@@ -1,0 +1,14 @@
+[package]
+
+name = "differential_dataflow"
+version = "0.0.1"
+authors = ["Frank McSherry <fmcsherry@me.com>"]
+
+[dependencies.timely]
+# git="https://github.com/frankmcsherry/timely-dataflow"
+path="../timely-dataflow"
+
+[dependencies]
+columnar="*"
+rand="*"
+time = "*"
