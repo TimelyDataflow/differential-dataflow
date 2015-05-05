@@ -11,8 +11,7 @@ use timely::communication::pact::Exchange;
 
 use columnar::Columnar;
 
-use collection_trace::batch_trace::{BatchVectorCollectionTrace, BatchDifferentialShard};
-use collection_trace::{LeastUpperBound, Lookup, BatchCollectionTrace};
+use collection_trace::{LeastUpperBound, Lookup, OperatorTrace};
 use collection_trace::lookup::UnsignedInt;
 use sort::*;
 
@@ -64,8 +63,9 @@ pub trait GroupByExt<G: GraphBuilder, D1: Data+Columnar> : UnaryNotifyExt<G, (D1
 
         // define state for the operator
         let mut inputs = Vec::new();
-        let mut trace = BatchDifferentialShard::<K, G::Timestamp,_, _>::new(BatchVectorCollectionTrace::new(look(0)),
-                                                                            BatchVectorCollectionTrace::new(look(0)));
+        let mut trace = OperatorTrace::<K, G::Timestamp, V1, V2, Look>::new(|| look(0));
+        // let mut trace = BatchDifferentialShard::<K, G::Timestamp,_, _>::new(BatchVectorCollectionTrace::new(look(0)),
+        //                                                                     BatchVectorCollectionTrace::new(look(0)));
         let mut to_do = Vec::new();
 
         // temporary storage for the operator
@@ -76,16 +76,20 @@ pub trait GroupByExt<G: GraphBuilder, D1: Data+Columnar> : UnaryNotifyExt<G, (D1
 
             // 1. read each input, and stash it in our staging area
             while let Some((time, mut data)) = input.pull() {
+                // println!("groupby received data at {:?}: {:?}", time, data.len());
                 inputs.entry_or_insert(time.clone(), || { notificator.notify_at(&time); Vec::new() })
                       .extend(data.drain(..).map(|(datum, delta)| (kv(datum), delta)));
             }
 
             // 2. go through each time of interest that has reached completion
             while let Some((index, _count)) = notificator.next() {
+                // println!("group_by notified at {:?}", index);
 
                 // 2a. if we have some input data to process
                 if let Some(mut data) = inputs.remove_key(&index) {
+                    // println!("data: {:?}", data.len());
                     coalesce(&mut data);
+                    // println!("data: {:?}", data.len());
 
                     let mut list = Vec::new();
                     let mut cursor = 0;

@@ -6,7 +6,9 @@ pub fn coalesce<T: Ord>(vec: &mut Vec<(T, i32)>) { coalesce_from(vec, 0); }
 pub fn coalesce_from<T: Ord>(vec: &mut Vec<(T, i32)>, offset: usize) {
     if !is_sorted(&vec[offset..]) {
         if vec.len() < 32 { isort_by(&mut vec[offset..], &|&(ref x,_)| x); }
-        else              { qsort_by(&mut vec[offset..], &|&(ref x,_)| x); }
+        else              { (&mut vec[offset..]).sort(); }
+
+        // else              { qsort_by(&mut vec[offset..], &|&(ref x,_)| x); }
     }
     merge_weights_from(vec, offset);
 

@@ -11,8 +11,8 @@ use timely::communication::pact::Exchange;
 
 use columnar::Columnar;
 
-use collection_trace::batch_trace::BatchVectorCollectionTrace;
-use collection_trace::collection_trace::BatchCollectionTrace;
+// use collection_trace::batch_trace::BinaryTrace;
+use collection_trace::CollectionTrace;
 
 use collection_trace::lookup::UnsignedInt;
 use collection_trace::{LeastUpperBound, Lookup};
@@ -78,8 +78,11 @@ pub trait JoinExt<G: GraphBuilder, D1: Data+Columnar> : BinaryNotifyExt<G, (D1, 
              look:  &GC)  -> Stream<G, (R, i32)> {
 
         // TODO : pay attention to the number of peers
-        let mut trace1 = Some(BatchVectorCollectionTrace::new(look(0)));
-        let mut trace2 = Some(BatchVectorCollectionTrace::new(look(0)));
+        // let mut trace1 = Some(BatchVectorCollectionTrace::new(look(0)));
+        // let mut trace2 = Some(BatchVectorCollectionTrace::new(look(0)));
+        let mut trace1 = Some(CollectionTrace::new(look(0)));
+        let mut trace2 = Some(CollectionTrace::new(look(0)));
+
 
         let mut stage1 = Vec::new();    // Vec<(T, Vec<(K, V1, i32)>)>;
         let mut stage2 = Vec::new();    // Vec<(T, Vec<(K, V2, i32)>)>;

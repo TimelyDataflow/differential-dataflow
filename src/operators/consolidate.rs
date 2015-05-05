@@ -37,9 +37,9 @@ impl<G: GraphBuilder, D: Ord+Data+Columnar> ConsolidateExt<D> for Stream<G, (D, 
             // 2. go through each time of interest that has reached completion
             while let Some((index, _count)) = notificator.next() {
                 if let Some(mut stash) = inputs.remove_key(&index) {
-                    let len = stash.len();
+                    // let len = stash.len();
                     coalesce(&mut stash);   // sorts and merges records; beats hashing.
-                    println!("consolidating at {:?}: {} -> {}", index, len, stash.len());
+                    // println!("consolidating at {:?}: {} -> {}", index, len, stash.len());
                     output.give_at(&index, stash.drain(..));
                 }
             }
