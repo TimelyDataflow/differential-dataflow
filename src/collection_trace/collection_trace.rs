@@ -1,8 +1,23 @@
 use std::mem;
 use std::marker::PhantomData;
 
+use core::nonzero::NonZero;
+
 use sort::{coalesce, is_sorted};
 use collection_trace::{close_under_lub, LeastUpperBound, Lookup};
+
+#[derive(Copy, Clone, Eq, PartialEq)]
+pub struct Offset {
+    dataz: NonZero<u32>,
+}
+
+impl Offset {
+    fn new(offset: usize) -> Offset {
+        assert!(offset < u32::max_value() as usize); // note strict inequality
+        Offset { dataz: unsafe { NonZero::new(u32::max_value() - offset as u32) } }
+    }
+    #[inline(always)] fn val(&self) -> usize { (u32::max_value() - *self.dataz) as usize }
+}
 
 type IndexEntry<T> = IndexEntry32<T>;
 
@@ -10,66 +25,68 @@ pub struct IndexEntry32<T> {
     index:  T,
     offset: u32,
     length: u32,
-    next:   u32,    // Option<NonZero<u32>> for the decrement would be cooler. unsafe, and needs more thinking.
+    next:   Option<Offset>,
+    // next:   u32,    // Option<NonZero<u32>> for the decrement would be cooler. unsafe, and needs more thinking.
 }
 
 impl<T> IndexEntry32<T> {
     pub fn index(&self) -> &T { &self.index }
     pub fn offset(&self) -> usize { self.offset as usize }
     pub fn length(&self) -> usize { self.length as usize }
-    pub fn next(&self, _position: usize) -> Option<usize> {
-        if self.next != u32::max_value() {
-            Some(self.next as usize)
-        } else { None }
+    pub fn next(&self, _position: usize) -> Option<Offset> {
+        self.next
+        // if self.next != u32::max_value() {
+        //     Some(self.next as usize)
+        // } else { None }
     }
-    pub fn new(index: T, offset: usize, length: usize, next: usize) -> IndexEntry32<T> {
+    pub fn new(index: T, offset: usize, length: usize, next: Option<Offset>) -> IndexEntry32<T> {
 
         assert!(offset < u32::max_value() as usize);
         assert!(length < u32::max_value() as usize);
         // assert!(next   < u32::max_value() as usize);
 
         IndexEntry32 {
-            index: index,
+            index:  index,
             offset: offset as u32,
             length: length as u32,
-            next: if next == usize::max_value() { u32::max_value() } else { next as u32 },
+            next:   next,
         }
     }
 }
 
-pub struct IndexEntry64<T> {
-    index:  T,
-    offset: u64,
-    length: u64,
-    next:   u64,    // Option<NonZero<u64>> for the decrement would be cooler. unsafe, and needs more thinking.
-}
+// pub struct IndexEntry64<T> {
+//     index:  T,
+//     offset: u64,
+//     length: u64,
+//     next:   u64,    // Option<NonZero<u64>> for the decrement would be cooler. unsafe, and needs more thinking.
+// }
+//
+// impl<T> IndexEntry64<T> {
+//     pub fn index(&self) -> &T { &self.index }
+//     pub fn offset(&self) -> usize { self.offset as usize }
+//     pub fn length(&self) -> usize { self.length as usize }
+//     pub fn next(&self, _position: usize) -> Option<usize> {
+//         if self.next != u64::max_value()  {
+//             Some(self.next as usize)
+//         } else { None } }
+//     pub fn new(index: T, offset: usize, length: usize, next: usize) -> IndexEntry64<T> {
+//         IndexEntry64 {
+//             index: index,
+//             offset: offset as u64,
+//             length: length as u64,
+//             next: if next == usize::max_value() { u64::max_value() } else { next as u64 },
+//         }
+//     }
+// }
 
-impl<T> IndexEntry64<T> {
-    pub fn index(&self) -> &T { &self.index }
-    pub fn offset(&self) -> usize { self.offset as usize }
-    pub fn length(&self) -> usize { self.length as usize }
-    pub fn next(&self, _position: usize) -> Option<usize> {
-        if self.next != u64::max_value()  {
-            Some(self.next as usize)
-        } else { None } }
-    pub fn new(index: T, offset: usize, length: usize, next: usize) -> IndexEntry64<T> {
-        IndexEntry64 {
-            index: index,
-            offset: offset as u64,
-            length: length as u64,
-            next: if next == usize::max_value() { u64::max_value() } else { next as u64 },
-        }
-    }
-}
-
-pub struct CollectionTrace<K, T, V, L: Lookup<K, usize>> {
+pub struct CollectionTrace<K, T, V, L: Lookup<K, Offset>> {
     phantom:    PhantomData<K>,
     updates:    Vec<(V, i32)>,
     times:      Vec<IndexEntry<T>>,
-    keys:       L,
+    keys:       L,                      // stores u32::max_value() - target, so that NonZero works
 }
 
-impl<K: Eq, T, V, L: Lookup<K, usize>> Default for CollectionTrace<K, T, V, L> {
+impl<K: Eq, T, V, L: Lookup<K, Offset>> Default for CollectionTrace<K, T, V, L> {
     fn default() -> CollectionTrace<K, T, V, L> {
         CollectionTrace {
             phantom: PhantomData,
@@ -111,17 +128,25 @@ fn merge<V: Ord+Clone>(mut slices: Vec<&[(V, i32)]>, target: &mut Vec<(V, i32)>)
 }
 
 
-impl<K: Eq, L: Lookup<K, usize>, T: LeastUpperBound+Clone, V: Eq+Ord+Clone> CollectionTrace<K, T, V, L> {
+impl<K: Eq, L: Lookup<K, Offset>, T: LeastUpperBound+Clone, V: Eq+Ord+Clone> CollectionTrace<K, T, V, L> {
 
     pub fn set_difference<I: Iterator<Item=(V, i32)>>(&mut self, key: K, time: T, difference: I) {
+
         let offset = self.updates.len();
         self.updates.extend(difference);
         assert!(is_sorted(&self.updates[offset..]), "all current uses of set_difference provide sorted data.");
         // coalesce_from(&mut self.updates, offset);
+
         if self.updates.len() > offset {
-            let position = self.keys.entry_or_insert(key, || usize::max_value());
-            self.times.push(IndexEntry::new(time, offset, self.updates.len() - offset, *position));
-            *position = self.times.len() - 1;
+            let next_position = Offset::new(self.times.len());
+            let position = self.keys.entry_or_insert(key, || next_position);
+            if position == &next_position {
+                self.times.push(IndexEntry::new(time, offset, self.updates.len() - offset, None));
+            }
+            else {
+                let pos = mem::replace(position, next_position);
+                self.times.push(IndexEntry::new(time, offset, self.updates.len() - offset, Some(pos)));
+            }
         }
     }
 
@@ -136,31 +161,39 @@ impl<K: Eq, L: Lookup<K, usize>, T: LeastUpperBound+Clone, V: Eq+Ord+Clone> Coll
         merge(slices, &mut self.updates);
         if self.updates.len() - count > 0 {
             // we just made a mess in updates, and need to explain ourselves...
-            let position = self.keys.entry_or_insert(key, || usize::max_value());
-            self.times.push(IndexEntry::new(time, count, self.updates.len() - count, *position));
-            *position = self.times.len() - 1;
+            let next_position = Offset::new(self.times.len());
+            let position = self.keys.entry_or_insert(key, || next_position);
+            if position == &next_position {
+                self.times.push(IndexEntry::new(time, count, self.updates.len() - count, None));
+            }
+            else {
+                let pos = mem::replace(position, next_position);
+                self.times.push(IndexEntry::new(time, count, self.updates.len() - count, Some(pos)));
+            }
+
         }
     }
 
     pub fn get_difference(&self, key: &K, time: &T) -> &[(V, i32)] {
         let mut next = self.keys.get_ref(key).map(|&x|x);
         while let Some(position) = next {
-            if self.times[position].index() == time {
-                return &self.updates[self.times[position].offset()..][..self.times[position].length()];
+            let diff = &self.times[position.val()];
+            if diff.index() == time {
+                return &self.updates[diff.offset()..][..diff.length()];
             }
-            next = self.times[position].next(position);
+            next = diff.next(position.val());
         }
         return &[]; // didn't find anything
     }
     pub fn get_collection(&self, key: &K, time: &T, target: &mut Vec<(V, i32)>) {
         let mut slices = Vec::new();
-
         let mut next = self.keys.get_ref(key).map(|&x|x);
         while let Some(position) = next {
-            if self.times[position].index() <= time {
-                slices.push(&self.updates[self.times[position].offset() ..][..self.times[position].length()]);
+            let diff = &self.times[position.val()];
+            if diff.index() <= time {
+                slices.push(&self.updates[diff.offset()..][..diff.length()]);
             }
-            next = self.times[position].next(position);
+            next = diff.next(position.val());
         }
 
         // target.clear();
@@ -169,26 +202,25 @@ impl<K: Eq, L: Lookup<K, usize>, T: LeastUpperBound+Clone, V: Eq+Ord+Clone> Coll
     }
 
     pub fn interesting_times(&mut self, key: &K, index: &T, result: &mut Vec<T>) {
-        let mut next = self.keys.get_ref(key).map(|&x|x);
-        while let Some(position) = next {
-            let lub = index.least_upper_bound(self.times[position].index());
+        self.map_over_times(key, |time, _| {
+            let lub = time.least_upper_bound(index);
             if !result.contains(&lub) {
                 result.push(lub);
             }
-            next = self.times[position].next(position);
-        }
+        });
         close_under_lub(result);
     }
     pub fn map_over_times<F:FnMut(&T, &[(V, i32)])>(&self, key: &K, mut func: F) {
         let mut next = self.keys.get_ref(key).map(|&x|x);
         while let Some(position) = next {
-            func(self.times[position].index(), &self.updates[self.times[position].offset()..][..self.times[position].length()]);
-            next = self.times[position].next(position);
+            let diff = &self.times[position.val()];
+            func(diff.index(), &self.updates[diff.offset()..][..diff.length()]);
+            next = diff.next(position.val());
         }
     }
 }
 
-impl<K: Eq, L: Lookup<K, usize>, T: LeastUpperBound+Clone, V: Eq+Ord+Clone> CollectionTrace<K, T, V, L> {
+impl<K: Eq, L: Lookup<K, Offset>, T: LeastUpperBound+Clone, V: Eq+Ord+Clone> CollectionTrace<K, T, V, L> {
     pub fn new(l: L) -> CollectionTrace<K, T, V, L> {
         CollectionTrace {
             phantom: PhantomData,

@@ -15,7 +15,7 @@ use columnar::Columnar;
 use collection_trace::CollectionTrace;
 
 use collection_trace::lookup::UnsignedInt;
-use collection_trace::{LeastUpperBound, Lookup};
+use collection_trace::{LeastUpperBound, Lookup, Offset};
 use sort::coalesce;
 use std::iter;
 
@@ -65,7 +65,7 @@ pub trait JoinExt<G: GraphBuilder, D1: Data+Columnar> : BinaryNotifyExt<G, (D1, 
                 H2: Fn(&D2)->u64+'static,
                 R:  Data+Columnar,
                 RF: Fn(&K,&V1,&V2)->R+'static,
-                LC: Lookup<K, usize>,
+                LC: Lookup<K, Offset>,
                 GC: Fn(u64)->LC,
                 >
             (&self,

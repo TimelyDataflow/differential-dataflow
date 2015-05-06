@@ -32,7 +32,7 @@ fn main() {
             bfs(&graph, &roots).map(|((_,r,s),w)| ((r,s),w))    // keep (root, step) pairs
                                .consolidate(|||x| x.0)          // aggregate up the counts
                                .inspect_batch(move |t, x| {
-                                   let elapsed = ((time::precise_time_s() - start2));
+                                   let elapsed = time::precise_time_s() - start2;
                                    println!("{}s:\tobserved at {:?}: {:?} changes; elapsed: {}s", elapsed, t, x.len(), elapsed - (t.inner as f64));
                                    for y in x {
                                        println!("\t{:?}", y);

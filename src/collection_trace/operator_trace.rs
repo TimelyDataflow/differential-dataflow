@@ -1,8 +1,9 @@
 use std::marker::PhantomData;
 
-use collection_trace::{CollectionTrace, LeastUpperBound, Lookup};
 
-pub struct OperatorTrace<K, T, S: Ord, R: Ord, L: Lookup<K, usize>> {
+use collection_trace::{CollectionTrace, LeastUpperBound, Lookup, Offset};
+
+pub struct OperatorTrace<K, T, S: Ord, R: Ord, L: Lookup<K, Offset>> {
     phantom:        PhantomData<K>,
     src:            Vec<(S,i32)>,
     dst:            Vec<(R,i32)>,
@@ -10,7 +11,7 @@ pub struct OperatorTrace<K, T, S: Ord, R: Ord, L: Lookup<K, usize>> {
     pub result:     CollectionTrace<K, T, R, L>,
 }
 
-impl<K: Eq+Clone, T:Clone+LeastUpperBound, S: Ord+Clone, R: Ord+Clone, L: Lookup<K, usize>> OperatorTrace<K, T, S, R, L> {
+impl<K: Eq+Clone, T:Clone+LeastUpperBound, S: Ord+Clone, R: Ord+Clone, L: Lookup<K, Offset>> OperatorTrace<K, T, S, R, L> {
     pub fn new<F: Fn()->L>(lookup: F) -> OperatorTrace<K, T, S, R, L> {
         OperatorTrace {
             phantom: PhantomData,

@@ -11,7 +11,7 @@ use timely::communication::pact::Exchange;
 
 use columnar::Columnar;
 
-use collection_trace::{LeastUpperBound, Lookup, OperatorTrace};
+use collection_trace::{LeastUpperBound, Lookup, OperatorTrace, Offset};
 use collection_trace::lookup::UnsignedInt;
 use sort::*;
 
@@ -54,7 +54,7 @@ pub trait GroupByExt<G: GraphBuilder, D1: Data+Columnar> : UnaryNotifyExt<G, (D1
                         D2:    Data+Columnar,
                         KV:    Fn(D1)->(K,V1)+'static,
                         Part:  Fn(&D1)->u64+'static,
-                        Look:  Lookup<K, usize>,
+                        Look:  Lookup<K, Offset>,
                         LookG: Fn(u64)->Look,
                         Logic: Fn(&K, &[(V1,i32)], &mut Vec<(V2, i32)>)+'static,
                         Reduc: Fn(&K, &V2)->D2+'static,
