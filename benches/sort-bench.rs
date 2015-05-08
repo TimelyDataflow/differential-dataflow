@@ -1,6 +1,7 @@
 #![feature(test)]
 #![feature(core)]
 #![feature(collections)]
+#![feature(collections_drain)]
 
 extern crate differential_dataflow;
 extern crate rand;
@@ -26,19 +27,19 @@ fn random_vec<T: Rand>(size: usize) -> Vec<T> {
     result
 }
 
-// #[bench] fn sort_bench(bencher: &mut Bencher) {
-//     let data = random_vec::<(u64, (u64, u64, u64, u64))>(1 << 16);
-//     bencher.iter(|| data.clone().sort());
-// }
+#[bench] fn sort_sort(bencher: &mut Bencher) {
+    let data = random_vec::<(u64, (u64, u64, u64, u64))>(1 << 12);
+    bencher.iter(|| data.clone().sort());
+}
 
-#[bench] fn qsort1_bench(bencher: &mut Bencher) {
-    let mut data = random_vec::<(u64, (u64, u64, u64, u64))>(1 << 16);
+#[bench] fn sort_qsort1(bencher: &mut Bencher) {
+    let mut data = random_vec::<(u64, (u64, u64, u64, u64))>(1 << 12);
     // for i in 0..data.len()  { data[i].0 = i as u64; }
 
     bencher.iter(|| qsort_by(&mut data.clone(), &|x|&x.0));
 }
-#[bench] fn qsort2_bench(bencher: &mut Bencher) {
-    let mut data = random_vec::<(u64, (u64, u64, u64, u64))>(1 << 16);
+#[bench] fn sort_qsort2(bencher: &mut Bencher) {
+    let mut data = random_vec::<(u64, (u64, u64, u64, u64))>(1 << 12);
     // for i in 0..data.len()  { data[i].0 = i as u64; }
 
     bencher.iter(|| qsort2_by(&mut data.clone(), &|x|&x.0));
@@ -57,38 +58,50 @@ fn random_vec<T: Rand>(size: usize) -> Vec<T> {
 // }
 
 
-// #[bench] fn rsort888_bench(bencher: &mut Bencher) {
-//     let data = random_vec::<(u64, (u64, u64, u64, u64))>(1 << 16);
-//     bencher.iter(|| rsort888(&mut data.clone(), &|&x| x.0));
-// }
-
-// #[bench] fn rsort8888_bench(bencher: &mut Bencher) {
-//     let data = random_vec::<(u64, (u64, u64, u64, u64))>(1 << 16);
-//     bencher.iter(|| rsort8888(&mut data.clone(), &|&x| x.0));
-// }
-
-#[bench] fn push_bench(bencher: &mut Bencher) {
-    let data = random_vec::<(u64, (u64, u64, u64, u64))>(1 << 14);
-    let mut buff = Vec::new();
-
-    bencher.bytes = 5 * 8 * data.len() as u64;
-    bencher.iter(|| {
-        buff.clear();
-        buff.push_all(&data);
-    });
+#[bench] fn sort_rsort888(bencher: &mut Bencher) {
+    let data = random_vec::<(u64, (u64, u64, u64, u64))>(1 << 12);
+    bencher.iter(|| rsort888(&mut data.clone(), &|&x| x.0));
 }
 
-#[bench] fn clone_bench(bencher: &mut Bencher) {
-    let data = random_vec::<(u64, (u64, u64, u64, u64))>(1 << 14);
+#[bench] fn sort_rsort8888(bencher: &mut Bencher) {
+    let data = random_vec::<(u64, (u64, u64, u64, u64))>(1 << 12);
+    bencher.iter(|| rsort8888(&mut data.clone(), &|&x| x.0));
+}
 
-    bencher.bytes = 5 * 8 * data.len() as u64;
-    bencher.iter(|| {
-        let mut buff = data.clone();
-    });
+// #[bench] fn push_bench(bencher: &mut Bencher) {
+//     let data = random_vec::<(u64, (u64, u64, u64, u64))>(1 << 14);
+//     let mut buff = Vec::new();
+//
+//     bencher.bytes = 5 * 8 * data.len() as u64;
+//     bencher.iter(|| {
+//         buff.clear();
+//         buff.push_all(&data);
+//     });
+// }
+//
+// #[bench] fn clone_bench(bencher: &mut Bencher) {
+//     let data = random_vec::<(u64, (u64, u64, u64, u64))>(1 << 14);
+//
+//     bencher.bytes = 5 * 8 * data.len() as u64;
+//     bencher.iter(|| {
+//         let mut buff = data.clone();
+//     });
+// }
+
+#[bench] fn endian_noop(bencher: &mut Bencher) {
+    bencher.iter(|| { (0..1024u64).sum::<u64>() })
+}
+
+#[bench] fn endian_to_le(bencher: &mut Bencher) {
+    bencher.iter(|| { (0..1024u64).map(|x| x.to_le()).sum::<u64>() })
+}
+
+#[bench] fn endian_to_be(bencher: &mut Bencher) {
+    bencher.iter(|| { (0..1024u64).map(|x| x.to_be()).sum::<u64>() })
 }
 
 #[bench] fn shuffle_r_bench(bencher: &mut Bencher) {
-    let data = random_vec::<(u64, (u64, u64, u64, u64))>(1 << 16);
+    let data = random_vec::<(u64, (u64, u64, u64, u64))>(1 << 12);
     let mut buff = Vec::new();
     let mut vecs = vec![Vec::new(); 16];
 
@@ -109,7 +122,7 @@ fn random_vec<T: Rand>(size: usize) -> Vec<T> {
 }
 
 #[bench] fn shuffle_s_bench(bencher: &mut Bencher) {
-    let data = random_vec::<(u64, (u64, u64, u64, u64))>(1 << 16);
+    let data = random_vec::<(u64, (u64, u64, u64, u64))>(1 << 12);
     let mut buff = Vec::new();
     let mut buff2 = data.clone();
     let mut vecs = vec![Vec::new(); 16];
@@ -131,7 +144,7 @@ fn random_vec<T: Rand>(size: usize) -> Vec<T> {
 }
 
 #[bench] fn radix_r_bench(bencher: &mut Bencher) {
-    let data = random_vec::<(u64, (u64, u64, u64, u64))>(1 << 16);
+    let data = random_vec::<(u64, (u64, u64, u64, u64))>(1 << 12);
     let mut buff = Vec::new();
 
     bencher.bytes = 5 * 8 * data.len() as u64;
@@ -144,7 +157,7 @@ fn random_vec<T: Rand>(size: usize) -> Vec<T> {
 }
 
 #[bench] fn shuffle_bench(bencher: &mut Bencher) {
-    let data = random_vec::<(u64, (u64, u64, u64, u64))>(1 << 16);
+    let data = random_vec::<(u64, (u64, u64, u64, u64))>(1 << 12);
     let mut buff = Vec::new();
     let mut vecs = vec![Vec::new(); 16];
 
@@ -153,7 +166,7 @@ fn random_vec<T: Rand>(size: usize) -> Vec<T> {
         buff.clear();
         buff.push_all(&data);
         for i in 0..vecs.len() { vecs[i].clear(); }
-        for (i, d) in buff.drain() {
+        for (i, d) in buff.drain(..) {
             unsafe { vecs.get_unchecked_mut((i & 0x0F) as usize) }.push(d);
         }
     });
@@ -169,20 +182,23 @@ pub fn rsort88<T:Ord+Copy, F: Fn(&T)->u64>(slice: &mut [T], func: &F) {
 }
 
 pub fn rsort888<T:Ord+Copy, F: Fn(&T)->u64>(slice: &mut [T], func: &F) {
-    rstep8(slice, func, |slice| rstep8(slice, &|x| func(x) >> 8, |slice| rstep8(slice, &|x| func(x) >> 16, |x| x.sort())));
+    rstep8(slice, func, |slice|
+        rstep8(slice, &|x| func(x) >> 8, |slice|
+            rstep8(slice, &|x| func(x) >> 16, |x| qsort(x))));
 }
 
 pub fn rsort8888<T:Ord+Copy, F: Fn(&T)->u64>(slice: &mut [T], func: &F) {
     rstep8(slice, func, |slice|
         rstep8(slice, &|x| func(x) >> 8, |slice|
             rstep8(slice, &|x| func(x) >> 16, |slice|
-                rstep8(slice, &|x| func(x) >> 24, |x| x.sort()))));
+                rstep8(slice, &|x| func(x) >> 24, |x| qsort(x)))));
 }
 
 
 pub fn rstep8<T:Ord+Copy, F: Fn(&T)->u64, A: Fn(&mut [T])>(slice: &mut [T], func: &F, andthen: A) {
     let mut ranges = [(0, 0); 256];
-    for elem in slice.iter() { ranges[(func(elem) & 0xFF) as usize].1 += 1; }
+    // for elem in slice.iter() { ranges[(func(elem) & 0xFF) as usize].1 += 1; }
+    for elem in slice.iter() { unsafe { ranges.get_unchecked_mut((func(elem) & 0xFF) as usize).1 += 1; } }
     for i in 1..ranges.len() { ranges[i].0 = ranges[i-1].1;
                                ranges[i].1 += ranges[i].0; }
 
