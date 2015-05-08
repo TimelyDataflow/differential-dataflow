@@ -37,8 +37,8 @@ fn _trim_and_flip<G: GraphBuilder, U: UnsignedInt>(graph: &Stream<G, ((U, U), i3
         graph.iterate(u32::max_value(), |||x|x.0, |edges| {
             let inner = edges.builder().enter(&graph);
             edges.map(|((x,_),w)| (x,w))
-                 .group_by_u(|x|(x,()), |&x|x, |&x,_| x, |&x,_,target| target.push((x,1)))
-                  .join_u(&inner, |x| (x,()), |(s,d)| (d,s), |&x| x, |x| x.0, |&d,_,&s| (s,d))
+                 .group_by_u(|x|(x,()), |&x,_| x, |&x,_,target| target.push((x,1)))
+                  .join_u(&inner, |x| (x,()), |(s,d)| (d,s), |&d,_,&s| (s,d))
              })
              .consolidate(|||x| x.0)
              .map(|((x,y),w)| ((y,x),w))
@@ -48,9 +48,9 @@ fn improve_labels<G: GraphBuilder, U: UnsignedInt>(labels: &Stream<G, ((U, U), i
     -> Stream<G, ((U, U), i32)>
 where G::Timestamp: LeastUpperBound {
 
-    labels.join_u(&edges, |l| l, |e| e, |l| l.0, |e| e.0, |_k,l,d| (*d,*l))
+    labels.join_u(&edges, |l| l, |e| e, |_k,l,d| (*d,*l))
           .concat(&nodes)
-          .group_by_u(|x| x, |x| x.0, |k,v| (*k,*v), |_, s, t| { t.push((s[0].0, 1)); } )
+          .group_by_u(|x| x, |k,v| (*k,*v), |_, s, t| { t.push((s[0].0, 1)); } )
 }
 
 fn reachability<G: GraphBuilder, U: UnsignedInt>(edges: &Stream<G, ((U, U), i32)>, nodes: &Stream<G, ((U, U), i32)>)
@@ -95,8 +95,8 @@ fn trim_edges<G: GraphBuilder, U: UnsignedInt>(cycle: &Stream<G, ((U, U), i32)>,
 
     let labels = fancy_reachability(&cycle, &nodes);
 
-    edges.join_u(&labels, |e| e, |l| l, |e| e.0, |l| l.0, |&e1,&e2,&l1| (e2,(e1,l1)))
-         .join_u(&labels, |e| e, |l| l, |e| e.0, |l| l.0, |&e2,&(e1,l1),&l2| ((e1,e2),(l1,l2)))
+    edges.join_u(&labels, |e| e, |l| l, |&e1,&e2,&l1| (e2,(e1,l1)))
+         .join_u(&labels, |e| e, |l| l, |&e2,&(e1,l1),&l2| ((e1,e2),(l1,l2)))
          .consolidate(|||x|(x.0).0)
          .filter(|&((_,(l1,l2)), _)| l1 == l2)
          .map(|(((x1,x2),_),d)| ((x2,x1),d))
@@ -138,13 +138,14 @@ fn _find_difference() {
             ans1.sort();
             ans2.sort();
 
-            if ans1 != ans2 {
-                println!("discrepancy found for ({}, {}), seed {}", node_count, edge_count, seed_idx);
-                println!("graph:\t{:?}", edges);
-                println!("ans1:\t{:?}", ans1);
-                println!("ans2:\t{:?}", ans2);
-                return();
-            }
+            assert!(ans1 == ans2);
+            // if ans1 != ans2 {
+            //     println!("discrepancy found for ({}, {}), seed {}", node_count, edge_count, seed_idx);
+            //     println!("graph:\t{:?}", edges);
+            //     println!("ans1:\t{:?}", ans1);
+            //     println!("ans2:\t{:?}", ans2);
+            //     return();
+            // }
         }
     }
 }
