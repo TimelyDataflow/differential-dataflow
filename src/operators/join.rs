@@ -19,25 +19,22 @@ use collection_trace::{LeastUpperBound, Lookup, Offset};
 use sort::coalesce;
 use std::iter;
 
-impl<G: GraphBuilder, D1: Data+Columnar, S: BinaryNotifyExt<G, (D1, i32)>> JoinExt<G, D1> for S where G::Timestamp: LeastUpperBound {}
+impl<G: GraphBuilder, D1: Data+Columnar, S: BinaryNotifyExt<G, (D1, i32)>+MapExt<G, (D1, i32)>> JoinExt<G, D1> for S where G::Timestamp: LeastUpperBound {}
 
-pub trait JoinExt<G: GraphBuilder, D1: Data+Columnar> : BinaryNotifyExt<G, (D1, i32)> where G::Timestamp: LeastUpperBound {
+pub trait JoinExt<G: GraphBuilder, D1: Data+Columnar> : BinaryNotifyExt<G, (D1, i32)>+MapExt<G, (D1, i32)> where G::Timestamp: LeastUpperBound {
     fn join_u<
             U:  UnsignedInt,
-            U1: UnsignedInt,
-            U2: UnsignedInt,
-            V1: Ord+Clone+Default+Debug+'static,
-            V2: Ord+Clone+Default+Debug+'static,
+            V1: Data+Columnar+Ord+Clone+Default+Debug+'static,
+            V2: Data+Columnar+Ord+Clone+Default+Debug+'static,
             D2: Data+Columnar,
             F1: Fn(D1)->(U,V1)+'static,
             F2: Fn(D2)->(U,V2)+'static,
-            H1: Fn(&D1)->U1+'static,
-            H2: Fn(&D2)->U2+'static,
             R:  Data+Columnar,
             RF: Fn(&U,&V1,&V2)->R+'static,
             >
-        (&self, other: &Stream<G, (D2, i32)>, kv1: F1, kv2: F2, part1: H1, part2: H2, result: RF) -> Stream<G, (R, i32)> {
-        self.join_inner(other, kv1, kv2, move |x| part1(x).as_usize() as u64, move |x| part2(x).as_usize() as u64, result, &|x| (Vec::new(), x))
+        (&self, other: &Stream<G, (D2, i32)>, kv1: F1, kv2: F2, result: RF) -> Stream<G, (R, i32)> {
+        self.map(move |(x,w)| (kv1(x),w))
+            .join_inner(&other.map(move |(x,w)| (kv2(x),w)), |x|x, |x|x, |&(k,_)| k.as_usize() as u64, |&(k,_)| k.as_usize() as u64, result, &|x| (Vec::new(), x))
     }
 
     fn join<K:  Ord+Clone+Hash+Debug+'static,
@@ -77,9 +74,9 @@ pub trait JoinExt<G: GraphBuilder, D1: Data+Columnar> : BinaryNotifyExt<G, (D1, 
              result: RF,
              look:  &GC)  -> Stream<G, (R, i32)> {
 
-        // TODO : pay attention to the number of peers
-        // let mut trace1 = Some(BatchVectorCollectionTrace::new(look(0)));
-        // let mut trace2 = Some(BatchVectorCollectionTrace::new(look(0)));
+        // TODO : pay more attention to the number of peers
+        // TODO : find a better trait to sub-trait so we can read .builder
+        // assert!(self.builder.peers() == 1);
         let mut trace1 = Some(CollectionTrace::new(look(0)));
         let mut trace2 = Some(CollectionTrace::new(look(0)));
 
@@ -95,7 +92,6 @@ pub trait JoinExt<G: GraphBuilder, D1: Data+Columnar> : BinaryNotifyExt<G, (D1, 
         self.binary_notify(stream2, exch1, exch2, format!("Join"), vec![], move |input1, input2, output, notificator| {
 
             // consider shutting down each trace if the opposing input has closed out
-            // TODO : This is buggy. Closing traces why stage1/stage2 non-empty is wrong.
             if trace2.is_some() && notificator.frontier(0).len() == 0 && stage1.len() == 0 { trace2 = None; }
             if trace1.is_some() && notificator.frontier(1).len() == 0 && stage2.len() == 0 { trace1 = None; }
 

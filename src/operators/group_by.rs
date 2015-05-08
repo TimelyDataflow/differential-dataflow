@@ -15,10 +15,10 @@ use collection_trace::{LeastUpperBound, Lookup, OperatorTrace, Offset};
 use collection_trace::lookup::UnsignedInt;
 use sort::*;
 
-impl<G: GraphBuilder, D1: Data+Columnar, S: UnaryNotifyExt<G, (D1, i32)>> GroupByExt<G, D1> for S where G::Timestamp: LeastUpperBound {}
+impl<G: GraphBuilder, D1: Data+Columnar, S: UnaryNotifyExt<G, (D1, i32)>+MapExt<G, (D1, i32)>> GroupByExt<G, D1> for S where G::Timestamp: LeastUpperBound {}
 
 
-pub trait GroupByExt<G: GraphBuilder, D1: Data+Columnar> : UnaryNotifyExt<G, (D1, i32)> where G::Timestamp: LeastUpperBound {
+pub trait GroupByExt<G: GraphBuilder, D1: Data+Columnar> : UnaryNotifyExt<G, (D1, i32)>+MapExt<G, (D1, i32)> where G::Timestamp: LeastUpperBound {
     fn group_by<
                 K:     Hash+Ord+Clone+'static,
                 V1:    Ord+Clone+Default+'static,        // TODO : Is Clone needed?
@@ -34,17 +34,16 @@ pub trait GroupByExt<G: GraphBuilder, D1: Data+Columnar> : UnaryNotifyExt<G, (D1
             }
     fn group_by_u<
                 U:     UnsignedInt,
-                U2:    UnsignedInt,
-                V1:    Ord+Clone+Default+'static,        // TODO : Is Clone needed?
+                V1:    Data+Columnar+Ord+Clone+Default+'static,        // TODO : Is Clone needed?
                 V2:    Ord+Clone+Default+'static,        // TODO : Is Clone needed?
                 D2:    Data+Columnar,
                 KV:    Fn(D1)->(U,V1)+'static,
-                Part:  Fn(&D1)->U2+'static,
                 Logic: Fn(&U, &[(V1,i32)], &mut Vec<(V2, i32)>)+'static,
                 Reduc: Fn(&U, &V2)->D2+'static,
                 >
-            (&self, kv: KV, part: Part, reduc: Reduc, logic: Logic) -> Stream<G, (D2, i32)> {
-                self.group_by_inner(kv, move |x| part(x).as_usize() as u64, reduc, |x| (Vec::new(), x), logic)
+            (&self, kv: KV, reduc: Reduc, logic: Logic) -> Stream<G, (D2, i32)> {
+                self.map(move |(x,w)| (kv(x),w))
+                    .group_by_inner(|x|x, |&(k,_)| k.as_usize() as u64, reduc, |x| (Vec::new(), x), logic)
     }
 
     fn group_by_inner<
@@ -61,12 +60,12 @@ pub trait GroupByExt<G: GraphBuilder, D1: Data+Columnar> : UnaryNotifyExt<G, (D1
                         >
                     (&self, kv: KV, part: Part, reduc: Reduc, look: LookG, logic: Logic) -> Stream<G, (D2, i32)> {
 
-        // define state for the operator
+        // TODO : pay more attention to the number of peers
+        // TODO : find a better trait to sub-trait so we can read .builder
+        // assert!(self.builder.peers() == 1);
+        let mut trace =  OperatorTrace::<K, G::Timestamp, V1, V2, Look>::new(|| look(0));
         let mut inputs = Vec::new();
-        let mut trace = OperatorTrace::<K, G::Timestamp, V1, V2, Look>::new(|| look(0));
-        // let mut trace = BatchDifferentialShard::<K, G::Timestamp,_, _>::new(BatchVectorCollectionTrace::new(look(0)),
-        //                                                                     BatchVectorCollectionTrace::new(look(0)));
-        let mut to_do = Vec::new();
+        let mut to_do =  Vec::new();
 
         // temporary storage for the operator
         let mut idx = Vec::new();   // Vec<G::Timestamp>,
@@ -76,20 +75,16 @@ pub trait GroupByExt<G: GraphBuilder, D1: Data+Columnar> : UnaryNotifyExt<G, (D1
 
             // 1. read each input, and stash it in our staging area
             while let Some((time, mut data)) = input.pull() {
-                // println!("groupby received data at {:?}: {:?}", time, data.len());
                 inputs.entry_or_insert(time.clone(), || { notificator.notify_at(&time); Vec::new() })
                       .extend(data.drain(..).map(|(datum, delta)| (kv(datum), delta)));
             }
 
             // 2. go through each time of interest that has reached completion
             while let Some((index, _count)) = notificator.next() {
-                // println!("group_by notified at {:?}", index);
 
                 // 2a. if we have some input data to process
                 if let Some(mut data) = inputs.remove_key(&index) {
-                    // println!("data: {:?}", data.len());
                     coalesce(&mut data);
-                    // println!("data: {:?}", data.len());
 
                     let mut list = Vec::new();
                     let mut cursor = 0;

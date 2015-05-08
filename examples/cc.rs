@@ -116,9 +116,9 @@ fn improve_labels<G: GraphBuilder, U: UnsignedInt>(labels: &Stream<G, ((U, U), i
     -> Stream<G, ((U, U), i32)>
 where G::Timestamp: LeastUpperBound {
 
-    labels.join_u(&edges, |l| l, |e| e, |l| l.0, |e| e.0, |_k,l,d| (*d,*l))
+    labels.join_u(&edges, |l| l, |e| e, |_k,l,d| (*d,*l))
           .concat(&nodes)
-          .group_by_u(|x| x, |x| x.0, |k,v| (*k,*v), |_, s, t| { t.push((s[0].0, 1)); } )
+          .group_by_u(|x| x, |k,v| (*k,*v), |_, s, t| { t.push((s[0].0, 1)); } )
 }
 
 fn reachability<G: GraphBuilder, U: UnsignedInt>(edges: &Stream<G, ((U, U), i32)>, nodes: &Stream<G, (U, i32)>)
@@ -136,7 +136,7 @@ where G::Timestamp: LeastUpperBound+Hash {
          .consolidate(|||x| x.0)
 }
 
-
+// fancier, but not-really-working, version where nodes with improved labels "cancel" their seed labels to avoid the state
 fn fancy_reachability<G: GraphBuilder, U: UnsignedInt>(edges: &Stream<G, ((U, U), i32)>, nodes: &Stream<G, (U, i32)>)
     -> Stream<G, ((U, U), i32)>
 where G::Timestamp: LeastUpperBound+Hash {

@@ -100,28 +100,26 @@ where G::Timestamp: LeastUpperBound+Hash {
     // repeatedly update minimal distances each node can be reached from each root
     nodes.iterate(u32::max_value(), |||x| x.0, |inner| {
 
-             let edges = inner.builder().enter(&edges);
-             let nodes = inner.builder().enter(&nodes);
+        let edges = inner.builder().enter(&edges);
+        let nodes = inner.builder().enter(&nodes);
 
-             inner.join_u(&edges,
-                      |l| (l.0, (l.1, l.2)),        // incoming (n,r,s) -> key: n, val: (r,s)
-                      |e| e, |l| l.0, |e| e.0,      // nonsense about edges and partitioning
-                      |_k,l,d| (*d, l.0, l.1 + 1))  // dst d can be reached from r in s + 1 steps
-                  .concat(&nodes)
-                  .group_by_u(
-                      |x| (x.0, (x.1, x.2)),        // incoming (n,r,s) -> key: n, val: (r,s)
-                      |x| x.0,                      //  nonsense about partitioning
-                      |k:&U,v:&(U, u32)| (*k,v.0,v.1),  // nonsense about output (ew types)
-                      |_, s, t| {
-                          t.push(s[0]);             // first record is least dist to least root
-                          let mut r = (s[0].0).0;   // track the root we are looking at
-                          for &x in s {             // for each available distance ...
-                              if (x.0).0 > r {      // ... if it is a new root ...
-                                  t.push(x);        // ... push the measurement and ...
-                                  r = (x.0).0;      // ... update the tracked root.
-                              }
-                          }
-                      })
-
+        inner.join_u(&edges,
+                 |l| (l.0, (l.1, l.2)),        // incoming (n,r,s) -> key: n, val: (r,s)
+                 |e| e,                        // nonsense about edges and partitioning
+                 |_k,l,d| (*d, l.0, l.1 + 1))  // dst d can be reached from r in s + 1 steps
+             .concat(&nodes)
+             .group_by_u(
+                 |x| (x.0, (x.1, x.2)),        // incoming (n,r,s) -> key: n, val: (r,s)
+                 |k:&_,v:&(U,_)| (*k,v.0,v.1), // nonsense about output (ew types)
+                 |_, s, t| {
+                     t.push(s[0]);             // first record is least dist to least root
+                     let mut r = (s[0].0).0;   // track the root we are looking at
+                     for &x in s {             // for each available distance ...
+                         if (x.0).0 > r {      // ... if it is a new root ...
+                             t.push(x);        // ... push the measurement and ...
+                             r = (x.0).0;      // ... update the tracked root.
+                         }
+                     }
+                 })
      })
 }
