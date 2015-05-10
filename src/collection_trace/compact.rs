@@ -1,109 +1,19 @@
 use std::mem;
 use std::marker::PhantomData;
 
-use core::nonzero::NonZero;
+// use core::nonzero::NonZero;
 
 use sort::{coalesce, is_sorted};
-use collection_trace::{close_under_lub, LeastUpperBound, Lookup};
+use collection_trace::{close_under_lub, LeastUpperBound, Lookup, Offset};
 
-#[derive(Copy, Clone, Eq, PartialEq)]
-pub struct Offset {
-    dataz: NonZero<u32>,
-}
-
-impl Offset {
-    pub fn new(offset: usize) -> Offset {
-        assert!(offset < u32::max_value() as usize); // note strict inequality
-        Offset { dataz: unsafe { NonZero::new(u32::max_value() - offset as u32) } }
-    }
-    #[inline(always)] pub fn val(&self) -> usize { (u32::max_value() - *self.dataz) as usize }
-}
-
-type IndexEntry<T> = IndexEntry32<T>;
-
-pub struct IndexEntry32<T> {
-    index:  T,
-    offset: u32,
-    length: u32,
-    next:   Option<Offset>,
-}
-
-impl<T> IndexEntry32<T> {
-    pub fn index(&self) -> &T { &self.index }
-    pub fn offset(&self) -> usize { self.offset as usize }
-    pub fn length(&self) -> usize { self.length as usize }
-    pub fn next(&self, _position: usize) -> Option<Offset> { self.next }
-    pub fn new(index: T, offset: usize, length: usize, next: Option<Offset>) -> IndexEntry32<T> {
-
-        assert!(offset < u32::max_value() as usize);
-        assert!(length < u32::max_value() as usize);
-
-        IndexEntry32 {
-            index:  index,
-            offset: offset as u32,
-            length: length as u32,
-            next:   next,
-        }
-    }
-}
-
-// pub struct IndexEntry64<T> {
-//     index:  T,
-//     offset: u64,
-//     length: u64,
-//     next:   u64,    // Option<NonZero<u64>> for the decrement would be cooler. unsafe, and needs more thinking.
-// }
-//
-// impl<T> IndexEntry64<T> {
-//     pub fn index(&self) -> &T { &self.index }
-//     pub fn offset(&self) -> usize { self.offset as usize }
-//     pub fn length(&self) -> usize { self.length as usize }
-//     pub fn next(&self, _position: usize) -> Option<usize> {
-//         if self.next != u64::max_value()  {
-//             Some(self.next as usize)
-//         } else { None } }
-//     pub fn new(index: T, offset: usize, length: usize, next: usize) -> IndexEntry64<T> {
-//         IndexEntry64 {
-//             index: index,
-//             offset: offset as u64,
-//             length: length as u64,
-//             next: if next == usize::max_value() { u64::max_value() } else { next as u64 },
-//         }
-//     }
-// }
-
-// In at attempt to reduce the amount of space required by collection trace, we are going to exploit
-// its append-only immutability, and "everything arrives for an index at once" properties.
-//  *  Updates will stay a nice flat vector (though, it could be split if needed).
-//  *  Each time will cover one contiguous span of updates: a position in updates determines a time.
-//  *  Regions will be indicated by an offset, with the length determined by the next offset in seq
-//  *  We'll also need some sort of next pointer to chain these together.
-
-// I reason the per-key cost is one Offset, the per-index cost is two Offsets, and no additional
-// per-update cost. The main pain point will be moving through the times sequentially to find which
-// one corresponds to a supplied offset, but this could become binary search as well, if needed.
-// This also limits us more seriously to 32 bits while we use that many, though I think this was
-// already the case with whatever we have at the moment.
-
-pub struct CollectionTrace<K, T, V, L: Lookup<K, Offset>> {
+pub struct Compact<K, T, V, L: Lookup<K, Offset>> {
     phantom:    PhantomData<K>,
     updates:    Vec<(V, i32)>,
-    times:      Vec<IndexEntry<T>>,
-    keys:       L,                      // stores u32::max_value() - target, so that NonZero works
+    links:      Vec<(u32, Option<Offset>)>,
+    times:      Vec<(T, usize)>,
+    keys:       L,
 
     temp:       Vec<(V, i32)>,
-}
-
-impl<K: Eq, T, V, L: Lookup<K, Offset>> Default for CollectionTrace<K, T, V, L> {
-    fn default() -> CollectionTrace<K, T, V, L> {
-        CollectionTrace {
-            phantom: PhantomData,
-            updates: Vec::new(),
-            times:   Vec::new(),
-            keys:    L::new(),
-            temp:    Vec::new(),
-        }
-    }
 }
 
 // TODO : Doing a fairly primitive merge here; re-reading every element every time;
@@ -141,9 +51,13 @@ fn merge<V: Ord+Clone>(mut slices: Vec<&[(V, i32)]>, target: &mut Vec<(V, i32)>)
 }
 
 
-impl<K: Eq, L: Lookup<K, Offset>, T: LeastUpperBound+Clone, V: Eq+Ord+Clone> CollectionTrace<K, T, V, L> {
+impl<K: Eq, L: Lookup<K, Offset>, T: LeastUpperBound+Clone, V: Eq+Ord+Clone> Compact<K, T, V, L> {
 
     pub fn set_difference<I: Iterator<Item=(V, i32)>>(&mut self, key: K, time: T, difference: I) {
+
+        if self.times.len() == 0 || self.times[self.times.len() - 1].0 != time {
+            self.times.push((time, self.links.len()));
+        }
 
         let offset = self.updates.len();
         self.updates.extend(difference);
@@ -151,14 +65,15 @@ impl<K: Eq, L: Lookup<K, Offset>, T: LeastUpperBound+Clone, V: Eq+Ord+Clone> Col
         // coalesce_from(&mut self.updates, offset);
 
         if self.updates.len() > offset {
-            let next_position = Offset::new(self.times.len());
-            let position = self.keys.entry_or_insert(key, || next_position);
-            if position == &next_position {
-                self.times.push(IndexEntry::new(time, offset, self.updates.len() - offset, None));
+
+            let next_position = Offset::new(self.links.len());
+            let prev_position = self.keys.entry_or_insert(key, || next_position);
+            if prev_position == &next_position {
+                self.links.push((offset as u32, None));
             }
             else {
-                let pos = mem::replace(position, next_position);
-                self.times.push(IndexEntry::new(time, offset, self.updates.len() - offset, Some(pos)));
+                self.links.push((offset as u32, Some(*prev_position)));
+                *prev_position = next_position;
             }
         }
     }
@@ -166,39 +81,88 @@ impl<K: Eq, L: Lookup<K, Offset>, T: LeastUpperBound+Clone, V: Eq+Ord+Clone> Col
     pub fn set_collection(&mut self, key: K, time: T, collection: &mut Vec<(V, i32)>) {
         coalesce(collection);
 
+        if self.times.len() == 0 || self.times[self.times.len() - 1].0 != time {
+            self.times.push((time.clone(), self.links.len()));
+        }
+
         let mut temp = mem::replace(&mut self.temp, Vec::new());
 
         self.get_collection(&key, &time, &mut temp);
         for index in (0..temp.len()) { temp[index].1 *= -1; }
 
-        let count = self.updates.len();
+        let offset = self.updates.len();
+
+        // TODO : Make this an iterator and use set_difference
         merge(vec![&temp[..], collection], &mut self.updates);
-        if self.updates.len() - count > 0 {
+        if self.updates.len() > offset {
             // we just made a mess in updates, and need to explain ourselves...
-            let next_position = Offset::new(self.times.len());
-            let position = self.keys.entry_or_insert(key, || next_position);
-            if position == &next_position {
-                self.times.push(IndexEntry::new(time, count, self.updates.len() - count, None));
+
+            let next_position = Offset::new(self.links.len());
+            let prev_position = self.keys.entry_or_insert(key, || next_position);
+            if prev_position == &next_position {
+                self.links.push((offset as u32, None));
             }
             else {
-                let pos = mem::replace(position, next_position);
-                self.times.push(IndexEntry::new(time, count, self.updates.len() - count, Some(pos)));
+                self.links.push((offset as u32, Some(*prev_position)));
+                *prev_position = next_position;
             }
-
         }
 
         mem::replace(&mut self.temp, temp);
         self.temp.clear();
     }
 
+    // this is the relatively expensive part of Compact.
+    // because we store indices implicitly, we have to look
+    // up the index for a position in self.links. This can
+    // be just a binary search, but that is more expensive
+    // than just looking at the data stashed if it were stashed
+    // in self.links.
+    fn get_index(&self, position: usize) -> usize {
+
+        let mut finger = 0;
+        assert!(self.times[finger].1 <= position);
+
+        let mut step = 1;
+        while finger + step < self.times.len() && self.times[finger + step].1 <= position {
+            finger += step;
+            step = step << 1;
+        }
+
+        step = step >> 1;
+        while step > 0 {
+            if finger + step < self.times.len() && self.times[finger + step].1 <= position {
+                finger += step;
+            }
+
+            step = step >> 1;
+        }
+
+        // finger should point at the last entry whose offset is less than position.
+        assert!(self.times[finger].1 <= position);
+        assert!(finger + 1 >= self.times.len() || self.times[finger + 1].1 > position);
+
+        finger
+    }
+
+    fn get_range(&self, position: Offset) -> &[(V, i32)] {
+        let lower = self.links[position.val()].0 as usize;
+        let upper = if (position.val() + 1) < self.links.len() { self.links[position.val() + 1].0 as usize } else { self.updates.len() };
+        &self.updates[lower..upper]
+    }
+
     pub fn get_difference(&self, key: &K, time: &T) -> &[(V, i32)] {
+
         let mut next = self.keys.get_ref(key).map(|&x|x);
         while let Some(position) = next {
-            let diff = &self.times[position.val()];
-            if diff.index() == time {
-                return &self.updates[diff.offset()..][..diff.length()];
+            let time_index = self.get_index(position.val());
+            if &self.times[time_index].0 == time {
+                return self.get_range(position);
+                // let lower = self.links[position.val()].0 as usize;
+                // let upper = if (position.val() + 1) < self.links.len() { self.links[position.val() + 1].0 as usize } else { self.updates.len() };
+                // return &self.updates[lower..upper];
             }
-            next = diff.next(position.val());
+            next = self.links[position.val()].1;
         }
         return &[]; // didn't find anything
     }
@@ -206,11 +170,14 @@ impl<K: Eq, L: Lookup<K, Offset>, T: LeastUpperBound+Clone, V: Eq+Ord+Clone> Col
         let mut slices = Vec::new();
         let mut next = self.keys.get_ref(key).map(|&x|x);
         while let Some(position) = next {
-            let diff = &self.times[position.val()];
-            if diff.index() <= time {
-                slices.push(&self.updates[diff.offset()..][..diff.length()]);
+            let time_index = self.get_index(position.val());
+            if &self.times[time_index].0 <= time {
+                slices.push(self.get_range(position));
+                // let lower = self.links[position.val()].0 as usize;
+                // let upper = if (position.val() + 1) < self.links.len() { self.links[position.val() + 1].0 as usize } else { self.updates.len() };
+                // slices.push(&self.updates[lower..upper]);
             }
-            next = diff.next(position.val());
+            next = self.links[position.val()].1;
         }
 
         // target.clear();
@@ -230,18 +197,22 @@ impl<K: Eq, L: Lookup<K, Offset>, T: LeastUpperBound+Clone, V: Eq+Ord+Clone> Col
     pub fn map_over_times<F:FnMut(&T, &[(V, i32)])>(&self, key: &K, mut func: F) {
         let mut next = self.keys.get_ref(key).map(|&x|x);
         while let Some(position) = next {
-            let diff = &self.times[position.val()];
-            func(diff.index(), &self.updates[diff.offset()..][..diff.length()]);
-            next = diff.next(position.val());
+            let time_index = self.get_index(position.val());
+            func(&self.times[time_index].0, self.get_range(position));
+            // let lower = self.links[position.val()].0 as usize;
+            // let upper = if (position.val() + 1) < self.links.len() { self.links[position.val() + 1].0 as usize } else { self.updates.len() };
+            // func(&self.times[time_index].0, &self.updates[lower..upper]);
+            next = self.links[position.val()].1;
         }
     }
 }
 
-impl<K: Eq, L: Lookup<K, Offset>, T: LeastUpperBound+Clone, V: Eq+Ord+Clone> CollectionTrace<K, T, V, L> {
-    pub fn new(l: L) -> CollectionTrace<K, T, V, L> {
-        CollectionTrace {
+impl<K: Eq, L: Lookup<K, Offset>, T: LeastUpperBound+Clone, V: Eq+Ord+Clone> Compact<K, T, V, L> {
+    pub fn new(l: L) -> Compact<K, T, V, L> {
+        Compact {
             phantom: PhantomData,
             updates: Vec::new(),
+            links:   Vec::new(),
             times:   Vec::new(),
             keys:    l,
             temp:    Vec::new(),
@@ -249,7 +220,8 @@ impl<K: Eq, L: Lookup<K, Offset>, T: LeastUpperBound+Clone, V: Eq+Ord+Clone> Col
     }
     pub fn size(&self) -> usize {
         self.updates.len() * mem::size_of::<(V, i32)>() +
-         self.times.len() * mem::size_of::<IndexEntry<T>>()
+        self.links.len() * mem::size_of::<(u32, Option<Offset>)>() +
+        self.times.len() * mem::size_of::<(T, usize)>()
     }
 }
 

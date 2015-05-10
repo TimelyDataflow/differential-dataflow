@@ -1,6 +1,6 @@
 use std::default::Default;
 use std::hash::Hash;
-use std::collections::HashSet;
+// use std::collections::HashSet;
 use std::collections::HashMap;
 
 use timely::example_shared::*;
@@ -99,15 +99,17 @@ pub trait GroupByExt<G: GraphBuilder, D1: Data+Columnar> : UnaryNotifyExt<G, (D1
                         trace.source.set_difference(key.clone(), index.clone(), list.drain(..));
                         trace.source.interesting_times(&key, &index, &mut idx);
                         for update in idx.drain(..) {
-                            to_do.entry_or_insert(update, || { notificator.notify_at(&update); HashSet::new() })
-                                 .insert(key.clone());
+                            to_do.entry_or_insert(update, || { notificator.notify_at(&update); Vec::new() })
+                                 .push(key.clone());
                         }
                     }
                 }
 
                 // 2b. if we have work to do at this notification (probably)
-                if let Some(keys) = to_do.remove_key(&index) {
+                if let Some(mut keys) = to_do.remove_key(&index) {
                     let mut session = output.session(&index);
+                    qsort(&mut keys[..]);
+                    keys.dedup();
                     for key in keys {
                         trace.set_collection_with(&key, &index, |k,s,r| logic(k,s,r));
                         for &(ref result, weight) in trace.result.get_difference(&key, &index)  {

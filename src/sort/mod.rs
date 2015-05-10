@@ -3,12 +3,13 @@ use std::ptr;
 use std::intrinsics;
 
 pub fn coalesce<T: Ord>(vec: &mut Vec<(T, i32)>) { coalesce_from(vec, 0); }
+
+#[inline(always)]
 pub fn coalesce_from<T: Ord>(vec: &mut Vec<(T, i32)>, offset: usize) {
     if !is_sorted(&vec[offset..]) {
         if vec.len() < 32 { isort_by(&mut vec[offset..], &|&(ref x,_)| x); }
-        else              { (&mut vec[offset..]).sort(); }
-
-        // else              { qsort_by(&mut vec[offset..], &|&(ref x,_)| x); }
+        else              { qsort_by(&mut vec[offset..], &|&(ref x,_)| x); }
+        // else              { (&mut vec[offset..]).sort(); }
     }
     merge_weights_from(vec, offset);
 
@@ -43,10 +44,12 @@ pub fn merge_weights_from<T: Ord>(vec: &mut Vec<(T, i32)>, offset: usize) {
 // qsort initially stolen from BurntSushi, who uses an unlicense.
 // somewhat different now, but some structure remains!
 pub fn qsort<T: Ord>(xs: &mut [T]) { qsort_by(xs, &|x| x); }
+
+#[inline(always)]
 pub fn qsort_by<V, T: Ord, F: Fn(&V)->&T>(xs: &mut [V], f: &F) {
     let mut work = vec![xs];
     while let Some(slice) = work.pop() {
-        if slice.len() < 32 { isort_by(slice, f) }
+        if slice.len() < 16 { isort_by(slice, f) }
         else {
             let p = partition1(slice, f);
             let next = slice.split_at_mut(p);
@@ -85,6 +88,8 @@ pub fn _ssort<T: Ord>(xs: &mut [T]) {
 
 // insertion sort
 pub fn isort<T: Ord>(xs: &mut [T]) { isort_by(xs, &|x| x); }
+
+#[inline(always)]
 pub fn isort_by<V, T: Ord, F:Fn(&V)->&T>(xs: &mut [V], f: &F) {
     for i in 1..xs.len() {
         let mut j = i;
@@ -95,6 +100,7 @@ pub fn isort_by<V, T: Ord, F:Fn(&V)->&T>(xs: &mut [V], f: &F) {
             // }
             while j > 0 && f(xs.get_unchecked(j-1)) > f(xs.get_unchecked(i)) { j -= 1; }
 
+            // bulk shift the stuff we skipped over
             let mut tmp: V = mem::uninitialized();
             ptr::swap(&mut tmp, xs.get_unchecked_mut(i));
             intrinsics::copy(xs.get_unchecked_mut(j), xs.get_unchecked_mut(j+1), i-j);
@@ -104,6 +110,7 @@ pub fn isort_by<V, T: Ord, F:Fn(&V)->&T>(xs: &mut [V], f: &F) {
     }
 }
 
+#[inline(always)]
 pub fn partition1<V, T: Ord, F: Fn(&V)->&T>(xs: &mut [V], f: &F) -> usize {
 
     let pivot = xs.len() / 2;
@@ -113,8 +120,11 @@ pub fn partition1<V, T: Ord, F: Fn(&V)->&T>(xs: &mut [V], f: &F) -> usize {
 
     unsafe {
         while lower < upper {
-            while lower < upper && f(&xs.get_unchecked(lower)) <= f(&xs.get_unchecked(pivot)) { lower += 1; }
-            while lower < upper && f(&xs.get_unchecked(pivot)) <= f(&xs.get_unchecked(upper)) { upper -= 1; }
+            // NOTE : Pairs are here to insulate against "same key" balance issues
+            while lower < upper && (f(&xs.get_unchecked(lower)),lower) <= (f(&xs.get_unchecked(pivot)),pivot) { lower += 1; }
+            while lower < upper && (f(&xs.get_unchecked(pivot)),pivot) <= (f(&xs.get_unchecked(upper)),upper) { upper -= 1; }
+            // while lower < upper && f(&xs.get_unchecked(lower)) <= f(&xs.get_unchecked(pivot)) { lower += 1; }
+            // while lower < upper && f(&xs.get_unchecked(pivot)) <= f(&xs.get_unchecked(upper)) { upper -= 1; }
             ptr::swap(xs.get_unchecked_mut(lower), xs.get_unchecked_mut(upper));
         }
     }
@@ -149,26 +159,72 @@ pub fn partition2<V, T: Ord, F: Fn(&V)->&T>(xs: &mut [V], f: &F) -> usize {
     nextp
 }
 
-pub fn rshuf<T: Ord, F: Fn(&T)->u64>(slice: &mut [T], func: F) {
-    _rstep8(slice, &func, |slice| if slice.len() < 256 { isort(slice) }
-                                 else { _rstep8(slice, &|x| func(x) >> 8, |slice| if slice.len() < 256 { isort(slice) } else { slice.sort() }) })
-}
+// pub fn rshuf<T: Ord, F: Fn(&T)->u64>(slice: &mut [T], func: F) {
+//     _rstep8(slice, &func, |slice| if slice.len() < 256 { isort(slice) }
+//                                  else { _rstep8(slice, &|x| func(x) >> 8, |slice| if slice.len() < 256 { isort(slice) } else { slice.sort() }) })
+// }
+//
+// pub fn _rstep8<T, F: Fn(&T)->u64, A: Fn(&mut [T])>(slice: &mut [T], func: &F, andthen: A) {
+//     let mut ranges = [(0, 0); 256];
+//     for elem in slice.iter() { ranges[(func(elem) & 0xFF) as usize].1 += 1; }
+//     for i in 1..ranges.len() { ranges[i].0 = ranges[i-1].1;
+//                                ranges[i].1 += ranges[i].0; }
+//
+//     let mut cursor = 0;
+//     for i in 0..256 {
+//         while ranges[i].0 < ranges[i].1 {
+//             let dst = (func(&slice[ranges[i].0]) & 0xFF) as usize;
+//             if dst != i { slice.swap(ranges[i].0, ranges[dst].0); }
+//             ranges[dst].0 += 1;
+//         }
+//
+//         andthen(&mut slice[cursor..ranges[i].0]);
+//         cursor = ranges[i].0;
+//     }
+// }
 
-pub fn _rstep8<T, F: Fn(&T)->u64, A: Fn(&mut [T])>(slice: &mut [T], func: &F, andthen: A) {
-    let mut ranges = [(0, 0); 256];
-    for elem in slice.iter() { ranges[(func(elem) & 0xFF) as usize].1 += 1; }
-    for i in 1..ranges.len() { ranges[i].0 = ranges[i-1].1;
-                               ranges[i].1 += ranges[i].0; }
+pub fn rsort<T:Ord, F: Fn(&T)->u64, G: Fn(&mut [T])>(slice: &mut [T], func: &F, and_then: &G) {
 
-    let mut cursor = 0;
-    for i in 0..256 {
-        while ranges[i].0 < ranges[i].1 {
-            let dst = (func(&slice[ranges[i].0]) & 0xFF) as usize;
-            if dst != i { slice.swap(ranges[i].0, ranges[dst].0); }
-            ranges[dst].0 += 1;
+    let mut upper = [0; 256];
+    let mut lower = [0; 256];
+
+    let mut work = vec![(slice, 0)];
+
+    while let Some((mut slice, shift)) = work.pop() {
+
+        // count number of elts with each radix
+        for i in 0..upper.len() { upper[i] = 0; }
+        for elem in slice.iter() { unsafe { *upper.get_unchecked_mut(((func(elem) >> shift) & 0xFF) as usize) += 1; } }
+
+        lower[0] = 0;
+        for i in 1..lower.len() { lower[i] = upper[i-1];
+                                  upper[i] += lower[i]; }
+
+        for i in 0..256 {
+            while lower[i] < upper[i] {
+                let dst = ((func(unsafe { slice.get_unchecked_mut(*lower.get_unchecked_mut(i)) }) >> shift) & 0xFF) as usize;
+                if dst != i {
+                    // slice.swap(ranges[i].0, ranges[dst].0);
+                    unsafe {
+                        let pa: *mut T = slice.get_unchecked_mut(*lower.get_unchecked_mut(i));
+                        let pb: *mut T = slice.get_unchecked_mut(*lower.get_unchecked_mut(dst));
+                        ptr::swap(pa, pb);
+                    }
+                }
+                lower[dst] += 1;
+            }
         }
 
-        andthen(&mut slice[cursor..ranges[i].0]);
-        cursor = ranges[i].0;
+        let mut cursor = 0;
+        for i in 0..256 {
+            let temp = slice;
+            let (todo, rest) = temp.split_at_mut(lower[i] - cursor);
+
+            if todo.len() > 256  && todo.len() < lower[255] / 2 { work.push((todo, shift + 8)); }
+            else                                                { and_then(todo); }
+
+            slice = rest;
+            cursor = lower[i];
+        }
     }
 }

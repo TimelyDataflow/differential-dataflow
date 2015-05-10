@@ -52,10 +52,8 @@ fn main() {
             input
         });
 
-        let node_count = 40_000_000;
-        let edge_count = 40_000_000;
-        // let node_count = 40;
-        // let edge_count = 40;
+        let node_count = 50_000_000;
+        let edge_count = 200_000_000;
 
         let seed: &[_] = &[1, 2, 3, 4];
         let mut rng: StdRng = SeedableRng::from_seed(seed);
@@ -66,12 +64,19 @@ fn main() {
         // let mut rng = rand::thread_rng();
         let mut edges = Vec::new();
         for _ in 0..edge_count {
-            edges.push((((rng.gen::<u64>() % node_count) as u32, (rng.gen::<u64>() % node_count) as u32), 1))
+            edges.push(((rng.gen_range(0, node_count), rng.gen_range(0, node_count)), 1))
         }
 
-        input.send_at(0, edges.clone().into_iter()
-                                      .map(|((x,y),w)|((x as u32, y as u32), w))
-                                      );
+        {
+            let mut slice = &edges[..];
+            while slice.len() > 0 {
+                let next = if slice.len() < 1000 { slice.len() } else { 1000 };
+                input.send_at(0, slice[..next].to_vec().into_iter());
+                computation.step();
+                slice = &slice[next..];
+            }
+        }
+        // input.send_at(0, edges.clone().into_iter());
 
         let mut round = 0 as u32;
         let mut changes = Vec::new();
@@ -80,9 +85,8 @@ fn main() {
 
                 for _ in 0..100 {
 
-                    let new_record = (((rng.gen::<u64>() % node_count) as u32,
-                                       (rng.gen::<u64>() % node_count) as u32), 1);
-                    let new_position = rng.gen::<usize>() % edges.len();
+                    let new_record = ((rng.gen_range(0, node_count), rng.gen_range(0, node_count)), 1);
+                    let new_position = rng.gen_range(0, edges.len());
                     let mut old_record = mem::replace(&mut edges[new_position], new_record.clone());
                     old_record.1 = -1;
                     changes.push(new_record);
@@ -107,18 +111,10 @@ fn connected_components<G: GraphBuilder, U: UnsignedInt>(edges: &Stream<G, ((U, 
 where G::Timestamp: LeastUpperBound+Hash {
 
     let edges = edges.map(|((x,y),w)| ((y,x),w)).concat(&edges);
-    let nodes = edges.map(|((_,x),w)| (x,w)).consolidate(|||&x|x.as_usize() as u64);
+    let nodes = edges.filter(|&((x,y),_)| x < y)
+                     .map(|((x,_),w)| (x,w)).consolidate(|||&x|x.as_usize() as u64);
 
     reachability(&edges, &nodes)
-}
-
-fn improve_labels<G: GraphBuilder, U: UnsignedInt>(labels: &Stream<G, ((U, U), i32)>, edges: &Stream<G, ((U, U), i32)>, nodes: &Stream<G, ((U, U), i32)>)
-    -> Stream<G, ((U, U), i32)>
-where G::Timestamp: LeastUpperBound {
-
-    labels.join_u(&edges, |l| l, |e| e, |_k,l,d| (*d,*l))
-          .concat(&nodes)
-          .group_by_u(|x| x, |k,v| (*k,*v), |_, s, t| { t.push((s[0].0, 1)); } )
 }
 
 fn reachability<G: GraphBuilder, U: UnsignedInt>(edges: &Stream<G, ((U, U), i32)>, nodes: &Stream<G, (U, i32)>)
@@ -136,21 +132,12 @@ where G::Timestamp: LeastUpperBound+Hash {
          .consolidate(|||x| x.0)
 }
 
-// fancier, but not-really-working, version where nodes with improved labels "cancel" their seed labels to avoid the state
-fn fancy_reachability<G: GraphBuilder, U: UnsignedInt>(edges: &Stream<G, ((U, U), i32)>, nodes: &Stream<G, (U, i32)>)
+
+fn improve_labels<G: GraphBuilder, U: UnsignedInt>(labels: &Stream<G, ((U, U), i32)>, edges: &Stream<G, ((U, U), i32)>, nodes: &Stream<G, ((U, U), i32)>)
     -> Stream<G, ((U, U), i32)>
-where G::Timestamp: LeastUpperBound+Hash {
+where G::Timestamp: LeastUpperBound {
 
-    edges.filter(|_| false)
-         .iterate(u32::max_value(), |||x| x.0, |inner| {
-             let edges = inner.builder().enter(&edges);
-             let nodes = inner.builder().enter(&nodes)
-                              .except(&inner.filter(|&((ref n, ref l),_)| l < n).map(|((n,_),w)| (n,w)))
-                              .delay(|r,t| { let mut t2 = t.clone(); t2.inner = 256 * (64 - r.0.as_usize().leading_zeros() as u32); t2 })
-                              .consolidate(|||&x| x)
-                              .map(|(x,w)| ((x,x),w));
-
-             improve_labels(inner, &edges, &nodes)
-         })
-         .consolidate(|||x| x.0)
+    labels.join_u(&edges, |l| l, |e| e, |_k,l,d| (*d,*l))
+          .concat(&nodes)
+          .group_by_u(|x| x, |k,v| (*k,*v), |_, s, t| { t.push((s[0].0, 1)); } )
 }

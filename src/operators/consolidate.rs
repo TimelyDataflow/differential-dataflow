@@ -23,6 +23,7 @@ impl<G: GraphBuilder, D: Ord+Data+Columnar> ConsolidateExt<D> for Stream<G, (D, 
         let mut inputs = Vec::new();    // Vec<(G::Timestamp, Vec<(D, i32))>
 
         let part1 = part();             // we may want a second one later on.
+        // let part2 = part();             // we may want a second one later on.
 
         let exch = Exchange::new(move |&(ref x,_)| part1(x).as_usize() as u64);
         self.unary_notify(exch, format!("Consolidate"), vec![], move |input, output, notificator| {
@@ -38,7 +39,7 @@ impl<G: GraphBuilder, D: Ord+Data+Columnar> ConsolidateExt<D> for Stream<G, (D, 
             while let Some((index, _count)) = notificator.next() {
                 if let Some(mut stash) = inputs.remove_key(&index) {
                     // let len = stash.len();
-                    coalesce(&mut stash);   // sorts and merges records; beats hashing.
+                    coalesce(&mut stash);
                     // println!("consolidating at {:?}: {} -> {}", index, len, stash.len());
                     output.give_at(&index, stash.drain(..));
                 }

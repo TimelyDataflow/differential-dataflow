@@ -1,4 +1,5 @@
 #![feature(core)]
+#![feature(collections)]
 #![feature(collections_drain)]
 #![feature(zero_one)]
 

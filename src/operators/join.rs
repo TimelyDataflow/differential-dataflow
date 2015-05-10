@@ -12,11 +12,12 @@ use timely::communication::pact::Exchange;
 use columnar::Columnar;
 
 // use collection_trace::batch_trace::BinaryTrace;
-use collection_trace::CollectionTrace;
+// use collection_trace::CollectionTrace;
+use collection_trace::Compact;
 
 use collection_trace::lookup::UnsignedInt;
 use collection_trace::{LeastUpperBound, Lookup, Offset};
-use sort::coalesce;
+use sort::*;
 use std::iter;
 
 impl<G: GraphBuilder, D1: Data+Columnar, S: BinaryNotifyExt<G, (D1, i32)>+MapExt<G, (D1, i32)>> JoinExt<G, D1> for S where G::Timestamp: LeastUpperBound {}
@@ -77,9 +78,8 @@ pub trait JoinExt<G: GraphBuilder, D1: Data+Columnar> : BinaryNotifyExt<G, (D1, 
         // TODO : pay more attention to the number of peers
         // TODO : find a better trait to sub-trait so we can read .builder
         // assert!(self.builder.peers() == 1);
-        let mut trace1 = Some(CollectionTrace::new(look(0)));
-        let mut trace2 = Some(CollectionTrace::new(look(0)));
-
+        let mut trace1 = Some(Compact::new(look(0)));
+        let mut trace2 = Some(Compact::new(look(0)));
 
         let mut stage1 = Vec::new();    // Vec<(T, Vec<(K, V1, i32)>)>;
         let mut stage2 = Vec::new();    // Vec<(T, Vec<(K, V2, i32)>)>;
@@ -159,7 +159,9 @@ pub trait JoinExt<G: GraphBuilder, D1: Data+Columnar> : BinaryNotifyExt<G, (D1, 
                     output.give_at(&time, vals.drain(..));
                 }
 
-                // println!("join size at {:?}: ({:?}, {:?})", time, trace1.as_ref().map(|x| x.size()).unwrap_or((0,0)), trace2.as_ref().map(|x|x.size()).unwrap_or((0,0)));
+                outbuf = Vec::new();
+
+                // println!("join size at {:?}: ({:?}, {:?})", time, trace1.as_ref().map(|x| x.size()).unwrap_or(0), trace2.as_ref().map(|x|x.size()).unwrap_or(0));
             }
         })
     }

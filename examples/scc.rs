@@ -1,6 +1,3 @@
-// #![feature(core)]
-#![feature(alloc)]
-
 extern crate rand;
 extern crate time;
 extern crate columnar;
@@ -8,8 +5,6 @@ extern crate timely;
 extern crate differential_dataflow;
 
 use std::mem;
-use std::rc::{Rc, try_unwrap};
-use std::cell::RefCell;
 
 use std::hash::Hash;
 use timely::example_shared::*;
@@ -35,7 +30,6 @@ use differential_dataflow::operators::*;
 
 fn main() {
     test_dataflow();
-    // find_difference();
 }
 
 fn _trim_and_flip<G: GraphBuilder, U: UnsignedInt>(graph: &Stream<G, ((U, U), i32)>)
@@ -44,14 +38,16 @@ fn _trim_and_flip<G: GraphBuilder, U: UnsignedInt>(graph: &Stream<G, ((U, U), i3
         graph.iterate(u32::max_value(), |||x|x.0, |edges| {
             let inner = edges.builder().enter(&graph);
             edges.map(|((x,_),w)| (x,w))
-                 .group_by_u(|x|(x,()), |&x,_| x, |&x,_,target| target.push((x,1)))
-                  .join_u(&inner, |x| (x,()), |(s,d)| (d,s), |&d,_,&s| (s,d))
+                 .group_by_u(|x|(x,()), |&x,_| x, |_,_,target| target.push(((),1)))
+                 .join_u(&inner, |x| (x,()), |(s,d)| (d,s), |&d,_,&s| (s,d))
              })
              .consolidate(|||x| x.0)
              .map(|((x,y),w)| ((y,x),w))
 }
 
-fn improve_labels<G: GraphBuilder, U: UnsignedInt>(labels: &Stream<G, ((U, U), i32)>, edges: &Stream<G, ((U, U), i32)>, nodes: &Stream<G, ((U, U), i32)>)
+fn improve_labels<G: GraphBuilder, U: UnsignedInt>(labels: &Stream<G, ((U, U), i32)>,
+                                                   edges: &Stream<G, ((U, U), i32)>,
+                                                   nodes: &Stream<G, ((U, U), i32)>)
     -> Stream<G, ((U, U), i32)>
 where G::Timestamp: LeastUpperBound {
 
@@ -60,14 +56,15 @@ where G::Timestamp: LeastUpperBound {
           .group_by_u(|x| x, |k,v| (*k,*v), |_, s, t| { t.push((s[0].0, 1)); } )
 }
 
-fn reachability<G: GraphBuilder, U: UnsignedInt>(edges: &Stream<G, ((U, U), i32)>, nodes: &Stream<G, ((U, U), i32)>)
+fn _reachability<G: GraphBuilder, U: UnsignedInt>(edges: &Stream<G, ((U, U), i32)>, nodes: &Stream<G, (U, i32)>)
     -> Stream<G, ((U, U), i32)>
 where G::Timestamp: LeastUpperBound+Hash {
 
     edges.filter(|_| false)
          .iterate(u32::max_value(), |||x| x.0, |inner| {
              let edges = inner.builder().enter(&edges);
-             let nodes = inner.builder().enter_at(&nodes, |r| 256 * (64 - (r.0).1.as_usize().leading_zeros() as u32));
+             let nodes = inner.builder().enter_at(&nodes, |r| 256 * (64 - r.0.as_usize().leading_zeros() as u32))
+                                        .map(|(x,w)| ((x,x),w));
 
              improve_labels(inner, &edges, &nodes)
          })
@@ -75,7 +72,7 @@ where G::Timestamp: LeastUpperBound+Hash {
 }
 
 
-fn fancy_reachability<G: GraphBuilder, U: UnsignedInt>(edges: &Stream<G, ((U, U), i32)>, nodes: &Stream<G, (U, i32)>)
+fn _fancy_reachability<G: GraphBuilder, U: UnsignedInt>(edges: &Stream<G, ((U, U), i32)>, nodes: &Stream<G, (U, i32)>)
     -> Stream<G, ((U, U), i32)>
 where G::Timestamp: LeastUpperBound+Hash {
 
@@ -100,7 +97,7 @@ fn trim_edges<G: GraphBuilder, U: UnsignedInt>(cycle: &Stream<G, ((U, U), i32)>,
 
     let nodes = edges.map(|((_,y),w)| (y,w)).consolidate(|||&x| x);
 
-    let labels = fancy_reachability(&cycle, &nodes);
+    let labels = _reachability(&cycle, &nodes);
 
     edges.join_u(&labels, |e| e, |l| l, |&e1,&e2,&l1| (e2,(e1,l1)))
          .join_u(&labels, |e| e, |l| l, |&e2,&(e1,l1),&l2| ((e1,e2),(l1,l2)))
@@ -120,101 +117,6 @@ fn strongly_connected<G: GraphBuilder, U: UnsignedInt>(graph: &Stream<G, ((U, U)
     })
 }
 
-fn _find_difference() {
-
-    for i in 1..1000 {
-        println!("testing: {}", i);
-        let node_count = i;
-        let edge_count = 2 * i;
-
-        for seed_idx in 0..20 {
-
-            let seed: &[_] = &[1, 2, 3, seed_idx];
-            let mut rng: StdRng = SeedableRng::from_seed(seed);
-            rng.gen::<f64>();
-
-            let mut edges = Vec::new();
-            for _ in 0..edge_count {
-                edges.push(((rng.gen_range(0, node_count), rng.gen_range(0, node_count)), 1));
-            }
-
-            let mut ans1 = _scc1(&edges);
-            let mut ans2 = _scc2(&edges);
-
-            ans1.sort();
-            ans2.sort();
-
-            if ans1 != ans2 {
-                println!("discrepancy found for ({}, {}), seed {}", node_count, edge_count, seed_idx);
-                println!("graph:\t{:?}", edges);
-                println!("ans1:\t{:?}", ans1);
-                println!("ans2:\t{:?}", ans2);
-                return();
-            }
-        }
-    }
-}
-
-fn _scc1(edges: &Vec<((u32, u32), i32)>) -> Vec<((u32, u32), i32)> {
-    let result = Rc::new(RefCell::new(Vec::new()));
-    {
-        let mut computation = GraphRoot::new(ThreadCommunicator);
-        let mut input = computation.subcomputation(|builder| {
-
-            let result = result.clone();
-            let (input, mut edges) = builder.new_input();
-
-            edges = _trim_and_flip(&edges);
-            edges = _trim_and_flip(&edges);
-
-            edges = strongly_connected(&edges);
-
-            edges.consolidate(|||x: &(u32, u32)| x.0)
-                 .inspect(move |x| result.borrow_mut().push(x.clone()));
-
-            input
-        });
-
-        input.send_at(0, edges.clone().into_iter());
-        input.close();
-
-        while computation.step() { }
-    }
-
-    try_unwrap(result).unwrap().into_inner()
-}
-
-
-fn _scc2(edges: &Vec<((u32, u32), i32)>) -> Vec<((u32, u32), i32)> {
-    let result = Rc::new(RefCell::new(Vec::new()));
-    {
-        let mut computation = GraphRoot::new(ThreadCommunicator);
-        let mut input = computation.subcomputation(|builder| {
-
-            let result = result.clone();
-            let (input, mut edges) = builder.new_input();
-
-            // edges = _trim_and_flip(edges);
-            // edges = _trim_and_flip(edges);
-
-            edges = strongly_connected(&edges);
-
-            edges.consolidate(|||x: &(u32, u32)| x.0)
-                 .inspect(move |x| result.borrow_mut().push(x.clone()));
-
-            input
-        });
-
-        input.send_at(0, edges.clone().into_iter());
-        input.close();
-
-        while computation.step() { }
-    }
-
-    try_unwrap(result).unwrap().into_inner()
-}
-
-
 fn test_dataflow() {
 
     let start = time::precise_time_s();
@@ -227,9 +129,6 @@ fn test_dataflow() {
 
         edges = _trim_and_flip(&edges);
         edges = _trim_and_flip(&edges);
-
-        // edges = edges.map(|((x,y),w)| ((y,x),w)).concat(&edges);
-        // reachability(&edges, &edges);
         edges = strongly_connected(&edges);
 
         edges.consolidate(|||x: &(u32, u32)| x.0)
@@ -241,8 +140,8 @@ fn test_dataflow() {
         input
     });
 
-    let node_count = 10_000_000;
-    let edge_count = 20_000_000;
+    let node_count = 1_000_000;
+    let edge_count = 2_000_000;
 
     let seed: &[_] = &[1, 2, 3, 4];
     let mut rng: StdRng = SeedableRng::from_seed(seed);
@@ -253,20 +152,26 @@ fn test_dataflow() {
     // let mut rng = rand::thread_rng();
     let mut edges = Vec::new();
     for _ in 0..edge_count {
-        edges.push((((rng.gen::<u64>() % node_count) as u32, (rng.gen::<u64>() % node_count) as u32), 1))
+        edges.push(((rng.gen_range(0, node_count), rng.gen_range(0, node_count)), 1));
     }
 
-    input.send_at(0, edges.clone().into_iter()
-                                  .map(|((x,y),w)|((x as u32, y as u32), w))
-                                  );
+    // input.send_at(0, edges.clone().into_iter());
+    {
+        let mut slice = &edges[..];
+        while slice.len() > 0 {
+            let next = if slice.len() < 1000 { slice.len() } else { 1000 };
+            input.send_at(0, slice[..next].to_vec().into_iter());
+            computation.step();
+            slice = &slice[next..];
+        }
+    }
 
     // let mut round = 0 as u32;
     // while computation.step() {
     //     if time::precise_time_s() - start >= round as f64 {
     //
-    //         let new_record = (((rng.gen::<u64>() % node_count) as u32,
-    //                            (rng.gen::<u64>() % node_count) as u32), 1);
-    //         let new_position = rng.gen::<usize>() % edges.len();
+    //         let new_record = ((rng.gen_range(0, node_count), rng.gen_range(0, node_count)), 1);
+    //         let new_position = rng.gen_range(0, edges.len());
     //         let mut old_record = mem::replace(&mut edges[new_position], new_record.clone());
     //         old_record.1 = -1;
     //
