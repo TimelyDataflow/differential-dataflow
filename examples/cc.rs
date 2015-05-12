@@ -6,14 +6,14 @@ extern crate columnar;
 extern crate timely;
 extern crate differential_dataflow;
 
-use std::mem;
-// use std::rc::{Rc, try_unwrap};
-// use std::cell::RefCell;
-
 use std::hash::Hash;
 use timely::example_shared::*;
 use timely::example_shared::operators::*;
 use timely::communication::ThreadCommunicator;
+use timely::communication::pact::Pipeline;
+use timely::communication::observer::ObserverSessionExt;
+use timely::progress::timestamp::RootTimestamp;
+use timely::progress::nested::product::Product;
 
 use rand::{Rng, SeedableRng, StdRng};
 
@@ -45,52 +45,53 @@ fn main() {
             edges = connected_components(&edges);
 
             edges.consolidate(|||x: &(u32, u32)| x.0)
-                 .inspect_batch(move |t, x| { println!("{}s:\tobserved at {:?}: {:?} changes",
-                                                     ((time::precise_time_s() - start2)) - (t.inner as f64),
-                                                     t, x.len()) });
+                 .unary_notify(Pipeline, format!("observer"), vec![RootTimestamp::new(0)], move |input, output, notificator| {
+                    while let Some((t, _)) = notificator.next() {
+                        println!("{}", ((time::precise_time_s() - start2)) - (t.inner as f64));
+                        // println!("{}s:\tnotified at {:?}", ((time::precise_time_s() - start2)) - (t.inner as f64), t);
+                        notificator.notify_at(&Product::new(t.outer, t.inner + 1));
+                    }
+                    while let Some((time, data)) = input.pull() {
+                        output.give_at(&time, data.drain(..));
+                    }
+                 })
+                //  .inspect_batch(move |t, x| { println!("{}s:\tobserved at {:?}: {:?} changes",
+                //                                      ((time::precise_time_s() - start2)) - (t.inner as f64),
+                //                                      t, x.len()) })
+                ;
 
             input
         });
 
-        let node_count = 50_000_000;
-        let edge_count = 200_000_000;
+        let nodes = 20_000_000;
+        let edges = 400_000_000;
+
+        println!("determining CC of {} nodes, {} edges:", nodes, edges);
 
         let seed: &[_] = &[1, 2, 3, 4];
-        let mut rng: StdRng = SeedableRng::from_seed(seed);
-        rng.gen::<f64>();
+        let mut rng1: StdRng = SeedableRng::from_seed(seed);
+        let mut rng2: StdRng = SeedableRng::from_seed(seed);
 
-        println!("determining CC of {} nodes, {} edges:", node_count, edge_count);
+        rng1.gen::<f64>();
+        rng2.gen::<f64>();
 
-        // let mut rng = rand::thread_rng();
-        let mut edges = Vec::new();
-        for _ in 0..edge_count {
-            edges.push(((rng.gen_range(0, node_count), rng.gen_range(0, node_count)), 1))
+        let mut left = edges;
+        while left > 0 {
+            let next = if left < 1000 { left } else { 1000 };
+            input.send_at(0, (0..next).map(|_| ((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), 1)));
+            computation.step();
+            left -= next;
         }
 
-        {
-            let mut slice = &edges[..];
-            while slice.len() > 0 {
-                let next = if slice.len() < 1000 { slice.len() } else { 1000 };
-                input.send_at(0, slice[..next].to_vec().into_iter());
-                computation.step();
-                slice = &slice[next..];
-            }
-        }
-        // input.send_at(0, edges.clone().into_iter());
 
         let mut round = 0 as u32;
         let mut changes = Vec::new();
         while computation.step() {
             if time::precise_time_s() - start >= round as f64 {
-
-                for _ in 0..100 {
-
-                    let new_record = ((rng.gen_range(0, node_count), rng.gen_range(0, node_count)), 1);
-                    let new_position = rng.gen_range(0, edges.len());
-                    let mut old_record = mem::replace(&mut edges[new_position], new_record.clone());
-                    old_record.1 = -1;
-                    changes.push(new_record);
-                    changes.push(old_record);
+                let change_count = 1000;
+                for _ in 0..change_count {
+                    changes.push(((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), 1));
+                    changes.push(((rng2.gen_range(0, nodes), rng2.gen_range(0, nodes)),-1));
                 }
 
                 input.send_at(round, changes.drain(..));
@@ -103,7 +104,6 @@ fn main() {
 
         while computation.step() { }
         computation.step(); // shut down
-
 }
 
 fn connected_components<G: GraphBuilder, U: UnsignedInt>(edges: &Stream<G, ((U, U), i32)>)

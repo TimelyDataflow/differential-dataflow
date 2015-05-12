@@ -140,8 +140,8 @@ fn test_dataflow() {
         input
     });
 
-    let node_count = 1_000_000;
-    let edge_count = 2_000_000;
+    let node_count = 10_000_000;
+    let edge_count = 20_000_000;
 
     let seed: &[_] = &[1, 2, 3, 4];
     let mut rng: StdRng = SeedableRng::from_seed(seed);
@@ -166,20 +166,20 @@ fn test_dataflow() {
         }
     }
 
-    // let mut round = 0 as u32;
-    // while computation.step() {
-    //     if time::precise_time_s() - start >= round as f64 {
-    //
-    //         let new_record = ((rng.gen_range(0, node_count), rng.gen_range(0, node_count)), 1);
-    //         let new_position = rng.gen_range(0, edges.len());
-    //         let mut old_record = mem::replace(&mut edges[new_position], new_record.clone());
-    //         old_record.1 = -1;
-    //
-    //         input.send_at(round, vec![old_record, new_record].into_iter());
-    //         input.advance_to(round + 1);
-    //         round += 1;
-    //     }
-    // }
+    let mut round = 0 as u32;
+    while computation.step() {
+        if time::precise_time_s() - start >= round as f64 {
+
+            let new_record = ((rng.gen_range(0, node_count), rng.gen_range(0, node_count)), 1);
+            let new_position = rng.gen_range(0, edges.len());
+            let mut old_record = mem::replace(&mut edges[new_position], new_record.clone());
+            old_record.1 = -1;
+
+            input.send_at(round, vec![old_record, new_record].into_iter());
+            input.advance_to(round + 1);
+            round += 1;
+        }
+    }
 
     input.close();
 

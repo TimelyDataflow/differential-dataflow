@@ -1,9 +1,10 @@
 use std::marker::PhantomData;
 
 
-use collection_trace::{CollectionTrace, Compact, LeastUpperBound, Lookup, Offset};
+use collection_trace::{CollectionTrace, Compact, Hybrid, LeastUpperBound, Lookup, Offset};
 
-pub type Trace<K, T, S, L> = Compact<K, T, S, L>;
+pub type Trace<K, T, S, L> = Hybrid<K, T, S, L>;
+// pub type Trace<K, T, S, L> = Compact<K, T, S, L>;
 // pub type Trace<K, T, S, L> = CollectionTrace<K, T, S, L>;
 
 pub struct OperatorTrace<K, T, S: Ord, R: Ord, L: Lookup<K, Offset>> {
