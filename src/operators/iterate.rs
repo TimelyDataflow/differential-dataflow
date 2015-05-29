@@ -16,25 +16,25 @@ use operators::ExceptExt;
 use operators::ConsolidateExt;
 
 pub trait IterateExt<G: GraphBuilder, D: Data> {
-    fn iterate<Q: Fn()->P,
-               P: Fn(&D)->U+'static,
+    fn iterate<P1: Fn(&D)->U+'static,
+               P2: Fn(&D)->U+'static,
                U: UnsignedInt,
                F: FnOnce(&Stream<SubgraphBuilder<G, T>, (D,i32)>)->
                          Stream<SubgraphBuilder<G, T>, (D,i32)>,
                T: Timestamp+LeastUpperBound=u64,
                >
-        (&self, iterations: T, part: Q, logic: F) -> Stream<G, (D,i32)> where G::Timestamp: LeastUpperBound, T::Summary: One;
+        (&self, iterations: T, part1: P1, part2: P2, logic: F) -> Stream<G, (D,i32)> where G::Timestamp: LeastUpperBound, T::Summary: One;
 }
 
 impl<G: GraphBuilder, D: Ord+Data+Columnar> IterateExt<G, D> for Stream<G, (D, i32)> {
-    fn iterate<Q: Fn()->P,
-               P: Fn(&D)->U+'static,
+    fn iterate<P1: Fn(&D)->U+'static,
+               P2: Fn(&D)->U+'static,
                U: UnsignedInt,
                F: FnOnce(&Stream<SubgraphBuilder<G, T>, (D,i32)>)->
                          Stream<SubgraphBuilder<G, T>, (D,i32)>,
                T: Timestamp+LeastUpperBound=u64,
                >
-        (&self, iterations: T, part: Q, logic: F) -> Stream<G, (D,i32)>
+        (&self, iterations: T, part1: P1, part2: P2, logic: F) -> Stream<G, (D,i32)>
 where G::Timestamp: LeastUpperBound, T::Summary: One {
 
         self.builder().subcomputation(|subgraph| {
@@ -44,7 +44,7 @@ where G::Timestamp: LeastUpperBound, T::Summary: One {
 
             let bottom = logic(&ingress.concat(&cycle));
 
-            bottom.except(&ingress).consolidate(part).connect_loop(feedback);
+            bottom.except(&ingress).consolidate(part1, part2).connect_loop(feedback);
             bottom.leave()
         })
     }

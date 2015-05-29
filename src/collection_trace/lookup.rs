@@ -54,32 +54,32 @@ impl<K: Eq+'static, V: 'static> Lookup<K, V> for Vec<(K, V)> {
     }
 }
 
-pub trait UnsignedInt : Copy+Eq+Ord+Hash+Data+Columnar+Default+'static { fn as_usize(&self) -> usize; }
-impl UnsignedInt for u64 { fn as_usize(&self) -> usize { *self as usize } }
-impl UnsignedInt for u32 { fn as_usize(&self) -> usize { *self as usize } }
-impl UnsignedInt for u16 { fn as_usize(&self) -> usize { *self as usize } }
-impl UnsignedInt for u8 { fn as_usize(&self) -> usize { *self as usize } }
+pub trait UnsignedInt : Copy+Eq+Ord+Hash+Data+Columnar+Default+'static { fn as_u64(&self) -> u64; }
+impl UnsignedInt for u64 { fn as_u64(&self) -> u64 { *self } }
+impl UnsignedInt for u32 { fn as_u64(&self) -> u64 { *self as u64 } }
+impl UnsignedInt for u16 { fn as_u64(&self) -> u64 { *self as u64 } }
+impl UnsignedInt for u8 { fn as_u64(&self) -> u64 { *self as u64 } }
 
 
 
 impl<V: 'static, U: UnsignedInt> Lookup<U,V> for (Vec<Option<V>>, u64) {
     fn new() -> Self { (Vec::new(), 0) }
     fn get_ref<'a>(&'a self, key: &U) -> Option<&'a V> {
-        let key = (key.as_usize() >> self.1) as usize;
+        let key = (key.as_u64() >> self.1) as usize;
         if self.0.len() > key { self.0[key].as_ref() } else { None }
     }
     fn get_mut<'a>(&'a mut self, key: &U) -> Option<&'a mut V> {
-        let key = (key.as_usize() >> self.1) as usize;
+        let key = (key.as_u64() >> self.1) as usize;
         if self.0.len() > key { self.0[key].as_mut() } else { None }
     }
     fn entry_or_insert<F: FnMut()->V>(&mut self, key: U, mut func: F) -> &mut V {
-        let key = (key.as_usize() >> self.1) as usize;
+        let key = (key.as_u64() >> self.1) as usize;
         while self.0.len() <= key { self.0.push(None); }
         if self.0[key].is_none() { self.0[key] = Some(func()); }
         self.0[key].as_mut().unwrap()
     }
     fn remove_key(&mut self, key: &U) -> Option<V> {
-        let key = (key.as_usize() >> self.1) as usize;
+        let key = (key.as_u64() >> self.1) as usize;
         if self.0.len() > key { self.0[key].take() } else { None }
     }
 }

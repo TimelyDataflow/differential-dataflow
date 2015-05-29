@@ -29,7 +29,7 @@ fn main() {
 
             // TODO : Type inference falls down w/o the u32, I guess because default int stuffs.
             bfs::<_,u32>(&graph, &roots).map(|((_,s),w)| (s,w))
-                               .consolidate(|||x| *x)
+                               .consolidate(|x| *x, |x| *x)
                                .inspect_batch(move |t, x| {
                                    let elapsed = time::precise_time_s() - start2;
                                    println!("{}s:\tobserved at {:?}: {:?} changes; elapsed: {}s", elapsed, t, x.len(), elapsed - (t.inner as f64));
@@ -93,7 +93,7 @@ where G::Timestamp: LeastUpperBound+Hash {
     let nodes = roots.map(|(x,w)| ((x, 0), w));
 
     // repeatedly update minimal distances each node can be reached from each root
-    nodes.iterate(u32::max_value(), |||x| x.0, |inner| {
+    nodes.iterate(u32::max_value(), |x| x.0, |x| x.0, |inner| {
 
         let edges = inner.builder().enter(&edges);
         let nodes = inner.builder().enter(&nodes);

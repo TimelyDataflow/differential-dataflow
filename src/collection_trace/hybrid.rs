@@ -1,7 +1,7 @@
 use std::mem;
 use std::marker::PhantomData;
 
-use sort::{coalesce, is_sorted};
+use sort::coalesce;
 use collection_trace::{close_under_lub, LeastUpperBound, Lookup, Offset};
 
 // Our plan with Hybrid is to make more explicit but indirected reference to times, by adding
@@ -55,37 +55,42 @@ fn merge<V: Ord+Clone>(mut slices: Vec<&[(V, i32)]>, target: &mut Vec<(V, i32)>)
 }
 
 
-impl<K: Eq, L: Lookup<K, Offset>, T: LeastUpperBound+Clone, V: Eq+Ord+Clone> Hybrid<K, T, V, L> {
+impl<K: Ord+Clone, L: Lookup<K, Offset>, T: LeastUpperBound+Clone, V: Ord+Clone> Hybrid<K, T, V, L> {
 
-    pub fn set_difference<I: Iterator<Item=(V, i32)>>(&mut self, key: K, time: T, difference: I) {
+    // this assumes that someone has gone and sorted things for us.
+    pub fn install_differences(&mut self, time: T, keys: &mut Vec<K>, vals: Vec<(V, i32)>) {
 
+        // TODO : build an iterator over (key, lower, slice) or something like that.
+        let mut lower = 0;  // the lower limit of the range of vals for the current key.
+        while lower < keys.len() {
+
+            // find the upper limit of this key range
+            let mut upper = lower + 1;
+            while upper < keys.len() && keys[lower] == keys[upper] {
+                upper += 1;
+            }
+
+            // adjust the linked list for keys[lower]
+            let next_position = Offset::new(self.links.len());
+            let prev_position = self.keys.entry_or_insert(keys[lower].clone(), || next_position);
+            if prev_position == &next_position {
+                self.links.push((self.times.len() as u32, lower as u32, None));
+            }
+            else {
+                self.links.push((self.times.len() as u32, lower as u32, Some(*prev_position)));
+                *prev_position = next_position;
+            }
+
+            lower = upper;
+        }
+
+        // TODO : logic is probably out-dated; should unconditionally pass this
         if self.times.len() == 0 || self.times[self.times.len() - 1].0 != time {
             if let Some(last) = self.times.last_mut() {
                 last.1.shrink_to_fit();
             }
-            self.times.push((time, Vec::new()));
+            self.times.push((time, vals));
         }
-
-        let index = self.times.len() - 1;
-        let updates = &mut self.times[index].1;
-        let offset = updates.len();
-        updates.extend(difference);
-        assert!(is_sorted(&updates[offset..]), "all current uses of set_difference provide sorted data.");
-        // coalesce_from(&mut self.updates, offset);
-
-        if updates.len() > offset {
-
-            let next_position = Offset::new(self.links.len());
-            let prev_position = self.keys.entry_or_insert(key, || next_position);
-            if prev_position == &next_position {
-                self.links.push((index as u32, offset as u32, None));
-            }
-            else {
-                self.links.push((index as u32, offset as u32, Some(*prev_position)));
-                *prev_position = next_position;
-            }
-        }
-
     }
 
     pub fn set_collection(&mut self, key: K, time: T, collection: &mut Vec<(V, i32)>) {
@@ -128,7 +133,7 @@ impl<K: Eq, L: Lookup<K, Offset>, T: LeastUpperBound+Clone, V: Eq+Ord+Clone> Hyb
         self.temp.clear();
     }
 
-    fn get_range(&self, position: Offset) -> &[(V, i32)] {
+    pub fn get_range(&self, position: Offset) -> &[(V, i32)] {
 
         let index = self.links[position.val()].0 as usize;
         let lower = self.links[position.val()].1 as usize;
@@ -146,49 +151,52 @@ impl<K: Eq, L: Lookup<K, Offset>, T: LeastUpperBound+Clone, V: Eq+Ord+Clone> Hyb
     }
 
     pub fn get_difference(&self, key: &K, time: &T) -> &[(V, i32)] {
-
-        let mut next = self.keys.get_ref(key).map(|&x|x);
-        while let Some(position) = next {
-            let time_index = self.links[position.val()].0 as usize;
-            if &self.times[time_index].0 == time {
-                return self.get_range(position);
-            }
-            next = self.links[position.val()].2;
-        }
-        return &[]; // didn't find anything
+        self.trace(key).filter(|x| x.0 == time).map(|x| x.1).next().unwrap_or(&[])
     }
-    pub fn get_collection(&self, key: &K, time: &T, target: &mut Vec<(V, i32)>) {
-        let mut slices = Vec::new();
-        let mut next = self.keys.get_ref(key).map(|&x|x);
-        while let Some(position) = next {
-            let time_index = self.links[position.val()].0 as usize;
-            if &self.times[time_index].0 <= time {
-                slices.push(self.get_range(position));
-            }
-            next = self.links[position.val()].2;
-        }
 
-        // target.clear();
+    pub fn get_collection(&self, key: &K, time: &T, target: &mut Vec<(V, i32)>) {
         assert!(target.len() == 0, "get_collection is expected to be called with an empty target.");
+        let slices = self.trace(key).filter(|x| x.0 <= time).map(|x| x.1).collect();
         merge(slices, target);
     }
 
     pub fn interesting_times(&mut self, key: &K, index: &T, result: &mut Vec<T>) {
-        self.map_over_times(key, |time, _| {
+        for (time, _) in self.trace(key) {
             let lub = time.least_upper_bound(index);
             if !result.contains(&lub) {
                 result.push(lub);
             }
-        });
+        }
         close_under_lub(result);
     }
-    pub fn map_over_times<F:FnMut(&T, &[(V, i32)])>(&self, key: &K, mut func: F) {
-        let mut next = self.keys.get_ref(key).map(|&x|x);
-        while let Some(position) = next {
-            let time_index = self.links[position.val()].0 as usize;
-            func(&self.times[time_index].0, self.get_range(position));
-            next = self.links[position.val()].2;
+
+    pub fn trace<'a, 'b>(&'a self, key: &'b K) -> TraceIterator<'a, K, T, V, L> {
+        TraceIterator {
+            trace: self,
+            next0: self.keys.get_ref(key).map(|&x|x),
         }
+    }
+}
+
+
+pub struct TraceIterator<'a, K: 'a, T: 'a, V: 'a, L: Lookup<K, Offset>+'a> {
+    trace: &'a Hybrid<K, T, V, L>,
+    next0: Option<Offset>,
+}
+
+impl<'a, K, T, V, L> Iterator for TraceIterator<'a, K, T, V, L>
+where K: Ord+Clone+'a,
+      T: LeastUpperBound+Clone+'a,
+      V: Ord+Clone+'a,
+      L: Lookup<K, Offset>+'a {
+    type Item = (&'a T, &'a [(V,i32)]);
+    fn next(&mut self) -> Option<Self::Item> {
+        self.next0.map(|position| {
+            let time_index = self.trace.links[position.val()].0 as usize;
+            let result = (&self.trace.times[time_index].0, self.trace.get_range(position));
+            self.next0 = self.trace.links[position.val()].2;
+            result
+        })
     }
 }
 
@@ -209,7 +217,7 @@ impl<K: Eq, L: Lookup<K, Offset>, T: LeastUpperBound+Clone, V: Eq+Ord+Clone> Hyb
     // }
 }
 
-
+// // special-cased for set_collection.
 // fn _sum<V: Ord+Clone>(mut a: &[(V, i32)], mut b: &[(V, i32)], target: &mut Vec<(V, i32)>) {
 //     while a.len() > 0 && b.len() > 0 {
 //         match a[0].0.cmp(&b[0].0) {
@@ -224,6 +232,45 @@ impl<K: Eq, L: Lookup<K, Offset>, T: LeastUpperBound+Clone, V: Eq+Ord+Clone> Hyb
 //     if b.len() > 0 { target.extend(b.iter().map(|x| x.clone())); }
 // }
 //
+
+// pub struct MergeIterator<'a, V: Ord+'a> {
+//     slices: Vec<&'a [(V, i32)]>,
+// }
+//
+// impl<'a, V: Ord+'a> Iterator for MergeIterator<'a, V> {
+//     type Item = (&'a V, i32);
+//     fn next(&mut self) -> Option<(&'a V, i32)> {
+//         // we can't tell how many elements we'll need to check before finding one that accumulates
+//         // to a non-zero frequency
+//         loop {
+//             if self.slices.len() > 0 {
+//                 let mut value = &self.slices[0][0].0;    // start with the first value
+//                 for slice in &self.slices[1..] {         // for each other value
+//                     if &slice[0].0 < value {        //   if it comes before the current value
+//                         value = &slice[0].0;        //     capture a reference to it
+//                     }
+//                 }
+//
+//                 let mut count = 0;                  // start with an empty accumulation
+//                 for slice in &mut self.slices[..] {      // for each non-empty slice
+//                     if &slice[0].0 == value {       //   if the first diff is for value
+//                         count += slice[0].1;        //     accumulate the delta
+//                         *slice = &slice[1..];       //     advance the slice by one
+//                     }
+//                 }
+//
+//                 self.slices.retain(|x| x.len() > 0);
+//                 if count != 0 {
+//                     return Some((value, count));
+//                 }
+//             }
+//             else {
+//                 return None;
+//             }
+//         }
+//     }
+// }
+
 // // a version of merge which returns a vector of references to values, avoiding the use of Clone
 // fn _ref_merge<'a, V: Ord>(mut slices: Vec<&'a[(V, i32)]>, target: &mut Vec<(&'a V, i32)>) {
 //     while slices.len() > 0 {

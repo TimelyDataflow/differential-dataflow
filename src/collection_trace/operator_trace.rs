@@ -1,13 +1,13 @@
 use std::marker::PhantomData;
 
 
-use collection_trace::{CollectionTrace, Compact, Hybrid, LeastUpperBound, Lookup, Offset};
+use collection_trace::{CollectionTrace, Hybrid, LeastUpperBound, Lookup, Offset};
 
 pub type Trace<K, T, S, L> = Hybrid<K, T, S, L>;
 // pub type Trace<K, T, S, L> = Compact<K, T, S, L>;
 // pub type Trace<K, T, S, L> = CollectionTrace<K, T, S, L>;
 
-pub struct OperatorTrace<K, T, S: Ord, R: Ord, L: Lookup<K, Offset>> {
+pub struct OperatorTrace<K: Ord, T, S: Ord, R: Ord, L: Lookup<K, Offset>> {
     phantom:        PhantomData<K>,
     src:            Vec<(S,i32)>,
     dst:            Vec<(R,i32)>,
@@ -15,7 +15,7 @@ pub struct OperatorTrace<K, T, S: Ord, R: Ord, L: Lookup<K, Offset>> {
     pub result:     Trace<K, T, R, L>,
 }
 
-impl<K: Eq+Clone, T:Clone+LeastUpperBound, S: Ord+Clone, R: Ord+Clone, L: Lookup<K, Offset>> OperatorTrace<K, T, S, R, L> {
+impl<K: Ord+Clone, T:Clone+LeastUpperBound, S: Ord+Clone, R: Ord+Clone, L: Lookup<K, Offset>> OperatorTrace<K, T, S, R, L> {
     pub fn new<F: Fn()->L>(lookup: F) -> OperatorTrace<K, T, S, R, L> {
         OperatorTrace {
             phantom: PhantomData,

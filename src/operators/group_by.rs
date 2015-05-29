@@ -43,7 +43,7 @@ pub trait GroupByExt<G: GraphBuilder, D1: Data+Columnar> : UnaryNotifyExt<G, (D1
                 >
             (&self, kv: KV, reduc: Reduc, logic: Logic) -> Stream<G, (D2, i32)> {
                 self.map(move |(x,w)| (kv(x),w))
-                    .group_by_inner(|x|x, |&(k,_)| k.as_usize() as u64, reduc, |x| (Vec::new(), x), logic)
+                    .group_by_inner(|x|x, |&(k,_)| k.as_u64(), reduc, |x| (Vec::new(), x), logic)
     }
 
     fn group_by_inner<
@@ -75,33 +75,40 @@ pub trait GroupByExt<G: GraphBuilder, D1: Data+Columnar> : UnaryNotifyExt<G, (D1
 
             // 1. read each input, and stash it in our staging area
             while let Some((time, mut data)) = input.pull() {
-                inputs.entry_or_insert(time.clone(), || { notificator.notify_at(&time); Vec::new() })
-                      .extend(data.drain(..).map(|(datum, delta)| (kv(datum), delta)));
+
+                notificator.notify_at(&time);
+                let mut queues = inputs.entry_or_insert(time.clone(), || { (Vec::new(), Vec::new()) });
+                for (datum, delta) in data.drain(..) {
+                    let (key, val) = kv(datum);
+                    queues.0.push(key);
+                    queues.1.push((val, delta));
+                }
             }
 
             // 2. go through each time of interest that has reached completion
             while let Some((index, _count)) = notificator.next() {
 
                 // 2a. if we have some input data to process
-                if let Some(mut data) = inputs.remove_key(&index) {
-                    coalesce(&mut data);
+                if let Some((mut keys, mut vals)) = inputs.remove_key(&index) {
+                    coalesce_kv(&mut keys, &mut vals);
 
-                    let mut list = Vec::new();
-                    let mut cursor = 0;
-                    while cursor < data.len() {
-                        let key = ((data[cursor].0).0).clone();
-                        while cursor < data.len() && key == (data[cursor].0).0 {
-                            let ((_, val), wgt) = data[cursor].clone();
-                            list.push((val, wgt));
-                            cursor += 1;
+                    trace.source.install_differences(index.clone(), &mut keys, vals);
+
+                    // iterate over keys to find interesting times
+                    let mut lower = 0;
+                    while lower < keys.len() {
+                        let mut upper = lower + 1;
+                        while upper < keys.len() && keys[lower] == keys[upper] {
+                            upper += 1;
                         }
 
-                        trace.source.set_difference(key.clone(), index.clone(), list.drain(..));
-                        trace.source.interesting_times(&key, &index, &mut idx);
+                        trace.source.interesting_times(&keys[lower], &index, &mut idx);
                         for update in idx.drain(..) {
                             to_do.entry_or_insert(update, || { notificator.notify_at(&update); Vec::new() })
-                                 .push(key.clone());
-                        }
+                                 .push(keys[lower].clone());
+                         }
+
+                        lower = upper;
                     }
                 }
 

@@ -1,15 +1,17 @@
+#![feature(scoped)]
+
 extern crate rand;
 extern crate time;
 extern crate columnar;
 extern crate timely;
 extern crate differential_dataflow;
 
-use std::mem;
-
+use std::thread;
 use std::hash::Hash;
+
 use timely::example_shared::*;
 use timely::example_shared::operators::*;
-use timely::communication::ThreadCommunicator;
+use timely::communication::{Communicator, ProcessCommunicator};
 
 use rand::{Rng, SeedableRng, StdRng};
 
@@ -29,19 +31,25 @@ use differential_dataflow::operators::*;
 // them using merge techniques. Updating cached accumulations seems maybe harder w/o hashmaps, but we'll see...
 
 fn main() {
-    test_dataflow();
+    let communicators = ProcessCommunicator::new_vector(1);
+    let mut guards = Vec::new();
+    for communicator in communicators.into_iter() {
+        guards.push(thread::Builder::new().name(format!("worker thread {}", communicator.index()))
+                                          .scoped(move || test_dataflow(communicator))
+                                          .unwrap());
+    }
 }
 
 fn _trim_and_flip<G: GraphBuilder, U: UnsignedInt>(graph: &Stream<G, ((U, U), i32)>)
     -> Stream<G, ((U, U), i32)> where G::Timestamp: LeastUpperBound {
 
-        graph.iterate(u32::max_value(), |||x|x.0, |edges| {
+        graph.iterate(u32::max_value(), |x|x.0, |x|x.0, |edges| {
             let inner = edges.builder().enter(&graph);
             edges.map(|((x,_),w)| (x,w))
                  .group_by_u(|x|(x,()), |&x,_| x, |_,_,target| target.push(((),1)))
                  .join_u(&inner, |x| (x,()), |(s,d)| (d,s), |&d,_,&s| (s,d))
              })
-             .consolidate(|||x| x.0)
+             .consolidate(|x| x.0, |x| x.0)
              .map(|((x,y),w)| ((y,x),w))
 }
 
@@ -61,14 +69,14 @@ fn _reachability<G: GraphBuilder, U: UnsignedInt>(edges: &Stream<G, ((U, U), i32
 where G::Timestamp: LeastUpperBound+Hash {
 
     edges.filter(|_| false)
-         .iterate(u32::max_value(), |||x| x.0, |inner| {
+         .iterate(u32::max_value(), |x| x.0, |x| x.0, |inner| {
              let edges = inner.builder().enter(&edges);
-             let nodes = inner.builder().enter_at(&nodes, |r| 256 * (64 - r.0.as_usize().leading_zeros() as u32))
+             let nodes = inner.builder().enter_at(&nodes, |r| 256 * (64 - r.0.as_u64().leading_zeros() as u32))
                                         .map(|(x,w)| ((x,x),w));
 
              improve_labels(inner, &edges, &nodes)
          })
-         .consolidate(|||x| x.0)
+         .consolidate(|x| x.0, |x| x.0)
 }
 
 
@@ -77,31 +85,31 @@ fn _fancy_reachability<G: GraphBuilder, U: UnsignedInt>(edges: &Stream<G, ((U, U
 where G::Timestamp: LeastUpperBound+Hash {
 
     edges.filter(|_| false)
-         .iterate(u32::max_value(), |||x| x.0, |inner| {
+         .iterate(u32::max_value(), |x| x.0, |x| x.0, |inner| {
              let edges = inner.builder().enter(&edges);
              let nodes = inner.builder().enter(&nodes)
                               .map(|(x,_)| (x,1))
                               .except(&inner.filter(|&((ref n, ref l),_)| l < n).map(|((n,_),w)| (n,w)))
-                              .delay(|r,t| { let mut t2 = t.clone(); t2.inner = 256 * (64 - r.0.as_usize().leading_zeros() as u32); t2 })
-                              .consolidate(|||&x| x)
+                              .delay(|r,t| { let mut t2 = t.clone(); t2.inner = 256 * (64 - r.0.as_u64().leading_zeros() as u32); t2 })
+                              .consolidate(|&x| x, |&x| x)
                               .map(|(x,w)| ((x,x),w));
 
              improve_labels(inner, &edges, &nodes)
          })
-         .consolidate(|||x| x.0)
+         .consolidate(|x| x.0, |x| x.0)
 }
 
 fn trim_edges<G: GraphBuilder, U: UnsignedInt>(cycle: &Stream<G, ((U, U), i32)>,
                                                edges: &Stream<G, ((U, U), i32)>)
     -> Stream<G, ((U, U), i32)> where G::Timestamp: LeastUpperBound+Hash {
 
-    let nodes = edges.map(|((_,y),w)| (y,w)).consolidate(|||&x| x);
+    let nodes = edges.map(|((_,y),w)| (y,w)).consolidate(|&x| x, |&x| x);
 
     let labels = _reachability(&cycle, &nodes);
 
     edges.join_u(&labels, |e| e, |l| l, |&e1,&e2,&l1| (e2,(e1,l1)))
          .join_u(&labels, |e| e, |l| l, |&e2,&(e1,l1),&l2| ((e1,e2),(l1,l2)))
-         .consolidate(|||x|(x.0).0)
+         .consolidate(|x|(x.0).0, |x|(x.0).0)
          .filter(|&((_,(l1,l2)), _)| l1 == l2)
          .map(|(((x1,x2),_),d)| ((x2,x1),d))
 }
@@ -109,7 +117,7 @@ fn trim_edges<G: GraphBuilder, U: UnsignedInt>(cycle: &Stream<G, ((U, U), i32)>,
 fn strongly_connected<G: GraphBuilder, U: UnsignedInt>(graph: &Stream<G, ((U, U), i32)>)
     -> Stream<G, ((U, U), i32)> where G::Timestamp: LeastUpperBound+Hash {
 
-    graph.iterate(u32::max_value(), |||x| x.0, |inner| {
+    graph.iterate(u32::max_value(), |x| x.0, |x| x.0, |inner| {
         let trans = inner.builder().enter(&graph).map(|((x,y),w)| ((y,x),w));
         let edges = inner.builder().enter(&graph);
 
@@ -117,11 +125,11 @@ fn strongly_connected<G: GraphBuilder, U: UnsignedInt>(graph: &Stream<G, ((U, U)
     })
 }
 
-fn test_dataflow() {
+fn test_dataflow<C: Communicator>(communicator: C) {
 
     let start = time::precise_time_s();
     let start2 = start.clone();
-    let mut computation = GraphRoot::new(ThreadCommunicator);
+    let mut computation = GraphRoot::new(communicator);
 
     let mut input = computation.subcomputation(|builder| {
 
@@ -131,7 +139,7 @@ fn test_dataflow() {
         edges = _trim_and_flip(&edges);
         edges = strongly_connected(&edges);
 
-        edges.consolidate(|||x: &(u32, u32)| x.0)
+        edges.consolidate(|x: &(u32, u32)| x.0, |x: &(u32, u32)| x.0)
             //  .inspect(|x| println!("{:?}", x));
              .inspect_batch(move |t, x| { println!("{}s:\tobserved at {:?}: {:?} changes",
                                                  ((time::precise_time_s() - start2)) - (t.inner as f64),
@@ -140,46 +148,47 @@ fn test_dataflow() {
         input
     });
 
-    let node_count = 10_000_000;
-    let edge_count = 20_000_000;
+    if computation.index() == 0 {
 
-    let seed: &[_] = &[1, 2, 3, 4];
-    let mut rng: StdRng = SeedableRng::from_seed(seed);
-    rng.gen::<f64>();
+        let nodes = 10_000_000;
+        let edges = 20_000_000;
 
-    println!("determining SCC of {} nodes, {} edges:", node_count, edge_count);
+        println!("determining SCC of {} nodes, {} edges:", nodes, edges);
 
-    // let mut rng = rand::thread_rng();
-    let mut edges = Vec::new();
-    for _ in 0..edge_count {
-        edges.push(((rng.gen_range(0, node_count), rng.gen_range(0, node_count)), 1));
-    }
+        let seed: &[_] = &[1, 2, 3, 4];
+        let mut rng1: StdRng = SeedableRng::from_seed(seed);
+        let mut rng2: StdRng = SeedableRng::from_seed(seed);
 
-    // input.send_at(0, edges.clone().into_iter());
-    {
-        let mut slice = &edges[..];
-        while slice.len() > 0 {
-            let next = if slice.len() < 1000 { slice.len() } else { 1000 };
-            input.send_at(0, slice[..next].to_vec().into_iter());
+        rng1.gen::<f64>();
+        rng2.gen::<f64>();
+
+        let mut left = edges;
+        while left > 0 {
+            let next = if left < 1000 { left } else { 1000 };
+            input.send_at(0, (0..next).map(|_| ((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), 1)));
             computation.step();
-            slice = &slice[next..];
+            left -= next;
         }
-    }
 
-    let mut round = 0 as u32;
-    while computation.step() {
-        if time::precise_time_s() - start >= round as f64 {
+        println!("input ingested after {}", time::precise_time_s() - start);
 
-            let new_record = ((rng.gen_range(0, node_count), rng.gen_range(0, node_count)), 1);
-            let new_position = rng.gen_range(0, edges.len());
-            let mut old_record = mem::replace(&mut edges[new_position], new_record.clone());
-            old_record.1 = -1;
+        // let mut round = 0 as u32;
+        // let mut changes = Vec::new();
+        // while computation.step() {
+        //     if time::precise_time_s() - start >= round as f64 {
+        //         let change_count = 1000;
+        //         for _ in 0..change_count {
+        //             changes.push(((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), 1));
+        //             changes.push(((rng2.gen_range(0, nodes), rng2.gen_range(0, nodes)),-1));
+        //         }
+        //
+        //         input.send_at(round, changes.drain(..));
+        //         input.advance_to(round + 1);
+        //         round += 1;
+        //     }
+        // }
 
-            input.send_at(round, vec![old_record, new_record].into_iter());
-            input.advance_to(round + 1);
-            round += 1;
         }
-    }
 
     input.close();
 

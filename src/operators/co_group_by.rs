@@ -48,7 +48,7 @@ pub trait CoGroupByExt<G: GraphBuilder, D1: Data+Columnar> : BinaryNotifyExt<G, 
                 Logic: Fn(&U, &[(V1,i32)], &[(V2,i32)], &mut Vec<(V3, i32)>)+'static,
                 Reduc: Fn(&U, &V3)->D3+'static,
                 >
-            (&self, kv: KV, reduc: Reduc, logic: Logic) -> Stream<G, (D2, i32)> {
+            (&self, kv1: KV1, kv2: KV2, reduc: Reduc, logic: Logic) -> Stream<G, (D2, i32)> {
                 self.map(move |(x,w)| (kv1(x),w))
                     .co_group_by_inner(&other.map(move |(x,w)| (kv2(x),w))
 

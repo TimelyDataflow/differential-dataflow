@@ -11,14 +11,11 @@ use timely::communication::pact::Exchange;
 
 use columnar::Columnar;
 
-// use collection_trace::batch_trace::BinaryTrace;
-// use collection_trace::CollectionTrace;
-use collection_trace::Compact;
+use collection_trace::Hybrid;
 
 use collection_trace::lookup::UnsignedInt;
 use collection_trace::{LeastUpperBound, Lookup, Offset};
 use sort::*;
-use std::iter;
 
 impl<G: GraphBuilder, D1: Data+Columnar, S: BinaryNotifyExt<G, (D1, i32)>+MapExt<G, (D1, i32)>> JoinExt<G, D1> for S where G::Timestamp: LeastUpperBound {}
 
@@ -30,12 +27,12 @@ pub trait JoinExt<G: GraphBuilder, D1: Data+Columnar> : BinaryNotifyExt<G, (D1, 
             D2: Data+Columnar,
             F1: Fn(D1)->(U,V1)+'static,
             F2: Fn(D2)->(U,V2)+'static,
-            R:  Data+Columnar,
+            R:  Ord+Data+Columnar,
             RF: Fn(&U,&V1,&V2)->R+'static,
             >
         (&self, other: &Stream<G, (D2, i32)>, kv1: F1, kv2: F2, result: RF) -> Stream<G, (R, i32)> {
         self.map(move |(x,w)| (kv1(x),w))
-            .join_inner(&other.map(move |(x,w)| (kv2(x),w)), |x|x, |x|x, |&(k,_)| k.as_usize() as u64, |&(k,_)| k.as_usize() as u64, result, &|x| (Vec::new(), x))
+            .join_inner(&other.map(move |(x,w)| (kv2(x),w)), |x|x, |x|x, |&(k,_)| k.as_u64(), |&(k,_)| k.as_u64(), |k| k.as_u64(), result, &|x| (Vec::new(), x))
     }
 
     fn join<K:  Ord+Clone+Hash+Debug+'static,
@@ -46,11 +43,12 @@ pub trait JoinExt<G: GraphBuilder, D1: Data+Columnar> : BinaryNotifyExt<G, (D1, 
             F2: Fn(D2)->(K,V2)+'static,
             H1: Fn(&D1)->u64+'static,
             H2: Fn(&D2)->u64+'static,
-            R:  Data+Columnar,
+            KH: Fn(&K)->u64+'static,
+            R:  Ord+Data+Columnar,
             RF: Fn(&K,&V1,&V2)->R+'static,
             >
-        (&self, other: &Stream<G, (D2, i32)>, kv1: F1, kv2: F2, part1: H1, part2: H2, result: RF) -> Stream<G, (R, i32)> {
-        self.join_inner(other, kv1, kv2, part1, part2, result, &|_| HashMap::new())
+        (&self, other: &Stream<G, (D2, i32)>, kv1: F1, kv2: F2, part1: H1, part2: H2, key_h: KH, result: RF) -> Stream<G, (R, i32)> {
+        self.join_inner(other, kv1, kv2, part1, part2, key_h, result, &|_| HashMap::new())
     }
     fn join_inner<
                 K:  Ord+Clone+Debug+'static,
@@ -61,7 +59,8 @@ pub trait JoinExt<G: GraphBuilder, D1: Data+Columnar> : BinaryNotifyExt<G, (D1, 
                 F2: Fn(D2)->(K,V2)+'static,
                 H1: Fn(&D1)->u64+'static,
                 H2: Fn(&D2)->u64+'static,
-                R:  Data+Columnar,
+                KH: Fn(&K)->u64+'static,
+                R:  Ord+Data+Columnar,
                 RF: Fn(&K,&V1,&V2)->R+'static,
                 LC: Lookup<K, Offset>,
                 GC: Fn(u64)->LC,
@@ -72,14 +71,15 @@ pub trait JoinExt<G: GraphBuilder, D1: Data+Columnar> : BinaryNotifyExt<G, (D1, 
              kv2: F2,
              part1: H1,
              part2: H2,
+             key_h: KH,
              result: RF,
              look:  &GC)  -> Stream<G, (R, i32)> {
 
         // TODO : pay more attention to the number of peers
         // TODO : find a better trait to sub-trait so we can read .builder
         // assert!(self.builder.peers() == 1);
-        let mut trace1 = Some(Compact::new(look(0)));
-        let mut trace2 = Some(Compact::new(look(0)));
+        let mut trace1 = Some(Hybrid::new(look(0)));
+        let mut trace2 = Some(Hybrid::new(look(0)));
 
         let mut stage1 = Vec::new();    // Vec<(T, Vec<(K, V1, i32)>)>;
         let mut stage2 = Vec::new();    // Vec<(T, Vec<(K, V2, i32)>)>;
@@ -95,67 +95,101 @@ pub trait JoinExt<G: GraphBuilder, D1: Data+Columnar> : BinaryNotifyExt<G, (D1, 
             if trace2.is_some() && notificator.frontier(0).len() == 0 && stage1.len() == 0 { trace2 = None; }
             if trace1.is_some() && notificator.frontier(1).len() == 0 && stage2.len() == 0 { trace1 = None; }
 
+            // read input 1, push key, (val,wgt) to vecs
             while let Some((time, data1)) = input1.pull() {
-                stage1.entry_or_insert(time.clone(), || { notificator.notify_at(&time); Vec::new() })
-                      .extend(data1.drain(..).map(|(datum, delta)| (kv1(datum), delta)));
+                notificator.notify_at(&time);
+                let mut vecs = stage1.entry_or_insert(time.clone(), || { (Vec::new(), Vec::new()) });
+                for (datum, wgt) in data1.drain(..) {
+                    let (key, val) = kv1(datum);
+                    vecs.0.push(key);
+                    vecs.1.push((val, wgt));
+                }
             }
 
+            // read input 2, push key, (val,wgt) to vecs
             while let Some((time, data2)) = input2.pull() {
-                stage2.entry_or_insert(time.clone(), || { notificator.notify_at(&time); Vec::new() })
-                      .extend(data2.drain(..).map(|(datum, delta)| (kv2(datum), delta)));
+                notificator.notify_at(&time);
+                let mut vecs = stage2.entry_or_insert(time.clone(), || { (Vec::new(), Vec::new()) });
+                for (datum, wgt) in data2.drain(..) {
+                    let (key, val) = kv2(datum);
+                    vecs.0.push(key);
+                    vecs.1.push((val, wgt));
+                }
             }
 
+            // check to see if we have inputs to process
             while let Some((time, _count)) = notificator.next() {
-                if let Some(mut data) = stage1.remove_key(&time) {
-                    coalesce(&mut data);
 
-                    let mut list = Vec::new();
-                    let mut cursor = 0;
-                    while cursor < data.len() {
-                        let key = ((data[cursor].0).0).clone();
-                        while cursor < data.len() && key == (data[cursor].0).0 {
-                            let ((_, val), wgt) = data[cursor].clone();
-                            list.push((val, wgt));
-                            cursor += 1;
+                if let Some((mut keys, mut vals)) = stage1.remove_key(&time) {
+                    // coalesce_kv(&mut keys, &mut vals);
+                    coalesce_kv8(&mut keys, &mut vals, &key_h);
+
+                    if let Some(trace) = trace2.as_ref() {
+                        let mut lower = 0;
+                        while lower < keys.len() {
+                            let mut upper = lower + 1;
+                            while upper < keys.len() && keys[lower] == keys[upper] {
+                                upper += 1;
+                            }
+
+                            let vals1 = &vals[lower..upper];
+                            for (t, vals2) in trace.trace(&keys[lower]) {
+                                let mut output = outbuf.entry_or_insert(time.least_upper_bound(t), || Vec::new());
+                                for &(ref v1, w1) in vals1 {
+                                    for &(ref v2, w2) in vals2 {
+                                        output.push((result(&keys[lower], v1, v2), w1 * w2));
+                                    }
+                                }
+                                // TODO : This sort of thing makes us go faster, but is cheating
+                                // TODO : because of the magic numbers involved.
+                                // if output.len() > 100_000_000 { coalesce(&mut output); }
+                            }
+
+                            lower = upper;
                         }
-
-                        if let Some(trace) = trace2.as_ref() {
-                            trace.map_over_times(&key, |index, values| {
-                                outbuf.entry_or_insert(time.least_upper_bound(index), || Vec::new())
-                                      .extend(values.iter().flat_map(|x| iter::repeat(x).zip(list.iter()).map(|(x,y)| (result(&key, &y.0, &x.0), y.1 * x.1))));
-
-                            });
-                        }
-
-                        trace1.as_mut().map(|x| x.set_difference(key, time.clone(), list.drain(..)));
-                        list.clear();
                     }
+
+                    // if trace1 exists, install differences. otherwise drop them.
+                    trace1.as_mut().map(|x| x.install_differences(time.clone(), &mut keys, vals));
                 }
 
-                if let Some(mut data) = stage2.remove_key(&time) {
-                    coalesce(&mut data);
+                if let Some((mut keys, mut vals)) = stage2.remove_key(&time) {
+                    // coalesce_kv(&mut keys, &mut vals);
+                    coalesce_kv8(&mut keys, &mut vals, &key_h);
 
-                    let mut list = Vec::new();
-                    let mut cursor = 0;
-                    while cursor < data.len() {
-                        let key = ((data[cursor].0).0).clone();
-                        while cursor < data.len() && key == (data[cursor].0).0 {
-                            let ((_, val), wgt) = data[cursor].clone();
-                            list.push((val, wgt));
-                            cursor += 1;
+                    if let Some(trace) = trace1.as_ref() {
+                        let mut lower = 0;
+                        while lower < keys.len() {
+                            let mut upper = lower + 1;
+                            while upper < keys.len() && keys[lower] == keys[upper] {
+                                upper += 1;
+                            }
+
+                            let vals2 = &vals[lower..upper];
+                            for (t, vals1) in trace.trace(&keys[lower]) {
+                                let mut output = outbuf.entry_or_insert(time.least_upper_bound(t), || Vec::new());
+                                for &(ref v1, w1) in vals1 {
+                                    for &(ref v2, w2) in vals2 {
+                                        output.push((result(&keys[lower], v1, v2), w1 * w2));
+                                    }
+                                }
+                                // TODO : This sort of thing makes us go faster, but is cheating
+                                // TODO : because of the magic numbers involved.
+                                // if output.len() > 100_000_000 { coalesce(&mut output); }
+                            }
+
+                            lower = upper;
                         }
-
-                        trace1.as_ref().map(|x| x.map_over_times(&key, |index, values| {
-                            outbuf.entry_or_insert(time.least_upper_bound(index), || Vec::new())
-                                  .extend(values.iter().flat_map(|x| iter::repeat(x).zip(list.iter()).map(|(x,y)| (result(&key, &x.0, &y.0), x.1 * y.1))));
-                        }));
-
-                        trace2.as_mut().map(|x| x.set_difference(key, time.clone(), list.drain(..)));
-                        list.clear();
                     }
+
+                    // if trace2 exists, install differences. otherwise drop them.
+                    trace2.as_mut().map(|x| x.install_differences(time.clone(), &mut keys, vals));
                 }
 
+                // transmit data for each output time
+                // TODO : coalesce first, to cut transmission
                 for (time, mut vals) in outbuf.drain(..) {
+                    coalesce(&mut vals);
                     output.give_at(&time, vals.drain(..));
                 }
 
