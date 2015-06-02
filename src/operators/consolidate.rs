@@ -9,6 +9,8 @@ use collection_trace::lookup::UnsignedInt;
 
 use columnar::Columnar;
 
+use timely::drain::DrainExt;
+
 pub trait ConsolidateExt<D> {
     fn consolidate<U: UnsignedInt,
                    F1: Fn(&D)->U+'static,
@@ -28,10 +30,11 @@ impl<G: GraphBuilder, D: Ord+Data+Columnar> ConsolidateExt<D> for Stream<G, (D, 
             // 1. read each input, and stash it in our staging area
             while let Some((index, mut data)) = input.pull() {
                 notificator.notify_at(&index);
-                // TODO : Coalescing pre-extend() can mean less allocation
+                // TODO : Coalescing pre-extend() can mean less allocation,
+                // TODO : but is a hack; shouldn't come in as big buffers.
                 // coalesce8(&mut data, &|x| part2(x).as_u64());
                 inputs.entry_or_insert(index.clone(), || Vec::new())
-                      .extend(data.drain(..));
+                      .extend(data.drain_temp());
             }
 
             // 2. go through each time of interest that has reached completion
@@ -40,7 +43,7 @@ impl<G: GraphBuilder, D: Ord+Data+Columnar> ConsolidateExt<D> for Stream<G, (D, 
                     // let len = stash.len();
                     coalesce8(&mut stash, &|x| part2(x).as_u64());
                     // println!("consolidating at {:?}: {} -> {}", index, len, stash.len());
-                    output.give_at(&index, stash.drain(..));
+                    output.give_at(&index, stash.drain_temp());
                 }
             }
         })

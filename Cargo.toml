@@ -1,18 +1,25 @@
 [package]
 
-name = "differential_dataflow"
+name = "differential-dataflow"
 version = "0.0.1"
 authors = ["Frank McSherry <fmcsherry@me.com>"]
 
-[dependencies.timely]
-git="https://github.com/frankmcsherry/timely-dataflow"
-# path="../timely-dataflow"
+description = "An incremental data-parallel dataflow platform"
+
+# These URLs point to more information about the repository
+documentation = "https://github.com/frankmcsherry/differential-dataflow"
+homepage = "https://github.com/frankmcsherry/differential-dataflow"
+repository = "https://github.com/frankmcsherry/differential-dataflow.git"
+keywords = ["differential", "dataflow"]
+license = "MIT"
 
 [dependencies]
+docopt="*"
 columnar="*"
 rand="*"
 time = "*"
 byteorder="*"
+timely="*"
 
 
 # [profile.release]

@@ -1,17 +1,21 @@
-#![feature(scoped)]
-
 extern crate rand;
 extern crate time;
 extern crate columnar;
 extern crate timely;
 extern crate differential_dataflow;
 
+extern crate docopt;
+use docopt::Docopt;
+
 use std::thread;
 use std::hash::Hash;
 
 use timely::example_shared::*;
 use timely::example_shared::operators::*;
-use timely::communication::{Communicator, ProcessCommunicator};
+// use timely::communication::{Communicator, ProcessCommunicator};
+use timely::communication::*;
+use timely::networking::initialize_networking;
+use timely::networking::initialize_networking_from_file;
 
 use rand::{Rng, SeedableRng, StdRng};
 
@@ -30,14 +34,67 @@ use differential_dataflow::operators::*;
 // Rather than requiring random access to diffs, we can store them as flat arrays (possibly sorted) and integrate
 // them using merge techniques. Updating cached accumulations seems maybe harder w/o hashmaps, but we'll see...
 
+static USAGE: &'static str = "
+Usage: scc [options] [<arguments>...]
+
+Options:
+    -w <arg>, --workers <arg>    number of workers per process [default: 1]
+    -p <arg>, --processid <arg>  identity of this process      [default: 0]
+    -n <arg>, --processes <arg>  number of processes involved  [default: 1]
+    -h <arg>, --hosts <arg>      list of host:port for workers
+";
+
 fn main() {
-    let communicators = ProcessCommunicator::new_vector(1);
+
+    let args = Docopt::new(USAGE).and_then(|dopt| dopt.parse()).unwrap_or_else(|e| e.exit());
+
+    let workers: u64 = if let Ok(threads) = args.get_str("-w").parse() { threads }
+                       else { panic!("invalid setting for --workers: {}", args.get_str("-t")) };
+    let process_id: u64 = if let Ok(proc_id) = args.get_str("-p").parse() { proc_id }
+                          else { panic!("invalid setting for --processid: {}", args.get_str("-p")) };
+    let processes: u64 = if let Ok(processes) = args.get_str("-n").parse() { processes }
+                         else { panic!("invalid setting for --processes: {}", args.get_str("-n")) };
+
+    println!("Starting timely with");
+    println!("\tworkers:\t{}", workers);
+    println!("\tprocesses:\t{}", processes);
+    println!("\tprocessid:\t{}", process_id);
+
+    // vector holding communicators to use; one per local worker.
+    if processes > 1 {
+        println!("Initializing BinaryCommunicator");
+
+        let hosts = args.get_str("-h");
+        let communicators = if hosts != "" {
+            initialize_networking_from_file(hosts, process_id, workers).ok().expect("error initializing networking")
+        }
+        else {
+            let addresses = (0..processes).map(|index| format!("localhost:{}", 2101 + index).to_string()).collect();
+            initialize_networking(addresses, process_id, workers).ok().expect("error initializing networking")
+        };
+
+        start_main(communicators);
+    }
+    else if workers > 1 {
+        println!("Initializing ProcessCommunicator");
+        start_main(ProcessCommunicator::new_vector(workers));
+    }
+    else {
+        println!("Initializing ThreadCommunicator");
+        start_main(vec![ThreadCommunicator]);
+    };
+}
+
+fn start_main<C: Communicator+Send>(communicators: Vec<C>) {
+    // let communicators = ProcessCommunicator::new_vector(1);
     let mut guards = Vec::new();
     for communicator in communicators.into_iter() {
         guards.push(thread::Builder::new().name(format!("worker thread {}", communicator.index()))
-                                          .scoped(move || test_dataflow(communicator))
+                                          .spawn(move || test_dataflow(communicator))
                                           .unwrap());
     }
+
+    for guard in guards { guard.join().unwrap(); }
 }
 
 fn _trim_and_flip<G: GraphBuilder, U: UnsignedInt>(graph: &Stream<G, ((U, U), i32)>)
@@ -150,8 +207,8 @@ fn test_dataflow<C: Communicator>(communicator: C) {
 
     if computation.index() == 0 {
 
-        let nodes = 10_000_000;
-        let edges = 20_000_000;
+        let nodes = 1_000_000;
+        let edges = 2_000_000;
 
         println!("determining SCC of {} nodes, {} edges:", nodes, edges);
 
@@ -195,15 +252,3 @@ fn test_dataflow<C: Communicator>(communicator: C) {
     while computation.step() { }
     computation.step(); // shut down
 }
-
-// #[test]
-// fn test_me () {
-//     let mut trace = VectorCollectionTrace::new();
-//     trace.set_difference((0,0), &mut vec![("a", 1), ("b", 2), ("c", 3)]);
-//     trace.set_difference((0,1), &mut vec![("a", -1), ("c", -2)]);
-//     trace.set_difference((1,0), &mut vec![("a", -1), ("c", -2)]);
-//     trace.set_difference((1,1), &mut vec![("a", 1), ("b", -2), ("c", 2)]);
-//     let mut result = Vec::new();
-//     trace.get_collection(&(1,1), &mut result);
-//     assert!(result == vec![("c", 1)]);
-// }

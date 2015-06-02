@@ -17,6 +17,8 @@ use collection_trace::lookup::UnsignedInt;
 use collection_trace::{LeastUpperBound, Lookup, Offset};
 use sort::*;
 
+use timely::drain::DrainExt;
+
 impl<G: GraphBuilder, D1: Data+Columnar, S: BinaryNotifyExt<G, (D1, i32)>+MapExt<G, (D1, i32)>> JoinExt<G, D1> for S where G::Timestamp: LeastUpperBound {}
 
 pub trait JoinExt<G: GraphBuilder, D1: Data+Columnar> : BinaryNotifyExt<G, (D1, i32)>+MapExt<G, (D1, i32)> where G::Timestamp: LeastUpperBound {
@@ -99,7 +101,7 @@ pub trait JoinExt<G: GraphBuilder, D1: Data+Columnar> : BinaryNotifyExt<G, (D1, 
             while let Some((time, data1)) = input1.pull() {
                 notificator.notify_at(&time);
                 let mut vecs = stage1.entry_or_insert(time.clone(), || { (Vec::new(), Vec::new()) });
-                for (datum, wgt) in data1.drain(..) {
+                for (datum, wgt) in data1.drain_temp() {
                     let (key, val) = kv1(datum);
                     vecs.0.push(key);
                     vecs.1.push((val, wgt));
@@ -110,7 +112,7 @@ pub trait JoinExt<G: GraphBuilder, D1: Data+Columnar> : BinaryNotifyExt<G, (D1, 
             while let Some((time, data2)) = input2.pull() {
                 notificator.notify_at(&time);
                 let mut vecs = stage2.entry_or_insert(time.clone(), || { (Vec::new(), Vec::new()) });
-                for (datum, wgt) in data2.drain(..) {
+                for (datum, wgt) in data2.drain_temp() {
                     let (key, val) = kv2(datum);
                     vecs.0.push(key);
                     vecs.1.push((val, wgt));
@@ -188,9 +190,9 @@ pub trait JoinExt<G: GraphBuilder, D1: Data+Columnar> : BinaryNotifyExt<G, (D1, 
 
                 // transmit data for each output time
                 // TODO : coalesce first, to cut transmission
-                for (time, mut vals) in outbuf.drain(..) {
+                for (time, mut vals) in outbuf.drain_temp() {
                     coalesce(&mut vals);
-                    output.give_at(&time, vals.drain(..));
+                    output.give_at(&time, vals.drain_temp());
                 }
 
                 outbuf = Vec::new();

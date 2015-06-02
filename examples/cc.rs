@@ -1,6 +1,3 @@
-#![feature(scoped)]
-#![feature(collections_drain)]
-
 extern crate rand;
 extern crate time;
 extern crate byteorder;
@@ -18,6 +15,7 @@ use std::hash::Hash;
 use timely::example_shared::*;
 use timely::example_shared::operators::*;
 use timely::communication::{Communicator, ProcessCommunicator};
+use timely::drain::DrainExt;
 // use timely::communication::pact::Pipeline;
 // use timely::communication::observer::ObserverSessionExt;
 // use timely::progress::timestamp::RootTimestamp;
@@ -46,9 +44,11 @@ fn main() {
     let mut guards = Vec::new();
     for communicator in communicators.into_iter() {
         guards.push(thread::Builder::new().name(format!("worker thread {}", communicator.index()))
-                                          .scoped(move || test_dataflow(communicator))
+                                          .spawn(move || test_dataflow(communicator))
                                           .unwrap());
     }
+
+    for guard in guards { guard.join().unwrap(); }
 }
 
 fn test_dataflow<C: Communicator>(communicator: C) {
@@ -77,7 +77,7 @@ fn test_dataflow<C: Communicator>(communicator: C) {
                 //         notificator.notify_at(&Product::new(t.outer, t.inner + 1));
                 //     }
                 //     while let Some((time, data)) = input.pull() {
-                //         output.give_at(&time, data.drain(..));
+                //         output.give_at(&time, data.drain_temp());
                 //     }
                 //  })
                  .inspect_batch(move |t, x| { println!("{}s:\tobserved at {:?}: {:?} changes",
@@ -103,9 +103,9 @@ fn test_dataflow<C: Communicator>(communicator: C) {
                     let edge = edges.read_u32::<LittleEndian>().unwrap();
                     if node % 2 == 0 && edge % 2 == 0 {
                         buffer.push(((node / 2 as u32, edge / 2 as u32), 1));
-                        if buffer.len() > 1000 {
+                        if buffer.len() > 4000 {
                             sent += buffer.len();
-                            input.send_at(0, buffer.drain(..));
+                            input.send_at(0, buffer.drain_temp());
                             computation.step();
                         }
                     }
@@ -114,7 +114,7 @@ fn test_dataflow<C: Communicator>(communicator: C) {
             }
 
             sent += buffer.len();
-            input.send_at(0, buffer.drain(..));
+            input.send_at(0, buffer.drain_temp());
 
             println!("sent {} edges", sent);
 
@@ -150,7 +150,7 @@ fn test_dataflow<C: Communicator>(communicator: C) {
             //             changes.push(((rng2.gen_range(0, nodes), rng2.gen_range(0, nodes)),-1));
             //         }
             //
-            //         input.send_at(round, changes.drain(..));
+            //         input.send_at(round, changes.drain_temp());
             //         input.advance_to(round + 1);
             //         round += 1;
             //     }
@@ -167,11 +167,10 @@ fn connected_components<G: GraphBuilder, U: UnsignedInt>(edges: &Stream<G, ((U, 
     -> Stream<G, ((U, U), i32)>
 where G::Timestamp: LeastUpperBound+Hash {
 
+    let nodes = edges.map(|((x,y),w)| (std::cmp::min(x,y), w))
+                     .consolidate(|x|x.as_u64(), |x|x.as_u64());
+
     let edges = edges.map(|((x,y),w)| ((y,x),w)).concat(&edges);
-    let nodes = edges.filter(|&((x,y),_)| x < y)
-                     .map(|((x,_),w)| (x,w))
-                     .consolidate(|&x|x.as_u64(), |&x|x.as_u64())
-                    ;
 
     reachability(&edges, &nodes)
 }
@@ -198,6 +197,5 @@ where G::Timestamp: LeastUpperBound {
 
     labels.join_u(&edges, |l| l, |e| e, |_k,l,d| (*d,*l))
           .concat(&nodes)
-          .consolidate(|x| x.0, |x| x.0)
           .group_by_u(|x| x, |k,v| (*k,*v), |_, s, t| { t.push((s[0].0, 1)); } )
 }

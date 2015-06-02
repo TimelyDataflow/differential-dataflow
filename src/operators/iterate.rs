@@ -1,4 +1,4 @@
-use std::num::One;
+// use std::num::One;
 
 use timely::example_shared::*;
 use timely::example_shared::operators::*;
@@ -14,6 +14,13 @@ use collection_trace::lookup::UnsignedInt;
 use collection_trace::LeastUpperBound;
 use operators::ExceptExt;
 use operators::ConsolidateExt;
+
+pub trait One {
+    fn one() -> Self;
+}
+
+impl One for u64 { fn one() -> u64 { 1 } }
+impl One for u32 { fn one() -> u32 { 1 } }
 
 pub trait IterateExt<G: GraphBuilder, D: Data> {
     fn iterate<P1: Fn(&D)->U+'static,

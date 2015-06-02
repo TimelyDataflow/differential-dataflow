@@ -1,9 +1,9 @@
-#![feature(core)]
-#![feature(collections)]
-#![feature(collections_drain)]
-#![feature(zero_one)]
+// #![feature(core)]
+// #![feature(collections)]
+// #![feature(collections_drain)]
+// #![feature(zero_one)]
 
-extern crate core;
+// extern crate core;
 extern crate rand;
 extern crate time;
 extern crate columnar;

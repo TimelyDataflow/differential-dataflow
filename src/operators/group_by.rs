@@ -15,6 +15,8 @@ use collection_trace::{LeastUpperBound, Lookup, OperatorTrace, Offset};
 use collection_trace::lookup::UnsignedInt;
 use sort::*;
 
+use timely::drain::DrainExt;
+
 impl<G: GraphBuilder, D1: Data+Columnar, S: UnaryNotifyExt<G, (D1, i32)>+MapExt<G, (D1, i32)>> GroupByExt<G, D1> for S where G::Timestamp: LeastUpperBound {}
 
 
@@ -26,11 +28,12 @@ pub trait GroupByExt<G: GraphBuilder, D1: Data+Columnar> : UnaryNotifyExt<G, (D1
                 D2:    Data+Columnar,
                 KV:    Fn(D1)->(K,V1)+'static,
                 Part:  Fn(&D1)->u64+'static,
+                KH:    Fn(&K)->u64+'static,
                 Logic: Fn(&K, &[(V1,i32)], &mut Vec<(V2, i32)>)+'static,
                 Reduc: Fn(&K, &V2)->D2+'static,
                 >
-            (&self, kv: KV, part: Part, reduc: Reduc, logic: Logic) -> Stream<G, (D2, i32)> {
-                self.group_by_inner(kv, part, reduc, |_| HashMap::new(), logic)
+            (&self, kv: KV, part: Part, key_h: KH, reduc: Reduc, logic: Logic) -> Stream<G, (D2, i32)> {
+                self.group_by_inner(kv, part, key_h, reduc, |_| HashMap::new(), logic)
             }
     fn group_by_u<
                 U:     UnsignedInt,
@@ -43,7 +46,7 @@ pub trait GroupByExt<G: GraphBuilder, D1: Data+Columnar> : UnaryNotifyExt<G, (D1
                 >
             (&self, kv: KV, reduc: Reduc, logic: Logic) -> Stream<G, (D2, i32)> {
                 self.map(move |(x,w)| (kv(x),w))
-                    .group_by_inner(|x|x, |&(k,_)| k.as_u64(), reduc, |x| (Vec::new(), x), logic)
+                    .group_by_inner(|x|x, |&(k,_)| k.as_u64(), |k| k.as_u64(), reduc, |x| (Vec::new(), x), logic)
     }
 
     fn group_by_inner<
@@ -53,12 +56,13 @@ pub trait GroupByExt<G: GraphBuilder, D1: Data+Columnar> : UnaryNotifyExt<G, (D1
                         D2:    Data+Columnar,
                         KV:    Fn(D1)->(K,V1)+'static,
                         Part:  Fn(&D1)->u64+'static,
+                        KH:    Fn(&K)->u64+'static,
                         Look:  Lookup<K, Offset>,
                         LookG: Fn(u64)->Look,
                         Logic: Fn(&K, &[(V1,i32)], &mut Vec<(V2, i32)>)+'static,
                         Reduc: Fn(&K, &V2)->D2+'static,
                         >
-                    (&self, kv: KV, part: Part, reduc: Reduc, look: LookG, logic: Logic) -> Stream<G, (D2, i32)> {
+                    (&self, kv: KV, part: Part, key_h: KH, reduc: Reduc, look: LookG, logic: Logic) -> Stream<G, (D2, i32)> {
 
         // TODO : pay more attention to the number of peers
         // TODO : find a better trait to sub-trait so we can read .builder
@@ -78,7 +82,7 @@ pub trait GroupByExt<G: GraphBuilder, D1: Data+Columnar> : UnaryNotifyExt<G, (D1
 
                 notificator.notify_at(&time);
                 let mut queues = inputs.entry_or_insert(time.clone(), || { (Vec::new(), Vec::new()) });
-                for (datum, delta) in data.drain(..) {
+                for (datum, delta) in data.drain_temp() {
                     let (key, val) = kv(datum);
                     queues.0.push(key);
                     queues.1.push((val, delta));
@@ -90,7 +94,7 @@ pub trait GroupByExt<G: GraphBuilder, D1: Data+Columnar> : UnaryNotifyExt<G, (D1
 
                 // 2a. if we have some input data to process
                 if let Some((mut keys, mut vals)) = inputs.remove_key(&index) {
-                    coalesce_kv(&mut keys, &mut vals);
+                    coalesce_kv8(&mut keys, &mut vals, &key_h);
 
                     trace.source.install_differences(index.clone(), &mut keys, vals);
 
@@ -103,7 +107,7 @@ pub trait GroupByExt<G: GraphBuilder, D1: Data+Columnar> : UnaryNotifyExt<G, (D1
                         }
 
                         trace.source.interesting_times(&keys[lower], &index, &mut idx);
-                        for update in idx.drain(..) {
+                        for update in idx.drain_temp() {
                             to_do.entry_or_insert(update, || { notificator.notify_at(&update); Vec::new() })
                                  .push(keys[lower].clone());
                          }

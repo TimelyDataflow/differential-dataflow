@@ -1,20 +1,38 @@
 use std::mem;
 use std::marker::PhantomData;
 
-use core::nonzero::NonZero;
+use std::ops::Deref;
 
 use sort::{coalesce, is_sorted};
 use collection_trace::{close_under_lub, LeastUpperBound, Lookup};
 
 #[derive(Copy, Clone, Eq, PartialEq)]
+pub struct OffsetOption {
+    value: u32,             // zero : None
+}
+
+impl OffsetOption {
+    pub fn new(val: u32) -> OffsetOption {
+        if val == 0 { panic!("cannot construct an OffsetOption with value 0"); }
+
+        OffsetOption { value: val }
+    }
+}
+
+impl Deref for OffsetOption {
+    type Target = u32;
+    fn deref(&self) -> &u32 { &self.value }
+}
+
+#[derive(Copy, Clone, Eq, PartialEq)]
 pub struct Offset {
-    dataz: NonZero<u32>,
+    dataz: OffsetOption,
 }
 
 impl Offset {
     pub fn new(offset: usize) -> Offset {
         assert!(offset < u32::max_value() as usize); // note strict inequality
-        Offset { dataz: unsafe { NonZero::new(u32::max_value() - offset as u32) } }
+        Offset { dataz: OffsetOption::new(u32::max_value() - offset as u32) }
     }
     #[inline(always)] pub fn val(&self) -> usize { (u32::max_value() - *self.dataz) as usize }
 }
@@ -51,7 +69,7 @@ impl<T> IndexEntry32<T> {
 //     index:  T,
 //     offset: u64,
 //     length: u64,
-//     next:   u64,    // Option<NonZero<u64>> for the decrement would be cooler. unsafe, and needs more thinking.
+//     next:   u64,    // Option<OffsetOption<u64>> for the decrement would be cooler. unsafe, and needs more thinking.
 // }
 //
 // impl<T> IndexEntry64<T> {
@@ -89,7 +107,7 @@ pub struct CollectionTrace<K, T, V, L: Lookup<K, Offset>> {
     phantom:    PhantomData<K>,
     updates:    Vec<(V, i32)>,
     times:      Vec<IndexEntry<T>>,
-    keys:       L,                      // stores u32::max_value() - target, so that NonZero works
+    keys:       L,                      // stores u32::max_value() - target, so that OffsetOption works
 
     temp:       Vec<(V, i32)>,
 }
@@ -136,7 +154,7 @@ fn merge<V: Ord+Clone>(mut slices: Vec<&[(V, i32)]>, target: &mut Vec<(V, i32)>)
     }
 
     if let Some(slice) = slices.pop() {
-        target.push_all(slice);
+        target.extend(slice.iter().cloned());
     }
 }
 

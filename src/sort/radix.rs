@@ -3,12 +3,14 @@ use std::mem;
 use std::fmt::Debug;
 use std::cmp;
 
+use timely::drain::DrainExt;
+
 pub fn rsort_experimental8<T:Ord+Copy, F: Fn(&T)->u64>(src: &mut Vec<Vec<T>>, dst: &mut Vec<Vec<T>>, func: &F) {
 
     let mut counts = [0u32; 256];
 
     for s in src {
-        for elem in s.drain(..) {
+        for elem in s.drain_temp() {
             unsafe {
                 let byte = (func(&elem) & 0xFF) as usize;
                 let p = dst.get_unchecked_mut(byte).as_mut_ptr();
@@ -32,7 +34,7 @@ pub fn rsort_experimental8_buf<T:Ord+Copy, F: Fn(&T)->u64>(src: &mut Vec<Vec<T>>
     let mut counts = [0u32; 256];   // TODO : This is limiting ...
 
     for s in src {
-        for elem in s.drain(..) {
+        for elem in s.drain_temp() {
             unsafe {
 
                 let byte = (func(&elem) & 0xFF) as usize;

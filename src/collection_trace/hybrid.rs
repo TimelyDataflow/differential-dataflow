@@ -50,7 +50,7 @@ fn merge<V: Ord+Clone>(mut slices: Vec<&[(V, i32)]>, target: &mut Vec<(V, i32)>)
     }
 
     if let Some(slice) = slices.pop() {
-        target.push_all(slice);
+        target.extend(slice.iter().cloned());
     }
 }
 

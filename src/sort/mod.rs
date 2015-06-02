@@ -1,6 +1,6 @@
 use std::mem;
 use std::ptr;
-use std::intrinsics;
+// use std::intrinsics;
 
 pub mod radix;
 
@@ -99,13 +99,13 @@ pub fn isort_kv<K: Ord, V>(keys: &mut [K], vals: &mut [V]) {
             // bulk shift the stuff we skipped over
             let mut tmp_k: K = mem::uninitialized();
             ptr::swap(&mut tmp_k, keys.get_unchecked_mut(i));
-            intrinsics::copy(keys.get_unchecked_mut(j), keys.get_unchecked_mut(j+1), i-j);
+            ptr::copy(keys.get_unchecked_mut(j), keys.get_unchecked_mut(j+1), i-j);
             ptr::swap(&mut tmp_k, keys.get_unchecked_mut(j));
             mem::forget(tmp_k);
 
             let mut tmp_v: V = mem::uninitialized();
             ptr::swap(&mut tmp_v, vals.get_unchecked_mut(i));
-            intrinsics::copy(vals.get_unchecked_mut(j), vals.get_unchecked_mut(j+1), i-j);
+            ptr::copy(vals.get_unchecked_mut(j), vals.get_unchecked_mut(j+1), i-j);
             ptr::swap(&mut tmp_v, vals.get_unchecked_mut(j));
             mem::forget(tmp_v);
         }
