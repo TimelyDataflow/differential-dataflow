@@ -124,7 +124,7 @@ fn test_dataflow<C: Communicator>(communicator: C, parts_pattern: String, items_
         });
 
         // filter parts by brand and container
-        let parts = parts.filter(|x| (x.0).1 == "Brand#33" && (x.0).2 == "WRAP PACK")
+        let parts = parts.filter(|x| (x.0).1 == "Brand#13" && (x.0).2 == "MEDBAG")
                          .map(|((key, _, _), wgt)| (key, wgt));
 
         // join items against their averages, filter by quantity, remove filter coordinate
