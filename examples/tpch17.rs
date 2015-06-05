@@ -35,7 +35,7 @@ use differential_dataflow::operators::*;
 // them using merge techniques. Updating cached accumulations seems maybe harder w/o hashmaps, but we'll see...
 
 static USAGE: &'static str = "
-Usage: tpch17 [options] [<arguments>...]
+Usage: tpch17 [options] [<arguments>...] <parts> <items>
 
 Options:
     -w <arg>, --workers <arg>    number of workers per process [default: 1]
@@ -60,6 +60,9 @@ fn main() {
     println!("\tprocesses:\t{}", processes);
     println!("\tprocessid:\t{}", process_id);
 
+    let parts_file = args.get_str("<parts>").to_owned();
+    let items_file = args.get_str("<items>").to_owned();
+
     // vector holding communicators to use; one per local worker.
     if processes > 1 {
         println!("Initializing BinaryCommunicator");
@@ -73,31 +76,33 @@ fn main() {
             initialize_networking(addresses, process_id, workers).ok().expect("error initializing networking")
         };
 
-        start_main(communicators);
+        start_main(communicators, parts_file, items_file);
     }
     else if workers > 1 {
         println!("Initializing ProcessCommunicator");
-        start_main(ProcessCommunicator::new_vector(workers));
+        start_main(ProcessCommunicator::new_vector(workers), parts_file, items_file);
     }
     else {
         println!("Initializing ThreadCommunicator");
-        start_main(vec![ThreadCommunicator]);
+        start_main(vec![ThreadCommunicator], parts_file, items_file);
     };
 }
 
-fn start_main<C: Communicator+Send>(communicators: Vec<C>) {
+fn start_main<C: Communicator+Send>(communicators: Vec<C>, parts_pattern: String, items_pattern: String) {
     // let communicators = ProcessCommunicator::new_vector(1);
     let mut guards = Vec::new();
     for communicator in communicators.into_iter() {
+        let parts = parts_pattern.clone();
+        let items = items_pattern.clone();
         guards.push(thread::Builder::new().name(format!("worker thread {}", communicator.index()))
-                                          .spawn(move || test_dataflow(communicator))
+                                          .spawn(move || test_dataflow(communicator, parts, items))
                                           .unwrap());
     }
 
     for guard in guards { guard.join().unwrap(); }
 }
 
-fn test_dataflow<C: Communicator>(communicator: C) {
+fn test_dataflow<C: Communicator>(communicator: C, parts_pattern: String, items_pattern: String) {
 
     let start = time::precise_time_s();
     let mut computation = GraphRoot::new(communicator);
@@ -134,53 +139,61 @@ fn test_dataflow<C: Communicator>(communicator: C) {
         (part_input, item_input)
     });
 
-    let mut parts_buffer = Vec::new();
-    let parts_reader =  BufReader::new(File::open(format!("/Users/mcsherry/Desktop/tpch-sf-10/part-{}.tbl", computation.index())).unwrap());
-    for line in parts_reader.lines() {
-        let text = line.ok().expect("read error");
-        let mut fields = text.split("|");
+    if let Ok(parts_file) = File::open(format!("{}-{}", parts_pattern, computation.index())) {
 
-        let part_id = fields.next().unwrap().parse::<u32>().unwrap();
-        fields.next();
-        fields.next();
-        let brand = fields.next().unwrap().to_owned();
-        fields.next();
-        fields.next();
-        let container = fields.next().unwrap().to_owned();
+        let mut parts_buffer = Vec::new();
+        let parts_reader = BufReader::new(parts_file);
 
-        parts_buffer.push(((part_id, brand, container), 1));
-        if parts_buffer.len() == 1024 {
-            parts.send_at(0u64, parts_buffer.drain_temp());
-            computation.step();
+        for line in parts_reader.lines() {
+            let text = line.ok().expect("read error");
+            let mut fields = text.split(" ");
 
+            let part_id = fields.next().unwrap().parse::<u32>().unwrap();
+            fields.next();
+            fields.next();
+            let brand = fields.next().unwrap().to_owned();
+            fields.next();
+            fields.next();
+            let container = fields.next().unwrap().to_owned();
+
+            parts_buffer.push(((part_id, brand, container), 1));
+            if parts_buffer.len() == 1024 {
+                parts.send_at(0u64, parts_buffer.drain_temp());
+                computation.step();
+
+            }
         }
+
+        parts.send_at(0u64, parts_buffer.drain_temp());
+        computation.step();
     }
+    else { println!("worker {}: did not find input {}-{}", computation.index(), parts_pattern, computation.index()); }
 
-    parts.send_at(0u64, parts_buffer.drain_temp());
-    computation.step();
+    if let Ok(items_file) = File::open(format!("{}-{}", items_pattern, computation.index())) {
+        let mut items_buffer = Vec::new();
+        let items_reader =  BufReader::new(items_file);
+        for line in items_reader.lines() {
+            let text = line.ok().expect("read error");
+            let mut fields = text.split(" ");
 
-    let mut items_buffer = Vec::new();
-    let items_reader =  BufReader::new(File::open(format!("/Users/mcsherry/Desktop/tpch-sf-10/lineitem-{}.tbl", computation.index())).unwrap());
-    for line in items_reader.lines() {
-        let text = line.ok().expect("read error");
-        let mut fields = text.split("|");
+            fields.next();
+            let item_id = fields.next().unwrap().parse::<u32>().unwrap();
+            fields.next();
+            fields.next();
+            let quantity = fields.next().unwrap().parse::<u32>().unwrap();
+            let extended_price = fields.next().unwrap().parse::<f64>().unwrap() as u64;
 
-        fields.next();
-        let item_id = fields.next().unwrap().parse::<u32>().unwrap();
-        fields.next();
-        fields.next();
-        let quantity = fields.next().unwrap().parse::<u32>().unwrap();
-        let extended_price = fields.next().unwrap().parse::<f64>().unwrap() as u64;
-
-        items_buffer.push(((item_id, quantity, extended_price), 1));
-        if items_buffer.len() == 1024 {
-            items.send_at(0u64, items_buffer.drain_temp());
-            computation.step();
+            items_buffer.push(((item_id, quantity, extended_price), 1));
+            if items_buffer.len() == 1024 {
+                items.send_at(0u64, items_buffer.drain_temp());
+                computation.step();
+            }
         }
-    }
 
-    items.send_at(0u64, items_buffer.drain_temp());
-    computation.step();
+        items.send_at(0u64, items_buffer.drain_temp());
+        computation.step();
+    }
+    else { println!("worker {}: did not find input {}-{}", computation.index(), items_pattern, computation.index()); }
 
     println!("data loaded at {}", time::precise_time_s() - start);
 
