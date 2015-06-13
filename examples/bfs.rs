@@ -66,12 +66,9 @@ fn main() {
         while computation.step() {
             if time::precise_time_s() - start >= round as f64 {
 
-                // println!("adding records!");
                 let changes = vec![((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), 1),
                                    ((rng2.gen_range(0, nodes), rng2.gen_range(0, nodes)),-1)];
                 graph.send_at(round, changes.into_iter());
-                // println!("{}s:\tintroducing {:?}", time::precise_time_s() - start, vec![old_record, new_record]);
-                // graph.send_at(round, vec![old_record, new_record].into_iter());
                 graph.advance_to(round + 1);
                 round += 1;
             }
@@ -98,8 +95,8 @@ where G::Timestamp: LeastUpperBound+Hash {
         let edges = inner.builder().enter(&edges);
         let nodes = inner.builder().enter(&nodes);
 
-        inner.join_u(&edges, |l| l, |e| e, |_k,l,d| (*d, l + 1))
+        inner.join_u(&edges, |l| l, |e| e, |_k,l,d| (*d, l+1))
              .concat(&nodes)
-             .group_by_u(|x| x, |k,v| (*k, *v), |_, s, t| t.push((s[0].0, 1)))
+             .group_by_u(|x| x, |k,v| (*k, *v), |_, mut s, t| t.push((*s.peek().unwrap().0, 1)))
      })
 }

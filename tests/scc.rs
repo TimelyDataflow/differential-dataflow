@@ -48,7 +48,7 @@ where G::Timestamp: LeastUpperBound {
 
     labels.join_u(&edges, |l| l, |e| e, |_k,l,d| (*d,*l))
           .concat(&nodes)
-          .group_by_u(|x| x, |k,v| (*k,*v), |_, s, t| { t.push((s[0].0, 1)); } )
+          .group_by_u(|x| x, |k,v| (*k,*v), |_, mut s, t| { t.push((*s.peek().unwrap().0, 1)); } )
 }
 
 fn _reachability<G: GraphBuilder, U: UnsignedInt>(edges: &Stream<G, ((U, U), i32)>, nodes: &Stream<G, ((U, U), i32)>)

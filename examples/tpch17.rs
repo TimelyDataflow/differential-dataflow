@@ -7,6 +7,9 @@ extern crate differential_dataflow;
 extern crate docopt;
 use docopt::Docopt;
 
+use std::rc::Rc;
+use std::cell::RefCell;
+
 use std::thread;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
@@ -19,23 +22,13 @@ use timely::networking::initialize_networking_from_file;
 
 use timely::drain::DrainExt;
 
-// use differential_dataflow::collection_trace::lookup::UnsignedInt;
-// use differential_dataflow::collection_trace::LeastUpperBound;
+use timely::progress::timestamp::RootTimestamp;
+use timely::communication::pact::Pipeline;
 
 use differential_dataflow::operators::*;
 
-// The typical differential dataflow vertex receives updates of the form (key, time, value, update),
-// where the data are logically partitioned by key, and are then subject to various aggregations by time,
-// accumulating for each value the update integers. The resulting multiset is the subjected to computation.
-
-// The implementation I am currently most comfortable with is *conservative* in the sense that it will defer updates
-// until it has received all updates for a time, at which point it commits these updates permanently. This is done
-// to avoid issues with running logic on partially formed data, but should also simplify our data management story.
-// Rather than requiring random access to diffs, we can store them as flat arrays (possibly sorted) and integrate
-// them using merge techniques. Updating cached accumulations seems maybe harder w/o hashmaps, but we'll see...
-
 static USAGE: &'static str = "
-Usage: tpch17 [options] [<arguments>...] <parts> <items>
+Usage: tpch17 [options] [<arguments>...] <parts> <items> <delim>
 
 Options:
     -w <arg>, --workers <arg>    number of workers per process [default: 1]
@@ -62,6 +55,10 @@ fn main() {
 
     let parts_file = args.get_str("<parts>").to_owned();
     let items_file = args.get_str("<items>").to_owned();
+    let mut delimiter = args.get_str("<delim>").to_owned();
+    if delimiter.len() == 0 { delimiter = " ".to_owned(); }
+
+    println!("delimiter: {}", delimiter);
 
     // vector holding communicators to use; one per local worker.
     if processes > 1 {
@@ -76,132 +73,154 @@ fn main() {
             initialize_networking(addresses, process_id, workers).ok().expect("error initializing networking")
         };
 
-        start_main(communicators, parts_file, items_file);
+        start_main(communicators, parts_file, items_file, delimiter);
     }
     else if workers > 1 {
         println!("Initializing ProcessCommunicator");
-        start_main(ProcessCommunicator::new_vector(workers), parts_file, items_file);
+        start_main(ProcessCommunicator::new_vector(workers), parts_file, items_file, delimiter);
     }
     else {
         println!("Initializing ThreadCommunicator");
-        start_main(vec![ThreadCommunicator], parts_file, items_file);
+        start_main(vec![ThreadCommunicator], parts_file, items_file, delimiter);
     };
 }
 
-fn start_main<C: Communicator+Send>(communicators: Vec<C>, parts_pattern: String, items_pattern: String) {
-    // let communicators = ProcessCommunicator::new_vector(1);
+fn start_main<C: Communicator+Send>(communicators: Vec<C>, parts_pattern: String, items_pattern: String, delimiter: String) {
     let mut guards = Vec::new();
     for communicator in communicators.into_iter() {
         let parts = parts_pattern.clone();
         let items = items_pattern.clone();
+        let delim = delimiter.clone();
         guards.push(thread::Builder::new().name(format!("worker thread {}", communicator.index()))
-                                          .spawn(move || test_dataflow(communicator, parts, items))
+                                          .spawn(move || test_dataflow(communicator, parts, items, delim))
                                           .unwrap());
     }
 
     for guard in guards { guard.join().unwrap(); }
 }
 
-fn test_dataflow<C: Communicator>(communicator: C, parts_pattern: String, items_pattern: String) {
+fn test_dataflow<C: Communicator>(communicator: C, parts_pattern: String, items_pattern: String, delimiter: String) {
 
-    let start = time::precise_time_s();
+    let comm_index = communicator.index();
+    let comm_peers = communicator.peers();
+
+    let mut start = time::precise_time_s();
     let mut computation = GraphRoot::new(communicator);
 
+    let epoch = Rc::new(RefCell::new(0u64));
+    let clone = epoch.clone();
+
+    // form the TPCH17-like query
     let (mut parts, mut items) = computation.subcomputation(|builder| {
 
         let (part_input, parts) = builder.new_input::<((u32, String, String), i32)>();
         let (item_input, items) = builder.new_input::<((u32, u32, u64), i32)>();
 
+        // filter parts by brand and container
+        let parts = parts.filter(|x| (x.0).1 == "Brand#23" && (x.0).2 == "MED BOX")
+                         .map(|((key, _, _), wgt)| (key, wgt));
+
+        // restrict lineitems to those of the relevant part
+        let items = items.join_u(&parts, |x| (x.0, (x.1,x.2)), |y| (y,()), |k,x,_| (*k,x.0,x.1));
+
         // compute the average quantities
         let average = items.group_by_u(|(x,y,_)| (x,y), |k,v| (*k,*v), |_,s,t| {
             let mut sum = 0;
             let mut cnt = 0;
-            for &(val,wgt) in s.iter() {
+            for (&val,wgt) in s {
                 cnt += wgt;
                 sum += val;
             }
             t.push((sum / cnt as u32, 1));
         });
 
-        // filter parts by brand and container
-        let parts = parts.filter(|x| (x.0).1 == "Brand#13" && (x.0).2 == "MEDBAG")
-                         .map(|((key, _, _), wgt)| (key, wgt));
-
         // join items against their averages, filter by quantity, remove filter coordinate
-        let items = items.join_u(&average, |x| (x.0, (x.1, x.2)), |y| y, |k, x, f| (*k, x.0, x.1, *f))
-                         .filter(|&((_, q, _, avg),_)| q < avg / 5)
-                         .map(|((key,_,price,_), wgt)| ((key,price), wgt));
-
-        // semi-join against the part keys we retained. think of a better way to produce sum ...
-        parts.join_u(&items, |k| (k,()), |(k,p)| (k,p), |_,_,p| *p)
-             .inspect_batch(|_t,x| println!("results: {:?}", x.len()));
+        items.join_u(&average, |x| (x.0, (x.1, x.2)), |y| y, |k, x, f| (*k, x.0, x.1, *f))
+             .filter(|&((_, q, _, avg),_)| q < avg / 5)
+             .map(|((key,_,price,_), wgt)| ((key,price), wgt))
+             .unary_notify::<u32, _, _>(Pipeline, format!("Subscribe"), vec![RootTimestamp::new(0)], move |i,_,n| {
+                 while let Some(_) = i.pull() { }
+                 for (time,_) in n.next() {
+                     *clone.borrow_mut() = time.inner + 1;
+                     if n.frontier(0).len() > 0 {
+                         n.notify_at(&RootTimestamp::new(*clone.borrow()));
+                     }
+                 }
+             })
+             ;
 
         (part_input, item_input)
     });
 
-    if let Ok(parts_file) = File::open(format!("{}-{}", parts_pattern, computation.index())) {
+    // read the parts input file
+    if let Ok(parts_file) = File::open(format!("{}-{}-{}", parts_pattern, comm_index, comm_peers)) {
 
         let mut parts_buffer = Vec::new();
         let parts_reader = BufReader::new(parts_file);
 
-        for line in parts_reader.lines() {
-            let text = line.ok().expect("read error");
-            let mut fields = text.split(" ");
-
-            let part_id = fields.next().unwrap().parse::<u32>().unwrap();
-            fields.next();
-            fields.next();
-            let brand = fields.next().unwrap().to_owned();
-            fields.next();
-            fields.next();
-            let container = fields.next().unwrap().to_owned();
-
-            parts_buffer.push(((part_id, brand, container), 1));
-            if parts_buffer.len() == 1024 {
-                parts.send_at(0u64, parts_buffer.drain_temp());
-                computation.step();
-
+        for (index, line) in parts_reader.lines().enumerate() {
+            if index as u64 % comm_peers == comm_index {
+                let text = line.ok().expect("read error");
+                let mut fields = text.split(&delimiter);
+                let part_id = fields.next().unwrap().parse::<u32>().unwrap();
+                fields.next();
+                fields.next();
+                let brand = fields.next().unwrap().to_owned();
+                fields.next();
+                fields.next();
+                let container = fields.next().unwrap().to_owned();
+                parts_buffer.push(((part_id, brand, container), 1));
             }
         }
 
         parts.send_at(0u64, parts_buffer.drain_temp());
         computation.step();
     }
-    else { println!("worker {}: did not find input {}-{}", computation.index(), parts_pattern, computation.index()); }
+    else { println!("worker {}: did not find input {}-{}-{}", computation.index(), parts_pattern, comm_index, comm_peers); }
 
-    if let Ok(items_file) = File::open(format!("{}-{}", items_pattern, computation.index())) {
-        let mut items_buffer = Vec::new();
+    // read the lineitems input file
+    let mut items_buffer = Vec::new();
+    if let Ok(items_file) = File::open(format!("{}-{}-{}", items_pattern, comm_index, comm_peers)) {
         let items_reader =  BufReader::new(items_file);
-        for line in items_reader.lines() {
-            let text = line.ok().expect("read error");
-            let mut fields = text.split(" ");
-
-            fields.next();
-            let item_id = fields.next().unwrap().parse::<u32>().unwrap();
-            fields.next();
-            fields.next();
-            let quantity = fields.next().unwrap().parse::<u32>().unwrap();
-            let extended_price = fields.next().unwrap().parse::<f64>().unwrap() as u64;
-
-            items_buffer.push(((item_id, quantity, extended_price), 1));
-            if items_buffer.len() == 1024 {
-                items.send_at(0u64, items_buffer.drain_temp());
-                computation.step();
+        for (index, line) in items_reader.lines().enumerate() {
+            if index as u64 % comm_peers == comm_index {
+                let text = line.ok().expect("read error");
+                let mut fields = text.split(&delimiter);
+                fields.next();
+                let item_id = fields.next().unwrap().parse::<u32>().unwrap();
+                fields.next();
+                fields.next();
+                let quantity = fields.next().unwrap().parse::<u32>().unwrap();
+                let extended_price = fields.next().unwrap().parse::<f64>().unwrap() as u64;
+                items_buffer.push(((item_id, quantity, extended_price), 1i32));
             }
         }
-
-        items.send_at(0u64, items_buffer.drain_temp());
-        computation.step();
     }
-    else { println!("worker {}: did not find input {}-{}", computation.index(), items_pattern, computation.index()); }
+    else { println!("worker {}: did not find input {}-{}-{}", comm_index, items_pattern, comm_index, comm_peers); }
 
     println!("data loaded at {}", time::precise_time_s() - start);
+    start = time::precise_time_s();
 
     parts.close();
+    let item_count = items_buffer.len();
+
+    let mut buffer = vec![];
+    for (index, item) in items_buffer.drain_temp().enumerate() {
+        buffer.push(item);
+        items.send_at(index as u64, buffer.drain_temp());
+        items.advance_to(index as u64 + 1);
+        while *epoch.borrow() <= index as u64 {
+            computation.step();
+        }
+    }
+
+    // items.send_at(0, items_buffer.drain_temp());
+
     items.close();
 
-    while computation.step() { std::thread::yield_now(); }
+    while computation.step() { }
     computation.step(); // shut down
 
     println!("computation finished at {}", time::precise_time_s() - start);
+    println!("rate: {}", (item_count as f64) / (time::precise_time_s() - start));
 }

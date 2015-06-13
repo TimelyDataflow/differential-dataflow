@@ -11,7 +11,7 @@ use timely::communication::pact::Exchange;
 
 use columnar::Columnar;
 
-use collection_trace::Hybrid;
+use collection_trace::CollectionTrace;
 
 use collection_trace::lookup::UnsignedInt;
 use collection_trace::{LeastUpperBound, Lookup, Offset};
@@ -80,8 +80,8 @@ pub trait JoinExt<G: GraphBuilder, D1: Data+Columnar> : BinaryNotifyExt<G, (D1, 
         // TODO : pay more attention to the number of peers
         // TODO : find a better trait to sub-trait so we can read .builder
         // assert!(self.builder.peers() == 1);
-        let mut trace1 = Some(Hybrid::new(look(0)));
-        let mut trace2 = Some(Hybrid::new(look(0)));
+        let mut trace1 = Some(CollectionTrace::new(look(0)));
+        let mut trace2 = Some(CollectionTrace::new(look(0)));
 
         let mut stage1 = Vec::new();    // Vec<(T, Vec<(K, V1, i32)>)>;
         let mut stage2 = Vec::new();    // Vec<(T, Vec<(K, V2, i32)>)>;
@@ -123,7 +123,6 @@ pub trait JoinExt<G: GraphBuilder, D1: Data+Columnar> : BinaryNotifyExt<G, (D1, 
             while let Some((time, _count)) = notificator.next() {
 
                 if let Some((mut keys, mut vals)) = stage1.remove_key(&time) {
-                    // coalesce_kv(&mut keys, &mut vals);
                     coalesce_kv8(&mut keys, &mut vals, &key_h);
 
                     if let Some(trace) = trace2.as_ref() {
@@ -142,21 +141,16 @@ pub trait JoinExt<G: GraphBuilder, D1: Data+Columnar> : BinaryNotifyExt<G, (D1, 
                                         output.push((result(&keys[lower], v1, v2), w1 * w2));
                                     }
                                 }
-                                // TODO : This sort of thing makes us go faster, but is cheating
-                                // TODO : because of the magic numbers involved.
-                                // if output.len() > 100_000_000 { coalesce(&mut output); }
                             }
 
                             lower = upper;
                         }
                     }
 
-                    // if trace1 exists, install differences. otherwise drop them.
                     trace1.as_mut().map(|x| x.install_differences(time.clone(), &mut keys, vals));
                 }
 
                 if let Some((mut keys, mut vals)) = stage2.remove_key(&time) {
-                    // coalesce_kv(&mut keys, &mut vals);
                     coalesce_kv8(&mut keys, &mut vals, &key_h);
 
                     if let Some(trace) = trace1.as_ref() {
@@ -175,29 +169,20 @@ pub trait JoinExt<G: GraphBuilder, D1: Data+Columnar> : BinaryNotifyExt<G, (D1, 
                                         output.push((result(&keys[lower], v1, v2), w1 * w2));
                                     }
                                 }
-                                // TODO : This sort of thing makes us go faster, but is cheating
-                                // TODO : because of the magic numbers involved.
-                                // if output.len() > 100_000_000 { coalesce(&mut output); }
                             }
 
                             lower = upper;
                         }
                     }
 
-                    // if trace2 exists, install differences. otherwise drop them.
                     trace2.as_mut().map(|x| x.install_differences(time.clone(), &mut keys, vals));
                 }
 
                 // transmit data for each output time
-                // TODO : coalesce first, to cut transmission
                 for (time, mut vals) in outbuf.drain_temp() {
                     coalesce(&mut vals);
                     output.give_at(&time, vals.drain_temp());
                 }
-
-                outbuf = Vec::new();
-
-                // println!("join size at {:?}: ({:?}, {:?})", time, trace1.as_ref().map(|x| x.size()).unwrap_or(0), trace2.as_ref().map(|x|x.size()).unwrap_or(0));
             }
         })
     }

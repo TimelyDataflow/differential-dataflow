@@ -1,7 +1,7 @@
 use std::default::Default;
 use std::hash::Hash;
-// use std::collections::HashSet;
 use std::collections::HashMap;
+use std::iter::Peekable;
 
 use timely::example_shared::*;
 use timely::example_shared::operators::*;
@@ -13,6 +13,8 @@ use columnar::Columnar;
 
 use collection_trace::{LeastUpperBound, Lookup, OperatorTrace, Offset};
 use collection_trace::lookup::UnsignedInt;
+use collection_trace::collection_trace::MergeIterator;
+
 use sort::*;
 
 use timely::drain::DrainExt;
@@ -23,13 +25,14 @@ impl<G: GraphBuilder, D1: Data+Columnar, S: UnaryNotifyExt<G, (D1, i32)>+MapExt<
 pub trait GroupByExt<G: GraphBuilder, D1: Data+Columnar> : UnaryNotifyExt<G, (D1, i32)>+MapExt<G, (D1, i32)> where G::Timestamp: LeastUpperBound {
     fn group_by<
                 K:     Hash+Ord+Clone+'static,
-                V1:    Ord+Clone+Default+'static,        // TODO : Is Clone needed?
-                V2:    Ord+Clone+Default+'static,        // TODO : Is Clone needed?
+                V1:    Ord+Clone+Default+'static,
+                V2:    Ord+Clone+Default+'static,
                 D2:    Data+Columnar,
                 KV:    Fn(D1)->(K,V1)+'static,
                 Part:  Fn(&D1)->u64+'static,
                 KH:    Fn(&K)->u64+'static,
-                Logic: Fn(&K, &[(V1,i32)], &mut Vec<(V2, i32)>)+'static,
+                // Logic: Fn(&K, &[(V1,i32)], &mut Vec<(V2, i32)>)+'static,
+                Logic: Fn(&K, Peekable<MergeIterator<V1>>, &mut Vec<(V2, i32)>)+'static,
                 Reduc: Fn(&K, &V2)->D2+'static,
                 >
             (&self, kv: KV, part: Part, key_h: KH, reduc: Reduc, logic: Logic) -> Stream<G, (D2, i32)> {
@@ -37,11 +40,12 @@ pub trait GroupByExt<G: GraphBuilder, D1: Data+Columnar> : UnaryNotifyExt<G, (D1
             }
     fn group_by_u<
                 U:     UnsignedInt,
-                V1:    Data+Columnar+Ord+Clone+Default+'static,        // TODO : Is Clone needed?
-                V2:    Ord+Clone+Default+'static,        // TODO : Is Clone needed?
+                V1:    Data+Columnar+Ord+Clone+Default+'static,
+                V2:    Ord+Clone+Default+'static,
                 D2:    Data+Columnar,
                 KV:    Fn(D1)->(U,V1)+'static,
-                Logic: Fn(&U, &[(V1,i32)], &mut Vec<(V2, i32)>)+'static,
+                // Logic: Fn(&U, &[(V1,i32)], &mut Vec<(V2, i32)>)+'static,
+                Logic: Fn(&U, Peekable<MergeIterator<V1>>, &mut Vec<(V2, i32)>)+'static,
                 Reduc: Fn(&U, &V2)->D2+'static,
                 >
             (&self, kv: KV, reduc: Reduc, logic: Logic) -> Stream<G, (D2, i32)> {
@@ -51,15 +55,16 @@ pub trait GroupByExt<G: GraphBuilder, D1: Data+Columnar> : UnaryNotifyExt<G, (D1
 
     fn group_by_inner<
                         K:     Hash+Ord+Clone+'static,
-                        V1:    Ord+Clone+Default+'static,        // TODO : Is Clone needed?
-                        V2:    Ord+Clone+Default+'static,        // TODO : Is Clone needed?
+                        V1:    Ord+Clone+Default+'static,
+                        V2:    Ord+Clone+Default+'static,
                         D2:    Data+Columnar,
                         KV:    Fn(D1)->(K,V1)+'static,
                         Part:  Fn(&D1)->u64+'static,
                         KH:    Fn(&K)->u64+'static,
                         Look:  Lookup<K, Offset>,
                         LookG: Fn(u64)->Look,
-                        Logic: Fn(&K, &[(V1,i32)], &mut Vec<(V2, i32)>)+'static,
+                        // Logic: Fn(&K, &[(V1,i32)], &mut Vec<(V2, i32)>)+'static,
+                        Logic: Fn(&K, Peekable<MergeIterator<V1>>, &mut Vec<(V2, i32)>)+'static,
                         Reduc: Fn(&K, &V2)->D2+'static,
                         >
                     (&self, kv: KV, part: Part, key_h: KH, reduc: Reduc, look: LookG, logic: Logic) -> Stream<G, (D2, i32)> {
@@ -122,14 +127,12 @@ pub trait GroupByExt<G: GraphBuilder, D1: Data+Columnar> : UnaryNotifyExt<G, (D1
                     qsort(&mut keys[..]);
                     keys.dedup();
                     for key in keys {
-                        trace.set_collection_with(&key, &index, |k,s,r| logic(k,s,r));
+                        trace.set_collection_from(&key, &index, |k,s,r| logic(k,s,r));
                         for &(ref result, weight) in trace.result.get_difference(&key, &index)  {
                             session.give((reduc(&key, &result), weight));
                         }
                     }
                 }
-
-                // println!("groupby size at {:?}: ({:?}, {:?})", index, trace.source.size(), trace.result.size());
             }
         })
     }
