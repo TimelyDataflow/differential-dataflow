@@ -25,7 +25,7 @@ The program to do this in differential dataflow follows exactly this pattern. Al
 let edges = dataflow.new_input::<((u32, u32), i32)>();
 let roots = dataflow.new_input::<(u32, i32)>();
 
-// initialize roots as reaching themselves at distance 0
+// initialize roots at distance 0
 let start = roots.map(|(x, w)| ((x, 0), w));
 
 // repeatedly update minimal distances to each node,
