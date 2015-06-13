@@ -9,7 +9,7 @@ Like many other data-parallel platforms, differential dataflow supports a variet
 
 Once you have written a differential dataflow program, you then update the input collections and the implementation will respond with the correct updates to the output collections. These updates (both input and output) have the form `(data, diff)`, where `data` is a typed record and `diff` is an integer indicating the change in the number of occurrences of `data`. A positive `diff` indicates more occurrences of `data` and a negative `diff` indicates fewer.
 
-Importantly, differential dataflow is efficient because it communicates *only* in terms of differences. At its core is a computational engine which is also based on differences, and which does no work that does not correspond to a change in the trace of your computation. Achieving this property in the presence of iterative subcomputations is the main "unique" feature of differential dataflow.
+Differential dataflow is efficient because it communicates *only* in terms of differences. At its core is a computational engine which is also based on differences, and which does no work that does not correspond to a change in the trace of your computation. Achieving this property in the presence of iterative subcomputations is the main "unique" feature of differential dataflow.
 
 ## An example program:  breadth first search
 
