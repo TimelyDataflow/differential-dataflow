@@ -115,7 +115,7 @@ That isn't the cool part, though.
 
 ### Concurrent incremental updates
 
-As soon as the computation started, it began to randomly add and remove edges, one addition and removal per second. These updates depend on the initial computation, and so we can't report their results until after reporting those of the first round. But, just after the first round emerges, we see outputs like:
+As soon as the computation started, it began to randomly add and remove edges, one addition and removal per second. These output updates depend on those of the initial computation, and so we can't report them until after reporting those of the first round. But, just after the first round of output emerges, we see outputs like:
 
 ```
 observed at (Root, 3):
@@ -145,11 +145,11 @@ Each of these outputs reports a change in the numbers of nodes at each distance 
 
 These outputs corresponding to inputs introduced at seconds 3, 4, 5, 8, and 11 from the start of the computation, times at which we haven't even finished introducing the initial 200M randomly generated graph edges. As a consequence, these outputs have fairly large `elapsed` measurements.
 
-However, you may notice that the times at which they are reported, their second of introduction plus the elapsed measurement, are quite tightly concentrated, at roughly 264 seconds. While these results are not available until after the outputs for the first epoch are complete, they do emerge almost immediately thereafter.
+However, you may notice that the times at which they are reported, their second of introduction plus the elapsed measurement, are quite tightly concentrated, at roughly 264.1 seconds. While these results are not available until after the outputs for the first epoch are complete, they do emerge almost immediately thereafter.
 
 ### Streaming incremental updates
 
-If we scan through the output until epoch 265, the first one unblocked by the initial 264.1s of work, we see that its elapsed time is quite small. As are those that follow it:
+If we scan through the output until epoch 265, the first one not blocked by the initial 264.1s of work, we see that its elapsed time is quite small. As are those that follow it:
 
 ```
 observed at (Root, 265):
