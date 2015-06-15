@@ -52,7 +52,7 @@ In any case, the outputs will precisely track the computation applied to the inp
 
 ## An example execution: breadth first search
 
-Let's take the [BFS example]() from the differential dataflow repository. It constructs a random graph on 200M edges, performs the reachability computation defined above, starting from root nodes 0,1, and 2, and reports the number of nodes at each distance.
+Let's take the [BFS example]() from the differential dataflow repository. It constructs a random graph on 200M edges, performs the reachability computation defined above, starting from root nodes 0, 1, and 2, and reports the number of nodes at each distance.
 
 The random number generator is seeded, so you should see the same output I see (up to timings):
 
@@ -115,7 +115,7 @@ That isn't the cool part, though.
 
 ### Concurrent incremental updates
 
-As soon as the computation started, it began to randomly add and remove edges, one addition and removal per second. These output updates depend on those of the initial computation, and so we can't report them until after reporting those of the first round. But, just after the first round of output emerges, we see outputs like:
+As soon as the computation started, it began to randomly add and remove edges, one addition and removal per second. The corresponding output updates depend on those of the initial computation, and so we can't report them until after reporting those of the first round. But, just after the first round of output emerges, we see outputs like:
 
 ```
 observed at (Root, 3):
