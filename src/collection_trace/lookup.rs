@@ -2,9 +2,10 @@ use std::hash::Hash;
 use std::collections::HashMap;
 
 use timely::communication::Data;
-use columnar::Columnar;
+use timely::serialization::Serializable;
+// use columnar::Columnar;
 
-pub trait Lookup<K: Eq, V>: 'static {
+pub trait Lookup<K: Eq, V> {
     fn new() -> Self;
     fn get_ref<'a>(&'a self, &K)->Option<&'a V>;
     fn get_mut<'a>(&'a mut self, &K)->Option<&'a mut V>;
@@ -22,7 +23,7 @@ impl<K: Hash+Eq+'static, V: 'static> Lookup<K,V> for HashMap<K,V> {
     fn remove_key(&mut self, key: &K) -> Option<V> { self.remove(key) }
 }
 
-impl<K: Eq+'static, V: 'static> Lookup<K, V> for Vec<(K, V)> {
+impl<K: Eq, V> Lookup<K, V> for Vec<(K, V)> {
     fn new() -> Self { Vec::new() }
     fn get_ref<'a>(&'a self, key: &K)->Option<&'a V> {
         if let Some(position) = self.iter().position(|x| &x.0 == key) {
@@ -54,7 +55,7 @@ impl<K: Eq+'static, V: 'static> Lookup<K, V> for Vec<(K, V)> {
     }
 }
 
-pub trait UnsignedInt : Copy+Eq+Ord+Hash+Data+Columnar+Default+'static { fn as_u64(&self) -> u64; }
+pub trait UnsignedInt : Copy+Eq+Ord+Hash+Data+Serializable+Default+'static { fn as_u64(&self) -> u64; }
 impl UnsignedInt for u64 { fn as_u64(&self) -> u64 { *self } }
 impl UnsignedInt for u32 { fn as_u64(&self) -> u64 { *self as u64 } }
 impl UnsignedInt for u16 { fn as_u64(&self) -> u64 { *self as u64 } }

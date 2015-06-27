@@ -8,8 +8,8 @@ use timely::example_shared::operators::*;
 
 use timely::communication::*;
 use timely::communication::pact::Exchange;
-
-use columnar::Columnar;
+use timely::serialization::Serializable;
+// use columnar::Columnar;
 
 use collection_trace::{LeastUpperBound, Lookup, OperatorTrace, Offset};
 use collection_trace::lookup::UnsignedInt;
@@ -19,19 +19,21 @@ use sort::*;
 
 use timely::drain::DrainExt;
 
-impl<G: GraphBuilder, D1: Data+Columnar, S: UnaryNotifyExt<G, (D1, i32)>+MapExt<G, (D1, i32)>> GroupByExt<G, D1> for S where G::Timestamp: LeastUpperBound {}
+impl<G: GraphBuilder, D: Data+Serializable, S> GroupByExt<G, D> for S
+where G::Timestamp: LeastUpperBound,
+      S: UnaryNotifyExt<G, (D, i32)>+MapExt<G, (D, i32)> { }
 
 
-pub trait GroupByExt<G: GraphBuilder, D1: Data+Columnar> : UnaryNotifyExt<G, (D1, i32)>+MapExt<G, (D1, i32)> where G::Timestamp: LeastUpperBound {
+pub trait GroupByExt<G: GraphBuilder, D1: Data+Serializable> : UnaryNotifyExt<G, (D1, i32)>+MapExt<G, (D1, i32)>
+where G::Timestamp: LeastUpperBound {
     fn group_by<
                 K:     Hash+Ord+Clone+'static,
                 V1:    Ord+Clone+Default+'static,
                 V2:    Ord+Clone+Default+'static,
-                D2:    Data+Columnar,
+                D2:    Data+Serializable,
                 KV:    Fn(D1)->(K,V1)+'static,
                 Part:  Fn(&D1)->u64+'static,
                 KH:    Fn(&K)->u64+'static,
-                // Logic: Fn(&K, &[(V1,i32)], &mut Vec<(V2, i32)>)+'static,
                 Logic: Fn(&K, Peekable<MergeIterator<V1>>, &mut Vec<(V2, i32)>)+'static,
                 Reduc: Fn(&K, &V2)->D2+'static,
                 >
@@ -39,35 +41,39 @@ pub trait GroupByExt<G: GraphBuilder, D1: Data+Columnar> : UnaryNotifyExt<G, (D1
                 self.group_by_inner(kv, part, key_h, reduc, |_| HashMap::new(), logic)
             }
     fn group_by_u<
-                U:     UnsignedInt,
-                V1:    Data+Columnar+Ord+Clone+Default+'static,
-                V2:    Ord+Clone+Default+'static,
-                D2:    Data+Columnar,
-                KV:    Fn(D1)->(U,V1)+'static,
-                // Logic: Fn(&U, &[(V1,i32)], &mut Vec<(V2, i32)>)+'static,
-                Logic: Fn(&U, Peekable<MergeIterator<V1>>, &mut Vec<(V2, i32)>)+'static,
-                Reduc: Fn(&U, &V2)->D2+'static,
-                >
+                  U:     UnsignedInt,
+                  V1:    Data+Serializable+Ord+Clone+Default+'static,
+                  V2:    Ord+Clone+Default+'static,
+                  D2:    Data+Serializable,
+                  KV:    Fn(D1)->(U,V1)+'static,
+                  Logic: Fn(&U, Peekable<MergeIterator<V1>>, &mut Vec<(V2, i32)>)+'static,
+                  Reduc: Fn(&U, &V2)->D2+'static,
+                  >
             (&self, kv: KV, reduc: Reduc, logic: Logic) -> Stream<G, (D2, i32)> {
                 self.map(move |(x,w)| (kv(x),w))
-                    .group_by_inner(|x|x, |&(k,_)| k.as_u64(), |k| k.as_u64(), reduc, |x| (Vec::new(), x), logic)
+                    .group_by_inner(|x|x,
+                                    |&(k,_)| k.as_u64(),
+                                    |k| k.as_u64(),
+                                    reduc,
+                                    |x| (Vec::new(), x),
+                                    logic)
     }
 
     fn group_by_inner<
-                        K:     Hash+Ord+Clone+'static,
-                        V1:    Ord+Clone+Default+'static,
-                        V2:    Ord+Clone+Default+'static,
-                        D2:    Data+Columnar,
-                        KV:    Fn(D1)->(K,V1)+'static,
-                        Part:  Fn(&D1)->u64+'static,
-                        KH:    Fn(&K)->u64+'static,
-                        Look:  Lookup<K, Offset>,
-                        LookG: Fn(u64)->Look,
-                        // Logic: Fn(&K, &[(V1,i32)], &mut Vec<(V2, i32)>)+'static,
-                        Logic: Fn(&K, Peekable<MergeIterator<V1>>, &mut Vec<(V2, i32)>)+'static,
-                        Reduc: Fn(&K, &V2)->D2+'static,
-                        >
-                    (&self, kv: KV, part: Part, key_h: KH, reduc: Reduc, look: LookG, logic: Logic) -> Stream<G, (D2, i32)> {
+                      K:     Hash+Ord+Clone+'static,
+                      V1:    Ord+Clone+Default+'static,
+                      V2:    Ord+Clone+Default+'static,
+                      D2:    Data+Serializable,
+                      KV:    Fn(D1)->(K,V1)+'static,
+                      Part:  Fn(&D1)->u64+'static,
+                      KH:    Fn(&K)->u64+'static,
+                      Look:  Lookup<K, Offset>+'static,
+                      LookG: Fn(u64)->Look,
+                      Logic: Fn(&K, Peekable<MergeIterator<V1>>, &mut Vec<(V2, i32)>)+'static,
+                      Reduc: Fn(&K, &V2)->D2+'static,
+                      >
+                    (&self, kv: KV, part: Part, key_h: KH, reduc: Reduc, look: LookG, logic: Logic)
+                 -> Stream<G, (D2, i32)> {
 
         // TODO : pay more attention to the number of peers
         // TODO : find a better trait to sub-trait so we can read .builder
@@ -86,7 +92,7 @@ pub trait GroupByExt<G: GraphBuilder, D1: Data+Columnar> : UnaryNotifyExt<G, (D1
             while let Some((time, mut data)) = input.pull() {
 
                 notificator.notify_at(&time);
-                let mut queues = inputs.entry_or_insert(time.clone(), || { (Vec::new(), Vec::new()) });
+                let mut queues = inputs.entry_or_insert(time.clone(), || (Vec::new(), Vec::new()));
                 for (datum, delta) in data.drain_temp() {
                     let (key, val) = kv(datum);
                     queues.0.push(key);

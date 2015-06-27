@@ -1,6 +1,5 @@
 extern crate rand;
 extern crate time;
-extern crate columnar;
 extern crate timely;
 extern crate differential_dataflow;
 
@@ -12,7 +11,6 @@ use std::hash::Hash;
 
 use timely::example_shared::*;
 use timely::example_shared::operators::*;
-// use timely::communication::{Communicator, ProcessCommunicator};
 use timely::communication::*;
 use timely::networking::initialize_networking;
 use timely::networking::initialize_networking_from_file;

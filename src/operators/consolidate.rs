@@ -2,12 +2,13 @@ use timely::example_shared::*;
 use timely::example_shared::operators::*;
 use timely::communication::*;
 use timely::communication::pact::Exchange;
+use timely::serialization::Serializable;
 
 use sort::*;
 use collection_trace::Lookup;
 use collection_trace::lookup::UnsignedInt;
 
-use columnar::Columnar;
+// use columnar::Columnar;
 
 use timely::drain::DrainExt;
 
@@ -17,7 +18,7 @@ pub trait ConsolidateExt<D> {
                    F2: Fn(&D)->U+'static>(self, part1: F1, part2: F2) -> Self;
 }
 
-impl<G: GraphBuilder, D: Ord+Data+Columnar> ConsolidateExt<D> for Stream<G, (D, i32)> {
+impl<G: GraphBuilder, D: Ord+Data+Serializable> ConsolidateExt<D> for Stream<G, (D, i32)> {
     fn consolidate<U: UnsignedInt,
                    F1: Fn(&D)->U+'static,
                    F2: Fn(&D)->U+'static>(self, part1: F1, part2: F2) -> Self {
@@ -30,9 +31,6 @@ impl<G: GraphBuilder, D: Ord+Data+Columnar> ConsolidateExt<D> for Stream<G, (D, 
             // 1. read each input, and stash it in our staging area
             while let Some((index, mut data)) = input.pull() {
                 notificator.notify_at(&index);
-                // TODO : Coalescing pre-extend() can mean less allocation,
-                // TODO : but is a hack; shouldn't come in as big buffers.
-                // coalesce8(&mut data, &|x| part2(x).as_u64());
                 inputs.entry_or_insert(index.clone(), || Vec::new())
                       .extend(data.drain_temp());
             }

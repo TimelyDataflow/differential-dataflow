@@ -1,6 +1,5 @@
 extern crate rand;
 extern crate time;
-extern crate columnar;
 extern crate timely;
 extern crate differential_dataflow;
 
@@ -62,23 +61,29 @@ fn main() {
     }
 
     // start the root set out with roots 0, 1, and 2
+    roots.advance_to(0);
+    computation.step();
+    computation.step();
+    computation.step();
+    println!("loaded; elapsed: {}s", time::precise_time_s() - start);
+
     roots.send_at(0, vec![(0, 1), (1, 1), (2, 1)].into_iter());
     roots.advance_to(1);
     roots.close();
 
-    // repeatedly change edges
-    let mut round = 0 as u32;
-    while computation.step() {
-        // once each full second ticks, change an edge
-        if time::precise_time_s() - start >= round as f64 {
-            // add edges using prior rng; remove edges using fresh rng with the same seed
-            let changes = vec![((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), 1),
-                               ((rng2.gen_range(0, nodes), rng2.gen_range(0, nodes)),-1)];
-            graph.send_at(round, changes.into_iter());
-            graph.advance_to(round + 1);
-            round += 1;
-        }
-    }
+    // // repeatedly change edges
+    // let mut round = 0 as u32;
+    // while computation.step() {
+    //     // once each full second ticks, change an edge
+    //     if time::precise_time_s() - start >= round as f64 {
+    //         // add edges using prior rng; remove edges using fresh rng with the same seed
+    //         let changes = vec![((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), 1),
+    //                            ((rng2.gen_range(0, nodes), rng2.gen_range(0, nodes)),-1)];
+    //         graph.send_at(round, changes.into_iter());
+    //         graph.advance_to(round + 1);
+    //         round += 1;
+    //     }
+    // }
 
     graph.close();                  // seal the source of edges
     while computation.step() { }    // wind down the computation

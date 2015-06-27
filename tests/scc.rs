@@ -1,6 +1,5 @@
 extern crate rand;
 extern crate time;
-extern crate columnar;
 extern crate timely;
 extern crate differential_dataflow;
 

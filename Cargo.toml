@@ -15,10 +15,10 @@ license = "MIT"
 
 [dependencies.timely]
 git="https://github.com/frankmcsherry/timely-dataflow.git"
+# path="../timely-dataflow"
 
 [dependencies]
 docopt="*"
-columnar="*"
 rand="*"
 time = "*"
 byteorder="*"

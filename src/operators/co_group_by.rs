@@ -1,6 +1,5 @@
 use std::default::Default;
 use std::hash::Hash;
-// use std::collections::HashSet;
 use std::collections::HashMap;
 
 use timely::example_shared::*;

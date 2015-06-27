@@ -7,8 +7,9 @@ use timely::communication::*;
 use timely::progress::nested::product::Product;
 use timely::progress::nested::Summary::Local;
 use timely::progress::timestamp::Timestamp;
+use timely::serialization::Serializable;
 
-use columnar::Columnar;
+// use columnar::Columnar;
 
 use collection_trace::lookup::UnsignedInt;
 use collection_trace::LeastUpperBound;
@@ -33,7 +34,7 @@ pub trait IterateExt<G: GraphBuilder, D: Data> {
         (&self, iterations: T, part1: P1, part2: P2, logic: F) -> Stream<G, (D,i32)> where G::Timestamp: LeastUpperBound, T::Summary: One;
 }
 
-impl<G: GraphBuilder, D: Ord+Data+Columnar> IterateExt<G, D> for Stream<G, (D, i32)> {
+impl<G: GraphBuilder, D: Ord+Data+Serializable> IterateExt<G, D> for Stream<G, (D, i32)> {
     fn iterate<P1: Fn(&D)->U+'static,
                P2: Fn(&D)->U+'static,
                U: UnsignedInt,

@@ -63,7 +63,7 @@ fn merge<V: Ord+Clone>(mut slices: Vec<&[(V, i32)]>, target: &mut Vec<(V, i32)>)
 
 
 impl<K, L, T, V> CollectionTrace<K, T, V, L>
-where K: Ord+Clone,
+where K: Eq+Clone,
       L: Lookup<K, Offset>,
       T: LeastUpperBound+Clone,
       V: Ord+Clone {
@@ -149,7 +149,7 @@ where K: Ord+Clone,
         let index = self.links[position.val()].0 as usize;
         let lower = self.links[position.val()].1 as usize;
 
-        // upper limit can be read if next link exists and corresponds to the same index. else, is last elt.
+        // upper limit can be read if next link exists and of the same index. else, is last elt.
         let upper = if (position.val() + 1) < self.links.len()
                     && index == self.links[position.val() + 1].0 as usize {
             self.links[position.val() + 1].1 as usize
@@ -166,7 +166,7 @@ where K: Ord+Clone,
     }
 
     pub fn get_collection(&self, key: &K, time: &T, target: &mut Vec<(V, i32)>) {
-        assert!(target.len() == 0, "get_collection is expected to be called with an empty target.");
+        assert!(target.len() == 0, "get_collection should be called with an empty target.");
         let slices = self.trace(key).filter(|x| x.0 <= time).map(|x| x.1).collect();
         merge(slices, target);
     }
@@ -201,7 +201,7 @@ pub struct TraceIterator<'a, K: 'a, T: 'a, V: 'a, L: Lookup<K, Offset>+'a> {
 }
 
 impl<'a, K, T, V, L> Iterator for TraceIterator<'a, K, T, V, L>
-where K: Ord+Clone+'a,
+where K: Eq+Clone+'a,
       T: LeastUpperBound+Clone+'a,
       V: Ord+Clone+'a,
       L: Lookup<K, Offset>+'a {
@@ -216,7 +216,7 @@ where K: Ord+Clone+'a,
     }
 }
 
-impl<K: Eq, L: Lookup<K, Offset>, T: LeastUpperBound+Clone, V: Eq+Ord+Clone> CollectionTrace<K, T, V, L> {
+impl<K, L: Lookup<K, Offset>, T, V> CollectionTrace<K, T, V, L> {
     pub fn new(l: L) -> CollectionTrace<K, T, V, L> {
         CollectionTrace {
             phantom: PhantomData,

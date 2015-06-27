@@ -6,7 +6,8 @@
 // extern crate core;
 extern crate rand;
 extern crate time;
-extern crate columnar;
+// extern crate columnar;
+// extern crate abomonation;
 extern crate timely;
 
 pub mod collection_trace;
