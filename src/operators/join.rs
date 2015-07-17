@@ -11,9 +11,6 @@ use timely::communication::pact::Exchange;
 
 use timely::serialization::Serializable;
 
-// use abomonation::Abomonation;
-// use columnar::Columnar;
-
 use collection_trace::CollectionTrace;
 
 use collection_trace::lookup::UnsignedInt;
@@ -22,22 +19,22 @@ use sort::*;
 
 use timely::drain::DrainExt;
 
-impl<G: GraphBuilder, D1: Data+Serializable, S> JoinExt<G, D1> for S
+impl<G: GraphBuilder, D1: Data+Serializable+Eq, S> JoinExt<G, D1> for S
 where G::Timestamp: LeastUpperBound,
       S: BinaryNotifyExt<G, (D1, i32)>+MapExt<G, (D1, i32)> { }
 
-pub trait JoinExt<G: GraphBuilder, D1: Data+Serializable> : BinaryNotifyExt<G, (D1, i32)>+MapExt<G, (D1, i32)>
+pub trait JoinExt<G: GraphBuilder, D1: Data+Serializable+Eq> : BinaryNotifyExt<G, (D1, i32)>+MapExt<G, (D1, i32)>
 where G::Timestamp: LeastUpperBound {
     fn join_u<
-            U:  UnsignedInt,
-            V1: Data+Serializable+Ord+Clone+Default+Debug+'static,
-            V2: Data+Serializable+Ord+Clone+Default+Debug+'static,
-            D2: Data+Serializable,
-            F1: Fn(D1)->(U,V1)+'static,
-            F2: Fn(D2)->(U,V2)+'static,
-            R:  Ord+Data+Serializable,
-            RF: Fn(&U,&V1,&V2)->R+'static,
-            >
+        U:  UnsignedInt,
+        V1: Data+Serializable+Ord+Clone+Default+Debug+'static,
+        V2: Data+Serializable+Ord+Clone+Default+Debug+'static,
+        D2: Data+Serializable+Eq,
+        F1: Fn(D1)->(U,V1)+'static,
+        F2: Fn(D2)->(U,V2)+'static,
+        R:  Ord+Data+Serializable,
+        RF: Fn(&U,&V1,&V2)->R+'static,
+    >
         (&self, other: &Stream<G, (D2, i32)>, kv1: F1, kv2: F2, result: RF) -> Stream<G, (R, i32)> {
         self.map(move |(x,w)| (kv1(x),w))
             .join_inner(&other.map(move |(x,w)| (kv2(x),w)),
@@ -50,18 +47,19 @@ where G::Timestamp: LeastUpperBound {
                         &|x| (Vec::new(), x))
     }
 
-    fn join<K:  Ord+Clone+Hash+Debug+'static,
-            V1: Ord+Clone+Debug+'static,
-            V2: Ord+Clone+Debug+'static,
-            D2: Data+Serializable,
-            F1: Fn(D1)->(K,V1)+'static,
-            F2: Fn(D2)->(K,V2)+'static,
-            H1: Fn(&D1)->u64+'static,
-            H2: Fn(&D2)->u64+'static,
-            KH: Fn(&K)->u64+'static,
-            R:  Ord+Data+Serializable,
-            RF: Fn(&K,&V1,&V2)->R+'static,
-            >
+    fn join<
+        K:  Ord+Clone+Hash+Debug+'static,
+        V1: Ord+Clone+Debug+'static,
+        V2: Ord+Clone+Debug+'static,
+        D2: Data+Serializable+Eq,
+        F1: Fn(D1)->(K,V1)+'static,
+        F2: Fn(D2)->(K,V2)+'static,
+        H1: Fn(&D1)->u64+'static,
+        H2: Fn(&D2)->u64+'static,
+        KH: Fn(&K)->u64+'static,
+        R:  Ord+Data+Serializable,
+        RF: Fn(&K,&V1,&V2)->R+'static,
+    >
         (&self, other: &Stream<G, (D2, i32)>,
         kv1: F1, kv2: F2,
         part1: H1, part2: H2,
@@ -70,20 +68,20 @@ where G::Timestamp: LeastUpperBound {
         self.join_inner(other, kv1, kv2, part1, part2, key_h, result, &|_| HashMap::new())
     }
     fn join_inner<
-                K:  Ord+Clone+Debug+'static,
-                V1: Ord+Clone+Debug+'static,
-                V2: Ord+Clone+Debug+'static,
-                D2: Data+Serializable,
-                F1: Fn(D1)->(K,V1)+'static,
-                F2: Fn(D2)->(K,V2)+'static,
-                H1: Fn(&D1)->u64+'static,
-                H2: Fn(&D2)->u64+'static,
-                KH: Fn(&K)->u64+'static,
-                R:  Ord+Data+Serializable,
-                RF: Fn(&K,&V1,&V2)->R+'static,
-                LC: Lookup<K, Offset>+'static,
-                GC: Fn(u64)->LC,
-                >
+        K:  Ord+Clone+Debug+'static,
+        V1: Ord+Clone+Debug+'static,
+        V2: Ord+Clone+Debug+'static,
+        D2: Data+Serializable+Eq,
+        F1: Fn(D1)->(K,V1)+'static,
+        F2: Fn(D2)->(K,V2)+'static,
+        H1: Fn(&D1)->u64+'static,
+        H2: Fn(&D2)->u64+'static,
+        KH: Fn(&K)->u64+'static,
+        R:  Ord+Data+Serializable,
+        RF: Fn(&K,&V1,&V2)->R+'static,
+        LC: Lookup<K, Offset>+'static,
+        GC: Fn(u64)->LC,
+    >
             (&self,
              stream2: &Stream<G, (D2, i32)>,
              kv1: F1,
@@ -141,22 +139,24 @@ where G::Timestamp: LeastUpperBound {
 
                 if let Some((mut keys, mut vals)) = stage1.remove_key(&time) {
                     coalesce_kv8(&mut keys, &mut vals, &key_h);
-
                     if let Some(trace) = trace2.as_ref() {
                         process_diffs(&time, &keys, &vals, &trace, &|k,v1,v2| result(k,v1,v2), &mut outbuf)
                     }
 
-                    trace1.as_mut().map(|x| x.install_differences(time.clone(), &mut keys, vals));
+                    if let Some(trace) = trace1.as_mut() {
+                        trace.install_differences(time.clone(), &mut keys, vals);
+                    }
                 }
 
                 if let Some((mut keys, mut vals)) = stage2.remove_key(&time) {
                     coalesce_kv8(&mut keys, &mut vals, &key_h);
-
                     if let Some(trace) = trace1.as_ref() {
                         process_diffs(&time, &keys, &vals, &trace, &|k,v1,v2| result(k,v2,v1), &mut outbuf)
                     }
 
-                    trace2.as_mut().map(|x| x.install_differences(time.clone(), &mut keys, vals));
+                    if let Some(trace) = trace2.as_mut() {
+                        trace.install_differences(time.clone(), &mut keys, vals);
+                    }
                 }
 
                 // transmit data for each output time
@@ -169,7 +169,7 @@ where G::Timestamp: LeastUpperBound {
     }
 }
 
-fn process_diffs<K, T, V1, V2, L, R, RF>(time: &T, keys: &[K], vals: &[(V1,i32)],
+fn process_diffs<K, T, V1: Debug, V2: Debug, L, R, RF>(time: &T, keys: &[K], vals: &[(V1,i32)],
                                          trace: &CollectionTrace<K,T,V2,L>,
                                          result: &RF,
                                          outbuf: &mut Vec<(T, Vec<(R,i32)>)>)

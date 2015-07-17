@@ -1,3 +1,5 @@
+use std::rc::Rc;
+
 use timely::example_shared::*;
 use timely::example_shared::operators::*;
 use timely::communication::*;
@@ -8,24 +10,20 @@ use sort::*;
 use collection_trace::Lookup;
 use collection_trace::lookup::UnsignedInt;
 
-// use columnar::Columnar;
-
 use timely::drain::DrainExt;
 
 pub trait ConsolidateExt<D> {
-    fn consolidate<U: UnsignedInt,
-                   F1: Fn(&D)->U+'static,
-                   F2: Fn(&D)->U+'static>(self, part1: F1, part2: F2) -> Self;
+    fn consolidate<U: UnsignedInt, F: Fn(&D)->U+'static>(&self, part: F) -> Self;
 }
 
 impl<G: GraphBuilder, D: Ord+Data+Serializable> ConsolidateExt<D> for Stream<G, (D, i32)> {
-    fn consolidate<U: UnsignedInt,
-                   F1: Fn(&D)->U+'static,
-                   F2: Fn(&D)->U+'static>(self, part1: F1, part2: F2) -> Self {
+    fn consolidate<U: UnsignedInt, F: Fn(&D)->U+'static>(&self, part: F) -> Self {
 
         let mut inputs = Vec::new();    // Vec<(G::Timestamp, Vec<(D, i32))>
+        let part1 = Rc::new(part);
+        let part2 = part1.clone();
 
-        let exch = Exchange::new(move |&(ref x,_)| part1(x).as_u64());
+        let exch = Exchange::new(move |&(ref x,_)| (*part1)(x).as_u64());
         self.unary_notify(exch, format!("Consolidate"), vec![], move |input, output, notificator| {
 
             // 1. read each input, and stash it in our staging area
@@ -39,7 +37,7 @@ impl<G: GraphBuilder, D: Ord+Data+Serializable> ConsolidateExt<D> for Stream<G, 
             while let Some((index, _count)) = notificator.next() {
                 if let Some(mut stash) = inputs.remove_key(&index) {
                     // let len = stash.len();
-                    coalesce8(&mut stash, &|x| part2(x).as_u64());
+                    coalesce8(&mut stash, &|x| (*part2)(x).as_u64());
                     // println!("consolidating at {:?}: {} -> {}", index, len, stash.len());
                     output.give_at(&index, stash.drain_temp());
                 }

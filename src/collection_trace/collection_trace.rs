@@ -1,8 +1,14 @@
 use std::mem;
 use std::marker::PhantomData;
+use std::iter::Peekable;
+use std::fmt::Debug;
 
 use sort::coalesce;
 use collection_trace::{close_under_lub, LeastUpperBound, Lookup};
+use iterators::merge::{Merge, MergeIterator};
+use iterators::coalesce::{Coalesce, CoalesceIterator};
+
+pub type CollectionIterator<'a, V> = Peekable<CoalesceIterator<&'a V, MergeIterator<SliceIterator<'a, V>>>>;
 
 #[derive(Copy, Clone)]
 pub struct Offset {
@@ -10,6 +16,7 @@ pub struct Offset {
 }
 
 impl Offset {
+    #[inline(always)]
     pub fn new(offset: usize) -> Offset {
         assert!(offset < u32::max_value() as usize); // note strict inequality
         Offset { dataz: u32::max_value() - offset as u32 }
@@ -20,7 +27,7 @@ impl Offset {
 
 pub struct CollectionTrace<K, T, V, L: Lookup<K, Offset>> {
     phantom:    PhantomData<K>,
-    links:      Vec<(u32, u32, Option<Offset>)>,    // (time, offset, next)
+    links:      Vec<(u32, u32, Option<Offset>)>,    // (time, offset, next_link)
     times:      Vec<(T, Vec<(V, i32)>)>,            // (time, updates)
     keys:       L,
 
@@ -66,7 +73,7 @@ impl<K, L, T, V> CollectionTrace<K, T, V, L>
 where K: Eq+Clone,
       L: Lookup<K, Offset>,
       T: LeastUpperBound+Clone,
-      V: Ord+Clone {
+      V: Ord+Clone+Debug {
 
     // this assumes that someone has gone and sorted things for us.
     pub fn install_differences(&mut self, time: T, keys: &mut Vec<K>, vals: Vec<(V, i32)>) {
@@ -171,9 +178,13 @@ where K: Eq+Clone,
         merge(slices, target);
     }
 
-    pub fn get_collection_iterator(&self, key: &K, time: &T) -> MergeIterator<V> {
-        let slices = self.trace(key).filter(|x| x.0 <= time).map(|x| x.1).collect();
-        MergeIterator { slices: slices }
+    pub fn get_collection_iterator(&self, key: &K, time: &T) -> CollectionIterator<V> {
+        self.trace(key)
+            .filter(|x| x.0 <= time)
+            .map(|x| SliceIterator::new(x.1))
+            .merge()
+            .coalesce()
+            .peekable()
     }
 
     pub fn interesting_times(&mut self, key: &K, index: &T, result: &mut Vec<T>) {
@@ -200,7 +211,7 @@ pub struct TraceIterator<'a, K: 'a, T: 'a, V: 'a, L: Lookup<K, Offset>+'a> {
     next0: Option<Offset>,
 }
 
-impl<'a, K, T, V, L> Iterator for TraceIterator<'a, K, T, V, L>
+impl<'a, K, T, V: Debug, L> Iterator for TraceIterator<'a, K, T, V, L>
 where K: Eq+Clone+'a,
       T: LeastUpperBound+Clone+'a,
       V: Ord+Clone+'a,
@@ -244,41 +255,28 @@ impl<K, L: Lookup<K, Offset>, T, V> CollectionTrace<K, T, V, L> {
 // }
 //
 
-pub struct MergeIterator<'a, V: Ord+'a> {
-    slices: Vec<&'a [(V, i32)]>,
+
+pub struct SliceIterator<'a, V: 'a> {
+    index: usize,
+    slice: &'a [(V, i32)],
 }
 
-impl<'a, V: Ord+'a> Iterator for MergeIterator<'a, V> {
+impl<'a, V: 'a> SliceIterator<'a, V> {
+    fn new(slice: &'a [(V, i32)]) -> SliceIterator<'a, V> {
+        SliceIterator {
+            index: 0,
+            slice: slice,
+        }
+    }
+}
+
+impl<'a, V: 'a> Iterator for SliceIterator<'a, V> {
     type Item = (&'a V, i32);
     fn next(&mut self) -> Option<(&'a V, i32)> {
-
-        // we can't tell how many elements we'll need to check
-        // before one that accumulates to a non-zero frequency
-        loop {
-            if self.slices.len() > 0 {
-                let mut value = &self.slices[0][0].0;   // start with the first value
-                for slice in &self.slices[1..] {        // for each other value
-                    if &slice[0].0 < value {            //   if it comes before the current value
-                        value = &slice[0].0;            //     capture a reference to it
-                    }
-                }
-
-                let mut count = 0;                      // start with an empty accumulation
-                for slice in &mut self.slices[..] {     // for each non-empty slice
-                    if &slice[0].0 == value {           //   if the first diff is for value
-                        count += slice[0].1;            //     accumulate the delta
-                        *slice = &slice[1..];           //     advance the slice by one
-                    }
-                }
-
-                self.slices.retain(|x| x.len() > 0);
-                if count != 0 {
-                    return Some((value, count));
-                }
-            }
-            else {
-                return None;
-            }
+        if self.index < self.slice.len() {
+            self.index += 1;
+            Some((&self.slice[self.index-1].0, self.slice[self.index-1].1))
         }
+        else { None }
     }
 }

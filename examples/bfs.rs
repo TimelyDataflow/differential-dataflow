@@ -29,7 +29,7 @@ fn main() {
         let dists = bfs(&graph, &roots);    // determine distances to each graph node
 
         dists.map(|((_,s),w)| (s,w))        // keep only the distances, not node ids
-             .consolidate(|x| *x, |x| *x)   // aggregate into one record per distance
+             .consolidate(|x| *x)           // aggregate into one record per distance
              .inspect_batch(move |t, x| {   // print up something neat for each update
                  println!("observed at {:?}:", t);
                  println!("elapsed: {}s", time::precise_time_s() - (start + t.inner as f64));
@@ -99,14 +99,14 @@ where G::Timestamp: LeastUpperBound,
     let nodes = roots.map(|(x,w)| ((x, 0), w));
 
     // repeatedly update minimal distances each node can be reached from each root
-    nodes.iterate(u32::max_value(), |x| x.0, |x| x.0, |inner| {
+    nodes.iterate(u32::max_value(), |x| x.0, |inner| {
 
         let edges = inner.builder().enter(&edges);
         let nodes = inner.builder().enter(&nodes);
 
         inner.join_u(&edges, |l| l, |e| e, |_k,l,d| (*d, l+1))
              .concat(&nodes)
-             .group_by_u(|x| x, |k,v| (*k, *v), |_, mut s, t| {
+             .group_by_u(|x| x, |k,v| (*k, *v), |_, s, t| {
                  t.push((*s.peek().unwrap().0, 1));
              })
      })

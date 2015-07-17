@@ -31,13 +31,13 @@ use differential_dataflow::operators::*;
 fn _trim_and_flip<G: GraphBuilder, U: UnsignedInt>(graph: &Stream<G, ((U, U), i32)>)
     -> Stream<G, ((U, U), i32)> where G::Timestamp: LeastUpperBound {
 
-        graph.iterate(u32::max_value(), |x|x.0, |x|x.0, |edges| {
+        graph.iterate(u32::max_value(), |x| x.0, |edges| {
             let inner = edges.builder().enter(&graph);
             edges.map(|((x,_),w)| (x,w))
                  .group_by_u(|x|(x,()), |&x,_| x, |&x,_,target| target.push((x,1)))
                   .join_u(&inner, |x| (x,()), |(s,d)| (d,s), |&d,_,&s| (s,d))
              })
-             .consolidate(|x| x.0, |x| x.0)
+             .consolidate(|x| x.0)
              .map(|((x,y),w)| ((y,x),w))
 }
 
@@ -55,13 +55,13 @@ fn _reachability<G: GraphBuilder, U: UnsignedInt>(edges: &Stream<G, ((U, U), i32
 where G::Timestamp: LeastUpperBound+Hash {
 
     edges.filter(|_| false)
-         .iterate(u32::max_value(), |x| x.0, |x| x.0, |inner| {
+         .iterate(u32::max_value(), |x| x.0, |inner| {
              let edges = inner.builder().enter(&edges);
              let nodes = inner.builder().enter_at(&nodes, |r| 256 * (64 - (r.0).1.as_u64().leading_zeros() as u32));
 
              improve_labels(inner, &edges, &nodes)
          })
-         .consolidate(|x| x.0, |x| x.0)
+         .consolidate(|x| x.0)
 }
 
 
@@ -70,31 +70,31 @@ fn fancy_reachability<G: GraphBuilder, U: UnsignedInt>(edges: &Stream<G, ((U, U)
 where G::Timestamp: LeastUpperBound+Hash {
 
     edges.filter(|_| false)
-         .iterate(u32::max_value(), |x| x.0, |x| x.0, |inner| {
+         .iterate(u32::max_value(), |x| x.0, |inner| {
              let edges = inner.builder().enter(&edges);
              let nodes = inner.builder().enter(&nodes)
                               .map(|(x,_)| (x,1))
                               .except(&inner.filter(|&((ref n, ref l),_)| l < n).map(|((n,_),w)| (n,w)))
                               .delay(|r,t| { let mut t2 = t.clone(); t2.inner = 256 * (64 - r.0.as_u64().leading_zeros() as u32); t2 })
-                              .consolidate(|&x| x, |&x| x)
+                              .consolidate(|&x| x)
                               .map(|(x,w)| ((x,x),w));
 
              improve_labels(inner, &edges, &nodes)
          })
-         .consolidate(|x| x.0, |x| x.0)
+         .consolidate(|x| x.0)
 }
 
 fn trim_edges<G: GraphBuilder, U: UnsignedInt>(cycle: &Stream<G, ((U, U), i32)>,
                                                edges: &Stream<G, ((U, U), i32)>)
     -> Stream<G, ((U, U), i32)> where G::Timestamp: LeastUpperBound+Hash {
 
-    let nodes = edges.map(|((_,y),w)| (y,w)).consolidate(|&x| x, |&x| x);
+    let nodes = edges.map(|((_,y),w)| (y,w)).consolidate(|&x| x);
 
     let labels = fancy_reachability(&cycle, &nodes);
 
     edges.join_u(&labels, |e| e, |l| l, |&e1,&e2,&l1| (e2,(e1,l1)))
          .join_u(&labels, |e| e, |l| l, |&e2,&(e1,l1),&l2| ((e1,e2),(l1,l2)))
-         .consolidate(|x|(x.0).0, |x|(x.0).0)
+         .consolidate(|x| (x.0).0)
          .filter(|&((_,(l1,l2)), _)| l1 == l2)
          .map(|(((x1,x2),_),d)| ((x2,x1),d))
 }
@@ -102,7 +102,7 @@ fn trim_edges<G: GraphBuilder, U: UnsignedInt>(cycle: &Stream<G, ((U, U), i32)>,
 fn strongly_connected<G: GraphBuilder, U: UnsignedInt>(graph: &Stream<G, ((U, U), i32)>)
     -> Stream<G, ((U, U), i32)> where G::Timestamp: LeastUpperBound+Hash {
 
-    graph.iterate(u32::max_value(), |x| x.0, |x| x.0, |inner| {
+    graph.iterate(u32::max_value(), |x| x.0, |inner| {
         let trans = inner.builder().enter(&graph).map(|((x,y),w)| ((y,x),w));
         let edges = inner.builder().enter(&graph);
 
@@ -160,7 +160,7 @@ fn _scc1(edges: &Vec<((u32, u32), i32)>) -> Rc<RefCell<Vec<((u32, u32), i32)>>> 
 
             edges = strongly_connected(&edges);
 
-            edges.consolidate(|x: &(u32, u32)| x.0, |x: &(u32, u32)| x.0)
+            edges.consolidate(|x: &(u32, u32)| x.0)
                  .inspect(move |x| result.borrow_mut().push(x.clone()));
 
             input
@@ -190,7 +190,7 @@ fn _scc2(edges: &Vec<((u32, u32), i32)>) -> Rc<RefCell<Vec<((u32, u32), i32)>>> 
 
             edges = strongly_connected(&edges);
 
-            edges.consolidate(|x: &(u32, u32)| x.0, |x: &(u32, u32)| x.0)
+            edges.consolidate(|x: &(u32, u32)| x.0)
                  .inspect(move |x| result.borrow_mut().push(x.clone()));
 
             input
