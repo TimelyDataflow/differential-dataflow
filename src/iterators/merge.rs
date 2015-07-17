@@ -1,5 +1,7 @@
 use std::mem;
 
+// TODO : Version with ordered values and don't-care payloads.
+
 pub trait Merge<I: Iterator> {
     fn merge(self) -> MergeIterator<I>;
 }

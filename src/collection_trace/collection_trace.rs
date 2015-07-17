@@ -25,6 +25,12 @@ impl Offset {
     pub fn val(&self) -> usize { (u32::max_value() - self.dataz) as usize }
 }
 
+
+// A CollectionTrace is logically equivalent to a Map<K, Vec<(T, Vec<(V, i32)>)>:
+// for each key, there is a list of times, each with a list of weighted values.
+// For reasons of efficiency, weighted values are co-located by time, and each
+// key has a linked list of offsets into the lists of weighted values.
+
 pub struct CollectionTrace<K, T, V, L: Lookup<K, Offset>> {
     phantom:    PhantomData<K>,
     links:      Vec<(u32, u32, Option<Offset>)>,    // (time, offset, next_link)
@@ -75,7 +81,7 @@ where K: Eq+Clone,
       T: LeastUpperBound+Clone,
       V: Ord+Clone+Debug {
 
-    // this assumes that someone has gone and sorted things for us.
+    // takes a collection of differences as accumulated from the input and installs them.
     pub fn install_differences(&mut self, time: T, keys: &mut Vec<K>, vals: Vec<(V, i32)>) {
 
         // TODO : build an iterator over (key, lower, slice) or something like that.
@@ -111,6 +117,8 @@ where K: Eq+Clone,
         }
     }
 
+    // takes sets the differences for K at T so that they accumulate to collection.
+    // this assumes that all prior T are fixed, as if they change it becomes incorrect.
     pub fn set_collection(&mut self, key: K, time: T, collection: &mut Vec<(V, i32)>) {
         coalesce(collection);
 
@@ -197,6 +205,7 @@ where K: Eq+Clone,
         close_under_lub(result);
     }
 
+    // returns a trace iterator, an iterator over the (&T, &[V,i32]) for the key.
     pub fn trace<'a, 'b>(&'a self, key: &'b K) -> TraceIterator<'a, K, T, V, L> {
         TraceIterator {
             trace: self,
