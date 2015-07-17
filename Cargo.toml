@@ -14,8 +14,8 @@ keywords = ["differential", "dataflow"]
 license = "MIT"
 
 [dependencies.timely]
-# git="https://github.com/frankmcsherry/timely-dataflow.git"
-path="../timely-dataflow"
+git="https://github.com/frankmcsherry/timely-dataflow.git"
+# path="../timely-dataflow"
 
 [dependencies.graph-map]
 git="https://github.com/frankmcsherry/graph-map.git"
