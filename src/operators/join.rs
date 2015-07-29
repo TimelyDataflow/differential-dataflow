@@ -3,12 +3,10 @@ use std::default::Default;
 use std::hash::Hash;
 use std::collections::HashMap;
 
-use timely::example_shared::*;
-use timely::example_shared::operators::*;
-
-use timely::communication::*;
+use timely::construction::*;
+use timely::construction::operators::*;
+use timely::communication::Data;
 use timely::communication::pact::Exchange;
-
 use timely::serialization::Serializable;
 
 use collection_trace::CollectionTrace;
@@ -106,7 +104,7 @@ where G::Timestamp: LeastUpperBound {
         let exch1 = Exchange::new(move |&(ref r, _)| part1(r));
         let exch2 = Exchange::new(move |&(ref r, _)| part2(r));
 
-        self.binary_notify(stream2, exch1, exch2, format!("Join"), vec![], move |input1, input2, output, notificator| {
+        self.binary_notify(stream2, exch1, exch2, "Join", vec![], move |input1, input2, output, notificator| {
 
             // consider shutting down each trace if the opposing input has closed out
             if trace2.is_some() && notificator.frontier(0).len() == 0 && stage1.len() == 0 { trace2 = None; }
@@ -162,7 +160,7 @@ where G::Timestamp: LeastUpperBound {
                 // transmit data for each output time
                 for (time, mut vals) in outbuf.drain_temp() {
                     coalesce(&mut vals);
-                    output.give_at(&time, vals.drain_temp());
+                    output.session(&time).give_iterator(vals.drain_temp());
                 }
             }
         })

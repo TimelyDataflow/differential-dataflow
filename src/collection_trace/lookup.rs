@@ -3,7 +3,6 @@ use std::collections::HashMap;
 
 use timely::communication::Data;
 use timely::serialization::Serializable;
-// use columnar::Columnar;
 
 pub trait Lookup<K: Eq, V> {
     fn new() -> Self;

@@ -7,9 +7,9 @@ use std::rc::Rc;
 use std::cell::RefCell;
 
 use std::hash::Hash;
-use timely::example_shared::*;
-use timely::example_shared::operators::*;
-use timely::communication::ThreadCommunicator;
+use timely::construction::*;
+use timely::construction::operators::*;
+use timely::communication::communicator::Thread;
 
 use rand::{Rng, SeedableRng, StdRng};
 
@@ -65,7 +65,7 @@ where G::Timestamp: LeastUpperBound+Hash {
 }
 
 
-fn fancy_reachability<G: GraphBuilder, U: UnsignedInt>(edges: &Stream<G, ((U, U), i32)>, nodes: &Stream<G, (U, i32)>)
+fn _fancy_reachability<G: GraphBuilder, U: UnsignedInt>(edges: &Stream<G, ((U, U), i32)>, nodes: &Stream<G, (U, i32)>)
     -> Stream<G, ((U, U), i32)>
 where G::Timestamp: LeastUpperBound+Hash {
 
@@ -88,9 +88,9 @@ fn trim_edges<G: GraphBuilder, U: UnsignedInt>(cycle: &Stream<G, ((U, U), i32)>,
                                                edges: &Stream<G, ((U, U), i32)>)
     -> Stream<G, ((U, U), i32)> where G::Timestamp: LeastUpperBound+Hash {
 
-    let nodes = edges.map(|((_,y),w)| (y,w)).consolidate(|&x| x);
+    let nodes = edges.map(|((_,y),w)| ((y,y),w)).consolidate(|&x| x.0);
 
-    let labels = fancy_reachability(&cycle, &nodes);
+    let labels = _reachability(&cycle, &nodes);
 
     edges.join_u(&labels, |e| e, |l| l, |&e1,&e2,&l1| (e2,(e1,l1)))
          .join_u(&labels, |e| e, |l| l, |&e2,&(e1,l1),&l2| ((e1,e2),(l1,l2)))
@@ -148,9 +148,10 @@ fn _find_difference() {
 
 fn _scc1(edges: &Vec<((u32, u32), i32)>) -> Rc<RefCell<Vec<((u32, u32), i32)>>> {
     let result = Rc::new(RefCell::new(Vec::new()));
+
     {
-        let mut computation = GraphRoot::new(ThreadCommunicator);
-        let mut input = computation.subcomputation(|builder| {
+        let mut computation = GraphRoot::new(Thread);
+        let mut input = computation.subcomputation::<u64,_,_>(|builder| {
 
             let result = result.clone();
             let (input, mut edges) = builder.new_input();
@@ -166,7 +167,9 @@ fn _scc1(edges: &Vec<((u32, u32), i32)>) -> Rc<RefCell<Vec<((u32, u32), i32)>>> 
             input
         });
 
-        input.send_at(0, edges.clone().into_iter());
+        for &edge in edges {
+            input.give(edge);
+        }
         input.close();
 
         while computation.step() { }
@@ -178,9 +181,10 @@ fn _scc1(edges: &Vec<((u32, u32), i32)>) -> Rc<RefCell<Vec<((u32, u32), i32)>>> 
 
 fn _scc2(edges: &Vec<((u32, u32), i32)>) -> Rc<RefCell<Vec<((u32, u32), i32)>>> {
     let result = Rc::new(RefCell::new(Vec::new()));
+
     {
-        let mut computation = GraphRoot::new(ThreadCommunicator);
-        let mut input = computation.subcomputation(|builder| {
+        let mut computation = GraphRoot::new(Thread);
+        let mut input = computation.subcomputation::<u64,_,_>(|builder| {
 
             let result = result.clone();
             let (input, mut edges) = builder.new_input();
@@ -196,7 +200,9 @@ fn _scc2(edges: &Vec<((u32, u32), i32)>) -> Rc<RefCell<Vec<((u32, u32), i32)>>> 
             input
         });
 
-        input.send_at(0, edges.clone().into_iter());
+        for &edge in edges {
+            input.give(edge);
+        }
         input.close();
 
         while computation.step() { }

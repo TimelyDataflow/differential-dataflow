@@ -91,3 +91,14 @@ fn merge_iterator() {
     let result = merge.collect::<Vec<_>>();
     assert_eq!(result, vec![1,2,3,4,5,6,6,9,14,26,29,29]);
 }
+
+#[test]
+fn merge_iterator_single() {
+    let a = vec![3, 4, 6, 9];
+    let b = vec![3, 4, 6, 9];
+
+    let merge = MergeIterator::new(vec![a.into_iter()].into_iter());
+
+    let result = merge.collect::<Vec<_>>();
+    assert_eq!(result, b);
+}

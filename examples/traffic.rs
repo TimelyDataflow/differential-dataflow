@@ -5,8 +5,8 @@ extern crate differential_dataflow;
 
 use rand::{Rng, SeedableRng, StdRng};
 
-use timely::example_shared::*;
-use timely::example_shared::operators::*;
+use timely::construction::*;
+use timely::construction::operators::*;
 use timely::communication::Communicator;
 
 use differential_dataflow::operators::*;
@@ -15,9 +15,8 @@ type Node = u32;
 type Edge = (Node, Node);
 
 fn main() {
-    timely::initialize(std::env::args(), |communicator| {
+    timely::execute(std::env::args(), |computation| {
         let start = time::precise_time_s();
-        let mut computation = GraphRoot::new(communicator);
 
         // define BFS dataflow; return handles to roots and edges inputs
         let mut graph = computation.subcomputation(|builder| {
@@ -35,8 +34,9 @@ fn main() {
         let seed: &[_] = &[1, 2, 3, computation.index() as usize];
         let mut rng1: StdRng = SeedableRng::from_seed(seed);    // rng for edge additions
 
-        graph.send_at(0, (0..100).map(|_| ((rng1.gen_range(0, nodes),
-                                            rng1.gen_range(0, nodes)), 1)));
+        for _ in 0..100 {
+            graph.give(((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), 1));
+        }
 
         // repeatedly change edges
         let mut rng2: StdRng = SeedableRng::from_seed(seed);    // rng for edge deletions
@@ -45,9 +45,8 @@ fn main() {
             // once each full second ticks, change an edge
             if time::precise_time_s() - start >= round as f64 {
                 // add edges using prior rng; remove edges using fresh rng with the same seed
-                let changes = vec![((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), 1),
-                                   ((rng2.gen_range(0, nodes), rng2.gen_range(0, nodes)),-1)];
-                graph.send_at(round, changes.into_iter());
+                graph.give(((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), 1));
+                graph.give(((rng2.gen_range(0, nodes), rng2.gen_range(0, nodes)),-1));
                 graph.advance_to(round + 1);
                 round += 1;
             }

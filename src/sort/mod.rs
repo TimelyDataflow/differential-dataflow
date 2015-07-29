@@ -3,6 +3,7 @@ use std::ptr;
 // use std::intrinsics;
 
 pub mod radix;
+// pub mod radix_merge;
 
 // we need a new class of sorting algorithms taking a vector of values and a vector of keys.
 // the reason is because we want to own the values rather than copy them; otherwise its silly.

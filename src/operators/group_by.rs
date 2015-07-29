@@ -1,18 +1,19 @@
+use std::rc::Rc;
 use std::default::Default;
 use std::hash::Hash;
 use std::collections::HashMap;
 use std::fmt::Debug;
 
-use timely::example_shared::*;
-use timely::example_shared::operators::*;
-
-use timely::communication::*;
+use timely::construction::*;
+use timely::construction::operators::*;
+use timely::communication::Data;
 use timely::communication::pact::Exchange;
 use timely::serialization::Serializable;
 
 use collection_trace::{LeastUpperBound, Lookup, OperatorTrace, Offset};
 use collection_trace::lookup::UnsignedInt;
 use collection_trace::collection_trace::CollectionIterator;
+// use sort::radix_merge::RadixMerge;
 
 use sort::*;
 
@@ -25,7 +26,7 @@ where G::Timestamp: LeastUpperBound,
 pub trait GroupByExt<G: GraphBuilder, D1: Data+Serializable+Eq> : UnaryNotifyExt<G, (D1, i32)>+MapExt<G, (D1, i32)>
 where G::Timestamp: LeastUpperBound {
     fn group_by<
-        K:     Hash+Ord+Clone+'static,
+        K:     Hash+Ord+Clone+Debug+'static,
         V1:    Ord+Clone+Default+Debug+'static,
         V2:    Ord+Clone+Default+Debug+'static,
         D2:    Data+Serializable,
@@ -58,7 +59,7 @@ where G::Timestamp: LeastUpperBound {
     }
 
     fn group_by_inner<
-        K:     Hash+Ord+Clone+'static,
+        K:     Hash+Ord+Clone+Debug+'static,
         V1:    Ord+Clone+Default+Debug+'static,
         V2:    Ord+Clone+Default+Debug+'static,
         D2:    Data+Serializable,
@@ -72,6 +73,9 @@ where G::Timestamp: LeastUpperBound {
     >
     (&self, kv: KV, part: Part, key_h: KH, reduc: Reduc, look: LookG, logic: Logic) -> Stream<G, (D2, i32)> {
 
+        let key_h = Rc::new(key_h);
+        let clone = key_h.clone();
+
         // TODO : pay more attention to the number of peers
         // TODO : find a better trait to sub-trait so we can read .builder
         // assert!(self.builder.peers() == 1);
@@ -79,21 +83,25 @@ where G::Timestamp: LeastUpperBound {
         let mut inputs = Vec::new();
         let mut to_do =  Vec::new();
 
+        // let mut merges = Vec::new();
+
         // temporary storage for the operator
         let mut idx = Vec::new();   // Vec<G::Timestamp>,
 
         let exch = Exchange::new(move |&(ref x,_)| part(x));
-        self.unary_notify(exch, format!("GroupBy"), vec![], move |input, output, notificator| {
+        self.unary_notify(exch, "GroupBy", vec![], move |input, output, notificator| {
 
             // 1. read each input, and stash it in our staging area
-            while let Some((time, mut data)) = input.pull() {
+            while let Some((time, data)) = input.pull() {
 
                 notificator.notify_at(&time);
                 let mut queues = inputs.entry_or_insert(time.clone(), || (Vec::new(), Vec::new()));
-                for (datum, delta) in data.drain_temp() {
+                // let mut merged = merges.entry_or_insert(time.clone(), || RadixMerge::new(key_h.clone()));
+                for (datum, wgt) in data.drain_temp() {
                     let (key, val) = kv(datum);
+                    // merged.push(key.clone(), val.clone(), wgt);
                     queues.0.push(key);
-                    queues.1.push((val, delta));
+                    queues.1.push((val, wgt));
                 }
             }
 
@@ -102,7 +110,12 @@ where G::Timestamp: LeastUpperBound {
 
                 // 2a. if we have some input data to process
                 if let Some((mut keys, mut vals)) = inputs.remove_key(&index) {
-                    coalesce_kv8(&mut keys, &mut vals, &key_h);
+
+                    // if let Some(merge) = merges.remove_key(&index) {
+                    //     merge.seal();
+                    // }
+
+                    coalesce_kv8(&mut keys, &mut vals, &*clone);
 
                     trace.source.install_differences(index.clone(), &mut keys, vals);
 

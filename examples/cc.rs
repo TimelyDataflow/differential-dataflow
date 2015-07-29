@@ -6,10 +6,9 @@ extern crate graph_map;
 extern crate differential_dataflow;
 
 use std::hash::Hash;
-use timely::example_shared::*;
-use timely::example_shared::operators::*;
+use timely::construction::*;
+use timely::construction::operators::*;
 use timely::communication::Communicator;
-use timely::drain::DrainExt;
 
 use differential_dataflow::collection_trace::lookup::UnsignedInt;
 use differential_dataflow::collection_trace::LeastUpperBound;
@@ -22,13 +21,9 @@ type Edge = (Node, Node);
 
 fn main() {
 
-    timely::initialize(std::env::args(), |communicator| {
-
+    timely::execute(std::env::args(), |computation| {
         let start = time::precise_time_s();
-        let mut computation = GraphRoot::new(communicator);
-
-        // define the computation
-        let mut input = computation.subcomputation(|builder| {
+        let mut input = computation.subcomputation::<u64,_,_>(|builder| {
             let (input, mut edges) = builder.new_input();
             edges = connected_components(&edges);
             edges.inspect_batch(move |t, x| {
@@ -40,29 +35,25 @@ fn main() {
 
         let graph = GraphMMap::new("/Users/mcsherry/Projects/Datasets/twitter-dedup");
 
-        let mut sent = 0;
-        let mut buffer = Vec::new();
-        for node in 0..graph.nodes() {
-            if (node % 2) == 0 && ((node as u64 / 2) % computation.peers() == computation.index()) {
-                let edges = graph.edges(node);
-                for dest in edges {
-                    if (*dest % 2) == 0 {
-                        buffer.push(((node as u32 / 2, *dest as u32 / 2), 1));
-                        if buffer.len() > 400000 {
-                            sent += buffer.len();
-                            input.send_at(0, buffer.drain_temp());
-                            computation.step();
+        {
+            let mut sent = 0;
+            for node in 0..graph.nodes() {
+                if node as u64 % computation.peers() == computation.index() {
+                    let edges = graph.edges(node);
+                    for dest in edges {
+                        if node % 2 == 0 && *dest % 2 == 0 {
+                            sent += 1;
+                            input.give(((node as u32, *dest), 1));
+                            if sent % 1_000_000 == 0 {
+                                computation.step();
+                            }
                         }
                     }
                 }
             }
+
+            println!("{}: loaded {} edges", time::precise_time_s() - start, sent);
         }
-
-        sent += buffer.len();
-        input.send_at(0, buffer.drain_temp());
-
-        println!("{}: loaded {} edges", time::precise_time_s() - start, sent);
-
 
         input.close();
 
@@ -74,23 +65,22 @@ fn main() {
 fn connected_components<G: GraphBuilder>(edges: &Stream<G, (Edge, i32)>) -> Stream<G, ((Node, Node), i32)>
 where G::Timestamp: LeastUpperBound+Hash {
 
-    let nodes = edges.map(|((x,y),w)| (std::cmp::min(x,y), w))
-                     .consolidate(|&x| x);
+    let nodes = edges.map_in_place(|&mut ((ref mut x, ref mut y), _)| { *x = std::cmp::min(*x,*y); *y = *x; } )
+                     .consolidate(|x| x.0);
 
     let edges = edges.map(|((x,y),w)| ((y,x),w)).concat(&edges);
 
     reachability(&edges, &nodes)
 }
 
-fn reachability<G: GraphBuilder>(edges: &Stream<G, (Edge, i32)>, nodes: &Stream<G, (Node, i32)>)
+fn reachability<G: GraphBuilder>(edges: &Stream<G, (Edge, i32)>, nodes: &Stream<G, ((Node, Node), i32)>)
     -> Stream<G, ((Node, Node), i32)>
 where G::Timestamp: LeastUpperBound+Hash {
 
     edges.filter(|_| false)
          .iterate(u32::max_value(), |x| x.0, |inner| {
              let edges = inner.builder().enter(&edges);
-             let nodes = inner.builder().enter_at(&nodes, |r| 256 * (64 - r.0.as_u64().leading_zeros() as u32 ))
-                                        .map(|(x,w)| ((x,x),w));
+             let nodes = inner.builder().enter_at(&nodes, |r| 256 * (64 - (r.0).0.as_u64().leading_zeros() as u32 ));
 
              improve_labels(inner, &edges, &nodes)
          })

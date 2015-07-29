@@ -1,9 +1,9 @@
-// use std::num::One;
+use timely::construction::*;
+use timely::construction::builder::SubgraphBuilder;
+use timely::construction::operators::*;
 
-use timely::example_shared::*;
-use timely::example_shared::operators::*;
+use timely::communication::Data;
 
-use timely::communication::*;
 use timely::progress::nested::product::Product;
 use timely::progress::nested::Summary::Local;
 use timely::progress::timestamp::Timestamp;

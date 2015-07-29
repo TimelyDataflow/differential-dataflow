@@ -1,8 +1,8 @@
 use std::rc::Rc;
 
-use timely::example_shared::*;
-use timely::example_shared::operators::*;
-use timely::communication::*;
+use timely::construction::*;
+use timely::construction::operators::*;
+use timely::communication::Data;
 use timely::communication::pact::Exchange;
 use timely::serialization::Serializable;
 
@@ -24,10 +24,10 @@ impl<G: GraphBuilder, D: Ord+Data+Serializable> ConsolidateExt<D> for Stream<G, 
         let part2 = part1.clone();
 
         let exch = Exchange::new(move |&(ref x,_)| (*part1)(x).as_u64());
-        self.unary_notify(exch, format!("Consolidate"), vec![], move |input, output, notificator| {
+        self.unary_notify(exch, "Consolidate", vec![], move |input, output, notificator| {
 
             // 1. read each input, and stash it in our staging area
-            while let Some((index, mut data)) = input.pull() {
+            while let Some((index, data)) = input.pull() {
                 notificator.notify_at(&index);
                 inputs.entry_or_insert(index.clone(), || Vec::new())
                       .extend(data.drain_temp());
@@ -39,7 +39,7 @@ impl<G: GraphBuilder, D: Ord+Data+Serializable> ConsolidateExt<D> for Stream<G, 
                     // let len = stash.len();
                     coalesce8(&mut stash, &|x| (*part2)(x).as_u64());
                     // println!("consolidating at {:?}: {} -> {}", index, len, stash.len());
-                    output.give_at(&index, stash.drain_temp());
+                    output.session(&index).give_iterator(stash.drain_temp());
                 }
             }
         })

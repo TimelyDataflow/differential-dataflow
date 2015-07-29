@@ -5,8 +5,8 @@ extern crate differential_dataflow;
 
 use rand::{Rng, SeedableRng, StdRng};
 
-use timely::example_shared::*;
-use timely::example_shared::operators::*;
+use timely::construction::*;
+use timely::construction::operators::*;
 use timely::communication::Communicator;
 
 
@@ -14,12 +14,11 @@ use differential_dataflow::collection_trace::LeastUpperBound;
 use differential_dataflow::operators::*;
 
 fn main() {
-    timely::initialize(std::env::args(), |communicator| {
+    timely::execute(std::env::args(), |computation| {
         let start = time::precise_time_s();
-        let mut computation = GraphRoot::new(communicator);
 
         // define BFS dataflow; return handles to roots and edges inputs
-        let (mut roots, mut graph) = computation.subcomputation(|builder| {
+        let (mut roots, mut graph) = computation.subcomputation::<u64,_,_>(|builder| {
 
             let (edge_input, graph) = builder.new_input();
             let (node_input, roots) = builder.new_input();
@@ -46,17 +45,11 @@ fn main() {
         println!("performing BFS on {} nodes, {} edges:", nodes, edges);
 
         if computation.index() == 0 {
-            // trickle edges in to dataflow
-            let mut left = edges;
-            while left > 0 {
-                let next = std::cmp::min(left, 1000);
-                graph.send_at(0, (0..next).map(|_| ((rng1.gen_range(0, nodes),
-                                                     rng1.gen_range(0, nodes)), 1)));
-                computation.step();
-                left -= next;
+            for _ in 0..edges {
+                graph.give(((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), 1));
             }
 
-            roots.send_at(0, (0..1).map(|x| (x,1)));
+            roots.give((0,1));
         }
         roots.close();
 

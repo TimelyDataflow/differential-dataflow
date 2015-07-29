@@ -1,7 +1,7 @@
 
-use timely::example_shared::*;
-use timely::example_shared::operators::*;
-use timely::communication::*;
+use timely::construction::*;
+use timely::construction::operators::*;
+use timely::communication::Data;
 
 pub trait ExceptExt {
     fn except(&self, &Self) -> Self;

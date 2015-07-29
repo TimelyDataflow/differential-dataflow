@@ -21,7 +21,7 @@ git="https://github.com/frankmcsherry/timely-dataflow.git"
 git="https://github.com/frankmcsherry/graph-map.git"
 
 [dependencies]
-docopt="*"
+# docopt="*"
 rand="*"
 time = "*"
 byteorder="*"
