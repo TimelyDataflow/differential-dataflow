@@ -1,8 +1,9 @@
 use std::hash::Hash;
 use std::collections::HashMap;
+use std::fmt::Debug;
 
-use timely::communication::Data;
-use timely::serialization::Serializable;
+use timely::Data;
+// use timely::serialization::Serializable;
 
 pub trait Lookup<K: Eq, V> {
     fn new() -> Self;
@@ -54,7 +55,7 @@ impl<K: Eq, V> Lookup<K, V> for Vec<(K, V)> {
     }
 }
 
-pub trait UnsignedInt : Copy+Eq+Ord+Hash+Data+Serializable+Default+'static { fn as_u64(&self) -> u64; }
+pub trait UnsignedInt : Copy+Eq+Ord+Hash+Data+Default+Debug+'static { fn as_u64(&self) -> u64; }
 impl UnsignedInt for u64 { fn as_u64(&self) -> u64 { *self } }
 impl UnsignedInt for u32 { fn as_u64(&self) -> u64 { *self as u64 } }
 impl UnsignedInt for u16 { fn as_u64(&self) -> u64 { *self as u64 } }

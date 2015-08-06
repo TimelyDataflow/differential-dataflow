@@ -1,10 +1,9 @@
 use std::rc::Rc;
 
-use timely::construction::*;
-use timely::construction::operators::*;
-use timely::communication::Data;
-use timely::communication::pact::Exchange;
-use timely::serialization::Serializable;
+use timely::Data;
+use timely::dataflow::*;
+use timely::dataflow::operators::*;
+use timely::dataflow::channels::pact::Exchange;
 
 use sort::*;
 use collection_trace::Lookup;
@@ -16,7 +15,7 @@ pub trait ConsolidateExt<D> {
     fn consolidate<U: UnsignedInt, F: Fn(&D)->U+'static>(&self, part: F) -> Self;
 }
 
-impl<G: GraphBuilder, D: Ord+Data+Serializable> ConsolidateExt<D> for Stream<G, (D, i32)> {
+impl<G: Scope, D: Ord+Data> ConsolidateExt<D> for Stream<G, (D, i32)> {
     fn consolidate<U: UnsignedInt, F: Fn(&D)->U+'static>(&self, part: F) -> Self {
 
         let mut inputs = Vec::new();    // Vec<(G::Timestamp, Vec<(D, i32))>
@@ -27,7 +26,7 @@ impl<G: GraphBuilder, D: Ord+Data+Serializable> ConsolidateExt<D> for Stream<G, 
         self.unary_notify(exch, "Consolidate", vec![], move |input, output, notificator| {
 
             // 1. read each input, and stash it in our staging area
-            while let Some((index, data)) = input.pull() {
+            while let Some((index, data)) = input.next() {
                 notificator.notify_at(&index);
                 inputs.entry_or_insert(index.clone(), || Vec::new())
                       .extend(data.drain_temp());

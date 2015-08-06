@@ -6,9 +6,8 @@ extern crate differential_dataflow;
 use std::hash::Hash;
 use rand::{Rng, SeedableRng, StdRng};
 
-use timely::construction::*;
-use timely::construction::operators::*;
-use timely::communication::Communicator;
+use timely::dataflow::*;
+use timely::dataflow::operators::*;
 
 use differential_dataflow::collection_trace::LeastUpperBound;
 use differential_dataflow::operators::*;
@@ -21,18 +20,18 @@ fn main() {
     let nodes: u32 = std::env::args().nth(1).unwrap().parse().unwrap();
     let edges: u32 = std::env::args().nth(2).unwrap().parse().unwrap();
 
-    timely::execute(std::env::args().skip(3), move |computation| {
+    timely::execute_from_args(std::env::args().skip(3), move |computation| {
 
         let start = time::precise_time_s();
         let start2 = start.clone();
 
-        let mut input = computation.subcomputation::<u64,_,_>(|builder| {
+        let mut input = computation.scoped::<u64,_,_>(|scope| {
 
-            let (input, mut edges) = builder.new_input();
+            let (input, mut edges) = scope.new_input();
 
             edges = _trim_and_flip(&edges);
-            // edges = _trim_and_flip(&edges);
-            // edges = _strongly_connected(&edges);
+            edges = _trim_and_flip(&edges);
+            edges = _strongly_connected(&edges);
 
             let mut counter = 0;
             edges.consolidate(|x| x.0)
@@ -58,7 +57,7 @@ fn main() {
             rng2.gen::<f64>();
 
             for index in 0..edges {
-                input.give(((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), 1));
+                input.send(((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), 1));
                 if (index % (1 << 16)) == 0 {
                     computation.step();
                 }
@@ -86,11 +85,11 @@ fn main() {
     });
 }
 
-fn _trim_and_flip<G: GraphBuilder>(graph: &Stream<G, (Edge, i32)>) -> Stream<G, (Edge, i32)>
+fn _trim_and_flip<G: Scope>(graph: &Stream<G, (Edge, i32)>) -> Stream<G, (Edge, i32)>
 where G::Timestamp: LeastUpperBound {
         graph
             .iterate(u32::max_value(), |x|x.0, |edges| {
-                let inner = edges.builder().enter(&graph);
+                let inner = edges.scope().enter(&graph);
                 edges.map(|((x,_),w)| (x,w))
                      .group_by_u(|x|(x,()), |&x,_| x, |_,_,target| target.push(((),1)))
                      .join_u(&inner, |x| (x,()), |(s,d)| (d,s), |&d,_,&s| (s,d))
@@ -99,17 +98,17 @@ where G::Timestamp: LeastUpperBound {
             .map(|((x,y),w)| ((y,x),w))
 }
 
-fn _strongly_connected<G: GraphBuilder>(graph: &Stream<G, (Edge, i32)>) -> Stream<G, (Edge, i32)>
+fn _strongly_connected<G: Scope>(graph: &Stream<G, (Edge, i32)>) -> Stream<G, (Edge, i32)>
 where G::Timestamp: LeastUpperBound+Hash {
     graph.iterate(u32::max_value(), |x| x.0, |inner| {
-        let trans = inner.builder().enter(&graph).map(|((x,y),w)| ((y,x),w));
-        let edges = inner.builder().enter(&graph);
+        let trans = inner.scope().enter(&graph).map(|((x,y),w)| ((y,x),w));
+        let edges = inner.scope().enter(&graph);
 
         _trim_edges(&_trim_edges(inner, &edges), &trans)
     })
 }
 
-fn _trim_edges<G: GraphBuilder>(cycle: &Stream<G, (Edge, i32)>, edges: &Stream<G, (Edge, i32)>)
+fn _trim_edges<G: Scope>(cycle: &Stream<G, (Edge, i32)>, edges: &Stream<G, (Edge, i32)>)
     -> Stream<G, (Edge, i32)> where G::Timestamp: LeastUpperBound+Hash {
 
     let nodes = edges.map(|((_,y),w)| (y,w)).consolidate(|&x| x);
@@ -123,13 +122,13 @@ fn _trim_edges<G: GraphBuilder>(cycle: &Stream<G, (Edge, i32)>, edges: &Stream<G
          .map(|(((x1,x2),_),d)| ((x2,x1),d))
 }
 
-fn _reachability<G: GraphBuilder>(edges: &Stream<G, (Edge, i32)>, nodes: &Stream<G, (Node, i32)>) -> Stream<G, (Edge, i32)>
+fn _reachability<G: Scope>(edges: &Stream<G, (Edge, i32)>, nodes: &Stream<G, (Node, i32)>) -> Stream<G, (Edge, i32)>
 where G::Timestamp: LeastUpperBound+Hash {
 
     edges.filter(|_| false)
          .iterate(u32::max_value(), |x| x.0, |inner| {
-             let edges = inner.builder().enter(&edges);
-             let nodes = inner.builder().enter_at(&nodes, |r| 256 * (64 - (r.0 as u64).leading_zeros() as u32))
+             let edges = inner.scope().enter(&edges);
+             let nodes = inner.scope().enter_at(&nodes, |r| 256 * (64 - (r.0 as u64).leading_zeros() as u32))
                                         .map(|(x,w)| ((x,x),w));
 
              _improve_labels(inner, &edges, &nodes)
@@ -137,7 +136,7 @@ where G::Timestamp: LeastUpperBound+Hash {
          .consolidate(|x| x.0)
 }
 
-fn _improve_labels<G: GraphBuilder>(labels: &Stream<G, ((Node, Node), i32)>,
+fn _improve_labels<G: Scope>(labels: &Stream<G, ((Node, Node), i32)>,
                                    edges: &Stream<G, (Edge, i32)>,
                                    nodes: &Stream<G, ((Node, Node), i32)>)
     -> Stream<G, ((Node, Node), i32)>

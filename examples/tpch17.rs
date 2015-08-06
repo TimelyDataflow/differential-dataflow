@@ -9,15 +9,13 @@ use std::cell::RefCell;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 
-use timely::construction::*;
-use timely::construction::operators::*;
-use timely::communication::Communicator;
-
 use timely::*;
+use timely::dataflow::*;
+use timely::dataflow::operators::*;
 use timely::drain::DrainExt;
 
 use timely::progress::timestamp::RootTimestamp;
-use timely::communication::pact::Pipeline;
+use timely::dataflow::channels::pact::Pipeline;
 
 use differential_dataflow::operators::*;
 
@@ -27,7 +25,7 @@ fn main() {
     let items_pattern = std::env::args().nth(3).unwrap();
     let delimiter = std::env::args().nth(4).unwrap();
 
-    timely::execute(std::env::args().skip(4), move |computation| {
+    timely::execute_from_args(std::env::args().skip(4), move |computation| {
 
         let comm_index = computation.index();
         let comm_peers = computation.peers();
@@ -38,7 +36,7 @@ fn main() {
         let clone = epoch.clone();
 
         // form the TPCH17-like query
-        let (mut parts, mut items) = computation.subcomputation(|builder| {
+        let (mut parts, mut items) = computation.scoped(|builder| {
 
             let (part_input, parts) = builder.new_input::<((u32, String, String), i32)>();
             let (item_input, items) = builder.new_input::<((u32, u32, u64), i32)>();
@@ -66,7 +64,7 @@ fn main() {
                  .filter(|&((_, q, _, avg),_)| q < avg / 5)
                  .map(|((key,_,price,_), wgt)| ((key,price), wgt))
                  .unary_notify::<u32, _, _>(Pipeline, "Subscribe", vec![RootTimestamp::new(0)], move |i,_,n| {
-                     while let Some(_) = i.pull() { }
+                     while let Some(_) = i.next() { }
                      for (time,_) in n.next() {
                          *clone.borrow_mut() = time.inner + 1;
                          if n.frontier(0).len() > 0 {
@@ -83,7 +81,7 @@ fn main() {
         if let Ok(parts_file) = File::open(format!("{}-{}-{}", parts_pattern, comm_index, comm_peers)) {
             let parts_reader = BufReader::new(parts_file);
             for (index, line) in parts_reader.lines().enumerate() {
-                if index as u64 % comm_peers == comm_index {
+                if index % comm_peers == comm_index {
                     let text = line.ok().expect("read error");
                     let mut fields = text.split(&delimiter);
                     let part_id = fields.next().unwrap().parse::<u32>().unwrap();
@@ -93,7 +91,7 @@ fn main() {
                     fields.next();
                     fields.next();
                     let container = fields.next().unwrap().to_owned();
-                    parts.give(((part_id, brand, container), 1));
+                    parts.send(((part_id, brand, container), 1));
                 }
             }
 
@@ -106,7 +104,7 @@ fn main() {
         if let Ok(items_file) = File::open(format!("{}-{}-{}", items_pattern, comm_index, comm_peers)) {
             let items_reader =  BufReader::new(items_file);
             for (index, line) in items_reader.lines().enumerate() {
-                if index as u64 % comm_peers == comm_index {
+                if index % comm_peers == comm_index {
                     let text = line.ok().expect("read error");
                     let mut fields = text.split(&delimiter);
                     fields.next();
@@ -128,7 +126,7 @@ fn main() {
         let item_count = items_buffer.len();
 
         for (index, item) in items_buffer.drain_temp().enumerate() {
-            items.give(item);
+            items.send(item);
             items.advance_to(index as u64 + 1);
             while *epoch.borrow() <= index as u64 {
                 computation.step();

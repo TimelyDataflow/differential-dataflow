@@ -4,11 +4,10 @@ use std::hash::Hash;
 use std::collections::HashMap;
 use std::fmt::Debug;
 
-use timely::construction::*;
-use timely::construction::operators::*;
-use timely::communication::Data;
-use timely::communication::pact::Exchange;
-use timely::serialization::Serializable;
+use timely::Data;
+use timely::dataflow::*;
+use timely::dataflow::operators::{Map, Unary};
+use timely::dataflow::channels::pact::Exchange;
 
 use collection_trace::{LeastUpperBound, Lookup, OperatorTrace, Offset};
 use collection_trace::lookup::UnsignedInt;
@@ -19,17 +18,17 @@ use sort::*;
 
 use timely::drain::DrainExt;
 
-impl<G: GraphBuilder, D: Data+Serializable+Eq, S> GroupByExt<G, D> for S
+impl<G: Scope, D: Data+Eq, S> GroupByExt<G, D> for S
 where G::Timestamp: LeastUpperBound,
-      S: UnaryNotifyExt<G, (D, i32)>+MapExt<G, (D, i32)> { }
+      S: Unary<G, (D, i32)>+Map<G, (D, i32)> { }
 
-pub trait GroupByExt<G: GraphBuilder, D1: Data+Serializable+Eq> : UnaryNotifyExt<G, (D1, i32)>+MapExt<G, (D1, i32)>
+pub trait GroupByExt<G: Scope, D1: Data+Eq> : Unary<G, (D1, i32)>+Map<G, (D1, i32)>
 where G::Timestamp: LeastUpperBound {
     fn group_by<
         K:     Hash+Ord+Clone+Debug+'static,
         V1:    Ord+Clone+Default+Debug+'static,
         V2:    Ord+Clone+Default+Debug+'static,
-        D2:    Data+Serializable,
+        D2:    Data,
         KV:    Fn(D1)->(K,V1)+'static,
         Part:  Fn(&D1)->u64+'static,
         KH:    Fn(&K)->u64+'static,
@@ -40,10 +39,10 @@ where G::Timestamp: LeastUpperBound {
         self.group_by_inner(kv, part, key_h, reduc, |_| HashMap::new(), logic)
     }
     fn group_by_u<
-        U:     UnsignedInt,
-        V1:    Data+Serializable+Ord+Clone+Default+Debug+'static,
+        U:     UnsignedInt+Debug,
+        V1:    Data+Ord+Clone+Default+Debug+'static,
         V2:    Ord+Clone+Default+Debug+'static,
-        D2:    Data+Serializable,
+        D2:    Data,
         KV:    Fn(D1)->(U,V1)+'static,
         Logic: Fn(&U, &mut CollectionIterator<V1>, &mut Vec<(V2, i32)>)+'static,
         Reduc: Fn(&U, &V2)->D2+'static,
@@ -62,7 +61,7 @@ where G::Timestamp: LeastUpperBound {
         K:     Hash+Ord+Clone+Debug+'static,
         V1:    Ord+Clone+Default+Debug+'static,
         V2:    Ord+Clone+Default+Debug+'static,
-        D2:    Data+Serializable,
+        D2:    Data,
         KV:    Fn(D1)->(K,V1)+'static,
         Part:  Fn(&D1)->u64+'static,
         KH:    Fn(&K)->u64+'static,
@@ -92,7 +91,7 @@ where G::Timestamp: LeastUpperBound {
         self.unary_notify(exch, "GroupBy", vec![], move |input, output, notificator| {
 
             // 1. read each input, and stash it in our staging area
-            while let Some((time, data)) = input.pull() {
+            while let Some((time, data)) = input.next() {
 
                 notificator.notify_at(&time);
                 let mut queues = inputs.entry_or_insert(time.clone(), || (Vec::new(), Vec::new()));

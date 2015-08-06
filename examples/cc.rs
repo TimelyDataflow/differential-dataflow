@@ -6,9 +6,8 @@ extern crate graph_map;
 extern crate differential_dataflow;
 
 use std::hash::Hash;
-use timely::construction::*;
-use timely::construction::operators::*;
-use timely::communication::Communicator;
+use timely::dataflow::*;
+use timely::dataflow::operators::*;
 
 use differential_dataflow::collection_trace::lookup::UnsignedInt;
 use differential_dataflow::collection_trace::LeastUpperBound;
@@ -21,10 +20,11 @@ type Edge = (Node, Node);
 
 fn main() {
 
-    timely::execute(std::env::args(), |computation| {
+    timely::execute_from_args(std::env::args(), |computation| {
+
         let start = time::precise_time_s();
-        let mut input = computation.subcomputation::<u64,_,_>(|builder| {
-            let (input, mut edges) = builder.new_input();
+        let mut input = computation.scoped::<u64,_,_>(|scope| {
+            let (input, mut edges) = scope.new_input();
             edges = connected_components(&edges);
             edges.inspect_batch(move |t, x| {
                 println!("{}s:\tepoch {:?}: {:?} changes", time::precise_time_s() - start, t, x.len())
@@ -38,12 +38,12 @@ fn main() {
         {
             let mut sent = 0;
             for node in 0..graph.nodes() {
-                if node as u64 % computation.peers() == computation.index() {
+                if node % computation.peers() == computation.index() {
                     let edges = graph.edges(node);
                     for dest in edges {
                         if node % 2 == 0 && *dest % 2 == 0 {
                             sent += 1;
-                            input.give(((node as u32, *dest), 1));
+                            input.send(((node as u32, *dest), 1));
                             if sent % 1_000_000 == 0 {
                                 computation.step();
                             }
@@ -62,7 +62,7 @@ fn main() {
     });
 }
 
-fn connected_components<G: GraphBuilder>(edges: &Stream<G, (Edge, i32)>) -> Stream<G, ((Node, Node), i32)>
+fn connected_components<G: Scope>(edges: &Stream<G, (Edge, i32)>) -> Stream<G, ((Node, Node), i32)>
 where G::Timestamp: LeastUpperBound+Hash {
 
     let nodes = edges.map_in_place(|&mut ((ref mut x, ref mut y), _)| { *x = std::cmp::min(*x,*y); *y = *x; } )
@@ -73,14 +73,14 @@ where G::Timestamp: LeastUpperBound+Hash {
     reachability(&edges, &nodes)
 }
 
-fn reachability<G: GraphBuilder>(edges: &Stream<G, (Edge, i32)>, nodes: &Stream<G, ((Node, Node), i32)>)
+fn reachability<G: Scope>(edges: &Stream<G, (Edge, i32)>, nodes: &Stream<G, ((Node, Node), i32)>)
     -> Stream<G, ((Node, Node), i32)>
 where G::Timestamp: LeastUpperBound+Hash {
 
     edges.filter(|_| false)
          .iterate(u32::max_value(), |x| x.0, |inner| {
-             let edges = inner.builder().enter(&edges);
-             let nodes = inner.builder().enter_at(&nodes, |r| 256 * (64 - (r.0).0.as_u64().leading_zeros() as u32 ));
+             let edges = inner.scope().enter(&edges);
+             let nodes = inner.scope().enter_at(&nodes, |r| 256 * (64 - (r.0).0.as_u64().leading_zeros() as u32 ));
 
              improve_labels(inner, &edges, &nodes)
          })
@@ -88,9 +88,9 @@ where G::Timestamp: LeastUpperBound+Hash {
 }
 
 
-fn improve_labels<G: GraphBuilder>(labels: &Stream<G, ((Node, Node), i32)>,
-                                   edges: &Stream<G, (Edge, i32)>,
-                                   nodes: &Stream<G, ((Node, Node), i32)>)
+fn improve_labels<G: Scope>(labels: &Stream<G, ((Node, Node), i32)>,
+                            edges: &Stream<G, (Edge, i32)>,
+                            nodes: &Stream<G, ((Node, Node), i32)>)
     -> Stream<G, ((Node, Node), i32)>
 where G::Timestamp: LeastUpperBound {
 

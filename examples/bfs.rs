@@ -3,27 +3,26 @@ extern crate time;
 extern crate timely;
 extern crate differential_dataflow;
 
-use timely::construction::*;
-use timely::construction::operators::*;
+use timely::dataflow::*;
+use timely::dataflow::operators::*;
 
 use rand::{Rng, SeedableRng, StdRng};
 
 use differential_dataflow::collection_trace::lookup::UnsignedInt;
 use differential_dataflow::collection_trace::LeastUpperBound;
-
 use differential_dataflow::operators::*;
 
 fn main() {
 
     // define a new computational scope, in which to run BFS
-    timely::execute(std::env::args(), |computation| {
+    timely::execute_from_args(std::env::args(), |computation| {
         let start = time::precise_time_s();
 
         // define BFS dataflow; return handles to roots and edges inputs
-        let (mut roots, mut graph) = computation.subcomputation(|builder| {
+        let (mut roots, mut graph) = computation.scoped(|scope| {
 
-            let (edge_input, graph) = builder.new_input();
-            let (node_input, roots) = builder.new_input();
+            let (edge_input, graph) = scope.new_input();
+            let (node_input, roots) = scope.new_input();
 
             let dists = bfs(&graph, &roots);    // determine distances to each graph node
 
@@ -52,7 +51,7 @@ fn main() {
         // trickle edges in to dataflow
         for _ in 0..(edges/1000) {
             for _ in 0..1000 {
-                graph.give(((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), 1));
+                graph.send(((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), 1));
             }
             computation.step();
         }
@@ -64,9 +63,9 @@ fn main() {
         computation.step();
         println!("loaded; elapsed: {}s", time::precise_time_s() - start);
 
-        roots.give((0,1));
-        roots.give((1,1));
-        roots.give((2,1));
+        roots.send((0,1));
+        roots.send((1,1));
+        roots.send((2,1));
         roots.advance_to(1);
         roots.close();
 
@@ -90,7 +89,7 @@ fn main() {
 }
 
 // returns pairs (n, s) indicating node n can be reached from a root in s steps.
-fn bfs<G: GraphBuilder, U>(edges: &Stream<G, ((U, U), i32)>, roots: &Stream<G, (U, i32)>)
+fn bfs<G: Scope, U>(edges: &Stream<G, ((U, U), i32)>, roots: &Stream<G, (U, i32)>)
     -> Stream<G, ((U, u32), i32)>
 where G::Timestamp: LeastUpperBound,
       U: UnsignedInt {
@@ -101,8 +100,8 @@ where G::Timestamp: LeastUpperBound,
     // repeatedly update minimal distances each node can be reached from each root
     nodes.iterate(u32::max_value(), |x| x.0, |inner| {
 
-        let edges = inner.builder().enter(&edges);
-        let nodes = inner.builder().enter(&nodes);
+        let edges = inner.scope().enter(&edges);
+        let nodes = inner.scope().enter(&nodes);
 
         inner.join_u(&edges, |l| l, |e| e, |_k,l,d| (*d, l+1))
              .concat(&nodes)

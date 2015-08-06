@@ -5,23 +5,21 @@ extern crate differential_dataflow;
 
 use rand::{Rng, SeedableRng, StdRng};
 
-use timely::construction::*;
-use timely::construction::operators::*;
-use timely::communication::Communicator;
-
+use timely::dataflow::*;
+use timely::dataflow::operators::*;
 
 use differential_dataflow::collection_trace::LeastUpperBound;
 use differential_dataflow::operators::*;
 
 fn main() {
-    timely::execute(std::env::args(), |computation| {
+    timely::execute_from_args(std::env::args(), |root| {
         let start = time::precise_time_s();
 
         // define BFS dataflow; return handles to roots and edges inputs
-        let (mut roots, mut graph) = computation.subcomputation::<u64,_,_>(|builder| {
+        let (mut roots, mut graph) = root.scoped::<u64,_,_>(|scope| {
 
-            let (edge_input, graph) = builder.new_input();
-            let (node_input, roots) = builder.new_input();
+            let (edge_input, graph) = scope.new_input();
+            let (node_input, roots) = scope.new_input();
 
             let edges = graph.map(|((x,y),w)| ((y,x), w)).concat(&graph);
 
@@ -44,20 +42,20 @@ fn main() {
 
         println!("performing BFS on {} nodes, {} edges:", nodes, edges);
 
-        if computation.index() == 0 {
+        if root.index() == 0 {
             for _ in 0..edges {
-                graph.give(((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), 1));
+                graph.send(((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), 1));
             }
 
-            roots.give((0,1));
+            roots.send((0,1));
         }
         roots.close();
 
         // // repeatedly change edges
-        // if computation.index() == 0 {
+        // if root.index() == 0 {
         //     let mut rng2: StdRng = SeedableRng::from_seed(seed);    // rng for edge deletions
         //     let mut round = 0 as u32;
-        //     while computation.step() {
+        //     while root.step() {
         //         // once each full second ticks, change an edge
         //         if time::precise_time_s() - start >= round as f64 {
         //             // add edges using prior rng; remove edges using fresh rng with the same seed
@@ -71,14 +69,14 @@ fn main() {
         // }
 
         graph.close();                  // seal the source of edges
-        while computation.step() { }    // wind down the computation
+        while root.step() { }    // wind down the root
         println!("done!");
     });
 }
 
 // returns pairs (n, (r, b, s)) indicating node n can be reached from root r by b in s steps.
 // one pair for each shortest path (so, this number can get quite large, but it is in binary)
-fn bc<G: GraphBuilder>(edges: &Stream<G, ((u32, u32), i32)>,
+fn bc<G: Scope>(edges: &Stream<G, ((u32, u32), i32)>,
                        roots: &Stream<G, (u32 ,i32)>)
                             -> Stream<G, ((u32, u32, u32, u32), i32)>
 where G::Timestamp: LeastUpperBound {
@@ -88,8 +86,8 @@ where G::Timestamp: LeastUpperBound {
 
     let dists = nodes.iterate(u32::max_value(), |x| x.0, |dists| {
 
-        let edges = dists.builder().enter(&edges);
-        let nodes = dists.builder().enter(&nodes);
+        let edges = dists.scope().enter(&edges);
+        let nodes = dists.scope().enter(&nodes);
 
         dists.join_u(&edges, |(n,r,_,s)| (n, (r,s)), |e| e, |&n, &(r,s), &d| (d, r, n, s+1))
              .concat(&nodes)

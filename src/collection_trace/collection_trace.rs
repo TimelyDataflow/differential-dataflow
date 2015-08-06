@@ -18,11 +18,11 @@ pub struct Offset {
 impl Offset {
     #[inline(always)]
     pub fn new(offset: usize) -> Offset {
-        assert!(offset < u32::max_value() as usize); // note strict inequality
-        Offset { dataz: u32::max_value() - offset as u32 }
+        assert!(offset < ((!0u32) as usize)); // note strict inequality
+        Offset { dataz: (!0u32) - offset as u32 }
     }
     #[inline(always)]
-    pub fn val(&self) -> usize { (u32::max_value() - self.dataz) as usize }
+    pub fn val(&self) -> usize { ((!0u32) - self.dataz) as usize }
 }
 
 

@@ -3,34 +3,33 @@ use std::default::Default;
 use std::hash::Hash;
 use std::collections::HashMap;
 
-use timely::construction::*;
-use timely::construction::operators::*;
-use timely::communication::Data;
-use timely::communication::pact::Exchange;
-use timely::serialization::Serializable;
+use timely::Data;
+use timely::dataflow::*;
+use timely::dataflow::operators::{Map, Binary};
+use timely::dataflow::channels::pact::Exchange;
 
 use collection_trace::CollectionTrace;
-
 use collection_trace::lookup::UnsignedInt;
 use collection_trace::{LeastUpperBound, Lookup, Offset};
+
 use sort::*;
 
 use timely::drain::DrainExt;
 
-impl<G: GraphBuilder, D1: Data+Serializable+Eq, S> JoinExt<G, D1> for S
+impl<G: Scope, D1: Data+Eq, S> JoinExt<G, D1> for S
 where G::Timestamp: LeastUpperBound,
-      S: BinaryNotifyExt<G, (D1, i32)>+MapExt<G, (D1, i32)> { }
+      S: Binary<G, (D1, i32)>+Map<G, (D1, i32)> { }
 
-pub trait JoinExt<G: GraphBuilder, D1: Data+Serializable+Eq> : BinaryNotifyExt<G, (D1, i32)>+MapExt<G, (D1, i32)>
+pub trait JoinExt<G: Scope, D1: Data+Eq> : Binary<G, (D1, i32)>+Map<G, (D1, i32)>
 where G::Timestamp: LeastUpperBound {
     fn join_u<
-        U:  UnsignedInt,
-        V1: Data+Serializable+Ord+Clone+Default+Debug+'static,
-        V2: Data+Serializable+Ord+Clone+Default+Debug+'static,
-        D2: Data+Serializable+Eq,
+        U:  UnsignedInt+Debug,
+        V1: Data+Ord+Clone+Default+Debug+'static,
+        V2: Data+Ord+Clone+Default+Debug+'static,
+        D2: Data+Eq,
         F1: Fn(D1)->(U,V1)+'static,
         F2: Fn(D2)->(U,V2)+'static,
-        R:  Ord+Data+Serializable,
+        R:  Ord+Data,
         RF: Fn(&U,&V1,&V2)->R+'static,
     >
         (&self, other: &Stream<G, (D2, i32)>, kv1: F1, kv2: F2, result: RF) -> Stream<G, (R, i32)> {
@@ -49,13 +48,13 @@ where G::Timestamp: LeastUpperBound {
         K:  Ord+Clone+Hash+Debug+'static,
         V1: Ord+Clone+Debug+'static,
         V2: Ord+Clone+Debug+'static,
-        D2: Data+Serializable+Eq,
+        D2: Data+Eq,
         F1: Fn(D1)->(K,V1)+'static,
         F2: Fn(D2)->(K,V2)+'static,
         H1: Fn(&D1)->u64+'static,
         H2: Fn(&D2)->u64+'static,
         KH: Fn(&K)->u64+'static,
-        R:  Ord+Data+Serializable,
+        R:  Ord+Data,
         RF: Fn(&K,&V1,&V2)->R+'static,
     >
         (&self, other: &Stream<G, (D2, i32)>,
@@ -69,13 +68,13 @@ where G::Timestamp: LeastUpperBound {
         K:  Ord+Clone+Debug+'static,
         V1: Ord+Clone+Debug+'static,
         V2: Ord+Clone+Debug+'static,
-        D2: Data+Serializable+Eq,
+        D2: Data+Eq,
         F1: Fn(D1)->(K,V1)+'static,
         F2: Fn(D2)->(K,V2)+'static,
         H1: Fn(&D1)->u64+'static,
         H2: Fn(&D2)->u64+'static,
         KH: Fn(&K)->u64+'static,
-        R:  Ord+Data+Serializable,
+        R:  Ord+Data,
         RF: Fn(&K,&V1,&V2)->R+'static,
         LC: Lookup<K, Offset>+'static,
         GC: Fn(u64)->LC,
@@ -111,7 +110,7 @@ where G::Timestamp: LeastUpperBound {
             if trace1.is_some() && notificator.frontier(1).len() == 0 && stage2.len() == 0 { trace1 = None; }
 
             // read input 1, push key, (val,wgt) to vecs
-            while let Some((time, data1)) = input1.pull() {
+            while let Some((time, data1)) = input1.next() {
                 notificator.notify_at(&time);
                 let mut vecs = stage1.entry_or_insert(time.clone(), || (Vec::new(), Vec::new()));
                 for (datum, wgt) in data1.drain_temp() {
@@ -122,7 +121,7 @@ where G::Timestamp: LeastUpperBound {
             }
 
             // read input 2, push key, (val,wgt) to vecs
-            while let Some((time, data2)) = input2.pull() {
+            while let Some((time, data2)) = input2.next() {
                 notificator.notify_at(&time);
                 let mut vecs = stage2.entry_or_insert(time.clone(), || (Vec::new(), Vec::new()));
                 for (datum, wgt) in data2.drain_temp() {

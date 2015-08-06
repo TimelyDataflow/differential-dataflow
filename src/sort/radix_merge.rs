@@ -1,132 +1,180 @@
 use std::rc::Rc;
+
+use itertools::Itertools;
+use sort::coalesce;
+
 use timely::drain::DrainExt;
+/*
 
-pub struct MergeMerge<K, V, F: Fn(&K)->u64> {
-    keys_src: Vec<Vec<(K, u32)>>,
-    vals_src: Vec<Vec<V>>,
-    wgts_src: Vec<Vec<(i32, u32)>>,
-    keys_tmp: Vec<(K, u32)>,
-    vals_tmp: Vec<V>,
-    wgts_tmp: Vec<(i32, u32)>,
-    func: Rc<F>,
+The goal here is to provide an interface that receives (K, V, i32) triples, and does its best to
+maintain them in a compact form, taking not much more space than if you were to sort them,
+accumulate weights and drop those with zero accumulation, and then run-length encode the K keys.
+
+Additionally, it would be nice if there was a good way to compress the i32 values. I suspect RLE
+would also make sense here, but random access would be nice for the "galloping iterator". You could
+imagine such an iterator making fast progress if there was good compression (subtracting steps from
+RLE counts)...
+
+ASIDE : a common RLE representation represents runs as two of the same element, followed by a count.
+ASIDE : the downside here is that if you just have two elements, you need a third to say "2", but
+ASIDE : there should be no overhead for single elements, nor triple elements, and things get better
+ASIDE : for more than that (assuming the count takes less-or-equal bytes as the data).
+
+Another approach is just to compress everything. The "data" are effectively [u8], which is gross
+but whatever. It *would* ensure locality of things like arrays and whatnot, which could be cool,
+but it would be super important to avoid re-sizing anything ever (which would be fine because it is
+all immutable). Abomonation compression could also slim the in-memory representation when used with
+an iterator, as you wouldn't need the e.g. 24 bytes for a string, but rather just the length (the
+surrounding 24 bytes being produced by the iterator).
+
+*/
+
+struct Columns<K, V> {
+    keys: Vec<K>,           // keys
+    cnts: Vec<u32>,         // counts
+    vals: Vec<V>,           // values
+    wgts: Vec<(i32,u32)>,   // run-length encoded within key group
 }
 
-
-pub struct RadixMerge<K, V, F: Fn(&K)->u64> {
-    keys_src: Vec<Vec<(K, u32)>>,
-    vals_src: Vec<Vec<V>>,
-    wgts_src: Vec<Vec<(i32, u32)>>,
-    keys_tmp: Vec<Vec<(K, u32)>>,
-    vals_tmp: Vec<Vec<V>>,
-    wgts_tmp: Vec<Vec<(i32, u32)>>,
-    func: Rc<F>,
-}
-
-impl<K: Ord, V: Ord, F: Fn(&K)->u64> RadixMerge<K, V, F> {
-    pub fn new(func: Rc<F>) -> RadixMerge<K, V, F> {
-        let mut ks = vec![]; for _ in 0..256 { ks.push(Vec::with_capacity(256)); }
-        let mut vs = vec![]; for _ in 0..256 { vs.push(Vec::with_capacity(256)); }
-        let mut ws = vec![]; for _ in 0..256 { ws.push(Vec::with_capacity(256)); }
-        let mut kt = vec![]; for _ in 0..256 { kt.push(Vec::with_capacity(256)); }
-        let mut vt = vec![]; for _ in 0..256 { vt.push(Vec::with_capacity(256)); }
-        let mut wt = vec![]; for _ in 0..256 { wt.push(Vec::with_capacity(256)); }
-        RadixMerge {
-            keys_src: ks,
-            vals_src: vs,
-            wgts_src: ws,
-            keys_tmp: kt,
-            vals_tmp: vt,
-            wgts_tmp: wt,
-            func: func,
+impl<K, V> Columns<K, V> {
+    pub fn new(k: usize, v: usize, w: usize) -> Columns<K, V> {
+        Columns {
+            keys: Vec::with_capacity(k),
+            cnts: Vec::with_capacity(k),
+            vals: Vec::with_capacity(v),
+            wgts: Vec::with_capacity(w),
         }
+    }
+    pub fn size(&self) -> usize {
+        self.keys.len() * ::std::mem::size_of::<K>() +
+        self.cnts.len() * 4 +
+        self.vals.len() * ::std::mem::size_of::<V>() +
+        self.wgts.len() * 8
+    }
+}
+
+pub struct Merge<K, V> {
+    sorted: Columns<K, V>,
+    staged: Vec<((K, V), i32)>
+}
+
+// TODO : Clone requirement is crap! Fix it.
+impl<K: Ord+Copy, V: Ord> Merge<K,V> {
+    pub fn new() -> Merge<K,V> { Merge {sorted: Columns::new(4, 4, 4), staged: Vec::with_capacity(4) } }
+    pub fn prune(&mut self) {
+        self.merge();
+        self.staged.shrink_to_fit();
     }
     pub fn push(&mut self, key: K, val: V, wgt: i32) {
-        let byte = ((self.func)(&key) % 256) as usize;
-        self.keys_src[byte].push((key, 1));
-        self.vals_src[byte].push(val);
-        self.wgts_src[byte].push((wgt, 1));
+        self.staged.push(((key, val), wgt));
 
-        if self.vals_src[byte].len() == self.vals_src[byte].capacity() {
-            let prev = self.keys_src[byte].len();
-            self.sort(byte);
-            let post = self.keys_src[byte].len();
+        // TODO : smarter tests exist based on sizes of K, V, etc.
+        if self.staged.len() == self.staged.capacity() {
+            // println!("merging at {} vals, with {} vals", self.sorted.vals.len(), self.staged.len());
 
-            if byte == 0 {
-                println!("went from {} to {} vs {}", prev, post, self.vals_src[byte].len());
+            // merge with self.*_sorted
+            self.merge();
+            if self.staged.capacity() < self.sorted.vals.len() / 4 {
+                self.staged = Vec::with_capacity(self.staged.capacity() * 2);
+                println!("doubling capacity to {}", self.staged.capacity());
             }
         }
     }
-    pub fn seal(mut self) -> (Vec<Vec<(K, u32)>>, Vec<Vec<V>>, Vec<Vec<(i32, u32)>>) {
-        for byte in 0..256 {
-            self.sort(byte)
-        }
-        (self.keys_src, self.vals_src, self.wgts_src)
-    }
 
-    fn sort(&mut self, index: usize) {
-        self.radix_shuffle(index, 8);
-        self.radix_shuffle(index, 16);
-        self.radix_shuffle(index, 24);
-        // self.radix_shuffle(byte, 32);
-        // self.radix_shuffle(byte, 40);
-        // self.radix_shuffle(byte, 48);
-        // self.radix_shuffle(byte, 56);
+    fn merge(&mut self) {
 
-        // compact those keys!
-        let keys = &mut self.keys_src[index];
-        let mut cursor = 0;
-        for i in 1..keys.len() {
-            if keys[cursor].0 == keys[i].0 {
-                keys[cursor].1 += keys[i].1;
-            }
-            else {
-                cursor += 1;
-                keys.swap(cursor, i);
-            }
-        }
-        keys.truncate(cursor+1);
+        self.staged.sort();
+        coalesce(&mut self.staged);
 
-        // compact those wgts!
-        for i in 0..keys.len() {
-            self.wgts_src[index][i] = (1, keys[i].1);
-        }
-        self.wgts_src[index].truncate(keys.len());
-    }
 
-    #[inline(never)]
-    fn radix_shuffle(&mut self, index: usize, shift: usize) {
+        // make sure to pre-allocate enough based on existing sizes
+        let mut result = Columns::new(self.sorted.keys.len() + self.staged.len(),
+                                      self.sorted.vals.len() + self.staged.len(),
+                                      self.sorted.wgts.len() + self.staged.len());
 
-        // push keys, vals, and wgts based on func(&key)
         {
-            let mut v_drain = self.vals_src[index].drain_temp();
-            let mut w_drain = self.wgts_src[index].drain_temp();
+            let keys = self.sorted.keys.drain_temp();
+            let cnts = self.sorted.cnts.drain_temp();
+            let vals = self.sorted.vals.drain_temp();
+            let wgts = self.sorted.wgts.drain_temp().flat_map(|(w,c)| ::std::iter::repeat(w).take(c as usize));
 
-            for (key, len) in self.keys_src[index].drain_temp() {
-                let byte = (((self.func)(&key) >> shift) % 256) as usize;
+            let sorted = keys.zip(cnts).flat_map(|(k,c)| ::std::iter::repeat(k).take(c as usize))
+                             .zip(vals)
+                             .zip(wgts);
 
-                // could / should just be a memcpy
-                self.vals_tmp[byte].extend(v_drain.by_ref().take(len as usize));
+            let staged = self.staged.drain_temp();
 
-                let mut w_read = 0;
-                while w_read < len {
-                    let (wgt, cnt) = w_drain.next().unwrap();
-                    self.wgts_tmp[byte].push((wgt, cnt));
-                    w_read += cnt;
+            let mut iterator = sorted.merge(staged).coalesce(|(p1,w1), (p2,w2)| {
+                if p1 == p2 { Ok((p1, w1 + w2)) }
+                else { Err(((p1,w1), (p2,w2))) }
+            });
+
+            // populate a new `Columns` with merged, coalesced data.
+            if let Some(((mut old_key, val), mut old_wgt)) = iterator.next() {
+                let mut key_cnt = 1;
+                let mut wgt_cnt = 1;
+
+                // always stash the val
+                result.vals.push(val);
+
+                for ((key, val), wgt) in iterator {
+
+                    // always stash the val
+                    result.vals.push(val);
+
+                    // if they key or weight has changed, stash the weight.
+                    if old_key != key || old_wgt != wgt {
+                        // stash wgt, using run-length encoding
+                        result.wgts.push((old_wgt, wgt_cnt));
+                        old_wgt = wgt;
+                        wgt_cnt = 0;
+                    }
+
+                    wgt_cnt += 1;
+
+                    // if the key has changed, stash the key
+                    if old_key != key {
+                        result.keys.push(old_key);
+                        result.cnts.push(key_cnt);
+                        old_key = key;
+                        key_cnt = 0;
+                    }
+
+                    key_cnt += 1;
                 }
 
-                self.keys_tmp[byte].push((key, len));
+                result.keys.push(old_key);
+                result.cnts.push(key_cnt);
+                result.wgts.push((old_wgt, wgt_cnt));
             }
-
-            assert!(v_drain.next().is_none());
-            assert!(w_drain.next().is_none());
         }
 
-        // copy the values back
-        for byte in 0..256 {
-            // should all be memcpys (probably aren't)
-            self.keys_src[index].extend(self.keys_tmp[byte].drain_temp());
-            self.vals_src[index].extend(self.vals_tmp[byte].drain_temp());
-            self.wgts_src[index].extend(self.wgts_tmp[byte].drain_temp());
-        }
+        result.keys.shrink_to_fit();
+        result.cnts.shrink_to_fit();
+        result.vals.shrink_to_fit();
+        result.wgts.shrink_to_fit();
+
+        self.sorted = result;
     }
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//
