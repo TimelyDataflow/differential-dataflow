@@ -3,10 +3,6 @@ extern crate time;
 extern crate timely;
 extern crate differential_dataflow;
 
-extern crate abomonation;
-
-use abomonation::Abomonation;
-
 use std::hash::{Hash, SipHasher, Hasher};
 use std::fmt::Debug;
 use std::io::{BufReader, BufRead};
@@ -24,6 +20,12 @@ use timely::progress::timestamp::RootTimestamp;
 
 use differential_dataflow::operators::*;
 use differential_dataflow::collection_trace::LeastUpperBound;
+
+fn hash<T: Hash>(x: &T) -> u64 {
+    let mut h = SipHasher::new();
+    x.hash(&mut h);
+    h.finish()
+}
 
 /// A collection defined by multiple mutually recursive rules.
 pub struct Variable<G: Scope, D: Ord+Default+Clone+Data+Debug+Hash>
@@ -60,159 +62,83 @@ impl<G: Scope, D: Ord+Default+Debug+Hash+Clone+Data> Drop for Variable<G, D> whe
     }
 }
 
-type P = (u32, u32);
-type Q = (u32, u32, u32);
-type U = (u32, u32, u32);
-
-#[derive(Copy, Clone, Ord, Eq, PartialOrd, PartialEq, Debug, Hash)]
-enum ProvenanceP {
-    EDB(P),
-    IR1(P, P),
-    IR3(P, Q, U)
-}
-
-impl ProvenanceP {
-    fn to_p(&self) -> P {
-        match *self {
-            ProvenanceP::EDB(p) => p,
-            ProvenanceP::IR1((x,_),(_,z)) => (x,z),
-            ProvenanceP::IR3((_,_),(x,_,_),(_,_,z)) => (x,z),
-        }
-    }
-}
-
-impl Abomonation for ProvenanceP { }
-
-#[derive(Copy, Clone, Ord, Eq, PartialOrd, PartialEq, Debug, Hash)]
-enum ProvenanceQ {
-    EDB(Q),
-    IR2(P, Q),
-}
-
-impl ProvenanceQ {
-    fn to_q(&self) -> Q {
-        match *self {
-            ProvenanceQ::EDB(q) => q,
-            ProvenanceQ::IR2((x,_),(_,r,z)) => (x,r,z),
-        }
-    }
-}
-
-fn test<D: Data>() {}
-
-impl Abomonation for ProvenanceQ { }
-
 fn main() {
-
-    test::<ProvenanceP>();
-    test::<ProvenanceQ>();
 
     timely::execute_from_args(std::env::args(), |root| {
 
         let start = time::precise_time_s();
-        let (mut p, mut q, mut u, mut p_query, mut q_query, probe) = root.scoped::<u64, _, _>(|outer| {
+        let (mut p, mut q, mut u, mut p_query, mut q_query, probe) = root.scoped::<u64, _, _>(move |outer| {
 
+            // inputs for p, q, and u base facts.
             let (p_input, p) = outer.new_input();
             let (q_input, q) = outer.new_input();
             let (u_input, u) = outer.new_input();
 
-            let ((p, p_prov), (q, q_prov)) = outer.scoped::<u64, _, _>(|inner| {
-
-                let mut p_prov = inner.enter(&p).map(|(p,w)| (ProvenanceP::EDB(p),w));
-                let mut q_prov = inner.enter(&q).map(|(q,w)| (ProvenanceQ::EDB(q),w));
+            // determine which rules fire with what variable settings.
+            let (ir1, ir2, ir3) = outer.scoped::<u64, _, _>(|inner| {
 
                 let u = inner.enter(&u);
                 let (mut p_rules, p) = Variable::from(&inner.enter(&p));
                 let (mut q_rules, q) = Variable::from(&inner.enter(&q));
 
-                // add one rule for P:
                 // P(x,z) := P(x,y), P(y,z)
-                let ir1 = p.join_u(&p, |(x,y)| (y,x), |(y,z)| (y,z), |&y, &x, &z| ProvenanceP::IR1((x,y),(y,z)));
+                let ir1 = p.join_u(&p, |(x,y)| (y,x), |(y,z)| (y,z), |&y, &x, &z| (x,y,z));
+                p_rules.add(&ir1.map(|((x,_,z),w)| ((x,z),w)));
 
-                // add two rules for Q:
                 // Q(x,r,z) := P(x,y), Q(y,r,z)
-                // Q(x,r,z) := P(y,w), Q(x,r,y), U(w,r,z)
-                let ir2 = p.join_u(&q, |(x,y)| (y,x), |(y,r,z)| (y,(r,z)), |&y, &x, &(r,z)| ProvenanceQ::IR2((x,y),(y,r,z)));
+                let ir2 = p.join_u(&q, |(x,y)| (y,x), |(y,r,z)| (y,(r,z)), |&y, &x, &(r,z)| (r,x,y,z));
+                q_rules.add(&ir2.map(|((r,x,_,z),w)| ((x,r,z),w)));
 
-                let ir3 = p.join_u(&q, |(y,w)| (y,w), |(x,r,y)| (y,(x,r)), |&y, &w, &(x,r)| ((y,w),(x,r,y)))
-                           .join(&u, |((y,w),(x,r,_))| ((r,w), (y,x)), |(w,r,z)| ((r,w),z),
-                                    |&((_,w),(_,r,_))| { let mut h = SipHasher::new(); (r,w).hash(&mut h); h.finish() },
-                                    |&(w,r,_)| { let mut h = SipHasher::new(); (r,w).hash(&mut h); h.finish() },
-                                    |&(r,w)|    { let mut h = SipHasher::new(); (r,w).hash(&mut h); h.finish() },
-                                    |&(r,w), &(y,x), &z| ProvenanceP::IR3((y,w), (x,r,y), (w,r,z)));
-
-                // let ir2 = p.join_u(&q, |p| (p.1,p), |q| (q.0,q), |_, &p, &q| ProvenanceQ::IR2(p,q));
-                // let ir3 = p.join_u(&q, |p| (p.0,p), |q| (q.2,q), |_, &p, &q)| (p,q)
-                //            .join(&u, |(p,q)| ((q.0,q.1), (p,q)), |u| ((u.1,u.2),u),
-                //                  |&(p,q)| { let mut h = SipHasher::new(); (q.0,q.1).hash(&mut h); h.finish() },
-                //                  |&u| { let mut h = SipHasher::new(); (u.1,u.2).hash(&mut h); h.finish() },
-                //                  |&k|    { let mut h = SipHasher::new(); k.hash(&mut h); h.finish() },
-                //                  |_, &(p,q), &u| ProvenanceQ::IR3(p, q, u);
-
-                p_rules.add(&ir1.map(|(x,w)| (x.to_p(),w)));
-                p_rules.add(&ir3.map(|(x,w)| (x.to_p(),w)));
-                p_prov = p_prov.concat(&ir1).concat(&ir3);
-
-                q_rules.add(&ir2.map(|(x,w)| (x.to_q(),w)));
-                q_prov = q_prov.concat(&ir2);
+                // P(x,z) := P(y,w), Q(x,r,y), U(w,r,z)
+                let ir3 = p.join_u(&q, |(y,w)| (y,w), |(x,r,y)| (y,(x,r)), |&y, &w, &(x,r)| (r,w,x,y))
+                           .join(&u, |(r,w,x,y)| ((r,w), (y,x)), |(w,r,z)| ((r,w),z),
+                                    |&(r,w,_,_)| hash(&(r,w)),
+                                    |&(w,r,_)| hash(&(r,w)),
+                                    |&(r,w)| hash(&(r,w)),
+                                    |&(r,w), &(y,x), &z| (r,w,x,y,z));
+                p_rules.add(&ir3.map(|((_,_,x,_,z),w)| ((x,z),w)));
 
                 // extract the results and return
-                ((p.leave(), p_prov.leave()), (q.leave(), q_prov.leave()))
+                (ir1.leave(), ir2.leave(), ir3.leave())
             });
 
-            // p.consolidate(|x| { let mut h = SipHasher::new(); x.hash(&mut h); h.finish() })
-            //  .inspect(|&((x,y),_)| println!("P({}, {})", x, y));
-            // q.consolidate(|x| { let mut h = SipHasher::new(); x.hash(&mut h); h.finish() })
-            //  .inspect(|&((x,r,z),_)| println!("Q({}, {}, {})", x, r, z));
-
+            // inputs through which to demand explanations.
             let (p_query_input, p_query) = outer.new_input();
             let (q_query_input, q_query) = outer.new_input();
 
-            // now we
-            let (p_base, q_base, u_base) = outer.scoped::<u64, _, _>(|inner| {
+            // now we determine which p and q need explaining, and which rules produce each of them
+            let (p_base, q_base, ir1_need, ir2_need, ir3_need) = outer.scoped::<u64, _, _>(|inner| {
 
+                // the p and q tuples we want explained.
                 let (mut p_rules, p_query) = Variable::from(&inner.enter(&p_query));
                 let (mut q_rules, q_query) = Variable::from(&inner.enter(&q_query));
 
-                let p_prov = inner.enter(&p_prov);
-                let q_prov = inner.enter(&q_prov);
+                // semi-join each ir using the tuple it would produce, against the tuples we want explained.
+                let ir1_need = p_query.join(&inner.enter(&ir1), |p| (p,()), |(x,y,z)| ((x,z), y), hash, |&(x,_,z)| hash(&(x,z)), hash, |&(x,z),_,&y| (x,y,z));
+                let ir2_need = q_query.join(&inner.enter(&ir2), |q| (q,()), |(r,x,y,z)| ((x,r,z), y), hash, |&(r,x,_,z)| hash(&(x,r,z)), hash, |&(x,r,z),_,&y| (r,x,y,z));
+                let ir3_need = p_query.join(&inner.enter(&ir3), |p| (p,()), |(r,w,x,y,z)| ((x,z), (r,w,y)), hash, |&(_,_,x,_,z)| hash(&(x,z)), hash, |&(x,z),_,&(r,w,y)| (r,w,x,y,z));
 
-                // everything in p_query needs to be explained using p_prov
-                let p_needs = p_query.join(&p_prov, |p| (p,()), |x| (x.to_p(), x),
-                                            |x| { let mut h = SipHasher::new(); x.hash(&mut h); h.finish() },
-                                            |x| { let mut h = SipHasher::new(); x.to_p().hash(&mut h); h.finish() },
-                                            |x| { let mut h = SipHasher::new(); x.hash(&mut h); h.finish() },
-                                            |_,_,x| *x);
+                // need p from: 2x ir1, 1x ir2, 1x ir3.
+                p_rules.add(&ir1_need.map(|((x,y,_),w2)| ((x,y),w2)));
+                p_rules.add(&ir1_need.map(|((_,y,z),w2)| ((y,z),w2)));
+                p_rules.add(&ir2_need.map(|((_,x,y,_),w2)| ((x,y),w2)));
+                p_rules.add(&ir3_need.map(|((_,w,_,y,_),w2)| ((y,w),w2)));
 
-                p_rules.add(&p_needs.filter_map2(|(x,w)| if let ProvenanceP::IR1(p,_) = x { Some((p,w)) } else { None }));
-                p_rules.add(&p_needs.filter_map2(|(x,w)| if let ProvenanceP::IR1(_,p) = x { Some((p,w)) } else { None }));
+                // need q from: 1x ir2, 1x ir3.
+                q_rules.add(&ir2_need.map(|((r,_,y,z),w2)| ((y,r,z),w2)));
+                q_rules.add(&ir3_need.map(|((r,_,x,y,_),w2)| ((x,r,y),w2)));
 
-                // everything in q_query needs to be explained using p_prov
-                let q_needs = q_query.join(&q_prov, |q| (q,()), |x| (x.to_q(), x),
-                                            |x| { let mut h = SipHasher::new(); x.hash(&mut h); h.finish() },
-                                            |x| { let mut h = SipHasher::new(); x.to_q().hash(&mut h); h.finish() },
-                                            |x| { let mut h = SipHasher::new(); x.hash(&mut h); h.finish() },
-                                            |_,_,x| *x);
-                p_rules.add(&q_needs.filter_map2(|(x,w)| if let ProvenanceQ::IR2(p,_) = x { Some((p,w)) } else { None }));
-                q_rules.add(&q_needs.filter_map2(|(x,w)| if let ProvenanceQ::IR2(_,q) = x { Some((q,w)) } else { None }));
-                p_rules.add(&p_needs.filter_map2(|(x,w)| if let ProvenanceP::IR3(p,_,_) = x { Some((p,w)) } else { None }));
-                q_rules.add(&p_needs.filter_map2(|(x,w)| if let ProvenanceP::IR3(_,q,_) = x { Some((q,w)) } else { None }));
-
-                // the tuples we *need* are instances of EDB, or a u instance for IR3.
-                // let p_base = p_needs.filter_map2(|(x,w)| if let ProvenanceP::EDB(p) = x { Some((p,w)) } else { None });
-                // let q_base = q_needs.filter_map2(|(x,w)| if let ProvenanceQ::EDB(q) = x { Some((q,w)) } else { None });
-                let u_base = p_needs.filter_map2(|(x,w)| if let ProvenanceP::IR3(_,_,u) = x { Some((u,w)) } else { None });
-
-                (p_needs.leave(), q_needs.leave(), u_base.leave())
+                (p_query.leave(), q_query.leave(), ir1_need.leave(), ir2_need.leave(), ir3_need.leave())
             });
 
-            let (probe, _) = p_base.consolidate(|x| { let mut h = SipHasher::new(); x.hash(&mut h); h.finish() })
-                  .inspect(|&(x,w)| println!("Required: {:?} -> {:?}\t{}", x, x.to_p(), w))
-                  .probe();
-            q_base.consolidate(|x| { let mut h = SipHasher::new(); x.hash(&mut h); h.finish() })
-                  .inspect(|&(x,w)| println!("Required: {:?} -> {:?}\t{}", x, x.to_q(), w));
-            u_base.consolidate(|x| { let mut h = SipHasher::new(); x.hash(&mut h); h.finish() })
-                  .inspect(|&((x,y,z),w)| println!("Required: U({}, {}, {})\t{}", x, y, z, w));
+            let (probe, _) = p_base.consolidate(hash).probe();
+
+            p_base.consolidate(hash).inspect(|&(x,_w)| println!("Required P{:?}", x));
+            q_base.consolidate(hash).inspect(|&(x,_w)| println!("Required Q{:?}", x));
+
+            ir1_need.consolidate(hash).inspect(|&(x,_w)| println!("Required IR1 {:?}", x));
+            ir2_need.consolidate(hash).inspect(|&(x,_w)| println!("Required IR2 {:?}", x));
+            ir3_need.consolidate(hash).inspect(|&(x,_w)| println!("Required IR3 {:?}", x));
 
             (p_input, q_input, u_input, p_query_input, q_query_input, probe)
         });
@@ -248,10 +174,7 @@ fn main() {
             }
         }
 
-        // p.send(((0u64,1u64), 1));
-        // p.send(((1u64,2u64), 1));
-        // q.send(((3u64,4u64,0u64), 1));
-        // u.send(((2u64,4u64,6u64), 1));
+        println!("loading:\t{}", time::precise_time_s() - start);
 
         p.close();
         q.close();
@@ -267,14 +190,20 @@ fn main() {
         println!("derivation:\t{}", time::precise_time_s() - start);
         let timer = time::precise_time_s();
 
-        // p_query.send(((0,2), 1));
         p_query.send(((36465u32,10135u32), 1));
+        p_query.advance_to(2);
+        q_query.advance_to(2);
+
+        while probe.lt(&RootTimestamp::new(2)) {
+            root.step();
+        }
+
+        println!("query:\t{}", time::precise_time_s() - timer);
 
         p_query.close();
         q_query.close();
 
         while root.step() { }    // wind down the computation
 
-        println!("query:\t{}", time::precise_time_s() - timer);
     });
 }
