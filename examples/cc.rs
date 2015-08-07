@@ -20,20 +20,23 @@ type Edge = (Node, Node);
 
 fn main() {
 
-    timely::execute_from_args(std::env::args(), |computation| {
+    let filename = std::env::args().nth(1).unwrap();
+
+    timely::execute_from_args(std::env::args().skip(1), move |computation| {
 
         let start = time::precise_time_s();
         let mut input = computation.scoped::<u64,_,_>(|scope| {
             let (input, mut edges) = scope.new_input();
             edges = connected_components(&edges);
-            edges.inspect_batch(move |t, x| {
-                println!("{}s:\tepoch {:?}: {:?} changes", time::precise_time_s() - start, t, x.len())
-            });
+            // edges.inspect_batch(move |t, x| {
+            //     println!("{}s:\tepoch {:?}: {:?} changes", time::precise_time_s() - start, t, x.len())
+            // });
 
             input
         });
 
-        let graph = GraphMMap::new("/Users/mcsherry/Projects/Datasets/twitter-dedup");
+        // let graph = GraphMMap::new("/Users/mcsherry/Projects/Datasets/twitter-dedup");
+        let graph = GraphMMap::new(&filename);
 
         {
             let mut sent = 0;
@@ -41,12 +44,10 @@ fn main() {
                 if node % computation.peers() == computation.index() {
                     let edges = graph.edges(node);
                     for dest in edges {
-                        if node % 2 == 0 && *dest % 2 == 0 {
-                            sent += 1;
-                            input.send(((node as u32, *dest), 1));
-                            if sent % 1_000_000 == 0 {
-                                computation.step();
-                            }
+                        sent += 1;
+                        input.send(((node as u32, *dest), 1));
+                        if sent % 1_000_000 == 0 {
+                            computation.step();
                         }
                     }
                 }
@@ -59,6 +60,8 @@ fn main() {
 
         while computation.step() { }
         computation.step(); // shut down
+        println!("{}: done", time::precise_time_s() - start);
+
     });
 }
 
