@@ -8,6 +8,25 @@ use collection_trace::{close_under_lub, LeastUpperBound, Lookup};
 use iterators::merge::{Merge, MergeIterator};
 use iterators::coalesce::{Coalesce, CoalesceIterator};
 
+/*
+
+Design notes:
+
+I'm thinking a CollectionTrace should probably keep an *ordered* list of keys K. Most of the
+operators it needs to support are contained inside a loop over keys, in sorted order (so far).
+
+An ordered list of keys, perhaps a merge tree of sorted lists, would simplify the whole Hash issue,
+which seems to be a performance and ergonomic pain in the ass.
+
+Imagine the keys are ordered, and are inserted through some natural `install_differences` calls,
+what would we expect the data to look like? Ideally, it would be laid out in a similar order, which
+is indeed what each call to `install_differences` would do. Over multiple calls, you would think
+that things wouldn't degrade. I guess each instance of differences installed will be sorted by key,
+so in some sense that is that.
+
+*/
+
+
 pub type CollectionIterator<'a, V> = Peekable<CoalesceIterator<&'a V, MergeIterator<SliceIterator<'a, V>>>>;
 
 #[derive(Copy, Clone)]

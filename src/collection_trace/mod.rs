@@ -2,6 +2,7 @@ pub mod least_upper_bound;
 pub mod collection_trace;
 pub mod operator_trace;
 pub mod lookup;
+pub mod index;
 // pub mod merge_tree;
 
 pub use collection_trace::lookup::Lookup;

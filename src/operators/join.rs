@@ -34,7 +34,7 @@ where G::Timestamp: LeastUpperBound {
     >
         (&self, other: &Stream<G, (D2, i32)>, kv1: F1, kv2: F2, result: RF) -> Stream<G, (R, i32)> {
         self.map(move |(x,w)| (kv1(x),w))
-            .join_inner(&other.map(move |(x,w)| (kv2(x),w)),
+            .join_raw(&other.map(move |(x,w)| (kv2(x),w)),
                         |x|x,
                         |x|x,
                         |&(k,_)| k.as_u64(),
@@ -62,9 +62,9 @@ where G::Timestamp: LeastUpperBound {
         part1: H1, part2: H2,
         key_h: KH, result: RF)
     -> Stream<G, (R, i32)> {
-        self.join_inner(other, kv1, kv2, part1, part2, key_h, result, &|_| HashMap::new())
+        self.join_raw(other, kv1, kv2, part1, part2, key_h, result, &|_| HashMap::new())
     }
-    fn join_inner<
+    fn join_raw<
         K:  Ord+Clone+Debug+'static,
         V1: Ord+Clone+Debug+'static,
         V2: Ord+Clone+Debug+'static,

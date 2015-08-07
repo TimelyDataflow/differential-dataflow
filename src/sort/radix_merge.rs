@@ -1,4 +1,4 @@
-use std::rc::Rc;
+// use std::rc::Rc;
 
 use itertools::Itertools;
 use sort::coalesce;
@@ -45,12 +45,12 @@ impl<K, V> Columns<K, V> {
             wgts: Vec::with_capacity(w),
         }
     }
-    pub fn size(&self) -> usize {
-        self.keys.len() * ::std::mem::size_of::<K>() +
-        self.cnts.len() * 4 +
-        self.vals.len() * ::std::mem::size_of::<V>() +
-        self.wgts.len() * 8
-    }
+    // pub fn size(&self) -> usize {
+    //     self.keys.len() * ::std::mem::size_of::<K>() +
+    //     self.cnts.len() * 4 +
+    //     self.vals.len() * ::std::mem::size_of::<V>() +
+    //     self.wgts.len() * 8
+    // }
 }
 
 pub struct Merge<K, V> {
