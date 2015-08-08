@@ -1,4 +1,4 @@
-#![feature(test)]
+// #![feature(test)]
 
 extern crate rand;
 extern crate time;
