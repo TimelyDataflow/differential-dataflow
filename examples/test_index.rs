@@ -74,7 +74,7 @@ fn test_index(log_size: usize) {
 
         }
 
-        println!("\t2e{}:\t{:2.3}x\t{} ns", query, index_tally as f64 / hash_tally as f64, (index_tally as i64 - hash_tally as i64) / 10);
+        println!("\t2e{}:\t{}\t{:2.3}x\t{} ns", query, index_tally as f64 / 10.0, index_tally as f64 / hash_tally as f64, (index_tally as i64 - hash_tally as i64) / 10);
     }
 }
 
