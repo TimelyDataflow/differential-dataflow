@@ -2,7 +2,7 @@
 
 extern crate rand;
 extern crate time;
-extern crate test;
+// extern crate test;
 extern crate getopts;
 extern crate timely;
 extern crate graph_map;
