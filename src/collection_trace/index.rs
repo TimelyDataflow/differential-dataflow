@@ -1,8 +1,8 @@
-use std::cmp::Ordering;
-use std::mem;
+// use std::cmp::Ordering;
+// use std::mem;
 use std::fmt::Debug;
 
-use timely::drain::DrainExt;
+// use timely::drain::DrainExt;
 
 use iterators::merge::Merge;
 
@@ -30,7 +30,9 @@ pub trait Index {
 }
 
 pub struct OrdIndex<K, V> {
-    kvs: Vec<Vec<(K,V)>>,      // geometrically sized ordered key-value lists.
+    // kvs: Vec<Vec<(K,V)>>,      // geometrically sized ordered key-value lists.
+    keys: Vec<Vec<K>>,
+    vals: Vec<Vec<V>>,
 }
 
 
@@ -41,16 +43,16 @@ impl<K: Ord+Clone+Debug, V: Ord+Default+Debug> Index for OrdIndex<K, V> {
     #[inline(never)]
     fn find_each<F: FnMut(&K, &mut V)>(&mut self, keys: &mut Vec<K>, mut logic: F) {
 
-        for kvs in &mut self.kvs {
+        for (ks, vs) in self.keys.iter_mut().zip(self.vals.iter_mut()) {
             // compare keys.len() and kvs.len()
-            if keys.len() < kvs.len() / 4 {
-                OrdIndex::gallop_self(keys, kvs, &mut logic);
+            if keys.len() < ks.len() / 4 {
+                OrdIndex::gallop_self(keys, ks, vs, &mut logic);
             }
-            else if kvs.len() < keys.len() / 4 {
-                OrdIndex::gallop_other(keys, kvs, &mut logic);
+            else if ks.len() < keys.len() / 4 {
+                OrdIndex::gallop_other(keys, ks, vs, &mut logic);
             }
             else {
-                OrdIndex::scan(keys, kvs, &mut logic);
+                OrdIndex::scan(keys, ks, vs, &mut logic);
             }
         }
     }
@@ -59,16 +61,16 @@ impl<K: Ord+Clone+Debug, V: Ord+Default+Debug> Index for OrdIndex<K, V> {
     #[inline(never)]
     fn for_each<F: FnMut(&K, &mut V)>(&mut self, keys: &mut Vec<K>, mut logic: F) {
 
-        for kvs in &mut self.kvs {
+        for (ks, vs) in self.keys.iter_mut().zip(self.vals.iter_mut()) {
             // compare keys.len() and kvs.len()
-            if keys.len() < kvs.len() / 4 {
-                OrdIndex::gallop_self(keys, kvs, &mut logic);
+            if keys.len() < ks.len() / 4 {
+                OrdIndex::gallop_self(keys, ks, vs, &mut logic);
             }
-            else if kvs.len() < keys.len() / 4 {
-                OrdIndex::gallop_other(keys, kvs, &mut logic);
+            else if ks.len() < keys.len() / 4 {
+                OrdIndex::gallop_other(keys, ks, vs, &mut logic);
             }
             else {
-                OrdIndex::scan(keys, kvs, &mut logic);
+                OrdIndex::scan(keys, ks, vs, &mut logic);
             }
         }
 
@@ -76,27 +78,36 @@ impl<K: Ord+Clone+Debug, V: Ord+Default+Debug> Index for OrdIndex<K, V> {
             let mut size = keys.len();
 
             let mut new = Vec::with_capacity(size);
-            for key in keys.drain_temp() {
+            for key in keys.iter() {
                 let mut value = Default::default();
                 logic(&key, &mut value);
-                new.push((key, value));
+                new.push(value);
             }
 
-            let mut temp = vec![new];
-            let mut len = self.kvs.len();
-            while len > 0 && self.kvs[len - 1].len() / 2 < size {
-                size += self.kvs[len - 1].len();
-                temp.push(self.kvs.pop().unwrap());
+            let keys = ::std::mem::replace(keys, Vec::new());
+
+            let mut temp = vec![(keys, new)];
+            let mut len = self.keys.len();
+            while len > 0 && self.keys[len - 1].len() / 2 < size {
+                size += self.keys[len - 1].len();
+                temp.push((self.keys.pop().unwrap(), self.vals.pop().unwrap()));
                 len -= 1;
             }
 
             if temp.len() > 1 {
-                let mut result = Vec::with_capacity(size);
-                result.extend(temp.into_iter().map(|x| x.into_iter()).merge());
-                self.kvs.push(result);
+                let mut keys_result = Vec::with_capacity(size);
+                let mut vals_result = Vec::with_capacity(size);
+                for (key, val) in temp.into_iter().map(|(x,y)| x.into_iter().zip(y.into_iter())).merge() {
+                    keys_result.push(key);
+                    vals_result.push(val);
+                }
+                self.keys.push(keys_result);
+                self.vals.push(vals_result);
             }
             else {
-                self.kvs.push(temp.pop().unwrap());
+                let (k, v) = temp.pop().unwrap();
+                self.keys.push(k);
+                self.vals.push(v);
             }
         }
     }
@@ -107,24 +118,25 @@ impl<K: Ord+Clone+Debug, V: Ord+Default+Debug> Index for OrdIndex<K, V> {
 impl<K: Ord, V> OrdIndex<K, V> {
     pub fn new() -> Self {
         OrdIndex {
-            kvs: Vec::new(),
+            keys: Vec::new(),
+            vals: Vec::new(),
         }
     }
     #[inline(never)]
-    fn search_self<F>(keys: &mut Vec<K>, kvs: &mut Vec<(K,V)>, logic: &mut F) where F: FnMut(&K, &mut V) {
+    fn _search_self<F>(keys: &mut Vec<K>, ks: &mut Vec<K>, vs: &mut Vec<V>, logic: &mut F) where F: FnMut(&K, &mut V) {
         keys.retain(|value| {
-            let mut hi = kvs.len();
+            let mut hi = ks.len();
             let mut lo = 0;
             while (hi + lo) / 2 > lo {
-                if value < &kvs[(hi + lo)/2].0 {
+                if value < &ks[(hi + lo)/2] {
                     hi = (hi + lo) / 2;
                 }
                 else {
                     lo = (hi + lo) / 2;
                 }
             }
-            if value == &kvs[lo].0 {
-                logic(value, &mut kvs[lo].1);
+            if value == &ks[lo] {
+                logic(value, &mut vs[lo]);
                 false
                 // true
             }
@@ -132,30 +144,33 @@ impl<K: Ord, V> OrdIndex<K, V> {
         });
     }
     #[inline(never)]
-    fn gallop_self<F>(keys: &mut Vec<K>, kvs: &mut Vec<(K,V)>, logic: &mut F) where F: FnMut(&K, &mut V) {
+    fn gallop_self<F>(keys: &mut Vec<K>, ks: &mut Vec<K>, vs: &mut Vec<V>, logic: &mut F) where F: FnMut(&K, &mut V) {
         // gallop across self.kvs
         let mut cursor = 0;
 
+        let mut step = 1;
+
         keys.retain(|value| {
-            if cursor < kvs.len() && &kvs[cursor].0 < value {
-                let mut step = 1;
-                while cursor + step < kvs.len() && &kvs[cursor + step].0 < value {
+            if cursor < ks.len() && &ks[cursor] < value {
+                if step == 0 { step = 1; }
+                while cursor + step < ks.len() && &ks[cursor + step] < value {
                     cursor += step;
                     step = step << 1;
                 }
 
                 step = step >> 1;
-                while step > 0 {
-                    if cursor + step < kvs.len() && &kvs[cursor + step].0 < value {
-                        cursor += step;
+                let mut down_step = step;
+                while down_step > 0 {
+                    if cursor + down_step < ks.len() && &ks[cursor + down_step] < value {
+                        cursor += down_step;
                     }
-                    step = step >> 1;
+                    down_step = down_step >> 1;
                 }
 
                 cursor += 1;
             }
-            if cursor < kvs.len() && &kvs[cursor].0 == value {
-                logic(value, &mut kvs[cursor].1);
+            if cursor < ks.len() && &ks[cursor] == value {
+                logic(value, &mut vs[cursor]);
                 false
                 // true
             }
@@ -163,12 +178,12 @@ impl<K: Ord, V> OrdIndex<K, V> {
         });
     }
     #[inline(never)]
-    fn gallop_other<F>(keys: &mut Vec<K>, kvs: &mut Vec<(K,V)>, logic: &mut F) where F: FnMut(&K, &mut V) {
+    fn gallop_other<F>(keys: &mut Vec<K>, ks: &mut Vec<K>, vs: &mut Vec<V>, logic: &mut F) where F: FnMut(&K, &mut V) {
         // gallop across keys. not sure how to do.
         // i guess filtering isn't mandatory, since no duplicates.
 
         let mut cursor = 0;
-        for &mut (ref k, ref mut v) in kvs {
+        for (k, ref mut v) in ks.iter().zip(vs.iter_mut()) {
             if cursor < keys.len() && &keys[cursor] < k {
                 let mut step = 1;
                 while cursor + step < keys.len() && &keys[cursor + step] < k {
@@ -192,14 +207,14 @@ impl<K: Ord, V> OrdIndex<K, V> {
         }
     }
     #[inline(never)]
-    fn scan<F>(keys: &mut Vec<K>, kvs: &mut Vec<(K,V)>, logic: &mut F) where F: FnMut(&K, &mut V) {
+    fn scan<F>(keys: &mut Vec<K>, ks: &mut Vec<K>, vs: &mut Vec<V>, logic: &mut F) where F: FnMut(&K, &mut V) {
 
         // move linearly; run logic on hits, retain on misses.
         let mut cursor = 0;
         keys.retain(|value| {
-            while cursor < kvs.len() && &kvs[cursor].0 < value { cursor += 1; }
-            if cursor < kvs.len() && &kvs[cursor].0 == value {
-                logic(value, &mut kvs[cursor].1);
+            while cursor < ks.len() && &ks[cursor] < value { cursor += 1; }
+            if cursor < ks.len() && &ks[cursor] == value {
+                logic(value, &mut vs[cursor]);
                 false
                 // true
             }

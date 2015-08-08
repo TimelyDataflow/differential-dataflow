@@ -53,10 +53,7 @@ impl<G: Scope, D: Ord+Default+Clone+Data+Debug+Hash> Variable<G, D> where G::Tim
 impl<G: Scope, D: Ord+Default+Debug+Hash+Clone+Data> Drop for Variable<G, D> where G::Timestamp: LeastUpperBound {
     fn drop(&mut self) {
         if let Some(feedback) = self.feedback.take() {
-            self.current.group_by(|x| (x, ()),
-                            |x| { let mut h = SipHasher::new(); x.hash(&mut h); h.finish() },
-                            |x| { let mut h = SipHasher::new(); x.hash(&mut h); h.finish() },
-                            |x,_| x.clone(), |x,_,t| t.push((x.clone(),1)))
+            self.current.group_by(|x| (x, ()), hash, hash, |x,_| x.clone(), |x,_,t| t.push((x.clone(),1)))
                         .connect_loop(feedback);
         }
     }
@@ -91,11 +88,7 @@ fn main() {
 
                 // P(x,z) := P(y,w), Q(x,r,y), U(w,r,z)
                 let ir3 = p.join_u(&q, |(y,w)| (y,w), |(x,r,y)| (y,(x,r)), |&y, &w, &(x,r)| (r,w,x,y))
-                           .join(&u, |(r,w,x,y)| ((r,w), (y,x)), |(w,r,z)| ((r,w),z),
-                                    |&(r,w,_,_)| hash(&(r,w)),
-                                    |&(w,r,_)| hash(&(r,w)),
-                                    |&(r,w)| hash(&(r,w)),
-                                    |&(r,w), &(y,x), &z| (r,w,x,y,z));
+                           .join(&u, |(r,w,x,y)| ((r,w), (y,x)), |(w,r,z)| ((r,w),z), hash, |&(r,w), &(y,x), &z| (r,w,x,y,z));
                 p_rules.add(&ir3.map(|((_,_,x,_,z),w)| ((x,z),w)));
 
                 // extract the results and return
@@ -114,9 +107,9 @@ fn main() {
                 let (mut q_rules, q_query) = Variable::from(&inner.enter(&q_query));
 
                 // semi-join each ir using the tuple it would produce, against the tuples we want explained.
-                let ir1_need = p_query.join(&inner.enter(&ir1), |p| (p,()), |(x,y,z)| ((x,z), y), hash, |&(x,_,z)| hash(&(x,z)), hash, |&(x,z),_,&y| (x,y,z));
-                let ir2_need = q_query.join(&inner.enter(&ir2), |q| (q,()), |(r,x,y,z)| ((x,r,z), y), hash, |&(r,x,_,z)| hash(&(x,r,z)), hash, |&(x,r,z),_,&y| (r,x,y,z));
-                let ir3_need = p_query.join(&inner.enter(&ir3), |p| (p,()), |(r,w,x,y,z)| ((x,z), (r,w,y)), hash, |&(_,_,x,_,z)| hash(&(x,z)), hash, |&(x,z),_,&(r,w,y)| (r,w,x,y,z));
+                let ir1_need = inner.enter(&ir1).semijoin(&p_query, |(x,y,z)| ((x,z), y), hash, |&(x,z),&y| (x,y,z));
+                let ir2_need = inner.enter(&ir2).semijoin(&q_query, |(r,x,y,z)| ((x,r,z), y), hash, |&(x,r,z),&y| (r,x,y,z));
+                let ir3_need = inner.enter(&ir3).semijoin(&p_query, |(r,w,x,y,z)| ((x,z), (r,w,y)), hash, |&(x,z),&(r,w,y)| (r,w,x,y,z));
 
                 // need p from: 2x ir1, 1x ir2, 1x ir3.
                 p_rules.add(&ir1_need.map(|((x,y,_),w2)| ((x,y),w2)));

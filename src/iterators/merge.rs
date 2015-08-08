@@ -38,6 +38,7 @@ impl<I: Iterator> MergeIterator<I> where I::Item: Ord {
         }
     }
 
+    #[inline]
     fn sift_down(&mut self, mut index: usize) {
         let mut child = 2 * index + 1;
         while child < self.heap.len() {
@@ -64,6 +65,7 @@ impl<I: Iterator> MergeIterator<I> where I::Item: Ord {
 // be larger. therefore, we only ever need to do sift_down from the root.
 impl<I: Iterator> Iterator for MergeIterator<I> where I::Item: Ord {
     type Item = I::Item;
+    #[inline]
     fn next(&mut self) -> Option<I::Item> {
         if self.heap.len() > 0 {
             let result = if let Some(mut next) = self.heap[0].1.next() {

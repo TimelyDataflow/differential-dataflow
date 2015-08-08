@@ -2,6 +2,7 @@ use std::fmt::Debug;
 use std::default::Default;
 use std::hash::Hash;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use timely::Data;
 use timely::dataflow::*;
@@ -16,11 +17,11 @@ use sort::*;
 
 use timely::drain::DrainExt;
 
-impl<G: Scope, D1: Data+Eq, S> JoinExt<G, D1> for S
+impl<G: Scope, D1: Data+Ord, S> JoinExt<G, D1> for S
 where G::Timestamp: LeastUpperBound,
       S: Binary<G, (D1, i32)>+Map<G, (D1, i32)> { }
 
-pub trait JoinExt<G: Scope, D1: Data+Eq> : Binary<G, (D1, i32)>+Map<G, (D1, i32)>
+pub trait JoinExt<G: Scope, D1: Data+Ord> : Binary<G, (D1, i32)>+Map<G, (D1, i32)>
 where G::Timestamp: LeastUpperBound {
     fn join_u<
         U:  UnsignedInt+Debug,
@@ -43,26 +44,55 @@ where G::Timestamp: LeastUpperBound {
                         result,
                         &|x| (Vec::new(), x))
     }
+    fn semijoin_u<
+        U:  UnsignedInt+Debug,
+        V1: Data+Ord+Clone+Default+Debug+'static,
+        F1: Fn(D1)->(U,V1)+'static,
+        RF: Fn(&U,&V1)->D1+'static,
+    >
+        (&self, other: &Stream<G, (U, i32)>, kv1: F1, result: RF) -> Stream<G, (D1, i32)> {
+
+        self.join_u(&other, kv1, |u| (u, ()), move |x,y,_| result(x,y))
+    }
 
     fn join<
-        K:  Ord+Clone+Hash+Debug+'static,
-        V1: Ord+Clone+Debug+'static,
-        V2: Ord+Clone+Debug+'static,
-        D2: Data+Eq,
+        K:  Data+Ord+Clone+Hash+Debug+'static,
+        V1: Data+Ord+Clone+Debug+'static,
+        V2: Data+Ord+Clone+Debug+'static,
+        D2: Data,
         F1: Fn(D1)->(K,V1)+'static,
         F2: Fn(D2)->(K,V2)+'static,
-        H1: Fn(&D1)->u64+'static,
-        H2: Fn(&D2)->u64+'static,
+        // H1: Fn(&D1)->u64+'static,
+        // H2: Fn(&D2)->u64+'static,
         KH: Fn(&K)->u64+'static,
         R:  Ord+Data,
         RF: Fn(&K,&V1,&V2)->R+'static,
     >
         (&self, other: &Stream<G, (D2, i32)>,
         kv1: F1, kv2: F2,
-        part1: H1, part2: H2,
+        // part1: H1, part2: H2,
         key_h: KH, result: RF)
     -> Stream<G, (R, i32)> {
-        self.join_raw(other, kv1, kv2, part1, part2, key_h, result, &|_| HashMap::new())
+
+        let kh1 = Rc::new(key_h);
+        let kh2 = kh1.clone();
+        let kh3 = kh1.clone();
+
+        self.map(move |(x,w)| (kv1(x),w))
+            .join_raw(&other.map(move |(x,w)| (kv2(x),w)), |x| x, |x| x, move |&(ref k,_)| kh1(k), move |&(ref k,_)| kh2(k), move |k| kh3(k), result, &|_| HashMap::new())
+    }
+    fn semijoin<
+        K:  Data+Ord+Clone+Hash+Debug+'static,
+        V1: Data+Ord+Clone+Debug+'static,
+        F1: Fn(D1)->(K,V1)+'static,
+        KH: Fn(&K)->u64+'static,
+        RF: Fn(&K,&V1)->D1+'static,
+    >
+        (&self, other: &Stream<G, (K, i32)>,
+        kv1: F1,
+        key_h: KH, result: RF)
+    -> Stream<G, (D1, i32)> {
+        self.join(&other, kv1, |k| (k,()), key_h, move |x,y,_| result(x,y))
     }
     fn join_raw<
         K:  Ord+Clone+Debug+'static,
