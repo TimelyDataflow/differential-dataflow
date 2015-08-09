@@ -5,8 +5,6 @@ extern crate timely;
 extern crate graph_map;
 extern crate differential_dataflow;
 
-use std::rc::Rc;
-
 use differential_dataflow::sort::radix_merge::{Merge};
 
 use graph_map::GraphMMap;

@@ -1,3 +1,5 @@
+#[allow(unused_variables)]
+
 extern crate rand;
 extern crate time;
 extern crate timely;
@@ -59,6 +61,34 @@ impl<G: Scope, D: Ord+Default+Debug+Hash+Clone+Data> Drop for Variable<G, D> whe
     }
 }
 
+macro_rules! rule {
+    ($name1: ident ($($var1:ident),*) := $name2: ident ($($var2:ident),*) $name3: ident ($($var3:ident),*) : ($($var4:ident),*) = ($($var5:ident),*)) => {{
+        let result =
+            $name2.0.join(
+                &$name3.0,
+                |($( $var2, )*)| (($( $var4, )*), ( $($var2, )*)),
+                |($( $var3, )*)| (($( $var5, )*), ( $($var3, )*)),
+                hash,
+                |_, &($( $var2, )*), &($( $var3, )*)| (($( $var2, )*), ($( $var3, )*)));
+        $name1.1.add(&result.map(|((($( $var2, )*), ($( $var3, )*)), www)| (($( $var1, )*), www)));
+
+        let temp = result.semijoin(&$name1.2, |(($( $var2, )*), ($( $var3, )*))| (($( $var1, )*), (($( $var2, )*), ($( $var3, )*))), hash, |_, &(($( $var2, )*), ($( $var3, )*))| (($( $var2, )*), ($( $var3, )*)));
+        $name2.3.add(&temp.map(|(( ($( $var2, )*) ,_),www)| (($( $var2, )*),www)));
+        $name3.3.add(&temp.map(|(( _, ($( $var3, )*)),www)| (($( $var3, )*),www)));
+
+        temp
+    }};
+}
+
+macro_rules! variable {
+    ($name0: ident : $name1: ident, $name2: ident) => {{
+        let temp1 = Variable::from(&$name0.enter(&$name1));
+        let temp2 = Variable::from(&$name0.enter(&$name2));
+        (temp1.1, temp1.0, temp2.1, temp2.0)
+    }}
+}
+
+
 fn main() {
 
     timely::execute_from_args(std::env::args(), |root| {
@@ -71,57 +101,31 @@ fn main() {
             let (q_input, q) = outer.new_input();
             let (u_input, u) = outer.new_input();
 
-            // determine which rules fire with what variable settings.
-            let (ir1, ir2, ir3) = outer.scoped::<u64, _, _>(|inner| {
-
-                let u = inner.enter(&u);
-                let (mut p_rules, p) = Variable::from(&inner.enter(&p));
-                let (mut q_rules, q) = Variable::from(&inner.enter(&q));
-
-                // P(x,z) := P(x,y), P(y,z)
-                let ir1 = p.join_u(&p, |(x,y)| (y,x), |(y,z)| (y,z), |&y, &x, &z| (x,y,z));
-                p_rules.add(&ir1.map(|((x,_,z),w)| ((x,z),w)));
-
-                // Q(x,r,z) := P(x,y), Q(y,r,z)
-                let ir2 = p.join_u(&q, |(x,y)| (y,x), |(y,r,z)| (y,(r,z)), |&y, &x, &(r,z)| (r,x,y,z));
-                q_rules.add(&ir2.map(|((r,x,_,z),w)| ((x,r,z),w)));
-
-                // P(x,z) := P(y,w), Q(x,r,y), U(w,r,z)
-                let ir3 = p.join_u(&q, |(y,w)| (y,w), |(x,r,y)| (y,(x,r)), |&y, &w, &(x,r)| (r,w,x,y))
-                           .join(&u, |(r,w,x,y)| ((r,w), (y,x)), |(w,r,z)| ((r,w),z), hash, |&(r,w), &(y,x), &z| (r,w,x,y,z));
-                p_rules.add(&ir3.map(|((_,_,x,_,z),w)| ((x,z),w)));
-
-                // extract the results and return
-                (ir1.leave(), ir2.leave(), ir3.leave())
-            });
-
             // inputs through which to demand explanations.
             let (p_query_input, p_query) = outer.new_input();
             let (q_query_input, q_query) = outer.new_input();
 
-            // now we determine which p and q need explaining, and which rules produce each of them
-            let (p_base, q_base, ir1_need, ir2_need, ir3_need) = outer.scoped::<u64, _, _>(|inner| {
+            // determine which rules fire with what variable settings.
+            let (p_base, q_base, ir1, ir2, ir3) = outer.scoped::<u64, _, _>(|inner| {
 
-                // the p and q tuples we want explained.
-                let (mut p_rules, p_query) = Variable::from(&inner.enter(&p_query));
-                let (mut q_rules, q_query) = Variable::from(&inner.enter(&q_query));
+                let (_unused, u) = Variable::from(&inner.enter(&u));
 
-                // semi-join each ir using the tuple it would produce, against the tuples we want explained.
-                let ir1_need = inner.enter(&ir1).semijoin(&p_query, |(x,y,z)| ((x,z), y), hash, |&(x,z),&y| (x,y,z));
-                let ir2_need = inner.enter(&ir2).semijoin(&q_query, |(r,x,y,z)| ((x,r,z), y), hash, |&(x,r,z),&y| (r,x,y,z));
-                let ir3_need = inner.enter(&ir3).semijoin(&p_query, |(r,w,x,y,z)| ((x,z), (r,w,y)), hash, |&(x,z),&(r,w,y)| (r,w,x,y,z));
+                let mut p = variable!(inner : p, p_query);
+                let mut q = variable!(inner : q, q_query);
 
-                // need p from: 2x ir1, 1x ir2, 1x ir3.
-                p_rules.add(&ir1_need.map(|((x,y,_),w2)| ((x,y),w2)));
-                p_rules.add(&ir1_need.map(|((_,y,z),w2)| ((y,z),w2)));
-                p_rules.add(&ir2_need.map(|((_,x,y,_),w2)| ((x,y),w2)));
-                p_rules.add(&ir3_need.map(|((_,w,_,y,_),w2)| ((y,w),w2)));
+                let ir1 = rule!(p(x,z)   := p(x,_y1) p(_y2,z)   : (_y1) = (_y2));
+                let ir2 = rule!(q(x,r,z) := p(x,_y1) q(_y2,r,z) : (_y1) = (_y2));
 
-                // need q from: 1x ir2, 1x ir3.
-                q_rules.add(&ir2_need.map(|((r,_,y,z),w2)| ((y,r,z),w2)));
-                q_rules.add(&ir3_need.map(|((r,_,x,y,_),w2)| ((x,r,y),w2)));
+                // P(x,z) := P(y,w), Q(x,r,y), U(w,r,z)
+                let ir3 = p.0.join_u(&q.0, |(y,w)| (y,w), |(x,r,y)| (y,(x,r)), |&y, &w, &(x,r)| (r,w,x,y))
+                           .join(&u, |(r,w,x,y)| ((r,w), (y,x)), |(w,r,z)| ((r,w),z), hash, |&(r,w), &(y,x), &z| (r,w,x,y,z));
+                p.1.add(&ir3.map(|((_,_,x,_,z),w)| ((x,z),w)));
+                let ir3_need = ir3.semijoin(&p.2, |(r,w,x,y,z)| ((x,z), (r,w,y)), hash, |&(x,z),&(r,w,y)| (r,w,x,y,z));
+                p.3.add(&ir3_need.map(|((_,w,_,y,_),w2)| ((y,w),w2)));
+                q.3.add(&ir3_need.map(|((r,_,x,y,_),w2)| ((x,r,y),w2)));
 
-                (p_query.leave(), q_query.leave(), ir1_need.leave(), ir2_need.leave(), ir3_need.leave())
+                // extract the results and return
+                (p.2.leave(), q.2.leave(), ir1.leave(), ir2.leave(), ir3.leave())
             });
 
             let (probe, _) = p_base.consolidate(hash).probe();
@@ -129,9 +133,9 @@ fn main() {
             p_base.consolidate(hash).inspect(|&(x,_w)| println!("Required P{:?}", x));
             q_base.consolidate(hash).inspect(|&(x,_w)| println!("Required Q{:?}", x));
 
-            ir1_need.consolidate(hash).inspect(|&(x,_w)| println!("Required IR1 {:?}", x));
-            ir2_need.consolidate(hash).inspect(|&(x,_w)| println!("Required IR2 {:?}", x));
-            ir3_need.consolidate(hash).inspect(|&(x,_w)| println!("Required IR3 {:?}", x));
+            ir1.consolidate(hash).inspect(|&(x,_w)| println!("Required IR1 {:?}", x));
+            ir2.consolidate(hash).inspect(|&(x,_w)| println!("Required IR2 {:?}", x));
+            ir3.consolidate(hash).inspect(|&(x,_w)| println!("Required IR3 {:?}", x));
 
             (p_input, q_input, u_input, p_query_input, q_query_input, probe)
         });

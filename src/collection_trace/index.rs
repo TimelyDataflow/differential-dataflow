@@ -45,7 +45,7 @@ impl<K: Ord+Clone+Debug, V: Ord+Default+Debug> Index for OrdIndex<K, V> {
 
         for (ks, vs) in self.keys.iter_mut().zip(self.vals.iter_mut()) {
             // compare keys.len() and kvs.len()
-            if keys.len() < ks.len() / 4 {
+            if keys.len() < ks.len() / 8 {
                 OrdIndex::gallop_self(keys, ks, vs, &mut logic);
             }
             else if ks.len() < keys.len() / 4 {
@@ -111,8 +111,6 @@ impl<K: Ord+Clone+Debug, V: Ord+Default+Debug> Index for OrdIndex<K, V> {
             }
         }
     }
-
-
 }
 
 impl<K: Ord, V> OrdIndex<K, V> {
@@ -152,7 +150,7 @@ impl<K: Ord, V> OrdIndex<K, V> {
 
         keys.retain(|value| {
             if cursor < ks.len() && &ks[cursor] < value {
-                if step == 0 { step = 1; }
+                if step < 1 { step = 1; }
                 while cursor + step < ks.len() && &ks[cursor + step] < value {
                     cursor += step;
                     step = step << 1;
@@ -160,6 +158,7 @@ impl<K: Ord, V> OrdIndex<K, V> {
 
                 step = step >> 1;
                 let mut down_step = step;
+
                 while down_step > 0 {
                     if cursor + down_step < ks.len() && &ks[cursor + down_step] < value {
                         cursor += down_step;

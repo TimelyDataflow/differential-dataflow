@@ -44,7 +44,7 @@ fn main() {
 
         let seed: &[_] = &[1, 2, 3, 4];
         let mut rng1: StdRng = SeedableRng::from_seed(seed);    // rng for edge additions
-        let mut rng2: StdRng = SeedableRng::from_seed(seed);    // rng for edge deletions
+        let mut _rng2: StdRng = SeedableRng::from_seed(seed);    // rng for edge deletions
 
         println!("performing BFS on {} nodes, {} edges:", nodes, edges);
 

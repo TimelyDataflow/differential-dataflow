@@ -1,4 +1,17 @@
 language: rust
-sudo: false
+sudo: required
+rust:
+- stable
+before_script:
+- pip install 'travis-cargo<0.2' --user && export PATH=$HOME/.local/bin:$PATH
 script:
-  - cargo test
+- |
+  travis-cargo build &&
+  travis-cargo test &&
+  travis-cargo bench &&
+  travis-cargo doc
+after_success:
+- travis-cargo --only stable doc-upload
+env:
+  global:
+    secure: d8tbB97FfXlLwGfzal2h/J2H7GdeR0dHBznqPfb/VxNPHevLJPtkD1Tnsqcs0/9w4piqmbKDzVWPAUXCA5Pg1e3f3pBqmgi12SYvzcFIHI1LLLbjF144S9vNNXhXc0IQE0bnaadX24A1JgRmmJJRt28qZnPxcCNdSJfrqV95h9Q=

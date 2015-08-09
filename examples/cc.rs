@@ -26,16 +26,11 @@ fn main() {
 
         let start = time::precise_time_s();
         let mut input = computation.scoped::<u64,_,_>(|scope| {
-            let (input, mut edges) = scope.new_input();
-            edges = connected_components(&edges);
-            // edges.inspect_batch(move |t, x| {
-            //     println!("{}s:\tepoch {:?}: {:?} changes", time::precise_time_s() - start, t, x.len())
-            // });
-
+            let (input, edges) = scope.new_input();
+            connected_components(&edges);
             input
         });
 
-        // let graph = GraphMMap::new("/Users/mcsherry/Projects/Datasets/twitter-dedup");
         let graph = GraphMMap::new(&filename);
 
         {

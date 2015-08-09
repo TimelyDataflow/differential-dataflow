@@ -20,11 +20,13 @@ git="https://github.com/frankmcsherry/timely-dataflow.git"
 [dependencies.graph-map]
 git="https://github.com/frankmcsherry/graph-map.git"
 
-[dependencies]
+[dev-dependencies]
+getopts="*"
 rand="*"
 time = "*"
 byteorder="*"
-getopts="*"
+
+[dependencies]
 itertools="*"
 # timely="*"
 
