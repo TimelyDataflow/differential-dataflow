@@ -1,4 +1,4 @@
-#![feature(hashmap_hasher)]
+// #![feature(hashmap_hasher)]
 
 extern crate rand;
 extern crate time;
@@ -7,8 +7,8 @@ extern crate timely;
 extern crate graph_map;
 extern crate differential_dataflow;
 
-use std::collections::HashMap;
-use std::collections::hash_state::DefaultState;
+// use std::collections::HashMap;
+// use std::collections::hash_state::DefaultState;
 use std::hash::{Hash, SipHasher, Hasher};
 
 fn hash_me<T: Hash>(x: &T) -> u64 {
@@ -29,20 +29,20 @@ fn main() {
 
 fn test_index(log_size: usize) {
 
-    let default_state: DefaultState<SipHasher> = Default::default();
-    let mut hash = HashMap::with_capacity_and_hash_state(1 << log_size, default_state);
+    // let default_state: DefaultState<SipHasher> = Default::default();
+    // let mut hash = HashMap::with_capacity_and_hash_state(1 << log_size, default_state);
     let mut hash_index = HashIndex::<(u64, (u64, u64)), (u64, u64), _>::new(|x| x.0);
     let mut hash_index2 = HashIndex::<(u64, u64), (u64, u64), _>::new(|x| x.0 ^ x.1);
 
     let seed: &[_] = &[1, 2, 3, 4];
     let mut rng: StdRng = SeedableRng::from_seed(seed);
 
-    let start = time::precise_time_ns();
-    for i in 0u64..(1 << log_size) {
-        hash.insert((i,i),(i,i));
-    }
-
-    println!("loaded hash_map 2^{}:\t{:.2e} ns; capacity: {}", log_size, (time::precise_time_ns() - start) as f64, hash.capacity());
+    // let start = time::precise_time_ns();
+    // for i in 0u64..(1 << log_size) {
+    //     hash.insert((i,i),(i,i));
+    // }
+    //
+    // println!("loaded hash_map 2^{}:\t{:.2e} ns; capacity: {}", log_size, (time::precise_time_ns() - start) as f64, hash.capacity());
 
     let start = time::precise_time_ns();
     for _ in 0u64..(1 << log_size) {
@@ -62,7 +62,7 @@ fn test_index(log_size: usize) {
 
     for query in 0..log_size {
 
-        let mut hash1_tally = 0;
+        // let mut hash1_tally = 0;
         let mut hash2_tally = 0;
         let mut hash3_tally = 0;
 
@@ -74,12 +74,12 @@ fn test_index(log_size: usize) {
                 vec.push((hash_me(&key), key));
             }
 
-            // vec.sort_by(|x,y| (x.0 & ((1 << (log_size + 1)) - 1)).cmp(&(y.0 & ((1 << (log_size + 1)) - 1))));
-            let start = time::precise_time_ns();
-            for i in vec.iter() {
-                assert!(hash.get(&i.1).is_none());
-            }
-            hash1_tally += time::precise_time_ns() - start;
+            // // vec.sort_by(|x,y| (x.0 & ((1 << (log_size + 1)) - 1)).cmp(&(y.0 & ((1 << (log_size + 1)) - 1))));
+            // let start = time::precise_time_ns();
+            // for i in vec.iter() {
+            //     assert!(hash.get(&i.1).is_none());
+            // }
+            // hash1_tally += time::precise_time_ns() - start;
 
 
             // vec.sort_by(|x,y| ((x.1).0 ^ (x.1).1).cmp(&((y.1).0 ^ (y.1).1)));
@@ -97,7 +97,7 @@ fn test_index(log_size: usize) {
             vec.clear();
         }
 
-        println!("\t2^{}:\t{}\t{}\t{}", query, (hash1_tally / 10) >> query, (hash2_tally / 10) >> query, (hash3_tally / 10) >> query);
+        println!("\t2^{}:\t{}\t{}\t{}", query, "STABILITY BOO", (hash2_tally / 10) >> query, (hash3_tally / 10) >> query);
 
     }
 }
