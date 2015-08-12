@@ -1,3 +1,5 @@
+#![feature(hashmap_hasher)]
+
 extern crate rand;
 extern crate time;
 extern crate getopts;
@@ -6,74 +8,96 @@ extern crate graph_map;
 extern crate differential_dataflow;
 
 use std::collections::HashMap;
+use std::collections::hash_state::DefaultState;
+use std::hash::{Hash, SipHasher, Hasher};
+
+fn hash_me<T: Hash>(x: &T) -> u64 {
+    let mut h = SipHasher::new();
+    x.hash(&mut h);
+    h.finish()
+}
 
 use rand::{Rng, SeedableRng, StdRng};
 
-use differential_dataflow::collection_trace::index::{Index, OrdIndex};
+use differential_dataflow::collection_trace::hash_index::HashIndex;
 
 fn main() {
-    for i in 25..28 {
+    for i in 25..26 {
         test_index(i);
     }
 }
 
 fn test_index(log_size: usize) {
 
-    let mut index = OrdIndex::new();
-    let mut hash = HashMap::new();
+    let default_state: DefaultState<SipHasher> = Default::default();
+    let mut hash = HashMap::with_capacity_and_hash_state(1 << log_size, default_state);
+    let mut hash_index = HashIndex::<(u64, (u64, u64)), (u64, u64), _>::new(|x| x.0);
+    let mut hash_index2 = HashIndex::<(u64, u64), (u64, u64), _>::new(|x| x.0 ^ x.1);
 
     let seed: &[_] = &[1, 2, 3, 4];
     let mut rng: StdRng = SeedableRng::from_seed(seed);
 
-    let mut tally = 0;
-
-    let mut vec = vec![];
-    let mut remaining = 1 << log_size;
-    while remaining > 0 {
-        for _ in 0.. (1 << (log_size - 4)) {
-            vec.push(((rng.next_u64()),(rng.next_u64())));
-        }
-        vec.sort();
-        remaining -= vec.len();
-        let start = time::precise_time_ns();
-        index.for_each(&mut vec, |k,v| { *v = *k });
-        tally += time::precise_time_ns() - start;
-        vec.clear();
-    }
-
-    println!("loaded index 2e{}:\t{:.2e} ns", log_size, tally as f64);
-
     let start = time::precise_time_ns();
-
-    for i in 0..(1 << log_size) {
+    for i in 0u64..(1 << log_size) {
         hash.insert((i,i),(i,i));
     }
 
-    println!("loaded hash 2e{}:\t{:.2e} ns", log_size, (time::precise_time_ns() - start) as f64);
+    println!("loaded hash_map 2^{}:\t{:.2e} ns; capacity: {}", log_size, (time::precise_time_ns() - start) as f64, hash.capacity());
+
+    let start = time::precise_time_ns();
+    for _ in 0u64..(1 << log_size) {
+        let key = (rng.next_u64(), rng.next_u64());
+        hash_index.entry_or_insert((key.0 ^ key.1, key), || key);
+    }
+
+    println!("loaded hash_index 2^{}:\t{:.2e} ns; capacity: {}", log_size, (time::precise_time_ns() - start) as f64, hash_index.capacity());
+
+    let start = time::precise_time_ns();
+    for _ in 0u64..(1 << log_size) {
+        let key = (rng.next_u64(), rng.next_u64());
+        hash_index2.entry_or_insert(key, || key);
+    }
+
+    println!("loaded hash_index 3^{}:\t{:.2e} ns; capacity: {}", log_size, (time::precise_time_ns() - start) as f64, hash_index.capacity());
 
     for query in 0..log_size {
 
-        let mut index_tally = 0;
-        let mut hash_tally = 0;
+        let mut hash1_tally = 0;
+        let mut hash2_tally = 0;
+        let mut hash3_tally = 0;
 
         for _ in 0..10 {
+            let mut vec = vec![];
+
             for _ in 0..(1 << query) {
-                vec.push(((rng.next_u64()),(rng.next_u64())));
+                let key = (rng.next_u64(), rng.next_u64());
+                vec.push((hash_me(&key), key));
             }
-            vec.sort();
+
+            // vec.sort_by(|x,y| (x.0 & ((1 << (log_size + 1)) - 1)).cmp(&(y.0 & ((1 << (log_size + 1)) - 1))));
             let start = time::precise_time_ns();
-            index.find_each(&mut vec, |k,v| { *v = *k });
+            for i in vec.iter() {
+                assert!(hash.get(&i.1).is_none());
+            }
+            hash1_tally += time::precise_time_ns() - start;
+
+
+            // vec.sort_by(|x,y| ((x.1).0 ^ (x.1).1).cmp(&((y.1).0 ^ (y.1).1)));
+            let start = time::precise_time_ns();
+            for i in vec.iter() {
+                assert!(hash_index.get_ref(&((i.1).0 ^ (i.1).1, i.1)).is_none());
+            }
+            hash2_tally += time::precise_time_ns() - start;
+
+            let start = time::precise_time_ns();
+            for i in vec.iter() {
+                assert!(hash_index2.get_ref(&i.1).is_none());
+            }
+            hash3_tally += time::precise_time_ns() - start;
             vec.clear();
-            index_tally += time::precise_time_ns() - start;
-
-            let start = time::precise_time_ns();
-            for i in 0..(1 << query) {
-                assert!(hash.get(&(i,i)).unwrap() == &(i,i));
-            }
-            hash_tally += time::precise_time_ns() - start;
-
         }
 
-        println!("\t2e{}:\t{}\t{:2.3}x\t{} ns", query, (index_tally / 10) >> query, index_tally as f64 / hash_tally as f64, (index_tally as i64 - hash_tally as i64) / 10);
+        println!("\t2^{}:\t{}\t{}\t{}", query, (hash1_tally / 10) >> query, (hash2_tally / 10) >> query, (hash3_tally / 10) >> query);
+
     }
 }
