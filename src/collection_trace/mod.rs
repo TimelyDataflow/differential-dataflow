@@ -3,6 +3,7 @@ pub mod collection_trace;
 pub mod operator_trace;
 pub mod lookup;
 pub mod index;
+pub mod hash_index;
 // pub mod merge_tree;
 
 pub use collection_trace::lookup::Lookup;

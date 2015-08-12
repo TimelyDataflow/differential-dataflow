@@ -70,11 +70,11 @@ macro_rules! rule {
                 |($( $var3, )*)| (($( $var5, )*), ( $($var3, )*)),
                 hash,
                 |_, &($( $var2, )*), &($( $var3, )*)| (($( $var2, )*), ($( $var3, )*)));
-        $name1.1.add(&result.map(|((($( $var2, )*), ($( $var3, )*)), www)| (($( $var1, )*), www)));
+        $name1.1.add(&result.map(|((($( $var2, )*), ($( $var3, )*)), __w)| (($( $var1, )*), __w)));
 
         let temp = result.semijoin(&$name1.2, |(($( $var2, )*), ($( $var3, )*))| (($( $var1, )*), (($( $var2, )*), ($( $var3, )*))), hash, |_, &(($( $var2, )*), ($( $var3, )*))| (($( $var2, )*), ($( $var3, )*)));
-        $name2.3.add(&temp.map(|(( ($( $var2, )*) ,_),www)| (($( $var2, )*),www)));
-        $name3.3.add(&temp.map(|(( _, ($( $var3, )*)),www)| (($( $var3, )*),www)));
+        $name2.3.add(&temp.map(|(( ($( $var2, )*) ,_),__w)| (($( $var2, )*),__w)));
+        $name3.3.add(&temp.map(|(( _, ($( $var3, )*)),__w)| (($( $var3, )*),__w)));
 
         temp
     }};

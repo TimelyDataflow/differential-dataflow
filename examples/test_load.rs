@@ -5,7 +5,7 @@ extern crate timely;
 extern crate graph_map;
 extern crate differential_dataflow;
 
-use differential_dataflow::sort::radix_merge::{Merge};
+use differential_dataflow::sort::radix_merge::Accumulator;
 
 use graph_map::GraphMMap;
 
@@ -16,9 +16,11 @@ fn main() {
     let graph = GraphMMap::new("/Users/mcsherry/Projects/Datasets/twitter-dedup");
     // let mut merge = RadixMerge::new(Rc::new(|x: &u32| *x as u64));
 
+    let parts = 256;
+
     let mut merges = vec![];
-    for _ in 0..256 {
-        merges.push(Merge::new());
+    for _ in 0..parts {
+        merges.push(Accumulator::new());
     }
 
     let mut node_counter = 0u64;
@@ -28,15 +30,15 @@ fn main() {
         let edges = graph.edges(node);
         for &dest in edges {
             edge_counter += 2;
-            merges[node % 256].push(node as u32, dest, 1);
-            merges[dest as usize % 256].push(dest, node as u32, 1);
+            merges[node % parts].push(node as u32, dest, 1, &|&x| x as u64 >> 8);
+            merges[dest as usize % parts].push(dest, node as u32, 1, &|&x| x as u64 >> 8);
         }
     }
     println!("nodes: {}", node_counter);
     println!("edges: {}", edge_counter);
     println!("d_avg: {}", edge_counter as f64 / node_counter as f64);
 
-    for merge in &mut merges {
-        merge.prune();
+    for merge in merges.into_iter() {
+        merge.done(&|&x| x as u64 >> 8);
     }
 }

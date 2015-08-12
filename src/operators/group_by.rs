@@ -138,7 +138,7 @@ where G::Timestamp: LeastUpperBound {
 
                     // coalesce the (key, val, wgt) triples, using a helpful &*clone : Fn(&K)->u64.
                     // TODO : make this sort in a specific order, rather than best-effort top-down
-                    // TODO : radix sort bailing out to qsort (shame!). bottom up radix, please.
+                    // TODO : radix sort bailing out to qsort (shame!). bottom-up radix, please.
                     coalesce_kv8(&mut keys, &mut vals, &*clone);
 
                     // defer to trace.source to install the (time, keys, vals).
