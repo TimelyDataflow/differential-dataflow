@@ -45,7 +45,7 @@ where G::Timestamp: LeastUpperBound {
         // user-defined operator logic, from a key and value iterator, populating an output vector.
         Logic: Fn(&K, &mut CollectionIterator<V1>, &mut Vec<(V2, i32)>)+'static,
 
-        // function from key and output value to output data (often)
+        // function from key and output value to output data.
         Reduc: Fn(&K, &V2)->D2+'static,
     >
     (&self, kv: KV, part: Part, key_h: KH, reduc: Reduc, logic: Logic) -> Stream<G, (D2, i32)> {
@@ -89,15 +89,19 @@ where G::Timestamp: LeastUpperBound {
         let key_h = Rc::new(key_h);
         let clone = key_h.clone();
 
-        // Here we describe a pair of source and result `CollectionTrace` instances.
+        // A pair of source and result `CollectionTrace` instances.
         // TODO : The hard-coded 0 means we don't know how many bits we can shave off of each int
         // TODO : key, which is fine for `HashMap` but less great for integer keyed maps, which use
         // TODO : dense vectors (sparser as number of workers increases).
-        // TODO : At the moment, we don't have access to the streams underlying .scope() method,
+        // TODO : At the moment, we don't have access to the stream's underlying .scope() method,
         // TODO : which is what would let us see the number of peers, because we only know that
-        // TODO : the implementor also implements the `Unary` and `Map` traits.
+        // TODO : the type also implements the `Unary` and `Map` traits, not that it is a `Stream`.
+        // TODO : We could implement this just for `Stream`, but would have to repeat the trait
+        // TODO : method signature boiler-plate, rather than use default implemenations.
         let mut trace =  OperatorTrace::<K, G::Timestamp, V1, V2, Look>::new(|| look(0));
+        // A map from times to received (key, val, wgt) triples.
         let mut inputs = Vec::new();
+        // A map from times to a list of keys that need processing at that time.
         let mut to_do =  Vec::new();
 
         // temporary storage for interesting times.

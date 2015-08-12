@@ -27,7 +27,7 @@ so in some sense that is that.
 */
 
 
-pub type CollectionIterator<'a, V> = Peekable<CoalesceIterator<&'a V, MergeIterator<SliceIterator<'a, V>>>>;
+pub type CollectionIterator<'a, V> = Peekable<CoalesceIterator<MergeIterator<SliceIterator<'a, V>>>>;
 
 #[derive(Copy, Clone)]
 pub struct Offset {
@@ -49,6 +49,21 @@ impl Offset {
 // for each key, there is a list of times, each with a list of weighted values.
 // For reasons of efficiency, weighted values are co-located by time, and each
 // key has a linked list of offsets into the lists of weighted values.
+
+/// A map from keys to time-indexed collection differences.
+///
+/// A `CollectionTrace` is morally equivalent to a `Map<K, Vec<(T, Vec<(V,i32)>)>`.
+/// It uses an implementor `L` of the `Lookup<K, Offset>` trait to map keys to an `Offset`, a
+/// position in member `self.links` of the head of the linked list for the key.
+///
+/// The entries in `self.links` form a linked list, where each element contains an index into
+/// `self.times` indicating a time, and an offset in the associated vector in `self.times[index]`.
+/// Finally, the `self.links` entry contains an optional `Offset` to the next element in the list.
+/// Entries are added to `self.links` sequentially, so that one can determine not only where some
+/// differences begin, but also where they end, by looking at the next entry in `self.lists`.
+///
+/// Elements of `self.times` correspond to distinct logical times, and the full set of differences
+/// received at each.
 
 pub struct CollectionTrace<K, T, V, L: Lookup<K, Offset>> {
     phantom:    PhantomData<K>,
@@ -266,23 +281,6 @@ impl<K, L: Lookup<K, Offset>, T, V> CollectionTrace<K, T, V, L> {
         }
     }
 }
-
-// // special-cased for set_collection.
-// fn _sum<V: Ord+Clone>(mut a: &[(V, i32)], mut b: &[(V, i32)], target: &mut Vec<(V, i32)>) {
-//     while a.len() > 0 && b.len() > 0 {
-//         match a[0].0.cmp(&b[0].0) {
-//             Ordering::Less    => { target.push(a[0].clone()); a = &a[1..]; },
-//             Ordering::Greater => { target.push(b[0].clone()); b = &b[1..]; },
-//             Ordering::Equal   => { target.push((a[0].0.clone(), a[0].1 + b[0].1));
-//                                    a = &a[1..]; b = &b[1..]; },
-//         }
-//     }
-//
-//     if a.len() > 0 { target.extend(a.iter().map(|x| x.clone())); }
-//     if b.len() > 0 { target.extend(b.iter().map(|x| x.clone())); }
-// }
-//
-
 
 pub struct SliceIterator<'a, V: 'a> {
     index: usize,

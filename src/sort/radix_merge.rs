@@ -230,7 +230,9 @@ impl<K: Ord, V: Ord> Compact<K, V> {
         for column in columns {
             let mut keycnt = column.keys.into_iter().zip(column.cnts.into_iter());
             if let Some((key, cnt)) = keycnt.next() {
-                keyvals.push(((func(&key), key, cnt), keycnt, column.vals.into_iter().zip(column.wgts.into_iter().flat_map(|(w,c)| ::std::iter::repeat(w).take(c as usize)))));
+                keyvals.push(((func(&key), key, cnt), keycnt, column.vals.into_iter()
+                    .zip(column.wgts.into_iter()
+                        .flat_map(|(w,c)| ::std::iter::repeat(w).take(c as usize)))));
             }
         }
 
