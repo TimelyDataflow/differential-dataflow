@@ -85,10 +85,6 @@ where G::Timestamp: LeastUpperBound {
     >
     (&self, kv: KV, part: Part, key_h: KH, reduc: Reduc, look: LookG, logic: Logic) -> Stream<G, (D2, i32)> {
 
-        // we will need at least two copies of the key hash function, so we wrap it in a refcount.
-        let key_h = Rc::new(key_h);
-        let clone = key_h.clone();
-
         // A pair of source and result `CollectionTrace` instances.
         // TODO : The hard-coded 0 means we don't know how many bits we can shave off of each int
         // TODO : key, which is fine for `HashMap` but less great for integer keyed maps, which use
@@ -97,16 +93,15 @@ where G::Timestamp: LeastUpperBound {
         // TODO : which is what would let us see the number of peers, because we only know that
         // TODO : the type also implements the `Unary` and `Map` traits, not that it is a `Stream`.
         // TODO : We could implement this just for `Stream`, but would have to repeat the trait
+
         // TODO : method signature boiler-plate, rather than use default implemenations.
         let mut trace =  OperatorTrace::<K, G::Timestamp, V1, V2, Look>::new(|| look(0));
+
         // A map from times to received (key, val, wgt) triples.
         let mut inputs = Vec::new();
+
         // A map from times to a list of keys that need processing at that time.
         let mut to_do =  Vec::new();
-
-        // temporary storage for interesting times.
-        // TODO : perhaps the collection trace should own this and return a &[G::Timestamp]?
-        let mut idx = Vec::new();
 
         // create an exchange channel based on the supplied Fn(&D1)->u64.
         let exch = Exchange::new(move |&(ref x,_)| part(x));
@@ -121,14 +116,9 @@ where G::Timestamp: LeastUpperBound {
                 notificator.notify_at(&time);
 
                 // fetch (and create, if needed) key and value queues for this time.
-                let mut queues = inputs.entry_or_insert(time.clone(), || (Vec::new(), Vec::new()));
+                let mut accums = inputs.entry_or_insert(time.clone(), || RadixAccumulator::new());
                 for (datum, wgt) in data.drain_temp() {
-                    // transform the data into key,val pairs and enqueue.
-                    // TODO : opportunity for a smarter, sorting/coalescing queue.
-                    // TODO : see the inappropriately named radix_merge::Merge struct.
-                    let (key, val) = kv(datum);
-                    queues.0.push(key);
-                    queues.1.push((val, wgt));
+                    accums.push((kv(datum), wgt), &key_h);
                 }
             }
 
@@ -138,55 +128,36 @@ where G::Timestamp: LeastUpperBound {
             while let Some((index, _count)) = notificator.next() {
 
                 // 2a. fetch any data associated with this time.
-                if let Some((mut keys, mut vals)) = inputs.remove_key(&index) {
+                if let Some(accumulation) = inputs.remove_key(&index) {
 
-                    // coalesce the (key, val, wgt) triples, using a helpful &*clone : Fn(&K)->u64.
-                    // TODO : make this sort in a specific order, rather than best-effort top-down
-                    // TODO : radix sort bailing out to qsort (shame!). bottom-up radix, please.
-                    coalesce_kv8(&mut keys, &mut vals, &*clone);
-
-                    // defer to trace.source to install the (time, keys, vals).
-                    // this mostly just updates a map from key to a linked list head indicating
-                    // an offset in vals.
-                    trace.source.install_differences(index.clone(), &mut keys, vals);
-
-                    // finally, we need to consult each of the installed keys (could have done at
-                    // install time, with lightly tweaked logic) to determine if there are future
-                    // times at which this key should be re-considered, because there will be
-                    // installed differences coming into effect. badly explained, sorry.
-                    // TODO : install_differences will probably want to take ownership/drain keys,
-                    // TODO : so we'll need to do this earlier, or as part of install_differences.
-                    // TODO : I suspect interesting_times could do a better job of determining
-                    // TODO : times that are *newly interesting*, i.e. not previously produced.
-                    keys.dedup();
-                    for key in keys.into_iter() {
-                        trace.source.interesting_times(&key, &index, &mut idx);
-                        // for each time interesting to the key,
-                        for update in idx.drain_temp() {
-                            // add the key to a list indexed by the time.
-                            to_do.entry_or_insert(update, || { notificator.notify_at(&update); Vec::new() })
-                                 .push(key.clone());
-                         }
+                    // for each key, determine if there are new times that may
+                    // require comparing the output to logic(input) at the time.
+                    for key in &accumulation.keys {
+                        for time in trace.source.interesting_times(key, &index) {
+                            to_do.entry_or_insert(time, || { notificator.notify_at(&time); Vec::new() })
+                                 .push((*key).clone());
+                        }
                     }
+
+                    // add the accumulation to the trace source.
+                    trace.source.set_differences(index.clone(), accumulation);
                 }
 
                 // 2b. We must now determine for each interesting key at this time, how does the
                 // currently reported output match up with what we need as output. Should we send
                 // more output differences, and what are they?
                 if let Some(mut keys) = to_do.remove_key(&index) {
-                    let mut session = output.session(&index);
-                    // would be great to sort these keys using `clone`.
-                    qsort(&mut keys[..]);
+
+                    // we would like these keys in a particular order.
+                    // TODO : use a radix sort since we have `key_h`.
+                    keys.sort_by(|x,y| (key_h(&x), x).cmp(&(key_h(&y), y)));
                     keys.dedup();
-                    for key in keys {
-                        // set_collection_from updates trace.result so that its differences will
-                        // accumulate to `logic` applied to the accumulation of trace.source.
-                        trace.set_collection_from(&key, &index, |k,s,r| logic(k,s,r));
-                        // send each difference (possibly none, which would be great).
-                        for &(ref result, weight) in trace.result.get_difference(&key, &index)  {
-                            session.give((reduc(&key, &result), weight));
-                        }
-                    }
+
+                    // set the output collections based on logic
+                    let mut session = output.session(&index);
+                    trace.set_collections_and(&index, keys.clone(), &logic, |k,v,w| {
+                        session.give((reduc(k,v),w))
+                    });
                 }
             }
         })

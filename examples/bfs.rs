@@ -57,7 +57,7 @@ fn main() {
         }
 
         // start the root set out with roots 0, 1, and 2
-        roots.advance_to(0);
+        // roots.advance_to(0);
         computation.step();
         computation.step();
         computation.step();
