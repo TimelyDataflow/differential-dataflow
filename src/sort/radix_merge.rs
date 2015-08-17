@@ -19,124 +19,127 @@
 
 // use std::fmt::Debug;
 
-use iterators::merge::Merge;
+// use iterators::merge::Merge;
 use iterators::merge::MergeUsing;
 use iterators::coalesce::Coalesce;
 
 use timely::drain::DrainExt;
+use std::fmt::Debug;
 
-pub struct RadixAccumulator<K, V> {
-    accumulators: Vec<Accumulator<K, V>>,
-}
+// use sorting::heap::sort_by as hsort_by;
 
-impl<K: Ord, V: Ord> RadixAccumulator<K, V> {
-    pub fn push<F: Fn(&K)->u64>(&mut self, key: K, val: V, wgt: i32, func: &F) {
-        self.accumulators[(func(&key) as usize) % 256].push(key, val, wgt, func);
-    }
-    pub fn done<F: Fn(&K)->u64>(self, func: &F) -> Vec<Option<Compact<K, V>>> {
-        self.accumulators.into_iter().map(|x| x.done(func)).collect()
-    }
-}
-
-/// Maintains a list of `(key, val, wgt)` triples in a compressed form.
-pub struct Accumulator<K, V> {
-    sorted: Vec<Compact<K, V>>,
-    staged: Vec<((K, V), i32)>,
-    limit: usize,
-}
-
-impl<K: Ord, V: Ord> Accumulator<K,V> {
-    /// Constructs a new `Accumulator` with a default capacity of zero.
-    pub fn new() -> Accumulator<K,V> {
-        Accumulator {
-            sorted: Vec::new(),
-            staged: Vec::new(),
-            limit: 0,
-        }
-    }
-    /// Constructs a new `Accumulator` with a supplied capacity.
-    pub fn with_capacity(size: usize) -> Accumulator<K, V> {
-        Accumulator {
-            sorted: Vec::new(),
-            staged: Vec::with_capacity(size),
-            limit: size,
-        }
-    }
-    /// Finalizes compression and returns a single `Compact` compressed accumulation.
-    #[inline(never)]
-    pub fn done<F: Fn(&K)->u64>(mut self, func: &F) -> Option<Compact<K, V>> {
-        // println!("in done");
-        self.compress(func);
-        self.merge(func);
-        self.sorted.pop()
-    }
-    /// Adds a new element to the accumulation.
-    #[inline]
-    pub fn push<F: Fn(&K)->u64>(&mut self, key: K, val: V, wgt: i32, func: &F) {
-        self.staged.push(((key, val), wgt));
-
-        // TODO : smarter tests exist based on sizes of K, V, etc.
-        if self.staged.len() >= self.limit {
-            self.compress(func)
-        }
-    }
-
-    #[inline(never)]
-    fn sort_staged<F: Fn(&K)->u64>(&mut self, func: &F) {
-        self.staged.sort_by(|&((ref k1, ref v1), _),&((ref k2, ref v2), _)| (func(k1), k1, v1).cmp(&(func(k2), k2, v2)));
-    }
-
-    #[inline(never)]
-    fn compress<F: Fn(&K)->u64>(&mut self, func: &F) {
-        let len = self.staged.len(); // number of elements we are compressing
-
-        self.sort_staged(func);
-        let mut next = Compact::new(len,len,len);
-        next.from(self.staged.drain_temp());
-
-        self.sorted.push(next);
-        self.sorted.sort_by(|x,y| y.size().cmp(&x.size()));
-
-        let mut new_capacity = self.sorted[0].size();
-        let mut new_consumed = 0;
-        for sorted in &self.sorted[1..] {
-            new_capacity += sorted.vals.len() * ::std::mem::size_of::<V>();
-            new_consumed += sorted.keys.len() * (::std::mem::size_of::<V>() + 4);
-            new_consumed += sorted.wgts.len() * 8;
-        }
-
-        if new_capacity > new_consumed {
-            new_capacity = (new_capacity - new_consumed)  / ::std::mem::size_of::<(K,V,i32)>();
-        }
-        else {
-            new_capacity = 0;
-        }
-
-        if new_capacity < 1024 {
-            // println!("sizes: {:?}", self.sorted.iter().map(|x| x.size()).collect::<Vec<_>>());
-            self.merge(func);
-            new_capacity = 1024;
-            if self.sorted.len() > 0 {
-                new_capacity = ::std::cmp::max(1024, self.sorted[0].size() / ::std::mem::size_of::<(K,V,i32)>());
-            }
-        }
-
-        if new_capacity > self.staged.capacity() {
-            self.staged = Vec::with_capacity(new_capacity);
-        }
-
-        self.limit = new_capacity;
-    }
-
-    #[inline(never)]
-    fn merge<F: Fn(&K)->u64>(&mut self, func: &F) {
-        let result = Compact::merge(::std::mem::replace(&mut self.sorted, Vec::new()), func);
-        // println!("result.size(): {}", result.size());
-        if result.size() > 0 {
-            self.sorted.push(result);
-        }
-    }
-}
+// pub struct RadixAccumulator<K, V> {
+//     accumulators: Vec<Accumulator<K, V>>,
+// }
+//
+// impl<K: Ord, V: Ord> RadixAccumulator<K, V> {
+//     pub fn push<F: Fn(&K)->u64>(&mut self, key: K, val: V, wgt: i32, func: &F) {
+//         self.accumulators[(func(&key) as usize) % 256].push(key, val, wgt, func);
+//     }
+//     pub fn done<F: Fn(&K)->u64>(self, func: &F) -> Vec<Option<Compact<K, V>>> {
+//         self.accumulators.into_iter().map(|x| x.done(func)).collect()
+//     }
+// }
+//
+// /// Maintains a list of `(key, val, wgt)` triples in a compressed form.
+// pub struct Accumulator<K, V> {
+//     sorted: Vec<Compact<K, V>>,
+//     staged: Vec<((K, V), i32)>,
+//     limit: usize,
+// }
+//
+// impl<K: Ord, V: Ord> Accumulator<K,V> {
+//     /// Constructs a new `Accumulator` with a default capacity of zero.
+//     pub fn new() -> Accumulator<K,V> {
+//         Accumulator {
+//             sorted: Vec::new(),
+//             staged: Vec::new(),
+//             limit: 0,
+//         }
+//     }
+//     /// Constructs a new `Accumulator` with a supplied capacity.
+//     pub fn with_capacity(size: usize) -> Accumulator<K, V> {
+//         Accumulator {
+//             sorted: Vec::new(),
+//             staged: Vec::with_capacity(size),
+//             limit: size,
+//         }
+//     }
+//     /// Finalizes compression and returns a single `Compact` compressed accumulation.
+//     #[inline(never)]
+//     pub fn done<F: Fn(&K)->u64>(mut self, func: &F) -> Option<Compact<K, V>> {
+//         // println!("in done");
+//         self.compress(func);
+//         self.merge(func);
+//         self.sorted.pop()
+//     }
+//     /// Adds a new element to the accumulation.
+//     #[inline]
+//     pub fn push<F: Fn(&K)->u64>(&mut self, key: K, val: V, wgt: i32, func: &F) {
+//         self.staged.push(((key, val), wgt));
+//
+//         // TODO : smarter tests exist based on sizes of K, V, etc.
+//         if self.staged.len() >= self.limit {
+//             self.compress(func)
+//         }
+//     }
+//
+//     #[inline(never)]
+//     fn sort_staged<F: Fn(&K)->u64>(&mut self, func: &F) {
+//         self.staged.sort_by(|&((ref k1, ref v1), _),&((ref k2, ref v2), _)| (func(k1), k1, v1).cmp(&(func(k2), k2, v2)));
+//     }
+//
+//     #[inline(never)]
+//     fn compress<F: Fn(&K)->u64>(&mut self, func: &F) {
+//         let len = self.staged.len(); // number of elements we are compressing
+//
+//         self.sort_staged(func);
+//         let mut next = Compact::new(len,len,len);
+//         next.from(self.staged.drain_temp());
+//
+//         self.sorted.push(next);
+//         self.sorted.sort_by(|x,y| y.size().cmp(&x.size()));
+//
+//         let mut new_capacity = self.sorted[0].size();
+//         let mut new_consumed = 0;
+//         for sorted in &self.sorted[1..] {
+//             new_capacity += sorted.vals.len() * ::std::mem::size_of::<V>();
+//             new_consumed += sorted.keys.len() * (::std::mem::size_of::<V>() + 4);
+//             new_consumed += sorted.wgts.len() * 8;
+//         }
+//
+//         if new_capacity > new_consumed {
+//             new_capacity = (new_capacity - new_consumed)  / ::std::mem::size_of::<(K,V,i32)>();
+//         }
+//         else {
+//             new_capacity = 0;
+//         }
+//
+//         if new_capacity < 1024 {
+//             // println!("sizes: {:?}", self.sorted.iter().map(|x| x.size()).collect::<Vec<_>>());
+//             self.merge(func);
+//             new_capacity = 1024;
+//             if self.sorted.len() > 0 {
+//                 new_capacity = ::std::cmp::max(1024, self.sorted[0].size() / ::std::mem::size_of::<(K,V,i32)>());
+//             }
+//         }
+//
+//         if new_capacity > self.staged.capacity() {
+//             self.staged = Vec::with_capacity(new_capacity);
+//         }
+//
+//         self.limit = new_capacity;
+//     }
+//
+//     #[inline(never)]
+//     fn merge<F: Fn(&K)->u64>(&mut self, func: &F) {
+//         let result = Compact::merge(::std::mem::replace(&mut self.sorted, Vec::new()), func);
+//         // println!("result.size(): {}", result.size());
+//         if result.size() > 0 {
+//             self.sorted.push(result);
+//         }
+//     }
+// }
 
 /// A compressed representation of the accumulation of `(key, val, wgt)` triples.
 // TODO : RLE where a run of two of the same elements means a value in a second array.
@@ -162,7 +165,7 @@ pub struct Compact<K, V> {
     pub wgts: Vec<(i32,u32)>,
 }
 
-impl<K: Ord, V: Ord> Compact<K, V> {
+impl<K: Ord+Debug, V: Ord> Compact<K, V> {
     /// Constructs a new `Compact` with indicated initial capacities.
     ///
     /// Most operations with `Compact` eventually shrink the amount of memory to fit whatever they
@@ -191,14 +194,11 @@ impl<K: Ord, V: Ord> Compact<K, V> {
     /// The `Compact` does not know about the ordering, only that it should look for repetitions of
     /// in the sequences of `key` and `wgt`.
     #[inline(never)]
-    pub fn from<I: Iterator<Item=((K, V), i32)>>(&mut self, mut iterator: I) {
-        self.keys.clear();
-        self.cnts.clear();
-        self.vals.clear();
-        self.wgts.clear();
+    pub fn extend<I: Iterator<Item=((K, V), i32)>>(&mut self, mut iterator: I) {
 
         // populate a new `Compact` with merged, coalesced data.
         if let Some(((mut old_key, val), mut old_wgt)) = iterator.next() {
+
             let mut key_cnt = 1;
             let mut wgt_cnt = 1;
 
@@ -234,6 +234,49 @@ impl<K: Ord, V: Ord> Compact<K, V> {
             self.keys.push(old_key);
             self.cnts.push(key_cnt);
             self.wgts.push((old_wgt, wgt_cnt));
+        }
+    }
+
+    #[inline(never)]
+    pub fn from_radix<F: Fn(&K)->u64>(source: Vec<Vec<((K,V),i32)>>, function: &F) -> Option<Compact<K,V>> {
+
+        let mut size = 0;
+        for list in &source {
+            size += list.len();
+        }
+
+        let mut result = Compact::new(size,size,size);
+        let mut buffer = vec![];
+        let mut current = 0;
+
+        for ((key, val), wgt) in source.into_iter().flat_map(|x| x.into_iter()) {
+            let hash = function(&key);
+            if buffer.len() > 0 && hash != current {
+                // if hash < current { println!("  radix sort error? {} < {}", hash, current); }
+                // hsort_by(&mut buffer, &|x: &((K,V),i32)| &x.0);
+                buffer.sort_by(|x: &((K,V),i32),y: &((K,V),i32)| x.0.cmp(&y.0));
+                result.extend(buffer.drain_temp().coalesce());
+            }
+            buffer.push(((key,val),wgt));
+            current = hash;
+        }
+
+        if buffer.len() > 0 {
+            // hsort_by(&mut buffer, &|x: &((K,V),i32)| &x.0);
+            buffer.sort_by(|x: &((K,V),i32),y: &((K,V),i32)| x.0.cmp(&y.0));
+            result.extend(buffer.drain_temp().coalesce());
+        }
+
+        if result.vals.len() > 0 {
+            result.keys.shrink_to_fit();
+            result.cnts.shrink_to_fit();
+            result.vals.shrink_to_fit();
+            result.wgts.shrink_to_fit();
+
+            Some(result)
+        }
+        else {
+            None
         }
     }
 

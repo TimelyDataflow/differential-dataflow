@@ -27,7 +27,10 @@ use collection_trace::trace::CollectionIterator;
 
 use iterators::coalesce::Coalesce;
 
-use sort::radix_merge::{Accumulator, Compact};
+
+use radix_sort::RadixSorter;
+
+use sort::radix_merge::{Compact};
 use sort::*;
 
 // implement `GroupByExt` for any stream implementing `Unary` and `Map` (most of them).
@@ -101,14 +104,14 @@ where G::Timestamp: LeastUpperBound {
 
         // TODO : method signature boiler-plate, rather than use default implemenations.
         // let mut trace =  OperatorTrace::<K, G::Timestamp, V1, V2, Look>::new(|| look(0));
-        let mut sources = (0..256).map(|_| Trace::new(look(8))).collect::<Vec<_>>();
-        let mut results = (0..256).map(|_| Trace::new(look(8))).collect::<Vec<_>>();
+        let mut source = Trace::new(look(0));
+        let mut result = Trace::new(look(0));
 
         // A map from times to received (key, val, wgt) triples.
         let mut inputs = Vec::new();
 
         // A map from times to a list of keys that need processing at that time.
-        let mut to_do = (0..256).map(|_| Vec::new()).collect::<Vec<_>>();
+        let mut to_do = Vec::new();
 
         // create an exchange channel based on the supplied Fn(&D1)->u64.
         let exch = Exchange::new(move |&(ref x,_)| part(x));
@@ -118,24 +121,9 @@ where G::Timestamp: LeastUpperBound {
 
             // 1. read each input, and stash it in our staging area
             while let Some((time, data)) = input.next() {
-
-                // request a notification for when all records with this time have been received.
                 notificator.notify_at(&time);
-
-                // fetch (and create, if needed) key and value queues for this time.
-                let mut accums = inputs.entry_or_insert(time.clone(), || {
-                    let mut result = Vec::with_capacity(256);
-                    for _ in 0..256 { result.push(Accumulator::new()); }
-                    result
-                });
-
-                // push each record to the appropriate accumulator
-                for (datum, wgt) in data.drain_temp() {
-                    let (key, val) = kv(datum);
-                    // println!("groupby recving ({:?}, {:?}, {})", key, val, wgt);
-                    let part = key_h(&key) as usize % 256;
-                    accums[part].push(key, val, wgt, &key_h);
-                }
+                inputs.entry_or_insert(time.clone(), || RadixSorter::new())
+                      .extend(data.drain_temp().map(|(d,w)| (kv(d),w)),  &|x| key_h(&(x.0).0));
             }
 
             // 2. go through each time of interest that has reached completion
@@ -143,35 +131,20 @@ where G::Timestamp: LeastUpperBound {
             // in the processing of a time that a future time will be interesting.
             while let Some((index, _count)) = notificator.next() {
 
-                // println!("groupby notificating at {:?}", index);
-
                 // 2a. fetch any data associated with this time.
-                if let Some(accumulation) = inputs.remove_key(&index) {
-
-                    // println!("groupby accumulation found at {:?}", index);
-
-                    // for each key, determine if there are new times that may
-                    // require comparing the output to logic(input) at the time.
-                    for (part, accum) in accumulation.into_iter().enumerate() {
-                        if let Some(compact) = accum.done(&key_h) {
-                            // println!("groupby accum found for part {:?}", part);
-                            // println!("  keys: {:?}", compact.keys);
-                            let source = &mut sources[part];
-                            for key in &compact.keys {
-                                for time in source.interesting_times(key, index.clone()).iter() {
-                                    let mut queue: &mut Vec<K> = to_do[part].entry_or_insert((*time).clone(), || {
-                                                    // println!("groupby enqueueing work for part {} at {:?} for key {:?}", part, time, key);
-                                                    notificator.notify_at(time);
-                                                    Vec::new()
-                                                });
-                                    queue.push((*key).clone());
-                                }
+                if let Some(mut queue) = inputs.remove_key(&index) {
+                    let radix_sorted = queue.finish(&|x| key_h(&(x.0).0));
+                    if let Some(compact) = Compact::from_radix(radix_sorted, &|k| key_h(k)) {
+                        for key in &compact.keys {
+                            for time in source.interesting_times(key, index.clone()).iter() {
+                                let mut queue = to_do.entry_or_insert((*time).clone(), || { notificator.notify_at(time); Vec::new() });
+                                queue.push((*key).clone());
                             }
-
-                            // add the accumulation to the trace source.
-                            // println!("setting source differences; {}", compact.vals.len());
-                            source.set_differences(index.clone(), compact);
                         }
+
+                        // add the accumulation to the trace source.
+                        // println!("setting source differences; {}", compact.vals.len());
+                        source.set_differences(index.clone(), compact);
                     }
                 }
 
@@ -181,62 +154,54 @@ where G::Timestamp: LeastUpperBound {
                 // temporary storage for operator implementations to populate
                 let mut buffer = vec![];
 
-                for part in 0..256 {
-
-                    let source = &mut sources[part];
-                    let result = &mut results[part];
-
                     // 2b. We must now determine for each interesting key at this time, how does the
                     // currently reported output match up with what we need as output. Should we send
                     // more output differences, and what are they?
 
-                    // Much of this logic used to hide in `OperatorTrace` and `CollectionTrace`.
-                    // They are now gone and simpler, respectively.
-                    if let Some(mut keys) = to_do[part].remove_key(&index) {
+                // Much of this logic used to hide in `OperatorTrace` and `CollectionTrace`.
+                // They are now gone and simpler, respectively.
+                if let Some(mut keys) = to_do.remove_key(&index) {
 
-                        // println!("groupby doing a thing at {:?}", index);
+                    // println!("groupby doing a thing at {:?}", index);
 
-                        // we would like these keys in a particular order.
-                        // TODO : use a radix sort since we have `key_h`.
-                        keys.sort_by(|x,y| (key_h(&x), x).cmp(&(key_h(&y), y)));
-                        keys.dedup();
+                    // we would like these keys in a particular order.
+                    // TODO : use a radix sort since we have `key_h`.
+                    keys.sort_by(|x,y| (key_h(&x), x).cmp(&(key_h(&y), y)));
+                    keys.dedup();
 
-                        // accumulations for installation into result
-                        let mut accumulation = Compact::new(0,0,0);
+                    // accumulations for installation into result
+                    let mut accumulation = Compact::new(0,0,0);
 
-                        let mut heap1 = vec![];
-                        let mut heap2 = vec![];
+                    let mut heap1 = vec![];
+                    let mut heap2 = vec![];
 
-                        for key in keys {
+                    for key in keys {
 
-                            // println!("groupby doing a thing for {:?} at {:?}", key, index);
+                        // acquire an iterator over the collection at `time`.
+                        let mut input = source.get_collection_using(&key, &index, &mut heap1);
 
-                            // acquire an iterator over the collection at `time`.
-                            let mut input = source.get_collection_using(&key, &index, &mut heap1);
+                        // if we have some data, invoke logic to populate self.dst
+                        if input.peek().is_some() { logic(&key, &mut input, &mut buffer); }
 
-                            // if we have some data, invoke logic to populate self.dst
-                            if input.peek().is_some() { logic(&key, &mut input, &mut buffer); }
+                        buffer.sort_by(|x,y| x.0.cmp(&y.0));
 
-                            buffer.sort_by(|x,y| x.0.cmp(&y.0));
-
-                            // push differences in to Compact.
-                            let mut compact = accumulation.session();
-                            for (val, wgt) in Coalesce::coalesce(result.get_collection_using(&key, &index, &mut heap2)
-                                                                       .map(|(v, w)| (v,-w))
-                                                                       .merge_by(buffer.iter().map(|&(ref v, w)| (v, w)), |x,y| {
-                                                                            x.0.cmp(&y.0)
-                                                                       }))
-                            {
-                                session.give((reduc(&key, val), wgt));
-                                compact.push(val.clone(), wgt);
-                            }
-                            compact.done(key);
-                            buffer.clear();
+                        // push differences in to Compact.
+                        let mut compact = accumulation.session();
+                        for (val, wgt) in Coalesce::coalesce(result.get_collection_using(&key, &index, &mut heap2)
+                                                                   .map(|(v, w)| (v,-w))
+                                                                   .merge_by(buffer.iter().map(|&(ref v, w)| (v, w)), |x,y| {
+                                                                        x.0.cmp(&y.0)
+                                                                   }))
+                        {
+                            session.give((reduc(&key, val), wgt));
+                            compact.push(val.clone(), wgt);
                         }
+                        compact.done(key);
+                        buffer.clear();
+                    }
 
-                        if accumulation.vals.len() > 0 {
-                            result.set_differences(index.clone(), accumulation);
-                        }
+                    if accumulation.vals.len() > 0 {
+                        result.set_differences(index.clone(), accumulation);
                     }
                 }
             }

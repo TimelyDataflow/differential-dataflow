@@ -16,7 +16,9 @@ use collection_trace::lookup::UnsignedInt;
 use collection_trace::{LeastUpperBound, Lookup, Offset};
 
 // use sort::*;
-use sort::radix_merge::{Accumulator, Compact};
+use sort::radix_merge::{Compact};
+
+use radix_sort::RadixSorter;
 
 
 impl<G: Scope, D1: Data+Ord, S> JoinExt<G, D1> for S
@@ -121,8 +123,8 @@ where G::Timestamp: LeastUpperBound {
         // TODO : pay more attention to the number of peers
         // TODO : find a better trait to sub-trait so we can read .builder
         // assert!(self.builder.peers() == 1);
-        let mut traces1 = Some({ let mut vec = vec![]; for _ in 0..256 { vec.push(Trace::new(look(8))); }; vec });
-        let mut traces2 = Some({ let mut vec = vec![]; for _ in 0..256 { vec.push(Trace::new(look(8))); }; vec });
+        let mut trace1 = Some(Trace::new(look(0)));
+        let mut trace2 = Some(Trace::new(look(0)));
 
         let mut inputs1 = Vec::new();    // Vec<(T, Vec<(K, V1, i32)>)>;
         let mut inputs2 = Vec::new();    // Vec<(T, Vec<(K, V2, i32)>)>;
@@ -135,76 +137,47 @@ where G::Timestamp: LeastUpperBound {
         self.binary_notify(stream2, exch1, exch2, "Join", vec![], move |input1, input2, output, notificator| {
 
             // consider shutting down each trace if the opposing input has closed out
-            if traces2.is_some() && notificator.frontier(0).len() == 0 && inputs1.len() == 0 { traces2 = None; }
-            if traces1.is_some() && notificator.frontier(1).len() == 0 && inputs2.len() == 0 { traces1 = None; }
+            if trace2.is_some() && notificator.frontier(0).len() == 0 && inputs1.len() == 0 { trace2 = None; }
+            if trace1.is_some() && notificator.frontier(1).len() == 0 && inputs2.len() == 0 { trace1 = None; }
 
-            // read input 1, push key, (val,wgt) to vecs
+            // read input 1, push key, (val,wgt) to queues
             while let Some((time, data)) = input1.next() {
-
                 notificator.notify_at(&time);
-
-                // fetch (and create, if needed) key and value queues for this time.
-                let mut accums = inputs1.entry_or_insert(time.clone(), || {
-                    let mut result = Vec::with_capacity(256);
-                    for _ in 0..256 { result.push(Accumulator::new()); }
-                    result
-                });
-
-                // push each record to the appropriate accumulator
-                for (datum, wgt) in data.drain_temp() {
-                    let (key, val) = kv1(datum);
-                    let part = key_h(&key) as usize % 256;
-                    accums[part].push(key, val, wgt, &key_h);
-                }
+                inputs1.entry_or_insert(time.clone(), || RadixSorter::new())
+                       .extend(data.drain_temp().map(|(d,w)| (kv1(d),w)),  &|x| key_h(&(x.0).0));
             }
 
-            // read input 2, push key, (val,wgt) to vecs
+            // read input 2, push key, (val,wgt) to queues
             while let Some((time, data)) = input2.next() {
-
                 notificator.notify_at(&time);
-
-                // fetch (and create, if needed) key and value queues for this time.
-                let mut accums = inputs2.entry_or_insert(time.clone(), || {
-                    let mut result = Vec::with_capacity(256);
-                    for _ in 0..256 { result.push(Accumulator::new()); }
-                    result
-                });
-
-                // push each record to the appropriate accumulator
-                for (datum, wgt) in data.drain_temp() {
-                    let (key, val) = kv2(datum);
-                    let part = key_h(&key) as usize % 256;
-                    accums[part].push(key, val, wgt, &key_h);
-                }
+                inputs2.entry_or_insert(time.clone(), || RadixSorter::new())
+                       .extend(data.drain_temp().map(|(d,w)| (kv2(d),w)),  &|x| key_h(&(x.0).0));
             }
 
             // check to see if we have inputs to process
             while let Some((time, _count)) = notificator.next() {
 
-                if let Some(accumulations) = inputs1.remove_key(&time) {
-                    for (part, accum) in accumulations.into_iter().enumerate() {
-                        if let Some(accum) = accum.done(&key_h) {
-                            if let Some(traces) = traces2.as_ref() {
-                                process_diffs(&time, &accum, &traces[part], &result, &mut outbuf);
-                            }
+                if let Some(mut queue) = inputs1.remove_key(&time) {
+                    let radix_sorted = queue.finish(&|x| key_h(&(x.0).0));
+                    if let Some(compact) = Compact::from_radix(radix_sorted, &|k| key_h(k)) {
+                        if let Some(trace) = trace2.as_ref() {
+                            process_diffs(&time, &compact, &trace, &result, &mut outbuf);
+                        }
 
-                            if let Some(traces) = traces1.as_mut() {
-                                traces[part].set_differences(time.clone(), accum);
-                            }
+                        if let Some(trace) = trace1.as_mut() {
+                            trace.set_differences(time.clone(), compact);
                         }
                     }
                 }
 
-                if let Some(accumulations) = inputs2.remove_key(&time) {
-                    for (part, accum) in accumulations.into_iter().enumerate() {
-                        if let Some(accum) = accum.done(&key_h) {
-                            if let Some(traces) = traces1.as_ref() {
-                                process_diffs(&time, &accum, &traces[part], &|k,x,y| result(k,y,x), &mut outbuf);
-                            }
-
-                            if let Some(traces) = traces2.as_mut() {
-                                traces[part].set_differences(time.clone(), accum);
-                            }
+                if let Some(mut queue) = inputs2.remove_key(&time) {
+                    let radix_sorted = queue.finish(&|x| key_h(&(x.0).0));
+                    if let Some(compact) = Compact::from_radix(radix_sorted, &|k| key_h(k)) {
+                    if let Some(trace) = trace1.as_ref() {
+                            process_diffs(&time, &compact, &trace, &|k,x,y| result(k,y,x), &mut outbuf);
+                        }
+                        if let Some(trace) = trace2.as_mut() {
+                            trace.set_differences(time.clone(), compact);
                         }
                     }
                 }

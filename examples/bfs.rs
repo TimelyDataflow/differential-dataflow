@@ -44,13 +44,13 @@ fn main() {
 
         let seed: &[_] = &[1, 2, 3, 4];
         let mut rng1: StdRng = SeedableRng::from_seed(seed);    // rng for edge additions
-        let mut _rng2: StdRng = SeedableRng::from_seed(seed);    // rng for edge deletions
+        let mut rng2: StdRng = SeedableRng::from_seed(seed);    // rng for edge deletions
 
         println!("performing BFS on {} nodes, {} edges:", nodes, edges);
 
         // trickle edges in to dataflow
-        for _ in 0..edges {
-            for _ in 0..1 {
+        for _ in 0..(edges/1000) {
+            for _ in 0..1000 {
                 graph.send(((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), 1));
             }
             computation.step();
@@ -69,19 +69,18 @@ fn main() {
         roots.advance_to(1);
         roots.close();
 
-        // // repeatedly change edges
-        // let mut round = 0 as u32;
-        // while computation.step() {
-        //     // once each full second ticks, change an edge
-        //     if time::precise_time_s() - start >= round as f64 {
-        //         // add edges using prior rng; remove edges using fresh rng with the same seed
-        //         let changes = vec![((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), 1),
-        //                            ((rng2.gen_range(0, nodes), rng2.gen_range(0, nodes)),-1)];
-        //         graph.send_at(round, changes.into_iter());
-        //         graph.advance_to(round + 1);
-        //         round += 1;
-        //     }
-        // }
+        // repeatedly change edges
+        let mut round = 0 as u32;
+        while computation.step() {
+            // once each full second ticks, change an edge
+            if time::precise_time_s() - start >= round as f64 {
+                // add edges using prior rng; remove edges using fresh rng with the same seed
+                graph.send(((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), 1));
+                graph.send(((rng2.gen_range(0, nodes), rng2.gen_range(0, nodes)),-1));
+                graph.advance_to(round + 1);
+                round += 1;
+            }
+        }
 
         graph.close();                  // seal the source of edges
         while computation.step() { }    // wind down the computation

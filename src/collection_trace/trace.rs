@@ -5,7 +5,7 @@ use collection_trace::{close_under_lub, LeastUpperBound, Lookup};
 use iterators::merge::{MergeUsing, MergeUsingIterator};
 use iterators::coalesce::{Coalesce, CoalesceIterator};
 use sort::radix_merge::Compact;
-
+use std::fmt::Debug;
 
 pub type CollectionIterator<'a, V> = Peekable<CoalesceIterator<MergeUsingIterator<'a, DifferenceIterator<'a, V>>>>;
 
@@ -60,7 +60,7 @@ pub struct Trace<K, T, V, L: Lookup<K, Offset>> {
     temp:       Vec<T>,
 }
 
-impl<K: Eq, L: Lookup<K, Offset>, T: LeastUpperBound, V: Ord> Trace<K, T, V, L> {
+impl<K: Eq+Ord+Debug, L: Lookup<K, Offset>, T: LeastUpperBound, V: Ord> Trace<K, T, V, L> {
 
     // takes a collection of differences as accumulated from the input and installs them.
     pub fn set_differences(&mut self, time: T, accumulation: Compact<K, V>) {
@@ -222,7 +222,7 @@ pub struct TraceIterator<'a, K: 'a, T: 'a, V: 'a, L: Lookup<K, Offset>+'a> {
 }
 
 impl<'a, K, T, V, L> Iterator for TraceIterator<'a, K, T, V, L>
-where K: Eq+'a,
+where K:  Debug+Ord+Eq+'a,
       T: LeastUpperBound+'a,
       V: Ord+'a,
       L: Lookup<K, Offset>+'a {
