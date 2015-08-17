@@ -432,74 +432,74 @@ impl<'a, K: 'a, V: 'a> CompactSession<'a, K, V> {
     }
 }
 
-#[cfg(test)]
-mod test {
-
-    use super::Accumulator;
-
-    #[test]
-    fn new() {
-        let accum = Accumulator::<(), ()>::new();
-        assert!(accum.done(&|_| 0).is_none());
-    }
-
-    #[test]
-    fn cancel() {
-        let mut accum = Accumulator::with_capacity(256);
-
-        accum.push(1, 2,  3, &|&x| x);
-        accum.push(1, 2, -3, &|&x| x);
-
-        assert!(accum.done(&|&x| x).is_none());
-    }
-
-    #[test]
-    fn load() {
-        let mut accum = Accumulator::with_capacity(256);
-
-        for key in 0..10 {
-            for val in 0..10 {
-                accum.push(key, key + val, 1, &|&x| x);
-            }
-        }
-
-        if let Some(compact) = accum.done(&|&x| x) {
-            println!("{:?}", compact.keys);
-            println!("{:?}", compact.cnts);
-            println!("{:?}", compact.vals);
-            println!("{:?}", compact.wgts);
-            assert_eq!(compact.keys, vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
-            assert_eq!(compact.cnts, vec![10; 10]);
-        }
-        else {
-            // should have been Some(_)
-            assert!(false);
-        }
-    }
-    #[test]
-    fn load_compact() {
-        let mut accum = Accumulator::with_capacity(256);
-
-        for key in 0..10 {
-            for val in 0..10 {
-                accum.push(key + val, key + val, 1, &|&x| x);
-            }
-        }
-
-        if let Some(compact) = accum.done(&|&x| x) {
-            println!("{:?}", compact.keys);
-            println!("{:?}", compact.cnts);
-            println!("{:?}", compact.vals);
-            println!("{:?}", compact.wgts);
-            assert_eq!(compact.keys, vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]);
-            assert_eq!(compact.cnts, vec![1, 1, 1, 1, 1, 1, 1, 1, 1, 1,  1,  1,  1,  1,  1,  1,  1,  1,  1]);
-            assert_eq!(compact.vals, vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]);
-            assert_eq!(compact.wgts, vec![(1, 1), (2, 1), (3, 1), (4, 1), (5, 1), (6, 1), (7, 1), (8, 1), (9, 1), (10, 1),
-                                            (9, 1),  (8, 1),  (7, 1),  (6, 1),  (5, 1),  (4, 1),  (3, 1),  (2, 1), (1, 1)]);
-        }
-        else {
-            // should have been Some(_)
-            assert!(false);
-        }
-    }
-}
+// #[cfg(test)]
+// mod test {
+//
+//     use super::Accumulator;
+//
+//     #[test]
+//     fn new() {
+//         let accum = Accumulator::<(), ()>::new();
+//         assert!(accum.done(&|_| 0).is_none());
+//     }
+//
+//     #[test]
+//     fn cancel() {
+//         let mut accum = Accumulator::with_capacity(256);
+//
+//         accum.push(1, 2,  3, &|&x| x);
+//         accum.push(1, 2, -3, &|&x| x);
+//
+//         assert!(accum.done(&|&x| x).is_none());
+//     }
+//
+//     #[test]
+//     fn load() {
+//         let mut accum = Accumulator::with_capacity(256);
+//
+//         for key in 0..10 {
+//             for val in 0..10 {
+//                 accum.push(key, key + val, 1, &|&x| x);
+//             }
+//         }
+//
+//         if let Some(compact) = accum.done(&|&x| x) {
+//             println!("{:?}", compact.keys);
+//             println!("{:?}", compact.cnts);
+//             println!("{:?}", compact.vals);
+//             println!("{:?}", compact.wgts);
+//             assert_eq!(compact.keys, vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+//             assert_eq!(compact.cnts, vec![10; 10]);
+//         }
+//         else {
+//             // should have been Some(_)
+//             assert!(false);
+//         }
+//     }
+//     #[test]
+//     fn load_compact() {
+//         let mut accum = Accumulator::with_capacity(256);
+//
+//         for key in 0..10 {
+//             for val in 0..10 {
+//                 accum.push(key + val, key + val, 1, &|&x| x);
+//             }
+//         }
+//
+//         if let Some(compact) = accum.done(&|&x| x) {
+//             println!("{:?}", compact.keys);
+//             println!("{:?}", compact.cnts);
+//             println!("{:?}", compact.vals);
+//             println!("{:?}", compact.wgts);
+//             assert_eq!(compact.keys, vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]);
+//             assert_eq!(compact.cnts, vec![1, 1, 1, 1, 1, 1, 1, 1, 1, 1,  1,  1,  1,  1,  1,  1,  1,  1,  1]);
+//             assert_eq!(compact.vals, vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]);
+//             assert_eq!(compact.wgts, vec![(1, 1), (2, 1), (3, 1), (4, 1), (5, 1), (6, 1), (7, 1), (8, 1), (9, 1), (10, 1),
+//                                             (9, 1),  (8, 1),  (7, 1),  (6, 1),  (5, 1),  (4, 1),  (3, 1),  (2, 1), (1, 1)]);
+//         }
+//         else {
+//             // should have been Some(_)
+//             assert!(false);
+//         }
+//     }
+// }

@@ -166,25 +166,25 @@ impl<'a, I: Iterator+'a> Iterator for MergeUsingIterator<'a, I> where I::Item: O
 
 
 
-#[test]
-fn merge_iterator() {
-    let a = vec![3, 4, 6, 9];
-    let b = vec![2, 14, 26, 29];
-    let c = vec![1, 5, 6, 29];
-
-    let merge = MergeIterator::new(vec![a.into_iter(), b.into_iter(), c.into_iter()].into_iter());
-
-    let result = merge.collect::<Vec<_>>();
-    assert_eq!(result, vec![1,2,3,4,5,6,6,9,14,26,29,29]);
-}
-
-#[test]
-fn merge_iterator_single() {
-    let a = vec![3, 4, 6, 9];
-    let b = vec![3, 4, 6, 9];
-
-    let merge = MergeIterator::new(vec![a.into_iter()].into_iter());
-
-    let result = merge.collect::<Vec<_>>();
-    assert_eq!(result, b);
-}
+// #[test]
+// fn merge_iterator() {
+//     let a = vec![3, 4, 6, 9];
+//     let b = vec![2, 14, 26, 29];
+//     let c = vec![1, 5, 6, 29];
+//
+//     let merge = MergeIterator::new(vec![a.into_iter(), b.into_iter(), c.into_iter()].into_iter());
+//
+//     let result = merge.collect::<Vec<_>>();
+//     assert_eq!(result, vec![1,2,3,4,5,6,6,9,14,26,29,29]);
+// }
+//
+// #[test]
+// fn merge_iterator_single() {
+//     let a = vec![3, 4, 6, 9];
+//     let b = vec![3, 4, 6, 9];
+//
+//     let merge = MergeIterator::new(vec![a.into_iter()].into_iter());
+//
+//     let result = merge.collect::<Vec<_>>();
+//     assert_eq!(result, b);
+// }
