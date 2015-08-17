@@ -39,8 +39,8 @@ fn main() {
             (node_input, edge_input)
         });
 
-        let nodes = 10u32; // the u32 helps type inference understand what nodes are
-        let edges = 20;
+        let nodes = 100_000_000u32; // the u32 helps type inference understand what nodes are
+        let edges = 200_000_000;
 
         let seed: &[_] = &[1, 2, 3, 4];
         let mut rng1: StdRng = SeedableRng::from_seed(seed);    // rng for edge additions
