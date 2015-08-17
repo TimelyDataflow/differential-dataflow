@@ -23,22 +23,22 @@ fn main() {
         merges.push(Accumulator::new());
     }
 
+    let func = |&x: &_| x as u64;
+
     let mut node_counter = 0u64;
     let mut edge_counter = 0u64;
     for node in 0..graph.nodes() {
         node_counter += 1;
         let edges = graph.edges(node);
-        for &dest in edges {
-            edge_counter += 2;
-            merges[node % parts].push(node as u32, dest, 1, &|&x| x as u64 >> 8);
-            merges[dest as usize % parts].push(dest, node as u32, 1, &|&x| x as u64 >> 8);
-        }
+        for &dest in edges { merges[node % parts].push(node as u32, dest, 1, &func); }
+        for &dest in edges { merges[dest as usize % parts].push(dest, node as u32, 1, &func); }
+        edge_counter += 2 * edge_counter;
     }
     println!("nodes: {}", node_counter);
     println!("edges: {}", edge_counter);
     println!("d_avg: {}", edge_counter as f64 / node_counter as f64);
 
     for merge in merges.into_iter() {
-        merge.done(&|&x| x as u64 >> 8);
+        merge.done(&func);
     }
 }

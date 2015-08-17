@@ -1,11 +1,13 @@
 use std::iter::Peekable;
 
 use collection_trace::{close_under_lub, LeastUpperBound, Lookup};
-use iterators::merge::{Merge, MergeIterator};
+// use iterators::merge::{Merge, MergeIterator};
+use iterators::merge::{MergeUsing, MergeUsingIterator};
 use iterators::coalesce::{Coalesce, CoalesceIterator};
+use sort::radix_merge::Compact;
 
 
-pub type CollectionIterator<'a, V> = Peekable<CoalesceIterator<MergeIterator<DifferenceIterator<'a, V>>>>;
+pub type CollectionIterator<'a, V> = Peekable<CoalesceIterator<MergeUsingIterator<'a, DifferenceIterator<'a, V>>>>;
 
 #[derive(Copy, Clone)]
 pub struct Offset {
@@ -38,9 +40,9 @@ impl Offset {
 /// received at each.
 
 struct ListEntry {
-    time: usize,
-    vals: usize,
-    wgts: usize,
+    time: u32,
+    vals: u32,
+    wgts: u32,
     next: Option<Offset>,
 }
 
@@ -55,12 +57,13 @@ pub struct Trace<K, T, V, L: Lookup<K, Offset>> {
     links:      Vec<ListEntry>,
     times:      Vec<TimeEntry<T, V>>,
     keys:       L,
+    temp:       Vec<T>,
 }
 
 impl<K: Eq, L: Lookup<K, Offset>, T: LeastUpperBound, V: Ord> Trace<K, T, V, L> {
 
     // takes a collection of differences as accumulated from the input and installs them.
-    pub fn set_differences(&mut self, time: T, accumulation: RadixAccumulation<K, V>) {
+    pub fn set_differences(&mut self, time: T, accumulation: Compact<K, V>) {
 
         // extract the relevant fields
         let keys = accumulation.keys;
@@ -86,7 +89,7 @@ impl<K: Eq, L: Lookup<K, Offset>, T: LeastUpperBound, V: Ord> Trace<K, T, V, L> 
             if &prev_position.val() == &next_position.val() {
                 // add the appropriate entry with no next pointer
                 self.links.push(ListEntry {
-                    time: time_index,
+                    time: time_index as u32,
                     vals: vals_offset,
                     wgts: wgts_offset,
                     next: None
@@ -96,7 +99,7 @@ impl<K: Eq, L: Lookup<K, Offset>, T: LeastUpperBound, V: Ord> Trace<K, T, V, L> 
             else {
                 // add the appropriate entry
                 self.links.push(ListEntry {
-                    time: time_index,
+                    time: time_index as u32,
                     vals: vals_offset,
                     wgts: wgts_offset,
                     next: Some(*prev_position)
@@ -105,10 +108,10 @@ impl<K: Eq, L: Lookup<K, Offset>, T: LeastUpperBound, V: Ord> Trace<K, T, V, L> 
             }
 
             // advance offsets.
-            vals_offset += cnt as usize;
+            vals_offset += cnt;
             let mut counter = 0;
             while counter < cnt {
-                counter += wgts[wgts_offset].1;
+                counter += wgts[wgts_offset as usize].1;
                 wgts_offset += 1;
             }
             assert_eq!(counter, cnt);
@@ -149,12 +152,22 @@ impl<K: Eq, L: Lookup<K, Offset>, T: LeastUpperBound, V: Ord> Trace<K, T, V, L> 
             .unwrap_or(DifferenceIterator::new(&[], &[]))
     }
 
-    /// Accumulates differences for `key` at times less than or equal to `time`.
-    pub fn get_collection<'a>(&'a self, key: &K, time: &T) -> CollectionIterator<'a, V> {
+    // /// Accumulates differences for `key` at times less than or equal to `time`.
+    // pub fn get_collection<'a>(&'a self, key: &K, time: &T) -> CollectionIterator<'a, V> {
+    //     self.trace(key)
+    //         .filter(|x| x.0 <= time)
+    //         .map(|x| x.1)
+    //         .merge()
+    //         .coalesce()
+    //         .peekable()
+    // }
+
+    // Accumulates differences for `key` at times less than or equal to `time`.
+    pub fn get_collection_using<'a, 'b>(&'a self, key: &K, time: &T, heap: &mut Vec<((&(), i32), DifferenceIterator<'static,()>)>) -> CollectionIterator<'a, V> where 'a : 'b {
         self.trace(key)
             .filter(|x| x.0 <= time)
             .map(|x| x.1)
-            .merge()
+            .merge_using(unsafe {::std::mem::transmute(heap)})
             .coalesce()
             .peekable()
     }
@@ -164,14 +177,19 @@ impl<K: Eq, L: Lookup<K, Offset>, T: LeastUpperBound, V: Ord> Trace<K, T, V, L> 
     // TODO : now in the least upper bound, but were not previously so. The main risk is that the
     // TODO : easy way to do this computes the LUB before and after, but this can be expensive:
     // TODO : the LUB with `index` is often likely to be smaller than the LUB without it.
-    pub fn interesting_times(&mut self, key: &K, index: &T, result: &mut Vec<T>) {
+    pub fn interesting_times<'a>(&'a mut self, key: &K, index: T) -> &'a [T] {
+        let mut temp = ::std::mem::replace(&mut self.temp, Vec::new());
+        temp.clear();
+        temp.push(index);
         for (time, _) in self.trace(key) {
-            let lub = time.least_upper_bound(index);
-            if !result.contains(&lub) {
-                result.push(lub);
+            let lub = time.least_upper_bound(&temp[0]);
+            if !temp.contains(&lub) {
+                temp.push(lub);
             }
         }
-        close_under_lub(result);
+        close_under_lub(&mut temp);
+        ::std::mem::replace(&mut self.temp, temp);
+        &self.temp[..]
     }
 
     /// An iteration of pairs of time `&T` and differences `DifferenceIterator<V>` for `key`.
@@ -183,8 +201,21 @@ impl<K: Eq, L: Lookup<K, Offset>, T: LeastUpperBound, V: Ord> Trace<K, T, V, L> 
     }
 }
 
+impl<K, L: Lookup<K, Offset>, T, V> Trace<K, T, V, L> {
+    pub fn new(l: L) -> Trace<K, T, V, L> {
+        Trace {
+            phantom: ::std::marker::PhantomData,
+            links:   Vec::new(),
+            times:   Vec::new(),
+            keys:    l,
+            temp:    Vec::new(),
+        }
+    }
+}
+
 
 /// Enumerates pairs of time `&T` and `DifferenceIterator<V>` of `(&V, i32)` elements.
+#[derive(Clone)]
 pub struct TraceIterator<'a, K: 'a, T: 'a, V: 'a, L: Lookup<K, Offset>+'a> {
     trace: &'a Trace<K, T, V, L>,
     next0: Option<Offset>,
@@ -196,6 +227,8 @@ where K: Eq+'a,
       V: Ord+'a,
       L: Lookup<K, Offset>+'a {
     type Item = (&'a T, DifferenceIterator<'a, V>);
+
+    #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         self.next0.map(|position| {
             let time_index = self.trace.links[position.val()].time as usize;
@@ -203,17 +236,6 @@ where K: Eq+'a,
             self.next0 = self.trace.links[position.val()].next;
             result
         })
-    }
-}
-
-impl<K, L: Lookup<K, Offset>, T, V> Trace<K, T, V, L> {
-    pub fn new(l: L) -> Trace<K, T, V, L> {
-        Trace {
-            phantom: ::std::marker::PhantomData,
-            links:   Vec::new(),
-            times:   Vec::new(),
-            keys:    l,
-        }
     }
 }
 
@@ -238,8 +260,22 @@ impl<'a, V: 'a> DifferenceIterator<'a, V> {
     }
 }
 
+impl<'a, V: 'a> Clone for DifferenceIterator<'a, V> {
+    fn clone(&self) -> Self {
+        DifferenceIterator {
+            vals: self.vals,
+            wgts: self.wgts,
+            next: self.next,
+            wgt_curr: self.wgt_curr,
+            wgt_left: self.wgt_left,
+        }
+    }
+}
+
 impl<'a, V: 'a> Iterator for DifferenceIterator<'a, V> {
     type Item = (&'a V, i32);
+
+    #[inline]
     fn next(&mut self) -> Option<(&'a V, i32)> {
         if self.next < self.vals.len() {
             if self.wgt_left == 0 {

@@ -24,8 +24,12 @@ impl<K: Ord+Clone, T:Clone+LeastUpperBound, S: Ord+Clone+Debug, R: Ord+Clone+Deb
         where F: Fn(&K, &mut CollectionIterator<S>, &mut Vec<(R, i32)>),
               G: FnMut(&K, &V, i32) {
 
-        let mut accum = Compact::new(0,0,0);
+        let mut accums = Vec::with_capacity(256);
+        for _ in 0..256 { accums.push(None); }
+
         for key in keys.into_iter() {
+
+            let
 
             // fetch the collection at the time
             let mut iter = self.source.get_collection(&key, time);

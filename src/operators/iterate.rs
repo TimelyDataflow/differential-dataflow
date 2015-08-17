@@ -1,3 +1,5 @@
+use std::fmt::Debug;
+
 use timely::dataflow::*;
 use timely::dataflow::scopes::Child;
 use timely::dataflow::operators::*;
@@ -33,7 +35,7 @@ pub trait IterateExt<G: Scope, D: Data> {
         (&self, iterations: T, part: P, logic: F) -> Stream<G, (D,i32)> where G::Timestamp: LeastUpperBound, T::Summary: One;
 }
 
-impl<G: Scope, D: Ord+Data> IterateExt<G, D> for Stream<G, (D, i32)> {
+impl<G: Scope, D: Ord+Data+Debug> IterateExt<G, D> for Stream<G, (D, i32)> {
     fn iterate<P: Fn(&D)->U+'static,
                U: UnsignedInt,
                F: FnOnce(&Stream<Child<G, T>, (D,i32)>)->

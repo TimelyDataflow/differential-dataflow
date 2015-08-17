@@ -2,7 +2,7 @@ use std::mem;
 use std::ptr;
 // use std::intrinsics;
 
-pub mod radix;
+// pub mod radix;
 pub mod radix_merge;
 
 // we need a new class of sorting algorithms taking a vector of values and a vector of keys.

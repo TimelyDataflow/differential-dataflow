@@ -56,10 +56,10 @@ impl<K: Eq, V> Lookup<K, V> for Vec<(K, V)> {
 }
 
 pub trait UnsignedInt : Copy+Eq+Ord+Hash+Data+Default+Debug+'static { fn as_u64(&self) -> u64; }
-impl UnsignedInt for u64 { fn as_u64(&self) -> u64 { *self } }
-impl UnsignedInt for u32 { fn as_u64(&self) -> u64 { *self as u64 } }
-impl UnsignedInt for u16 { fn as_u64(&self) -> u64 { *self as u64 } }
-impl UnsignedInt for u8 { fn as_u64(&self) -> u64 { *self as u64 } }
+impl UnsignedInt for u64 { #[inline] fn as_u64(&self) -> u64 { *self } }
+impl UnsignedInt for u32 { #[inline] fn as_u64(&self) -> u64 { *self as u64 } }
+impl UnsignedInt for u16 { #[inline] fn as_u64(&self) -> u64 { *self as u64 } }
+impl UnsignedInt for u8 { #[inline] fn as_u64(&self) -> u64 { *self as u64 } }
 
 
 

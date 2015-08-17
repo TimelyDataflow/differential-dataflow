@@ -1,4 +1,5 @@
 use std::rc::Rc;
+use std::fmt::Debug;
 
 use timely::Data;
 use timely::dataflow::*;
@@ -6,6 +7,7 @@ use timely::dataflow::operators::*;
 use timely::dataflow::channels::pact::Exchange;
 
 use sort::*;
+// use sort::radix_merge::{Accumulator, Compact};
 use collection_trace::Lookup;
 use collection_trace::lookup::UnsignedInt;
 
@@ -15,7 +17,7 @@ pub trait ConsolidateExt<D> {
     fn consolidate<U: UnsignedInt, F: Fn(&D)->U+'static>(&self, part: F) -> Self;
 }
 
-impl<G: Scope, D: Ord+Data> ConsolidateExt<D> for Stream<G, (D, i32)> {
+impl<G: Scope, D: Ord+Data+Debug> ConsolidateExt<D> for Stream<G, (D, i32)> {
     fn consolidate<U: UnsignedInt, F: Fn(&D)->U+'static>(&self, part: F) -> Self {
 
         let mut inputs = Vec::new();    // Vec<(G::Timestamp, Vec<(D, i32))>
@@ -38,6 +40,7 @@ impl<G: Scope, D: Ord+Data> ConsolidateExt<D> for Stream<G, (D, i32)> {
                     // let len = stash.len();
                     coalesce8(&mut stash, &|x| (*part2)(x).as_u64());
                     // println!("consolidating at {:?}: {} -> {}", index, len, stash.len());
+
                     output.session(&index).give_iterator(stash.drain_temp());
                 }
             }
