@@ -20,6 +20,12 @@ git="https://github.com/frankmcsherry/timely-dataflow.git"
 [dependencies.graph-map]
 git="https://github.com/frankmcsherry/graph-map.git"
 
+[dependencies.radix-sort]
+git="https://github.com/frankmcsherry/radix-sort.git"
+
+# [dependencies.sorting]
+# path="../sorting"
+
 [dev-dependencies]
 getopts="*"
 rand="*"

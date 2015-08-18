@@ -22,83 +22,10 @@ impl<K: Eq, V, F: Fn(&K)->u64> HashIndex<K, V, F> {
     }
     pub fn capacity(&self) -> usize { self.buffer.capacity() }
 
-    pub fn get_ref<'a>(&'a self, query: &K) -> Option<&'a V> {
 
-        let target = (self.bucket)(query) >> self.shift;
-        let mut iterator = self.buffer[target as usize ..].iter().map(|x| x.as_ref());
-        while let Some(Some(&(ref key, ref val))) = iterator.next() {
-            let found = (self.bucket)(key) >> self.shift;
-            if found >= target {
-                if key == query {
-                    return Some(val);
-                }
-                else {
-                    return None;
-                }
-            }
-        }
-
-        return None;
-    }
-
-
-    pub fn get_mut<'a>(&'a mut self, query: &K) -> Option<&'a V> {
-
-        let target = (self.bucket)(query) >> self.shift;
-        let mut iterator = self.buffer[target as usize ..].iter_mut().map(|x| x.as_ref());
-        while let Some(Some(&(ref key, ref val))) = iterator.next() {
-            let found = (self.bucket)(key) >> self.shift;
-            if found == target && key == query {
-                return Some(val);
-            }
-            if found > target {
-                return None;
-            }
-        }
-
-        return None;
-    }
-
-    pub fn entry_or_insert<G: FnMut()->V>(&mut self, key: K, mut func: G) -> &mut V {
-
-        let target = (self.bucket)(&key) >> self.shift;
-
-        let mut success = false;
-        let mut position = target as usize;
-        while position < self.buffer.len() {
-            if let Some(ref mut kv) = self.buffer[position].as_mut() {
-                let found = (self.bucket)(&kv.0) >> self.shift;
-                if found == target && key == kv.0 {
-                    success = true;
-                    break;
-                }
-                if found > target { break; }
-            }
-            else { break; }
-
-            position += 1;
-        }
-
-        if success { return &mut self.buffer[position].as_mut().unwrap().1; }
-        else {
-            // position now points at the place where the value should go.
-            // we may need to slide everyone from there forward until a None.
-            let begin = position;
-            while position < self.buffer.len() && self.buffer[position].is_some() {
-                position += 1;
-            }
-
-            if position < self.buffer.len() {
-
-                for i in 0..(position - begin) {
-                    self.buffer.swap(position - i - 1, position - i);
-                }
-
-                assert!(self.buffer[begin].is_none());
-                self.buffer[begin] = Some((key, func()));
-                self.count += 1;
-                &mut self.buffer[begin].as_mut().unwrap().1
-            }
+    pub fn entry_or_insert<'a, G: FnMut()->V>(&'a mut self, key: K, func: &G) -> &'a mut V {
+        get_or_insert(&mut self.buffer, key, &|k| (self.bucket(k) >> self.shift), func);
+        if let Ok
             else {
                 // println!("resizing: load at {}", self.count as f64 / self.buffer.capacity() as f64);
 
@@ -123,42 +50,113 @@ impl<K: Eq, V, F: Fn(&K)->u64> HashIndex<K, V, F> {
                 self.entry_or_insert(key, func)
             }
         }
+}
+
+
+pub fn get_ref<'a, K: Eq, V, F: Fn(&K)->usize>(slice: &'a [Option<(K,V)>], query: &K, function: &F) -> Option<&'a V> {
+
+    let target = function(query);
+    let mut iterator = slice[target..].iter().map(|x| x.as_ref());
+    while let Some(Some(&(ref key, ref val))) = iterator.next() {
+        let found = function(key);
+        if found >= target && key == query { return Some(val); }
+        if found > target { return None; }
     }
 
-    pub fn remove_key(&mut self, key: &K) -> Option<V> {
+    return None;
+}
 
-        let target = (self.bucket)(&key) >> self.shift;
 
-        let mut success = false;
-        let mut position = target as usize;
-        while position < self.buffer.len() {
-            if let Some(ref mut kv) = self.buffer[position].as_mut() {
-                let found = (self.bucket)(&kv.0) >> self.shift;
-                if found == target && key == &kv.0 {
-                    success = true;
-                    break;
-                }
-                if found > target { break; }
+pub fn get_mut<'a, K: Eq, V, F: Fn(&K)->usize>(slice: &'a mut [Option<(K,V>)], query: &K, function: &F) -> Option<&'a mut V> {
+
+    let target = function(query);
+    let mut iterator = slice[target..].iter_mut().map(|x| x.as_ref());
+    while let Some(Some(&(ref key, ref mut val))) = iterator.next() {
+        let found = function(key);
+        if found >= target && key == query { return Some(val); }
+        if found > target { return None; }
+    }
+
+    return None;
+}
+
+pub fn get_or_insert<'a, K: Eq, V, F: Fn(&K)->usize, G: FnMut()->V>(slice: &'a mut [Option<(K,V>)], key: K, function: &F, mut func: G) -> Result<&'a mut V,()> {
+
+    let target = function(&key);
+
+    let mut success = false;
+    let mut position = target as usize;
+    while position < self.buffer.len() {
+        if let Some(ref mut kv) = slice[position].as_mut() {
+            let found = function(&kv.0);
+            if found == target && key == kv.0 {
+                success = true;
+                break;
             }
-            else { break; }
+            if found > target { break; }
+        }
+        else { break; }
 
+        position += 1;
+    }
+
+    if success { return Ok(&mut slice[position].as_mut().unwrap().1); }
+    else {
+        // position now points at the place where the value should go.
+        // we may need to slide everyone from there forward until a None.
+        let begin = position;
+        while position < slice.len() && slice[position].is_some() {
             position += 1;
         }
 
-        if success {
-            let result = self.buffer[position].take();
+        if position < slice.len() {
 
-            // now propagate the None forward as long as records are past their preferred location
-            while position + 1 < self.buffer.len()
-               && self.buffer[position].is_some()
-               && (self.bucket)(&self.buffer[position].as_ref().unwrap().0) >> self.shift <= position as u64 {
-                self.buffer.swap(position, position + 1);
+            for i in 0..(position - begin) {
+                slice.swap(position - i - 1, position - i);
             }
 
-            result.map(|(_,v)| v)
+            assert!(slice[begin].is_none());
+            slice[begin] = Some((key, func()));
+            self.count += 1;
+            return Ok(&mut slice[begin].as_mut().unwrap().1);
         }
-        else {
-            None
+        else { return Err(()); }
+    }
+}
+
+pub fn remove_key<'a, K: Eq, V, F: Fn(&K)->usize>(slice: &mut [Option<(K,V)>], key: &K, function: &F) -> Option<V> {
+
+    let target = function(&key);
+
+    let mut success = false;
+    let mut position = target as usize;
+    while position < slice.len() {
+        if let Some(ref mut kv) = slice[position].as_mut() {
+            let found = function(&kv.0);
+            if found == target && key == &kv.0 {
+                success = true;
+                break;
+            }
+            if found > target { break; }
         }
+        else { break; }
+
+        position += 1;
+    }
+
+    if success {
+        let result = slice[position].take();
+
+        // now propagate the None forward as long as records are past their preferred location
+        while position + 1 < slice.len()
+           && slice[position].is_some()
+           && function(&self.buffer[position].as_ref().unwrap().0) <= position as u64 {
+            slice.swap(position, position + 1);
+        }
+
+        result.map(|(_,v)| v)
+    }
+    else {
+        None
     }
 }

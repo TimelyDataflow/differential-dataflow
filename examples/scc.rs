@@ -57,7 +57,9 @@ fn main() {
             rng2.gen::<f64>();
 
             for index in 0..edges {
-                input.send(((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), 1));
+                let edge = (rng1.gen_range(0, nodes), rng1.gen_range(0, nodes));
+                // println!("edge: {:?}", edge);
+                input.send((edge, 1));
                 if (index % (1 << 16)) == 0 {
                     computation.step();
                 }
@@ -144,5 +146,7 @@ where G::Timestamp: LeastUpperBound {
 
     labels.join_u(&edges, |l| l, |e| e, |_k,l,d| (*d,*l))
           .concat(&nodes)
+        //   .inspect_batch(|t, b| println!("all labels at {:?}: {:?}", t, b))
           .group_by_u(|x| x, |k,v| (*k,*v), |_, s, t| { t.push((*s.peek().unwrap().0, 1)); } )
+        //   .inspect_batch(|t, b| println!("min labels at {:?}: {:?}", t, b))
 }

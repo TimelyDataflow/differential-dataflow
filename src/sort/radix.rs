@@ -5,6 +5,9 @@ use std::cmp;
 
 use timely::drain::DrainExt;
 
+
+
+
 pub fn rsort_experimental8<T:Ord+Copy, F: Fn(&T)->u64>(src: &mut Vec<Vec<T>>, dst: &mut Vec<Vec<T>>, func: &F) {
 
     let mut counts = [0u32; 256];
@@ -85,16 +88,18 @@ pub fn rsort_msb<T:Ord, F: Fn(&T)->u64, G: Fn(&mut [T])>(slice: &mut [T], func: 
             }
         }
 
-        let mut cursor = 0;
-        for i in 0..256 {
-            let temp = slice;
-            let (todo, rest) = temp.split_at_mut(lower[i] as usize - cursor);
+        if shift/8 + 1 < <U as Unsigned>::bytes() {
+            let mut cursor = 0;
+            for i in 0..256 {
+                let temp = slice;
+                let (todo, rest) = temp.split_at_mut(lower[i] as usize - cursor);
 
-            if todo.len() > 256  && todo.len() < lower[255] as usize / 2 { work.push((todo, shift + 8)); }
-            else                                                { and_then(todo); }
+                if todo.len() > 256  && todo.len() < lower[255] as usize / 2 { work.push((todo, shift + 8)); }
+                else                                                { and_then(todo); }
 
-            slice = rest;
-            cursor = lower[i] as usize;
+                slice = rest;
+                cursor = lower[i] as usize;
+            }
         }
     }
 }

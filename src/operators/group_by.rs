@@ -8,11 +8,12 @@
 //! The operator is invoked only on non-empty groups; the provided iterator uses `Peekable` and it
 //! is safe to call `.peek().unwrap()` on the iterator.
 
-use std::rc::Rc;
 use std::default::Default;
 use std::hash::Hash;
 use std::collections::HashMap;
 use std::fmt::Debug;
+
+use itertools::Itertools;
 
 use timely::Data;
 use timely::dataflow::*;
@@ -20,9 +21,16 @@ use timely::dataflow::operators::{Map, Unary};
 use timely::dataflow::channels::pact::Exchange;
 use timely::drain::DrainExt;
 
-use collection_trace::{LeastUpperBound, Lookup, OperatorTrace, Offset};
+use collection_trace::{LeastUpperBound, Lookup, Trace, Offset};
 use collection_trace::lookup::UnsignedInt;
-use collection_trace::collection_trace::CollectionIterator;
+use collection_trace::trace::CollectionIterator;
+
+use iterators::coalesce::Coalesce;
+
+
+use radix_sort::RadixSorter;
+
+use sort::radix_merge::{Compact};
 use sort::*;
 
 // implement `GroupByExt` for any stream implementing `Unary` and `Map` (most of them).
@@ -85,10 +93,6 @@ where G::Timestamp: LeastUpperBound {
     >
     (&self, kv: KV, part: Part, key_h: KH, reduc: Reduc, look: LookG, logic: Logic) -> Stream<G, (D2, i32)> {
 
-        // we will need at least two copies of the key hash function, so we wrap it in a refcount.
-        let key_h = Rc::new(key_h);
-        let clone = key_h.clone();
-
         // A pair of source and result `CollectionTrace` instances.
         // TODO : The hard-coded 0 means we don't know how many bits we can shave off of each int
         // TODO : key, which is fine for `HashMap` but less great for integer keyed maps, which use
@@ -97,16 +101,17 @@ where G::Timestamp: LeastUpperBound {
         // TODO : which is what would let us see the number of peers, because we only know that
         // TODO : the type also implements the `Unary` and `Map` traits, not that it is a `Stream`.
         // TODO : We could implement this just for `Stream`, but would have to repeat the trait
+
         // TODO : method signature boiler-plate, rather than use default implemenations.
-        let mut trace =  OperatorTrace::<K, G::Timestamp, V1, V2, Look>::new(|| look(0));
+        // let mut trace =  OperatorTrace::<K, G::Timestamp, V1, V2, Look>::new(|| look(0));
+        let mut source = Trace::new(look(0));
+        let mut result = Trace::new(look(0));
+
         // A map from times to received (key, val, wgt) triples.
         let mut inputs = Vec::new();
-        // A map from times to a list of keys that need processing at that time.
-        let mut to_do =  Vec::new();
 
-        // temporary storage for interesting times.
-        // TODO : perhaps the collection trace should own this and return a &[G::Timestamp]?
-        let mut idx = Vec::new();
+        // A map from times to a list of keys that need processing at that time.
+        let mut to_do = Vec::new();
 
         // create an exchange channel based on the supplied Fn(&D1)->u64.
         let exch = Exchange::new(move |&(ref x,_)| part(x));
@@ -116,20 +121,9 @@ where G::Timestamp: LeastUpperBound {
 
             // 1. read each input, and stash it in our staging area
             while let Some((time, data)) = input.next() {
-
-                // request a notification for when all records with this time have been received.
                 notificator.notify_at(&time);
-
-                // fetch (and create, if needed) key and value queues for this time.
-                let mut queues = inputs.entry_or_insert(time.clone(), || (Vec::new(), Vec::new()));
-                for (datum, wgt) in data.drain_temp() {
-                    // transform the data into key,val pairs and enqueue.
-                    // TODO : opportunity for a smarter, sorting/coalescing queue.
-                    // TODO : see the inappropriately named radix_merge::Merge struct.
-                    let (key, val) = kv(datum);
-                    queues.0.push(key);
-                    queues.1.push((val, wgt));
-                }
+                inputs.entry_or_insert(time.clone(), || RadixSorter::new())
+                      .extend(data.drain_temp().map(|(d,w)| (kv(d),w)),  &|x| key_h(&(x.0).0));
             }
 
             // 2. go through each time of interest that has reached completion
@@ -138,54 +132,76 @@ where G::Timestamp: LeastUpperBound {
             while let Some((index, _count)) = notificator.next() {
 
                 // 2a. fetch any data associated with this time.
-                if let Some((mut keys, mut vals)) = inputs.remove_key(&index) {
+                if let Some(mut queue) = inputs.remove_key(&index) {
+                    let radix_sorted = queue.finish(&|x| key_h(&(x.0).0));
+                    if let Some(compact) = Compact::from_radix(radix_sorted, &|k| key_h(k)) {
+                        for key in &compact.keys {
+                            for time in source.interesting_times(key, index.clone()).iter() {
+                                let mut queue = to_do.entry_or_insert((*time).clone(), || { notificator.notify_at(time); Vec::new() });
+                                queue.push((*key).clone());
+                            }
+                        }
 
-                    // coalesce the (key, val, wgt) triples, using a helpful &*clone : Fn(&K)->u64.
-                    // TODO : make this sort in a specific order, rather than best-effort top-down
-                    // TODO : radix sort bailing out to qsort (shame!). bottom-up radix, please.
-                    coalesce_kv8(&mut keys, &mut vals, &*clone);
-
-                    // defer to trace.source to install the (time, keys, vals).
-                    // this mostly just updates a map from key to a linked list head indicating
-                    // an offset in vals.
-                    trace.source.install_differences(index.clone(), &mut keys, vals);
-
-                    // finally, we need to consult each of the installed keys (could have done at
-                    // install time, with lightly tweaked logic) to determine if there are future
-                    // times at which this key should be re-considered, because there will be
-                    // installed differences coming into effect. badly explained, sorry.
-                    // TODO : install_differences will probably want to take ownership/drain keys,
-                    // TODO : so we'll need to do this earlier, or as part of install_differences.
-                    // TODO : I suspect interesting_times could do a better job of determining
-                    // TODO : times that are *newly interesting*, i.e. not previously produced.
-                    keys.dedup();
-                    for key in keys.into_iter() {
-                        trace.source.interesting_times(&key, &index, &mut idx);
-                        // for each time interesting to the key,
-                        for update in idx.drain_temp() {
-                            // add the key to a list indexed by the time.
-                            to_do.entry_or_insert(update, || { notificator.notify_at(&update); Vec::new() })
-                                 .push(key.clone());
-                         }
+                        // add the accumulation to the trace source.
+                        // println!("setting source differences; {}", compact.vals.len());
+                        source.set_differences(index.clone(), compact);
                     }
                 }
 
-                // 2b. We must now determine for each interesting key at this time, how does the
-                // currently reported output match up with what we need as output. Should we send
-                // more output differences, and what are they?
+                // we may need to produce output at index
+                let mut session = output.session(&index);
+
+                // temporary storage for operator implementations to populate
+                let mut buffer = vec![];
+
+                    // 2b. We must now determine for each interesting key at this time, how does the
+                    // currently reported output match up with what we need as output. Should we send
+                    // more output differences, and what are they?
+
+                // Much of this logic used to hide in `OperatorTrace` and `CollectionTrace`.
+                // They are now gone and simpler, respectively.
                 if let Some(mut keys) = to_do.remove_key(&index) {
-                    let mut session = output.session(&index);
-                    // would be great to sort these keys using `clone`.
-                    qsort(&mut keys[..]);
+
+                    // println!("groupby doing a thing at {:?}", index);
+
+                    // we would like these keys in a particular order.
+                    // TODO : use a radix sort since we have `key_h`.
+                    keys.sort_by(|x,y| (key_h(&x), x).cmp(&(key_h(&y), y)));
                     keys.dedup();
+
+                    // accumulations for installation into result
+                    let mut accumulation = Compact::new(0,0,0);
+
+                    let mut heap1 = vec![];
+                    let mut heap2 = vec![];
+
                     for key in keys {
-                        // set_collection_from updates trace.result so that its differences will
-                        // accumulate to `logic` applied to the accumulation of trace.source.
-                        trace.set_collection_from(&key, &index, |k,s,r| logic(k,s,r));
-                        // send each difference (possibly none, which would be great).
-                        for &(ref result, weight) in trace.result.get_difference(&key, &index)  {
-                            session.give((reduc(&key, &result), weight));
+
+                        // acquire an iterator over the collection at `time`.
+                        let mut input = source.get_collection_using(&key, &index, &mut heap1);
+
+                        // if we have some data, invoke logic to populate self.dst
+                        if input.peek().is_some() { logic(&key, &mut input, &mut buffer); }
+
+                        buffer.sort_by(|x,y| x.0.cmp(&y.0));
+
+                        // push differences in to Compact.
+                        let mut compact = accumulation.session();
+                        for (val, wgt) in Coalesce::coalesce(result.get_collection_using(&key, &index, &mut heap2)
+                                                                   .map(|(v, w)| (v,-w))
+                                                                   .merge_by(buffer.iter().map(|&(ref v, w)| (v, w)), |x,y| {
+                                                                        x.0.cmp(&y.0)
+                                                                   }))
+                        {
+                            session.give((reduc(&key, val), wgt));
+                            compact.push(val.clone(), wgt);
                         }
+                        compact.done(key);
+                        buffer.clear();
+                    }
+
+                    if accumulation.vals.len() > 0 {
+                        result.set_differences(index.clone(), accumulation);
                     }
                 }
             }
