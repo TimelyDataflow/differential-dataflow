@@ -40,15 +40,17 @@ impl<G: Scope, D: Ord+Data+Debug> ConsolidateExt<D> for Stream<G, (D, i32)> {
         let exch = Exchange::new(move |&(ref x,_)| (*part1)(x).as_u64());
         self.unary_notify(exch, "Consolidate", vec![], move |input, output, notificator| {
 
-            input.for_each(|index: &G::Timestamp, data: &mut Content<(D, i32)>| {
+            // input.for_each(|index: &G::Timestamp, data: &mut Content<(D, i32)>| {
+            while let Some((index, data)) = input.next() {
                 notificator.notify_at(&index);
                 inputs.entry_or_insert(index.clone(), || RadixSorter::new())
                       .extend(data.drain_temp(), &|x| (*part2)(&x.0).as_u64());
-            });
+            }
+            // });
 
             // 2. go through each time of interest that has reached completion
-            // while let Some((index, _count)) = notificator.next() {
-            notificator.for_each(|index, _count| {
+            while let Some((index, _count)) = notificator.next() {
+            // notificator.for_each(|index, _count| {
                 if let Some(mut stash) = inputs.remove_key(&index) {
 
                     let mut session = output.session(&index);
@@ -72,7 +74,8 @@ impl<G: Scope, D: Ord+Data+Debug> ConsolidateExt<D> for Stream<G, (D, i32)> {
                         session.give_iterator(buffer.drain_temp().coalesce());
                     }
                 }
-            });
+            }
+            // });
         })
     }
 }
