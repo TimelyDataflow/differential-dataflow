@@ -6,7 +6,7 @@
 //! system will automatically update the results of your computation with any corresponding additions
 //! and removals.
 //!
-//! Differential dataflow built on top of the timely dataflow framework for data-parallel programming
+//! Differential dataflow is built on the timely dataflow framework for data-parallel programming
 //! and so is automatically parallelizable across multiple threads, processes, and computers.
 //! Moreover, because it uses timely dataflow's primitives, it seamlessly inter-operates with other
 //! timely dataflow computations.
@@ -28,7 +28,7 @@
 //!
 //! // repeatedly update minimal distances to each node,
 //! // by describing how to do one round of updates, and then repeating.
-//! let limit = start.iterate(u32::max_value(), |x| x.0, |x| x.0, |dists| {
+//! let limit = start.iterate(u32::max_value(), |x| x.0, |dists| {
 //!
 //!     // bring the invariant edges into the loop
 //!     let edges = dists.builder().enter(&edges);

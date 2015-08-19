@@ -30,7 +30,7 @@ let start = roots.map(|(x, w)| ((x, 0), w));
 
 // repeatedly update minimal distances to each node,
 // by describing how to do one round of updates, and then repeating.
-let limit = start.iterate(u32::max_value(), |x| x.0, |x| x.0, |dists| {
+let limit = start.iterate(u32::max_value(), |x| x.0, |dists| {
 
     // bring the invariant edges into the loop
     let edges = dists.builder().enter(&edges);
@@ -52,7 +52,7 @@ In any case, the outputs will precisely track the computation applied to the inp
 
 ## An example execution: breadth first search
 
-Let's take the [BFS example]() from the differential dataflow repository. It constructs a random graph on 200M edges, performs the reachability computation defined above, starting from root nodes 0, 1, and 2, and reports the number of nodes at each distance.
+Let's take the [BFS example](https://github.com/frankmcsherry/differential-dataflow/blob/master/examples/bfs.rs) from the differential dataflow repository. It constructs a random graph on 200M edges, performs the reachability computation defined above, starting from root nodes 0, 1, and 2, and reports the number of nodes at each distance.
 
 The random number generator is seeded, so you should see the same output I see (up to timings):
 
