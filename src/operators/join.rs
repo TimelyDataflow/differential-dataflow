@@ -1,3 +1,5 @@
+//! Match pairs of records based on a key, and apply a reduction function.
+
 use std::fmt::Debug;
 use std::default::Default;
 use std::hash::Hash;
@@ -25,8 +27,13 @@ impl<G: Scope, D1: Data+Ord, S> JoinExt<G, D1> for S
 where G::Timestamp: LeastUpperBound,
       S: Binary<G, (D1, i32)>+Map<G, (D1, i32)> { }
 
+/// An extension trait for the `join` methods.
 pub trait JoinExt<G: Scope, D1: Data+Ord> : Binary<G, (D1, i32)>+Map<G, (D1, i32)>
 where G::Timestamp: LeastUpperBound {
+    /// Matches elements of two streams using unsigned integers as the keys.
+    ///
+    /// `join_u` takes a second input stream, two key-val selector functions, and a reduction
+    /// function from an unsigned integer (the key) and two value references to the output type.
     fn join_u<
         U:  UnsignedInt+Debug,
         V1: Data+Ord+Clone+Default+Debug+'static,
@@ -48,6 +55,13 @@ where G::Timestamp: LeastUpperBound {
                         result,
                         &|x| (Vec::new(), x))
     }
+    /// Restricts the input stream to those elements whose unsigned integer key is present in the
+    /// second stream.
+    ///
+    /// `semijoin_u` takes a second stream, a key-val selector function, and a reconstruction function.
+    /// Records are produced in the output if their key matches an unsigned integer present in the
+    /// second stream. The key-val selector and reconstruction function are available to help avoid
+    /// storing a redundant copy of the key in the value payload.
     fn semijoin_u<
         U:  UnsignedInt+Debug,
         V1: Data+Ord+Clone+Default+Debug+'static,
@@ -59,6 +73,7 @@ where G::Timestamp: LeastUpperBound {
         self.join_u(&other, kv1, |u| (u, ()), move |x,y,_| result(x,y))
     }
 
+    /// Matches elements of two streams using a key function.
     fn join<
         K:  Data+Ord+Clone+Hash+Debug+'static,
         V1: Data+Ord+Clone+Debug+'static,
@@ -82,6 +97,8 @@ where G::Timestamp: LeastUpperBound {
         self.map(move |(x,w)| (kv1(x),w))
             .join_raw(&other.map(move |(x,w)| (kv2(x),w)), |x| x, |x| x, move |&(ref k,_)| kh1(k), move |&(ref k,_)| kh2(k), move |k| kh3(k), result, &|_| HashMap::new())
     }
+
+    /// Restricts the input stream to those elements whose key is present in the second stream.
     fn semijoin<
         K:  Data+Ord+Clone+Hash+Debug+'static,
         V1: Data+Ord+Clone+Debug+'static,
