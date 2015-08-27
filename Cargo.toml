@@ -17,10 +17,10 @@ license = "MIT"
 git="https://github.com/frankmcsherry/timely-dataflow.git"
 # path="../timely-dataflow"
 
-[dependencies.graph-map]
+[dependencies.graph_map]
 git="https://github.com/frankmcsherry/graph-map.git"
 
-[dependencies.radix-sort]
+[dependencies.radix_sort]
 git="https://github.com/frankmcsherry/radix-sort.git"
 
 # [dependencies.sorting]
