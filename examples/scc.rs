@@ -146,7 +146,5 @@ where G::Timestamp: LeastUpperBound {
 
     labels.join_u(&edges, |l| l, |e| e, |_k,l,d| (*d,*l))
           .concat(&nodes)
-        //   .inspect_batch(|t, b| println!("all labels at {:?}: {:?}", t, b))
-          .group_by_u(|x| x, |k,v| (*k,*v), |_, s, t| { t.push((*s.peek().unwrap().0, 1)); } )
-        //   .inspect_batch(|t, b| println!("min labels at {:?}: {:?}", t, b))
+          .group_u(|_, s, t| t.push((*s.peek().unwrap().0, 1)))
 }

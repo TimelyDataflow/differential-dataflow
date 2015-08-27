@@ -3,8 +3,8 @@
 //! Differential dataflow programs are written using primitives operations like `map`, `filter`,
 //! `join`, and `group_by`, as well as higher-order operations like `iterate`. Having defined a
 //! differential dataflow computation, you may add or remove records from its inputs, and the
-//! system will automatically update the results of your computation with any corresponding additions
-//! and removals.
+//! system will automatically update the outputs of your computation with the appropriate corresponding
+//! additions and removals.
 //!
 //! Differential dataflow is built on the timely dataflow framework for data-parallel programming
 //! and so is automatically parallelizable across multiple threads, processes, and computers.
@@ -46,7 +46,7 @@
 //! limit.inspect(|x| println!("observed: {:?}", x));
 //! ```
 
-
+extern crate fnv;
 extern crate timely;
 extern crate itertools;
 extern crate radix_sort;

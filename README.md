@@ -40,7 +40,7 @@ let limit = start.iterate(u32::max_value(), |x| x.0, |dists| {
     // group by node id and keep minimum distance.
     dists.join_u(&edges, |d| d, |e| e, |_,d,n| (*n, d+1))
          .concat(&dists)
-         .group_by_u(|x| x, |k,v| (*k, *v), |_, mut s, t| {
+         .group_u(|_, mut s, t| {
              t.push((*s.peek().unwrap().0, 1))
          })
 });

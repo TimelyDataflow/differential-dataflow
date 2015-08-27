@@ -10,7 +10,7 @@
 //! it triggers no additional computation.
 
 use std::default::Default;
-use std::hash::Hash;
+use std::hash::{Hash, Hasher};
 use std::collections::HashMap;
 use std::fmt::Debug;
 
@@ -28,36 +28,51 @@ use collection_trace::trace::CollectionIterator;
 
 use iterators::coalesce::Coalesce;
 use radix_sort::RadixSorter;
+use fnv::FnvHasher;
 use sort::radix_merge::{Compact};
 use sort::*;
 
+fn hash_fnv<T: Hash>(x: &T) -> u64 {
+    let mut h: FnvHasher = Default::default();
+    x.hash(&mut h);
+    h.finish()
+}
 
-// fn hash<T: Hash>(x: &T) -> u64 {
-//     let mut h = SipHasher::new();
-//     x.hash(&mut h);
-//     h.finish()
-// }
-//
-//
-// /// Extension trait for the `group` differential dataflow method
-// pub trait GroupExt<G: Scope, K: Data+Ord+Hash, V: Data+Ord> : GroupByExt<G, (K,V)> {
-//     fn group<L, V2>(&self, logic: L) -> Stream<G, ((K,V2),i32)>
-//         where L: Fn(&K, &mut CollectionIterator<V>, &mut Vec<(V2, i32)>)+'static {
-//             self.group_by(|x| x, |&(ref k,_)| hash(k), |k| hash(k), |k,v2| (k.clone(), v2.clone()), |_| HashMap::new(), logic);
-//     }
-// }
-//
-// impl<G: Scope, D: Data+Eq, S> GroupExt<G, D> for S
-// where G::Timestamp: LeastUpperBound,
-//       S: Unary<G, (D, i32)>+Map<G, (D, i32)> { }
-//
+/// Extension trait for the `group` differential dataflow method
+pub trait GroupExt<G: Scope, K: Data+Ord+Hash+Default+Debug, V: Data+Ord+Default+Debug> : GroupByExt<G, (K,V)>
+    where G::Timestamp: LeastUpperBound {
+    fn group<L, V2: Data+Ord+Default+Debug>(&self, logic: L) -> Stream<G, ((K,V2),i32)>
+        where L: Fn(&K, &mut CollectionIterator<V>, &mut Vec<(V2, i32)>)+'static {
+            self.group_by_inner(|x| x, |&(ref k,_)| hash_fnv(k), hash_fnv, |k,v2| ((*k).clone(), (*v2).clone()), |_| HashMap::new(), logic)
+    }
+}
+
+impl<G: Scope, K: Data+Ord+Hash+Default+Debug, V: Data+Ord+Default+Debug, S> GroupExt<G, K, V> for S
+where G::Timestamp: LeastUpperBound,
+      S: Unary<G, ((K,V), i32)>+Map<G, ((K,V), i32)> { }
+
+
+pub trait GroupUnsigned<G: Scope, U: UnsignedInt, V: Data+Ord+Default+Debug> : GroupByExt<G, (U,V)>
+    where G::Timestamp: LeastUpperBound {
+    fn group_u<L, V2: Data+Ord+Default+Debug>(&self, logic: L) -> Stream<G, ((U,V2),i32)>
+        where L: Fn(&U, &mut CollectionIterator<V>, &mut Vec<(V2, i32)>)+'static {
+            self.group_by_inner(|x| x, |&(k,_)| k.as_u64(), |k| k.as_u64(),
+                                    |&k, v| (k.clone(), (*v).clone()),
+                                    |x| (Vec::new(), x),
+                                    logic)
+    }
+}
+
+// implement `GroupByExt` for any stream implementing `Unary` and `Map` (most of them).
+impl<G: Scope, U: UnsignedInt, V: Data+Ord+Default+Debug, S> GroupUnsigned<G, U, V> for S
+where G::Timestamp: LeastUpperBound,
+      S: GroupByExt<G, (U,V)> { }
+
 
 // implement `GroupByExt` for any stream implementing `Unary` and `Map` (most of them).
 impl<G: Scope, D: Data+Eq, S> GroupByExt<G, D> for S
 where G::Timestamp: LeastUpperBound,
-      S: Unary<G, (D, i32)>+Map<G, (D, i32)> { }
-
-
+    S: Unary<G,(D,i32)>+Map<G,(D,i32)> { }
 
 
 /// Extension trait for the `group_by` and `group_by_u` differential dataflow methods.
@@ -97,7 +112,7 @@ where G::Timestamp: LeastUpperBound {
     /// A specialization of the `group_by` method to the case that the key type `K` is an unsigned
     /// integer, and the strategy for indexing by key is simply to index into a vector.
     fn group_by_u<
-        U:     UnsignedInt+Debug,
+        U:     Data+UnsignedInt+Debug,
         V1:    Data+Ord+Clone+Default+Debug+'static,
         V2:    Ord+Clone+Default+Debug+'static,
         D2:    Data,

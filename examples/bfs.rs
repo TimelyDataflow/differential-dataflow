@@ -104,8 +104,6 @@ where G::Timestamp: LeastUpperBound,
 
         inner.join_u(&edges, |l| l, |e| e, |_k,l,d| (*d, l+1))
              .concat(&nodes)
-             .group_by_u(|x| x, |k,v| (*k, *v), |_, s, t| {
-                 t.push((*s.peek().unwrap().0, 1));
-             })
+             .group_u(|_, s, t| t.push((*s.peek().unwrap().0, 1)))
      })
 }
