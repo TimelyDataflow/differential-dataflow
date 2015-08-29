@@ -1,13 +1,16 @@
 use std::iter::Peekable;
 
-use collection_trace::{close_under_lub, LeastUpperBound, Lookup};
+use collection::{close_under_lub, LeastUpperBound, Lookup};
 
-// use iterators::merge::{Merge, MergeIterator};
 use iterators::merge::{MergeUsing, MergeUsingIterator};
 use iterators::coalesce::{Coalesce, CoalesceIterator};
 use sort::radix_merge::Compact;
 use std::fmt::Debug;
 
+/// Enumerates the elements of a collection for a given key at a given time.
+///
+/// A collection iterator is only provided for non-empty sets, so one can call `peek.unwrap()` on
+/// the iterator without worrying about panicing.
 pub type CollectionIterator<'a, V> = Peekable<CoalesceIterator<MergeUsingIterator<'a, DifferenceIterator<'a, V>>>>;
 
 #[derive(Copy, Clone)]
@@ -53,6 +56,14 @@ struct TimeEntry<T, V> {
     wgts: Vec<(i32, u32)>,
 }
 
+/// A collection of values indexed by `key` and `time`.
+///
+/// #Safety
+/// For reasons of borrow checking, it is difficult to merge references using already-allocated
+/// memory. The method `get_collection_using` uses its `heap` argument to store refereces that should
+/// remain valid for as long as the `Trace` is valid, but I cannot convince Rust of this fact because
+/// only I know that once installed, differences are immutable. Please do not call `get_collection_using`
+/// with a `heap` argument that may out-live the `Trace` itself.
 pub struct Trace<K, T, V, L: Lookup<K, Offset>> {
     phantom:    ::std::marker::PhantomData<K>,
     links:      Vec<ListEntry>,
@@ -61,10 +72,10 @@ pub struct Trace<K, T, V, L: Lookup<K, Offset>> {
     temp:       Vec<T>,
 }
 
-impl<K: Eq+Ord+Debug, L: Lookup<K, Offset>, T: LeastUpperBound, V: Ord> Trace<K, T, V, L> {
+impl<K, V, L, T> Trace<K, T, V, L> where K: Ord, V: Ord, L: Lookup<K, Offset>, T: LeastUpperBound {
 
-    // takes a collection of differences as accumulated from the input and installs them.
-    pub fn set_differences(&mut self, time: T, accumulation: Compact<K, V>) {
+    /// Installs a supplied set of keys and values as the differences for `time`.
+    pub fn set_difference(&mut self, time: T, accumulation: Compact<K, V>) {
 
         // extract the relevant fields
         let keys = accumulation.keys;
@@ -144,7 +155,7 @@ impl<K: Eq+Ord+Debug, L: Lookup<K, Offset>, T: LeastUpperBound, V: Ord> Trace<K,
                                 &self.times[time].wgts[wgts_lower..wgts_upper])
     }
 
-    /// Finds difference for `key` at `time` or returns an empty iterator if none.
+    /// Enumerates the differences for `key` at `time`.
     pub fn get_difference<'a>(&'a self, key: &K, time: &T) -> DifferenceIterator<'a, V> {
         self.trace(key)
             .filter(|x| x.0 == time)
@@ -163,22 +174,24 @@ impl<K: Eq+Ord+Debug, L: Lookup<K, Offset>, T: LeastUpperBound, V: Ord> Trace<K,
     //         .peekable()
     // }
 
-    // Accumulates differences for `key` at times less than or equal to `time`.
-    pub fn get_collection_using<'a, 'b>(&'a self, key: &K, time: &T, heap: &mut Vec<((&(), i32), DifferenceIterator<'static,()>)>) -> CollectionIterator<'a, V> where 'a : 'b {
+    /// Enumerates the collection for `key` at `time`.
+    ///
+    /// A collection is defined as the accumulation of all differences at times less or equal to
+    /// `time`.
+    pub unsafe fn get_collection_using<'a>(&'a self, key: &K, time: &T, heap: &mut Vec<((&(), i32), DifferenceIterator<'static,()>)>) -> CollectionIterator<'a, V> {
         self.trace(key)
             .filter(|x| x.0 <= time)
             .map(|x| x.1)
-            .merge_using(unsafe {::std::mem::transmute(heap)})
+            .merge_using(::std::mem::transmute(heap))
             .coalesce()
             .peekable()
     }
 
-    /// Those times that are the least upper bound of `time` and any subset of existing times.
     // TODO : this could do a better job of returning newly interesting times: those times that are
     // TODO : now in the least upper bound, but were not previously so. The main risk is that the
     // TODO : easy way to do this computes the LUB before and after, but this can be expensive:
     // TODO : the LUB with `index` is often likely to be smaller than the LUB without it.
-
+    /// Lists times that are the least upper bound of `time` and any subset of existing times.
     pub fn interesting_times<'a>(&'a mut self, key: &K, index: T) -> &'a [T] {
         let mut temp = ::std::mem::replace(&mut self.temp, Vec::new());
         temp.clear();
@@ -194,8 +207,8 @@ impl<K: Eq+Ord+Debug, L: Lookup<K, Offset>, T: LeastUpperBound, V: Ord> Trace<K,
         &self.temp[..]
     }
 
-    /// An iteration of pairs of time `&T` and differences `DifferenceIterator<V>` for `key`.
-    pub fn trace<'a, 'b>(&'a self, key: &'b K) -> TraceIterator<'a, K, T, V, L> {
+    /// Enumerates pairs of time `&T` and differences `DifferenceIterator<V>` for `key`.
+    pub fn trace<'a>(&'a self, key: &K) -> TraceIterator<'a, K, T, V, L> {
         TraceIterator {
             trace: self,
             next0: self.keys.get_ref(key).map(|&x|x),
@@ -224,7 +237,7 @@ pub struct TraceIterator<'a, K: 'a, T: 'a, V: 'a, L: Lookup<K, Offset>+'a> {
 }
 
 impl<'a, K, T, V, L> Iterator for TraceIterator<'a, K, T, V, L>
-where K:  Debug+Ord+Eq+'a,
+where K:  Ord+'a,
       T: LeastUpperBound+'a,
       V: Ord+'a,
       L: Lookup<K, Offset>+'a {

@@ -11,7 +11,7 @@
 pub use self::group_by::{GroupByExt, GroupExt, GroupUnsigned};
 pub use self::consolidate::ConsolidateExt;
 pub use self::iterate::IterateExt;
-pub use self::join::JoinExt;
+pub use self::join::{JoinBy, Join, JoinUnsigned};
 
 pub mod group_by;
 pub mod consolidate;

@@ -1,57 +1,105 @@
 //! Differential dataflow is a high-throughput, low-latency data-parallel programming framework.
 //!
-//! Differential dataflow programs are written using primitives operations like `map`, `filter`,
-//! `join`, and `group_by`, as well as higher-order operations like `iterate`. Having defined a
-//! differential dataflow computation, you may add or remove records from its inputs, and the
-//! system will automatically update the outputs of your computation with the appropriate corresponding
-//! additions and removals.
+//! Differential dataflow programs are written in a collection-oriented style, where multisets of
+//! records are transformed and combined using primitives operations like `map`, `filter`,
+//! `join`, and `group_by`. Differential dataflow also includes a higher-order operation `iterate`.
+//!
+//! Having defined a differential dataflow computation, you may then add or remove records from its
+//! inputs, and the system will automatically update the computation's outputs with the appropriate
+//! corresponding additions and removals.
 //!
 //! Differential dataflow is built on the timely dataflow framework for data-parallel programming
 //! and so is automatically parallelizable across multiple threads, processes, and computers.
 //! Moreover, because it uses timely dataflow's primitives, it seamlessly inter-operates with other
 //! timely dataflow computations.
 //!
-//! It should be stressed that differential dataflow is still very much a work in progress, with
-//! features and ergonomics still wildly in development. It is generally improving, though.
+//! Differential dataflow is still very much a work in progress, with features and ergonomics still
+//! wildly in development. It is generally improving, though.
 //!
 //! # Examples
 //!
 //! The following example is a fragment for computing the breadth-first-search depth in a graph.
 //!
 //! ```ignore
-//! // an example BFS computation fragment in differential dataflow
-//! let (e_in, edges) = dataflow.new_input::<((u32, u32), i32)>();
-//! let (r_in, roots) = dataflow.new_input::<(u32, i32)>();
+//! extern crate timely;
+//! use timely::*;
+//! use timely::dataflow::Scope;
+//! use timely::dataflow::operators::{Input, Inspect};
 //!
-//! // initialize roots at distance 0
-//! let start = roots.map(|(x, w)| ((x, 0), w));
+//! use differential_dataflow::operators::*;
 //!
-//! // repeatedly update minimal distances to each node,
-//! // by describing how to do one round of updates, and then repeating.
-//! let limit = start.iterate(u32::max_value(), |x| x.0, |dists| {
+//! // construct and execute a timely dataflow
+//! timely::execute(Configuration::Thread, |root| {
 //!
-//!     // bring the invariant edges into the loop
-//!     let edges = dists.builder().enter(&edges);
+//!     let (edges, roots) = root.scoped(|scope| {
 //!
-//!     // join current distances with edges to get +1 distances,
-//!     // include the current distances in the set as well,
-//!     // group by node id and keep minimum distance.
-//!     dists.join_u(&edges, |d| d, |e| e, |_,d,n| (*n, d+1))
-//!          .concat(&dists)
-//!          .group_by_u(|x| x, |k,v| (*k, *v), |_, mut s, t| {
-//!              t.push((*s.peek().unwrap().0, 1))
-//!          })
+//!         let (e_in, edges) = dataflow.new_input::<((u32, u32), i32)>();
+//!         let (r_in, roots) = dataflow.new_input::<(u32, i32)>();
+//!
+//!         // initialize roots at distance 0
+//!         let start = roots.map(|(x, w)| ((x, 0), w));
+//!
+//!         // repeatedly update minimal distances to each node,
+//!         // by describing how to do one round of updates, and then repeating.
+//!         let limit = start.iterate(|dists| {
+//!
+//!             // bring the invariant edges into the loop
+//!             let edges = dists.builder().enter(&edges);
+//!
+//!             // join current distances with edges to get +1 distances,
+//!             // include the current distances in the set as well,
+//!             // group by node id and keep minimum distance.
+//!             dists.join_map(&edges, |_,&d,&n| (n,d+1))
+//!                  .concat(&dists)
+//!                  .group(|_, s, t| {
+//!                      t.push((*s.peek().unwrap().0, 1))
+//!                  })
+//!         });
+//!
+//!         // inspect distances!
+//!         limit.inspect(|x| println!("observed: {:?}", x));
+//!
+//!         (e_in, r_in)
+//!     });
+//!
+//!     edges.send(((0,1), 1));
+//!     edges.send(((1,2), 1));
+//!     edges.send(((2,3), 1));
+//!     edges.close();
+//!
+//!     roots.send((0, 1));
+//!     roots.close();
+//!
+//!     while root.step() { }
 //! });
-//!
-//! limit.inspect(|x| println!("observed: {:?}", x));
 //! ```
+
+use std::hash::Hasher;
+use std::fmt::Debug;
+
+/// A signed integer used it indicate changes in frequency.
+pub type Weight = i32;
+
+/// A stream of updates to the weights of records.
+pub type Collection<G, T> = timely::dataflow::Stream<G, (T, Weight)>;
+
+/// A composite trait for data types usable in differential dataflow.
+pub trait Data : timely::Data + ::std::hash::Hash + Ord + Debug + Clone {
+    #[inline]
+    fn hashed(&self) -> u64 {
+        let mut h: fnv::FnvHasher = Default::default();
+        self.hash(&mut h);
+        h.finish()
+    }
+}
+impl<T: timely::Data + ::std::hash::Hash + Ord + Debug + Clone> Data for T { }
 
 extern crate fnv;
 extern crate timely;
 extern crate itertools;
 extern crate radix_sort;
 
-pub mod collection_trace;
-pub mod sort;
+pub mod collection;
 pub mod operators;
-pub mod iterators;
+mod sort;
+mod iterators;

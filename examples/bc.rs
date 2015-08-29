@@ -25,7 +25,7 @@ fn main() {
 
             let dists = bc(&edges, &roots);    // determine distances to each graph node
 
-            dists.consolidate(|x| x.0)
+            dists.consolidate()
                  .inspect_batch(move |t,b| {
                      println!("epoch: {:?}, length: {}, processing: {}",
                         t, b.len(), (time::precise_time_s() - start) - (t.inner as f64));
@@ -84,12 +84,12 @@ where G::Timestamp: LeastUpperBound {
     // initialize roots as reaching themselves at distance 0
     let nodes = roots.map(|(x,w)| ((x, x, x, 0), w));
 
-    let dists = nodes.iterate(u32::max_value(), |x| x.0, |dists| {
+    let dists = nodes.iterate(|dists| {
 
         let edges = dists.scope().enter(&edges);
         let nodes = dists.scope().enter(&nodes);
 
-        dists.join_u(&edges, |(n,r,_,s)| (n, (r,s)), |e| e, |&n, &(r,s), &d| (d, r, n, s+1))
+        dists.join_by_u(&edges, |(n,r,_,s)| (n, (r,s)), |e| e, |&n, &(r,s), &d| (d, r, n, s+1))
              .concat(&nodes)
              .group_by(|(n,r,b,s)| ((n,r),(s,b)),       // (key, val)
                        |&(n,r,_,_)| (n + r) as u64,     // how to hash records

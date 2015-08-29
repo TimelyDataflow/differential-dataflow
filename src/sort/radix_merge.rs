@@ -26,6 +26,8 @@ use iterators::coalesce::Coalesce;
 use timely::drain::DrainExt;
 use std::fmt::Debug;
 
+use radix_sort::Unsigned;
+
 // use sorting::heap::sort_by as hsort_by;
 
 // pub struct RadixAccumulator<K, V> {
@@ -238,7 +240,7 @@ impl<K: Ord+Debug, V: Ord> Compact<K, V> {
     }
 
     #[inline(never)]
-    pub fn from_radix<F: Fn(&K)->u64>(source: Vec<Vec<((K,V),i32)>>, function: &F) -> Option<Compact<K,V>> {
+    pub fn from_radix<U: Unsigned+Default, F: Fn(&K)->U>(source: Vec<Vec<((K,V),i32)>>, function: &F) -> Option<Compact<K,V>> {
 
         let mut size = 0;
         for list in &source {
@@ -247,7 +249,7 @@ impl<K: Ord+Debug, V: Ord> Compact<K, V> {
 
         let mut result = Compact::new(size,size,size);
         let mut buffer = vec![];
-        let mut current = 0;
+        let mut current = Default::default();
 
         for ((key, val), wgt) in source.into_iter().flat_map(|x| x.into_iter()) {
             let hash = function(&key);

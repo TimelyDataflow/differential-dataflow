@@ -1,41 +1,84 @@
-//! Match pairs of records based on a key, and apply a reduction function.
+//! Match pairs of records based on a key.
 
 use std::fmt::Debug;
 use std::default::Default;
-use std::hash::Hash;
+use std::hash::{Hash, Hasher};
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use timely::Data;
+use ::Data;
 use timely::dataflow::*;
 use timely::dataflow::operators::{Map, Binary};
 use timely::dataflow::channels::pact::Exchange;
 use timely::drain::DrainExt;
 
 
-use collection_trace::Trace;
-use collection_trace::lookup::UnsignedInt;
-use collection_trace::{LeastUpperBound, Lookup, Offset};
+use collection::{Trace, LeastUpperBound, Lookup, Offset};
 
-// use sort::*;
 use sort::radix_merge::{Compact};
+use radix_sort::{RadixSorter, Unsigned};
 
-use radix_sort::RadixSorter;
+/// Join implementations for `(key,val)` data.
+pub trait Join<G: Scope, K: Data+Clone, V: Data+Clone> : JoinBy<G, (K,V)> {
+
+    /// Matches pairs of `(key,val1)` and `(key,val2)` records based on `key`.
+    fn join<V2>(&self, other: &Stream<G, ((K,V2),i32)>) -> Stream<G, ((K,V,V2),i32)>
+    where V2: Data+Clone+Debug+'static,
+          G::Timestamp: LeastUpperBound {
+        self.join_by_core(other, |x| x, |x| x, |&(ref k,_)| k.hashed(), |&(ref k,_)| k.hashed(), |k| k.hashed(), |k,v1,v2| (k.clone(), v1.clone(), v2.clone()), &|_| HashMap::new())
+    }
+    /// Matches pairs of `(key,val1)` and `(key,val2)` records based on `key` and applies a reduction function.
+    fn join_map<V2, D, R>(&self, other: &Stream<G, ((K,V2),i32)>, logic: R) -> Stream<G, (D,i32)>
+    where V2: Data+Clone+Debug+'static,
+          D: Data,
+          R: Fn(&K, &V, &V2)->D+'static,
+          G::Timestamp: LeastUpperBound {
+        self.join_by_core(other, |x| x, |x| x, |&(ref k,_)| k.hashed(), |&(ref k,_)| k.hashed(), |k| k.hashed(), logic, &|_| HashMap::new())
+    }
+}
+
+impl<G: Scope, K: Data+Default, V: Data+Default, S> Join<G, K, V> for S
+where G::Timestamp: LeastUpperBound,
+      S: JoinBy<G, (K,V)> { }
 
 
-impl<G: Scope, D1: Data+Ord, S> JoinExt<G, D1> for S
+/// Join implementations for `(unsigned_int, val)` data.
+pub trait JoinUnsigned<G: Scope, U: Unsigned+Data+Default, V: Data+Ord+Clone+Debug> : JoinBy<G, (U,V)> {
+
+    /// Matches pairs of `(key, val1)` and `(key, val2)` data based `key`.
+    fn join_u<V2>(&self, other: &Stream<G, ((U,V2),i32)>) -> Stream<G, ((U,V,V2),i32)>
+    where V2: Data+Clone+Debug+'static,
+          G::Timestamp: LeastUpperBound {
+        self.join_by_core(other, |x| x, |x| x, |&(ref k,_)| k.as_u64(), |&(ref k,_)| k.as_u64(), |k| k.clone(), |k,v1,v2| (k.clone(), v1.clone(), v2.clone()), &|x| (Vec::new(), x))
+    }
+    /// Matches pairs of `(key,val1)` and `(key,val2)` records based on `key` and applies a reduction function.
+    fn join_map_u<V2, D, R>(&self, other: &Stream<G, ((U,V2),i32)>, logic: R) -> Stream<G, (D,i32)>
+    where V2: Data+Clone+Debug+'static,
+          D: Data,
+          R: Fn(&U, &V, &V2)->D+'static,
+          G::Timestamp: LeastUpperBound {
+        self.join_by_core(other, |x| x, |x| x, |&(ref k,_)| k.as_u64(), |&(ref k,_)| k.as_u64(), |k| k.clone(), logic, &|x| (Vec::new(), x))
+    }
+
+}
+
+impl<G: Scope, U: Unsigned+Data+Default, V: Data+Ord+Default+Debug, S> JoinUnsigned<G, U, V> for S
+where G::Timestamp: LeastUpperBound,
+      S: JoinBy<G, (U,V)> { }
+
+impl<G: Scope, D1: Data+Ord, S> JoinBy<G, D1> for S
 where G::Timestamp: LeastUpperBound,
       S: Binary<G, (D1, i32)>+Map<G, (D1, i32)> { }
 
-/// An extension trait for the `join` methods.
-pub trait JoinExt<G: Scope, D1: Data+Ord> : Binary<G, (D1, i32)>+Map<G, (D1, i32)>
+/// Join implementations with parameterizable key selector functions.
+pub trait JoinBy<G: Scope, D1: Data+Ord> : Binary<G, (D1, i32)>+Map<G, (D1, i32)>
 where G::Timestamp: LeastUpperBound {
     /// Matches elements of two streams using unsigned integers as the keys.
     ///
-    /// `join_u` takes a second input stream, two key-val selector functions, and a reduction
+    /// `join_by_u` takes a second input stream, two key-val selector functions, and a reduction
     /// function from an unsigned integer (the key) and two value references to the output type.
-    fn join_u<
-        U:  UnsignedInt+Debug,
+    fn join_by_u<
+        U:  Unsigned+Data+Default,
         V1: Data+Ord+Clone+Default+Debug+'static,
         V2: Data+Ord+Clone+Default+Debug+'static,
         D2: Data+Eq,
@@ -46,42 +89,43 @@ where G::Timestamp: LeastUpperBound {
     >
         (&self, other: &Stream<G, (D2, i32)>, kv1: F1, kv2: F2, result: RF) -> Stream<G, (R, i32)> {
         self.map(move |(x,w)| (kv1(x),w))
-            .join_raw(&other.map(move |(x,w)| (kv2(x),w)),
+            .join_by_core(&other.map(move |(x,w)| (kv2(x),w)),
                         |x|x,
                         |x|x,
-                        |&(k,_)| k.as_u64(),
-                        |&(k,_)| k.as_u64(),
-                        |k| k.as_u64(),
+                        |&(ref k,_)| k.as_u64(),
+                        |&(ref k,_)| k.as_u64(),
+                        |k| k.clone(),
                         result,
                         &|x| (Vec::new(), x))
     }
     /// Restricts the input stream to those elements whose unsigned integer key is present in the
     /// second stream.
     ///
-    /// `semijoin_u` takes a second stream, a key-val selector function, and a reconstruction function.
+    /// `semijoin_by_u` takes a second stream, a key-val selector function, and a reconstruction function.
     /// Records are produced in the output if their key matches an unsigned integer present in the
     /// second stream. The key-val selector and reconstruction function are available to help avoid
     /// storing a redundant copy of the key in the value payload.
-    fn semijoin_u<
-        U:  UnsignedInt+Debug,
+    fn semijoin_by_u<
+        U:  Unsigned+Data+Default,
         V1: Data+Ord+Clone+Default+Debug+'static,
         F1: Fn(D1)->(U,V1)+'static,
         RF: Fn(&U,&V1)->D1+'static,
     >
         (&self, other: &Stream<G, (U, i32)>, kv1: F1, result: RF) -> Stream<G, (D1, i32)> {
 
-        self.join_u(&other, kv1, |u| (u, ()), move |x,y,_| result(x,y))
+        self.join_by_u(&other, kv1, |u| (u, ()), move |x,y,_| result(x,y))
     }
 
     /// Matches elements of two streams using a key function.
-    fn join<
+    fn join_by<
         K:  Data+Ord+Clone+Hash+Debug+'static,
         V1: Data+Ord+Clone+Debug+'static,
         V2: Data+Ord+Clone+Debug+'static,
         D2: Data,
         F1: Fn(D1)->(K,V1)+'static,
         F2: Fn(D2)->(K,V2)+'static,
-        KH: Fn(&K)->u64+'static,
+        U:  Unsigned+Data+Default,
+        KH: Fn(&K)->U+'static,
         R:  Ord+Data,
         RF: Fn(&K,&V1,&V2)->R+'static,
     >
@@ -95,11 +139,19 @@ where G::Timestamp: LeastUpperBound {
         let kh3 = kh1.clone();
 
         self.map(move |(x,w)| (kv1(x),w))
-            .join_raw(&other.map(move |(x,w)| (kv2(x),w)), |x| x, |x| x, move |&(ref k,_)| kh1(k), move |&(ref k,_)| kh2(k), move |k| kh3(k), result, &|_| HashMap::new())
+            .join_by_core(
+                &other.map(move |(x,w)| (kv2(x),w)),
+                |x| x,
+                |x| x,
+                move |&(ref k,_)| kh1(k).as_u64(),
+                move |&(ref k,_)| kh2(k).as_u64(),
+                move |k| kh3(k),
+                result,
+                &|_| HashMap::new())
     }
 
     /// Restricts the input stream to those elements whose key is present in the second stream.
-    fn semijoin<
+    fn semijoin_by<
         K:  Data+Ord+Clone+Hash+Debug+'static,
         V1: Data+Ord+Clone+Debug+'static,
         F1: Fn(D1)->(K,V1)+'static,
@@ -110,9 +162,9 @@ where G::Timestamp: LeastUpperBound {
         kv1: F1,
         key_h: KH, result: RF)
     -> Stream<G, (D1, i32)> {
-        self.join(&other, kv1, |k| (k,()), key_h, move |x,y,_| result(x,y))
+        self.join_by(&other, kv1, |k| (k,()), key_h, move |x,y,_| result(x,y))
     }
-    fn join_raw<
+    fn join_by_core<
         K:  Ord+Clone+Debug+'static,
         V1: Ord+Clone+Debug+'static,
         V2: Ord+Clone+Debug+'static,
@@ -121,7 +173,8 @@ where G::Timestamp: LeastUpperBound {
         F2: Fn(D2)->(K,V2)+'static,
         H1: Fn(&D1)->u64+'static,
         H2: Fn(&D2)->u64+'static,
-        KH: Fn(&K)->u64+'static,
+        U:  Unsigned+Data+Default,
+        KH: Fn(&K)->U+'static,
         R:  Ord+Data,
         RF: Fn(&K,&V1,&V2)->R+'static,
         LC: Lookup<K, Offset>+'static,
@@ -182,7 +235,7 @@ where G::Timestamp: LeastUpperBound {
                         }
 
                         if let Some(trace) = trace1.as_mut() {
-                            trace.set_differences(time.clone(), compact);
+                            trace.set_difference(time.clone(), compact);
                         }
                     }
                 }
@@ -194,7 +247,7 @@ where G::Timestamp: LeastUpperBound {
                             process_diffs(&time, &compact, &trace, &|k,x,y| result(k,y,x), &mut outbuf);
                         }
                         if let Some(trace) = trace2.as_mut() {
-                            trace.set_differences(time.clone(), compact);
+                            trace.set_difference(time.clone(), compact);
                         }
                     }
                 }

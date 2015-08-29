@@ -20,7 +20,7 @@ fn main() {
         // define BFS dataflow; return handles to roots and edges inputs
         let mut graph = computation.scoped(|builder| {
             let (input, edges) = builder.new_input();
-            edges.consolidate(|x: &Edge| x.0)
+            edges.consolidate()
                  .inspect_batch(move |t,b|
                      println!("epoch: {:?}, length: {}, processing: {}",
                         t, b.len(), (time::precise_time_s() - start) - (t.inner as f64))

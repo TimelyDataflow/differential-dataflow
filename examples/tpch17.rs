@@ -46,7 +46,7 @@ fn main() {
                              .map(|((key, _, _), wgt)| (key, wgt));
 
             // restrict lineitems to those of the relevant part
-            let items = items.join_u(&parts, |x| (x.0, (x.1,x.2)), |y| (y,()), |k,x,_| (*k,x.0,x.1));
+            let items = items.join_by_u(&parts, |x| (x.0, (x.1,x.2)), |y| (y,()), |k,x,_| (*k,x.0,x.1));
 
             // compute the average quantities
             let average = items.group_by_u(|(x,y,_)| (x,y), |k,v| (*k,*v), |_,s,t| {
@@ -60,7 +60,7 @@ fn main() {
             });
 
             // join items against their averages, filter by quantity, remove filter coordinate
-            items.join_u(&average, |x| (x.0, (x.1, x.2)), |y| y, |k, x, f| (*k, x.0, x.1, *f))
+            items.join_by_u(&average, |x| (x.0, (x.1, x.2)), |y| y, |k, x, f| (*k, x.0, x.1, *f))
                  .filter(|&((_, q, _, avg),_)| q < avg / 5)
                  .map(|((key,_,price,_), wgt)| ((key,price), wgt))
                  .unary_notify::<u32, _, _>(Pipeline, "Subscribe", vec![RootTimestamp::new(0)], move |i,_,n| {

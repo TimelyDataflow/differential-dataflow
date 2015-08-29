@@ -17,7 +17,7 @@
 //!
 //! ```ignore
 //! // repeatedly divide out factors of two.
-//! let limits = numbers.iterate(u64::max_value(), |x| x, |values| {
+//! let limits = numbers.iterate(|values| {
 //!     values.map(|(x,w) if x % 2 == 0 { (x / 2, w) } else { (x, w) })
 //! });
 //! ```
@@ -31,65 +31,58 @@ use timely::dataflow::*;
 use timely::dataflow::scopes::Child;
 use timely::dataflow::operators::*;
 
-use timely::Data;
+use ::{Data, Collection};
 
 use timely::progress::nested::product::Product;
 use timely::progress::nested::Summary::Local;
 use timely::progress::timestamp::Timestamp;
-// use timely::serialization::Serializable;
 
-// use columnar::Columnar;
-
-use collection_trace::lookup::UnsignedInt;
-use collection_trace::LeastUpperBound;
-// use operators::ExceptExt;
+use radix_sort::Unsigned;
+use collection::LeastUpperBound;
 use operators::ConsolidateExt;
-
-pub trait One {
-    fn one() -> Self;
-}
-
-impl One for u64 { fn one() -> u64 { 1 } }
-impl One for u32 { fn one() -> u32 { 1 } }
 
 /// An extension trait for the `iterate` method.
 pub trait IterateExt<G: Scope, D: Data> {
-    /// Iteratively applies a function `logic` to the input data stream, `iterations` many times.
-    ///
-    /// The actual computation uses differential dataflow logic to avoid re-evaluating stabilized
-    /// parts of the computation.
-    ///
-    /// The `part` parameter is a partitioning function from `D` to an unsigned integer, required
-    /// to partition the data for data-parallel equality testing, to detect per-record stabilization.
-    fn iterate<P, U, F, T=u64>
-        (&self, iterations: T, part: P, logic: F) -> Stream<G, (D,i32)>
+    /// Iteratively apply `logic` to the source collection until convergence.
+    fn iterate<F>(&self, logic: F) -> Collection<G, D>
         where G::Timestamp: LeastUpperBound,
-              T::Summary: One,
+              F: FnOnce(&Collection<Child<G, u64>, D>)->Collection<Child<G, u64>, D>;
+
+    /// Iteratively apply `logic` to the source collection until convergence.
+    ///
+    /// The `partition` argument is used to partition the data for consolidation.
+    fn iterate_by<P, U, F>(&self, partition: P, logic: F) -> Collection<G, D>
+        where G::Timestamp: LeastUpperBound,
+              U: Unsigned,
               P: Fn(&D)->U+'static,
-             U: UnsignedInt,
-             F: FnOnce(&Stream<Child<G, T>, (D,i32)>)->
-                       Stream<Child<G, T>, (D,i32)>,
-             T: Timestamp+LeastUpperBound;
+              F: FnOnce(&Collection<Child<G, u64>, D>)->Collection<Child<G, u64>, D>;
 }
 
-impl<G: Scope, D: Ord+Data+Debug> IterateExt<G, D> for Stream<G, (D, i32)> {
-    fn iterate<P: Fn(&D)->U+'static,
-               U: UnsignedInt,
-               F: FnOnce(&Stream<Child<G, T>, (D,i32)>)->
-                         Stream<Child<G, T>, (D,i32)>,
-               T: Timestamp+LeastUpperBound=u64,
-               >
-        (&self, iterations: T, part: P, logic: F) -> Stream<G, (D,i32)>
-where G::Timestamp: LeastUpperBound, T::Summary: One {
+impl<G: Scope, D: Ord+Data+Debug> IterateExt<G, D> for Collection<G, D> {
+    fn iterate<F>(&self, logic: F) -> Collection<G, D>
+        where G::Timestamp: LeastUpperBound,
+              F: FnOnce(&Collection<Child<G, u64>, D>)->Collection<Child<G, u64>, D> {
+
+        self.iterate_by(|x| x.hashed(), logic)
+
+    }
+    fn iterate_by<P, U, F>(&self, partition: P, logic: F) -> Collection<G, D>
+        where F: FnOnce(&Collection<Child<G, u64>, D>)->Collection<Child<G, u64>, D>,
+              U: Unsigned,
+              P: Fn(&D)->U+'static,
+              G::Timestamp: LeastUpperBound {
 
         self.scope().scoped(|subgraph| {
 
-            let (feedback, cycle) = subgraph.loop_variable(Product::new(G::Timestamp::max(), iterations), Local(T::Summary::one()));
+            let (feedback, cycle) = subgraph.loop_variable(Product::new(G::Timestamp::max(), u64::max()), Local(1));
             let ingress = subgraph.enter(&self);
 
             let bottom = logic(&ingress.concat(&cycle));
 
-            bottom.concat(&ingress.map(|(x,w)| (x,-w))).consolidate(part).connect_loop(feedback);
+            bottom.concat(&ingress.map(|(x,w)| (x,-w)))
+                  .consolidate_by(partition)
+                  .connect_loop(feedback);
+
             bottom.leave()
         })
     }

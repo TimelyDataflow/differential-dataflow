@@ -34,7 +34,7 @@ fn main() {
             edges = _strongly_connected(&edges);
 
             let mut counter = 0;
-            edges.consolidate(|x| x.0)
+            edges.consolidate_by(|x| x.0)
                  .inspect_batch(move |t, x| {
                      counter += x.len();
                      println!("{}s:\tobserved at {:?}: {:?} changes",
@@ -89,20 +89,19 @@ fn main() {
 
 fn _trim_and_flip<G: Scope>(graph: &Stream<G, (Edge, i32)>) -> Stream<G, (Edge, i32)>
 where G::Timestamp: LeastUpperBound {
-        graph
-            .iterate(u32::max_value(), |x|x.0, |edges| {
-                let inner = edges.scope().enter(&graph);
-                edges.map(|((x,_),w)| (x,w))
-                     .group_by_u(|x|(x,()), |&x,_| x, |_,_,target| target.push(((),1)))
-                     .join_u(&inner, |x| (x,()), |(s,d)| (d,s), |&d,_,&s| (s,d))
-            })
-            .consolidate(|x| x.0)
-            .map(|((x,y),w)| ((y,x),w))
+        graph.iterate_by(|x| x.0, |edges| {
+                 let inner = edges.scope().enter(&graph);
+                 edges.map(|((x,_),w)| (x,w))
+                      .group_by_u(|x|(x,()), |&x,_| x, |_,_,target| target.push(((),1)))
+                      .join_by_u(&inner, |x| (x,()), |(s,d)| (d,s), |&d,_,&s| (s,d))
+             })
+             .consolidate_by(|x| x.0)
+             .map(|((x,y),w)| ((y,x),w))
 }
 
 fn _strongly_connected<G: Scope>(graph: &Stream<G, (Edge, i32)>) -> Stream<G, (Edge, i32)>
 where G::Timestamp: LeastUpperBound+Hash {
-    graph.iterate(u32::max_value(), |x| x.0, |inner| {
+    graph.iterate(|inner| {
         let trans = inner.scope().enter(&graph).map(|((x,y),w)| ((y,x),w));
         let edges = inner.scope().enter(&graph);
 
@@ -113,29 +112,29 @@ where G::Timestamp: LeastUpperBound+Hash {
 fn _trim_edges<G: Scope>(cycle: &Stream<G, (Edge, i32)>, edges: &Stream<G, (Edge, i32)>)
     -> Stream<G, (Edge, i32)> where G::Timestamp: LeastUpperBound+Hash {
 
-    let nodes = edges.map(|((_,y),w)| (y,w)).consolidate(|&x| x);
+    let nodes = edges.map(|((_,y),w)| (y,w)).consolidate_by(|&x| x);
 
     let labels = _reachability(&cycle, &nodes);
 
-    edges.join_u(&labels, |e| e, |l| l, |&e1,&e2,&l1| (e2,(e1,l1)))
-         .join_u(&labels, |e| e, |l| l, |&e2,&(e1,l1),&l2| ((e1,e2),(l1,l2)))
-         .consolidate(|x| (x.0).0)
+    edges.join_map_u(&labels, |&e1,&e2,&l1| (e2,(e1,l1)))
+         .join_map_u(&labels, |&e2,&(e1,l1),&l2| ((e1,e2),(l1,l2)))
          .filter(|&((_,(l1,l2)), _)| l1 == l2)
          .map(|(((x1,x2),_),d)| ((x2,x1),d))
+         .consolidate_by(|x| x.0)
 }
 
 fn _reachability<G: Scope>(edges: &Stream<G, (Edge, i32)>, nodes: &Stream<G, (Node, i32)>) -> Stream<G, (Edge, i32)>
 where G::Timestamp: LeastUpperBound+Hash {
 
     edges.filter(|_| false)
-         .iterate(u32::max_value(), |x| x.0, |inner| {
+         .iterate_by(|x| x.0, |inner| {
              let edges = inner.scope().enter(&edges);
-             let nodes = inner.scope().enter_at(&nodes, |r| 256 * (64 - (r.0 as u64).leading_zeros() as u32))
+             let nodes = inner.scope().enter_at(&nodes, |r| 256 * (64 - (r.0 as u64).leading_zeros() as u64))
                                         .map(|(x,w)| ((x,x),w));
 
              _improve_labels(inner, &edges, &nodes)
          })
-         .consolidate(|x| x.0)
+         .consolidate_by(|x| x.0)
 }
 
 fn _improve_labels<G: Scope>(labels: &Stream<G, ((Node, Node), i32)>,
@@ -144,7 +143,7 @@ fn _improve_labels<G: Scope>(labels: &Stream<G, ((Node, Node), i32)>,
     -> Stream<G, ((Node, Node), i32)>
 where G::Timestamp: LeastUpperBound {
 
-    labels.join_u(&edges, |l| l, |e| e, |_k,l,d| (*d,*l))
+    labels.join_map_u(&edges, |_k,l,d| (*d,*l))
           .concat(&nodes)
           .group_u(|_, s, t| t.push((*s.peek().unwrap().0, 1)))
 }

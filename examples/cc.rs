@@ -9,7 +9,7 @@ use std::hash::Hash;
 use timely::dataflow::*;
 use timely::dataflow::operators::*;
 
-use differential_dataflow::collection_trace::lookup::UnsignedInt;
+// use differential_dataflow::collection_trace::lookup::UnsignedInt;
 use differential_dataflow::collection_trace::LeastUpperBound;
 use differential_dataflow::operators::*;
 
@@ -64,7 +64,7 @@ fn connected_components<G: Scope>(edges: &Stream<G, (Edge, i32)>) -> Stream<G, (
 where G::Timestamp: LeastUpperBound+Hash {
 
     let nodes = edges.map_in_place(|&mut ((ref mut x, ref mut y), _)| { *x = std::cmp::min(*x,*y); *y = *x; } )
-                     .consolidate(|x| x.0);
+                     .consolidate();
 
     let edges = edges.map(|((x,y),w)| ((y,x),w)).concat(&edges);
 
@@ -76,13 +76,13 @@ fn reachability<G: Scope>(edges: &Stream<G, (Edge, i32)>, nodes: &Stream<G, ((No
 where G::Timestamp: LeastUpperBound+Hash {
 
     edges.filter(|_| false)
-         .iterate(u32::max_value(), |x| x.0, |inner| {
+         .iterate(|inner| {
              let edges = inner.scope().enter(&edges);
-             let nodes = inner.scope().enter_at(&nodes, |r| 256 * (64 - (r.0).0.as_u64().leading_zeros() as u32 ));
+             let nodes = inner.scope().enter_at(&nodes, |r| 256 * (64 - (r.0).0.leading_zeros() as u64));
 
              improve_labels(inner, &edges, &nodes)
          })
-         .consolidate(|x| x.0)
+         .consolidate()
 }
 
 
@@ -92,7 +92,7 @@ fn improve_labels<G: Scope>(labels: &Stream<G, ((Node, Node), i32)>,
     -> Stream<G, ((Node, Node), i32)>
 where G::Timestamp: LeastUpperBound {
 
-    labels.join_u(&edges, |l| l, |e| e, |_k,l,d| (*d,*l))
+    labels.join_by_u(&edges, |l| l, |e| e, |_k,l,d| (*d,*l))
           .concat(&nodes)
-          .group_by_u(|x| x, |k,v| (*k,*v), |_, s, t| { t.push((*s.peek().unwrap().0, 1)); } )
+          .group_u(|_, s, t| { t.push((*s.peek().unwrap().0, 1)); } )
 }

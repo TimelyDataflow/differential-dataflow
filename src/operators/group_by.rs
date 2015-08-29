@@ -16,34 +16,25 @@ use std::fmt::Debug;
 
 use itertools::Itertools;
 
-use timely::Data;
+use ::Data;
 use timely::dataflow::*;
 use timely::dataflow::operators::{Map, Unary};
 use timely::dataflow::channels::pact::Exchange;
 use timely::drain::DrainExt;
 
-use collection_trace::{LeastUpperBound, Lookup, Trace, Offset};
-use collection_trace::lookup::UnsignedInt;
-use collection_trace::trace::CollectionIterator;
+use collection::{LeastUpperBound, Lookup, Trace, Offset};
+use collection::trace::CollectionIterator;
 
 use iterators::coalesce::Coalesce;
-use radix_sort::RadixSorter;
-use fnv::FnvHasher;
+use radix_sort::{RadixSorter, Unsigned};
 use sort::radix_merge::{Compact};
-use sort::*;
-
-fn hash_fnv<T: Hash>(x: &T) -> u64 {
-    let mut h: FnvHasher = Default::default();
-    x.hash(&mut h);
-    h.finish()
-}
 
 /// Extension trait for the `group` differential dataflow method
 pub trait GroupExt<G: Scope, K: Data+Ord+Hash+Default+Debug, V: Data+Ord+Default+Debug> : GroupByExt<G, (K,V)>
     where G::Timestamp: LeastUpperBound {
     fn group<L, V2: Data+Ord+Default+Debug>(&self, logic: L) -> Stream<G, ((K,V2),i32)>
         where L: Fn(&K, &mut CollectionIterator<V>, &mut Vec<(V2, i32)>)+'static {
-            self.group_by_inner(|x| x, |&(ref k,_)| hash_fnv(k), hash_fnv, |k,v2| ((*k).clone(), (*v2).clone()), |_| HashMap::new(), logic)
+            self.group_by_inner(|x| x, |&(ref k,_)| k.hashed(), |k| k.hashed(), |k,v2| ((*k).clone(), (*v2).clone()), |_| HashMap::new(), logic)
     }
 }
 
@@ -52,19 +43,22 @@ where G::Timestamp: LeastUpperBound,
       S: Unary<G, ((K,V), i32)>+Map<G, ((K,V), i32)> { }
 
 
-pub trait GroupUnsigned<G: Scope, U: UnsignedInt, V: Data+Ord+Default+Debug> : GroupByExt<G, (U,V)>
+pub trait GroupUnsigned<G: Scope, U: Unsigned+Data+Default, V: Data+Ord+Default+Debug> : GroupByExt<G, (U,V)>
     where G::Timestamp: LeastUpperBound {
     fn group_u<L, V2: Data+Ord+Default+Debug>(&self, logic: L) -> Stream<G, ((U,V2),i32)>
         where L: Fn(&U, &mut CollectionIterator<V>, &mut Vec<(V2, i32)>)+'static {
-            self.group_by_inner(|x| x, |&(k,_)| k.as_u64(), |k| k.as_u64(),
-                                    |&k, v| (k.clone(), (*v).clone()),
-                                    |x| (Vec::new(), x),
-                                    logic)
+            self.group_by_inner(
+                |x| x,
+                |&(ref k,_)| k.as_u64(),
+                |k| k.clone(),
+                |k, v| (k.clone(), (*v).clone()),
+                |x| (Vec::new(), x),
+                logic)
     }
 }
 
 // implement `GroupByExt` for any stream implementing `Unary` and `Map` (most of them).
-impl<G: Scope, U: UnsignedInt, V: Data+Ord+Default+Debug, S> GroupUnsigned<G, U, V> for S
+impl<G: Scope, U: Unsigned+Data+Default, V: Data+Ord+Default+Debug, S> GroupUnsigned<G, U, V> for S
 where G::Timestamp: LeastUpperBound,
       S: GroupByExt<G, (U,V)> { }
 
@@ -97,7 +91,8 @@ where G::Timestamp: LeastUpperBound {
         D2:    Data,                                //  type of the output data
         KV:    Fn(D1)->(K,V1)+'static,              //  function from data to (key,val)
         Part:  Fn(&D1)->u64+'static,                //  partitioning function; should match KH
-        KH:    Fn(&K)->u64+'static,                 //  partitioning function for key; should match Part.
+        U:     Unsigned+Default,
+        KH:    Fn(&K)->U+'static,                   //  partitioning function for key; should match Part.
 
         // user-defined operator logic, from a key and value iterator, populating an output vector.
         Logic: Fn(&K, &mut CollectionIterator<V1>, &mut Vec<(V2, i32)>)+'static,
@@ -112,8 +107,8 @@ where G::Timestamp: LeastUpperBound {
     /// A specialization of the `group_by` method to the case that the key type `K` is an unsigned
     /// integer, and the strategy for indexing by key is simply to index into a vector.
     fn group_by_u<
-        U:     Data+UnsignedInt+Debug,
-        V1:    Data+Ord+Clone+Default+Debug+'static,
+        U:     Data+Unsigned+Default,
+        V1:    Data+Clone+Default+'static,
         V2:    Ord+Clone+Default+Debug+'static,
         D2:    Data,
         KV:    Fn(D1)->(U,V1)+'static,
@@ -123,8 +118,8 @@ where G::Timestamp: LeastUpperBound {
             (&self, kv: KV, reduc: Reduc, logic: Logic) -> Stream<G, (D2, i32)> {
                 self.map(move |(x,w)| (kv(x),w))
                     .group_by_inner(|x| x,
-                                    |&(k,_)| k.as_u64(),
-                                    |k| k.as_u64(),
+                                    |&(ref k,_)| k.as_u64(),
+                                    |k| k.clone(),
                                     reduc,
                                     |x| (Vec::new(), x),
                                     logic)
@@ -140,7 +135,8 @@ where G::Timestamp: LeastUpperBound {
         D2:    Data,
         KV:    Fn(D1)->(K,V1)+'static,
         Part:  Fn(&D1)->u64+'static,
-        KH:    Fn(&K)->u64+'static,
+        U:     Unsigned+Default,
+        KH:    Fn(&K)->U+'static,
         Look:  Lookup<K, Offset>+'static,
         LookG: Fn(u64)->Look,
         Logic: Fn(&K, &mut CollectionIterator<V1>, &mut Vec<(V2, i32)>)+'static,
@@ -199,7 +195,7 @@ where G::Timestamp: LeastUpperBound {
 
                         // add the accumulation to the trace source.
                         // println!("setting source differences; {}", compact.vals.len());
-                        source.set_differences(index.clone(), compact);
+                        source.set_difference(index.clone(), compact);
                     }
                 }
 
@@ -233,7 +229,7 @@ where G::Timestamp: LeastUpperBound {
                     for key in keys {
 
                         // acquire an iterator over the collection at `time`.
-                        let mut input = source.get_collection_using(&key, &index, &mut heap1);
+                        let mut input = unsafe { source.get_collection_using(&key, &index, &mut heap1) };
 
                         // if we have some data, invoke logic to populate self.dst
                         if input.peek().is_some() { logic(&key, &mut input, &mut buffer); }
@@ -242,7 +238,7 @@ where G::Timestamp: LeastUpperBound {
 
                         // push differences in to Compact.
                         let mut compact = accumulation.session();
-                        for (val, wgt) in Coalesce::coalesce(result.get_collection_using(&key, &index, &mut heap2)
+                        for (val, wgt) in Coalesce::coalesce(unsafe { result.get_collection_using(&key, &index, &mut heap2) }
                                                                    .map(|(v, w)| (v,-w))
                                                                    .merge_by(buffer.iter().map(|&(ref v, w)| (v, w)), |x,y| {
                                                                         x.0.cmp(&y.0)
@@ -256,7 +252,7 @@ where G::Timestamp: LeastUpperBound {
                     }
 
                     if accumulation.vals.len() > 0 {
-                        result.set_differences(index.clone(), accumulation);
+                        result.set_difference(index.clone(), accumulation);
                     }
                 }
             }

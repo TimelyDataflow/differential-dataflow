@@ -8,9 +8,12 @@ use timely::dataflow::operators::*;
 
 use rand::{Rng, SeedableRng, StdRng};
 
-use differential_dataflow::collection_trace::lookup::UnsignedInt;
+// use differential_dataflow::collection_trace::lookup::UnsignedInt;
 use differential_dataflow::collection_trace::LeastUpperBound;
 use differential_dataflow::operators::*;
+
+type Node = u32;
+type Edge = (Node, Node);
 
 fn main() {
 
@@ -27,7 +30,7 @@ fn main() {
             let dists = bfs(&graph, &roots);    // determine distances to each graph node
 
             dists.map(|((_,s),w)| (s,w))        // keep only the distances, not node ids
-                 .consolidate(|x| *x)           // aggregate into one record per distance
+                 .consolidate()           // aggregate into one record per distance
                  .inspect_batch(move |t, x| {   // print up something neat for each update
                      println!("observed at {:?}:", t);
                      println!("elapsed: {}s", time::precise_time_s() - (start + t.inner as f64));
@@ -39,8 +42,8 @@ fn main() {
             (node_input, edge_input)
         });
 
-        let nodes = 100_000_000u32; // the u32 helps type inference understand what nodes are
-        let edges = 200_000_000;
+        let nodes = 1_000_000u32; // the u32 helps type inference understand what nodes are
+        let edges = 2_000_000;
 
         let seed: &[_] = &[1, 2, 3, 4];
         let mut rng1: StdRng = SeedableRng::from_seed(seed);    // rng for edge additions
@@ -88,21 +91,20 @@ fn main() {
 }
 
 // returns pairs (n, s) indicating node n can be reached from a root in s steps.
-fn bfs<G: Scope, U>(edges: &Stream<G, ((U, U), i32)>, roots: &Stream<G, (U, i32)>)
-    -> Stream<G, ((U, u32), i32)>
-where G::Timestamp: LeastUpperBound,
-      U: UnsignedInt {
+fn bfs<G: Scope>(edges: &Stream<G, (Edge, i32)>, roots: &Stream<G, (Node, i32)>)
+    -> Stream<G, ((Node, u32), i32)>
+where G::Timestamp: LeastUpperBound {
 
     // initialize roots as reaching themselves at distance 0
     let nodes = roots.map(|(x,w)| ((x, 0), w));
 
     // repeatedly update minimal distances each node can be reached from each root
-    nodes.iterate(u32::max_value(), |x| x.0, |inner| {
+    nodes.iterate(|inner| {
 
         let edges = inner.scope().enter(&edges);
         let nodes = inner.scope().enter(&nodes);
 
-        inner.join_u(&edges, |l| l, |e| e, |_k,l,d| (*d, l+1))
+        inner.join_by_u(&edges, |l| l, |e| e, |_k,l,d| (*d, l+1))
              .concat(&nodes)
              .group_u(|_, s, t| t.push((*s.peek().unwrap().0, 1)))
      })
