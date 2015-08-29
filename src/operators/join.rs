@@ -15,7 +15,7 @@ use timely::drain::DrainExt;
 
 use collection::{Trace, LeastUpperBound, Lookup, Offset};
 
-use sort::radix_merge::{Compact};
+use collection::compact::Compact;
 use radix_sort::{RadixSorter, Unsigned};
 
 /// Join implementations for `(key,val)` data.

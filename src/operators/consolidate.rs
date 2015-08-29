@@ -66,7 +66,6 @@ impl<G: Scope, D: Ord+Data+Debug> ConsolidateExt<D> for Stream<G, (D, i32)> {
                     for (datum, wgt) in source.into_iter().flat_map(|x| x.into_iter()) {
                         let hash = (*part2)(&datum).as_u64();
                         if buffer.len() > 0 && hash != current {
-                            // if hash < current { println!("  radix sort error? {} < {}", hash, current); }
                             buffer.sort_by(|x: &(D,i32),y: &(D,i32)| x.0.cmp(&y.0));
                             session.give_iterator(buffer.drain_temp().coalesce());
                             current = hash;

@@ -27,7 +27,7 @@ use collection::trace::CollectionIterator;
 
 use iterators::coalesce::Coalesce;
 use radix_sort::{RadixSorter, Unsigned};
-use sort::radix_merge::{Compact};
+use collection::compact::Compact;
 
 /// Extension trait for the `group` differential dataflow method
 pub trait GroupExt<G: Scope, K: Data+Ord+Hash+Default+Debug, V: Data+Ord+Default+Debug> : GroupByExt<G, (K,V)>
@@ -194,7 +194,6 @@ where G::Timestamp: LeastUpperBound {
                         }
 
                         // add the accumulation to the trace source.
-                        // println!("setting source differences; {}", compact.vals.len());
                         source.set_difference(index.clone(), compact);
                     }
                 }
@@ -212,8 +211,6 @@ where G::Timestamp: LeastUpperBound {
                 // Much of this logic used to hide in `OperatorTrace` and `CollectionTrace`.
                 // They are now gone and simpler, respectively.
                 if let Some(mut keys) = to_do.remove_key(&index) {
-
-                    // println!("groupby doing a thing at {:?}", index);
 
                     // we would like these keys in a particular order.
                     // TODO : use a radix sort since we have `key_h`.

@@ -79,7 +79,7 @@ impl<G: Scope, D: Ord+Data+Debug> IterateExt<G, D> for Collection<G, D> {
 
             let bottom = logic(&ingress.concat(&cycle));
 
-            bottom.concat(&ingress.map(|(x,w)| (x,-w)))
+            bottom.concat(&ingress.map_in_place(|x| x.1 = -x.1))
                   .consolidate_by(partition)
                   .connect_loop(feedback);
 

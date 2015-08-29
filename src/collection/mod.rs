@@ -7,6 +7,7 @@
 pub mod least_upper_bound;
 pub mod lookup;
 pub mod trace;
+pub mod compact;
 
 pub use collection::lookup::Lookup;
 pub use collection::least_upper_bound::LeastUpperBound;

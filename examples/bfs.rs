@@ -8,9 +8,8 @@ use timely::dataflow::operators::*;
 
 use rand::{Rng, SeedableRng, StdRng};
 
-// use differential_dataflow::collection_trace::lookup::UnsignedInt;
-use differential_dataflow::collection::LeastUpperBound;
 use differential_dataflow::operators::*;
+use differential_dataflow::collection::LeastUpperBound;
 
 type Node = u32;
 type Edge = (Node, Node);

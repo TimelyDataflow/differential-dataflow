@@ -4,8 +4,7 @@ use collection::{close_under_lub, LeastUpperBound, Lookup};
 
 use iterators::merge::{MergeUsing, MergeUsingIterator};
 use iterators::coalesce::{Coalesce, CoalesceIterator};
-use sort::radix_merge::Compact;
-use std::fmt::Debug;
+use collection::compact::Compact;
 
 /// Enumerates the elements of a collection for a given key at a given time.
 ///

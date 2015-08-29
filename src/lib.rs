@@ -101,5 +101,5 @@ extern crate radix_sort;
 
 pub mod collection;
 pub mod operators;
-mod sort;
+// mod sort;
 mod iterators;
