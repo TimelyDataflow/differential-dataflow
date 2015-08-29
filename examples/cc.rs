@@ -10,7 +10,7 @@ use timely::dataflow::*;
 use timely::dataflow::operators::*;
 
 // use differential_dataflow::collection_trace::lookup::UnsignedInt;
-use differential_dataflow::collection_trace::LeastUpperBound;
+use differential_dataflow::collection::LeastUpperBound;
 use differential_dataflow::operators::*;
 
 use graph_map::GraphMMap;

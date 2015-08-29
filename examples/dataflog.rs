@@ -21,7 +21,7 @@ use timely::progress::nested::Summary::Local;
 use timely::progress::timestamp::RootTimestamp;
 
 use differential_dataflow::operators::*;
-use differential_dataflow::collection_trace::LeastUpperBound;
+use differential_dataflow::collection::LeastUpperBound;
 
 use fnv::FnvHasher;
 

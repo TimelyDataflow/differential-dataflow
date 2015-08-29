@@ -9,7 +9,7 @@ use rand::{Rng, SeedableRng, StdRng};
 use timely::dataflow::*;
 use timely::dataflow::operators::*;
 
-use differential_dataflow::collection_trace::LeastUpperBound;
+use differential_dataflow::collection::LeastUpperBound;
 use differential_dataflow::operators::*;
 
 type Node = u32;
