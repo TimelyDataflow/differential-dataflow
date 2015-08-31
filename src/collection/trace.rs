@@ -1,4 +1,5 @@
 use std::iter::Peekable;
+use std::fmt::Debug;
 
 use collection::{close_under_lub, LeastUpperBound, Lookup};
 
@@ -59,7 +60,7 @@ struct TimeEntry<T, V> {
 ///
 /// #Safety
 /// For reasons of borrow checking, it is difficult to merge references using already-allocated
-/// memory. The method `get_collection_using` uses its `heap` argument to store refereces that should
+/// memory. The method `get_collection_using` uses its `heap` argument to store references that should
 /// remain valid for as long as the `Trace` is valid, but I cannot convince Rust of this fact because
 /// only I know that once installed, differences are immutable. Please do not call `get_collection_using`
 /// with a `heap` argument that may out-live the `Trace` itself.
@@ -71,7 +72,7 @@ pub struct Trace<K, T, V, L: Lookup<K, Offset>> {
     temp:       Vec<T>,
 }
 
-impl<K, V, L, T> Trace<K, T, V, L> where K: Ord, V: Ord, L: Lookup<K, Offset>, T: LeastUpperBound {
+impl<K, V, L, T> Trace<K, T, V, L> where K: Ord, V: Ord, L: Lookup<K, Offset>, T: LeastUpperBound+Debug {
 
     /// Installs a supplied set of keys and values as the differences for `time`.
     pub fn set_difference(&mut self, time: T, accumulation: Compact<K, V>) {
@@ -88,6 +89,8 @@ impl<K, V, L, T> Trace<K, T, V, L> where K: Ord, V: Ord, L: Lookup<K, Offset>, T
         // counters for offsets in vals and wgts
         let mut vals_offset = 0;
         let mut wgts_offset = 0;
+
+        let links_len = self.links.len();
 
         // for each key and count ...
         for (key, cnt) in keys.into_iter().zip(cnts.into_iter()) {
@@ -127,6 +130,11 @@ impl<K, V, L, T> Trace<K, T, V, L> where K: Ord, V: Ord, L: Lookup<K, Offset>, T
             }
             assert_eq!(counter, cnt);
         }
+
+        // println!("set_difference sizes for {:?}:", time);
+        // println!("\tkeys: {}", (self.links.len() - links_len) * ::std::mem::size_of::<ListEntry>());
+        // println!("\tvals: {}", vals.len() * ::std::mem::size_of::<V>());
+        // println!("\twgts: {}", wgts.len() * ::std::mem::size_of::<(i32, u32)>());
 
         // add the values and weights to the list of timed differences.
         self.times.push(TimeEntry { time: time, vals: vals, wgts: wgts });
@@ -237,7 +245,7 @@ pub struct TraceIterator<'a, K: 'a, T: 'a, V: 'a, L: Lookup<K, Offset>+'a> {
 
 impl<'a, K, T, V, L> Iterator for TraceIterator<'a, K, T, V, L>
 where K:  Ord+'a,
-      T: LeastUpperBound+'a,
+      T: LeastUpperBound+Debug+'a,
       V: Ord+'a,
       L: Lookup<K, Offset>+'a {
     type Item = (&'a T, DifferenceIterator<'a, V>);

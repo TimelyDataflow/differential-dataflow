@@ -19,8 +19,7 @@
 
 // use std::fmt::Debug;
 
-// use iterators::merge::Merge;
-use iterators::merge::MergeUsing;
+// use iterators::merge::MergeUsing;
 use iterators::coalesce::Coalesce;
 
 use timely::drain::DrainExt;
@@ -178,103 +177,103 @@ impl<K: Ord+Debug, V: Ord> Compact<K, V> {
         }
         session.done(key);
     }
-
-    /// Merges a set of `Compact` into a new single `Compact`.
-    ///
-    /// This method uses the `Ord` property of `K` and `V` to merge the elements into a single
-    /// `Compact` whose `keys` and `wgts` are ideally further compressed. It is likely that this
-    /// method will need to be expanded to take a function ordering `K`, so that the radix-based
-    /// sorting and ordering used by the ultimate consumers can be implemented.
-    pub fn merge<F: Fn(&K)->u64>(columns: Vec<Compact<K, V>>, func: &F) -> Compact<K, V> {
-
-        // storage for our results. hard to estimate size, other than the max of what we have now.
-
-        let mut key_cnt = 0;
-        let mut val_cnt = 0;
-
-        for compact in &columns {
-            key_cnt += compact.keys.len();
-            val_cnt += compact.vals.len();
-        }
-
-        let mut result = Compact::new(key_cnt,val_cnt,val_cnt);
-
-        let mut keyvals = vec![];
-
-        for column in columns {
-            let mut keycnt = column.keys.into_iter().zip(column.cnts.into_iter());
-            if let Some((key, cnt)) = keycnt.next() {
-                keyvals.push(((func(&key), key, cnt), keycnt, column.vals.into_iter()
-                    .zip(column.wgts.into_iter()
-                        .flat_map(|(w,c)| ::std::iter::repeat(w).take(c as usize)))));
-            }
-        }
-
-        keyvals.sort_by(|&(ref kx,_,_),&(ref ky,_,_)| kx.cmp(&ky));
-
-        // TODO : this is embarassing. I am basically guessing at the size of the underlying
-        // TODO : iterator, which I think is a pair of "remaining count" and "iterator ptr".
-        let mut heap = Vec::<((V,i32),(usize, usize))>::new();
-
-        while keyvals.len() > 0 {
-
-            // determine the prefix of equivalently small keys
-            let mut min_keys = 1;
-            while min_keys < keyvals.len() && (keyvals[min_keys].0).0 == (keyvals[0].0).0 {
-                min_keys += 1;
-            }
-
-            let mut session = result.session();
-            for (val, wgt) in keyvals[0..min_keys].iter_mut()
-                                                  .map(|&mut ((_,_,c), _, ref mut v)| v.by_ref().take(c as usize))
-                                                  .merge_using(unsafe { ::std::mem::transmute(&mut heap) })
-                                                // .merge()
-                                                  .coalesce() {
-
-                                                    //   assert!(session.compact.vals.capacity() > session.compact.vals.len());
-                                                    //   assert!(session.compact.wgts.capacity() > session.compact.wgts.len());
-
-                // println!("pushing (_, {})", wgt);
-                session.push(val, wgt);
-            }
-
-            // pop the keys from each participating iterator,
-            // recover a key to push into result.keys...
-            // TODO : Try to use a Merge iterator on the (key,cnt) iterator pair?
-            let mut key = None;
-            for i in 0..min_keys {
-                let index = min_keys - i - 1;
-                key = Some(
-                    // if we can advance, do so but worry about maintaining order.
-                    if let Some((key, cnt)) = keyvals[index].1.next() {
-                        let result = ::std::mem::replace(&mut keyvals[index].0, (func(&key),key,cnt)).1;
-
-                        // walk forward from next, swapping out-of-order keys.
-                        let mut next = index;
-                        while next + 1 < keyvals.len() && keyvals[next].0 > keyvals[next+1].0 {
-                            keyvals.swap(next, next+1);
-                            next += 1;
-                        }
-
-                        result
-                    }
-                    else {
-                        // if we have no more elements, remove the iterators.
-                        (keyvals.remove(index).0).1
-                    }
-                );
-
-            }
-
-            assert!(session.compact.keys.capacity() > session.compact.keys.len());
-            assert!(session.compact.cnts.capacity() > session.compact.cnts.len());
-
-
-            session.done(key.unwrap());
-        }
-
-        result
-    }
+    //
+    // /// Merges a set of `Compact` into a new single `Compact`.
+    // ///
+    // /// This method uses the `Ord` property of `K` and `V` to merge the elements into a single
+    // /// `Compact` whose `keys` and `wgts` are ideally further compressed. It is likely that this
+    // /// method will need to be expanded to take a function ordering `K`, so that the radix-based
+    // /// sorting and ordering used by the ultimate consumers can be implemented.
+    // pub fn merge<F: Fn(&K)->u64>(columns: Vec<Compact<K, V>>, func: &F) -> Compact<K, V> {
+    //
+    //     // storage for our results. hard to estimate size, other than the max of what we have now.
+    //
+    //     let mut key_cnt = 0;
+    //     let mut val_cnt = 0;
+    //
+    //     for compact in &columns {
+    //         key_cnt += compact.keys.len();
+    //         val_cnt += compact.vals.len();
+    //     }
+    //
+    //     let mut result = Compact::new(key_cnt,val_cnt,val_cnt);
+    //
+    //     let mut keyvals = vec![];
+    //
+    //     for column in columns {
+    //         let mut keycnt = column.keys.into_iter().zip(column.cnts.into_iter());
+    //         if let Some((key, cnt)) = keycnt.next() {
+    //             keyvals.push(((func(&key), key, cnt), keycnt, column.vals.into_iter()
+    //                 .zip(column.wgts.into_iter()
+    //                     .flat_map(|(w,c)| ::std::iter::repeat(w).take(c as usize)))));
+    //         }
+    //     }
+    //
+    //     keyvals.sort_by(|&(ref kx,_,_),&(ref ky,_,_)| kx.cmp(&ky));
+    //
+    //     // TODO : this is embarassing. I am basically guessing at the size of the underlying
+    //     // TODO : iterator, which I think is a pair of "remaining count" and "iterator ptr".
+    //     let mut heap = Vec::<((V,i32),(usize, usize))>::new();
+    //
+    //     while keyvals.len() > 0 {
+    //
+    //         // determine the prefix of equivalently small keys
+    //         let mut min_keys = 1;
+    //         while min_keys < keyvals.len() && (keyvals[min_keys].0).0 == (keyvals[0].0).0 {
+    //             min_keys += 1;
+    //         }
+    //
+    //         let mut session = result.session();
+    //         for (val, wgt) in keyvals[0..min_keys].iter_mut()
+    //                                               .map(|&mut ((_,_,c), _, ref mut v)| v.by_ref().take(c as usize))
+    //                                               .merge_using(unsafe { ::std::mem::transmute(&mut heap) })
+    //                                             // .merge()
+    //                                               .coalesce() {
+    //
+    //                                                 //   assert!(session.compact.vals.capacity() > session.compact.vals.len());
+    //                                                 //   assert!(session.compact.wgts.capacity() > session.compact.wgts.len());
+    //
+    //             // println!("pushing (_, {})", wgt);
+    //             session.push(val, wgt);
+    //         }
+    //
+    //         // pop the keys from each participating iterator,
+    //         // recover a key to push into result.keys...
+    //         // TODO : Try to use a Merge iterator on the (key,cnt) iterator pair?
+    //         let mut key = None;
+    //         for i in 0..min_keys {
+    //             let index = min_keys - i - 1;
+    //             key = Some(
+    //                 // if we can advance, do so but worry about maintaining order.
+    //                 if let Some((key, cnt)) = keyvals[index].1.next() {
+    //                     let result = ::std::mem::replace(&mut keyvals[index].0, (func(&key),key,cnt)).1;
+    //
+    //                     // walk forward from next, swapping out-of-order keys.
+    //                     let mut next = index;
+    //                     while next + 1 < keyvals.len() && keyvals[next].0 > keyvals[next+1].0 {
+    //                         keyvals.swap(next, next+1);
+    //                         next += 1;
+    //                     }
+    //
+    //                     result
+    //                 }
+    //                 else {
+    //                     // if we have no more elements, remove the iterators.
+    //                     (keyvals.remove(index).0).1
+    //                 }
+    //             );
+    //
+    //         }
+    //
+    //         assert!(session.compact.keys.capacity() > session.compact.keys.len());
+    //         assert!(session.compact.cnts.capacity() > session.compact.cnts.len());
+    //
+    //
+    //         session.done(key.unwrap());
+    //     }
+    //
+    //     result
+    // }
 }
 
 pub struct CompactSession<'a, K: 'a, V: 'a> {
@@ -296,11 +295,9 @@ impl<'a, K: 'a, V: 'a> CompactSession<'a, K, V> {
     }
     #[inline]
     pub fn push(&mut self, val: V, wgt: i32) {
-        // assert!(self.compact.vals.capacity() > self.compact.vals.len());
         self.compact.vals.push(val);
         if wgt != self.old_wgt {
             if self.wgt_cnt > 0 {
-                // assert!(self.compact.wgts.capacity() > self.compact.wgts.len());
                 self.compact.wgts.push((self.old_wgt, self.wgt_cnt));
             }
             self.old_wgt = wgt;
@@ -310,9 +307,7 @@ impl<'a, K: 'a, V: 'a> CompactSession<'a, K, V> {
     }
     pub fn done(self, key: K) {
         if self.compact.vals.len() > self.len {
-            // assert!(self.compact.keys.capacity() > self.compact.keys.len());
             self.compact.keys.push(key);
-            // assert!(self.compact.cnts.capacity() > self.compact.cnts.len());
             self.compact.cnts.push((self.compact.vals.len() - self.len) as u32);
             self.compact.wgts.push((self.old_wgt, self.wgt_cnt));
         }

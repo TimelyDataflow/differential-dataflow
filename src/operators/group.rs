@@ -1,13 +1,35 @@
 //! Group records by a key, and apply a reduction function.
 //!
-//! The `group_by` operator acts on data that can be viewed as pairs `(key, val)`.
-//! It groups together values with the same key, and then applies user-defined logic to each pair
-//! of `key` and `[val]`, where the latter is presented as an iterator. The user logic is expected
-//! to write output to a supplied `&mut Vec<(output, i32)>` of outputs and and their multiplicities.
+//! The `group` operators act on data that can be viewed as pairs `(key, val)`. They group records
+//! with the same key, and apply user supplied functions to the key and a list of values, which are
+//! expected to populate a list of output values.
 //!
-//! The operator is invoked only on non-empty groups; the provided iterator uses `Peekable` and has
-//! already asserted that `.peek().is_some()`, meaning it is safe to call `.peek().unwrap()`, and
-//! it triggers no additional computation.
+//! Several variants of `group` exist which allow more precise control over how grouping is done.
+//! For example, the `_by` suffixed variants take arbitrary data, but require a key-value selector
+//! to be applied to each record. The `_u` suffixed variants use unsigned integers as keys, and
+//! will use a dense array rather than a `HashMap` to store their keys.
+//!
+//! The list of values are presented as an iterator which internally merges sorted lists of values.
+//! This ordering can be exploited in several cases to avoid computation when only the first few
+//! elements are required.
+//!
+//! #Examples
+//!
+//! This example groups a stream of `(key,val)` pairs by `key`, and yields only the most frequently
+//! occurring value for each key.
+//!
+//! ```ignore
+//! stream.group(|key, vals, output| {
+//!     let (mut max_val, mut max_wgt) = vals.peek().unwrap();
+//!     for (val, wgt) in vals {
+//!         if wgt > max_wgt {
+//!             max_wgt = wgt;
+//!             max_val = val;
+//!         }
+//!     }
+//!     output.push((max_val.clone(), max_wgt));
+//! })
+//! ```
 
 use std::default::Default;
 use std::hash::{Hash, Hasher};
@@ -30,7 +52,7 @@ use radix_sort::{RadixSorter, Unsigned};
 use collection::compact::Compact;
 
 /// Extension trait for the `group` differential dataflow method
-pub trait GroupExt<G: Scope, K: Data+Ord+Hash+Default+Debug, V: Data+Ord+Default+Debug> : GroupByExt<G, (K,V)>
+pub trait Group<G: Scope, K: Data+Ord+Hash+Default+Debug, V: Data+Ord+Default+Debug> : GroupBy<G, (K,V)>
     where G::Timestamp: LeastUpperBound {
     fn group<L, V2: Data+Ord+Default+Debug>(&self, logic: L) -> Stream<G, ((K,V2),i32)>
         where L: Fn(&K, &mut CollectionIterator<V>, &mut Vec<(V2, i32)>)+'static {
@@ -38,12 +60,12 @@ pub trait GroupExt<G: Scope, K: Data+Ord+Hash+Default+Debug, V: Data+Ord+Default
     }
 }
 
-impl<G: Scope, K: Data+Ord+Hash+Default+Debug, V: Data+Ord+Default+Debug, S> GroupExt<G, K, V> for S
+impl<G: Scope, K: Data+Ord+Hash+Default+Debug, V: Data+Ord+Default+Debug, S> Group<G, K, V> for S
 where G::Timestamp: LeastUpperBound,
       S: Unary<G, ((K,V), i32)>+Map<G, ((K,V), i32)> { }
 
 
-pub trait GroupUnsigned<G: Scope, U: Unsigned+Data+Default, V: Data+Ord+Default+Debug> : GroupByExt<G, (U,V)>
+pub trait GroupUnsigned<G: Scope, U: Unsigned+Data+Default, V: Data+Ord+Default+Debug> : GroupBy<G, (U,V)>
     where G::Timestamp: LeastUpperBound {
     fn group_u<L, V2: Data+Ord+Default+Debug>(&self, logic: L) -> Stream<G, ((U,V2),i32)>
         where L: Fn(&U, &mut CollectionIterator<V>, &mut Vec<(V2, i32)>)+'static {
@@ -57,20 +79,20 @@ pub trait GroupUnsigned<G: Scope, U: Unsigned+Data+Default, V: Data+Ord+Default+
     }
 }
 
-// implement `GroupByExt` for any stream implementing `Unary` and `Map` (most of them).
+// implement `GroupBy` for any stream implementing `Unary` and `Map` (most of them).
 impl<G: Scope, U: Unsigned+Data+Default, V: Data+Ord+Default+Debug, S> GroupUnsigned<G, U, V> for S
 where G::Timestamp: LeastUpperBound,
-      S: GroupByExt<G, (U,V)> { }
+      S: GroupBy<G, (U,V)> { }
 
 
-// implement `GroupByExt` for any stream implementing `Unary` and `Map` (most of them).
-impl<G: Scope, D: Data+Eq, S> GroupByExt<G, D> for S
+// implement `GroupBy` for any stream implementing `Unary` and `Map` (most of them).
+impl<G: Scope, D: Data+Eq, S> GroupBy<G, D> for S
 where G::Timestamp: LeastUpperBound,
     S: Unary<G,(D,i32)>+Map<G,(D,i32)> { }
 
 
 /// Extension trait for the `group_by` and `group_by_u` differential dataflow methods.
-pub trait GroupByExt<G: Scope, D1: Data+Eq> : Unary<G, (D1, i32)>+Map<G, (D1, i32)>
+pub trait GroupBy<G: Scope, D1: Data+Eq> : Unary<G, (D1, i32)>+Map<G, (D1, i32)>
 where G::Timestamp: LeastUpperBound {
 
     /// Groups input records together by key and applies a reduction function.
@@ -194,6 +216,7 @@ where G::Timestamp: LeastUpperBound {
                         }
 
                         // add the accumulation to the trace source.
+                        // println!("group1");
                         source.set_difference(index.clone(), compact);
                     }
                 }
@@ -249,6 +272,7 @@ where G::Timestamp: LeastUpperBound {
                     }
 
                     if accumulation.vals.len() > 0 {
+                        // println!("group2");
                         result.set_difference(index.clone(), accumulation);
                     }
                 }

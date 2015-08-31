@@ -48,7 +48,7 @@ pub trait JoinUnsigned<G: Scope, U: Unsigned+Data+Default, V: Data+Ord+Clone+Deb
     /// Matches pairs of `(key, val1)` and `(key, val2)` data based `key`.
     fn join_u<V2>(&self, other: &Stream<G, ((U,V2),i32)>) -> Stream<G, ((U,V,V2),i32)>
     where V2: Data+Clone+Debug+'static,
-          G::Timestamp: LeastUpperBound {
+          G::Timestamp: LeastUpperBound+Debug {
         self.join_by_core(other, |x| x, |x| x, |&(ref k,_)| k.as_u64(), |&(ref k,_)| k.as_u64(), |k| k.clone(), |k,v1,v2| (k.clone(), v1.clone(), v2.clone()), &|x| (Vec::new(), x))
     }
     /// Matches pairs of `(key,val1)` and `(key,val2)` records based on `key` and applies a reduction function.
@@ -56,23 +56,23 @@ pub trait JoinUnsigned<G: Scope, U: Unsigned+Data+Default, V: Data+Ord+Clone+Deb
     where V2: Data+Clone+Debug+'static,
           D: Data,
           R: Fn(&U, &V, &V2)->D+'static,
-          G::Timestamp: LeastUpperBound {
+          G::Timestamp: LeastUpperBound+Debug {
         self.join_by_core(other, |x| x, |x| x, |&(ref k,_)| k.as_u64(), |&(ref k,_)| k.as_u64(), |k| k.clone(), logic, &|x| (Vec::new(), x))
     }
 
 }
 
 impl<G: Scope, U: Unsigned+Data+Default, V: Data+Ord+Default+Debug, S> JoinUnsigned<G, U, V> for S
-where G::Timestamp: LeastUpperBound,
+where G::Timestamp: LeastUpperBound+Debug,
       S: JoinBy<G, (U,V)> { }
 
 impl<G: Scope, D1: Data+Ord, S> JoinBy<G, D1> for S
-where G::Timestamp: LeastUpperBound,
+where G::Timestamp: LeastUpperBound+Debug,
       S: Binary<G, (D1, i32)>+Map<G, (D1, i32)> { }
 
 /// Join implementations with parameterizable key selector functions.
 pub trait JoinBy<G: Scope, D1: Data+Ord> : Binary<G, (D1, i32)>+Map<G, (D1, i32)>
-where G::Timestamp: LeastUpperBound {
+where G::Timestamp: LeastUpperBound+Debug {
     /// Matches elements of two streams using unsigned integers as the keys.
     ///
     /// `join_by_u` takes a second input stream, two key-val selector functions, and a reduction
@@ -235,6 +235,7 @@ where G::Timestamp: LeastUpperBound {
                         }
 
                         if let Some(trace) = trace1.as_mut() {
+                            // println!("join1");
                             trace.set_difference(time.clone(), compact);
                         }
                     }
@@ -247,6 +248,7 @@ where G::Timestamp: LeastUpperBound {
                             process_diffs(&time, &compact, &trace, &|k,x,y| result(k,y,x), &mut outbuf);
                         }
                         if let Some(trace) = trace2.as_mut() {
+                            // println!("join2");
                             trace.set_difference(time.clone(), compact);
                         }
                     }
@@ -273,7 +275,7 @@ fn process_diffs<K, T, V1: Debug, V2, L, R: Ord, RF>(time: &T,
                                          trace: &Trace<K,T,V2,L>,
                                          result: &RF,
                                          outbuf: &mut Vec<(T, Vec<(R,i32)>)>)
-where T: Eq+LeastUpperBound+Clone,
+where T: Eq+LeastUpperBound+Clone+Debug,
       K: Ord+Debug,
       V2: Ord+Debug,
       RF: Fn(&K,&V1,&V2)->R,

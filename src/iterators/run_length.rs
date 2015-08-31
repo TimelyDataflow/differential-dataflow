@@ -1,3 +1,57 @@
+pub struct WeightDecoder<I: Iterator<Item=i32>> {
+    items: Peekable<I>,
+}
+
+impl<I: Iterator<Item=i32>> Iterator for WeightDecoder {
+    type Item=(i32, usize);
+    fn next(&mut self) -> Option<(i32, usize)> {
+        self.items.next().map(|item| {
+            let count = if let Some(next) = self.items.peek() {
+                if item == next {
+                    self.items.next();
+                    self.items.next().unwrap() as usize
+                }
+                else { 1 }
+            }
+            else { 1 };
+            Some((item, count))
+        })
+    }
+}
+
+pub struct WeightEncoder<'a> {
+    items: &'a mut Vec<i32>,
+    count: i32,
+}
+
+impl<'a> WeightEncoder<'a> {
+    pub fn push(&mut self, value: i32) {
+        let len = self.items.len();
+        if self.count == 0 || self.items[len - 1] != value {
+            if self.count > 1 {
+                // repeat last element, push count
+                let last = self.items[len - 1];
+                self.items.push(last);
+                self.items.push(count);
+            }
+
+            // push value, reset count
+            self.items.push(value);
+            self.count = 0;
+        }
+
+        self.count += 1;
+    }
+    pub fn done(self) {
+        if self.count > 1 {
+            // repeat last element, push count
+            let last = self.items[len - 1];
+            self.items.push(last);
+            self.items.push(count);
+        }
+    }
+}
+
 
 /// A run-length decoder, given an iterator over items and an iterator over counts, notices repeats
 /// in the items and yields (item, usize) pairs indicating the intended multiplicity.

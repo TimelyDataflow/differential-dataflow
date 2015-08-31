@@ -41,8 +41,8 @@ fn main() {
             (node_input, edge_input)
         });
 
-        let nodes = 1_000_000u32; // the u32 helps type inference understand what nodes are
-        let edges = 2_000_000;
+        let nodes = 100_000_000u32; // the u32 helps type inference understand what nodes are
+        let edges = 200_000_000;
 
         let seed: &[_] = &[1, 2, 3, 4];
         let mut rng1: StdRng = SeedableRng::from_seed(seed);    // rng for edge additions
@@ -65,9 +65,9 @@ fn main() {
         computation.step();
         println!("loaded; elapsed: {}s", time::precise_time_s() - start);
 
-        roots.send((0,1));
-        roots.send((1,1));
-        roots.send((2,1));
+        roots.send((0, 1));
+        roots.send((1, 1));
+        roots.send((2, 1));
         roots.advance_to(1);
         roots.close();
 
@@ -83,9 +83,6 @@ fn main() {
                 round += 1;
             }
         }
-
-        graph.close();                  // seal the source of edges
-        while computation.step() { }    // wind down the computation
     });
 }
 
@@ -96,6 +93,8 @@ where G::Timestamp: LeastUpperBound {
 
     // initialize roots as reaching themselves at distance 0
     let nodes = roots.map(|(x,w)| ((x, 0), w));
+    let edges = edges.map(|((x,y),w)| ((y,x),w))
+                     .concat(&edges);
 
     // repeatedly update minimal distances each node can be reached from each root
     nodes.iterate(|inner| {
@@ -103,7 +102,7 @@ where G::Timestamp: LeastUpperBound {
         let edges = inner.scope().enter(&edges);
         let nodes = inner.scope().enter(&nodes);
 
-        inner.join_by_u(&edges, |l| l, |e| e, |_k,l,d| (*d, l+1))
+        inner.join_map_u(&edges, |_k,l,d| (*d, l+1))
              .concat(&nodes)
              .group_u(|_, s, t| t.push((*s.peek().unwrap().0, 1)))
      })

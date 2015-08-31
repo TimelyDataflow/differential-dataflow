@@ -1,4 +1,4 @@
-//! Multiset indexed by elements of a partially ordered set.
+//! A time-varying multiset of records.
 //!
 //! The core datastructure representing a dataset in differential dataflow is `collection::Trace`.
 //! It represents a multiset that can be indexed by partially ordered times, and is stored in a

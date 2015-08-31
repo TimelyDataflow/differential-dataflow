@@ -5,6 +5,18 @@
 //! a collection that aggregates down to zero records, and one that actually has no records. The
 //! underlying system can more clearly see that no work must be done in the later case, and we can
 //! drop out of, e.g. iterative computations.
+//!
+//! #Examples
+//!
+//! This example performs a standard "word count", where each line of text is split into multiple
+//! words, each word is converted to a word with count 1, and `consolidate` then accumulates the
+//! counts of equivalent words.
+//!
+//! ```ignore
+//! stream.flat_map(|line| line.split_whitespace())
+//!       .map(|word| (word, 1))
+//!       .consolidate();
+//! ```
 
 use std::rc::Rc;
 use std::fmt::Debug;

@@ -18,7 +18,43 @@
 //!
 //! # Examples
 //!
-//! The following example is a fragment for computing the breadth-first-search depth in a graph.
+//! ```ignore
+//! extern crate timely;
+//! use timely::*;
+//! use timely::dataflow::Scope;
+//! use timely::dataflow::operators::{Input, Inspect};
+//!
+//! use differential_dataflow::operators::*;
+//!
+//! // construct and execute a timely dataflow
+//! timely::execute(Configuration::Thread, |root| {
+//!
+//!     // construct an input and group its records
+//!     // keeping only the smallest values.
+//!     let mut input = root.scoped(|scope| {
+//!         let (handle, stream) = scope.new_input();
+//!         stream.group(|key, vals, output| output.push(vals.next().unwrap()))
+//!               .inspect(|val| println!("observed: {:?}", val));
+//!
+//!         handle
+//!     });
+//!
+//!     // introduce many records
+//!     for i in 0..1000 {
+//!         input.send((i % 10, i % 3));
+//!         input.advance_to(i + 1);
+//!         root.step();
+//!     }
+//!
+//!     input.close();
+//!     while root.step() { }
+//! });
+//! ```
+//!
+//!
+//!
+//! For a more complicated example, the following fragment computes the breadth-first-search depth
+//! in a graph.
 //!
 //! ```ignore
 //! extern crate timely;
@@ -33,8 +69,8 @@
 //!
 //!     let (edges, roots) = root.scoped(|scope| {
 //!
-//!         let (e_in, edges) = dataflow.new_input::<((u32, u32), i32)>();
-//!         let (r_in, roots) = dataflow.new_input::<(u32, i32)>();
+//!         let (e_in, edges) = scope.new_input::<((u32, u32), i32)>();
+//!         let (r_in, roots) = scope.new_input::<(u32, i32)>();
 //!
 //!         // initialize roots at distance 0
 //!         let start = roots.map(|(x, w)| ((x, 0), w));
@@ -77,11 +113,11 @@
 use std::hash::Hasher;
 use std::fmt::Debug;
 
-/// A signed integer used it indicate changes in frequency.
-pub type Weight = i32;
+/// A change in count.
+pub type Delta = i32;
 
-/// A stream of updates to the weights of records.
-pub type Collection<G, T> = timely::dataflow::Stream<G, (T, Weight)>;
+/// A stream of updates to record counts.
+pub type Collection<G, T> = timely::dataflow::Stream<G, (T, Delta)>;
 
 /// A composite trait for data types usable in differential dataflow.
 pub trait Data : timely::Data + ::std::hash::Hash + Ord + Debug + Clone {
