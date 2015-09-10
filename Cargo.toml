@@ -14,8 +14,8 @@ keywords = ["differential", "dataflow"]
 license = "MIT"
 
 [dependencies.timely]
-git="https://github.com/frankmcsherry/timely-dataflow.git"
-# path="../timely-dataflow"
+# git="https://github.com/frankmcsherry/timely-dataflow.git"
+path="../timely-dataflow"
 
 [dependencies.graph_map]
 git="https://github.com/frankmcsherry/graph-map.git"
@@ -29,14 +29,17 @@ git="https://github.com/frankmcsherry/radix-sort.git"
 [dev-dependencies]
 getopts="*"
 rand="*"
-time = "*"
 byteorder="*"
 
 [dependencies]
 itertools="*"
+time = "*"
 fnv="*"
 # timely="*"
 
+[features]
+default = []
+logging = ["timely/logging"]
 
 # [profile.release]
 # opt-level = 3
