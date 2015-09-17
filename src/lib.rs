@@ -120,7 +120,7 @@ pub type Delta = i32;
 pub type Collection<G, T> = timely::dataflow::Stream<G, (T, Delta)>;
 
 /// A composite trait for data types usable in differential dataflow.
-pub trait Data : timely::Data + ::std::hash::Hash + Ord + Debug + Clone {
+pub trait Data : timely::Data + ::std::hash::Hash + Ord + Debug {
     #[inline]
     fn hashed(&self) -> u64 {
         let mut h: fnv::FnvHasher = Default::default();
@@ -128,9 +128,10 @@ pub trait Data : timely::Data + ::std::hash::Hash + Ord + Debug + Clone {
         h.finish()
     }
 }
-impl<T: timely::Data + ::std::hash::Hash + Ord + Debug + Clone> Data for T { }
+impl<T: timely::Data + ::std::hash::Hash + Ord + Debug> Data for T { }
 
 extern crate fnv;
+extern crate time;
 extern crate timely;
 extern crate itertools;
 extern crate radix_sort;

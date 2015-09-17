@@ -35,6 +35,7 @@ use std::default::Default;
 use std::hash::{Hash, Hasher};
 use std::collections::HashMap;
 use std::fmt::Debug;
+use std::ops::DerefMut;
 
 use itertools::Itertools;
 
@@ -52,7 +53,7 @@ use radix_sort::{RadixSorter, Unsigned};
 use collection::compact::Compact;
 
 /// Extension trait for the `group` differential dataflow method
-pub trait Group<G: Scope, K: Data+Ord+Hash+Default+Debug, V: Data+Ord+Default+Debug> : GroupBy<G, (K,V)>
+pub trait Group<G: Scope, K: Data+Default, V: Data+Default> : GroupBy<G, (K,V)>
     where G::Timestamp: LeastUpperBound {
     fn group<L, V2: Data+Ord+Default+Debug>(&self, logic: L) -> Stream<G, ((K,V2),i32)>
         where L: Fn(&K, &mut CollectionIterator<V>, &mut Vec<(V2, i32)>)+'static {
@@ -60,12 +61,12 @@ pub trait Group<G: Scope, K: Data+Ord+Hash+Default+Debug, V: Data+Ord+Default+De
     }
 }
 
-impl<G: Scope, K: Data+Ord+Hash+Default+Debug, V: Data+Ord+Default+Debug, S> Group<G, K, V> for S
+impl<G: Scope, K: Data+Default, V: Data+Default, S> Group<G, K, V> for S
 where G::Timestamp: LeastUpperBound,
       S: Unary<G, ((K,V), i32)>+Map<G, ((K,V), i32)> { }
 
 
-pub trait GroupUnsigned<G: Scope, U: Unsigned+Data+Default, V: Data+Ord+Default+Debug> : GroupBy<G, (U,V)>
+pub trait GroupUnsigned<G: Scope, U: Unsigned+Data+Default, V: Data+Default+Debug> : GroupBy<G, (U,V)>
     where G::Timestamp: LeastUpperBound {
     fn group_u<L, V2: Data+Ord+Default+Debug>(&self, logic: L) -> Stream<G, ((U,V2),i32)>
         where L: Fn(&U, &mut CollectionIterator<V>, &mut Vec<(V2, i32)>)+'static {
@@ -186,8 +187,16 @@ where G::Timestamp: LeastUpperBound {
         // A map from times to a list of keys that need processing at that time.
         let mut to_do = Vec::new();
 
+        // temporary storage for operator implementations to populate
+        let mut buffer = vec![];
+        let mut heap1 = vec![];
+        let mut heap2 = vec![];
+
+
         // create an exchange channel based on the supplied Fn(&D1)->u64.
         let exch = Exchange::new(move |&(ref x,_)| part(x));
+
+        let mut sorter = RadixSorter::new();
 
         // fabricate a data-parallel operator using the `unary_notify` pattern.
         self.unary_notify(exch, "GroupBy", vec![], move |input, output, notificator| {
@@ -195,8 +204,8 @@ where G::Timestamp: LeastUpperBound {
             // 1. read each input, and stash it in our staging area
             while let Some((time, data)) = input.next() {
                 notificator.notify_at(&time);
-                inputs.entry_or_insert(time.clone(), || RadixSorter::new())
-                      .extend(data.drain_temp().map(|(d,w)| (kv(d),w)),  &|x| key_h(&(x.0).0));
+                inputs.entry_or_insert(time.clone(), || Vec::new())
+                      .push(::std::mem::replace(data.deref_mut(), Vec::new()));
             }
 
             // 2. go through each time of interest that has reached completion
@@ -206,8 +215,27 @@ where G::Timestamp: LeastUpperBound {
 
                 // 2a. fetch any data associated with this time.
                 if let Some(mut queue) = inputs.remove_key(&index) {
-                    let radix_sorted = queue.finish(&|x| key_h(&(x.0).0));
-                    if let Some(compact) = Compact::from_radix(radix_sorted, &|k| key_h(k)) {
+
+                    // sort things; radix if many, .sort_by if few.
+                    let compact = if queue.len() > 1 {
+                        for element in queue.into_iter() {
+                            sorter.extend(element.into_iter().map(|(d,w)| (kv(d),w)), &|x| key_h(&(x.0).0));
+                        }
+                        let mut sorted = sorter.finish(&|x| key_h(&(x.0).0));
+                        let result = Compact::from_radix(&mut sorted, &|k| key_h(k));
+                        sorted.truncate(256);
+                        sorter.recycle(sorted);
+                        result
+                    }
+                    else {
+                        let mut vec = queue.pop().unwrap();
+                        let mut vec = vec.drain_temp().map(|(d,w)| (kv(d),w)).collect::<Vec<_>>();
+                        vec.sort_by(|x,y| key_h(&(x.0).0).cmp(&key_h((&(y.0).0))));
+                        Compact::from_radix(&mut vec![vec], &|k| key_h(k))
+                    };
+
+                    if let Some(compact) = compact {
+
                         for key in &compact.keys {
                             for time in source.interesting_times(key, index.clone()).iter() {
                                 let mut queue = to_do.entry_or_insert((*time).clone(), || { notificator.notify_at(time); Vec::new() });
@@ -224,8 +252,6 @@ where G::Timestamp: LeastUpperBound {
                 // we may need to produce output at index
                 let mut session = output.session(&index);
 
-                // temporary storage for operator implementations to populate
-                let mut buffer = vec![];
 
                     // 2b. We must now determine for each interesting key at this time, how does the
                     // currently reported output match up with what we need as output. Should we send
@@ -241,10 +267,7 @@ where G::Timestamp: LeastUpperBound {
                     keys.dedup();
 
                     // accumulations for installation into result
-                    let mut accumulation = Compact::new(0,0,0);
-
-                    let mut heap1 = vec![];
-                    let mut heap2 = vec![];
+                    let mut accumulation = Compact::new(0,0);
 
                     for key in keys {
 

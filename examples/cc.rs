@@ -64,9 +64,10 @@ fn connected_components<G: Scope>(edges: &Stream<G, (Edge, i32)>) -> Stream<G, (
 where G::Timestamp: LeastUpperBound+Hash {
 
     let nodes = edges.map_in_place(|&mut ((ref mut x, ref mut y), _)| { *x = std::cmp::min(*x,*y); *y = *x; } )
-                     .consolidate();
+                     .consolidate_by(|x| x.0);
 
-    let edges = edges.map(|((x,y),w)| ((y,x),w)).concat(&edges);
+    let edges = edges.map_in_place(|x| x.0 = ((x.0).1, (x.0).0))
+                     .concat(&edges);
 
     reachability(&edges, &nodes)
 }
@@ -82,7 +83,7 @@ where G::Timestamp: LeastUpperBound+Hash {
 
              improve_labels(inner, &edges, &nodes)
          })
-         .consolidate()
+        //  .consolidate()
 }
 
 
@@ -92,7 +93,7 @@ fn improve_labels<G: Scope>(labels: &Stream<G, ((Node, Node), i32)>,
     -> Stream<G, ((Node, Node), i32)>
 where G::Timestamp: LeastUpperBound {
 
-    labels.join_by_u(&edges, |l| l, |e| e, |_k,l,d| (*d,*l))
+    labels.join_map_u(&edges, |_k,l,d| (*d,*l))
           .concat(&nodes)
           .group_u(|_, s, t| { t.push((*s.peek().unwrap().0, 1)); } )
 }

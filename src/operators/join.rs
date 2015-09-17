@@ -2,9 +2,11 @@
 
 use std::fmt::Debug;
 use std::default::Default;
-use std::hash::{Hash, Hasher};
+use std::hash::Hasher;
 use std::collections::HashMap;
 use std::rc::Rc;
+
+use std::ops::DerefMut;
 
 use ::Data;
 use timely::dataflow::*;
@@ -12,14 +14,12 @@ use timely::dataflow::operators::{Map, Binary};
 use timely::dataflow::channels::pact::Exchange;
 use timely::drain::DrainExt;
 
-
 use collection::{Trace, LeastUpperBound, Lookup, Offset};
-
 use collection::compact::Compact;
 use radix_sort::{RadixSorter, Unsigned};
 
 /// Join implementations for `(key,val)` data.
-pub trait Join<G: Scope, K: Data+Clone, V: Data+Clone> : JoinBy<G, (K,V)> {
+pub trait Join<G: Scope, K: Data, V: Data> : JoinBy<G, (K,V)> {
 
     /// Matches pairs of `(key,val1)` and `(key,val2)` records based on `key`.
     fn join<V2>(&self, other: &Stream<G, ((K,V2),i32)>) -> Stream<G, ((K,V,V2),i32)>
@@ -29,7 +29,7 @@ pub trait Join<G: Scope, K: Data+Clone, V: Data+Clone> : JoinBy<G, (K,V)> {
     }
     /// Matches pairs of `(key,val1)` and `(key,val2)` records based on `key` and applies a reduction function.
     fn join_map<V2, D, R>(&self, other: &Stream<G, ((K,V2),i32)>, logic: R) -> Stream<G, (D,i32)>
-    where V2: Data+Clone+Debug+'static,
+    where V2: Data+'static,
           D: Data,
           R: Fn(&K, &V, &V2)->D+'static,
           G::Timestamp: LeastUpperBound {
@@ -43,17 +43,17 @@ where G::Timestamp: LeastUpperBound,
 
 
 /// Join implementations for `(unsigned_int, val)` data.
-pub trait JoinUnsigned<G: Scope, U: Unsigned+Data+Default, V: Data+Ord+Clone+Debug> : JoinBy<G, (U,V)> {
+pub trait JoinUnsigned<G: Scope, U: Unsigned+Data+Default, V: Data> : JoinBy<G, (U,V)> {
 
     /// Matches pairs of `(key, val1)` and `(key, val2)` data based `key`.
     fn join_u<V2>(&self, other: &Stream<G, ((U,V2),i32)>) -> Stream<G, ((U,V,V2),i32)>
-    where V2: Data+Clone+Debug+'static,
+    where V2: Data+'static,
           G::Timestamp: LeastUpperBound+Debug {
         self.join_by_core(other, |x| x, |x| x, |&(ref k,_)| k.as_u64(), |&(ref k,_)| k.as_u64(), |k| k.clone(), |k,v1,v2| (k.clone(), v1.clone(), v2.clone()), &|x| (Vec::new(), x))
     }
     /// Matches pairs of `(key,val1)` and `(key,val2)` records based on `key` and applies a reduction function.
     fn join_map_u<V2, D, R>(&self, other: &Stream<G, ((U,V2),i32)>, logic: R) -> Stream<G, (D,i32)>
-    where V2: Data+Clone+Debug+'static,
+    where V2: Data+'static,
           D: Data,
           R: Fn(&U, &V, &V2)->D+'static,
           G::Timestamp: LeastUpperBound+Debug {
@@ -79,12 +79,12 @@ where G::Timestamp: LeastUpperBound+Debug {
     /// function from an unsigned integer (the key) and two value references to the output type.
     fn join_by_u<
         U:  Unsigned+Data+Default,
-        V1: Data+Ord+Clone+Default+Debug+'static,
-        V2: Data+Ord+Clone+Default+Debug+'static,
-        D2: Data+Eq,
+        V1: Data+Default+'static,
+        V2: Data+Default+'static,
+        D2: Data,
         F1: Fn(D1)->(U,V1)+'static,
         F2: Fn(D2)->(U,V2)+'static,
-        R:  Ord+Data,
+        R:  Data,
         RF: Fn(&U,&V1,&V2)->R+'static,
     >
         (&self, other: &Stream<G, (D2, i32)>, kv1: F1, kv2: F2, result: RF) -> Stream<G, (R, i32)> {
@@ -107,7 +107,7 @@ where G::Timestamp: LeastUpperBound+Debug {
     /// storing a redundant copy of the key in the value payload.
     fn semijoin_by_u<
         U:  Unsigned+Data+Default,
-        V1: Data+Ord+Clone+Default+Debug+'static,
+        V1: Data+Default+'static,
         F1: Fn(D1)->(U,V1)+'static,
         RF: Fn(&U,&V1)->D1+'static,
     >
@@ -118,15 +118,15 @@ where G::Timestamp: LeastUpperBound+Debug {
 
     /// Matches elements of two streams using a key function.
     fn join_by<
-        K:  Data+Ord+Clone+Hash+Debug+'static,
-        V1: Data+Ord+Clone+Debug+'static,
-        V2: Data+Ord+Clone+Debug+'static,
+        K:  Data+'static,
+        V1: Data+'static,
+        V2: Data+'static,
         D2: Data,
         F1: Fn(D1)->(K,V1)+'static,
         F2: Fn(D2)->(K,V2)+'static,
         U:  Unsigned+Data+Default,
         KH: Fn(&K)->U+'static,
-        R:  Ord+Data,
+        R:  Data,
         RF: Fn(&K,&V1,&V2)->R+'static,
     >
         (&self, other: &Stream<G, (D2, i32)>,
@@ -152,8 +152,8 @@ where G::Timestamp: LeastUpperBound+Debug {
 
     /// Restricts the input stream to those elements whose key is present in the second stream.
     fn semijoin_by<
-        K:  Data+Ord+Clone+Hash+Debug+'static,
-        V1: Data+Ord+Clone+Debug+'static,
+        K:  Data+'static,
+        V1: Data+'static,
         F1: Fn(D1)->(K,V1)+'static,
         KH: Fn(&K)->u64+'static,
         RF: Fn(&K,&V1)->D1+'static,
@@ -165,17 +165,17 @@ where G::Timestamp: LeastUpperBound+Debug {
         self.join_by(&other, kv1, |k| (k,()), key_h, move |x,y,_| result(x,y))
     }
     fn join_by_core<
-        K:  Ord+Clone+Debug+'static,
-        V1: Ord+Clone+Debug+'static,
-        V2: Ord+Clone+Debug+'static,
-        D2: Data+Eq,
+        K:  Data,
+        V1: Data,
+        V2: Data,
+        D2: Data,
         F1: Fn(D1)->(K,V1)+'static,
         F2: Fn(D2)->(K,V2)+'static,
         H1: Fn(&D1)->u64+'static,
         H2: Fn(&D2)->u64+'static,
         U:  Unsigned+Data+Default,
         KH: Fn(&K)->U+'static,
-        R:  Ord+Data,
+        R:  Data,
         RF: Fn(&K,&V1,&V2)->R+'static,
         LC: Lookup<K, Offset>+'static,
         GC: Fn(u64)->LC,
@@ -204,6 +204,9 @@ where G::Timestamp: LeastUpperBound+Debug {
         let exch1 = Exchange::new(move |&(ref r, _)| part1(r));
         let exch2 = Exchange::new(move |&(ref r, _)| part2(r));
 
+        let mut sorter1 = RadixSorter::new();
+        let mut sorter2 = RadixSorter::new();
+
         self.binary_notify(stream2, exch1, exch2, "Join", vec![], move |input1, input2, output, notificator| {
 
             // consider shutting down each trace if the opposing input has closed out
@@ -213,38 +216,76 @@ where G::Timestamp: LeastUpperBound+Debug {
             // read input 1, push key, (val,wgt) to queues
             while let Some((time, data)) = input1.next() {
                 notificator.notify_at(&time);
-                inputs1.entry_or_insert(time.clone(), || RadixSorter::new())
-                       .extend(data.drain_temp().map(|(d,w)| (kv1(d),w)),  &|x| key_h(&(x.0).0));
+                inputs1.entry_or_insert(time.clone(), || Vec::new())
+                       .push(::std::mem::replace(data.deref_mut(), Vec::new()));
             }
 
             // read input 2, push key, (val,wgt) to queues
             while let Some((time, data)) = input2.next() {
                 notificator.notify_at(&time);
-                inputs2.entry_or_insert(time.clone(), || RadixSorter::new())
-                       .extend(data.drain_temp().map(|(d,w)| (kv2(d),w)),  &|x| key_h(&(x.0).0));
+                inputs2.entry_or_insert(time.clone(), || Vec::new())
+                       .push(::std::mem::replace(data.deref_mut(), Vec::new()));
             }
 
             // check to see if we have inputs to process
             while let Some((time, _count)) = notificator.next() {
 
                 if let Some(mut queue) = inputs1.remove_key(&time) {
-                    let radix_sorted = queue.finish(&|x| key_h(&(x.0).0));
-                    if let Some(compact) = Compact::from_radix(radix_sorted, &|k| key_h(k)) {
+
+                    // sort things; radix if many, .sort_by if few.
+                    let compact = if queue.len() > 1 {
+                        for element in queue.into_iter() {
+                            sorter1.extend(element.into_iter().map(|(d,w)| (kv1(d),w)), &|x| key_h(&(x.0).0));
+                        }
+                        let mut sorted = sorter1.finish(&|x| key_h(&(x.0).0));
+                        let result = Compact::from_radix(&mut sorted, &|k| key_h(k));
+                        sorted.truncate(256);
+                        sorter1.recycle(sorted);
+                        result
+                    }
+                    else {
+                        let mut vec = queue.pop().unwrap();
+                        let mut vec = vec.drain_temp().map(|(d,w)| (kv1(d),w)).collect::<Vec<_>>();
+
+                        vec.sort_by(|x,y| key_h(&(x.0).0).cmp(&key_h((&(y.0).0))));
+                        Compact::from_radix(&mut vec![vec], &|k| key_h(k))
+                    };
+
+                    if let Some(compact) = compact {
                         if let Some(trace) = trace2.as_ref() {
                             process_diffs(&time, &compact, &trace, &result, &mut outbuf);
                         }
 
                         if let Some(trace) = trace1.as_mut() {
-                            // println!("join1");
                             trace.set_difference(time.clone(), compact);
                         }
                     }
                 }
 
                 if let Some(mut queue) = inputs2.remove_key(&time) {
-                    let radix_sorted = queue.finish(&|x| key_h(&(x.0).0));
-                    if let Some(compact) = Compact::from_radix(radix_sorted, &|k| key_h(k)) {
-                    if let Some(trace) = trace1.as_ref() {
+
+                    // sort things; radix if many, .sort_by if few.
+                    let compact = if queue.len() > 1 {
+                        for element in queue.into_iter() {
+                            sorter2.extend(element.into_iter().map(|(d,w)| (kv2(d),w)), &|x| key_h(&(x.0).0));
+                        }
+                        let mut sorted = sorter2.finish(&|x| key_h(&(x.0).0));
+                        let result = Compact::from_radix(&mut sorted, &|k| key_h(k));
+                        sorted.truncate(256);
+                        sorter2.recycle(sorted);
+                        result
+                    }
+                    else {
+                        let mut vec = queue.pop().unwrap();
+                        let mut vec = vec.drain_temp().map(|(d,w)| (kv2(d),w)).collect::<Vec<_>>();
+                        vec.sort_by(|x,y| key_h(&(x.0).0).cmp(&key_h((&(y.0).0))));
+                        Compact::from_radix(&mut vec![vec], &|k| key_h(k))
+                    };
+
+                    // let radix_sorted = queue.finish(&|x| key_h(&(x.0).0));
+                    // if let Some(compact) = Compact::from_radix(radix_sorted, &|k| key_h(k)) {
+                    if let Some(compact) = compact {
+                        if let Some(trace) = trace1.as_ref() {
                             process_diffs(&time, &compact, &trace, &|k,x,y| result(k,y,x), &mut outbuf);
                         }
                         if let Some(trace) = trace2.as_mut() {
@@ -281,13 +322,13 @@ where T: Eq+LeastUpperBound+Clone+Debug,
       RF: Fn(&K,&V1,&V2)->R,
       L: Lookup<K, Offset> {
 
-    let func = |&(w,c)| ::std::iter::repeat(w).take(c as usize);
-    let mut vals = compact.vals.iter().zip(compact.wgts.iter().flat_map(&func));
+    // let func = |&(w,c)| ::std::iter::repeat(w).take(c as usize);
+    let mut vals = compact.vals.iter();//.zip(compact.wgts.iter().flat_map(&func));
 
     for (key, &cnt) in compact.keys.iter().zip(compact.cnts.iter()) {
         for (t, vals2) in trace.trace(key) {
             let mut output = outbuf.entry_or_insert(time.least_upper_bound(t), || Vec::new());
-            for (val, wgt) in vals.clone().take(cnt as usize) {
+            for &(ref val, wgt) in vals.clone().take(cnt as usize) {
                 for (val2, wgt2) in vals2.clone() {
                     output.push((result(key, val, val2), wgt * wgt2));
                 }

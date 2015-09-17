@@ -24,6 +24,7 @@ impl<I: Iterator> CoalesceIterator<I> {
 
 impl<V: Ord, I: Iterator<Item=(V, i32)>> Iterator for CoalesceIterator<I> {
     type Item = (V, i32);
+    #[inline]
     fn next(&mut self) -> Option<(V, i32)> {
         loop {
             if let Some((val, mut wgt)) = self.iter.next() {

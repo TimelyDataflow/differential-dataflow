@@ -46,14 +46,14 @@ impl Offset {
 struct ListEntry {
     time: u32,
     vals: u32,
-    wgts: u32,
+    // wgts: u32,
     next: Option<Offset>,
 }
 
 struct TimeEntry<T, V> {
     time: T,
-    vals: Vec<V>,
-    wgts: Vec<(i32, u32)>,
+    vals: Vec<(V, i32)>,
+    // wgts: Vec<(i32, u32)>,
 }
 
 /// A collection of values indexed by `key` and `time`.
@@ -81,14 +81,14 @@ impl<K, V, L, T> Trace<K, T, V, L> where K: Ord, V: Ord, L: Lookup<K, Offset>, T
         let keys = accumulation.keys;
         let cnts = accumulation.cnts;
         let vals = accumulation.vals;
-        let wgts = accumulation.wgts;
+        // let wgts = accumulation.wgts;
 
         // index of the self.times entry we are about to insert
         let time_index = self.times.len();
 
         // counters for offsets in vals and wgts
         let mut vals_offset = 0;
-        let mut wgts_offset = 0;
+        // let mut wgts_offset = 0;
 
         let links_len = self.links.len();
 
@@ -105,7 +105,7 @@ impl<K, V, L, T> Trace<K, T, V, L> where K: Ord, V: Ord, L: Lookup<K, Offset>, T
                 self.links.push(ListEntry {
                     time: time_index as u32,
                     vals: vals_offset,
-                    wgts: wgts_offset,
+                    // wgts: wgts_offset,
                     next: None
                 });
             }
@@ -115,7 +115,7 @@ impl<K, V, L, T> Trace<K, T, V, L> where K: Ord, V: Ord, L: Lookup<K, Offset>, T
                 self.links.push(ListEntry {
                     time: time_index as u32,
                     vals: vals_offset,
-                    wgts: wgts_offset,
+                    // wgts: wgts_offset,
                     next: Some(*prev_position)
                 });
                 *prev_position = next_position;
@@ -123,12 +123,12 @@ impl<K, V, L, T> Trace<K, T, V, L> where K: Ord, V: Ord, L: Lookup<K, Offset>, T
 
             // advance offsets.
             vals_offset += cnt;
-            let mut counter = 0;
-            while counter < cnt {
-                counter += wgts[wgts_offset as usize].1;
-                wgts_offset += 1;
-            }
-            assert_eq!(counter, cnt);
+            // let mut counter = 0;
+            // while counter < cnt {
+            //     counter += wgts[wgts_offset as usize].1;
+            //     wgts_offset += 1;
+            // }
+            // assert_eq!(counter, cnt);
         }
 
         // println!("set_difference sizes for {:?}:", time);
@@ -137,29 +137,26 @@ impl<K, V, L, T> Trace<K, T, V, L> where K: Ord, V: Ord, L: Lookup<K, Offset>, T
         // println!("\twgts: {}", wgts.len() * ::std::mem::size_of::<(i32, u32)>());
 
         // add the values and weights to the list of timed differences.
-        self.times.push(TimeEntry { time: time, vals: vals, wgts: wgts });
+        self.times.push(TimeEntry { time: time, vals: vals });
     }
 
     fn get_range<'a>(&'a self, position: Offset) -> DifferenceIterator<'a, V> {
 
         let time = self.links[position.val()].time as usize;
         let vals_lower = self.links[position.val()].vals as usize;
-        let wgts_lower = self.links[position.val()].wgts as usize;
+        // let wgts_lower = self.links[position.val()].wgts as usize;
 
         // upper limit can be read if next link exists and of the same index. else, is last elt.
-        let (vals_upper, wgts_upper) = if (position.val() + 1) < self.links.len()
+        let vals_upper = if (position.val() + 1) < self.links.len()
                                         && time == self.links[position.val() + 1].time as usize {
 
-            (self.links[position.val() + 1].vals as usize,
-             self.links[position.val() + 1].wgts as usize)
+            self.links[position.val() + 1].vals as usize
         }
         else {
-            (self.times[time].vals.len(),
-             self.times[time].wgts.len())
+            self.times[time].vals.len()
         };
 
-        DifferenceIterator::new(&self.times[time].vals[vals_lower..vals_upper],
-                                &self.times[time].wgts[wgts_lower..wgts_upper])
+        DifferenceIterator::new(&self.times[time].vals[vals_lower..vals_upper])
     }
 
     /// Enumerates the differences for `key` at `time`.
@@ -168,7 +165,7 @@ impl<K, V, L, T> Trace<K, T, V, L> where K: Ord, V: Ord, L: Lookup<K, Offset>, T
             .filter(|x| x.0 == time)
             .map(|x| x.1)
             .next()
-            .unwrap_or(DifferenceIterator::new(&[], &[]))
+            .unwrap_or(DifferenceIterator::new(&[]))
     }
 
     // /// Accumulates differences for `key` at times less than or equal to `time`.
@@ -263,21 +260,15 @@ where K:  Ord+'a,
 
 /// Enumerates `(&V,i32)` elements of a difference.
 pub struct DifferenceIterator<'a, V: 'a> {
-    vals: &'a [V],
-    wgts: &'a [(i32,u32)],
+    vals: &'a [(V,i32)],
     next: usize,            // index of next entry in vals,
-    wgt_curr: usize,
-    wgt_left: usize,
 }
 
 impl<'a, V: 'a> DifferenceIterator<'a, V> {
-    fn new(vals: &'a [V], wgts: &'a [(i32, u32)]) -> DifferenceIterator<'a, V> {
+    fn new(vals: &'a [(V, i32)]) -> DifferenceIterator<'a, V> {
         DifferenceIterator {
             vals: vals,
-            wgts: wgts,
             next: 0,
-            wgt_curr: 0,
-            wgt_left: wgts[0].1 as usize,
         }
     }
 }
@@ -286,10 +277,7 @@ impl<'a, V: 'a> Clone for DifferenceIterator<'a, V> {
     fn clone(&self) -> Self {
         DifferenceIterator {
             vals: self.vals,
-            wgts: self.wgts,
             next: self.next,
-            wgt_curr: self.wgt_curr,
-            wgt_left: self.wgt_left,
         }
     }
 }
@@ -300,13 +288,8 @@ impl<'a, V: 'a> Iterator for DifferenceIterator<'a, V> {
     #[inline]
     fn next(&mut self) -> Option<(&'a V, i32)> {
         if self.next < self.vals.len() {
-            if self.wgt_left == 0 {
-                self.wgt_curr += 1;
-                self.wgt_left = self.wgts[self.wgt_curr].1 as usize;
-            }
-            self.wgt_left -= 1;
             self.next += 1;
-            Some((&self.vals[self.next - 1], self.wgts[self.wgt_curr].0))
+            Some((&self.vals[self.next - 1].0, self.vals[self.next - 1].1))
         }
         else {
             None

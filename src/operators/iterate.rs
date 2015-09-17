@@ -33,8 +33,8 @@ use timely::dataflow::operators::*;
 
 use ::{Data, Collection};
 
-use timely::progress::nested::product::Product;
-use timely::progress::nested::Summary::Local;
+// use timely::progress::nested::product::Product;
+// use timely::progress::nested::Summary::Local;
 use timely::progress::timestamp::Timestamp;
 
 use radix_sort::Unsigned;
@@ -74,13 +74,13 @@ impl<G: Scope, D: Ord+Data+Debug> IterateExt<G, D> for Collection<G, D> {
 
         self.scope().scoped(|subgraph| {
 
-            let (feedback, cycle) = subgraph.loop_variable(Product::new(G::Timestamp::max(), u64::max()), Local(1));
+            let (feedback, cycle) = subgraph.loop_variable(u64::max(), 1);
             let ingress = subgraph.enter(&self);
 
             let bottom = logic(&ingress.concat(&cycle));
 
             bottom.concat(&ingress.map_in_place(|x| x.1 = -x.1))
-                  .consolidate_by(partition)
+                //   .consolidate_by(partition)
                   .connect_loop(feedback);
 
             bottom.leave()

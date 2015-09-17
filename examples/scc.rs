@@ -60,7 +60,7 @@ fn main() {
                 let edge = (rng1.gen_range(0, nodes), rng1.gen_range(0, nodes));
                 // println!("edge: {:?}", edge);
                 input.send((edge, 1));
-                if (index % (1 << 16)) == 0 {
+                if (index % (1 << 12)) == 0 {
                     computation.step();
                 }
             }
@@ -91,18 +91,16 @@ fn _trim_and_flip<G: Scope>(graph: &Stream<G, (Edge, i32)>) -> Stream<G, (Edge, 
 where G::Timestamp: LeastUpperBound {
         graph.iterate_by(|x| x.0, |edges| {
                  let inner = edges.scope().enter(&graph);
-                 edges.map(|((x,_),w)| (x,w))
-                      .group_by_u(|x|(x,()), |&x,_| x, |_,_,target| target.push(((),1)))
+                 edges.group_by_u(|(x,_)|(x,()), |&x,_| x, |_,_,target| target.push(((),1)))
                       .join_by_u(&inner, |x| (x,()), |(s,d)| (d,s), |&d,_,&s| (s,d))
              })
-             .consolidate_by(|x| x.0)
-             .map(|((x,y),w)| ((y,x),w))
+             .map_in_place(|x| x.0 = ((x.0).1, (x.0).0))
 }
 
 fn _strongly_connected<G: Scope>(graph: &Stream<G, (Edge, i32)>) -> Stream<G, (Edge, i32)>
 where G::Timestamp: LeastUpperBound+Hash {
     graph.iterate(|inner| {
-        let trans = inner.scope().enter(&graph).map(|((x,y),w)| ((y,x),w));
+        let trans = inner.scope().enter(&graph).map_in_place(|x| x.0 = ((x.0).1, (x.0).0));
         let edges = inner.scope().enter(&graph);
 
         _trim_edges(&_trim_edges(inner, &edges), &trans)
@@ -112,7 +110,8 @@ where G::Timestamp: LeastUpperBound+Hash {
 fn _trim_edges<G: Scope>(cycle: &Stream<G, (Edge, i32)>, edges: &Stream<G, (Edge, i32)>)
     -> Stream<G, (Edge, i32)> where G::Timestamp: LeastUpperBound+Hash {
 
-    let nodes = edges.map(|((_,y),w)| (y,w)).consolidate_by(|&x| x);
+    let nodes = edges.map_in_place(|x| (x.0).0 = (x.0).1)
+                     .consolidate_by(|&x| x.0);
 
     let labels = _reachability(&cycle, &nodes);
 
@@ -120,21 +119,20 @@ fn _trim_edges<G: Scope>(cycle: &Stream<G, (Edge, i32)>, edges: &Stream<G, (Edge
          .join_map_u(&labels, |&e2,&(e1,l1),&l2| ((e1,e2),(l1,l2)))
          .filter(|&((_,(l1,l2)), _)| l1 == l2)
          .map(|(((x1,x2),_),d)| ((x2,x1),d))
-         .consolidate_by(|x| x.0)
+        //  .consolidate_by(|x| x.0)
 }
 
-fn _reachability<G: Scope>(edges: &Stream<G, (Edge, i32)>, nodes: &Stream<G, (Node, i32)>) -> Stream<G, (Edge, i32)>
+fn _reachability<G: Scope>(edges: &Stream<G, (Edge, i32)>, nodes: &Stream<G, ((Node, Node), i32)>) -> Stream<G, (Edge, i32)>
 where G::Timestamp: LeastUpperBound+Hash {
 
     edges.filter(|_| false)
          .iterate_by(|x| x.0, |inner| {
              let edges = inner.scope().enter(&edges);
-             let nodes = inner.scope().enter_at(&nodes, |r| 256 * (64 - (r.0 as u64).leading_zeros() as u64))
-                                        .map(|(x,w)| ((x,x),w));
+             let nodes = inner.scope().enter_at(&nodes, |r| 256 * (64 - ((r.0).0 as u64).leading_zeros() as u64));
 
              _improve_labels(inner, &edges, &nodes)
          })
-         .consolidate_by(|x| x.0)
+        //  .consolidate_by(|x| x.0)
 }
 
 fn _improve_labels<G: Scope>(labels: &Stream<G, ((Node, Node), i32)>,

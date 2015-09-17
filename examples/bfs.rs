@@ -5,6 +5,7 @@ extern crate differential_dataflow;
 
 use timely::dataflow::*;
 use timely::dataflow::operators::*;
+use timely::progress::timestamp::RootTimestamp;
 
 use rand::{Rng, SeedableRng, StdRng};
 
@@ -21,28 +22,30 @@ fn main() {
         let start = time::precise_time_s();
 
         // define BFS dataflow; return handles to roots and edges inputs
-        let (mut roots, mut graph) = computation.scoped(|scope| {
+        let (mut roots, mut graph, probe) = computation.scoped(|scope| {
 
             let (edge_input, graph) = scope.new_input();
             let (node_input, roots) = scope.new_input();
 
             let dists = bfs(&graph, &roots);    // determine distances to each graph node
 
-            dists.map(|((_,s),w)| (s,w))        // keep only the distances, not node ids
-                 .consolidate()           // aggregate into one record per distance
-                 .inspect_batch(move |t, x| {   // print up something neat for each update
-                     println!("observed at {:?}:", t);
-                     println!("elapsed: {}s", time::precise_time_s() - (start + t.inner as f64));
-                     for y in x {
-                         println!("\t{:?}", y);
-                     }
-                 });
+            let probe = dists
+                // .map(|((_,s),w)| (s,w))        // keep only the distances, not node ids
+                //  .consolidate_by(|&x| x)           // aggregate into one record per distance
+                //  .inspect_batch(move |t, x| {   // print up something neat for each update
+                //     //  println!("observed at {:?}:", t);
+                //      println!("elapsed: {}s", time::precise_time_s() - (start + t.inner as f64));
+                //     //  for y in x {
+                //     //      println!("\t{:?}", y);
+                //     //  }
+                //  })
+                 .probe().0;
 
-            (node_input, edge_input)
+            (node_input, edge_input, probe)
         });
 
-        let nodes = 100_000_000u32; // the u32 helps type inference understand what nodes are
-        let edges = 200_000_000;
+        let nodes = 50_000u32; // the u32 helps type inference understand what nodes are
+        let edges = 100_000;
 
         let seed: &[_] = &[1, 2, 3, 4];
         let mut rng1: StdRng = SeedableRng::from_seed(seed);    // rng for edge additions
@@ -50,12 +53,14 @@ fn main() {
 
         println!("performing BFS on {} nodes, {} edges:", nodes, edges);
 
-        // trickle edges in to dataflow
-        for _ in 0..(edges/1000) {
-            for _ in 0..1000 {
-                graph.send(((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), 1));
+        if computation.index() == 0 {
+            // trickle edges in to dataflow
+            for _ in 0..(edges/1000) {
+                for _ in 0..1000 {
+                    graph.send(((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), 1));
+                }
+                computation.step();
             }
-            computation.step();
         }
 
         // start the root set out with roots 0, 1, and 2
@@ -71,18 +76,42 @@ fn main() {
         roots.advance_to(1);
         roots.close();
 
-        // repeatedly change edges
-        let mut round = 0 as u32;
-        while computation.step() {
-            // once each full second ticks, change an edge
-            if time::precise_time_s() - start >= round as f64 {
-                // add edges using prior rng; remove edges using fresh rng with the same seed
-                graph.send(((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), 1));
-                graph.send(((rng2.gen_range(0, nodes), rng2.gen_range(0, nodes)),-1));
-                graph.advance_to(round + 1);
-                round += 1;
+        graph.advance_to(1);
+
+        let mut changes = Vec::new();
+        for wave in 0.. {
+
+            for _ in 0..1000 {
+                changes.push(((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), 1));
+                changes.push(((rng2.gen_range(0, nodes), rng2.gen_range(0, nodes)),-1));
             }
+
+            let start = time::precise_time_s();
+            for _ in 0..1000 {
+                let round = *graph.epoch();
+                graph.send(changes.pop().unwrap());
+                graph.send(changes.pop().unwrap());
+                graph.advance_to(round + 1);
+
+                while probe.le(&RootTimestamp::new(round)) {
+                    computation.step();
+                }
+            }
+
+            println!("round {}: avg {}", wave, (time::precise_time_s() - start) / 1000.0f64);
         }
+        // // repeatedly change edges
+        // let mut round = 0 as u32;
+        // while computation.step() {
+        //     // once each full second ticks, change an edge
+        //     if time::precise_time_s() - start >= round as f64 {
+        //         // add edges using prior rng; remove edges using fresh rng with the same seed
+        //         graph.send(((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), 1));
+        //         graph.send(((rng2.gen_range(0, nodes), rng2.gen_range(0, nodes)),-1));
+        //         graph.advance_to(round + 1);
+        //         round += 1;
+        //     }
+        // }
     });
 }
 
@@ -93,8 +122,9 @@ where G::Timestamp: LeastUpperBound {
 
     // initialize roots as reaching themselves at distance 0
     let nodes = roots.map(|(x,w)| ((x, 0), w));
-    let edges = edges.map(|((x,y),w)| ((y,x),w))
-                     .concat(&edges);
+
+    // let edges = edges.map_in_place(|x| x.0 = ((x.0).1, (x.0).0))
+    //                  .concat(&edges);
 
     // repeatedly update minimal distances each node can be reached from each root
     nodes.iterate(|inner| {
