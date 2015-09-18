@@ -33,9 +33,7 @@
 
 use std::rc::Rc;
 use std::default::Default;
-use std::hash::{Hash, Hasher};
-use std::collections::HashMap;
-use std::fmt::Debug;
+use std::hash::Hasher;
 use std::ops::DerefMut;
 
 use itertools::Itertools;
@@ -57,9 +55,14 @@ use collection::compact::Compact;
 pub trait CoGroupBy<G: Scope, K: Data, V1: Data> : Binary<G, ((K,V1), i32)>+Map<G, ((K,V1), i32)>
 where G::Timestamp: LeastUpperBound {
 
-    /// The lowest level `cogroup` implementation, which is parameterized by the type of storage to
-    /// use for mapping keys `K` to `Offset`, an internal `CollectionTrace` type. This method should
-    /// probably rarely be used directly.
+    /// A primitive binary version of `group_by`, which acts on a `Stream<((K,V1),i32)` and a `Stream<((K,V2),i32)`.
+    ///
+    /// The two streams must already be key-value pairs, which is too bad. Also, in addition to the
+    /// normal arguments (another stream, a hash for the key, a reduction function, and per-key logic),
+    /// the user must specify a function implmenting `Fn(u64) -> Look`, where `Look: Lookup<K, Offset>` is something you shouldn't have to know about yet.
+    /// The right thing to use here, for the moment, is `|_| HashMap::new()`.
+    ///
+    /// There are better options if you know your key is an unsigned integer, namely `|x| (Vec::new(), x)`.
     fn cogroup_by_inner<
         D:     Data,
         V2:    Data+Default,
@@ -95,8 +98,8 @@ where G::Timestamp: LeastUpperBound {
         let key_2 = key_h.clone();
 
         // create an exchange channel based on the supplied Fn(&D1)->u64.
-        let exch1 = Exchange::new(move |&(ref x,_)| key_1(&x.0).as_u64());
-        let exch2 = Exchange::new(move |&(ref x,_)| key_2(&x.0).as_u64());
+        let exch1 = Exchange::new(move |&((ref k, _),_)| key_1(k).as_u64());
+        let exch2 = Exchange::new(move |&((ref k, _),_)| key_2(k).as_u64());
 
         let mut sorter1 = RadixSorter::new();
         let mut sorter2 = RadixSorter::new();
