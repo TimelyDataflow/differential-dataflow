@@ -284,7 +284,7 @@ where G::Timestamp: LeastUpperBound {
                         for (val, wgt) in Coalesce::coalesce(unsafe { result.get_collection_using(&key, &index, &mut heap2) }
                                                                    .map(|(v, w)| (v,-w))
                                                                    .merge_by(buffer.iter().map(|&(ref v, w)| (v, w)), |x,y| {
-                                                                        x.0.cmp(&y.0)
+                                                                        x.0 <= y.0
                                                                    }))
                         {
                             session.give((reduc(&key, val), wgt));
