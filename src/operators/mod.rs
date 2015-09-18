@@ -9,11 +9,13 @@
 //! their timely dataflow analogues are sufficient (e.g. `map`, `filter`, `concat`).
 
 pub use self::group::{GroupBy, Group, GroupUnsigned};
+pub use self::cogroup::CoGroupBy;
 pub use self::consolidate::ConsolidateExt;
 pub use self::iterate::IterateExt;
 pub use self::join::{JoinBy, Join, JoinUnsigned};
 
 pub mod group;
+pub mod cogroup;
 pub mod consolidate;
 pub mod iterate;
 pub mod join;

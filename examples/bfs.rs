@@ -44,8 +44,8 @@ fn main() {
             (node_input, edge_input, probe)
         });
 
-        let nodes = 50_000u32; // the u32 helps type inference understand what nodes are
-        let edges = 100_000;
+        let nodes = 50_000_000u32; // the u32 helps type inference understand what nodes are
+        let edges = 100_000_000;
 
         let seed: &[_] = &[1, 2, 3, 4];
         let mut rng1: StdRng = SeedableRng::from_seed(seed);    // rng for edge additions
@@ -77,6 +77,9 @@ fn main() {
         roots.close();
 
         graph.advance_to(1);
+        while probe.le(&RootTimestamp::new(0)) {
+            computation.step();
+        }
 
         let mut changes = Vec::new();
         for wave in 0.. {
@@ -98,7 +101,7 @@ fn main() {
                 }
             }
 
-            println!("round {}: avg {}", wave, (time::precise_time_s() - start) / 1000.0f64);
+            println!("wave {}: avg {}", wave, (time::precise_time_s() - start) / 1000.0f64);
         }
         // // repeatedly change edges
         // let mut round = 0 as u32;
