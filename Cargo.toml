@@ -32,7 +32,7 @@ rand="*"
 byteorder="*"
 
 [dependencies]
-itertools="*"
+itertools="0.4"
 time = "*"
 fnv="*"
 # timely="*"
