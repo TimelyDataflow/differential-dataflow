@@ -19,7 +19,7 @@ use collection::compact::Compact;
 use radix_sort::{RadixSorter, Unsigned};
 
 /// Join implementations for `(key,val)` data.
-pub trait Join<G: Scope, K: Data, V: Data> : JoinBy<G, (K,V)> {
+pub trait Join<G: Scope, K: Data, V: Data> : JoinBy<G, (K,V)> where G::Timestamp: LeastUpperBound {
 
     /// Matches pairs of `(key,val1)` and `(key,val2)` records based on `key`.
     fn join<V2>(&self, other: &Stream<G, ((K,V2),i32)>) -> Stream<G, ((K,V,V2),i32)>
@@ -43,7 +43,7 @@ where G::Timestamp: LeastUpperBound,
 
 
 /// Join implementations for `(unsigned_int, val)` data.
-pub trait JoinUnsigned<G: Scope, U: Unsigned+Data+Default, V: Data> : JoinBy<G, (U,V)> {
+pub trait JoinUnsigned<G: Scope, U: Unsigned+Data+Default, V: Data> : JoinBy<G, (U,V)> where G::Timestamp: LeastUpperBound {
 
     /// Matches pairs of `(key, val1)` and `(key, val2)` data based `key`.
     fn join_u<V2>(&self, other: &Stream<G, ((U,V2),i32)>) -> Stream<G, ((U,V,V2),i32)>
@@ -303,9 +303,18 @@ where G::Timestamp: LeastUpperBound+Debug {
                 // accumulation, which can be weird (no hash function, so sorting would be "slow").
                 // Related: it may not be safe to sit on lots of data; downstream the data are
                 // partitioned and may be coalesced, but no such guarantee here; may overflow mem.
-                for (time, mut vals) in outbuf.drain_temp() {
-                    output.session(&time).give_iterator(vals.drain_temp());
+
+                if let Some(mut buffer) = outbuf.remove_key(&time) {
+                    output.session(&time).give_iterator(buffer.drain_temp());
                 }
+
+                for &(ref time, _) in &outbuf {
+                    notificator.notify_at(time);
+                }
+
+                // for (time, mut vals) in outbuf.drain_temp() {
+                //     output.session(&time).give_iterator(vals.drain_temp());
+                // }
             }
         })
     }
@@ -322,8 +331,7 @@ where T: Eq+LeastUpperBound+Clone+Debug,
       RF: Fn(&K,&V1,&V2)->R,
       L: Lookup<K, Offset> {
 
-    // let func = |&(w,c)| ::std::iter::repeat(w).take(c as usize);
-    let mut vals = compact.vals.iter();//.zip(compact.wgts.iter().flat_map(&func));
+    let mut vals = compact.vals.iter();
 
     for (key, &cnt) in compact.keys.iter().zip(compact.cnts.iter()) {
         for (t, vals2) in trace.trace(key) {

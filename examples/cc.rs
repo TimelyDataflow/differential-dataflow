@@ -9,7 +9,6 @@ use std::hash::Hash;
 use timely::dataflow::*;
 use timely::dataflow::operators::*;
 
-// use differential_dataflow::collection_trace::lookup::UnsignedInt;
 use differential_dataflow::collection::LeastUpperBound;
 use differential_dataflow::operators::*;
 
@@ -21,49 +20,36 @@ type Edge = (Node, Node);
 fn main() {
 
     let filename = std::env::args().nth(1).unwrap();
+    let start = time::precise_time_s();
 
     timely::execute_from_args(std::env::args().skip(1), move |computation| {
 
-        let start = time::precise_time_s();
-        let mut input = computation.scoped::<u64,_,_>(|scope| {
-            let (input, edges) = scope.new_input();
+        let peers = computation.peers();
+        let index = computation.index();
+
+        computation.scoped::<u64,_,_>(|scope| {
+
+            let graph = GraphMMap::new(&filename);
+            let nodes = graph.nodes();
+            let edges = (0..nodes)
+                .filter(move |node| node % peers == index)      // TODO : below is pretty horrible.
+                .flat_map(move |node| {
+                    let vec = graph.edges(node).to_vec();
+                    vec.into_iter().map(move |edge| ((node as u32, edge),1))
+                })
+                .to_stream(scope);
+
             connected_components(&edges);
-            input
         });
-
-        let graph = GraphMMap::new(&filename);
-
-        {
-            let mut sent = 0;
-            for node in 0..graph.nodes() {
-                if node % computation.peers() == computation.index() {
-                    let edges = graph.edges(node);
-                    for dest in edges {
-                        sent += 1;
-                        input.send(((node as u32, *dest), 1));
-                        if sent % 1_000_000 == 0 {
-                            computation.step();
-                        }
-                    }
-                }
-            }
-
-            println!("{}: loaded {} edges", time::precise_time_s() - start, sent);
-        }
-
-        input.close();
-
-        while computation.step() { }
-        computation.step(); // shut down
-        println!("{}: done", time::precise_time_s() - start);
-
     });
+
+    println!("{}: done", time::precise_time_s() - start);
 }
 
 fn connected_components<G: Scope>(edges: &Stream<G, (Edge, i32)>) -> Stream<G, ((Node, Node), i32)>
 where G::Timestamp: LeastUpperBound+Hash {
 
-    let nodes = edges.map_in_place(|&mut ((ref mut x, ref mut y), _)| { *x = std::cmp::min(*x,*y); *y = *x; } )
+    let nodes = edges.map_in_place(|pair| { let min = std::cmp::min((pair.0).0, (pair.0).1); pair.0 = (min, min); } )
                      .consolidate_by(|x| x.0);
 
     let edges = edges.map_in_place(|x| x.0 = ((x.0).1, (x.0).0))
@@ -83,7 +69,6 @@ where G::Timestamp: LeastUpperBound+Hash {
 
              improve_labels(inner, &edges, &nodes)
          })
-        //  .consolidate()
 }
 
 

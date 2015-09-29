@@ -30,16 +30,10 @@ use std::fmt::Debug;
 use timely::dataflow::*;
 use timely::dataflow::scopes::Child;
 use timely::dataflow::operators::*;
-
-use ::{Data, Collection};
-
-// use timely::progress::nested::product::Product;
-// use timely::progress::nested::Summary::Local;
 use timely::progress::timestamp::Timestamp;
 
-use radix_sort::Unsigned;
+use ::{Data, Collection};
 use collection::LeastUpperBound;
-use operators::ConsolidateExt;
 
 /// An extension trait for the `iterate` method.
 pub trait IterateExt<G: Scope, D: Data> {
@@ -47,30 +41,12 @@ pub trait IterateExt<G: Scope, D: Data> {
     fn iterate<F>(&self, logic: F) -> Collection<G, D>
         where G::Timestamp: LeastUpperBound,
               F: FnOnce(&Collection<Child<G, u64>, D>)->Collection<Child<G, u64>, D>;
-
-    /// Iteratively apply `logic` to the source collection until convergence.
-    ///
-    /// The `partition` argument is used to partition the data for consolidation.
-    fn iterate_by<P, U, F>(&self, partition: P, logic: F) -> Collection<G, D>
-        where G::Timestamp: LeastUpperBound,
-              U: Unsigned,
-              P: Fn(&D)->U+'static,
-              F: FnOnce(&Collection<Child<G, u64>, D>)->Collection<Child<G, u64>, D>;
 }
 
 impl<G: Scope, D: Ord+Data+Debug> IterateExt<G, D> for Collection<G, D> {
     fn iterate<F>(&self, logic: F) -> Collection<G, D>
         where G::Timestamp: LeastUpperBound,
               F: FnOnce(&Collection<Child<G, u64>, D>)->Collection<Child<G, u64>, D> {
-
-        self.iterate_by(|x| x.hashed(), logic)
-
-    }
-    fn iterate_by<P, U, F>(&self, partition: P, logic: F) -> Collection<G, D>
-        where F: FnOnce(&Collection<Child<G, u64>, D>)->Collection<Child<G, u64>, D>,
-              U: Unsigned,
-              P: Fn(&D)->U+'static,
-              G::Timestamp: LeastUpperBound {
 
         self.scope().scoped(|subgraph| {
 
@@ -80,7 +56,6 @@ impl<G: Scope, D: Ord+Data+Debug> IterateExt<G, D> for Collection<G, D> {
             let bottom = logic(&ingress.concat(&cycle));
 
             bottom.concat(&ingress.map_in_place(|x| x.1 = -x.1))
-                //   .consolidate_by(partition)
                   .connect_loop(feedback);
 
             bottom.leave()

@@ -89,9 +89,11 @@ fn main() {
 
 fn _trim_and_flip<G: Scope>(graph: &Stream<G, (Edge, i32)>) -> Stream<G, (Edge, i32)>
 where G::Timestamp: LeastUpperBound {
-        graph.iterate_by(|x| x.0, |edges| {
+        graph.iterate(|edges| {
                  let inner = edges.scope().enter(&graph);
-                 edges.group_by_u(|(x,_)|(x,()), |&x,_| x, |_,_,target| target.push(((),1)))
+                 edges.map(|((x,_),w)| (x,w))
+                      .threshold(|&x| x, |i| (Vec::new(), i), |_, w| if w > 0 { 1 } else { 0 })
+                    //.group_by_u(|(x,_)|(x,()), |&x,_| x, |_,_,target| target.push(((),1)))
                       .join_by_u(&inner, |x| (x,()), |(s,d)| (d,s), |&d,_,&s| (s,d))
              })
              .map_in_place(|x| x.0 = ((x.0).1, (x.0).0))
@@ -100,9 +102,8 @@ where G::Timestamp: LeastUpperBound {
 fn _strongly_connected<G: Scope>(graph: &Stream<G, (Edge, i32)>) -> Stream<G, (Edge, i32)>
 where G::Timestamp: LeastUpperBound+Hash {
     graph.iterate(|inner| {
-        let trans = inner.scope().enter(&graph).map_in_place(|x| x.0 = ((x.0).1, (x.0).0));
         let edges = inner.scope().enter(&graph);
-
+        let trans = edges.map_in_place(|x| x.0 = ((x.0).1, (x.0).0));
         _trim_edges(&_trim_edges(inner, &edges), &trans)
     })
 }
@@ -126,7 +127,7 @@ fn _reachability<G: Scope>(edges: &Stream<G, (Edge, i32)>, nodes: &Stream<G, ((N
 where G::Timestamp: LeastUpperBound+Hash {
 
     edges.filter(|_| false)
-         .iterate_by(|x| x.0, |inner| {
+         .iterate(|inner| {
              let edges = inner.scope().enter(&edges);
              let nodes = inner.scope().enter_at(&nodes, |r| 256 * (64 - ((r.0).0 as u64).leading_zeros() as u64));
 

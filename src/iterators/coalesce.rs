@@ -1,6 +1,6 @@
 use std::iter::Peekable;
 
-pub trait Coalesce<I> {
+pub trait Coalesce<I: Iterator> {
     fn coalesce(self) -> CoalesceIterator<I>;
 }
 

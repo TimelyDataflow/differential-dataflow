@@ -5,6 +5,7 @@ extern crate time;
 extern crate timely;
 extern crate differential_dataflow;
 
+use std::collections::HashMap;
 use std::io::{BufReader, BufRead};
 use std::fs::File;
 
@@ -43,7 +44,8 @@ impl<G: Scope, D: Default+Data> Variable<G, D> where G::Timestamp: LeastUpperBou
 impl<G: Scope, D: Default+Data> Drop for Variable<G, D> where G::Timestamp: LeastUpperBound {
     fn drop(&mut self) {
         if let Some(feedback) = self.feedback.take() {
-            self.current.group_by(|x| (x, ()), |x| x.hashed(), |x| x.hashed(), |x,_| x.clone(), |_,_,t| t.push(((),1)))
+            self.current.threshold(|x| x.hashed(), |_| HashMap::new(), |_, w| if w > 0 { 1 } else { 0 })
+                     // .group_by(|x| (x, ()), |x| x.hashed(), |x| x.hashed(), |x,_| x.clone(), |_,_,t| t.push(((),1)))
                         .connect_loop(feedback);
         }
     }
@@ -120,7 +122,7 @@ fn main() {
             let (q_query_input, q_query) = outer.new_input();
 
             // determine which rules fire with what variable settings.
-            let (p_base, q_base, ir1, ir2, ir3) = outer.scoped::<u64, _, _>(|inner| {
+            let (p_base, _q_base, ir1, ir2, ir3) = outer.scoped::<u64, _, _>(|inner| {
 
                 let (_unused, u) = Variable::from(&inner.enter(&u));
 

@@ -13,7 +13,9 @@ pub use self::cogroup::CoGroupBy;
 pub use self::consolidate::ConsolidateExt;
 pub use self::iterate::IterateExt;
 pub use self::join::{JoinBy, Join, JoinUnsigned};
+pub use self::threshold::Threshold;
 
+pub mod threshold;
 pub mod group;
 pub mod cogroup;
 pub mod consolidate;

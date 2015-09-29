@@ -76,13 +76,13 @@ impl<K: Ord+Debug, V: Ord> Compact<K, V> {
     pub fn extend<I: Iterator<Item=((K, V), i32)>>(&mut self, mut iterator: I) {
 
         // populate a new `Compact` with merged, coalesced data.
-        if let Some(((mut old_key, val), mut old_wgt)) = iterator.next() {
+        if let Some(((mut old_key, val), wgt)) = iterator.next() {
 
             let mut key_cnt = 1;
             // let mut wgt_cnt = 1;
 
             // always stash the val
-            self.vals.push((val, old_wgt));
+            self.vals.push((val, wgt));
 
             for ((key, val), wgt) in iterator {
 

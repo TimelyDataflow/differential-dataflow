@@ -117,7 +117,7 @@ use std::fmt::Debug;
 pub type Delta = i32;
 
 /// A stream of updates to record counts.
-pub type Collection<G, T> = timely::dataflow::Stream<G, (T, Delta)>;
+pub type Collection<S, T> = timely::dataflow::Stream<S, (T, Delta)>;
 
 /// A composite trait for data types usable in differential dataflow.
 pub trait Data : timely::Data + ::std::hash::Hash + Ord + Debug {

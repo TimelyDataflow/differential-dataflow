@@ -20,7 +20,7 @@
 //!
 //! ```ignore
 //! stream.group(|key, vals, output| {
-//!     let (mut max_val, mut max_wgt) = vals.peek().unwrap();
+//!     let (mut max_val, mut max_wgt) = vals.next().unwrap();
 //!     for (val, wgt) in vals {
 //!         if wgt > max_wgt {
 //!             max_wgt = wgt;
@@ -160,7 +160,7 @@ where G::Timestamp: LeastUpperBound {
         Part:  Fn(&D1)->u64+'static,
         U:     Unsigned+Default,
         KH:    Fn(&K)->U+'static,
-        Look:  Lookup<K, Offset>+'static,
+        Look:  Lookup<K, Offset>+Debug+'static,
         LookG: Fn(u64)->Look,
         Logic: Fn(&K, &mut CollectionIterator<V1>, &mut Vec<(V2, i32)>)+'static,
         Reduc: Fn(&K, &V2)->D2+'static,
@@ -287,7 +287,8 @@ where G::Timestamp: LeastUpperBound {
                                                                         x.0 <= y.0
                                                                    }))
                         {
-                            session.give((reduc(&key, val), wgt));
+                            let result = (reduc(&key, val), wgt);
+                            session.give(result);
                             compact.push(val.clone(), wgt);
                         }
                         compact.done(key);
@@ -295,7 +296,6 @@ where G::Timestamp: LeastUpperBound {
                     }
 
                     if accumulation.vals.len() > 0 {
-                        // println!("group2");
                         result.set_difference(index.clone(), accumulation);
                     }
                 }
