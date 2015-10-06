@@ -171,7 +171,8 @@ impl<K, V, L, T> Trace<K, T, V, L> where K: Ord, V: Ord, L: Lookup<K, Offset>, T
     ///
     /// A collection is defined as the accumulation of all differences at times less or equal to
     /// `time`.
-    pub unsafe fn get_collection_using<'a>(&'a self, key: &K, time: &T, heap: &mut Vec<((&(), i32), DifferenceIterator<'static,()>)>) -> CollectionIterator<'a, V> {
+    pub unsafe fn get_collection_using<'a>(&'a self, key: &K, time: &T,
+            heap: &mut Vec<((&(), i32), DifferenceIterator<'static,()>)>) -> CollectionIterator<'a, V> {
         // panic!();
         heap.clear();
         self.trace(key)

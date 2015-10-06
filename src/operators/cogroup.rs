@@ -51,6 +51,10 @@ use iterators::coalesce::Coalesce;
 use radix_sort::{RadixSorter, Unsigned};
 use collection::compact::Compact;
 
+impl<G: Scope, K: Data, V1: Data, S> CoGroupBy<G, K, V1> for S
+where G::Timestamp: LeastUpperBound,
+      S: Binary<G, ((K,V1), i32)>+Map<G, ((K,V1), i32)> { }
+
 /// Extension trait for the `group_by` and `group_by_u` differential dataflow methods.
 pub trait CoGroupBy<G: Scope, K: Data, V1: Data> : Binary<G, ((K,V1), i32)>+Map<G, ((K,V1), i32)>
 where G::Timestamp: LeastUpperBound {
