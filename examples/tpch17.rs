@@ -17,7 +17,8 @@ use timely::drain::DrainExt;
 use timely::progress::timestamp::RootTimestamp;
 use timely::dataflow::channels::pact::Pipeline;
 
-use differential_dataflow::operators::*;
+use differential_dataflow::operators::group::GroupBy;
+use differential_dataflow::operators::join::JoinBy;
 
 fn main() {
 
