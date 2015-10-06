@@ -45,9 +45,6 @@
 //!         input.advance_to(i + 1);
 //!         root.step();
 //!     }
-//!
-//!     input.close();
-//!     while root.step() { }
 //! });
 //! ```
 //!
@@ -101,12 +98,8 @@
 //!     edges.send(((0,1), 1));
 //!     edges.send(((1,2), 1));
 //!     edges.send(((2,3), 1));
-//!     edges.close();
 //!
 //!     roots.send((0, 1));
-//!     roots.close();
-//!
-//!     while root.step() { }
 //! });
 //! ```
 
@@ -116,11 +109,17 @@ use std::fmt::Debug;
 /// A change in count.
 pub type Delta = i32;
 
-/// A stream of updates to record counts.
-pub type Collection<S, T> = timely::dataflow::Stream<S, (T, Delta)>;
+/// A mutable collection of values of type `T`.
+pub type Collection<G, T> = timely::dataflow::Stream<G, (T, Delta)>;
 
 /// A composite trait for data types usable in differential dataflow.
 pub trait Data : timely::Data + ::std::hash::Hash + Ord + Debug {
+    /// Extracts a `u64` suitable for distributing and sorting the data.
+    ///
+    /// The default implementation use `FnvHasher`. It might be nice to couple this more carefully
+    /// with the implementor, to allow it to drive the distribution and sorting techniques. For
+    /// example, dense unsigned integers would like a different function, but also must communicate
+    /// that a `HashMap` is not the best way to use their values.
     #[inline]
     fn hashed(&self) -> u64 {
         let mut h: fnv::FnvHasher = Default::default();
@@ -130,6 +129,11 @@ pub trait Data : timely::Data + ::std::hash::Hash + Ord + Debug {
 }
 impl<T: timely::Data + ::std::hash::Hash + Ord + Debug> Data for T { }
 
+// /// An extension of timely's `Scope` trait requiring timestamps implement `LeastUpperBound`.
+// pub trait Scope : timely::dataflow::Scope where Self::Timestamp: collection::LeastUpperBound { }
+// impl<S: timely::dataflow::Scope> Scope for S where S::Timestamp: collection::LeastUpperBound { }
+
+
 extern crate fnv;
 extern crate time;
 extern crate timely;
@@ -138,5 +142,4 @@ extern crate radix_sort;
 
 pub mod collection;
 pub mod operators;
-// mod sort;
 mod iterators;

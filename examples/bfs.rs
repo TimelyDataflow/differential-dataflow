@@ -89,6 +89,8 @@ where G::Timestamp: LeastUpperBound {
 
     // initialize roots as reaching themselves at distance 0
     let nodes = roots.map(|(x,w)| ((x, 0), w));
+    // let edges = edges.map_in_place(|x| x.0 = ((x.0).1, (x.0).0))
+    //                  .concat(&edges);
 
     // repeatedly update minimal distances each node can be reached from each root
     nodes.iterate(|inner| {

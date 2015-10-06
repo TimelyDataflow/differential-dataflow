@@ -2,16 +2,36 @@ use std::hash::Hash;
 use std::collections::HashMap;
 use radix_sort::Unsigned;
 
+use collection::robin_hood::RHHMap;
+
 pub trait Lookup<K: Eq, V> {
-    fn new() -> Self;
     fn get_ref<'a>(&'a self, &K)->Option<&'a V>;
     fn get_mut<'a>(&'a mut self, &K)->Option<&'a mut V>;
     fn entry_or_insert<F: FnMut()->V>(&mut self, K, F) -> &mut V;
     fn remove_key(&mut self, &K) -> Option<V>;
 }
 
+impl<K: Eq+Clone, V, F: Fn(&K)->usize> Lookup<K, V> for RHHMap<K, V, F> {
+    #[inline]
+    fn get_ref<'a>(&'a self, key: &K) -> Option<&'a V> { self.get_ref(key) }
+    #[inline]
+    fn get_mut<'a>(&'a mut self, key: &K) -> Option<&'a mut V> { self.get_mut(key) }
+    #[inline]
+    fn entry_or_insert<G: FnMut()->V>(&mut self, key: K, mut func: G) -> &mut V {
+        let cloned = key.clone();
+        if self.get_ref(&key).is_none() {
+            let val = func();
+            self.insert(key, val);
+        }
+        self.get_mut(&cloned).unwrap()
+    }
+    #[inline]
+    fn remove_key(&mut self, key: &K) -> Option<V> {
+        self.remove(key).map(|x| x.1)
+    }
+}
+
 impl<K: Hash+Eq+'static, V: 'static> Lookup<K,V> for HashMap<K,V> {
-    fn new() -> Self { HashMap::new() }
     #[inline]
     fn get_ref<'a>(&'a self, key: &K) -> Option<&'a V> { self.get(key) }
     #[inline]
@@ -25,7 +45,6 @@ impl<K: Hash+Eq+'static, V: 'static> Lookup<K,V> for HashMap<K,V> {
 }
 
 impl<K: Eq, V> Lookup<K, V> for Vec<(K, V)> {
-    fn new() -> Self { Vec::new() }
     #[inline]
     fn get_ref<'a>(&'a self, key: &K)->Option<&'a V> {
         if let Some(position) = self.iter().position(|x| &x.0 == key) {
@@ -61,7 +80,6 @@ impl<K: Eq, V> Lookup<K, V> for Vec<(K, V)> {
 }
 
 impl<V: 'static, U: Unsigned> Lookup<U,V> for (Vec<Option<V>>, u64) {
-    fn new() -> Self { (Vec::new(), 0) }
     #[inline]
     fn get_ref<'a>(&'a self, key: &U) -> Option<&'a V> {
         let key = (key.as_u64() >> self.1) as usize;

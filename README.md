@@ -30,7 +30,7 @@ let start = roots.map(|(x, w)| ((x, 0), w));
 
 // repeatedly update minimal distances to each node,
 // by describing how to do one round of updates, and then repeating.
-let limit = start.iterate(u32::max_value(), |x| x.0, |dists| {
+let limit = start.iterate(|dists| {
 
     // bring the invariant edges into the loop
     let edges = dists.builder().enter(&edges);
@@ -38,7 +38,7 @@ let limit = start.iterate(u32::max_value(), |x| x.0, |dists| {
     // join current distances with edges to get +1 distances,
     // include the current distances in the set as well,
     // group by node id and keep minimum distance.
-    dists.join_u(&edges, |d| d, |e| e, |_,d,n| (*n, d+1))
+    dists.join_map_u(&edges, |_,d,n| (*n, d+1))
          .concat(&dists)
          .group_u(|_, s, t| t.push((*s.peek().unwrap().0, 1)) )
 });
@@ -173,3 +173,35 @@ The `elapsed` measurements from this point on are single-digit milliseconds, or 
 ## Data parallelism
 
 Differential dataflow is built on [timely dataflow](https://github.com/frankmcsherry/timely-dataflow), a distributed data-parallel dataflow platform. Consequently, it distributes over multiple threads, processes, and computers. The additional resources allow larger computations to be processed more efficiently, but may limit the minimal latency for small updates, as more computations must coordinate.
+
+## To-do list
+
+There are a few things that stand out as good, meaty bits of work to do. If you are interested, let me know. Otherwise I'll take a stab at them.
+
+### Garbage collection
+
+The current store for differential dataflow tuples is logically equivalent to an append-only list. It only grows. In the Naiad work we had some garbage collection, because you can use progress information to form equivalance classes of "indistinguishable" times; ones that would either all be used in an aggregation on none of which would be used. Differences at indistinguishable times can be consolidated, and cancelled records can be discarded.
+
+There are [the beginnings of a garbage-collecting trace](https://github.com/frankmcsherry/differential-dataflow/blob/master/src/collection/tier.rs), but putting this in place involves some more thinking about how to progressively stage the traces, to avoid constantly recollecting. The trace has a `step` method to progressively collect, but it's all very un-tested at this point.
+
+### Generic storage
+
+A "trace", a map from keys to times to vals to weights, can have many representations. The most general representation requires a lot more structure than some of the simpler ones. Examples of traces with simpler representations include:
+
+* Traces containing differences for only one time.
+* Traces containing only positive differences (where the values can just be listed, without weights).
+* Traces containing differences where the value has type `()`.
+
+In each of these cases, and many weird combinations of them, there are substantial gains to be had by specialization. For example, it is very common to have a large static (or slowly changing) collection of background data. This could easily be represented as a one-level trie, where we have a list of `(key, count)` and a list of `vals`. This has very little overhead, and is very efficient to navigate. Changes to this collection could be maintained in a general representation, separately.
+
+Given that no one of these representations are sufficiently general and concise, it seems appealing to describe them generically with a trait, and allow implementations to override the representation (perhaps defaulting to the most general representation). We could take the methods from the current `Trace`, but some of them involve lifetimes in what appear to be higher-kinded fashions (mainly, we need to describe the lifetime of value references, unless we are ok cloning them).
+
+There are some details about how to work around this in [Rust's associated items RFC](https://github.com/aturon/rfcs/blob/associated-items/active/0000-associated-items.md#encoding-higher-kinded-types), which would probably involve ripping up a bunch of things, and putting them back down differently.
+
+### Re-using storage
+
+It is not uncommon for the same set of `(key, val)` tuples to be used by multiple operators. At the moment each operator maintains its own indexed copy of the tuples. This is pretty clearly wasteful, both in terms of memory and computation. However, sharing the state is a bit complicated, because it interacts weirdly with dataflow semantics. It seems like it could be done, in the sense that there are no data races or weird sharing that we have to worry about, so much as how to communicate the correct information.
+
+### Half-joins
+
+There is the potential to implement multiple joins in a manner like that of Koch et al, where the join is logically differentiated with respect to each of its inputs, and each form is instantiated to respond to changes in the corresponding input. This seems very pleasant, and avoids materializing (and storing) intermediate data, but seems to require a new operator, like a join but which only responds to changes on one of its inputs.

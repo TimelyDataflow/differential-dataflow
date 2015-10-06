@@ -32,14 +32,13 @@
 //! ```
 
 use std::default::Default;
-use std::hash::{Hash, Hasher};
+// use std::hash::Hasher;
 use std::collections::HashMap;
-use std::fmt::Debug;
 use std::ops::DerefMut;
 
 use itertools::Itertools;
 
-use ::Data;
+use ::{Data, Collection, Delta};
 use timely::dataflow::*;
 use timely::dataflow::operators::{Map, Unary};
 use timely::dataflow::channels::pact::Exchange;
@@ -50,14 +49,25 @@ use collection::trace::CollectionIterator;
 
 use iterators::coalesce::Coalesce;
 use radix_sort::{RadixSorter, Unsigned};
+use collection::robin_hood::RHHMap;
 use collection::compact::Compact;
 
 /// Extension trait for the `group` differential dataflow method
-pub trait Group<G: Scope, K: Data+Default, V: Data+Default> : GroupBy<G, (K,V)>
+pub trait Group<G: Scope, K: Data, V: Data> : GroupBy<G, (K,V)>
     where G::Timestamp: LeastUpperBound {
-    fn group<L, V2: Data+Ord+Default+Debug>(&self, logic: L) -> Stream<G, ((K,V2),i32)>
-        where L: Fn(&K, &mut CollectionIterator<V>, &mut Vec<(V2, i32)>)+'static {
-            self.group_by_inner(|x| x, |&(ref k,_)| k.hashed(), |k| k.hashed(), |k,v2| ((*k).clone(), (*v2).clone()), |_| HashMap::new(), logic)
+
+    /// Groups records by their first field, and applies reduction logic to the associated values.
+    fn group<L, V2: Data>(&self, logic: L) -> Collection<G, (K,V2)>
+        where L: Fn(&K, &mut CollectionIterator<V>, &mut Vec<(V2, Delta)>)+'static {
+            // self.group_by_inner(|x| x, |&(ref k,_)| k.hashed(), |k| k.hashed(), |k,v2| ((*k).clone(), (*v2).clone()), |_| HashMap::new(), logic)
+            self.group_by_inner(
+                |x| x,
+                |&(ref k,_)| k.hashed(),
+                |k| k.hashed(),
+                |k,v2| ((*k).clone(), (*v2).clone()),
+                |_| RHHMap::new(|x: &K| x.hashed() as usize),
+                logic
+            )
     }
 }
 
@@ -66,9 +76,9 @@ where G::Timestamp: LeastUpperBound,
       S: Unary<G, ((K,V), i32)>+Map<G, ((K,V), i32)> { }
 
 
-pub trait GroupUnsigned<G: Scope, U: Unsigned+Data+Default, V: Data+Default+Debug> : GroupBy<G, (U,V)>
+pub trait GroupUnsigned<G: Scope, U: Unsigned+Data+Default, V: Data> : GroupBy<G, (U,V)>
     where G::Timestamp: LeastUpperBound {
-    fn group_u<L, V2: Data+Ord+Default+Debug>(&self, logic: L) -> Stream<G, ((U,V2),i32)>
+    fn group_u<L, V2: Data>(&self, logic: L) -> Stream<G, ((U,V2),i32)>
         where L: Fn(&U, &mut CollectionIterator<V>, &mut Vec<(V2, i32)>)+'static {
             self.group_by_inner(
                 |x| x,
@@ -81,19 +91,19 @@ pub trait GroupUnsigned<G: Scope, U: Unsigned+Data+Default, V: Data+Default+Debu
 }
 
 // implement `GroupBy` for any stream implementing `Unary` and `Map` (most of them).
-impl<G: Scope, U: Unsigned+Data+Default, V: Data+Ord+Default+Debug, S> GroupUnsigned<G, U, V> for S
+impl<G: Scope, U: Unsigned+Data+Default, V: Data, S> GroupUnsigned<G, U, V> for S
 where G::Timestamp: LeastUpperBound,
       S: GroupBy<G, (U,V)> { }
 
 
 // implement `GroupBy` for any stream implementing `Unary` and `Map` (most of them).
-impl<G: Scope, D: Data+Eq, S> GroupBy<G, D> for S
+impl<G: Scope, D: Data, S> GroupBy<G, D> for S
 where G::Timestamp: LeastUpperBound,
     S: Unary<G,(D,i32)>+Map<G,(D,i32)> { }
 
 
 /// Extension trait for the `group_by` and `group_by_u` differential dataflow methods.
-pub trait GroupBy<G: Scope, D1: Data+Eq> : Unary<G, (D1, i32)>+Map<G, (D1, i32)>
+pub trait GroupBy<G: Scope, D1: Data> : Unary<G, (D1, i32)>+Map<G, (D1, i32)>
 where G::Timestamp: LeastUpperBound {
 
     /// Groups input records together by key and applies a reduction function.
@@ -108,9 +118,9 @@ where G::Timestamp: LeastUpperBound {
     /// This all may seem overcomplicated, and it may indeed become simpler in the future. For the
     /// moment it is designed to allow as much programmability as possible.
     fn group_by<
-        K:     Hash+Ord+Clone+Debug+'static,        //  type of the key
-        V1:    Ord+Clone+Default+Debug+'static,     //  type of the input value
-        V2:    Ord+Clone+Default+Debug+'static,     //  type of the output value
+        K:     Data,        //  type of the key
+        V1:    Data,     //  type of the input value
+        V2:    Data,     //  type of the output value
         D2:    Data,                                //  type of the output data
         KV:    Fn(D1)->(K,V1)+'static,              //  function from data to (key,val)
         Part:  Fn(&D1)->u64+'static,                //  partitioning function; should match KH
@@ -131,8 +141,8 @@ where G::Timestamp: LeastUpperBound {
     /// integer, and the strategy for indexing by key is simply to index into a vector.
     fn group_by_u<
         U:     Data+Unsigned+Default,
-        V1:    Data+Clone+Default+'static,
-        V2:    Ord+Clone+Default+Debug+'static,
+        V1:    Data,
+        V2:    Data,
         D2:    Data,
         KV:    Fn(D1)->(U,V1)+'static,
         Logic: Fn(&U, &mut CollectionIterator<V1>, &mut Vec<(V2, i32)>)+'static,
@@ -152,15 +162,15 @@ where G::Timestamp: LeastUpperBound {
     /// use for mapping keys `K` to `Offset`, an internal `CollectionTrace` type. This method should
     /// probably rarely be used directly.
     fn group_by_inner<
-        K:     Ord+Clone+Debug+'static,
-        V1:    Ord+Clone+Default+Debug+'static,
-        V2:    Ord+Clone+Default+Debug+'static,
+        K:     Data,
+        V1:    Data,
+        V2:    Data,
         D2:    Data,
         KV:    Fn(D1)->(K,V1)+'static,
         Part:  Fn(&D1)->u64+'static,
         U:     Unsigned+Default,
         KH:    Fn(&K)->U+'static,
-        Look:  Lookup<K, Offset>+Debug+'static,
+        Look:  Lookup<K, Offset>+'static,
         LookG: Fn(u64)->Look,
         Logic: Fn(&K, &mut CollectionIterator<V1>, &mut Vec<(V2, i32)>)+'static,
         Reduc: Fn(&K, &V2)->D2+'static,
@@ -175,7 +185,6 @@ where G::Timestamp: LeastUpperBound {
         // TODO : which is what would let us see the number of peers, because we only know that
         // TODO : the type also implements the `Unary` and `Map` traits, not that it is a `Stream`.
         // TODO : We could implement this just for `Stream`, but would have to repeat the trait
-
         // TODO : method signature boiler-plate, rather than use default implemenations.
         // let mut trace =  OperatorTrace::<K, G::Timestamp, V1, V2, Look>::new(|| look(0));
         let mut source = Trace::new(look(0));
@@ -191,7 +200,6 @@ where G::Timestamp: LeastUpperBound {
         let mut buffer = vec![];
         let mut heap1 = vec![];
         let mut heap2 = vec![];
-
 
         // create an exchange channel based on the supplied Fn(&D1)->u64.
         let exch = Exchange::new(move |&(ref x,_)| part(x));
@@ -249,20 +257,16 @@ where G::Timestamp: LeastUpperBound {
                     }
                 }
 
-                // we may need to produce output at index
-                let mut session = output.session(&index);
+                // 2b. We must now determine for each interesting key at this time, how does the
+                // currently reported output match up with what we need as output. Should we send
+                // more output differences, and what are they?
 
-
-                    // 2b. We must now determine for each interesting key at this time, how does the
-                    // currently reported output match up with what we need as output. Should we send
-                    // more output differences, and what are they?
-
-                // Much of this logic used to hide in `OperatorTrace` and `CollectionTrace`.
-                // They are now gone and simpler, respectively.
                 if let Some(mut keys) = to_do.remove_key(&index) {
 
+                    // we may need to produce output at index
+                    let mut session = output.session(&index);
+
                     // we would like these keys in a particular order.
-                    // TODO : use a radix sort since we have `key_h`.
                     keys.sort_by(|x,y| (key_h(&x), x).cmp(&(key_h(&y), y)));
                     keys.dedup();
 

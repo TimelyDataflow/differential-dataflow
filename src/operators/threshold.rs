@@ -1,5 +1,4 @@
 use std::rc::Rc;
-use std::fmt::Debug;
 use std::ops::DerefMut;
 use std::default::Default;
 
@@ -26,7 +25,7 @@ pub trait Threshold<G: Scope, D: Data+Default+'static> : Unary<G, (D,i32)>
         F: Fn(&D, i32)->i32+'static,
         U: Unsigned+Default+'static,
         KeyH: Fn(&D)->U+'static,
-        Look:  Lookup<D, Offset>+Debug+'static,
+        Look:  Lookup<D, Offset>+'static,
         LookG: Fn(u64)->Look+'static,
         >(&self, key_h: KeyH, look: LookG, function: F) -> Stream<G, (D, i32)> {
 

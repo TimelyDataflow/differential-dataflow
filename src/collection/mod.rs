@@ -10,6 +10,7 @@ pub mod trace;
 pub mod compact;
 pub mod tier;
 pub mod count;
+pub mod robin_hood;
 
 pub use collection::lookup::Lookup;
 pub use collection::least_upper_bound::LeastUpperBound;

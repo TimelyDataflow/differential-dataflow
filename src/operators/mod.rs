@@ -8,11 +8,11 @@
 //! other ways compatible with timely dataflow. In fact, many operators are currently absent because
 //! their timely dataflow analogues are sufficient (e.g. `map`, `filter`, `concat`).
 
-pub use self::group::{GroupBy, Group, GroupUnsigned};
+pub use self::group::Group;
 pub use self::cogroup::CoGroupBy;
 pub use self::consolidate::ConsolidateExt;
 pub use self::iterate::IterateExt;
-pub use self::join::{JoinBy, Join, JoinUnsigned};
+pub use self::join::Join;
 pub use self::threshold::Threshold;
 
 pub mod threshold;
