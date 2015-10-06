@@ -10,6 +10,8 @@ use timely::dataflow::operators::*;
 
 use differential_dataflow::collection::LeastUpperBound;
 use differential_dataflow::operators::*;
+use differential_dataflow::operators::join::JoinBy;
+use differential_dataflow::operators::group::GroupBy;
 
 fn main() {
     timely::execute_from_args(std::env::args(), |root| {

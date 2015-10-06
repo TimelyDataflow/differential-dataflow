@@ -9,8 +9,10 @@ use rand::{Rng, SeedableRng, StdRng};
 use timely::dataflow::*;
 use timely::dataflow::operators::*;
 
-use differential_dataflow::collection::LeastUpperBound;
 use differential_dataflow::operators::*;
+use differential_dataflow::operators::group::GroupUnsigned;
+use differential_dataflow::operators::join::{JoinUnsigned, JoinBy};
+use differential_dataflow::collection::LeastUpperBound;
 
 type Node = u32;
 type Edge = (Node, Node);

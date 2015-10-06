@@ -11,6 +11,8 @@ use timely::dataflow::operators::*;
 
 use differential_dataflow::collection::LeastUpperBound;
 use differential_dataflow::operators::*;
+use differential_dataflow::operators::join::JoinUnsigned;
+use differential_dataflow::operators::group::GroupUnsigned;
 
 use graph_map::GraphMMap;
 

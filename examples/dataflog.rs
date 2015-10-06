@@ -18,6 +18,7 @@ use timely::progress::timestamp::RootTimestamp;
 use differential_dataflow::Data;
 use differential_dataflow::operators::*;
 use differential_dataflow::collection::LeastUpperBound;
+use differential_dataflow::operators::join::JoinBy;
 
 /// A collection defined by multiple mutually recursive rules.
 pub struct Variable<G: Scope, D: Default+Data>
