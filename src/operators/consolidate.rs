@@ -70,7 +70,7 @@ impl<G: Scope, D: Ord+Data+Debug> ConsolidateExt<D> for Stream<G, (D, i32)> {
             // notificator.for_each(|index, _count| {
                 if let Some(mut stash) = inputs.remove_key(&index) {
 
-                    let start = ::time::precise_time_s();
+                    // let start = ::time::precise_time_s();
 
                     let mut session = output.session(&index);
                     let mut buffer = vec![];
@@ -92,7 +92,7 @@ impl<G: Scope, D: Ord+Data+Debug> ConsolidateExt<D> for Stream<G, (D, i32)> {
                         session.give_iterator(buffer.drain_temp().coalesce());
                     }
 
-                    println!("consolidated {:?} in {:?}s", index, ::time::precise_time_s() - start);
+                    // println!("consolidated {:?} in {:?}s", index, ::time::precise_time_s() - start);
                 }
             }
             // });
