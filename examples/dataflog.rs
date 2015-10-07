@@ -188,13 +188,18 @@ fn main() {
             let (_s_query_input, s_query) = outer.new_input();
             let (_u_query_input, u_query) = outer.new_input();
 
+            // VERY IMPORTANT to define these here, not in the inner scope. it currently causes
+            // timely to get VERY CONFUSED about who is named what. A timely bug, for sure.
+            let p_empty = p.filter(|_| false);
+            let q_empty = q.filter(|_| false);
+
             // derive each of the firings of each of the rules, as well as tuples deleted from
             // both p and q to ensure the emptiness of
             let (p_del, q_del, ir1, ir2, ir3, ir4, ir5, ir6) = outer.scoped::<u64,_,_>(|middle| {
 
                 // an evolving set of things we may want to remove from p_edb and q_edb.
-                let mut p_del = Variable::from(&middle.enter(&p.filter(|_| false)));
-                let mut q_del = Variable::from(&middle.enter(&q.filter(|_| false)));
+                let mut p_del = Variable::from(&middle.enter(&p_empty));
+                let mut q_del = Variable::from(&middle.enter(&q_empty));
 
                 let c_query = middle.enter(&c_query);
                 let p_query = middle.enter(&p_query);
@@ -300,12 +305,12 @@ fn main() {
 
         // worker 0 loads the data
         if root.index() == 0 {
-            for_each_trip_in("/Users/mcsherry/Desktop/c.txt", |x| c.send((x,1)));
-            for_each_pair_in("/Users/mcsherry/Desktop/p.txt", |x| p.send((x,1)));
-            for_each_trip_in("/Users/mcsherry/Desktop/q.txt", |x| q.send((x,1)));
-            for_each_trip_in("/Users/mcsherry/Desktop/r.txt", |x| r.send((x,1)));
-            for_each_pair_in("/Users/mcsherry/Desktop/s.txt", |x| s.send((x,1)));
-            for_each_trip_in("/Users/mcsherry/Desktop/u.txt", |x| u.send((x,1)));
+            for_each_trip_in("/Users/mcsherry/Desktop/galen/c.txt", |x| c.send((x,1)));
+            for_each_pair_in("/Users/mcsherry/Desktop/galen/p.txt", |x| p.send((x,1)));
+            for_each_trip_in("/Users/mcsherry/Desktop/galen/q.txt", |x| q.send((x,1)));
+            for_each_trip_in("/Users/mcsherry/Desktop/galen/r.txt", |x| r.send((x,1)));
+            for_each_pair_in("/Users/mcsherry/Desktop/galen/s.txt", |x| s.send((x,1)));
+            for_each_trip_in("/Users/mcsherry/Desktop/galen/u.txt", |x| u.send((x,1)));
         }
 
         println!("loading:\t{}", time::precise_time_s() - start);
