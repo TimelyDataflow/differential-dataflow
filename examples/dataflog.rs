@@ -188,7 +188,7 @@ fn main() {
             let (_s_query_input, s_query) = outer.new_input();
             let (_u_query_input, u_query) = outer.new_input();
 
-            // VERY IMPORTANT to define these here, not in the inner scope. it currently causes
+            // VERY IMPORTANT to define these here, not in the inner scope. That currently causes
             // timely to get VERY CONFUSED about who is named what. A timely bug, for sure.
             let p_empty = p.filter(|_| false);
             let q_empty = q.filter(|_| false);
@@ -255,17 +255,8 @@ fn main() {
 
                 // p_bad and q_bad are p and q tuples involved in the derivation.
                 // we should remove some of them from p, q by adding them to p_del, q_del.
-                let p_bad = p_bad.map(|(x,w)| ((x,()),w))
-                             .join(&p_edb.map(|(x,w)| ((x,()),w)))
-                             .map(|((x,(),()),w)| (((),x),w));
-                            //  .group(|_,s,t| t.push(s.next().map(|(&x,w)|(x,w)).unwrap()))
-                            //  .map(|(((),x),w)| (x,w));
-
-                let q_bad = q_bad.map(|(x,w)| ((x,()),w))
-                             .join(&q_edb.map(|(x,w)| ((x,()),w)))
-                             .map(|((x,(),()),w)| (((),x),w));
-                            //  .group(|_,s,t| t.push(s.next().map(|(&x,w)|(x,w)).unwrap()))
-                            //  .map(|(((),x),w)| (x,w));
+                let p_bad = p_bad.map(|(x,w)| ((x,()),w)).join(&p_edb.map(|(x,w)| ((x,()),w))).map(|((x,(),()),w)| (((),x),w));
+                let q_bad = q_bad.map(|(x,w)| ((x,()),w)) .join(&q_edb.map(|(x,w)| ((x,()),w))).map(|((x,(),()),w)| (((),x),w));
 
                 // p_bad.inspect(|x| println!("PBAD{:?}", x));
                 // q_bad.inspect(|x| println!("QBAD{:?}", x));
@@ -277,9 +268,7 @@ fn main() {
 
                 let q_bad_new = p_bad.cogroup_by_inner(&q_bad, |k| k.hashed(), |_,&x| x,
                             |_| HashMap::new(), |_key, input1, input2, output| {
-                    if input1.next() == None {
-                        input2.next().map(|(&x,w)| output.push((x,w)));
-                    }
+                    if input1.next() == None { input2.next().map(|(&x,w)| output.push((x,w))); }
                 });
 
                 p_del.0.add(&p_bad_new);

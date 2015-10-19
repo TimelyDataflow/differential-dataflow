@@ -10,7 +10,7 @@ use timely::dataflow::*;
 use timely::dataflow::operators::*;
 
 use differential_dataflow::operators::*;
-use differential_dataflow::operators::group::GroupUnsigned;
+use differential_dataflow::operators::group::{GroupUnsigned, GroupBy};
 use differential_dataflow::operators::join::{JoinUnsigned, JoinBy};
 use differential_dataflow::collection::LeastUpperBound;
 
@@ -83,9 +83,6 @@ fn main() {
         }
 
         input.close();
-
-        while computation.step() { }
-        computation.step(); // shut down
     });
 }
 
@@ -94,8 +91,8 @@ where G::Timestamp: LeastUpperBound {
         graph.iterate(|edges| {
                  let inner = edges.scope().enter(&graph);
                  edges.map(|((x,_),w)| (x,w))
-                      .threshold(|&x| x, |i| (Vec::new(), i), |_, w| if w > 0 { 1 } else { 0 })
-                    //.group_by_u(|(x,_)|(x,()), |&x,_| x, |_,_,target| target.push(((),1)))
+                    //   .threshold(|&x| x, |i| (Vec::new(), i), |_, w| if w > 0 { 1 } else { 0 })
+                      .group_by_u(|x|(x,()), |&x,_| x, |_,_,target| target.push(((),1)))
                       .join_by_u(&inner, |x| (x,()), |(s,d)| (d,s), |&d,_,&s| (s,d))
              })
              .map_in_place(|x| x.0 = ((x.0).1, (x.0).0))
@@ -146,5 +143,5 @@ where G::Timestamp: LeastUpperBound {
 
     labels.join_map_u(&edges, |_k,l,d| (*d,*l))
           .concat(&nodes)
-          .group(|_, s, t| t.push((*s.peek().unwrap().0, 1)))
+          .group_u(|_, s, t| t.push((*s.peek().unwrap().0, 1)))
 }
