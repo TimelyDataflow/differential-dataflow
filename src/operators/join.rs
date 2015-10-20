@@ -14,6 +14,8 @@ use timely::dataflow::operators::{Map, Binary};
 use timely::dataflow::channels::pact::Exchange;
 use timely::drain::DrainExt;
 
+use timely_communication::Allocate;
+
 use collection::{Trace, LeastUpperBound, Lookup, Offset};
 use collection::compact::Compact;
 use radix_sort::{RadixSorter, Unsigned};
@@ -45,7 +47,10 @@ pub trait Join<G: Scope, K: Data, V: Data> : JoinBy<G, (K,V)> where G::Timestamp
     /// });
     /// ```
     fn join<V2: Data>(&self, other: &Collection<G, (K,V2)>) -> Collection<G, (K,V,V2)> {
-        self.join_by_core(other, |x| x, |x| x,
+        self.join_by_core::<K, V, V2, (K,V2),_,_,_,_,_,_,_,_,_,_>(
+            other,
+            |x: (K,V)| x,
+            |x| x,
             |&(ref k,_)| k.hashed(),
             |&(ref k,_)| k.hashed(),
             |k| k.hashed(),
@@ -84,16 +89,16 @@ pub trait JoinUnsigned<G: Scope, U: Unsigned+Data+Default, V: Data> : JoinBy<G, 
 
 }
 
-impl<G: Scope, U: Unsigned+Data+Default, V: Data+Ord+Default+Debug, S> JoinUnsigned<G, U, V> for S
+impl<G: Scope, U: Unsigned+Data+Default, V: Data, S> JoinUnsigned<G, U, V> for S
 where G::Timestamp: LeastUpperBound,
       S: JoinBy<G, (U,V)> { }
 
 impl<G: Scope, D1: Data+Ord, S> JoinBy<G, D1> for S
 where G::Timestamp: LeastUpperBound,
-      S: Binary<G, (D1, i32)>+Map<G, (D1, i32)> { }
+      S: JoinByCore<G, D1>+Map<G, (D1,i32)> { }
 
 /// Join implementations with parameterizable key selector functions.
-pub trait JoinBy<G: Scope, D1: Data> : Binary<G, (D1, i32)>+Map<G, (D1, i32)> where G::Timestamp: LeastUpperBound {
+pub trait JoinBy<G: Scope, D1: Data> : JoinByCore<G, D1>+Map<G, (D1,i32)> where G::Timestamp: LeastUpperBound {
     /// Matches elements of two streams using unsigned integers as the keys.
     ///
     /// `join_by_u` takes a second input stream, two key-val selector functions, and a reduction
@@ -188,6 +193,37 @@ pub trait JoinBy<G: Scope, D1: Data> : Binary<G, (D1, i32)>+Map<G, (D1, i32)> wh
     -> Stream<G, (D1, i32)> {
         self.join_by(&other, kv1, |k| (k,()), key_h, move |x,y,_| result(x,y))
     }
+}
+
+pub trait JoinByCore<G: Scope, D1: Data> {
+    fn join_by_core<
+        K:  Data,
+        V1: Data,
+        V2: Data,
+        D2: Data,
+        F1: Fn(D1)->(K,V1)+'static,
+        F2: Fn(D2)->(K,V2)+'static,
+        H1: Fn(&D1)->u64+'static,
+        H2: Fn(&D2)->u64+'static,
+        U:  Unsigned+Data+Default,
+        KH: Fn(&K)->U+'static,
+        R:  Data,
+        RF: Fn(&K,&V1,&V2)->R+'static,
+        LC: Lookup<K, Offset>+'static,
+        GC: Fn(u64)->LC,
+    >
+            (&self,
+             stream2: &Stream<G, (D2, i32)>,
+             kv1: F1,
+             kv2: F2,
+             part1: H1,
+             part2: H2,
+             key_h: KH,
+             result: RF,
+             look:  &GC)  -> Stream<G, (R, i32)>;
+}
+
+impl<G: Scope, D1: Data> JoinByCore<G, D1> for Stream<G, (D1, i32)> where G::Timestamp: LeastUpperBound {
     fn join_by_core<
         K:  Data,
         V1: Data,
@@ -217,8 +253,15 @@ pub trait JoinBy<G: Scope, D1: Data> : Binary<G, (D1, i32)>+Map<G, (D1, i32)> wh
         // TODO : pay more attention to the number of peers
         // TODO : find a better trait to sub-trait so we can read .builder
         // assert!(self.builder.peers() == 1);
-        let mut trace1 = Some(Trace::new(look(0)));
-        let mut trace2 = Some(Trace::new(look(0)));
+        let peers = self.scope().peers();
+        let mut log_peers = 0;
+        while (1 << (log_peers + 1)) <= peers {
+            log_peers += 1;
+        }
+
+
+        let mut trace1 = Some(Trace::new(look(log_peers)));
+        let mut trace2 = Some(Trace::new(look(log_peers)));
 
         let mut inputs1 = Vec::new();    // Vec<(T, Vec<(K, V1, i32)>)>;
         let mut inputs2 = Vec::new();    // Vec<(T, Vec<(K, V2, i32)>)>;

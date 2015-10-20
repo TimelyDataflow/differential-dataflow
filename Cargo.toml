@@ -32,6 +32,7 @@ rand="*"
 byteorder="*"
 
 [dependencies]
+timely_communication="*"
 itertools="0.4"
 time = "*"
 fnv="*"

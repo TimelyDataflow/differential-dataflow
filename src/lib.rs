@@ -139,6 +139,7 @@ extern crate time;
 extern crate timely;
 extern crate itertools;
 extern crate radix_sort;
+extern crate timely_communication;
 
 pub mod collection;
 pub mod operators;

@@ -59,8 +59,8 @@ pub trait Group<G: Scope, K: Data, V: Data> : GroupBy<G, (K,V)>
     /// Groups records by their first field, and applies reduction logic to the associated values.
     fn group<L, V2: Data>(&self, logic: L) -> Collection<G, (K,V2)>
         where L: Fn(&K, &mut CollectionIterator<V>, &mut Vec<(V2, Delta)>)+'static {
-            // self.group_by_inner(|x| x, |&(ref k,_)| k.hashed(), |k| k.hashed(), |k,v2| ((*k).clone(), (*v2).clone()), |_| HashMap::new(), logic)
-            self.group_by_inner(
+            // self.group_by_core(|x| x, |&(ref k,_)| k.hashed(), |k| k.hashed(), |k,v2| ((*k).clone(), (*v2).clone()), |_| HashMap::new(), logic)
+            self.group_by_core(
                 |x| x,
                 |&(ref k,_)| k.hashed(),
                 |k| k.hashed(),
@@ -73,14 +73,14 @@ pub trait Group<G: Scope, K: Data, V: Data> : GroupBy<G, (K,V)>
 
 impl<G: Scope, K: Data+Default, V: Data+Default, S> Group<G, K, V> for S
 where G::Timestamp: LeastUpperBound,
-      S: Unary<G, ((K,V), i32)>+Map<G, ((K,V), i32)> { }
+      S: GroupBy<G, (K,V)>+Map<G, ((K,V), i32)> { }
 
 
 pub trait GroupUnsigned<G: Scope, U: Unsigned+Data+Default, V: Data> : GroupBy<G, (U,V)>
     where G::Timestamp: LeastUpperBound {
     fn group_u<L, V2: Data>(&self, logic: L) -> Stream<G, ((U,V2),i32)>
         where L: Fn(&U, &mut CollectionIterator<V>, &mut Vec<(V2, i32)>)+'static {
-            self.group_by_inner(
+            self.group_by_core(
                 |x| x,
                 |&(ref k,_)| k.as_u64(),
                 |k| k.clone(),
@@ -99,11 +99,11 @@ where G::Timestamp: LeastUpperBound,
 // implement `GroupBy` for any stream implementing `Unary` and `Map` (most of them).
 impl<G: Scope, D: Data, S> GroupBy<G, D> for S
 where G::Timestamp: LeastUpperBound,
-    S: Unary<G,(D,i32)>+Map<G,(D,i32)> { }
+    S: GroupByCore<G,D>+Map<G,(D,i32)> { }
 
 
 /// Extension trait for the `group_by` and `group_by_u` differential dataflow methods.
-pub trait GroupBy<G: Scope, D1: Data> : Unary<G, (D1, i32)>+Map<G, (D1, i32)>
+pub trait GroupBy<G: Scope, D1: Data> : GroupByCore<G, D1>+Map<G,(D1,i32)>
 where G::Timestamp: LeastUpperBound {
 
     /// Groups input records together by key and applies a reduction function.
@@ -134,7 +134,7 @@ where G::Timestamp: LeastUpperBound {
         Reduc: Fn(&K, &V2)->D2+'static,
     >
     (&self, kv: KV, part: Part, key_h: KH, reduc: Reduc, logic: Logic) -> Stream<G, (D2, i32)> {
-        self.group_by_inner(kv, part, key_h, reduc, |_| HashMap::new(), logic)
+        self.group_by_core(kv, part, key_h, reduc, |_| HashMap::new(), logic)
     }
 
     /// A specialization of the `group_by` method to the case that the key type `K` is an unsigned
@@ -150,18 +150,41 @@ where G::Timestamp: LeastUpperBound {
     >
             (&self, kv: KV, reduc: Reduc, logic: Logic) -> Stream<G, (D2, i32)> {
                 self.map(move |(x,w)| (kv(x),w))
-                    .group_by_inner(|x| x,
+                    .group_by_core(|x| x,
                                     |&(ref k,_)| k.as_u64(),
                                     |k| k.clone(),
                                     reduc,
                                     |x| (Vec::new(), x),
                                     logic)
     }
+}
+
+pub trait GroupByCore<G: Scope, D1: Data> {
+
+    fn group_by_core<
+        K:     Data,
+        V1:    Data,
+        V2:    Data,
+        D2:    Data,
+        KV:    Fn(D1)->(K,V1)+'static,
+        Part:  Fn(&D1)->u64+'static,
+        U:     Unsigned+Default,
+        KH:    Fn(&K)->U+'static,
+        Look:  Lookup<K, Offset>+'static,
+        LookG: Fn(u64)->Look,
+        Logic: Fn(&K, &mut CollectionIterator<V1>, &mut Vec<(V2, i32)>)+'static,
+        Reduc: Fn(&K, &V2)->D2+'static,
+    >
+    (&self, kv: KV, part: Part, key_h: KH, reduc: Reduc, look: LookG, logic: Logic) -> Stream<G, (D2, i32)>;
+
+}
+
+impl<G: Scope, D1: Data> GroupByCore<G, D1> for Stream<G, (D1, i32)> where G::Timestamp: LeastUpperBound {
 
     /// The lowest level `group*` implementation, which is parameterized by the type of storage to
     /// use for mapping keys `K` to `Offset`, an internal `CollectionTrace` type. This method should
     /// probably rarely be used directly.
-    fn group_by_inner<
+    fn group_by_core<
         K:     Data,
         V1:    Data,
         V2:    Data,
@@ -187,8 +210,15 @@ where G::Timestamp: LeastUpperBound {
         // TODO : We could implement this just for `Stream`, but would have to repeat the trait
         // TODO : method signature boiler-plate, rather than use default implemenations.
         // let mut trace =  OperatorTrace::<K, G::Timestamp, V1, V2, Look>::new(|| look(0));
-        let mut source = Trace::new(look(0));
-        let mut result = Trace::new(look(0));
+
+        let peers = self.scope().peers();
+        let mut log_peers = 0;
+        while (1 << (log_peers + 1)) <= peers {
+            log_peers += 1;
+        }
+
+        let mut source = Trace::new(look(log_peers));
+        let mut result = Trace::new(look(log_peers));
 
         // A map from times to received (key, val, wgt) triples.
         let mut inputs = Vec::new();
