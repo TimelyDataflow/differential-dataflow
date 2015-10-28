@@ -82,9 +82,9 @@ impl<G: Scope, D: Ord+Data+Debug> ConsolidateExt<D> for Stream<G, (D, i32)> {
                         if buffer.len() > 0 && hash != current {
                             buffer.sort_by(|x: &(D,i32),y: &(D,i32)| x.0.cmp(&y.0));
                             session.give_iterator(buffer.drain_temp().coalesce());
-                            current = hash;
                         }
                         buffer.push((datum,wgt));
+                        current = hash;
                     }
 
                     if buffer.len() > 0 {

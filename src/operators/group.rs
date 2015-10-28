@@ -49,7 +49,7 @@ use collection::trace::CollectionIterator;
 
 use iterators::coalesce::Coalesce;
 use radix_sort::{RadixSorter, Unsigned};
-use collection::robin_hood::RHHMap;
+// use collection::robin_hood::RHHMap;
 use collection::compact::Compact;
 
 /// Extension trait for the `group` differential dataflow method
@@ -65,7 +65,7 @@ pub trait Group<G: Scope, K: Data, V: Data> : GroupBy<G, (K,V)>
                 |&(ref k,_)| k.hashed(),
                 |k| k.hashed(),
                 |k,v2| ((*k).clone(), (*v2).clone()),
-                |_| RHHMap::new(|x: &K| x.hashed() as usize),
+                |_| HashMap::new(),//RHHMap::new(|x: &K| x.hashed() as usize),
                 logic
             )
     }
