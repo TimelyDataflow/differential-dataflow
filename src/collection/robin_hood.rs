@@ -52,15 +52,19 @@ impl<K: Eq, V, F: Fn(&K)->usize> RHHMap<K, V, F> {
                 let old_buffer = ::std::mem::replace(&mut self.buffer, new_buffer);
                 self.shift -= 1;
 
-                let mut cursor = 0;
+                // let mut count = 0;
+                let mut cursor = 0;                
                 for oldkeyval in old_buffer.into_iter() {
                     if let Some((oldkey, oldval)) = oldkeyval {
+                        // count += 1;
                         let target = (self.bucket)(&oldkey) >> self.shift;
                         cursor = ::std::cmp::max(cursor, target);
                         self.buffer[cursor as usize] = Some((oldkey, oldval));
                         cursor += 1;
                     }
                 }
+
+                // println!("doubled length to {}; occupancy: {}", self.capacity() - self.slop, (count as f64) / ((self.capacity() - self.slop) as f64));
 
                 self.insert(key, val)
             }
@@ -103,9 +107,18 @@ pub fn get_mut<'a, K: Eq, V, F: Fn(&K)->usize>(slice: &'a mut [Option<(K,V)>], q
     return None;
 }
 
+#[derive(Eq, PartialEq)]
+enum SearchStatus {
+    Searching,
+    Found(usize),
+    Missing(usize),
+}
+
 /// Returns either the previous `(key,val)` pair for `key`, or `Err((key,val))` if `slice` does not have enough room to insert it.
 #[inline]
 pub fn insert<'a, K: Eq, V, F: Fn(&K)->usize>(slice: &'a mut [Option<(K,V)>], key: K, val: V, function: &F, location: usize) -> Result<Option<(K,V)>,(K,V)> {
+
+    let slop = 32;
 
     if location >= slice.len() {
         panic!("location {} > slice.len: {}", location, slice.len());
@@ -113,51 +126,92 @@ pub fn insert<'a, K: Eq, V, F: Fn(&K)->usize>(slice: &'a mut [Option<(K,V)>], ke
 
     let target = function(&key);
 
-    let mut success = false;
     let mut position = location;
-    while position < slice.len() {
+    let mut status = SearchStatus::Searching;
+    let limit = ::std::cmp::min(location + slop, slice.len());
+    while status == SearchStatus::Searching && position < limit {
         if let Some(ref mut kv) = slice[position].as_mut() {
             let found = function(&kv.0);
             if found == target && key == kv.0 {
-                success = true;
-                break;
+                status = SearchStatus::Found(position);
             }
-            if found > target { break; }
+            if found > target { status = SearchStatus::Missing(position); }
         }
-        else { break; }
+        else { status = SearchStatus::Missing(position); }
 
         position += 1;
     }
 
-    if success {
-        let result = slice[position].take();
-        slice[position] = Some((key, val));
-        return Ok(result);
-    }
-    else {
-        // position now points at the place where the value should go.
-        // we may need to slide everyone from there forward until a None.
-        let begin = position;
-        while position < slice.len() && slice[position].is_some() {
-            position += 1;
+    match status {
+        // if we bailed out of the search
+        SearchStatus::Searching => {
+            // println!("bailed out looking for element");
+            Err((key, val))
         }
-
-        if position > begin + 16 {
-            return Err((key, val));
+        // we found the key at `index`
+        SearchStatus::Found(index) => {
+            Ok(::std::mem::replace(&mut slice[index], Some((key, val))))
         }
-
-        if position < slice.len() {
-
-            for i in 0..(position - begin) {
-                slice.swap(position - i - 1, position - i);
+        // we should have found the key by `index`, and should put the data there now
+        SearchStatus::Missing(mut index) => {
+            let begin = index;
+            while index < slice.len() && slice[index].is_some() {
+                index += 1;
             }
 
-            assert!(slice[begin].is_none());
-            slice[begin] = Some((key, val));
-            return Ok(None);
+            // if we need to slide folks too far, is a bug
+            if index > begin + 4 * slop {
+                // println!("very long run: {}", index - begin);
+                return Err((key, val));
+            }
+
+            if index < slice.len() {
+
+                for i in 0..(index - begin) {
+                    slice.swap(index - i - 1, index - i);
+                }
+
+                assert!(slice[begin].is_none());
+                slice[begin] = Some((key, val));
+                Ok(None)
+            }
+            else { Err((key, val)) }
         }
-        else { return Err((key, val)); }
     }
+
+    // if position - location > 100 {
+    //     println!("zomfg; pos - loc = {}", position - location);
+    // }
+
+    // if success {
+    //     let result = slice[position].take();
+    //     slice[position] = Some((key, val));
+    //     return Ok(result);
+    // }
+    // else {
+    //     // position now points at the place where the value should go.
+    //     // we may need to slide everyone from there forward until a None.
+    //     let begin = position;
+    //     while position < slice.len() && slice[position].is_some() {
+    //         position += 1;
+    //     }
+
+    //     if position > begin + 16 {
+    //         return Err((key, val));
+    //     }
+
+    //     if position < slice.len() {
+
+    //         for i in 0..(position - begin) {
+    //             slice.swap(position - i - 1, position - i);
+    //         }
+
+    //         assert!(slice[begin].is_none());
+    //         slice[begin] = Some((key, val));
+    //         return Ok(None);
+    //     }
+    //     else { return Err((key, val)); }
+    // }
 }
 
 /// Returns either the `(key,val)` pair associated with `key`, or `None` if it does not exist.

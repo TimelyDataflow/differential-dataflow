@@ -18,6 +18,7 @@ use timely_communication::Allocate;
 
 use collection::{Trace, LeastUpperBound, Lookup, Offset};
 use collection::compact::Compact;
+use collection::robin_hood::RHHMap;
 use radix_sort::{RadixSorter, Unsigned};
 
 /// Join implementations for `(key,val)` data.
@@ -176,7 +177,9 @@ pub trait JoinBy<G: Scope, D1: Data> : JoinByCore<G, D1>+Map<G, (D1,i32)> where 
                 move |&(ref k,_)| kh2(k).as_u64(),
                 move |k| kh3(k),
                 result,
-                &|_| HashMap::new())
+                // &|_| HashMap::new()
+                &|_| RHHMap::new(|x: &K| x.hashed() as usize)
+            )
     }
 
     /// Restricts the input stream to those elements whose key is present in the second stream.

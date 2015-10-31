@@ -21,8 +21,8 @@ type Edge = (Node, Node);
 
 fn main() {
 
+    // snag a filename to use for the input graph.
     let filename = std::env::args().nth(1).unwrap();
-    let start = time::precise_time_s();
 
     timely::execute_from_args(std::env::args().skip(1), move |computation| {
 
@@ -44,43 +44,30 @@ fn main() {
             connected_components(&edges);
         });
     });
-
-    println!("{}: done", time::precise_time_s() - start);
 }
 
 fn connected_components<G: Scope>(edges: &Stream<G, (Edge, i32)>) -> Stream<G, ((Node, Node), i32)>
 where G::Timestamp: LeastUpperBound+Hash {
 
-    let nodes = edges.map_in_place(|pair| { let min = std::cmp::min((pair.0).0, (pair.0).1); pair.0 = (min, min); } )
+    // each edge (x,y) means that we need at least a label for the min of x and y.
+    let nodes = edges.map_in_place(|pair| {
+                        let min = std::cmp::min((pair.0).0, (pair.0).1);
+                        pair.0 = (min, min);
+                     })
                      .consolidate_by(|x| x.0);
 
+    // each edge should exist in both directions.
     let edges = edges.map_in_place(|x| x.0 = ((x.0).1, (x.0).0))
                      .concat(&edges);
 
-    reachability(&edges, &nodes)
-}
-
-fn reachability<G: Scope>(edges: &Stream<G, (Edge, i32)>, nodes: &Stream<G, ((Node, Node), i32)>)
-    -> Stream<G, ((Node, Node), i32)>
-where G::Timestamp: LeastUpperBound+Hash {
-
-    edges.filter(|_| false)
+    // don't actually use these labels, just grab the type
+    nodes.filter(|_| false)
          .iterate(|inner| {
              let edges = inner.scope().enter(&edges);
              let nodes = inner.scope().enter_at(&nodes, |r| 256 * (64 - (r.0).0.leading_zeros() as u64));
 
-             improve_labels(inner, &edges, &nodes)
+            inner.join_map_u(&edges, |_k,l,d| (*d,*l))
+                 .concat(&nodes)
+                 .group_u(|_, s, t| { t.push((*s.peek().unwrap().0, 1)); } )
          })
-}
-
-
-fn improve_labels<G: Scope>(labels: &Stream<G, ((Node, Node), i32)>,
-                            edges: &Stream<G, (Edge, i32)>,
-                            nodes: &Stream<G, ((Node, Node), i32)>)
-    -> Stream<G, ((Node, Node), i32)>
-where G::Timestamp: LeastUpperBound {
-
-    labels.join_map_u(&edges, |_k,l,d| (*d,*l))
-          .concat(&nodes)
-          .group_u(|_, s, t| { t.push((*s.peek().unwrap().0, 1)); } )
 }

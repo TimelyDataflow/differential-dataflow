@@ -41,9 +41,9 @@ fnv="*"
 default = []
 logging = ["timely/logging"]
 
-# [profile.release]
-# opt-level = 3
-# debug = true
-# rpath = false
-# lto = false
-# debug-assertions = false
+#[profile.release]
+#opt-level = 3
+#debug = true
+#rpath = false
+#lto = false
+#debug-assertions = false
