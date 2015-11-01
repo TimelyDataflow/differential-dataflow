@@ -10,6 +10,8 @@ use timely::progress::timestamp::RootTimestamp;
 use rand::{Rng, SeedableRng, StdRng};
 
 use differential_dataflow::operators::*;
+use differential_dataflow::operators::join::JoinUnsigned;
+use differential_dataflow::operators::group::GroupUnsigned;
 use differential_dataflow::collection::LeastUpperBound;
 
 type Node = u32;
@@ -98,8 +100,8 @@ where G::Timestamp: LeastUpperBound {
         let edges = inner.scope().enter(&edges);
         let nodes = inner.scope().enter(&nodes);
 
-        inner.join_map(&edges, |_k,l,d| (*d, l+1))
+        inner.join_map_u(&edges, |_k,l,d| (*d, l+1))
              .concat(&nodes)
-             .group(|_, s, t| t.push((*s.peek().unwrap().0, 1)))
+             .group_u(|_, s, t| t.push((*s.peek().unwrap().0, 1)))
      })
 }

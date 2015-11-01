@@ -14,7 +14,9 @@ pub use self::consolidate::ConsolidateExt;
 pub use self::iterate::IterateExt;
 pub use self::join::Join;
 pub use self::threshold::Threshold;
+pub use self::arrange::{ArrangeByKey, ArrangeBySelf};
 
+pub mod arrange;
 pub mod threshold;
 pub mod group;
 pub mod cogroup;

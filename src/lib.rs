@@ -134,6 +134,7 @@ impl<T: timely::Data + ::std::hash::Hash + Ord + Debug> Data for T { }
 // impl<S: timely::dataflow::Scope> Scope for S where S::Timestamp: collection::LeastUpperBound { }
 
 
+extern crate rc;
 extern crate fnv;
 extern crate time;
 extern crate timely;

@@ -1,3 +1,4 @@
+
 [package]
 
 name = "differential-dataflow"
@@ -36,6 +37,7 @@ timely_communication="*"
 itertools="0.4"
 time = "*"
 fnv="*"
+rc="*"
 
 [features]
 default = []

@@ -45,6 +45,8 @@ pub struct Compact<K, V> {
     pub vals: Vec<(V, i32)>,
 }
 
+// abomonate!(Compact : keys, cnts, vals);
+
 impl<K: Ord+Debug, V: Ord> Compact<K, V> {
     /// Constructs a new `Compact` with indicated initial capacities.
     ///

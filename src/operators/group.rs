@@ -200,17 +200,6 @@ impl<G: Scope, D1: Data> GroupByCore<G, D1> for Stream<G, (D1, i32)> where G::Ti
     >
     (&self, kv: KV, part: Part, key_h: KH, reduc: Reduc, look: LookG, logic: Logic) -> Stream<G, (D2, i32)> {
 
-        // A pair of source and result `CollectionTrace` instances.
-        // TODO : The hard-coded 0 means we don't know how many bits we can shave off of each int
-        // TODO : key, which is fine for `HashMap` but less great for integer keyed maps, which use
-        // TODO : dense vectors (sparser as number of workers increases).
-        // TODO : At the moment, we don't have access to the stream's underlying .scope() method,
-        // TODO : which is what would let us see the number of peers, because we only know that
-        // TODO : the type also implements the `Unary` and `Map` traits, not that it is a `Stream`.
-        // TODO : We could implement this just for `Stream`, but would have to repeat the trait
-        // TODO : method signature boiler-plate, rather than use default implemenations.
-        // let mut trace =  OperatorTrace::<K, G::Timestamp, V1, V2, Look>::new(|| look(0));
-
         let peers = self.scope().peers();
         let mut log_peers = 0;
         while (1 << (log_peers + 1)) <= peers {
