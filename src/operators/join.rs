@@ -56,7 +56,8 @@ pub trait Join<G: Scope, K: Data, V: Data> : JoinBy<G, (K,V)> where G::Timestamp
             |&(ref k,_)| k.hashed(),
             |k| k.hashed(),
             |k,v1,v2| (k.clone(), v1.clone(), v2.clone()),
-            &|_| HashMap::new()
+            // &|_| HashMap::new(),
+            &|_| RHHMap::new(|x: &K| x.hashed() as usize)
         )
     }
     /// Matches pairs of `(key,val1)` and `(key,val2)` records based on `key` and applies a reduction function.
@@ -77,7 +78,13 @@ pub trait JoinUnsigned<G: Scope, U: Unsigned+Data+Default, V: Data> : JoinBy<G, 
     fn join_u<V2>(&self, other: &Stream<G, ((U,V2),i32)>) -> Stream<G, ((U,V,V2),i32)>
     where V2: Data,
           G::Timestamp: LeastUpperBound+Debug {
-        self.join_by_core(other, |x| x, |x| x, |&(ref k,_)| k.as_u64(), |&(ref k,_)| k.as_u64(), |k| k.clone(), |k,v1,v2| (k.clone(), v1.clone(), v2.clone()), &|x| (Vec::new(), x))
+        self.join_by_core(
+            other, |x| x, |x| x,
+            |&(ref k,_)| k.as_u64(),
+            |&(ref k,_)| k.as_u64(),
+            |k| k.clone(),
+            |k,v1,v2| (k.clone(), v1.clone(), v2.clone()),
+            &|x| (Vec::new(), x))
     }
     /// Matches pairs of `(key,val1)` and `(key,val2)` records based on `key` and applies a reduction function.
     fn join_map_u<V2, D, R>(&self, other: &Stream<G, ((U,V2),i32)>, logic: R) -> Stream<G, (D,i32)>
@@ -352,14 +359,11 @@ impl<G: Scope, D1: Data> JoinByCore<G, D1> for Stream<G, (D1, i32)> where G::Tim
                         Compact::from_radix(&mut vec![vec], &|k| key_h(k))
                     };
 
-                    // let radix_sorted = queue.finish(&|x| key_h(&(x.0).0));
-                    // if let Some(compact) = Compact::from_radix(radix_sorted, &|k| key_h(k)) {
                     if let Some(compact) = compact {
                         if let Some(trace) = trace1.as_ref() {
                             process_diffs(&time, &compact, &trace, &|k,x,y| result(k,y,x), &mut outbuf);
                         }
                         if let Some(trace) = trace2.as_mut() {
-                            // println!("join2");
                             trace.set_difference(time.clone(), compact);
                         }
                     }

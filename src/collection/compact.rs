@@ -17,9 +17,6 @@
 //! exactly what we would have done in the simple case. As memory gets tighter, it behaves more
 //! responsiby.
 
-// use std::fmt::Debug;
-
-// use iterators::merge::MergeUsing;
 use iterators::coalesce::Coalesce;
 
 use timely::drain::DrainExt;
@@ -72,14 +69,13 @@ impl<K: Ord+Debug, V: Ord> Compact<K, V> {
     ///
     /// The `Compact` does not know about the ordering, only that it should look for repetitions of
     /// in the sequences of `key` and `wgt`.
-    #[inline(never)]
+    // #[inline(never)]
     pub fn extend<I: Iterator<Item=((K, V), i32)>>(&mut self, mut iterator: I) {
 
         // populate a new `Compact` with merged, coalesced data.
         if let Some(((mut old_key, val), wgt)) = iterator.next() {
 
             let mut key_cnt = 1;
-            // let mut wgt_cnt = 1;
 
             // always stash the val
             self.vals.push((val, wgt));
@@ -88,16 +84,6 @@ impl<K: Ord+Debug, V: Ord> Compact<K, V> {
 
                 // always stash the val
                 self.vals.push((val,wgt));
-
-                // // if the key or weight has changed, stash the weight.
-                // if old_key != key || old_wgt != wgt {
-                //     // stash wgt, using run-length encoding
-                //     self.wgts.push((old_wgt, wgt_cnt));
-                //     old_wgt = wgt;
-                //     wgt_cnt = 0;
-                // }
-                //
-                // wgt_cnt += 1;
 
                 // if the key has changed, stash the key
                 if old_key != key {
@@ -112,11 +98,55 @@ impl<K: Ord+Debug, V: Ord> Compact<K, V> {
 
             self.keys.push(old_key);
             self.cnts.push(key_cnt);
-            // self.wgts.push((old_wgt, wgt_cnt));
         }
     }
 
-    #[inline(never)]
+    pub fn extend_by(&mut self, buffer: &mut Vec<((K, V), i32)>) {
+
+        // coalesce things
+        let mut cursor = 0;
+        for index in 1 .. buffer.len() {
+            if buffer[cursor].0 == buffer[index].0 {
+                buffer[cursor].1 += buffer[index].1;
+            }
+            else {
+                if buffer[cursor].1 != 0 {
+                    cursor += 1;
+                }
+                buffer.swap(cursor, index);
+            }
+        }
+        if buffer[cursor].1 != 0 {
+            cursor += 1;
+        }
+        buffer.truncate(cursor);
+
+        let mut iter = buffer.drain_temp();
+        if let Some(((key1,val1),wgt1)) = iter.next() {
+
+            let mut prev_len = self.vals.len();
+
+            self.keys.push(key1);
+            self.vals.push((val1, wgt1));
+
+            for ((key, val), wgt) in iter {
+
+                // if the key has changed, stash the key
+                if self.keys[self.keys.len() - 1] != key {
+                    self.keys.push(key);
+                    self.cnts.push((self.vals.len() - prev_len) as u32);
+                    prev_len = self.vals.len();
+                }
+
+                // always stash the val
+                self.vals.push((val,wgt));
+            }
+
+            self.cnts.push((self.vals.len() - prev_len) as u32);
+        }
+    }
+
+    // #[inline(never)]
     pub fn from_radix<U: Unsigned+Default, F: Fn(&K)->U>(source: &mut Vec<Vec<((K,V),i32)>>, function: &F) -> Option<Compact<K,V>> {
 
         let mut size = 0;
@@ -126,20 +156,22 @@ impl<K: Ord+Debug, V: Ord> Compact<K, V> {
 
         let mut result = Compact::new(size,size);
         let mut buffer = vec![];
-        let mut current = Default::default();
 
+        let mut current = Default::default();
+        
         for ((key, val), wgt) in source.iter_mut().flat_map(|x| x.drain_temp()) {
             let hash = function(&key);
             if buffer.len() > 0 && hash != current {
                 // if hash < current { println!("  radix sort error? {} < {}", hash, current); }
-                // hsort_by(&mut buffer, &|x: &((K,V),i32)| &x.0);
                 buffer.sort_by(|x: &((K,V),i32),y: &((K,V),i32)| x.0.cmp(&y.0));
-                result.extend(buffer.drain_temp().coalesce());
+        
+                // result.extend(buffer.drain_temp().coalesce());
+                result.extend_by(&mut buffer);
             }
             buffer.push(((key,val),wgt));
             current = hash;
         }
-
+        
         if buffer.len() > 0 {
             // hsort_by(&mut buffer, &|x: &((K,V),i32)| &x.0);
             buffer.sort_by(|x: &((K,V),i32),y: &((K,V),i32)| x.0.cmp(&y.0));
