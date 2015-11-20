@@ -74,6 +74,17 @@ impl<G: Scope, U: Unsigned+Data+Default, V: Data> JoinUnsigned<G, U, V> for Coll
         let arranged1 = self.arrange_by_key(|k| k.clone(), |x| (Vec::new(), x));
         let arranged2 = other.arrange_by_key(|k| k.clone(), |x| (Vec::new(), x));
         arranged1.join(&arranged2, logic)
+    // /// Matches pairs of `(key, val1)` and `(key, val2)` data based `key`.
+    // fn join_u<V2>(&self, other: &Stream<G, ((U,V2),i32)>) -> Stream<G, ((U,V,V2),i32)>
+    // where V2: Data,
+    //       G::Timestamp: LeastUpperBound+Debug {
+    //     self.join_by_core(
+    //         other, |x| x, |x| x,
+    //         |&(ref k,_)| k.as_u64(),
+    //         |&(ref k,_)| k.as_u64(),
+    //         |k| k.clone(),
+    //         |k,v1,v2| (k.clone(), v1.clone(), v2.clone()),
+    //         &|x| (Vec::new(), x))
     }
     fn semijoin(&self, other: &Collection<G, U>) -> Collection<G, (U, V)> {
         let arranged1 = self.arrange_by_key(|k| k.clone(), |x| (Vec::new(), x));
