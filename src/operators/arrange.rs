@@ -16,22 +16,29 @@ use timely::drain::DrainExt;
 
 use ::{Data, Collection};
 use collection::{LeastUpperBound, Lookup, Trace, Offset};
+use collection::trace::{Traceable, TraceRef};
 use collection::count::Count;
 use collection::compact::Compact;
 use radix_sort::{RadixSorter, Unsigned};
 
-pub struct ArrangedByKey<G: Scope, K: Data, V: Data, L: Lookup<K, Offset>+'static> {
-    pub stream: Stream<G, (Vec<K>, Vec<u32>, Vec<(V, i32)>)>,
-    pub trace: Rc<RefCell<Trace<K, G::Timestamp, V, L>>>,
+pub struct Arranged<G: Scope, T: Traceable<Index=G::Timestamp>> 
+    where 
+        T::Key: Data, 
+        T::Value: Data, 
+        G::Timestamp: LeastUpperBound ,
+        for<'a> &'a T: TraceRef<'a, T::Key, T::Index, T::Value> 
+        {
+    pub stream: Stream<G, (Vec<<T as Traceable>::Key>, Vec<u32>, Vec<(<T as Traceable>::Value, i32)>)>,
+    pub trace: Rc<RefCell<T>>,
 }
 
-pub trait ArrangeByKey<G: Scope, K: Data, V: Data> {
+pub trait ArrangeByKey<G: Scope, K: Data, V: Data> where G::Timestamp: LeastUpperBound {
     fn arrange_by_key<
         U:     Unsigned+Default,
         KH:    Fn(&K)->U+'static,
         Look:  Lookup<K, Offset>+'static,
         LookG: Fn(u64)->Look,
-    >(&self, key_h: KH, look: LookG) -> ArrangedByKey<G, K, V, Look>;
+    >(&self, key_h: KH, look: LookG) -> Arranged<G, Trace<K,G::Timestamp,V,Look>>;
 }
 
 impl<G: Scope, K: Data, V: Data> ArrangeByKey<G, K, V> for Collection<G, (K, V)> where G::Timestamp: LeastUpperBound {
@@ -42,7 +49,7 @@ impl<G: Scope, K: Data, V: Data> ArrangeByKey<G, K, V> for Collection<G, (K, V)>
         Look:  Lookup<K, Offset>+'static,
         LookG: Fn(u64)->Look,
     >
-    (&self, key_h: KH, look: LookG) -> ArrangedByKey<G, K, V, Look> {
+    (&self, key_h: KH, look: LookG) -> Arranged<G, Trace<K,G::Timestamp,V,Look>> {
 
         let peers = self.scope().peers();
         let mut log_peers = 0;
@@ -110,7 +117,7 @@ impl<G: Scope, K: Data, V: Data> ArrangeByKey<G, K, V> for Collection<G, (K, V)>
             }
         });
 
-        ArrangedByKey { stream: stream, trace: trace }
+        Arranged { stream: stream, trace: trace }
     }
 }
 

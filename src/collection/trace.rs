@@ -1,85 +1,77 @@
 use std::iter::Peekable;
-use std::fmt::Debug;
 
 use collection::{close_under_lub, LeastUpperBound, Lookup};
 
-use iterators::merge::{MergeUsing, MergeUsingIterator};
+use iterators::merge::{Merge, MergeIterator};
 use iterators::coalesce::{Coalesce, CoalesceIterator};
 use collection::compact::Compact;
 
-/// Enumerates the elements of a collection for a given key at a given time.
-///
-/// A collection iterator is only provided for non-empty sets, so one can call `peek.unwrap()` on
-/// the iterator without worrying about panicing.
-pub type CollectionIterator<'a, V> = Peekable<CoalesceIterator<MergeUsingIterator<'a, DifferenceIterator<'a, V>>>>;
+// Test implementation which uses references rather than clones 
 
-#[derive(Copy, Clone, Debug)]
-pub struct Offset {
-    dataz: u32,
-}
+pub trait Traceable where for<'a> &'a Self: TraceRef<'a, Self::Key, Self::Index, Self::Value> {
 
-impl Offset {
-    #[inline(always)]
-    fn new(offset: usize) -> Offset {
-        assert!(offset < ((!0u32) as usize)); // note strict inequality
-        Offset { dataz: (!0u32) - offset as u32 }
+    type Key: Ord+'static;
+    type Index: LeastUpperBound+'static;
+    type Value: Ord+'static;
+
+    /// Introduces differences in `accumulation` at `time`.
+    fn set_difference(&mut self, time: Self::Index, accumulation: Compact<Self::Key, Self::Value>);
+
+    /// Method whose only role is to provide the lifetime to the `Trace` trait.
+    fn trace<'a>(&'a self, key: &Self::Key) -> <&'a Self as TraceRef<'a,Self::Key,Self::Index,Self::Value>>::TIterator {
+        TraceRef::<'a,Self::Key,Self::Index,Self::Value>::trace(self, key)
     }
-    #[inline(always)]
-    fn val(&self) -> usize { ((!0u32) - self.dataz) as usize }
+
+    /// Enumerates updates for a specified key and time.
+    fn get_difference<'a>(&'a self, key: &Self::Key, time: &Self::Index) 
+        -> Option<<&'a Self as TraceRef<'a,Self::Key,Self::Index,Self::Value>>::VIterator> {
+        self.trace(key)
+            .filter(|x| x.0 == time)
+            .map(|x| x.1)
+            .next()
+    }
+
+    /// Accumulates differences for `key` at times less than or equal to `time`.
+    ///
+    /// The `&mut self` argument allows the trace to use stashed storage for a merge.
+    fn get_collection<'a>(&'a mut self, key: &Self::Key, time: &Self::Index) 
+        -> CollectionIterator<<&'a Self as TraceRef<'a,Self::Key,Self::Index,Self::Value>>::VIterator> {
+        self.trace(key)
+            .into_iter()
+            .filter(|x| x.0 <= time)
+            .map(|x| x.1)
+            .merge()
+            .coalesce()
+            .peekable()
+    }
+
+    // TODO : Make sure the right assumptions are made about contents of stash.
+    fn interesting_times<'a>(&'a mut self, key: &Self::Key, time: &Self::Index, stash: &mut Vec<Self::Index>) {
+        // add all times, but filter a bit if possible
+        for iter in self.trace(key) {
+            let lub = iter.0.least_upper_bound(time);
+            if !stash.contains(&lub) {
+                stash.push(lub);
+            }
+        }
+        close_under_lub(stash);
+    }
 }
 
-/// A map from keys to time-indexed collection differences.
-///
-/// A `Trace` is morally equivalent to a `Map<K, Vec<(T, Vec<(V,i32)>)>`.
-/// It uses an implementor `L` of the `Lookup<K, Offset>` trait to map keys to an `Offset`, a
-/// position in member `self.links` of the head of the linked list for the key.
-///
-/// The entries in `self.links` form a linked list, where each element contains an index into
-/// `self.times` indicating a time, and an offset in the associated vector in `self.times[index]`.
-/// Finally, the `self.links` entry contains an optional `Offset` to the next element in the list.
-/// Entries are added to `self.links` sequentially, so that one can determine not only where some
-/// differences begin, but also where they end, by looking at the next entry in `self.lists`.
-///
-/// Elements of `self.times` correspond to distinct logical times, and the full set of differences
-/// received at each.
-
-struct ListEntry {
-    time: u32,
-    vals: u32,
-    next: Option<Offset>,
+pub trait TraceRef<'a,K,T:'a,V:'a> {
+    type VIterator: Iterator<Item=(&'a V, i32)>;
+    type TIterator: Iterator<Item=(&'a T, Self::VIterator)>;
+    fn trace(self, key: &K) -> Self::TIterator;
 }
 
-struct TimeEntry<T, V> {
-    time: T,
-    vals: Vec<(V, i32)>,
-}
+pub type CollectionIterator<VIterator> = Peekable<CoalesceIterator<MergeIterator<VIterator>>>;
 
-/// A collection of values indexed by `key` and `time`.
-///
-/// #Safety
-/// For reasons of borrow checking, it is difficult to merge references using already-allocated
-/// memory. The method `get_collection_using` uses its `heap` argument to store references that should
-/// remain valid for as long as the `Trace` is valid, but I cannot convince Rust of this fact because
-/// only I know that once installed, differences are immutable. Please do not call `get_collection_using`
-/// with a `heap` argument that may out-live the `Trace` itself.
-pub struct Trace<K, T, V, L> {
-    phantom:    ::std::marker::PhantomData<K>,
-    links:      Vec<ListEntry>,
-    times:      Vec<TimeEntry<T, V>>,
-    pub keys:       L,
-    temp:       Vec<T>,
-}
+impl<K,V,L,T> Traceable for Trace<K, T, V, L> where K: Ord+'static, V: Ord+'static, L: Lookup<K, Offset>+'static, T: LeastUpperBound+'static {
+    type Key = K;
+    type Index = T;
+    type Value = V;
 
-// impl<K, T, V, L> Drop for Trace<K, T, V, L> {
-//     fn drop(&mut self) {
-//         println!("dropping trace");
-//     }
-// }
-
-impl<K, V, L, T> Trace<K, T, V, L> where K: Ord, V: Ord, L: Lookup<K, Offset>, T: LeastUpperBound+Debug {
-
-    /// Installs a supplied set of keys and values as the differences for `time`.
-    pub fn set_difference(&mut self, time: T, accumulation: Compact<K, V>) {
+    fn set_difference(&mut self, time: T, accumulation: Compact<K, V>) {
 
         // extract the relevant fields
         let keys = accumulation.keys;
@@ -128,7 +120,75 @@ impl<K, V, L, T> Trace<K, T, V, L> where K: Ord, V: Ord, L: Lookup<K, Offset>, T
         // add the values and weights to the list of timed differences.
         self.times.push(TimeEntry { time: time, vals: vals });
     }
+}
 
+impl<'a,K,V,L,T> TraceRef<'a,K,T,V> for &'a Trace<K,T,V,L> where K: Ord+'a, V: Ord+'a, L: Lookup<K, Offset>+'a, T: LeastUpperBound+'a {
+    type VIterator = DifferenceIterator<'a, V>;
+    type TIterator = TraceIterator<'a,K,T,V,L>;
+    fn trace(self, key: &K) -> Self::TIterator {
+        TraceIterator {
+            trace: self,
+            next0: self.keys.get_ref(key).map(|&x|x),
+        }
+    }   
+}
+
+/// Enumerates the elements of a collection for a given key at a given time.
+///
+/// A collection iterator is only provided for non-empty sets, so one can call `peek.unwrap()` on
+/// the iterator without worrying about panicing.
+// pub type CollectionIterator<'a, V> = Peekable<CoalesceIterator<MergeUsingIterator<'a, DifferenceIterator<'a, V>>>>;
+
+#[derive(Copy, Clone, Debug)]
+pub struct Offset {
+    dataz: u32,
+}
+
+impl Offset {
+    #[inline(always)]
+    fn new(offset: usize) -> Offset {
+        assert!(offset < ((!0u32) as usize)); // note strict inequality
+        Offset { dataz: (!0u32) - offset as u32 }
+    }
+    #[inline(always)]
+    fn val(&self) -> usize { ((!0u32) - self.dataz) as usize }
+}
+
+/// A map from keys to time-indexed collection differences.
+///
+/// A `Trace` is morally equivalent to a `Map<K, Vec<(T, Vec<(V,i32)>)>`.
+/// It uses an implementor `L` of the `Lookup<K, Offset>` trait to map keys to an `Offset`, a
+/// position in member `self.links` of the head of the linked list for the key.
+///
+/// The entries in `self.links` form a linked list, where each element contains an index into
+/// `self.times` indicating a time, and an offset in the associated vector in `self.times[index]`.
+/// Finally, the `self.links` entry contains an optional `Offset` to the next element in the list.
+/// Entries are added to `self.links` sequentially, so that one can determine not only where some
+/// differences begin, but also where they end, by looking at the next entry in `self.lists`.
+///
+/// Elements of `self.times` correspond to distinct logical times, and the full set of differences
+/// received at each.
+
+struct ListEntry {
+    time: u32,
+    vals: u32,
+    next: Option<Offset>,
+}
+
+struct TimeEntry<T, V> {
+    time: T,
+    vals: Vec<(V, i32)>,
+}
+
+/// A collection of values indexed by `key` and `time`.
+pub struct Trace<K, T, V, L> {
+    phantom:    ::std::marker::PhantomData<K>,
+    links:      Vec<ListEntry>,
+    times:      Vec<TimeEntry<T, V>>,
+    pub keys:       L,
+}
+
+impl<K, V, L, T> Trace<K, T, V, L> where K: Ord, V: Ord, L: Lookup<K, Offset>, T: LeastUpperBound {
     #[inline]
     fn get_range<'a>(&'a self, position: Offset) -> DifferenceIterator<'a, V> {
 
@@ -147,70 +207,6 @@ impl<K, V, L, T> Trace<K, T, V, L> where K: Ord, V: Ord, L: Lookup<K, Offset>, T
 
         DifferenceIterator::new(&self.times[time].vals[vals_lower..vals_upper])
     }
-
-    /// Enumerates the differences for `key` at `time`.
-    pub fn get_difference<'a>(&'a self, key: &K, time: &T) -> DifferenceIterator<'a, V> {
-        self.trace(key)
-            .filter(|x| x.0 == time)
-            .map(|x| x.1)
-            .next()
-            .unwrap_or(DifferenceIterator::new(&[]))
-    }
-
-    // /// Accumulates differences for `key` at times less than or equal to `time`.
-    // pub fn get_collection<'a>(&'a self, key: &K, time: &T) -> CollectionIterator<'a, V> {
-    //     self.trace(key)
-    //         .filter(|x| x.0 <= time)
-    //         .map(|x| x.1)
-    //         .merge()
-    //         .coalesce()
-    //         .peekable()
-    // }
-
-    /// Enumerates the collection for `key` at `time`.
-    ///
-    /// A collection is defined as the accumulation of all differences at times less or equal to
-    /// `time`.
-    pub unsafe fn get_collection_using<'a>(&'a self, key: &K, time: &T,
-            heap: &mut Vec<((&(), i32), DifferenceIterator<'static,()>)>) -> CollectionIterator<'a, V> {
-        // panic!();
-        heap.clear();
-        self.trace(key)
-            .filter(|x| x.0 <= time)
-            .map(|x| x.1)
-            .merge_using(::std::mem::transmute(heap))
-            .coalesce()
-            .peekable()
-    }
-
-    // TODO : this could do a better job of returning newly interesting times: those times that are
-    // TODO : now in the least upper bound, but were not previously so. The main risk is that the
-    // TODO : easy way to do this computes the LUB before and after, but this can be expensive:
-    // TODO : the LUB with `index` is often likely to be smaller than the LUB without it.
-    /// Lists times that are the least upper bound of `time` and any subset of existing times.
-    pub fn interesting_times<'a>(&'a mut self, key: &K, index: T) -> &'a [T] {
-        // panic!();
-        let mut temp = ::std::mem::replace(&mut self.temp, Vec::new());
-        temp.clear();
-        temp.push(index);
-        for (time, _) in self.trace(key) {
-            let lub = time.least_upper_bound(&temp[0]);
-            if !temp.contains(&lub) {
-                temp.push(lub);
-            }
-        }
-        close_under_lub(&mut temp);
-        ::std::mem::replace(&mut self.temp, temp);
-        &self.temp[..]
-    }
-
-    /// Enumerates pairs of time `&T` and differences `DifferenceIterator<V>` for `key`.
-    pub fn trace<'a>(&'a self, key: &K) -> TraceIterator<'a, K, T, V, L> {
-        TraceIterator {
-            trace: self,
-            next0: self.keys.get_ref(key).map(|&x|x),
-        }
-    }
 }
 
 impl<K: Eq, L: Lookup<K, Offset>, T, V> Trace<K, T, V, L> {
@@ -221,7 +217,6 @@ impl<K: Eq, L: Lookup<K, Offset>, T, V> Trace<K, T, V, L> {
             links:   Vec::new(),
             times:   Vec::new(),
             keys:    l,
-            temp:    Vec::new(),
         }
     }
 }
@@ -236,7 +231,7 @@ pub struct TraceIterator<'a, K: Eq+'a, T: 'a, V: 'a, L: Lookup<K, Offset>+'a> {
 
 impl<'a, K, T, V, L> Iterator for TraceIterator<'a, K, T, V, L>
 where K:  Ord+'a,
-      T: LeastUpperBound+Debug+'a,
+      T: LeastUpperBound+'a,
       V: Ord+'a,
       L: Lookup<K, Offset>+'a {
     type Item = (&'a T, DifferenceIterator<'a, V>);

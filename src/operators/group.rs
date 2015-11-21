@@ -45,7 +45,7 @@ use timely::dataflow::channels::pact::Exchange;
 use timely::drain::DrainExt;
 
 use collection::{LeastUpperBound, Lookup, Trace, Offset};
-use collection::trace::CollectionIterator;
+use collection::trace::{CollectionIterator, DifferenceIterator, Traceable};
 
 use iterators::coalesce::Coalesce;
 use radix_sort::{RadixSorter, Unsigned};
@@ -58,8 +58,7 @@ pub trait Group<G: Scope, K: Data, V: Data> : GroupBy<G, (K,V)>
 
     /// Groups records by their first field, and applies reduction logic to the associated values.
     fn group<L, V2: Data>(&self, logic: L) -> Collection<G, (K,V2)>
-        where L: Fn(&K, &mut CollectionIterator<V>, &mut Vec<(V2, Delta)>)+'static {
-            // self.group_by_core(|x| x, |&(ref k,_)| k.hashed(), |k| k.hashed(), |k,v2| ((*k).clone(), (*v2).clone()), |_| HashMap::new(), logic)
+        where L: Fn(&K, &mut CollectionIterator<DifferenceIterator<V>>, &mut Vec<(V2, Delta)>)+'static {
             self.group_by_core(
                 |x| x,
                 |&(ref k,_)| k.hashed(),
@@ -79,7 +78,7 @@ where G::Timestamp: LeastUpperBound,
 pub trait GroupUnsigned<G: Scope, U: Unsigned+Data+Default, V: Data> : GroupBy<G, (U,V)>
     where G::Timestamp: LeastUpperBound {
     fn group_u<L, V2: Data>(&self, logic: L) -> Stream<G, ((U,V2),i32)>
-        where L: Fn(&U, &mut CollectionIterator<V>, &mut Vec<(V2, i32)>)+'static {
+        where L: Fn(&U, &mut CollectionIterator<DifferenceIterator<V>>, &mut Vec<(V2, i32)>)+'static {
             self.group_by_core(
                 |x| x,
                 |&(ref k,_)| k.as_u64(),
@@ -128,7 +127,7 @@ where G::Timestamp: LeastUpperBound {
         KH:    Fn(&K)->U+'static,                   //  partitioning function for key; should match Part.
 
         // user-defined operator logic, from a key and value iterator, populating an output vector.
-        Logic: Fn(&K, &mut CollectionIterator<V1>, &mut Vec<(V2, i32)>)+'static,
+        Logic: Fn(&K, &mut CollectionIterator<DifferenceIterator<V1>>, &mut Vec<(V2, i32)>)+'static,
 
         // function from key and output value to output data.
         Reduc: Fn(&K, &V2)->D2+'static,
@@ -145,7 +144,7 @@ where G::Timestamp: LeastUpperBound {
         V2:    Data,
         D2:    Data,
         KV:    Fn(D1)->(U,V1)+'static,
-        Logic: Fn(&U, &mut CollectionIterator<V1>, &mut Vec<(V2, i32)>)+'static,
+        Logic: Fn(&U, &mut CollectionIterator<DifferenceIterator<V1>>, &mut Vec<(V2, i32)>)+'static,
         Reduc: Fn(&U, &V2)->D2+'static,
     >
             (&self, kv: KV, reduc: Reduc, logic: Logic) -> Stream<G, (D2, i32)> {
@@ -172,7 +171,7 @@ pub trait GroupByCore<G: Scope, D1: Data> {
         KH:    Fn(&K)->U+'static,
         Look:  Lookup<K, Offset>+'static,
         LookG: Fn(u64)->Look,
-        Logic: Fn(&K, &mut CollectionIterator<V1>, &mut Vec<(V2, i32)>)+'static,
+        Logic: Fn(&K, &mut CollectionIterator<DifferenceIterator<V1>>, &mut Vec<(V2, i32)>)+'static,
         Reduc: Fn(&K, &V2)->D2+'static,
     >
     (&self, kv: KV, part: Part, key_h: KH, reduc: Reduc, look: LookG, logic: Logic) -> Stream<G, (D2, i32)>;
@@ -195,7 +194,7 @@ impl<G: Scope, D1: Data> GroupByCore<G, D1> for Stream<G, (D1, i32)> where G::Ti
         KH:    Fn(&K)->U+'static,
         Look:  Lookup<K, Offset>+'static,
         LookG: Fn(u64)->Look,
-        Logic: Fn(&K, &mut CollectionIterator<V1>, &mut Vec<(V2, i32)>)+'static,
+        Logic: Fn(&K, &mut CollectionIterator<DifferenceIterator<V1>>, &mut Vec<(V2, i32)>)+'static,
         Reduc: Fn(&K, &V2)->D2+'static,
     >
     (&self, kv: KV, part: Part, key_h: KH, reduc: Reduc, look: LookG, logic: Logic) -> Stream<G, (D2, i32)> {
@@ -217,8 +216,8 @@ impl<G: Scope, D1: Data> GroupByCore<G, D1> for Stream<G, (D1, i32)> where G::Ti
 
         // temporary storage for operator implementations to populate
         let mut buffer = vec![];
-        let mut heap1 = vec![];
-        let mut heap2 = vec![];
+        // let mut heap1 = vec![];
+        // let mut heap2 = vec![];
 
         // create an exchange channel based on the supplied Fn(&D1)->u64.
         let exch = Exchange::new(move |&(ref x,_)| part(x));
@@ -263,11 +262,15 @@ impl<G: Scope, D1: Data> GroupByCore<G, D1> for Stream<G, (D1, i32)> where G::Ti
 
                     if let Some(compact) = compact {
 
+                        let mut stash = Vec::new();
                         for key in &compact.keys {
-                            for time in source.interesting_times(key, index.clone()).iter() {
+                            stash.push(index.clone());
+                            source.interesting_times(key, &index, &mut stash);
+                            for time in &stash {
                                 let mut queue = to_do.entry_or_insert((*time).clone(), || { notificator.notify_at(time); Vec::new() });
                                 queue.push((*key).clone());
                             }
+                            stash.clear();
                         }
 
                         // add the accumulation to the trace source.
@@ -295,7 +298,7 @@ impl<G: Scope, D1: Data> GroupByCore<G, D1> for Stream<G, (D1, i32)> where G::Ti
                     for key in keys {
 
                         // acquire an iterator over the collection at `time`.
-                        let mut input = unsafe { source.get_collection_using(&key, &index, &mut heap1) };
+                        let mut input = source.get_collection(&key, &index);
 
                         // if we have some data, invoke logic to populate self.dst
                         if input.peek().is_some() { logic(&key, &mut input, &mut buffer); }
@@ -304,7 +307,7 @@ impl<G: Scope, D1: Data> GroupByCore<G, D1> for Stream<G, (D1, i32)> where G::Ti
 
                         // push differences in to Compact.
                         let mut compact = accumulation.session();
-                        for (val, wgt) in Coalesce::coalesce(unsafe { result.get_collection_using(&key, &index, &mut heap2) }
+                        for (val, wgt) in Coalesce::coalesce(result.get_collection(&key, &index)
                                                                    .map(|(v, w)| (v,-w))
                                                                    .merge_by(buffer.iter().map(|&(ref v, w)| (v, w)), |x,y| {
                                                                         x.0 <= y.0

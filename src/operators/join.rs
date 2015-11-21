@@ -3,6 +3,7 @@
 use std::default::Default;
 use std::collections::HashMap;
 
+use timely::progress::Timestamp;
 use timely::dataflow::Scope;
 use timely::dataflow::operators::Binary;
 use timely::dataflow::channels::pact::Pipeline;
@@ -10,8 +11,9 @@ use timely::drain::DrainExt;
 
 use ::{Data, Collection};
 use collection::{LeastUpperBound, Lookup, Offset};
+use collection::trace::{Traceable,TraceRef};
 use radix_sort::{Unsigned};
-use operators::arrange::{ArrangeByKey, ArrangedByKey, ArrangeBySelf, ArrangedBySelf};
+use operators::arrange::{ArrangeByKey, Arranged, ArrangeBySelf, ArrangedBySelf};
 
 /// Join implementations for `(key,val)` data.
 ///
@@ -74,17 +76,6 @@ impl<G: Scope, U: Unsigned+Data+Default, V: Data> JoinUnsigned<G, U, V> for Coll
         let arranged1 = self.arrange_by_key(|k| k.clone(), |x| (Vec::new(), x));
         let arranged2 = other.arrange_by_key(|k| k.clone(), |x| (Vec::new(), x));
         arranged1.join(&arranged2, logic)
-    // /// Matches pairs of `(key, val1)` and `(key, val2)` data based `key`.
-    // fn join_u<V2>(&self, other: &Stream<G, ((U,V2),i32)>) -> Stream<G, ((U,V,V2),i32)>
-    // where V2: Data,
-    //       G::Timestamp: LeastUpperBound+Debug {
-    //     self.join_by_core(
-    //         other, |x| x, |x| x,
-    //         |&(ref k,_)| k.as_u64(),
-    //         |&(ref k,_)| k.as_u64(),
-    //         |k| k.clone(),
-    //         |k,v1,v2| (k.clone(), v1.clone(), v2.clone()),
-    //         &|x| (Vec::new(), x))
     }
     fn semijoin(&self, other: &Collection<G, U>) -> Collection<G, (U, V)> {
         let arranged1 = self.arrange_by_key(|k| k.clone(), |x| (Vec::new(), x));
@@ -94,11 +85,15 @@ impl<G: Scope, U: Unsigned+Data+Default, V: Data> JoinUnsigned<G, U, V> for Coll
 }
 
 pub trait JoinArranged<G: Scope, K: Data, V: Data> {
-    fn join<V2: Data, L2: Lookup<K, Offset>+'static, R:  Data, RF: Fn(&K,&V,&V2)->R+'static> (
+    fn join<T2: Traceable<Key=K,Index=G::Timestamp>+'static, R:  Data, RF: Fn(&K,&V,&T2::Value)->R+'static> (
         &self,
-        stream2: &ArrangedByKey<G, K, V2, L2>,
+        stream2: &Arranged<G, T2>,
         result: RF
-    )  -> Collection<G, R>;
+    ) -> Collection<G, R>
+    where T2::Value: Data,
+    G::Timestamp: LeastUpperBound,
+    for<'a> &'a T2: TraceRef<'a, T2::Key, T2::Index, T2::Value>
+    ;
 
     fn semijoin<L2: Lookup<K, ::collection::count::Offset>+'static> (
         &self,
@@ -106,17 +101,28 @@ pub trait JoinArranged<G: Scope, K: Data, V: Data> {
     )  -> Collection<G, (K, V)>;
 }
 
-impl<G: Scope, K: Data, V: Data, L: Lookup<K, Offset>+'static> JoinArranged<G, K, V> for ArrangedByKey<G, K, V, L> where G::Timestamp : LeastUpperBound {
+impl<TS: Timestamp, G: Scope<Timestamp=TS>, T: Traceable<Index=TS>+'static> JoinArranged<G, T::Key, T::Value> for Arranged<G, T> 
+    where 
+        G::Timestamp : LeastUpperBound, 
+        T::Key: Data, 
+        T::Value: Data, 
+        for<'a> &'a T: TraceRef<'a, T::Key, T::Index, T::Value> 
+        {
     fn join<
-        V2: Data,
-        L2: Lookup<K, Offset>+'static,
+        T2: Traceable<Key=T::Key, Index=G::Timestamp>+'static,
         R:  Data,
-        RF: Fn(&K,&V,&V2)->R+'static,
-    >(
+        RF: Fn(&T::Key,&T::Value,&T2::Value)->R+'static,
+    >
+    (
         &self,
-        other: &ArrangedByKey<G, K, V2, L2>,
+        other: &Arranged<G,T2>,
         result: RF
-    ) -> Collection<G, R> {
+    ) -> Collection<G, R> 
+    where 
+        T2::Value: Data, 
+        G::Timestamp: LeastUpperBound,
+        for<'a> &'a T2: TraceRef<'a, T2::Key, T2::Index, T2::Value> 
+        {
 
 
         let mut trace1 = Some(self.trace.clone());
@@ -157,7 +163,8 @@ impl<G: Scope, K: Data, V: Data, L: Lookup<K, Offset>+'static> JoinArranged<G, K
                     if let Some((keys, cnts, vals)) = inputs1.remove_key(&time) {
                         let mut vals = vals.iter();
                         for (key, &cnt) in keys.iter().zip(cnts.iter()) {
-                            for (t, diffs) in trace.borrow().trace(key) {
+                            let borrow = trace.borrow();
+                            for (t, diffs) in borrow.trace(key) {
                                 if acknowledged.iter().any(|t2| t <= t2) {
                                     let mut output = outbuf.entry_or_insert(time.least_upper_bound(t), || Vec::new());
                                     for (ref val2, wgt2) in diffs {
@@ -180,7 +187,8 @@ impl<G: Scope, K: Data, V: Data, L: Lookup<K, Offset>+'static> JoinArranged<G, K
                     if let Some((keys, cnts, vals)) = inputs2.remove_key(&time) {
                         let mut vals = vals.iter();
                         for (key, &cnt) in keys.iter().zip(cnts.iter()) {
-                            for (t, diffs) in trace.borrow().trace(key) {
+                            let borrow = trace.borrow();
+                            for (t, diffs) in borrow.trace(key) {
                                 if acknowledged.iter().any(|t2| t <= t2) {
                                     let mut output = outbuf.entry_or_insert(time.least_upper_bound(t), || Vec::new());
                                     for (ref val1, wgt1) in diffs {
@@ -207,7 +215,7 @@ impl<G: Scope, K: Data, V: Data, L: Lookup<K, Offset>+'static> JoinArranged<G, K
         })
     }
 
-    fn semijoin<L2: Lookup<K, ::collection::count::Offset>+'static>(&self, other: &ArrangedBySelf<G, K, L2>) -> Collection<G, (K,V)> {
+    fn semijoin<L2: Lookup<T::Key, ::collection::count::Offset>+'static>(&self, other: &ArrangedBySelf<G, T::Key, L2>) -> Collection<G, (T::Key,T::Value)> {
 
         let mut trace1 = Some(self.trace.clone());
         let mut trace2 = Some(other.trace.clone());
@@ -268,7 +276,8 @@ impl<G: Scope, K: Data, V: Data, L: Lookup<K, Offset>+'static> JoinArranged<G, K
                     if let Some((keys, cnts, vals)) = inputs2.remove_key(&time) {
                         let mut vals = vals.iter();
                         for (key, &cnt) in keys.iter().zip(cnts.iter()) {
-                            for (t, diffs) in trace.borrow().trace(key) {
+                            let borrow = trace.borrow();
+                            for (t, diffs) in borrow.trace(key) {
                                 if acknowledged.iter().any(|t2| t <= t2) {
                                     let mut output = outbuf.entry_or_insert(time.least_upper_bound(t), || Vec::new());
                                     for (ref val1, wgt1) in diffs {
