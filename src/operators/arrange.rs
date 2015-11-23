@@ -21,6 +21,14 @@ use collection::count::Count;
 use collection::compact::Compact;
 use radix_sort::{RadixSorter, Unsigned};
 
+/// A collection of `(K,V)` values as a timely stream and shared trace.
+///
+/// An `Arranged` performs the task of arranging a keyed collection once, 
+/// allowing multiple differential operators to use the same trace. This 
+/// saves on computation and memory, in exchange for some cognitive overhead
+/// in writing differential operators: each must pay enough care to signals
+/// from the `stream` field to know the subset of `trace` it has logically 
+/// received.
 pub struct Arranged<G: Scope, T: Traceable<Index=G::Timestamp>> 
     where 
         T::Key: Data, 
@@ -32,6 +40,7 @@ pub struct Arranged<G: Scope, T: Traceable<Index=G::Timestamp>>
     pub trace: Rc<RefCell<T>>,
 }
 
+/// Arranges something as `(Key,Val)` pairs. 
 pub trait ArrangeByKey<G: Scope, K: Data, V: Data> where G::Timestamp: LeastUpperBound {
     fn arrange_by_key<
         U:     Unsigned+Default,
@@ -42,7 +51,6 @@ pub trait ArrangeByKey<G: Scope, K: Data, V: Data> where G::Timestamp: LeastUppe
 }
 
 impl<G: Scope, K: Data, V: Data> ArrangeByKey<G, K, V> for Collection<G, (K, V)> where G::Timestamp: LeastUpperBound {
-
     fn arrange_by_key<
         U:     Unsigned+Default,
         KH:    Fn(&K)->U+'static,
@@ -86,9 +94,6 @@ impl<G: Scope, K: Data, V: Data> ArrangeByKey<G, K, V> for Collection<G, (K, V)>
 
                 // 2a. fetch any data associated with this time.
                 if let Some(mut queue) = inputs.remove_key(&index) {
-
-                    // println!("got some data for {:?}; updating", index);
-
                     // sort things; radix if many, .sort_by if few.
                     let compact = if queue.len() > 1 {
                         for element in queue.into_iter() {
@@ -122,18 +127,19 @@ impl<G: Scope, K: Data, V: Data> ArrangeByKey<G, K, V> for Collection<G, (K, V)>
 }
 
 
-pub struct ArrangedBySelf<G: Scope, K: Data, L: Lookup<K, ::collection::count::Offset>+'static> {
-    pub stream: Stream<G, (Vec<K>, Vec<u32>, Vec<((), i32)>)>,
-    pub trace: Rc<RefCell<Count<K, G::Timestamp, L>>>,
-}
-
+/// Arranges something as `(Key,())` pairs, logically by `Key`.
+///
+/// This trait provides an optimized implementation of `ArrangeByKey` in which
+/// the underlying trace does not support dynamic numbers of values for each key,
+/// which saves on computation and memory.
 pub trait ArrangeBySelf<G: Scope, K: Data> {
     fn arrange_by_self<
         U:     Unsigned+Default,
         KH:    Fn(&K)->U+'static,
         Look:  Lookup<K, ::collection::count::Offset>+'static,
         LookG: Fn(u64)->Look,
-    >(&self, key_h: KH, look: LookG) -> ArrangedBySelf<G, K, Look>;
+    >(&self, key_h: KH, look: LookG) -> Arranged<G, Count<K, G::Timestamp, Look>>
+    where G::Timestamp: LeastUpperBound;
 }
 
 impl<G: Scope, K: Data> ArrangeBySelf<G, K> for Collection<G, K> where G::Timestamp: LeastUpperBound {
@@ -144,7 +150,8 @@ impl<G: Scope, K: Data> ArrangeBySelf<G, K> for Collection<G, K> where G::Timest
         Look:  Lookup<K, ::collection::count::Offset>+'static,
         LookG: Fn(u64)->Look,
     >
-    (&self, key_h: KH, look: LookG) -> ArrangedBySelf<G, K, Look> {
+    (&self, key_h: KH, look: LookG) -> Arranged<G, Count<K, G::Timestamp, Look>> 
+    where G::Timestamp: LeastUpperBound {
 
         let peers = self.scope().peers();
         let mut log_peers = 0;
@@ -208,6 +215,6 @@ impl<G: Scope, K: Data> ArrangeBySelf<G, K> for Collection<G, K> where G::Timest
             }
         });
 
-        ArrangedBySelf { stream: stream, trace: trace }
+        Arranged { stream: stream, trace: trace }
     }
 }

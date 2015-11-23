@@ -10,7 +10,7 @@ use timely::dataflow::*;
 use timely::dataflow::operators::*;
 
 use differential_dataflow::operators::*;
-use differential_dataflow::operators::group::{GroupUnsigned, GroupBy};
+use differential_dataflow::operators::group::{GroupUnsigned};
 use differential_dataflow::operators::join::{JoinUnsigned};
 use differential_dataflow::collection::LeastUpperBound;
 
@@ -90,9 +90,9 @@ fn _trim_and_flip<G: Scope>(graph: &Stream<G, (Edge, i32)>) -> Stream<G, (Edge, 
 where G::Timestamp: LeastUpperBound {
     graph.iterate(|edges| {
         let inner = edges.scope().enter(&graph).map_in_place(|x| x.0 = ((x.0).1, (x.0).0));
-        edges.map(|((x,_),w)| (x,w))
+        edges.map(|((x,_),w)| ((x,()),w))
               // .threshold(|&x| x, |i| (Vec::new(), i), |_, w| if w > 0 { 1 } else { 0 })
-            .group_by_u(|x|(x,()), |&x,_| (x, ()), |_,_,target| target.push(((),1)))
+            .group_u(|_,_,target| target.push(((),1)))
             .join_map_u(&inner, |&d,_,&s| (s,d))
     })
     .map_in_place(|x| x.0 = ((x.0).1, (x.0).0))

@@ -42,119 +42,264 @@ use ::{Data, Collection, Delta};
 use timely::dataflow::*;
 use timely::dataflow::operators::{Map, Unary};
 use timely::dataflow::channels::pact::Exchange;
+use timely::dataflow::channels::pact::Pipeline;
 use timely::drain::DrainExt;
+use timely::progress::Timestamp;
 
 use collection::{LeastUpperBound, Lookup, Trace, Offset};
-use collection::trace::{CollectionIterator, DifferenceIterator, Traceable};
+use collection::trace::{CollectionIterator, DifferenceIterator, Traceable, TraceRef};
 
 use iterators::coalesce::Coalesce;
 use radix_sort::{RadixSorter, Unsigned};
 // use collection::robin_hood::RHHMap;
 use collection::compact::Compact;
+use operators::arrange::{Arranged, ArrangeByKey, ArrangeBySelf};
 
 /// Extension trait for the `group` differential dataflow method
-pub trait Group<G: Scope, K: Data, V: Data> : GroupBy<G, (K,V)>
+pub trait Group<G: Scope, K: Data, V: Data>// : GroupBy<G,(K,V)>
     where G::Timestamp: LeastUpperBound {
 
     /// Groups records by their first field, and applies reduction logic to the associated values.
-    fn group<L, V2: Data>(&self, logic: L) -> Collection<G, (K,V2)>
-        where L: Fn(&K, &mut CollectionIterator<DifferenceIterator<V>>, &mut Vec<(V2, Delta)>)+'static {
-            self.group_by_core(
-                |x| x,
-                |&(ref k,_)| k.hashed(),
-                |k| k.hashed(),
-                |k,v2| ((*k).clone(), (*v2).clone()),
-                |_| HashMap::new(),//RHHMap::new(|x: &K| x.hashed() as usize),
-                logic
-            )
+    fn group<L, V2: Data>(&self, logic: L) -> Collection<G,(K,V2)>
+        where L: for<'a> Fn(
+            &K, 
+            CollectionIterator<<&'a Trace<K,G::Timestamp,V,HashMap<K,Offset>> as TraceRef<'a,K,G::Timestamp,V>>::VIterator>, 
+            &mut Vec<(V2, i32)>
+        )+'static;
+}
+
+impl<G: Scope, K: Data+Default, V: Data+Default> Group<G, K, V> for Collection<G,(K,V)>
+where G::Timestamp: LeastUpperBound { 
+
+    fn group<L, V2: Data>(&self, logic: L) -> Collection<G,(K,V2)>
+        where L: for<'a> Fn(
+            &K, 
+            CollectionIterator<<&'a Trace<K,G::Timestamp,V,HashMap<K,Offset>> as TraceRef<'a,K,G::Timestamp,V>>::VIterator>, 
+            &mut Vec<(V2, i32)>
+        )+'static {
+
+        self.arrange_by_key(|k| k.hashed(), |_| HashMap::new())
+            .group(Trace::new(HashMap::new()), logic)
     }
 }
 
-impl<G: Scope, K: Data+Default, V: Data+Default, S> Group<G, K, V> for S
-where G::Timestamp: LeastUpperBound,
-      S: GroupBy<G, (K,V)>+Map<G, ((K,V), i32)> { }
 
-
-pub trait GroupUnsigned<G: Scope, U: Unsigned+Data+Default, V: Data> : GroupBy<G, (U,V)>
+pub trait GroupUnsigned<G: Scope, U: Unsigned+Data+Default, V: Data>// : GroupBy<G, (U,V)>
     where G::Timestamp: LeastUpperBound {
-    fn group_u<L, V2: Data>(&self, logic: L) -> Stream<G, ((U,V2),i32)>
-        where L: Fn(&U, &mut CollectionIterator<DifferenceIterator<V>>, &mut Vec<(V2, i32)>)+'static {
-            self.group_by_core(
-                |x| x,
-                |&(ref k,_)| k.as_u64(),
-                |k| k.clone(),
-                |k, v| (k.clone(), (*v).clone()),
-                |x| (Vec::new(), x),
-                logic)
-    }
+    fn group_u<L, V2: Data>(&self, logic: L) -> Collection<G,(U,V2)>
+        where L: for<'a> Fn(
+            &U, 
+            CollectionIterator<<&'a Trace<U,G::Timestamp,V,(Vec<Option<Offset>>, u64)> as TraceRef<'a,U,G::Timestamp,V>>::VIterator>, 
+            &mut Vec<(V2, i32)>
+        )+'static;
 }
 
 // implement `GroupBy` for any stream implementing `Unary` and `Map` (most of them).
-impl<G: Scope, U: Unsigned+Data+Default, V: Data, S> GroupUnsigned<G, U, V> for S
-where G::Timestamp: LeastUpperBound,
-      S: GroupBy<G, (U,V)> { }
+impl<G: Scope, U: Unsigned+Data+Default, V: Data> GroupUnsigned<G, U, V> for Collection<G, (U,V)>
+where G::Timestamp: LeastUpperBound { 
 
+    fn group_u<L, V2: Data>(&self, logic: L) -> Collection<G,(U,V2)>
+        where L: for<'a> Fn(
+            &U, 
+            CollectionIterator<<&'a Trace<U,G::Timestamp,V,(Vec<Option<Offset>>, u64)> as TraceRef<'a,U,G::Timestamp,V>>::VIterator>, 
+            &mut Vec<(V2, i32)>
+        )+'static {
 
-// implement `GroupBy` for any stream implementing `Unary` and `Map` (most of them).
-impl<G: Scope, D: Data, S> GroupBy<G, D> for S
-where G::Timestamp: LeastUpperBound,
-    S: GroupByCore<G,D>+Map<G,(D,i32)> { }
+        let peers = self.scope().peers();
+        let mut log_peers = 0;
+        while (1 << (log_peers + 1)) <= peers {
+            log_peers += 1;
+        }
 
-
-/// Extension trait for the `group_by` and `group_by_u` differential dataflow methods.
-pub trait GroupBy<G: Scope, D1: Data> : GroupByCore<G, D1>+Map<G,(D1,i32)>
-where G::Timestamp: LeastUpperBound {
-
-    /// Groups input records together by key and applies a reduction function.
-    ///
-    /// `group_by` transforms a stream of records of type `D1` into a stream of records of type `D2`,
-    /// by first transforming each input record into a `(key, val): (K, V1)` pair. For each key with
-    /// some values, `logic` is invoked on the key and an value enumerator which presents `(V1, i32)`
-    /// pairs, indicating for each value its multiplicity. `logic` is expected to populate its third
-    /// argument, a `&mut Vec<(V2, i32)>` indicating multiplicities of output records. Finally, for
-    /// each `(key,val) : (K,V2)` pair produced, `reduc` is applied to produce an output `D2` record.
-    ///
-    /// This all may seem overcomplicated, and it may indeed become simpler in the future. For the
-    /// moment it is designed to allow as much programmability as possible.
-    fn group_by<
-        K:     Data,        //  type of the key
-        V1:    Data,     //  type of the input value
-        V2:    Data,     //  type of the output value
-        D2:    Data,                                //  type of the output data
-        KV:    Fn(D1)->(K,V1)+'static,              //  function from data to (key,val)
-        Part:  Fn(&D1)->u64+'static,                //  partitioning function; should match KH
-        U:     Unsigned+Default,
-        KH:    Fn(&K)->U+'static,                   //  partitioning function for key; should match Part.
-
-        // user-defined operator logic, from a key and value iterator, populating an output vector.
-        Logic: Fn(&K, &mut CollectionIterator<DifferenceIterator<V1>>, &mut Vec<(V2, i32)>)+'static,
-
-        // function from key and output value to output data.
-        Reduc: Fn(&K, &V2)->D2+'static,
-    >
-    (&self, kv: KV, part: Part, key_h: KH, reduc: Reduc, logic: Logic) -> Stream<G, (D2, i32)> {
-        self.group_by_core(kv, part, key_h, reduc, |_| HashMap::new(), logic)
+        self.arrange_by_key(|k| k.clone(), |x| (Vec::new(), x))
+            .group(Trace::new((Vec::new(), log_peers)), logic)
     }
+}
 
-    /// A specialization of the `group_by` method to the case that the key type `K` is an unsigned
-    /// integer, and the strategy for indexing by key is simply to index into a vector.
-    fn group_by_u<
-        U:     Data+Unsigned+Default,
-        V1:    Data,
-        V2:    Data,
-        D2:    Data,
-        KV:    Fn(D1)->(U,V1)+'static,
-        Logic: Fn(&U, &mut CollectionIterator<DifferenceIterator<V1>>, &mut Vec<(V2, i32)>)+'static,
-        Reduc: Fn(&U, &V2)->D2+'static,
-    >
-            (&self, kv: KV, reduc: Reduc, logic: Logic) -> Stream<G, (D2, i32)> {
-                self.map(move |(x,w)| (kv(x),w))
-                    .group_by_core(|x| x,
-                                    |&(ref k,_)| k.as_u64(),
-                                    |k| k.clone(),
-                                    reduc,
-                                    |x| (Vec::new(), x),
-                                    logic)
+
+
+// // implement `GroupBy` for any stream implementing `Unary` and `Map` (most of them).
+// impl<G: Scope, D: Data, S> GroupBy<G, D> for S
+// where G::Timestamp: LeastUpperBound,
+//     S: GroupByCore<G,D>+Map<G,(D,i32)> { }
+
+
+// /// Extension trait for the `group_by` and `group_by_u` differential dataflow methods.
+// pub trait GroupBy<G: Scope, D1: Data> : GroupByCore<G, D1>+Map<G,(D1,i32)>
+// where G::Timestamp: LeastUpperBound {
+
+//     /// Groups input records together by key and applies a reduction function.
+//     ///
+//     /// `group_by` transforms a stream of records of type `D1` into a stream of records of type `D2`,
+//     /// by first transforming each input record into a `(key, val): (K, V1)` pair. For each key with
+//     /// some values, `logic` is invoked on the key and an value enumerator which presents `(V1, i32)`
+//     /// pairs, indicating for each value its multiplicity. `logic` is expected to populate its third
+//     /// argument, a `&mut Vec<(V2, i32)>` indicating multiplicities of output records. Finally, for
+//     /// each `(key,val) : (K,V2)` pair produced, `reduc` is applied to produce an output `D2` record.
+//     ///
+//     /// This all may seem overcomplicated, and it may indeed become simpler in the future. For the
+//     /// moment it is designed to allow as much programmability as possible.
+//     fn group_by<
+//         K:     Data,        //  type of the key
+//         V1:    Data,     //  type of the input value
+//         V2:    Data,     //  type of the output value
+//         D2:    Data,                                //  type of the output data
+//         KV:    Fn(D1)->(K,V1)+'static,              //  function from data to (key,val)
+//         Part:  Fn(&D1)->u64+'static,                //  partitioning function; should match KH
+//         U:     Unsigned+Default,
+//         KH:    Fn(&K)->U+'static,                   //  partitioning function for key; should match Part.
+
+//         // user-defined operator logic, from a key and value iterator, populating an output vector.
+//         Logic: Fn(&K, &mut CollectionIterator<DifferenceIterator<V1>>, &mut Vec<(V2, i32)>)+'static,
+
+//         // function from key and output value to output data.
+//         Reduc: Fn(&K, &V2)->D2+'static,
+//     >
+//     (&self, kv: KV, part: Part, key_h: KH, reduc: Reduc, logic: Logic) -> Stream<G, (D2, i32)> {
+//         self.group_by_core(kv, part, key_h, reduc, |_| HashMap::new(), logic)
+//     }
+
+//     /// A specialization of the `group_by` method to the case that the key type `K` is an unsigned
+//     /// integer, and the strategy for indexing by key is simply to index into a vector.
+//     fn group_by_u<
+//         U:     Data+Unsigned+Default,
+//         V1:    Data,
+//         V2:    Data,
+//         D2:    Data,
+//         KV:    Fn(D1)->(U,V1)+'static,
+//         Logic: Fn(&U, &mut CollectionIterator<DifferenceIterator<V1>>, &mut Vec<(V2, i32)>)+'static,
+//         Reduc: Fn(&U, &V2)->D2+'static,
+//     >
+//             (&self, kv: KV, reduc: Reduc, logic: Logic) -> Stream<G, (D2, i32)> {
+//                 self.map(move |(x,w)| (kv(x),w))
+//                     .group_by_core(|x| x,
+//                                     |&(ref k,_)| k.as_u64(),
+//                                     |k| k.clone(),
+//                                     reduc,
+//                                     |x| (Vec::new(), x),
+//                                     logic)
+//     }
+// }
+
+
+pub trait GroupArranged<G: Scope, T: Traceable<Index=G::Timestamp>> 
+where 
+    G::Timestamp: LeastUpperBound,
+    for<'a> &'a T: TraceRef<'a,T::Key,T::Index,T::Value>, {
+    /// Matches the elements of two arranged traces.
+    ///
+    /// The arrangements must have matching keys and indices, but the values may be arbitrary.
+    fn group<T2,Logic> (&self, trace: T2, logic: Logic) -> Collection<G,(T2::Key,T2::Value)>
+    where 
+        T2: Traceable<Key=T::Key,Index=G::Timestamp>+'static,
+        for<'a> &'a T2: TraceRef<'a,T2::Key,T2::Index,T2::Value>,
+        Logic: for<'a> Fn(
+            &T::Key, 
+            CollectionIterator<<&'a T as TraceRef<'a,T::Key,T::Index,T::Value>>::VIterator>, 
+            &mut Vec<(T2::Value, i32)>
+        )+'static;
+}
+
+impl<TS,G,T> GroupArranged<G,T> for Arranged<G,T> 
+    where
+        TS: Timestamp,
+        G: Scope<Timestamp=TS>,
+        G::Timestamp: LeastUpperBound, 
+        T: Traceable<Index=TS>+'static,
+        for<'a> &'a T: TraceRef<'a,T::Key,T::Index,T::Value> {
+    fn group<T2,Logic> (&self, trace: T2, logic: Logic) -> Collection<G,(T2::Key,T2::Value)>
+    where 
+        T2: Traceable<Key=T::Key,Index=T::Index>+'static,
+        for<'a> &'a T2: TraceRef<'a,T2::Key,T2::Index,T2::Value>,
+        Logic: for<'a> Fn(
+            &T::Key, 
+            CollectionIterator<<&'a T as TraceRef<'a,T::Key,T::Index,T::Value>>::VIterator>, 
+            &mut Vec<(T2::Value, i32)>
+        )+'static {
+
+        let source = self.trace.clone();
+        let mut result = trace;
+
+        let mut inputs = Vec::new();    // A map from times to received (key, val, wgt) triples.
+        let mut to_do = Vec::new();     // A map from times to a list of keys that need processing at that time.
+        let mut buffer = vec![];        // temporary storage for operator implementations to populate
+
+        // fabricate a data-parallel operator using the `unary_notify` pattern.
+        self.stream.unary_notify(Pipeline, "Group", vec![], move |input, output, notificator| {
+
+            // read input, push all data to queues
+            while let Some((time, data)) = input.next() {
+                assert!(data.len() == 1);
+                notificator.notify_at(&time);
+                inputs.entry_or_insert(time.clone(), || data.drain_temp().next().unwrap());
+            }
+
+            // a notification means we may have input, and keys to validate.
+            while let Some((index, _count)) = notificator.next() {
+
+                // scan input keys and determine interesting times.
+                // TODO : we aren't filtering by acknowledged time, so there
+                // TODO : may be some (large?) amount of redundancy here.
+                if let Some((keys,_,_)) = inputs.remove_key(&index) {
+                    let borrow = source.borrow();
+                    let mut stash = Vec::new();
+                    for key in keys {
+                        stash.push(index.clone());
+                        borrow.interesting_times(&key, &index, &mut stash);
+                        for time in stash.drain_temp() {
+                            to_do.entry_or_insert(time, || { notificator.notify_at(&time); Vec::new() })
+                                 .push(key.clone());
+                        }
+                    }
+                }
+
+                // ensure `output == logic(input)` for keys.
+                if let Some(mut keys) = to_do.remove_key(&index) {
+
+                    let mut borrow = source.borrow_mut();
+    
+                    // we may need to produce output at index
+                    let mut session = output.session(&index);
+
+                    // the keys *must* be distinct, and should be in some order.
+                    keys.sort();    // keys.sort_by(|x,y| (key_h(&x), x).cmp(&(key_h(&y), y)));
+                    keys.dedup();
+
+                    // accumulations for installation into result
+                    let mut accumulation = Compact::new(0,0);
+
+                    for key in keys {
+
+                        // if the input is non-empty, invoke logic to populate buffer.
+                        let mut input = borrow.get_collection(&key, &index);
+                        if input.peek().is_some() { 
+                            logic(&key, input, &mut buffer);
+                            // don't trust `logic` to sort the results.
+                            buffer.sort_by(|x,y| x.0.cmp(&y.0));    
+                        }
+                        
+                        // push differences in to Compact.
+                        let mut compact = accumulation.session();
+                        for (val, wgt) in Coalesce::coalesce(
+                            result.get_collection(&key, &index)
+                                  .map(|(v, w)| (v,-w))
+                                  .merge_by(buffer.iter().map(|&(ref v, w)| (v, w)), |x,y| {
+                                      x.0 <= y.0
+                                  }))
+                        {
+                            session.give(((key.clone(), val.clone()), wgt));
+                            compact.push(val.clone(), wgt);
+                        }
+                        compact.done(key);
+                        buffer.clear();
+                    }
+
+                    if accumulation.vals.len() > 0 {
+                        result.set_difference(index.clone(), accumulation);
+                    }
+                }
+            }
+        })
     }
 }
 

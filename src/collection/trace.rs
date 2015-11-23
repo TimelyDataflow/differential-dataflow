@@ -1,19 +1,27 @@
 use std::iter::Peekable;
 
+use ::Data;
 use collection::{close_under_lub, LeastUpperBound, Lookup};
+use collection::compact::Compact;
 
 use iterators::merge::{Merge, MergeIterator};
 use iterators::coalesce::{Coalesce, CoalesceIterator};
-use collection::compact::Compact;
 
 // Test implementation which uses references rather than clones 
 
 pub trait Traceable where for<'a> &'a Self: TraceRef<'a, Self::Key, Self::Index, Self::Value> {
 
-    type Key: Ord+'static;
+    type Key: Data+Ord+'static;
     type Index: LeastUpperBound+'static;
-    type Value: Ord+'static;
+    type Value: Data+Ord+'static;
 
+    // type PartKey: Unsigned;    // the keys are partitioned and likely ordered by this unsigned integer
+
+    // // indicates the part for a key
+    // fn part(&self, key: &Self::Key) -> Self::PartKey;
+
+    // TODO : Should probably allow the trace to determine how it receives data. 
+    // TODO : Radix sorting and such might live in the trace, rather than in `Arrange`.
     /// Introduces differences in `accumulation` at `time`.
     fn set_difference(&mut self, time: Self::Index, accumulation: Compact<Self::Key, Self::Value>);
 
@@ -46,7 +54,7 @@ pub trait Traceable where for<'a> &'a Self: TraceRef<'a, Self::Key, Self::Index,
     }
 
     // TODO : Make sure the right assumptions are made about contents of stash.
-    fn interesting_times<'a>(&'a mut self, key: &Self::Key, time: &Self::Index, stash: &mut Vec<Self::Index>) {
+    fn interesting_times<'a>(&'a self, key: &Self::Key, time: &Self::Index, stash: &mut Vec<Self::Index>) {
         // add all times, but filter a bit if possible
         for iter in self.trace(key) {
             let lub = iter.0.least_upper_bound(time);
@@ -59,14 +67,14 @@ pub trait Traceable where for<'a> &'a Self: TraceRef<'a, Self::Key, Self::Index,
 }
 
 pub trait TraceRef<'a,K,T:'a,V:'a> {
-    type VIterator: Iterator<Item=(&'a V, i32)>;
-    type TIterator: Iterator<Item=(&'a T, Self::VIterator)>;
+    type VIterator: Iterator<Item=(&'a V, i32)>+'a;
+    type TIterator: Iterator<Item=(&'a T, Self::VIterator)>+'a;
     fn trace(self, key: &K) -> Self::TIterator;
 }
 
 pub type CollectionIterator<VIterator> = Peekable<CoalesceIterator<MergeIterator<VIterator>>>;
 
-impl<K,V,L,T> Traceable for Trace<K, T, V, L> where K: Ord+'static, V: Ord+'static, L: Lookup<K, Offset>+'static, T: LeastUpperBound+'static {
+impl<K,V,L,T> Traceable for Trace<K, T, V, L> where K: Data+Ord+'static, V: Data+Ord+'static, L: Lookup<K, Offset>+'static, T: LeastUpperBound+'static {
     type Key = K;
     type Index = T;
     type Value = V;
@@ -122,7 +130,7 @@ impl<K,V,L,T> Traceable for Trace<K, T, V, L> where K: Ord+'static, V: Ord+'stat
     }
 }
 
-impl<'a,K,V,L,T> TraceRef<'a,K,T,V> for &'a Trace<K,T,V,L> where K: Ord+'a, V: Ord+'a, L: Lookup<K, Offset>+'a, T: LeastUpperBound+'a {
+impl<'a,K,V,L,T> TraceRef<'a,K,T,V> for &'a Trace<K,T,V,L> where K: Data+Ord+'a, V: Data+Ord+'a, L: Lookup<K, Offset>+'a, T: LeastUpperBound+'a {
     type VIterator = DifferenceIterator<'a, V>;
     type TIterator = TraceIterator<'a,K,T,V,L>;
     fn trace(self, key: &K) -> Self::TIterator {

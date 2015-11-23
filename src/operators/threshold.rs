@@ -15,6 +15,7 @@ use radix_sort::{RadixSorter, Unsigned};
 use collection::{LeastUpperBound, Lookup};
 use collection::count::{Count, Offset};
 use collection::compact::Compact;
+use collection::trace::{Traceable};
 
 impl<G: Scope, D: Data+Default+'static, S: Unary<G, (D, i32)>> Threshold<G, D> for S where G::Timestamp: LeastUpperBound { }
 
@@ -72,12 +73,15 @@ pub trait Threshold<G: Scope, D: Data+Default+'static> : Unary<G, (D,i32)>
                         Compact::from_radix(&mut vec![vec], &|k| key2(k))
                     };
                     if let Some(compact) = compact {
-
+                        let mut stash = Vec::new();
                         for key in &compact.keys {
-                            for time in source.interesting_times(key, index.clone()).iter() {
+                            stash.push(index.clone());
+                            source.interesting_times(key, &index, &mut stash);
+                            for time in &stash {
                                 let mut queue = to_do.entry_or_insert((*time).clone(), || { notificator.notify_at(time); Vec::new() });
                                 queue.push((*key).clone());
                             }
+                            stash.clear();
                         }
 
                         source.set_difference(index.clone(), compact);
