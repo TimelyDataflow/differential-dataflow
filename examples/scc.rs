@@ -144,5 +144,5 @@ where G::Timestamp: LeastUpperBound {
 
     labels.join_map_u(&edges, |_k,l,d| (*d,*l))
           .concat(&nodes)
-          .group_u(|_, s, t| t.push((*s.peek().unwrap().0, 1)))
+          .group_u(|_, mut s, t| t.push((*s.peek().unwrap().0, 1)))
 }
