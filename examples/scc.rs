@@ -92,7 +92,6 @@ where G::Timestamp: LeastUpperBound {
         let inner = edges.scope().enter(&graph).map_in_place(|x| x.0 = ((x.0).1, (x.0).0));
         edges.map(|((x,_),w)| (x,w))
              .threshold(|&x| x, |i| (Vec::new(), i), |_,_| 1)
-            // .group_u(|_,_,target| target.push(((),1)))
              .map(|(x,w)| ((x,()),w))
              .join_map_u(&inner, |&d,_,&s| (s,d))
     })
