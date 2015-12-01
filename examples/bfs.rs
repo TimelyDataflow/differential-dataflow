@@ -60,26 +60,28 @@ fn main() {
 
         println!("stable; elapsed: {}s", time::precise_time_s() - start);
 
-        let mut changes = Vec::new();
-        for wave in 0.. {
-            for _ in 0..batch {
-                changes.push(((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), 1));
-                changes.push(((rng2.gen_range(0, nodes), rng2.gen_range(0, nodes)),-1));
-            }
-
-            let start = time::precise_time_s();
-            let round = *graph.epoch();
-            if computation.index() == 0 {
-                while let Some(change) = changes.pop() {
-                    graph.send(change);
+        if batch > 0 {
+            let mut changes = Vec::new();
+            for wave in 0.. {
+                for _ in 0..batch {
+                    changes.push(((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), 1));
+                    changes.push(((rng2.gen_range(0, nodes), rng2.gen_range(0, nodes)),-1));
                 }
-            }
-            graph.advance_to(round + 1);
 
-            while probe.le(&RootTimestamp::new(round)) { computation.step(); }
+                let start = time::precise_time_s();
+                let round = *graph.epoch();
+                if computation.index() == 0 {
+                    while let Some(change) = changes.pop() {
+                        graph.send(change);
+                    }
+                }
+                graph.advance_to(round + 1);
 
-            if computation.index() == 0 {
-                println!("wave {}: avg {}", wave, (time::precise_time_s() - start) / (batch as f64));
+                while probe.le(&RootTimestamp::new(round)) { computation.step(); }
+
+                if computation.index() == 0 {
+                    println!("wave {}: avg {}", wave, (time::precise_time_s() - start) / (batch as f64));
+                }
             }
         }
     });
