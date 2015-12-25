@@ -48,17 +48,17 @@ impl<G: Scope, D: Ord+Data+Debug> IterateExt<G, D> for Collection<G, D> {
         where G::Timestamp: LeastUpperBound,
               F: FnOnce(&Collection<Child<G, u64>, D>)->Collection<Child<G, u64>, D> {
 
-        self.scope().scoped(|subgraph| {
+        Collection::new(self.inner.scope().scoped(|subgraph| {
 
             let (feedback, cycle) = subgraph.loop_variable(u64::max(), 1);
-            let ingress = subgraph.enter(&self);
+            let ingress = subgraph.enter(&self.inner);
 
-            let bottom = logic(&ingress.concat(&cycle));
+            let bottom = logic(&Collection::new(ingress.concat(&cycle))).inner;
 
             bottom.concat(&ingress.map_in_place(|x| x.1 = -x.1))
                   .connect_loop(feedback);
 
             bottom.leave()
-        })
+        }))
     }
 }

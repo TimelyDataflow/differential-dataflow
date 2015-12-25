@@ -6,6 +6,7 @@ extern crate graph_map;
 extern crate differential_dataflow;
 
 use std::hash::Hash;
+use std::mem;
 use timely::dataflow::*;
 use timely::dataflow::operators::*;
 
@@ -42,7 +43,7 @@ fn main() {
                 })
                 .to_stream(scope);
 
-            connected_components(&edges);
+            connected_components(&Collection::new(edges));
         });
     });
 }
@@ -52,20 +53,20 @@ where G::Timestamp: LeastUpperBound+Hash {
 
     // each edge (x,y) means that we need at least a label for the min of x and y.
     let nodes = edges.map_in_place(|pair| {
-                        let min = std::cmp::min((pair.0).0, (pair.0).1);
-                        pair.0 = (min, min);
+                        let min = std::cmp::min(pair.0, pair.1);
+                        *pair = (min, min);
                      })
                      .consolidate_by(|x| x.0);
 
     // each edge should exist in both directions.
-    let edges = edges.map_in_place(|x| x.0 = ((x.0).1, (x.0).0))
+    let edges = edges.map_in_place(|x| mem::swap(&mut x.0, &mut x.1))
                      .concat(&edges);
 
     // don't actually use these labels, just grab the type
     nodes.filter(|_| false)
          .iterate(|inner| {
-             let edges = inner.scope().enter(&edges);
-             let nodes = inner.scope().enter_at(&nodes, |r| 256 * (64 - (r.0).0.leading_zeros() as u64));
+             let edges = edges.enter_into(&inner.scope());
+             let nodes = nodes.enter_into_at(&inner.scope(), |r| 256 * (64 - (r.0).0.leading_zeros() as u64));
 
             inner.join_map_u(&edges, |_k,l,d| (*d,*l))
                  .concat(&nodes)

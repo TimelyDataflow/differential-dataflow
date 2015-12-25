@@ -24,7 +24,10 @@ fn main() {
             let (edge_input, graph) = scope.new_input();
             let (node_input, roots) = scope.new_input();
 
-            let edges = graph.map(|((x,y),w)| ((y,x), w)).concat(&graph);
+            let graph = Collection::new(graph);
+            let roots = Collection::new(roots);
+
+            let edges = graph.map(|(x,y)| (y,x)).concat(&graph);
 
             let dists = bc(&edges, &roots);    // determine distances to each graph node
 
@@ -85,12 +88,12 @@ fn bc<G: Scope>(edges: &Collection<G, (u32, u32)>,
 where G::Timestamp: LeastUpperBound {
 
     // initialize roots as reaching themselves at distance 0
-    let nodes = roots.map(|(x,w)| ((x, x, x, 0), w));
+    let nodes = roots.map(|x| (x, x, x, 0));
 
     let dists = nodes.iterate(|dists| {
 
-        let edges = dists.scope().enter(&edges);
-        let nodes = dists.scope().enter(&nodes);
+        let edges = edges.enter_into(&dists.scope());
+        let nodes = nodes.enter_into(&dists.scope());
 
         dists.join_by_u(&edges, |(n,r,_,s)| (n, (r,s)), |e| e, |&n, &(r,s), &d| (d, r, n, s+1))
              .concat(&nodes)

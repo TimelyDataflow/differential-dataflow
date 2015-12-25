@@ -101,12 +101,71 @@ impl<G: Scope, U: Unsigned+Data+Default, V: Data, S> JoinUnsigned<G, U, V> for S
 where G::Timestamp: LeastUpperBound,
       S: JoinBy<G, (U,V)> { }
 
-impl<G: Scope, D1: Data+Ord, S> JoinBy<G, D1> for S
-where G::Timestamp: LeastUpperBound,
-      S: JoinByCore<G, D1>+Map<G, (D1,i32)> { }
+impl<G: Scope, D1: Data+Ord> JoinBy<G, D1> for Collection<G, D1>
+where G::Timestamp: LeastUpperBound {
+    fn join_by_u<U, V1, V2, D2, F1, F2, R, RF>
+
+        (&self, other: &Collection<G, D2>, kv1: F1, kv2: F2, result: RF) -> Collection<G, R>
+
+        where
+            U:  Unsigned+Data+Default,
+            V1: Data,
+            V2: Data,
+            D2: Data,
+            F1: Fn(D1)->(U,V1)+'static,
+            F2: Fn(D2)->(U,V2)+'static,
+            R:  Data,
+            RF: Fn(&U,&V1,&V2)->R+'static, {
+
+        self.map(kv1)
+            .join_by_core(&other.map(kv2),
+                        |x|x,
+                        |x|x,
+                        |&(ref k,_)| k.as_u64(),
+                        |&(ref k,_)| k.as_u64(),
+                        |k| k.clone(),
+                        result,
+                        &|x| (Vec::new(), x))
+    }
+
+    fn join_by<
+        K:  Data,
+        V1: Data,
+        V2: Data,
+        D2: Data,
+        F1: Fn(D1)->(K,V1)+'static,
+        F2: Fn(D2)->(K,V2)+'static,
+        U:  Unsigned+Data+Default,
+        KH: Fn(&K)->U+'static,
+        R:  Data,
+        RF: Fn(&K,&V1,&V2)->R+'static,
+    >
+        (&self, other: &Collection<G, D2>,
+        kv1: F1, kv2: F2,
+        key_h: KH, result: RF)
+    -> Collection<G, R> {
+
+        let kh1 = Rc::new(key_h);
+        let kh2 = kh1.clone();
+        let kh3 = kh1.clone();
+
+        self.map(kv1)
+            .join_by_core(
+                &other.map(kv2),
+                |x| x,
+                |x| x,
+                move |&(ref k,_)| kh1(k).as_u64(),
+                move |&(ref k,_)| kh2(k).as_u64(),
+                move |k| kh3(k),
+                result,
+                // &|_| HashMap::new()
+                &|_| RHHMap::new(|x: &K| x.hashed() as usize)
+            )
+    }
+}
 
 /// Join implementations with parameterizable key selector functions.
-pub trait JoinBy<G: Scope, D1: Data> : JoinByCore<G, D1>+Map<G, (D1,i32)> where G::Timestamp: LeastUpperBound {
+pub trait JoinBy<G: Scope, D1: Data> : JoinByCore<G, D1> where G::Timestamp: LeastUpperBound {
     /// Matches elements of two streams using unsigned integers as the keys.
     ///
     /// `join_by_u` takes a second input stream, two key-val selector functions, and a reduction
@@ -123,18 +182,8 @@ pub trait JoinBy<G: Scope, D1: Data> : JoinByCore<G, D1>+Map<G, (D1,i32)> where 
             F1: Fn(D1)->(U,V1)+'static,
             F2: Fn(D2)->(U,V2)+'static,
             R:  Data,
-            RF: Fn(&U,&V1,&V2)->R+'static, {
+            RF: Fn(&U,&V1,&V2)->R+'static;
 
-        self.map(move |(x,w)| (kv1(x),w))
-            .join_by_core(&other.map(move |(x,w)| (kv2(x),w)),
-                        |x|x,
-                        |x|x,
-                        |&(ref k,_)| k.as_u64(),
-                        |&(ref k,_)| k.as_u64(),
-                        |k| k.clone(),
-                        result,
-                        &|x| (Vec::new(), x))
-    }
     /// Restricts the input stream to those elements whose unsigned integer key is present in the
     /// second stream.
     ///
@@ -169,25 +218,7 @@ pub trait JoinBy<G: Scope, D1: Data> : JoinByCore<G, D1>+Map<G, (D1,i32)> where 
         (&self, other: &Collection<G, D2>,
         kv1: F1, kv2: F2,
         key_h: KH, result: RF)
-    -> Collection<G, R> {
-
-        let kh1 = Rc::new(key_h);
-        let kh2 = kh1.clone();
-        let kh3 = kh1.clone();
-
-        self.map(move |(x,w)| (kv1(x),w))
-            .join_by_core(
-                &other.map(move |(x,w)| (kv2(x),w)),
-                |x| x,
-                |x| x,
-                move |&(ref k,_)| kh1(k).as_u64(),
-                move |&(ref k,_)| kh2(k).as_u64(),
-                move |k| kh3(k),
-                result,
-                // &|_| HashMap::new()
-                &|_| RHHMap::new(|x: &K| x.hashed() as usize)
-            )
-    }
+    -> Collection<G, R>;
 
     /// Restricts the input stream to those elements whose key is present in the second stream.
     fn semijoin_by<
@@ -263,7 +294,7 @@ impl<G: Scope, D1: Data> JoinByCore<G, D1> for Collection<G, D1> where G::Timest
         // TODO : pay more attention to the number of peers
         // TODO : find a better trait to sub-trait so we can read .builder
         // assert!(self.builder.peers() == 1);
-        let peers = self.scope().peers();
+        let peers = self.inner.scope().peers();
         let mut log_peers = 0;
         while (1 << (log_peers + 1)) <= peers {
             log_peers += 1;
@@ -284,7 +315,7 @@ impl<G: Scope, D1: Data> JoinByCore<G, D1> for Collection<G, D1> where G::Timest
         let mut sorter1 = RadixSorter::new();
         let mut sorter2 = RadixSorter::new();
 
-        self.binary_notify(stream2, exch1, exch2, "Join", vec![], move |input1, input2, output, notificator| {
+        Collection::new(self.inner.binary_notify(&stream2.inner, exch1, exch2, "Join", vec![], move |input1, input2, output, notificator| {
 
             // consider shutting down each trace if the opposing input has closed out
             if trace2.is_some() && notificator.frontier(0).len() == 0 && inputs1.len() == 0 { trace2 = None; }
@@ -390,7 +421,7 @@ impl<G: Scope, D1: Data> JoinByCore<G, D1> for Collection<G, D1> where G::Timest
                 //     output.session(&time).give_iterator(vals.drain_temp());
                 // }
             }
-        })
+        }))
     }
 }
 

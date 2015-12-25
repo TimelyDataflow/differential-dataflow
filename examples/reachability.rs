@@ -33,7 +33,7 @@ fn main() {
         let (mut graph, mut roots, probe) = computation.scoped(|scope| {
             let (root_input, roots) = scope.new_input();
             let (edge_input, graph) = scope.new_input();
-            let probe = reach(&graph, &roots).probe().0;
+            let probe = reach(&Collection::new(graph), &Collection::new(roots)).probe().0;
             (edge_input, root_input, probe)
         });
 
@@ -104,12 +104,12 @@ fn main() {
 fn reach<G: Scope>(edges: &Collection<G, Edge>, roots: &Collection<G, Node>) -> Collection<G, (Node, Node)>
 where G::Timestamp: LeastUpperBound {
 
-    let roots = roots.map(|(x,w)| ((x,x),w));
+    let roots = roots.map(|x| (x,x));
 
     roots.iterate(|inner| {
 
-        let edges = inner.scope().enter(&edges);
-        let roots = inner.scope().enter(&roots);
+        let edges = edges.enter_into(&inner.scope());
+        let roots = roots.enter_into(&inner.scope());
 
         inner.join_map(&edges, |_k,&l,&d| (d, l))
              .concat(&roots)

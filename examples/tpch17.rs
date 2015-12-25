@@ -17,6 +17,7 @@ use timely::drain::DrainExt;
 use timely::progress::timestamp::RootTimestamp;
 use timely::dataflow::channels::pact::Pipeline;
 
+use differential_dataflow::Collection;
 use differential_dataflow::operators::group::GroupBy;
 use differential_dataflow::operators::join::JoinBy;
 
@@ -42,9 +43,12 @@ fn main() {
             let (part_input, parts) = builder.new_input::<((u32, String, String), i32)>();
             let (item_input, items) = builder.new_input::<((u32, u32, u64), i32)>();
 
+            let parts = Collection::new(parts);
+            let items = Collection::new(items);
+
             // filter parts by brand and container
-            let parts = parts.filter(|x| (x.0).1 == "Brand#23" && (x.0).2 == "MED BOX")
-                             .map(|((key, _, _), wgt)| (key, wgt));
+            let parts = parts.filter(|x| x.1 == "Brand#23" && x.2 == "MED BOX")
+                             .map(|(key, _, _)| key);
 
             // restrict lineitems to those of the relevant part
             let items = items.join_by_u(&parts, |x| (x.0, (x.1,x.2)), |y| (y,()), |k,x,_| (*k,x.0,x.1));
@@ -62,8 +66,9 @@ fn main() {
 
             // join items against their averages, filter by quantity, remove filter coordinate
             items.join_by_u(&average, |x| (x.0, (x.1, x.2)), |y| y, |k, x, f| (*k, x.0, x.1, *f))
-                 .filter(|&((_, q, _, avg),_)| q < avg / 5)
-                 .map(|((key,_,price,_), wgt)| ((key,price), wgt))
+                 .filter(|&(_, q, _, avg)| q < avg / 5)
+                 .map(|(key, _, price, _)| (key, price))
+                 .inner
                  .unary_notify::<u32, _, _>(Pipeline, "Subscribe", vec![RootTimestamp::new(0)], move |i,_,n| {
                      while let Some(_) = i.next() { }
                      for (time,_) in n.next() {

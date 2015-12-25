@@ -48,14 +48,14 @@ impl<G: Scope, D: Ord+Data+Debug> ConsolidateExt<D> for Collection<G, D> {
     fn consolidate(&self) -> Self {
        self.consolidate_by(|x| x.hashed())
     }
-    fn consolidate_by<U: Unsigned, F: Fn(&D)->U+'static>(&self, part: F) -> Self {
 
+    fn consolidate_by<U: Unsigned, F: Fn(&D)->U+'static>(&self, part: F) -> Self {
         let mut inputs = Vec::new();    // Vec<(G::Timestamp, Vec<(D, i32))>
         let part1 = Rc::new(part);
         let part2 = part1.clone();
 
         let exch = Exchange::new(move |&(ref x,_)| (*part1)(x).as_u64());
-        self.unary_notify(exch, "Consolidate", vec![], move |input, output, notificator| {
+        Collection::new(self.inner.unary_notify(exch, "Consolidate", vec![], move |input, output, notificator| {
 
             // input.for_each(|index: &G::Timestamp, data: &mut Content<(D, i32)>| {
             while let Some((index, data)) = input.next() {
@@ -96,6 +96,6 @@ impl<G: Scope, D: Ord+Data+Debug> ConsolidateExt<D> for Collection<G, D> {
                 }
             }
             // });
-        })
+        }))
     }
 }
