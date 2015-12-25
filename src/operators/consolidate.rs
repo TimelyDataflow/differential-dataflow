@@ -30,7 +30,7 @@ use collection::Lookup;
 use iterators::coalesce::Coalesce;
 use radix_sort::{RadixSorter, Unsigned};
 
-use ::Data;
+use ::{Collection, Data};
 
 use timely::drain::DrainExt;
 
@@ -44,7 +44,7 @@ pub trait ConsolidateExt<D: Data> {
     fn consolidate_by<U: Unsigned, F: Fn(&D)->U+'static>(&self, part: F) -> Self;
 }
 
-impl<G: Scope, D: Ord+Data+Debug> ConsolidateExt<D> for Stream<G, (D, i32)> {
+impl<G: Scope, D: Ord+Data+Debug> ConsolidateExt<D> for Collection<G, D> {
     fn consolidate(&self) -> Self {
        self.consolidate_by(|x| x.hashed())
     }

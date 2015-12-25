@@ -8,6 +8,7 @@ use rand::{Rng, SeedableRng, StdRng};
 use timely::dataflow::*;
 use timely::dataflow::operators::*;
 
+use differential_dataflow::Collection;
 use differential_dataflow::collection::LeastUpperBound;
 use differential_dataflow::operators::*;
 use differential_dataflow::operators::join::JoinBy;
@@ -78,9 +79,9 @@ fn main() {
 
 // returns pairs (n, (r, b, s)) indicating node n can be reached from root r by b in s steps.
 // one pair for each shortest path (so, this number can get quite large, but it is in binary)
-fn bc<G: Scope>(edges: &Stream<G, ((u32, u32), i32)>,
-                       roots: &Stream<G, (u32 ,i32)>)
-                            -> Stream<G, ((u32, u32, u32, u32), i32)>
+fn bc<G: Scope>(edges: &Collection<G, (u32, u32)>,
+                       roots: &Collection<G, u32>)
+                            -> Collection<G, (u32, u32, u32, u32)>
 where G::Timestamp: LeastUpperBound {
 
     // initialize roots as reaching themselves at distance 0

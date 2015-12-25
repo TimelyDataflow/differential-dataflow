@@ -9,7 +9,7 @@ use timely::dataflow::*;
 use timely::dataflow::operators::*;
 use timely::progress::timestamp::RootTimestamp;
 
-use differential_dataflow::Data;
+use differential_dataflow::{Collection, Data};
 use differential_dataflow::operators::*;
 use differential_dataflow::collection::LeastUpperBound;
 use differential_dataflow::collection::robin_hood::RHHMap;
@@ -101,7 +101,7 @@ fn main() {
 }
 
 // returns pairs (n, s) indicating node n can be reached from a root in s steps.
-fn reach<G: Scope>(edges: &Stream<G, (Edge, i32)>, roots: &Stream<G, (Node, i32)>) -> Stream<G, ((Node, Node), i32)>
+fn reach<G: Scope>(edges: &Collection<G, Edge>, roots: &Collection<G, Node>) -> Collection<G, (Node, Node)>
 where G::Timestamp: LeastUpperBound {
 
     let roots = roots.map(|(x,w)| ((x,x),w));

@@ -9,6 +9,7 @@ use rand::{Rng, SeedableRng, StdRng};
 use timely::dataflow::*;
 use timely::dataflow::operators::*;
 
+use differential_dataflow::Collection;
 use differential_dataflow::operators::*;
 use differential_dataflow::operators::group::{GroupUnsigned, GroupBy};
 use differential_dataflow::operators::join::{JoinUnsigned, JoinBy};
@@ -86,7 +87,7 @@ fn main() {
     });
 }
 
-fn _trim_and_flip<G: Scope>(graph: &Stream<G, (Edge, i32)>) -> Stream<G, (Edge, i32)>
+fn _trim_and_flip<G: Scope>(graph: &Collection<G, Edge>) -> Collection<G, Edge>
 where G::Timestamp: LeastUpperBound {
         graph.iterate(|edges| {
                  let inner = edges.scope().enter(&graph);
@@ -98,7 +99,7 @@ where G::Timestamp: LeastUpperBound {
              .map_in_place(|x| x.0 = ((x.0).1, (x.0).0))
 }
 
-fn _strongly_connected<G: Scope>(graph: &Stream<G, (Edge, i32)>) -> Stream<G, (Edge, i32)>
+fn _strongly_connected<G: Scope>(graph: &Collection<G, Edge>) -> Collection<G, Edge>
 where G::Timestamp: LeastUpperBound+Hash {
     graph.iterate(|inner| {
         let edges = inner.scope().enter(&graph);
@@ -107,8 +108,8 @@ where G::Timestamp: LeastUpperBound+Hash {
     })
 }
 
-fn _trim_edges<G: Scope>(cycle: &Stream<G, (Edge, i32)>, edges: &Stream<G, (Edge, i32)>)
-    -> Stream<G, (Edge, i32)> where G::Timestamp: LeastUpperBound+Hash {
+fn _trim_edges<G: Scope>(cycle: &Collection<G, Edge>, edges: &Collection<G, Edge>)
+    -> Collection<G, Edge> where G::Timestamp: LeastUpperBound+Hash {
 
     let nodes = edges.map_in_place(|x| (x.0).0 = (x.0).1)
                      .consolidate_by(|&x| x.0);
@@ -122,7 +123,7 @@ fn _trim_edges<G: Scope>(cycle: &Stream<G, (Edge, i32)>, edges: &Stream<G, (Edge
         //  .consolidate_by(|x| x.0)
 }
 
-fn _reachability<G: Scope>(edges: &Stream<G, (Edge, i32)>, nodes: &Stream<G, ((Node, Node), i32)>) -> Stream<G, (Edge, i32)>
+fn _reachability<G: Scope>(edges: &Collection<G, Edge>, nodes: &Collection<G, (Node, Node)>) -> Collection<G, Edge>
 where G::Timestamp: LeastUpperBound+Hash {
 
     edges.filter(|_| false)
@@ -135,10 +136,10 @@ where G::Timestamp: LeastUpperBound+Hash {
         //  .consolidate_by(|x| x.0)
 }
 
-fn _improve_labels<G: Scope>(labels: &Stream<G, ((Node, Node), i32)>,
-                                   edges: &Stream<G, (Edge, i32)>,
-                                   nodes: &Stream<G, ((Node, Node), i32)>)
-    -> Stream<G, ((Node, Node), i32)>
+fn _improve_labels<G: Scope>(labels: &Collection<G, (Node, Node)>,
+                                   edges: &Collection<G, Edge>,
+                                   nodes: &Collection<G, (Node, Node)>)
+    -> Collection<G, (Node, Node)>
 where G::Timestamp: LeastUpperBound {
 
     labels.join_map_u(&edges, |_k,l,d| (*d,*l))

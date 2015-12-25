@@ -38,7 +38,7 @@ use std::ops::DerefMut;
 
 use itertools::Itertools;
 
-use ::Data;
+use ::{Collection, Data};
 use timely::dataflow::*;
 use timely::dataflow::operators::{Map, Binary};
 use timely::dataflow::channels::pact::Exchange;
@@ -59,7 +59,7 @@ where G::Timestamp: LeastUpperBound,
 pub trait CoGroupBy<G: Scope, K: Data, V1: Data> : Binary<G, ((K,V1), i32)>+Map<G, ((K,V1), i32)>
 where G::Timestamp: LeastUpperBound {
 
-    /// A primitive binary version of `group_by`, which acts on a `Stream<((K,V1),i32)` and a `Stream<((K,V2),i32)`.
+    /// A primitive binary version of `group_by`, which acts on a `Collection<G, (K, V1)>` and a `Collection<G, (K, V2)>`.
     ///
     /// The two streams must already be key-value pairs, which is too bad. Also, in addition to the
     /// normal arguments (another stream, a hash for the key, a reduction function, and per-key logic),
@@ -78,7 +78,7 @@ where G::Timestamp: LeastUpperBound {
         Logic: Fn(&K, &mut CollectionIterator<V1>, &mut CollectionIterator<V2>, &mut Vec<(V3, i32)>)+'static,
         Reduc: Fn(&K, &V3)->D+'static,
     >
-    (&self, other: &Stream<G, ((K,V2),i32)>, key_h: KH, reduc: Reduc, look: LookG, logic: Logic) -> Stream<G, (D, i32)> {
+    (&self, other: &Collection<G, (K, V2)>, key_h: KH, reduc: Reduc, look: LookG, logic: Logic) -> Collection<G, D> {
 
         let mut source1 = Trace::new(look(0));
         let mut source2 = Trace::new(look(0));

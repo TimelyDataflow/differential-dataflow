@@ -78,7 +78,7 @@ where G::Timestamp: LeastUpperBound,
 
 pub trait GroupUnsigned<G: Scope, U: Unsigned+Data+Default, V: Data> : GroupBy<G, (U,V)>
     where G::Timestamp: LeastUpperBound {
-    fn group_u<L, V2: Data>(&self, logic: L) -> Stream<G, ((U,V2),i32)>
+    fn group_u<L, V2: Data>(&self, logic: L) -> Collection<G, (U, V2)>
         where L: Fn(&U, &mut CollectionIterator<V>, &mut Vec<(V2, i32)>)+'static {
             self.group_by_core(
                 |x| x,
@@ -133,7 +133,7 @@ where G::Timestamp: LeastUpperBound {
         // function from key and output value to output data.
         Reduc: Fn(&K, &V2)->D2+'static,
     >
-    (&self, kv: KV, part: Part, key_h: KH, reduc: Reduc, logic: Logic) -> Stream<G, (D2, i32)> {
+    (&self, kv: KV, part: Part, key_h: KH, reduc: Reduc, logic: Logic) -> Collection<G, D2> {
         self.group_by_core(kv, part, key_h, reduc, |_| HashMap::new(), logic)
     }
 
@@ -148,7 +148,7 @@ where G::Timestamp: LeastUpperBound {
         Logic: Fn(&U, &mut CollectionIterator<V1>, &mut Vec<(V2, i32)>)+'static,
         Reduc: Fn(&U, &V2)->D2+'static,
     >
-            (&self, kv: KV, reduc: Reduc, logic: Logic) -> Stream<G, (D2, i32)> {
+            (&self, kv: KV, reduc: Reduc, logic: Logic) -> Collection<G, D2> {
                 self.map(move |(x,w)| (kv(x),w))
                     .group_by_core(|x| x,
                                     |&(ref k,_)| k.as_u64(),
@@ -175,11 +175,11 @@ pub trait GroupByCore<G: Scope, D1: Data> {
         Logic: Fn(&K, &mut CollectionIterator<V1>, &mut Vec<(V2, i32)>)+'static,
         Reduc: Fn(&K, &V2)->D2+'static,
     >
-    (&self, kv: KV, part: Part, key_h: KH, reduc: Reduc, look: LookG, logic: Logic) -> Stream<G, (D2, i32)>;
+    (&self, kv: KV, part: Part, key_h: KH, reduc: Reduc, look: LookG, logic: Logic) -> Collection<G, D2>;
 
 }
 
-impl<G: Scope, D1: Data> GroupByCore<G, D1> for Stream<G, (D1, i32)> where G::Timestamp: LeastUpperBound {
+impl<G: Scope, D1: Data> GroupByCore<G, D1> for Collection<G, D1> where G::Timestamp: LeastUpperBound {
 
     /// The lowest level `group*` implementation, which is parameterized by the type of storage to
     /// use for mapping keys `K` to `Offset`, an internal `CollectionTrace` type. This method should
@@ -198,7 +198,7 @@ impl<G: Scope, D1: Data> GroupByCore<G, D1> for Stream<G, (D1, i32)> where G::Ti
         Logic: Fn(&K, &mut CollectionIterator<V1>, &mut Vec<(V2, i32)>)+'static,
         Reduc: Fn(&K, &V2)->D2+'static,
     >
-    (&self, kv: KV, part: Part, key_h: KH, reduc: Reduc, look: LookG, logic: Logic) -> Stream<G, (D2, i32)> {
+    (&self, kv: KV, part: Part, key_h: KH, reduc: Reduc, look: LookG, logic: Logic) -> Collection<G, D2> {
 
         // A pair of source and result `CollectionTrace` instances.
         // TODO : The hard-coded 0 means we don't know how many bits we can shave off of each int

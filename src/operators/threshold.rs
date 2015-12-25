@@ -4,7 +4,7 @@ use std::default::Default;
 
 use itertools::Itertools;
 
-use ::Data;
+use ::{Collection, Data};
 use timely::dataflow::*;
 use timely::dataflow::operators::{Map, Unary};
 use timely::dataflow::channels::pact::Exchange;
@@ -27,7 +27,7 @@ pub trait Threshold<G: Scope, D: Data+Default+'static> : Unary<G, (D,i32)>
         KeyH: Fn(&D)->U+'static,
         Look:  Lookup<D, Offset>+'static,
         LookG: Fn(u64)->Look+'static,
-        >(&self, key_h: KeyH, look: LookG, function: F) -> Stream<G, (D, i32)> {
+        >(&self, key_h: KeyH, look: LookG, function: F) -> Collection<G, D> {
 
         let mut source = Count::new(look(0));
         let mut result = Count::new(look(0));

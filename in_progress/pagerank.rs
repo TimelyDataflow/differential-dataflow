@@ -13,6 +13,7 @@
 //
 // use rand::{Rng, SeedableRng, StdRng};
 //
+// use differential_dataflow::Collection;
 // use differential_dataflow::collection_trace::lookup::UnsignedInt;
 // use differential_dataflow::collection_trace::LeastUpperBound;
 //
@@ -109,7 +110,7 @@ fn main() {
 //             computation.step(); // shut down
 }
 //
-// fn pagerank<G: GraphBuilder, U: UnsignedInt>(edges: &Stream<G, ((U, U), i32)>) -> Stream<G, (U, i32)>
+// fn pagerank<G: GraphBuilder, U: UnsignedInt>(edges: &Collection<G, (U, U)>) -> Collection<G, U>
 // where G::Timestamp: LeastUpperBound+Hash {
 //
 //     let degrs = edges.map(|(x,w)| (x.0,w))

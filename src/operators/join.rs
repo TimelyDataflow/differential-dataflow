@@ -9,7 +9,7 @@ use std::rc::Rc;
 use std::ops::DerefMut;
 
 use ::{Data, Collection};
-use timely::dataflow::{Stream, Scope};
+use timely::dataflow::Scope;
 use timely::dataflow::operators::{Map, Binary};
 use timely::dataflow::channels::pact::Exchange;
 use timely::drain::DrainExt;
@@ -61,7 +61,7 @@ pub trait Join<G: Scope, K: Data, V: Data> : JoinBy<G, (K,V)> where G::Timestamp
         )
     }
     /// Matches pairs of `(key,val1)` and `(key,val2)` records based on `key` and applies a reduction function.
-    fn join_map<V2: Data, D: Data, R>(&self, other: &Stream<G, ((K,V2),i32)>, logic: R) -> Stream<G, (D,i32)>
+    fn join_map<V2: Data, D: Data, R>(&self, other: &Collection<G, (K, V2)>, logic: R) -> Collection<G, D>
     where R: Fn(&K, &V, &V2)->D+'static {
         self.join_by_core(other, |x| x, |x| x, |&(ref k,_)| k.hashed(), |&(ref k,_)| k.hashed(), |k| k.hashed(), logic, &|_| HashMap::new())
     }
@@ -75,7 +75,7 @@ where G::Timestamp: LeastUpperBound, S: JoinBy<G, (K,V)> { }
 pub trait JoinUnsigned<G: Scope, U: Unsigned+Data+Default, V: Data> : JoinBy<G, (U,V)> where G::Timestamp: LeastUpperBound {
 
     /// Matches pairs of `(key, val1)` and `(key, val2)` data based `key`.
-    fn join_u<V2>(&self, other: &Stream<G, ((U,V2),i32)>) -> Stream<G, ((U,V,V2),i32)>
+    fn join_u<V2>(&self, other: &Collection<G, (U, V2)>) -> Collection<G, (U, V, V2)>
     where V2: Data,
           G::Timestamp: LeastUpperBound+Debug {
         self.join_by_core(
@@ -87,7 +87,7 @@ pub trait JoinUnsigned<G: Scope, U: Unsigned+Data+Default, V: Data> : JoinBy<G, 
             &|x| (Vec::new(), x))
     }
     /// Matches pairs of `(key,val1)` and `(key,val2)` records based on `key` and applies a reduction function.
-    fn join_map_u<V2, D, R>(&self, other: &Stream<G, ((U,V2),i32)>, logic: R) -> Stream<G, (D,i32)>
+    fn join_map_u<V2, D, R>(&self, other: &Collection<G, (U, V2)>, logic: R) -> Collection<G, D>
     where V2: Data,
           D: Data,
           R: Fn(&U, &V, &V2)->D+'static,
@@ -113,7 +113,7 @@ pub trait JoinBy<G: Scope, D1: Data> : JoinByCore<G, D1>+Map<G, (D1,i32)> where 
     /// function from an unsigned integer (the key) and two value references to the output type.
     fn join_by_u<U, V1, V2, D2, F1, F2, R, RF>
 
-        (&self, other: &Stream<G, (D2, i32)>, kv1: F1, kv2: F2, result: RF) -> Stream<G, (R, i32)>
+        (&self, other: &Collection<G, D2>, kv1: F1, kv2: F2, result: RF) -> Collection<G, R>
 
         where
             U:  Unsigned+Data+Default,
@@ -148,7 +148,7 @@ pub trait JoinBy<G: Scope, D1: Data> : JoinByCore<G, D1>+Map<G, (D1,i32)> where 
         F1: Fn(D1)->(U,V1)+'static,
         RF: Fn(&U,&V1)->D1+'static,
     >
-        (&self, other: &Stream<G, (U, i32)>, kv1: F1, result: RF) -> Stream<G, (D1, i32)> {
+        (&self, other: &Collection<G, U>, kv1: F1, result: RF) -> Collection<G, D1> {
 
         self.join_by_u(&other, kv1, |u| (u, ()), move |x,y,_| result(x,y))
     }
@@ -166,10 +166,10 @@ pub trait JoinBy<G: Scope, D1: Data> : JoinByCore<G, D1>+Map<G, (D1,i32)> where 
         R:  Data,
         RF: Fn(&K,&V1,&V2)->R+'static,
     >
-        (&self, other: &Stream<G, (D2, i32)>,
+        (&self, other: &Collection<G, D2>,
         kv1: F1, kv2: F2,
         key_h: KH, result: RF)
-    -> Stream<G, (R, i32)> {
+    -> Collection<G, R> {
 
         let kh1 = Rc::new(key_h);
         let kh2 = kh1.clone();
@@ -197,10 +197,10 @@ pub trait JoinBy<G: Scope, D1: Data> : JoinByCore<G, D1>+Map<G, (D1,i32)> where 
         KH: Fn(&K)->u64+'static,
         RF: Fn(&K,&V1)->D1+'static,
     >
-        (&self, other: &Stream<G, (K, i32)>,
+        (&self, other: &Collection<G, K>,
         kv1: F1,
         key_h: KH, result: RF)
-    -> Stream<G, (D1, i32)> {
+    -> Collection<G, D1> {
         self.join_by(&other, kv1, |k| (k,()), key_h, move |x,y,_| result(x,y))
     }
 }
@@ -223,17 +223,17 @@ pub trait JoinByCore<G: Scope, D1: Data> {
         GC: Fn(u64)->LC,
     >
             (&self,
-             stream2: &Stream<G, (D2, i32)>,
+             stream2: &Collection<G, D2>,
              kv1: F1,
              kv2: F2,
              part1: H1,
              part2: H2,
              key_h: KH,
              result: RF,
-             look:  &GC)  -> Stream<G, (R, i32)>;
+             look:  &GC)  -> Collection<G, R>;
 }
 
-impl<G: Scope, D1: Data> JoinByCore<G, D1> for Stream<G, (D1, i32)> where G::Timestamp: LeastUpperBound {
+impl<G: Scope, D1: Data> JoinByCore<G, D1> for Collection<G, D1> where G::Timestamp: LeastUpperBound {
     fn join_by_core<
         K:  Data,
         V1: Data,
@@ -251,14 +251,14 @@ impl<G: Scope, D1: Data> JoinByCore<G, D1> for Stream<G, (D1, i32)> where G::Tim
         GC: Fn(u64)->LC,
     >
             (&self,
-             stream2: &Stream<G, (D2, i32)>,
+             stream2: &Collection<G, D2>,
              kv1: F1,
              kv2: F2,
              part1: H1,
              part2: H2,
              key_h: KH,
              result: RF,
-             look:  &GC)  -> Stream<G, (R, i32)> {
+             look:  &GC)  -> Collection<G, R> {
 
         // TODO : pay more attention to the number of peers
         // TODO : find a better trait to sub-trait so we can read .builder

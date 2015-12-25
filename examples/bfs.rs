@@ -9,6 +9,7 @@ use timely::progress::timestamp::RootTimestamp;
 
 use rand::{Rng, SeedableRng, StdRng};
 
+use differential_dataflow::Collection;
 use differential_dataflow::operators::*;
 use differential_dataflow::operators::join::JoinUnsigned;
 use differential_dataflow::operators::group::GroupUnsigned;
@@ -88,7 +89,7 @@ fn main() {
 }
 
 // returns pairs (n, s) indicating node n can be reached from a root in s steps.
-fn bfs<G: Scope>(edges: &Stream<G, (Edge, i32)>, roots: &Stream<G, (Node, i32)>) -> Stream<G, ((Node, u32), i32)>
+fn bfs<G: Scope>(edges: &Collection<G, Edge>, roots: &Collection<G, Node>) -> Collection<G, (Node, u32)>
 where G::Timestamp: LeastUpperBound {
 
     // initialize roots as reaching themselves at distance 0
