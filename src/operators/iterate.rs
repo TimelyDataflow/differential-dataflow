@@ -51,7 +51,7 @@ impl<G: Scope, D: Ord+Data+Debug> IterateExt<G, D> for Collection<G, D> {
         Collection::new(self.inner.scope().scoped(|subgraph| {
 
             let (feedback, cycle) = subgraph.loop_variable(u64::max(), 1);
-            let ingress = subgraph.enter(&self.inner);
+            let ingress = self.inner.enter(subgraph);
 
             let bottom = logic(&Collection::new(ingress.concat(&cycle))).inner;
 

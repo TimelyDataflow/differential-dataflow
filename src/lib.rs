@@ -77,7 +77,7 @@
 //!         let limit = start.iterate(|dists| {
 //!
 //!             // bring the invariant edges into the loop
-//!             let edges = dists.builder().enter(&edges);
+//!             let edges = edges.enter(&dists.scope());
 //!
 //!             // join current distances with edges to get +1 distances,
 //!             // include the current distances in the set as well,

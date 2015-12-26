@@ -123,8 +123,8 @@ fn main() {
 //     edges.group_by_u(|x| (x.0,()), |k,_| *k, |_,_,t| { t.push(((), 10000)) })
 //          .iterate(u32::max_value(), |||x| *x, |ranks| {
 //
-//              let degrs = ranks.builder().enter(&degrs);
-//              let edges = ranks.builder().enter(&edges);
+//              let degrs = degrs.enter(&ranks.scope());
+//              let edges = edges.enter(&ranks.scope());
 //
 //              // pair surfers with the out-degree of their location
 //              ranks.join_u(&degrs, |n| (n,()), |nc| nc, |n,_,c| (*n,*c))
