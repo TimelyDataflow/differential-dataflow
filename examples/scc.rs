@@ -112,7 +112,7 @@ where G::Timestamp: LeastUpperBound+Hash {
 fn _trim_edges<G: Scope>(cycle: &Collection<G, Edge>, edges: &Collection<G, Edge>)
     -> Collection<G, Edge> where G::Timestamp: LeastUpperBound+Hash {
 
-    let nodes = edges.map_in_place(|x| mem::swap(&mut x.0, &mut x.1))
+    let nodes = edges.map_in_place(|x| x.0 = x.1)
                      .consolidate_by(|&x| x.0);
 
     let labels = _reachability(&cycle, &nodes);
