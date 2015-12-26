@@ -78,7 +78,7 @@ where G::Timestamp: LeastUpperBound,
 
 pub trait GroupUnsigned<G: Scope, U: Unsigned+Data+Default, V: Data> : GroupBy<G, (U,V)>
     where G::Timestamp: LeastUpperBound {
-    fn group_u<L, V2: Data>(&self, logic: L) -> Stream<G, ((U,V2),i32)>
+    fn group_u<L, V2: Data>(&self, logic: L) -> Collection<G, (U, V2)>
         where L: Fn(&U, &mut CollectionIterator<V>, &mut Vec<(V2, i32)>)+'static {
             self.group_by_core(
                 |x| x,
@@ -96,14 +96,32 @@ where G::Timestamp: LeastUpperBound,
       S: GroupBy<G, (U,V)> { }
 
 
-// implement `GroupBy` for any stream implementing `Unary` and `Map` (most of them).
-impl<G: Scope, D: Data, S> GroupBy<G, D> for S
-where G::Timestamp: LeastUpperBound,
-    S: GroupByCore<G,D>+Map<G,(D,i32)> { }
+// implement `GroupBy` for any collection.
+impl<G: Scope, D1: Data> GroupBy<G, D1> for Collection<G, D1>
+where G::Timestamp: LeastUpperBound {
+    fn group_by_u<
+        U:     Data+Unsigned+Default,
+        V1:    Data,
+        V2:    Data,
+        D2:    Data,
+        KV:    Fn(D1)->(U,V1)+'static,
+        Logic: Fn(&U, &mut CollectionIterator<V1>, &mut Vec<(V2, i32)>)+'static,
+        Reduc: Fn(&U, &V2)->D2+'static,
+    >
+            (&self, kv: KV, reduc: Reduc, logic: Logic) -> Collection<G, D2> {
+                self.map(kv)
+                    .group_by_core(|x| x,
+                                    |&(ref k,_)| k.as_u64(),
+                                    |k| k.clone(),
+                                    reduc,
+                                    |x| (Vec::new(), x),
+                                    logic)
+    }
+}
 
 
 /// Extension trait for the `group_by` and `group_by_u` differential dataflow methods.
-pub trait GroupBy<G: Scope, D1: Data> : GroupByCore<G, D1>+Map<G,(D1,i32)>
+pub trait GroupBy<G: Scope, D1: Data> : GroupByCore<G, D1>
 where G::Timestamp: LeastUpperBound {
 
     /// Groups input records together by key and applies a reduction function.
@@ -133,7 +151,7 @@ where G::Timestamp: LeastUpperBound {
         // function from key and output value to output data.
         Reduc: Fn(&K, &V2)->D2+'static,
     >
-    (&self, kv: KV, part: Part, key_h: KH, reduc: Reduc, logic: Logic) -> Stream<G, (D2, i32)> {
+    (&self, kv: KV, part: Part, key_h: KH, reduc: Reduc, logic: Logic) -> Collection<G, D2> {
         self.group_by_core(kv, part, key_h, reduc, |_| HashMap::new(), logic)
     }
 
@@ -148,15 +166,7 @@ where G::Timestamp: LeastUpperBound {
         Logic: Fn(&U, &mut CollectionIterator<V1>, &mut Vec<(V2, i32)>)+'static,
         Reduc: Fn(&U, &V2)->D2+'static,
     >
-            (&self, kv: KV, reduc: Reduc, logic: Logic) -> Stream<G, (D2, i32)> {
-                self.map(move |(x,w)| (kv(x),w))
-                    .group_by_core(|x| x,
-                                    |&(ref k,_)| k.as_u64(),
-                                    |k| k.clone(),
-                                    reduc,
-                                    |x| (Vec::new(), x),
-                                    logic)
-    }
+            (&self, kv: KV, reduc: Reduc, logic: Logic) -> Collection<G, D2>;
 }
 
 pub trait GroupByCore<G: Scope, D1: Data> {
@@ -175,11 +185,11 @@ pub trait GroupByCore<G: Scope, D1: Data> {
         Logic: Fn(&K, &mut CollectionIterator<V1>, &mut Vec<(V2, i32)>)+'static,
         Reduc: Fn(&K, &V2)->D2+'static,
     >
-    (&self, kv: KV, part: Part, key_h: KH, reduc: Reduc, look: LookG, logic: Logic) -> Stream<G, (D2, i32)>;
+    (&self, kv: KV, part: Part, key_h: KH, reduc: Reduc, look: LookG, logic: Logic) -> Collection<G, D2>;
 
 }
 
-impl<G: Scope, D1: Data> GroupByCore<G, D1> for Stream<G, (D1, i32)> where G::Timestamp: LeastUpperBound {
+impl<G: Scope, D1: Data> GroupByCore<G, D1> for Collection<G, D1> where G::Timestamp: LeastUpperBound {
 
     /// The lowest level `group*` implementation, which is parameterized by the type of storage to
     /// use for mapping keys `K` to `Offset`, an internal `CollectionTrace` type. This method should
@@ -198,7 +208,7 @@ impl<G: Scope, D1: Data> GroupByCore<G, D1> for Stream<G, (D1, i32)> where G::Ti
         Logic: Fn(&K, &mut CollectionIterator<V1>, &mut Vec<(V2, i32)>)+'static,
         Reduc: Fn(&K, &V2)->D2+'static,
     >
-    (&self, kv: KV, part: Part, key_h: KH, reduc: Reduc, look: LookG, logic: Logic) -> Stream<G, (D2, i32)> {
+    (&self, kv: KV, part: Part, key_h: KH, reduc: Reduc, look: LookG, logic: Logic) -> Collection<G, D2> {
 
         // A pair of source and result `CollectionTrace` instances.
         // TODO : The hard-coded 0 means we don't know how many bits we can shave off of each int
@@ -211,7 +221,7 @@ impl<G: Scope, D1: Data> GroupByCore<G, D1> for Stream<G, (D1, i32)> where G::Ti
         // TODO : method signature boiler-plate, rather than use default implemenations.
         // let mut trace =  OperatorTrace::<K, G::Timestamp, V1, V2, Look>::new(|| look(0));
 
-        let peers = self.scope().peers();
+        let peers = self.inner.scope().peers();
         let mut log_peers = 0;
         while (1 << (log_peers + 1)) <= peers {
             log_peers += 1;
@@ -237,7 +247,7 @@ impl<G: Scope, D1: Data> GroupByCore<G, D1> for Stream<G, (D1, i32)> where G::Ti
         let mut sorter = RadixSorter::new();
 
         // fabricate a data-parallel operator using the `unary_notify` pattern.
-        self.unary_notify(exch, "GroupBy", vec![], move |input, output, notificator| {
+        Collection::new(self.inner.unary_notify(exch, "GroupBy", vec![], move |input, output, notificator| {
 
             // 1. read each input, and stash it in our staging area
             while let Some((time, data)) = input.next() {
@@ -334,6 +344,6 @@ impl<G: Scope, D1: Data> GroupByCore<G, D1> for Stream<G, (D1, i32)> where G::Ti
                     }
                 }
             }
-        })
+        }))
     }
 }

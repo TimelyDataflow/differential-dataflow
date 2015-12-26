@@ -4,11 +4,13 @@ extern crate timely;
 extern crate differential_dataflow;
 
 use std::hash::Hash;
+use std::mem;
 use rand::{Rng, SeedableRng, StdRng};
 
 use timely::dataflow::*;
 use timely::dataflow::operators::*;
 
+use differential_dataflow::Collection;
 use differential_dataflow::operators::*;
 use differential_dataflow::operators::group::{GroupUnsigned, GroupBy};
 use differential_dataflow::operators::join::{JoinUnsigned, JoinBy};
@@ -29,7 +31,8 @@ fn main() {
 
         let mut input = computation.scoped::<u64,_,_>(|scope| {
 
-            let (input, mut edges) = scope.new_input();
+            let (input, edges) = scope.new_input();
+            let mut edges = Collection::new(edges);
 
             edges = _trim_and_flip(&edges);
             edges = _trim_and_flip(&edges);
@@ -86,59 +89,58 @@ fn main() {
     });
 }
 
-fn _trim_and_flip<G: Scope>(graph: &Stream<G, (Edge, i32)>) -> Stream<G, (Edge, i32)>
+fn _trim_and_flip<G: Scope>(graph: &Collection<G, Edge>) -> Collection<G, Edge>
 where G::Timestamp: LeastUpperBound {
         graph.iterate(|edges| {
-                 let inner = edges.scope().enter(&graph);
-                 edges.map(|((x,_),w)| (x,w))
-                    //   .threshold(|&x| x, |i| (Vec::new(), i), |_, w| if w > 0 { 1 } else { 0 })
-                      .group_by_u(|x|(x,()), |&x,_| x, |_,_,target| target.push(((),1)))
-                      .join_by_u(&inner, |x| (x,()), |(s,d)| (d,s), |&d,_,&s| (s,d))
-             })
-             .map_in_place(|x| x.0 = ((x.0).1, (x.0).0))
+            let inner = graph.enter(&edges.scope());
+            edges.map(|(x,_)| x)
+            //   .threshold(|&x| x, |i| (Vec::new(), i), |_, w| if w > 0 { 1 } else { 0 })
+                 .group_by_u(|x|(x,()), |&x,_| x, |_,_,target| target.push(((),1)))
+                 .join_by_u(&inner, |x| (x,()), |(s,d)| (d,s), |&d,_,&s| (s,d))
+        }).map_in_place(|x| mem::swap(&mut x.0, &mut x.1))
 }
 
-fn _strongly_connected<G: Scope>(graph: &Stream<G, (Edge, i32)>) -> Stream<G, (Edge, i32)>
+fn _strongly_connected<G: Scope>(graph: &Collection<G, Edge>) -> Collection<G, Edge>
 where G::Timestamp: LeastUpperBound+Hash {
     graph.iterate(|inner| {
-        let edges = inner.scope().enter(&graph);
-        let trans = edges.map_in_place(|x| x.0 = ((x.0).1, (x.0).0));
+        let edges = graph.enter(&inner.scope());
+        let trans = edges.map_in_place(|x| mem::swap(&mut x.0, &mut x.1));
         _trim_edges(&_trim_edges(inner, &edges), &trans)
     })
 }
 
-fn _trim_edges<G: Scope>(cycle: &Stream<G, (Edge, i32)>, edges: &Stream<G, (Edge, i32)>)
-    -> Stream<G, (Edge, i32)> where G::Timestamp: LeastUpperBound+Hash {
+fn _trim_edges<G: Scope>(cycle: &Collection<G, Edge>, edges: &Collection<G, Edge>)
+    -> Collection<G, Edge> where G::Timestamp: LeastUpperBound+Hash {
 
-    let nodes = edges.map_in_place(|x| (x.0).0 = (x.0).1)
+    let nodes = edges.map_in_place(|x| mem::swap(&mut x.0, &mut x.1))
                      .consolidate_by(|&x| x.0);
 
     let labels = _reachability(&cycle, &nodes);
 
     edges.join_map_u(&labels, |&e1,&e2,&l1| (e2,(e1,l1)))
          .join_map_u(&labels, |&e2,&(e1,l1),&l2| ((e1,e2),(l1,l2)))
-         .filter(|&((_,(l1,l2)), _)| l1 == l2)
-         .map(|(((x1,x2),_),d)| ((x2,x1),d))
-        //  .consolidate_by(|x| x.0)
+         .filter(|&(_,(l1,l2))| l1 == l2)
+         .map(|((x1,x2),_)| (x2,x1))
+    //   .consolidate_by(|x| x.0)
 }
 
-fn _reachability<G: Scope>(edges: &Stream<G, (Edge, i32)>, nodes: &Stream<G, ((Node, Node), i32)>) -> Stream<G, (Edge, i32)>
+fn _reachability<G: Scope>(edges: &Collection<G, Edge>, nodes: &Collection<G, (Node, Node)>) -> Collection<G, Edge>
 where G::Timestamp: LeastUpperBound+Hash {
 
     edges.filter(|_| false)
          .iterate(|inner| {
-             let edges = inner.scope().enter(&edges);
-             let nodes = inner.scope().enter_at(&nodes, |r| 256 * (64 - ((r.0).0 as u64).leading_zeros() as u64));
+             let edges = edges.enter(&inner.scope());
+             let nodes = nodes.enter_at(&inner.scope(), |r| 256 * (64 - ((r.0).0 as u64).leading_zeros() as u64));
 
              _improve_labels(inner, &edges, &nodes)
          })
         //  .consolidate_by(|x| x.0)
 }
 
-fn _improve_labels<G: Scope>(labels: &Stream<G, ((Node, Node), i32)>,
-                                   edges: &Stream<G, (Edge, i32)>,
-                                   nodes: &Stream<G, ((Node, Node), i32)>)
-    -> Stream<G, ((Node, Node), i32)>
+fn _improve_labels<G: Scope>(labels: &Collection<G, (Node, Node)>,
+                                   edges: &Collection<G, Edge>,
+                                   nodes: &Collection<G, (Node, Node)>)
+    -> Collection<G, (Node, Node)>
 where G::Timestamp: LeastUpperBound {
 
     labels.join_map_u(&edges, |_k,l,d| (*d,*l))

@@ -77,7 +77,7 @@
 //!         let limit = start.iterate(|dists| {
 //!
 //!             // bring the invariant edges into the loop
-//!             let edges = dists.builder().enter(&edges);
+//!             let edges = edges.enter(&dists.scope());
 //!
 //!             // join current distances with edges to get +1 distances,
 //!             // include the current distances in the set as well,
@@ -109,8 +109,7 @@ use std::fmt::Debug;
 /// A change in count.
 pub type Delta = i32;
 
-/// A mutable collection of values of type `T`.
-pub type Collection<G, T> = timely::dataflow::Stream<G, (T, Delta)>;
+pub use stream::Collection;
 
 /// A composite trait for data types usable in differential dataflow.
 pub trait Data : timely::Data + ::std::hash::Hash + Ord + Debug {
@@ -144,3 +143,4 @@ extern crate timely_communication;
 pub mod collection;
 pub mod operators;
 mod iterators;
+mod stream;

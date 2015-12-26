@@ -38,7 +38,7 @@ use std::ops::DerefMut;
 
 use itertools::Itertools;
 
-use ::Data;
+use ::{Collection, Data};
 use timely::dataflow::*;
 use timely::dataflow::operators::{Map, Binary};
 use timely::dataflow::channels::pact::Exchange;
@@ -51,15 +51,10 @@ use iterators::coalesce::Coalesce;
 use radix_sort::{RadixSorter, Unsigned};
 use collection::compact::Compact;
 
-impl<G: Scope, K: Data, V1: Data, S> CoGroupBy<G, K, V1> for S
-where G::Timestamp: LeastUpperBound,
-      S: Binary<G, ((K,V1), i32)>+Map<G, ((K,V1), i32)> { }
-
 /// Extension trait for the `group_by` and `group_by_u` differential dataflow methods.
-pub trait CoGroupBy<G: Scope, K: Data, V1: Data> : Binary<G, ((K,V1), i32)>+Map<G, ((K,V1), i32)>
-where G::Timestamp: LeastUpperBound {
+pub trait CoGroupBy<G: Scope, K: Data, V1: Data> where G::Timestamp: LeastUpperBound {
 
-    /// A primitive binary version of `group_by`, which acts on a `Stream<((K,V1),i32)` and a `Stream<((K,V2),i32)`.
+    /// A primitive binary version of `group_by`, which acts on a `Collection<G, (K, V1)>` and a `Collection<G, (K, V2)>`.
     ///
     /// The two streams must already be key-value pairs, which is too bad. Also, in addition to the
     /// normal arguments (another stream, a hash for the key, a reduction function, and per-key logic),
@@ -78,7 +73,23 @@ where G::Timestamp: LeastUpperBound {
         Logic: Fn(&K, &mut CollectionIterator<V1>, &mut CollectionIterator<V2>, &mut Vec<(V3, i32)>)+'static,
         Reduc: Fn(&K, &V3)->D+'static,
     >
-    (&self, other: &Stream<G, ((K,V2),i32)>, key_h: KH, reduc: Reduc, look: LookG, logic: Logic) -> Stream<G, (D, i32)> {
+    (&self, other: &Collection<G, (K, V2)>, key_h: KH, reduc: Reduc, look: LookG, logic: Logic) -> Collection<G, D>;
+}
+
+impl<G: Scope, K: Data, V1: Data> CoGroupBy<G, K, V1> for Collection<G, (K, V1)>
+where G::Timestamp: LeastUpperBound {
+    fn cogroup_by_inner<
+        D:     Data,
+        V2:    Data+Default,
+        V3:    Data+Default,
+        U:     Unsigned+Default,
+        KH:    Fn(&K)->U+'static,
+        Look:  Lookup<K, Offset>+'static,
+        LookG: Fn(u64)->Look,
+        Logic: Fn(&K, &mut CollectionIterator<V1>, &mut CollectionIterator<V2>, &mut Vec<(V3, i32)>)+'static,
+        Reduc: Fn(&K, &V3)->D+'static,
+    >
+    (&self, other: &Collection<G, (K, V2)>, key_h: KH, reduc: Reduc, look: LookG, logic: Logic) -> Collection<G, D> {
 
         let mut source1 = Trace::new(look(0));
         let mut source2 = Trace::new(look(0));
@@ -109,7 +120,7 @@ where G::Timestamp: LeastUpperBound {
         let mut sorter2 = RadixSorter::new();
 
         // fabricate a data-parallel operator using the `unary_notify` pattern.
-        self.binary_notify(other, exch1, exch2, "CoGroupBy", vec![], move |input1, input2, output, notificator| {
+        Collection::new(self.inner.binary_notify(&other.inner, exch1, exch2, "CoGroupBy", vec![], move |input1, input2, output, notificator| {
 
             // 1. read each input, and stash it in our staging area
             while let Some((time, data)) = input1.next() {
@@ -250,6 +261,6 @@ where G::Timestamp: LeastUpperBound {
                     }
                 }
             }
-        })
+        }))
     }
 }
