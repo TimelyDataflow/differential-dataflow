@@ -11,115 +11,6 @@ use iterators::coalesce::Coalesce;
 /// Changes to frequencies.
 pub type W = i32;
 
-// // This is the type of stuff we may need if we want to support a `Trace` trait, which could allow
-// // associated iterator types. Currently a bit confusing because the iterator types need to be
-// // generic over lifetimes, which is a type of HKT. There is some information about how to fake this
-// // out in the associated items RFC, but let's hold off for now.
-//
-// pub trait TraceIter<'a, K, T, V> {
-//     type I: Iterator<(&'a V, W)>;
-//     fn iter(self, key: &K, time: &T) -> I;
-// }
-//
-// pub trait Trace<K, T, V> {
-//
-//     fn set_difference(&mut self, time: T, accumulation: Compact<K, V>);
-//     fn get_collection<'a>(&'a mut self, time: T) -> <&'a Self>::I where &'a Self: TraceIter<'a, K, T, V>;
-//
-// }
-
-// /// A `Trace` represents a collection of `(K, T, V, W)` tuples, which can be efficiently accessed
-// /// first by `K`, then by `T`, and finally as an ordered sequence of pairs `(V, W)`.
-// pub struct Trace<K, T, V> {
-//     /// Map from key to head of its linked list.
-//     ///
-//     /// This map is soft-state, redundant with the information in `self.tiers`, but indexed in a
-//     /// more appealing manner, from the point of view of accessing keys without looking at each
-//     /// `Tier`.
-//     ///
-//     /// TODO : The implementation should switch from a Rust `HashMap` to something more performant.
-//     /// Possibilities include a custom RHH implementation, or an implementor `L: Lookup<K, usize>`.
-//     index: HashMap<K, usize>,
-//     /// Linked list of cached entries into `self.tier`.
-//     ///
-//     /// Each represents a tier index, a position in that tier's `keys`
-//     /// list, and a pointer to the next entry in the linked list. A next entry of `max_value()`
-//     /// indicates that there are no more entries.
-//     links: Vec<(usize, usize, usize)>,
-//     /// A list of tiers.
-//     ///
-//     /// The position of each tier is important for our cached representation, and we should not
-//     /// change them except under duress, or in the process of finishing a merge, where each of the
-//     /// keys associated with the tier will need to have their links updated anyhow.
-//     tiers: Vec<Tier<K, T, V>>,
-//     /// A list of merges-in-progress.
-//     ///
-//     /// The two indices indicate which entries of `self.tiers` are being merged, and the third
-//     /// element is the merge itself.
-//     merges: Vec<(usize, usize, Merge<K, T, V>)>,
-// }
-//
-// impl<K, T, V> Trace<K, T, V> {
-//     /// Adds the differences in `accumulation` at `time` to the trace.
-//     pub fn set_difference(&mut self, time: T, accumulation: Compact<K, V>) {
-//
-//         // extract the relevant fields
-//         let keys = accumulation.keys;
-//         let cnts = accumulation.cnts;
-//         let vals = accumulation.vals;
-//
-//         let mut difference = Tier::with_capacities(keys.len(), keys.len(), 0);
-//
-//         difference.vals = vals;
-//         difference.times.push((time, keys.len()));
-//
-//         // counters for offsets in vals and wgts
-//         let mut idxs_offset = 0;
-//         let mut vals_offset = 0;
-//         for (key, cnt) in keys.into_iter().zip(cnts.into_iter()) {
-//
-//             idxs_offset += 1;
-//             vals_offset += cnt;
-//
-//             difference.keys.push((key, idxs_offset));
-//             difference.idxs.push((0, vals_offset));
-//
-//         }
-//
-//         for &(ref key, off) in &difference.keys {
-//
-//             // prepare a new head cursor, and recover whatever is currently there.
-//             let next_position = Offset::new(self.links.len());
-//             let prev_position = self.keys.entry_or_insert(key, || next_position);
-//
-//             // if we inserted a previously absent key
-//             if &prev_position.val() == &next_position.val() {
-//                 // add the appropriate entry with no next pointer
-//                 self.links.push(ListEntry {
-//                     time: self.tiers.len() as u32,
-//                     vals: off,
-//                     next: None
-//                 });
-//             }
-//             // we haven't yet installed next_position, so do that too
-//             else {
-//                 // add the appropriate entry
-//                 self.links.push(ListEntry {
-//                     time: self.tiers.len() as u32,
-//                     vals: off,
-//                     next: Some(*prev_position)
-//                 });
-//                 *prev_position = next_position;
-//             }
-//
-//         }
-//
-//         // add the values and weights to the list of timed differences.
-//         self.tiers.push(difference);
-//
-//     }
-// }
-
 /// A collection of `(K, T, V, W)` tuples, grouped by `K` then `T` then `V`.
 ///
 /// A `Tier` is a trie-representation of `(K, T, V, W)` tuples, meaning its representation is as a
@@ -131,11 +22,11 @@ pub type W = i32;
 /// field. Finally, the `vals` field has each interval sorted by `V`.
 #[derive(Debug, Eq, PartialEq)]
 pub struct Tier<K, T, V> {
-    /// Pairs of key and offset into `self.idxs`.
+    /// Pairs of key and offset into `self.idxs`. Sorted by `key`.
     pub keys: Vec<(K, usize)>,
-    /// Pairs of idx and offset into `self.vals`.
+    /// Pairs of idx and offset into `self.vals`. Sorted by `idx`
     pub idxs: Vec<(usize, usize)>,
-    /// Pairs of val and weight.
+    /// Pairs of val and weight. Sorted by `val`.
     pub vals: Vec<(V, W)>,
     /// Pairs of timestamp and the number of references to the timestamp.
     pub times: Vec<(T,usize)>,
