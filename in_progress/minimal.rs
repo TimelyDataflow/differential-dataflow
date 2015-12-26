@@ -39,12 +39,12 @@ fn main() {
     //     edges.filter(|_| false)
     //          .iterate(u32::max_value(), |x| x.0, |x| x.0, |inner| {
     //
-    //              let edges = inner.builder.enter(&edges);
+    //              let edges = edges.enter(&inner.scope());
     //
     //              // prep the same computation using the iterated data
-    //              let degrs_o = inner.builder.enter(&degrs);
-    //              let neigh_o = inner.builder.enter(&neigh);
-    //              let dpdnt_o = inner.builder.enter(&dpdnt);
+    //              let degrs_o = degrs.enter(&inner.scope());
+    //              let neigh_o = neigh.enter(&inner.scope());
+    //              let dpdnt_o = dpdnt.enter(&inner.scope());
     //
     //              let degrs_i = inner.group_by_u(|x| x, |k,v| (*k,*v), |_k, s, t| { t.push((s.count() as u32, 1)); });
     //              let neigh_i = degrs_i.join_u(&inner, |x| x, |y| y, |k,x,y| (*k,*x,*y));

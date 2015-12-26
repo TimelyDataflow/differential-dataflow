@@ -81,7 +81,7 @@ impl<G: Scope, K: Data, V: Data> ArrangeByKey<G, K, V> for Collection<G, (K, V)>
         let mut sorter = RadixSorter::new();
 
         // fabricate a data-parallel operator using the `unary_notify` pattern.
-        let stream = self.unary_notify(exch, "ArrangeByKey", vec![], move |input, output, notificator| {
+        let stream = self.inner.unary_notify(exch, "ArrangeByKey", vec![], move |input, output, notificator| {
 
             // 1. read each input, and stash it in our staging area
             while let Some((time, data)) = input.next() {
@@ -175,7 +175,7 @@ impl<G: Scope, K: Data> ArrangeBySelf<G, K> for Collection<G, K> where G::Timest
         let mut sorter = RadixSorter::new();
 
         // fabricate a data-parallel operator using the `unary_notify` pattern.
-        let stream = self.unary_notify(exch, "ArrangeBySelf", vec![], move |input, output, notificator| {
+        let stream = self.inner.unary_notify(exch, "ArrangeBySelf", vec![], move |input, output, notificator| {
 
             // 1. read each input, and stash it in our staging area
             while let Some((time, data)) = input.next() {

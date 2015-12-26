@@ -9,6 +9,7 @@ use timely::progress::timestamp::RootTimestamp;
 
 use rand::{Rng, SeedableRng, StdRng};
 
+use differential_dataflow::Collection;
 use differential_dataflow::operators::*;
 use differential_dataflow::operators::join::JoinUnsigned;
 use differential_dataflow::operators::group::GroupUnsigned;
@@ -32,7 +33,7 @@ fn main() {
 
             let roots = vec![(0,1)].into_iter().to_stream(scope);
             let (edge_input, graph) = scope.new_input();
-            let probe = bfs(&graph, &roots).probe().0;
+            let probe = bfs(&Collection::new(graph), &Collection::new(roots)).probe().0;
 
             (edge_input, probe)
         });
@@ -88,19 +89,19 @@ fn main() {
 }
 
 // returns pairs (n, s) indicating node n can be reached from a root in s steps.
-fn bfs<G: Scope>(edges: &Stream<G, (Edge, i32)>, roots: &Stream<G, (Node, i32)>) -> Stream<G, ((Node, u32), i32)>
+fn bfs<G: Scope>(edges: &Collection<G, Edge>, roots: &Collection<G, Node>) -> Collection<G, (Node, u32)>
 where G::Timestamp: LeastUpperBound {
 
     // initialize roots as reaching themselves at distance 0
-    let nodes = roots.map(|(x,w)| ((x, 0), w));
+    let nodes = roots.map(|x| (x, 0));
     // let edges = edges.map_in_place(|x| x.0 = ((x.0).1, (x.0).0))
     //                  .concat(&edges);
 
     // repeatedly update minimal distances each node can be reached from each root
     nodes.iterate(|inner| {
 
-        let edges = inner.scope().enter(&edges);
-        let nodes = inner.scope().enter(&nodes);
+        let edges = edges.enter(&inner.scope());
+        let nodes = nodes.enter(&inner.scope());
 
         inner.join_map_u(&edges, |_k,l,d| (*d, l+1))
              .concat(&nodes)

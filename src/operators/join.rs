@@ -3,10 +3,19 @@
 use std::default::Default;
 use std::collections::HashMap;
 
+// <<<<<<< HEAD
 use timely::progress::Timestamp;
 use timely::dataflow::Scope;
 use timely::dataflow::operators::Binary;
 use timely::dataflow::channels::pact::Pipeline;
+// =======
+// use std::ops::DerefMut;
+
+// use ::{Data, Collection};
+// use timely::dataflow::Scope;
+// use timely::dataflow::operators::{Map, Binary};
+// use timely::dataflow::channels::pact::Exchange;
+// >>>>>>> master
 use timely::drain::DrainExt;
 
 use ::{Data, Collection};
@@ -50,7 +59,7 @@ pub trait Join<G: Scope, K: Data, V: Data> {
 
 impl<G: Scope, K: Data, V: Data> Join<G, K, V> for Collection<G, (K, V)> where G::Timestamp: LeastUpperBound {
     /// Matches pairs of `(key,val1)` and `(key,val2)` records based on `key` and applies a reduction function.
-    fn join_map<V2: Data, D: Data, R>(&self, other: &Collection<G, (K,V2)>, logic: R) -> Collection<G, D>
+    fn join_map<V2: Data, D: Data, R>(&self, other: &Collection<G, (K, V2)>, logic: R) -> Collection<G, D>
     where R: Fn(&K, &V, &V2)->D+'static {
         let arranged1 = self.arrange_by_key(|k| k.hashed(), |_| HashMap::new());
         let arranged2 = other.arrange_by_key(|k| k.hashed(), |_| HashMap::new());
@@ -130,11 +139,12 @@ impl<TS: Timestamp, G: Scope<Timestamp=TS>, T: Traceable<Index=TS>+'static> Join
         // used to restrict diffs processed.
         let mut acknowledged = Vec::new();
 
-        self.stream.binary_notify(&other.stream, Pipeline, Pipeline, "Join", vec![], move |input1, input2, output, notificator| {
+        let result = self.stream.binary_notify(&other.stream, Pipeline, Pipeline, "Join", vec![], move |input1, input2, output, notificator| {
 
             // shut down a trace if the opposing input has been closed out.
             // TODO : more generally, we would like to announce our frontier to each trace, so that it may
             // TODO : be compacted when the frontiers of all of its referees have advanced past some point.
+
             if trace2.is_some() && notificator.frontier(0).len() == 0 && inputs1.len() == 0 { trace2 = None; }
             if trace1.is_some() && notificator.frontier(1).len() == 0 && inputs2.len() == 0 { trace1 = None; }
 
@@ -220,6 +230,8 @@ impl<TS: Timestamp, G: Scope<Timestamp=TS>, T: Traceable<Index=TS>+'static> Join
                     notificator.notify_at(time);
                 }
             }
-        })
+        });
+
+        Collection::new(result)
     }
 }

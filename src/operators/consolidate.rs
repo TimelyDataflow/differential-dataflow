@@ -30,7 +30,7 @@ use collection::Lookup;
 use iterators::coalesce::Coalesce;
 use radix_sort::{RadixSorter, Unsigned};
 
-use ::Data;
+use ::{Collection, Data};
 
 use timely::drain::DrainExt;
 
@@ -44,18 +44,18 @@ pub trait ConsolidateExt<D: Data> {
     fn consolidate_by<U: Unsigned, F: Fn(&D)->U+'static>(&self, part: F) -> Self;
 }
 
-impl<G: Scope, D: Ord+Data+Debug> ConsolidateExt<D> for Stream<G, (D, i32)> {
+impl<G: Scope, D: Ord+Data+Debug> ConsolidateExt<D> for Collection<G, D> {
     fn consolidate(&self) -> Self {
        self.consolidate_by(|x| x.hashed())
     }
-    fn consolidate_by<U: Unsigned, F: Fn(&D)->U+'static>(&self, part: F) -> Self {
 
+    fn consolidate_by<U: Unsigned, F: Fn(&D)->U+'static>(&self, part: F) -> Self {
         let mut inputs = Vec::new();    // Vec<(G::Timestamp, Vec<(D, i32))>
         let part1 = Rc::new(part);
         let part2 = part1.clone();
 
         let exch = Exchange::new(move |&(ref x,_)| (*part1)(x).as_u64());
-        self.unary_notify(exch, "Consolidate", vec![], move |input, output, notificator| {
+        Collection::new(self.inner.unary_notify(exch, "Consolidate", vec![], move |input, output, notificator| {
 
             // input.for_each(|index: &G::Timestamp, data: &mut Content<(D, i32)>| {
             while let Some((index, data)) = input.next() {
@@ -70,7 +70,7 @@ impl<G: Scope, D: Ord+Data+Debug> ConsolidateExt<D> for Stream<G, (D, i32)> {
             // notificator.for_each(|index, _count| {
                 if let Some(mut stash) = inputs.remove_key(&index) {
 
-                    // let start = ::time::precise_time_s();
+                    let start = ::time::precise_time_s();
 
                     let mut session = output.session(&index);
                     let mut buffer = vec![];
@@ -87,15 +87,16 @@ impl<G: Scope, D: Ord+Data+Debug> ConsolidateExt<D> for Stream<G, (D, i32)> {
                         current = hash;
                     }
 
+                    // let len = buffer.len();
                     if buffer.len() > 0 {
                         buffer.sort_by(|x: &(D,i32),y: &(D,i32)| x.0.cmp(&y.0));
                         session.give_iterator(buffer.drain_temp().coalesce());
                     }
 
-                    // println!("consolidated {:?} in {:?}s", index, ::time::precise_time_s() - start);
+                    // println!("consolidated {:?} in {:?}s ({} elts)", index, ::time::precise_time_s() - start, len);
                 }
             }
             // });
-        })
+        }))
     }
 }

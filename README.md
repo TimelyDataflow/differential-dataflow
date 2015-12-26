@@ -33,7 +33,7 @@ let start = roots.map(|(x, w)| ((x, 0), w));
 let limit = start.iterate(|dists| {
 
     // bring the invariant edges into the loop
-    let edges = dists.builder().enter(&edges);
+    let edges = edges.enter(&dists.scope());
 
     // join current distances with edges to get +1 distances,
     // include the current distances in the set as well,
@@ -198,10 +198,13 @@ Given that no one of these representations are sufficiently general and concise,
 
 There are some details about how to work around this in [Rust's associated items RFC](https://github.com/aturon/rfcs/blob/associated-items/active/0000-associated-items.md#encoding-higher-kinded-types), which would probably involve ripping up a bunch of things, and putting them back down differently.
 
+**Update**: There is a first attempt at this in the [`arrangement` branch](https://github.com/frankmcsherry/differential-dataflow/tree/arrangement), which also does the "Re-using storage" thing below. At the moment, it ICEs Rust stable and nightly (in different ways) and may be more horrible than is worth it. 
+
 ### Re-using storage
 
 It is not uncommon for the same set of `(key, val)` tuples to be used by multiple operators. At the moment each operator maintains its own indexed copy of the tuples. This is pretty clearly wasteful, both in terms of memory and computation. However, sharing the state is a bit complicated, because it interacts weirdly with dataflow semantics. It seems like it could be done, in the sense that there are no data races or weird sharing that we have to worry about, so much as how to communicate the correct information.
 
+**Update**: There is a first attempt at this in the [`arrangement` branch](https://github.com/frankmcsherry/differential-dataflow/tree/arrangement), which also does the "Generic storage" thing above. At the moment, it ICEs Rust stable and nightly (in different ways) and may be more horrible than is worth it. 
 ### Half-joins
 
 There is the potential to implement multiple joins in a manner like that of Koch et al, where the join is logically differentiated with respect to each of its inputs, and each form is instantiated to respond to changes in the corresponding input. This seems very pleasant, and avoids materializing (and storing) intermediate data, but seems to require a new operator, like a join but which only responds to changes on one of its inputs.

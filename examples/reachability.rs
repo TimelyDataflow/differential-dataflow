@@ -9,7 +9,7 @@ use timely::dataflow::*;
 use timely::dataflow::operators::*;
 use timely::progress::timestamp::RootTimestamp;
 
-use differential_dataflow::Data;
+use differential_dataflow::{Collection, Data};
 use differential_dataflow::operators::*;
 use differential_dataflow::collection::LeastUpperBound;
 use differential_dataflow::collection::robin_hood::RHHMap;
@@ -33,7 +33,7 @@ fn main() {
         let (mut graph, mut roots, probe) = computation.scoped(|scope| {
             let (root_input, roots) = scope.new_input();
             let (edge_input, graph) = scope.new_input();
-            let probe = reach(&graph, &roots).probe().0;
+            let probe = reach(&Collection::new(graph), &Collection::new(roots)).probe().0;
             (edge_input, root_input, probe)
         });
 
@@ -101,15 +101,15 @@ fn main() {
 }
 
 // returns pairs (n, s) indicating node n can be reached from a root in s steps.
-fn reach<G: Scope>(edges: &Stream<G, (Edge, i32)>, roots: &Stream<G, (Node, i32)>) -> Stream<G, ((Node, Node), i32)>
+fn reach<G: Scope>(edges: &Collection<G, Edge>, roots: &Collection<G, Node>) -> Collection<G, (Node, Node)>
 where G::Timestamp: LeastUpperBound {
 
-    let roots = roots.map(|(x,w)| ((x,x),w));
+    let roots = roots.map(|x| (x,x));
 
     roots.iterate(|inner| {
 
-        let edges = inner.scope().enter(&edges);
-        let roots = inner.scope().enter(&roots);
+        let edges = edges.enter(&inner.scope());
+        let roots = roots.enter(&inner.scope());
 
         inner.join_map(&edges, |_k,&l,&d| (d, l))
              .concat(&roots)
