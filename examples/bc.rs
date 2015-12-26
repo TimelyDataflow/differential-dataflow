@@ -92,8 +92,8 @@ where G::Timestamp: LeastUpperBound {
 
     let dists = nodes.iterate(|dists| {
 
-        let edges = edges.enter_into(&dists.scope());
-        let nodes = nodes.enter_into(&dists.scope());
+        let edges = edges.enter(&dists.scope());
+        let nodes = nodes.enter(&dists.scope());
 
         dists.join_by_u(&edges, |(n,r,_,s)| (n, (r,s)), |e| e, |&n, &(r,s), &d| (d, r, n, s+1))
              .concat(&nodes)

@@ -65,8 +65,8 @@ where G::Timestamp: LeastUpperBound+Hash {
     // don't actually use these labels, just grab the type
     nodes.filter(|_| false)
          .iterate(|inner| {
-             let edges = edges.enter_into(&inner.scope());
-             let nodes = nodes.enter_into_at(&inner.scope(), |r| 256 * (64 - (r.0).0.leading_zeros() as u64));
+             let edges = edges.enter(&inner.scope());
+             let nodes = nodes.enter_at(&inner.scope(), |r| 256 * (64 - (r.0).0.leading_zeros() as u64));
 
             inner.join_map_u(&edges, |_k,l,d| (*d,*l))
                  .concat(&nodes)

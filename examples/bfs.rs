@@ -100,8 +100,8 @@ where G::Timestamp: LeastUpperBound {
     // repeatedly update minimal distances each node can be reached from each root
     nodes.iterate(|inner| {
 
-        let edges = edges.enter_into(&inner.scope());
-        let nodes = nodes.enter_into(&inner.scope());
+        let edges = edges.enter(&inner.scope());
+        let nodes = nodes.enter(&inner.scope());
 
         inner.join_map_u(&edges, |_k,l,d| (*d, l+1))
              .concat(&nodes)

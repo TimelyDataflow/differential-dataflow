@@ -108,8 +108,8 @@ where G::Timestamp: LeastUpperBound {
 
     roots.iterate(|inner| {
 
-        let edges = edges.enter_into(&inner.scope());
-        let roots = roots.enter_into(&inner.scope());
+        let edges = edges.enter(&inner.scope());
+        let roots = roots.enter(&inner.scope());
 
         inner.join_map(&edges, |_k,&l,&d| (d, l))
              .concat(&roots)

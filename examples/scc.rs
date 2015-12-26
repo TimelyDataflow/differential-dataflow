@@ -92,7 +92,7 @@ fn main() {
 fn _trim_and_flip<G: Scope>(graph: &Collection<G, Edge>) -> Collection<G, Edge>
 where G::Timestamp: LeastUpperBound {
         graph.iterate(|edges| {
-            let inner = graph.enter_into(&edges.scope());
+            let inner = graph.enter(&edges.scope());
             edges.map(|(x,_)| x)
             //   .threshold(|&x| x, |i| (Vec::new(), i), |_, w| if w > 0 { 1 } else { 0 })
                  .group_by_u(|x|(x,()), |&x,_| x, |_,_,target| target.push(((),1)))
@@ -103,7 +103,7 @@ where G::Timestamp: LeastUpperBound {
 fn _strongly_connected<G: Scope>(graph: &Collection<G, Edge>) -> Collection<G, Edge>
 where G::Timestamp: LeastUpperBound+Hash {
     graph.iterate(|inner| {
-        let edges = graph.enter_into(&inner.scope());
+        let edges = graph.enter(&inner.scope());
         let trans = edges.map_in_place(|x| mem::swap(&mut x.0, &mut x.1));
         _trim_edges(&_trim_edges(inner, &edges), &trans)
     })
@@ -129,8 +129,8 @@ where G::Timestamp: LeastUpperBound+Hash {
 
     edges.filter(|_| false)
          .iterate(|inner| {
-             let edges = edges.enter_into(&inner.scope());
-             let nodes = nodes.enter_into_at(&inner.scope(), |r| 256 * (64 - ((r.0).0 as u64).leading_zeros() as u64));
+             let edges = edges.enter(&inner.scope());
+             let nodes = nodes.enter_at(&inner.scope(), |r| 256 * (64 - ((r.0).0 as u64).leading_zeros() as u64));
 
              _improve_labels(inner, &edges, &nodes)
          })

@@ -44,13 +44,13 @@ impl<G: Scope, D: Data> Collection<G, D> {
         }
     }
 
-    pub fn enter_into<T: Timestamp>(&self, child: &Child<G, T>) -> Collection<Child<G, T>, D> {
+    pub fn enter<T: Timestamp>(&self, child: &Child<G, T>) -> Collection<Child<G, T>, D> {
         Collection {
             inner: child.enter(&self.inner)
         }
     }
 
-    pub fn enter_into_at<T: Timestamp, F: Fn(&(D, Delta)) -> T + 'static>(&self, child: &Child<G, T>, initial: F) -> Collection<Child<G, T>, D> where G::Timestamp: Hash, T: Hash {
+    pub fn enter_at<T: Timestamp, F: Fn(&(D, Delta)) -> T + 'static>(&self, child: &Child<G, T>, initial: F) -> Collection<Child<G, T>, D> where G::Timestamp: Hash, T: Hash {
         Collection {
             inner: child.enter_at(&self.inner, initial)
         }
