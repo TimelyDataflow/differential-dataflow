@@ -7,7 +7,7 @@ use collection::compact::Compact;
 use iterators::merge::{Merge, MergeIterator};
 use iterators::coalesce::{Coalesce, CoalesceIterator};
 
-// Test implementation which uses references rather than clones 
+// TODO : Consider adding 'a parameter here; removing TraceRef.
 
 pub trait Traceable where for<'a> &'a Self: TraceRef<'a, Self::Key, Self::Index, Self::Value> {
 
@@ -15,10 +15,9 @@ pub trait Traceable where for<'a> &'a Self: TraceRef<'a, Self::Key, Self::Index,
     type Index: LeastUpperBound+'static;
     type Value: Data+Ord+'static;
 
-    // type PartKey: Unsigned;    // the keys are partitioned and likely ordered by this unsigned integer
+    // type PartKey: Unsigned;                              // the keys are partitioned and likely ordered by this unsigned integer
+    // fn part(&self, key: &Self::Key) -> Self::PartKey;    // indicates the part for a key
 
-    // // indicates the part for a key
-    // fn part(&self, key: &Self::Key) -> Self::PartKey;
 
     // TODO : Should probably allow the trace to determine how it receives data. 
     // TODO : Radix sorting and such might live in the trace, rather than in `Arrange`.
@@ -256,6 +255,9 @@ where K:  Ord+'a,
 }
 
 /// Enumerates `(&V,i32)` elements of a difference.
+///
+/// Morally equivalent to a `&[(V,i32)]` slice iterator, except returns a `(&V,i32)` rather than a `&(V,i32)`.
+/// This is important for consolidate and merge, though they could probably be changed.
 pub struct DifferenceIterator<'a, V: 'a> {
     vals: &'a [(V,i32)],
     next: usize,            // index of next entry in vals,
