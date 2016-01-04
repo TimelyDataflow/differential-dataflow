@@ -24,7 +24,6 @@ use std::fmt::Debug;
 use timely::dataflow::*;
 use timely::dataflow::operators::*;
 use timely::dataflow::channels::pact::Exchange;
-// use timely::dataflow::channels::Content;
 
 use collection::Lookup;
 use iterators::coalesce::Coalesce;
@@ -57,20 +56,15 @@ impl<G: Scope, D: Ord+Data+Debug> ConsolidateExt<D> for Collection<G, D> {
         let exch = Exchange::new(move |&(ref x,_)| (*part1)(x).as_u64());
         Collection::new(self.inner.unary_notify(exch, "Consolidate", vec![], move |input, output, notificator| {
 
-            // input.for_each(|index: &G::Timestamp, data: &mut Content<(D, i32)>| {
             while let Some((index, data)) = input.next() {
                 notificator.notify_at(&index);
                 inputs.entry_or_insert(index.clone(), || RadixSorter::new())
                       .extend(data.drain_temp(), &|x| (*part2)(&x.0));
             }
-            // });
 
             // 2. go through each time of interest that has reached completion
             while let Some((index, _count)) = notificator.next() {
-            // notificator.for_each(|index, _count| {
                 if let Some(mut stash) = inputs.remove_key(&index) {
-
-                    let start = ::time::precise_time_s();
 
                     let mut session = output.session(&index);
                     let mut buffer = vec![];
@@ -87,16 +81,12 @@ impl<G: Scope, D: Ord+Data+Debug> ConsolidateExt<D> for Collection<G, D> {
                         current = hash;
                     }
 
-                    // let len = buffer.len();
                     if buffer.len() > 0 {
                         buffer.sort_by(|x: &(D,i32),y: &(D,i32)| x.0.cmp(&y.0));
                         session.give_iterator(buffer.drain_temp().coalesce());
                     }
-
-                    // println!("consolidated {:?} in {:?}s ({} elts)", index, ::time::precise_time_s() - start, len);
                 }
             }
-            // });
         }))
     }
 }

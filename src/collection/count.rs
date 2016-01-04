@@ -3,9 +3,9 @@
 use ::Data;
 use collection::{LeastUpperBound, Lookup};
 use collection::compact::Compact;
-use collection::trace::{Traceable, TraceRef};
+use collection::trace::{Trace, TraceRef};
 
-impl<K, L, T> Traceable for Count<K, T, L> where K: Data+Ord+'static, L: Lookup<K, Offset>+'static, T: LeastUpperBound+'static {
+impl<K, L, T> Trace for Count<K, T, L> where K: Data+Ord+'static, L: Lookup<K, Offset>+'static, T: LeastUpperBound+'static {
     type Key = K;
     type Index = T;
     type Value = ();
@@ -100,7 +100,7 @@ impl<K, L, T> Count<K, T, L> where K: Data+Ord+'static, L: Lookup<K, Offset>+'st
 
     pub fn get_count(&self, key: &K, time: &T) -> i32 {
         let mut sum = 0;
-        for wgt in Traceable::trace(self, key).filter(|x| x.0 <= time).map(|mut x| x.1.next().unwrap().1) {
+        for wgt in Trace::trace(self, key).filter(|x| x.0 <= time).map(|mut x| x.1.next().unwrap().1) {
             sum += wgt;
         }
         sum

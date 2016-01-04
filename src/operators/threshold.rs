@@ -15,7 +15,7 @@ use radix_sort::{RadixSorter, Unsigned};
 use collection::{LeastUpperBound, Lookup};
 use collection::count::{Count, Offset};
 use collection::compact::Compact;
-use collection::trace::{Traceable};
+use collection::trace::Trace;
 
 /// Extension trait for the `group` differential dataflow method
 pub trait Threshold<G: Scope, D: Data+Default+'static>

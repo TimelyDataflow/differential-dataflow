@@ -15,8 +15,8 @@ use timely::dataflow::channels::pact::Exchange;
 use timely::drain::DrainExt;
 
 use ::{Data, Collection};
-use collection::{LeastUpperBound, Lookup, Trace, Offset};
-use collection::trace::{Traceable, TraceRef};
+use collection::{LeastUpperBound, Lookup, Trace, TraceRef};
+use collection::basic::{BasicTrace, Offset};
 use collection::count::Count;
 use collection::compact::Compact;
 use radix_sort::{RadixSorter, Unsigned};
@@ -29,14 +29,14 @@ use radix_sort::{RadixSorter, Unsigned};
 /// in writing differential operators: each must pay enough care to signals
 /// from the `stream` field to know the subset of `trace` it has logically 
 /// received.
-pub struct Arranged<G: Scope, T: Traceable<Index=G::Timestamp>> 
+pub struct Arranged<G: Scope, T: Trace<Index=G::Timestamp>> 
     where 
         T::Key: Data, 
         T::Value: Data, 
         G::Timestamp: LeastUpperBound ,
         for<'a> &'a T: TraceRef<'a, T::Key, T::Index, T::Value> 
         {
-    pub stream: Stream<G, (Vec<<T as Traceable>::Key>, Vec<u32>, Vec<(<T as Traceable>::Value, i32)>)>,
+    pub stream: Stream<G, (Vec<<T as Trace>::Key>, Vec<u32>, Vec<(<T as Trace>::Value, i32)>)>,
     pub trace: Rc<RefCell<T>>,
 }
 
@@ -47,7 +47,7 @@ pub trait ArrangeByKey<G: Scope, K: Data, V: Data> where G::Timestamp: LeastUppe
         KH:    Fn(&K)->U+'static,
         Look:  Lookup<K, Offset>+'static,
         LookG: Fn(u64)->Look,
-    >(&self, key_h: KH, look: LookG) -> Arranged<G, Trace<K,G::Timestamp,V,Look>>;
+    >(&self, key_h: KH, look: LookG) -> Arranged<G, BasicTrace<K,G::Timestamp,V,Look>>;
 }
 
 impl<G: Scope, K: Data, V: Data> ArrangeByKey<G, K, V> for Collection<G, (K, V)> where G::Timestamp: LeastUpperBound {
@@ -57,7 +57,7 @@ impl<G: Scope, K: Data, V: Data> ArrangeByKey<G, K, V> for Collection<G, (K, V)>
         Look:  Lookup<K, Offset>+'static,
         LookG: Fn(u64)->Look,
     >
-    (&self, key_h: KH, look: LookG) -> Arranged<G, Trace<K,G::Timestamp,V,Look>> {
+    (&self, key_h: KH, look: LookG) -> Arranged<G, BasicTrace<K,G::Timestamp,V,Look>> {
 
         let peers = self.scope().peers();
         let mut log_peers = 0;
@@ -66,7 +66,7 @@ impl<G: Scope, K: Data, V: Data> ArrangeByKey<G, K, V> for Collection<G, (K, V)>
         }
 
         // create a trace to share with downstream consumers.
-        let trace = Rc::new(RefCell::new(Trace::new(look(log_peers))));
+        let trace = Rc::new(RefCell::new(BasicTrace::new(look(log_peers))));
         // TODO : We would like to use a weak reference, but stable Rust doesn't have these.
         let source = trace.downgrade();
 

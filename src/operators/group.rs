@@ -44,8 +44,9 @@ use timely::dataflow::operators::{Map, Unary};
 use timely::dataflow::channels::pact::Exchange;
 use timely::drain::DrainExt;
 
-use collection::{LeastUpperBound, Lookup, Trace, Offset};
-use collection::trace::{CollectionIterator, DifferenceIterator, Traceable};
+use collection::{LeastUpperBound, Lookup, Trace, BasicTrace, Offset};
+use collection::trace::CollectionIterator;
+use collection::basic::DifferenceIterator;
 
 use iterators::coalesce::Coalesce;
 use radix_sort::{RadixSorter, Unsigned};
@@ -215,8 +216,8 @@ impl<G: Scope, D1: Data> GroupByCore<G, D1> for Collection<G, D1> where G::Times
             log_peers += 1;
         }
 
-        let mut source = Trace::new(look(log_peers));
-        let mut result = Trace::new(look(log_peers));
+        let mut source = BasicTrace::new(look(log_peers));
+        let mut result = BasicTrace::new(look(log_peers));
 
         // A map from times to received (key, val, wgt) triples.
         let mut inputs = Vec::new();

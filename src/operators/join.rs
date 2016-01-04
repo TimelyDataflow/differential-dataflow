@@ -20,7 +20,7 @@ use timely::drain::DrainExt;
 
 use ::{Data, Collection};
 use collection::{LeastUpperBound, Lookup};
-use collection::trace::{Traceable,TraceRef};
+use collection::trace::{Trace,TraceRef};
 use radix_sort::{Unsigned};
 use operators::arrange::{Arranged, ArrangeByKey, ArrangeBySelf};
 
@@ -110,20 +110,20 @@ pub trait JoinArranged<G: Scope, K: Data, V: Data> where G::Timestamp: LeastUppe
     /// The arrangements must have matching keys and indices, but the values may be arbitrary.
     fn join<T2,R,RF> (&self, stream2: &Arranged<G,T2>, result: RF) -> Collection<G,R>
     where 
-        T2: Traceable<Key=K,Index=G::Timestamp>+'static,
+        T2: Trace<Key=K,Index=G::Timestamp>+'static,
         R: Data,
         RF: Fn(&K,&V,&T2::Value)->R+'static,
         for<'a> &'a T2: TraceRef<'a,T2::Key,T2::Index,T2::Value>
         ;
 }
 
-impl<TS: Timestamp, G: Scope<Timestamp=TS>, T: Traceable<Index=TS>+'static> JoinArranged<G, T::Key, T::Value> for Arranged<G, T> 
+impl<TS: Timestamp, G: Scope<Timestamp=TS>, T: Trace<Index=TS>+'static> JoinArranged<G, T::Key, T::Value> for Arranged<G, T> 
     where 
         G::Timestamp: LeastUpperBound, 
         for<'a> &'a T: TraceRef<'a, T::Key, T::Index, T::Value> {
     fn join<T2,R,RF>(&self, other: &Arranged<G,T2>, result: RF) -> Collection<G,R> 
     where 
-        T2: Traceable<Key=T::Key, Index=G::Timestamp>+'static,
+        T2: Trace<Key=T::Key, Index=G::Timestamp>+'static,
         R: Data,
         RF: Fn(&T::Key,&T::Value,&T2::Value)->R+'static,
         for<'a> &'a T2: TraceRef<'a,T2::Key,T2::Index,T2::Value> {
