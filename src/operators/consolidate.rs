@@ -24,14 +24,12 @@ use std::fmt::Debug;
 use timely::dataflow::*;
 use timely::dataflow::operators::*;
 use timely::dataflow::channels::pact::Exchange;
+use timely_sort::{LSBRadixSorter, Unsigned};
 
 use collection::Lookup;
 use iterators::coalesce::Coalesce;
-use radix_sort::{RadixSorter, Unsigned};
 
 use ::{Collection, Data};
-
-use timely::drain::DrainExt;
 
 /// An extension method for consolidating weighted streams.
 pub trait ConsolidateExt<D: Data> {
@@ -58,8 +56,8 @@ impl<G: Scope, D: Ord+Data+Debug> ConsolidateExt<D> for Collection<G, D> {
 
             while let Some((index, data)) = input.next() {
                 notificator.notify_at(&index);
-                inputs.entry_or_insert(index.clone(), || RadixSorter::new())
-                      .extend(data.drain_temp(), &|x| (*part2)(&x.0));
+                inputs.entry_or_insert(index.clone(), || LSBRadixSorter::new())
+                      .extend(data.drain(..), &|x| (*part2)(&x.0));
             }
 
             // 2. go through each time of interest that has reached completion
@@ -75,7 +73,7 @@ impl<G: Scope, D: Ord+Data+Debug> ConsolidateExt<D> for Collection<G, D> {
                         let hash = (*part2)(&datum).as_u64();
                         if buffer.len() > 0 && hash != current {
                             buffer.sort_by(|x: &(D,i32),y: &(D,i32)| x.0.cmp(&y.0));
-                            session.give_iterator(buffer.drain_temp().coalesce());
+                            session.give_iterator(buffer.drain(..).coalesce());
                         }
                         buffer.push((datum,wgt));
                         current = hash;
@@ -83,7 +81,7 @@ impl<G: Scope, D: Ord+Data+Debug> ConsolidateExt<D> for Collection<G, D> {
 
                     if buffer.len() > 0 {
                         buffer.sort_by(|x: &(D,i32),y: &(D,i32)| x.0.cmp(&y.0));
-                        session.give_iterator(buffer.drain_temp().coalesce());
+                        session.give_iterator(buffer.drain(..).coalesce());
                     }
                 }
             }

@@ -12,14 +12,13 @@ use std::ops::DerefMut;
 use timely::dataflow::*;
 use timely::dataflow::operators::{Map, Unary};
 use timely::dataflow::channels::pact::Exchange;
-use timely::drain::DrainExt;
+use timely_sort::{LSBRadixSorter, Unsigned};
 
 use ::{Data, Collection};
 use collection::{LeastUpperBound, Lookup, Trace, TraceRef};
 use collection::basic::{BasicTrace, Offset};
 use collection::count::Count;
 use collection::compact::Compact;
-use radix_sort::{RadixSorter, Unsigned};
 
 /// A collection of `(K,V)` values as a timely stream and shared trace.
 ///
@@ -78,7 +77,7 @@ impl<G: Scope, K: Data, V: Data> ArrangeByKey<G, K, V> for Collection<G, (K, V)>
         let part2 = part1.clone();
         let exch = Exchange::new(move |&((ref k, _),_): &((K,V),i32)| part1(k).as_u64());
 
-        let mut sorter = RadixSorter::new();
+        let mut sorter = LSBRadixSorter::new();
 
         // fabricate a data-parallel operator using the `unary_notify` pattern.
         let stream = self.inner.unary_notify(exch, "ArrangeByKey", vec![], move |input, output, notificator| {
@@ -107,7 +106,7 @@ impl<G: Scope, K: Data, V: Data> ArrangeByKey<G, K, V> for Collection<G, (K, V)>
                     }
                     else {
                         let mut vec = queue.pop().unwrap();
-                        let mut vec = vec.drain_temp().map(|(d,w)| (d,w)).collect::<Vec<_>>();
+                        let mut vec = vec.drain(..).map(|(d,w)| (d,w)).collect::<Vec<_>>();
                         vec.sort_by(|x,y| part2(&(x.0).0).cmp(&part2((&(y.0).0))));
                         Compact::from_radix(&mut vec![vec], &|k| part2(k))
                     };
@@ -172,7 +171,7 @@ impl<G: Scope, K: Data> ArrangeBySelf<G, K> for Collection<G, K> where G::Timest
         let part2 = part1.clone();
         let exch = Exchange::new(move |&(ref k,_): &(K,i32)| part1(k).as_u64());
 
-        let mut sorter = RadixSorter::new();
+        let mut sorter = LSBRadixSorter::new();
 
         // fabricate a data-parallel operator using the `unary_notify` pattern.
         let stream = self.inner.unary_notify(exch, "ArrangeBySelf", vec![], move |input, output, notificator| {
@@ -201,7 +200,7 @@ impl<G: Scope, K: Data> ArrangeBySelf<G, K> for Collection<G, K> where G::Timest
                     }
                     else {
                         let mut vec = queue.pop().unwrap();
-                        let mut vec = vec.drain_temp().map(|(d,w)| ((d,()),w)).collect::<Vec<_>>();
+                        let mut vec = vec.drain(..).map(|(d,w)| ((d,()),w)).collect::<Vec<_>>();
                         vec.sort_by(|x,y| part2(&(x.0).0).cmp(&part2((&(y.0).0))));
                         Compact::from_radix(&mut vec![vec], &|k| part2(k))
                     };

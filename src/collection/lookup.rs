@@ -1,6 +1,7 @@
 use std::hash::Hash;
 use std::collections::HashMap;
-use radix_sort::Unsigned;
+
+use timely_sort::Unsigned;
 
 use collection::robin_hood::RHHMap;
 

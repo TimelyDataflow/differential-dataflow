@@ -3,25 +3,15 @@
 use std::default::Default;
 use std::collections::HashMap;
 
-// <<<<<<< HEAD
 use timely::progress::Timestamp;
 use timely::dataflow::Scope;
 use timely::dataflow::operators::Binary;
 use timely::dataflow::channels::pact::Pipeline;
-// =======
-// use std::ops::DerefMut;
-
-// use ::{Data, Collection};
-// use timely::dataflow::Scope;
-// use timely::dataflow::operators::{Map, Binary};
-// use timely::dataflow::channels::pact::Exchange;
-// >>>>>>> master
-use timely::drain::DrainExt;
+use timely_sort::Unsigned;
 
 use ::{Data, Collection};
 use collection::{LeastUpperBound, Lookup};
 use collection::trace::{Trace,TraceRef};
-use radix_sort::{Unsigned};
 use operators::arrange::{Arranged, ArrangeByKey, ArrangeBySelf};
 
 /// Join implementations for `(key,val)` data.
@@ -152,14 +142,14 @@ impl<TS: Timestamp, G: Scope<Timestamp=TS>, T: Trace<Index=TS>+'static> JoinArra
             while let Some((time, data)) = input1.next() {
                 assert!(data.len() == 1);
                 notificator.notify_at(&time);
-                inputs1.entry_or_insert(time.clone(), || data.drain_temp().next().unwrap());
+                inputs1.entry_or_insert(time.clone(), || data.drain(..).next().unwrap());
             }
 
             // read input 2, push all data to queues
             while let Some((time, data)) = input2.next() {
                 assert!(data.len() == 1);
                 notificator.notify_at(&time);
-                inputs2.entry_or_insert(time.clone(), || data.drain_temp().next().unwrap());
+                inputs2.entry_or_insert(time.clone(), || data.drain(..).next().unwrap());
             }
 
             // Notification means we have inputs to process or outputs to send.
@@ -222,7 +212,7 @@ impl<TS: Timestamp, G: Scope<Timestamp=TS>, T: Trace<Index=TS>+'static> JoinArra
                 // TODO : aggregation. It may be that we should send everything
                 // TODO : and let the receiver store the data as it sees fit.
                 if let Some(mut buffer) = outbuf.remove_key(&time) {
-                    output.session(&time).give_iterator(buffer.drain_temp());
+                    output.session(&time).give_iterator(buffer.drain(..));
                 }
 
                 // make sure we hold capabilities for each time still to send at.

@@ -26,7 +26,7 @@ let (e_in, edges) = dataflow.new_input::<((u32, u32), i32)>();
 let (r_in, roots) = dataflow.new_input::<(u32, i32)>();
 
 // initialize roots at distance 0
-let start = roots.map(|(x, w)| ((x, 0), w));
+let start = roots.map(|x| (x, 0));
 
 // repeatedly update minimal distances to each node,
 // by describing how to do one round of updates, and then repeating.

@@ -19,10 +19,9 @@
 
 use iterators::coalesce::Coalesce;
 
-use timely::drain::DrainExt;
 use std::fmt::Debug;
 
-use radix_sort::Unsigned;
+use timely_sort::Unsigned;
 
 /// A compressed representation of the accumulation of `(key, val, wgt)` triples.
 // TODO : RLE where a run of two of the same elements means a value in a second array.
@@ -123,7 +122,7 @@ impl<K: Ord+Debug, V: Ord> Compact<K, V> {
         }
         buffer.truncate(cursor);
 
-        let mut iter = buffer.drain_temp();
+        let mut iter = buffer.drain(..);
         if let Some(((key1,val1),wgt1)) = iter.next() {
 
             let mut prev_len = self.vals.len();
@@ -161,13 +160,13 @@ impl<K: Ord+Debug, V: Ord> Compact<K, V> {
 
         let mut current = Default::default();
         
-        for ((key, val), wgt) in source.iter_mut().flat_map(|x| x.drain_temp()) {
+        for ((key, val), wgt) in source.iter_mut().flat_map(|x| x.drain(..)) {
             let hash = function(&key);
             if buffer.len() > 0 && hash != current {
                 // if hash < current { println!("  radix sort error? {} < {}", hash, current); }
                 buffer.sort_by(|x: &((K,V),i32),y: &((K,V),i32)| x.0.cmp(&y.0));
         
-                // result.extend(buffer.drain_temp().coalesce());
+                // result.extend(buffer.drain(..).coalesce());
                 result.extend_by(&mut buffer);
             }
             buffer.push(((key,val),wgt));
@@ -177,7 +176,7 @@ impl<K: Ord+Debug, V: Ord> Compact<K, V> {
         if buffer.len() > 0 {
             // hsort_by(&mut buffer, &|x: &((K,V),i32)| &x.0);
             buffer.sort_by(|x: &((K,V),i32),y: &((K,V),i32)| x.0.cmp(&y.0));
-            result.extend(buffer.drain_temp().coalesce());
+            result.extend(buffer.drain(..).coalesce());
         }
 
         if result.vals.len() > 0 {
