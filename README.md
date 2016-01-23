@@ -46,14 +46,14 @@ Once you've set up a differential dataflow graph, you are then able to start int
 
 Let's take the [BFS example](https://github.com/frankmcsherry/differential-dataflow/blob/master/examples/bfs.rs) from the differential dataflow repository. It takes four arguments: 
 
-    cargo run --release --example bfs nodes edges batch inspect
+    cargo run --release --example bfs -- nodes edges batch inspect
 
 where `nodes` and `edges` are numbers of nodes and edges in your random graph of choice, `batch` is "how many edges should we change at a time?" and `inspect` should be `inspect` if you want to see any output. Not observing the output may let it go a bit faster in a low-latency environment.
 
 Let's try 1M nodes, 10M edges:
 
 ```
-Echidnatron% cargo run --release --example bfs 10000000 100000000 1000 inspect
+Echidnatron% cargo run --release --example bfs -- 10000000 100000000 1000 inspect
      Running `target/release/examples/bfs 10000000 100000000 1000 inspect`
 performing BFS on 10000000 nodes, 100000000 edges:
 loaded; elapsed: 4.963626955002837s
