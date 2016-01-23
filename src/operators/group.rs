@@ -42,14 +42,12 @@ use ::{Data, Collection, Delta};
 use timely::dataflow::*;
 use timely::dataflow::operators::{Map, Unary};
 use timely::dataflow::channels::pact::Exchange;
-use timely::drain::DrainExt;
+use timely_sort::{LSBRadixSorter, Unsigned};
 
 use collection::{LeastUpperBound, Lookup, Trace, Offset};
 use collection::trace::CollectionIterator;
 
 use iterators::coalesce::Coalesce;
-use radix_sort::{RadixSorter, Unsigned};
-// use collection::robin_hood::RHHMap;
 use collection::compact::Compact;
 
 /// Extension trait for the `group` differential dataflow method
@@ -244,7 +242,7 @@ impl<G: Scope, D1: Data> GroupByCore<G, D1> for Collection<G, D1> where G::Times
         // create an exchange channel based on the supplied Fn(&D1)->u64.
         let exch = Exchange::new(move |&(ref x,_)| part(x));
 
-        let mut sorter = RadixSorter::new();
+        let mut sorter = LSBRadixSorter::new();
 
         // fabricate a data-parallel operator using the `unary_notify` pattern.
         Collection::new(self.inner.unary_notify(exch, "GroupBy", vec![], move |input, output, notificator| {
@@ -277,7 +275,7 @@ impl<G: Scope, D1: Data> GroupByCore<G, D1> for Collection<G, D1> where G::Times
                     }
                     else {
                         let mut vec = queue.pop().unwrap();
-                        let mut vec = vec.drain_temp().map(|(d,w)| (kv(d),w)).collect::<Vec<_>>();
+                        let mut vec = vec.drain(..).map(|(d,w)| (kv(d),w)).collect::<Vec<_>>();
                         vec.sort_by(|x,y| key_h(&(x.0).0).cmp(&key_h((&(y.0).0))));
                         Compact::from_radix(&mut vec![vec], &|k| key_h(k))
                     };

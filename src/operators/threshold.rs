@@ -8,9 +8,8 @@ use ::{Collection, Data};
 use timely::dataflow::*;
 use timely::dataflow::operators::{Map, Unary};
 use timely::dataflow::channels::pact::Exchange;
-use timely::drain::DrainExt;
 
-use radix_sort::{RadixSorter, Unsigned};
+use timely_sort::{LSBRadixSorter, Unsigned};
 
 use collection::{LeastUpperBound, Lookup};
 use collection::count::{Count, Offset};
@@ -46,7 +45,7 @@ impl<G: Scope, D: Data+Default+'static> Threshold<G, D> for Collection<G, D> whe
         // A map from times to a list of keys that need processing at that time.
         let mut to_do = Vec::new();
 
-        let mut sorter = RadixSorter::new();
+        let mut sorter = LSBRadixSorter::new();
 
         let key1 = Rc::new(key_h);
         let key2 = key1.clone();
@@ -77,7 +76,7 @@ impl<G: Scope, D: Data+Default+'static> Threshold<G, D> for Collection<G, D> whe
                     }
                     else {
                         let mut vec = queue.pop().unwrap();
-                        let mut vec = vec.drain_temp().map(|(d,w)| ((d,()),w)).collect::<Vec<_>>();
+                        let mut vec = vec.drain(..).map(|(d,w)| ((d,()),w)).collect::<Vec<_>>();
                         vec.sort_by(|x,y| key2(&(x.0).0).cmp(&key2((&(y.0).0))));
                         Compact::from_radix(&mut vec![vec], &|k| key2(k))
                     };

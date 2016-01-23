@@ -12,14 +12,13 @@ use ::{Data, Collection};
 use timely::dataflow::Scope;
 use timely::dataflow::operators::{Map, Binary};
 use timely::dataflow::channels::pact::Exchange;
-use timely::drain::DrainExt;
 
 use timely_communication::Allocate;
 
 use collection::{Trace, LeastUpperBound, Lookup, Offset};
 use collection::compact::Compact;
 use collection::robin_hood::RHHMap;
-use radix_sort::{RadixSorter, Unsigned};
+use timely_sort::{LSBRadixSorter, Unsigned};
 
 /// Join implementations for `(key,val)` data.
 ///
@@ -312,8 +311,8 @@ impl<G: Scope, D1: Data> JoinByCore<G, D1> for Collection<G, D1> where G::Timest
         let exch1 = Exchange::new(move |&(ref r, _)| part1(r));
         let exch2 = Exchange::new(move |&(ref r, _)| part2(r));
 
-        let mut sorter1 = RadixSorter::new();
-        let mut sorter2 = RadixSorter::new();
+        let mut sorter1 = LSBRadixSorter::new();
+        let mut sorter2 = LSBRadixSorter::new();
 
         Collection::new(self.inner.binary_notify(&stream2.inner, exch1, exch2, "Join", vec![], move |input1, input2, output, notificator| {
 
@@ -353,7 +352,7 @@ impl<G: Scope, D1: Data> JoinByCore<G, D1> for Collection<G, D1> where G::Timest
                     }
                     else {
                         let mut vec = queue.pop().unwrap();
-                        let mut vec = vec.drain_temp().map(|(d,w)| (kv1(d),w)).collect::<Vec<_>>();
+                        let mut vec = vec.drain(..).map(|(d,w)| (kv1(d),w)).collect::<Vec<_>>();
 
                         vec.sort_by(|x,y| key_h(&(x.0).0).cmp(&key_h((&(y.0).0))));
                         Compact::from_radix(&mut vec![vec], &|k| key_h(k))
@@ -385,7 +384,7 @@ impl<G: Scope, D1: Data> JoinByCore<G, D1> for Collection<G, D1> where G::Timest
                     }
                     else {
                         let mut vec = queue.pop().unwrap();
-                        let mut vec = vec.drain_temp().map(|(d,w)| (kv2(d),w)).collect::<Vec<_>>();
+                        let mut vec = vec.drain(..).map(|(d,w)| (kv2(d),w)).collect::<Vec<_>>();
                         vec.sort_by(|x,y| key_h(&(x.0).0).cmp(&key_h((&(y.0).0))));
                         Compact::from_radix(&mut vec![vec], &|k| key_h(k))
                     };
@@ -410,15 +409,15 @@ impl<G: Scope, D1: Data> JoinByCore<G, D1> for Collection<G, D1> where G::Timest
                 // partitioned and may be coalesced, but no such guarantee here; may overflow mem.
 
                 if let Some(mut buffer) = outbuf.remove_key(&time) {
-                    output.session(&time).give_iterator(buffer.drain_temp());
+                    output.session(&time).give_iterator(buffer.drain(..));
                 }
 
                 for &(ref time, _) in &outbuf {
                     notificator.notify_at(time);
                 }
 
-                // for (time, mut vals) in outbuf.drain_temp() {
-                //     output.session(&time).give_iterator(vals.drain_temp());
+                // for (time, mut vals) in outbuf.drain(..) {
+                //     output.session(&time).give_iterator(vals.drain(..));
                 // }
             }
         }))
