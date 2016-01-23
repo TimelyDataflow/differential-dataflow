@@ -47,6 +47,7 @@ use collection::{LeastUpperBound, Lookup, Trace, BasicTrace, Offset};
 use collection::trace::CollectionIterator;
 use collection::basic::DifferenceIterator;
 use collection::compact::Compact;
+
 use iterators::coalesce::Coalesce;
 
 /// Extension trait for the `group` differential dataflow method

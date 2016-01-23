@@ -42,13 +42,12 @@ use ::{Collection, Data};
 use timely::dataflow::*;
 use timely::dataflow::operators::{Map, Binary};
 use timely::dataflow::channels::pact::Exchange;
-use timely::drain::DrainExt;
+use timely_sort::{LSBRadixSorter, Unsigned};
 
 use collection::{LeastUpperBound, Lookup, Trace, Offset};
 use collection::trace::{CollectionIterator, DifferenceIterator, Traceable};
 
 use iterators::coalesce::Coalesce;
-use radix_sort::{RadixSorter, Unsigned};
 use collection::compact::Compact;
 
 /// Extension trait for the `group_by` and `group_by_u` differential dataflow methods.
@@ -113,8 +112,8 @@ where G::Timestamp: LeastUpperBound {
         let exch1 = Exchange::new(move |&((ref k, _),_)| key_1(k).as_u64());
         let exch2 = Exchange::new(move |&((ref k, _),_)| key_2(k).as_u64());
 
-        let mut sorter1 = RadixSorter::new();
-        let mut sorter2 = RadixSorter::new();
+        let mut sorter1 = LSBRadixSorter::new();
+        let mut sorter2 = LSBRadixSorter::new();
 
         // fabricate a data-parallel operator using the `unary_notify` pattern.
         Collection::new(self.inner.binary_notify(&other.inner, exch1, exch2, "CoGroupBy", vec![], move |input1, input2, output, notificator| {
@@ -158,7 +157,7 @@ where G::Timestamp: LeastUpperBound {
                     }
                     else {
                         let mut vec = queue.pop().unwrap();
-                        let mut vec = vec.drain_temp().collect::<Vec<_>>();
+                        let mut vec = vec.drain(..).collect::<Vec<_>>();
                         vec.sort_by(|x,y| key_h(&(x.0).0).cmp(&key_h((&(y.0).0))));
                         Compact::from_radix(&mut vec![vec], &|k| key_h(k))
                     };
@@ -195,7 +194,7 @@ where G::Timestamp: LeastUpperBound {
                     }
                     else {
                         let mut vec = queue.pop().unwrap();
-                        let mut vec = vec.drain_temp().collect::<Vec<_>>();
+                        let mut vec = vec.drain(..).collect::<Vec<_>>();
                         vec.sort_by(|x,y| key_h(&(x.0).0).cmp(&key_h((&(y.0).0))));
                         Compact::from_radix(&mut vec![vec], &|k| key_h(k))
                     };

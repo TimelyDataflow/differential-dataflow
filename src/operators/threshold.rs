@@ -8,6 +8,7 @@ use ::{Collection, Data};
 use timely::dataflow::*;
 use timely::dataflow::operators::{Map, Unary};
 use timely::dataflow::channels::pact::Exchange;
+
 use timely_sort::{LSBRadixSorter, Unsigned};
 
 use collection::{LeastUpperBound, Lookup};

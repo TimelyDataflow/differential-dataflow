@@ -22,153 +22,90 @@ Each known minimal distance (to some node) can be joined with the set of edges e
 The program to do this in differential dataflow follows exactly this pattern. Although there is a bit of syntactic guff, and there is no reason you should expect to understand the arguments of the various methods at this point, the above algorithm looks like:
 
 ```rust
-let (e_in, edges) = dataflow.new_input::<((u32, u32), i32)>();
-let (r_in, roots) = dataflow.new_input::<(u32, i32)>();
+	// imagine nodes and edges contain (node, dist) and (src, dst) pairs, respectively
+    // repeatedly update minimal distances each node can be reached from each root
+    nodes.iterate(|inner| {
 
-// initialize roots at distance 0
-let start = roots.map(|x| (x, 0));
+        let edges = edges.enter(&inner.scope());
+        let nodes = nodes.enter(&inner.scope());
 
-// repeatedly update minimal distances to each node,
-// by describing how to do one round of updates, and then repeating.
-let limit = start.iterate(|dists| {
-
-    // bring the invariant edges into the loop
-    let edges = edges.enter(&dists.scope());
-
-    // join current distances with edges to get +1 distances,
-    // include the current distances in the set as well,
-    // group by node id and keep minimum distance.
-    dists.join_map_u(&edges, |_,d,n| (*n, d+1))
-         .concat(&dists)
-         .group_u(|_, s, t| t.push((*s.peek().unwrap().0, 1)) )
-});
+        // join dists with edges, keeps old dists, keep min.
+        inner.join_map_u(&edges, |_k,l,d| (*d, l+1))
+             .concat(&nodes)
+             .group_u(|_, s, t| t.push((*s.peek().unwrap().0, 1)))
+    })
 ```
 
-Having defined the computation, we can now modify the `edges` and `roots` input collections, using the `e_in` and `r_in` handles, respectively. We might start by adding all of our edges, and perhaps then exploring the set of roots. Or we might change the edges with the roots held fixed to see how the distances change for each edge.
 
-In any case, the outputs will precisely track the computation applied to the inputs. It's just that easy!
+
+The [BFS example](https://github.com/frankmcsherry/differential-dataflow/blob/master/examples/bfs.rs) from the differential dataflow repository [wraps this up as a method](https://github.com/frankmcsherry/differential-dataflow/blob/master/examples/bfs.rs#L98-L115).
+
+Once you've set up a differential dataflow graph, you are then able to start interacting with it by adding "differences" to the inputs. The example in the repository has inputs for the roots of the computation and the edges in the graph. We can repeatedly add and remove edges, for example, and differential dataflow magically updates the outputs of the computation!
 
 ## An example execution: breadth first search
 
-Let's take the [BFS example](https://github.com/frankmcsherry/differential-dataflow/blob/master/examples/bfs.rs) from the differential dataflow repository. It constructs a random graph on 200M edges, performs the reachability computation defined above, starting from root nodes 0, 1, and 2, and reports the number of nodes at each distance.
+Let's take the [BFS example](https://github.com/frankmcsherry/differential-dataflow/blob/master/examples/bfs.rs) from the differential dataflow repository. It takes four arguments: 
 
-The random number generator is seeded, so you should see the same output I see (up to timings):
+    cargo run --release --example bfs -- nodes edges batch inspect
 
-```
-Echidnatron% cargo run --release --example bfs
-     Running `target/release/examples/bfs`
-performing BFS on 100000000 nodes, 200000000 edges:
-observed at (Root, 0):
-elapsed: 264.0985786569945s
-	(0, 3)
-	(1, 8)
-	(2, 21)
-	(3, 52)
-	(4, 99)
-	(5, 199)
-	(6, 357)
-	(7, 711)
-	(8, 1349)
-	(9, 2721)
-	(10, 5465)
-	(11, 10902)
-	(12, 21798)
-	(13, 43391)
-	(14, 86149)
-	(15, 172251)
-	(16, 342484)
-	(17, 676404)
-	(18, 1325526)
-	(19, 2544386)
-	(20, 4699159)
-	(21, 8077892)
-	(22, 12229347)
-	(23, 15145774)
-	(24, 14275975)
-	(25, 10020299)
-	(26, 5505139)
-	(27, 2584731)
-	(28, 1118823)
-	(29, 467071)
-	(30, 192398)
-	(31, 78933)
-	(32, 32175)
-	(33, 13103)
-	(34, 5162)
-	(35, 2051)
-	(36, 819)
-	(37, 336)
-	(38, 138)
-	(39, 56)
-	(40, 34)
-	(41, 14)
-	(42, 6)
-	(43, 3)
-	(44, 2)
-```
+where `nodes` and `edges` are numbers of nodes and edges in your random graph of choice, `batch` is "how many edges should we change at a time?" and `inspect` should be `inspect` if you want to see any output. Not observing the output may let it go a bit faster in a low-latency environment.
 
-The computation takes 264.1 seconds to get done, which is not a great (or even good) time for breadth first search on 200 million edges. The computation is single threaded, and the number would go down when more threads are brought to bear.
-
-That isn't the cool part, though.
-
-### Concurrent incremental updates
-
-As soon as the computation started, it began to randomly add and remove edges, one addition and removal per second. The corresponding output updates depend on those of the initial computation, and so we can't report them until after reporting those of the first round. But, just after the first round of output emerges, we see outputs like:
+Let's try 1M nodes, 10M edges:
 
 ```
-observed at (Root, 3):
-elapsed: 261.10050941698137s
-	(23, 1)
-	(24, 2)
-	(25, -2)
-	(27, -1)
-observed at (Root, 4):
-elapsed: 260.100518569001s
-	(21, 1)
-	(24, -1)
-observed at (Root, 5):
-elapsed: 259.1005240849918s
-	(23, 1)
-observed at (Root, 8):
-elapsed: 256.1005283939885s
-	(24, -1)
-	(25, -1)
-observed at (Root, 11):
-elapsed: 253.109466711001s
-	(25, 1)
-	(26, -1)
+Echidnatron% cargo run --release --example bfs -- 10000000 100000000 1000 inspect
+     Running `target/release/examples/bfs 10000000 100000000 1000 inspect`
+performing BFS on 10000000 nodes, 100000000 edges:
+loaded; elapsed: 4.963626955002837s
+	(0, 1)
+	(1, 9)
+	(2, 84)
+	(3, 881)
+	(4, 8834)
+	(5, 87849)
+	(6, 833495)
+	(7, 5128633)
+	(8, 3917057)
+	(9, 22710)
+	(10, 10)
+stable; elapsed: 29.791500767001708s
 ```
 
-Each of these outputs reports a change in the numbers of nodes at each distance from the roots. If accumulated with prior counts (the initial counts above, plus any preceding changes), they are the correct counts for the number of nodes *now* at each distance from the roots.
+This tells us how many nodes in the graph are reachable at each distance (mostly distance `7` and `8` it seems), as well as how long it took to determine this (`29.79s` which isn't great). This improves with more threads, but it isn't the coolest part of differential dataflow.
 
-These outputs corresponding to inputs introduced at seconds 3, 4, 5, 8, and 11 from the start of the computation, times at which we haven't even finished introducing the initial 200M randomly generated graph edges. As a consequence, these outputs have fairly large `elapsed` measurements.
+### Incremental updates
 
-However, you may notice that the times at which they are reported, their second of introduction plus the elapsed measurement, are quite tightly concentrated, at roughly 264.1 seconds. While these results are not available until after the outputs for the first epoch are complete, they do emerge almost immediately thereafter.
-
-### Streaming incremental updates
-
-If we scan through the output until epoch 265, the first one not blocked by the initial 264.1s of work, we see that its elapsed time is quite small. As are those that follow it:
+As soon as the computation has produced the output above, we start introduce batches of `batch` edge changes at a time. We add that many and remove that many. In the example above, we are removing 1000 existing edges and adding 1000 new ones.
 
 ```
-observed at (Root, 265):
-elapsed: 0.0018802949925884604s
-	(25, -1)
-	(26, -1)
-	(27, -1)
-observed at (Root, 268):
-elapsed: 0.0018262710073031485s
-	(24, 1)
-observed at (Root, 273):
-elapsed: 0.0018914630054496229s
-	(25, -1)
-observed at (Root, 274):
-elapsed: 0.00016224500723183155s
-	(22, -1)
-	(24, 1)
-	(29, 1)
-...
+	(7, 1)
+	(8, -2)
+	(9, 1)
+wave 0: avg 0.00012186273099359823
+	(6, 4)
+	(7, -2)
+	(8, -3)
+	(9, 1)
+wave 1: avg 0.000010136429002159274
+	(5, -3)
+	(6, -25)
+	(7, -45)
+	(8, 70)
+	(9, 3)
+wave 2: avg 0.000016634063002129552
+	(6, -3)
+	(7, -4)
+	(8, 7)
+wave 3: avg 0.000010830363004060928
+	(5, -1)
+	(6, -6)
+	(7, -43)
+	(8, 49)
+	(9, 1)
+wave 4: avg 0.00001652919500338612
 ```
-The `elapsed` measurements from this point on are single-digit milliseconds, or less.
+
+We are now seeing the changes to the node distances for each batch of 1000 changes, and the amount of time taken *divided by the batch size*. It's a pretty small time. The number of changes are also pretty small, which makes me wonder a bit. The dynamics of these sorts of experiments are often a bit weird. 
 
 ## Data parallelism
 
