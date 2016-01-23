@@ -33,7 +33,8 @@ The program to do this in differential dataflow follows exactly this pattern. Al
              .concat(&nodes)
              .group_u(|_, s, t| t.push((*s.peek().unwrap().0, 1)))
      })
-}```
+}
+```
 
 
 
