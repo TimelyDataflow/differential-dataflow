@@ -12,7 +12,6 @@ use std::io::{BufRead, BufReader};
 use timely::*;
 use timely::dataflow::*;
 use timely::dataflow::operators::*;
-use timely::drain::DrainExt;
 
 use timely::progress::timestamp::RootTimestamp;
 use timely::dataflow::channels::pact::Pipeline;
@@ -131,7 +130,7 @@ fn main() {
         parts.close();
         let item_count = items_buffer.len();
 
-        for (index, item) in items_buffer.drain_temp().enumerate() {
+        for (index, item) in items_buffer.drain(..).enumerate() {
             items.send(item);
             items.advance_to(index as u64 + 1);
             while *epoch.borrow() <= index as u64 {
