@@ -23,9 +23,10 @@ fn main() {
     let nodes: u32 = std::env::args().nth(1).unwrap().parse().unwrap();
     let edges: u32 = std::env::args().nth(2).unwrap().parse().unwrap();
     let batch: u32 = std::env::args().nth(3).unwrap().parse().unwrap();
+    let inspect: bool = std::env::args().nth(4).unwrap() == "inspect";
 
     // define a new computational scope, in which to run BFS
-    timely::execute_from_args(std::env::args().skip(4), move |computation| {
+    timely::execute_from_args(std::env::args().skip(5), move |computation| {
         let start = time::precise_time_s();
 
         // define BFS dataflow; return handles to roots and edges inputs
@@ -33,9 +34,15 @@ fn main() {
 
             let roots = vec![(0,1)].into_iter().to_stream(scope);
             let (edge_input, graph) = scope.new_input();
-            let probe = bfs(&Collection::new(graph), &Collection::new(roots)).probe().0;
+            let mut result = bfs(&Collection::new(graph), &Collection::new(roots));
 
-            (edge_input, probe)
+            if !inspect {
+                result = result.filter(|_| false);
+            }
+
+            let probe = result.map(|(_x,l)| l).consolidate_by(|&x| x).inner.inspect(|x| println!("\t{:?}", x)).probe();
+
+            (edge_input, probe.0)
         });
 
         let seed: &[_] = &[1, 2, 3, 4];
