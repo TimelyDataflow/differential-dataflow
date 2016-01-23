@@ -73,7 +73,7 @@ stable; elapsed: 29.791500767001708s
 
 This tells us how many nodes in the graph are reachable at each distance (mostly distance `7` and `8` it seems), as well as how long it took to determine this (`29.79s` which isn't great). This improves with more threads, but it isn't the coolest part of differential dataflow.
 
-### Concurrent incremental updates
+### Incremental updates
 
 As soon as the computation has produced the output above, we start introduce batches of `batch` edge changes at a time. We add that many and remove that many. In the example above, we are removing 1000 existing edges and adding 1000 new ones.
 
