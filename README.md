@@ -29,11 +29,11 @@ The program to do this in differential dataflow follows exactly this pattern. Al
         let edges = edges.enter(&inner.scope());
         let nodes = nodes.enter(&inner.scope());
 
+        // join dists with edges, keeps old dists, keep min.
         inner.join_map_u(&edges, |_k,l,d| (*d, l+1))
              .concat(&nodes)
              .group_u(|_, s, t| t.push((*s.peek().unwrap().0, 1)))
-     })
-}
+    })
 ```
 
 
