@@ -18,7 +18,7 @@ use timely::progress::timestamp::RootTimestamp;
 use differential_dataflow::Data;
 use differential_dataflow::operators::*;
 use differential_dataflow::collection::LeastUpperBound;
-use differential_dataflow::operators::join::JoinBy;
+use differential_dataflow::operators::join::{Join, JoinUnsigned};
 
 use differential_dataflow::collection::robin_hood::RHHMap;
 
