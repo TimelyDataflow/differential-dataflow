@@ -50,7 +50,7 @@ Let's take the [BFS example](https://github.com/frankmcsherry/differential-dataf
 
 where `nodes` and `edges` are numbers of nodes and edges in your random graph of choice, `batch` is "how many edges should we change at a time?" and `inspect` should be `inspect` if you want to see any output. Not observing the output may let it go a bit faster in a low-latency environment.
 
-Let's try 1M nodes, 10M edges:
+Let's try 10M nodes, 100M edges:
 
 ```
 Echidnatron% cargo run --release --example bfs -- 10000000 100000000 1000 inspect
@@ -109,9 +109,9 @@ We are now seeing the changes to the node distances for each batch of 1000 chang
 
 ## Data parallelism
 
-Differential dataflow is built on [timely dataflow](https://github.com/frankmcsherry/timely-dataflow), a distributed data-parallel dataflow platform. Consequently, it distributes over multiple threads, processes, and computers. The additional resources allow larger computations to be processed more efficiently, but may limit the minimal latency for small updates, as more computations must coordinate.
+Differential dataflow is built on [timely dataflow](https://github.com/frankmcsherry/timely-dataflow), a distributed data-parallel dataflow platform. Consequently, it distributes over multiple threads, processes, and computers. The additional resources increase the throughput as more workers contribute, but may reduce the minimal latency for small updates as more workers must coordinate.
 
-## To-do list
+<!-- ## To-do list
 
 There are a few things that stand out as good, meaty bits of work to do. If you are interested, let me know. Otherwise I'll take a stab at them.
 
@@ -144,4 +144,4 @@ It is not uncommon for the same set of `(key, val)` tuples to be used by multipl
 **Update**: There is a first attempt at this in the [`arrangement` branch](https://github.com/frankmcsherry/differential-dataflow/tree/arrangement), which also does the "Generic storage" thing above. At the moment, it ICEs Rust stable and nightly (in different ways) and may be more horrible than is worth it. 
 ### Half-joins
 
-There is the potential to implement multiple joins in a manner like that of Koch et al, where the join is logically differentiated with respect to each of its inputs, and each form is instantiated to respond to changes in the corresponding input. This seems very pleasant, and avoids materializing (and storing) intermediate data, but seems to require a new operator, like a join but which only responds to changes on one of its inputs.
+There is the potential to implement multiple joins in a manner like that of Koch et al, where the join is logically differentiated with respect to each of its inputs, and each form is instantiated to respond to changes in the corresponding input. This seems very pleasant, and avoids materializing (and storing) intermediate data, but seems to require a new operator, like a join but which only responds to changes on one of its inputs. -->
