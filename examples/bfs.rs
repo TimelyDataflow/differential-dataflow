@@ -71,9 +71,11 @@ fn main() {
         if batch > 0 {
             let mut changes = Vec::new();
             for wave in 0.. {
-                for _ in 0..batch {
-                    changes.push(((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), 1));
-                    changes.push(((rng2.gen_range(0, nodes), rng2.gen_range(0, nodes)),-1));
+                if computation.index() == 0 {
+                    for _ in 0..batch {
+                        changes.push(((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), 1));
+                        changes.push(((rng2.gen_range(0, nodes), rng2.gen_range(0, nodes)),-1));
+                    }
                 }
 
                 let start = time::precise_time_s();

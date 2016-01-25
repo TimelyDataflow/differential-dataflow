@@ -15,31 +15,31 @@ use timely::dataflow::operators::*;
 use timely::dataflow::operators::feedback::Handle;
 use timely::progress::timestamp::RootTimestamp;
 
-use differential_dataflow::Data;
+use differential_dataflow::{Data, Collection};
 use differential_dataflow::operators::*;
+use differential_dataflow::operators::join::JoinUnsigned;
 use differential_dataflow::collection::LeastUpperBound;
-use differential_dataflow::operators::join::{Join, JoinUnsigned};
-
 use differential_dataflow::collection::robin_hood::RHHMap;
 
 /// A collection defined by multiple mutually recursive rules.
 pub struct Variable<G: Scope, D: Default+Data>
 where G::Timestamp: LeastUpperBound {
     feedback: Option<Handle<G::Timestamp, u64,(D, i32)>>,
-    current:  Stream<Child<G, u64>, (D,i32)>,
+    current:  Collection<Child<G, u64>, D>,
 }
 
 impl<G: Scope, D: Default+Data> Variable<G, D> where G::Timestamp: LeastUpperBound {
     /// Creates a new `Variable` and a `Stream` representing its output, from a supplied `source` stream.
-    pub fn from(source: &Stream<Child<G, u64>, (D,i32)>) -> (Variable<G, D>, Stream<Child<G,u64>, (D, i32)>) {
-        let (feedback, cycle) = source.scope().loop_variable(u64::max_value(), 1);
+    pub fn from(source: &Collection<Child<G, u64>, D>) -> (Variable<G, D>, Collection<Child<G,u64>, D>) {
+        let (feedback, cycle) = source.inner.scope().loop_variable(u64::max_value(), 1);
+        let cycle = Collection::new(cycle);
         let mut result = Variable { feedback: Some(feedback), current: cycle.clone() };
         let stream = cycle.clone();
         result.add(source);
         (result, stream)
     }
     /// Adds a new source of data to the `Variable`.
-    pub fn add(&mut self, source: &Stream<Child<G, u64>, (D,i32)>) {
+    pub fn add(&mut self, source: &Collection<Child<G, u64>, D>) {
         self.current = self.current.concat(source);
     }
 }
@@ -51,6 +51,7 @@ impl<G: Scope, D: Default+Data> Drop for Variable<G, D> where G::Timestamp: Leas
                 // |_| HashMap::new(), 
                 |_| RHHMap::new(|x: &D| x.hashed() as usize),
                 |_, w| if w > 0 { 1 } else { 0 })
+                        .inner
                         .connect_loop(feedback);
         }
     }
@@ -60,23 +61,27 @@ impl<G: Scope, D: Default+Data> Drop for Variable<G, D> where G::Timestamp: Leas
 pub struct NewVariable<G: Scope, D: Default+Data>
 where G::Timestamp: LeastUpperBound {
     feedback: Option<Handle<G::Timestamp, u64,(D, i32)>>,
-    source:  Stream<Child<G, u64>, (D,i32)>,
+    source:  Collection<Child<G, u64>, D>,
 }
 
 impl<G: Scope, D: Default+Data> NewVariable<G, D> where G::Timestamp: LeastUpperBound {
     /// Creates a new `Variable` and a `Stream` representing its output, from a supplied `source` stream.
-    pub fn from(source: &Stream<Child<G, u64>, (D,i32)>) -> (NewVariable<G, D>, Stream<Child<G,u64>, (D, i32)>) {
-        let (feedback, cycle) = source.scope().loop_variable(u64::max_value(), 1);
+    pub fn from(source: &Collection<Child<G, u64>, D>) -> (NewVariable<G, D>, Collection<Child<G,u64>, D>) {
+        let (feedback, cycle) = source.inner.scope().loop_variable(u64::max_value(), 1);
+        let cycle = Collection::new(cycle);
         let result = NewVariable { feedback: Some(feedback), source: cycle.clone() };
         let stream = cycle.clone();
         (result, stream)
     }
     /// Adds a new source of data to the `Variable`.
-    pub fn set(mut self, result: &Stream<Child<G, u64>, (D,i32)>) {
+    pub fn set(mut self, result: &Collection<Child<G, u64>, D>) {
         if let Some(feedback) = self.feedback.take() {
-            self.source.map_in_place(|x| x.1 *= -1)
-                       .concat(result)
-                       .connect_loop(feedback);
+            // negate weights; perhaps should be a Collection method?
+            self.source
+                .negate()
+                .concat(result)
+                .inner
+                .connect_loop(feedback);
         }
     }
 }
@@ -115,33 +120,25 @@ macro_rules! rule {
 macro_rules! rule_3 {
     ($name1: ident ($($var1:ident),*) := $name2: ident ($($var2:ident),*) $name3: ident ($($var3:ident),*) $name4: ident ($($var4:ident),*) : $key1:ident = $key2:ident, ($($key3:ident),*) = ($($key4:ident),*)) => {{
         let result =
-            $name2.0.join_by_u(
-                &$name3.0,
-                |($( $var2, )*)| ($key1, ( $($var2, )*)),
-                |($( $var3, )*)| ($key2, ( $($var3, )*)),
-                // |x| x.hashed(),
-                |_, &($( $var2, )*), &($( $var3, )*)| (($( $var2, )*), ($( $var3, )*)));
+            $name2.0
+                .map(|($( $var2, )*)| ($key1, ( $($var2, )*)))
+                .join_map_u(&$name3.0.map(|($( $var3, )*)| ($key2, ( $($var3, )*))),
+                    |_, &($( $var2, )*), &($( $var3, )*)| (($( $var2, )*), ($( $var3, )*)));
 
-        // result.map(|(_,w)| ((),w)).consolidate_by(|_| 0u64).inspect_batch(|t,b| { let mut sum = 0i64; for &(_,w) in b.iter() { sum += w as i64; } println!("intermediate: {} @ {:?}", sum, t); });
+        let result = result.map(|(($( $var2, )*), ($( $var3, )*))| (($( $key3, )*), (($( $var2, )*), ($( $var3, )*))))
+            .join_map(&$name4.0.map(|($( $var4, )*)| (($( $key4, )*), ( $($var4, )*))),
+                |_, &(($( $var2, )*), ($( $var3, )*)), &($( $var4, )*)| (($( $var2, )*), ($( $var3, )*), ($( $var4, )*)));
 
-        let result = result.join_by(
-                &$name4.0,
-                |(($( $var2, )*), ($( $var3, )*))| (($( $key3, )*), (($( $var2, )*), ($( $var3, )*))),
-                |($( $var4, )*)| (($( $key4, )*), ( $($var4, )*)),
-                |x| x.hashed(),
-                |_, &(($( $var2, )*), ($( $var3, )*)), &($( $var4, )*)| (($( $var2, )*), ($( $var3, )*), ($( $var4, )*))
-            );
+        $name1.1.add(&result.map(|(($( $var2, )*), ($( $var3, )*), ($( $var4, )*))| ($( $var1, )*)));
 
-        $name1.1.add(&result.map(|((($( $var2, )*), ($( $var3, )*), ($( $var4, )*)), __w)| (($( $var1, )*), __w)));
+        let temp = result.filter(|_| false)
+                         .map(|(($( $var2, )*), ($( $var3, )*), ($( $var4, )*))| (($( $var1, )*), (($( $var2, )*), ($( $var3, )*), ($( $var4, )*))))
+                         .semijoin(&$name1.2)
+                         .map(|(_, (($( $var2, )*), ($( $var3, )*), ($( $var4, )*)))| (($( $var2, )*), ($( $var3, )*), ($( $var4, )*)));
 
-        let temp = result.filter(|_| false).semijoin_by(
-            &$name1.2,
-            |(($( $var2, )*), ($( $var3, )*), ($( $var4, )*))| (($( $var1, )*), (($( $var2, )*), ($( $var3, )*), ($( $var4, )*))),
-            |x| x.hashed(),
-            |_, &(($( $var2, )*), ($( $var3, )*), ($( $var4, )*))| (($( $var2, )*), ($( $var3, )*), ($( $var4, )*)));
-        $name2.3.add(&temp.map(|((($( $var2, )*),_,_),__w)| (($( $var2, )*),__w)));
-        $name3.3.add(&temp.map(|((_,($( $var3, )*),_),__w)| (($( $var3, )*),__w)));
-        $name4.3.add(&temp.map(|((_,_,($( $var4, )*)),__w)| (($( $var4, )*),__w)));
+        $name2.3.add(&temp.map(|(($( $var2, )*),_,_)| ($( $var2, )*)));
+        $name3.3.add(&temp.map(|(_,($( $var3, )*),_)| ($( $var3, )*)));
+        $name4.3.add(&temp.map(|(_,_,($( $var4, )*))| ($( $var4, )*)));
 
         temp
     }};
@@ -149,30 +146,31 @@ macro_rules! rule_3 {
 
 macro_rules! rule_u {
     ($name1: ident ($($var1:ident),*) := $name2: ident ($($var2:ident),*) $name3: ident ($($var3:ident),*) : $var4:ident = $var5:ident) => {{
-        let result =
-            $name2.0.join_by_u(
-                &$name3.0,
-                |($( $var2, )*)| ($var4, ( $($var2, )*)),
-                |($( $var3, )*)| ($var5, ( $($var3, )*)),
-                |_, &($( $var2, )*), &($( $var3, )*)| (($( $var2, )*), ($( $var3, )*)));
-        $name1.1.add(&result.map(|((($( $var2, )*), ($( $var3, )*)), __w)| (($( $var1, )*), __w)));
 
-        let temp = result.filter(|_| false).semijoin_by(
-            &$name1.2,
-            |(($( $var2, )*), ($( $var3, )*))| (($( $var1, )*), (($( $var2, )*), ($( $var3, )*))),
-            |x| x.hashed(),
-            |_, &(($( $var2, )*), ($( $var3, )*))| (($( $var2, )*), ($( $var3, )*)));
-        $name2.3.add(&temp.map(|(( ($( $var2, )*) ,_),__w)| (($( $var2, )*),__w)));
-        $name3.3.add(&temp.map(|(( _, ($( $var3, )*)),__w)| (($( $var3, )*),__w)));
+        let result =
+            $name2.0
+                .map(|($( $var2, )*)| ($var4, ( $($var2, )*)))
+                .join_map_u(
+                    &$name3.0.map(|($( $var3, )*)| ($var5, ( $($var3, )*))),
+                    |_, &($( $var2, )*), &($( $var3, )*)| (($( $var2, )*), ($( $var3, )*)));
+
+        $name1.1.add(&result.map(|(($( $var2, )*), ($( $var3, )*))| ($( $var1, )*)));
+
+        let temp = result.filter(|_| false)
+                         .map(|(($( $var2, )*), ($( $var3, )*))| (($( $var1, )*), (($( $var2, )*), ($( $var3, )*))))
+                         .semijoin(&$name1.2);
+
+        $name2.3.add(&temp.map(|(_, (($( $var2, )*) ,_))| ($( $var2, )*)));
+        $name3.3.add(&temp.map(|(_, (_, ($( $var3, )*)))| ($( $var3, )*)));
 
         temp
     }};
 }
 
 macro_rules! variable {
-    ($name0: ident : $name1: expr, $name2: expr) => {{
-        let temp1 = Variable::from(&$name0.enter(&$name1));
-        let temp2 = Variable::from(&$name0.enter(&$name2));
+    ($scope: ident : $name1: expr, $name2: expr) => {{
+        let temp1 = Variable::from(&$name1.enter(&$scope));
+        let temp2 = Variable::from(&$name2.enter(&$scope));
         (temp1.1, temp1.0, temp2.1, temp2.0)
     }}
 }
@@ -213,36 +211,36 @@ fn main() {
         let (mut c, mut p, mut q, mut r, mut s, mut u, mut p_query, mut q_query, probe) = root.scoped::<u64, _, _>(move |outer| {
 
             // inputs for p, q, and u base facts.
-            let (c_input, c) = outer.new_input();
-            let (p_input, p) = outer.new_input();
-            let (q_input, q) = outer.new_input();
-            let (r_input, r) = outer.new_input();
-            let (s_input, s) = outer.new_input();
-            let (u_input, u) = outer.new_input();
+            let (c_input, c) = outer.new_input(); let c = Collection::new(c);
+            let (p_input, p) = outer.new_input(); let p = Collection::new(p);
+            let (q_input, q) = outer.new_input(); let q = Collection::new(q);
+            let (r_input, r) = outer.new_input(); let r = Collection::new(r);
+            let (s_input, s) = outer.new_input(); let s = Collection::new(s);
+            let (u_input, u) = outer.new_input(); let u = Collection::new(u);
 
             // inputs through which to demand explanations.
-            let (_c_query_input, c_query) = outer.new_input();
-            let (p_query_input, p_query) = outer.new_input();
-            let (q_query_input, q_query) = outer.new_input();
-            let (_r_query_input, r_query) = outer.new_input();
-            let (_s_query_input, s_query) = outer.new_input();
-            let (_u_query_input, u_query) = outer.new_input();
+            let (_c_query_input, c_query) = outer.new_input(); let c_query = Collection::new(c_query);
+            let (p_query_input, p_query) = outer.new_input();  let p_query = Collection::new(p_query);
+            let (q_query_input, q_query) = outer.new_input();  let q_query = Collection::new(q_query);
+            let (_r_query_input, r_query) = outer.new_input(); let r_query = Collection::new(r_query);
+            let (_s_query_input, s_query) = outer.new_input(); let s_query = Collection::new(s_query);
+            let (_u_query_input, u_query) = outer.new_input(); let u_query = Collection::new(u_query);
 
             // derive each of the firings of each of the rules, as well as tuples deleted from
             // both p and q to ensure the emptiness of
             let (p_del, _q_del, _ir1, _ir2, _ir3, _ir4, _ir5, _ir6) = outer.scoped::<u64,_,_>(|middle| {
 
                 // an evolving set of things we may want to remove from p_edb and q_edb.
-                let mut p_del = Variable::from(&middle.enter(&p).filter(|_| false));
-                let mut q_del = Variable::from(&middle.enter(&q).filter(|_| false));
+                let mut p_del = Variable::from(&p.enter(&middle).filter(|_| false));
+                let mut q_del = Variable::from(&q.enter(&middle).filter(|_| false));
 
                 // bring outer streams into the middle scope
-                let (c_edb, c_query) = (middle.enter(&c), middle.enter(&c_query));
-                let (p_edb, p_query) = (middle.enter(&p).concat(&p_del.1.map(|(x,w)|(x,-w))).consolidate(), middle.enter(&p_query));
-                let (q_edb, q_query) = (middle.enter(&q).concat(&q_del.1.map(|(x,w)|(x,-w))).consolidate(), middle.enter(&q_query));
-                let (r_edb, r_query) = (middle.enter(&r), middle.enter(&r_query));
-                let (s_edb, s_query) = (middle.enter(&s), middle.enter(&s_query));
-                let (u_edb, u_query) = (middle.enter(&u), middle.enter(&u_query));
+                let (c_edb, c_query) = (c.enter(&middle), c_query.enter(&middle));
+                let (p_edb, p_query) = (p.enter(&middle).concat(&p_del.1.negate()).consolidate(), p_query.enter(&middle));
+                let (q_edb, q_query) = (q.enter(&middle).concat(&q_del.1.negate()).consolidate(), q_query.enter(&middle));
+                let (r_edb, r_query) = (r.enter(&middle), r_query.enter(&middle));
+                let (s_edb, s_query) = (s.enter(&middle), s_query.enter(&middle));
+                let (u_edb, u_query) = (u.enter(&middle), u_query.enter(&middle));
 
                 // determine derived p and q tuples, instances of p and q tuples which participate
                 // in the derivation of query (secret) tuples, and also which rules fire with what
@@ -275,21 +273,23 @@ fn main() {
 
                 // p_bad and q_bad are p and q tuples involved in the derivation.
                 // we should remove some of them from p, q by adding them to p_del, q_del.
-                let p_bad = p_bad.map(|(x,w)| ((x,()),w)).join(&p_edb.map(|(x,w)| ((x,()),w))).map(|((x,(),()),w)| (((),x),w));
-                let q_bad = q_bad.map(|(x,w)| ((x,()),w)).join(&q_edb.map(|(x,w)| ((x,()),w))).map(|((x,(),()),w)| (((),x),w));
+                let p_bad = p_bad.map(|x| (x,())).semijoin(&p_edb).map(|(x,())| x);
+                let q_bad = q_bad.map(|x| (x,())).semijoin(&q_edb).map(|(x,())| x);
 
-                let p_bad_new = p_bad.cogroup_by_inner(&q_bad, |k| k.hashed(), |_,&x| x,
-                            |_| HashMap::new(), |_key, input1, _input2, output| {
-                     output.push(input1.next().map(|(&x,w)|(x,w)).unwrap());
-                });
+                // // TODO : CoGroup is broken at the moment (incorrect interesting times).
+                // let p_bad_new = p_bad.cogroup_by_inner(&q_bad, |k| k.hashed(), |_,&x| x,
+                //             |_| HashMap::new(), |_key, input1, _input2, output| {
+                //      output.push(input1.next().map(|(&x,w)|(x,w)).unwrap());
+                // });
 
-                let q_bad_new = p_bad.cogroup_by_inner(&q_bad, |k| k.hashed(), |_,&x| x,
-                            |_| HashMap::new(), |_key, input1, input2, output| {
-                    if input1.next() == None { input2.next().map(|(&x,w)| output.push((x,w))); }
-                });
+                // // TODO : CoGroup is broken at the moment (incorrect interesting times).
+                // let q_bad_new = p_bad.cogroup_by_inner(&q_bad, |k| k.hashed(), |_,&x| x,
+                //             |_| HashMap::new(), |_key, input1, input2, output| {
+                //     if input1.next() == None { input2.next().map(|(&x,w)| output.push((x,w))); }
+                // });
 
-                p_del.0.add(&p_bad_new);
-                q_del.0.add(&q_bad_new);
+                p_del.0.add(&p_bad);
+                q_del.0.add(&q_bad);
 
                 (p_del.1.leave(), q_del.1.leave(), ir1.leave(), ir2.leave(), ir3.leave(), ir4.leave(), ir5.leave(), ir6.leave())
             });
