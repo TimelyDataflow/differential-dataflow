@@ -33,6 +33,12 @@ impl<G: Scope, D: Data> Collection<G, D> {
         }
     }
 
+    pub fn negate(&self) -> Collection<G, D> {
+        Collection {
+            inner: self.inner.map_in_place(|x| x.1 *= -1)
+        }
+    }
+
     pub fn filter<L: Fn(&D) -> bool + 'static>(&self, logic: L) -> Collection<G, D> {
         Collection {
             inner: self.inner.filter(move |&(ref data, _)| logic(data))
