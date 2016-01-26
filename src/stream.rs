@@ -9,6 +9,7 @@ use timely::dataflow::operators::*;
 use ::Delta;
 
 /// A mutable collection of values of type `D`
+#[derive(Clone)]
 pub struct Collection<G: Scope, D: Data> {
     pub inner: Stream<G, (D, Delta)>
 }
