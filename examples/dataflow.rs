@@ -65,7 +65,7 @@ fn main() {
 
             let label_query = queries.map(|q| (q,()))
                                      .join(&labels)
-                                     .map(|(q, _, l)| (l,q));
+                                     .map(|(q,_,l)| (l,q));
 
             let mut query_topics = label_query.join(&topk);
 
@@ -111,12 +111,12 @@ fn main() {
         if batch > 0 {
             let mut changes = Vec::new();
             for wave in 0.. {
-                let mut batch = batch / computation.peers();
-                if computation.index() < batch % computation.peers() { 
-                    batch += 1; 
+                let mut my_batch = batch / computation.peers();
+                if computation.index() < (batch % computation.peers()) { 
+                    my_batch += 1; 
                 }
 
-                for _ in 0..batch {
+                for _ in 0..my_batch {
                     changes.push(((tweet_rng1.gen_range(0, users), 
                                    tweet_rng1.gen_range(0, users),
                                    tweet_rng1.gen_range(0, topics)), 1));
