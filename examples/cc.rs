@@ -2,7 +2,7 @@ extern crate rand;
 extern crate time;
 extern crate getopts;
 extern crate timely;
-extern crate graph_map;
+// extern crate graph_map;
 extern crate differential_dataflow;
 
 use std::hash::Hash;
@@ -16,7 +16,7 @@ use differential_dataflow::operators::*;
 use differential_dataflow::operators::join::JoinUnsigned;
 use differential_dataflow::operators::group::GroupUnsigned;
 
-use graph_map::GraphMMap;
+// use graph_map::GraphMMap;
 
 type Node = u32;
 type Edge = (Node, Node);
@@ -31,19 +31,20 @@ fn main() {
         let peers = computation.peers();
         let index = computation.index();
 
+        // // What you might do if you used GraphMMap:
+        // let graph = GraphMMap::new(&filename);
+        // let nodes = graph.nodes();
+        // let edges = (0..nodes).filter(move |node| node % peers == index)
+        //                       .flat_map(move |node| {
+        //                           let vec = graph.edges(node).to_vec();
+        //                           vec.into_iter().map(move |edge| ((node as u32, edge),1))
+        //                       })
+
+        let edges = vec![((0,1),1), ((1,2),1)].into_iter();
+
         computation.scoped::<u64,_,_>(|scope| {
 
-            let graph = GraphMMap::new(&filename);
-            let nodes = graph.nodes();
-            let edges = (0..nodes)
-                .filter(move |node| node % peers == index)      // TODO : below is pretty horrible.
-                .flat_map(move |node| {
-                    let vec = graph.edges(node).to_vec();
-                    vec.into_iter().map(move |edge| ((node as u32, edge),1))
-                })
-                .to_stream(scope);
-
-            connected_components(&Collection::new(edges));
+            connected_components(&Collection::new(edges.to_stream(scope)));
         });
     });
 }
