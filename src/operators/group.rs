@@ -56,6 +56,12 @@ pub trait Group<G: Scope, K: Data, V: Data> : GroupBy<G, (K,V)>
 
     /// Groups records by their first field, and applies reduction logic to the associated values.
     fn group<L, V2: Data>(&self, logic: L) -> Collection<G, (K,V2)>
+        where L: Fn(&K, &mut CollectionIterator<DifferenceIterator<V>>, &mut Vec<(V2, Delta)>)+'static;
+}
+
+impl<G: Scope, K: Data+Default, V: Data+Default> Group<G, K, V> for Collection<G, (K,V)>
+where G::Timestamp: LeastUpperBound {
+    fn group<L, V2: Data>(&self, logic: L) -> Collection<G, (K,V2)>
         where L: Fn(&K, &mut CollectionIterator<DifferenceIterator<V>>, &mut Vec<(V2, Delta)>)+'static {
             self.group_by_core(
                 |x| x,
@@ -67,11 +73,6 @@ pub trait Group<G: Scope, K: Data, V: Data> : GroupBy<G, (K,V)>
             )
     }
 }
-
-impl<G: Scope, K: Data+Default, V: Data+Default, S> Group<G, K, V> for S
-where G::Timestamp: LeastUpperBound,
-      S: GroupBy<G, (K,V)>+Map<G, ((K,V), i32)> { }
-
 
 pub trait GroupUnsigned<G: Scope, U: Unsigned+Data+Default, V: Data> : GroupBy<G, (U,V)>
     where G::Timestamp: LeastUpperBound {

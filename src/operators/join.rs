@@ -15,8 +15,6 @@ use collection::trace::{Trace,TraceRef};
 use operators::arrange::{Arranged, ArrangeByKey, ArrangeBySelf};
 
 /// Join implementations for `(key,val)` data.
-///
-/// The `Join` trait provides default implementations of `join` for streams of data with
 pub trait Join<G: Scope, K: Data, V: Data> {
 
     /// Matches pairs `(key,val1)` and `(key,val2)` based on `key`.
@@ -43,7 +41,9 @@ pub trait Join<G: Scope, K: Data, V: Data> {
     fn join<V2: Data>(&self, other: &Collection<G, (K,V2)>) -> Collection<G, (K,V,V2)> {
         self.join_map(other, |k,v1,v2| (k.clone(), v1.clone(), v2.clone()))
     }
+    /// Matches pairs `(key,val1)` and `(key,val2)` based on `key` and then applies a function.
     fn join_map<V2: Data, D: Data, R: Fn(&K, &V, &V2)->D+'static>(&self, other: &Collection<G, (K,V2)>, logic: R) -> Collection<G, D>;
+    /// Matches pairs `(key,val1)` and `key` based on `key`, filtering the first collection by values present in the second.
     fn semijoin(&self, other: &Collection<G, K>) -> Collection<G, (K, V)>;
 } 
 
@@ -68,11 +68,19 @@ impl<G: Scope, K: Data, V: Data> Join<G, K, V> for Collection<G, (K, V)> where G
 /// a more generic hash map. This can substantially reduce the amount of computation and memory
 /// required, but it will allocate as much memory as the largest identifier and so may have poor
 /// performance if the absolute range of keys is large.
+///
+/// These method may be deprecated in preferences of an approach which allows implementors of `Data` to define
+/// their own approach to indexing data. In this case, a newtype wrapping dense unsigned integers would indicate
+/// the indexing strategy, and the methods would simply be as above.
+
 pub trait JoinUnsigned<G: Scope, U: Unsigned+Data+Default, V: Data> where G::Timestamp: LeastUpperBound {
+    /// Joins two collections with dense unsigned integer keys.
     fn join_u<V2: Data>(&self, other: &Collection<G, (U,V2)>) -> Collection<G, (U,V,V2)> {
         self.join_map_u(other, |k,v1,v2| (k.clone(), v1.clone(), v2.clone()))
     }
+    /// Joins two collections with dense unsigned integer keys and then applies a map function.
     fn join_map_u<V2: Data, D: Data, R: Fn(&U, &V, &V2)->D+'static>(&self, other: &Collection<G, (U,V2)>, logic: R) -> Collection<G, D>;
+    /// Semijoins a collection with dense unsigned integer keys against a set of such keys.
     fn semijoin(&self, other: &Collection<G, U>) -> Collection<G, (U, V)>;
 }
 
@@ -95,9 +103,13 @@ impl<G: Scope, U: Unsigned+Data+Default, V: Data> JoinUnsigned<G, U, V> for Coll
 /// directly in the event that one has a handle to an `Arranged<G,T>`, perhaps because
 /// the arrangement is available for re-use, or from the output of a `group` operator.
 pub trait JoinArranged<G: Scope, K: Data, V: Data> where G::Timestamp: LeastUpperBound {
-    /// Matches the elements of two arranged traces.
+    /// Joins two arranged collections with the same key type.
     ///
-    /// The arrangements must have matching keys and indices, but the values may be arbitrary.
+    /// Each matching pair of records `(key, val1)` and `(key, val2)` are subjected to the `result` function, 
+    /// producing a corresponding output record.
+    ///
+    /// This trait is implemented for arrangements (`Arranged<G, T>`) rather than collections. The `Join` trait 
+    /// contains the implementations for collections.
     fn join<T2,R,RF> (&self, stream2: &Arranged<G,T2>, result: RF) -> Collection<G,R>
     where 
         T2: Trace<Key=K,Index=G::Timestamp>+'static,
