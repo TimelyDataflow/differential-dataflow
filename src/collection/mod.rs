@@ -8,7 +8,7 @@ pub mod least_upper_bound;
 pub mod lookup;
 pub mod trace;
 pub mod compact;
-pub mod tier;
+pub mod trie;
 pub mod count;
 pub mod robin_hood;
 pub mod basic;

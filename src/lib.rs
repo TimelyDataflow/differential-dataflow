@@ -111,6 +111,12 @@ pub type Delta = i32;
 
 pub use stream::Collection;
 
+// TODO : I would like this trait to have something like a `Map` associated type,
+// indicating the way that it would prefer to be used as an index. I think this 
+// looks like Higher Kinded Types, as the associated type would need to be generic
+// over values indexed against. Perhaps it can be faked in the same way that `Trace`
+// fakes HKT with `TraceRef`.
+
 /// A composite trait for data types usable in differential dataflow.
 pub trait Data : timely::Data + ::std::hash::Hash + Ord + Debug {
     /// Extracts a `u64` suitable for distributing and sorting the data.
@@ -128,9 +134,9 @@ pub trait Data : timely::Data + ::std::hash::Hash + Ord + Debug {
 }
 impl<T: timely::Data + ::std::hash::Hash + Ord + Debug> Data for T { }
 
-// /// An extension of timely's `Scope` trait requiring timestamps implement `LeastUpperBound`.
-// pub trait Scope : timely::dataflow::Scope where Self::Timestamp: collection::LeastUpperBound { }
-// impl<S: timely::dataflow::Scope> Scope for S where S::Timestamp: collection::LeastUpperBound { }
+/// An extension of timely's `Scope` trait requiring timestamps implement `LeastUpperBound`.
+pub trait TestScope : timely::dataflow::Scope where Self::Timestamp: collection::LeastUpperBound { }
+impl<S: timely::dataflow::Scope> TestScope for S where S::Timestamp: collection::LeastUpperBound { }
 
 
 extern crate rc;

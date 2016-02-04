@@ -1,3 +1,12 @@
+//! A trait for maps from `K` to `V` and implementations. 
+//!
+//! The `Lookup<K,V>` trait corresponds to a map from `K` to `V`. This can be
+//! implemented many different ways based on different requirements. A `HashMap<K,V>`
+//! is a general solution for `K: Hash`, whereas a `Vec<(K,V)>` is a primitive but
+//! often effective solution for `K: Eq`, the minimal requirement.
+//!
+//! Other implementations include a `Vec<Option<V>>` for `usize` keys, and a `RHHMap` 
+//! implementation based on a Robin Hood hashing implementation.
 use std::hash::Hash;
 use std::collections::HashMap;
 

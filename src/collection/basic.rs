@@ -4,6 +4,17 @@ use collection::{LeastUpperBound, Lookup};
 use collection::compact::Compact;
 
 /// A collection of values indexed by `key` and `time`.
+///
+/// A `BasicTrace` maintains a mapping from keys of type `K` to offsets into a vector of
+/// `ListEntry` structs, which are themselves linked-list entries of pairs of a time `T` 
+/// and an offset into a `TimeEntry` struct, which wraps a `Vec<(V, i32)>`.
+///
+/// This trie structure is easy to update as new times arrive: the new data form a new 
+/// `TimeEntry`, and any involved keys have elements added to their linked lists.
+///
+/// At the same time, its performance can degrade after large numbers of updates as the 
+/// data associated with a given key becomes more and more diffuse. The trace also has 
+/// no support for compaction.
 pub struct BasicTrace<K, T, V, L> {
     phantom: ::std::marker::PhantomData<K>,
     links: Vec<ListEntry>,
@@ -13,8 +24,8 @@ pub struct BasicTrace<K, T, V, L> {
 
 impl<K,V,L,T> Trace for BasicTrace<K, T, V, L> 
     where 
-        K: Data+'static, 
-        V: Data+'static, 
+        K: Data, 
+        V: Data, 
         L: Lookup<K, Offset>+'static, 
         T: LeastUpperBound+'static {
     type Key = K;
@@ -173,9 +184,9 @@ pub struct TraceIterator<'a, K: Eq+'a, T: 'a, V: 'a, L: Lookup<K, Offset>+'a> {
 }
 
 impl<'a, K, T, V, L> Iterator for TraceIterator<'a, K, T, V, L>
-where K:  Ord+'a,
+where K: Data,
       T: LeastUpperBound+'a,
-      V: Ord+'a,
+      V: Data,
       L: Lookup<K, Offset>+'a {
     type Item = (&'a T, DifferenceIterator<'a, V>);
 

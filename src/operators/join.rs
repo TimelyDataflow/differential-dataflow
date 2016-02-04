@@ -172,6 +172,9 @@ impl<TS: Timestamp, G: Scope<Timestamp=TS>, T: Trace<Index=TS>+'static> JoinArra
                 // after processing the first input, so that it is as if we added the inputs 
                 // to the traces in this order.
 
+                // TODO : it is probably wise to compact the results from each key before sending.
+                // TODO : at least, "changes" in join inputs often result in cancellations.
+
                 // compare fresh data on the first input against stale data on the second
                 if let Some(ref trace) = trace2 {
                     if let Some((keys, cnts, vals)) = inputs1.remove_key(&time) {
