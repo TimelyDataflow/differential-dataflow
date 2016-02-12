@@ -66,7 +66,6 @@ impl<G: Scope, K: Data, V: Data> ArrangeByKey<G, K, V> for Collection<G, (K, V)>
 
         // create a trace to share with downstream consumers.
         let trace = Rc::new(RefCell::new(BasicTrace::new(look(log_peers))));
-        // TODO : We would like to use a weak reference, but stable Rust doesn't have these.
         let source = trace.downgrade();
 
         // A map from times to received (key, val, wgt) triples.
@@ -96,8 +95,9 @@ impl<G: Scope, K: Data, V: Data> ArrangeByKey<G, K, V> for Collection<G, (K, V)>
                     // sort things; radix if many, .sort_by if few.
                     let compact = if queue.len() > 1 {
                         for element in queue.into_iter() {
-                            sorter.extend(element.into_iter().map(|(d,w)| (d,w)), &|x| part2(&(x.0).0));
+                            sorter.push_batch(element, &|x| part2(&(x.0).0));
                         }
+
                         let mut sorted = sorter.finish(&|x| part2(&(x.0).0));
                         let result = Compact::from_radix(&mut sorted, &|k| part2(k));
                         sorted.truncate(256);
@@ -106,7 +106,6 @@ impl<G: Scope, K: Data, V: Data> ArrangeByKey<G, K, V> for Collection<G, (K, V)>
                     }
                     else {
                         let mut vec = queue.pop().unwrap();
-                        let mut vec = vec.drain(..).map(|(d,w)| (d,w)).collect::<Vec<_>>();
                         vec.sort_by(|x,y| part2(&(x.0).0).cmp(&part2((&(y.0).0))));
                         Compact::from_radix(&mut vec![vec], &|k| part2(k))
                     };

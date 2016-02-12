@@ -40,7 +40,9 @@ fn main() {
                 result = result.filter(|_| false);
             }
 
-            let probe = result.map(|(_x,l)| l).consolidate_by(|&x| x).inner.inspect(|x| println!("\t{:?}", x)).probe();
+            let probe = result.map(|(_,l)| l)
+                              .consolidate_by(|&x| x)
+                              .inspect(|x| println!("\t{:?}", x)).probe();
 
             (edge_input, probe.0)
         });
