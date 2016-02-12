@@ -249,9 +249,9 @@ impl<G: Scope, D1: Data> GroupByCore<G, D1> for Collection<G, D1> where G::Times
 
             // 1. read each input, and stash it in our staging area
             while let Some((time, data)) = input.next() {
-                notificator.notify_at(&time);
-                inputs.entry_or_insert(time.clone(), || Vec::new())
+                inputs.entry_or_insert(time.time(), || Vec::new())
                       .push(::std::mem::replace(data.deref_mut(), Vec::new()));
+                notificator.notify_at(time);
             }
 
             // 2. go through each time of interest that has reached completion
@@ -283,15 +283,15 @@ impl<G: Scope, D1: Data> GroupByCore<G, D1> for Collection<G, D1> where G::Times
                     if let Some(compact) = compact {
 
                         for key in &compact.keys {
-                            for time in source.interesting_times(key, index.clone()).iter() {
-                                let mut queue = to_do.entry_or_insert((*time).clone(), || { notificator.notify_at(time); Vec::new() });
+                            for time in source.interesting_times(key, index.time()).iter() {
+                                let mut queue = to_do.entry_or_insert((*time).clone(), || { notificator.notify_at(index.delayed(time)); Vec::new() });
                                 queue.push((*key).clone());
                             }
                         }
 
                         // add the accumulation to the trace source.
                         // println!("group1");
-                        source.set_difference(index.clone(), compact);
+                        source.set_difference(index.time(), compact);
                     }
                 }
 
@@ -314,7 +314,7 @@ impl<G: Scope, D1: Data> GroupByCore<G, D1> for Collection<G, D1> where G::Times
                     for key in keys {
 
                         // acquire an iterator over the collection at `time`.
-                        let mut input = unsafe { source.get_collection_using(&key, &index, &mut heap1) };
+                        let mut input = unsafe { source.get_collection_using(&key, &index.time(), &mut heap1) };
 
                         // if we have some data, invoke logic to populate self.dst
                         if input.peek().is_some() { logic(&key, &mut input, &mut buffer); }
@@ -323,7 +323,7 @@ impl<G: Scope, D1: Data> GroupByCore<G, D1> for Collection<G, D1> where G::Times
 
                         // push differences in to Compact.
                         let mut compact = accumulation.session();
-                        for (val, wgt) in Coalesce::coalesce(unsafe { result.get_collection_using(&key, &index, &mut heap2) }
+                        for (val, wgt) in Coalesce::coalesce(unsafe { result.get_collection_using(&key, &index.time(), &mut heap2) }
                                                                    .map(|(v, w)| (v,-w))
                                                                    .merge_by(buffer.iter().map(|&(ref v, w)| (v, w)), |x,y| {
                                                                         x.0 <= y.0
@@ -338,7 +338,7 @@ impl<G: Scope, D1: Data> GroupByCore<G, D1> for Collection<G, D1> where G::Times
                     }
 
                     if accumulation.vals.len() > 0 {
-                        result.set_difference(index.clone(), accumulation);
+                        result.set_difference(index.time(), accumulation);
                     }
                 }
             }

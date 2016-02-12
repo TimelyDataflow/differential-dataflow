@@ -322,16 +322,16 @@ impl<G: Scope, D1: Data> JoinByCore<G, D1> for Collection<G, D1> where G::Timest
 
             // read input 1, push key, (val,wgt) to queues
             while let Some((time, data)) = input1.next() {
-                notificator.notify_at(&time);
-                inputs1.entry_or_insert(time.clone(), || Vec::new())
+                inputs1.entry_or_insert(time.time(), || Vec::new())
                        .push(::std::mem::replace(data.deref_mut(), Vec::new()));
+                notificator.notify_at(time);
             }
 
             // read input 2, push key, (val,wgt) to queues
             while let Some((time, data)) = input2.next() {
-                notificator.notify_at(&time);
-                inputs2.entry_or_insert(time.clone(), || Vec::new())
+                inputs2.entry_or_insert(time.time(), || Vec::new())
                        .push(::std::mem::replace(data.deref_mut(), Vec::new()));
+                notificator.notify_at(time);
             }
 
             // check to see if we have inputs to process
@@ -360,11 +360,11 @@ impl<G: Scope, D1: Data> JoinByCore<G, D1> for Collection<G, D1> where G::Timest
 
                     if let Some(compact) = compact {
                         if let Some(trace) = trace2.as_ref() {
-                            process_diffs(&time, &compact, &trace, &result, &mut outbuf);
+                            process_diffs(&time.time(), &compact, &trace, &result, &mut outbuf);
                         }
 
                         if let Some(trace) = trace1.as_mut() {
-                            trace.set_difference(time.clone(), compact);
+                            trace.set_difference(time.time(), compact);
                         }
                     }
                 }
@@ -391,10 +391,10 @@ impl<G: Scope, D1: Data> JoinByCore<G, D1> for Collection<G, D1> where G::Timest
 
                     if let Some(compact) = compact {
                         if let Some(trace) = trace1.as_ref() {
-                            process_diffs(&time, &compact, &trace, &|k,x,y| result(k,y,x), &mut outbuf);
+                            process_diffs(&time.time(), &compact, &trace, &|k,x,y| result(k,y,x), &mut outbuf);
                         }
                         if let Some(trace) = trace2.as_mut() {
-                            trace.set_difference(time.clone(), compact);
+                            trace.set_difference(time.time(), compact);
                         }
                     }
                 }
@@ -412,8 +412,8 @@ impl<G: Scope, D1: Data> JoinByCore<G, D1> for Collection<G, D1> where G::Timest
                     output.session(&time).give_iterator(buffer.drain(..));
                 }
 
-                for &(ref time, _) in &outbuf {
-                    notificator.notify_at(time);
+                for &(ref new_time, _) in &outbuf {
+                    notificator.notify_at(time.delayed(new_time));
                 }
 
                 // for (time, mut vals) in outbuf.drain(..) {
