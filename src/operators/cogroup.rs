@@ -123,16 +123,16 @@ where G::Timestamp: LeastUpperBound {
 
             // 1. read each input, and stash it in our staging area
             while let Some((time, data)) = input1.next() {
-                notificator.notify_at(&time);
-                inputs1.entry_or_insert(time.clone(), || Vec::new())
+                inputs1.entry_or_insert(time.time(), || Vec::new())
                        .push(::std::mem::replace(data.deref_mut(), Vec::new()));
+                notificator.notify_at(time);
             }
 
             // 1. read each input, and stash it in our staging area
             while let Some((time, data)) = input2.next() {
-                notificator.notify_at(&time);
-                inputs2.entry_or_insert(time.clone(), || Vec::new())
+                inputs2.entry_or_insert(time.time(), || Vec::new())
                        .push(::std::mem::replace(data.deref_mut(), Vec::new()));
+                notificator.notify_at(time);
             }
 
             // 2. go through each time of interest that has reached completion
@@ -164,13 +164,13 @@ where G::Timestamp: LeastUpperBound {
                     if let Some(compact) = compact {
 
                         for key in &compact.keys {
-                            for time in source1.interesting_times(key, index.clone()).iter() {
-                                let mut queue = to_do.entry_or_insert((*time).clone(), || { notificator.notify_at(time); Vec::new() });
+                            for time in source1.interesting_times(key, index.time()).iter() {
+                                let mut queue = to_do.entry_or_insert((*time).clone(), || { notificator.notify_at(index.delayed(time)); Vec::new() });
                                 queue.push((*key).clone());
                             }
                         }
 
-                        source1.set_difference(index.clone(), compact);
+                        source1.set_difference(index.time(), compact);
                     }
                 }
 
@@ -198,13 +198,13 @@ where G::Timestamp: LeastUpperBound {
                     if let Some(compact) = compact {
 
                         for key in &compact.keys {
-                            for time in source2.interesting_times(key, index.clone()).iter() {
-                                let mut queue = to_do.entry_or_insert((*time).clone(), || { notificator.notify_at(time); Vec::new() });
+                            for time in source2.interesting_times(key, index.time()).iter() {
+                                let mut queue = to_do.entry_or_insert((*time).clone(), || { notificator.notify_at(index.delayed(time)); Vec::new() });
                                 queue.push((*key).clone());
                             }
                         }
 
-                        source2.set_difference(index.clone(), compact);
+                        source2.set_difference(index.time(), compact);
                     }
                 }
 
@@ -241,7 +241,7 @@ where G::Timestamp: LeastUpperBound {
 
                         // push differences in to Compact.
                         let mut compact = accumulation.session();
-                        for (val, wgt) in Coalesce::coalesce(unsafe { result.get_collection_using(&key, &index, &mut heap3) }
+                        for (val, wgt) in Coalesce::coalesce(unsafe { result.get_collection_using(&key, &index.time(), &mut heap3) }
                                                                    .map(|(v, w)| (v,-w))
                                                                    .merge_by(buffer.iter().map(|&(ref v, w)| (v, w)), |x,y| {
                                                                         x.0 <= y.0
@@ -256,7 +256,7 @@ where G::Timestamp: LeastUpperBound {
 
                     if accumulation.vals.len() > 0 {
                         // println!("group2");
-                        result.set_difference(index.clone(), accumulation);
+                        result.set_difference(index.time(), accumulation);
                     }
                 }
             }

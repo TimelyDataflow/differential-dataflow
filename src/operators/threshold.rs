@@ -53,9 +53,9 @@ impl<G: Scope, D: Data+Default+'static> Threshold<G, D> for Collection<G, D> whe
         Collection::new(self.inner.unary_notify(Exchange::new(move |x: &(D, i32)| key1(&x.0).as_u64()), "Count", vec![], move |input, output, notificator| {
 
             while let Some((time, data)) = input.next() {
-                notificator.notify_at(&time);
-                inputs.entry_or_insert(time.clone(), || Vec::new())
+                inputs.entry_or_insert(time.time(), || Vec::new())
                       .push(::std::mem::replace(data.deref_mut(), Vec::new()));
+                notificator.notify_at(time);
             }
 
             while let Some((index, _count)) = notificator.next() {
@@ -83,13 +83,13 @@ impl<G: Scope, D: Data+Default+'static> Threshold<G, D> for Collection<G, D> whe
                     if let Some(compact) = compact {
 
                         for key in &compact.keys {
-                            for time in source.interesting_times(key, index.clone()).iter() {
-                                let mut queue = to_do.entry_or_insert((*time).clone(), || { notificator.notify_at(time); Vec::new() });
+                            for time in source.interesting_times(key, index.time()).iter() {
+                                let mut queue = to_do.entry_or_insert((*time).clone(), || { notificator.notify_at(index.delayed(time)); Vec::new() });
                                 queue.push((*key).clone());
                             }
                         }
 
-                        source.set_difference(index.clone(), compact);
+                        source.set_difference(index.time(), compact);
                     }
                 }
 
@@ -114,9 +114,9 @@ impl<G: Scope, D: Data+Default+'static> Threshold<G, D> for Collection<G, D> whe
 
                     for key in keys {
 
-                        let count = source.get_count(&key, &index);
+                        let count = source.get_count(&key, &index.time());
                         let output = if count > 0 { function(&key, count) } else { 0 };
-                        let current = result.get_count(&key, &index);
+                        let current = result.get_count(&key, &index.time());
 
                         if output != current {
                             let mut compact = accumulation.session();
@@ -127,7 +127,7 @@ impl<G: Scope, D: Data+Default+'static> Threshold<G, D> for Collection<G, D> whe
                     }
 
                     if accumulation.vals.len() > 0 {
-                        result.set_difference(index.clone(), accumulation);
+                        result.set_difference(index.time(), accumulation);
                     }
                 }
             }

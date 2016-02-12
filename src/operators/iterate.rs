@@ -30,7 +30,6 @@ use std::fmt::Debug;
 use timely::dataflow::*;
 use timely::dataflow::scopes::Child;
 use timely::dataflow::operators::*;
-use timely::progress::timestamp::Timestamp;
 
 use ::{Data, Collection};
 use collection::LeastUpperBound;
