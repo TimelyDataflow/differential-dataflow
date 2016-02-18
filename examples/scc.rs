@@ -126,7 +126,6 @@ fn _trim_edges<G: Scope>(cycle: &Collection<G, Edge>, edges: &Collection<G, Edge
          .join_map_u(&labels, |&e2,&(e1,l1),&l2| ((e1,e2),(l1,l2)))
          .filter(|&(_,(l1,l2))| l1 == l2)
          .map(|((x1,x2),_)| (x2,x1))
-      // .consolidate_by(|x| x.0)
 }
 
 fn _reachability<G: Scope>(edges: &Collection<G, Edge>, nodes: &Collection<G, (Node, Node)>) -> Collection<G, Edge>
@@ -137,22 +136,8 @@ where G::Timestamp: LeastUpperBound+Hash {
              let edges = edges.enter(&inner.scope());
              let nodes = nodes.enter_at(&inner.scope(), |r| 256 * (64 - ((r.0).0 as u64).leading_zeros() as u64));
 
-             _improve_labels(inner, &edges, &nodes)
+             inner.join_map_u(&edges, |_k,l,d| (*d,*l))
+                  .concat(&nodes)
+                  .group_u(|_, mut s, t| t.push((*s.peek().unwrap().0, 1)))
          })
-         // .consolidate_by(|x| x.0)
-}
-
-fn _improve_labels<G: Scope>(labels: &Collection<G, (Node, Node)>,
-                                   edges: &Collection<G, Edge>,
-                                   nodes: &Collection<G, (Node, Node)>)
-    -> Collection<G, (Node, Node)>
-where G::Timestamp: LeastUpperBound {
-
-    let result = labels.join_map_u(&edges, |_k,l,d| (*d,*l))
-          .concat(&nodes)
-          .group_u(|_, mut s, t| t.push((*s.peek().unwrap().0, 1)));
-         // .consolidate_by(|x| x.0);
-
-    // result.inner.inspect(|x| println!("diff: {:?}", x));
-    result
 }
