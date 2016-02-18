@@ -39,6 +39,31 @@ pub struct Arranged<G: Scope, T: Trace<Index=G::Timestamp>>
     pub trace: Rc<RefCell<T>>,
 }
 
+impl<G: Scope, T: Trace<Index=G::Timestamp>> Arranged<G, T> 
+    where 
+        T::Key: Data, 
+        T::Value: Data, 
+        G::Timestamp: LeastUpperBound ,
+        for<'a> &'a T: TraceRef<'a, T::Key, T::Index, T::Value> 
+    {
+    
+    pub fn as_collection(&self) -> Collection<G, (T::Key, T::Value)> {
+        Collection::new(
+            self.stream.flat_map(|(keys, cnts, vals)| {
+
+                let keys = keys.into_iter();
+                let cnts = cnts.into_iter();
+                let vals = vals.into_iter();
+
+                keys.zip(cnts)
+                    .flat_map(|(k,c)| (0..c).map(move |_| k.clone()))
+                    .zip(vals)
+                    .map(|(k,(v,w))| ((k,v),w))
+            })
+        )
+    }
+}
+
 /// Arranges something as `(Key,Val)` pairs. 
 pub trait ArrangeByKey<G: Scope, K: Data, V: Data> where G::Timestamp: LeastUpperBound {
     fn arrange_by_key<
