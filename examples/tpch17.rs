@@ -76,7 +76,7 @@ fn main() {
                      for (time,_) in n.next() {
                          *clone.borrow_mut() = time.inner + 1;
                          if n.frontier(0).len() > 0 {
-                             n.notify_at(&RootTimestamp::new(*clone.borrow()));
+                             n.notify_at(time.delayed(&RootTimestamp::new(*clone.borrow())));
                          }
                      }
                  })

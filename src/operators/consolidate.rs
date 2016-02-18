@@ -55,9 +55,9 @@ impl<G: Scope, D: Ord+Data+Debug> ConsolidateExt<D> for Collection<G, D> {
         Collection::new(self.inner.unary_notify(exch, "Consolidate", vec![], move |input, output, notificator| {
 
             while let Some((index, data)) = input.next() {
-                notificator.notify_at(&index);
-                inputs.entry_or_insert(index.clone(), || LSBRadixSorter::new())
+                inputs.entry_or_insert(index.time(), || LSBRadixSorter::new())
                       .extend(data.drain(..), &|x| (*part2)(&x.0));
+                notificator.notify_at(index);
             }
 
             // 2. go through each time of interest that has reached completion

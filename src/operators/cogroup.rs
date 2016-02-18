@@ -120,16 +120,16 @@ where G::Timestamp: LeastUpperBound {
 
             // 1. read each input, and stash it in our staging area
             while let Some((time, data)) = input1.next() {
-                notificator.notify_at(&time);
-                inputs1.entry_or_insert(time.clone(), || Vec::new())
+                inputs1.entry_or_insert(time.time(), || Vec::new())
                        .push(::std::mem::replace(data.deref_mut(), Vec::new()));
+                notificator.notify_at(time);
             }
 
             // 1. read each input, and stash it in our staging area
             while let Some((time, data)) = input2.next() {
-                notificator.notify_at(&time);
-                inputs2.entry_or_insert(time.clone(), || Vec::new())
+                inputs2.entry_or_insert(time.time(), || Vec::new())
                        .push(::std::mem::replace(data.deref_mut(), Vec::new()));
+                notificator.notify_at(time);
             }
 
             // 2. go through each time of interest that has reached completion
@@ -168,13 +168,13 @@ where G::Timestamp: LeastUpperBound {
                             stash.push(index.clone());
                             source1.interesting_times(key, &index, &mut stash);
                             for time in &stash {
-                                let mut queue = to_do.entry_or_insert((*time).clone(), || { notificator.notify_at(time); Vec::new() });
+                                let mut queue = to_do.entry_or_insert((*time).clone(), || { notificator.notify_at(index.delayed(time)); Vec::new() });
                                 queue.push((*key).clone());
                             }
                             stash.clear();
                         }
 
-                        source1.set_difference(index.clone(), compact);
+                        source1.set_difference(index.time(), compact);
                     }
                 }
 
@@ -205,13 +205,13 @@ where G::Timestamp: LeastUpperBound {
                             stash.push(index.clone());
                             source2.interesting_times(key, &index, &mut stash);
                             for time in &stash {
-                                let mut queue = to_do.entry_or_insert((*time).clone(), || { notificator.notify_at(time); Vec::new() });
+                                let mut queue = to_do.entry_or_insert((*time).clone(), || { notificator.notify_at(index.delayed(time)); Vec::new() });
                                 queue.push((*key).clone());
                             }
                             stash.clear();
                         }
 
-                        source2.set_difference(index.clone(), compact);
+                        source2.set_difference(index.time(), compact);
                     }
                 }
 
@@ -263,7 +263,7 @@ where G::Timestamp: LeastUpperBound {
 
                     if accumulation.vals.len() > 0 {
                         // println!("group2");
-                        result.set_difference(index.clone(), accumulation);
+                        result.set_difference(index.time(), accumulation);
                     }
                 }
             }

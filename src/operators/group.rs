@@ -237,26 +237,28 @@ where
             // 1. read each input, and stash it in our staging area.
             // only stash the keys, because vals etc are in self.trace
             while let Some((time, data)) = input.next() {
-                notificator.notify_at(&time);
-                inputs.entry_or_insert(time.clone(), || data.drain(..).next().unwrap().0);
+                inputs.entry_or_insert(time.time(), || { notificator.notify_at(time); data.drain(..).next().unwrap().0 });
             }
 
             // 2. go through each time of interest that has reached completion
             // times are interesting either because we received data, or because we conclude
             // in the processing of a time that a future time will be interesting.
-            while let Some((index, _count)) = notificator.next() {
+            while let Some((capability, _count)) = notificator.next() {
 
-                // 2a. if we received keys, determine interesting times.
-                if let Some(queue) = inputs.remove_key(&index) {
+                let time = capability.time();
+
+                // 2a. If we received any keys, determine the interesting times for each.
+                //     We then enqueue the keys at the corresponding time, for use later.
+                if let Some(queue) = inputs.remove_key(&time) {
 
                     let source = source.borrow();
                     let mut stash = Vec::new();
                     for key in queue {
-                        if source.get_difference(&key, &index).is_some() {
-                            stash.push(index.clone());
-                            source.interesting_times(&key, &index, &mut stash);
-                            for time in &stash {
-                                to_do.entry_or_insert((*time).clone(), || { notificator.notify_at(time); Vec::new() })
+                        if source.get_difference(&key, &time).is_some() {
+                            stash.push(capability.time());
+                            source.interesting_times(&key, &time, &mut stash);
+                            for new_time in &stash {
+                                to_do.entry_or_insert(time.clone(), || { notificator.notify_at(capability.delayed(new_time)); Vec::new() })
                                      .push(key.clone());
                             }
                             stash.clear();
@@ -264,32 +266,35 @@ where
                     }
                 }
 
-                // 2b. if we have work to do, best get to it.
-                if let Some(mut keys) = to_do.remove_key(&index) {
+                // 2b. Process any interesting keys at this time.
+                if let Some(mut keys) = to_do.remove_key(&time) {
 
-                    // we would like these keys in a particular order.
+                    // We would like these keys in a particular order. 
+                    // We also want to de-duplicate them, in case there are dupes. 
                     keys.sort_by(|x,y| (key_h(&x), x).cmp(&(key_h(&y), y)));
                     keys.dedup();
 
                     // accumulations for installation into result
                     let mut accumulation = Compact::new(0,0);
 
+                    // borrow `source` to avoid constant re-borrowing.
                     let mut source_borrow = source.borrow_mut();
 
                     for key in keys {
 
                         // acquire an iterator over the collection at `time`.
-                        let mut input = source_borrow.get_collection(&key, &index);
+                        let mut input = source_borrow.get_collection(&key, &time);
 
                         // if we have some input data, invoke logic to populate buffer.
                         if input.peek().is_some() { logic(&key, &mut input, &mut buffer); }
 
+                        // sort the buffer, because we can't trust user code to do that.
                         buffer.sort_by(|x,y| x.0.cmp(&y.0));
 
                         // push differences in to Compact.
                         let mut compact = accumulation.session();
                         for (val, wgt) in Coalesce::coalesce(target.borrow_mut()
-                                                                   .get_collection(&key, &index)
+                                                                   .get_collection(&key, &time)
                                                                    .map(|(v, w)| (v,-w))
                                                                    .merge_by(buffer.iter().map(|&(ref v, w)| (v, w)), |x,y| {
                                                                         x.0 <= y.0
@@ -302,8 +307,8 @@ where
                     }
 
                     if accumulation.vals.len() > 0 {
-                        output.session(&index).give((accumulation.keys.clone(), accumulation.cnts.clone(), accumulation.vals.clone()));
-                        target.borrow_mut().set_difference(index.clone(), accumulation);
+                        output.session(&capability).give((accumulation.keys.clone(), accumulation.cnts.clone(), accumulation.vals.clone()));
+                        target.borrow_mut().set_difference(time, accumulation);
                     }
                 }
             }
@@ -390,18 +395,20 @@ impl<G: Scope, D1: Data> GroupByCore<G, D1> for Collection<G, D1> where G::Times
 
             // 1. read each input, and stash it in our staging area
             while let Some((time, data)) = input.next() {
-                notificator.notify_at(&time);
-                inputs.entry_or_insert(time.clone(), || Vec::new())
+                inputs.entry_or_insert(time.time(), || Vec::new())
                       .push(::std::mem::replace(data.deref_mut(), Vec::new()));
+                notificator.notify_at(time);
             }
 
             // 2. go through each time of interest that has reached completion
             // times are interesting either because we received data, or because we conclude
             // in the processing of a time that a future time will be interesting.
-            while let Some((index, _count)) = notificator.next() {
+            while let Some((capability, _count)) = notificator.next() {
+
+                let time = capability.time();
 
                 // 2a. fetch any data associated with this time.
-                if let Some(mut queue) = inputs.remove_key(&index) {
+                if let Some(mut queue) = inputs.remove_key(&time) {
 
                     // sort things; radix if many, .sort_by if few.
                     let compact = if queue.len() > 1 {
@@ -425,18 +432,17 @@ impl<G: Scope, D1: Data> GroupByCore<G, D1> for Collection<G, D1> where G::Times
 
                         let mut stash = Vec::new();
                         for key in &compact.keys {
-                            stash.push(index.clone());
-                            source.interesting_times(key, &index, &mut stash);
-                            for time in &stash {
-                                let mut queue = to_do.entry_or_insert((*time).clone(), || { notificator.notify_at(time); Vec::new() });
-                                queue.push((*key).clone());
+                            stash.push(capability.time());
+                            source.interesting_times(key, &time, &mut stash);
+                            for new_time in &stash {
+                                to_do.entry_or_insert(time.clone(), || { notificator.notify_at(capability.delayed(new_time)); Vec::new() })
+                                     .push((*key).clone());
                             }
                             stash.clear();
                         }
 
                         // add the accumulation to the trace source.
-                        // println!("group1");
-                        source.set_difference(index.clone(), compact);
+                        source.set_difference(capability.time(), compact);
                     }
                 }
 
@@ -444,10 +450,10 @@ impl<G: Scope, D1: Data> GroupByCore<G, D1> for Collection<G, D1> where G::Times
                 // currently reported output match up with what we need as output. Should we send
                 // more output differences, and what are they?
 
-                if let Some(mut keys) = to_do.remove_key(&index) {
+                if let Some(mut keys) = to_do.remove_key(&time) {
 
                     // we may need to produce output at index
-                    let mut session = output.session(&index);
+                    let mut session = output.session(&capability);
 
                     // we would like these keys in a particular order.
                     keys.sort_by(|x,y| (key_h(&x), x).cmp(&(key_h(&y), y)));
@@ -459,7 +465,7 @@ impl<G: Scope, D1: Data> GroupByCore<G, D1> for Collection<G, D1> where G::Times
                     for key in keys {
 
                         // acquire an iterator over the collection at `time`.
-                        let mut input = source.get_collection(&key, &index);
+                        let mut input = source.get_collection(&key, &time);
 
                         // if we have some data, invoke logic to populate self.dst
                         if input.peek().is_some() { logic(&key, &mut input, &mut buffer); }
@@ -468,7 +474,7 @@ impl<G: Scope, D1: Data> GroupByCore<G, D1> for Collection<G, D1> where G::Times
 
                         // push differences in to Compact.
                         let mut compact = accumulation.session();
-                        for (val, wgt) in Coalesce::coalesce(result.get_collection(&key, &index)
+                        for (val, wgt) in Coalesce::coalesce(result.get_collection(&key, &time)
                                                                    .map(|(v, w)| (v,-w))
                                                                    .merge_by(buffer.iter().map(|&(ref v, w)| (v, w)), |x,y| {
                                                                         x.0 <= y.0
@@ -483,7 +489,7 @@ impl<G: Scope, D1: Data> GroupByCore<G, D1> for Collection<G, D1> where G::Times
                     }
 
                     if accumulation.vals.len() > 0 {
-                        result.set_difference(index.clone(), accumulation);
+                        result.set_difference(time, accumulation);
                     }
                 }
             }

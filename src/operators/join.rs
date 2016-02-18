@@ -153,19 +153,21 @@ impl<TS: Timestamp, G: Scope<Timestamp=TS>, T: Trace<Index=TS>+'static> JoinArra
             // read input 1, push all data to queues
             while let Some((time, data)) = input1.next() {
                 assert!(data.len() == 1);
-                notificator.notify_at(&time);
-                inputs1.entry_or_insert(time.clone(), || data.drain(..).next().unwrap());
+                inputs1.entry_or_insert(time.time(), || data.drain(..).next().unwrap());
+                notificator.notify_at(time);
             }
 
             // read input 2, push all data to queues
             while let Some((time, data)) = input2.next() {
                 assert!(data.len() == 1);
-                notificator.notify_at(&time);
-                inputs2.entry_or_insert(time.clone(), || data.drain(..).next().unwrap());
+                inputs2.entry_or_insert(time.time(), || data.drain(..).next().unwrap());
+                notificator.notify_at(time);
             }
 
             // Notification means we have inputs to process or outputs to send.
-            while let Some((time, _count)) = notificator.next() {
+            while let Some((capability, _count)) = notificator.next() {
+
+                let time = capability.time();
 
                 // We must be careful to only respond to pairs of differences at `time` with
                 // one output record, not two. To do this correctly, we acknowledge the time
@@ -227,12 +229,12 @@ impl<TS: Timestamp, G: Scope<Timestamp=TS>, T: Trace<Index=TS>+'static> JoinArra
                 // TODO : aggregation. It may be that we should send everything
                 // TODO : and let the receiver store the data as it sees fit.
                 if let Some(mut buffer) = outbuf.remove_key(&time) {
-                    output.session(&time).give_iterator(buffer.drain(..));
+                    output.session(&capability).give_iterator(buffer.drain(..));
                 }
 
                 // make sure we hold capabilities for each time still to send at.
-                for &(ref time, _) in &outbuf {
-                    notificator.notify_at(time);
+                for &(ref new_time, _) in &outbuf {
+                    notificator.notify_at(capability.delayed(new_time));
                 }
             }
         });

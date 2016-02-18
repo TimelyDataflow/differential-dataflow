@@ -83,7 +83,7 @@ impl<G: Scope, K: Data, V: Data> ArrangeByKey<G, K, V> for Collection<G, (K, V)>
 
             // 1. read each input, and stash it in our staging area
             while let Some((time, data)) = input.next() {
-                inputs.entry_or_insert(time.clone(), || { notificator.notify_at(&time); Vec::new() })
+                inputs.entry_or_insert(time.time(), || { notificator.notify_at(time); Vec::new() })
                       .push(::std::mem::replace(data.deref_mut(), Vec::new()));
             }
 
@@ -113,7 +113,7 @@ impl<G: Scope, K: Data, V: Data> ArrangeByKey<G, K, V> for Collection<G, (K, V)>
                     if let Some(compact) = compact {
                         output.session(&index).give((compact.keys.clone(), compact.cnts.clone(), compact.vals.clone()));
                         if let Some(trace) = source.upgrade() {
-                            trace.borrow_mut().set_difference(index, compact);
+                            trace.borrow_mut().set_difference(index.time(), compact);
                         }
                     }
                 }
@@ -177,7 +177,7 @@ impl<G: Scope, K: Data> ArrangeBySelf<G, K> for Collection<G, K> where G::Timest
 
             // 1. read each input, and stash it in our staging area
             while let Some((time, data)) = input.next() {
-                inputs.entry_or_insert(time.clone(), || { notificator.notify_at(&time); Vec::new() })
+                inputs.entry_or_insert(time.time(), || { notificator.notify_at(time); Vec::new() })
                       .push(::std::mem::replace(data.deref_mut(), Vec::new()));
             }
 
@@ -206,7 +206,7 @@ impl<G: Scope, K: Data> ArrangeBySelf<G, K> for Collection<G, K> where G::Timest
                     if let Some(compact) = compact {
                         output.session(&index).give((compact.keys.clone(), compact.cnts.clone(), compact.vals.clone()));
                         if let Some(trace) = source.upgrade() {
-                            trace.borrow_mut().set_difference(index.clone(), compact);
+                            trace.borrow_mut().set_difference(index.time(), compact);
                         }
                     }
                 }
