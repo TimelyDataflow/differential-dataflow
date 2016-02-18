@@ -36,7 +36,6 @@ fn main() {
 
             edges = _trim_and_flip(&edges);
             edges = _trim_and_flip(&edges);
-            // edges.inspect(|x| println!("edge: {:?}", x.0));
             edges = _strongly_connected(&edges);
 
             let mut counter = 0;
@@ -64,7 +63,6 @@ fn main() {
 
             for index in 0..edges {
                 let edge = (rng1.gen_range(0, nodes), rng1.gen_range(0, nodes));
-                // println!("edge: {:?}", edge);
                 input.send((edge, 1));
                 if (index % (1 << 12)) == 0 {
                     computation.step();
@@ -102,7 +100,6 @@ where G::Timestamp: LeastUpperBound {
              .join_map_u(&inner, |&d,_,&s| (s,d))
     })
     .map_in_place(|x| mem::swap(&mut x.0, &mut x.1))
-    // .inspect_batch(|t,_x| println!("observed edges at {:?}", t))
 }
 
 fn _strongly_connected<G: Scope>(graph: &Collection<G, Edge>) -> Collection<G, Edge>
