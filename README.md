@@ -38,7 +38,7 @@ The program to do this in differential dataflow follows exactly this pattern. Al
 
 
 
-The [BFS example](https://github.com/frankmcsherry/differential-dataflow/blob/master/examples/bfs.rs) from the differential dataflow repository [wraps this up as a method](https://github.com/frankmcsherry/differential-dataflow/blob/master/examples/bfs.rs#L98-L115).
+The [BFS example](https://github.com/frankmcsherry/differential-dataflow/blob/master/examples/bfs.rs) from the differential dataflow repository [wraps this up as a method](https://github.com/frankmcsherry/differential-dataflow/blob/master/examples/bfs.rs#L102-L119).
 
 Once you've set up a differential dataflow graph, you are then able to start interacting with it by adding "differences" to the inputs. The example in the repository has inputs for the roots of the computation and the edges in the graph. We can repeatedly add and remove edges, for example, and differential dataflow magically updates the outputs of the computation!
 
@@ -162,4 +162,3 @@ A successful implementation, experiment, and write-up for a Datalog-like join us
 ## Acknowledgements
 
 In addition to contributions to this repository, differential dataflow is based on work at the now defunct Microsoft Research lab in Silicon Valley. Collaborators have included: Martin Abadi, Paul Barham, Rebecca Isaacs, Michael Isard, Derek Murray, and Gordon Plotkin. Work on this project continued at the Systems Group of ETH Zürich, and was informed by discussions with Zaheer Chothia, Andrea Lattuada, John Liagouris, and Darko Makreshanski.
->>>>>>> master
