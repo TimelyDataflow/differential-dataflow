@@ -35,15 +35,14 @@ use rc::Rc;
 use std::cell::RefCell;
 use std::default::Default;
 use std::collections::HashMap;
-use std::ops::DerefMut;
 
 use itertools::Itertools;
 
 use ::{Data, Collection, Delta};
 use timely::dataflow::*;
 use timely::dataflow::operators::{Map, Unary};
-use timely::dataflow::channels::pact::{Exchange, Pipeline};
-use timely_sort::{LSBRadixSorter, Unsigned};
+use timely::dataflow::channels::pact::Pipeline;
+use timely_sort::Unsigned;
 
 use collection::{LeastUpperBound, Lookup, Trace, BasicTrace, Offset};
 use collection::trace::CollectionIterator;
