@@ -37,6 +37,7 @@ use std::default::Default;
 use std::collections::HashMap;
 
 use itertools::Itertools;
+use linear_map::LinearMap;
 
 use ::{Data, Collection, Delta};
 use timely::dataflow::*;
@@ -152,10 +153,10 @@ where
         let target = result.clone();
 
         // A map from times to received (key, val, wgt) triples.
-        let mut inputs = Vec::new();
+        let mut inputs = LinearMap::new();
 
         // A map from times to a list of keys that need processing at that time.
-        let mut to_do = Vec::new();
+        let mut to_do = LinearMap::new();
 
         // temporary storage for operator implementations to populate
         let mut buffer = vec![];

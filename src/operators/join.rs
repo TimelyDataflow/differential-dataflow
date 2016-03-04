@@ -3,6 +3,8 @@
 use std::default::Default;
 use std::collections::HashMap;
 
+use linear_map::LinearMap;
+
 use timely::progress::Timestamp;
 use timely::dataflow::Scope;
 use timely::dataflow::operators::Binary;
@@ -133,9 +135,9 @@ impl<TS: Timestamp, G: Scope<Timestamp=TS>, T: Trace<Index=TS>+'static> JoinArra
         let mut trace1 = Some(self.trace.clone());
         let mut trace2 = Some(other.trace.clone());
 
-        let mut inputs1 = Vec::new();
-        let mut inputs2 = Vec::new();
-        let mut outbuf = Vec::new();
+        let mut inputs1 = LinearMap::new();
+        let mut inputs2 = LinearMap::new();
+        let mut outbuf = LinearMap::new();
 
         // upper envelope of notified times; 
         // used to restrict diffs processed.
@@ -233,7 +235,7 @@ impl<TS: Timestamp, G: Scope<Timestamp=TS>, T: Trace<Index=TS>+'static> JoinArra
                 }
 
                 // make sure we hold capabilities for each time still to send at.
-                for &(ref new_time, _) in &outbuf {
+                for (new_time, _) in &outbuf {
                     notificator.notify_at(capability.delayed(new_time));
                 }
             }

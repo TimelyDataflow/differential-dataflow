@@ -13,6 +13,7 @@ use std::collections::HashMap;
 use timely_sort::Unsigned;
 
 use collection::robin_hood::RHHMap;
+use linear_map::LinearMap;
 
 pub trait Lookup<K: Eq, V> {
     fn get_ref<'a>(&'a self, &K)->Option<&'a V>;
@@ -54,39 +55,17 @@ impl<K: Hash+Eq+'static, V: 'static> Lookup<K,V> for HashMap<K,V> {
     fn remove_key(&mut self, key: &K) -> Option<V> { self.remove(key) }
 }
 
-impl<K: Eq, V> Lookup<K, V> for Vec<(K, V)> {
+impl<K: Eq, V> Lookup<K, V> for LinearMap<K, V> {
     #[inline]
-    fn get_ref<'a>(&'a self, key: &K)->Option<&'a V> {
-        if let Some(position) = self.iter().position(|x| &x.0 == key) {
-            Some(&self[position].1)
-        }
-        else { None }
-    }
+    fn get_ref<'a>(&'a self, key: &K) -> Option<&'a V> { self.get(key) }
     #[inline]
-    fn get_mut<'a>(&'a mut self, key: &K)->Option<&'a mut V> {
-        if let Some(position) = self.iter().position(|x| &x.0 == key) {
-            Some(&mut self[position].1)
-        }
-        else { None }
-    }
+    fn get_mut<'a>(&'a mut self, key: &K) -> Option<&'a mut V> { self.get_mut(key) }
     #[inline]
     fn entry_or_insert<F: FnOnce()->V>(&mut self, key: K, func: F) -> &mut V {
-        if let Some(position) = self.iter().position(|x| x.0 == key) {
-            &mut self[position].1
-        }
-        else {
-            self.push((key, func()));
-            let last = self.len() - 1;
-            &mut self[last].1
-        }
+        self.entry(key).or_insert_with(func)
     }
     #[inline]
-    fn remove_key(&mut self, key: &K) -> Option<V> {
-        if let Some(position) = self.iter().position(|x| &x.0 == key) {
-            Some(self.swap_remove(position).1)
-        }
-        else { None }
-    }
+    fn remove_key(&mut self, key: &K) -> Option<V> { self.remove(key) }
 }
 
 impl<V: 'static, U: Unsigned> Lookup<U,V> for (Vec<Option<V>>, u64) {

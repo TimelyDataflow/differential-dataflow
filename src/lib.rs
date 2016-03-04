@@ -144,6 +144,7 @@ extern crate fnv;
 extern crate time;
 extern crate timely;
 extern crate itertools;
+extern crate linear_map;
 extern crate timely_sort;
 extern crate timely_communication;
 
