@@ -2,10 +2,13 @@ extern crate rand;
 extern crate time;
 extern crate timely;
 extern crate differential_dataflow;
+extern crate vec_map;
 
 use std::hash::Hash;
 use std::mem;
 use rand::{Rng, SeedableRng, StdRng};
+
+use vec_map::VecMap;
 
 use timely::dataflow::*;
 use timely::dataflow::operators::*;
@@ -95,7 +98,7 @@ where G::Timestamp: LeastUpperBound {
                          .map_in_place(|x| mem::swap(&mut x.0, &mut x.1));
 
         edges.map(|(x,_)| x)
-             .threshold(|&x| x, |i| (Vec::new(), i), |_,_| 1)
+             .threshold(|&x| x, |i| (VecMap::new(), i), |_,_| 1)
              .map(|x| (x,()))
              .join_map_u(&inner, |&d,_,&s| (s,d))
     })

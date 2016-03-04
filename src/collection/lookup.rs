@@ -14,6 +14,7 @@ use timely_sort::Unsigned;
 
 use collection::robin_hood::RHHMap;
 use linear_map::LinearMap;
+use vec_map::VecMap;
 
 pub trait Lookup<K: Eq, V> {
     fn get_ref<'a>(&'a self, &K)->Option<&'a V>;
@@ -68,27 +69,25 @@ impl<K: Eq, V> Lookup<K, V> for LinearMap<K, V> {
     fn remove_key(&mut self, key: &K) -> Option<V> { self.remove(key) }
 }
 
-impl<V: 'static, U: Unsigned> Lookup<U,V> for (Vec<Option<V>>, u64) {
+impl<V: 'static, U: Unsigned> Lookup<U,V> for (VecMap<V>, u64) {
     #[inline]
     fn get_ref<'a>(&'a self, key: &U) -> Option<&'a V> {
         let key = (key.as_u64() >> self.1) as usize;
-        if self.0.len() > key { self.0[key].as_ref() } else { None }
+        self.0.get(key)
     }
     #[inline]
     fn get_mut<'a>(&'a mut self, key: &U) -> Option<&'a mut V> {
         let key = (key.as_u64() >> self.1) as usize;
-        if self.0.len() > key { self.0[key].as_mut() } else { None }
+        self.0.get_mut(key)
     }
     #[inline]
     fn entry_or_insert<F: FnOnce()->V>(&mut self, key: U, func: F) -> &mut V {
         let key = (key.as_u64() >> self.1) as usize;
-        while self.0.len() <= key { self.0.push(None); }
-        if self.0[key].is_none() { self.0[key] = Some(func()); }
-        self.0[key].as_mut().unwrap()
+        self.0.entry(key).or_insert_with(func)
     }
     #[inline]
     fn remove_key(&mut self, key: &U) -> Option<V> {
         let key = (key.as_u64() >> self.1) as usize;
-        if self.0.len() > key { self.0[key].take() } else { None }
+        self.0.remove(key)
     }
 }

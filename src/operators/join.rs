@@ -4,6 +4,7 @@ use std::default::Default;
 use std::collections::HashMap;
 
 use linear_map::LinearMap;
+use vec_map::VecMap;
 
 use timely::progress::Timestamp;
 use timely::dataflow::Scope;
@@ -88,13 +89,13 @@ pub trait JoinUnsigned<G: Scope, U: Unsigned+Data+Default, V: Data> where G::Tim
 
 impl<G: Scope, U: Unsigned+Data+Default, V: Data> JoinUnsigned<G, U, V> for Collection<G, (U, V)> where G::Timestamp: LeastUpperBound {
     fn join_map_u<V2: Data, D: Data, R: Fn(&U, &V, &V2)->D+'static>(&self, other: &Collection<G, (U,V2)>, logic: R) -> Collection<G, D> {
-        let arranged1 = self.arrange_by_key(|k| k.clone(), |x| (Vec::new(), x));
-        let arranged2 = other.arrange_by_key(|k| k.clone(), |x| (Vec::new(), x));
+        let arranged1 = self.arrange_by_key(|k| k.clone(), |x| (VecMap::new(), x));
+        let arranged2 = other.arrange_by_key(|k| k.clone(), |x| (VecMap::new(), x));
         arranged1.join(&arranged2, logic)
     }
     fn semijoin(&self, other: &Collection<G, U>) -> Collection<G, (U, V)> {
-        let arranged1 = self.arrange_by_key(|k| k.clone(), |x| (Vec::new(), x));
-        let arranged2 = other.arrange_by_self(|k| k.clone(), |x| (Vec::new(), x));
+        let arranged1 = self.arrange_by_key(|k| k.clone(), |x| (VecMap::new(), x));
+        let arranged2 = other.arrange_by_self(|k| k.clone(), |x| (VecMap::new(), x));
         arranged1.join(&arranged2, |k,v,_| (k.clone(), v.clone()))        
     }
 }

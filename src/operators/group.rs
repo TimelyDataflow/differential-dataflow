@@ -38,6 +38,7 @@ use std::collections::HashMap;
 
 use itertools::Itertools;
 use linear_map::LinearMap;
+use vec_map::VecMap;
 
 use ::{Data, Collection, Delta};
 use timely::dataflow::*;
@@ -100,8 +101,8 @@ impl<G: Scope, U: Unsigned+Data+Default, V: Data> GroupUnsigned<G, U, V> for Col
 where G::Timestamp: LeastUpperBound {
     fn group_u<L, V2: Data>(&self, logic: L) -> Collection<G, (U, V2)>
         where L: Fn(&U, &mut CollectionIterator<DifferenceIterator<V>>, &mut Vec<(V2, i32)>)+'static {
-            self.arrange_by_key(|k| k.as_u64(), |x| (Vec::new(), x))
-                .group(|k| k.as_u64(), |x| (Vec::new(), x), logic)
+            self.arrange_by_key(|k| k.as_u64(), |x| (VecMap::new(), x))
+                .group(|k| k.as_u64(), |x| (VecMap::new(), x), logic)
                 .as_collection()
         }
 }
