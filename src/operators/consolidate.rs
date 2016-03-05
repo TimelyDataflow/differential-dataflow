@@ -21,6 +21,8 @@
 use std::rc::Rc;
 use std::fmt::Debug;
 
+use linear_map::LinearMap;
+
 use timely::dataflow::*;
 use timely::dataflow::operators::*;
 use timely::dataflow::channels::pact::Exchange;
@@ -47,7 +49,7 @@ impl<G: Scope, D: Ord+Data+Debug> ConsolidateExt<D> for Collection<G, D> {
     }
 
     fn consolidate_by<U: Unsigned, F: Fn(&D)->U+'static>(&self, part: F) -> Self {
-        let mut inputs = Vec::new();    // Vec<(G::Timestamp, Vec<(D, i32))>
+        let mut inputs = LinearMap::new();    // LinearMap<G::Timestamp, Vec<(D, i32)>>
         let part1 = Rc::new(part);
         let part2 = part1.clone();
 

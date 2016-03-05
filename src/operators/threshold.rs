@@ -3,6 +3,7 @@ use std::ops::DerefMut;
 use std::default::Default;
 
 use itertools::Itertools;
+use linear_map::LinearMap;
 
 use ::{Collection, Data};
 use timely::dataflow::*;
@@ -41,10 +42,10 @@ impl<G: Scope, D: Data+Default+'static> Threshold<G, D> for Collection<G, D> whe
         let mut result = Count::new(look(0));
 
         // A map from times to received (key, val, wgt) triples.
-        let mut inputs = Vec::new();
+        let mut inputs = LinearMap::new();
 
         // A map from times to a list of keys that need processing at that time.
-        let mut to_do = Vec::new();
+        let mut to_do = LinearMap::new();
 
         let mut sorter = LSBRadixSorter::new();
 

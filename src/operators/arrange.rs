@@ -9,6 +9,8 @@ use std::cell::RefCell;
 use std::default::Default;
 use std::ops::DerefMut;
 
+use linear_map::LinearMap;
+
 use timely::dataflow::*;
 use timely::dataflow::operators::{Map, Unary};
 use timely::dataflow::channels::pact::Exchange;
@@ -94,7 +96,7 @@ impl<G: Scope, K: Data, V: Data> ArrangeByKey<G, K, V> for Collection<G, (K, V)>
         let source = trace.downgrade();
 
         // A map from times to received (key, val, wgt) triples.
-        let mut inputs = Vec::new();
+        let mut inputs = LinearMap::new();
 
         // create an exchange channel based on the supplied Fn(&D1)->u64.
         let part1 = Rc::new(key_h);
@@ -188,7 +190,7 @@ impl<G: Scope, K: Data> ArrangeBySelf<G, K> for Collection<G, K> where G::Timest
         let source = trace.downgrade();
 
         // A map from times to received (key, val, wgt) triples.
-        let mut inputs = Vec::new();
+        let mut inputs = LinearMap::new();
 
         // create an exchange channel based on the supplied Fn(&D1)->u64.
         let part1 = Rc::new(key_h);

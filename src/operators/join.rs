@@ -3,6 +3,9 @@
 use std::default::Default;
 use std::collections::HashMap;
 
+use linear_map::LinearMap;
+use vec_map::VecMap;
+
 use timely::progress::Timestamp;
 use timely::dataflow::Scope;
 use timely::dataflow::operators::Binary;
@@ -86,13 +89,13 @@ pub trait JoinUnsigned<G: Scope, U: Unsigned+Data+Default, V: Data> where G::Tim
 
 impl<G: Scope, U: Unsigned+Data+Default, V: Data> JoinUnsigned<G, U, V> for Collection<G, (U, V)> where G::Timestamp: LeastUpperBound {
     fn join_map_u<V2: Data, D: Data, R: Fn(&U, &V, &V2)->D+'static>(&self, other: &Collection<G, (U,V2)>, logic: R) -> Collection<G, D> {
-        let arranged1 = self.arrange_by_key(|k| k.clone(), |x| (Vec::new(), x));
-        let arranged2 = other.arrange_by_key(|k| k.clone(), |x| (Vec::new(), x));
+        let arranged1 = self.arrange_by_key(|k| k.clone(), |x| (VecMap::new(), x));
+        let arranged2 = other.arrange_by_key(|k| k.clone(), |x| (VecMap::new(), x));
         arranged1.join(&arranged2, logic)
     }
     fn semijoin(&self, other: &Collection<G, U>) -> Collection<G, (U, V)> {
-        let arranged1 = self.arrange_by_key(|k| k.clone(), |x| (Vec::new(), x));
-        let arranged2 = other.arrange_by_self(|k| k.clone(), |x| (Vec::new(), x));
+        let arranged1 = self.arrange_by_key(|k| k.clone(), |x| (VecMap::new(), x));
+        let arranged2 = other.arrange_by_self(|k| k.clone(), |x| (VecMap::new(), x));
         arranged1.join(&arranged2, |k,v,_| (k.clone(), v.clone()))        
     }
 }
@@ -133,9 +136,9 @@ impl<TS: Timestamp, G: Scope<Timestamp=TS>, T: Trace<Index=TS>+'static> JoinArra
         let mut trace1 = Some(self.trace.clone());
         let mut trace2 = Some(other.trace.clone());
 
-        let mut inputs1 = Vec::new();
-        let mut inputs2 = Vec::new();
-        let mut outbuf = Vec::new();
+        let mut inputs1 = LinearMap::new();
+        let mut inputs2 = LinearMap::new();
+        let mut outbuf = LinearMap::new();
 
         // upper envelope of notified times; 
         // used to restrict diffs processed.
@@ -233,7 +236,7 @@ impl<TS: Timestamp, G: Scope<Timestamp=TS>, T: Trace<Index=TS>+'static> JoinArra
                 }
 
                 // make sure we hold capabilities for each time still to send at.
-                for &(ref new_time, _) in &outbuf {
+                for (new_time, _) in &outbuf {
                     notificator.notify_at(capability.delayed(new_time));
                 }
             }

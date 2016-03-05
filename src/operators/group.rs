@@ -37,6 +37,8 @@ use std::default::Default;
 use std::collections::HashMap;
 
 use itertools::Itertools;
+use linear_map::LinearMap;
+use vec_map::VecMap;
 
 use ::{Data, Collection, Delta};
 use timely::dataflow::*;
@@ -99,8 +101,8 @@ impl<G: Scope, U: Unsigned+Data+Default, V: Data> GroupUnsigned<G, U, V> for Col
 where G::Timestamp: LeastUpperBound {
     fn group_u<L, V2: Data>(&self, logic: L) -> Collection<G, (U, V2)>
         where L: Fn(&U, &mut CollectionIterator<DifferenceIterator<V>>, &mut Vec<(V2, i32)>)+'static {
-            self.arrange_by_key(|k| k.as_u64(), |x| (Vec::new(), x))
-                .group(|k| k.as_u64(), |x| (Vec::new(), x), logic)
+            self.arrange_by_key(|k| k.as_u64(), |x| (VecMap::new(), x))
+                .group(|k| k.as_u64(), |x| (VecMap::new(), x), logic)
                 .as_collection()
         }
 }
@@ -152,10 +154,10 @@ where
         let target = result.clone();
 
         // A map from times to received (key, val, wgt) triples.
-        let mut inputs = Vec::new();
+        let mut inputs = LinearMap::new();
 
         // A map from times to a list of keys that need processing at that time.
-        let mut to_do = Vec::new();
+        let mut to_do = LinearMap::new();
 
         // temporary storage for operator implementations to populate
         let mut buffer = vec![];
