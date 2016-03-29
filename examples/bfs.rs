@@ -1,19 +1,27 @@
 extern crate rand;
 extern crate time;
 extern crate timely;
+extern crate timely_sort;
 extern crate differential_dataflow;
+extern crate vec_map;
 
 use timely::dataflow::*;
 use timely::dataflow::operators::*;
 use timely::progress::timestamp::RootTimestamp;
+use timely_sort::Unsigned;
 
 use rand::{Rng, SeedableRng, StdRng};
+use vec_map::VecMap;
 
 use differential_dataflow::Collection;
 use differential_dataflow::operators::*;
 use differential_dataflow::operators::join::JoinUnsigned;
+use differential_dataflow::operators::join::JoinArranged;
 use differential_dataflow::operators::group::GroupUnsigned;
+use differential_dataflow::operators::group::GroupArranged;
 use differential_dataflow::collection::LeastUpperBound;
+
+use differential_dataflow::operators::iterate::Variable;
 
 type Node = u32;
 type Edge = (Node, Node);
@@ -116,4 +124,33 @@ where G::Timestamp: LeastUpperBound {
              .concat(&nodes)
              .group_u(|_, s, t| t.push((*s.peek().unwrap().0, 1)))
      })
+}
+
+// Experimental implementation using arrangement to share the output of group_u with the input to join_map_u.
+
+// returns pairs (n, s) indicating node n can be reached from a root in s steps.
+fn bfs2<G: Scope>(edges: &Collection<G, Edge>, roots: &Collection<G, Node>) -> Collection<G, (Node, u32)>
+where G::Timestamp: LeastUpperBound {
+
+    // initialize roots as reaching themselves at distance 0
+    let nodes = roots.map(|x| (x, 0));
+
+    // repeatedly update minimal distances each node can be reached from each root
+    nodes.scope().scoped(|scope| {
+
+        let edges = edges.enter(scope);
+        let nodes2 = nodes.enter(scope);
+
+        let variable = Variable::from(nodes.enter(scope));
+
+        let arranged = variable.concat(&nodes2)
+                               .arrange_by_key(|k| k.as_u64(), |x| (VecMap::new(), x))
+                               .group(|k| k.as_u64(), |x| (VecMap::new(), x), |_, s, t| t.push((*s.peek().unwrap().0, 1)));
+
+        let result = arranged.as_collection().leave();
+
+        variable.set(&arranged.join(&edges.arrange_by_key(|k| k.as_u64(), |x| (VecMap::new(), x)), |_k,l,d| (*d, l+1)));
+
+        result
+    })
 }
