@@ -56,7 +56,7 @@ use iterators::coalesce::Coalesce;
 use operators::arrange::{Arranged, ArrangeByKey};
 
 /// Extension trait for the `group` differential dataflow method
-pub trait Group<G: Scope, K: Data, V: Data>// : GroupByCore<G, (K,V)>
+pub trait Group<G: Scope, K: Data, V: Data>
     where G::Timestamp: LeastUpperBound {
 
     /// Groups records by their first field, and applies reduction logic to the associated values.
@@ -115,7 +115,8 @@ pub trait GroupArranged<G: Scope, K: Data, V: Data> {
     /// This method is used by `group` and `group_u` as defined on `Collection`, and it can
     /// also be called directly by user code that wants access to the arranged output. This
     /// can be helpful when the resulting data are re-used immediately with the same keys. 
-    fn group<V2, U, KH, Look, LookG, Logic>(&self, key_h: KH, look: LookG, logic: Logic) -> Arranged<G, BasicTrace<K,G::Timestamp,V2,Look>> 
+    fn group<V2, U, KH, Look, LookG, Logic>(&self, key_h: KH, look: LookG, logic: Logic) 
+        -> Arranged<G, BasicTrace<K,G::Timestamp,V2,Look>> 
     where
         G::Timestamp: LeastUpperBound,
         V2:    Data,
@@ -134,7 +135,8 @@ where
     L: Lookup<K, Offset>+'static,
     G::Timestamp: LeastUpperBound {
 
-    fn group<V2, U, KH, Look, LookG, Logic>(&self, key_h: KH, look: LookG, logic: Logic) -> Arranged<G, BasicTrace<K,G::Timestamp,V2,Look>> 
+    fn group<V2, U, KH, Look, LookG, Logic>(&self, key_h: KH, look: LookG, logic: Logic) 
+        -> Arranged<G, BasicTrace<K,G::Timestamp,V2,Look>> 
     where
         V2:    Data,
         U:     Unsigned+Default,
