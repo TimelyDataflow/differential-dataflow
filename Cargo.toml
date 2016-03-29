@@ -22,11 +22,11 @@ getopts="0.2.14"
 rand="0.3.13"
 byteorder="0.4.2"
 
-[dependencies.timely]
-git="https://github.com/frankmcsherry/timely-dataflow.git"
+#[dependencies.timely]
+#git="https://github.com/frankmcsherry/timely-dataflow.git"
 
 [dependencies]
-# timely="^0.0.12"
+timely="^0.0.13"
 timely_sort="^0.1.1"
 timely_communication="^0.1.3"
 itertools="0.4"
