@@ -26,7 +26,7 @@ byteorder="0.4.2"
 #git="https://github.com/frankmcsherry/timely-dataflow.git"
 
 [dependencies]
-timely="^0.0.13"
+timely="0.0.14"
 timely_sort="^0.1.1"
 timely_communication="^0.1.3"
 itertools="0.4"
