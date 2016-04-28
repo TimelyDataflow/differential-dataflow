@@ -69,6 +69,9 @@ fn main() {
                 }
                 computation.step();
             }
+            for _ in 0.. (edges % 1000) {
+                graph.send(((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), 1));
+            }
         }
 
         println!("loaded; elapsed: {}s", time::precise_time_s() - start);
@@ -104,7 +107,7 @@ fn main() {
                 }
             }
         }
-    });
+    }).unwrap();
 }
 
 // returns pairs (n, s) indicating node n can be reached from a root in s steps.
@@ -129,7 +132,7 @@ where G::Timestamp: LeastUpperBound {
 // Experimental implementation using arrangement to share the output of group_u with the input to join_map_u.
 
 // returns pairs (n, s) indicating node n can be reached from a root in s steps.
-fn bfs2<G: Scope>(edges: &Collection<G, Edge>, roots: &Collection<G, Node>) -> Collection<G, (Node, u32)>
+fn _bfs2<G: Scope>(edges: &Collection<G, Edge>, roots: &Collection<G, Node>) -> Collection<G, (Node, u32)>
 where G::Timestamp: LeastUpperBound {
 
     // initialize roots as reaching themselves at distance 0
