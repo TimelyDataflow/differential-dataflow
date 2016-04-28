@@ -190,8 +190,9 @@ where
                         if source.get_difference(&key, &time).is_some() {
                             stash.push(capability.time());
                             source.interesting_times(&key, &time, &mut stash);
+
                             for new_time in &stash {
-                                to_do.entry_or_insert(time.clone(), || { notificator.notify_at(capability.delayed(new_time)); Vec::new() })
+                                to_do.entry_or_insert(new_time.clone(), || { notificator.notify_at(capability.delayed(new_time)); Vec::new() })
                                      .push(key.clone());
                             }
                             stash.clear();
