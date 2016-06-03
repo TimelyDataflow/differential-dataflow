@@ -109,14 +109,14 @@ impl<G: Scope, K: Data, V: Data> ArrangeByKey<G, K, V> for Collection<G, (K, V)>
         let stream = self.inner.unary_notify(exch, "ArrangeByKey", vec![], move |input, output, notificator| {
 
             // 1. read each input, and stash it in our staging area
-            while let Some((time, data)) = input.next() {
+            input.for_each(|time, data| {
                 inputs.entry_or_insert(time.time(), || { notificator.notify_at(time); Vec::new() })
-                      .push(::std::mem::replace(data.deref_mut(), Vec::new()));
-            }
+                      .push(::std::mem::replace(data.deref_mut(), Vec::new()));                
+            });
 
             // 2. for each complete time, sort out the received input.
-            while let Some((index, _count)) = notificator.next() {
-
+            notificator.for_each(|index, _count| {
+                
                 // 2a. fetch any data associated with this time.
                 if let Some(mut queue) = inputs.remove_key(&index) {
                     // sort things; radix if many, .sort_by if few.
@@ -137,14 +137,16 @@ impl<G: Scope, K: Data, V: Data> ArrangeByKey<G, K, V> for Collection<G, (K, V)>
                         Compact::from_radix(&mut vec![vec], &|k| part2(k))
                     };
 
+
                     if let Some(compact) = compact {
                         output.session(&index).give((compact.keys.clone(), compact.cnts.clone(), compact.vals.clone()));
                         if let Some(trace) = source.upgrade() {
                             trace.borrow_mut().set_difference(index.time(), compact);
                         }
                     }
+
                 }
-            }
+            });
         });
 
         Arranged { stream: stream, trace: trace }

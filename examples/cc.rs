@@ -2,7 +2,7 @@ extern crate rand;
 extern crate time;
 extern crate getopts;
 extern crate timely;
-// extern crate graph_map;
+extern crate graph_map;
 extern crate differential_dataflow;
 
 use std::hash::Hash;
@@ -16,7 +16,7 @@ use differential_dataflow::operators::*;
 use differential_dataflow::operators::join::JoinUnsigned;
 use differential_dataflow::operators::group::GroupUnsigned;
 
-// use graph_map::GraphMMap;
+use graph_map::GraphMMap;
 
 type Node = u32;
 type Edge = (Node, Node);
@@ -32,21 +32,19 @@ fn main() {
         let index = computation.index();
 
         // // What you might do if you used GraphMMap:
-        // let graph = GraphMMap::new(&filename);
-        // let nodes = graph.nodes();
-        // let edges = (0..nodes).filter(move |node| node % peers == index)
-        //                       .flat_map(move |node| {
-        //                           let vec = graph.edges(node).to_vec();
-        //                           vec.into_iter().map(move |edge| ((node as u32, edge),1))
-        //                       })
-
-        let edges = vec![((0,1),1), ((1,2),1)].into_iter();
+        let graph = GraphMMap::new(&filename);
+        let nodes = graph.nodes();
+        let edges = (0..nodes).filter(move |node| node % peers == index)
+                              .flat_map(move |node| {
+                                  let vec = graph.edges(node).to_vec();
+                                  vec.into_iter().map(move |edge| ((node as u32, edge),1))
+                              });
 
         computation.scoped::<u64,_,_>(|scope| {
-
             connected_components(&Collection::new(edges.to_stream(scope)));
         });
-    });
+
+    }).unwrap();
 }
 
 fn connected_components<G: Scope>(edges: &Collection<G, Edge>) -> Collection<G, (Node, Node)>
@@ -67,10 +65,11 @@ where G::Timestamp: LeastUpperBound+Hash {
     nodes.filter(|_| false)
          .iterate(|inner| {
              let edges = edges.enter(&inner.scope());
-             let nodes = nodes.enter_at(&inner.scope(), |r| 256 * (64 - (r.0).0.leading_zeros() as u64));
+             let nodes = nodes.enter_at(&inner.scope(), |r| 256 * (64 - (r.0).1.leading_zeros() as u64));
 
             inner.join_map_u(&edges, |_k,l,d| (*d,*l))
                  .concat(&nodes)
+                 // .consolidate()
                  .group_u(|_, mut s, t| { t.push((*s.peek().unwrap().0, 1)); } )
          })
 }

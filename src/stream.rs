@@ -51,13 +51,13 @@ impl<G: Scope, D: Data> Collection<G, D> {
         }
     }
 
-    pub fn enter<T: Timestamp>(&self, child: &Child<G, T>) -> Collection<Child<G, T>, D> {
+    pub fn enter<'a, T: Timestamp>(&self, child: &Child<'a, G, T>) -> Collection<Child<'a, G, T>, D> {
         Collection {
             inner: self.inner.enter(child)
         }
     }
 
-    pub fn enter_at<T: Timestamp, F: Fn(&(D, Delta)) -> T + 'static>(&self, child: &Child<G, T>, initial: F) -> Collection<Child<G, T>, D> where G::Timestamp: Hash, T: Hash {
+    pub fn enter_at<'a, T: Timestamp, F: Fn(&(D, Delta)) -> T + 'static>(&self, child: &Child<'a, G, T>, initial: F) -> Collection<Child<'a, G, T>, D> where G::Timestamp: Hash, T: Hash {
         Collection {
             inner: self.inner.enter_at(child, initial)
         }
@@ -87,7 +87,7 @@ impl<G: Scope, D: Data> Collection<G, D> {
     }
 }
 
-impl<G: Scope, T: Timestamp, D: Data> Collection<Child<G, T>, D> {
+impl<'a, G: Scope, T: Timestamp, D: Data> Collection<Child<'a, G, T>, D> {
     pub fn leave(&self) -> Collection<G, D> {
         Collection {
             inner: self.inner.leave()

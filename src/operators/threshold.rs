@@ -2,12 +2,11 @@ use std::rc::Rc;
 use std::ops::DerefMut;
 use std::default::Default;
 
-use itertools::Itertools;
 use linear_map::LinearMap;
 
 use ::{Collection, Data};
 use timely::dataflow::*;
-use timely::dataflow::operators::{Map, Unary};
+use timely::dataflow::operators::Unary;
 use timely::dataflow::channels::pact::Exchange;
 
 use timely_sort::{LSBRadixSorter, Unsigned};
@@ -54,11 +53,12 @@ impl<G: Scope, D: Data+Default+'static> Threshold<G, D> for Collection<G, D> whe
 
         Collection::new(self.inner.unary_notify(Exchange::new(move |x: &(D, i32)| key1(&x.0).as_u64()), "Count", vec![], move |input, output, notificator| {
 
-            while let Some((time, data)) = input.next() {
+            // while let Some((time, data)) = input.next() {
+            input.for_each(|time, data| {
                 inputs.entry_or_insert(time.time(), || Vec::new())
                       .push(::std::mem::replace(data.deref_mut(), Vec::new()));
                 notificator.notify_at(time);
-            }
+            });
 
             while let Some((index, _count)) = notificator.next() {
                 // 2a. fetch any data associated with this time.

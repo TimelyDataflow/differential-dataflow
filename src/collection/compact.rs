@@ -102,6 +102,7 @@ impl<K: Ord+Debug, V: Ord> Compact<K, V> {
         }
     }
 
+    // #[inline(never)]
     pub fn extend_by(&mut self, buffer: &mut Vec<((K, V), i32)>) {
 
         // coalesce things

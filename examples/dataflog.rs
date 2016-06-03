@@ -22,15 +22,15 @@ use differential_dataflow::collection::LeastUpperBound;
 use differential_dataflow::collection::robin_hood::RHHMap;
 
 /// A collection defined by multiple mutually recursive rules.
-pub struct Variable<G: Scope, D: Default+Data>
+pub struct Variable<'a, G: Scope, D: Default+Data>
 where G::Timestamp: LeastUpperBound {
     feedback: Option<Handle<G::Timestamp, u64,(D, i32)>>,
-    current:  Collection<Child<G, u64>, D>,
+    current:  Collection<Child<'a, G, u64>, D>,
 }
 
-impl<G: Scope, D: Default+Data> Variable<G, D> where G::Timestamp: LeastUpperBound {
+impl<'a, G: Scope, D: Default+Data> Variable<'a, G, D> where G::Timestamp: LeastUpperBound {
     /// Creates a new `Variable` and a `Stream` representing its output, from a supplied `source` stream.
-    pub fn from(source: &Collection<Child<G, u64>, D>) -> (Variable<G, D>, Collection<Child<G,u64>, D>) {
+    pub fn from(source: &Collection<Child<'a, G, u64>, D>) -> (Variable<'a, G, D>, Collection<Child<'a, G,u64>, D>) {
         let (feedback, cycle) = source.inner.scope().loop_variable(u64::max_value(), 1);
         let cycle = Collection::new(cycle);
         let mut result = Variable { feedback: Some(feedback), current: cycle.clone() };
@@ -39,12 +39,12 @@ impl<G: Scope, D: Default+Data> Variable<G, D> where G::Timestamp: LeastUpperBou
         (result, stream)
     }
     /// Adds a new source of data to the `Variable`.
-    pub fn add(&mut self, source: &Collection<Child<G, u64>, D>) {
+    pub fn add(&mut self, source: &Collection<Child<'a, G, u64>, D>) {
         self.current = self.current.concat(source);
     }
 }
 
-impl<G: Scope, D: Default+Data> Drop for Variable<G, D> where G::Timestamp: LeastUpperBound {
+impl<'a, G: Scope, D: Default+Data> Drop for Variable<'a, G, D> where G::Timestamp: LeastUpperBound {
     fn drop(&mut self) {
         if let Some(feedback) = self.feedback.take() {
             self.current.threshold(|x| x.hashed(), 
@@ -58,15 +58,15 @@ impl<G: Scope, D: Default+Data> Drop for Variable<G, D> where G::Timestamp: Leas
 }
 
 /// A collection defined by multiple mutually recursive rules.
-pub struct NewVariable<G: Scope, D: Default+Data>
+pub struct NewVariable<'a, G: Scope, D: Default+Data>
 where G::Timestamp: LeastUpperBound {
     feedback: Option<Handle<G::Timestamp, u64,(D, i32)>>,
-    source:  Collection<Child<G, u64>, D>,
+    source:  Collection<Child<'a, G, u64>, D>,
 }
 
-impl<G: Scope, D: Default+Data> NewVariable<G, D> where G::Timestamp: LeastUpperBound {
+impl<'a, G: Scope, D: Default+Data> NewVariable<'a, G, D> where G::Timestamp: LeastUpperBound {
     /// Creates a new `Variable` and a `Stream` representing its output, from a supplied `source` stream.
-    pub fn from(source: &Collection<Child<G, u64>, D>) -> (NewVariable<G, D>, Collection<Child<G,u64>, D>) {
+    pub fn from(source: &Collection<Child<'a, G, u64>, D>) -> (NewVariable<'a, G, D>, Collection<Child<'a, G,u64>, D>) {
         let (feedback, cycle) = source.inner.scope().loop_variable(u64::max_value(), 1);
         let cycle = Collection::new(cycle);
         let result = NewVariable { feedback: Some(feedback), source: cycle.clone() };
@@ -74,7 +74,7 @@ impl<G: Scope, D: Default+Data> NewVariable<G, D> where G::Timestamp: LeastUpper
         (result, stream)
     }
     /// Adds a new source of data to the `Variable`.
-    pub fn set(mut self, result: &Collection<Child<G, u64>, D>) {
+    pub fn set(mut self, result: &Collection<Child<'a, G, u64>, D>) {
         if let Some(feedback) = self.feedback.take() {
             // negate weights; perhaps should be a Collection method?
             self.source
@@ -86,7 +86,7 @@ impl<G: Scope, D: Default+Data> NewVariable<G, D> where G::Timestamp: LeastUpper
     }
 }
 
-impl<G: Scope, D: Default+Data> Drop for NewVariable<G, D> where G::Timestamp: LeastUpperBound {
+impl<'a, G: Scope, D: Default+Data> Drop for NewVariable<'a, G, D> where G::Timestamp: LeastUpperBound {
     fn drop(&mut self) {
         if self.feedback.is_some() {
             panic!("unset new_variable");

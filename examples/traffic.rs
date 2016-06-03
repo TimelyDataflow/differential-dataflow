@@ -56,5 +56,5 @@ fn main() {
         graph.close();                  // seal the source of edges
         while computation.step() { }    // wind down the computation
         println!("done!");
-    });
+    }).unwrap();
 }

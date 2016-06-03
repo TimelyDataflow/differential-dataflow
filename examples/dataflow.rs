@@ -146,7 +146,7 @@ fn main() {
                 }
             }
         }
-    });
+    }).unwrap();
 }
 
 fn connected_components<G: Scope>(edges: &Collection<G, Edge>) -> Collection<G, (Node, Node)>

@@ -38,8 +38,14 @@ pub trait ConsolidateExt<D: Data> {
     /// Aggregates the weights of equal records into at most one record.
     fn consolidate(&self) -> Self;
 
-    /// Aggregates the weights of equal records into at most one record, partitions data using the
-    /// supplied partition function.
+    /// Aggregates the weights of equal records into at most one record, partitions the
+    /// data using the supplied partition function.
+    ///
+    /// Note that `consolidate_by` attempts to aggregate weights as it goes, to ensure
+    /// that it does not consume more memory than is required of its collection. It does
+    /// among records with the same `part` value, so if you just set all part values
+    /// to the same value, it may not do a great job because you'll have lots of blocks 
+    /// with distinct values. Just, bear that in mind if you want to be clever with this.
     fn consolidate_by<U: Unsigned, F: Fn(&D)->U+'static>(&self, part: F) -> Self;
 }
 
@@ -56,21 +62,74 @@ impl<G: Scope, D: Ord+Data+Debug> ConsolidateExt<D> for Collection<G, D> {
         let exch = Exchange::new(move |&(ref x,_)| (*part1)(x).as_u64());
         Collection::new(self.inner.unary_notify(exch, "Consolidate", vec![], move |input, output, notificator| {
 
-            while let Some((index, data)) = input.next() {
-                inputs.entry_or_insert(index.time(), || LSBRadixSorter::new())
-                      .extend(data.drain(..), &|x| (*part2)(&x.0));
+            // Consolidation needs to address the issue that the amount of incoming data
+            // may be too large to maintain in queues, but small enough once aggregated.
+            // Although arbitrarily large queues *should* work at sequential disk io (?)
+            // it seems like we should be smarter than that. We could overflow disk when
+            // counting crazy 12-cliques or something, right?
+
+            // So, we can't just pop data off and enqueue it, we need to do something like
+            // sort and consolidate what we have, or something like that. We know how to 
+            // sort and consolidate (see below), but who knows how we should be doing merges
+            // and weird stuff like that... Probably power-of-two merges or somesuch...
+
+            // If we thought we were unlikely to have collisions, we could just sort each 
+            // of the hunks we get out of the radix sorter and coalesce them. This could be
+            // arbitrarily ineffective if we have lots of collisions though (consolidating 
+            // by a key of a (key,val) pair, for some reason). Let's try it for now.
+
+            input.for_each(|index, data| {
+
+                // make large to turn off compaction.
+                let default_threshold = usize::max_value(); //1 << 20;
+
+                // an entry stores a sorter (the data), a current count, and a compaction threshold.
+                let entry = inputs.entry_or_insert(index.time(), || (LSBRadixSorter::new(), 0, default_threshold));
+                let (ref mut sorter, ref mut count, ref mut thresh) = *entry;
+
+                *count += data.len();
+                sorter.extend(data.drain(..), &|x| (*part2)(&x.0));
+
+                if count > thresh {
+
+                    *count = 0; 
+                    *thresh = 0;
+
+                    // pull out blocks sorted by the hash; coalesce each.
+                    let finished = sorter.finish(&|x| (*part2)(&x.0));
+                    for mut block in finished {
+                        let mut finger = 0;
+                        for i in 1..block.len() {
+                            if block[finger].0 == block[i].0 {
+                                block[finger].1 += block[i].1;
+                                block[i].1 = 0;
+                            }
+                            else {
+                                finger = i;
+                            }
+                        }
+                        block.retain(|x| x.1 != 0);
+                        *thresh += block.len();
+                        sorter.push_batch(block, &|x| (*part2)(&x.0));
+                    }
+
+                    if *thresh < default_threshold { *thresh = default_threshold; }
+                }
+
                 notificator.notify_at(index);
-            }
+            });
 
             // 2. go through each time of interest that has reached completion
-            while let Some((index, _count)) = notificator.next() {
-                if let Some(mut stash) = inputs.remove_key(&index) {
+            notificator.for_each(|index, _count| {
+
+                // pull out sorter, ignore count and thresh (irrelevant now).
+                if let Some((mut sorter, _, _)) = inputs.remove_key(&index) {
 
                     let mut session = output.session(&index);
                     let mut buffer = vec![];
                     let mut current = 0;
 
-                    let source = stash.finish(&|x| (*part2)(&x.0));
+                    let source = sorter.finish(&|x| (*part2)(&x.0));
                     for (datum, wgt) in source.into_iter().flat_map(|x| x.into_iter()) {
                         let hash = (*part2)(&datum).as_u64();
                         if buffer.len() > 0 && hash != current {
@@ -86,7 +145,7 @@ impl<G: Scope, D: Ord+Data+Debug> ConsolidateExt<D> for Collection<G, D> {
                         session.give_iterator(buffer.drain(..).coalesce());
                     }
                 }
-            }
+            });
         }))
     }
 }

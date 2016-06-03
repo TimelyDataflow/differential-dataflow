@@ -63,13 +63,13 @@ pub trait IterateExt<G: Scope, D: Data> {
     /// Iteratively apply `logic` to the source collection until convergence.
     fn iterate<F>(&self, logic: F) -> Collection<G, D>
         where G::Timestamp: LeastUpperBound,
-              F: FnOnce(&Collection<Child<G, u64>, D>)->Collection<Child<G, u64>, D>;
+              for<'a> F: FnOnce(&Collection<Child<'a, G, u64>, D>)->Collection<Child<'a, G, u64>, D>;
 }
 
 impl<G: Scope, D: Ord+Data+Debug> IterateExt<G, D> for Collection<G, D> {
     fn iterate<F>(&self, logic: F) -> Collection<G, D>
         where G::Timestamp: LeastUpperBound,
-              F: FnOnce(&Collection<Child<G, u64>, D>)->Collection<Child<G, u64>, D> {
+              for<'a> F: FnOnce(&Collection<Child<'a, G, u64>, D>)->Collection<Child<'a, G, u64>, D> {
 
         self.inner.scope().scoped(|subgraph| {
             // create a new variable, apply logic, bind variable, return.
@@ -91,22 +91,22 @@ impl<G: Scope, D: Ord+Data+Debug> IterateExt<G, D> for Collection<G, D> {
 /// The `Variable` struct allows differential dataflow programs requiring more sophisticated
 /// iterative patterns than singly recursive iteration. For example: in mutual recursion two 
 /// collections evolve simultaneously.
-pub struct Variable<G: Scope, D: Data>
+pub struct Variable<'a, G: Scope, D: Data>
 where G::Timestamp: LeastUpperBound {
-    collection: Collection<Child<G, u64>, D>,
+    collection: Collection<Child<'a, G, u64>, D>,
     feedback: Handle<G::Timestamp, u64,(D, i32)>,
-    source: Collection<Child<G, u64>, D>,
+    source: Collection<Child<'a, G, u64>, D>,
 }
 
-impl<G: Scope, D: Data> Variable<G, D> where G::Timestamp: LeastUpperBound {
+impl<'a, G: Scope, D: Data> Variable<'a, G, D> where G::Timestamp: LeastUpperBound {
     /// Creates a new `Variable` and a `Stream` representing its output, from a supplied `source` stream.
-    pub fn from(source: Collection<Child<G, u64>, D>) -> Variable<G, D> {
+    pub fn from(source: Collection<Child<'a, G, u64>, D>) -> Variable<'a, G, D> {
         let (feedback, updates) = source.inner.scope().loop_variable(u64::max_value(), 1);
         let collection = Collection::new(updates).concat(&source);
         Variable { collection: collection, feedback: feedback, source: source }
     }
     /// Adds a new source of data to the `Variable`.
-    pub fn set(self, result: &Collection<Child<G, u64>, D>) -> Collection<Child<G, u64>, D> {
+    pub fn set(self, result: &Collection<Child<'a, G, u64>, D>) -> Collection<Child<'a, G, u64>, D> {
         self.source.negate()
                    .concat(result)
                    .inner
@@ -116,8 +116,8 @@ impl<G: Scope, D: Data> Variable<G, D> where G::Timestamp: LeastUpperBound {
     }
 }
 
-impl<G: Scope, D: Data> Deref for Variable<G, D> where G::Timestamp: LeastUpperBound {
-    type Target = Collection<Child<G, u64>, D>;
+impl<'a, G: Scope, D: Data> Deref for Variable<'a, G, D> where G::Timestamp: LeastUpperBound {
+    type Target = Collection<Child<'a, G, u64>, D>;
     fn deref(&self) -> &Self::Target {
         &self.collection
     }

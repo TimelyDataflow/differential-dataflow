@@ -42,7 +42,7 @@ use vec_map::VecMap;
 
 use ::{Data, Collection, Delta};
 use timely::dataflow::*;
-use timely::dataflow::operators::{Map, Unary};
+use timely::dataflow::operators::Unary;
 use timely::dataflow::channels::pact::Pipeline;
 use timely_sort::Unsigned;
 
@@ -73,7 +73,7 @@ pub trait Group<G: Scope, K: Data, V: Data>
 }
 
 impl<G: Scope, K: Data+Default, V: Data+Default> Group<G, K, V> for Collection<G, (K,V)>
-where G::Timestamp: LeastUpperBound 
+where G::Timestamp: LeastUpperBound
 {
     fn group<L, V2: Data>(&self, logic: L) -> Collection<G, (K,V2)>
         where L: Fn(&K, &mut CollectionIterator<DifferenceIterator<V>>, &mut Vec<(V2, Delta)>)+'static {
@@ -87,17 +87,17 @@ where G::Timestamp: LeastUpperBound
 /// Extension trait for the `group_u` differential dataflow method.
 pub trait GroupUnsigned<G: Scope, U: Unsigned+Data+Default, V: Data>
     where G::Timestamp: LeastUpperBound {
-    /// Groups records by their first field, when this field implements `Unsigned`. 
+    /// Groups records by their first field, when this field implements `Unsigned`.
     ///
     /// This method uses a `Vec<Option<_>>` as its internal storage, allocating
-    /// enough memory to directly index based on the first fields. This can be 
+    /// enough memory to directly index based on the first fields. This can be
     /// very useful when these fields are small integers, but it can be expensive
     /// if they are large and sparse.
     fn group_u<L, V2: Data>(&self, logic: L) -> Collection<G, (U, V2)>
         where L: Fn(&U, &mut CollectionIterator<DifferenceIterator<V>>, &mut Vec<(V2, i32)>)+'static;
 }
 
-impl<G: Scope, U: Unsigned+Data+Default, V: Data> GroupUnsigned<G, U, V> for Collection<G, (U,V)> 
+impl<G: Scope, U: Unsigned+Data+Default, V: Data> GroupUnsigned<G, U, V> for Collection<G, (U,V)>
 where G::Timestamp: LeastUpperBound {
     fn group_u<L, V2: Data>(&self, logic: L) -> Collection<G, (U, V2)>
         where L: Fn(&U, &mut CollectionIterator<DifferenceIterator<V>>, &mut Vec<(V2, i32)>)+'static {
@@ -114,9 +114,9 @@ pub trait GroupArranged<G: Scope, K: Data, V: Data> {
     ///
     /// This method is used by `group` and `group_u` as defined on `Collection`, and it can
     /// also be called directly by user code that wants access to the arranged output. This
-    /// can be helpful when the resulting data are re-used immediately with the same keys. 
-    fn group<V2, U, KH, Look, LookG, Logic>(&self, key_h: KH, look: LookG, logic: Logic) 
-        -> Arranged<G, BasicTrace<K,G::Timestamp,V2,Look>> 
+    /// can be helpful when the resulting data are re-used immediately with the same keys.
+    fn group<V2, U, KH, Look, LookG, Logic>(&self, key_h: KH, look: LookG, logic: Logic)
+        -> Arranged<G, BasicTrace<K,G::Timestamp,V2,Look>>
     where
         G::Timestamp: LeastUpperBound,
         V2:    Data,
@@ -128,15 +128,15 @@ pub trait GroupArranged<G: Scope, K: Data, V: Data> {
 }
 
 impl<G, K, V, L> GroupArranged<G, K, V> for Arranged<G, BasicTrace<K, G::Timestamp, V, L>>
-where 
+where
     G: Scope,
     K: Data,
     V: Data,
     L: Lookup<K, Offset>+'static,
     G::Timestamp: LeastUpperBound {
 
-    fn group<V2, U, KH, Look, LookG, Logic>(&self, key_h: KH, look: LookG, logic: Logic) 
-        -> Arranged<G, BasicTrace<K,G::Timestamp,V2,Look>> 
+    fn group<V2, U, KH, Look, LookG, Logic>(&self, key_h: KH, look: LookG, logic: Logic)
+        -> Arranged<G, BasicTrace<K,G::Timestamp,V2,Look>>
     where
         V2:    Data,
         U:     Unsigned+Default,
@@ -169,13 +169,20 @@ where
 
             // 1. read each input, and stash it in our staging area.
             // only stash the keys, because vals etc are in self.trace
-            while let Some((time, data)) = input.next() {
-                inputs.entry_or_insert(time.time(), || { notificator.notify_at(time); data.drain(..).next().unwrap().0 });
-            }
+            input.for_each(|time, data| {
+                inputs.entry_or_insert(time.time(), || {
+                    notificator.notify_at(time);
+                    data.drain(..).next().unwrap().0
+                });
+            });
 
             // 2. go through each time of interest that has reached completion
             // times are interesting either because we received data, or because we conclude
             // in the processing of a time that a future time will be interesting.
+
+            // TODO : re-rig to use notificator.for_each(). Presently the code re-borrows notificator, 
+            // TODO : which makes it unsuitable for for_each. Sort this out (for_each could offer a ref
+            // TODO : to the notificator?)
             while let Some((capability, _count)) = notificator.next() {
 
                 let time = capability.time();
@@ -192,7 +199,10 @@ where
                             source.interesting_times(&key, &time, &mut stash);
 
                             for new_time in &stash {
-                                to_do.entry_or_insert(new_time.clone(), || { notificator.notify_at(capability.delayed(new_time)); Vec::new() })
+                                to_do.entry_or_insert(new_time.clone(), || {
+                                         notificator.notify_at(capability.delayed(new_time));
+                                         Vec::new()
+                                     })
                                      .push(key.clone());
                             }
                             stash.clear();
@@ -203,8 +213,8 @@ where
                 // 2b. Process any interesting keys at this time.
                 if let Some(mut keys) = to_do.remove_key(&time) {
 
-                    // We would like these keys in a particular order. 
-                    // We also want to de-duplicate them, in case there are dupes. 
+                    // We would like these keys in a particular order.
+                    // We also want to de-duplicate them, in case there are dupes.
                     keys.sort_by(|x,y| (key_h(&x), x).cmp(&(key_h(&y), y)));
                     keys.dedup();
 

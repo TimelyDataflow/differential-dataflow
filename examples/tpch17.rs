@@ -51,7 +51,7 @@ fn main() {
 
             // restrict lineitems to those of the relevant part
             let items = items.map(|x| (x.0, (x.1, x.2)))
-                             .semijoin(&parts)
+                             .semijoin_u(&parts)
                              .map(|(k,v)| (k, v.0, v.1));
 
             // compute the average quantities
@@ -150,5 +150,5 @@ fn main() {
 
         println!("computation finished at {}", time::precise_time_s() - start);
         println!("rate: {}", (item_count as f64) / (time::precise_time_s() - start));
-    });
+    }).unwrap();
 }

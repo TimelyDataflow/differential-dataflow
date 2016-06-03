@@ -13,7 +13,7 @@ pub trait Trace where for<'a> &'a Self: TraceRef<'a, Self::Key, Self::Index, Sel
     type Index: LeastUpperBound;
     type Value: Data;
 
-    // type PartKey: Unsigned;                              // the keys are partitioned and likely ordered by this unsigned integer
+    // type PartKey: Unsigned;                              // the keys are partitioned and likely ordered by this unsigned int
     // fn part(&self, key: &Self::Key) -> Self::PartKey;    // indicates the part for a key
 
 

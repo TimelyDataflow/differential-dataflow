@@ -88,7 +88,7 @@ fn main() {
         }
 
         input.close();
-    });
+    }).unwrap();
 }
 
 fn _trim_and_flip<G: Scope>(graph: &Collection<G, Edge>) -> Collection<G, Edge>

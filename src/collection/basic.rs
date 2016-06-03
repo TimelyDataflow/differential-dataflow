@@ -32,6 +32,7 @@ impl<K,V,L,T> Trace for BasicTrace<K, T, V, L>
     type Index = T;
     type Value = V;
 
+    #[inline(never)]
     fn set_difference(&mut self, time: T, accumulation: Compact<K, V>) {
 
         // extract the relevant fields
