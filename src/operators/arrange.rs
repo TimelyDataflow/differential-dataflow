@@ -115,7 +115,7 @@ impl<G: Scope, K: Data, V: Data> ArrangeByKey<G, K, V> for Collection<G, (K, V)>
             });
 
             // 2. for each complete time, sort out the received input.
-            notificator.for_each(|index, _count| {
+            notificator.for_each(|index, _count, _notificator| {
                 
                 // 2a. fetch any data associated with this time.
                 if let Some(mut queue) = inputs.remove_key(&index) {

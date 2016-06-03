@@ -183,7 +183,8 @@ where
             // TODO : re-rig to use notificator.for_each(). Presently the code re-borrows notificator, 
             // TODO : which makes it unsuitable for for_each. Sort this out (for_each could offer a ref
             // TODO : to the notificator?)
-            while let Some((capability, _count)) = notificator.next() {
+            // while let Some((capability, _count)) = notificator.next() {
+            notificator.for_each(|capability, _count, notificator| {
 
                 let time = capability.time();
 
@@ -255,7 +256,7 @@ where
                         target.borrow_mut().set_difference(time, accumulation);
                     }
                 }
-            }
+            });
         });
 
         Arranged { stream: stream, trace: result }

@@ -60,7 +60,8 @@ impl<G: Scope, D: Data+Default+'static> Threshold<G, D> for Collection<G, D> whe
                 notificator.notify_at(time);
             });
 
-            while let Some((index, _count)) = notificator.next() {
+            notificator.for_each(|index, _count, notificator| {
+            // while let Some((index, _count)) = notificator.next() {
                 // 2a. fetch any data associated with this time.
                 if let Some(mut queue) = inputs.remove_key(&index) {
                     // sort things; radix if many, .sort_by if few.
@@ -132,7 +133,7 @@ impl<G: Scope, D: Data+Default+'static> Threshold<G, D> for Collection<G, D> whe
                         result.set_difference(index.time(), accumulation);
                     }
                 }
-            }
+            });
         }))
     }
 }

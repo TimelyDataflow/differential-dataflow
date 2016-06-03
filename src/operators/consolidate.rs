@@ -120,7 +120,7 @@ impl<G: Scope, D: Ord+Data+Debug> ConsolidateExt<D> for Collection<G, D> {
             });
 
             // 2. go through each time of interest that has reached completion
-            notificator.for_each(|index, _count| {
+            notificator.for_each(|index, _count, _notificator| {
 
                 // pull out sorter, ignore count and thresh (irrelevant now).
                 if let Some((mut sorter, _, _)) = inputs.remove_key(&index) {

@@ -272,7 +272,8 @@ impl<TS: Timestamp, G: Scope<Timestamp=TS>, T: Trace<Index=TS>+'static> JoinArra
             });
 
             // Notification means we have inputs to process or outputs to send.
-            while let Some((capability, _count)) = notificator.next() {
+            // while let Some((capability, _count)) = notificator.next() {
+            notificator.for_each(|capability, _count, notificator| {
 
                 let time = capability.time();
 
@@ -355,7 +356,7 @@ impl<TS: Timestamp, G: Scope<Timestamp=TS>, T: Trace<Index=TS>+'static> JoinArra
                 for (new_time, _) in &outbuf {
                     notificator.notify_at(capability.delayed(new_time));
                 }
-            }
+            });
         });
 
         Collection::new(result)
