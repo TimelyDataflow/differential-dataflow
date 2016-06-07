@@ -354,7 +354,10 @@ impl<TS: Timestamp, G: Scope<Timestamp=TS>, T: Trace<Index=TS>+'static> JoinArra
 
                 // make sure we hold capabilities for each time still to send at.
                 for (new_time, _) in &outbuf {
-                    notificator.notify_at(capability.delayed(new_time));
+                    // NOTE : WHOA THIS IS MESSED UP;
+                    if capability.time().le(new_time) {
+                        notificator.notify_at(capability.delayed(new_time));
+                    }
                 }
             });
         });
