@@ -36,6 +36,18 @@ use ::{Collection, Data};
 /// An extension method for consolidating weighted streams.
 pub trait ConsolidateExt<D: Data> {
     /// Aggregates the weights of equal records into at most one record.
+    ///
+    /// This method uses the type `D`'s `hashed()` method to partition the data.
+    /// 
+    /// #Examples
+    ///
+    /// In the following fragment, `result` contains only `(1, 3)`:
+    ///
+    /// ```ignore
+    /// let stream = vec![(0,1),(1,1),(0,-1),(1,2)].to_stream(scope);
+    /// let collection = Collection::new(stream);
+    /// let result = collection.consolidate();
+    /// ```
     fn consolidate(&self) -> Self;
 
     /// Aggregates the weights of equal records into at most one record, partitions the
@@ -43,9 +55,19 @@ pub trait ConsolidateExt<D: Data> {
     ///
     /// Note that `consolidate_by` attempts to aggregate weights as it goes, to ensure
     /// that it does not consume more memory than is required of its collection. It does
-    /// among records with the same `part` value, so if you just set all part values
-    /// to the same value, it may not do a great job because you'll have lots of blocks 
-    /// with distinct values. Just, bear that in mind if you want to be clever with this.
+    /// among blocks of records with the same `part` value, so if you just set all part 
+    /// values to the same value, it may not do a great job because you'll have lots of 
+    /// blocks with distinct values. Just, bear that in mind if you want to be clever.
+    ///
+    /// #Examples
+    ///
+    /// In the following fragment, `result` contains only `(1, 3)`:
+    ///
+    /// ```ignore
+    /// let stream = vec![(0,1),(1,1),(0,-1),(1,2)].to_stream(scope);
+    /// let collection = Collection::new(stream);
+    /// let result = collection.consolidate_by(|&x| x);
+    /// ```    
     fn consolidate_by<U: Unsigned, F: Fn(&D)->U+'static>(&self, part: F) -> Self;
 }
 
@@ -81,7 +103,8 @@ impl<G: Scope, D: Ord+Data+Debug> ConsolidateExt<D> for Collection<G, D> {
             input.for_each(|index, data| {
 
                 // make large to turn off compaction.
-                let default_threshold = usize::max_value(); //1 << 20;
+                let default_threshold = usize::max_value();
+                // let default_threshold = 256 << 10;
 
                 // an entry stores a sorter (the data), a current count, and a compaction threshold.
                 let entry = inputs.entry_or_insert(index.time(), || (LSBRadixSorter::new(), 0, default_threshold));

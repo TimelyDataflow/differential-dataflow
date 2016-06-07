@@ -1,5 +1,4 @@
 extern crate rand;
-extern crate time;
 extern crate timely;
 extern crate timely_sort;
 extern crate differential_dataflow;
@@ -7,7 +6,6 @@ extern crate vec_map;
 
 use timely::dataflow::*;
 use timely::dataflow::operators::*;
-use timely::progress::timestamp::RootTimestamp;
 use timely_sort::Unsigned;
 
 use rand::{Rng, SeedableRng, StdRng};
@@ -35,7 +33,8 @@ fn main() {
 
     // define a new computational scope, in which to run BFS
     timely::execute_from_args(std::env::args().skip(5), move |computation| {
-        let start = time::precise_time_s();
+        
+        let timer = ::std::time::Instant::now();
 
         // define BFS dataflow; return handles to roots and edges inputs
         let (mut graph, probe) = computation.scoped(|scope| {
@@ -74,12 +73,12 @@ fn main() {
             }
         }
 
-        println!("loaded; elapsed: {}s", time::precise_time_s() - start);
+        println!("loaded; elapsed: {:?}", timer.elapsed());
 
         graph.advance_to(1);
-        while probe.le(&RootTimestamp::new(0)) { computation.step(); }
+        computation.step_while(|| probe.lt(graph.time()));
 
-        println!("stable; elapsed: {}s", time::precise_time_s() - start);
+        println!("stable; elapsed: {:?}", timer.elapsed());
 
         if batch > 0 {
             let mut changes = Vec::new();
@@ -91,7 +90,7 @@ fn main() {
                     }
                 }
 
-                let start = time::precise_time_s();
+                let timer = ::std::time::Instant::now();
                 let round = *graph.epoch();
                 if computation.index() == 0 {
                     while let Some(change) = changes.pop() {
@@ -99,11 +98,10 @@ fn main() {
                     }
                 }
                 graph.advance_to(round + 1);
-
-                while probe.le(&RootTimestamp::new(round)) { computation.step(); }
+                computation.step_while(|| probe.lt(&graph.time()));
 
                 if computation.index() == 0 {
-                    println!("wave {}: avg {}", wave, (time::precise_time_s() - start) / (batch as f64));
+                    println!("wave {}: avg {:?}", wave, timer.elapsed() / (batch as u32));
                 }
             }
         }

@@ -66,6 +66,7 @@ impl<'a,K,L,T> TraceRef<'a,K,T,()> for &'a Count<K,T,L> where K: Ord+'a, L: Look
     }   
 }
 
+/// An opaque offset into internal storage.
 #[derive(Copy, Clone, Debug)]
 pub struct Offset {
     dataz: u32,
@@ -87,17 +88,20 @@ struct ListEntry {
     next: Option<Offset>,
 }
 
+/// A trace specialized for the value type `()`.
+///
+/// This trace does not need to represent a variable number of values associated with
+/// each key, and instead needs only one weight per timestamp.
 pub struct Count<K, T, L> {
     phantom:    ::std::marker::PhantomData<K>,
     links:      Vec<ListEntry>,
     times:      Vec<T>,
-    pub keys:   L,
-    // temp:       Vec<T>,
+    keys:   L,
     silly: (),
 }
 
 impl<K, L, T> Count<K, T, L> where K: Data+Ord+'static, L: Lookup<K, Offset>+'static, T: LeastUpperBound+'static {
-
+    /// Recovers the count for the `()` value for a key at a time.
     pub fn get_count(&self, key: &K, time: &T) -> i32 {
         let mut sum = 0;
         for wgt in Trace::trace(self, key).filter(|x| x.0 <= time).map(|mut x| x.1.next().unwrap().1) {
@@ -108,6 +112,7 @@ impl<K, L, T> Count<K, T, L> where K: Data+Ord+'static, L: Lookup<K, Offset>+'st
 }
 
 impl<K: Eq, L: Lookup<K, Offset>, T> Count<K, T, L> {
+    /// Allocates a new `Count` from a supplied lookup.
     pub fn new(l: L) -> Count<K, T, L> {
         Count {
             phantom: ::std::marker::PhantomData,
@@ -144,6 +149,10 @@ where K: Ord+'a,
     }
 }
 
+/// An iterator over weighted references to `()`.
+///
+/// This iterator exists because it is needed to implement `Trace` and `TraceRef`.
+/// Its implementation is quite silly, but we seem to need an actual `&()` to return.
 pub struct WeightIterator<'a> {
     weight: i32,
     silly: &'a (),

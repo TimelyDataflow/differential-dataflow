@@ -1,11 +1,11 @@
 #[allow(unused_variables)]
 extern crate fnv;
 extern crate rand;
-extern crate time;
+// extern crate time;
 extern crate timely;
 extern crate differential_dataflow;
 
-use std::collections::HashMap;
+use std::time::Instant;
 use std::io::{BufReader, BufRead};
 use std::fs::File;
 
@@ -19,7 +19,7 @@ use differential_dataflow::{Data, Collection};
 use differential_dataflow::operators::*;
 use differential_dataflow::operators::join::JoinUnsigned;
 use differential_dataflow::collection::LeastUpperBound;
-use differential_dataflow::collection::robin_hood::RHHMap;
+// use differential_dataflow::collection::robin_hood::RHHMap;
 
 /// A collection defined by multiple mutually recursive rules.
 pub struct Variable<'a, G: Scope, D: Default+Data>
@@ -47,10 +47,7 @@ impl<'a, G: Scope, D: Default+Data> Variable<'a, G, D> where G::Timestamp: Least
 impl<'a, G: Scope, D: Default+Data> Drop for Variable<'a, G, D> where G::Timestamp: LeastUpperBound {
     fn drop(&mut self) {
         if let Some(feedback) = self.feedback.take() {
-            self.current.threshold(|x| x.hashed(), 
-                // |_| HashMap::new(), 
-                |_| RHHMap::new(|x: &D| x.hashed() as usize),
-                |_, w| if w > 0 { 1 } else { 0 })
+            self.current.distinct()
                         .inner
                         .connect_loop(feedback);
         }
@@ -207,7 +204,8 @@ fn main() {
 
     timely::execute_from_args(std::env::args(), |root| {
 
-        let start = time::precise_time_s();
+        let timer = Instant::now();
+
         let (mut c, mut p, mut q, mut r, mut s, mut u, mut p_query, mut q_query, probe) = root.scoped::<u64, _, _>(move |outer| {
 
             // inputs for p, q, and u base facts.
@@ -327,8 +325,8 @@ fn main() {
         while probe.lt(&RootTimestamp::new(1)) { root.step(); }
         root.step();
 
-        // println!("derivation:\t{}", time::precise_time_s() - start);
-        let timer = time::precise_time_s();
+        println!("derivation:\t{:?}", timer.elapsed());
+        let timer = ::std::time::Instant::now();
 
         // p_query.send(((1u32,3u32), 1));
         q_query.send(((1u32,4u32,5u32), 1));
@@ -337,6 +335,6 @@ fn main() {
 
         while probe.lt(&RootTimestamp::new(2)) { root.step(); }
 
-        // println!("query:\t{}", time::precise_time_s() - timer);
-    });
+        println!("query:\t{:?}", timer.elapsed());
+    }).unwrap();
 }

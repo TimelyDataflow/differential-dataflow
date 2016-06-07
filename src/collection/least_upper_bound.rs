@@ -1,6 +1,10 @@
+//! Partially ordered elements with a least upper bound.
 
+/// Partially ordered elements with a least upper bound.
 pub trait LeastUpperBound : PartialOrd {
+    /// A maximum value for the type.
     fn max() -> Self;
+    /// The least element greater or equal to each argument.
     fn least_upper_bound(&self, &Self) -> Self;
 }
 
@@ -46,7 +50,7 @@ impl LeastUpperBound for i32 {
     fn least_upper_bound(&self, other: &i32) -> i32 { if self < other { *other } else { *self }}
 }
 
-
+/// Extends `vector` to contain all least upper bounds of pairs of elements.
 pub fn close_under_lub<T: LeastUpperBound>(vector: &mut Vec<T>) {
     // compares each element to those elements after it.
     let mut first = 0;

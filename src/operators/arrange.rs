@@ -4,7 +4,7 @@
 //! The intent is that multiple users of the same data can share the resources needed to arrange and 
 //! maintain the data. 
 
-use rc::Rc;
+use std::rc::Rc;
 use std::cell::RefCell;
 use std::default::Default;
 use std::ops::DerefMut;
@@ -37,7 +37,13 @@ pub struct Arranged<G: Scope, T: Trace<Index=G::Timestamp>>
         G::Timestamp: LeastUpperBound ,
         for<'a> &'a T: TraceRef<'a, T::Key, T::Index, T::Value> 
         {
+    /// A stream containing arranged updates.
+    ///
+    /// This stream may be reduced to just the keys, with the expectation that looking up the
+    /// updated values in the associated trace should be more efficient than cloning the values.
+    /// Users who need the values can obviously use the original stream.
     pub stream: Stream<G, (Vec<<T as Trace>::Key>, Vec<u32>, Vec<(<T as Trace>::Value, i32)>)>,
+    /// A shared trace, updated by the `Arrange` operator and readable by others.
     pub trace: Rc<RefCell<T>>,
 }
 
@@ -49,6 +55,11 @@ impl<G: Scope, T: Trace<Index=G::Timestamp>> Arranged<G, T>
         for<'a> &'a T: TraceRef<'a, T::Key, T::Index, T::Value> 
     {
     
+    /// Flattens the stream into a `Collection`.
+    ///
+    /// This operator is not obviously more efficient than using the `Collection` that is input
+    /// to the `Arrange` operator. However, this may be the only way to recover a collection from 
+    /// only the `Arranged` type.
     pub fn as_collection(&self) -> Collection<G, (T::Key, T::Value)> {
         Collection::new(
             self.stream.flat_map(|(keys, cnts, vals)| {
@@ -68,6 +79,11 @@ impl<G: Scope, T: Trace<Index=G::Timestamp>> Arranged<G, T>
 
 /// Arranges something as `(Key,Val)` pairs. 
 pub trait ArrangeByKey<G: Scope, K: Data, V: Data> where G::Timestamp: LeastUpperBound {
+    /// Arranges a stream of `(Key, Val)` updates by `Key`.
+    ///
+    /// This operator arranges a stream of values into a shared trace, whose contents it maintains.
+    /// This trace is current for all times completed by the output stream, which can be used to
+    /// safely identify the stable times and values in the trace.
     fn arrange_by_key<
         U:     Unsigned+Default,
         KH:    Fn(&K)->U+'static,
@@ -93,7 +109,7 @@ impl<G: Scope, K: Data, V: Data> ArrangeByKey<G, K, V> for Collection<G, (K, V)>
 
         // create a trace to share with downstream consumers.
         let trace = Rc::new(RefCell::new(BasicTrace::new(look(log_peers))));
-        let source = trace.downgrade();
+        let source = Rc::downgrade(&trace);
 
         // A map from times to received (key, val, wgt) triples.
         let mut inputs = LinearMap::new();
@@ -160,6 +176,11 @@ impl<G: Scope, K: Data, V: Data> ArrangeByKey<G, K, V> for Collection<G, (K, V)>
 /// the underlying trace does not support dynamic numbers of values for each key,
 /// which saves on computation and memory.
 pub trait ArrangeBySelf<G: Scope, K: Data> {
+    /// Arranges a stream of `(Key, ()))` updates by `Key`.
+    ///
+    /// This operator produces a stream of values, but more important shares a trace it maintains.
+    /// This trace is current for all times completed by the output stream, which can be used to
+    /// safely identify the stable times and values in the trace.
     fn arrange_by_self<
         U:     Unsigned+Default,
         KH:    Fn(&K)->U+'static,
@@ -188,8 +209,7 @@ impl<G: Scope, K: Data> ArrangeBySelf<G, K> for Collection<G, K> where G::Timest
 
         // create a trace to share with downstream consumers.
         let trace = Rc::new(RefCell::new(Count::new(look(log_peers))));
-        // TODO : We would like to use a weak reference, but stable Rust doesn't have these.
-        let source = trace.downgrade();
+        let source = Rc::downgrade(&trace);
 
         // A map from times to received (key, val, wgt) triples.
         let mut inputs = LinearMap::new();

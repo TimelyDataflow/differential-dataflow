@@ -1,3 +1,5 @@
+//! A basic collection trace.
+
 use ::Data;
 use collection::{Trace, TraceRef};
 use collection::{LeastUpperBound, Lookup};
@@ -84,7 +86,11 @@ impl<K,V,L,T> Trace for BasicTrace<K, T, V, L>
     }
 }
 
-impl<'a,K,V,L,T> TraceRef<'a,K,T,V> for &'a BasicTrace<K,T,V,L> where K: Data+'a, V: Data+'a, L: Lookup<K, Offset>+'a, T: LeastUpperBound+'a {
+impl<'a,K,V,L,T> TraceRef<'a,K,T,V> for &'a BasicTrace<K,T,V,L> 
+where K: Data+'a, 
+      V: Data+'a, 
+      L: Lookup<K, Offset>+'a, 
+      T: LeastUpperBound+'a {
     type VIterator = DifferenceIterator<'a, V>;
     type TIterator = TraceIterator<'a,K,T,V,L>;
     fn trace(self, key: &K) -> Self::TIterator {
@@ -95,12 +101,10 @@ impl<'a,K,V,L,T> TraceRef<'a,K,T,V> for &'a BasicTrace<K,T,V,L> where K: Data+'a
     }   
 }
 
-/// Enumerates the elements of a collection for a given key at a given time.
+/// An opaque offset into internal storage.
 ///
-/// A collection iterator is only provided for non-empty sets, so one can call `peek.unwrap()` on
-/// the iterator without worrying about panicing.
-// pub type CollectionIterator<'a, V> = Peekable<CoalesceIterator<MergeUsingIterator<'a, DifferenceIterator<'a, V>>>>;
-
+/// This type is public only so that users may choose the type of index, whose type contains `Offset`.
+/// The longer-term hope is that NonZero stabilizes, which can be used here to save memory in indices.
 #[derive(Copy, Clone, Debug)]
 pub struct Offset {
     dataz: u32,
@@ -165,8 +169,8 @@ impl<K, V, L, T> BasicTrace<K, T, V, L> where K: Ord, V: Ord, L: Lookup<K, Offse
 }
 
 impl<K: Eq, L: Lookup<K, Offset>, T, V> BasicTrace<K, T, V, L> {
+    /// Allocates a new basic trace.
     pub fn new(l: L) -> BasicTrace<K, T, V, L> {
-        // println!("allocating trace");
         BasicTrace {
             phantom: ::std::marker::PhantomData,
             links:   Vec::new(),

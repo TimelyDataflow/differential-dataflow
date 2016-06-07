@@ -3,113 +3,237 @@ An implementation of [differential dataflow](http://www.cidrdb.org/cidr2013/Pape
 
 ## Background
 
-Differential dataflow is a data-parallel programming framework designed to efficiently process large volumes of data and to quickly respond to changes in input collections.
+Differential dataflow is a data-parallel programming framework designed to efficiently process large volumes of data and to quickly respond to arbitrary changes in input collections. 
 
-Like many other data-parallel platforms, differential dataflow supports a variety of data-parallel operators such as `group_by` and `join`. Unlike most other data-parallel platforms, differential dataflow also includes an `iterate` operator, which repeatedly applies a differential dataflow subcomputation to a collection until it converges.
+Differential dataflow programs are written as transformations of collections of data, using familiar operators like `map`, `filter`, `join`, and `group`. Differential dataflow includes perhaps less familiar operators like `iterate`, which repeatedly applies a differential dataflow fragment to a collection. The programs are compiled down to timely dataflow computations.
 
-Once you have written a differential dataflow program, you then update the input collections and the implementation will respond with the correct updates to the output collections. These updates (both input and output) have the form `(data, diff)`, where `data` is a typed record and `diff` is an integer indicating the change in the number of occurrences of `data`. A positive `diff` indicates more occurrences of `data` and a negative `diff` indicates fewer. If things are working correctly, you never see a zero `diff`.
+Once written, a differential dataflow responds to arbitrary changes to its initially empty input collections, reporting the corresponding changes to each of its output collections. Differential dataflow can react quickly because it only acts where changes in collections occur, and does no work elsewhere.
 
-Differential dataflow is efficient because it communicates *only* in terms of differences. At its core is a computational engine which is also based on differences, and which does no work that does not correspond to a change in the trace of the computation as a result of changes to the inputs. Achieving this property in the presence of iterative subcomputations is the main "unique" feature of differential dataflow.
+## An example: counting degrees in a graph.
 
-## An example program:  breadth first search
-
-Consider the graph problem of determining the distance from a set of root nodes to each other node in the graph.
-
-One way to approach this problem is to develop a set of known minimal distances to nodes, perhaps starting from the set of roots at distance zero, and repeatedly expanding the set using the graph's edges.
-
-Each known minimal distance (to some node) can be joined with the set of edges emanating from the node, resulting in proposals for distances to other nodes. To collect these into a set of minimal distances, we can group them by the node identifier and retain only the minimal distance.
-
-The program to do this in differential dataflow follows exactly this pattern. Although there is a bit of syntactic guff, and there is no reason you should expect to understand the arguments of the various methods at this point, the above algorithm looks like:
+A graph is a collection of pairs `(Node, Node)`, and one standard analysis is to determine the number of times each `Node` occurs in the first position, its "degree". The number of nodes with each degree is a helpful graph statistic.
 
 ```rust
-	// imagine nodes and edges contain (node, dist) and (src, dst) pairs, respectively
-    // repeatedly update minimal distances each node can be reached from each root
-    nodes.iterate(|inner| {
+// create a a degree counting differential dataflow
+let (mut input, probe) = computation.scoped(|scope| {
 
-        let edges = edges.enter(&inner.scope());
-        let nodes = nodes.enter(&inner.scope());
+	// create edge input, count a few ways.
+	let (input, edges) = scope.new_input();
 
-        // join dists with edges, keeps old dists, keep min.
-        inner.join_map_u(&edges, |_k,l,d| (*d, l+1))
-             .concat(&nodes)
-             .group_u(|_, s, t| t.push((*s.peek().unwrap().0, 1)))
-    })
+	// pull off source and count them.
+	let degrs = edges.as_collection()	 // /-- this is a lie --\
+					 .flat_map(|(src, dst)| [src,dst].into_iter())
+					 .count();
+
+	// pull of count and count those.
+    let distr = degrs.map(|(_, cnt)| cnt as u32)
+					 .count();
+
+	// show us something about the collection, notice when done.
+	let probe = distr.inspect(|x| println!("observed: {:?}", x))
+					 .probe().0;
+
+    (input, probe)
+});
 ```
 
+If we feed this with some random graph data, say fifty random edges among ten nodes, we get output like
 
+		Running `target/release/examples/degrees 10 50 1`
+	observed: ((6, 2), 1)
+	observed: ((5, 4), 1)
+	observed: ((7, 1), 1)
+	observed: ((4, 2), 1)
+	observed: ((3, 1), 1)
+	Loading finished after Duration { secs: 0, nanos: 122363 }
 
-The [BFS example](https://github.com/frankmcsherry/differential-dataflow/blob/master/examples/bfs.rs) from the differential dataflow repository [wraps this up as a method](https://github.com/frankmcsherry/differential-dataflow/blob/master/examples/bfs.rs#L102-L119).
+This shows us the records that passed the `inspect` operator, revealing the contents of the collection: there are five distinct degrees, three through seven. The records have the form `((degree, count), delta)` where the `delta` field tells us that each record is coming into existence. If it were leaving, it would be a negative number.
 
-Once you've set up a differential dataflow graph, you are then able to start interacting with it by adding "differences" to the inputs. The example in the repository has inputs for the roots of the computation and the edges in the graph. We can repeatedly add and remove edges, for example, and differential dataflow magically updates the outputs of the computation!
+Let's update the input by removing one edge and adding a new random edge:
 
-## An example execution: breadth first search
+	observed: ((8, 1), 1)
+	observed: ((7, 1), -1)
+	observed: ((2, 1), 1)
+	observed: ((3, 1), -1)
+	Round 1 finished after Duration { secs: 0, nanos: 53880 }
 
-Let's take the [BFS example](https://github.com/frankmcsherry/differential-dataflow/blob/master/examples/bfs.rs) from the differential dataflow repository. It takes four arguments: 
+We see here some changes! Those degree three and seven nodes have been replaced by degree two and eight nodes; looks like one lost an edge and gave it to the other!
 
-    cargo run --release --example bfs -- nodes edges batch inspect
+How about a few more changes?
 
-where `nodes` and `edges` are numbers of nodes and edges in your random graph of choice, `batch` is "how many edges should we change at a time?" and `inspect` should be `inspect` if you want to see any output. Not observing the output may let it go a bit faster in a low-latency environment.
+	Round 2 finished after Duration { secs: 0, nanos: 19312 }
+	Round 3 finished after Duration { secs: 0, nanos: 16572 }
+	Round 4 finished after Duration { secs: 0, nanos: 17950 }
+	observed: ((6, 2), -1)
+	observed: ((6, 3), 1)
+	observed: ((5, 3), 1)
+	observed: ((5, 4), -1)
+	observed: ((8, 1), -1)
+	observed: ((7, 1), 1)
+	Round 5 finished after Duration { secs: 0, nanos: 37817 }
 
-Let's try 10M nodes, 100M edges:
+Well a few weird things happen here. First, rounds 2, 3, and 4 don't print anything. Seriously? It turns out that the random changes we made didn't affect any of the degree counts, we moved edges between nodes, preserving degrees. It can happen. 
 
+The second weird thing is that with only two edge changes we have six changes in the output! It turns out we can have up to eight. The eight gets turned back into a seven, and a five gets turned into a six. But: going from five to six changes the count for each, and each change requires two record differences.
+
+### Scaling up
+
+The appealing thing about differential dataflow is that it only does work where things change, so even if there is a lot of data, if not much changes it goes quite fast. Let's scale our 10 nodes and 50 edges up by a factor of one million:
+
+		Running `target/release/examples/degrees 10000000 50000000 1`
+	...
+	Loading finished after Duration { secs: 14, nanos: 887066000 }
+	observed: ((6, 1459805), -1)
+	observed: ((6, 1459807), 1)
+	observed: ((5, 1757098), 1)
+	observed: ((5, 1757099), -1)
+	observed: ((7, 1042893), 1)
+	observed: ((7, 1042894), -1)
+	Round 1 finished after Duration { secs: 0, nanos: 251857841 }
+
+After 15 seconds or so, we get our counts (which I elided because there are lots of them). Then it takes just 250ms to update these counts. This is faster than 15 seconds, but differential is actually still just getting warmed up (cleaning up after the previous round, mainly). If we keep watching, we see
+
+	observed: ((6, 1459806), 1)
+	observed: ((6, 1459807), -1)
+	observed: ((5, 1757097), 1)
+	observed: ((5, 1757098), -1)
+	observed: ((7, 1042893), -1)
+	observed: ((7, 1042894), 1)
+	observed: ((4, 1751921), -1)
+	observed: ((4, 1751922), 1)
+	Round 2 finished after Duration { secs: 0, nanos: 71098 }
+
+This is what the performance looks like for the remaining rounds: about 50-70 microseconds to update the counts, similar to the times on the 10 node 50 edge graph, which makes some sense because no matter how large the graph, randomly rewiring one edge can change at most four counts, corresponding to at most eight changes in the collection.
+
+### Scaling out
+
+Differential dataflow is built on top of [timely dataflow](https://github.com/frankmcsherry/timely-dataflow), a distributed data-parallel runtime. Timely dataflow scales out to multiple independent workers, increasing the capacity of the system (at the cost of some coordination that cuts into latency).
+
+If we bring two workers to bear, the 10 million node, 50 million edge computation drops down from 14.887s to 
+
+		Running `target/release/examples/degrees 10000000 50000000 1 -w2
+	Loading finished after Duration { secs: 7, nanos: 323694414 }
+	...
+	Round 1 finished after Duration { secs: 0, nanos: 145373140 }
+	...
+	Round 2 finished after Duration { secs: 0, nanos: 171744 }
+	...
+	Round 3 finished after Duration { secs: 0, nanos: 119206 }
+
+The initial computation got pretty much 2x faster! You might have noticed that the time has actually *increased* for the later rounds, which makes sense because there are only like at most eight records. We don't need two threads for that; they just get in the way. It's a trade-off. More workers make bulk work faster and increase the throughput, but cut in to the minimal latency.
+
+### Other stuff
+
+You might say: "15s is a long time to update 50 million counts." It's true, with 100ns RAM, you might expect to do 10 million updates per second (at least), since all you need to do is increment some random entry in an array (maybe four of them, for each endpoint that changed). 10 million updates per second would be 5 seconds for 50 million edges.
+
+Fortunately, there are implementations of each operator when the keys are unsigned integers that just probe in arrays and do a light amount of logic (`count_u` in the case of count).
+
+		Running `target/release/examples/degrees 10000000 50000000 1`
+	...
+	Loading finished after Duration { secs: 4, nanos: 768145153 }
+	...
+	Round 1 finished after Duration { secs: 0, nanos: 217417146 }
+	...
+	Round 2 finished after Duration { secs: 0, nanos: 49914 }
+
+There you go, five seconds. Now, this is still slower than you would get with an array, because differential dataflow is leaving everything in a state where it can be efficiently updated. You might have thought an array does a just-fine job of this, so let's talk about something cooler.
+
+## A second example: k-core computation
+
+The k-core of a graph is the largest subset of its edges so that all vertices with an edges have degree at least k. This means that we need to throw away edges incident on vertices with degree less than k. Those edges going away might lower some other degrees, so we need to *keep* throwing away edges on vertices with degree less than k until we stop. Maybe we throw away all the edges, maybe we stop with some left over. 
+
+```rust
+let k = 5;
+edges.iterate(|inner| {
+
+	// determine which vertices remain
+	let active = edges.flat_map(|(src,dst)| [src,dst].into_iter())
+					  .threshold_u(|cnt| if cnt > k { 1 } else { 0 });
+
+	// restrict edges to those pointing to active vertices
+	edges.semijoin_u(active)
+		 .map(|(src,dst)| (dst,src))
+		 .semijoin_u(active)
+		 .map(|(dst,src)| (src,dst))
+});
 ```
-Echidnatron% cargo run --release --example bfs -- 10000000 100000000 1000 inspect
-     Running `target/release/examples/bfs 10000000 100000000 1000 inspect`
-performing BFS on 10000000 nodes, 100000000 edges:
-loaded; elapsed: 4.963626955002837s
-	(0, 1)
-	(1, 9)
-	(2, 84)
-	(3, 881)
-	(4, 8834)
-	(5, 87849)
-	(6, 833495)
-	(7, 5128633)
-	(8, 3917057)
-	(9, 22710)
-	(10, 10)
-stable; elapsed: 29.791500767001708s
-```
 
-This tells us how many nodes in the graph are reachable at each distance (mostly distance `7` and `8` it seems), as well as how long it took to determine this (`29.79s` which isn't great). This improves with more threads, but it isn't the coolest part of differential dataflow.
+To be totally clear, the syntax with `into_iter` doesn't work, because Rust, and instead there is a more horrible syntax needed to get a non-heap allocated iterator over two elements. But, it works, and
 
-### Incremental updates
+	     Running `target/release/examples/degrees 10000000 50000000 1 5`
+	observed: ((5, 400565), 1)
+	observed: ((6, 659693), 1)
+	observed: ((7, 930734), 1)
+	observed: ((8, 1152892), 1)
+	...
+	observed: ((30, 3), 1)
+	Loading finished after Duration { secs: 31, nanos: 240040855 }
 
-As soon as the computation has produced the output above, we start introduce batches of `batch` edge changes at a time. We add that many and remove that many. In the example above, we are removing 1000 existing edges and adding 1000 new ones.
+Well that is a thing. Who knows if 31 seconds is any good. Let's start messing around with the data!
 
-```
-	(7, 1)
-	(8, -2)
-	(9, 1)
-wave 0: avg 0.00012186273099359823
-	(6, 4)
-	(7, -2)
-	(8, -3)
-	(9, 1)
-wave 1: avg 0.000010136429002159274
-	(5, -3)
-	(6, -25)
-	(7, -45)
-	(8, 70)
-	(9, 3)
-wave 2: avg 0.000016634063002129552
-	(6, -3)
-	(7, -4)
-	(8, 7)
-wave 3: avg 0.000010830363004060928
-	(5, -1)
-	(6, -6)
-	(7, -43)
-	(8, 49)
-	(9, 1)
-wave 4: avg 0.00001652919500338612
-```
+	observed: ((6, 659692), 1)
+	observed: ((6, 659693), -1)
+	observed: ((7, 930734), -1)
+	observed: ((7, 930735), 1)
+	observed: ((8, 1152891), 1)
+	observed: ((8, 1152892), -1)
+	observed: ((9, 1263344), -1)
+	observed: ((9, 1263346), 1)
+	observed: ((10, 1250532), 1)
+	observed: ((10, 1250533), -1)
+	observed: ((11, 1122179), -1)
+	observed: ((11, 1122180), 1)
+	observed: ((12, 925999), 1)
+	observed: ((12, 926000), -1)
+	Round 1 finished after Duration { secs: 0, nanos: 301988072 }
+	observed: ((6, 659692), -1)
+	observed: ((6, 659693), 1)
+	observed: ((7, 930734), 1)
+	observed: ((7, 930735), -1)
+	observed: ((9, 1263345), 1)
+	observed: ((9, 1263346), -1)
+	observed: ((10, 1250532), -1)
+	observed: ((10, 1250534), 1)
+	observed: ((11, 1122179), 1)
+	observed: ((11, 1122180), -1)
+	observed: ((13, 704217), 1)
+	observed: ((13, 704218), -1)
+	observed: ((14, 497956), -1)
+	observed: ((14, 497957), 1)
+	Round 2 finished after Duration { secs: 0, nanos: 401968 }
 
-We are now seeing the changes to the node distances for each batch of 1000 changes, and the amount of time taken *divided by the batch size*. It's a pretty small time. The number of changes are also pretty small, which makes me wonder a bit. The dynamics of these sorts of experiments are often a bit weird. 
+Ok, the 300 milliseconds to clean up some mess, and then we are down to about 400 microseconds to *update* the degree distribution of the k-core of our graph. And amazing, we have enough work now that adding a second worker improves things
 
-## Data parallelism
+    	Running `target/release/examples/degrees 10000000 50000000 1 5 -w2`
+	Loading finished after Duration { secs: 16, nanos: 808444276 }
+    ...
+    Round 2 finished after Duration { secs: 0, nanos: 401113 }
 
-Differential dataflow is built on [timely dataflow](https://github.com/frankmcsherry/timely-dataflow), a distributed data-parallel dataflow platform. Consequently, it distributes over multiple threads, processes, and computers. The additional resources increase the throughput as more workers contribute, but may reduce the minimal latency for small updates as more workers must coordinate.
+Even round 2 goes faster! Like, a teensy bit. 
+
+Of course, round 2 isn't why we used multiple workers. Multiple workers do increase the *throughput* of a computation, though. Let's see what happens if we adjust 1000 edges each iteration rather than just one.
+
+	     Running `target/release/examples/degrees 10000000 50000000 1000 5`
+	...
+	Loading finished after Duration { secs: 30, nanos: 115939220 }
+	...
+	Round 1 finished after Duration { secs: 0, nanos: 316472394 }
+	...
+	Round 2 finished after Duration { secs: 0, nanos: 11244112 }
+
+Looks like about 11 milliseconds for one worker to do 1,000 updates. That is much better than 1,000 x the 50-70 microsecond latency up above! Also, if we spin up a second worker, we see
+
+	     Running `target/release/examples/degrees 10000000 50000000 1000 5 -w2`
+	...
+	Loading finished after Duration { secs: 17, nanos: 181791387 }
+	...
+	Round 1 finished after Duration { secs: 0, nanos: 198020474 }
+	...
+	Round 2 finished after Duration { secs: 0, nanos: 6525667 }
+
+We cut the latency by almost a factor of two even for round 2. Thanks, second worker!
+
+That's about 6.5ms to update 1,000 edges, which means we should be able to handle about 150,000 edge changes each second. And the number goes up if we batch more edges together, or use more workers!
 
 ## Roadmap
 

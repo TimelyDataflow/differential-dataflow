@@ -102,6 +102,7 @@ impl<K: Ord+Debug, V: Ord> Compact<K, V> {
         }
     }
 
+    /// Extends the compact collection by a set of key-value updates.
     // #[inline(never)]
     pub fn extend_by(&mut self, buffer: &mut Vec<((K, V), i32)>) {
 
@@ -148,6 +149,7 @@ impl<K: Ord+Debug, V: Ord> Compact<K, V> {
         }
     }
 
+    /// Extends the compact collection from the result of a timely_sort radix sorter.
     // #[inline(never)]
     pub fn from_radix<U: Unsigned+Default, F: Fn(&K)->U>(source: &mut Vec<Vec<((K,V),i32)>>, function: &F) -> Option<Compact<K,V>> {
 
@@ -192,10 +194,12 @@ impl<K: Ord+Debug, V: Ord> Compact<K, V> {
         }
     }
 
+    /// Creates a new session for introducing one key's worth of values.
     pub fn session<'a>(&'a mut self) -> CompactSession<'a, K, V> {
         CompactSession::new(self)
     }
 
+    /// Pushes updates for a key from a supplied iterator.
     pub fn push<I: Iterator<Item=(V, i32)>>(&mut self, key: K, iterator: I) {
         let mut session = self.session();
         for (val, wgt) in iterator {
@@ -205,12 +209,14 @@ impl<K: Ord+Debug, V: Ord> Compact<K, V> {
     }
 }
 
+/// A session for adding one key's worth of updates.
 pub struct CompactSession<'a, K: 'a, V: 'a> {
     compact: &'a mut Compact<K, V>,
     len: usize,
 }
 
 impl<'a, K: 'a, V: 'a> CompactSession<'a, K, V> {
+    /// Allocates a new session.
     pub fn new(compact: &'a mut Compact<K, V>) -> CompactSession<'a, K, V> {
         let len = compact.vals.len();
         CompactSession {
@@ -218,10 +224,12 @@ impl<'a, K: 'a, V: 'a> CompactSession<'a, K, V> {
             len: len,
         }
     }
+    /// Adds an update for the key.
     #[inline]
     pub fn push(&mut self, val: V, wgt: i32) {
         self.compact.vals.push((val,wgt));
     }
+    /// Consumes the session and finalizes the updates.
     pub fn done(self, key: K) {
         if self.compact.vals.len() > self.len {
             self.compact.keys.push(key);

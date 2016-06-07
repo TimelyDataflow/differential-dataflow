@@ -1,18 +1,17 @@
 extern crate rand;
-extern crate time;
 extern crate timely;
 extern crate differential_dataflow;
+
+use std::time::Instant;
 
 use rand::{Rng, SeedableRng, StdRng};
 
 use timely::dataflow::*;
 use timely::dataflow::operators::*;
-use timely::progress::timestamp::RootTimestamp;
 
-use differential_dataflow::{Collection, Data};
+use differential_dataflow::Collection;
 use differential_dataflow::operators::*;
 use differential_dataflow::collection::LeastUpperBound;
-use differential_dataflow::collection::robin_hood::RHHMap;
 
 type Node = u32;
 type Edge = (Node, Node);
@@ -27,7 +26,8 @@ fn main() {
 
     // define a new computational scope, in which to run BFS
     timely::execute_from_args(std::env::args().skip(4), move |computation| {
-        let start = time::precise_time_s();
+        
+        let timer = Instant::now();
 
         // define BFS dataflow; return handles to roots and edges inputs
         let (mut graph, mut roots, probe) = computation.scoped(|scope| {
@@ -52,25 +52,25 @@ fn main() {
         }
 
         if computation.index() == 0 {
-            println!("loaded; elapsed: {}s", time::precise_time_s() - start);
+            println!("loaded; elapsed: {:?}", timer.elapsed());
         }
 
         roots.advance_to(1);
         graph.advance_to(1);
-        while probe.le(&RootTimestamp::new(0)) { computation.step(); }
+        computation.step_while(|| probe.lt(graph.time()));
 
         if computation.index() == 0 {
-            println!("stable; elapsed: {}s", time::precise_time_s() - start);
+            println!("stable; elapsed: {:?}", timer.elapsed());
         }
         for i in 0..10 {
             roots.send((i, 1));
             roots.advance_to(2 + i);
             graph.advance_to(2 + i);
 
-            let start = time::precise_time_s();
-            while probe.le(&RootTimestamp::new(1 + i)) { computation.step(); }
+            let timer = ::std::time::Instant::now();
+            computation.step_while(|| probe.lt(graph.time()));
             if computation.index() == 0 {
-                println!("query; elapsed: {}s", time::precise_time_s() - start);
+                println!("query; elapsed: {:?}", timer.elapsed());
             }
         }
 
@@ -81,7 +81,7 @@ fn main() {
                 changes.push(((rng2.gen_range(0, nodes), rng2.gen_range(0, nodes)),-1));
             }
 
-            let start = time::precise_time_s();
+            let timer = ::std::time::Instant::now();
             let round = *graph.epoch();
             if computation.index() == 0 {
                 while let Some(change) = changes.pop() {
@@ -91,13 +91,13 @@ fn main() {
             roots.advance_to(round + 1);
             graph.advance_to(round + 1);
 
-            while probe.le(&RootTimestamp::new(round)) { computation.step(); }
+            computation.step_while(|| probe.lt(graph.time()));
 
             if computation.index() == 0 {
-                println!("wave {}: avg {}", wave, (time::precise_time_s() - start) / (batch as f64));
+                println!("wave {}: avg {:?}", wave, timer.elapsed() / (batch as u32));
             }
         }
-    });
+    }).unwrap();
 }
 
 // returns pairs (n, s) indicating node n can be reached from a root in s steps.
@@ -113,6 +113,6 @@ where G::Timestamp: LeastUpperBound {
 
         inner.join_map(&edges, |_k,&l,&d| (d, l))
              .concat(&roots)
-             .threshold(|&x| x.hashed(), |_| RHHMap::new(|x: &(Node,Node)| x.hashed() as usize), |_, _| 1)
+             .distinct()
      })
 }

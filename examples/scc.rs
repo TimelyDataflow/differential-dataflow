@@ -1,14 +1,14 @@
 extern crate rand;
-extern crate time;
+// extern crate time;
 extern crate timely;
 extern crate differential_dataflow;
-extern crate vec_map;
+// extern crate vec_map;
 
 use std::hash::Hash;
 use std::mem;
 use rand::{Rng, SeedableRng, StdRng};
 
-use vec_map::VecMap;
+// use vec_map::VecMap;
 
 use timely::dataflow::*;
 use timely::dataflow::operators::*;
@@ -29,8 +29,7 @@ fn main() {
 
     timely::execute_from_args(std::env::args().skip(3), move |computation| {
 
-        let start = time::precise_time_s();
-        let start2 = start.clone();
+        let timer = ::std::time::Instant::now();
 
         let mut input = computation.scoped::<u64,_,_>(|scope| {
 
@@ -45,9 +44,7 @@ fn main() {
             edges.consolidate_by(|x| x.0)
                  .inspect_batch(move |t, x| {
                      counter += x.len();
-                     println!("{}s:\tobserved at {:?}: {:?} changes",
-                              ((time::precise_time_s() - start2)) - (t.inner as f64),
-                              t, counter)
+                     println!("{:?}:\tobserved at {:?}: {:?} changes", timer.elapsed(), t, counter)
                  });
 
             input
@@ -72,7 +69,7 @@ fn main() {
                 }
             }
 
-            println!("input ingested after {}", time::precise_time_s() - start);
+            println!("input ingested after {:?}", timer.elapsed());
 
             // while computation.step() {
             //     if time::precise_time_s() - start >= *input.epoch() as f64 {
@@ -98,7 +95,7 @@ where G::Timestamp: LeastUpperBound {
                          .map_in_place(|x| mem::swap(&mut x.0, &mut x.1));
 
         edges.map(|(x,_)| x)
-             .threshold(|&x| x, |i| (VecMap::new(), i), |_,_| 1)
+             .distinct()
              .map(|x| (x,()))
              .join_map_u(&inner, |&d,_,&s| (s,d))
     })

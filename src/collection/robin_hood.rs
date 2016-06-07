@@ -1,3 +1,9 @@
+//! A Robin Hood hash map.
+
+/// A Robin Hood hash map.
+///
+/// The hash map is parameterized by a supplied function acting as the hash function,
+/// allowing the user more flexibility in defining the behavior of the map.
 pub struct RHHMap<K: Eq, V, F: Fn(&K)->usize> {
     bucket: F,
     buffer: Vec<Option<(K,V)>>,
@@ -6,6 +12,7 @@ pub struct RHHMap<K: Eq, V, F: Fn(&K)->usize> {
 }
 
 impl<K: Eq, V, F: Fn(&K)->usize> RHHMap<K, V, F> {
+    /// Allocates a new Robin Hood hash map.
     pub fn new(function: F) -> RHHMap<K, V, F> {
         let slop = 4;
         let mut buffer = Vec::with_capacity(2 + slop);
@@ -17,20 +24,24 @@ impl<K: Eq, V, F: Fn(&K)->usize> RHHMap<K, V, F> {
             slop: slop,
         }
     }
+    /// The capacity of the underlying storage.
     pub fn capacity(&self) -> usize { self.buffer.capacity() }
 
+    /// Get a reference to the value associated with a queried key.
     #[inline]
     pub fn get_ref<'a>(&'a self, query: &K) -> Option<&'a V> {
         let shift = self.shift;
         let bucket = &self.bucket;
         get_ref(&self.buffer[..], query, &|x| bucket(x), bucket(query) >> shift)
     }
+    /// Get a mutable reference to the value associated with a queried key.
     #[inline]
     pub fn get_mut<'a>(&'a mut self, query: &K) -> Option<&'a mut V> {
         let shift = self.shift;
         let bucket = &self.bucket;
         get_mut(&mut self.buffer[..], query, &|x| bucket(x), bucket(query) >> shift)
     }
+    /// Insert a key, value pair, recovering any pre-existing key, value pair.
     #[inline]
     pub fn insert(&mut self, key: K, val: V) -> Option<(K,V)> {
 
@@ -70,6 +81,7 @@ impl<K: Eq, V, F: Fn(&K)->usize> RHHMap<K, V, F> {
             }
         }
     }
+    /// Removes a key, recovering the key, value pair.
     pub fn remove(&mut self, key: &K) -> Option<(K,V)> {
         let shift = self.shift;
         let bucket = &self.bucket;
@@ -178,40 +190,6 @@ pub fn insert<'a, K: Eq, V, F: Fn(&K)->usize>(slice: &'a mut [Option<(K,V)>], ke
             else { Err((key, val)) }
         }
     }
-
-    // if position - location > 100 {
-    //     println!("zomfg; pos - loc = {}", position - location);
-    // }
-
-    // if success {
-    //     let result = slice[position].take();
-    //     slice[position] = Some((key, val));
-    //     return Ok(result);
-    // }
-    // else {
-    //     // position now points at the place where the value should go.
-    //     // we may need to slide everyone from there forward until a None.
-    //     let begin = position;
-    //     while position < slice.len() && slice[position].is_some() {
-    //         position += 1;
-    //     }
-
-    //     if position > begin + 16 {
-    //         return Err((key, val));
-    //     }
-
-    //     if position < slice.len() {
-
-    //         for i in 0..(position - begin) {
-    //             slice.swap(position - i - 1, position - i);
-    //         }
-
-    //         assert!(slice[begin].is_none());
-    //         slice[begin] = Some((key, val));
-    //         return Ok(None);
-    //     }
-    //     else { return Err((key, val)); }
-    // }
 }
 
 /// Returns either the `(key,val)` pair associated with `key`, or `None` if it does not exist.

@@ -31,7 +31,7 @@
 //! })
 //! ```
 
-use rc::Rc;
+use std::rc::Rc;
 use std::cell::RefCell;
 use std::default::Default;
 use std::collections::HashMap;
@@ -56,8 +56,7 @@ use iterators::coalesce::Coalesce;
 use operators::arrange::{Arranged, ArrangeByKey};
 
 /// Extension trait for the `group` differential dataflow method
-pub trait Group<G: Scope, K: Data, V: Data>
-    where G::Timestamp: LeastUpperBound {
+pub trait Group<G: Scope, K: Data, V: Data> where G::Timestamp: LeastUpperBound {
 
     /// Groups records by their first field, and applies reduction logic to the associated values.
     ///
@@ -83,6 +82,18 @@ where G::Timestamp: LeastUpperBound
     }
 }
 
+/// Counts the number of occurrences of each element.
+pub trait Count<G: Scope, K: Data> where G::Timestamp: LeastUpperBound {
+    /// Counts the number of occurrences of each element.
+    fn count(&self) -> Collection<G, (K,Delta)>;
+}
+
+impl<G: Scope, K: Data+Default> Count<G, K> for Collection<G, K> where G::Timestamp: LeastUpperBound {
+    fn count(&self) -> Collection<G, (K,Delta)> {
+        self.map(|k| (k,()))
+            .group(|_k,s,t| t.push((s.next().unwrap().1, 1)))
+    }
+}
 
 /// Extension trait for the `group_u` differential dataflow method.
 pub trait GroupUnsigned<G: Scope, U: Unsigned+Data+Default, V: Data>
@@ -107,6 +118,19 @@ where G::Timestamp: LeastUpperBound {
         }
 }
 
+
+/// Counts the number of occurrences of each unsigned element.
+pub trait CountUnsigned<G: Scope, U: Unsigned+Data+Default> where G::Timestamp: LeastUpperBound {
+    /// Counts the number of occurrences of each unsigned element.
+    fn count_u(&self) -> Collection<G, (U,Delta)>;
+}
+
+impl<G: Scope, U: Unsigned+Data+Default> CountUnsigned<G, U> for Collection<G, U> where G::Timestamp: LeastUpperBound {
+    fn count_u(&self) -> Collection<G,(U,Delta)> {
+        self.map(|k| (k,()))
+            .group_u(|_k,s,t| t.push((s.next().unwrap().1, 1)))
+    }
+}
 
 /// Extension trait for the `group` operator on `Arrange<_>` data.
 pub trait GroupArranged<G: Scope, K: Data, V: Data> {
@@ -179,11 +203,6 @@ where
             // 2. go through each time of interest that has reached completion
             // times are interesting either because we received data, or because we conclude
             // in the processing of a time that a future time will be interesting.
-
-            // TODO : re-rig to use notificator.for_each(). Presently the code re-borrows notificator, 
-            // TODO : which makes it unsuitable for for_each. Sort this out (for_each could offer a ref
-            // TODO : to the notificator?)
-            // while let Some((capability, _count)) = notificator.next() {
             notificator.for_each(|capability, _count, notificator| {
 
                 let time = capability.time();
@@ -196,6 +215,8 @@ where
                     let mut stash = Vec::new();
                     for key in queue {
                         if source.get_difference(&key, &time).is_some() {
+
+                            // determine times at which updates may occur.
                             stash.push(capability.time());
                             source.interesting_times(&key, &time, &mut stash);
 
@@ -238,21 +259,30 @@ where
 
                         // push differences in to Compact.
                         let mut compact = accumulation.session();
-                        for (val, wgt) in Coalesce::coalesce(target.borrow_mut()
-                                                                   .get_collection(&key, &time)
-                                                                   .map(|(v, w)| (v,-w))
-                                                                   .merge_by(buffer.iter().map(|&(ref v, w)| (v, w)), |x,y| {
-                                                                        x.0 <= y.0
-                                                                   }))
+
                         {
-                            compact.push(val.clone(), wgt);
+                            let mut borrow = target.borrow_mut();
+                            let iter = borrow.get_collection(&key, &time)
+                                             .map(|(v, w)| (v,-w))
+                                             .merge_by(buffer.iter().map(|&(ref v, w)| (v, w)), |x,y| {
+                                                 x.0 <= y.0
+                                             });
+
+                            for (val, wgt) in Coalesce::coalesce(iter) {
+                                compact.push(val.clone(), wgt);
+                            }
                         }
+
                         compact.done(key);
                         buffer.clear();
                     }
 
                     if accumulation.vals.len() > 0 {
-                        output.session(&capability).give((accumulation.keys.clone(), accumulation.cnts.clone(), accumulation.vals.clone()));
+                        output.session(&capability).give((
+                            accumulation.keys.clone(), 
+                            accumulation.cnts.clone(), 
+                            accumulation.vals.clone()
+                        ));
                         target.borrow_mut().set_difference(time, accumulation);
                     }
                 }

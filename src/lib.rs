@@ -103,13 +103,15 @@
 //! });
 //! ```
 
+#![forbid(missing_docs)]
+
 use std::hash::Hasher;
 use std::fmt::Debug;
 
 /// A change in count.
 pub type Delta = i32;
 
-pub use stream::Collection;
+pub use stream::{Collection, AsCollection};
 
 // TODO : I would like this trait to have something like a `Map` associated type,
 // indicating the way that it would prefer to be used as an index. I think this 
@@ -135,13 +137,13 @@ pub trait Data : timely::Data + ::std::hash::Hash + Ord + Debug {
 impl<T: timely::Data + ::std::hash::Hash + Ord + Debug> Data for T { }
 
 /// An extension of timely's `Scope` trait requiring timestamps implement `LeastUpperBound`.
+///
+/// The intent of this trait is that it could be used as the constraint for collections, removing the 
+/// need to put `G::Timestamp: LeastUpperBound` everywhere.
 pub trait TestScope : timely::dataflow::Scope where Self::Timestamp: collection::LeastUpperBound { }
 impl<S: timely::dataflow::Scope> TestScope for S where S::Timestamp: collection::LeastUpperBound { }
 
-
-extern crate rc;
 extern crate fnv;
-extern crate time;
 extern crate timely;
 extern crate vec_map;
 extern crate itertools;

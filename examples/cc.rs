@@ -1,5 +1,5 @@
 extern crate rand;
-extern crate time;
+// extern crate time;
 extern crate getopts;
 extern crate timely;
 extern crate graph_map;

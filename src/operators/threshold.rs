@@ -1,44 +1,134 @@
+//! An operator acting on `(Key, ())` collections.
+
 use std::rc::Rc;
-use std::ops::DerefMut;
+use std::cell::RefCell;
+// use std::ops::DerefMut;
 use std::default::Default;
 
+use std::collections::HashMap;
 use linear_map::LinearMap;
+use vec_map::VecMap;
 
-use ::{Collection, Data};
+use ::{Collection, Data, Delta};
 use timely::dataflow::*;
 use timely::dataflow::operators::Unary;
-use timely::dataflow::channels::pact::Exchange;
+use timely::dataflow::channels::pact::Pipeline;
+// use timely::dataflow::channels::pact::Exchange;
 
-use timely_sort::{LSBRadixSorter, Unsigned};
+use timely_sort::Unsigned;
 
 use collection::{LeastUpperBound, Lookup};
-use collection::count::{Count, Offset};
+use collection::count::Offset;
+use collection::count::Count as CountTrace;
 use collection::compact::Compact;
 use collection::trace::Trace;
 
-/// Extension trait for the `group` differential dataflow method
-pub trait Threshold<G: Scope, D: Data+Default+'static>
+use operators::arrange::{Arranged, ArrangeBySelf};
+
+/// Extension trait for the `threshold` differential dataflow method
+pub trait Threshold<G: Scope, K: Data>
     where G::Timestamp: LeastUpperBound {
-    fn threshold<
-        F: Fn(&D, i32)->i32+'static,
-        U: Unsigned+Default+'static,
-        KeyH: Fn(&D)->U+'static,
-        Look:  Lookup<D, Offset>+'static,
-        LookG: Fn(u64)->Look+'static,
-        >(&self, key_h: KeyH, look: LookG, function: F) -> Collection<G, D>;
+
+    /// Groups records by their first field, and applies reduction logic to the associated values.
+    ///
+    /// It would be nice for this to be generic over possible arrangements of data, but it seems that Rust
+    /// ICEs when I try this. I'm not exactly sure how one would specify the arrangement (the type is used
+    /// in `logic`, by way of its associated iterator types, but not clearly enough to drive type inference),
+    /// but we don't have that problem yet anyhow.
+    ///
+    /// In any case, it would be great if the same implementation could handle `(K,V)` pairs and `K` elements
+    /// treated as `(K, ())` pairs.
+    fn threshold<L>(&self, logic: L) -> Collection<G, K> where L: Fn(&K, Delta)->Delta+'static;
+
+    /// Collects distinct elements.
+    fn distinct(&self) -> Collection<G, K> {
+        self.threshold(|_,_| 1)
+    }
 }
 
-impl<G: Scope, D: Data+Default+'static> Threshold<G, D> for Collection<G, D> where G::Timestamp: LeastUpperBound {
-    fn threshold<
-        F: Fn(&D, i32)->i32+'static,
-        U: Unsigned+Default+'static,
-        KeyH: Fn(&D)->U+'static,
-        Look:  Lookup<D, Offset>+'static,
-        LookG: Fn(u64)->Look+'static,
-        >(&self, key_h: KeyH, look: LookG, function: F) -> Collection<G, D> {
+impl<G: Scope, K: Data+Default> Threshold<G, K> for Collection<G, K> where G::Timestamp: LeastUpperBound {
+    fn threshold<L>(&self, logic: L) -> Collection<G, K>
+        where L: Fn(&K, Delta)->Delta+'static {
+            self.arrange_by_self(|k| k.hashed(), |_| HashMap::new())
+                .threshold(|k| k.hashed(), |_| HashMap::new(), logic)
+                .as_collection()
+                .map(|(k,_)| k)
+    }
+}
 
-        let mut source = Count::new(look(0));
-        let mut result = Count::new(look(0));
+
+/// Extension trait for the `group_u` differential dataflow method.
+pub trait ThresholdUnsigned<G: Scope, U: Unsigned+Data+Default>
+    where G::Timestamp: LeastUpperBound {
+    /// Groups records by their first field, when this field implements `Unsigned`.
+    ///
+    /// This method uses a `Vec<Option<_>>` as its internal storage, allocating
+    /// enough memory to directly index based on the first fields. This can be
+    /// very useful when these fields are small integers, but it can be expensive
+    /// if they are large and sparse.
+    fn threshold_u<L>(&self, logic: L) -> Collection<G, U> where L: Fn(&U, Delta)->Delta+'static;
+
+    /// Collects distinct elements, when they implement `Unsigned`.
+    fn distinct_u(&self) -> Collection<G, U> {
+        self.threshold_u(|_,_| 1)
+    }
+}
+
+impl<G: Scope, U: Unsigned+Data+Default> ThresholdUnsigned<G, U> for Collection<G, U>
+where G::Timestamp: LeastUpperBound {
+    fn threshold_u<L>(&self, logic: L) -> Collection<G, U>
+        where L: Fn(&U, Delta)->Delta+'static {
+            self.arrange_by_self(|k| k.as_u64(), |x| (VecMap::new(), x))
+                .threshold(|k| k.as_u64(), |x| (VecMap::new(), x), logic)
+                .as_collection()
+                .map(|(k,_)| k)
+        }
+}
+
+
+/// Extension trait for the `group` operator on `Arrange<_>` data.
+pub trait ThresholdArranged<G: Scope, K: Data> {
+    /// Groups arranged data using a key hash function, a lookup generator, and user logic.
+    ///
+    /// This method is used by `group` and `group_u` as defined on `Collection`, and it can
+    /// also be called directly by user code that wants access to the arranged output. This
+    /// can be helpful when the resulting data are re-used immediately with the same keys.
+    fn threshold<U, KH, Look, LookG, Logic>(&self, key_h: KH, look: LookG, logic: Logic)
+        -> Arranged<G,CountTrace<K,G::Timestamp,Look>>
+    where
+        G::Timestamp: LeastUpperBound,
+        U:     Unsigned+Default,
+        KH:    Fn(&K)->U+'static,
+        Look:  Lookup<K, Offset>+'static,
+        LookG: Fn(u64)->Look,
+        Logic: Fn(&K, Delta)->Delta+'static;
+}
+
+impl<G, K, L> ThresholdArranged<G, K> for Arranged<G, CountTrace<K, G::Timestamp, L>>
+where
+    G: Scope,
+    K: Data,
+    L: Lookup<K, Offset>+'static,
+    G::Timestamp: LeastUpperBound {
+
+    fn threshold<U, KH, Look, LookG, Logic>(&self, key_h: KH, look: LookG, logic: Logic)
+        -> Arranged<G, CountTrace<K,G::Timestamp,Look>>
+    where
+        U:     Unsigned+Default,
+        KH:    Fn(&K)->U+'static,
+        Look:  Lookup<K, Offset>+'static,
+        LookG: Fn(u64)->Look,
+        Logic: Fn(&K, Delta)->Delta+'static {
+
+        let peers = self.stream.scope().peers();
+        let mut log_peers = 0;
+        while (1 << (log_peers + 1)) <= peers {
+            log_peers += 1;
+        }
+
+        let source = self.trace.clone();
+        let result = Rc::new(RefCell::new(CountTrace::new(look(log_peers))));
+        let target = result.clone();
 
         // A map from times to received (key, val, wgt) triples.
         let mut inputs = LinearMap::new();
@@ -46,94 +136,88 @@ impl<G: Scope, D: Data+Default+'static> Threshold<G, D> for Collection<G, D> whe
         // A map from times to a list of keys that need processing at that time.
         let mut to_do = LinearMap::new();
 
-        let mut sorter = LSBRadixSorter::new();
+        // fabricate a data-parallel operator using the `unary_notify` pattern.
+        let stream = self.stream.unary_notify(Pipeline, "CountArranged", vec![], move |input, output, notificator| {
 
-        let key1 = Rc::new(key_h);
-        let key2 = key1.clone();
-
-        Collection::new(self.inner.unary_notify(Exchange::new(move |x: &(D, i32)| key1(&x.0).as_u64()), "Count", vec![], move |input, output, notificator| {
-
-            // while let Some((time, data)) = input.next() {
+            // 1. read each input, and stash it in our staging area.
+            // only stash the keys, because vals etc are in self.trace
             input.for_each(|time, data| {
-                inputs.entry_or_insert(time.time(), || Vec::new())
-                      .push(::std::mem::replace(data.deref_mut(), Vec::new()));
-                notificator.notify_at(time);
+                inputs.entry_or_insert(time.time(), || {
+                    notificator.notify_at(time);
+                    data.drain(..).next().unwrap().0
+                });
             });
 
-            notificator.for_each(|index, _count, notificator| {
-            // while let Some((index, _count)) = notificator.next() {
-                // 2a. fetch any data associated with this time.
-                if let Some(mut queue) = inputs.remove_key(&index) {
-                    // sort things; radix if many, .sort_by if few.
-                    let compact = if queue.len() > 1 {
-                        for element in queue.into_iter() {
-                            sorter.extend(element.into_iter().map(|(d,w)| ((d,()),w)), &|x| key2(&(x.0).0));
-                        }
-                        let mut sorted = sorter.finish(&|x| key2(&(x.0).0));
-                        let result = Compact::from_radix(&mut sorted, &|k| key2(k));
-                        sorted.truncate(256);
-                        sorter.recycle(sorted);
-                        result
-                    }
-                    else {
-                        let mut vec = queue.pop().unwrap();
-                        let mut vec = vec.drain(..).map(|(d,w)| ((d,()),w)).collect::<Vec<_>>();
-                        vec.sort_by(|x,y| key2(&(x.0).0).cmp(&key2((&(y.0).0))));
-                        Compact::from_radix(&mut vec![vec], &|k| key2(k))
-                    };
-                    if let Some(compact) = compact {
-                        let mut stash = Vec::new();
-                        for key in &compact.keys {
-                            stash.push(index.time());
-                            source.interesting_times(key, &index.time(), &mut stash);
-                            for time in &stash {
-                                let mut queue = to_do.entry_or_insert((*time).clone(), || { notificator.notify_at(index.delayed(time)); Vec::new() });
-                                queue.push((*key).clone());
+            // 2. go through each time of interest that has reached completion
+            // times are interesting either because we received data, or because we conclude
+            // in the processing of a time that a future time will be interesting.
+
+            notificator.for_each(|capability, _count, notificator| {
+
+                let time = capability.time();
+
+                // 2a. If we received any keys, determine the interesting times for each.
+                //     We then enqueue the keys at the corresponding time, for use later.
+                if let Some(queue) = inputs.remove_key(&time) {
+
+                    let source = source.borrow();
+                    let mut stash = Vec::new();
+                    for key in queue {
+                        if source.get_difference(&key, &time).is_some() {
+
+                            // determine times at which updates may occur.
+                            stash.push(capability.time());
+                            source.interesting_times(&key, &time, &mut stash);
+
+                            for new_time in &stash {
+                                to_do.entry_or_insert(new_time.clone(), || {
+                                         notificator.notify_at(capability.delayed(new_time));
+                                         Vec::new()
+                                     })
+                                     .push(key.clone());
                             }
                             stash.clear();
                         }
-
-                        source.set_difference(index.time(), compact);
                     }
                 }
 
-                // we may need to produce output at index
-                let mut session = output.session(&index);
+                // 2b. Process any interesting keys at this time.
+                if let Some(mut keys) = to_do.remove_key(&time) {
 
-                // 2b. We must now determine for each interesting key at this time, how does the
-                // currently reported output match up with what we need as output. Should we send
-                // more output differences, and what are they?
-
-                // Much of this logic used to hide in `OperatorTrace` and `CollectionTrace`.
-                // They are now gone and simpler, respectively.
-                if let Some(mut keys) = to_do.remove_key(&index) {
-
-                    // we would like these keys in a particular order.
-                    keys.sort_by(|x,y| (key2(x), x).cmp(&(key2(y), y)));
+                    // We would like these keys in a particular order.
+                    // We also want to de-duplicate them, in case there are dupes.
+                    keys.sort_by(|x,y| (key_h(&x), x).cmp(&(key_h(&y), y)));
                     keys.dedup();
 
                     // accumulations for installation into result
                     let mut accumulation = Compact::new(0,0);
 
+                    // borrow `source` to avoid constant re-borrowing.
+                    let source_borrow = source.borrow_mut();
+
                     for key in keys {
 
-                        let count = source.get_count(&key, &index.time());
-                        let output = if count > 0 { function(&key, count) } else { 0 };
-                        let current = result.get_count(&key, &index.time());
+                        let count = source_borrow.get_count(&key, &time);
+                        let output = if count > 0 { logic(&key, count) } else { 0 };
+                        let current = target.borrow().get_count(&key, &time);
 
                         if output != current {
                             let mut compact = accumulation.session();
-                            session.give((key.clone(), output - current));
+                            // session.give((key.clone(), output - current));
                             compact.push((), output - current);
                             compact.done(key);
                         }
+
                     }
 
                     if accumulation.vals.len() > 0 {
-                        result.set_difference(index.time(), accumulation);
+                        output.session(&capability).give((accumulation.keys.clone(), accumulation.cnts.clone(), accumulation.vals.clone()));
+                        target.borrow_mut().set_difference(time, accumulation);
                     }
                 }
             });
-        }))
+        });
+
+        Arranged { stream: stream, trace: result }
     }
 }

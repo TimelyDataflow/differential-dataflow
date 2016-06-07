@@ -1,15 +1,14 @@
 extern crate rand;
-extern crate time;
 extern crate timely;
 extern crate differential_dataflow;
 
 use std::rc::Rc;
 use std::cell::RefCell;
+use std::time::Instant;
 
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 
-use timely::*;
 use timely::dataflow::*;
 use timely::dataflow::operators::*;
 
@@ -31,7 +30,7 @@ fn main() {
         let comm_index = computation.index();
         let comm_peers = computation.peers();
 
-        let mut start = time::precise_time_s();
+        let timer = Instant::now();
 
         let epoch = Rc::new(RefCell::new(0u64));
         let clone = epoch.clone();
@@ -127,11 +126,11 @@ fn main() {
         }
         else { println!("worker {}: did not find input {}-{}-{}", comm_index, items_pattern, comm_index, comm_peers); }
 
-        println!("data loaded at {}", time::precise_time_s() - start);
-        start = time::precise_time_s();
+        println!("data loaded at {:?}", timer.elapsed());
+        let timer = ::std::time::Instant::now();
 
         parts.close();
-        let item_count = items_buffer.len();
+        // let item_count = items_buffer.len();
 
         for (index, item) in items_buffer.drain(..).enumerate() {
             items.send(item);
@@ -148,7 +147,7 @@ fn main() {
         while computation.step() { }
         computation.step(); // shut down
 
-        println!("computation finished at {}", time::precise_time_s() - start);
-        println!("rate: {}", (item_count as f64) / (time::precise_time_s() - start));
+        println!("computation finished at {:?}", timer.elapsed());
+        // println!("rate: {}", (item_count as f64) / timer.elapsed());
     }).unwrap();
 }

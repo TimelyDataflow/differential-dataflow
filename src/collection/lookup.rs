@@ -16,10 +16,15 @@ use collection::robin_hood::RHHMap;
 use linear_map::LinearMap;
 use vec_map::VecMap;
 
+/// A map from `K` to `V`. 
 pub trait Lookup<K: Eq, V> {
+    /// Recovers a reference to the value associated with a key.
     fn get_ref<'a>(&'a self, &K)->Option<&'a V>;
+    /// Recovers a mutable referecne to the value associated with a key.
     fn get_mut<'a>(&'a mut self, &K)->Option<&'a mut V>;
+    /// Recovers a mutable reference, inserting a new value if absent.
     fn entry_or_insert<F: FnOnce()->V>(&mut self, K, F) -> &mut V;
+    /// Removes the key and returns its value if it exists.
     fn remove_key(&mut self, &K) -> Option<V>;
 }
 
