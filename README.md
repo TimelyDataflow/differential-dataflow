@@ -147,7 +147,7 @@ let k = 5;
 edges.iterate(|inner| {
 
 	// determine the active vertices     // /-- this is a lie --\
-	let active = edges.flat_map(|(src,dst)| [src,dst].into_iter())
+	let active = inner.flat_map(|(src,dst)| [src,dst].into_iter())
 					  .threshold_u(|cnt| if cnt >= k { 1 } else { 0 });
 
 	// keep edges between active vertices
