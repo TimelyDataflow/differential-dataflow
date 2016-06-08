@@ -21,8 +21,8 @@ let (mut input, probe) = computation.scoped(|scope| {
 	let (input, edges) = scope.new_input();
 
 	// pull off source and count them.
-	let degrs = edges.as_collection()	 // /-- this is a lie --\
-					 .flat_map(|(src, dst)| [src,dst].into_iter())
+	let degrs = edges.as_collection()
+					 .map(|(src,_dst)| src)
 					 .count();
 
 	// pull of count and count those.
@@ -140,17 +140,17 @@ There you go, five seconds. Now, this is still slower than you would get with an
 
 ## A second example: k-core computation
 
-The k-core of a graph is the largest subset of its edges so that all vertices with an edges have degree at least k. This means that we need to throw away edges incident on vertices with degree less than k. Those edges going away might lower some other degrees, so we need to *keep* throwing away edges on vertices with degree less than k until we stop. Maybe we throw away all the edges, maybe we stop with some left over. 
+The k-core of a graph is the largest subset of its edges so that all vertices with any edges have degree at least k. The way you find the k-core is to throw away all edges incident on vertices with degree less than k. Those edges going away might lower some other degrees, so we need to *keep* throwing away edges on vertices with degree less than k until we stop. Maybe we throw away all the edges, maybe we stop with some left over.
 
 ```rust
 let k = 5;
 edges.iterate(|inner| {
 
-	// determine which vertices remain
+	// determine the active vertices     // /-- this is a lie --\
 	let active = edges.flat_map(|(src,dst)| [src,dst].into_iter())
-					  .threshold_u(|cnt| if cnt > k { 1 } else { 0 });
+					  .threshold_u(|cnt| if cnt >= k { 1 } else { 0 });
 
-	// restrict edges to those pointing to active vertices
+	// keep edges between active vertices
 	edges.semijoin_u(active)
 		 .map(|(src,dst)| (dst,src))
 		 .semijoin_u(active)
@@ -158,7 +158,7 @@ edges.iterate(|inner| {
 });
 ```
 
-To be totally clear, the syntax with `into_iter` doesn't work, because Rust, and instead there is a more horrible syntax needed to get a non-heap allocated iterator over two elements. But, it works, and
+To be totally clear, the syntax with `into_iter()` doesn't work, because Rust, and instead there is a more horrible syntax needed to get a non-heap allocated iterator over two elements. But, it works, and
 
 	     Running `target/release/examples/degrees 10000000 50000000 1 5`
 	observed: ((5, 400565), 1)
@@ -172,33 +172,11 @@ To be totally clear, the syntax with `into_iter` doesn't work, because Rust, and
 Well that is a thing. Who knows if 31 seconds is any good. Let's start messing around with the data!
 
 	observed: ((6, 659692), 1)
-	observed: ((6, 659693), -1)
-	observed: ((7, 930734), -1)
-	observed: ((7, 930735), 1)
-	observed: ((8, 1152891), 1)
-	observed: ((8, 1152892), -1)
-	observed: ((9, 1263344), -1)
-	observed: ((9, 1263346), 1)
-	observed: ((10, 1250532), 1)
-	observed: ((10, 1250533), -1)
-	observed: ((11, 1122179), -1)
-	observed: ((11, 1122180), 1)
-	observed: ((12, 925999), 1)
+	...
 	observed: ((12, 926000), -1)
 	Round 1 finished after Duration { secs: 0, nanos: 301988072 }
 	observed: ((6, 659692), -1)
-	observed: ((6, 659693), 1)
-	observed: ((7, 930734), 1)
-	observed: ((7, 930735), -1)
-	observed: ((9, 1263345), 1)
-	observed: ((9, 1263346), -1)
-	observed: ((10, 1250532), -1)
-	observed: ((10, 1250534), 1)
-	observed: ((11, 1122179), 1)
-	observed: ((11, 1122180), -1)
-	observed: ((13, 704217), 1)
-	observed: ((13, 704218), -1)
-	observed: ((14, 497956), -1)
+	...
 	observed: ((14, 497957), 1)
 	Round 2 finished after Duration { secs: 0, nanos: 401968 }
 
