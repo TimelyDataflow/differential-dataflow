@@ -1,22 +1,16 @@
 extern crate rand;
-// extern crate time;
 extern crate timely;
 extern crate differential_dataflow;
-// extern crate vec_map;
 
 use std::hash::Hash;
 use std::mem;
 use rand::{Rng, SeedableRng, StdRng};
-
-// use vec_map::VecMap;
 
 use timely::dataflow::*;
 use timely::dataflow::operators::*;
 
 use differential_dataflow::Collection;
 use differential_dataflow::operators::*;
-use differential_dataflow::operators::group::{GroupUnsigned};
-use differential_dataflow::operators::join::{JoinUnsigned};
 use differential_dataflow::collection::LeastUpperBound;
 
 type Node = u32;

@@ -13,8 +13,6 @@ use rand::{Rng, SeedableRng, StdRng};
 
 use differential_dataflow::Collection;
 use differential_dataflow::operators::*;
-use differential_dataflow::operators::join::JoinUnsigned;
-use differential_dataflow::operators::group::GroupUnsigned;
 use differential_dataflow::collection::LeastUpperBound;
 
 type Node = usize;

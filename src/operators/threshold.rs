@@ -2,7 +2,6 @@
 
 use std::rc::Rc;
 use std::cell::RefCell;
-// use std::ops::DerefMut;
 use std::default::Default;
 
 use std::collections::HashMap;
@@ -13,7 +12,6 @@ use ::{Collection, Data, Delta};
 use timely::dataflow::*;
 use timely::dataflow::operators::Unary;
 use timely::dataflow::channels::pact::Pipeline;
-// use timely::dataflow::channels::pact::Exchange;
 
 use timely_sort::Unsigned;
 
@@ -44,6 +42,19 @@ pub trait Threshold<G: Scope, K: Data>
     fn distinct(&self) -> Collection<G, K> {
         self.threshold(|_,_| 1)
     }
+
+    /// Groups records by their first field, when this field implements `Unsigned`.
+    ///
+    /// This method uses a `Vec<Option<_>>` as its internal storage, allocating
+    /// enough memory to directly index based on the first fields. This can be
+    /// very useful when these fields are small integers, but it can be expensive
+    /// if they are large and sparse.
+    fn threshold_u<L>(&self, logic: L) -> Collection<G, K> where K: Unsigned+Default, L: Fn(&K, Delta)->Delta+'static;
+
+    /// Collects distinct elements, when they implement `Unsigned`.
+    fn distinct_u(&self) -> Collection<G, K> where K: Unsigned+Default {
+        self.threshold_u(|_,_| 1)
+    }
 }
 
 impl<G: Scope, K: Data+Default> Threshold<G, K> for Collection<G, K> where G::Timestamp: LeastUpperBound {
@@ -54,37 +65,15 @@ impl<G: Scope, K: Data+Default> Threshold<G, K> for Collection<G, K> where G::Ti
                 .as_collection()
                 .map(|(k,_)| k)
     }
-}
 
-
-/// Extension trait for the `group_u` differential dataflow method.
-pub trait ThresholdUnsigned<G: Scope, U: Unsigned+Data+Default>
-    where G::Timestamp: LeastUpperBound {
-    /// Groups records by their first field, when this field implements `Unsigned`.
-    ///
-    /// This method uses a `Vec<Option<_>>` as its internal storage, allocating
-    /// enough memory to directly index based on the first fields. This can be
-    /// very useful when these fields are small integers, but it can be expensive
-    /// if they are large and sparse.
-    fn threshold_u<L>(&self, logic: L) -> Collection<G, U> where L: Fn(&U, Delta)->Delta+'static;
-
-    /// Collects distinct elements, when they implement `Unsigned`.
-    fn distinct_u(&self) -> Collection<G, U> {
-        self.threshold_u(|_,_| 1)
+    fn threshold_u<L>(&self, logic: L) -> Collection<G, K>
+    where K: Unsigned+Default, L: Fn(&K, Delta)->Delta+'static {
+        self.arrange_by_self(|k| k.as_u64(), |x| (VecMap::new(), x))
+            .threshold(|k| k.as_u64(), |x| (VecMap::new(), x), logic)
+            .as_collection()
+            .map(|(k,_)| k)
     }
 }
-
-impl<G: Scope, U: Unsigned+Data+Default> ThresholdUnsigned<G, U> for Collection<G, U>
-where G::Timestamp: LeastUpperBound {
-    fn threshold_u<L>(&self, logic: L) -> Collection<G, U>
-        where L: Fn(&U, Delta)->Delta+'static {
-            self.arrange_by_self(|k| k.as_u64(), |x| (VecMap::new(), x))
-                .threshold(|k| k.as_u64(), |x| (VecMap::new(), x), logic)
-                .as_collection()
-                .map(|(k,_)| k)
-        }
-}
-
 
 /// Extension trait for the `group` operator on `Arrange<_>` data.
 pub trait ThresholdArranged<G: Scope, K: Data> {

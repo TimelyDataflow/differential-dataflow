@@ -69,6 +69,16 @@ pub trait Group<G: Scope, K: Data, V: Data> where G::Timestamp: LeastUpperBound 
     /// treated as `(K, ())` pairs.
     fn group<L, V2: Data>(&self, logic: L) -> Collection<G, (K,V2)>
         where L: Fn(&K, &mut CollectionIterator<DifferenceIterator<V>>, &mut Vec<(V2, Delta)>)+'static;
+
+    /// Groups records by their first field, when this field implements `Unsigned`.
+    ///
+    /// This method uses a `Vec<Option<_>>` as its internal storage, allocating
+    /// enough memory to directly index based on the first fields. This can be
+    /// very useful when these fields are small integers, but it can be expensive
+    /// if they are large and sparse.
+    fn group_u<L, V2: Data>(&self, logic: L) -> Collection<G, (K, V2)>
+        where K: Unsigned+Default,
+              L: Fn(&K, &mut CollectionIterator<DifferenceIterator<V>>, &mut Vec<(V2, i32)>)+'static;
 }
 
 impl<G: Scope, K: Data+Default, V: Data+Default> Group<G, K, V> for Collection<G, (K,V)>
@@ -80,53 +90,31 @@ where G::Timestamp: LeastUpperBound
                 .group(|k| k.hashed(), |_| HashMap::new(), logic)
                 .as_collection()
     }
+
+    fn group_u<L, V2: Data>(&self, logic: L) -> Collection<G, (K, V2)>
+        where K: Unsigned+Default,
+              L: Fn(&K, &mut CollectionIterator<DifferenceIterator<V>>, &mut Vec<(V2, i32)>)+'static {
+            self.arrange_by_key(|k| k.as_u64(), |x| (VecMap::new(), x))
+                .group(|k| k.as_u64(), |x| (VecMap::new(), x), logic)
+                .as_collection()
+    }
 }
 
 /// Counts the number of occurrences of each element.
 pub trait Count<G: Scope, K: Data> where G::Timestamp: LeastUpperBound {
     /// Counts the number of occurrences of each element.
     fn count(&self) -> Collection<G, (K,Delta)>;
+
+    /// Counts the number of occurrences of each unsigned element.
+    fn count_u(&self) -> Collection<G, (K,Delta)> where K: Unsigned+Default;
 }
 
-impl<G: Scope, K: Data+Default> Count<G, K> for Collection<G, K> where G::Timestamp: LeastUpperBound {
+impl<G: Scope, K: Data+Default> Count<G, K> for Collection<G, K> where K: Unsigned+Default, G::Timestamp: LeastUpperBound {
     fn count(&self) -> Collection<G, (K,Delta)> {
         self.map(|k| (k,()))
             .group(|_k,s,t| t.push((s.next().unwrap().1, 1)))
     }
-}
-
-/// Extension trait for the `group_u` differential dataflow method.
-pub trait GroupUnsigned<G: Scope, U: Unsigned+Data+Default, V: Data>
-    where G::Timestamp: LeastUpperBound {
-    /// Groups records by their first field, when this field implements `Unsigned`.
-    ///
-    /// This method uses a `Vec<Option<_>>` as its internal storage, allocating
-    /// enough memory to directly index based on the first fields. This can be
-    /// very useful when these fields are small integers, but it can be expensive
-    /// if they are large and sparse.
-    fn group_u<L, V2: Data>(&self, logic: L) -> Collection<G, (U, V2)>
-        where L: Fn(&U, &mut CollectionIterator<DifferenceIterator<V>>, &mut Vec<(V2, i32)>)+'static;
-}
-
-impl<G: Scope, U: Unsigned+Data+Default, V: Data> GroupUnsigned<G, U, V> for Collection<G, (U,V)>
-where G::Timestamp: LeastUpperBound {
-    fn group_u<L, V2: Data>(&self, logic: L) -> Collection<G, (U, V2)>
-        where L: Fn(&U, &mut CollectionIterator<DifferenceIterator<V>>, &mut Vec<(V2, i32)>)+'static {
-            self.arrange_by_key(|k| k.as_u64(), |x| (VecMap::new(), x))
-                .group(|k| k.as_u64(), |x| (VecMap::new(), x), logic)
-                .as_collection()
-        }
-}
-
-
-/// Counts the number of occurrences of each unsigned element.
-pub trait CountUnsigned<G: Scope, U: Unsigned+Data+Default> where G::Timestamp: LeastUpperBound {
-    /// Counts the number of occurrences of each unsigned element.
-    fn count_u(&self) -> Collection<G, (U,Delta)>;
-}
-
-impl<G: Scope, U: Unsigned+Data+Default> CountUnsigned<G, U> for Collection<G, U> where G::Timestamp: LeastUpperBound {
-    fn count_u(&self) -> Collection<G,(U,Delta)> {
+    fn count_u(&self) -> Collection<G,(K,Delta)> {
         self.map(|k| (k,()))
             .group_u(|_k,s,t| t.push((s.next().unwrap().1, 1)))
     }

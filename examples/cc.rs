@@ -1,5 +1,4 @@
 extern crate rand;
-// extern crate time;
 extern crate getopts;
 extern crate timely;
 extern crate graph_map;
@@ -13,8 +12,6 @@ use timely::dataflow::operators::*;
 use differential_dataflow::Collection;
 use differential_dataflow::collection::LeastUpperBound;
 use differential_dataflow::operators::*;
-use differential_dataflow::operators::join::JoinUnsigned;
-use differential_dataflow::operators::group::GroupUnsigned;
 
 use graph_map::GraphMMap;
 

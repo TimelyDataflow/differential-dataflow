@@ -93,36 +93,8 @@ pub trait Join<G: Scope, K: Data, V: Data> {
     /// assert_eq!(extracted[0].1, vec![((0,0),1)]);
     /// ```
     fn semijoin(&self, other: &Collection<G, K>) -> Collection<G, (K, V)>;
-} 
 
-impl<G: Scope, K: Data, V: Data> Join<G, K, V> for Collection<G, (K, V)> where G::Timestamp: LeastUpperBound {
-    /// Matches pairs of `(key,val1)` and `(key,val2)` records based on `key` and applies a reduction function.
-    fn join_map<V2: Data, D: Data, R>(&self, other: &Collection<G, (K, V2)>, logic: R) -> Collection<G, D>
-    where R: Fn(&K, &V, &V2)->D+'static {
-        let arranged1 = self.arrange_by_key(|k| k.hashed(), |_| HashMap::new());
-        let arranged2 = other.arrange_by_key(|k| k.hashed(), |_| HashMap::new());
-        arranged1.join(&arranged2, logic)
-    }
-    fn semijoin(&self, other: &Collection<G, K>) -> Collection<G, (K, V)> {
-        let arranged1 = self.arrange_by_key(|k| k.hashed(), |_| HashMap::new());
-        let arranged2 = other.arrange_by_self(|k| k.hashed(), |_| HashMap::new());
-        arranged1.join(&arranged2, |k,v,_| (k.clone(), v.clone()))
-    }
-}
-
-/// Matches pairs `(key, val1)` and `(key, val2)` for dense unsigned integer keys.
-///
-/// These methods are optimizations of the general `Join` trait to use `Vec` indices rather than
-/// a more generic hash map. This can substantially reduce the amount of computation and memory
-/// required, but it will allocate as much memory as the largest identifier and so may have poor
-/// performance if the absolute range of keys is large.
-///
-/// These method may be deprecated in preferences of an approach which allows implementors of `Data` to define
-/// their own approach to indexing data. In this case, a newtype wrapping dense unsigned integers would indicate
-/// the indexing strategy, and the methods would simply be as above.
-
-pub trait JoinUnsigned<G: Scope, U: Unsigned+Data+Default, V: Data> where G::Timestamp: LeastUpperBound {
-    /// Joins two collections with dense unsigned integer keys.
+        /// Joins two collections with dense unsigned integer keys.
     ///
     /// #Examples
     /// ```ignore
@@ -143,7 +115,7 @@ pub trait JoinUnsigned<G: Scope, U: Unsigned+Data+Default, V: Data> where G::Tim
     /// assert_eq!(extracted.len(), 1);
     /// assert_eq!(extracted[0].1, vec![((0,0,'a'),1), ((1,2,'B'),1)]);
     /// ```
-    fn join_u<V2: Data>(&self, other: &Collection<G, (U,V2)>) -> Collection<G, (U,V,V2)> {
+    fn join_u<V2: Data>(&self, other: &Collection<G, (K,V2)>) -> Collection<G, (K,V,V2)> where K: Unsigned+Default {
         self.join_map_u(other, |k,v1,v2| (k.clone(), v1.clone(), v2.clone()))
     }
     /// Joins two collections with dense unsigned integer keys and then applies a map function.
@@ -167,7 +139,7 @@ pub trait JoinUnsigned<G: Scope, U: Unsigned+Data+Default, V: Data> where G::Tim
     /// assert_eq!(extracted.len(), 1);
     /// assert_eq!(extracted[0].1, vec![((0,'a'),1), ((3,'B'),1)]);
     /// ```
-    fn join_map_u<V2: Data, D: Data, R: Fn(&U, &V, &V2)->D+'static>(&self, other: &Collection<G, (U,V2)>, logic: R) -> Collection<G, D>;
+    fn join_map_u<V2: Data, D: Data, R: Fn(&K, &V, &V2)->D+'static>(&self, other: &Collection<G, (K,V2)>, logic: R) -> Collection<G, D> where K: Unsigned+Default;
     /// Semijoins a collection with dense unsigned integer keys against a set of such keys.
     ///
     /// #Examples
@@ -189,21 +161,62 @@ pub trait JoinUnsigned<G: Scope, U: Unsigned+Data+Default, V: Data> where G::Tim
     /// assert_eq!(extracted.len(), 1);
     /// assert_eq!(extracted[0].1, vec![((0,0),1)]);
     /// ```
-    fn semijoin_u(&self, other: &Collection<G, U>) -> Collection<G, (U, V)>;
-}
+    fn semijoin_u(&self, other: &Collection<G, K>) -> Collection<G, (K, V)> where K: Unsigned+Default;
+} 
 
-impl<G: Scope, U: Unsigned+Data+Default, V: Data> JoinUnsigned<G, U, V> for Collection<G, (U, V)> where G::Timestamp: LeastUpperBound {
-    fn join_map_u<V2: Data, D: Data, R: Fn(&U, &V, &V2)->D+'static>(&self, other: &Collection<G, (U,V2)>, logic: R) -> Collection<G, D> {
+impl<G: Scope, K: Data, V: Data> Join<G, K, V> for Collection<G, (K, V)> where G::Timestamp: LeastUpperBound {
+    /// Matches pairs of `(key,val1)` and `(key,val2)` records based on `key` and applies a reduction function.
+    fn join_map<V2: Data, D: Data, R>(&self, other: &Collection<G, (K, V2)>, logic: R) -> Collection<G, D>
+    where R: Fn(&K, &V, &V2)->D+'static {
+        let arranged1 = self.arrange_by_key(|k| k.hashed(), |_| HashMap::new());
+        let arranged2 = other.arrange_by_key(|k| k.hashed(), |_| HashMap::new());
+        arranged1.join(&arranged2, logic)
+    }
+    fn semijoin(&self, other: &Collection<G, K>) -> Collection<G, (K, V)> {
+        let arranged1 = self.arrange_by_key(|k| k.hashed(), |_| HashMap::new());
+        let arranged2 = other.arrange_by_self(|k| k.hashed(), |_| HashMap::new());
+        arranged1.join(&arranged2, |k,v,_| (k.clone(), v.clone()))
+    }
+
+    fn join_map_u<V2: Data, D: Data, R: Fn(&K, &V, &V2)->D+'static>(&self, other: &Collection<G, (K,V2)>, logic: R) -> Collection<G, D> where K: Unsigned+Default {
         let arranged1 = self.arrange_by_key(|k| k.clone(), |x| (VecMap::new(), x));
         let arranged2 = other.arrange_by_key(|k| k.clone(), |x| (VecMap::new(), x));
         arranged1.join(&arranged2, logic)
     }
-    fn semijoin_u(&self, other: &Collection<G, U>) -> Collection<G, (U, V)> {
+    fn semijoin_u(&self, other: &Collection<G, K>) -> Collection<G, (K, V)> where K: Unsigned+Default {
         let arranged1 = self.arrange_by_key(|k| k.clone(), |x| (VecMap::new(), x));
         let arranged2 = other.arrange_by_self(|k| k.clone(), |x| (VecMap::new(), x));
         arranged1.join(&arranged2, |k,v,_| (k.clone(), v.clone()))        
     }
 }
+
+// /// Matches pairs `(key, val1)` and `(key, val2)` for dense unsigned integer keys.
+// ///
+// /// These methods are optimizations of the general `Join` trait to use `Vec` indices rather than
+// /// a more generic hash map. This can substantially reduce the amount of computation and memory
+// /// required, but it will allocate as much memory as the largest identifier and so may have poor
+// /// performance if the absolute range of keys is large.
+// ///
+// /// These method may be deprecated in preferences of an approach which allows implementors of `Data` to define
+// /// their own approach to indexing data. In this case, a newtype wrapping dense unsigned integers would indicate
+// /// the indexing strategy, and the methods would simply be as above.
+
+// pub trait JoinUnsigned<G: Scope, U: Unsigned+Data+Default, V: Data> where G::Timestamp: LeastUpperBound {
+
+// }
+
+// impl<G: Scope, U: Unsigned+Data+Default, V: Data> JoinUnsigned<G, U, V> for Collection<G, (U, V)> where G::Timestamp: LeastUpperBound {
+//     fn join_map_u<V2: Data, D: Data, R: Fn(&U, &V, &V2)->D+'static>(&self, other: &Collection<G, (U,V2)>, logic: R) -> Collection<G, D> {
+//         let arranged1 = self.arrange_by_key(|k| k.clone(), |x| (VecMap::new(), x));
+//         let arranged2 = other.arrange_by_key(|k| k.clone(), |x| (VecMap::new(), x));
+//         arranged1.join(&arranged2, logic)
+//     }
+//     fn semijoin_u(&self, other: &Collection<G, U>) -> Collection<G, (U, V)> {
+//         let arranged1 = self.arrange_by_key(|k| k.clone(), |x| (VecMap::new(), x));
+//         let arranged2 = other.arrange_by_self(|k| k.clone(), |x| (VecMap::new(), x));
+//         arranged1.join(&arranged2, |k,v,_| (k.clone(), v.clone()))        
+//     }
+// }
 
 /// Matches the elements of two arranged traces.
 ///

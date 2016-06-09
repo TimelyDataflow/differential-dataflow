@@ -1,7 +1,6 @@
 #[allow(unused_variables)]
 extern crate fnv;
 extern crate rand;
-// extern crate time;
 extern crate timely;
 extern crate differential_dataflow;
 
@@ -17,9 +16,7 @@ use timely::progress::timestamp::RootTimestamp;
 
 use differential_dataflow::{Data, Collection};
 use differential_dataflow::operators::*;
-use differential_dataflow::operators::join::JoinUnsigned;
 use differential_dataflow::collection::LeastUpperBound;
-// use differential_dataflow::collection::robin_hood::RHHMap;
 
 /// A collection defined by multiple mutually recursive rules.
 pub struct Variable<'a, G: Scope, D: Default+Data>

@@ -16,8 +16,7 @@ use timely::dataflow::channels::pact::Pipeline;
 use timely::progress::timestamp::RootTimestamp;
 
 use differential_dataflow::Collection;
-use differential_dataflow::operators::group::GroupUnsigned;
-use differential_dataflow::operators::join::JoinUnsigned;
+use differential_dataflow::operators::*;
 
 fn main() {
 

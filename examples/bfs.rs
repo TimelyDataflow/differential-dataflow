@@ -13,9 +13,7 @@ use vec_map::VecMap;
 
 use differential_dataflow::Collection;
 use differential_dataflow::operators::*;
-use differential_dataflow::operators::join::JoinUnsigned;
 use differential_dataflow::operators::join::JoinArranged;
-use differential_dataflow::operators::group::GroupUnsigned;
 use differential_dataflow::operators::group::GroupArranged;
 use differential_dataflow::collection::LeastUpperBound;
 
