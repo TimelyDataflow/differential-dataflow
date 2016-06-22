@@ -76,9 +76,9 @@ pub trait Trace where for<'a> &'a Self: TraceRef<'a, Self::Key, Self::Index, Sel
 /// A reference to a `Trace` with a bound lifetime `'a`.
 pub trait TraceRef<'a,K,T:'a,V:'a> {
     /// Iterator over references to values.
-    type VIterator: Iterator<Item=(&'a V, i32)>+'a;
+    type VIterator: Iterator<Item=(&'a V, i32)>+Clone+'a;
     /// Iterator over times and `VIterator`s.
-    type TIterator: Iterator<Item=(&'a T, Self::VIterator)>+'a;
+    type TIterator: Iterator<Item=(&'a T, Self::VIterator)>+Clone+'a;
     /// Iterates over differences associated with the key.
     fn trace(self, key: &K) -> Self::TIterator;
 }

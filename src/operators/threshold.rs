@@ -4,9 +4,12 @@ use std::rc::Rc;
 use std::cell::RefCell;
 use std::default::Default;
 
+use std::hash::BuildHasherDefault;
+
 use std::collections::HashMap;
 use linear_map::LinearMap;
 use vec_map::VecMap;
+use fnv::FnvHasher;
 
 use ::{Collection, Data, Delta};
 use timely::dataflow::*;
@@ -60,8 +63,12 @@ pub trait Threshold<G: Scope, K: Data>
 impl<G: Scope, K: Data+Default> Threshold<G, K> for Collection<G, K> where G::Timestamp: LeastUpperBound {
     fn threshold<L>(&self, logic: L) -> Collection<G, K>
         where L: Fn(&K, Delta)->Delta+'static {
-            self.arrange_by_self(|k| k.hashed(), |_| HashMap::new())
-                .threshold(|k| k.hashed(), |_| HashMap::new(), logic)
+            self.arrange_by_self(|k| k.hashed(), |_| { 
+                    let x: HashMap<_,_,BuildHasherDefault<FnvHasher>> = HashMap::default();
+                    x } )
+                .threshold(|k| k.hashed(), |_| { 
+                    let x: HashMap<_,_,BuildHasherDefault<FnvHasher>> = HashMap::default();
+                    x }, logic)
                 .as_collection()
                 .map(|(k,_)| k)
     }

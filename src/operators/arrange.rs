@@ -253,10 +253,10 @@ impl<G: Scope, K: Data> ArrangeBySelf<G, K> for Collection<G, K> where G::Timest
                         Compact::from_radix(&mut vec![vec], &|k| part2(k))
                     };
                     if let Some(compact) = compact {
-                        output.session(&index).give((compact.keys.clone(), compact.cnts.clone(), compact.vals.clone()));
                         if let Some(trace) = source.upgrade() {
-                            trace.borrow_mut().set_difference(index.time(), compact);
+                            trace.borrow_mut().set_difference(index.time(), compact.clone());
                         }
+                        output.session(&index).give((compact.keys, compact.cnts, compact.vals));
                     }
                 }
             }

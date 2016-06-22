@@ -66,9 +66,9 @@ impl<K: Ord, T: Eq, V: Ord+Clone> Trie<K, T, V> {
         else {
             // TODO : merge_using may be important here
             self.vals.extend(idxs.iter()
-                                         .map(|&(_, ref slice)| slice.iter().cloned())
-                                         .merge()
-                                         .coalesce());
+                                 .map(|&(_, ref slice)| slice.iter().cloned())
+                                 .merge()
+                                 .coalesce());
         }
 
         // if we produced `(val,wgt)` data, push the new length and the indicated `idx` in result.
@@ -135,7 +135,7 @@ pub struct Merge<K, T, V> {
 // without lots of sorting and shuffling and such. The common case is likely to be many regions
 // left un-adjusted, and it would be good to optimize for this case.
 impl<K: Ord+Clone, T: Eq+Clone+Hash, V: Ord+Clone> Merge<K, T, V> {
-    /// Constructs a new `Merge` from two instances of `Teir` and a function advancing timestamps.
+    /// Constructs a new `Merge` from two instances of `Trie` and a function advancing timestamps.
     ///
     /// This method initiates a merge of two Tries, consolidating their representation which can
     /// potentially reduce the complexity and amount of memory required to describe a trace. The

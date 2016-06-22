@@ -104,7 +104,7 @@ impl<G: Scope, D: Ord+Data+Debug> ConsolidateExt<D> for Collection<G, D> {
 
                 // make large to turn off compaction.
                 let default_threshold = usize::max_value();
-                // let default_threshold = 256 << 10;
+                // let default_threshold = 1 << 20;
 
                 // an entry stores a sorter (the data), a current count, and a compaction threshold.
                 let entry = inputs.entry_or_insert(index.time(), || (LSBRadixSorter::new(), 0, default_threshold));

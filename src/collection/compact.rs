@@ -28,7 +28,7 @@ use timely_sort::Unsigned;
 // TODO : this would probably improve compressed representations of small sets (those without much
 // TODO : key repetition). Compressing these better means we can go longer before merging, which
 // TODO : should make most everything else better too.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Compact<K, V> {
     /// An ordered list of the distinct keys.
     pub keys: Vec<K>,

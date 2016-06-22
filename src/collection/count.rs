@@ -126,7 +126,6 @@ impl<K: Eq, L: Lookup<K, Offset>, T> Count<K, T, L> {
 }
 
 /// Enumerates pairs of time `&T` and `i32`.
-#[derive(Clone)]
 pub struct CountIterator<'a, K: Eq+'a, T: 'a, L: Lookup<K, Offset>+'a> {
     trace: &'a Count<K, T, L>,
     next0: Option<Offset>,
@@ -149,6 +148,18 @@ where K: Ord+'a,
     }
 }
 
+impl<'a, K: Eq, T, L> Clone for CountIterator<'a, K, T, L> 
+where K: Ord+'a,
+      T: LeastUpperBound+'a,
+      L: Lookup<K, Offset>+'a {
+    fn clone(&self) -> CountIterator<'a, K, T, L> {
+        CountIterator {
+            trace: self.trace,
+            next0: self.next0,
+        }
+    }
+}
+
 /// An iterator over weighted references to `()`.
 ///
 /// This iterator exists because it is needed to implement `Trace` and `TraceRef`.
@@ -166,6 +177,15 @@ impl<'a> Iterator for WeightIterator<'a> {
             let result = self.weight;
             self.weight = 0;
             Some((self.silly, result))
+        }
+    }
+}
+
+impl<'a> Clone for WeightIterator<'a> {
+    fn clone(&self) -> WeightIterator<'a> {
+        WeightIterator {
+            weight: self.weight,
+            silly: self.silly,
         }
     }
 }

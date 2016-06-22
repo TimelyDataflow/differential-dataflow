@@ -25,7 +25,7 @@ let (mut input, probe) = computation.scoped(|scope| {
 					 .map(|(src,_dst)| src)
 					 .count();
 
-	// pull of count and count those.
+	// pull off count and count those.
     let distr = degrs.map(|(_, cnt)| cnt as u32)
 					 .count();
 

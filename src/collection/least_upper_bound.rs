@@ -50,6 +50,11 @@ impl LeastUpperBound for i32 {
     fn least_upper_bound(&self, other: &i32) -> i32 { if self < other { *other } else { *self }}
 }
 
+impl LeastUpperBound for () {
+    fn max() -> () { () }
+    fn least_upper_bound(&self, _other: &()) -> () { () }
+}
+
 /// Extends `vector` to contain all least upper bounds of pairs of elements.
 pub fn close_under_lub<T: LeastUpperBound>(vector: &mut Vec<T>) {
     // compares each element to those elements after it.

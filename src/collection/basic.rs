@@ -182,7 +182,6 @@ impl<K: Eq, L: Lookup<K, Offset>, T, V> BasicTrace<K, T, V, L> {
 
 
 /// Enumerates pairs of time `&T` and `DifferenceIterator<V>` of `(&V, i32)` elements.
-#[derive(Clone)]
 pub struct TraceIterator<'a, K: Eq+'a, T: 'a, V: 'a, L: Lookup<K, Offset>+'a> {
     trace: &'a BasicTrace<K, T, V, L>,
     next0: Option<Offset>,
@@ -203,6 +202,19 @@ where K: Data,
             self.next0 = self.trace.links[position.val()].next;
             result
         })
+    }
+}
+
+impl<'a, K: Eq, T, V, L> Clone for TraceIterator<'a, K, T, V, L> 
+where K: Ord+'a,
+      T: LeastUpperBound+'a,
+      V: Data,
+      L: Lookup<K, Offset>+'a {
+    fn clone(&self) -> TraceIterator<'a, K, T, V, L> {
+        TraceIterator {
+            trace: self.trace,
+            next0: self.next0,
+        }
     }
 }
 

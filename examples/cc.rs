@@ -37,7 +37,7 @@ fn main() {
                                   vec.into_iter().map(move |edge| ((node as u32, edge),1))
                               });
 
-        computation.scoped::<u64,_,_>(|scope| {
+        computation.scoped::<(),_,_>(|scope| {
             connected_components(&Collection::new(edges.to_stream(scope)));
         });
 

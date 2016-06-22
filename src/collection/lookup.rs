@@ -48,7 +48,7 @@ impl<K: Eq+Clone, V, F: Fn(&K)->usize> Lookup<K, V> for RHHMap<K, V, F> {
     }
 }
 
-impl<K: Hash+Eq+'static, V: 'static> Lookup<K,V> for HashMap<K,V> {
+impl<K: Hash+Eq+'static, V: 'static, S: ::std::hash::BuildHasher> Lookup<K,V> for HashMap<K,V, S> {
     #[inline]
     fn get_ref<'a>(&'a self, key: &K) -> Option<&'a V> { self.get(key) }
     #[inline]
