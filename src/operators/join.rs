@@ -93,8 +93,31 @@ pub trait Join<G: Scope, K: Data, V: Data> {
     /// assert_eq!(extracted[0].1, vec![((0,0),1)]);
     /// ```
     fn semijoin(&self, other: &Collection<G, K>) -> Collection<G, (K, V)>;
+    /// Matches pairs `(key,val1)` and `key` based on `key`, discarding values 
+    /// in the first collection if their key is present in the second.
+    ///
+    /// #Examples
+    /// ```ignore
+    /// extern crate timely;
+    /// use timely::dataflow::operators::{ToStream, Capture};
+    /// use timely::dataflow::operators::capture::Extract;
+    /// use differential_dataflow::operators::Join;
+    ///
+    /// let data = timely::example(|scope| {
+    ///     let col1 = vec![((0,0),1),((1,2),1)].into_iter().to_stream(scope);
+    ///     let col2 = vec![(0,1)].into_iter().to_stream(scope);
+    ///
+    ///     // should retain record `(0,0)` and discard `(1,2)`.
+    ///     col1.semijoin(&col2).capture();
+    /// });
+    ///
+    /// let extracted = data.extract();
+    /// assert_eq!(extracted.len(), 1);
+    /// assert_eq!(extracted[0].1, vec![((1,2),1)]);
+    /// ```
+    fn antijoin(&self, other: &Collection<G, K>) -> Collection<G, (K, V)>;
 
-        /// Joins two collections with dense unsigned integer keys.
+    /// Joins two collections with dense unsigned integer keys.
     ///
     /// #Examples
     /// ```ignore
@@ -162,6 +185,28 @@ pub trait Join<G: Scope, K: Data, V: Data> {
     /// assert_eq!(extracted[0].1, vec![((0,0),1)]);
     /// ```
     fn semijoin_u(&self, other: &Collection<G, K>) -> Collection<G, (K, V)> where K: Unsigned+Default;
+    /// Antijoins a collection with dense unsigned integer keys against a set of such keys.
+    ///
+    /// #Examples
+    /// ```ignore
+    /// extern crate timely;
+    /// use timely::dataflow::operators::{ToStream, Capture};
+    /// use timely::dataflow::operators::capture::Extract;
+    /// use differential_dataflow::operators::Join;
+    ///
+    /// let data = timely::example(|scope| {
+    ///     let col1 = vec![((0,0),1),((1,2),1)].into_iter().to_stream(scope);
+    ///     let col2 = vec![(0,1)].into_iter().to_stream(scope);
+    ///
+    ///     // should retain record `(0,0)` and discard `(1,2)`.
+    ///     col1.semijoin(&col2).capture();
+    /// });
+    ///
+    /// let extracted = data.extract();
+    /// assert_eq!(extracted.len(), 1);
+    /// assert_eq!(extracted[0].1, vec![((0,0),1)]);
+    /// ```
+    fn antijoin_u(&self, other: &Collection<G, K>) -> Collection<G, (K, V)> where K: Unsigned+Default;
 } 
 
 impl<G: Scope, K: Data, V: Data> Join<G, K, V> for Collection<G, (K, V)> where G::Timestamp: LeastUpperBound {
@@ -177,6 +222,9 @@ impl<G: Scope, K: Data, V: Data> Join<G, K, V> for Collection<G, (K, V)> where G
         let arranged2 = other.arrange_by_self(|k| k.hashed(), |_| HashMap::new());
         arranged1.join(&arranged2, |k,v,_| (k.clone(), v.clone()))
     }
+    fn antijoin(&self, other: &Collection<G, K>) -> Collection<G, (K, V)> {
+        self.concat(&self.semijoin(other).negate())
+    }
 
     fn join_map_u<V2: Data, D: Data, R: Fn(&K, &V, &V2)->D+'static>(&self, other: &Collection<G, (K,V2)>, logic: R) -> Collection<G, D> where K: Unsigned+Default {
         let arranged1 = self.arrange_by_key(|k| k.clone(), |x| (VecMap::new(), x));
@@ -187,6 +235,9 @@ impl<G: Scope, K: Data, V: Data> Join<G, K, V> for Collection<G, (K, V)> where G
         let arranged1 = self.arrange_by_key(|k| k.clone(), |x| (VecMap::new(), x));
         let arranged2 = other.arrange_by_self(|k| k.clone(), |x| (VecMap::new(), x));
         arranged1.join(&arranged2, |k,v,_| (k.clone(), v.clone()))        
+    }
+    fn antijoin_u(&self, other: &Collection<G, K>) -> Collection<G, (K, V)> where K: Unsigned+Default {
+        self.concat(&self.semijoin_u(other).negate())
     }
 }
 
