@@ -215,51 +215,31 @@ That's about 6.5ms to update 1,000 edges, which means we should be able to handl
 
 ## Roadmap
 
-There are several bits of work in progress, and some next steps that remain to be done. I will describe them in an attempt to put them in some order.
+There are several interesting things still to do with differential dataflow. Here is the roadmap of what I am hoping to do (though, holler if you'd like to stick your nose in and help out, or ever just comment):
 
-### Arrangement as an operator
+### Compacting traces
 
-The main change underway in the arrangement branch is a new class of operators `arrange_by_*` that take various collections and key functions and group the data by the key function. Each differential dataflow operator (e.g. `group`, `join`) used to do this on their own, but for several reasons it seems that factoring this out could simplify our lives and improve performance.
+Naiad's implementation of differential dataflow is capable of compacting traces so that as frontiers progress, indistinguishable differences are merged and possibly cancelled. Timely dataflow presents enough information to do this, and actually provides more information that allows independent compaction for bi-linear operators like `join`, which Naiad's progress tracking doesn't support.
 
-Users of methods like `group` and `join` should see no (or, few) changes, but they will also be able to tap in to the arrangement infrastructure to do some interesting things:
+The current `Trace` implementations are ill-suited for this, and should probably be replaced as part of a larger overhaul. For example, trace implementations (of which there can be many) will surely need to improve to support fine-grained timestamps (the next item on the list).
 
-#### Generic storage
+Independently, the `arrange` operator permits sharing of `Trace` implementations, and this sharing must gate the state compaction. This isn't complicated, but it does mean that the current `Rc` sharing will need to be upgraded to reference counted frontiers (e.g. `MutableAntichain`), so that the trace manager can understand up to what frontiers is it safe to compact the data.
 
-The per-operator state in differential dataflow is morally equivalent to a collection of `(K, T, V, W)` for keys `K` timestamps `T` values `V` and integer weights `W`. However, specific operators may have structural constraints that do not require this full generality:
+### Fine-grained timestamps
 
-* Operators without values, for example set-theoretic operators like `distinct`, `union`, `intersect`, and `semijoin`, use the value type `()` which has zero size. This means that rather than providing for an offset into a list of possible `((), W)` pairs, we can instead simply keep the `W` value.
+Data are currently sent in batches with a single timestamp, as this is how timely dataflow current manages its messages. However, many streams of data have very fine grained updates with individual changes each having their own time. These two are in conflict, and don't need to be.
 
-* Operators whose inputs are closed and so do not change with time will shut down and retain no state. However, some operators take multiple inputs, only some of which correspond to closed inputs that do not vary with time: a standard example is the join in a graph algorithm where the edges may be static while the node values evolve. In this case, there is no need for the complexity associated with multiple timestamps. There may be no need for negative weights either, nor weights at all if we simply record the values `V` that occur.
+Differential could process streams of `(val, time, wgt)` where `time` is promoted to data, as long as each batch has a timestamp less or equal to the times it contains. This would permit larger numbers of changes in each batch, and each batch could potentially be retired at once (rather than serializing the work). This has the potential to increase throughput substantially (as more work gets done at once) and improve scaling as workers need to coordinate less often.
 
-Other examples include storage that may have different strategies for sharing (to be discussed), compaction (to be discussed), and fault-tolerance (not to be discussed).
+The "cost" here is mostly in complexity: differential operators would need to understand how to process collections of changes at various times and should probably avoid using time-keyed maps to store the differences before they are processed. The core `Trace` implementations would likely need to be improved to not have as much per-time overhead (perhaps flattening the `(key, time, val, wgt)` tuples into a trie, as prototyped elsewhere). Such designs and implementations would likely be sub-optimal for batch processing, but it feels like in this direction lies progress.
 
-To support these, there is a `Trace` trait and many of the operators have been re-written to be generic in the type of trace. 
+### Fault-tolerance
 
-This change allows us to have one implementation of core `join` logic that can be used for `equijoin`, `semijoin`, and `intersect`, without having to sacrifice performance for the simpler instances. At least, we provide rustc and llvm with enough information to perform appropriate specialization; whether it helps a great deal or not is to be seen. Likewise, we should be able to have one implementation of core `group` logic, but an ICE in Rust currently prevents this (more on this as it evolves). 
+This is mostly an idle diversion. The functional nature of differential dataflow should mean that it can commit updates for various times once they are confirmed correct, and upon recovery any identified updates can simply be loaded rather than waited upon. For example, trie-based `Trace` implementations represent a collection of updates in a range of times as a flat array, which should be fairly easily serialized and stored.
 
-#### Sharing
+As part of recovering, we might imagine that operators will be called upon to reproduce a subset of their output diffs, by time (because downstream operators didn't commit everything). The `group` operator is already designed to produce output diffs by time on demand, but operators like `join` are not so designed (in short, `join` can't afford to record its outputs, which makes it harder to see what has changed at a time from the time alone).
 
-In many cases, the same set of data will be partitioned the same way multiple times. Examples include `(key, val)` relations that are joined with multiple datasets. It is a waste to have each instance of `join` perform identical work and spend memory maintaining identical collections. 
-
-The `arrange_by_*` operators present their input data both as a stream, but also with a shared read-only reference `Rc<SharedTrace<K,T,V,W>>` (not its real name) that can be handed to multiple consumers of the data. The arrange operator will perform the arrangement once, and downstream operators can take notifications on the stream to determine which subset of times it has logically accepted.
-
-The arrangements are generic with respect to an implementor of `Trace`, which may require some wrappers to allow the same stream to be used in different scopes (for example, the same set of edges in different graph subcomputations).
-
-#### Compaction
-
-The state maintained by current differential dataflow operators, and by current `Trace` implementors, is an append-only list of differences. This has good properties with respect to sharing, and sanity generally, but it does grow without bound as the computation proceeds. As each user of the trace must filter through prior differences associated with each key, computation times also increase with the number of differences.
-
-As the computation proceeds, progress information can reveal that differences at some times are no longer possible. From this information, we can determine that some times in the logs are effectively indistinguishable: two times `t1` and `t2` may have the property that for all future times `t`, `t1 <= t iff t2 <= t`. In such a case, the two times can be coalesced, which can cause differences to collapse. In many common cases like windowed streams, the result is a bounded memory footprint.
-
-Naiad's differential dataflow implementation performed compaction in place. Our current design wants to avoid this, but we can simply compact data into a second location and swap it in once we know it is safe to do so. Some archeaology must be done to recover the compaction logic (I opted not to exfiltrate the research when MSR SVC was shut down), and to check whether it is still correct for the more general setting here (Naiad had relatively more restricted timestamps).
-
-Another detail is that sharing as described above makes reasoning about equivalent times more sensitive. As multiple readers may be tracking a given collection, we need to track the lower envelope of times they may need to differentiate between. This may require changing the simple reference-counted pointer to be something a bit more thoughtful (perhaps a RAII wrapper that advances a frontier, and abandons it on drop?). 
-
-### Motivation
-
-An excellent and interesting motivator for a lot of this work is a combination of the worst-case optimal join work of Ngo et al with the flattened stream join work of Koch et al. Taken together, and implemented in differential, they appear to provide incrementally updateable worst-case join computation with a memory footprint proportional to the size of the input relations (or their difference traces, if they are not static collections). This has the potential to be very exciting in the context of something like Datalog, where somewhat exotic joins are performed incrementally, as part of semi-naive evaluation. 
-
-A successful implementation, experiment, and write-up for a Datalog-like join using these techinques would probably make for a pretty neat paper. 
+It would be interesting to prototype serializing this state to stable storage, and finding and loading it on start-up. There is much more to do to have "serious" fault-tolerance, but this would at least be interesting to explore.
 
 ## Acknowledgements
 
