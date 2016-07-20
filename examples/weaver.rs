@@ -67,9 +67,7 @@ fn main() {
 
             // do reach on the graph from the roots, report counts at each distance.
             let result = reach(&graph, &roots);
-            let roots_probe = result//.map(|(_,l)| l)
-                                    //.consolidate_by(|&x| x)
-                                    .probe().0;
+            let roots_probe = result.probe().0;
 
             (raw_input, trans_input, query_input, roots_input, query_probe, roots_probe)
         });
@@ -135,7 +133,7 @@ fn main() {
         println!("query elapsed: {:?} for 1,000 x {}", timer.elapsed(), block);
 
 
-        let mut travs = Vec::with_capacity(100);
+        let mut travs = Vec::with_capacity(1000);
         while travs.len() < travs.capacity() {
             let mut temp = vec![];
             for _ in 0 .. block {
@@ -172,8 +170,8 @@ fn main() {
         println!("travs elapsed: {:?} for 1,000 x {}", timer.elapsed(), block);
 
         if computation.index() == 0 {
-            latencies[50 ..].sort();
-            for &x in latencies[50..].iter() {
+            latencies[500 ..].sort();
+            for &x in latencies[500..].iter() {
                 println!("{}", (x as f64) / 1000000000.0f64);
             }
         }
