@@ -4,7 +4,6 @@
 //! It represents a multiset that can be indexed by partially ordered times, and is stored in a
 //! compressed incremental representation.
 
-pub mod least_upper_bound;
 pub mod lookup;
 pub mod trace;
 pub mod compact;
@@ -14,7 +13,5 @@ pub mod robin_hood;
 pub mod basic;
 
 pub use collection::lookup::Lookup;
-pub use collection::least_upper_bound::LeastUpperBound;
-pub use collection::least_upper_bound::close_under_lub;
 pub use collection::trace::{Trace, TraceRef};
 pub use collection::basic::{BasicTrace, Offset};

@@ -15,7 +15,7 @@ use differential_dataflow::Collection;
 use differential_dataflow::operators::*;
 use differential_dataflow::operators::join::JoinArranged;
 use differential_dataflow::operators::group::GroupArranged;
-use differential_dataflow::collection::LeastUpperBound;
+use differential_dataflow::lattice::Lattice;
 
 use differential_dataflow::operators::iterate::Variable;
 
@@ -108,7 +108,7 @@ fn main() {
 
 // returns pairs (n, s) indicating node n can be reached from a root in s steps.
 fn bfs<G: Scope>(edges: &Collection<G, Edge>, roots: &Collection<G, Node>) -> Collection<G, (Node, u32)>
-where G::Timestamp: LeastUpperBound {
+where G::Timestamp: Lattice {
 
     // initialize roots as reaching themselves at distance 0
     let nodes = roots.map(|x| (x, 0));
@@ -129,7 +129,7 @@ where G::Timestamp: LeastUpperBound {
 
 // returns pairs (n, s) indicating node n can be reached from a root in s steps.
 fn _bfs2<G: Scope>(edges: &Collection<G, Edge>, roots: &Collection<G, Node>) -> Collection<G, (Node, u32)>
-where G::Timestamp: LeastUpperBound {
+where G::Timestamp: Lattice {
 
     // initialize roots as reaching themselves at distance 0
     let nodes = roots.map(|x| (x, 0));

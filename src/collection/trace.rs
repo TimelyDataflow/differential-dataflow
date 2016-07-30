@@ -3,7 +3,7 @@
 use std::iter::Peekable;
 
 use ::Data;
-use collection::{close_under_lub, LeastUpperBound};
+use lattice::{close_under_join, Lattice};
 use collection::compact::Compact;
 
 use iterators::merge::{Merge, MergeIterator};
@@ -15,7 +15,7 @@ pub trait Trace where for<'a> &'a Self: TraceRef<'a, Self::Key, Self::Index, Sel
     /// The data-parallel key.
     type Key: Data;
     /// Timestamp for changes to the collection.
-    type Index: LeastUpperBound;
+    type Index: Lattice;
     /// Values associated with each key.
     type Value: Data;
 
@@ -63,13 +63,13 @@ pub trait Trace where for<'a> &'a Self: TraceRef<'a, Self::Key, Self::Index, Sel
         // add all times, but filter a bit if possible
         for iter in self.trace(key) {
             if !iter.0.le(time) {
-                let lub = iter.0.least_upper_bound(time);
+                let lub = iter.0.join(time);
                 if !stash.contains(&lub) {
                     stash.push(lub);
                 }
             }
         }
-        close_under_lub(stash);
+        close_under_join(stash);
     }
 }
 

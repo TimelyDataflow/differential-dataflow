@@ -12,7 +12,7 @@ use timely::dataflow::operators::*;
 
 use differential_dataflow::{Collection, AsCollection, Data};
 use differential_dataflow::operators::*;
-use differential_dataflow::collection::LeastUpperBound;
+use differential_dataflow::lattice::Lattice;
 
 use graph_map::GraphMMap;
 
@@ -225,7 +225,7 @@ fn main() {
 
 // returns pairs (n, s) indicating node n can be reached from node s.
 fn reach<G>(edges: &Collection<G, Edge>, roots: &Collection<G, Node>) -> Collection<G, (Node, Node)>
-where G: Scope, G::Timestamp: LeastUpperBound {
+where G: Scope, G::Timestamp: Lattice {
 
     // initialize roots as reaching themselves
     let nodes = roots.map(|x| (x, x));
@@ -243,7 +243,7 @@ where G: Scope, G::Timestamp: LeastUpperBound {
 }
 
 fn transactional<G, D>(trans: &Collection<G, (usize, bool, D)>, state: &Collection<G, D>) -> Collection<G, usize>
-where G: Scope, D: Data+Default, G::Timestamp: LeastUpperBound {
+where G: Scope, D: Data+Default, G::Timestamp: Lattice {
 
     // we develop the set of transaction ids that must abort, 
     // starting from the optimistic assumption that none must.

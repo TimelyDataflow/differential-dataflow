@@ -140,8 +140,8 @@ impl<T: timely::Data + ::std::hash::Hash + Ord + Debug> Data for T { }
 ///
 /// The intent of this trait is that it could be used as the constraint for collections, removing the 
 /// need to put `G::Timestamp: LeastUpperBound` everywhere.
-pub trait TestScope : timely::dataflow::Scope where Self::Timestamp: collection::LeastUpperBound { }
-impl<S: timely::dataflow::Scope> TestScope for S where S::Timestamp: collection::LeastUpperBound { }
+pub trait TestScope : timely::dataflow::Scope where Self::Timestamp: lattice::Lattice { }
+impl<S: timely::dataflow::Scope> TestScope for S where S::Timestamp: lattice::Lattice { }
 
 extern crate fnv;
 extern crate timely;
@@ -153,5 +153,6 @@ extern crate timely_communication;
 
 pub mod collection;
 pub mod operators;
+pub mod lattice;
 mod iterators;
 mod stream;

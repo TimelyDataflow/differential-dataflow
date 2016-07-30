@@ -11,7 +11,7 @@ use timely::dataflow::operators::*;
 
 use differential_dataflow::Collection;
 use differential_dataflow::operators::*;
-use differential_dataflow::collection::LeastUpperBound;
+use differential_dataflow::lattice::Lattice;
 
 type Node = u32;
 type Edge = (Node, Node);
@@ -83,7 +83,7 @@ fn main() {
 }
 
 fn _trim_and_flip<G: Scope>(graph: &Collection<G, Edge>) -> Collection<G, Edge>
-where G::Timestamp: LeastUpperBound {
+where G::Timestamp: Lattice {
     graph.iterate(|edges| {
         let inner = graph.enter(&edges.scope())
                          .map_in_place(|x| mem::swap(&mut x.0, &mut x.1));
@@ -97,7 +97,7 @@ where G::Timestamp: LeastUpperBound {
 }
 
 fn _strongly_connected<G: Scope>(graph: &Collection<G, Edge>) -> Collection<G, Edge>
-where G::Timestamp: LeastUpperBound+Hash {
+where G::Timestamp: Lattice+Hash {
     graph.iterate(|inner| {
         let edges = graph.enter(&inner.scope());
         let trans = edges.map_in_place(|x| mem::swap(&mut x.0, &mut x.1));
@@ -106,7 +106,7 @@ where G::Timestamp: LeastUpperBound+Hash {
 }
 
 fn _trim_edges<G: Scope>(cycle: &Collection<G, Edge>, edges: &Collection<G, Edge>)
-    -> Collection<G, Edge> where G::Timestamp: LeastUpperBound+Hash {
+    -> Collection<G, Edge> where G::Timestamp: Lattice+Hash {
 
     let nodes = edges.map_in_place(|x| x.0 = x.1)
                      .consolidate_by(|&x| x.0);
@@ -120,7 +120,7 @@ fn _trim_edges<G: Scope>(cycle: &Collection<G, Edge>, edges: &Collection<G, Edge
 }
 
 fn _reachability<G: Scope>(edges: &Collection<G, Edge>, nodes: &Collection<G, (Node, Node)>) -> Collection<G, Edge>
-where G::Timestamp: LeastUpperBound+Hash {
+where G::Timestamp: Lattice+Hash {
 
     edges.filter(|_| false)
          .iterate(|inner| {

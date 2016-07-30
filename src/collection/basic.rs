@@ -1,8 +1,9 @@
 //! A basic collection trace.
 
 use ::Data;
+use lattice::Lattice;
 use collection::{Trace, TraceRef};
-use collection::{LeastUpperBound, Lookup};
+use collection::Lookup;
 use collection::compact::Compact;
 
 /// A collection of values indexed by `key` and `time`.
@@ -29,7 +30,7 @@ impl<K,V,L,T> Trace for BasicTrace<K, T, V, L>
         K: Data, 
         V: Data, 
         L: Lookup<K, Offset>+'static, 
-        T: LeastUpperBound+'static {
+        T: Lattice+'static {
     type Key = K;
     type Index = T;
     type Value = V;
@@ -90,7 +91,7 @@ impl<'a,K,V,L,T> TraceRef<'a,K,T,V> for &'a BasicTrace<K,T,V,L>
 where K: Data+'a, 
       V: Data+'a, 
       L: Lookup<K, Offset>+'a, 
-      T: LeastUpperBound+'a {
+      T: Lattice+'a {
     type VIterator = DifferenceIterator<'a, V>;
     type TIterator = TraceIterator<'a,K,T,V,L>;
     fn trace(self, key: &K) -> Self::TIterator {
@@ -147,7 +148,7 @@ struct TimeEntry<T, V> {
 }
 
 
-impl<K, V, L, T> BasicTrace<K, T, V, L> where K: Ord, V: Ord, L: Lookup<K, Offset>, T: LeastUpperBound {
+impl<K, V, L, T> BasicTrace<K, T, V, L> where K: Ord, V: Ord, L: Lookup<K, Offset>, T: Lattice {
     #[inline]
     fn get_range<'a>(&'a self, position: Offset) -> DifferenceIterator<'a, V> {
 
@@ -189,7 +190,7 @@ pub struct TraceIterator<'a, K: Eq+'a, T: 'a, V: 'a, L: Lookup<K, Offset>+'a> {
 
 impl<'a, K, T, V, L> Iterator for TraceIterator<'a, K, T, V, L>
 where K: Data,
-      T: LeastUpperBound+'a,
+      T: Lattice+'a,
       V: Data,
       L: Lookup<K, Offset>+'a {
     type Item = (&'a T, DifferenceIterator<'a, V>);
@@ -207,7 +208,7 @@ where K: Data,
 
 impl<'a, K: Eq, T, V, L> Clone for TraceIterator<'a, K, T, V, L> 
 where K: Ord+'a,
-      T: LeastUpperBound+'a,
+      T: Lattice+'a,
       V: Data,
       L: Lookup<K, Offset>+'a {
     fn clone(&self) -> TraceIterator<'a, K, T, V, L> {

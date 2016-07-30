@@ -1,11 +1,12 @@
 //! Like `Count` but with the value type specialized to `()`.
 
 use ::Data;
-use collection::{LeastUpperBound, Lookup};
+use lattice::Lattice;
+use collection::Lookup;
 use collection::compact::Compact;
 use collection::trace::{Trace, TraceRef};
 
-impl<K, L, T> Trace for Count<K, T, L> where K: Data+Ord+'static, L: Lookup<K, Offset>+'static, T: LeastUpperBound+'static {
+impl<K, L, T> Trace for Count<K, T, L> where K: Data+Ord+'static, L: Lookup<K, Offset>+'static, T: Lattice+'static {
     type Key = K;
     type Index = T;
     type Value = ();
@@ -54,7 +55,7 @@ impl<K, L, T> Trace for Count<K, T, L> where K: Data+Ord+'static, L: Lookup<K, O
     }
 }
 
-impl<'a,K,L,T> TraceRef<'a,K,T,()> for &'a Count<K,T,L> where K: Ord+'a, L: Lookup<K, Offset>+'a, T: LeastUpperBound+'a {
+impl<'a,K,L,T> TraceRef<'a,K,T,()> for &'a Count<K,T,L> where K: Ord+'a, L: Lookup<K, Offset>+'a, T: Lattice+'a {
     type VIterator = WeightIterator<'a>;
     type TIterator = CountIterator<'a,K,T,L>;
     fn trace(self, key: &K) -> Self::TIterator {
@@ -100,7 +101,7 @@ pub struct Count<K, T, L> {
     silly: (),
 }
 
-impl<K, L, T> Count<K, T, L> where K: Data+Ord+'static, L: Lookup<K, Offset>+'static, T: LeastUpperBound+'static {
+impl<K, L, T> Count<K, T, L> where K: Data+Ord+'static, L: Lookup<K, Offset>+'static, T: Lattice+'static {
     /// Recovers the count for the `()` value for a key at a time.
     pub fn get_count(&self, key: &K, time: &T) -> i32 {
         let mut sum = 0;
@@ -133,7 +134,7 @@ pub struct CountIterator<'a, K: Eq+'a, T: 'a, L: Lookup<K, Offset>+'a> {
 
 impl<'a, K: Eq, T, L> Iterator for CountIterator<'a, K, T, L>
 where K: Ord+'a,
-      T: LeastUpperBound+'a,
+      T: Lattice+'a,
       L: Lookup<K, Offset>+'a {
     type Item = (&'a T, WeightIterator<'a>);
 
@@ -150,7 +151,7 @@ where K: Ord+'a,
 
 impl<'a, K: Eq, T, L> Clone for CountIterator<'a, K, T, L> 
 where K: Ord+'a,
-      T: LeastUpperBound+'a,
+      T: Lattice+'a,
       L: Lookup<K, Offset>+'a {
     fn clone(&self) -> CountIterator<'a, K, T, L> {
         CountIterator {

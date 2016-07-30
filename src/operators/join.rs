@@ -13,7 +13,8 @@ use timely::dataflow::channels::pact::Pipeline;
 use timely_sort::Unsigned;
 
 use ::{Data, Collection};
-use collection::{LeastUpperBound, Lookup};
+use lattice::Lattice;
+use collection::Lookup;
 use collection::trace::{Trace,TraceRef};
 use operators::arrange::{Arranged, ArrangeByKey, ArrangeBySelf};
 
@@ -209,7 +210,7 @@ pub trait Join<G: Scope, K: Data, V: Data> {
     fn antijoin_u(&self, other: &Collection<G, K>) -> Collection<G, (K, V)> where K: Unsigned+Default;
 } 
 
-impl<G: Scope, K: Data, V: Data> Join<G, K, V> for Collection<G, (K, V)> where G::Timestamp: LeastUpperBound {
+impl<G: Scope, K: Data, V: Data> Join<G, K, V> for Collection<G, (K, V)> where G::Timestamp: Lattice {
     /// Matches pairs of `(key,val1)` and `(key,val2)` records based on `key` and applies a reduction function.
     fn join_map<V2: Data, D: Data, R>(&self, other: &Collection<G, (K, V2)>, logic: R) -> Collection<G, D>
     where R: Fn(&K, &V, &V2)->D+'static {
@@ -252,11 +253,11 @@ impl<G: Scope, K: Data, V: Data> Join<G, K, V> for Collection<G, (K, V)> where G
 // /// their own approach to indexing data. In this case, a newtype wrapping dense unsigned integers would indicate
 // /// the indexing strategy, and the methods would simply be as above.
 
-// pub trait JoinUnsigned<G: Scope, U: Unsigned+Data+Default, V: Data> where G::Timestamp: LeastUpperBound {
+// pub trait JoinUnsigned<G: Scope, U: Unsigned+Data+Default, V: Data> where G::Timestamp: Lattice {
 
 // }
 
-// impl<G: Scope, U: Unsigned+Data+Default, V: Data> JoinUnsigned<G, U, V> for Collection<G, (U, V)> where G::Timestamp: LeastUpperBound {
+// impl<G: Scope, U: Unsigned+Data+Default, V: Data> JoinUnsigned<G, U, V> for Collection<G, (U, V)> where G::Timestamp: Lattice {
 //     fn join_map_u<V2: Data, D: Data, R: Fn(&U, &V, &V2)->D+'static>(&self, other: &Collection<G, (U,V2)>, logic: R) -> Collection<G, D> {
 //         let arranged1 = self.arrange_by_key(|k| k.clone(), |x| (VecMap::new(), x));
 //         let arranged2 = other.arrange_by_key(|k| k.clone(), |x| (VecMap::new(), x));
@@ -274,7 +275,7 @@ impl<G: Scope, K: Data, V: Data> Join<G, K, V> for Collection<G, (K, V)> where G
 /// This method is used by the various `join` implementations, but it can also be used 
 /// directly in the event that one has a handle to an `Arranged<G,T>`, perhaps because
 /// the arrangement is available for re-use, or from the output of a `group` operator.
-pub trait JoinArranged<G: Scope, K: Data, V: Data> where G::Timestamp: LeastUpperBound {
+pub trait JoinArranged<G: Scope, K: Data, V: Data> where G::Timestamp: Lattice {
     /// Joins two arranged collections with the same key type.
     ///
     /// Each matching pair of records `(key, val1)` and `(key, val2)` are subjected to the `result` function, 
@@ -293,7 +294,7 @@ pub trait JoinArranged<G: Scope, K: Data, V: Data> where G::Timestamp: LeastUppe
 
 impl<TS: Timestamp, G: Scope<Timestamp=TS>, T: Trace<Index=TS>+'static> JoinArranged<G, T::Key, T::Value> for Arranged<G, T> 
     where 
-        G::Timestamp: LeastUpperBound, 
+        G::Timestamp: Lattice, 
         for<'a> &'a T: TraceRef<'a, T::Key, T::Index, T::Value> {
     fn join<T2,R,RF>(&self, other: &Arranged<G,T2>, result: RF) -> Collection<G,R> 
     where 
@@ -364,7 +365,7 @@ impl<TS: Timestamp, G: Scope<Timestamp=TS>, T: Trace<Index=TS>+'static> JoinArra
                             let borrow = trace.borrow();
                             for (t, diffs) in borrow.trace(key) {
                                 if acknowledged.iter().any(|t2| t <= t2) {
-                                    let mut output = outbuf.entry_or_insert(time.least_upper_bound(t), || Vec::new());
+                                    let mut output = outbuf.entry_or_insert(time.join(t), || Vec::new());
                                     for (ref val2, wgt2) in diffs {
                                         for &(ref val1, wgt1) in vals.clone().take(cnt as usize) {
                                             output.push((result(key, val1, val2), wgt1 * wgt2));
@@ -389,7 +390,7 @@ impl<TS: Timestamp, G: Scope<Timestamp=TS>, T: Trace<Index=TS>+'static> JoinArra
                             let borrow = trace.borrow();
                             for (t, diffs) in borrow.trace(key) {
                                 if acknowledged.iter().any(|t2| t <= t2) {
-                                    let mut output = outbuf.entry_or_insert(time.least_upper_bound(t), || Vec::new());
+                                    let mut output = outbuf.entry_or_insert(time.join(t), || Vec::new());
                                     for (ref val1, wgt1) in diffs {
                                         for &(ref val2, wgt2) in vals.clone().take(cnt as usize) {
                                             output.push((result(key, val1, val2), wgt1 * wgt2));
