@@ -11,7 +11,7 @@ use timely::dataflow::operators::*;
 
 use differential_dataflow::Collection;
 use differential_dataflow::operators::*;
-use differential_dataflow::collection::LeastUpperBound;
+use differential_dataflow::lattice::Lattice;
 
 type Node = u32;
 type Edge = (Node, Node);
@@ -111,7 +111,7 @@ fn main() {
 
 // returns pairs (n, s) indicating node n can be reached from a root in s steps.
 fn reach<G: Scope>(edges: &Collection<G, Edge>, roots: &Collection<G, Node>) -> Collection<G, (Node, Node)>
-where G::Timestamp: LeastUpperBound {
+where G::Timestamp: Lattice {
 
     let roots = roots.map(|x| (x,x));
 

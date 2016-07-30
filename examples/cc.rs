@@ -10,7 +10,7 @@ use timely::dataflow::*;
 use timely::dataflow::operators::*;
 
 use differential_dataflow::Collection;
-use differential_dataflow::collection::LeastUpperBound;
+use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::*;
 
 use graph_map::GraphMMap;
@@ -45,7 +45,7 @@ fn main() {
 }
 
 fn connected_components<G: Scope>(edges: &Collection<G, Edge>) -> Collection<G, (Node, Node)>
-where G::Timestamp: LeastUpperBound+Hash {
+where G::Timestamp: Lattice+Hash {
 
     // each edge (x,y) means that we need at least a label for the min of x and y.
     let nodes = edges.map_in_place(|pair| {

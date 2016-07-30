@@ -46,7 +46,8 @@ use timely::dataflow::operators::Unary;
 use timely::dataflow::channels::pact::Pipeline;
 use timely_sort::Unsigned;
 
-use collection::{LeastUpperBound, Lookup, Trace, BasicTrace, Offset};
+use lattice::Lattice;
+use collection::{Lookup, Trace, BasicTrace, Offset};
 use collection::trace::CollectionIterator;
 use collection::basic::DifferenceIterator;
 use collection::compact::Compact;
@@ -56,7 +57,7 @@ use iterators::coalesce::Coalesce;
 use operators::arrange::{Arranged, ArrangeByKey};
 
 /// Extension trait for the `group` differential dataflow method
-pub trait Group<G: Scope, K: Data, V: Data> where G::Timestamp: LeastUpperBound {
+pub trait Group<G: Scope, K: Data, V: Data> where G::Timestamp: Lattice {
 
     /// Groups records by their first field, and applies reduction logic to the associated values.
     ///
@@ -82,7 +83,7 @@ pub trait Group<G: Scope, K: Data, V: Data> where G::Timestamp: LeastUpperBound 
 }
 
 impl<G: Scope, K: Data+Default, V: Data+Default> Group<G, K, V> for Collection<G, (K,V)>
-where G::Timestamp: LeastUpperBound
+where G::Timestamp: Lattice
 {
     fn group<L, V2: Data>(&self, logic: L) -> Collection<G, (K,V2)>
         where L: Fn(&K, &mut CollectionIterator<DifferenceIterator<V>>, &mut Vec<(V2, Delta)>)+'static {
@@ -101,7 +102,7 @@ where G::Timestamp: LeastUpperBound
 }
 
 /// Counts the number of occurrences of each element.
-pub trait Count<G: Scope, K: Data> where G::Timestamp: LeastUpperBound {
+pub trait Count<G: Scope, K: Data> where G::Timestamp: Lattice {
     /// Counts the number of occurrences of each element.
     fn count(&self) -> Collection<G, (K,Delta)>;
 
@@ -109,7 +110,7 @@ pub trait Count<G: Scope, K: Data> where G::Timestamp: LeastUpperBound {
     fn count_u(&self) -> Collection<G, (K,Delta)> where K: Unsigned+Default;
 }
 
-impl<G: Scope, K: Data+Default> Count<G, K> for Collection<G, K> where K: Unsigned+Default, G::Timestamp: LeastUpperBound {
+impl<G: Scope, K: Data+Default> Count<G, K> for Collection<G, K> where K: Unsigned+Default, G::Timestamp: Lattice {
     fn count(&self) -> Collection<G, (K,Delta)> {
         self.map(|k| (k,()))
             .group(|_k,s,t| t.push((s.next().unwrap().1, 1)))
@@ -130,7 +131,7 @@ pub trait GroupArranged<G: Scope, K: Data, V: Data> {
     fn group<V2, U, KH, Look, LookG, Logic>(&self, key_h: KH, look: LookG, logic: Logic)
         -> Arranged<G, BasicTrace<K,G::Timestamp,V2,Look>>
     where
-        G::Timestamp: LeastUpperBound,
+        G::Timestamp: Lattice,
         V2:    Data,
         U:     Unsigned+Default,
         KH:    Fn(&K)->U+'static,
@@ -145,7 +146,7 @@ where
     K: Data,
     V: Data,
     L: Lookup<K, Offset>+'static,
-    G::Timestamp: LeastUpperBound {
+    G::Timestamp: Lattice {
 
     fn group<V2, U, KH, Look, LookG, Logic>(&self, key_h: KH, look: LookG, logic: Logic)
         -> Arranged<G, BasicTrace<K,G::Timestamp,V2,Look>>

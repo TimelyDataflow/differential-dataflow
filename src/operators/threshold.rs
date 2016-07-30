@@ -18,7 +18,8 @@ use timely::dataflow::channels::pact::Pipeline;
 
 use timely_sort::Unsigned;
 
-use collection::{LeastUpperBound, Lookup};
+use lattice::Lattice;
+use collection::Lookup;
 use collection::count::Offset;
 use collection::count::Count as CountTrace;
 use collection::compact::Compact;
@@ -28,7 +29,7 @@ use operators::arrange::{Arranged, ArrangeBySelf};
 
 /// Extension trait for the `threshold` differential dataflow method
 pub trait Threshold<G: Scope, K: Data>
-    where G::Timestamp: LeastUpperBound {
+    where G::Timestamp: Lattice {
 
     /// Groups records by their first field, and applies reduction logic to the associated values.
     ///
@@ -60,7 +61,7 @@ pub trait Threshold<G: Scope, K: Data>
     }
 }
 
-impl<G: Scope, K: Data+Default> Threshold<G, K> for Collection<G, K> where G::Timestamp: LeastUpperBound {
+impl<G: Scope, K: Data+Default> Threshold<G, K> for Collection<G, K> where G::Timestamp: Lattice {
     fn threshold<L>(&self, logic: L) -> Collection<G, K>
         where L: Fn(&K, Delta)->Delta+'static {
             self.arrange_by_self(|k| k.hashed(), |_| { 
@@ -92,7 +93,7 @@ pub trait ThresholdArranged<G: Scope, K: Data> {
     fn threshold<U, KH, Look, LookG, Logic>(&self, key_h: KH, look: LookG, logic: Logic)
         -> Arranged<G,CountTrace<K,G::Timestamp,Look>>
     where
-        G::Timestamp: LeastUpperBound,
+        G::Timestamp: Lattice,
         U:     Unsigned+Default,
         KH:    Fn(&K)->U+'static,
         Look:  Lookup<K, Offset>+'static,
@@ -105,7 +106,7 @@ where
     G: Scope,
     K: Data,
     L: Lookup<K, Offset>+'static,
-    G::Timestamp: LeastUpperBound {
+    G::Timestamp: Lattice {
 
     fn threshold<U, KH, Look, LookG, Logic>(&self, key_h: KH, look: LookG, logic: Logic)
         -> Arranged<G, CountTrace<K,G::Timestamp,Look>>

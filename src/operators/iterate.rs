@@ -56,19 +56,19 @@ use timely::dataflow::operators::*;
 use timely::dataflow::operators::feedback::Handle;
 
 use ::{Data, Collection};
-use collection::LeastUpperBound;
+use lattice::Lattice;
 
 /// An extension trait for the `iterate` method.
 pub trait IterateExt<G: Scope, D: Data> {
     /// Iteratively apply `logic` to the source collection until convergence.
     fn iterate<F>(&self, logic: F) -> Collection<G, D>
-        where G::Timestamp: LeastUpperBound,
+        where G::Timestamp: Lattice,
               for<'a> F: FnOnce(&Collection<Child<'a, G, u64>, D>)->Collection<Child<'a, G, u64>, D>;
 }
 
 impl<G: Scope, D: Ord+Data+Debug> IterateExt<G, D> for Collection<G, D> {
     fn iterate<F>(&self, logic: F) -> Collection<G, D>
-        where G::Timestamp: LeastUpperBound,
+        where G::Timestamp: Lattice,
               for<'a> F: FnOnce(&Collection<Child<'a, G, u64>, D>)->Collection<Child<'a, G, u64>, D> {
 
         self.inner.scope().scoped(|subgraph| {
@@ -92,13 +92,13 @@ impl<G: Scope, D: Ord+Data+Debug> IterateExt<G, D> for Collection<G, D> {
 /// iterative patterns than singly recursive iteration. For example: in mutual recursion two 
 /// collections evolve simultaneously.
 pub struct Variable<'a, G: Scope, D: Data>
-where G::Timestamp: LeastUpperBound {
+where G::Timestamp: Lattice {
     collection: Collection<Child<'a, G, u64>, D>,
     feedback: Handle<G::Timestamp, u64,(D, i32)>,
     source: Collection<Child<'a, G, u64>, D>,
 }
 
-impl<'a, G: Scope, D: Data> Variable<'a, G, D> where G::Timestamp: LeastUpperBound {
+impl<'a, G: Scope, D: Data> Variable<'a, G, D> where G::Timestamp: Lattice {
     /// Creates a new `Variable` and a `Stream` representing its output, from a supplied `source` stream.
     pub fn from(source: Collection<Child<'a, G, u64>, D>) -> Variable<'a, G, D> {
         let (feedback, updates) = source.inner.scope().loop_variable(u64::max_value(), 1);
@@ -116,7 +116,7 @@ impl<'a, G: Scope, D: Data> Variable<'a, G, D> where G::Timestamp: LeastUpperBou
     }
 }
 
-impl<'a, G: Scope, D: Data> Deref for Variable<'a, G, D> where G::Timestamp: LeastUpperBound {
+impl<'a, G: Scope, D: Data> Deref for Variable<'a, G, D> where G::Timestamp: Lattice {
     type Target = Collection<Child<'a, G, u64>, D>;
     fn deref(&self) -> &Self::Target {
         &self.collection

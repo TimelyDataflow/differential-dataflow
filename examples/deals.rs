@@ -22,7 +22,7 @@ use timely::dataflow::operators::*;
 use differential_dataflow::Collection;
 use differential_dataflow::operators::*;
 use differential_dataflow::operators::join::JoinArranged;
-use differential_dataflow::collection::LeastUpperBound;
+use differential_dataflow::lattice::Lattice;
 
 use graph_map::GraphMMap;
 
@@ -112,7 +112,7 @@ fn main() {
 
 // returns pairs (root, friend-of-friend) for the top-k friends of friends by count.
 fn _pymk<G: Scope>(edges: &Collection<G, Edge>, query: &Collection<G, Node>, k: usize) -> Collection<G, (Node,Node)>
-where G::Timestamp: LeastUpperBound {
+where G::Timestamp: Lattice {
 
     // symmetrize the graph
     let edges = edges.map_in_place(|x: &mut (u32, u32)| ::std::mem::swap(&mut x.0, &mut x.1))
@@ -136,7 +136,7 @@ where G::Timestamp: LeastUpperBound {
 
 // returns pairs (n, s) indicating node n can be reached from a root in s steps.
 fn _reach<G: Scope>(edges: &Collection<G, Edge>, query: &Collection<G, Node>) -> Collection<G, Node>
-where G::Timestamp: LeastUpperBound {
+where G::Timestamp: Lattice {
 
     // initialize query as reaching themselves at distance 0
     // repeatedly update minimal distances each node can be reached from each root
@@ -156,7 +156,7 @@ where G::Timestamp: LeastUpperBound {
 
 // returns pairs (node, label) indicating the connected component containing each node
 fn _connected_components<G: Scope>(edges: &Collection<G, Edge>) -> Collection<G, (Node, Node)>
-where G::Timestamp: LeastUpperBound+Hash {
+where G::Timestamp: Lattice+Hash {
 
     // each edge (x,y) means that we need at least a label for the min of x and y.
     let nodes = edges.map_in_place(|pair| {
@@ -183,7 +183,7 @@ where G::Timestamp: LeastUpperBound+Hash {
 
 // returns pairs (n, s) indicating node n can be reached from a root in s steps.
 fn _bfs<G: Scope>(edges: &Collection<G, Edge>, query: &Collection<G, Node>) -> Collection<G, (Node, u32)>
-where G::Timestamp: LeastUpperBound {
+where G::Timestamp: Lattice {
 
     // initialize query as reaching themselves at distance 0
     let nodes = query.map(|x| (x, 0));

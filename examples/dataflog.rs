@@ -8,7 +8,7 @@ use timely::dataflow::operators::feedback::Handle;
 
 use differential_dataflow::{Data, Collection, AsCollection};
 use differential_dataflow::operators::*;
-use differential_dataflow::collection::LeastUpperBound;
+use differential_dataflow::lattice::Lattice;
 
 /// A collection defined by multiple mutually recursive rules.
 ///
@@ -16,13 +16,13 @@ use differential_dataflow::collection::LeastUpperBound;
 /// is like the `Variable` defined in `iterate.rs` optimized for Datalog rules: it supports repeated
 /// addition of collections, and a final `distinct` operator applied before connecting the definition.
 pub struct Variable<'a, G: Scope, D: Default+Data>
-where G::Timestamp: LeastUpperBound {
+where G::Timestamp: Lattice {
     feedback: Option<Handle<G::Timestamp, u64,(D, i32)>>,
     current: Collection<Child<'a, G, u64>, D>,
     cycle: Collection<Child<'a, G, u64>, D>,
 }
 
-impl<'a, G: Scope, D: Default+Data> Variable<'a, G, D> where G::Timestamp: LeastUpperBound {
+impl<'a, G: Scope, D: Default+Data> Variable<'a, G, D> where G::Timestamp: Lattice {
     /// Creates a new `Variable` from a supplied `source` stream.
     pub fn from(source: &Collection<Child<'a, G, u64>, D>) -> Variable<'a, G, D> {
         let (feedback, cycle) = source.inner.scope().loop_variable(u64::max_value(), 1);
@@ -37,14 +37,14 @@ impl<'a, G: Scope, D: Default+Data> Variable<'a, G, D> where G::Timestamp: Least
     }
 }
 
-impl<'a, G: Scope, D: Default+Data> ::std::ops::Deref for Variable<'a, G, D> where G::Timestamp: LeastUpperBound {
+impl<'a, G: Scope, D: Default+Data> ::std::ops::Deref for Variable<'a, G, D> where G::Timestamp: Lattice {
     type Target = Collection<Child<'a, G, u64>, D>;
     fn deref(&self) -> &Self::Target {
         &self.cycle
     }
 }
 
-impl<'a, G: Scope, D: Default+Data> Drop for Variable<'a, G, D> where G::Timestamp: LeastUpperBound {
+impl<'a, G: Scope, D: Default+Data> Drop for Variable<'a, G, D> where G::Timestamp: Lattice {
     fn drop(&mut self) {
         if let Some(feedback) = self.feedback.take() {
             self.current.distinct()

@@ -17,7 +17,8 @@ use timely::dataflow::channels::pact::Exchange;
 use timely_sort::{LSBRadixSorter, Unsigned};
 
 use ::{Data, Collection};
-use collection::{LeastUpperBound, Lookup, Trace, TraceRef};
+use lattice::Lattice;
+use collection::{Lookup, Trace, TraceRef};
 use collection::basic::{BasicTrace, Offset};
 use collection::count::Count;
 use collection::compact::Compact;
@@ -34,7 +35,7 @@ pub struct Arranged<G: Scope, T: Trace<Index=G::Timestamp>>
     where 
         T::Key: Data, 
         T::Value: Data, 
-        G::Timestamp: LeastUpperBound ,
+        G::Timestamp: Lattice ,
         for<'a> &'a T: TraceRef<'a, T::Key, T::Index, T::Value> 
         {
     /// A stream containing arranged updates.
@@ -51,7 +52,7 @@ impl<G: Scope, T: Trace<Index=G::Timestamp>> Arranged<G, T>
     where 
         T::Key: Data, 
         T::Value: Data, 
-        G::Timestamp: LeastUpperBound ,
+        G::Timestamp: Lattice ,
         for<'a> &'a T: TraceRef<'a, T::Key, T::Index, T::Value> 
     {
     
@@ -78,7 +79,7 @@ impl<G: Scope, T: Trace<Index=G::Timestamp>> Arranged<G, T>
 }
 
 /// Arranges something as `(Key,Val)` pairs. 
-pub trait ArrangeByKey<G: Scope, K: Data, V: Data> where G::Timestamp: LeastUpperBound {
+pub trait ArrangeByKey<G: Scope, K: Data, V: Data> where G::Timestamp: Lattice {
     /// Arranges a stream of `(Key, Val)` updates by `Key`.
     ///
     /// This operator arranges a stream of values into a shared trace, whose contents it maintains.
@@ -92,7 +93,7 @@ pub trait ArrangeByKey<G: Scope, K: Data, V: Data> where G::Timestamp: LeastUppe
     >(&self, key_h: KH, look: LookG) -> Arranged<G, BasicTrace<K,G::Timestamp,V,Look>>;
 }
 
-impl<G: Scope, K: Data, V: Data> ArrangeByKey<G, K, V> for Collection<G, (K, V)> where G::Timestamp: LeastUpperBound {
+impl<G: Scope, K: Data, V: Data> ArrangeByKey<G, K, V> for Collection<G, (K, V)> where G::Timestamp: Lattice {
     fn arrange_by_key<
         U:     Unsigned+Default,
         KH:    Fn(&K)->U+'static,
@@ -187,10 +188,10 @@ pub trait ArrangeBySelf<G: Scope, K: Data> {
         Look:  Lookup<K, ::collection::count::Offset>+'static,
         LookG: Fn(u64)->Look,
     >(&self, key_h: KH, look: LookG) -> Arranged<G, Count<K, G::Timestamp, Look>>
-    where G::Timestamp: LeastUpperBound;
+    where G::Timestamp: Lattice;
 }
 
-impl<G: Scope, K: Data> ArrangeBySelf<G, K> for Collection<G, K> where G::Timestamp: LeastUpperBound {
+impl<G: Scope, K: Data> ArrangeBySelf<G, K> for Collection<G, K> where G::Timestamp: Lattice {
 
     fn arrange_by_self<
         U:     Unsigned+Default,
@@ -199,7 +200,7 @@ impl<G: Scope, K: Data> ArrangeBySelf<G, K> for Collection<G, K> where G::Timest
         LookG: Fn(u64)->Look,
     >
     (&self, key_h: KH, look: LookG) -> Arranged<G, Count<K, G::Timestamp, Look>> 
-    where G::Timestamp: LeastUpperBound {
+    where G::Timestamp: Lattice {
 
         let peers = self.scope().peers();
         let mut log_peers = 0;
