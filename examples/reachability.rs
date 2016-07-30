@@ -21,6 +21,7 @@ fn main() {
     let nodes: u32 = std::env::args().nth(1).unwrap().parse().unwrap();
     let edges: u32 = std::env::args().nth(2).unwrap().parse().unwrap();
     let batch: u32 = std::env::args().nth(3).unwrap().parse().unwrap();
+    let waves: u32 = std::env::args().nth(4).unwrap().parse().unwrap();
 
     println!("performing reachability on {} nodes, {} edges:", nodes, edges);
 
@@ -31,9 +32,14 @@ fn main() {
 
         // define BFS dataflow; return handles to roots and edges inputs
         let (mut graph, mut roots, probe) = computation.scoped(|scope| {
+
             let (root_input, roots) = scope.new_input();
+            let roots = Collection::new(roots);
+
             let (edge_input, graph) = scope.new_input();
-            let probe = reach(&Collection::new(graph), &Collection::new(roots)).probe().0;
+            let graph = Collection::new(graph);
+
+            let probe = reach(&graph, &roots).probe().0;
             (edge_input, root_input, probe)
         });
 
@@ -75,7 +81,7 @@ fn main() {
         }
 
         let mut changes = Vec::new();
-        for wave in 0..10 {
+        for wave in 0..waves {
             for _ in 0..batch {
                 changes.push(((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), 1));
                 changes.push(((rng2.gen_range(0, nodes), rng2.gen_range(0, nodes)),-1));
@@ -94,7 +100,10 @@ fn main() {
             computation.step_while(|| probe.lt(graph.time()));
 
             if computation.index() == 0 {
-                println!("wave {}: avg {:?}", wave, timer.elapsed() / (batch as u32));
+                let elapsed = timer.elapsed();
+                let nanos = elapsed.as_secs() * 1_000_000_000 + elapsed.subsec_nanos() as u64;
+                // println!("wave {}: avg {:?}", wave, nanos / (batch as u32));
+                println!("{}", (nanos as f64) / 1000000000.0f64);
             }
         }
     }).unwrap();
