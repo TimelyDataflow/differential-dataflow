@@ -20,7 +20,7 @@ use vec_map::VecMap;
 pub trait Lookup<K: Eq, V> {
     /// Recovers a reference to the value associated with a key.
     fn get_ref<'a>(&'a self, &K)->Option<&'a V>;
-    /// Recovers a mutable referecne to the value associated with a key.
+    /// Recovers a mutable reference to the value associated with a key.
     fn get_mut<'a>(&'a mut self, &K)->Option<&'a mut V>;
     /// Recovers a mutable reference, inserting a new value if absent.
     fn entry_or_insert<F: FnOnce()->V>(&mut self, K, F) -> &mut V;
