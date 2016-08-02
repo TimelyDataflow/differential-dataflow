@@ -10,6 +10,21 @@ pub trait Lattice : PartialOrd {
     fn join(&self, &Self) -> Self;
     /// The largest element lesser than both arguments.
     fn meet(&self, &Self) -> Self;
+
+    /// Advances self to the largest time indistinguishable under `frontier`.
+    // TODO : add an example here demonstrating the result invariant.
+    fn advance_by(&self, frontier: &[Self]) -> Option<Self> where Self: Sized{
+        if frontier.len() > 0 {
+            let mut result = self.join(&frontier[0]);
+            for f in &frontier[1..] {
+                result = result.meet(&self.join(f));
+            }
+            Some(result)
+        }  
+        else {
+            None
+        }
+    }
 }
 
 use timely::progress::nested::product::Product;
