@@ -14,6 +14,7 @@
 //! elements are required.
 //!
 //! #Examples
+
 //!
 //! This example groups a stream of `(key,val)` pairs by `key`, and yields only the most frequently
 //! occurring value for each key.
@@ -35,6 +36,8 @@ use std::rc::Rc;
 use std::cell::RefCell;
 use std::default::Default;
 use std::collections::HashMap;
+// use std::hash::BuildHasherDefault;
+// use fnv::FnvHasher;
 
 use itertools::Itertools;
 use linear_map::LinearMap;
@@ -45,6 +48,8 @@ use timely::dataflow::*;
 use timely::dataflow::operators::Unary;
 use timely::dataflow::channels::pact::Pipeline;
 use timely_sort::Unsigned;
+
+// use collection::basic::Offset;
 
 use lattice::Lattice;
 use collection::{Lookup, Trace, BasicTrace, Offset};
@@ -87,6 +92,8 @@ where G::Timestamp: Lattice
 {
     fn group<L, V2: Data>(&self, logic: L) -> Collection<G, (K,V2)>
         where L: Fn(&K, &mut CollectionIterator<DifferenceIterator<V>>, &mut Vec<(V2, Delta)>)+'static {
+            // self.arrange_by_key(|k| k.hashed(), |_| { let map: HashMap<K, Offset, 
+                // BuildHasherDefault<FnvHasher>> = ::std::default::Default::default(); map })
             self.arrange_by_key(|k| k.hashed(), |_| HashMap::new())
                 .group(|k| k.hashed(), |_| HashMap::new(), logic)
                 .as_collection()
