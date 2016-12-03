@@ -37,7 +37,7 @@ fn main() {
         // define BFS dataflow; return handles to roots and edges inputs
         let (mut graph, probe) = computation.scoped(|scope| {
 
-            let roots = vec![(0,1)].into_iter().to_stream(scope);
+            let roots = vec![(0,1), (1,1), (2,1)].into_iter().to_stream(scope);
             let (edge_input, graph) = scope.new_input();
             let mut result = bfs(&Collection::new(graph), &Collection::new(roots));
 
