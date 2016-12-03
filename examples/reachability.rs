@@ -81,7 +81,7 @@ fn main() {
         }
 
         let mut changes = Vec::new();
-        for wave in 0..waves {
+        for _wave in 0..waves {
             for _ in 0..batch {
                 changes.push(((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), 1));
                 changes.push(((rng2.gen_range(0, nodes), rng2.gen_range(0, nodes)),-1));
