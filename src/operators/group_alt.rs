@@ -13,7 +13,7 @@ use stream::AsCollection;
 use timely::progress::Antichain;
 use timely::dataflow::*;
 use timely::dataflow::operators::Unary;
-use timely::dataflow::channels::pact::Pipeline;
+use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::Capability;
 
 use lattice::Lattice;
@@ -38,8 +38,10 @@ where G::Timestamp: Lattice+Ord
         let mut to_do = LinearMap::new();   // A map from times to a list of keys that need processing at that time.
         let mut capabilities = Vec::new();  // notificator replacement (for capabilitiesS)
 
+        let exchange = Exchange::new(|x: &((K,V),i32)| (x.0).0.hashed());
+
         // fabricate a data-parallel operator using the `unary_notify` pattern.
-        self.inner.unary_notify(Pipeline, "GroupAlt", vec![], move |input, output, notificator| {
+        self.inner.unary_notify(exchange, "GroupAlt", vec![], move |input, output, notificator| {
 
             // 1. read each input, and stash it in our staging area.
             input.for_each(|time, data| {
