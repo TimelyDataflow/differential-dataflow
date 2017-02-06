@@ -1,5 +1,14 @@
 //! A Robin Hood hash map.
 
+
+#[derive(Eq, PartialEq)]
+enum SearchStatus {
+    Searching,
+    Found(usize),
+    Missing(usize),
+}
+
+
 /// A Robin Hood hash map.
 ///
 /// The hash map is parameterized by a supplied function acting as the hash function,
@@ -117,13 +126,6 @@ pub fn get_mut<'a, K: Eq, V, F: Fn(&K)->usize>(slice: &'a mut [Option<(K,V)>], q
     }
 
     return None;
-}
-
-#[derive(Eq, PartialEq)]
-enum SearchStatus {
-    Searching,
-    Found(usize),
-    Missing(usize),
 }
 
 /// Returns either the previous `(key,val)` pair for `key`, or `Err((key,val))` if `slice` does not have enough room to insert it.

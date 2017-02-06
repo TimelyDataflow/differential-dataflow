@@ -4,7 +4,7 @@ use ::Data;
 use lattice::Lattice;
 use collection::Lookup;
 use collection::compact::Compact;
-use collection::trace::{Trace, TraceRef};
+use collection::trace::{Trace, TraceReference};
 
 impl<K, L, T> Trace for Count<K, T, L> where K: Data+Ord+'static, L: Lookup<K, Offset>+'static, T: Lattice+'static {
     type Key = K;
@@ -55,14 +55,13 @@ impl<K, L, T> Trace for Count<K, T, L> where K: Data+Ord+'static, L: Lookup<K, O
     }
 }
 
-impl<'a,K,L,T> TraceRef<'a,K,T,()> for &'a Count<K,T,L> where K: Ord+'a, L: Lookup<K, Offset>+'a, T: Lattice+'a {
+impl<'a,K,L,T> TraceReference<'a> for Count<K,T,L> where K: Data+Ord+'a, L: Lookup<K, Offset>+'static, T: Lattice+'static {
     type VIterator = WeightIterator<'a>;
     type TIterator = CountIterator<'a,K,T,L>;
-    fn trace(self, key: &K) -> Self::TIterator {
+    fn trace(&'a self, key: &K) -> Self::TIterator {
         CountIterator {
             trace: self,
             next0: self.keys.get_ref(key).map(|&x|x),
-            // silly: (),
         }
     }   
 }
@@ -105,7 +104,7 @@ impl<K, L, T> Count<K, T, L> where K: Data+Ord+'static, L: Lookup<K, Offset>+'st
     /// Recovers the count for the `()` value for a key at a time.
     pub fn get_count(&self, key: &K, time: &T) -> i32 {
         let mut sum = 0;
-        for wgt in Trace::trace(self, key).filter(|x| x.0 <= time).map(|mut x| x.1.next().unwrap().1) {
+        for wgt in self.trace(key).filter(|x| x.0 <= time).map(|mut x| x.1.next().unwrap().1) {
             sum += wgt;
         }
         sum

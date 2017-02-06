@@ -87,6 +87,8 @@ where G::Timestamp: Lattice
 {
     fn group<L, V2: Data>(&self, logic: L) -> Collection<G, (K,V2)>
         where L: Fn(&K, &mut CollectionIterator<DifferenceIterator<V>>, &mut Vec<(V2, Delta)>)+'static {
+            // self.arrange_by_key(|k| k.hashed(), |_| { let map: HashMap<K, Offset, 
+                // BuildHasherDefault<FnvHasher>> = ::std::default::Default::default(); map })
             self.arrange_by_key(|k| k.hashed(), |_| HashMap::new())
                 .group(|k| k.hashed(), |_| HashMap::new(), logic)
                 .as_collection()

@@ -151,6 +151,8 @@ extern crate linear_map;
 extern crate timely_sort;
 extern crate timely_communication;
 
+// pub mod trace;
+
 pub mod collection;
 pub mod operators;
 pub mod lattice;
