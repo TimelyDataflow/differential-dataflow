@@ -9,6 +9,7 @@
 //! their timely dataflow analogues are sufficient (e.g. `map`, `filter`, `concat`).
 
 pub use self::group::Group;
+pub use self::group_alt::GroupAlt;
 // pub use self::cogroup::CoGroupBy;
 pub use self::consolidate::ConsolidateExt;
 pub use self::iterate::IterateExt;
@@ -19,6 +20,7 @@ pub use self::arrange::{ArrangeByKey, ArrangeBySelf};
 pub mod arrange;
 pub mod threshold;
 pub mod group;
+pub mod group_alt;
 // pub mod cogroup;
 pub mod consolidate;
 pub mod iterate;
