@@ -70,6 +70,9 @@ where G::Timestamp: Lattice+Ord
                 for capability in capabilities.iter() {
                     frontier.insert(capability.time());
                 }
+                for time in notificator.frontier(0).iter() {
+                    frontier.insert(time.clone());
+                }
 
                 let capability = capabilities.swap_remove(position);
                 let time = capability.time();
@@ -82,14 +85,7 @@ where G::Timestamp: Lattice+Ord
                     for (key, mut updates) in queue.drain() {
 
                         // consolidate updates
-                        updates.sort_by(|x,y| x.0.cmp(&y.0));
-                        for index in 1 .. updates.len() {
-                            if updates[index].0 == updates[index-1].0 {
-                                updates[index].1 += updates[index-1].1;
-                                updates[index-1].1 = 0;
-                            }
-                        }
-                        updates.retain(|x| x.1 != 0);
+                        consolidate(&mut updates);
 
                         // only continue if updates exist
                         if updates.len() > 0 {
@@ -130,20 +126,9 @@ where G::Timestamp: Lattice+Ord
                             // advance times, consolidate inputs
                             for (_, times) in state.0.iter_mut() {
                                 for time_diff in times.iter_mut() {
-                                    let mut advanced = time_diff.0.join(&frontier.elements()[0]);
-                                    for index in 1 .. frontier.elements().len() {
-                                        advanced = advanced.meet(&time_diff.0.join(&frontier.elements()[index])); 
-                                    }
-                                    time_diff.0 = advanced;
+                                    time_diff.0 = advance(&time_diff.0, frontier.elements());
                                 }
-                                times.sort_by(|x,y| x.0.cmp(&y.0));
-                                for index in 1 .. times.len() {
-                                    if times[index].0 == times[index-1].0 {
-                                        times[index].1 += times[index-1].1;
-                                        times[index-1].1 = 0;
-                                    }
-                                }
-                                times.retain(|x| x.1 != 0);
+                                consolidate(times);
                             }
                         }
                     }
@@ -171,19 +156,12 @@ where G::Timestamp: Lattice+Ord
                             input_stage.clear();
                             output_stage.clear();
 
-                            // println!("key: {:?}, entry: {:?}", key, entry);
-
                             // 1. form the input collection
                             for (val, times) in entry.0.iter() {
-                                let sum = times.iter()
-                                               .filter(|td| td.0.le(&time))
-                                               .map(|td| td.1)
-                                               .sum();
+                                let sum = accumulate(&times[..], &time);
                                 if sum > 0 { input_stage.push((val.clone(), sum)); }
                             }
                             input_stage.sort();
-
-                            // println!("key: {:?}, input: {:?}", key, input_stage);
 
                             // 2. apply user logic
                             if input_stage.len() > 0 {
@@ -194,20 +172,10 @@ where G::Timestamp: Lattice+Ord
                             for (val, times) in entry.1.iter() {
                                 let val: &V2 = val;
                                 let times: &Vec<(G::Timestamp, i32)> = times;
-                                let sum: i32 = times.iter()
-                                                    .filter(|td| td.0.le(&time))
-                                                    .map(|td| td.1)
-                                                    .sum();
-                                output_stage.push((val.clone(), -sum));
+                                let sum = accumulate(&times[..], &time);
+                                if sum != 0 { output_stage.push((val.clone(), -sum)); }
                             }
-                            output_stage.sort();
-                            for index in 1 .. output_stage.len() {
-                                if output_stage[index].0 == output_stage[index-1].0 {
-                                    output_stage[index].1 += output_stage[index-1].1;
-                                    output_stage[index-1].1 = 0;
-                                }
-                            }
-                            output_stage.retain(|x| x.1 != 0);
+                            consolidate(&mut output_stage);
 
                             // 4. commit and send output differences
                             for (val, diff) in output_stage.drain(..) {
@@ -218,20 +186,9 @@ where G::Timestamp: Lattice+Ord
                             // consolidate output (it might need it too!)
                             for (_, times) in entry.1.iter_mut() {
                                 for time_diff in times.iter_mut() {
-                                    let mut advanced = time_diff.0.join(&frontier.elements()[0]);
-                                    for index in 1 .. frontier.elements().len() {
-                                        advanced = advanced.meet(&time_diff.0.join(&frontier.elements()[index])); 
-                                    }
-                                    time_diff.0 = advanced;
+                                    time_diff.0 = advance(&time_diff.0, frontier.elements());
                                 }
-                                times.sort_by(|x,y| x.0.cmp(&y.0));
-                                for index in 1 .. times.len() {
-                                    if times[index].0 == times[index-1].0 {
-                                        times[index].1 += times[index-1].1;
-                                        times[index-1].1 = 0;
-                                    }
-                                }
-                                times.retain(|x| x.1 != 0);
+                                consolidate(times);
                             }
                         }
                     }
@@ -444,14 +401,14 @@ where G::Timestamp: Lattice+Ord
 //     }
 // }
 
-// /// Advances a time to the largest time equivalent under all comparisons to other times in the future of frontier.
-// fn advance<T: Lattice>(time: &T, frontier: &[T]) -> T {
-//     let mut result = time.join(&frontier[0]);
-//     for index in 1 .. frontier.len() {
-//         result = result.meet(&time.join(&frontier[index]));
-//     }
-//     result
-// }
+/// Advances a time to the largest time equivalent under all comparisons to other times in the future of frontier.
+fn advance<T: Lattice>(time: &T, frontier: &[T]) -> T {
+    let mut result = time.join(&frontier[0]);
+    for index in 1 .. frontier.len() {
+        result = result.meet(&time.join(&frontier[index]));
+    }
+    result
+}
 
 // fn extract<T, L: Fn(&T)->bool>(source: &mut Vec<T>, target: &mut Vec<T>, logic: L) {
 //     let mut index = 0;
@@ -495,3 +452,24 @@ where G::Timestamp: Lattice+Ord
 //         self.buffer
 //     }
 // }
+
+fn consolidate<T: Ord>(list: &mut Vec<(T, i32)>) {
+    list.sort_by(|x,y| x.0.cmp(&y.0));
+    for index in 1 .. list.len() {
+        if list[index].0 == list[index-1].0 {
+            list[index].1 += list[index-1].1;
+            list[index-1].1 = 0;
+        }
+    }
+    list.retain(|x| x.1 != 0);
+}
+
+fn accumulate<T: Lattice>(list: &[(T, i32)], time: &T) -> i32 {
+    let mut sum = 0;
+    for pair in list.iter() {
+        if pair.0.le(time) {
+            sum += pair.1
+        }
+    }
+    sum
+}
