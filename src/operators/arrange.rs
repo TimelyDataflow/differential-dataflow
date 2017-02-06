@@ -18,7 +18,7 @@ use timely_sort::{LSBRadixSorter, Unsigned};
 
 use ::{Data, Collection};
 use lattice::Lattice;
-use collection::{Lookup, Trace, TraceRef};
+use collection::{Lookup, Trace, TraceReference};
 use collection::basic::{BasicTrace, Offset};
 use collection::count::Count;
 use collection::compact::Compact;
@@ -31,12 +31,13 @@ use collection::compact::Compact;
 /// in writing differential operators: each must pay enough care to signals
 /// from the `stream` field to know the subset of `trace` it has logically 
 /// received.
-pub struct Arranged<G: Scope, T: Trace<Index=G::Timestamp>> 
+pub struct Arranged<G: Scope, T: Trace> 
     where 
+        for<'a> T: TraceReference<'a>,
         T::Key: Data, 
         T::Value: Data, 
         G::Timestamp: Lattice ,
-        for<'a> &'a T: TraceRef<'a, T::Key, T::Index, T::Value> 
+        // for<'a> &'a T: TraceRef<'a, T::Key, T::Index, T::Value> 
         {
     /// A stream containing arranged updates.
     ///
@@ -48,12 +49,13 @@ pub struct Arranged<G: Scope, T: Trace<Index=G::Timestamp>>
     pub trace: Rc<RefCell<T>>,
 }
 
-impl<G: Scope, T: Trace<Index=G::Timestamp>> Arranged<G, T> 
+impl<G: Scope, T: Trace> Arranged<G, T> 
     where 
+        for<'a> T: TraceReference<'a>,
         T::Key: Data, 
         T::Value: Data, 
         G::Timestamp: Lattice ,
-        for<'a> &'a T: TraceRef<'a, T::Key, T::Index, T::Value> 
+        // for<'a> &'a T: TraceRef<'a, T::Key, T::Index, T::Value> 
     {
     
     /// Flattens the stream into a `Collection`.

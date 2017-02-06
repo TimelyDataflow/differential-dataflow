@@ -11,7 +11,8 @@ pub mod trie;
 pub mod count;
 pub mod robin_hood;
 pub mod basic;
+pub mod naive;
 
 pub use collection::lookup::Lookup;
-pub use collection::trace::{Trace, TraceRef};
+pub use collection::trace::{Trace, TraceReference};
 pub use collection::basic::{BasicTrace, Offset};

@@ -2,7 +2,7 @@
 
 use ::Data;
 use lattice::Lattice;
-use collection::{Trace, TraceRef};
+use collection::{Trace, TraceReference};
 use collection::Lookup;
 use collection::compact::Compact;
 
@@ -87,14 +87,14 @@ impl<K,V,L,T> Trace for BasicTrace<K, T, V, L>
     }
 }
 
-impl<'a,K,V,L,T> TraceRef<'a,K,T,V> for &'a BasicTrace<K,T,V,L> 
+impl<'a,K,V,L,T> TraceReference<'a> for BasicTrace<K,T,V,L> 
 where K: Data+'a, 
       V: Data+'a, 
-      L: Lookup<K, Offset>+'a, 
-      T: Lattice+'a {
+      L: Lookup<K, Offset>+'static, 
+      T: Lattice+'static {
     type VIterator = DifferenceIterator<'a, V>;
     type TIterator = TraceIterator<'a,K,T,V,L>;
-    fn trace(self, key: &K) -> Self::TIterator {
+    fn trace(&'a self, key: &K) -> Self::TIterator {
         TraceIterator {
             trace: self,
             next0: self.keys.get_ref(key).map(|&x|x),

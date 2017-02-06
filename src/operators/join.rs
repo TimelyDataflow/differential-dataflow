@@ -15,7 +15,7 @@ use timely_sort::Unsigned;
 use ::{Data, Collection};
 use lattice::Lattice;
 use collection::Lookup;
-use collection::trace::{Trace,TraceRef};
+use collection::trace::{Trace, TraceReference};
 use operators::arrange::{Arranged, ArrangeByKey, ArrangeBySelf};
 
 /// Join implementations for `(key,val)` data.
@@ -242,34 +242,6 @@ impl<G: Scope, K: Data, V: Data> Join<G, K, V> for Collection<G, (K, V)> where G
     }
 }
 
-// /// Matches pairs `(key, val1)` and `(key, val2)` for dense unsigned integer keys.
-// ///
-// /// These methods are optimizations of the general `Join` trait to use `Vec` indices rather than
-// /// a more generic hash map. This can substantially reduce the amount of computation and memory
-// /// required, but it will allocate as much memory as the largest identifier and so may have poor
-// /// performance if the absolute range of keys is large.
-// ///
-// /// These method may be deprecated in preferences of an approach which allows implementors of `Data` to define
-// /// their own approach to indexing data. In this case, a newtype wrapping dense unsigned integers would indicate
-// /// the indexing strategy, and the methods would simply be as above.
-
-// pub trait JoinUnsigned<G: Scope, U: Unsigned+Data+Default, V: Data> where G::Timestamp: Lattice {
-
-// }
-
-// impl<G: Scope, U: Unsigned+Data+Default, V: Data> JoinUnsigned<G, U, V> for Collection<G, (U, V)> where G::Timestamp: Lattice {
-//     fn join_map_u<V2: Data, D: Data, R: Fn(&U, &V, &V2)->D+'static>(&self, other: &Collection<G, (U,V2)>, logic: R) -> Collection<G, D> {
-//         let arranged1 = self.arrange_by_key(|k| k.clone(), |x| (VecMap::new(), x));
-//         let arranged2 = other.arrange_by_key(|k| k.clone(), |x| (VecMap::new(), x));
-//         arranged1.join(&arranged2, logic)
-//     }
-//     fn semijoin_u(&self, other: &Collection<G, U>) -> Collection<G, (U, V)> {
-//         let arranged1 = self.arrange_by_key(|k| k.clone(), |x| (VecMap::new(), x));
-//         let arranged2 = other.arrange_by_self(|k| k.clone(), |x| (VecMap::new(), x));
-//         arranged1.join(&arranged2, |k,v,_| (k.clone(), v.clone()))        
-//     }
-// }
-
 /// Matches the elements of two arranged traces.
 ///
 /// This method is used by the various `join` implementations, but it can also be used 
@@ -286,22 +258,22 @@ pub trait JoinArranged<G: Scope, K: Data, V: Data> where G::Timestamp: Lattice {
     fn join<T2,R,RF> (&self, stream2: &Arranged<G,T2>, result: RF) -> Collection<G,R>
     where 
         T2: Trace<Key=K,Index=G::Timestamp>+'static,
+        for<'a> T2: TraceReference<'a>+'static,
         R: Data,
-        RF: Fn(&K,&V,&T2::Value)->R+'static,
-        for<'a> &'a T2: TraceRef<'a,T2::Key,T2::Index,T2::Value>
-        ;
+        RF: Fn(&K,&V,&T2::Value)->R+'static;
 }
 
-impl<TS: Timestamp, G: Scope<Timestamp=TS>, T: Trace<Index=TS>+'static> JoinArranged<G, T::Key, T::Value> for Arranged<G, T> 
+impl<TS: Timestamp, G: Scope<Timestamp=TS>, T> JoinArranged<G, T::Key, T::Value> for Arranged<G, T> 
     where 
-        G::Timestamp: Lattice, 
-        for<'a> &'a T: TraceRef<'a, T::Key, T::Index, T::Value> {
+        T: Trace<Index=TS>+'static,
+        for<'a> T: TraceReference<'a>+'static,
+        G::Timestamp: Lattice {
     fn join<T2,R,RF>(&self, other: &Arranged<G,T2>, result: RF) -> Collection<G,R> 
     where 
         T2: Trace<Key=T::Key, Index=G::Timestamp>+'static,
+        for<'a> T2: TraceReference<'a>+'static,
         R: Data,
-        RF: Fn(&T::Key,&T::Value,&T2::Value)->R+'static,
-        for<'a> &'a T2: TraceRef<'a,T2::Key,T2::Index,T2::Value> {
+        RF: Fn(&T::Key,&T::Value,&T2::Value)->R+'static {
 
         let mut trace1 = Some(self.trace.clone());
         let mut trace2 = Some(other.trace.clone());
@@ -337,7 +309,6 @@ impl<TS: Timestamp, G: Scope<Timestamp=TS>, T: Trace<Index=TS>+'static> JoinArra
             });
 
             // Notification means we have inputs to process or outputs to send.
-            // while let Some((capability, _count)) = notificator.next() {
             notificator.for_each(|capability, _count, notificator| {
 
                 let time = capability.time();
