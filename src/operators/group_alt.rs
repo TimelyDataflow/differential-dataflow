@@ -36,7 +36,7 @@ where G::Timestamp: Lattice+Ord
         let mut state = HashMap::new();     // key -> (input_trace, output_trace)
         let mut inputs = LinearMap::new();  // A map from times to received (key, val, wgt) triples.
         let mut to_do = LinearMap::new();   // A map from times to a list of keys that need processing at that time.
-        let mut capabilities = Vec::new();  // notificator replacement (for capabilitiesS)
+        let mut capabilities = Vec::new();  // notificator replacement (for capabilities)
 
         let exchange = Exchange::new(|x: &((K,V),i32)| (x.0).0.hashed());
 
@@ -401,15 +401,6 @@ where G::Timestamp: Lattice+Ord
 //     }
 // }
 
-/// Advances a time to the largest time equivalent under all comparisons to other times in the future of frontier.
-fn advance<T: Lattice>(time: &T, frontier: &[T]) -> T {
-    let mut result = time.join(&frontier[0]);
-    for index in 1 .. frontier.len() {
-        result = result.meet(&time.join(&frontier[index]));
-    }
-    result
-}
-
 // fn extract<T, L: Fn(&T)->bool>(source: &mut Vec<T>, target: &mut Vec<T>, logic: L) {
 //     let mut index = 0;
 //     while index < source.len() {
@@ -452,6 +443,15 @@ fn advance<T: Lattice>(time: &T, frontier: &[T]) -> T {
 //         self.buffer
 //     }
 // }
+
+/// Advances a time to the largest time equivalent under all comparisons to other times in the future of frontier.
+fn advance<T: Lattice>(time: &T, frontier: &[T]) -> T {
+    let mut result = time.join(&frontier[0]);
+    for index in 1 .. frontier.len() {
+        result = result.meet(&time.join(&frontier[index]));
+    }
+    result
+}
 
 fn consolidate<T: Ord>(list: &mut Vec<(T, i32)>) {
     list.sort_by(|x,y| x.0.cmp(&y.0));
