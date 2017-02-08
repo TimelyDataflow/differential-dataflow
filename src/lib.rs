@@ -158,3 +158,4 @@ pub mod operators;
 pub mod lattice;
 mod iterators;
 mod stream;
+mod trace;
