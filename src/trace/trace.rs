@@ -58,7 +58,7 @@ impl<Key: Ord+Debug+Clone, Val: Ord+Debug+Clone, Time: Lattice+Ord+Debug+Clone> 
 
 			// unimplemented!();
 			self.layers.push(LayerMerge::Finished(layer));
-			self.layers.sort_by(|x,y| x.len().cmp(&y.len()));
+			self.layers.sort_by(|x,y| y.len().cmp(&x.len()));
 
 			while self.layers.len() > 2 && self.layers[self.layers.len() - 2].len() < 2 * self.layers[self.layers.len() - 1].len() {
 				if let Some(LayerMerge::Finished(layer1)) = self.layers.pop() {
@@ -465,6 +465,7 @@ impl<Key: Ord+Debug, Val: Ord+Debug, Time: Lattice+Ord+Debug> TraceCursor<Key, V
 	/// advance any cursor that has been previously used, and perhaps more in the case of 
 	/// `seek_key`. Having done so, we need to re-introduce the invariant that `self.layers`
 	/// contains only layers with valid keys, and is sorted by those keys.
+	#[inline(never)]
 	fn tidy_keys(&mut self) {
 		let mut valid = 0; 
 		while valid < self.dirty {

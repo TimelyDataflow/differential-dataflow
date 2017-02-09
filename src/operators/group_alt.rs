@@ -40,7 +40,6 @@ where G::Timestamp: Lattice+Ord
         let mut input_trace = Trace::new(Default::default());
         let mut output_trace = Trace::new(Default::default());
 
-        // let mut state = HashMap::new();     // key -> (input_trace, output_trace)
         let mut inputs = LinearMap::new();  // A map from times to received (key, val, wgt) triples.
         let mut to_do = LinearMap::new();   // A map from times to a list of keys that need processing at that time.
         let mut capabilities = Vec::new();  // notificator replacement (for capabilities)
@@ -62,9 +61,6 @@ where G::Timestamp: Lattice+Ord
                 for ((key, val), diff) in data.drain(..) {
                     // println!("update: {:?}", (&key, &val, diff));
                     updates.push(((key, val), diff as isize));
-                    // updates.entry(key)
-                    //        .or_insert(Vec::new())
-                    //        .push((val, diff));
                 }
             });
 
@@ -91,17 +87,11 @@ where G::Timestamp: Lattice+Ord
 
                 // 2a. If we received any keys, determine the interesting times for each.
                 //     We then enqueue the keys at the corresponding time, for use later.
-                if let Some(mut batch) = inputs.remove_key(&time) {
+                if let Some(batch) = inputs.remove_key(&time) {
 
                     let layer = Layer::new(batch.done().into_iter().map(|((k,v),d)| (k, v, time.clone(), d)), &[], &[]);
 
-                    // let mut buffer = Vec::new();
                     let mut stash = Vec::new();
-
-                    // let mut temp = Vec::new();
-                    // temp.extend(queue.drain());
-                    // temp.sort_by(|x,y| x.0.cmp(&y.0));
-
                     let mut trace_cursor = input_trace.cursor();
 
                     for key_idx in 0 .. layer.keys.len() {
@@ -110,7 +100,7 @@ where G::Timestamp: Lattice+Ord
                         stash.push(time.clone());
                         if let Some(mut key_view) = trace_cursor.seek_key(&layer.keys[key_idx].0) {
                             while let Some(val_view) = key_view.next_val() {
-                                val_view.map(|&(ref t, d)| {
+                                val_view.map(|&(ref t, _d)| {
                                     let joined = time.join(t);
                                     if joined != time && !stash.contains(&joined) {
                                         stash.push(joined);
@@ -119,7 +109,6 @@ where G::Timestamp: Lattice+Ord
                             }
                         }
                         close_under_join(&mut stash);
-                        // println!("stash: {:?}", stash);
 
                         // notificate for times, add key to todo list.
                         for new_time in &stash {
@@ -145,10 +134,8 @@ where G::Timestamp: Lattice+Ord
                     // We also want to de-duplicate them, in case there are dupes.
                     keys.sort();
                     keys.dedup();
-                    // println!("keys todo: {:?}", keys);
 
                     // staging areas for input and output of user code.
-                    // let mut temp_stage = Vec::new();
                     let mut input_stage = Vec::new();
                     let mut output_stage = Vec::new();
 
@@ -181,9 +168,6 @@ where G::Timestamp: Lattice+Ord
                             logic(&key, &input_stage[..], &mut output_stage);
                         }
 
-                        // println!("key: {:?}, input: {:?}, output: {:?}", key, input_stage, output_stage);
-
-
                         // 3. subtract existing output differences
                         if let Some(mut output_key_view) = output_trace_cursor.seek_key(&key) {
                             while let Some(output_val_view) = output_key_view.next_val() {
@@ -197,7 +181,6 @@ where G::Timestamp: Lattice+Ord
                             }
                         }
                         consolidate(&mut output_stage);
-                        // println!("  post-consolidate: {:?}", output_stage);
 
                         // 4. send output differences, assemble output layer
                         if output_stage.len() > 0 {
@@ -211,15 +194,7 @@ where G::Timestamp: Lattice+Ord
                         }
                     }
 
-                    // println!("");
-                    // println!("o_trace: {:?}", output_trace);
-                    // println!("out_layer: {:?}", output_layer);
-
                     output_trace.insert(Rc::new(output_layer));
-
-                    // println!("o_trace: {:?}", output_trace);
-                    // println!("");
-
                 }
             }
         })
@@ -455,16 +430,17 @@ impl<T: Ord> BatchCompact<T> {
     }
     fn push(&mut self, element: (T, isize)) {
         self.buffer.push(element);
-        if self.buffer.len() > self.sorted * 2 {
-            self.buffer.sort();
-            for index in 1 .. self.buffer.len() {
-                if self.buffer[index].0 == self.buffer[index-1].0 {
-                    self.buffer[index].1 += self.buffer[index-1].1;
-                    self.buffer[index-1].1 = 0;
-                }
-            }
-            self.buffer.retain(|x| x.1 != 0);
-        }
+        // if self.buffer.len() > ::std::cmp::max(self.sorted * 2, 1024) {
+        //     self.buffer.sort();
+        //     for index in 1 .. self.buffer.len() {
+        //         if self.buffer[index].0 == self.buffer[index-1].0 {
+        //             self.buffer[index].1 += self.buffer[index-1].1;
+        //             self.buffer[index-1].1 = 0;
+        //         }
+        //     }
+        //     self.buffer.retain(|x| x.1 != 0);
+        //     self.sorted = self.buffer.len();
+        // }
     }
     fn done(mut self) -> Vec<(T, isize)> {
         if self.buffer.len() > self.sorted {
@@ -476,6 +452,7 @@ impl<T: Ord> BatchCompact<T> {
                 }
             }
             self.buffer.retain(|x| x.1 != 0);
+            self.sorted = self.buffer.len();
         }
         self.buffer
     }
@@ -512,15 +489,6 @@ impl<T: Ord> BatchCompact<T> {
 //     }
 // }
 
-/// Advances a time to the largest time equivalent under all comparisons to other times in the future of frontier.
-fn advance<T: Lattice>(time: &T, frontier: &[T]) -> T {
-    let mut result = time.join(&frontier[0]);
-    for index in 1 .. frontier.len() {
-        result = result.meet(&time.join(&frontier[index]));
-    }
-    result
-}
-
 fn consolidate<T: Ord>(list: &mut Vec<(T, i32)>) {
     list.sort_by(|x,y| x.0.cmp(&y.0));
     for index in 1 .. list.len() {
@@ -530,14 +498,4 @@ fn consolidate<T: Ord>(list: &mut Vec<(T, i32)>) {
         }
     }
     list.retain(|x| x.1 != 0);
-}
-
-fn accumulate<T: Lattice>(list: &[(T, i32)], time: &T) -> i32 {
-    let mut sum = 0;
-    for pair in list.iter() {
-        if pair.0.le(time) {
-            sum += pair.1
-        }
-    }
-    sum
 }
