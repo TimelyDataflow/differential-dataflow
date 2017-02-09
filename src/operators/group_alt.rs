@@ -1,14 +1,18 @@
 //! Group records by a key, and apply a reduction function.
 
-use std::collections::HashMap;
+// use std::collections::HashMap;
+// use std::hash::Hash;
 
-use std::hash::Hash;
+use std::rc::Rc;
 
 use linear_map::LinearMap;
 
 use ::{Data, Collection, Delta};
 use ::lattice::close_under_join;
 use stream::AsCollection;
+
+use trace::trace::{Trace, Layer};
+
 
 use timely::progress::Antichain;
 use timely::dataflow::*;
@@ -20,20 +24,23 @@ use lattice::Lattice;
 use collection::Lookup;
 
 /// Extension trait for the `group` differential dataflow method
-pub trait GroupAlt<G: Scope, K: Data+Hash, V: Data+Hash> where G::Timestamp: Lattice+Ord {
+pub trait GroupAlt<G: Scope, K: Data, V: Data> where G::Timestamp: Lattice+Ord {
 
     /// Groups records by their first field, and applies reduction logic to the associated values.
-    fn group_alt<L, V2: Data+Hash>(&self, logic: L) -> Collection<G, (K,V2)>
+    fn group_alt<L, V2: Data>(&self, logic: L) -> Collection<G, (K,V2)>
         where L: Fn(&K, &[(V, Delta)], &mut Vec<(V2, Delta)>)+'static;
 }
 
-impl<G: Scope, K: Data+Hash, V: Data+Hash> GroupAlt<G, K, V> for Collection<G, (K,V)>
+impl<G: Scope, K: Data, V: Data> GroupAlt<G, K, V> for Collection<G, (K,V)>
 where G::Timestamp: Lattice+Ord
 {
-    fn group_alt<L, V2: Data+Hash>(&self, logic: L) -> Collection<G, (K,V2)>
+    fn group_alt<L, V2: Data>(&self, logic: L) -> Collection<G, (K,V2)>
         where L: Fn(&K, &[(V, Delta)], &mut Vec<(V2, Delta)>)+'static {
 
-        let mut state = HashMap::new();     // key -> (input_trace, output_trace)
+        let mut input_trace = Trace::new(Default::default());
+        let mut output_trace = Trace::new(Default::default());
+
+        // let mut state = HashMap::new();     // key -> (input_trace, output_trace)
         let mut inputs = LinearMap::new();  // A map from times to received (key, val, wgt) triples.
         let mut to_do = LinearMap::new();   // A map from times to a list of keys that need processing at that time.
         let mut capabilities = Vec::new();  // notificator replacement (for capabilities)
@@ -49,13 +56,15 @@ where G::Timestamp: Lattice+Ord
                     if !capabilities.iter().any(|c: &Capability<G::Timestamp>| c.time() == time.time()) {
                         capabilities.push(time);
                     }
-                    HashMap::new()
+                    BatchCompact::new()
                 });
 
                 for ((key, val), diff) in data.drain(..) {
-                    updates.entry(key)
-                           .or_insert(Vec::new())
-                           .push((val, diff));
+                    // println!("update: {:?}", (&key, &val, diff));
+                    updates.push(((key, val), diff as isize));
+                    // updates.entry(key)
+                    //        .or_insert(Vec::new())
+                    //        .push((val, diff));
                 }
             });
 
@@ -74,64 +83,59 @@ where G::Timestamp: Lattice+Ord
                     frontier.insert(time.clone());
                 }
 
+                input_trace.advance_frontier(frontier.elements());
+                output_trace.advance_frontier(frontier.elements());
+
                 let capability = capabilities.swap_remove(position);
                 let time = capability.time();
 
                 // 2a. If we received any keys, determine the interesting times for each.
                 //     We then enqueue the keys at the corresponding time, for use later.
-                if let Some(mut queue) = inputs.remove_key(&time) {
+                if let Some(mut batch) = inputs.remove_key(&time) {
 
+                    let layer = Layer::new(batch.done().into_iter().map(|((k,v),d)| (k, v, time.clone(), d)), &[], &[]);
+
+                    // let mut buffer = Vec::new();
                     let mut stash = Vec::new();
-                    for (key, mut updates) in queue.drain() {
 
-                        // consolidate updates
-                        consolidate(&mut updates);
+                    // let mut temp = Vec::new();
+                    // temp.extend(queue.drain());
+                    // temp.sort_by(|x,y| x.0.cmp(&y.0));
 
-                        // only continue if updates exist
-                        if updates.len() > 0 {
+                    let mut trace_cursor = input_trace.cursor();
 
-                            let state = state.entry(key.clone())
-                                             .or_insert((HashMap::new(), HashMap::new()));
+                    for key_idx in 0 .. layer.keys.len() {
 
-                            // determine new interesting times
-                            stash.push(capability.time());
-                            for (_, times) in state.0.iter() {
-                                for &(ref time2,_) in times {
-                                    let joined = time.join(time2);
+                        // track down existing times, join with `time` and close under join.
+                        stash.push(time.clone());
+                        if let Some(mut key_view) = trace_cursor.seek_key(&layer.keys[key_idx].0) {
+                            while let Some(val_view) = key_view.next_val() {
+                                val_view.map(|&(ref t, d)| {
+                                    let joined = time.join(t);
                                     if joined != time && !stash.contains(&joined) {
                                         stash.push(joined);
                                     }
-                                }
-                            }
-                            close_under_join(&mut stash);
-
-                            // notificate for times, add key to todo list.
-                            for new_time in &stash {
-                                to_do.entry_or_insert(new_time.clone(), || {
-                                    let delayed = capability.delayed(new_time);
-                                    if !capabilities.iter().any(|c| c.time() == delayed.time()) {
-                                        capabilities.push(delayed);
-                                    }
-                                    Vec::new()
-                                })
-                                .push(key.clone());
-                            }
-                            stash.clear();
-
-                            // commit updates
-                            for (val, diff) in updates.drain(..) {
-                                state.0.entry(val).or_insert(Vec::new()).push((time.clone(), diff));
-                            }
-
-                            // advance times, consolidate inputs
-                            for (_, times) in state.0.iter_mut() {
-                                for time_diff in times.iter_mut() {
-                                    time_diff.0 = advance(&time_diff.0, frontier.elements());
-                                }
-                                consolidate(times);
+                                });
                             }
                         }
+                        close_under_join(&mut stash);
+                        // println!("stash: {:?}", stash);
+
+                        // notificate for times, add key to todo list.
+                        for new_time in &stash {
+                            to_do.entry_or_insert(new_time.clone(), || {
+                                let delayed = capability.delayed(new_time);
+                                if !capabilities.iter().any(|c| c.time() == delayed.time()) {
+                                    capabilities.push(delayed);
+                                }
+                                Vec::new()
+                            })
+                            .push(layer.keys[key_idx].0.clone());
+                        }
+                        stash.clear();
                     }
+
+                    input_trace.insert(Rc::new(layer));
                 }
 
                 // 2b. Process any interesting keys at this time.
@@ -141,57 +145,81 @@ where G::Timestamp: Lattice+Ord
                     // We also want to de-duplicate them, in case there are dupes.
                     keys.sort();
                     keys.dedup();
+                    // println!("keys todo: {:?}", keys);
 
                     // staging areas for input and output of user code.
+                    // let mut temp_stage = Vec::new();
                     let mut input_stage = Vec::new();
                     let mut output_stage = Vec::new();
 
                     // session for sending produced output.
                     let mut session = output.session(&capability);
 
+                    let mut input_trace_cursor = input_trace.cursor();
+                    let mut output_trace_cursor = output_trace.cursor();
+
+                    let mut output_layer = Layer::new(Vec::new().into_iter(), &[], &[]);
+
                     for key in keys {
 
-                        if let Some(mut entry) = state.get_mut(&key) {
+                        input_stage.clear();
+                        output_stage.clear();
 
-                            input_stage.clear();
-                            output_stage.clear();
-
-                            // 1. form the input collection
-                            for (val, times) in entry.0.iter() {
-                                let sum = accumulate(&times[..], &time);
-                                if sum > 0 { input_stage.push((val.clone(), sum)); }
-                            }
-                            input_stage.sort();
-
-                            // 2. apply user logic
-                            if input_stage.len() > 0 {
-                                logic(&key, &input_stage[..], &mut output_stage);
-                            }
-
-                            // 3. subtract existing output differences
-                            for (val, times) in entry.1.iter() {
-                                let val: &V2 = val;
-                                let times: &Vec<(G::Timestamp, i32)> = times;
-                                let sum = accumulate(&times[..], &time);
-                                if sum != 0 { output_stage.push((val.clone(), -sum)); }
-                            }
-                            consolidate(&mut output_stage);
-
-                            // 4. commit and send output differences
-                            for (val, diff) in output_stage.drain(..) {
-                                entry.1.entry(val.clone()).or_insert(Vec::new()).push((time.clone(), diff));
-                                session.give(((key.clone(), val), diff));
-                            }
-
-                            // consolidate output (it might need it too!)
-                            for (_, times) in entry.1.iter_mut() {
-                                for time_diff in times.iter_mut() {
-                                    time_diff.0 = advance(&time_diff.0, frontier.elements());
+                        if let Some(mut key_view) = input_trace_cursor.seek_key(&key) {
+                            // assemble the input collection
+                            while let Some(val_view) = key_view.next_val() {
+                                let mut sum = 0;
+                                val_view.map(|&(ref t,d)| if t.le(&time) { sum += d; });
+                                if sum > 0 {
+                                    input_stage.push((val_view.val().clone(), sum as i32));
                                 }
-                                consolidate(times);
                             }
                         }
+
+                        // 2. apply user logic
+                        if input_stage.len() > 0 {
+                            logic(&key, &input_stage[..], &mut output_stage);
+                        }
+
+                        // println!("key: {:?}, input: {:?}, output: {:?}", key, input_stage, output_stage);
+
+
+                        // 3. subtract existing output differences
+                        if let Some(mut output_key_view) = output_trace_cursor.seek_key(&key) {
+                            while let Some(output_val_view) = output_key_view.next_val() {
+                                let mut sum = 0;
+                                output_val_view.map(|&(ref t, d)| if t.le(&time) { sum += d; });
+                                if sum != 0 {
+                                    let val_ref: &V2 = output_val_view.val();
+                                    let val: V2 = val_ref.clone();
+                                    output_stage.push((val, -sum as i32));
+                                }
+                            }
+                        }
+                        consolidate(&mut output_stage);
+                        // println!("  post-consolidate: {:?}", output_stage);
+
+                        // 4. send output differences, assemble output layer
+                        if output_stage.len() > 0 {
+                            for (val, diff) in output_stage.drain(..) {
+                                session.give(((key.clone(), val.clone()), diff));
+                                output_layer.times.push((time.clone(), diff as isize));
+                                output_layer.vals.push((val, output_layer.times.len()));
+                            }
+
+                            output_layer.keys.push((key, output_layer.vals.len()));
+                        }
                     }
+
+                    // println!("");
+                    // println!("o_trace: {:?}", output_trace);
+                    // println!("out_layer: {:?}", output_layer);
+
+                    output_trace.insert(Rc::new(output_layer));
+
+                    // println!("o_trace: {:?}", output_trace);
+                    // println!("");
+
                 }
             }
         })
@@ -412,6 +440,46 @@ where G::Timestamp: Lattice+Ord
 //         }
 //     }
 // }
+
+struct BatchCompact<T: Ord> {
+    sorted: usize,
+    buffer: Vec<(T, isize)>,
+}
+
+impl<T: Ord> BatchCompact<T> {
+    fn new() -> BatchCompact<T> {
+        BatchCompact {
+            sorted: 0,
+            buffer: Vec::new(),
+        }
+    }
+    fn push(&mut self, element: (T, isize)) {
+        self.buffer.push(element);
+        if self.buffer.len() > self.sorted * 2 {
+            self.buffer.sort();
+            for index in 1 .. self.buffer.len() {
+                if self.buffer[index].0 == self.buffer[index-1].0 {
+                    self.buffer[index].1 += self.buffer[index-1].1;
+                    self.buffer[index-1].1 = 0;
+                }
+            }
+            self.buffer.retain(|x| x.1 != 0);
+        }
+    }
+    fn done(mut self) -> Vec<(T, isize)> {
+        if self.buffer.len() > self.sorted {
+            self.buffer.sort();
+            for index in 1 .. self.buffer.len() {
+                if self.buffer[index].0 == self.buffer[index-1].0 {
+                    self.buffer[index].1 += self.buffer[index-1].1;
+                    self.buffer[index-1].1 = 0;
+                }
+            }
+            self.buffer.retain(|x| x.1 != 0);
+        }
+        self.buffer
+    }
+}
 
 // struct BatchDistinct<T: Ord> {
 //     sorted: usize,

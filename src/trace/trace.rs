@@ -3,21 +3,23 @@
 //! A `Trace` supports searching by key, within which one can search by val, 
 
 use std::rc::Rc;
+use std::fmt::Debug;
+use std::cmp::Ordering;
 use lattice::Lattice;
+
 
 // A trace is made up of several layers, each of which are immutable collections of updates.
 //
 // The layers are Rc'd to exploit their immutability through more aggressive sharing.
-#[allow(dead_code)]
-pub struct Trace<Key: Ord, Val: Ord, Time: Lattice+Ord> {
+#[derive(Debug)]
+pub struct Trace<Key: Ord+Debug, Val: Ord+Debug, Time: Lattice+Ord+Debug> {
 	frontier: Vec<Time>,					// Times after which the times in the traces must be distinguishable.
 	layers: Vec<LayerMerge<Key, Val, Time>>	// Several possibly shared collections of updates.
 }
 
-impl<Key: Ord, Val: Ord, Time: Lattice+Ord> Trace<Key, Val, Time> {
+impl<Key: Ord+Debug+Clone, Val: Ord+Debug+Clone, Time: Lattice+Ord+Debug+Clone> Trace<Key, Val, Time> {
 
 	/// Creates a new empty trace
-	#[allow(dead_code)]
 	pub fn new(default: Time) -> Self { 
 		Trace { 
 			frontier: vec![default],
@@ -26,50 +28,84 @@ impl<Key: Ord, Val: Ord, Time: Lattice+Ord> Trace<Key, Val, Time> {
 	}
 
 	/// Returns a wholly owned cursor to navigate the trace.
-	#[allow(dead_code)]
 	pub fn cursor(&self) -> TraceCursor<Key, Val, Time> {
 		TraceCursor::new(&self.layers[..])
 	}
 
 	/// Inserts a new layer layer, merging to maintain few layers.
-	#[allow(dead_code)]
 	pub fn insert(&mut self, layer: Rc<Layer<Key, Val, Time>>) {
-		let units = layer.times.len();
-		for layer in &mut self.layers {
-			if let LayerMerge::Merging(_,_,ref mut merge) = *layer {
-				merge.work(units);
+		if layer.times.len() > 0 {
+
+			// // once we do progressive merging, do this.		
+			// let units = layer.times.len();
+			// for layer in &mut self.layers {
+			// 	if let LayerMerge::Merging(_,_,ref mut merge) = *layer {
+			// 		merge.work(units);
+			// 	}
+			// }
+
+			// while last two elements exist, both less than layer.len()
+			while self.layers.len() > 2 && self.layers[self.layers.len() - 2].len() < layer.times.len() {
+				if let Some(LayerMerge::Finished(layer1)) = self.layers.pop() {
+					if let Some(LayerMerge::Finished(layer2)) = self.layers.pop() {
+						let merge = Layer::merge(&*layer1, &*layer2, &self.frontier[..]);
+						if merge.times.len() > 0 {
+							self.layers.push(LayerMerge::Finished(Rc::new(merge)));
+						}
+					} else { panic!("wtf"); }
+				} else { panic!("wtf"); }
+			}
+
+			// unimplemented!();
+			self.layers.push(LayerMerge::Finished(layer));
+			self.layers.sort_by(|x,y| x.len().cmp(&y.len()));
+
+			while self.layers.len() > 2 && self.layers[self.layers.len() - 2].len() < 2 * self.layers[self.layers.len() - 1].len() {
+				if let Some(LayerMerge::Finished(layer1)) = self.layers.pop() {
+					if let Some(LayerMerge::Finished(layer2)) = self.layers.pop() {
+						let merge = Layer::merge(&*layer1, &*layer2, &self.frontier[..]);
+						if merge.times.len() > 0 {
+							self.layers.push(LayerMerge::Finished(Rc::new(merge)));
+						}
+					} else { panic!("wtf"); }
+				} else { panic!("wtf"); }
 			}
 		}
-
-		// unimplemented!();
-		self.layers.push(LayerMerge::Finished(layer));
 	}
 
-	#[allow(dead_code)]
 	pub fn advance_frontier(&mut self, _frontier: &[Time]) {
-		unimplemented!();
+		// unimplemented!();
+		self.frontier = _frontier.to_vec();
 	}
 }
 
-pub enum LayerMerge<Key: Ord, Val: Ord, Time: Lattice+Ord> {
+#[derive(Debug)]
+pub enum LayerMerge<Key: Ord+Debug, Val: Ord+Debug, Time: Lattice+Ord+Debug> {
 	Merging(Rc<Layer<Key, Val, Time>>, Rc<Layer<Key, Val, Time>>, Merge<Key, Val, Time>),
 	Finished(Rc<Layer<Key, Val, Time>>),
 }
 
-impl<Key: Ord, Val: Ord, Time: Lattice+Ord> LayerMerge<Key, Val, Time> {
+impl<Key: Ord+Debug, Val: Ord+Debug, Time: Lattice+Ord+Debug> LayerMerge<Key, Val, Time> {
 	fn work(&mut self, units: usize) {
 		if let LayerMerge::Merging(_,_,ref mut merge) = *self {
 			merge.work(units);
 		}
 	}
+	fn len(&self) -> usize {
+		match self {
+			&LayerMerge::Merging(ref x, ref y,_) => x.times.len() + y.times.len(),
+			&LayerMerge::Finished(ref x) => x.times.len(),
+		}
+	}
 }
 
-pub struct Merge<Key: Ord, Val: Ord, Time: Lattice+Ord> {
+#[derive(Debug)]
+pub struct Merge<Key: Ord+Debug, Val: Ord+Debug, Time: Lattice+Ord+Debug> {
 	source1: Rc<Layer<Key, Val, Time>>,
 	source2: Rc<Layer<Key, Val, Time>>,
 }
 
-impl<Key: Ord, Val: Ord, Time: Lattice+Ord> Merge<Key, Val, Time> {
+impl<Key: Ord+Debug, Val: Ord+Debug, Time: Lattice+Ord+Debug> Merge<Key, Val, Time> {
 	// merges at least `units` updates.
 	fn work(&mut self, units: usize) {
 		unimplemented!();
@@ -77,17 +113,16 @@ impl<Key: Ord, Val: Ord, Time: Lattice+Ord> Merge<Key, Val, Time> {
 }
 
 // A layer organizes data first by key, then by val, and finally by time.
-#[allow(dead_code)]
-pub struct Layer<Key: Ord, Val: Ord, Time: Lattice+Ord> {
-	keys: Vec<(Key, usize)>,		// key and offset in self.vals of final element.
-	vals: Vec<(Val, usize)>,		// val and offset in self.times of final element.
-	times: Vec<(Time, isize)>,		// time and corresponding difference.
-	desc: Description<Time>,		// describes contents of the layer (from when, mainly).
+#[derive(Debug)]
+pub struct Layer<Key: Ord+Debug, Val: Ord+Debug, Time: Lattice+Ord+Debug> {
+	pub keys: Vec<(Key, usize)>,		// key and offset in self.vals of final element.
+	pub vals: Vec<(Val, usize)>,		// val and offset in self.times of final element.
+	pub times: Vec<(Time, isize)>,		// time and corresponding difference.
+	pub desc: Description<Time>,		// describes contents of the layer (from when, mainly).
 }
 
-impl<Key: Ord, Val: Ord, Time: Lattice+Ord+Clone> Layer<Key, Val, Time> {
+impl<Key: Ord+Debug+Clone, Val: Ord+Debug+Clone, Time: Lattice+Ord+Debug+Clone> Layer<Key, Val, Time> {
 	/// Constructs a new Layer from sorted data.
-	#[allow(dead_code)]
 	pub fn new<I: Iterator<Item=(Key,Val,Time,isize)>>(mut data: I, lower: &[Time], upper: &[Time]) -> Layer<Key, Val, Time> {
 
 		let mut keys = Vec::new();
@@ -129,32 +164,220 @@ impl<Key: Ord, Val: Ord, Time: Lattice+Ord+Clone> Layer<Key, Val, Time> {
 			}
 		}
 	}
+
+
+	fn extend_from(&mut self, layer: &Self, key_off: usize, frontier: &[Time]) {
+
+		let lower = if key_off == 0 { 0 } else { layer.keys[key_off-1].1 };
+		let upper = layer.keys[key_off].1;
+
+		let vals_len = self.vals.len();
+
+		for val_index in lower .. upper {
+
+			let times_len = self.times.len();
+			let lower = if val_index == 0 { 0 } else { layer.vals[val_index-1].1 };
+			let upper = layer.vals[val_index].1;
+
+			for &(ref time, diff) in &layer.times[lower .. upper] {
+				self.times.push((time.advance_by(frontier).unwrap(), diff));
+			}
+			self.times[times_len ..].sort_by(|x,y| x.0.cmp(&y.0));
+			consolidate(&mut self.times, times_len);
+
+			if self.times.len() > times_len {
+				self.vals.push((layer.vals[val_index].0.clone(), self.times.len()));
+			}
+		}
+
+		if self.vals.len() > vals_len {
+			self.keys.push((layer.keys[key_off].0.clone(), self.vals.len()));
+		}
+	}
+
+	/// Conducts a full merge, right away. Times advanced per `frontier`.
+	pub fn merge(layer1: &Self, layer2: &Self, frontier: &[Time]) -> Self {
+
+		// println!("");
+		// println!("merging:");
+		// println!("\tlayer1.keys:\t{:?}", layer1.keys);
+		// println!("\tlayer1.vals:\t{:?}", layer1.vals);
+		// println!("\tlayer1.time:\t{:?}", layer1.times);
+		// println!("\tlayer2.keys:\t{:?}", layer2.keys);
+		// println!("\tlayer2.vals:\t{:?}", layer2.vals);
+		// println!("\tlayer2.time:\t{:?}", layer2.times);
+
+		// TODO : Figure out if lower, upper are just unions or something.
+		let mut result = Layer::new(Vec::new().into_iter(), &[], &[]);
+
+		let mut key1_off = 0;
+		let mut key2_off = 0;
+
+		while key1_off < layer1.keys.len() && key2_off < layer2.keys.len() {
+
+			match layer1.keys[key1_off].0.cmp(&layer2.keys[key2_off].0) {
+				Ordering::Less		=> {
+					result.extend_from(layer1, key1_off, frontier);
+					key1_off += 1;
+				},
+				Ordering::Equal  	=> {
+
+					let vals_len = result.vals.len();
+
+					let mut lower1 = if key1_off == 0 { 0 } else { layer1.keys[key1_off-1].1 };
+					let upper1 = layer1.keys[key1_off].1;
+
+					let mut lower2 = if key2_off == 0 { 0 } else { layer2.keys[key2_off-1].1 };
+					let upper2 = layer2.keys[key2_off].1;
+
+					while lower1 < upper1 && lower2 < upper2 {
+
+						let times_len = result.times.len();
+
+						let old_lower1 = lower1;
+						let old_lower2 = lower2;
+
+						if layer1.vals[old_lower1].0 <= layer2.vals[old_lower2].0 {
+							let t_lower = if lower1 == 0 { 0 } else { layer1.vals[lower1 - 1].1 };
+							let t_upper = layer1.vals[lower1].1;
+							for &(ref time, diff) in &layer1.times[t_lower .. t_upper] {
+								result.times.push((time.advance_by(frontier).unwrap(), diff));
+							}
+							lower1 += 1;
+						}
+
+						if layer2.vals[old_lower2].0 <= layer1.vals[old_lower1].0 {
+							let t_lower = if lower2 == 0 { 0 } else { layer2.vals[lower2 - 1].1 };
+							let t_upper = layer2.vals[lower2].1;
+							for &(ref time, diff) in &layer2.times[t_lower .. t_upper] {
+								result.times.push((time.advance_by(frontier).unwrap(), diff));
+							}		
+							lower2 += 1					
+						}
+
+						result.times[times_len ..].sort_by(|x,y| x.0.cmp(&y.0));
+						consolidate(&mut result.times, times_len);
+
+						if result.times.len() > times_len {
+							if lower1 > old_lower1 {	
+								result.vals.push((layer1.vals[old_lower1].0.clone(), result.times.len()));
+							}
+							else {
+								result.vals.push((layer2.vals[old_lower2].0.clone(), result.times.len()));								
+							}
+						}
+					}
+
+					while lower1 < upper1 {
+						let times_len = result.times.len();
+
+						let t_lower = if lower1 == 0 { 0 } else { layer1.vals[lower1 - 1].1 };
+						let t_upper = layer1.vals[lower1].1;
+						for &(ref time, diff) in &layer1.times[t_lower .. t_upper] {
+							result.times.push((time.advance_by(frontier).unwrap(), diff));
+						}
+
+						result.times[times_len ..].sort_by(|x,y| x.0.cmp(&y.0));
+						consolidate(&mut result.times, times_len);
+
+						if result.times.len() > times_len {
+							result.vals.push((layer1.vals[lower1].0.clone(), result.times.len()));
+						}
+
+						lower1 += 1;
+					}
+
+					while lower2 < upper2 {
+						let times_len = result.times.len();
+
+						let t_lower = if lower2 == 0 { 0 } else { layer2.vals[lower2 - 1].1 };
+						let t_upper = layer2.vals[lower2].1;
+						for &(ref time, diff) in &layer2.times[t_lower .. t_upper] {
+							result.times.push((time.advance_by(frontier).unwrap(), diff));
+						}
+
+						result.times[times_len ..].sort_by(|x,y| x.0.cmp(&y.0));
+						consolidate(&mut result.times, times_len);
+
+						if result.times.len() > times_len {
+							result.vals.push((layer2.vals[lower2].0.clone(), result.times.len()));
+						}
+
+						lower2 += 1;
+					}
+
+					// push key if vals pushed.
+					if result.vals.len() > vals_len {
+						result.keys.push((layer1.keys[key1_off].0.clone(), result.vals.len()));
+					}
+
+					key1_off += 1;
+					key2_off += 1;
+				},
+				Ordering::Greater	=> {
+					result.extend_from(layer2, key2_off, frontier);
+					key2_off += 1;
+				},
+			}
+		}
+
+		while key1_off < layer1.keys.len() {
+			result.extend_from(layer1, key1_off, frontier);
+			key1_off += 1;
+		}
+
+		while key2_off < layer2.keys.len() {
+			result.extend_from(layer2, key2_off, frontier);
+			key2_off += 1;
+		}
+
+		// println!("\tresult.keys:\t{:?}", result.keys);
+		// println!("\tresult.vals:\t{:?}", result.vals);
+		// println!("\tresult.time:\t{:?}", result.times);
+
+		result
+	}
 }
 
-/// Describes an interval of partially ordered times.
+fn consolidate<T: Eq+Clone>(vec: &mut Vec<(T, isize)>, off: usize) {
+	for index in (off + 1) .. vec.len() {
+		if vec[index].0 == vec[index - 1].0 {
+			vec[index].1 += vec[index - 1].1;
+			vec[index - 1].1 = 0;
+		}
+	}
+	let mut cursor = off;
+	for index in off .. vec.len() {
+		if vec[index].1 != 0 {
+			vec[cursor] = vec[index].clone();
+			cursor += 1;
+		}
+	}
+	vec.truncate(cursor);
+}
+
+/// Describes an interval of partially Ord+Debugered times.
 ///
-/// A `Description` indicates a set of partially ordered times, and a moment at which they are
+/// A `Description` indicates a set of partially Ord+Debugered times, and a moment at which they are
 /// observed. The `lower` and `upper` frontiers bound the times contained within, and the `since`
 /// frontier indicates a moment at which the times were observed. If `since` is strictly in 
 /// advance of `lower`, the contained times may be "advanced" to times which appear equivalent to
 /// any time after `since`.
-#[allow(dead_code)]
-struct Description<Time: Lattice+Ord> {
+#[derive(Debug)]
+pub struct Description<Time: Lattice+Ord+Debug> {
 	lower: Vec<Time>,	// lower frontier of contained updates.
 	upper: Vec<Time>,	// upper frontier of contained updates.
 	since: Vec<Time>,	// frontier used for update compaction.
 }
 
 /// A cursor allowing navigation of a trace.
-#[allow(dead_code)]
-pub struct TraceCursor<Key: Ord, Val: Ord, Time: Lattice+Ord> {
+pub struct TraceCursor<Key: Ord+Debug, Val: Ord+Debug, Time: Lattice+Ord+Debug> {
 	layers: Vec<LayerCursor<Key, Val, Time>>,	// cursors for each layer.
 	dirty: usize,								// number of consumed layers.
 }
 
-impl<Key: Ord, Val: Ord, Time: Lattice+Ord> TraceCursor<Key, Val, Time> {
+impl<Key: Ord+Debug, Val: Ord+Debug, Time: Lattice+Ord+Debug> TraceCursor<Key, Val, Time> {
 
-	#[allow(dead_code)]
 	fn new(layers: &[LayerMerge<Key, Val, Time>]) -> TraceCursor<Key, Val, Time> {
 		let mut cursors = Vec::new();
 		for layer in layers {
@@ -164,15 +387,18 @@ impl<Key: Ord, Val: Ord, Time: Lattice+Ord> TraceCursor<Key, Val, Time> {
 					cursors.push(LayerCursor::new(layer2.clone())); 
 				}
 				&LayerMerge::Finished(ref layer) => { 
+					assert!(layer.times.len() > 0);
 					cursors.push(LayerCursor::new(layer.clone())); 
 				}
 			}
 		}
+
+		cursors.sort_by(|x,y| x.key().cmp(&y.key()));
+
 		TraceCursor { layers: cursors, dirty: 0 }
 	}
 
 	/// Advances the cursor to the next key, providing a view if the key exists.
-	#[allow(dead_code)]
 	pub fn next_key<'a>(&'a mut self) -> Option<KeyView<'a, Key, Val, Time>> {
 		for index in 0 .. self.dirty { self.layers[index].step_key(); }
 		self.tidy_keys();
@@ -192,8 +418,15 @@ impl<Key: Ord, Val: Ord, Time: Lattice+Ord> TraceCursor<Key, Val, Time> {
 	/// The existence of the key indicates that data exist, however, and that the value 
 	/// cursor will return some values, but updates across multiple layers may cancel with 
 	/// each other.
-	#[allow(dead_code)]
 	pub fn seek_key<'a>(&'a mut self, key: &Key) -> Option<KeyView<'a, Key, Val, Time>> {
+
+		// println!();
+		// println!("seeking key: {:?}", key);
+		// println!("self.layers.len(): {}", self.layers.len());
+
+		// for index in 0 .. self.layers.len() {
+		// 	println!("  key: {:?}", self.layers[index].key());
+		// }
 
 		let mut dirty = 0;
 		while dirty < self.layers.len() && self.layers[dirty].key() < key {
@@ -203,6 +436,9 @@ impl<Key: Ord, Val: Ord, Time: Lattice+Ord> TraceCursor<Key, Val, Time> {
 		assert!(dirty >= self.dirty);
 		self.dirty = dirty;
 		self.tidy_keys();
+		// println!("self.layers.len(): {} (post-tidy)", self.layers.len());
+		// println!("layer: {:?}", self.layers[0].layer.keys);
+		// println!("found_key: {:?}", self.layers[0].key());
 
 		if self.layers.len() > 0 && self.layers[0].key() == key {
 			self.dirty = 1 + self.layers[1..].iter().take_while(|x| x.key() == self.layers[0].key()).count();
@@ -215,7 +451,6 @@ impl<Key: Ord, Val: Ord, Time: Lattice+Ord> TraceCursor<Key, Val, Time> {
 
 	pub fn peek_key(&mut self) -> Option<&Key> {
 		self.tidy_keys();
-
 		if self.layers.len() > 0 {
 			Some(&self.layers[0].key())
 		}
@@ -230,7 +465,6 @@ impl<Key: Ord, Val: Ord, Time: Lattice+Ord> TraceCursor<Key, Val, Time> {
 	/// advance any cursor that has been previously used, and perhaps more in the case of 
 	/// `seek_key`. Having done so, we need to re-introduce the invariant that `self.layers`
 	/// contains only layers with valid keys, and is sorted by those keys.
-	#[allow(dead_code)]
 	fn tidy_keys(&mut self) {
 		let mut valid = 0; 
 		while valid < self.dirty {
@@ -259,15 +493,13 @@ impl<Key: Ord, Val: Ord, Time: Lattice+Ord> TraceCursor<Key, Val, Time> {
 }
 
 /// Wraps a `TraceCursor` and provides access to the values of the current key.
-#[allow(dead_code)]
-pub struct KeyView<'a, Key: Ord+'a, Val: Ord+'a, Time: Lattice+Ord+'a> {
+pub struct KeyView<'a, Key: Ord+Debug+'a, Val: Ord+Debug+'a, Time: Lattice+Ord+Debug+'a> {
 	layers: &'a mut [LayerCursor<Key, Val, Time>],	// reference to source data.
 	dirty: usize,									// number of consumed values.
 }
 
-impl<'a, Key: Ord+'a, Val: Ord+'a, Time: Lattice+Ord+'a> KeyView<'a, Key, Val, Time> {
+impl<'a, Key: Ord+Debug+'a, Val: Ord+Debug+'a, Time: Lattice+Ord+Debug+'a> KeyView<'a, Key, Val, Time> {
 
-	#[allow(dead_code)]
 	fn new(layers: &'a mut [LayerCursor<Key, Val, Time>]) -> KeyView<'a, Key, Val, Time> {
 		layers.sort_by(|x,y| x.val().cmp(&y.val()));
 		KeyView {
@@ -277,12 +509,11 @@ impl<'a, Key: Ord+'a, Val: Ord+'a, Time: Lattice+Ord+'a> KeyView<'a, Key, Val, T
 	}
 
 	/// Returns the key associated with the `KeyView`.
-	#[allow(dead_code)]
 	pub fn key(&self) -> &Key { self.layers[0].key() }
 
 	/// Advances the key view to the next value, returns a view if it exists.
-	#[allow(dead_code)]
 	pub fn next_val(&mut self) -> Option<ValView<Key, Val, Time>> {
+
 		for index in 0 .. self.dirty { self.layers[index].step_val(); }
 		self.tidy_vals();
 
@@ -295,7 +526,6 @@ impl<'a, Key: Ord+'a, Val: Ord+'a, Time: Lattice+Ord+'a> KeyView<'a, Key, Val, T
 		}
 	}
 	/// Advances the key view to the sought value, returns a view if it exists.
-	#[allow(dead_code)]
 	pub fn seek_val<'b>(&'b mut self, val: &Val) -> Option<ValView<'b, Key, Val, Time>> { 
 		let mut dirty = 0;
 		while dirty < self.layers.len() && self.layers[dirty].val() < val {
@@ -315,7 +545,17 @@ impl<'a, Key: Ord+'a, Val: Ord+'a, Time: Lattice+Ord+'a> KeyView<'a, Key, Val, T
 		}
 	}
 
-	#[allow(dead_code)]
+	pub fn peek_val(&mut self) -> Option<&Val> {
+		self.tidy_vals();
+		if self.layers.len() > 0 {
+			Some(&self.layers[0].val())
+		}
+		else {
+			None
+		}
+	}
+
+
 	fn tidy_vals(&mut self) {
 		let mut valid = 0; 
 		while valid < self.dirty {
@@ -354,28 +594,24 @@ impl<'a, Key: Ord+'a, Val: Ord+'a, Time: Lattice+Ord+'a> KeyView<'a, Key, Val, T
 }
 
 /// Wrapper around a fixed value, allows mapping across time diffs.
-#[allow(dead_code)]
-pub struct ValView<'a, Key: Ord+'a, Val: Ord+'a, Time: Lattice+Ord+'a> {
+pub struct ValView<'a, Key: Ord+Debug+'a, Val: Ord+Debug+'a, Time: Lattice+Ord+Debug+'a> {
 	layers: &'a mut [LayerCursor<Key, Val, Time>],	// reference to source data.
 }
 
-impl<'a, Key: Ord+'a, Val: Ord+'a, Time: Lattice+Ord+'a> ValView<'a, Key, Val, Time> {
+impl<'a, Key: Ord+Debug+'a, Val: Ord+Debug+'a, Time: Lattice+Ord+Debug+'a> ValView<'a, Key, Val, Time> {
 
 	// constructs a new trace from a 
-	#[allow(dead_code)]
-	fn new(layers: &'a mut [LayerCursor<Key, Val, Time>]) -> ValView<'a, Key, Val, Time> {
+		fn new(layers: &'a mut [LayerCursor<Key, Val, Time>]) -> ValView<'a, Key, Val, Time> {
 		ValView {
 			layers: layers,
 		}
 	} 
 
 	/// Returns the value associated with the `ValView`.
-	#[allow(dead_code)]
-	pub fn val(&self) -> &Val { self.layers[0].val() }
+		pub fn val(&self) -> &Val { self.layers[0].val() }
 
 	/// Applies `logic` to each time associated with the value.
-	#[allow(dead_code)]
-	pub fn map<L: FnMut(&(Time, isize))>(&self, mut logic: L) {
+		pub fn map<L: FnMut(&(Time, isize))>(&self, mut logic: L) {
 		for layer in self.layers.iter() {
 			for times in layer.times() {
 				logic(times)
@@ -385,17 +621,16 @@ impl<'a, Key: Ord+'a, Val: Ord+'a, Time: Lattice+Ord+'a> ValView<'a, Key, Val, T
 }
 
 /// A cursor for navigating a single layer.
-#[allow(dead_code)]
-struct LayerCursor<Key: Ord, Val: Ord, Time: Lattice+Ord> {
+#[derive(Debug)]
+struct LayerCursor<Key: Ord+Debug, Val: Ord+Debug, Time: Lattice+Ord+Debug> {
 	key_slice: (usize, usize),
 	val_slice: (usize, usize),
 	layer: Rc<Layer<Key, Val, Time>>,
 }
 
-impl<Key: Ord, Val: Ord, Time: Lattice+Ord> LayerCursor<Key, Val, Time> {
+impl<Key: Ord+Debug, Val: Ord+Debug, Time: Lattice+Ord+Debug> LayerCursor<Key, Val, Time> {
 
 	// creates a new LayerCursor from non-empty layer data. 
-	#[allow(dead_code)]
 	fn new(layer: Rc<Layer<Key, Val, Time>>) -> LayerCursor<Key, Val, Time> {
 		LayerCursor {
 			key_slice: (0, layer.keys.len()),
@@ -404,18 +639,15 @@ impl<Key: Ord, Val: Ord, Time: Lattice+Ord> LayerCursor<Key, Val, Time> {
 		}
 	}
 
-	#[allow(dead_code)]
 	fn key(&self) -> &Key { 
 		debug_assert!(self.key_valid());
 		&self.layer.keys[self.key_slice.0].0
 	 }
-	#[allow(dead_code)]
 	fn val(&self) -> &Val { 
 		debug_assert!(self.key_valid());
 		debug_assert!(self.val_valid());
 		&self.layer.vals[self.val_slice.0].0
 	}
-	#[allow(dead_code)]
 	fn times(&self) -> &[(Time, isize)] {
 		debug_assert!(self.key_valid());
 		debug_assert!(self.val_valid());
@@ -424,17 +656,16 @@ impl<Key: Ord, Val: Ord, Time: Lattice+Ord> LayerCursor<Key, Val, Time> {
 		&self.layer.times[lower .. upper]
 	}
 
-	#[allow(dead_code)]
 	fn key_valid(&self) -> bool { self.key_slice.0 < self.key_slice.1 }
-	#[allow(dead_code)]
 	fn val_valid(&self) -> bool { self.val_slice.0 < self.val_slice.1 }
 
 	// advances key slice, updates val slice, and returns whether cursor is valid.
-	#[allow(dead_code)]
 	fn step_key(&mut self) -> bool {
 		self.key_slice.0 += 1;
 		if self.key_valid() {
-			self.val_slice = (self.val_slice.1, self.layer.keys[self.key_slice.0].1);
+			let lower = if self.key_slice.0 > 0 { self.layer.keys[self.key_slice.0-1].1 } else { 0 };
+			let upper = self.layer.keys[self.key_slice.0].1;
+			self.val_slice = (lower, upper);
 			true
 		}
 		else {
@@ -445,12 +676,13 @@ impl<Key: Ord, Val: Ord, Time: Lattice+Ord> LayerCursor<Key, Val, Time> {
 	}
 
 	// advances key slice, updates val slice, and returns whether cursor is valid.
-	#[allow(dead_code)]
 	fn seek_key(&mut self, key: &Key) -> bool {
 		let step = advance(&self.layer.keys[self.key_slice.0 .. self.key_slice.1], |k| k.0.lt(key));
 		self.key_slice.0 += step;
 		if self.key_valid() {
-			self.val_slice = (self.val_slice.1, self.layer.keys[self.key_slice.0].1);
+			let lower = if self.key_slice.0 > 0 { self.layer.keys[self.key_slice.0-1].1 } else { 0 };
+			let upper = self.layer.keys[self.key_slice.0].1;
+			self.val_slice = (lower, upper);
 			true			
 		}
 		else {
@@ -460,7 +692,6 @@ impl<Key: Ord, Val: Ord, Time: Lattice+Ord> LayerCursor<Key, Val, Time> {
 		}
 	}
 
-	#[allow(dead_code)]
 	fn step_val(&mut self) -> bool {
 		self.val_slice.0 += 1;
 		if self.val_valid() {
@@ -471,7 +702,6 @@ impl<Key: Ord, Val: Ord, Time: Lattice+Ord> LayerCursor<Key, Val, Time> {
 			false
 		}
 	}
-	#[allow(dead_code)]
 	fn seek_val(&mut self, val: &Val) -> bool {
 		let step = advance(&self.layer.vals[self.val_slice.0 .. self.val_slice.1], |v| v.0.lt(val));
 		self.val_slice.0 += step;
@@ -493,7 +723,6 @@ impl<Key: Ord, Val: Ord, Time: Lattice+Ord> LayerCursor<Key, Val, Time> {
 /// and the slice. This allows `advance` to use exponential search to 
 /// count the number of elements in time logarithmic in the result.
 // #[inline(never)]
-#[allow(dead_code)]
 pub fn advance<T, F: Fn(&T)->bool>(slice: &[T], function: F) -> usize {
 
     // start with no advance
