@@ -98,7 +98,7 @@ where G::Timestamp: Lattice+Ord
 
                         // track down existing times, join with `time` and close under join.
                         stash.push(time.clone());
-                        if let Some(mut key_view) = trace_cursor.seek_key(&layer.keys[key_idx].0) {
+                        if let Some(mut key_view) = trace_cursor.seek_key(&layer.keys[key_idx]) {
                             while let Some(val_view) = key_view.next_val() {
                                 val_view.map(|&(ref t, _d)| {
                                     let joined = time.join(t);
@@ -119,7 +119,7 @@ where G::Timestamp: Lattice+Ord
                                 }
                                 Vec::new()
                             })
-                            .push(layer.keys[key_idx].0.clone());
+                            .push(layer.keys[key_idx].clone());
                         }
                         stash.clear();
                     }
@@ -190,7 +190,8 @@ where G::Timestamp: Lattice+Ord
                                 output_layer.vals.push((val, output_layer.times.len()));
                             }
 
-                            output_layer.keys.push((key, output_layer.vals.len()));
+                            output_layer.keys.push(key);
+                            output_layer.offs.push(output_layer.vals.len());
                         }
                     }
 
@@ -416,19 +417,23 @@ where G::Timestamp: Lattice+Ord
 //     }
 // }
 
-struct BatchCompact<T: Ord> {
+/// Compacts `(T, isize)` pairs lazily.
+pub struct BatchCompact<T: Ord> {
     sorted: usize,
     buffer: Vec<(T, isize)>,
 }
 
 impl<T: Ord> BatchCompact<T> {
-    fn new() -> BatchCompact<T> {
+    /// Allocates a new batch compacter.
+    pub fn new() -> BatchCompact<T> {
         BatchCompact {
             sorted: 0,
             buffer: Vec::new(),
         }
     }
-    fn push(&mut self, element: (T, isize)) {
+
+    /// Adds an element to the batch compacter.
+    pub fn push(&mut self, element: (T, isize)) {
         self.buffer.push(element);
         // if self.buffer.len() > ::std::cmp::max(self.sorted * 2, 1024) {
         //     self.buffer.sort();
@@ -442,7 +447,8 @@ impl<T: Ord> BatchCompact<T> {
         //     self.sorted = self.buffer.len();
         // }
     }
-    fn done(mut self) -> Vec<(T, isize)> {
+    /// Finishes compaction, returns results.
+    pub fn done(mut self) -> Vec<(T, isize)> {
         if self.buffer.len() > self.sorted {
             self.buffer.sort();
             for index in 1 .. self.buffer.len() {
