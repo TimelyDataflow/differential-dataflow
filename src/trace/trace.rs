@@ -32,33 +32,23 @@ impl<Key: Ord+Debug+Clone, Val: Ord+Debug+Clone, Time: Lattice+Ord+Debug+Clone> 
 		TraceCursor::new(&self.layers[..])
 	}
 
-	/// Inserts a new layer layer, merging to maintain few layers.
 	pub fn insert(&mut self, layer: Rc<Layer<Key, Val, Time>>) {
+
 		if layer.times.len() > 0 {
-
-			// // once we do progressive merging, do this.		
-			// let units = layer.times.len();
-			// for layer in &mut self.layers {
-			// 	if let LayerMerge::Merging(_,_,ref mut merge) = *layer {
-			// 		merge.work(units);
-			// 	}
-			// }
-
 			// while last two elements exist, both less than layer.len()
 			while self.layers.len() >= 2 && self.layers[self.layers.len() - 2].len() < layer.times.len() {
-				if let Some(LayerMerge::Finished(layer1)) = self.layers.pop() {
-					if let Some(LayerMerge::Finished(layer2)) = self.layers.pop() {
+				match (self.layers.pop(), self.layers.pop()) {
+					(Some(LayerMerge::Finished(layer1)), Some(LayerMerge::Finished(layer2))) => {
 						let merge = Layer::merge(&*layer1, &*layer2, &self.frontier[..]);
 						if merge.times.len() > 0 {
 							self.layers.push(LayerMerge::Finished(Rc::new(merge)));
 						}
-					} else { panic!("wtf"); }
-				} else { panic!("wtf"); }
+					},
+					_ => { panic!("found unfinished merge; debug!"); }
+				}
 			}
 
-			// unimplemented!();
 			self.layers.push(LayerMerge::Finished(layer));
-			// self.layers.sort_by(|x,y| y.len().cmp(&x.len()));
 
 			while self.layers.len() >= 2 && self.layers[self.layers.len() - 2].len() < 2 * self.layers[self.layers.len() - 1].len() {
 				if let Some(LayerMerge::Finished(layer1)) = self.layers.pop() {
@@ -73,24 +63,135 @@ impl<Key: Ord+Debug+Clone, Val: Ord+Debug+Clone, Time: Lattice+Ord+Debug+Clone> 
 		}
 	}
 
-	pub fn advance_frontier(&mut self, _frontier: &[Time]) {
-		// unimplemented!();
-		self.frontier = _frontier.to_vec();
+	/// Inserts a new layer layer, merging to maintain few layers.
+	pub fn _prog_insert(&mut self, layer: Rc<Layer<Key, Val, Time>>) {
+
+		// TODO : we want to support empty layers to allow descriptions to advance.
+		if layer.times.len() > 0 {
+
+			let effort = 8 * layer.times.len();
+
+			// apply effort to existing merges.
+			// when a merge finishes, consider merging it with the preceding layer.
+			let mut index = 0;
+			while index < self.layers.len() {
+
+				let mut units = self.layers[index].work(effort);
+				if units > 0 {
+
+					if self.layers[index].len() == 0 {
+						self.layers.remove(index);
+					}
+					else {
+						while units > 0 && index > 0 && index < self.layers.len() && self.layers[index-1].len() < 2 * self.layers[index].len() {
+
+							// we have just completed a merge, and we have a preceding small-enough layer.
+							let layer1 = ::std::mem::replace(&mut self.layers[index-1], LayerMerge::Finished(Rc::new(Layer::empty())));
+							let layer2 = self.layers.remove(index);
+
+							match (layer1, layer2) {
+								(LayerMerge::Finished(layer1), LayerMerge::Finished(layer2)) => {
+									self.layers[index-1] = LayerMerge::merge(layer1, layer2, &self.frontier[..]);
+								},
+								_ => { panic!("uh oh!"); }
+							}
+
+							index -= 1;
+							units = self.layers[index].work(units);
+							if self.layers[index].len() == 0 {
+								self.layers.remove(index);
+							}
+						}
+					}
+				}
+				else {
+					index += 1;
+				}
+			}
+
+			// while last two elements exist, both less than layer.len()
+			while self.layers.len() >= 2 && self.layers[self.layers.len() - 2].len() < layer.times.len() {
+				match (self.layers.pop(), self.layers.pop()) {
+					(Some(LayerMerge::Finished(layer1)), Some(LayerMerge::Finished(layer2))) => {
+						let merge = Layer::merge(&*layer1, &*layer2, &self.frontier[..]);
+						if merge.times.len() > 0 {
+							self.layers.push(LayerMerge::Finished(Rc::new(merge)));
+						}
+					},
+					_ => { panic!("found unfinished merge; debug!"); }
+				}
+			}
+
+			// now that `layer` is smallest, push it on.
+			self.layers.push(LayerMerge::Finished(layer));
+
+			// if we need to start a merge, let's do that.
+			if self.layers.len() >= 2 && self.layers[self.layers.len() - 2].len() < 2 * self.layers[self.layers.len() - 1].len() {
+				match (self.layers.pop(), self.layers.pop()) {
+					(Some(LayerMerge::Finished(layer1)), Some(LayerMerge::Finished(layer2))) => {
+						self.layers.push(LayerMerge::merge(layer1, layer2, &self.frontier[..]));
+					},
+					_ => { panic!("found unfinished merge; debug!"); }
+				}
+			}
+		}
+	}
+
+	/// Advances the frontier of the trace, allowing compaction of like times.
+	pub fn advance_frontier(&mut self, frontier: &[Time]) {
+		self.frontier = frontier.to_vec();
 	}
 }
 
+/// Layer wrapper for either layers and layer merges in progress.
 #[derive(Debug)]
 pub enum LayerMerge<Key: Ord+Debug, Val: Ord+Debug, Time: Lattice+Ord+Debug> {
+	/// A merge in progress, contain references to the two source layers and the merge state.
 	Merging(Rc<Layer<Key, Val, Time>>, Rc<Layer<Key, Val, Time>>, Merge<Key, Val, Time>),
+	/// A single layer of a merge that was completed or never started.
 	Finished(Rc<Layer<Key, Val, Time>>),
 }
 
-impl<Key: Ord+Debug, Val: Ord+Debug, Time: Lattice+Ord+Debug> LayerMerge<Key, Val, Time> {
-	fn work(&mut self, units: usize) {
-		if let LayerMerge::Merging(_,_,ref mut merge) = *self {
-			merge.work(units);
+impl<Key: Ord+Debug+Clone, Val: Ord+Debug+Clone, Time: Lattice+Ord+Debug+Clone> LayerMerge<Key, Val, Time> {
+
+	/// Creates a new merge object for a pair of layers.
+	fn merge(layer1: Rc<Layer<Key, Val, Time>>, layer2: Rc<Layer<Key, Val, Time>>, frontier: &[Time]) -> Self {
+
+		// bold to assert, but let's see why not.
+		assert_eq!(layer1.desc.upper, layer2.desc.lower);
+
+		LayerMerge::Merging(layer1.clone(), layer2.clone(), Merge {
+			source1: LayerCursor::new(layer1),
+			source2: LayerCursor::new(layer2),
+			result: Layer::empty(),
+			frontier: frontier.to_vec(),
+			worked: 0,
+			target: 0,
+		})
+
+	}
+
+	/// Merges at least `units` tuples; returns "left over" effort.
+	fn work(&mut self, units: usize) -> usize {
+		let result = if let LayerMerge::Merging(_,_,ref mut merge) = *self {
+			merge.work(units)
+		}
+		else {
+			None
+		};
+
+		if let Some((result, remaining)) = result {
+			*self = LayerMerge::Finished(Rc::new(result));
+			remaining
+		}
+		else {
+			0
 		}
 	}
+
+	/// Number of tuples, or sum of source tuples for merges in progress.
+	///
+	/// The length may decrease when a merge completes and cancelation or consolidation occurs.
 	fn len(&self) -> usize {
 		match self {
 			&LayerMerge::Merging(ref x, ref y,_) => x.times.len() + y.times.len(),
@@ -99,27 +200,191 @@ impl<Key: Ord+Debug, Val: Ord+Debug, Time: Lattice+Ord+Debug> LayerMerge<Key, Va
 	}
 }
 
+/// A merge in progress.
+///
+/// This structure represents the state for a merge in progress, used by progressive merging.
 #[derive(Debug)]
 pub struct Merge<Key: Ord+Debug, Val: Ord+Debug, Time: Lattice+Ord+Debug> {
-	source1: Rc<Layer<Key, Val, Time>>,
-	source2: Rc<Layer<Key, Val, Time>>,
+	source1: LayerCursor<Key, Val, Time>,
+	source2: LayerCursor<Key, Val, Time>,
+	result: Layer<Key, Val, Time>,
+	frontier: Vec<Time>,
+	worked: usize,
+	target: usize,
 }
 
-impl<Key: Ord+Debug, Val: Ord+Debug, Time: Lattice+Ord+Debug> Merge<Key, Val, Time> {
-	// merges at least `units` updates.
-	fn work(&mut self, units: usize) {
-		unimplemented!();
+impl<Key: Ord+Debug+Clone, Val: Ord+Debug+Clone, Time: Lattice+Ord+Debug+Clone> Merge<Key, Val, Time> {
+
+	/// Merges at least `units` source tuples. Returns the layer and "left over" effort when the merge completes.
+	fn work(&mut self, units: usize) -> Option<(Layer<Key, Val, Time>, usize)> {
+
+		self.target += units;
+		while self.source1.key_valid() && self.source2.key_valid() && self.worked < self.target {
+
+			// note where we start to account for amont of work done.
+			let times_pos = (self.source1.val_slice.0, self.source2.val_slice.0);
+
+			// compare keys to determine what work to do next.
+			match self.source1.key().cmp(&self.source2.key()) {
+				Ordering::Less => 		{
+					self.result.extend_from(&self.source1.layer, self.source1.key_slice.0, &self.frontier[..]);
+					self.source1.step_key();
+				},
+				Ordering::Equal => 		{
+
+					let vals_len = self.result.vals.len();
+
+					// we will do all the work, rather than monitor self.worked.
+					while self.source1.val_valid() && self.source2.val_valid() {
+
+						let times_len = self.result.times.len();
+
+						match self.source1.val().cmp(&self.source2.val()) {
+							Ordering::Less => 		{
+
+								for &(ref time, diff) in self.source1.times() {
+									self.result.times.push((time.advance_by(&self.frontier).unwrap(), diff));
+								}
+								consolidate(&mut self.result.times, times_len);
+
+								// if we pushed times, push the value.
+								if self.result.times.len() > times_len {
+									self.result.vals.push((self.source1.val().clone(), self.result.times.len()));
+								}
+
+								self.source1.step_val();
+							},
+							Ordering::Equal => 		{
+
+								for &(ref time, diff) in self.source1.times() {
+									self.result.times.push((time.advance_by(&self.frontier[..]).unwrap(), diff));
+								}
+								for &(ref time, diff) in self.source2.times() {
+									self.result.times.push((time.advance_by(&self.frontier[..]).unwrap(), diff));
+								}
+								consolidate(&mut self.result.times, times_len);
+
+								// if we pushed times, push the value.
+								if self.result.times.len() > times_len {
+									self.result.vals.push((self.source1.val().clone(), self.result.times.len()));
+								}
+
+								self.source1.step_val();
+								self.source2.step_val();
+							},
+							Ordering::Greater => 	{
+
+								for &(ref time, diff) in self.source2.times() {
+									self.result.times.push((time.advance_by(&self.frontier[..]).unwrap(), diff));
+								}
+								consolidate(&mut self.result.times, times_len);
+
+								// if we pushed times, push the value.
+								if self.result.times.len() > times_len {
+									self.result.vals.push((self.source2.val().clone(), self.result.times.len()));
+								}
+
+								self.source2.step_val();
+							},
+						}
+					}
+
+					while self.source1.val_valid() {
+						let times_len = self.result.times.len();
+						for &(ref time, diff) in self.source1.times() {
+							self.result.times.push((time.advance_by(&self.frontier).unwrap(), diff));
+						}
+						consolidate(&mut self.result.times, times_len);
+
+						// if we pushed times, push the value.
+						if self.result.times.len() > times_len {
+							self.result.vals.push((self.source1.val().clone(), self.result.times.len()));
+						}
+
+						self.source1.step_val();
+					}
+
+					while self.source2.val_valid() {
+						let times_len = self.result.times.len();
+						for &(ref time, diff) in self.source2.times() {
+							self.result.times.push((time.advance_by(&self.frontier).unwrap(), diff));
+						}
+						consolidate(&mut self.result.times, times_len);
+
+						// if we pushed times, push the value.
+						if self.result.times.len() > times_len {
+							self.result.vals.push((self.source2.val().clone(), self.result.times.len()));
+						}
+
+						self.source2.step_val();
+					}
+
+					// if we pushed values, push the key.
+					if self.result.vals.len() > vals_len {
+						self.result.keys.push(self.source1.key().clone());
+						self.result.offs.push(self.result.vals.len());
+					}
+
+					self.source1.step_key();
+					self.source2.step_key();
+				},
+				Ordering::Greater =>	{
+					self.result.extend_from(&self.source2.layer, self.source2.key_slice.0, &self.frontier[..]);
+					self.source2.step_key();		
+				},
+			}
+
+			self.worked += self.source1.val_slice.0 - times_pos.0;
+			self.worked += self.source2.val_slice.0 - times_pos.1;
+		}
+
+		// if self.source2 drained, get to draining self.source1.
+		while self.source1.key_valid() && self.worked < self.target {
+			let time_pos = self.source1.val_slice.0;
+			self.result.extend_from(&self.source1.layer, self.source1.key_slice.0, &self.frontier[..]);
+			self.worked += self.source1.val_slice.0 - time_pos;
+			self.source1.step_key();
+		}
+
+		// if self.source1 drained, get to draining self.source2.
+		while self.source2.key_valid() && self.worked < self.target {
+			let time_pos = self.source2.val_slice.0;
+			self.result.extend_from(&self.source2.layer, self.source2.key_slice.0, &self.frontier[..]);
+			self.worked += self.source2.val_slice.0 - time_pos;
+			self.source2.step_key();
+		}
+
+		// we are done! finish things up
+		if !self.source1.key_valid() && !self.source2.key_valid() {
+
+			// println!("\nmerge complete");
+			// println!("layer1: {:?}", self.source1.layer);
+			// println!("layer2: {:?}", self.source2.layer);
+			// println!("result: {:?}", self.result);
+
+			let empty_layer = Layer::new(Vec::new().into_iter(), &[], &[]);
+			let surplus = if self.target > self.worked { self.target - self.worked + 1 } else { 1 };
+			Some((::std::mem::replace(&mut self.result, empty_layer), surplus))
+		}
+		else {
+			None
+		}
 	}
 }
 
-// A layer organizes data first by key, then by val, and finally by time.
+/// An immutable collection of update tuples, from a contiguous interval of logical times.
 #[derive(Debug)]
 pub struct Layer<Key: Ord+Debug, Val: Ord+Debug, Time: Lattice+Ord+Debug> {
-	pub keys: Vec<Key>,					// key and offset in self.vals of final element.
-	pub offs: Vec<usize>,				//  this : \----/
-	pub vals: Vec<(Val, usize)>,		// val and offset in self.times of final element.
-	pub times: Vec<(Time, isize)>,		// time and corresponding difference.
-	pub desc: Description<Time>,		// describes contents of the layer (from when, mainly).
+	/// Sorted list of keys with at least one update tuple.
+	pub keys: Vec<Key>,
+	/// Offsets in `self.vals` where the corresponding key *stops*.
+	pub offs: Vec<usize>,
+	/// Values and offsets in `self.times`.
+	pub vals: Vec<(Val, usize)>,
+	/// Times and differences, in correspondence with update tuples.
+	pub times: Vec<(Time, isize)>,
+	/// Description of the update times this layer represents.
+	pub desc: Description<Time>,
 }
 
 impl<Key: Ord+Debug+Clone, Val: Ord+Debug+Clone, Time: Lattice+Ord+Debug+Clone> Layer<Key, Val, Time> {
@@ -170,6 +435,12 @@ impl<Key: Ord+Debug+Clone, Val: Ord+Debug+Clone, Time: Lattice+Ord+Debug+Clone> 
 		}
 	}
 
+	/// Returns an empty new layer.
+	pub fn empty() -> Layer<Key, Val, Time> {
+		Layer::new(Vec::new().into_iter(), &[], &[])
+	}
+
+	/// Extends a layer from a key in another layer.
 	fn extend_from(&mut self, layer: &Self, key_off: usize, frontier: &[Time]) {
 
 		let lower = if key_off == 0 { 0 } else { layer.offs[key_off-1] };
@@ -186,7 +457,6 @@ impl<Key: Ord+Debug+Clone, Val: Ord+Debug+Clone, Time: Lattice+Ord+Debug+Clone> 
 			for &(ref time, diff) in &layer.times[lower .. upper] {
 				self.times.push((time.advance_by(frontier).unwrap(), diff));
 			}
-			self.times[times_len ..].sort_by(|x,y| x.0.cmp(&y.0));
 			consolidate(&mut self.times, times_len);
 
 			if self.times.len() > times_len {
@@ -203,16 +473,8 @@ impl<Key: Ord+Debug+Clone, Val: Ord+Debug+Clone, Time: Lattice+Ord+Debug+Clone> 
 	/// Conducts a full merge, right away. Times advanced per `frontier`.
 	pub fn merge(layer1: &Self, layer2: &Self, frontier: &[Time]) -> Self {
 
-		// println!("");
-		// println!("merging:");
-		// println!("\tlayer1.keys:\t{:?}", layer1.keys);
-		// println!("\tlayer1.vals:\t{:?}", layer1.vals);
-		// println!("\tlayer1.time:\t{:?}", layer1.times);
-		// println!("\tlayer2.keys:\t{:?}", layer2.keys);
-		// println!("\tlayer2.vals:\t{:?}", layer2.vals);
-		// println!("\tlayer2.time:\t{:?}", layer2.times);
-
 		// TODO : Figure out if lower, upper are just unions or something.
+		// NOTE : The should be, as we only merge contiguous time slices.
 		let mut result = Layer::new(Vec::new().into_iter(), &[], &[]);
 
 		result.keys = Vec::with_capacity(layer1.keys.len() + layer2.keys.len());
@@ -265,7 +527,6 @@ impl<Key: Ord+Debug+Clone, Val: Ord+Debug+Clone, Time: Lattice+Ord+Debug+Clone> 
 							lower2 += 1					
 						}
 
-						result.times[times_len ..].sort_by(|x,y| x.0.cmp(&y.0));
 						consolidate(&mut result.times, times_len);
 
 						if result.times.len() > times_len {
@@ -287,7 +548,6 @@ impl<Key: Ord+Debug+Clone, Val: Ord+Debug+Clone, Time: Lattice+Ord+Debug+Clone> 
 							result.times.push((time.advance_by(frontier).unwrap(), diff));
 						}
 
-						result.times[times_len ..].sort_by(|x,y| x.0.cmp(&y.0));
 						consolidate(&mut result.times, times_len);
 
 						if result.times.len() > times_len {
@@ -306,7 +566,6 @@ impl<Key: Ord+Debug+Clone, Val: Ord+Debug+Clone, Time: Lattice+Ord+Debug+Clone> 
 							result.times.push((time.advance_by(frontier).unwrap(), diff));
 						}
 
-						result.times[times_len ..].sort_by(|x,y| x.0.cmp(&y.0));
 						consolidate(&mut result.times, times_len);
 
 						if result.times.len() > times_len {
@@ -342,15 +601,13 @@ impl<Key: Ord+Debug+Clone, Val: Ord+Debug+Clone, Time: Lattice+Ord+Debug+Clone> 
 			key2_off += 1;
 		}
 
-		// println!("\tresult.keys:\t{:?}", result.keys);
-		// println!("\tresult.vals:\t{:?}", result.vals);
-		// println!("\tresult.time:\t{:?}", result.times);
-
 		result
 	}
 }
 
-pub fn consolidate<T: Eq+Clone>(vec: &mut Vec<(T, isize)>, off: usize) {
+/// Scans `vec[off..]` and consolidates differences of adjacent equivalent elements.
+pub fn consolidate<T: Ord+Clone>(vec: &mut Vec<(T, isize)>, off: usize) {
+	vec[off..].sort_by(|x,y| x.0.cmp(&y.0));
 	for index in (off + 1) .. vec.len() {
 		if vec[index].0 == vec[index - 1].0 {
 			vec[index].1 += vec[index - 1].1;
@@ -369,16 +626,19 @@ pub fn consolidate<T: Eq+Clone>(vec: &mut Vec<(T, isize)>, off: usize) {
 
 /// Describes an interval of partially Ord+Debugered times.
 ///
-/// A `Description` indicates a set of partially Ord+Debugered times, and a moment at which they are
+/// A `Description` indicates a set of partially ordered times, and a moment at which they are
 /// observed. The `lower` and `upper` frontiers bound the times contained within, and the `since`
 /// frontier indicates a moment at which the times were observed. If `since` is strictly in 
 /// advance of `lower`, the contained times may be "advanced" to times which appear equivalent to
 /// any time after `since`.
 #[derive(Debug)]
 pub struct Description<Time: Lattice+Ord+Debug> {
-	lower: Vec<Time>,	// lower frontier of contained updates.
-	upper: Vec<Time>,	// upper frontier of contained updates.
-	since: Vec<Time>,	// frontier used for update compaction.
+	/// lower frontier of contained updates.
+	lower: Vec<Time>,
+	/// upper frontier of contained updates.
+	upper: Vec<Time>,
+	/// frontier used for update compaction.
+	since: Vec<Time>,
 }
 
 /// A cursor allowing navigation of a trace.
@@ -388,7 +648,7 @@ pub struct TraceCursor<Key: Ord+Debug, Val: Ord+Debug, Time: Lattice+Ord+Debug> 
 }
 
 impl<Key: Ord+Debug, Val: Ord+Debug, Time: Lattice+Ord+Debug> TraceCursor<Key, Val, Time> {
-
+	/// Constructs new cursor from slice of layers.
 	fn new(layers: &[LayerMerge<Key, Val, Time>]) -> TraceCursor<Key, Val, Time> {
 		let mut cursors = Vec::new();
 		for layer in layers {
@@ -405,7 +665,6 @@ impl<Key: Ord+Debug, Val: Ord+Debug, Time: Lattice+Ord+Debug> TraceCursor<Key, V
 		}
 
 		cursors.sort_by(|x,y| x.key().cmp(&y.key()));
-
 		TraceCursor { layers: cursors, dirty: 0 }
 	}
 
@@ -449,6 +708,7 @@ impl<Key: Ord+Debug, Val: Ord+Debug, Time: Lattice+Ord+Debug> TraceCursor<Key, V
 		}
 	}
 
+	/// Reveals the key that would be revealed by `self.next_key()`.
 	pub fn peek_key(&mut self) -> Option<&Key> {
 		self.tidy_keys();
 		if self.layers.len() > 0 {
@@ -501,7 +761,7 @@ pub struct KeyView<'a, Key: Ord+Debug+'a, Val: Ord+Debug+'a, Time: Lattice+Ord+D
 }
 
 impl<'a, Key: Ord+Debug+'a, Val: Ord+Debug+'a, Time: Lattice+Ord+Debug+'a> KeyView<'a, Key, Val, Time> {
-
+	/// Allocates a new layer from a mutable layer cursor slice.
 	fn new(layers: &'a mut [LayerCursor<Key, Val, Time>]) -> KeyView<'a, Key, Val, Time> {
 		layers.sort_by(|x,y| x.val().cmp(&y.val()));
 		KeyView {
@@ -546,7 +806,7 @@ impl<'a, Key: Ord+Debug+'a, Val: Ord+Debug+'a, Time: Lattice+Ord+Debug+'a> KeyVi
 			None
 		}
 	}
-
+	/// Reveals the value that would be returned by `self.step_val()`.
 	pub fn peek_val(&mut self) -> Option<&Val> {
 		self.tidy_vals();
 		if self.layers.len() > 0 {
@@ -557,7 +817,7 @@ impl<'a, Key: Ord+Debug+'a, Val: Ord+Debug+'a, Time: Lattice+Ord+Debug+'a> KeyVi
 		}
 	}
 
-
+	/// Removes completed cursors, and re-sorts invalidated cursors.
 	fn tidy_vals(&mut self) {
 		let mut valid = 0; 
 		while valid < self.dirty {
@@ -678,7 +938,7 @@ impl<Key: Ord+Debug, Val: Ord+Debug, Time: Lattice+Ord+Debug> LayerCursor<Key, V
 		}
 		else {
 			self.key_slice.0 = self.key_slice.1;	// step back so we don't overflow.
-			self.val_slice = (0, 0);
+			self.val_slice = (self.layer.times.len(), self.layer.times.len());
 			false
 		}
 	}
@@ -695,7 +955,7 @@ impl<Key: Ord+Debug, Val: Ord+Debug, Time: Lattice+Ord+Debug> LayerCursor<Key, V
 		}
 		else {
 			self.key_slice.0 = self.key_slice.1;
-			self.val_slice = (0, 0);
+			self.val_slice = (self.layer.times.len(), self.layer.times.len());
 			false
 		}
 	}
