@@ -6,7 +6,7 @@ pub mod trace_trait;
 pub mod cursor;
 
 pub use self::layer::{Layer, LayerCursor};
-pub use self::trace::{Trace};
+pub use self::trace::LayerTrace;
 pub use self::cursor::Cursor;
 
 /// Scans `vec[off..]` and consolidates differences of adjacent equivalent elements.

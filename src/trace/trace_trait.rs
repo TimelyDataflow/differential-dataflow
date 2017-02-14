@@ -13,13 +13,13 @@ pub trait Trace<Key: Ord, Val: Ord, Time: Ord> {
 	type Cursor: Cursor<Key = Key, Val = Val, Time = Time>;
 
 	/// Allocates a new empty trace.
-	fn new() -> Self;
+	fn new(default: Time) -> Self;
 	/// Introduces a batch of updates to the trace.
 	fn insert(&mut self, batch: Self::Batch);
 	/// Acquires a cursor to the collection's contents.
 	fn cursor(&self) -> Self::Cursor;
 	/// Advances the frontier of times the collection must respond to.
-	fn advance(&mut self, frontier: &[Time]);
+	fn advance_by(&mut self, frontier: &[Time]);
 }
 
 
@@ -46,46 +46,3 @@ pub trait Builder<Key, Val, Time> {
 	/// Adds a new element to the batch.
 	fn push(&mut self, element: (Key, Val, Time, isize));
 }
-
-
-
-
-
-/// A type supporting navigation of update tuples by key.
-pub trait KeyCursor<'a, Key, Val, Time> {
-	/// Type supporting navigation by value; returned for each key.
-	type ValCursor: ValCursor<'a, Key, Val, Time>;
-	/// Advances cursor to next key, if it exists.
-	fn next_key(&'a mut self) -> Option<Self::ValCursor>;
-	/// Advances cursor to specific key, if it exists.
-	fn seek_key(&'a mut self, key: &Key) -> Option<Self::ValCursor>;
-	/// Reveals the next key, if it exists.
-	fn peek_key(&mut self) -> Option<&Key>;
-	// /// Returns cursor for the previous key's values. (TODO : what happens at first?)
-	// fn redo_key(&'a mut self) -> Option<Self::ValCursor>;
-}
-
-/// A type supporting navigation of update tuples by value.
-pub trait ValCursor<'a, Key, Val, Time> {
-	/// A type abstracting the `(Time, isize)` pairs of the value.
-	type TimeCursor: TimeCursor<Val, Time>;
-	/// Advances cursor to the next value, if it exists.
-	fn next_val(&'a mut self) -> Option<Self::TimeCursor>;
-	/// Advances cursor to a specific value, if it exists.
-	fn seek_val(&'a mut self, key: &Val) -> Option<Self::TimeCursor>;
-	/// Reveals the next value, if it exists.
-	fn peek_val(&mut self) -> Option<&Val>;
-	/// Returns the key these values correspond to.
-	fn key(&self) -> &Key;
-}
-
-/// A type representing unordered `(Time, isize)` pairs.
-pub trait TimeCursor<Val, Time> {
-	/// Applies `logic` to each `(time, diff)` tuple.
-	fn map<L: FnMut(&Time, isize)>(&self, logic: L);
-	/// Returns the value these updates correspond to.
-	fn val(&self) -> &Val;
-}
-
-
-

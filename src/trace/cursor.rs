@@ -196,72 +196,96 @@ impl<C: Cursor> CursorList<C> {
 	/// Re-sorts the first `valid_keys` cursors under the assumption that cursors[prefix .. valid_keys] are ordered by key.
 	fn tidy_keys(&mut self, prefix: usize) {
 
+		// 0. invalidate this, because.
+		self.equiv_keys = 0;
+
 		// 1. move invalid cursors to `self.valid_vals` and decrement appropriately.
-		let mut valid = 0; 
+		let mut dirty = 0; 
 		for index in 0 .. prefix {
 			if self.cursors[index].key_valid() {
-				self.cursors.swap(valid, index);
-				valid += 1;
+				self.cursors.swap(dirty, index);
+				dirty += 1;
 			}
 		}
-		self.equiv_keys -= self.valid_keys - valid;
-		self.valid_keys = valid;
+		if prefix - dirty > 0 {	// must translate valid keys down
+			for index in prefix .. self.valid_keys {
+				self.cursors.swap(index, index - (prefix - dirty));
+			}
+		}
+		self.valid_keys -= prefix - dirty;
 
 		// 2. If disorderly values remain, .. 
-		if self.equiv_keys > 0 {
+		if dirty > 0 {
 			// a. identify the largest value among them.
 			let mut max_index = 0;
-			for index in 1 .. self.equiv_vals {
+			for index in 1 .. dirty {
 				if self.cursors[index].key() > self.cursors[max_index].key() {
 					max_index = index;
 				}
 			}
 			// b. determine how many of the ordered values we must involve.
-			let mut beyond = self.equiv_keys;
+			let mut beyond = dirty;
 			while beyond < self.valid_keys && self.cursors[beyond].key() < self.cursors[max_index].key() {
 				beyond += 1;
 			}
-			// c. sort those cursors and determine how many values are equivalent.
+			// c. sort those cursors.
 			self.cursors[.. beyond].sort_by(|x,y| x.key().cmp(y.key()));
+		}
+		
+		// 3. count equivalent keys (if any are valid)
+		if self.valid_keys > 0 {
 			self.equiv_keys = 1;
 			while self.equiv_keys < self.valid_keys && self.cursors[self.equiv_keys].key() == self.cursors[0].key() {
 				self.equiv_keys += 1;
 			}
-
-			let to_tidy = self.equiv_keys;
-			self.tidy_vals(to_tidy);
 		}
+
+		// 4. order equivalent keys by value.
+		let to_tidy = self.equiv_keys;
+		self.valid_vals = self.equiv_keys;	// <-- presumably true? 
+		self.tidy_vals(to_tidy);
 	}
 	/// Re-sorts the first `valid_vals` cursors under the assumption that cursors[prefix .. valid_vals] are ordered by value.
 	fn tidy_vals(&mut self, prefix: usize) {
 
+		// 0. invalidate this, because.
+		self.equiv_vals = 0;
+
 		// 1. move invalid cursors to `self.valid_vals` and decrement appropriately.
-		let mut valid = 0; 
+		let mut dirty = 0; 
 		for index in 0 .. prefix {
 			if self.cursors[index].val_valid() {
-				self.cursors.swap(valid, index);
-				valid += 1;
+				self.cursors.swap(dirty, index);
+				dirty += 1;
 			}
 		}
-		self.equiv_vals -= self.valid_vals - valid;
-		self.valid_vals = valid;
+		if prefix - dirty > 0 {
+			for index in prefix .. self.valid_vals {
+				self.cursors.swap(index, index - (prefix - dirty));
+			}
+		}
+		self.valid_vals -= prefix - dirty;
 
 		// 2. If disorderly values remain, .. 
-		if self.equiv_vals > 0 {
+		if dirty > 0 {
 			// a. identify the largest value among them.
 			let mut max_index = 0;
-			for index in 1 .. self.equiv_vals {
+			for index in 1 .. dirty {
 				if self.cursors[index].val() > self.cursors[max_index].val() {
 					max_index = index;
 				}
 			}
 			// b. determine how many of the ordered values we must involve.
-			let mut beyond = self.equiv_vals;
+			let mut beyond = dirty;
 			while beyond < self.valid_vals && self.cursors[beyond].val() < self.cursors[max_index].val() {
 				beyond += 1;
 			}
-			// c. sort those cursors and determine how many values are equivalent.
+			// c. sort those cursors.
 			self.cursors[.. beyond].sort_by(|x,y| x.val().cmp(y.val()));
+		}
+
+		// 3. count equivalent values
+		if self.valid_vals > 0 {
 			self.equiv_vals = 1;
 			while self.equiv_vals < self.valid_vals && self.cursors[self.equiv_vals].val() == self.cursors[0].val() {
 				self.equiv_vals += 1;

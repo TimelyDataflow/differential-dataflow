@@ -21,8 +21,9 @@ use collection::trace::{Trace, TraceReference};
 use operators::arrange::{Arranged, ArrangeByKey, ArrangeBySelf};
 use operators::group_alt::BatchCompact;
 use trace::{Layer, Cursor, consolidate};
-use trace::Trace as TraceAlt;
-use trace::trace_trait::{Batch, TimeCursor, ValCursor, KeyCursor};
+use trace::LayerTrace as TraceAlt;
+use trace::trace_trait::Batch;
+use trace::trace_trait::Trace as TraceWTF;
 
 /// Join implementations for `(key,val)` data.
 pub trait Join<G: Scope, K: Data, V: Data> {
@@ -467,7 +468,7 @@ impl<TS: Timestamp, G: Scope<Timestamp=TS>, K: Data, V: Data> JoinAlt<G, K, V> f
                     let time: G::Timestamp = time.clone();
                     antichain.insert(time);
                 }
-                trace.advance_frontier(antichain.elements());
+                trace.advance_by(antichain.elements());
             }
 
             // shut down the trace if the frontier is empty and inputs are done. else, advance frontier.
@@ -482,7 +483,7 @@ impl<TS: Timestamp, G: Scope<Timestamp=TS>, K: Data, V: Data> JoinAlt<G, K, V> f
                     let time: G::Timestamp = time.clone();
                     antichain.insert(time);
                 }
-                trace.advance_frontier(antichain.elements());
+                trace.advance_by(antichain.elements());
             }
 
             // read input 1, push all data to queues
@@ -585,23 +586,47 @@ where
     let mut trace_cursor = trace.cursor();
 
     while layer_cursor.key_valid() {
-        let buffer_len = buffer.len();                            
-        if let Some(mut key_view) = trace_cursor.seek_key(layer_cursor.key()) {
-            while let Some(val_view) = key_view.next_val() {
-                layer_cursor.rewind_vals();
+        let buffer_len = buffer.len(); 
+        trace_cursor.seek_key(layer_cursor.key());
+        if trace_cursor.key_valid() && trace_cursor.key() == layer_cursor.key() {
+            while trace_cursor.val_valid() {
                 while layer_cursor.val_valid() {
                     layer_cursor.map_times(|time2, diff2| {
-                        val_view.map(|time1, diff1| {
-                            let r = result(layer_cursor.key(), layer_cursor.val(), val_view.val());
+                        trace_cursor.map_times(|time1, diff1| {
+                            let r = result(layer_cursor.key(), layer_cursor.val(), trace_cursor.val());
                             buffer.push(((time1.join(time2), r), diff1 * diff2));
                         });                                            
                     });
 
                     layer_cursor.step_val();
                 }
+
+                layer_cursor.rewind_vals();
+                trace_cursor.step_val();
             }
         }
         layer_cursor.step_key();
         consolidate(buffer, buffer_len);
     }
+
+    // while layer_cursor.key_valid() {
+    //     let buffer_len = buffer.len();                            
+    //     if let Some(mut key_view) = trace_cursor.seek_key(layer_cursor.key()) {
+    //         while let Some(val_view) = key_view.next_val() {
+    //             layer_cursor.rewind_vals();
+    //             while layer_cursor.val_valid() {
+    //                 layer_cursor.map_times(|time2, diff2| {
+    //                     val_view.map(|time1, diff1| {
+    //                         let r = result(layer_cursor.key(), layer_cursor.val(), val_view.val());
+    //                         buffer.push(((time1.join(time2), r), diff1 * diff2));
+    //                     });                                            
+    //                 });
+    //
+    //                 layer_cursor.step_val();
+    //             }
+    //         }
+    //     }
+    //     layer_cursor.step_key();
+    //     consolidate(buffer, buffer_len);
+    // }
 }

@@ -8,7 +8,7 @@ use ::{Data, Collection, Delta};
 use ::lattice::close_under_join;
 use stream::AsCollection;
 
-use trace::{Trace, Layer};
+use trace::{LayerTrace, Layer};
 
 
 use timely::progress::Antichain;
@@ -19,7 +19,8 @@ use timely::dataflow::operators::Capability;
 
 use lattice::Lattice;
 use collection::Lookup;
-use trace::trace_trait::{TimeCursor, ValCursor, KeyCursor};
+use trace::trace_trait::Trace;
+use trace::Cursor;
 
 /// Extension trait for the `group` differential dataflow method
 pub trait GroupAlt<G: Scope, K: Data, V: Data> where G::Timestamp: Lattice+Ord {
@@ -35,8 +36,8 @@ where G::Timestamp: Lattice+Ord
     fn group_alt<L, V2: Data>(&self, logic: L) -> Collection<G, (K,V2)>
         where L: Fn(&K, &[(V, Delta)], &mut Vec<(V2, Delta)>)+'static {
 
-        let mut input_trace = Trace::new(Default::default());
-        let mut output_trace = Trace::new(Default::default());
+        let mut input_trace = LayerTrace::new(Default::default());
+        let mut output_trace = LayerTrace::new(Default::default());
 
         let mut inputs = LinearMap::new();  // A map from times to received (key, val, wgt) triples.
         let mut to_do = LinearMap::new();   // A map from times to a list of keys that need processing at that time.
@@ -76,8 +77,8 @@ where G::Timestamp: Lattice+Ord
                     frontier.insert(time.clone());
                 }
 
-                input_trace.advance_frontier(frontier.elements());
-                output_trace.advance_frontier(frontier.elements());
+                input_trace.advance_by(frontier.elements());
+                output_trace.advance_by(frontier.elements());
 
                 let capability = capabilities.swap_remove(position);
                 let time = capability.time();
@@ -95,16 +96,29 @@ where G::Timestamp: Lattice+Ord
 
                         // track down existing times, join with `time` and close under join.
                         stash.push(time.clone());
-                        if let Some(mut key_view) = trace_cursor.seek_key(&layer.keys[key_idx]) {
-                            while let Some(val_view) = key_view.next_val() {
-                                val_view.map(|t,_d| {
+                        trace_cursor.seek_key(&layer.keys[key_idx]);
+                        if trace_cursor.key_valid() && trace_cursor.key() == &layer.keys[key_idx] {
+                            while trace_cursor.val_valid() {
+                                trace_cursor.map_times(|t,_d| {
                                     let joined = time.join(t);
                                     if joined != time && !stash.contains(&joined) {
                                         stash.push(joined);
                                     }
                                 });
+                                trace_cursor.step_val();
                             }
                         }
+
+                        // if let Some(mut key_view) = trace_cursor.seek_key(&layer.keys[key_idx]) {
+                        //     while let Some(val_view) = key_view.next_val() {
+                        //         val_view.map(|t,_d| {
+                        //             let joined = time.join(t);
+                        //             if joined != time && !stash.contains(&joined) {
+                        //                 stash.push(joined);
+                        //             }
+                        //         });
+                        //     }
+                        // }
                         close_under_join(&mut stash);
 
                         // notificate for times, add key to todo list.
@@ -149,34 +163,61 @@ where G::Timestamp: Lattice+Ord
                         input_stage.clear();
                         output_stage.clear();
 
-                        if let Some(mut key_view) = input_trace_cursor.seek_key(&key) {
-                            // assemble the input collection
-                            while let Some(val_view) = key_view.next_val() {
+                        input_trace_cursor.seek_key(&key);
+                        if input_trace_cursor.key_valid() && input_trace_cursor.key() == &key {
+                            while input_trace_cursor.val_valid() {
                                 let mut sum = 0;
-                                val_view.map(|t,d| if t.le(&time) { sum += d; });
+                                input_trace_cursor.map_times(|t,d| if t.le(&time) { sum += d; });
                                 if sum > 0 {
-                                    input_stage.push((val_view.val().clone(), sum as i32));
+                                    input_stage.push((input_trace_cursor.val().clone(), sum as i32));
                                 }
+
+                                input_trace_cursor.step_val();
                             }
                         }
 
-                        // 2. apply user logic
+                        // if let Some(mut key_view) = input_trace_cursor.seek_key(&key) {
+                        //     // assemble the input collection
+                        //     while let Some(val_view) = key_view.next_val() {
+                        //         let mut sum = 0;
+                        //         val_view.map(|t,d| if t.le(&time) { sum += d; });
+                        //         if sum > 0 {
+                        //             input_stage.push((val_view.val().clone(), sum as i32));
+                        //         }
+                        //     }
+                        // }
+
+                        // 2. apply user logic (only if values exist).
                         if input_stage.len() > 0 {
                             logic(&key, &input_stage[..], &mut output_stage);
                         }
 
                         // 3. subtract existing output differences
-                        if let Some(mut output_key_view) = output_trace_cursor.seek_key(&key) {
-                            while let Some(output_val_view) = output_key_view.next_val() {
+                        output_trace_cursor.seek_key(&key);
+                        if output_trace_cursor.key_valid() && output_trace_cursor.key() == &key {
+                            while output_trace_cursor.val_valid() {
                                 let mut sum = 0;
-                                output_val_view.map(|t,d| if t.le(&time) { sum += d; });
+                                output_trace_cursor.map_times(|t,d| if t.le(&time) { sum += d; });
                                 if sum != 0 {
-                                    let val_ref: &V2 = output_val_view.val();
+                                    let val_ref: &V2 = output_trace_cursor.val();
                                     let val: V2 = val_ref.clone();
                                     output_stage.push((val, -sum as i32));
                                 }
+
+                                output_trace_cursor.step_val();
                             }
                         }
+                        // if let Some(mut output_key_view) = output_trace_cursor.seek_key(&key) {
+                        //     while let Some(output_val_view) = output_key_view.next_val() {
+                        //         let mut sum = 0;
+                        //         output_val_view.map(|t,d| if t.le(&time) { sum += d; });
+                        //         if sum != 0 {
+                        //             let val_ref: &V2 = output_val_view.val();
+                        //             let val: V2 = val_ref.clone();
+                        //             output_stage.push((val, -sum as i32));
+                        //         }
+                        //     }
+                        // }
                         consolidate(&mut output_stage);
 
                         // 4. send output differences, assemble output layer
