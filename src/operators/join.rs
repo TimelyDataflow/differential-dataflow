@@ -20,8 +20,9 @@ use collection::Lookup;
 use collection::trace::{Trace, TraceReference};
 use operators::arrange::{Arranged, ArrangeByKey, ArrangeBySelf};
 use operators::group_alt::BatchCompact;
-use trace::trace::{Layer, LayerCursor, consolidate};
-use trace::trace::Trace as TraceAlt;
+use trace::{Layer, Cursor, consolidate};
+use trace::Trace as TraceAlt;
+use trace::trace_trait::{Batch, TimeCursor, ValCursor, KeyCursor};
 
 /// Join implementations for `(key,val)` data.
 pub trait Join<G: Scope, K: Data, V: Data> {
@@ -515,11 +516,9 @@ impl<TS: Timestamp, G: Scope<Timestamp=TS>, K: Data, V: Data> JoinAlt<G, K, V> f
 
                 if let Some(buffer) = inputs1.remove_key(&time) {
                     let layer1 = Rc::new(Layer::new(buffer.done().into_iter().map(|((k,v),d)| (k,v,time.clone(),d)), &[], &[]));
-
                     if let Some(ref trace2) = trace2 {
                         cross_product(&layer1, trace2, &mut output_buffer, |k,v1,v2| result(k, v1, v2));
                     }
-
                     if let Some(ref mut trace) = trace1 {
                         trace.insert(layer1);
                     }
@@ -527,11 +526,9 @@ impl<TS: Timestamp, G: Scope<Timestamp=TS>, K: Data, V: Data> JoinAlt<G, K, V> f
 
                 if let Some(buffer) = inputs2.remove_key(&time) {
                     let layer2 = Rc::new(Layer::new(buffer.done().into_iter().map(|((k,v),d)| (k,v,time.clone(),d)), &[], &[]));
-
                     if let Some(ref trace1) = trace1 {
                         cross_product(&layer2, trace1, &mut output_buffer, |k,v2,v1| result(k,v1,v2));
                     }
-
                     if let Some(ref mut trace) = trace2 {
                         trace.insert(layer2);
                     }
@@ -584,37 +581,27 @@ where
     RF: Fn(&K,&V1,&V2)->R,
 {
     // construct cursors for the layer and the trace.
-    let mut layer_cursor = LayerCursor::new(layer.clone());
+    let mut layer_cursor = layer.cursor();
     let mut trace_cursor = trace.cursor();
 
     while layer_cursor.key_valid() {
         let buffer_len = buffer.len();                            
         if let Some(mut key_view) = trace_cursor.seek_key(layer_cursor.key()) {
-            // println!("key: {:?}", key_view.key());
-            // println!("key_view: {:?}", key_view);
             while let Some(val_view) = key_view.next_val() {
-                layer_cursor.rewind_val();
-                // println!("val_view: {:?}", val_view);
-                // println!("  trace_val: {:?}", val_view.val());
+                layer_cursor.rewind_vals();
                 while layer_cursor.val_valid() {
-                    // println!("  layer_val: {:?}", layer_cursor.val());
-                    for &(ref time2, diff2) in layer_cursor.times() {
-                        val_view.map(|&(ref time1, diff1)| {
-                            // println!("    called on {:?}", (time1, diff1));
+                    layer_cursor.map_times(|time2, diff2| {
+                        val_view.map(|time1, diff1| {
                             let r = result(layer_cursor.key(), layer_cursor.val(), val_view.val());
-                            // println!("    pushing {:?}", ((time1.join(time2), &r), diff1 * diff2));
                             buffer.push(((time1.join(time2), r), diff1 * diff2));
                         });                                            
-                    }
+                    });
 
                     layer_cursor.step_val();
                 }
             }
         }
-
         layer_cursor.step_key();
         consolidate(buffer, buffer_len);
     }
-
-
 }

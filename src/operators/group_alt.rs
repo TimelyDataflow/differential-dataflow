@@ -1,8 +1,5 @@
 //! Group records by a key, and apply a reduction function.
 
-// use std::collections::HashMap;
-// use std::hash::Hash;
-
 use std::rc::Rc;
 
 use linear_map::LinearMap;
@@ -11,7 +8,7 @@ use ::{Data, Collection, Delta};
 use ::lattice::close_under_join;
 use stream::AsCollection;
 
-use trace::trace::{Trace, Layer};
+use trace::{Trace, Layer};
 
 
 use timely::progress::Antichain;
@@ -22,6 +19,7 @@ use timely::dataflow::operators::Capability;
 
 use lattice::Lattice;
 use collection::Lookup;
+use trace::trace_trait::{TimeCursor, ValCursor, KeyCursor};
 
 /// Extension trait for the `group` differential dataflow method
 pub trait GroupAlt<G: Scope, K: Data, V: Data> where G::Timestamp: Lattice+Ord {
@@ -59,7 +57,6 @@ where G::Timestamp: Lattice+Ord
                 });
 
                 for ((key, val), diff) in data.drain(..) {
-                    // println!("update: {:?}", (&key, &val, diff));
                     updates.push(((key, val), diff as isize));
                 }
             });
@@ -100,7 +97,7 @@ where G::Timestamp: Lattice+Ord
                         stash.push(time.clone());
                         if let Some(mut key_view) = trace_cursor.seek_key(&layer.keys[key_idx]) {
                             while let Some(val_view) = key_view.next_val() {
-                                val_view.map(|&(ref t, _d)| {
+                                val_view.map(|t,_d| {
                                     let joined = time.join(t);
                                     if joined != time && !stash.contains(&joined) {
                                         stash.push(joined);
@@ -156,7 +153,7 @@ where G::Timestamp: Lattice+Ord
                             // assemble the input collection
                             while let Some(val_view) = key_view.next_val() {
                                 let mut sum = 0;
-                                val_view.map(|&(ref t,d)| if t.le(&time) { sum += d; });
+                                val_view.map(|t,d| if t.le(&time) { sum += d; });
                                 if sum > 0 {
                                     input_stage.push((val_view.val().clone(), sum as i32));
                                 }
@@ -172,7 +169,7 @@ where G::Timestamp: Lattice+Ord
                         if let Some(mut output_key_view) = output_trace_cursor.seek_key(&key) {
                             while let Some(output_val_view) = output_key_view.next_val() {
                                 let mut sum = 0;
-                                output_val_view.map(|&(ref t, d)| if t.le(&time) { sum += d; });
+                                output_val_view.map(|t,d| if t.le(&time) { sum += d; });
                                 if sum != 0 {
                                     let val_ref: &V2 = output_val_view.val();
                                     let val: V2 = val_ref.clone();
