@@ -1,6 +1,12 @@
 //! A trie-structured representation of update tuples. 
 //!
+//! The trie representation separates out the key, val, and time components of update tuples into distinct
+//! arrays. This representation maintains one copy of each key, and one copy of each value for each key. 
 //! 
+//! One of the intents of the trie representation is that it can provide multiple `Trace` implementations: 
+//! the trie can have the standard (key, val) interpretation, but it can also act as a trace whose keys are
+//! (key, val) and whose values are (), which can be useful for set operations (e.g. `distinct`) on the 
+//! collection.
 
 use std::rc::Rc;
 use std::cmp::Ordering;
@@ -19,7 +25,6 @@ pub struct Spine<Key: Ord, Val: Ord, Time: Lattice+Ord> {
 	frontier: Vec<Time>,					// Times after which the times in the traces must be distinguishable.
 	layers: Vec<Rc<Layer<Key, Val, Time>>>	// Several possibly shared collections of updates.
 }
-
 
 impl<Key: Ord+Clone, Val: Ord+Clone, Time: Lattice+Ord+Clone> Trace<Key, Val, Time> for Spine<Key, Val, Time> {
 
@@ -472,11 +477,6 @@ impl<Key: Ord+Clone, Val: Ord+Clone, Time: Lattice+Ord+Clone> Builder<Key, Val, 
 		Rc::new(Layer::new(self.done().into_iter().map(|((k,v,t),d)| (k,v,t,d)), &[], &[]))
 	}
 }
-
-// impl<Key: Ord+Clone, Val: Ord+Clone, Time: Lattice+Ord+Clone> Into<Rc<Layer<Key,Val,Time>>> for LayerBuilder<(Key, Val, Time)> {
-// 	fn into(self) -> Rc<Layer<Key,Val,Time>> {
-// 	}
-// }
 
 /// Reports the number of elements satisfing the predicate.
 ///
