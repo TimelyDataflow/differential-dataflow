@@ -8,9 +8,6 @@ use ::{Data, Collection, Delta};
 use ::lattice::close_under_join;
 use stream::AsCollection;
 
-use trace::{LayerTrace, Layer};
-
-
 use timely::progress::Antichain;
 use timely::dataflow::*;
 use timely::dataflow::operators::Unary;
@@ -19,8 +16,9 @@ use timely::dataflow::operators::Capability;
 
 use lattice::Lattice;
 use collection::Lookup;
-use trace::trace_trait::Trace;
-use trace::Cursor;
+// use trace::Trace;
+use trace::{LayerTrace, Layer, Cursor, Trace};
+
 
 /// Extension trait for the `group` differential dataflow method
 pub trait GroupAlt<G: Scope, K: Data, V: Data> where G::Timestamp: Lattice+Ord {

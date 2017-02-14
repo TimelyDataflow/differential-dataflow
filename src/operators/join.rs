@@ -20,10 +20,9 @@ use collection::Lookup;
 use collection::trace::{Trace, TraceReference};
 use operators::arrange::{Arranged, ArrangeByKey, ArrangeBySelf};
 use operators::group_alt::BatchCompact;
-use trace::{Layer, Cursor, consolidate};
+use trace::{Batch, Layer, Cursor, consolidate};
 use trace::LayerTrace as TraceAlt;
-use trace::trace_trait::Batch;
-use trace::trace_trait::Trace as TraceWTF;
+use trace::Trace as TraceWTF;
 
 /// Join implementations for `(key,val)` data.
 pub trait Join<G: Scope, K: Data, V: Data> {

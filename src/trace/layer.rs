@@ -4,9 +4,7 @@ use std::fmt::Debug;
 use std::cmp::Ordering;
 
 use lattice::Lattice;
-use trace::consolidate;
-use trace::trace_trait::{Batch, Builder};
-use trace::cursor::Cursor;
+use trace::{Batch, Builder, Cursor, consolidate};
 
 /// An immutable collection of update tuples, from a contiguous interval of logical times.
 #[derive(Debug)]

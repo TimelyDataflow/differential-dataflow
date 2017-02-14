@@ -8,7 +8,7 @@ use std::fmt::Debug;
 use lattice::Lattice;
 use trace::layer::{Layer, LayerCursor};
 use trace::cursor::CursorList;
-use trace::trace_trait::{Trace, Batch};
+use trace::{Trace, Batch};
 
 // A trace is made up of several layers, each of which are immutable collections of updates.
 #[derive(Debug)]
