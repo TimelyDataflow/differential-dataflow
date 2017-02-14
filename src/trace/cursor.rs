@@ -1,9 +1,11 @@
+//! Traits and types for navigating order sequences of update tuples.
+//!
+//! The `Cursor` trait contains several methods for efficiently navigating ordered collections
+//! of tuples of the form `(key, val, time, diff)`. The cursor is different from an iterator 
+//! both because it allows navigation on multiple levels (key and val), but also because it 
+//! supports efficient seeking (via the `seek_key` and `seek_val` methods).
 
 /// A cursor for navigating ordered `(key, val, time, diff)` updates.
-///
-/// NOTE: It is currently unclear to me whether we would like a cursor interface or
-/// an iterator interface. The cursor makes some merging more efficient, and we'll
-/// likely want to add the `seek` functionality anyhow, so cursor it is for now.
 pub trait Cursor {
 	
 	/// Type of key used by cursor.
@@ -30,16 +32,16 @@ pub trait Cursor {
 	fn map_times<L: FnMut(&Self::Time, isize)>(&self, logic: L);
 
 	/// Advances the cursor to the next key. Indicates if the key is valid.
-	fn step_key(&mut self) -> bool;
+	fn step_key(&mut self);
 	/// Advances the cursor to the specified key. Indicates if the key is valid.
-	fn seek_key(&mut self, key: &Self::Key) -> bool;
+	fn seek_key(&mut self, key: &Self::Key);
 	/// Reveals the next key, if it is valid.
 	fn peek_key(&self) -> Option<&Self::Key>;
 	
 	/// Advances the cursor to the next value. Indicates if the value is valid.
-	fn step_val(&mut self) -> bool;
+	fn step_val(&mut self);
 	/// Advances the cursor to the specified value. Indicates if the value is valid.
-	fn seek_val(&mut self, val: &Self::Val) -> bool;
+	fn seek_val(&mut self, val: &Self::Val);
 	/// Reveals the next value, if it is valid.
 	fn peek_val(&self) -> Option<&Self::Val>;
 
@@ -314,44 +316,40 @@ impl<C: Cursor> Cursor for CursorList<C> {
 	}
 
 	// key methods
-	fn step_key(&mut self) -> bool {
+	fn step_key(&mut self) {
 		for cursor in &mut self.cursors[.. self.equiv_keys] {
 			cursor.step_key();
 		}
 		let to_tidy = self.equiv_keys;
 		self.tidy_keys(to_tidy);
-		self.key_valid()
 	}
-	fn seek_key(&mut self, key: &Self::Key) -> bool {
+	fn seek_key(&mut self, key: &Self::Key) {
 		let mut index = 0;
 		while index < self.valid_keys && self.cursors[index].key() < key {
 			self.cursors[index].seek_key(key);
 			index += 1;
 		}
 		self.tidy_keys(index);
-		self.key_valid()
 	}
 	fn peek_key(&self) -> Option<&Self::Key> {
 		if self.key_valid() { Some(self.key()) } else { None }
 	}
 	
 	// value methods
-	fn step_val(&mut self) -> bool {
+	fn step_val(&mut self) {
 		for cursor in &mut self.cursors[.. self.equiv_vals] {
 			cursor.step_val();
 		}
 		let to_tidy = self.equiv_vals;
 		self.tidy_vals(to_tidy);
-		self.val_valid()
 	}
-	fn seek_val(&mut self, val: &Self::Val) -> bool {
+	fn seek_val(&mut self, val: &Self::Val) {
 		let mut index = 0;
 		while index < self.valid_vals && self.cursors[index].val() < val {
 			self.cursors[index].seek_val(val);
 			index += 1;
 		}
 		self.tidy_vals(index);
-		self.val_valid()
 	}
 	fn peek_val(&self) -> Option<&Self::Val> {
 		if self.val_valid() { Some(self.val()) } else { None }

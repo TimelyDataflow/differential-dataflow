@@ -156,6 +156,6 @@ extern crate timely_communication;
 pub mod collection;
 pub mod operators;
 pub mod lattice;
+pub mod trace;
 mod iterators;
 mod stream;
-mod trace;

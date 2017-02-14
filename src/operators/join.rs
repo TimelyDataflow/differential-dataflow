@@ -20,8 +20,7 @@ use collection::Lookup;
 use collection::trace::{Trace, TraceReference};
 use operators::arrange::{Arranged, ArrangeByKey, ArrangeBySelf};
 use operators::group_alt::BatchCompact;
-use trace::{Batch, Layer, Cursor, consolidate};
-use trace::LayerTrace as TraceAlt;
+use trace::{Batch, Layer, Cursor, Spine, consolidate};
 use trace::Trace as TraceWTF;
 
 /// Join implementations for `(key,val)` data.
@@ -439,8 +438,8 @@ impl<TS: Timestamp, G: Scope<Timestamp=TS>, K: Data, V: Data> JoinAlt<G, K, V> f
         R: Data,
         RF: Fn(&K,&V,&V2)->R+'static {
 
-        let mut trace1 = Some(TraceAlt::new(Default::default()));
-        let mut trace2 = Some(TraceAlt::new(Default::default()));
+        let mut trace1 = Some(Spine::new(Default::default()));
+        let mut trace2 = Some(Spine::new(Default::default()));
 
         let mut inputs1 = LinearMap::new();
         let mut inputs2 = LinearMap::new();
@@ -450,7 +449,7 @@ impl<TS: Timestamp, G: Scope<Timestamp=TS>, K: Data, V: Data> JoinAlt<G, K, V> f
         let exchange1 = Exchange::new(|&(ref k,_): &((K,V),i32) | k.hashed());
         let exchange2 = Exchange::new(|&(ref k,_): &((K,V2),i32)| k.hashed());
 
-        let result = self.inner.binary_notify(&other.inner, exchange1, exchange2, "Join", vec![], move |input1, input2, output, notificator| {
+        let result = self.inner.binary_notify(&other.inner, exchange1, exchange2, "JoinAlt", vec![], move |input1, input2, output, notificator| {
 
             let frontier1 = notificator.frontier(0);
             let frontier2 = notificator.frontier(1);
@@ -487,20 +486,16 @@ impl<TS: Timestamp, G: Scope<Timestamp=TS>, K: Data, V: Data> JoinAlt<G, K, V> f
 
             // read input 1, push all data to queues
             input1.for_each(|time, data| {
-                let buffer = inputs1.entry_or_insert(time.time(), || BatchCompact::new());
-                for ((key,val),diff) in data.drain(..) {
-                    buffer.push(((key,val), diff as isize));
-                }
+                inputs1.entry_or_insert(time.time(), || BatchCompact::new())
+                       .extend(data.drain(..).map(|(keyval,diff)| (keyval, diff as isize)));
 
                 if !capabilities.iter().any(|c: &Capability<G::Timestamp>| c.time() == time.time()) { capabilities.push(time); }
             });
 
             // read input 2, push all data to queues
             input2.for_each(|time, data| {
-                let buffer = inputs2.entry_or_insert(time.time(), || BatchCompact::new());
-                for ((key,val),diff) in data.drain(..) {
-                    buffer.push(((key,val), diff as isize));
-                }
+                inputs2.entry_or_insert(time.time(), || BatchCompact::new())
+                       .extend(data.drain(..).map(|(keyval, diff)| (keyval, diff as isize)));
 
                 if !capabilities.iter().any(|c| c.time() == time.time()) { capabilities.push(time); }
             });
@@ -516,22 +511,14 @@ impl<TS: Timestamp, G: Scope<Timestamp=TS>, K: Data, V: Data> JoinAlt<G, K, V> f
 
                 if let Some(buffer) = inputs1.remove_key(&time) {
                     let layer1 = Rc::new(Layer::new(buffer.done().into_iter().map(|((k,v),d)| (k,v,time.clone(),d)), &[], &[]));
-                    if let Some(ref trace2) = trace2 {
-                        cross_product(&layer1, trace2, &mut output_buffer, |k,v1,v2| result(k, v1, v2));
-                    }
-                    if let Some(ref mut trace) = trace1 {
-                        trace.insert(layer1);
-                    }
+                    trace2.as_ref().map(|trace2| cross_product(&layer1, trace2, &mut output_buffer, |k,v1,v2| result(k,v1,v2)));
+                    trace1.as_mut().map(|trace1| trace1.insert(layer1));
                 }
 
                 if let Some(buffer) = inputs2.remove_key(&time) {
                     let layer2 = Rc::new(Layer::new(buffer.done().into_iter().map(|((k,v),d)| (k,v,time.clone(),d)), &[], &[]));
-                    if let Some(ref trace1) = trace1 {
-                        cross_product(&layer2, trace1, &mut output_buffer, |k,v2,v1| result(k,v1,v2));
-                    }
-                    if let Some(ref mut trace) = trace2 {
-                        trace.insert(layer2);
-                    }
+                    trace1.as_ref().map(|trace1| cross_product(&layer2, trace1, &mut output_buffer, |k,v2,v1| result(k,v1,v2)));
+                    trace2.as_mut().map(|trace2| trace2.insert(layer2));
                 }                
 
                 consolidate(&mut output_buffer, 0);
@@ -571,7 +558,7 @@ impl<TS: Timestamp, G: Scope<Timestamp=TS>, K: Data, V: Data> JoinAlt<G, K, V> f
 }
 
 /// Forms the cross product of `layer` and `trace`, applying `result` and populating `buffer`.
-fn cross_product<K, V1, V2, T, R, RF>(layer: &Rc<Layer<K,V1,T>>, trace: &TraceAlt<K,V2,T>, buffer: &mut Vec<((T,R),isize)>, result: RF) 
+fn cross_product<K, V1, V2, T, R, RF>(layer: &Rc<Layer<K,V1,T>>, trace: &Spine<K,V2,T>, buffer: &mut Vec<((T,R),isize)>, result: RF) 
 where 
     K: Data,
     V1: Data,
@@ -607,25 +594,4 @@ where
         layer_cursor.step_key();
         consolidate(buffer, buffer_len);
     }
-
-    // while layer_cursor.key_valid() {
-    //     let buffer_len = buffer.len();                            
-    //     if let Some(mut key_view) = trace_cursor.seek_key(layer_cursor.key()) {
-    //         while let Some(val_view) = key_view.next_val() {
-    //             layer_cursor.rewind_vals();
-    //             while layer_cursor.val_valid() {
-    //                 layer_cursor.map_times(|time2, diff2| {
-    //                     val_view.map(|time1, diff1| {
-    //                         let r = result(layer_cursor.key(), layer_cursor.val(), val_view.val());
-    //                         buffer.push(((time1.join(time2), r), diff1 * diff2));
-    //                     });                                            
-    //                 });
-    //
-    //                 layer_cursor.step_val();
-    //             }
-    //         }
-    //     }
-    //     layer_cursor.step_key();
-    //     consolidate(buffer, buffer_len);
-    // }
 }
