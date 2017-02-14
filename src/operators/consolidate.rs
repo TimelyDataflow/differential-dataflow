@@ -77,7 +77,7 @@ impl<G: Scope, D: Ord+Data+Debug> ConsolidateExt<D> for Collection<G, D> {
     }
 
     fn consolidate_by<U: Unsigned, F: Fn(&D)->U+'static>(&self, part: F) -> Self {
-        let mut inputs = LinearMap::new();    // LinearMap<G::Timestamp, Vec<(D, i32)>>
+        let mut inputs: LinearMap<G::Timestamp, LSBRadixSorter<(D, i32)>> = LinearMap::new();
         let part1 = Rc::new(part);
         let part2 = part1.clone();
 
