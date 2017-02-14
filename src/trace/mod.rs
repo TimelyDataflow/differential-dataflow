@@ -8,11 +8,12 @@
 //! and allows various data structures to be interpretable as multiple different types of trace.
 
 pub mod cursor;
+pub mod description;
 pub mod implementations;
 
 pub use self::implementations::trie::{Spine, Layer, LayerCursor};
 pub use self::cursor::Cursor;
-pub use self::cursor::{ KeyViewer, ValViewer, TimeViewer };
+pub use self::cursor::viewers::{ KeyViewer, ValViewer, TimeViewer };
 
 /// An append-only collection of `(key, val, time, diff)` tuples.
 pub trait Trace<Key: Ord, Val: Ord, Time: Ord> {

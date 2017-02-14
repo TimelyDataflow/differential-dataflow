@@ -7,7 +7,8 @@ use std::cmp::Ordering;
 
 use lattice::Lattice;
 use trace::{Batch, Builder, Cursor, Trace, consolidate};
-use trace::cursor::CursorList;
+use trace::description::Description;
+use trace::cursor::cursor_list::CursorList;
 
 /// An append-only collection of update tuples.
 ///
@@ -135,11 +136,7 @@ impl<Key: Ord+Clone, Val: Ord+Clone, Time: Lattice+Ord+Clone> Layer<Key, Val, Ti
 			offs: offs,
 			vals: vals,
 			times: times,
-			desc: Description {
-				lower: lower.to_vec(),
-				upper: upper.to_vec(),
-				since: lower.to_vec(),
-			}
+			desc: Description::new(lower, upper, lower),
 		}
 	}
 
@@ -311,22 +308,6 @@ impl<Key: Ord+Clone, Val: Ord+Clone, Time: Lattice+Ord+Clone> Layer<Key, Val, Ti
 
 		result
 	}
-}
-
-/// Describes an interval of partially ordered times.
-///
-/// A `Description` indicates a set of partially ordered times, and a moment at which they are
-/// observed. The `lower` and `upper` frontiers bound the times contained within, and the `since`
-/// frontier indicates a moment at which the times were observed. If `since` is strictly in 
-/// advance of `lower`, the contained times may be "advanced" to times which appear equivalent to
-/// any time after `since`.
-pub struct Description<Time> {
-	/// lower frontier of contained updates.
-	lower: Vec<Time>,
-	/// upper frontier of contained updates.
-	upper: Vec<Time>,
-	/// frontier used for update compaction.
-	since: Vec<Time>,
 }
 
 /// A cursor for navigating a single layer.
