@@ -28,22 +28,16 @@ pub struct Spine<Key: Ord, Val: Ord, Time: Lattice+Ord> {
 
 impl<Key: Ord+Clone, Val: Ord+Clone, Time: Lattice+Ord+Clone> Trace<Key, Val, Time> for Spine<Key, Val, Time> {
 
-	/// The type of an immutable collection of updates.
 	type Batch = Rc<Layer<Key, Val, Time>>;
-	/// The type used to enumerate the collections contents.
 	type Cursor = CursorList<LayerCursor<Key, Val, Time>>;
 
-	/// Allocates a new empty trace.
 	fn new(default: Time) -> Self {
 		Spine { 
 			frontier: vec![default],
 			layers: Vec::new(),
 		} 		
 	}
-
-	/// Introduces a batch of updates to the trace.
-	///
-	/// Note: this does not perform progressive merging; that code is around somewhere though.
+	// Note: this does not perform progressive merging; that code is around somewhere though.
 	fn insert(&mut self, layer: Self::Batch) {
 		if layer.times.len() > 0 {
 			// while last two elements exist, both less than layer.len()
@@ -64,7 +58,6 @@ impl<Key: Ord+Clone, Val: Ord+Clone, Time: Lattice+Ord+Clone> Trace<Key, Val, Ti
 			}
 		}
 	}
-	/// Acquires a cursor to the collection's contents.
 	fn cursor(&self) -> Self::Cursor {
 		let mut cursors = Vec::new();
 		for layer in &self.layers[..] {
@@ -73,11 +66,55 @@ impl<Key: Ord+Clone, Val: Ord+Clone, Time: Lattice+Ord+Clone> Trace<Key, Val, Ti
 
 		CursorList::new(cursors)
 	}
-	/// Advances the frontier of times the collection must respond to.
 	fn advance_by(&mut self, frontier: &[Time]) {
 		self.frontier = frontier.to_vec();
 	}
 }
+
+// impl<Key: Ord+Clone, Val: Ord+Clone, Time: Lattice+Ord+Clone> Trace<(Key, Val), (), Time> for Spine<Key, Val, Time> {
+
+// 	type Batch = Rc<Layer<Key, Val, Time>>;
+// 	type Cursor = CursorList<LayerSetCursor<Key, Val, Time>>;
+
+// 	fn new(default: Time) -> Self {
+// 		Spine { 
+// 			frontier: vec![default],
+// 			layers: Vec::new(),
+// 		} 		
+// 	}
+// 	// Note: this does not perform progressive merging; that code is around somewhere though.
+// 	fn insert(&mut self, layer: Self::Batch) {
+// 		if layer.times.len() > 0 {
+// 			// while last two elements exist, both less than layer.len()
+// 			while self.layers.len() >= 2 && self.layers[self.layers.len() - 2].len() < layer.times.len() {
+// 				let layer1 = self.layers.pop().unwrap();
+// 				let layer2 = self.layers.pop().unwrap();
+// 				let result = Rc::new(Layer::merge(&layer1, &layer2, &self.frontier[..]));
+// 				self.layers.push(result);
+// 			}
+
+// 			self.layers.push(layer);
+
+// 			while self.layers.len() >= 2 && self.layers[self.layers.len() - 2].len() < 2 * self.layers[self.layers.len() - 1].len() {
+// 				let layer1 = self.layers.pop().unwrap();
+// 				let layer2 = self.layers.pop().unwrap();
+// 				let result = Rc::new(Layer::merge(&layer1, &layer2, &self.frontier[..]));
+// 				self.layers.push(result);
+// 			}
+// 		}
+// 	}
+// 	fn cursor(&self) -> Self::Cursor {
+// 		let mut cursors = Vec::new();
+// 		for layer in &self.layers[..] {
+// 			cursors.push(LayerSetCursor::new(layer.clone()));
+// 		}
+
+// 		CursorList::new(cursors)
+// 	}
+// 	fn advance_by(&mut self, frontier: &[Time]) {
+// 		self.frontier = frontier.to_vec();
+// 	}
+// }
 
 
 /// An immutable collection of update tuples, from a contiguous interval of logical times.
@@ -100,6 +137,13 @@ impl<Key: Ord+Clone, Val: Ord+Clone, Time: Lattice+Ord+Clone> Batch<Key, Val, Ti
 	fn cursor(&self) -> Self::Cursor { LayerCursor::new(self.clone()) }
 	fn len(&self) -> usize { self.times.len() }
 }
+
+// impl<Key: Ord+Clone, Val: Ord+Clone, Time: Lattice+Ord+Clone> Batch<(Key, Val), (), Time> for Rc<Layer<Key, Val, Time>> {
+// 	type Builder = LayerBuilder<(Key, Val, Time)>;
+// 	type Cursor = LayerSetCursor<Key, Val, Time>;
+// 	fn cursor(&self) -> Self::Cursor { LayerSetCursor::new(self.clone()) }
+// 	fn len(&self) -> usize { self.times.len() }
+// }
 
 impl<Key: Ord+Clone, Val: Ord+Clone, Time: Lattice+Ord+Clone> Layer<Key, Val, Time> {
 	/// Constructs a new Layer from sorted data.
@@ -323,7 +367,6 @@ pub struct LayerCursor<Key: Ord, Val: Ord, Time: Lattice+Ord> {
 }
 
 impl<Key: Ord, Val: Ord, Time: Lattice+Ord> LayerCursor<Key, Val, Time> {
-
 	/// Creates a new LayerCursor from non-empty layer data. 
 	pub fn new(layer: Rc<Layer<Key, Val, Time>>) -> LayerCursor<Key, Val, Time> {
 		LayerCursor {
@@ -421,6 +464,107 @@ impl<Key: Ord, Val: Ord, Time: Lattice+Ord> Cursor for LayerCursor<Key, Val, Tim
 	}
 }
 
+// /// A cursor for Layer that interprets the layer as having key of type `(Key, Val)` and a value of `()`.
+// pub struct LayerSetCursor<Key: Ord, Val: Ord, Time: Lattice+Ord> {
+// 	key: Option<(Key, Val)>,			// something we can hand a reference to.
+// 	value: (),							// something we can hand a reference to.
+// 	seen: bool,							// whether we have revealed the value or not.
+// 	index: (usize, usize),				// key and val positions.
+// 	layer: Rc<Layer<Key, Val, Time>>	// the layer itself.
+// }
+
+// impl<Key: Ord+Clone, Val: Ord+Clone, Time: Lattice+Ord> LayerSetCursor<Key, Val, Time> {
+// 	/// Creates a new LayerSetCursor from non-empty layer data. 
+// 	pub fn new(layer: Rc<Layer<Key, Val, Time>>) -> LayerSetCursor<Key, Val, Time> {
+// 		LayerSetCursor {
+// 			key: None,
+// 			value: (),
+// 			seen: false,
+// 			index: (0, 0),
+// 			layer: layer,
+// 		}
+// 	}
+// }
+
+// impl<Key: Ord+Clone, Val: Ord+Clone, Time: Lattice+Ord> Cursor for LayerSetCursor<Key, Val, Time> {
+// 	type Key = (Key, Val);
+// 	type Val = ();
+// 	type Time = Time;
+
+// 	fn key(&self) -> &(Key, Val) { 
+// 		unimplemented!();
+// 		debug_assert!(self.key_valid());
+// 		// self.key = Some((self.layer.keys[self.index.0].clone(), self.layer.vals[self.index.1].0.clone()));
+// 		&self.key.as_ref().unwrap()
+// 	}
+// 	fn val(&self) -> &() { 
+// 		debug_assert!(self.key_valid());
+// 		debug_assert!(self.val_valid());
+// 		&self.value
+// 	}
+// 	fn map_times<L: FnMut(&Time, isize)>(&self, mut logic: L) {
+// 		debug_assert!(self.key_valid());
+// 		debug_assert!(self.val_valid());
+// 		let lower = if self.index.1 == 0 { 0 } else { self.layer.vals[self.index.1 - 1].1 };
+// 		let upper = self.layer.vals[self.index.1].1;
+// 		for &(ref time, diff) in &self.layer.times[lower .. upper] {
+// 			logic(time, diff);
+// 		}
+// 	}
+
+// 	fn key_valid(&self) -> bool { self.index.0 < self.layer.keys.len() }
+// 	fn val_valid(&self) -> bool { !self.seen }
+
+// 	fn step_key(&mut self){
+// 		unimplemented!();
+
+// 		if self.index.1 < self.layer.vals.len() {
+// 			self.index.1 += 1;
+// 			if self.index.1 == self.layer.offs[self.index.0] {
+// 				self.index.0 += 1;
+// 			}
+// 		}
+// 	}
+
+// 	fn seek_key(&mut self, &(ref key, ref val): &(Key, Val)) {
+// 		unimplemented!();
+
+// 		let key_step = advance(&self.layer.keys[self.index.0 ..], |k| k.lt(key));
+
+// 		self.index.0 += key_step;
+
+// 		if self.index.0 < self.layer.keys.len() {
+// 			let lower = if self.index.0 == 0 { 0 } else { self.layer.offs[self.index.0] };
+// 			let upper = self.layer.offs[self.index.1];
+// 			self.index.1 = ::std::cmp::max(lower, self.index.1);
+// 			self.index.1 += advance(&self.layer.vals[self.index.1 .. upper], |v| v.0.lt(val));
+// 			self.seen = self.index.1 < upper;
+// 		}
+// 	}
+// 	fn peek_key(&self) -> Option<&Self::Key> {
+// 		if self.key_valid() { Some(self.key()) } else { None }
+// 	}
+
+// 	fn step_val(&mut self) {
+// 		self.seen = true;
+// 	}
+// 	fn seek_val(&mut self, val: &Self::Val) {
+// 		// there is only one value, (), and seeking for it shouldn't move the cursor, I think.
+// 	}
+// 	fn peek_val(&self) -> Option<&Self::Val> {
+// 		if self.val_valid() { Some(self.val()) } else { None }
+// 	}
+
+// 	fn rewind_keys(&mut self) {
+// 		*self = LayerSetCursor::new(self.layer.clone())
+// 	}
+
+// 	fn rewind_vals(&mut self) {
+// 		debug_assert!(self.key_valid());
+// 		self.seen = false;
+// 	}
+// }
+
 /// A builder for creating layers from unsorted update tuples.
 pub struct LayerBuilder<T: Ord> {
     sorted: usize,
@@ -443,7 +587,7 @@ impl<T: Ord> LayerBuilder<T> {
         //     self.buffer.sort();
         //     for index in 1 .. self.buffer.len() {
         //         if self.buffer[index].0 == self.buffer[index-1].0 {
-        //             self.buffer[index].1 += self.buffer[index-1].1;
+        //             self.buffer[index].1 += self.buffer[index-1].1;g
         //             self.buffer[index-1].1 = 0;
         //         }
         //     }
@@ -468,9 +612,21 @@ impl<T: Ord> LayerBuilder<T> {
     }
 }
 
-impl<Key: Ord+Clone, Val: Ord+Clone, Time: Lattice+Ord+Clone> Builder<Key, Val, Time, Rc<Layer<Key, Val, Time>>> for LayerBuilder<(Key, Val, Time)> {
+impl<Key, Val, Time> Builder<Key, Val, Time, Rc<Layer<Key, Val, Time>>> for LayerBuilder<(Key, Val, Time)> 
+where Key: Ord+Clone, Val: Ord+Clone, Time: Lattice+Ord+Clone {
 	fn new() -> Self { LayerBuilder::new() }
 	fn push(&mut self, (key, val, time, diff): (Key, Val, Time, isize)) {
+		self.push(((key, val, time), diff));
+	}
+	fn done(self) -> Rc<Layer<Key, Val, Time>> {
+		Rc::new(Layer::new(self.done().into_iter().map(|((k,v,t),d)| (k,v,t,d)), &[], &[]))
+	}
+}
+
+impl<Key, Val, Time> Builder<(Key, Val), (), Time, Rc<Layer<Key, Val, Time>>> for LayerBuilder<(Key, Val, Time)> 
+where Key: Ord+Clone, Val: Ord+Clone, Time: Lattice+Ord+Clone {
+	fn new() -> Self { LayerBuilder::new() }
+	fn push(&mut self, ((key, val), _, time, diff): ((Key, Val), (), Time, isize)) {
 		self.push(((key, val, time), diff));
 	}
 	fn done(self) -> Rc<Layer<Key, Val, Time>> {

@@ -7,6 +7,7 @@
 
 pub mod viewers;
 pub mod cursor_list;
+// pub mod cursor_pair;
 
 /// A cursor for navigating ordered `(key, val, time, diff)` updates.
 pub trait Cursor {
