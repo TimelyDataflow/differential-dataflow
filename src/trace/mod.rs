@@ -56,7 +56,7 @@ pub trait Builder<Key, Val, Time, Output> {
 	/// Adds a new element to the batch.
 	fn push(&mut self, element: (Key, Val, Time, isize));
 	/// Completes building and returns the batch.
-	fn done(self) -> Output;
+	fn done(self, lower: &[Time], upper: &[Time]) -> Output;
 }
 
 

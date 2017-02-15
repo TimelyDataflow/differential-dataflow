@@ -618,8 +618,8 @@ where Key: Ord+Clone, Val: Ord+Clone, Time: Lattice+Ord+Clone {
 	fn push(&mut self, (key, val, time, diff): (Key, Val, Time, isize)) {
 		self.push(((key, val, time), diff));
 	}
-	fn done(self) -> Rc<Layer<Key, Val, Time>> {
-		Rc::new(Layer::new(self.done().into_iter().map(|((k,v,t),d)| (k,v,t,d)), &[], &[]))
+	fn done(self, lower: &[Time], upper: &[Time]) -> Rc<Layer<Key, Val, Time>> {
+		Rc::new(Layer::new(self.done().into_iter().map(|((k,v,t),d)| (k,v,t,d)), lower, upper))
 	}
 }
 
@@ -629,8 +629,8 @@ where Key: Ord+Clone, Val: Ord+Clone, Time: Lattice+Ord+Clone {
 	fn push(&mut self, ((key, val), _, time, diff): ((Key, Val), (), Time, isize)) {
 		self.push(((key, val, time), diff));
 	}
-	fn done(self) -> Rc<Layer<Key, Val, Time>> {
-		Rc::new(Layer::new(self.done().into_iter().map(|((k,v,t),d)| (k,v,t,d)), &[], &[]))
+	fn done(self, lower: &[Time], upper: &[Time]) -> Rc<Layer<Key, Val, Time>> {
+		Rc::new(Layer::new(self.done().into_iter().map(|((k,v,t),d)| (k,v,t,d)), lower, upper))
 	}
 }
 

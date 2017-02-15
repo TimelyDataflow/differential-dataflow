@@ -18,6 +18,7 @@ pub use self::threshold::Threshold;
 pub use self::arrange::{ArrangeByKey, ArrangeBySelf};
 
 pub mod arrange;
+// pub mod arrange_alt;
 pub mod threshold;
 pub mod group;
 pub mod group_alt;
@@ -25,3 +26,4 @@ pub mod group_alt;
 pub mod consolidate;
 pub mod iterate;
 pub mod join;
+pub mod join_alt;
