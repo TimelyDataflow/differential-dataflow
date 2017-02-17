@@ -291,7 +291,9 @@ impl<TS: Timestamp, G: Scope<Timestamp=TS>, K: Data, V: Data> JoinCore<G, K, V> 
         let mut output_buffer = Vec::new();
         let mut times = Vec::new();
 
-        let result = self.inner.binary_notify(&other.inner, exchange1, exchange2, "JoinAlt", vec![], move |input1, input2, output, notificator| {
+        let mut todo: Vec<Deferred<K,V,V2,G::Timestamp,Spine<K,V,G::Timestamp>,Spine<K,V2,G::Timestamp>>> = Vec::new();     // readied outputs to enumerate.
+
+        let stream = self.inner.binary_notify(&other.inner, exchange1, exchange2, "JoinAlt", vec![], move |input1, input2, output, notificator| {
 
             let frontier1 = notificator.frontier(0);
             let frontier2 = notificator.frontier(1);
@@ -330,7 +332,7 @@ impl<TS: Timestamp, G: Scope<Timestamp=TS>, K: Data, V: Data> JoinCore<G, K, V> 
             input1.for_each(|time, data| {
                 inputs1.entry(time.time())
                        .or_insert(BatchCompact::new())
-                       .extend(data.drain(..).map(|(keyval,diff)| (keyval, diff as isize)));
+                       .extend(data.drain(..));
 
                 if !capabilities.iter().any(|c: &Capability<G::Timestamp>| c.time() == time.time()) { capabilities.push(time); }
             });
@@ -339,31 +341,44 @@ impl<TS: Timestamp, G: Scope<Timestamp=TS>, K: Data, V: Data> JoinCore<G, K, V> 
             input2.for_each(|time, data| {
                 inputs2.entry(time.time())
                        .or_insert(BatchCompact::new())
-                       .extend(data.drain(..).map(|(keyval, diff)| (keyval, diff as isize)));
+                       .extend(data.drain(..));
 
                 if !capabilities.iter().any(|c| c.time() == time.time()) { capabilities.push(time); }
             });
 
+            // look for input work that we can now perform.
             capabilities.sort_by(|x,y| x.time().cmp(&y.time()));
-
             if let Some(position) = capabilities.iter().position(|c| !frontier1.iter().any(|t| t.le(&c.time())) &&
                                                                      !frontier2.iter().any(|t| t.le(&c.time())) ) {
                 let capability = capabilities.remove(position);
                 let time = capability.time();
 
-                if let Some(buffer) = inputs1.remove(&time) {
+                // create input batch, insert into trace, prepare work.
+                let work1 = inputs1.remove(&time).and_then(|buffer| {
                     let layer1 = Rc::new(Layer::new(buffer.done().into_iter().map(|((k,v),d)| (k,v,time.clone(),d)), &[], &[]));
-                    trace2.as_ref().map(|trace2| cross_product(&layer1, trace2, &mut output_buffer, |k,v1,v2| result(k,v1,v2)));
-                    trace1.as_mut().map(|trace1| trace1.insert(layer1));
-                }
+                    trace1.as_mut().map(|trace1| trace1.insert(layer1.clone()));
+                    trace2.as_ref().map(|t| (layer1.cursor(), t.cursor()))
+                });
 
-                if let Some(buffer) = inputs2.remove(&time) {
+                // create input batch, insert into trace, prepare work.
+                let work2 = inputs2.remove(&time).and_then(|buffer| {
                     let layer2 = Rc::new(Layer::new(buffer.done().into_iter().map(|((k,v),d)| (k,v,time.clone(),d)), &[], &[]));
-                    trace1.as_ref().map(|trace1| cross_product(&layer2, trace1, &mut output_buffer, |k,v2,v1| result(k,v1,v2)));
-                    trace2.as_mut().map(|trace2| trace2.insert(layer2));
-                }                
+                    trace2.as_mut().map(|trace2| trace2.insert(layer2.clone()));
+                    trace1.as_ref().map(|t| (layer2.cursor(), t.cursor()))
+                });
 
-                consolidate(&mut output_buffer, 0);
+                // enqueue work item if either input needs it.
+                if work1.is_some() || work2.is_some() {
+                    todo.push(Deferred::new(work1, work2, capability));
+                }
+            }
+
+            // do some work on outstanding computation. maybe not all work.
+            if todo.len() > 0 {
+
+                todo[0].work(&mut output_buffer, &result, 1_000_000);
+
+                consolidate(&mut output_buffer, 0); // co-locating like times.
 
                 if output_buffer.len() > 0 {
 
@@ -381,7 +396,7 @@ impl<TS: Timestamp, G: Scope<Timestamp=TS>, K: Data, V: Data> JoinCore<G, K, V> 
 
                     let mut drain = output_buffer.drain(..);
                     for (time, count) in times.drain(..) {
-                        let cap = capability.delayed(&time);
+                        let cap = todo[0].capability().delayed(&time);
                         let mut session = output.session(&cap);
                         for ((_, r), d) in drain.by_ref().take(count) {
                             session.give((r, d));
@@ -389,50 +404,98 @@ impl<TS: Timestamp, G: Scope<Timestamp=TS>, K: Data, V: Data> JoinCore<G, K, V> 
                     }
                 }
 
+                if !todo[0].work_remains() { todo.remove(0); }
+
                 assert!(output_buffer.len() == 0);
                 assert!(times.len() == 0);
             }
         });
 
-        Collection::new(result)
+        Collection::new(stream)
     }
 }
 
-/// Forms the cross product of `layer` and `trace`, applying `result` and populating `buffer`.
-fn cross_product<K, V1, V2, T, R, RF>(layer: &Rc<Layer<K,V1,T>>, trace: &Spine<K,V2,T>, buffer: &mut Vec<((T,R),isize)>, result: RF) 
-where 
-    K: Data,
-    V1: Data,
-    V2: Data,
-    T: Lattice+Ord+::std::fmt::Debug+Clone,
-    R: Data,
-    RF: Fn(&K,&V1,&V2)->R,
-{
-    // construct cursors for the layer and the trace.
-    let mut layer_cursor = layer.cursor();
-    let mut trace_cursor = trace.cursor();
+struct Deferred<K: Ord, V1: Ord, V2: Ord, T: Timestamp+Lattice+Ord, T1: Trace<K, V1, T>, T2: Trace<K, V2, T>> {
+    work1: Option<(<T1::Batch as Batch<K,V1,T>>::Cursor, T2::Cursor)>,
+    work2: Option<(<T2::Batch as Batch<K,V2,T>>::Cursor, T1::Cursor)>,
+    capability: Capability<T>,
+}
 
-    while layer_cursor.key_valid() {
-        let buffer_len = buffer.len(); 
-        trace_cursor.seek_key(layer_cursor.key());
-        if trace_cursor.key_valid() && trace_cursor.key() == layer_cursor.key() {
-            while trace_cursor.val_valid() {
-                while layer_cursor.val_valid() {
-                    layer_cursor.map_times(|time2, diff2| {
-                        trace_cursor.map_times(|time1, diff1| {
-                            let r = result(layer_cursor.key(), layer_cursor.val(), trace_cursor.val());
-                            buffer.push(((time1.join(time2), r), diff1 * diff2));
-                        });                                            
-                    });
+impl<K: Ord, V1: Ord, V2: Ord, T: Timestamp+Lattice+Ord, T1: Trace<K, V1, T>, T2: Trace<K, V2, T>> Deferred<K, V1, V2, T, T1, T2> {
+    fn new(work1: Option<(<T1::Batch as Batch<K,V1,T>>::Cursor, T2::Cursor)>, 
+           work2: Option<(<T2::Batch as Batch<K,V2,T>>::Cursor, T1::Cursor)>, 
+           capability: Capability<T>) -> Self {
+        Deferred {
+            work1: work1,
+            work2: work2,
+            capability: capability,
+        }
+    }
 
-                    layer_cursor.step_val();
+    fn capability(&self) -> &Capability<T> { &self.capability }
+
+    fn work_remains(&self) -> bool { 
+        let work1 = self.work1.as_ref().map(|x| x.0.key_valid());
+        let work2 = self.work2.as_ref().map(|x| x.0.key_valid());
+        work1 == Some(true) || work2 == Some(true)
+    }
+
+    /// Process keys until at least `limit` output tuples produced, or work exhausted.
+    fn work<R: Ord+Clone, RF: Fn(&K, &V1, &V2)->R>(&mut self, output: &mut Vec<((T, R), Delta)>, logic: &RF, limit: usize) {
+
+        // work on the first bit of work.
+        if let Some((ref mut layer, ref mut trace)) = self.work1 {
+            while layer.key_valid() && output.len() < limit {
+                let output_len = output.len(); 
+                trace.seek_key(layer.key());
+                if trace.key_valid() && trace.key() == layer.key() {
+                    while trace.val_valid() {
+                        while layer.val_valid() {
+                            layer.map_times(|time2, diff2| {
+                                trace.map_times(|time1, diff1| {
+                                    let r = logic(layer.key(), layer.val(), trace.val());
+                                    output.push(((time1.join(time2), r), diff1 * diff2));
+                                });                                            
+                            });
+
+                            layer.step_val();
+                        }
+
+                        layer.rewind_vals();
+                        trace.step_val();
+                    }
                 }
-
-                layer_cursor.rewind_vals();
-                trace_cursor.step_val();
+                layer.step_key();
+                consolidate(output, output_len);
             }
         }
-        layer_cursor.step_key();
-        consolidate(buffer, buffer_len);
+
+        // work on the second bit of work.
+        if let Some((ref mut layer, ref mut trace)) = self.work2 {
+            while layer.key_valid() && output.len() < limit {
+                let output_len = output.len(); 
+                trace.seek_key(layer.key());
+                if trace.key_valid() && trace.key() == layer.key() {
+                    while trace.val_valid() {
+                        while layer.val_valid() {
+                            layer.map_times(|time2, diff2| {
+                                trace.map_times(|time1, diff1| {
+                                    let r = logic(layer.key(), trace.val(), layer.val());
+                                    output.push(((time1.join(time2), r), diff1 * diff2));
+                                });                                            
+                            });
+
+                            layer.step_val();
+                        }
+
+                        layer.rewind_vals();
+                        trace.step_val();
+                    }
+                }
+                layer.step_key();
+                consolidate(output, output_len);
+            }
+        }
+
     }
 }
