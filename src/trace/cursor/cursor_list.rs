@@ -146,8 +146,15 @@ impl<C: Cursor> Cursor for CursorList<C> {
 	fn val_valid(&self) -> bool { self.valid_vals > 0 }
 
 	// accessors 
-	fn key(&self) -> &Self::Key { self.cursors[0].key() }
-	fn val(&self) -> &Self::Val { self.cursors[0].val() }
+	fn key(&self) -> &Self::Key { 
+		debug_assert!(self.key_valid());
+		self.cursors[0].key() 
+	}
+	fn val(&self) -> &Self::Val { 
+		debug_assert!(self.key_valid());
+		debug_assert!(self.val_valid());
+		self.cursors[0].val() 
+	}
 	fn map_times<L: FnMut(&Self::Time, isize)>(&self, mut logic: L) {
 		for cursor in &self.cursors[.. self.equiv_vals] {
 			cursor.map_times(|t,d| logic(t,d));

@@ -1,4 +1,5 @@
 use std::iter::Peekable;
+use ::Delta;
 
 pub trait Coalesce<I: Iterator> {
     fn coalesce(self) -> CoalesceIterator<I>;
@@ -22,10 +23,10 @@ impl<I: Iterator> CoalesceIterator<I> {
     }
 }
 
-impl<V: Ord, I: Iterator<Item=(V, i32)>> Iterator for CoalesceIterator<I> {
-    type Item = (V, i32);
+impl<V: Ord, I: Iterator<Item=(V, Delta)>> Iterator for CoalesceIterator<I> {
+    type Item = (V, Delta);
     #[inline]
-    fn next(&mut self) -> Option<(V, i32)> {
+    fn next(&mut self) -> Option<(V, Delta)> {
         loop {
             if let Some((val, mut wgt)) = self.iter.next() {
                 while self.iter.peek().map(|&(ref v, _)| v == &val) == Some(true) {

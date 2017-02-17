@@ -16,7 +16,7 @@ use timely::dataflow::operators::{Map, Unary};
 use timely::dataflow::channels::pact::Exchange;
 use timely_sort::{LSBRadixSorter, Unsigned};
 
-use ::{Data, Collection};
+use ::{Data, Collection, Delta};
 use lattice::Lattice;
 use collection::{Lookup, Trace, TraceReference};
 use collection::basic::{BasicTrace, Offset};
@@ -120,7 +120,7 @@ impl<G: Scope, K: Data, V: Data> ArrangeByKey<G, K, V> for Collection<G, (K, V)>
         // create an exchange channel based on the supplied Fn(&D1)->u64.
         let part1 = Rc::new(key_h);
         let part2 = part1.clone();
-        let exch = Exchange::new(move |&((ref k, _),_): &((K,V),i32)| part1(k).as_u64());
+        let exch = Exchange::new(move |&((ref k, _),_): &((K,V),Delta)| part1(k).as_u64());
 
         let mut sorter = LSBRadixSorter::new();
 

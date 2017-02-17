@@ -1,6 +1,6 @@
 //! A basic collection trace.
 
-use ::Data;
+use ::{Data, Delta};
 use lattice::Lattice;
 use collection::{Trace, TraceReference};
 use collection::Lookup;
@@ -144,7 +144,7 @@ struct ListEntry {
 
 struct TimeEntry<T, V> {
     time: T,
-    vals: Vec<(V, i32)>,
+    vals: Vec<(V, Delta)>,
 }
 
 
@@ -224,12 +224,12 @@ where K: Ord+'a,
 /// Morally equivalent to a `&[(V,i32)]` slice iterator, except it returns a `(&V,i32)` rather than a `&(V,i32)`.
 /// This is important for consolidate and merge.
 pub struct DifferenceIterator<'a, V: 'a> {
-    vals: &'a [(V,i32)],
+    vals: &'a [(V,Delta)],
     next: usize,            // index of next entry in vals,
 }
 
 impl<'a, V: 'a> DifferenceIterator<'a, V> {
-    fn new(vals: &'a [(V, i32)]) -> DifferenceIterator<'a, V> {
+    fn new(vals: &'a [(V,Delta)]) -> DifferenceIterator<'a, V> {
         DifferenceIterator {
             vals: vals,
             next: 0,
@@ -247,10 +247,10 @@ impl<'a, V: 'a> Clone for DifferenceIterator<'a, V> {
 }
 
 impl<'a, V: 'a> Iterator for DifferenceIterator<'a, V> {
-    type Item = (&'a V, i32);
+    type Item = (&'a V, Delta);
 
     #[inline]
-    fn next(&mut self) -> Option<(&'a V, i32)> {
+    fn next(&mut self) -> Option<(&'a V, Delta)> {
         if self.next < self.vals.len() {
             self.next += 1;
             Some((&self.vals[self.next - 1].0, self.vals[self.next - 1].1))

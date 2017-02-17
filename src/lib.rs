@@ -66,8 +66,8 @@
 //!
 //!     let (edges, roots) = root.scoped(|scope| {
 //!
-//!         let (e_in, edges) = scope.new_input::<((u32, u32), i32)>();
-//!         let (r_in, roots) = scope.new_input::<(u32, i32)>();
+//!         let (e_in, edges) = scope.new_input(); // ((u32, u32), isize);
+//!         let (r_in, roots) = scope.new_input(); // (u32, isize);
 //!
 //!         // initialize roots at distance 0
 //!         let start = roots.map(|(x, w)| ((x, 0), w));
@@ -84,9 +84,7 @@
 //!             // group by node id and keep minimum distance.
 //!             dists.join_map(&edges, |_,&d,&n| (n,d+1))
 //!                  .concat(&dists)
-//!                  .group(|_, s, t| {
-//!                      t.push((*s.peek().unwrap().0, 1))
-//!                  })
+//!                  .group(|_, s, t| t.push((s[0].0, 1))
 //!         });
 //!
 //!         // inspect distances!
@@ -109,7 +107,7 @@ use std::hash::Hasher;
 use std::fmt::Debug;
 
 /// A change in count.
-pub type Delta = i32;
+pub type Delta = isize;
 
 pub use stream::{Collection, AsCollection};
 
@@ -153,9 +151,9 @@ extern crate timely_communication;
 
 // pub mod trace;
 
-pub mod collection;
+// pub mod collection;
 pub mod operators;
 pub mod lattice;
 pub mod trace;
-mod iterators;
+// mod iterators;
 mod stream;

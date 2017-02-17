@@ -9,7 +9,7 @@ use iterators::merge::Merge as Whatever;
 use iterators::coalesce::Coalesce;
 
 /// Changes to frequencies.
-pub type W = i32;
+pub type W = ::Delta;
 
 /// A collection of `(K, T, V, W)` tuples, grouped by `K` then `T` then `V`.
 ///

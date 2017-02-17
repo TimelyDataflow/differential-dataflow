@@ -1,6 +1,6 @@
 //! Like `Count` but with the value type specialized to `()`.
 
-use ::Data;
+use ::{Data, Delta};
 use lattice::Lattice;
 use collection::Lookup;
 use collection::compact::Compact;
@@ -84,7 +84,7 @@ impl Offset {
 
 struct ListEntry {
     time: u32,
-    wgts: i32,
+    wgts: Delta,
     next: Option<Offset>,
 }
 
@@ -102,7 +102,7 @@ pub struct Count<K, T, L> {
 
 impl<K, L, T> Count<K, T, L> where K: Data+Ord+'static, L: Lookup<K, Offset>+'static, T: Lattice+'static {
     /// Recovers the count for the `()` value for a key at a time.
-    pub fn get_count(&self, key: &K, time: &T) -> i32 {
+    pub fn get_count(&self, key: &K, time: &T) -> Delta {
         let mut sum = 0;
         for wgt in self.trace(key).filter(|x| x.0 <= time).map(|mut x| x.1.next().unwrap().1) {
             sum += wgt;
@@ -165,13 +165,13 @@ where K: Ord+'a,
 /// This iterator exists because it is needed to implement `Trace` and `TraceRef`.
 /// Its implementation is quite silly, but we seem to need an actual `&()` to return.
 pub struct WeightIterator<'a> {
-    weight: i32,
+    weight: Delta,
     silly: &'a (),
 }
 
 impl<'a> Iterator for WeightIterator<'a> {
-    type Item = (&'a (), i32);
-    fn next(&mut self) -> Option<(&'a (), i32)> {
+    type Item = (&'a (), Delta);
+    fn next(&mut self) -> Option<(&'a (), Delta)> {
         if self.weight == 0 { None }
         else {
             let result = self.weight;

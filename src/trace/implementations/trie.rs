@@ -152,7 +152,7 @@ impl<Key: Ord+Clone, Val: Ord+Clone, Time: Lattice+Ord+Clone> Layer<Key, Val, Ti
 		let mut keys = Vec::new();
 		let mut offs = Vec::new();
 		let mut vals = Vec::new();
-		let mut times = Vec::new();
+		let mut times = Vec::with_capacity(data.size_hint().0);
 
 		if let Some((key, val, time, diff)) = data.next() {
 

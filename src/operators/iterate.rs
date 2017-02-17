@@ -55,7 +55,7 @@ use timely::dataflow::scopes::Child;
 use timely::dataflow::operators::*;
 use timely::dataflow::operators::feedback::Handle;
 
-use ::{Data, Collection};
+use ::{Data, Collection, Delta};
 use lattice::Lattice;
 
 /// An extension trait for the `iterate` method.
@@ -94,7 +94,7 @@ impl<G: Scope, D: Ord+Data+Debug> IterateExt<G, D> for Collection<G, D> {
 pub struct Variable<'a, G: Scope, D: Data>
 where G::Timestamp: Lattice {
     collection: Collection<Child<'a, G, u64>, D>,
-    feedback: Handle<G::Timestamp, u64,(D, i32)>,
+    feedback: Handle<G::Timestamp, u64,(D, Delta)>,
     source: Collection<Child<'a, G, u64>, D>,
 }
 

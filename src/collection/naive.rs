@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::hash::Hash;
 
-use ::Data;
+use ::{Data, Delta};
 use lattice::Lattice;
 use collection::{Trace, TraceReference};
 use collection::compact::Compact;
@@ -11,7 +11,7 @@ use collection::compact::Compact;
 /// A naive trace implementation based on HashMap.
 pub struct HashTrace<K, T, V> {
     // TODO : the hash val could be a (Vec<(T,u32)>, Vec<(V,i32)>) instead...
-    map: HashMap<K, Vec<(T, Vec<(V, i32)>)>>,
+    map: HashMap<K, Vec<(T, Vec<(V, Delta)>)>>,
 }
 
 impl<K,V,T> Trace for HashTrace<K, T, V> 
@@ -76,7 +76,7 @@ where K: Data+Hash+'a,
 
 /// Enumerates pairs of time `&T` and `DifferenceIterator<V>` of `(&V, i32)` elements.
 pub struct TraceIterator<'a, T: 'a, V: 'a> {
-    slice: &'a [(T, Vec<(V, i32)>)],
+    slice: &'a [(T, Vec<(V, Delta)>)],
 }
 
 impl<'a, T, V> Iterator for TraceIterator<'a, T, V>
@@ -113,11 +113,11 @@ where T: Lattice+'a,
 /// Morally equivalent to a `&[(V,i32)]` slice iterator, except it returns a `(&V,i32)` rather than a `&(V,i32)`.
 /// This is important for consolidate and merge.
 pub struct DifferenceIterator<'a, V: 'a> {
-    vals: &'a [(V, i32)],
+    vals: &'a [(V, Delta)],
 }
 
 impl<'a, V: 'a> DifferenceIterator<'a, V> {
-    fn new(vals: &'a [(V, i32)]) -> DifferenceIterator<'a, V> {
+    fn new(vals: &'a [(V, Delta)]) -> DifferenceIterator<'a, V> {
         DifferenceIterator {
             vals: vals,
         }
@@ -133,10 +133,10 @@ impl<'a, V: 'a> Clone for DifferenceIterator<'a, V> {
 }
 
 impl<'a, V: 'a> Iterator for DifferenceIterator<'a, V> {
-    type Item = (&'a V, i32);
+    type Item = (&'a V, Delta);
 
     #[inline]
-    fn next(&mut self) -> Option<(&'a V, i32)> {
+    fn next(&mut self) -> Option<(&'a V, Delta)> {
         if self.vals.len() > 0 {
             let result = (&self.vals[0].0, self.vals[0].1);
             self.vals = &self.vals[1..];

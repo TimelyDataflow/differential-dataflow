@@ -2,7 +2,7 @@
 
 use std::iter::Peekable;
 
-use ::Data;
+use ::{Data, Delta};
 use lattice::{close_under_join, Lattice};
 use collection::compact::Compact;
 
@@ -73,7 +73,7 @@ pub trait TraceReference<'a> : Trace where
     {
 
     /// Iterator over references to values.
-    type VIterator: Iterator<Item=(&'a Self::Value, i32)>+Clone+'a;
+    type VIterator: Iterator<Item=(&'a Self::Value, Delta)>+Clone+'a;
     /// Iterator over times and `VIterator`s.
     type TIterator: Iterator<Item=(&'a Self::Index, Self::VIterator)>+Clone+'a;
     /// Iterates over differences associated with the key.

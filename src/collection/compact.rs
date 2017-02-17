@@ -23,6 +23,8 @@ use std::fmt::Debug;
 
 use timely_sort::Unsigned;
 
+use ::Delta;
+
 /// A compressed representation of the accumulation of `(key, val, wgt)` triples.
 // TODO : RLE where a run of two of the same elements means a value in a second array.
 // TODO : this would probably improve compressed representations of small sets (those without much
@@ -38,7 +40,7 @@ pub struct Compact<K, V> {
     /// treat non-repetitions better.
     pub cnts: Vec<u32>,
     /// A list of values, ordered within each key group.
-    pub vals: Vec<(V, i32)>,
+    pub vals: Vec<(V, Delta)>,
 }
 
 // abomonate!(Compact : keys, cnts, vals);
@@ -71,7 +73,7 @@ impl<K: Ord+Debug, V: Ord> Compact<K, V> {
     /// The `Compact` does not know about the ordering, only that it should look for repetitions of
     /// in the sequences of `key` and `wgt`.
     // #[inline(never)]
-    pub fn extend<I: Iterator<Item=((K, V), i32)>>(&mut self, mut iterator: I) {
+    pub fn extend<I: Iterator<Item=((K, V), Delta)>>(&mut self, mut iterator: I) {
 
         // populate a new `Compact` with merged, coalesced data.
         if let Some(((mut old_key, val), wgt)) = iterator.next() {
@@ -104,7 +106,7 @@ impl<K: Ord+Debug, V: Ord> Compact<K, V> {
 
     /// Extends the compact collection by a set of key-value updates.
     // #[inline(never)]
-    pub fn extend_by(&mut self, buffer: &mut Vec<((K, V), i32)>) {
+    pub fn extend_by(&mut self, buffer: &mut Vec<((K, V), Delta)>) {
 
         // coalesce things
         let mut cursor = 0;
@@ -151,7 +153,7 @@ impl<K: Ord+Debug, V: Ord> Compact<K, V> {
 
     /// Extends the compact collection from the result of a timely_sort radix sorter.
     // #[inline(never)]
-    pub fn from_radix<U: Unsigned+Default, F: Fn(&K)->U>(source: &mut Vec<Vec<((K,V),i32)>>, function: &F) -> Option<Compact<K,V>> {
+    pub fn from_radix<U: Unsigned+Default, F: Fn(&K)->U>(source: &mut Vec<Vec<((K,V),Delta)>>, function: &F) -> Option<Compact<K,V>> {
 
         let mut size = 0;
         for list in source.iter() {
@@ -167,7 +169,7 @@ impl<K: Ord+Debug, V: Ord> Compact<K, V> {
             let hash = function(&key);
             if buffer.len() > 0 && hash != current {
                 // if hash < current { println!("  radix sort error? {} < {}", hash, current); }
-                buffer.sort_by(|x: &((K,V),i32),y: &((K,V),i32)| x.0.cmp(&y.0));
+                buffer.sort_by(|x: &((K,V),Delta),y: &((K,V),Delta)| x.0.cmp(&y.0));
         
                 // result.extend(buffer.drain(..).coalesce());
                 result.extend_by(&mut buffer);
@@ -178,7 +180,7 @@ impl<K: Ord+Debug, V: Ord> Compact<K, V> {
         
         if buffer.len() > 0 {
             // hsort_by(&mut buffer, &|x: &((K,V),i32)| &x.0);
-            buffer.sort_by(|x: &((K,V),i32),y: &((K,V),i32)| x.0.cmp(&y.0));
+            buffer.sort_by(|x: &((K,V),Delta),y: &((K,V),Delta)| x.0.cmp(&y.0));
             result.extend(buffer.drain(..).coalesce());
         }
 
@@ -200,7 +202,7 @@ impl<K: Ord+Debug, V: Ord> Compact<K, V> {
     }
 
     /// Pushes updates for a key from a supplied iterator.
-    pub fn push<I: Iterator<Item=(V, i32)>>(&mut self, key: K, iterator: I) {
+    pub fn push<I: Iterator<Item=(V, Delta)>>(&mut self, key: K, iterator: I) {
         let mut session = self.session();
         for (val, wgt) in iterator {
             session.push(val, wgt);
@@ -226,7 +228,7 @@ impl<'a, K: 'a, V: 'a> CompactSession<'a, K, V> {
     }
     /// Adds an update for the key.
     #[inline]
-    pub fn push(&mut self, val: V, wgt: i32) {
+    pub fn push(&mut self, val: V, wgt: Delta) {
         self.compact.vals.push((val,wgt));
     }
     /// Consumes the session and finalizes the updates.
