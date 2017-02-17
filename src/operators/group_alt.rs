@@ -180,11 +180,7 @@ where G::Timestamp: Lattice+Ord
                 }
 
                 // 2.c: Process interesting keys at this time.
-                if let Some(mut keys) = to_do.remove(&time) {
-
-                    // We would like these keys in a particular order.
-                    // We also want to de-duplicate them, naturally.
-                    // let keys = keys.done();
+                if let Some(keys) = to_do.remove(&time) {
 
                     // session for sending produced output.
                     let mut session = output.session(&capability);
@@ -195,6 +191,7 @@ where G::Timestamp: Lattice+Ord
                     // changes to output_trace we build up (and eventually send).
                     let mut output_layer = Layer::new(Vec::new().into_iter(), &[], &[]);
 
+                    // sort, dedup keys and iterate.
                     for key in keys.done() {
 
                         input_stage.clear();
