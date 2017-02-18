@@ -103,8 +103,8 @@ pub trait Join<G: Scope, K: Data+Ord, V: Data+Ord> {
     ///     let col1 = vec![((0,0),1),((1,2),1)].into_iter().to_stream(scope);
     ///     let col2 = vec![(0,1)].into_iter().to_stream(scope);
     ///
-    ///     // should retain record `(0,0)` and discard `(1,2)`.
-    ///     col1.semijoin(&col2).capture();
+    ///     // should retain record `(1,2)` and discard `(0,0)`.
+    ///     col1.antijoin(&col2).consolidate().capture();
     /// });
     ///
     /// let extracted = data.extract();
@@ -113,6 +113,7 @@ pub trait Join<G: Scope, K: Data+Ord, V: Data+Ord> {
     /// ```
     fn antijoin(&self, other: &Collection<G, K>) -> Collection<G, (K, V)>;
 } 
+
 
 impl<G: Scope, K: Data+Ord, V: Data+Ord> Join<G, K, V> for Collection<G, (K, V)> where G::Timestamp: Lattice+Ord {
     /// Matches pairs of `(key,val1)` and `(key,val2)` records based on `key` and applies a reduction function.
@@ -129,6 +130,26 @@ impl<G: Scope, K: Data+Ord, V: Data+Ord> Join<G, K, V> for Collection<G, (K, V)>
     }
     fn antijoin(&self, other: &Collection<G, K>) -> Collection<G, (K, V)> {
         self.concat(&self.semijoin(other).negate())
+    }
+}
+
+
+impl<G: Scope, K: Data+Ord, V: Data+Ord, T: Trace<K, V, G::Timestamp>> Join<G, K, V> for Arranged<G, K, V, T> 
+where G::Timestamp: Lattice+Ord,
+      T: 'static,
+      T::Batch: 'static {
+    /// Matches pairs of `(key,val1)` and `(key,val2)` records based on `key` and applies a reduction function.
+    fn join_map<V2: Data+Ord, D: Data, R>(&self, other: &Collection<G, (K, V2)>, logic: R) -> Collection<G, D>
+    where R: Fn(&K, &V, &V2)->D+'static {
+        let arranged2 = other.arrange_by_key();
+        self.join_arranged(&arranged2, logic)
+    }
+    fn semijoin(&self, other: &Collection<G, K>) -> Collection<G, (K, V)> {
+        let arranged2 = other.arrange_by_self();
+        self.join_arranged(&arranged2, |k,v,_| (k.clone(), v.clone()))
+    }
+    fn antijoin(&self, other: &Collection<G, K>) -> Collection<G, (K, V)> {
+        self.as_collection().concat(&self.semijoin(other).negate())
     }
 }
 
