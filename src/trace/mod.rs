@@ -18,7 +18,7 @@ pub use self::cursor::viewers::{ KeyViewer, ValViewer, TimeViewer };
 /// An append-only collection of `(key, val, time, diff)` tuples.
 pub trait Trace<Key: Ord, Val: Ord, Time: Ord> {
 	/// The type of an immutable collection of updates.
-	type Batch: Batch<Key, Val, Time>;
+	type Batch: Batch<Key, Val, Time>+Clone;
 	/// The type used to enumerate the collections contents.
 	type Cursor: Cursor<Key = Key, Val = Val, Time = Time>;
 
@@ -55,6 +55,12 @@ pub trait Builder<Key, Val, Time, Output> {
 	fn new() -> Self; 
 	/// Adds a new element to the batch.
 	fn push(&mut self, element: (Key, Val, Time, isize));
+	/// Adds an unordered sequence of new elements to the batch.
+	fn extend<I: Iterator<Item=(Key,Val,Time,isize)>>(&mut self, iter: I) {
+		for item in iter {
+			self.push(item);
+		}
+	}
 	/// Completes building and returns the batch.
 	fn done(self, lower: &[Time], upper: &[Time]) -> Output;
 }

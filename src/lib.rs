@@ -118,7 +118,7 @@ pub use stream::{Collection, AsCollection};
 // fakes HKT with `TraceRef`.
 
 /// A composite trait for data types usable in differential dataflow.
-pub trait Data : timely::Data + ::std::hash::Hash + Ord + Debug {
+pub trait Data : timely::ExchangeData + ::std::hash::Hash + Ord + Debug {
     /// Extracts a `u64` suitable for distributing and sorting the data.
     ///
     /// The default implementation use `FnvHasher`. It might be nice to couple this more carefully
@@ -132,7 +132,7 @@ pub trait Data : timely::Data + ::std::hash::Hash + Ord + Debug {
         h.finish()
     }
 }
-impl<T: timely::Data + ::std::hash::Hash + Ord + Debug> Data for T { }
+impl<T: timely::ExchangeData + ::std::hash::Hash + Ord + Debug> Data for T { }
 
 /// An extension of timely's `Scope` trait requiring timestamps implement `LeastUpperBound`.
 ///
@@ -148,12 +148,9 @@ extern crate itertools;
 extern crate linear_map;
 extern crate timely_sort;
 extern crate timely_communication;
+extern crate abomonation;
 
-// pub mod trace;
-
-// pub mod collection;
 pub mod operators;
 pub mod lattice;
 pub mod trace;
-// mod iterators;
 mod stream;

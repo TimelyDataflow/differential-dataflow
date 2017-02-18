@@ -20,7 +20,7 @@ pub use self::join_alt::Join;
 // pub use self::arrange::{ArrangeByKey, ArrangeBySelf};
 
 // pub mod arrange;
-// pub mod arrange_alt;
+pub mod arrange_alt;
 // pub mod threshold;
 // pub mod group;
 pub mod group_alt;

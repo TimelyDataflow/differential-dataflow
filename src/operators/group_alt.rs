@@ -32,88 +32,92 @@
 //! ```
 
 use std::rc::Rc;
+use std::cell::RefCell;
 
 use linear_map::LinearMap;
 
 use ::{Data, Collection, Delta};
-use stream::AsCollection;
 
 use timely::progress::Antichain;
 use timely::dataflow::*;
 use timely::dataflow::operators::Unary;
-use timely::dataflow::channels::pact::Exchange;
+use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Capability;
-use timely_sort::Unsigned;
 
+use operators::arrange_alt::{Arranged, ArrangeByKey, ArrangeBySelf, BatchWrapper, TraceHandle, TraceWrapper};
 use lattice::Lattice;
-use trace::{Batch, Spine, Layer, Cursor, Trace};
+use trace::{Batch, Cursor, Trace, Builder};
+use trace::implementations::trie::Spine as TrieSpine;
+use trace::implementations::keys::Spine as KeysSpine;
 
 
-/// Extension trait for the `group` differential dataflow method
+/// Extension trait for the `group` differential dataflow method.
 pub trait Group<G: Scope, K: Data, V: Data> where G::Timestamp: Lattice+Ord {
-
     /// Groups records by their first field, and applies reduction logic to the associated values.
-    fn group<L, V2: Data>(&self, logic: L) -> Collection<G, (K,V2)>
+    fn group<L, V2: Data>(&self, logic: L) -> Collection<G, (K, V2)>
         where L: Fn(&K, &[(V, Delta)], &mut Vec<(V2, Delta)>)+'static;
+}
 
-    /// Groups records by their first field, and applies reduction logic to the associated values.
-    fn group_u<L, V2: Data>(&self, logic: L) -> Collection<G, (K,V2)>
-        where L: Fn(&K, &[(V, Delta)], &mut Vec<(V2, Delta)>)+'static,
-              K: Unsigned {
-                self.group(logic)
+impl<G: Scope, K: Data, V: Data> Group<G, K, V> for Collection<G, (K, V)> where G::Timestamp: Lattice+Ord {
+    fn group<L, V2: Data>(&self, logic: L) -> Collection<G, (K, V2)>
+        where L: Fn(&K, &[(V, Delta)], &mut Vec<(V2, Delta)>)+'static {
+
+        self.arrange_by_key()
+            .group_arranged::<_,_,TrieSpine<K,V2,G::Timestamp>>(logic)
+            .as_collection()
     }
 }
 
-/// Counts the number of occurrences of each element.
-pub trait Distinct<G: Scope, K: Data> where G::Timestamp: Lattice {
-    /// Counts the number of occurrences of each element.
+/// Extension trait for the `distinct` differential dataflow method.
+pub trait Distinct<G: Scope, K: Data> where G::Timestamp: Lattice+Ord {
+    /// Reduces the collection to one occurrence of each distinct element.
     fn distinct(&self) -> Collection<G, K>;
-
-    /// Counts the number of occurrences of each unsigned element.
-    fn distinct_u(&self) -> Collection<G, K> where K: Unsigned;
 }
 
 impl<G: Scope, K: Data+Ord> Distinct<G, K> for Collection<G, K> where G::Timestamp: Lattice+Ord {
     fn distinct(&self) -> Collection<G, K> {
-        self.map(|k| (k,()))
-            .group(|_k,_s,t| t.push(((), 1)))
+        self.arrange_by_self()
+            .group_arranged::<_,_,KeysSpine<K,G::Timestamp>>(|_k,_s,t| t.push(((), 1)))
+            .as_collection()
             .map(|(k,_)| k)
-    }
-    fn distinct_u(&self) -> Collection<G, K> {
-        self.distinct()
     }
 }
 
 
-/// Counts the number of occurrences of each element.
-pub trait Count<G: Scope, K: Data> where G::Timestamp: Lattice {
+/// Extension trait for the `count` differential dataflow method.
+pub trait Count<G: Scope, K: Data> where G::Timestamp: Lattice+Ord {
     /// Counts the number of occurrences of each element.
-    fn count(&self) -> Collection<G, (K,Delta)>;
-
-    /// Counts the number of occurrences of each unsigned element.
-    fn count_u(&self) -> Collection<G, (K,Delta)> where K: Unsigned+Default;
+    fn count(&self) -> Collection<G, (K, isize)>;
 }
 
 impl<G: Scope, K: Data+Ord> Count<G, K> for Collection<G, K> where G::Timestamp: Lattice+Ord {
-    fn count(&self) -> Collection<G, (K,Delta)> {
-        self.map(|k| (k,()))
-            .group(|_k,s,t| t.push((s[0].1, 1)))
-    }
-    fn count_u(&self) -> Collection<G,(K,Delta)> {
-        self.count()
+    fn count(&self) -> Collection<G, (K, isize)> {
+        self.arrange_by_self()
+            .group_arranged::<_,_,TrieSpine<K,isize,G::Timestamp>>(|_k,s,t| t.push((s[0].1, 1)))
+            .as_collection()
     }
 }
 
-impl<G: Scope, K: Data, V: Data> Group<G, K, V> for Collection<G, (K,V)>
-where G::Timestamp: Lattice+Ord
+
+/// Extension trace for the group_arranged differential dataflow method.
+pub trait GroupArranged<G: Scope, K: Data, V: Data> where G::Timestamp: Lattice+Ord {
+    /// Applies `group` to arranged data, and returns an arrangement of output data.
+    fn group_arranged<L, V2: Data, T2: Trace<K, V2, G::Timestamp>+'static>(&self, logic: L) -> Arranged<G, K, V2, T2>
+        where L: Fn(&K, &[(V, Delta)], &mut Vec<(V2, Delta)>)+'static;
+}
+
+impl<G: Scope, K: Data, V: Data, T1: Trace<K,V,G::Timestamp>+'static> GroupArranged<G, K, V> for Arranged<G, K, V, T1>
+where G::Timestamp: Lattice+Ord, T1::Batch: Clone+'static
 {
-    fn group<L, V2: Data>(&self, logic: L) -> Collection<G, (K,V2)>
+    fn group_arranged<L, V2: Data, T2: Trace<K, V2, G::Timestamp>+'static>(&self, logic: L) -> Arranged<G, K, V2, T2>
         where L: Fn(&K, &[(V, Delta)], &mut Vec<(V2, Delta)>)+'static {
 
-        let mut source_trace = Spine::new(Default::default());  // trace for received input updates.
-        let mut output_trace = Spine::new(Default::default());  // trace for produced output updates.
+        let mut source_trace = self.new_handle();
+        let result_trace = Rc::new(RefCell::new(TraceWrapper::new(Default::default())));
+        let mut output_trace = TraceHandle::new(&result_trace);
 
-        let mut inputs = LinearMap::new();  // A map from times to received (key, val, wgt) triples.
+        // let mut inputs = LinearMap::new();  // A map from times to received (key, val, wgt) triples.
+        // let mut inputs = Vec::new();
         let mut to_do = LinearMap::new();   // A map from times to a list of keys that need processing at that time.
         let mut capabilities = Vec::new();  // notificator replacement (for capabilities).
 
@@ -121,37 +125,30 @@ where G::Timestamp: Lattice+Ord
         let mut input_stage = Vec::new();   // staging for per-key input (pre-iterator).
         let mut output_stage = Vec::new();  // staging for per-key output.
 
-        let exchange = Exchange::new(|x: &((K,V),Delta)| (x.0).0.hashed());
+        // let exchange = Exchange::new(|x: &((K,V),Delta)| (x.0).0.hashed());
 
         // fabricate a data-parallel operator using the `unary_notify` pattern.
-        self.inner.unary_notify(exchange, "GroupAlt", vec![], move |input, output, notificator| {
+        let stream = self.stream.unary_notify(Pipeline, "GroupArrange", vec![], move |input, output, notificator| {
 
             // 1. read each input, and stash it in our staging area.
-            // enqueue capability if one does not yet exist.
+            // We expect *exactly one* record for each time, as we are getting arranged batches.
             input.for_each(|time, data| {
-                let updates = inputs.entry(time.time()).or_insert_with(|| {
-                    if !capabilities.iter().any(|c: &Capability<G::Timestamp>| c.time() == time.time()) {
-                        capabilities.push(time);
-                    }
-                    BatchCompact::new()
-                });
-
-                for ((key, val), diff) in data.drain(..) {
-                    updates.push(((key, val), diff));
-                }
+                // replace existing entry with the received batch.
+                capabilities.retain(|x: &(Capability<G::Timestamp>, _)| x.0.time() != time.time());
+                capabilities.push((time, data.drain(..).next()));
             });
 
             // 2. go through each time of interest that has reached completion. 
             // times are interesting if we have received data for the time, or
             // if we have determined that some keys must be re-evaluated to see
             // if the output remains unchanged.
-            capabilities.sort_by(|x,y| x.time().cmp(&y.time()));
-            if let Some(position) = capabilities.iter().position(|c| !notificator.frontier(0).iter().any(|t| t.le(&c.time()))) {
+            capabilities.sort_by(|x,y| x.0.time().cmp(&y.0.time()));
+            if let Some(position) = capabilities.iter().position(|c| !notificator.frontier(0).iter().any(|t| t.le(&c.0.time()))) {
 
                 // 2.a: form frontier, advance traces.
                 let mut frontier = Antichain::new();
-                for capability in capabilities.iter() {
-                    frontier.insert(capability.time());
+                for entry in capabilities.iter() {
+                    frontier.insert(entry.0.time());
                 }
                 for time in notificator.frontier(0).iter() {
                     frontier.insert(time.clone());
@@ -161,35 +158,32 @@ where G::Timestamp: Lattice+Ord
                 output_trace.advance_by(frontier.elements());
 
                 // *now* safe to pop capability out (not before 2.a).
-                let capability = capabilities.swap_remove(position);
+                let (capability, wrapped) = capabilities.swap_remove(position);
                 let time = capability.time();
 
                 // 2.b: order inputs; enqueue work (keys); update source trace.
-                if let Some(batch) = inputs.remove(&time) {
-
-                    let layer = Rc::new(Layer::new(batch.done().into_iter().map(|((k,v),d)| (k, v, time.clone(), d)), &[], &[]));
-
+                if let Some(wrapped) = wrapped {
+                    let batch = wrapped.item;
                     let mut todo = to_do.entry(time.clone()).or_insert(BatchDistinct::new());
-                    let mut layer_cursor = layer.cursor();
-                    while layer_cursor.key_valid() {
-                        todo.push(layer_cursor.key().clone());
-                        layer_cursor.step_key();
+                    let mut batch_cursor = batch.cursor();
+                    while batch_cursor.key_valid() {
+                        todo.push(batch_cursor.key().clone());
+                        batch_cursor.step_key();
                     }
 
-                    source_trace.insert(layer);
+                    // source_trace.insert(batch);
                 }
 
                 // 2.c: Process interesting keys at this time.
                 if let Some(keys) = to_do.remove(&time) {
 
-                    // session for sending produced output.
-                    let mut session = output.session(&capability);
-
-                    let mut source_cursor = source_trace.cursor();
-                    let mut output_cursor = output_trace.cursor();
+                    let source_borrow = source_trace.wrapper.borrow();
+                    let mut source_cursor = source_borrow.trace.cursor();
+                    let output_borrow: &mut T2 = &mut output_trace.wrapper.borrow_mut().trace;
+                    let mut output_cursor = output_borrow.cursor();
 
                     // changes to output_trace we build up (and eventually send).
-                    let mut output_layer = Layer::new(Vec::new().into_iter(), &[], &[]);
+                    let mut output_builder = <T2::Batch as Batch<K,V2,G::Timestamp>>::Builder::new();
 
                     // sort, dedup keys and iterate.
                     for key in keys.done() {
@@ -260,8 +254,8 @@ where G::Timestamp: Lattice+Ord
                             to_do.entry(new_time.clone())
                                  .or_insert_with(|| {
                                     let delayed = capability.delayed(new_time);
-                                    if !capabilities.iter().any(|c| c.time() == delayed.time()) {
-                                        capabilities.push(delayed);
+                                    if !capabilities.iter().any(|c| c.0.time() == delayed.time()) {
+                                        capabilities.push((delayed, None));
                                     }
                                     BatchDistinct::new()
                                  })
@@ -270,26 +264,24 @@ where G::Timestamp: Lattice+Ord
                         time_stage.clear(); 
 
                         // 4. send output differences, assemble output layer
+                        // TODO : introduce "ordered builder" trait, impls.
                         if output_stage.len() > 0 {
-
                             for (val, diff) in output_stage.drain(..) {
-                                session.give(((key.clone(), val.clone()), diff));
-                                output_layer.times.push((time.clone(), diff));
-                                output_layer.vals.push((val, output_layer.times.len()));
+                                output_builder.push((key.clone(), val.clone(), time.clone(), diff));
                             }
-
-                            output_layer.keys.push(key);
-                            output_layer.offs.push(output_layer.vals.len());
                         }
 
                     }
 
-                    // commit output updates to output_trace.
-                    output_trace.insert(Rc::new(output_layer));
+                    // send and commit output updates
+                    let output_batch = output_builder.done(&[], &[]);
+                    output.session(&capability).give(BatchWrapper { item: output_batch.clone() });
+                    output_borrow.insert(output_batch);
                 }
             }
-        })
-        .as_collection()
+        });
+
+        Arranged { stream: stream, trace: result_trace, collection: None }
     }
 }
 
