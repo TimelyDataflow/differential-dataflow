@@ -6,7 +6,7 @@
 //! One of the intents of the trie representation is that it can provide multiple `Trace` implementations: 
 //! the trie can have the standard (key, val) interpretation, but it can also act as a trace whose keys are
 //! (key, val) and whose values are (), which can be useful for set operations (e.g. `distinct`) on the 
-//! collection.
+//! collection. These other implementations are currently commented out as they confound type inference.
 
 use std::rc::Rc;
 use std::cmp::Ordering;
