@@ -16,6 +16,9 @@
 //! counted pointer, and which mediates the advancement of frontiers. Ideally, a `TraceHandle` looks a
 //! lot like a trace, though this isn't beatifully masked at the moment (it can't implement the trait
 //! because we can't insert at it; it does implement `advance_by` and could implement `cursor`). 
+//! 
+//! Note: in the current implementation, all batches have only one time. This will probably change and
+//! shouldn't be relied on.
 
 use std::rc::Rc;
 use std::cell::RefCell;
@@ -25,13 +28,12 @@ use linear_map::LinearMap;
 
 use timely::dataflow::*;
 use timely::dataflow::operators::Unary;
-use timely::dataflow::channels::pact::Exchange;
+use timely::dataflow::channels::pact::{Pipeline, Exchange};
 use timely::progress::frontier::MutableAntichain;
 
-use ::{Data, Collection};
+use ::{Data, Collection, AsCollection};
 use lattice::Lattice;
-use trace::{Trace, Batch, Builder};
-
+use trace::{Trace, Batch, Builder, Cursor};
 use trace::implementations::trie::Spine as TrieSpine;
 use trace::implementations::keys::Spine as KeysSpine;
 
@@ -154,7 +156,28 @@ impl<G: Scope, K: Data+Ord, V: Data+Ord, T: Trace<K, V, G::Timestamp>> Arranged<
     /// to the `Arrange` operator. However, this may be the only way to recover a collection from 
     /// only the `Arranged` type.
     pub fn as_collection(&self) -> Collection<G, (K, V)> {
-        unimplemented!()
+
+        // unimplemented!()
+
+        self.stream.unary_stream(Pipeline, "AsCollection", |input, output| {
+            input.for_each(|time, data| {
+                let mut session = output.session(&time);
+                for wrapper in data.drain(..) {
+                    let batch = wrapper.item;
+                    let mut cursor = batch.cursor();
+                    while cursor.key_valid() {
+                        while cursor.val_valid() {
+                            cursor.map_times(|_time, diff| {
+                                session.give(((cursor.key().clone(), cursor.val().clone()), diff));
+                            });
+                            cursor.step_val();
+                        }
+                        cursor.step_key();
+                    }
+                }
+            })
+        })
+        .as_collection()
     }
 }
 
