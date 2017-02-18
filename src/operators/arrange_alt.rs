@@ -104,6 +104,10 @@ impl<K: Ord, V: Ord, T: Lattice+Ord+Clone+::std::fmt::Debug+'static, Tr: Trace<K
         self.wrapper.borrow_mut().adjust_frontier(&self.frontier[..], frontier);
         self.frontier = frontier.to_vec();
     }
+    /// Creates a new cursor over the wrapped trace.
+    pub fn cursor(&self) -> Tr::Cursor {
+        self.wrapper.borrow().trace.cursor()
+    }
 }
 
 impl<K: Ord, V: Ord, T: Lattice+Ord+Clone+::std::fmt::Debug+'static, Tr: Trace<K, V, T>> Drop for TraceHandle<K, V, T, Tr> {

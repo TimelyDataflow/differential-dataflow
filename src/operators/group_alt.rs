@@ -177,10 +177,9 @@ where G::Timestamp: Lattice+Ord, T1::Batch: Clone+'static
                 // 2.c: Process interesting keys at this time.
                 if let Some(keys) = to_do.remove(&time) {
 
-                    let source_borrow = source_trace.wrapper.borrow();
-                    let mut source_cursor = source_borrow.trace.cursor();
-                    let output_borrow: &mut T2 = &mut output_trace.wrapper.borrow_mut().trace;
-                    let mut output_cursor = output_borrow.cursor();
+                    // let source_borrow = source_trace.wrapper.borrow();
+                    let mut source_cursor: T1::Cursor = source_trace.cursor();
+                    let mut output_cursor: T2::Cursor = output_trace.cursor();
 
                     // changes to output_trace we build up (and eventually send).
                     let mut output_builder = <T2::Batch as Batch<K,V2,G::Timestamp>>::Builder::new();
@@ -276,6 +275,7 @@ where G::Timestamp: Lattice+Ord, T1::Batch: Clone+'static
                     // send and commit output updates
                     let output_batch = output_builder.done(&[], &[]);
                     output.session(&capability).give(BatchWrapper { item: output_batch.clone() });
+                    let output_borrow: &mut T2 = &mut output_trace.wrapper.borrow_mut().trace;
                     output_borrow.insert(output_batch);
                 }
             }

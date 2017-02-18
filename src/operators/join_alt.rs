@@ -1,23 +1,17 @@
 //! Match pairs of records based on a key.
 
-use std::rc::Rc;
-use std::default::Default;
-
 use linear_map::LinearMap;
 
 use timely::progress::{Timestamp, Antichain};
 use timely::dataflow::Scope;
 use timely::dataflow::operators::Binary;
-use timely::dataflow::channels::pact::Exchange;
+use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Capability;
-use timely_sort::Unsigned;
 
 use ::{Data, Delta, Collection};
 use lattice::Lattice;
-// use collection::Lookup;
-use operators::group_alt::BatchCompact;
-use trace::{Batch, Layer, Cursor, Trace, Spine, consolidate};
-
+use operators::arrange_alt::{Arranged, ArrangeByKey, ArrangeBySelf};
+use trace::{Batch, Cursor, Trace, consolidate};
 
 /// Join implementations for `(key,val)` data.
 pub trait Join<G: Scope, K: Data+Ord, V: Data+Ord> {
@@ -118,132 +112,23 @@ pub trait Join<G: Scope, K: Data+Ord, V: Data+Ord> {
     /// assert_eq!(extracted[0].1, vec![((1,2),1)]);
     /// ```
     fn antijoin(&self, other: &Collection<G, K>) -> Collection<G, (K, V)>;
-
-    /// Joins two collections with dense unsigned integer keys.
-    ///
-    /// #Examples
-    /// ```ignore
-    /// extern crate timely;
-    /// use timely::dataflow::operators::{ToStream, Capture};
-    /// use timely::dataflow::operators::capture::Extract;
-    /// use differential_dataflow::operators::Join;
-    ///
-    /// let data = timely::example(|scope| {
-    ///     let col1 = vec![((0,0),1),((1,2),1)].into_iter().to_stream(scope);
-    ///     let col2 = vec![((0,'a'),1),((1,'B'),1)].into_iter().to_stream(scope);
-    ///
-    ///     // should produce triples `(0,0,'a')` and `(1,2,'B')`.
-    ///     col1.join_u(&col2).capture();
-    /// });
-    ///
-    /// let extracted = data.extract();
-    /// assert_eq!(extracted.len(), 1);
-    /// assert_eq!(extracted[0].1, vec![((0,0,'a'),1), ((1,2,'B'),1)]);
-    /// ```
-    fn join_u<V2: Data>(&self, other: &Collection<G, (K,V2)>) -> Collection<G, (K,V,V2)> where K: Unsigned+Default {
-        self.join_map_u(other, |k,v1,v2| (k.clone(), v1.clone(), v2.clone()))
-    }
-    /// Joins two collections with dense unsigned integer keys and then applies a map function.
-    ///
-    /// #Examples
-    /// ```ignore
-    /// extern crate timely;
-    /// use timely::dataflow::operators::{ToStream, Capture};
-    /// use timely::dataflow::operators::capture::Extract;
-    /// use differential_dataflow::operators::Join;
-    ///
-    /// let data = timely::example(|scope| {
-    ///     let col1 = vec![((0,0),1),((1,2),1)].into_iter().to_stream(scope);
-    ///     let col2 = vec![((0,'a'),1),((1,'B'),1)].into_iter().to_stream(scope);
-    ///
-    ///     // should produce records `(0 + 0,'a')` and `(1 + 2,'B')`.
-    ///     col1.join_map_u(&col2, |k,v1,v2| (*k + *v1, *v2)).capture();
-    /// });
-    ///
-    /// let extracted = data.extract();
-    /// assert_eq!(extracted.len(), 1);
-    /// assert_eq!(extracted[0].1, vec![((0,'a'),1), ((3,'B'),1)]);
-    /// ```
-    fn join_map_u<V2: Data, D: Data, R: Fn(&K, &V, &V2)->D+'static>(&self, other: &Collection<G, (K,V2)>, logic: R) -> Collection<G, D> where K: Unsigned+Default;
-    /// Semijoins a collection with dense unsigned integer keys against a set of such keys.
-    ///
-    /// #Examples
-    /// ```ignore
-    /// extern crate timely;
-    /// use timely::dataflow::operators::{ToStream, Capture};
-    /// use timely::dataflow::operators::capture::Extract;
-    /// use differential_dataflow::operators::Join;
-    ///
-    /// let data = timely::example(|scope| {
-    ///     let col1 = vec![((0,0),1),((1,2),1)].into_iter().to_stream(scope);
-    ///     let col2 = vec![(0,1)].into_iter().to_stream(scope);
-    ///
-    ///     // should retain record `(0,0)` and discard `(1,2)`.
-    ///     col1.semijoin(&col2).capture();
-    /// });
-    ///
-    /// let extracted = data.extract();
-    /// assert_eq!(extracted.len(), 1);
-    /// assert_eq!(extracted[0].1, vec![((0,0),1)]);
-    /// ```
-    fn semijoin_u(&self, other: &Collection<G, K>) -> Collection<G, (K, V)> where K: Unsigned+Default;
-    /// Antijoins a collection with dense unsigned integer keys against a set of such keys.
-    ///
-    /// #Examples
-    /// ```ignore
-    /// extern crate timely;
-    /// use timely::dataflow::operators::{ToStream, Capture};
-    /// use timely::dataflow::operators::capture::Extract;
-    /// use differential_dataflow::operators::Join;
-    ///
-    /// let data = timely::example(|scope| {
-    ///     let col1 = vec![((0,0),1),((1,2),1)].into_iter().to_stream(scope);
-    ///     let col2 = vec![(0,1)].into_iter().to_stream(scope);
-    ///
-    ///     // should retain record `(0,0)` and discard `(1,2)`.
-    ///     col1.semijoin(&col2).capture();
-    /// });
-    ///
-    /// let extracted = data.extract();
-    /// assert_eq!(extracted.len(), 1);
-    /// assert_eq!(extracted[0].1, vec![((0,0),1)]);
-    /// ```
-    fn antijoin_u(&self, other: &Collection<G, K>) -> Collection<G, (K, V)> where K: Unsigned+Default;
 } 
 
 impl<G: Scope, K: Data+Ord, V: Data+Ord> Join<G, K, V> for Collection<G, (K, V)> where G::Timestamp: Lattice+Ord {
     /// Matches pairs of `(key,val1)` and `(key,val2)` records based on `key` and applies a reduction function.
     fn join_map<V2: Data+Ord, D: Data, R>(&self, other: &Collection<G, (K, V2)>, logic: R) -> Collection<G, D>
     where R: Fn(&K, &V, &V2)->D+'static {
-        self.join_core(&other, logic)
-        // let arranged1 = self.arrange_by_key(|k| k.hashed(), |_| HashMap::new());
-        // let arranged2 = other.arrange_by_key(|k| k.hashed(), |_| HashMap::new());
-        // arranged1.join(&arranged2, logic)
+        let arranged1 = self.arrange_by_key();
+        let arranged2 = other.arrange_by_key();
+        arranged1.join_arranged(&arranged2, logic)
     }
     fn semijoin(&self, other: &Collection<G, K>) -> Collection<G, (K, V)> {
-        self.join_map(&other.map(|k| (k,())), |k,v,_| (k.clone(), v.clone()))
-        // let arranged1 = self.arrange_by_key(|k| k.hashed(), |_| HashMap::new());
-        // let arranged2 = other.arrange_by_self(|k| k.hashed(), |_| HashMap::new());
-        // arranged1.join(&arranged2, |k,v,_| (k.clone(), v.clone()))
+        let arranged1 = self.arrange_by_key();
+        let arranged2 = other.arrange_by_self();
+        arranged1.join_arranged(&arranged2, |k,v,_| (k.clone(), v.clone()))
     }
     fn antijoin(&self, other: &Collection<G, K>) -> Collection<G, (K, V)> {
         self.concat(&self.semijoin(other).negate())
-    }
-
-    fn join_map_u<V2: Data+Ord, D: Data, R: Fn(&K, &V, &V2)->D+'static>(&self, other: &Collection<G, (K,V2)>, logic: R) -> Collection<G, D> where K: Unsigned+Default {
-        self.join_map(other, logic)
-        // let arranged1 = self.arrange_by_key(|k| k.clone(), |x| (VecMap::new(), x));
-        // let arranged2 = other.arrange_by_key(|k| k.clone(), |x| (VecMap::new(), x));
-        // arranged1.join(&arranged2, logic)
-    }
-    fn semijoin_u(&self, other: &Collection<G, K>) -> Collection<G, (K, V)> where K: Unsigned+Default {
-        self.semijoin(other)
-        // let arranged1 = self.arrange_by_key(|k| k.clone(), |x| (VecMap::new(), x));
-        // let arranged2 = other.arrange_by_self(|k| k.clone(), |x| (VecMap::new(), x));
-        // arranged1.join(&arranged2, |k,v,_| (k.clone(), v.clone()))        
-    }
-    fn antijoin_u(&self, other: &Collection<G, K>) -> Collection<G, (K, V)> where K: Unsigned+Default {
-        self.concat(&self.semijoin_u(other).negate())
     }
 }
 
@@ -253,7 +138,7 @@ impl<G: Scope, K: Data+Ord, V: Data+Ord> Join<G, K, V> for Collection<G, (K, V)>
 /// This method is used by the various `join` implementations, but it can also be used 
 /// directly in the event that one has a handle to an `Arranged<G,T>`, perhaps because
 /// the arrangement is available for re-use, or from the output of a `group` operator.
-pub trait JoinCore<G: Scope, K: Data, V: Data> where G::Timestamp: Lattice+Ord {
+pub trait JoinArranged<G: Scope, K: Data, V: Data> where G::Timestamp: Lattice+Ord {
     /// Joins two arranged collections with the same key type.
     ///
     /// Each matching pair of records `(key, val1)` and `(key, val2)` are subjected to the `result` function, 
@@ -261,39 +146,49 @@ pub trait JoinCore<G: Scope, K: Data, V: Data> where G::Timestamp: Lattice+Ord {
     ///
     /// This trait is implemented for arrangements (`Arranged<G, T>`) rather than collections. The `Join` trait 
     /// contains the implementations for collections.
-    fn join_core<V2,R,RF> (&self, stream2: &Collection<G,(K,V2)>, result: RF) -> Collection<G,R>
+    fn join_arranged<V2,T2,R,RF> (&self, stream2: &Arranged<G,K,V2,T2>, result: RF) -> Collection<G,R>
     where 
         V2: Data+Ord,
+        T2: Trace<K,V2,G::Timestamp>,
+        T2: 'static,
+        T2::Batch: 'static,
         R: Data,
         RF: Fn(&K,&V,&V2)->R+'static;
 }
 
-impl<TS: Timestamp, G: Scope<Timestamp=TS>, K: Data, V: Data> JoinCore<G, K, V> for Collection<G, (K,V)> 
+impl<G: Scope, K: Data, V: Data, T1: Trace<K,V,G::Timestamp>> JoinArranged<G, K, V> for Arranged<G,K,V,T1> 
     where 
-        G::Timestamp: Lattice+Ord {
-    fn join_core<V2,R,RF>(&self, other: &Collection<G,(K,V2)>, result: RF) -> Collection<G,R> 
+        G::Timestamp: Lattice+Ord,
+        T1: 'static,
+        T1::Batch: 'static,
+         {
+    fn join_arranged<V2,T2,R,RF>(&self, other: &Arranged<G,K,V2,T2>, result: RF) -> Collection<G,R> 
     where 
         V2: Data,
+        T2: Trace<K,V2,G::Timestamp>,
+        T2: 'static,
+        T2::Batch: 'static,
         R: Data,
         RF: Fn(&K,&V,&V2)->R+'static {
 
-        let mut trace1 = Some(Spine::new(Default::default()));
-        let mut trace2 = Some(Spine::new(Default::default()));
+        let mut trace1 = Some(self.new_handle());
+        let mut trace2 = Some(other.new_handle());
 
         let mut inputs1 = LinearMap::new();
         let mut inputs2 = LinearMap::new();
 
         let mut capabilities = Vec::new();
+        let mut acknowledged = Vec::new();
 
-        let exchange1 = Exchange::new(|&(ref k,_): &((K,V),Delta) | k.hashed());
-        let exchange2 = Exchange::new(|&(ref k,_): &((K,V2),Delta)| k.hashed());
+        // let exchange1 = Exchange::new(|&(ref k,_): &((K,V),Delta) | k.hashed());
+        // let exchange2 = Exchange::new(|&(ref k,_): &((K,V2),Delta)| k.hashed());
 
         let mut output_buffer = Vec::new();
         let mut times = Vec::new();
 
-        let mut todo: Vec<Deferred<K,V,V2,G::Timestamp,Spine<K,V,G::Timestamp>,Spine<K,V2,G::Timestamp>>> = Vec::new();     // readied outputs to enumerate.
+        let mut todo: Vec<Deferred<K,V,V2,G::Timestamp,T1,T2>> = Vec::new();     // readied outputs to enumerate.
 
-        let stream = self.inner.binary_notify(&other.inner, exchange1, exchange2, "JoinAlt", vec![], move |input1, input2, output, notificator| {
+        let stream = self.stream.binary_notify(&other.stream, Pipeline, Pipeline, "JoinAlt", vec![], move |input1, input2, output, notificator| {
 
             let frontier1 = notificator.frontier(0);
             let frontier2 = notificator.frontier(1);
@@ -330,19 +225,13 @@ impl<TS: Timestamp, G: Scope<Timestamp=TS>, K: Data, V: Data> JoinCore<G, K, V> 
 
             // read input 1, push all data to queues
             input1.for_each(|time, data| {
-                inputs1.entry(time.time())
-                       .or_insert(BatchCompact::new())
-                       .extend(data.drain(..));
-
+                inputs1.insert(time.time(), data.drain(..).next().unwrap());
                 if !capabilities.iter().any(|c: &Capability<G::Timestamp>| c.time() == time.time()) { capabilities.push(time); }
             });
 
             // read input 2, push all data to queues
             input2.for_each(|time, data| {
-                inputs2.entry(time.time())
-                       .or_insert(BatchCompact::new())
-                       .extend(data.drain(..));
-
+                inputs2.insert(time.time(), data.drain(..).next().unwrap());
                 if !capabilities.iter().any(|c| c.time() == time.time()) { capabilities.push(time); }
             });
 
@@ -354,23 +243,22 @@ impl<TS: Timestamp, G: Scope<Timestamp=TS>, K: Data, V: Data> JoinCore<G, K, V> 
                 let time = capability.time();
 
                 // create input batch, insert into trace, prepare work.
-                let work1 = inputs1.remove(&time).and_then(|buffer| {
-                    let layer1 = Rc::new(Layer::new(buffer.done().into_iter().map(|((k,v),d)| (k,v,time.clone(),d)), &[], &[]));
-                    trace1.as_mut().map(|trace1| trace1.insert(layer1.clone()));
-                    trace2.as_ref().map(|t| (layer1.cursor(), t.cursor()))
+                let work1 = inputs1.remove(&time).and_then(|batch| {
+                    trace2.as_ref().map(|t| (batch.item.cursor(), t.cursor()))
                 });
 
                 // create input batch, insert into trace, prepare work.
-                let work2 = inputs2.remove(&time).and_then(|buffer| {
-                    let layer2 = Rc::new(Layer::new(buffer.done().into_iter().map(|((k,v),d)| (k,v,time.clone(),d)), &[], &[]));
-                    trace2.as_mut().map(|trace2| trace2.insert(layer2.clone()));
-                    trace1.as_ref().map(|t| (layer2.cursor(), t.cursor()))
+                let work2 = inputs2.remove(&time).and_then(|batch| {
+                    trace1.as_ref().map(|t| (batch.item.cursor(), t.cursor()))
                 });
 
                 // enqueue work item if either input needs it.
                 if work1.is_some() || work2.is_some() {
-                    todo.push(Deferred::new(work1, work2, capability));
+                    todo.push(Deferred::new(work1, work2, capability, &acknowledged[..]));
                 }
+
+                acknowledged.retain(|t| !(t <= &time));
+                acknowledged.push(time);
             }
 
             // do some work on outstanding computation. maybe not all work.
@@ -415,20 +303,26 @@ impl<TS: Timestamp, G: Scope<Timestamp=TS>, K: Data, V: Data> JoinCore<G, K, V> 
     }
 }
 
+/// Deferred join computation.
+///
+/// The structure wraps cursors which allow 
 struct Deferred<K: Ord, V1: Ord, V2: Ord, T: Timestamp+Lattice+Ord, T1: Trace<K, V1, T>, T2: Trace<K, V2, T>> {
     work1: Option<(<T1::Batch as Batch<K,V1,T>>::Cursor, T2::Cursor)>,
     work2: Option<(<T2::Batch as Batch<K,V2,T>>::Cursor, T1::Cursor)>,
     capability: Capability<T>,
+    acknowledged: Vec<T>,
 }
 
 impl<K: Ord, V1: Ord, V2: Ord, T: Timestamp+Lattice+Ord, T1: Trace<K, V1, T>, T2: Trace<K, V2, T>> Deferred<K, V1, V2, T, T1, T2> {
     fn new(work1: Option<(<T1::Batch as Batch<K,V1,T>>::Cursor, T2::Cursor)>, 
            work2: Option<(<T2::Batch as Batch<K,V2,T>>::Cursor, T1::Cursor)>, 
-           capability: Capability<T>) -> Self {
+           capability: Capability<T>,
+           acknowledged: &[T]) -> Self {
         Deferred {
             work1: work1,
             work2: work2,
             capability: capability,
+            acknowledged: acknowledged.to_vec(),
         }
     }
 
@@ -444,18 +338,23 @@ impl<K: Ord, V1: Ord, V2: Ord, T: Timestamp+Lattice+Ord, T1: Trace<K, V1, T>, T2
     fn work<R: Ord+Clone, RF: Fn(&K, &V1, &V2)->R>(&mut self, output: &mut Vec<((T, R), Delta)>, logic: &RF, limit: usize) {
 
         // work on the first bit of work.
+        let acknowledged = &self.acknowledged;
+        let time = self.capability.time();
+
         if let Some((ref mut layer, ref mut trace)) = self.work1 {
             while layer.key_valid() && output.len() < limit {
-                let output_len = output.len(); 
+                let output_len = output.len();
                 trace.seek_key(layer.key());
                 if trace.key_valid() && trace.key() == layer.key() {
                     while trace.val_valid() {
                         while layer.val_valid() {
-                            layer.map_times(|time2, diff2| {
-                                trace.map_times(|time1, diff1| {
-                                    let r = logic(layer.key(), layer.val(), trace.val());
-                                    output.push(((time1.join(time2), r), diff1 * diff2));
-                                });                                            
+                            let r = logic(layer.key(), layer.val(), trace.val());
+                            trace.map_times(|time1, diff1| {
+                                if acknowledged.iter().any(|t| time1 <= t) {
+                                    layer.map_times(|time2, diff2| {
+                                        output.push(((time1.join(time2), r.clone()), diff1 * diff2));
+                                    });
+                                }
                             });
 
                             layer.step_val();
@@ -478,11 +377,13 @@ impl<K: Ord, V1: Ord, V2: Ord, T: Timestamp+Lattice+Ord, T1: Trace<K, V1, T>, T2
                 if trace.key_valid() && trace.key() == layer.key() {
                     while trace.val_valid() {
                         while layer.val_valid() {
-                            layer.map_times(|time2, diff2| {
-                                trace.map_times(|time1, diff1| {
-                                    let r = logic(layer.key(), trace.val(), layer.val());
-                                    output.push(((time1.join(time2), r), diff1 * diff2));
-                                });                                            
+                            let r = logic(layer.key(), trace.val(), layer.val());
+                            trace.map_times(|time1, diff1| {
+                                if time1 <= &time || acknowledged.iter().any(|t| time1 <= t) {
+                                    layer.map_times(|time2, diff2| {
+                                        output.push(((time1.join(time2), r.clone()), diff1 * diff2));
+                                    });                   
+                                }                         
                             });
 
                             layer.step_val();
@@ -496,6 +397,5 @@ impl<K: Ord, V1: Ord, V2: Ord, T: Timestamp+Lattice+Ord, T1: Trace<K, V1, T>, T2
                 consolidate(output, output_len);
             }
         }
-
     }
 }
