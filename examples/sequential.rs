@@ -13,8 +13,8 @@ use differential_dataflow::{Collection, Data};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::*;
 
-use differential_dataflow::collection::trace::CollectionIterator;
-use differential_dataflow::collection::basic::DifferenceIterator;
+// use differential_dataflow::collection::trace::CollectionIterator;
+// use differential_dataflow::collection::basic::DifferenceIterator;
 
 use graph_map::GraphMMap;
 
@@ -58,7 +58,7 @@ fn main() {
 }
 
 fn _color<G: Scope>(edges: &Edges<G>) -> Nodes<G,Option<u32>> 
-where G::Timestamp: Lattice+Hash {
+where G::Timestamp: Lattice+Hash+Ord {
 
     // need some bogus initial values.
     let start = edges.map(|(x,_y)| (x,u32::max_value()))
@@ -67,25 +67,20 @@ where G::Timestamp: Lattice+Hash {
     // repeatedly apply color-picking logic.
     sequence(&start, &edges, |_node, vals| {
 
+        // look for the first absent positive integer.
         // start at 1 in case we ever use NonZero<u32>.
-        let mut candidate = 1;
-        while let Some((color, _)) = vals.next() {
-            if let Some(color) = *color {
-                if color == candidate { 
-                    candidate += 1; 
-                }
-            }
-            else {
-                println!("whoa, None?");
-            }
+
+        let mut index = 0;
+        while index < vals.len() && vals[index].0.unwrap() == (index as u32) + 1 {
+          index += 1;
         }
 
-        candidate
+        (index as u32) + 1
     })
 }
 
 fn _reach<G: Scope>(edges: &Edges<G>) -> Nodes<G,Option<bool>> 
-where G::Timestamp: Lattice+Hash {
+where G::Timestamp: Lattice+Hash+Ord {
 
     // need some bogus initial values.
     let start = edges.map(|(x,_y)| (x, x < 10))
@@ -95,8 +90,9 @@ where G::Timestamp: Lattice+Hash {
     sequence(&start, &edges, |_node, vals| {
 
         let mut reached = false;
-        while let Some((b, _)) = vals.next() {
-            if let Some(b) = *b {
+        let mut iter = vals.iter();
+        while let Some(&(b, _)) = iter.next() {
+            if let Some(b) = b {
                 if b { reached = true; }
             }
         }
@@ -105,8 +101,8 @@ where G::Timestamp: Lattice+Hash {
 }
 
 fn sequence<G: Scope, V: Data, F>(state: &Nodes<G, V>, edges: &Edges<G>, logic: F) -> Nodes<G, Option<V>>
-where G::Timestamp: Lattice+Hash,
-      F: Fn(&Node, &mut CollectionIterator<DifferenceIterator<Option<V>>>)->V+'static {
+where G::Timestamp: Lattice+Hash+Ord,
+      F: Fn(&Node, &[(Option<V>, isize)])->V+'static {
 
         // start iteration with None messages for all.
         state.map(|(node, _state)| (node, None))
@@ -121,13 +117,13 @@ where G::Timestamp: Lattice+Hash,
                 let reverse = edges.filter(|edge| edge.0 > edge.1); 
 
                 // new state goes along forward edges, old state along reverse edges
-                let new_messages = new_state.join_map_u(&forward, |_k,v,d| (*d,v.clone()));
-                let old_messages = old_state.join_map_u(&reverse, |_k,v,d| (*d,v.clone()));
+                let new_messages = new_state.join_map(&forward, |_k,v,d| (*d,v.clone()));
+                let old_messages = old_state.join_map(&reverse, |_k,v,d| (*d,v.clone()));
 
                 // merge messages; apply logic if no None messages remain.
                 let result = new_messages.concat(&old_messages)
-                                         .group_u(move |k, vs, t| {
-                                             if vs.peek().unwrap().0.is_some() {
+                                         .group(move |k, vs, t| {
+                                             if vs[0].0.is_some() {
                                                  t.push((Some(logic(k, vs)), 1));
                                              }
                                              else {

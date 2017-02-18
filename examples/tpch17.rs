@@ -37,8 +37,8 @@ fn main() {
         // form the TPCH17-like query
         let (mut parts, mut items) = computation.scoped(|builder| {
 
-            let (part_input, parts) = builder.new_input::<((u32, String, String), i32)>();
-            let (item_input, items) = builder.new_input::<((u32, u32, u64), i32)>();
+            let (part_input, parts) = builder.new_input::<((u32, String, String), isize)>();
+            let (item_input, items) = builder.new_input::<((u32, u32, u64), isize)>();
 
             let parts = Collection::new(parts);
             let items = Collection::new(items);
@@ -49,14 +49,14 @@ fn main() {
 
             // restrict lineitems to those of the relevant part
             let items = items.map(|x| (x.0, (x.1, x.2)))
-                             .semijoin_u(&parts)
+                             .semijoin(&parts)
                              .map(|(k,v)| (k, v.0, v.1));
 
             // compute the average quantities
-            let average = items.map(|(x,y,_)| (x,y)).group_u(|_,s,t| {
+            let average = items.map(|(x,y,_)| (x,y)).group(|_,s,t| {
                 let mut sum = 0;
                 let mut cnt = 0;
-                for (&val,wgt) in s {
+                for &(val,wgt) in s {
                     cnt += wgt;
                     sum += val;
                 }
@@ -65,7 +65,7 @@ fn main() {
 
             // join items against their averages, filter by quantity, remove filter coordinate
             items.map(|x| (x.0, (x.1, x.2)))
-                 .join_map_u(&average, |k, x, f| (*k, x.0, x.1, *f))
+                 .join_map(&average, |k, x, f| (*k, x.0, x.1, *f))
                  .filter(|&(_, q, _, avg)| q < avg / 5)
                  .map(|(key, _, price, _)| (key, price))
                  .inner
@@ -119,7 +119,7 @@ fn main() {
                     fields.next();
                     let quantity = fields.next().unwrap().parse::<u32>().unwrap();
                     let extended_price = fields.next().unwrap().parse::<f64>().unwrap() as u64;
-                    items_buffer.push(((item_id, quantity, extended_price), 1i32));
+                    items_buffer.push(((item_id, quantity, extended_price), 1isize));
                 }
             }
         }
