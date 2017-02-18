@@ -157,8 +157,6 @@ impl<G: Scope, K: Data+Ord, V: Data+Ord, T: Trace<K, V, G::Timestamp>> Arranged<
     /// only the `Arranged` type.
     pub fn as_collection(&self) -> Collection<G, (K, V)> {
 
-        // unimplemented!()
-
         self.stream.unary_stream(Pipeline, "AsCollection", |input, output| {
             input.for_each(|time, data| {
                 let mut session = output.session(&time);
@@ -181,20 +179,8 @@ impl<G: Scope, K: Data+Ord, V: Data+Ord, T: Trace<K, V, G::Timestamp>> Arranged<
     }
 }
 
-// impl<G: Scope, K: Data+Ord, V: Data+Ord, T: Trace<K, V, G::Timestamp>> Deref for Arranged<G, K, V, T> 
-//     where G::Timestamp: Lattice+Ord,
-//           T::Batch: Clone+'static {
-//     type Target = Collection<G, (K, V)>;
-//     fn deref(&self) -> &Self::Target {
-//         if self.collection.is_none() {
-//             self.collection = Some(self.as_collection());
-//         }
-//         self.collection.as_ref().unwrap()
-//     }
-// }
-
 /// Arranges something as `(Key,Val)` pairs according to a type `T` of trace.
-pub trait Arrange<G: Scope, K: Data+Ord, V: Data+Ord, T: Trace<K, V, G::Timestamp>> 
+pub trait Arrange<G: Scope, K: Data, V: Data, T: Trace<K, V, G::Timestamp>> 
 where G::Timestamp: Lattice+Ord,
       T::Batch: Clone+'static {
     /// Arranges a stream of `(Key, Val)` updates by `Key`.
@@ -205,7 +191,7 @@ where G::Timestamp: Lattice+Ord,
     fn arrange(&self) -> Arranged<G, K, V, T>;
 }
 
-impl<G: Scope, K: Data+Ord, V: Data+Ord, T: Trace<K, V, G::Timestamp>+'static> Arrange<G, K, V, T> for Collection<G, (K, V)>
+impl<G: Scope, K: Data, V: Data, T: Trace<K, V, G::Timestamp>+'static> Arrange<G, K, V, T> for Collection<G, (K, V)>
 where G::Timestamp: Lattice+Ord,
       T::Batch: Clone+'static {
     fn arrange(&self) -> Arranged<G, K, V, T> {
@@ -223,7 +209,10 @@ where G::Timestamp: Lattice+Ord,
 
             input.for_each(|time, data| {
                 inputs.entry(time.time())
-                      .or_insert_with(|| { notificator.notify_at(time.clone()); <T::Batch as Batch<K,V,G::Timestamp>>::Builder::new() })
+                      .or_insert_with(|| { 
+                        notificator.notify_at(time.clone()); 
+                        <T::Batch as Batch<K,V,G::Timestamp>>::Builder::new() 
+                      })
                       .extend(data.drain(..).map(|(kv,d)| (kv.0, kv.1, time.time(), d)));
             });
 
