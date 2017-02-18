@@ -111,20 +111,19 @@ pub type Delta = isize;
 
 pub use stream::{Collection, AsCollection};
 
-// TODO : I would like this trait to have something like a `Map` associated type,
-// indicating the way that it would prefer to be used as an index. I think this 
-// looks like Higher Kinded Types, as the associated type would need to be generic
-// over values indexed against. Perhaps it can be faked in the same way that `Trace`
-// fakes HKT with `TraceRef`.
-
 /// A composite trait for data types usable in differential dataflow.
-pub trait Data : timely::ExchangeData + ::std::hash::Hash + Ord + Debug {
+pub trait Data : timely::ExchangeData + Ord + Debug + ::std::hash::Hash {
+
     /// Extracts a `u64` suitable for distributing and sorting the data.
     ///
-    /// The default implementation use `FnvHasher`. It might be nice to couple this more carefully
-    /// with the implementor, to allow it to drive the distribution and sorting techniques. For
-    /// example, dense unsigned integers would like a different function, but also must communicate
-    /// that a `HashMap` is not the best way to use their values.
+    /// Data are distributed using the low bits / bytes of this value, and data may be laid out using
+    /// the high bits / bytes (as per robin hood hashing). We should *probably* let the type choose
+    /// its own `U: Unsigned` as an output type, so that types like `u32` can satisfy the spirit of 
+    /// this requirement.
+    ///
+    /// There is a default implementation using `FnvHasher` for any type which implements `Hash`. 
+    /// if you would like to provide your own implementation, it is important that it not implement
+    /// `Hash`, which you should be able to do with a wrapper type that does not derive `Hash`.
     #[inline]
     fn hashed(&self) -> u64 {
         let mut h: fnv::FnvHasher = Default::default();
@@ -133,6 +132,10 @@ pub trait Data : timely::ExchangeData + ::std::hash::Hash + Ord + Debug {
     }
 }
 impl<T: timely::ExchangeData + ::std::hash::Hash + Ord + Debug> Data for T { }
+
+// TODO : add `Uniform<T: Unsigned>` with its own `hashed` function; fix up traits, reqs to support.
+// this should make "node identifiers" easier to support efficiently, by requiring the user to first
+// map their indentifiers into the space uniformly.
 
 /// An extension of timely's `Scope` trait requiring timestamps implement `LeastUpperBound`.
 ///
