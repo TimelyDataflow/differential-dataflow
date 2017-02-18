@@ -4,19 +4,14 @@ extern crate timely_sort;
 extern crate differential_dataflow;
 extern crate vec_map;
 
-use vec_map::VecMap;
-
 use timely::dataflow::*;
 use timely::dataflow::operators::*;
-
-use timely_sort::Unsigned;
 
 use rand::{Rng, SeedableRng, StdRng};
 
 use differential_dataflow::{Collection, AsCollection};
 use differential_dataflow::operators::*;
 use differential_dataflow::operators::join_alt::JoinArranged;
-// use differential_dataflow::operators::threshold_alt::ThresholdArranged;
 use differential_dataflow::operators::group_alt::{Count, GroupArranged, Group};
 use differential_dataflow::operators::arrange_alt::{ArrangeByKey, ArrangeBySelf};
 use differential_dataflow::lattice::Lattice;
