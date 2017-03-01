@@ -10,7 +10,9 @@ use super::Cursor;
 /// equivalent values in `self.cursors`. Although they are implicit in `self.cursors`, We maintain these values 
 /// explicitly, in `self.equiv_keys` and `self.equiv_vals`. We also track the number of valid keys and valid 
 /// values, to avoid continually re-considering cursors in invalid states.
-pub struct CursorList<C: Cursor> {
+#[derive(Debug)]
+pub struct CursorList<K, V, T, C: Cursor<K, V, T>> {
+	_phantom: ::std::marker::PhantomData<(K, V, T)>,
 	cursors: Vec<C>,	// ordered by valid keys and valid values.
 	equiv_keys: usize,	// cursors[..equiv_keys] all have the same key.
 	equiv_vals: usize,	// cursors[..equiv_vals] all have the same key and value.
@@ -18,11 +20,12 @@ pub struct CursorList<C: Cursor> {
 	valid_vals: usize,	// cursors[..valid_vals] all have valid_val() true.
 }
 
-impl<C: Cursor> CursorList<C> {
+impl<K, V, T, C: Cursor<K, V, T>> CursorList<K, V, T, C> where K: Ord, V: Ord {
 	/// Creates a new cursor list from pre-existing cursors.
 	pub fn new(cursors: Vec<C>) -> Self {
 		let cursors_len = cursors.len();
 		let mut result = CursorList {
+			_phantom: ::std::marker::PhantomData,
 			cursors: cursors,
 			equiv_keys: cursors_len,
 			equiv_vals: 0,
@@ -71,6 +74,7 @@ impl<C: Cursor> CursorList<C> {
 			}
 			// c. sort those cursors.
 			self.cursors[.. beyond].sort_by(|x,y| x.key().cmp(y.key()));
+			// println!("{:?} / {:?}", beyond, self.cursors.len());
 		}
 		
 		// 3. count equivalent keys (if any are valid)
@@ -135,28 +139,27 @@ impl<C: Cursor> CursorList<C> {
 	}
 }
 
-impl<C: Cursor> Cursor for CursorList<C> {
-
-	type Key = C::Key;
-	type Val = C::Val;
-	type Time = C::Time;
+impl<K, V, T, C: Cursor<K, V, T>> Cursor<K, V, T> for CursorList<K, V, T, C> 
+where 
+	K: Ord+Clone, 
+	V: Ord+Clone {
 
 	// validation methods
 	fn key_valid(&self) -> bool { self.valid_keys > 0 }
 	fn val_valid(&self) -> bool { self.valid_vals > 0 }
 
 	// accessors 
-	fn key(&self) -> &Self::Key { 
+	fn key(&self) -> &K { 
 		debug_assert!(self.key_valid());
 		self.cursors[0].key() 
 	}
-	fn val(&self) -> &Self::Val { 
+	fn val(&self) -> &V { 
 		debug_assert!(self.key_valid());
 		debug_assert!(self.val_valid());
 		self.cursors[0].val() 
 	}
-	fn map_times<L: FnMut(&Self::Time, isize)>(&self, mut logic: L) {
-		for cursor in &self.cursors[.. self.equiv_vals] {
+	fn map_times<L: FnMut(&T, isize)>(&mut self, mut logic: L) {
+		for cursor in &mut self.cursors[.. self.equiv_vals] {
 			cursor.map_times(|t,d| logic(t,d));
 		}
 	}
@@ -169,16 +172,13 @@ impl<C: Cursor> Cursor for CursorList<C> {
 		let to_tidy = self.equiv_keys;
 		self.tidy_keys(to_tidy);
 	}
-	fn seek_key(&mut self, key: &Self::Key) {
+	fn seek_key(&mut self, key: &K) {
 		let mut index = 0;
-		while index < self.valid_keys && self.cursors[index].key() < key {
+		while index < self.valid_keys && self.cursors[index].key() < &key {
 			self.cursors[index].seek_key(key);
 			index += 1;
 		}
 		self.tidy_keys(index);
-	}
-	fn peek_key(&self) -> Option<&Self::Key> {
-		if self.key_valid() { Some(self.key()) } else { None }
 	}
 	
 	// value methods
@@ -189,16 +189,13 @@ impl<C: Cursor> Cursor for CursorList<C> {
 		let to_tidy = self.equiv_vals;
 		self.tidy_vals(to_tidy);
 	}
-	fn seek_val(&mut self, val: &Self::Val) {
+	fn seek_val(&mut self, val: &V) {
 		let mut index = 0;
-		while index < self.valid_vals && self.cursors[index].val() < val {
+		while index < self.valid_vals && self.cursors[index].val() < &val {
 			self.cursors[index].seek_val(val);
 			index += 1;
 		}
 		self.tidy_vals(index);
-	}
-	fn peek_val(&self) -> Option<&Self::Val> {
-		if self.val_valid() { Some(self.val()) } else { None }
 	}
 
 	// rewinding methods

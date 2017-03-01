@@ -243,7 +243,7 @@ where G: Scope, G::Timestamp: Lattice+Ord {
 }
 
 fn transactional<G, D>(trans: &Collection<G, (usize, bool, D)>, state: &Collection<G, D>) -> Collection<G, usize>
-where G: Scope, D: Data+Default, G::Timestamp: Lattice+Ord {
+where G: Scope, D: Data+Default+::std::hash::Hash, G::Timestamp: Lattice+Ord {
 
     // we develop the set of transaction ids that must abort, 
     // starting from the optimistic assumption that none must.

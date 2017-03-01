@@ -71,7 +71,7 @@ impl<'a, C: Cursor+'a> ValViewer<'a, C> {
 			self.active = true;
 		}
 		if self.cursor.val_valid() {
-			Some(TimeViewer { cursor: &*self.cursor })
+			Some(TimeViewer { cursor: &mut *self.cursor })
 		}
 		else { 
 			None 
@@ -82,7 +82,7 @@ impl<'a, C: Cursor+'a> ValViewer<'a, C> {
 		// self.active = true;			// TODO : how can we know if we've started? we may repeat value.
 		self.cursor.seek_val(val);
 		if self.cursor.val_valid() {
-			Some(TimeViewer { cursor: &*self.cursor })
+			Some(TimeViewer { cursor: &mut *self.cursor })
 		}
 		else { 
 			None 
@@ -103,7 +103,7 @@ impl<'a, C: Cursor+'a> ValViewer<'a, C> {
 
 /// A view over times and differences associated with one (key, value) pair.
 pub struct TimeViewer<'a, C: Cursor+'a> {
-	cursor: &'a C,
+	cursor: &'a mut C,
 }
 
 impl<'a, C: Cursor+'a> TimeViewer<'a, C> {
@@ -112,7 +112,7 @@ impl<'a, C: Cursor+'a> TimeViewer<'a, C> {
 	/// The value associated with the times viewed.
 	pub fn val(&self) -> &C::Val { self.cursor.val() }
 	/// Applies `logic` to each `(time, diff)` pair in the view.
-	pub fn map<L: FnMut(&C::Time, isize)>(&self, logic: L) {
+	pub fn map<L: FnMut(&C::Time, isize)>(&mut self, logic: L) {
 		self.cursor.map_times(logic);
 	}
 }

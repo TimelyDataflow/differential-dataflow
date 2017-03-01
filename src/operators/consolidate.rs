@@ -27,7 +27,7 @@ use timely::dataflow::operators::*;
 use timely::dataflow::channels::pact::Exchange;
 use timely_sort::Unsigned;
 
-use ::{Collection, Data, Delta};
+use ::{Collection, Data, Delta, Hashable};
 
 /// An extension method for consolidating weighted streams.
 pub trait ConsolidateExt<D: Data> {
@@ -46,7 +46,7 @@ pub trait ConsolidateExt<D: Data> {
     ///     .consolidate()
     ///     .inspect(|x| println!("{:}", x));
     /// ```
-    fn consolidate(&self) -> Self;
+    fn consolidate(&self) -> Self where D: Hashable;
 
     /// Aggregates the weights of equal records into at most one record, partitions the
     /// data using the supplied partition function.
@@ -65,8 +65,8 @@ pub trait ConsolidateExt<D: Data> {
     fn consolidate_by<U: Unsigned, F: Fn(&D)->U+'static>(&self, part: F) -> Self;
 }
 
-impl<G: Scope, D: Ord+Data+Debug> ConsolidateExt<D> for Collection<G, D> {
-    fn consolidate(&self) -> Self {
+impl<G: Scope, D: Data+Debug> ConsolidateExt<D> for Collection<G, D> {
+    fn consolidate(&self) -> Self where D: Hashable {
        self.consolidate_by(|x| x.hashed())
     }
 

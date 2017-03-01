@@ -65,7 +65,7 @@ fn main() {
 
             // join items against their averages, filter by quantity, remove filter coordinate
             items.map(|x| (x.0, (x.1, x.2)))
-                 .join_map(&average, |k, x, f| (*k, x.0, x.1, *f))
+                 .join_map(&average, |k, x, f| (k.clone(), x.0, x.1, *f))
                  .filter(|&(_, q, _, avg)| q < avg / 5)
                  .map(|(key, _, price, _)| (key, price))
                  .inner

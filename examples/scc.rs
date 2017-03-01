@@ -32,16 +32,17 @@ fn main() {
             let (input, edges) = scope.new_input();
             let mut edges = Collection::new(edges);
 
-            edges = _trim_and_flip(&edges);
-            edges = _trim_and_flip(&edges);
-            edges = _strongly_connected(&edges);
+            edges = _trim_and_flip_u(&edges);
+            edges = _trim_and_flip_u(&edges);
+            // edges = _strongly_connected(&edges);
 
             if inspect {
                 let mut counter = 0;
                 edges = edges.consolidate_by(|x| x.0)
-                             .inspect_batch(move |t, x| {
-                                 counter += x.len();
+                             .inspect_batch(move |t, xs| {
+                                 counter += xs.len();
                                  println!("{:?}:\tobserved at {:?}: {:?} changes", timer.elapsed(), t, counter)
+                                 // println!("{:?}:\tcount{:?}", t, xs);
                              });
             }
 
@@ -55,19 +56,27 @@ fn main() {
         if computation.index() == 0 {
 
             // println!("determining SCC of {} nodes, {} edges:", nodes, edges);
+            let seed: &[_] = &[1, 2, 3, 4];
+            let mut rng: StdRng = SeedableRng::from_seed(seed);
+
+            let mut names = Vec::with_capacity(nodes as usize);
+            for index in 0 .. nodes {
+              names.push(rng.gen_range(0, u32::max_value()));
+              // names.push(index as u32);
+            }
 
             rng1.gen::<f64>();
             rng2.gen::<f64>();
 
             for index in 0..edges {
-                let edge = (rng1.gen_range(0, nodes), rng1.gen_range(0, nodes));
+                let edge = (names[rng1.gen_range(0, nodes) as usize], names[rng1.gen_range(0, nodes) as usize]);
                 input.send((edge, 1));
                 if (index % (1 << 12)) == 0 {
                     computation.step();
                 }
             }
 
-            // println!("input ingested after {:?}", timer.elapsed());
+            println!("input ingested after {:?}", timer.elapsed());
         }
 
         if batch > 0 {
@@ -96,19 +105,31 @@ fn main() {
                 }
             }
         }
+
+        // println!("finished after {:?}", timer.elapsed());
+
     }).unwrap();
 }
 
-fn _trim_and_flip<G: Scope>(graph: &Collection<G, Edge>) -> Collection<G, Edge>
-where G::Timestamp: Lattice+Ord {
+fn _trim_and_flip_u<G: Scope>(graph: &Collection<G, Edge>) -> Collection<G, Edge>
+where G::Timestamp: Lattice+Ord+Hash {
     graph.iterate(|edges| {
-        let inner = graph.enter(&edges.scope())
-                         .map_in_place(|x| mem::swap(&mut x.0, &mut x.1));
+        // keep edges from active edge destinations.
+        let active = edges.map(|(_,dst)| dst).distinct_u();
+        graph.enter(&edges.scope())
+             .semijoin_u(&active)
+    })
+    .map_in_place(|x| mem::swap(&mut x.0, &mut x.1))
+}
 
-        edges.map(|(x,_)| x)
-             .distinct()
-             .map(|x| (x,()))
-             .join_map(&inner, |&d,_,&s| (s,d))
+fn _trim_and_flip<G: Scope>(graph: &Collection<G, Edge>) -> Collection<G, Edge>
+where G::Timestamp: Lattice+Ord+Hash {
+    graph.iterate(|edges| {
+        // keep edges from active edge destinations.
+        let active = edges.map(|(_,dst)| dst).distinct();
+        // active.inner.inspect_batch(|t,xs| println!("{:?}\tcount: {:?}", t, xs));
+        graph.enter(&edges.scope())
+             .semijoin(&active)
     })
     .map_in_place(|x| mem::swap(&mut x.0, &mut x.1))
 }

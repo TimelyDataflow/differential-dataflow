@@ -13,15 +13,16 @@ use trace::cursor::cursor_list::CursorList;
 /// A spine maintains a small number of immutable collections of update tuples, merging the collections when
 /// two have similar sizes. In this way, it allows the addition of more tuples, which may then be merged with
 /// other immutable collections. 
+#[derive(Debug)]
 pub struct Spine<Key: Ord, Time: Lattice+Ord> {
 	frontier: Vec<Time>,				// Times after which the times in the traces must be distinguishable.
 	layers: Vec<Rc<Layer<Key, Time>>>	// Several possibly shared collections of updates.
 }
 
-impl<Key: Ord+Clone, Time: Lattice+Ord+Clone> Trace<Key, (), Time> for Spine<Key, Time> {
+impl<Key: Ord+Clone+'static, Time: Lattice+Ord+Clone+'static> Trace<Key, (), Time> for Spine<Key, Time> {
 
 	type Batch = Rc<Layer<Key, Time>>;
-	type Cursor = CursorList<LayerCursor<Key, Time>>;
+	type Cursor = CursorList<Key, (), Time, LayerCursor<Key, Time>>;
 
 	fn new(default: Time) -> Self {
 		Spine { 
@@ -64,7 +65,9 @@ impl<Key: Ord+Clone, Time: Lattice+Ord+Clone> Trace<Key, (), Time> for Spine<Key
 }
 
 /// An immutable collection of update tuples, from a contiguous interval of logical times.
+#[derive(Debug)]
 pub struct Layer<Key: Ord, Time: Lattice+Ord> {
+
 	/// Sorted list of keys with at least one update tuple.
 	pub keys: Vec<Key>,
 	/// Offsets in `self.vals` where the corresponding key *stops*.
@@ -87,9 +90,9 @@ impl<Key: Ord+Clone, Time: Lattice+Ord+Clone> Layer<Key, Time> {
 	/// Constructs a new Layer from sorted data.
 	pub fn new<I: Iterator<Item=(Key,Time,isize)>>(mut data: I, lower: &[Time], upper: &[Time]) -> Layer<Key, Time> {
 
-		let mut keys = Vec::new();
-		let mut offs = Vec::new();
-		let mut times = Vec::new();
+		let mut keys = Vec::with_capacity(data.size_hint().0);
+		let mut offs = Vec::with_capacity(data.size_hint().0+1);
+		let mut times = Vec::with_capacity(data.size_hint().0);
 
 		if let Some((key, time, diff)) = data.next() {
 
@@ -212,6 +215,7 @@ impl<Key: Ord+Clone, Time: Lattice+Ord+Clone> Layer<Key, Time> {
 }
 
 /// A cursor for navigating a single layer.
+#[derive(Debug)]
 pub struct LayerCursor<Key: Ord, Time: Lattice+Ord> {
 	key_pos: usize,
 	val_seen: bool,
@@ -231,11 +235,7 @@ impl<Key: Ord, Time: Lattice+Ord> LayerCursor<Key, Time> {
 	}
 }
 
-impl<Key: Ord, Time: Lattice+Ord> Cursor for LayerCursor<Key, Time> {
-
-	type Key = Key;
-	type Val = ();
-	type Time = Time;
+impl<Key: Ord, Time: Lattice+Ord> Cursor<Key, (), Time> for LayerCursor<Key, Time> {
 
 	fn key(&self) -> &Key { 
 		debug_assert!(self.key_valid());
@@ -246,7 +246,7 @@ impl<Key: Ord, Time: Lattice+Ord> Cursor for LayerCursor<Key, Time> {
 		debug_assert!(self.val_valid());
 		&self.val
 	}
-	fn map_times<L: FnMut(&Time, isize)>(&self, mut logic: L) {
+	fn map_times<L: FnMut(&Time, isize)>(&mut self, mut logic: L) {
 		debug_assert!(self.key_valid());
 		debug_assert!(self.val_valid());
 		let lower = if self.key_pos == 0 { 0 } else { self.layer.offs[self.key_pos - 1] };
@@ -281,18 +281,12 @@ impl<Key: Ord, Time: Lattice+Ord> Cursor for LayerCursor<Key, Time> {
 			self.val_seen = true;
 		}
 	}
-	fn peek_key(&self) -> Option<&Self::Key> {
-		if self.key_valid() { Some(self.key()) } else { None }
-	}
 
 	fn step_val(&mut self) {
 		self.val_seen = true;
 	}
-	fn seek_val(&mut self, _: &Self::Val) {
+	fn seek_val(&mut self, _: &()) {
 		// I think this does nothing.
-	}
-	fn peek_val(&self) -> Option<&Self::Val> {
-		if self.val_valid() { Some(self.val()) } else { None }
 	}
 
 	fn rewind_keys(&mut self) {

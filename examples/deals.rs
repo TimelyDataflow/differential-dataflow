@@ -10,11 +10,11 @@ use std::time::Instant;
 use std::hash::Hash;
 use std::mem;
 
-use vec_map::VecMap;
+// use vec_map::VecMap;
 
 use rand::{Rng, SeedableRng, StdRng};
 
-use timely_sort::Unsigned;
+// use timely_sort::Unsigned;
 
 use timely::dataflow::*;
 use timely::dataflow::operators::*;
@@ -124,7 +124,7 @@ where G::Timestamp: Lattice+Ord {
     let query = query.arrange_by_self();
 
     // restrict attention to edges from query nodes
-    edges.join_arranged(&query, |k,v,_| (v.clone(), k.clone()))
+    edges.join_arranged(&query, |k,v,_| (v.clone(), k.item.clone()))
          .arrange_by_key()
          .join_arranged(&edges, |_,x,y| (x.clone(), y.clone()))
          // the next thing is the "topk" computation. sorry!
@@ -178,7 +178,7 @@ where G::Timestamp: Lattice+Hash+Ord {
 
              inner.join_map(&edges, |_k,l,d| (*d,*l))
                   .concat(&nodes)
-                  .group(|_, mut s, t| { t.push((s[0].0, 1)); } )
+                  .group(|_, s, t| { t.push((s[0].0, 1)); } )
          })
 }
 

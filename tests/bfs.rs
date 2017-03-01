@@ -8,41 +8,41 @@ use timely::dataflow::*;
 use timely::dataflow::operators::*;
 
 use differential_dataflow::Collection;
+use differential_dataflow::hashable::OrdWrapper;
+
 use differential_dataflow::operators::*;
+use differential_dataflow::operators::arrange_alt::*;
+use differential_dataflow::operators::join_alt::*;
+use differential_dataflow::operators::group_alt::*;
+
 use differential_dataflow::lattice::Lattice;
+
+use differential_dataflow::trace::Trace;
+use differential_dataflow::trace::implementations::trie::Spine as TrieSpine;
+use differential_dataflow::trace::implementations::rhh::Spine as RHHSpine;
 
 type Node = u32;
 type Edge = (Node, Node);
 
-fn main() {
+#[test]
+fn main_test() {
 
-    let nodes: u32 = std::env::args().nth(1).unwrap().parse().unwrap();
-    let edges: u32 = std::env::args().nth(2).unwrap().parse().unwrap();
-    let batch: u32 = std::env::args().nth(3).unwrap().parse().unwrap();
-    let rounds: u32 = std::env::args().nth(4).unwrap().parse().unwrap();
-    let inspect: bool = std::env::args().nth(5).unwrap() == "inspect";
+    let nodes: u32 = 4;
+    let edges: u32 = 6;
+    let batch: u32 = 1;
 
     // define a new computational scope, in which to run BFS
     timely::execute_from_args(std::env::args().skip(6), move |computation| {
         
-        let timer = ::std::time::Instant::now();
-
         // define BFS dataflow; return handles to roots and edges inputs
         let (mut graph, probe) = computation.scoped(|scope| {
 
             let roots = vec![(1,1)].into_iter().to_stream(scope);
             let (edge_input, graph) = scope.new_input();
 
-            let mut result = bfs(&Collection::new(graph.clone()), &Collection::new(roots.clone()));
+            let result = bfs(&Collection::new(graph.clone()), &Collection::new(roots.clone()));
 
-            if !inspect {
-                result = result.filter(|_| false);
-            }
-
-            let probe = result.map(|(_,l)| l)
-                              .consolidate_by(|&x| x)
-                              .inspect(|x| println!("\t{:?}", x)).probe()
-                              ;
+            let probe = result.probe();
 
             (edge_input, probe.0)
         });
@@ -56,7 +56,7 @@ fn main() {
         if computation.index() == 0 {
             // trickle edges in to dataflow
             for _ in 0..(edges/1000) {
-                for _ in 0..1000 {
+                for _ in 0..10000 {
                     graph.send(((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), 1));
                 }
                 computation.step();
@@ -66,16 +66,12 @@ fn main() {
             }
         }
 
-        // println!("loaded; elapsed: {:?}", timer.elapsed());
-
         graph.advance_to(1);
         computation.step_while(|| probe.lt(graph.time()));
 
-        // println!("stable; elapsed: {:?}", timer.elapsed());
-
         if batch > 0 {
             let mut changes = Vec::new();
-            for _wave in 0 .. rounds {
+            for _wave in 0 .. 1000 {
                 if computation.index() == 0 {
                     for _ in 0..batch {
                         changes.push(((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), 1));
@@ -96,14 +92,9 @@ fn main() {
                 // if computation.index() == 0 {
                 //     let elapsed = timer.elapsed();
                 //     println!("{}", elapsed.as_secs() * 1000000000 + (elapsed.subsec_nanos() as u64));
-                //     // println!()
-                //     // println!("wave {}: avg {:?}", wave, timer.elapsed() / (batch as u32));
                 // }
             }
         }
-
-        // println!("finished; elapsed: {:?}", timer.elapsed());
-
     }).unwrap();
 }
 
@@ -117,39 +108,39 @@ where G::Timestamp: Lattice+Ord {
     // repeatedly update minimal distances each node can be reached from each root
     nodes.iterate(|inner| {
 
-        let edges = edges.enter(&inner.scope());
+        let edges = edges.enter(&inner.scope());//.inspect_batch(|t,xs| println!("{:?}\tedges: {:?}",t,xs));
         let nodes = nodes.enter(&inner.scope());
 
-        inner.join_map(&edges, |_k,l,d| (*d, l+1))
-             .concat(&nodes)
-             .group(|_, s, t| t.push((s[0].0, 1)))
+        let edges_tr = edges.arrange(|k,v| (k,v), TrieSpine::new(Default::default()));
+        let edges_rh = edges.arrange(|k,v| (OrdWrapper { item:k }, v), RHHSpine::new(Default::default()));
+
+        // let inner = inner.inspect_batch(|t,xs| println!("{:?}\tinner: {:?}",t,xs));
+
+        let inner_tr = inner.arrange(|k,v| (k,v), TrieSpine::new(Default::default()));
+        let inner_rh = inner.arrange(|k,v| (OrdWrapper { item:k }, v), RHHSpine::new(Default::default()));
+
+        let props_tr = inner_tr.join_arranged(&edges_tr, |_k,l,d| (*d, l+1))/*.inspect_batch(|t,xs| println!("{:?}\tjoin_tr: {:?}", t, xs))*/.concat(&nodes);
+        let props_rh = inner_rh.join_arranged(&edges_rh, |_k,l,d| (*d, l+1))/*.inspect_batch(|t,xs| println!("{:?}\tjoin_rh: {:?}", t, xs))*/.concat(&nodes);
+
+        props_tr.negate().concat(&props_rh).consolidate().inspect_batch(|t,xs| if xs.len() > 0 { panic!("{:?}\tjoin discrepancy: {:?}", t, xs) });
+
+        // let props_tr = props_tr.inspect_batch(|t,xs| println!("{:?}\tprops: {:?}",t,xs));
+
+        let pregr_tr = props_tr.arrange(|k,v| (k,v), TrieSpine::new(Default::default()));
+        let pregr_rh = props_tr.arrange(|k,v| (OrdWrapper { item:k }, v), RHHSpine::new(Default::default()));
+
+        let groups_tr = pregr_tr.group_arranged(|_, s, t| t.push((s[0].0, 1)), TrieSpine::new(Default::default()))
+                                .as_collection(|&k,&v| (k,v))
+                                // .inspect_batch(|t,xs| println!("{:?}\tgroup_tr: {:?}", t, xs))
+                                ;
+        let groups_rh = pregr_rh.group_arranged(|_, s, t| t.push((s[0].0, 1)), RHHSpine::new(Default::default()))
+                                .as_collection(|k,&v| (k.item, v))
+                                // .inspect_batch(|t,xs| println!("{:?}\tgroup_rh: {:?}", t, xs))
+                                ;
+
+        groups_tr.negate().concat(&groups_rh).consolidate().inspect_batch(|t,xs| if xs.len() > 0 { panic!("{:?}\tgroup discrepancy: {:?}", t, xs) });
+
+        groups_tr
+             
      })
 }
-
-// // Experimental implementation using arrangement to share the output of group_u with the input to join_map_u.
-// // returns pairs (n, s) indicating node n can be reached from a root in s steps.
-// fn _bfs2<G: Scope>(edges: &Collection<G, Edge>, roots: &Collection<G, Node>) -> Collection<G, (Node, u32)>
-// where G::Timestamp: Lattice {
-
-//     // initialize roots as reaching themselves at distance 0
-//     let nodes = roots.map(|x| (x, 0));
-
-//     // repeatedly update minimal distances each node can be reached from each root
-//     nodes.scope().scoped(|scope| {
-
-//         let edges = edges.enter(scope);
-//         let nodes2 = nodes.enter(scope);
-
-//         let variable = Variable::from(nodes.enter(scope));
-
-//         let arranged = variable.concat(&nodes2)
-//                                .arrange_by_key(|k| k.as_u64(), |x| (VecMap::new(), x))
-//                                .group(|k| k.as_u64(), |x| (VecMap::new(), x), |_, s, t| t.push((*s.peek().unwrap().0, 1)));
-
-//         let result = arranged.as_collection().leave();
-
-//         variable.set(&arranged.join(&edges.arrange_by_key(|k| k.as_u64(), |x| (VecMap::new(), x)), |_k,l,d| (*d, l+1)));
-
-//         result
-//     })
-// }

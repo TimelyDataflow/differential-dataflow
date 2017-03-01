@@ -9,6 +9,7 @@ use timely::dataflow::operators::*;
 
 use rand::{Rng, SeedableRng, StdRng};
 
+use differential_dataflow::trace::Trace;
 use differential_dataflow::{Collection, AsCollection};
 use differential_dataflow::operators::*;
 use differential_dataflow::operators::join_alt::JoinArranged;
@@ -142,16 +143,16 @@ where G::Timestamp: Lattice+::std::hash::Hash+Ord {
 		// determine active vertices
 		let active = inner.flat_map(|(src,dst)| Some(src).into_iter().chain(Some(dst).into_iter()))
 						  .arrange_by_self()
-						  .group_arranged::<_,_,differential_dataflow::trace::implementations::trie::Spine<_,_,_>>(move |_k, s, t| { if s[0].1 > k { t.push(((),1)) } });
+						  .group_arranged(move |_k, s, t| { if s[0].1 > k { t.push(((),1)) } }, differential_dataflow::trace::implementations::trie::Spine::new(Default::default()));
                 		  // .threshold(|k| k.as_u64(), |x| (VecMap::new(), x), move |_,cnt| if cnt >= k { 1 } else { 0 });
 
 		// restrict edges active vertices, return result
 	    edges.enter(&inner.scope())
 	    	 .arrange_by_key()
-	    	 .join_arranged(&active, |k,v,_| (k.clone(), v.clone()))
+	    	 .join_arranged(&active, |k,v,_| (k.item.clone(), v.clone()))
 	    	 .map(|(src,dst)| (dst,src))
  	    	 .arrange_by_key()
- 	    	 .join_arranged(&active, |k,v,_| (k.clone(), v.clone()))
+ 	    	 .join_arranged(&active, |k,v,_| (k.item.clone(), v.clone()))
      	     .map(|(dst,src)| (src,dst))
 	})
 }

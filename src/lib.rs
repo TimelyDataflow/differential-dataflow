@@ -103,46 +103,25 @@
 
 #![forbid(missing_docs)]
 
-use std::hash::Hasher;
 use std::fmt::Debug;
 
 /// A change in count.
 pub type Delta = isize;
 
 pub use stream::{Collection, AsCollection};
+pub use hashable::Hashable;
 
 /// A composite trait for data types usable in differential dataflow.
-pub trait Data : timely::ExchangeData + Ord + Debug + ::std::hash::Hash {
-
-    /// Extracts a `u64` suitable for distributing and sorting the data.
-    ///
-    /// Data are distributed using the low bits / bytes of this value, and data may be laid out using
-    /// the high bits / bytes (as per robin hood hashing). We should *probably* let the type choose
-    /// its own `U: Unsigned` as an output type, so that types like `u32` can satisfy the spirit of 
-    /// this requirement.
-    ///
-    /// There is a default implementation using `FnvHasher` for any type which implements `Hash`. 
-    /// if you would like to provide your own implementation, it is important that it not implement
-    /// `Hash`, which you should be able to do with a wrapper type that does not derive `Hash`.
-    #[inline]
-    fn hashed(&self) -> u64 {
-        let mut h: fnv::FnvHasher = Default::default();
-        self.hash(&mut h);
-        h.finish()
-    }
-}
-impl<T: timely::ExchangeData + ::std::hash::Hash + Ord + Debug> Data for T { }
-
-// TODO : add `Uniform<T: Unsigned>` with its own `hashed` function; fix up traits, reqs to support.
-// this should make "node identifiers" easier to support efficiently, by requiring the user to first
-// map their indentifiers into the space uniformly.
-
-/// An extension of timely's `Scope` trait requiring timestamps implement `LeastUpperBound`.
 ///
-/// The intent of this trait is that it could be used as the constraint for collections, removing the 
-/// need to put `G::Timestamp: LeastUpperBound` everywhere.
-pub trait TestScope : timely::dataflow::Scope where Self::Timestamp: lattice::Lattice { }
-impl<S: timely::dataflow::Scope> TestScope for S where S::Timestamp: lattice::Lattice { }
+/// This trait differs from Rust's `Hash` trait, which is designed to allow general hash functions 
+/// to operate over a type. Here, instead, we are just about providing a value, and allowing the 
+/// type to override that behavior if appropriate.
+///
+/// The trait also requires the specification of an output type. This can be helpful in situations 
+/// where we want to cache the hash value, or in situations like radix sorting where we can more 
+/// efficiently sort data if we know there are fewer bytes in the integer keys.
+pub trait Data : timely::ExchangeData + Ord + Debug { }
+impl<T: timely::ExchangeData + Ord + Debug> Data for T { }
 
 extern crate fnv;
 extern crate timely;
@@ -151,9 +130,13 @@ extern crate itertools;
 extern crate linear_map;
 extern crate timely_sort;
 extern crate timely_communication;
+
+#[macro_use]
 extern crate abomonation;
 
+pub mod hashable;
 pub mod operators;
 pub mod lattice;
 pub mod trace;
 mod stream;
+

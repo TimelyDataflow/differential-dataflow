@@ -42,8 +42,7 @@ fn main() {
 
             // produce pairs (label, topic) for each topic.
             let label_topics = tweets.map(|(u,_,t)| (u,t))
-                                     .join(&labels)
-                                     .map(|(_,t,l)| (l,t));
+                                     .join_map(&labels, |_,&t,&l| (l,t));
 
             // group by (l,t) and emit a count for each.
             let counts = label_topics.map(|x| (x,()))
@@ -61,10 +60,9 @@ fn main() {
             let queries = Collection::new(queries);
 
             let label_query = queries.map(|q| (q,()))
-                                     .join(&labels)
-                                     .map(|(q,_,l)| (l,q));
-
-            let mut query_topics = label_query.join(&topk);
+                                     .join_map(&labels, |q,_,&l| (l,q.clone()));
+ 
+            let mut query_topics = label_query.join_map(&topk, |k,x,&y| (k.clone(), x.clone(), y));
 
             if !inspect {
                 query_topics = query_topics.filter(|_| false);

@@ -10,8 +10,9 @@ use timely::dataflow::operators::*;
 use differential_dataflow::Collection;
 use differential_dataflow::operators::*;
 use differential_dataflow::lattice::Lattice;
+use differential_dataflow::hashable::UnsignedWrapper;
 
-type Node = u32;
+type Node = UnsignedWrapper<u32>;
 type Edge = (Node, Node);
 
 fn main() {
@@ -25,12 +26,22 @@ fn main() {
     // define a new computational scope, in which to run BFS
     timely::execute_from_args(std::env::args().skip(6), move |computation| {
         
+        let seed: &[_] = &[1, 2, 3, 4];
+        let mut rng: StdRng = SeedableRng::from_seed(seed);
+        let mut rng1: StdRng = SeedableRng::from_seed(seed);    // rng for edge additions
+        let mut rng2: StdRng = SeedableRng::from_seed(seed);    // rng for edge deletions
+
+        let mut names = Vec::new();
+        for _ in 0 .. nodes {
+            names.push(UnsignedWrapper::from(rng.gen_range(0, u32::max_value())));
+        }
+
         let timer = ::std::time::Instant::now();
 
         // define BFS dataflow; return handles to roots and edges inputs
         let (mut graph, probe) = computation.scoped(|scope| {
 
-            let roots = vec![(1,1)].into_iter().to_stream(scope);
+            let roots = vec![(names[1],1)].into_iter().to_stream(scope);
             let (edge_input, graph) = scope.new_input();
 
             let mut result = bfs(&Collection::new(graph.clone()), &Collection::new(roots.clone()));
@@ -47,39 +58,35 @@ fn main() {
             (edge_input, probe.0)
         });
 
-        let seed: &[_] = &[1, 2, 3, 4];
-        let mut rng1: StdRng = SeedableRng::from_seed(seed);    // rng for edge additions
-        let mut rng2: StdRng = SeedableRng::from_seed(seed);    // rng for edge deletions
-
         // println!("performing BFS on {} nodes, {} edges:", nodes, edges);
 
         if computation.index() == 0 {
             // trickle edges in to dataflow
             for _ in 0..(edges/1000) {
                 for _ in 0..1000 {
-                    graph.send(((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), 1));
+                    graph.send(((names[rng1.gen_range(0, nodes) as usize], names[rng1.gen_range(0, nodes) as usize]), 1));
                 }
                 computation.step();
             }
             for _ in 0.. (edges % 1000) {
-                graph.send(((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), 1));
+                graph.send(((names[rng1.gen_range(0, nodes) as usize], names[rng1.gen_range(0, nodes) as usize]), 1));
             }
         }
 
-        // println!("loaded; elapsed: {:?}", timer.elapsed());
+        println!("loaded; elapsed: {:?}", timer.elapsed());
 
         graph.advance_to(1);
         computation.step_while(|| probe.lt(graph.time()));
 
-        // println!("stable; elapsed: {:?}", timer.elapsed());
+        println!("stable; elapsed: {:?}", timer.elapsed());
 
         if batch > 0 {
             let mut changes = Vec::new();
             for _wave in 0 .. rounds {
                 if computation.index() == 0 {
                     for _ in 0..batch {
-                        changes.push(((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), 1));
-                        changes.push(((rng2.gen_range(0, nodes), rng2.gen_range(0, nodes)),-1));
+                        changes.push(((names[rng1.gen_range(0, nodes) as usize], names[rng1.gen_range(0, nodes) as usize]), 1));
+                        changes.push(((names[rng2.gen_range(0, nodes) as usize], names[rng2.gen_range(0, nodes) as usize]),-1));
                     }
                 }
 
@@ -102,7 +109,7 @@ fn main() {
             }
         }
 
-        // println!("finished; elapsed: {:?}", timer.elapsed());
+        println!("finished; elapsed: {:?}", timer.elapsed());
 
     }).unwrap();
 }
@@ -123,33 +130,6 @@ where G::Timestamp: Lattice+Ord {
         inner.join_map(&edges, |_k,l,d| (*d, l+1))
              .concat(&nodes)
              .group(|_, s, t| t.push((s[0].0, 1)))
+             
      })
 }
-
-// // Experimental implementation using arrangement to share the output of group_u with the input to join_map_u.
-// // returns pairs (n, s) indicating node n can be reached from a root in s steps.
-// fn _bfs2<G: Scope>(edges: &Collection<G, Edge>, roots: &Collection<G, Node>) -> Collection<G, (Node, u32)>
-// where G::Timestamp: Lattice {
-
-//     // initialize roots as reaching themselves at distance 0
-//     let nodes = roots.map(|x| (x, 0));
-
-//     // repeatedly update minimal distances each node can be reached from each root
-//     nodes.scope().scoped(|scope| {
-
-//         let edges = edges.enter(scope);
-//         let nodes2 = nodes.enter(scope);
-
-//         let variable = Variable::from(nodes.enter(scope));
-
-//         let arranged = variable.concat(&nodes2)
-//                                .arrange_by_key(|k| k.as_u64(), |x| (VecMap::new(), x))
-//                                .group(|k| k.as_u64(), |x| (VecMap::new(), x), |_, s, t| t.push((*s.peek().unwrap().0, 1)));
-
-//         let result = arranged.as_collection().leave();
-
-//         variable.set(&arranged.join(&edges.arrange_by_key(|k| k.as_u64(), |x| (VecMap::new(), x)), |_k,l,d| (*d, l+1)));
-
-//         result
-//     })
-// }
