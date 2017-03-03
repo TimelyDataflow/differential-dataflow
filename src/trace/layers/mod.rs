@@ -38,7 +38,7 @@ pub trait Trie  : ::std::marker::Sized {
 	///
 	/// Collections are allowed their own semantics for merging. For example, unordered collections
 	/// simply collect values, whereas weighted collections accumulate weights and discard elements
-	/// who weights are zero.
+	/// whose weights are zero.
 	fn merge(&self, other: &Self) -> Self {
 		let mut merger = Self::MergeBuilder::with_capacity(self, other);
 		// println!("{:?} and {:?}", self.keys(), other.keys());
