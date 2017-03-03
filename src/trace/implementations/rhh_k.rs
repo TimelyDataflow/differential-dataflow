@@ -270,7 +270,7 @@ where Key: Clone+Default+HashOrdered, Time: Lattice+Ord+Clone+Default+Debug {
         // This is not unethical, because we have full knowledge of the collection trace structure here.
 		let layer = builder.done();
 
-		println!("{:?}\tcount: {:?} -> {:?}", self.time, count, layer.tuples());
+		// println!("{:?}\tcount: {:?} -> {:?}", self.time, count, layer.tuples());
 
 		Rc::new(Layer {
 			layer: layer,
