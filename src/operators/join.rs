@@ -367,9 +367,6 @@ impl<G: Scope, K: Eq+'static, V: 'static, T1: Trace<K,V,G::Timestamp>> JoinArran
 /// This allows us to avoid producing and buffering massive amounts 
 struct Deferred<K, V1, V2, T, T1, T2> 
 where 
-    // K: Ord+Debug+Data, 
-    // V1: Ord+Data, 
-    // V2: Ord+Data, 
     T: Timestamp+Lattice+Ord+Debug, 
     T1: Trace<K, V1, T>, 
     T2: Trace<K, V2, T>,
@@ -383,16 +380,9 @@ where
 impl<K, V1, V2, T, T1, T2> Deferred<K, V1, V2, T, T1, T2>
 where
     K: Eq,
-    // K: Ord+Debug+Data, 
-    // V1: Ord+Data, 
-    // V2: Ord+Data, 
     T: Timestamp+Lattice+Ord+Debug, 
     T1: Trace<K,V1,T>, 
     T2: Trace<K,V2,T>,
-    // T2::Cursor: Debug,
-    // <<T2 as Trace<K, V2, T>>::Batch as Batch<K, V2, T>>::Cursor: Debug,
-    // T1::Cursor: Debug,
-    // <<T1 as Trace<K, V1, T>>::Batch as Batch<K, V1, T>>::Cursor: Debug,
 {
     fn new(work1: Option<(<T1::Batch as Batch<K,V1,T>>::Cursor, T2::Cursor)>, 
            work2: Option<(<T2::Batch as Batch<K,V2,T>>::Cursor, T1::Cursor)>, 
@@ -422,13 +412,7 @@ where
     ///
     /// To make the method more responsive, we could count the number of diffs processed, and allow the 
     /// computation to break out at any point.
-    fn work<R: Ord+Clone, RF: Fn(&K, &V1, &V2)->R>(&mut self, output: &mut Vec<((T, R), Delta)>, logic: &RF, limit: usize)
-    // where 
-        // T1::Key: Borrow<K>+From<K>,
-        // T1::Val: Borrow<V1>+From<V1>,
-        // T2::Key: Borrow<K>+From<K>,
-        // T2::Val: Borrow<V2>+From<V2>,
-     {
+    fn work<R: Ord+Clone, RF: Fn(&K, &V1, &V2)->R>(&mut self, output: &mut Vec<((T, R), Delta)>, logic: &RF, limit: usize) {
 
         let acknowledged = &self.acknowledged;
         let time = self.capability.time();

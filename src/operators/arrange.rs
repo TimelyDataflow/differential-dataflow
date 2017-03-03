@@ -1,24 +1,26 @@
-//! The `arrange` operator and its variants arrange a collection into a shareable trace structure.
+//! Arranges a collection into a shareable trace structure.
 //!
-//! The `arrange` operator is applied to a differential dataflow `Collection` and return an `Arranged`.
-//! Several operators (`join`, `group`, and `cogroup`, among others) are implemented in terms of this
-//! structure, and can be applied directly to arranged data. Internally, the operators will borrow the
-//! shared state, and listen on the timely stream for shared batches of data. The resources to assemble
-//! the collection, both computation and memory, are spent only once.
+//! The `arrange` operator applies to a differential dataflow `Collection` and returns an `Arranged` 
+//! structure, which maintains the collection's records in an indexed manner.
+//!
+//! Several operators (`join`, `group`, and `cogroup`, among others) are implemented against `Arranged`,
+//! and can be applied directly to arranged data instead of the collection. Internally, the operators 
+//! will borrow the shared state, and listen on the timely stream for shared batches of data. The 
+//! resources to index the collection---communication, computation, and memory---are spent only once,
+//! and only one copy of the index needs to be maintained as the collection changes.
 //! 
-//! The arranged collection is stored in a trace, whose append-only behavior means that it is safe to 
+//! The arranged collection is stored in a trace, whose append-only operation means that it is safe to 
 //! share between the single writer and multiple readers. Each reader is expected to interrogate the 
 //! trace only at times for which it knows the trace is complete, as indicated by the frontiers on its
-//! incoming channels. Failing to do this is "safe", but may result in undefined semantics.
+//! incoming channels. Failing to do this is "safe" in the Rust sense, but the reader may see ill-defined
+//! data at times for which the trace is not complete. (This being said, all current implementations 
+//! commit only completed data to the trace).
 //! 
 //! Internally, the shared trace is wrapped in a `TraceWrapper` type which maintains information about 
 //! the frontiers of all of its referees. Each referee has a `TraceHandle`, which acts as a reference 
 //! counted pointer, and which mediates the advancement of frontiers. Ideally, a `TraceHandle` looks a
 //! lot like a trace, though this isn't beatifully masked at the moment (it can't implement the trait
 //! because we can't insert at it; it does implement `advance_by` and could implement `cursor`). 
-//! 
-//! Note: in the current implementation, all batches have only one time. This will probably change and
-//! shouldn't be relied on.
 
 use std::rc::Rc;
 use std::cell::RefCell;
@@ -44,6 +46,10 @@ use trace::implementations::rhh::Spine as HashSpine;
 use trace::implementations::rhh_k::Spine as KeyHashSpine;
 
 /// Wrapper type to permit transfer of `Rc` types, as in batch.
+///
+/// The `BatchWrapper`s sole purpose in life is to implement `Abomonation` with methods that panic
+/// when called. This allows the wrapped data to be transited along timely's `Pipeline` channels. 
+/// The wrapper cannot fake out `Send`, and so cannot be used on timely's `Exchange` channels. 
 #[derive(Clone,Ord,PartialOrd,Eq,PartialEq,Debug)]
 pub struct BatchWrapper<T> {
     /// The wrapped item.
@@ -52,9 +58,9 @@ pub struct BatchWrapper<T> {
 
 // NOTE: This is all horrible. Don't look too hard.
 impl<T> ::abomonation::Abomonation for BatchWrapper<T> {
-   unsafe fn entomb(&self, _writer: &mut Vec<u8>) { panic!() }
-   unsafe fn embalm(&mut self) { panic!() }
-   unsafe fn exhume<'a,'b>(&'a mut self, _bytes: &'b mut [u8]) -> Option<&'b mut [u8]> { panic!()  }
+   unsafe fn entomb(&self, _writer: &mut Vec<u8>) { panic!("BatchWrapper Abomonation impl reached") }
+   unsafe fn embalm(&mut self) { panic!("BatchWrapper Abomonation impl reached") }
+   unsafe fn exhume<'a,'b>(&'a mut self, _bytes: &'b mut [u8]) -> Option<&'b mut [u8]> { panic!("BatchWrapper Abomonation impl reached")  }
 }
 
 
@@ -87,9 +93,8 @@ impl<K,V,T,Tr: Trace<K,V,T>> TraceWrapper<K,V,T,Tr> where T: Lattice+Ord+Clone+'
 
 /// A handle to a shared trace which maintains its own frontier information.
 ///
-/// As long as the handle exists, it should protect the trace from advancing past the associated frontier.
-/// This protection advances as the handle's frontier is advanced. When the handle is dropped the protection
-/// is removed.
+/// As long as the handle exists, the wrapped trace should continue to exist and will not advance its 
+/// timestamps past the frontier maintained by the handle.
 pub struct TraceHandle<K,V,T,Tr: Trace<K,V,T>> where T: Lattice+Ord+Clone+'static {
     frontier: Vec<T>,
     /// Wrapped trace. Please be gentle when using.
@@ -146,8 +151,8 @@ pub struct Arranged<G: Scope, K, V, T: Trace<K, V, G::Timestamp>> where G::Times
     pub stream: Stream<G, BatchWrapper<T::Batch>>,
     /// A shared trace, updated by the `Arrange` operator and readable by others.
     pub trace: Rc<RefCell<TraceWrapper<K, V, G::Timestamp, T>>>,
-    /// If dereferenced, we build this collection.
-    pub collection: Option<Collection<G, (K, V)>>,
+    // TODO : We might have an `Option<Collection<G, (K, V)>>` here, which `as_collection` sets and
+    // returns when invoked, so as to not duplicate work with multiple calls to `as_collection`.
 }
 
 impl<G: Scope, K, V, T: Trace<K, V, G::Timestamp>> Arranged<G, K, V, T> where G::Timestamp: Lattice+Ord {
@@ -250,14 +255,18 @@ impl<G: Scope, K: Data+Hashable, V: Data> Arrange<G, K, V> for Collection<G, (K,
             });
         });
 
-        Arranged { stream: stream, trace: trace, collection: None }
+        Arranged { stream: stream, trace: trace }
     }
 }
 
 /// Arranges something as `(Key,Val)` pairs according to a type `T` of trace.
+///
+/// This arrangement requires `Key: Hashable`, and uses the `hashed()` method to place keys in a hashed
+/// map. This can result in many hash calls, and in some cases it may help to first transform `K` to the
+/// pair `(u64, K)` of hash value and key.
 pub trait ArrangeByKey<G: Scope, K: Data+Default+Hashable, V: Data> 
 where G::Timestamp: Lattice+Ord {
-    /// Arranges a stream of `(Key, Val)` updates by `Key`.
+    /// Arranges a collection of `(Key, Val)` records by `Key`.
     ///
     /// This operator arranges a stream of values into a shared trace, whose contents it maintains.
     /// This trace is current for all times completed by the output stream, which can be used to
@@ -266,21 +275,24 @@ where G::Timestamp: Lattice+Ord {
 }
 
 impl<G: Scope, K: Data+Default+Hashable, V: Data> ArrangeByKey<G, K, V> for Collection<G, (K,V)>
-where G::Timestamp: Lattice+Ord  {
-        
+where G::Timestamp: Lattice+Ord  {        
     fn arrange_by_key(&self) -> Arranged<G, OrdWrapper<K>, V, HashSpine<OrdWrapper<K>, V, G::Timestamp>> {
         self.arrange(|k,v| (OrdWrapper {item:k},v), HashSpine::new(Default::default()))
     }
 }
 
-/// Arranges something as `(Key,Val)` pairs according to a type `T` of trace.
+/// Arranges something as `(Key, ())` pairs according to a type `T` of trace.
+///
+/// This arrangement requires `Key: Hashable`, and uses the `hashed()` method to place keys in a hashed
+/// map. This can result in many hash calls, and in some cases it may help to first transform `K` to the
+/// pair `(u64, K)` of hash value and key.
 pub trait ArrangeBySelf<G: Scope, K: Data+Default+Hashable> 
 where G::Timestamp: Lattice+Ord {
-    /// Arranges a stream of `(Key, Val)` updates by `Key`.
+    /// Arranges a collection of `Key` records by `Key`.
     ///
-    /// This operator arranges a stream of values into a shared trace, whose contents it maintains.
-    /// This trace is current for all times completed by the output stream, which can be used to
-    /// safely identify the stable times and values in the trace.
+    /// This operator arranges a collection of records into a shared trace, whose contents it maintains.
+    /// This trace is current for all times complete in the output stream, which can be used to safely
+    /// identify the stable times and values in the trace.
     fn arrange_by_self(&self) -> Arranged<G, OrdWrapper<K>, (), KeyHashSpine<OrdWrapper<K>, G::Timestamp>>;
 }
 

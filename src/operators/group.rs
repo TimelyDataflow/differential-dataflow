@@ -322,7 +322,7 @@ where
             }
         });
 
-        Arranged { stream: stream, trace: result_trace, collection: None }
+        Arranged { stream: stream, trace: result_trace }
     }
 }
 
