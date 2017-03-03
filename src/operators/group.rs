@@ -53,10 +53,7 @@ use trace::{Batch, Cursor, Trace, Builder};
 // use trace::implementations::trie::Spine as OrdSpine;
 // use trace::implementations::keys::Spine as KeysSpine;
 use trace::implementations::rhh::Spine as HashSpine;
-// use trace::implementations::rhh::HashWrapper;
 use trace::implementations::rhh_k::Spine as KeyHashSpine;
-
-// use hashable::{HashableWrapper, UnsignedWrapper};
 
 /// Extension trait for the `group` differential dataflow method.
 pub trait Group<G: Scope, K: Data, V: Data> where G::Timestamp: Lattice+Ord {

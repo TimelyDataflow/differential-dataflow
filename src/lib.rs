@@ -108,7 +108,7 @@ use std::fmt::Debug;
 /// A change in count.
 pub type Delta = isize;
 
-pub use stream::{Collection, AsCollection};
+pub use collection::{Collection, AsCollection};
 pub use hashable::Hashable;
 
 /// A composite trait for data types usable in differential dataflow.
@@ -138,5 +138,5 @@ pub mod hashable;
 pub mod operators;
 pub mod lattice;
 pub mod trace;
-mod stream;
+mod collection;
 
