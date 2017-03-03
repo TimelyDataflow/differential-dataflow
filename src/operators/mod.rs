@@ -8,24 +8,13 @@
 //! other ways compatible with timely dataflow. In fact, many operators are currently absent because
 //! their timely dataflow analogues are sufficient (e.g. `map`, `filter`, `concat`).
 
-// pub use self::group::Group;
-pub use self::group_alt::Group;
-pub use self::group_alt::Distinct;
-pub use self::group_alt::Count;
-// pub use self::cogroup::CoGroupBy;
+pub use self::group::{Group, Distinct, Count};
 pub use self::consolidate::ConsolidateExt;
 pub use self::iterate::IterateExt;
-pub use self::join_alt::Join;
-// pub use self::threshold::Threshold;
-// pub use self::arrange::{ArrangeByKey, ArrangeBySelf};
+pub use self::join::Join;
 
-// pub mod arrange;
-pub mod arrange_alt;
-// pub mod threshold;
-// pub mod group;
-pub mod group_alt;
-// pub mod cogroup;
+pub mod arrange;
+pub mod group;
 pub mod consolidate;
 pub mod iterate;
-// pub mod join;
-pub mod join_alt;
+pub mod join;

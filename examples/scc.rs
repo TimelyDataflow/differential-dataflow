@@ -13,6 +13,15 @@ use differential_dataflow::Collection;
 use differential_dataflow::operators::*;
 use differential_dataflow::lattice::Lattice;
 
+use differential_dataflow::trace::Trace;
+use differential_dataflow::operators::join::JoinArranged;
+use differential_dataflow::operators::group::GroupArranged;
+use differential_dataflow::operators::arrange::Arrange;
+use differential_dataflow::hashable::UnsignedWrapper;
+use differential_dataflow::trace::implementations::rhh::Spine as HashSpine;
+use differential_dataflow::trace::implementations::rhh_k::Spine as KeyHashSpine;
+
+
 type Node = u32;
 type Edge = (Node, Node);
 
@@ -60,7 +69,7 @@ fn main() {
             let mut rng: StdRng = SeedableRng::from_seed(seed);
 
             let mut names = Vec::with_capacity(nodes as usize);
-            for index in 0 .. nodes {
+            for _index in 0 .. nodes {
               names.push(rng.gen_range(0, u32::max_value()));
               // names.push(index as u32);
             }
@@ -115,9 +124,18 @@ fn _trim_and_flip_u<G: Scope>(graph: &Collection<G, Edge>) -> Collection<G, Edge
 where G::Timestamp: Lattice+Ord+Hash {
     graph.iterate(|edges| {
         // keep edges from active edge destinations.
-        let active = edges.map(|(_,dst)| dst).distinct_u();
+
+        let active = edges.map(|(_,k)| (k,()))
+                          .arrange(|k,v| (UnsignedWrapper::from(k), v), KeyHashSpine::new(Default::default()))
+                          .group_arranged(|_k,_s,t| t.push(((), 1)), KeyHashSpine::new(Default::default()));
+
         graph.enter(&edges.scope())
-             .semijoin_u(&active)
+             .arrange(|k,v| (UnsignedWrapper::from(k), v), HashSpine::new(Default::default()))
+             .join_arranged(&active, |k,v,_| (k.item.clone(), v.clone()))
+
+        // let active = edges.map(|(_,dst)| dst).distinct_u();
+        // graph.enter(&edges.scope())
+        //      .semijoin_u(&active)
     })
     .map_in_place(|x| mem::swap(&mut x.0, &mut x.1))
 }
@@ -151,8 +169,8 @@ fn _trim_edges<G: Scope>(cycle: &Collection<G, Edge>, edges: &Collection<G, Edge
 
     let labels = _reachability(&cycle, &nodes);
 
-    edges.join_map(&labels, |&e1,&e2,&l1| (e2,(e1,l1)))
-         .join_map(&labels, |&e2,&(e1,l1),&l2| ((e1,e2),(l1,l2)))
+    edges.join_map_u(&labels, |&e1,&e2,&l1| (e2,(e1,l1)))
+         .join_map_u(&labels, |&e2,&(e1,l1),&l2| ((e1,e2),(l1,l2)))
          .filter(|&(_,(l1,l2))| l1 == l2)
          .map(|((x1,x2),_)| (x2,x1))
 }

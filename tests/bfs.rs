@@ -11,9 +11,9 @@ use differential_dataflow::Collection;
 use differential_dataflow::hashable::OrdWrapper;
 
 use differential_dataflow::operators::*;
-use differential_dataflow::operators::arrange_alt::*;
-use differential_dataflow::operators::join_alt::*;
-use differential_dataflow::operators::group_alt::*;
+use differential_dataflow::operators::arrange::*;
+use differential_dataflow::operators::join::*;
+use differential_dataflow::operators::group::*;
 
 use differential_dataflow::lattice::Lattice;
 

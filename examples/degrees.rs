@@ -12,10 +12,11 @@ use rand::{Rng, SeedableRng, StdRng};
 use differential_dataflow::trace::Trace;
 use differential_dataflow::{Collection, AsCollection};
 use differential_dataflow::operators::*;
-use differential_dataflow::operators::join_alt::JoinArranged;
-use differential_dataflow::operators::group_alt::{Count, GroupArranged, Group};
-use differential_dataflow::operators::arrange_alt::{ArrangeByKey, ArrangeBySelf};
+use differential_dataflow::operators::join::JoinArranged;
+use differential_dataflow::operators::group::GroupArranged;
+use differential_dataflow::operators::arrange::{ArrangeByKey, ArrangeBySelf};
 use differential_dataflow::lattice::Lattice;
+use differential_dataflow::trace::implementations::rhh::Spine;
 
 fn main() {
 
@@ -143,7 +144,7 @@ where G::Timestamp: Lattice+::std::hash::Hash+Ord {
 		// determine active vertices
 		let active = inner.flat_map(|(src,dst)| Some(src).into_iter().chain(Some(dst).into_iter()))
 						  .arrange_by_self()
-						  .group_arranged(move |_k, s, t| { if s[0].1 > k { t.push(((),1)) } }, differential_dataflow::trace::implementations::trie::Spine::new(Default::default()));
+						  .group_arranged(move |_k, s, t| { if s[0].1 > k { t.push(((),1)) } }, Spine::new(Default::default()));
                 		  // .threshold(|k| k.as_u64(), |x| (VecMap::new(), x), move |_,cnt| if cnt >= k { 1 } else { 0 });
 
 		// restrict edges active vertices, return result

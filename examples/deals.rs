@@ -10,19 +10,15 @@ use std::time::Instant;
 use std::hash::Hash;
 use std::mem;
 
-// use vec_map::VecMap;
-
 use rand::{Rng, SeedableRng, StdRng};
-
-// use timely_sort::Unsigned;
 
 use timely::dataflow::*;
 use timely::dataflow::operators::*;
 
 use differential_dataflow::Collection;
 use differential_dataflow::operators::*;
-use differential_dataflow::operators::arrange_alt::{ArrangeByKey, ArrangeBySelf};
-use differential_dataflow::operators::join_alt::JoinArranged;
+use differential_dataflow::operators::arrange::{ArrangeByKey, ArrangeBySelf};
+use differential_dataflow::operators::join::JoinArranged;
 use differential_dataflow::lattice::Lattice;
 
 use graph_map::GraphMMap;

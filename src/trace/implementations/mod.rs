@@ -38,8 +38,8 @@
 //! into 'ordered builder'". Then the builder would be bright enough to emit a "batch" for the composite 
 //! trace, rather than just a batch of the type merged.
 
-// pub mod trie;
-// pub mod keys;
+pub mod trie;
+pub mod keys;
 
 pub mod rhh;
 pub mod rhh_k;

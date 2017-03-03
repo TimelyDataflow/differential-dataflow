@@ -25,7 +25,7 @@ fn main() {
     // define a new computational scope, in which to run BFS
     timely::execute_from_args(std::env::args().skip(6), move |computation| {
         
-        let timer = ::std::time::Instant::now();
+        // let timer = ::std::time::Instant::now();
 
         // define BFS dataflow; return handles to roots and edges inputs
         let (mut graph, probe) = computation.scoped(|scope| {

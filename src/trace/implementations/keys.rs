@@ -80,6 +80,7 @@ pub struct Layer<Key: Ord, Time: Lattice+Ord> {
 
 impl<Key: Ord+Clone, Time: Lattice+Ord+Clone> Batch<Key, (), Time> for Rc<Layer<Key, Time>> {
 	type Builder = LayerBuilder<(Key, Time)>;
+	type OrderedBuilder = LayerBuilder<(Key, Time)>;
 	type Cursor = LayerCursor<Key, Time>;
 	fn cursor(&self) -> Self::Cursor { LayerCursor::new(self.clone()) }
 	fn len(&self) -> usize { self.times.len() }
