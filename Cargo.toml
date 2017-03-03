@@ -2,7 +2,7 @@
 [package]
 
 name = "differential-dataflow"
-version = "0.0.3"
+version = "0.0.4"
 authors = ["Frank McSherry <fmcsherry@me.com>"]
 
 description = "An incremental data-parallel dataflow platform"
