@@ -4,32 +4,32 @@ extern crate differential_dataflow;
 use timely::dataflow::operators::{ToStream, Capture};
 use timely::dataflow::operators::capture::Extract;
 use differential_dataflow::AsCollection;
-use differential_dataflow::operators::{ConsolidateExt, Join};
+use differential_dataflow::operators::{Consolidate, Join};
 
-// #[test]
-// fn join() {
+#[test]
+fn join() {
 
-//     let data = timely::example(|scope| {
+    let data = timely::example(|scope| {
 
-//         let col1 = vec![((0,0),1),((1,2),1)]
-//                         .into_iter()
-//                         .to_stream(scope)
-//                         .as_collection();
+        let col1 = vec![((0,0),1),((1,2),1)]
+                        .into_iter()
+                        .to_stream(scope)
+                        .as_collection();
 
-//         let col2 = vec![((0,'a'),1),((1,'B'),1)]
-//                         .into_iter()
-//                         .to_stream(scope)
-//                         .as_collection();
+        let col2 = vec![((0,'a'),1),((1,'B'),1)]
+                        .into_iter()
+                        .to_stream(scope)
+                        .as_collection();
 
-//         // should produce triples `(0,0,'a')` and `(1,2,'B')`.
-//         col1.join(&col2).inner.capture()
-//     });
+        // should produce triples `(0,0,'a')` and `(1,2,'B')`.
+        col1.join(&col2).inner.capture()
+    });
 
-//     let extracted = data.extract();
-//     assert_eq!(extracted.len(), 1);
-//     assert_eq!(extracted[0].1, vec![((0,0,'a'),1), ((1,2,'B'),1)]);
+    let extracted = data.extract();
+    assert_eq!(extracted.len(), 1);
+    assert_eq!(extracted[0].1, vec![((0,0,'a'),1), ((1,2,'B'),1)]);
 
-// }
+}
 
 #[test]
 fn join_map() {

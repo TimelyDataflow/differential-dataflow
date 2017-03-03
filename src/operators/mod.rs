@@ -9,8 +9,8 @@
 //! their timely dataflow analogues are sufficient (e.g. `map`, `filter`, `concat`).
 
 pub use self::group::{Group, Distinct, Count};
-pub use self::consolidate::ConsolidateExt;
-pub use self::iterate::IterateExt;
+pub use self::consolidate::Consolidate;
+pub use self::iterate::Iterate;
 pub use self::join::Join;
 
 pub mod arrange;

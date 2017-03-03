@@ -1,18 +1,25 @@
 //! Iterative application of a differential dataflow fragment.
 //!
-//! The `iterate` operator takes as an argument a closure from a differential dataflow stream to a
-//! stream of the same type. The output are differences which accumulate to the result of applying
-//! this closure a specified number of times.
+//! The `iterate` operator takes as an argument a closure from a differential dataflow collection 
+//! to a collection of the same type. The output collection is the result of applying this closure 
+//! an unbounded number of times.
 //!
 //! The implementation of `iterate` does not directly apply the closure, but rather establishes an
 //! iterative timely dataflow subcomputation, in which differences circulate until they dissipate
 //! (indicating that the computation has reached fixed point), or until some number of iterations
-//! have passed.
+//! have passed. 
+//!
+//! **Note**: The dataflow assembled by `iterate` does not automatically insert `consolidate` for 
+//! you. This means that either (i) you should insert one yourself, (ii) you should be certain that
+//! all paths from the input to the output of the loop involve consolidation, or (iii) you should 
+//! be worried that logically cancelable differences may circulate indefinitely.
+//!
+//! #Details 
 //!
 //! The `iterate` method is written using a `Variable`, which lets you define your own iterative 
 //! computations when `iterate` itself is not sufficient. This can happen when you have two 
-//! collections that should evolve simultaneously, or when you would like to return an intermediate 
-//! result from your iterative computation.
+//! collections that should evolve simultaneously, or when you would like to rotate your loop and 
+//! return an intermediate result.
 //! 
 //! Using `Variable` requires more explicit arrangement of your computation, but isn't much more
 //! complicated. You must define a new variable from an existing stream (its initial value), and 
@@ -33,6 +40,7 @@
 //! // repeatedly divide out factors of two.
 //! let limits = numbers.iterate(|values| {
 //!     values.map(|x if x % 2 == 0 { x/2 } else { x })
+//!           .consolidate()
 //! });
 //! ```
 //!
@@ -42,7 +50,8 @@
 //! // repeatedly divide out factors of two.
 //! let limits = computation.scoped(|scope| {
 //!     let variable = Variable::from(numbers.enter(scope));
-//!     let result = variable.map(|x if x % 2 == 0 { x/2 } else { x });
+//!     let result = variable.map(|x if x % 2 == 0 { x/2 } else { x })
+//!                          .consolidate();
 //!     variable.set(&result)
 //!             .leave()
 //! })
@@ -59,14 +68,14 @@ use ::{Data, Collection, Delta};
 use lattice::Lattice;
 
 /// An extension trait for the `iterate` method.
-pub trait IterateExt<G: Scope, D: Data> {
+pub trait Iterate<G: Scope, D: Data> {
     /// Iteratively apply `logic` to the source collection until convergence.
     fn iterate<F>(&self, logic: F) -> Collection<G, D>
         where G::Timestamp: Lattice,
               for<'a> F: FnOnce(&Collection<Child<'a, G, u64>, D>)->Collection<Child<'a, G, u64>, D>;
 }
 
-impl<G: Scope, D: Ord+Data+Debug> IterateExt<G, D> for Collection<G, D> {
+impl<G: Scope, D: Ord+Data+Debug> Iterate<G, D> for Collection<G, D> {
     fn iterate<F>(&self, logic: F) -> Collection<G, D>
         where G::Timestamp: Lattice,
               for<'a> F: FnOnce(&Collection<Child<'a, G, u64>, D>)->Collection<Child<'a, G, u64>, D> {

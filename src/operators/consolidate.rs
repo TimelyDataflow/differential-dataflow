@@ -30,7 +30,7 @@ use timely_sort::Unsigned;
 use ::{Collection, Data, Delta, Hashable};
 
 /// An extension method for consolidating weighted streams.
-pub trait ConsolidateExt<D: Data> {
+pub trait Consolidate<D: Data> {
     /// Aggregates the weights of equal records into at most one record.
     ///
     /// This method uses the type `D`'s `hashed()` method to partition the data.
@@ -65,7 +65,7 @@ pub trait ConsolidateExt<D: Data> {
     fn consolidate_by<U: Unsigned, F: Fn(&D)->U+'static>(&self, part: F) -> Self;
 }
 
-impl<G: Scope, D: Data+Debug> ConsolidateExt<D> for Collection<G, D> {
+impl<G: Scope, D: Data+Debug> Consolidate<D> for Collection<G, D> {
     fn consolidate(&self) -> Self where D: Hashable {
        self.consolidate_by(|x| x.hashed())
     }
