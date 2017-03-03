@@ -133,7 +133,7 @@ where
     G: Scope, 
     K: Data+Default+Hashable, 
     V: Data,
-    G::Timestamp: Lattice+Ord,
+    G::Timestamp: Lattice+Ord+Copy,
 {
     fn join_map<V2: Data, D: Data, R>(&self, other: &Collection<G, (K, V2)>, logic: R) -> Collection<G, D>
     where R: Fn(&K, &V, &V2)->D+'static {
@@ -191,7 +191,7 @@ pub trait JoinArranged<G: Scope, K: 'static, V: 'static> where G::Timestamp: Lat
 
 impl<G: Scope, K: Eq+'static, V: 'static, T1: Trace<K,V,G::Timestamp>> JoinArranged<G, K, V> for Arranged<G,K,V,T1> 
     where 
-        G::Timestamp: Lattice+Ord,
+        G::Timestamp: Lattice+Ord+Debug+Copy,
         T1: 'static,
         T1::Batch: 'static,
          {
@@ -211,7 +211,8 @@ impl<G: Scope, K: Eq+'static, V: 'static, T1: Trace<K,V,G::Timestamp>> JoinArran
         let mut inputs2 = LinearMap::<G::Timestamp, T2::Batch>::new();
 
         let mut capabilities = Vec::<Capability<G::Timestamp>>::new();
-        let mut acknowledged = Vec::<G::Timestamp>::new();
+        // let mut acknowledged = Vec::<G::Timestamp>::new();
+        // let mut ack_frontier = Antichain::new();
 
         let mut output_buffer = Vec::new();
         let mut times = Vec::new();
@@ -223,52 +224,45 @@ impl<G: Scope, K: Eq+'static, V: 'static, T1: Trace<K,V,G::Timestamp>> JoinArran
             let frontier1 = notificator.frontier(0);
             let frontier2 = notificator.frontier(1);
 
+            // The acknowledged frontier
+            //
+            // The `ack_frontier` antichain tracks those times at which updates have not yet been acknowledged.
+            // It is defined by the two input frontiers, and the set of as-yet unstarted work. When we start
+            // to work on a time the current acknowledged frontier is captured, and the time is considered 
+            // committed. Even though we have not yet produced the outputs, we have accounted for their 
+            // eventual production. The acknowledged frontier is just about accounting for outputs, rather
+            // than enforcing anything about how they are produced.
+
+            let mut ack_frontier = Antichain::new();
+
+            for time in frontier1 { ack_frontier.insert(time.clone()); }
+            for time in frontier2 { ack_frontier.insert(time.clone()); }
+            for cap in &capabilities { ack_frontier.insert(cap.time()); }
+
             // Advancing the input collections
             //
             // Join's use of input collections is unlike `group`'s use of input collections. Each input 
             // collection has its updates
             //
-            //   (i) filtered by "acknowledged times" `acknowledged`, and then 
+            //   (i) filtered by "acknowledged times" `ack_frontier`, and then 
             //   (ii) crossed with new updates from the other collection. 
             //
-            // We must not remove the distinction between updates with respect to any element of the set of 
-            // acknowledged times, present *or future*. Note that `acknowledged` is the upper envelope of 
-            // acknowledged times; it is *not* the lower envelope (frontier) for future acknowledged times.
-            // Future elements of `acknowledged` come from the times of input differences, whose frontiers
-            // are determined by the input frontiers and received-but-unacknowledged input data.
-            //
-            // Importantly, at the moment `acknowledged` may receive elements from times on *either input*,
-            // meaning that (absent further reasoning) each input trace needs to use the frontiers of both 
-            // of its inputs. It is reasonable to consider acknowledging inputs independently, although it 
-            // may become unreasonable with somewhat more consideration.
-            //
-            // It is likely that `acknowledged` can be somehow advanced by the frontiers of the inputs. If
-            // nothing else, we can "complete" the upper envelope to match the frontier using our knowledge
-            // that some timestamps are empty; `acknowledged` only contains observed timestamps, and does 
-            // not reflect completeness information from frontiers.
+            // We must not remove the distinction between updates with respect to any time in the frontier
+            // of times we may yet acknowledge, as these distinctions are what include or exclude updates
+            // from the corresponding cross product. This frontier as already defined includes the times 
+            // of future updates, which define the second constraint. We should be ok using `ack_frontier` 
+            // for the calls to `advance_by`. 
 
             // shut down trace1 if the frontier2 is empty and inputs2 are done. else, advance its frontier.
             if trace2.is_some() && frontier1.len() == 0 && inputs1.len() == 0 { trace2 = None; }
             if let Some(ref mut trace) = trace2 {
-                let mut antichain = Antichain::new();
-                for time in frontier1 { antichain.insert(time.clone()); }
-                for time in frontier2 { antichain.insert(time.clone()); }
-                for time in inputs1.keys() { antichain.insert(time.clone()); }
-                for time in inputs2.keys() { antichain.insert(time.clone()); }
-                for time in &acknowledged { antichain.insert(time.clone()); }
-                trace.advance_by(antichain.elements());
+                trace.advance_by(ack_frontier.elements());
             }
 
             // shut down trace1 if the frontier2 is empty and inputs2 are done. else, advance its frontier.
             if trace1.is_some() && frontier2.len() == 0 && inputs2.len() == 0 { trace1 = None; }
             if let Some(ref mut trace) = trace1 {
-                let mut antichain = Antichain::new();
-                for time in frontier1 { antichain.insert(time.clone()); }
-                for time in frontier2 { antichain.insert(time.clone()); }
-                for time in inputs1.keys() { antichain.insert(time.clone()); }
-                for time in inputs2.keys() { antichain.insert(time.clone()); }
-                for time in &acknowledged { antichain.insert(time.clone()); }
-                trace.advance_by(antichain.elements());
+                trace.advance_by(ack_frontier.elements());
             }
 
             // read input 1, push all data to queues
@@ -302,14 +296,8 @@ impl<G: Scope, K: Eq+'static, V: 'static, T1: Trace<K,V,G::Timestamp>> JoinArran
 
                 // enqueue work item if either input needs it.
                 if work1.is_some() || work2.is_some() {
-                    todo.push(Deferred::new(work1, work2, capability, &acknowledged[..]));
+                    todo.push(Deferred::new(work1, work2, capability, ack_frontier));
                 }
-
-                // TODO : This grows without bound as the upper envelope grows.
-                // TODO : Seems like it should be able to be `advance_by`d as well, 
-                // TODO : though not sure what the math is exactly.
-                acknowledged.retain(|t| !(t <= &time));
-                acknowledged.push(time);
             }
 
             // perform some outstanding computation. perhaps not all of it.
@@ -374,25 +362,28 @@ where
     work1: Option<(<T1::Batch as Batch<K,V1,T>>::Cursor, T2::Cursor)>,
     work2: Option<(<T2::Batch as Batch<K,V2,T>>::Cursor, T1::Cursor)>,
     capability: Capability<T>,
-    acknowledged: Vec<T>,
+    // acknowledged: Vec<T>,
+    ack_frontier: Antichain<T>,
 }
 
 impl<K, V1, V2, T, T1, T2> Deferred<K, V1, V2, T, T1, T2>
 where
     K: Eq,
-    T: Timestamp+Lattice+Ord+Debug, 
+    T: Timestamp+Lattice+Ord+Debug+Copy, 
     T1: Trace<K,V1,T>, 
     T2: Trace<K,V2,T>,
 {
     fn new(work1: Option<(<T1::Batch as Batch<K,V1,T>>::Cursor, T2::Cursor)>, 
            work2: Option<(<T2::Batch as Batch<K,V2,T>>::Cursor, T1::Cursor)>, 
            capability: Capability<T>,
-           acknowledged: &[T]) -> Self {
+           // acknowledged: &[T],
+           ack_frontier: Antichain<T>) -> Self {
         Deferred {
             work1: work1,
             work2: work2,
             capability: capability,
-            acknowledged: acknowledged.to_vec(),
+            // acknowledged: acknowledged.to_vec(),
+            ack_frontier: ack_frontier,
         }
     }
 
@@ -412,9 +403,10 @@ where
     ///
     /// To make the method more responsive, we could count the number of diffs processed, and allow the 
     /// computation to break out at any point.
+    #[inline(never)]
     fn work<R: Ord+Clone, RF: Fn(&K, &V1, &V2)->R>(&mut self, output: &mut Vec<((T, R), Delta)>, logic: &RF, limit: usize) {
 
-        let acknowledged = &self.acknowledged;
+        let ack_frontier = &self.ack_frontier;
         let time = self.capability.time();
         let mut temp = Vec::new();
 
@@ -427,12 +419,13 @@ where
                         while layer.val_valid() {
                             let r = logic(layer.key(), layer.val(), trace.val());
                             trace.map_times(|time1, diff1| {
-                                if acknowledged.iter().any(|t| time1 <= t) {
+                                if !ack_frontier.elements().iter().any(|t| t <= time1) {
                                     layer.map_times(|time2, diff2| {
                                         temp.push((time1.join(time2), diff1 * diff2));
                                     });
                                 }
                             });
+
                             consolidate(&mut temp, 0);
                             output.extend(temp.drain(..).map(|(t,d)| ((t,r.clone()), d)));
                             layer.step_val();
@@ -455,12 +448,13 @@ where
                         while layer.val_valid() {
                             let r = logic(layer.key(), trace.val(), layer.val());
                             trace.map_times(|time1, diff1| {
-                                if time1 <= &time || acknowledged.iter().any(|t| time1 <= t) {
+                                if time1 <= &time || !ack_frontier.elements().iter().any(|t| t <= time1) {
                                     layer.map_times(|time2, diff2| {
                                         temp.push((time1.join(time2), diff1 * diff2));
                                     });                   
                                 }                         
                             });
+
                             consolidate(&mut temp, 0);
                             output.extend(temp.drain(..).map(|(t,d)| ((t,r.clone()), d)));
                             layer.step_val();
