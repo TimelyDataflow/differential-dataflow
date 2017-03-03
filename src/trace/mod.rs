@@ -66,6 +66,8 @@ pub trait Batch<K, V, T> where Self: ::std::marker::Sized {
 	/// be used to create new batches. Other types may also be used to build batches, but
 	/// this type must be defined to provide a default builder type.
 	type Builder: Builder<K, V, T, Self>;
+	/// A builder for pre-sorted sequences of tuples (e.g., for the output of `group`).
+	type OrderedBuilder: Builder<K, V, T, Self>;
 	/// The type used to enumerate the batch's contents.
 	type Cursor: Cursor<K, V, T>;
 	/// Acquires a cursor to the batch's contents.
@@ -94,21 +96,6 @@ pub trait Builder<K, V, T, Output: Batch<K, V, T>> {
 /// Scans `vec[off..]` and consolidates differences of adjacent equivalent elements.
 pub fn consolidate<T: Ord+Clone>(vec: &mut Vec<(T, isize)>, off: usize) {
 	consolidate_by(vec, off, |x,y| x.cmp(&y));
-	// vec[off..].sort_by(|x,y| x.0.cmp(&y.0));
-	// for index in (off + 1) .. vec.len() {
-	// 	if vec[index].0 == vec[index - 1].0 {
-	// 		vec[index].1 += vec[index - 1].1;
-	// 		vec[index - 1].1 = 0;
-	// 	}
-	// }
-	// let mut cursor = off;
-	// for index in off .. vec.len() {
-	// 	if vec[index].1 != 0 {
-	// 		vec[cursor] = vec[index].clone();
-	// 		cursor += 1;
-	// 	}
-	// }
-	// vec.truncate(cursor);
 }
 
 

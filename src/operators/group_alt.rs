@@ -221,14 +221,11 @@ where
                     let mut output_cursor: T2::Cursor = output_trace.cursor();
 
                     // changes to output_trace we build up (and eventually send).
-                    let mut output_builder = <T2::Batch as Batch<K,V2,G::Timestamp>>::Builder::new();
+                    // let mut output_builder = <T2::Batch as Batch<K,V2,G::Timestamp>>::Builder::new();
+                    let mut output_builder = <T2::Batch as Batch<K,V2,G::Timestamp>>::OrderedBuilder::new();
 
                     // sort, dedup keys and iterate.                    
                     for key in keys.done() {
-
-                        // println!("processing key: {:?}", key);
-
-                        // let key: K = key.borrow().clone();
 
                         input_stage.clear();
                         output_stage.clear();
@@ -260,14 +257,10 @@ where
                             }
                         }
 
-                        // println!("  input: {:?}", input_stage);
-
                         // 2. apply user logic (only if non-empty).
                         if input_stage.len() > 0 {
                             logic(&key, &input_stage[..], &mut output_stage);
                         }
-
-                        // println!("  output: {:?}", output_stage);
 
                         // 3. subtract existing output differences.
                         output_cursor.seek_key(&key);

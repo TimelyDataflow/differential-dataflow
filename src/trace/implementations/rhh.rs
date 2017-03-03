@@ -4,12 +4,9 @@
 //! keys that implement `Hash`, keys whose hashes have been computed and are stashed with the key, and
 //! integers keys which are promised to be random enough to be used as the hashes themselves.
 use std::rc::Rc;
-// use std::hash::Hash;
-// use std::borrow::Borrow;
 
 use timely_sort::{Unsigned};
 
-// use ::Hashable;
 use hashable::HashOrdered;
 
 use trace::layers::{Trie, TupleBuilder};
@@ -115,6 +112,7 @@ pub struct Layer<Key: HashOrdered, Val: Ord, Time: Lattice+Ord> {
 
 impl<Key: Clone+Default+HashOrdered, Val: Ord+Clone, Time: Lattice+Ord+Clone+Default> Batch<Key, Val, Time> for Rc<Layer<Key, Val, Time>> {
 	type Builder = LayerBuilder<Key, Val, Time>;
+	type OrderedBuilder = OrdBuilder<Key, Val, Time>;
 	type Cursor = LayerCursor<Key, Val, Time>;
 	fn cursor(&self) -> Self::Cursor {  LayerCursor { cursor: self.layer.cursor() } }
 	fn len(&self) -> usize { self.layer.tuples() }
@@ -137,8 +135,8 @@ impl<Key: Clone+Default+HashOrdered, Val: Ord+Clone, Time: Lattice+Ord+Clone+Def
 	pub fn advance_by(layer: &Rc<Self>, frontier: &[Time]) -> Self { 
 
 		// TODO: This is almost certainly too much `with_capacity`.
-		// TODO: We should design and implement an "in-orded builder", which takes cues from key and val
-		// structure, rather than having to infer them from tuples.
+		// TODO: We should design and implement an "in-order builder", which takes cues from key and val
+		// structure, rather than having to re-infer them from tuples.
 		// TODO: We should understand whether in-place mutation is appropriate, or too gross. At the moment,
 		// this could be a general method defined on any implementor of `trace::Cursor`.
 		let mut builder = <RHHBuilder<Key, Val, Time> as TupleBuilder>::with_capacity(layer.len());
@@ -204,93 +202,88 @@ pub struct LayerBuilder<K: HashOrdered, V: Ord, T: Ord> {
 	time: T,
 	// TODO : Have this build `Layer`s and merge, instead of re-sorting sorted data.
     buffer: Vec<((K, V), isize)>,
+    buffers: Vec<Vec<((K, V), isize)>>,
 }
-
-
-		// if self.buffers.len() > 0 {
-		// 	self.buffers.push(::std::mem::replace(&mut self.buffer, Vec::new()));
-  //       	let mut sorter = ::timely_sort::LSBRadixSorter::new();
-  //       	sorter.sort(&mut self.buffers, &|x| (x.0).0.hashed());
-
-  //       	let mut current_hash = 0;
-  //       	for ((key, val), diff) in self.buffers.drain(..).flat_map(|batch| batch.into_iter()) {
-  //       		if key.hashed().as_u64() != current_hash {
-  //       			consolidate(&mut self.buffer, 0);
-		// 			for ((key,val),diff) in self.buffer.drain(..) {
-		// 				builder.push_tuple((key, (val, (self.time.clone(), diff))));
-		// 			}
-		// 			current_hash = key.hashed().as_u64();
-  //       		}
-		// 		builder.push_tuple((key, (val, (self.time.clone(), diff))));
-  //       	}
-  //       	consolidate(&mut self.buffer, 0);
-		// 	for ((key,val),diff) in self.buffer.drain(..) {
-		// 		builder.push_tuple((key, (val, (self.time.clone(), diff))));
-		// 	}
-		// }
-		// else {
-		// 	consolidate(&mut self.buffer, 0);
-		// 	for ((key,val),diff) in self.buffer.drain(..) {
-		// 		builder.push_tuple((key, (val, (self.time.clone(), diff))));
-		// 	}
-		// }
-
 
 impl<Key, Val, Time> Builder<Key, Val, Time, Rc<Layer<Key, Val, Time>>> for LayerBuilder<Key, Val, Time> 
 where Key: Clone+Default+HashOrdered, Val: Ord+Clone, Time: Lattice+Ord+Clone+Default {
-	fn new() -> Self { LayerBuilder { time: Default::default(), buffer: Vec::new() } }
+	fn new() -> Self { LayerBuilder { time: Default::default(), buffer: Vec::new(), buffers: Vec::new() } }
 	fn push(&mut self, (key, val, time, diff): (Key, Val, Time, isize)) {
 		self.time = time;
 		self.buffer.push(((key, val), diff));
+		if self.buffer.len() == 1 << 12 {
+			self.buffers.push(::std::mem::replace(&mut self.buffer, Vec::with_capacity(1 << 12)));
+		}
 	}
 	fn done(mut self, lower: &[Time], upper: &[Time]) -> Rc<Layer<Key, Val, Time>> {
 
-		let print = self.buffer.len() > 1000000;
+		let mut count = self.buffer.len();
+		for buffer in &self.buffers {
+			count += buffer.len();
+		}
 
-        let timer = ::std::time::Instant::now();
+		let mut builder = <RHHBuilder<Key, Val, Time> as TupleBuilder>::with_capacity(count);
 
-        // radix sort larger batches. could radix sort smaller batches, with a different implementation.
-        if self.buffer.len() > 1_000 {
+        // sort things, radix if many, `sort` if few.
+        if self.buffers.len() > 0 {
+        	if self.buffer.len() > 0 {
+				self.buffers.push(::std::mem::replace(&mut self.buffer, Vec::new()));
+        	}
 
         	let mut sorter = ::timely_sort::LSBRadixSorter::new();
-        	for update in self.buffer.drain(..) {
-        		sorter.push(update, &|x| (x.0).0.hashed());
-        	}
-
-        	let mut sorted = sorter.finish(&|x| (x.0).0.hashed());
+        	sorter.sort(&mut self.buffers, &|x| (x.0).0.hashed());
 
         	let mut current_hash = 0;
-        	let mut current_pos = 0;
-        	for ((key,val), diff) in sorted.drain(..).flat_map(|batch| batch.into_iter()) {
+        	for ((key, val), diff) in self.buffers.drain(..).flat_map(|batch| batch.into_iter()) {
         		if key.hashed().as_u64() != current_hash {
         			current_hash = key.hashed().as_u64();
-					consolidate(&mut self.buffer, current_pos);
-        			current_pos = self.buffer.len();
+					consolidate(&mut self.buffer, 0);
+					for ((key, val),diff) in self.buffer.drain(..) {
+						builder.push_tuple((key, (val, (self.time.clone(), diff))));
+					}
         		}
-        		self.buffer.push(((key,val),diff));
+        		self.buffer.push(((key, val), diff));
         	}
-			consolidate(&mut self.buffer, current_pos);
+			consolidate(&mut self.buffer, 0);
+			for ((key, val),diff) in self.buffer.drain(..) {
+				builder.push_tuple((key, (val, (self.time.clone(), diff))));
+			}
         }
         else {
-			consolidate(&mut self.buffer, 0);
-	    }
-		if print { println!("collapse: {:?}", timer.elapsed()); }
+        	consolidate(&mut self.buffer, 0);
+			for ((key, val),diff) in self.buffer.drain(..) {
+				builder.push_tuple((key, (val, (self.time.clone(), diff))));
+			}
+        }
 
-        let timer = ::std::time::Instant::now();
-		let mut builder = <RHHBuilder<Key, Val, Time> as TupleBuilder>::with_capacity(self.buffer.len());
-        // TODO : We should be able to build a `Layer` directly here, without the weird indirection of `push_tuple`.
-        // We can compute the number of keys, (key,val)s, allocate exact amounts, and then drop everything in place.
-        // This is not unethical, because we have full knowledge of the collection trace structure here.
-		for ((key,val),diff) in self.buffer.drain(..) {
-			builder.push_tuple((key, (val, (self.time.clone(), diff))));
-		}
 		let layer = builder.done();
-		if print { println!("building: {:?}", timer.elapsed()); }
 
 		Rc::new(Layer {
 			layer: layer,
 			desc: Description::new(lower, upper, lower)
 		})
+	}
+}
 
+
+/// A builder for creating layers from unsorted update tuples.
+pub struct OrdBuilder<Key: HashOrdered, Val: Ord, Time: Ord> {
+	builder: RHHBuilder<Key, Val, Time>,
+}
+
+impl<Key, Val, Time> Builder<Key, Val, Time, Rc<Layer<Key, Val, Time>>> for OrdBuilder<Key, Val, Time> 
+where Key: Clone+Default+HashOrdered, Val: Ord+Clone, Time: Lattice+Ord+Clone+Default {
+
+	fn new() -> Self { OrdBuilder { builder: RHHBuilder::new() } }
+	fn push(&mut self, (key, val, time, diff): (Key, Val, Time, isize)) {
+		self.builder.push_tuple((key, (val, (time, diff))));
+	}
+
+	#[inline(never)]
+	fn done(self, lower: &[Time], upper: &[Time]) -> Rc<Layer<Key, Val, Time>> {
+		Rc::new(Layer {
+			layer: self.builder.done(),
+			desc: Description::new(lower, upper, lower)
+		})
 	}
 }
