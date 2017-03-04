@@ -4,28 +4,26 @@ extern crate timely_sort;
 extern crate differential_dataflow;
 extern crate vec_map;
 
-use vec_map::VecMap;
-
 use timely::dataflow::*;
 use timely::dataflow::operators::*;
 
-use timely_sort::Unsigned;
-
 use rand::{Rng, SeedableRng, StdRng};
 
+use differential_dataflow::trace::Trace;
 use differential_dataflow::{Collection, AsCollection};
 use differential_dataflow::operators::*;
 use differential_dataflow::operators::join::JoinArranged;
-use differential_dataflow::operators::threshold::ThresholdArranged;
-use differential_dataflow::operators::group::Count;
+use differential_dataflow::operators::group::GroupArranged;
+use differential_dataflow::operators::arrange::{ArrangeByKey, ArrangeBySelf};
 use differential_dataflow::lattice::Lattice;
+use differential_dataflow::trace::implementations::rhh::Spine;
 
 fn main() {
 
     let nodes: u32 = std::env::args().nth(1).unwrap().parse().unwrap();
     let edges: usize = std::env::args().nth(2).unwrap().parse().unwrap();
     let batch: usize = std::env::args().nth(3).unwrap().parse().unwrap();
-    let k: i32 = std::env::args().nth(4).unwrap().parse().unwrap();
+    let k: isize = std::env::args().nth(4).unwrap().parse().unwrap();
 
     let kc1 = std::env::args().find(|x| x == "kcore1").is_some();
     let kc2 = std::env::args().find(|x| x == "kcore2").is_some();
@@ -51,11 +49,11 @@ fn main() {
 
     		let degrs = edges//.flat_map(|(src,dst)| Some(src).into_iter().chain(Some(dst).into_iter()))
     						 .map(|(src,_dst)| src)
-    						 .count_u();
+    						 .count();
 
     		// pull of count, and count.
 		    let distr = degrs.map(|(_, cnt)| cnt as u32)
-    						 .count_u();
+    						 .count();
 
 			// show us something about the collection, notice when done.
 			let probe = distr//.inspect(|x| println!("observed: {:?}", x))
@@ -121,38 +119,41 @@ fn main() {
 }
 
 
-fn kcore1<G: Scope>(edges: &Collection<G, (u32, u32)>, k: i32) -> Collection<G, (u32, u32)> 
-where G::Timestamp: Lattice {
+fn kcore1<G: Scope>(edges: &Collection<G, (u32, u32)>, k: isize) -> Collection<G, (u32, u32)> 
+where G::Timestamp: Lattice+Ord {
 	edges.iterate(|inner| {
 		// determine active vertices
-		let active = inner.flat_map(|(src,dst)| Some(src).into_iter().chain(Some(dst).into_iter()))
-						  .threshold_u(move |_,cnt| if cnt >= k { 1 } else { 0 });
+		let active = inner.flat_map(|(src,dst)| Some((src,())).into_iter().chain(Some((dst,())).into_iter()))
+						  .group(move |_k, s, t| { if s[0].1 > k { t.push(((),1)) } })
+						  .map(|(k,_)| k);
+						  // .threshold_u(move |_,cnt| if cnt >= k { 1 } else { 0 });
 
 		// restrict edges active vertices, return result
 	    edges.enter(&inner.scope())
-	    	 .semijoin_u(&active)
+	    	 .semijoin(&active)
 	    	 .map(|(src,dst)| (dst,src))
-     	     .semijoin_u(&active)
+     	     .semijoin(&active)
      	     .map(|(dst,src)| (src,dst))
 	})
 }
 
-fn kcore2<G: Scope>(edges: &Collection<G, (u32, u32)>, k: i32) -> Collection<G, (u32, u32)> 
-where G::Timestamp: Lattice+::std::hash::Hash {
+fn kcore2<G: Scope>(edges: &Collection<G, (u32, u32)>, k: isize) -> Collection<G, (u32, u32)> 
+where G::Timestamp: Lattice+::std::hash::Hash+Ord {
 
 	edges.iterate(move |inner| {
 		// determine active vertices
 		let active = inner.flat_map(|(src,dst)| Some(src).into_iter().chain(Some(dst).into_iter()))
-						  .arrange_by_self(|k| k.as_u64(), |x| (VecMap::new(), x))
-                		  .threshold(|k| k.as_u64(), |x| (VecMap::new(), x), move |_,cnt| if cnt >= k { 1 } else { 0 });
+						  .arrange_by_self()
+						  .group_arranged(move |_k, s, t| { if s[0].1 > k { t.push(((),1)) } }, Spine::new(Default::default()));
+                		  // .threshold(|k| k.as_u64(), |x| (VecMap::new(), x), move |_,cnt| if cnt >= k { 1 } else { 0 });
 
 		// restrict edges active vertices, return result
 	    edges.enter(&inner.scope())
-	    	 .arrange_by_key(|k| k.clone(), |x| (VecMap::new(), x))
-	    	 .join(&active, |k,v,_| (k.clone(), v.clone()))
+	    	 .arrange_by_key()
+	    	 .join_arranged(&active, |k,v,_| (k.item.clone(), v.clone()))
 	    	 .map(|(src,dst)| (dst,src))
- 	    	 .arrange_by_key(|k| k.clone(), |x| (VecMap::new(), x))
- 	    	 .join(&active, |k,v,_| (k.clone(), v.clone()))
+ 	    	 .arrange_by_key()
+ 	    	 .join_arranged(&active, |k,v,_| (k.item.clone(), v.clone()))
      	     .map(|(dst,src)| (src,dst))
 	})
 }

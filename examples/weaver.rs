@@ -57,7 +57,7 @@ fn main() {
             let query = query.as_collection();
 
             // query the graph, return a probe.
-            let query_probe = graph.semijoin_u(&query)
+            let query_probe = graph.semijoin(&query)
                                    .probe().0;
 
 
@@ -225,7 +225,7 @@ fn main() {
 
 // returns pairs (n, s) indicating node n can be reached from node s.
 fn reach<G>(edges: &Collection<G, Edge>, roots: &Collection<G, Node>) -> Collection<G, (Node, Node)>
-where G: Scope, G::Timestamp: Lattice {
+where G: Scope, G::Timestamp: Lattice+Ord {
 
     // initialize roots as reaching themselves
     let nodes = roots.map(|x| (x, x));
@@ -243,7 +243,7 @@ where G: Scope, G::Timestamp: Lattice {
 }
 
 fn transactional<G, D>(trans: &Collection<G, (usize, bool, D)>, state: &Collection<G, D>) -> Collection<G, usize>
-where G: Scope, D: Data+Default, G::Timestamp: Lattice {
+where G: Scope, D: Data+Default+::std::hash::Hash, G::Timestamp: Lattice+Ord {
 
     // we develop the set of transaction ids that must abort, 
     // starting from the optimistic assumption that none must.
@@ -264,7 +264,7 @@ where G: Scope, D: Data+Default, G::Timestamp: Lattice {
             // writes -> (location, trans_id), filtered by aborts
             let writes = trans.filter(|x| x.1 == false)
                               .map(|x| (x.0, x.2))
-                              .antijoin_u(&abort)
+                              .antijoin(&abort)
                               .map(|x| (x.1, x.0));
 
             // cogroup may be the right way to do this, 
@@ -278,7 +278,7 @@ where G: Scope, D: Data+Default, G::Timestamp: Lattice {
             reads.map(|x| (x,()))
                  .antijoin(&lookup)
                  .map(|((_,t),())| t)
-                 .distinct_u()
+                 .distinct()
         })
 
 }

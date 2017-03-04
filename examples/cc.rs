@@ -45,7 +45,7 @@ fn main() {
 }
 
 fn connected_components<G: Scope>(edges: &Collection<G, Edge>) -> Collection<G, (Node, Node)>
-where G::Timestamp: Lattice+Hash {
+where G::Timestamp: Lattice+Hash+Ord {
 
     // each edge (x,y) means that we need at least a label for the min of x and y.
     let nodes = edges.map_in_place(|pair| {
@@ -64,9 +64,9 @@ where G::Timestamp: Lattice+Hash {
              let edges = edges.enter(&inner.scope());
              let nodes = nodes.enter_at(&inner.scope(), |r| 256 * (64 - (r.0).1.leading_zeros() as u64));
 
-            inner.join_map_u(&edges, |_k,l,d| (*d,*l))
+            inner.join_map(&edges, |_k,l,d| (*d,*l))
                  .concat(&nodes)
                  // .consolidate()
-                 .group_u(|_, mut s, t| { t.push((*s.peek().unwrap().0, 1)); } )
+                 .group(|_, s, t| { t.push((s[0].0, 1)); } )
          })
 }

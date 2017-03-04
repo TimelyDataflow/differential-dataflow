@@ -4,18 +4,14 @@ extern crate timely_sort;
 extern crate differential_dataflow;
 extern crate vec_map;
 
-use vec_map::VecMap;
-
 use timely::dataflow::*;
 use timely::dataflow::operators::*;
-
-use timely_sort::Unsigned;
 
 use rand::{Rng, SeedableRng, StdRng};
 
 use differential_dataflow::AsCollection;
-use differential_dataflow::operators::*;
-use differential_dataflow::collection::Trace;
+use differential_dataflow::operators::arrange::ArrangeByKey;
+use differential_dataflow::trace::{Cursor, Trace};
 
 fn main() {
 
@@ -37,7 +33,7 @@ fn main() {
 
     		// pull off source, and count.
     		let arranged = edges.as_collection()
-    							.arrange_by_key(|k: &u32| k.as_u64(), |x| (VecMap::new(), x));
+    							.arrange_by_key();
 
 		    (input, arranged.stream.probe().0, arranged.trace.clone())
     	});
@@ -92,11 +88,16 @@ fn main() {
 
 						let mut count = 0;
 		        		let timer = ::std::time::Instant::now();
-		        		let mut borrow = trace.borrow_mut();
-		        		for node in 0..nodes {
-		        			for _edge in borrow.get_collection(&node, input.time()) {
-		        				count += 1;
+		        		let mut cursor = trace.borrow().trace.cursor();
+		        		while cursor.key_valid() {
+		        			while cursor.val_valid() {
+								let mut sum = 0;		        				
+								cursor.map_times(|_,d| sum += d);
+								if sum > 0 { count += 1; }
+								cursor.step_val();
 		        			}
+
+		        			cursor.step_key()
 		        		}
 
 		        		println!("count: {} in {:?}", count, timer.elapsed());

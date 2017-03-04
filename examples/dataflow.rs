@@ -42,20 +42,17 @@ fn main() {
 
             // produce pairs (label, topic) for each topic.
             let label_topics = tweets.map(|(u,_,t)| (u,t))
-                                     .join(&labels)
-                                     .map(|(_,t,l)| (l,t));
+                                     .join_map(&labels, |_,&t,&l| (l,t));
 
             // group by (l,t) and emit a count for each.
             let counts = label_topics.map(|x| (x,()))
-                                     .group(|_,s,t| {
-                                         t.push((s.next().unwrap().1, 1))
-                                     });
+                                     .group(|_,s,t| t.push((s[0].1, 1)));
 
             let k = 5;
             // retain the k largest counts. negate first to exploit ordering.
             let topk = counts.map(|((l,t), c)| (l, (-c, t)))
                              .group(move |_,s,t| {
-                                 t.extend(s.take(k).map(|(&(_,t),_)| (t,1)));
+                                 t.extend(s[..k].iter().map(|&((_,t),_)| (t,1)));
                              });
 
             // entries corresponding to a @username, but a u32 instead.
@@ -63,10 +60,9 @@ fn main() {
             let queries = Collection::new(queries);
 
             let label_query = queries.map(|q| (q,()))
-                                     .join(&labels)
-                                     .map(|(q,_,l)| (l,q));
-
-            let mut query_topics = label_query.join(&topk);
+                                     .join_map(&labels, |q,_,&l| (l,q.clone()));
+ 
+            let mut query_topics = label_query.join_map(&topk, |k,x,&y| (k.clone(), x.clone(), y));
 
             if !inspect {
                 query_topics = query_topics.filter(|_| false);
@@ -148,7 +144,7 @@ fn main() {
 }
 
 fn connected_components<G: Scope>(edges: &Collection<G, Edge>) -> Collection<G, (Node, Node)>
-    where G::Timestamp: Lattice+Hash {
+    where G::Timestamp: Lattice+Hash+Ord {
 
     // each edge (x,y) means that we need at least a label for the min of x and y.
     let nodes = edges.map_in_place(|pair| {
@@ -167,8 +163,8 @@ fn connected_components<G: Scope>(edges: &Collection<G, Edge>) -> Collection<G, 
              let edges = edges.enter(&inner.scope());
              let nodes = nodes.enter_at(&inner.scope(), |r| 256 * (64 - (r.0).0.leading_zeros() as u64));
 
-            inner.join_map_u(&edges, |_k,l,d| (*d,*l))
+            inner.join_map(&edges, |_k,l,d| (*d,*l))
                  .concat(&nodes)
-                 .group_u(|_, s, t| { t.push((*s.peek().unwrap().0, 1)); } )
+                 .group(|_, s, t| { t.push((s[0].0, 1)); } )
          })
 }

@@ -66,8 +66,8 @@
 //!
 //!     let (edges, roots) = root.scoped(|scope| {
 //!
-//!         let (e_in, edges) = scope.new_input::<((u32, u32), i32)>();
-//!         let (r_in, roots) = scope.new_input::<(u32, i32)>();
+//!         let (e_in, edges) = scope.new_input(); // ((u32, u32), isize);
+//!         let (r_in, roots) = scope.new_input(); // (u32, isize);
 //!
 //!         // initialize roots at distance 0
 //!         let start = roots.map(|(x, w)| ((x, 0), w));
@@ -84,9 +84,7 @@
 //!             // group by node id and keep minimum distance.
 //!             dists.join_map(&edges, |_,&d,&n| (n,d+1))
 //!                  .concat(&dists)
-//!                  .group(|_, s, t| {
-//!                      t.push((*s.peek().unwrap().0, 1))
-//!                  })
+//!                  .group(|_, s, t| t.push((s[0].0, 1))
 //!         });
 //!
 //!         // inspect distances!
@@ -105,43 +103,25 @@
 
 #![forbid(missing_docs)]
 
-use std::hash::Hasher;
 use std::fmt::Debug;
 
 /// A change in count.
-pub type Delta = i32;
+pub type Delta = isize;
 
-pub use stream::{Collection, AsCollection};
-
-// TODO : I would like this trait to have something like a `Map` associated type,
-// indicating the way that it would prefer to be used as an index. I think this 
-// looks like Higher Kinded Types, as the associated type would need to be generic
-// over values indexed against. Perhaps it can be faked in the same way that `Trace`
-// fakes HKT with `TraceRef`.
+pub use collection::{Collection, AsCollection};
+pub use hashable::Hashable;
 
 /// A composite trait for data types usable in differential dataflow.
-pub trait Data : timely::Data + ::std::hash::Hash + Ord + Debug {
-    /// Extracts a `u64` suitable for distributing and sorting the data.
-    ///
-    /// The default implementation use `FnvHasher`. It might be nice to couple this more carefully
-    /// with the implementor, to allow it to drive the distribution and sorting techniques. For
-    /// example, dense unsigned integers would like a different function, but also must communicate
-    /// that a `HashMap` is not the best way to use their values.
-    #[inline]
-    fn hashed(&self) -> u64 {
-        let mut h: fnv::FnvHasher = Default::default();
-        self.hash(&mut h);
-        h.finish()
-    }
-}
-impl<T: timely::Data + ::std::hash::Hash + Ord + Debug> Data for T { }
-
-/// An extension of timely's `Scope` trait requiring timestamps implement `LeastUpperBound`.
 ///
-/// The intent of this trait is that it could be used as the constraint for collections, removing the 
-/// need to put `G::Timestamp: LeastUpperBound` everywhere.
-pub trait TestScope : timely::dataflow::Scope where Self::Timestamp: lattice::Lattice { }
-impl<S: timely::dataflow::Scope> TestScope for S where S::Timestamp: lattice::Lattice { }
+/// This trait differs from Rust's `Hash` trait, which is designed to allow general hash functions 
+/// to operate over a type. Here, instead, we are just about providing a value, and allowing the 
+/// type to override that behavior if appropriate.
+///
+/// The trait also requires the specification of an output type. This can be helpful in situations 
+/// where we want to cache the hash value, or in situations like radix sorting where we can more 
+/// efficiently sort data if we know there are fewer bytes in the integer keys.
+pub trait Data : timely::ExchangeData + Ord + Debug { }
+impl<T: timely::ExchangeData + Ord + Debug> Data for T { }
 
 extern crate fnv;
 extern crate timely;
@@ -151,10 +131,12 @@ extern crate linear_map;
 extern crate timely_sort;
 extern crate timely_communication;
 
-// pub mod trace;
+#[macro_use]
+extern crate abomonation;
 
-pub mod collection;
+pub mod hashable;
 pub mod operators;
 pub mod lattice;
-mod iterators;
-mod stream;
+pub mod trace;
+mod collection;
+

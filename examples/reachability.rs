@@ -111,7 +111,7 @@ fn main() {
 
 // returns pairs (n, s) indicating node n can be reached from a root in s steps.
 fn reach<G: Scope>(edges: &Collection<G, Edge>, roots: &Collection<G, Node>) -> Collection<G, (Node, Node)>
-where G::Timestamp: Lattice {
+where G::Timestamp: Lattice+Ord {
 
     let roots = roots.map(|x| (x,x));
 
