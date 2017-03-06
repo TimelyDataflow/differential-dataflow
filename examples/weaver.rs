@@ -76,9 +76,10 @@ fn main() {
         let graph = GraphMMap::new(&filename);
 
         if computation.index() == 0 {
+            let &time = raw.time();
             for node in 0 .. graph.nodes() {
                 for &edge in graph.edges(node) {
-                    raw.send(((node as u32, edge as u32), 1));
+                    raw.send(((node as u32, edge as u32), time, 1));
                 }
             }
         }
@@ -114,8 +115,9 @@ fn main() {
         let timer = ::std::time::Instant::now();
 
         for buffer in &reads {
+            let &time = query.time();
             for &entry in buffer {
-                query.send((entry, 1));
+                query.send((entry, time, 1));
             }
 
             let next = trans.epoch() + 1;
@@ -148,8 +150,9 @@ fn main() {
 
         for buffer in &travs {
             let inner_timer = ::std::time::Instant::now();
+            let &time = roots.time();
             for &src in buffer {
-                roots.send((src, 1));
+                roots.send((src, time, 1));
             }
 
             let next = trans.epoch() + 1;
@@ -202,8 +205,9 @@ fn main() {
         let timer = ::std::time::Instant::now();
 
         for buffer in &writes {
+            let &time = trans.time();
             for &entry in buffer {
-                trans.send((entry, 1));
+                trans.send((entry, time, 1));
             }
 
             let next = trans.epoch() + 1;

@@ -193,7 +193,7 @@ impl<G: Scope, K: Eq+'static, V: 'static, T1: Trace<K,V,G::Timestamp>> JoinArran
     where 
         G::Timestamp: Lattice+Ord+Debug+Copy,
         T1: 'static,
-        T1::Batch: 'static,
+        T1::Batch: 'static+Debug,
          {
     fn join_arranged<V2,T2,R,RF>(&self, other: &Arranged<G,K,V2,T2>, result: RF) -> Collection<G,R> 
     where 
@@ -211,11 +211,8 @@ impl<G: Scope, K: Eq+'static, V: 'static, T1: Trace<K,V,G::Timestamp>> JoinArran
         let mut inputs2 = LinearMap::<G::Timestamp, T2::Batch>::new();
 
         let mut capabilities = Vec::<Capability<G::Timestamp>>::new();
-        // let mut acknowledged = Vec::<G::Timestamp>::new();
-        // let mut ack_frontier = Antichain::new();
 
         let mut output_buffer = Vec::new();
-        let mut times = Vec::new();
 
         let mut todo: Vec<Deferred<K,V,V2,G::Timestamp,T1,T2>> = Vec::new();     // readied outputs to enumerate.
 
@@ -238,6 +235,8 @@ impl<G: Scope, K: Eq+'static, V: 'static, T1: Trace<K,V,G::Timestamp>> JoinArran
             for time in frontier1 { ack_frontier.insert(time.clone()); }
             for time in frontier2 { ack_frontier.insert(time.clone()); }
             for cap in &capabilities { ack_frontier.insert(cap.time()); }
+
+            // println!("ack_frontier: {:?}", ack_frontier.elements());
 
             // Advancing the input collections
             //
@@ -267,6 +266,8 @@ impl<G: Scope, K: Eq+'static, V: 'static, T1: Trace<K,V,G::Timestamp>> JoinArran
 
             // read input 1, push all data to queues
             input1.for_each(|time, data| {
+                // println!("join1 recv: {:?}", time);
+                // for elt in data.iter() { println!("  {:?}", elt); }
                 inputs1.insert(time.time(), data.drain(..).next().unwrap().item);
                 if !capabilities.iter().any(|c| c.time() == time.time()) { capabilities.push(time); }
             });
@@ -284,6 +285,8 @@ impl<G: Scope, K: Eq+'static, V: 'static, T1: Trace<K,V,G::Timestamp>> JoinArran
                 let capability = capabilities.remove(position);
                 let time = capability.time();
 
+                // println!("join working: {:?}", time);
+
                 // create input batch, insert into trace, prepare work.
                 let work1 = inputs1.remove(&time).and_then(|batch| {
                     trace2.as_ref().map(|t| (batch.cursor(), t.cursor()))
@@ -296,6 +299,7 @@ impl<G: Scope, K: Eq+'static, V: 'static, T1: Trace<K,V,G::Timestamp>> JoinArran
 
                 // enqueue work item if either input needs it.
                 if work1.is_some() || work2.is_some() {
+                    // println!("join work started");
                     todo.push(Deferred::new(work1, work2, capability, ack_frontier));
                 }
             }
@@ -305,43 +309,17 @@ impl<G: Scope, K: Eq+'static, V: 'static, T1: Trace<K,V,G::Timestamp>> JoinArran
 
                 // produces at least 1_000_000 outputs, or exhausts `todo[0]`.
                 todo[0].work(&mut output_buffer, &result, 1_000_000);
+                // println!("join_work.len(): {:?}", output_buffer.len());
 
-                // We must plan out output sessions, putting all updates with the same time together
-                // so that we aren't continually flushing the channel and sending singleton messages
-                // (and progress updates).
-
-                // co-locate like times (less important for hi-res).
-                consolidate(&mut output_buffer, 0);
-                if output_buffer.len() > 0 {
-
-                    // now sorted by times; count entries for each time to plan sessions.
-                    times.push(((output_buffer[0].0).0, 1));
-                    for index in 1 .. output_buffer.len() {
-                        if (output_buffer[index].0).0 != (output_buffer[index-1].0).0 {
-                            times.push(((output_buffer[index].0).0, 1));
-                        }
-                        else {
-                            let len = times.len();
-                            times[len-1].1 += 1;
-                        }
-                    }
-
-                    // drain `output_buffer`, sending records as we go.
-                    let mut drain = output_buffer.drain(..);
-                    for (time, count) in times.drain(..) {
-                        let cap = todo[0].capability().delayed(&time);
-                        let mut session = output.session(&cap);
-                        for ((_, r), d) in drain.by_ref().take(count) {
-                            session.give((r, d));
-                        }
+                {   // need scope to let session drop, so we can ditch todo[0].
+                    let mut session = output.session(todo[0].capability());
+                    for ((time, data), diff) in output_buffer.drain(..) {
+                        session.give((data, time, diff));
                     }
                 }
 
                 // TODO : A queue would be better than a stack. :P
                 if !todo[0].work_remains() { todo.remove(0); }
-
-                assert!(output_buffer.len() == 0);
-                assert!(times.len() == 0);
             }
         });
 
@@ -382,7 +360,6 @@ where
             work1: work1,
             work2: work2,
             capability: capability,
-            // acknowledged: acknowledged.to_vec(),
             ack_frontier: ack_frontier,
         }
     }

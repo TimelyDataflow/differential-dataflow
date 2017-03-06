@@ -41,7 +41,7 @@ fn main() {
         let edges = (0..nodes).filter(move |node| node % peers == index)
                               .flat_map(move |node| {
                                   let vec = graph.edges(node).to_vec();
-                                  vec.into_iter().map(move |edge| ((node as u32, edge),1))
+                                  vec.into_iter().map(move |edge| ((node as u32, edge), Default::default(), 1))
                               });
 
         // let edges = vec![((0,1),1),((1,2),1),((0,2),1)].into_iter();

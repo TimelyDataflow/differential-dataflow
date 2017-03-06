@@ -37,8 +37,8 @@ fn main() {
         // form the TPCH17-like query
         let (mut parts, mut items) = computation.scoped(|builder| {
 
-            let (part_input, parts) = builder.new_input::<((u32, String, String), isize)>();
-            let (item_input, items) = builder.new_input::<((u32, u32, u64), isize)>();
+            let (part_input, parts) = builder.new_input::<((u32, String, String), _, isize)>();
+            let (item_input, items) = builder.new_input::<((u32, u32, u64), _, isize)>();
 
             let parts = Collection::new(parts);
             let items = Collection::new(items);
@@ -85,6 +85,7 @@ fn main() {
 
         // read the parts input file
         if let Ok(parts_file) = File::open(format!("{}-{}-{}", parts_pattern, comm_index, comm_peers)) {
+            let &time = parts.time();
             let parts_reader = BufReader::new(parts_file);
             for (index, line) in parts_reader.lines().enumerate() {
                 if index % comm_peers == comm_index {
@@ -97,7 +98,7 @@ fn main() {
                     fields.next();
                     fields.next();
                     let container = fields.next().unwrap().to_owned();
-                    parts.send(((part_id, brand, container), 1));
+                    parts.send(((part_id, brand, container), time, 1));
                 }
             }
 
@@ -131,8 +132,9 @@ fn main() {
         parts.close();
         // let item_count = items_buffer.len();
 
-        for (index, item) in items_buffer.drain(..).enumerate() {
-            items.send(item);
+        for (index, (data, diff)) in items_buffer.drain(..).enumerate() {
+            let &time = items.time();
+            items.send((data, time, diff));
             items.advance_to(index as u64 + 1);
             while *epoch.borrow() <= index as u64 {
                 computation.step();

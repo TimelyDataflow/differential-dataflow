@@ -34,7 +34,7 @@ fn main() {
         let edges = (0..nodes).filter(move |node| node % peers == index)
                               .flat_map(move |node| {
                                   let vec = graph.edges(node).to_vec();
-                                  vec.into_iter().map(move |edge| ((node as u32, edge),1))
+                                  vec.into_iter().map(move |edge| ((node as u32, edge), Default::default(), 1))
                               });
 
         computation.scoped::<(),_,_>(|scope| {
@@ -62,7 +62,7 @@ where G::Timestamp: Lattice+Hash+Ord {
     nodes.filter(|_| false)
          .iterate(|inner| {
              let edges = edges.enter(&inner.scope());
-             let nodes = nodes.enter_at(&inner.scope(), |r| 256 * (64 - (r.0).1.leading_zeros() as u64));
+             let nodes = nodes.enter_at(&inner.scope(), |r| 256 * (64 - r.1.leading_zeros() as u64));
 
             inner.join_map(&edges, |_k,l,d| (*d,*l))
                  .concat(&nodes)

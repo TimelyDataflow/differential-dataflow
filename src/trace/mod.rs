@@ -38,7 +38,6 @@ pub use self::cursor::Cursor;
 ///
 /// The trace must be constructable from, and navigable by the `Key`, `Val`, `Time` types, but does not need
 /// to return them.
-
 pub trait Trace<Key, Val, Time> {
 
 	/// The type of an immutable collection of updates.
@@ -49,6 +48,13 @@ pub trait Trace<Key, Val, Time> {
 	/// Allocates a new empty trace.
 	fn new(default: Time) -> Self;
 	/// Introduces a batch of updates to the trace.
+	///
+	/// Batches describe the time intervals they contain, and they should be added to the trace in contiguous
+	/// intervals. If a batch arrives with a lower bound that does not equal the upper bound of the most recent
+	/// addition, the trace will add an empty batch. It is an error to then try to populate that region of time.
+	///
+	/// This restriction could be relaxed, especially if we discover ways in which batch interval order could 
+	/// commute. For now, the trace should complain, to the extent that it cares about contiguous intervals.
 	fn insert(&mut self, batch: Self::Batch);
 	/// Acquires a cursor to the collection's contents.
 	fn cursor(&self) -> Self::Cursor;
@@ -56,18 +62,12 @@ pub trait Trace<Key, Val, Time> {
 	fn advance_by(&mut self, frontier: &[Time]);
 }
 
-
 /// An immutable collection of updates.
 pub trait Batch<K, V, T> where Self: ::std::marker::Sized {
-
-	/// The type used to assemble a batch.
-	///
-	/// The `Self::Builder` type must support conversion into a batch, and so can always
-	/// be used to create new batches. Other types may also be used to build batches, but
-	/// this type must be defined to provide a default builder type.
+	/// A type used to assemble batches from disordered updates.
+	type Batcher: Batcher<K, V, T, Self>;
+	/// A type used to assemble batches from ordered update sequences.
 	type Builder: Builder<K, V, T, Self>;
-	/// A builder for pre-sorted sequences of tuples (e.g., for the output of `group`).
-	type OrderedBuilder: Builder<K, V, T, Self>;
 	/// The type used to enumerate the batch's contents.
 	type Cursor: Cursor<K, V, T>;
 	/// Acquires a cursor to the batch's contents.
@@ -76,22 +76,37 @@ pub trait Batch<K, V, T> where Self: ::std::marker::Sized {
 	fn len(&self) -> usize;
 }
 
-/// A type which builds up a batch, but is not navigable until done building.
-pub trait Builder<K, V, T, Output: Batch<K, V, T>> {
-	/// Allocates a new empty builder.
+/// Functionality for collecting and batching updates.
+pub trait Batcher<K, V, T, Output: Batch<K, V, T>> {
+	/// Allocates a new empty batcher.
 	fn new() -> Self; 
-	/// Adds a new element to the batch.
+	/// Adds an element to the batcher.
 	fn push(&mut self, element: (K, V, T, isize));
-	/// Adds an unordered sequence of new elements to the batch.
+	/// Adds an unordered sequence of elements to the batcher.
 	fn extend<I: Iterator<Item=(K,V,T,isize)>>(&mut self, iter: I) {
 		for item in iter {
 			self.push(item);
 		}
 	}
+	/// Returns the batch between `lower` and `upper`.
+	fn seal(&mut self, lower: &[T], upper: &[T]) -> Output;
+	/// Returns the lower envelope of contained update times.
+	fn frontier(&mut self) -> &[T];
+}
+
+/// Functionality for building batches from ordered update sequences.
+pub trait Builder<K, V, T, Output: Batch<K, V, T>> {
+	/// Allocates an empty builder.
+	fn new() -> Self;
+	/// Adds an element to the batch.
+	fn push(&mut self, element: (K, V, T, isize));
+	/// Adds an ordered sequence of elements to the batch.
+	fn extend<I: Iterator<Item=(K,V,T,isize)>>(&mut self, iter: I) {
+		for item in iter { self.push(item); }
+	}
 	/// Completes building and returns the batch.
 	fn done(self, lower: &[T], upper: &[T]) -> Output;
 }
-
 
 /// Scans `vec[off..]` and consolidates differences of adjacent equivalent elements.
 pub fn consolidate<T: Ord+Clone>(vec: &mut Vec<(T, isize)>, off: usize) {
