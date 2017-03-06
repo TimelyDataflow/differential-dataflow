@@ -91,7 +91,7 @@ fn main() {
 
 						let mut count = 0;
 		        		let timer = ::std::time::Instant::now();
-		        		let mut cursor = trace.borrow().trace.cursor();
+		        		let mut cursor = trace.cursor();
 		        		while cursor.key_valid() {
 		        			while cursor.val_valid() {
 								let mut sum = 0;		        				
