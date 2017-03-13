@@ -30,6 +30,14 @@ impl<'a, T: Timestamp+Ord+Clone, D: Data> InputSession<'a, T, D> {
 	/// Adds to the weight of an element in the collection.
 	pub fn update(&mut self, element: D, change: isize) { self.buffer.push((element, self.time.clone(), change)); }
 
+	/// Forces buffered data into the timely input, and advances its time to match that of the sesson.
+	pub fn flush(&mut self) {
+		for (data, time, diff) in self.buffer.drain(..) {
+			self.handle.send((data, time, diff));
+		}
+		self.handle.advance_to(self.time.inner);		
+	}
+
 	/// Advances the logical time for future records.
 	///
 	/// Importantly, this method does **not** advance the time on the underlying handle. This happens only when the
@@ -42,13 +50,12 @@ impl<'a, T: Timestamp+Ord+Clone, D: Data> InputSession<'a, T, D> {
 
 	/// Reveals the current time of the session.
 	pub fn epoch(&self) -> &T { &self.time.inner }
+	/// Reveals the current time of the session.
+	pub fn time(&self) -> &Product<RootTimestamp, T> { &self.time }
 }
 
 impl<'a, T: Timestamp+Ord+Clone, D: Data> Drop for InputSession<'a, T, D> {
 	fn drop(&mut self) {
-		for (data, time, diff) in self.buffer.drain(..) {
-			self.handle.send((data, time, diff));
-		}
-		self.handle.advance_to(self.time.inner);
+		self.flush();
 	}
 }

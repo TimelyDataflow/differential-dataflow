@@ -164,7 +164,18 @@ where
 
         let mut time_stage = Vec::new();    // staging for building up interesting times.
         let mut input_stage = Vec::new();   // staging for per-key input (pre-iterator).
-        let mut output_stage = Vec::<(V2, isize)>::new();  // staging for per-key output.
+        let mut output_stage = Vec::<(V2, Delta)>::new();  // staging for per-key output.
+
+        // where we store updates that are not universally applied.
+        let mut input_edits = Vec::<(V, G::Timestamp, Delta)>::new();
+        let mut output_edits = Vec::<(V2, G::Timestamp, Delta)>::new();
+
+        // where we store new output diffs (to be committed).
+        let mut output_accum = Vec::<(V2, G::Timestamp, Delta)>::new();
+
+        // priority queue for interesting times.
+        // unfortunately, BinaryHeap is a max heap. T.T
+        let mut interesting_times = Vec::new();
 
         // fabricate a data-parallel operator using the `unary_notify` pattern.
         let stream = self.stream.unary_notify(Pipeline, "GroupArrange", vec![], move |input, output, notificator| {
@@ -186,6 +197,9 @@ where
 
                 // Push each (key, time) pair into `interesting`. 
                 // TODO: This is pretty inefficient if many values and just one time. Optimize that case?
+                // TODO: We should be able to keep times in the batch, deferring their enumeration until
+                //       we process the corresponding key. Should minimize outstanding pairs that we may
+                //       otherwise continually re-sort and scan and such.
                 for batch in data.drain(..) {
                     let mut cursor = batch.item.cursor();
                     while cursor.key_valid() {
@@ -203,15 +217,21 @@ where
             //    expose elements of `interesting`. A pair `(key, time)` is exposed if the time is
             //    greater or equal to that of the capability, and not greater or equal to the time
             //    of a later held capability, or a time in the input frontier.
+            //
+            //    We do one capability at a time because our output messages can only contain one 
+            //    capability. If this restriction were removed, we could skip this loop and simply
+            //    extract all updates at times between our capabilities and the input frontier.
 
-            // The following pattern looks a lot like what is done in `arrange`. In fact, we've 
+            // The following pattern looks a lot like what is done in `arrange`. In fact, we have 
             // stolen some code from there, so if either looks wrong, make sure to check the other
             // as well.
 
+            // This tracks counts of keys with various distint times.
             let mut counts = Vec::new();
 
             for index in 0 .. capabilities.len() {
 
+                // Only do all of this if the capability is not present in the input frontier.
                 if !notificator.frontier(0).iter().any(|t| t == &capabilities[index].time()) {
 
                     // Assemble an upper bound on exposed times.
@@ -226,23 +246,21 @@ where
                     }
 
                     // deduplicate, order by key.
-                    // TODO: this could be much more efficiently done; e.g. radix sorting.
-                    // TODO: perhaps think out whether we could avoid re-sorting sorted elements.
-                    // interesting.dedup();
-                    // interesting.sort();
-                    // interesting.dedup();
+                    // TODO: This could be much more efficiently done; e.g. radix sorting.
+                    // TODO: Perhaps think out whether we could avoid re-sorting sorted elements.
+                    // TODO: This is where we might also involve the batches themselves, as all of
+                    //       the keys are already sorted therein. This might limit us to one batch
+                    //       at a time, without a horrible merge?
                     sort_dedup(&mut interesting);
 
-                    // extract exposed times
+                    // Segment `interesting` into `exposed` and the next value of interesting.
+                    // This is broken out as a separate method mostly for performance profiling.
                     let mut new_interesting = Vec::new();
                     let mut exposed = Vec::new();
-
                     segment(&mut interesting, &mut exposed, &mut new_interesting, |&(_, ref time)| {
                         capabilities[index].time().le(&time) && !upper.iter().any(|t| t.le(&time))
                     });
-
                     interesting = new_interesting;
-
 
                     // cursors for navigating input and output traces.
                     let mut source_cursor: T1::Cursor = source_trace.cursor();
@@ -251,126 +269,150 @@ where
                     // changes to output_trace we build up (and eventually commit and send).
                     let mut output_builder = <T2::Batch as Batch<K,V2,G::Timestamp>>::Builder::new();
 
-                    // Time to process all of these interesting pairs!
-                    // We want to process in batches defined by keys, and within each back in some order on
-                    // times that is compatible with the partial order (before we process a time, we want 
-                    // all strictly less times processed for the key). As we process a key we may discover 
-                    // new interesting times for the key! When this happens, we either (i) want to introduce
-                    // the time (at a compatible moment) if it is not greater than `upper`, or (ii) add the
-                    // pair to `interesting` for future processing.
-
-                    // priority queue for interesting times.
-                    // unfortunately, BinaryHeap is a max heap. T.T
-                    let mut times = Vec::new();
+                    // We now iterate through exposed keys, for each enumerating through interesting times.
+                    // The set of interesting times is initially those in `exposed`, but the set may grow
+                    // as computation proceeds, because of joins between new times and pre-existing times.
 
                     let mut position = 0;
                     while position < exposed.len() {
 
                         let key = exposed[position].0.clone();
-                        source_cursor.seek_key(&key);
 
-                        // add the first time
-                        times.push(exposed[position].1);
-                        position += 1;
-
-                        // add further times for the same key.
+                        // Load `interesting_times` with those times we must reconsider.
+                        interesting_times.clear();
                         while position < exposed.len() && exposed[position].0 == key {
-                            times.push(exposed[position].1);
+                            interesting_times.push(exposed[position].1);
                             position += 1;
                         }
 
-                        let mut output_accum = Vec::<(V2, G::Timestamp, isize)>::new();
+                        // Sort the times in reverse order (we `pop` elements, because no min_heap).
+                        interesting_times.sort_by(|x,y| y.cmp(&x));
+                        interesting_times.dedup();
 
-                        // for each interesting time (where the set may grow as we run) ..
-                        times.sort_by(|x,y| y.cmp(&x));
-                        times.dedup();
+                        // Determine the `meet` of times, useful in restricting updates to capture.
+                        let mut meet = interesting_times[0].clone(); 
+                        for index in 1 .. interesting_times.len() {
+                            meet = meet.meet(&interesting_times[index]);
+                        }
 
-                        // At this point, all queries about the input (and output) will be for times
-                        // in the future of elements of `times`. We could determine the meet and join
-                        // of these times, accumulating those updates less than the meet and capturing
-                        // those updates less than the join (but not less than the meet). This could 
-                        // simplify our computation when we have several times.
+                        // Our accumulated output updates for the key should start empty.
+                        output_accum.clear();
 
-                        let mut dirty = false;
-
+                        // Counts the number of distinct times for the key.
                         let mut counter = 0;
 
-                        while let Some(time) = times.pop() {
+                        // The plan at this point is to accumulate into `input_stage` and `output_stage`
+                        // using the first time, but also to capture updates so that we can correct these
+                        // accumulations as we shift times. We can optimize this somewhat, by discarding 
+                        // updates less than the meet of times, as they will be common to all times we 
+                        // process.
 
-                            counter += 1;
+                        // Clear our stashes of input and output updates.
+                        input_edits.clear();
+                        output_edits.clear();
 
-                            if dirty {
-                                source_cursor.rewind_vals();
-                                output_cursor.rewind_vals();
+                        // Clear our staging ground for input and output collections.
+                        input_stage.clear();
+                        output_stage.clear();
+
+                        // Accumulate into `input_stage` and populate `input_edits`.
+                        // TODO: The accumulation starts at `meet` and must be updated to the first 
+                        //       element of times. We should probably just start there.
+                        source_cursor.seek_key(&key);
+                        if source_cursor.key_valid() && source_cursor.key() == &key {
+                            while source_cursor.val_valid() {
+                                let val: V = source_cursor.val().clone();
+                                let mut sum = 0;
+                                source_cursor.map_times(|t,d| {
+                                    if t.le(&meet) { sum += d; }
+                                    if !t.le(&meet) {
+                                        input_edits.push((val.clone(), t.clone(), d));
+                                    }
+                                });
+                                if sum != 0 {
+                                    input_stage.push((source_cursor.val().clone(), sum));
+                                }
+                                source_cursor.step_val();
                             }
+                        }
 
-                            dirty = true;
+                        // Accumulate into `output_stage` and populate `output_edits`. 
+                        // NOTE: No accumulation currently done, as we put user output in `output_stage`.
+                        //       Easy-ish to fix.
+                        output_cursor.seek_key(&key);
+                        if output_cursor.key_valid() && output_cursor.key() == &key {
+                            while output_cursor.val_valid() {
+                                let val: V2 = output_cursor.val().clone();
+                                let mut sum = 0;
+                                output_cursor.map_times(|t,d| {
+                                    // if t.le(&meet) { sum += d; }
+                                    // if !t.le(&meet) {
+                                        output_edits.push((val.clone(), t.clone(), d));
+                                    // }
+                                });
+                                // if sum != 0 {
+                                //     output_stage.push((output_cursor.val().clone(), sum));
+                                // }
+                                output_cursor.step_val();
+                            }
+                        }
+
+                        // used to help us diff out previous updates.
+                        let mut prev_time = meet.clone();
+
+                        while let Some(this_time) = interesting_times.pop() {
 
                             // This is the body of the `group` logic. It is here that we process
                             // an interesting pair `(key, time)`, by assembling input, applying 
                             // user logic, differencing from the output, and updating interesting
                             // times for the key.
 
-                            input_stage.clear();
-                            output_stage.clear();
+                            counter += 1;
+
+                            // Clear the staging ground for newly interesting times for this key.
+                            time_stage.clear();
 
                             // 1. build up input collection; capture unused times as interesting.
                             // NOTE: for this to be correct with an iterator approach (that may 
                             // not look at all input updates) we need to look at the times in 
                             // the output trace as well. Even this may not be right (needs math).
 
-                            if source_cursor.key_valid() && source_cursor.key() == &key {
-                                while source_cursor.val_valid() {
-                                    let mut sum = 0;
-                                    source_cursor.map_times(|t,d| {
-                                        if t.le(&time) { sum += d; }
-                                        else {
-                                            // capture time for future re-evaluation
-                                            let join = t.join(&time);
-                                            if !time_stage.contains(&join) {
-                                                time_stage.push(join);
-                                            }
-                                        }
-                                    });
-                                    if sum > 0 {
-                                        // TODO : currently cloning values; references would be better.
-                                        input_stage.push((source_cursor.val().clone(), sum));
+                            // We need to update `input_stage` by edits in `input_edits`, diffing 
+                            // out updates on whose times `this_time` and `prev_time` do not agree
+                            // about <=. 
+                            for &(ref val, ref time, diff) in &input_edits {
+                                let le_prev = time.le(&prev_time);
+                                let le_next = time.le(&this_time);
+                                if le_prev != le_next {
+                                    if le_prev { input_stage.push((val.clone(),-diff)); }
+                                    else       { input_stage.push((val.clone(), diff)); }
+                                }
+                                if !le_next { 
+                                    let join = time.join(&this_time);
+                                    if !time_stage.contains(&join) {
+                                        time_stage.push(join);
                                     }
-                                    source_cursor.step_val();
                                 }
                             }
+                            consolidate(&mut input_stage);
 
-                            // 2. apply user logic (only if non-empty).
+                            // 2. apply user logic (only if non-empty input).
+                            output_stage.clear();
                             if input_stage.len() > 0 {
                                 logic(&key, &input_stage[..], &mut output_stage);
                             }
 
-                            // println!("key: {:?}, input: {:?}, ouput: {:?} @ {:?}", key, input_stage, output_stage, time);
+                            // println!("key: {:?}, input: {:?}, ouput: {:?} @ {:?}", key, input_stage, output_stage, this_time);
 
                             // 3. subtract existing output differences.
-                            output_cursor.seek_key(&key);
-                            if output_cursor.key_valid() && output_cursor.key() == &key {
-                                while output_cursor.val_valid() {
-                                    let mut sum = 0;
-                                    output_cursor.map_times(|t,d| { 
-                                        if t.le(&time) { sum += d; }
-                                        // // NOTE : this is important for interesting times opt; don't forget
-                                        // else {
-                                        //     let join = t.join(&time);
-                                        //     if !time_stage.contains(&join) {
-                                        //         time_stage.push(join);
-                                        //     }
-                                        // }
-                                    });
-                                    if sum != 0 {
-                                        output_stage.push((output_cursor.val().clone(), -sum));
-                                    }
-                                    output_cursor.step_val();
+                            for &(ref val, ref time, diff) in &output_edits {
+                                if time.le(&this_time) {
+                                    output_stage.push((val.clone(), -diff));
                                 }
                             }
                             // incorporate uncommitted output updates.
-                            for &(ref val, ref t, diff) in &output_accum {
-                                if t.le(&time) {
+                            for &(ref val, ref time, diff) in &output_accum {
+                                if time.le(&this_time) {
                                     output_stage.push((val.clone(), -diff));
                                 }
                             }
@@ -382,38 +424,39 @@ where
                             time_stage.dedup();
                             for new_time in time_stage.drain(..) {
                                 if !upper.iter().any(|t| t.le(&new_time)) {
-                                    assert!(new_time != time);
-                                    times.push(new_time);
+                                    // add to the list of times to do *now*.
+                                    assert!(new_time != this_time);
+                                    interesting_times.push(new_time);
                                 }
                                 else {
+                                    // defer until some future moment.
                                     interesting.push((key.clone(), new_time));
                                 }
                             }
 
                             // 4. send output differences, assemble output layer
-                            // TODO : introduce "ordered builder" trait, impls.
-                            if output_stage.len() > 0 {
-                                for (val, diff) in output_stage.drain(..) {
-                                    output_accum.push((val, time.clone(), diff));
-                                }
+                            for (val, diff) in output_stage.drain(..) {
+                                output_accum.push((val, this_time.clone(), diff));
                             }
 
                             // because we have a crap heap.
-                            times.sort_by(|x,y| y.cmp(&x));
-                            times.dedup();
+                            interesting_times.sort_by(|x,y| y.cmp(&x));
+                            interesting_times.dedup();
+                            prev_time = this_time;
                         }
 
-                        while counts.len() <= counter {
-                            counts.push(0);
-                        }
+                        // Indicate an instance of a key with `counter` distinct times processed.
+                        while counts.len() <= counter { counts.push(0); }
                         counts[counter] += 1;
 
+                        // Move output updates into the output builder. Sort first to ensure order.
+                        output_accum.sort();
                         for (val, time, diff) in output_accum.drain(..) {
                             output_builder.push((key.clone(), val, time, diff));
                         }
                     }
 
-                    // having processed all exposed keys and times, we should commit and send the batch.
+                    // We have processed all exposed keys and times, and should commit and send the batch.
                     let output_batch = output_builder.done(&[], &[]);     // TODO: fix this nonsense.
                     output.session(&capabilities[index]).give(BatchWrapper { item: output_batch.clone() });
                     let output_borrow: &mut T2 = &mut output_trace.wrapper.borrow_mut().trace;
@@ -421,23 +464,28 @@ where
                 }
             }
 
-            for (index, &count) in counts.iter().enumerate() {
-                if count > 0 {
-                    println!("counts[{}]:\t{}", index, count);
-                }
-            }
-            if counts.len() > 0 {
-                println!("");
-            }
+            // if counts.len() > 0 {
+            //     println!("");
+            //     for index in 0 .. capabilities.len() {
+            //         println!("time: {:?}", capabilities[index].time());
+            //     }
+            // }
+            // for (index, &count) in counts.iter().enumerate() {
+            //     if count > 0 {
+            //         println!("counts[{}]:\t{}", index, count);
+            //     }
+            // }
 
             // 3. Having now processed all capabilities, we must advance them to track the frontier
             //    of times in `interesting`. 
+            // 
+            // TODO: It would be great if these were just the "newly interesting" times, rather than 
+            //       those that live in batches, from which we can directly extract lower bounds.
+            // TODO: We should only mint new capabilities for times not already in `capabilities`. 
             let mut new_frontier = Antichain::new();
             for &(_, ref time) in &interesting {
                 new_frontier.insert(time.clone());
             }
-
-            // TODO: Perhaps this could be optimized when not much changes?
             let mut new_capabilities = Vec::new();
             for time in new_frontier.elements() {
                 if let Some(capability) = capabilities.iter().find(|c| c.time().le(time)) {
@@ -446,17 +494,9 @@ where
             }
             capabilities = new_capabilities;
 
-            for time in notificator.frontier(0) {
-                new_frontier.insert(time.clone());
-            }
-
-            // assert!(new_frontier.elements().len() > 0);
-            source_trace.advance_by(new_frontier.elements());
-            output_trace.advance_by(new_frontier.elements());
-
-
-            // println!("group: done");
-
+            // We have processed all updates through the input frontier, and can advance traces.
+            source_trace.advance_by(notificator.frontier(0));
+            output_trace.advance_by(notificator.frontier(0));
         });
 
         Arranged { stream: stream, trace: result_trace }
