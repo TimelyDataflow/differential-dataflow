@@ -13,7 +13,7 @@ use timely::dataflow::operators::Capability;
 use timely_sort::Unsigned;
 
 use hashable::{Hashable, UnsignedWrapper};
-use ::{Data, Delta, Collection};
+use ::{Data, Ring, Collection};
 use lattice::Lattice;
 use operators::arrange::{Arrange, Arranged, ArrangeByKey, ArrangeBySelf};
 use trace::{Batch, Cursor, Trace, consolidate};
@@ -22,7 +22,7 @@ use trace::implementations::rhh::Spine as HashSpine;
 use trace::implementations::rhh_k::Spine as KeyHashSpine;
 
 /// Join implementations for `(key,val)` data.
-pub trait Join<G: Scope, K: Data, V: Data> {
+pub trait Join<G: Scope, K: Data, V: Data, R: Ring> {
 
     /// Matches pairs `(key,val1)` and `(key,val2)` based on `key` and then applies a function.
     ///
@@ -45,11 +45,11 @@ pub trait Join<G: Scope, K: Data, V: Data> {
     /// assert_eq!(extracted.len(), 1);
     /// assert_eq!(extracted[0].1, vec![((0,'a'),1), ((3,'B'),1)]);
     /// ```
-    fn join<V2: Data>(&self, other: &Collection<G, (K,V2)>) -> Collection<G, (K,V,V2)> {
+    fn join<V2: Data>(&self, other: &Collection<G, (K,V2), R>) -> Collection<G, (K,V,V2), R> {
         self.join_map(other, |k,v,v2| (k.clone(),v.clone(),v2.clone()))
     }
     /// Like `join`, but with an randomly distributed unsigned key.
-    fn join_u<V2: Data>(&self, other: &Collection<G, (K,V2)>) -> Collection<G, (K,V,V2)> where K: Unsigned+Copy {
+    fn join_u<V2: Data>(&self, other: &Collection<G, (K,V2), R>) -> Collection<G, (K,V,V2), R> where K: Unsigned+Copy {
         self.join_map_u(other, |k,v,v2| (k.clone(),v.clone(),v2.clone()))
     }
     /// Matches pairs `(key,val1)` and `(key,val2)` based on `key` and then applies a function.
@@ -73,9 +73,11 @@ pub trait Join<G: Scope, K: Data, V: Data> {
     /// assert_eq!(extracted.len(), 1);
     /// assert_eq!(extracted[0].1, vec![((0,'a'),1), ((3,'B'),1)]);
     /// ```
-    fn join_map<V2: Data, D: Data, R: Fn(&K, &V, &V2)->D+'static>(&self, other: &Collection<G, (K,V2)>, logic: R) -> Collection<G, D>;
+    fn join_map<V2, D, L>(&self, other: &Collection<G, (K,V2), R>, logic: L) -> Collection<G, D, R>
+    where V2: Data, D: Data, L: Fn(&K, &V, &V2)->D+'static;
     /// Like `join_map`, but with a randomly distributed unsigned key.
-    fn join_map_u<V2: Data, D: Data, R: Fn(&K, &V, &V2)->D+'static>(&self, other: &Collection<G, (K,V2)>, logic: R) -> Collection<G, D> where K: Unsigned+Copy;
+    fn join_map_u<V2, D, L>(&self, other: &Collection<G, (K,V2), R>, logic: L) -> Collection<G, D, R> 
+    where K: Unsigned+Copy, V2: Data, D: Data, L: Fn(&K, &V, &V2)->D+'static;
     /// Matches pairs `(key,val1)` and `key` based on `key`, filtering the first collection by values present in the second.
     ///
     /// #Examples
@@ -97,9 +99,9 @@ pub trait Join<G: Scope, K: Data, V: Data> {
     /// assert_eq!(extracted.len(), 1);
     /// assert_eq!(extracted[0].1, vec![((0,0),1)]);
     /// ```
-    fn semijoin(&self, other: &Collection<G, K>) -> Collection<G, (K, V)>;
+    fn semijoin(&self, other: &Collection<G, K, R>) -> Collection<G, (K, V), R>;
     /// Like `semijoin`, but with a randomly distributed unsigned key.    
-    fn semijoin_u(&self, other: &Collection<G, K>) -> Collection<G, (K, V)> where K: Unsigned+Copy;
+    fn semijoin_u(&self, other: &Collection<G, K, R>) -> Collection<G, (K, V), R> where K: Unsigned+Copy;
     /// Matches pairs `(key,val1)` and `key` based on `key`, discarding values 
     /// in the first collection if their key is present in the second.
     ///
@@ -122,46 +124,47 @@ pub trait Join<G: Scope, K: Data, V: Data> {
     /// assert_eq!(extracted.len(), 1);
     /// assert_eq!(extracted[0].1, vec![((1,2),1)]);
     /// ```
-    fn antijoin(&self, other: &Collection<G, K>) -> Collection<G, (K, V)>;
+    fn antijoin(&self, other: &Collection<G, K, R>) -> Collection<G, (K, V), R>;
     /// Like `antijoin`, but with a randomly distributed unsigned key.
-    fn antijoin_u(&self, other: &Collection<G, K>) -> Collection<G, (K, V)> where K: Unsigned+Copy;
+    fn antijoin_u(&self, other: &Collection<G, K, R>) -> Collection<G, (K, V), R> where K: Unsigned+Copy;
 } 
 
 
-impl<G, K, V> Join<G, K, V> for Collection<G, (K, V)>
+impl<G, K, V, R> Join<G, K, V, R> for Collection<G, (K, V), R>
 where
     G: Scope, 
     K: Data+Default+Hashable, 
     V: Data,
+    R: Ring,
     G::Timestamp: Lattice+Ord+Copy,
 {
-    fn join_map<V2: Data, D: Data, R>(&self, other: &Collection<G, (K, V2)>, logic: R) -> Collection<G, D>
-    where R: Fn(&K, &V, &V2)->D+'static {
+    fn join_map<V2: Data, D: Data, L>(&self, other: &Collection<G, (K, V2), R>, logic: L) -> Collection<G, D, R>
+    where L: Fn(&K, &V, &V2)->D+'static {
         let arranged1 = self.arrange_by_key();
         let arranged2 = other.arrange_by_key();
         arranged1.join_arranged(&arranged2, move |k,v1,v2| logic(&k.item,v1,v2))
     }
-    fn semijoin(&self, other: &Collection<G, K>) -> Collection<G, (K, V)> {
+    fn semijoin(&self, other: &Collection<G, K, R>) -> Collection<G, (K, V), R> {
         let arranged1 = self.arrange_by_key();
         let arranged2 = other.arrange_by_self();
         arranged1.join_arranged(&arranged2, |k,v,_| (k.item.clone(), v.clone()))
     }
-    fn antijoin(&self, other: &Collection<G, K>) -> Collection<G, (K, V)> {
+    fn antijoin(&self, other: &Collection<G, K, R>) -> Collection<G, (K, V), R> {
         self.concat(&self.semijoin(other).negate())
     }
 
-    fn join_map_u<V2: Data, D: Data, R>(&self, other: &Collection<G, (K, V2)>, logic: R) -> Collection<G, D>
-    where R: Fn(&K, &V, &V2)->D+'static, K: Unsigned+Copy {
+    fn join_map_u<V2: Data, D: Data, L>(&self, other: &Collection<G, (K, V2), R>, logic: L) -> Collection<G, D, R>
+    where L: Fn(&K, &V, &V2)->D+'static, K: Unsigned+Copy {
         let arranged1 = self.arrange(|k,v| (UnsignedWrapper::from(k), v), HashSpine::new(Default::default()));
         let arranged2 = other.arrange(|k,v| (UnsignedWrapper::from(k), v), HashSpine::new(Default::default()));
         arranged1.join_arranged(&arranged2, move |k,v1,v2| logic(&k.item,v1,v2))
     }
-    fn semijoin_u(&self, other: &Collection<G, K>) -> Collection<G, (K, V)> where K: Unsigned+Copy {
+    fn semijoin_u(&self, other: &Collection<G, K, R>) -> Collection<G, (K, V), R> where K: Unsigned+Copy {
         let arranged1 = self.arrange(|k,v| (UnsignedWrapper::from(k), v), HashSpine::new(Default::default()));
         let arranged2 = other.map(|k| (k,())).arrange(|k,v| (UnsignedWrapper::from(k), v), KeyHashSpine::new(Default::default()));
         arranged1.join_arranged(&arranged2, |k,v,_| (k.item.clone(), v.clone()))
     }
-    fn antijoin_u(&self, other: &Collection<G, K>) -> Collection<G, (K, V)> where K: Unsigned+Copy {
+    fn antijoin_u(&self, other: &Collection<G, K, R>) -> Collection<G, (K, V), R> where K: Unsigned+Copy {
         self.concat(&self.semijoin(other).negate())
     }
 }
@@ -171,7 +174,7 @@ where
 /// This method is used by the various `join` implementations, but it can also be used 
 /// directly in the event that one has a handle to an `Arranged<G,T>`, perhaps because
 /// the arrangement is available for re-use, or from the output of a `group` operator.
-pub trait JoinArranged<G: Scope, K: 'static, V: 'static> where G::Timestamp: Lattice+Ord {
+pub trait JoinArranged<G: Scope, K: 'static, V: 'static, R: Ring> where G::Timestamp: Lattice+Ord {
     /// Joins two arranged collections with the same key type.
     ///
     /// Each matching pair of records `(key, val1)` and `(key, val2)` are subjected to the `result` function, 
@@ -179,30 +182,34 @@ pub trait JoinArranged<G: Scope, K: 'static, V: 'static> where G::Timestamp: Lat
     ///
     /// This trait is implemented for arrangements (`Arranged<G, T>`) rather than collections. The `Join` trait 
     /// contains the implementations for collections.
-    fn join_arranged<V2,T2,R,RF> (&self, stream2: &Arranged<G,K,V2,T2>, result: RF) -> Collection<G,R>
+    fn join_arranged<V2,T2,D,L> (&self, stream2: &Arranged<G,K,V2,R,T2>, result: L) -> Collection<G,D,R>
     where 
         V2: 'static,
-        T2: Trace<K, V2, G::Timestamp>+'static,
+        T2: Trace<K, V2, G::Timestamp, R>+'static,
         T2: 'static,
         T2::Batch: 'static,
-        R: Data,
-        RF: Fn(&K,&V,&V2)->R+'static;
+        D: Data,
+        L: Fn(&K,&V,&V2)->D+'static;
 }
 
-impl<G: Scope, K: Eq+'static, V: 'static, T1: Trace<K,V,G::Timestamp>> JoinArranged<G, K, V> for Arranged<G,K,V,T1> 
+impl<G, K, V, R, T1> JoinArranged<G, K, V, R> for Arranged<G,K,V,R,T1> 
     where 
+        G: Scope, 
+        K: Eq+'static, 
+        V: 'static, 
+        R: Ring,
+        T1: Trace<K,V,G::Timestamp, R>,
         G::Timestamp: Lattice+Ord+Debug+Copy,
         T1: 'static,
-        T1::Batch: 'static+Debug,
-         {
-    fn join_arranged<V2,T2,R,RF>(&self, other: &Arranged<G,K,V2,T2>, result: RF) -> Collection<G,R> 
+        T1::Batch: 'static+Debug {
+    fn join_arranged<V2,T2,D,L>(&self, other: &Arranged<G,K,V2,R,T2>, result: L) -> Collection<G,D,R> 
     where 
         V2: 'static,
-        T2: Trace<K,V2,G::Timestamp>,
+        T2: Trace<K,V2,G::Timestamp,R>,
         T2: 'static,
         T2::Batch: 'static,
-        R: Data,
-        RF: Fn(&K,&V,&V2)->R+'static {
+        D: Data,
+        L: Fn(&K,&V,&V2)->D+'static {
 
         let mut trace1 = Some(self.new_handle());
         let mut trace2 = Some(other.new_handle());
@@ -214,7 +221,7 @@ impl<G: Scope, K: Eq+'static, V: 'static, T1: Trace<K,V,G::Timestamp>> JoinArran
 
         let mut output_buffer = Vec::new();
 
-        let mut todo: Vec<Deferred<K,V,V2,G::Timestamp,T1,T2>> = Vec::new();     // readied outputs to enumerate.
+        let mut todo: Vec<Deferred<K,V,V2,G::Timestamp,R,T1,T2>> = Vec::new();     // readied outputs to enumerate.
 
         let stream = self.stream.binary_notify(&other.stream, Pipeline, Pipeline, "JoinAlt", vec![], move |input1, input2, output, notificator| {
 
@@ -331,30 +338,29 @@ impl<G: Scope, K: Eq+'static, V: 'static, T1: Trace<K,V,G::Timestamp>> JoinArran
 ///
 /// The structure wraps cursors which allow us to play out join computation at whatever rate we like.
 /// This allows us to avoid producing and buffering massive amounts 
-struct Deferred<K, V1, V2, T, T1, T2> 
+struct Deferred<K, V1, V2, T, R, T1, T2> 
 where 
     T: Timestamp+Lattice+Ord+Debug, 
-    T1: Trace<K, V1, T>, 
-    T2: Trace<K, V2, T>,
+    T1: Trace<K, V1, T, R>, 
+    T2: Trace<K, V2, T, R>,
 {
-    work1: Option<(<T1::Batch as Batch<K,V1,T>>::Cursor, T2::Cursor)>,
-    work2: Option<(<T2::Batch as Batch<K,V2,T>>::Cursor, T1::Cursor)>,
+    work1: Option<(<T1::Batch as Batch<K,V1,T,R>>::Cursor, T2::Cursor)>,
+    work2: Option<(<T2::Batch as Batch<K,V2,T,R>>::Cursor, T1::Cursor)>,
     capability: Capability<T>,
-    // acknowledged: Vec<T>,
     ack_frontier: Antichain<T>,
 }
 
-impl<K, V1, V2, T, T1, T2> Deferred<K, V1, V2, T, T1, T2>
+impl<K, V1, V2, T, R, T1, T2> Deferred<K, V1, V2, T, R, T1, T2>
 where
     K: Eq,
-    T: Timestamp+Lattice+Ord+Debug+Copy, 
-    T1: Trace<K,V1,T>, 
-    T2: Trace<K,V2,T>,
+    T: Timestamp+Lattice+Ord+Debug+Copy,
+    R: Ring, 
+    T1: Trace<K,V1,T,R>, 
+    T2: Trace<K,V2,T,R>,
 {
-    fn new(work1: Option<(<T1::Batch as Batch<K,V1,T>>::Cursor, T2::Cursor)>, 
-           work2: Option<(<T2::Batch as Batch<K,V2,T>>::Cursor, T1::Cursor)>, 
+    fn new(work1: Option<(<T1::Batch as Batch<K,V1,T,R>>::Cursor, T2::Cursor)>, 
+           work2: Option<(<T2::Batch as Batch<K,V2,T,R>>::Cursor, T1::Cursor)>, 
            capability: Capability<T>,
-           // acknowledged: &[T],
            ack_frontier: Antichain<T>) -> Self {
         Deferred {
             work1: work1,
@@ -381,7 +387,7 @@ where
     /// To make the method more responsive, we could count the number of diffs processed, and allow the 
     /// computation to break out at any point.
     #[inline(never)]
-    fn work<R: Ord+Clone, RF: Fn(&K, &V1, &V2)->R>(&mut self, output: &mut Vec<((T, R), Delta)>, logic: &RF, limit: usize) {
+    fn work<D: Ord+Clone, L: Fn(&K, &V1, &V2)->D>(&mut self, output: &mut Vec<((T, D), R)>, logic: &L, limit: usize) {
 
         let ack_frontier = &self.ack_frontier;
         let time = self.capability.time();

@@ -32,7 +32,7 @@
 //! ```
 
 use hashable::{Hashable, UnsignedWrapper};
-use ::{Data, Collection, Delta};
+use ::{Data, Collection, Ring};
 
 use timely::progress::Antichain;
 use timely::dataflow::*;
@@ -50,25 +50,25 @@ use trace::implementations::rhh::Spine as HashSpine;
 use trace::implementations::rhh_k::Spine as KeyHashSpine;
 
 /// Extension trait for the `group` differential dataflow method.
-pub trait Group<G: Scope, K: Data, V: Data> where G::Timestamp: Lattice+Ord {
+pub trait Group<G: Scope, K: Data, V: Data, R: Ring> where G::Timestamp: Lattice+Ord {
     /// Groups records by their first field, and applies reduction logic to the associated values.
-    fn group<L, V2: Data>(&self, logic: L) -> Collection<G, (K, V2)>
-        where L: Fn(&K, &[(V, Delta)], &mut Vec<(V2, Delta)>)+'static;
+    fn group<L, V2: Data, R2: Ring>(&self, logic: L) -> Collection<G, (K, V2), R2>
+        where L: Fn(&K, &[(V, R)], &mut Vec<(V2, R2)>)+'static;
     /// Groups records by their first field, and applies reduction logic to the associated values.
-    fn group_u<L, V2: Data>(&self, logic: L) -> Collection<G, (K, V2)>
-        where L: Fn(&K, &[(V, Delta)], &mut Vec<(V2, Delta)>)+'static, K: Unsigned+Copy;
+    fn group_u<L, V2: Data, R2: Ring>(&self, logic: L) -> Collection<G, (K, V2), R2>
+        where L: Fn(&K, &[(V, R)], &mut Vec<(V2, R2)>)+'static, K: Unsigned+Copy;
 }
 
-impl<G: Scope, K: Data+Default+Hashable, V: Data> Group<G, K, V> for Collection<G, (K, V)> 
+impl<G: Scope, K: Data+Default+Hashable, V: Data, R: Ring> Group<G, K, V, R> for Collection<G, (K, V), R> 
     where G::Timestamp: Lattice+Ord+::std::fmt::Debug {
-    fn group<L, V2: Data>(&self, logic: L) -> Collection<G, (K, V2)>
-        where L: Fn(&K, &[(V, Delta)], &mut Vec<(V2, Delta)>)+'static {
+    fn group<L, V2: Data, R2: Ring>(&self, logic: L) -> Collection<G, (K, V2), R2>
+        where L: Fn(&K, &[(V, R)], &mut Vec<(V2, R2)>)+'static {
         self.arrange_by_key()
             .group_arranged(move |k,s,t| logic(&k.item,s,t), HashSpine::new(Default::default()))
             .as_collection(|k,v| (k.item.clone(), v.clone()))
     }
-    fn group_u<L, V2: Data>(&self, logic: L) -> Collection<G, (K, V2)>
-        where L: Fn(&K, &[(V, Delta)], &mut Vec<(V2, Delta)>)+'static, K: Unsigned+Copy {
+    fn group_u<L, V2: Data, R2: Ring>(&self, logic: L) -> Collection<G, (K, V2), R2>
+        where L: Fn(&K, &[(V, R)], &mut Vec<(V2, R2)>)+'static, K: Unsigned+Copy {
         self.arrange(|k,v| (UnsignedWrapper::from(k), v), HashSpine::new(Default::default()))
             .group_arranged(move |k,s,t| logic(&k.item,s,t), HashSpine::new(Default::default()))
             .as_collection(|k,v| (k.item.clone(), v.clone()))
@@ -78,18 +78,19 @@ impl<G: Scope, K: Data+Default+Hashable, V: Data> Group<G, K, V> for Collection<
 /// Extension trait for the `distinct` differential dataflow method.
 pub trait Distinct<G: Scope, K: Data> where G::Timestamp: Lattice+Ord {
     /// Reduces the collection to one occurrence of each distinct element.
-    fn distinct(&self) -> Collection<G, K>;
+    fn distinct(&self) -> Collection<G, K, isize>;
     /// Reduces the collection to one occurrence of each distinct element.
-    fn distinct_u(&self) -> Collection<G, K> where K: Unsigned+Copy;
+    fn distinct_u(&self) -> Collection<G, K, isize> where K: Unsigned+Copy;
 }
 
-impl<G: Scope, K: Data+Default+Hashable> Distinct<G, K> for Collection<G, K> where G::Timestamp: Lattice+Ord+::std::fmt::Debug {
-    fn distinct(&self) -> Collection<G, K> {
+impl<G: Scope, K: Data+Default+Hashable> Distinct<G, K> for Collection<G, K, isize> 
+where G::Timestamp: Lattice+Ord+::std::fmt::Debug {
+    fn distinct(&self) -> Collection<G, K, isize> {
         self.arrange_by_self()
             .group_arranged(|_k,_s,t| t.push(((), 1)), KeyHashSpine::new(Default::default()))
             .as_collection(|k,_| k.item.clone())
     }
-    fn distinct_u(&self) -> Collection<G, K> where K: Unsigned+Copy {
+    fn distinct_u(&self) -> Collection<G, K, isize> where K: Unsigned+Copy {
         self.map(|k| (k,()))
             .arrange(|k,v| (UnsignedWrapper::from(k), v), KeyHashSpine::new(Default::default()))
             .group_arranged(|_k,_s,t| t.push(((), 1)), KeyHashSpine::new(Default::default()))
@@ -99,20 +100,21 @@ impl<G: Scope, K: Data+Default+Hashable> Distinct<G, K> for Collection<G, K> whe
 
 
 /// Extension trait for the `count` differential dataflow method.
-pub trait Count<G: Scope, K: Data> where G::Timestamp: Lattice+Ord {
+pub trait Count<G: Scope, K: Data, R: Ring> where G::Timestamp: Lattice+Ord {
     /// Counts the number of occurrences of each element.
-    fn count(&self) -> Collection<G, (K, isize)>;
+    fn count(&self) -> Collection<G, (K, R), isize>;
     /// Counts the number of occurrences of each element.
-    fn count_u(&self) -> Collection<G, (K, isize)> where K: Unsigned+Copy;
+    fn count_u(&self) -> Collection<G, (K, R), isize> where K: Unsigned+Copy;
 }
 
-impl<G: Scope, K: Data+Default+Hashable> Count<G, K> for Collection<G, K> where G::Timestamp: Lattice+Ord+::std::fmt::Debug {
-    fn count(&self) -> Collection<G, (K, isize)> {
+impl<G: Scope, K: Data+Default+Hashable, R: Ring> Count<G, K, R> for Collection<G, K, R>
+ where G::Timestamp: Lattice+Ord+::std::fmt::Debug {
+    fn count(&self) -> Collection<G, (K, R), isize> {
         self.arrange_by_self()
             .group_arranged(|_k,s,t| t.push((s[0].1, 1)), HashSpine::new(Default::default()))
             .as_collection(|k,&c| (k.item.clone(), c))
     }
-    fn count_u(&self) -> Collection<G, (K, isize)> where K: Unsigned+Copy {
+    fn count_u(&self) -> Collection<G, (K, R), isize> where K: Unsigned+Copy {
         self.map(|k| (k,()))
             .arrange(|k,v| (UnsignedWrapper::from(k), v), KeyHashSpine::new(Default::default()))
             .group_arranged(|_k,s,t| t.push((s[0].1, 1)), HashSpine::new(Default::default()))
@@ -122,26 +124,28 @@ impl<G: Scope, K: Data+Default+Hashable> Count<G, K> for Collection<G, K> where 
 
 
 /// Extension trace for the group_arranged differential dataflow method.
-pub trait GroupArranged<G: Scope, K: Data, V: Data> where G::Timestamp: Lattice+Ord {
+pub trait GroupArranged<G: Scope, K: Data, V: Data, R: Ring> where G::Timestamp: Lattice+Ord {
     /// Applies `group` to arranged data, and returns an arrangement of output data.
-    fn group_arranged<L, V2, T2>(&self, logic: L, empty: T2) -> Arranged<G, K, V2, T2>
+    fn group_arranged<L, V2, T2, R2>(&self, logic: L, empty: T2) -> Arranged<G, K, V2, R2, T2>
         where
             V2: Data,
-            T2: Trace<K, V2, G::Timestamp>+'static,
-            L: Fn(&K, &[(V, Delta)], &mut Vec<(V2, Delta)>)+'static
+            R2: Ring,
+            T2: Trace<K, V2, G::Timestamp, R2>+'static,
+            L: Fn(&K, &[(V, R)], &mut Vec<(V2, R2)>)+'static
             ; 
 }
 
-impl<G: Scope, K: Data, V: Data, T1> GroupArranged<G, K, V> for Arranged<G, K, V, T1>
+impl<G: Scope, K: Data, V: Data, T1, R: Ring> GroupArranged<G, K, V, R> for Arranged<G, K, V, R, T1>
 where 
     G::Timestamp: Lattice+Ord,
-    T1: Trace<K, V, G::Timestamp>+'static {
+    T1: Trace<K, V, G::Timestamp, R>+'static {
         
-    fn group_arranged<L, V2, T2>(&self, logic: L, empty: T2) -> Arranged<G, K, V2, T2>
+    fn group_arranged<L, V2, T2, R2>(&self, logic: L, empty: T2) -> Arranged<G, K, V2, R2, T2>
         where 
             V2: Data,
-            T2: Trace<K, V2, G::Timestamp>+'static,
-            L: Fn(&K, &[(V, Delta)], &mut Vec<(V2, Delta)>)+'static {
+            R2: Ring,
+            T2: Trace<K, V2, G::Timestamp, R2>+'static,
+            L: Fn(&K, &[(V, R)], &mut Vec<(V2, R2)>)+'static {
 
         let mut source_trace = self.new_handle();
         let mut output_trace = TraceHandle::new(empty, &[Default::default()]);
@@ -164,14 +168,14 @@ where
 
         let mut time_stage = Vec::new();    // staging for building up interesting times.
         let mut input_stage = Vec::new();   // staging for per-key input (pre-iterator).
-        let mut output_stage = Vec::<(V2, Delta)>::new();  // staging for per-key output.
+        let mut output_stage = Vec::<(V2, R2)>::new();  // staging for per-key output.
 
         // where we store updates that are not universally applied.
-        let mut input_edits = Vec::<(V, G::Timestamp, Delta)>::new();
-        let mut output_edits = Vec::<(V2, G::Timestamp, Delta)>::new();
+        let mut input_edits = Vec::<(V, G::Timestamp, R)>::new();
+        let mut output_edits = Vec::<(V2, G::Timestamp, R2)>::new();
 
         // where we store new output diffs (to be committed).
-        let mut output_accum = Vec::<(V2, G::Timestamp, Delta)>::new();
+        let mut output_accum = Vec::<(V2, G::Timestamp, R2)>::new();
 
         // priority queue for interesting times.
         // unfortunately, BinaryHeap is a max heap. T.T
@@ -267,7 +271,7 @@ where
                     let mut output_cursor: T2::Cursor = output_trace.cursor();
 
                     // changes to output_trace we build up (and eventually commit and send).
-                    let mut output_builder = <T2::Batch as Batch<K,V2,G::Timestamp>>::Builder::new();
+                    let mut output_builder = <T2::Batch as Batch<K,V2,G::Timestamp,R2>>::Builder::new();
 
                     // We now iterate through exposed keys, for each enumerating through interesting times.
                     // The set of interesting times is initially those in `exposed`, but the set may grow
@@ -322,14 +326,14 @@ where
                         if source_cursor.key_valid() && source_cursor.key() == &key {
                             while source_cursor.val_valid() {
                                 let val: V = source_cursor.val().clone();
-                                let mut sum = 0;
+                                let mut sum = R::zero();
                                 source_cursor.map_times(|t,d| {
-                                    if t.le(&meet) { sum += d; }
+                                    if t.le(&meet) { sum = sum + d; }
                                     if !t.le(&meet) {
                                         input_edits.push((val.clone(), t.clone(), d));
                                     }
                                 });
-                                if sum != 0 {
+                                if !sum.is_zero() {
                                     input_stage.push((source_cursor.val().clone(), sum));
                                 }
                                 source_cursor.step_val();
@@ -523,13 +527,13 @@ fn segment<T, F: Fn(&T)->bool>(source: &mut Vec<T>, dest1: &mut Vec<T>, dest2: &
 }
 
 
-fn consolidate<T: Ord>(list: &mut Vec<(T, isize)>) {
+fn consolidate<T: Ord, R: Ring>(list: &mut Vec<(T, R)>) {
     list.sort_by(|x,y| x.0.cmp(&y.0));
     for index in 1 .. list.len() {
         if list[index].0 == list[index-1].0 {
-            list[index].1 += list[index-1].1;
-            list[index-1].1 = 0;
+            list[index].1 = list[index].1 + list[index-1].1;
+            list[index-1].1 = R::zero();
         }
     }
-    list.retain(|x| x.1 != 0);
+    list.retain(|x| !x.1.is_zero());
 }

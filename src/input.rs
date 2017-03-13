@@ -1,21 +1,28 @@
 //! Input session to simplify high resolution input.
 
-use ::{Data, Delta};
+use ::{Data, Ring};
 use timely::progress::Timestamp;
 use timely::progress::timestamp::RootTimestamp;
 use timely::progress::nested::product::Product;
 
 /// An input session wrapping a single timely dataflow timestamp.
-pub struct InputSession<'a, T: Timestamp+Ord+Clone, D: Data> {
+pub struct InputSession<'a, T: Timestamp+Ord+Clone, D: Data, R: Ring> {
 	time: Product<RootTimestamp, T>,
-	buffer: Vec<(D, Product<RootTimestamp, T>, Delta)>,
-	handle: &'a mut ::timely::dataflow::operators::input::Handle<T,(D,Product<RootTimestamp, T>,Delta)>,
+	buffer: Vec<(D, Product<RootTimestamp, T>, R)>,
+	handle: &'a mut ::timely::dataflow::operators::input::Handle<T,(D,Product<RootTimestamp, T>,R)>,
 }
 
-impl<'a, T: Timestamp+Ord+Clone, D: Data> InputSession<'a, T, D> {
+impl<'a, T: Timestamp+Ord+Clone, D: Data> InputSession<'a, T, D, isize> {
+	/// Adds an element to the collection.
+	pub fn insert(&mut self, element: D) { self.update(element, 1); }
+	/// Removes an element from the collection.
+	pub fn remove(&mut self, element: D) { self.update(element,-1); }
+}
+
+impl<'a, T: Timestamp+Ord+Clone, D: Data, R: Ring> InputSession<'a, T, D, R> {
 
 	/// Creates a new session from a reference to an input handle.
-	pub fn from(handle: &'a mut ::timely::dataflow::operators::input::Handle<T,(D,Product<RootTimestamp, T>,Delta)>) -> Self {
+	pub fn from(handle: &'a mut ::timely::dataflow::operators::input::Handle<T,(D,Product<RootTimestamp, T>,R)>) -> Self {
 		InputSession {
 			time: handle.time().clone(),
 			buffer: Vec::new(),
@@ -23,12 +30,8 @@ impl<'a, T: Timestamp+Ord+Clone, D: Data> InputSession<'a, T, D> {
 		}
 	}
 
-	/// Adds an element to the collection.
-	pub fn insert(&mut self, element: D) { self.update(element, 1); }
-	/// Removes an element from the collection.
-	pub fn remove(&mut self, element: D) { self.update(element,-1); }
 	/// Adds to the weight of an element in the collection.
-	pub fn update(&mut self, element: D, change: isize) { self.buffer.push((element, self.time.clone(), change)); }
+	pub fn update(&mut self, element: D, change: R) { self.buffer.push((element, self.time.clone(), change)); }
 
 	/// Forces buffered data into the timely input, and advances its time to match that of the sesson.
 	pub fn flush(&mut self) {
@@ -54,7 +57,7 @@ impl<'a, T: Timestamp+Ord+Clone, D: Data> InputSession<'a, T, D> {
 	pub fn time(&self) -> &Product<RootTimestamp, T> { &self.time }
 }
 
-impl<'a, T: Timestamp+Ord+Clone, D: Data> Drop for InputSession<'a, T, D> {
+impl<'a, T: Timestamp+Ord+Clone, D: Data, R: Ring> Drop for InputSession<'a, T, D, R> {
 	fn drop(&mut self) {
 		self.flush();
 	}

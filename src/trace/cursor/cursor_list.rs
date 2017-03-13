@@ -11,8 +11,8 @@ use super::Cursor;
 /// explicitly, in `self.equiv_keys` and `self.equiv_vals`. We also track the number of valid keys and valid 
 /// values, to avoid continually re-considering cursors in invalid states.
 #[derive(Debug)]
-pub struct CursorList<K, V, T, C: Cursor<K, V, T>> {
-	_phantom: ::std::marker::PhantomData<(K, V, T)>,
+pub struct CursorList<K, V, T, R, C: Cursor<K, V, T, R>> {
+	_phantom: ::std::marker::PhantomData<(K, V, T, R)>,
 	cursors: Vec<C>,	// ordered by valid keys and valid values.
 	equiv_keys: usize,	// cursors[..equiv_keys] all have the same key.
 	equiv_vals: usize,	// cursors[..equiv_vals] all have the same key and value.
@@ -20,7 +20,7 @@ pub struct CursorList<K, V, T, C: Cursor<K, V, T>> {
 	valid_vals: usize,	// cursors[..valid_vals] all have valid_val() true.
 }
 
-impl<K, V, T, C: Cursor<K, V, T>> CursorList<K, V, T, C> where K: Ord, V: Ord {
+impl<K, V, T, R, C: Cursor<K, V, T, R>> CursorList<K, V, T, R, C> where K: Ord, V: Ord {
 	/// Creates a new cursor list from pre-existing cursors.
 	pub fn new(cursors: Vec<C>) -> Self {
 		let cursors_len = cursors.len();
@@ -139,7 +139,7 @@ impl<K, V, T, C: Cursor<K, V, T>> CursorList<K, V, T, C> where K: Ord, V: Ord {
 	}
 }
 
-impl<K, V, T, C: Cursor<K, V, T>> Cursor<K, V, T> for CursorList<K, V, T, C> 
+impl<K, V, T, R, C: Cursor<K, V, T, R>> Cursor<K, V, T, R> for CursorList<K, V, T, R, C> 
 where 
 	K: Ord+Clone, 
 	V: Ord+Clone {
@@ -158,7 +158,7 @@ where
 		debug_assert!(self.val_valid());
 		self.cursors[0].val() 
 	}
-	fn map_times<L: FnMut(&T, isize)>(&mut self, mut logic: L) {
+	fn map_times<L: FnMut(&T, R)>(&mut self, mut logic: L) {
 		for cursor in &mut self.cursors[.. self.equiv_vals] {
 			cursor.map_times(|t,d| logic(t,d));
 		}

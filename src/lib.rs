@@ -104,9 +104,7 @@
 #![forbid(missing_docs)]
 
 use std::fmt::Debug;
-
-/// A change in count.
-pub type Delta = isize;
+use std::ops::{Add, Sub, Neg, Mul};
 
 pub use collection::{Collection, AsCollection};
 pub use hashable::Hashable;
@@ -122,6 +120,24 @@ pub use hashable::Hashable;
 /// efficiently sort data if we know there are fewer bytes in the integer keys.
 pub trait Data : timely::ExchangeData + Ord + Debug { }
 impl<T: timely::ExchangeData + Ord + Debug> Data for T { }
+
+/// A type that can be treated as a mathematical ring.
+pub trait Ring : Add<Self, Output=Self> + Sub<Self, Output=Self> + Neg<Output=Self> + Mul<Self, Output=Self> + std::marker::Sized + Data + Copy {
+	/// Returns true if the element is the additive identity.
+	fn is_zero(&self) -> bool;
+	/// The additive identity.
+	fn zero() -> Self;
+}
+
+impl Ring for isize { 
+	fn is_zero(&self) -> bool { *self == 0 }
+	fn zero() -> Self { 0 }
+}
+
+// impl<R1: Ring, R2: Ring> Ring for (R1, R2) {
+// 	fn is_zero(&self) -> bool { self.0.is_zero() && self.1.is_zero() }
+// 	fn zero() -> Self { (R1::zero(), R2::zero()) }
+// }
 
 extern crate fnv;
 extern crate timely;
