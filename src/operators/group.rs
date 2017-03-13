@@ -343,7 +343,7 @@ where
                         if output_cursor.key_valid() && output_cursor.key() == &key {
                             while output_cursor.val_valid() {
                                 let val: V2 = output_cursor.val().clone();
-                                let mut sum = 0;
+                                // let mut sum = 0;
                                 output_cursor.map_times(|t,d| {
                                     // if t.le(&meet) { sum += d; }
                                     // if !t.le(&meet) {
