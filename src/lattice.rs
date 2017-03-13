@@ -58,6 +58,13 @@ impl Lattice for RootTimestamp {
     fn meet(&self, _: &RootTimestamp) -> RootTimestamp { RootTimestamp }
 }
 
+impl Lattice for usize {
+    fn min() -> usize { usize::min_value() }
+    fn max() -> usize { usize::max_value() }
+    fn join(&self, other: &usize) -> usize { ::std::cmp::max(*self, *other) }
+    fn meet(&self, other: &usize) -> usize { ::std::cmp::min(*self, *other) }
+}
+
 impl Lattice for u64 {
     fn min() -> u64 { u64::min_value() }
     fn max() -> u64 { u64::max_value() }

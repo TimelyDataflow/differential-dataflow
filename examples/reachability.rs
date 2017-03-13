@@ -50,8 +50,9 @@ fn main() {
         if computation.index() == 0 {
             // trickle edges in to dataflow
             for _ in 0..(edges/1000) {
+                let &time = graph.time();
                 for _ in 0..1000 {
-                    graph.send(((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), 1));
+                    graph.send(((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), time, 1));
                 }
                 computation.step();
             }
@@ -69,7 +70,8 @@ fn main() {
             println!("stable; elapsed: {:?}", timer.elapsed());
         }
         for i in 0..10 {
-            roots.send((i, 1));
+            let &time = roots.time();
+            roots.send((i, time, 1));
             roots.advance_to(2 + i);
             graph.advance_to(2 + i);
 
@@ -82,9 +84,10 @@ fn main() {
 
         let mut changes = Vec::new();
         for _wave in 0..waves {
+            let &time = graph.time();
             for _ in 0..batch {
-                changes.push(((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), 1));
-                changes.push(((rng2.gen_range(0, nodes), rng2.gen_range(0, nodes)),-1));
+                changes.push(((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), time, 1));
+                changes.push(((rng2.gen_range(0, nodes), rng2.gen_range(0, nodes)), time,-1));
             }
 
             let timer = ::std::time::Instant::now();

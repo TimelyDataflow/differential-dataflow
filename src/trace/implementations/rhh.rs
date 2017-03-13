@@ -4,8 +4,10 @@
 //! keys that implement `Hash`, keys whose hashes have been computed and are stashed with the key, and
 //! integers keys which are promised to be random enough to be used as the hashes themselves.
 use std::rc::Rc;
+use std::mem::replace;
 
-use timely_sort::{Unsigned};
+use timely::progress::frontier::Antichain;
+use timely_sort::{Unsigned, LSBRadixSorter};
 
 use hashable::HashOrdered;
 
@@ -17,7 +19,7 @@ use trace::layers::ordered::{OrderedLayer, OrderedBuilder, OrderedCursor};
 use trace::layers::unordered::{UnorderedLayer, UnorderedBuilder, UnorderedCursor};
 
 use lattice::Lattice;
-use trace::{Batch, Builder, Cursor, Trace};
+use trace::{Batch, Batcher, Builder, Cursor, Trace};
 use trace::consolidate;
 use trace::description::Description;
 use trace::cursor::cursor_list::CursorList;
@@ -32,7 +34,8 @@ type RHHBuilder<Key, Val, Time> = HashedBuilder<Key, OrderedBuilder<Val, Unorder
 #[derive(Debug)]
 pub struct Spine<Key: HashOrdered, Val: Ord, Time: Lattice+Ord> {
 	frontier: Vec<Time>,					// Times after which the times in the traces must be distinguishable.
-	layers: Vec<Rc<Layer<Key, Val, Time>>>	// Several possibly shared collections of updates.
+	layers: Vec<Rc<Layer<Key, Val, Time>>>,	// Several possibly shared collections of updates.
+	done: bool,
 }
 
 // A trace implementation for any key type that can be borrowed from or converted into `Key`.
@@ -50,10 +53,12 @@ where
 		Spine { 
 			frontier: vec![default],
 			layers: Vec::new(),
+			done: false,
 		} 		
 	}
 	// Note: this does not perform progressive merging; that code is around somewhere though.
 	fn insert(&mut self, layer: Self::Batch) {
+		assert!(!self.done);
 		if layer.layer.keys() > 0 {
 			// while last two elements exist, both less than layer.len()
 			while self.layers.len() >= 2 && self.layers[self.layers.len() - 2].len() < layer.len() {
@@ -86,6 +91,7 @@ where
 		}
 	}
 	fn cursor(&self) -> Self::Cursor {
+		assert!(!self.done);
 		let mut cursors = Vec::new();
 		for layer in &self.layers[..] {
 			if layer.len() > 0 {
@@ -97,6 +103,10 @@ where
 	}
 	fn advance_by(&mut self, frontier: &[Time]) {
 		self.frontier = frontier.to_vec();
+		if self.frontier.len() == 0 {
+			self.layers.clear();
+			self.done = true;
+		}
 	}
 }
 
@@ -111,8 +121,8 @@ pub struct Layer<Key: HashOrdered, Val: Ord, Time: Lattice+Ord> {
 }
 
 impl<Key: Clone+Default+HashOrdered, Val: Ord+Clone, Time: Lattice+Ord+Clone+Default> Batch<Key, Val, Time> for Rc<Layer<Key, Val, Time>> {
+	type Batcher = LayerBatcher<Key, Val, Time>;
 	type Builder = LayerBuilder<Key, Val, Time>;
-	type OrderedBuilder = OrdBuilder<Key, Val, Time>;
 	type Cursor = LayerCursor<Key, Val, Time>;
 	fn cursor(&self) -> Self::Cursor {  LayerCursor { cursor: self.layer.cursor() } }
 	fn len(&self) -> usize { self.layer.tuples() }
@@ -198,83 +208,151 @@ impl<Key: Clone+HashOrdered, Val: Ord+Clone, Time: Lattice+Ord+Clone> Cursor<Key
 
 
 /// A builder for creating layers from unsorted update tuples.
-pub struct LayerBuilder<K: HashOrdered, V: Ord, T: Ord> {
-	time: T,
-	// TODO : Have this build `Layer`s and merge, instead of re-sorting sorted data.
-    buffer: Vec<((K, V), isize)>,
-    buffers: Vec<Vec<((K, V), isize)>>,
+pub struct LayerBatcher<K, V, T: PartialOrd> {
+	// where we stash records we don't know what to do with yet.
+    buffer: Vec<((K, V), T, isize)>,
+    buffers: Vec<Vec<((K, V), T, isize)>>,
+
+    sorter: LSBRadixSorter<((K, V), T, isize)>,
+    stash: Vec<Vec<((K, V), T, isize)>>,
+    stage: Vec<((K, V, T), isize)>,
+
+    /// lower bound of contained updates.
+    frontier: Antichain<T>,
 }
 
-impl<Key, Val, Time> Builder<Key, Val, Time, Rc<Layer<Key, Val, Time>>> for LayerBuilder<Key, Val, Time> 
+impl<Key, Val, Time: PartialOrd> LayerBatcher<Key, Val, Time> {
+	fn empty(&mut self) -> Vec<((Key, Val), Time, isize)> {
+		self.stash.pop().unwrap_or_else(|| Vec::with_capacity(1 << 10))
+	}
+}
+
+impl<Key, Val, Time> Batcher<Key, Val, Time, Rc<Layer<Key, Val, Time>>> for LayerBatcher<Key, Val, Time> 
 where Key: Clone+Default+HashOrdered, Val: Ord+Clone, Time: Lattice+Ord+Clone+Default {
-	fn new() -> Self { LayerBuilder { time: Default::default(), buffer: Vec::new(), buffers: Vec::new() } }
+	fn new() -> Self { 
+		LayerBatcher { 
+			buffer: Vec::with_capacity(1 << 10), 
+			buffers: Vec::new(),
+			sorter: LSBRadixSorter::new(),
+			stash: Vec::new(),
+			stage: Vec::new(),
+			frontier: Antichain::new(),
+		} 
+	}
 	fn push(&mut self, (key, val, time, diff): (Key, Val, Time, isize)) {
-		self.time = time;
-		self.buffer.push(((key, val), diff));
-		if self.buffer.len() == 1 << 12 {
-			self.buffers.push(::std::mem::replace(&mut self.buffer, Vec::with_capacity(1 << 12)));
+		self.buffer.push(((key, val), time, diff));
+		if self.buffer.len() == (1 << 10) {
+			let empty = self.empty();
+			self.buffers.push(::std::mem::replace(&mut self.buffer, empty));
 		}
 	}
-	fn done(mut self, lower: &[Time], upper: &[Time]) -> Rc<Layer<Key, Val, Time>> {
 
-		let mut count = self.buffer.len();
+	// TODO: Consider sorting everything, which would allow cancelation of any updates.
+	fn seal(&mut self, lower: &[Time], upper: &[Time]) -> Rc<Layer<Key, Val, Time>> {
+
+		// 1. Scan all of self.buffers and self.buffer to move appropriate updates to self.sorter.
+		if self.buffers.len() > 0 {
+	    	if self.buffer.len() > 0 {
+	    		let empty = self.empty();
+				self.buffers.push(replace(&mut self.buffer, empty));
+	    	}
+
+	    	let mut buffers = replace(&mut self.buffers, Vec::new());
+	    	for mut buffer in buffers.drain(..) {
+	    		for ((key, val), time, diff) in buffer.drain(..) {
+					if lower.iter().any(|t| t.le(&time)) && !upper.iter().any(|t| t.le(&time)) {
+						self.sorter.push(((key, val), time, diff), &|x| (x.0).0.hashed());
+					}
+					else {
+						if self.buffer.len() == (1 << 10) {
+							let empty = self.empty();
+							self.buffers.push(replace(&mut self.buffer, empty));
+						}
+						// frontier.insert(time.clone());
+						self.buffer.push(((key, val), time, diff));
+					}        			
+	    		}
+	    		self.stash.push(buffer);
+	    	}
+	    	replace(&mut self.stash, Vec::new());
+	    	// self.sorter.recycle(replace(&mut self.stash, Vec::new()));
+
+			// 2. Finish up sorting, then drain the contents into `builder`, consolidating as we go.
+			let mut builder = LayerBuilder::new();
+			let mut sorted = self.sorter.finish(&|x| (x.0).0.hashed());
+			let mut current_hash = 0;
+			for buffer in sorted.iter_mut() {
+				for ((key, val), time, diff) in buffer.drain(..) {
+	        		if key.hashed().as_u64() != current_hash {
+	        			current_hash = key.hashed().as_u64();
+						consolidate(&mut self.stage, 0);
+						for ((key, val, time), diff) in self.stage.drain(..) {
+							builder.push((key, val, time, diff));
+						}
+	        		}
+	        		self.stage.push(((key, val, time), diff));				
+				}
+			}
+			// self.sorter.recycle(sorted);
+			consolidate(&mut self.stage, 0);
+			for ((key, val, time), diff) in self.stage.drain(..) {
+				builder.push((key, val, time, diff));
+			}
+
+			// 3. Return the finished layer with its bounds.
+			builder.done(lower, upper)
+		}
+		else {
+			let mut stash = self.empty();
+
+			for ((key, val), time, diff) in self.buffer.drain(..) {
+				if lower.iter().any(|t| t.le(&time)) && !upper.iter().any(|t| t.le(&time)) {
+					self.stage.push(((key, val, time), diff));
+				}
+				else {	
+					stash.push(((key, val), time, diff));
+				}
+			}
+
+			self.stash.push(replace(&mut self.buffer, stash));
+
+			consolidate(&mut self.stage, 0);
+			let mut builder = LayerBuilder::new();
+			for ((key, val, time), diff) in self.stage.drain(..) {
+				builder.push((key, val, time, diff));
+			}
+
+			builder.done(lower, upper)
+		}
+	}
+
+	fn frontier(&mut self) -> &[Time] {
+
+		self.frontier = Antichain::new();
+
 		for buffer in &self.buffers {
-			count += buffer.len();
+			for &(_, ref time, _) in buffer {
+				self.frontier.insert(time.clone());
+			}
+		}
+		for &(_, ref time, _) in &self.buffer {
+			self.frontier.insert(time.clone());
 		}
 
-		let mut builder = <RHHBuilder<Key, Val, Time> as TupleBuilder>::with_capacity(count);
-
-        // sort things, radix if many, `sort` if few.
-        if self.buffers.len() > 0 {
-        	if self.buffer.len() > 0 {
-				self.buffers.push(::std::mem::replace(&mut self.buffer, Vec::new()));
-        	}
-
-        	let mut sorter = ::timely_sort::LSBRadixSorter::new();
-        	sorter.sort(&mut self.buffers, &|x| (x.0).0.hashed());
-
-        	let mut current_hash = 0;
-        	for ((key, val), diff) in self.buffers.drain(..).flat_map(|batch| batch.into_iter()) {
-        		if key.hashed().as_u64() != current_hash {
-        			current_hash = key.hashed().as_u64();
-					consolidate(&mut self.buffer, 0);
-					for ((key, val),diff) in self.buffer.drain(..) {
-						builder.push_tuple((key, (val, (self.time.clone(), diff))));
-					}
-        		}
-        		self.buffer.push(((key, val), diff));
-        	}
-			consolidate(&mut self.buffer, 0);
-			for ((key, val),diff) in self.buffer.drain(..) {
-				builder.push_tuple((key, (val, (self.time.clone(), diff))));
-			}
-        }
-        else {
-        	consolidate(&mut self.buffer, 0);
-			for ((key, val),diff) in self.buffer.drain(..) {
-				builder.push_tuple((key, (val, (self.time.clone(), diff))));
-			}
-        }
-
-		let layer = builder.done();
-
-		Rc::new(Layer {
-			layer: layer,
-			desc: Description::new(lower, upper, lower)
-		})
+		self.frontier.elements()
 	}
 }
 
 
 /// A builder for creating layers from unsorted update tuples.
-pub struct OrdBuilder<Key: HashOrdered, Val: Ord, Time: Ord> {
+pub struct LayerBuilder<Key: HashOrdered, Val: Ord, Time: Ord> {
 	builder: RHHBuilder<Key, Val, Time>,
 }
 
-impl<Key, Val, Time> Builder<Key, Val, Time, Rc<Layer<Key, Val, Time>>> for OrdBuilder<Key, Val, Time> 
+impl<Key, Val, Time> Builder<Key, Val, Time, Rc<Layer<Key, Val, Time>>> for LayerBuilder<Key, Val, Time> 
 where Key: Clone+Default+HashOrdered, Val: Ord+Clone, Time: Lattice+Ord+Clone+Default {
 
-	fn new() -> Self { OrdBuilder { builder: RHHBuilder::new() } }
+	fn new() -> Self { LayerBuilder { builder: RHHBuilder::new() } }
 	fn push(&mut self, (key, val, time, diff): (Key, Val, Time, isize)) {
 		self.builder.push_tuple((key, (val, (time, diff))));
 	}

@@ -11,7 +11,7 @@ fn group() {
 
     let data = timely::example(|scope| {
 
-        let col1 = vec![((0,0),1),((1,2),1),((1,1),1)]
+        let col1 = vec![((0,0), Default::default(), 1),((1,2),Default::default(), 1),((1,1),Default::default(), 1)]
                         .into_iter()
                         .to_stream(scope)
                         .as_collection();
@@ -21,5 +21,5 @@ fn group() {
 
     let extracted = data.extract();
     assert_eq!(extracted.len(), 1);
-    assert_eq!(extracted[0].1, vec![((0,0),1), ((1,1),2)]);
+    assert_eq!(extracted[0].1, vec![((0,0),Default::default(), 1), ((1,1),Default::default(), 2)]);
 }

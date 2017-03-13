@@ -69,7 +69,7 @@ fn main() {
             }
 
             let probe = query_topics.consolidate_by(|&(_,q,_)| q)
-                                    .inspect(|&((l,q,t),w)| println!("\t(query: {},\tlabel: {},\ttopic:{}\t(weight: {})", q, l, t, w))
+                                    .inspect(|&((l,q,t),_,w)| println!("\t(query: {},\tlabel: {},\ttopic:{}\t(weight: {})", q, l, t, w))
                                     .probe();
 
             (tweet_input, query_input, probe.0)
@@ -85,14 +85,16 @@ fn main() {
 
         println!("performing AppealingDataflow with {} users, {} topics:", users, topics);
 
+        let &time = tweets.time();
         for _ in 0 .. users/computation.peers() {
             tweets.send(((tweet_rng1.gen_range(0, users), 
                           tweet_rng1.gen_range(0, users),
-                          tweet_rng1.gen_range(0, topics)),1));
+                          tweet_rng1.gen_range(0, topics)), time, 1));
         } 
 
+        let &time = queries.time();
         if computation.index() == 0 {
-            queries.send((query_rng1.gen_range(0, users),1));
+            queries.send((query_rng1.gen_range(0, users), time, 1));
         }
 
         println!("loaded; elapsed: {:?}", timer.elapsed());
@@ -106,6 +108,9 @@ fn main() {
         if batch > 0 {
             let mut changes = Vec::new();
             for wave in 0.. {
+
+                let &time = tweets.time();
+
                 let mut my_batch = batch / computation.peers();
                 if computation.index() < (batch % computation.peers()) { 
                     my_batch += 1; 
@@ -114,10 +119,10 @@ fn main() {
                 for _ in 0..my_batch {
                     changes.push(((tweet_rng1.gen_range(0, users), 
                                    tweet_rng1.gen_range(0, users),
-                                   tweet_rng1.gen_range(0, topics)), 1));
+                                   tweet_rng1.gen_range(0, topics)), time, 1));
                     changes.push(((tweet_rng2.gen_range(0, users), 
                                    tweet_rng2.gen_range(0, users),
-                                   tweet_rng2.gen_range(0, topics)),-1));
+                                   tweet_rng2.gen_range(0, topics)), time,-1));
                 }
 
 
@@ -127,8 +132,9 @@ fn main() {
                     tweets.send(change);
                 }
                 if computation.index() == 0 {
-                    queries.send((query_rng1.gen_range(0, users), 1));
-                    queries.send((query_rng2.gen_range(0, users),-1));
+                    let &time = queries.time();
+                    queries.send((query_rng1.gen_range(0, users), time, 1));
+                    queries.send((query_rng2.gen_range(0, users), time,-1));
                 }
 
                 tweets.advance_to(round + 1);
@@ -161,7 +167,7 @@ fn connected_components<G: Scope>(edges: &Collection<G, Edge>) -> Collection<G, 
     nodes.filter(|_| false)
          .iterate(|inner| {
              let edges = edges.enter(&inner.scope());
-             let nodes = nodes.enter_at(&inner.scope(), |r| 256 * (64 - (r.0).0.leading_zeros() as u64));
+             let nodes = nodes.enter_at(&inner.scope(), |r| 256 * (64 - r.0.leading_zeros() as u64));
 
             inner.join_map(&edges, |_k,l,d| (*d,*l))
                  .concat(&nodes)

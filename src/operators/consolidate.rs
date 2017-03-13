@@ -20,14 +20,13 @@
 
 use std::fmt::Debug;
 
-use linear_map::LinearMap;
-
 use timely::dataflow::*;
 use timely::dataflow::operators::*;
 use timely::dataflow::channels::pact::Exchange;
 use timely_sort::Unsigned;
 
 use ::{Collection, Data, Delta, Hashable};
+use operators::group::Group;
 
 /// An extension method for consolidating weighted streams.
 pub trait Consolidate<D: Data> {
@@ -65,34 +64,30 @@ pub trait Consolidate<D: Data> {
     fn consolidate_by<U: Unsigned, F: Fn(&D)->U+'static>(&self, part: F) -> Self;
 }
 
-impl<G: Scope, D: Data+Debug> Consolidate<D> for Collection<G, D> {
+impl<G: Scope, D> Consolidate<D> for Collection<G, D>
+where
+    D: Data+Debug+Hashable+Default,
+    G::Timestamp: ::lattice::Lattice+Ord,
+ {
     fn consolidate(&self) -> Self where D: Hashable {
        self.consolidate_by(|x| x.hashed())
     }
 
     fn consolidate_by<U: Unsigned, F: Fn(&D)->U+'static>(&self, part: F) -> Self {
-        let mut inputs = LinearMap::new();    // LinearMap<G::Timestamp, Vec<(D, i32)>>
 
-        let exch = Exchange::new(move |&(ref x,_)| part(x).as_u64());
-        Collection::new(self.inner.unary_notify(exch, "Consolidate", vec![], move |input, output, notificator| {
+        // let mut buffer = Vec::new();
+        // let mut capabilities = Vec::new();
 
-            // 1. push each incoming record into a batch compactor.
-            input.for_each(|index, data| {
-                inputs.entry(index.time())
-                      .or_insert(BatchCompact::new())
-                      .extend(data.drain(..));
+        self.map(|x| (x,()))
+            .group(|_,s,t| t.push(((), s[0].1)))
+            .map(|(x,_)| x)
 
-                notificator.notify_at(index);
-            });
+        // let exch = Exchange::new(move |&(ref x,_,_): &(D,G::Timestamp,isize)| part(x).as_u64());
+        // Collection::new(self.inner.unary_notify(exch, "Consolidate", vec![], move |_input, _output, _notificator| {
 
-            // 2. go through each time of interest that has reached completion
-            notificator.for_each(|index, _count, _notificator| {
-                if let Some(batch) = inputs.remove(&index) {
+        //     unimplemented!();
 
-                    output.session(&index).give_iterator(batch.done().into_iter());
-                }
-            });
-        }))
+        // }))
     }
 }
 

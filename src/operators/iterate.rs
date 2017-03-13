@@ -59,6 +59,8 @@
 use std::fmt::Debug;
 use std::ops::Deref;
 
+use timely::progress::nested::product::Product;
+
 use timely::dataflow::*;
 use timely::dataflow::scopes::Child;
 use timely::dataflow::operators::*;
@@ -103,7 +105,7 @@ impl<G: Scope, D: Ord+Data+Debug> Iterate<G, D> for Collection<G, D> {
 pub struct Variable<'a, G: Scope, D: Data>
 where G::Timestamp: Lattice {
     collection: Collection<Child<'a, G, u64>, D>,
-    feedback: Handle<G::Timestamp, u64,(D, Delta)>,
+    feedback: Handle<G::Timestamp, u64,(D, Product<G::Timestamp, u64>, Delta)>,
     source: Collection<Child<'a, G, u64>, D>,
 }
 
@@ -119,6 +121,7 @@ impl<'a, G: Scope, D: Data> Variable<'a, G, D> where G::Timestamp: Lattice {
         self.source.negate()
                    .concat(result)
                    .inner
+                   .map(|(x,t,d)| (x, Product::new(t.outer, t.inner+1), d))
                    .connect_loop(self.feedback);
 
         self.collection

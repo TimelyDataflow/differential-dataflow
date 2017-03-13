@@ -1,6 +1,7 @@
 extern crate timely;
 extern crate differential_dataflow;
 
+use timely::progress::nested::product::Product;
 use timely::dataflow::*;
 use timely::dataflow::scopes::Child;
 use timely::dataflow::operators::*;
@@ -17,7 +18,7 @@ use differential_dataflow::lattice::Lattice;
 /// addition of collections, and a final `distinct` operator applied before connecting the definition.
 pub struct Variable<'a, G: Scope, D: Default+Data+Hashable>
 where G::Timestamp: Lattice+Ord {
-    feedback: Option<Handle<G::Timestamp, u64,(D, isize)>>,
+    feedback: Option<Handle<G::Timestamp, u64,(D, Product<G::Timestamp, u64>, isize)>>,
     current: Collection<Child<'a, G, u64>, D>,
     cycle: Collection<Child<'a, G, u64>, D>,
 }
@@ -63,12 +64,12 @@ fn main() {
         root.scoped::<u64,_,_>(move |outer| {
 
             // inputs for base facts; currently not used because no data on hand.
-            let (_cin, c) = outer.new_input::<((u32,u32,u32),isize)>(); let c = c.as_collection();
-            let (_pin, p) = outer.new_input::<((u32,u32),isize)>(); let p = p.as_collection();
-            let (_qin, q) = outer.new_input::<((u32,u32,u32),isize)>(); let q = q.as_collection();
-            let (_rin, r) = outer.new_input::<((u32,u32,u32),isize)>(); let r = r.as_collection();
-            let (_sin, s) = outer.new_input::<((u32,u32),isize)>(); let s = s.as_collection();
-            let (_uin, u) = outer.new_input::<((u32,u32,u32),isize)>(); let u = u.as_collection();
+            let (_cin, c) = outer.new_input::<((u32,u32,u32),_,isize)>(); let c = c.as_collection();
+            let (_pin, p) = outer.new_input::<((u32,u32),_,isize)>(); let p = p.as_collection();
+            let (_qin, q) = outer.new_input::<((u32,u32,u32),_,isize)>(); let q = q.as_collection();
+            let (_rin, r) = outer.new_input::<((u32,u32,u32),_,isize)>(); let r = r.as_collection();
+            let (_sin, s) = outer.new_input::<((u32,u32),_,isize)>(); let s = s.as_collection();
+            let (_uin, u) = outer.new_input::<((u32,u32,u32),_,isize)>(); let u = u.as_collection();
 
             // construct iterative derivation scope
             let (_p, _q) = outer.scoped::<u64,_,_>(|inner| {

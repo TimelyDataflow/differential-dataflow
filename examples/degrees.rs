@@ -67,9 +67,10 @@ fn main() {
         let mut rng2: StdRng = SeedableRng::from_seed(seed);    // rng for edge additions
 
         // load up graph dataz
+        let &time = input.time();
         for edge in 0..edges {
         	if edge % peers == index {
-        		input.send(((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), 1));
+        		input.send(((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), time, 1));
         	}
 
         	// move the data along a bit
@@ -93,9 +94,10 @@ fn main() {
 		if batch > 0 {
 
 			for edge in 0usize .. {
+				let &time = input.time();
 				if edge % peers == index {
-	        		input.send(((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), 1));
-	        		input.send(((rng2.gen_range(0, nodes), rng2.gen_range(0, nodes)),-1));
+	        		input.send(((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), time, 1));
+	        		input.send(((rng2.gen_range(0, nodes), rng2.gen_range(0, nodes)), time,-1));
 				}
 
 	        	if edge % batch == (batch - 1) {

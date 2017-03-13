@@ -77,9 +77,10 @@ fn main() {
             rng1.gen::<f64>();
             rng2.gen::<f64>();
 
+            let &time = input.time();
             for index in 0..edges {
                 let edge = (names[rng1.gen_range(0, nodes) as usize], names[rng1.gen_range(0, nodes) as usize]);
-                input.send((edge, 1));
+                input.send((edge, time, 1));
                 if (index % (1 << 12)) == 0 {
                     computation.step();
                 }
@@ -92,9 +93,10 @@ fn main() {
             let mut changes = Vec::with_capacity(2 * batch);
             for _ in 0 .. {
                 if computation.index() == 0 {
+                    let &time = input.time();
                     for _ in 0 .. batch {
-                        changes.push(((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), 1));
-                        changes.push(((rng2.gen_range(0, nodes), rng2.gen_range(0, nodes)),-1));
+                        changes.push(((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), time, 1));
+                        changes.push(((rng2.gen_range(0, nodes), rng2.gen_range(0, nodes)), time,-1));
                     }
                 }
 
@@ -181,7 +183,7 @@ where G::Timestamp: Lattice+Ord+Hash {
     edges.filter(|_| false)
          .iterate(|inner| {
              let edges = edges.enter(&inner.scope());
-             let nodes = nodes.enter_at(&inner.scope(), |r| 256 * (64 - ((r.0).0 as u64).leading_zeros() as u64));
+             let nodes = nodes.enter_at(&inner.scope(), |r| 256 * (64 - (r.0 as u64).leading_zeros() as u64));
 
              inner.join_map(&edges, |_k,l,d| (*d,*l))
                   .concat(&nodes)

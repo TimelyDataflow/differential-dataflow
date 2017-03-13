@@ -201,6 +201,7 @@ where
 	// rewinding methods
 	fn rewind_keys(&mut self) { 
 		let len = self.cursors.len();
+		self.valid_keys = len;
 		for cursor in &mut self.cursors[.. len] {
 			cursor.rewind_keys();
 		}
@@ -208,6 +209,7 @@ where
 	}
 	fn rewind_vals(&mut self) { 
 		let len = self.equiv_keys;
+		self.valid_vals = len;
 		for cursor in &mut self.cursors[.. len] {
 			cursor.rewind_vals();
 		}
