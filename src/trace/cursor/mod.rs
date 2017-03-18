@@ -10,7 +10,7 @@ pub mod cursor_list;
 // pub mod cursor_pair;
 
 /// A cursor for navigating ordered `(key, val, time, diff)` updates.
-pub trait Cursor<K, V, T> {
+pub trait Cursor<K, V, T, R> {
 	
 	/// Indicates if the current key is valid.
 	///
@@ -26,7 +26,7 @@ pub trait Cursor<K, V, T> {
 	/// A reference to the current value. Asserts if invalid.
 	fn val(&self) -> &V;
 	/// Applies `logic` to each pair of time and difference.
-	fn map_times<L: FnMut(&T, isize)>(&mut self, logic: L);
+	fn map_times<L: FnMut(&T, R)>(&mut self, logic: L);
 
 	/// Advances the cursor to the next key. Indicates if the key is valid.
 	fn step_key(&mut self);

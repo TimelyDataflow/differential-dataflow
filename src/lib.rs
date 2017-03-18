@@ -105,11 +105,9 @@
 
 use std::fmt::Debug;
 
-/// A change in count.
-pub type Delta = isize;
-
 pub use collection::{Collection, AsCollection};
 pub use hashable::Hashable;
+pub use ring::Ring;
 
 /// A composite trait for data types usable in differential dataflow.
 ///
@@ -130,8 +128,6 @@ extern crate itertools;
 extern crate linear_map;
 extern crate timely_sort;
 extern crate timely_communication;
-
-#[macro_use]
 extern crate abomonation;
 
 pub mod hashable;
@@ -139,5 +135,6 @@ pub mod operators;
 pub mod lattice;
 pub mod trace;
 pub mod input;
+pub mod ring;
 mod collection;
 

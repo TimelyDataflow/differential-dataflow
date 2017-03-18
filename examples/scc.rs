@@ -47,7 +47,7 @@ fn main() {
 
             if inspect {
                 let mut counter = 0;
-                edges = edges.consolidate_by(|x| x.0)
+                edges = edges.consolidate()
                              .inspect_batch(move |t, xs| {
                                  counter += xs.len();
                                  println!("{:?}:\tobserved at {:?}: {:?} changes", timer.elapsed(), t, counter)
@@ -167,7 +167,7 @@ fn _trim_edges<G: Scope>(cycle: &Collection<G, Edge>, edges: &Collection<G, Edge
     -> Collection<G, Edge> where G::Timestamp: Lattice+Ord+Hash {
 
     let nodes = edges.map_in_place(|x| x.0 = x.1)
-                     .consolidate_by(|&x| x.0);
+                     .consolidate();
 
     let labels = _reachability(&cycle, &nodes);
 

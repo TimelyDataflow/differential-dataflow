@@ -12,6 +12,7 @@ pub mod description;
 pub mod implementations;
 pub mod layers;
 
+use ::Ring;
 pub use self::cursor::Cursor;
 
 // 	The traces and batch and cursors want the flexibility to appear as if they manage certain types of keys and 
@@ -38,12 +39,12 @@ pub use self::cursor::Cursor;
 ///
 /// The trace must be constructable from, and navigable by the `Key`, `Val`, `Time` types, but does not need
 /// to return them.
-pub trait Trace<Key, Val, Time> {
+pub trait Trace<Key, Val, Time, R> {
 
 	/// The type of an immutable collection of updates.
-	type Batch: Batch<Key, Val, Time>+Clone+'static;
+	type Batch: Batch<Key, Val, Time, R>+Clone+'static;
 	/// The type used to enumerate the collections contents.
-	type Cursor: Cursor<Key, Val, Time>;
+	type Cursor: Cursor<Key, Val, Time, R>;
 
 	/// Allocates a new empty trace.
 	fn new(default: Time) -> Self;
@@ -63,13 +64,13 @@ pub trait Trace<Key, Val, Time> {
 }
 
 /// An immutable collection of updates.
-pub trait Batch<K, V, T> where Self: ::std::marker::Sized {
+pub trait Batch<K, V, T, R> where Self: ::std::marker::Sized {
 	/// A type used to assemble batches from disordered updates.
-	type Batcher: Batcher<K, V, T, Self>;
+	type Batcher: Batcher<K, V, T, R, Self>;
 	/// A type used to assemble batches from ordered update sequences.
-	type Builder: Builder<K, V, T, Self>;
+	type Builder: Builder<K, V, T, R, Self>;
 	/// The type used to enumerate the batch's contents.
-	type Cursor: Cursor<K, V, T>;
+	type Cursor: Cursor<K, V, T, R>;
 	/// Acquires a cursor to the batch's contents.
 	fn cursor(&self) -> Self::Cursor;
 	/// The number of updates in the batch.
@@ -77,13 +78,13 @@ pub trait Batch<K, V, T> where Self: ::std::marker::Sized {
 }
 
 /// Functionality for collecting and batching updates.
-pub trait Batcher<K, V, T, Output: Batch<K, V, T>> {
+pub trait Batcher<K, V, T, R, Output: Batch<K, V, T, R>> {
 	/// Allocates a new empty batcher.
 	fn new() -> Self; 
 	/// Adds an element to the batcher.
-	fn push(&mut self, element: (K, V, T, isize));
+	fn push(&mut self, element: (K, V, T, R));
 	/// Adds an unordered sequence of elements to the batcher.
-	fn extend<I: Iterator<Item=(K,V,T,isize)>>(&mut self, iter: I) {
+	fn extend<I: Iterator<Item=(K,V,T,R)>>(&mut self, iter: I) {
 		for item in iter {
 			self.push(item);
 		}
@@ -95,13 +96,13 @@ pub trait Batcher<K, V, T, Output: Batch<K, V, T>> {
 }
 
 /// Functionality for building batches from ordered update sequences.
-pub trait Builder<K, V, T, Output: Batch<K, V, T>> {
+pub trait Builder<K, V, T, R, Output: Batch<K, V, T, R>> {
 	/// Allocates an empty builder.
 	fn new() -> Self;
 	/// Adds an element to the batch.
-	fn push(&mut self, element: (K, V, T, isize));
+	fn push(&mut self, element: (K, V, T, R));
 	/// Adds an ordered sequence of elements to the batch.
-	fn extend<I: Iterator<Item=(K,V,T,isize)>>(&mut self, iter: I) {
+	fn extend<I: Iterator<Item=(K,V,T,R)>>(&mut self, iter: I) {
 		for item in iter { self.push(item); }
 	}
 	/// Completes building and returns the batch.
@@ -109,23 +110,23 @@ pub trait Builder<K, V, T, Output: Batch<K, V, T>> {
 }
 
 /// Scans `vec[off..]` and consolidates differences of adjacent equivalent elements.
-pub fn consolidate<T: Ord+Clone>(vec: &mut Vec<(T, isize)>, off: usize) {
+pub fn consolidate<T: Ord+Clone, R: Ring>(vec: &mut Vec<(T, R)>, off: usize) {
 	consolidate_by(vec, off, |x,y| x.cmp(&y));
 }
 
 
 /// Scans `vec[off..]` and consolidates differences of adjacent equivalent elements.
-pub fn consolidate_by<T: Eq+Clone, L: Fn(&T, &T)->::std::cmp::Ordering>(vec: &mut Vec<(T, isize)>, off: usize, cmp: L) {
+pub fn consolidate_by<T: Eq+Clone, L: Fn(&T, &T)->::std::cmp::Ordering, R: Ring>(vec: &mut Vec<(T, R)>, off: usize, cmp: L) {
 	vec[off..].sort_by(|x,y| cmp(&x.0, &y.0));
 	for index in (off + 1) .. vec.len() {
 		if vec[index].0 == vec[index - 1].0 {
-			vec[index].1 += vec[index - 1].1;
-			vec[index - 1].1 = 0;
+			vec[index].1 = vec[index].1 + vec[index - 1].1;
+			vec[index - 1].1 = R::zero();
 		}
 	}
 	let mut cursor = off;
 	for index in off .. vec.len() {
-		if vec[index].1 != 0 {
+		if !vec[index].1.is_zero() {
 			vec[cursor] = vec[index].clone();
 			cursor += 1;
 		}

@@ -10,6 +10,8 @@ use std::mem::replace;
 use timely::progress::frontier::Antichain;
 use timely_sort::{Unsigned, LSBRadixSorter};
 
+
+use ::Ring;
 use hashable::HashOrdered;
 
 use trace::layers::{Trie, TupleBuilder};
@@ -24,7 +26,7 @@ use trace::consolidate;
 use trace::description::Description;
 use trace::cursor::cursor_list::CursorList;
 
-type RHHBuilder<Key, Time> = HashedBuilder<Key, UnorderedBuilder<(Time, isize)>>;
+type RHHBuilder<Key, Time, R> = HashedBuilder<Key, UnorderedBuilder<(Time, R)>>;
 
 /// An append-only collection of update tuples.
 ///
@@ -32,21 +34,22 @@ type RHHBuilder<Key, Time> = HashedBuilder<Key, UnorderedBuilder<(Time, isize)>>
 /// two have similar sizes. In this way, it allows the addition of more tuples, which may then be merged with
 /// other immutable collections. 
 #[derive(Debug)]
-pub struct Spine<Key: HashOrdered, Time: Lattice+Ord+Debug> {
+pub struct Spine<Key: HashOrdered, Time: Lattice+Ord+Debug, R: Ring> {
 	frontier: Vec<Time>,					// Times after which the times in the traces must be distinguishable.
-	layers: Vec<Rc<Layer<Key, Time>>>	// Several possibly shared collections of updates.
+	layers: Vec<Rc<Layer<Key, Time, R>>>	// Several possibly shared collections of updates.
 }
 
 // A trace implementation for any key type that can be borrowed from or converted into `Key`.
 // TODO: Almost all this implementation seems to be generic with respect to the trace and layer types.
-impl<Key, Time> Trace<Key, (), Time> for Spine<Key, Time> 
+impl<Key, Time, R> Trace<Key, (), Time, R> for Spine<Key, Time, R> 
 where 
 	Key: Clone+Default+HashOrdered+'static,
 	Time: Lattice+Ord+Clone+Default+Debug+'static,
+	R: Ring,
 {
 
-	type Batch = Rc<Layer<Key, Time>>;
-	type Cursor = CursorList<Key, (), Time, LayerCursor<Key, Time>>;
+	type Batch = Rc<Layer<Key, Time, R>>;
+	type Cursor = CursorList<Key, (), Time, R, LayerCursor<Key, Time, R>>;
 
 	fn new(default: Time) -> Self {
 		Spine { 
@@ -78,7 +81,7 @@ where
 
 				// if we just merged the last layer, `advance_by` it.
 				if self.layers.len() == 0 {
-					result = Rc::new(Layer::<Key, Time>::advance_by(&result, &self.frontier[..]));
+					result = Rc::new(Layer::<Key, Time, R>::advance_by(&result, &self.frontier[..]));
 				}
 
 				if result.len() > 0 {
@@ -105,24 +108,24 @@ where
 
 /// An immutable collection of update tuples, from a contiguous interval of logical times.
 #[derive(Debug)]
-pub struct Layer<Key: HashOrdered, Time: Lattice+Ord> {
+pub struct Layer<Key: HashOrdered, Time: Lattice+Ord, R: Ring> {
 	/// Where all the dataz is.
-	pub layer: HashedLayer<Key, UnorderedLayer<(Time, isize)>>,
+	pub layer: HashedLayer<Key, UnorderedLayer<(Time, R)>>,
 	/// Description of the update times this layer represents.
 	pub desc: Description<Time>,
 }
 
-impl<Key: Clone+Default+HashOrdered, Time: Lattice+Ord+Clone+Default> Batch<Key, (), Time> for Rc<Layer<Key, Time>> {
-	type Batcher = LayerBatcher<Key, Time>;
-	type Builder = LayerBuilder<Key, Time>;
-	type Cursor = LayerCursor<Key, Time>;
+impl<Key: Clone+Default+HashOrdered, Time: Lattice+Ord+Clone+Default, R: Ring> Batch<Key, (), Time, R> for Rc<Layer<Key, Time, R>> {
+	type Batcher = LayerBatcher<Key, Time, R>;
+	type Builder = LayerBuilder<Key, Time, R>;
+	type Cursor = LayerCursor<Key, Time, R>;
 	fn cursor(&self) -> Self::Cursor { 
 		LayerCursor { empty: (), valid: true, cursor: self.layer.cursor() } 
 	}
 	fn len(&self) -> usize { self.layer.tuples() }
 }
 
-impl<Key: Clone+Default+HashOrdered, Time: Lattice+Ord+Clone+Default> Layer<Key, Time> {
+impl<Key: Clone+Default+HashOrdered, Time: Lattice+Ord+Clone+Default, R: Ring> Layer<Key, Time, R> {
 
 	/// Conducts a full merge, right away. Times not advanced.
 	pub fn merge(&self, other: &Self) -> Self {
@@ -143,7 +146,7 @@ impl<Key: Clone+Default+HashOrdered, Time: Lattice+Ord+Clone+Default> Layer<Key,
 		// structure, rather than having to infer them from tuples.
 		// TODO: We should understand whether in-place mutation is appropriate, or too gross. At the moment,
 		// this could be a general method defined on any implementor of `trace::Cursor`.
-		let mut builder = <RHHBuilder<Key, Time> as TupleBuilder>::with_capacity(layer.len());
+		let mut builder = <RHHBuilder<Key, Time, R> as TupleBuilder>::with_capacity(layer.len());
 
 		if layer.len() > 0 {
 			let mut times = Vec::new();
@@ -172,17 +175,17 @@ impl<Key: Clone+Default+HashOrdered, Time: Lattice+Ord+Clone+Default> Layer<Key,
 
 /// A cursor for navigating a single layer.
 #[derive(Debug)]
-pub struct LayerCursor<Key: Clone+HashOrdered, Time: Lattice+Ord+Clone> {
+pub struct LayerCursor<Key: Clone+HashOrdered, Time: Lattice+Ord+Clone, R: Copy> {
 	valid: bool,
 	empty: (),
-	cursor: HashedCursor<Key, UnorderedCursor<(Time, isize)>>,
+	cursor: HashedCursor<Key, UnorderedCursor<(Time, R)>>,
 }
 
 
-impl<Key: Clone+HashOrdered, Time: Lattice+Ord+Clone> Cursor<Key, (), Time> for LayerCursor<Key, Time> {
+impl<Key: Clone+HashOrdered, Time: Lattice+Ord+Clone, R: Copy> Cursor<Key, (), Time, R> for LayerCursor<Key, Time, R> {
 	fn key(&self) -> &Key { &self.cursor.key() }
 	fn val(&self) -> &() { &self.empty }
-	fn map_times<L: FnMut(&Time, isize)>(&mut self, mut logic: L) {
+	fn map_times<L: FnMut(&Time, R)>(&mut self, mut logic: L) {
 		self.cursor.child.rewind();
 		while self.cursor.child.valid() {
 			logic(&self.cursor.child.key().0, self.cursor.child.key().1);
@@ -201,46 +204,107 @@ impl<Key: Clone+HashOrdered, Time: Lattice+Ord+Clone> Cursor<Key, (), Time> for 
 
 
 /// A builder for creating layers from unsorted update tuples.
-pub struct LayerBatcher<K, T: PartialOrd> {
+pub struct LayerBatcher<K, T: PartialOrd, R: Ring> {
 	// where we stash records we don't know what to do with yet.
-    buffer: Vec<(K, T, isize)>,
-    buffers: Vec<Vec<(K, T, isize)>>,
+    buffer: Vec<(K, T, R)>,
+    buffers: Vec<Vec<(K, T, R)>>,
 
-    sorter: LSBRadixSorter<(K, T, isize)>,
-    stash: Vec<Vec<(K, T, isize)>>,
-    stage: Vec<((K, T), isize)>,
+    sorted: usize,
+    sorter: LSBRadixSorter<(K, T, R)>,
+    stash: Vec<Vec<(K, T, R)>>,
+    stage: Vec<((K, T), R)>,
 
     /// lower bound of contained updates.
     frontier: Antichain<T>,
 }
 
-impl<Key, Time: PartialOrd> LayerBatcher<Key, Time> {
-	fn empty(&mut self) -> Vec<(Key, Time, isize)> {
+impl<Key, Time: PartialOrd, R: Ring> LayerBatcher<Key, Time, R>
+where Key: Clone+Default+HashOrdered, Time: Lattice+Ord+Clone+Default {
+	fn empty(&mut self) -> Vec<(Key, Time, R)> {
 		self.stash.pop().unwrap_or_else(|| Vec::with_capacity(1 << 10))
 	}
+
+	// Compacts the representation of data in self.buffer and self.buffers.
+	// This could, in principle, move data into a trace, because it is even more 
+	// compact in that form, and easier to merge as compared to re-sorting.
+	fn compact(&mut self) {
+
+		let mut buffers = ::std::mem::replace(&mut self.buffers, Vec::new());
+		self.sorter.sort(&mut buffers, &|x| x.0.hashed());
+
+		// set this so that we avoid re-tripping sorting.
+		self.sorted = self.buffers.len();
+
+		// consolidate the contents, writing them back to their buffers.
+		let mut current_hash = 0;
+		for mut buffer in buffers.drain(..) {
+			for (key, time, diff) in buffer.drain(..) {
+	    		if key.hashed().as_u64() != current_hash {
+	    			current_hash = key.hashed().as_u64();
+					consolidate(&mut self.stage, 0);
+					for ((key, time), diff) in self.stage.drain(..) {
+
+						// *we* know push doesn't use `self.stage`, but ...
+						self.buffer.push((key, time, diff));
+						if self.buffer.len() == (1 << 10) {
+							let empty = self.stash.pop().unwrap_or_else(|| Vec::with_capacity(1 << 10));
+							self.buffers.push(::std::mem::replace(&mut self.buffer, empty));
+						}
+
+					}
+	    		}
+	    		self.stage.push(((key, time), diff));				
+			}
+			self.stash.push(buffer)
+		}
+		consolidate(&mut self.stage, 0);
+		for ((key, time), diff) in self.stage.drain(..) {
+
+			// *we* know push doesn't use `self.stage`, but ...
+			self.buffer.push((key, time, diff));
+			if self.buffer.len() == (1 << 10) {
+				let empty = self.stash.pop().unwrap_or_else(|| Vec::with_capacity(1 << 10));
+				self.buffers.push(::std::mem::replace(&mut self.buffer, empty));
+			}
+
+		}
+
+		// update self.sorted to reflect compacted data.
+		self.sorted = self.buffers.len();
+		self.stash.clear();
+	}
+
 }
 
-impl<Key, Time> Batcher<Key, (), Time, Rc<Layer<Key, Time>>> for LayerBatcher<Key, Time> 
+impl<Key, Time, R: Ring> Batcher<Key, (), Time, R, Rc<Layer<Key, Time, R>>> for LayerBatcher<Key, Time, R> 
 where Key: Clone+Default+HashOrdered, Time: Lattice+Ord+Clone+Default {
 	fn new() -> Self { 
 		LayerBatcher { 
 			buffer: Vec::with_capacity(1 << 10), 
 			buffers: Vec::new(),
 			sorter: LSBRadixSorter::new(),
+			sorted: 0,
 			stash: Vec::new(),
 			stage: Vec::new(),
 			frontier: Antichain::new(),
 		} 
 	}
-	fn push(&mut self, (key, _, time, diff): (Key, (), Time, isize)) {
+
+	fn push(&mut self, (key, _, time, diff): (Key, (), Time, R)) {
 		self.buffer.push((key, time, diff));
 		if self.buffer.len() == (1 << 10) {
 			let empty = self.empty();
 			self.buffers.push(::std::mem::replace(&mut self.buffer, empty));
+
+			// if it has been a while since we have compacted, let's do so now.
+			if self.buffers.len() > ::std::cmp::max(2 * self.sorted, 1_000) {
+				self.compact();
+			}
 		}
 	}
+
 	// TODO: Consider sorting everything, which would allow cancelation of any updates.
-	fn seal(&mut self, lower: &[Time], upper: &[Time]) -> Rc<Layer<Key, Time>> {
+	fn seal(&mut self, lower: &[Time], upper: &[Time]) -> Rc<Layer<Key, Time, R>> {
 
 		// 1. Scan all of self.buffers and self.buffer to move appropriate updates to self.sorter.
     	if self.buffer.len() > 0 {
@@ -314,20 +378,20 @@ where Key: Clone+Default+HashOrdered, Time: Lattice+Ord+Clone+Default {
 }
 
 /// A builder for creating layers from unsorted update tuples.
-pub struct LayerBuilder<Key: HashOrdered, Time: Ord> {
-	builder: RHHBuilder<Key, Time>,
+pub struct LayerBuilder<Key: HashOrdered, Time: Ord, R: Ring> {
+	builder: RHHBuilder<Key, Time, R>,
 }
 
-impl<Key, Time> Builder<Key, (), Time, Rc<Layer<Key, Time>>> for LayerBuilder<Key, Time> 
-where Key: Clone+Default+HashOrdered, Time: Lattice+Ord+Clone+Default {
+impl<Key, Time, R> Builder<Key, (), Time, R, Rc<Layer<Key, Time, R>>> for LayerBuilder<Key, Time, R> 
+where Key: Clone+Default+HashOrdered, Time: Lattice+Ord+Clone+Default, R: Ring {
 
 	fn new() -> Self { LayerBuilder { builder: RHHBuilder::new() } }
-	fn push(&mut self, (key, _, time, diff): (Key, (), Time, isize)) {
+	fn push(&mut self, (key, _, time, diff): (Key, (), Time, R)) {
 		self.builder.push_tuple((key, (time, diff)));
 	}
 
 	#[inline(never)]
-	fn done(self, lower: &[Time], upper: &[Time]) -> Rc<Layer<Key, Time>> {
+	fn done(self, lower: &[Time], upper: &[Time]) -> Rc<Layer<Key, Time, R>> {
 		Rc::new(Layer {
 			layer: self.builder.done(),
 			desc: Description::new(lower, upper, lower)

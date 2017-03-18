@@ -62,7 +62,7 @@ where G::Timestamp: Lattice+Hash+Ord {
 
     // need some bogus initial values.
     let start = edges.map(|(x,_y)| (x,u32::max_value()))
-                     .consolidate_by(|x| x.0);
+                     .consolidate();
 
     // repeatedly apply color-picking logic.
     sequence(&start, &edges, |_node, vals| {
@@ -84,7 +84,7 @@ where G::Timestamp: Lattice+Hash+Ord {
 
     // need some bogus initial values.
     let start = edges.map(|(x,_y)| (x, x < 10))
-                     .consolidate_by(|x| x.0);
+                     .consolidate();
 
     // repeatedly apply color-picking logic.
     sequence(&start, &edges, |_node, vals| {

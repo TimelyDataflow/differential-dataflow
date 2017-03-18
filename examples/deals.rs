@@ -162,7 +162,7 @@ where G::Timestamp: Lattice+Hash+Ord {
                         let min = std::cmp::min(pair.0, pair.1);
                         *pair = (min, min);
                      })
-                     .consolidate_by(|x| x.0);
+                     .consolidate();
 
     // each edge should exist in both directions.
     let edges = edges.map_in_place(|x| mem::swap(&mut x.0, &mut x.1))

@@ -36,7 +36,7 @@ use timely_sort::Unsigned;
 
 use hashable::OrdWrapper;
 
-use ::{Data, Collection, AsCollection, Hashable};
+use ::{Data, Ring, Collection, AsCollection, Hashable};
 use lattice::Lattice;
 use trace::{Trace, Batch, Batcher, Cursor};
 // use trace::implementations::trie::Spine as OrdSpine;
@@ -64,14 +64,14 @@ impl<T> ::abomonation::Abomonation for BatchWrapper<T> {
 
 
 /// A wrapper around a trace which tracks the frontiers of all referees.
-pub struct TraceWrapper<K, V, T, Tr: Trace<K,V,T>> where T: Lattice+Ord+Clone+'static {
-    phantom: ::std::marker::PhantomData<(K, V)>,
+pub struct TraceWrapper<K, V, T, R, Tr: Trace<K,V,T,R>> where T: Lattice+Ord+Clone+'static {
+    phantom: ::std::marker::PhantomData<(K, V, R)>,
     frontiers: MutableAntichain<T>,
     /// The wrapped trace.
     pub trace: Tr,
 }
 
-impl<K,V,T,Tr: Trace<K,V,T>> TraceWrapper<K,V,T,Tr> where T: Lattice+Ord+Clone+'static {
+impl<K,V,T,R,Tr: Trace<K,V,T,R>> TraceWrapper<K,V,T,R,Tr> where T: Lattice+Ord+Clone+'static {
     /// Allocates a new trace wrapper.
     fn new(empty: Tr) -> Self {
         TraceWrapper {
@@ -94,13 +94,13 @@ impl<K,V,T,Tr: Trace<K,V,T>> TraceWrapper<K,V,T,Tr> where T: Lattice+Ord+Clone+'
 ///
 /// As long as the handle exists, the wrapped trace should continue to exist and will not advance its 
 /// timestamps past the frontier maintained by the handle.
-pub struct TraceHandle<K,V,T,Tr: Trace<K,V,T>> where T: Lattice+Ord+Clone+'static {
+pub struct TraceHandle<K,V,T,R,Tr: Trace<K,V,T,R>> where T: Lattice+Ord+Clone+'static {
     frontier: Vec<T>,
     /// Wrapped trace. Please be gentle when using.
-    pub wrapper: Rc<RefCell<TraceWrapper<K,V,T,Tr>>>,
+    pub wrapper: Rc<RefCell<TraceWrapper<K,V,T,R,Tr>>>,
 }
 
-impl<K,V,T,Tr: Trace<K,V,T>> TraceHandle<K,V,T,Tr> where T: Lattice+Ord+Clone+'static {
+impl<K,V,T,R,Tr: Trace<K,V,T,R>> TraceHandle<K,V,T,R,Tr> where T: Lattice+Ord+Clone+'static {
     /// Allocates a new handle from an existing wrapped wrapper.
     pub fn new(trace: Tr, frontier: &[T]) -> Self {
 
@@ -127,7 +127,7 @@ impl<K,V,T,Tr: Trace<K,V,T>> TraceHandle<K,V,T,Tr> where T: Lattice+Ord+Clone+'s
     }
 }
 
-impl<K, V, T: Lattice+Ord+Clone, Tr: Trace<K, V, T>> Clone for TraceHandle<K, V, T, Tr> {
+impl<K, V, T: Lattice+Ord+Clone, R, Tr: Trace<K, V, T, R>> Clone for TraceHandle<K, V, T, R, Tr> {
     fn clone(&self) -> Self {
         // increase ref counts for this frontier
         self.wrapper.borrow_mut().adjust_frontier(&[], &self.frontier[..]);
@@ -138,7 +138,7 @@ impl<K, V, T: Lattice+Ord+Clone, Tr: Trace<K, V, T>> Clone for TraceHandle<K, V,
     }
 }
 
-impl<K, V, T, Tr: Trace<K, V, T>> Drop for TraceHandle<K, V, T, Tr> 
+impl<K, V, T, R, Tr: Trace<K, V, T, R>> Drop for TraceHandle<K, V, T, R, Tr> 
     where T: Lattice+Ord+Clone+'static {
     fn drop(&mut self) {
         self.wrapper.borrow_mut().adjust_frontier(&self.frontier[..], &[]);
@@ -154,7 +154,7 @@ impl<K, V, T, Tr: Trace<K, V, T>> Drop for TraceHandle<K, V, T, Tr>
 /// in writing differential operators: each must pay enough care to signals
 /// from the `stream` field to know the subset of `trace` it has logically 
 /// received.
-pub struct Arranged<G: Scope, K, V, T: Trace<K, V, G::Timestamp>> where G::Timestamp: Lattice+Ord {
+pub struct Arranged<G: Scope, K, V, R, T: Trace<K, V, G::Timestamp, R>> where G::Timestamp: Lattice+Ord {
     /// A stream containing arranged updates.
     ///
     /// This stream contains the same batches of updates the trace itself accepts, so there should
@@ -162,15 +162,15 @@ pub struct Arranged<G: Scope, K, V, T: Trace<K, V, G::Timestamp>> where G::Times
     /// the batches in the trace, by key and by value.
     pub stream: Stream<G, BatchWrapper<T::Batch>>,
     /// A shared trace, updated by the `Arrange` operator and readable by others.
-    pub trace: TraceHandle<K, V, G::Timestamp, T>,
+    pub trace: TraceHandle<K, V, G::Timestamp, R, T>,
     // TODO : We might have an `Option<Collection<G, (K, V)>>` here, which `as_collection` sets and
     // returns when invoked, so as to not duplicate work with multiple calls to `as_collection`.
 }
 
-impl<G: Scope, K, V, T: Trace<K, V, G::Timestamp>> Arranged<G, K, V, T> where G::Timestamp: Lattice+Ord {
+impl<G: Scope, K, V, R, T: Trace<K, V, G::Timestamp, R>> Arranged<G, K, V, R, T> where G::Timestamp: Lattice+Ord {
     
     /// Allocates a new handle to the shared trace, with independent frontier tracking.
-    pub fn new_handle(&self) -> TraceHandle<K, V, G::Timestamp, T> {
+    pub fn new_handle(&self) -> TraceHandle<K, V, G::Timestamp, R, T> {
         self.trace.clone()
     }
 
@@ -179,8 +179,9 @@ impl<G: Scope, K, V, T: Trace<K, V, G::Timestamp>> Arranged<G, K, V, T> where G:
     /// The underlying `Stream<G, BatchWrapper<T::Batch>>` is a much more efficient way to access the data,
     /// and this method should only be used when the data need to be transformed or exchanged, rather than
     /// supplied as arguments to an operator using the same key-value structure.
-    pub fn as_collection<D: Data, L>(&self, logic: L) -> Collection<G, D>
+    pub fn as_collection<D: Data, L>(&self, logic: L) -> Collection<G, D, R>
         where
+            R: Ring,
             T::Batch: Clone+'static,
             K: Clone, V: Clone,
             L: Fn(&K, &V) -> D+'static,
@@ -197,7 +198,7 @@ impl<G: Scope, K, V, T: Trace<K, V, G::Timestamp>> Arranged<G, K, V, T> where G:
                         while cursor.val_valid() {
                             let val: V = cursor.val().clone();  // TODO: pass ref in map_times
                             cursor.map_times(|time, diff| {
-                                session.give((logic(&key, &val), time.clone(), diff));
+                                session.give((logic(&key, &val), time.clone(), diff.clone()));
                             });
                             cursor.step_val();
                         }
@@ -211,23 +212,23 @@ impl<G: Scope, K, V, T: Trace<K, V, G::Timestamp>> Arranged<G, K, V, T> where G:
 }
 
 /// Arranges something as `(Key,Val)` pairs according to a type `T` of trace.
-pub trait Arrange<G: Scope, K, V> where G::Timestamp: Lattice+Ord {
+pub trait Arrange<G: Scope, K, V, R: Ring> where G::Timestamp: Lattice+Ord {
     /// Arranges a stream of `(Key, Val)` updates by `Key`. Accepts an empty instance of the trace type.
     ///
     /// This operator arranges a stream of values into a shared trace, whose contents it maintains.
     /// This trace is current for all times completed by the output stream, which can be used to
     /// safely identify the stable times and values in the trace.
-    fn arrange<T, K2:'static, V2:'static, L>(&self, map: L, empty: T) -> Arranged<G, K2, V2, T> 
+    fn arrange<T, K2:'static, V2:'static, L>(&self, map: L, empty: T) -> Arranged<G, K2, V2, R, T> 
         where 
-            T: Trace<K2, V2, G::Timestamp>+'static,
+            T: Trace<K2, V2, G::Timestamp, R>+'static,
             L: Fn(K,V)->(K2,V2)+'static;
 }
 
-impl<G: Scope, K: Data+Hashable, V: Data> Arrange<G, K, V> for Collection<G, (K, V)> where G::Timestamp: Lattice+Ord {
+impl<G: Scope, K: Data+Hashable, V: Data, R: Ring> Arrange<G, K, V, R> for Collection<G, (K, V), R> where G::Timestamp: Lattice+Ord {
 
-    fn arrange<T, K2:'static, V2:'static, L>(&self, map: L, empty: T) -> Arranged<G, K2, V2, T> 
+    fn arrange<T, K2:'static, V2:'static, L>(&self, map: L, empty: T) -> Arranged<G, K2, V2, R, T> 
         where 
-            T: Trace<K2, V2, G::Timestamp>+'static,
+            T: Trace<K2, V2, G::Timestamp, R>+'static,
             L: Fn(K,V)->(K2,V2)+'static {
 
         // create a trace to share with downstream consumers.
@@ -235,24 +236,20 @@ impl<G: Scope, K: Data+Hashable, V: Data> Arrange<G, K, V> for Collection<G, (K,
         let source = Rc::downgrade(&handle.wrapper);
 
         // Where we will deposit received updates, and from which we extract batches.
-        let mut batcher = <T::Batch as Batch<K2,V2,G::Timestamp>>::Batcher::new();
+        let mut batcher = <T::Batch as Batch<K2,V2,G::Timestamp,R>>::Batcher::new();
 
         // Capabilities for the lower envelope of updates in `batcher`.
         let mut capabilities = Vec::<Capability<G::Timestamp>>::new();
 
         // fabricate a data-parallel operator using the `unary_notify` pattern.
-        let exchange = Exchange::new(move |update: &((K,V),G::Timestamp,isize)| (update.0).0.hashed().as_u64());
+        let exchange = Exchange::new(move |update: &((K,V),G::Timestamp,R)| (update.0).0.hashed().as_u64());
         let stream = self.inner.unary_notify(exchange, "Arrange", vec![], move |input, output, notificator| {
-
-            // println!("arrange: start");
 
             // As we receive data, we need to (i) stash the data and (ii) keep *enough* capabilities.
             // We don't have to keep all capabilities, but we need to be able to form output messages
             // when we realize that time intervals are complete.
 
             input.for_each(|cap, data| {
-
-                // println!("arrange recv");
 
                 // add the capability to our list of capabilities.
                 capabilities.retain(|c| !c.time().gt(&cap.time()));
@@ -262,7 +259,6 @@ impl<G: Scope, K: Data+Hashable, V: Data> Arrange<G, K, V> for Collection<G, (K,
 
                 // add the updates to our batcher.
                 for ((key, val), time, diff) in data.drain(..) {
-                    // println!("  - ({:?}, {:?}) : {:?}", key, val, diff);
                     let (key, val) = map(key, val);
                     batcher.push((key, val, time, diff));
                 }
@@ -348,7 +344,6 @@ impl<G: Scope, K: Data+Hashable, V: Data> Arrange<G, K, V> for Collection<G, (K,
                 }
                 capabilities = new_capabilities;
             }
-            // println!("arrange: done");
 
         });
 
@@ -361,19 +356,19 @@ impl<G: Scope, K: Data+Hashable, V: Data> Arrange<G, K, V> for Collection<G, (K,
 /// This arrangement requires `Key: Hashable`, and uses the `hashed()` method to place keys in a hashed
 /// map. This can result in many hash calls, and in some cases it may help to first transform `K` to the
 /// pair `(u64, K)` of hash value and key.
-pub trait ArrangeByKey<G: Scope, K: Data+Default+Hashable, V: Data> 
+pub trait ArrangeByKey<G: Scope, K: Data+Default+Hashable, V: Data, R: Ring> 
 where G::Timestamp: Lattice+Ord {
     /// Arranges a collection of `(Key, Val)` records by `Key`.
     ///
     /// This operator arranges a stream of values into a shared trace, whose contents it maintains.
     /// This trace is current for all times completed by the output stream, which can be used to
     /// safely identify the stable times and values in the trace.
-    fn arrange_by_key(&self) -> Arranged<G, OrdWrapper<K>, V, HashSpine<OrdWrapper<K>, V, G::Timestamp>>;
+    fn arrange_by_key(&self) -> Arranged<G, OrdWrapper<K>, V, R, HashSpine<OrdWrapper<K>, V, G::Timestamp, R>>;
 }
 
-impl<G: Scope, K: Data+Default+Hashable, V: Data> ArrangeByKey<G, K, V> for Collection<G, (K,V)>
+impl<G: Scope, K: Data+Default+Hashable, V: Data, R: Ring> ArrangeByKey<G, K, V, R> for Collection<G, (K,V), R>
 where G::Timestamp: Lattice+Ord  {        
-    fn arrange_by_key(&self) -> Arranged<G, OrdWrapper<K>, V, HashSpine<OrdWrapper<K>, V, G::Timestamp>> {
+    fn arrange_by_key(&self) -> Arranged<G, OrdWrapper<K>, V, R, HashSpine<OrdWrapper<K>, V, G::Timestamp, R>> {
         self.arrange(|k,v| (OrdWrapper {item:k},v), HashSpine::new(Default::default()))
     }
 }
@@ -383,20 +378,20 @@ where G::Timestamp: Lattice+Ord  {
 /// This arrangement requires `Key: Hashable`, and uses the `hashed()` method to place keys in a hashed
 /// map. This can result in many hash calls, and in some cases it may help to first transform `K` to the
 /// pair `(u64, K)` of hash value and key.
-pub trait ArrangeBySelf<G: Scope, K: Data+Default+Hashable> 
+pub trait ArrangeBySelf<G: Scope, K: Data+Default+Hashable, R: Ring> 
 where G::Timestamp: Lattice+Ord {
     /// Arranges a collection of `Key` records by `Key`.
     ///
     /// This operator arranges a collection of records into a shared trace, whose contents it maintains.
     /// This trace is current for all times complete in the output stream, which can be used to safely
     /// identify the stable times and values in the trace.
-    fn arrange_by_self(&self) -> Arranged<G, OrdWrapper<K>, (), KeyHashSpine<OrdWrapper<K>, G::Timestamp>>;
+    fn arrange_by_self(&self) -> Arranged<G, OrdWrapper<K>, (), R, KeyHashSpine<OrdWrapper<K>, G::Timestamp, R>>;
 }
 
 
-impl<G: Scope, K: Data+Default+Hashable> ArrangeBySelf<G, K> for Collection<G, K>
+impl<G: Scope, K: Data+Default+Hashable, R: Ring> ArrangeBySelf<G, K, R> for Collection<G, K, R>
 where G::Timestamp: Lattice+Ord {
-    fn arrange_by_self(&self) -> Arranged<G, OrdWrapper<K>, (), KeyHashSpine<OrdWrapper<K>, G::Timestamp>> {
+    fn arrange_by_self(&self) -> Arranged<G, OrdWrapper<K>, (), R, KeyHashSpine<OrdWrapper<K>, G::Timestamp, R>> {
         self.map(|k| (k,()))
             .arrange(|k,v| (OrdWrapper {item:k}, v), KeyHashSpine::new(Default::default()))
     }
