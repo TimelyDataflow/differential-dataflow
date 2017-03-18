@@ -10,6 +10,11 @@ use timely::dataflow::operators::*;
 use ::Ring;
 
 /// A mutable collection of values of type `D`
+///
+/// The collection is additionally parameterized by a type `R` implementing the `Ring` trait.
+/// This `R` defaults to `isize`, and most often can be thought of as "the change in count". 
+/// However, this can be more general, which is useful when one wants to accumulate values 
+/// other than counts, for example the sums of various quantities (e.g. computing an average).
 #[derive(Clone)]
 pub struct Collection<G: Scope, D, R: Ring = isize> {
     /// Underlying timely dataflow stream.

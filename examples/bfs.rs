@@ -40,7 +40,7 @@ fn main() {
             }
 
             let probe = result.map(|(_,l)| l)
-                              .consolidate_by(|&x| x)
+                              .consolidate()
                               .inspect(|x| println!("\t{:?}", x))
                               .probe();
 

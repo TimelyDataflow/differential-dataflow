@@ -104,10 +104,10 @@
 #![forbid(missing_docs)]
 
 use std::fmt::Debug;
-use std::ops::{Add, Sub, Neg, Mul};
 
 pub use collection::{Collection, AsCollection};
 pub use hashable::Hashable;
+pub use ring::Ring;
 
 /// A composite trait for data types usable in differential dataflow.
 ///
@@ -121,24 +121,6 @@ pub use hashable::Hashable;
 pub trait Data : timely::ExchangeData + Ord + Debug { }
 impl<T: timely::ExchangeData + Ord + Debug> Data for T { }
 
-/// A type that can be treated as a mathematical ring.
-pub trait Ring : Add<Self, Output=Self> + Sub<Self, Output=Self> + Neg<Output=Self> + Mul<Self, Output=Self> + std::marker::Sized + Data + Copy {
-	/// Returns true if the element is the additive identity.
-	fn is_zero(&self) -> bool;
-	/// The additive identity.
-	fn zero() -> Self;
-}
-
-impl Ring for isize { 
-	fn is_zero(&self) -> bool { *self == 0 }
-	fn zero() -> Self { 0 }
-}
-
-// impl<R1: Ring, R2: Ring> Ring for (R1, R2) {
-// 	fn is_zero(&self) -> bool { self.0.is_zero() && self.1.is_zero() }
-// 	fn zero() -> Self { (R1::zero(), R2::zero()) }
-// }
-
 extern crate fnv;
 extern crate timely;
 extern crate vec_map;
@@ -146,8 +128,6 @@ extern crate itertools;
 extern crate linear_map;
 extern crate timely_sort;
 extern crate timely_communication;
-
-#[macro_use]
 extern crate abomonation;
 
 pub mod hashable;
@@ -155,5 +135,6 @@ pub mod operators;
 pub mod lattice;
 pub mod trace;
 pub mod input;
+pub mod ring;
 mod collection;
 

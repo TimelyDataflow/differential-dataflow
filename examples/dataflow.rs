@@ -68,7 +68,7 @@ fn main() {
                 query_topics = query_topics.filter(|_| false);
             }
 
-            let probe = query_topics.consolidate_by(|&(_,q,_)| q)
+            let probe = query_topics.consolidate()
                                     .inspect(|&((l,q,t),_,w)| println!("\t(query: {},\tlabel: {},\ttopic:{}\t(weight: {})", q, l, t, w))
                                     .probe();
 
@@ -157,7 +157,7 @@ fn connected_components<G: Scope>(edges: &Collection<G, Edge>) -> Collection<G, 
                         let min = std::cmp::min(pair.0, pair.1);
                         *pair = (min, min);
                      })
-                     .consolidate_by(|x| x.0);
+                     .consolidate();
 
     // each edge should exist in both directions.
     let edges = edges.map_in_place(|x| ::std::mem::swap(&mut x.0, &mut x.1))

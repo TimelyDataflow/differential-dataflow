@@ -245,15 +245,11 @@ impl<G: Scope, K: Data+Hashable, V: Data, R: Ring> Arrange<G, K, V, R> for Colle
         let exchange = Exchange::new(move |update: &((K,V),G::Timestamp,R)| (update.0).0.hashed().as_u64());
         let stream = self.inner.unary_notify(exchange, "Arrange", vec![], move |input, output, notificator| {
 
-            // println!("arrange: start");
-
             // As we receive data, we need to (i) stash the data and (ii) keep *enough* capabilities.
             // We don't have to keep all capabilities, but we need to be able to form output messages
             // when we realize that time intervals are complete.
 
             input.for_each(|cap, data| {
-
-                // println!("arrange recv");
 
                 // add the capability to our list of capabilities.
                 capabilities.retain(|c| !c.time().gt(&cap.time()));
@@ -263,7 +259,6 @@ impl<G: Scope, K: Data+Hashable, V: Data, R: Ring> Arrange<G, K, V, R> for Colle
 
                 // add the updates to our batcher.
                 for ((key, val), time, diff) in data.drain(..) {
-                    // println!("  - ({:?}, {:?}) : {:?}", key, val, diff);
                     let (key, val) = map(key, val);
                     batcher.push((key, val, time, diff));
                 }
@@ -349,7 +344,6 @@ impl<G: Scope, K: Data+Hashable, V: Data, R: Ring> Arrange<G, K, V, R> for Colle
                 }
                 capabilities = new_capabilities;
             }
-            // println!("arrange: done");
 
         });
 
