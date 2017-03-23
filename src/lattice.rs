@@ -13,6 +13,7 @@ pub trait Lattice : PartialOrd {
 
     /// Advances self to the largest time indistinguishable under `frontier`.
     // TODO : add an example here demonstrating the result invariant.
+    #[inline(always)]
     fn advance_by(&self, frontier: &[Self]) -> Option<Self> where Self: Sized{
         if frontier.len() > 0 {
             let mut result = self.join(&frontier[0]);
@@ -34,13 +35,14 @@ impl<T1: Lattice, T2: Lattice> Lattice for Product<T1, T2> {
     fn min() -> Self { Product::new(T1::min(), T2::min()) }
     #[inline(always)]
     fn max() -> Self { Product::new(T1::max(), T2::max()) }
-
+    #[inline(always)]
     fn join(&self, other: &Product<T1, T2>) -> Product<T1, T2> {
         Product {
             outer: self.outer.join(&other.outer),
             inner: self.inner.join(&other.inner),
         }
     }
+    #[inline(always)]
     fn meet(&self, other: &Product<T1, T2>) -> Product<T1, T2> {
         Product {
             outer: self.outer.meet(&other.outer),
@@ -52,44 +54,68 @@ impl<T1: Lattice, T2: Lattice> Lattice for Product<T1, T2> {
 use timely::progress::timestamp::RootTimestamp;
 
 impl Lattice for RootTimestamp {
+    #[inline(always)]
     fn min() -> RootTimestamp { RootTimestamp }
+    #[inline(always)]
     fn max() -> RootTimestamp { RootTimestamp }
+    #[inline(always)]
     fn join(&self, _: &RootTimestamp) -> RootTimestamp { RootTimestamp }
+    #[inline(always)]
     fn meet(&self, _: &RootTimestamp) -> RootTimestamp { RootTimestamp }
 }
 
 impl Lattice for usize {
+    #[inline(always)]
     fn min() -> usize { usize::min_value() }
+    #[inline(always)]
     fn max() -> usize { usize::max_value() }
+    #[inline(always)]
     fn join(&self, other: &usize) -> usize { ::std::cmp::max(*self, *other) }
+    #[inline(always)]
     fn meet(&self, other: &usize) -> usize { ::std::cmp::min(*self, *other) }
 }
 
 impl Lattice for u64 {
+    #[inline(always)]
     fn min() -> u64 { u64::min_value() }
+    #[inline(always)]
     fn max() -> u64 { u64::max_value() }
+    #[inline(always)]
     fn join(&self, other: &u64) -> u64 { ::std::cmp::max(*self, *other) }
+    #[inline(always)]
     fn meet(&self, other: &u64) -> u64 { ::std::cmp::min(*self, *other) }
 }
 
 impl Lattice for u32 {
+    #[inline(always)]
     fn min() -> u32 { u32::min_value() }
+    #[inline(always)]
     fn max() -> u32 { u32::max_value() }
+    #[inline(always)]
     fn join(&self, other: &u32) -> u32 { ::std::cmp::max(*self, *other) }
+    #[inline(always)]
     fn meet(&self, other: &u32) -> u32 { ::std::cmp::min(*self, *other) }
 }
 
 impl Lattice for i32 {
+    #[inline(always)]
     fn min() -> i32 { i32::min_value() }
+    #[inline(always)]
     fn max() -> i32 { i32::max_value() }
+    #[inline(always)]
     fn join(&self, other: &i32) -> i32 { ::std::cmp::max(*self, *other) }
+    #[inline(always)]
     fn meet(&self, other: &i32) -> i32 { ::std::cmp::min(*self, *other) }
 }
 
 impl Lattice for () {
+    #[inline(always)]
     fn min() -> () { () }
+    #[inline(always)]
     fn max() -> () { () }
+    #[inline(always)]
     fn join(&self, _other: &()) -> () { () }
+    #[inline(always)]
     fn meet(&self, _other: &()) -> () { () }
 }
 
