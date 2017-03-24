@@ -94,11 +94,13 @@ pub struct OrdWrapper<T: Ord+Hashable> {
 }
 
 impl<T: Ord+Hashable> PartialOrd for OrdWrapper<T> {
+    #[inline(always)]
     fn partial_cmp(&self, other: &Self) -> Option<::std::cmp::Ordering> {
         (self.item.hashed(), &self.item).partial_cmp(&(other.item.hashed(), &other.item))
     }
 }
 impl<T: Ord+Hashable> Ord for OrdWrapper<T> {
+    #[inline(always)]
     fn cmp(&self, other: &Self) -> ::std::cmp::Ordering {
         (self.item.hashed(), &self.item).cmp(&(other.item.hashed(), &other.item))        
     }
@@ -124,15 +126,18 @@ pub struct HashableWrapper<T: Hashable> {
 
 impl<T: Hashable> Hashable for HashableWrapper<T> {
     type Output = T::Output;
+    #[inline(always)]
     fn hashed(&self) -> T::Output { self.hash }
 }
 
 impl<T: Hashable> Deref for HashableWrapper<T> {
     type Target = T;
+    #[inline(always)]
     fn deref(&self) -> &T { &self.item }
 }
 
 impl<T: Hashable> From<T> for HashableWrapper<T> {
+    #[inline(always)]
     fn from(item: T) -> HashableWrapper<T> { 
         HashableWrapper {
             hash: item.hashed(),
@@ -150,14 +155,17 @@ pub struct UnsignedWrapper<T: Unsigned+Copy> {
 
 impl<T: Unsigned+Copy> Hashable for UnsignedWrapper<T> {
     type Output = T;
+    #[inline(always)]
     fn hashed(&self) -> Self::Output { self.item }
 }
 
 impl<T: Unsigned+Copy> Deref for UnsignedWrapper<T> {
     type Target = T;
+    #[inline(always)]
     fn deref(&self) -> &T { &self.item }
 }
 
 impl<T: Unsigned+Copy> From<T> for UnsignedWrapper<T> {
+    #[inline(always)]
     fn from(item: T) -> Self { UnsignedWrapper { item: item } }
 }

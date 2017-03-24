@@ -76,16 +76,16 @@ fn main() {
         	}
 		}
 
-		let timer = ::std::time::Instant::now();
+		// let timer = ::std::time::Instant::now();
 
 		input.advance_to(1);
 		computation.step_while(|| probe.lt(input.time()));
 
-		if index == 0 {
-			let timer = timer.elapsed();
-			let nanos = timer.as_secs() * 1000000000 + timer.subsec_nanos() as u64;
-			println!("Loading finished after {:?}", nanos);
-		}
+		// if index == 0 {
+		// 	let timer = timer.elapsed();
+		// 	let nanos = timer.as_secs() * 1000000000 + timer.subsec_nanos() as u64;
+		// 	println!("Loading finished after {:?}", nanos);
+		// }
 
 		if batch > 0 {
 
