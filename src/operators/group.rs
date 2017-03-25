@@ -227,6 +227,12 @@ where
             // stolen some code from there, so if either looks wrong, make sure to check the other
             // as well.
 
+            // lower bound for use in descriptions.
+            let mut lower = Vec::new();
+            for cap in &capabilities {
+                lower.push(cap.time());
+            }
+
             for index in 0 .. capabilities.len() {
 
                 // Only do all of this if the capability is not present in the input frontier.
@@ -398,10 +404,12 @@ where
                     }
 
                     // We have processed all exposed keys and times, and should commit and send the batch.
-                    let output_batch = output_builder.done(&[], &[]);     // TODO: fix this nonsense.
+                    let output_batch = output_builder.done(&lower[..], &upper[..]);
                     output.session(&capabilities[index]).give(BatchWrapper { item: output_batch.clone() });
                     let output_borrow: &mut T2 = &mut output_trace.wrapper.borrow_mut().trace;
                     output_borrow.insert(output_batch);
+
+                    lower = upper;
                 }
             }
 
