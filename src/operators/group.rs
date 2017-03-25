@@ -163,22 +163,16 @@ where
         let mut interesting = Vec::<(K, G::Timestamp)>::new();
         let mut capabilities = Vec::<Capability<G::Timestamp>>::new();
 
+        // buffers and logic for computing interesting times "efficiently".
         let mut interestinator: Interestinator<G::Timestamp> = Default::default();
 
-        // experimental accumulators
+        // accumulators for input, output, and output produced as we execute.
         let mut input_accumulator = Accumulator::<V, G::Timestamp, R>::new();
         let mut output_accumulator = Accumulator::<V2, G::Timestamp, R2>::new();
         let mut yielded_accumulator = Accumulator::<V2, G::Timestamp, R2>::new();
 
-        // input accumulation and conditional edits.
-        // let mut input_stage = Vec::<(V, R)>::new();                     // accumulated input updates.
-        // let mut input_edits = Vec::<(V, G::Timestamp, R)>::new();       // conditional input updates.
-
-        // output accumualtion and conditional edits.
-        let mut output_logic = Vec::<(V2, R2)>::new();                  // output of user logic.
-        // let mut output_stage = Vec::<(V2, R2)>::new();                  // accumulated output updates.
-        // let mut output_edits = Vec::<(V2, G::Timestamp, R2)>::new();    // conditional output updates.
-        // let mut output_yield = Vec::<(V2, G::Timestamp, R2)>::new();    // newly produced output.
+        // where the user's logic produces output.
+        let mut output_logic = Vec::<(V2, R2)>::new();
 
         // working space for per-key interesting times.
         let mut interesting_times = Vec::new();
@@ -189,7 +183,10 @@ where
             // TODO: I think we could keep most of `interesting` in the received layer.
             //       We do need to break out "derived" interesting times, and stash them,
             //       but that is different from putting an entry for every tuple in the 
-            //       input batch.
+            //       input batch. The `group` input is just the `arrange` producing these
+            //       batches, and so they should be ready to fire at the same granularities,
+            //       though perhaps with multiple workers drawing boundaries differently, 
+            //       this is less clearly evident.
 
             // 1. Read input batches, stash capabilities, populate `interesting`.
             input.for_each(|cap, data| {
@@ -297,17 +294,7 @@ where
                         interesting_times.sort();
                         interesting_times.dedup();
 
-                        // // Our accumulated output updates for the key should start empty.
-                        // output_yield.clear();
-
-                        // // Clear our stashes of input and output updates.
-                        // input_edits.clear();
-                        // output_edits.clear();
-
-                        // // Clear our staging ground for input and output collections.
-                        // input_stage.clear();
-                        // output_stage.clear();
-
+                        // clear accumulators (will now repopulate)
                         input_accumulator.clear();
                         output_accumulator.clear();
                         yielded_accumulator.clear();
@@ -316,15 +303,12 @@ where
                         output_accumulator.time = interesting_times[0].clone();
 
                         // Accumulate into `input_stage` and populate `input_edits`.
-                        // TODO: The accumulation starts at `meet` and must be updated to the first 
-                        //       element of times. We should probably just start there.
                         source_cursor.seek_key(&key);
                         if source_cursor.key_valid() && source_cursor.key() == &key {
                             while source_cursor.val_valid() {
                                 let val: V = source_cursor.val().clone();
                                 let mut sum = R::zero();
                                 source_cursor.map_times(|t,d| {
-                                    // println!("  edit: {:?}", (&key, &val, t, d));
                                     if t.le(&input_accumulator.time) { 
                                         sum = sum + d; 
                                     }
@@ -341,8 +325,6 @@ where
                         input_accumulator.shackle();
 
                         // Accumulate into `output_stage` and populate `output_edits`. 
-                        // NOTE: No accumulation currently done, as we put user output in `output_stage`.
-                        //       Easy-ish to fix.
                         output_cursor.seek_key(&key);
                         if output_cursor.key_valid() && output_cursor.key() == &key {
                             while output_cursor.val_valid() {
@@ -399,7 +381,7 @@ where
                                 for &(ref val, diff) in &yielded_accumulator.accum {
                                     output_logic.push((val.clone(), -diff));
                                 }
-                                consolidate_b(&mut output_logic);
+                                consolidate(&mut output_logic);
 
                                 // 4. send output differences, assemble output layer
                                 for (val, diff) in output_logic.drain(..) {
@@ -450,6 +432,8 @@ where
     }
 }
 
+// Several methods are broken out here to help understand performance profiling.
+
 #[inline(never)]
 fn sort_dedup<T: Ord>(list: &mut Vec<T>) {
     list.dedup();
@@ -470,19 +454,7 @@ fn segment<T, F: Fn(&T)->bool>(source: &mut Vec<T>, dest1: &mut Vec<T>, dest2: &
 }
 
 #[inline(never)]
-fn consolidate_a<T: Ord, R: Ring>(list: &mut Vec<(T, R)>) {
-    list.sort_by(|x,y| x.0.cmp(&y.0));
-    for index in 1 .. list.len() {
-        if list[index].0 == list[index-1].0 {
-            list[index].1 = list[index].1 + list[index-1].1;
-            list[index-1].1 = R::zero();
-        }
-    }
-    list.retain(|x| !x.1.is_zero());
-}
-
-#[inline(never)]
-fn consolidate_b<T: Ord, R: Ring>(list: &mut Vec<(T, R)>) {
+fn consolidate<T: Ord, R: Ring>(list: &mut Vec<(T, R)>) {
     list.sort_by(|x,y| x.0.cmp(&y.0));
     for index in 1 .. list.len() {
         if list[index].0 == list[index-1].0 {
@@ -505,30 +477,6 @@ fn consolidate2<D: Ord, T: Ord, R: Ring>(list: &mut Vec<(D, T, R)>) {
     list.retain(|x| !x.2.is_zero());
 }
 
-
-#[inline(never)]
-fn _update<D, T, R>(edits: &[(D, T, R)], stage: &mut Vec<(D, R)>, prev_time: &T, this_time: &T) 
-where D: Ord+Clone, T: Ord+Lattice, R: Ring {
-
-    // back up to relevant updates.
-    let mut start = edits.len();
-    while start > 0 && edits[start-1].1.cmp(this_time) != ::std::cmp::Ordering::Greater {
-        start -= 1;
-    }
-
-    let edits = &edits[start ..];
-
-    for &(ref val, ref time, diff) in edits {
-        let le_prev = time.le(&prev_time);
-        let le_this = time.le(&this_time);
-        if le_prev != le_this {
-            if le_prev { stage.push((val.clone(),-diff)); }
-            else       { stage.push((val.clone(), diff)); }
-        }
-    }
-    consolidate_a(stage);
-}
-
 /// Allocated state and temporary buffers for closing interesting time under join.
 #[derive(Default)]
 struct Interestinator<T: Ord+Lattice+Clone> {
@@ -546,9 +494,12 @@ struct Interestinator<T: Ord+Lattice+Clone> {
 }
 
 impl<T: Ord+Lattice+Clone+::std::fmt::Debug> Interestinator<T> {
-    fn close_interesting_times<D: ::std::fmt::Debug, R: ::std::fmt::Debug>(&mut self, edits: &[(D, T, R)], times: &mut Vec<T>) {
-
-        // println!("\nclosing: {:?} and {:?}", edits, times);
+    /// Extends `times` with the join of subsets of `edits` and `times` with at least one element from `times`.
+    ///
+    /// This method has a somewhat non-standard implementation in the aim of being "more linear", which makes it
+    /// a bit more complicated that you might think, and with possibly surprising performance. If this method shows
+    /// up on performance profiling, it may be worth asking for more information, as it is a work in progress.
+    fn close_interesting_times<D, R>(&mut self, edits: &[(D, T, R)], times: &mut Vec<T>) {
 
         // Candidate algorithm: sort list of (time, is_new) pairs describing old and new times. 
         // We aim to do not much worse than processing times in this order. 
@@ -570,22 +521,6 @@ impl<T: Ord+Lattice+Clone+::std::fmt::Debug> Interestinator<T> {
         // behind (e.g. if a closed new_accum becomes enormous and un-accumulable, bad news for us). It is 
         // probably safe to close in place, as the in-order execution would do this anyhow.
 
-        // // REFERENCE IMPLEMENTATION (LESS CLEVER)
-        // let mut reference = times.clone();
-        // let mut position = 0;
-        // let mut reference = times.clone();
-        // while position < reference.len() {
-        //     for &(_, ref time, _) in edits {
-        //         if !time.le(&reference[position]) {
-        //             let join = time.join(&reference[position]);
-        //             reference.push(join);
-        //         }
-        //     }
-        //     position += 1;
-        //     reference[position..].sort();
-        //     reference.dedup();
-        // }
-
         // CLEVER IMPLEMENTATION
         // 1. populate uniform list of times, and indicate whether they are for new or old times.
         assert!(self.total.len() == 0);
@@ -593,7 +528,7 @@ impl<T: Ord+Lattice+Clone+::std::fmt::Debug> Interestinator<T> {
         for &(_, ref time, _) in edits { self.total.push((time.clone(), 1)); }
         for time in times.iter() { self.total.push((time.clone(), edits.len() as isize + 1)); }
 
-        consolidate_a(&mut self.total);
+        consolidate(&mut self.total);
 
         // 2. determine the frontiers by scanning list in reverse order (for each: when it exits frontier).
         self.frontier.clear();
@@ -690,9 +625,47 @@ impl<T: Ord+Lattice+Clone+::std::fmt::Debug> Interestinator<T> {
 
         // assert_eq!(*times, reference);
     }
+
+    /// Reference implementation for `close_interesting_times`, using lots more effort than should be needed.
+    fn _close_interesting_times_reference<D, R>(&mut self, edits: &[(D, T, R)], times: &mut Vec<T>) {
+
+        // REFERENCE IMPLEMENTATION (LESS CLEVER)
+        let times_len = times.len();
+        for position in 0 .. times_len {
+            for &(_, ref time, _) in edits {
+                if !time.le(&times[position]) {
+                    let join = time.join(&times[position]);
+                    times.push(join);
+                }
+            }
+        }
+        
+        let mut position = 0;
+        while position < times.len() {
+            for index in 0 .. position {
+                if !times[index].le(&times[position]) {
+                    let join = times[index].join(&times[position]);
+                    times.push(join);
+                }
+            }
+            position += 1;
+            times[position..].sort();
+            times.dedup();
+        }
+    }
 }
 
 /// Maintains an accumulation of updates over partially ordered times.
+///
+/// The `Accumulator` tries to cleverly partition its input edits into "chains": totally ordered contiguous 
+/// subsequences. These chains simplify updating of accumulations, as in each chain it is relatively easy to 
+/// understand how mnay updates must be re-considered.
+///
+/// Many of the methods on `Accumulator` require understanding of how they should be used. Perhaps this can
+/// be fixed with an `AccumulatorBuilder` helper type, but the intended life-cycle is: the `Accumulator` is 
+/// initially valid, and `push_edit` and `update_to` may be called at will. Direct manipulation of the public
+/// fields (which we do) requires a call to `shackle` before using the `Accumulator` again (to rebuild the 
+/// chains and correct the accumulation).
 struct Accumulator<D: Ord+Clone, T: Lattice+Ord, R: Ring> {
     pub time: T,
     pub edits: Vec<(D, T, R)>,
@@ -748,7 +721,7 @@ impl<D: Ord+Clone, T: Lattice+Ord, R: Ring> Accumulator<D, T, R> {
     fn shackle(&mut self) {
 
         consolidate2(&mut self.edits);
-        consolidate_a(&mut self.accum);
+        consolidate(&mut self.accum);
 
         self.edits.sort_by(|x,y| x.1.cmp(&y.1));
 
@@ -808,7 +781,7 @@ impl<D: Ord+Clone, T: Lattice+Ord, R: Ring> Accumulator<D, T, R> {
         }
 
         self.time = new_time;
-        consolidate_a(&mut self.accum);
+        consolidate(&mut self.accum);
         &self.accum[..]
     }
 }
