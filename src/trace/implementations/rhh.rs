@@ -140,9 +140,17 @@ impl<Key: Clone+Default+HashOrdered, Val: Ord+Clone, Time: Lattice+Ord+Clone+Def
 			assert!(other.desc.upper().iter().any(|t| t.le(time)));
 		}
 
+		// one of self.desc.since or other.desc.since needs to be not behind the other...
+		let since = if self.desc.since().iter().all(|t1| other.desc.since().iter().any(|t2| t2.le(t1))) {
+			other.desc.since()
+		}
+		else {
+			self.desc.since()
+		};
+
 		Layer {
 			layer: self.layer.merge(&other.layer),
-			desc: Description::new(other.desc.lower(), self.desc.upper(), &[]), // TODO: third argument wrong
+			desc: Description::new(other.desc.lower(), self.desc.upper(), since),
 		}
 	}
 	/// Advances times in `layer` and consolidates differences for like times.
