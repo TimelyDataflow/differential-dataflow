@@ -59,36 +59,32 @@ where
 	}
 	// Note: this does not perform progressive merging; that code is around somewhere though.
 	fn insert(&mut self, layer: Self::Batch) {
-		if layer.layer.keys() > 0 {
-			// while last two elements exist, both less than layer.len()
-			while self.layers.len() >= 2 && self.layers[self.layers.len() - 2].len() < layer.len() {
-				let layer1 = self.layers.pop().unwrap();
-				let layer2 = self.layers.pop().unwrap();
-				let result = Rc::new(Layer::merge(&layer1, &layer2));
-				if result.len() > 0 {
-					self.layers.push(result);
-				}
-			}
 
-			if layer.len() > 0 {
-				self.layers.push(layer);
-			}
-
-		    while self.layers.len() >= 2 && self.layers[self.layers.len() - 2].len() < 2 * self.layers[self.layers.len() - 1].len() {
-				let layer1 = self.layers.pop().unwrap();
-				let layer2 = self.layers.pop().unwrap();
-				let mut result = Rc::new(layer1.merge(&layer2));
-
-				// if we just merged the last layer, `advance_by` it.
-				if self.layers.len() == 0 {
-					result = Rc::new(Layer::<Key, Time, R>::advance_by(&result, &self.frontier[..]));
-				}
-
-				if result.len() > 0 {
-					self.layers.push(result);
-				}
+		// while last two elements exist, both less than layer.len()
+		while self.layers.len() >= 2 && self.layers[self.layers.len() - 2].len() < layer.len() {
+			let layer1 = self.layers.pop().unwrap();
+			let layer2 = self.layers.pop().unwrap();
+			let result = Rc::new(Layer::merge(&layer1, &layer2));
+			if result.len() > 0 {
+				self.layers.push(result);
 			}
 		}
+
+		self.layers.push(layer);
+
+	    while self.layers.len() >= 2 && self.layers[self.layers.len() - 2].len() < 2 * self.layers[self.layers.len() - 1].len() {
+			let layer1 = self.layers.pop().unwrap();
+			let layer2 = self.layers.pop().unwrap();
+			let mut result = Rc::new(layer1.merge(&layer2));
+
+			// if we just merged the last layer, `advance_by` it.
+			if self.layers.len() == 0 {
+				result = Rc::new(Layer::<Key, Time, R>::advance_by(&result, &self.frontier[..]));
+			}
+
+			self.layers.push(result);
+		}
+
 	}
 	fn cursor(&self) -> Self::Cursor {
 		let mut cursors = Vec::new();
@@ -129,9 +125,26 @@ impl<Key: Clone+Default+HashOrdered, Time: Lattice+Ord+Clone+Default, R: Ring> L
 
 	/// Conducts a full merge, right away. Times not advanced.
 	pub fn merge(&self, other: &Self) -> Self {
+
+		// // this may not be true if we leave gaps; a weaker statement would be "<=".
+		// assert!(other.desc.upper() == self.desc.lower());
+
+		// each element of self.desc.lower must be in the future of some element of other.desc.upper
+		for time in self.desc.lower() {
+			assert!(other.desc.upper().iter().any(|t| t.le(time)));
+		}
+
+		// one of self.desc.since or other.desc.since needs to be not behind the other...
+		let since = if self.desc.since().iter().all(|t1| other.desc.since().iter().any(|t2| t2.le(t1))) {
+			other.desc.since()
+		}
+		else {
+			self.desc.since()
+		};
+		
 		Layer {
 			layer: self.layer.merge(&other.layer),
-			desc: Description::new(&[], &[], &[]),
+			desc: Description::new(other.desc.lower(), self.desc.upper(), since),
 		}
 	}
 	/// Advances times in `layer` and consolidates differences for like times.
