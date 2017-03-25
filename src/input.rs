@@ -31,23 +31,28 @@ impl<'a, T: Timestamp+Ord+Clone, D: Data, R: Ring> InputSession<'a, T, D, R> {
 	}
 
 	/// Adds to the weight of an element in the collection.
-	pub fn update(&mut self, element: D, change: R) { self.buffer.push((element, self.time.clone(), change)); }
+	pub fn update(&mut self, element: D, change: R) { 
+		self.buffer.push((element, self.time.clone(), change)); 
+	}
 
-	/// Forces buffered data into the timely input, and advances its time to match that of the sesson.
+	/// Forces buffered data into the timely input, and advances its time to match that of the session.
 	pub fn flush(&mut self) {
 		for (data, time, diff) in self.buffer.drain(..) {
 			self.handle.send((data, time, diff));
 		}
-		self.handle.advance_to(self.time.inner);		
+		if self.handle.epoch() < &self.time.inner {
+			self.handle.advance_to(self.time.inner);		
+		}
 	}
 
 	/// Advances the logical time for future records.
 	///
 	/// Importantly, this method does **not** advance the time on the underlying handle. This happens only when the
-	/// session is dropped. It is not correct to use this time as a basis for a computations `step_while` method.
+	/// session is dropped or flushed. It is not correct to use this time as a basis for a computation's `step_while`
+	/// method unless it has just been flushed.
 	pub fn advance_to(&mut self, time: T) {
-		assert!(self.handle.epoch() < &time);
-		assert!(&self.time.inner < &time);
+		assert!(self.handle.epoch() <= &time);
+		assert!(&self.time.inner <= &time);
 		self.time = Product::new(RootTimestamp, time);
 	}
 

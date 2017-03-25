@@ -23,13 +23,12 @@ fn main() {
     let nodes: u32 = std::env::args().nth(1).unwrap().parse().unwrap();
     let edges: usize = std::env::args().nth(2).unwrap().parse().unwrap();
     let batch: usize = std::env::args().nth(3).unwrap().parse().unwrap();
-    let k: isize = std::env::args().nth(4).unwrap().parse().unwrap();
 
     let kc1 = std::env::args().find(|x| x == "kcore1").is_some();
     let kc2 = std::env::args().find(|x| x == "kcore2").is_some();
 
     // define a new computational scope, in which to run BFS
-    timely::execute_from_args(std::env::args().skip(5), move |computation| {
+    timely::execute_from_args(std::env::args().skip(4), move |computation| {
 
     	let index = computation.index();
     	let peers = computation.peers();
@@ -40,19 +39,17 @@ fn main() {
     		// create edge input, count a few ways.
     		let (input, edges) = scope.new_input();
 
-    		
     		// pull off source, and count.
     		let mut edges = edges.as_collection();
 
-    		if kc1 { edges = kcore1(&edges, k); }
-    		if kc2 { edges = kcore2(&edges, k); }
+    		if kc1 { edges = kcore1(&edges, std::env::args().nth(4).unwrap().parse().unwrap()); }
+    		if kc2 { edges = kcore2(&edges, std::env::args().nth(4).unwrap().parse().unwrap()); }
 
-    		let degrs = edges//.flat_map(|(src,dst)| Some(src).into_iter().chain(Some(dst).into_iter()))
-    						 .map(|(src,_dst)| src)
+    		let degrs = edges.map(|(src, _dst)| src)
     						 .count();
 
     		// pull of count, and count.
-		    let distr = degrs.map(|(_, cnt)| cnt as u32)
+		    let distr = degrs.map(|(_src, cnt)| cnt)
     						 .count();
 
 			// show us something about the collection, notice when done.
@@ -79,44 +76,42 @@ fn main() {
         	}
 		}
 
-		let timer = ::std::time::Instant::now();
+		// let timer = ::std::time::Instant::now();
 
 		input.advance_to(1);
 		computation.step_while(|| probe.lt(input.time()));
 
-		if index == 0 {
-			let timer = timer.elapsed();
-			let nanos = timer.as_secs() * 1000000000 + timer.subsec_nanos() as u64;
-			println!("Loading finished after {:?}", nanos);
-		}
+		// if index == 0 {
+		// 	let timer = timer.elapsed();
+		// 	let nanos = timer.as_secs() * 1000000000 + timer.subsec_nanos() as u64;
+		// 	println!("Loading finished after {:?}", nanos);
+		// }
 
-		// change graph, forever
 		if batch > 0 {
 
-			for edge in 0usize .. {
-				let &time = input.time();
-				if edge % peers == index {
-	        		input.send(((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), time, 1));
-	        		input.send(((rng2.gen_range(0, nodes), rng2.gen_range(0, nodes)), time,-1));
-				}
+			// create a new input session; will batch data for us!
+            let mut session = differential_dataflow::input::InputSession::from(&mut input);
 
-	        	if edge % batch == (batch - 1) {
+            for round in 1 .. {
+
+            	// only do the work of this worker.
+            	if round % peers == index {
+            		session.advance_to(round);
+	        		session.insert((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)));
+	        		session.remove((rng2.gen_range(0, nodes), rng2.gen_range(0, nodes)));
+            	}
+
+            	if round % batch == 0 {
+            		// all workers indicate they have finished with `round`.
+            		session.advance_to(round + 1);
+					session.flush();
 
 	        		let timer = ::std::time::Instant::now();
-
-	        		let next = input.epoch() + 1;
-	        		input.advance_to(next);
-					computation.step_while(|| probe.lt(input.time()));
-
-					if index == 0 {
-						let timer = timer.elapsed();
-						let nanos = timer.as_secs() * 1000000000 + timer.subsec_nanos() as u64;
-						println!("Round {} finished after {:?}", next - 1, nanos);
-					}
-	        	}
-	        }
-	    }
-
+					computation.step_while(|| probe.lt(session.time()));
+					println!("worker {}, round {} finished after {:?}", index, round, timer.elapsed());
+            	}
+            }
+		}
     }).unwrap();
 }
 

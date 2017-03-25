@@ -163,33 +163,30 @@ where
         let mut interesting = Vec::<(K, G::Timestamp)>::new();
         let mut capabilities = Vec::<Capability<G::Timestamp>>::new();
 
-        // In the course of processing interesting pairs, we will need space to stage inputs, outputs, and future
-        // times that may be interesting for the processed key.
+        // buffers and logic for computing interesting times "efficiently".
+        let mut interestinator: Interestinator<G::Timestamp> = Default::default();
 
-        let mut time_stage = Vec::new();    // staging for building up interesting times.
-        let mut input_stage = Vec::new();   // staging for per-key input (pre-iterator).
-        let mut output_stage = Vec::<(V2, R2)>::new();  // staging for per-key output.
+        // accumulators for input, output, and output produced as we execute.
+        let mut input_accumulator = Accumulator::<V, G::Timestamp, R>::new();
+        let mut output_accumulator = Accumulator::<V2, G::Timestamp, R2>::new();
+        let mut yielded_accumulator = Accumulator::<V2, G::Timestamp, R2>::new();
 
-        // where we store updates that are not universally applied.
-        let mut input_edits = Vec::<(V, G::Timestamp, R)>::new();
-        let mut output_edits = Vec::<(V2, G::Timestamp, R2)>::new();
+        // where the user's logic produces output.
+        let mut output_logic = Vec::<(V2, R2)>::new();
 
-        // where we store new output diffs (to be committed).
-        let mut output_accum = Vec::<(V2, G::Timestamp, R2)>::new();
-
-        // priority queue for interesting times.
-        // unfortunately, BinaryHeap is a max heap. T.T
+        // working space for per-key interesting times.
         let mut interesting_times = Vec::new();
 
         // fabricate a data-parallel operator using the `unary_notify` pattern.
         let stream = self.stream.unary_notify(Pipeline, "GroupArrange", vec![], move |input, output, notificator| {
 
-            // println!("group: start");
-
             // TODO: I think we could keep most of `interesting` in the received layer.
             //       We do need to break out "derived" interesting times, and stash them,
             //       but that is different from putting an entry for every tuple in the 
-            //       input batch.
+            //       input batch. The `group` input is just the `arrange` producing these
+            //       batches, and so they should be ready to fire at the same granularities,
+            //       though perhaps with multiple workers drawing boundaries differently, 
+            //       this is less clearly evident.
 
             // 1. Read input batches, stash capabilities, populate `interesting`.
             input.for_each(|cap, data| {
@@ -229,9 +226,6 @@ where
             // The following pattern looks a lot like what is done in `arrange`. In fact, we have 
             // stolen some code from there, so if either looks wrong, make sure to check the other
             // as well.
-
-            // This tracks counts of keys with various distint times.
-            let mut counts = Vec::new();
 
             for index in 0 .. capabilities.len() {
 
@@ -280,6 +274,7 @@ where
                     let mut position = 0;
                     while position < exposed.len() {
 
+                        // The reason we are gathered here today.
                         let key = exposed[position].0.clone();
 
                         // Load `interesting_times` with those times we must reconsider.
@@ -289,173 +284,115 @@ where
                             position += 1;
                         }
 
-                        // Sort the times in reverse order (we `pop` elements, because no min_heap).
-                        interesting_times.sort_by(|x,y| y.cmp(&x));
-                        interesting_times.dedup();
-
                         // Determine the `meet` of times, useful in restricting updates to capture.
                         let mut meet = interesting_times[0].clone(); 
                         for index in 1 .. interesting_times.len() {
                             meet = meet.meet(&interesting_times[index]);
                         }
 
-                        // Our accumulated output updates for the key should start empty.
-                        output_accum.clear();
+                        // Sort and deduplicate interesting times. Helps with accum initialization.
+                        interesting_times.sort();
+                        interesting_times.dedup();
 
-                        // Counts the number of distinct times for the key.
-                        let mut counter = 0;
+                        // clear accumulators (will now repopulate)
+                        input_accumulator.clear();
+                        output_accumulator.clear();
+                        yielded_accumulator.clear();
 
-                        // The plan at this point is to accumulate into `input_stage` and `output_stage`
-                        // using the first time, but also to capture updates so that we can correct these
-                        // accumulations as we shift times. We can optimize this somewhat, by discarding 
-                        // updates less than the meet of times, as they will be common to all times we 
-                        // process.
-
-                        // Clear our stashes of input and output updates.
-                        input_edits.clear();
-                        output_edits.clear();
-
-                        // Clear our staging ground for input and output collections.
-                        input_stage.clear();
-                        output_stage.clear();
+                        input_accumulator.time = interesting_times[0].clone();
+                        output_accumulator.time = interesting_times[0].clone();
 
                         // Accumulate into `input_stage` and populate `input_edits`.
-                        // TODO: The accumulation starts at `meet` and must be updated to the first 
-                        //       element of times. We should probably just start there.
                         source_cursor.seek_key(&key);
                         if source_cursor.key_valid() && source_cursor.key() == &key {
                             while source_cursor.val_valid() {
                                 let val: V = source_cursor.val().clone();
                                 let mut sum = R::zero();
                                 source_cursor.map_times(|t,d| {
-                                    if t.le(&meet) { sum = sum + d; }
+                                    if t.le(&input_accumulator.time) { 
+                                        sum = sum + d; 
+                                    }
                                     if !t.le(&meet) {
-                                        input_edits.push((val.clone(), t.clone(), d));
+                                        input_accumulator.edits.push((val.clone(), t.join(&meet), d));
                                     }
                                 });
                                 if !sum.is_zero() {
-                                    input_stage.push((source_cursor.val().clone(), sum));
+                                    input_accumulator.accum.push((val, sum));
                                 }
                                 source_cursor.step_val();
                             }
                         }
+                        input_accumulator.shackle();
 
                         // Accumulate into `output_stage` and populate `output_edits`. 
-                        // NOTE: No accumulation currently done, as we put user output in `output_stage`.
-                        //       Easy-ish to fix.
                         output_cursor.seek_key(&key);
                         if output_cursor.key_valid() && output_cursor.key() == &key {
                             while output_cursor.val_valid() {
                                 let val: V2 = output_cursor.val().clone();
-                                // let mut sum = 0;
+                                let mut sum = R2::zero();
                                 output_cursor.map_times(|t,d| {
-                                    // if t.le(&meet) { sum += d; }
-                                    // if !t.le(&meet) {
-                                        output_edits.push((val.clone(), t.clone(), d));
-                                    // }
+                                    if t.le(&output_accumulator.time) {
+                                        sum = sum + d;
+                                    }
+                                    if !t.le(&meet) {
+                                        output_accumulator.edits.push((val.clone(), t.join(&meet), d));
+                                    }
                                 });
-                                // if sum != 0 {
-                                //     output_stage.push((output_cursor.val().clone(), sum));
-                                // }
+                                if !sum.is_zero() {
+                                    output_accumulator.accum.push((val, sum));
+                                }
                                 output_cursor.step_val();
                             }
                         }
+                        output_accumulator.shackle();
 
-                        // used to help us diff out previous updates.
-                        let mut prev_time = meet.clone();
+                        // Determine all interesting times: those that are the join of at least one time
+                        // from `interesting_times` and any times from `input_edits`.
+                        interestinator.close_interesting_times(&input_accumulator.edits[..], &mut interesting_times);
 
-                        while let Some(this_time) = interesting_times.pop() {
+                        // each interesting time must be considered!
+                        for this_time in interesting_times.drain(..) {
 
-                            // This is the body of the `group` logic. It is here that we process
-                            // an interesting pair `(key, time)`, by assembling input, applying 
-                            // user logic, differencing from the output, and updating interesting
-                            // times for the key.
-
-                            counter += 1;
-
-                            // Clear the staging ground for newly interesting times for this key.
-                            time_stage.clear();
-
-                            // 1. build up input collection; capture unused times as interesting.
-                            // NOTE: for this to be correct with an iterator approach (that may 
-                            // not look at all input updates) we need to look at the times in 
-                            // the output trace as well. Even this may not be right (needs math).
-
-                            // We need to update `input_stage` by edits in `input_edits`, diffing 
-                            // out updates on whose times `this_time` and `prev_time` do not agree
-                            // about <=. 
-                            for &(ref val, ref time, diff) in &input_edits {
-                                let le_prev = time.le(&prev_time);
-                                let le_next = time.le(&this_time);
-                                if le_prev != le_next {
-                                    if le_prev { input_stage.push((val.clone(),-diff)); }
-                                    else       { input_stage.push((val.clone(), diff)); }
-                                }
-                                if !le_next { 
-                                    let join = time.join(&this_time);
-                                    if !time_stage.contains(&join) {
-                                        time_stage.push(join);
-                                    }
-                                }
+                            // not all times are ready to be finalized. stash them with the key.
+                            if upper.iter().any(|t| t.le(&this_time)) {
+                                interesting.push((key.clone(), this_time));
                             }
-                            consolidate(&mut input_stage);
+                            else {
 
-                            // 2. apply user logic (only if non-empty input).
-                            output_stage.clear();
-                            if input_stage.len() > 0 {
-                                logic(&key, &input_stage[..], &mut output_stage);
-                            }
+                                // 1. update `input_stage` and `output_stage` to `this_time`.
+                                input_accumulator.update_to(this_time.clone());
+                                output_accumulator.update_to(this_time.clone());
+                                yielded_accumulator.update_to(this_time.clone());
 
-                            // println!("key: {:?}, input: {:?}, ouput: {:?} @ {:?}", key, input_stage, output_stage, this_time);
+                                // 2. apply user logic (only if non-empty input).
+                                output_logic.clear();
+                                if input_accumulator.accum.len() > 0 {
+                                    logic(&key, &input_accumulator.accum[..], &mut output_logic);
+                                }
 
-                            // 3. subtract existing output differences.
-                            for &(ref val, ref time, diff) in &output_edits {
-                                if time.le(&this_time) {
-                                    output_stage.push((val.clone(), -diff));
+                                // println!("key: {:?}, input: {:?}, ouput: {:?} @ {:?}", 
+                                //          key, &input_accumulator.accum[..], output_logic, this_time);
+
+                                // 3. subtract existing output differences.
+                                for &(ref val, diff) in &output_accumulator.accum[..] {
+                                    output_logic.push((val.clone(), -diff));
+                                }
+                                // incorporate uncommitted output updates.
+                                for &(ref val, diff) in &yielded_accumulator.accum {
+                                    output_logic.push((val.clone(), -diff));
+                                }
+                                consolidate(&mut output_logic);
+
+                                // 4. send output differences, assemble output layer
+                                for (val, diff) in output_logic.drain(..) {
+                                    yielded_accumulator.push_edit((val.clone(), this_time.clone(), diff));
                                 }
                             }
-                            // incorporate uncommitted output updates.
-                            for &(ref val, ref time, diff) in &output_accum {
-                                if time.le(&this_time) {
-                                    output_stage.push((val.clone(), -diff));
-                                }
-                            }
-                            consolidate(&mut output_stage);
-
-                            // 5. register interesting (key, time) pairs.
-                            // We do this here to avoid cloning the key if we don't need to.
-                            time_stage.sort();
-                            time_stage.dedup();
-                            for new_time in time_stage.drain(..) {
-                                if !upper.iter().any(|t| t.le(&new_time)) {
-                                    // add to the list of times to do *now*.
-                                    assert!(new_time != this_time);
-                                    interesting_times.push(new_time);
-                                }
-                                else {
-                                    // defer until some future moment.
-                                    interesting.push((key.clone(), new_time));
-                                }
-                            }
-
-                            // 4. send output differences, assemble output layer
-                            for (val, diff) in output_stage.drain(..) {
-                                output_accum.push((val, this_time.clone(), diff));
-                            }
-
-                            // because we have a crap heap.
-                            interesting_times.sort_by(|x,y| y.cmp(&x));
-                            interesting_times.dedup();
-                            prev_time = this_time;
                         }
 
-                        // Indicate an instance of a key with `counter` distinct times processed.
-                        while counts.len() <= counter { counts.push(0); }
-                        counts[counter] += 1;
-
-                        // Move output updates into the output builder. Sort first to ensure order.
-                        output_accum.sort();
-                        for (val, time, diff) in output_accum.drain(..) {
+                        // Sort yielded output updates and move into output builder.
+                        yielded_accumulator.edits.sort();
+                        for (val, time, diff) in yielded_accumulator.edits.drain(..) {
                             output_builder.push((key.clone(), val, time, diff));
                         }
                     }
@@ -467,18 +404,6 @@ where
                     output_borrow.insert(output_batch);
                 }
             }
-
-            // if counts.len() > 0 {
-            //     println!("");
-            //     for index in 0 .. capabilities.len() {
-            //         println!("time: {:?}", capabilities[index].time());
-            //     }
-            // }
-            // for (index, &count) in counts.iter().enumerate() {
-            //     if count > 0 {
-            //         println!("counts[{}]:\t{}", index, count);
-            //     }
-            // }
 
             // 3. Having now processed all capabilities, we must advance them to track the frontier
             //    of times in `interesting`. 
@@ -507,6 +432,8 @@ where
     }
 }
 
+// Several methods are broken out here to help understand performance profiling.
+
 #[inline(never)]
 fn sort_dedup<T: Ord>(list: &mut Vec<T>) {
     list.dedup();
@@ -526,7 +453,7 @@ fn segment<T, F: Fn(&T)->bool>(source: &mut Vec<T>, dest1: &mut Vec<T>, dest2: &
     }
 }
 
-
+#[inline(never)]
 fn consolidate<T: Ord, R: Ring>(list: &mut Vec<(T, R)>) {
     list.sort_by(|x,y| x.0.cmp(&y.0));
     for index in 1 .. list.len() {
@@ -536,4 +463,325 @@ fn consolidate<T: Ord, R: Ring>(list: &mut Vec<(T, R)>) {
         }
     }
     list.retain(|x| !x.1.is_zero());
+}
+
+#[inline(never)]
+fn consolidate2<D: Ord, T: Ord, R: Ring>(list: &mut Vec<(D, T, R)>) {
+    list.sort_by(|x,y| (&y.0, &y.1).cmp(&(&x.0, &x.1)));
+    for index in 1 .. list.len() {
+        if list[index].0 == list[index-1].0 && list[index].1 == list[index-1].1 {
+            list[index].2 = list[index].2 + list[index-1].2;
+            list[index-1].2 = R::zero();
+        }
+    }
+    list.retain(|x| !x.2.is_zero());
+}
+
+/// Allocated state and temporary buffers for closing interesting time under join.
+#[derive(Default)]
+struct Interestinator<T: Ord+Lattice+Clone> {
+
+    total: Vec<(T, isize)>,     // holds all times; a non-zero value indicates a new time.
+
+    old_accum: Vec<T>,          // accumulated old times, compacted via self.frontier.
+    new_accum: Vec<T>,          // accumulated new times, compacted via self.frontier.
+
+    entrance: Vec<(T, usize)>,  // times and self.total indices at which they enter self.frontier.
+    frontier: Vec<T>,           // allocation to hold the evolving frontier.
+
+    old_temp: Vec<T>,           // temporary storage to avoid 
+    new_temp: Vec<T>,
+}
+
+impl<T: Ord+Lattice+Clone+::std::fmt::Debug> Interestinator<T> {
+    /// Extends `times` with the join of subsets of `edits` and `times` with at least one element from `times`.
+    ///
+    /// This method has a somewhat non-standard implementation in the aim of being "more linear", which makes it
+    /// a bit more complicated that you might think, and with possibly surprising performance. If this method shows
+    /// up on performance profiling, it may be worth asking for more information, as it is a work in progress.
+    fn close_interesting_times<D, R>(&mut self, edits: &[(D, T, R)], times: &mut Vec<T>) {
+
+        // Candidate algorithm: sort list of (time, is_new) pairs describing old and new times. 
+        // We aim to do not much worse than processing times in this order. 
+        // 
+        // We will maintain a few accumulations to help us correctly maintain the set of new times.
+        //
+        //   Frontier: We track the elements in the frontier, identified in an initial reverse scan.
+        //   old_accum: We accumulate old times using the frontier, which I hope is correct.
+        //   new_accum: We accumulate new times using the frontier, which I hope is correct.
+        //
+        // For each time, we check whether the frontier changes, and if so perhaps update our accums.
+        // We then do something based on whether it is a new or old time:
+        // 
+        //   new time: join with each element of old_accum, add results + self to new_accum, re-close, emit.
+        //   old time: join with each element of new_accum, re-close, emit.
+        //
+        // We can either re-close the new_accum set with each element, or repeat the process with new
+        // synthetic times. In either case, we need to be careful to not leave a massive amount of work
+        // behind (e.g. if a closed new_accum becomes enormous and un-accumulable, bad news for us). It is 
+        // probably safe to close in place, as the in-order execution would do this anyhow.
+
+        // CLEVER IMPLEMENTATION
+        // 1. populate uniform list of times, and indicate whether they are for new or old times.
+        assert!(self.total.len() == 0);
+        self.total.reserve(edits.len() + times.len());
+        for &(_, ref time, _) in edits { self.total.push((time.clone(), 1)); }
+        for time in times.iter() { self.total.push((time.clone(), edits.len() as isize + 1)); }
+
+        consolidate(&mut self.total);
+
+        // 2. determine the frontiers by scanning list in reverse order (for each: when it exits frontier).
+        self.frontier.clear();
+        self.entrance.clear();
+        self.entrance.reserve(self.total.len());
+        let mut position = self.total.len();
+        while position > 0 {
+            position -= 1;
+            // "add" total[position] and seeing who drops == who is exposed when total[position] removed.
+            let mut index = 0;
+            while index < self.frontier.len() {
+                if self.total[position].0.le(&self.frontier[index]) {
+                    self.entrance.push((self.frontier.swap_remove(index), position));
+                }
+                else {
+                    index += 1;
+                }
+            }
+            self.frontier.push(self.total[position].0.clone());
+        }
+
+        // 3. swing through `total` and apply per-time thinkings.
+        self.old_temp.clear();
+        self.new_temp.clear();
+        self.old_accum.clear();
+        self.new_accum.clear();
+
+        for (index, (time, is_new)) in self.total.drain(..).enumerate() {
+            
+            if is_new > edits.len() as isize {
+                for new_time in &self.new_accum {
+                    let join = time.join(new_time);
+                    if join != time { 
+                        self.new_temp.push(join.clone()); 
+                        times.push(join); 
+                    }
+                }
+                for t in self.new_temp.drain(..) { self.new_accum.push(t); }
+
+                for old_time in &self.old_accum {
+                    let join = time.join(old_time);
+                    if join != time { 
+                        self.new_accum.push(join.clone()); 
+                        times.push(join); 
+                    }
+                }
+                self.new_accum.push(time.clone());
+            }
+            else {
+
+                for new_time in &self.new_accum {
+                    let join = time.join(new_time);
+                    self.new_temp.push(join.clone()); 
+                    times.push(join); 
+                }
+                for t in self.new_temp.drain(..) { self.new_accum.push(t); }
+
+                for old_time in &self.old_accum {
+                    let join = time.join(old_time);
+                    if join != time { self.old_temp.push(join); }
+                }
+                for t in self.old_temp.drain(..) { self.old_accum.push(t); }
+                self.old_accum.push(time.clone());
+            }
+
+    
+            // update old_accum and new_accum with frontier changes, deduplicating.
+
+            // TODO: Can we mantain frontiers corresponding to new times and the current `new_accum`, as all 
+            //       future additions must be joined with such elements. This could reduce the complexity of 
+            //       `old_accum` substantially, removing distinctions between irrelevant prior times.
+
+            // a. remove time from frontier; it's not there any more.
+            self.frontier.retain(|x| !x.eq(&time));
+            // b. add any indicated elements
+            while self.entrance.last().map(|x| x.1) == Some(index) {
+                self.frontier.push(self.entrance.pop().unwrap().0);
+            }
+
+            if self.frontier.len() > 0 {
+                // advance times in the old accumulation, sort and deduplicate.
+                for time in &mut self.old_accum { *time = time.advance_by(&self.frontier[..]).unwrap(); }
+                self.old_accum.sort();
+                self.old_accum.dedup();
+                // advance times in the new accumulation, sort and deduplicate.
+                for time in &mut self.new_accum { *time = time.advance_by(&self.frontier[..]).unwrap(); }
+                self.new_accum.sort();
+                self.new_accum.dedup();
+            }
+        }
+
+        times.sort();
+        times.dedup();
+
+        // assert_eq!(*times, reference);
+    }
+
+    /// Reference implementation for `close_interesting_times`, using lots more effort than should be needed.
+    fn _close_interesting_times_reference<D, R>(&mut self, edits: &[(D, T, R)], times: &mut Vec<T>) {
+
+        // REFERENCE IMPLEMENTATION (LESS CLEVER)
+        let times_len = times.len();
+        for position in 0 .. times_len {
+            for &(_, ref time, _) in edits {
+                if !time.le(&times[position]) {
+                    let join = time.join(&times[position]);
+                    times.push(join);
+                }
+            }
+        }
+        
+        let mut position = 0;
+        while position < times.len() {
+            for index in 0 .. position {
+                if !times[index].le(&times[position]) {
+                    let join = times[index].join(&times[position]);
+                    times.push(join);
+                }
+            }
+            position += 1;
+            times[position..].sort();
+            times.dedup();
+        }
+    }
+}
+
+/// Maintains an accumulation of updates over partially ordered times.
+///
+/// The `Accumulator` tries to cleverly partition its input edits into "chains": totally ordered contiguous 
+/// subsequences. These chains simplify updating of accumulations, as in each chain it is relatively easy to 
+/// understand how mnay updates must be re-considered.
+///
+/// Many of the methods on `Accumulator` require understanding of how they should be used. Perhaps this can
+/// be fixed with an `AccumulatorBuilder` helper type, but the intended life-cycle is: the `Accumulator` is 
+/// initially valid, and `push_edit` and `update_to` may be called at will. Direct manipulation of the public
+/// fields (which we do) requires a call to `shackle` before using the `Accumulator` again (to rebuild the 
+/// chains and correct the accumulation).
+struct Accumulator<D: Ord+Clone, T: Lattice+Ord, R: Ring> {
+    pub time: T,
+    pub edits: Vec<(D, T, R)>,
+    pub chains: Vec<(usize, usize, usize)>,
+    pub accum: Vec<(D, R)>,
+}
+
+impl<D: Ord+Clone, T: Lattice+Ord, R: Ring> Accumulator<D, T, R> {
+
+    /// Allocates a new empty accumulator.
+    fn new() -> Self {
+        Accumulator {
+            time: T::min(),
+            edits: Vec::new(),
+            chains: Vec::new(),
+            accum: Vec::new(),
+        }
+    }
+
+    /// Clears the allocator and sets the time to `T::min()`.
+    fn clear(&mut self) {
+        self.time = T::min();
+        self.edits.clear();
+        self.chains.clear();
+        self.accum.clear();
+    }
+
+    /// Introduces edits into a live accumulation.
+    fn push_edit(&mut self, edit: (D, T, R)) {
+
+        // do we need a new chain?
+        if self.edits.len() == 0 || !self.edits[self.edits.len()-1].1.le(&edit.1) {
+            let edits = self.edits.len();
+            self.chains.push((edits, edits, edits + 1));
+            self.edits.push(edit);
+        }
+        else {
+            let chains = self.chains.len();
+            self.edits.push(edit);
+            self.chains[chains-1].2 = self.edits.len();
+        }
+
+        // we may need to advance the finger of the last chain by one.
+        let finger = self.chains[self.chains.len()-1].1;
+        if self.edits[finger].1.le(&self.time) {
+            self.accum.push((self.edits[finger].0.clone(), self.edits[finger].2));
+            let chains_len = self.chains.len();
+            self.chains[chains_len-1].1 += 1;
+        }
+    }
+
+    /// Sorts `edits` and forms chains.
+    fn shackle(&mut self) {
+
+        consolidate2(&mut self.edits);
+        consolidate(&mut self.accum);
+
+        self.edits.sort_by(|x,y| x.1.cmp(&y.1));
+
+        let mut lower = 0;
+        for upper in 1 .. self.edits.len() {
+            if !self.edits[upper-1].1.le(&self.edits[upper].1) {
+                self.chains.push((lower, lower, upper));
+                lower = upper;
+            }
+        }
+
+        if self.edits.len() > 0 {
+            self.chains.push((lower, lower, self.edits.len()));
+        }
+    }
+    
+    /// Updates the internal accumulation to correspond to `new_time`.
+    ///
+    /// This method traverses edits by chains, or totally ordered subsequences. It traverses
+    /// each chain at most once over the course of totally ordered updates, as it only moves
+    /// forward through each of its own internal chains. Although the method should be correct
+    /// for arbitrary sequences of times, the performance could be arbitrarily poor.
+
+    fn update_to(&mut self, new_time: T) -> &[(D, R)] {
+
+        let meet = self.time.meet(&new_time);
+        for chain in 0 .. self.chains.len() {
+
+            // finger is the first element *not* `le` this.time.
+            let mut finger = self.chains[chain].1;
+
+            // possibly move forward, adding edits while times less than `new_time`.
+            while finger < self.chains[chain].2 && self.edits[finger].1.le(&new_time) {
+                self.accum.push((self.edits[finger].0.clone(), self.edits[finger].2));
+                finger += 1;
+            }
+            // possibly move backward, subtracting edits with times not less than `new_time`.
+            while finger > self.chains[chain].0 && !self.edits[finger-1].1.le(&new_time) {
+                self.accum.push((self.edits[finger-1].0.clone(), -self.edits[finger-1].2));
+                finger -= 1;                    
+            }
+
+            let position = ::std::cmp::min(self.chains[chain].1, finger);
+            self.chains[chain].1 = finger;
+
+            // from the lower end of updates things are less certain; 
+            while position > self.chains[chain].0 && !self.edits[position-1].1.le(&meet) {
+
+                let le_prev = self.edits[position-1].1.le(&self.time);
+                let le_this = self.edits[position-1].1.le(&new_time);
+                if le_prev != le_this {
+                    if le_prev { self.accum.push((self.edits[position-1].0.clone(),-self.edits[position-1].2)); }
+                    else       { self.accum.push((self.edits[position-1].0.clone(), self.edits[position-1].2)); }
+                }
+
+            }
+        }
+
+        self.time = new_time;
+        consolidate(&mut self.accum);
+        &self.accum[..]
+    }
 }
