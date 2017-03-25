@@ -250,6 +250,7 @@ where Key: Clone+Default+HashOrdered, Val: Ord+Clone, Time: Lattice+Ord+Clone+De
 	}
 
 	// TODO: Consider sorting everything, which would allow cancelation of any updates.
+	#[inline(never)]
 	fn seal(&mut self, lower: &[Time], upper: &[Time]) -> Rc<Layer<Key, Val, Time, R>> {
 
 		// 1. Scan all of self.buffers and self.buffer to move appropriate updates to self.sorter.
