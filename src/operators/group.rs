@@ -31,6 +31,9 @@
 //! })
 //! ```
 
+use std::fmt::Debug;
+use std::default::Default;
+
 use hashable::{Hashable, UnsignedWrapper};
 use ::{Data, Collection, Ring};
 
@@ -60,10 +63,10 @@ pub trait Group<G: Scope, K: Data, V: Data, R: Ring> where G::Timestamp: Lattice
 }
 
 impl<G: Scope, K: Data+Default+Hashable, V: Data, R: Ring> Group<G, K, V, R> for Collection<G, (K, V), R> 
-    where G::Timestamp: Lattice+Ord+::std::fmt::Debug {
+    where G::Timestamp: Lattice+Ord+Debug {
     fn group<L, V2: Data, R2: Ring>(&self, logic: L) -> Collection<G, (K, V2), R2>
         where L: Fn(&K, &[(V, R)], &mut Vec<(V2, R2)>)+'static {
-        self.arrange_by_key()
+        self.arrange_by_key_hashed()
             .group_arranged(move |k,s,t| logic(&k.item,s,t), HashSpine::new(Default::default()))
             .as_collection(|k,v| (k.item.clone(), v.clone()))
     }
@@ -507,6 +510,7 @@ impl<T: Ord+Lattice+Clone+::std::fmt::Debug> Interestinator<T> {
     /// This method has a somewhat non-standard implementation in the aim of being "more linear", which makes it
     /// a bit more complicated that you might think, and with possibly surprising performance. If this method shows
     /// up on performance profiling, it may be worth asking for more information, as it is a work in progress.
+    #[inline(never)]
     fn close_interesting_times<D, R>(&mut self, edits: &[(D, T, R)], times: &mut Vec<T>) {
 
         // Candidate algorithm: sort list of (time, is_new) pairs describing old and new times. 
@@ -753,6 +757,7 @@ impl<D: Ord+Clone, T: Lattice+Ord, R: Ring> Accumulator<D, T, R> {
     /// forward through each of its own internal chains. Although the method should be correct
     /// for arbitrary sequences of times, the performance could be arbitrarily poor.
 
+    #[inline(never)]
     fn update_to(&mut self, new_time: T) -> &[(D, R)] {
 
         let meet = self.time.meet(&new_time);

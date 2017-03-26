@@ -118,12 +118,12 @@ where G::Timestamp: Lattice+Ord {
                      .concat(&edges);
 
     // "arrange" edges, because we'll want to use it twice the same way.
-    let edges = edges.arrange_by_key();
+    let edges = edges.arrange_by_key_hashed();
     let query = query.arrange_by_self();
 
     // restrict attention to edges from query nodes
     edges.join_arranged(&query, |k,v,_| (v.clone(), k.item.clone()))
-         .arrange_by_key()
+         .arrange_by_key_hashed()
          .join_arranged(&edges, |_,x,y| (x.clone(), y.clone()))
          // the next thing is the "topk" computation. sorry!
          .group(move |_,s,t| {

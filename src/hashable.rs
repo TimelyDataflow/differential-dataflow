@@ -121,7 +121,8 @@ impl<T: Ord+Hashable> Deref for OrdWrapper<T> {
 #[derive(Clone, Default, Ord, PartialOrd, Eq, PartialEq, Debug, Copy)]
 pub struct HashableWrapper<T: Hashable> {
     hash: T::Output,
-    item: T,
+    /// The item, for reference.
+    pub item: T,
 }
 
 impl<T: Hashable> Hashable for HashableWrapper<T> {
