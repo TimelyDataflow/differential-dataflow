@@ -320,41 +320,69 @@ where Key: Clone+Default+HashOrdered, Time: Lattice+Ord+Clone+Default {
 	#[inline(never)]
 	fn seal(&mut self, lower: &[Time], upper: &[Time]) -> Rc<Layer<Key, Time, R>> {
 
-		// 1. Scan all of self.buffers and self.buffer to move appropriate updates to self.sorter.
-		if self.buffers.len() > 0 {
+		// Sealing a batch means finding those updates with times greater or equal to some element
+		// of `lower`, but not greater or equal to any element of `upper`. 
+		//
+		// Until timely dataflow gets multiple capabilities per message, we will probably want to
+		// consider sealing multiple batches at once, as we will get multiple requests with nearly
+		// the same `upper`, as we retire a few capabilities in sequence. Food for thought, anyhow.
+		//
+		// Our goal here is to partition stashed updates into "those to keep" and "those to sort"
+		// as efficiently as possible. In particular, if we can avoid lot of allocations, re-using
+		// the allocations we already have, I would be delighted.
 
-	    	if self.buffer.len() > 0 {
-				let empty = self.empty();
-				self.buffers.push(replace(&mut self.buffer, empty));
-	    	}
+		// move the tail onto self.buffers.
+		if self.buffer.len() > 0 {
+			let empty = self.empty();
+			let tail = replace(&mut self.buffer, empty);
+			self.buffers.push(tail);
+		}
 
-	    	// let mut frontier = Antichain::new();
-	    	let buffers = replace(&mut self.buffers, Vec::new());
-	    	for mut buffer in buffers.into_iter() {
-	    		for (key, time, diff) in buffer.drain(..) {
-					if lower.iter().any(|t| t.le(&time)) && !upper.iter().any(|t| t.le(&time)) {
-						self.sorter.push((key, time, diff), &|x| x.0.hashed());
-					}
-					else {
-						if self.buffer.len() == (1 << 10) {
-							let empty = self.empty();
-							self.buffers.push(replace(&mut self.buffer, empty));
+		// partition data into data we keep and data we seal and ship.
+		let mut to_keep = Vec::new();	// updates that are not yet ready.
+		let mut to_seal = Vec::new();	// updates that are ready to go.
+
+		let mut to_keep_tail = self.empty();
+		let mut to_seal_tail = self.empty();
+
+		// swing through each buffer, each element, and partition
+		for mut buffer in self.buffers.drain(..) {
+			for (key, time, diff) in buffer.drain(..) {
+				if lower.iter().any(|t| t.le(&time)) && !upper.iter().any(|t| t.le(&time)) {
+					if to_seal_tail.len() == to_seal_tail.capacity() {
+						if to_seal_tail.len() > 0 {
+							to_seal.push(to_seal_tail);
 						}
-						// frontier.insert(time.clone());
-						self.buffer.push((key, time, diff));
-					}        			
-	    		}
-	    		self.stash.push(buffer);
-	    	}
+						to_seal_tail = self.stash.pop().unwrap_or_else(|| Vec::with_capacity(1 << 10));//self.empty();
+					}
+					to_seal_tail.push((key, time, diff));
+				}
+				else {
+					if to_keep_tail.len() == to_keep_tail.capacity() {
+						if to_keep_tail.len() > 0 {
+							to_keep.push(to_keep_tail);
+						}
+						to_keep_tail = self.stash.pop().unwrap_or_else(|| Vec::with_capacity(1 << 10));//self.empty();
+					}
+					to_keep_tail.push((key, time, diff));
+				}
+			}
+			self.stash.push(buffer);
+		}
 
-	    	// self.frontier = frontier;
+		// retain stuff we keep.
+		self.buffers = to_keep;
+		self.buffer = to_keep_tail;
 
-			// 2. Finish up sorting, then drain the contents into `builder`, consolidating as we go.
+		// now we sort `to_seal`. do this differently based on its length.
+		if to_seal_tail.len() > 0 { to_seal.push(to_seal_tail); }
+		if to_seal.len() > 1 {
+			// sort the data; will probably trigger many allocations.
+			self.sorter.sort(&mut to_seal, &|x| x.0.hashed());
+
 			let mut builder = LayerBuilder::new();
-
-			let mut sorted = self.sorter.finish(&|x| x.0.hashed());
 			let mut current_hash = 0;
-			for mut buffer in sorted.drain(..) {
+			for buffer in to_seal.iter_mut() {
 				for (key, time, diff) in buffer.drain(..) {
 	        		if key.hashed().as_u64() != current_hash {
 	        			current_hash = key.hashed().as_u64();
@@ -365,8 +393,8 @@ where Key: Clone+Default+HashOrdered, Time: Lattice+Ord+Clone+Default {
 	        		}
 	        		self.stage.push(((key, time), diff));				
 				}
-				// TODO: Do something with `buffer`?
 			}
+			self.sorter.recycle(to_seal);
 			consolidate(&mut self.stage, 0);
 			for ((key, time), diff) in self.stage.drain(..) {
 				builder.push((key, (), time, diff));
@@ -376,27 +404,97 @@ where Key: Clone+Default+HashOrdered, Time: Lattice+Ord+Clone+Default {
 			builder.done(lower, upper)
 		}
 		else {
-			let mut stash = self.empty();
-
-			for (key, time, diff) in self.buffer.drain(..) {
-				if lower.iter().any(|t| t.le(&time)) && !upper.iter().any(|t| t.le(&time)) {
-					self.stage.push(((key, time), diff));
-				}
-				else {	
-					stash.push((key, time, diff));
-				}
+			let mut data = to_seal.pop().unwrap_or_else(|| self.empty());
+			for (key, time, diff) in data.drain(..) {
+				self.stage.push(((key, time), diff));
 			}
-
-			self.stash.push(replace(&mut self.buffer, stash));
-
 			consolidate(&mut self.stage, 0);
+
 			let mut builder = LayerBuilder::new();
 			for ((key, time), diff) in self.stage.drain(..) {
 				builder.push((key, (), time, diff));
 			}
-
 			builder.done(lower, upper)
 		}
+
+
+		// // 1. Scan all of self.buffers and self.buffer to move appropriate updates to self.sorter.
+		// if self.buffers.len() > 0 {
+
+	 //    	if self.buffer.len() > 0 {
+		// 		let empty = self.empty();
+		// 		self.buffers.push(replace(&mut self.buffer, empty));
+	 //    	}
+
+	 //    	// let mut frontier = Antichain::new();
+	 //    	let buffers = replace(&mut self.buffers, Vec::new());
+	 //    	for mut buffer in buffers.into_iter() {
+	 //    		for (key, time, diff) in buffer.drain(..) {
+		// 			if lower.iter().any(|t| t.le(&time)) && !upper.iter().any(|t| t.le(&time)) {
+		// 				self.sorter.push((key, time, diff), &|x| x.0.hashed());
+		// 			}
+		// 			else {
+		// 				if self.buffer.len() == (1 << 10) {
+		// 					let empty = self.empty();
+		// 					self.buffers.push(replace(&mut self.buffer, empty));
+		// 				}
+		// 				// frontier.insert(time.clone());
+		// 				self.buffer.push((key, time, diff));
+		// 			}        			
+	 //    		}
+	 //    		self.stash.push(buffer);
+	 //    	}
+
+	 //    	// self.frontier = frontier;
+
+		// 	// 2. Finish up sorting, then drain the contents into `builder`, consolidating as we go.
+		// 	let mut builder = LayerBuilder::new();
+
+		// 	let mut sorted = self.sorter.finish(&|x| x.0.hashed());
+		// 	let mut current_hash = 0;
+		// 	for mut buffer in sorted.drain(..) {
+		// 		for (key, time, diff) in buffer.drain(..) {
+	 //        		if key.hashed().as_u64() != current_hash {
+	 //        			current_hash = key.hashed().as_u64();
+		// 				consolidate(&mut self.stage, 0);
+		// 				for ((key, time), diff) in self.stage.drain(..) {
+		// 					builder.push((key, (), time, diff));
+		// 				}
+	 //        		}
+	 //        		self.stage.push(((key, time), diff));				
+		// 		}
+		// 		// TODO: Do something with `buffer`?
+		// 	}
+		// 	consolidate(&mut self.stage, 0);
+		// 	for ((key, time), diff) in self.stage.drain(..) {
+		// 		builder.push((key, (), time, diff));
+		// 	}
+
+		// 	// 3. Return the finished layer with its bounds.
+		// 	builder.done(lower, upper)
+		// }
+		// else {
+		// 	let mut stash = self.empty();
+
+		// 	for (key, time, diff) in self.buffer.drain(..) {
+		// 		if lower.iter().any(|t| t.le(&time)) && !upper.iter().any(|t| t.le(&time)) {
+		// 			self.stage.push(((key, time), diff));
+		// 		}
+		// 		else {	
+		// 			stash.push((key, time, diff));
+		// 		}
+		// 	}
+
+		// 	self.stash.push(replace(&mut self.buffer, stash));
+
+		// 	consolidate(&mut self.stage, 0);
+		// 	let mut builder = LayerBuilder::new();
+		// 	for ((key, time), diff) in self.stage.drain(..) {
+		// 		builder.push((key, (), time, diff));
+		// 	}
+
+		// 	builder.done(lower, upper)
+		// }
 	}
 
 	fn frontier(&mut self) -> &[Time] {
