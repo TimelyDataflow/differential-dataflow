@@ -180,6 +180,8 @@ where
         // working space for per-key interesting times.
         let mut interesting_times = Vec::new();
 
+        let mut lower = vec![<G::Timestamp as Lattice>::min()];
+
         // fabricate a data-parallel operator using the `unary_notify` pattern.
         let stream = self.stream.unary_notify(Pipeline, "GroupArrange", vec![], move |input, output, notificator| {
 
@@ -229,12 +231,6 @@ where
             // The following pattern looks a lot like what is done in `arrange`. In fact, we have 
             // stolen some code from there, so if either looks wrong, make sure to check the other
             // as well.
-
-            // lower bound for use in descriptions.
-            let mut lower = Vec::new();
-            for cap in &capabilities {
-                lower.push(cap.time());
-            }
 
             for index in 0 .. capabilities.len() {
 

@@ -132,8 +132,8 @@ impl<Key: Clone+Default+HashOrdered, Val: Ord+Clone, Time: Lattice+Ord+Clone+Def
 	/// Conducts a full merge, right away. Times not advanced.
 	pub fn merge(&self, other: &Self) -> Self {
 
-		// // this may not be true if we leave gaps; a weaker statement would be "<=".
-		// assert!(other.desc.upper() == self.desc.lower());
+		// This may not be true if we leave gaps, so we try hard not to do that.
+		assert!(other.desc.upper() == self.desc.lower());
 
 		// each element of self.desc.lower must be in the future of some element of other.desc.upper
 		for time in self.desc.lower() {
@@ -233,6 +233,8 @@ pub struct LayerBatcher<K, V, T: PartialOrd, R> {
     stash: Vec<Vec<((K, V), T, R)>>,
     stage: Vec<((K, V, T), R)>,
 
+    lower: Vec<T>,
+
     /// lower bound of contained updates.
     frontier: Antichain<T>,
 }
@@ -253,9 +255,14 @@ where Key: Clone+Default+HashOrdered, Val: Ord+Clone, Time: Lattice+Ord+Clone+De
 			stash: Vec::new(),
 			stage: Vec::new(),
 			frontier: Antichain::new(),
+			lower: vec![Time::min()]
 		} 
 	}
 	fn push(&mut self, (key, val, time, diff): (Key, Val, Time, R)) {
+
+		// each pushed update should be in the future of the current lower bound.
+		debug_assert!(self.lower.iter().any(|t| t.le(&time)));
+
 		self.buffer.push(((key, val), time, diff));
 		if self.buffer.len() == (1 << 10) {
 			let empty = self.empty();
@@ -265,7 +272,7 @@ where Key: Clone+Default+HashOrdered, Val: Ord+Clone, Time: Lattice+Ord+Clone+De
 
 	// TODO: Consider sorting everything, which would allow cancelation of any updates.
 	#[inline(never)]
-	fn seal(&mut self, lower: &[Time], upper: &[Time]) -> Rc<Layer<Key, Val, Time, R>> {
+	fn seal(&mut self, upper: &[Time]) -> Rc<Layer<Key, Val, Time, R>> {
 
 		// Sealing a batch means finding those updates with times greater or equal to some element
 		// of `lower`, but not greater or equal to any element of `upper`. 
@@ -295,12 +302,12 @@ where Key: Clone+Default+HashOrdered, Val: Ord+Clone, Time: Lattice+Ord+Clone+De
 		// swing through each buffer, each element, and partition
 		for mut buffer in self.buffers.drain(..) {
 			for ((key, val), time, diff) in buffer.drain(..) {
-				if lower.iter().any(|t| t.le(&time)) && !upper.iter().any(|t| t.le(&time)) {
+				if !upper.iter().any(|t| t.le(&time)) {
 					if to_seal_tail.len() == to_seal_tail.capacity() {
 						if to_seal_tail.len() > 0 {
 							to_seal.push(to_seal_tail);
 						}
-						to_seal_tail = self.stash.pop().unwrap_or_else(|| Vec::with_capacity(1 << 10));//self.empty();
+						to_seal_tail = self.stash.pop().unwrap_or_else(|| Vec::with_capacity(1 << 10));
 					}
 					to_seal_tail.push(((key, val), time, diff));
 				}
@@ -309,7 +316,7 @@ where Key: Clone+Default+HashOrdered, Val: Ord+Clone, Time: Lattice+Ord+Clone+De
 						if to_keep_tail.len() > 0 {
 							to_keep.push(to_keep_tail);
 						}
-						to_keep_tail = self.stash.pop().unwrap_or_else(|| Vec::with_capacity(1 << 10));//self.empty();
+						to_keep_tail = self.stash.pop().unwrap_or_else(|| Vec::with_capacity(1 << 10));
 					}
 					to_keep_tail.push(((key, val), time, diff));
 				}
@@ -348,7 +355,9 @@ where Key: Clone+Default+HashOrdered, Val: Ord+Clone, Time: Lattice+Ord+Clone+De
 			}
 
 			// 3. Return the finished layer with its bounds.
-			builder.done(lower, upper)
+			let result = builder.done(&self.lower[..], upper);
+			self.lower = upper.to_vec();
+			result
 		}
 		else {
 			let mut data = to_seal.pop().unwrap_or_else(|| self.empty());
@@ -361,7 +370,9 @@ where Key: Clone+Default+HashOrdered, Val: Ord+Clone, Time: Lattice+Ord+Clone+De
 			for ((key, val, time), diff) in self.stage.drain(..) {
 				builder.push((key, val, time, diff));
 			}
-			builder.done(lower, upper)
+			let result = builder.done(&self.lower[..], upper);
+			self.lower = upper.to_vec();
+			result
 		}
 	}
 
