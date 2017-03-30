@@ -125,6 +125,7 @@ impl<Key: Clone+Default+HashOrdered, Val: Ord+Clone, Time: Lattice+Ord+Clone+Def
 	type Cursor = LayerCursor<Key, Val, Time, R>;
 	fn cursor(&self) -> Self::Cursor {  LayerCursor { cursor: self.layer.cursor() } }
 	fn len(&self) -> usize { self.layer.tuples() }
+	fn description(&self) -> &Description<Time> { &self.desc }
 }
 
 impl<Key: Clone+Default+HashOrdered, Val: Ord+Clone, Time: Lattice+Ord+Clone+Default, R: Ring> Layer<Key, Val, Time, R> {

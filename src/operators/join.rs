@@ -1,16 +1,17 @@
 //! Match pairs of records based on a key.
 
 use std::fmt::Debug;
-use std::borrow::Borrow;
 
-use linear_map::LinearMap;
-
-use timely::progress::{Timestamp, Antichain};
+use timely::progress::Timestamp;
 use timely::dataflow::Scope;
 use timely::dataflow::operators::Binary;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Capability;
 use timely_sort::Unsigned;
+
+use timely::dataflow::operators::OutputHandle;
+use timely::dataflow::channels::pushers::tee::Tee;
+
 
 use hashable::{Hashable, UnsignedWrapper};
 use ::{Data, Ring, Collection};
@@ -186,7 +187,6 @@ pub trait JoinArranged<G: Scope, K: 'static, V: 'static, R: Ring> where G::Times
     where 
         V2: 'static,
         T2: Trace<K, V2, G::Timestamp, R>+'static,
-        T2: 'static,
         T2::Batch: 'static,
         D: Data,
         L: Fn(&K,&V,&V2)->D+'static;
@@ -198,135 +198,82 @@ impl<G, K, V, R, T1> JoinArranged<G, K, V, R> for Arranged<G,K,V,R,T1>
         K: Eq+'static, 
         V: 'static, 
         R: Ring,
-        T1: Trace<K,V,G::Timestamp, R>,
+        T1: Trace<K,V,G::Timestamp, R>+'static,
         G::Timestamp: Lattice+Ord+Debug+Copy,
-        T1: 'static,
         T1::Batch: 'static+Debug {
     fn join_arranged<V2,T2,D,L>(&self, other: &Arranged<G,K,V2,R,T2>, result: L) -> Collection<G,D,R> 
     where 
         V2: 'static,
-        T2: Trace<K,V2,G::Timestamp,R>,
-        T2: 'static,
+        T2: Trace<K,V2,G::Timestamp,R>+'static,
         T2::Batch: 'static,
         D: Data,
         L: Fn(&K,&V,&V2)->D+'static {
 
+        // handles to shared trace data structures.
         let mut trace1 = Some(self.new_handle());
         let mut trace2 = Some(other.new_handle());
 
-        let mut inputs1 = LinearMap::<G::Timestamp, T1::Batch>::new();
-        let mut inputs2 = LinearMap::<G::Timestamp, T2::Batch>::new();
+        // acknowledged frontier for each input.
+        let mut acknowledged1 = vec![G::Timestamp::min()];
+        let mut acknowledged2 = vec![G::Timestamp::min()];
 
-        let mut capabilities = Vec::<Capability<G::Timestamp>>::new();
+        // deferred work of batches from each input.
+        let mut todo1: Vec<Deferred<K,V2,V,G::Timestamp,R,T2::Cursor,<T1::Batch as Batch<K,V,G::Timestamp,R>>::Cursor>> = Vec::new();
+        let mut todo2: Vec<Deferred<K,V,V2,G::Timestamp,R,T1::Cursor,<T2::Batch as Batch<K,V2,G::Timestamp,R>>::Cursor>> = Vec::new();
 
-        let mut output_buffer = Vec::new();
+        let stream = self.stream.binary_notify(&other.stream, Pipeline, Pipeline, "Join", vec![], move |input1, input2, output, notificator| {
 
-        let mut todo: Vec<Deferred<K,V,V2,G::Timestamp,R,T1,T2>> = Vec::new();     // readied outputs to enumerate.
-
-        let stream = self.stream.binary_notify(&other.stream, Pipeline, Pipeline, "JoinAlt", vec![], move |input1, input2, output, notificator| {
-
-            let frontier1 = notificator.frontier(0);
-            let frontier2 = notificator.frontier(1);
-
-            // The acknowledged frontier
+            // The join computation repeatedly accepts batches of updates from each of its inputs.
             //
-            // The `ack_frontier` antichain tracks those times at which updates have not yet been acknowledged.
-            // It is defined by the two input frontiers, and the set of as-yet unstarted work. When we start
-            // to work on a time the current acknowledged frontier is captured, and the time is considered 
-            // committed. Even though we have not yet produced the outputs, we have accounted for their 
-            // eventual production. The acknowledged frontier is just about accounting for outputs, rather
-            // than enforcing anything about how they are produced.
+            // For each accepted batch, it prepares a work-item to join the batch against previously "accepted"
+            // updates from its other input. It is important to track which updates have been accepted, through
+            // a combination of the input's frontier and the most recently received batch's upper bound, because
+            // we use a shared trace and there may be updates present that are in advance of this accepted bound.
 
-            let mut ack_frontier = Antichain::new();
-
-            for time in frontier1 { ack_frontier.insert(time.clone()); }
-            for time in frontier2 { ack_frontier.insert(time.clone()); }
-            for cap in &capabilities { ack_frontier.insert(cap.time()); }
-
-            // println!("ack_frontier: {:?}", ack_frontier.elements());
-
-            // Advancing the input collections
-            //
-            // Join's use of input collections is unlike `group`'s use of input collections. Each input 
-            // collection has its updates
-            //
-            //   (i) filtered by "acknowledged times" `ack_frontier`, and then 
-            //   (ii) crossed with new updates from the other collection. 
-            //
-            // We must not remove the distinction between updates with respect to any time in the frontier
-            // of times we may yet acknowledge, as these distinctions are what include or exclude updates
-            // from the corresponding cross product. This frontier as already defined includes the times 
-            // of future updates, which define the second constraint. We should be ok using `ack_frontier` 
-            // for the calls to `advance_by`. 
-
-            // shut down trace1 if the frontier2 is empty and inputs2 are done. else, advance its frontier.
-            if trace2.is_some() && frontier1.len() == 0 && inputs1.len() == 0 { trace2 = None; }
-            if let Some(ref mut trace) = trace2 {
-                trace.advance_by(ack_frontier.elements());
-            }
-
-            // shut down trace1 if the frontier2 is empty and inputs2 are done. else, advance its frontier.
-            if trace1.is_some() && frontier2.len() == 0 && inputs2.len() == 0 { trace1 = None; }
-            if let Some(ref mut trace) = trace1 {
-                trace.advance_by(ack_frontier.elements());
-            }
-
-            // read input 1, push all data to queues
-            input1.for_each(|time, data| {
-                // println!("join1 recv: {:?}", time);
-                // for elt in data.iter() { println!("  {:?}", elt); }
-                inputs1.insert(time.time(), data.drain(..).next().unwrap().item);
-                if !capabilities.iter().any(|c| c.time() == time.time()) { capabilities.push(time); }
-            });
-
-            // read input 2, push all data to queues
-            input2.for_each(|time, data| {
-                inputs2.insert(time.time(), data.drain(..).next().unwrap().item);
-                if !capabilities.iter().any(|c| c.time() == time.time()) { capabilities.push(time); }
-            });
-
-            // look for input work that we can now perform.
-            capabilities.sort_by(|x,y| x.time().cmp(&y.time()));
-            if let Some(position) = capabilities.iter().position(|c| !frontier1.iter().any(|t| t.le(&c.time())) &&
-                                                                     !frontier2.iter().any(|t| t.le(&c.time())) ) {
-                let capability = capabilities.remove(position);
-                let time = capability.time();
-
-                // println!("join working: {:?}", time);
-
-                // create input batch, insert into trace, prepare work.
-                let work1 = inputs1.remove(&time).and_then(|batch| {
-                    trace2.as_ref().map(|t| (batch.cursor(), t.cursor()))
-                });
-
-                // create input batch, insert into trace, prepare work.
-                let work2 = inputs2.remove(&time).and_then(|batch| {
-                    trace1.as_ref().map(|t| (batch.cursor(), t.cursor()))
-                });
-
-                // enqueue work item if either input needs it.
-                if work1.is_some() || work2.is_some() {
-                    // println!("join work started");
-                    todo.push(Deferred::new(work1, work2, capability, ack_frontier));
-                }
-            }
-
-            // perform some outstanding computation. perhaps not all of it.
-            if todo.len() > 0 {
-
-                // produces at least 1_000_000 outputs, or exhausts `todo[0]`.
-                todo[0].work(&mut output_buffer, &result, 1_000_000);
-                // println!("join_work.len(): {:?}", output_buffer.len());
-
-                {   // need scope to let session drop, so we can ditch todo[0].
-                    let mut session = output.session(todo[0].capability());
-                    for ((time, data), diff) in output_buffer.drain(..) {
-                        session.give((data, time, diff));
+            // drain input 1, prepare work.
+            input1.for_each(|capability, data| {
+                if let Some(ref trace2) = trace2 {
+                    for batch1 in data.drain(..) {
+                        todo1.push(Deferred::new(trace2.cursor(), batch1.item.cursor(), capability.clone(), acknowledged2.clone()));
+                        debug_assert!(batch1.item.description().upper().iter().all(|t| acknowledged1.iter().any(|t2| t2.le(t))));
+                        acknowledged1 = batch1.item.description().upper().to_vec();
                     }
                 }
+            });
 
-                // TODO : A queue would be better than a stack. :P
-                if !todo[0].work_remains() { todo.remove(0); }
+            // drain input 2, prepare work.
+            input2.for_each(|capability, data| {
+                if let Some(ref trace1) = trace1 {
+                    for batch2 in data.drain(..) {
+                        todo2.push(Deferred::new(trace1.cursor(), batch2.item.cursor(), capability.clone(), acknowledged1.clone()));
+                        debug_assert!(batch2.item.description().upper().iter().all(|t| acknowledged2.iter().any(|t2| t2.le(t))));
+                        acknowledged2 = batch2.item.description().upper().to_vec();
+                    }
+                }
+            });
+
+            // shut down or advance trace2 based on the frontier of input 1.
+            if trace2.is_some() && notificator.frontier(0).len() == 0 { trace2 = None; }
+            if let Some(ref mut trace2) = trace2 {
+                trace2.advance_by(notificator.frontier(0));
+            }
+
+            // shut down or advance trace1 based on the frontier of input 2.
+            if trace1.is_some() && notificator.frontier(1).len() == 0 { trace1 = None; }
+            if let Some(ref mut trace1) = trace1 {
+                trace1.advance_by(notificator.frontier(1));
+            }
+
+            // perform some amount of outstanding work. 
+            if todo1.len() > 0 {
+                todo1[0].work(output, &|k,v2,v1| result(k,v1,v2), 1_000_000);
+                if !todo1[0].work_remains() { todo1.remove(0); }
+            }
+
+            // perform some amount of outstanding work. 
+            if todo2.len() > 0 {
+                todo2[0].work(output, &|k,v1,v2| result(k,v1,v2), 1_000_000);
+                if !todo2[0].work_remains() { todo2.remove(0); }
             }
         });
 
@@ -337,118 +284,84 @@ impl<G, K, V, R, T1> JoinArranged<G, K, V, R> for Arranged<G,K,V,R,T1>
 /// Deferred join computation.
 ///
 /// The structure wraps cursors which allow us to play out join computation at whatever rate we like.
-/// This allows us to avoid producing and buffering massive amounts 
-struct Deferred<K, V1, V2, T, R, T1, T2> 
+/// This allows us to avoid producing and buffering massive amounts of data, without giving the timely
+/// dataflow system a chance to run operators that can consume and aggregate the data.
+struct Deferred<K, V1, V2, T, R, C1, C2> 
 where 
     T: Timestamp+Lattice+Ord+Debug, 
-    T1: Trace<K, V1, T, R>, 
-    T2: Trace<K, V2, T, R>,
+    C1: Cursor<K, V1, T, R>,
+    C2: Cursor<K, V2, T, R>,
 {
-    work1: Option<(<T1::Batch as Batch<K,V1,T,R>>::Cursor, T2::Cursor)>,
-    work2: Option<(<T2::Batch as Batch<K,V2,T,R>>::Cursor, T1::Cursor)>,
+    phant: ::std::marker::PhantomData<(K, V1, V2, R)>,
+    trace: C1,
+    batch: C2,
     capability: Capability<T>,
-    ack_frontier: Antichain<T>,
+    acknowledged: Vec<T>,
 }
 
-impl<K, V1, V2, T, R, T1, T2> Deferred<K, V1, V2, T, R, T1, T2>
+impl<K, V1, V2, T, R, C1, C2> Deferred<K, V1, V2, T, R, C1, C2>
 where
     K: Eq,
     T: Timestamp+Lattice+Ord+Debug+Copy,
     R: Ring, 
-    T1: Trace<K,V1,T,R>, 
-    T2: Trace<K,V2,T,R>,
+    C1: Cursor<K, V1, T, R>,
+    C2: Cursor<K, V2, T, R>,
 {
-    fn new(work1: Option<(<T1::Batch as Batch<K,V1,T,R>>::Cursor, T2::Cursor)>, 
-           work2: Option<(<T2::Batch as Batch<K,V2,T,R>>::Cursor, T1::Cursor)>, 
-           capability: Capability<T>,
-           ack_frontier: Antichain<T>) -> Self {
+    fn new(trace: C1, batch: C2, capability: Capability<T>, acknowledged: Vec<T>) -> Self {
         Deferred {
-            work1: work1,
-            work2: work2,
+            phant: ::std::marker::PhantomData,
+            trace: trace,
+            batch: batch,
             capability: capability,
-            ack_frontier: ack_frontier,
+            acknowledged: acknowledged,
         }
     }
 
-    fn capability(&self) -> &Capability<T> { &self.capability }
-
     fn work_remains(&self) -> bool { 
-        let work1 = self.work1.as_ref().map(|x| x.0.key_valid());
-        let work2 = self.work2.as_ref().map(|x| x.0.key_valid());
-        work1 == Some(true) || work2 == Some(true)
+        self.batch.key_valid()
     }
 
     /// Process keys until at least `limit` output tuples produced, or the work is exhausted.
-    ///
-    /// This method steps through keys in both update layers, doing complete keys worth of work until
-    /// `output` contains at least `limit` records. This may involve much more than `limit` computation,
-    /// as updates may cancel, and for massive keys it may result in arbitrarily large output anyhow.
-    ///
-    /// To make the method more responsive, we could count the number of diffs processed, and allow the 
-    /// computation to break out at any point.
     #[inline(never)]
-    fn work<D: Ord+Clone, L: Fn(&K, &V1, &V2)->D>(&mut self, output: &mut Vec<((T, D), R)>, logic: &L, limit: usize) {
+    fn work<D, L>(&mut self, output: &mut OutputHandle<T, (D, T, R), Tee<T, (D, T, R)>>, logic: &L, limit: usize) 
+    where D: Ord+Clone+Data, L: Fn(&K, &V1, &V2)->D {
 
-        let ack_frontier = &self.ack_frontier;
-        let time = self.capability.time();
+        let acknowledged = &self.acknowledged;
         let mut temp = Vec::new();
 
-        // work on the first bit of work.
-        if let Some((ref mut layer, ref mut trace)) = self.work1 {
-            while layer.key_valid() && output.len() < limit {
-                trace.seek_key(layer.key().borrow());
-                if trace.key_valid() && trace.key() == layer.key() {
-                    while trace.val_valid() {
-                        while layer.val_valid() {
-                            let r = logic(layer.key(), layer.val(), trace.val());
-                            trace.map_times(|time1, diff1| {
-                                if !ack_frontier.elements().iter().any(|t| t <= time1) {
-                                    layer.map_times(|time2, diff2| {
-                                        temp.push((time1.join(time2), diff1 * diff2));
-                                    });
-                                }
-                            });
+        let mut effort = 0;
+        let mut session = output.session(&self.capability);
 
-                            consolidate(&mut temp, 0);
-                            output.extend(temp.drain(..).map(|(t,d)| ((t,r.clone()), d)));
-                            layer.step_val();
+        let trace = &mut self.trace;
+        let batch = &mut self.batch;
+
+        while batch.key_valid() && effort < limit {
+            trace.seek_key(batch.key());
+            if trace.key_valid() && trace.key() == batch.key() {
+                while trace.val_valid() {
+                    while batch.val_valid() {
+                        let r = logic(batch.key(), trace.val(), batch.val());
+                        trace.map_times(|time1, diff1| {
+                            if !acknowledged.iter().any(|t| t <= time1) {
+                                batch.map_times(|time2, diff2| {
+                                    temp.push((time1.join(time2), diff1 * diff2));
+                                });
+                            }
+                        });
+
+                        consolidate(&mut temp, 0);
+                        effort += temp.len();
+                        for (t, d) in temp.drain(..) {
+                            session.give((r.clone(), t, d));
                         }
-
-                        layer.rewind_vals();
-                        trace.step_val();
+                        batch.step_val();
                     }
+
+                    batch.rewind_vals();
+                    trace.step_val();
                 }
-                layer.step_key();
             }
-        }
-
-        // work on the second bit of work.
-        if let Some((ref mut layer, ref mut trace)) = self.work2 {
-            while layer.key_valid() && output.len() < limit {
-                trace.seek_key(layer.key().borrow());
-                if trace.key_valid() && trace.key() == layer.key() {
-                    while trace.val_valid() {
-                        while layer.val_valid() {
-                            let r = logic(layer.key(), trace.val(), layer.val());
-                            trace.map_times(|time1, diff1| {
-                                if time1 <= &time || !ack_frontier.elements().iter().any(|t| t <= time1) {
-                                    layer.map_times(|time2, diff2| {
-                                        temp.push((time1.join(time2), diff1 * diff2));
-                                    });                   
-                                }                         
-                            });
-
-                            consolidate(&mut temp, 0);
-                            output.extend(temp.drain(..).map(|(t,d)| ((t,r.clone()), d)));
-                            layer.step_val();
-                        }
-
-                        layer.rewind_vals();
-                        trace.step_val();
-                    }
-                }
-                layer.step_key();
-            }
+            batch.step_key();
         }
     }
 }

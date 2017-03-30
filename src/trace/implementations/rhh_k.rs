@@ -119,6 +119,7 @@ impl<Key: Clone+Default+HashOrdered, Time: Lattice+Ord+Clone+Default, R: Ring> B
 		LayerCursor { empty: (), valid: true, cursor: self.layer.cursor() } 
 	}
 	fn len(&self) -> usize { self.layer.tuples() }
+	fn description(&self) -> &Description<Time> { &self.desc }
 }
 
 impl<Key: Clone+Default+HashOrdered, Time: Lattice+Ord+Clone+Default, R: Ring> Layer<Key, Time, R> {
