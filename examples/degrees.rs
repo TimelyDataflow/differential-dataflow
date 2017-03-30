@@ -146,10 +146,10 @@ where G::Timestamp: Lattice+::std::hash::Hash+Ord {
 
 		// restrict edges active vertices, return result
 	    edges.enter(&inner.scope())
-	    	 .arrange_by_key()
+	    	 .arrange_by_key_hashed()
 	    	 .join_arranged(&active, |k,v,_| (k.item.clone(), v.clone()))
 	    	 .map(|(src,dst)| (dst,src))
- 	    	 .arrange_by_key()
+ 	    	 .arrange_by_key_hashed()
  	    	 .join_arranged(&active, |k,v,_| (k.item.clone(), v.clone()))
      	     .map(|(dst,src)| (src,dst))
 	})

@@ -31,6 +31,9 @@
 //! })
 //! ```
 
+use std::fmt::Debug;
+use std::default::Default;
+
 use hashable::{Hashable, UnsignedWrapper};
 use ::{Data, Collection, Ring};
 
@@ -60,10 +63,10 @@ pub trait Group<G: Scope, K: Data, V: Data, R: Ring> where G::Timestamp: Lattice
 }
 
 impl<G: Scope, K: Data+Default+Hashable, V: Data, R: Ring> Group<G, K, V, R> for Collection<G, (K, V), R> 
-    where G::Timestamp: Lattice+Ord+::std::fmt::Debug {
+    where G::Timestamp: Lattice+Ord+Debug, <K as Hashable>::Output: Data+Default {
     fn group<L, V2: Data, R2: Ring>(&self, logic: L) -> Collection<G, (K, V2), R2>
         where L: Fn(&K, &[(V, R)], &mut Vec<(V2, R2)>)+'static {
-        self.arrange_by_key()
+        self.arrange_by_key_hashed_cached()
             .group_arranged(move |k,s,t| logic(&k.item,s,t), HashSpine::new(Default::default()))
             .as_collection(|k,v| (k.item.clone(), v.clone()))
     }
@@ -177,6 +180,8 @@ where
         // working space for per-key interesting times.
         let mut interesting_times = Vec::new();
 
+        let mut lower = vec![<G::Timestamp as Lattice>::min()];
+
         // fabricate a data-parallel operator using the `unary_notify` pattern.
         let stream = self.stream.unary_notify(Pipeline, "GroupArrange", vec![], move |input, output, notificator| {
 
@@ -226,12 +231,6 @@ where
             // The following pattern looks a lot like what is done in `arrange`. In fact, we have 
             // stolen some code from there, so if either looks wrong, make sure to check the other
             // as well.
-
-            // lower bound for use in descriptions.
-            let mut lower = Vec::new();
-            for cap in &capabilities {
-                lower.push(cap.time());
-            }
 
             for index in 0 .. capabilities.len() {
 
@@ -319,6 +318,7 @@ where
                                         sum = sum + d; 
                                     }
                                     if !t.le(&meet) {
+                                        // TODO: Capture times, consolidate, push afterwards.
                                         input_accumulator.edits.push((val.clone(), t.join(&meet), d));
                                     }
                                 });
@@ -341,6 +341,7 @@ where
                                         sum = sum + d;
                                     }
                                     if !t.le(&meet) {
+                                        // TODO: Capture times, consolidate, push afterwards.
                                         output_accumulator.edits.push((val.clone(), t.join(&meet), d));
                                     }
                                 });
@@ -461,7 +462,7 @@ fn segment<T, F: Fn(&T)->bool>(source: &mut Vec<T>, dest1: &mut Vec<T>, dest2: &
     }
 }
 
-#[inline(never)]
+// #[inline(never)]
 fn consolidate<T: Ord, R: Ring>(list: &mut Vec<(T, R)>) {
     list.sort_by(|x,y| x.0.cmp(&y.0));
     for index in 1 .. list.len() {
@@ -473,7 +474,7 @@ fn consolidate<T: Ord, R: Ring>(list: &mut Vec<(T, R)>) {
     list.retain(|x| !x.1.is_zero());
 }
 
-#[inline(never)]
+// #[inline(never)]
 fn consolidate2<D: Ord, T: Ord, R: Ring>(list: &mut Vec<(D, T, R)>) {
     list.sort_by(|x,y| (&y.0, &y.1).cmp(&(&x.0, &x.1)));
     for index in 1 .. list.len() {
@@ -507,6 +508,7 @@ impl<T: Ord+Lattice+Clone+::std::fmt::Debug> Interestinator<T> {
     /// This method has a somewhat non-standard implementation in the aim of being "more linear", which makes it
     /// a bit more complicated that you might think, and with possibly surprising performance. If this method shows
     /// up on performance profiling, it may be worth asking for more information, as it is a work in progress.
+    #[inline(never)]
     fn close_interesting_times<D, R>(&mut self, edits: &[(D, T, R)], times: &mut Vec<T>) {
 
         // Candidate algorithm: sort list of (time, is_new) pairs describing old and new times. 
@@ -753,6 +755,7 @@ impl<D: Ord+Clone, T: Lattice+Ord, R: Ring> Accumulator<D, T, R> {
     /// forward through each of its own internal chains. Although the method should be correct
     /// for arbitrary sequences of times, the performance could be arbitrarily poor.
 
+    #[inline(never)]
     fn update_to(&mut self, new_time: T) -> &[(D, R)] {
 
         let meet = self.time.meet(&new_time);

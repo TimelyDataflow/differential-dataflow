@@ -140,12 +140,12 @@ where
 {
     fn join_map<V2: Data, D: Data, L>(&self, other: &Collection<G, (K, V2), R>, logic: L) -> Collection<G, D, R>
     where L: Fn(&K, &V, &V2)->D+'static {
-        let arranged1 = self.arrange_by_key();
-        let arranged2 = other.arrange_by_key();
+        let arranged1 = self.arrange_by_key_hashed();
+        let arranged2 = other.arrange_by_key_hashed();
         arranged1.join_arranged(&arranged2, move |k,v1,v2| logic(&k.item,v1,v2))
     }
     fn semijoin(&self, other: &Collection<G, K, R>) -> Collection<G, (K, V), R> {
-        let arranged1 = self.arrange_by_key();
+        let arranged1 = self.arrange_by_key_hashed();
         let arranged2 = other.arrange_by_self();
         arranged1.join_arranged(&arranged2, |k,v,_| (k.item.clone(), v.clone()))
     }

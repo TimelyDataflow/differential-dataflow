@@ -19,21 +19,21 @@ fn main() {
     let edges: usize = std::env::args().nth(2).unwrap().parse().unwrap();
     let batch: usize = std::env::args().nth(3).unwrap().parse().unwrap();
 
-    // define a new computational scope, in which to run BFS
-    timely::execute_from_args(std::env::args().skip(5), move |computation| {
+    // define a new timely dataflow computation. 
+    timely::execute_from_args(std::env::args().skip(4), move |worker| {
 
-    	let index = computation.index();
-    	let peers = computation.peers();
+    	let index = worker.index();
+    	let peers = worker.peers();
 
     	// create a a degree counting differential dataflow
-    	let (mut input, probe, trace) = computation.scoped(|scope| {
+    	let (mut input, probe, trace) = worker.scoped(|scope| {
 
     		// create edge input, count a few ways.
     		let (input, edges) = scope.new_input();
 
     		// pull off source, and count.
     		let arranged = edges.as_collection()
-    							.arrange_by_key();
+    							.arrange_by_key_hashed();
 
 		    (input, arranged.stream.probe().0, arranged.trace.clone())
     	});
@@ -51,14 +51,14 @@ fn main() {
 
         	// move the data along a bit
         	if edge % 10000 == 9999 {
-        		computation.step();
+        		worker.step();
         	}
 		}
 
 		let timer = ::std::time::Instant::now();
 
 		input.advance_to(1);
-		computation.step_while(|| probe.lt(input.time()));
+		worker.step_while(|| probe.lt(input.time()));
 
 		if index == 0 {
 			let timer = timer.elapsed();
@@ -82,7 +82,7 @@ fn main() {
 
 	        		let next = input.epoch() + 1;
 	        		input.advance_to(next);
-					computation.step_while(|| probe.lt(input.time()));
+					worker.step_while(|| probe.lt(input.time()));
 
 					if index == 0 {
 						let timer = timer.elapsed();

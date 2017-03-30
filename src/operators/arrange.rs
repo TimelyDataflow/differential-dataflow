@@ -34,7 +34,7 @@ use timely::dataflow::operators::Capability;
 
 use timely_sort::Unsigned;
 
-use hashable::OrdWrapper;
+use hashable::{HashableWrapper, OrdWrapper};
 
 use ::{Data, Ring, Collection, AsCollection, Hashable};
 use lattice::Lattice;
@@ -308,7 +308,7 @@ impl<G: Scope, K: Data+Hashable, V: Data, R: Ring> Arrange<G, K, V, R> for Colle
                     }
 
                     // extract updates between `capabilities[index].time()` and `upper`.
-                    let batch = batcher.seal(&[capabilities[index].time()], &upper[..]);
+                    let batch = batcher.seal(&upper[..]);
 
                     // If the source is still active, commit the extracted batch.
                     source.upgrade().map(|trace| {
@@ -363,13 +363,22 @@ where G::Timestamp: Lattice+Ord {
     /// This operator arranges a stream of values into a shared trace, whose contents it maintains.
     /// This trace is current for all times completed by the output stream, which can be used to
     /// safely identify the stable times and values in the trace.
-    fn arrange_by_key(&self) -> Arranged<G, OrdWrapper<K>, V, R, HashSpine<OrdWrapper<K>, V, G::Timestamp, R>>;
+    fn arrange_by_key_hashed(&self) -> Arranged<G, OrdWrapper<K>, V, R, HashSpine<OrdWrapper<K>, V, G::Timestamp, R>>;
+    /// Arranges a collection of `(Key, Val)` records by `Key`.
+    ///
+    /// This operator arranges a stream of values into a shared trace, whose contents it maintains.
+    /// This trace is current for all times completed by the output stream, which can be used to
+    /// safely identify the stable times and values in the trace.
+    fn arrange_by_key_hashed_cached(&self) -> Arranged<G, HashableWrapper<K>, V, R, HashSpine<HashableWrapper<K>, V, G::Timestamp, R>> where <K as Hashable>::Output: Default;
 }
 
 impl<G: Scope, K: Data+Default+Hashable, V: Data, R: Ring> ArrangeByKey<G, K, V, R> for Collection<G, (K,V), R>
-where G::Timestamp: Lattice+Ord  {        
-    fn arrange_by_key(&self) -> Arranged<G, OrdWrapper<K>, V, R, HashSpine<OrdWrapper<K>, V, G::Timestamp, R>> {
+where G::Timestamp: Lattice+Ord {        
+    fn arrange_by_key_hashed(&self) -> Arranged<G, OrdWrapper<K>, V, R, HashSpine<OrdWrapper<K>, V, G::Timestamp, R>> {
         self.arrange(|k,v| (OrdWrapper {item:k},v), HashSpine::new(Default::default()))
+    }
+    fn arrange_by_key_hashed_cached(&self) -> Arranged<G, HashableWrapper<K>, V, R, HashSpine<HashableWrapper<K>, V, G::Timestamp, R>> where <K as Hashable>::Output: Default {
+        self.arrange(|k,v| (HashableWrapper::from(k),v), HashSpine::new(Default::default()))
     }
 }
 

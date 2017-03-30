@@ -73,29 +73,48 @@ fn main() {
 
         // println!("stable; elapsed: {:?}", timer.elapsed());
 
-        if batch > 0 {
-            for _wave in 0 .. rounds {
+        let mut session = differential_dataflow::input::InputSession::from(&mut graph);
+        for round in 0 .. rounds {
+            for element in 0 .. batch {
                 if computation.index() == 0 {
-                    let mut session = differential_dataflow::input::InputSession::from(&mut graph);
-                    for _ in 0 .. batch {
-                        session.insert((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)));
-                        session.remove((rng2.gen_range(0, nodes), rng2.gen_range(0, nodes)));
-                        let &round = session.epoch();
-                        session.advance_to(round + 1);
-                    }
+                    session.insert((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)));
+                    session.remove((rng2.gen_range(0, nodes), rng2.gen_range(0, nodes)));
                 }
+                session.advance_to(1 + round * batch + element);                
+            }
+            session.flush();
 
-                let timer = ::std::time::Instant::now();
-                computation.step_while(|| probe.lt(&graph.time()));
+            let timer = ::std::time::Instant::now();
+            computation.step_while(|| probe.lt(&session.time()));
 
-                if computation.index() == 0 {
-                    let elapsed = timer.elapsed();
-                    println!("{}", elapsed.as_secs() * 1000000000 + (elapsed.subsec_nanos() as u64));
-                    // println!()
-                    // println!("wave {}: avg {:?}", wave, timer.elapsed() / (batch as u32));
-                }
+            if computation.index() == 0 {
+                let elapsed = timer.elapsed();
+                println!("{}", elapsed.as_secs() * 1000000000 + (elapsed.subsec_nanos() as u64));
             }
         }
+
+
+        // if batch > 0 {
+        //     for _wave in 0 .. rounds {
+        //         if computation.index() == 0 {
+        //             let mut session = differential_dataflow::input::InputSession::from(&mut graph);
+        //             for _ in 0 .. batch {
+        //                 session.insert((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)));
+        //                 session.remove((rng2.gen_range(0, nodes), rng2.gen_range(0, nodes)));
+        //                 let &round = session.epoch();
+        //                 session.advance_to(round + 1);
+        //             }
+        //         }
+
+        //         let timer = ::std::time::Instant::now();
+        //         computation.step_while(|| probe.lt(&graph.time()));
+
+        //         if computation.index() == 0 {
+        //             let elapsed = timer.elapsed();
+        //             println!("{}", elapsed.as_secs() * 1000000000 + (elapsed.subsec_nanos() as u64));
+        //         }
+        //     }
+        // }
 
         // println!("finished; elapsed: {:?}", timer.elapsed());
 
@@ -112,13 +131,11 @@ where G::Timestamp: Lattice+Ord {
     // repeatedly update minimal distances each node can be reached from each root
     nodes.iterate(|inner| {
 
-        let edges = edges.enter(&inner.scope());//.inspect(|x| println!("edge: {:?}", x));
-        let nodes = nodes.enter(&inner.scope());//.inspect(|x| println!("node: {:?}", x));
+        let edges = edges.enter(&inner.scope());
+        let nodes = nodes.enter(&inner.scope());
 
-        inner.join_map(&edges, |_k,l,d| (*d, l+1))//.inspect(|x| println!("join: {:?}", x))
-             // .inspect_batch(|t,xs| println!("\njoin:  {:?}:\t{:?}", t, xs))
+        inner.join_map(&edges, |_k,l,d| (*d, l+1))
              .concat(&nodes)
-             .group(|_, s, t| t.push((s[0].0, 1)))//.inspect(|x| println!("grup: {:?}", x))
-             // .inspect_batch(|t,xs| println!("\ngroup: {:?}:\t{:?}", t, xs))
+             .group(|_, s, t| t.push((s[0].0, 1)))
      })
 }
