@@ -180,6 +180,10 @@ where
         // working space for per-key interesting times.
         let mut interesting_times = Vec::new();
 
+        // where we stash times as we extract from histories.
+        let mut time_buffer1 = Vec::new();
+        let mut time_buffer2 = Vec::new();
+
         let mut lower = vec![<G::Timestamp as Lattice>::min()];
 
         // fabricate a data-parallel operator using the `unary_notify` pattern.
@@ -289,15 +293,15 @@ where
                             position += 1;
                         }
 
+                        // Sort and deduplicate interesting times. Helps with accum initialization.
+                        interesting_times.sort();
+                        interesting_times.dedup();
+
                         // Determine the `meet` of times, useful in restricting updates to capture.
                         let mut meet = interesting_times[0].clone(); 
                         for index in 1 .. interesting_times.len() {
                             meet = meet.meet(&interesting_times[index]);
                         }
-
-                        // Sort and deduplicate interesting times. Helps with accum initialization.
-                        interesting_times.sort();
-                        interesting_times.dedup();
 
                         // clear accumulators (will now repopulate)
                         input_accumulator.clear();
@@ -313,15 +317,17 @@ where
                             while source_cursor.val_valid() {
                                 let val: V = source_cursor.val().clone();
                                 let mut sum = R::zero();
+
                                 source_cursor.map_times(|t,d| {
                                     if t.le(&input_accumulator.time) { 
                                         sum = sum + d; 
                                     }
                                     if !t.le(&meet) {
-                                        // TODO: Capture times, consolidate, push afterwards.
-                                        input_accumulator.edits.push((val.clone(), t.join(&meet), d));
+                                        time_buffer1.push((t.join(&meet), d));
                                     }
                                 });
+                                consolidate(&mut time_buffer1);
+                                input_accumulator.edits.extend(time_buffer1.drain(..).map(|(t,d)| (val.clone(), t, d)));
                                 if !sum.is_zero() {
                                     input_accumulator.accum.push((val, sum));
                                 }
@@ -341,10 +347,11 @@ where
                                         sum = sum + d;
                                     }
                                     if !t.le(&meet) {
-                                        // TODO: Capture times, consolidate, push afterwards.
-                                        output_accumulator.edits.push((val.clone(), t.join(&meet), d));
+                                        time_buffer2.push((t.join(&meet), d));
                                     }
                                 });
+                                consolidate(&mut time_buffer2);
+                                output_accumulator.edits.extend(time_buffer2.drain(..).map(|(t,d)| (val.clone(), t, d)));
                                 if !sum.is_zero() {
                                     output_accumulator.accum.push((val, sum));
                                 }
@@ -474,17 +481,17 @@ fn consolidate<T: Ord, R: Ring>(list: &mut Vec<(T, R)>) {
     list.retain(|x| !x.1.is_zero());
 }
 
-// #[inline(never)]
-fn consolidate2<D: Ord, T: Ord, R: Ring>(list: &mut Vec<(D, T, R)>) {
-    list.sort_by(|x,y| (&y.0, &y.1).cmp(&(&x.0, &x.1)));
-    for index in 1 .. list.len() {
-        if list[index].0 == list[index-1].0 && list[index].1 == list[index-1].1 {
-            list[index].2 = list[index].2 + list[index-1].2;
-            list[index-1].2 = R::zero();
-        }
-    }
-    list.retain(|x| !x.2.is_zero());
-}
+// // #[inline(never)]
+// fn consolidate2<D: Ord, T: Ord, R: Ring>(list: &mut Vec<(D, T, R)>) {
+//     list.sort_by(|x,y| (&y.0, &y.1).cmp(&(&x.0, &x.1)));
+//     for index in 1 .. list.len() {
+//         if list[index].0 == list[index-1].0 && list[index].1 == list[index-1].1 {
+//             list[index].2 = list[index].2 + list[index-1].2;
+//             list[index-1].2 = R::zero();
+//         }
+//     }
+//     list.retain(|x| !x.2.is_zero());
+// }
 
 /// Allocated state and temporary buffers for closing interesting time under join.
 #[derive(Default)]
@@ -531,109 +538,115 @@ impl<T: Ord+Lattice+Clone+::std::fmt::Debug> Interestinator<T> {
         // behind (e.g. if a closed new_accum becomes enormous and un-accumulable, bad news for us). It is 
         // probably safe to close in place, as the in-order execution would do this anyhow.
 
-        // CLEVER IMPLEMENTATION
-        // 1. populate uniform list of times, and indicate whether they are for new or old times.
-        assert!(self.total.len() == 0);
-        self.total.reserve(edits.len() + times.len());
-        for &(_, ref time, _) in edits { self.total.push((time.clone(), 1)); }
-        for time in times.iter() { self.total.push((time.clone(), edits.len() as isize + 1)); }
+        if edits.len() + times.len() < 10 { 
+            self._close_interesting_times_reference(edits, times);
+        }
+        else {
 
-        consolidate(&mut self.total);
+            // CLEVER IMPLEMENTATION
+            // 1. populate uniform list of times, and indicate whether they are for new or old times.
+            assert!(self.total.len() == 0);
+            self.total.reserve(edits.len() + times.len());
+            for &(_, ref time, _) in edits { self.total.push((time.clone(), 1)); }
+            for time in times.iter() { self.total.push((time.clone(), edits.len() as isize + 1)); }
 
-        // 2. determine the frontiers by scanning list in reverse order (for each: when it exits frontier).
-        self.frontier.clear();
-        self.entrance.clear();
-        self.entrance.reserve(self.total.len());
-        let mut position = self.total.len();
-        while position > 0 {
-            position -= 1;
-            // "add" total[position] and seeing who drops == who is exposed when total[position] removed.
-            let mut index = 0;
-            while index < self.frontier.len() {
-                if self.total[position].0.le(&self.frontier[index]) {
-                    self.entrance.push((self.frontier.swap_remove(index), position));
+            consolidate(&mut self.total);
+
+            // 2. determine the frontiers by scanning list in reverse order (for each: when it exits frontier).
+            self.frontier.clear();
+            self.entrance.clear();
+            self.entrance.reserve(self.total.len());
+            let mut position = self.total.len();
+            while position > 0 {
+                position -= 1;
+                // "add" total[position] and seeing who drops == who is exposed when total[position] removed.
+                let mut index = 0;
+                while index < self.frontier.len() {
+                    if self.total[position].0.le(&self.frontier[index]) {
+                        self.entrance.push((self.frontier.swap_remove(index), position));
+                    }
+                    else {
+                        index += 1;
+                    }
+                }
+                self.frontier.push(self.total[position].0.clone());
+            }
+
+            // 3. swing through `total` and apply per-time thinkings.
+            self.old_temp.clear();
+            self.new_temp.clear();
+            self.old_accum.clear();
+            self.new_accum.clear();
+
+            for (index, (time, is_new)) in self.total.drain(..).enumerate() {
+                
+                if is_new > edits.len() as isize {
+                    for new_time in &self.new_accum {
+                        let join = time.join(new_time);
+                        if join != time { 
+                            self.new_temp.push(join.clone()); 
+                            times.push(join); 
+                        }
+                    }
+                    for t in self.new_temp.drain(..) { self.new_accum.push(t); }
+
+                    for old_time in &self.old_accum {
+                        let join = time.join(old_time);
+                        if join != time { 
+                            self.new_accum.push(join.clone()); 
+                            times.push(join); 
+                        }
+                    }
+                    self.new_accum.push(time.clone());
                 }
                 else {
-                    index += 1;
-                }
-            }
-            self.frontier.push(self.total[position].0.clone());
-        }
 
-        // 3. swing through `total` and apply per-time thinkings.
-        self.old_temp.clear();
-        self.new_temp.clear();
-        self.old_accum.clear();
-        self.new_accum.clear();
-
-        for (index, (time, is_new)) in self.total.drain(..).enumerate() {
-            
-            if is_new > edits.len() as isize {
-                for new_time in &self.new_accum {
-                    let join = time.join(new_time);
-                    if join != time { 
+                    for new_time in &self.new_accum {
+                        let join = time.join(new_time);
                         self.new_temp.push(join.clone()); 
                         times.push(join); 
                     }
-                }
-                for t in self.new_temp.drain(..) { self.new_accum.push(t); }
+                    for t in self.new_temp.drain(..) { self.new_accum.push(t); }
 
-                for old_time in &self.old_accum {
-                    let join = time.join(old_time);
-                    if join != time { 
-                        self.new_accum.push(join.clone()); 
-                        times.push(join); 
+                    for old_time in &self.old_accum {
+                        let join = time.join(old_time);
+                        if join != time { self.old_temp.push(join); }
                     }
+                    for t in self.old_temp.drain(..) { self.old_accum.push(t); }
+                    self.old_accum.push(time.clone());
                 }
-                self.new_accum.push(time.clone());
-            }
-            else {
 
-                for new_time in &self.new_accum {
-                    let join = time.join(new_time);
-                    self.new_temp.push(join.clone()); 
-                    times.push(join); 
+        
+                // update old_accum and new_accum with frontier changes, deduplicating.
+
+                // TODO: Can we mantain frontiers corresponding to new times and the current `new_accum`, as all 
+                //       future additions must be joined with such elements. This could reduce the complexity of 
+                //       `old_accum` substantially, removing distinctions between irrelevant prior times.
+
+                // a. remove time from frontier; it's not there any more.
+                self.frontier.retain(|x| !x.eq(&time));
+                // b. add any indicated elements
+                while self.entrance.last().map(|x| x.1) == Some(index) {
+                    self.frontier.push(self.entrance.pop().unwrap().0);
                 }
-                for t in self.new_temp.drain(..) { self.new_accum.push(t); }
 
-                for old_time in &self.old_accum {
-                    let join = time.join(old_time);
-                    if join != time { self.old_temp.push(join); }
+                if self.frontier.len() > 0 {
+                    // advance times in the old accumulation, sort and deduplicate.
+                    for time in &mut self.old_accum { *time = time.advance_by(&self.frontier[..]).unwrap(); }
+                    self.old_accum.sort();
+                    self.old_accum.dedup();
+                    // advance times in the new accumulation, sort and deduplicate.
+                    for time in &mut self.new_accum { *time = time.advance_by(&self.frontier[..]).unwrap(); }
+                    self.new_accum.sort();
+                    self.new_accum.dedup();
                 }
-                for t in self.old_temp.drain(..) { self.old_accum.push(t); }
-                self.old_accum.push(time.clone());
             }
 
-    
-            // update old_accum and new_accum with frontier changes, deduplicating.
+            times.sort();
+            times.dedup();
 
-            // TODO: Can we mantain frontiers corresponding to new times and the current `new_accum`, as all 
-            //       future additions must be joined with such elements. This could reduce the complexity of 
-            //       `old_accum` substantially, removing distinctions between irrelevant prior times.
-
-            // a. remove time from frontier; it's not there any more.
-            self.frontier.retain(|x| !x.eq(&time));
-            // b. add any indicated elements
-            while self.entrance.last().map(|x| x.1) == Some(index) {
-                self.frontier.push(self.entrance.pop().unwrap().0);
-            }
-
-            if self.frontier.len() > 0 {
-                // advance times in the old accumulation, sort and deduplicate.
-                for time in &mut self.old_accum { *time = time.advance_by(&self.frontier[..]).unwrap(); }
-                self.old_accum.sort();
-                self.old_accum.dedup();
-                // advance times in the new accumulation, sort and deduplicate.
-                for time in &mut self.new_accum { *time = time.advance_by(&self.frontier[..]).unwrap(); }
-                self.new_accum.sort();
-                self.new_accum.dedup();
-            }
+            // assert_eq!(*times, reference);
         }
-
-        times.sort();
-        times.dedup();
-
-        // assert_eq!(*times, reference);
     }
 
     /// Reference implementation for `close_interesting_times`, using lots more effort than should be needed.
@@ -730,7 +743,7 @@ impl<D: Ord+Clone, T: Lattice+Ord, R: Ring> Accumulator<D, T, R> {
     /// Sorts `edits` and forms chains.
     fn shackle(&mut self) {
 
-        consolidate2(&mut self.edits);
+        // consolidate2(&mut self.edits);
         consolidate(&mut self.accum);
 
         self.edits.sort_by(|x,y| x.1.cmp(&y.1));
