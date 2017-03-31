@@ -308,7 +308,7 @@ impl<G: Scope, K: Data+Hashable, V: Data, R: Ring> Arrange<G, K, V, R> for Colle
                     }
 
                     // extract updates between `capabilities[index].time()` and `upper`.
-                    let batch = batcher.seal(&[capabilities[index].time()], &upper[..]);
+                    let batch = batcher.seal(&upper[..]);
 
                     // If the source is still active, commit the extracted batch.
                     source.upgrade().map(|trace| {

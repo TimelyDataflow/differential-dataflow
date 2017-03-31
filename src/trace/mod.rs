@@ -92,8 +92,8 @@ pub trait Batcher<K, V, T, R, Output: Batch<K, V, T, R>> {
 			self.push(item);
 		}
 	}
-	/// Returns the batch between `lower` and `upper`.
-	fn seal(&mut self, lower: &[T], upper: &[T]) -> Output;
+	/// Returns all updates not greater or equal to an element of `upper`.
+	fn seal(&mut self, upper: &[T]) -> Output;
 	/// Returns the lower envelope of contained update times.
 	fn frontier(&mut self) -> &[T];
 }
