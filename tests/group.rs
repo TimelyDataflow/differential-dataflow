@@ -1,10 +1,11 @@
 extern crate timely;
 extern crate differential_dataflow;
 
-use timely::dataflow::operators::{ToStream, Capture};
+use timely::progress::timestamp::RootTimestamp;
+use timely::dataflow::operators::{ToStream, Capture, Map};
 use timely::dataflow::operators::capture::Extract;
 use differential_dataflow::AsCollection;
-use differential_dataflow::operators::{Group};
+use differential_dataflow::operators::{Group, Count};
 
 #[test]
 fn group() {
@@ -22,4 +23,24 @@ fn group() {
     let extracted = data.extract();
     assert_eq!(extracted.len(), 1);
     assert_eq!(extracted[0].1, vec![((0,0),Default::default(), 1), ((1,1),Default::default(), 2)]);
+}
+
+#[test]
+fn group_scaling() {
+
+    let data = timely::example(|scope| {
+
+        // let scale = 100;
+        let scale = 100_000;
+
+        (0 .. 1).to_stream(scope)
+                .flat_map(move |_| (0..scale).map(|i| ((), RootTimestamp::new(i), 1)))
+                .as_collection()
+                .count()
+                .inner
+                .capture()
+    });
+
+    let extracted = data.extract();
+    assert_eq!(extracted.len(), 1);
 }

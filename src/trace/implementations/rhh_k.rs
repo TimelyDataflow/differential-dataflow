@@ -65,9 +65,7 @@ where
 			let layer1 = self.layers.pop().unwrap();
 			let layer2 = self.layers.pop().unwrap();
 			let result = Rc::new(Layer::merge(&layer1, &layer2));
-			if result.len() > 0 {
-				self.layers.push(result);
-			}
+			self.layers.push(result);
 		}
 
 		self.layers.push(layer);
@@ -119,6 +117,7 @@ impl<Key: Clone+Default+HashOrdered, Time: Lattice+Ord+Clone+Default, R: Ring> B
 		LayerCursor { empty: (), valid: true, cursor: self.layer.cursor() } 
 	}
 	fn len(&self) -> usize { self.layer.tuples() }
+	fn description(&self) -> &Description<Time> { &self.desc }
 }
 
 impl<Key: Clone+Default+HashOrdered, Time: Lattice+Ord+Clone+Default, R: Ring> Layer<Key, Time, R> {
@@ -128,11 +127,6 @@ impl<Key: Clone+Default+HashOrdered, Time: Lattice+Ord+Clone+Default, R: Ring> L
 
 		// This may not be true if we leave gaps, so we try hard not to do that.
 		assert!(other.desc.upper() == self.desc.lower());
-
-		// each element of self.desc.lower must be in the future of some element of other.desc.upper
-		for time in self.desc.lower() {
-			assert!(other.desc.upper().iter().any(|t| t.le(time)));
-		}
 
 		// one of self.desc.since or other.desc.since needs to be not behind the other...
 		let since = if self.desc.since().iter().all(|t1| other.desc.since().iter().any(|t2| t2.le(t1))) {
