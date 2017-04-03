@@ -316,14 +316,8 @@ impl<G: Scope, K: Data+Hashable, V: Data, R: Ring> Arrange<G, K, V, R> for Colle
                         trace.insert(batch.clone())
                     });
 
-                    // If the batch is non-empty, send it along to downstream consumers.
-                    if batch.len() > 0 {
-                        // TODO: we could plausibly take the meet of times in the batch and downgrade the capability
-                        // first? This would mean downstream consumers only sit on the weakest capability that they
-                        // actually need. On the other hand, it is another scan over updates and work and such. Plus
-                        // these messages will be consumed very quickly, not blocking other workers.
-                        output.session(&capabilities[index]).give(BatchWrapper { item: batch });
-                    }
+                    // send the batch to downstream consumers, empty or not.
+                    output.session(&capabilities[index]).give(BatchWrapper { item: batch });
                 }
             }
 
