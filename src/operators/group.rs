@@ -74,7 +74,8 @@ impl<G: Scope, K: Data+Default+Hashable, V: Data, R: Ring> Group<G, K, V, R> for
     }
     fn group_u<L, V2: Data, R2: Ring>(&self, logic: L) -> Collection<G, (K, V2), R2>
         where L: Fn(&K, &[(V, R)], &mut Vec<(V2, R2)>)+'static, K: Unsigned+Copy {
-        self.arrange(|k,v| (UnsignedWrapper::from(k), v), HashSpine::new(Default::default()))
+        self.map(|(k,v)| (UnsignedWrapper::from(k), v))
+            .arrange(HashSpine::new(Default::default()))
             .group_arranged(move |k,s,t| logic(&k.item,s,t), HashSpine::new(Default::default()))
             .as_collection(|k,v| (k.item.clone(), v.clone()))
     }
@@ -96,8 +97,8 @@ where G::Timestamp: Lattice+Ord+::std::fmt::Debug {
             .as_collection(|k,_| k.item.clone())
     }
     fn distinct_u(&self) -> Collection<G, K, isize> where K: Unsigned+Copy {
-        self.map(|k| (k,()))
-            .arrange(|k,v| (UnsignedWrapper::from(k), v), KeyHashSpine::new(Default::default()))
+        self.map(|k| (UnsignedWrapper::from(k), ()))
+            .arrange(KeyHashSpine::new(Default::default()))
             .group_arranged(|_k,_s,t| t.push(((), 1)), KeyHashSpine::new(Default::default()))
             .as_collection(|k,_| k.item.clone())
     }
@@ -120,8 +121,8 @@ impl<G: Scope, K: Data+Default+Hashable, R: Ring> Count<G, K, R> for Collection<
             .as_collection(|k,&c| (k.item.clone(), c))
     }
     fn count_u(&self) -> Collection<G, (K, R), isize> where K: Unsigned+Copy {
-        self.map(|k| (k,()))
-            .arrange(|k,v| (UnsignedWrapper::from(k), v), KeyHashSpine::new(Default::default()))
+        self.map(|k| (UnsignedWrapper::from(k), ()))
+            .arrange(KeyHashSpine::new(Default::default()))
             .group_arranged(|_k,s,t| t.push((s[0].1, 1)), HashSpine::new(Default::default()))
             .as_collection(|k,&c| (k.item.clone(), c))
     }

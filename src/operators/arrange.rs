@@ -218,25 +218,23 @@ pub trait Arrange<G: Scope, K, V, R: Ring> where G::Timestamp: Lattice+Ord {
     /// This operator arranges a stream of values into a shared trace, whose contents it maintains.
     /// This trace is current for all times completed by the output stream, which can be used to
     /// safely identify the stable times and values in the trace.
-    fn arrange<T, K2:'static, V2:'static, L>(&self, map: L, empty: T) -> Arranged<G, K2, V2, R, T> 
+    fn arrange<T>(&self, empty_trace: T) -> Arranged<G, K, V, R, T> 
         where 
-            T: Trace<K2, V2, G::Timestamp, R>+'static,
-            L: Fn(K,V)->(K2,V2)+'static;
+            T: Trace<K, V, G::Timestamp, R>+'static;
 }
 
 impl<G: Scope, K: Data+Hashable, V: Data, R: Ring> Arrange<G, K, V, R> for Collection<G, (K, V), R> where G::Timestamp: Lattice+Ord {
 
-    fn arrange<T, K2:'static, V2:'static, L>(&self, map: L, empty: T) -> Arranged<G, K2, V2, R, T> 
+    fn arrange<T>(&self, empty_trace: T) -> Arranged<G, K, V, R, T> 
         where 
-            T: Trace<K2, V2, G::Timestamp, R>+'static,
-            L: Fn(K,V)->(K2,V2)+'static {
+            T: Trace<K, V, G::Timestamp, R>+'static {
 
         // create a trace to share with downstream consumers.
-        let handle = TraceHandle::new(empty, &[Default::default()]);
+        let handle = TraceHandle::new(empty_trace, &[<G::Timestamp as Lattice>::min()]);
         let source = Rc::downgrade(&handle.wrapper);
 
         // Where we will deposit received updates, and from which we extract batches.
-        let mut batcher = <T::Batch as Batch<K2,V2,G::Timestamp,R>>::Batcher::new();
+        let mut batcher = <T::Batch as Batch<K,V,G::Timestamp,R>>::Batcher::new();
 
         // Capabilities for the lower envelope of updates in `batcher`.
         let mut capabilities = Vec::<Capability<G::Timestamp>>::new();
@@ -259,7 +257,7 @@ impl<G: Scope, K: Data+Hashable, V: Data, R: Ring> Arrange<G, K, V, R> for Colle
 
                 // add the updates to our batcher.
                 for ((key, val), time, diff) in data.drain(..) {
-                    let (key, val) = map(key, val);
+                    // let (key, val) = map(key, val);
                     batcher.push((key, val, time, diff));
                 }
             });
@@ -363,16 +361,20 @@ where G::Timestamp: Lattice+Ord {
     /// This operator arranges a stream of values into a shared trace, whose contents it maintains.
     /// This trace is current for all times completed by the output stream, which can be used to
     /// safely identify the stable times and values in the trace.
-    fn arrange_by_key_hashed_cached(&self) -> Arranged<G, HashableWrapper<K>, V, R, HashSpine<HashableWrapper<K>, V, G::Timestamp, R>> where <K as Hashable>::Output: Default;
+    fn arrange_by_key_hashed_cached(&self) -> Arranged<G, HashableWrapper<K>, V, R, HashSpine<HashableWrapper<K>, V, G::Timestamp, R>>
+    where <K as Hashable>::Output: Default+Data;
 }
 
 impl<G: Scope, K: Data+Default+Hashable, V: Data, R: Ring> ArrangeByKey<G, K, V, R> for Collection<G, (K,V), R>
 where G::Timestamp: Lattice+Ord {        
     fn arrange_by_key_hashed(&self) -> Arranged<G, OrdWrapper<K>, V, R, HashSpine<OrdWrapper<K>, V, G::Timestamp, R>> {
-        self.arrange(|k,v| (OrdWrapper {item:k},v), HashSpine::new(Default::default()))
+        self.map(|(k,v)| (OrdWrapper {item:k},v))
+            .arrange(HashSpine::new(<G::Timestamp as Lattice>::min()))
     }
-    fn arrange_by_key_hashed_cached(&self) -> Arranged<G, HashableWrapper<K>, V, R, HashSpine<HashableWrapper<K>, V, G::Timestamp, R>> where <K as Hashable>::Output: Default {
-        self.arrange(|k,v| (HashableWrapper::from(k),v), HashSpine::new(Default::default()))
+    fn arrange_by_key_hashed_cached(&self) -> Arranged<G, HashableWrapper<K>, V, R, HashSpine<HashableWrapper<K>, V, G::Timestamp, R>> 
+    where <K as Hashable>::Output: Default+Data {
+        self.map(|(k,v)| (HashableWrapper::from(k),v))
+            .arrange(HashSpine::new(<G::Timestamp as Lattice>::min()))
     }
 }
 
@@ -395,7 +397,7 @@ where G::Timestamp: Lattice+Ord {
 impl<G: Scope, K: Data+Default+Hashable, R: Ring> ArrangeBySelf<G, K, R> for Collection<G, K, R>
 where G::Timestamp: Lattice+Ord {
     fn arrange_by_self(&self) -> Arranged<G, OrdWrapper<K>, (), R, KeyHashSpine<OrdWrapper<K>, G::Timestamp, R>> {
-        self.map(|k| (k,()))
-            .arrange(|k,v| (OrdWrapper {item:k}, v), KeyHashSpine::new(Default::default()))
+        self.map(|k| (OrdWrapper {item:k}, ()))
+            .arrange(KeyHashSpine::new(<G::Timestamp as Lattice>::min()))
     }
 }
