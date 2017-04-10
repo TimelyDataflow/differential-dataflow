@@ -300,6 +300,7 @@ where Key: Clone+Default+HashOrdered, Time: Lattice+Ord+Clone+Default {
 		} 
 	}
 
+	#[inline(always)]
 	fn push(&mut self, (key, _, time, diff): (Key, (), Time, R)) {
 
 		// each pushed update should be in the future of the current lower bound.

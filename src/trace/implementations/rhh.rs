@@ -251,6 +251,8 @@ where Key: Clone+Default+HashOrdered, Val: Ord+Clone, Time: Lattice+Ord+Clone+De
 			lower: vec![Time::min()]
 		} 
 	}
+
+	#[inline(always)]
 	fn push(&mut self, (key, val, time, diff): (Key, Val, Time, R)) {
 
 		// each pushed update should be in the future of the current lower bound.
