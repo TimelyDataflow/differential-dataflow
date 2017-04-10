@@ -324,6 +324,7 @@ impl<K: HashOrdered+Clone+Default, L: TupleBuilder> TupleBuilder for HashedBuild
 			vals: L::with_capacity(cap) 
 		} 
 	}
+	#[inline(always)]
 	fn push_tuple(&mut self, (key, val): (K, L::Item)) {
 
 		// we build up self.temp, and rely on self.boundary() to drain self.temp.

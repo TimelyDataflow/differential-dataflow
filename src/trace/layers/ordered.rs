@@ -171,6 +171,7 @@ impl<K: Ord+Clone, L: TupleBuilder> TupleBuilder for OrderedBuilder<K, L> {
 			vals: L::with_capacity(cap),
 		}
 	}
+	#[inline(always)]
 	fn push_tuple(&mut self, (key, val): (K, L::Item)) {
 
 		// if first element, prior element finish, or different element, need to push and maybe punctuate.
