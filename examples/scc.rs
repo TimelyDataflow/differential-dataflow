@@ -127,12 +127,13 @@ where G::Timestamp: Lattice+Ord+Hash {
     graph.iterate(|edges| {
         // keep edges from active edge destinations.
 
-        let active = edges.map(|(_,k)| (k,()))
-                          .arrange(|k,v| (UnsignedWrapper::from(k), v), KeyHashSpine::new(Default::default()))
+        let active = edges.map(|(_,k)| (UnsignedWrapper::from(k), ()))
+                          .arrange(KeyHashSpine::new(Default::default()))
                           .group_arranged(|_k,_s,t| t.push(((), 1)), KeyHashSpine::new(Default::default()));
 
         graph.enter(&edges.scope())
-             .arrange(|k,v| (UnsignedWrapper::from(k), v), HashSpine::new(Default::default()))
+             .map(|(k,v)| (UnsignedWrapper::from(k), v))
+             .arrange(HashSpine::new(Default::default()))
              .join_arranged(&active, |k,v,_| (k.item.clone(), v.clone()))
 
         // let active = edges.map(|(_,dst)| dst).distinct_u();
