@@ -156,7 +156,7 @@ where
         let mut output_trace = TraceHandle::new(empty, &[Default::default()]);
         let result_trace = output_trace.clone();
 
-        let mut thinker1 = InterestAccumulator::<V, V2, G::Timestamp, R, R2>::new();
+        // let mut thinker1 = InterestAccumulator::<V, V2, G::Timestamp, R, R2>::new();
         let mut thinker2 = HistoryReplayer::<V, V2, G::Timestamp, R, R2>::new();
         let mut temporary = Vec::<G::Timestamp>::new();
 
@@ -252,12 +252,13 @@ where
                     let mut key = None;
                     if synth_position < exposed.len() { key = Some(exposed[synth_position].0.clone()); }
                     for batch_cursor in &batch_cursors {
-                        if key == None { key = Some(batch_cursor.key().clone()); }
+                        if key == None { 
+                            key = Some(batch_cursor.key().clone()); 
+                        }
                         else {
                             key = key.map(|k| ::std::cmp::min(k, batch_cursor.key().clone()));
                         }
                     }
-
                     debug_assert!(key.is_some());
                     let key = key.unwrap();
 
@@ -325,18 +326,16 @@ where
 
                     // move all updates for this key into corresponding builders.
                     for index in 0 .. buffers.len() {
-                        buffers[index].1.sort();
+                        buffers[index].1.sort_by(|x,y| x.0.cmp(&y.0));
                         for (val, time, diff) in buffers[index].1.drain(..) {
                             builders[index].push((key.clone(), val, time, diff));
                         }
                     }
                 }
 
-            // seal up builders, send along with capabilities, downgrade capabilities to track `interesting` pairs.
-
+                // build and ship each batch (because only one capability per message).
                 for (index, builder) in builders.drain(..).enumerate() {
 
-            // this builder captured times not greater or equal to any later capability, nor any element of upper.
                     let mut local_upper = upper_limit.clone();
                     for capability in &capabilities[index + 1 ..] {
                         local_upper.retain(|t| !capability.lt(t));
@@ -350,7 +349,6 @@ where
 
                     output.session(&capabilities[index]).give(BatchWrapper { item: batch.clone() });
                     output_trace.wrapper.borrow_mut().trace.insert(batch);
-
                 }
 
                 assert!(lower_issued == upper_limit);
@@ -392,6 +390,27 @@ where
 // Several methods are broken out here to help understand performance profiling.
 
 #[inline(never)]
+fn sort_dedup_a<T: Ord>(list: &mut Vec<T>) {
+    list.dedup();
+    list.sort();
+    list.dedup();
+}
+
+#[inline(never)]
+fn sort_dedup_b<T: Ord>(list: &mut Vec<T>) {
+    list.dedup();
+    list.sort();
+    list.dedup();
+}
+
+#[inline(never)]
+fn sort_dedup_c<T: Ord>(list: &mut Vec<T>) {
+    list.dedup();
+    list.sort();
+    list.dedup();
+}
+
+#[inline(never)]
 fn sort_dedup<T: Ord>(list: &mut Vec<T>) {
     list.dedup();
     list.sort();
@@ -423,14 +442,20 @@ fn consolidate<T: Ord, R: Ring>(list: &mut Vec<(T, R)>) {
 }
 
 /// Scans `vec[off..]` and consolidates differences of adjacent equivalent elements.
+#[inline(never)]
 pub fn consolidate_from<T: Ord+Clone, R: Ring>(vec: &mut Vec<(T, R)>, off: usize) {
-    vec[off..].sort();
+
+    // We should do an insertion-sort like initial scan which builds up sorted, consolidated runs.
+    // In a world where there are not many results, we may never even need to call in to merge sort.
+
+    vec[off..].sort_by(|x,y| x.0.cmp(&y.0));
     for index in (off + 1) .. vec.len() {
         if vec[index].0 == vec[index - 1].0 {
             vec[index].1 = vec[index].1 + vec[index - 1].1;
             vec[index - 1].1 = R::zero();
         }
     }
+
     let mut cursor = off;
     for index in off .. vec.len() {
         if !vec[index].1.is_zero() {
@@ -439,6 +464,7 @@ pub fn consolidate_from<T: Ord+Clone, R: Ring>(vec: &mut Vec<(T, R)>, off: usize
         }
     }
     vec.truncate(cursor);
+    
 }
 
 trait PerKeyCompute<V1, V2, T, R1, R2> 
@@ -467,6 +493,7 @@ where
         L: Fn(&K, &[(V1, R1)], &mut Vec<(V2, R2)>);
 }
 
+
 /// The `HistoryReplayer` is a compute strategy based on moving through existing inputs, interesting times, etc in 
 /// time order, maintaining consolidated representations of updates with respect to future interesting times.
 struct HistoryReplayer<V1, V2, T, R1, R2> 
@@ -479,23 +506,128 @@ where
 {
     input_history: CollectionHistory<V1, T, R1>,
     input_actions: Vec<(T, usize)>,
-
     output_history: CollectionHistory<V2, T, R2>,
     output_actions: Vec<(T, usize)>,
-
     input_buffer: Vec<(V1, R1)>,
     output_buffer: Vec<(V2, R2)>,
-
     output_produced: Vec<((V2, T), R2)>,
-
     known_times: Vec<T>,
     synth_times: Vec<T>,
-
     meets: Vec<T>,
-
     times_current: Vec<T>,
+    lower: Vec<T>,
+}
 
-    times_temp: Vec<T>,
+impl<V1, V2, T, R1, R2> HistoryReplayer<V1, V2, T, R1, R2> 
+where
+    V1: Ord+Clone+Debug,
+    V2: Ord+Clone+Debug,
+    T: Lattice+Ord+Clone+Debug,
+    R1: Ring+Debug,
+    R2: Ring+Debug,
+{
+    #[inline(never)]
+    fn build_input_history<K, C1>(&mut self, key: &K, source_cursor: &mut C1, meet: &T, _upper_limit: &[T]) 
+    where K: Eq+Clone+Debug, C1: Cursor<K, V1, T, R1>, {
+
+        self.input_history.clear();
+        self.input_actions.clear();
+
+        source_cursor.seek_key(&key);
+        if source_cursor.key_valid() && source_cursor.key() == key {
+            while source_cursor.val_valid() {
+                let start = self.input_history.times.len();
+                source_cursor.map_times(|t, d| {
+                    // if format!("{:?}", key) == "OrdWrapper { item: 0 }".to_owned() {
+                    //     println!("key 0 input:\t{:?}, {:?}", t, d);
+                    // }
+
+                    let join = t.join(&meet);
+                    // if upper_limit.iter().any(|t| t.le(&join)) {
+                    //     if !self.known_times.iter().any(|t| t.le(&join)) {
+                    //         self.known_times.retain(|t| !join.le(t));
+                    //         self.known_times.push(join);
+                    //     }
+                    // }
+                    // else {
+                        self.input_history.times.push((join, d));
+                    // }
+                });
+                self.input_history.seal_from(source_cursor.val().clone(), start);
+                source_cursor.step_val();
+            }
+        }
+
+        self.input_actions.reserve(self.input_history.times.len());
+        for (index, history) in self.input_history.values.iter().enumerate() {
+            for offset in history.lower .. history.upper {
+                // if format!("{:?}", key) == "OrdWrapper { item: 0 }".to_owned() {
+                //     println!("key 0 input:\t{:?}, {:?}, {:?}", self.input_history.times[offset].0, self.input_history.values[index].value, self.input_history.times[offset].1);
+                // }
+                self.input_actions.push((self.input_history.times[offset].0.clone(), index));
+            }
+        }
+
+        // TODO: this could have been a merge; helpful if few values. (perhaps it is with mergesort!)
+        self.sort_input_actions();
+    }
+
+    #[inline(never)]
+    fn sort_input_actions(&mut self) {
+        self.input_actions.sort_by(|x,y| x.0.cmp(&y.0));
+    }
+
+    #[inline(never)]
+    fn build_output_history<K, C2>(&mut self, key: &K, output_cursor: &mut C2, meet: &T, _upper_limit: &[T]) 
+    where K: Eq+Clone+Debug, C2: Cursor<K, V2, T, R2>, {
+
+        self.output_history.clear();
+        self.output_actions.clear();
+
+        output_cursor.seek_key(&key);
+        if output_cursor.key_valid() && output_cursor.key() == key {
+            while output_cursor.val_valid() {
+                let start = self.output_history.times.len();
+                output_cursor.map_times(|t, d| {
+
+                    // if format!("{:?}", key) == "OrdWrapper { item: 0 }".to_owned() {
+                    //     println!("key 0 output:\t{:?}, {:?}", t, d);
+                    // }
+
+                    let join = t.join(&meet);
+                    // if upper_limit.iter().any(|t| t.le(&join)) {
+                    //     if !self.known_times.iter().any(|t| t.le(&join)) {
+                    //         self.known_times.retain(|t| !join.le(t));
+                    //         self.known_times.push(join);
+                    //     }
+                    // }
+                    // else {
+                        self.output_history.times.push((join, d));
+                    // }
+                });
+                self.output_history.seal_from(output_cursor.val().clone(), start);
+                output_cursor.step_val();
+            }
+        }
+
+        self.output_actions.reserve(self.output_history.times.len());
+        for (index, history) in self.output_history.values.iter().enumerate() {
+            for offset in history.lower .. history.upper {
+                // if format!("{:?}", key) == "OrdWrapper { item: 0 }".to_owned() {
+                //     println!("key 0 output:\t{:?}, {:?}, {:?}", self.output_history.times[offset].0, self.output_history.values[index].value, self.output_history.times[offset].1);
+                // }
+                self.output_actions.push((self.output_history.times[offset].0.clone(), index));
+            }
+        }
+
+        // TODO: this could have been a merge; helpful if few values. (perhaps it is with mergesort!)
+        self.output_actions.sort_by(|x,y| x.0.cmp(&y.0)); 
+
+        // println!("{:?}", key);
+        // if format!("{:?}", key) == "OrdWrapper { item: 0 }".to_owned() {
+        //     println!("hey: {:?}", meet);
+        // }
+    }
 }
 
 impl<V1, V2, T, R1, R2> PerKeyCompute<V1, V2, T, R1, R2> for HistoryReplayer<V1, V2, T, R1, R2> 
@@ -510,22 +642,16 @@ where
         HistoryReplayer { 
             input_history: CollectionHistory::new(),
             input_actions: Vec::new(),
-
             output_history: CollectionHistory::new(),
             output_actions: Vec::new(),
-
             input_buffer: Vec::new(),
             output_buffer: Vec::new(),
-
             output_produced: Vec::new(),
-
             known_times: Vec::new(),
             synth_times: Vec::new(),
-
             meets: Vec::new(),
-
             times_current: Vec::new(),
-            times_temp: Vec::new(),
+            lower: Vec::new(),
         }
     }
     #[inline(never)]
@@ -545,17 +671,24 @@ where
         C2: Cursor<K, V2, T, R2>, 
         L: Fn(&K, &[(V1, R1)], &mut Vec<(V2, R2)>) 
     {
+
         // we use meets[0], and this should be true anyhow (otherwise, don't call).
         assert!(times.len() > 0);
 
-        // experimenting with meet vs frontiers for advancing (good for distributive lattices).
-        let mut meet = T::max();
-        for time in times.iter() {
-            meet = meet.meet(time);
+        // determine a lower frontier of interesting times.
+        self.lower.clear();
+        for time in times.drain(..) {
+            if !self.lower.iter().any(|t| t.le(&time)) { 
+                self.lower.retain(|t| !time.lt(t));
+                self.lower.push(time);
+            }
         }
 
-        self.known_times.clear();
+        // experimenting with meet vs frontiers for advancing (good for distributive lattices).
+        // could also just use `lower` for advancing if we find it isn't too painful.
+        let mut meet = self.lower.iter().fold(T::max(), |meet, time| meet.meet(time));
 
+        self.known_times.clear();
 
         // The fast-forwarding we are about to do with input and output can result in very weird looking
         // data. In particular, we can have "old" updates in the future of "new" updates, and even beyond
@@ -566,55 +699,8 @@ where
         // by time so that the history for a value is always a prefix of its range. As we proceed through 
         // time we extend the valid ranges.
 
-        {   // extract input updates, advanced by `meet`.
-
-            self.input_history.clear();
-            self.input_actions.clear();
-
-            source_cursor.seek_key(&key);
-            if source_cursor.key_valid() && source_cursor.key() == key {
-                while source_cursor.val_valid() {
-                    let start = self.input_history.times.len();
-                    source_cursor.map_times(|t, d| self.input_history.times.push((t.join(&meet), d)));
-                    self.input_history.seal_from(source_cursor.val().clone(), start);
-                    source_cursor.step_val();
-                }
-            }
-
-            self.input_actions.reserve(self.input_history.times.len());
-            for (index, history) in self.input_history.values.iter().enumerate() {
-                for offset in history.lower .. history.upper {
-                    self.input_actions.push((self.input_history.times[offset].0.clone(), index));
-                }
-            }
-            // TODO: this could have been a merge; helpful if few values. (perhaps it is with mergesort!)
-            self.input_actions.sort_by(|x,y| x.0.cmp(&y.0));
-        }
-        
-        {   // extract output updates, advanced by `meet`.
-
-            self.output_history.clear();
-            self.output_actions.clear();
-
-            output_cursor.seek_key(&key);
-            if output_cursor.key_valid() && output_cursor.key() == key {
-                while output_cursor.val_valid() {
-                    let start = self.output_history.times.len();
-                    output_cursor.map_times(|t, d| self.output_history.times.push((t.join(&meet), d)));
-                    self.output_history.seal_from(output_cursor.val().clone(), start);
-                    output_cursor.step_val();
-                }
-            }
-
-            self.output_actions.reserve(self.output_history.times.len());
-            for (index, history) in self.output_history.values.iter().enumerate() {
-                for offset in history.lower .. history.upper {
-                    self.output_actions.push((self.output_history.times[offset].0.clone(), index));
-                }
-            }
-            // TODO: this could have been a merge; helpful if few values. (perhaps it is with mergesort!)
-            self.output_actions.sort();        
-        }
+        self.build_input_history(key, source_cursor, &meet, upper_limit);
+        self.build_output_history(key, output_cursor, &meet, upper_limit);
 
         // TODO: We should be able to thin out any updates at times that, advanced, are greater than some
         //       element of `upper_limit`, as we will never incorporate that update. We should take care 
@@ -632,11 +718,33 @@ where
         {   // populate `self.known_times` with times from the input, output, and the `times` argument.
             
             // TODO: This could be a merge (perhaps it is, if we use mergesort).
-            for &(ref time, _) in &self.input_actions { self.known_times.push(time.clone()); }
-            for &(ref time, _) in &self.output_actions { self.known_times.push(time.clone()); }
-            for time in times.iter() { self.known_times.push(time.clone()); }
+            let mut input_slice = &self.input_actions[..];
+            let mut output_slice = &self.output_actions[..];
 
-            sort_dedup(&mut self.known_times);
+            while input_slice.len() > 0 || output_slice.len() > 0 {
+                let mut next = T::max();
+                if input_slice.len() > 0 && input_slice[0].0.cmp(&next) == Ordering::Less {
+                    next = input_slice[0].0.clone();
+                }
+                if output_slice.len() > 0 && output_slice[0].0.cmp(&next) == Ordering::Less {
+                    next = output_slice[0].0.clone();
+                }
+
+
+                while input_slice.len() > 0 && input_slice[0].0 == next {
+                    input_slice = &input_slice[1..];
+                }
+                while output_slice.len() > 0 && output_slice[0].0 == next {
+                    output_slice = &output_slice[1..];
+                }
+
+                self.known_times.push(next);
+            }
+
+            // for &(ref time, _) in &self.input_actions { self.known_times.push(time.clone()); }
+            // for &(ref time, _) in &self.output_actions { self.known_times.push(time.clone()); }
+
+            sort_dedup_c(&mut self.known_times);
         }
 
         {   // populate `self.meets` with the meets of suffixes of `self.known_times`.
@@ -644,22 +752,17 @@ where
             self.meets.clear();
             self.meets.reserve(self.known_times.len());
             self.meets.extend(self.known_times.iter().cloned());
-            for i in (0 .. self.meets.len() - 1).rev() {
-                self.meets[i] = self.meets[i].meet(&self.meets[i+1]);
+            for i in (1 .. self.meets.len()).rev() {
+                self.meets[i-1] = self.meets[i-1].meet(&self.meets[i]);
             }
         }
 
-        // // TODO: We could discard these sorts of updates, if we think they are a problem. 
-        // self.input_updates.retain(|&((ref time, _), _)| !upper_limit.iter().any(|t| t.le(time)));
-        // self.output_updates.retain(|&((ref time, _), _)| !upper_limit.iter().any(|t| t.le(time)));
-
-        // we track out position in each of our lists of actions using slices; 
+        // we track our position in each of our lists of actions using slices; 
         // as we pull work from the front, we advance the slice. we could have
         // used drain iterators, but we want to peek at the next element and 
         // this seemed like the simplest way to do that.
         let mut input_slice = &self.input_actions[..];
         let mut output_slice = &self.output_actions[..];
-        let mut times_slice = &times[..];
 
         let mut known_slice = &self.known_times[..];
         let mut meets_slice = &self.meets[..];
@@ -694,9 +797,6 @@ where
                 let value_index = output_slice[0].1;
                 self.output_history.step(value_index);
                 output_slice = &output_slice[1..];
-            }
-            while times_slice.len() > 0 && times_slice[0] == next_time {
-                times_slice = &times_slice[1..];
             }
 
             // we should only process times that are not in the future.
@@ -733,14 +833,10 @@ where
                 // stash produced updates in capability-indexed buffers, and `output_updates`.
                 if self.output_buffer.len() > 0 {
 
+                    // any times not greater than `lower` must be empty (and should be skipped, but testing!)
+                    assert!(self.lower.iter().any(|t| t.le(&next_time)));
+
                     let idx = outputs.iter().rev().position(|&(ref time, _)| time.le(&next_time));
-                    if !idx.is_some() {
-                        println!("PANIC: failed to find capability for {:?} among:", next_time);
-                        for output in outputs.iter() {
-                            println!("  {:?}", output.0);
-                        }
-                        panic!();
-                    }
                     let idx = outputs.len() - idx.unwrap() - 1;
                     for (val, diff) in self.output_buffer.drain(..) {
                         self.output_produced.push(((val.clone(), next_time.clone()), diff));
@@ -754,20 +850,32 @@ where
                     consolidate(&mut self.output_produced);
 
                 }
+
+                // determine synthetic interesting times!
+                // could just join `next_time` with all times in `input_updates` and `output_updates`.
+                // could also just retire to some beach and drink a lot. that is not why we are here!
+
+                for time in &self.times_current {
+                    let join = next_time.join(time);
+                    if join != next_time {
+                        // enqueue `join` if not beyond `upper_limit`; else add to `new_interesting` frontier.
+                        if !upper_limit.iter().any(|t| t.le(&join)) {
+                            self.synth_times.push(join); 
+                        }
+                        else {
+                            if !new_interesting.iter().any(|t| t.le(&join)) { 
+                                new_interesting.retain(|t| !join.lt(t));
+                                new_interesting.push(join);
+                            }                        
+                        }
+                    }
+                }
             }
             else {  
                 // otherwise we delay the time for the future (and warn about it)
-                new_interesting.push(next_time.clone());
-            }
-
-            // determine synthetic interesting times!
-            // could just join `next_time` with all times in `input_updates` and `output_updates`.
-            // could also just retire to some beach and drink a lot. that is not why we are here!
-
-            for time in &self.times_current {
-                let join = next_time.join(time);
-                if join != next_time {
-                    self.synth_times.push(join.clone()); 
+                if !new_interesting.iter().any(|t| t.le(&next_time)) { 
+                    new_interesting.retain(|t| !next_time.lt(t));
+                    new_interesting.push(next_time.clone());
                 }
             }
 
@@ -776,26 +884,26 @@ where
             // update our view of the meet of remaining times. 
             // NOTE: this does not advance collections, which can be done value-by-value as appropriate.
             if meets_slice.len() > 0 || self.synth_times.len() > 0 {
-                meet = T::max();
+                meet = self.synth_times.iter().fold(T::max(), |meet, time| meet.meet(time));
                 if meets_slice.len() > 0 { meet = meet.meet(&meets_slice[0]); }
-                for time in &self.synth_times { meet = meet.meet(time); }
+                // for time in &self.synth_times { meet = meet.meet(time); }
 
                 for time in &mut self.times_current {
                     *time = time.join(&meet);
                 }
-                sort_dedup(&mut self.times_current);
+                sort_dedup_a(&mut self.times_current);
             }
 
             // again, this should be a min-heap.
-            sort_dedup(&mut self.synth_times);
+            sort_dedup_b(&mut self.synth_times);
         }
 
-        // sort_dedup(new_interesting);
-
-        // new_interesting is populated only from distinct times we considered, in order.
+        new_interesting.sort();
         for index in 1 .. new_interesting.len() {
             debug_assert!(new_interesting[index-1].cmp(&new_interesting[index]) == Ordering::Less);
         }
+
+        // println!("input_diffs: {:?}, output_diffs: {:?}", self.input_actions.len(), self.output_actions.len());
     }
 }
 
@@ -866,16 +974,16 @@ impl<V: Clone, T: Lattice+Ord+Clone+Debug, R: Ring> CollectionHistory<V, T, R> {
                 cursor += 1;
             }
             
-            // should be a range of zeros, .. 
-            debug_assert!(lower <= cursor);
-            for index in lower .. cursor {
-                debug_assert!(self.times[index].1.is_zero());
-            }
-            // .. followed by a range of non-zeros.
-            debug_assert!(cursor <= valid);
-            for index in cursor .. valid {
-                debug_assert!(!self.times[index].1.is_zero());
-            }
+            // // should be a range of zeros, .. 
+            // debug_assert!(lower <= cursor);
+            // for index in lower .. cursor {
+            //     debug_assert!(self.times[index].1.is_zero());
+            // }
+            // // .. followed by a range of non-zeros.
+            // debug_assert!(cursor <= valid);
+            // for index in cursor .. valid {
+            //     debug_assert!(!self.times[index].1.is_zero());
+            // }
 
             self.values[value_index].lower = cursor;
             self.values[value_index].clean = valid;
@@ -899,7 +1007,7 @@ impl<V: Clone, T: Lattice+Ord+Clone+Debug, R: Ring> CollectionHistory<V, T, R> {
         }
     }
 
-    #[inline(always)]
+    #[inline(never)]
     fn insert(&mut self, time: &T, meet: &T, destination: &mut Vec<(V, R)>) {
 
         for value_index in 0 .. self.values.len() {
@@ -922,11 +1030,12 @@ impl<V: Clone, T: Lattice+Ord+Clone+Debug, R: Ring> CollectionHistory<V, T, R> {
             }
             if !sum.is_zero() {
                 destination.push((self.values[value_index].value.clone(), sum));
+                // return;  // <-- cool optimization for top_k
             }
         }
     }
 
-    #[inline(always)]
+    #[inline(never)]
     fn remove(&mut self, time: &T, meet: &T, destination: &mut Vec<(V, R)>) {
 
         for value_index in 0 .. self.values.len() {
