@@ -11,7 +11,7 @@ use rand::{Rng, SeedableRng, StdRng};
 
 use differential_dataflow::AsCollection;
 use differential_dataflow::operators::arrange::ArrangeByKey;
-use differential_dataflow::trace::{Cursor, Trace};
+use differential_dataflow::trace::Cursor;
 
 fn main() {
 
