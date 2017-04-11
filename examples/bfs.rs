@@ -92,32 +92,6 @@ fn main() {
                 println!("{}", elapsed.as_secs() * 1000000000 + (elapsed.subsec_nanos() as u64));
             }
         }
-
-
-        // if batch > 0 {
-        //     for _wave in 0 .. rounds {
-        //         if computation.index() == 0 {
-        //             let mut session = differential_dataflow::input::InputSession::from(&mut graph);
-        //             for _ in 0 .. batch {
-        //                 session.insert((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)));
-        //                 session.remove((rng2.gen_range(0, nodes), rng2.gen_range(0, nodes)));
-        //                 let &round = session.epoch();
-        //                 session.advance_to(round + 1);
-        //             }
-        //         }
-
-        //         let timer = ::std::time::Instant::now();
-        //         computation.step_while(|| probe.lt(&graph.time()));
-
-        //         if computation.index() == 0 {
-        //             let elapsed = timer.elapsed();
-        //             println!("{}", elapsed.as_secs() * 1000000000 + (elapsed.subsec_nanos() as u64));
-        //         }
-        //     }
-        // }
-
-        // println!("finished; elapsed: {:?}", timer.elapsed());
-
     }).unwrap();
 }
 
@@ -138,4 +112,22 @@ where G::Timestamp: Lattice+Ord {
              .concat(&nodes)
              .group(|_, s, t| t.push((s[0].0, 1)))
      })
+}
+
+// returns pairs (n, s) indicating node n can be reached from a root in s steps.
+fn reach<G: Scope>(edges: &Collection<G, Edge>, roots: &Collection<G, Node>) -> Collection<G, (Node, u32)>
+where G::Timestamp: Lattice+Ord {
+
+    // repeatedly update minimal distances each node can be reached from each root
+    roots.iterate(|inner| {
+
+        let edges = edges.enter(&inner.scope());
+        let roots = roots.enter(&inner.scope());
+
+        edges.semijoin_u(&inner)
+             .map(|(_, dst)| dst)
+             .concat(&roots)
+             .distinct_u()
+    })
+    .map(|x| (x,0))
 }
