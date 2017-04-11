@@ -97,13 +97,7 @@ where G::Timestamp: Lattice+Ord+::std::fmt::Debug {
     fn distinct_u(&self) -> Collection<G, K, isize> where K: Unsigned+Copy {
         self.map(|k| (UnsignedWrapper::from(k), ()))
             .arrange(DefaultKeyTrace::new())
-            .group_arranged(|_k,_s,t| { 
-                if _s[0].1 < 1 {
-                    panic!("key: {:?}, count: {:?}", _k, _s[0].1);
-                    // assert!(_s[0].1 > 0 ); 
-                }
-                t.push(((), 1)); 
-            }, DefaultKeyTrace::new())
+            .group_arranged(|_k,_s,t| t.push(((), 1)), DefaultKeyTrace::new())
             .as_collection(|k,_| k.item.clone())
     }
 }
@@ -161,8 +155,8 @@ where
         let mut output_trace = TraceHandle::new(empty, &[<G::Timestamp as Lattice>::min()], &[<G::Timestamp as Lattice>::min()]);
         let result_trace = output_trace.clone();
 
-        let mut thinker2 = InterestAccumulator::<V, V2, G::Timestamp, R, R2>::new();
-        // let mut thinker2 = HistoryReplayer::<V, V2, G::Timestamp, R, R2>::new();
+        // let mut thinker2 = InterestAccumulator::<V, V2, G::Timestamp, R, R2>::new();
+        let mut thinker2 = HistoryReplayer::<V, V2, G::Timestamp, R, R2>::new();
         let mut temporary = Vec::<G::Timestamp>::new();
 
         // Our implementation maintains a list of outstanding `(key, time)` synthetic interesting times, 
@@ -392,6 +386,8 @@ where
             source_trace.advance_by(&upper_limit[..]);
             output_trace.advance_by(&upper_limit[..]);
 
+            source_trace.distinguish_since(&upper_limit[..]);
+            output_trace.distinguish_since(&upper_limit[..]);
         });
 
         Arranged { stream: stream, trace: result_trace }

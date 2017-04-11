@@ -131,7 +131,7 @@ impl<K,V,T,R,Tr: Trace<K,V,T,R>> TraceHandle<K,V,T,R,Tr> where T: Lattice+Ord+Cl
         self.advance_frontier = frontier.to_vec();
     }
     /// Allows the trace to compact batches of times before `frontier`.
-    pub fn distinguish_through(&mut self, frontier: &[T]) {
+    pub fn distinguish_since(&mut self, frontier: &[T]) {
         self.wrapper.borrow_mut().adjust_through_frontier(&self.through_frontier[..], frontier);
         self.through_frontier = frontier.to_vec();        
     }

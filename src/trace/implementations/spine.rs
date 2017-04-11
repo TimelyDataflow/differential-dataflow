@@ -64,37 +64,43 @@ where
 	}
 	fn cursor_through(&self, upper: &[T]) -> Option<Self::Cursor> {
 
-		// THIS IS ALL WRONG AT THE MOMENT (AT LEAST, THE COUNT_VALID STUFF).
-		unimplemented!();
+		assert!(self.advance_frontier.len() > 0);
+
+		// // THIS IS ALL WRONG AT THE MOMENT (AT LEAST, THE COUNT_VALID STUFF).
+		// unimplemented!();
 
 		// Check that `upper` is greater or equal to `self.through_frontier`.
 		// Otherwise, the cut could be in `self.merging` and it is user error anyhow.
-		let upper_valid = upper.iter().all(|t1| self.through_frontier.iter().any(|t2| t2.le(t1)));
+		if upper.iter().all(|t1| self.through_frontier.iter().any(|t2| t2.le(t1))) {
 
-		// Find the position of the batch with upper limit `upper`. It is possible we 
-		// find nothing (e.g. when `upper` is `&[]`, or when `self.pending` is empty),
-		// in which case we must test that the last upper limit is less or equal to `upper`. 
-		let count = self.pending.iter()
-								.position(|batch| batch.description().upper() == upper)
-								.unwrap_or(self.pending.len());
-
-		// The count is valid if either pending is empty, or the identified location's upper limit is not after `upper`.
-		let count_valid = self.pending.len() == 0 || upper.iter().all(|t1| self.pending[count-1].description().upper().iter().any(|t2| t2.le(t1)));
-
-		// We can return a cursor if `upper` is valid, and if `count` reflects a valid cut point.
-		if upper_valid && count_valid {
 			let mut cursors = Vec::new();
 			cursors.extend(self.merging.iter().filter(|b| b.len() > 0).map(|b| b.cursor()));
-			cursors.extend(self.pending[..count].iter().filter(|b| b.len() > 0).map(|b| b.cursor()));
+			for batch in &self.pending {
+				let include_lower = upper.iter().all(|t1| batch.description().lower().iter().any(|t2| t2.le(t1)));
+				let include_upper = upper.iter().all(|t1| batch.description().lower().iter().any(|t2| t2.le(t1)));
+
+				if include_lower != include_upper {
+					panic!("`cursor_through` straddles batch");
+					return None;
+				}
+
+				// include pending batches 
+				if include_upper {
+					cursors.push(batch.cursor());
+				}
+			}
 			Some(CursorList::new(cursors))
 		}
 		else {
-			panic!("failed in `cursor_through`: {:?}, {:?}", upper_valid, count_valid);
 			None
 		}
 	}
 	fn advance_by(&mut self, frontier: &[T]) {
 		self.advance_frontier = frontier.to_vec();
+		if self.advance_frontier.len() == 0 {
+			self.pending.clear();
+			self.merging.clear();
+		}
 	}
 	fn distinguish_since(&mut self, frontier: &[T]) {
 		self.through_frontier = frontier.to_vec();
@@ -136,7 +142,7 @@ where
 
 				// if we just merged the last layer, `advance_by` it.
 				if self.merging.len() == 0 {
-					result = Self::advance_by(&result, &self.advance_frontier[..]);
+					result = Self::advance_batch(&result, &self.advance_frontier[..]);
 				}
 
 				self.merging.push(result);
@@ -150,7 +156,9 @@ where
 	/// to avoid allocation and building headaches. It is implemented on the `Rc` variant
 	/// to get access to `cursor()`, and in principle to allow a progressive implementation. 
 	#[inline(never)]
-	fn advance_by(layer: &B, frontier: &[T]) -> B { 
+	fn advance_batch(batch: &B, frontier: &[T]) -> B { 
+
+		assert!(frontier.len() > 0);
 
 		// TODO: This is almost certainly too much `with_capacity`.
 		// TODO: We should design and implement an "in-order builder", which takes cues from key and val
@@ -160,7 +168,7 @@ where
 		let mut builder = <B as Batch<K, V, T, R>>::Builder::new();
 
 		let mut times = Vec::new();
-		let mut cursor = layer.cursor();
+		let mut cursor = batch.cursor();
 
 		while cursor.key_valid() {
 			while cursor.val_valid() {
@@ -169,10 +177,11 @@ where
 				for (time, diff) in times.drain(..) {
 					builder.push((cursor.key().clone(), cursor.val().clone(), time, diff));
 				}
+				cursor.step_val();
 			}
 			cursor.step_key();
 		}
 
-		builder.done(layer.description().lower(), layer.description().upper(), frontier)
+		builder.done(batch.description().lower(), batch.description().upper(), frontier)
 	}
 }
