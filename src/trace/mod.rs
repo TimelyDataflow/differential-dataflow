@@ -44,11 +44,13 @@ pub trait Trace<Key, Val, Time, R> {
 
 	/// The type of an immutable collection of updates.
 	type Batch: Batch<Key, Val, Time, R>+Clone+'static;
+
 	/// The type used to enumerate the collections contents.
 	type Cursor: Cursor<Key, Val, Time, R>;
 
 	/// Allocates a new empty trace.
-	fn new(default: Time) -> Self;
+	fn new() -> Self;
+
 	/// Introduces a batch of updates to the trace.
 	///
 	/// Batches describe the time intervals they contain, and they should be added to the trace in contiguous
@@ -58,10 +60,43 @@ pub trait Trace<Key, Val, Time, R> {
 	/// This restriction could be relaxed, especially if we discover ways in which batch interval order could 
 	/// commute. For now, the trace should complain, to the extent that it cares about contiguous intervals.
 	fn insert(&mut self, batch: Self::Batch);
+
 	/// Acquires a cursor to the collection's contents.
-	fn cursor(&self) -> Self::Cursor;
-	/// Advances the frontier of times the collection must respond to.
+	fn cursor(&self) -> Self::Cursor {
+		if let Some(cursor) = self.cursor_through(&[]) {
+			cursor
+		}
+		else {
+			panic!("unable to acquire complete cursor for trace; is it closed?");
+		}
+	}
+
+	/// Acquires a cursor to the restriction of the collection's contents to updates at times not greater or 
+	/// equal to an element of `upper`.
+	///
+	/// This method is expected to work if called with an `upper` that (i) was an observed bound in batches from
+	/// the trace, and (ii) the trace has not been advanced beyond `upper`. Practically, the implementation should
+	/// be expected to look for a "clean cut" using `upper`, and if it finds such a cut can return a cursor. This
+	/// should allow `upper` such as `&[]` as used by `self.cursor()`, though it is difficult to imagine other uses.
+	fn cursor_through(&self, upper: &[Time]) -> Option<Self::Cursor>;
+
+	/// Advances the frontier of times the collection must be correctly accumulable through.
+	///
+	/// Practically, this allows the trace to advance times in updates it maintains as long as the advanced times 
+	/// still compare equivalently to any times greater or equal to some element of `frontier`. Times not greater
+	/// or equal to some element of `frontier` may no longer correctly accumulate, so do not advance a trace unless
+	/// you are quite sure you no longer require the distinction.
 	fn advance_by(&mut self, frontier: &[Time]);
+
+	/// Advances the frontier that may be used in `cursor_through`.
+	///
+	/// Practically, this allows the trace to merge batches whose upper frontier comes before `frontier`. The trace
+	/// is likely to be annoyed or confused if you use a frontier other than one observed as an upper bound of an 
+	/// actual batch. This doesn't seem likely to be a problem, but get in touch if it is.
+	///
+	/// Calling `distinguish_since(&[])` indicates that all batches may be merged at any point, which essentially 
+	/// disables the use of `cursor_through` with any parameter other than `&[]`, which is the behavior of `cursor`.
+	fn distinguish_since(&mut self, frontier: &[Time]);
 }
 
 /// An immutable collection of updates.
@@ -78,20 +113,18 @@ pub trait Batch<K, V, T, R> where Self: ::std::marker::Sized {
 	fn len(&self) -> usize;
 	/// Describes the times of the updates in the batch.
 	fn description(&self) -> &Description<T>;
+	/// Merges two consecutive batches.
+	///
+	/// `None` is returned if the upper bound of `self` is not equal to the lower bound of `other`.
+	fn merge(&self, other: &Self) -> Option<Self>;
 }
 
 /// Functionality for collecting and batching updates.
 pub trait Batcher<K, V, T, R, Output: Batch<K, V, T, R>> {
 	/// Allocates a new empty batcher.
 	fn new() -> Self; 
-	/// Adds an element to the batcher.
-	fn push(&mut self, element: (K, V, T, R));
-	/// Adds an unordered sequence of elements to the batcher.
-	fn extend<I: Iterator<Item=(K,V,T,R)>>(&mut self, iter: I) {
-		for item in iter {
-			self.push(item);
-		}
-	}
+	/// Adds an unordered batch of elements to the batcher.
+	fn push_batch(&mut self, batch: &mut Vec<((K, V), T, R)>);
 	/// Returns all updates not greater or equal to an element of `upper`.
 	fn seal(&mut self, upper: &[T]) -> Output;
 	/// Returns the lower envelope of contained update times.
@@ -109,7 +142,7 @@ pub trait Builder<K, V, T, R, Output: Batch<K, V, T, R>> {
 		for item in iter { self.push(item); }
 	}
 	/// Completes building and returns the batch.
-	fn done(self, lower: &[T], upper: &[T]) -> Output;
+	fn done(self, lower: &[T], upper: &[T], since: &[T]) -> Output;
 }
 
 /// Scans `vec[off..]` and consolidates differences of adjacent equivalent elements.
