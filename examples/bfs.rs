@@ -7,7 +7,7 @@ use rand::{Rng, SeedableRng, StdRng};
 use timely::dataflow::*;
 use timely::dataflow::operators::*;
 
-use differential_dataflow::Collection;
+use differential_dataflow::{Collection, AsCollection};
 use differential_dataflow::operators::*;
 use differential_dataflow::lattice::Lattice;
 
@@ -25,15 +25,15 @@ fn main() {
     // define a new computational scope, in which to run BFS
     timely::execute_from_args(std::env::args().skip(6), move |computation| {
         
-        // let timer = ::std::time::Instant::now();
+        let timer = ::std::time::Instant::now();
 
         // define BFS dataflow; return handles to roots and edges inputs
-        let (mut graph, probe) = computation.scoped(|scope| {
+        let (mut roots, mut graph, probe) = computation.scoped(|scope| {
 
-            let roots = vec![(1,Default::default(),1)].into_iter().to_stream(scope);
+            let (root_input, roots) = scope.new_input();
             let (edge_input, graph) = scope.new_input();
 
-            let mut result = bfs(&Collection::new(graph.clone()), &Collection::new(roots.clone()));
+            let mut result = reach(&graph.as_collection(), &roots.as_collection());
 
             if !inspect {
                 result = result.filter(|_| false);
@@ -44,12 +44,22 @@ fn main() {
                               .inspect(|x| println!("\t{:?}", x))
                               .probe();
 
-            (edge_input, probe.0)
+            (root_input, edge_input, probe.0)
         });
 
         let seed: &[_] = &[1, 2, 3, 4];
         let mut rng1: StdRng = SeedableRng::from_seed(seed);    // rng for edge additions
         let mut rng2: StdRng = SeedableRng::from_seed(seed);    // rng for edge deletions
+
+        let mut names = Vec::new();
+        let mut rng: StdRng = SeedableRng::from_seed(seed);
+        for _i in 0 .. nodes {
+            // names.push(_i as u32);
+            names.push(rng.next_u32());
+        }
+
+        roots.send((names[1], Default::default(), 1));
+        roots.close();
 
         // println!("performing BFS on {} nodes, {} edges:", nodes, edges);
 
@@ -57,30 +67,34 @@ fn main() {
             // trickle edges in to dataflow
             for _ in 0..(edges/1000) {
                 for _ in 0..1000 {
-                    graph.send(((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), Default::default(), 1));
+                    let src = *rng1.choose(&names[..]).unwrap();
+                    let dst = *rng1.choose(&names[..]).unwrap();
+                    graph.send(((src, dst), Default::default(), 1));
                 }
                 computation.step();
             }
             for _ in 0.. (edges % 1000) {
-                graph.send(((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), Default::default(), 1));
+                let src = *rng1.choose(&names[..]).unwrap();
+                let dst = *rng1.choose(&names[..]).unwrap();
+                graph.send(((src, dst), Default::default(), 1));
             }
         }
 
-        // println!("loaded; elapsed: {:?}", timer.elapsed());
+        println!("loaded; elapsed: {:?}", timer.elapsed());
 
         graph.advance_to(1);
         computation.step_while(|| probe.lt(graph.time()));
 
-        // println!("stable; elapsed: {:?}", timer.elapsed());
+        println!("stable; elapsed: {:?}", timer.elapsed());
 
         let mut session = differential_dataflow::input::InputSession::from(&mut graph);
         for round in 0 .. rounds {
             for element in 0 .. batch {
                 if computation.index() == 0 {
-                    session.insert((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)));
-                    session.remove((rng2.gen_range(0, nodes), rng2.gen_range(0, nodes)));
+                    session.insert((names[rng1.gen_range(0, nodes as usize)], names[rng1.gen_range(0, nodes as usize)]));
+                    session.remove((names[rng2.gen_range(0, nodes as usize)], names[rng2.gen_range(0, nodes as usize)]));
                 }
-                session.advance_to(1 + round * batch + element);                
+                session.advance_to(2 + round * batch + element);                
             }
             session.flush();
 
@@ -89,9 +103,11 @@ fn main() {
 
             if computation.index() == 0 {
                 let elapsed = timer.elapsed();
-                println!("{}", elapsed.as_secs() * 1000000000 + (elapsed.subsec_nanos() as u64));
+                println!();
+                // println!("{:?}:\t{}", round, elapsed.as_secs() * 1000000000 + (elapsed.subsec_nanos() as u64));
             }
         }
+        println!("finished; elapsed: {:?}", timer.elapsed());
     }).unwrap();
 }
 
@@ -108,9 +124,9 @@ where G::Timestamp: Lattice+Ord {
         let edges = edges.enter(&inner.scope());
         let nodes = nodes.enter(&inner.scope());
 
-        inner.join_map(&edges, |_k,l,d| (*d, l+1))
+        inner.join_map_u(&edges, |_k,l,d| (*d, l+1))
              .concat(&nodes)
-             .group(|_, s, t| t.push((s[0].0, 1)))
+             .group_u(|_, s, t| t.push((s[0].0, 1)))
      })
 }
 

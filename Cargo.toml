@@ -27,8 +27,8 @@ git="http://github.com/frankmcsherry/timely-dataflow"
 
 [dependencies]
 abomonation="0.4.4"
-timely_sort="^0.1.1"
-timely_communication="^0.1.3"
+timely_sort="0.1.5"
+timely_communication="0.1.5"
 itertools="0.4"
 fnv="1.0.2"
 linear-map = "0.0.4"
