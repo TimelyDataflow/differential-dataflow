@@ -32,7 +32,7 @@ where
 	V: Ord+Clone,
 	// K: Clone+Default+HashOrdered+'static,
 	// Time: Lattice+Ord+Clone+Default+Debug+'static,
-	T: Lattice+Ord+Clone,  // Clone needed for `advance_frontier` and friends.
+	T: Lattice+Ord+Clone+::std::fmt::Debug,  // Clone needed for `advance_frontier` and friends.
 	R: Ring,
 	B: Batch<K, V, T, R>+Clone+'static,
 {
@@ -64,10 +64,8 @@ where
 	}
 	fn cursor_through(&self, upper: &[T]) -> Option<Self::Cursor> {
 
+		// we shouldn't grab a cursor into a closed trace, right?
 		assert!(self.advance_frontier.len() > 0);
-
-		// // THIS IS ALL WRONG AT THE MOMENT (AT LEAST, THE COUNT_VALID STUFF).
-		// unimplemented!();
 
 		// Check that `upper` is greater or equal to `self.through_frontier`.
 		// Otherwise, the cut could be in `self.merging` and it is user error anyhow.
@@ -77,11 +75,11 @@ where
 			cursors.extend(self.merging.iter().filter(|b| b.len() > 0).map(|b| b.cursor()));
 			for batch in &self.pending {
 				let include_lower = upper.iter().all(|t1| batch.description().lower().iter().any(|t2| t2.le(t1)));
-				let include_upper = upper.iter().all(|t1| batch.description().lower().iter().any(|t2| t2.le(t1)));
+				let include_upper = upper.iter().all(|t1| batch.description().upper().iter().any(|t2| t2.le(t1)));
 
-				if include_lower != include_upper {
-					panic!("`cursor_through` straddles batch");
-					return None;
+				if include_lower != include_upper && upper != batch.description().lower() {
+					panic!("`cursor_through` straddles batch:\n\tlower: {:?}\n\tfront: {:?}\n\tupper: {:?}", batch.description().lower(), upper, batch.description().upper());
+					// return None;
 				}
 
 				// include pending batches 
@@ -113,7 +111,7 @@ where
 	K: Clone,				// Clone required by advance
 	V: Clone,				// Clone required by advance
 	// Key: Clone+Default+HashOrdered+'static,
-	T: Lattice+Ord+Clone,	// Clone required by `consolidate`.
+	T: Lattice+Ord+Clone+::std::fmt::Debug,	// Clone required by `consolidate`.
 	R: Ring,
 	B: Batch<K, V, T, R>,
 {
