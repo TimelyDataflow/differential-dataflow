@@ -135,6 +135,8 @@ Now we can just watch as changes roll past and look at the times.
     worker 0, round 5 finished after Duration { secs: 0, nanos: 239285 }
     ...
 
+Nice. This is some hundreds of microseconds per update, which means maybe ten thousand updates per second. It's not a horrible number for my laptop, but it isn't the right answer yet.
+
 ### Scaling .. "along"?
 
 Differential dataflow is designed for throughput in addition to latency. We can increase the number of rounds it works on concurrently, increasing its effective throughput.
@@ -150,7 +152,7 @@ Notice that those times above are a few hundred microseconds for each single upd
     worker 0, round 50 finished after Duration { secs: 0, nanos: 305817 }
     ...
 
-These aren't much larger times, and we are doing 10x the work in each of them. In fact, we are doing the *exact same* computation as above, just batched differently. We still get out changes tagged with the round they happened in, even if that round isn't a multiple of ten (in this example).
+These aren't much larger times, and we are doing 10x the work in each of them. In fact, we are doing the *exact same* computation as above, just batched differently. We still get out changes tagged with the round they happened in, even if that round isn't a multiple of ten (in this example), and they are exactly the same changes (or they should be) as in the single update a time example.
 
 As we turn up the batching, performance improves. Here we work on one hundred rounds of updates at once:
 
@@ -162,9 +164,9 @@ As we turn up the batching, performance improves. Here we work on one hundred ro
     worker 0, round 400 finished after Duration { secs: 0, nanos: 750404 }
     worker 0, round 500 finished after Duration { secs: 0, nanos: 824990 }
 
-This averages to about 70 microseconds for each update, which makes some sense as each of the updates needs to probe randomly into the ten million counts we are maintaining.
+This now averages to about seven microseconds for each update, which is looking more like one hundred thousand updates per second. 
 
-We can scale quite a bit further, taking a hundred thousand rounds of updates at a time:
+Actually, let's just try that. Here are the numbers for one hundred thousand rounds of updates at a time:
 
     Running `target/release/examples/degrees 10000000 50000000 100000`
     Loading finished after 6298320551
@@ -174,7 +176,7 @@ We can scale quite a bit further, taking a hundred thousand rounds of updates at
     worker 0, round 400000 finished after Duration { secs: 0, nanos: 678072041 }
     worker 0, round 500000 finished after Duration { secs: 0, nanos: 501202869 }
 
-This averages to around five microseconds per update, and now that I think about it each update was actually two changes, wasn't it. Good for differential dataflow!
+This averages to around five microseconds per update, and now that I think about it each update was actually two changes, wasn't it. Good for you, differential dataflow!
 
 ### Scaling out
 
