@@ -51,26 +51,26 @@ This shows us the records that passed the `inspect` operator, revealing the cont
 
 Let's update the input by removing one edge and adding a new random edge:
 
-	observed: ((7, 1), (Root, 1), -1)
-	observed: ((8, 1), (Root, 1), 1)
-	observed: ((3, 1), (Root, 1), -1)
-	observed: ((2, 1), (Root, 1), 1)
-	worker 0, round 1 finished after Duration { secs: 0, nanos: 139268 }
+    observed: ((7, 1), (Root, 1), -1)
+    observed: ((8, 1), (Root, 1), 1)
+    observed: ((3, 1), (Root, 1), -1)
+    observed: ((2, 1), (Root, 1), 1)
+    worker 0, round 1 finished after Duration { secs: 0, nanos: 139268 }
 
 We see here some changes! Those degree three and seven nodes have been replaced by degree two and eight nodes; looks like one lost an edge and gave it to the other!
 
 How about a few more changes?
 
-	worker 0, round 2 finished after Duration { secs: 0, nanos: 81286 }
-	worker 0, round 3 finished after Duration { secs: 0, nanos: 73066 }
-	worker 0, round 4 finished after Duration { secs: 0, nanos: 64023 }
-	observed: ((5, 3), (Root, 5), 1)
-	observed: ((5, 4), (Root, 5), -1)
-	observed: ((7, 1), (Root, 5), 1)
-	observed: ((6, 2), (Root, 5), -1)
-	observed: ((6, 3), (Root, 5), 1)
-	observed: ((8, 1), (Root, 5), -1)
-	worker 0, round 5 finished after Duration { secs: 0, nanos: 104017 }
+    worker 0, round 2 finished after Duration { secs: 0, nanos: 81286 }
+    worker 0, round 3 finished after Duration { secs: 0, nanos: 73066 }
+    worker 0, round 4 finished after Duration { secs: 0, nanos: 64023 }
+    observed: ((5, 3), (Root, 5), 1)
+    observed: ((5, 4), (Root, 5), -1)
+    observed: ((7, 1), (Root, 5), 1)
+    observed: ((6, 2), (Root, 5), -1)
+    observed: ((6, 3), (Root, 5), 1)
+    observed: ((8, 1), (Root, 5), -1)
+    worker 0, round 5 finished after Duration { secs: 0, nanos: 104017 }
 
 Well a few weird things happen here. First, rounds 2, 3, and 4 don't print anything. Seriously? It turns out that the random changes we made didn't affect any of the degree counts, we moved edges between nodes, preserving degrees. It can happen. 
 
@@ -80,60 +80,60 @@ The second weird thing is that with only two edge changes we have six changes in
 
 The appealing thing about differential dataflow is that it only does work where things change, so even if there is a lot of data, if not much changes it goes quite fast. Let's scale our 10 nodes and 50 edges up by a factor of one million:
 
-	Running `target/release/examples/degrees 10000000 50000000 1`
-	observed: ((1, 336908), (Root, 0), 1)
-	observed: ((2, 843854), (Root, 0), 1)
-	observed: ((3, 1404462), (Root, 0), 1)
-	observed: ((4, 1751921), (Root, 0), 1)
-	observed: ((5, 1757099), (Root, 0), 1)
-	observed: ((6, 1459805), (Root, 0), 1)
-	observed: ((7, 1042894), (Root, 0), 1)
-	observed: ((8, 653178), (Root, 0), 1)
-	observed: ((9, 363983), (Root, 0), 1)
-	observed: ((10, 181423), (Root, 0), 1)
-	observed: ((11, 82478), (Root, 0), 1)
-	observed: ((12, 34407), (Root, 0), 1)
-	observed: ((13, 13216), (Root, 0), 1)
-	observed: ((14, 4842), (Root, 0), 1)
-	observed: ((15, 1561), (Root, 0), 1)
-	observed: ((16, 483), (Root, 0), 1)
-	observed: ((17, 143), (Root, 0), 1)
-	observed: ((18, 38), (Root, 0), 1)
-	observed: ((19, 8), (Root, 0), 1)
-	observed: ((20, 3), (Root, 0), 1)
-	observed: ((22, 1), (Root, 0), 1)
-	Loading finished after 6430259862
+    Running `target/release/examples/degrees 10000000 50000000 1`
+    observed: ((1, 336908), (Root, 0), 1)
+    observed: ((2, 843854), (Root, 0), 1)
+    observed: ((3, 1404462), (Root, 0), 1)
+    observed: ((4, 1751921), (Root, 0), 1)
+    observed: ((5, 1757099), (Root, 0), 1)
+    observed: ((6, 1459805), (Root, 0), 1)
+    observed: ((7, 1042894), (Root, 0), 1)
+    observed: ((8, 653178), (Root, 0), 1)
+    observed: ((9, 363983), (Root, 0), 1)
+    observed: ((10, 181423), (Root, 0), 1)
+    observed: ((11, 82478), (Root, 0), 1)
+    observed: ((12, 34407), (Root, 0), 1)
+    observed: ((13, 13216), (Root, 0), 1)
+    observed: ((14, 4842), (Root, 0), 1)
+    observed: ((15, 1561), (Root, 0), 1)
+    observed: ((16, 483), (Root, 0), 1)
+    observed: ((17, 143), (Root, 0), 1)
+    observed: ((18, 38), (Root, 0), 1)
+    observed: ((19, 8), (Root, 0), 1)
+    observed: ((20, 3), (Root, 0), 1)
+    observed: ((22, 1), (Root, 0), 1)
+    Loading finished after 6430259862
 
 There are a lot more distinct degrees here. I sorted them because it was too painful to look at unsorted. You would normally get to see them unsorted, because they are just changes to a collection.
 
 Let's do a single change again.
 
-	observed: ((5, 1757098), (Root, 1), 1)
-	observed: ((5, 1757099), (Root, 1), -1)
-	observed: ((7, 1042893), (Root, 1), 1)
-	observed: ((7, 1042894), (Root, 1), -1)
-	observed: ((6, 1459805), (Root, 1), -1)
-	observed: ((6, 1459807), (Root, 1), 1)
-	worker 0, round 1 finished after Duration { secs: 0, nanos: 141173 }
+    observed: ((5, 1757098), (Root, 1), 1)
+    observed: ((5, 1757099), (Root, 1), -1)
+    observed: ((7, 1042893), (Root, 1), 1)
+    observed: ((7, 1042894), (Root, 1), -1)
+    observed: ((6, 1459805), (Root, 1), -1)
+    observed: ((6, 1459807), (Root, 1), 1)
+    worker 0, round 1 finished after Duration { secs: 0, nanos: 141173 }
 
 Although the initial computation took about six seconds, we get our changes in about 141 microseconds. That's pretty nice. Actually, it is small enough that the time to print things to the screen is a bit expensive, so let's comment that part out.
 
 ```rust
-	// show us something about the collection, notice when done.
-	let probe = distr//.inspect(|x| println!("observed: {:?}", x))
-					 .probe().0;
+    // show us something about the collection, notice when done.
+    let probe = distr//.inspect(|x| println!("observed: {:?}", x))
+                     .probe().0;
 ```
 
 Now we can just watch as changes roll past and look at the times.
 
-	Running `target/release/examples/degrees 10000000 50000000 1`
-	Loading finished after 6619354153
-	worker 0, round 1 finished after Duration { secs: 0, nanos: 99671 }
-	worker 0, round 2 finished after Duration { secs: 0, nanos: 292651 }
-	worker 0, round 3 finished after Duration { secs: 0, nanos: 94333 }
-	worker 0, round 4 finished after Duration { secs: 0, nanos: 110136 }
-	worker 0, round 5 finished after Duration { secs: 0, nanos: 239285 }
-	...
+    Running `target/release/examples/degrees 10000000 50000000 1`
+    Loading finished after 6619354153
+    worker 0, round 1 finished after Duration { secs: 0, nanos: 99671 }
+    worker 0, round 2 finished after Duration { secs: 0, nanos: 292651 }
+    worker 0, round 3 finished after Duration { secs: 0, nanos: 94333 }
+    worker 0, round 4 finished after Duration { secs: 0, nanos: 110136 }
+    worker 0, round 5 finished after Duration { secs: 0, nanos: 239285 }
+    ...
 
 ### Scaling .. "along"?
 
@@ -141,38 +141,38 @@ Differential dataflow is designed for throughput in addition to latency. We can 
 
 Notice that those times above are a few hundred microseconds for each single update. If we work on ten rounds of updates at once, we get times that look like this:
 
-	Running `target/release/examples/degrees 10000000 50000000 10`
-	Loading finished after 6361826154
-	worker 0, round 10 finished after Duration { secs: 0, nanos: 228456 }
-	worker 0, round 20 finished after Duration { secs: 0, nanos: 285968 }
-	worker 0, round 30 finished after Duration { secs: 0, nanos: 129293 }
-	worker 0, round 40 finished after Duration { secs: 0, nanos: 184597 }
-	worker 0, round 50 finished after Duration { secs: 0, nanos: 305817 }
-	...
+    Running `target/release/examples/degrees 10000000 50000000 10`
+    Loading finished after 6361826154
+    worker 0, round 10 finished after Duration { secs: 0, nanos: 228456 }
+    worker 0, round 20 finished after Duration { secs: 0, nanos: 285968 }
+    worker 0, round 30 finished after Duration { secs: 0, nanos: 129293 }
+    worker 0, round 40 finished after Duration { secs: 0, nanos: 184597 }
+    worker 0, round 50 finished after Duration { secs: 0, nanos: 305817 }
+    ...
 
 These aren't much larger times, and we are doing 10x the work in each of them. In fact, we are doing the *exact same* computation as above, just batched differently. We still get out changes tagged with the round they happened in, even if that round isn't a multiple of ten (in this example).
 
 As we turn up the batching, performance improves. Here we work on one hundred rounds of updates at once:
 
-	Running `target/release/examples/degrees 10000000 50000000 100`
-	Loading finished after 6415122044
-	worker 0, round 100 finished after Duration { secs: 0, nanos: 701348 }
-	worker 0, round 200 finished after Duration { secs: 0, nanos: 773354 }
-	worker 0, round 300 finished after Duration { secs: 0, nanos: 590371 }
-	worker 0, round 400 finished after Duration { secs: 0, nanos: 750404 }
-	worker 0, round 500 finished after Duration { secs: 0, nanos: 824990 }
+    Running `target/release/examples/degrees 10000000 50000000 100`
+    Loading finished after 6415122044
+    worker 0, round 100 finished after Duration { secs: 0, nanos: 701348 }
+    worker 0, round 200 finished after Duration { secs: 0, nanos: 773354 }
+    worker 0, round 300 finished after Duration { secs: 0, nanos: 590371 }
+    worker 0, round 400 finished after Duration { secs: 0, nanos: 750404 }
+    worker 0, round 500 finished after Duration { secs: 0, nanos: 824990 }
 
 This averages to about 70 microseconds for each update, which makes some sense as each of the updates needs to probe randomly into the ten million counts we are maintaining.
 
 We can scale quite a bit further, taking a hundred thousand rounds of updates at a time:
 
-	Running `target/release/examples/degrees 10000000 50000000 100000`
-	Loading finished after 6298320551
-	worker 0, round 100000 finished after Duration { secs: 0, nanos: 492671676 }
-	worker 0, round 200000 finished after Duration { secs: 0, nanos: 563281465 }
-	worker 0, round 300000 finished after Duration { secs: 0, nanos: 496625436 }
-	worker 0, round 400000 finished after Duration { secs: 0, nanos: 678072041 }
-	worker 0, round 500000 finished after Duration { secs: 0, nanos: 501202869 }
+    Running `target/release/examples/degrees 10000000 50000000 100000`
+    Loading finished after 6298320551
+    worker 0, round 100000 finished after Duration { secs: 0, nanos: 492671676 }
+    worker 0, round 200000 finished after Duration { secs: 0, nanos: 563281465 }
+    worker 0, round 300000 finished after Duration { secs: 0, nanos: 496625436 }
+    worker 0, round 400000 finished after Duration { secs: 0, nanos: 678072041 }
+    worker 0, round 500000 finished after Duration { secs: 0, nanos: 501202869 }
 
 This averages to around five microseconds per update, and now that I think about it each update was actually two changes, wasn't it. Good for differential dataflow!
 
@@ -182,41 +182,41 @@ Differential dataflow is built on top of [timely dataflow](https://github.com/fr
 
 If we bring two workers to bear, our 10 million node, 50 million edge computation drops down from six seconds to something less than four seconds.
 
-	Running `target/release/examples/degrees 10000000 50000000 1 -w2`
-	Loading finished after 3829615905
-	worker 0, round 1 finished after Duration { secs: 0, nanos: 144977 }
-	worker 1, round 1 finished after Duration { secs: 0, nanos: 267777 }
-	worker 0, round 2 finished after Duration { secs: 0, nanos: 191293 }
-	worker 1, round 2 finished after Duration { secs: 0, nanos: 188237 }
+    Running `target/release/examples/degrees 10000000 50000000 1 -w2`
+    Loading finished after 3829615905
+    worker 0, round 1 finished after Duration { secs: 0, nanos: 144977 }
+    worker 1, round 1 finished after Duration { secs: 0, nanos: 267777 }
+    worker 0, round 2 finished after Duration { secs: 0, nanos: 191293 }
+    worker 1, round 2 finished after Duration { secs: 0, nanos: 188237 }
 
 That is a so-so reduction. You might notice that the times *increased* for the subsequent rounds. It turns out that multiple workers just get in each other's way when there isn't much work to do. 
 
 Fortunately, as we work on more and more rounds of updates at the same time, the benefit of multiple workers increases. Here are the numbers for ten rounds at a time:
 
-	Running `target/release/examples/degrees 10000000 50000000 10 -w2`
-	Loading finished after 4397079028
-	worker 0, round 10 finished after Duration { secs: 0, nanos: 237852 }
-	worker 1, round 10 finished after Duration { secs: 0, nanos: 282013 }
-	worker 0, round 20 finished after Duration { secs: 0, nanos: 252407 }
-	worker 1, round 20 finished after Duration { secs: 0, nanos: 245471 }
+    Running `target/release/examples/degrees 10000000 50000000 10 -w2`
+    Loading finished after 4397079028
+    worker 0, round 10 finished after Duration { secs: 0, nanos: 237852 }
+    worker 1, round 10 finished after Duration { secs: 0, nanos: 282013 }
+    worker 0, round 20 finished after Duration { secs: 0, nanos: 252407 }
+    worker 1, round 20 finished after Duration { secs: 0, nanos: 245471 }
 
 One hundred rounds at a time:
 
-	Running `target/release/examples/degrees 10000000 50000000 100 -w2`
-	Loading finished after 4353001399
-	worker 0, round 100 finished after Duration { secs: 0, nanos: 592987 }
-	worker 1, round 100 finished after Duration { secs: 0, nanos: 607109 }
-	worker 0, round 200 finished after Duration { secs: 0, nanos: 500817 }
-	worker 1, round 200 finished after Duration { secs: 0, nanos: 472060 }
+    Running `target/release/examples/degrees 10000000 50000000 100 -w2`
+    Loading finished after 4353001399
+    worker 0, round 100 finished after Duration { secs: 0, nanos: 592987 }
+    worker 1, round 100 finished after Duration { secs: 0, nanos: 607109 }
+    worker 0, round 200 finished after Duration { secs: 0, nanos: 500817 }
+    worker 1, round 200 finished after Duration { secs: 0, nanos: 472060 }
 
 One hundred thousand rounds at a time:
 
-	Running `target/release/examples/degrees 10000000 50000000 100000 -w2`
-	Loading finished after 4122080785
-	worker 0, round 100000 finished after Duration { secs: 0, nanos: 294948065 }
-	worker 1, round 100000 finished after Duration { secs: 0, nanos: 293974321 }
-	worker 1, round 200000 finished after Duration { secs: 0, nanos: 330388268 }
-	worker 0, round 200000 finished after Duration { secs: 0, nanos: 330458713 }
+    Running `target/release/examples/degrees 10000000 50000000 100000 -w2`
+    Loading finished after 4122080785
+    worker 0, round 100000 finished after Duration { secs: 0, nanos: 294948065 }
+    worker 1, round 100000 finished after Duration { secs: 0, nanos: 293974321 }
+    worker 1, round 200000 finished after Duration { secs: 0, nanos: 330388268 }
+    worker 0, round 200000 finished after Duration { secs: 0, nanos: 330458713 }
 
 These last numbers were about half a second with one worker, and are decently improved with the second worker.
 
