@@ -20,7 +20,6 @@ pub struct Description<Time> {
 impl<Time: Clone> Description<Time> {
 	/// Returns a new description from its component parts.
 	pub fn new(lower: &[Time], upper: &[Time], since: &[Time]) -> Self {
-
 		assert!(lower.len() > 0);	// this should always be true.
 		// assert!(upper.len() > 0);	// this may not always be true.
 		Description {
@@ -29,6 +28,9 @@ impl<Time: Clone> Description<Time> {
 			since: since.to_vec(),
 		}
 	}
+}
+
+impl<Time> Description<Time> {
 	/// The lower envelope for times in the interval.
 	pub fn lower(&self) -> &[Time] { &self.lower[..] }
 	/// The upper envelope for times in the interval.

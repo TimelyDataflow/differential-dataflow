@@ -5,10 +5,9 @@
 //! integers keys which are promised to be random enough to be used as the hashes themselves.
 use std::rc::Rc;
 use std::fmt::Debug;
-use std::mem::replace;
 
 use timely::progress::frontier::Antichain;
-use timely_sort::{Unsigned, LSBRadixSorter};
+use timely_sort::{MSBRadixSorter, RadixSorterBase};
 
 
 use ::Ring;
@@ -35,8 +34,10 @@ type RHHBuilder<Key, Time, R> = HashedBuilder<Key, UnorderedBuilder<(Time, R)>>;
 /// other immutable collections. 
 #[derive(Debug)]
 pub struct Spine<Key: HashOrdered, Time: Lattice+Ord+Debug, R: Ring> {
-	frontier: Vec<Time>,					// Times after which the times in the traces must be distinguishable.
-	layers: Vec<Rc<Layer<Key, Time, R>>>	// Several possibly shared collections of updates.
+	advance_frontier: Vec<Time>,			// Times after which the trace must accumulate correctly.
+	through_frontier: Vec<Time>,			// Times after which the trace must be able to subset its inputs.
+	merging: Vec<Rc<Layer<Key, Time, R>>>,	// Several possibly shared collections of updates.
+	pending: Vec<Rc<Layer<Key, Time, R>>>,	// Layers at times in advance of `frontier`.
 }
 
 // A trace implementation for any key type that can be borrowed from or converted into `Key`.
@@ -51,54 +52,113 @@ where
 	type Batch = Rc<Layer<Key, Time, R>>;
 	type Cursor = CursorList<Key, (), Time, R, LayerCursor<Key, Time, R>>;
 
-	fn new(default: Time) -> Self {
+	fn new() -> Self {
 		Spine { 
-			frontier: vec![default],
-			layers: Vec::new(),
+			advance_frontier: vec![<Time as Lattice>::min()],
+			through_frontier: vec![<Time as Lattice>::min()],
+			merging: Vec::new(),
+			pending: Vec::new(),
 		} 		
 	}
 	// Note: this does not perform progressive merging; that code is around somewhere though.
 	fn insert(&mut self, layer: Self::Batch) {
 
-		// while last two elements exist, both less than layer.len()
-		while self.layers.len() >= 2 && self.layers[self.layers.len() - 2].len() < layer.len() {
-			let layer1 = self.layers.pop().unwrap();
-			let layer2 = self.layers.pop().unwrap();
-			let result = Rc::new(Layer::merge(&layer1, &layer2));
-			self.layers.push(result);
+		// we can ignore degenerate layers (TODO: learn where they come from; suppress them?)
+		if layer.desc.lower() != layer.desc.upper() {
+			self.pending.push(layer);
+			self.consider_merges();
 		}
-
-		self.layers.push(layer);
-
-	    while self.layers.len() >= 2 && self.layers[self.layers.len() - 2].len() < 2 * self.layers[self.layers.len() - 1].len() {
-			let layer1 = self.layers.pop().unwrap();
-			let layer2 = self.layers.pop().unwrap();
-			let mut result = Rc::new(layer1.merge(&layer2));
-
-			// if we just merged the last layer, `advance_by` it.
-			if self.layers.len() == 0 {
-				result = Rc::new(Layer::<Key, Time, R>::advance_by(&result, &self.frontier[..]));
-			}
-
-			self.layers.push(result);
+		else {
+			// degenerate layers had best be empty.
+			assert!(layer.len() == 0);
 		}
-
 	}
-	fn cursor(&self) -> Self::Cursor {
-		let mut cursors = Vec::new();
-		for layer in &self.layers[..] {
-			if layer.len() > 0 {
-				cursors.push(layer.cursor());
+	fn cursor_through(&self, upper: &[Time]) -> Option<Self::Cursor> {
+
+		// Check that `upper` is greater or equal to `self.through_frontier`.
+		// Otherwise, the cut could be in `self.merging` and it is user error anyhow.
+		let upper_valid = upper.iter().all(|t1| self.through_frontier.iter().any(|t2| t2.le(t1)));
+
+		// Find the position of the batch with upper limit `upper`. It is possible we 
+		// find nothing (e.g. when `upper` is `&[]`, or when `self.pending` is empty),
+		// in which case we must test that the last upper limit is less or equal to `upper`. 
+		let count = self.pending.iter()
+								.position(|batch| batch.desc.upper() == upper)
+								.unwrap_or(self.pending.len());
+
+		// The count is valid if either pending is empty, or the identified location's upper limit is not after `upper`.
+		let count_valid = self.pending.len() == 0 || upper.iter().all(|t1| self.pending[count].desc.upper().iter().any(|t2| t2.le(t1)));
+
+		// We can return a cursor if `upper` is valid, and if `count` reflects a valid cut point.
+		if upper_valid && count_valid {
+
+			let mut cursors = Vec::new();
+			for layer in &self.merging[..] {
+				if layer.len() > 0 {
+					cursors.push(layer.cursor());
+				}
 			}
+			for batch in &self.pending[..count] {
+				if batch.len() > 0 {
+					cursors.push(batch.cursor());
+				}
+			}
+			Some(CursorList::new(cursors))
+
+		}
+		else {
+			None
 		}
 
-		CursorList::new(cursors)
 	}
 	fn advance_by(&mut self, frontier: &[Time]) {
-		self.frontier = frontier.to_vec();
+		self.advance_frontier = frontier.to_vec();
+	}
+	fn distinguish_since(&mut self, frontier: &[Time]) {
+		self.through_frontier = frontier.to_vec();
+		self.consider_merges();
 	}
 }
 
+impl<Key, Time, R> Spine<Key, Time, R> 
+where 
+	Key: Clone+Default+HashOrdered+'static,
+	Time: Lattice+Ord+Clone+Default+Debug+'static,
+	R: Ring,
+{
+	// Migrate data from `self.pending` into `self.merging`.
+	fn consider_merges(&mut self) {
+
+		// TODO: We could consider merging in batches here, rather than in sequence. Little is known...
+		while self.pending.len() > 0 && self.through_frontier.iter().all(|t1| self.pending[0].description().upper().iter().any(|t2| t2.le(t1))) {
+
+			let layer = self.pending.remove(0);
+
+			// while last two elements exist, both less than layer.len()
+			while self.merging.len() >= 2 && self.merging[self.merging.len() - 2].len() < layer.len() {
+				let layer1 = self.merging.pop().unwrap();
+				let layer2 = self.merging.pop().unwrap();
+				let result = layer2.merge(&layer1).unwrap();
+				self.merging.push(result);
+			}
+
+			self.merging.push(layer);
+
+		    while self.merging.len() >= 2 && self.merging[self.merging.len() - 2].len() < 2 * self.merging[self.merging.len() - 1].len() {
+				let layer1 = self.merging.pop().unwrap();
+				let layer2 = self.merging.pop().unwrap();
+				let mut result = layer2.merge(&layer1).unwrap();
+
+				// if we just merged the last layer, `advance_by` it.
+				if self.merging.len() == 0 {
+					result = Rc::new(Layer::<Key, Time, R>::advance_by(&result, &self.advance_frontier[..]));
+				}
+
+				self.merging.push(result);
+			}
+		}
+	}
+}
 
 /// An immutable collection of update tuples, from a contiguous interval of logical times.
 #[derive(Debug)]
@@ -118,38 +178,40 @@ impl<Key: Clone+Default+HashOrdered, Time: Lattice+Ord+Clone+Default, R: Ring> B
 	}
 	fn len(&self) -> usize { self.layer.tuples() }
 	fn description(&self) -> &Description<Time> { &self.desc }
+	fn merge(&self, other: &Self) -> Option<Self> {
+
+		// Things are horribly wrong if this is not true.
+		if other.desc.upper() == self.desc.lower() {
+
+			// one of self.desc.since or other.desc.since needs to be not behind the other...
+			let since = if self.desc.since().iter().all(|t1| other.desc.since().iter().any(|t2| t2.le(t1))) {
+				other.desc.since()
+			}
+			else {
+				self.desc.since()
+			};
+			
+			Some(Rc::new(Layer {
+				layer: self.layer.merge(&other.layer),
+				desc: Description::new(other.desc.lower(), self.desc.upper(), since),
+			}))
+		}
+		else { None }
+	}
 }
 
-impl<Key: Clone+Default+HashOrdered, Time: Lattice+Ord+Clone+Default, R: Ring> Layer<Key, Time, R> {
+impl<Key: Clone+Default+HashOrdered, Time: Lattice+Ord+Clone+Default+Debug, R: Ring> Layer<Key, Time, R> {
 
-	/// Conducts a full merge, right away. Times not advanced.
-	pub fn merge(&self, other: &Self) -> Self {
-
-		// This may not be true if we leave gaps, so we try hard not to do that.
-		assert!(other.desc.upper() == self.desc.lower());
-
-		// one of self.desc.since or other.desc.since needs to be not behind the other...
-		let since = if self.desc.since().iter().all(|t1| other.desc.since().iter().any(|t2| t2.le(t1))) {
-			other.desc.since()
-		}
-		else {
-			self.desc.since()
-		};
-		
-		Layer {
-			layer: self.layer.merge(&other.layer),
-			desc: Description::new(other.desc.lower(), self.desc.upper(), since),
-		}
-	}
 	/// Advances times in `layer` and consolidates differences for like times.
 	///
 	/// TODO: This method could be defined on `&mut self`, exploiting in-place mutation
 	/// to avoid allocation and building headaches. It is implemented on the `Rc` variant
 	/// to get access to `cursor()`, and in principle to allow a progressive implementation. 
+	#[inline(never)]
 	pub fn advance_by(layer: &Rc<Self>, frontier: &[Time]) -> Self { 
 
 		// TODO: This is almost certainly too much `with_capacity`.
-		// TODO: We should design and implement an "in-orded builder", which takes cues from key and val
+		// TODO: We should design and implement an "in-order builder", which takes cues from key and val
 		// structure, rather than having to infer them from tuples.
 		// TODO: We should understand whether in-place mutation is appropriate, or too gross. At the moment,
 		// this could be a general method defined on any implementor of `trace::Cursor`.
@@ -164,9 +226,7 @@ impl<Key: Clone+Default+HashOrdered, Time: Lattice+Ord+Clone+Default, R: Ring> L
 					cursor.map_times(|time: &Time, diff| times.push((time.advance_by(frontier).unwrap(), diff)));
 					consolidate(&mut times, 0);
 					for (time, diff) in times.drain(..) {
-						let key_ref: &Key = cursor.key();
-						let key_clone: Key = key_ref.clone();
-						builder.push_tuple((key_clone, (time, diff)));
+						builder.push_tuple((cursor.key().clone(), (time, diff)));
 					}
 				}
 				cursor.step_key();
@@ -213,117 +273,134 @@ impl<Key: Clone+HashOrdered, Time: Lattice+Ord+Clone, R: Copy> Cursor<Key, (), T
 /// A builder for creating layers from unsorted update tuples.
 pub struct LayerBatcher<K, T: PartialOrd, R: Ring> {
 	// where we stash records we don't know what to do with yet.
-    buffer: Vec<(K, T, R)>,
-    buffers: Vec<Vec<(K, T, R)>>,
-
+    buffers: Vec<Vec<((K, ()), T, R)>>,
     sorted: usize,
-    sorter: LSBRadixSorter<(K, T, R)>,
-    stash: Vec<Vec<(K, T, R)>>,
-    stage: Vec<((K, T), R)>,
-
+    sorter: MSBRadixSorter<((K, ()), T, R)>,
+    stash: Vec<Vec<((K, ()), T, R)>>,
     lower: Vec<T>,
-
-    /// lower bound of contained updates.
     frontier: Antichain<T>,
 }
 
 impl<Key, Time: PartialOrd, R: Ring> LayerBatcher<Key, Time, R>
 where Key: Clone+Default+HashOrdered, Time: Lattice+Ord+Clone+Default {
-	fn empty(&mut self) -> Vec<(Key, Time, R)> {
+
+	// Provides an allocated buffer, either from stash or through allocation.
+	fn empty(&mut self) -> Vec<((Key, ()), Time, R)> {
 		self.stash.pop().unwrap_or_else(|| Vec::with_capacity(1 << 10))
 	}
 
 	// Compacts the representation of data in self.buffer and self.buffers.
 	// This could, in principle, move data into a trace, because it is even more 
 	// compact in that form, and easier to merge as compared to re-sorting.
+	#[inline(never)]
 	fn compact(&mut self) {
 
-		let mut buffers = ::std::mem::replace(&mut self.buffers, Vec::new());
-		self.sorter.sort(&mut buffers, &|x| x.0.hashed());
-
-		// set this so that we avoid re-tripping sorting.
-		self.sorted = self.buffers.len();
-
-		// consolidate the contents, writing them back to their buffers.
-		let mut current_hash = 0;
-		for mut buffer in buffers.drain(..) {
-			for (key, time, diff) in buffer.drain(..) {
-	    		if key.hashed().as_u64() != current_hash {
-	    			current_hash = key.hashed().as_u64();
-					consolidate(&mut self.stage, 0);
-					for ((key, time), diff) in self.stage.drain(..) {
-
-						// *we* know push doesn't use `self.stage`, but ...
-						self.buffer.push((key, time, diff));
-						if self.buffer.len() == (1 << 10) {
-							let empty = self.stash.pop().unwrap_or_else(|| Vec::with_capacity(1 << 10));
-							self.buffers.push(::std::mem::replace(&mut self.buffer, empty));
-						}
-
-					}
-	    		}
-	    		self.stage.push(((key, time), diff));				
+		let mut sum1 = R::zero();
+		for batch in &self.buffers {
+			for element in batch.iter() {
+				sum1 = sum1 + element.2;
 			}
-			self.stash.push(buffer)
-		}
-		consolidate(&mut self.stage, 0);
-		for ((key, time), diff) in self.stage.drain(..) {
-
-			// *we* know push doesn't use `self.stage`, but ...
-			self.buffer.push((key, time, diff));
-			if self.buffer.len() == (1 << 10) {
-				let empty = self.stash.pop().unwrap_or_else(|| Vec::with_capacity(1 << 10));
-				self.buffers.push(::std::mem::replace(&mut self.buffer, empty));
-			}
-
 		}
 
-		// update self.sorted to reflect compacted data.
+		self.sorter.sort_and(&mut self.buffers, &|x: &((Key, ()),Time,R)| (x.0).0.hashed(), |slice| consolidate_vec(slice));
+
+		let mut sum2 = R::zero();
+		for batch in &self.buffers {
+			for element in batch.iter() {
+				sum2 = sum2 + element.2;
+			}
+		}
+
+		assert!(sum1 == sum2);
+
+		self.sorter.rebalance(&mut self.stash, 256);
 		self.sorted = self.buffers.len();
-		self.stash.clear();
+		self.stash.clear();	// <-- too aggressive?
 	}
 
+	#[inline(never)]
+	fn segment(&mut self, upper: &[Time]) -> Vec<Vec<((Key,()), Time, R)>> {
+
+		let mut to_keep = Vec::new();	// updates that are not yet ready.
+		let mut to_seal = Vec::new();	// updates that are ready to go.
+
+		let mut to_keep_tail = self.empty();
+		let mut to_seal_tail = self.empty();
+
+		// swing through each buffer, each element, and partition
+		for mut buffer in self.buffers.drain(..) {
+			for ((key, _), time, diff) in buffer.drain(..) {
+				if !upper.iter().any(|t| t.le(&time)) {
+					if to_seal_tail.len() == to_seal_tail.capacity() {
+						if to_seal_tail.len() > 0 {
+							to_seal.push(to_seal_tail);
+						}
+						to_seal_tail = self.stash.pop().unwrap_or_else(|| Vec::with_capacity(1 << 10));
+					}
+					to_seal_tail.push(((key, ()), time, diff));
+				}
+				else {
+					if to_keep_tail.len() == to_keep_tail.capacity() {
+						if to_keep_tail.len() > 0 {
+							to_keep.push(to_keep_tail);
+						}
+						to_keep_tail = self.stash.pop().unwrap_or_else(|| Vec::with_capacity(1 << 10));
+					}
+					to_keep_tail.push(((key, ()), time, diff));
+				}
+			}
+			self.stash.push(buffer);
+		}
+
+		if to_keep_tail.len() > 0 { to_keep.push(to_keep_tail); }
+		if to_seal_tail.len() > 0 { to_seal.push(to_seal_tail); }
+
+		self.buffers = to_keep;
+		to_seal
+	}
 }
 
 impl<Key, Time, R: Ring> Batcher<Key, (), Time, R, Rc<Layer<Key, Time, R>>> for LayerBatcher<Key, Time, R> 
 where Key: Clone+Default+HashOrdered, Time: Lattice+Ord+Clone+Default {
 	fn new() -> Self { 
 		LayerBatcher { 
-			buffer: Vec::with_capacity(1 << 10), 
 			buffers: Vec::new(),
-			sorter: LSBRadixSorter::new(),
+			sorter: MSBRadixSorter::new(),
 			sorted: 0,
 			stash: Vec::new(),
-			stage: Vec::new(),
 			frontier: Antichain::new(),
 			lower: vec![Time::min()],
 		} 
 	}
 
-	#[inline(always)]
-	fn push(&mut self, (key, _, time, diff): (Key, (), Time, R)) {
+	#[inline(never)]
+	fn push_batch(&mut self, batch: &mut Vec<((Key, ()), Time, R)>) {
 
-		// each pushed update should be in the future of the current lower bound.
-		debug_assert!(self.lower.iter().any(|t| t.le(&time)));
+		// If we have spare capacity, copy contents rather than appending list.
+		if self.buffers.last().map(|buf| buf.len() + batch.len() <= buf.capacity()) == Some(true) {
+			self.buffers.last_mut().map(|buf| buf.extend(batch.drain(..)));
+		}
+		else {
+			self.buffers.push(::std::mem::replace(batch, Vec::new()));
+		}
 
-		self.buffer.push((key, time, diff));
-		if self.buffer.len() == (1 << 10) {
-			let empty = self.empty();
-			self.buffers.push(::std::mem::replace(&mut self.buffer, empty));
-
-			// if it has been a while since we have compacted, let's do so now.
-			if self.buffers.len() > ::std::cmp::max(2 * self.sorted, 1_000) {
-				self.compact();
-			}
+		// If we have accepted a lot of data since our last compaction, compact again!
+		if self.buffers.len() > ::std::cmp::max(2 * self.sorted, 1_000) {
+			self.compact();
 		}
 	}
 
-	// TODO: Consider sorting everything, which would allow cancelation of any updates.
+	// Sealing a batch means finding those updates with times not greater or equal to any time 
+	// in `upper`. All updates must have time greater or equal to the previously used `upper`,
+	// which we call `lower`, by assumption that after sealing a batcher we receive no more 
+	// updates with times not greater or equal to `upper`.
 	#[inline(never)]
 	fn seal(&mut self, upper: &[Time]) -> Rc<Layer<Key, Time, R>> {
 
-		// Sealing a batch means finding those updates with times greater or equal to some element
-		// of `lower`, but not greater or equal to any element of `upper`. 
+		// TODO: We filter and then consolidate; we could consolidate and then filter, for general
+		//       health of compact state. Would mean that repeated `seal` calls wouldn't have to 
+		//       re-sort the data if we tracked a dirty bit. Maybe wouldn't be all that helpful, 
+		//       if we aren't running a surplus of data (if the optimistic compaction isn't helpful).
 		//
 		// Until timely dataflow gets multiple capabilities per message, we will probably want to
 		// consider sealing multiple batches at once, as we will get multiple requests with nearly
@@ -333,110 +410,54 @@ where Key: Clone+Default+HashOrdered, Time: Lattice+Ord+Clone+Default {
 		// as efficiently as possible. In particular, if we can avoid lot of allocations, re-using
 		// the allocations we already have, I would be delighted.
 
-		// move the tail onto self.buffers.
-		if self.buffer.len() > 0 {
-			let empty = self.empty();
-			let tail = replace(&mut self.buffer, empty);
-			self.buffers.push(tail);
+		// Extract data we plan to seal and ship.
+		let mut to_seal = self.segment(upper);
+
+		let mut sum1 = R::zero();
+		for batch in &self.buffers {
+			for element in batch.iter() {
+				sum1 = sum1 + element.2;
+			}
 		}
 
-		// partition data into data we keep and data we seal and ship.
-		let mut to_keep = Vec::new();	// updates that are not yet ready.
-		let mut to_seal = Vec::new();	// updates that are ready to go.
+		// Sort the data; this uses top-down MSB radix sort with an early exit to consolidate_vec.
+		self.sorter.sort_and(&mut to_seal, &|x: &((Key,()), Time, R)| (x.0).0.hashed(), |slice| consolidate_vec(slice));		
 
-		let mut to_keep_tail = self.empty();
-		let mut to_seal_tail = self.empty();
-
-		// swing through each buffer, each element, and partition
-		for mut buffer in self.buffers.drain(..) {
-			for (key, time, diff) in buffer.drain(..) {
-				if !upper.iter().any(|t| t.le(&time)) {
-					if to_seal_tail.len() == to_seal_tail.capacity() {
-						if to_seal_tail.len() > 0 {
-							to_seal.push(to_seal_tail);
-						}
-						to_seal_tail = self.stash.pop().unwrap_or_else(|| Vec::with_capacity(1 << 10));
-					}
-					to_seal_tail.push((key, time, diff));
-				}
-				else {
-					if to_keep_tail.len() == to_keep_tail.capacity() {
-						if to_keep_tail.len() > 0 {
-							to_keep.push(to_keep_tail);
-						}
-						to_keep_tail = self.stash.pop().unwrap_or_else(|| Vec::with_capacity(1 << 10));
-					}
-					to_keep_tail.push((key, time, diff));
-				}
+		let mut sum2 = R::zero();
+		for batch in &self.buffers {
+			for element in batch.iter() {
+				sum2 = sum2 + element.2;
 			}
-			self.stash.push(buffer);
 		}
 
-		// retain stuff we keep.
-		self.buffers = to_keep;
-		self.buffer = to_keep_tail;
+		assert!(sum1 == sum2);
 
-		// now we sort `to_seal`. do this differently based on its length.
-		if to_seal_tail.len() > 0 { to_seal.push(to_seal_tail); }
-		if to_seal.len() > 1 {
-			// sort the data; will probably trigger many allocations.
-			self.sorter.sort(&mut to_seal, &|x| x.0.hashed());
-
-			let mut builder = LayerBuilder::new();
-			let mut current_hash = 0;
-			for buffer in to_seal.iter_mut() {
-				for (key, time, diff) in buffer.drain(..) {
-	        		if key.hashed().as_u64() != current_hash {
-	        			current_hash = key.hashed().as_u64();
-						consolidate(&mut self.stage, 0);
-						for ((key, time), diff) in self.stage.drain(..) {
-							builder.push((key, (), time, diff));
-						}
-	        		}
-	        		self.stage.push(((key, time), diff));				
-				}
-			}
-			self.sorter.recycle(to_seal);
-			consolidate(&mut self.stage, 0);
-			for ((key, time), diff) in self.stage.drain(..) {
+		// Create a new layer from the consolidated updates.
+		let count = to_seal.iter().map(|x| x.len()).sum();
+		let mut builder = LayerBuilder::with_capacity(count);
+		for buffer in to_seal.iter_mut() {
+			for ((key, _), time, diff) in buffer.drain(..) {
+				debug_assert!(!diff.is_zero());
 				builder.push((key, (), time, diff));
 			}
-
-			// 3. Return the finished layer with its bounds.
-			let result = builder.done(&self.lower[..], upper);
-			self.lower = upper.to_vec();
-			result
 		}
-		else {
-			let mut data = to_seal.pop().unwrap_or_else(|| self.empty());
-			for (key, time, diff) in data.drain(..) {
-				self.stage.push(((key, time), diff));
-			}
-			consolidate(&mut self.stage, 0);
 
-			let mut builder = LayerBuilder::new();
-			for ((key, time), diff) in self.stage.drain(..) {
-				builder.push((key, (), time, diff));
-			}
-			let result = builder.done(&self.lower[..], upper);
-			self.lower = upper.to_vec();
-			result
-		}
+		// Recycle the consumed buffers, if appropriate.
+		self.sorter.rebalance(&mut to_seal, 256);
+
+		// Return the finished layer with its bounds.
+		let result = builder.done(&self.lower[..], upper, &self.lower[..]);
+		self.lower = upper.to_vec();
+		result
 	}
 
 	fn frontier(&mut self) -> &[Time] {
-
 		self.frontier = Antichain::new();
-
 		for buffer in &self.buffers {
 			for &(_, ref time, _) in buffer {
 				self.frontier.insert(time.clone());
 			}
 		}
-		for &(_, ref time, _) in &self.buffer {
-			self.frontier.insert(time.clone());
-		}
-
 		self.frontier.elements()
 	}
 }
@@ -455,10 +476,28 @@ where Key: Clone+Default+HashOrdered, Time: Lattice+Ord+Clone+Default, R: Ring {
 	}
 
 	#[inline(never)]
-	fn done(self, lower: &[Time], upper: &[Time]) -> Rc<Layer<Key, Time, R>> {
+	fn done(self, lower: &[Time], upper: &[Time], since: &[Time]) -> Rc<Layer<Key, Time, R>> {
 		Rc::new(Layer {
 			layer: self.builder.done(),
-			desc: Description::new(lower, upper, lower)
+			desc: Description::new(lower, upper, since)
 		})
 	}
+}
+
+impl<Key, Time, R> LayerBuilder<Key, Time, R> 
+where Key: Clone+Default+HashOrdered, Time: Lattice+Ord+Clone+Default, R: Ring {
+	fn with_capacity(cap: usize) -> Self { LayerBuilder { builder: RHHBuilder::with_capacity(cap) } }
+}
+
+/// Scans `vec[off..]` and consolidates differences of adjacent equivalent elements.
+#[inline(always)]
+pub fn consolidate_vec<D: Ord+Clone, T:Ord+Clone, R: Ring>(slice: &mut Vec<(D, T, R)>) {
+	slice.sort_by(|x,y| (&x.0,&x.1).cmp(&(&y.0,&y.1)));
+	for index in 1 .. slice.len() {
+		if slice[index].0 == slice[index - 1].0 && slice[index].1 == slice[index - 1].1 {
+			slice[index].2 = slice[index].2 + slice[index - 1].2;
+			slice[index - 1].2 = R::zero();
+		}
+	}
+	slice.retain(|x| !x.2.is_zero());
 }

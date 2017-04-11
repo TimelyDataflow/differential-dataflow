@@ -19,8 +19,8 @@ use lattice::Lattice;
 use operators::arrange::{Arrange, Arranged, ArrangeByKey, ArrangeBySelf};
 use trace::{Batch, Cursor, Trace, consolidate};
 
-use trace::implementations::rhh::Spine as HashSpine;
-use trace::implementations::rhh_k::Spine as KeyHashSpine;
+use trace::implementations::hash::HashValSpine as DefaultValTrace;
+use trace::implementations::hash::HashKeySpine as DefaultKeyTrace;
 
 /// Join implementations for `(key,val)` data.
 pub trait Join<G: Scope, K: Data, V: Data, R: Ring> {
@@ -157,16 +157,16 @@ where
     fn join_map_u<V2: Data, D: Data, L>(&self, other: &Collection<G, (K, V2), R>, logic: L) -> Collection<G, D, R>
     where L: Fn(&K, &V, &V2)->D+'static, K: Unsigned+Copy {
         let arranged1 = self.map(|(k,v)| (UnsignedWrapper::from(k), v))
-                            .arrange(HashSpine::new(<G::Timestamp as Lattice>::min()));
+                            .arrange(DefaultValTrace::new());
         let arranged2 = other.map(|(k,v)| (UnsignedWrapper::from(k), v))
-                             .arrange(HashSpine::new(<G::Timestamp as Lattice>::min()));
+                             .arrange(DefaultValTrace::new());
         arranged1.join_arranged(&arranged2, move |k,v1,v2| logic(&k.item,v1,v2))
     }
     fn semijoin_u(&self, other: &Collection<G, K, R>) -> Collection<G, (K, V), R> where K: Unsigned+Copy {
         let arranged1 = self.map(|(k,v)| (UnsignedWrapper::from(k), v))
-                            .arrange(HashSpine::new(<G::Timestamp as Lattice>::min()));
+                            .arrange(DefaultValTrace::new());
         let arranged2 = other.map(|k| (UnsignedWrapper::from(k), ()))
-                             .arrange(KeyHashSpine::new(<G::Timestamp as Lattice>::min()));
+                             .arrange(DefaultKeyTrace::new());
         arranged1.join_arranged(&arranged2, |k,v,_| (k.item.clone(), v.clone()))
     }
     fn antijoin_u(&self, other: &Collection<G, K, R>) -> Collection<G, (K, V), R> where K: Unsigned+Copy {
@@ -238,9 +238,12 @@ impl<G, K, V, R, T1> JoinArranged<G, K, V, R> for Arranged<G,K,V,R,T1>
             input1.for_each(|capability, data| {
                 if let Some(ref trace2) = trace2 {
                     for batch1 in data.drain(..) {
-                        todo1.push(Deferred::new(trace2.cursor(), batch1.item.cursor(), capability.clone(), acknowledged2.clone()));
+                        let trace2_cursor = trace2.cursor_through(&acknowledged2[..]).unwrap();
+                        let batch1_cursor = batch1.item.cursor();
+                        todo1.push(Deferred::new(trace2_cursor, batch1_cursor, capability.clone()));
                         debug_assert!(batch1.item.description().upper().iter().all(|t| acknowledged1.iter().any(|t2| t2.le(t))));
                         acknowledged1 = batch1.item.description().upper().to_vec();
+                        // println!("enqueueing work with ack2 {:?}, ack1 now {:?}", acknowledged2, acknowledged1);
                     }
                 }
             });
@@ -249,9 +252,12 @@ impl<G, K, V, R, T1> JoinArranged<G, K, V, R> for Arranged<G,K,V,R,T1>
             input2.for_each(|capability, data| {
                 if let Some(ref trace1) = trace1 {
                     for batch2 in data.drain(..) {
-                        todo2.push(Deferred::new(trace1.cursor(), batch2.item.cursor(), capability.clone(), acknowledged1.clone()));
+                        let trace1_cursor = trace1.cursor_through(&acknowledged1[..]).unwrap();
+                        let batch2_cursor = batch2.item.cursor();
+                        todo2.push(Deferred::new(trace1_cursor, batch2_cursor, capability.clone()));
                         debug_assert!(batch2.item.description().upper().iter().all(|t| acknowledged2.iter().any(|t2| t2.le(t))));
                         acknowledged2 = batch2.item.description().upper().to_vec();
+                        // println!("enqueueing work with ack1 {:?}, ack2 now {:?}", acknowledged1, acknowledged2);
                     }
                 }
             });
@@ -263,8 +269,10 @@ impl<G, K, V, R, T1> JoinArranged<G, K, V, R> for Arranged<G,K,V,R,T1>
             if let Some(ref mut trace2) = trace2 {
                 let mut frontier = acknowledged2.clone();
                 for time in notificator.frontier(0) {
-                    frontier.retain(|t| !time.lt(t));
-                    if !frontier.iter().any(|t| t.le(time)) { frontier.push(time.clone()); }
+                    if !frontier.iter().any(|t| t.le(time)) { 
+                        frontier.retain(|t| !time.lt(t));
+                        frontier.push(time.clone()); 
+                    }
                 }
                 trace2.advance_by(&frontier[..]);
             }
@@ -274,20 +282,22 @@ impl<G, K, V, R, T1> JoinArranged<G, K, V, R> for Arranged<G,K,V,R,T1>
             if let Some(ref mut trace1) = trace1 {
                 let mut frontier = acknowledged1.clone();
                 for time in notificator.frontier(1) {
-                    frontier.retain(|t| !time.lt(t));
-                    if !frontier.iter().any(|t| t.le(time)) { frontier.push(time.clone()); }
+                    if !frontier.iter().any(|t| t.le(time)) { 
+                        frontier.retain(|t| !time.lt(t));
+                        frontier.push(time.clone()); 
+                    }
                 }
                 trace1.advance_by(&frontier[..]);
             }
 
             // perform some amount of outstanding work. 
-            if todo1.len() > 0 {
+            while todo1.len() > 0 {
                 todo1[0].work(output, &|k,v2,v1| result(k,v1,v2), 1_000_000);
                 if !todo1[0].work_remains() { todo1.remove(0); }
             }
 
             // perform some amount of outstanding work. 
-            if todo2.len() > 0 {
+            while todo2.len() > 0 {
                 todo2[0].work(output, &|k,v1,v2| result(k,v1,v2), 1_000_000);
                 if !todo2[0].work_remains() { todo2.remove(0); }
             }
@@ -313,7 +323,7 @@ where
     trace: C1,
     batch: C2,
     capability: Capability<T>,
-    acknowledged: Vec<T>,
+    // acknowledged: Vec<T>,
 }
 
 impl<K, V1, V2, T, R, C1, C2> Deferred<K, V1, V2, T, R, C1, C2>
@@ -326,13 +336,13 @@ where
     C1: Cursor<K, V1, T, R>,
     C2: Cursor<K, V2, T, R>,
 {
-    fn new(trace: C1, batch: C2, capability: Capability<T>, acknowledged: Vec<T>) -> Self {
+    fn new(trace: C1, batch: C2, capability: Capability<T>) -> Self {
         Deferred {
             phant: ::std::marker::PhantomData,
             trace: trace,
             batch: batch,
             capability: capability,
-            acknowledged: acknowledged,
+            // acknowledged: acknowledged,
         }
     }
 
@@ -340,73 +350,73 @@ where
         self.batch.key_valid()
     }
 
-    /// Process keys until at least `limit` output tuples produced, or the work is exhausted.
-    #[inline(never)]
-    fn _work<D, L>(&mut self, output: &mut OutputHandle<T, (D, T, R), Tee<T, (D, T, R)>>, logic: &L, limit: usize) 
-    where D: Ord+Clone+Data, L: Fn(&K, &V1, &V2)->D {
+    // /// Process keys until at least `limit` output tuples produced, or the work is exhausted.
+    // #[inline(never)]
+    // fn _work<D, L>(&mut self, output: &mut OutputHandle<T, (D, T, R), Tee<T, (D, T, R)>>, logic: &L, limit: usize) 
+    // where D: Ord+Clone+Data, L: Fn(&K, &V1, &V2)->D {
 
-        let acknowledged = &self.acknowledged;
-        let time = self.capability.time();
+    //     let acknowledged = &self.acknowledged;
+    //     let time = self.capability.time();
 
-        let mut effort = 0;
-        let mut session = output.session(&self.capability);
+    //     let mut effort = 0;
+    //     let mut session = output.session(&self.capability);
 
-        let trace = &mut self.trace;
-        let batch = &mut self.batch;
+    //     let trace = &mut self.trace;
+    //     let batch = &mut self.batch;
 
-        // TODO: This implementation can be quadratic in the input for each key, despite producing a linear sized
-        // output. We can change the implementation to process times in-order, which can reduce this particular
-        // worst-case performance (though perhaps maintaining collections over time is also expensive).
+    //     // TODO: This implementation can be quadratic in the input for each key, despite producing a linear sized
+    //     // output. We can change the implementation to process times in-order, which can reduce this particular
+    //     // worst-case performance (though perhaps maintaining collections over time is also expensive).
  
-        let mut temp = Vec::new();
-        let mut temp1 = Vec::new();
-        let mut temp2 = Vec::new();
+    //     let mut temp = Vec::new();
+    //     let mut temp1 = Vec::new();
+    //     let mut temp2 = Vec::new();
 
-        while batch.key_valid() && effort < limit {
-            trace.seek_key(batch.key());
-            if trace.key_valid() && trace.key() == batch.key() {
-                while trace.val_valid() {
-                    while batch.val_valid() {
+    //     while batch.key_valid() && effort < limit {
+    //         trace.seek_key(batch.key());
+    //         if trace.key_valid() && trace.key() == batch.key() {
+    //             while trace.val_valid() {
+    //                 while batch.val_valid() {
 
-                        // we now want to compute the cross-product of times and diffs, 
-                        // but this could take quadratic work if done badly. do better!
+    //                     // we now want to compute the cross-product of times and diffs, 
+    //                     // but this could take quadratic work if done badly. do better!
 
-                        let r = logic(batch.key(), trace.val(), batch.val());
-                        trace.map_times(|time1, diff1|
-                            if !acknowledged.iter().any(|t| t <= time1) {
-                                temp1.push((time.join(time1), diff1));
-                            }
-                        );
-                        batch.map_times(|time2, diff2| temp2.push((time2.clone(), diff2)));
+    //                     let r = logic(batch.key(), trace.val(), batch.val());
+    //                     trace.map_times(|time1, diff1|
+    //                         if !acknowledged.iter().any(|t| t <= time1) {
+    //                             temp1.push((time.join(time1), diff1));
+    //                         }
+    //                     );
+    //                     batch.map_times(|time2, diff2| temp2.push((time2.clone(), diff2)));
 
-                        consolidate(&mut temp1, 0);
-                        consolidate(&mut temp2, 0);
+    //                     consolidate(&mut temp1, 0);
+    //                     consolidate(&mut temp2, 0);
 
-                        for &(ref time1, diff1) in &temp1[..] {
-                            for &(ref time2, diff2) in &temp2[..] {
-                                temp.push((time1.join(time2), diff1 * diff2));
-                            }
-                        }
+    //                     for &(ref time1, diff1) in &temp1[..] {
+    //                         for &(ref time2, diff2) in &temp2[..] {
+    //                             temp.push((time1.join(time2), diff1 * diff2));
+    //                         }
+    //                     }
 
-                        temp1.clear();
-                        temp2.clear();
+    //                     temp1.clear();
+    //                     temp2.clear();
 
-                        consolidate(&mut temp, 0);
+    //                     consolidate(&mut temp, 0);
 
-                        effort += temp.len();
-                        for (t, d) in temp.drain(..) {
-                            session.give((r.clone(), t, d));
-                        }
-                        batch.step_val();
-                    }
+    //                     effort += temp.len();
+    //                     for (t, d) in temp.drain(..) {
+    //                         session.give((r.clone(), t, d));
+    //                     }
+    //                     batch.step_val();
+    //                 }
 
-                    batch.rewind_vals();
-                    trace.step_val();
-                }
-            }
-            batch.step_key();
-        }
-    }
+    //                 batch.rewind_vals();
+    //                 trace.step_val();
+    //             }
+    //         }
+    //         batch.step_key();
+    //     }
+    // }
 
 
     /// Process keys until at least `limit` output tuples produced, or the work is exhausted.
@@ -414,7 +424,6 @@ where
     fn work<D, L>(&mut self, output: &mut OutputHandle<T, (D, T, R), Tee<T, (D, T, R)>>, logic: &L, limit: usize) 
     where D: Ord+Clone+Data, L: Fn(&K, &V1, &V2)->D {
 
-        let acknowledged = &self.acknowledged;
         let time = self.capability.time();
 
         let mut effort = 0;
@@ -431,6 +440,12 @@ where
         let mut thinker = JoinThinker::<V1, V2, T, R>::new();
 
         while batch.key_valid() && effort < limit {
+
+            // let print_me = format!("{:?}", batch.key()) == "UnsignedWrapper { item: 2002306141 }".to_owned();
+            // if print_me {
+            //     println!("FOUND OUR KEY!");
+            // }
+
             trace.seek_key(batch.key());
             if trace.key_valid() && trace.key() == batch.key() {
 
@@ -438,11 +453,9 @@ where
                 thinker.history1.clear();
                 while trace.val_valid() {
                     let val: V1 = trace.val().clone();
-                    trace.map_times(|time1, diff1| 
-                        if !acknowledged.iter().any(|t| t <= time1) {
-                            thinker.history1.push(val.clone(), time.join(time1), diff1);
-                        }
-                    );
+                    trace.map_times(|time1, diff1| {
+                        thinker.history1.push(val.clone(), time.join(time1), diff1);
+                    });
                     trace.step_val();
                 }
 
@@ -451,6 +464,7 @@ where
                 while batch.val_valid() {
                     let val: V2 = batch.val().clone();
                     batch.map_times(|time2, diff2| {
+                        // if print_me { println!("  batch: {:?}, {:?}, {:?}", val.clone(), time2, diff2); }
                         thinker.history2.push(val.clone(), time2.clone(), diff2);
                     });
                     batch.step_val();
@@ -461,11 +475,17 @@ where
                 consolidate(&mut temp, 0);
                 effort += temp.len();
                 for ((d, t), r) in temp.drain(..) {
+                    // if print_me {
+                    //     println!("  Sending something: {:?}, {:?}, {:?}", d, t, r);
+                    // }
                     session.give((d, t, r));
                 }
 
             }
+
             batch.step_key();
+
+            // if print_me { println!("DONE WITH KEY I GUESS"); }
         }
     }
 }
@@ -487,8 +507,11 @@ impl<V1: Ord+Clone, V2: Ord+Clone, T: Lattice+Ord+Clone, R: Ring> JoinThinker<V1
 
         // for reasonably sized edits, do the dead-simple thing.
         if self.history1.edits.len() < 10 || self.history2.edits.len() < 10 {
+            // if print { println!("here? {:?}, {:?}", self.history1.edits.len(), self.history2.edits.len()) }
             for &((ref time1, ref val1), diff1) in &self.history1.edits[..] {
+                // if print { println!("here!") }
                 for &((ref time2, ref val2), diff2) in &self.history2.edits[..] {
+                    // if print { println!("here.") }
                     results(val1, val2, time1.join(time2), diff1 * diff2);
                 }
             }

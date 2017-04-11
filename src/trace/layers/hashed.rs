@@ -330,6 +330,7 @@ impl<K: HashOrdered+Clone+Default, L: TupleBuilder> TupleBuilder for HashedBuild
 		// we build up self.temp, and rely on self.boundary() to drain self.temp.
 		let temp_len = self.temp.len();
 		if temp_len == 0 || self.temp[temp_len-1].key != key {
+			if temp_len > 0 { debug_assert!(self.temp[temp_len-1].key < key); }
 			let boundary = self.vals.boundary();
 			if temp_len > 0 {
 				self.temp[temp_len-1].set_upper(boundary);

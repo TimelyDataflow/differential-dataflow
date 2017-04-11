@@ -48,10 +48,8 @@ use timely_sort::Unsigned;
 use operators::arrange::{Arrange, Arranged, ArrangeByKey, ArrangeBySelf, BatchWrapper, TraceHandle};
 use lattice::Lattice;
 use trace::{Batch, Cursor, Trace, Builder};
-// use trace::implementations::trie::Spine as OrdSpine;
-// use trace::implementations::keys::Spine as KeysSpine;
-use trace::implementations::rhh::Spine as HashSpine;
-use trace::implementations::rhh_k::Spine as KeyHashSpine;
+use trace::implementations::hash::HashValSpine as DefaultValTrace;
+use trace::implementations::hash::HashKeySpine as DefaultKeyTrace;
 
 /// Extension trait for the `group` differential dataflow method.
 pub trait Group<G: Scope, K: Data, V: Data, R: Ring> where G::Timestamp: Lattice+Ord {
@@ -69,14 +67,14 @@ impl<G: Scope, K: Data+Default+Hashable, V: Data, R: Ring> Group<G, K, V, R> for
         where L: Fn(&K, &[(V, R)], &mut Vec<(V2, R2)>)+'static {
         // self.arrange_by_key_hashed_cached()
         self.arrange_by_key_hashed()
-            .group_arranged(move |k,s,t| logic(&k.item,s,t), HashSpine::new(Default::default()))
+            .group_arranged(move |k,s,t| logic(&k.item,s,t), DefaultValTrace::new())
             .as_collection(|k,v| (k.item.clone(), v.clone()))
     }
     fn group_u<L, V2: Data, R2: Ring>(&self, logic: L) -> Collection<G, (K, V2), R2>
         where L: Fn(&K, &[(V, R)], &mut Vec<(V2, R2)>)+'static, K: Unsigned+Copy {
         self.map(|(k,v)| (UnsignedWrapper::from(k), v))
-            .arrange(HashSpine::new(Default::default()))
-            .group_arranged(move |k,s,t| logic(&k.item,s,t), HashSpine::new(Default::default()))
+            .arrange(DefaultValTrace::new())
+            .group_arranged(move |k,s,t| logic(&k.item,s,t), DefaultValTrace::new())
             .as_collection(|k,v| (k.item.clone(), v.clone()))
     }
 }
@@ -93,13 +91,19 @@ impl<G: Scope, K: Data+Default+Hashable> Distinct<G, K> for Collection<G, K, isi
 where G::Timestamp: Lattice+Ord+::std::fmt::Debug {
     fn distinct(&self) -> Collection<G, K, isize> {
         self.arrange_by_self()
-            .group_arranged(|_k,_s,t| t.push(((), 1)), KeyHashSpine::new(Default::default()))
+            .group_arranged(|_k,_s,t| t.push(((), 1)), DefaultKeyTrace::new())
             .as_collection(|k,_| k.item.clone())
     }
     fn distinct_u(&self) -> Collection<G, K, isize> where K: Unsigned+Copy {
         self.map(|k| (UnsignedWrapper::from(k), ()))
-            .arrange(KeyHashSpine::new(Default::default()))
-            .group_arranged(|_k,_s,t| t.push(((), 1)), KeyHashSpine::new(Default::default()))
+            .arrange(DefaultKeyTrace::new())
+            .group_arranged(|_k,_s,t| { 
+                if _s[0].1 < 1 {
+                    panic!("key: {:?}, count: {:?}", _k, _s[0].1);
+                    // assert!(_s[0].1 > 0 ); 
+                }
+                t.push(((), 1)); 
+            }, DefaultKeyTrace::new())
             .as_collection(|k,_| k.item.clone())
     }
 }
@@ -117,13 +121,13 @@ impl<G: Scope, K: Data+Default+Hashable, R: Ring> Count<G, K, R> for Collection<
  where G::Timestamp: Lattice+Ord+::std::fmt::Debug {
     fn count(&self) -> Collection<G, (K, R), isize> {
         self.arrange_by_self()
-            .group_arranged(|_k,s,t| t.push((s[0].1, 1)), HashSpine::new(Default::default()))
+            .group_arranged(|_k,s,t| t.push((s[0].1, 1)), DefaultValTrace::new())
             .as_collection(|k,&c| (k.item.clone(), c))
     }
     fn count_u(&self) -> Collection<G, (K, R), isize> where K: Unsigned+Copy {
         self.map(|k| (UnsignedWrapper::from(k), ()))
-            .arrange(KeyHashSpine::new(Default::default()))
-            .group_arranged(|_k,s,t| t.push((s[0].1, 1)), HashSpine::new(Default::default()))
+            .arrange(DefaultKeyTrace::new())
+            .group_arranged(|_k,s,t| t.push((s[0].1, 1)), DefaultValTrace::new())
             .as_collection(|k,&c| (k.item.clone(), c))
     }
 }
@@ -154,11 +158,11 @@ where
             L: Fn(&K, &[(V, R)], &mut Vec<(V2, R2)>)+'static {
 
         let mut source_trace = self.new_handle();
-        let mut output_trace = TraceHandle::new(empty, &[Default::default()]);
+        let mut output_trace = TraceHandle::new(empty, &[<G::Timestamp as Lattice>::min()], &[<G::Timestamp as Lattice>::min()]);
         let result_trace = output_trace.clone();
 
-        // let mut thinker1 = InterestAccumulator::<V, V2, G::Timestamp, R, R2>::new();
-        let mut thinker2 = HistoryReplayer::<V, V2, G::Timestamp, R, R2>::new();
+        let mut thinker2 = InterestAccumulator::<V, V2, G::Timestamp, R, R2>::new();
+        // let mut thinker2 = HistoryReplayer::<V, V2, G::Timestamp, R, R2>::new();
         let mut temporary = Vec::<G::Timestamp>::new();
 
         // Our implementation maintains a list of outstanding `(key, time)` synthetic interesting times, 
@@ -172,6 +176,8 @@ where
         // tracks frontiers received from batches, for sanity.
         let mut lower_sanity = vec![<G::Timestamp as Lattice>::min()];
         let mut lower_issued = vec![<G::Timestamp as Lattice>::min()];
+
+        let id = self.stream.scope().index();
 
         // fabricate a data-parallel operator using the `unary_notify` pattern.
         let stream = self.stream.unary_notify(Pipeline, "Group", Vec::new(), move |input, output, notificator| {
@@ -323,7 +329,10 @@ where
                     // assert_eq!(buffers, buffers2);
                     // assert_eq!(temporary, temp2);
 
-                    for time in temporary.drain(..) { interesting.push((key.clone(), time)); }
+                    for time in temporary.drain(..) { 
+                        assert!(upper_limit.iter().any(|t| t.le(&time)));
+                        interesting.push((key.clone(), time)); 
+                    }
 
                     // move all updates for this key into corresponding builders.
                     for index in 0 .. buffers.len() {
@@ -336,16 +345,16 @@ where
 
                 // build and ship each batch (because only one capability per message).
                 for (index, builder) in builders.drain(..).enumerate() {
-
                     let mut local_upper = upper_limit.clone();
                     for capability in &capabilities[index + 1 ..] {
-                        local_upper.retain(|t| !capability.lt(t));
-                        if !local_upper.iter().any(|t| t.lt(&capability.time())) {
-                            local_upper.push(capability.time());
+                        let time = capability.time();
+                        if !local_upper.iter().any(|t| t.le(&time)) {
+                            local_upper.retain(|t| !time.lt(t));
+                            local_upper.push(time);
                         }
                     }
 
-                    let batch = builder.done(&lower_issued[..], &local_upper[..]);
+                    let batch = builder.done(&lower_issued[..], &local_upper[..], &lower_issued[..]);
                     lower_issued = local_upper;
 
                     output.session(&capabilities[index]).give(BatchWrapper { item: batch.clone() });
@@ -355,10 +364,10 @@ where
                 assert!(lower_issued == upper_limit);
 
                 // update capabilities to reflect `interesting` pairs.
-                let mut frontier = Vec::new();
-                for &(_, ref time) in &interesting {
-                    frontier.retain(|t| !time.lt(t));
+                let mut frontier = Vec::<G::Timestamp>::new();
+                for &(_, ref time) in &interesting {                    
                     if !frontier.iter().any(|t| t.le(time)) {
+                        frontier.retain(|t| !time.lt(t));
                         frontier.push(time.clone());
                     }
                 }
@@ -370,9 +379,10 @@ where
                         new_capabilities.push(cap.delayed(&time));
                     }
                     else {
-                        println!("failed to find capability less than new frontier time:");
-                        println!("  time: {:?}", time);
-                        println!("  caps: {:?}", capabilities);
+                        println!("{}:\tfailed to find capability less than new frontier time:", id);
+                        println!("{}:\t  time: {:?}", id, time);
+                        println!("{}:\t  caps: {:?}", id, capabilities);
+                        println!("{}:\t  uppr: {:?}", id, upper_limit);
                     }
                 }
                 capabilities = new_capabilities;
@@ -443,7 +453,7 @@ fn consolidate<T: Ord, R: Ring>(list: &mut Vec<(T, R)>) {
 }
 
 /// Scans `vec[off..]` and consolidates differences of adjacent equivalent elements.
-#[inline(never)]
+// #[inline(never)]
 pub fn consolidate_from<T: Ord+Clone, R: Ring>(vec: &mut Vec<(T, R)>, off: usize) {
 
     // We should do an insertion-sort like initial scan which builds up sorted, consolidated runs.
@@ -544,15 +554,15 @@ where
                     // }
 
                     let join = t.join(&meet);
-                    // if upper_limit.iter().any(|t| t.le(&join)) {
-                    //     if !self.known_times.iter().any(|t| t.le(&join)) {
-                    //         self.known_times.retain(|t| !join.le(t));
-                    //         self.known_times.push(join);
-                    //     }
-                    // }
-                    // else {
+                    if _upper_limit.iter().any(|t| t.le(&join)) {
+                        if !self.known_times.iter().any(|t| t.le(&join)) {
+                            self.known_times.retain(|t| !join.le(t));
+                            self.known_times.push(join);
+                        }
+                    }
+                    else {
                         self.input_history.times.push((join, d));
-                    // }
+                    }
                 });
                 self.input_history.seal_from(source_cursor.val().clone(), start);
                 source_cursor.step_val();
@@ -596,15 +606,15 @@ where
                     // }
 
                     let join = t.join(&meet);
-                    // if upper_limit.iter().any(|t| t.le(&join)) {
-                    //     if !self.known_times.iter().any(|t| t.le(&join)) {
-                    //         self.known_times.retain(|t| !join.le(t));
-                    //         self.known_times.push(join);
-                    //     }
-                    // }
-                    // else {
+                    if _upper_limit.iter().any(|t| t.le(&join)) {
+                        if !self.known_times.iter().any(|t| t.le(&join)) {
+                            self.known_times.retain(|t| !join.le(t));
+                            self.known_times.push(join);
+                        }
+                    }
+                    else {
                         self.output_history.times.push((join, d));
-                    // }
+                    }
                 });
                 self.output_history.seal_from(output_cursor.val().clone(), start);
                 output_cursor.step_val();
@@ -864,19 +874,29 @@ where
                             self.synth_times.push(join); 
                         }
                         else {
-                            if !new_interesting.iter().any(|t| t.le(&join)) { 
-                                new_interesting.retain(|t| !join.lt(t));
-                                new_interesting.push(join);
-                            }                        
+                            if outputs.iter().any(|&(ref t,_)| t.le(&join)) {
+                                if !new_interesting.iter().any(|t| t.le(&join)) { 
+                                    new_interesting.retain(|t| !join.lt(t));
+                                    // if !outputs.iter().any(|&(ref t,_)| t.le(&join)) {
+                                    //     panic!("warning about time w/o capability");
+                                    // }
+                                    new_interesting.push(join);
+                                }                        
+                            }
                         }
                     }
                 }
             }
             else {  
                 // otherwise we delay the time for the future (and warn about it)
-                if !new_interesting.iter().any(|t| t.le(&next_time)) { 
-                    new_interesting.retain(|t| !next_time.lt(t));
-                    new_interesting.push(next_time.clone());
+                if outputs.iter().any(|&(ref t,_)| t.le(&next_time)) {
+                    if !new_interesting.iter().any(|t| t.le(&next_time)) { 
+                        new_interesting.retain(|t| !next_time.lt(t));
+                        new_interesting.push(next_time.clone());
+                        // if !outputs.iter().any(|&(ref t,_)| t.le(&next_time)) {
+                        //     panic!("warning about time w/o capability");
+                        // }
+                    }
                 }
             }
 
@@ -1099,8 +1119,8 @@ where
 
 impl<V1, V2, T, R1, R2> PerKeyCompute<V1, V2, T, R1, R2> for InterestAccumulator<V1, V2, T, R1, R2> 
 where 
-    V1: Ord+Clone,
-    V2: Ord+Clone,
+    V1: Ord+Clone+Debug,
+    V2: Ord+Clone+Debug,
     T: Lattice+Ord+Clone+Debug,
     R1: Ring,
     R2: Ring,
@@ -1127,7 +1147,7 @@ where
         outputs: &mut [(T, Vec<(V2, T, R2)>)],
         new_interesting: &mut Vec<T>)
     where 
-        K: Eq+Clone,
+        K: Eq+Clone+Debug,
         C1: Cursor<K, V1, T, R1>, 
         C2: Cursor<K, V2, T, R2>, 
         L: Fn(&K, &[(V1, R1)], &mut Vec<(V2, R2)>)
@@ -1152,6 +1172,9 @@ where
                 let mut sum = R1::zero();
 
                 source_cursor.map_times(|t,d| {
+
+                    // println!("INPUT UPDATE: {:?}, {:?}, {:?}, {:?}", key, val, t, d);
+
                     if t.le(&self.input_accumulator.time) { 
                         sum = sum + d; 
                     }
@@ -1218,7 +1241,7 @@ where
                 }
 
                 // println!("key: {:?}, input: {:?}, ouput: {:?} @ {:?}", 
-                //          key, &input_accumulator.accum[..], output_logic, this_time);
+                //          key, &self.input_accumulator.accum[..], self.output_logic, this_time);
 
                 // 3. subtract existing output differences.
                 for &(ref val, diff) in &self.output_accumulator.accum[..] {
