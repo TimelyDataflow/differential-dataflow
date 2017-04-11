@@ -238,7 +238,6 @@ impl<G, K, V, R, T1> JoinArranged<G, K, V, R> for Arranged<G,K,V,R,T1>
             input1.for_each(|capability, data| {
                 if let Some(ref trace2) = trace2 {
                     for batch1 in data.drain(..) {
-                        println!("opening cursor through {:?}", acknowledged2);
                         let trace2_cursor = trace2.cursor_through(&acknowledged2[..]).unwrap();
                         let batch1_cursor = batch1.item.cursor();
                         todo1.push(Deferred::new(trace2_cursor, batch1_cursor, capability.clone()));
@@ -252,7 +251,6 @@ impl<G, K, V, R, T1> JoinArranged<G, K, V, R> for Arranged<G,K,V,R,T1>
             input2.for_each(|capability, data| {
                 if let Some(ref trace1) = trace1 {
                     for batch2 in data.drain(..) {
-                        println!("opening cursor through {:?}", acknowledged1);
                         let trace1_cursor = trace1.cursor_through(&acknowledged1[..]).unwrap();
                         let batch2_cursor = batch2.item.cursor();
                         todo2.push(Deferred::new(trace1_cursor, batch2_cursor, capability.clone()));
