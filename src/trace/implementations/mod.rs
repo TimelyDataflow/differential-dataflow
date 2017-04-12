@@ -40,6 +40,8 @@
 
 pub mod spine;
 pub mod batcher;
+
+pub mod ord;
 pub mod hash;
 
 // pub mod rhh;

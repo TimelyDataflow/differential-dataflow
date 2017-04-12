@@ -151,8 +151,8 @@ where
 		self.sorter.sort_and(&mut to_seal, &|x: &((K,V),T,R)| (x.0).0.hashed(), |slice| consolidate_vec(slice));		
 
 		// TODO: Add a `with_capacity` method to the trait, to pre-allocate space.
-		// let count: usize = to_seal.iter().map(|x| x.len()).sum();
-		let mut builder = B::Builder::new();
+		let count = to_seal.iter().map(|x| x.len()).sum();
+		let mut builder = B::Builder::with_capacity(count);
 		for buffer in to_seal.iter_mut() {
 			for ((key, val), time, diff) in buffer.drain(..) {
 				debug_assert!(!diff.is_zero());
@@ -186,7 +186,9 @@ where
 fn consolidate_vec<K: Ord+Hashable+Clone, V: Ord+Clone, T:Ord+Clone, R: Ring>(slice: &mut Vec<((K,V),T,R)>) {
 
 	// IMPORTANT: This needs to order by the key's Hashable implementation!
-	slice.sort_by(|&((ref k1, ref v1), ref t1, _),&((ref k2, ref v2), ref t2, _)| (k1.hashed(), k1, v1, t1).cmp(&(k2.hashed(), k2, v2, t2)));
+	slice.sort_by(|&((ref k1, ref v1), ref t1, _),&((ref k2, ref v2), ref t2, _)| 
+		(k1.hashed(), k1, v1, t1).cmp(&(k2.hashed(), k2, v2, t2))
+	);
 	for index in 1 .. slice.len() {
 		if slice[index].0 == slice[index - 1].0 && slice[index].1 == slice[index - 1].1 {
 			slice[index].2 = slice[index].2 + slice[index - 1].2;

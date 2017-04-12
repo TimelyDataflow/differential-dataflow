@@ -11,12 +11,11 @@
 use std::rc::Rc;
 
 use ::Ring;
-use hashable::HashOrdered;
+use hashable::Hashable;
 
 use trace::layers::{Trie, TupleBuilder};
 use trace::layers::Builder as TrieBuilder;
 use trace::layers::Cursor as TrieCursor;
-use trace::layers::hashed::{HashedLayer, HashedBuilder, HashedCursor};
 use trace::layers::ordered::{OrderedLayer, OrderedBuilder, OrderedCursor};
 use trace::layers::unordered::{UnorderedLayer, UnorderedBuilder, UnorderedCursor};
 
@@ -28,27 +27,27 @@ use super::spine::Spine;
 use super::batcher::RadixBatcher;
 
 /// A trace implementation using a spine of hash-map batches.
-pub type HashValSpine<K, V, T, R> = Spine<K, V, T, R, HashValBatch<K, V, T, R>>;
+pub type OrdValSpine<K, V, T, R> = Spine<K, V, T, R, OrdValBatch<K, V, T, R>>;
 /// A trace implementation for empty values using a spine of hash-map batches.
-pub type HashKeySpine<K, T, R> = Spine<K, (), T, R, HashKeyBatch<K, T, R>>;
+pub type OrdKeySpine<K, T, R> = Spine<K, (), T, R, OrdKeyBatch<K, T, R>>;
 
 
 /// An immutable collection of update tuples, from a contiguous interval of logical times.
 #[derive(Debug)]
-pub struct HashValBatch<K: HashOrdered, V: Ord, T: Lattice, R> {
+pub struct OrdValBatch<K: Ord+Hashable, V: Ord, T: Lattice, R> {
 	/// Where all the dataz is.
-	pub layer: Rc<HashedLayer<K, OrderedLayer<V, UnorderedLayer<(T, R)>>>>,
+	pub layer: Rc<OrderedLayer<K, OrderedLayer<V, UnorderedLayer<(T, R)>>>>,
 	/// Description of the update times this layer represents.
 	pub desc: Description<T>,
 }
 
-impl<K, V, T, R> Batch<K, V, T, R> for HashValBatch<K, V, T, R> 
-where K: Clone+Default+HashOrdered, V: Clone+Ord, T: Lattice+Ord+Clone+Default, R: Ring {
+impl<K, V, T, R> Batch<K, V, T, R> for OrdValBatch<K, V, T, R> 
+where K: Ord+Clone+Hashable, V: Ord+Clone, T: Lattice+Ord+Clone, R: Ring {
 	type Batcher = RadixBatcher<K, V, T, R, Self>;
-	type Builder = HashValBuilder<K, V, T, R>;
-	type Cursor = HashValCursor<K, V, T, R>;
+	type Builder = OrdValBuilder<K, V, T, R>;
+	type Cursor = OrdValCursor<K, V, T, R>;
 	fn cursor(&self) -> Self::Cursor { 
-		HashValCursor { cursor: self.layer.cursor() } 
+		OrdValCursor { cursor: self.layer.cursor() } 
 	}
 	fn len(&self) -> usize { self.layer.tuples() }
 	fn description(&self) -> &Description<T> { &self.desc }
@@ -65,7 +64,7 @@ where K: Clone+Default+HashOrdered, V: Clone+Ord, T: Lattice+Ord+Clone+Default, 
 				self.desc.since()
 			};
 			
-			Some(HashValBatch {
+			Some(OrdValBatch {
 				layer: Rc::new(self.layer.merge(&other.layer)),
 				desc: Description::new(self.desc.lower(), other.desc.upper(), since),
 			})
@@ -76,9 +75,9 @@ where K: Clone+Default+HashOrdered, V: Clone+Ord, T: Lattice+Ord+Clone+Default, 
 	}
 }
 
-impl<K: HashOrdered, V: Ord, T: Lattice+Ord+Clone, R> Clone for HashValBatch<K, V, T, R> {
+impl<K: Ord+Hashable, V: Ord, T: Lattice+Ord+Clone, R> Clone for OrdValBatch<K, V, T, R> {
 	fn clone(&self) -> Self {
-		HashValBatch {
+		OrdValBatch {
 			layer: self.layer.clone(),
 			desc: self.desc.clone(),
 		}
@@ -87,11 +86,11 @@ impl<K: HashOrdered, V: Ord, T: Lattice+Ord+Clone, R> Clone for HashValBatch<K, 
 
 /// A cursor for navigating a single layer.
 #[derive(Debug)]
-pub struct HashValCursor<K: Clone+HashOrdered, V: Ord+Clone, T: Lattice+Ord+Clone, R: Copy> {
-	cursor: HashedCursor<K, OrderedCursor<V, UnorderedCursor<(T, R)>>>,
+pub struct OrdValCursor<K: Ord+Clone+Hashable, V: Ord+Clone, T: Lattice+Ord+Clone, R: Copy> {
+	cursor: OrderedCursor<K, OrderedCursor<V, UnorderedCursor<(T, R)>>>,
 }
 
-impl<K: Clone+HashOrdered, V: Ord+Clone, T: Lattice+Ord+Clone, R: Copy> Cursor<K, V, T, R> for HashValCursor<K, V, T, R> {
+impl<K: Ord+Clone+Hashable, V: Ord+Clone, T: Lattice+Ord+Clone, R: Copy> Cursor<K, V, T, R> for OrdValCursor<K, V, T, R> {
 	fn key(&self) -> &K { &self.cursor.key() }
 	fn val(&self) -> &V { &self.cursor.child.key() }
 	fn map_times<L: FnMut(&T, R)>(&mut self, mut logic: L) {
@@ -113,21 +112,21 @@ impl<K: Clone+HashOrdered, V: Ord+Clone, T: Lattice+Ord+Clone, R: Copy> Cursor<K
 
 
 /// A builder for creating layers from unsorted update tuples.
-pub struct HashValBuilder<K: HashOrdered, V: Ord, T: Ord, R: Ring> {
-	builder: HashedBuilder<K, OrderedBuilder<V, UnorderedBuilder<(T, R)>>>,
+pub struct OrdValBuilder<K: Ord+Hashable, V: Ord, T: Ord, R: Ring> {
+	builder: OrderedBuilder<K, OrderedBuilder<V, UnorderedBuilder<(T, R)>>>,
 }
 
-impl<K, V, T, R> Builder<K, V, T, R, HashValBatch<K, V, T, R>> for HashValBuilder<K, V, T, R> 
-where K: Clone+Default+HashOrdered, V: Ord+Clone, T: Lattice+Ord+Clone+Default, R: Ring {
+impl<K, V, T, R> Builder<K, V, T, R, OrdValBatch<K, V, T, R>> for OrdValBuilder<K, V, T, R> 
+where K: Ord+Clone+Hashable, V: Ord+Clone, T: Lattice+Ord+Clone, R: Ring {
 
 	fn new() -> Self { 
-		HashValBuilder { 
-			builder: HashedBuilder::<K, OrderedBuilder<V, UnorderedBuilder<(T, R)>>>::new() 
+		OrdValBuilder { 
+			builder: OrderedBuilder::<K, OrderedBuilder<V, UnorderedBuilder<(T, R)>>>::new() 
 		} 
 	}
 	fn with_capacity(cap: usize) -> Self { 
-		HashValBuilder { 
-			builder: HashedBuilder::<K, OrderedBuilder<V, UnorderedBuilder<(T, R)>>>::with_capacity(cap) 
+		OrdValBuilder { 
+			builder: OrderedBuilder::<K, OrderedBuilder<V, UnorderedBuilder<(T, R)>>>::with_capacity(cap) 
 		} 
 	}
 
@@ -137,8 +136,8 @@ where K: Clone+Default+HashOrdered, V: Ord+Clone, T: Lattice+Ord+Clone+Default, 
 	}
 
 	#[inline(never)]
-	fn done(self, lower: &[T], upper: &[T], since: &[T]) -> HashValBatch<K, V, T, R> {
-		HashValBatch {
+	fn done(self, lower: &[T], upper: &[T], since: &[T]) -> OrdValBatch<K, V, T, R> {
+		OrdValBatch {
 			layer: Rc::new(self.builder.done()),
 			desc: Description::new(lower, upper, since)
 		}
@@ -150,20 +149,20 @@ where K: Clone+Default+HashOrdered, V: Ord+Clone, T: Lattice+Ord+Clone+Default, 
 
 /// An immutable collection of update tuples, from a contiguous interval of logical times.
 #[derive(Debug)]
-pub struct HashKeyBatch<K: HashOrdered, T: Lattice, R> {
+pub struct OrdKeyBatch<K: Ord+Hashable, T: Lattice, R> {
 	/// Where all the dataz is.
-	pub layer: Rc<HashedLayer<K, UnorderedLayer<(T, R)>>>,
+	pub layer: Rc<OrderedLayer<K, UnorderedLayer<(T, R)>>>,
 	/// Description of the update times this layer represents.
 	pub desc: Description<T>,
 }
 
-impl<K, T, R> Batch<K, (), T, R> for HashKeyBatch<K, T, R> 
-where K: Clone+Default+HashOrdered, T: Lattice+Ord+Clone+Default, R: Ring {
+impl<K, T, R> Batch<K, (), T, R> for OrdKeyBatch<K, T, R> 
+where K: Ord+Clone+Hashable, T: Lattice+Ord+Clone, R: Ring {
 	type Batcher = RadixBatcher<K, (), T, R, Self>;
-	type Builder = HashKeyBuilder<K, T, R>;
-	type Cursor = HashKeyCursor<K, T, R>;
+	type Builder = OrdKeyBuilder<K, T, R>;
+	type Cursor = OrdKeyCursor<K, T, R>;
 	fn cursor(&self) -> Self::Cursor { 
-		HashKeyCursor { empty: (), valid: true, cursor: self.layer.cursor() } 
+		OrdKeyCursor { empty: (), valid: true, cursor: self.layer.cursor() } 
 	}
 	fn len(&self) -> usize { self.layer.tuples() }
 	fn description(&self) -> &Description<T> { &self.desc }
@@ -180,7 +179,7 @@ where K: Clone+Default+HashOrdered, T: Lattice+Ord+Clone+Default, R: Ring {
 				self.desc.since()
 			};
 			
-			Some(HashKeyBatch {
+			Some(OrdKeyBatch {
 				layer: Rc::new(self.layer.merge(&other.layer)),
 				desc: Description::new(self.desc.lower(), other.desc.upper(), since),
 			})
@@ -191,9 +190,9 @@ where K: Clone+Default+HashOrdered, T: Lattice+Ord+Clone+Default, R: Ring {
 	}
 }
 
-impl<K: HashOrdered, T: Lattice+Ord+Clone, R> Clone for HashKeyBatch<K, T, R> {
+impl<K: Ord+Hashable, T: Lattice+Ord+Clone, R> Clone for OrdKeyBatch<K, T, R> {
 	fn clone(&self) -> Self {
-		HashKeyBatch {
+		OrdKeyBatch {
 			layer: self.layer.clone(),
 			desc: self.desc.clone(),
 		}
@@ -202,13 +201,13 @@ impl<K: HashOrdered, T: Lattice+Ord+Clone, R> Clone for HashKeyBatch<K, T, R> {
 
 /// A cursor for navigating a single layer.
 #[derive(Debug)]
-pub struct HashKeyCursor<K: Clone+HashOrdered, T: Lattice+Ord+Clone, R: Copy> {
+pub struct OrdKeyCursor<K: Ord+Clone+Hashable, T: Lattice+Ord+Clone, R: Copy> {
 	valid: bool,
 	empty: (),
-	cursor: HashedCursor<K, UnorderedCursor<(T, R)>>,
+	cursor: OrderedCursor<K, UnorderedCursor<(T, R)>>,
 }
 
-impl<K: Clone+HashOrdered, T: Lattice+Ord+Clone, R: Copy> Cursor<K, (), T, R> for HashKeyCursor<K, T, R> {
+impl<K: Ord+Clone+Hashable, T: Lattice+Ord+Clone, R: Copy> Cursor<K, (), T, R> for OrdKeyCursor<K, T, R> {
 	fn key(&self) -> &K { &self.cursor.key() }
 	fn val(&self) -> &() { &self.empty }
 	fn map_times<L: FnMut(&T, R)>(&mut self, mut logic: L) {
@@ -230,21 +229,22 @@ impl<K: Clone+HashOrdered, T: Lattice+Ord+Clone, R: Copy> Cursor<K, (), T, R> fo
 
 
 /// A builder for creating layers from unsorted update tuples.
-pub struct HashKeyBuilder<K: HashOrdered, T: Ord, R: Ring> {
-	builder: HashedBuilder<K, UnorderedBuilder<(T, R)>>,
+pub struct OrdKeyBuilder<K: Ord, T: Ord, R: Ring> {
+	builder: OrderedBuilder<K, UnorderedBuilder<(T, R)>>,
 }
 
-impl<K, T, R> Builder<K, (), T, R, HashKeyBatch<K, T, R>> for HashKeyBuilder<K, T, R> 
-where K: Clone+Default+HashOrdered, T: Lattice+Ord+Clone+Default, R: Ring {
+impl<K, T, R> Builder<K, (), T, R, OrdKeyBatch<K, T, R>> for OrdKeyBuilder<K, T, R> 
+where K: Ord+Clone+Hashable, T: Lattice+Ord+Clone, R: Ring {
 
 	fn new() -> Self { 
-		HashKeyBuilder { 
-			builder: HashedBuilder::<K, UnorderedBuilder<(T, R)>>::new() 
+		OrdKeyBuilder { 
+			builder: OrderedBuilder::<K, UnorderedBuilder<(T, R)>>::new() 
 		} 
 	}
-	fn with_capacity(cap: usize) -> Self { 
-		HashKeyBuilder { 
-			builder: HashedBuilder::<K, UnorderedBuilder<(T, R)>>::with_capacity(cap) 
+
+	fn with_capacity(cap: usize) -> Self {
+		OrdKeyBuilder { 
+			builder: OrderedBuilder::<K, UnorderedBuilder<(T, R)>>::with_capacity(cap) 
 		} 
 	}
 
@@ -254,8 +254,8 @@ where K: Clone+Default+HashOrdered, T: Lattice+Ord+Clone+Default, R: Ring {
 	}
 
 	#[inline(never)]
-	fn done(self, lower: &[T], upper: &[T], since: &[T]) -> HashKeyBatch<K, T, R> {
-		HashKeyBatch {
+	fn done(self, lower: &[T], upper: &[T], since: &[T]) -> OrdKeyBatch<K, T, R> {
+		OrdKeyBatch {
 			layer: Rc::new(self.builder.done()),
 			desc: Description::new(lower, upper, since)
 		}

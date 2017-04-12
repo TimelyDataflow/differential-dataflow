@@ -135,6 +135,8 @@ pub trait Batcher<K, V, T, R, Output: Batch<K, V, T, R>> {
 pub trait Builder<K, V, T, R, Output: Batch<K, V, T, R>> {
 	/// Allocates an empty builder.
 	fn new() -> Self;
+	/// Allocates an empty builder with some capacity.
+	fn with_capacity(cap: usize) -> Self;
 	/// Adds an element to the batch.
 	fn push(&mut self, element: (K, V, T, R));
 	/// Adds an ordered sequence of elements to the batch.
