@@ -130,8 +130,6 @@ pub trait Batch<K, V, T, R> where Self: ::std::marker::Sized {
 		assert!(frontier.len() > 0);
 
 		// TODO: This is almost certainly too much `with_capacity`.
-		// TODO: We should design and implement an "in-order builder", which takes cues from key and val
-		//       structure, rather than having to infer them from tuples.
 		let mut builder = Self::Builder::with_capacity(self.len());
 
 		let mut times = Vec::new();
@@ -153,8 +151,10 @@ pub trait Batch<K, V, T, R> where Self: ::std::marker::Sized {
 	}
 	/// Advance times to `frontier` updating this batch.
 	///
-	/// This method is the common way to advance batches, and gives batches the ability to collapse in-place
-	/// when possible.
+	/// This method gives batches the ability to collapse in-place when possible, and is the common 
+	/// entry point to advance batches. Most types of batches do have shared state, but `advance` is 
+	/// commonly invoked just after a batch is formed from a merge and when there is a unique owner 
+	/// of the shared state. 
 	fn advance_mut(&mut self, frontier: &[T]) where K: Ord+Clone, V: Ord+Clone, T: Lattice+Ord+Clone, R: Ring {
 		*self = self.advance_ref(frontier);
 	}

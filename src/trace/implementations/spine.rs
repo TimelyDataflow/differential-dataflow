@@ -20,20 +20,19 @@ pub struct Spine<K, V, T: Lattice+Ord, R: Ring, B: Batch<K, V, T, R>> {
 	advance_frontier: Vec<T>,	// Times after which the trace must accumulate correctly.
 	through_frontier: Vec<T>,	// Times after which the trace must be able to subset its inputs.
 	merging: Vec<B>,			// Several possibly shared collections of updates.
-	pending: Vec<B>,			// Layers at times in advance of `frontier`.
+	pending: Vec<B>,			// Batches at times in advance of `frontier`.
 }
 
 // A trace implementation for any key type that can be borrowed from or converted into `Key`.
-// TODO: Almost all this implementation seems to be generic with respect to the trace and layer types.
+// TODO: Almost all this implementation seems to be generic with respect to the trace and batch types.
 impl<K, V, T, R, B> Trace<K, V, T, R> for Spine<K, V, T, R, B> 
 where 
-	K: Ord+Clone,			// Clone needed for `advance_batch` (in-place could remove)	
-	V: Ord+Clone,			// Clone needed for `advance_batch` (in-place could remove)
-	T: Lattice+Ord+Clone,	// Clone needed for `advance_frontier` and friends.
+	K: Ord+Clone,			// Clone is required by `batch::advance_*` (in-place could remove).
+	V: Ord+Clone,			// Clone is required by `batch::advance_*` (in-place could remove).
+	T: Lattice+Ord+Clone,	// Clone is required by `advance_by` and `batch::advance_*`.
 	R: Ring,
 	B: Batch<K, V, T, R>+Clone+'static,
 {
-
 	type Batch = B;
 	type Cursor = CursorList<K, V, T, R, <B as Batch<K, V, T, R>>::Cursor>;
 
@@ -44,19 +43,19 @@ where
 			through_frontier: vec![<T as Lattice>::min()],
 			merging: Vec::new(),
 			pending: Vec::new(),
-		} 		
+		}
 	}
 	// Note: this does not perform progressive merging; that code is around somewhere though.
-	fn insert(&mut self, layer: Self::Batch) {
+	fn insert(&mut self, batch: Self::Batch) {
 
-		// we can ignore degenerate layers (TODO: learn where they come from; suppress them?)
-		if layer.description().lower() != layer.description().upper() {
-			self.pending.push(layer);
+		// we can ignore degenerate batches (TODO: learn where they come from; suppress them?)
+		if batch.lower() != batch.upper() {
+			self.pending.push(batch);
 			self.consider_merges();
 		}
 		else {
-			// degenerate layers had best be empty.
-			assert!(layer.len() == 0);
+			// degenerate batches had best be empty.
+			assert!(batch.len() == 0);
 		}
 	}
 	fn cursor_through(&self, upper: &[T]) -> Option<Self::Cursor> {
@@ -71,11 +70,11 @@ where
 			let mut cursors = Vec::new();
 			cursors.extend(self.merging.iter().filter(|b| b.len() > 0).map(|b| b.cursor()));
 			for batch in &self.pending {
-				let include_lower = upper.iter().all(|t1| batch.description().lower().iter().any(|t2| t2.le(t1)));
-				let include_upper = upper.iter().all(|t1| batch.description().upper().iter().any(|t2| t2.le(t1)));
+				let include_lower = upper.iter().all(|t1| batch.lower().iter().any(|t2| t2.le(t1)));
+				let include_upper = upper.iter().all(|t1| batch.upper().iter().any(|t2| t2.le(t1)));
 
-				if include_lower != include_upper && upper != batch.description().lower() {
-					panic!("`cursor_through` straddles batch");
+				if include_lower != include_upper && upper != batch.lower() {
+					panic!("`cursor_through`: `upper` straddles batch");
 					// return None;
 				}
 
@@ -105,76 +104,48 @@ where
 
 impl<K, V, T, R, B> Spine<K, V, T, R, B> 
 where 
-	K: Ord+Clone,			// Clone required by advance
-	V: Ord+Clone,			// Clone required by advance
-	T: Lattice+Ord+Clone,	// Clone required by `consolidate`.
+	K: Ord+Clone,			// Clone is required by `advance_mut`.
+	V: Ord+Clone,			// Clone is required by `advance_mut`.
+	T: Lattice+Ord+Clone,	// Clone is required by `advance_mut`.
 	R: Ring,
 	B: Batch<K, V, T, R>,
 {
 	// Migrate data from `self.pending` into `self.merging`.
 	fn consider_merges(&mut self) {
 
-		// TODO: We could consider merging in batches here, rather than in sequence. Little is known...
-		while self.pending.len() > 0 && self.through_frontier.iter().all(|t1| self.pending[0].description().upper().iter().any(|t2| t2.le(t1))) {
-
+		// TODO: We could consider merging in batches here, rather than in sequence. 
+		//       Little is currently known about whether this is important ...
+		while self.pending.len() > 0 && 
+		      self.through_frontier.iter().all(|t1| self.pending[0].upper().iter().any(|t2| t2.le(t1))) 
+        {
+        	// this could be a VecDeque, if we ever notice this.
 			let batch = self.pending.remove(0);
 
-			// while last two elements exist, both less than layer.len()
+			// while last two elements exist, both less than batch.len()
 			while self.merging.len() >= 2 && self.merging[self.merging.len() - 2].len() < batch.len() {
-				let layer1 = self.merging.pop().unwrap();
-				let layer2 = self.merging.pop().unwrap();
-				let result = layer2.merge(&layer1);
+				let batch1 = self.merging.pop().unwrap();
+				let batch2 = self.merging.pop().unwrap();
+				let result = batch2.merge(&batch1);
 				self.merging.push(result);
 			}
 
 			self.merging.push(batch);
 
-		    while self.merging.len() >= 2 && self.merging[self.merging.len() - 2].len() < 2 * self.merging[self.merging.len() - 1].len() {
-				let layer1 = self.merging.pop().unwrap();
-				let layer2 = self.merging.pop().unwrap();
-				let mut result = layer2.merge(&layer1);
+			// `len` exists only to narrow while condition.
+			let mut len = self.merging.len();
+			while len >= 2 && self.merging[len - 2].len() < 2 * self.merging[len - 1].len() {
+				let batch1 = self.merging.pop().unwrap();
+				let batch2 = self.merging.pop().unwrap();
+				let mut result = batch2.merge(&batch1);
 
-				// if we just merged the last layer, `advance_by` it.
+				// if we just merged the last batch, `advance_by` it.
 				if self.merging.len() == 0 {
 					result.advance_mut(&self.advance_frontier[..]);
 				}
 
 				self.merging.push(result);
+				len = self.merging.len();
 			}
 		}
 	}
-
-	// /// Advances times in `layer` and consolidates differences for like times.
-	// ///
-	// /// TODO: This method could be defined on `&mut self`, exploiting in-place mutation
-	// ///       to avoid allocation and building headaches. 
-	// #[inline(never)]
-	// fn advance_batch(batch: &B, frontier: &[T]) -> B { 
-
-	// 	assert!(frontier.len() > 0);
-
-	// 	// TODO: This is almost certainly too much `with_capacity`.
-	// 	// TODO: We should design and implement an "in-order builder", which takes cues from key and val
-	// 	//       structure, rather than having to infer them from tuples.
-	// 	// TODO: We should understand whether in-place mutation is appropriate, or too gross. At the moment,
-	// 	//       this could be a general method defined on any implementor of `trace::Cursor`.
-	// 	let mut builder = <B as Batch<K, V, T, R>>::Builder::with_capacity(batch.len());
-
-	// 	let mut times = Vec::new();
-	// 	let mut cursor = batch.cursor();
-
-	// 	while cursor.key_valid() {
-	// 		while cursor.val_valid() {
-	// 			cursor.map_times(|time: &T, diff| times.push((time.advance_by(frontier).unwrap(), diff)));
-	// 			consolidate(&mut times, 0);
-	// 			for (time, diff) in times.drain(..) {
-	// 				builder.push((cursor.key().clone(), cursor.val().clone(), time, diff));
-	// 			}
-	// 			cursor.step_val();
-	// 		}
-	// 		cursor.step_key();
-	// 	}
-
-	// 	builder.done(batch.description().lower(), batch.description().upper(), frontier)
-	// }
 }
