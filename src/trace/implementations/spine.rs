@@ -111,6 +111,7 @@ where
 	B: Batch<K, V, T, R>,
 {
 	// Migrate data from `self.pending` into `self.merging`.
+	#[inline(never)]
 	fn consider_merges(&mut self) {
 
 		// TODO: We could consider merging in batches here, rather than in sequence. 

@@ -155,6 +155,7 @@ pub trait Batch<K, V, T, R> where Self: ::std::marker::Sized {
 	/// entry point to advance batches. Most types of batches do have shared state, but `advance` is 
 	/// commonly invoked just after a batch is formed from a merge and when there is a unique owner 
 	/// of the shared state. 
+	#[inline(never)]
 	fn advance_mut(&mut self, frontier: &[T]) where K: Ord+Clone, V: Ord+Clone, T: Lattice+Ord+Clone, R: Ring {
 		*self = self.advance_ref(frontier);
 	}

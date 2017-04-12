@@ -1,11 +1,11 @@
-//! Trace and batch implementations based on Robin Hood hashing.
+//! Trace and batch implementations based on sorted ranges.
 //!
 //! The types and type aliases in this module start with either 
 //! 
-//! * `HashVal`: Collections whose data have the form `(key, val)` where `key` is hash-ordered.
-//! * `HashKey`: Collections whose data have the form `key` where `key` is hash-ordered.
+//! * `OrdVal`: Collections whose data have the form `(key, val)` where `key` is ordered.
+//! * `OrdKey`: Collections whose data have the form `key` where `key` is ordered.
 //!
-//! Although `HashVal` is more general than `HashKey`, the latter has a simpler representation
+//! Although `OrdVal` is more general than `OrdKey`, the latter has a simpler representation
 //! and should consume fewer resources (computation and memory) when it applies.
 
 use std::rc::Rc;
@@ -86,7 +86,8 @@ pub struct OrdValCursor<K: Ord+Clone+Hashable, V: Ord+Clone, T: Lattice+Ord+Clon
 	cursor: OrderedCursor<K, OrderedCursor<V, UnorderedCursor<(T, R)>>>,
 }
 
-impl<K: Ord+Clone+Hashable, V: Ord+Clone, T: Lattice+Ord+Clone, R: Copy> Cursor<K, V, T, R> for OrdValCursor<K, V, T, R> {
+impl<K, V, T, R> Cursor<K, V, T, R> for OrdValCursor<K, V, T, R> 
+where K: Ord+Clone+Hashable, V: Ord+Clone, T: Lattice+Ord+Clone, R: Copy {
 	fn key(&self) -> &K { &self.cursor.key() }
 	fn val(&self) -> &V { &self.cursor.child.key() }
 	fn map_times<L: FnMut(&T, R)>(&mut self, mut logic: L) {
