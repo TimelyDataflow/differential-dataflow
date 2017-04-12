@@ -6,8 +6,7 @@
 
 use ::Ring;
 use lattice::Lattice;
-use trace::{Batch, Builder, Cursor, Trace};
-use trace::consolidate;
+use trace::{Batch, Trace};
 use trace::cursor::cursor_list::CursorList;
 
 /// An append-only collection of update tuples.
@@ -28,11 +27,9 @@ pub struct Spine<K, V, T: Lattice+Ord, R: Ring, B: Batch<K, V, T, R>> {
 // TODO: Almost all this implementation seems to be generic with respect to the trace and layer types.
 impl<K, V, T, R, B> Trace<K, V, T, R> for Spine<K, V, T, R, B> 
 where 
-	K: Ord+Clone,	// TODO: Why is clone required? (cursorlist?)
-	V: Ord+Clone,
-	// K: Clone+Default+HashOrdered+'static,
-	// Time: Lattice+Ord+Clone+Default+Debug+'static,
-	T: Lattice+Ord+Clone+::std::fmt::Debug,  // Clone needed for `advance_frontier` and friends.
+	K: Ord+Clone,			// Clone needed for `advance_batch` (in-place could remove)	
+	V: Ord+Clone,			// Clone needed for `advance_batch` (in-place could remove)
+	T: Lattice+Ord+Clone,	// Clone needed for `advance_frontier` and friends.
 	R: Ring,
 	B: Batch<K, V, T, R>+Clone+'static,
 {
@@ -78,7 +75,7 @@ where
 				let include_upper = upper.iter().all(|t1| batch.description().upper().iter().any(|t2| t2.le(t1)));
 
 				if include_lower != include_upper && upper != batch.description().lower() {
-					panic!("`cursor_through` straddles batch:\n\tlower: {:?}\n\tfront: {:?}\n\tupper: {:?}", batch.description().lower(), upper, batch.description().upper());
+					panic!("`cursor_through` straddles batch");
 					// return None;
 				}
 
@@ -108,10 +105,9 @@ where
 
 impl<K, V, T, R, B> Spine<K, V, T, R, B> 
 where 
-	K: Clone,				// Clone required by advance
-	V: Clone,				// Clone required by advance
-	// Key: Clone+Default+HashOrdered+'static,
-	T: Lattice+Ord+Clone+::std::fmt::Debug,	// Clone required by `consolidate`.
+	K: Ord+Clone,			// Clone required by advance
+	V: Ord+Clone,			// Clone required by advance
+	T: Lattice+Ord+Clone,	// Clone required by `consolidate`.
 	R: Ring,
 	B: Batch<K, V, T, R>,
 {
@@ -127,7 +123,7 @@ where
 			while self.merging.len() >= 2 && self.merging[self.merging.len() - 2].len() < batch.len() {
 				let layer1 = self.merging.pop().unwrap();
 				let layer2 = self.merging.pop().unwrap();
-				let result = layer2.merge(&layer1).unwrap();
+				let result = layer2.merge(&layer1);
 				self.merging.push(result);
 			}
 
@@ -136,11 +132,11 @@ where
 		    while self.merging.len() >= 2 && self.merging[self.merging.len() - 2].len() < 2 * self.merging[self.merging.len() - 1].len() {
 				let layer1 = self.merging.pop().unwrap();
 				let layer2 = self.merging.pop().unwrap();
-				let mut result = layer2.merge(&layer1).unwrap();
+				let mut result = layer2.merge(&layer1);
 
 				// if we just merged the last layer, `advance_by` it.
 				if self.merging.len() == 0 {
-					result = Self::advance_batch(&result, &self.advance_frontier[..]);
+					result.advance_mut(&self.advance_frontier[..]);
 				}
 
 				self.merging.push(result);
@@ -148,38 +144,37 @@ where
 		}
 	}
 
-	/// Advances times in `layer` and consolidates differences for like times.
-	///
-	/// TODO: This method could be defined on `&mut self`, exploiting in-place mutation
-	/// to avoid allocation and building headaches. It is implemented on the `Rc` variant
-	/// to get access to `cursor()`, and in principle to allow a progressive implementation. 
-	#[inline(never)]
-	fn advance_batch(batch: &B, frontier: &[T]) -> B { 
+	// /// Advances times in `layer` and consolidates differences for like times.
+	// ///
+	// /// TODO: This method could be defined on `&mut self`, exploiting in-place mutation
+	// ///       to avoid allocation and building headaches. 
+	// #[inline(never)]
+	// fn advance_batch(batch: &B, frontier: &[T]) -> B { 
 
-		assert!(frontier.len() > 0);
+	// 	assert!(frontier.len() > 0);
 
-		// TODO: This is almost certainly too much `with_capacity`.
-		// TODO: We should design and implement an "in-order builder", which takes cues from key and val
-		// structure, rather than having to infer them from tuples.
-		// TODO: We should understand whether in-place mutation is appropriate, or too gross. At the moment,
-		// this could be a general method defined on any implementor of `trace::Cursor`.
-		let mut builder = <B as Batch<K, V, T, R>>::Builder::new();
+	// 	// TODO: This is almost certainly too much `with_capacity`.
+	// 	// TODO: We should design and implement an "in-order builder", which takes cues from key and val
+	// 	//       structure, rather than having to infer them from tuples.
+	// 	// TODO: We should understand whether in-place mutation is appropriate, or too gross. At the moment,
+	// 	//       this could be a general method defined on any implementor of `trace::Cursor`.
+	// 	let mut builder = <B as Batch<K, V, T, R>>::Builder::with_capacity(batch.len());
 
-		let mut times = Vec::new();
-		let mut cursor = batch.cursor();
+	// 	let mut times = Vec::new();
+	// 	let mut cursor = batch.cursor();
 
-		while cursor.key_valid() {
-			while cursor.val_valid() {
-				cursor.map_times(|time: &T, diff| times.push((time.advance_by(frontier).unwrap(), diff)));
-				consolidate(&mut times, 0);
-				for (time, diff) in times.drain(..) {
-					builder.push((cursor.key().clone(), cursor.val().clone(), time, diff));
-				}
-				cursor.step_val();
-			}
-			cursor.step_key();
-		}
+	// 	while cursor.key_valid() {
+	// 		while cursor.val_valid() {
+	// 			cursor.map_times(|time: &T, diff| times.push((time.advance_by(frontier).unwrap(), diff)));
+	// 			consolidate(&mut times, 0);
+	// 			for (time, diff) in times.drain(..) {
+	// 				builder.push((cursor.key().clone(), cursor.val().clone(), time, diff));
+	// 			}
+	// 			cursor.step_val();
+	// 		}
+	// 		cursor.step_key();
+	// 	}
 
-		builder.done(batch.description().lower(), batch.description().upper(), frontier)
-	}
+	// 	builder.done(batch.description().lower(), batch.description().upper(), frontier)
+	// }
 }

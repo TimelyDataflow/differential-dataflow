@@ -51,26 +51,22 @@ where K: Ord+Clone+Hashable, V: Ord+Clone, T: Lattice+Ord+Clone, R: Ring {
 	}
 	fn len(&self) -> usize { self.layer.tuples() }
 	fn description(&self) -> &Description<T> { &self.desc }
-	fn merge(&self, other: &Self) -> Option<Self> {
+	fn merge(&self, other: &Self) -> Self {
 
 		// Things are horribly wrong if this is not true.
-		if self.desc.upper() == other.desc.lower() {
+		assert!(self.desc.upper() == other.desc.lower());
 
-			// one of self.desc.since or other.desc.since needs to be not behind the other...
-			let since = if self.desc.since().iter().all(|t1| other.desc.since().iter().any(|t2| t2.le(t1))) {
-				other.desc.since()
-			}
-			else {
-				self.desc.since()
-			};
-			
-			Some(OrdValBatch {
-				layer: Rc::new(self.layer.merge(&other.layer)),
-				desc: Description::new(self.desc.lower(), other.desc.upper(), since),
-			})
+		// one of self.desc.since or other.desc.since needs to be not behind the other...
+		let since = if self.desc.since().iter().all(|t1| other.desc.since().iter().any(|t2| t2.le(t1))) {
+			other.desc.since()
 		}
 		else {
-			None
+			self.desc.since()
+		};
+		
+		OrdValBatch {
+			layer: Rc::new(self.layer.merge(&other.layer)),
+			desc: Description::new(self.desc.lower(), other.desc.upper(), since),
 		}
 	}
 }
@@ -166,26 +162,22 @@ where K: Ord+Clone+Hashable, T: Lattice+Ord+Clone, R: Ring {
 	}
 	fn len(&self) -> usize { self.layer.tuples() }
 	fn description(&self) -> &Description<T> { &self.desc }
-	fn merge(&self, other: &Self) -> Option<Self> {
+	fn merge(&self, other: &Self) -> Self {
 
 		// Things are horribly wrong if this is not true.
-		if self.desc.upper() == other.desc.lower() {
+		assert!(self.desc.upper() == other.desc.lower());
 
-			// one of self.desc.since or other.desc.since needs to be not behind the other...
-			let since = if self.desc.since().iter().all(|t1| other.desc.since().iter().any(|t2| t2.le(t1))) {
-				other.desc.since()
-			}
-			else {
-				self.desc.since()
-			};
-			
-			Some(OrdKeyBatch {
-				layer: Rc::new(self.layer.merge(&other.layer)),
-				desc: Description::new(self.desc.lower(), other.desc.upper(), since),
-			})
+		// one of self.desc.since or other.desc.since needs to be not behind the other...
+		let since = if self.desc.since().iter().all(|t1| other.desc.since().iter().any(|t2| t2.le(t1))) {
+			other.desc.since()
 		}
 		else {
-			None
+			self.desc.since()
+		};
+		
+		OrdKeyBatch {
+			layer: Rc::new(self.layer.merge(&other.layer)),
+			desc: Description::new(self.desc.lower(), other.desc.upper(), since),
 		}
 	}
 }

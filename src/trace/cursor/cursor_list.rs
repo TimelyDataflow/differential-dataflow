@@ -141,8 +141,8 @@ impl<K, V, T, R, C: Cursor<K, V, T, R>> CursorList<K, V, T, R, C> where K: Ord, 
 
 impl<K, V, T, R, C: Cursor<K, V, T, R>> Cursor<K, V, T, R> for CursorList<K, V, T, R, C> 
 where 
-	K: Ord+Clone, 
-	V: Ord+Clone {
+	K: Ord, 
+	V: Ord {
 
 	// validation methods
 	fn key_valid(&self) -> bool { self.valid_keys > 0 }

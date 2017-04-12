@@ -13,6 +13,7 @@ pub mod implementations;
 pub mod layers;
 
 use ::Ring;
+use ::lattice::Lattice;
 pub use self::cursor::Cursor;
 pub use self::description::Description;
 
@@ -115,8 +116,48 @@ pub trait Batch<K, V, T, R> where Self: ::std::marker::Sized {
 	fn description(&self) -> &Description<T>;
 	/// Merges two consecutive batches.
 	///
-	/// `None` is returned if the upper bound of `self` is not equal to the lower bound of `other`.
-	fn merge(&self, other: &Self) -> Option<Self>;
+	/// Panics if `self.upper()` does not equal `other.lower()`. This is almost certainly a logic bug,
+	/// as the resulting batch does not have a contiguous description. If you would like to put an empty
+	/// interval between the two, you can create an empty interval and do two merges.
+	fn merge(&self, other: &Self) -> Self;
+	/// All times in the batch are greater or equal to an element of `lower`.
+	fn lower(&self) -> &[T] { self.description().lower() }
+	/// All times in the batch are not greater or equal to any element of `upper`.
+	fn upper(&self) -> &[T] { self.description().upper() }
+	/// Advance times to `frontier` creating a new batch.
+	fn advance_ref(&self, frontier: &[T]) -> Self where K: Ord+Clone, V: Ord+Clone, T: Lattice+Ord+Clone, R: Ring {
+
+		assert!(frontier.len() > 0);
+
+		// TODO: This is almost certainly too much `with_capacity`.
+		// TODO: We should design and implement an "in-order builder", which takes cues from key and val
+		//       structure, rather than having to infer them from tuples.
+		let mut builder = Self::Builder::with_capacity(self.len());
+
+		let mut times = Vec::new();
+		let mut cursor = self.cursor();
+
+		while cursor.key_valid() {
+			while cursor.val_valid() {
+				cursor.map_times(|time: &T, diff| times.push((time.advance_by(frontier).unwrap(), diff)));
+				consolidate(&mut times, 0);
+				for (time, diff) in times.drain(..) {
+					builder.push((cursor.key().clone(), cursor.val().clone(), time, diff));
+				}
+				cursor.step_val();
+			}
+			cursor.step_key();
+		}
+
+		builder.done(self.description().lower(), self.description().upper(), frontier)
+	}
+	/// Advance times to `frontier` updating this batch.
+	///
+	/// This method is the common way to advance batches, and gives batches the ability to collapse in-place
+	/// when possible.
+	fn advance_mut(&mut self, frontier: &[T]) where K: Ord+Clone, V: Ord+Clone, T: Lattice+Ord+Clone, R: Ring {
+		*self = self.advance_ref(frontier);
+	}
 }
 
 /// Functionality for collecting and batching updates.
