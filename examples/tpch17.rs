@@ -12,6 +12,7 @@ use timely::dataflow::operators::*;
 
 use differential_dataflow::AsCollection;
 use differential_dataflow::operators::*;
+use differential_dataflow::input::InputSession;
 
 fn main() {
 
@@ -41,12 +42,10 @@ fn main() {
             // restrict lineitems to those of the relevant part
             let items = items.as_collection()
                              .map(|x| (x.0, (x.1, x.2)))
-                             .semijoin(&parts)
-                             .map(|(k,v)| (k, v.0, v.1));
+                             .semijoin(&parts);
 
-            // group by item id, keep way below-average quantities.
-            let probe = items.map(|x| (x.0, (x.1, x.2)))
-                             .group(|_, s, t| {
+            // group by item id, keep way below average quantities.
+            let probe = items.group(|_, s, t| {
 
                                  let sum: u32 = s.iter().map(|x| (x.0).0).sum();
                                  let cnt = s.len() as u32;
@@ -107,29 +106,24 @@ fn main() {
 
         println!("data loaded at {:?}", timer.elapsed());
         let timer = ::std::time::Instant::now();
+        let item_count = items_buffer.len();
 
         parts.close();
 
-        let item_count = items_buffer.len();
-
-        {
-        let mut counter = 0;
-        let mut session = ::differential_dataflow::input::InputSession::from(&mut items);
-        for ((item_id, quantity, extended_price), index) in items_buffer.drain(..) {
+        // create an input session and start feeding items.
+        let mut session = InputSession::from(&mut items);
+        for (counter, ((item_id, quantity, extended_price), index)) in items_buffer.drain(..).enumerate() {
             if session.time().inner < index { session.advance_to(index); }
             session.insert((item_id, quantity, extended_price));
             if counter % batch == batch - 1 {
                 session.flush();
                 computation.step_while(|| probe.lt(session.time()));
             }
-            counter += 1;
-        }
         }
 
-        items.close();
-
-        while computation.step() { }
-        computation.step(); // shut down
+        // finish session and drain computation.
+        session.flush();
+        computation.step_while(|| probe.lt(session.time()));
 
         println!("computation finished at {:?}", timer.elapsed());
         let elapsed = timer.elapsed();
