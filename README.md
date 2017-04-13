@@ -224,78 +224,62 @@ These last numbers were about half a second with one worker, and are decently im
 
 ## A second example: k-core computation
 
-The k-core of a graph is the largest subset of its edges so that all vertices with any edges have degree at least k. The way you find the k-core is to throw away all edges incident on vertices with degree less than k. Those edges going away might lower some other degrees, so we need to *keep* throwing away edges on vertices with degree less than k until we stop. Maybe we throw away all the edges, maybe we stop with some left over.
+The k-core of a graph is the largest subset of its edges so that all vertices with any incident edges have degree at least k. One way to find the k-core is to repeatedly delete all edges incident on vertices with degree less than k. Those edges going away might lower the degrees of other vertices, so we need to *iteratively* throwing away edges on vertices with degree less than k until we stop. Maybe we throw away all the edges, maybe we stop with some left over.
+
+Here is a direct implementation, in which we repeatedly take determine the set of active nodes (those with at least 
+`k` edges point to or from them), and restrict the set `edges` to those with both `src` and `dst` present in `active`.
 
 ```rust
 let k = 5;
+
+// iteratively thin edges.
 edges.iterate(|inner| {
 
-    // determine the active vertices     // /-- this is a lie --\
+    // determine the active vertices        /-- this is a lie --\
     let active = inner.flat_map(|(src,dst)| [src,dst].into_iter())
-                      .threshold_u(|cnt| if cnt >= k { 1 } else { 0 });
+                      .map(|node| (node, ()))
+                      .group(|_node, s, t| if s[0].1 > k { t.push(((), 1)); })
+                      .map(|(node,_)| node);
 
     // keep edges between active vertices
-    edges.semijoin_u(active)
+    edges.enter(&inner.scope())
+         .semijoin(active)
          .map(|(src,dst)| (dst,src))
-         .semijoin_u(active)
+         .semijoin(active)
          .map(|(dst,src)| (src,dst))
 });
 ```
 
 To be totally clear, the syntax with `into_iter()` doesn't work, because Rust, and instead there is a more horrible syntax needed to get a non-heap allocated iterator over two elements. But, it works, and
 
-         Running `target/release/examples/degrees 10000000 50000000 1 5`
-    observed: ((5, 400565), 1)
-    observed: ((6, 659693), 1)
-    observed: ((7, 930734), 1)
-    observed: ((8, 1152892), 1)
-    ...
-    observed: ((30, 3), 1)
-    Loading finished after Duration { secs: 31, nanos: 240040855 }
+    Running `target/release/examples/degrees 10000000 50000000 1 5 kcore1`
+    Loading finished after 72204416910
 
-Well that is a thing. Who knows if 31 seconds is any good. Let's start messing around with the data!
+Well that is a thing. Who knows if 72 seconds is any good? (*ed:* it is worse than the numbers in the previous version of this readme).
 
-    observed: ((6, 659692), 1)
-    ...
-    observed: ((12, 926000), -1)
-    Round 1 finished after Duration { secs: 0, nanos: 301988072 }
-    observed: ((6, 659692), -1)
-    ...
-    observed: ((14, 497957), 1)
-    Round 2 finished after Duration { secs: 0, nanos: 401968 }
+The amazing thing, though is what happens next:
 
-Ok, the 300 milliseconds to clean up some mess, and then we are down to about 400 microseconds to *update* the degree distribution of the k-core of our graph. And amazing, we have enough work now that adding a second worker improves things
+    worker 0, round 1 finished after Duration { secs: 0, nanos: 567171 }
+    worker 0, round 2 finished after Duration { secs: 0, nanos: 449687 }
+    worker 0, round 3 finished after Duration { secs: 0, nanos: 467143 }
+    worker 0, round 4 finished after Duration { secs: 0, nanos: 480019 }
+    worker 0, round 5 finished after Duration { secs: 0, nanos: 404831 }
 
-        Running `target/release/examples/degrees 10000000 50000000 1 5 -w2`
-    Loading finished after Duration { secs: 16, nanos: 808444276 }
-    ...
-    Round 2 finished after Duration { secs: 0, nanos: 401113 }
+We are taking about half a millisecond to *update* the k-core computation. Each edge addition and deletion could cause other edges to drop out of or more confusingly *return* to the k-core, and differential dataflow is correctly updating all of that for you. And it is doing it in sub-millisecond timescales.
 
-Even round 2 goes faster! Like, a teensy bit. 
+If we crank the batching up by one thousand, we improve the throughput a fair bit:
 
-Of course, round 2 isn't why we used multiple workers. Multiple workers do increase the *throughput* of a computation, though. Let's see what happens if we adjust 1000 edges each iteration rather than just one.
+    Running `target/release/examples/degrees 10000000 50000000 1000 5 kcore1`
+    Loading finished after Duration { secs: 73, nanos: 507094824 }
+    worker 0, round 1000 finished after Duration { secs: 0, nanos: 55649900 }
+    worker 0, round 2000 finished after Duration { secs: 0, nanos: 51793416 }
+    worker 0, round 3000 finished after Duration { secs: 0, nanos: 57733231 }
+    worker 0, round 4000 finished after Duration { secs: 0, nanos: 50438934 }
+    worker 0, round 5000 finished after Duration { secs: 0, nanos: 55020469 }
 
-         Running `target/release/examples/degrees 10000000 50000000 1000 5`
-    ...
-    Loading finished after Duration { secs: 30, nanos: 115939220 }
-    ...
-    Round 1 finished after Duration { secs: 0, nanos: 316472394 }
-    ...
-    Round 2 finished after Duration { secs: 0, nanos: 11244112 }
+Each batch is doing one thousand rounds of updates in just over 50 milliseconds, averaging out to about 50 microseconds for each update, and corresponding to roughly 20,000 distinct updates per second.
 
-Looks like about 11 milliseconds for one worker to do 1,000 updates. That is much better than 1,000 x the 50-70 microsecond latency up above! Also, if we spin up a second worker, we see
-
-         Running `target/release/examples/degrees 10000000 50000000 1000 5 -w2`
-    ...
-    Loading finished after Duration { secs: 17, nanos: 181791387 }
-    ...
-    Round 1 finished after Duration { secs: 0, nanos: 198020474 }
-    ...
-    Round 2 finished after Duration { secs: 0, nanos: 6525667 }
-
-We cut the latency by almost a factor of two even for round 2. Thanks, second worker!
-
-That's about 6.5ms to update 1,000 edges, which means we should be able to handle about 150,000 edge changes each second. And the number goes up if we batch more edges together, or use more workers!
+I think this is all great, both that it works at all and that it even seems to work pretty well.
 
 ## Roadmap
 
@@ -303,31 +287,35 @@ There are several interesting things still to do with differential dataflow. Her
 
 ### Compacting traces
 
-Naiad's implementation of differential dataflow is capable of compacting traces so that as frontiers progress, indistinguishable differences are merged and possibly cancelled. Timely dataflow presents enough information to do this, and actually provides more information that allows independent compaction for bi-linear operators like `join`, which Naiad's progress tracking doesn't support.
+As computation proceeds, some older times become indistinguishable. Once we hit round 1,000, we don't really care about the difference between updates at round 500 versus round 600; all updates before round 1,000 are "done". Updates at indistinguishable times can be merged, which is an important part of differential dataflow running forever and ever.
 
-The current `Trace` implementations are ill-suited for this, and should probably be replaced as part of a larger overhaul. For example, trace implementations (of which there can be many) will surely need to improve to support fine-grained timestamps (the next item on the list).
+The underlying data stores are now able to compact their representations when provided with guarantees about which future times will be encountered. This results in stable incremental update times even after millions of batches of rounds of updates.
 
-Independently, the `arrange` operator permits sharing of `Trace` implementations, and this sharing must gate the state compaction. This isn't complicated, but it does mean that the current `Rc` sharing will need to be upgraded to reference counted frontiers (e.g. `MutableAntichain`), so that the trace manager can understand up to what frontiers is it safe to compact the data.
+This compaction works across shared use of the traces, in that multiple operators can use the same state and provide different opinions about which future times will be encountered. The trace implementation is bright enough to track the lower bound of these opinions, and compact conservatively to continue to permit sharing of resources.
 
 **MERGED**
 
 ### Fine-grained timestamps
 
-Data are currently sent in batches with a single timestamp, as this is how timely dataflow current manages its messages. However, many streams of data have very fine grained updates with individual changes each having their own time. These two are in conflict, and don't need to be.
+Differential dataflow used to strongly rely on the fact that all times in a batch of updates would be identical. This introduces substantial overheads for fine-grained updates, where there are perhaps just a few updates with each timestamp; each must be put in its own batch, and introduce coordination overhead for the underlying timely dataflow runtime.
 
-Differential could process streams of `(val, time, wgt)` where `time` is promoted to data, as long as each batch has a timestamp less or equal to the times it contains. This would permit larger numbers of changes in each batch, and each batch could potentially be retired at once (rather than serializing the work). This has the potential to increase throughput substantially (as more work gets done at once) and improve scaling as workers need to coordinate less often.
+The underlying streams of updates are now able to be batched arbitrarily, with timestamps promoted to data fields. Differential dataflow can now batch updates at different times, and the operator implementations can retire time *intervals* rather than individual times, often with improved performance.
 
-The "cost" here is mostly in complexity: differential operators would need to understand how to process collections of changes at various times and should probably avoid using time-keyed maps to store the differences before they are processed. The core `Trace` implementations would likely need to be improved to not have as much per-time overhead (perhaps flattening the `(key, time, val, wgt)` tuples into a trie, as prototyped elsewhere). Such designs and implementations would likely be sub-optimal for batch processing, but it feels like in this direction lies progress.
+There is now some complexity in the operator implementations, each of which emulates "sequential playback" of the updates on a key-by-key basis. The intent is that they should do no more work than one would do if updates were provided one at a time, but without the associated system overhead.
 
 **MERGED**
 
 ### Fault-tolerance
 
-This is mostly an idle diversion. The functional nature of differential dataflow should mean that it can commit updates for various times once they are confirmed correct, and upon recovery any identified updates can simply be loaded rather than waited upon. For example, trie-based `Trace` implementations represent a collection of updates in a range of times as a flat array, which should be fairly easily serialized and stored.
+The functional nature of differential dataflow computations means that it can commit to output updates for various times once they are produced, because as long as the input are also committed, the computation should always produce the same output. Internally, differential dataflow stores data as indexed collections of immutable lists, and each list is self-describing: each indicates an interval of logical time and contains exactly the updates in that interval.
 
-As part of recovering, we might imagine that operators will be called upon to reproduce a subset of their output diffs, by time (because downstream operators didn't commit everything). The `group` operator is already designed to produce output diffs by time on demand, but operators like `join` are not so designed (in short, `join` can't afford to record its outputs, which makes it harder to see what has changed at a time from the time alone).
+The internal data stores are sufficient to quickly bring a differential dataflow computation back to life if failed or otherwise shut down. The immutable nature makes them well suited for persisting to disk and replicating as appropriate. It seems reasonable to investigate how much or little extra is required to quickly recover a stopped differential dataflow computation from persisted versions of its immutable collections.
 
-It would be interesting to prototype serializing this state to stable storage, and finding and loading it on start-up. There is much more to do to have "serious" fault-tolerance, but this would at least be interesting to explore.
+There is much more to do to have "serious" fault-tolerance,  but this is an interesting first step to explore.
+
+### Other issues
+
+The [issue tracker](https://github.com/frankmcsherry/differential-dataflow/issues) has several open issues relating to current performance defects or missing features. If you are interested in contributing, that would be great! If you have other questions, don't hesitate to get in touch.
 
 ## Acknowledgements
 
