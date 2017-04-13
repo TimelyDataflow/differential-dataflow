@@ -137,7 +137,7 @@ pub trait Batch<K, V, T, R> where Self: ::std::marker::Sized {
 
 		while cursor.key_valid() {
 			while cursor.val_valid() {
-				cursor.map_times(|time: &T, diff| times.push((time.advance_by(frontier).unwrap(), diff)));
+				cursor.map_times(|time: &T, diff| times.push((time.advance_by(frontier), diff)));
 				consolidate(&mut times, 0);
 				for (time, diff) in times.drain(..) {
 					builder.push((cursor.key().clone(), cursor.val().clone(), time, diff));

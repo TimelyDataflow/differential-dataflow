@@ -6,24 +6,57 @@ pub trait Lattice : PartialOrd {
     fn min() -> Self;
     /// The largest element of the type.
     fn max() -> Self;
-    /// The smallest element greater than both arguments.
+    /// The smallest element greater than or equal to both arguments.
     fn join(&self, &Self) -> Self;
-    /// The largest element lesser than both arguments.
+    /// The largest element less than or equal to both arguments.
     fn meet(&self, &Self) -> Self;
 
     /// Advances self to the largest time indistinguishable under `frontier`.
-    // TODO : add an example here demonstrating the result invariant.
+    ///
+    /// This method produces the "largest" lattice element with the property that for every
+    /// lattice element greater than some element of `frontier`, both the result and `self`
+    /// compare identically to the lattice element. The result is the "largest" element in
+    /// the sense that any other element with the same property (compares identically to times
+    /// greater or equal to `frontier`) must be less or equal to the result.
+    ///
+    /// When provided an empty frontier, the result is `<Self as Lattice>::max()`. It should
+    /// perhaps be distinguished by an `Option<Self>` type, but the `None` case only happens
+    /// when `frontier` is empty, which the caller can see for themselves if they want to be
+    /// clever.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use timely::progress::nested::product::Product;
+    ///
+    /// let time = Product::new(3, 7);
+    /// let frontier = vec![Product::new(4, 8), Product::new(5, 3)];
+    /// let advanced = time.advance_by(&frontier[..]);
+    ///
+    /// // `time` and `advanced` are indistinguishable to elements >= an element of `frontier`
+    /// for i in (0 .. 10) {
+    ///     for j in (0 .. 10) {
+    ///         let test = Product::new(i, j);
+    ///         // for `test` in the future of `frontier` ..
+    ///         if frontier.iter().any(|t| t.le(&test)) {
+    ///             assert_eq!(time.le(&test), advanced.le(&test));
+    ///         }
+    ///     }
+    /// }
+    ///
+    /// assert_eq!(time, Product::new(4, 7));
+    /// ```
     #[inline(always)]
-    fn advance_by(&self, frontier: &[Self]) -> Option<Self> where Self: Sized{
+    fn advance_by(&self, frontier: &[Self]) -> Self where Self: Sized{
         if frontier.len() > 0 {
             let mut result = self.join(&frontier[0]);
             for f in &frontier[1..] {
                 result = result.meet(&self.join(f));
             }
-            Some(result)
+            result
         }  
         else {
-            None
+            Self::max()
         }
     }
 }

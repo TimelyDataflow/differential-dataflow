@@ -19,8 +19,10 @@ use lattice::Lattice;
 use operators::arrange::{Arrange, Arranged, ArrangeByKey, ArrangeBySelf};
 use trace::{Batch, Cursor, Trace, consolidate};
 
-use trace::implementations::hash::HashValSpine as DefaultValTrace;
-use trace::implementations::hash::HashKeySpine as DefaultKeyTrace;
+// use trace::implementations::hash::HashValSpine as DefaultValTrace;
+// use trace::implementations::hash::HashKeySpine as DefaultKeyTrace;
+use trace::implementations::ord::OrdValSpine as DefaultValTrace;
+use trace::implementations::ord::OrdKeySpine as DefaultKeyTrace;
 
 /// Join implementations for `(key,val)` data.
 pub trait Join<G: Scope, K: Data, V: Data, R: Ring> {
@@ -521,7 +523,7 @@ impl<V: Ord+Clone, T: Lattice+Ord+Clone, R: Ring> ValueHistory<V, T, R> {
 
     fn advance_buffer_by(&mut self, frontier: &[T]) {
         for &mut ((ref mut time, _), _) in &mut self.buffer {
-            *time = time.advance_by(frontier).unwrap();
+            *time = time.advance_by(frontier);
         }
         consolidate(&mut self.buffer, 0);
     }

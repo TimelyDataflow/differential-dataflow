@@ -48,8 +48,11 @@ use timely_sort::Unsigned;
 use operators::arrange::{Arrange, Arranged, ArrangeByKey, ArrangeBySelf, BatchWrapper, TraceHandle};
 use lattice::Lattice;
 use trace::{Batch, Cursor, Trace, Builder};
-use trace::implementations::hash::HashValSpine as DefaultValTrace;
-use trace::implementations::hash::HashKeySpine as DefaultKeyTrace;
+// use trace::implementations::hash::HashValSpine as DefaultValTrace;
+// use trace::implementations::hash::HashKeySpine as DefaultKeyTrace;
+use trace::implementations::ord::OrdValSpine as DefaultValTrace;
+use trace::implementations::ord::OrdKeySpine as DefaultKeyTrace;
+
 
 /// Extension trait for the `group` differential dataflow method.
 pub trait Group<G: Scope, K: Data, V: Data, R: Ring> where G::Timestamp: Lattice+Ord {
@@ -1413,11 +1416,11 @@ impl<T: Ord+Lattice+Clone+::std::fmt::Debug> Interestinator<T> {
 
                 if self.frontier.len() > 0 {
                     // advance times in the old accumulation, sort and deduplicate.
-                    for time in &mut self.old_accum { *time = time.advance_by(&self.frontier[..]).unwrap(); }
+                    for time in &mut self.old_accum { *time = time.advance_by(&self.frontier[..]); }
                     self.old_accum.sort();
                     self.old_accum.dedup();
                     // advance times in the new accumulation, sort and deduplicate.
-                    for time in &mut self.new_accum { *time = time.advance_by(&self.frontier[..]).unwrap(); }
+                    for time in &mut self.new_accum { *time = time.advance_by(&self.frontier[..]); }
                     self.new_accum.sort();
                     self.new_accum.dedup();
                 }
