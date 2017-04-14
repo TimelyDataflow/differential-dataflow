@@ -39,7 +39,11 @@
 //! trace, rather than just a batch of the type merged.
 
 pub mod spine;
-pub mod batcher;
+
+mod batcher;
+mod batcher_merge;
+
+pub use self::batcher::RadixBatcher as Batcher;
 
 pub mod ord;
 pub mod hash;
