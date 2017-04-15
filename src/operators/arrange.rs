@@ -271,10 +271,6 @@ impl<G: Scope, K: Data+Hashable, V: Data, R: Ring> Arrange<G, K, V, R> for Colle
 
             input.for_each(|cap, data| {
 
-                for &(_, ref time, _) in data.iter() {
-                    assert!(cap.time().le(time));
-                }
-
                 // add the capability to our list of capabilities.
                 capabilities.retain(|c| !c.time().gt(&cap.time()));
                 if !capabilities.iter().any(|c| c.time().le(&cap.time())) { 
@@ -305,61 +301,58 @@ impl<G: Scope, K: Data+Hashable, V: Data, R: Ring> Arrange<G, K, V, R> for Colle
             // non-empty batch whose lower envelope does not match `trace_upper`, we must add an empty 
             // batch to the trace to ensure contiguity.
 
-            let mut sent_any = false;
-            for index in 0 .. capabilities.len() {
+            // If there is at least one capability no longer in advance of the input frontier ...
+            if capabilities.iter().any(|c| !notificator.frontier(0).iter().any(|t| t.le(&c.time()))) {
 
-                if !notificator.frontier(0).iter().any(|t| t == &capabilities[index].time()) {
+                // For each capability not in advance of the input frontier ... 
+                for index in 0 .. capabilities.len() {
+                    if !notificator.frontier(0).iter().any(|t| t.le(&capabilities[index].time())) {
 
-                    sent_any = true;
-
-                    // Assemble the upper frontier, from subsequent capabilities and the input frontier.
-                    // TODO: this is cubic, I think, and could be quadratic if we went in the reverse direction.
-                    // We would want to insert the batches in *this* order, though. Perhaps with clever sorting
-                    // and such we could get this to linear-ish (plus sorting). Not clear how expensive this 
-                    // will be until we understand how large frontiers end up being (could be unboundedly large).
-                    let mut upper = Vec::new();
-                    for after in (index + 1) .. capabilities.len() {
-                        upper.push(capabilities[after].time());
-                    }
-                    for time in notificator.frontier(0) {
-                        if !upper.iter().any(|t| t.le(time)) {
-                            upper.push(time.clone());
+                        // Assemble the upper bound on times we can commit with this capabilities.
+                        // This is determined both by the input frontier, and by subsequent capabilities
+                        // which may shadow this capability for some times.
+                        let mut upper = notificator.frontier(0).to_vec();
+                        for capability in &capabilities[(index + 1) .. ] {
+                            let time = capability.time();
+                            if !upper.iter().any(|t| t.le(&time)) {
+                                upper.retain(|t| !time.le(t));
+                                upper.push(time);
+                            }
                         }
+
+                        // Extract updates not in advance of `upper`.
+                        let batch = batcher.seal(&upper[..]);
+
+                        // If the source is still active, commit the extracted batch.
+                        // The source may become inactive if all downsteam users of the trace drop their references.
+                        source.upgrade().map(|trace| {
+                            let trace: &mut T = &mut trace.borrow_mut().trace;
+                            trace.insert(batch.clone())
+                        });
+
+                        // send the batch to downstream consumers, empty or not.
+                        output.session(&capabilities[index]).give(BatchWrapper { item: batch });
                     }
-
-                    // extract updates between `capabilities[index].time()` and `upper`.
-                    let batch = batcher.seal(&upper[..]);
-
-                    // If the source is still active, commit the extracted batch.
-                    // The source may become inactive if all downsteam users of the trace drop their references.
-                    source.upgrade().map(|trace| {
-                        let trace: &mut T = &mut trace.borrow_mut().trace;
-                        trace.insert(batch.clone())
-                    });
-
-                    // send the batch to downstream consumers, empty or not.
-                    output.session(&capabilities[index]).give(BatchWrapper { item: batch });
                 }
-            }
 
-            // The trace should now contain batches with intervals up to the input frontier. Test?
+                // Having extracted and sent batches between each capability and the input frontier,
+                // we should advance all capabilities to match the batcher's lower update frontier.
+                // This may involve discarding capabilities, which is fine as any new updates arrive 
+                // in messages with new capabilities.
 
-            // Having extracted and sent batches between each capability and the input frontier,
-            // we should advance all capabilities to match the batcher's lower update frontier.
-            // This may involve discarding capabilties, which is fine as any new updates arrive 
-            // in messages with new capabilities.
-
-            // TODO: Perhaps this could be optimized when not much changes?
-            if sent_any {
                 let mut new_capabilities = Vec::new();
                 for time in batcher.frontier() {
                     if let Some(capability) = capabilities.iter().find(|c| c.time().le(time)) {
                         new_capabilities.push(capability.delayed(time));
                     }
                 }
+
+                // println!("Arrange: downgrading capabilities:");
+                // println!("  from: {:?}", capabilities);
+                // println!("    to: {:?}", new_capabilities);
+
                 capabilities = new_capabilities;
             }
-
         });
 
         Arranged { stream: stream, trace: handle }

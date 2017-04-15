@@ -279,13 +279,13 @@ impl<G, K, V, R, T1> JoinArranged<G, K, V, R> for Arranged<G,K,V,R,T1>
             }
 
             // perform some amount of outstanding work. 
-            if todo1.len() > 0 {
+            while todo1.len() > 0 {
                 todo1[0].work(output, &|k,v2,v1| result(k,v1,v2), 1_000_000);
                 if !todo1[0].work_remains() { todo1.remove(0); }
             }
 
             // perform some amount of outstanding work. 
-            if todo2.len() > 0 {
+            while todo2.len() > 0 {
                 todo2[0].work(output, &|k,v1,v2| result(k,v1,v2), 1_000_000);
                 if !todo2[0].work_remains() { todo2.remove(0); }
             }
