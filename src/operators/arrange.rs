@@ -280,26 +280,17 @@ impl<G: Scope, K: Data+Hashable, V: Data, R: Ring> Arrange<G, K, V, R> for Colle
                 batcher.push_batch(&mut data.replace_with(Vec::new()));
             });
 
-            // Because we can only use one capability per message, on each notification we will need
-            // to pull out the updates greater or equal to the notified time, and less than the current
-            // frontier. We may have to do this a few times with different notified times, creating 
-            // messages which could have been bundled into one, but that is how it is for the moment.
-
-            // Whenever there is a gap between our capabilities and the input frontier, we can (and should)
-            // extract the corresponding updates and produce a batch. Note, there may not actually be updates,
-            // due to cancelation, but we should discover this and advance the batcher's frontier nonetheless.
-
-            // We plan to advance our capabilities to match or exceed the input frontier. This means that 
-            // some updates must be transmitted. For each capability in turn, we extract the batch that 
-            // corresponds to the time interval to our capabilities just before and just after retiring 
-            // the capability. At the end of the process, all of our capabilities should be in line with 
-            // the input frontier, but we can (and must) advance them to track the lower envelope of the 
-            // updates in the batcher.
-
-            // We now swing through our capabilities, and determine which updates must be transmitted when
-            // we downgrade each capability to one matching our input frontier. If at any point we find a 
-            // non-empty batch whose lower envelope does not match `trace_upper`, we must add an empty 
-            // batch to the trace to ensure contiguity.
+            // Timely dataflow currently only allows one capability per message, and we may have multiple
+            // incomparable times for which we need to send data. This would normally require shattering
+            // all updates we might send into multiple batches, each associated with a capability. 
+            //
+            // Instead! We can cheat a bit. We can extract one batch, and just make sure to send all of 
+            // capabilities along in separate messages. This is a bit dubious, and we will want to make 
+            // sure that each operator that consumes batches (group, join, as_collection) understands this.
+            // 
+            // At the moment this is painful for non-group operators, who each rely on having the correct 
+            // capabilities at hand, and must find the right capability record-by-record otherwise. But, 
+            // something like this should ease some pain. (we could also just fix timely).
 
             // If there is at least one capability no longer in advance of the input frontier ...
             if capabilities.iter().any(|c| !notificator.frontier(0).iter().any(|t| t.le(&c.time()))) {
@@ -336,7 +327,7 @@ impl<G: Scope, K: Data+Hashable, V: Data, R: Ring> Arrange<G, K, V, R> for Colle
                 }
 
                 // Having extracted and sent batches between each capability and the input frontier,
-                // we should advance all capabilities to match the batcher's lower update frontier.
+                // we should downgrade all capabilities to match the batcher's lower update frontier.
                 // This may involve discarding capabilities, which is fine as any new updates arrive 
                 // in messages with new capabilities.
 
@@ -346,10 +337,6 @@ impl<G: Scope, K: Data+Hashable, V: Data, R: Ring> Arrange<G, K, V, R> for Colle
                         new_capabilities.push(capability.delayed(time));
                     }
                 }
-
-                // println!("Arrange: downgrading capabilities:");
-                // println!("  from: {:?}", capabilities);
-                // println!("    to: {:?}", new_capabilities);
 
                 capabilities = new_capabilities;
             }

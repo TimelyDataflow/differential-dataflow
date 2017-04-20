@@ -18,6 +18,7 @@ use ::{Data, Ring, Collection, AsCollection};
 use lattice::Lattice;
 use operators::arrange::{Arrange, Arranged, ArrangeByKey, ArrangeBySelf};
 use trace::{Batch, Cursor, Trace, consolidate};
+use operators::ValueHistory2;
 
 // use trace::implementations::hash::HashValSpine as DefaultValTrace;
 // use trace::implementations::hash::HashKeySpine as DefaultKeyTrace;
@@ -278,15 +279,17 @@ impl<G, K, V, R, T1> JoinArranged<G, K, V, R> for Arranged<G,K,V,R,T1>
                 trace1.distinguish_since(&acknowledged1[..]);
             }
 
+            let mut fuel = 1_000_000;
+
             // perform some amount of outstanding work. 
-            while todo1.len() > 0 {
-                todo1[0].work(output, &|k,v2,v1| result(k,v1,v2), 1_000_000);
+            while todo1.len() > 0 && fuel > 0 {
+                todo1[0].work(output, &|k,v2,v1| result(k,v1,v2), &mut fuel);
                 if !todo1[0].work_remains() { todo1.remove(0); }
             }
 
             // perform some amount of outstanding work. 
-            while todo2.len() > 0 {
-                todo2[0].work(output, &|k,v1,v2| result(k,v1,v2), 1_000_000);
+            while todo2.len() > 0 && fuel > 0 {
+                todo2[0].work(output, &|k,v1,v2| result(k,v1,v2), &mut fuel);
                 if !todo2[0].work_remains() { todo2.remove(0); }
             }
 
@@ -312,7 +315,6 @@ where
     trace: C1,
     batch: C2,
     capability: Capability<T>,
-    // acknowledged: Vec<T>,
 }
 
 impl<K, V1, V2, T, R, C1, C2> Deferred<K, V1, V2, T, R, C1, C2>
@@ -340,10 +342,10 @@ where
 
     /// Process keys until at least `limit` output tuples produced, or the work is exhausted.
     #[inline(never)]
-    fn work<D, L>(&mut self, output: &mut OutputHandle<T, (D, T, R), Tee<T, (D, T, R)>>, logic: &L, limit: usize) 
+    fn work<D, L>(&mut self, output: &mut OutputHandle<T, (D, T, R), Tee<T, (D, T, R)>>, logic: &L, fuel: &mut usize) 
     where D: Ord+Clone+Data, L: Fn(&K, &V1, &V2)->D {
 
-        let time = self.capability.time();
+        let meet = self.capability.time();
 
         let mut effort = 0;
         let mut session = output.session(&self.capability);
@@ -351,41 +353,21 @@ where
         let trace = &mut self.trace;
         let batch = &mut self.batch;
 
-        // TODO: This implementation can be quadratic in the input for each key, despite producing a linear sized
-        // output. We can change the implementation to process times in-order, which can reduce this particular
-        // worst-case performance (though perhaps maintaining collections over time is also expensive).
- 
         let mut temp = Vec::new();
         let mut thinker = JoinThinker::<V1, V2, T, R>::new();
 
-        while batch.key_valid() && effort < limit {
+        while batch.key_valid() && effort < *fuel {
 
             trace.seek_key(batch.key());
             if trace.key_valid() && trace.key() == batch.key() {
 
-                // exfiltrate trace history.
-                thinker.history1.clear();
-                while trace.val_valid() {
-                    let val: V1 = trace.val().clone();
-                    trace.map_times(|time1, diff1| {
-                        thinker.history1.push(val.clone(), time.join(time1), diff1);
-                    });
-                    trace.step_val();
-                }
-
-                // exfiltrate batch history.
-                thinker.history2.clear();
-                while batch.val_valid() {
-                    let val: V2 = batch.val().clone();
-                    batch.map_times(|time2, diff2| {
-                        thinker.history2.push(val.clone(), time2.clone(), diff2);
-                    });
-                    batch.step_val();
-                }
+                thinker.history1.edits.load(trace, |time| time.join(&meet));
+                thinker.history2.edits.load(batch, |time| time.clone());
 
                 // populate `temp` with the results in the best way we know how.
                 thinker.think(|v1,v2,t,r| temp.push(((logic(batch.key(), v1, v2), t), r)));
                 consolidate(&mut temp, 0);
+
                 effort += temp.len();
                 for ((d, t), r) in temp.drain(..) {
                     session.give((d, t, r));
@@ -395,154 +377,78 @@ where
 
             batch.step_key();
         }
+
+        if effort > *fuel { *fuel = 0; }
+        else              { *fuel -= effort; }
     }
 }
 
 struct JoinThinker<V1: Ord+Clone, V2: Ord+Clone, T: Lattice+Ord+Clone, R: Ring> {
-    pub history1: ValueHistory<V1, T, R>,
-    pub history2: ValueHistory<V2, T, R>,
+    pub history1: ValueHistory2<V1, T, R>,
+    pub history2: ValueHistory2<V2, T, R>,
 }
 
-impl<V1: Ord+Clone, V2: Ord+Clone, T: Lattice+Ord+Clone, R: Ring> JoinThinker<V1, V2, T, R> {
+impl<V1: Ord+Clone, V2: Ord+Clone, T: Lattice+Ord+Clone, R: Ring> JoinThinker<V1, V2, T, R> 
+where V1: Debug, V2: Debug, T: Debug, R: Debug
+{
     fn new() -> Self {
         JoinThinker {
-            history1: ValueHistory::new(),
-            history2: ValueHistory::new(),
+            history1: ValueHistory2::new(),
+            history2: ValueHistory2::new(),
         }
     }
 
     fn think<F: FnMut(&V1,&V2,T,R)>(&mut self, mut results: F) {
 
         // for reasonably sized edits, do the dead-simple thing.
-        if self.history1.edits.len() < 10 || self.history2.edits.len() < 10 {
-            for &((ref time1, ref val1), diff1) in &self.history1.edits[..] {
-                for &((ref time2, ref val2), diff2) in &self.history2.edits[..] {
-                    results(val1, val2, time1.join(time2), diff1 * diff2);
-                }
-            }
+        if self.history1.edits.len() < 1000 || self.history2.edits.len() < 1000 {
+            self.history1.edits.map(|v1, t1, d1| {
+                self.history2.edits.map(|v2, t2, d2| {
+                    results(v1, v2, t1.join(t2), d1 * d2);
+                })
+            })
         }
         else {
 
             self.history1.order();
             self.history2.order();
 
-            while self.history1.not_done() && self.history2.not_done() {
+            while !self.history1.is_done() && !self.history2.is_done() {
 
-                if self.history1.time().cmp(&self.history2.time()) == ::std::cmp::Ordering::Less {
-                    self.history2.advance_buffer_by(&self.history1.frontier[..]);
-                    for &((ref time2, ref val2), diff2) in &self.history2.buffer {
-                        let &((ref time1, ref val1), diff1) = self.history1.edit();
+                if self.history1.time().unwrap().cmp(&self.history2.time().unwrap()) == ::std::cmp::Ordering::Less {
+                    self.history2.advance_buffer_by(self.history1.meet().unwrap());
+                    for &((ref val2, ref time2), diff2) in &self.history2.buffer {
+                        let (val1, time1, diff1) = self.history1.edit().unwrap();
                         results(val1, val2, time1.join(time2), diff1 * diff2);
                     }
                     self.history1.step();
                 }
                 else {
-                    self.history1.advance_buffer_by(&self.history2.frontier[..]);
-                    for &((ref time1, ref val1), diff1) in &self.history1.buffer {
-                        let &((ref time2, ref val2), diff2) = self.history2.edit();
+                    self.history1.advance_buffer_by(self.history2.meet().unwrap());
+                    for &((ref val1, ref time1), diff1) in &self.history1.buffer {
+                        let (val2, time2, diff2) = self.history2.edit().unwrap();
                         results(val1, val2, time1.join(time2), diff1 * diff2);
                     }
                     self.history2.step();
                 }
             }
 
-            while self.history1.not_done() {
-                self.history2.advance_buffer_by(&self.history1.frontier[..]);
-                for &((ref time2, ref val2), diff2) in &self.history2.buffer {
-                    let &((ref time1, ref val1), diff1) = self.history1.edit();
+            while !self.history1.is_done() {
+                self.history2.advance_buffer_by(self.history1.meet().unwrap());
+                for &((ref val2, ref time2), diff2) in &self.history2.buffer {
+                    let (val1, time1, diff1) = self.history1.edit().unwrap();
                     results(val1, val2, time1.join(time2), diff1 * diff2);
                 }
                 self.history1.step();                
             }
-            while self.history2.not_done() {
-                self.history1.advance_buffer_by(&self.history2.frontier[..]);
-                for &((ref time1, ref val1), diff1) in &self.history1.buffer {
-                    let &((ref time2, ref val2), diff2) = self.history2.edit();
+            while !self.history2.is_done() {
+                self.history1.advance_buffer_by(self.history2.meet().unwrap());
+                for &((ref val1, ref time1), diff1) in &self.history1.buffer {
+                    let (val2, time2, diff2) = self.history2.edit().unwrap();
                     results(val1, val2, time1.join(time2), diff1 * diff2);
                 }
                 self.history2.step();                
             }
-
         }
     }
-}
-
-struct ValueHistory<V: Ord+Clone, T: Lattice+Ord+Clone, R: Ring> {
-    edits: Vec<((T, V), R)>,
-    buffer: Vec<((T, V), R)>,
-    frontier: Vec<T>,
-    entrance: Vec<(T, usize)>,
-    cursor: usize,
-}
-
-impl<V: Ord+Clone, T: Lattice+Ord+Clone, R: Ring> ValueHistory<V, T, R> {
-    fn new() -> Self {
-        ValueHistory {
-            edits: Vec::new(),
-            buffer: Vec::new(),
-            frontier: Vec::new(),
-            entrance: Vec::new(),
-            cursor: 0,
-        }
-    }
-    fn clear(&mut self) {
-        self.edits.clear();
-        self.buffer.clear();
-        self.frontier.clear();
-        self.entrance.clear();
-    }
-    fn push(&mut self, val: V, time: T, ring: R) {
-        self.edits.push(((time, val), ring));
-    }
-    fn order(&mut self) {
-        
-        consolidate(&mut self.edits, 0);
-
-        self.buffer.clear();
-        self.cursor = 0;
-        self.frontier.clear();
-        self.entrance.clear();
-
-        self.entrance.reserve(self.edits.len());
-        let mut position = self.edits.len();
-        while position > 0 {
-            position -= 1;
-            // "add" edits[position] and seeing who drops == who is exposed when edits[position] removed.
-            let mut index = 0;
-            while index < self.frontier.len() {
-                if (self.edits[position].0).0.le(&self.frontier[index]) {
-                    self.entrance.push((self.frontier.swap_remove(index), position));
-                }
-                else {
-                    index += 1;
-                }
-            }
-            self.frontier.push((self.edits[position].0).0.clone());
-        }
-    }
-
-    fn advance_buffer_by(&mut self, frontier: &[T]) {
-        for &mut ((ref mut time, _), _) in &mut self.buffer {
-            *time = time.advance_by(frontier);
-        }
-        consolidate(&mut self.buffer, 0);
-    }
-
-    fn time(&self) -> &T { &(self.edits[self.cursor].0).0 }
-    fn edit(&self) -> &((T, V), R) { &self.edits[self.cursor] }
-    fn step(&mut self) { 
-
-        // a. remove time from frontier; it's not there any more.
-        let new_time = &(self.edits[self.cursor].0).0;
-        self.frontier.retain(|x| !x.eq(new_time));
-        // b. add any indicated elements
-        while self.entrance.last().map(|x| x.1) == Some(self.cursor) {
-            self.frontier.push(self.entrance.pop().unwrap().0);
-        }
-
-        self.buffer.push(self.edits[self.cursor].clone());
-        self.cursor += 1; 
-
-    }
-    fn not_done(&self) -> bool { self.cursor < self.edits.len() }
 }
