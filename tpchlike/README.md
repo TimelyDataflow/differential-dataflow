@@ -6,6 +6,8 @@ The evaluation here is meant to mimic the evaluation done in ["How to Win a Hot 
 
 Our plan is to evenutally implement all of the queries, each a few different ways to demonstrate the awesome flexibility of differential dataflow, and to get measurements from each reflecting the amount of time taken. 
 
+---
+
 The program runs with the command line
 
     cargo run --release -- <path> <logical_batch> <physical_batch>
@@ -23,5 +25,7 @@ Here are some initial measurements on the scale factor 1 dataset (about 1GB of d
 | [query17](https://github.com/frankmcsherry/differential-dataflow/blob/master/tpchlike/src/queries/query17.rs) |  7.42s |  5.72s |   4.78s |      6,201,215 |
 
 *: It is very possible that I have botched some of the query implementations. I'm not validating the results at the moment, as I don't have much to validate against, but if you think you see bugs (or want to help validating) drop me a line! Please don't just go and use these measurements as "truth" until we find out if I am actually computing the correct answers.
+
+---
 
 The only comparisons I have at the moment are for those found at [dbtoaster.org](http://www.dbtoaster.org/index.php?page=home&subpage=performance) and in the [hot-dog eating paper](https://infoscience.epfl.ch/record/218203/files/sigmod2016-cr.pdf?version=1). However, I'm still trying to understand their results; for example, they report 100m+ tuples/second for `query06` and just 17 tuples/second for `query15`. Once I learn more about whether I am reading their results correctly, I'll try and post some comparisons.
