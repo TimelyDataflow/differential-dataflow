@@ -13,11 +13,20 @@ pub trait Ring : Add<Self, Output=Self> + Sub<Self, Output=Self> + Neg<Output=Se
 	fn zero() -> Self;
 }
 
-impl Ring for isize { 
+impl Ring for isize {
 	#[inline(always)] fn is_zero(&self) -> bool { *self == 0 }
 	#[inline(always)] fn zero() -> Self { 0 }
 }
 
+impl Ring for i64 {
+	#[inline(always)] fn is_zero(&self) -> bool { *self == 0 }
+	#[inline(always)] fn zero() -> Self { 0 }
+}
+
+impl Ring for i32 {
+	#[inline(always)] fn is_zero(&self) -> bool { *self == 0 }
+	#[inline(always)] fn zero() -> Self { 0 }
+}
 
 /// The ring defined by a pair of ring elements.
 #[derive(Copy, Ord, PartialOrd, Eq, PartialEq, Debug, Clone)]
