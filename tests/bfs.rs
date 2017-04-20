@@ -19,7 +19,7 @@ use differential_dataflow::lattice::Lattice;
 type Node = usize;
 type Edge = (Node, Node);
 
-#[test] fn bfs_10_20_1000() { test_sizes(10, 20, 1000); }
+#[test] fn bfs_10_20_1000() { test_sizes(10, 20, 200); }
 #[test] fn bfs_100_200_10() { test_sizes(100, 200, 10); }
 #[test] fn bfs_100_2000_1() { test_sizes(100, 2000, 1); }
 
@@ -48,6 +48,21 @@ fn test_sizes(nodes: usize, edges: usize, rounds: usize) {
     results1.sort_by(|x,y| x.1.cmp(&y.1));
     results2.sort();
     results2.sort_by(|x,y| x.1.cmp(&y.1));
+
+    if results1 != results2 {
+        println!("RESULTS INEQUAL!!!");
+        for x in &results1 { 
+            if !results2.contains(x) {
+                println!("  in seq, not diff: {:?}", x);
+            }
+        }
+        for x in &results2 { 
+            if !results1.contains(x) {
+                println!("  in diff, not seq: {:?}", x);
+            }
+        }
+
+    }
 
     assert_eq!(results1, results2);
 }

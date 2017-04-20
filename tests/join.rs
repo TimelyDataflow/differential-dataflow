@@ -77,6 +77,8 @@ fn antijoin() {
     assert_eq!(extracted[0].1, vec![((1,2), Default::default(),1)]);
 }
 
+#[test] fn join_scale_1() { join_scaling(1); }
+#[test] fn join_scale_10() { join_scaling(10); }
 #[test] fn join_scale_100() { join_scaling(100); }
 #[test] fn join_scale_1000() { join_scaling(1000); }
 #[test] fn join_scale_10000() { join_scaling(10000); }

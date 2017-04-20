@@ -271,10 +271,6 @@ impl<G: Scope, K: Data+Hashable, V: Data, R: Ring> Arrange<G, K, V, R> for Colle
 
             input.for_each(|cap, data| {
 
-                for &(_, ref time, _) in data.iter() {
-                    assert!(cap.time().le(time));
-                }
-
                 // add the capability to our list of capabilities.
                 capabilities.retain(|c| !c.time().gt(&cap.time()));
                 if !capabilities.iter().any(|c| c.time().le(&cap.time())) { 
@@ -284,82 +280,66 @@ impl<G: Scope, K: Data+Hashable, V: Data, R: Ring> Arrange<G, K, V, R> for Colle
                 batcher.push_batch(&mut data.replace_with(Vec::new()));
             });
 
-            // Because we can only use one capability per message, on each notification we will need
-            // to pull out the updates greater or equal to the notified time, and less than the current
-            // frontier. We may have to do this a few times with different notified times, creating 
-            // messages which could have been bundled into one, but that is how it is for the moment.
+            // Timely dataflow currently only allows one capability per message, and we may have multiple
+            // incomparable times for which we need to send data. This would normally require shattering
+            // all updates we might send into multiple batches, each associated with a capability. 
+            //
+            // Instead! We can cheat a bit. We can extract one batch, and just make sure to send all of 
+            // capabilities along in separate messages. This is a bit dubious, and we will want to make 
+            // sure that each operator that consumes batches (group, join, as_collection) understands this.
+            // 
+            // At the moment this is painful for non-group operators, who each rely on having the correct 
+            // capabilities at hand, and must find the right capability record-by-record otherwise. But, 
+            // something like this should ease some pain. (we could also just fix timely).
 
-            // Whenever there is a gap between our capabilities and the input frontier, we can (and should)
-            // extract the corresponding updates and produce a batch. Note, there may not actually be updates,
-            // due to cancelation, but we should discover this and advance the batcher's frontier nonetheless.
+            // If there is at least one capability no longer in advance of the input frontier ...
+            if capabilities.iter().any(|c| !notificator.frontier(0).iter().any(|t| t.le(&c.time()))) {
 
-            // We plan to advance our capabilities to match or exceed the input frontier. This means that 
-            // some updates must be transmitted. For each capability in turn, we extract the batch that 
-            // corresponds to the time interval to our capabilities just before and just after retiring 
-            // the capability. At the end of the process, all of our capabilities should be in line with 
-            // the input frontier, but we can (and must) advance them to track the lower envelope of the 
-            // updates in the batcher.
+                // For each capability not in advance of the input frontier ... 
+                for index in 0 .. capabilities.len() {
+                    if !notificator.frontier(0).iter().any(|t| t.le(&capabilities[index].time())) {
 
-            // We now swing through our capabilities, and determine which updates must be transmitted when
-            // we downgrade each capability to one matching our input frontier. If at any point we find a 
-            // non-empty batch whose lower envelope does not match `trace_upper`, we must add an empty 
-            // batch to the trace to ensure contiguity.
-
-            let mut sent_any = false;
-            for index in 0 .. capabilities.len() {
-
-                if !notificator.frontier(0).iter().any(|t| t == &capabilities[index].time()) {
-
-                    sent_any = true;
-
-                    // Assemble the upper frontier, from subsequent capabilities and the input frontier.
-                    // TODO: this is cubic, I think, and could be quadratic if we went in the reverse direction.
-                    // We would want to insert the batches in *this* order, though. Perhaps with clever sorting
-                    // and such we could get this to linear-ish (plus sorting). Not clear how expensive this 
-                    // will be until we understand how large frontiers end up being (could be unboundedly large).
-                    let mut upper = Vec::new();
-                    for after in (index + 1) .. capabilities.len() {
-                        upper.push(capabilities[after].time());
-                    }
-                    for time in notificator.frontier(0) {
-                        if !upper.iter().any(|t| t.le(time)) {
-                            upper.push(time.clone());
+                        // Assemble the upper bound on times we can commit with this capabilities.
+                        // This is determined both by the input frontier, and by subsequent capabilities
+                        // which may shadow this capability for some times.
+                        let mut upper = notificator.frontier(0).to_vec();
+                        for capability in &capabilities[(index + 1) .. ] {
+                            let time = capability.time();
+                            if !upper.iter().any(|t| t.le(&time)) {
+                                upper.retain(|t| !time.le(t));
+                                upper.push(time);
+                            }
                         }
+
+                        // Extract updates not in advance of `upper`.
+                        let batch = batcher.seal(&upper[..]);
+
+                        // If the source is still active, commit the extracted batch.
+                        // The source may become inactive if all downsteam users of the trace drop their references.
+                        source.upgrade().map(|trace| {
+                            let trace: &mut T = &mut trace.borrow_mut().trace;
+                            trace.insert(batch.clone())
+                        });
+
+                        // send the batch to downstream consumers, empty or not.
+                        output.session(&capabilities[index]).give(BatchWrapper { item: batch });
                     }
-
-                    // extract updates between `capabilities[index].time()` and `upper`.
-                    let batch = batcher.seal(&upper[..]);
-
-                    // If the source is still active, commit the extracted batch.
-                    // The source may become inactive if all downsteam users of the trace drop their references.
-                    source.upgrade().map(|trace| {
-                        let trace: &mut T = &mut trace.borrow_mut().trace;
-                        trace.insert(batch.clone())
-                    });
-
-                    // send the batch to downstream consumers, empty or not.
-                    output.session(&capabilities[index]).give(BatchWrapper { item: batch });
                 }
-            }
 
-            // The trace should now contain batches with intervals up to the input frontier. Test?
+                // Having extracted and sent batches between each capability and the input frontier,
+                // we should downgrade all capabilities to match the batcher's lower update frontier.
+                // This may involve discarding capabilities, which is fine as any new updates arrive 
+                // in messages with new capabilities.
 
-            // Having extracted and sent batches between each capability and the input frontier,
-            // we should advance all capabilities to match the batcher's lower update frontier.
-            // This may involve discarding capabilties, which is fine as any new updates arrive 
-            // in messages with new capabilities.
-
-            // TODO: Perhaps this could be optimized when not much changes?
-            if sent_any {
                 let mut new_capabilities = Vec::new();
                 for time in batcher.frontier() {
                     if let Some(capability) = capabilities.iter().find(|c| c.time().le(time)) {
                         new_capabilities.push(capability.delayed(time));
                     }
                 }
+
                 capabilities = new_capabilities;
             }
-
         });
 
         Arranged { stream: stream, trace: handle }
