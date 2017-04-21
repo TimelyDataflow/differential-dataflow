@@ -1,5 +1,8 @@
 //! Match pairs of records based on a key.
-
+//!
+//! The various `join` implementations require that the units of each collection can be multiplied, and that 
+//! the multiplication distributes over addition. That is, we will repeatedly evaluate (a + b) * c as (a * c)
+//! + (b * c), and if this is not equal to the former term, little is known about the actual output.
 use std::fmt::Debug;
 use std::ops::Mul;
 
