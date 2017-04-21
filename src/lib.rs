@@ -107,7 +107,7 @@ use std::fmt::Debug;
 
 pub use collection::{Collection, AsCollection};
 pub use hashable::Hashable;
-pub use ring::Ring;
+pub use difference::Diff;
 
 /// A composite trait for data types usable in differential dataflow.
 ///
@@ -135,6 +135,6 @@ pub mod operators;
 pub mod lattice;
 pub mod trace;
 pub mod input;
-pub mod ring;
+pub mod difference;
 mod collection;
 

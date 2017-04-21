@@ -10,7 +10,7 @@
 
 use std::rc::Rc;
 
-use ::Ring;
+use ::Diff;
 use hashable::Hashable;
 
 use trace::layers::{Trie, TupleBuilder};
@@ -42,7 +42,7 @@ pub struct OrdValBatch<K: Ord+Hashable, V: Ord, T: Lattice, R> {
 }
 
 impl<K, V, T, R> Batch<K, V, T, R> for OrdValBatch<K, V, T, R> 
-where K: Ord+Clone+Hashable, V: Ord+Clone, T: Lattice+Ord+Clone, R: Ring {
+where K: Ord+Clone+Hashable, V: Ord+Clone, T: Lattice+Ord+Clone, R: Diff {
 	type Batcher = RadixBatcher<K, V, T, R, Self>;
 	type Builder = OrdValBuilder<K, V, T, R>;
 	type Cursor = OrdValCursor<K, V, T, R>;
@@ -109,12 +109,12 @@ where K: Ord+Clone+Hashable, V: Ord+Clone, T: Lattice+Ord+Clone, R: Copy {
 
 
 /// A builder for creating layers from unsorted update tuples.
-pub struct OrdValBuilder<K: Ord+Hashable, V: Ord, T: Ord, R: Ring> {
+pub struct OrdValBuilder<K: Ord+Hashable, V: Ord, T: Ord, R: Diff> {
 	builder: OrderedBuilder<K, OrderedBuilder<V, UnorderedBuilder<(T, R)>>>,
 }
 
 impl<K, V, T, R> Builder<K, V, T, R, OrdValBatch<K, V, T, R>> for OrdValBuilder<K, V, T, R> 
-where K: Ord+Clone+Hashable, V: Ord+Clone, T: Lattice+Ord+Clone, R: Ring {
+where K: Ord+Clone+Hashable, V: Ord+Clone, T: Lattice+Ord+Clone, R: Diff {
 
 	fn new() -> Self { 
 		OrdValBuilder { 
@@ -154,7 +154,7 @@ pub struct OrdKeyBatch<K: Ord+Hashable, T: Lattice, R> {
 }
 
 impl<K, T, R> Batch<K, (), T, R> for OrdKeyBatch<K, T, R> 
-where K: Ord+Clone+Hashable, T: Lattice+Ord+Clone, R: Ring {
+where K: Ord+Clone+Hashable, T: Lattice+Ord+Clone, R: Diff {
 	type Batcher = RadixBatcher<K, (), T, R, Self>;
 	type Builder = OrdKeyBuilder<K, T, R>;
 	type Cursor = OrdKeyCursor<K, T, R>;
@@ -222,12 +222,12 @@ impl<K: Ord+Clone+Hashable, T: Lattice+Ord+Clone, R: Copy> Cursor<K, (), T, R> f
 
 
 /// A builder for creating layers from unsorted update tuples.
-pub struct OrdKeyBuilder<K: Ord, T: Ord, R: Ring> {
+pub struct OrdKeyBuilder<K: Ord, T: Ord, R: Diff> {
 	builder: OrderedBuilder<K, UnorderedBuilder<(T, R)>>,
 }
 
 impl<K, T, R> Builder<K, (), T, R, OrdKeyBatch<K, T, R>> for OrdKeyBuilder<K, T, R> 
-where K: Ord+Clone+Hashable, T: Lattice+Ord+Clone, R: Ring {
+where K: Ord+Clone+Hashable, T: Lattice+Ord+Clone, R: Diff {
 
 	fn new() -> Self { 
 		OrdKeyBuilder { 

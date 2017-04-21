@@ -12,7 +12,7 @@ pub mod description;
 pub mod implementations;
 pub mod layers;
 
-use ::Ring;
+use ::Diff;
 use ::lattice::Lattice;
 pub use self::cursor::Cursor;
 pub use self::description::Description;
@@ -125,7 +125,7 @@ pub trait Batch<K, V, T, R> where Self: ::std::marker::Sized {
 	/// All times in the batch are not greater or equal to any element of `upper`.
 	fn upper(&self) -> &[T] { self.description().upper() }
 	/// Advance times to `frontier` creating a new batch.
-	fn advance_ref(&self, frontier: &[T]) -> Self where K: Ord+Clone, V: Ord+Clone, T: Lattice+Ord+Clone, R: Ring {
+	fn advance_ref(&self, frontier: &[T]) -> Self where K: Ord+Clone, V: Ord+Clone, T: Lattice+Ord+Clone, R: Diff {
 
 		assert!(frontier.len() > 0);
 
@@ -156,7 +156,7 @@ pub trait Batch<K, V, T, R> where Self: ::std::marker::Sized {
 	/// commonly invoked just after a batch is formed from a merge and when there is a unique owner 
 	/// of the shared state. 
 	#[inline(never)]
-	fn advance_mut(&mut self, frontier: &[T]) where K: Ord+Clone, V: Ord+Clone, T: Lattice+Ord+Clone, R: Ring {
+	fn advance_mut(&mut self, frontier: &[T]) where K: Ord+Clone, V: Ord+Clone, T: Lattice+Ord+Clone, R: Diff {
 		*self = self.advance_ref(frontier);
 	}
 }
@@ -190,13 +190,13 @@ pub trait Builder<K, V, T, R, Output: Batch<K, V, T, R>> {
 }
 
 /// Scans `vec[off..]` and consolidates differences of adjacent equivalent elements.
-pub fn consolidate<T: Ord+Clone, R: Ring>(vec: &mut Vec<(T, R)>, off: usize) {
+pub fn consolidate<T: Ord+Clone, R: Diff>(vec: &mut Vec<(T, R)>, off: usize) {
 	consolidate_by(vec, off, |x,y| x.cmp(&y));
 }
 
 
 /// Scans `vec[off..]` and consolidates differences of adjacent equivalent elements.
-pub fn consolidate_by<T: Eq+Clone, L: Fn(&T, &T)->::std::cmp::Ordering, R: Ring>(vec: &mut Vec<(T, R)>, off: usize, cmp: L) {
+pub fn consolidate_by<T: Eq+Clone, L: Fn(&T, &T)->::std::cmp::Ordering, R: Diff>(vec: &mut Vec<(T, R)>, off: usize, cmp: L) {
 	vec[off..].sort_by(|x,y| cmp(&x.0, &y.0));
 	for index in (off + 1) .. vec.len() {
 		if vec[index].0 == vec[index - 1].0 {

@@ -36,7 +36,7 @@ use timely_sort::Unsigned;
 
 use hashable::{HashableWrapper, OrdWrapper};
 
-use ::{Data, Ring, Collection, AsCollection, Hashable};
+use ::{Data, Diff, Collection, AsCollection, Hashable};
 use lattice::Lattice;
 use trace::{Trace, Batch, Batcher, Cursor};
 use trace::implementations::hash::HashValSpine as DefaultValTrace;
@@ -203,7 +203,7 @@ impl<G: Scope, K, V, R, T: Trace<K, V, G::Timestamp, R>> Arranged<G, K, V, R, T>
     /// supplied as arguments to an operator using the same key-value structure.
     pub fn as_collection<D: Data, L>(&self, logic: L) -> Collection<G, D, R>
         where
-            R: Ring,
+            R: Diff,
             T::Batch: Clone+'static,
             K: Clone, V: Clone,
             L: Fn(&K, &V) -> D+'static,
@@ -234,7 +234,7 @@ impl<G: Scope, K, V, R, T: Trace<K, V, G::Timestamp, R>> Arranged<G, K, V, R, T>
 }
 
 /// Arranges something as `(Key,Val)` pairs according to a type `T` of trace.
-pub trait Arrange<G: Scope, K, V, R: Ring> where G::Timestamp: Lattice+Ord {
+pub trait Arrange<G: Scope, K, V, R: Diff> where G::Timestamp: Lattice+Ord {
     /// Arranges a stream of `(Key, Val)` updates by `Key`. Accepts an empty instance of the trace type.
     ///
     /// This operator arranges a stream of values into a shared trace, whose contents it maintains.
@@ -245,7 +245,7 @@ pub trait Arrange<G: Scope, K, V, R: Ring> where G::Timestamp: Lattice+Ord {
             T: Trace<K, V, G::Timestamp, R>+'static;
 }
 
-impl<G: Scope, K: Data+Hashable, V: Data, R: Ring> Arrange<G, K, V, R> for Collection<G, (K, V), R> where G::Timestamp: Lattice+Ord {
+impl<G: Scope, K: Data+Hashable, V: Data, R: Diff> Arrange<G, K, V, R> for Collection<G, (K, V), R> where G::Timestamp: Lattice+Ord {
 
     fn arrange<T>(&self, empty_trace: T) -> Arranged<G, K, V, R, T> 
         where 
@@ -351,7 +351,7 @@ impl<G: Scope, K: Data+Hashable, V: Data, R: Ring> Arrange<G, K, V, R> for Colle
 /// This arrangement requires `Key: Hashable`, and uses the `hashed()` method to place keys in a hashed
 /// map. This can result in many hash calls, and in some cases it may help to first transform `K` to the
 /// pair `(u64, K)` of hash value and key.
-pub trait ArrangeByKey<G: Scope, K: Data+Default+Hashable, V: Data, R: Ring> 
+pub trait ArrangeByKey<G: Scope, K: Data+Default+Hashable, V: Data, R: Diff> 
 where G::Timestamp: Lattice+Ord {
     /// Arranges a collection of `(Key, Val)` records by `Key`.
     ///
@@ -368,7 +368,7 @@ where G::Timestamp: Lattice+Ord {
     where <K as Hashable>::Output: Default+Data;
 }
 
-impl<G: Scope, K: Data+Default+Hashable, V: Data, R: Ring> ArrangeByKey<G, K, V, R> for Collection<G, (K,V), R>
+impl<G: Scope, K: Data+Default+Hashable, V: Data, R: Diff> ArrangeByKey<G, K, V, R> for Collection<G, (K,V), R>
 where G::Timestamp: Lattice+Ord {        
     fn arrange_by_key_hashed(&self) -> Arranged<G, OrdWrapper<K>, V, R, DefaultValTrace<OrdWrapper<K>, V, G::Timestamp, R>> {
         self.map(|(k,v)| (OrdWrapper {item:k},v))
@@ -386,7 +386,7 @@ where G::Timestamp: Lattice+Ord {
 /// This arrangement requires `Key: Hashable`, and uses the `hashed()` method to place keys in a hashed
 /// map. This can result in many hash calls, and in some cases it may help to first transform `K` to the
 /// pair `(u64, K)` of hash value and key.
-pub trait ArrangeBySelf<G: Scope, K: Data+Default+Hashable, R: Ring> 
+pub trait ArrangeBySelf<G: Scope, K: Data+Default+Hashable, R: Diff> 
 where G::Timestamp: Lattice+Ord {
     /// Arranges a collection of `Key` records by `Key`.
     ///
@@ -397,7 +397,7 @@ where G::Timestamp: Lattice+Ord {
 }
 
 
-impl<G: Scope, K: Data+Default+Hashable, R: Ring> ArrangeBySelf<G, K, R> for Collection<G, K, R>
+impl<G: Scope, K: Data+Default+Hashable, R: Diff> ArrangeBySelf<G, K, R> for Collection<G, K, R>
 where G::Timestamp: Lattice+Ord {
     fn arrange_by_self(&self) -> Arranged<G, OrdWrapper<K>, (), R, DefaultKeyTrace<OrdWrapper<K>, G::Timestamp, R>> {
         self.map(|k| (OrdWrapper {item:k}, ()))
