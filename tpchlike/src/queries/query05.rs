@@ -7,6 +7,7 @@ use differential_dataflow::operators::*;
 use differential_dataflow::lattice::Lattice;
 
 use ::Collections;
+use ::types::create_date;
 
 // -- $ID$
 // -- TPC-H/TPC-R Local Supplier Volume Query (Q5)
@@ -40,15 +41,8 @@ use ::Collections;
 //     revenue desc;
 // :n -1
 
-
 fn starts_with(source: &[u8], query: &[u8]) -> bool {
     source.len() >= query.len() && &source[..query.len()] == query
-}
-
-fn substring(source: &[u8], query: &[u8]) -> bool {
-    (0 .. (source.len() - query.len())).any(|offset| 
-        (0 .. query.len()).all(|i| source[i + offset] == query[i])
-    )
 }
 
 pub fn query<G: Scope>(collections: &Collections<G>) -> ProbeHandle<G::Timestamp> 
@@ -71,8 +65,8 @@ where G::Timestamp: Lattice+Ord {
     collections
         .suppliers
         .map(|x| (x.nation_key, x.supp_key))
-        .semijoin(&nations.map(|x| x.0))
-        .map(|(nat, supp)| (supp, nat));
+        .join(&nations)
+        .map(|(nat, supp, name)| (supp, (nat, name)));
 
     let customers = 
     collections
@@ -84,22 +78,22 @@ where G::Timestamp: Lattice+Ord {
     let orders =
     collections
         .orders
-        .filter(|o| o.order_date >= ::types::create_date(1994, 1, 1) && o.order_date < ::types::create_date(1995, 1, 1))
+        .filter(|o| o.order_date >= create_date(1994, 1, 1) && o.order_date < create_date(1995, 1, 1))
         .map(|o| (o.cust_key, o.order_key))
         .semijoin(&customers)
         .map(|o| o.1);
 
-    collections
+    let lineitems = collections
         .lineitems
-        .map(|l| (l.order_key, (l.supp_key, l.extended_price * (100 - l.discount) / 100)))
-        .semijoin(&orders)
-        .map(|(order, (supp, price))| (supp, price))
-        .join(&suppliers)
-        .map(|(supp, price, nat)| (nat, price))
-        .join(&nations)
         .inner
-        .map(|((nat, price, name), time, diff)| (name, time, price * diff as i64))
+        .map(|(l,t,d)| ((l.order_key, l.supp_key), t, d * (l.extended_price * (100 - l.discount) / 100) as isize))
         .as_collection()
+        .semijoin(&orders)
+        .map(|(order, supp)| supp);
+
+    suppliers
+        .semijoin(&lineitems)
+        .map(|(supp, (nat, name))| name)
         .count()
         .probe()
         .0

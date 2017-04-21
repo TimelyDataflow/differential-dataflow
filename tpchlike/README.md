@@ -12,7 +12,7 @@ The program runs with the command line
 
     cargo run --release -- <path> <logical_batch> <physical_batch>
 
-and looks in `<path>` for the various TPC-H files (e.g. `lineitem.tbl`). If you don't have these files, you can grab the generator at the TPC-H link up above. The `logical_batch` argument merges rounds of input and changes the output of the computation; we try to use `1` for the most part, which acts as if each tuple were introduced independently. The `physical_batch` argument indicates how many logical rounds should be introduced concurrently; increasing this argument can increase the throughput at the expense of latency.
+and looks in `<path>` for the various TPC-H files (e.g. `lineitem.tbl`). If you don't have these files, you can grab the generator at the TPC-H link up above. The `logical_batch` argument merges rounds of input and changes the output of the computation; we try to use `1` for the most part, which acts as if each tuple were introduced independently. The `physical_batch` argument indicates how many logical rounds should be introduced concurrently; increasing this argument can increase the throughput at the expense of latency, but will not change the output of the computation.
 
 Here are some initial measurements on the scale factor 1 dataset (about 1GB of data, and six million tuples in the `lineitem` relation), as we vary the physical batching (varying the concurrent work). We also report the number of tuples in the base relations used by the query (though our harness currently inserts all tuples into all relations anyhow; oops).*
 
@@ -22,7 +22,7 @@ Here are some initial measurements on the scale factor 1 dataset (about 1GB of d
 | [query02](https://github.com/frankmcsherry/differential-dataflow/blob/master/tpchlike/src/queries/query02.rs) |  2.29s |  1.72s |   1.61s |      1,010,030 |
 | [query03](https://github.com/frankmcsherry/differential-dataflow/blob/master/tpchlike/src/queries/query03.rs) |  2.81s |  2.61s |  2.46s |      7,651,215 |
 | [query04](https://github.com/frankmcsherry/differential-dataflow/blob/master/tpchlike/src/queries/query04.rs) |  6.83s |  5.80s |  3.72s |      7,501,215 |
-| [query05](https://github.com/frankmcsherry/differential-dataflow/blob/master/tpchlike/src/queries/query05.rs) |  5.81s |  5.67s |  4.13s |      7,661,245 |
+| [query05](https://github.com/frankmcsherry/differential-dataflow/blob/master/tpchlike/src/queries/query05.rs) |  5.23s |  4.57s |  3.82s |      7,661,245 |
 | [query06](https://github.com/frankmcsherry/differential-dataflow/blob/master/tpchlike/src/queries/query06.rs) |  1.29s |  1.35s |   1.49s |      6,001,215 |
 | [query15](https://github.com/frankmcsherry/differential-dataflow/blob/master/tpchlike/src/queries/query15.rs) | 73.12s | 67.15s |  84.63s |      6,011,215 |
 | [query17](https://github.com/frankmcsherry/differential-dataflow/blob/master/tpchlike/src/queries/query17.rs) |  7.42s |  5.72s |   4.78s |      6,201,215 |
@@ -30,7 +30,7 @@ Here are some initial measurements on the scale factor 1 dataset (about 1GB of d
 
 *: It is very possible that I have botched some of the query implementations. I'm not validating the results at the moment, as I don't have much to validate against, but if you think you see bugs (or want to help validating) drop me a line! Please don't just go and use these measurements as "truth" until we find out if I am actually computing the correct answers.
 
-**: I'm not doing any multi-query optimization, so this is probably close to the sum of times. It is maintaining all of the queries consistently as the tuples flow in, though.
+**: I'm not doing any multi-query optimization, so this is probably close to the sum of times. It is maintaining all of the queries consistently as the tuples flow in, though. It may also be a bit stale as I roll out more queries.
 
 ---
 
