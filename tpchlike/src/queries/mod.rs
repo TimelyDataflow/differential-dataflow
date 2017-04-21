@@ -5,5 +5,7 @@ pub mod query04;
 pub mod query05;
 pub mod query06;
 pub mod query07;
+pub mod query08;
 pub mod query15;
 pub mod query17;
+pub mod query19;
