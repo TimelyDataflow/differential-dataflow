@@ -7,7 +7,7 @@ use timely::dataflow::scopes::Child;
 use timely::dataflow::{Scope, Stream};
 use timely::dataflow::operators::*;
 
-use ::Ring;
+use ::Diff;
 
 /// A mutable collection of values of type `D`
 ///
@@ -16,12 +16,12 @@ use ::Ring;
 /// However, this can be more general, which is useful when one wants to accumulate values 
 /// other than counts, for example the sums of various quantities (e.g. computing an average).
 #[derive(Clone)]
-pub struct Collection<G: Scope, D, R: Ring = isize> {
+pub struct Collection<G: Scope, D, R: Diff = isize> {
     /// Underlying timely dataflow stream.
     pub inner: Stream<G, (D, G::Timestamp, R)>
 }
 
-impl<G: Scope, D: Data, R: Ring> Collection<G, D, R> where G::Timestamp: Data {
+impl<G: Scope, D: Data, R: Diff> Collection<G, D, R> where G::Timestamp: Data {
     /// Creates a new Collection from a timely dataflow stream.
     pub fn new(stream: Stream<G, (D, G::Timestamp, R)>) -> Collection<G, D, R> {
         Collection { inner: stream }
@@ -105,7 +105,7 @@ impl<G: Scope, D: Data, R: Ring> Collection<G, D, R> where G::Timestamp: Data {
     }
 }
 
-impl<'a, G: Scope, T: Timestamp, D: Data, R: Ring> Collection<Child<'a, G, T>, D, R> {
+impl<'a, G: Scope, T: Timestamp, D: Data, R: Diff> Collection<Child<'a, G, T>, D, R> {
     /// Returns the final value of a Collection from a nested scope to its containing scope.
     pub fn leave(&self) -> Collection<G, D, R> {
         self.inner.leave()
@@ -115,12 +115,12 @@ impl<'a, G: Scope, T: Timestamp, D: Data, R: Ring> Collection<Child<'a, G, T>, D
 }
 
 /// Conversion to a differential dataflow Collection.
-pub trait AsCollection<G: Scope, D: Data, R: Ring> {
+pub trait AsCollection<G: Scope, D: Data, R: Diff> {
     /// Conversion to a differential dataflow Collection.
     fn as_collection(&self) -> Collection<G, D, R>;
 }
 
-impl<G: Scope, D: Data, R: Ring> AsCollection<G, D, R> for Stream<G, (D, G::Timestamp, R)> {
+impl<G: Scope, D: Data, R: Diff> AsCollection<G, D, R> for Stream<G, (D, G::Timestamp, R)> {
     fn as_collection(&self) -> Collection<G, D, R> {
         Collection::new(self.clone())
     }

@@ -5,7 +5,7 @@ extern crate differential_dataflow;
 use timely::dataflow::*;
 use timely::dataflow::operators::*;
 
-use differential_dataflow::ring::RingPair;
+use differential_dataflow::difference::DiffPair;
 use differential_dataflow::AsCollection;
 use differential_dataflow::operators::Consolidate;
 
@@ -27,7 +27,7 @@ fn main() {
             let (input, data) = scope.new_input::<((usize, isize), isize)>();
 
             // move `val` into the ring component.
-            data.map(|((x,y),d)| (x, Default::default(), RingPair::new(y,d)))
+            data.map(|((x,y),d)| (x, Default::default(), DiffPair::new(y,d)))
 				.as_collection()
                 .consolidate();
 

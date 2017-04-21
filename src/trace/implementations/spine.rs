@@ -4,7 +4,7 @@
 //! immutable batches of updates. It is generic with respect to the batch type, and can be 
 //! instantiated for any implementor of `trace::Batch`.
 
-use ::Ring;
+use ::Diff;
 use lattice::Lattice;
 use trace::{Batch, Trace};
 use trace::cursor::cursor_list::CursorList;
@@ -15,7 +15,7 @@ use trace::cursor::cursor_list::CursorList;
 /// two have similar sizes. In this way, it allows the addition of more tuples, which may then be merged with
 /// other immutable collections. 
 #[derive(Debug)]
-pub struct Spine<K, V, T: Lattice+Ord, R: Ring, B: Batch<K, V, T, R>> {
+pub struct Spine<K, V, T: Lattice+Ord, R: Diff, B: Batch<K, V, T, R>> {
 	phantom: ::std::marker::PhantomData<(K, V, R)>,
 	advance_frontier: Vec<T>,	// Times after which the trace must accumulate correctly.
 	through_frontier: Vec<T>,	// Times after which the trace must be able to subset its inputs.
@@ -30,7 +30,7 @@ where
 	K: Ord+Clone,			// Clone is required by `batch::advance_*` (in-place could remove).
 	V: Ord+Clone,			// Clone is required by `batch::advance_*` (in-place could remove).
 	T: Lattice+Ord+Clone,	// Clone is required by `advance_by` and `batch::advance_*`.
-	R: Ring,
+	R: Diff,
 	B: Batch<K, V, T, R>+Clone+'static,
 {
 	type Batch = B;
@@ -107,7 +107,7 @@ where
 	K: Ord+Clone,			// Clone is required by `advance_mut`.
 	V: Ord+Clone,			// Clone is required by `advance_mut`.
 	T: Lattice+Ord+Clone,	// Clone is required by `advance_mut`.
-	R: Ring,
+	R: Diff,
 	B: Batch<K, V, T, R>,
 {
 	// Migrate data from `self.pending` into `self.merging`.

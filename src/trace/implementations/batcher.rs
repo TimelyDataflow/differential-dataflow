@@ -3,14 +3,14 @@
 use timely::progress::frontier::Antichain;
 use timely_sort::{MSBRadixSorter, RadixSorterBase};
 
-use ::Ring;
+use ::Diff;
 use hashable::Hashable;
 
 use lattice::Lattice;
 use trace::{Batch, Batcher, Builder};
 
 /// Creates batches from unordered tuples.
-pub struct RadixBatcher<K: Hashable, V, T: PartialOrd, R: Ring, B: Batch<K, V, T, R>> {
+pub struct RadixBatcher<K: Hashable, V, T: PartialOrd, R: Diff, B: Batch<K, V, T, R>> {
     phantom: ::std::marker::PhantomData<B>,
     buffers: Vec<Vec<((K, V), T, R)>>,
     sorted: usize,
@@ -25,7 +25,7 @@ where
     K: Ord+Clone+Hashable, 
     V: Ord+Clone,
     T: Lattice+Ord+Clone,
-    R: Ring,
+    R: Diff,
     B: Batch<K, V, T, R> 
 {
     // Provides an allocated buffer, either from stash or through allocation.
@@ -91,7 +91,7 @@ where
     K: Ord+Clone+Hashable, 
     V: Ord+Clone,
     T: Lattice+Ord+Clone,
-    R: Ring,
+    R: Diff,
     B: Batch<K, V, T, R>, 
 {
     fn new() -> Self { 
@@ -182,7 +182,7 @@ where
 
 /// Scans `vec[off..]` and consolidates differences of adjacent equivalent elements.
 #[inline(always)]
-fn consolidate_vec<K: Ord+Hashable+Clone, V: Ord+Clone, T:Ord+Clone, R: Ring>(slice: &mut Vec<((K,V),T,R)>) {
+fn consolidate_vec<K: Ord+Hashable+Clone, V: Ord+Clone, T:Ord+Clone, R: Diff>(slice: &mut Vec<((K,V),T,R)>) {
 
     // IMPORTANT: This needs to order by the key's Hashable implementation!
     slice.sort_by(|&((ref k1, ref v1), ref t1, _),&((ref k2, ref v2), ref t2, _)| 

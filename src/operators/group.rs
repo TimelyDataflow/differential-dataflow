@@ -35,7 +35,7 @@ use std::fmt::Debug;
 use std::default::Default;
 
 use hashable::{Hashable, UnsignedWrapper};
-use ::{Data, Collection, Ring};
+use ::{Data, Collection, Diff};
 
 use timely::dataflow::*;
 use timely::dataflow::operators::Unary;
@@ -54,25 +54,25 @@ use trace::implementations::ord::OrdKeySpine as DefaultKeyTrace;
 
 
 /// Extension trait for the `group` differential dataflow method.
-pub trait Group<G: Scope, K: Data, V: Data, R: Ring> where G::Timestamp: Lattice+Ord {
+pub trait Group<G: Scope, K: Data, V: Data, R: Diff> where G::Timestamp: Lattice+Ord {
     /// Groups records by their first field, and applies reduction logic to the associated values.
-    fn group<L, V2: Data, R2: Ring>(&self, logic: L) -> Collection<G, (K, V2), R2>
+    fn group<L, V2: Data, R2: Diff>(&self, logic: L) -> Collection<G, (K, V2), R2>
         where L: Fn(&K, &[(V, R)], &mut Vec<(V2, R2)>)+'static;
     /// Groups records by their first field, and applies reduction logic to the associated values.
-    fn group_u<L, V2: Data, R2: Ring>(&self, logic: L) -> Collection<G, (K, V2), R2>
+    fn group_u<L, V2: Data, R2: Diff>(&self, logic: L) -> Collection<G, (K, V2), R2>
         where L: Fn(&K, &[(V, R)], &mut Vec<(V2, R2)>)+'static, K: Unsigned+Copy;
 }
 
-impl<G: Scope, K: Data+Default+Hashable, V: Data, R: Ring> Group<G, K, V, R> for Collection<G, (K, V), R> 
+impl<G: Scope, K: Data+Default+Hashable, V: Data, R: Diff> Group<G, K, V, R> for Collection<G, (K, V), R> 
     where G::Timestamp: Lattice+Ord+Debug, <K as Hashable>::Output: Data+Default {
-    fn group<L, V2: Data, R2: Ring>(&self, logic: L) -> Collection<G, (K, V2), R2>
+    fn group<L, V2: Data, R2: Diff>(&self, logic: L) -> Collection<G, (K, V2), R2>
         where L: Fn(&K, &[(V, R)], &mut Vec<(V2, R2)>)+'static {
         // self.arrange_by_key_hashed_cached()
         self.arrange_by_key_hashed()
             .group_arranged(move |k,s,t| logic(&k.item,s,t), DefaultValTrace::new())
             .as_collection(|k,v| (k.item.clone(), v.clone()))
     }
-    fn group_u<L, V2: Data, R2: Ring>(&self, logic: L) -> Collection<G, (K, V2), R2>
+    fn group_u<L, V2: Data, R2: Diff>(&self, logic: L) -> Collection<G, (K, V2), R2>
         where L: Fn(&K, &[(V, R)], &mut Vec<(V2, R2)>)+'static, K: Unsigned+Copy {
         self.map(|(k,v)| (UnsignedWrapper::from(k), v))
             .arrange(DefaultValTrace::new())
@@ -106,14 +106,14 @@ where G::Timestamp: Lattice+Ord+::std::fmt::Debug {
 
 
 /// Extension trait for the `count` differential dataflow method.
-pub trait Count<G: Scope, K: Data, R: Ring> where G::Timestamp: Lattice+Ord {
+pub trait Count<G: Scope, K: Data, R: Diff> where G::Timestamp: Lattice+Ord {
     /// Counts the number of occurrences of each element.
     fn count(&self) -> Collection<G, (K, R), isize>;
     /// Counts the number of occurrences of each element.
     fn count_u(&self) -> Collection<G, (K, R), isize> where K: Unsigned+Copy;
 }
 
-impl<G: Scope, K: Data+Default+Hashable, R: Ring> Count<G, K, R> for Collection<G, K, R>
+impl<G: Scope, K: Data+Default+Hashable, R: Diff> Count<G, K, R> for Collection<G, K, R>
  where G::Timestamp: Lattice+Ord+::std::fmt::Debug {
     fn count(&self) -> Collection<G, (K, R), isize> {
         self.arrange_by_self()
@@ -130,18 +130,18 @@ impl<G: Scope, K: Data+Default+Hashable, R: Ring> Count<G, K, R> for Collection<
 
 
 /// Extension trace for the group_arranged differential dataflow method.
-pub trait GroupArranged<G: Scope, K: Data, V: Data, R: Ring> where G::Timestamp: Lattice+Ord {
+pub trait GroupArranged<G: Scope, K: Data, V: Data, R: Diff> where G::Timestamp: Lattice+Ord {
     /// Applies `group` to arranged data, and returns an arrangement of output data.
     fn group_arranged<L, V2, T2, R2>(&self, logic: L, empty: T2) -> Arranged<G, K, V2, R2, T2>
         where
             V2: Data,
-            R2: Ring,
+            R2: Diff,
             T2: Trace<K, V2, G::Timestamp, R2>+'static,
             L: Fn(&K, &[(V, R)], &mut Vec<(V2, R2)>)+'static
             ; 
 }
 
-impl<G: Scope, K: Data, V: Data, T1, R: Ring> GroupArranged<G, K, V, R> for Arranged<G, K, V, R, T1>
+impl<G: Scope, K: Data, V: Data, T1, R: Diff> GroupArranged<G, K, V, R> for Arranged<G, K, V, R, T1>
 where 
     G::Timestamp: Lattice+Ord,
     T1: Trace<K, V, G::Timestamp, R>+'static {
@@ -149,7 +149,7 @@ where
     fn group_arranged<L, V2, T2, R2>(&self, logic: L, empty: T2) -> Arranged<G, K, V2, R2, T2>
         where 
             V2: Data,
-            R2: Ring,
+            R2: Diff,
             T2: Trace<K, V2, G::Timestamp, R2>+'static,
             L: Fn(&K, &[(V, R)], &mut Vec<(V2, R2)>)+'static {
 
@@ -485,7 +485,7 @@ fn segment<T, F: Fn(&T)->bool>(source: &mut Vec<T>, dest1: &mut Vec<T>, dest2: &
 }
 
 #[inline(never)]
-fn consolidate<T: Ord, R: Ring>(list: &mut Vec<(T, R)>) {
+fn consolidate<T: Ord, R: Diff>(list: &mut Vec<(T, R)>) {
     list.sort_by(|x,y| x.0.cmp(&y.0));
     for index in 1 .. list.len() {
         if list[index].0 == list[index-1].0 {
@@ -498,7 +498,7 @@ fn consolidate<T: Ord, R: Ring>(list: &mut Vec<(T, R)>) {
 
 /// Scans `vec[off..]` and consolidates differences of adjacent equivalent elements.
 // #[inline(never)]
-pub fn consolidate_from<T: Ord+Clone, R: Ring>(vec: &mut Vec<(T, R)>, off: usize) {
+pub fn consolidate_from<T: Ord+Clone, R: Diff>(vec: &mut Vec<(T, R)>, off: usize) {
 
     // We should do an insertion-sort like initial scan which builds up sorted, consolidated runs.
     // In a world where there are not many results, we may never even need to call in to merge sort.
@@ -527,8 +527,8 @@ where
     V1: Ord+Clone,
     V2: Ord+Clone,
     T: Lattice+Ord+Clone,
-    R1: Ring,
-    R2: Ring,
+    R1: Diff,
+    R2: Diff,
 {
     fn new() -> Self;
     fn compute<K, C1, C2, C3, L>(
@@ -559,7 +559,7 @@ mod history_replay {
 
     // use timely::progress::frontier::Antichain;
 
-    use ::Ring;
+    use ::Diff;
     use lattice::Lattice;
     use trace::Cursor;
     use operators::ValueHistory2;
@@ -573,8 +573,8 @@ mod history_replay {
         V1: Ord+Clone,
         V2: Ord+Clone,
         T: Lattice+Ord+Clone,
-        R1: Ring,
-        R2: Ring,
+        R1: Diff,
+        R2: Diff,
     {
         batch_history: ValueHistory2<V1, T, R1>,
         input_history: ValueHistory2<V1, T, R1>,
@@ -595,8 +595,8 @@ mod history_replay {
         V1: Ord+Clone+Debug,
         V2: Ord+Clone+Debug,
         T: Lattice+Ord+Clone+Debug,
-        R1: Ring+Debug,
-        R2: Ring+Debug,
+        R1: Diff+Debug,
+        R2: Diff+Debug,
     {
         fn new() -> Self {
             HistoryReplayer { 
@@ -899,7 +899,7 @@ mod history_replay_prior {
     use std::fmt::Debug;
     use std::cmp::Ordering;
 
-    use ::Ring;
+    use ::Diff;
     use lattice::Lattice;
     use trace::Cursor;
 
@@ -912,8 +912,8 @@ mod history_replay_prior {
         V1: Ord+Clone,
         V2: Ord+Clone,
         T: Lattice+Ord+Clone,
-        R1: Ring,
-        R2: Ring,
+        R1: Diff,
+        R2: Diff,
     {
         batch_history: CollectionHistory<V1, T, R1>,
         input_history: CollectionHistory<V1, T, R1>,
@@ -934,8 +934,8 @@ mod history_replay_prior {
         V1: Ord+Clone+Debug,
         V2: Ord+Clone+Debug,
         T: Lattice+Ord+Clone+Debug,
-        R1: Ring+Debug,
-        R2: Ring+Debug,
+        R1: Diff+Debug,
+        R2: Diff+Debug,
     {
         fn new() -> Self {
             HistoryReplayer { 
@@ -1340,14 +1340,14 @@ mod history_replay_prior {
         upper: usize,
     }
 
-    struct CollectionHistory<V: Clone, T: Lattice+Ord+Clone, R: Ring> {
+    struct CollectionHistory<V: Clone, T: Lattice+Ord+Clone, R: Diff> {
         pub values: Vec<ValueHistory<V>>,
         pub actions: Vec<(T, usize)>,
         action_cursor: usize,
         pub times: Vec<(T, R)>,
     }
 
-    impl<V: Clone, T: Lattice+Ord+Clone+Debug, R: Ring> CollectionHistory<V, T, R> {
+    impl<V: Clone, T: Lattice+Ord+Clone+Debug, R: Diff> CollectionHistory<V, T, R> {
         fn new() -> Self {
             CollectionHistory {
                 values: Vec::new(),

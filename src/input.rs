@@ -1,12 +1,12 @@
 //! Input session to simplify high resolution input.
 
-use ::{Data, Ring};
+use ::{Data, Diff};
 use timely::progress::Timestamp;
 use timely::progress::timestamp::RootTimestamp;
 use timely::progress::nested::product::Product;
 
 /// An input session wrapping a single timely dataflow timestamp.
-pub struct InputSession<'a, T: Timestamp+Ord+Clone, D: Data, R: Ring> {
+pub struct InputSession<'a, T: Timestamp+Ord+Clone, D: Data, R: Diff> {
 	time: Product<RootTimestamp, T>,
 	buffer: Vec<(D, Product<RootTimestamp, T>, R)>,
 	handle: &'a mut ::timely::dataflow::operators::input::Handle<T,(D,Product<RootTimestamp, T>,R)>,
@@ -19,7 +19,7 @@ impl<'a, T: Timestamp+Ord+Clone, D: Data> InputSession<'a, T, D, isize> {
 	pub fn remove(&mut self, element: D) { self.update(element,-1); }
 }
 
-impl<'a, T: Timestamp+Ord+Clone, D: Data, R: Ring> InputSession<'a, T, D, R> {
+impl<'a, T: Timestamp+Ord+Clone, D: Data, R: Diff> InputSession<'a, T, D, R> {
 
 	/// Creates a new session from a reference to an input handle.
 	pub fn from(handle: &'a mut ::timely::dataflow::operators::input::Handle<T,(D,Product<RootTimestamp, T>,R)>) -> Self {
@@ -62,7 +62,7 @@ impl<'a, T: Timestamp+Ord+Clone, D: Data, R: Ring> InputSession<'a, T, D, R> {
 	pub fn time(&self) -> &Product<RootTimestamp, T> { &self.time }
 }
 
-impl<'a, T: Timestamp+Ord+Clone, D: Data, R: Ring> Drop for InputSession<'a, T, D, R> {
+impl<'a, T: Timestamp+Ord+Clone, D: Data, R: Diff> Drop for InputSession<'a, T, D, R> {
 	fn drop(&mut self) {
 		self.flush();
 	}

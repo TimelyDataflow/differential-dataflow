@@ -66,18 +66,18 @@ use timely::dataflow::scopes::Child;
 use timely::dataflow::operators::*;
 use timely::dataflow::operators::feedback::Handle;
 
-use ::{Data, Collection, Ring};
+use ::{Data, Collection, Diff};
 use lattice::Lattice;
 
 /// An extension trait for the `iterate` method.
-pub trait Iterate<G: Scope, D: Data, R: Ring> {
+pub trait Iterate<G: Scope, D: Data, R: Diff> {
     /// Iteratively apply `logic` to the source collection until convergence.
     fn iterate<F>(&self, logic: F) -> Collection<G, D, R>
         where G::Timestamp: Lattice,
               for<'a> F: FnOnce(&Collection<Child<'a, G, u64>, D, R>)->Collection<Child<'a, G, u64>, D, R>;
 }
 
-impl<G: Scope, D: Ord+Data+Debug, R: Ring> Iterate<G, D, R> for Collection<G, D, R> {
+impl<G: Scope, D: Ord+Data+Debug, R: Diff> Iterate<G, D, R> for Collection<G, D, R> {
     fn iterate<F>(&self, logic: F) -> Collection<G, D, R>
         where G::Timestamp: Lattice,
               for<'a> F: FnOnce(&Collection<Child<'a, G, u64>, D, R>)->Collection<Child<'a, G, u64>, D, R> {
@@ -102,14 +102,14 @@ impl<G: Scope, D: Ord+Data+Debug, R: Ring> Iterate<G, D, R> for Collection<G, D,
 /// The `Variable` struct allows differential dataflow programs requiring more sophisticated
 /// iterative patterns than singly recursive iteration. For example: in mutual recursion two 
 /// collections evolve simultaneously.
-pub struct Variable<'a, G: Scope, D: Data, R: Ring>
+pub struct Variable<'a, G: Scope, D: Data, R: Diff>
 where G::Timestamp: Lattice {
     collection: Collection<Child<'a, G, u64>, D, R>,
     feedback: Handle<G::Timestamp, u64,(D, Product<G::Timestamp, u64>, R)>,
     source: Collection<Child<'a, G, u64>, D, R>,
 }
 
-impl<'a, G: Scope, D: Data, R: Ring> Variable<'a, G, D, R> where G::Timestamp: Lattice {
+impl<'a, G: Scope, D: Data, R: Diff> Variable<'a, G, D, R> where G::Timestamp: Lattice {
     /// Creates a new `Variable` and a `Stream` representing its output, from a supplied `source` stream.
     pub fn from(source: Collection<Child<'a, G, u64>, D, R>) -> Variable<'a, G, D, R> {
         let (feedback, updates) = source.inner.scope().loop_variable(u64::max_value(), 1);
@@ -128,7 +128,7 @@ impl<'a, G: Scope, D: Data, R: Ring> Variable<'a, G, D, R> where G::Timestamp: L
     }
 }
 
-impl<'a, G: Scope, D: Data, R: Ring> Deref for Variable<'a, G, D, R> where G::Timestamp: Lattice {
+impl<'a, G: Scope, D: Data, R: Diff> Deref for Variable<'a, G, D, R> where G::Timestamp: Lattice {
     type Target = Collection<Child<'a, G, u64>, D, R>;
     fn deref(&self) -> &Self::Target {
         &self.collection

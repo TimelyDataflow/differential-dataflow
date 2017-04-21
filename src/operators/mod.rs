@@ -21,7 +21,7 @@ pub mod join;
 
 // use std::cmp::Ordering;
 
-use ::Ring;
+use ::Diff;
 use lattice::Lattice;
 use trace::{Cursor, consolidate};
 
@@ -44,7 +44,7 @@ pub struct EditList<V, T, R> {
     edits: Vec<(T, R)>,
 }
 
-impl<V, T, R> EditList<V, T, R> where T: Ord+Clone, R: Ring {
+impl<V, T, R> EditList<V, T, R> where T: Ord+Clone, R: Diff {
     /// Creates an empty list of edits.
     #[inline(always)]
     fn new() -> Self {
@@ -104,7 +104,7 @@ struct ValueHistory2<V, T, R> {
     buffer: Vec<((V, T), R)>,               // where we accumulate / collapse updates.
 }
 
-impl<V: Ord+Clone, T: Lattice+Ord+Clone, R: Ring> ValueHistory2<V, T, R> {
+impl<V: Ord+Clone, T: Lattice+Ord+Clone, R: Diff> ValueHistory2<V, T, R> {
     fn new() -> Self {
         ValueHistory2 {
             edits: EditList::new(), // empty; will swap out for real list later
@@ -182,7 +182,7 @@ impl<V: Ord+Clone, T: Lattice+Ord+Clone, R: Ring> ValueHistory2<V, T, R> {
 
 
 
-// struct ValueHistory<V: Ord+Clone, T: Lattice+Ord+Clone, R: Ring> {
+// struct ValueHistory<V: Ord+Clone, T: Lattice+Ord+Clone, R: Diff> {
 //     edits: Vec<((T, V), R)>,
 //     buffer: Vec<((T, V), R)>,
 //     frontier: Vec<T>,
@@ -190,7 +190,7 @@ impl<V: Ord+Clone, T: Lattice+Ord+Clone, R: Ring> ValueHistory2<V, T, R> {
 //     cursor: usize,
 // }
 
-// impl<V: Ord+Clone, T: Lattice+Ord+Clone, R: Ring> ValueHistory<V, T, R> {
+// impl<V: Ord+Clone, T: Lattice+Ord+Clone, R: Diff> ValueHistory<V, T, R> {
 //     fn new() -> Self {
 //         ValueHistory {
 //             edits: Vec::new(),
@@ -231,8 +231,8 @@ impl<V: Ord+Clone, T: Lattice+Ord+Clone, R: Ring> ValueHistory2<V, T, R> {
 //         self.frontier.clear();
 //         self.entrance.clear();
 //     }
-//     fn push(&mut self, val: V, time: T, ring: R) {
-//         self.edits.push(((time, val), ring));
+//     fn push(&mut self, val: V, time: T, Diff: R) {
+//         self.edits.push(((time, val), Diff));
 //     }
 //     fn order(&mut self) {
         

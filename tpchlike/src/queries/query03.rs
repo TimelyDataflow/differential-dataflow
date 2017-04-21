@@ -62,7 +62,9 @@ where G::Timestamp: Lattice+Ord {
     collections
         .lineitems
         .filter(|l| l.ship_date > ::types::create_date(1995, 3, 15))
-        .map(|l| (l.order_key, l.extended_price * (100 - l.discount) / 100));
+        .inner
+        .map(|(l,t,d)| (l.order_key, t, (l.extended_price * (100 - l.discount) / 100) as isize * d))
+        .as_collection();
 
     let orders = 
     collections
@@ -73,10 +75,7 @@ where G::Timestamp: Lattice+Ord {
     orders
         .semijoin(&customers)
         .map(|(_, (order_key, order_date, ship_priority))| (order_key, (order_date, ship_priority)))
-        .join(&lineitems)
-        .inner
-        .map(|((order_key, (date, ship), price), time, diff)| ((order_key, date, ship), time, price * diff as i64))
-        .as_collection()
+        .semijoin(&lineitems)
         .count()
         .probe()
         .0

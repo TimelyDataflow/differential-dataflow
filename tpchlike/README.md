@@ -20,7 +20,7 @@ Here are some initial measurements on the scale factor 1 dataset (about 1GB of d
 |--------:|-------:|-------:|--------:|---------------:|
 | [query01](https://github.com/frankmcsherry/differential-dataflow/blob/master/tpchlike/src/queries/query01.rs) |  1.26s |  1.33s |   1.43s |      6,001,215 |
 | [query02](https://github.com/frankmcsherry/differential-dataflow/blob/master/tpchlike/src/queries/query02.rs) |  2.29s |  1.72s |   1.61s |      1,010,030 |
-| [query03](https://github.com/frankmcsherry/differential-dataflow/blob/master/tpchlike/src/queries/query03.rs) |  2.81s |  2.61s |  2.46s |      7,651,215 |
+| [query03](https://github.com/frankmcsherry/differential-dataflow/blob/master/tpchlike/src/queries/query03.rs) |  2.67s |  2.35s |  2.31s |      7,651,215 |
 | [query04](https://github.com/frankmcsherry/differential-dataflow/blob/master/tpchlike/src/queries/query04.rs) |  6.83s |  5.80s |  3.72s |      7,501,215 |
 | [query05](https://github.com/frankmcsherry/differential-dataflow/blob/master/tpchlike/src/queries/query05.rs) |  5.23s |  4.57s |  3.82s |      7,661,245 |
 | [query06](https://github.com/frankmcsherry/differential-dataflow/blob/master/tpchlike/src/queries/query06.rs) |  1.29s |  1.35s |   1.49s |      6,001,215 |

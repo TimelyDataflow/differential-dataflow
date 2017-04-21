@@ -10,7 +10,7 @@
 
 use std::rc::Rc;
 
-use ::Ring;
+use ::Diff;
 use hashable::HashOrdered;
 
 use trace::layers::{Trie, TupleBuilder};
@@ -43,7 +43,7 @@ pub struct HashValBatch<K: HashOrdered, V: Ord, T: Lattice, R> {
 }
 
 impl<K, V, T, R> Batch<K, V, T, R> for HashValBatch<K, V, T, R> 
-where K: Clone+Default+HashOrdered, V: Clone+Ord, T: Lattice+Ord+Clone+Default, R: Ring {
+where K: Clone+Default+HashOrdered, V: Clone+Ord, T: Lattice+Ord+Clone+Default, R: Diff {
 	type Batcher = RadixBatcher<K, V, T, R, Self>;
 	type Builder = HashValBuilder<K, V, T, R>;
 	type Cursor = HashValCursor<K, V, T, R>;
@@ -109,12 +109,12 @@ impl<K: Clone+HashOrdered, V: Ord+Clone, T: Lattice+Ord+Clone, R: Copy> Cursor<K
 
 
 /// A builder for creating layers from unsorted update tuples.
-pub struct HashValBuilder<K: HashOrdered, V: Ord, T: Ord, R: Ring> {
+pub struct HashValBuilder<K: HashOrdered, V: Ord, T: Ord, R: Diff> {
 	builder: HashedBuilder<K, OrderedBuilder<V, UnorderedBuilder<(T, R)>>>,
 }
 
 impl<K, V, T, R> Builder<K, V, T, R, HashValBatch<K, V, T, R>> for HashValBuilder<K, V, T, R> 
-where K: Clone+Default+HashOrdered, V: Ord+Clone, T: Lattice+Ord+Clone+Default, R: Ring {
+where K: Clone+Default+HashOrdered, V: Ord+Clone, T: Lattice+Ord+Clone+Default, R: Diff {
 
 	fn new() -> Self { 
 		HashValBuilder { 
@@ -154,7 +154,7 @@ pub struct HashKeyBatch<K: HashOrdered, T: Lattice, R> {
 }
 
 impl<K, T, R> Batch<K, (), T, R> for HashKeyBatch<K, T, R> 
-where K: Clone+Default+HashOrdered, T: Lattice+Ord+Clone+Default, R: Ring {
+where K: Clone+Default+HashOrdered, T: Lattice+Ord+Clone+Default, R: Diff {
 	type Batcher = RadixBatcher<K, (), T, R, Self>;
 	type Builder = HashKeyBuilder<K, T, R>;
 	type Cursor = HashKeyCursor<K, T, R>;
@@ -222,12 +222,12 @@ impl<K: Clone+HashOrdered, T: Lattice+Ord+Clone, R: Copy> Cursor<K, (), T, R> fo
 
 
 /// A builder for creating layers from unsorted update tuples.
-pub struct HashKeyBuilder<K: HashOrdered, T: Ord, R: Ring> {
+pub struct HashKeyBuilder<K: HashOrdered, T: Ord, R: Diff> {
 	builder: HashedBuilder<K, UnorderedBuilder<(T, R)>>,
 }
 
 impl<K, T, R> Builder<K, (), T, R, HashKeyBatch<K, T, R>> for HashKeyBuilder<K, T, R> 
-where K: Clone+Default+HashOrdered, T: Lattice+Ord+Clone+Default, R: Ring {
+where K: Clone+Default+HashOrdered, T: Lattice+Ord+Clone+Default, R: Diff {
 
 	fn new() -> Self { 
 		HashKeyBuilder { 
