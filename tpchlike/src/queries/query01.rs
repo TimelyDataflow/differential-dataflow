@@ -5,7 +5,7 @@ use timely::dataflow::operators::probe::Handle as ProbeHandle;
 use differential_dataflow::AsCollection;
 use differential_dataflow::operators::*;
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::ring::RingPair;
+use differential_dataflow::difference::DiffPair;
 
 use ::Collections;
 
@@ -45,11 +45,11 @@ pub fn query<G: Scope>(collections: &Collections<G>) -> ProbeHandle<G::Timestamp
                .inner
                .map(|(item, time, diff)| 
                 ((item.return_flag, item.line_status), time, 
-                    RingPair::new(item.quantity, 
-                    RingPair::new(item.extended_price,
-                    RingPair::new(item.extended_price * (100 - item.discount) / 100,
-                    RingPair::new(item.extended_price * (100 - item.discount) * (100 + item.tax) / 10000,
-                    RingPair::new(item.discount, diff)))))))
+                    DiffPair::new(item.quantity, 
+                    DiffPair::new(item.extended_price,
+                    DiffPair::new(item.extended_price * (100 - item.discount) / 100,
+                    DiffPair::new(item.extended_price * (100 - item.discount) * (100 + item.tax) / 10000,
+                    DiffPair::new(item.discount, diff)))))))
                .as_collection()
                .count()
                .probe()
