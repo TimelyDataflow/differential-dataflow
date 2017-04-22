@@ -2,6 +2,7 @@
 extern crate abomonation;
 extern crate timely;
 extern crate differential_dataflow;
+extern crate arrayvec;
 
 use std::fs::File;
 use std::io::{BufRead, BufReader, Write};

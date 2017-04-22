@@ -1,20 +1,13 @@
 //! Types for TPCH-like queries.
 
-
-pub use self::part::Part;
-pub use self::supplier::Supplier;
-pub use self::part_supp::PartSupp;
-pub use self::customer::Customer;
-pub use self::order::Order;
-pub use self::line_item::LineItem;
-pub use self::nation::Nation;
-pub use self::region::Region;
+use arrayvec::ArrayString;
+use abomonation::Abomonation;
 
 pub type Date = u32;
 
 #[inline(always)]
 pub fn create_date(year: u16, month: u8, day: u8) -> u32 {
-    (year as u32) << 16 + (month as u32) << 8 + (day as u32)
+    ((year as u32) << 16) + ((month as u32) << 8) + (day as u32)
 }
 
 fn parse_date(date: &str) -> Date {
@@ -33,314 +26,268 @@ fn copy_from_to(src: &[u8], dst: &mut [u8]) {
     }
 }
 
-pub mod part {
+fn read_u01(string: &str) -> [u8;1] { let mut buff = [0;1]; copy_from_to(string.as_bytes(), &mut buff); buff }
+fn read_u10(string: &str) -> [u8;10] { let mut buff = [0;10]; copy_from_to(string.as_bytes(), &mut buff); buff }
+fn read_u15(string: &str) -> [u8;15] { let mut buff = [0;15]; copy_from_to(string.as_bytes(), &mut buff); buff }
+fn read_u25(string: &str) -> [u8;25] { let mut buff = [0;25]; copy_from_to(string.as_bytes(), &mut buff); buff }
 
-    use abomonation::Abomonation;
-    use super::copy_from_to;
 
-    unsafe_abomonate!(Part : name, comment);
+unsafe_abomonate!(Part);
 
-    #[derive(Default,Ord,PartialOrd,Eq,PartialEq,Clone,Debug,Hash)]
-    pub struct Part {
-        pub part_key: usize,
-        pub name: String,
-        pub mfgr: [u8; 25],
-        pub brand: [u8; 10],
-        pub typ: [u8; 25],
-        pub size: i32,
-        pub container: [u8; 10],
-        pub retail_price: i64,
-        pub comment: String,
-    }
+#[derive(Ord,PartialOrd,Eq,PartialEq,Clone,Debug,Hash)]
+pub struct Part {
+    pub part_key: usize,
+    pub name: ArrayString<[u8;56]>,
+    pub mfgr: [u8; 25],
+    pub brand: [u8; 10],
+    pub typ: ArrayString<[u8;25]>,
+    pub size: i32,
+    pub container: [u8; 10],
+    pub retail_price: i64,
+    pub comment: ArrayString<[u8;23]>,
+}
 
-    impl<'a> From<&'a str> for Part {
-        fn from(text: &'a str) -> Part {
+impl<'a> From<&'a str> for Part {
+    fn from(text: &'a str) -> Part {
 
-            let mut result: Part = Default::default();
-            let delim = "|";
-            let mut fields = text.split(&delim);
+        let delim = "|";
+        let mut fields = text.split(&delim);
 
-            result.part_key = fields.next().unwrap().parse().unwrap();
-            result.name = fields.next().unwrap().to_owned();
-            copy_from_to(fields.next().unwrap().as_bytes(), &mut result.mfgr);
-            copy_from_to(fields.next().unwrap().as_bytes(), &mut result.brand);
-            copy_from_to(fields.next().unwrap().as_bytes(), &mut result.typ);
-            result.size = fields.next().unwrap().parse().unwrap();
-            copy_from_to(fields.next().unwrap().as_bytes(), &mut result.container);
-            result.retail_price = (fields.next().unwrap().parse::<f64>().unwrap() * 100.0) as i64;
-            result.comment = fields.next().unwrap().to_owned();
-
-            result
+        Part {
+            part_key: fields.next().unwrap().parse().unwrap(),
+            name: ArrayString::from(fields.next().unwrap()).unwrap(),
+            mfgr: read_u25(fields.next().unwrap()),
+            brand: read_u10(fields.next().unwrap()),
+            typ: ArrayString::from(fields.next().unwrap()).unwrap(),
+            size: fields.next().unwrap().parse().unwrap(),
+            container: read_u10(fields.next().unwrap()),
+            retail_price: (fields.next().unwrap().parse::<f64>().unwrap() * 100.0) as i64,
+            comment: ArrayString::from(fields.next().unwrap()).unwrap()
         }
     }
 }
 
-pub mod supplier {
+unsafe_abomonate!(Supplier);
 
-    use abomonation::Abomonation;
-    use super::copy_from_to;
-    
-    unsafe_abomonate!(Supplier : address, comment);
+#[derive(Ord,PartialOrd,Eq,PartialEq,Clone,Debug,Hash)]
+pub struct Supplier {
+    pub supp_key: usize,
+    pub name: [u8; 25],
+    pub address: ArrayString<[u8; 40]>,
+    pub nation_key: usize,
+    pub phone: [u8; 15],
+    pub acctbal: i64,
+    pub comment: ArrayString<[u8; 128]>,
+}
 
-    #[derive(Default,Ord,PartialOrd,Eq,PartialEq,Clone,Debug,Hash)]
-    pub struct Supplier {
-        pub supp_key: usize,
-        pub name: [u8; 25],
-        pub address: String,
-        pub nation_key: usize,
-        pub phone: [u8; 15],
-        pub acctbal: i64,
-        pub comment: String,
-    }
+impl<'a> From<&'a str> for Supplier {
+    fn from(text: &'a str) -> Supplier {
 
-    impl<'a> From<&'a str> for Supplier {
-        fn from(text: &'a str) -> Supplier {
+        let delim = "|";
+        let mut fields = text.split(&delim);
 
-            let mut result: Supplier = Default::default();
-            let delim = "|";
-            let mut fields = text.split(&delim);
-
-            result.supp_key = fields.next().unwrap().parse().unwrap();
-            copy_from_to(fields.next().unwrap().as_bytes(), &mut result.name);
-            result.address = fields.next().unwrap().to_owned();
-            result.nation_key = fields.next().unwrap().parse().unwrap();
-            copy_from_to(fields.next().unwrap().as_bytes(), &mut result.phone);
-            result.acctbal = (fields.next().unwrap().parse::<f64>().unwrap() * 100.0) as i64;
-            result.comment = fields.next().unwrap().to_owned();
-
-            result
+        Supplier {
+            supp_key: fields.next().unwrap().parse().unwrap(),
+            name: read_u25(fields.next().unwrap()),
+            address: ArrayString::from(fields.next().unwrap()).unwrap(),
+            nation_key: fields.next().unwrap().parse().unwrap(),
+            phone: read_u15(fields.next().unwrap()),
+            acctbal: (fields.next().unwrap().parse::<f64>().unwrap() * 100.0) as i64,
+            comment: ArrayString::from(fields.next().unwrap()).unwrap(),
         }
     }
 }
 
-pub mod part_supp {
+unsafe_abomonate!(PartSupp);
 
-    use abomonation::Abomonation;
-    unsafe_abomonate!(PartSupp : comment);
+#[derive(Ord,PartialOrd,Eq,PartialEq,Clone,Debug,Hash)]
+pub struct PartSupp {
+    pub part_key: usize,
+    pub supp_key: usize,
+    pub availqty: i32,
+    pub supplycost: i64,
+    pub comment: ArrayString<[u8; 224]>,
+}
 
-    #[derive(Default,Ord,PartialOrd,Eq,PartialEq,Clone,Debug,Hash)]
-    pub struct PartSupp {
-        pub part_key: usize,
-        pub supp_key: usize,
-        pub availqty: i32,
-        pub supplycost: i64,
-        pub comment: String,
-    }
+impl<'a> From<&'a str> for PartSupp {
+    fn from(text: &'a str) -> PartSupp {
 
-    impl<'a> From<&'a str> for PartSupp {
-        fn from(text: &'a str) -> PartSupp {
+        let delim = "|";
+        let mut fields = text.split(&delim);
 
-            let mut result: PartSupp = Default::default();
-            let delim = "|";
-            let mut fields = text.split(&delim);
-
-            result.part_key = fields.next().unwrap().parse().unwrap();
-            result.supp_key = fields.next().unwrap().parse().unwrap();
-            result.availqty = fields.next().unwrap().parse().unwrap();
-            result.supplycost = (fields.next().unwrap().parse::<f64>().unwrap() * 100.0) as i64;
-            result.comment = fields.next().unwrap().to_owned();
-
-            result
+        PartSupp {
+            part_key: fields.next().unwrap().parse().unwrap(),
+            supp_key: fields.next().unwrap().parse().unwrap(),
+            availqty: fields.next().unwrap().parse().unwrap(),
+            supplycost: (fields.next().unwrap().parse::<f64>().unwrap() * 100.0) as i64,
+            comment: ArrayString::from(fields.next().unwrap()).unwrap(),
         }
     }
 }
 
-pub mod customer {
+unsafe_abomonate!(Customer);
 
-    use abomonation::Abomonation;
-    use super::copy_from_to;
+#[derive(Ord,PartialOrd,Eq,PartialEq,Clone,Debug,Hash)]
+pub struct Customer {
+    pub cust_key: usize,
+    pub name: ArrayString<[u8;25]>,
+    pub address: ArrayString<[u8;40]>,
+    pub nation_key: usize,
+    pub phone: [u8; 15],
+    pub acctbal: i64,
+    pub mktsegment: [u8; 10],
+    pub comment: ArrayString<[u8;128]>,
+}
 
-    unsafe_abomonate!(Customer : address, comment);
+impl<'a> From<&'a str> for Customer {
+    fn from(text: &'a str) -> Customer {
 
-    #[derive(Default,Ord,PartialOrd,Eq,PartialEq,Clone,Debug,Hash)]
-    pub struct Customer {
-        pub cust_key: usize,
-        pub name: [u8; 25],
-        pub address: String,
-        pub nation_key: usize,
-        pub phone: [u8; 15],
-        pub acctbal: i64,
-        pub mktsegment: [u8; 10],
-        pub comment: String,
-    }
+        // let mut result: Customer = Default::default();
+        let delim = "|";
+        let mut fields = text.split(&delim);
 
-    impl<'a> From<&'a str> for Customer {
-        fn from(text: &'a str) -> Customer {
-
-            let mut result: Customer = Default::default();
-            let delim = "|";
-            let mut fields = text.split(&delim);
-
-            result.cust_key = fields.next().unwrap().parse().unwrap();
-            copy_from_to(fields.next().unwrap().as_bytes(), &mut result.name);
-            result.address = fields.next().unwrap().to_owned();
-            result.nation_key = fields.next().unwrap().parse().unwrap();
-            copy_from_to(fields.next().unwrap().as_bytes(), &mut result.phone);
-            result.acctbal = (fields.next().unwrap().parse::<f64>().unwrap() * 100.0) as i64;
-            copy_from_to(fields.next().unwrap().as_bytes(), &mut result.mktsegment);
-            result.comment = fields.next().unwrap().to_owned();
-
-            result
+        Customer {
+            cust_key: fields.next().unwrap().parse().unwrap(),
+            name: ArrayString::from(fields.next().unwrap()).unwrap(),
+            address: ArrayString::from(fields.next().unwrap()).unwrap(),
+            nation_key: fields.next().unwrap().parse().unwrap(),
+            phone: read_u15(fields.next().unwrap()),
+            acctbal: (fields.next().unwrap().parse::<f64>().unwrap() * 100.0) as i64,
+            mktsegment: read_u10(fields.next().unwrap()),
+            comment: ArrayString::from(fields.next().unwrap()).unwrap(),
         }
     }
 }
 
-pub mod order {
+unsafe_abomonate!(Order);
 
-    use abomonation::Abomonation;
-    use super::{parse_date, copy_from_to, Date};
+#[derive(Ord,PartialOrd,Eq,PartialEq,Clone,Debug,Hash)]
+pub struct Order {
+    pub order_key: usize,
+    pub cust_key: usize,
+    pub order_status: [u8; 1],
+    pub total_price: i64,
+    pub order_date: Date,
+    pub order_priority: [u8; 15],
+    pub clerk: [u8; 15],
+    pub ship_priority: i32,
+    pub comment: ArrayString<[u8; 96]>,
+}
 
-    unsafe_abomonate!(Order : comment);
+impl<'a> From<&'a str> for Order {
+    fn from(text: &'a str) -> Order {
 
-    #[derive(Default,Ord,PartialOrd,Eq,PartialEq,Clone,Debug,Hash)]
-    pub struct Order {
-        pub order_key: usize,
-        pub cust_key: usize,
-        pub order_status: [u8; 1],
-        pub total_price: i64,
-        pub order_date: Date,
-        pub order_priority: [u8; 15],
-        pub clerk: [u8; 15],
-        pub ship_priority: i32,
-        pub comment: String,
-    }
+        let delim = "|";
+        let mut fields = text.split(&delim);
 
-    impl<'a> From<&'a str> for Order {
-        fn from(text: &'a str) -> Order {
-
-            let mut result: Order = Default::default();
-            let delim = "|";
-            let mut fields = text.split(&delim);
-
-            result.order_key = fields.next().unwrap().parse().unwrap();
-            result.cust_key = fields.next().unwrap().parse().unwrap();
-            copy_from_to(fields.next().unwrap().as_bytes(), &mut result.order_status);
-            result.total_price = (fields.next().unwrap().parse::<f64>().unwrap() * 100.0) as i64;
-            result.order_date = parse_date(&fields.next().unwrap());
-            copy_from_to(fields.next().unwrap().as_bytes(), &mut result.order_priority);
-            copy_from_to(fields.next().unwrap().as_bytes(), &mut result.clerk);
-            result.ship_priority = fields.next().unwrap().parse().unwrap();
-            result.comment = fields.next().unwrap().to_owned();
-
-            result
+        Order {
+            order_key: fields.next().unwrap().parse().unwrap(),
+            cust_key: fields.next().unwrap().parse().unwrap(),
+            order_status: read_u01(fields.next().unwrap()),
+            total_price: (fields.next().unwrap().parse::<f64>().unwrap() * 100.0) as i64,
+            order_date: parse_date(&fields.next().unwrap()),
+            order_priority: read_u15(fields.next().unwrap()),
+            clerk: read_u15(fields.next().unwrap()),
+            ship_priority: fields.next().unwrap().parse().unwrap(),
+            comment: ArrayString::from(fields.next().unwrap()).unwrap(),
         }
     }
 }
 
-pub mod line_item {
+unsafe_abomonate!(LineItem);
 
-    use abomonation::Abomonation;
-    use super::{parse_date, copy_from_to, Date};
+#[derive(Ord,PartialOrd,Eq,PartialEq,Clone,Debug,Hash)]
+pub struct LineItem {
+    pub order_key: usize,
+    pub part_key: usize,
+    pub supp_key: usize,
+    pub line_number: i32,
+    pub quantity: i64,
+    pub extended_price: i64,
+    pub discount: i64,
+    pub tax: i64,
+    pub return_flag: [u8; 1],
+    pub line_status: [u8; 1],
+    pub ship_date: Date,
+    pub commit_date: Date,
+    pub receipt_date: Date,
+    pub ship_instruct: [u8; 25],
+    pub ship_mode: [u8; 10],
+    pub comment: ArrayString<[u8; 48]>,
+}
 
-    unsafe_abomonate!(LineItem : comment);
+impl<'a> From<&'a str> for LineItem {
+    fn from(text: &'a str) -> LineItem {
 
-    #[derive(Default,Ord,PartialOrd,Eq,PartialEq,Clone,Debug,Hash)]
-    pub struct LineItem {
-        pub order_key: usize,
-        pub part_key: usize,
-        pub supp_key: usize,
-        pub line_number: i32,
-        pub quantity: i64,
-        pub extended_price: i64,
-        pub discount: i64,
-        pub tax: i64,
-        pub return_flag: [u8; 1],
-        pub line_status: [u8; 1],
-        pub ship_date: Date,
-        pub commit_date: Date,
-        pub receipt_date: Date,
-        pub ship_instruct: [u8; 25],
-        pub ship_mode: [u8; 10],
-        pub comment: String,
-    }
+        let delim = "|";
+        let mut fields = text.split(&delim);
 
-    impl<'a> From<&'a str> for LineItem {
-        fn from(text: &'a str) -> LineItem {
-
-            let mut result: LineItem = Default::default();
-            let delim = "|";
-            let mut fields = text.split(&delim);
-
-            result.order_key = fields.next().unwrap().parse().unwrap();
-            result.part_key = fields.next().unwrap().parse().unwrap();
-            result.supp_key = fields.next().unwrap().parse().unwrap();
-            result.line_number = fields.next().unwrap().parse().unwrap();
-            result.quantity = (fields.next().unwrap().parse::<f64>().unwrap() * 100.0) as i64;
-            result.extended_price = (fields.next().unwrap().parse::<f64>().unwrap() * 100.0) as i64;
-            result.discount = (fields.next().unwrap().parse::<f64>().unwrap() * 100.0) as i64;
-            result.tax = (fields.next().unwrap().parse::<f64>().unwrap() * 100.0) as i64;
-            copy_from_to(fields.next().unwrap().as_bytes(), &mut result.return_flag);
-            copy_from_to(fields.next().unwrap().as_bytes(), &mut result.line_status);
-            result.ship_date = parse_date(&fields.next().unwrap());
-            result.commit_date = parse_date(&fields.next().unwrap());
-            result.receipt_date = parse_date(&fields.next().unwrap());
-            copy_from_to(fields.next().unwrap().as_bytes(), &mut result.ship_instruct);
-            copy_from_to(fields.next().unwrap().as_bytes(), &mut result.ship_mode);
-            result.comment = fields.next().unwrap().to_owned();
-
-            result
+        LineItem {
+            order_key: fields.next().unwrap().parse().unwrap(),
+            part_key: fields.next().unwrap().parse().unwrap(),
+            supp_key: fields.next().unwrap().parse().unwrap(),
+            line_number: fields.next().unwrap().parse().unwrap(),
+            quantity: (fields.next().unwrap().parse::<f64>().unwrap() * 100.0) as i64,
+            extended_price: (fields.next().unwrap().parse::<f64>().unwrap() * 100.0) as i64,
+            discount: (fields.next().unwrap().parse::<f64>().unwrap() * 100.0) as i64,
+            tax: (fields.next().unwrap().parse::<f64>().unwrap() * 100.0) as i64,
+            return_flag: read_u01(fields.next().unwrap()),
+            line_status: read_u01(fields.next().unwrap()),
+            ship_date: parse_date(&fields.next().unwrap()),
+            commit_date: parse_date(&fields.next().unwrap()),
+            receipt_date: parse_date(&fields.next().unwrap()),
+            ship_instruct: read_u25(fields.next().unwrap()),
+            ship_mode: read_u10(fields.next().unwrap()),
+            comment: ArrayString::from(fields.next().unwrap()).unwrap(),
         }
     }
 }
 
-pub mod nation {
+unsafe_abomonate!(Nation);
 
-    use abomonation::Abomonation;
-    use super::copy_from_to;
+#[derive(Ord,PartialOrd,Eq,PartialEq,Clone,Debug,Hash)]
+pub struct Nation {
+    pub nation_key: usize,
+    pub name: [u8; 25],
+    pub region_key: usize,
+    // pub comment: String,
+    pub comment: ArrayString<[u8;160]>,
+}
 
-    unsafe_abomonate!(Nation : comment);
+impl<'a> From<&'a str> for Nation {
+    fn from(text: &'a str) -> Nation {
 
-    #[derive(Default,Ord,PartialOrd,Eq,PartialEq,Clone,Debug,Hash)]
-    pub struct Nation {
-        pub nation_key: usize,
-        pub name: [u8; 25],
-        pub region_key: usize,
-        pub comment: String,
-    }
+        let delim = "|";
+        let mut fields = text.split(&delim);
 
-    impl<'a> From<&'a str> for Nation {
-        fn from(text: &'a str) -> Nation {
-
-            let mut result: Nation = Default::default();
-            let delim = "|";
-            let mut fields = text.split(&delim);
-
-            result.nation_key = fields.next().unwrap().parse().unwrap();
-            copy_from_to(fields.next().unwrap().as_bytes(), &mut result.name);
-            result.region_key = fields.next().unwrap().parse().unwrap();
-            result.comment = fields.next().unwrap().to_owned();
-
-            result
+        Nation {
+            nation_key: fields.next().unwrap().parse().unwrap(),
+            name: read_u25(fields.next().unwrap()),
+            region_key: fields.next().unwrap().parse().unwrap(),
+            comment: ArrayString::from(fields.next().unwrap()).unwrap(),
         }
     }
 }
 
-pub mod region {
+unsafe_abomonate!(Region);
 
-    use abomonation::Abomonation;
-    use super::copy_from_to;
+#[derive(Ord,PartialOrd,Eq,PartialEq,Clone,Debug,Hash)]
+pub struct Region {
+    pub region_key: usize,
+    pub name: [u8; 25],
+    pub comment: ArrayString<[u8;160]>,
+}
 
-    unsafe_abomonate!(Region : comment);
+impl<'a> From<&'a str> for Region {
+    fn from(text: &'a str) -> Region {
 
-    #[derive(Default,Ord,PartialOrd,Eq,PartialEq,Clone,Debug,Hash)]
-    pub struct Region {
-        pub region_key: usize,
-        pub name: [u8; 25],
-        pub comment: String,
-    }
+        let delim = "|";
+        let mut fields = text.split(&delim);
 
-    impl<'a> From<&'a str> for Region {
-        fn from(text: &'a str) -> Region {
-
-            let mut result: Region = Default::default();
-            let delim = "|";
-            let mut fields = text.split(&delim);
-
-            result.region_key = fields.next().unwrap().parse().unwrap();
-            copy_from_to(fields.next().unwrap().as_bytes(), &mut result.name);
-            result.comment = fields.next().unwrap().to_owned();
-
-            result
+        Region {
+            region_key: fields.next().unwrap().parse().unwrap(),
+            name: read_u25(fields.next().unwrap()),
+            comment: ArrayString::from(fields.next().unwrap()).unwrap(),
         }
     }
 }

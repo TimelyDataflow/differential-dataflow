@@ -52,7 +52,9 @@ pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Times
                     DiffPair::new(diff as i64 * item.extended_price * (100 - item.discount) * (100 + item.tax) / 10000,
                     DiffPair::new(diff as i64 * item.discount, diff))))))).into_iter()
             }
-            else { None.into_iter() }
+            else { 
+                None.into_iter() 
+            }
         )
         .as_collection()
         .count()

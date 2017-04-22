@@ -82,7 +82,7 @@ where G::Timestamp: Lattice+Ord {
 
     collections
         .suppliers()
-        .map(|s| (s.supp_key, (s.name, s.address, s.phone)))
+        .map(|s| (s.supp_key, (s.name, s.address.to_string(), s.phone)))
         .join(&top_suppliers)
         .probe()
         .0

@@ -92,7 +92,7 @@ where G::Timestamp: Lattice+Ord {
 
     collections
         .suppliers()
-        .map(|s| (s.supp_key, (s.name, s.address, s.nation_key)))
+        .map(|s| (s.supp_key, (s.name, s.address.to_string(), s.nation_key)))
         .semijoin(&suppliers)
         .map(|(_, (name, addr, nation))| (nation, (name, addr)))
         .join(&nations)

@@ -88,14 +88,14 @@ where G::Timestamp: Lattice+Ord {
     let suppliers = 
     collections
         .suppliers()
-        .map(|x| (x.nation_key, (x.acctbal, x.name, x.address, x.phone, x.comment, x.supp_key)))
+        .map(|x| (x.nation_key, (x.acctbal, x.name, x.address.to_string(), x.phone, x.comment.to_string(), x.supp_key)))
         .semijoin(&nations.map(|x| x.0))
         .map(|(nat, (acc, nam, add, phn, com, key))| (key, (nat, acc, nam, add, phn, com)));
 
     let parts = 
     collections
         .parts()
-        .filter(|x| substring(&x.typ[..], b"BRASS") && x.size == 15)
+        .filter(|x| substring(x.typ.as_str().as_bytes(), b"BRASS") && x.size == 15)
         .map(|x| (x.part_key, x.mfgr));
 
     let partsupps = 

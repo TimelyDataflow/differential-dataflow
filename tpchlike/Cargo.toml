@@ -10,5 +10,8 @@ git="https://github.com/frankmcsherry/timely-dataflow"
 #git="https://github.com/frankmcsherry/differential-dataflow"
 path=".."
 
+[dependencies.arrayvec]
+git="https://github.com/bluss/arrayvec"
+
 [dependencies]
 abomonation="0.4.5"

@@ -85,7 +85,7 @@ where G::Timestamp: Lattice+Ord {
         .join(&nations2)
         .map(|(_, supp_key, is_name)| (supp_key, is_name));
 
-    let parts = collections.parts.filter(|p| starts_with(&p.typ, b"ECONOMY ANODIZED STEEL")).map(|p| p.part_key);
+    let parts = collections.parts.filter(|p| p.typ.as_str() == "ECONOMY ANODIZED STEEL").map(|p| p.part_key);
 
     collections
         .lineitems()
