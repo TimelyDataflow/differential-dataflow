@@ -60,24 +60,21 @@ where G::Timestamp: Lattice+Ord {
             .inner
             .flat_map(|(item, time, diff)| 
                 if create_date(1996, 1, 1) <= item.ship_date && item.ship_date < create_date(1996,4,1) {
-                    Some((item.supp_key, time, item.extended_price * diff as i64)).into_iter()
+                    Some((item.supp_key, time, (item.extended_price * (100 - item.discount) / 100) * diff as i64)).into_iter()
                 }
                 else { None.into_iter() }
             )
-            // .filter(|x| ::types::create_date(1996, 1, 1) <= x.ship_date && x.ship_date < ::types::create_date(1996,4,1))
-            // .inner
-            // .map(|(item, time, diff)| (item.supp_key, time, item.extended_price * diff as i64))
             .as_collection()
             .count();
 
     // suppliers with maximum revenue
     let top_suppliers =
         revenue
-            .map(|(supp, total)| ((), (-total, supp)))
-            .group(|_k, s, t| {
-               let target = (s[0].0).0;    // <-- largest revenue
-               t.extend(s.iter().take_while(|x| (x.0).0 == target));
-            })
+            // do a hierarchical min, to improve update perf.
+            .map(|(supp, total)| (supp % 100, (-total, supp)))
+            .group(|_k, s, t| t.extend(s.iter().take_while(|x| (x.0).0 == (s[0].0).0)))
+            .map(|(_, x)| ((), x))
+            .group(|_k, s, t| t.extend(s.iter().take_while(|x| (x.0).0 == (s[0].0).0)))
             .map(|(_,(total, supp))| (supp, -total));
 
     collections

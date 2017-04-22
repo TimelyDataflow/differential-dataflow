@@ -26,7 +26,7 @@ Here are some initial measurements on the scale factor 1 dataset (about 1GB of d
 | [query06](./src/queries/query06.rs) |  0.32s |  0.17s |   0.16s |      6,001,215 |       36.88M/s |
 | [query07](./src/queries/query07.rs) |  4.98s |  2.65s |   1.88s |      7,661,240 |        4.08M/s |
 | [query08](./src/queries/query08.rs) |  7.85s |  5.38s |   4.06s |      7,861,240 |        1.89M/s |
-| [query15](./src/queries/query15.rs) | 40.47s | 34.08s |  39.08s |      6,011,215 |      154.02K/s |
+| [query15](./src/queries/query15.rs) |  4.29s |  2.11s |   1.28s |      6,011,215 |        4.69M/s |
 | [query17](./src/queries/query17.rs) |  6.71s |  4.96s |   3.76s |      6,201,215 |        1.65M/s |
 | [query19](./src/queries/query19.rs) |  0.51s |  0.27s |   0.24s |      6,201,215 |       25.40M/s |
 | [query20](./src/queries/query20.rs) |  2.11s |  1.28s |   1.06s |      6,811,215 |        6.41M/s |

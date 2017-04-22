@@ -58,18 +58,18 @@ fn main() {
             let mut probes = Vec::new();
 
             match query {
-                1 => probes.push(queries::query01::query(&mut collections)),
-                2 => probes.push(queries::query02::query(&mut collections)),
-                3 => probes.push(queries::query03::query(&mut collections)),
-                4 => probes.push(queries::query04::query(&mut collections)),
-                5 => probes.push(queries::query05::query(&mut collections)),
-                6 => probes.push(queries::query06::query(&mut collections)),
-                7 => probes.push(queries::query07::query(&mut collections)),
-                8 => probes.push(queries::query08::query(&mut collections)),
+                // 1 => probes.push(queries::query01::query(&mut collections)),
+                // 2 => probes.push(queries::query02::query(&mut collections)),
+                // 3 => probes.push(queries::query03::query(&mut collections)),
+                // 4 => probes.push(queries::query04::query(&mut collections)),
+                // 5 => probes.push(queries::query05::query(&mut collections)),
+                // 6 => probes.push(queries::query06::query(&mut collections)),
+                // 7 => probes.push(queries::query07::query(&mut collections)),
+                // 8 => probes.push(queries::query08::query(&mut collections)),
                 15 => probes.push(queries::query15::query(&mut collections)),
-                17 => probes.push(queries::query17::query(&mut collections)),
-                19 => probes.push(queries::query19::query(&mut collections)),
-                20 => probes.push(queries::query20::query(&mut collections)),
+                // 17 => probes.push(queries::query17::query(&mut collections)),
+                // 19 => probes.push(queries::query19::query(&mut collections)),
+                // 20 => probes.push(queries::query20::query(&mut collections)),
                 _ => panic!("query: {:?} unimplemented", query),
             }
 
