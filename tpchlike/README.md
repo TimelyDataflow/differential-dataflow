@@ -18,7 +18,7 @@ Here are some initial measurements on the scale factor 1 dataset* (about 1GB of 
 
 |                                                                                                               |  1,000 | 10,000 | 100,000 | tuples touched | rate @ 100,000 |
 |--------------------------------------------------------------------------------------------------------------:|-------:|-------:|--------:|---------------:|---------------:|
-| [query01](https://github.com/frankmcsherry/differential-dataflow/blob/master/tpchlike/src/queries/query01.rs) |  0.35s |  0.32s |   0.30s |      6,001,215 |       19.84M/s |
+| [query01](./queries/query01.rs) |  0.35s |  0.32s |   0.30s |      6,001,215 |       19.84M/s |
 | [query02](https://github.com/frankmcsherry/differential-dataflow/blob/master/tpchlike/src/queries/query02.rs) |  1.15s |  0.65s |   0.48s |      1,010,030 |        2.10M/s |
 | [query03](https://github.com/frankmcsherry/differential-dataflow/blob/master/tpchlike/src/queries/query03.rs) |  1.88s |  1.43s |   1.28s |      7,651,215 |        5.96M/s |
 | [query04](https://github.com/frankmcsherry/differential-dataflow/blob/master/tpchlike/src/queries/query04.rs) |  5.89s |  4.10s |   2.66s |      7,501,215 |        2.82M/s |
