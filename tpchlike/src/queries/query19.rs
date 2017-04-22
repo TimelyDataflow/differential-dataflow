@@ -5,10 +5,10 @@ use timely::dataflow::operators::probe::Handle as ProbeHandle;
 use differential_dataflow::AsCollection;
 use differential_dataflow::operators::*;
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::difference::DiffPair;
+// use differential_dataflow::difference::DiffPair;
 
 use ::Collections;
-use ::types::create_date;
+// use ::types::create_date;
 
 // -- $ID$
 // -- TPC-H/TPC-R Discounted Revenue Query (Q19)
@@ -58,27 +58,31 @@ fn starts_with(source: &[u8], query: &[u8]) -> bool {
     source.len() >= query.len() && &source[..query.len()] == query
 }
 
-pub fn query<G: Scope>(collections: &Collections<G>) -> ProbeHandle<G::Timestamp> 
+pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp> 
 where G::Timestamp: Lattice+Ord {
 
     let lineitems =
     collections
-        .lineitems
-        .filter(|x| (starts_with(&x.ship_mode, b"AIR") || starts_with(&x.ship_mode, b"AIR REG")) && starts_with(&x.ship_instruct, b"DELIVER IN PERSON"))
-        .map(|l| (l.part_key, (l.quantity, l.extended_price * (100 - l.discount) / 100)));
+        .lineitems()
+        .flat_map(|x| 
+            if (starts_with(&x.ship_mode, b"AIR") || starts_with(&x.ship_mode, b"AIR REG")) && starts_with(&x.ship_instruct, b"DELIVER IN PERSON") {
+                Some((x.part_key, (x.quantity, x.extended_price * (100 - x.discount) / 100))).into_iter()
+            }
+            else { None.into_iter() }
+        );
 
     let lines1 = lineitems.filter(|&(_, (quant,_))| quant >= 1 && quant <= 11).map(|x| (x.0, (x.1).1));
     let lines2 = lineitems.filter(|&(_, (quant,_))| quant >= 10 && quant <= 20).map(|x| (x.0, (x.1).1));
     let lines3 = lineitems.filter(|&(_, (quant,_))| quant >= 20 && quant <= 30).map(|x| (x.0, (x.1).1));
 
-    let parts = collections.parts.map(|p| (p.part_key, (p.brand, p.container, p.size)));
+    let parts = collections.parts().map(|p| (p.part_key, (p.brand, p.container, p.size)));
 
-    let parts1 = parts.filter(|&(key, (brand, container, size))| 
+    let parts1 = parts.filter(|&(_key, (brand, container, size))| 
                                     starts_with(&brand, b"Brand#12") && 1 <= size && size <= 5 && 
                                     (starts_with(&container, b"SM CASE") || starts_with(&container, b"SM BOX") || starts_with(&container, b"SM PACK") || starts_with(&container, b"MED PKG"))
                                 ).map(|x| x.0);
-    let parts2 = parts.filter(|&(key, (brand, container, size))| starts_with(&brand, b"Brand#23") && 1 <= size && size <= 10 && (starts_with(&container, b"MED BAG") || starts_with(&container, b"MED BOX") || starts_with(&container, b"MED PKG") || starts_with(&container, b"MED PACK"))).map(|x| x.0);
-    let parts3 = parts.filter(|&(key, (brand, container, size))| starts_with(&brand, b"Brand#34") && 1 <= size && size <= 15 && (starts_with(&container, b"LG CASE") || starts_with(&container, b"LG BOX") || starts_with(&container, b"LG PACK") || starts_with(&container, b"LG PCG"))).map(|x| x.0);
+    let parts2 = parts.filter(|&(_key, (brand, container, size))| starts_with(&brand, b"Brand#23") && 1 <= size && size <= 10 && (starts_with(&container, b"MED BAG") || starts_with(&container, b"MED BOX") || starts_with(&container, b"MED PKG") || starts_with(&container, b"MED PACK"))).map(|x| x.0);
+    let parts3 = parts.filter(|&(_key, (brand, container, size))| starts_with(&brand, b"Brand#34") && 1 <= size && size <= 15 && (starts_with(&container, b"LG CASE") || starts_with(&container, b"LG BOX") || starts_with(&container, b"LG PACK") || starts_with(&container, b"LG PCG"))).map(|x| x.0);
 
     let result1 = lines1.semijoin(&parts1);
     let result2 = lines2.semijoin(&parts2);
@@ -90,7 +94,7 @@ where G::Timestamp: Lattice+Ord {
         .concat(&result3)
         .distinct()
         .inner
-        .map(|((key, revenue), time, d)| ((), time, revenue * d as i64))
+        .map(|((_key, revenue), time, d)| ((), time, revenue * d as i64))
         .as_collection()
         .count()
         .probe()

@@ -45,55 +45,55 @@ fn starts_with(source: &[u8], query: &[u8]) -> bool {
     source.len() >= query.len() && &source[..query.len()] == query
 }
 
-pub fn query<G: Scope>(collections: &Collections<G>) -> ProbeHandle<G::Timestamp> 
+pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp> 
 where G::Timestamp: Lattice+Ord {
 
     let regions = 
     collections
-        .regions
+        .regions()
         .filter(|x| starts_with(&x.name[..], b"ASIA"))
         .map(|x| x.region_key);
 
     let nations = 
     collections
-        .nations
+        .nations()
         .map(|x| (x.region_key, (x.nation_key, x.name)))
         .semijoin(&regions)
-        .map(|(regio_key, (nation_key, name))| (nation_key, name));
+        .map(|(_region_key, (nation_key, name))| (nation_key, name));
 
     let suppliers = 
     collections
-        .suppliers
+        .suppliers()
         .map(|x| (x.nation_key, x.supp_key))
         .join(&nations)
         .map(|(nat, supp, name)| (supp, (nat, name)));
 
     let customers = 
     collections
-        .customers
+        .customers()
         .map(|c| (c.nation_key, c.cust_key))
         .semijoin(&nations.map(|x| x.0))
         .map(|c| c.1);
         
     let orders =
     collections
-        .orders
+        .orders()
         .filter(|o| o.order_date >= create_date(1994, 1, 1) && o.order_date < create_date(1995, 1, 1))
         .map(|o| (o.cust_key, o.order_key))
         .semijoin(&customers)
         .map(|o| o.1);
 
     let lineitems = collections
-        .lineitems
+        .lineitems()
         .inner
         .map(|(l,t,d)| ((l.order_key, l.supp_key), t, d * (l.extended_price * (100 - l.discount) / 100) as isize))
         .as_collection()
         .semijoin(&orders)
-        .map(|(order, supp)| supp);
+        .map(|(_order, supp)| supp);
 
     suppliers
         .semijoin(&lineitems)
-        .map(|(supp, (nat, name))| name)
+        .map(|(_supp, (_nat, name))| name)
         .count()
         .probe()
         .0

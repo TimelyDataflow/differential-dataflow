@@ -59,24 +59,28 @@ fn starts_with(source: &[u8], query: &[u8]) -> bool {
     source.len() >= query.len() && &source[..query.len()] == query
 }
 
-pub fn query<G: Scope>(collections: &Collections<G>) -> ProbeHandle<G::Timestamp> 
+pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp> 
 where G::Timestamp: Lattice+Ord {
 
-    let regions = collections.regions.filter(|r| starts_with(&r.name, b"AMERICA")).map(|r| r.region_key);
-    let nations1 = collections.nations.map(|n| (n.region_key, n.nation_key)).semijoin(&regions).map(|x| x.1);
-    let customers = collections.customers.map(|c| (c.nation_key, c.cust_key)).semijoin(&nations1).map(|x| x.1);
+    let regions = collections.regions().filter(|r| starts_with(&r.name, b"AMERICA")).map(|r| r.region_key);
+    let nations1 = collections.nations().map(|n| (n.region_key, n.nation_key)).semijoin(&regions).map(|x| x.1);
+    let customers = collections.customers().map(|c| (c.nation_key, c.cust_key)).semijoin(&nations1).map(|x| x.1);
     let orders = 
     collections
-        .orders
-        .filter(|o| create_date(1995,1,1) <= o.order_date && o.order_date <= create_date(1996, 12, 31))
-        .map(|o| (o.cust_key, (o.order_key, o.order_date >> 16)))
+        .orders()
+        .flat_map(|o|
+            if create_date(1995,1,1) <= o.order_date && o.order_date <= create_date(1996, 12, 31) {
+                Some((o.cust_key, (o.order_key, o.order_date >> 16))).into_iter()
+            }
+            else { None.into_iter() }
+        )
         .semijoin(&customers)
         .map(|x| x.1);
 
     let nations2 = collections.nations.map(|n| (n.nation_key, starts_with(&n.name, b"BRAZIL")));
     let suppliers = 
     collections
-        .suppliers
+        .suppliers()
         .map(|s| (s.nation_key, s.supp_key))
         .join(&nations2)
         .map(|(_, supp_key, is_name)| (supp_key, is_name));
@@ -84,14 +88,14 @@ where G::Timestamp: Lattice+Ord {
     let parts = collections.parts.filter(|p| starts_with(&p.typ, b"ECONOMY ANODIZED STEEL")).map(|p| p.part_key);
 
     collections
-        .lineitems
+        .lineitems()
         .inner
         .map(|(l,t,d)| ((l.part_key, (l.supp_key, l.order_key)), t, ((l.extended_price * (100 - l.discount)) as isize / 100) * d))
         .as_collection()
         .semijoin(&parts)
-        .map(|(part_key, (supp_key, order_key))| (order_key, supp_key))
+        .map(|(_part_key, (supp_key, order_key))| (order_key, supp_key))
         .join(&orders)
-        .map(|(order_key, supp_key, order_date)| (supp_key, order_date))
+        .map(|(_order_key, supp_key, order_date)| (supp_key, order_date))
         .join(&suppliers)
         .inner
         .map(|((_, order_date, is_name), time, price)| (order_date, time, DiffPair::new(if is_name { price } else { 0 }, price)))

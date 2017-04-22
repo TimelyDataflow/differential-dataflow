@@ -54,43 +54,48 @@ use ::types::create_date;
 //     s_name;
 // :n -1
 
-
 fn starts_with(source: &[u8], query: &[u8]) -> bool {
     source.len() >= query.len() && &source[..query.len()] == query
 }
 
-fn substring(source: &[u8], query: &[u8]) -> bool {
-    (0 .. (source.len() - query.len())).any(|offset| 
-        (0 .. query.len()).all(|i| source[i + offset] == query[i])
-    )
-}
-
-pub fn query<G: Scope>(collections: &Collections<G>) -> ProbeHandle<G::Timestamp> 
+pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp> 
 where G::Timestamp: Lattice+Ord {
 
     let partkeys = collections.parts.filter(|p| p.name.as_bytes() == b"forest").map(|p| p.part_key);
 
-    let available = collections.lineitems.filter(|l| l.ship_date >= create_date(1994, 1, 1) && l.ship_date < create_date(1995, 1, 1))
-                                        .map(|l| (l.part_key, (l.supp_key, l.quantity)))
-                                        .semijoin(&partkeys)
-                                        .inner
-                                        .map(|(l, t, d)| ((l.0, (l.1).0), t, (l.1).1 as isize * d))
-                                        .as_collection()
-                                        .count();
+    let available = 
+    collections
+        .lineitems()
+        .flat_map(|l| 
+            if l.ship_date >= create_date(1994, 1, 1) && l.ship_date < create_date(1995, 1, 1) {
+                Some((l.part_key, (l.supp_key, l.quantity))).into_iter()
+            }
+            else { None.into_iter() }
+        )
+        .semijoin(&partkeys)
+        .inner
+        .map(|(l, t, d)| ((l.0, (l.1).0), t, (l.1).1 as isize * d))
+        .as_collection()
+        .count();
 
-    let suppliers = collections.partsupps.map(|ps| (ps.part_key, (ps.supp_key, ps.availqty)))
-                                         .semijoin(&partkeys)
-                                         .map(|(part_key, (supp_key, avail))| ((part_key, supp_key), avail))
-                                         .join(&available)
-                                         .filter(|&(_, avail1, avail2)| avail1 > avail2 as i32 / 2)
-                                         .map(|((_, supp_key), _, _)| supp_key);
+    let suppliers = 
+    collections
+        .partsupps()
+        .map(|ps| (ps.part_key, (ps.supp_key, ps.availqty)))
+        .semijoin(&partkeys)
+        .map(|(part_key, (supp_key, avail))| ((part_key, supp_key), avail))
+        .join(&available)
+        .filter(|&(_, avail1, avail2)| avail1 > avail2 as i32 / 2)
+        .map(|((_, supp_key), _, _)| supp_key);
 
     let nations = collections.nations.filter(|n| starts_with(&n.name, b"CANADA")).map(|n| (n.nation_key, n.name));
 
-    collections.suppliers.map(|s| (s.supp_key, (s.name, s.address, s.nation_key)))
-                         .semijoin(&suppliers)
-                         .map(|(_, (name, addr, nation))| (nation, (name, addr)))
-                         .join(&nations)
-                         .probe()
-                         .0
+    collections
+        .suppliers()
+        .map(|s| (s.supp_key, (s.name, s.address, s.nation_key)))
+        .semijoin(&suppliers)
+        .map(|(_, (name, addr, nation))| (nation, (name, addr)))
+        .join(&nations)
+        .probe()
+        .0
 }

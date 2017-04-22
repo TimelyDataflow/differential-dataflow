@@ -1,8 +1,8 @@
 use timely::dataflow::*;
-use timely::dataflow::operators::*;
+// use timely::dataflow::operators::*;
 use timely::dataflow::operators::probe::Handle as ProbeHandle;
 
-use differential_dataflow::AsCollection;
+// use differential_dataflow::AsCollection;
 use differential_dataflow::operators::*;
 use differential_dataflow::lattice::Lattice;
 
@@ -69,38 +69,38 @@ fn substring(source: &[u8], query: &[u8]) -> bool {
     )
 }
 
-pub fn query<G: Scope>(collections: &Collections<G>) -> ProbeHandle<G::Timestamp> 
+pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp> 
 where G::Timestamp: Lattice+Ord {
 
     let regions = 
     collections
-        .regions
+        .regions()
         .filter(|x| starts_with(&x.name[..], b"EUROPE"))
         .map(|x| x.region_key);
 
     let nations = 
     collections
-        .nations
+        .nations()
         .map(|x| (x.region_key, (x.nation_key, x.name)))
         .semijoin(&regions)
-        .map(|(regio_key, (nation_key, name))| (nation_key, name));
+        .map(|(_region_key, (nation_key, name))| (nation_key, name));
 
     let suppliers = 
     collections
-        .suppliers
+        .suppliers()
         .map(|x| (x.nation_key, (x.acctbal, x.name, x.address, x.phone, x.comment, x.supp_key)))
         .semijoin(&nations.map(|x| x.0))
         .map(|(nat, (acc, nam, add, phn, com, key))| (key, (nat, acc, nam, add, phn, com)));
 
     let parts = 
     collections
-        .parts
+        .parts()
         .filter(|x| substring(&x.typ[..], b"BRASS") && x.size == 15)
         .map(|x| (x.part_key, x.mfgr));
 
     let partsupps = 
     collections
-        .partsupps
+        .partsupps()
         .map(|x| (x.supp_key, (x.part_key, x.supplycost)))
         .semijoin(&suppliers.map(|x| x.0))
         .map(|(supp, (part, supply_cost))| (part, (supply_cost, supp)))
@@ -114,7 +114,7 @@ where G::Timestamp: Lattice+Ord {
         .join(&parts)
         .map(|(part_key, (cost, supp), mfgr)| (supp, (cost, part_key, mfgr)))
         .join(&suppliers)
-        .map(|(supp, (cost, part, mfgr), (nat, acc, nam, add, phn, com))| (nat, (cost, part, mfgr, acc, nam, add, phn, com)))
+        .map(|(_supp, (cost, part, mfgr), (nat, acc, nam, add, phn, com))| (nat, (cost, part, mfgr, acc, nam, add, phn, com)))
         .join(&nations)
         .probe()
         .0

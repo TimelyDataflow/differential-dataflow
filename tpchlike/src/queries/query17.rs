@@ -33,17 +33,17 @@ use ::Collections;
 //   );
 // :n -1
 
-pub fn query<G: Scope>(collections: &Collections<G>) -> ProbeHandle<G::Timestamp> 
+pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp> 
 where G::Timestamp: Lattice+Ord {
 
     let parts = 
     collections
-        .parts     // We fluff out search strings to have the right lengths. \\
+        .parts()   // We fluff out search strings to have the right lengths. \\
         .filter(|x| &x.brand == b"Brand#2300" && &x.container == b"MED BOX000")
         .map(|x| x.part_key);
 
     collections
-        .lineitems
+        .lineitems()
         .map(|x| (x.part_key, (x.quantity, x.extended_price)))
         .semijoin(&parts)
         .group(|_k, s, t| {

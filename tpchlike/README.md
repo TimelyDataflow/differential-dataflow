@@ -14,27 +14,26 @@ The program runs with the command line
 
 and looks in `<path>` for the various TPC-H files (e.g. `lineitem.tbl`). If you don't have these files, you can grab the generator at the TPC-H link up above. The `logical_batch` argument merges rounds of input and changes the output of the computation; we try to use `1` for the most part, which acts as if each tuple were introduced independently. The `physical_batch` argument indicates how many logical rounds should be introduced concurrently; increasing this argument can increase the throughput at the expense of latency, but will not change the output of the computation.
 
-Here are some initial measurements on the scale factor 1 dataset (about 1GB of data, and six million tuples in the `lineitem` relation), as we vary the physical batching (varying the concurrent work). We also report the number of tuples in the base relations used by the query (though our harness currently inserts all tuples into all relations anyhow; oops).*
+Here are some initial measurements on the scale factor 1 dataset* (about 1GB of data, and six million tuples in the `lineitem` relation), as we vary the physical batching (varying the concurrent work). We also report the number of tuples in the base relations used by the query, and the throughput at batch size 100,000.**
 
-|         |  1,000 | 10,000 | 100,000 | tuples touched |
-|--------:|-------:|-------:|--------:|---------------:|
-| [query01](https://github.com/frankmcsherry/differential-dataflow/blob/master/tpchlike/src/queries/query01.rs) |  1.26s |  1.33s |   1.43s | 6,001,215 |
-| [query02](https://github.com/frankmcsherry/differential-dataflow/blob/master/tpchlike/src/queries/query02.rs) |  2.29s |  1.72s |   1.61s | 1,010,030 |
-| [query03](https://github.com/frankmcsherry/differential-dataflow/blob/master/tpchlike/src/queries/query03.rs) |  2.67s |  2.35s |   2.31s | 7,651,215 |
-| [query04](https://github.com/frankmcsherry/differential-dataflow/blob/master/tpchlike/src/queries/query04.rs) |  6.83s |  5.80s |   3.72s | 7,501,215 |
-| [query05](https://github.com/frankmcsherry/differential-dataflow/blob/master/tpchlike/src/queries/query05.rs) |  5.23s |  4.57s |   3.82s | 7,661,245 |
-| [query06](https://github.com/frankmcsherry/differential-dataflow/blob/master/tpchlike/src/queries/query06.rs) |  1.29s |  1.35s |   1.49s | 6,001,215 |
-| [query07](https://github.com/frankmcsherry/differential-dataflow/blob/master/tpchlike/src/queries/query07.rs) |  3.19s |  2.49s |   2.20s | 7,661,240 |
-| [query08](https://github.com/frankmcsherry/differential-dataflow/blob/master/tpchlike/src/queries/query08.rs) |  9.48s |  7.20s |   5.48s | 7,861,240 |
-| [query15](https://github.com/frankmcsherry/differential-dataflow/blob/master/tpchlike/src/queries/query15.rs) | 73.12s | 67.15s |  84.63s | 6,011,215 |
-| [query17](https://github.com/frankmcsherry/differential-dataflow/blob/master/tpchlike/src/queries/query17.rs) |  7.42s |  5.72s |   4.78s | 6,201,215 |
-| [query19](https://github.com/frankmcsherry/differential-dataflow/blob/master/tpchlike/src/queries/query19.rs) |  1.54s |  1.57s |   1.67s | 6,201,215 |
-| [query20](https://github.com/frankmcsherry/differential-dataflow/blob/master/tpchlike/src/queries/query20.rs) |  1.92s |  1.74s |   1.75s | 7,011,240 |
-| all**      |  82.86s   |  74.77s | 90.55s |  7,011,245 |
+|                                                                                                               |  1,000 | 10,000 | 100,000 | tuples touched | rate @ 100,000 |
+|--------------------------------------------------------------------------------------------------------------:|-------:|-------:|--------:|---------------:|---------------:|
+| [query01](https://github.com/frankmcsherry/differential-dataflow/blob/master/tpchlike/src/queries/query01.rs) |  0.35s |  0.32s |   0.30s |      6,001,215 |       19.84M/s |
+| [query02](https://github.com/frankmcsherry/differential-dataflow/blob/master/tpchlike/src/queries/query02.rs) |  1.15s |  0.65s |   0.48s |      1,010,030 |        2.10M/s |
+| [query03](https://github.com/frankmcsherry/differential-dataflow/blob/master/tpchlike/src/queries/query03.rs) |  1.88s |  1.43s |   1.28s |      7,651,215 |        5.96M/s |
+| [query04](https://github.com/frankmcsherry/differential-dataflow/blob/master/tpchlike/src/queries/query04.rs) |  5.89s |  4.10s |   2.66s |      7,501,215 |        2.82M/s |
+| [query05](https://github.com/frankmcsherry/differential-dataflow/blob/master/tpchlike/src/queries/query05.rs) |  4.51s |  3.50s |   2.86s |      7,661,245 |        2.68M/s |
+| [query06](https://github.com/frankmcsherry/differential-dataflow/blob/master/tpchlike/src/queries/query06.rs) |  0.35s |  0.33s |   0.32s |      6,001,215 |       18.83M/s |
+| [query07](https://github.com/frankmcsherry/differential-dataflow/blob/master/tpchlike/src/queries/query07.rs) |  2.32s |  1.46s |   1.07s |      7,661,240 |        7.17M/s |
+| [query08](https://github.com/frankmcsherry/differential-dataflow/blob/master/tpchlike/src/queries/query08.rs) |  6.82s |  5.28s |   3.87s |      7,861,240 |        1.98M/s |
+| [query15](https://github.com/frankmcsherry/differential-dataflow/blob/master/tpchlike/src/queries/query15.rs) | 70.19s | 65.75s |  81.80s |      6,011,215 |       74.48K/s |
+| [query17](https://github.com/frankmcsherry/differential-dataflow/blob/master/tpchlike/src/queries/query17.rs) |  6.56s |  4.79s |   3.75s |      6,201,215 |        1.66M/s |
+| [query19](https://github.com/frankmcsherry/differential-dataflow/blob/master/tpchlike/src/queries/query19.rs) |  0.63s |  0.50s |   0.46s |      6,201,215 |       13.48M/s |
+| [query20](https://github.com/frankmcsherry/differential-dataflow/blob/master/tpchlike/src/queries/query20.rs) |  1.05s |  0.70s |   0.61s |      6,811,215 |       11.20M/s |
 
-*: It is very possible that I have botched some of the query implementations. I'm not validating the results at the moment, as I don't have much to validate against, but if you think you see bugs (or want to help validating) drop me a line! Please don't just go and use these measurements as "truth" until we find out if I am actually computing the correct answers.
+*: I have a copy of the scale factor 10 dataset, which is what the hot-dog eating paper uses, but OSX annoyingly sees the sequential data loading as a great indication that it should page everything out to disk. It ends up at 16GB in memory, reading the data back in mostly measures my SSD (which gives 800MB/s reads, and indeed most queries take just over 20 seconds).
 
-**: I'm not doing any multi-query optimization, so this is probably close to the sum of times. It is maintaining all of the queries consistently as the tuples flow in, though. The number may also be a bit stale as I roll out more queries.
+**: It is very possible that I have botched some of the query implementations. I'm not validating the results at the moment, as I don't have much to validate against, but if you think you see bugs (or want to help validating) drop me a line! Please don't just go and use these measurements as "truth" until we find out if I am actually computing the correct answers.
 
 ---
 

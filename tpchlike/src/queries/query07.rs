@@ -60,46 +60,52 @@ fn starts_with(source: &[u8], query: &[u8]) -> bool {
     source.len() >= query.len() && &source[..query.len()] == query
 }
 
-pub fn query<G: Scope>(collections: &Collections<G>) -> ProbeHandle<G::Timestamp> 
+pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp> 
 where G::Timestamp: Lattice+Ord {
 
     let nations =
     collections
-        .nations
+        .nations()
         .filter(|n| starts_with(&n.name, b"FRANCE") || starts_with(&n.name, b"GERMANY"))
         .map(|n| (n.nation_key, n.name));
 
     let customers = 
     collections
-        .customers
+        .customers()
         .map(|c| (c.nation_key, c.cust_key))
         .join(&nations)
-        .map(|(nation_key, cust_key, name)| (cust_key, name));
+        .map(|(_nation_key, cust_key, name)| (cust_key, name));
 
     let orders = 
     collections
-        .orders
+        .orders()
         .map(|o| (o.cust_key, o.order_key))
         .join(&customers)
-        .map(|(cust_key, order_key, name)| (order_key, name));
+        .map(|(_cust_key, order_key, name)| (order_key, name));
 
     let suppliers = 
     collections
-        .suppliers
+        .suppliers()
         .map(|s| (s.nation_key, s.supp_key))
         .join(&nations)
-        .map(|(nation_key, supp_key, name)| (supp_key, name));
+        .map(|(_nation_key, supp_key, name)| (supp_key, name));
 
     collections
-        .lineitems
+        .lineitems()
         .inner
-        .map(|(l, t, d)| ((l.supp_key, (l.order_key, l.ship_date)), t, (l.extended_price * (100 - l.discount)) as isize / 100 * d))
+        .flat_map(|(l, t, d)| 
+            if create_date(1995, 1, 1) <= l.ship_date && l.ship_date <= create_date(1996, 12, 31) {
+                Some(((l.supp_key, (l.order_key, l.ship_date)), t, (l.extended_price * (100 - l.discount)) as isize / 100 * d)).into_iter()
+            }
+            else { None.into_iter() }
+        )
+        // .map(|(l, t, d)| )
         .as_collection()
-        .filter(|l| create_date(1995, 1, 1) <= (l.1).1 && (l.1).1 <= create_date(1996, 12, 31))
+        // .filter(|l| create_date(1995, 1, 1) <= (l.1).1 && (l.1).1 <= create_date(1996, 12, 31))
         .join(&suppliers)
-        .map(|(supp_key, (order_key, ship_date), name_s)| (order_key, (ship_date, name_s)))
+        .map(|(_supp_key, (order_key, ship_date), name_s)| (order_key, (ship_date, name_s)))
         .join(&orders)
-        .map(|(order_key, (ship_date, name_s), name_c)| (name_s, name_c, ship_date >> 16))
+        .map(|(_order_key, (ship_date, name_s), name_c)| (name_s, name_c, ship_date >> 16))
         .filter(|x| x.0 != x.1)
         .count()
         .probe()

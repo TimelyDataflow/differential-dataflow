@@ -1,8 +1,8 @@
 use timely::dataflow::*;
-use timely::dataflow::operators::*;
+// use timely::dataflow::operators::*;
 use timely::dataflow::operators::probe::Handle as ProbeHandle;
 
-use differential_dataflow::AsCollection;
+// use differential_dataflow::AsCollection;
 use differential_dataflow::operators::*;
 use differential_dataflow::lattice::Lattice;
 
@@ -37,20 +37,23 @@ use ::Collections;
 //     o_orderpriority;
 // :n -1
 
-pub fn query<G: Scope>(collections: &Collections<G>) -> ProbeHandle<G::Timestamp> 
+pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp> 
 where G::Timestamp: Lattice+Ord {
 
     let lineitems = 
     collections
-        .lineitems
-        .filter(|l| l.commit_date < l.receipt_date)
-        .map(|l| l.order_key)
+        .lineitems()
+        .flat_map(|l| if l.commit_date < l.receipt_date { Some(l.order_key).into_iter() } else { None.into_iter() })
         .distinct();
 
     collections
-        .orders
-        .filter(|o| o.order_date >= ::types::create_date(1993, 7, 1) && o.order_date < ::types::create_date(1993, 10, 1))
-        .map(|o| (o.order_key, o.order_priority))
+        .orders()
+        .flat_map(|o| 
+            if o.order_date >= ::types::create_date(1993, 7, 1) && o.order_date < ::types::create_date(1993, 10, 1) {
+                Some((o.order_key, o.order_priority)).into_iter()
+            }
+            else { None.into_iter() }
+        )
         .semijoin(&lineitems)
         .map(|o| o.1)
         .count()

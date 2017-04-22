@@ -12,6 +12,7 @@ pub use self::region::Region;
 
 pub type Date = u32;
 
+#[inline(always)]
 pub fn create_date(year: u16, month: u8, day: u8) -> u32 {
     (year as u32) << 16 + (month as u32) << 8 + (day as u32)
 }

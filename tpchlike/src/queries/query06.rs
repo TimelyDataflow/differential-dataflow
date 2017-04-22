@@ -7,6 +7,7 @@ use differential_dataflow::operators::*;
 use differential_dataflow::lattice::Lattice;
 
 use ::Collections;
+use ::types::create_date;
 
 // -- $ID$
 // -- TPC-H/TPC-R Forecasting Revenue Change Query (Q6)
@@ -25,18 +26,18 @@ use ::Collections;
 //     and l_quantity < :3;
 // :n -1
 
-pub fn query<G: Scope>(collections: &Collections<G>) -> ProbeHandle<G::Timestamp> 
+pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp> 
 where G::Timestamp: Lattice+Ord {
 
     collections
-        .lineitems
-        .filter(|x| x.ship_date >= ::types::create_date(1994, 1, 1) && 
-                    x.ship_date < ::types::create_date(1995, 1, 1) && 
-                    5 <= x.discount && 
-                    x.discount < 7 && 
-                    x.quantity < 24)
+        .lineitems()
         .inner
-        .map(|(x, time, diff)| ((), time, (x.extended_price * x.discount / 100) * diff as i64))
+        .flat_map(|(x, time, diff)| 
+            if create_date(1994, 1, 1) <= x.ship_date && x.ship_date < create_date(1995, 1, 1) && 5 <= x.discount && x.discount < 7 && x.quantity < 24 {
+                Some(((), time, (x.extended_price * x.discount / 100) * diff as i64)).into_iter()
+            }
+            else { None.into_iter() }
+        )
         .as_collection()
         .count()
         .probe()

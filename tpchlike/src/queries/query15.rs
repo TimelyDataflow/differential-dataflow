@@ -7,6 +7,7 @@ use differential_dataflow::operators::*;
 use differential_dataflow::lattice::Lattice;
 
 use ::Collections;
+use ::types::create_date;
 
 // -- $ID$
 // -- TPC-H/TPC-R Top Supplier Query (Q15)
@@ -49,16 +50,23 @@ use ::Collections;
 // drop view revenue:s;
 // :n -1
 
-pub fn query<G: Scope>(collections: &Collections<G>) -> ProbeHandle<G::Timestamp> 
+pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp> 
 where G::Timestamp: Lattice+Ord {
 
     // revenue by supplier
     let revenue = 
         collections
-            .lineitems
-            .filter(|x| ::types::create_date(1996, 1, 1) <= x.ship_date && x.ship_date < ::types::create_date(1996,4,1))
+            .lineitems()
             .inner
-            .map(|(item, time, diff)| (item.supp_key, time, item.extended_price * diff as i64))
+            .flat_map(|(item, time, diff)| 
+                if create_date(1996, 1, 1) <= item.ship_date && item.ship_date < create_date(1996,4,1) {
+                    Some((item.supp_key, time, item.extended_price * diff as i64)).into_iter()
+                }
+                else { None.into_iter() }
+            )
+            // .filter(|x| ::types::create_date(1996, 1, 1) <= x.ship_date && x.ship_date < ::types::create_date(1996,4,1))
+            // .inner
+            // .map(|(item, time, diff)| (item.supp_key, time, item.extended_price * diff as i64))
             .as_collection()
             .count();
 
@@ -73,7 +81,7 @@ where G::Timestamp: Lattice+Ord {
             .map(|(_,(total, supp))| (supp, -total));
 
     collections
-        .suppliers
+        .suppliers()
         .map(|s| (s.supp_key, (s.name, s.address, s.phone)))
         .join(&top_suppliers)
         .probe()

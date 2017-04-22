@@ -38,20 +38,24 @@ use ::Collections;
 //     l_linestatus;
 // :n -1
 
-pub fn query<G: Scope>(collections: &Collections<G>) -> ProbeHandle<G::Timestamp> where G::Timestamp: Lattice+Ord {
+pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp> where G::Timestamp: Lattice+Ord {
 
-    collections.lineitems
-               .filter(|x| x.ship_date < ::types::create_date(1998,9,1))
-               .inner
-               .map(|(item, time, diff)| 
-                ((item.return_flag, item.line_status), time, 
-                    DiffPair::new(item.quantity, 
-                    DiffPair::new(item.extended_price,
-                    DiffPair::new(item.extended_price * (100 - item.discount) / 100,
-                    DiffPair::new(item.extended_price * (100 - item.discount) * (100 + item.tax) / 10000,
-                    DiffPair::new(item.discount, diff)))))))
-               .as_collection()
-               .count()
-               .probe()
-               .0
+    collections
+        .lineitems()
+        .inner
+        .flat_map(|(item, time, diff)| 
+            if item.ship_date < ::types::create_date(1998, 9, 1) {
+                Some(((item.return_flag, item.line_status), time, 
+                    DiffPair::new(diff as i64 * item.quantity, 
+                    DiffPair::new(diff as i64 * item.extended_price,
+                    DiffPair::new(diff as i64 * item.extended_price * (100 - item.discount) / 100,
+                    DiffPair::new(diff as i64 * item.extended_price * (100 - item.discount) * (100 + item.tax) / 10000,
+                    DiffPair::new(diff as i64 * item.discount, diff))))))).into_iter()
+            }
+            else { None.into_iter() }
+        )
+        .as_collection()
+        .count()
+        .probe()
+        .0
 }

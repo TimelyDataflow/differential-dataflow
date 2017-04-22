@@ -43,24 +43,18 @@ fn starts_with(source: &[u8], query: &[u8]) -> bool {
     source.len() >= query.len() && &source[..query.len()] == query
 }
 
-fn substring(source: &[u8], query: &[u8]) -> bool {
-    (0 .. (source.len() - query.len())).any(|offset| 
-        (0 .. query.len()).all(|i| source[i + offset] == query[i])
-    )
-}
-
-pub fn query<G: Scope>(collections: &Collections<G>) -> ProbeHandle<G::Timestamp> 
+pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp> 
 where G::Timestamp: Lattice+Ord {
 
     let customers =
     collections
-        .customers
+        .customers()
         .filter(|c| starts_with(&c.mktsegment[..], b"BUILDING"))
         .map(|c| c.cust_key);
 
     let lineitems = 
     collections
-        .lineitems
+        .lineitems()
         .filter(|l| l.ship_date > ::types::create_date(1995, 3, 15))
         .inner
         .map(|(l,t,d)| (l.order_key, t, (l.extended_price * (100 - l.discount) / 100) as isize * d))
@@ -68,7 +62,7 @@ where G::Timestamp: Lattice+Ord {
 
     let orders = 
     collections
-        .orders
+        .orders()
         .filter(|o| o.order_date < ::types::create_date(1995, 3, 15))
         .map(|o| (o.cust_key, (o.order_key, o.order_date, o.ship_priority)));
 
