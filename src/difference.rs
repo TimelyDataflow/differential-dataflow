@@ -36,8 +36,10 @@ impl Diff for i32 {
 /// The Diff defined by a pair of Diff elements.
 #[derive(Copy, Ord, PartialOrd, Eq, PartialEq, Debug, Clone)]
 pub struct DiffPair<R1: Diff, R2: Diff> {
-	element1: R1,
-	element2: R2,
+	/// The first element in the pair.
+	pub element1: R1,
+	/// The second element in the pair.
+	pub element2: R2,
 }
 
 impl<R1: Diff, R2: Diff> DiffPair<R1, R2> {
@@ -95,5 +97,17 @@ where <R1 as Mul<T>>::Output: Diff, <R2 as Mul<T>>::Output: Diff {
 		)
 	}
 }
+
+// // TODO: This currently causes rustc to trip a recursion limit, because who knows why.
+// impl<R1: Diff, R2: Diff> Mul<DiffPair<R1,R2>> for isize
+// where isize: Mul<R1>, isize: Mul<R2>, <isize as Mul<R1>>::Output: Diff, <isize as Mul<R2>>::Output: Diff {
+// 	type Output = DiffPair<<isize as Mul<R1>>::Output, <isize as Mul<R2>>::Output>;
+// 	fn mul(self, other: DiffPair<R1,R2>) -> Self::Output {
+// 		DiffPair::new(
+// 			self * other.element1,
+// 			self * other.element2,
+// 		)
+// 	}
+// }
 
 impl<R1: Diff, R2: Diff> Abomonation for DiffPair<R1, R2> { }
