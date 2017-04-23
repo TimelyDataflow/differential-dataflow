@@ -30,16 +30,16 @@ Here are some initial measurements on the scale factor 1 dataset (about 1GB of d
 | [query10](./src/queries/query10.rs) |  8.02s |  5.20s |   3.22s |      7,651,240 |        2.38M/s |
 | [query11](./src/queries/query11.rs) | 10.81s |  9.40s |   9.82s |        810,025 |       82.49K/s |
 | [query12](./src/queries/query12.rs) |  2.71s |  1.72s |   1.10s |      7,501,215 |        6.84M/s |
-|  query13                            |        |        |         |                |                |
+| [query13](./src/queries/query13.rs) |  8.66s |  6.06s |   4.96s |      1,650,000 |      332.63K/s |
 | [query14](./src/queries/query14.rs) |  1.19s |  0.72s |   0.50s |      6,201,215 |       12.52M/s |
 | [query15](./src/queries/query15.rs) |  4.29s |  2.11s |   1.28s |      6,011,215 |        4.69M/s |
-|  query16                            |        |        |         |                |                |
+| [query16](./src/queries/query16.rs) |  1.92s |  1.22s |   0.98s |      1,010,000 |        1.03M/s |
 | [query17](./src/queries/query17.rs) |  6.71s |  4.96s |   3.76s |      6,201,215 |        1.65M/s |
 | [query18](./src/queries/query18.rs) | 30.52s | 22.32s |  18.13s |      7,651,215 |      422.10K/s |
 | [query19](./src/queries/query19.rs) |  0.51s |  0.27s |   0.24s |      6,201,215 |       25.40M/s |
 | [query20](./src/queries/query20.rs) |  2.11s |  1.28s |   1.06s |      6,811,215 |        6.41M/s |
 | [query21](./src/queries/query21.rs) | 23.85s | 16.08s |  10.55s |      7,511,240 |      712.09K/s |
-| [query22](./src/queries/query21.rs) | 25.67s | 29.30s |  47.69s |      1,650,000 |       56.32K/s |
+| [query22](./src/queries/query22.rs) | 25.67s | 29.30s |  47.69s |      1,650,000 |       56.32K/s |
 
 **PLEASE NOTE**: These times are the reported running times of the code in the repository, which may or may not compute the intended quantities. It is very possible (likely, even) that I have botched some of the query implementations. I'm not validating the results at the moment, as I don't have much to validate against, but if you think you see bugs (or want to help validating) drop me a line! Please don't just go and use these measurements as "truth" until we find out if I am actually computing the correct answers.
 
