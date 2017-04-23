@@ -88,7 +88,6 @@ where G::Timestamp: Lattice+Ord {
     let result2 = lines2.semijoin(&parts2);
     let result3 = lines3.semijoin(&parts3);
 
-    // NOTE: This is only correct due to disjointness assumptions. Probably should keep revenue around as data, distinct, then count?
     result1
         .concat(&result2)
         .concat(&result3)
