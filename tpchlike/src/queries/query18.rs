@@ -4,12 +4,15 @@ use timely::dataflow::operators::probe::Handle as ProbeHandle;
 
 use differential_dataflow::AsCollection;
 use differential_dataflow::operators::*;
-use differential_dataflow::operators::arrange::{ArrangeBySelf, ArrangeByKey};
+use differential_dataflow::operators::arrange::Arrange;
 use differential_dataflow::operators::join::JoinArranged;
 use differential_dataflow::operators::group::GroupArranged;
 use differential_dataflow::trace::Trace;
+use differential_dataflow::trace::implementations::ord::OrdKeySpine as DefaultKeyTrace;
 use differential_dataflow::trace::implementations::ord::OrdValSpine as DefaultValTrace;
 use differential_dataflow::lattice::Lattice;
+use differential_dataflow::hashable::UnsignedWrapper;
+
 use ::Collections;
 
 // -- $ID$
@@ -55,19 +58,23 @@ use ::Collections;
 pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp> 
 where G::Timestamp: Lattice+Ord {
 
+    let orders =
+    collections
+        .orders()
+        .map(|o| (UnsignedWrapper::from(o.order_key), (o.cust_key, o.order_date, o.total_price)))
+        .arrange(DefaultValTrace::new());
+
     collections
         .lineitems()
         .inner
-        .map(|(l, t, d)| (l.order_key, t, (l.quantity as isize) * d))
+        .map(|(l, t, d)| ((UnsignedWrapper::from(l.order_key), ()), t, (l.quantity as isize) * d))
         .as_collection()
-        // .count()
-        // .filter(|x| x.1 > 300)
-        .arrange_by_self()
-        .group_arranged(|_k,_s,t| t.push((_s[0].1, 1)), DefaultValTrace::new())
-        .join_arranged(&collections.orders().map(|o| (o.order_key, (o.cust_key, o.order_date, o.total_price))).arrange_by_key_hashed(), |k,v1,v2| (k.clone(), v1.clone(), v2.clone()))
+        .arrange(DefaultKeyTrace::new())
+        .group_arranged(|_k,s,t| t.push((s[0].1, 1)), DefaultValTrace::new())
+        .join_arranged(&orders, |k,v1,v2| (k.item.clone(), v1.clone(), v2.clone()))
         .filter(|x| x.1 > 300)
         .map(|(okey, quantity, (custkey, date, price))| (custkey, (okey, date, price, quantity)))
-        .join(&collections.customers().map(|c| (c.cust_key, c.name.to_string())))
+        .join_u(&collections.customers().map(|c| (c.cust_key, c.name.to_string())))
         .probe()
         .0
 }

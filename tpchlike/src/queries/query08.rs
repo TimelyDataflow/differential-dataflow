@@ -63,8 +63,8 @@ pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Times
 where G::Timestamp: Lattice+Ord {
 
     let regions = collections.regions().filter(|r| starts_with(&r.name, b"AMERICA")).map(|r| r.region_key);
-    let nations1 = collections.nations().map(|n| (n.region_key, n.nation_key)).semijoin(&regions).map(|x| x.1);
-    let customers = collections.customers().map(|c| (c.nation_key, c.cust_key)).semijoin(&nations1).map(|x| x.1);
+    let nations1 = collections.nations().map(|n| (n.region_key, n.nation_key)).semijoin_u(&regions).map(|x| x.1);
+    let customers = collections.customers().map(|c| (c.nation_key, c.cust_key)).semijoin_u(&nations1).map(|x| x.1);
     let orders = 
     collections
         .orders()
@@ -74,7 +74,7 @@ where G::Timestamp: Lattice+Ord {
             }
             else { None.into_iter() }
         )
-        .semijoin(&customers)
+        .semijoin_u(&customers)
         .map(|x| x.1);
 
     let nations2 = collections.nations.map(|n| (n.nation_key, starts_with(&n.name, b"BRAZIL")));
@@ -82,7 +82,7 @@ where G::Timestamp: Lattice+Ord {
     collections
         .suppliers()
         .map(|s| (s.nation_key, s.supp_key))
-        .join(&nations2)
+        .join_u(&nations2)
         .map(|(_, supp_key, is_name)| (supp_key, is_name));
 
     let parts = collections.parts.filter(|p| p.typ.as_str() == "ECONOMY ANODIZED STEEL").map(|p| p.part_key);
@@ -92,15 +92,15 @@ where G::Timestamp: Lattice+Ord {
         .inner
         .map(|(l,t,d)| ((l.part_key, (l.supp_key, l.order_key)), t, ((l.extended_price * (100 - l.discount)) as isize / 100) * d))
         .as_collection()
-        .semijoin(&parts)
+        .semijoin_u(&parts)
         .map(|(_part_key, (supp_key, order_key))| (order_key, supp_key))
-        .join(&orders)
+        .join_u(&orders)
         .map(|(_order_key, supp_key, order_date)| (supp_key, order_date))
-        .join(&suppliers)
+        .join_u(&suppliers)
         .inner
         .map(|((_, order_date, is_name), time, price)| (order_date, time, DiffPair::new(if is_name { price } else { 0 }, price)))
         .as_collection()
-        .count()
+        .count_u()
         .probe()
         .0
 }

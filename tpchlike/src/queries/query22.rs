@@ -63,7 +63,7 @@ where G::Timestamp: Lattice+Ord {
         .flat_map(|c| {
             let cc: [u8;2] = [c.phone[0], c.phone[1]];
             if (&cc == b"13" || &cc == b"31" || &cc == b"23" || &cc == b"29" || &cc == b"30" || &cc == b"18" || &cc == b"17") && c.acctbal > 0 {
-                Some((cc, c.acctbal, c.cust_key)).into_iter()
+                Some((((cc[1] as u16) << 8) + cc[0] as u16, c.acctbal, c.cust_key)).into_iter()
             }
             else {
                 None.into_iter()
@@ -79,14 +79,14 @@ where G::Timestamp: Lattice+Ord {
 
     customers
         .map(|(cc, acct, key)| (key, (cc, acct)))
-        .antijoin(&collections.orders().map(|o| o.cust_key).distinct())
+        .antijoin_u(&collections.orders().map(|o| o.cust_key).distinct_u())
         .map(|(_, (cc, acct))| (cc, acct))
-        .join(&averages)
+        .join_u(&averages)
         .filter(|&(_cc, acct, aggs)| acct as isize > aggs.element1 / aggs.element2)
         .inner
         .map(|((cc, acct, _aggs), t, d)| (cc, t, DiffPair::new(acct as isize * d, d)))
         .as_collection()
-        .count()
+        .count_u()
         .probe()
         .0
 }

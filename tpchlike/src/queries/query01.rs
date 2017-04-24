@@ -45,7 +45,7 @@ pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Times
         .inner
         .flat_map(|(item, time, diff)| 
             if item.ship_date < ::types::create_date(1998, 9, 1) {
-                Some(((item.return_flag, item.line_status), time, 
+                Some((((item.return_flag[0] as u16) << 8) + item.line_status[0] as u16, time, 
                     DiffPair::new(diff as i64 * item.quantity, 
                     DiffPair::new(diff as i64 * item.extended_price,
                     DiffPair::new(diff as i64 * item.extended_price * (100 - item.discount) / 100,
@@ -57,7 +57,7 @@ pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Times
             }
         )
         .as_collection()
-        .count()
+        .count_u()
         .probe()
         .0
 }

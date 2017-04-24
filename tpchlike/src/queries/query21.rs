@@ -78,29 +78,29 @@ where G::Timestamp: Lattice+Ord {
     collections
         .lineitems()
         .map(|l| (l.order_key, (l.supp_key, l.receipt_date > l.commit_date)))
-        .semijoin(&orders);
+        .semijoin_u(&orders);
 
     let lateitems = lineitems.filter(|l| (l.1).1);
-    let lateorders = lateitems.map(|l| l.0).distinct();
+    let lateorders = lateitems.map(|l| l.0).distinct_u();
 
     let problems = 
     lineitems
         .map(|(order_key, (_supp_key, is_late))| (order_key, is_late))
-        .semijoin(&lateorders)    //- on_time and late, but just one late -\\
-        .group(|_order_key, s, t| if s.len() == 2 && s[1].1 == 1 { t.push(((), 1)); })
+        .semijoin_u(&lateorders)    //- on_time and late, but just one late -\\
+        .group_u(|_order_key, s, t| if s.len() == 2 && s[1].1 == 1 { t.push(((), 1)); })
         .map(|(order_key, _)| order_key);
 
     let latesupps = 
     lateitems
-        .semijoin(&problems)
+        .semijoin_u(&problems)
         .map(|(_order_key, (supp_key, _))| supp_key);
 
     collections
         .suppliers()
         .map(|s| (s.supp_key, (s.name, s.nation_key)))
-        .semijoin(&latesupps)
+        .semijoin_u(&latesupps)
         .map(|(_, (name, nation))| (nation, name))
-        .semijoin(&collections.nations().filter(|n| starts_with(&n.name, b"SAUDI ARABIA")).map(|n| n.nation_key))
+        .semijoin_u(&collections.nations().filter(|n| starts_with(&n.name, b"SAUDI ARABIA")).map(|n| n.nation_key))
         .count()
         .probe()
         .0

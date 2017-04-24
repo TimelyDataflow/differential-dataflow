@@ -7,6 +7,7 @@ use differential_dataflow::operators::*;
 use differential_dataflow::lattice::Lattice;
 
 use ::Collections;
+use ::types::create_date;
 
 // -- $ID$
 // -- TPC-H/TPC-R Shipping Priority Query (Q3)
@@ -49,15 +50,18 @@ where G::Timestamp: Lattice+Ord {
     let customers =
     collections
         .customers()
-        .filter(|c| starts_with(&c.mktsegment[..], b"BUILDING"))
-        .map(|c| c.cust_key);
+        .flat_map(|c| if starts_with(&c.mktsegment[..], b"BUILDING") { Some(c.cust_key).into_iter() } else { None.into_iter() });
 
     let lineitems = 
     collections
         .lineitems()
-        .filter(|l| l.ship_date > ::types::create_date(1995, 3, 15))
         .inner
-        .map(|(l,t,d)| (l.order_key, t, (l.extended_price * (100 - l.discount) / 100) as isize * d))
+        .flat_map(|(l,t,d)| 
+            if l.ship_date > create_date(1995, 3, 15) {
+                Some((l.order_key, t, (l.extended_price * (100 - l.discount) / 100) as isize * d)).into_iter()
+            }
+            else { None.into_iter() }
+        )
         .as_collection();
 
     let orders = 
@@ -67,9 +71,9 @@ where G::Timestamp: Lattice+Ord {
         .map(|o| (o.cust_key, (o.order_key, o.order_date, o.ship_priority)));
 
     orders
-        .semijoin(&customers)
+        .semijoin_u(&customers)
         .map(|(_, (order_key, order_date, ship_priority))| (order_key, (order_date, ship_priority)))
-        .semijoin(&lineitems)
+        .semijoin_u(&lineitems)
         .count()
         .probe()
         .0

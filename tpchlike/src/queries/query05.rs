@@ -58,21 +58,21 @@ where G::Timestamp: Lattice+Ord {
     collections
         .nations()
         .map(|x| (x.region_key, (x.nation_key, x.name)))
-        .semijoin(&regions)
+        .semijoin_u(&regions)
         .map(|(_region_key, (nation_key, name))| (nation_key, name));
 
     let suppliers = 
     collections
         .suppliers()
         .map(|x| (x.nation_key, x.supp_key))
-        .join(&nations)
+        .join_u(&nations)
         .map(|(nat, supp, name)| (supp, (nat, name)));
 
     let customers = 
     collections
         .customers()
         .map(|c| (c.nation_key, c.cust_key))
-        .semijoin(&nations.map(|x| x.0))
+        .semijoin_u(&nations.map(|x| x.0))
         .map(|c| c.1);
         
     let orders =
@@ -80,7 +80,7 @@ where G::Timestamp: Lattice+Ord {
         .orders()
         .filter(|o| o.order_date >= create_date(1994, 1, 1) && o.order_date < create_date(1995, 1, 1))
         .map(|o| (o.cust_key, o.order_key))
-        .semijoin(&customers)
+        .semijoin_u(&customers)
         .map(|o| o.1);
 
     let lineitems = collections
@@ -88,11 +88,11 @@ where G::Timestamp: Lattice+Ord {
         .inner
         .map(|(l,t,d)| ((l.order_key, l.supp_key), t, d * (l.extended_price * (100 - l.discount) / 100) as isize))
         .as_collection()
-        .semijoin(&orders)
+        .semijoin_u(&orders)
         .map(|(_order, supp)| supp);
 
     suppliers
-        .semijoin(&lineitems)
+        .semijoin_u(&lineitems)
         .map(|(_supp, (_nat, name))| name)
         .count()
         .probe()

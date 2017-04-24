@@ -5,6 +5,7 @@ use timely::dataflow::operators::probe::Handle as ProbeHandle;
 use differential_dataflow::AsCollection;
 use differential_dataflow::operators::*;
 use differential_dataflow::lattice::Lattice;
+use differential_dataflow::difference::DiffPair;
 
 use ::Collections;
 use ::types::create_date;
@@ -37,6 +38,8 @@ fn starts_with(source: &[u8], query: &[u8]) -> bool {
 pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp> 
 where G::Timestamp: Lattice+Ord {
 
+    println!("TODO: we add a () value because there is no semijoins for value-free collections");
+
     let lineitems = 
     collections
         .lineitems()
@@ -52,9 +55,12 @@ where G::Timestamp: Lattice+Ord {
 
     collections
         .parts()
-        .map(|p| (p.part_key, starts_with(&p.typ.as_bytes(), b"PROMO")))
-        .semijoin(&lineitems)
-        .count()
+        .inner
+        .map(|(p, t, d)| ((p.part_key, ()), t, DiffPair::new(d, if starts_with(&p.typ.as_bytes(), b"PROMO") { d } else { 0 })))
+        .as_collection()
+        .semijoin_u(&lineitems)
+        .map(|(part_key, _)| part_key)
+        .count_u()
         .probe()
         .0
 }

@@ -36,6 +36,8 @@ use ::Collections;
 pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp> 
 where G::Timestamp: Lattice+Ord {
 
+    println!("TODO: query 17 gets a global count with key 0u8, rather than ().");
+
     let parts = 
     collections
         .parts()   // We fluff out search strings to have the right lengths. \\
@@ -45,8 +47,8 @@ where G::Timestamp: Lattice+Ord {
     collections
         .lineitems()
         .map(|x| (x.part_key, (x.quantity, x.extended_price)))
-        .semijoin(&parts)
-        .group(|_k, s, t| {
+        .semijoin_u(&parts)
+        .group_u(|_k, s, t| {
 
             // determine the total and count of quantity.
             let total: i64 = s.iter().map(|x| (x.0).0).sum();
@@ -60,9 +62,9 @@ where G::Timestamp: Lattice+Ord {
                              .map(|&((_,price),count)| (price, count)));
         })
         .inner
-        .map(|((_part, price), time, count)| ((), time, price * count as i64))
+        .map(|((_part, price), time, count)| (0u8, time, price * count as i64))
         .as_collection()
-        .count()
+        .count_u()
         .probe()
         .0
 }

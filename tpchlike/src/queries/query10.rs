@@ -76,15 +76,15 @@ where G::Timestamp: Lattice+Ord {
             }
             else { None.into_iter() }
         )
-        .semijoin(&lineitems)
+        .semijoin_u(&lineitems)
         .map(|(_, cust_key)| cust_key);
 
     collections
         .customers()
         .map(|c| (c.cust_key, (c.name.to_string(), c.phone, c.address.to_string(), c.comment.to_string(), c.nation_key)))
-        .semijoin(&orders)
+        .semijoin_u(&orders)
         .map(|(cust_key, (name, phn, addr, comm, nation_key))| (nation_key, (cust_key, name, phn, addr, comm)))
-        .join(&collections.nations().map(|n| (n.nation_key, n.name)))
+        .join_u(&collections.nations().map(|n| (n.nation_key, n.name)))
         .count()
         .probe()
         .0

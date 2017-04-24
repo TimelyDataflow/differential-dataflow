@@ -75,47 +75,45 @@ where G::Timestamp: Lattice+Ord {
     let regions = 
     collections
         .regions()
-        .filter(|x| starts_with(&x.name[..], b"EUROPE"))
-        .map(|x| x.region_key);
+        .flat_map(|x| if starts_with(&x.name[..], b"EUROPE") { Some(x.region_key).into_iter() } else { None.into_iter() });
 
     let nations = 
     collections
         .nations()
         .map(|x| (x.region_key, (x.nation_key, x.name)))
-        .semijoin(&regions)
+        .semijoin_u(&regions)
         .map(|(_region_key, (nation_key, name))| (nation_key, name));
 
     let suppliers = 
     collections
         .suppliers()
         .map(|x| (x.nation_key, (x.acctbal, x.name, x.address.to_string(), x.phone, x.comment.to_string(), x.supp_key)))
-        .semijoin(&nations.map(|x| x.0))
+        .semijoin_u(&nations.map(|x| x.0))
         .map(|(nat, (acc, nam, add, phn, com, key))| (key, (nat, acc, nam, add, phn, com)));
 
     let parts = 
     collections
         .parts()
-        .filter(|x| substring(x.typ.as_str().as_bytes(), b"BRASS") && x.size == 15)
-        .map(|x| (x.part_key, x.mfgr));
+        .flat_map(|x| if substring(x.typ.as_str().as_bytes(), b"BRASS") && x.size == 15 { Some((x.part_key, x.mfgr)).into_iter() } else { None.into_iter() });
 
     let partsupps = 
     collections
         .partsupps()
         .map(|x| (x.supp_key, (x.part_key, x.supplycost)))
-        .semijoin(&suppliers.map(|x| x.0))
+        .semijoin_u(&suppliers.map(|x| x.0))
         .map(|(supp, (part, supply_cost))| (part, (supply_cost, supp)))
-        .semijoin(&parts.map(|x| x.0))
-        .group(|_x, s, t| {
+        .semijoin_u(&parts.map(|x| x.0))
+        .group_u(|_x, s, t| {
             let minimum = (s[0].0).0;
             t.extend(s.iter().take_while(|x| (x.0).0 == minimum));
         });
 
     partsupps
-        .join(&parts)
+        .join_u(&parts)
         .map(|(part_key, (cost, supp), mfgr)| (supp, (cost, part_key, mfgr)))
-        .join(&suppliers)
+        .join_u(&suppliers)
         .map(|(_supp, (cost, part, mfgr), (nat, acc, nam, add, phn, com))| (nat, (cost, part, mfgr, acc, nam, add, phn, com)))
-        .join(&nations)
+        .join_u(&nations)
         .probe()
         .0
 }

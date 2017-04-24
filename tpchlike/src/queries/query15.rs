@@ -53,6 +53,8 @@ use ::types::create_date;
 pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp> 
 where G::Timestamp: Lattice+Ord {
 
+    println!("TODO: query 15 takes a global aggregate with key 0u8, instead of ().");
+
     // revenue by supplier
     let revenue = 
         collections
@@ -64,47 +66,39 @@ where G::Timestamp: Lattice+Ord {
                 }
                 else { None.into_iter() }
             )
-            .as_collection()
-            // .count()
-            ;
+            .as_collection();
 
     // suppliers with maximum revenue
     let top_suppliers =
         revenue
             // do a hierarchical min, to improve update perf.
-            // .map(|(supp, total)| ((), (-total, supp)))
-            // .map(|(supp, total)| (supp % 100, (-total, supp)))
-            // .group(|_k, s, t| t.extend(s.iter().take_while(|x| (x.0).0 == (s[0].0).0)))
-            // .map(|(_, x)| ((), x))
-            // .group(|_k, s, t| t.extend(s.iter().take_while(|x| (x.0).0 == (s[0].0).0)))
-            // .map(|(_,(total, supp))| (supp, -total));
-            .map(|key| (key % 1000, key))
-            .group(|_k, s, t| {
+            .map(|key| ((key % 1000) as u16, key))
+            .group_u(|_k, s, t| {
                 let max = s.iter().map(|x| x.1).max().unwrap();
                 t.extend(s.iter().filter(|x| x.1 == max));
             })
-            .map(|(_,key)| (key % 100, key))
-            .group(|_k, s, t| {
+            .map(|(_,key)| ((key % 100) as u8, key))
+            .group_u(|_k, s, t| {
                 let max = s.iter().map(|x| x.1).max().unwrap();
                 t.extend(s.iter().filter(|x| x.1 == max));
             })
-            .map(|(_,key)| (key % 10, key))
-            .group(|_k, s, t| {
+            .map(|(_,key)| ((key % 10) as u8, key))
+            .group_u(|_k, s, t| {
                 let max = s.iter().map(|x| x.1).max().unwrap();
                 t.extend(s.iter().filter(|x| x.1 == max));
             })
-            .map(|(_,key)| ((), key))
-            .group(|_k, s, t| {
+            .map(|(_,key)| (0u8, key))
+            .group_u(|_k, s, t| {
                 let max = s.iter().map(|x| x.1).max().unwrap();
                 t.extend(s.iter().filter(|x| x.1 == max));
             })
-            .map(|(_, key)| key);
+            .map(|(_, key)| key)
+            .count_u();
 
     collections
         .suppliers()
         .map(|s| (s.supp_key, (s.name, s.address.to_string(), s.phone)))
-        .semijoin(&top_suppliers)
-        .count()
+        .join_u(&top_suppliers)
         .probe()
         .0
 }

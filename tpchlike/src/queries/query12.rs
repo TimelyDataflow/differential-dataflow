@@ -1,10 +1,11 @@
 use timely::dataflow::*;
-// use timely::dataflow::operators::*;
+use timely::dataflow::operators::*;
 use timely::dataflow::operators::probe::Handle as ProbeHandle;
 
-// use differential_dataflow::AsCollection;
+use differential_dataflow::AsCollection;
 use differential_dataflow::operators::*;
 use differential_dataflow::lattice::Lattice;
+use differential_dataflow::difference::DiffPair;
 
 use ::Collections;
 use ::types::create_date;
@@ -52,11 +53,24 @@ fn starts_with(source: &[u8], query: &[u8]) -> bool {
 pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp> 
 where G::Timestamp: Lattice+Ord {
 
+    println!("TODO: query 12 does contortions because isize doesn't implement Mul<DiffPair<isize, isize>>.");
+
     let orders = 
     collections
         .orders()
-        .map(|o| (o.order_key, starts_with(&o.order_priority, b"1-URGENT") || starts_with(&o.order_priority, b"2-HIGH")));
+        .inner
+        .map(|(o, t, d)| {
+            let diff = if starts_with(&o.order_priority, b"1-URGENT") || starts_with(&o.order_priority, b"2-HIGH") {
+                DiffPair::new(d, 0)
+            }
+            else { 
+                DiffPair::new(0, d) 
+            };
+            ((o.order_key, ()), t, diff)
+        })
+        .as_collection();
 
+    let lineitems =
     collections
         .lineitems()
         .flat_map(|l| 
@@ -68,8 +82,11 @@ where G::Timestamp: Lattice+Ord {
 
             }
             else { None.into_iter() }
-        )
-        .join(&orders)
+        );
+
+    orders
+        .join_u(&lineitems)
+        .map(|(_order, _, ship_mode)| ship_mode)
         .count()
         .probe()
         .0

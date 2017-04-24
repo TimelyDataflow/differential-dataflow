@@ -70,17 +70,17 @@ where G::Timestamp: Lattice+Ord {
     collections
         .lineitems()
         .map(|l| (l.part_key, (l.supp_key, l.order_key, l.extended_price * (100 - l.discount) / 100, l.quantity)))
-        .semijoin(&parts)
+        .semijoin_u(&parts)
         .map(|(part_key, (supp_key, order_key, revenue, quantity))| ((part_key, supp_key), (order_key, revenue, quantity)))
         .join(&collections.partsupps().map(|ps| ((ps.part_key, ps.supp_key), ps.supplycost)))
         .inner
         .map(|(((_part_key, supp_key), (order_key, revenue, quantity), supplycost),t,d)| ((order_key, supp_key), t, ((revenue - supplycost * quantity) as isize) * d))
         .as_collection()
-        .join(&collections.orders().map(|o| (o.order_key, o.order_date >> 16)))
+        .join_u(&collections.orders().map(|o| (o.order_key, o.order_date >> 16)))
         .map(|(_, supp_key, order_year)| (supp_key, order_year))
-        .join(&collections.suppliers().map(|s| (s.supp_key, s.nation_key)))
+        .join_u(&collections.suppliers().map(|s| (s.supp_key, s.nation_key)))
         .map(|(_, order_year, nation_key)| (nation_key, order_year))
-        .join(&collections.nations().map(|n| (n.nation_key, n.name)))
+        .join_u(&collections.nations().map(|n| (n.nation_key, n.name)))
         .count()
         .probe()
         .0

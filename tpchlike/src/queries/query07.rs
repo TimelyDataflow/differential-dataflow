@@ -73,21 +73,21 @@ where G::Timestamp: Lattice+Ord {
     collections
         .customers()
         .map(|c| (c.nation_key, c.cust_key))
-        .join(&nations)
+        .join_u(&nations)
         .map(|(_nation_key, cust_key, name)| (cust_key, name));
 
     let orders = 
     collections
         .orders()
         .map(|o| (o.cust_key, o.order_key))
-        .join(&customers)
+        .join_u(&customers)
         .map(|(_cust_key, order_key, name)| (order_key, name));
 
     let suppliers = 
     collections
         .suppliers()
         .map(|s| (s.nation_key, s.supp_key))
-        .join(&nations)
+        .join_u(&nations)
         .map(|(_nation_key, supp_key, name)| (supp_key, name));
 
     collections
@@ -99,12 +99,10 @@ where G::Timestamp: Lattice+Ord {
             }
             else { None.into_iter() }
         )
-        // .map(|(l, t, d)| )
         .as_collection()
-        // .filter(|l| create_date(1995, 1, 1) <= (l.1).1 && (l.1).1 <= create_date(1996, 12, 31))
-        .join(&suppliers)
+        .join_u(&suppliers)
         .map(|(_supp_key, (order_key, ship_date), name_s)| (order_key, (ship_date, name_s)))
-        .join(&orders)
+        .join_u(&orders)
         .map(|(_order_key, (ship_date, name_s), name_c)| (name_s, name_c, ship_date >> 16))
         .filter(|x| x.0 != x.1)
         .count()

@@ -72,9 +72,9 @@ where G::Timestamp: Lattice+Ord {
             }
             else { None.into_iter() }
         )
-        .semijoin(&partkeys)
+        .semijoin_u(&partkeys)
         .inner
-        .map(|(l, t, d)| ((l.0, (l.1).0), t, (l.1).1 as isize * d))
+        .map(|(l, t, d)| (((l.0 as u64) << 32) + (l.1).0 as u64, t, (l.1).1 as isize * d))
         .as_collection()
         .count();
 
@@ -82,20 +82,20 @@ where G::Timestamp: Lattice+Ord {
     collections
         .partsupps()
         .map(|ps| (ps.part_key, (ps.supp_key, ps.availqty)))
-        .semijoin(&partkeys)
-        .map(|(part_key, (supp_key, avail))| ((part_key, supp_key), avail))
-        .join(&available)
+        .semijoin_u(&partkeys)
+        .map(|(part_key, (supp_key, avail))| (((part_key as u64) << 32) + (supp_key as u64), avail))
+        .join_u(&available)   // TODO: these could be fused into a u64, for join_u.
         .filter(|&(_, avail1, avail2)| avail1 > avail2 as i32 / 2)
-        .map(|((_, supp_key), _, _)| supp_key);
+        .map(|(part_supp_fuse, _, _)| (part_supp_fuse & (u32::max_value() as u64)) as usize);
 
     let nations = collections.nations.filter(|n| starts_with(&n.name, b"CANADA")).map(|n| (n.nation_key, n.name));
 
     collections
         .suppliers()
         .map(|s| (s.supp_key, (s.name, s.address.to_string(), s.nation_key)))
-        .semijoin(&suppliers)
+        .semijoin_u(&suppliers)
         .map(|(_, (name, addr, nation))| (nation, (name, addr)))
-        .join(&nations)
+        .join_u(&nations)
         .probe()
         .0
 }
