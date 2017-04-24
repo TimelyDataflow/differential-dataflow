@@ -1,14 +1,12 @@
 use timely::dataflow::*;
-use timely::dataflow::operators::*;
+// use timely::dataflow::operators::*;
 use timely::dataflow::operators::probe::Handle as ProbeHandle;
 
-use differential_dataflow::AsCollection;
+// use differential_dataflow::AsCollection;
 use differential_dataflow::operators::*;
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::difference::DiffPair;
 
 use ::Collections;
-use ::types::create_date;
 
 // -- $ID$
 // -- TPC-H/TPC-R Parts/Supplier Relationship Query (Q16)

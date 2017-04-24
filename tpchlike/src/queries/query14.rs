@@ -5,7 +5,6 @@ use timely::dataflow::operators::probe::Handle as ProbeHandle;
 use differential_dataflow::AsCollection;
 use differential_dataflow::operators::*;
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::difference::DiffPair;
 
 use ::Collections;
 use ::types::create_date;
@@ -31,15 +30,8 @@ use ::types::create_date;
 //     and l_shipdate < date ':1' + interval '1' month;
 // :n -1
 
-
 fn starts_with(source: &[u8], query: &[u8]) -> bool {
     source.len() >= query.len() && &source[..query.len()] == query
-}
-
-fn substring(source: &[u8], query: &[u8]) -> bool {
-    (0 .. (source.len() - query.len())).any(|offset| 
-        (0 .. query.len()).all(|i| source[i + offset] == query[i])
-    )
 }
 
 pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp> 

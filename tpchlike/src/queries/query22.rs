@@ -8,7 +8,6 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::difference::DiffPair;
 
 use ::Collections;
-use ::types::create_date;
 
 // -- $ID$
 // -- TPC-H/TPC-R Global Sales Opportunity Query (Q22)
@@ -55,16 +54,6 @@ use ::types::create_date;
 //     cntrycode;
 // :n -1
 
-fn starts_with(source: &[u8], query: &[u8]) -> bool {
-    source.len() >= query.len() && &source[..query.len()] == query
-}
-
-fn substring(source: &[u8], query: &[u8]) -> bool {
-    (0 .. (source.len() - query.len())).any(|offset| 
-        (0 .. query.len()).all(|i| source[i + offset] == query[i])
-    )
-}
-
 pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp> 
 where G::Timestamp: Lattice+Ord {
 
@@ -93,7 +82,7 @@ where G::Timestamp: Lattice+Ord {
         .antijoin(&collections.orders().map(|o| o.cust_key).distinct())
         .map(|(_, (cc, acct))| (cc, acct))
         .join(&averages)
-        .filter(|&(cc, acct, aggs)| acct as isize > aggs.element1 / aggs.element2)
+        .filter(|&(_cc, acct, aggs)| acct as isize > aggs.element1 / aggs.element2)
         .inner
         .map(|((cc, acct, _aggs), t, d)| (cc, t, DiffPair::new(acct as isize * d, d)))
         .as_collection()

@@ -7,7 +7,6 @@ use differential_dataflow::operators::*;
 use differential_dataflow::lattice::Lattice;
 
 use ::Collections;
-use ::types::create_date;
 
 // -- $ID$
 // -- TPC-H/TPC-R Important Stock Identification Query (Q11)

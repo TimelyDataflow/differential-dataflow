@@ -1,14 +1,12 @@
 use timely::dataflow::*;
-use timely::dataflow::operators::*;
+// use timely::dataflow::operators::*;
 use timely::dataflow::operators::probe::Handle as ProbeHandle;
 
-use differential_dataflow::AsCollection;
+// use differential_dataflow::AsCollection;
 use differential_dataflow::operators::*;
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::difference::DiffPair;
 
 use ::Collections;
-use ::types::create_date;
 
 // -- $ID$
 // -- TPC-H/TPC-R Suppliers Who Kept Orders Waiting Query (Q21)
@@ -62,12 +60,6 @@ fn starts_with(source: &[u8], query: &[u8]) -> bool {
     source.len() >= query.len() && &source[..query.len()] == query
 }
 
-fn substring(source: &[u8], query: &[u8]) -> bool {
-    (0 .. (source.len() - query.len())).any(|offset| 
-        (0 .. query.len()).all(|i| source[i + offset] == query[i])
-    )
-}
-
 pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp> 
 where G::Timestamp: Lattice+Ord {
 
@@ -93,7 +85,7 @@ where G::Timestamp: Lattice+Ord {
 
     let problems = 
     lineitems
-        .map(|(order_key, (supp_key, is_late))| (order_key, is_late))
+        .map(|(order_key, (_supp_key, is_late))| (order_key, is_late))
         .semijoin(&lateorders)    //- on_time and late, but just one late -\\
         .group(|_order_key, s, t| if s.len() == 2 && s[1].1 == 1 { t.push(((), 1)); })
         .map(|(order_key, _)| order_key);

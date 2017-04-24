@@ -60,27 +60,51 @@ where G::Timestamp: Lattice+Ord {
             .inner
             .flat_map(|(item, time, diff)| 
                 if create_date(1996, 1, 1) <= item.ship_date && item.ship_date < create_date(1996,4,1) {
-                    Some((item.supp_key, time, (item.extended_price * (100 - item.discount) / 100) * diff as i64)).into_iter()
+                    Some((item.supp_key, time, (item.extended_price * (100 - item.discount) / 100) as isize * diff)).into_iter()
                 }
                 else { None.into_iter() }
             )
             .as_collection()
-            .count();
+            // .count()
+            ;
 
     // suppliers with maximum revenue
     let top_suppliers =
         revenue
             // do a hierarchical min, to improve update perf.
-            .map(|(supp, total)| (supp % 100, (-total, supp)))
-            .group(|_k, s, t| t.extend(s.iter().take_while(|x| (x.0).0 == (s[0].0).0)))
-            .map(|(_, x)| ((), x))
-            .group(|_k, s, t| t.extend(s.iter().take_while(|x| (x.0).0 == (s[0].0).0)))
-            .map(|(_,(total, supp))| (supp, -total));
+            // .map(|(supp, total)| ((), (-total, supp)))
+            // .map(|(supp, total)| (supp % 100, (-total, supp)))
+            // .group(|_k, s, t| t.extend(s.iter().take_while(|x| (x.0).0 == (s[0].0).0)))
+            // .map(|(_, x)| ((), x))
+            // .group(|_k, s, t| t.extend(s.iter().take_while(|x| (x.0).0 == (s[0].0).0)))
+            // .map(|(_,(total, supp))| (supp, -total));
+            .map(|key| (key % 1000, key))
+            .group(|_k, s, t| {
+                let max = s.iter().map(|x| x.1).max().unwrap();
+                t.extend(s.iter().filter(|x| x.1 == max));
+            })
+            .map(|(_,key)| (key % 100, key))
+            .group(|_k, s, t| {
+                let max = s.iter().map(|x| x.1).max().unwrap();
+                t.extend(s.iter().filter(|x| x.1 == max));
+            })
+            .map(|(_,key)| (key % 10, key))
+            .group(|_k, s, t| {
+                let max = s.iter().map(|x| x.1).max().unwrap();
+                t.extend(s.iter().filter(|x| x.1 == max));
+            })
+            .map(|(_,key)| ((), key))
+            .group(|_k, s, t| {
+                let max = s.iter().map(|x| x.1).max().unwrap();
+                t.extend(s.iter().filter(|x| x.1 == max));
+            })
+            .map(|(_, key)| key);
 
     collections
         .suppliers()
         .map(|s| (s.supp_key, (s.name, s.address.to_string(), s.phone)))
-        .join(&top_suppliers)
+        .semijoin(&top_suppliers)
+        .count()
         .probe()
         .0
 }

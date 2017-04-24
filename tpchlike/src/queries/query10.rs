@@ -48,15 +48,8 @@ use ::types::create_date;
 //     revenue desc;
 // :n 20
 
-
 fn starts_with(source: &[u8], query: &[u8]) -> bool {
     source.len() >= query.len() && &source[..query.len()] == query
-}
-
-fn substring(source: &[u8], query: &[u8]) -> bool {
-    (0 .. (source.len() - query.len())).any(|offset| 
-        (0 .. query.len()).all(|i| source[i + offset] == query[i])
-    )
 }
 
 pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp> 
