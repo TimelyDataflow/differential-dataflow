@@ -394,6 +394,7 @@ where
 
                 // populate `temp` with the results in the best way we know how.
                 thinker.think(|v1,v2,t,r1,r2| temp.push(((logic(batch.key(), v1, v2), t), mult(r1,r2))));
+
                 consolidate(&mut temp, 0);
 
                 effort += temp.len();
@@ -429,7 +430,7 @@ where V1: Debug, V2: Debug, T: Debug
     fn think<F: FnMut(&V1,&V2,T,&R1,&R2)>(&mut self, mut results: F) {
 
         // for reasonably sized edits, do the dead-simple thing.
-        if self.history1.edits.len() < 1000 || self.history2.edits.len() < 1000 {
+        if self.history1.edits.len() < 10 || self.history2.edits.len() < 10 {
             self.history1.edits.map(|v1, t1, d1| {
                 self.history2.edits.map(|v2, t2, d2| {
                     results(v1, v2, t1.join(t2), &d1, &d2);

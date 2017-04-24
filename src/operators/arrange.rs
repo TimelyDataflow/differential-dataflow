@@ -39,8 +39,10 @@ use hashable::{HashableWrapper, OrdWrapper};
 use ::{Data, Diff, Collection, AsCollection, Hashable};
 use lattice::Lattice;
 use trace::{Trace, Batch, Batcher, Cursor};
-use trace::implementations::hash::HashValSpine as DefaultValTrace;
-use trace::implementations::hash::HashKeySpine as DefaultKeyTrace;
+// use trace::implementations::hash::HashValSpine as DefaultValTrace;
+// use trace::implementations::hash::HashKeySpine as DefaultKeyTrace;
+use trace::implementations::ord::OrdValSpine as DefaultValTrace;
+use trace::implementations::ord::OrdKeySpine as DefaultKeyTrace;
 
 /// Wrapper type to permit transfer of `Rc` types, as in batch.
 ///

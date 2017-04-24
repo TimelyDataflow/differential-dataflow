@@ -37,9 +37,7 @@ impl<'a, T: Timestamp+Ord+Clone, D: Data, R: Diff> InputSession<'a, T, D, R> {
 
 	/// Forces buffered data into the timely input, and advances its time to match that of the session.
 	pub fn flush(&mut self) {
-		for (data, time, diff) in self.buffer.drain(..) {
-			self.handle.send((data, time, diff));
-		}
+		self.handle.send_batch(&mut self.buffer);
 		if self.handle.epoch() < &self.time.inner {
 			self.handle.advance_to(self.time.inner);		
 		}
