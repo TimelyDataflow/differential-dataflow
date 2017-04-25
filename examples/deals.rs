@@ -49,10 +49,10 @@ fn main() {
             let query = Collection::new(stream2);
 
             let probe = match program.as_str() {
-                "reach" => _reach(&graph, &query).inner.probe().0,
-                "cc"    => _connected_components(&graph).inner.probe().0,
-                "bfs"   => _bfs(&graph, &query).inner.probe().0,
-                "pymk"  => _pymk(&graph, &query, 10).inner.probe().0,
+                "reach" => _reach(&graph, &query).probe(),
+                "cc"    => _connected_components(&graph).probe(),
+                "bfs"   => _bfs(&graph, &query).probe(),
+                "pymk"  => _pymk(&graph, &query, 10).probe(),
                 _       => panic!("must specify one of 'reach', 'cc', 'bfs'.")
             };
 

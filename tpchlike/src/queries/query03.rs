@@ -76,5 +76,4 @@ where G::Timestamp: Lattice+Ord {
         .semijoin_u(&lineitems)
         .count()
         .probe()
-        .0
 }

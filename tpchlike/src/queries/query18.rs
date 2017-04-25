@@ -76,5 +76,4 @@ where G::Timestamp: Lattice+Ord {
         .map(|(okey, quantity, (custkey, date, price))| (custkey, (okey, date, price, quantity)))
         .join_u(&collections.customers().map(|c| (c.cust_key, c.name.to_string())))
         .probe()
-        .0
 }

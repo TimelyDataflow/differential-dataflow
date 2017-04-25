@@ -100,5 +100,4 @@ where G::Timestamp: Lattice+Ord {
         .map(|s| (s.supp_key, (s.name, s.address.to_string(), s.phone)))
         .join_u(&top_suppliers)
         .probe()
-        .0
 }

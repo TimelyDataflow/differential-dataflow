@@ -55,7 +55,7 @@ fn main() {
                              });
             }
 
-            (input, edges.probe().0)
+            (input, edges.probe())
         });
 
         let seed: &[_] = &[1, 2, 3, 4];

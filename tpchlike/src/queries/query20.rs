@@ -95,5 +95,4 @@ where G::Timestamp: Lattice+Ord {
         .map(|(_, (name, addr, nation))| (nation, (name, addr)))
         .join_u(&nations)
         .probe()
-        .0
 }

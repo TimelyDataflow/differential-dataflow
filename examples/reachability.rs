@@ -39,7 +39,7 @@ fn main() {
             let (edge_input, graph) = scope.new_input();
             let graph = Collection::new(graph);
 
-            let probe = reach(&graph, &roots).probe().0;
+            let probe = reach(&graph, &roots).probe();
             (edge_input, root_input, probe)
         });
 

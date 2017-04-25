@@ -35,8 +35,8 @@ fn main() {
     		let arranged = edges.as_collection()
     							.arrange_by_key_hashed();
 
-		    (input, arranged.stream.probe().0, arranged.trace.clone())
-    	});
+            (input, arranged.stream.probe(), arranged.trace.clone())
+        });
 
         let seed: &[_] = &[1, 2, 3, index];
         let mut rng1: StdRng = SeedableRng::from_seed(seed);    // rng for edge additions
@@ -108,6 +108,5 @@ fn main() {
 	        	}
 	        }
 	    }
-
     }).unwrap();
 }

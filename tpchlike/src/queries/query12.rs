@@ -87,5 +87,4 @@ where G::Timestamp: Lattice+Ord {
         .map(|(_order, _, ship_mode)| ship_mode)
         .count()
         .probe()
-        .0
 }
