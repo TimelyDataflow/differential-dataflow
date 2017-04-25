@@ -37,9 +37,9 @@ impl<G: Scope, D: Data, R: Diff> Collection<G, D, R> where G::Timestamp: Data {
                   .as_collection()
     }
     /// Applies the supplied function to each element of the Collection.
-    pub fn flat_map<D2: Data, I: Iterator<Item=D2>, L: Fn(D) -> I + 'static>(&self, logic: L) -> Collection<G, D2, R> 
+    pub fn flat_map<D2: Data, I: IntoIterator<Item=D2>, L: Fn(D) -> I + 'static>(&self, logic: L) -> Collection<G, D2, R> 
         where G::Timestamp: Clone {
-        self.inner.flat_map(move |(data, time, delta)| logic(data).map(move |x| (x, time.clone(), delta)))
+        self.inner.flat_map(move |(data, time, delta)| logic(data).into_iter().map(move |x| (x, time.clone(), delta)))
                   .as_collection()
     }
     /// Negates the counts of each element in the Collection.

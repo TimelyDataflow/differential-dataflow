@@ -58,9 +58,9 @@ where G::Timestamp: Lattice+Ord {
         .orders()
         .flat_map(|o| 
             if o.order_date >= ::types::create_date(1993, 7, 1) && o.order_date < ::types::create_date(1993, 10, 1) {
-                Some((UnsignedWrapper::from(o.order_key), o.order_priority)).into_iter()
+                Some((UnsignedWrapper::from(o.order_key), o.order_priority))
             }
-            else { None.into_iter() }
+            else { None }
         )
         .arrange(DefaultValTrace::new())
         .join_arranged(&lineitems, |k,v,_| (k.item.clone(), v.clone()))

@@ -75,7 +75,7 @@ where G::Timestamp: Lattice+Ord {
     let regions = 
     collections
         .regions()
-        .flat_map(|x| if starts_with(&x.name[..], b"EUROPE") { Some(x.region_key).into_iter() } else { None.into_iter() });
+        .flat_map(|x| if starts_with(&x.name[..], b"EUROPE") { Some(x.region_key) } else { None });
 
     let nations = 
     collections
@@ -94,7 +94,7 @@ where G::Timestamp: Lattice+Ord {
     let parts = 
     collections
         .parts()
-        .flat_map(|x| if substring(x.typ.as_str().as_bytes(), b"BRASS") && x.size == 15 { Some((x.part_key, x.mfgr)).into_iter() } else { None.into_iter() });
+        .flat_map(|x| if substring(x.typ.as_str().as_bytes(), b"BRASS") && x.size == 15 { Some((x.part_key, x.mfgr)) } else { None });
 
     let partsupps = 
     collections

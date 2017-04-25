@@ -46,9 +46,9 @@ where G::Timestamp: Lattice+Ord {
         .inner
         .flat_map(|(l,t,d)|
             if create_date(1995,9,1) < l.ship_date && l.ship_date < create_date(1995,10,1) {
-                Some((l.part_key, t, (l.extended_price * (100 - l.discount) / 100) as isize * d)).into_iter()
+                Some((l.part_key, t, (l.extended_price * (100 - l.discount) / 100) as isize * d))
             }
-            else { None.into_iter() }
+            else { None }
         )
         .as_collection();
 

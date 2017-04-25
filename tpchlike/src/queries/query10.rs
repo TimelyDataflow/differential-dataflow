@@ -61,9 +61,9 @@ where G::Timestamp: Lattice+Ord {
         .inner
         .flat_map(|(x,t,d)| 
             if starts_with(&x.return_flag, b"R") {
-                Some((x.order_key, t, (x.extended_price * (100 - x.discount)) as isize * d)).into_iter()
+                Some((x.order_key, t, (x.extended_price * (100 - x.discount)) as isize * d))
             }
-            else { None.into_iter() }
+            else { None }
         )
         .as_collection();
 
@@ -72,9 +72,9 @@ where G::Timestamp: Lattice+Ord {
         .orders()
         .flat_map(|o| 
             if create_date(1993,10,1) < o.order_date && o.order_date <= create_date(1994,1,1) {
-                Some((o.order_key, o.cust_key)).into_iter()
+                Some((o.order_key, o.cust_key))
             }
-            else { None.into_iter() }
+            else { None }
         )
         .semijoin_u(&lineitems)
         .map(|(_, cust_key)| cust_key);
