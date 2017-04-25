@@ -22,10 +22,11 @@
 //! lot like a trace, though this isn't beatifully masked at the moment (it can't implement the trait
 //! because we can't insert at it; it does implement `advance_by` and could implement `cursor`). 
 
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 use std::cell::RefCell;
 use std::default::Default;
 use std::ops::DerefMut;
+use std::collections::VecDeque;
 
 use timely::dataflow::*;
 use timely::dataflow::operators::Unary;
@@ -108,6 +109,16 @@ pub struct TraceHandle<K,V,T,R,Tr: Trace<K,V,T,R>> where T: Lattice+Ord+Clone+'s
     through_frontier: Vec<T>,
     /// Wrapped trace. Please be gentle when using.
     pub wrapper: Rc<RefCell<TraceWrapper<K,V,T,R,Tr>>>,
+
+    /// A shared list of shared queues; consumers add to the list, `arrange` deposits the current frontier
+    /// and perhaps a newly formed batch into each. The intent is that it can deposit progress information 
+    /// without a new batch, if its input frontier has advanced without any corresponding updates.
+    ///
+    /// Note that the references to the `VecDeque` queues are `Weak`, and they become invalid when the other
+    /// endpoint drops their reference. This makes the "hang up" procedure much simpler. The `arrange` operator
+    /// is the only one who takes mutable access to the queues, and is the one to be in charge of cleaning dead
+    /// references.
+    queues: Rc<RefCell<Vec<Weak<RefCell<VecDeque<(Vec<T>, Option<<Tr as Trace<K,V,T,R>>::Batch>)>>>>>>,
 }
 
 impl<K,V,T,R,Tr: Trace<K,V,T,R>> TraceHandle<K,V,T,R,Tr> where T: Lattice+Ord+Clone+'static {
@@ -122,6 +133,7 @@ impl<K,V,T,R,Tr: Trace<K,V,T,R>> TraceHandle<K,V,T,R,Tr> where T: Lattice+Ord+Cl
             advance_frontier: advance_frontier.to_vec(),
             through_frontier: through_frontier.to_vec(),
             wrapper: Rc::new(RefCell::new(wrapper)),
+            queues: Rc::new(RefCell::new(Vec::new())),
         }
     }
     /// Sets frontier to now be elements in `frontier`.
@@ -157,6 +169,7 @@ impl<K, V, T: Lattice+Ord+Clone, R, Tr: Trace<K, V, T, R>> Clone for TraceHandle
             advance_frontier: self.advance_frontier.clone(),
             through_frontier: self.through_frontier.clone(),
             wrapper: self.wrapper.clone(),
+            queues: self.queues.clone(),
         }
     }
 }
@@ -256,7 +269,11 @@ impl<G: Scope, K: Data+Hashable, V: Data, R: Diff> Arrange<G, K, V, R> for Colle
 
         // create a trace to share with downstream consumers.
         let handle = TraceHandle::new(empty_trace, &[<G::Timestamp as Lattice>::min()], &[<G::Timestamp as Lattice>::min()]);
+
+        // acquire local downgraded copies of the references. 
+        // downgrading means that these instances will not keep the targets alive, especially important for the trace.
         let source = Rc::downgrade(&handle.wrapper);
+        let queues = Rc::downgrade(&handle.queues);
 
         // Where we will deposit received updates, and from which we extract batches.
         let mut batcher = <T::Batch as Batch<K,V,G::Timestamp,R>>::Batcher::new();
@@ -322,6 +339,17 @@ impl<G: Scope, K: Data+Hashable, V: Data, R: Diff> Arrange<G, K, V, R> for Colle
                         source.upgrade().map(|trace| {
                             let trace: &mut T = &mut trace.borrow_mut().trace;
                             trace.insert(batch.clone())
+                        });
+
+                        // If we still have listeners, send each a copy of the input frontier and current batch.
+                        queues.upgrade().map(|queues| {
+                            let mut borrow = queues.borrow_mut();
+                            for queue in borrow.iter_mut() {
+                                queue.upgrade().map(|queue| {
+                                    queue.borrow_mut().push_back((notificator.frontier(0).to_vec(), Some(batch.clone())));
+                                });
+                            }
+                            borrow.retain(|w| w.upgrade().is_some());
                         });
 
                         // send the batch to downstream consumers, empty or not.
