@@ -69,9 +69,9 @@ where G::Timestamp: Lattice+Ord {
         .inner
         .flat_map(|(x,t,d)| 
             if (starts_with(&x.ship_mode, b"AIR") || starts_with(&x.ship_mode, b"AIR REG")) && starts_with(&x.ship_instruct, b"DELIVER IN PERSON") {
-                Some(((x.part_key, x.quantity), t, d * (x.extended_price * (100 - x.discount) / 100) as isize)).into_iter()
+                Some(((x.part_key, x.quantity), t, d * (x.extended_price * (100 - x.discount) / 100) as isize))
             }
-            else { None.into_iter() }
+            else { None }
         )
         .as_collection();
 

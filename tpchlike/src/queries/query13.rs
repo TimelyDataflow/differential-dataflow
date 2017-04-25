@@ -49,12 +49,7 @@ where G::Timestamp: Lattice+Ord {
     let orders =
     collections
         .orders()
-        .flat_map(|o|
-            if !substring2(&o.comment.as_bytes(), b"special", b"requests") {
-                Some(o.cust_key).into_iter()
-            }
-            else { None.into_iter() } 
-        );
+        .flat_map(|o| if !substring2(&o.comment.as_bytes(), b"special", b"requests") { Some(o.cust_key) } else { None } );
 
     collections
         .customers()

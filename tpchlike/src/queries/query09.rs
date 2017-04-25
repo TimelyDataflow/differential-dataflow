@@ -60,12 +60,7 @@ where G::Timestamp: Lattice+Ord {
     let parts =
     collections
         .parts()
-        .flat_map(|x| 
-            if substring(&x.name.as_bytes(), b"green") {
-                Some(x.part_key).into_iter()
-            }
-            else { None.into_iter() }
-        );
+        .flat_map(|x| if substring(&x.name.as_bytes(), b"green") { Some(x.part_key) } else { None } );
 
     collections
         .lineitems()

@@ -77,11 +77,9 @@ where G::Timestamp: Lattice+Ord {
             if (starts_with(&l.ship_mode, b"MAIL") || starts_with(&l.ship_mode, b"SHIP")) && 
                 l.commit_date < l.receipt_date && l.ship_date < l.commit_date && 
                 create_date(1994,1,1) <= l.receipt_date && l.receipt_date < create_date(1995,1,1) {
-
-                Some((l.order_key, l.ship_mode)).into_iter()
-
+                Some((l.order_key, l.ship_mode))
             }
-            else { None.into_iter() }
+            else { None }
         );
 
     orders

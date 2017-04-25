@@ -67,10 +67,8 @@ where G::Timestamp: Lattice+Ord {
     collections
         .lineitems()
         .flat_map(|l| 
-            if l.ship_date >= create_date(1994, 1, 1) && l.ship_date < create_date(1995, 1, 1) {
-                Some((l.part_key, (l.supp_key, l.quantity))).into_iter()
-            }
-            else { None.into_iter() }
+            if l.ship_date >= create_date(1994, 1, 1) && l.ship_date < create_date(1995, 1, 1) { Some((l.part_key, (l.supp_key, l.quantity))) }
+            else { None }
         )
         .semijoin_u(&partkeys)
         .inner

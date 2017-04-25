@@ -70,9 +70,9 @@ where G::Timestamp: Lattice+Ord {
         .orders()
         .flat_map(|o|
             if create_date(1995,1,1) <= o.order_date && o.order_date <= create_date(1996, 12, 31) {
-                Some((o.cust_key, (o.order_key, o.order_date >> 16))).into_iter()
+                Some((o.cust_key, (o.order_key, o.order_date >> 16)))
             }
-            else { None.into_iter() }
+            else { None }
         )
         .semijoin_u(&customers)
         .map(|x| x.1);

@@ -67,10 +67,8 @@ where G::Timestamp: Lattice+Ord {
     collections
         .orders()
         .flat_map(|o|
-            if starts_with(&o.order_status, b"F") {
-                Some(o.order_key).into_iter()
-            }
-            else { None.into_iter() }
+            if starts_with(&o.order_status, b"F") { Some(o.order_key) }
+            else { None }
         );
 
     // lineitems relevant to "F" orders.

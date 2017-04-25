@@ -67,9 +67,9 @@ where G::Timestamp: Lattice+Ord {
         .suppliers()
         .flat_map(|s| 
             if substring2(s.comment.as_bytes(), b"Customer", b"Complaints") {
-                Some((s.supp_key)).into_iter()
+                Some((s.supp_key))
             }
-            else { None.into_iter() }
+            else { None }
         );
 
 
@@ -83,9 +83,9 @@ where G::Timestamp: Lattice+Ord {
         .parts()
         .flat_map(|p| 
             if !starts_with(&p.brand, b"Brand45") && !starts_with(&p.typ.as_bytes(), b"MEDIUM POLISHED") && [49, 14, 23, 45, 19, 3, 36, 9].contains(&p.size) {
-                Some((p.part_key, (p.brand, p.typ.to_string(), p.size))).into_iter()
+                Some((p.part_key, (p.brand, p.typ.to_string(), p.size)))
             }
-            else { None.into_iter() }
+            else { None }
 
         )
         .semijoin_u(&parts)

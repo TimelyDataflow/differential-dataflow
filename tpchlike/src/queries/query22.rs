@@ -63,11 +63,9 @@ where G::Timestamp: Lattice+Ord {
         .flat_map(|c| {
             let cc: [u8;2] = [c.phone[0], c.phone[1]];
             if (&cc == b"13" || &cc == b"31" || &cc == b"23" || &cc == b"29" || &cc == b"30" || &cc == b"18" || &cc == b"17") && c.acctbal > 0 {
-                Some((((cc[1] as u16) << 8) + cc[0] as u16, c.acctbal, c.cust_key)).into_iter()
+                Some((((cc[1] as u16) << 8) + cc[0] as u16, c.acctbal, c.cust_key))
             }
-            else {
-                None.into_iter()
-            }
+            else { None }
         });
 
     let averages = 
