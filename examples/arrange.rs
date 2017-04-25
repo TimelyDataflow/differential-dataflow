@@ -4,7 +4,7 @@ extern crate timely_sort;
 extern crate differential_dataflow;
 extern crate vec_map;
 
-use timely::dataflow::*;
+// use timely::dataflow::*;
 use timely::dataflow::operators::*;
 
 use rand::{Rng, SeedableRng, StdRng};
@@ -13,9 +13,9 @@ use differential_dataflow::AsCollection;
 use differential_dataflow::operators::arrange::ArrangeByKey;
 use differential_dataflow::operators::group::GroupArranged;
 use differential_dataflow::trace::implementations::ord::OrdValSpine;
-use differential_dataflow::trace::Cursor;
-use differential_dataflow::trace::Batch;
-use differential_dataflow::trace::Trace;
+use differential_dataflow::trace::{Cursor, Trace};
+// use differential_dataflow::trace::Batch;
+use differential_dataflow::hashable::OrdWrapper;
 
 fn main() {
 
@@ -40,14 +40,6 @@ fn main() {
                                 .arrange_by_key_hashed();
 
             (input, arranged.stream.probe().0, arranged.trace.clone())
-        });
-
-        let mut trace2 = trace.clone();
-        worker.dataflow(move |scope| {
-
-            trace2.create_in(scope)
-                  .group_arranged(|_k, s, t| t.push((s[0].0, 1)), OrdValSpine::new());
-
         });
 
         let seed: &[_] = &[1, 2, 3, index];
@@ -90,6 +82,15 @@ fn main() {
 
                 if edge % batch == (batch - 1) {
 
+                    let mut trace2 = trace.clone();
+                    worker.dataflow(move |scope| {
+                        trace2.create_in(scope)
+                              .group_arranged(|_k, s, t| t.push((s[0].0, 1)), OrdValSpine::new())
+                              .as_collection(|k: &OrdWrapper<u32>, v: &u32| (k.item.clone(),v.clone()))
+                              .inspect(|x| println!("{:?}", x));
+                    });
+
+
                     let timer = ::std::time::Instant::now();
 
                     trace.advance_by(&[input.time().clone()]);
@@ -121,17 +122,6 @@ fn main() {
                         }
 
                         println!("count: {} in {:?}", count, timer.elapsed());
-
-                        // or we can monitor data from a shared queue...
-                        let queue = trace.new_listener();
-                        let mut borrow = queue.borrow_mut();
-                        while let Some((frontier, batch)) = borrow.pop_front() {
-                            println!("received from queue:");
-                            println!("  frontier: {:?}", frontier);
-                            if let Some((time, batch)) = batch {
-                                println!("  batch from: {:?} -> {:?}, since: {:?} @ {:?}", batch.lower(), batch.upper(), batch.description().since(), time);
-                            }
-                        }
                     }
                 }
             }
