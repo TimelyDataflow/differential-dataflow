@@ -25,6 +25,7 @@
 use std::rc::Rc;
 use std::cell::RefCell;
 use std::default::Default;
+use std::ops::DerefMut;
 
 use timely::dataflow::*;
 use timely::dataflow::operators::Unary;
@@ -279,7 +280,7 @@ impl<G: Scope, K: Data+Hashable, V: Data, R: Diff> Arrange<G, K, V, R> for Colle
                     capabilities.push(cap);
                 }
 
-                batcher.push_batch(&mut data.replace_with(Vec::new()));
+                batcher.push_batch(data.deref_mut());
             });
 
             // Timely dataflow currently only allows one capability per message, and we may have multiple
