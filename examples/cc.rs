@@ -23,10 +23,10 @@ fn main() {
     // snag a filename to use for the input graph.
     let filename = std::env::args().nth(1).unwrap();
 
-    timely::execute_from_args(std::env::args().skip(1), move |computation| {
+    timely::execute_from_args(std::env::args().skip(1), move |worker| {
 
-        let peers = computation.peers();
-        let index = computation.index();
+        let peers = worker.peers();
+        let index = worker.index();
 
         // // What you might do if you used GraphMMap:
         let graph = GraphMMap::new(&filename);
@@ -37,7 +37,7 @@ fn main() {
                                   vec.into_iter().map(move |edge| ((node as u32, edge), Default::default(), 1))
                               });
 
-        computation.scoped::<(),_,_>(|scope| {
+        worker.dataflow::<(),_,_>(|scope| {
             connected_components(&Collection::new(edges.to_stream(scope)));
         });
 

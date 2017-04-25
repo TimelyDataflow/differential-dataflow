@@ -23,17 +23,17 @@ fn main() {
     let inspect: bool = std::env::args().nth(5).unwrap() == "inspect";
 
     // define a new computational scope, in which to run BFS
-    timely::execute_from_args(std::env::args().skip(6), move |computation| {
+    timely::execute_from_args(std::env::args().skip(6), move |worker| {
         
-        let timer = ::std::time::Instant::now();
+        // let timer = ::std::time::Instant::now();
 
         // define BFS dataflow; return handles to roots and edges inputs
-        let (mut roots, mut graph, probe) = computation.scoped(|scope| {
+        let (mut roots, mut graph, probe) = worker.dataflow(|scope| {
 
             let (root_input, roots) = scope.new_input();
             let (edge_input, graph) = scope.new_input();
 
-            let mut result = reach(&graph.as_collection(), &roots.as_collection());
+            let mut result = bfs(&graph.as_collection(), &roots.as_collection());
 
             if !inspect {
                 result = result.filter(|_| false);
@@ -51,63 +51,52 @@ fn main() {
         let mut rng1: StdRng = SeedableRng::from_seed(seed);    // rng for edge additions
         let mut rng2: StdRng = SeedableRng::from_seed(seed);    // rng for edge deletions
 
-        let mut names = Vec::new();
-        let mut rng: StdRng = SeedableRng::from_seed(seed);
-        for _i in 0 .. nodes {
-            // names.push(_i as u32);
-            names.push(rng.next_u32());
-        }
-
-        roots.send((names[1], Default::default(), 1));
+        roots.send((0, Default::default(), 1));
         roots.close();
 
         // println!("performing BFS on {} nodes, {} edges:", nodes, edges);
 
-        if computation.index() == 0 {
+        if worker.index() == 0 {
+
+            let mut session = differential_dataflow::input::InputSession::from(&mut graph);
+
             // trickle edges in to dataflow
             for _ in 0..(edges/1000) {
                 for _ in 0..1000 {
-                    let src = *rng1.choose(&names[..]).unwrap();
-                    let dst = *rng1.choose(&names[..]).unwrap();
-                    graph.send(((src, dst), Default::default(), 1));
+                    session.insert((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)));
                 }
-                computation.step();
+                worker.step();
             }
             for _ in 0.. (edges % 1000) {
-                let src = *rng1.choose(&names[..]).unwrap();
-                let dst = *rng1.choose(&names[..]).unwrap();
-                graph.send(((src, dst), Default::default(), 1));
+                session.insert((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)));
             }
         }
 
-        println!("loaded; elapsed: {:?}", timer.elapsed());
+        // println!("loaded; elapsed: {:?}", timer.elapsed());
 
         graph.advance_to(1);
-        computation.step_while(|| probe.lt(graph.time()));
-
-        println!("stable; elapsed: {:?}", timer.elapsed());
+        worker.step_while(|| probe.lt(graph.time()));
 
         let mut session = differential_dataflow::input::InputSession::from(&mut graph);
         for round in 0 .. rounds {
             for element in 0 .. batch {
-                if computation.index() == 0 {
-                    session.insert((names[rng1.gen_range(0, nodes as usize)], names[rng1.gen_range(0, nodes as usize)]));
-                    session.remove((names[rng2.gen_range(0, nodes as usize)], names[rng2.gen_range(0, nodes as usize)]));
+                if worker.index() == 0 {
+                    session.insert((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)));
+                    session.remove((rng2.gen_range(0, nodes), rng2.gen_range(0, nodes)));
                 }
                 session.advance_to(2 + round * batch + element);                
             }
             session.flush();
 
-            let timer = ::std::time::Instant::now();
-            computation.step_while(|| probe.lt(&session.time()));
+            // let timer = ::std::time::Instant::now();
+            worker.step_while(|| probe.lt(&session.time()));
 
-            if computation.index() == 0 {
-                let elapsed = timer.elapsed();
-                println!();
+            if worker.index() == 0 {
+                // let elapsed = timer.elapsed();
                 // println!("{:?}:\t{}", round, elapsed.as_secs() * 1000000000 + (elapsed.subsec_nanos() as u64));
             }
         }
-        println!("finished; elapsed: {:?}", timer.elapsed());
+        // println!("finished; elapsed: {:?}", timer.elapsed());
     }).unwrap();
 }
 
@@ -127,6 +116,7 @@ where G::Timestamp: Lattice+Ord {
         inner.join_map_u(&edges, |_k,l,d| (*d, l+1))
              .concat(&nodes)
              .group_u(|_, s, t| t.push((s[0].0, 1)))
+             // .inspect_batch(|t, xs| println!("{:?}: {:?}", t, xs.len()))
      })
 }
 
