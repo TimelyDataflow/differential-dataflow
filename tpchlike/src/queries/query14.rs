@@ -62,5 +62,4 @@ where G::Timestamp: Lattice+Ord {
         .map(|(part_key, _)| part_key)
         .count_u()
         .probe()
-        .0
 }

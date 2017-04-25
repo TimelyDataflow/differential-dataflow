@@ -60,7 +60,7 @@ fn main() {
                              })
                              .probe();
 
-            (part_input, item_input, probe.0)
+            (part_input, item_input, probe)
         });
 
         // read the parts input file

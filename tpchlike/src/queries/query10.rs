@@ -87,5 +87,4 @@ where G::Timestamp: Lattice+Ord {
         .join_u(&collections.nations().map(|n| (n.nation_key, n.name)))
         .count()
         .probe()
-        .0
 }

@@ -91,5 +91,4 @@ where G::Timestamp: Lattice+Ord {
         .semijoin_u(&parts)
         .count()
         .probe()
-        .0
 }

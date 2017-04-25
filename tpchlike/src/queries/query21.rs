@@ -101,5 +101,4 @@ where G::Timestamp: Lattice+Ord {
         .semijoin_u(&collections.nations().filter(|n| starts_with(&n.name, b"SAUDI ARABIA")).map(|n| n.nation_key))
         .count()
         .probe()
-        .0
 }

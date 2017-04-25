@@ -58,7 +58,7 @@ fn main() {
 
             // query the graph, return a probe.
             let query_probe = graph.semijoin(&query)
-                                   .probe().0;
+                                   .probe();
 
 
             // issue reachability queries from various roots
@@ -67,7 +67,7 @@ fn main() {
 
             // do reach on the graph from the roots, report counts at each distance.
             let result = reach(&graph, &roots);
-            let roots_probe = result.probe().0;
+            let roots_probe = result.probe();
 
             (raw_input, trans_input, query_input, roots_input, query_probe, roots_probe)
         });

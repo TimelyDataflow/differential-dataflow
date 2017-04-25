@@ -54,7 +54,7 @@ fn main() {
 
 			// show us something about the collection, notice when done.
 			let probe = distr//.inspect(|x| println!("observed: {:?}", x))
-							 .probe().0;
+							 .probe();
 
 		    (input, probe)
     	});

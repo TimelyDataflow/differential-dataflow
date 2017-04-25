@@ -72,7 +72,7 @@ fn main() {
                                     .inspect(|&((l,q,t),_,w)| println!("\t(query: {},\tlabel: {},\ttopic:{}\t(weight: {})", q, l, t, w))
                                     .probe();
 
-            (tweet_input, query_input, probe.0)
+            (tweet_input, query_input, probe)
         });
 
         let tweet_seed: &[_] = &[0, 1, 2, worker.index()];

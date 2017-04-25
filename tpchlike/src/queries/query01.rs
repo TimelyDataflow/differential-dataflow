@@ -59,5 +59,4 @@ pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Times
         .as_collection()
         .count_u()
         .probe()
-        .0
 }

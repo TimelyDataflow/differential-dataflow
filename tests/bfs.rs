@@ -204,6 +204,72 @@ fn bfs_differential(
         .collect()
 }
 
+fn bfs_arranged(
+    roots_list: Vec<(usize, usize, isize)>, 
+    edges_list: Vec<((usize, usize), usize, isize)>) 
+-> Vec<((usize, usize), usize, isize)>
+{
+
+    let (send, recv) = ::std::sync::mpsc::channel();
+    let send = Arc::new(Mutex::new(send));
+
+    timely::execute(timely::Configuration::Thread, move |worker| {
+        
+        let mut roots_list = roots_list.clone();
+        let mut edges_list = edges_list.clone();
+
+        // define BFS dataflow; return handles to roots and edges inputs
+        let (mut roots, mut edges) = worker.dataflow(|scope| {
+
+            let send = send.lock().unwrap().clone();
+
+            let (root_input, roots) = scope.new_input();
+            let (edge_input, edges) = scope.new_input();
+
+            let roots = roots.as_collection();
+            let edges = edges.as_collection();
+
+            bfs(&edges, &roots).map(|(_, dist)| dist)
+                               .count()
+                               .map(|(x,y)| (x, y as usize))
+                               .inner
+                               .capture_into(send);
+
+            (root_input, edge_input)
+        });
+
+        // sort by decreasing insertion time.
+        roots_list.sort_by(|x,y| y.1.cmp(&x.1));
+        edges_list.sort_by(|x,y| y.1.cmp(&x.1));
+
+        let mut roots = differential_dataflow::input::InputSession::from(&mut roots);
+        let mut edges = differential_dataflow::input::InputSession::from(&mut edges);
+
+        let mut round = 0;
+        while roots_list.len() > 0 || edges_list.len() > 0 {
+
+            while roots_list.last().map(|x| x.1) == Some(round) {
+                let (node, _time, diff) = roots_list.pop().unwrap();                
+                roots.update(node, diff);
+            }
+            while edges_list.last().map(|x| x.1) == Some(round) {
+                let ((src, dst), _time, diff) = edges_list.pop().unwrap();                
+                edges.update((src, dst), diff);
+            }
+
+            round += 1;
+            roots.advance_to(round);
+            edges.advance_to(round);
+        }
+
+    }).unwrap();
+
+    recv.extract()
+        .into_iter()
+        .flat_map(|(_, list)| list.into_iter().map(|((dst,cnt),time,diff)| ((dst,cnt), time.inner, diff)))
+        .collect()
+}
+
 // returns pairs (n, s) indicating node n can be reached from a root in s steps.
 fn bfs<G: Scope>(edges: &Collection<G, Edge>, roots: &Collection<G, Node>) -> Collection<G, (Node, usize)>
 where G::Timestamp: Lattice+Ord {

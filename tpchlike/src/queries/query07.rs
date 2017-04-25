@@ -107,5 +107,4 @@ where G::Timestamp: Lattice+Ord {
         .filter(|x| x.0 != x.1)
         .count()
         .probe()
-        .0
 }

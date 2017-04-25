@@ -115,5 +115,4 @@ where G::Timestamp: Lattice+Ord {
         .map(|(_supp, (cost, part, mfgr), (nat, acc, nam, add, phn, com))| (nat, (cost, part, mfgr, acc, nam, add, phn, com)))
         .join_u(&nations)
         .probe()
-        .0
 }

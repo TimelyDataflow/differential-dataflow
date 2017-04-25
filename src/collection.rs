@@ -95,9 +95,8 @@ impl<G: Scope, D: Data, R: Diff> Collection<G, D, R> where G::Timestamp: Data {
     ///
     /// This probe is used to determine when the state of the Collection has stabilized and can
     /// be read out. 
-    pub fn probe(&self) -> (probe::Handle<G::Timestamp>, Collection<G, D, R>) {
-        let (handle, stream) = self.inner.probe();
-        (handle, stream.as_collection())
+    pub fn probe(&self) -> probe::Handle<G::Timestamp> {
+        self.inner.probe()
     }
     /// The scope containing the underlying timely dataflow stream.
     pub fn scope(&self) -> G {

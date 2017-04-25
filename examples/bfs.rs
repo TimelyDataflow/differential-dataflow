@@ -44,7 +44,7 @@ fn main() {
                               .inspect(|x| println!("\t{:?}", x))
                               .probe();
 
-            (root_input, edge_input, probe.0)
+            (root_input, edge_input, probe)
         });
 
         let seed: &[_] = &[1, 2, 3, 4];
