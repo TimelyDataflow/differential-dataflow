@@ -32,6 +32,7 @@ use timely::dataflow::*;
 use timely::dataflow::operators::Unary;
 use timely::dataflow::channels::pact::{Pipeline, Exchange};
 use timely::progress::frontier::MutableAntichain;
+use timely::progress::Timestamp;
 use timely::dataflow::operators::Capability;
 
 use timely_sort::Unsigned;
@@ -118,7 +119,7 @@ pub struct TraceHandle<K,V,T,R,Tr: Trace<K,V,T,R>> where T: Lattice+Ord+Clone+'s
     /// endpoint drops their reference. This makes the "hang up" procedure much simpler. The `arrange` operator
     /// is the only one who takes mutable access to the queues, and is the one to be in charge of cleaning dead
     /// references.
-    queues: Rc<RefCell<Vec<Weak<RefCell<VecDeque<(Vec<T>, Option<<Tr as Trace<K,V,T,R>>::Batch>)>>>>>>,
+    queues: Rc<RefCell<Vec<Weak<RefCell<VecDeque<(Vec<T>, Option<(T, <Tr as Trace<K,V,T,R>>::Batch)>)>>>>>>,
 }
 
 impl<K,V,T,R,Tr: Trace<K,V,T,R>> TraceHandle<K,V,T,R,Tr> where T: Lattice+Ord+Clone+'static {
@@ -163,19 +164,55 @@ impl<K,V,T,R,Tr: Trace<K,V,T,R>> TraceHandle<K,V,T,R,Tr> where T: Lattice+Ord+Cl
     ///
     /// The queue will be immediately populated with existing batches from the trace, and until the reference 
     /// is dropped will receive new batches as produced by the source `arrange` operator.
-    pub fn new_listener(&self) -> Rc<RefCell<VecDeque<(Vec<T>, Option<<Tr as Trace<K,V,T,R>>::Batch>)>>> {
+    pub fn new_listener(&self) -> Rc<RefCell<VecDeque<(Vec<T>, Option<(T, <Tr as Trace<K,V,T,R>>::Batch)>)>>> {
 
         // create a new queue for progress and batch information.
         let mut queue = VecDeque::new();
 
         // add the existing batches from the trace
-        self.wrapper.borrow().trace.map_batches(|batch| queue.push_back((batch.upper().to_vec(), Some(batch.clone()))));
+        self.wrapper.borrow().trace.map_batches(|batch| queue.push_back((vec![T::min()], Some((T::min(), batch.clone())))));
 
         // wraps the queue in a ref-counted ref cell and enqueue/return it.
         let reference = Rc::new(RefCell::new(queue));
         let mut borrow = self.queues.borrow_mut();
         borrow.push(Rc::downgrade(&reference));
         reference
+    }
+
+    /// Creates a new source of data in the supplied scope, using the referenced trace as a source.
+    pub fn create_in<G: Scope<Timestamp=T>>(&mut self, scope: &G) -> Arranged<G, K, V, R, Tr> where T: Timestamp {
+        
+        let queue = self.new_listener();
+
+        let collection = ::timely::dataflow::operators::operator::source(scope, "ArrangedSource", move |capability| {
+            
+            // capabilities the source maintains.
+            let mut capabilities = vec![capability];
+            
+            move |output| {
+
+                let mut borrow = queue.borrow_mut();
+                while let Some((frontier, sent)) = borrow.pop_front() {
+                    // if data are associated, send em!
+                    if let Some((time, batch)) = sent {
+                        let cap = capabilities.iter().find(|c| c.time().le(&time)).unwrap().delayed(&time);
+                        output.session(&cap).give(BatchWrapper { item: batch });
+                    }
+
+                    // advance capabilities to look like `frontier`.
+                    let mut new_capabilities = Vec::new();
+                    for time in frontier.iter() {
+                        new_capabilities.push(capabilities.iter().find(|c| c.time().le(&time)).unwrap().delayed(&time))
+                    }
+                    capabilities = new_capabilities;
+                }
+            }
+        });
+
+        Arranged {
+            stream: collection,
+            trace: self.clone(),
+        }
     }
 }
 
@@ -365,7 +402,7 @@ impl<G: Scope, K: Data+Hashable, V: Data, R: Diff> Arrange<G, K, V, R> for Colle
                             let mut borrow = queues.borrow_mut();
                             for queue in borrow.iter_mut() {
                                 queue.upgrade().map(|queue| {
-                                    queue.borrow_mut().push_back((notificator.frontier(0).to_vec(), Some(batch.clone())));
+                                    queue.borrow_mut().push_back((notificator.frontier(0).to_vec(), Some((capabilities[index].time(), batch.clone()))));
                                 });
                             }
                             borrow.retain(|w| w.upgrade().is_some());

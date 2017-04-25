@@ -11,8 +11,11 @@ use rand::{Rng, SeedableRng, StdRng};
 
 use differential_dataflow::AsCollection;
 use differential_dataflow::operators::arrange::ArrangeByKey;
+use differential_dataflow::operators::group::GroupArranged;
+use differential_dataflow::trace::implementations::ord::OrdValSpine;
 use differential_dataflow::trace::Cursor;
 use differential_dataflow::trace::Batch;
+use differential_dataflow::trace::Trace;
 
 fn main() {
 
@@ -37,6 +40,14 @@ fn main() {
                                 .arrange_by_key_hashed();
 
             (input, arranged.stream.probe().0, arranged.trace.clone())
+        });
+
+        let mut trace2 = trace.clone();
+        worker.dataflow(move |scope| {
+
+            trace2.create_in(scope)
+                  .group_arranged(|_k, s, t| t.push((s[0].0, 1)), OrdValSpine::new());
+
         });
 
         let seed: &[_] = &[1, 2, 3, index];
@@ -117,8 +128,8 @@ fn main() {
                         while let Some((frontier, batch)) = borrow.pop_front() {
                             println!("received from queue:");
                             println!("  frontier: {:?}", frontier);
-                            if let Some(batch) = batch {
-                                println!("  batch from: {:?} -> {:?}, since: {:?}", batch.lower(), batch.upper(), batch.description().since());
+                            if let Some((time, batch)) = batch {
+                                println!("  batch from: {:?} -> {:?}, since: {:?} @ {:?}", batch.lower(), batch.upper(), batch.description().since(), time);
                             }
                         }
                     }
