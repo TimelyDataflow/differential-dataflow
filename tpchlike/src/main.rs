@@ -32,7 +32,7 @@ fn main() {
         let physical_batch = ::std::env::args().nth(3).unwrap().parse::<usize>().unwrap();
         let query: usize = ::std::env::args().nth(4).unwrap().parse().unwrap();
 
-        let (mut inputs, probes, used) = worker.scoped::<usize,_,_>(move |scope| {
+        let (mut inputs, probes, used) = worker.dataflow::<usize,_,_>(move |scope| {
 
             // create new inputs to use in workers!
             let (cust_in, cust) = scope.new_input();
