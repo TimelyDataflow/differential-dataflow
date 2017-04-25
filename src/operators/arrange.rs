@@ -164,13 +164,13 @@ impl<K,V,T,R,Tr: Trace<K,V,T,R>> TraceHandle<K,V,T,R,Tr> where T: Lattice+Ord+Cl
     ///
     /// The queue will be immediately populated with existing batches from the trace, and until the reference 
     /// is dropped will receive new batches as produced by the source `arrange` operator.
-    pub fn new_listener(&self) -> Rc<RefCell<VecDeque<(Vec<T>, Option<(T, <Tr as Trace<K,V,T,R>>::Batch)>)>>> {
+    pub fn new_listener(&self) -> Rc<RefCell<VecDeque<(Vec<T>, Option<(T, <Tr as Trace<K,V,T,R>>::Batch)>)>>> where T: Default {
 
         // create a new queue for progress and batch information.
         let mut queue = VecDeque::new();
 
         // add the existing batches from the trace
-        self.wrapper.borrow().trace.map_batches(|batch| queue.push_back((vec![T::min()], Some((T::min(), batch.clone())))));
+        self.wrapper.borrow().trace.map_batches(|batch| queue.push_back((vec![T::default()], Some((T::default(), batch.clone())))));
 
         // wraps the queue in a ref-counted ref cell and enqueue/return it.
         let reference = Rc::new(RefCell::new(queue));
@@ -195,14 +195,24 @@ impl<K,V,T,R,Tr: Trace<K,V,T,R>> TraceHandle<K,V,T,R,Tr> where T: Lattice+Ord+Cl
                 while let Some((frontier, sent)) = borrow.pop_front() {
                     // if data are associated, send em!
                     if let Some((time, batch)) = sent {
-                        let cap = capabilities.iter().find(|c| c.time().le(&time)).unwrap().delayed(&time);
-                        output.session(&cap).give(BatchWrapper { item: batch });
+                        if let Some(cap) = capabilities.iter().find(|c| c.time().le(&time)) {
+                            let delayed = cap.delayed(&time);
+                            output.session(&delayed).give(BatchWrapper { item: batch });
+                        }
+                        else {
+                            panic!("failed to find capability for {:?} in {:?}", time, capabilities);
+                        }
                     }
 
                     // advance capabilities to look like `frontier`.
                     let mut new_capabilities = Vec::new();
                     for time in frontier.iter() {
-                        new_capabilities.push(capabilities.iter().find(|c| c.time().le(&time)).unwrap().delayed(&time))
+                        if let Some(cap) = capabilities.iter().find(|c| c.time().le(&time)) {
+                            new_capabilities.push(cap.delayed(&time));
+                        }
+                        else {
+                            panic!("failed to find capability for {:?} in {:?}", time, capabilities);
+                        }
                     }
                     capabilities = new_capabilities;
                 }
