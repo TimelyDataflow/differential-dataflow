@@ -158,6 +158,25 @@ impl<K,V,T,R,Tr: Trace<K,V,T,R>> TraceHandle<K,V,T,R,Tr> where T: Lattice+Ord+Cl
     pub fn cursor_through(&self, frontier: &[T]) -> Option<Tr::Cursor> {
         ::std::cell::RefCell::borrow(&self.wrapper).trace.cursor_through(frontier)
     }
+
+    /// Attaches a new shared queue to the trace.
+    ///
+    /// The queue will be immediately populated with existing batches from the trace, and until the reference 
+    /// is dropped will receive new batches as produced by the source `arrange` operator.
+    pub fn new_listener(&self) -> Rc<RefCell<VecDeque<(Vec<T>, Option<<Tr as Trace<K,V,T,R>>::Batch>)>>> {
+
+        // create a new queue for progress and batch information.
+        let mut queue = VecDeque::new();
+
+        // add the existing batches from the trace
+        self.wrapper.borrow().trace.map_batches(|batch| queue.push_back((batch.upper().to_vec(), Some(batch.clone()))));
+
+        // wraps the queue in a ref-counted ref cell and enqueue/return it.
+        let reference = Rc::new(RefCell::new(queue));
+        let mut borrow = self.queues.borrow_mut();
+        borrow.push(Rc::downgrade(&reference));
+        reference
+    }
 }
 
 impl<K, V, T: Lattice+Ord+Clone, R, Tr: Trace<K, V, T, R>> Clone for TraceHandle<K, V, T, R, Tr> {

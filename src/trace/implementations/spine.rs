@@ -100,6 +100,15 @@ where
 		self.through_frontier = frontier.to_vec();
 		self.consider_merges();
 	}
+
+	fn map_batches<F: FnMut(&Self::Batch)>(&self, mut f: F) {
+		for batch in self.merging.iter() {
+			f(batch);
+		}
+		for batch in self.pending.iter() {
+			f(batch);
+		}
+	}
 }
 
 impl<K, V, T, R, B> Spine<K, V, T, R, B> 
