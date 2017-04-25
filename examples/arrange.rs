@@ -26,8 +26,8 @@ fn main() {
         let index = worker.index();
         let peers = worker.peers();
 
-        // create a a degree counting differential dataflow
-        let (mut input, probe, mut trace) = worker.scoped(|scope| {
+    	// create a a degree counting differential dataflow
+    	let (mut input, probe, mut trace) = worker.dataflow(|scope| {
 
             // create edge input, count a few ways.
             let (input, edges) = scope.new_input();

@@ -22,10 +22,10 @@ type Edge = (Node, Node);
 fn main() {
 
     // define a new computational scope, in which to run reach
-    timely::execute_from_args(std::env::args(), move |computation| {
+    timely::execute_from_args(std::env::args(), move |worker| {
         
         // contruct iterative transaction dataflow, attach reachability query to graph.
-        let (mut raw, mut trans, mut query, mut roots, query_probe, roots_probe) = computation.scoped(|scope| {
+        let (mut raw, mut trans, mut query, mut roots, query_probe, roots_probe) = worker.dataflow(|scope| {
 
             // transactional updates to edge collection.
             let (raw_input, raw) = scope.new_input();
@@ -75,7 +75,7 @@ fn main() {
         let filename = std::env::args().nth(1).unwrap();
         let graph = GraphMMap::new(&filename);
 
-        if computation.index() == 0 {
+        if worker.index() == 0 {
             let &time = raw.time();
             for node in 0 .. graph.nodes() {
                 for &edge in graph.edges(node) {
@@ -92,7 +92,7 @@ fn main() {
 
         // do computation for a bit, until we see outputs from each.
         while query_probe.lt(&trans.time()) || roots_probe.lt(&trans.time()) {
-            computation.step();
+            worker.step();
         }
 
         let seed: &[_] = &[1, 2, 3, 4];
@@ -105,7 +105,7 @@ fn main() {
             let mut buffer = vec![];
             for i in 0 .. block as usize {
                 let key = rng.gen_range(0, graph.nodes() as u32);
-                if i % computation.peers() == computation.index() {
+                if i % worker.peers() == worker.index() {
                     buffer.push(key);
                 }
             }
@@ -127,7 +127,7 @@ fn main() {
 
             // do computation for a bit, until we see outputs from each.
             while query_probe.lt(&trans.time()) || roots_probe.lt(&trans.time()) {
-                computation.step();
+                worker.step();
             }
         }
 
@@ -162,7 +162,7 @@ fn main() {
 
             // do computation for a bit, until we see outputs from each.
             while query_probe.lt(&trans.time()) || roots_probe.lt(&trans.time()) {
-                computation.step();
+                worker.step();
             }
 
             let elapsed = inner_timer.elapsed();
@@ -172,7 +172,7 @@ fn main() {
         roots.close();
         println!("travs elapsed: {:?} for 1,000 x {}", timer.elapsed(), block);
 
-        if computation.index() == 0 {
+        if worker.index() == 0 {
             latencies[500 ..].sort();
             for &x in latencies[500..].iter() {
                 println!("{}", (x as f64) / 1000000000.0f64);
@@ -180,8 +180,8 @@ fn main() {
         }
 
         let mut writes = Vec::with_capacity(1000);
-        let index = computation.index(); 
-        let peers = computation.peers(); 
+        let index = worker.index(); 
+        let peers = worker.peers(); 
         let mut t_id = index;
 
         while writes.len() < writes.capacity() {
@@ -193,7 +193,7 @@ fn main() {
             for i in 0 .. block as usize {
                 let edge1 = edge_set[rng.gen_range(0, edge_set.len())];
                 let edge2 = edge_set[rng.gen_range(0, edge_set.len())];
-                if i % computation.peers() == computation.index() {
+                if i % worker.peers() == worker.index() {
                     buffer.push((t_id, true, edge1));
                     buffer.push((t_id, false, edge2));
                 }
@@ -217,7 +217,7 @@ fn main() {
 
             // do computation for a bit, until we see outputs from each.
             while query_probe.lt(&trans.time()) || roots_probe.lt(&trans.time()) {
-                computation.step();
+                worker.step();
             }
         }
 

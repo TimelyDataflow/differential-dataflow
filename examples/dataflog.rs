@@ -58,10 +58,10 @@ impl<'a, G: Scope, D: Default+Data+Hashable> Drop for Variable<'a, G, D> where G
 fn main() {
 
     // start up timely computation
-    timely::execute_from_args(std::env::args(), |root| {
+    timely::execute_from_args(std::env::args(), |worker| {
 
         // construct streaming scope
-        root.scoped::<u64,_,_>(move |outer| {
+        worker.dataflow::<u64,_,_>(move |outer| {
 
             // inputs for base facts; currently not used because no data on hand.
             let (_cin, c) = outer.new_input::<((u32,u32,u32),_,isize)>(); let c = c.as_collection();

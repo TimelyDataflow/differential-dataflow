@@ -26,12 +26,12 @@ fn main() {
     println!("performing reachability on {} nodes, {} edges:", nodes, edges);
 
     // define a new computational scope, in which to run BFS
-    timely::execute_from_args(std::env::args().skip(4), move |computation| {
+    timely::execute_from_args(std::env::args().skip(4), move |worker| {
         
         let timer = Instant::now();
 
         // define BFS dataflow; return handles to roots and edges inputs
-        let (mut graph, mut roots, probe) = computation.scoped(|scope| {
+        let (mut graph, mut roots, probe) = worker.dataflow(|scope| {
 
             let (root_input, roots) = scope.new_input();
             let roots = Collection::new(roots);
@@ -47,26 +47,26 @@ fn main() {
         let mut rng1: StdRng = SeedableRng::from_seed(seed);    // rng for edge additions
         let mut rng2: StdRng = SeedableRng::from_seed(seed);    // rng for edge deletions
 
-        if computation.index() == 0 {
+        if worker.index() == 0 {
             // trickle edges in to dataflow
             for _ in 0..(edges/1000) {
                 let &time = graph.time();
                 for _ in 0..1000 {
                     graph.send(((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), time, 1));
                 }
-                computation.step();
+                worker.step();
             }
         }
 
-        if computation.index() == 0 {
+        if worker.index() == 0 {
             println!("loaded; elapsed: {:?}", timer.elapsed());
         }
 
         roots.advance_to(1);
         graph.advance_to(1);
-        computation.step_while(|| probe.lt(graph.time()));
+        worker.step_while(|| probe.lt(graph.time()));
 
-        if computation.index() == 0 {
+        if worker.index() == 0 {
             println!("stable; elapsed: {:?}", timer.elapsed());
         }
         for i in 0..10 {
@@ -76,8 +76,8 @@ fn main() {
             graph.advance_to(2 + i);
 
             let timer = ::std::time::Instant::now();
-            computation.step_while(|| probe.lt(graph.time()));
-            if computation.index() == 0 {
+            worker.step_while(|| probe.lt(graph.time()));
+            if worker.index() == 0 {
                 println!("query; elapsed: {:?}", timer.elapsed());
             }
         }
@@ -92,7 +92,7 @@ fn main() {
 
             let timer = ::std::time::Instant::now();
             let round = *graph.epoch();
-            if computation.index() == 0 {
+            if worker.index() == 0 {
                 while let Some(change) = changes.pop() {
                     graph.send(change);
                 }
@@ -100,9 +100,9 @@ fn main() {
             roots.advance_to(round + 1);
             graph.advance_to(round + 1);
 
-            computation.step_while(|| probe.lt(graph.time()));
+            worker.step_while(|| probe.lt(graph.time()));
 
-            if computation.index() == 0 {
+            if worker.index() == 0 {
                 let elapsed = timer.elapsed();
                 let nanos = elapsed.as_secs() * 1_000_000_000 + elapsed.subsec_nanos() as u64;
                 // println!("wave {}: avg {:?}", wave, nanos / (batch as u32));

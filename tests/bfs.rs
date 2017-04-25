@@ -153,7 +153,7 @@ fn bfs_differential(
         let mut edges_list = edges_list.clone();
 
         // define BFS dataflow; return handles to roots and edges inputs
-        let (mut roots, mut edges) = worker.scoped(|scope| {
+        let (mut roots, mut edges) = worker.dataflow(|scope| {
 
             let send = send.lock().unwrap().clone();
 

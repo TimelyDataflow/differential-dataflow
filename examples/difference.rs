@@ -20,9 +20,9 @@ fn main() {
     // Specifically, the program aims to accumulate (key, val) pairs where we are
     // interested in the sum of values for each key, as well as the count of the
     // number of records, so that we can produce the average.
-    timely::execute_from_args(std::env::args().skip(4), move |computation| {
+    timely::execute_from_args(std::env::args().skip(4), move |worker| {
 
-        let mut input = computation.scoped::<(), _, _>(|scope| {
+        let mut input = worker.dataflow::<(), _, _>(|scope| {
 
             let (input, data) = scope.new_input::<((usize, isize), isize)>();
 
@@ -42,7 +42,7 @@ fn main() {
 
         	// we must still give the computation the opportunity to act.
         	if val > 0 && val % batch == 0 { 
-        		computation.step(); 
+        		worker.step(); 
         		let elapsed = timer.elapsed();
         		let secs = elapsed.as_secs() as f64 + (elapsed.subsec_nanos() as f64)/1000000000.0;
         		println!("tuples: {:?},\telts/sec: {:?}", val, val as f64 / secs);

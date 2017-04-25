@@ -32,15 +32,15 @@ fn main() {
     let filename = std::env::args().nth(1).unwrap();
     let program = std::env::args().nth(2).unwrap(); 
 
-    timely::execute_from_args(std::env::args().skip(1), move |computation| {
+    timely::execute_from_args(std::env::args().skip(1), move |worker| {
 
-        let peers = computation.peers();
-        let index = computation.index();
+        let peers = worker.peers();
+        let index = worker.index();
 
         // // What you might do if you used GraphMMap:
         let graph = GraphMMap::new(&filename);
 
-        let (mut input, mut query, probe) = computation.scoped::<u64,_,_>(|scope| {
+        let (mut input, mut query, probe) = worker.dataflow::<u64,_,_>(|scope| {
 
             let (input, stream1) = scope.new_input();
             let (rootz, stream2) = scope.new_input();
@@ -75,7 +75,7 @@ fn main() {
         // run until graph is loaded
         input.advance_to(1);
         query.advance_to(1);
-        computation.step_while(|| probe.lt(query.time()));
+        worker.step_while(|| probe.lt(query.time()));
 
         if index == 0 {
             println!("loaded: {:?}", timer.elapsed());
@@ -96,7 +96,7 @@ fn main() {
             let next = query.epoch() + 1;
             input.advance_to(next);
             query.advance_to(next);
-            while probe.lt(query.time()) { computation.step(); }
+            while probe.lt(query.time()) { worker.step(); }
             latencies.push(timer.elapsed());
         }
 
@@ -125,7 +125,7 @@ where G::Timestamp: Lattice+Ord {
     edges.join_arranged(&query, |k,v,_| (v.clone(), k.item.clone()))
          .arrange_by_key_hashed()
          .join_arranged(&edges, |_,x,y| (x.clone(), y.clone()))
-         // the next thing is the "topk" computation. sorry!
+         // the next thing is the "topk" worker. sorry!
          .group(move |_,s,t| {
              t.extend(s.iter().map(|&(x,y)| (x,y)));       // propose all inputs as outputs
              t.sort_by(|x,y| (-x.1).cmp(&(-y.1)));  // sort by negative count (large numbers first)

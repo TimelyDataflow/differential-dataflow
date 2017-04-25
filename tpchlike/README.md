@@ -10,7 +10,7 @@ Our plan is to eventually implement all of the queries, each a few different way
 
 The program runs with the command line
 
-    cargo run --release -- <path> <logical_batch> <physical_batch>
+    cargo run --release -- <path> <logical_batch> <physical_batch> <query number>
 
 and looks in `<path>` for the various TPC-H files (e.g. `lineitem.tbl`). If you don't have these files, you can grab the generator at the TPC-H link up above. The `logical_batch` argument merges rounds of input and changes the output of the computation; we try to use `1` for the most part, which acts as if each tuple were introduced independently. The `physical_batch` argument indicates how many logical rounds should be introduced concurrently; increasing this argument can increase the throughput at the expense of latency, but will not change the output of the computation.
 

@@ -32,11 +32,11 @@ fn main() {
     let batch: usize = std::env::args().nth(3).unwrap().parse().unwrap();
     let inspect = std::env::args().find(|x| x == "inspect").is_some();
 
-    timely::execute_from_args(std::env::args().skip(4), move |computation| {
+    timely::execute_from_args(std::env::args().skip(4), move |worker| {
 
         let timer = ::std::time::Instant::now();
 
-        let (mut input, probe) = computation.scoped::<u64,_,_>(|scope| {
+        let (mut input, probe) = worker.dataflow::<u64,_,_>(|scope| {
 
             let (input, edges) = scope.new_input();
             let mut edges = Collection::new(edges);
@@ -62,7 +62,7 @@ fn main() {
         let mut rng1: StdRng = SeedableRng::from_seed(seed);
         let mut rng2: StdRng = SeedableRng::from_seed(seed);
 
-        if computation.index() == 0 {
+        if worker.index() == 0 {
 
             // println!("determining SCC of {} nodes, {} edges:", nodes, edges);
             let seed: &[_] = &[1, 2, 3, 4];
@@ -82,7 +82,7 @@ fn main() {
                 let edge = (names[rng1.gen_range(0, nodes) as usize], names[rng1.gen_range(0, nodes) as usize]);
                 input.send((edge, time, 1));
                 if (index % (1 << 12)) == 0 {
-                    computation.step();
+                    worker.step();
                 }
             }
 
@@ -92,7 +92,7 @@ fn main() {
         if batch > 0 {
             let mut changes = Vec::with_capacity(2 * batch);
             for _ in 0 .. {
-                if computation.index() == 0 {
+                if worker.index() == 0 {
                     let &time = input.time();
                     for _ in 0 .. batch {
                         changes.push(((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), time, 1));
@@ -102,15 +102,15 @@ fn main() {
 
                 let timer = ::std::time::Instant::now();
                 let round = *input.epoch();
-                if computation.index() == 0 {
+                if worker.index() == 0 {
                     while let Some(change) = changes.pop() {
                         input.send(change);
                     }
                 }
                 input.advance_to(round + 1);
-                computation.step_while(|| probe.lt(&input.time()));
+                worker.step_while(|| probe.lt(&input.time()));
 
-                if computation.index() == 0 {
+                if worker.index() == 0 {
                     let elapsed = timer.elapsed();
                     println!("{}", elapsed.as_secs() * 1000000000 + (elapsed.subsec_nanos() as u64));
                 }

@@ -26,12 +26,12 @@ fn main() {
     let inspect: bool = std::env::args().nth(4).unwrap() == "inspect";
 
     // define a new computational scope, in which to run BFS
-    timely::execute_from_args(std::env::args().skip(5), move |computation| {
+    timely::execute_from_args(std::env::args().skip(5), move |worker| {
 
         let timer = Instant::now();
 
         // define BFS dataflow; return handles to roots and edges inputs
-        let (mut tweets, mut queries, probe) = computation.scoped(|scope| {
+        let (mut tweets, mut queries, probe) = worker.dataflow(|scope| {
 
             // entries corresponding to (@username, @mention, #topic), but a (u32, u32, u32) instead.
             let (tweet_input, tweets) = scope.new_input(); 
@@ -75,25 +75,25 @@ fn main() {
             (tweet_input, query_input, probe.0)
         });
 
-        let tweet_seed: &[_] = &[0, 1, 2, computation.index()];
+        let tweet_seed: &[_] = &[0, 1, 2, worker.index()];
         let mut tweet_rng1: StdRng = SeedableRng::from_seed(tweet_seed);    // rng for edge additions
         let mut tweet_rng2: StdRng = SeedableRng::from_seed(tweet_seed);    // rng for edge deletions
 
-        let query_seed: &[_] = &[1, 2, 3, computation.index()];
+        let query_seed: &[_] = &[1, 2, 3, worker.index()];
         let mut query_rng1: StdRng = SeedableRng::from_seed(query_seed);    // rng for edge additions
         let mut query_rng2: StdRng = SeedableRng::from_seed(query_seed);    // rng for edge deletions
 
         println!("performing AppealingDataflow with {} users, {} topics:", users, topics);
 
         let &time = tweets.time();
-        for _ in 0 .. users/computation.peers() {
+        for _ in 0 .. users/worker.peers() {
             tweets.send(((tweet_rng1.gen_range(0, users), 
                           tweet_rng1.gen_range(0, users),
                           tweet_rng1.gen_range(0, topics)), time, 1));
         } 
 
         let &time = queries.time();
-        if computation.index() == 0 {
+        if worker.index() == 0 {
             queries.send((query_rng1.gen_range(0, users), time, 1));
         }
 
@@ -101,7 +101,7 @@ fn main() {
 
         tweets.advance_to(1);
         queries.advance_to(1);
-        computation.step_while(|| probe.lt(queries.time()));
+        worker.step_while(|| probe.lt(queries.time()));
 
         println!("stable; elapsed: {:?}", timer.elapsed());
 
@@ -111,8 +111,8 @@ fn main() {
 
                 let &time = tweets.time();
 
-                let mut my_batch = batch / computation.peers();
-                if computation.index() < (batch % computation.peers()) { 
+                let mut my_batch = batch / worker.peers();
+                if worker.index() < (batch % worker.peers()) { 
                     my_batch += 1; 
                 }
 
@@ -131,7 +131,7 @@ fn main() {
                 for change in changes.drain(..) {
                     tweets.send(change);
                 }
-                if computation.index() == 0 {
+                if worker.index() == 0 {
                     let &time = queries.time();
                     queries.send((query_rng1.gen_range(0, users), time, 1));
                     queries.send((query_rng2.gen_range(0, users), time,-1));
@@ -139,9 +139,9 @@ fn main() {
 
                 tweets.advance_to(round + 1);
                 queries.advance_to(round + 1);
-                computation.step_while(|| probe.lt(queries.time()));
+                worker.step_while(|| probe.lt(queries.time()));
 
-                if computation.index() == 0 {
+                if worker.index() == 0 {
                     println!("wave {}: avg {:?}", wave, start.elapsed() / (batch as u32));
                 }
             }
