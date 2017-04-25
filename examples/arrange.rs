@@ -27,7 +27,7 @@ fn main() {
         let peers = worker.peers();
 
         // create a a degree counting differential dataflow
-        let (mut input, probe, trace) = worker.scoped(|scope| {
+        let (mut input, probe, mut trace) = worker.scoped(|scope| {
 
             // create edge input, count a few ways.
             let (input, edges) = scope.new_input();
@@ -80,6 +80,9 @@ fn main() {
                 if edge % batch == (batch - 1) {
 
                     let timer = ::std::time::Instant::now();
+
+                    trace.advance_by(&[input.time().clone()]);
+                    trace.distinguish_since(&[input.time().clone()]);
 
                     let next = input.epoch() + 1;
                     input.advance_to(next);
