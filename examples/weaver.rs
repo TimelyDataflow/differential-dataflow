@@ -7,6 +7,7 @@ extern crate graph_map;
 
 use rand::{Rng, SeedableRng, StdRng};
 
+use timely::order::PartialOrder;
 use timely::dataflow::*;
 use timely::dataflow::operators::*;
 
@@ -91,7 +92,7 @@ fn main() {
         roots.advance_to(next);
 
         // do computation for a bit, until we see outputs from each.
-        while query_probe.lt(&trans.time()) || roots_probe.lt(&trans.time()) {
+        while query_probe.less_than(&trans.time()) || roots_probe.less_than(&trans.time()) {
             worker.step();
         }
 
@@ -126,7 +127,7 @@ fn main() {
             roots.advance_to(next);
 
             // do computation for a bit, until we see outputs from each.
-            while query_probe.lt(&trans.time()) || roots_probe.lt(&trans.time()) {
+            while query_probe.less_than(&trans.time()) || roots_probe.less_than(&trans.time()) {
                 worker.step();
             }
         }
@@ -161,7 +162,7 @@ fn main() {
             roots.advance_to(next);
 
             // do computation for a bit, until we see outputs from each.
-            while query_probe.lt(&trans.time()) || roots_probe.lt(&trans.time()) {
+            while query_probe.less_than(&trans.time()) || roots_probe.less_than(&trans.time()) {
                 worker.step();
             }
 
@@ -216,7 +217,7 @@ fn main() {
             // roots.advance_to(next);
 
             // do computation for a bit, until we see outputs from each.
-            while query_probe.lt(&trans.time()) || roots_probe.lt(&trans.time()) {
+            while query_probe.less_than(&trans.time()) || roots_probe.less_than(&trans.time()) {
                 worker.step();
             }
         }

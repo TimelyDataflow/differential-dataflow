@@ -64,7 +64,7 @@ fn main() {
 
         roots.advance_to(1);
         graph.advance_to(1);
-        worker.step_while(|| probe.lt(graph.time()));
+        worker.step_while(|| probe.less_than(graph.time()));
 
         if worker.index() == 0 {
             println!("stable; elapsed: {:?}", timer.elapsed());
@@ -76,7 +76,7 @@ fn main() {
             graph.advance_to(2 + i);
 
             let timer = ::std::time::Instant::now();
-            worker.step_while(|| probe.lt(graph.time()));
+            worker.step_while(|| probe.less_than(graph.time()));
             if worker.index() == 0 {
                 println!("query; elapsed: {:?}", timer.elapsed());
             }
@@ -100,7 +100,7 @@ fn main() {
             roots.advance_to(round + 1);
             graph.advance_to(round + 1);
 
-            worker.step_while(|| probe.lt(graph.time()));
+            worker.step_while(|| probe.less_than(graph.time()));
 
             if worker.index() == 0 {
                 let elapsed = timer.elapsed();

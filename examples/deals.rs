@@ -75,7 +75,7 @@ fn main() {
         // run until graph is loaded
         input.advance_to(1);
         query.advance_to(1);
-        worker.step_while(|| probe.lt(query.time()));
+        worker.step_while(|| probe.less_than(query.time()));
 
         if index == 0 {
             println!("loaded: {:?}", timer.elapsed());
@@ -96,7 +96,7 @@ fn main() {
             let next = query.epoch() + 1;
             input.advance_to(next);
             query.advance_to(next);
-            while probe.lt(query.time()) { worker.step(); }
+            while probe.less_than(query.time()) { worker.step(); }
             latencies.push(timer.elapsed());
         }
 

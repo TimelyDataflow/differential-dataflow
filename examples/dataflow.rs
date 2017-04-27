@@ -101,7 +101,7 @@ fn main() {
 
         tweets.advance_to(1);
         queries.advance_to(1);
-        worker.step_while(|| probe.lt(queries.time()));
+        worker.step_while(|| probe.less_than(queries.time()));
 
         println!("stable; elapsed: {:?}", timer.elapsed());
 
@@ -139,7 +139,7 @@ fn main() {
 
                 tweets.advance_to(round + 1);
                 queries.advance_to(round + 1);
-                worker.step_while(|| probe.lt(queries.time()));
+                worker.step_while(|| probe.less_than(queries.time()));
 
                 if worker.index() == 0 {
                     println!("wave {}: avg {:?}", wave, start.elapsed() / (batch as u32));

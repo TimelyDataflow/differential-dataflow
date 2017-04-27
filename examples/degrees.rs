@@ -79,7 +79,7 @@ fn main() {
 		}
 
 		input.advance_to(1);
-		worker.step_while(|| probe.lt(input.time()));
+		worker.step_while(|| probe.less_than(input.time()));
 
 		if index == 0 {
 			// let timer = timer.elapsed();
@@ -107,7 +107,7 @@ fn main() {
 					session.flush();
 
 	        		let timer = ::std::time::Instant::now();
-					worker.step_while(|| probe.lt(session.time()));
+					worker.step_while(|| probe.less_than(session.time()));
 					println!("worker {}, round {} finished after {:?}", index, round, timer.elapsed());
             	}
             }

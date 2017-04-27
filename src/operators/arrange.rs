@@ -28,6 +28,7 @@ use std::default::Default;
 use std::ops::DerefMut;
 use std::collections::VecDeque;
 
+use timely::order::PartialOrder;
 use timely::dataflow::*;
 use timely::dataflow::operators::Unary;
 use timely::dataflow::channels::pact::{Pipeline, Exchange};
@@ -52,7 +53,7 @@ use trace::implementations::ord::OrdKeySpine as DefaultKeyTrace;
 /// The `BatchWrapper`s sole purpose in life is to implement `Abomonation` with methods that panic
 /// when called. This allows the wrapped data to be transited along timely's `Pipeline` channels. 
 /// The wrapper cannot fake out `Send`, and so cannot be used on timely's `Exchange` channels. 
-#[derive(Clone,Ord,PartialOrd,Eq,PartialEq,Debug)]
+#[derive(Clone,Eq,PartialEq,Debug)]
 pub struct BatchWrapper<T> {
     /// The wrapped item.
     pub item: T,
@@ -67,7 +68,7 @@ impl<T> ::abomonation::Abomonation for BatchWrapper<T> {
 
 
 /// A wrapper around a trace which tracks the frontiers of all referees.
-pub struct TraceWrapper<K, V, T, R, Tr: Trace<K,V,T,R>> where T: Lattice+Ord+Clone+'static {
+pub struct TraceWrapper<K, V, T, R, Tr: Trace<K,V,T,R>> where T: Lattice+Clone+'static {
     phantom: ::std::marker::PhantomData<(K, V, R)>,
     advance_frontiers: MutableAntichain<T>,
     through_frontiers: MutableAntichain<T>,
@@ -75,7 +76,7 @@ pub struct TraceWrapper<K, V, T, R, Tr: Trace<K,V,T,R>> where T: Lattice+Ord+Clo
     pub trace: Tr,
 }
 
-impl<K,V,T,R,Tr: Trace<K,V,T,R>> TraceWrapper<K,V,T,R,Tr> where T: Lattice+Ord+Clone+'static {
+impl<K,V,T,R,Tr: Trace<K,V,T,R>> TraceWrapper<K,V,T,R,Tr> where T: Lattice+Clone+'static {
     /// Allocates a new trace wrapper.
     fn new(empty: Tr) -> Self {
         TraceWrapper {
@@ -105,7 +106,7 @@ impl<K,V,T,R,Tr: Trace<K,V,T,R>> TraceWrapper<K,V,T,R,Tr> where T: Lattice+Ord+C
 ///
 /// As long as the handle exists, the wrapped trace should continue to exist and will not advance its 
 /// timestamps past the frontier maintained by the handle.
-pub struct TraceHandle<K,V,T,R,Tr: Trace<K,V,T,R>> where T: Lattice+Ord+Clone+'static {
+pub struct TraceHandle<K,V,T,R,Tr: Trace<K,V,T,R>> where T: Lattice+Clone+'static {
     advance_frontier: Vec<T>,
     through_frontier: Vec<T>,
     /// Wrapped trace. Please be gentle when using.
@@ -122,7 +123,7 @@ pub struct TraceHandle<K,V,T,R,Tr: Trace<K,V,T,R>> where T: Lattice+Ord+Clone+'s
     queues: Rc<RefCell<Vec<Weak<RefCell<VecDeque<(Vec<T>, Option<(T, <Tr as Trace<K,V,T,R>>::Batch)>)>>>>>>,
 }
 
-impl<K,V,T,R,Tr: Trace<K,V,T,R>> TraceHandle<K,V,T,R,Tr> where T: Lattice+Ord+Clone+'static {
+impl<K,V,T,R,Tr: Trace<K,V,T,R>> TraceHandle<K,V,T,R,Tr> where T: Lattice+Clone+'static {
     /// Allocates a new handle from an existing wrapped wrapper.
     pub fn new(trace: Tr, advance_frontier: &[T], through_frontier: &[T]) -> Self {
 
@@ -195,7 +196,7 @@ impl<K,V,T,R,Tr: Trace<K,V,T,R>> TraceHandle<K,V,T,R,Tr> where T: Lattice+Ord+Cl
                 while let Some((frontier, sent)) = borrow.pop_front() {
                     // if data are associated, send em!
                     if let Some((time, batch)) = sent {
-                        if let Some(cap) = capabilities.iter().find(|c| c.time().le(&time)) {
+                        if let Some(cap) = capabilities.iter().find(|c| c.time().less_equal(&time)) {
                             let delayed = cap.delayed(&time);
                             output.session(&delayed).give(BatchWrapper { item: batch });
                         }
@@ -207,7 +208,7 @@ impl<K,V,T,R,Tr: Trace<K,V,T,R>> TraceHandle<K,V,T,R,Tr> where T: Lattice+Ord+Cl
                     // advance capabilities to look like `frontier`.
                     let mut new_capabilities = Vec::new();
                     for time in frontier.iter() {
-                        if let Some(cap) = capabilities.iter().find(|c| c.time().le(&time)) {
+                        if let Some(cap) = capabilities.iter().find(|c| c.time().less_equal(&time)) {
                             new_capabilities.push(cap.delayed(&time));
                         }
                         else {
@@ -226,7 +227,7 @@ impl<K,V,T,R,Tr: Trace<K,V,T,R>> TraceHandle<K,V,T,R,Tr> where T: Lattice+Ord+Cl
     }
 }
 
-impl<K, V, T: Lattice+Ord+Clone, R, Tr: Trace<K, V, T, R>> Clone for TraceHandle<K, V, T, R, Tr> {
+impl<K, V, T: Lattice+Clone, R, Tr: Trace<K, V, T, R>> Clone for TraceHandle<K, V, T, R, Tr> {
     fn clone(&self) -> Self {
         // increase ref counts for this frontier
         self.wrapper.borrow_mut().adjust_advance_frontier(&[], &self.advance_frontier[..]);
@@ -241,7 +242,7 @@ impl<K, V, T: Lattice+Ord+Clone, R, Tr: Trace<K, V, T, R>> Clone for TraceHandle
 }
 
 impl<K, V, T, R, Tr: Trace<K, V, T, R>> Drop for TraceHandle<K, V, T, R, Tr> 
-    where T: Lattice+Ord+Clone+'static {
+    where T: Lattice+Clone+'static {
     fn drop(&mut self) {
         self.wrapper.borrow_mut().adjust_advance_frontier(&self.advance_frontier[..], &[]);
         self.wrapper.borrow_mut().adjust_through_frontier(&self.through_frontier[..], &[]);
@@ -258,7 +259,7 @@ impl<K, V, T, R, Tr: Trace<K, V, T, R>> Drop for TraceHandle<K, V, T, R, Tr>
 /// in writing differential operators: each must pay enough care to signals
 /// from the `stream` field to know the subset of `trace` it has logically 
 /// received.
-pub struct Arranged<G: Scope, K, V, R, T: Trace<K, V, G::Timestamp, R>> where G::Timestamp: Lattice+Ord {
+pub struct Arranged<G: Scope, K, V, R, T: Trace<K, V, G::Timestamp, R>> where G::Timestamp: Lattice {
     /// A stream containing arranged updates.
     ///
     /// This stream contains the same batches of updates the trace itself accepts, so there should
@@ -271,7 +272,7 @@ pub struct Arranged<G: Scope, K, V, R, T: Trace<K, V, G::Timestamp, R>> where G:
     // returns when invoked, so as to not duplicate work with multiple calls to `as_collection`.
 }
 
-impl<G: Scope, K, V, R, T: Trace<K, V, G::Timestamp, R>> Arranged<G, K, V, R, T> where G::Timestamp: Lattice+Ord {
+impl<G: Scope, K, V, R, T: Trace<K, V, G::Timestamp, R>> Arranged<G, K, V, R, T> where G::Timestamp: Lattice {
     
     /// Allocates a new handle to the shared trace, with independent frontier tracking.
     pub fn new_handle(&self) -> TraceHandle<K, V, G::Timestamp, R, T> {
@@ -316,7 +317,7 @@ impl<G: Scope, K, V, R, T: Trace<K, V, G::Timestamp, R>> Arranged<G, K, V, R, T>
 }
 
 /// Arranges something as `(Key,Val)` pairs according to a type `T` of trace.
-pub trait Arrange<G: Scope, K, V, R: Diff> where G::Timestamp: Lattice+Ord {
+pub trait Arrange<G: Scope, K, V, R: Diff> where G::Timestamp: Lattice {
     /// Arranges a stream of `(Key, Val)` updates by `Key`. Accepts an empty instance of the trace type.
     ///
     /// This operator arranges a stream of values into a shared trace, whose contents it maintains.
@@ -359,7 +360,7 @@ impl<G: Scope, K: Data+Hashable, V: Data, R: Diff> Arrange<G, K, V, R> for Colle
 
                 // add the capability to our list of capabilities.
                 capabilities.retain(|c| !c.time().gt(&cap.time()));
-                if !capabilities.iter().any(|c| c.time().le(&cap.time())) { 
+                if !capabilities.iter().any(|c| c.time().less_equal(&cap.time())) { 
                     capabilities.push(cap);
                 }
 
@@ -379,11 +380,11 @@ impl<G: Scope, K: Data+Hashable, V: Data, R: Diff> Arrange<G, K, V, R> for Colle
             // something like this should ease some pain. (we could also just fix timely).
 
             // If there is at least one capability no longer in advance of the input frontier ...
-            if capabilities.iter().any(|c| !notificator.frontier(0).iter().any(|t| t.le(&c.time()))) {
+            if capabilities.iter().any(|c| !notificator.frontier(0).iter().any(|t| t.less_equal(&c.time()))) {
 
                 // For each capability not in advance of the input frontier ... 
                 for index in 0 .. capabilities.len() {
-                    if !notificator.frontier(0).iter().any(|t| t.le(&capabilities[index].time())) {
+                    if !notificator.frontier(0).iter().any(|t| t.less_equal(&capabilities[index].time())) {
 
                         // Assemble the upper bound on times we can commit with this capabilities.
                         // This is determined both by the input frontier, and by subsequent capabilities
@@ -391,8 +392,8 @@ impl<G: Scope, K: Data+Hashable, V: Data, R: Diff> Arrange<G, K, V, R> for Colle
                         let mut upper = notificator.frontier(0).to_vec();
                         for capability in &capabilities[(index + 1) .. ] {
                             let time = capability.time();
-                            if !upper.iter().any(|t| t.le(&time)) {
-                                upper.retain(|t| !time.le(t));
+                            if !upper.iter().any(|t| t.less_equal(&time)) {
+                                upper.retain(|t| !time.less_equal(t));
                                 upper.push(time);
                             }
                         }
@@ -430,7 +431,7 @@ impl<G: Scope, K: Data+Hashable, V: Data, R: Diff> Arrange<G, K, V, R> for Colle
 
                 let mut new_capabilities = Vec::new();
                 for time in batcher.frontier() {
-                    if let Some(capability) = capabilities.iter().find(|c| c.time().le(time)) {
+                    if let Some(capability) = capabilities.iter().find(|c| c.time().less_equal(time)) {
                         new_capabilities.push(capability.delayed(time));
                     }
                 }

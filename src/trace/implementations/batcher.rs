@@ -56,7 +56,7 @@ where
         // swing through each buffer, each element, and partition
         for mut buffer in self.buffers.drain(..) {
             for ((key, val), time, diff) in buffer.drain(..) {
-                if !upper.iter().any(|t| t.le(&time)) {
+                if !upper.iter().any(|t| t.less_equal(&time)) {
                     if to_seal_tail.len() == to_seal_tail.capacity() {
                         if to_seal_tail.len() > 0 {
                             to_seal.push(to_seal_tail);

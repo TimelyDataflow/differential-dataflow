@@ -65,13 +65,13 @@ where
 
 		// Check that `upper` is greater or equal to `self.through_frontier`.
 		// Otherwise, the cut could be in `self.merging` and it is user error anyhow.
-		if upper.iter().all(|t1| self.through_frontier.iter().any(|t2| t2.le(t1))) {
+		if upper.iter().all(|t1| self.through_frontier.iter().any(|t2| t2.less_equal(t1))) {
 
 			let mut cursors = Vec::new();
 			cursors.extend(self.merging.iter().filter(|b| b.len() > 0).map(|b| b.cursor()));
 			for batch in &self.pending {
-				let include_lower = upper.iter().all(|t1| batch.lower().iter().any(|t2| t2.le(t1)));
-				let include_upper = upper.iter().all(|t1| batch.upper().iter().any(|t2| t2.le(t1)));
+				let include_lower = upper.iter().all(|t1| batch.lower().iter().any(|t2| t2.less_equal(t1)));
+				let include_upper = upper.iter().all(|t1| batch.upper().iter().any(|t2| t2.less_equal(t1)));
 
 				if include_lower != include_upper && upper != batch.lower() {
 					panic!("`cursor_through`: `upper` straddles batch");
@@ -126,7 +126,7 @@ where
 		// TODO: We could consider merging in batches here, rather than in sequence. 
 		//       Little is currently known about whether this is important ...
 		while self.pending.len() > 0 && 
-		      self.through_frontier.iter().all(|t1| self.pending[0].upper().iter().any(|t2| t2.le(t1))) 
+		      self.through_frontier.iter().all(|t1| self.pending[0].upper().iter().any(|t2| t2.less_equal(t1))) 
         {
         	// this could be a VecDeque, if we ever notice this.
 			let batch = self.pending.remove(0);

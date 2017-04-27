@@ -62,7 +62,7 @@ fn main() {
         let timer = ::std::time::Instant::now();
 
         input.advance_to(1);
-        worker.step_while(|| probe.lt(input.time()));
+        worker.step_while(|| probe.less_than(input.time()));
 
         if index == 0 {
             let timer = timer.elapsed();
@@ -98,7 +98,7 @@ fn main() {
 
                     let next = input.epoch() + 1;
                     input.advance_to(next);
-                    worker.step_while(|| probe.lt(input.time()));
+                    worker.step_while(|| probe.less_than(input.time()));
 
                     if index == 0 {
                         let timer = timer.elapsed();

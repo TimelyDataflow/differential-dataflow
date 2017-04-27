@@ -1,25 +1,26 @@
 //! Input session to simplify high resolution input.
 
 use ::{Data, Diff};
+use timely::order::PartialOrder;
 use timely::progress::Timestamp;
 use timely::progress::timestamp::RootTimestamp;
 use timely::progress::nested::product::Product;
 
 /// An input session wrapping a single timely dataflow timestamp.
-pub struct InputSession<'a, T: Timestamp+Ord+Clone, D: Data, R: Diff> {
+pub struct InputSession<'a, T: Timestamp+Clone, D: Data, R: Diff> {
 	time: Product<RootTimestamp, T>,
 	buffer: Vec<(D, Product<RootTimestamp, T>, R)>,
 	handle: &'a mut ::timely::dataflow::operators::input::Handle<T,(D,Product<RootTimestamp, T>,R)>,
 }
 
-impl<'a, T: Timestamp+Ord+Clone, D: Data> InputSession<'a, T, D, isize> {
+impl<'a, T: Timestamp+Clone, D: Data> InputSession<'a, T, D, isize> {
 	/// Adds an element to the collection.
 	pub fn insert(&mut self, element: D) { self.update(element, 1); }
 	/// Removes an element from the collection.
 	pub fn remove(&mut self, element: D) { self.update(element,-1); }
 }
 
-impl<'a, T: Timestamp+Ord+Clone, D: Data, R: Diff> InputSession<'a, T, D, R> {
+impl<'a, T: Timestamp+Clone, D: Data, R: Diff> InputSession<'a, T, D, R> {
 
 	/// Creates a new session from a reference to an input handle.
 	pub fn from(handle: &'a mut ::timely::dataflow::operators::input::Handle<T,(D,Product<RootTimestamp, T>,R)>) -> Self {
@@ -38,7 +39,7 @@ impl<'a, T: Timestamp+Ord+Clone, D: Data, R: Diff> InputSession<'a, T, D, R> {
 	/// Forces buffered data into the timely input, and advances its time to match that of the session.
 	pub fn flush(&mut self) {
 		self.handle.send_batch(&mut self.buffer);
-		if self.handle.epoch() < &self.time.inner {
+		if self.handle.epoch().less_than(&self.time.inner) {
 			self.handle.advance_to(self.time.inner);		
 		}
 	}
@@ -49,8 +50,8 @@ impl<'a, T: Timestamp+Ord+Clone, D: Data, R: Diff> InputSession<'a, T, D, R> {
 	/// session is dropped or flushed. It is not correct to use this time as a basis for a computation's `step_while`
 	/// method unless it has just been flushed.
 	pub fn advance_to(&mut self, time: T) {
-		assert!(self.handle.epoch() <= &time);
-		assert!(&self.time.inner <= &time);
+		assert!(self.handle.epoch().less_equal(&time));
+		assert!(&self.time.inner.less_equal(&time));
 		self.time = Product::new(RootTimestamp, time);
 	}
 
@@ -60,7 +61,7 @@ impl<'a, T: Timestamp+Ord+Clone, D: Data, R: Diff> InputSession<'a, T, D, R> {
 	pub fn time(&self) -> &Product<RootTimestamp, T> { &self.time }
 }
 
-impl<'a, T: Timestamp+Ord+Clone, D: Data, R: Diff> Drop for InputSession<'a, T, D, R> {
+impl<'a, T: Timestamp+Clone, D: Data, R: Diff> Drop for InputSession<'a, T, D, R> {
 	fn drop(&mut self) {
 		self.flush();
 	}
