@@ -359,7 +359,7 @@ impl<G: Scope, K: Data+Hashable, V: Data, R: Diff> Arrange<G, K, V, R> for Colle
             input.for_each(|cap, data| {
 
                 // add the capability to our list of capabilities.
-                capabilities.retain(|c| !c.time().gt(&cap.time()));
+                capabilities.retain(|c| !cap.time().less_than(&c.time()));
                 if !capabilities.iter().any(|c| c.time().less_equal(&cap.time())) { 
                     capabilities.push(cap);
                 }
