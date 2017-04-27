@@ -133,7 +133,7 @@ fn main() {
             inputs.7.advance_to(next_round);
 
             let time = inputs.0.time(); 
-            worker.step_while(|| probes.iter().all(|p| p.lt(&time)));
+            worker.step_while(|| probes.iter().all(|p| p.less_than(&time)));
             round += 1;
         }
 
