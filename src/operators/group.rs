@@ -20,14 +20,7 @@
 //!
 //! ```ignore
 //! stream.group(|key, vals, output| {
-//!     let (mut max_val, mut max_wgt) = vals.next().unwrap();
-//!     for (val, wgt) in vals {
-//!         if wgt > max_wgt {
-//!             max_wgt = wgt;
-//!             max_val = val;
-//!         }
-//!     }
-//!     output.push((max_val.clone(), max_wgt));
+//!     output.push(vals.iter().max_by_key(|&(_val, wgt)| wgt).unwrap());
 //! })
 //! ```
 
