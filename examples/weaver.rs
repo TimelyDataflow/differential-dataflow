@@ -2,7 +2,6 @@ extern crate rand;
 extern crate timely;
 extern crate timely_sort;
 extern crate differential_dataflow;
-extern crate vec_map;
 extern crate graph_map;
 
 use rand::{Rng, SeedableRng, StdRng};

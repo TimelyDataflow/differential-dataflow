@@ -4,7 +4,6 @@ extern crate timely;
 extern crate timely_sort;
 extern crate graph_map;
 extern crate differential_dataflow;
-extern crate vec_map;
 
 use std::time::Instant;
 use std::hash::Hash;

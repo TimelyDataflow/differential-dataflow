@@ -28,10 +28,7 @@ git="http://github.com/frankmcsherry/timely-dataflow"
 abomonation="0.4.4"
 timely_sort="0.1.5"
 timely_communication="0.1.5"
-itertools="0.4"
 fnv="1.0.2"
-linear-map = "0.0.4"
-vec_map = "0.6.0"
 
 [features]
 default = []

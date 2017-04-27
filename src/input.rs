@@ -1,10 +1,10 @@
 //! Input session to simplify high resolution input.
 
-use ::{Data, Diff};
-use timely::order::PartialOrder;
 use timely::progress::Timestamp;
 use timely::progress::timestamp::RootTimestamp;
 use timely::progress::nested::product::Product;
+
+use ::{Data, Diff};
 
 /// An input session wrapping a single timely dataflow timestamp.
 pub struct InputSession<'a, T: Timestamp+Clone, D: Data, R: Diff> {

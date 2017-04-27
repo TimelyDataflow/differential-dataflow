@@ -2,7 +2,7 @@ extern crate rand;
 extern crate timely;
 extern crate timely_sort;
 extern crate differential_dataflow;
-extern crate vec_map;
+// extern crate vec_map;
 
 use timely::dataflow::*;
 use timely::dataflow::operators::*;
