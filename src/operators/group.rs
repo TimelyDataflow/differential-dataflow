@@ -20,14 +20,7 @@
 //!
 //! ```ignore
 //! stream.group(|key, vals, output| {
-//!     let (mut max_val, mut max_wgt) = vals.next().unwrap();
-//!     for (val, wgt) in vals {
-//!         if wgt > max_wgt {
-//!             max_wgt = wgt;
-//!             max_val = val;
-//!         }
-//!     }
-//!     output.push((max_val.clone(), max_wgt));
+//!     output.push(vals.iter().max_by_key(|&(_val, wgt)| wgt).unwrap());
 //! })
 //! ```
 
@@ -37,6 +30,7 @@ use std::default::Default;
 use hashable::{Hashable, UnsignedWrapper};
 use ::{Data, Collection, Diff};
 
+use timely::order::PartialOrder;
 use timely::dataflow::*;
 use timely::dataflow::operators::Unary;
 use timely::dataflow::channels::pact::Pipeline;
@@ -216,8 +210,8 @@ where
                 }
 
                 // Ensure that `capabilities` covers the capability of the batch.
-                capabilities.retain(|cap| !capability.time().lt(&cap.time()));
-                if !capabilities.iter().any(|cap| cap.time().le(&capability.time())) {
+                capabilities.retain(|cap| !capability.time().less_than(&cap.time()));
+                if !capabilities.iter().any(|cap| cap.time().less_equal(&capability.time())) {
                     capabilities.push(capability);
                 }
             });
@@ -236,8 +230,8 @@ where
             for time1 in notificator.frontier(0) {
                 for time2 in &upper_received {
                     let join = time1.join(time2);
-                    if !upper_limit.iter().any(|t| t.le(&join)) {
-                        upper_limit.retain(|t| !join.le(t));
+                    if !upper_limit.iter().any(|t| t.less_equal(&join)) {
+                        upper_limit.retain(|t| !join.less_equal(t));
                         upper_limit.push(join);
                     }
                 }
@@ -249,7 +243,7 @@ where
             // as well as batch descriptions.
             //
             // We can (and should) advance source and output traces if `upper_limit` indicates this is possible.
-            if capabilities.iter().any(|c| !upper_limit.iter().any(|t| t.le(&c.time()))) {
+            if capabilities.iter().any(|c| !upper_limit.iter().any(|t| t.less_equal(&c.time()))) {
 
                 // `interesting` contains "warnings" about keys and times that may need to be re-considered.
                 // We first extract those times from this list that lie in the interval we will process.
@@ -257,7 +251,7 @@ where
                 let mut new_interesting = Vec::new();
                 let mut exposed = Vec::new();
                 segment(&mut interesting, &mut exposed, &mut new_interesting, |&(_, ref time)| {
-                    !upper_limit.iter().any(|t| t.le(&time))
+                    !upper_limit.iter().any(|t| t.less_equal(&time))
                 });
                 interesting = new_interesting;
 
@@ -273,7 +267,7 @@ where
                 let mut buffers = Vec::<(G::Timestamp, Vec<(V2, G::Timestamp, R2)>)>::new();
                 let mut builders = Vec::new();
                 for i in 0 .. capabilities.len() {
-                    buffers.push((capabilities[i].time(), Vec::new()));
+                    buffers.push((capabilities[i].time().clone(), Vec::new()));
                     builders.push(<T2::Batch as Batch<K,V2,G::Timestamp,R2>>::Builder::new());
                 }
 
@@ -387,7 +381,7 @@ where
 
                     // Record future warnings about interesting times (and assert they should be "future").
                     for time in temporary.drain(..) { 
-                        assert!(upper_limit.iter().any(|t| t.le(&time)));
+                        assert!(upper_limit.iter().any(|t| t.less_equal(&time)));
                         interesting.push((key.clone(), time)); 
                     }
 
@@ -407,9 +401,9 @@ where
                 for (index, builder) in builders.drain(..).enumerate() {
                     let mut local_upper = upper_limit.clone();
                     for capability in &capabilities[index + 1 ..] {
-                        let time = capability.time();
-                        if !local_upper.iter().any(|t| t.le(&time)) {
-                            local_upper.retain(|t| !time.lt(t));
+                        let time = capability.time().clone();
+                        if !local_upper.iter().any(|t| t.less_equal(&time)) {
+                            local_upper.retain(|t| !time.less_than(t));
                             local_upper.push(time);
                         }
                     }
@@ -425,8 +419,8 @@ where
                 // Determine the frontier of our interesting times.
                 let mut frontier = Vec::<G::Timestamp>::new();
                 for &(_, ref time) in &interesting {                    
-                    if !frontier.iter().any(|t| t.le(time)) {
-                        frontier.retain(|t| !time.lt(t));
+                    if !frontier.iter().any(|t| t.less_equal(time)) {
+                        frontier.retain(|t| !time.less_than(t));
                         frontier.push(time.clone());
                     }
                 }
@@ -434,7 +428,7 @@ where
                 // Update `capabilities` to reflect interesting pairs described by `frontier`.
                 let mut new_capabilities = Vec::new();
                 for time in frontier.drain(..) {
-                    if let Some(cap) = capabilities.iter().find(|c| c.time().le(&time)) {
+                    if let Some(cap) = capabilities.iter().find(|c| c.time().less_equal(&time)) {
                         new_capabilities.push(cap.delayed(&time));
                     }
                     else {
@@ -727,15 +721,15 @@ mod history_replay {
                 // are tracking may not have advanced far enough.
                 // TODO: `batch_history` may or may not be super compact at this point, and so this check might 
                 //       yield false positives if not sufficiently compact. Maybe we should into this and see.
-                interesting = interesting || self.batch_history.buffer.iter().any(|&((_, ref t),_)| t.le(&next_time));
-                interesting = interesting || self.times_current.iter().any(|t| t.le(&next_time));
+                interesting = interesting || self.batch_history.buffer.iter().any(|&((_, ref t),_)| t.less_equal(&next_time));
+                interesting = interesting || self.times_current.iter().any(|t| t.less_equal(&next_time));
 
                 // We should only process times that are not in advance of `upper_limit`. 
                 //
                 // We have no particular guarantee that known times will not be in advance of `upper_limit`.
                 // We may have the guarantee that synthetic times will not be, as we test against the limit
                 // before we add the time to `synth_times`.
-                if !upper_limit.iter().any(|t| t.le(&next_time)) {
+                if !upper_limit.iter().any(|t| t.less_equal(&next_time)) {
 
                     // We should re-evaluate the computation if this is an interesting time.
                     // If the time is uninteresting (and our logic is sound) it is not possible for there to be 
@@ -748,7 +742,7 @@ mod history_replay {
                         debug_assert!(self.input_buffer.is_empty());
                         self.input_history.advance_buffer_by(&meet);
                         for &((ref value, ref time), diff) in self.input_history.buffer.iter() {
-                            if time.le(&next_time) {
+                            if time.less_equal(&next_time) {
                                 self.input_buffer.push((value.clone(), diff));
                             }
                             else {
@@ -765,7 +759,7 @@ mod history_replay {
 
                         self.output_history.advance_buffer_by(&meet);
                         for &((ref value, ref time), diff) in self.output_history.buffer.iter() {
-                            if time.le(&next_time) {
+                            if time.less_equal(&next_time) {
                                 self.output_buffer.push((value.clone(), -diff));
                             }
                             else {
@@ -773,7 +767,7 @@ mod history_replay {
                             }
                         }
                         for &((ref value, ref time), diff) in self.output_produced.iter() {
-                            if time.le(&next_time) {
+                            if time.less_equal(&next_time) {
                                 self.output_buffer.push((value.clone(), -diff));
                             }
                             else {
@@ -797,7 +791,7 @@ mod history_replay {
                             // We *should* be able to find a capability for `next_time`. Any thing else would 
                             // indicate a logical error somewhere along the way; either we release a capability 
                             // we should have kept, or we have computed the output incorrectly (or both!)
-                            let idx = outputs.iter().rev().position(|&(ref time, _)| time.le(&next_time));
+                            let idx = outputs.iter().rev().position(|&(ref time, _)| time.less_equal(&next_time));
                             let idx = outputs.len() - idx.unwrap() - 1;
                             for (val, diff) in self.output_buffer.drain(..) {
                                 self.output_produced.push(((val.clone(), next_time.clone()), diff));
@@ -826,12 +820,12 @@ mod history_replay {
                     // Any time, even uninteresting times, must be joined with the current accumulation of 
                     // batch times as well as the current accumulation of `times_current`.
                     for &((_, ref time), _) in self.batch_history.buffer.iter() {
-                        if !time.le(&next_time) {
+                        if !time.less_equal(&next_time) {
                             self.temporary.push(time.join(&next_time));
                         }
                     }
                     for time in self.times_current.iter() {
-                        if !time.le(&next_time) {
+                        if !time.less_equal(&next_time) {
                             self.temporary.push(time.join(&next_time));
                         }
                     }
@@ -842,8 +836,8 @@ mod history_replay {
                     let synth_len = self.synth_times.len();
                     for time in self.temporary.drain(..) {
                         // We can either service `join` now, or must delay for the future.
-                        if upper_limit.iter().any(|t| t.le(&time)) {
-                            debug_assert!(outputs.iter().any(|&(ref t,_)| t.le(&time)));
+                        if upper_limit.iter().any(|t| t.less_equal(&time)) {
+                            debug_assert!(outputs.iter().any(|&(ref t,_)| t.less_equal(&time)));
                             new_interesting.push(time);
                         }
                         else {
@@ -864,7 +858,7 @@ mod history_replay {
                         // as initial interesting times are filtered to be in interval, and synthetic times are also
                         // filtered before introducing them to `self.synth_times`.
                         new_interesting.push(next_time.clone());
-                        debug_assert!(outputs.iter().any(|&(ref t,_)| t.le(&next_time)))
+                        debug_assert!(outputs.iter().any(|&(ref t,_)| t.less_equal(&next_time)))
                     }
                 }
 
@@ -982,14 +976,14 @@ mod history_replay_prior {
             // will eventually want to use `advance_by` with a frontier anyhow.
             self.lower.clear();
             for thing in self.batch_history.times.iter() {
-                if !self.lower.iter().any(|t| t.le(&thing.0)) { 
-                    self.lower.retain(|t| !thing.0.lt(t));
+                if !self.lower.iter().any(|t| t.less_equal(&thing.0)) { 
+                    self.lower.retain(|t| !thing.0.less_than(t));
                     self.lower.push(thing.0.clone());
                 }                
             }
             for time in times.iter() {
-                if !self.lower.iter().any(|t| t.le(time)) { 
-                    self.lower.retain(|t| !time.lt(t));
+                if !self.lower.iter().any(|t| t.less_equal(time)) { 
+                    self.lower.retain(|t| !time.less_than(t));
                     self.lower.push(time.clone());
                 }
             }
@@ -1148,8 +1142,8 @@ mod history_replay_prior {
                 // Times could also be interesting if an interesting time is less than them, as they would join
                 // and become the time itself.
                 interesting = interesting || self.batch_history.values.iter().any(|h| self.batch_history.times[h.lower .. h.valid]
-                                                                                                .iter().any(|t| t.0.le(&next_time)));
-                interesting = interesting || self.times_current.iter().any(|t| t.le(&next_time));
+                                                                                                .iter().any(|t| t.0.less_equal(&next_time)));
+                interesting = interesting || self.times_current.iter().any(|t| t.less_equal(&next_time));
 
 
                 // We should only process times that are not in advance of `upper_limit`. 
@@ -1157,7 +1151,7 @@ mod history_replay_prior {
                 // We have no particular guarantee that known times will not be in advance of `upper_limit`.
                 // We may have the guarantee that synthetic times will not be, as we test against the limit
                 // before we add the time to `synth_times`.
-                if !upper_limit.iter().any(|t| t.le(&next_time)) {
+                if !upper_limit.iter().any(|t| t.less_equal(&next_time)) {
 
                     // We should re-evaluate the computation if this is an interesting time.
                     // If the time is uninteresting (and our logic is sound) it is not possible for there to be 
@@ -1166,7 +1160,7 @@ mod history_replay_prior {
 
                         // any times not greater than `lower` must be empty (and should be skipped, but testing!)
 
-                        if !self.lower.iter().any(|t| t.le(&next_time)) {
+                        if !self.lower.iter().any(|t| t.less_equal(&next_time)) {
                             println!("PANIC: interesting time inversion:");
                             println!("    time:   {:?}", next_time);
                             println!("    lower: {:?}", self.lower);
@@ -1201,7 +1195,7 @@ mod history_replay_prior {
 
                         self.output_history.remove(&next_time, &meet, &mut self.output_buffer);
                         for &((ref value, ref time), diff) in self.output_produced.iter() {
-                            if time.le(&next_time) {
+                            if time.less_equal(&next_time) {
                                 self.output_buffer.push((value.clone(), -diff));
                             }
                         }
@@ -1222,7 +1216,7 @@ mod history_replay_prior {
                             // We *should* be able to find a capability for `next_time`. Any thing else would 
                             // indicate a logical error somewhere along the way; either we release a capability 
                             // we should have kept, or we have computed the output incorrectly (or both!)
-                            let idx = outputs.iter().rev().position(|&(ref time, _)| time.le(&next_time));
+                            let idx = outputs.iter().rev().position(|&(ref time, _)| time.less_equal(&next_time));
                             let idx = outputs.len() - idx.unwrap() - 1;
                             for (val, diff) in self.output_buffer.drain(..) {
                                 self.output_produced.push(((val.clone(), next_time.clone()), diff));
@@ -1250,7 +1244,7 @@ mod history_replay_prior {
 
                     self.batch_history.join_with_into(&next_time, &mut self.temporary);
                     for time in self.times_current.iter() {
-                        if !time.le(&next_time) {
+                        if !time.less_equal(&next_time) {
                             self.temporary.push(time.join(&next_time));
                         }
                     }
@@ -1261,7 +1255,7 @@ mod history_replay_prior {
                         self.input_history.join_with_into(&next_time, &mut self.temporary);
                         self.output_history.join_with_into(&next_time, &mut self.temporary);
                         for &((_, ref time), _) in self.output_produced.iter() {
-                            if !time.le(&next_time) {
+                            if !time.less_equal(&next_time) {
                                 self.temporary.push(time.join(&next_time));
                             }
                         }
@@ -1272,8 +1266,8 @@ mod history_replay_prior {
 
                     for time in self.temporary.drain(..) {
                         // We can either service `join` now, or must delay for the future.
-                        if upper_limit.iter().any(|t| t.le(&time)) {
-                            debug_assert!(outputs.iter().any(|&(ref t,_)| t.le(&time)));
+                        if upper_limit.iter().any(|t| t.less_equal(&time)) {
+                            debug_assert!(outputs.iter().any(|&(ref t,_)| t.less_equal(&time)));
                             new_interesting.push(time);
                         }
                         else {
@@ -1288,7 +1282,7 @@ mod history_replay_prior {
                         // be here, actually. I think we have already filtered all new interesting times, and all
                         // other interesting times should be within the interval.
                         new_interesting.push(next_time.clone());
-                        debug_assert!(outputs.iter().any(|&(ref t,_)| t.le(&next_time)))
+                        debug_assert!(outputs.iter().any(|&(ref t,_)| t.less_equal(&next_time)))
                     }
                 }
 
@@ -1563,7 +1557,7 @@ mod history_replay_prior {
 
                 let mut sum = R::zero();
                 for index in lower .. valid {
-                    if self.times[index].0.le(time) {
+                    if self.times[index].0.less_equal(time) {
                         sum = sum + self.times[index].1;
                     }
                 }
@@ -1591,7 +1585,7 @@ mod history_replay_prior {
 
                 let mut sum = R::zero();
                 for index in lower .. valid {
-                    if self.times[index].0.le(time) {
+                    if self.times[index].0.less_equal(time) {
                         sum = sum - self.times[index].1;
                     }
                 }
@@ -1606,7 +1600,7 @@ mod history_replay_prior {
         fn join_with_into(&self, time: &T, destination: &mut Vec<T>) {
             for history in self.values.iter() {
                 for &(ref t, _) in &self.times[history.lower .. history.valid] {
-                    if !t.le(time) {
+                    if !t.less_equal(time) {
                         destination.push(t.join(time));
                     }
                 }

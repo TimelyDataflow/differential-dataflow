@@ -1,7 +1,9 @@
 //! Partially ordered elements with a least upper bound.
 
+use timely::order::PartialOrder;
+
 /// A bounded partially ordered type supporting joins and meets.
-pub trait Lattice : PartialOrd {
+pub trait Lattice : PartialOrder {
     /// The smallest element of the type.
     fn min() -> Self;
     /// The largest element of the type.
@@ -38,8 +40,8 @@ pub trait Lattice : PartialOrd {
     ///     for j in (0 .. 10) {
     ///         let test = Product::new(i, j);
     ///         // for `test` in the future of `frontier` ..
-    ///         if frontier.iter().any(|t| t.le(&test)) {
-    ///             assert_eq!(time.le(&test), advanced.le(&test));
+    ///         if frontier.iter().any(|t| t.less_equal(&test)) {
+    ///             assert_eq!(time.less_equal(&test), advanced.less_equal(&test));
     ///         }
     ///     }
     /// }

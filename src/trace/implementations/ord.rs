@@ -57,7 +57,7 @@ where K: Ord+Clone+Hashable, V: Ord+Clone, T: Lattice+Ord+Clone, R: Diff {
 		assert!(self.desc.upper() == other.desc.lower());
 
 		// one of self.desc.since or other.desc.since needs to be not behind the other...
-		let since = if self.desc.since().iter().all(|t1| other.desc.since().iter().any(|t2| t2.le(t1))) {
+		let since = if self.desc.since().iter().all(|t1| other.desc.since().iter().any(|t2| t2.less_equal(t1))) {
 			other.desc.since()
 		}
 		else {
@@ -169,7 +169,7 @@ where K: Ord+Clone+Hashable, T: Lattice+Ord+Clone, R: Diff {
 		assert!(self.desc.upper() == other.desc.lower());
 
 		// one of self.desc.since or other.desc.since needs to be not behind the other...
-		let since = if self.desc.since().iter().all(|t1| other.desc.since().iter().any(|t2| t2.le(t1))) {
+		let since = if self.desc.since().iter().all(|t1| other.desc.since().iter().any(|t2| t2.less_equal(t1))) {
 			other.desc.since()
 		}
 		else {

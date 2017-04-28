@@ -136,7 +136,7 @@ where
                 while cursor.val_valid() {
                     let val: V = cursor.val().clone();
                     cursor.map_times(|time, diff| {
-                        if upper.iter().any(|t| t.le(time)) {
+                        if upper.iter().any(|t| t.less_equal(time)) {
                             builder_keep.push((key.clone(), val.clone(), time.clone(), diff));
                             self.frontier.insert(time.clone());
                         }

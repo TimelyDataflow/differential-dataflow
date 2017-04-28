@@ -6,6 +6,7 @@ use std::hash::Hash;
 use std::mem;
 use rand::{Rng, SeedableRng, StdRng};
 
+use timely::order::PartialOrder;
 use timely::dataflow::*;
 use timely::dataflow::operators::*;
 
@@ -108,7 +109,7 @@ fn main() {
                     }
                 }
                 input.advance_to(round + 1);
-                worker.step_while(|| probe.lt(&input.time()));
+                worker.step_while(|| probe.less_than(&input.time()));
 
                 if worker.index() == 0 {
                     let elapsed = timer.elapsed();

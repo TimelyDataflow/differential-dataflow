@@ -98,6 +98,13 @@ pub trait Trace<Key, Val, Time, R> {
 	/// Calling `distinguish_since(&[])` indicates that all batches may be merged at any point, which essentially 
 	/// disables the use of `cursor_through` with any parameter other than `&[]`, which is the behavior of `cursor`.
 	fn distinguish_since(&mut self, frontier: &[Time]);
+
+	/// Maps some logic across the batches the collection manages.
+	///
+	/// This is currently used only to extract historical data to prime late-starting operators who want to reproduce
+	/// the stream of batches moving past the trace. It could also be a fine basis for a default implementation of the
+	/// cursor methods, as they (by default) just move through batches accumulating cursors into a cursor list.
+	fn map_batches<F: FnMut(&Self::Batch)>(&self, f: F);
 }
 
 /// An immutable collection of updates.

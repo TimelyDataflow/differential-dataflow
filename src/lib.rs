@@ -123,9 +123,9 @@ impl<T: timely::ExchangeData + Ord + Debug> Data for T { }
 
 extern crate fnv;
 extern crate timely;
-extern crate vec_map;
-extern crate itertools;
-extern crate linear_map;
+// extern crate vec_map;
+// extern crate itertools;
+// extern crate linear_map;
 extern crate timely_sort;
 extern crate timely_communication;
 extern crate abomonation;

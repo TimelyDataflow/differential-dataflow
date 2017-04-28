@@ -151,7 +151,7 @@ where
     K: Data+Default+Hashable, 
     V: Data,
     R: Diff,
-    G::Timestamp: Lattice+Ord+Copy,
+    G::Timestamp: Lattice+Ord,
 {
     fn join_map<V2: Data, R2: Diff, D: Data, L>(&self, other: &Collection<G, (K, V2), R2>, logic: L) -> Collection<G, D, <R as Mul<R2>>::Output>
     where R: Mul<R2>, <R as Mul<R2>>::Output: Diff, L: Fn(&K, &V, &V2)->D+'static {
@@ -224,7 +224,7 @@ impl<G, K, V, R1, T1> JoinArranged<G, K, V, R1> for Arranged<G,K,V,R1,T1>
         V: Ord+Clone+Debug+'static, 
         R1: Diff,
         T1: Trace<K,V,G::Timestamp, R1>+'static,
-        G::Timestamp: Lattice+Ord+Debug+Copy,
+        G::Timestamp: Lattice+Ord+Debug,
         T1::Batch: 'static+Debug {
     fn join_arranged<V2,T2,R2,D,L>(&self, other: &Arranged<G,K,V2,R2,T2>, result: L) -> Collection<G,D,<R1 as Mul<R2>>::Output> 
     where 
@@ -345,7 +345,7 @@ where
     K: Debug+Eq,
     V1: Ord+Clone+Debug,
     V2: Ord+Clone+Debug,
-    T: Timestamp+Lattice+Ord+Debug+Copy,
+    T: Timestamp+Lattice+Ord+Debug,
     R1: Diff, 
     R2: Diff, 
     R3: Diff,

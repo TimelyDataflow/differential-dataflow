@@ -6,6 +6,7 @@ use rand::{Rng, SeedableRng, StdRng};
 
 use timely::dataflow::*;
 use timely::dataflow::operators::*;
+use timely::dataflow::operators::probe::Handle;
 
 use differential_dataflow::{Collection, AsCollection};
 use differential_dataflow::operators::*;
@@ -28,7 +29,8 @@ fn main() {
         // let timer = ::std::time::Instant::now();
 
         // define BFS dataflow; return handles to roots and edges inputs
-        let (mut roots, mut graph, probe) = worker.dataflow(|scope| {
+        let mut probe = Handle::new();
+        let (mut roots, mut graph) = worker.dataflow(|scope| {
 
             let (root_input, roots) = scope.new_input();
             let (edge_input, graph) = scope.new_input();
@@ -39,12 +41,12 @@ fn main() {
                 result = result.filter(|_| false);
             }
 
-            let probe = result.map(|(_,l)| l)
-                              .consolidate()
-                              .inspect(|x| println!("\t{:?}", x))
-                              .probe();
+            result.map(|(_,l)| l)
+                  .consolidate()
+                  .inspect(|x| println!("\t{:?}", x))
+                  .probe_with(&mut probe);
 
-            (root_input, edge_input, probe)
+            (root_input, edge_input)
         });
 
         let seed: &[_] = &[1, 2, 3, 4];
@@ -75,7 +77,7 @@ fn main() {
         // println!("loaded; elapsed: {:?}", timer.elapsed());
 
         graph.advance_to(1);
-        worker.step_while(|| probe.lt(graph.time()));
+        worker.step_while(|| probe.less_than(graph.time()));
 
         let mut session = differential_dataflow::input::InputSession::from(&mut graph);
         for round in 0 .. rounds {
@@ -89,7 +91,7 @@ fn main() {
             session.flush();
 
             // let timer = ::std::time::Instant::now();
-            worker.step_while(|| probe.lt(&session.time()));
+            worker.step_while(|| probe.less_than(&session.time()));
 
             if worker.index() == 0 {
                 // let elapsed = timer.elapsed();
