@@ -1,7 +1,18 @@
-//! Traits and types related to the hashing of data.
+//! Traits and types related to the distribution of data.
 //!
 //! These traits and types are in support of a flexible approach to data distribution and organization,
-//! in which we might like to more explicitly manage how certain types are handled.
+//! in which we might like to more explicitly manage how certain types are handled. Although the term
+//! "hashing" is used throughout, it is a misnomer; these traits relate to extracting reasonably distributed
+//! integers from the types, and hashing happens to be evocative of this.
+//!
+//! Differential dataflow operators need to co-locate data that are equivalent so that they may have 
+//! the differences consolidated, and eventually cancelled. The chose approach is to extract an integer
+//! from the keys of the data, ensuring that elements with the same key arrive at the same worker, where
+//! the consolidation can occur.
+//! 
+//! The intent is that types should be able to indicate how this integer is determined, so that general
+//! data types can use a generic hash function, where as more specialized types such as uniformly
+//! distributed integers can perhaps do something simpler (like report their own value). 
 
 use std::hash::Hasher;
 use std::ops::Deref;
@@ -10,11 +21,15 @@ use abomonation::Abomonation;
 
 use timely_sort::Unsigned;
 
-/// Types with a `hashed` method, producing a hash value of some unsigned output type.
+/// Types with a `hashed` method, producing an unsigned output of some type.
+///
+/// The output type may vary from a `u8` up to a `u64`, allowing types with simple keys
+/// to communicate this through their size. Certain algorithms, for example radix sorting,
+/// can take advantage of the smaller size.
 pub trait Hashable {
-    /// The type of the output hash.
+    /// The type of the output value.
     type Output: Unsigned+Copy;
-    /// A hash of the associated value.
+    /// A well-distributed integer derived from the data.
     fn hashed(&self) -> Self::Output;
 }
 
@@ -28,12 +43,14 @@ impl<T: ::std::hash::Hash> Hashable for T {
 }
 
 /// A marker trait for types whose `Ord` implementation orders first by `hashed()`.
+/// 
+/// Types implementing this trait *must* implement `Ord` and satisfy the property that two values 
+/// with different hashes have the same order as their hashes. This trait allows implementations 
+/// that sort by hash value to rely on the `Ord` implementation of the type.
 pub trait HashOrdered : Ord+Hashable { }
 impl<T: Ord+Hashable> HashOrdered for OrdWrapper<T> { }
 impl<T: Ord+Hashable> HashOrdered for HashableWrapper<T> { }
 impl<T: Unsigned+Copy> HashOrdered for UnsignedWrapper<T> { }
-
-
 
 // It would be great to use the macros for these, but I couldn't figure out how to get it
 // to work with constraints (i.e. `Hashable`) on the generic parameters.
@@ -117,7 +134,7 @@ impl<T: Ord+Hashable> Deref for OrdWrapper<T> {
 }
 
 
-/// Wrapper to stash hash value along actual value.
+/// Wrapper to stash hash value with the actual value.
 #[derive(Clone, Default, Ord, PartialOrd, Eq, PartialEq, Debug, Copy)]
 pub struct HashableWrapper<T: Hashable> {
     hash: T::Output,
