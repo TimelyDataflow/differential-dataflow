@@ -40,7 +40,7 @@ impl<'a, T: Timestamp+Clone, D: Data, R: Diff> InputSession<'a, T, D, R> {
 	pub fn flush(&mut self) {
 		self.handle.send_batch(&mut self.buffer);
 		if self.handle.epoch().less_than(&self.time.inner) {
-			self.handle.advance_to(self.time.inner);		
+			self.handle.advance_to(self.time.inner.clone());		
 		}
 	}
 

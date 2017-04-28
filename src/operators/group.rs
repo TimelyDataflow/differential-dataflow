@@ -267,7 +267,7 @@ where
                 let mut buffers = Vec::<(G::Timestamp, Vec<(V2, G::Timestamp, R2)>)>::new();
                 let mut builders = Vec::new();
                 for i in 0 .. capabilities.len() {
-                    buffers.push((capabilities[i].time(), Vec::new()));
+                    buffers.push((capabilities[i].time().clone(), Vec::new()));
                     builders.push(<T2::Batch as Batch<K,V2,G::Timestamp,R2>>::Builder::new());
                 }
 
@@ -401,7 +401,7 @@ where
                 for (index, builder) in builders.drain(..).enumerate() {
                     let mut local_upper = upper_limit.clone();
                     for capability in &capabilities[index + 1 ..] {
-                        let time = capability.time();
+                        let time = capability.time().clone();
                         if !local_upper.iter().any(|t| t.less_equal(&time)) {
                             local_upper.retain(|t| !time.less_than(t));
                             local_upper.push(time);

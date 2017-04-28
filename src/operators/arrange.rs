@@ -391,7 +391,7 @@ impl<G: Scope, K: Data+Hashable, V: Data, R: Diff> Arrange<G, K, V, R> for Colle
                         // which may shadow this capability for some times.
                         let mut upper = notificator.frontier(0).to_vec();
                         for capability in &capabilities[(index + 1) .. ] {
-                            let time = capability.time();
+                            let time = capability.time().clone();
                             if !upper.iter().any(|t| t.less_equal(&time)) {
                                 upper.retain(|t| !time.less_equal(t));
                                 upper.push(time);
@@ -413,7 +413,7 @@ impl<G: Scope, K: Data+Hashable, V: Data, R: Diff> Arrange<G, K, V, R> for Colle
                             let mut borrow = queues.borrow_mut();
                             for queue in borrow.iter_mut() {
                                 queue.upgrade().map(|queue| {
-                                    queue.borrow_mut().push_back((notificator.frontier(0).to_vec(), Some((capabilities[index].time(), batch.clone()))));
+                                    queue.borrow_mut().push_back((notificator.frontier(0).to_vec(), Some((capabilities[index].time().clone(), batch.clone()))));
                                 });
                             }
                             borrow.retain(|w| w.upgrade().is_some());
