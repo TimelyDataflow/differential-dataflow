@@ -1,4 +1,10 @@
 //! A type that can be treated as a difference.
+//!
+//! Differential dataflow most commonly tracks the counts associated with records in a multiset, but it 
+//! generalizes to tracking any map from the records to an Abelian group. The most common generalization
+//! is when we maintain both a count and another accumulation, for example height. The differential 
+//! dataflow collections would then track for each record the total of counts and heights, which allows 
+//! us to track something like the average.
 
 use std::ops::{Add, Sub, Neg, Mul};
 
@@ -13,8 +19,15 @@ use ::Data;
 /// accumulate them in the right order, so commutativity is important until we conclude otherwise).
 pub trait Diff : Add<Self, Output=Self> + Sub<Self, Output=Self> + Neg<Output=Self> + ::std::marker::Sized + Data + Copy {
 	/// Returns true if the element is the additive identity.
+	///
+	/// This is primarily used by differential dataflow to know when it is safe to delete and update.
+	/// When a difference accumulates to zero, the difference has no effect on any accumulation and can
+	/// be removed.
 	fn is_zero(&self) -> bool;
 	/// The additive identity.
+	///
+	/// This method is primarily used by differential dataflow internals as part of consolidation, when 
+	/// one value is accumulated elsewhere and must be replaced by valid but harmless value.
 	fn zero() -> Self;
 }
 
@@ -33,7 +46,12 @@ impl Diff for i32 {
 	#[inline(always)] fn zero() -> Self { 0 }
 }
 
-/// The Diff defined by a pair of Diff elements.
+/// The difference defined by a pair of difference elements.
+///
+/// This type is essentially a "pair", though in Rust the tuple types do not derive the numeric
+/// traits we require, and so we need to emulate the types ourselves. In the interest of ergonomics,
+/// we may eventually replace the numeric traits with our own, so that we can implement them for 
+/// tuples and allow users to ignore details like these.
 #[derive(Copy, Ord, PartialOrd, Eq, PartialEq, Debug, Clone)]
 pub struct DiffPair<R1: Diff, R2: Diff> {
 	/// The first element in the pair.

@@ -1,4 +1,10 @@
-//! Input session to simplify high resolution input.
+//! Input sessions for simplified collection updates.
+//! 
+//! Although users can directly manipulate timely dataflow streams as collection inputs, 
+//! the `InputSession` type can make this more efficient and less error-prone. Specifically,
+//! the type batches up updates with their logical times and ships them with coarsened 
+//! timely dataflow capabilities, exposing more concurrency to the operator implementations
+//! than are evident from the logical times, which appear to execute in sequence.
 
 use timely::progress::Timestamp;
 use timely::progress::timestamp::RootTimestamp;
@@ -6,7 +12,12 @@ use timely::progress::nested::product::Product;
 
 use ::{Data, Diff};
 
-/// An input session wrapping a single timely dataflow timestamp.
+/// An input session wrapping a single timely dataflow capability.
+///
+/// Each timely dataflow message has a corresponding capability, which is a logical time in the
+/// timely dataflow system. Differential dataflow updates can happen at a much higher rate than 
+/// timely dataflow's progress tracking infrastructure supports, because the logical times are 
+/// promoted to data and updates are batched together. The `InputSession` type does this batching.
 pub struct InputSession<'a, T: Timestamp+Clone, D: Data, R: Diff> {
 	time: Product<RootTimestamp, T>,
 	buffer: Vec<(D, Product<RootTimestamp, T>, R)>,
@@ -36,7 +47,11 @@ impl<'a, T: Timestamp+Clone, D: Data, R: Diff> InputSession<'a, T, D, R> {
 		self.buffer.push((element, self.time.clone(), change)); 
 	}
 
-	/// Forces buffered data into the timely input, and advances its time to match that of the session.
+	/// Forces buffered data into the timely dataflow input, and advances its time to match that of the session.
+	///
+	/// It is important to call `flush` before expecting timely dataflow to report progress. Until this method is
+	/// called, all updates may still be in internal buffers and not exposed to timely dataflow. Once the method is
+	/// called, all buffers are flushed and timely dataflow is advised that some logical times are no longer possible.
 	pub fn flush(&mut self) {
 		self.handle.send_batch(&mut self.buffer);
 		if self.handle.epoch().less_than(&self.time.inner) {
@@ -46,9 +61,9 @@ impl<'a, T: Timestamp+Clone, D: Data, R: Diff> InputSession<'a, T, D, R> {
 
 	/// Advances the logical time for future records.
 	///
-	/// Importantly, this method does **not** advance the time on the underlying handle. This happens only when the
-	/// session is dropped or flushed. It is not correct to use this time as a basis for a computation's `step_while`
-	/// method unless it has just been flushed.
+	/// Importantly, this method does **not** immediately inform timely dataflow of the change. This happens only when 
+	/// the session is dropped or flushed. It is not correct to use this time as a basis for a computation's `step_while`
+	/// method unless the session has just been flushed.
 	pub fn advance_to(&mut self, time: T) {
 		assert!(self.handle.epoch().less_equal(&time));
 		assert!(&self.time.inner.less_equal(&time));

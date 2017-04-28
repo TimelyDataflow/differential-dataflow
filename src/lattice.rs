@@ -1,4 +1,8 @@
 //! Partially ordered elements with a least upper bound.
+//!
+//! Lattices form the basis of differential dataflow's efficient execution in the presence of 
+//! iterative sub-computations. All logical times in differential dataflow must implement the 
+//! `Lattice` trait, and all reasoning in operators are done it terms of `Lattice` methods.
 
 use timely::order::PartialOrder;
 

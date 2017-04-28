@@ -1,12 +1,8 @@
-//! Timely dataflow operators specific to differential dataflow.
+//! Specialize differential dataflow operators.
 //!
-//! Differential dataflow introduces a small number of specialized operators, designed to apply to
-//! streams of *typed updates*, records of the form `(T, Delta)` indicating that the frequency of the
-//! associated record of type `T` has changed.
-//!
-//! These operators have specialized implementations to make them work efficiently, but are in all
-//! other ways compatible with timely dataflow. In fact, many operators are currently absent because
-//! their timely dataflow analogues are sufficient (e.g. `map`, `filter`, `concat`).
+//! Differential dataflow introduces a small number of specialized operators on collections. These 
+//! operators have specialized implementations to make them work efficiently, and are in addition 
+//! to several operations defined directly on the `Collection` type (e.g. `map` and `filter`).
 
 pub use self::group::{Group, Distinct, Count, consolidate_from};
 pub use self::consolidate::Consolidate;
@@ -18,8 +14,6 @@ pub mod group;
 pub mod consolidate;
 pub mod iterate;
 pub mod join;
-
-// use std::cmp::Ordering;
 
 use ::Diff;
 use lattice::Lattice;
@@ -39,7 +33,7 @@ use trace::{Cursor, consolidate};
 /// important in something like `join`.
 
 /// An accumulation of (value, time, diff) updates.
-pub struct EditList<V, T, R> {
+struct EditList<V, T, R> {
     values: Vec<(V, usize)>,
     edits: Vec<(T, R)>,
 }
