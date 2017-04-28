@@ -38,7 +38,7 @@ use timely::dataflow::operators::Capability;
 
 use timely_sort::Unsigned;
 
-use hashable::{HashableWrapper, OrdWrapper};
+use hashable::{HashOrdered, HashableWrapper, OrdWrapper};
 
 use ::{Data, Diff, Collection, AsCollection, Hashable};
 use lattice::Lattice;
@@ -328,7 +328,7 @@ pub trait Arrange<G: Scope, K, V, R: Diff> where G::Timestamp: Lattice {
             T: Trace<K, V, G::Timestamp, R>+'static;
 }
 
-impl<G: Scope, K: Data+Hashable, V: Data, R: Diff> Arrange<G, K, V, R> for Collection<G, (K, V), R> where G::Timestamp: Lattice+Ord {
+impl<G: Scope, K: Data+HashOrdered, V: Data, R: Diff> Arrange<G, K, V, R> for Collection<G, (K, V), R> where G::Timestamp: Lattice+Ord {
 
     fn arrange<T>(&self, empty_trace: T) -> Arranged<G, K, V, R, T> 
         where 
