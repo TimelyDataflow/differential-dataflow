@@ -8,12 +8,13 @@ use timely::dataflow::operators::*;
 use rand::{Rng, SeedableRng, StdRng};
 
 use differential_dataflow::AsCollection;
-use differential_dataflow::operators::arrange::ArrangeByKey;
+use differential_dataflow::operators::arrange::{ArrangeByKey, TraceAgent};
 use differential_dataflow::operators::group::GroupArranged;
 use differential_dataflow::trace::implementations::ord::OrdValSpine;
 use differential_dataflow::trace::{Cursor, Trace};
 // use differential_dataflow::trace::Batch;
 use differential_dataflow::hashable::OrdWrapper;
+use differential_dataflow::trace::TraceReader;
 
 fn main() {
 
@@ -82,7 +83,9 @@ fn main() {
 
                     let mut trace2 = trace.clone();
                     worker.dataflow(move |scope| {
-                        trace2.create_in(scope)
+
+                        TraceAgent::import(scope, trace2)
+                        // trace2.create_in(scope)
                               .group_arranged(|_k, s, t| t.push((s[0].0, 1)), OrdValSpine::new())
                               .as_collection(|k: &OrdWrapper<u32>, v: &u32| (k.item.clone(),v.clone()))
                               .inspect(|x| println!("{:?}", x));

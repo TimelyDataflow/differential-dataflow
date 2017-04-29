@@ -21,13 +21,15 @@ use hashable::{Hashable, UnsignedWrapper};
 use ::{Data, Diff, Collection, AsCollection};
 use lattice::Lattice;
 use operators::arrange::{Arrange, Arranged, ArrangeByKey, ArrangeBySelf};
-use trace::{Batch, Cursor, Trace, consolidate};
+use trace::{BatchReader, Cursor, Trace, consolidate};
 use operators::ValueHistory2;
 
 // use trace::implementations::hash::HashValSpine as DefaultValTrace;
 // use trace::implementations::hash::HashKeySpine as DefaultKeyTrace;
 use trace::implementations::ord::OrdValSpine as DefaultValTrace;
 use trace::implementations::ord::OrdKeySpine as DefaultKeyTrace;
+
+use trace::TraceReader;
 
 /// Join implementations for `(key,val)` data.
 pub trait Join<G: Scope, K: Data, V: Data, R: Diff> {
@@ -208,8 +210,8 @@ pub trait JoinArranged<G: Scope, K: 'static, V: 'static, R: Diff> where G::Times
     fn join_arranged<V2,T2,R2,D,L> (&self, stream2: &Arranged<G,K,V2,R2,T2>, result: L) -> Collection<G,D,<R as Mul<R2>>::Output>
     where 
         V2: Ord+Clone+Debug+'static,
-        T2: Trace<K, V2, G::Timestamp, R2>+'static,
-        T2::Batch: 'static,
+        T2: TraceReader<K, V2, G::Timestamp, R2>+'static,
+        T2::Batch: BatchReader<K, V2, G::Timestamp, R2>+'static,
         R2: Diff,
         R: Mul<R2>,
         <R as Mul<R2>>::Output: Diff,
@@ -220,17 +222,17 @@ pub trait JoinArranged<G: Scope, K: 'static, V: 'static, R: Diff> where G::Times
 impl<G, K, V, R1, T1> JoinArranged<G, K, V, R1> for Arranged<G,K,V,R1,T1> 
     where 
         G: Scope, 
+        G::Timestamp: Lattice+Ord+Debug,
         K: Debug+Eq+'static, 
         V: Ord+Clone+Debug+'static, 
         R1: Diff,
-        T1: Trace<K,V,G::Timestamp, R1>+'static,
-        G::Timestamp: Lattice+Ord+Debug,
-        T1::Batch: 'static+Debug {
+        T1: TraceReader<K,V,G::Timestamp, R1>+'static,
+        T1::Batch: BatchReader<K,V,G::Timestamp,R1>+'static+Debug {
     fn join_arranged<V2,T2,R2,D,L>(&self, other: &Arranged<G,K,V2,R2,T2>, result: L) -> Collection<G,D,<R1 as Mul<R2>>::Output> 
     where 
         V2: Ord+Clone+Debug+'static,
-        T2: Trace<K,V2,G::Timestamp,R2>+'static,
-        T2::Batch: 'static,
+        T2: TraceReader<K,V2,G::Timestamp,R2>+'static,
+        T2::Batch: BatchReader<K, V2, G::Timestamp, R2>+'static,
         R2: Diff,
         R1: Mul<R2>,
         <R1 as Mul<R2>>::Output: Diff,
@@ -238,16 +240,16 @@ impl<G, K, V, R1, T1> JoinArranged<G, K, V, R1> for Arranged<G,K,V,R1,T1>
         L: Fn(&K,&V,&V2)->D+'static {
 
         // handles to shared trace data structures.
-        let mut trace1 = Some(self.new_handle());
-        let mut trace2 = Some(other.new_handle());
+        let mut trace1 = Some(self.trace.clone());
+        let mut trace2 = Some(other.trace.clone());
 
         // acknowledged frontier for each input.
         let mut acknowledged1 = vec![G::Timestamp::min()];
         let mut acknowledged2 = vec![G::Timestamp::min()];
 
         // deferred work of batches from each input.
-        let mut todo1: Vec<Deferred<K,V2,V,G::Timestamp,R2,R1,<R1 as Mul<R2>>::Output,T2::Cursor,<T1::Batch as Batch<K,V,G::Timestamp,R1>>::Cursor,_>> = Vec::new();
-        let mut todo2: Vec<Deferred<K,V,V2,G::Timestamp,R1,R2,<R1 as Mul<R2>>::Output,T1::Cursor,<T2::Batch as Batch<K,V2,G::Timestamp,R2>>::Cursor,_>> = Vec::new();
+        let mut todo1 = Vec::new();
+        let mut todo2 = Vec::new();
 
         self.stream.binary_notify(&other.stream, Pipeline, Pipeline, "Join", vec![], move |input1, input2, output, notificator| {
 
@@ -260,7 +262,7 @@ impl<G, K, V, R1, T1> JoinArranged<G, K, V, R1> for Arranged<G,K,V,R1,T1>
 
             // drain input 1, prepare work.
             input1.for_each(|capability, data| {
-                if let Some(ref trace2) = trace2 {
+                if let Some(ref mut trace2) = trace2 {
                     for batch1 in data.drain(..) {
                         let trace2_cursor = trace2.cursor_through(&acknowledged2[..]).unwrap();
                         let batch1_cursor = batch1.item.cursor();
@@ -273,7 +275,7 @@ impl<G, K, V, R1, T1> JoinArranged<G, K, V, R1> for Arranged<G,K,V,R1,T1>
 
             // drain input 2, prepare work.
             input2.for_each(|capability, data| {
-                if let Some(ref trace1) = trace1 {
+                if let Some(ref mut trace1) = trace1 {
                     for batch2 in data.drain(..) {
                         let trace1_cursor = trace1.cursor_through(&acknowledged1[..]).unwrap();
                         let batch2_cursor = batch2.item.cursor();
