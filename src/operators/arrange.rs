@@ -134,6 +134,10 @@ where T: Lattice+Clone+'static, Tr: TraceReader<K,V,T,R> {
         borrow.push(Rc::downgrade(&reference));
         reference
     }
+}
+
+impl<K, V, T, R, Tr> TraceRc<K, V, T, R, TraceAgent<K, V, T, R, Tr>>
+where T: Lattice+Clone+'static, Tr: TraceReader<K,V,T,R> {
 
     /// Copies an existing collection into the supplied scope.
     /// 
@@ -142,11 +146,11 @@ where T: Lattice+Clone+'static, Tr: TraceReader<K,V,T,R> {
     /// of the collection is its current state, and updates occur from this point forward. The historical changes
     /// the collection experienced in the past are accumulated, and the distinctions from the initial collection 
     /// are no longer evident.
-    pub fn import<G: Scope<Timestamp=T>>(scope: &G, trace: TraceRc<K, V, T, R, Self>) -> Arranged<G, K, V, R, Self> where T: Timestamp {
+    pub fn import<G: Scope<Timestamp=T>>(&self, scope: &G) -> Arranged<G, K, V, R, TraceAgent<K, V, T, R, Tr>> where T: Timestamp {
 
     // pub fn create_in<G: Scope<Timestamp=T>>(&mut self, scope: &G) -> Arranged<G, K, V, R, Tr> where T: Timestamp {
         
-        let queue = trace.wrapper.borrow_mut().trace.new_listener();
+        let queue = self.wrapper.borrow_mut().trace.new_listener();
 
         let collection = ::timely::dataflow::operators::operator::source(scope, "ArrangedSource", move |capability| {
             
@@ -185,219 +189,10 @@ where T: Lattice+Clone+'static, Tr: TraceReader<K,V,T,R> {
 
         Arranged {
             stream: collection,
-            trace: trace.clone(),
+            trace: self.clone(),
         }
     }
 }
-
-// /// A wrapper around a trace which tracks the frontiers of all referees.
-// /// 
-// /// This is an internal type, unlikely to be useful to higher-level programs, but exposed just in case.
-// /// This type is equivalent to a `RefCell`, in that it wraps the mutable state that multiple referrers 
-// /// may influence.
-// pub struct TraceWrapper<K, V, T, R, Tr> 
-// where T: Lattice+Clone+'static, Tr: TraceReader<K,V,T,R> {
-//     phantom: ::std::marker::PhantomData<(K, V, R)>,
-//     advance_frontiers: MutableAntichain<T>,
-//     through_frontiers: MutableAntichain<T>,
-//     /// The wrapped trace.
-//     pub trace: Tr,
-// }
-
-// impl<K,V,T,R,Tr> TraceWrapper<K,V,T,R,Tr>
-// where T: Lattice+Clone+'static, Tr: TraceReader<K,V,T,R> {
-//     /// Allocates a new trace wrapper.
-//     fn new(empty: Tr) -> Self {
-//         TraceWrapper {
-//             phantom: ::std::marker::PhantomData,
-//             advance_frontiers: MutableAntichain::new(),
-//             through_frontiers: MutableAntichain::new(),
-//             trace: empty,
-//         }
-//     }
-//     // /// Reports the current frontier of the trace.
-//     // fn _frontier(&self) -> &[T] { self.frontiers.elements() }
-//     /// Replaces elements of `lower` with those of `upper`.
-//     fn adjust_advance_frontier(&mut self, lower: &[T], upper: &[T]) {
-//         for element in upper { self.advance_frontiers.update_and(element, 1, |_,_| {}); }
-//         for element in lower { self.advance_frontiers.update_and(element, -1, |_,_| {}); }
-//         self.trace.advance_by(self.advance_frontiers.elements());
-//     }
-//     /// Replaces elements of `lower` with those of `upper`.
-//     fn adjust_through_frontier(&mut self, lower: &[T], upper: &[T]) {
-//         for element in upper { self.through_frontiers.update_and(element, 1, |_,_| {}); }
-//         for element in lower { self.through_frontiers.update_and(element, -1, |_,_| {}); }
-//         self.trace.distinguish_since(self.through_frontiers.elements());
-//     }
-// }
-
-// /// A handle to a shared trace.
-// ///
-// /// As long as the handle exists, the wrapped trace should continue to exist and will not advance its 
-// /// timestamps past the frontier maintained by the handle. The intent is that such a handle appears as
-// /// if it is a privately maintained trace, despite being backed by shared resources.
-// pub struct TraceHandle<K,V,T,R,Tr> where T: Lattice+Clone+'static, Tr: TraceReader<K,V,T,R> {
-//     advance_frontier: Vec<T>,
-//     through_frontier: Vec<T>,
-//     /// Wrapped trace. Please be gentle when using.
-//     pub wrapper: Rc<RefCell<TraceWrapper<K,V,T,R,Tr>>>,
-
-//     /// A shared list of shared queues; consumers add to the list, `arrange` deposits the current frontier
-//     /// and perhaps a newly formed batch into each. The intent is that it can deposit progress information 
-//     /// without a new batch, if its input frontier has advanced without any corresponding updates.
-//     ///
-//     /// Note that the references to the `VecDeque` queues are `Weak`, and they become invalid when the other
-//     /// endpoint drops their reference. This makes the "hang up" procedure much simpler. The `arrange` operator
-//     /// is the only one who takes mutable access to the queues, and is the one to be in charge of cleaning dead
-//     /// references.
-//     queues: Rc<RefCell<Vec<Weak<RefCell<VecDeque<(Vec<T>, Option<(T, <Tr as TraceReader<K,V,T,R>>::Batch)>)>>>>>>,
-// }
-
-// impl<K,V,T,R,Tr> TraceReader<K,V,T,R> for TraceHandle<K,V,T,R,Tr> where T: Lattice+Clone+'static, Tr: TraceReader<K,V,T,R> {
-
-//     type Batch = Tr::Batch;
-//     type Cursor = Tr::Cursor;
-
-//     /// Sets frontier to now be elements in `frontier`.
-//     ///
-//     /// This change may not have immediately observable effects. It informs the shared trace that this 
-//     /// handle no longer requires access to times other than those in the future of `frontier`, but if
-//     /// there are other handles to the same trace, it may not yet be able to compact.
-//     fn advance_by(&mut self, frontier: &[T]) {
-//         self.wrapper.borrow_mut().adjust_advance_frontier(&self.advance_frontier[..], frontier);
-//         self.advance_frontier = frontier.to_vec();
-//     }
-//     fn advance_frontier(&mut self) -> &[T] { &self.advance_frontier[..] }
-//     /// Allows the trace to compact batches of times before `frontier`.
-//     fn distinguish_since(&mut self, frontier: &[T]) {
-//         self.wrapper.borrow_mut().adjust_through_frontier(&self.through_frontier[..], frontier);
-//         self.through_frontier = frontier.to_vec();        
-//     }
-//     fn distinguish_frontier(&mut self) -> &[T] { &self.through_frontier[..] }
-//     /// Creates a new cursor over the wrapped trace.
-//     fn cursor(&mut self) -> Tr::Cursor {
-//         self.wrapper.borrow_mut().trace.cursor()
-//     }
-//     /// Creates a new cursor over the wrapped trace.
-//     fn cursor_through(&mut self, frontier: &[T]) -> Option<Tr::Cursor> {
-//         self.wrapper.borrow_mut().trace.cursor_through(frontier)
-//     }
-//     fn map_batches<F: FnMut(&Self::Batch)>(&mut self, mut f: F) { 
-//         self.wrapper.borrow_mut().trace.map_batches(f)
-//     }
-// }
-
-// impl<K,V,T,R,Tr> TraceHandle<K,V,T,R,Tr> where T: Lattice+Clone+'static, Tr: TraceReader<K,V,T,R> {
-//     /// Allocates a new handle from an existing wrapped wrapper.
-//     pub fn new(trace: Tr, advance_frontier: &[T], through_frontier: &[T]) -> Self {
-
-//         let mut wrapper = TraceWrapper::new(trace);
-//         wrapper.adjust_advance_frontier(&[], advance_frontier);
-//         wrapper.adjust_through_frontier(&[], through_frontier);
-
-//         TraceHandle {
-//             advance_frontier: advance_frontier.to_vec(),
-//             through_frontier: through_frontier.to_vec(),
-//             wrapper: Rc::new(RefCell::new(wrapper)),
-//             queues: Rc::new(RefCell::new(Vec::new())),
-//         }
-//     }
-
-//     /// Attaches a new shared queue to the trace.
-//     ///
-//     /// The queue will be immediately populated with existing historical batches from the trace, and until the reference 
-//     /// is dropped the queue will receive new batches as produced by the source `arrange` operator.
-//     pub fn new_listener(&self) -> Rc<RefCell<VecDeque<(Vec<T>, Option<(T, <Tr as TraceReader<K,V,T,R>>::Batch)>)>>> where T: Default {
-
-//         // create a new queue for progress and batch information.
-//         let mut queue = VecDeque::new();
-
-//         // add the existing batches from the trace
-//         self.wrapper.borrow_mut().trace.map_batches(|batch| queue.push_back((vec![T::default()], Some((T::default(), batch.clone())))));
-
-//         // wraps the queue in a ref-counted ref cell and enqueue/return it.
-//         let reference = Rc::new(RefCell::new(queue));
-//         let mut borrow = self.queues.borrow_mut();
-//         borrow.push(Rc::downgrade(&reference));
-//         reference
-//     }
-
-//     /// Copies an existing collection into the supplied scope.
-//     /// 
-//     /// This method creates an `Arranged` collection that should appear indistinguishable from applying `arrange` 
-//     /// directly to the source collection brought into the local scope. The only caveat is that the initial state 
-//     /// of the collection is its current state, and updates occur from this point forward. The historical changes
-//     /// the collection experienced in the past are accumulated, and the distinctions from the initial collection 
-//     /// are no longer evident.
-//     pub fn create_in<G: Scope<Timestamp=T>>(&mut self, scope: &G) -> Arranged<G, K, V, R, Tr> where T: Timestamp {
-        
-//         let queue = self.new_listener();
-
-//         let collection = ::timely::dataflow::operators::operator::source(scope, "ArrangedSource", move |capability| {
-            
-//             // capabilities the source maintains.
-//             let mut capabilities = vec![capability];
-            
-//             move |output| {
-
-//                 let mut borrow = queue.borrow_mut();
-//                 while let Some((frontier, sent)) = borrow.pop_front() {
-//                     // if data are associated, send em!
-//                     if let Some((time, batch)) = sent {
-//                         if let Some(cap) = capabilities.iter().find(|c| c.time().less_equal(&time)) {
-//                             let delayed = cap.delayed(&time);
-//                             output.session(&delayed).give(BatchWrapper { item: batch });
-//                         }
-//                         else {
-//                             panic!("failed to find capability for {:?} in {:?}", time, capabilities);
-//                         }
-//                     }
-
-//                     // advance capabilities to look like `frontier`.
-//                     let mut new_capabilities = Vec::new();
-//                     for time in frontier.iter() {
-//                         if let Some(cap) = capabilities.iter().find(|c| c.time().less_equal(&time)) {
-//                             new_capabilities.push(cap.delayed(&time));
-//                         }
-//                         else {
-//                             panic!("failed to find capability for {:?} in {:?}", time, capabilities);
-//                         }
-//                     }
-//                     capabilities = new_capabilities;
-//                 }
-//             }
-//         });
-
-//         Arranged {
-//             stream: collection,
-//             trace: self.clone(),
-//         }
-//     }
-// }
-
-// impl<K, V, T: Lattice+Clone, R, Tr> Clone for TraceHandle<K, V, T, R, Tr> where Tr: TraceReader<K, V, T, R> {
-//     fn clone(&self) -> Self {
-//         // increase ref counts for this frontier
-//         self.wrapper.borrow_mut().adjust_advance_frontier(&[], &self.advance_frontier[..]);
-//         self.wrapper.borrow_mut().adjust_through_frontier(&[], &self.through_frontier[..]);
-//         TraceHandle {
-//             advance_frontier: self.advance_frontier.clone(),
-//             through_frontier: self.through_frontier.clone(),
-//             wrapper: self.wrapper.clone(),
-//             queues: self.queues.clone(),
-//         }
-//     }
-// }
-
-// impl<K, V, T, R, Tr> Drop for TraceHandle<K, V, T, R, Tr>
-//     where T: Lattice+Clone+'static, Tr: TraceReader<K, V, T, R> {
-//     fn drop(&mut self) {
-//         self.wrapper.borrow_mut().adjust_advance_frontier(&self.advance_frontier[..], &[]);
-//         self.wrapper.borrow_mut().adjust_through_frontier(&self.through_frontier[..], &[]);
-//         self.advance_frontier = Vec::new();
-//         self.through_frontier = Vec::new();
-//     }
-// }
 
 /// An arranged collection of `(K,V)` values.
 ///
