@@ -8,8 +8,10 @@ use timely::dataflow::operators::*;
 use rand::{Rng, SeedableRng, StdRng};
 
 use differential_dataflow::AsCollection;
-use differential_dataflow::operators::arrange::{ArrangeByKey, TraceAgent};
-use differential_dataflow::operators::group::GroupArranged;
+use differential_dataflow::operators::arrange::ArrangeByKey;
+use differential_dataflow::operators::group::{Group, GroupArranged, Count};
+use differential_dataflow::operators::join::{Join, JoinArranged};
+use differential_dataflow::operators::Iterate;
 use differential_dataflow::trace::implementations::ord::OrdValSpine;
 use differential_dataflow::trace::{Cursor, Trace};
 // use differential_dataflow::trace::Batch;
@@ -33,13 +35,40 @@ fn main() {
 
             // create edge input, count a few ways.
             let (input, edges) = scope.new_input();
+            let edges = edges.as_collection();
 
-            // pull off source, and count.
-            let arranged = edges.as_collection()
-                                .arrange_by_key_hashed();
+            // arrange, then export the arranged trace.
+            let arranged = edges.arrange_by_key_hashed();
 
             (input, arranged.stream.probe(), arranged.trace.clone())
         });
+
+
+        let (mut roots, probe2) = worker.dataflow(|scope| {
+
+            let edges = trace.import(scope);
+            let (input, roots) = scope.new_input();
+            let roots = roots.as_collection();
+
+            // repeatedly update minimal distances each node can be reached from each root
+            let probe = roots.iterate(|dists| {
+
+                let edges = edges.enter(&dists.scope());
+                let roots = roots.enter(&dists.scope());
+
+                dists.arrange_by_key_hashed()
+                     .join_arranged(&edges, |_k,l,d| (*d, l+1))
+                     .concat(&roots)
+                     .group_u(|_, s, t| t.push((s[0].0, 1)))
+            })
+            .map(|(node, dist)| dist)
+            .count()
+            .inspect(|x| println!("distance update: {:?}", x))
+            .probe();
+
+            (input, probe)
+        });
+
 
         let seed: &[_] = &[1, 2, 3, index];
         let mut rng1: StdRng = SeedableRng::from_seed(seed);    // rng for edge additions
@@ -61,6 +90,8 @@ fn main() {
         let timer = ::std::time::Instant::now();
 
         input.advance_to(1);
+        roots.advance_to(1);
+
         worker.step_while(|| probe.less_than(input.time()));
 
         if index == 0 {
@@ -81,49 +112,53 @@ fn main() {
 
                 if edge % batch == (batch - 1) {
 
-                    let mut trace2 = trace.clone();
-                    worker.dataflow(move |scope| {
+                    roots.send(((edge as u32, 0), time, 1));
 
-                        TraceAgent::import(scope, trace2)
-                        // trace2.create_in(scope)
-                              .group_arranged(|_k, s, t| t.push((s[0].0, 1)), OrdValSpine::new())
-                              .as_collection(|k: &OrdWrapper<u32>, v: &u32| (k.item.clone(),v.clone()))
-                              .inspect(|x| println!("{:?}", x));
-                    });
+                    // let trace2 = trace.clone();
+                    // worker.dataflow(move |scope| {
+
+                    //     // TraceAgent::import(scope, trace2)
+                    //     trace2.import(scope)
+                    //           .group_arranged(|_k, s, t| t.push((s[0].0, 1)), OrdValSpine::new())
+                    //           .as_collection(|k: &OrdWrapper<u32>, v: &u32| (k.item.clone(),v.clone()))
+                    //           .inspect(|x| println!("{:?}", x));
+                    // });
 
 
                     let timer = ::std::time::Instant::now();
 
-                    trace.advance_by(&[input.time().clone()]);
-                    trace.distinguish_since(&[input.time().clone()]);
+                    // trace.advance_by(&[input.time().clone()]);
+                    // trace.distinguish_since(&[input.time().clone()]);
 
                     let next = input.epoch() + 1;
                     input.advance_to(next);
-                    worker.step_while(|| probe.less_than(input.time()));
+                    roots.advance_to(next);
 
-                    if index == 0 {
-                        let timer = timer.elapsed();
-                        let nanos = timer.as_secs() * 1000000000 + timer.subsec_nanos() as u64;
-                        println!("Round {} finished after {:?}", next - 1, nanos);
+                    worker.step_while(|| probe.less_than(input.time()) && probe2.less_than(input.time()));
 
-                        let mut count = 0;
+                    // if index == 0 {
+                    //     let timer = timer.elapsed();
+                    //     let nanos = timer.as_secs() * 1000000000 + timer.subsec_nanos() as u64;
+                    //     println!("Round {} finished after {:?}", next - 1, nanos);
 
-                        // we can directly interrogate the trace...
-                        let timer = ::std::time::Instant::now();
-                        let mut cursor = trace.cursor();
-                        while cursor.key_valid() {
-                            while cursor.val_valid() {
-                                let mut sum = 0;                                
-                                cursor.map_times(|_,d| sum += d);
-                                if sum > 0 { count += 1; }
-                                cursor.step_val();
-                            }
+                    //     let mut count = 0;
 
-                            cursor.step_key()
-                        }
+                    //     // we can directly interrogate the trace...
+                    //     let timer = ::std::time::Instant::now();
+                    //     let mut cursor = trace.cursor();
+                    //     while cursor.key_valid() {
+                    //         while cursor.val_valid() {
+                    //             let mut sum = 0;                                
+                    //             cursor.map_times(|_,d| sum += d);
+                    //             if sum > 0 { count += 1; }
+                    //             cursor.step_val();
+                    //         }
 
-                        println!("count: {} in {:?}", count, timer.elapsed());
-                    }
+                    //         cursor.step_key()
+                    //     }
+
+                    //     println!("count: {} in {:?}", count, timer.elapsed());
+                    // }
                 }
             }
         }
