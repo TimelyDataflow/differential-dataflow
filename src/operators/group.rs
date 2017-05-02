@@ -433,20 +433,7 @@ where
                         output.session(&capabilities[index]).give(BatchWrapper { item: batch.clone() });
 
                         // use the trace agent to insert the batch and notify any listeners.
-                        output_trace.wrapper.borrow_mut().trace.insert_at(upper_limit.clone(), Some((capabilities[index].time().clone(), batch)));
-
-                        // // If we still have listeners, send each a copy of the input frontier and current batch.
-                        // queues.upgrade().map(|queues| {
-                        //     let mut borrow = queues.borrow_mut();
-                        //     for queue in borrow.iter_mut() {
-                        //         queue.upgrade().map(|queue| {
-                        //             queue.borrow_mut().push_back((notificator.frontier(0).to_vec(), Some((capabilities[index].time().clone(), batch.clone()))));
-                        //         });
-                        //     }
-                        //     borrow.retain(|w| w.upgrade().is_some());
-                        // });
-
-                        // output_trace.wrapper.borrow_mut().trace.trace.insert(batch);
+                        output_trace.wrapper.borrow_mut().trace.insert_at(local_upper.clone(), Some((capabilities[index].time().clone(), batch)));
                     }
                 }
 
