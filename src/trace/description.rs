@@ -4,7 +4,9 @@
 //! updates. We do assume that these updates are in the context of a known computation and 
 //! known input, so there is a well-defined "correct answer" for the full set of updates. 
 //!
+//! ```ignore
 //!      full = { (data, time, diff) }
+//! ```
 //!
 //! Our aim with a description is to specify a subset of these updates unambiguously.
 //!
@@ -13,8 +15,10 @@
 //! `full` represented in the batch: those updates whose times are greater or equal to some 
 //! element of `lower` but not greater or equal to any element of `upper`.
 //!
+//! ```ignore
 //!     subset = { (data, time, diff) in full | lower.any(|t| t.le(time)) && 
 //! 										   !upper.any(|t| t.le(time)) }
+//! ```
 //!
 //! The third frontier `since` is used to indicate that the times presented by the batch may
 //! no longer reflect the values in `subset` above. Although the updates are precisely those 
@@ -25,6 +29,7 @@
 //! weights of updates from `full` at times greater or equal to an element of `lower`, greater 
 //! or equal to no element of `upper`, and less or equal to the query time.
 //!
+//! ```ignore
 //!     for all times t1:
 //! 
 //!        if since.any(|t2| t2.less_equal(t1)) then:
@@ -36,7 +41,8 @@
 //!                sum x where (data, t2, x) in full and  t2.less_equal(t1)
 //!                                                  and  lower.any(|t3| t3.less_equal(t2))
 //!                                                  and !upper.any(|t3| t3.less_equal(t2))
-//! 
+//! ```
+//!
 //! Very importantly, this equality does not make any other guarantees about the contents of
 //! the batch when one iterates through it. There are some consequences of the math that can
 //! be relied upon, though.
