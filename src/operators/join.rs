@@ -191,7 +191,7 @@ where
     }
     fn antijoin_u<R2>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), R>
     where K: Unsigned+Copy, R2: Diff, R: Mul<R2, Output=R> {
-        self.concat(&self.semijoin(other).negate())
+        self.concat(&self.semijoin_u(other).negate())
     }
 }
 
@@ -445,31 +445,6 @@ where
         }
 
         self.done = !batch.key_valid() || !trace.key_valid();
-
-        // println!("done!");
-
-        // while batch.key_valid() && effort < *fuel {
-
-        //     trace.seek_key(batch.key());
-        //     if trace.key_valid() && trace.key() == batch.key() {
-
-        //         thinker.history1.edits.load(trace, |time| time.join(&meet));
-        //         thinker.history2.edits.load(batch, |time| time.clone());
-
-        //         // populate `temp` with the results in the best way we know how.
-        //         thinker.think(|v1,v2,t,r1,r2| temp.push(((logic(batch.key(), v1, v2), t), mult(r1,r2))));
-
-        //         consolidate(&mut temp, 0);
-
-        //         effort += temp.len();
-        //         for ((d, t), r) in temp.drain(..) {
-        //             session.give((d, t, r));
-        //         }
-
-        //     }
-
-        //     batch.step_key();
-        // }
 
         if effort > *fuel { *fuel = 0; }
         else              { *fuel -= effort; }

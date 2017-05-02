@@ -381,7 +381,7 @@ impl<G: Scope, K: Data+HashOrdered, V: Data, R: Diff> Arrange<G, K, V, R> for Co
                             let mut borrow = queues.borrow_mut();
                             for queue in borrow.iter_mut() {
                                 queue.upgrade().map(|queue| {
-                                    queue.borrow_mut().push_back((notificator.frontier(0).to_vec(), Some((capabilities[index].time().clone(), batch.clone()))));
+                                    queue.borrow_mut().push_back((upper.clone(), Some((capabilities[index].time().clone(), batch.clone()))));
                                 });
                             }
                             borrow.retain(|w| w.upgrade().is_some());
@@ -405,6 +405,19 @@ impl<G: Scope, K: Data+HashOrdered, V: Data, R: Diff> Arrange<G, K, V, R> for Co
                 }
 
                 capabilities = new_capabilities;
+
+                // This very aggressively pushes frontier information along. We may want to dial it back 
+                // if we find that we are spamming folks.
+                queues.upgrade().map(|queues| {
+                    let mut borrow = queues.borrow_mut();
+                    for queue in borrow.iter_mut() {
+                        queue.upgrade().map(|queue| {
+                            queue.borrow_mut().push_back((notificator.frontier(0).to_vec(), None));
+                        });
+                    }
+                    borrow.retain(|w| w.upgrade().is_some());
+                });
+
             }
         });
 
