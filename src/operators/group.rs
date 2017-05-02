@@ -429,11 +429,12 @@ where
 
                     if lower_issued != local_upper {
                         let batch = builder.done(&lower_issued[..], &local_upper[..], &lower_issued[..]);
-                        lower_issued = local_upper;
                         output.session(&capabilities[index]).give(BatchWrapper { item: batch.clone() });
 
                         // use the trace agent to insert the batch and notify any listeners.
-                        output_trace.wrapper.borrow_mut().trace.insert_at(local_upper.clone(), Some((capabilities[index].time().clone(), batch)));
+                        output_trace.wrapper.borrow_mut().trace.insert_at(&local_upper[..], Some((capabilities[index].time().clone(), batch)));
+
+                        lower_issued = local_upper;
                     }
                 }
 
@@ -461,7 +462,7 @@ where
                 }
                 capabilities = new_capabilities;
 
-                output_trace.wrapper.borrow_mut().trace.insert_at(upper_limit.clone(), None);
+                output_trace.wrapper.borrow_mut().trace.insert_at(&upper_limit[..], None);
 
     // let mut ul = upper_limit.clone();
     // ul.sort();
