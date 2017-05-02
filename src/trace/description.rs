@@ -48,7 +48,7 @@
 //! be relied upon, though.
 //! 
 //! The most important consequence is that when `since <= lower` the contents of the batch 
-//! must be equivalent to range of updates in `full`. If it is ever the case that `since` is
+//! must be identical to the updates in `subset`. If it is ever the case that `since` is
 //! in advance of `lower`, consumers of the batch must take care that they not use the times
 //! observed in the batch without ensuring that they are appropriately advanced (typically by
 //! `since`). Failing to do so may produce updates that are not in advance of `since`, which 

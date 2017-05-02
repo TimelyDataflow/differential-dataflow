@@ -47,7 +47,7 @@ use trace::implementations::ord::OrdValSpine as DefaultValTrace;
 use trace::implementations::ord::OrdKeySpine as DefaultKeyTrace;
 
 use trace::wrappers::enter::{TraceEnter, BatchEnter};
-use trace::wrappers::rc::TraceRc;
+// use trace::wrappers::rc::TraceRc;
 
 /// Wrapper type to permit transfer of `Rc` types, as in batch.
 ///
@@ -68,16 +68,40 @@ impl<T> ::abomonation::Abomonation for BatchWrapper<T> {
    unsafe fn exhume<'a,'b>(&'a mut self, _bytes: &'b mut [u8]) -> Option<&'b mut [u8]> { panic!("BatchWrapper Abomonation impl")  }
 }
 
-/// A `TraceReader` wrapper which tracks others interested in batches and progress.
-pub struct TraceAgent<K, V, T, R, Tr> 
-where T: Lattice+Clone+'static, Tr: TraceReader<K,V,T,R> {
+/// A trace writer capability.
+pub struct TraceWriter<K, V, T, R, Tr>
+where T: Lattice+Clone+'static, Tr: Trace<K,V,T,R>, Tr::Batch: Batch<K,V,T,R> {
     phantom: ::std::marker::PhantomData<(K, V, R)>,
-    trace: Tr,
+    trace: Weak<RefCell<Tr>>,
     queues: Rc<RefCell<Vec<Weak<RefCell<VecDeque<(Vec<T>, Option<(T, Tr::Batch)>)>>>>>>,
 }
 
-impl<K, V, T, R, Tr> Drop for TraceAgent<K, V, T, R, Tr> 
-where T: Lattice+Clone+'static, Tr: TraceReader<K,V,T,R> {
+impl<K, V, T, R, Tr> TraceWriter<K, V, T, R, Tr>
+where T: Lattice+Clone+'static, Tr: Trace<K,V,T,R>, Tr::Batch: Batch<K,V,T,R> {
+
+    /// Advances the trace to `frontier`, providing batch data if it exists.
+    pub fn seal(&mut self, frontier: &[T], data: Option<(T, Tr::Batch)>) {
+
+        // push information to each listener that still exists.
+        let mut borrow = self.queues.borrow_mut();
+        for queue in borrow.iter_mut() {
+            queue.upgrade().map(|queue| {
+                queue.borrow_mut().push_back((frontier.to_vec(), data.clone()));
+            });
+        }
+        borrow.retain(|w| w.upgrade().is_some());
+
+        // push data to the trace, if it still exists.
+        if let Some((_time, batch)) = data {
+            if let Some(trace) = self.trace.upgrade() {
+                trace.borrow_mut().insert(batch);
+            }
+        }
+    }
+}
+
+impl<K, V, T, R, Tr> Drop for TraceWriter<K, V, T, R, Tr>
+where T: Lattice+Clone+'static, Tr: Trace<K,V,T,R>, Tr::Batch: Batch<K,V,T,R> {
     fn drop(&mut self) {
         let mut borrow = self.queues.borrow_mut();
         for queue in borrow.iter_mut() {
@@ -85,47 +109,65 @@ where T: Lattice+Clone+'static, Tr: TraceReader<K,V,T,R> {
                 queue.borrow_mut().push_back((Vec::new(), None));
             });
         }
+        borrow.retain(|w| w.upgrade().is_some());
     }
+}
+
+
+/// A `TraceReader` wrapper which tracks others interested in batches and progress.
+pub struct TraceAgent<K, V, T, R, Tr> 
+where T: Lattice+Clone+'static, Tr: TraceReader<K,V,T,R> {
+    phantom: ::std::marker::PhantomData<(K, V, R)>,
+    trace: Rc<RefCell<Tr>>,
+    queues: Weak<RefCell<Vec<Weak<RefCell<VecDeque<(Vec<T>, Option<(T, Tr::Batch)>)>>>>>>,
+    stash: Vec<T>,
 }
 
 impl<K, V, T, R, Tr> TraceReader<K, V, T, R> for TraceAgent<K, V, T, R, Tr> 
 where T: Lattice+Clone+'static, Tr: TraceReader<K,V,T,R> {
     type Batch = Tr::Batch;
     type Cursor = Tr::Cursor;
-    fn advance_by(&mut self, frontier: &[T]) { self.trace.advance_by(frontier) }
-    fn advance_frontier(&mut self) -> &[T] { &self.trace.advance_frontier() }
-    fn distinguish_since(&mut self, frontier: &[T]) { self.trace.distinguish_since(frontier) }
-    fn distinguish_frontier(&mut self) -> &[T] { &self.trace.distinguish_frontier() }
-    fn cursor_through(&mut self, frontier: &[T]) -> Option<Tr::Cursor> { self.trace.cursor_through(frontier) }
-    fn map_batches<F: FnMut(&Self::Batch)>(&mut self, f: F) { self.trace.map_batches(f) }
+    fn advance_by(&mut self, frontier: &[T]) { self.trace.borrow_mut().advance_by(frontier) }
+    fn advance_frontier(&mut self) -> &[T] { 
+        self.stash.clear();
+        self.stash.extend(self.trace.borrow_mut().advance_frontier().iter().cloned());
+        &self.stash[..]
+        // &self.trace.borrow_mut().advance_frontier() 
+    }
+    fn distinguish_since(&mut self, frontier: &[T]) { self.trace.borrow_mut().distinguish_since(frontier) }
+    fn distinguish_frontier(&mut self) -> &[T] { 
+        self.stash.clear();
+        self.stash.extend(self.trace.borrow_mut().distinguish_frontier().iter().cloned());
+        &self.stash[..]
+        // &self.trace.borrow_mut().distinguish_frontier() 
+    }
+    fn cursor_through(&mut self, frontier: &[T]) -> Option<Tr::Cursor> { self.trace.borrow_mut().cursor_through(frontier) }
+    fn map_batches<F: FnMut(&Self::Batch)>(&mut self, f: F) { self.trace.borrow_mut().map_batches(f) }
 }
 
 impl<K, V, T, R, Tr> TraceAgent<K, V, T, R, Tr> 
 where T: Lattice+Clone+'static, Tr: TraceReader<K,V,T,R> {
 
     /// Creates a new agent from a trace reader.
-    pub fn new(trace: Tr) -> Self {
-        TraceAgent {
+    pub fn new(trace: Tr) -> (Self, TraceWriter<K,V,T,R,Tr>) where Tr: Trace<K,V,T,R>, Tr::Batch: Batch<K,V,T,R> {
+
+        let trace = Rc::new(RefCell::new(trace));
+        let queues = Rc::new(RefCell::new(Vec::new()));
+
+        let reader = TraceAgent {
             phantom: ::std::marker::PhantomData,
-            trace: trace,
-            queues: Rc::new(RefCell::new(Vec::new())),
-        }
-    }
+            trace: trace.clone(),
+            queues: Rc::downgrade(&queues),
+            stash: Vec::new(),
+        };
 
-    /// Inserts a batch in the trace, and signals each of the listeners.
-    pub fn insert_at(&mut self, frontier: &[T], sent: Option<(T, Tr::Batch)>) where Tr: Trace<K,V,T,R>, Tr::Batch: Batch<K,V,T,R> {
+        let writer = TraceWriter {
+            phantom: ::std::marker::PhantomData,
+            trace: Rc::downgrade(&trace),
+            queues: queues,
+        };
 
-        let mut borrow = self.queues.borrow_mut();
-        for queue in borrow.iter_mut() {
-            queue.upgrade().map(|queue| {
-                queue.borrow_mut().push_back((frontier.to_vec(), sent.clone()));
-            });
-        }
-        borrow.retain(|w| w.upgrade().is_some());
-
-        if let Some((_, batch)) = sent {
-            self.trace.insert(batch);
-        }
+        (reader, writer)
     }
 
     /// Attaches a new shared queue to the trace.
@@ -135,20 +177,28 @@ where T: Lattice+Clone+'static, Tr: TraceReader<K,V,T,R> {
     pub fn new_listener(&mut self) -> Rc<RefCell<VecDeque<(Vec<T>, Option<(T, <Tr as TraceReader<K,V,T,R>>::Batch)>)>>> where T: Default {
 
         // create a new queue for progress and batch information.
-        let mut queue = VecDeque::new();
+        let mut new_queue = VecDeque::new();
 
         // add the existing batches from the trace
-        self.trace.map_batches(|batch| queue.push_back((vec![T::default()], Some((T::default(), batch.clone())))));
+        self.trace.borrow_mut().map_batches(|batch| new_queue.push_back((vec![T::default()], Some((T::default(), batch.clone())))));
+
+        let reference = Rc::new(RefCell::new(new_queue));
 
         // wraps the queue in a ref-counted ref cell and enqueue/return it.
-        let reference = Rc::new(RefCell::new(queue));
-        let mut borrow = self.queues.borrow_mut();
-        borrow.push(Rc::downgrade(&reference));
+        if let Some(queue) = self.queues.upgrade() {
+            let mut borrow = queue.borrow_mut();
+            borrow.push(Rc::downgrade(&reference));
+        }
+        else {
+            // if the trace is closed, send a final signal.
+            reference.borrow_mut().push_back((Vec::new(), None));
+        }
+
         reference
     }
 }
 
-impl<K, V, T, R, Tr> TraceRc<K, V, T, R, TraceAgent<K, V, T, R, Tr>>
+impl<K, V, T, R, Tr> TraceAgent<K, V, T, R, Tr>
 where T: Lattice+Clone+'static, Tr: TraceReader<K,V,T,R> {
 
     /// Copies an existing collection into the supplied scope.
@@ -158,11 +208,9 @@ where T: Lattice+Clone+'static, Tr: TraceReader<K,V,T,R> {
     /// of the collection is its current state, and updates occur from this point forward. The historical changes
     /// the collection experienced in the past are accumulated, and the distinctions from the initial collection 
     /// are no longer evident.
-    pub fn import<G: Scope<Timestamp=T>>(&self, scope: &G) -> Arranged<G, K, V, R, TraceAgent<K, V, T, R, Tr>> where T: Timestamp {
+    pub fn import<G: Scope<Timestamp=T>>(&mut self, scope: &G) -> Arranged<G, K, V, R, TraceAgent<K, V, T, R, Tr>> where T: Timestamp {
 
-    // pub fn create_in<G: Scope<Timestamp=T>>(&mut self, scope: &G) -> Arranged<G, K, V, R, Tr> where T: Timestamp {
-        
-        let queue = self.wrapper.borrow_mut().trace.new_listener();
+        let queue = self.new_listener();
 
         let collection = ::timely::dataflow::operators::operator::source(scope, "ArrangedSource", move |capability| {
             
@@ -206,11 +254,24 @@ where T: Lattice+Clone+'static, Tr: TraceReader<K,V,T,R> {
     }
 }
 
+impl<K, V, T, R, Tr> Clone for TraceAgent<K, V, T, R, Tr>
+where T: Lattice+Clone+'static, Tr: TraceReader<K,V,T,R> {
+    fn clone(&self) -> Self {
+        TraceAgent {
+            phantom: ::std::marker::PhantomData,
+            trace: self.trace.clone(),
+            queues: self.queues.clone(),
+            stash: Vec::new(),
+        }
+    }
+}
+
+
 /// An arranged collection of `(K,V)` values.
 ///
 /// An `Arranged` allows multiple differential operators to share the resources (communication, 
 /// computation, memory) required to produce and maintain an indexed representation of a collection.
-pub struct Arranged<G: Scope, K, V, R, T> where G::Timestamp: Lattice, T: TraceReader<K, V, G::Timestamp, R> {
+pub struct Arranged<G: Scope, K, V, R, T> where G::Timestamp: Lattice, T: TraceReader<K, V, G::Timestamp, R>+Clone {
     /// A stream containing arranged updates.
     ///
     /// This stream contains the same batches of updates the trace itself accepts, so there should
@@ -218,12 +279,12 @@ pub struct Arranged<G: Scope, K, V, R, T> where G::Timestamp: Lattice, T: TraceR
     /// the batches in the trace, by key and by value.
     pub stream: Stream<G, BatchWrapper<T::Batch>>,
     /// A shared trace, updated by the `Arrange` operator and readable by others.
-    pub trace: TraceRc<K, V, G::Timestamp, R, T>,
+    pub trace: T,
     // TODO : We might have an `Option<Collection<G, (K, V)>>` here, which `as_collection` sets and
     // returns when invoked, so as to not duplicate work with multiple calls to `as_collection`.
 }
 
-impl<G: Scope, K, V, R, T> Arranged<G, K, V, R, T> where G::Timestamp: Lattice, T: TraceReader<K, V, G::Timestamp, R> {
+impl<G: Scope, K, V, R, T> Arranged<G, K, V, R, T> where G::Timestamp: Lattice, T: TraceReader<K, V, G::Timestamp, R>+Clone {
     
     // /// Allocates a new handle to the shared trace, with independent frontier tracking.
     // pub fn new_handle(&self) -> TraceHandle<K, V, G::Timestamp, R, T> {
@@ -236,7 +297,7 @@ impl<G: Scope, K, V, R, T> Arranged<G, K, V, R, T> where G::Timestamp: Lattice, 
     /// have all been extended with an additional coordinate with the default value. The resulting collection does
     /// not vary with the new timestamp coordinate.
     pub fn enter<'a, TInner>(&self, child: &Child<'a, G, TInner>)
-        -> Arranged<Child<'a, G, TInner>, K, V, R, TraceEnter<K, V, G::Timestamp, R, TraceRc<K, V, G::Timestamp, R, T>, TInner>>
+        -> Arranged<Child<'a, G, TInner>, K, V, R, TraceEnter<K, V, G::Timestamp, R, T, TInner>>
         where 
             // OtherTraceWrapper<K, V, G::Timestamp, R, T, TInner>: Trace<K, V, Product<G::Timestamp, TInner>, R>,
             T::Batch: Clone, K: 'static, V: 'static, G::Timestamp: Clone+Default+'static, TInner: Lattice+Timestamp+Clone+Default+'static, R: 'static {
@@ -245,7 +306,7 @@ impl<G: Scope, K, V, R, T> Arranged<G, K, V, R, T> where G::Timestamp: Lattice, 
 
         Arranged {
             stream: self.stream.enter(child).map(|bw| BatchWrapper { item: BatchEnter::make_from(bw.item) }),
-            trace: TraceRc::make_from(TraceEnter::make_from(self.trace.clone())).0,
+            trace: TraceEnter::make_from(self.trace.clone()),
         }
     }
 
@@ -306,11 +367,11 @@ impl<G: Scope, K: Data+HashOrdered, V: Data, R: Diff> Arrange<G, K, V, R> for Co
             T: Trace<K, V, G::Timestamp, R>+'static,
             T::Batch: Batch<K, V, G::Timestamp, R> {
 
-        let agent = TraceAgent::new(empty_trace);
-        let queues = Rc::downgrade(&agent.queues);
+        let (reader, mut writer) = TraceAgent::new(empty_trace);
+        // let queues = Rc::downgrade(&agent.queues);
 
-        let (handle, source) = TraceRc::make_from(agent);
-        let source = Rc::downgrade(&source);
+        // let (handle, source) = TraceRc::make_from(agent);
+        // let source = Rc::downgrade(&source);
 
         // // create a trace to share with downstream consumers.
         // let handle = TraceHandle::new(empty_trace, &[<G::Timestamp as Lattice>::min()], &[<G::Timestamp as Lattice>::min()]);
@@ -379,25 +440,27 @@ impl<G: Scope, K: Data+HashOrdered, V: Data, R: Diff> Arrange<G, K, V, R> for Co
                         // Extract updates not in advance of `upper`.
                         let batch = batcher.seal(&upper[..]);
 
-                        // If the source is still active, commit the extracted batch.
-                        // The source may become inactive if all downsteam users of the trace drop their references.
-                        source.upgrade().map(|trace| {
-                            trace.borrow_mut().trace.trace.insert(batch.clone());
-                        });
+                        writer.seal(&upper[..], Some((capabilities[index].time().clone(), batch.clone())));
 
-                        // If we still have listeners, send each a copy of the input frontier and current batch.
-                        // NOTE: We could have used agent.insert_at, but .. source is discarded when handles to 
-                        //       the trace drop, though there could still be consumers of the streams (e.g. the 
-                        //       as_collection operator, which doesn't hold the trace).
-                        queues.upgrade().map(|queues| {
-                            let mut borrow = queues.borrow_mut();
-                            for queue in borrow.iter_mut() {
-                                queue.upgrade().map(|queue| {
-                                    queue.borrow_mut().push_back((upper.clone(), Some((capabilities[index].time().clone(), batch.clone()))));
-                                });
-                            }
-                            borrow.retain(|w| w.upgrade().is_some());
-                        });
+                        // // If the source is still active, commit the extracted batch.
+                        // // The source may become inactive if all downsteam users of the trace drop their references.
+                        // source.upgrade().map(|trace| {
+                        //     trace.borrow_mut().trace.trace.insert(batch.clone());
+                        // });
+
+                        // // If we still have listeners, send each a copy of the input frontier and current batch.
+                        // // NOTE: We could have used agent.insert_at, but .. source is discarded when handles to 
+                        // //       the trace drop, though there could still be consumers of the streams (e.g. the 
+                        // //       as_collection operator, which doesn't hold the trace).
+                        // queues.upgrade().map(|queues| {
+                        //     let mut borrow = queues.borrow_mut();
+                        //     for queue in borrow.iter_mut() {
+                        //         queue.upgrade().map(|queue| {
+                        //             queue.borrow_mut().push_back((upper.clone(), Some((capabilities[index].time().clone(), batch.clone()))));
+                        //         });
+                        //     }
+                        //     borrow.retain(|w| w.upgrade().is_some());
+                        // });
 
                         // send the batch to downstream consumers, empty or not.
                         output.session(&capabilities[index]).give(BatchWrapper { item: batch });
@@ -418,22 +481,24 @@ impl<G: Scope, K: Data+HashOrdered, V: Data, R: Diff> Arrange<G, K, V, R> for Co
 
                 capabilities = new_capabilities;
 
-                // This very aggressively pushes frontier information along. We may want to dial it back 
-                // if we find that we are spamming folks.
-                queues.upgrade().map(|queues| {
-                    let mut borrow = queues.borrow_mut();
-                    for queue in borrow.iter_mut() {
-                        queue.upgrade().map(|queue| {
-                            queue.borrow_mut().push_back((notificator.frontier(0).to_vec(), None));
-                        });
-                    }
-                    borrow.retain(|w| w.upgrade().is_some());
-                });
+                writer.seal(notificator.frontier(0), None);
+
+                // // This very aggressively pushes frontier information along. We may want to dial it back 
+                // // if we find that we are spamming folks.
+                // queues.upgrade().map(|queues| {
+                //     let mut borrow = queues.borrow_mut();
+                //     for queue in borrow.iter_mut() {
+                //         queue.upgrade().map(|queue| {
+                //             queue.borrow_mut().push_back((notificator.frontier(0).to_vec(), None));
+                //         });
+                //     }
+                //     borrow.retain(|w| w.upgrade().is_some());
+                // });
 
             }
         });
 
-        Arranged { stream: stream, trace: handle }
+        Arranged { stream: stream, trace: reader }
     }
 }
 

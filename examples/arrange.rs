@@ -37,7 +37,7 @@ fn main() {
         let mut probe = timely::dataflow::operators::probe::Handle::new();
 
         // create a dataflow managing an ever-changing edge collection.
-    	let graph = worker.dataflow(|scope| {
+    	let mut graph = worker.dataflow(|scope| {
 
             // create a source operator which will produce random edges and delete them.
             timely::dataflow::operators::operator::source(scope, "RandomGraph", |mut capability| {

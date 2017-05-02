@@ -211,7 +211,7 @@ pub trait JoinArranged<G: Scope, K: 'static, V: 'static, R: Diff> where G::Times
     fn join_arranged<V2,T2,R2,D,L> (&self, stream2: &Arranged<G,K,V2,R2,T2>, result: L) -> Collection<G,D,<R as Mul<R2>>::Output>
     where 
         V2: Ord+Clone+Debug+'static,
-        T2: TraceReader<K, V2, G::Timestamp, R2>+'static,
+        T2: TraceReader<K, V2, G::Timestamp, R2>+Clone+'static,
         T2::Batch: BatchReader<K, V2, G::Timestamp, R2>+'static,
         R2: Diff,
         R: Mul<R2>,
@@ -232,7 +232,7 @@ where
     fn join_arranged<V2,T2,R2,D,L> (&self, stream2: &Arranged<G,OrdWrapper<K>,V2,R2,T2>, result: L) -> Collection<G,D,<R as Mul<R2>>::Output>
     where 
         V2: Ord+Clone+Debug+'static,
-        T2: TraceReader<OrdWrapper<K>, V2, G::Timestamp, R2>+'static,
+        T2: TraceReader<OrdWrapper<K>, V2, G::Timestamp, R2>+Clone+'static,
         T2::Batch: BatchReader<OrdWrapper<K>, V2, G::Timestamp, R2>+'static,
         R2: Diff,
         R: Mul<R2>,
@@ -254,12 +254,12 @@ impl<G, K, V, R1, T1> JoinArranged<G, K, V, R1> for Arranged<G,K,V,R1,T1>
         K: Debug+Eq+'static, 
         V: Ord+Clone+Debug+'static, 
         R1: Diff,
-        T1: TraceReader<K,V,G::Timestamp, R1>+'static,
+        T1: TraceReader<K,V,G::Timestamp, R1>+Clone+'static,
         T1::Batch: BatchReader<K,V,G::Timestamp,R1>+'static+Debug {
     fn join_arranged<V2,T2,R2,D,L>(&self, other: &Arranged<G,K,V2,R2,T2>, result: L) -> Collection<G,D,<R1 as Mul<R2>>::Output> 
     where 
         V2: Ord+Clone+Debug+'static,
-        T2: TraceReader<K,V2,G::Timestamp,R2>+'static,
+        T2: TraceReader<K,V2,G::Timestamp,R2>+Clone+'static,
         T2::Batch: BatchReader<K, V2, G::Timestamp, R2>+'static,
         R2: Diff,
         R1: Mul<R2>,

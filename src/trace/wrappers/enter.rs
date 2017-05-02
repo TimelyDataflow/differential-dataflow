@@ -14,6 +14,17 @@ pub struct TraceEnter<K, V, T, R, Tr, TInner> where Tr: TraceReader<K, V, T, R>,
     stash2: Vec<Product<T, TInner>>,
 }
 
+impl<K,V,T,R,Tr,TInner> Clone for TraceEnter<K, V, T, R, Tr, TInner> where Tr: TraceReader<K, V, T, R>+Clone, T: Lattice+Clone+'static {
+    fn clone(&self) -> Self {
+        TraceEnter {
+            phantom: ::std::marker::PhantomData,
+            trace: self.trace.clone(),
+            stash1: Vec::new(),
+            stash2: Vec::new(),
+        }
+    }
+}
+
 impl<K, V, T, R, Tr, TInner> TraceReader<K, V, Product<T, TInner>, R> for TraceEnter<K, V, T, R, Tr, TInner>
 where
     Tr: TraceReader<K, V, T, R>, 
