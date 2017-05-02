@@ -118,24 +118,5 @@ where G::Timestamp: Lattice+Ord {
         inner.join_map_u(&edges, |_k,l,d| (*d, l+1))
              .concat(&nodes)
              .group_u(|_, s, t| t.push((s[0].0, 1)))
-             // .inspect_batch(|t, xs| println!("{:?}: {:?}", t, xs.len()))
      })
-}
-
-// returns pairs (n, s) indicating node n can be reached from a root in s steps.
-fn reach<G: Scope>(edges: &Collection<G, Edge>, roots: &Collection<G, Node>) -> Collection<G, (Node, u32)>
-where G::Timestamp: Lattice+Ord {
-
-    // repeatedly update minimal distances each node can be reached from each root
-    roots.iterate(|inner| {
-
-        let edges = edges.enter(&inner.scope());
-        let roots = roots.enter(&inner.scope());
-
-        edges.semijoin_u(&inner)
-             .map(|(_, dst)| dst)
-             .concat(&roots)
-             .distinct_u()
-    })
-    .map(|x| (x,0))
 }
