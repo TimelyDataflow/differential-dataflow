@@ -76,6 +76,18 @@ where T: Lattice+Clone+'static, Tr: TraceReader<K,V,T,R> {
     queues: Rc<RefCell<Vec<Weak<RefCell<VecDeque<(Vec<T>, Option<(T, Tr::Batch)>)>>>>>>,
 }
 
+impl<K, V, T, R, Tr> Drop for TraceAgent<K, V, T, R, Tr> 
+where T: Lattice+Clone+'static, Tr: TraceReader<K,V,T,R> {
+    fn drop(&mut self) {
+        let mut borrow = self.queues.borrow_mut();
+        for queue in borrow.iter_mut() {
+            queue.upgrade().map(|queue| {
+                queue.borrow_mut().push_back((Vec::new(), None));
+            });
+        }
+    }
+}
+
 impl<K, V, T, R, Tr> TraceReader<K, V, T, R> for TraceAgent<K, V, T, R, Tr> 
 where T: Lattice+Clone+'static, Tr: TraceReader<K,V,T,R> {
     type Batch = Tr::Batch;
