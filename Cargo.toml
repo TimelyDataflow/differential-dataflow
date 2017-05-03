@@ -20,6 +20,7 @@ git="https://github.com/frankmcsherry/graph-map.git"
 getopts="0.2.14"
 rand="0.3.13"
 byteorder="0.4.2"
+itertools="^0.6"
 
 [dependencies.timely]
 git="http://github.com/frankmcsherry/timely-dataflow"
