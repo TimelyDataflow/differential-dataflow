@@ -27,8 +27,10 @@ use trace::TraceReader;
 pub struct TraceBox<K, V, T, R, Tr> 
 where T: Lattice+Clone+'static, Tr: TraceReader<K,V,T,R> {
     phantom: ::std::marker::PhantomData<(K, V, R)>,
-    advance_frontiers: MutableAntichain<T>,
-    through_frontiers: MutableAntichain<T>,
+    /// accumulated holds on times for advancement.
+    pub advance_frontiers: MutableAntichain<T>,
+    /// accumulated holds on times for distinction.
+    pub through_frontiers: MutableAntichain<T>,
     /// The wrapped trace.
     pub trace: Tr,
 }
@@ -39,7 +41,7 @@ where T: Lattice+Clone+'static, Tr: TraceReader<K,V,T,R> {
     ///
     /// The trace may already exist and have non-initial advance and distinguish frontiers. The boxing
     /// process will fish these out and make sure that they are used for the initial read capabilities.
-    fn new(mut trace: Tr) -> Self {
+    pub fn new(mut trace: Tr) -> Self {
 
         let mut advance = MutableAntichain::new();
         for time in trace.advance_frontier() {
@@ -59,13 +61,13 @@ where T: Lattice+Clone+'static, Tr: TraceReader<K,V,T,R> {
         }
     }
     /// Replaces elements of `lower` with those of `upper`.
-    fn adjust_advance_frontier(&mut self, lower: &[T], upper: &[T]) {
+    pub fn adjust_advance_frontier(&mut self, lower: &[T], upper: &[T]) {
         for element in upper { self.advance_frontiers.update_and(element, 1, |_,_| {}); }
         for element in lower { self.advance_frontiers.update_and(element, -1, |_,_| {}); }
         self.trace.advance_by(self.advance_frontiers.elements());
     }
     /// Replaces elements of `lower` with those of `upper`.
-    fn adjust_through_frontier(&mut self, lower: &[T], upper: &[T]) {
+    pub fn adjust_through_frontier(&mut self, lower: &[T], upper: &[T]) {
         for element in upper { self.through_frontiers.update_and(element, 1, |_,_| {}); }
         for element in lower { self.through_frontiers.update_and(element, -1, |_,_| {}); }
         self.trace.distinguish_since(self.through_frontiers.elements());

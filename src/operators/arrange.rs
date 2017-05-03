@@ -47,7 +47,7 @@ use trace::implementations::ord::OrdValSpine as DefaultValTrace;
 use trace::implementations::ord::OrdKeySpine as DefaultKeyTrace;
 
 use trace::wrappers::enter::{TraceEnter, BatchEnter};
-// use trace::wrappers::rc::TraceRc;
+use trace::wrappers::rc::TraceBox;
 
 /// Wrapper type to permit transfer of `Rc` types, as in batch.
 ///
@@ -72,7 +72,7 @@ impl<T> ::abomonation::Abomonation for BatchWrapper<T> {
 pub struct TraceWriter<K, V, T, R, Tr>
 where T: Lattice+Clone+'static, Tr: Trace<K,V,T,R>, Tr::Batch: Batch<K,V,T,R> {
     phantom: ::std::marker::PhantomData<(K, V, R)>,
-    trace: Weak<RefCell<Tr>>,
+    trace: Weak<RefCell<TraceBox<K, V, T, R, Tr>>>,
     queues: Rc<RefCell<Vec<Weak<RefCell<VecDeque<(Vec<T>, Option<(T, Tr::Batch)>)>>>>>>,
 }
 
@@ -94,7 +94,7 @@ where T: Lattice+Clone+'static, Tr: Trace<K,V,T,R>, Tr::Batch: Batch<K,V,T,R> {
         // push data to the trace, if it still exists.
         if let Some((_time, batch)) = data {
             if let Some(trace) = self.trace.upgrade() {
-                trace.borrow_mut().insert(batch);
+                trace.borrow_mut().trace.insert(batch);
             }
         }
     }
@@ -114,35 +114,41 @@ where T: Lattice+Clone+'static, Tr: Trace<K,V,T,R>, Tr::Batch: Batch<K,V,T,R> {
 }
 
 
-/// A `TraceReader` wrapper which tracks others interested in batches and progress.
+/// A `TraceReader` wrapper which can be imported into other dataflows.
+///
+/// The `TraceAgent` is the default trace type produced by `arranged`, and it can be extracted
+/// from the dataflow in which it was defined, and imported into other dataflows.
 pub struct TraceAgent<K, V, T, R, Tr> 
 where T: Lattice+Clone+'static, Tr: TraceReader<K,V,T,R> {
     phantom: ::std::marker::PhantomData<(K, V, R)>,
-    trace: Rc<RefCell<Tr>>,
+    trace: Rc<RefCell<TraceBox<K, V, T, R, Tr>>>,
     queues: Weak<RefCell<Vec<Weak<RefCell<VecDeque<(Vec<T>, Option<(T, Tr::Batch)>)>>>>>>,
-    stash: Vec<T>,
+    advance: Vec<T>,
+    through: Vec<T>,
 }
 
 impl<K, V, T, R, Tr> TraceReader<K, V, T, R> for TraceAgent<K, V, T, R, Tr> 
 where T: Lattice+Clone+'static, Tr: TraceReader<K,V,T,R> {
     type Batch = Tr::Batch;
     type Cursor = Tr::Cursor;
-    fn advance_by(&mut self, frontier: &[T]) { self.trace.borrow_mut().advance_by(frontier) }
+    fn advance_by(&mut self, frontier: &[T]) { 
+        self.trace.borrow_mut().adjust_advance_frontier(&self.advance[..], frontier);
+        self.advance.clear();
+        self.advance.extend(frontier.iter().cloned());
+    }
     fn advance_frontier(&mut self) -> &[T] { 
-        self.stash.clear();
-        self.stash.extend(self.trace.borrow_mut().advance_frontier().iter().cloned());
-        &self.stash[..]
-        // &self.trace.borrow_mut().advance_frontier() 
+        &self.advance[..]
     }
-    fn distinguish_since(&mut self, frontier: &[T]) { self.trace.borrow_mut().distinguish_since(frontier) }
+    fn distinguish_since(&mut self, frontier: &[T]) { 
+        self.trace.borrow_mut().adjust_through_frontier(&self.through[..], frontier);
+        self.through.clear();
+        self.through.extend(frontier.iter().cloned());
+    }
     fn distinguish_frontier(&mut self) -> &[T] { 
-        self.stash.clear();
-        self.stash.extend(self.trace.borrow_mut().distinguish_frontier().iter().cloned());
-        &self.stash[..]
-        // &self.trace.borrow_mut().distinguish_frontier() 
+        &self.through[..]
     }
-    fn cursor_through(&mut self, frontier: &[T]) -> Option<Tr::Cursor> { self.trace.borrow_mut().cursor_through(frontier) }
-    fn map_batches<F: FnMut(&Self::Batch)>(&mut self, f: F) { self.trace.borrow_mut().map_batches(f) }
+    fn cursor_through(&mut self, frontier: &[T]) -> Option<Tr::Cursor> { self.trace.borrow_mut().trace.cursor_through(frontier) }
+    fn map_batches<F: FnMut(&Self::Batch)>(&mut self, f: F) { self.trace.borrow_mut().trace.map_batches(f) }
 }
 
 impl<K, V, T, R, Tr> TraceAgent<K, V, T, R, Tr> 
@@ -151,14 +157,15 @@ where T: Lattice+Clone+'static, Tr: TraceReader<K,V,T,R> {
     /// Creates a new agent from a trace reader.
     pub fn new(trace: Tr) -> (Self, TraceWriter<K,V,T,R,Tr>) where Tr: Trace<K,V,T,R>, Tr::Batch: Batch<K,V,T,R> {
 
-        let trace = Rc::new(RefCell::new(trace));
+        let trace = Rc::new(RefCell::new(TraceBox::new(trace)));
         let queues = Rc::new(RefCell::new(Vec::new()));
 
         let reader = TraceAgent {
             phantom: ::std::marker::PhantomData,
             trace: trace.clone(),
             queues: Rc::downgrade(&queues),
-            stash: Vec::new(),
+            advance: trace.borrow().advance_frontiers.elements().to_vec(),
+            through: trace.borrow().through_frontiers.elements().to_vec(),
         };
 
         let writer = TraceWriter {
@@ -180,7 +187,7 @@ where T: Lattice+Clone+'static, Tr: TraceReader<K,V,T,R> {
         let mut new_queue = VecDeque::new();
 
         // add the existing batches from the trace
-        self.trace.borrow_mut().map_batches(|batch| new_queue.push_back((vec![T::default()], Some((T::default(), batch.clone())))));
+        self.trace.borrow_mut().trace.map_batches(|batch| new_queue.push_back((vec![T::default()], Some((T::default(), batch.clone())))));
 
         let reference = Rc::new(RefCell::new(new_queue));
 
@@ -208,6 +215,40 @@ where T: Lattice+Clone+'static, Tr: TraceReader<K,V,T,R> {
     /// of the collection is its current state, and updates occur from this point forward. The historical changes
     /// the collection experienced in the past are accumulated, and the distinctions from the initial collection 
     /// are no longer evident.
+    ///
+    /// The intended semantics are that the introduced collection is accumulated up to `self.advance_frontier()`.
+    /// If multiple workers have disparite frontiers, the collection is still loaded but it may be partial until
+    /// the upper bound of the collected frontiers, at which point it correctly tracks the source collection. The
+    /// intent is that such disagreements result in only transient divergence from the source collection, which 
+    /// can be worked around by the workers if required.
+    ///
+    /// #Examples
+    ///
+    /// The following fragment demonstrates the creation of a `TraceAgent` in one dataflow, and its importation 
+    /// into and use in a second dataflow. The behavior in the second dataflow should be identical to that in 
+    /// the first dataflow, except for progress that may have been made in the meantime. In this example, we do
+    /// not advance `trace`, and so the replay would be the full history.
+    ///
+    /// ```ignore
+    /// // define a collection, arrange, return trace.
+    /// let mut trace = worker.dataflow(|scope| {
+    ///     ...
+    ///     .arrange_by_key()
+    ///     .trace
+    /// });
+    ///
+    /// // do some work.
+    /// worker.step();
+    /// worker.step();    
+    /// 
+    /// // create a new dataflow, import, monitor trace.
+    /// let probe = worker.dataflow(|scope| {
+    ///     let arranged = trace.import(scope);
+    ///     arranged.join_arranged(&arranged)
+    ///             .inspect(|x| println!("{:?}", x))
+    ///             .probe()
+    /// });
+    /// ```
     pub fn import<G: Scope<Timestamp=T>>(&mut self, scope: &G) -> Arranged<G, K, V, R, TraceAgent<K, V, T, R, Tr>> where T: Timestamp {
 
         let queue = self.new_listener();
@@ -257,11 +298,17 @@ where T: Lattice+Clone+'static, Tr: TraceReader<K,V,T,R> {
 impl<K, V, T, R, Tr> Clone for TraceAgent<K, V, T, R, Tr>
 where T: Lattice+Clone+'static, Tr: TraceReader<K,V,T,R> {
     fn clone(&self) -> Self {
+
+        // increase counts for wrapped `TraceBox`.
+        self.trace.borrow_mut().adjust_advance_frontier(&[], &self.advance[..]);
+        self.trace.borrow_mut().adjust_through_frontier(&[], &self.through[..]);
+
         TraceAgent {
             phantom: ::std::marker::PhantomData,
             trace: self.trace.clone(),
             queues: self.queues.clone(),
-            stash: Vec::new(),
+            advance: self.advance.clone(),
+            through: self.through.clone(),
         }
     }
 }
