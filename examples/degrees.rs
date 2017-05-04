@@ -12,7 +12,7 @@ use rand::{Rng, SeedableRng, StdRng};
 use differential_dataflow::trace::Trace;
 use differential_dataflow::{Collection, AsCollection};
 use differential_dataflow::operators::*;
-use differential_dataflow::operators::join::JoinArranged;
+// use differential_dataflow::operators::join::JoinArranged;
 use differential_dataflow::operators::group::GroupArranged;
 use differential_dataflow::operators::arrange::{ArrangeByKey, ArrangeBySelf};
 use differential_dataflow::lattice::Lattice;
@@ -146,10 +146,10 @@ where G::Timestamp: Lattice+::std::hash::Hash+Ord {
         // restrict edges active vertices, return result
         edges.enter(&inner.scope())
              .arrange_by_key_hashed()
-             .join_arranged(&active, |k,v,_| (k.item.clone(), v.clone()))
+             .join_core(&active, |k,v,_| Some((k.item.clone(), v.clone())))
              .map(|(src,dst)| (dst,src))
              .arrange_by_key_hashed()
-             .join_arranged(&active, |k,v,_| (k.item.clone(), v.clone()))
+             .join_core(&active, |k,v,_| Some((k.item.clone(), v.clone())))
              .map(|(dst,src)| (src,dst))
     })
 }
