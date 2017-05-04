@@ -24,7 +24,7 @@ itertools="^0.6"
 
 [dependencies]
 abomonation="0.4.4"
-timely="0.0.16"
+timely="0.2.0"
 timely_sort="0.1.6"
 timely_communication="0.1.5"
 fnv="1.0.2"
