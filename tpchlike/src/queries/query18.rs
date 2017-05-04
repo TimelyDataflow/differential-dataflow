@@ -58,6 +58,8 @@ use ::Collections;
 pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp> 
 where G::Timestamp: Lattice+Ord {
 
+    println!("TODO: Q18 could use filter trace wrapper");
+
     let orders =
     collections
         .orders()
@@ -71,9 +73,12 @@ where G::Timestamp: Lattice+Ord {
         .as_collection()
         .arrange(DefaultKeyTrace::new())
         .group_arranged(|_k,s,t| t.push((s[0].1, 1)), DefaultValTrace::new())
-        .join_core(&orders, |k,v1,v2| Some((k.item.clone(), v1.clone(), v2.clone())))
-        .filter(|x| x.1 > 300)
-        .map(|(okey, quantity, (custkey, date, price))| (custkey, (okey, date, price, quantity)))
+        .join_core(&orders, |&o_key, &quant, &(cust_key, date, price)| 
+            if quant > 300 { 
+                Some((cust_key, (o_key, date, price, quant)))
+            }
+            else { None }
+        )
         .join_u(&collections.customers().map(|c| (c.cust_key, c.name.to_string())))
         .probe()
 }

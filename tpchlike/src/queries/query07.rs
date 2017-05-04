@@ -63,6 +63,8 @@ fn starts_with(source: &[u8], query: &[u8]) -> bool {
 pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp> 
 where G::Timestamp: Lattice+Ord {
 
+    println!("TODO: Q07 could use `join_core` to fuse map and filter");
+
     let nations =
     collections
         .nations()

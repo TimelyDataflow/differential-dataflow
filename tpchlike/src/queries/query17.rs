@@ -36,13 +36,17 @@ use ::Collections;
 pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp> 
 where G::Timestamp: Lattice+Ord {
 
-    println!("TODO: query 17 gets a global count with key 0u8, rather than ().");
+    println!("TODO: Q17 gets a global count with key 0u8, rather than ().");
 
     let parts = 
     collections
         .parts()   // We fluff out search strings to have the right lengths. \\
-        .filter(|x| &x.brand == b"Brand#2300" && &x.container == b"MED BOX000")
-        .map(|x| x.part_key);
+        .flat_map(|x| 
+            if &x.brand == b"Brand#2300" && &x.container == b"MED BOX000" {
+                Some(x.part_key)
+            }
+            else { None }
+        );
 
     collections
         .lineitems()

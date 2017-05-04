@@ -39,6 +39,6 @@ Here are some initial measurements on the scale factor 1 dataset (about 1GB of d
 | [query19](./src/queries/query19.rs) |  0.43s |  0.23s |   0.22s |      6,201,215 |       28.22M/s |   1.95M/s |
 | [query20](./src/queries/query20.rs) |  1.45s |  0.86s |   0.72s |      6,811,215 |        9.43M/s |     977/s |
 | [query21](./src/queries/query21.rs) |  8.81s |  6.97s |   5.82s |      7,511,240 |        1.29M/s | 836.80K/s |
-| [query22](./src/queries/query22.rs) | 22.16s | 29.03s |  35.80s |      1,650,000 |       46.08K/s |     189/s |
+| [query22](./src/queries/query22.rs) |  7.67s |  8.27s |   9.50s |      1,650,000 |      173.66K/s |     189/s |
 
 **PLEASE NOTE**: These times are the reported running times of the code in the repository, which may or may not compute the intended quantities. It is very possible (likely, even) that I have botched some or all of the query implementations. I'm not validating the results at the moment, as I don't have much to validate against, but if you think you see bugs (or want to help validating) drop me a line! Please don't just go and use these measurements as "truth" until we find out if I am actually computing the correct answers.

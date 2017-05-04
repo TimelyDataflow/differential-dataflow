@@ -47,6 +47,8 @@ use ::Collections;
 pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp> 
 where G::Timestamp: Lattice+Ord {
 
+    println!("TODO: Q04 could use count_u for [u8;15] 'priority'");
+
     let lineitems = 
     collections
         .lineitems()
@@ -63,8 +65,7 @@ where G::Timestamp: Lattice+Ord {
             else { None }
         )
         .arrange(DefaultValTrace::new())
-        .join_core(&lineitems, |k,v,_| Some((k.item.clone(), v.clone())))
-        .map(|o| o.1)
+        .join_core(&lineitems, |_k,v,_| Some(v.clone()))
         .count()
         .probe()
 }

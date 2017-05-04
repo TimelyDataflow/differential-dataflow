@@ -66,7 +66,7 @@ where G::Timestamp: Lattice+Ord {
         .suppliers()
         .map(|x| (x.nation_key, x.supp_key))
         .join_u(&nations)
-        .map(|(nat, supp, name)| (supp, (nat, name)));
+        .map(|(_nat, supp, name)| (supp, name));
 
     let customers = 
     collections
@@ -93,7 +93,7 @@ where G::Timestamp: Lattice+Ord {
 
     suppliers
         .semijoin_u(&lineitems)
-        .map(|(_supp, (_nat, name))| name)
+        .map(|(_supp, name)| name)
         .count()
         .probe()
 }

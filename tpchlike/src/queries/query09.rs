@@ -57,6 +57,8 @@ fn substring(source: &[u8], query: &[u8]) -> bool {
 pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp> 
 where G::Timestamp: Lattice+Ord {
 
+    println!("TODO: Q09 join order may be pessimal; could pivot to put lineitems last");
+
     let parts =
     collections
         .parts()

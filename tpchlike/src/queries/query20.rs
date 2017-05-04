@@ -4,7 +4,13 @@ use timely::dataflow::operators::probe::Handle as ProbeHandle;
 
 use differential_dataflow::AsCollection;
 use differential_dataflow::operators::*;
+use differential_dataflow::operators::arrange::Arrange;
+use differential_dataflow::operators::group::GroupArranged;
 use differential_dataflow::lattice::Lattice;
+use differential_dataflow::trace::Trace;
+use differential_dataflow::trace::implementations::ord::OrdKeySpine as DefaultKeyTrace;
+use differential_dataflow::trace::implementations::ord::OrdValSpine as DefaultValTrace;
+use differential_dataflow::hashable::UnsignedWrapper;
 
 use ::Collections;
 use ::types::create_date;
@@ -72,19 +78,24 @@ where G::Timestamp: Lattice+Ord {
         )
         .semijoin_u(&partkeys)
         .inner
-        .map(|(l, t, d)| (((l.0 as u64) << 32) + (l.1).0 as u64, t, (l.1).1 as isize * d))
+        .map(|(l, t, d)| ((UnsignedWrapper::from(((l.0 as u64) << 32) + (l.1).0 as u64), ()), t, (l.1).1 as isize * d))
         .as_collection()
-        .count();
+        .arrange(DefaultKeyTrace::new())
+        .group_arranged(|_k,s,t| t.push((s[0].1, 1)), DefaultValTrace::new());
 
     let suppliers = 
     collections
         .partsupps()
         .map(|ps| (ps.part_key, (ps.supp_key, ps.availqty)))
         .semijoin_u(&partkeys)
-        .map(|(part_key, (supp_key, avail))| (((part_key as u64) << 32) + (supp_key as u64), avail))
-        .join_u(&available)   // TODO: these could be fused into a u64, for join_u.
-        .filter(|&(_, avail1, avail2)| avail1 > avail2 as i32 / 2)
-        .map(|(part_supp_fuse, _, _)| (part_supp_fuse & (u32::max_value() as u64)) as usize);
+        .map(|(part_key, (supp_key, avail))| (UnsignedWrapper::from(((part_key as u64) << 32) + (supp_key as u64)), avail))
+        .arrange(DefaultValTrace::new())
+        .join_core(&available, |&key, &avail1, &avail2| 
+            if avail1 > avail2 as i32 / 2 {
+                Some((key.item & (u32::max_value() as u64)) as usize)
+            }
+            else { None }
+        );
 
     let nations = collections.nations.filter(|n| starts_with(&n.name, b"CANADA")).map(|n| (n.nation_key, n.name));
 
