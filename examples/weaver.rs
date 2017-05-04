@@ -6,7 +6,6 @@ extern crate graph_map;
 
 use rand::{Rng, SeedableRng, StdRng};
 
-use timely::order::PartialOrder;
 use timely::dataflow::*;
 use timely::dataflow::operators::*;
 

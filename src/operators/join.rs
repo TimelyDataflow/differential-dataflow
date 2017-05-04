@@ -5,6 +5,7 @@
 //! + (b * c), and if this is not equal to the former term, little is known about the actual output.
 use std::fmt::Debug;
 use std::ops::Mul;
+use std::cmp::Ordering;
 
 use timely::progress::Timestamp;
 use timely::dataflow::Scope;
@@ -17,17 +18,19 @@ use timely::dataflow::operators::OutputHandle;
 use timely::dataflow::channels::pushers::tee::Tee;
 
 
-use hashable::{Hashable, UnsignedWrapper};
+use hashable::{Hashable, UnsignedWrapper, OrdWrapper};
 use ::{Data, Diff, Collection, AsCollection};
 use lattice::Lattice;
 use operators::arrange::{Arrange, Arranged, ArrangeByKey, ArrangeBySelf};
-use trace::{Batch, Cursor, Trace, consolidate};
+use trace::{BatchReader, Cursor, Trace, consolidate};
 use operators::ValueHistory2;
 
 // use trace::implementations::hash::HashValSpine as DefaultValTrace;
 // use trace::implementations::hash::HashKeySpine as DefaultKeyTrace;
 use trace::implementations::ord::OrdValSpine as DefaultValTrace;
 use trace::implementations::ord::OrdKeySpine as DefaultKeyTrace;
+
+use trace::TraceReader;
 
 /// Join implementations for `(key,val)` data.
 pub trait Join<G: Scope, K: Data, V: Data, R: Diff> {
@@ -188,7 +191,7 @@ where
     }
     fn antijoin_u<R2>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), R>
     where K: Unsigned+Copy, R2: Diff, R: Mul<R2, Output=R> {
-        self.concat(&self.semijoin(other).negate())
+        self.concat(&self.semijoin_u(other).negate())
     }
 }
 
@@ -208,8 +211,8 @@ pub trait JoinArranged<G: Scope, K: 'static, V: 'static, R: Diff> where G::Times
     fn join_arranged<V2,T2,R2,D,L> (&self, stream2: &Arranged<G,K,V2,R2,T2>, result: L) -> Collection<G,D,<R as Mul<R2>>::Output>
     where 
         V2: Ord+Clone+Debug+'static,
-        T2: Trace<K, V2, G::Timestamp, R2>+'static,
-        T2::Batch: 'static,
+        T2: TraceReader<K, V2, G::Timestamp, R2>+Clone+'static,
+        T2::Batch: BatchReader<K, V2, G::Timestamp, R2>+'static,
         R2: Diff,
         R: Mul<R2>,
         <R as Mul<R2>>::Output: Diff,
@@ -217,20 +220,47 @@ pub trait JoinArranged<G: Scope, K: 'static, V: 'static, R: Diff> where G::Times
         L: Fn(&K,&V,&V2)->D+'static;
 }
 
+
+impl<G, K, V, R> JoinArranged<G, OrdWrapper<K>, V, R> for Collection<G, (K, V), R>
+where
+    G: Scope, 
+    K: Data+Default+Hashable, 
+    V: Data,
+    R: Diff,
+    G::Timestamp: Lattice+Ord,
+{
+    fn join_arranged<V2,T2,R2,D,L> (&self, stream2: &Arranged<G,OrdWrapper<K>,V2,R2,T2>, result: L) -> Collection<G,D,<R as Mul<R2>>::Output>
+    where 
+        V2: Ord+Clone+Debug+'static,
+        T2: TraceReader<OrdWrapper<K>, V2, G::Timestamp, R2>+Clone+'static,
+        T2::Batch: BatchReader<OrdWrapper<K>, V2, G::Timestamp, R2>+'static,
+        R2: Diff,
+        R: Mul<R2>,
+        <R as Mul<R2>>::Output: Diff,
+        D: Data,
+        L: Fn(&OrdWrapper<K>,&V,&V2)->D+'static {
+
+        self.arrange_by_key_hashed()
+            .join_arranged(stream2, result)
+
+    }
+}
+
 impl<G, K, V, R1, T1> JoinArranged<G, K, V, R1> for Arranged<G,K,V,R1,T1> 
     where 
+        K: Ord,
         G: Scope, 
+        G::Timestamp: Lattice+Ord+Debug,
         K: Debug+Eq+'static, 
         V: Ord+Clone+Debug+'static, 
         R1: Diff,
-        T1: Trace<K,V,G::Timestamp, R1>+'static,
-        G::Timestamp: Lattice+Ord+Debug,
-        T1::Batch: 'static+Debug {
+        T1: TraceReader<K,V,G::Timestamp, R1>+Clone+'static,
+        T1::Batch: BatchReader<K,V,G::Timestamp,R1>+'static+Debug {
     fn join_arranged<V2,T2,R2,D,L>(&self, other: &Arranged<G,K,V2,R2,T2>, result: L) -> Collection<G,D,<R1 as Mul<R2>>::Output> 
     where 
         V2: Ord+Clone+Debug+'static,
-        T2: Trace<K,V2,G::Timestamp,R2>+'static,
-        T2::Batch: 'static,
+        T2: TraceReader<K,V2,G::Timestamp,R2>+Clone+'static,
+        T2::Batch: BatchReader<K, V2, G::Timestamp, R2>+'static,
         R2: Diff,
         R1: Mul<R2>,
         <R1 as Mul<R2>>::Output: Diff,
@@ -238,16 +268,16 @@ impl<G, K, V, R1, T1> JoinArranged<G, K, V, R1> for Arranged<G,K,V,R1,T1>
         L: Fn(&K,&V,&V2)->D+'static {
 
         // handles to shared trace data structures.
-        let mut trace1 = Some(self.new_handle());
-        let mut trace2 = Some(other.new_handle());
+        let mut trace1 = Some(self.trace.clone());
+        let mut trace2 = Some(other.trace.clone());
 
         // acknowledged frontier for each input.
         let mut acknowledged1 = vec![G::Timestamp::min()];
         let mut acknowledged2 = vec![G::Timestamp::min()];
 
         // deferred work of batches from each input.
-        let mut todo1: Vec<Deferred<K,V2,V,G::Timestamp,R2,R1,<R1 as Mul<R2>>::Output,T2::Cursor,<T1::Batch as Batch<K,V,G::Timestamp,R1>>::Cursor,_>> = Vec::new();
-        let mut todo2: Vec<Deferred<K,V,V2,G::Timestamp,R1,R2,<R1 as Mul<R2>>::Output,T1::Cursor,<T2::Batch as Batch<K,V2,G::Timestamp,R2>>::Cursor,_>> = Vec::new();
+        let mut todo1 = Vec::new();
+        let mut todo2 = Vec::new();
 
         self.stream.binary_notify(&other.stream, Pipeline, Pipeline, "Join", vec![], move |input1, input2, output, notificator| {
 
@@ -260,7 +290,7 @@ impl<G, K, V, R1, T1> JoinArranged<G, K, V, R1> for Arranged<G,K,V,R1,T1>
 
             // drain input 1, prepare work.
             input1.for_each(|capability, data| {
-                if let Some(ref trace2) = trace2 {
+                if let Some(ref mut trace2) = trace2 {
                     for batch1 in data.drain(..) {
                         let trace2_cursor = trace2.cursor_through(&acknowledged2[..]).unwrap();
                         let batch1_cursor = batch1.item.cursor();
@@ -273,7 +303,7 @@ impl<G, K, V, R1, T1> JoinArranged<G, K, V, R1> for Arranged<G,K,V,R1,T1>
 
             // drain input 2, prepare work.
             input2.for_each(|capability, data| {
-                if let Some(ref trace1) = trace1 {
+                if let Some(ref mut trace1) = trace1 {
                     for batch2 in data.drain(..) {
                         let trace1_cursor = trace1.cursor_through(&acknowledged1[..]).unwrap();
                         let batch2_cursor = batch2.item.cursor();
@@ -338,11 +368,12 @@ where
     batch: C2,
     capability: Capability<T>,
     mult: M,
+    done: bool,
 }
 
 impl<K, V1, V2, T, R1, R2, R3, C1, C2, M> Deferred<K, V1, V2, T, R1, R2, R3, C1, C2, M>
 where
-    K: Debug+Eq,
+    K: Ord+Debug+Eq,
     V1: Ord+Clone+Debug,
     V2: Ord+Clone+Debug,
     T: Timestamp+Lattice+Ord+Debug,
@@ -360,11 +391,12 @@ where
             batch: batch,
             capability: capability,
             mult: mult,
+            done: false,
         }
     }
 
     fn work_remains(&self) -> bool { 
-        self.batch.key_valid()
+        !self.done
     }
 
     /// Process keys until at least `limit` output tuples produced, or the work is exhausted.
@@ -384,28 +416,35 @@ where
         let mut temp = Vec::new();
         let mut thinker = JoinThinker::<V1, V2, T, R1, R2>::new();
 
-        while batch.key_valid() && effort < *fuel {
+        while batch.key_valid() && trace.key_valid() && effort < *fuel {
 
-            trace.seek_key(batch.key());
-            if trace.key_valid() && trace.key() == batch.key() {
+            // println!("{:?} v {:?}", batch.key(), trace.key());
 
-                thinker.history1.edits.load(trace, |time| time.join(&meet));
-                thinker.history2.edits.load(batch, |time| time.clone());
+            match trace.key().cmp(batch.key()) {
+                Ordering::Less => trace.seek_key(batch.key()),
+                Ordering::Greater => batch.seek_key(trace.key()),
+                Ordering::Equal => {
 
-                // populate `temp` with the results in the best way we know how.
-                thinker.think(|v1,v2,t,r1,r2| temp.push(((logic(batch.key(), v1, v2), t), mult(r1,r2))));
+                    thinker.history1.edits.load(trace, |time| time.join(&meet));
+                    thinker.history2.edits.load(batch, |time| time.clone());
 
-                consolidate(&mut temp, 0);
+                    // populate `temp` with the results in the best way we know how.
+                    thinker.think(|v1,v2,t,r1,r2| temp.push(((logic(batch.key(), v1, v2), t), mult(r1,r2))));
 
-                effort += temp.len();
-                for ((d, t), r) in temp.drain(..) {
-                    session.give((d, t, r));
+                    consolidate(&mut temp, 0);
+
+                    effort += temp.len();
+                    for ((d, t), r) in temp.drain(..) {
+                        session.give((d, t, r));
+                    }
+
+                    batch.step_key();
+                    trace.step_key();
                 }
-
             }
-
-            batch.step_key();
         }
+
+        self.done = !batch.key_valid() || !trace.key_valid();
 
         if effort > *fuel { *fuel = 0; }
         else              { *fuel -= effort; }

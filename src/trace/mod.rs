@@ -11,6 +11,7 @@ pub mod cursor;
 pub mod description;
 pub mod implementations;
 pub mod layers;
+pub mod wrappers;
 
 use ::Diff;
 use ::lattice::Lattice;
@@ -32,38 +33,21 @@ pub use self::description::Description;
 //
 //  We could just start by cloning things. Worry about wrapping references later on.
 
-
-
-/// An append-only collection of `(key, val, time, diff)` tuples.
+/// A trace whose contents may be read.
 ///
-/// The trace must pretend to look like a collection of `(Key, Val, Time, isize)` tuples, but is permitted
-/// to introduce new types `KeyRef`, `ValRef`, and `TimeRef` which can be dereference to the types above.
-///
-/// The trace must be constructable from, and navigable by the `Key`, `Val`, `Time` types, but does not need
-/// to return them.
-pub trait Trace<Key, Val, Time, R> {
+/// This is a restricted interface to the more general `Trace` trait, which extends this trait with further methods
+/// to update the contents of the trace. These methods are used to examine the contents, and to update the reader's
+/// capabilities (which may release restrictions on the mutations to the underlying trace and cause work to happen).
+pub trait TraceReader<Key, Val, Time, R> {
 
 	/// The type of an immutable collection of updates.
-	type Batch: Batch<Key, Val, Time, R>+Clone+'static;
+	type Batch: BatchReader<Key, Val, Time, R>+Clone+'static;
 
 	/// The type used to enumerate the collections contents.
 	type Cursor: Cursor<Key, Val, Time, R>;
 
-	/// Allocates a new empty trace.
-	fn new() -> Self;
-
-	/// Introduces a batch of updates to the trace.
-	///
-	/// Batches describe the time intervals they contain, and they should be added to the trace in contiguous
-	/// intervals. If a batch arrives with a lower bound that does not equal the upper bound of the most recent
-	/// addition, the trace will add an empty batch. It is an error to then try to populate that region of time.
-	///
-	/// This restriction could be relaxed, especially if we discover ways in which batch interval order could 
-	/// commute. For now, the trace should complain, to the extent that it cares about contiguous intervals.
-	fn insert(&mut self, batch: Self::Batch);
-
-	/// Acquires a cursor to the collection's contents.
-	fn cursor(&self) -> Self::Cursor {
+	/// Provides a cursor over updates contained in the trace.
+	fn cursor(&mut self) -> Self::Cursor {
 		if let Some(cursor) = self.cursor_through(&[]) {
 			cursor
 		}
@@ -79,7 +63,7 @@ pub trait Trace<Key, Val, Time, R> {
 	/// the trace, and (ii) the trace has not been advanced beyond `upper`. Practically, the implementation should
 	/// be expected to look for a "clean cut" using `upper`, and if it finds such a cut can return a cursor. This
 	/// should allow `upper` such as `&[]` as used by `self.cursor()`, though it is difficult to imagine other uses.
-	fn cursor_through(&self, upper: &[Time]) -> Option<Self::Cursor>;
+	fn cursor_through(&mut self, upper: &[Time]) -> Option<Self::Cursor>;
 
 	/// Advances the frontier of times the collection must be correctly accumulable through.
 	///
@@ -88,6 +72,13 @@ pub trait Trace<Key, Val, Time, R> {
 	/// or equal to some element of `frontier` may no longer correctly accumulate, so do not advance a trace unless
 	/// you are quite sure you no longer require the distinction.
 	fn advance_by(&mut self, frontier: &[Time]);
+
+	/// Reports the frontier from which all time comparisions should be accurate.
+	///
+	/// Times that are not greater or equal to some element of the advance frontier may accumulate inaccurately as
+	/// the trace may have lost the ability to distinguish between such times. Accumulations are only guaranteed to
+	/// be accurate from the frontier onwards.
+	fn advance_frontier(&mut self) -> &[Time];
 
 	/// Advances the frontier that may be used in `cursor_through`.
 	///
@@ -99,20 +90,54 @@ pub trait Trace<Key, Val, Time, R> {
 	/// disables the use of `cursor_through` with any parameter other than `&[]`, which is the behavior of `cursor`.
 	fn distinguish_since(&mut self, frontier: &[Time]);
 
+	/// Reports the frontier from which the collection may be subsetted.
+	///
+	/// The semantics are less elegant here, but the underlying trace will not merge batches in advance of this 
+	/// frontier, which ensures that operators can extract the subset of the trace at batch boundaries from this
+	/// frontier onward. These boundaries may be used in `cursor_through`, whereas boundaries not in advance of 
+	/// this frontier are not guaranteed to return a cursor.
+	fn distinguish_frontier(&mut self) -> &[Time];
+
 	/// Maps some logic across the batches the collection manages.
 	///
 	/// This is currently used only to extract historical data to prime late-starting operators who want to reproduce
 	/// the stream of batches moving past the trace. It could also be a fine basis for a default implementation of the
 	/// cursor methods, as they (by default) just move through batches accumulating cursors into a cursor list.
-	fn map_batches<F: FnMut(&Self::Batch)>(&self, f: F);
+	fn map_batches<F: FnMut(&Self::Batch)>(&mut self, f: F);
+
 }
 
-/// An immutable collection of updates.
-pub trait Batch<K, V, T, R> where Self: ::std::marker::Sized {
-	/// A type used to assemble batches from disordered updates.
-	type Batcher: Batcher<K, V, T, R, Self>;
-	/// A type used to assemble batches from ordered update sequences.
-	type Builder: Builder<K, V, T, R, Self>;
+/// An append-only collection of `(key, val, time, diff)` tuples.
+///
+/// The trace must pretend to look like a collection of `(Key, Val, Time, isize)` tuples, but is permitted
+/// to introduce new types `KeyRef`, `ValRef`, and `TimeRef` which can be dereference to the types above.
+///
+/// The trace must be constructable from, and navigable by the `Key`, `Val`, `Time` types, but does not need
+/// to return them.
+pub trait Trace<Key, Val, Time, R> : TraceReader<Key, Val, Time, R> where <Self as TraceReader<Key, Val, Time, R>>::Batch: Batch<Key, Val, Time, R> {
+
+	/// Allocates a new empty trace.
+	fn new() -> Self;
+
+	/// Introduces a batch of updates to the trace.
+	///
+	/// Batches describe the time intervals they contain, and they should be added to the trace in contiguous
+	/// intervals. If a batch arrives with a lower bound that does not equal the upper bound of the most recent
+	/// addition, the trace will add an empty batch. It is an error to then try to populate that region of time.
+	///
+	/// This restriction could be relaxed, especially if we discover ways in which batch interval order could 
+	/// commute. For now, the trace should complain, to the extent that it cares about contiguous intervals.
+	fn insert(&mut self, batch: Self::Batch);
+}
+
+/// A batch of updates whose contents may be read.
+///
+/// This is a restricted interface to batches of updates, which support the reading of the batch's contents,
+/// but do not expose ways to construct the batches. This trait is appropriate for views of the batch, and is
+/// especially useful for views derived from other sources in ways that prevent the construction of batches
+/// from the type of data in the view (for example, filtered views, or views with extended time coordinates).
+pub trait BatchReader<K, V, T, R> {
+
 	/// The type used to enumerate the batch's contents.
 	type Cursor: Cursor<K, V, T, R>;
 	/// Acquires a cursor to the batch's contents.
@@ -121,16 +146,27 @@ pub trait Batch<K, V, T, R> where Self: ::std::marker::Sized {
 	fn len(&self) -> usize;
 	/// Describes the times of the updates in the batch.
 	fn description(&self) -> &Description<T>;
+
+	/// All times in the batch are greater or equal to an element of `lower`.
+	fn lower(&self) -> &[T] { self.description().lower() }
+	/// All times in the batch are not greater or equal to any element of `upper`.
+	fn upper(&self) -> &[T] { self.description().upper() }
+
+}
+
+/// An immutable collection of updates.
+pub trait Batch<K, V, T, R> : BatchReader<K, V, T, R> where Self: ::std::marker::Sized {
+	/// A type used to assemble batches from disordered updates.
+	type Batcher: Batcher<K, V, T, R, Self>;
+	/// A type used to assemble batches from ordered update sequences.
+	type Builder: Builder<K, V, T, R, Self>;
+
 	/// Merges two consecutive batches.
 	///
 	/// Panics if `self.upper()` does not equal `other.lower()`. This is almost certainly a logic bug,
 	/// as the resulting batch does not have a contiguous description. If you would like to put an empty
 	/// interval between the two, you can create an empty interval and do two merges.
 	fn merge(&self, other: &Self) -> Self;
-	/// All times in the batch are greater or equal to an element of `lower`.
-	fn lower(&self) -> &[T] { self.description().lower() }
-	/// All times in the batch are not greater or equal to any element of `upper`.
-	fn upper(&self) -> &[T] { self.description().upper() }
 	/// Advance times to `frontier` creating a new batch.
 	fn advance_ref(&self, frontier: &[T]) -> Self where K: Ord+Clone, V: Ord+Clone, T: Lattice+Ord+Clone, R: Diff {
 

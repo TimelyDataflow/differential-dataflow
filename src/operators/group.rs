@@ -24,6 +24,7 @@
 //! })
 //! ```
 
+// use std::rc::Rc;
 use std::fmt::Debug;
 use std::default::Default;
 
@@ -37,15 +38,17 @@ use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Capability;
 use timely_sort::Unsigned;
 
-use operators::arrange::{Arrange, Arranged, ArrangeByKey, ArrangeBySelf, BatchWrapper, TraceHandle};
+use operators::arrange::{Arrange, Arranged, ArrangeByKey, ArrangeBySelf, BatchWrapper, TraceAgent};
 use lattice::Lattice;
-use trace::{Batch, Cursor, Trace, Builder};
+use trace::{Batch, BatchReader, Cursor, Trace, Builder};
 use trace::cursor::cursor_list::CursorList;
 // use trace::implementations::hash::HashValSpine as DefaultValTrace;
 // use trace::implementations::hash::HashKeySpine as DefaultKeyTrace;
 use trace::implementations::ord::OrdValSpine as DefaultValTrace;
 use trace::implementations::ord::OrdKeySpine as DefaultKeyTrace;
 
+use trace::TraceReader;
+// use trace::wrappers::rc::TraceRc;
 
 /// Extension trait for the `group` differential dataflow method.
 pub trait Group<G: Scope, K: Data, V: Data, R: Diff> where G::Timestamp: Lattice+Ord {
@@ -135,11 +138,12 @@ pub trait GroupArranged<G: Scope, K: Data, V: Data, R: Diff> where G::Timestamp:
     ///
     /// This method is used by the more ergonomic `group`, `distinct`, and `count` methods, although
     /// it can be very useful if one needs to manually attach and re-use existing arranged collections.
-    fn group_arranged<L, V2, T2, R2>(&self, logic: L, empty: T2) -> Arranged<G, K, V2, R2, T2>
+    fn group_arranged<L, V2, T2, R2>(&self, logic: L, empty: T2) -> Arranged<G, K, V2, R2, TraceAgent<K, V2, G::Timestamp, R2, T2>>
         where
             V2: Data,
             R2: Diff,
             T2: Trace<K, V2, G::Timestamp, R2>+'static,
+            T2::Batch: Batch<K, V2, G::Timestamp, R2>,
             L: Fn(&K, &[(V, R)], &mut Vec<(V2, R2)>)+'static
             ; 
 }
@@ -147,18 +151,24 @@ pub trait GroupArranged<G: Scope, K: Data, V: Data, R: Diff> where G::Timestamp:
 impl<G: Scope, K: Data, V: Data, T1, R: Diff> GroupArranged<G, K, V, R> for Arranged<G, K, V, R, T1>
 where 
     G::Timestamp: Lattice+Ord,
-    T1: Trace<K, V, G::Timestamp, R>+'static {
+    T1: TraceReader<K, V, G::Timestamp, R>+Clone+'static,
+    T1::Batch: BatchReader<K, V, G::Timestamp, R> {
         
-    fn group_arranged<L, V2, T2, R2>(&self, logic: L, empty: T2) -> Arranged<G, K, V2, R2, T2>
+    fn group_arranged<L, V2, T2, R2>(&self, logic: L, empty: T2) -> Arranged<G, K, V2, R2, TraceAgent<K, V2, G::Timestamp, R2, T2>>
         where 
             V2: Data,
             R2: Diff,
             T2: Trace<K, V2, G::Timestamp, R2>+'static,
+            T2::Batch: Batch<K, V2, G::Timestamp, R2>,
             L: Fn(&K, &[(V, R)], &mut Vec<(V2, R2)>)+'static {
 
-        let mut source_trace = self.new_handle();
-        let mut output_trace = TraceHandle::new(empty, &[G::Timestamp::min()], &[G::Timestamp::min()]);
-        let result_trace = output_trace.clone();
+        let mut source_trace = self.trace.clone();
+
+        let (mut output_reader, mut output_writer) = TraceAgent::new(empty);
+        // let queues = Rc::downgrade(&agent.queues);
+
+        // let mut output_trace = TraceRc::make_from(agent).0;
+        let result_trace = output_reader.clone();
 
         // let mut thinker1 = history_replay_prior::HistoryReplayer::<V, V2, G::Timestamp, R, R2>::new();
         let mut thinker = history_replay::HistoryReplayer::<V, V2, G::Timestamp, R, R2>::new();
@@ -288,11 +298,11 @@ where
                 // earlier `upper_received` to avoid antagonizing the trace which may end up with `upper_limit`
                 // cutting through a single (largely empty, at least near `upper_limit`) batch. 
                 source_trace.distinguish_since(&upper_received[..]);
-                output_trace.distinguish_since(&upper_received[..]);
+                output_reader.distinguish_since(&upper_received[..]);
 
                 // cursors for navigating input and output traces.
                 let mut source_cursor: T1::Cursor = source_trace.cursor_through(&upper_received[..]).unwrap();
-                let mut output_cursor: T2::Cursor = output_trace.cursor(); // TODO: this panicked when as above; WHY???
+                let mut output_cursor: T2::Cursor = output_reader.cursor(); // TODO: this panicked when as above; WHY???
                 let mut batch_cursor = CursorList::new(batch_cursors);
 
                 // // The only purpose of `lower_received` was to allow slicing off old input.
@@ -419,9 +429,14 @@ where
 
                     if lower_issued != local_upper {
                         let batch = builder.done(&lower_issued[..], &local_upper[..], &lower_issued[..]);
-                        lower_issued = local_upper;
                         output.session(&capabilities[index]).give(BatchWrapper { item: batch.clone() });
-                        output_trace.wrapper.borrow_mut().trace.insert(batch);
+
+                        output_writer.seal(&local_upper[..], Some((capabilities[index].time().clone(), batch)));
+
+                        // use the trace agent to insert the batch and notify any listeners.
+                        // output_trace.wrapper.borrow_mut().trace.insert_at(&local_upper[..], Some((capabilities[index].time().clone(), batch)));
+
+                        lower_issued = local_upper;
                     }
                 }
 
@@ -449,6 +464,9 @@ where
                 }
                 capabilities = new_capabilities;
 
+                output_writer.seal(&upper_limit[..], None);
+                // output_trace.wrapper.borrow_mut().trace.insert_at(&upper_limit[..], None);
+
     // let mut ul = upper_limit.clone();
     // ul.sort();
 
@@ -460,7 +478,7 @@ where
             // this frontier to compare against historical times, so we should allow the trace to start
             // compacting batches by advancing times.
             source_trace.advance_by(&upper_limit[..]);
-            output_trace.advance_by(&upper_limit[..]);
+            output_reader.advance_by(&upper_limit[..]);
 
         });
 

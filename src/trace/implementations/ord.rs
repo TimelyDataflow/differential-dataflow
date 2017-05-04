@@ -20,7 +20,7 @@ use trace::layers::ordered::{OrderedLayer, OrderedBuilder, OrderedCursor};
 use trace::layers::unordered::{UnorderedLayer, UnorderedBuilder, UnorderedCursor};
 
 use lattice::Lattice;
-use trace::{Batch, Builder, Cursor};
+use trace::{Batch, BatchReader, Builder, Cursor};
 use trace::description::Description;
 
 use super::spine::Spine;
@@ -41,16 +41,20 @@ pub struct OrdValBatch<K: Ord+Hashable, V: Ord, T: Lattice, R> {
 	pub desc: Description<T>,
 }
 
-impl<K, V, T, R> Batch<K, V, T, R> for OrdValBatch<K, V, T, R> 
+impl<K, V, T, R> BatchReader<K, V, T, R> for OrdValBatch<K, V, T, R> 
 where K: Ord+Clone+Hashable, V: Ord+Clone, T: Lattice+Ord+Clone, R: Diff {
-	type Batcher = RadixBatcher<K, V, T, R, Self>;
-	type Builder = OrdValBuilder<K, V, T, R>;
 	type Cursor = OrdValCursor<K, V, T, R>;
 	fn cursor(&self) -> Self::Cursor { 
 		OrdValCursor { cursor: self.layer.cursor() } 
 	}
 	fn len(&self) -> usize { self.layer.tuples() }
 	fn description(&self) -> &Description<T> { &self.desc }
+}
+
+impl<K, V, T, R> Batch<K, V, T, R> for OrdValBatch<K, V, T, R> 
+where K: Ord+Clone+Hashable, V: Ord+Clone, T: Lattice+Ord+Clone, R: Diff {
+	type Batcher = RadixBatcher<K, V, T, R, Self>;
+	type Builder = OrdValBuilder<K, V, T, R>;
 	fn merge(&self, other: &Self) -> Self {
 
 		// Things are horribly wrong if this is not true.
@@ -153,16 +157,20 @@ pub struct OrdKeyBatch<K: Ord+Hashable, T: Lattice, R> {
 	pub desc: Description<T>,
 }
 
-impl<K, T, R> Batch<K, (), T, R> for OrdKeyBatch<K, T, R> 
+impl<K, T, R> BatchReader<K, (), T, R> for OrdKeyBatch<K, T, R> 
 where K: Ord+Clone+Hashable, T: Lattice+Ord+Clone, R: Diff {
-	type Batcher = RadixBatcher<K, (), T, R, Self>;
-	type Builder = OrdKeyBuilder<K, T, R>;
 	type Cursor = OrdKeyCursor<K, T, R>;
 	fn cursor(&self) -> Self::Cursor { 
 		OrdKeyCursor { empty: (), valid: true, cursor: self.layer.cursor() } 
 	}
 	fn len(&self) -> usize { self.layer.tuples() }
 	fn description(&self) -> &Description<T> { &self.desc }
+}
+
+impl<K, T, R> Batch<K, (), T, R> for OrdKeyBatch<K, T, R> 
+where K: Ord+Clone+Hashable, T: Lattice+Ord+Clone, R: Diff {
+	type Batcher = RadixBatcher<K, (), T, R, Self>;
+	type Builder = OrdKeyBuilder<K, T, R>;
 	fn merge(&self, other: &Self) -> Self {
 
 		// Things are horribly wrong if this is not true.

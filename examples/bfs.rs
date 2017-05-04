@@ -26,7 +26,7 @@ fn main() {
     // define a new computational scope, in which to run BFS
     timely::execute_from_args(std::env::args().skip(6), move |worker| {
         
-        // let timer = ::std::time::Instant::now();
+        let timer = ::std::time::Instant::now();
 
         // define BFS dataflow; return handles to roots and edges inputs
         let mut probe = Handle::new();
@@ -56,7 +56,7 @@ fn main() {
         roots.send((0, Default::default(), 1));
         roots.close();
 
-        // println!("performing BFS on {} nodes, {} edges:", nodes, edges);
+        println!("performing BFS on {} nodes, {} edges:", nodes, edges);
 
         if worker.index() == 0 {
 
@@ -74,7 +74,7 @@ fn main() {
             }
         }
 
-        // println!("loaded; elapsed: {:?}", timer.elapsed());
+        println!("loaded; elapsed: {:?}", timer.elapsed());
 
         graph.advance_to(1);
         worker.step_while(|| probe.less_than(graph.time()));
@@ -90,15 +90,15 @@ fn main() {
             }
             session.flush();
 
-            // let timer = ::std::time::Instant::now();
+            let timer = ::std::time::Instant::now();
             worker.step_while(|| probe.less_than(&session.time()));
 
             if worker.index() == 0 {
-                // let elapsed = timer.elapsed();
-                // println!("{:?}:\t{}", round, elapsed.as_secs() * 1000000000 + (elapsed.subsec_nanos() as u64));
+                let elapsed = timer.elapsed();
+                println!("{:?}:\t{}", round, elapsed.as_secs() * 1000000000 + (elapsed.subsec_nanos() as u64));
             }
         }
-        // println!("finished; elapsed: {:?}", timer.elapsed());
+        println!("finished; elapsed: {:?}", timer.elapsed());
     }).unwrap();
 }
 
@@ -118,24 +118,5 @@ where G::Timestamp: Lattice+Ord {
         inner.join_map_u(&edges, |_k,l,d| (*d, l+1))
              .concat(&nodes)
              .group_u(|_, s, t| t.push((s[0].0, 1)))
-             // .inspect_batch(|t, xs| println!("{:?}: {:?}", t, xs.len()))
      })
-}
-
-// returns pairs (n, s) indicating node n can be reached from a root in s steps.
-fn reach<G: Scope>(edges: &Collection<G, Edge>, roots: &Collection<G, Node>) -> Collection<G, (Node, u32)>
-where G::Timestamp: Lattice+Ord {
-
-    // repeatedly update minimal distances each node can be reached from each root
-    roots.iterate(|inner| {
-
-        let edges = edges.enter(&inner.scope());
-        let roots = roots.enter(&inner.scope());
-
-        edges.semijoin_u(&inner)
-             .map(|(_, dst)| dst)
-             .concat(&roots)
-             .distinct_u()
-    })
-    .map(|x| (x,0))
 }

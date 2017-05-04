@@ -21,7 +21,7 @@ use trace::layers::ordered::{OrderedLayer, OrderedBuilder, OrderedCursor};
 use trace::layers::unordered::{UnorderedLayer, UnorderedBuilder, UnorderedCursor};
 
 use lattice::Lattice;
-use trace::{Batch, Builder, Cursor};
+use trace::{Batch, BatchReader, Builder, Cursor};
 use trace::description::Description;
 
 use super::spine::Spine;
@@ -42,16 +42,20 @@ pub struct HashValBatch<K: HashOrdered, V: Ord, T: Lattice, R> {
 	pub desc: Description<T>,
 }
 
-impl<K, V, T, R> Batch<K, V, T, R> for HashValBatch<K, V, T, R> 
+impl<K, V, T, R> BatchReader<K, V, T, R> for HashValBatch<K, V, T, R> 
 where K: Clone+Default+HashOrdered, V: Clone+Ord, T: Lattice+Ord+Clone+Default, R: Diff {
-	type Batcher = RadixBatcher<K, V, T, R, Self>;
-	type Builder = HashValBuilder<K, V, T, R>;
 	type Cursor = HashValCursor<K, V, T, R>;
 	fn cursor(&self) -> Self::Cursor { 
 		HashValCursor { cursor: self.layer.cursor() } 
 	}
 	fn len(&self) -> usize { self.layer.tuples() }
 	fn description(&self) -> &Description<T> { &self.desc }
+}
+
+impl<K, V, T, R> Batch<K, V, T, R> for HashValBatch<K, V, T, R> 
+where K: Clone+Default+HashOrdered, V: Clone+Ord, T: Lattice+Ord+Clone+Default, R: Diff {
+	type Batcher = RadixBatcher<K, V, T, R, Self>;
+	type Builder = HashValBuilder<K, V, T, R>;
 	fn merge(&self, other: &Self) -> Self {
 
 		// Things are horribly wrong if this is not true.
@@ -153,16 +157,20 @@ pub struct HashKeyBatch<K: HashOrdered, T: Lattice, R> {
 	pub desc: Description<T>,
 }
 
-impl<K, T, R> Batch<K, (), T, R> for HashKeyBatch<K, T, R> 
+impl<K, T, R> BatchReader<K, (), T, R> for HashKeyBatch<K, T, R> 
 where K: Clone+Default+HashOrdered, T: Lattice+Ord+Clone+Default, R: Diff {
-	type Batcher = RadixBatcher<K, (), T, R, Self>;
-	type Builder = HashKeyBuilder<K, T, R>;
 	type Cursor = HashKeyCursor<K, T, R>;
 	fn cursor(&self) -> Self::Cursor { 
 		HashKeyCursor { empty: (), valid: true, cursor: self.layer.cursor() } 
 	}
 	fn len(&self) -> usize { self.layer.tuples() }
 	fn description(&self) -> &Description<T> { &self.desc }
+}
+
+impl<K, T, R> Batch<K, (), T, R> for HashKeyBatch<K, T, R> 
+where K: Clone+Default+HashOrdered, T: Lattice+Ord+Clone+Default, R: Diff {
+	type Batcher = RadixBatcher<K, (), T, R, Self>;
+	type Builder = HashKeyBuilder<K, T, R>;
 	fn merge(&self, other: &Self) -> Self {
 
 		// Things are horribly wrong if this is not true.

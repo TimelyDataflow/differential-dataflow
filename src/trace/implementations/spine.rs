@@ -6,7 +6,7 @@
 
 use ::Diff;
 use lattice::Lattice;
-use trace::{Batch, Trace};
+use trace::{Batch, BatchReader, Trace, TraceReader};
 use trace::cursor::cursor_list::CursorList;
 
 /// An append-only collection of update tuples.
@@ -23,9 +23,7 @@ pub struct Spine<K, V, T: Lattice+Ord, R: Diff, B: Batch<K, V, T, R>> {
 	pending: Vec<B>,			// Batches at times in advance of `frontier`.
 }
 
-// A trace implementation for any key type that can be borrowed from or converted into `Key`.
-// TODO: Almost all this implementation seems to be generic with respect to the trace and batch types.
-impl<K, V, T, R, B> Trace<K, V, T, R> for Spine<K, V, T, R, B> 
+impl<K, V, T, R, B> TraceReader<K, V, T, R> for Spine<K, V, T, R, B> 
 where 
 	K: Ord+Clone,			// Clone is required by `batch::advance_*` (in-place could remove).
 	V: Ord+Clone,			// Clone is required by `batch::advance_*` (in-place could remove).
@@ -34,31 +32,9 @@ where
 	B: Batch<K, V, T, R>+Clone+'static,
 {
 	type Batch = B;
-	type Cursor = CursorList<K, V, T, R, <B as Batch<K, V, T, R>>::Cursor>;
+	type Cursor = CursorList<K, V, T, R, <B as BatchReader<K, V, T, R>>::Cursor>;
 
-	fn new() -> Self {
-		Spine { 
-			phantom: ::std::marker::PhantomData,
-			advance_frontier: vec![<T as Lattice>::min()],
-			through_frontier: vec![<T as Lattice>::min()],
-			merging: Vec::new(),
-			pending: Vec::new(),
-		}
-	}
-	// Note: this does not perform progressive merging; that code is around somewhere though.
-	fn insert(&mut self, batch: Self::Batch) {
-
-		// we can ignore degenerate batches (TODO: learn where they come from; suppress them?)
-		if batch.lower() != batch.upper() {
-			self.pending.push(batch);
-			self.consider_merges();
-		}
-		else {
-			// degenerate batches had best be empty.
-			assert!(batch.len() == 0);
-		}
-	}
-	fn cursor_through(&self, upper: &[T]) -> Option<Self::Cursor> {
+	fn cursor_through(&mut self, upper: &[T]) -> Option<Self::Cursor> {
 
 		// we shouldn't grab a cursor into a closed trace, right?
 		assert!(self.advance_frontier.len() > 0);
@@ -96,17 +72,54 @@ where
 			self.merging.clear();
 		}
 	}
+	fn advance_frontier(&mut self) -> &[T] { &self.advance_frontier[..] }
 	fn distinguish_since(&mut self, frontier: &[T]) {
 		self.through_frontier = frontier.to_vec();
 		self.consider_merges();
 	}
+	fn distinguish_frontier(&mut self) -> &[T] { &self.through_frontier[..] }
 
-	fn map_batches<F: FnMut(&Self::Batch)>(&self, mut f: F) {
+	fn map_batches<F: FnMut(&Self::Batch)>(&mut self, mut f: F) {
 		for batch in self.merging.iter() {
 			f(batch);
 		}
 		for batch in self.pending.iter() {
 			f(batch);
+		}
+	}
+}
+
+// A trace implementation for any key type that can be borrowed from or converted into `Key`.
+// TODO: Almost all this implementation seems to be generic with respect to the trace and batch types.
+impl<K, V, T, R, B> Trace<K, V, T, R> for Spine<K, V, T, R, B> 
+where 
+	K: Ord+Clone,			// Clone is required by `batch::advance_*` (in-place could remove).
+	V: Ord+Clone,			// Clone is required by `batch::advance_*` (in-place could remove).
+	T: Lattice+Ord+Clone,	// Clone is required by `advance_by` and `batch::advance_*`.
+	R: Diff,
+	B: Batch<K, V, T, R>+Clone+'static,
+{
+
+	fn new() -> Self {
+		Spine { 
+			phantom: ::std::marker::PhantomData,
+			advance_frontier: vec![<T as Lattice>::min()],
+			through_frontier: vec![<T as Lattice>::min()],
+			merging: Vec::new(),
+			pending: Vec::new(),
+		}
+	}
+	// Note: this does not perform progressive merging; that code is around somewhere though.
+	fn insert(&mut self, batch: Self::Batch) {
+
+		// we can ignore degenerate batches (TODO: learn where they come from; suppress them?)
+		if batch.lower() != batch.upper() {
+			self.pending.push(batch);
+			self.consider_merges();
+		}
+		else {
+			// degenerate batches had best be empty.
+			assert!(batch.len() == 0);
 		}
 	}
 }

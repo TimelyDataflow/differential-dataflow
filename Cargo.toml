@@ -1,7 +1,7 @@
 [package]
 
 name = "differential-dataflow"
-version = "0.0.4"
+version = "0.1.1"
 authors = ["Frank McSherry <fmcsherry@me.com>"]
 
 description = "An incremental data-parallel dataflow platform"
@@ -20,13 +20,12 @@ git="https://github.com/frankmcsherry/graph-map.git"
 getopts="0.2.14"
 rand="0.3.13"
 byteorder="0.4.2"
-
-[dependencies.timely]
-git="http://github.com/frankmcsherry/timely-dataflow"
+itertools="^0.6"
 
 [dependencies]
 abomonation="0.4.4"
-timely_sort="0.1.5"
+timely="0.0.16"
+timely_sort="0.1.6"
 timely_communication="0.1.5"
 fnv="1.0.2"
 

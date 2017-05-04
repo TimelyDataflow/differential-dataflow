@@ -2,7 +2,6 @@ extern crate timely;
 extern crate timely_sort;
 extern crate differential_dataflow;
 
-use timely::dataflow::*;
 use timely::dataflow::operators::*;
 
 use differential_dataflow::difference::DiffPair;
