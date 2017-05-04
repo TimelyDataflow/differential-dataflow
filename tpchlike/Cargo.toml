@@ -3,6 +3,9 @@ name = "tpchlike"
 version = "0.1.0"
 authors = ["Frank McSherry <fmcsherry@me.com>"]
 
+[dependencies.timely]
+git="https://github.com/frankmcsherry/timely-dataflow/"
+
 [dependencies.differential-dataflow]
 git="https://github.com/frankmcsherry/differential-dataflow"
 
@@ -10,5 +13,4 @@ git="https://github.com/frankmcsherry/differential-dataflow"
 git="https://github.com/bluss/arrayvec"
 
 [dependencies]
-timely="0.2.0"
 abomonation="0.4.5"
