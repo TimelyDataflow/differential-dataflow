@@ -549,8 +549,10 @@ where
                     );
 
                     // TODO: This consolidation is optional, and it may not be very 
-                    //       helpful. We might try harder to understand whether we 
+                    //       helpful. We might try harder to understand whether we
                     //       should do this work here, or downstream at consumers.
+                    // TODO: Perhaps `thinker` should have the buffer, do smarter
+                    //       consolidation, and then deposit results in `session`.
                     consolidate(temp, 0);
 
                     effort += temp.len();
@@ -603,6 +605,12 @@ where V1: Debug, V2: Debug, T: Debug
 
             self.history1.order();
             self.history2.order();
+
+            // TODO: It seems like there is probably a good deal of redundant `advance_buffer_by`
+            //       in here. If a time is ever repeated, for example, the call will be identical
+            //       and accomplish nothing. If only a single record has been added, it may not
+            //       be worth the time to collapse (advance, re-sort) the data when a linear scan
+            //       is sufficient.
 
             while !self.history1.is_done() && !self.history2.is_done() {
 

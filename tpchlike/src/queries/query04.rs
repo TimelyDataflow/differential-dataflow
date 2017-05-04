@@ -5,7 +5,7 @@ use timely::dataflow::operators::probe::Handle as ProbeHandle;
 // use differential_dataflow::AsCollection;
 use differential_dataflow::operators::*;
 use differential_dataflow::operators::arrange::Arrange;
-use differential_dataflow::operators::join::JoinArranged;
+// use differential_dataflow::operators::join::JoinArranged;
 use differential_dataflow::operators::group::GroupArranged;
 use differential_dataflow::trace::Trace;
 use differential_dataflow::trace::implementations::ord::OrdKeySpine as DefaultKeyTrace;
@@ -63,7 +63,7 @@ where G::Timestamp: Lattice+Ord {
             else { None }
         )
         .arrange(DefaultValTrace::new())
-        .join_arranged(&lineitems, |k,v,_| (k.item.clone(), v.clone()))
+        .join_core(&lineitems, |k,v,_| Some((k.item.clone(), v.clone())))
         .map(|o| o.1)
         .count()
         .probe()
