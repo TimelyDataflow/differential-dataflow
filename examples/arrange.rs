@@ -10,7 +10,7 @@ use rand::{Rng, SeedableRng, StdRng};
 use differential_dataflow::AsCollection;
 use differential_dataflow::operators::arrange::ArrangeByKey;
 use differential_dataflow::operators::group::Group;
-use differential_dataflow::operators::join::JoinArranged;
+use differential_dataflow::operators::join::JoinCore;
 use differential_dataflow::operators::Iterate;
 use differential_dataflow::operators::Consolidate;
 
@@ -120,7 +120,7 @@ fn main() {
                 let edges = edges.enter(&dists.scope());
                 let roots = roots.enter(&dists.scope());
 
-                dists.join_arranged(&edges, |_k,l,d| (*d, l+1))
+                dists.join_core(&edges, |_k,l,d| Some((*d, l+1)))
                      .concat(&roots)
                      .group_u(|_, s, t| t.push((s[0].0, 1)))
             })
@@ -139,11 +139,11 @@ fn main() {
             let query = query.as_collection();
 
             query.map(|x| (x, x))
-                 .join_arranged(&edges, |_n, &q, &d| (d, q))
+                 .join_core(&edges, |_n, &q, &d| Some((d, q)))
                  // .inspect(|x| println!("reachable @ 1: {:?}", x))
-                 .join_arranged(&edges, |_n, &q, &d| (d, q))
+                 .join_core(&edges, |_n, &q, &d| Some((d, q)))
                  // .inspect(|x| println!("reachable @ 2: {:?}", x))
-                 .join_arranged(&edges, |_n, &q, &d| (d, q))
+                 .join_core(&edges, |_n, &q, &d| Some((d, q)))
                  .map(|(_node, query)| query)
                  .consolidate()
                  // .inspect(|x| println!("neighbors @ 3: {:?}", x))

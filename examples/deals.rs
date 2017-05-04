@@ -17,7 +17,7 @@ use timely::dataflow::operators::*;
 use differential_dataflow::Collection;
 use differential_dataflow::operators::*;
 use differential_dataflow::operators::arrange::{ArrangeByKey, ArrangeBySelf};
-use differential_dataflow::operators::join::JoinArranged;
+// use differential_dataflow::operators::join::JoinArranged;
 use differential_dataflow::lattice::Lattice;
 
 use graph_map::GraphMMap;
@@ -121,9 +121,9 @@ where G::Timestamp: Lattice+Ord {
     let query = query.arrange_by_self();
 
     // restrict attention to edges from query nodes
-    edges.join_arranged(&query, |k,v,_| (v.clone(), k.item.clone()))
+    edges.join_core(&query, |k,v,_| Some((v.clone(), k.item.clone())))
          .arrange_by_key_hashed()
-         .join_arranged(&edges, |_,x,y| (x.clone(), y.clone()))
+         .join_core(&edges, |_,x,y| Some((x.clone(), y.clone())))
          // the next thing is the "topk" worker. sorry!
          .group(move |_,s,t| {
              t.extend(s.iter().map(|&(x,y)| (x,y)));       // propose all inputs as outputs

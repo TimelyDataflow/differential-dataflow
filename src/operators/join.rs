@@ -61,11 +61,6 @@ pub trait Join<G: Scope, K: Data, V: Data, R: Diff> {
     {
         self.join_map(other, |k,v,v2| (k.clone(),v.clone(),v2.clone()))
     }
-    /// Like `join`, but with an randomly distributed unsigned key.
-    fn join_u<V2: Data, R2: Diff>(&self, other: &Collection<G, (K,V2), R2>) -> Collection<G, (K,V,V2), <R as Mul<R2>>::Output>
-    where K: Unsigned+Copy, R: Mul<R2>, <R as Mul<R2>>::Output: Diff {
-        self.join_map_u(other, |k,v,v2| (k.clone(),v.clone(),v2.clone()))
-    }
     /// Matches pairs `(key,val1)` and `(key,val2)` based on `key` and then applies a function.
     ///
     /// #Examples
@@ -89,11 +84,12 @@ pub trait Join<G: Scope, K: Data, V: Data, R: Diff> {
     /// ```
     fn join_map<V2, R2: Diff, D, L>(&self, other: &Collection<G, (K,V2), R2>, logic: L) -> Collection<G, D, <R as Mul<R2>>::Output>
     where V2: Data, R: Mul<R2>, <R as Mul<R2>>::Output: Diff, D: Data, L: Fn(&K, &V, &V2)->D+'static;
-    /// Like `join_map`, but with a randomly distributed unsigned key.
-    fn join_map_u<V2, R2: Diff, D, L>(&self, other: &Collection<G, (K,V2), R2>, logic: L) -> Collection<G, D, <R as Mul<R2>>::Output> 
-    where K: Unsigned+Copy, R: Mul<R2>, <R as Mul<R2>>::Output: Diff, V2: Data, D: Data, L: Fn(&K, &V, &V2)->D+'static;
-    /// Matches pairs `(key,val1)` and `key` based on `key`, filtering the first collection by values present in the second.
+    /// Matches pairs `(key, val)` and `key` based on `key`, producing the former with frequencies multiplied.
     ///
+    /// When the second collection contains frequencies that are either zero or one this is the more traditional
+    /// relational semijoin. When the second collection may contain multiplicities, this operation may scale up
+    /// the counts of the records in the first input.
+    /// 
     /// #Examples
     /// ```ignore
     /// extern crate timely;
@@ -115,10 +111,7 @@ pub trait Join<G: Scope, K: Data, V: Data, R: Diff> {
     /// ```
     fn semijoin<R2>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), <R as Mul<R2>>::Output> 
     where R2: Diff, R: Mul<R2>, <R as Mul<R2>>::Output: Diff;
-    /// Like `semijoin`, but with a randomly distributed unsigned key.    
-    fn semijoin_u<R2>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), <R as Mul<R2>>::Output> 
-    where K: Unsigned+Copy, R2: Diff, R: Mul<R2>, <R as Mul<R2>>::Output: Diff;
-    /// Matches pairs `(key,val1)` and `key` based on `key`, discarding values 
+    /// Matches pairs `(key, val)` and `key` based on `key`, discarding values 
     /// in the first collection if their key is present in the second.
     ///
     /// #Examples
@@ -142,11 +135,107 @@ pub trait Join<G: Scope, K: Data, V: Data, R: Diff> {
     /// ```
     fn antijoin<R2>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), R>
     where R2: Diff, R: Mul<R2, Output = R>;
-    /// Like `antijoin`, but with a randomly distributed unsigned key.
-    fn antijoin_u<R2>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), R>
-    where K: Unsigned+Copy, R2: Diff, R: Mul<R2, Output=R>;
 } 
 
+/// Join implementations for `(key,val)` data.
+pub trait JoinUnsigned<G: Scope, K: Data, V: Data, R: Diff> {
+
+    /// Matches pairs `(key,val1)` and `(key,val2)` based on `key` and then applies a function.
+    ///
+    /// #Examples
+    /// ```ignore
+    /// extern crate timely;
+    /// use timely::dataflow::operators::{ToStream, Capture};
+    /// use timely::dataflow::operators::capture::Extract;
+    /// use differential_dataflow::operators::Join;
+    ///
+    /// let data = timely::example(|scope| {
+    ///     let col1 = vec![((0,0),1),((1,2),1)].into_iter().to_stream(scope);
+    ///     let col2 = vec![((0,'a'),1),((1,'B'),1)].into_iter().to_stream(scope);
+    ///
+    ///     // should produce records `(0 + 0,'a')` and `(1 + 2,'B')`.
+    ///     col1.join_map_u(&col2, |k,v1,v2| (*k + *v1, *v2)).capture();
+    /// });
+    ///
+    /// let extracted = data.extract();
+    /// assert_eq!(extracted.len(), 1);
+    /// assert_eq!(extracted[0].1, vec![((0,'a'),1), ((3,'B'),1)]);
+    /// ```
+    fn join_u<V2: Data, R2: Diff>(&self, other: &Collection<G, (K,V2), R2>) -> Collection<G, (K,V,V2), <R as Mul<R2>>::Output>
+    where R: Mul<R2>, <R as Mul<R2>>::Output: Diff {
+        self.join_map_u(other, |k,v,v2| (k.clone(),v.clone(),v2.clone()))
+    }
+    /// Matches pairs `(key,val1)` and `(key,val2)` based on `key` and then applies a function.
+    ///
+    /// #Examples
+    /// ```ignore
+    /// extern crate timely;
+    /// use timely::dataflow::operators::{ToStream, Capture};
+    /// use timely::dataflow::operators::capture::Extract;
+    /// use differential_dataflow::operators::Join;
+    ///
+    /// let data = timely::example(|scope| {
+    ///     let col1 = vec![((0,0),1),((1,2),1)].into_iter().to_stream(scope);
+    ///     let col2 = vec![((0,'a'),1),((1,'B'),1)].into_iter().to_stream(scope);
+    ///
+    ///     // should produce records `(0 + 0,'a')` and `(1 + 2,'B')`.
+    ///     col1.join_map_u(&col2, |k,v1,v2| (*k + *v1, *v2)).capture();
+    /// });
+    ///
+    /// let extracted = data.extract();
+    /// assert_eq!(extracted.len(), 1);
+    /// assert_eq!(extracted[0].1, vec![((0,'a'),1), ((3,'B'),1)]);
+    /// ```
+    fn join_map_u<V2, R2: Diff, D, L>(&self, other: &Collection<G, (K,V2), R2>, logic: L) -> Collection<G, D, <R as Mul<R2>>::Output> 
+    where R: Mul<R2>, <R as Mul<R2>>::Output: Diff, V2: Data, D: Data, L: Fn(&K, &V, &V2)->D+'static;
+    /// Matches pairs `(key,val1)` and `key` based on `key`, filtering the first collection by values present in the second.
+    ///
+    /// #Examples
+    /// ```ignore
+    /// extern crate timely;
+    /// use timely::dataflow::operators::{ToStream, Capture};
+    /// use timely::dataflow::operators::capture::Extract;
+    /// use differential_dataflow::operators::Join;
+    ///
+    /// let data = timely::example(|scope| {
+    ///     let col1 = vec![((0,0),1),((1,2),1)].into_iter().to_stream(scope);
+    ///     let col2 = vec![(0,1)].into_iter().to_stream(scope);
+    ///
+    ///     // should retain record `(0,0)` and discard `(1,2)`.
+    ///     col1.semijoin_u(&col2).capture();
+    /// });
+    ///
+    /// let extracted = data.extract();
+    /// assert_eq!(extracted.len(), 1);
+    /// assert_eq!(extracted[0].1, vec![((0,0),1)]);
+    /// ```
+    fn semijoin_u<R2>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), <R as Mul<R2>>::Output> 
+    where R2: Diff, R: Mul<R2>, <R as Mul<R2>>::Output: Diff;
+    /// Matches pairs `(key,val1)` and `key` based on `key`, discarding values 
+    /// in the first collection if their key is present in the second.
+    ///
+    /// #Examples
+    /// ```ignore
+    /// extern crate timely;
+    /// use timely::dataflow::operators::{ToStream, Capture};
+    /// use timely::dataflow::operators::capture::Extract;
+    /// use differential_dataflow::operators::Join;
+    ///
+    /// let data = timely::example(|scope| {
+    ///     let col1 = vec![((0,0),1),((1,2),1)].into_iter().to_stream(scope);
+    ///     let col2 = vec![(0,1)].into_iter().to_stream(scope);
+    ///
+    ///     // should retain record `(1,2)` and discard `(0,0)`.
+    ///     col1.antijoin_u(&col2).consolidate().capture();
+    /// });
+    ///
+    /// let extracted = data.extract();
+    /// assert_eq!(extracted.len(), 1);
+    /// assert_eq!(extracted[0].1, vec![((1,2),1)]);
+    /// ```
+    fn antijoin_u<R2>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), R>
+    where R2: Diff, R: Mul<R2, Output=R>;
+} 
 
 impl<G, K, V, R> Join<G, K, V, R> for Collection<G, (K, V), R>
 where
@@ -160,37 +249,50 @@ where
     where R: Mul<R2>, <R as Mul<R2>>::Output: Diff, L: Fn(&K, &V, &V2)->D+'static {
         let arranged1 = self.arrange_by_key_hashed();
         let arranged2 = other.arrange_by_key_hashed();
-        arranged1.join_arranged(&arranged2, move |k,v1,v2| logic(&k.item,v1,v2))
+        arranged1.join_core(&arranged2, move |k,v1,v2| Some(logic(&k.item,v1,v2)))
     }
+
     fn semijoin<R2: Diff>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), <R as Mul<R2>>::Output> 
     where R: Mul<R2>, <R as Mul<R2>>::Output: Diff {
         let arranged1 = self.arrange_by_key_hashed();
         let arranged2 = other.arrange_by_self();
-        arranged1.join_arranged(&arranged2, |k,v,_| (k.item.clone(), v.clone()))
+        arranged1.join_core(&arranged2, |k,v,_| Some((k.item.clone(), v.clone())))
     }
+
     fn antijoin<R2: Diff>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), R>
     where R: Mul<R2, Output=R> {
         self.concat(&self.semijoin(other).negate())
     }
+}
 
+impl<G, K, V, R> JoinUnsigned<G, K, V, R> for Collection<G, (K, V), R>
+where
+    G: Scope, 
+    K: Data+Default+Hashable+Unsigned+Copy, 
+    V: Data,
+    R: Diff,
+    G::Timestamp: Lattice+Ord,
+{
     fn join_map_u<V2, R2, D, L>(&self, other: &Collection<G, (K, V2), R2>, logic: L) -> Collection<G, D, <R as Mul<R2>>::Output>
-    where K: Unsigned+Copy, V2: Data, R2: Diff, R: Mul<R2>, <R as Mul<R2>>::Output: Diff, D: Data, L: Fn(&K, &V, &V2)->D+'static {
+    where V2: Data, R2: Diff, R: Mul<R2>, <R as Mul<R2>>::Output: Diff, D: Data, L: Fn(&K, &V, &V2)->D+'static {
         let arranged1 = self.map(|(k,v)| (UnsignedWrapper::from(k), v))
                             .arrange(DefaultValTrace::new());
         let arranged2 = other.map(|(k,v)| (UnsignedWrapper::from(k), v))
                              .arrange(DefaultValTrace::new());
-        arranged1.join_arranged(&arranged2, move |k,v1,v2| logic(&k.item,v1,v2))
+        arranged1.join_core(&arranged2, move |k,v1,v2| Some(logic(&k.item,v1,v2)))
     }
+
     fn semijoin_u<R2>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), <R as Mul<R2>>::Output>
-    where K: Unsigned+Copy, R2: Diff, R: Mul<R2>, <R as Mul<R2>>::Output: Diff {
+    where R2: Diff, R: Mul<R2>, <R as Mul<R2>>::Output: Diff {
         let arranged1 = self.map(|(k,v)| (UnsignedWrapper::from(k), v))
                             .arrange(DefaultValTrace::new());
         let arranged2 = other.map(|k| (UnsignedWrapper::from(k), ()))
                              .arrange(DefaultKeyTrace::new());
-        arranged1.join_arranged(&arranged2, |k,v,_| (k.item.clone(), v.clone()))
+        arranged1.join_core(&arranged2, |k,v,_| Some((k.item.clone(), v.clone())))
     }
+
     fn antijoin_u<R2>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), R>
-    where K: Unsigned+Copy, R2: Diff, R: Mul<R2, Output=R> {
+    where R2: Diff, R: Mul<R2, Output=R> {
         self.concat(&self.semijoin_u(other).negate())
     }
 }
@@ -200,15 +302,15 @@ where
 /// This method is used by the various `join` implementations, but it can also be used 
 /// directly in the event that one has a handle to an `Arranged<G,T>`, perhaps because
 /// the arrangement is available for re-use, or from the output of a `group` operator.
-pub trait JoinArranged<G: Scope, K: 'static, V: 'static, R: Diff> where G::Timestamp: Lattice+Ord {
+pub trait JoinCore<G: Scope, K: 'static, V: 'static, R: Diff> where G::Timestamp: Lattice+Ord {
     /// Joins two arranged collections with the same key type.
     ///
     /// Each matching pair of records `(key, val1)` and `(key, val2)` are subjected to the `result` function, 
-    /// producing a corresponding output record.
+    /// which produces something implementing `IntoIterator`, where the output collection will have 
     ///
     /// This trait is implemented for arrangements (`Arranged<G, T>`) rather than collections. The `Join` trait 
     /// contains the implementations for collections.
-    fn join_arranged<V2,T2,R2,D,L> (&self, stream2: &Arranged<G,K,V2,R2,T2>, result: L) -> Collection<G,D,<R as Mul<R2>>::Output>
+    fn join_core<V2,T2,R2,I,L> (&self, stream2: &Arranged<G,K,V2,R2,T2>, result: L) -> Collection<G,I::Item,<R as Mul<R2>>::Output>
     where 
         V2: Ord+Clone+Debug+'static,
         T2: TraceReader<K, V2, G::Timestamp, R2>+Clone+'static,
@@ -216,12 +318,14 @@ pub trait JoinArranged<G: Scope, K: 'static, V: 'static, R: Diff> where G::Times
         R2: Diff,
         R: Mul<R2>,
         <R as Mul<R2>>::Output: Diff,
-        D: Data,
-        L: Fn(&K,&V,&V2)->D+'static;
+        I: IntoIterator,
+        I::Item: Data,
+        L: Fn(&K,&V,&V2)->I+'static,
+        ;
 }
 
 
-impl<G, K, V, R> JoinArranged<G, OrdWrapper<K>, V, R> for Collection<G, (K, V), R>
+impl<G, K, V, R> JoinCore<G, OrdWrapper<K>, V, R> for Collection<G, (K, V), R>
 where
     G: Scope, 
     K: Data+Default+Hashable, 
@@ -229,7 +333,7 @@ where
     R: Diff,
     G::Timestamp: Lattice+Ord,
 {
-    fn join_arranged<V2,T2,R2,D,L> (&self, stream2: &Arranged<G,OrdWrapper<K>,V2,R2,T2>, result: L) -> Collection<G,D,<R as Mul<R2>>::Output>
+    fn join_core<V2,T2,R2,I,L> (&self, stream2: &Arranged<G,OrdWrapper<K>,V2,R2,T2>, result: L) -> Collection<G,I::Item,<R as Mul<R2>>::Output>
     where 
         V2: Ord+Clone+Debug+'static,
         T2: TraceReader<OrdWrapper<K>, V2, G::Timestamp, R2>+Clone+'static,
@@ -237,16 +341,16 @@ where
         R2: Diff,
         R: Mul<R2>,
         <R as Mul<R2>>::Output: Diff,
-        D: Data,
-        L: Fn(&OrdWrapper<K>,&V,&V2)->D+'static {
+        I: IntoIterator,
+        I::Item: Data,
+        L: Fn(&OrdWrapper<K>,&V,&V2)->I+'static {
 
         self.arrange_by_key_hashed()
-            .join_arranged(stream2, result)
-
+            .join_core(stream2, result)
     }
 }
 
-impl<G, K, V, R1, T1> JoinArranged<G, K, V, R1> for Arranged<G,K,V,R1,T1> 
+impl<G, K, V, R1, T1> JoinCore<G, K, V, R1> for Arranged<G,K,V,R1,T1> 
     where 
         K: Ord,
         G: Scope, 
@@ -256,7 +360,7 @@ impl<G, K, V, R1, T1> JoinArranged<G, K, V, R1> for Arranged<G,K,V,R1,T1>
         R1: Diff,
         T1: TraceReader<K,V,G::Timestamp, R1>+Clone+'static,
         T1::Batch: BatchReader<K,V,G::Timestamp,R1>+'static+Debug {
-    fn join_arranged<V2,T2,R2,D,L>(&self, other: &Arranged<G,K,V2,R2,T2>, result: L) -> Collection<G,D,<R1 as Mul<R2>>::Output> 
+    fn join_core<V2,T2,R2,I,L>(&self, other: &Arranged<G,K,V2,R2,T2>, result: L) -> Collection<G,I::Item,<R1 as Mul<R2>>::Output> 
     where 
         V2: Ord+Clone+Debug+'static,
         T2: TraceReader<K,V2,G::Timestamp,R2>+Clone+'static,
@@ -264,8 +368,9 @@ impl<G, K, V, R1, T1> JoinArranged<G, K, V, R1> for Arranged<G,K,V,R1,T1>
         R2: Diff,
         R1: Mul<R2>,
         <R1 as Mul<R2>>::Output: Diff,
-        D: Data,
-        L: Fn(&K,&V,&V2)->D+'static {
+        I: IntoIterator,
+        I::Item: Data,
+        L: Fn(&K,&V,&V2)->I+'static {
 
         // handles to shared trace data structures.
         let mut trace1 = Some(self.trace.clone());
@@ -354,14 +459,17 @@ impl<G, K, V, R1, T1> JoinArranged<G, K, V, R1> for Arranged<G,K,V,R1,T1>
 /// The structure wraps cursors which allow us to play out join computation at whatever rate we like.
 /// This allows us to avoid producing and buffering massive amounts of data, without giving the timely
 /// dataflow system a chance to run operators that can consume and aggregate the data.
-struct Deferred<K, V1, V2, T, R1, R2, R3, C1, C2, M> 
+struct Deferred<K, V1, V2, T, R1, R2, R3, C1, C2, M, D> 
 where 
     V1: Ord+Clone,
     V2: Ord+Clone,
     T: Timestamp+Lattice+Ord+Debug, 
+    R1: Diff, 
+    R2: Diff, 
     C1: Cursor<K, V1, T, R1>,
     C2: Cursor<K, V2, T, R2>,
     M: Fn(&R1,&R2)->R3,
+    D: Ord+Clone+Data,
 {
     phant: ::std::marker::PhantomData<(K, V1, V2, R1, R2)>,
     trace: C1,
@@ -369,9 +477,11 @@ where
     capability: Capability<T>,
     mult: M,
     done: bool,
+    temp: Vec<((D, T), R3)>,
+    thinker: JoinThinker<V1, V2, T, R1, R2>,
 }
 
-impl<K, V1, V2, T, R1, R2, R3, C1, C2, M> Deferred<K, V1, V2, T, R1, R2, R3, C1, C2, M>
+impl<K, V1, V2, T, R1, R2, R3, C1, C2, M, D> Deferred<K, V1, V2, T, R1, R2, R3, C1, C2, M, D>
 where
     K: Ord+Debug+Eq,
     V1: Ord+Clone+Debug,
@@ -383,6 +493,7 @@ where
     C1: Cursor<K, V1, T, R1>,
     C2: Cursor<K, V2, T, R2>,
     M: Fn(&R1,&R2)->R3,
+    D: Ord+Clone+Data, 
 {
     fn new(trace: C1, batch: C2, capability: Capability<T>, mult: M) -> Self {
         Deferred {
@@ -392,6 +503,8 @@ where
             capability: capability,
             mult: mult,
             done: false,
+            temp: Vec::new(),
+            thinker: JoinThinker::new(),
         }
     }
 
@@ -401,8 +514,8 @@ where
 
     /// Process keys until at least `limit` output tuples produced, or the work is exhausted.
     #[inline(never)]
-    fn work<D, L>(&mut self, output: &mut OutputHandle<T, (D, T, R3), Tee<T, (D, T, R3)>>, logic: &L, fuel: &mut usize) 
-    where D: Ord+Clone+Data, L: Fn(&K, &V1, &V2)->D {
+    fn work<L, I>(&mut self, output: &mut OutputHandle<T, (D, T, R3), Tee<T, (D, T, R3)>>, logic: &L, fuel: &mut usize) 
+    where I: IntoIterator<Item=D>, L: Fn(&K, &V1, &V2)->I {
 
         let meet = self.capability.time();
 
@@ -413,12 +526,10 @@ where
         let batch = &mut self.batch;
         let mult = &self.mult;
 
-        let mut temp = Vec::new();
-        let mut thinker = JoinThinker::<V1, V2, T, R1, R2>::new();
+        let temp = &mut self.temp;
+        let thinker = &mut self.thinker;
 
         while batch.key_valid() && trace.key_valid() && effort < *fuel {
-
-            // println!("{:?} v {:?}", batch.key(), trace.key());
 
             match trace.key().cmp(batch.key()) {
                 Ordering::Less => trace.seek_key(batch.key()),
@@ -428,10 +539,21 @@ where
                     thinker.history1.edits.load(trace, |time| time.join(&meet));
                     thinker.history2.edits.load(batch, |time| time.clone());
 
-                    // populate `temp` with the results in the best way we know how.
-                    thinker.think(|v1,v2,t,r1,r2| temp.push(((logic(batch.key(), v1, v2), t), mult(r1,r2))));
+                    assert_eq!(temp.len(), 0);
 
-                    consolidate(&mut temp, 0);
+                    // populate `temp` with the results in the best way we know how.
+                    thinker.think(|v1,v2,t,r1,r2| 
+                        for result in logic(batch.key(), v1, v2) {
+                            temp.push(((result, t.clone()), mult(r1, r2)));
+                        }
+                    );
+
+                    // TODO: This consolidation is optional, and it may not be very 
+                    //       helpful. We might try harder to understand whether we
+                    //       should do this work here, or downstream at consumers.
+                    // TODO: Perhaps `thinker` should have the buffer, do smarter
+                    //       consolidation, and then deposit results in `session`.
+                    consolidate(temp, 0);
 
                     effort += temp.len();
                     for ((d, t), r) in temp.drain(..) {
@@ -440,6 +562,9 @@ where
 
                     batch.step_key();
                     trace.step_key();
+
+                    thinker.history1.clear();
+                    thinker.history2.clear();
                 }
             }
         }
@@ -480,6 +605,12 @@ where V1: Debug, V2: Debug, T: Debug
 
             self.history1.order();
             self.history2.order();
+
+            // TODO: It seems like there is probably a good deal of redundant `advance_buffer_by`
+            //       in here. If a time is ever repeated, for example, the call will be identical
+            //       and accomplish nothing. If only a single record has been added, it may not
+            //       be worth the time to collapse (advance, re-sort) the data when a linear scan
+            //       is sufficient.
 
             while !self.history1.is_done() && !self.history2.is_done() {
 

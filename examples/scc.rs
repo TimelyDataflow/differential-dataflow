@@ -14,7 +14,7 @@ use differential_dataflow::operators::*;
 use differential_dataflow::lattice::Lattice;
 
 use differential_dataflow::trace::Trace;
-use differential_dataflow::operators::join::JoinArranged;
+// use differential_dataflow::operators::join::JoinArranged;
 use differential_dataflow::operators::group::GroupArranged;
 use differential_dataflow::operators::arrange::Arrange;
 use differential_dataflow::hashable::UnsignedWrapper;
@@ -134,7 +134,7 @@ where G::Timestamp: Lattice+Ord+Hash {
         graph.enter(&edges.scope())
              .map(|(k,v)| (UnsignedWrapper::from(k), v))
              .arrange(HashSpine::new())
-             .join_arranged(&active, |k,v,_| (k.item.clone(), v.clone()))
+             .join_core(&active, |k,v,_| Some((k.item.clone(), v.clone())))
 
         // let active = edges.map(|(_,dst)| dst).distinct_u();
         // graph.enter(&edges.scope())

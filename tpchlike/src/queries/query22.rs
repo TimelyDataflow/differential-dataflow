@@ -6,6 +6,14 @@ use differential_dataflow::AsCollection;
 use differential_dataflow::operators::*;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::difference::DiffPair;
+use differential_dataflow::operators::arrange::Arrange;
+// use differential_dataflow::operators::join::JoinArranged;
+use differential_dataflow::operators::group::GroupArranged;
+
+use differential_dataflow::trace::Trace;
+use differential_dataflow::trace::implementations::ord::OrdKeySpine as DefaultKeyTrace;
+use differential_dataflow::trace::implementations::ord::OrdValSpine as DefaultValTrace;
+use differential_dataflow::hashable::UnsignedWrapper;
 
 use ::Collections;
 
@@ -71,19 +79,21 @@ where G::Timestamp: Lattice+Ord {
     let averages = 
     customers
         .inner
-        .map(|((cc, acctbal, _), t, d)| (cc, t, DiffPair::new(acctbal as isize * d, d)))
+        .map(|((cc, acctbal, _), t, d)| ((UnsignedWrapper::from(cc), ()), t, DiffPair::new(acctbal as isize * d, d)))
         .as_collection()
-        .count()
-        .map(|(cc, pair)| (cc, pair.element1 / pair.element2));
+        .arrange(DefaultKeyTrace::new())
+        .group_arranged(|_k,s,t| t.push((s[0].1, 1)), DefaultValTrace::new());
 
     customers
         .map(|(cc, acct, key)| (key, (cc, acct)))
         .antijoin_u(&collections.orders().map(|o| o.cust_key).distinct_u())
-        .map(|(_, (cc, acct))| (cc, acct))
-        .join_u(&averages)
-        .filter(|&(_cc, acct, avg)| acct as isize > avg)
+        .map(|(_, (cc, acct))| (UnsignedWrapper::from(cc), acct))
+        .arrange(DefaultValTrace::new())
+        .join_core(&averages, |&cc, &acct, &pair|
+            if acct as isize > (pair.element1 / pair.element2) { Some((cc.item, acct)) } else { None }
+        )
         .inner
-        .map(|((cc, acct, _aggs), t, d)| (cc, t, DiffPair::new(acct as isize * d, d)))
+        .map(|((cc, acct), t, d)| (cc, t, DiffPair::new(acct as isize * d, d)))
         .as_collection()
         .count_u()
         .probe()

@@ -7,7 +7,7 @@
 pub use self::group::{Group, Distinct, Count, consolidate_from};
 pub use self::consolidate::Consolidate;
 pub use self::iterate::Iterate;
-pub use self::join::Join;
+pub use self::join::{Join, JoinUnsigned, JoinCore};
 
 pub mod arrange;
 pub mod group;
