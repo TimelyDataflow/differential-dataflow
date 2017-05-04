@@ -165,7 +165,6 @@ where
         let mut source_trace = self.trace.clone();
 
         let (mut output_reader, mut output_writer) = TraceAgent::new(empty);
-        // let queues = Rc::downgrade(&agent.queues);
 
         // let mut output_trace = TraceRc::make_from(agent).0;
         let result_trace = output_reader.clone();
@@ -429,12 +428,10 @@ where
 
                     if lower_issued != local_upper {
                         let batch = builder.done(&lower_issued[..], &local_upper[..], &lower_issued[..]);
+
+                        // ship batch to the output, and commit to the output trace.
                         output.session(&capabilities[index]).give(BatchWrapper { item: batch.clone() });
-
                         output_writer.seal(&local_upper[..], Some((capabilities[index].time().clone(), batch)));
-
-                        // use the trace agent to insert the batch and notify any listeners.
-                        // output_trace.wrapper.borrow_mut().trace.insert_at(&local_upper[..], Some((capabilities[index].time().clone(), batch)));
 
                         lower_issued = local_upper;
                     }
@@ -464,8 +461,8 @@ where
                 }
                 capabilities = new_capabilities;
 
+                // ensure that observed progres is reflected in the output.
                 output_writer.seal(&upper_limit[..], None);
-                // output_trace.wrapper.borrow_mut().trace.insert_at(&upper_limit[..], None);
 
     // let mut ul = upper_limit.clone();
     // ul.sort();
