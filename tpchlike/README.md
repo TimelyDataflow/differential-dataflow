@@ -33,12 +33,12 @@ Here are some initial measurements on the scale factor 1 dataset (about 1GB of d
 | [query13](./src/queries/query13.rs) |  6.18s |  4.47s |   3.83s |      1,650,000 |      430.86K/s | 779.52K/s |
 | [query14](./src/queries/query14.rs) |  0.87s |  0.51s |   0.36s |      6,201,215 |       17.12M/s |  33.04M/s |
 | [query15](./src/queries/query15.rs) |  1.54s |  0.81s |   0.45s |      6,011,215 |       13.44M/s |      17/s |
-| [query16](./src/queries/query16.rs) |  1.40s |  0.94s |   0.79s |      1,010,000 |        1.28M/s | 123.94K/s |
+| [query16](./src/queries/query16.rs) |  1.17s |  0.85s |   0.71s |      1,010,000 |        1.43M/s | 123.94K/s |
 | [query17](./src/queries/query17.rs) |  3.96s |  3.29s |   2.75s |      6,201,215 |        2.25M/s | 379.30K/s |
 | [query18](./src/queries/query18.rs) | 12.46s | 10.93s |   9.77s |      7,651,215 |      782.91K/s |   1.13M/s |
 | [query19](./src/queries/query19.rs) |  0.43s |  0.23s |   0.22s |      6,201,215 |       28.22M/s |   1.95M/s |
 | [query20](./src/queries/query20.rs) |  1.45s |  0.86s |   0.72s |      6,811,215 |        9.43M/s |     977/s |
 | [query21](./src/queries/query21.rs) |  8.81s |  6.97s |   5.82s |      7,511,240 |        1.29M/s | 836.80K/s |
-| [query22](./src/queries/query22.rs) | 22.18s | 29.91s |  36.32s |      1,650,000 |       45.32K/s |     189/s |
+| [query22](./src/queries/query22.rs) | 22.16s | 29.03s |  35.80s |      1,650,000 |       46.08K/s |     189/s |
 
 **PLEASE NOTE**: These times are the reported running times of the code in the repository, which may or may not compute the intended quantities. It is very possible (likely, even) that I have botched some or all of the query implementations. I'm not validating the results at the moment, as I don't have much to validate against, but if you think you see bugs (or want to help validating) drop me a line! Please don't just go and use these measurements as "truth" until we find out if I am actually computing the correct answers.

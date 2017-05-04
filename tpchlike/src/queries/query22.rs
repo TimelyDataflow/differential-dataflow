@@ -73,14 +73,15 @@ where G::Timestamp: Lattice+Ord {
         .inner
         .map(|((cc, acctbal, _), t, d)| (cc, t, DiffPair::new(acctbal as isize * d, d)))
         .as_collection()
-        .count();
+        .count()
+        .map(|(cc, pair)| (cc, pair.element1 / pair.element2));
 
     customers
         .map(|(cc, acct, key)| (key, (cc, acct)))
         .antijoin_u(&collections.orders().map(|o| o.cust_key).distinct_u())
         .map(|(_, (cc, acct))| (cc, acct))
         .join_u(&averages)
-        .filter(|&(_cc, acct, aggs)| acct as isize > aggs.element1 / aggs.element2)
+        .filter(|&(_cc, acct, avg)| acct as isize > avg)
         .inner
         .map(|((cc, acct, _aggs), t, d)| (cc, t, DiffPair::new(acct as isize * d, d)))
         .as_collection()
