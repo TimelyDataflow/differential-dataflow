@@ -354,14 +354,17 @@ impl<G, K, V, R1, T1> JoinArranged<G, K, V, R1> for Arranged<G,K,V,R1,T1>
 /// The structure wraps cursors which allow us to play out join computation at whatever rate we like.
 /// This allows us to avoid producing and buffering massive amounts of data, without giving the timely
 /// dataflow system a chance to run operators that can consume and aggregate the data.
-struct Deferred<K, V1, V2, T, R1, R2, R3, C1, C2, M> 
+struct Deferred<K, V1, V2, T, R1, R2, R3, C1, C2, M, D> 
 where 
     V1: Ord+Clone,
     V2: Ord+Clone,
     T: Timestamp+Lattice+Ord+Debug, 
+    R1: Diff, 
+    R2: Diff, 
     C1: Cursor<K, V1, T, R1>,
     C2: Cursor<K, V2, T, R2>,
     M: Fn(&R1,&R2)->R3,
+    D: Ord+Clone+Data,
 {
     phant: ::std::marker::PhantomData<(K, V1, V2, R1, R2)>,
     trace: C1,
@@ -369,9 +372,11 @@ where
     capability: Capability<T>,
     mult: M,
     done: bool,
+    temp: Vec<((D, T), R3)>,
+    thinker: JoinThinker<V1, V2, T, R1, R2>,
 }
 
-impl<K, V1, V2, T, R1, R2, R3, C1, C2, M> Deferred<K, V1, V2, T, R1, R2, R3, C1, C2, M>
+impl<K, V1, V2, T, R1, R2, R3, C1, C2, M, D> Deferred<K, V1, V2, T, R1, R2, R3, C1, C2, M, D>
 where
     K: Ord+Debug+Eq,
     V1: Ord+Clone+Debug,
@@ -383,6 +388,7 @@ where
     C1: Cursor<K, V1, T, R1>,
     C2: Cursor<K, V2, T, R2>,
     M: Fn(&R1,&R2)->R3,
+    D: Ord+Clone+Data, 
 {
     fn new(trace: C1, batch: C2, capability: Capability<T>, mult: M) -> Self {
         Deferred {
@@ -392,6 +398,8 @@ where
             capability: capability,
             mult: mult,
             done: false,
+            temp: Vec::new(),
+            thinker: JoinThinker::new(),
         }
     }
 
@@ -401,8 +409,8 @@ where
 
     /// Process keys until at least `limit` output tuples produced, or the work is exhausted.
     #[inline(never)]
-    fn work<D, L>(&mut self, output: &mut OutputHandle<T, (D, T, R3), Tee<T, (D, T, R3)>>, logic: &L, fuel: &mut usize) 
-    where D: Ord+Clone+Data, L: Fn(&K, &V1, &V2)->D {
+    fn work<L>(&mut self, output: &mut OutputHandle<T, (D, T, R3), Tee<T, (D, T, R3)>>, logic: &L, fuel: &mut usize) 
+    where L: Fn(&K, &V1, &V2)->D {
 
         let meet = self.capability.time();
 
@@ -413,12 +421,10 @@ where
         let batch = &mut self.batch;
         let mult = &self.mult;
 
-        let mut temp = Vec::new();
-        let mut thinker = JoinThinker::<V1, V2, T, R1, R2>::new();
+        let temp = &mut self.temp;
+        let thinker = &mut self.thinker;
 
         while batch.key_valid() && trace.key_valid() && effort < *fuel {
-
-            // println!("{:?} v {:?}", batch.key(), trace.key());
 
             match trace.key().cmp(batch.key()) {
                 Ordering::Less => trace.seek_key(batch.key()),
@@ -428,10 +434,12 @@ where
                     thinker.history1.edits.load(trace, |time| time.join(&meet));
                     thinker.history2.edits.load(batch, |time| time.clone());
 
+                    assert_eq!(temp.len(), 0);
+
                     // populate `temp` with the results in the best way we know how.
                     thinker.think(|v1,v2,t,r1,r2| temp.push(((logic(batch.key(), v1, v2), t), mult(r1,r2))));
 
-                    consolidate(&mut temp, 0);
+                    consolidate(temp, 0);
 
                     effort += temp.len();
                     for ((d, t), r) in temp.drain(..) {
@@ -440,6 +448,9 @@ where
 
                     batch.step_key();
                     trace.step_key();
+
+                    thinker.history1.clear();
+                    thinker.history2.clear();
                 }
             }
         }
