@@ -216,11 +216,17 @@ where T: Lattice+Clone+'static, Tr: TraceReader<K,V,T,R> {
     /// the collection experienced in the past are accumulated, and the distinctions from the initial collection 
     /// are no longer evident.
     ///
-    /// The intended semantics are that the introduced collection is accumulated up to `self.advance_frontier()`.
-    /// If multiple workers have disparite frontiers, the collection is still loaded but it may be partial until
-    /// the upper bound of the collected frontiers, at which point it correctly tracks the source collection. The
-    /// intent is that such disagreements result in only transient divergence from the source collection, which 
-    /// can be worked around by the workers if required.
+    /// The current behavior is that the introduced collection accumulates updates to some times less or equal
+    /// to `self.advance_frontier()`. There is *not* currently a guarantee that the updates are accumulated *to*
+    /// the frontier, and the resulting collection history may be weirdly partial until this point. In particular, 
+    /// the historical collection may move through configurations that did not actually occur, even if eventually
+    /// arriving at the correct collection. This is probably a bug; although we get to the right place in the end, 
+    /// the intermediate computation could do something that the original computation did not, like diverge. 
+    ///
+    /// I would expect the semantics to improve to "updates are advanced to `self.advance_frontier()`", which
+    /// means the computation will run as if starting from exactly this frontier. It is not currently clear whose
+    /// responsibility this should be (the trace/batch should only reveal these times, or an operator should know
+    /// to advance times before using them).
     ///
     /// #Examples
     ///
@@ -333,11 +339,6 @@ pub struct Arranged<G: Scope, K, V, R, T> where G::Timestamp: Lattice, T: TraceR
 
 impl<G: Scope, K, V, R, T> Arranged<G, K, V, R, T> where G::Timestamp: Lattice, T: TraceReader<K, V, G::Timestamp, R>+Clone {
     
-    // /// Allocates a new handle to the shared trace, with independent frontier tracking.
-    // pub fn new_handle(&self) -> TraceHandle<K, V, G::Timestamp, R, T> {
-    //     self.trace.clone()
-    // }
-
     /// Brings an arranged collection into a nested scope.
     ///
     /// This method produces a proxy trace handle that uses the same backing data, but acts as if the timestamps
@@ -346,10 +347,12 @@ impl<G: Scope, K, V, R, T> Arranged<G, K, V, R, T> where G::Timestamp: Lattice, 
     pub fn enter<'a, TInner>(&self, child: &Child<'a, G, TInner>)
         -> Arranged<Child<'a, G, TInner>, K, V, R, TraceEnter<K, V, G::Timestamp, R, T, TInner>>
         where 
-            // OtherTraceWrapper<K, V, G::Timestamp, R, T, TInner>: Trace<K, V, Product<G::Timestamp, TInner>, R>,
-            T::Batch: Clone, K: 'static, V: 'static, G::Timestamp: Clone+Default+'static, TInner: Lattice+Timestamp+Clone+Default+'static, R: 'static {
-
-        // unimplemented!()
+            T::Batch: Clone, 
+            K: 'static, 
+            V: 'static, 
+            G::Timestamp: Clone+Default+'static, 
+            TInner: Lattice+Timestamp+Clone+Default+'static, 
+            R: 'static {
 
         Arranged {
             stream: self.stream.enter(child).map(|bw| BatchWrapper { item: BatchEnter::make_from(bw.item) }),
@@ -415,18 +418,6 @@ impl<G: Scope, K: Data+HashOrdered, V: Data, R: Diff> Arrange<G, K, V, R> for Co
             T::Batch: Batch<K, V, G::Timestamp, R> {
 
         let (reader, mut writer) = TraceAgent::new(empty_trace);
-        // let queues = Rc::downgrade(&agent.queues);
-
-        // let (handle, source) = TraceRc::make_from(agent);
-        // let source = Rc::downgrade(&source);
-
-        // // create a trace to share with downstream consumers.
-        // let handle = TraceHandle::new(empty_trace, &[<G::Timestamp as Lattice>::min()], &[<G::Timestamp as Lattice>::min()]);
-
-        // // acquire local downgraded copies of the references. 
-        // // downgrading means that these instances will not keep the targets alive, especially important for the trace.
-        // let source = Rc::downgrade(&handle.wrapper);
-        // let queues = Rc::downgrade(&handle.queues);
 
         // Where we will deposit received updates, and from which we extract batches.
         let mut batcher = <T::Batch as Batch<K,V,G::Timestamp,R>>::Batcher::new();
@@ -488,26 +479,6 @@ impl<G: Scope, K: Data+HashOrdered, V: Data, R: Diff> Arrange<G, K, V, R> for Co
                         let batch = batcher.seal(&upper[..]);
 
                         writer.seal(&upper[..], Some((capabilities[index].time().clone(), batch.clone())));
-
-                        // // If the source is still active, commit the extracted batch.
-                        // // The source may become inactive if all downsteam users of the trace drop their references.
-                        // source.upgrade().map(|trace| {
-                        //     trace.borrow_mut().trace.trace.insert(batch.clone());
-                        // });
-
-                        // // If we still have listeners, send each a copy of the input frontier and current batch.
-                        // // NOTE: We could have used agent.insert_at, but .. source is discarded when handles to 
-                        // //       the trace drop, though there could still be consumers of the streams (e.g. the 
-                        // //       as_collection operator, which doesn't hold the trace).
-                        // queues.upgrade().map(|queues| {
-                        //     let mut borrow = queues.borrow_mut();
-                        //     for queue in borrow.iter_mut() {
-                        //         queue.upgrade().map(|queue| {
-                        //             queue.borrow_mut().push_back((upper.clone(), Some((capabilities[index].time().clone(), batch.clone()))));
-                        //         });
-                        //     }
-                        //     borrow.retain(|w| w.upgrade().is_some());
-                        // });
 
                         // send the batch to downstream consumers, empty or not.
                         output.session(&capabilities[index]).give(BatchWrapper { item: batch });
