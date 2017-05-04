@@ -320,6 +320,15 @@ where T: Lattice+Clone+'static, Tr: TraceReader<K,V,T,R> {
 }
 
 
+impl<K, V, T, R, Tr> Drop for TraceAgent<K, V, T, R, Tr>
+where T: Lattice+Clone+'static, Tr: TraceReader<K,V,T,R> {
+    fn drop(&mut self) {
+        // decrement borrow counts to remove all holds
+        self.trace.borrow_mut().adjust_advance_frontier(&self.advance[..], &[]);
+        self.trace.borrow_mut().adjust_through_frontier(&self.through[..], &[]);
+    }
+}
+
 /// An arranged collection of `(K,V)` values.
 ///
 /// An `Arranged` allows multiple differential operators to share the resources (communication, 
