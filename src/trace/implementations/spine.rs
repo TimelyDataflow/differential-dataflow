@@ -157,14 +157,22 @@ where
 			// `len` exists only to narrow while condition.
 			let mut len = self.merging.len();
 			while len >= 2 && self.merging[len - 2].len() < 2 * self.merging[len - 1].len() {
-				let batch1 = self.merging.pop().unwrap();
-				let batch2 = self.merging.pop().unwrap();
+
+				let mut batch1 = self.merging.pop().unwrap();
+				let mut batch2 = self.merging.pop().unwrap();
+
+				// advance inputs, rather than outputs.
+				if self.merging.len() == 0 {
+					batch1.advance_mut(&self.advance_frontier[..]);
+					batch2.advance_mut(&self.advance_frontier[..]);
+				}
+
 				let mut result = batch2.merge(&batch1);
 
-				// if we just merged the last batch, `advance_by` it.
-				if self.merging.len() == 0 {
-					result.advance_mut(&self.advance_frontier[..]);
-				}
+				// // if we just merged the last batch, `advance_by` it.
+				// if self.merging.len() == 0 {
+				// 	result.advance_mut(&self.advance_frontier[..]);
+				// }
 
 				self.merging.push(result);
 				len = self.merging.len();

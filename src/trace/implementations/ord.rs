@@ -17,6 +17,7 @@ use trace::layers::{Trie, TupleBuilder};
 use trace::layers::Builder as TrieBuilder;
 use trace::layers::Cursor as TrieCursor;
 use trace::layers::ordered::{OrderedLayer, OrderedBuilder, OrderedCursor};
+use trace::layers::ordered_leaf::{OrderedLeaf, OrderedLeafBuilder, OrderedLeafCursor};
 use trace::layers::unordered::{UnorderedLayer, UnorderedBuilder, UnorderedCursor};
 
 use lattice::Lattice;
@@ -36,7 +37,7 @@ pub type OrdKeySpine<K, T, R> = Spine<K, (), T, R, OrdKeyBatch<K, T, R>>;
 #[derive(Debug)]
 pub struct OrdValBatch<K: Ord+Hashable, V: Ord, T: Lattice, R> {
 	/// Where all the dataz is.
-	pub layer: Rc<OrderedLayer<K, OrderedLayer<V, UnorderedLayer<(T, R)>>>>,
+	pub layer: Rc<OrderedLayer<K, OrderedLayer<V, OrderedLeaf<T, R>>>>,
 	/// Description of the update times this layer represents.
 	pub desc: Description<T>,
 }
@@ -87,7 +88,7 @@ impl<K: Ord+Hashable, V: Ord, T: Lattice+Ord+Clone, R> Clone for OrdValBatch<K, 
 /// A cursor for navigating a single layer.
 #[derive(Debug)]
 pub struct OrdValCursor<K: Ord+Clone+Hashable, V: Ord+Clone, T: Lattice+Ord+Clone, R: Copy> {
-	cursor: OrderedCursor<K, OrderedCursor<V, UnorderedCursor<(T, R)>>>,
+	cursor: OrderedCursor<K, OrderedCursor<V, OrderedLeafCursor<T, R>>>,
 }
 
 impl<K, V, T, R> Cursor<K, V, T, R> for OrdValCursor<K, V, T, R> 
@@ -114,7 +115,7 @@ where K: Ord+Clone+Hashable, V: Ord+Clone, T: Lattice+Ord+Clone, R: Copy {
 
 /// A builder for creating layers from unsorted update tuples.
 pub struct OrdValBuilder<K: Ord+Hashable, V: Ord, T: Ord, R: Diff> {
-	builder: OrderedBuilder<K, OrderedBuilder<V, UnorderedBuilder<(T, R)>>>,
+	builder: OrderedBuilder<K, OrderedBuilder<V, OrderedLeafBuilder<T, R>>>,
 }
 
 impl<K, V, T, R> Builder<K, V, T, R, OrdValBatch<K, V, T, R>> for OrdValBuilder<K, V, T, R> 
@@ -122,12 +123,12 @@ where K: Ord+Clone+Hashable, V: Ord+Clone, T: Lattice+Ord+Clone, R: Diff {
 
 	fn new() -> Self { 
 		OrdValBuilder { 
-			builder: OrderedBuilder::<K, OrderedBuilder<V, UnorderedBuilder<(T, R)>>>::new() 
+			builder: OrderedBuilder::<K, OrderedBuilder<V, OrderedLeafBuilder<T, R>>>::new() 
 		} 
 	}
 	fn with_capacity(cap: usize) -> Self { 
 		OrdValBuilder { 
-			builder: OrderedBuilder::<K, OrderedBuilder<V, UnorderedBuilder<(T, R)>>>::with_capacity(cap) 
+			builder: OrderedBuilder::<K, OrderedBuilder<V, OrderedLeafBuilder<T, R>>>::with_capacity(cap) 
 		} 
 	}
 
@@ -152,7 +153,7 @@ where K: Ord+Clone+Hashable, V: Ord+Clone, T: Lattice+Ord+Clone, R: Diff {
 #[derive(Debug)]
 pub struct OrdKeyBatch<K: Ord+Hashable, T: Lattice, R> {
 	/// Where all the dataz is.
-	pub layer: Rc<OrderedLayer<K, UnorderedLayer<(T, R)>>>,
+	pub layer: Rc<OrderedLayer<K, OrderedLeaf<T, R>>>,
 	/// Description of the update times this layer represents.
 	pub desc: Description<T>,
 }
@@ -205,7 +206,7 @@ impl<K: Ord+Hashable, T: Lattice+Ord+Clone, R> Clone for OrdKeyBatch<K, T, R> {
 pub struct OrdKeyCursor<K: Ord+Clone+Hashable, T: Lattice+Ord+Clone, R: Copy> {
 	valid: bool,
 	empty: (),
-	cursor: OrderedCursor<K, UnorderedCursor<(T, R)>>,
+	cursor: OrderedCursor<K, OrderedLeafCursor<T, R>>,
 }
 
 impl<K: Ord+Clone+Hashable, T: Lattice+Ord+Clone, R: Copy> Cursor<K, (), T, R> for OrdKeyCursor<K, T, R> {
@@ -231,7 +232,7 @@ impl<K: Ord+Clone+Hashable, T: Lattice+Ord+Clone, R: Copy> Cursor<K, (), T, R> f
 
 /// A builder for creating layers from unsorted update tuples.
 pub struct OrdKeyBuilder<K: Ord, T: Ord, R: Diff> {
-	builder: OrderedBuilder<K, UnorderedBuilder<(T, R)>>,
+	builder: OrderedBuilder<K, OrderedLeafBuilder<T, R>>,
 }
 
 impl<K, T, R> Builder<K, (), T, R, OrdKeyBatch<K, T, R>> for OrdKeyBuilder<K, T, R> 
@@ -239,13 +240,13 @@ where K: Ord+Clone+Hashable, T: Lattice+Ord+Clone, R: Diff {
 
 	fn new() -> Self { 
 		OrdKeyBuilder { 
-			builder: OrderedBuilder::<K, UnorderedBuilder<(T, R)>>::new() 
+			builder: OrderedBuilder::<K, OrderedLeafBuilder<T, R>>::new() 
 		} 
 	}
 
 	fn with_capacity(cap: usize) -> Self {
 		OrdKeyBuilder { 
-			builder: OrderedBuilder::<K, UnorderedBuilder<(T, R)>>::with_capacity(cap) 
+			builder: OrderedBuilder::<K, OrderedLeafBuilder<T, R>>::with_capacity(cap) 
 		} 
 	}
 

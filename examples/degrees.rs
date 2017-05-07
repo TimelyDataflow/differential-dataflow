@@ -14,6 +14,7 @@ use differential_dataflow::{Collection, AsCollection};
 use differential_dataflow::operators::*;
 // use differential_dataflow::operators::join::JoinArranged;
 use differential_dataflow::operators::group::GroupArranged;
+use differential_dataflow::operators::count::CountTotal;
 use differential_dataflow::operators::arrange::{ArrangeByKey, ArrangeBySelf};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::implementations::hash::HashValSpine as Spine;
@@ -42,15 +43,15 @@ fn main() {
             // pull off source, and count.
             let mut edges = edges.as_collection();
 
-            if kc1 { edges = kcore1(&edges, std::env::args().nth(4).unwrap().parse().unwrap()); }
-            if kc2 { edges = kcore2(&edges, std::env::args().nth(4).unwrap().parse().unwrap()); }
+            // if kc1 { edges = kcore1(&edges, std::env::args().nth(4).unwrap().parse().unwrap()); }
+            // if kc2 { edges = kcore2(&edges, std::env::args().nth(4).unwrap().parse().unwrap()); }
 
             let degrs = edges.map(|(src, _dst)| src)
-                             .count_u();
+                             .count_total_u();
 
             // pull of count, and count.
             let distr = degrs.map(|(_src, cnt)| cnt as usize)
-                             .count_u();
+                             .count_total_u();
 
             // show us something about the collection, notice when done.
             let probe = distr//.inspect(|x| println!("observed: {:?}", x))
@@ -115,41 +116,41 @@ fn main() {
     }).unwrap();
 }
 
-fn kcore1<G: Scope>(edges: &Collection<G, (u32, u32)>, k: isize) -> Collection<G, (u32, u32)> 
-where G::Timestamp: Lattice+Ord {
+// fn kcore1<G: Scope>(edges: &Collection<G, (u32, u32)>, k: isize) -> Collection<G, (u32, u32)> 
+// where G::Timestamp: Lattice+Ord {
 
-    edges.iterate(|inner| {
-        // determine active vertices
-        let active = inner.flat_map(|(src,dst)| Some((src,())).into_iter().chain(Some((dst,())).into_iter()))
-                          .group(move |_k, s, t| { if s[0].1 > k { t.push(((),1)) } })
-                          .map(|(k,_)| k);
-                          // .threshold_u(move |_,cnt| if cnt >= k { 1 } else { 0 });
+//     edges.iterate(|inner| {
+//         // determine active vertices
+//         let active = inner.flat_map(|(src,dst)| Some((src,())).into_iter().chain(Some((dst,())).into_iter()))
+//                           .group(move |_k, s, t| { if s[0].1 > k { t.push(((),1)) } })
+//                           .map(|(k,_)| k);
+//                           // .threshold_u(move |_,cnt| if cnt >= k { 1 } else { 0 });
 
-        // restrict edges active vertices, return result
-        edges.enter(&inner.scope())
-             .semijoin(&active)
-             .map(|(src,dst)| (dst,src))
-             .semijoin(&active)
-             .map(|(dst,src)| (src,dst))
-    })
-}
+//         // restrict edges active vertices, return result
+//         edges.enter(&inner.scope())
+//              .semijoin(&active)
+//              .map(|(src,dst)| (dst,src))
+//              .semijoin(&active)
+//              .map(|(dst,src)| (src,dst))
+//     })
+// }
 
-fn kcore2<G: Scope>(edges: &Collection<G, (u32, u32)>, k: isize) -> Collection<G, (u32, u32)> 
-where G::Timestamp: Lattice+::std::hash::Hash+Ord {
+// fn kcore2<G: Scope>(edges: &Collection<G, (u32, u32)>, k: isize) -> Collection<G, (u32, u32)> 
+// where G::Timestamp: Lattice+::std::hash::Hash+Ord {
 
-    edges.iterate(move |inner| {
-        // determine active vertices
-        let active = inner.flat_map(|(src,dst)| Some(src).into_iter().chain(Some(dst).into_iter()))
-                          .arrange_by_self()
-                          .group_arranged(move |_k, s, t| { if s[0].1 > k { t.push(((),1)) } }, Spine::new());
+//     edges.iterate(move |inner| {
+//         // determine active vertices
+//         let active = inner.flat_map(|(src,dst)| Some(src).into_iter().chain(Some(dst).into_iter()))
+//                           .arrange_by_self()
+//                           .group_arranged(move |_k, s, t| { if s[0].1 > k { t.push(((),1)) } }, Spine::new());
 
-        // restrict edges active vertices, return result
-        edges.enter(&inner.scope())
-             .arrange_by_key_hashed()
-             .join_core(&active, |k,v,_| Some((k.item.clone(), v.clone())))
-             .map(|(src,dst)| (dst,src))
-             .arrange_by_key_hashed()
-             .join_core(&active, |k,v,_| Some((k.item.clone(), v.clone())))
-             .map(|(dst,src)| (src,dst))
-    })
-}
+//         // restrict edges active vertices, return result
+//         edges.enter(&inner.scope())
+//              .arrange_by_key_hashed()
+//              .join_core(&active, |k,v,_| Some((k.item.clone(), v.clone())))
+//              .map(|(src,dst)| (dst,src))
+//              .arrange_by_key_hashed()
+//              .join_core(&active, |k,v,_| Some((k.item.clone(), v.clone())))
+//              .map(|(dst,src)| (src,dst))
+//     })
+// }
