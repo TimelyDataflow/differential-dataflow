@@ -68,6 +68,6 @@ where G::Timestamp: Lattice+Ord {
         .inner
         .map(|((_part, price), time, count)| (0u8, time, price * count as i64))
         .as_collection()
-        .count_u()
+        .count_total_u()
         .probe()
 }

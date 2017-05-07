@@ -99,6 +99,6 @@ where G::Timestamp: Lattice+Ord {
         .semijoin_u(&latesupps)
         .map(|(_, (name, nation))| (nation, name))
         .semijoin_u(&collections.nations().filter(|n| starts_with(&n.name, b"SAUDI ARABIA")).map(|n| n.nation_key))
-        .count()
+        .count_total()
         .probe()
 }

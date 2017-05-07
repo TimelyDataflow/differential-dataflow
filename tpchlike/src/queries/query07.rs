@@ -107,6 +107,6 @@ where G::Timestamp: Lattice+Ord {
         .join_u(&orders)
         .map(|(_order_key, (ship_date, name_s), name_c)| (name_s, name_c, ship_date >> 16))
         .filter(|x| x.0 != x.1)
-        .count()
+        .count_total()
         .probe()
 }

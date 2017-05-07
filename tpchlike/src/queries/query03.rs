@@ -74,6 +74,6 @@ where G::Timestamp: Lattice+Ord {
         .semijoin_u(&customers)
         .map(|(_, (order_key, order_date, ship_priority))| (order_key, (order_date, ship_priority)))
         .semijoin_u(&lineitems)
-        .count()
+        .count_total()
         .probe()
 }

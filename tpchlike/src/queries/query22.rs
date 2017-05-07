@@ -65,6 +65,8 @@ use ::Collections;
 pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp> 
 where G::Timestamp: Lattice+Ord {
 
+    println!("TODO: Q22 uses a `group` for counting to get an arrangement; could use `count_total`");
+
     let customers = 
     collections
         .customers()
@@ -95,6 +97,6 @@ where G::Timestamp: Lattice+Ord {
         .inner
         .map(|((cc, acct), t, d)| (cc, t, DiffPair::new(acct as isize * d, d)))
         .as_collection()
-        .count_u()
+        .count_total_u()
         .probe()
 }

@@ -78,6 +78,6 @@ where G::Timestamp: Lattice+Ord {
         .join_u(&collections.suppliers().map(|s| (s.supp_key, s.nation_key)))
         .map(|(_, order_year, nation_key)| (nation_key, order_year))
         .join_u(&collections.nations().map(|n| (n.nation_key, n.name)))
-        .count()
+        .count_total()
         .probe()
 }

@@ -55,8 +55,8 @@ where G::Timestamp: Lattice+Ord {
         .customers()
         .map(|c| c.cust_key)
         .concat(&orders)
-        .count_u()
+        .count_total_u()
         .map(|(_cust_key, count)| (count-1) as usize)
-        .count_u()
+        .count_total_u()
         .probe()
 }

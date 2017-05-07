@@ -93,7 +93,7 @@ where G::Timestamp: Lattice+Ord {
                 t.extend(s.iter().filter(|x| x.1 == max));
             })
             .map(|(_, key)| key)
-            .count_u();
+            .count_total_u();
 
     collections
         .suppliers()

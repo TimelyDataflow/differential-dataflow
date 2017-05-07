@@ -85,6 +85,6 @@ where G::Timestamp: Lattice+Ord {
         .semijoin_u(&orders)
         .map(|(cust_key, (name, phn, addr, comm, nation_key))| (nation_key, (cust_key, name, phn, addr, comm)))
         .join_u(&collections.nations().map(|n| (n.nation_key, n.name)))
-        .count()
+        .count_total()
         .probe()
 }

@@ -66,6 +66,6 @@ where G::Timestamp: Lattice+Ord {
         )
         .arrange(DefaultValTrace::new())
         .join_core(&lineitems, |_k,v,_| Some(v.clone()))
-        .count()
+        .count_total()
         .probe()
 }

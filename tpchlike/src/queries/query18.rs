@@ -58,7 +58,8 @@ use ::Collections;
 pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp> 
 where G::Timestamp: Lattice+Ord {
 
-    println!("TODO: Q18 could use filter trace wrapper");
+    println!("TODO: Q18 could use filter trace wrapper (eval vs filter in `join_core`)");
+    println!("TODO: Q18 uses `group_arranged` to get arrangement, but could use count_total");
 
     let orders =
     collections

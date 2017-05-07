@@ -77,6 +77,6 @@ where G::Timestamp: Lattice+Ord {
             t.extend(s.iter().filter(|x| x.1 > threshold));
         })
         .map(|(_, part_key)| part_key)
-        .count_u()
+        .count_total_u()
         .probe()
 }

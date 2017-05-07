@@ -7,7 +7,8 @@ authors = ["Frank McSherry <fmcsherry@me.com>"]
 git="https://github.com/frankmcsherry/timely-dataflow/"
 
 [dependencies.differential-dataflow]
-git="https://github.com/frankmcsherry/differential-dataflow"
+path="../"
+#git="https://github.com/frankmcsherry/differential-dataflow"
 
 [dependencies.arrayvec]
 git="https://github.com/bluss/arrayvec"

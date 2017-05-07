@@ -18,27 +18,27 @@ Here are some initial measurements on the scale factor 1 dataset (about 1GB of d
 
 |                                     |  1,000 | 10,000 | 100,000 | tuples touched | rate @ 100,000 | [Hot Dog](https://infoscience.epfl.ch/record/218203/files/sigmod2016-cr.pdf?version=1) |
 |------------------------------------:|-------:|-------:|--------:|---------------:|---------------:|----------:|
-| [query01](./src/queries/query01.rs) |  4.04s |  4.24s |   5.10s |      6,001,215 |        1.18M/s |   1.27M/s |
-| [query02](./src/queries/query02.rs) |  0.51s |  0.40s |   0.40s |      1,010,030 |        2.55M/s | 756.61K/s |
-| [query03](./src/queries/query03.rs) |  1.84s |  1.32s |   1.10s |      7,651,215 |        6.98M/s |   3.74M/s |
-| [query04](./src/queries/query04.rs) |  2.54s |  2.09s |   1.91s |      7,501,215 |        3.93M/s |  10.08M/s |
-| [query05](./src/queries/query05.rs) |  2.90s |  2.32s |   1.77s |      7,661,245 |        4.32M/s | 584.26K/s |
-| [query06](./src/queries/query06.rs) |  0.32s |  0.17s |   0.16s |      6,001,215 |       36.88M/s | 138.33M/s |
-| [query07](./src/queries/query07.rs) |  2.87s |  1.85s |   1.45s |      7,661,240 |        5.28M/s | 650.65K/s |
-| [query08](./src/queries/query08.rs) |  4.74s |  4.01s |   3.04s |      7,861,240 |        2.52M/s |  91.22K/s |
-| [query09](./src/queries/query09.rs) | 10.65s |  7.16s |   4.75s |      8,511,240 |        1.79M/s | 104.37K/s |
-| [query10](./src/queries/query10.rs) |  7.07s |  4.52s |   2.70s |      7,651,240 |        2.84M/s |   2.89M/s |
-| [query11](./src/queries/query11.rs) |  9.98s |  9.08s |   9.73s |        810,025 |       83.25K/s |     768/s |
-| [query12](./src/queries/query12.rs) |  1.08s |  0.79s |   0.61s |      7,501,215 |       12.37M/s |   8.68M/s |
-| [query13](./src/queries/query13.rs) |  6.18s |  4.47s |   3.83s |      1,650,000 |      430.86K/s | 779.52K/s |
-| [query14](./src/queries/query14.rs) |  0.87s |  0.51s |   0.36s |      6,201,215 |       17.12M/s |  33.04M/s |
-| [query15](./src/queries/query15.rs) |  1.54s |  0.81s |   0.45s |      6,011,215 |       13.44M/s |      17/s |
-| [query16](./src/queries/query16.rs) |  1.17s |  0.85s |   0.71s |      1,010,000 |        1.43M/s | 123.94K/s |
-| [query17](./src/queries/query17.rs) |  3.96s |  3.29s |   2.75s |      6,201,215 |        2.25M/s | 379.30K/s |
-| [query18](./src/queries/query18.rs) | 12.46s | 10.93s |   9.77s |      7,651,215 |      782.91K/s |   1.13M/s |
-| [query19](./src/queries/query19.rs) |  0.43s |  0.23s |   0.22s |      6,201,215 |       28.22M/s |   1.95M/s |
-| [query20](./src/queries/query20.rs) |  1.45s |  0.86s |   0.72s |      6,811,215 |        9.43M/s |     977/s |
-| [query21](./src/queries/query21.rs) |  8.81s |  6.97s |   5.82s |      7,511,240 |        1.29M/s | 836.80K/s |
-| [query22](./src/queries/query22.rs) |  7.67s |  8.27s |   9.50s |      1,650,000 |      173.66K/s |     189/s |
+| [query01](./src/queries/query01.rs) |  1.46s |  1.41s |   1.58s |      6,001,215 |        3.79M/s |   1.27M/s |
+| [query02](./src/queries/query02.rs) |  0.47s |  0.38s |   0.34s |      1,010,030 |        2.96M/s | 756.61K/s |
+| [query03](./src/queries/query03.rs) |  1.68s |  1.19s |   1.02s |      7,651,215 |        7.50M/s |   3.74M/s |
+| [query04](./src/queries/query04.rs) |  2.24s |  1.92s |   1.78s |      7,501,215 |        4.22M/s |  10.08M/s |
+| [query05](./src/queries/query05.rs) |  2.56s |  2.17s |   1.66s |      7,661,245 |        4.60M/s | 584.26K/s |
+| [query06](./src/queries/query06.rs) |  0.31s |  0.17s |   0.16s |      6,001,215 |       37.08M/s | 138.33M/s |
+| [query07](./src/queries/query07.rs) |  2.81s |  1.69s |   1.37s |      7,661,240 |        5.60M/s | 650.65K/s |
+| [query08](./src/queries/query08.rs) |  4.43s |  3.89s |   2.97s |      7,861,240 |        2.58M/s |  91.22K/s |
+| [query09](./src/queries/query09.rs) |  9.91s |  6.90s |   4.40s |      8,511,240 |        1.93M/s | 104.37K/s |
+| [query10](./src/queries/query10.rs) |  4.56s |  3.05s |   1.89s |      7,651,240 |        4.04M/s |   2.89M/s |
+| [query11](./src/queries/query11.rs) |  9.60s |  8.73s |   9.54s |        810,025 |       84.93K/s |     768/s |
+| [query12](./src/queries/query12.rs) |  0.97s |  0.74s |   0.55s |      7,501,215 |       13.75M/s |   8.68M/s |
+| [query13](./src/queries/query13.rs) |  2.11s |  1.53s |   1.43s |      1,650,000 |        1.16M/s | 779.52K/s |
+| [query14](./src/queries/query14.rs) |  0.66s |  0.39s |   0.29s |      6,201,215 |       21.07M/s |  33.04M/s |
+| [query15](./src/queries/query15.rs) |  1.51s |  0.81s |   0.45s |      6,011,215 |       13.50M/s |      17/s |
+| [query16](./src/queries/query16.rs) |  0.82s |  0.63s |   0.57s |      1,010,000 |        1.76M/s | 123.94K/s |
+| [query17](./src/queries/query17.rs) |  3.91s |  3.16s |   2.66s |      6,201,215 |        2.33M/s | 379.30K/s |
+| [query18](./src/queries/query18.rs) | 11.86s | 10.43s |   9.25s |      7,651,215 |      827.38K/s |   1.13M/s |
+| [query19](./src/queries/query19.rs) |  0.41s |  0.23s |   0.22s |      6,201,215 |       28.73M/s |   1.95M/s |
+| [query20](./src/queries/query20.rs) |  1.31s |  0.86s |   0.74s |      6,811,215 |        9.22M/s |     977/s |
+| [query21](./src/queries/query21.rs) |  8.11s |  6.50s |   5.51s |      7,511,240 |        1.36M/s | 836.80K/s |
+| [query22](./src/queries/query22.rs) |  7.73s |  8.25s |   9.50s |      1,650,000 |      173.70K/s |     189/s |
 
 **PLEASE NOTE**: These times are the reported running times of the code in the repository, which may or may not compute the intended quantities. It is very possible (likely, even) that I have botched some or all of the query implementations. I'm not validating the results at the moment, as I don't have much to validate against, but if you think you see bugs (or want to help validating) drop me a line! Please don't just go and use these measurements as "truth" until we find out if I am actually computing the correct answers.

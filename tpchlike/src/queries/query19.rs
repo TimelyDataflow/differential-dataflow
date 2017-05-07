@@ -61,7 +61,7 @@ fn starts_with(source: &[u8], query: &[u8]) -> bool {
 pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp> 
 where G::Timestamp: Lattice+Ord {
 
-    println!("TODO: query 19 could use some _u attention");
+    println!("TODO: Q19 joins have spurious () value, because `intersect` doesn't exist");
 
     let lineitems =
     collections
@@ -93,6 +93,6 @@ where G::Timestamp: Lattice+Ord {
         .concat(&result2)
         .concat(&result3)
         .map(|(x,_)| x)
-        .count_u()
+        .count_total_u()
         .probe()
 }

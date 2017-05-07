@@ -60,6 +60,6 @@ where G::Timestamp: Lattice+Ord {
         .as_collection()
         .semijoin_u(&lineitems)
         .map(|(part_key, _)| part_key)
-        .count_u()
+        .count_total_u()
         .probe()
 }

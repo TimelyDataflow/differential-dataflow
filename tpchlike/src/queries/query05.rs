@@ -94,6 +94,6 @@ where G::Timestamp: Lattice+Ord {
     suppliers
         .semijoin_u(&lineitems)
         .map(|(_supp, name)| name)
-        .count()
+        .count_total()
         .probe()
 }

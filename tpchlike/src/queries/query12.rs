@@ -85,6 +85,6 @@ where G::Timestamp: Lattice+Ord {
     orders
         .join_u(&lineitems)
         .map(|(_order, _, ship_mode)| ship_mode)
-        .count()
+        .count_total()
         .probe()
 }

@@ -100,6 +100,6 @@ where G::Timestamp: Lattice+Ord {
         .inner
         .map(|((_, order_date, is_name), time, price)| (order_date, time, DiffPair::new(if is_name { price } else { 0 }, price)))
         .as_collection()
-        .count_u()
+        .count_total_u()
         .probe()
 }

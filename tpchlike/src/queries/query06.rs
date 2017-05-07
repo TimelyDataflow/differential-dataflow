@@ -41,6 +41,6 @@ where G::Timestamp: Lattice+Ord {
             else { None }
         )
         .as_collection()
-        .count_u()
+        .count_total_u()
         .probe()
 }
