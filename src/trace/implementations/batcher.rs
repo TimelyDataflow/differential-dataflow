@@ -4,13 +4,13 @@ use timely::progress::frontier::Antichain;
 use timely_sort::{MSBRadixSorter, RadixSorterBase};
 
 use ::Diff;
-use hashable::Hashable;
+use hashable::HashOrdered;
 
 use lattice::Lattice;
 use trace::{Batch, Batcher, Builder};
 
 /// Creates batches from unordered tuples.
-pub struct RadixBatcher<K: Hashable, V, T: PartialOrd, R: Diff, B: Batch<K, V, T, R>> {
+pub struct RadixBatcher<K: HashOrdered, V, T: PartialOrd, R: Diff, B: Batch<K, V, T, R>> {
     phantom: ::std::marker::PhantomData<B>,
     buffers: Vec<Vec<((K, V), T, R)>>,
     sorted: usize,
@@ -22,9 +22,9 @@ pub struct RadixBatcher<K: Hashable, V, T: PartialOrd, R: Diff, B: Batch<K, V, T
 
 impl<K, V, T, R, B> RadixBatcher<K, V, T, R, B>
 where 
-    K: Ord+Clone+Hashable, 
-    V: Ord+Clone,
-    T: Lattice+Ord+Clone,
+    K: Ord+HashOrdered, 
+    V: Ord,
+    T: Lattice+Ord,
     R: Diff,
     B: Batch<K, V, T, R> 
 {
@@ -88,8 +88,8 @@ where
 
 impl<K, V, T, R, B> Batcher<K, V, T, R, B> for RadixBatcher<K, V, T, R, B> 
 where 
-    K: Ord+Clone+Hashable, 
-    V: Ord+Clone,
+    K: Ord+HashOrdered, 
+    V: Ord,
     T: Lattice+Ord+Clone,
     R: Diff,
     B: Batch<K, V, T, R>, 
@@ -169,7 +169,7 @@ where
     }
 
     fn frontier(&mut self) -> &[T] {
-        self.frontier = Antichain::new();
+        self.frontier.clear();
         for buffer in &self.buffers {
             for &(_, ref time, _) in buffer {
                 self.frontier.insert(time.clone());
@@ -182,11 +182,10 @@ where
 
 /// Scans `vec[off..]` and consolidates differences of adjacent equivalent elements.
 #[inline(always)]
-fn consolidate_vec<K: Ord+Hashable+Clone, V: Ord+Clone, T:Ord+Clone, R: Diff>(slice: &mut Vec<((K,V),T,R)>) {
+fn consolidate_vec<K: Ord+HashOrdered, V: Ord, T:Ord, R: Diff>(slice: &mut Vec<((K,V),T,R)>) {
 
-    // IMPORTANT: This needs to order by the key's Hashable implementation!
     slice.sort_by(|&((ref k1, ref v1), ref t1, _),&((ref k2, ref v2), ref t2, _)| 
-        (k1.hashed(), k1, v1, t1).cmp(&(k2.hashed(), k2, v2, t2))
+        (k1, v1, t1).cmp(&(k2, v2, t2))
     );
     for index in 1 .. slice.len() {
         if slice[index].0 == slice[index - 1].0 && slice[index].1 == slice[index - 1].1 {

@@ -11,7 +11,7 @@
 use std::rc::Rc;
 
 use ::Diff;
-use hashable::Hashable;
+use hashable::HashOrdered;
 
 use trace::layers::{Trie, TupleBuilder};
 use trace::layers::Builder as TrieBuilder;
@@ -35,7 +35,7 @@ pub type OrdKeySpine<K, T, R> = Spine<K, (), T, R, OrdKeyBatch<K, T, R>>;
 
 /// An immutable collection of update tuples, from a contiguous interval of logical times.
 #[derive(Debug)]
-pub struct OrdValBatch<K: Ord+Hashable, V: Ord, T: Lattice, R> {
+pub struct OrdValBatch<K: Ord+HashOrdered, V: Ord, T: Lattice, R> {
 	/// Where all the dataz is.
 	pub layer: Rc<OrderedLayer<K, OrderedLayer<V, OrderedLeaf<T, R>>>>,
 	/// Description of the update times this layer represents.
@@ -43,7 +43,7 @@ pub struct OrdValBatch<K: Ord+Hashable, V: Ord, T: Lattice, R> {
 }
 
 impl<K, V, T, R> BatchReader<K, V, T, R> for OrdValBatch<K, V, T, R> 
-where K: Ord+Clone+Hashable, V: Ord+Clone, T: Lattice+Ord+Clone, R: Diff {
+where K: Ord+Clone+HashOrdered, V: Ord+Clone, T: Lattice+Ord+Clone, R: Diff {
 	type Cursor = OrdValCursor<K, V, T, R>;
 	fn cursor(&self) -> Self::Cursor { 
 		OrdValCursor { cursor: self.layer.cursor() } 
@@ -53,7 +53,7 @@ where K: Ord+Clone+Hashable, V: Ord+Clone, T: Lattice+Ord+Clone, R: Diff {
 }
 
 impl<K, V, T, R> Batch<K, V, T, R> for OrdValBatch<K, V, T, R> 
-where K: Ord+Clone+Hashable, V: Ord+Clone, T: Lattice+Ord+Clone, R: Diff {
+where K: Ord+Clone+HashOrdered, V: Ord+Clone, T: Lattice+Ord+Clone, R: Diff {
 	type Batcher = RadixBatcher<K, V, T, R, Self>;
 	type Builder = OrdValBuilder<K, V, T, R>;
 	fn merge(&self, other: &Self) -> Self {
@@ -76,7 +76,7 @@ where K: Ord+Clone+Hashable, V: Ord+Clone, T: Lattice+Ord+Clone, R: Diff {
 	}
 }
 
-impl<K: Ord+Hashable, V: Ord, T: Lattice+Ord+Clone, R> Clone for OrdValBatch<K, V, T, R> {
+impl<K: Ord+HashOrdered, V: Ord, T: Lattice+Ord+Clone, R> Clone for OrdValBatch<K, V, T, R> {
 	fn clone(&self) -> Self {
 		OrdValBatch {
 			layer: self.layer.clone(),
@@ -87,12 +87,12 @@ impl<K: Ord+Hashable, V: Ord, T: Lattice+Ord+Clone, R> Clone for OrdValBatch<K, 
 
 /// A cursor for navigating a single layer.
 #[derive(Debug)]
-pub struct OrdValCursor<K: Ord+Clone+Hashable, V: Ord+Clone, T: Lattice+Ord+Clone, R: Copy> {
+pub struct OrdValCursor<K: Ord+Clone+HashOrdered, V: Ord+Clone, T: Lattice+Ord+Clone, R: Copy> {
 	cursor: OrderedCursor<K, OrderedCursor<V, OrderedLeafCursor<T, R>>>,
 }
 
 impl<K, V, T, R> Cursor<K, V, T, R> for OrdValCursor<K, V, T, R> 
-where K: Ord+Clone+Hashable, V: Ord+Clone, T: Lattice+Ord+Clone, R: Copy {
+where K: Ord+Clone+HashOrdered, V: Ord+Clone, T: Lattice+Ord+Clone, R: Copy {
 	fn key(&self) -> &K { &self.cursor.key() }
 	fn val(&self) -> &V { &self.cursor.child.key() }
 	fn map_times<L: FnMut(&T, R)>(&mut self, mut logic: L) {
@@ -114,12 +114,12 @@ where K: Ord+Clone+Hashable, V: Ord+Clone, T: Lattice+Ord+Clone, R: Copy {
 
 
 /// A builder for creating layers from unsorted update tuples.
-pub struct OrdValBuilder<K: Ord+Hashable, V: Ord, T: Ord, R: Diff> {
+pub struct OrdValBuilder<K: Ord+HashOrdered, V: Ord, T: Ord, R: Diff> {
 	builder: OrderedBuilder<K, OrderedBuilder<V, OrderedLeafBuilder<T, R>>>,
 }
 
 impl<K, V, T, R> Builder<K, V, T, R, OrdValBatch<K, V, T, R>> for OrdValBuilder<K, V, T, R> 
-where K: Ord+Clone+Hashable, V: Ord+Clone, T: Lattice+Ord+Clone, R: Diff {
+where K: Ord+Clone+HashOrdered, V: Ord+Clone, T: Lattice+Ord+Clone, R: Diff {
 
 	fn new() -> Self { 
 		OrdValBuilder { 
@@ -151,7 +151,7 @@ where K: Ord+Clone+Hashable, V: Ord+Clone, T: Lattice+Ord+Clone, R: Diff {
 
 /// An immutable collection of update tuples, from a contiguous interval of logical times.
 #[derive(Debug)]
-pub struct OrdKeyBatch<K: Ord+Hashable, T: Lattice, R> {
+pub struct OrdKeyBatch<K: Ord+HashOrdered, T: Lattice, R> {
 	/// Where all the dataz is.
 	pub layer: Rc<OrderedLayer<K, OrderedLeaf<T, R>>>,
 	/// Description of the update times this layer represents.
@@ -159,7 +159,7 @@ pub struct OrdKeyBatch<K: Ord+Hashable, T: Lattice, R> {
 }
 
 impl<K, T, R> BatchReader<K, (), T, R> for OrdKeyBatch<K, T, R> 
-where K: Ord+Clone+Hashable, T: Lattice+Ord+Clone, R: Diff {
+where K: Ord+Clone+HashOrdered, T: Lattice+Ord+Clone, R: Diff {
 	type Cursor = OrdKeyCursor<K, T, R>;
 	fn cursor(&self) -> Self::Cursor { 
 		OrdKeyCursor { empty: (), valid: true, cursor: self.layer.cursor() } 
@@ -169,7 +169,7 @@ where K: Ord+Clone+Hashable, T: Lattice+Ord+Clone, R: Diff {
 }
 
 impl<K, T, R> Batch<K, (), T, R> for OrdKeyBatch<K, T, R> 
-where K: Ord+Clone+Hashable, T: Lattice+Ord+Clone, R: Diff {
+where K: Ord+Clone+HashOrdered, T: Lattice+Ord+Clone, R: Diff {
 	type Batcher = RadixBatcher<K, (), T, R, Self>;
 	type Builder = OrdKeyBuilder<K, T, R>;
 	fn merge(&self, other: &Self) -> Self {
@@ -192,7 +192,7 @@ where K: Ord+Clone+Hashable, T: Lattice+Ord+Clone, R: Diff {
 	}
 }
 
-impl<K: Ord+Hashable, T: Lattice+Ord+Clone, R> Clone for OrdKeyBatch<K, T, R> {
+impl<K: Ord+HashOrdered, T: Lattice+Ord+Clone, R> Clone for OrdKeyBatch<K, T, R> {
 	fn clone(&self) -> Self {
 		OrdKeyBatch {
 			layer: self.layer.clone(),
@@ -203,13 +203,13 @@ impl<K: Ord+Hashable, T: Lattice+Ord+Clone, R> Clone for OrdKeyBatch<K, T, R> {
 
 /// A cursor for navigating a single layer.
 #[derive(Debug)]
-pub struct OrdKeyCursor<K: Ord+Clone+Hashable, T: Lattice+Ord+Clone, R: Copy> {
+pub struct OrdKeyCursor<K: Ord+Clone+HashOrdered, T: Lattice+Ord+Clone, R: Copy> {
 	valid: bool,
 	empty: (),
 	cursor: OrderedCursor<K, OrderedLeafCursor<T, R>>,
 }
 
-impl<K: Ord+Clone+Hashable, T: Lattice+Ord+Clone, R: Copy> Cursor<K, (), T, R> for OrdKeyCursor<K, T, R> {
+impl<K: Ord+Clone+HashOrdered, T: Lattice+Ord+Clone, R: Copy> Cursor<K, (), T, R> for OrdKeyCursor<K, T, R> {
 	fn key(&self) -> &K { &self.cursor.key() }
 	fn val(&self) -> &() { &self.empty }
 	fn map_times<L: FnMut(&T, R)>(&mut self, mut logic: L) {
@@ -236,7 +236,7 @@ pub struct OrdKeyBuilder<K: Ord, T: Ord, R: Diff> {
 }
 
 impl<K, T, R> Builder<K, (), T, R, OrdKeyBatch<K, T, R>> for OrdKeyBuilder<K, T, R> 
-where K: Ord+Clone+Hashable, T: Lattice+Ord+Clone, R: Diff {
+where K: Ord+Clone+HashOrdered, T: Lattice+Ord+Clone, R: Diff {
 
 	fn new() -> Self { 
 		OrdKeyBuilder { 
