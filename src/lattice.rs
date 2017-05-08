@@ -32,16 +32,21 @@ pub trait Lattice : PartialOrder {
     ///
     /// # Examples
     ///
-    /// ```ignore
-    /// use timely::progress::nested::product::Product;
+    /// ```
+    /// # extern crate timely;
+    /// # extern crate differential_dataflow;
+    /// # use timely::PartialOrder;
+    /// # use timely::progress::nested::product::Product;
+    /// # use differential_dataflow::lattice::Lattice;
+    /// # fn main() {
     ///
     /// let time = Product::new(3, 7);
     /// let frontier = vec![Product::new(4, 8), Product::new(5, 3)];
     /// let advanced = time.advance_by(&frontier[..]);
     ///
     /// // `time` and `advanced` are indistinguishable to elements >= an element of `frontier`
-    /// for i in (0 .. 10) {
-    ///     for j in (0 .. 10) {
+    /// for i in 0 .. 10 {
+    ///     for j in 0 .. 10 {
     ///         let test = Product::new(i, j);
     ///         // for `test` in the future of `frontier` ..
     ///         if frontier.iter().any(|t| t.less_equal(&test)) {
@@ -50,7 +55,8 @@ pub trait Lattice : PartialOrder {
     ///     }
     /// }
     ///
-    /// assert_eq!(time, Product::new(4, 7));
+    /// assert_eq!(advanced, Product::new(4, 7));
+    /// # }
     /// ```
     #[inline(always)]
     fn advance_by(&self, frontier: &[Self]) -> Self where Self: Sized{
