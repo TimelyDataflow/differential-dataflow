@@ -4,7 +4,7 @@ use timely::dataflow::operators::probe::Handle as ProbeHandle;
 
 use differential_dataflow::AsCollection;
 use differential_dataflow::operators::*;
-use differential_dataflow::lattice::Lattice;
+use differential_dataflow::lattice::TotalOrder;
 
 use ::Collections;
 
@@ -34,7 +34,7 @@ use ::Collections;
 // :n -1
 
 pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp> 
-where G::Timestamp: Lattice+Ord {
+where G::Timestamp: TotalOrder+Ord {
 
     println!("TODO: Q17 gets a global count with key 0u8, rather than ().");
 

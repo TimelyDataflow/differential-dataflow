@@ -4,7 +4,7 @@ use timely::dataflow::operators::probe::Handle as ProbeHandle;
 
 use differential_dataflow::AsCollection;
 use differential_dataflow::operators::*;
-use differential_dataflow::lattice::Lattice;
+use differential_dataflow::lattice::TotalOrder;
 use differential_dataflow::difference::DiffPair;
 
 use ::Collections;
@@ -51,9 +51,9 @@ fn starts_with(source: &[u8], query: &[u8]) -> bool {
 }
 
 pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp> 
-where G::Timestamp: Lattice+Ord {
+where G::Timestamp: TotalOrder+Ord {
 
-    println!("TODO: query 12 does contortions because isize doesn't implement Mul<DiffPair<isize, isize>>.");
+    println!("TODO: Q12 does contortions because isize doesn't implement Mul<DiffPair<isize, isize>>.");
 
     let orders = 
     collections

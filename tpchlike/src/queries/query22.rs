@@ -4,7 +4,7 @@ use timely::dataflow::operators::probe::Handle as ProbeHandle;
 
 use differential_dataflow::AsCollection;
 use differential_dataflow::operators::*;
-use differential_dataflow::lattice::Lattice;
+use differential_dataflow::lattice::TotalOrder;
 use differential_dataflow::difference::DiffPair;
 use differential_dataflow::operators::arrange::Arrange;
 // use differential_dataflow::operators::join::JoinArranged;
@@ -63,7 +63,7 @@ use ::Collections;
 // :n -1
 
 pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp> 
-where G::Timestamp: Lattice+Ord {
+where G::Timestamp: TotalOrder+Ord {
 
     println!("TODO: Q22 uses a `group` for counting to get an arrangement; could use `count_total`");
 
