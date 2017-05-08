@@ -1,8 +1,6 @@
 use timely::dataflow::*;
-use timely::dataflow::operators::*;
 use timely::dataflow::operators::probe::Handle as ProbeHandle;
 
-use differential_dataflow::AsCollection;
 use differential_dataflow::operators::*;
 use differential_dataflow::lattice::TotalOrder;
 use differential_dataflow::difference::DiffPair;
@@ -43,21 +41,16 @@ where G::Timestamp: TotalOrder+Ord {
     let lineitems = 
     collections
         .lineitems()
-        .inner
-        .flat_map(|(l,t,d)|
+        .explode(|l|
             if create_date(1995,9,1) < l.ship_date && l.ship_date < create_date(1995,10,1) {
-                Some((l.part_key, t, (l.extended_price * (100 - l.discount) / 100) as isize * d))
+                Some((l.part_key, (l.extended_price * (100 - l.discount) / 100) as isize ))
             }
-            else { None }
-        )
-        .as_collection();
-
+            else { None }            
+        );
 
     collections
         .parts()
-        .inner
-        .map(|(p, t, d)| ((p.part_key, ()), t, DiffPair::new(d, if starts_with(&p.typ.as_bytes(), b"PROMO") { d } else { 0 })))
-        .as_collection()
+        .explode(|p| Some(((p.part_key, ()), DiffPair::new(1, if starts_with(&p.typ.as_bytes(), b"PROMO") { 1 } else { 0 }))))
         .semijoin_u(&lineitems)
         .map(|(part_key, _)| part_key)
         .count_total_u()

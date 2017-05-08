@@ -1,8 +1,6 @@
 use timely::dataflow::*;
-use timely::dataflow::operators::*;
 use timely::dataflow::operators::probe::Handle as ProbeHandle;
 
-use differential_dataflow::AsCollection;
 use differential_dataflow::operators::*;
 use differential_dataflow::lattice::TotalOrder;
 
@@ -64,14 +62,12 @@ where G::Timestamp: TotalOrder+Ord {
     let lineitems =
     collections
         .lineitems()
-        .inner
-        .flat_map(|(x,t,d)| 
+        .explode(|x| 
             if (starts_with(&x.ship_mode, b"AIR") || starts_with(&x.ship_mode, b"AIR REG")) && starts_with(&x.ship_instruct, b"DELIVER IN PERSON") {
-                Some(((x.part_key, x.quantity), t, d * (x.extended_price * (100 - x.discount) / 100) as isize))
+                Some(((x.part_key, x.quantity), (x.extended_price * (100 - x.discount) / 100) as isize))
             }
             else { None }
-        )
-        .as_collection();
+        );
 
     let lines1 = lineitems.filter(|&(_, quant)| quant >= 1 && quant <= 11).map(|x| (x.0, ()));
     let lines2 = lineitems.filter(|&(_, quant)| quant >= 10 && quant <= 20).map(|x| (x.0, ()));

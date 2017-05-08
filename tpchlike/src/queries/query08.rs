@@ -1,8 +1,6 @@
 use timely::dataflow::*;
-use timely::dataflow::operators::*;
 use timely::dataflow::operators::probe::Handle as ProbeHandle;
 
-use differential_dataflow::AsCollection;
 use differential_dataflow::operators::*;
 use differential_dataflow::lattice::TotalOrder;
 use differential_dataflow::difference::DiffPair;
@@ -89,17 +87,13 @@ where G::Timestamp: TotalOrder+Ord {
 
     collections
         .lineitems()
-        .inner
-        .map(|(l,t,d)| ((l.part_key, (l.supp_key, l.order_key)), t, ((l.extended_price * (100 - l.discount)) as isize / 100) * d))
-        .as_collection()
+        .explode(|l| Some(((l.part_key, (l.supp_key, l.order_key)), ((l.extended_price * (100 - l.discount)) as isize / 100))))
         .semijoin_u(&parts)
         .map(|(_part_key, (supp_key, order_key))| (order_key, supp_key))
         .join_u(&orders)
         .map(|(_order_key, supp_key, order_date)| (supp_key, order_date))
         .join_u(&suppliers)
-        .inner
-        .map(|((_, order_date, is_name), time, price)| (order_date, time, DiffPair::new(if is_name { price } else { 0 }, price)))
-        .as_collection()
+        .explode(|(_, order_date, is_name)| Some((order_date, DiffPair::new(if is_name { 1 } else { 0 }, 1))))
         .count_total_u()
         .probe()
 }

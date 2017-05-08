@@ -1,8 +1,6 @@
 use timely::dataflow::*;
-use timely::dataflow::operators::*;
 use timely::dataflow::operators::probe::Handle as ProbeHandle;
 
-use differential_dataflow::AsCollection;
 use differential_dataflow::operators::*;
 use differential_dataflow::lattice::TotalOrder;
 
@@ -65,9 +63,7 @@ where G::Timestamp: TotalOrder+Ord {
             t.extend(s.iter().filter(|&&((quantity,_),_)| quantity < threshold)
                              .map(|&((_,price),count)| (price, count)));
         })
-        .inner
-        .map(|((_part, price), time, count)| (0u8, time, price * count as i64))
-        .as_collection()
+        .explode(|(_part, price)| Some((0u8, price as isize)))
         .count_total_u()
         .probe()
 }

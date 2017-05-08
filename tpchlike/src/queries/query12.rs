@@ -1,8 +1,6 @@
 use timely::dataflow::*;
-use timely::dataflow::operators::*;
 use timely::dataflow::operators::probe::Handle as ProbeHandle;
 
-use differential_dataflow::AsCollection;
 use differential_dataflow::operators::*;
 use differential_dataflow::lattice::TotalOrder;
 use differential_dataflow::difference::DiffPair;
@@ -58,17 +56,14 @@ where G::Timestamp: TotalOrder+Ord {
     let orders = 
     collections
         .orders()
-        .inner
-        .map(|(o, t, d)| {
-            let diff = if starts_with(&o.order_priority, b"1-URGENT") || starts_with(&o.order_priority, b"2-HIGH") {
-                DiffPair::new(d, 0)
+        .explode(|o|
+            if starts_with(&o.order_priority, b"1-URGENT") || starts_with(&o.order_priority, b"2-HIGH") {
+                Some(((o.order_key, ()), DiffPair::new(1, 0)))
             }
             else { 
-                DiffPair::new(0, d) 
-            };
-            ((o.order_key, ()), t, diff)
-        })
-        .as_collection();
+                Some(((o.order_key, ()), DiffPair::new(0, 1)))
+            }
+        );
 
     let lineitems =
     collections
