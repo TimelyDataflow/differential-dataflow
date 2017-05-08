@@ -195,8 +195,6 @@ where
         // fabricate a data-parallel operator using the `unary_notify` pattern.
         let stream = self.stream.unary_notify(Pipeline, "Group", Vec::new(), move |input, output, notificator| {
 
-            // let mut timer = ::std::time::Instant::now();
-
             // The `group` operator receives fully formed batches, which each serve as an indication
             // that the frontier has advanced to the upper bound of their description.
             //
@@ -217,6 +215,9 @@ where
 
             let mut batch_cursors = Vec::new();
 
+            // The only purpose of `lower_received` was to allow slicing off old input.
+            let lower_received = upper_received.clone();
+
             // Drain the input stream of batches, validating the contiguity of the batch descriptions and
             // capturing a cursor for each of the batches as well as ensuring we hold a capability for the
             // times in the batch.
@@ -224,7 +225,6 @@ where
 
                 // In principle we could have multiple batches per message (in practice, it would be weird).
                 for batch in batches.drain(..).map(|x| x.item) {
-                    // println!("batch.len(): {:?}", batch.len());
                     assert!(&upper_received[..] == batch.description().lower());
                     upper_received = batch.description().upper().to_vec();
                     batch_cursors.push(batch.cursor());                    
@@ -236,9 +236,6 @@ where
                     capabilities.push(capability);
                 }
             });
-
-            // println!("{:?}\tconsumed input", timer.elapsed());
-            // timer = ::std::time::Instant::now();
 
             // The interval of times we can retire is upper bounded by both the most recently received batch
             // upper bound (`upper_received`) and by the input progress frontier (`notificator.frontier(0)`).
@@ -261,9 +258,6 @@ where
                 }
             }
 
-            // println!("{:?}\tupper_limit determined", timer.elapsed());
-            // timer = ::std::time::Instant::now();
-
             // If we have no capabilities, then we (i) should not produce any outputs and (ii) could not send
             // any produced outputs even if they were (incorrectly) produced. We cannot even send empty batches
             // to indicate forward progress, and must hope that downstream operators look at progress frontiers
@@ -282,9 +276,6 @@ where
                 });
                 interesting = new_interesting;
 
-                // println!("{:?}\tinteresting times determined", timer.elapsed());
-                // timer = ::std::time::Instant::now();
-
                 // Prepare an output buffer and builder for each capability. 
                 //
                 // We buffer and build separately, as outputs are produced grouped by time, whereas the 
@@ -301,19 +292,11 @@ where
                     builders.push(<T2::Batch as Batch<K,V2,G::Timestamp,R2>>::Builder::new());
                 }
 
-                // println!("{:?}\tdistinctions made", timer.elapsed());
-                // timer = ::std::time::Instant::now();
-
                 // cursors for navigating input and output traces.
-                let mut source_cursor: T1::Cursor = source_trace.cursor_through(&upper_received[..]).unwrap();
+                let mut source_cursor: T1::Cursor = source_trace.cursor_through(&lower_received[..]).unwrap();
                 let mut output_cursor: T2::Cursor = output_reader.cursor(); // TODO: this panicked when as above; WHY???
                 let mut batch_cursor = CursorList::new(batch_cursors);
 
-                // println!("{:?}\tcursors acquired", timer.elapsed());
-                // timer = ::std::time::Instant::now();
-
-                // // The only purpose of `lower_received` was to allow slicing off old input.
-                // lower_received = upper_received.clone();
 
                 // let timer = ::std::time::Instant::now();
                 // let mut compute_counter = 0;
@@ -352,8 +335,6 @@ where
 
                     // tidy up times, removing redundancy.
                     sort_dedup(&mut interesting_times);
-                    // interesting_times.sort();
-                    // interesting_times.dedup();
 
                     // let mut interesting_times2 = interesting_times.clone();
                     // let mut buffers2 = buffers.clone();
@@ -424,9 +405,6 @@ where
                     }
                 }
 
-                // println!("{:?}\tkeys processed", timer.elapsed());
-                // timer = ::std::time::Instant::now();
-
                 // build and ship each batch (because only one capability per message).
                 for (index, builder) in builders.drain(..).enumerate() {
                     let mut local_upper = upper_limit.clone();
@@ -440,27 +418,15 @@ where
 
                     if lower_issued != local_upper {
 
-                        // println!("{:?}\t\tstarting", timer.elapsed());
-                        // timer = ::std::time::Instant::now();
-
                         let batch = builder.done(&lower_issued[..], &local_upper[..], &lower_issued[..]);
-
-                        // println!("{:?}\t\tbuild done", timer.elapsed());
-                        // timer = ::std::time::Instant::now();
 
                         // ship batch to the output, and commit to the output trace.
                         output.session(&capabilities[index]).give(BatchWrapper { item: batch.clone() });
                         output_writer.seal(&local_upper[..], Some((capabilities[index].time().clone(), batch)));
 
-                        // println!("{:?}\t\tsent and sealed", timer.elapsed());
-                        // timer = ::std::time::Instant::now();
-
                         lower_issued = local_upper;
                     }
                 }
-
-                // println!("{:?}\toutput sealed, shipped", timer.elapsed());
-                // timer = ::std::time::Instant::now();
 
                 // Determine the frontier of our interesting times.
                 let mut frontier = Vec::<G::Timestamp>::new();
@@ -489,9 +455,6 @@ where
                 // ensure that observed progres is reflected in the output.
                 output_writer.seal(&upper_limit[..], None);
 
-                // println!("{:?}\talmost done", timer.elapsed());
-                // timer = ::std::time::Instant::now();
-
     // let mut ul = upper_limit.clone();
     // ul.sort();
 
@@ -499,24 +462,13 @@ where
     // println!("(key, times) pairs:\t{:?}\t{:?}\t{:?}\tavg {:?}ns\t{:?}", compute_counter, output_counter, key_count, avg_ns, ul);
             }
 
-            // We have processed all updates through `upper_limit` and will only use times in advance of 
-            // this frontier to compare against historical times, so we should allow the trace to start
-            // compacting batches by advancing times.
+            // We only anticipate future times in advance of `upper_limit`.
             source_trace.advance_by(&upper_limit[..]);
             output_reader.advance_by(&upper_limit[..]);
 
-
-            // We no longer need to distinguish between the batches we have received and historical batches,
-            // so we should allow the trace to start merging them.
-            //
-            // Note: We know that there will be no further times through `upper_limit`, but we still use the
-            // earlier `upper_received` to avoid antagonizing the trace which may end up with `upper_limit`
-            // cutting through a single (largely empty, at least near `upper_limit`) batch. 
+            // We will only slice the data between future batches.
             source_trace.distinguish_since(&upper_received[..]);
             output_reader.distinguish_since(&upper_received[..]);
-            
-            // println!("{:?}\ttraces advanced\n", timer.elapsed());
-            // timer = ::std::time::Instant::now();
         });
 
         Arranged { stream: stream, trace: result_trace }
@@ -615,8 +567,6 @@ mod history_replay {
     use std::fmt::Debug;
     use std::cmp::Ordering;
 
-    // use timely::progress::frontier::Antichain;
-
     use ::Diff;
     use lattice::Lattice;
     use trace::Cursor;
@@ -640,11 +590,9 @@ mod history_replay {
         input_buffer: Vec<(V1, R1)>,
         output_buffer: Vec<(V2, R2)>,
         output_produced: Vec<((V2, T), R2)>,
-        // known_times: Vec<T>,
         synth_times: Vec<T>,
         meets: Vec<T>,
         times_current: Vec<T>,
-        // lower: Vec<T>,
         temporary: Vec<T>,
     }
 
@@ -664,11 +612,9 @@ mod history_replay {
                 input_buffer: Vec::new(),
                 output_buffer: Vec::new(),
                 output_produced: Vec::new(),
-                // known_times: Vec::new(),
                 synth_times: Vec::new(),
                 meets: Vec::new(),
                 times_current: Vec::new(),
-                // lower: Vec::new(),
                 temporary: Vec::new(),
             }
         }
@@ -691,26 +637,22 @@ mod history_replay {
             C3: Cursor<K, V1, T, R1>, 
             L: Fn(&K, &[(V1, R1)], &mut Vec<(V2, R2)>) 
         {
-            // The first thing we need to know is which times and values we are worried about.
-            // We use `T::min` as the lower bound with which we join everything to avoid changing the times,
-            // not knowing any better, but also because all updates should be ahead of the interval's lower
-            // bound.
 
+            // The work to do is defined principally be the contents of `batch_cursor` and `times`, which
+            // together indicate the times at which we should re-evaluate the user logic on the accumulated
+            // inputs. Before anything else, we will want to extract this information, as it will allow us 
+            // to thin out other inputs as we load them.
+
+            // Load the batch contents.
             self.batch_history.clear(); 
             if batch_cursor.key_valid() && batch_cursor.key() == key {
                 self.batch_history.load(batch_cursor, |time| time.clone());
             }
 
-            // Tracks the frontier of times we may still consider. Repeatedly re-derived from frontiers of 
-            // each of the (currently five) sources of times we consider. Could be simplified to just be the
-            // meet of these times, but would lose minimality (not correctness) for non-distributed lattices.
-
-            // Determine a lower frontier of interesting times.
-            // I'm not sure what we do with this other than a `debug_assert` and re-scan it to produce `meet`.
-            // Perhaps we should just grab the meet here? Or we could leave this here, because as grown-ups we
-            // will eventually want to use `advance_by` with a frontier anyhow.
-            let mut meet = T::max();
-            if let Some(time) = self.batch_history.meet() { meet = meet.meet(&time); }
+            // We determine the meet of times we must reconsider (those from `batch` and `times`). This meet
+            // can be used to advance other historical times, which may consolidate their representation. As
+            // a first step, we determine the meets of each *suffix* of `times`, which we will use as we play
+            // history forward.
 
             self.meets.clear();
             self.meets.extend(times.iter().cloned());
@@ -718,14 +660,23 @@ mod history_replay {
                 self.meets[index-1] = self.meets[index-1].meet(&self.meets[index]);
             }
 
+            // Determine the meet of times in `batch` and `times`.
+            let mut meet = T::max();
             if self.meets.len() > 0 { meet = meet.meet(&self.meets[0]); }
+            if let Some(time) = self.batch_history.meet() { meet = meet.meet(&time); }
 
+            // Having determined the meet, we can load the input and output histories, where we 
+            // advance all times by joining them with `meet`. The resulting times are more compact
+            // and guaranteed to accumulate identically for times greater or equal to `meet`.
+
+            // Load the input history.
             self.input_history.clear(); 
             source_cursor.seek_key(key);
             if source_cursor.key_valid() && source_cursor.key() == key {
                 self.input_history.load(source_cursor, |time| time.join(&meet));
             }
 
+            // Load the output history.
             self.output_history.clear();
             output_cursor.seek_key(key);
             if output_cursor.key_valid() && output_cursor.key() == key {
@@ -744,6 +695,8 @@ mod history_replay {
 
             let mut compute_counter = 0;
             let mut output_counter = 0;
+
+            // We play history forward, continuing as long as we have any outstanding times.
 
             while !self.input_history.is_done() || !self.output_history.is_done() || 
                   !self.batch_history.is_done() || self.synth_times.len() > 0 || times_slice.len() > 0 {
@@ -806,6 +759,14 @@ mod history_replay {
                         debug_assert!(self.input_buffer.is_empty());
                         self.input_history.advance_buffer_by(&meet);
                         for &((ref value, ref time), diff) in self.input_history.buffer.iter() {
+                            if time.less_equal(&next_time) {
+                                self.input_buffer.push((value.clone(), diff));
+                            }
+                            else {
+                                self.temporary.push(next_time.join(time));
+                            }
+                        }
+                        for &((ref value, ref time), diff) in self.batch_history.buffer.iter() {
                             if time.less_equal(&next_time) {
                                 self.input_buffer.push((value.clone(), diff));
                             }
