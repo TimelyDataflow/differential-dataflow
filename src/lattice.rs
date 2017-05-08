@@ -8,13 +8,71 @@ use timely::order::PartialOrder;
 
 /// A bounded partially ordered type supporting joins and meets.
 pub trait Lattice : PartialOrder {
+
     /// The smallest element of the type.
+    ///
+    /// #Examples
+    ///
+    /// ```
+    /// use differential_dataflow::lattice::Lattice;
+    ///
+    /// let min = <usize as Lattice>::min();
+    /// assert_eq!(min, usize::min_value());
+    /// ```
     fn min() -> Self;
+
     /// The largest element of the type.
+    ///
+    /// #Examples
+    ///
+    /// ```
+    /// use differential_dataflow::lattice::Lattice;
+    ///
+    /// let max = <usize as Lattice>::max();
+    /// assert_eq!(max, usize::max_value());
+    /// ```
     fn max() -> Self;
+
     /// The smallest element greater than or equal to both arguments.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # extern crate timely;
+    /// # extern crate differential_dataflow;
+    /// # use timely::PartialOrder;
+    /// # use timely::progress::nested::product::Product;
+    /// # use differential_dataflow::lattice::Lattice;
+    /// # fn main() {
+    ///
+    /// let time1 = Product::new(3, 7);
+    /// let time2 = Product::new(4, 6);
+    /// let join = time1.join(&time2);
+    ///
+    /// assert_eq!(join, Product::new(4, 7));
+    /// # }
+    /// ```
     fn join(&self, &Self) -> Self;
+
     /// The largest element less than or equal to both arguments.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # extern crate timely;
+    /// # extern crate differential_dataflow;
+    /// # use timely::PartialOrder;
+    /// # use timely::progress::nested::product::Product;
+    /// # use differential_dataflow::lattice::Lattice;
+    /// # fn main() {
+    ///
+    /// let time1 = Product::new(3, 7);
+    /// let time2 = Product::new(4, 6);
+    /// let meet = time1.meet(&time2);
+    ///
+    /// assert_eq!(meet, Product::new(3, 6));
+    /// # }
+    /// ```    
     fn meet(&self, &Self) -> Self;
 
     /// Advances self to the largest time indistinguishable under `frontier`.
@@ -85,6 +143,24 @@ pub trait Lattice : PartialOrder {
 /// Note that this trait is distinct from `Ord`; many implementors of `Lattice` also implement 
 /// `Ord` so that they may be sorted, deduplicated, etc. This implementation neither derives any
 /// information from an `Ord` implementation nor informs it in any way.
+///
+/// #Examples
+///
+/// ```
+/// use differential_dataflow::lattice::TotalOrder;
+///
+/// // The `join` and `meet` of totally ordered elements are always one of the two.
+/// fn invariant<T: TotalOrder>(elt1: T, elt2: T) {
+///     if elt1.less_equal(&elt2) {
+///         assert!(elt1.meet(&elt2) == elt1);
+///         assert!(elt1.join(&elt2) == elt2);
+///     }
+///     else {
+///         assert!(elt1.meet(&elt2) == elt2);
+///         assert!(elt1.join(&elt2) == elt1);
+///     }
+/// }
+/// ```
 pub trait TotalOrder : Lattice { }
 
 use timely::progress::nested::product::Product;
@@ -110,8 +186,18 @@ impl<T1: Lattice, T2: Lattice> Lattice for Product<T1, T2> {
     }
 }
 
-impl<T> TotalOrder for Product<RootTimestamp, T> where T: TotalOrder { } 
-impl<T> TotalOrder for Product<(), T> where T: TotalOrder { } 
+/// A type that does not affect total orderedness.
+///
+/// This trait is not useful, but must be made public and documented or else Rust 
+/// complains about its existence in the constraints on the implementation of 
+/// public traits for public types.
+pub trait Empty : Lattice { }
+
+impl Empty for RootTimestamp { }
+impl Empty for () { }
+impl<T1: Empty, T2: Empty> Empty for Product<T1, T2> { }
+
+impl<T1, T2> TotalOrder for Product<T1, T2> where T1: Empty, T2: TotalOrder { } 
 
 use timely::progress::timestamp::RootTimestamp;
 
@@ -192,22 +278,3 @@ impl Lattice for () {
 }
 
 impl TotalOrder for () { }
-
-// /// Extends `vector` to contain all joins of pairs of elements.
-// pub fn close_under_join<T: Lattice>(vector: &mut Vec<T>) {
-//     // compares each element to those elements after it.
-//     let mut first = 0;
-//     while first < vector.len() {
-//         let mut next = first + 1;
-//         while next < vector.len() {
-//             let lub = vector[first].join(&vector[next]);
-//             if !vector.contains(&lub) {
-//                 vector.push(lub);
-//             }
-
-//             next += 1;
-//         }
-
-//         first += 1;
-//     }
-// }
