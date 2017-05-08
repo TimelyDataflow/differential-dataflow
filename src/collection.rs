@@ -1,6 +1,7 @@
 //! Types and traits associated with collections of data.
 
 use std::hash::Hash;
+use std::ops::Mul;
 
 use timely::Data;
 use timely::progress::Timestamp;
@@ -41,7 +42,10 @@ impl<G: Scope, D: Data, R: Diff> Collection<G, D, R> where G::Timestamp: Data {
         Collection { inner: stream }
     }
     /// Creates a new collection by applying the supplied function to each input element.
-    pub fn map<D2: Data, L: Fn(D) -> D2 + 'static>(&self, logic: L) -> Collection<G, D2, R> {
+    pub fn map<D2, L>(&self, logic: L) -> Collection<G, D2, R> 
+    where D2: Data, 
+          L: Fn(D) -> D2 + 'static 
+    {
         self.inner.map(move |(data, time, delta)| (logic(data), time, delta))
                   .as_collection()
     }
@@ -50,7 +54,8 @@ impl<G: Scope, D: Data, R: Diff> Collection<G, D, R> where G::Timestamp: Data {
     /// Although the name suggests in-place mutation, this function does not change the source collection, 
     /// but rather re-uses the underlying allocations in its implementation. The method is semantically 
     /// equivalent to `map`, but can be more efficient.
-    pub fn map_in_place<L: Fn(&mut D) + 'static>(&self, logic: L) -> Collection<G, D, R> {
+    pub fn map_in_place<L>(&self, logic: L) -> Collection<G, D, R> 
+    where L: Fn(&mut D) + 'static {
         self.inner.map_in_place(move |&mut (ref mut data, _, _)| logic(data))
                   .as_collection()
     }
@@ -59,8 +64,11 @@ impl<G: Scope, D: Data, R: Diff> Collection<G, D, R> where G::Timestamp: Data {
     /// This method extracts an iterator from each input element, and extracts the full contents of the iterator. Be 
     /// warned that if the iterators produce substantial amounts of data, they are currently fully drained before attempting
     /// to consolidate the results.
-    pub fn flat_map<D2: Data, I: IntoIterator<Item=D2>, L: Fn(D) -> I + 'static>(&self, logic: L) -> Collection<G, D2, R> 
-        where G::Timestamp: Clone {
+    pub fn flat_map<I, L>(&self, logic: L) -> Collection<G, I::Item, R> 
+        where G::Timestamp: Clone,
+              I: IntoIterator, 
+              I::Item: Data,
+              L: Fn(D) -> I + 'static {
         self.inner.flat_map(move |(data, time, delta)| logic(data).into_iter().map(move |x| (x, time.clone(), delta)))
                   .as_collection()
     }
@@ -74,7 +82,8 @@ impl<G: Scope, D: Data, R: Diff> Collection<G, D, R> where G::Timestamp: Data {
                   .as_collection()
     }
     /// Creates a new collection containing those input records satisfying the supplied predicate.
-    pub fn filter<L: Fn(&D) -> bool + 'static>(&self, logic: L) -> Collection<G, D, R> {
+    pub fn filter<L>(&self, logic: L) -> Collection<G, D, R> 
+    where L: Fn(&D) -> bool + 'static {
         self.inner.filter(move |&(ref data, _, _)| logic(data))
                   .as_collection()
     }
@@ -87,8 +96,35 @@ impl<G: Scope, D: Data, R: Diff> Collection<G, D, R> where G::Timestamp: Data {
         self.inner.concat(&other.inner)
                   .as_collection()
     }
+    /// Replaces each record with another, with a new difference type.
+    ///
+    /// This method is most commonly used to take records containing aggregatable data (e.g. numbers to be summed)
+    /// and move the data into the difference component. This will allow differential dataflow to update in-place.
+    ///
+    /// #Examples
+    ///
+    /// ```ignore
+    /// // moves `salary` to accumulable data, and results 
+    /// // in the total salary for people by name (e.g. how
+    /// // much do people named "Frank" get paid).
+    /// employees.explode(|(name, salary)| (name, salary))
+    ///          .count();
+    /// ```
+    pub fn explode<D2, R2, I, L>(&self, logic: L) -> Collection<G, D2, <R2 as Mul<R>>::Output> 
+    where D2: Data, 
+          R2: Diff+Mul<R>, 
+          <R2 as Mul<R>>::Output: Data+Diff,
+          I: IntoIterator<Item=(D2,R2)>, 
+          L: Fn(D)->I+'static,
+    {
+        self.inner
+            .flat_map(move |(x, t, d)| logic(x).into_iter().map(move |(x,d2)| (x, t.clone(), d2 * d)))
+            .as_collection()
+    }
+
     /// Brings a Collection into a nested scope.
-    pub fn enter<'a, T: Timestamp>(&self, child: &Child<'a, G, T>) -> Collection<Child<'a, G, T>, D, R> {
+    pub fn enter<'a, T>(&self, child: &Child<'a, G, T>) -> Collection<Child<'a, G, T>, D, R> 
+    where T: Timestamp {
         self.inner.enter(child)
                   .map(|(data, time, diff)| (data, Product::new(time, Default::default()), diff))
                   .as_collection()
@@ -96,8 +132,9 @@ impl<G: Scope, D: Data, R: Diff> Collection<G, D, R> where G::Timestamp: Data {
     /// Brings a Collection into a nested scope, at varying times.
     ///
     /// The `initial` function indicates the time at which each element of the Collection should appear.
-    pub fn enter_at<'a, T: Timestamp, F>(&self, child: &Child<'a, G, T>, initial: F) -> Collection<Child<'a, G, T>, D, R> 
-    where F: Fn(&D) -> T + 'static,
+    pub fn enter_at<'a, T, F>(&self, child: &Child<'a, G, T>, initial: F) -> Collection<Child<'a, G, T>, D, R> 
+    where T: Timestamp,
+          F: Fn(&D) -> T + 'static,
           G::Timestamp: Hash, T: Hash {
 
         let initial1 = ::std::rc::Rc::new(initial);
@@ -120,7 +157,8 @@ impl<G: Scope, D: Data, R: Diff> Collection<G, D, R> where G::Timestamp: Data {
     /// at the logical time `time`. When times are totally ordered (for example, `usize`), these updates reflect
     /// the changes along the sequence of collections. For partially ordered times, the mathematics are more 
     /// interesting and less intuitive, unfortunately. 
-    pub fn inspect<F: FnMut(&(D, G::Timestamp, R))+'static>(&self, func: F) -> Collection<G, D, R> {
+    pub fn inspect<F>(&self, func: F) -> Collection<G, D, R> 
+    where F: FnMut(&(D, G::Timestamp, R))+'static {
         self.inner.inspect(func)
                   .as_collection()
     }
@@ -128,7 +166,8 @@ impl<G: Scope, D: Data, R: Diff> Collection<G, D, R> where G::Timestamp: Data {
     ///
     /// This method is analogous to `inspect`, but operates on batches and reveals the timely dataflow capability
     /// associated with the batch of updates.
-    pub fn inspect_batch<F: FnMut(&G::Timestamp, &[(D, G::Timestamp, R)])+'static>(&self, func: F) -> Collection<G, D, R> {
+    pub fn inspect_batch<F>(&self, func: F) -> Collection<G, D, R> 
+    where F: FnMut(&G::Timestamp, &[(D, G::Timestamp, R)])+'static {
         self.inner.inspect_batch(func)
                   .as_collection()
     }
