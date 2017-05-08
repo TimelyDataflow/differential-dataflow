@@ -167,12 +167,7 @@ where
 					batch2.advance_mut(&self.advance_frontier[..]);
 				}
 
-				let mut result = batch2.merge(&batch1);
-
-				// // if we just merged the last batch, `advance_by` it.
-				// if self.merging.len() == 0 {
-				// 	result.advance_mut(&self.advance_frontier[..]);
-				// }
+				let result = batch2.merge(&batch1);
 
 				self.merging.push(result);
 				len = self.merging.len();

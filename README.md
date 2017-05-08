@@ -104,7 +104,7 @@ The appealing thing about differential dataflow is that it only does work where 
     observed: ((19, 8), (Root, 0), 1)
     observed: ((20, 3), (Root, 0), 1)
     observed: ((22, 1), (Root, 0), 1)
-    Loading finished after 6430259862
+    Loading finished after Duration { secs: 15, nanos: 485478768 }
 
 There are a lot more distinct degrees here. I sorted them because it was too painful to look at unsorted. You would normally get to see them unsorted, because they are just changes to a collection.
 
@@ -116,7 +116,7 @@ Let's do a single change again.
     observed: ((7, 1042894), (Root, 1), -1)
     observed: ((6, 1459805), (Root, 1), -1)
     observed: ((6, 1459807), (Root, 1), 1)
-    worker 0, round 1 finished after Duration { secs: 0, nanos: 141173 }
+    worker 0, round 1 finished after Duration { secs: 0, nanos: 119917 }
 
 Although the initial computation took about six seconds, we get our changes in about 141 microseconds. That's pretty nice. Actually, it is small enough that the time to print things to the screen is a bit expensive, so let's comment that part out.
 
@@ -128,13 +128,13 @@ Although the initial computation took about six seconds, we get our changes in a
 
 Now we can just watch as changes roll past and look at the times.
 
-    Running `target/release/examples/degrees 10000000 50000000 1`
-    Loading finished after 6619354153
-    worker 0, round 1 finished after Duration { secs: 0, nanos: 99671 }
-    worker 0, round 2 finished after Duration { secs: 0, nanos: 292651 }
-    worker 0, round 3 finished after Duration { secs: 0, nanos: 94333 }
-    worker 0, round 4 finished after Duration { secs: 0, nanos: 110136 }
-    worker 0, round 5 finished after Duration { secs: 0, nanos: 239285 }
+         Running `target/release/examples/degrees 10000000 50000000 1`
+    Loading finished after Duration { secs: 15, nanos: 632757755 }
+    worker 0, round 1 finished after Duration { secs: 0, nanos: 141124 }
+    worker 0, round 2 finished after Duration { secs: 0, nanos: 105730 }
+    worker 0, round 3 finished after Duration { secs: 0, nanos: 106172 }
+    worker 0, round 4 finished after Duration { secs: 0, nanos: 168487 }
+    worker 0, round 5 finished after Duration { secs: 0, nanos: 62194 }
     ...
 
 Nice. This is some hundreds of microseconds per update, which means maybe ten thousand updates per second. It's not a horrible number for my laptop, but it isn't the right answer yet.
@@ -145,84 +145,149 @@ Differential dataflow is designed for throughput in addition to latency. We can 
 
 Notice that those times above are a few hundred microseconds for each single update. If we work on ten rounds of updates at once, we get times that look like this:
 
-    Running `target/release/examples/degrees 10000000 50000000 10`
-    Loading finished after 6361826154
-    worker 0, round 10 finished after Duration { secs: 0, nanos: 228456 }
-    worker 0, round 20 finished after Duration { secs: 0, nanos: 285968 }
-    worker 0, round 30 finished after Duration { secs: 0, nanos: 129293 }
-    worker 0, round 40 finished after Duration { secs: 0, nanos: 184597 }
-    worker 0, round 50 finished after Duration { secs: 0, nanos: 305817 }
+         Running `target/release/examples/degrees 10000000 50000000 10`
+    Loading finished after Duration { secs: 15, nanos: 665081016 }
+    worker 0, round 10 finished after Duration { secs: 0, nanos: 321328 }
+    worker 0, round 20 finished after Duration { secs: 0, nanos: 220047 }
+    worker 0, round 30 finished after Duration { secs: 0, nanos: 234313 }
+    worker 0, round 40 finished after Duration { secs: 0, nanos: 311963 }
+    worker 0, round 50 finished after Duration { secs: 0, nanos: 188093 }
     ...
 
 These aren't much larger times, and we are doing 10x the work in each of them. In fact, we are doing the *exact same* computation as above, just batched differently. We still get out changes tagged with the round they happened in, even if that round isn't a multiple of ten (in this example), and they are exactly the same changes (or they should be) as in the single update a time example.
 
 As we turn up the batching, performance improves. Here we work on one hundred rounds of updates at once:
 
-    Running `target/release/examples/degrees 10000000 50000000 100`
-    Loading finished after 6415122044
-    worker 0, round 100 finished after Duration { secs: 0, nanos: 701348 }
-    worker 0, round 200 finished after Duration { secs: 0, nanos: 773354 }
-    worker 0, round 300 finished after Duration { secs: 0, nanos: 590371 }
-    worker 0, round 400 finished after Duration { secs: 0, nanos: 750404 }
-    worker 0, round 500 finished after Duration { secs: 0, nanos: 824990 }
+         Running `target/release/examples/degrees 10000000 50000000 100`
+    Loading finished after Duration { secs: 15, nanos: 612717043 }
+    worker 0, round 100 finished after Duration { secs: 0, nanos: 1237368 }
+    worker 0, round 200 finished after Duration { secs: 0, nanos: 1184419 }
+    worker 0, round 300 finished after Duration { secs: 0, nanos: 1169537 }
+    worker 0, round 400 finished after Duration { secs: 0, nanos: 1275858 }
+    worker 0, round 500 finished after Duration { secs: 0, nanos: 1187122 }
+    ...
 
-This now averages to about seven microseconds for each update, which is looking more like one hundred thousand updates per second. 
+This now averages to about twelve microseconds for each update, which is getting closer to one hundred thousand updates per second. 
 
 Actually, let's just try that. Here are the numbers for one hundred thousand rounds of updates at a time:
 
-    Running `target/release/examples/degrees 10000000 50000000 100000`
-    Loading finished after 6298320551
-    worker 0, round 100000 finished after Duration { secs: 0, nanos: 492671676 }
-    worker 0, round 200000 finished after Duration { secs: 0, nanos: 563281465 }
-    worker 0, round 300000 finished after Duration { secs: 0, nanos: 496625436 }
-    worker 0, round 400000 finished after Duration { secs: 0, nanos: 678072041 }
-    worker 0, round 500000 finished after Duration { secs: 0, nanos: 501202869 }
+         Running `target/release/examples/degrees 10000000 50000000 100000`
+    Loading finished after Duration { secs: 15, nanos: 554954141 }
+    worker 0, round 100000 finished after Duration { secs: 0, nanos: 529935399 }
+    worker 0, round 200000 finished after Duration { secs: 0, nanos: 580862749 }
+    worker 0, round 300000 finished after Duration { secs: 0, nanos: 537156939 }
+    worker 0, round 400000 finished after Duration { secs: 0, nanos: 709743753 }
+    worker 0, round 500000 finished after Duration { secs: 0, nanos: 546691982 }
+    ...
 
-This averages to around five microseconds per update, and now that I think about it each update was actually two changes, wasn't it. Good for you, differential dataflow!
+This averages to about five or six microseconds per round of update, and now that I think about it each update was actually two changes, wasn't it. Good for you, differential dataflow!
 
 ### Scaling out
 
 Differential dataflow is built on top of [timely dataflow](https://github.com/frankmcsherry/timely-dataflow), a distributed data-parallel runtime. Timely dataflow scales out to multiple independent workers, increasing the capacity of the system (at the cost of some coordination that cuts into latency).
 
-If we bring two workers to bear, our 10 million node, 50 million edge computation drops down from six seconds to something less than four seconds.
+If we bring two workers to bear, our 10 million node, 50 million edge computation drops down from fiveteen seconds to just over eight seconds.
 
-    Running `target/release/examples/degrees 10000000 50000000 1 -w2`
-    Loading finished after 3829615905
-    worker 0, round 1 finished after Duration { secs: 0, nanos: 144977 }
-    worker 1, round 1 finished after Duration { secs: 0, nanos: 267777 }
-    worker 0, round 2 finished after Duration { secs: 0, nanos: 191293 }
-    worker 1, round 2 finished after Duration { secs: 0, nanos: 188237 }
+         Running `target/release/examples/degrees 10000000 50000000 1 -w2`
+    Loading finished after Duration { secs: 8, nanos: 207375094 }
+    worker 0, round 1 finished after Duration { secs: 0, nanos: 119399 }
+    worker 1, round 1 finished after Duration { secs: 0, nanos: 241527 }
+    worker 0, round 2 finished after Duration { secs: 0, nanos: 222533 }
+    worker 1, round 2 finished after Duration { secs: 0, nanos: 154681 }
+    ...
 
 That is a so-so reduction. You might notice that the times *increased* for the subsequent rounds. It turns out that multiple workers just get in each other's way when there isn't much work to do. 
 
 Fortunately, as we work on more and more rounds of updates at the same time, the benefit of multiple workers increases. Here are the numbers for ten rounds at a time:
 
-    Running `target/release/examples/degrees 10000000 50000000 10 -w2`
-    Loading finished after 4397079028
-    worker 0, round 10 finished after Duration { secs: 0, nanos: 237852 }
-    worker 1, round 10 finished after Duration { secs: 0, nanos: 282013 }
-    worker 0, round 20 finished after Duration { secs: 0, nanos: 252407 }
-    worker 1, round 20 finished after Duration { secs: 0, nanos: 245471 }
+         Running `target/release/examples/degrees 10000000 50000000 10 -w2`
+    Loading finished after Duration { secs: 8, nanos: 575313222 }
+    worker 0, round 10 finished after Duration { secs: 0, nanos: 267152 }
+    worker 1, round 10 finished after Duration { secs: 0, nanos: 325377 }
+    worker 1, round 20 finished after Duration { secs: 0, nanos: 201332 }
+    worker 0, round 20 finished after Duration { secs: 0, nanos: 252631 }
+    ...
 
 One hundred rounds at a time:
 
-    Running `target/release/examples/degrees 10000000 50000000 100 -w2`
-    Loading finished after 4353001399
-    worker 0, round 100 finished after Duration { secs: 0, nanos: 592987 }
-    worker 1, round 100 finished after Duration { secs: 0, nanos: 607109 }
-    worker 0, round 200 finished after Duration { secs: 0, nanos: 500817 }
-    worker 1, round 200 finished after Duration { secs: 0, nanos: 472060 }
+         Running `target/release/examples/degrees 10000000 50000000 100 -w2`
+    Loading finished after Duration { secs: 8, nanos: 877454322 }
+    worker 0, round 100 finished after Duration { secs: 0, nanos: 764008 }
+    worker 1, round 100 finished after Duration { secs: 0, nanos: 810008 }
+    worker 0, round 200 finished after Duration { secs: 0, nanos: 696741 }
+    worker 1, round 200 finished after Duration { secs: 0, nanos: 730942 }
+    ...
 
 One hundred thousand rounds at a time:
 
     Running `target/release/examples/degrees 10000000 50000000 100000 -w2`
-    Loading finished after 4122080785
-    worker 0, round 100000 finished after Duration { secs: 0, nanos: 294948065 }
-    worker 1, round 100000 finished after Duration { secs: 0, nanos: 293974321 }
-    worker 1, round 200000 finished after Duration { secs: 0, nanos: 330388268 }
-    worker 0, round 200000 finished after Duration { secs: 0, nanos: 330458713 }
+    Loading finished after Duration { secs: 8, nanos: 789885099 }
+    worker 0, round 100000 finished after Duration { secs: 0, nanos: 322398063 }
+    worker 1, round 100000 finished after Duration { secs: 0, nanos: 322534039 }
+    worker 0, round 200000 finished after Duration { secs: 0, nanos: 340302572 }
+    worker 1, round 200000 finished after Duration { secs: 0, nanos: 340617938 }
+    ...
 
 These last numbers were about half a second with one worker, and are decently improved with the second worker.
+
+### Going even faster
+
+There are several performance optimizations in differential dataflow designed to make the underlying operators as close to what you would expect to write, when possible. Additionally, by building on timely dataflow, you can drop in your own implementations a la carte where you know best.
+
+For example, we know that all of the keys involved in these two `count` methods are unsigned integers. We can use a special form of `count` called `count_u`, which just uses the values themselves to distribute and sort the records, rather than repeatedly hashing them.
+
+         Running `target/release/examples/degrees 10000000 50000000 10 -w2`
+    Loading finished after Duration { secs: 7, nanos: 462765111 }
+    worker 0, round 10 finished after Duration { secs: 0, nanos: 284091 }
+    worker 1, round 10 finished after Duration { secs: 0, nanos: 438691 }
+    worker 0, round 20 finished after Duration { secs: 0, nanos: 257730 }
+    worker 1, round 20 finished after Duration { secs: 0, nanos: 202014 }
+    ...
+
+         Running `target/release/examples/degrees 10000000 50000000 100 -w2`
+    Loading finished after Duration { secs: 7, nanos: 359640948 }
+    worker 0, round 100 finished after Duration { secs: 0, nanos: 726242 }
+    worker 1, round 100 finished after Duration { secs: 0, nanos: 742154 }
+    worker 1, round 200 finished after Duration { secs: 0, nanos: 555628 }
+    worker 0, round 200 finished after Duration { secs: 0, nanos: 580650 }
+    ...
+
+         Running `target/release/examples/degrees 10000000 50000000 100000 -w2`
+    Loading finished after Duration { secs: 7, nanos: 357319064 }
+    worker 0, round 100000 finished after Duration { secs: 0, nanos: 222533047 }
+    worker 1, round 100000 finished after Duration { secs: 0, nanos: 223707807 }
+    worker 0, round 200000 finished after Duration { secs: 0, nanos: 237145000 }
+    worker 1, round 200000 finished after Duration { secs: 0, nanos: 237228387 }
+    ...
+
+
+For another example, we also know in this case that the underlying collections go through a *sequence* of changes, meaning their timestamps are totally ordered. In this case we can use a much simpler implementation, `count_total_u`. The reduces the update times substantially, for each batch size:
+
+         Running `target/release/examples/degrees 10000000 50000000 10 -w2`
+    Loading finished after Duration { secs: 5, nanos: 866946585 }
+    worker 1, round 10 finished after Duration { secs: 0, nanos: 149072 }
+    worker 0, round 10 finished after Duration { secs: 0, nanos: 93686 }
+    worker 0, round 20 finished after Duration { secs: 0, nanos: 134797 }
+    worker 1, round 20 finished after Duration { secs: 0, nanos: 144141 }
+    ...
+
+         Running `target/release/examples/degrees 10000000 50000000 100 -w2`
+    Loading finished after Duration { secs: 5, nanos: 927197087 }
+    worker 0, round 100 finished after Duration { secs: 0, nanos: 382786 }
+    worker 1, round 100 finished after Duration { secs: 0, nanos: 430597 }
+    worker 1, round 200 finished after Duration { secs: 0, nanos: 436174 }
+    worker 0, round 200 finished after Duration { secs: 0, nanos: 449252 }
+    ...
+
+         Running `target/release/examples/degrees 10000000 50000000 100000 -w2`
+    Loading finished after Duration { secs: 5, nanos: 923657540 }
+    worker 0, round 100000 finished after Duration { secs: 0, nanos: 111166331 }
+    worker 1, round 100000 finished after Duration { secs: 0, nanos: 111733061 }
+    worker 0, round 200000 finished after Duration { secs: 0, nanos: 114145529 }
+    worker 1, round 200000 finished after Duration { secs: 0, nanos: 115295166 }
+    ...
+
+These times have now dropped quite a bit from where we started; we now absorb almost one million rounds of updates per second, and produce correct (not just consistent) answers even while distributed across multiple workers.
 
 ## A second example: k-core computation
 
