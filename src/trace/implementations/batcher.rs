@@ -184,9 +184,8 @@ where
 #[inline(always)]
 fn consolidate_vec<K: Ord+HashOrdered, V: Ord, T:Ord, R: Diff>(slice: &mut Vec<((K,V),T,R)>) {
 
-    slice.sort_by(|&((ref k1, ref v1), ref t1, _),&((ref k2, ref v2), ref t2, _)| 
-        (k1, v1, t1).cmp(&(k2, v2, t2))
-    );
+    slice.sort_by(|&(ref kv1, ref t1, _),&(ref kv2, ref t2, _)|  (kv1, t1).cmp(&(kv2, t2)));
+
     for index in 1 .. slice.len() {
         if slice[index].0 == slice[index - 1].0 && slice[index].1 == slice[index - 1].1 {
             slice[index].2 = slice[index].2 + slice[index - 1].2;
