@@ -1,8 +1,6 @@
 use timely::dataflow::*;
-use timely::dataflow::operators::*;
 use timely::dataflow::operators::probe::Handle as ProbeHandle;
 
-use differential_dataflow::AsCollection;
 use differential_dataflow::operators::*;
 use differential_dataflow::lattice::TotalOrder;
 
@@ -55,14 +53,12 @@ where G::Timestamp: TotalOrder+Ord {
     let lineitems = 
     collections
         .lineitems()
-        .inner
-        .flat_map(|(l,t,d)| 
+        .explode(|l| 
             if l.ship_date > create_date(1995, 3, 15) {
-                Some((l.order_key, t, (l.extended_price * (100 - l.discount) / 100) as isize * d))
+                Some((l.order_key, (l.extended_price * (100 - l.discount) / 100) as isize))
             }
             else { None }
-        )
-        .as_collection();
+        );
 
     let orders = 
     collections

@@ -1,8 +1,6 @@
 use timely::dataflow::*;
-use timely::dataflow::operators::*;
 use timely::dataflow::operators::probe::Handle as ProbeHandle;
 
-use differential_dataflow::AsCollection;
 use differential_dataflow::operators::*;
 use differential_dataflow::lattice::TotalOrder;
 
@@ -70,9 +68,9 @@ where G::Timestamp: TotalOrder+Ord {
         .semijoin_u(&parts)
         .map(|(part_key, (supp_key, order_key, revenue, quantity))| ((part_key, supp_key), (order_key, revenue, quantity)))
         .join(&collections.partsupps().map(|ps| ((ps.part_key, ps.supp_key), ps.supplycost)))
-        .inner
-        .map(|(((_part_key, supp_key), (order_key, revenue, quantity), supplycost),t,d)| ((order_key, supp_key), t, ((revenue - supplycost * quantity) as isize) * d))
-        .as_collection()
+        .explode(|((_part_key, supp_key), (order_key, revenue, quantity), supplycost)|
+            Some(((order_key, supp_key), ((revenue - supplycost * quantity) as isize)))
+        )
         .join_u(&collections.orders().map(|o| (o.order_key, o.order_date >> 16)))
         .map(|(_, supp_key, order_year)| (supp_key, order_year))
         .join_u(&collections.suppliers().map(|s| (s.supp_key, s.nation_key)))

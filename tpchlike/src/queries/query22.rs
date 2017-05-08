@@ -1,13 +1,10 @@
 use timely::dataflow::*;
-use timely::dataflow::operators::*;
 use timely::dataflow::operators::probe::Handle as ProbeHandle;
 
-use differential_dataflow::AsCollection;
 use differential_dataflow::operators::*;
 use differential_dataflow::lattice::TotalOrder;
 use differential_dataflow::difference::DiffPair;
 use differential_dataflow::operators::arrange::Arrange;
-// use differential_dataflow::operators::join::JoinArranged;
 use differential_dataflow::operators::group::GroupArranged;
 
 use differential_dataflow::trace::Trace;
@@ -80,9 +77,7 @@ where G::Timestamp: TotalOrder+Ord {
 
     let averages = 
     customers
-        .inner
-        .map(|((cc, acctbal, _), t, d)| ((UnsignedWrapper::from(cc), ()), t, DiffPair::new(acctbal as isize * d, d)))
-        .as_collection()
+        .explode(|(cc, acctbal, _)| Some(((UnsignedWrapper::from(cc), ()), DiffPair::new(acctbal as isize, 1))))
         .arrange(DefaultKeyTrace::new())
         .group_arranged(|_k,s,t| t.push((s[0].1, 1)), DefaultValTrace::new());
 
@@ -94,9 +89,7 @@ where G::Timestamp: TotalOrder+Ord {
         .join_core(&averages, |&cc, &acct, &pair|
             if acct as isize > (pair.element1 / pair.element2) { Some((cc.item, acct)) } else { None }
         )
-        .inner
-        .map(|((cc, acct), t, d)| (cc, t, DiffPair::new(acct as isize * d, d)))
-        .as_collection()
+        .explode(|(cc, acct)| Some((cc, DiffPair::new(acct as isize, 1))))
         .count_total_u()
         .probe()
 }

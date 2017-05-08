@@ -1,8 +1,6 @@
 use timely::dataflow::*;
-use timely::dataflow::operators::*;
 use timely::dataflow::operators::probe::Handle as ProbeHandle;
 
-use differential_dataflow::AsCollection;
 use differential_dataflow::operators::*;
 use differential_dataflow::operators::arrange::Arrange;
 use differential_dataflow::operators::group::GroupArranged;
@@ -79,9 +77,7 @@ where G::Timestamp: TotalOrder+Ord {
             else { None }
         )
         .semijoin_u(&partkeys)
-        .inner
-        .map(|(l, t, d)| ((UnsignedWrapper::from(((l.0 as u64) << 32) + (l.1).0 as u64), ()), t, (l.1).1 as isize * d))
-        .as_collection()
+        .explode(|l| Some(((UnsignedWrapper::from(((l.0 as u64) << 32) + (l.1).0 as u64), ()), (l.1).1 as isize)))
         .arrange(DefaultKeyTrace::new())
         .group_arranged(|_k,s,t| t.push((s[0].1, 1)), DefaultValTrace::new());
 

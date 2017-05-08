@@ -1,8 +1,6 @@
 use timely::dataflow::*;
-use timely::dataflow::operators::*;
 use timely::dataflow::operators::probe::Handle as ProbeHandle;
 
-use differential_dataflow::AsCollection;
 use differential_dataflow::operators::*;
 use differential_dataflow::lattice::TotalOrder;
 
@@ -59,14 +57,12 @@ where G::Timestamp: TotalOrder+Ord {
     let revenue = 
         collections
             .lineitems()
-            .inner
-            .flat_map(|(item, time, diff)| 
+            .explode(|item|
                 if create_date(1996, 1, 1) <= item.ship_date && item.ship_date < create_date(1996,4,1) {
-                    Some((item.supp_key, time, (item.extended_price * (100 - item.discount) / 100) as isize * diff))
+                    Some((item.supp_key, (item.extended_price * (100 - item.discount) / 100) as isize))
                 }
                 else { None }
-            )
-            .as_collection();
+            );
 
     // suppliers with maximum revenue
     let top_suppliers =

@@ -1,8 +1,6 @@
 use timely::dataflow::*;
-use timely::dataflow::operators::*;
 use timely::dataflow::operators::probe::Handle as ProbeHandle;
 
-use differential_dataflow::AsCollection;
 use differential_dataflow::operators::*;
 use differential_dataflow::operators::arrange::Arrange;
 use differential_dataflow::operators::group::GroupArranged;
@@ -68,9 +66,7 @@ where G::Timestamp: TotalOrder+Ord {
 
     collections
         .lineitems()
-        .inner
-        .map(|(l, t, d)| ((UnsignedWrapper::from(l.order_key), ()), t, (l.quantity as isize) * d))
-        .as_collection()
+        .explode(|l| Some(((UnsignedWrapper::from(l.order_key), ()), l.quantity as isize)))
         .arrange(DefaultKeyTrace::new())
         .group_arranged(|_k,s,t| t.push((s[0].1, 1)), DefaultValTrace::new())
         .join_core(&orders, |&o_key, &quant, &(cust_key, date, price)| 

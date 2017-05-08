@@ -1,8 +1,6 @@
 use timely::dataflow::*;
-use timely::dataflow::operators::*;
 use timely::dataflow::operators::probe::Handle as ProbeHandle;
 
-use differential_dataflow::AsCollection;
 use differential_dataflow::operators::*;
 use differential_dataflow::lattice::TotalOrder;
 use differential_dataflow::difference::DiffPair;
@@ -42,21 +40,19 @@ pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Times
 
     collections
         .lineitems()
-        .inner
-        .flat_map(|(item, time, diff)| 
+        .explode(|item| 
             if item.ship_date < ::types::create_date(1998, 9, 1) {
-                Some((((item.return_flag[0] as u16) << 8) + item.line_status[0] as u16, time, 
-                    DiffPair::new(diff as i64 * item.quantity, 
-                    DiffPair::new(diff as i64 * item.extended_price,
-                    DiffPair::new(diff as i64 * item.extended_price * (100 - item.discount) / 100,
-                    DiffPair::new(diff as i64 * item.extended_price * (100 - item.discount) * (100 + item.tax) / 10000,
-                    DiffPair::new(diff as i64 * item.discount, diff)))))))
+                Some((((item.return_flag[0] as u16) << 8) + item.line_status[0] as u16, 
+                    DiffPair::new(item.quantity as isize, 
+                    DiffPair::new(item.extended_price as isize,
+                    DiffPair::new((item.extended_price * (100 - item.discount) / 100) as isize,
+                    DiffPair::new((item.extended_price * (100 - item.discount) * (100 + item.tax) / 10000) as isize,
+                    DiffPair::new(item.discount as isize, 1)))))))
             }
             else { 
                 None
             }
         )
-        .as_collection()
         .count_total_u()
         .probe()
 }
