@@ -5,10 +5,10 @@ extern crate differential_dataflow;
 use rand::{Rng, SeedableRng, StdRng};
 
 use timely::dataflow::*;
-use timely::dataflow::operators::*;
 use timely::dataflow::operators::probe::Handle;
 
-use differential_dataflow::{Collection, AsCollection};
+use differential_dataflow::input::Input;
+use differential_dataflow::Collection;
 use differential_dataflow::operators::*;
 use differential_dataflow::lattice::Lattice;
 
@@ -32,10 +32,10 @@ fn main() {
         let mut probe = Handle::new();
         let (mut roots, mut graph) = worker.dataflow(|scope| {
 
-            let (root_input, roots) = scope.new_input();
-            let (edge_input, graph) = scope.new_input();
+            let (root_input, roots) = scope.new_collection();
+            let (edge_input, graph) = scope.new_collection();
 
-            let mut result = bfs(&graph.as_collection(), &roots.as_collection());
+            let mut result = bfs(&graph, &roots);
 
             if !inspect {
                 result = result.filter(|_| false);
@@ -53,24 +53,22 @@ fn main() {
         let mut rng1: StdRng = SeedableRng::from_seed(seed);    // rng for edge additions
         let mut rng2: StdRng = SeedableRng::from_seed(seed);    // rng for edge deletions
 
-        roots.send((0, Default::default(), 1));
+        roots.insert(0);
         roots.close();
 
         println!("performing BFS on {} nodes, {} edges:", nodes, edges);
 
         if worker.index() == 0 {
 
-            let mut session = differential_dataflow::input::InputSession::from(&mut graph);
-
             // trickle edges in to dataflow
             for _ in 0..(edges/1000) {
                 for _ in 0..1000 {
-                    session.insert((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)));
+                    graph.insert((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)));
                 }
                 worker.step();
             }
             for _ in 0.. (edges % 1000) {
-                session.insert((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)));
+                graph.insert((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)));
             }
         }
 
@@ -79,19 +77,18 @@ fn main() {
         graph.advance_to(1);
         worker.step_while(|| probe.less_than(graph.time()));
 
-        let mut session = differential_dataflow::input::InputSession::from(&mut graph);
         for round in 0 .. rounds {
             for element in 0 .. batch {
                 if worker.index() == 0 {
-                    session.insert((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)));
-                    session.remove((rng2.gen_range(0, nodes), rng2.gen_range(0, nodes)));
+                    graph.insert((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)));
+                    graph.remove((rng2.gen_range(0, nodes), rng2.gen_range(0, nodes)));
                 }
-                session.advance_to(2 + round * batch + element);                
+                graph.advance_to(2 + round * batch + element);                
             }
-            session.flush();
+            graph.flush();
 
             let timer = ::std::time::Instant::now();
-            worker.step_while(|| probe.less_than(&session.time()));
+            worker.step_while(|| probe.less_than(&graph.time()));
 
             if worker.index() == 0 {
                 let elapsed = timer.elapsed();

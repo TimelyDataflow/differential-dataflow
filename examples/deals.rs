@@ -12,12 +12,11 @@ use std::mem;
 use rand::{Rng, SeedableRng, StdRng};
 
 use timely::dataflow::*;
-use timely::dataflow::operators::*;
 
+use differential_dataflow::input::Input;
 use differential_dataflow::Collection;
 use differential_dataflow::operators::*;
 use differential_dataflow::operators::arrange::{ArrangeByKey, ArrangeBySelf};
-// use differential_dataflow::operators::join::JoinArranged;
 use differential_dataflow::lattice::Lattice;
 
 use graph_map::GraphMMap;
@@ -41,11 +40,8 @@ fn main() {
 
         let (mut input, mut query, probe) = worker.dataflow::<u64,_,_>(|scope| {
 
-            let (input, stream1) = scope.new_input();
-            let (rootz, stream2) = scope.new_input();
-
-            let graph = Collection::new(stream1);
-            let query = Collection::new(stream2);
+            let (input, graph) = scope.new_collection();
+            let (rootz, query) = scope.new_collection();
 
             let probe = match program.as_str() {
                 "reach" => _reach(&graph, &query).probe(),
@@ -62,11 +58,10 @@ fn main() {
         let timer = Instant::now();
 
         // start loading up the graph
-        let &time = input.time();
         for node in 0..graph.nodes() {
             if node % peers == index {
                 for &edge in graph.edges(node) {
-                    input.send(((node as u32, edge), time, 1));
+                    input.insert((node as u32, edge));
                 }
             }
         }
@@ -87,10 +82,9 @@ fn main() {
         let mut rng: StdRng = SeedableRng::from_seed(seed);    // rng for edge additions
 
         for _count in 0..latencies.capacity() {
-            let &time = query.time();
             let timer = Instant::now();
             if index == 0 {
-                query.send((rng.gen_range(0, graph.nodes() as u32), time, 1));
+                query.insert((rng.gen_range(0, graph.nodes() as u32)));
             }
             let next = query.epoch() + 1;
             input.advance_to(next);

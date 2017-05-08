@@ -6,11 +6,30 @@
 //! timely dataflow capabilities, exposing more concurrency to the operator implementations
 //! than are evident from the logical times, which appear to execute in sequence.
 
+use timely_communication::Allocate;
+
 use timely::progress::Timestamp;
 use timely::progress::timestamp::RootTimestamp;
 use timely::progress::nested::product::Product;
+use timely::dataflow::operators::Input as TimelyInput;
+use timely::dataflow::operators::input::Handle;
+use timely::dataflow::scopes::{Child, Root};
 
 use ::{Data, Diff};
+use collection::{Collection, AsCollection};
+
+/// Create a new collection and input handle to control the collection.
+pub trait Input<'a, A: Allocate, T: Timestamp+Ord> {
+    /// Create a new collection and input handle to control the collection.
+    fn new_collection<D: Data, R: Diff>(&mut self) -> (InputSession<T, D, R>, Collection<Child<'a, Root<A>, T>, D, R>);
+}
+
+impl<'a, A: Allocate, T: Timestamp+Ord> Input<'a, A, T> for Child<'a, Root<A>, T> {
+    fn new_collection<D: Data, R: Diff>(&mut self) -> (InputSession<T, D, R>, Collection<Child<'a, Root<A>, T>, D, R>) {
+		let (handle, stream) = self.new_input();
+		(InputSession::from(handle), stream.as_collection())
+    }
+}
 
 /// An input session wrapping a single timely dataflow capability.
 ///
@@ -18,23 +37,23 @@ use ::{Data, Diff};
 /// timely dataflow system. Differential dataflow updates can happen at a much higher rate than 
 /// timely dataflow's progress tracking infrastructure supports, because the logical times are 
 /// promoted to data and updates are batched together. The `InputSession` type does this batching.
-pub struct InputSession<'a, T: Timestamp+Clone, D: Data, R: Diff> {
+pub struct InputSession<T: Timestamp+Clone, D: Data, R: Diff> {
 	time: Product<RootTimestamp, T>,
 	buffer: Vec<(D, Product<RootTimestamp, T>, R)>,
-	handle: &'a mut ::timely::dataflow::operators::input::Handle<T,(D,Product<RootTimestamp, T>,R)>,
+	handle: Handle<T,(D,Product<RootTimestamp, T>,R)>,
 }
 
-impl<'a, T: Timestamp+Clone, D: Data> InputSession<'a, T, D, isize> {
+impl<T: Timestamp+Clone, D: Data> InputSession<T, D, isize> {
 	/// Adds an element to the collection.
 	pub fn insert(&mut self, element: D) { self.update(element, 1); }
 	/// Removes an element from the collection.
 	pub fn remove(&mut self, element: D) { self.update(element,-1); }
 }
 
-impl<'a, T: Timestamp+Clone, D: Data, R: Diff> InputSession<'a, T, D, R> {
+impl<'a, T: Timestamp+Clone, D: Data, R: Diff> InputSession<T, D, R> {
 
 	/// Creates a new session from a reference to an input handle.
-	pub fn from(handle: &'a mut ::timely::dataflow::operators::input::Handle<T,(D,Product<RootTimestamp, T>,R)>) -> Self {
+	pub fn from(handle: Handle<T,(D,Product<RootTimestamp, T>,R)>) -> Self {
 		InputSession {
 			time: handle.time().clone(),
 			buffer: Vec::new(),
@@ -74,9 +93,12 @@ impl<'a, T: Timestamp+Clone, D: Data, R: Diff> InputSession<'a, T, D, R> {
 	pub fn epoch(&self) -> &T { &self.time.inner }
 	/// Reveals the current time of the session.
 	pub fn time(&self) -> &Product<RootTimestamp, T> { &self.time }
+
+	/// Closes the input, flushing and sealing the wrapped timely input.
+	pub fn close(self) { }
 }
 
-impl<'a, T: Timestamp+Clone, D: Data, R: Diff> Drop for InputSession<'a, T, D, R> {
+impl<T: Timestamp+Clone, D: Data, R: Diff> Drop for InputSession<T, D, R> {
 	fn drop(&mut self) {
 		self.flush();
 	}

@@ -7,11 +7,11 @@ use rand::{Rng, SeedableRng, StdRng};
 use std::sync::{Arc, Mutex};
 
 use timely::dataflow::*;
-use timely::dataflow::operators::*;
 use timely::dataflow::operators::Capture;
 use timely::dataflow::operators::capture::Extract;
 
-use differential_dataflow::{Collection, AsCollection};
+use differential_dataflow::input::Input;
+use differential_dataflow::Collection;
 
 use differential_dataflow::operators::*;
 use differential_dataflow::lattice::Lattice;
@@ -157,11 +157,8 @@ fn bfs_differential(
 
             let send = send.lock().unwrap().clone();
 
-            let (root_input, roots) = scope.new_input();
-            let (edge_input, edges) = scope.new_input();
-
-            let roots = roots.as_collection();
-            let edges = edges.as_collection();
+            let (root_input, roots) = scope.new_collection();
+            let (edge_input, edges) = scope.new_collection();
 
             bfs(&edges, &roots).map(|(_, dist)| dist)
                                .count()
@@ -175,9 +172,6 @@ fn bfs_differential(
         // sort by decreasing insertion time.
         roots_list.sort_by(|x,y| y.1.cmp(&x.1));
         edges_list.sort_by(|x,y| y.1.cmp(&x.1));
-
-        let mut roots = differential_dataflow::input::InputSession::from(&mut roots);
-        let mut edges = differential_dataflow::input::InputSession::from(&mut edges);
 
         let mut round = 0;
         while roots_list.len() > 0 || edges_list.len() > 0 {

@@ -7,7 +7,8 @@ use timely::dataflow::scopes::Child;
 use timely::dataflow::operators::*;
 use timely::dataflow::operators::feedback::Handle;
 
-use differential_dataflow::{Data, Collection, AsCollection, Hashable};
+use differential_dataflow::input::Input;
+use differential_dataflow::{Data, Collection, Hashable};
 use differential_dataflow::operators::*;
 use differential_dataflow::lattice::Lattice;
 
@@ -64,12 +65,12 @@ fn main() {
         worker.dataflow::<u64,_,_>(move |outer| {
 
             // inputs for base facts; currently not used because no data on hand.
-            let (_cin, c) = outer.new_input::<((u32,u32,u32),_,isize)>(); let c = c.as_collection();
-            let (_pin, p) = outer.new_input::<((u32,u32),_,isize)>(); let p = p.as_collection();
-            let (_qin, q) = outer.new_input::<((u32,u32,u32),_,isize)>(); let q = q.as_collection();
-            let (_rin, r) = outer.new_input::<((u32,u32,u32),_,isize)>(); let r = r.as_collection();
-            let (_sin, s) = outer.new_input::<((u32,u32),_,isize)>(); let s = s.as_collection();
-            let (_uin, u) = outer.new_input::<((u32,u32,u32),_,isize)>(); let u = u.as_collection();
+            let (_cin, c) = outer.new_collection::<(u32,u32,u32),isize>();
+            let (_pin, p) = outer.new_collection::<(u32,u32),isize>();
+            let (_qin, q) = outer.new_collection::<(u32,u32,u32),isize>();
+            let (_rin, r) = outer.new_collection::<(u32,u32,u32),isize>();
+            let (_sin, s) = outer.new_collection::<(u32,u32),isize>();
+            let (_uin, u) = outer.new_collection::<(u32,u32,u32),isize>();
 
             // construct iterative derivation scope
             let (_p, _q) = outer.scoped::<u64,_,_>(|inner| {
