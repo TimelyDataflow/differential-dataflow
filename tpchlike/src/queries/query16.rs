@@ -1,10 +1,8 @@
 use timely::dataflow::*;
-// use timely::dataflow::operators::*;
 use timely::dataflow::operators::probe::Handle as ProbeHandle;
 
-// use differential_dataflow::AsCollection;
 use differential_dataflow::operators::*;
-use differential_dataflow::lattice::Lattice;
+use differential_dataflow::lattice::TotalOrder;
 
 use ::Collections;
 
@@ -58,7 +56,7 @@ fn substring2(source: &[u8], query1: &[u8], query2: &[u8]) -> bool {
 }
 
 pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp> 
-where G::Timestamp: Lattice+Ord {
+where G::Timestamp: TotalOrder+Ord {
 
     println!("TODO: query 16 could use a count_u if it joins after to re-collect its attributes");
 
@@ -86,7 +84,6 @@ where G::Timestamp: Lattice+Ord {
                 Some((p.part_key, (p.brand, p.typ.to_string(), p.size)))
             }
             else { None }
-
         )
         .semijoin_u(&parts)
         .count_total()

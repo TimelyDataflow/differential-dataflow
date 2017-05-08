@@ -4,7 +4,7 @@ use timely::dataflow::operators::probe::Handle as ProbeHandle;
 
 // use differential_dataflow::AsCollection;
 use differential_dataflow::operators::*;
-use differential_dataflow::lattice::Lattice;
+use differential_dataflow::lattice::TotalOrder;
 
 use ::Collections;
 
@@ -44,7 +44,7 @@ fn substring2(source: &[u8], query1: &[u8], query2: &[u8]) -> bool {
 }
 
 pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp> 
-where G::Timestamp: Lattice+Ord {
+where G::Timestamp: TotalOrder+Ord {
 
     let orders =
     collections
