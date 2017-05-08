@@ -9,6 +9,7 @@ use timely::dataflow::operators::*;
 
 use rand::{Rng, SeedableRng, StdRng};
 
+use differential_dataflow::input::Input;
 use differential_dataflow::trace::Trace;
 use differential_dataflow::{Collection, AsCollection};
 use differential_dataflow::operators::*;
@@ -38,20 +39,17 @@ fn main() {
         let (mut input, probe) = worker.dataflow(|scope| {
 
             // create edge input, count a few ways.
-            let (input, edges) = scope.new_input();
-
-            // pull off source, and count.
-            let mut edges = edges.as_collection();
+            let (input, edges) = scope.new_collection();
 
             // if kc1 { edges = kcore1(&edges, std::env::args().nth(4).unwrap().parse().unwrap()); }
             // if kc2 { edges = kcore2(&edges, std::env::args().nth(4).unwrap().parse().unwrap()); }
 
             let degrs = edges.map(|(src, _dst)| src)
-                             .count_total_u();
+                             .count();
 
             // pull of count, and count.
             let distr = degrs.map(|(_src, cnt)| cnt as usize)
-                             .count_total_u();
+                             .count();
 
             // show us something about the collection, notice when done.
             let probe = distr//.inspect(|x| println!("observed: {:?}", x))
@@ -67,19 +65,14 @@ fn main() {
         let mut rng2: StdRng = SeedableRng::from_seed(seed);    // rng for edge additions
 
         // load up graph dataz
-        let &time = input.time();
         for edge in 0..edges {
             if edge % peers == index {
-                input.send(((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), time, 1));
-            }
-
-            // move the data along a bit
-            if edge % 10000 == 9999 {
-                worker.step();
+                input.insert((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)))
             }
         }
 
         input.advance_to(1);
+        input.flush();
         worker.step_while(|| probe.less_than(input.time()));
 
         if index == 0 {
@@ -90,25 +83,22 @@ fn main() {
 
         if batch > 0 {
 
-            // create a new input session; will batch data for us!
-            let mut session = differential_dataflow::input::InputSession::from(&mut input);
-
             for round in 1 .. {
 
                 // only do the work of this worker.
                 if round % peers == index {
-                    session.advance_to(round);
-                    session.insert((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)));
-                    session.remove((rng2.gen_range(0, nodes), rng2.gen_range(0, nodes)));
+                    input.advance_to(round);
+                    input.insert((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)));
+                    input.remove((rng2.gen_range(0, nodes), rng2.gen_range(0, nodes)));
                 }
 
                 if round % batch == 0 {
                     // all workers indicate they have finished with `round`.
-                    session.advance_to(round + 1);
-                    session.flush();
+                    input.advance_to(round + 1);
+                    input.flush();
 
                     let timer = ::std::time::Instant::now();
-                    worker.step_while(|| probe.less_than(session.time()));
+                    worker.step_while(|| probe.less_than(input.time()));
                     println!("worker {}, round {} finished after {:?}", index, round, timer.elapsed());
                 }
             }

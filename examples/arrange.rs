@@ -7,6 +7,7 @@ use timely::dataflow::operators::*;
 
 use rand::{Rng, SeedableRng, StdRng};
 
+use differential_dataflow::input::Input;
 use differential_dataflow::AsCollection;
 use differential_dataflow::operators::arrange::ArrangeByKey;
 use differential_dataflow::operators::group::Group;
@@ -110,9 +111,8 @@ fn main() {
         let mut roots = worker.dataflow(|scope| {
 
             let edges = graph.import(scope);
-            let (input, roots) = scope.new_input();
-            let roots = roots.as_collection()
-                             .map(|x| (x, 0));
+            let (input, roots) = scope.new_collection();
+            let roots = roots.map(|x| (x, 0));
 
             // repeatedly update minimal distances each node can be reached from each root
             roots.iterate(|dists| {
@@ -135,18 +135,12 @@ fn main() {
         let mut query = worker.dataflow(|scope| {
 
             let edges = graph.import(scope);
-            let (input, query) = scope.new_input();
-            let query = query.as_collection();
+            let (input, query) = scope.new_collection();
 
             query.map(|x| (x, x))
                  .join_core(&edges, |_n, &q, &d| Some((d, q)))
-                 // .inspect(|x| println!("reachable @ 1: {:?}", x))
                  .join_core(&edges, |_n, &q, &d| Some((d, q)))
-                 // .inspect(|x| println!("reachable @ 2: {:?}", x))
                  .join_core(&edges, |_n, &q, &d| Some((d, q)))
-                 .map(|(_node, query)| query)
-                 .consolidate()
-                 // .inspect(|x| println!("neighbors @ 3: {:?}", x))
                  .probe_with(&mut probe);
 
             input
@@ -157,26 +151,24 @@ fn main() {
         drop(graph);
 
         if batch > 0 {
-            let round = 0;
-            // for round in 0 .. {
+            for round in 0 .. {
 
                 let mut time = roots.time().clone();
 
-                roots.send(((round % nodes), time, 1));
-                query.send(((round % nodes), time, 1));
+                roots.insert(round % nodes);
+                query.insert(round % nodes);
 
                 time.inner += batch;
 
                 roots.advance_to(time.inner);
                 query.advance_to(time.inner);
 
-                query.send(((round % nodes), time, -1));
+                query.remove(round % nodes);
 
-                // println!("");
                 worker.step_while(|| probe.less_than(&time));
 
                 println!("done after: {:?}", timer.elapsed());
-            // }
+            }
         }
     }).unwrap();
 }

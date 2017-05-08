@@ -7,8 +7,8 @@ use std::time::Instant;
 use rand::{Rng, SeedableRng, StdRng};
 
 use timely::dataflow::*;
-use timely::dataflow::operators::*;
 
+use differential_dataflow::input::Input;
 use differential_dataflow::Collection;
 use differential_dataflow::operators::*;
 use differential_dataflow::lattice::Lattice;
@@ -32,13 +32,8 @@ fn main() {
 
         // define BFS dataflow; return handles to roots and edges inputs
         let (mut graph, mut roots, probe) = worker.dataflow(|scope| {
-
-            let (root_input, roots) = scope.new_input();
-            let roots = Collection::new(roots);
-
-            let (edge_input, graph) = scope.new_input();
-            let graph = Collection::new(graph);
-
+            let (root_input, roots) = scope.new_collection();
+            let (edge_input, graph) = scope.new_collection();
             let probe = reach(&graph, &roots).probe();
             (edge_input, root_input, probe)
         });
@@ -50,9 +45,8 @@ fn main() {
         if worker.index() == 0 {
             // trickle edges in to dataflow
             for _ in 0..(edges/1000) {
-                let &time = graph.time();
                 for _ in 0..1000 {
-                    graph.send(((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), time, 1));
+                    graph.insert((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)));
                 }
                 worker.step();
             }
@@ -62,18 +56,17 @@ fn main() {
             println!("loaded; elapsed: {:?}", timer.elapsed());
         }
 
-        roots.advance_to(1);
-        graph.advance_to(1);
+        roots.advance_to(1); roots.flush();
+        graph.advance_to(1); graph.flush();
         worker.step_while(|| probe.less_than(graph.time()));
 
         if worker.index() == 0 {
             println!("stable; elapsed: {:?}", timer.elapsed());
         }
         for i in 0..10 {
-            let &time = roots.time();
-            roots.send((i, time, 1));
-            roots.advance_to(2 + i);
-            graph.advance_to(2 + i);
+            roots.insert(i);
+            roots.advance_to(2 + i); roots.flush();
+            graph.advance_to(2 + i); graph.flush();
 
             let timer = ::std::time::Instant::now();
             worker.step_while(|| probe.less_than(graph.time()));
@@ -82,23 +75,17 @@ fn main() {
             }
         }
 
-        let mut changes = Vec::new();
         for _wave in 0..waves {
-            let &time = graph.time();
-            for _ in 0..batch {
-                changes.push(((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), time, 1));
-                changes.push(((rng2.gen_range(0, nodes), rng2.gen_range(0, nodes)), time,-1));
-            }
-
             let timer = ::std::time::Instant::now();
             let round = *graph.epoch();
             if worker.index() == 0 {
-                while let Some(change) = changes.pop() {
-                    graph.send(change);
+                for _ in 0..batch {
+                    graph.insert((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)));
+                    graph.remove((rng2.gen_range(0, nodes), rng2.gen_range(0, nodes)));
                 }
             }
-            roots.advance_to(round + 1);
-            graph.advance_to(round + 1);
+            roots.advance_to(round + 1); roots.flush();
+            graph.advance_to(round + 1); roots.flush();
 
             worker.step_while(|| probe.less_than(graph.time()));
 

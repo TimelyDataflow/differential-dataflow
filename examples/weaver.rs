@@ -9,6 +9,7 @@ use rand::{Rng, SeedableRng, StdRng};
 use timely::dataflow::*;
 use timely::dataflow::operators::*;
 
+use differential_dataflow::input::Input;
 use differential_dataflow::{Collection, AsCollection, Data};
 use differential_dataflow::operators::*;
 use differential_dataflow::lattice::Lattice;
@@ -27,12 +28,10 @@ fn main() {
         let (mut raw, mut trans, mut query, mut roots, query_probe, roots_probe) = worker.dataflow(|scope| {
 
             // transactional updates to edge collection.
-            let (raw_input, raw) = scope.new_input();
-            let raw = raw.as_collection();
+            let (raw_input, raw) = scope.new_collection();
 
             // transactional updates to edge collection.
-            let (trans_input, trans) = scope.new_input();
-            let trans = trans.as_collection();
+            let (trans_input, trans) = scope.new_collection();
 
             // graph contains committed edges, will persist across epochs.
             let (handle, graph) = scope.loop_variable(u64::max_value(), 1);
@@ -52,8 +51,7 @@ fn main() {
             graph.inner.connect_loop(handle);
 
             // read queries against edge collection
-            let (query_input, query) = scope.new_input();
-            let query = query.as_collection();
+            let (query_input, query) = scope.new_collection();
 
             // query the graph, return a probe.
             let query_probe = graph.semijoin(&query)
@@ -61,8 +59,7 @@ fn main() {
 
 
             // issue reachability queries from various roots
-            let (roots_input, roots) = scope.new_input();
-            let roots = roots.as_collection();
+            let (roots_input, roots) = scope.new_collection();
 
             // do reach on the graph from the roots, report counts at each distance.
             let result = reach(&graph, &roots);
@@ -75,19 +72,18 @@ fn main() {
         let graph = GraphMMap::new(&filename);
 
         if worker.index() == 0 {
-            let &time = raw.time();
             for node in 0 .. graph.nodes() {
                 for &edge in graph.edges(node) {
-                    raw.send(((node as u32, edge as u32), time, 1));
+                    raw.insert((node as u32, edge as u32));
                 }
             }
         }
         raw.close();
 
         let next = trans.epoch() + 2;
-        trans.advance_to(next);
-        query.advance_to(next);
-        roots.advance_to(next);
+        trans.advance_to(next); trans.flush();
+        query.advance_to(next); query.flush();
+        roots.advance_to(next); roots.flush();
 
         // do computation for a bit, until we see outputs from each.
         while query_probe.less_than(&trans.time()) || roots_probe.less_than(&trans.time()) {
@@ -114,15 +110,14 @@ fn main() {
         let timer = ::std::time::Instant::now();
 
         for buffer in &reads {
-            let &time = query.time();
             for &entry in buffer {
-                query.send((entry, time, 1));
+                query.insert(entry);
             }
 
             let next = trans.epoch() + 1;
-            trans.advance_to(next);
-            query.advance_to(next);
-            roots.advance_to(next);
+            trans.advance_to(next); trans.flush();
+            query.advance_to(next); query.flush();
+            roots.advance_to(next); roots.flush();
 
             // do computation for a bit, until we see outputs from each.
             while query_probe.less_than(&trans.time()) || roots_probe.less_than(&trans.time()) {
@@ -149,15 +144,13 @@ fn main() {
 
         for buffer in &travs {
             let inner_timer = ::std::time::Instant::now();
-            let &time = roots.time();
             for &src in buffer {
-                roots.send((src, time, 1));
+                roots.insert(src);
             }
 
             let next = trans.epoch() + 1;
-            trans.advance_to(next);
-            // query.advance_to(next);
-            roots.advance_to(next);
+            trans.advance_to(next); trans.flush();
+            roots.advance_to(next); roots.flush();
 
             // do computation for a bit, until we see outputs from each.
             while query_probe.less_than(&trans.time()) || roots_probe.less_than(&trans.time()) {
@@ -204,15 +197,12 @@ fn main() {
         let timer = ::std::time::Instant::now();
 
         for buffer in &writes {
-            let &time = trans.time();
             for &entry in buffer {
-                trans.send((entry, time, 1));
+                trans.insert(entry);
             }
 
             let next = trans.epoch() + 1;
-            trans.advance_to(next);
-            // query.advance_to(next);
-            // roots.advance_to(next);
+            trans.advance_to(next); trans.flush();
 
             // do computation for a bit, until we see outputs from each.
             while query_probe.less_than(&trans.time()) || roots_probe.less_than(&trans.time()) {

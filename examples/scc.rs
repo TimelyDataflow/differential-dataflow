@@ -7,8 +7,8 @@ use std::mem;
 use rand::{Rng, SeedableRng, StdRng};
 
 use timely::dataflow::*;
-use timely::dataflow::operators::*;
 
+use differential_dataflow::input::Input;
 use differential_dataflow::Collection;
 use differential_dataflow::operators::*;
 use differential_dataflow::lattice::Lattice;
@@ -38,8 +38,7 @@ fn main() {
 
         let (mut input, probe) = worker.dataflow::<u64,_,_>(|scope| {
 
-            let (input, edges) = scope.new_input();
-            let mut edges = Collection::new(edges);
+            let (input, mut edges) = scope.new_collection();
 
             edges = _trim_and_flip_u(&edges);
             edges = _trim_and_flip_u(&edges);
@@ -64,50 +63,28 @@ fn main() {
 
         if worker.index() == 0 {
 
-            // println!("determining SCC of {} nodes, {} edges:", nodes, edges);
-            let seed: &[_] = &[1, 2, 3, 4];
-            let mut rng: StdRng = SeedableRng::from_seed(seed);
-
-            let mut names = Vec::with_capacity(nodes as usize);
-            for _index in 0 .. nodes {
-              names.push(rng.gen_range(0, u32::max_value()));
-              // names.push(index as u32);
-            }
-
             rng1.gen::<f64>();
             rng2.gen::<f64>();
 
-            let &time = input.time();
-            for index in 0..edges {
-                let edge = (names[rng1.gen_range(0, nodes) as usize], names[rng1.gen_range(0, nodes) as usize]);
-                input.send((edge, time, 1));
-                if (index % (1 << 12)) == 0 {
-                    worker.step();
-                }
+            for _index in 0..edges {
+                input.insert((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)));
             }
 
             println!("input ingested after {:?}", timer.elapsed());
         }
 
         if batch > 0 {
-            let mut changes = Vec::with_capacity(2 * batch);
             for _ in 0 .. {
-                if worker.index() == 0 {
-                    let &time = input.time();
-                    for _ in 0 .. batch {
-                        changes.push(((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), time, 1));
-                        changes.push(((rng2.gen_range(0, nodes), rng2.gen_range(0, nodes)), time,-1));
-                    }
-                }
-
                 let timer = ::std::time::Instant::now();
                 let round = *input.epoch();
                 if worker.index() == 0 {
-                    while let Some(change) = changes.pop() {
-                        input.send(change);
+                      for _ in 0 .. batch {
+                        input.insert((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)));
+                        input.remove((rng2.gen_range(0, nodes), rng2.gen_range(0, nodes)));
                     }
                 }
                 input.advance_to(round + 1);
+                input.flush();
                 worker.step_while(|| probe.less_than(&input.time()));
 
                 if worker.index() == 0 {

@@ -115,7 +115,6 @@ fn test_import_completed_dataflow() {
                     input.send(((src, dst), time, w));
                 }
             }
-            let input_time = input.time().clone();
             input.close();
 
             worker.step_while(|| !probe.done());

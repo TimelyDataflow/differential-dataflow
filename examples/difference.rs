@@ -2,10 +2,8 @@ extern crate timely;
 extern crate timely_sort;
 extern crate differential_dataflow;
 
-use timely::dataflow::operators::*;
-
+use differential_dataflow::input::Input;
 use differential_dataflow::difference::DiffPair;
-use differential_dataflow::AsCollection;
 use differential_dataflow::operators::Consolidate;
 
 fn main() {
@@ -23,11 +21,10 @@ fn main() {
 
         let mut input = worker.dataflow::<(), _, _>(|scope| {
 
-            let (input, data) = scope.new_input::<((usize, isize), isize)>();
+            let (input, data) = scope.new_collection::<(usize, isize), isize>();
 
             // move `val` into the ring component.
-            data.map(|((x,y),d)| (x, Default::default(), DiffPair::new(y,d)))
-				.as_collection()
+            data.explode(|(x,y)| Some((x, DiffPair::new(y, 1))))
                 .consolidate();
 
             input
@@ -37,7 +34,7 @@ fn main() {
 
         for val in 0 .. {
         	// introduce some data with bounded key.
-        	input.send(((val % keys, (val as isize) % 100), 1 as isize));
+        	input.insert((val % keys, (val as isize) % 100));
 
         	// we must still give the computation the opportunity to act.
         	if val > 0 && val % batch == 0 { 

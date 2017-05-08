@@ -1,5 +1,4 @@
 extern crate rand;
-// extern crate time;
 extern crate timely;
 extern crate differential_dataflow;
 
@@ -7,10 +6,10 @@ use std::hash::Hash;
 use std::time::Instant;
 
 use timely::dataflow::*;
-use timely::dataflow::operators::*;
 
 use rand::{Rng, SeedableRng, StdRng};
 
+use differential_dataflow::input::Input;
 use differential_dataflow::Collection;
 use differential_dataflow::operators::*;
 use differential_dataflow::lattice::Lattice;
@@ -34,8 +33,7 @@ fn main() {
         let (mut tweets, mut queries, probe) = worker.dataflow(|scope| {
 
             // entries corresponding to (@username, @mention, #topic), but a (u32, u32, u32) instead.
-            let (tweet_input, tweets) = scope.new_input(); 
-            let tweets = Collection::new(tweets);
+            let (tweet_input, tweets) = scope.new_collection(); 
 
             // determine connected components based on mentions.
             let labels = connected_components(&tweets.map(|(u,m,_)| (u,m)));
@@ -56,8 +54,7 @@ fn main() {
                              });
 
             // entries corresponding to a @username, but a u32 instead.
-            let (query_input, queries) = scope.new_input(); 
-            let queries = Collection::new(queries);
+            let (query_input, queries) = scope.new_collection(); 
 
             let label_query = queries.map(|q| (q,()))
                                      .join_map(&labels, |q,_,&l| (l,q.clone()));
@@ -85,60 +82,51 @@ fn main() {
 
         println!("performing AppealingDataflow with {} users, {} topics:", users, topics);
 
-        let &time = tweets.time();
         for _ in 0 .. users/worker.peers() {
-            tweets.send(((tweet_rng1.gen_range(0, users), 
-                          tweet_rng1.gen_range(0, users),
-                          tweet_rng1.gen_range(0, topics)), time, 1));
+            tweets.insert((tweet_rng1.gen_range(0, users), 
+                           tweet_rng1.gen_range(0, users),
+                           tweet_rng1.gen_range(0, topics)));
         } 
 
-        let &time = queries.time();
         if worker.index() == 0 {
-            queries.send((query_rng1.gen_range(0, users), time, 1));
+            queries.insert(query_rng1.gen_range(0, users));
         }
 
         println!("loaded; elapsed: {:?}", timer.elapsed());
 
-        tweets.advance_to(1);
-        queries.advance_to(1);
+        tweets.advance_to(1); tweets.flush();
+        queries.advance_to(1); queries.flush();
         worker.step_while(|| probe.less_than(queries.time()));
 
         println!("stable; elapsed: {:?}", timer.elapsed());
 
         if batch > 0 {
-            let mut changes = Vec::new();
             for wave in 0.. {
-
-                let &time = tweets.time();
 
                 let mut my_batch = batch / worker.peers();
                 if worker.index() < (batch % worker.peers()) { 
                     my_batch += 1; 
                 }
 
-                for _ in 0..my_batch {
-                    changes.push(((tweet_rng1.gen_range(0, users), 
-                                   tweet_rng1.gen_range(0, users),
-                                   tweet_rng1.gen_range(0, topics)), time, 1));
-                    changes.push(((tweet_rng2.gen_range(0, users), 
-                                   tweet_rng2.gen_range(0, users),
-                                   tweet_rng2.gen_range(0, topics)), time,-1));
-                }
-
-
                 let start = ::std::time::Instant::now();
                 let round = *tweets.epoch();
-                for change in changes.drain(..) {
-                    tweets.send(change);
-                }
-                if worker.index() == 0 {
-                    let &time = queries.time();
-                    queries.send((query_rng1.gen_range(0, users), time, 1));
-                    queries.send((query_rng2.gen_range(0, users), time,-1));
+
+                for _ in 0..my_batch {
+                    tweets.insert((tweet_rng1.gen_range(0, users), 
+                                   tweet_rng1.gen_range(0, users),
+                                   tweet_rng1.gen_range(0, topics)));
+                    tweets.remove((tweet_rng2.gen_range(0, users), 
+                                   tweet_rng2.gen_range(0, users),
+                                   tweet_rng2.gen_range(0, topics)));
                 }
 
-                tweets.advance_to(round + 1);
-                queries.advance_to(round + 1);
+                if worker.index() == 0 {
+                    queries.insert(query_rng1.gen_range(0, users));
+                    queries.remove(query_rng2.gen_range(0, users));
+                }
+
+                tweets.advance_to(round + 1); tweets.flush();
+                queries.advance_to(round + 1); queries.flush();
                 worker.step_while(|| probe.less_than(queries.time()));
 
                 if worker.index() == 0 {
