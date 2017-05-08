@@ -107,7 +107,7 @@ impl<G: Scope, D: Data, R: Diff> Collection<G, D, R> where G::Timestamp: Data {
     /// // moves `salary` to accumulable data, and results 
     /// // in the total salary for people by name (e.g. how
     /// // much do people named "Frank" get paid).
-    /// employees.explode(|(name, salary)| (name, salary))
+    /// employees.explode(|(name, salary)| Some((name, salary)))
     ///          .count();
     /// ```
     pub fn explode<D2, R2, I, L>(&self, logic: L) -> Collection<G, D2, <R2 as Mul<R>>::Output> 
