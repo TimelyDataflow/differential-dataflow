@@ -20,14 +20,30 @@ use collection::{Collection, AsCollection};
 
 /// Create a new collection and input handle to control the collection.
 pub trait Input<'a, A: Allocate, T: Timestamp+Ord> {
-    /// Create a new collection and input handle to control the collection.
-    fn new_collection<D: Data, R: Diff>(&mut self) -> (InputSession<T, D, R>, Collection<Child<'a, Root<A>, T>, D, R>);
+    /// Create a new collection and input handle to subsequently control the collection.
+    fn new_collection<D, R>(&mut self) -> (InputSession<T, D, R>, Collection<Child<'a, Root<A>, T>, D, R>)
+    where D: Data, R: Diff;
+    /// Create a new collection and input handle from initial data.
+    fn new_collection_from<I>(&mut self, data: I) -> (InputSession<T, I::Item, isize>, Collection<Child<'a, Root<A>, T>, I::Item, isize>)
+    where I: IntoIterator+'static, I::Item: Data;
 }
 
 impl<'a, A: Allocate, T: Timestamp+Ord> Input<'a, A, T> for Child<'a, Root<A>, T> {
-    fn new_collection<D: Data, R: Diff>(&mut self) -> (InputSession<T, D, R>, Collection<Child<'a, Root<A>, T>, D, R>) {
+    fn new_collection<D, R>(&mut self) -> (InputSession<T, D, R>, Collection<Child<'a, Root<A>, T>, D, R>) 
+    where D: Data, R: Diff{
 		let (handle, stream) = self.new_input();
 		(InputSession::from(handle), stream.as_collection())
+    }
+    fn new_collection_from<I>(&mut self, data: I) -> (InputSession<T, I::Item, isize>, Collection<Child<'a, Root<A>, T>, I::Item, isize>) 
+    where I: IntoIterator+'static, I::Item: Data {
+
+    	use timely::dataflow::operators::ToStream;
+
+		let (handle, stream) = self.new_input();
+
+		let source = data.into_iter().map(|d| (d, Default::default(), 1)).to_stream(self).as_collection();
+
+		(InputSession::from(handle), stream.as_collection().concat(&source))
     }
 }
 

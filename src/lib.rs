@@ -28,8 +28,7 @@
 //! let (mut input, probe) = worker.dataflow(|scope| {
 //!
 //!     // create edge input, count a few ways.
-//!     let (input, edges) = scope.new_input();
-//!     let mut edges = edges.as_collection();
+//!     let (input, edges) = scope.new_collection();
 //!
 //!     // extract the source field, and then count.
 //!     let degrs = edges.map(|(src, _dst)| src)
@@ -51,6 +50,25 @@
 //! records (triples of data, time, and change in count) at the `input` stream handle. The `probe` is
 //! how timely dataflow tells us that we have seen all corresponding output updates (in case there are
 //! none).
+//!
+//! ```ignore
+//! loop {
+//!     let time = input.epoch();
+//!     for round in time .. time + 100 {
+//!         input.advance_to(round);
+//!         input.insert((round % 13, round % 7));
+//!     }
+//!
+//!     input.flush();
+//!     while probe.less_than(input.time()) { 
+//!        worker.step(); 
+//!     }
+//! }
+//! ```
+//! 
+//! This example should print out the 100 changes in the output, in this case each reflecting the increase
+//! of some node degree by one (typically four output changes, corresponding to the addition and deletion 
+//! of the new and old counts of the old and new degrees of the affected node).
 
 #![forbid(missing_docs)]
 

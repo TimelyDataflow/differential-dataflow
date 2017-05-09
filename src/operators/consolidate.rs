@@ -18,8 +18,6 @@
 //!       .consolidate();
 //! ```
 
-use std::fmt::Debug;
-
 use timely::dataflow::*;
 
 use ::{Collection, Data, Diff, Hashable};
@@ -48,7 +46,7 @@ pub trait Consolidate<D: Data> {
 
 impl<G: Scope, D, R> Consolidate<D> for Collection<G, D, R>
 where
-    D: Data+Debug+Hashable+Default,
+    D: Data,
     R: Diff,
     G::Timestamp: ::lattice::Lattice+Ord,
  {
