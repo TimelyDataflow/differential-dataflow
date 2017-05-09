@@ -20,8 +20,7 @@ A graph is a collection of pairs `(Node, Node)`, and one standard analysis is to
 let (mut input, probe) = computation.scoped(|scope| {
 
     // create edge input, count a few ways.
-    let (input, edges) = scope.new_input();
-    let edges = edges.as_collection();
+    let (input, edges) = scope.new_collection();
 
     // pull off source and count them.
     let degrs = edges.map(|(src, _dst)| src)

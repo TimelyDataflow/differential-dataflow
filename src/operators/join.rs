@@ -37,101 +37,115 @@ pub trait Join<G: Scope, K: Data, V: Data, R: Diff> {
 
     /// Matches pairs `(key,val1)` and `(key,val2)` based on `key` and then applies a function.
     ///
-    /// #Examples
-    /// ```ignore
+    /// # Examples
+    ///
+    /// ```
+    /// #
     /// extern crate timely;
-    /// use timely::dataflow::operators::{ToStream, Capture};
-    /// use timely::dataflow::operators::capture::Extract;
+    /// extern crate differential_dataflow;
+    ///
+    /// use differential_dataflow::input::Input;
     /// use differential_dataflow::operators::Join;
     ///
-    /// let data = timely::example(|scope| {
-    ///     let col1 = vec![((0,0),1),((1,2),1)].into_iter().to_stream(scope);
-    ///     let col2 = vec![((0,'a'),1),((1,'B'),1)].into_iter().to_stream(scope);
+    /// fn main() {
+    ///     ::timely::example(|scope| {
     ///
-    ///     // should produce records `(0 + 0,'a')` and `(1 + 2,'B')`.
-    ///     col1.join_map(&col2, |k,v1,v2| (*k + *v1, *v2)).capture();
-    /// });
+    ///         let x = scope.new_collection_from(vec![(0, 1), (1, 3)]).1;
+    ///         let y = scope.new_collection_from(vec![(0, 'a'), (1, 'b')]).1;
+    ///         let z = scope.new_collection_from(vec![(0, 1, 'a'), (1, 3, 'b')]).1;
     ///
-    /// let extracted = data.extract();
-    /// assert_eq!(extracted.len(), 1);
-    /// assert_eq!(extracted[0].1, vec![((0,'a'),1), ((3,'B'),1)]);
+    ///         x.join(&y)
+    ///          .assert_eq(&z);
+    ///     });
+    /// }
     /// ```
     fn join<V2: Data, R2: Diff>(&self, other: &Collection<G, (K,V2), R2>) -> Collection<G, (K,V,V2), <R as Mul<R2>>::Output> 
     where R: Mul<R2>, <R as Mul<R2>>::Output: Diff
     {
         self.join_map(other, |k,v,v2| (k.clone(),v.clone(),v2.clone()))
     }
+
     /// Matches pairs `(key,val1)` and `(key,val2)` based on `key` and then applies a function.
     ///
-    /// #Examples
-    /// ```ignore
+    /// # Examples
+    ///
+    /// ```
+    /// #
     /// extern crate timely;
-    /// use timely::dataflow::operators::{ToStream, Capture};
-    /// use timely::dataflow::operators::capture::Extract;
+    /// extern crate differential_dataflow;
+    ///
+    /// use differential_dataflow::input::Input;
     /// use differential_dataflow::operators::Join;
     ///
-    /// let data = timely::example(|scope| {
-    ///     let col1 = vec![((0,0),1),((1,2),1)].into_iter().to_stream(scope);
-    ///     let col2 = vec![((0,'a'),1),((1,'B'),1)].into_iter().to_stream(scope);
+    /// fn main() {
+    ///     ::timely::example(|scope| {
     ///
-    ///     // should produce records `(0 + 0,'a')` and `(1 + 2,'B')`.
-    ///     col1.join_map(&col2, |k,v1,v2| (*k + *v1, *v2)).capture();
-    /// });
+    ///         let x = scope.new_collection_from(vec![(0, 1), (1, 3)]).1;
+    ///         let y = scope.new_collection_from(vec![(0, 'a'), (1, 'b')]).1;
+    ///         let z = scope.new_collection_from(vec![(1, 'a'), (3, 'b')]).1;
     ///
-    /// let extracted = data.extract();
-    /// assert_eq!(extracted.len(), 1);
-    /// assert_eq!(extracted[0].1, vec![((0,'a'),1), ((3,'B'),1)]);
+    ///         x.join_map(&y, |_key, &a, &b| (a,b))
+    ///          .assert_eq(&z);
+    ///     });
+    /// }
     /// ```
     fn join_map<V2, R2: Diff, D, L>(&self, other: &Collection<G, (K,V2), R2>, logic: L) -> Collection<G, D, <R as Mul<R2>>::Output>
     where V2: Data, R: Mul<R2>, <R as Mul<R2>>::Output: Diff, D: Data, L: Fn(&K, &V, &V2)->D+'static;
+
     /// Matches pairs `(key, val)` and `key` based on `key`, producing the former with frequencies multiplied.
     ///
     /// When the second collection contains frequencies that are either zero or one this is the more traditional
     /// relational semijoin. When the second collection may contain multiplicities, this operation may scale up
     /// the counts of the records in the first input.
-    /// 
-    /// #Examples
-    /// ```ignore
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// #
     /// extern crate timely;
-    /// use timely::dataflow::operators::{ToStream, Capture};
-    /// use timely::dataflow::operators::capture::Extract;
+    /// extern crate differential_dataflow;
+    ///
+    /// use differential_dataflow::input::Input;
     /// use differential_dataflow::operators::Join;
     ///
-    /// let data = timely::example(|scope| {
-    ///     let col1 = vec![((0,0),1),((1,2),1)].into_iter().to_stream(scope);
-    ///     let col2 = vec![(0,1)].into_iter().to_stream(scope);
+    /// fn main() {
+    ///     ::timely::example(|scope| {
     ///
-    ///     // should retain record `(0,0)` and discard `(1,2)`.
-    ///     col1.semijoin(&col2).capture();
-    /// });
+    ///         let x = scope.new_collection_from(vec![(0, 1), (1, 3)]).1;
+    ///         let y = scope.new_collection_from(vec![0, 2]).1;
+    ///         let z = scope.new_collection_from(vec![(0, 1)]).1;
     ///
-    /// let extracted = data.extract();
-    /// assert_eq!(extracted.len(), 1);
-    /// assert_eq!(extracted[0].1, vec![((0,0),1)]);
+    ///         x.semijoin(&y)
+    ///          .assert_eq(&z);
+    ///     });
+    /// }
     /// ```
     fn semijoin<R2>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), <R as Mul<R2>>::Output> 
     where R2: Diff, R: Mul<R2>, <R as Mul<R2>>::Output: Diff;
     /// Matches pairs `(key, val)` and `key` based on `key`, discarding values 
     /// in the first collection if their key is present in the second.
     ///
-    /// #Examples
-    /// ```ignore
+    /// # Examples
+    ///
+    /// ```
+    /// #
     /// extern crate timely;
-    /// use timely::dataflow::operators::{ToStream, Capture};
-    /// use timely::dataflow::operators::capture::Extract;
+    /// extern crate differential_dataflow;
+    ///
+    /// use differential_dataflow::input::Input;
     /// use differential_dataflow::operators::Join;
     ///
-    /// let data = timely::example(|scope| {
-    ///     let col1 = vec![((0,0),1),((1,2),1)].into_iter().to_stream(scope);
-    ///     let col2 = vec![(0,1)].into_iter().to_stream(scope);
+    /// fn main() {
+    ///     ::timely::example(|scope| {
     ///
-    ///     // should retain record `(1,2)` and discard `(0,0)`.
-    ///     col1.antijoin(&col2).consolidate().capture();
-    /// });
+    ///         let x = scope.new_collection_from(vec![(0, 1), (1, 3)]).1;
+    ///         let y = scope.new_collection_from(vec![0, 2]).1;
+    ///         let z = scope.new_collection_from(vec![(1, 3)]).1;
     ///
-    /// let extracted = data.extract();
-    /// assert_eq!(extracted.len(), 1);
-    /// assert_eq!(extracted[0].1, vec![((1,2),1)]);
+    ///         x.antijoin(&y)
+    ///          .assert_eq(&z);
+    ///     });
+    /// }
     /// ```
     fn antijoin<R2>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), R>
     where R2: Diff, R: Mul<R2, Output = R>;
@@ -142,96 +156,115 @@ pub trait JoinUnsigned<G: Scope, K: Data, V: Data, R: Diff> {
 
     /// Matches pairs `(key,val1)` and `(key,val2)` based on `key` and then applies a function.
     ///
-    /// #Examples
-    /// ```ignore
+    /// # Examples
+    ///
+    /// ```
+    /// #
     /// extern crate timely;
-    /// use timely::dataflow::operators::{ToStream, Capture};
-    /// use timely::dataflow::operators::capture::Extract;
-    /// use differential_dataflow::operators::Join;
+    /// extern crate differential_dataflow;
     ///
-    /// let data = timely::example(|scope| {
-    ///     let col1 = vec![((0,0),1),((1,2),1)].into_iter().to_stream(scope);
-    ///     let col2 = vec![((0,'a'),1),((1,'B'),1)].into_iter().to_stream(scope);
+    /// use differential_dataflow::input::Input;
+    /// use differential_dataflow::operators::JoinUnsigned;
     ///
-    ///     // should produce records `(0 + 0,'a')` and `(1 + 2,'B')`.
-    ///     col1.join_map_u(&col2, |k,v1,v2| (*k + *v1, *v2)).capture();
-    /// });
+    /// fn main() {
+    ///     ::timely::example(|scope| {
     ///
-    /// let extracted = data.extract();
-    /// assert_eq!(extracted.len(), 1);
-    /// assert_eq!(extracted[0].1, vec![((0,'a'),1), ((3,'B'),1)]);
+    ///         let x = scope.new_collection_from(vec![(0u32, 1), (1, 3)]).1;
+    ///         let y = scope.new_collection_from(vec![(0, 'a'), (1, 'b')]).1;
+    ///         let z = scope.new_collection_from(vec![(0, 1, 'a'), (1, 3, 'b')]).1;
+    ///
+    ///         x.join_u(&y)
+    ///          .assert_eq(&z);
+    ///     });
+    /// }
     /// ```
     fn join_u<V2: Data, R2: Diff>(&self, other: &Collection<G, (K,V2), R2>) -> Collection<G, (K,V,V2), <R as Mul<R2>>::Output>
     where R: Mul<R2>, <R as Mul<R2>>::Output: Diff {
         self.join_map_u(other, |k,v,v2| (k.clone(),v.clone(),v2.clone()))
     }
+
     /// Matches pairs `(key,val1)` and `(key,val2)` based on `key` and then applies a function.
     ///
-    /// #Examples
-    /// ```ignore
+    /// # Examples
+    ///
+    /// ```
+    /// #
     /// extern crate timely;
-    /// use timely::dataflow::operators::{ToStream, Capture};
-    /// use timely::dataflow::operators::capture::Extract;
-    /// use differential_dataflow::operators::Join;
+    /// extern crate differential_dataflow;
     ///
-    /// let data = timely::example(|scope| {
-    ///     let col1 = vec![((0,0),1),((1,2),1)].into_iter().to_stream(scope);
-    ///     let col2 = vec![((0,'a'),1),((1,'B'),1)].into_iter().to_stream(scope);
+    /// use differential_dataflow::input::Input;
+    /// use differential_dataflow::operators::JoinUnsigned;
     ///
-    ///     // should produce records `(0 + 0,'a')` and `(1 + 2,'B')`.
-    ///     col1.join_map_u(&col2, |k,v1,v2| (*k + *v1, *v2)).capture();
-    /// });
+    /// fn main() {
+    ///     ::timely::example(|scope| {
     ///
-    /// let extracted = data.extract();
-    /// assert_eq!(extracted.len(), 1);
-    /// assert_eq!(extracted[0].1, vec![((0,'a'),1), ((3,'B'),1)]);
+    ///         let x = scope.new_collection_from(vec![(0u32, 1), (1, 3)]).1;
+    ///         let y = scope.new_collection_from(vec![(0, 'a'), (1, 'b')]).1;
+    ///         let z = scope.new_collection_from(vec![(1, 'a'), (3, 'b')]).1;
+    ///
+    ///         x.join_map_u(&y, |_key, &a, &b| (a,b))
+    ///          .assert_eq(&z);
+    ///     });
+    /// }
     /// ```
     fn join_map_u<V2, R2: Diff, D, L>(&self, other: &Collection<G, (K,V2), R2>, logic: L) -> Collection<G, D, <R as Mul<R2>>::Output> 
     where R: Mul<R2>, <R as Mul<R2>>::Output: Diff, V2: Data, D: Data, L: Fn(&K, &V, &V2)->D+'static;
+
     /// Matches pairs `(key,val1)` and `key` based on `key`, filtering the first collection by values present in the second.
     ///
-    /// #Examples
-    /// ```ignore
+    /// When the second collection contains frequencies that are either zero or one this is the more traditional
+    /// relational semijoin. When the second collection may contain multiplicities, this operation may scale up
+    /// the counts of the records in the first input.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// #
     /// extern crate timely;
-    /// use timely::dataflow::operators::{ToStream, Capture};
-    /// use timely::dataflow::operators::capture::Extract;
-    /// use differential_dataflow::operators::Join;
+    /// extern crate differential_dataflow;
     ///
-    /// let data = timely::example(|scope| {
-    ///     let col1 = vec![((0,0),1),((1,2),1)].into_iter().to_stream(scope);
-    ///     let col2 = vec![(0,1)].into_iter().to_stream(scope);
+    /// use differential_dataflow::input::Input;
+    /// use differential_dataflow::operators::JoinUnsigned;
     ///
-    ///     // should retain record `(0,0)` and discard `(1,2)`.
-    ///     col1.semijoin_u(&col2).capture();
-    /// });
+    /// fn main() {
+    ///     ::timely::example(|scope| {
     ///
-    /// let extracted = data.extract();
-    /// assert_eq!(extracted.len(), 1);
-    /// assert_eq!(extracted[0].1, vec![((0,0),1)]);
+    ///         let x = scope.new_collection_from(vec![(0u32, 1), (1, 3)]).1;
+    ///         let y = scope.new_collection_from(vec![0, 2]).1;
+    ///         let z = scope.new_collection_from(vec![(0, 1)]).1;
+    ///
+    ///         x.semijoin_u(&y)
+    ///          .assert_eq(&z);
+    ///     });
+    /// }
     /// ```
     fn semijoin_u<R2>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), <R as Mul<R2>>::Output> 
     where R2: Diff, R: Mul<R2>, <R as Mul<R2>>::Output: Diff;
+
     /// Matches pairs `(key,val1)` and `key` based on `key`, discarding values 
     /// in the first collection if their key is present in the second.
     ///
-    /// #Examples
-    /// ```ignore
+    /// # Examples
+    ///
+    /// ```
+    /// #
     /// extern crate timely;
-    /// use timely::dataflow::operators::{ToStream, Capture};
-    /// use timely::dataflow::operators::capture::Extract;
-    /// use differential_dataflow::operators::Join;
+    /// extern crate differential_dataflow;
     ///
-    /// let data = timely::example(|scope| {
-    ///     let col1 = vec![((0,0),1),((1,2),1)].into_iter().to_stream(scope);
-    ///     let col2 = vec![(0,1)].into_iter().to_stream(scope);
+    /// use differential_dataflow::input::Input;
+    /// use differential_dataflow::operators::JoinUnsigned;
     ///
-    ///     // should retain record `(1,2)` and discard `(0,0)`.
-    ///     col1.antijoin_u(&col2).consolidate().capture();
-    /// });
+    /// fn main() {
+    ///     ::timely::example(|scope| {
     ///
-    /// let extracted = data.extract();
-    /// assert_eq!(extracted.len(), 1);
-    /// assert_eq!(extracted[0].1, vec![((1,2),1)]);
+    ///         let x = scope.new_collection_from(vec![(0u32, 1), (1, 3)]).1;
+    ///         let y = scope.new_collection_from(vec![0, 2]).1;
+    ///         let z = scope.new_collection_from(vec![(1, 3)]).1;
+    ///
+    ///         x.antijoin_u(&y)
+    ///          .assert_eq(&z);
+    ///     });
+    /// }
     /// ```
     fn antijoin_u<R2>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), R>
     where R2: Diff, R: Mul<R2, Output=R>;
@@ -310,6 +343,38 @@ pub trait JoinCore<G: Scope, K: 'static, V: 'static, R: Diff> where G::Timestamp
     ///
     /// This trait is implemented for arrangements (`Arranged<G, T>`) rather than collections. The `Join` trait 
     /// contains the implementations for collections.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// #
+    /// extern crate timely;
+    /// extern crate differential_dataflow;
+    ///
+    /// use differential_dataflow::input::Input;
+    /// use differential_dataflow::operators::arrange::Arrange;
+    /// use differential_dataflow::operators::join::JoinCore;
+    /// use differential_dataflow::trace::Trace;
+    /// use differential_dataflow::trace::implementations::ord::OrdValSpine;
+    /// use differential_dataflow::hashable::OrdWrapper;
+    ///
+    /// fn main() {
+    ///     ::timely::example(|scope| {
+    ///
+    ///         let x = scope.new_collection_from(vec![(0u32, 1), (1, 3)]).1
+    ///                      .map(|(x,y)| (OrdWrapper { item: x }, y))
+    ///                      .arrange(OrdValSpine::new());
+    ///         let y = scope.new_collection_from(vec![(0, 'a'), (1, 'b')]).1
+    ///                      .map(|(x,y)| (OrdWrapper { item: x }, y))
+    ///                      .arrange(OrdValSpine::new());
+    ///
+    ///         let z = scope.new_collection_from(vec![(1, 'a'), (3, 'b')]).1;
+    ///
+    ///         x.join_core(&y, |_key, &a, &b| Some((a, b)))
+    ///          .assert_eq(&z);
+    ///     });
+    /// }
+    /// ```
     fn join_core<V2,T2,R2,I,L> (&self, stream2: &Arranged<G,K,V2,R2,T2>, result: L) -> Collection<G,I::Item,<R as Mul<R2>>::Output>
     where 
         V2: Ord+Clone+Debug+'static,

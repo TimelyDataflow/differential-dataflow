@@ -5,18 +5,6 @@
 //! a collection that aggregates down to zero records, and one that actually has no records. The
 //! underlying system can more clearly see that no work must be done in the later case, and we can
 //! drop out of, e.g. iterative computations.
-//!
-//! #Examples
-//!
-//! This example performs a standard "word count", where each line of text is split into multiple
-//! words, each word is converted to a word with count 1, and `consolidate` then accumulates the
-//! counts of equivalent words.
-//!
-//! ```ignore
-//! stream.flat_map(|line| line.split_whitespace())
-//!       .map(|word| (word, 1))
-//!       .consolidate();
-//! ```
 
 use timely::dataflow::*;
 
@@ -24,33 +12,44 @@ use ::{Collection, Data, Diff, Hashable};
 use operators::arrange::ArrangeBySelf;
 
 /// An extension method for consolidating weighted streams.
-pub trait Consolidate<D: Data> {
+pub trait Consolidate<D: Data+Hashable> {
     /// Aggregates the weights of equal records into at most one record.
     ///
     /// This method uses the type `D`'s `hashed()` method to partition the data. The data are 
     /// accumulated in place, each held back until their timestamp has completed.
-    /// 
-    /// #Examples
     ///
-    /// In the following fragment, we should see only `(1, 3)`:
+    /// # Examples
     ///
-    /// ```ignore
-    /// vec![(0,1),(1,1),(0,-1),(1,2)]
-    ///     .to_stream(scope)
-    ///     .as_collection()
-    ///     .consolidate()
-    ///     .inspect(|x| println!("{:}", x));
     /// ```
-    fn consolidate(&self) -> Self where D: Hashable;
+    /// #
+    /// extern crate timely;
+    /// extern crate differential_dataflow;
+    ///
+    /// use differential_dataflow::input::Input;
+    /// use differential_dataflow::operators::Consolidate;
+    ///
+    /// fn main() {
+    ///     ::timely::example(|scope| {
+    ///
+    ///         let x = scope.new_collection_from(1 .. 10u32).1;
+    ///
+    ///         x.negate()
+    ///          .concat(&x)
+    ///          .consolidate() // <-- ensures cancellation occurs
+    ///          .assert_empty();
+    ///     });
+    /// }
+    /// ```
+    fn consolidate(&self) -> Self;
 }
 
 impl<G: Scope, D, R> Consolidate<D> for Collection<G, D, R>
 where
-    D: Data,
+    D: Data+Hashable,
     R: Diff,
     G::Timestamp: ::lattice::Lattice+Ord,
  {
-    fn consolidate(&self) -> Self where D: Hashable {
+    fn consolidate(&self) -> Self {
        self.arrange_by_self().as_collection(|d,_| d.item.clone())
     }
 }

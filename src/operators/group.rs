@@ -12,19 +12,7 @@
 //! The list of values are presented as an iterator which internally merges sorted lists of values.
 //! This ordering can be exploited in several cases to avoid computation when only the first few
 //! elements are required.
-//!
-//! #Examples
-//!
-//! This example groups a collection of `(key,val)` pairs by `key`, and yields only the most frequently
-//! occurring value for each key.
-//!
-//! ```ignore
-//! collection.group(|key, vals, output| {
-//!     output.push(vals.iter().max_by_key(|&(_val, wgt)| wgt).unwrap());
-//! })
-//! ```
 
-// use std::rc::Rc;
 use std::fmt::Debug;
 use std::default::Default;
 
@@ -48,18 +36,61 @@ use trace::implementations::ord::OrdValSpine as DefaultValTrace;
 use trace::implementations::ord::OrdKeySpine as DefaultKeyTrace;
 
 use trace::TraceReader;
-// use trace::wrappers::rc::TraceRc;
 
 /// Extension trait for the `group` differential dataflow method.
 pub trait Group<G: Scope, K: Data, V: Data, R: Diff> where G::Timestamp: Lattice+Ord {
     /// Groups records by their first field, and applies reduction logic to the associated values.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// #
+    /// extern crate timely;
+    /// extern crate differential_dataflow;
+    ///
+    /// use differential_dataflow::input::Input;
+    /// use differential_dataflow::operators::Group;
+    ///
+    /// fn main() {
+    ///     ::timely::example(|scope| {
+    ///         // report the first value for each group
+    ///         scope.new_collection_from(1 .. 10).1
+    ///              .map(|x| (x / 3, x))
+    ///              .group(|_key, src, dst| {
+    ///                  dst.push((src[0], 1))
+    ///              });
+    ///     });
+    /// }
+    /// ```
     fn group<L, V2: Data, R2: Diff>(&self, logic: L) -> Collection<G, (K, V2), R2>
-        where L: Fn(&K, &[(V, R)], &mut Vec<(V2, R2)>)+'static;
+    where L: Fn(&K, &[(V, R)], &mut Vec<(V2, R2)>)+'static;
     /// Groups records by their first field, and applies reduction logic to the associated values.
     /// 
     /// This method is a specialization for when the key is an unsigned integer fit for distributing the data.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// #
+    /// extern crate timely;
+    /// extern crate differential_dataflow;
+    ///
+    /// use differential_dataflow::input::Input;
+    /// use differential_dataflow::operators::Group;
+    ///
+    /// fn main() {
+    ///     ::timely::example(|scope| {
+    ///         // report the first value for each group
+    ///         scope.new_collection_from(1 .. 10u32).1
+    ///              .map(|x| (x / 3, x))
+    ///              .group_u(|_key, src, dst| {
+    ///                  dst.push((src[0], 1))
+    ///              });
+    ///     });
+    /// }
+    /// ```
     fn group_u<L, V2: Data, R2: Diff>(&self, logic: L) -> Collection<G, (K, V2), R2>
-        where L: Fn(&K, &[(V, R)], &mut Vec<(V2, R2)>)+'static, K: Unsigned+Copy;
+    where L: Fn(&K, &[(V, R)], &mut Vec<(V2, R2)>)+'static, K: Unsigned+Copy;
 }
 
 impl<G: Scope, K: Data+Default+Hashable, V: Data, R: Diff> Group<G, K, V, R> for Collection<G, (K, V), R> 
@@ -83,10 +114,50 @@ impl<G: Scope, K: Data+Default+Hashable, V: Data, R: Diff> Group<G, K, V, R> for
 /// Extension trait for the `distinct` differential dataflow method.
 pub trait Distinct<G: Scope, K: Data> where G::Timestamp: Lattice+Ord {
     /// Reduces the collection to one occurrence of each distinct element.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// #
+    /// extern crate timely;
+    /// extern crate differential_dataflow;
+    ///
+    /// use differential_dataflow::input::Input;
+    /// use differential_dataflow::operators::Distinct;
+    ///
+    /// fn main() {
+    ///     ::timely::example(|scope| {
+    ///         // report at most one of each key.
+    ///         scope.new_collection_from(1 .. 10).1
+    ///              .map(|x| x / 3)
+    ///              .distinct();
+    ///     });
+    /// }
+    /// ```
     fn distinct(&self) -> Collection<G, K, isize>;
     /// Reduces the collection to one occurrence of each distinct element.
     /// 
     /// This method is a specialization for when the key is an unsigned integer fit for distributing the data.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// #
+    /// extern crate timely;
+    /// extern crate differential_dataflow;
+    ///
+    /// use differential_dataflow::input::Input;
+    /// use differential_dataflow::operators::Distinct;
+    ///
+    /// fn main() {
+    ///     ::timely::example(|scope| {
+    ///         // report at most one of each key.
+    ///         scope.new_collection_from(1 .. 10u32).1
+    ///              .map(|x| x / 3)
+    ///              .distinct_u();
+    ///     });
+    /// }
+    /// ```
     fn distinct_u(&self) -> Collection<G, K, isize> where K: Unsigned+Copy;
 }
 
@@ -109,10 +180,50 @@ where G::Timestamp: Lattice+Ord+::std::fmt::Debug {
 /// Extension trait for the `count` differential dataflow method.
 pub trait Count<G: Scope, K: Data, R: Diff> where G::Timestamp: Lattice+Ord {
     /// Counts the number of occurrences of each element.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// #
+    /// extern crate timely;
+    /// extern crate differential_dataflow;
+    ///
+    /// use differential_dataflow::input::Input;
+    /// use differential_dataflow::operators::Count;
+    ///
+    /// fn main() {
+    ///     ::timely::example(|scope| {
+    ///         // report the number of occurrences of each key
+    ///         scope.new_collection_from(1 .. 10).1
+    ///              .map(|x| x / 3)
+    ///              .count();
+    ///     });
+    /// }
+    /// ```
     fn count(&self) -> Collection<G, (K, R), isize>;
     /// Counts the number of occurrences of each element.
     /// 
     /// This method is a specialization for when the key is an unsigned integer fit for distributing the data.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// #
+    /// extern crate timely;
+    /// extern crate differential_dataflow;
+    ///
+    /// use differential_dataflow::input::Input;
+    /// use differential_dataflow::operators::Count;
+    ///
+    /// fn main() {
+    ///     ::timely::example(|scope| {
+    ///         // report the number of occurrences of each key
+    ///         scope.new_collection_from(1 .. 10u32).1
+    ///              .map(|x| x / 3)
+    ///              .count_u();
+    ///     });
+    /// }
+    /// ```
     fn count_u(&self) -> Collection<G, (K, R), isize> where K: Unsigned+Copy;
 }
 
@@ -138,6 +249,35 @@ pub trait GroupArranged<G: Scope, K: Data, V: Data, R: Diff> where G::Timestamp:
     ///
     /// This method is used by the more ergonomic `group`, `distinct`, and `count` methods, although
     /// it can be very useful if one needs to manually attach and re-use existing arranged collections.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// #
+    /// extern crate timely;
+    /// extern crate differential_dataflow;
+    ///
+    /// use differential_dataflow::input::Input;
+    /// use differential_dataflow::operators::arrange::Arrange;
+    /// use differential_dataflow::operators::group::GroupArranged;
+    /// use differential_dataflow::trace::Trace;
+    /// use differential_dataflow::trace::implementations::ord::OrdValSpine;
+    /// use differential_dataflow::hashable::OrdWrapper;
+    ///
+    /// fn main() {
+    ///     ::timely::example(|scope| {
+    ///
+    ///         // wrap and order input, then group manually.
+    ///         scope.new_collection_from(1 .. 10u32).1
+    ///              .map(|x| (OrdWrapper { item: x / 3 }, x))
+    ///              .arrange(OrdValSpine::new())
+    ///              .group_arranged(
+    ///                  move |_key, src, dst| dst.push((src[0], 1)),
+    ///                  OrdValSpine::new()
+    ///              );
+    ///     });
+    /// }
+    /// ```
     fn group_arranged<L, V2, T2, R2>(&self, logic: L, empty: T2) -> Arranged<G, K, V2, R2, TraceAgent<K, V2, G::Timestamp, R2, T2>>
         where
             V2: Data,

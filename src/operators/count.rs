@@ -12,17 +12,6 @@
 //! The list of values are presented as an iterator which internally merges sorted lists of values.
 //! This ordering can be exploited in several cases to avoid computation when only the first few
 //! elements are required.
-//!
-//! #Examples
-//!
-//! This example groups a collection of `(key,val)` pairs by `key`, and yields only the most frequently
-//! occurring value for each key.
-//!
-//! ```ignore
-//! collection.group(|key, vals, output| {
-//!     output.push(vals.iter().max_by_key(|&(_val, wgt)| wgt).unwrap());
-//! })
-//! ```
 
 use std::default::Default;
 
@@ -42,10 +31,50 @@ use trace::implementations::ord::OrdKeySpine as DefaultKeyTrace;
 /// Extension trait for the `count` differential dataflow method.
 pub trait CountTotal<G: Scope, K: Data, R: Diff> where G::Timestamp: TotalOrder+Ord {
     /// Counts the number of occurrences of each element.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// #
+    /// extern crate timely;
+    /// extern crate differential_dataflow;
+    ///
+    /// use differential_dataflow::input::Input;
+    /// use differential_dataflow::operators::CountTotal;
+    ///
+    /// fn main() {
+    ///     ::timely::example(|scope| {
+    ///         // report the number of occurrences of each key
+    ///         scope.new_collection_from(1 .. 10).1
+    ///              .map(|x| x / 3)
+    ///              .count_total();
+    ///     });
+    /// }
+    /// ```
     fn count_total(&self) -> Collection<G, (K, R), isize>;
     /// Counts the number of occurrences of each element.
     /// 
     /// This method is a specialization for when the key is an unsigned integer fit for distributing the data.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// #
+    /// extern crate timely;
+    /// extern crate differential_dataflow;
+    ///
+    /// use differential_dataflow::input::Input;
+    /// use differential_dataflow::operators::CountTotal;
+    ///
+    /// fn main() {
+    ///     ::timely::example(|scope| {
+    ///         // report the number of occurrences of each key
+    ///         scope.new_collection_from(1 .. 10u32).1
+    ///              .map(|x| x / 3)
+    ///              .count_total_u();
+    ///     });
+    /// }
+    /// ```
     fn count_total_u(&self) -> Collection<G, (K, R), isize> where K: Unsigned+Copy;
 }
 
@@ -71,6 +100,32 @@ pub trait CountTotalCore<G: Scope, K: Data, R: Diff> where G::Timestamp: TotalOr
     ///
     /// This method is used by the more ergonomic `group`, `distinct`, and `count` methods, although
     /// it can be very useful if one needs to manually attach and re-use existing arranged collections.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// #
+    /// extern crate timely;
+    /// extern crate differential_dataflow;
+    ///
+    /// use differential_dataflow::input::Input;
+    /// use differential_dataflow::operators::arrange::Arrange;
+    /// use differential_dataflow::operators::count::CountTotalCore;
+    /// use differential_dataflow::trace::Trace;
+    /// use differential_dataflow::trace::implementations::ord::OrdKeySpine;
+    /// use differential_dataflow::hashable::OrdWrapper;
+    ///
+    /// fn main() {
+    ///     ::timely::example(|scope| {
+    ///
+    ///         // wrap and order input, then group manually.
+    ///         scope.new_collection_from(1 .. 10u32).1
+    ///              .map(|x| (OrdWrapper { item: x / 3 }, ()))
+    ///              .arrange(OrdKeySpine::new())
+    ///              .count_total_core();
+    ///     });
+    /// }    
+    /// ```
     fn count_total_core(&self) -> Collection<G, (K, R), isize>;
 }
 

@@ -29,32 +29,6 @@
 //! and it can be used in most situations where a collection can be used. The act of setting a 
 //! `Variable` consumes it and returns the corresponding `Collection`, preventing you from setting
 //! it multiple times.
-//!
-//! #Examples
-//!
-//! The example repeatedly divides even numbers by two, and leaves odd numbers as they are. Although
-//! some numbers may take multiple iterations to converge, converged numbers have no overhead in
-//! subsequent iterations.
-//!
-//! ```ignore
-//! // repeatedly divide out factors of two.
-//! let limits = numbers.iterate(|values| {
-//!     values.map(|x if x % 2 == 0 { x/2 } else { x })
-//!           .consolidate()
-//! });
-//! ```
-//!
-//! The same example written manually with a `Variable`:
-//!
-//! ```ignore
-//! // repeatedly divide out factors of two.
-//! let limits = computation.scoped(|scope| {
-//!     let variable = Variable::from(numbers.enter(scope));
-//!     let result = variable.map(|x if x % 2 == 0 { x/2 } else { x })
-//!                          .consolidate();
-//!     variable.set(&result)
-//!             .leave()
-//! })
 
 use std::fmt::Debug;
 use std::ops::Deref;
@@ -72,6 +46,29 @@ use lattice::Lattice;
 /// An extension trait for the `iterate` method.
 pub trait Iterate<G: Scope, D: Data, R: Diff> {
     /// Iteratively apply `logic` to the source collection until convergence.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// #
+    /// extern crate timely;
+    /// extern crate differential_dataflow;
+    ///
+    /// use differential_dataflow::input::Input;
+    /// use differential_dataflow::operators::Iterate;
+    /// use differential_dataflow::operators::Consolidate;
+    ///
+    /// fn main() {
+    ///     ::timely::example(|scope| {
+    ///
+    ///         scope.new_collection_from(1 .. 10u32).1
+    ///              .iterate(|values| {
+    ///                  values.map(|x| if x % 2 == 0 { x/2 } else { x })
+    ///                        .consolidate()
+    ///              });
+    ///     });
+    /// }
+    /// ```    
     fn iterate<F>(&self, logic: F) -> Collection<G, D, R>
         where G::Timestamp: Lattice,
               for<'a> F: FnOnce(&Collection<Child<'a, G, u64>, D, R>)->Collection<Child<'a, G, u64>, D, R>;
@@ -102,6 +99,37 @@ impl<G: Scope, D: Ord+Data+Debug, R: Diff> Iterate<G, D, R> for Collection<G, D,
 /// The `Variable` struct allows differential dataflow programs requiring more sophisticated
 /// iterative patterns than singly recursive iteration. For example: in mutual recursion two 
 /// collections evolve simultaneously.
+///
+/// # Examples
+///
+/// The following example is equivalent to the example for the `Iterate` trait.
+///
+/// ```
+/// #
+/// extern crate timely;
+/// extern crate differential_dataflow;
+///
+/// use timely::dataflow::Scope;
+///
+/// use differential_dataflow::input::Input;
+/// use differential_dataflow::operators::iterate::Variable;
+/// use differential_dataflow::operators::Consolidate;
+///
+/// fn main() {
+///     ::timely::example(|scope| {
+///
+///         let numbers = scope.new_collection_from(1 .. 10u32).1;
+///
+///         scope.scoped(|nested| {
+///             let variable = Variable::from(numbers.enter(nested));
+///             let result = variable.map(|x| if x % 2 == 0 { x/2 } else { x })
+///                                  .consolidate();
+///             variable.set(&result)
+///                     .leave()
+///         });
+///     })
+/// }
+/// ```    
 pub struct Variable<'a, G: Scope, D: Data, R: Diff>
 where G::Timestamp: Lattice {
     collection: Collection<Child<'a, G, u64>, D, R>,

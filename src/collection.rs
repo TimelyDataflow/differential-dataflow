@@ -66,7 +66,6 @@ impl<G: Scope, D: Data, R: Diff> Collection<G, D, R> where G::Timestamp: Data {
     /// extern crate differential_dataflow;
     ///
     /// use differential_dataflow::input::Input;
-    /// use differential_dataflow::operators::*;
     ///
     /// fn main() {
     ///     ::timely::example(|scope| {
@@ -466,7 +465,9 @@ impl<G: Scope, D: Data, R: Diff> Collection<G, D, R> where G::Timestamp: Data {
     ///     });
     /// }
     /// ```
-    pub fn assert_eq(&self, other: &Self) where D: ::Data+Hashable, G::Timestamp: Lattice+Ord {
+    pub fn assert_eq(&self, other: &Self) 
+    where D: ::Data+Hashable,
+          G::Timestamp: Lattice+Ord {
         self.negate()
             .concat(other)
             .assert_empty();
@@ -498,7 +499,10 @@ impl<G: Scope, D: Data, R: Diff> Collection<G, D, R> where G::Timestamp: Data {
     ///     });
     /// }
     /// ```
-    pub fn assert_empty(&self) where D: ::Data+Hashable, G::Timestamp: Lattice+Ord {
+    pub fn assert_empty(&self) 
+    where D: ::Data+Hashable, 
+          G::Timestamp: Lattice+Ord {
+
         use operators::consolidate::Consolidate;
         self.consolidate()
             .inspect(|_| assert!(false));
