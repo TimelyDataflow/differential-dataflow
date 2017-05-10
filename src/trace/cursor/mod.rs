@@ -44,3 +44,27 @@ pub trait Cursor<K, V, T, R> {
 	/// Rewinds the cursor to the first value for current key.
 	fn rewind_vals(&mut self);
 }
+
+/// Debugging and testing utilities for Cursor.
+pub trait CursorDebug<K: Clone, V: Clone, T: Clone, R: Clone> : Cursor<K, V, T, R> {
+	/// Rewinds the cursor and outputs its contents to a Vec
+	fn to_vec(&mut self) -> Vec<((K, V), Vec<(T, R)>)> {
+		let mut out = Vec::new();
+		self.rewind_keys();
+		self.rewind_vals();
+		while self.key_valid() {
+			while self.val_valid() {
+				let mut kv_out = Vec::new();
+				self.map_times(|ts, r| {
+					kv_out.push((ts.clone(), r));
+				});
+				out.push(((self.key().clone(), self.val().clone()), kv_out));
+				self.step_val();
+			}
+			self.step_key();
+		}
+		out
+	}
+}
+
+impl<C, K: Clone, V: Clone, T: Clone, R: Clone> CursorDebug<K, V, T, R> for C where C: Cursor<K, V, T, R> { }
