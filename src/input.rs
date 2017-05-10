@@ -21,9 +21,69 @@ use collection::{Collection, AsCollection};
 /// Create a new collection and input handle to control the collection.
 pub trait Input<'a, A: Allocate, T: Timestamp+Ord> {
     /// Create a new collection and input handle to subsequently control the collection.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// #
+    /// extern crate timely;
+    /// extern crate timely_communication;
+    /// extern crate differential_dataflow;
+    ///
+    /// use timely_communication::Configuration;
+    /// use differential_dataflow::input::Input;
+    ///
+    /// fn main() {
+    ///     ::timely::execute(Configuration::Thread, |worker| {
+    ///
+    ///			let (mut handle, probe) = worker.dataflow::<(),_,_>(|scope| {
+    ///				// create input handle and collection.
+    ///				let (handle, data) = scope.new_collection();
+    ///         	let probe = data.map(|x| x * 2)
+    ///				            	.inspect(|x| println!("{:?}", x))
+    ///				            	.probe();
+    ///				(handle, probe)
+    ///     	});
+    ///
+    ///			handle.insert(1);
+    ///			handle.insert(5);
+    ///
+    ///		}).unwrap();
+    /// }
+    /// ```
     fn new_collection<D, R>(&mut self) -> (InputSession<T, D, R>, Collection<Child<'a, Root<A>, T>, D, R>)
     where D: Data, R: Diff;
     /// Create a new collection and input handle from initial data.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// #
+    /// extern crate timely;
+    /// extern crate timely_communication;
+    /// extern crate differential_dataflow;
+    ///
+    /// use timely_communication::Configuration;
+    /// use differential_dataflow::input::Input;
+    ///
+    /// fn main() {
+    ///     ::timely::execute(Configuration::Thread, |worker| {
+    ///
+    ///			let (mut handle, probe) = worker.dataflow::<(),_,_>(|scope| {
+    ///				// create input handle and collection.
+    ///				let (handle, data) = scope.new_collection_from(0 .. 10);
+    ///         	let probe = data.map(|x| x * 2)
+    ///				            	.inspect(|x| println!("{:?}", x))
+    ///				            	.probe();
+    ///				(handle, probe)
+    ///     	});
+    ///
+    ///			handle.insert(1);
+    ///			handle.insert(5);
+    ///
+    ///		}).unwrap();
+    /// }
+    /// ```
     fn new_collection_from<I>(&mut self, data: I) -> (InputSession<T, I::Item, isize>, Collection<Child<'a, Root<A>, T>, I::Item, isize>)
     where I: IntoIterator+'static, I::Item: Data;
 }
@@ -40,7 +100,6 @@ impl<'a, A: Allocate, T: Timestamp+Ord> Input<'a, A, T> for Child<'a, Root<A>, T
     	use timely::dataflow::operators::ToStream;
 
 		let (handle, stream) = self.new_input();
-
 		let source = data.into_iter().map(|d| (d, Default::default(), 1)).to_stream(self).as_collection();
 
 		(InputSession::from(handle), stream.as_collection().concat(&source))
@@ -53,6 +112,51 @@ impl<'a, A: Allocate, T: Timestamp+Ord> Input<'a, A, T> for Child<'a, Root<A>, T
 /// timely dataflow system. Differential dataflow updates can happen at a much higher rate than 
 /// timely dataflow's progress tracking infrastructure supports, because the logical times are 
 /// promoted to data and updates are batched together. The `InputSession` type does this batching.
+///
+/// # Examples
+///
+/// ```
+/// #
+/// extern crate timely;
+/// extern crate timely_communication;
+/// extern crate differential_dataflow;
+///
+/// use timely_communication::Configuration;
+/// use differential_dataflow::input::Input;
+///
+/// fn main() {
+///     ::timely::execute(Configuration::Thread, |worker| {
+///
+///			let (mut handle, probe) = worker.dataflow(|scope| {
+///				// create input handle and collection.
+///				let (handle, data) = scope.new_collection_from(0 .. 10);
+///         	let probe = data.map(|x| x * 2)
+///				            	.inspect(|x| println!("{:?}", x))
+///				            	.probe();
+///				(handle, probe)
+///     	});
+///
+///			handle.insert(3);
+///			handle.advance_to(1);
+///			handle.insert(5);
+///			handle.advance_to(2);
+///			handle.flush();
+///
+///			while probe.less_than(handle.time()) {
+///				worker.step();
+///			}
+///
+///			handle.remove(5);
+///			handle.advance_to(3);
+///			handle.flush();
+///
+///			while probe.less_than(handle.time()) {
+///				worker.step();
+///			}
+///
+///		}).unwrap();
+/// }
+/// ```
 pub struct InputSession<T: Timestamp+Clone, D: Data, R: Diff> {
 	time: Product<RootTimestamp, T>,
 	buffer: Vec<(D, Product<RootTimestamp, T>, R)>,

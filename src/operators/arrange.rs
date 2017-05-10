@@ -228,32 +228,49 @@ where T: Lattice+Clone+'static, Tr: TraceReader<K,V,T,R> {
     /// responsibility this should be (the trace/batch should only reveal these times, or an operator should know
     /// to advance times before using them).
     ///
-    /// #Examples
+    /// # Examples
     ///
-    /// The following fragment demonstrates the creation of a `TraceAgent` in one dataflow, and its importation 
-    /// into and use in a second dataflow. The behavior in the second dataflow should be identical to that in 
-    /// the first dataflow, except for progress that may have been made in the meantime. In this example, we do
-    /// not advance `trace`, and so the replay would be the full history.
+    /// ```
+    /// #
+    /// extern crate timely;
+    /// extern crate timely_communication;
+    /// extern crate differential_dataflow;
     ///
-    /// ```ignore
-    /// // define a collection, arrange, return trace.
-    /// let mut trace = worker.dataflow(|scope| {
-    ///     ...
-    ///     .arrange_by_key()
-    ///     .trace
-    /// });
+    /// use timely_communication::Configuration;
+    /// use differential_dataflow::input::Input;
+    /// use differential_dataflow::operators::arrange::Arrange;
+    /// use differential_dataflow::operators::group::GroupArranged;
+    /// use differential_dataflow::trace::Trace;
+    /// use differential_dataflow::trace::implementations::ord::OrdValSpine;
+    /// use differential_dataflow::hashable::OrdWrapper;
     ///
-    /// // do some work.
-    /// worker.step();
-    /// worker.step();    
-    /// 
-    /// // create a new dataflow, import, monitor trace.
-    /// let probe = worker.dataflow(|scope| {
-    ///     let arranged = trace.import(scope);
-    ///     arranged.join_arranged(&arranged)
-    ///             .inspect(|x| println!("{:?}", x))
-    ///             .probe()
-    /// });
+    /// fn main() {
+    ///     ::timely::execute(Configuration::Thread, |worker| {
+    ///
+    ///         // create a first dataflow
+    ///         let mut trace = worker.dataflow::<u32,_,_>(|scope| {
+    ///             // create input handle and collection.
+    ///             scope.new_collection_from(0 .. 10).1
+    ///                  .map(|x| (OrdWrapper { item: x }, x))
+    ///                  .arrange(OrdValSpine::new())
+    ///                  .trace
+    ///         });
+    ///
+    ///         // do some work.
+    ///         worker.step();
+    ///         worker.step();
+    ///
+    ///         // create a second dataflow
+    ///         worker.dataflow(move |scope| {
+    ///             trace.import(scope)
+    ///                  .group_arranged(
+    ///                      move |_key, src, dst| dst.push((src[0], 1)),
+    ///                      OrdValSpine::new()
+    ///                  );
+    ///         });
+    ///
+    ///     }).unwrap();
+    /// }
     /// ```
     pub fn import<G: Scope<Timestamp=T>>(&mut self, scope: &G) -> Arranged<G, K, V, R, TraceAgent<K, V, T, R, Tr>> where T: Timestamp {
 
