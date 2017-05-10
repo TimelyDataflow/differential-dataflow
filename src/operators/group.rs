@@ -1133,7 +1133,7 @@ mod history_replay_prior {
         {
             // The first thing we need to know is which times and values we are worried about.
             // We use `T::min` as the lower bound with which we join everything to avoid changing the times.
-            self.batch_history.reload1(key, batch_cursor, &T::min());
+            self.batch_history.reload(key, batch_cursor, &T::min());
 
             // Determine a lower frontier of interesting times.
             // I'm not sure what we do with this other than a `debug_assert` and re-scan it to produce `meet`.
@@ -1165,8 +1165,8 @@ mod history_replay_prior {
             // These histories act as caches in front of each cursor. They should provide the same functionality,
             // but are capable of compacting their representation as we proceed through the computation.
 
-            self.input_history.reload2(key, source_cursor, &meet);
-            self.output_history.reload3(key, output_cursor, &meet);
+            self.input_history.reload(key, source_cursor, &meet);
+            self.output_history.reload(key, output_cursor, &meet);
 
             // TODO: We should be able to thin out any updates at times that, advanced, are greater than some
             //       element of `upper_limit`, as we will never incorporate that update. We should take care 
@@ -1517,61 +1517,7 @@ mod history_replay_prior {
         }
 
         #[inline(never)]
-        fn reload1<K, C>(&mut self, key: &K, cursor: &mut C, meet: &T) 
-        where K: Eq+Clone+Debug, C: Cursor<K, V, T, R> { 
-
-            self.values.clear();
-            self.actions.clear();
-            self.action_cursor = 0;
-            self.times.clear();
-
-            cursor.seek_key(&key);
-            if cursor.key_valid() && cursor.key() == key {
-                while cursor.val_valid() {
-                    // let val: V1 = source_cursor.val().clone();
-                    let start = self.times.len();
-                    cursor.map_times(|t, d| {
-                        // println!("  INPUT: ({:?}, {:?}, {:?}, {:?})", key, val, t, d);
-                        self.times.push((t.join(&meet), d));
-                    });
-                    self.seal_from(cursor.val().clone(), start);
-                    cursor.step_val();
-                }
-                cursor.step_key();
-            }
-
-            self.build_actions();
-        }
-
-        #[inline(never)]
-        fn reload2<K, C>(&mut self, key: &K, cursor: &mut C, meet: &T) 
-        where K: Eq+Clone+Debug, C: Cursor<K, V, T, R> { 
-
-            self.values.clear();
-            self.actions.clear();
-            self.action_cursor = 0;
-            self.times.clear();
-
-            cursor.seek_key(&key);
-            if cursor.key_valid() && cursor.key() == key {
-                while cursor.val_valid() {
-                    // let val: V1 = source_cursor.val().clone();
-                    let start = self.times.len();
-                    cursor.map_times(|t, d| {
-                        // println!("  INPUT: ({:?}, {:?}, {:?}, {:?})", key, val, t, d);
-                        self.times.push((t.join(&meet), d));
-                    });
-                    self.seal_from(cursor.val().clone(), start);
-                    cursor.step_val();
-                }
-                cursor.step_key();
-            }
-
-            self.build_actions();
-        }
-
-        #[inline(never)]
-        fn reload3<K, C>(&mut self, key: &K, cursor: &mut C, meet: &T) 
+        fn reload<K, C>(&mut self, key: &K, cursor: &mut C, meet: &T)
         where K: Eq+Clone+Debug, C: Cursor<K, V, T, R> { 
 
             self.values.clear();
