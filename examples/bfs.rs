@@ -75,6 +75,7 @@ fn main() {
         println!("loaded; elapsed: {:?}", timer.elapsed());
 
         graph.advance_to(1);
+        graph.flush();
         worker.step_while(|| probe.less_than(graph.time()));
 
         for round in 0 .. rounds {
