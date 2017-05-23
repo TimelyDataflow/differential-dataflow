@@ -54,9 +54,6 @@ fn main() {
         let mut rng1: StdRng = SeedableRng::from_seed(seed);    // rng for edge additions
         let mut rng2: StdRng = SeedableRng::from_seed(seed);    // rng for edge deletions
 
-        roots.insert((0, 1));
-        roots.close();
-
         println!("performing BFS on {} nodes, {} edges:", nodes, edges);
 
         if worker.index() == 0 {
@@ -64,14 +61,18 @@ fn main() {
                 graph.insert((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)));
             }
         }
-
         println!("loaded; elapsed: {:?}", timer.elapsed());
 
-        graph.advance_to(1);
-        graph.flush();
+        roots.advance_to(1); roots.flush();
+        graph.advance_to(1); graph.flush();
         worker.step_while(|| probe.less_than(graph.time()));
+        println!("stable; elapsed: {:?}", timer.elapsed());
 
-        println!("stable");
+        roots.insert((0, 1));
+        roots.close();
+        graph.advance_to(2); graph.flush();
+        worker.step_while(|| probe.less_than(graph.time()));
+        println!("queried; elapsed: {:?}", timer.elapsed());
 
         for round in 0 .. rounds {
             for element in 0 .. batch {
@@ -79,7 +80,7 @@ fn main() {
                     graph.insert((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)));
                     graph.remove((rng2.gen_range(0, nodes), rng2.gen_range(0, nodes)));
                 }
-                graph.advance_to(2 + round * batch + element);                
+                graph.advance_to(3 + round * batch + element);                
             }
             graph.flush();
 
