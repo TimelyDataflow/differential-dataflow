@@ -67,8 +67,11 @@ fn main() {
         }
 
         // run until graph is loaded
-        input.advance_to(1);
-        query.advance_to(1);
+        input.advance_to(1); input.flush();
+        query.advance_to(1); query.flush();
+
+        input.close();
+
         worker.step_while(|| probe.less_than(query.time()));
 
         if index == 0 {
@@ -87,8 +90,8 @@ fn main() {
                 query.insert((rng.gen_range(0, graph.nodes() as u32)));
             }
             let next = query.epoch() + 1;
-            input.advance_to(next);
-            query.advance_to(next);
+            // input.advance_to(next); input.flush();
+            query.advance_to(next); query.flush();
             while probe.less_than(query.time()) { worker.step(); }
             latencies.push(timer.elapsed());
         }
@@ -119,7 +122,7 @@ where G::Timestamp: Lattice+Ord {
          .arrange_by_key_hashed()
          .join_core(&edges, |_,x,y| Some((x.clone(), y.clone())))
          // the next thing is the "topk" worker. sorry!
-         .group(move |_,s,t| {
+         .group_u(move |_,s,t| {
              t.extend(s.iter().map(|&(x,y)| (x,y)));       // propose all inputs as outputs
              t.sort_by(|x,y| (-x.1).cmp(&(-y.1)));  // sort by negative count (large numbers first)
              t.truncate(k)                          // keep at most k of these
@@ -138,11 +141,11 @@ where G::Timestamp: Lattice+Ord {
         let nodes = query.enter(&inner.scope());
 
         // edges from active sources activate their destinations
-        edges.semijoin(&inner)
+        edges.semijoin_u(&inner)
              .map(|(_,d)| d)
              .concat(&nodes)
-             .distinct()
-     })
+             .distinct_u()
+    })
 }
 
 
@@ -167,9 +170,9 @@ where G::Timestamp: Lattice+Hash+Ord {
              let edges = edges.enter(&inner.scope());
              let nodes = nodes.enter_at(&inner.scope(), |r| 256 * (64 - r.0.leading_zeros() as u64));
 
-             inner.join_map(&edges, |_k,l,d| (*d,*l))
+             inner.join_map_u(&edges, |_k,l,d| (*d,*l))
                   .concat(&nodes)
-                  .group(|_, s, t| { t.push((s[0].0, 1)); } )
+                  .group_u(|_, s, t| { t.push((s[0].0, 1)); } )
          })
 }
 
@@ -186,8 +189,8 @@ where G::Timestamp: Lattice+Ord {
         let edges = edges.enter(&inner.scope());
         let nodes = nodes.enter(&inner.scope());
 
-        inner.join_map(&edges, |_k,l,d| (*d, l+1))
+        inner.join_map_u(&edges, |_k,l,d| (*d, l+1))
              .concat(&nodes)
-             .group(|_, s, t| t.push((s[0].0, 1)))
+             .group_u(|_, s, t| t.push((s[0].0, 1)))
      })
 }
