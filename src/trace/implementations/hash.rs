@@ -79,15 +79,6 @@ where K: Clone+Default+HashOrdered, V: Clone+Ord, T: Lattice+Ord+Clone+Default, 
 	}
 }
 
-// impl<K: HashOrdered, V: Ord, T: Lattice+Ord+Clone, R> Clone for HashValBatch<K, V, T, R> {
-// 	fn clone(&self) -> Self {
-// 		HashValBatch {
-// 			layer: self.layer.clone(),
-// 			desc: self.desc.clone(),
-// 		}
-// 	}
-// }
-
 /// A cursor for navigating a single layer.
 #[derive(Debug)]
 pub struct HashValCursor<K: Clone+HashOrdered, V: Ord+Clone, T: Lattice+Ord+Clone, R: Copy> {
@@ -197,15 +188,6 @@ where K: Clone+Default+HashOrdered, T: Lattice+Ord+Clone+Default, R: Diff {
 		})
 	}
 }
-
-// impl<K: HashOrdered, T: Lattice+Ord+Clone, R> Clone for HashKeyBatch<K, T, R> {
-// 	fn clone(&self) -> Self {
-// 		HashKeyBatch {
-// 			layer: self.layer.clone(),
-// 			desc: self.desc.clone(),
-// 		}
-// 	}
-// }
 
 /// A cursor for navigating a single layer.
 #[derive(Debug)]

@@ -78,15 +78,6 @@ where K: Ord+Clone+HashOrdered, V: Ord+Clone, T: Lattice+Ord+Clone, R: Diff {
 	}
 }
 
-// impl<K: Ord+HashOrdered, V: Ord, T: Lattice+Ord+Clone, R> Clone for Rc<OrdValBatch<K, V, T, R>> {
-// 	fn clone(&self) -> Self {
-// 		OrdValBatch {
-// 			layer: self.layer.clone(),
-// 			desc: self.desc.clone(),
-// 		}
-// 	}
-// }
-
 /// A cursor for navigating a single layer.
 #[derive(Debug)]
 pub struct OrdValCursor<K: Ord+Clone+HashOrdered, V: Ord+Clone, T: Lattice+Ord+Clone, R: Copy> {
@@ -197,15 +188,6 @@ where K: Ord+Clone+HashOrdered, T: Lattice+Ord+Clone, R: Diff {
 		})
 	}
 }
-
-// impl<K: Ord+HashOrdered, T: Lattice+Ord+Clone, R> Clone for OrdKeyBatch<K, T, R> {
-// 	fn clone(&self) -> Self {
-// 		OrdKeyBatch {
-// 			layer: self.layer.clone(),
-// 			desc: self.desc.clone(),
-// 		}
-// 	}
-// }
 
 /// A cursor for navigating a single layer.
 #[derive(Debug)]
