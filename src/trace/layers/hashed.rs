@@ -129,7 +129,7 @@ pub struct HashedBuilder<B, K: HashOrdered, L> {
 	pub keys: Vec<Entry<K>>,	// keys and offs co-located because we expect to find the right answers fast.
 	/// A builder for the layer below.
 	pub vals: L,
-    _b: ::std::marker::PhantomData<B>,
+	_b: ::std::marker::PhantomData<B>,
 }
 
 impl<B, K: HashOrdered+Clone+Default, L> HashedBuilder<B, K, L> {
@@ -236,7 +236,7 @@ impl<B, K: HashOrdered+Clone+Default, L: MergeBuilder<B>> MergeBuilder<B> for Ha
 			temp: Vec::new(),
 			keys: Vec::with_capacity(other1.keys() + other2.keys()),
 			vals: L::with_capacity(&other1.vals, &other2.vals),
-            _b: ::std::marker::PhantomData,
+			_b: ::std::marker::PhantomData,
 		}
 	}
 	/// Copies fully formed ranges (note plural) of keys from another trie.
@@ -326,7 +326,7 @@ impl<B, K: HashOrdered+Clone+Default, L: TupleBuilder<B>> TupleBuilder<B> for Ha
 			temp: Vec::with_capacity(cap), 
 			keys: Vec::with_capacity(cap), 
 			vals: L::with_capacity(cap),
-            _b: ::std::marker::PhantomData,
+			_b: ::std::marker::PhantomData,
 		} 
 	}
 	#[inline(always)]

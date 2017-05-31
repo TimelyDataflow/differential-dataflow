@@ -140,8 +140,8 @@ where
 		//       Little is currently known about whether this is important ...
 		while self.pending.len() > 0 && 
 		      self.through_frontier.iter().all(|t1| self.pending[0].upper().iter().any(|t2| t2.less_equal(t1))) 
-        {
-        	// this could be a VecDeque, if we ever notice this.
+		{
+			// this could be a VecDeque, if we ever notice this.
 			let batch = self.pending.remove(0);
 
 			// while last two elements exist, both less than batch.len()

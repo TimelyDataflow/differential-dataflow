@@ -52,8 +52,8 @@ impl<B, K: Clone> MergeBuilder<B> for UnorderedBuilder<K> {
 		self.vals.extend_from_slice(&other.vals[lower .. upper]);
 	}
 	fn push_merge(&mut self, other1: (&Self::Trie, usize, usize), other2: (&Self::Trie, usize, usize)) -> usize {
-        <UnorderedBuilder<K> as MergeBuilder<B>>::copy_range(self, &other1.0, other1.1, other1.2);
-        <UnorderedBuilder<K> as MergeBuilder<B>>::copy_range(self, &other2.0, other2.1, other2.2);
+		<UnorderedBuilder<K> as MergeBuilder<B>>::copy_range(self, &other1.0, other1.1, other1.2);
+		<UnorderedBuilder<K> as MergeBuilder<B>>::copy_range(self, &other2.0, other2.1, other2.2);
 		self.vals.len()
 	}
 }

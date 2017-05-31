@@ -47,8 +47,8 @@ where K: Ord+Clone+HashOrdered, V: Ord+Clone, T: Lattice+Ord+Clone, R: Diff {
 	type Cursor = OrdValCursor<K, V, T, R>;
 	fn cursor(&self) -> Self::Cursor { 
 		OrdValCursor {
-            cursor: self.layer.cursor(OwningRef::new(self.clone()).map(|x| &x.layer))
-	}
+			cursor: self.layer.cursor(OwningRef::new(self.clone()).map(|x| &x.layer))
+		}
 	}
 	fn len(&self) -> usize { <OrderedLayer<K, OrderedLayer<V, OrderedLeaf<T, R>>> as Trie<OrdValBatch<K, V, T, R>>>::tuples(&self.layer) }
 	fn description(&self) -> &Description<T> { &self.desc }
@@ -71,10 +71,10 @@ where K: Ord+Clone+HashOrdered, V: Ord+Clone, T: Lattice+Ord+Clone, R: Diff {
 			self.desc.since()
 		};
 		
-        Rc::new(OrdValBatch {
-            layer: <OrderedLayer<K, OrderedLayer<V, OrderedLeaf<T, R>>> as Trie<OrdValBatch<K, V, T, R>>>::merge(&self.layer, &other.layer),  //self.layer.merge(&other.layer),
-            desc: Description::new(self.desc.lower(), other.desc.upper(), since),
-        })
+		Rc::new(OrdValBatch {
+			layer: <OrderedLayer<K, OrderedLayer<V, OrderedLeaf<T, R>>> as Trie<OrdValBatch<K, V, T, R>>>::merge(&self.layer, &other.layer),  //self.layer.merge(&other.layer),
+			desc: Description::new(self.desc.lower(), other.desc.upper(), since),
+		})
 	}
 }
 
@@ -141,10 +141,10 @@ where K: Ord+Clone+HashOrdered, V: Ord+Clone, T: Lattice+Ord+Clone, R: Diff {
 
 	#[inline(never)]
 	fn done(self, lower: &[T], upper: &[T], since: &[T]) -> Rc<OrdValBatch<K, V, T, R>> {
-        Rc::new(OrdValBatch {
-            layer: self.builder.done(),
-            desc: Description::new(lower, upper, since)
-        })
+		Rc::new(OrdValBatch {
+			layer: self.builder.done(),
+			desc: Description::new(lower, upper, since)
+		})
 	}
 }
 
@@ -165,10 +165,10 @@ where K: Ord+Clone+HashOrdered, T: Lattice+Ord+Clone, R: Diff {
 	type Cursor = OrdKeyCursor<K, T, R>;
 	fn cursor(&self) -> Self::Cursor { 
 		OrdKeyCursor {
-            empty: (),
-            valid: true,
-            cursor: self.layer.cursor(OwningRef::new(self.clone()).map(|x| &x.layer)),
-        } 
+			empty: (),
+			valid: true,
+			cursor: self.layer.cursor(OwningRef::new(self.clone()).map(|x| &x.layer)),
+		} 
 	}
 	fn len(&self) -> usize { <OrderedLayer<K, OrderedLeaf<T, R>> as Trie<OrdKeyBatch<K, T, R>>>::tuples(&self.layer) }
 	fn description(&self) -> &Description<T> { &self.desc }
@@ -191,10 +191,10 @@ where K: Ord+Clone+HashOrdered, T: Lattice+Ord+Clone, R: Diff {
 			self.desc.since()
 		};
 		
-        Rc::new(OrdKeyBatch {
-            layer: <OrderedLayer<K, OrderedLeaf<T, R>> as Trie<OrdKeyBatch<K, T, R>>>::merge(&self.layer, &other.layer),
-            desc: Description::new(self.desc.lower(), other.desc.upper(), since),
-        })
+		Rc::new(OrdKeyBatch {
+			layer: <OrderedLayer<K, OrderedLeaf<T, R>> as Trie<OrdKeyBatch<K, T, R>>>::merge(&self.layer, &other.layer),
+			desc: Description::new(self.desc.lower(), other.desc.upper(), since),
+		})
 	}
 }
 
@@ -263,10 +263,10 @@ where K: Ord+Clone+HashOrdered, T: Lattice+Ord+Clone, R: Diff {
 
 	#[inline(never)]
 	fn done(self, lower: &[T], upper: &[T], since: &[T]) -> Rc<OrdKeyBatch<K, T, R>> {
-        Rc::new(OrdKeyBatch {
-            layer: self.builder.done(),
-            desc: Description::new(lower, upper, since)
-        })
+		Rc::new(OrdKeyBatch {
+			layer: self.builder.done(),
+			desc: Description::new(lower, upper, since)
+		})
 	}
 }
 

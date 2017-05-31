@@ -48,8 +48,8 @@ where K: Clone+Default+HashOrdered, V: Clone+Ord, T: Lattice+Ord+Clone+Default, 
 	type Cursor = HashValCursor<K, V, T, R>;
 	fn cursor(&self) -> Self::Cursor { 
 		HashValCursor {
-            cursor: self.layer.cursor(OwningRef::new(self.clone()).map(|x| &x.layer)),
-	}
+			cursor: self.layer.cursor(OwningRef::new(self.clone()).map(|x| &x.layer)),
+		}
 	}
 	fn len(&self) -> usize { <HashedLayer<K, OrderedLayer<V, UnorderedLayer<(T, R)>>> as Trie<HashValBatch<K, V, T, R>>>::tuples(&self.layer) }
 	fn description(&self) -> &Description<T> { &self.desc }
@@ -72,10 +72,10 @@ where K: Clone+Default+HashOrdered, V: Clone+Ord, T: Lattice+Ord+Clone+Default, 
 			self.desc.since()
 		};
 		
-        Rc::new(HashValBatch {
-            layer: <HashedLayer<K, OrderedLayer<V, UnorderedLayer<(T, R)>>> as Trie<HashValBatch<K, V, T, R>>>::merge(&self.layer, &other.layer),
-            desc: Description::new(self.desc.lower(), other.desc.upper(), since),
-        })
+		Rc::new(HashValBatch {
+			layer: <HashedLayer<K, OrderedLayer<V, UnorderedLayer<(T, R)>>> as Trie<HashValBatch<K, V, T, R>>>::merge(&self.layer, &other.layer),
+			desc: Description::new(self.desc.lower(), other.desc.upper(), since),
+		})
 	}
 }
 
@@ -141,10 +141,10 @@ where K: Clone+Default+HashOrdered, V: Ord+Clone, T: Lattice+Ord+Clone+Default, 
 
 	#[inline(never)]
 	fn done(self, lower: &[T], upper: &[T], since: &[T]) -> Rc<HashValBatch<K, V, T, R>> {
-        Rc::new(HashValBatch {
-            layer: self.builder.done(),
-            desc: Description::new(lower, upper, since)
-        })
+		Rc::new(HashValBatch {
+			layer: self.builder.done(),
+			desc: Description::new(lower, upper, since)
+		})
 	}
 }
 
@@ -165,10 +165,10 @@ where K: Clone+Default+HashOrdered, T: Lattice+Ord+Clone+Default, R: Diff {
 	type Cursor = HashKeyCursor<K, T, R>;
 	fn cursor(&self) -> Self::Cursor { 
 		HashKeyCursor {
-            empty: (),
-            valid: true,
-            cursor: self.layer.cursor(OwningRef::new(self.clone()).map(|x| &x.layer)),
-        } 
+			empty: (),
+			valid: true,
+			cursor: self.layer.cursor(OwningRef::new(self.clone()).map(|x| &x.layer)),
+		} 
 	}
 	fn len(&self) -> usize { <HashedLayer<K, UnorderedLayer<(T, R)>> as Trie<HashKeyBatch<K, T, R>>>::tuples(&self.layer) }
 	fn description(&self) -> &Description<T> { &self.desc }
@@ -191,10 +191,10 @@ where K: Clone+Default+HashOrdered, T: Lattice+Ord+Clone+Default, R: Diff {
 			self.desc.since()
 		};
 		
-        Rc::new(HashKeyBatch {
-            layer: <HashedLayer<K, UnorderedLayer<(T, R)>> as Trie<HashKeyBatch<K, T, R>>>::merge(&self.layer, &other.layer),
-            desc: Description::new(self.desc.lower(), other.desc.upper(), since),
-        })
+		Rc::new(HashKeyBatch {
+			layer: <HashedLayer<K, UnorderedLayer<(T, R)>> as Trie<HashKeyBatch<K, T, R>>>::merge(&self.layer, &other.layer),
+			desc: Description::new(self.desc.lower(), other.desc.upper(), since),
+		})
 	}
 }
 
@@ -262,10 +262,10 @@ where K: Clone+Default+HashOrdered, T: Lattice+Ord+Clone+Default, R: Diff {
 
 	#[inline(never)]
 	fn done(self, lower: &[T], upper: &[T], since: &[T]) -> Rc<HashKeyBatch<K, T, R>> {
-        Rc::new(HashKeyBatch {
-            layer: self.builder.done(),
-            desc: Description::new(lower, upper, since)
-        })
+		Rc::new(HashKeyBatch {
+			layer: self.builder.done(),
+			desc: Description::new(lower, upper, since)
+		})
 	}
 }
 

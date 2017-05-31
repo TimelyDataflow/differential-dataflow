@@ -66,7 +66,7 @@ pub struct OrderedBuilder<B, K: Ord, L> {
 	pub offs: Vec<usize>,
 	/// The next layer down
 	pub vals: L,
-    _b: ::std::marker::PhantomData<B>,
+	_b: ::std::marker::PhantomData<B>,
 }
 
 impl<B, K: Ord+Clone, L: Builder<B>> Builder<B> for OrderedBuilder<B, K, L> {
@@ -95,7 +95,7 @@ impl<B, K: Ord+Clone, L: MergeBuilder<B>> MergeBuilder<B> for OrderedBuilder<B, 
 			keys: Vec::with_capacity(other1.keys() + other2.keys()),
 			offs: offs,
 			vals: L::with_capacity(&other1.vals, &other2.vals),
-            _b: ::std::marker::PhantomData,
+			_b: ::std::marker::PhantomData,
 		}
 	}
 	fn copy_range(&mut self, other: &Self::Trie, lower: usize, upper: usize) {
@@ -172,7 +172,7 @@ impl<B, K: Ord+Clone, L: TupleBuilder<B>> TupleBuilder<B> for OrderedBuilder<B, 
 			keys: Vec::with_capacity(cap), 
 			offs: offs, 
 			vals: L::with_capacity(cap),
-            _b: ::std::marker::PhantomData,
+			_b: ::std::marker::PhantomData,
 		}
 	}
 	#[inline(always)]
