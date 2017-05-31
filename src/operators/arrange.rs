@@ -36,7 +36,7 @@ use timely::dataflow::scopes::Child;
 
 use timely_sort::Unsigned;
 
-use hashable::{HashOrdered, HashableWrapper, OrdWrapper};
+use hashable::{HashOrdered, HashableWrapper, OrdWrapper, UnsignedWrapper};
 
 use ::{Data, Diff, Collection, AsCollection, Hashable};
 use lattice::Lattice;
@@ -306,6 +306,7 @@ where T: Lattice+Clone+'static, Tr: TraceReader<K,V,T,R> {
                             panic!("failed to find capability for {:?} in {:?}", time, capabilities);
                         }
                     }
+                    // println!("downgrading {:?} -> {:?}", capabilities, new_capabilities);
                     capabilities = new_capabilities;
                 }
             }
@@ -525,7 +526,7 @@ impl<G: Scope, K: Data+HashOrdered, V: Data, R: Diff> Arrange<G, K, V, R> for Co
 
                 capabilities = new_capabilities;
 
-                writer.seal(notificator.frontier(0), None);
+                // writer.seal(notificator.frontier(0), None);
 
                 // // This very aggressively pushes frontier information along. We may want to dial it back 
                 // // if we find that we are spamming folks.
@@ -540,6 +541,8 @@ impl<G: Scope, K: Data+HashOrdered, V: Data, R: Diff> Arrange<G, K, V, R> for Co
                 // });
 
             }
+
+            writer.seal(notificator.frontier(0), None);
         });
 
         Arranged { stream: stream, trace: reader }
@@ -566,6 +569,13 @@ where G::Timestamp: Lattice+Ord {
     /// safely identify the stable times and values in the trace.
     fn arrange_by_key_hashed_cached(&self) -> Arranged<G, HashableWrapper<K>, V, R, TraceAgent<HashableWrapper<K>, V, G::Timestamp, R, DefaultValTrace<HashableWrapper<K>, V, G::Timestamp, R>>>
     where <K as Hashable>::Output: Default+Data;
+    /// Arranges a collection of `(Key, Val)` records by `Key`.
+    ///
+    /// This operator arranges a stream of values into a shared trace, whose contents it maintains.
+    /// This trace is current for all times completed by the output stream, which can be used to
+    /// safely identify the stable times and values in the trace.
+    fn arrange_by_key_u(&self) -> Arranged<G, UnsignedWrapper<K>, V, R, TraceAgent<UnsignedWrapper<K>, V, G::Timestamp, R, DefaultValTrace<UnsignedWrapper<K>, V, G::Timestamp, R>>>
+    where K: Unsigned+Copy;
 }
 
 impl<G: Scope, K: Data+Default+Hashable, V: Data, R: Diff> ArrangeByKey<G, K, V, R> for Collection<G, (K,V), R>
@@ -577,6 +587,11 @@ where G::Timestamp: Lattice+Ord {
     fn arrange_by_key_hashed_cached(&self) -> Arranged<G, HashableWrapper<K>, V, R, TraceAgent<HashableWrapper<K>, V, G::Timestamp, R, DefaultValTrace<HashableWrapper<K>, V, G::Timestamp, R>>> 
     where <K as Hashable>::Output: Default+Data {
         self.map(|(k,v)| (HashableWrapper::from(k),v))
+            .arrange(DefaultValTrace::new())
+    }
+    fn arrange_by_key_u(&self) -> Arranged<G, UnsignedWrapper<K>, V, R, TraceAgent<UnsignedWrapper<K>, V, G::Timestamp, R, DefaultValTrace<UnsignedWrapper<K>, V, G::Timestamp, R>>>
+    where K: Unsigned+Copy{
+        self.map(|(k,v)| (UnsignedWrapper {item:k},v))
             .arrange(DefaultValTrace::new())
     }
 }
@@ -594,6 +609,13 @@ where G::Timestamp: Lattice+Ord {
     /// This trace is current for all times complete in the output stream, which can be used to safely
     /// identify the stable times and values in the trace.
     fn arrange_by_self(&self) -> Arranged<G, OrdWrapper<K>, (), R, TraceAgent<OrdWrapper<K>, (), G::Timestamp, R, DefaultKeyTrace<OrdWrapper<K>, G::Timestamp, R>>>;
+    /// Arranges a collection of `Key` records by `Key`.
+    ///
+    /// This operator arranges a collection of records into a shared trace, whose contents it maintains.
+    /// This trace is current for all times complete in the output stream, which can be used to safely
+    /// identify the stable times and values in the trace.
+    fn arrange_by_self_u(&self) -> Arranged<G, UnsignedWrapper<K>, (), R, TraceAgent<UnsignedWrapper<K>, (), G::Timestamp, R, DefaultKeyTrace<UnsignedWrapper<K>, G::Timestamp, R>>>
+    where K: Unsigned+Copy;
 }
 
 
@@ -601,6 +623,11 @@ impl<G: Scope, K: Data+Hashable, R: Diff> ArrangeBySelf<G, K, R> for Collection<
 where G::Timestamp: Lattice+Ord {
     fn arrange_by_self(&self) -> Arranged<G, OrdWrapper<K>, (), R, TraceAgent<OrdWrapper<K>, (), G::Timestamp, R, DefaultKeyTrace<OrdWrapper<K>, G::Timestamp, R>>> {
         self.map(|k| (OrdWrapper {item:k}, ()))
+            .arrange(DefaultKeyTrace::new())
+    }
+    fn arrange_by_self_u(&self) -> Arranged<G, UnsignedWrapper<K>, (), R, TraceAgent<UnsignedWrapper<K>, (), G::Timestamp, R, DefaultKeyTrace<UnsignedWrapper<K>, G::Timestamp, R>>>
+        where K: Unsigned+Copy {
+        self.map(|k| (UnsignedWrapper {item:k}, ()))
             .arrange(DefaultKeyTrace::new())
     }
 }
