@@ -91,6 +91,7 @@ extern crate timely;
 extern crate timely_sort;
 extern crate timely_communication;
 extern crate abomonation;
+extern crate owning_ref;
 
 pub mod hashable;
 pub mod operators;

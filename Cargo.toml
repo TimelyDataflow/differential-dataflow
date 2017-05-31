@@ -30,6 +30,7 @@ abomonation="0.4.4"
 timely_sort="0.1.6"
 timely_communication="0.1.5"
 fnv="1.0.2"
+owning_ref="^0.3"
 
 [features]
 default = []

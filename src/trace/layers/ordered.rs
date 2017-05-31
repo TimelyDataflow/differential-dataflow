@@ -2,6 +2,7 @@
 
 use std::rc::Rc;
 use super::{Trie, Cursor, Builder, MergeBuilder, TupleBuilder};
+use owning_ref::OwningRef;
 
 /// A level of the trie, with keys and offsets into a lower layer.
 ///
@@ -9,25 +10,25 @@ use super::{Trie, Cursor, Builder, MergeBuilder, TupleBuilder};
 #[derive(Debug)]
 pub struct OrderedLayer<K: Ord, L> {
 	/// The keys of the layer.
-	pub keys: Rc<Vec<K>>,
+	pub keys: Vec<K>,
 	/// The offsets associate with each key.
 	///
 	/// The bounds for `keys[i]` are `(offs[i], offs[i+1]`). The offset array is guaranteed to be one
 	/// element longer than the keys array, ensuring that these accesses do not panic.
-	pub offs: Rc<Vec<usize>>,
+	pub offs: Vec<usize>,
 	/// The ranges of values associated with the keys.
 	pub vals: L,
 }
 
-impl<K: Ord+Clone, L: Trie> Trie for OrderedLayer<K, L> {
+impl<B, K: Ord+Clone, L: Trie<B>> Trie<B> for OrderedLayer<K, L> {
 	type Item = (K, L::Item);
-	type Cursor = OrderedCursor<K, L::Cursor>;
-	type MergeBuilder = OrderedBuilder<K, L::MergeBuilder>;
-	type TupleBuilder = OrderedBuilder<K, L::TupleBuilder>;
+	type Cursor = OrderedCursor<B, K, L::Cursor>;
+	type MergeBuilder = OrderedBuilder<B, K, L::MergeBuilder>;
+	type TupleBuilder = OrderedBuilder<B, K, L::TupleBuilder>;
 
 	fn keys(&self) -> usize { self.keys.len() }
 	fn tuples(&self) -> usize { self.vals.tuples() }
-	fn cursor_from(&self, lower: usize, upper: usize) -> Self::Cursor {
+	fn cursor_from(&self, owned_self: OwningRef<Rc<B>, Self>, lower: usize, upper: usize) -> Self::Cursor {
 		// let child_lower = if lower == 0 { 0 } else { self.offs[lower-1] };
 		// let child_upper = self.offs[lower];
 
@@ -38,19 +39,19 @@ impl<K: Ord+Clone, L: Trie> Trie for OrderedLayer<K, L> {
 			let child_lower = self.offs[lower];
 			let child_upper = self.offs[lower + 1];
 			OrderedCursor {
-				keys: self.keys.clone(),
-				offs: self.offs.clone(),
+				keys: owned_self.clone().map(|x| &x.keys),
+				offs: owned_self.clone().map(|x| &x.offs),
 				bounds: (lower, upper),
-				child: self.vals.cursor_from(child_lower, child_upper),
+				child: self.vals.cursor_from(owned_self.map(|x| &x.vals), child_lower, child_upper),
 				pos: lower,
 			}		
 		}
 		else {
 			OrderedCursor {
-				keys: self.keys.clone(),
-				offs: self.offs.clone(),
+				keys: owned_self.clone().map(|x| &x.keys),
+				offs: owned_self.clone().map(|x| &x.offs),
 				bounds: (0, 0),
-				child: self.vals.cursor_from(0, 0),
+				child: self.vals.cursor_from(owned_self.map(|x| &x.vals), 0, 0),
 				pos: 0,
 			}	
 		}
@@ -58,16 +59,17 @@ impl<K: Ord+Clone, L: Trie> Trie for OrderedLayer<K, L> {
 }
 
 /// Assembles a layer of this 
-pub struct OrderedBuilder<K: Ord, L> {
+pub struct OrderedBuilder<B, K: Ord, L> {
 	/// Keys
 	pub keys: Vec<K>,
 	/// Offsets
 	pub offs: Vec<usize>,
 	/// The next layer down
 	pub vals: L,
+    _b: ::std::marker::PhantomData<B>,
 }
 
-impl<K: Ord+Clone, L: Builder> Builder for OrderedBuilder<K, L> {
+impl<B, K: Ord+Clone, L: Builder<B>> Builder<B> for OrderedBuilder<B, K, L> {
 	type Trie = OrderedLayer<K, L::Trie>; 
 	fn boundary(&mut self) -> usize { 
 		self.offs[self.keys.len()] = self.vals.boundary();
@@ -78,14 +80,14 @@ impl<K: Ord+Clone, L: Builder> Builder for OrderedBuilder<K, L> {
 			self.offs[self.keys.len()] = self.vals.boundary();
 		}
 		OrderedLayer {
-			keys: Rc::new(self.keys),
-			offs: Rc::new(self.offs),
+			keys: self.keys,
+			offs: self.offs,
 			vals: self.vals.done(),
 		}
 	}
 }
 
-impl<K: Ord+Clone, L: MergeBuilder> MergeBuilder for OrderedBuilder<K, L> {
+impl<B, K: Ord+Clone, L: MergeBuilder<B>> MergeBuilder<B> for OrderedBuilder<B, K, L> {
 	fn with_capacity(other1: &Self::Trie, other2: &Self::Trie) -> Self {
 		let mut offs = Vec::with_capacity(other1.keys() + other2.keys() + 1);
 		offs.push(0);
@@ -93,6 +95,7 @@ impl<K: Ord+Clone, L: MergeBuilder> MergeBuilder for OrderedBuilder<K, L> {
 			keys: Vec::with_capacity(other1.keys() + other2.keys()),
 			offs: offs,
 			vals: L::with_capacity(&other1.vals, &other2.vals),
+            _b: ::std::marker::PhantomData,
 		}
 	}
 	fn copy_range(&mut self, other: &Self::Trie, lower: usize, upper: usize) {
@@ -158,10 +161,10 @@ impl<K: Ord+Clone, L: MergeBuilder> MergeBuilder for OrderedBuilder<K, L> {
 	}
 }
 
-impl<K: Ord+Clone, L: TupleBuilder> TupleBuilder for OrderedBuilder<K, L> {
+impl<B, K: Ord+Clone, L: TupleBuilder<B>> TupleBuilder<B> for OrderedBuilder<B, K, L> {
 
 	type Item = (K, L::Item);
-	fn new() -> Self { OrderedBuilder { keys: Vec::new(), offs: vec![0], vals: L::new() } }
+	fn new() -> Self { OrderedBuilder { keys: Vec::new(), offs: vec![0], vals: L::new(), _b: ::std::marker::PhantomData } }
 	fn with_capacity(cap: usize) -> Self { 
 		let mut offs = Vec::with_capacity(cap + 1);
 		offs.push(0);
@@ -169,6 +172,7 @@ impl<K: Ord+Clone, L: TupleBuilder> TupleBuilder for OrderedBuilder<K, L> {
 			keys: Vec::with_capacity(cap), 
 			offs: offs, 
 			vals: L::with_capacity(cap),
+            _b: ::std::marker::PhantomData,
 		}
 	}
 	#[inline(always)]
@@ -188,16 +192,16 @@ impl<K: Ord+Clone, L: TupleBuilder> TupleBuilder for OrderedBuilder<K, L> {
 
 /// A cursor with a child cursor that is updated as we move.
 #[derive(Debug)]
-pub struct OrderedCursor<K: Ord, L: Cursor> {
-	keys: Rc<Vec<K>>,
-	offs: Rc<Vec<usize>>,
+pub struct OrderedCursor<B, K: Ord, L: Cursor> {
+	keys: OwningRef<Rc<B>, Vec<K>>,
+	offs: OwningRef<Rc<B>, Vec<usize>>,
 	pos: usize,
 	bounds: (usize, usize),
 	/// The cursor for the trie layer below this one.
 	pub child: L,
 }
 
-impl<K: Ord, L: Cursor> Cursor for OrderedCursor<K, L> {
+impl<B, K: Ord, L: Cursor> Cursor for OrderedCursor<B, K, L> {
 	type Key = K;
 	fn key(&self) -> &Self::Key { &self.keys[self.pos] }
 	fn step(&mut self) {
