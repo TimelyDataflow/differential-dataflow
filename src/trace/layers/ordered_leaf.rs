@@ -21,7 +21,7 @@ impl<B, K: Ord+Clone, R: Diff+Clone> Trie<B> for OrderedLeaf<K, R> {
     type MergeBuilder = OrderedLeafBuilder<K, R>;
     type TupleBuilder = OrderedLeafBuilder<K, R>;
     fn keys(&self) -> usize { self.vals.len() }
-    fn tuples(&self) -> usize { self.vals.len() } //self.keys() } FIXME correct?
+    fn tuples(&self) -> usize { <OrderedLeaf<K, R> as Trie<B>>::keys(&self) }
     fn cursor_from(&self, owned_self: OwningRef<Rc<B>, Self>, lower: usize, upper: usize) -> Self::Cursor { 
         // println!("unordered: {} .. {}", lower, upper);
         OrderedLeafCursor {
@@ -47,7 +47,7 @@ impl<B, K: Ord+Clone, R: Diff+Clone> Builder<B> for OrderedLeafBuilder<K, R> {
 impl<B, K: Ord+Clone, R: Diff+Clone> MergeBuilder<B> for OrderedLeafBuilder<K, R> {
     fn with_capacity(other1: &Self::Trie, other2: &Self::Trie) -> Self {
         OrderedLeafBuilder {
-            vals: Vec::with_capacity(other1.vals.len() + other2.vals.len()), //other1.keys() + other2.keys()), FIXME correct?
+            vals: Vec::with_capacity(<OrderedLeaf<K, R> as Trie<B>>::keys(other1) + <OrderedLeaf<K, R> as Trie<B>>::keys(other2)),
         }
     }
     fn copy_range(&mut self, other: &Self::Trie, lower: usize, upper: usize) {

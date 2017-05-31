@@ -19,7 +19,7 @@ impl<B, K: Clone> Trie<B> for UnorderedLayer<K> {
 	type MergeBuilder = UnorderedBuilder<K>;
 	type TupleBuilder = UnorderedBuilder<K>;
 	fn keys(&self) -> usize { self.vals.len() }
-	fn tuples(&self) -> usize { self.vals.len() } // self.keys() } // FIXME correct?
+	fn tuples(&self) -> usize { <UnorderedLayer<K> as Trie<B>>::keys(&self) }
 	fn cursor_from(&self, owned_self: OwningRef<Rc<B>, Self>, lower: usize, upper: usize) -> Self::Cursor {	
 		// println!("unordered: {} .. {}", lower, upper);
 		UnorderedCursor {
@@ -45,7 +45,7 @@ impl<B, K: Clone> Builder<B> for UnorderedBuilder<K> {
 impl<B, K: Clone> MergeBuilder<B> for UnorderedBuilder<K> {
 	fn with_capacity(other1: &Self::Trie, other2: &Self::Trie) -> Self {
 		UnorderedBuilder {
-			vals: Vec::with_capacity(other1.vals.len() + other2.vals.len()), // FIXME correct?
+			vals: Vec::with_capacity(<UnorderedLayer<K> as Trie<B>>::keys(other1) + <UnorderedLayer<K> as Trie<B>>::keys(other2)),
 		}
 	}
 	fn copy_range(&mut self, other: &Self::Trie, lower: usize, upper: usize) {

@@ -19,7 +19,7 @@ impl<B, K: Ord+Clone> Trie<B> for WeightedLayer<K> {
 	type MergeBuilder = WeightedBuilder<K>;
 	type TupleBuilder = WeightedBuilder<K>;
 	fn keys(&self) -> usize { self.keys.len() }
-	fn tuples(&self) -> usize { self.keys.len() } //self.keys() } FIXME correct?
+	fn tuples(&self) -> usize { <WeightedLayer<K> as Trie<B>>::keys(&self) }
 	fn cursor_from(&self, owned_self: OwningRef<Rc<B>, Self>, lower: usize, upper: usize) -> Self::Cursor {	
 		WeightedCursor {
 			keys: owned_self.clone().map(|x| &x.keys),
@@ -57,8 +57,8 @@ impl<B, K: Ord+Clone> MergeBuilder<B> for WeightedBuilder<K> {
 	fn with_capacity(other1: &Self::Trie, other2: &Self::Trie) -> Self {
 		WeightedBuilder {
 			is_new: false,
-			keys: Vec::with_capacity(other1.keys.len() + other2.keys.len()), // FIXME correct?
-			wgts: Vec::with_capacity(other1.keys.len() + other2.keys.len()), // FIXME correct?
+			keys: Vec::with_capacity(<WeightedLayer<K> as Trie<B>>::keys(other1) + <WeightedLayer<K> as Trie<B>>::keys(other2)),
+			wgts: Vec::with_capacity(<WeightedLayer<K> as Trie<B>>::keys(other1) + <WeightedLayer<K> as Trie<B>>::keys(other2)),
 		}
 	}
 	fn copy_range(&mut self, other: &Self::Trie, lower: usize, upper: usize) {
