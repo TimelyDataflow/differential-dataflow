@@ -20,11 +20,14 @@ use differential_dataflow::operators::arrange::ArrangeByKey;
 use grapht::{RootTime, TraceHandle};
 
 #[no_mangle]
-pub fn build(dataflow: &mut Child<Root<Allocator>,usize>, handles: &mut HashMap<String, TraceHandle>, probe: &mut ProbeHandle<RootTime>) {
-
+pub fn build(
+    dataflow: &mut Child<Root<Allocator>,usize>, 
+    handles: &mut HashMap<String, TraceHandle>, 
+    probe: &mut ProbeHandle<RootTime>) 
+{
     let nodes = 1000;
     let edges = 2000;
-    let batch = 100;
+    let batch = 10;
 
     // create a trace from a source of random graph edges.
     let trace = timely::dataflow::operators::operator::source(dataflow, "RandomGraph", |mut capability| {

@@ -15,8 +15,11 @@ use grapht::{RootTime, TraceHandle};
 
 
 #[no_mangle]
-pub fn build(dataflow: &mut Child<Root<Allocator>,usize>, handles: &mut HashMap<String, TraceHandle>, probe: &mut ProbeHandle<RootTime>) {
-
+pub fn build(
+    dataflow: &mut Child<Root<Allocator>,usize>, 
+    handles: &mut HashMap<String, TraceHandle>, 
+    probe: &mut ProbeHandle<RootTime>) 
+{
     println!("initializing degree distribution dataflow");
 
     if let Some(handle) = handles.get_mut("random") {
