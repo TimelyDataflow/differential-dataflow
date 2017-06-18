@@ -1,0 +1,15 @@
+[package]
+name = "grapht"
+version = "0.1.0"
+authors = ["Frank McSherry <fmcsherry@me.com>"]
+
+[dependencies.timely]
+git="https://github.com/frankmcsherry/timely-dataflow/"
+
+[dependencies.differential-dataflow]
+path="../"
+
+[dependencies]
+rand="0.3.13"
+libloading="*"
+timely_communication="*"

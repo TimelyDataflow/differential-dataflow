@@ -1,0 +1,21 @@
+[package]
+name = "random_graph"
+version = "0.1.0"
+authors = ["Frank McSherry <fmcsherry@me.com>"]
+
+[dependencies.timely]
+git="https://github.com/frankmcsherry/timely-dataflow/"
+
+[dependencies.differential-dataflow]
+path="../../../"
+
+[dependencies.grapht]
+path="../../"
+
+[dependencies]
+rand="0.3.13"
+libloading="*"
+timely_communication="*"
+
+[lib]
+crate-type = ["dylib"]
