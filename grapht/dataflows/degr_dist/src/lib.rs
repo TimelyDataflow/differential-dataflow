@@ -13,29 +13,36 @@ use differential_dataflow::operators::CountTotal;
 
 use grapht::{RootTime, TraceHandle};
 
+// ./dataflows/degr_dist/target/debug/libdegr_dist.dylib build <graph_name>
 
 #[no_mangle]
 pub fn build(
     dataflow: &mut Child<Root<Allocator>,usize>, 
     handles: &mut HashMap<String, TraceHandle>, 
-    probe: &mut ProbeHandle<RootTime>) 
+    probe: &mut ProbeHandle<RootTime>,
+    args: &[String]) 
 {
-    println!("initializing degree distribution dataflow");
+    if args.len() == 1 {
 
-    if let Some(handle) = handles.get_mut("random") {
+        let graph_name = &args[0];
 
-        let edges = handle.import(dataflow);
+        // println!("initializing degree distribution dataflow on graph: {:?}", graph_name);
 
-        edges
-            .as_collection(|k,v| (k.item.clone(), v.clone()))
-            .map(|(src, _dst)| src)
-            .count_total_u()
-            .map(|(_src, cnt)| cnt as usize)
-            .count_total_u()
-            .inspect(|x| println!("count: {:?}", x))
-            .probe_with(probe);
-    }
-    else {
-        println!("failed to find graph: random");
+        if let Some(handle) = handles.get_mut(graph_name) {
+
+            let edges = handle.import(dataflow);
+
+            edges
+                .as_collection(|k,v| (k.item.clone(), v.clone()))
+                .map(|(src, _dst)| src)
+                .count_total_u()
+                .map(|(_src, cnt)| cnt as usize)
+                .count_total_u()
+                .inspect(|x| println!("count: {:?}", x))
+                .probe_with(probe);
+        }
+        else {
+            println!("failed to find graph: {:?}", graph_name);
+        }
     }
 }

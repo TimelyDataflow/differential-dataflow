@@ -21,7 +21,8 @@ use grapht::{RootTime, TraceHandle};
 pub fn build(
     dataflow: &mut Child<Root<Allocator>,usize>, 
     handles: &mut HashMap<String, TraceHandle>, 
-    probe: &mut ProbeHandle<RootTime>) 
+    probe: &mut ProbeHandle<RootTime>,
+    args: &[String]) 
 {
     println!("initializing neighborhood dataflow");
 

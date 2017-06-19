@@ -19,75 +19,85 @@ use differential_dataflow::operators::arrange::ArrangeByKey;
 
 use grapht::{RootTime, TraceHandle};
 
+// ./dataflows/random_graph/target/debug/librandom_graph.dylib build <graph_name> 1000 2000 10
+
 #[no_mangle]
 pub fn build(
     dataflow: &mut Child<Root<Allocator>,usize>, 
     handles: &mut HashMap<String, TraceHandle>, 
-    probe: &mut ProbeHandle<RootTime>) 
+    probe: &mut ProbeHandle<RootTime>,
+    args: &[String]) 
 {
-    let nodes = 1000;
-    let edges = 2000;
-    let batch = 10;
+    if args.len() == 4 {
 
-    // create a trace from a source of random graph edges.
-    let trace = timely::dataflow::operators::operator::source(dataflow, "RandomGraph", |mut capability| {
+        let name = &args[0];
+        let nodes: usize = args[1].parse().unwrap();
+        let edges: usize = args[2].parse().unwrap();
+        let batch: usize = args[3].parse().unwrap();
 
-        let index = dataflow.index();
-        let peers = dataflow.peers();
+        // create a trace from a source of random graph edges.
+        let trace = timely::dataflow::operators::operator::source(dataflow, "RandomGraph", |mut capability| {
 
-        let seed: &[_] = &[1, 2, 3, index];
-        let mut rng1: StdRng = SeedableRng::from_seed(seed);    // rng for edge additions
-        let mut rng2: StdRng = SeedableRng::from_seed(seed);    // rng for edge deletions
+            let index = dataflow.index();
+            let peers = dataflow.peers();
 
-        let mut additions = 0;
-        let mut deletions = 0;
+            let seed: &[_] = &[1, 2, 3, index];
+            let mut rng1: StdRng = SeedableRng::from_seed(seed);    // rng for edge additions
+            let mut rng2: StdRng = SeedableRng::from_seed(seed);    // rng for edge deletions
 
-        let handle = probe.clone();
+            let mut additions = 0;
+            let mut deletions = 0;
 
-        move |output| {
+            let handle = probe.clone();
 
-            // do nothing if the probe is not caught up to us
-            if !handle.less_than(capability.time()) {
+            move |output| {
 
-                let mut time = capability.time().clone();
-                // println!("{:?}\tintroducing edges for batch starting {:?}", timer.elapsed(), time);
+                // do nothing if the probe is not caught up to us
+                if !handle.less_than(capability.time()) {
 
-                {   // scope to allow session to drop, un-borrow.
-                    let mut session = output.session(&capability);
+                    let mut time = capability.time().clone();
+                    // println!("{:?}\tintroducing edges for batch starting {:?}", timer.elapsed(), time);
 
-                    // we want to send at times.inner + (0 .. batch).
-                    for _ in 0 .. batch {
+                    {   // scope to allow session to drop, un-borrow.
+                        let mut session = output.session(&capability);
 
-                        while additions < time.inner + edges {
-                            if additions % peers == index {
-                                let src = rng1.gen_range(0, nodes);
-                                let dst = rng1.gen_range(0, nodes);
-                                session.give(((src, dst), time, 1));
+                        // we want to send at times.inner + (0 .. batch).
+                        for _ in 0 .. batch {
+
+                            while additions < time.inner + edges {
+                                if additions % peers == index {
+                                    let src = rng1.gen_range(0, nodes);
+                                    let dst = rng1.gen_range(0, nodes);
+                                    session.give(((src, dst), time, 1));
+                                }
+                                additions += 1;
                             }
-                            additions += 1;
-                        }
-                        while deletions < time.inner {
-                            if deletions % peers == index {
-                                let src = rng2.gen_range(0, nodes);
-                                let dst = rng2.gen_range(0, nodes);
-                                session.give(((src, dst), time, -1));
+                            while deletions < time.inner {
+                                if deletions % peers == index {
+                                    let src = rng2.gen_range(0, nodes);
+                                    let dst = rng2.gen_range(0, nodes);
+                                    session.give(((src, dst), time, -1));
+                                }
+                                deletions += 1;
                             }
-                            deletions += 1;
-                        }
 
-                        time.inner += 1;
+                            time.inner += 1;
+                        }
                     }
+
+                    // println!("downgrading {:?} to {:?}", capability, time);
+                    capability.downgrade(&time);
                 }
-
-                // println!("downgrading {:?} to {:?}", capability, time);
-                capability.downgrade(&time);
             }
-        }
-    })
-    .probe_with(probe)
-    .as_collection()
-    .arrange_by_key_u()
-    .trace;
+        })
+        .probe_with(probe)
+        .as_collection()
+        .arrange_by_key_u()
+        .trace;
 
-    handles.insert("random".to_owned(), trace);
+        handles.insert(name.to_owned(), trace);
+    }
+    else {
+        println!("expect four arguments, found: {:?}", args);
+    }
 }
