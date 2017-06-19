@@ -107,3 +107,19 @@ If we look further down we get the degree three counts:
     count: ((3, 166), (Root, 2), 1)
 
 And so it goes. 
+
+## Next steps
+
+Watching `println!` statements fly past is only so interesting. Which is to say: "not very".
+
+Here are some next steps to try and flesh out the Grapht project.
+
+### Compacting histories
+
+Right now the full graph history remains in effect, and there is differential dataflow infrastructure to allow it to self-compact: we would just keep information about the "current" state of the graph, and computations that attach get this current representation as one big "change". This means we wouldn't have to see the thirty thousand rounds of historical changes, or more if we weren't prompt with starting up our computations.
+
+### Terminating computations
+
+Differential dataflow computations "terminate" when there are no further changes to process. This means both that the inputs have stopped changing, and that changes in flight have all been resolved. Right now the example input `random_graph` changes forever, which means we don't need to check if this actually works. But, we could cause any input graph to "seize", ceasing changes and allowing dependent differential dataflow computations to wind down.
+
+We could also look into "detaching" an existing computation from its inputs; even though the inputs continue to change, we can suppress the changes in the interest of terminating and winding down the computation. This may be a bit more invasive, as the mechanisms we use to share traces do not have such a concept built in to them. This is a great example of kicking the tires of differential dataflow, and seeing what else we might need to make it more useful.
