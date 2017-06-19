@@ -93,7 +93,9 @@ fn load_dataflow(
         // look up the symbol in the shared library
         worker.dataflow_using(lib, |lib, child| {
             unsafe {
+                // if let Ok(func) = lib.get::<Symbol<unsafe extern fn(Environment)>>(sym_name.as_bytes()) {
                 if let Ok(func) = lib.get::<Symbol<unsafe extern fn(&mut Child<Root<Allocator>,usize>, &mut HashMap<String, TraceHandle>, &mut ProbeHandle<RootTime>, &[String])>>(sym_name.as_bytes()) {
+                    // func((child, handles, probe, args))
                     func(child, handles, probe, args)
                 }
                 else { println!("failed to find symbol in shared library."); }

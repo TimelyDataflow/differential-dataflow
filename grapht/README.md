@@ -108,6 +108,57 @@ If we look further down we get the degree three counts:
 
 And so it goes. 
 
+## An example computation
+
+Let's take a closer look at the `degr_dist` computation. What does it look like?
+
+You can find [the source](https://github.com/frankmcsherry/differential-dataflow/tree/master/grapht/dataflows/degr_dist) in the repository, but it's intentionally concise so let's just take a peek at [`dataflows/degr_dist/src/lib.rs`](https://github.com/frankmcsherry/differential-dataflow/blob/master/grapht/dataflows/degr_dist/src/lib.rs) where all of the logic lives:
+
+```rust
+extern crate timely;
+extern crate timely_communication;
+extern crate differential_dataflow;
+extern crate grapht;
+
+use std::collections::HashMap;
+
+use timely_communication::Allocator;
+use timely::dataflow::scopes::{Child, Root};
+use timely::dataflow::operators::probe::Handle as ProbeHandle;
+
+use differential_dataflow::operators::CountTotal;
+
+use grapht::{RootTime, TraceHandle};
+
+#[no_mangle]
+pub fn build(
+    dataflow: &mut Child<Root<Allocator>,usize>, 
+    handles: &mut HashMap<String, TraceHandle>, 
+    probe: &mut ProbeHandle<RootTime>,
+    args: &[String]) 
+{
+    if args.len() == 1 {
+
+        let graph_name = &args[0];
+        if let Some(handle) = handles.get_mut(graph_name) {
+
+            handle
+                .import(dataflow)
+                .as_collection(|k,v| (k.item.clone(), v.clone()))
+                .map(|(src, _dst)| src)
+                .count_total_u()
+                .map(|(_src, cnt)| cnt as usize)
+                .count_total_u()
+                .inspect(|x| println!("count: {:?}", x))
+                .probe_with(probe);
+        }
+        else {
+            println!("failed to find graph: {:?}", graph_name);
+        }
+    }
+}
+```
+
 ## Next steps
 
 Watching `println!` statements fly past is only so interesting. Which is to say: "not very".

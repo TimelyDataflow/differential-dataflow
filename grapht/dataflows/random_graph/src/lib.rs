@@ -17,11 +17,12 @@ use timely::dataflow::operators::Probe;
 use differential_dataflow::AsCollection;
 use differential_dataflow::operators::arrange::ArrangeByKey;
 
-use grapht::{RootTime, TraceHandle};
+use grapht::{Environment, RootTime, TraceHandle};
 
 // ./dataflows/random_graph/target/debug/librandom_graph.dylib build <graph_name> 1000 2000 10
 
 #[no_mangle]
+// pub fn build((dataflow, handles, probe, args): Environment) {
 pub fn build(
     dataflow: &mut Child<Root<Allocator>,usize>, 
     handles: &mut HashMap<String, TraceHandle>, 

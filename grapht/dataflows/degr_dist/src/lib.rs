@@ -11,11 +11,12 @@ use timely::dataflow::operators::probe::Handle as ProbeHandle;
 
 use differential_dataflow::operators::CountTotal;
 
-use grapht::{RootTime, TraceHandle};
+use grapht::{Environment, RootTime, TraceHandle};
 
 // ./dataflows/degr_dist/target/debug/libdegr_dist.dylib build <graph_name>
 
 #[no_mangle]
+// pub fn build((dataflow, handles, probe, args): Environment) {
 pub fn build(
     dataflow: &mut Child<Root<Allocator>,usize>, 
     handles: &mut HashMap<String, TraceHandle>, 
@@ -25,14 +26,10 @@ pub fn build(
     if args.len() == 1 {
 
         let graph_name = &args[0];
-
-        // println!("initializing degree distribution dataflow on graph: {:?}", graph_name);
-
         if let Some(handle) = handles.get_mut(graph_name) {
 
-            let edges = handle.import(dataflow);
-
-            edges
+            handle
+                .import(dataflow)
                 .as_collection(|k,v| (k.item.clone(), v.clone()))
                 .map(|(src, _dst)| src)
                 .count_total_u()
