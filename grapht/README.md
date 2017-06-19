@@ -114,6 +114,8 @@ Let's take a closer look at the `degr_dist` computation. What does it look like?
 
 You can find [the source](https://github.com/frankmcsherry/differential-dataflow/tree/master/grapht/dataflows/degr_dist) in the repository, but it's intentionally concise so let's just take a peek at [`dataflows/degr_dist/src/lib.rs`](https://github.com/frankmcsherry/differential-dataflow/blob/master/grapht/dataflows/degr_dist/src/lib.rs) where all of the logic lives:
 
+First, there is an epic amount of boilerplate that I would love to remove. Current attempts to wrap this up in an `Environment` type have failed (the FFI calls result in mis-interpreted arguments).
+
 ```rust
 extern crate timely;
 extern crate timely_communication;
@@ -129,7 +131,11 @@ use timely::dataflow::operators::probe::Handle as ProbeHandle;
 use differential_dataflow::operators::CountTotal;
 
 use grapht::{RootTime, TraceHandle};
+```
 
+Once we get past the boilerplate, we get to define a method that takes some context about the larger world, and is free to build up some dataflow!
+
+```rust
 #[no_mangle]
 pub fn build(
     dataflow: &mut Child<Root<Allocator>,usize>, 
@@ -158,6 +164,8 @@ pub fn build(
     }
 }
 ```
+
+Nothing particularly magical here. We've stashed trace handles in `handles`, and `probe` is a probe handle we are expected to use (at least, if we'd like the worker to wait for our computation to catch up before moving ahead).
 
 ## Next steps
 

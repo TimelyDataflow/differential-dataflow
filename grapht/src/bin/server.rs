@@ -22,7 +22,7 @@ use timely_communication::Allocator;
 
 use libloading::{Library, Symbol};
 
-use grapht::{RootTime, TraceHandle};
+use grapht::{Environment, RootTime, TraceHandle};
 
 fn main() {
 
