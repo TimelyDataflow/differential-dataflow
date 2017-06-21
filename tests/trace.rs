@@ -1,14 +1,19 @@
 extern crate timely;
 extern crate differential_dataflow;
+
+use std::rc::Rc;
+
 use differential_dataflow::trace::implementations::ord::OrdValSpine;
 use differential_dataflow::trace::{Trace, TraceReader, Batch, Batcher};
 use differential_dataflow::trace::cursor::CursorDebug;
-// use differential_dataflow::operators::ValueHistory2;
 use differential_dataflow::hashable::UnsignedWrapper;
+
+use differential_dataflow::trace::implementations::ord::OrdValBatch;
+use differential_dataflow::trace::implementations::spine::Spine;
 
 type IntegerTrace = OrdValSpine<UnsignedWrapper<u64>, u64, usize, i64>;
 
-fn get_trace() -> differential_dataflow::trace::implementations::spine::Spine<differential_dataflow::hashable::UnsignedWrapper<u64>, u64, usize, i64, differential_dataflow::trace::implementations::ord::OrdValBatch<differential_dataflow::hashable::UnsignedWrapper<u64>, u64, usize, i64>> {
+fn get_trace() -> Spine<UnsignedWrapper<u64>, u64, usize, i64, Rc<OrdValBatch<UnsignedWrapper<u64>, u64, usize, i64>>> {
     let mut trace = IntegerTrace::new();
     {
         let mut batcher = <<

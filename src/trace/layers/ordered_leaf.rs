@@ -2,6 +2,8 @@
 
 use std::rc::Rc;
 
+use owning_ref::OwningRef;
+
 use difference::Diff;
 
 use super::{Trie, Cursor, Builder, MergeBuilder, TupleBuilder};
@@ -10,20 +12,20 @@ use super::{Trie, Cursor, Builder, MergeBuilder, TupleBuilder};
 #[derive(Debug)]
 pub struct OrderedLeaf<K, R> {
     /// Unordered values.
-    pub vals: Rc<Vec<(K, R)>>,
+    pub vals: Vec<(K, R)>,
 }
 
-impl<K: Ord+Clone, R: Diff+Clone> Trie for OrderedLeaf<K, R> {
+impl<B, K: Ord+Clone, R: Diff+Clone> Trie<B> for OrderedLeaf<K, R> {
     type Item = (K, R);
-    type Cursor = OrderedLeafCursor<K, R>;
+    type Cursor = OrderedLeafCursor<B, K, R>;
     type MergeBuilder = OrderedLeafBuilder<K, R>;
     type TupleBuilder = OrderedLeafBuilder<K, R>;
     fn keys(&self) -> usize { self.vals.len() }
-    fn tuples(&self) -> usize { self.keys() }
-    fn cursor_from(&self, lower: usize, upper: usize) -> Self::Cursor { 
+    fn tuples(&self) -> usize { <OrderedLeaf<K, R> as Trie<B>>::keys(&self) }
+    fn cursor_from(&self, owned_self: OwningRef<Rc<B>, Self>, lower: usize, upper: usize) -> Self::Cursor { 
         // println!("unordered: {} .. {}", lower, upper);
         OrderedLeafCursor {
-            vals: self.vals.clone(),
+            vals: owned_self.map(|x| &x.vals),
             bounds: (lower, upper),
             pos: lower,
         }
@@ -36,16 +38,16 @@ pub struct OrderedLeafBuilder<K, R> {
     pub vals: Vec<(K, R)>,
 }
 
-impl<K: Ord+Clone, R: Diff+Clone> Builder for OrderedLeafBuilder<K, R> {
+impl<B, K: Ord+Clone, R: Diff+Clone> Builder<B> for OrderedLeafBuilder<K, R> {
     type Trie = OrderedLeaf<K, R>; 
     fn boundary(&mut self) -> usize { self.vals.len() } 
-    fn done(self) -> Self::Trie { OrderedLeaf { vals: Rc::new(self.vals) } }
+    fn done(self) -> Self::Trie { OrderedLeaf { vals: self.vals } }
 }
 
-impl<K: Ord+Clone, R: Diff+Clone> MergeBuilder for OrderedLeafBuilder<K, R> {
+impl<B, K: Ord+Clone, R: Diff+Clone> MergeBuilder<B> for OrderedLeafBuilder<K, R> {
     fn with_capacity(other1: &Self::Trie, other2: &Self::Trie) -> Self {
         OrderedLeafBuilder {
-            vals: Vec::with_capacity(other1.keys() + other2.keys()),
+            vals: Vec::with_capacity(<OrderedLeaf<K, R> as Trie<B>>::keys(other1) + <OrderedLeaf<K, R> as Trie<B>>::keys(other2)),
         }
     }
     fn copy_range(&mut self, other: &Self::Trie, lower: usize, upper: usize) {
@@ -68,7 +70,7 @@ impl<K: Ord+Clone, R: Diff+Clone> MergeBuilder for OrderedLeafBuilder<K, R> {
                 ::std::cmp::Ordering::Less => {
                     // determine how far we can advance lower1 until we reach/pass lower2
                     let step = 1 + advance(&trie1.vals[(1+lower1)..upper1], |x| x < &trie2.vals[lower2]);
-                    self.copy_range(trie1, lower1, lower1 + step);
+                    <OrderedLeafBuilder<K, R> as MergeBuilder<B>>::copy_range(self, trie1, lower1, lower1 + step);
                     lower1 += step;
                 }
                 ::std::cmp::Ordering::Equal => {
@@ -84,20 +86,20 @@ impl<K: Ord+Clone, R: Diff+Clone> MergeBuilder for OrderedLeafBuilder<K, R> {
                 ::std::cmp::Ordering::Greater => {
                     // determine how far we can advance lower2 until we reach/pass lower1
                     let step = 1 + advance(&trie2.vals[(1+lower2)..upper2], |x| x < &trie1.vals[lower1]);
-                    self.copy_range(trie2, lower2, lower2 + step);
+                    <OrderedLeafBuilder<K, R> as MergeBuilder<B>>::copy_range(self, trie2, lower2, lower2 + step);
                     lower2 += step;
                 }
             }
         }
 
-        if lower1 < upper1 { self.copy_range(trie1, lower1, upper1); }
-        if lower2 < upper2 { self.copy_range(trie2, lower2, upper2); }
+        if lower1 < upper1 { <OrderedLeafBuilder<K, R> as MergeBuilder<B>>::copy_range(self, trie1, lower1, upper1); }
+        if lower2 < upper2 { <OrderedLeafBuilder<K, R> as MergeBuilder<B>>::copy_range(self, trie2, lower2, upper2); }
 
         self.vals.len()
     }
 }
 
-impl<K: Ord+Clone, R: Diff+Clone> TupleBuilder for OrderedLeafBuilder<K, R> {
+impl<B, K: Ord+Clone, R: Diff+Clone> TupleBuilder<B> for OrderedLeafBuilder<K, R> {
     type Item = (K, R);
     fn new() -> Self { OrderedLeafBuilder { vals: Vec::new() } }
     fn with_capacity(cap: usize) -> Self { OrderedLeafBuilder { vals: Vec::with_capacity(cap) } }
@@ -108,13 +110,13 @@ impl<K: Ord+Clone, R: Diff+Clone> TupleBuilder for OrderedLeafBuilder<K, R> {
 ///
 /// This cursor does not support `seek`, though I'm not certain how to expose this.
 #[derive(Debug)]
-pub struct OrderedLeafCursor<K, R> {
-    vals: Rc<Vec<(K, R)>>,
+pub struct OrderedLeafCursor<B, K, R> {
+    vals: OwningRef<Rc<B>, Vec<(K, R)>>,
     pos: usize,
     bounds: (usize, usize),
 }
 
-impl<K: Clone, R: Clone> Cursor for OrderedLeafCursor<K, R> {
+impl<B, K: Clone, R: Clone> Cursor for OrderedLeafCursor<B, K, R> {
     type Key = (K, R);
     fn key(&self) -> &Self::Key { &self.vals[self.pos] }
     fn step(&mut self) {

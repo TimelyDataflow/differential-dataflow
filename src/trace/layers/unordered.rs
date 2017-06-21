@@ -1,26 +1,29 @@
 //! Implementation using ordered keys and exponential search.
 
 use std::rc::Rc;
+
+use owning_ref::OwningRef;
+
 use super::{Trie, Cursor, Builder, MergeBuilder, TupleBuilder};
 
 /// A layer of unordered values. 
 #[derive(Debug)]
 pub struct UnorderedLayer<K> {
 	/// Unordered values.
-	pub vals: Rc<Vec<K>>,
+	pub vals: Vec<K>,
 }
 
-impl<K: Clone> Trie for UnorderedLayer<K> {
+impl<B, K: Clone> Trie<B> for UnorderedLayer<K> {
 	type Item = K;
-	type Cursor = UnorderedCursor<K>;
+	type Cursor = UnorderedCursor<B, K>;
 	type MergeBuilder = UnorderedBuilder<K>;
 	type TupleBuilder = UnorderedBuilder<K>;
 	fn keys(&self) -> usize { self.vals.len() }
-	fn tuples(&self) -> usize { self.keys() }
-	fn cursor_from(&self, lower: usize, upper: usize) -> Self::Cursor {	
+	fn tuples(&self) -> usize { <UnorderedLayer<K> as Trie<B>>::keys(&self) }
+	fn cursor_from(&self, owned_self: OwningRef<Rc<B>, Self>, lower: usize, upper: usize) -> Self::Cursor {	
 		// println!("unordered: {} .. {}", lower, upper);
 		UnorderedCursor {
-			vals: self.vals.clone(),
+			vals: owned_self.map(|x| &x.vals),
 			bounds: (lower, upper),
 			pos: lower,
 		}
@@ -33,29 +36,29 @@ pub struct UnorderedBuilder<K> {
 	pub vals: Vec<K>,
 }
 
-impl<K: Clone> Builder for UnorderedBuilder<K> {
+impl<B, K: Clone> Builder<B> for UnorderedBuilder<K> {
 	type Trie = UnorderedLayer<K>; 
 	fn boundary(&mut self) -> usize { self.vals.len() } 
-	fn done(self) -> Self::Trie { UnorderedLayer { vals: Rc::new(self.vals) } }
+	fn done(self) -> Self::Trie { UnorderedLayer { vals: self.vals } }
 }
 
-impl<K: Clone> MergeBuilder for UnorderedBuilder<K> {
+impl<B, K: Clone> MergeBuilder<B> for UnorderedBuilder<K> {
 	fn with_capacity(other1: &Self::Trie, other2: &Self::Trie) -> Self {
 		UnorderedBuilder {
-			vals: Vec::with_capacity(other1.keys() + other2.keys()),
+			vals: Vec::with_capacity(<UnorderedLayer<K> as Trie<B>>::keys(other1) + <UnorderedLayer<K> as Trie<B>>::keys(other2)),
 		}
 	}
 	fn copy_range(&mut self, other: &Self::Trie, lower: usize, upper: usize) {
 		self.vals.extend_from_slice(&other.vals[lower .. upper]);
 	}
 	fn push_merge(&mut self, other1: (&Self::Trie, usize, usize), other2: (&Self::Trie, usize, usize)) -> usize {
-		self.copy_range(&other1.0, other1.1, other1.2);
-		self.copy_range(&other2.0, other2.1, other2.2);
+		<UnorderedBuilder<K> as MergeBuilder<B>>::copy_range(self, &other1.0, other1.1, other1.2);
+		<UnorderedBuilder<K> as MergeBuilder<B>>::copy_range(self, &other2.0, other2.1, other2.2);
 		self.vals.len()
 	}
 }
 
-impl<K: Clone> TupleBuilder for UnorderedBuilder<K> {
+impl<B, K: Clone> TupleBuilder<B> for UnorderedBuilder<K> {
 	type Item = K;
 	fn new() -> Self { UnorderedBuilder { vals: Vec::new() } }
 	fn with_capacity(cap: usize) -> Self { UnorderedBuilder { vals: Vec::with_capacity(cap) } }
@@ -66,13 +69,13 @@ impl<K: Clone> TupleBuilder for UnorderedBuilder<K> {
 ///
 /// This cursor does not support `seek`, though I'm not certain how to expose this.
 #[derive(Debug)]
-pub struct UnorderedCursor<K> {
-	vals: Rc<Vec<K>>,
+pub struct UnorderedCursor<B, K> {
+	vals: OwningRef<Rc<B>, Vec<K>>,
 	pos: usize,
 	bounds: (usize, usize),
 }
 
-impl<K: Clone> Cursor for UnorderedCursor<K> {
+impl<B, K: Clone> Cursor for UnorderedCursor<B, K> {
 	type Key = K;
 	fn key(&self) -> &Self::Key { &self.vals[self.pos] }
 	fn step(&mut self) {

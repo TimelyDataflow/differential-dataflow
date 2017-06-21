@@ -9,6 +9,7 @@
 //! and should consume fewer resources (computation and memory) when it applies.
 
 use std::rc::Rc;
+use owning_ref::OwningRef;
 
 use ::Diff;
 use hashable::HashOrdered;
@@ -27,31 +28,33 @@ use super::spine::Spine;
 use super::batcher::RadixBatcher;
 
 /// A trace implementation using a spine of hash-map batches.
-pub type OrdValSpine<K, V, T, R> = Spine<K, V, T, R, OrdValBatch<K, V, T, R>>;
+pub type OrdValSpine<K, V, T, R> = Spine<K, V, T, R, Rc<OrdValBatch<K, V, T, R>>>;
 /// A trace implementation for empty values using a spine of hash-map batches.
-pub type OrdKeySpine<K, T, R> = Spine<K, (), T, R, OrdKeyBatch<K, T, R>>;
+pub type OrdKeySpine<K, T, R> = Spine<K, (), T, R, Rc<OrdKeyBatch<K, T, R>>>;
 
 
 /// An immutable collection of update tuples, from a contiguous interval of logical times.
 #[derive(Debug)]
 pub struct OrdValBatch<K: Ord+HashOrdered, V: Ord, T: Lattice, R> {
 	/// Where all the dataz is.
-	pub layer: Rc<OrderedLayer<K, OrderedLayer<V, OrderedLeaf<T, R>>>>,
+	pub layer: OrderedLayer<K, OrderedLayer<V, OrderedLeaf<T, R>>>,
 	/// Description of the update times this layer represents.
 	pub desc: Description<T>,
 }
 
-impl<K, V, T, R> BatchReader<K, V, T, R> for OrdValBatch<K, V, T, R> 
+impl<K, V, T, R> BatchReader<K, V, T, R> for Rc<OrdValBatch<K, V, T, R>>
 where K: Ord+Clone+HashOrdered, V: Ord+Clone, T: Lattice+Ord+Clone, R: Diff {
 	type Cursor = OrdValCursor<K, V, T, R>;
 	fn cursor(&self) -> Self::Cursor { 
-		OrdValCursor { cursor: self.layer.cursor() } 
+		OrdValCursor {
+			cursor: self.layer.cursor(OwningRef::new(self.clone()).map(|x| &x.layer))
+		}
 	}
-	fn len(&self) -> usize { self.layer.tuples() }
+	fn len(&self) -> usize { <OrderedLayer<K, OrderedLayer<V, OrderedLeaf<T, R>>> as Trie<OrdValBatch<K, V, T, R>>>::tuples(&self.layer) }
 	fn description(&self) -> &Description<T> { &self.desc }
 }
 
-impl<K, V, T, R> Batch<K, V, T, R> for OrdValBatch<K, V, T, R> 
+impl<K, V, T, R> Batch<K, V, T, R> for Rc<OrdValBatch<K, V, T, R>>
 where K: Ord+Clone+HashOrdered, V: Ord+Clone, T: Lattice+Ord+Clone, R: Diff {
 	type Batcher = RadixBatcher<K, V, T, R, Self>;
 	type Builder = OrdValBuilder<K, V, T, R>;
@@ -68,26 +71,17 @@ where K: Ord+Clone+HashOrdered, V: Ord+Clone, T: Lattice+Ord+Clone, R: Diff {
 			self.desc.since()
 		};
 		
-		OrdValBatch {
-			layer: Rc::new(self.layer.merge(&other.layer)),
+		Rc::new(OrdValBatch {
+			layer: <OrderedLayer<K, OrderedLayer<V, OrderedLeaf<T, R>>> as Trie<OrdValBatch<K, V, T, R>>>::merge(&self.layer, &other.layer),  //self.layer.merge(&other.layer),
 			desc: Description::new(self.desc.lower(), other.desc.upper(), since),
-		}
-	}
-}
-
-impl<K: Ord+HashOrdered, V: Ord, T: Lattice+Ord+Clone, R> Clone for OrdValBatch<K, V, T, R> {
-	fn clone(&self) -> Self {
-		OrdValBatch {
-			layer: self.layer.clone(),
-			desc: self.desc.clone(),
-		}
+		})
 	}
 }
 
 /// A cursor for navigating a single layer.
 #[derive(Debug)]
 pub struct OrdValCursor<K: Ord+Clone+HashOrdered, V: Ord+Clone, T: Lattice+Ord+Clone, R: Copy> {
-	cursor: OrderedCursor<K, OrderedCursor<V, OrderedLeafCursor<T, R>>>,
+	cursor: OrderedCursor<OrdValBatch<K, V, T, R>, K, OrderedCursor<OrdValBatch<K, V, T, R>, V, OrderedLeafCursor<OrdValBatch<K, V, T, R>, T, R>>>,
 }
 
 impl<K, V, T, R> Cursor<K, V, T, R> for OrdValCursor<K, V, T, R> 
@@ -113,21 +107,21 @@ where K: Ord+Clone+HashOrdered, V: Ord+Clone, T: Lattice+Ord+Clone, R: Copy {
 
 
 /// A builder for creating layers from unsorted update tuples.
-pub struct OrdValBuilder<K: Ord+HashOrdered, V: Ord, T: Ord, R: Diff> {
-	builder: OrderedBuilder<K, OrderedBuilder<V, OrderedLeafBuilder<T, R>>>,
+pub struct OrdValBuilder<K: Ord+HashOrdered, V: Ord, T: Ord+Lattice, R: Diff> {
+	builder: OrderedBuilder<OrdValBatch<K, V, T, R>, K, OrderedBuilder<OrdValBatch<K, V, T, R>, V, OrderedLeafBuilder<T, R>>>,
 }
 
-impl<K, V, T, R> Builder<K, V, T, R, OrdValBatch<K, V, T, R>> for OrdValBuilder<K, V, T, R> 
+impl<K, V, T, R> Builder<K, V, T, R, Rc<OrdValBatch<K, V, T, R>>> for OrdValBuilder<K, V, T, R> 
 where K: Ord+Clone+HashOrdered, V: Ord+Clone, T: Lattice+Ord+Clone, R: Diff {
 
 	fn new() -> Self { 
 		OrdValBuilder { 
-			builder: OrderedBuilder::<K, OrderedBuilder<V, OrderedLeafBuilder<T, R>>>::new() 
+			builder: OrderedBuilder::<OrdValBatch<K, V, T, R>, K, OrderedBuilder<OrdValBatch<K, V, T, R>, V, OrderedLeafBuilder<T, R>>>::new() 
 		} 
 	}
 	fn with_capacity(cap: usize) -> Self { 
 		OrdValBuilder { 
-			builder: OrderedBuilder::<K, OrderedBuilder<V, OrderedLeafBuilder<T, R>>>::with_capacity(cap) 
+			builder: OrderedBuilder::<OrdValBatch<K, V, T, R>, K, OrderedBuilder<OrdValBatch<K, V, T, R>, V, OrderedLeafBuilder<T, R>>>::with_capacity(cap) 
 		} 
 	}
 
@@ -137,11 +131,11 @@ where K: Ord+Clone+HashOrdered, V: Ord+Clone, T: Lattice+Ord+Clone, R: Diff {
 	}
 
 	#[inline(never)]
-	fn done(self, lower: &[T], upper: &[T], since: &[T]) -> OrdValBatch<K, V, T, R> {
-		OrdValBatch {
-			layer: Rc::new(self.builder.done()),
+	fn done(self, lower: &[T], upper: &[T], since: &[T]) -> Rc<OrdValBatch<K, V, T, R>> {
+		Rc::new(OrdValBatch {
+			layer: self.builder.done(),
 			desc: Description::new(lower, upper, since)
-		}
+		})
 	}
 }
 
@@ -152,22 +146,26 @@ where K: Ord+Clone+HashOrdered, V: Ord+Clone, T: Lattice+Ord+Clone, R: Diff {
 #[derive(Debug)]
 pub struct OrdKeyBatch<K: Ord+HashOrdered, T: Lattice, R> {
 	/// Where all the dataz is.
-	pub layer: Rc<OrderedLayer<K, OrderedLeaf<T, R>>>,
+	pub layer: OrderedLayer<K, OrderedLeaf<T, R>>,
 	/// Description of the update times this layer represents.
 	pub desc: Description<T>,
 }
 
-impl<K, T, R> BatchReader<K, (), T, R> for OrdKeyBatch<K, T, R> 
+impl<K, T, R> BatchReader<K, (), T, R> for Rc<OrdKeyBatch<K, T, R>>
 where K: Ord+Clone+HashOrdered, T: Lattice+Ord+Clone, R: Diff {
 	type Cursor = OrdKeyCursor<K, T, R>;
 	fn cursor(&self) -> Self::Cursor { 
-		OrdKeyCursor { empty: (), valid: true, cursor: self.layer.cursor() } 
+		OrdKeyCursor {
+			empty: (),
+			valid: true,
+			cursor: self.layer.cursor(OwningRef::new(self.clone()).map(|x| &x.layer)),
+		} 
 	}
-	fn len(&self) -> usize { self.layer.tuples() }
+	fn len(&self) -> usize { <OrderedLayer<K, OrderedLeaf<T, R>> as Trie<OrdKeyBatch<K, T, R>>>::tuples(&self.layer) }
 	fn description(&self) -> &Description<T> { &self.desc }
 }
 
-impl<K, T, R> Batch<K, (), T, R> for OrdKeyBatch<K, T, R> 
+impl<K, T, R> Batch<K, (), T, R> for Rc<OrdKeyBatch<K, T, R>>
 where K: Ord+Clone+HashOrdered, T: Lattice+Ord+Clone, R: Diff {
 	type Batcher = RadixBatcher<K, (), T, R, Self>;
 	type Builder = OrdKeyBuilder<K, T, R>;
@@ -184,19 +182,10 @@ where K: Ord+Clone+HashOrdered, T: Lattice+Ord+Clone, R: Diff {
 			self.desc.since()
 		};
 		
-		OrdKeyBatch {
-			layer: Rc::new(self.layer.merge(&other.layer)),
+		Rc::new(OrdKeyBatch {
+			layer: <OrderedLayer<K, OrderedLeaf<T, R>> as Trie<OrdKeyBatch<K, T, R>>>::merge(&self.layer, &other.layer),
 			desc: Description::new(self.desc.lower(), other.desc.upper(), since),
-		}
-	}
-}
-
-impl<K: Ord+HashOrdered, T: Lattice+Ord+Clone, R> Clone for OrdKeyBatch<K, T, R> {
-	fn clone(&self) -> Self {
-		OrdKeyBatch {
-			layer: self.layer.clone(),
-			desc: self.desc.clone(),
-		}
+		})
 	}
 }
 
@@ -205,7 +194,7 @@ impl<K: Ord+HashOrdered, T: Lattice+Ord+Clone, R> Clone for OrdKeyBatch<K, T, R>
 pub struct OrdKeyCursor<K: Ord+Clone+HashOrdered, T: Lattice+Ord+Clone, R: Copy> {
 	valid: bool,
 	empty: (),
-	cursor: OrderedCursor<K, OrderedLeafCursor<T, R>>,
+	cursor: OrderedCursor<OrdKeyBatch<K, T, R>, K, OrderedLeafCursor<OrdKeyBatch<K, T, R>, T, R>>,
 }
 
 impl<K: Ord+Clone+HashOrdered, T: Lattice+Ord+Clone, R: Copy> Cursor<K, (), T, R> for OrdKeyCursor<K, T, R> {
@@ -230,22 +219,22 @@ impl<K: Ord+Clone+HashOrdered, T: Lattice+Ord+Clone, R: Copy> Cursor<K, (), T, R
 
 
 /// A builder for creating layers from unsorted update tuples.
-pub struct OrdKeyBuilder<K: Ord, T: Ord, R: Diff> {
-	builder: OrderedBuilder<K, OrderedLeafBuilder<T, R>>,
+pub struct OrdKeyBuilder<K: Ord+HashOrdered, T: Ord+Lattice, R: Diff> {
+	builder: OrderedBuilder<OrdKeyBatch<K, T, R>, K, OrderedLeafBuilder<T, R>>,
 }
 
-impl<K, T, R> Builder<K, (), T, R, OrdKeyBatch<K, T, R>> for OrdKeyBuilder<K, T, R> 
+impl<K, T, R> Builder<K, (), T, R, Rc<OrdKeyBatch<K, T, R>>> for OrdKeyBuilder<K, T, R> 
 where K: Ord+Clone+HashOrdered, T: Lattice+Ord+Clone, R: Diff {
 
 	fn new() -> Self { 
 		OrdKeyBuilder { 
-			builder: OrderedBuilder::<K, OrderedLeafBuilder<T, R>>::new() 
+			builder: OrderedBuilder::<OrdKeyBatch<K, T, R>, K, OrderedLeafBuilder<T, R>>::new() 
 		} 
 	}
 
 	fn with_capacity(cap: usize) -> Self {
 		OrdKeyBuilder { 
-			builder: OrderedBuilder::<K, OrderedLeafBuilder<T, R>>::with_capacity(cap) 
+			builder: OrderedBuilder::<OrdKeyBatch<K, T, R>, K, OrderedLeafBuilder<T, R>>::with_capacity(cap) 
 		} 
 	}
 
@@ -255,11 +244,11 @@ where K: Ord+Clone+HashOrdered, T: Lattice+Ord+Clone, R: Diff {
 	}
 
 	#[inline(never)]
-	fn done(self, lower: &[T], upper: &[T], since: &[T]) -> OrdKeyBatch<K, T, R> {
-		OrdKeyBatch {
-			layer: Rc::new(self.builder.done()),
+	fn done(self, lower: &[T], upper: &[T], since: &[T]) -> Rc<OrdKeyBatch<K, T, R>> {
+		Rc::new(OrdKeyBatch {
+			layer: self.builder.done(),
 			desc: Description::new(lower, upper, since)
-		}
+		})
 	}
 }
 
