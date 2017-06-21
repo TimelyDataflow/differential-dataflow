@@ -32,6 +32,8 @@ fn main() {
     // demonstrate dynamic loading of dataflows via shared libraries.
     let guards = timely::execute_from_args(std::env::args(), move |worker| {
 
+        let timer = ::std::time::Instant::now();
+
         let commands = commands1.clone();
         let mut command_count = 0;
 
@@ -56,7 +58,7 @@ fn main() {
             }
 
             worker.step();
-            // println!("stepping!");
+            // println!("{:?}\tstepping", timer.elapsed());
         }
 
     });

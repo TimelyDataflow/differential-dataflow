@@ -2,7 +2,9 @@ extern crate timely;
 extern crate timely_communication;
 extern crate differential_dataflow;
 
+use std::rc::Rc;
 use std::collections::HashMap;
+
 use timely_communication::Allocator;
 use timely::dataflow::scopes::{Child, Root};
 use timely::dataflow::operators::probe::Handle as ProbeHandle;
@@ -15,7 +17,7 @@ use differential_dataflow::trace::implementations::ord::OrdValBatch;
 
 pub type RootTime = timely::progress::nested::product::Product<timely::progress::timestamp::RootTimestamp, usize>;
 type TraceBatch = OrdValBatch<UnsignedWrapper<usize>, usize, RootTime, isize>;
-type TraceSpine = Spine<UnsignedWrapper<usize>, usize, RootTime, isize, TraceBatch>;
+type TraceSpine = Spine<UnsignedWrapper<usize>, usize, RootTime, isize, Rc<TraceBatch>>;
 pub type TraceHandle = TraceAgent<UnsignedWrapper<usize>, usize, RootTime, isize, TraceSpine>;
 
 // &mut Child<Root<Allocator>,usize>, 
