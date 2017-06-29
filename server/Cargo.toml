@@ -1,5 +1,5 @@
 [package]
-name = "degr_dist"
+name = "dd_server"
 version = "0.1.0"
 authors = ["Frank McSherry <fmcsherry@me.com>"]
 
@@ -7,15 +7,9 @@ authors = ["Frank McSherry <fmcsherry@me.com>"]
 git="https://github.com/frankmcsherry/timely-dataflow/"
 
 [dependencies.differential-dataflow]
-path="../../../"
-
-[dependencies.grapht]
-path="../../"
+path="../"
 
 [dependencies]
 rand="0.3.13"
 libloading="*"
 timely_communication="*"
-
-[lib]
-crate-type = ["dylib"]

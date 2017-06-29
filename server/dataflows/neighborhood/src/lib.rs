@@ -1,7 +1,7 @@
 extern crate timely;
 extern crate timely_communication;
 extern crate differential_dataflow;
-extern crate grapht;
+extern crate dd_server;
 
 use std::collections::HashMap;
 
@@ -14,7 +14,7 @@ use differential_dataflow::operators::JoinCore;
 use differential_dataflow::operators::Consolidate;
 use differential_dataflow::operators::arrange::ArrangeByKey;
 
-use grapht::{RootTime, TraceHandle};
+use dd_server::{RootTime, TraceHandle};
 
 
 #[no_mangle]

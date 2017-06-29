@@ -3,8 +3,9 @@ extern crate rand;
 extern crate timely;
 extern crate timely_communication;
 extern crate differential_dataflow;
-extern crate grapht;
+extern crate dd_server;
 
+use std::any::Any;
 use std::collections::HashMap;
 
 use rand::{Rng, SeedableRng, StdRng};
@@ -17,15 +18,15 @@ use timely::dataflow::operators::Probe;
 use differential_dataflow::AsCollection;
 use differential_dataflow::operators::arrange::ArrangeByKey;
 
-use grapht::{Environment, RootTime, TraceHandle};
+use dd_server::{Environment, RootTime, TraceHandle};
 
-// ./dataflows/random_graph/target/debug/librandom_graph.dylib build <graph_name> 1000 2000 10
+// load ./dataflows/random_graph/target/debug/librandom_graph.dylib build <graph_name> 1000 2000 10
 
 #[no_mangle]
 // pub fn build((dataflow, handles, probe, args): Environment) {
 pub fn build(
     dataflow: &mut Child<Root<Allocator>,usize>, 
-    handles: &mut HashMap<String, TraceHandle>, 
+    handles: &mut HashMap<String, Box<Any>>, 
     probe: &mut ProbeHandle<RootTime>,
     args: &[String]) 
 {
@@ -37,7 +38,7 @@ pub fn build(
         let batch: usize = args[3].parse().unwrap();
 
         // create a trace from a source of random graph edges.
-        let trace = timely::dataflow::operators::operator::source(dataflow, "RandomGraph", |mut capability| {
+        let trace: TraceHandle = timely::dataflow::operators::operator::source(dataflow, "RandomGraph", |mut capability| {
 
             let index = dataflow.index();
             let peers = dataflow.peers();
@@ -96,7 +97,11 @@ pub fn build(
         .arrange_by_key_u()
         .trace;
 
-        handles.insert(name.to_owned(), trace);
+        let boxed: Box<Any> = Box::new(trace);
+
+        // println!("boxed correctly?: {:?}", boxed.downcast_ref::<TraceHandle>().is_some());
+
+        handles.insert(name.to_owned(), boxed);
     }
     else {
         println!("expect four arguments, found: {:?}", args);

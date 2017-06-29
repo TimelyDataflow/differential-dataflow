@@ -1,5 +1,5 @@
 [package]
-name = "grapht"
+name = "random_graph"
 version = "0.1.0"
 authors = ["Frank McSherry <fmcsherry@me.com>"]
 
@@ -7,9 +7,15 @@ authors = ["Frank McSherry <fmcsherry@me.com>"]
 git="https://github.com/frankmcsherry/timely-dataflow/"
 
 [dependencies.differential-dataflow]
-path="../"
+path="../../../"
+
+[dependencies.dd_server]
+path="../../"
 
 [dependencies]
 rand="0.3.13"
 libloading="*"
 timely_communication="*"
+
+[lib]
+crate-type = ["dylib"]

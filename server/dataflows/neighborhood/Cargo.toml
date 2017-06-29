@@ -1,5 +1,5 @@
 [package]
-name = "random_graph"
+name = "neighborhood"
 version = "0.1.0"
 authors = ["Frank McSherry <fmcsherry@me.com>"]
 
@@ -9,7 +9,7 @@ git="https://github.com/frankmcsherry/timely-dataflow/"
 [dependencies.differential-dataflow]
 path="../../../"
 
-[dependencies.grapht]
+[dependencies.dd_server]
 path="../../"
 
 [dependencies]

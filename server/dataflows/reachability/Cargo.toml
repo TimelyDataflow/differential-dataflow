@@ -9,7 +9,7 @@ git="https://github.com/frankmcsherry/timely-dataflow/"
 [dependencies.differential-dataflow]
 path="../../../"
 
-[dependencies.grapht]
+[dependencies.dd_server]
 path="../../"
 
 [dependencies]
