@@ -167,7 +167,7 @@ Nothing particularly magical here. We've stashed trace handles in `handles`, and
 
 ### Stashing outputs
 
-Watching `println!` statements fly past is only so interesting. Which is to say: "not very". Step one is obviously to comment out the `.inspect()` line, but where do we go from there? Probably, we would want to publish the output, which we can do with out mutable access to `handles`.
+Watching `println!` statements fly past is only so interesting. Which is to say: "not very". Step one is obviously to comment out the `.inspect()` line, but where do we go from there? Probably, we would want to publish the output, which we can do with our mutable access to `handles`.
 
 Instead, let's look at what the `random_graph` library does. Now, we aren't going to look at all the code, because there is a lot of random graph stuff, but from the point where we have a differential dataflow collection of edges, which we `probe`, onwards it looks like:
 
