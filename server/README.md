@@ -1,16 +1,16 @@
-# Grapht
+# Graph Server
 
 A differential dataflow server for continually changing graphs
 
 ## Overview
 
-Grapht is a system that hosts continually changing graph datasets, and computation defined over them. Users are able to build and load shared libraries that can both define computation over existing graph datasets or define and share new graphs. The user code is able to share the same underlying representations for the graphs, reducing the overhead and streamlining the execution.
+The graph server is a system that hosts continually changing graph datasets, and computation defined over them. Users are able to build and load shared libraries that can both define computation over existing graph datasets or define and share new graphs. The user code is able to share the same underlying representations for the graphs, reducing the overhead and streamlining the execution.
 
 ## A Sketch
 
-Grapht is very much in progress, and its goals are mostly to exercise timely and differential dataflow as systems, and to see where this leads. At the moment, Grapht provides a small set of graph definitions and graph analyses one can load against them. This is mostly so that we can see what it is like to start up and shut down graph computations with shared state, and understand if we are doing this well. 
+The graph server is very much in progress, and its goals are mostly to exercise timely and differential dataflow as systems, and to see where this leads. At the moment, the server provides a small set of graph definitions and graph analyses one can load against them. This is mostly so that we can see what it is like to start up and shut down graph computations with shared state, and understand if we are doing this well. 
 
-Several computations are defined in `./dataflows/` which give examples of defining your own computation. These projects have no special status, and could each be re-implemented by users such as yourself. The intent is that once your project is compiled, Grapht can load the associated shared libraries and bring your computation into the same shared address space as the other graph computations.
+Several computations are defined in `./dataflows/` which give examples of defining your own computation. These projects have no special status, and could each be re-implemented by users such as yourself. The intent is that once your project is compiled, the server can load the associated shared libraries and bring your computation into the same shared address space as the other graph computations.
 
 ## Examples
 
@@ -23,7 +23,6 @@ This .. doesn't appear to do anything:
     Echidnatron% cargo run --bin server
         Finished dev [unoptimized + debuginfo] target(s) in 0.0 secs
          Running `target/debug/server`
-    >
 
 What has happened is that the server is up and running and waiting for some input! Pretty exciting. 
 
@@ -50,19 +49,17 @@ Ok, back to the server now. Load that puppy up again and
     Echidnatron% cargo run --bin server
         Finished dev [unoptimized + debuginfo] target(s) in 0.0 secs
          Running `target/debug/server`
-    > ./dataflows/random_graph/target/debug/librandom_graph.dylib build <graph_name> 1000 2000 10
-    >
+    load ./dataflows/random_graph/target/debug/librandom_graph.dylib build <graph_name> 1000 2000 10
 
 Ok. We have now bound to `<graph_name>` a random graph on 1,000 nodes comprising a sliding window over 2,000 edges, advanced ten edges at a time. If you would like to, you can change any of the arguments passed.
 
 Up next, let's attach the `degr_dist` computation to `<graph_name>` and see what we get:
 
-    > ./dataflows/degr_dist/target/debug/libdegr_dist.dylib build <graph_name>
-    >
+    load ./dataflows/degr_dist/target/debug/libdegr_dist.dylib build <graph_name>
 
 You may have a moment now where nothing much happens. In fact, lots is happening behind the scenes; we are taking all of the produced history of `<graph_name>` and feeding it in to the `degr_dist` computation. Here we go:
 
-    > count: ((1, 266), (Root, 0), 1)
+    count: ((1, 266), (Root, 0), 1)
     count: ((1, 266), (Root, 1), -1)
     count: ((1, 267), (Root, 1), 1)
     count: ((1, 267), (Root, 2), -1)
@@ -71,7 +68,7 @@ You may have a moment now where nothing much happens. In fact, lots is happening
     count: ((1, 267), (Root, 4), 1)
     ...
 
-Here we learn a few things: First, I just print `>` to make it look like a console, and this is a mess when we also try and print out the changes to the degree distribution. More importantly, we start to get the history for count of `1`: initially there are 266 nodes with out-degree one, which increases, then decreases, then increases, then ...
+We now start to get the history for count of `1`: initially there are 266 nodes with out-degree one, which increases to 267, then decreases back to 266, then increases, then ...
 
     ...
     count: ((1, 269), (Root, 999), -1)
@@ -122,6 +119,7 @@ extern crate timely_communication;
 extern crate differential_dataflow;
 extern crate grapht;
 
+use std::any::Any;
 use std::collections::HashMap;
 
 use timely_communication::Allocator;
@@ -139,7 +137,7 @@ Once we get past the boilerplate, we get to define a method that takes some cont
 #[no_mangle]
 pub fn build(
     dataflow: &mut Child<Root<Allocator>,usize>, 
-    handles: &mut HashMap<String, TraceHandle>, 
+    handles: &mut HashMap<String, Box<Any>>, 
     probe: &mut ProbeHandle<RootTime>,
     args: &[String]) 
 {
@@ -165,13 +163,33 @@ pub fn build(
 }
 ```
 
-Nothing particularly magical here. We've stashed trace handles in `handles`, and `probe` is a probe handle we are expected to use (at least, if we'd like the worker to wait for our computation to catch up before moving ahead).
+Nothing particularly magical here. We've stashed trace handles in `handles`, and `probe` is a probe handle we are expected to use (at least, if we'd like the worker to wait for our computation to catch up before moving ahead; we don't have to).
+
+### Stashing outputs
+
+Watching `println!` statements fly past is only so interesting. Which is to say: "not very". Step one is obviously to comment out the `.inspect()` line, but where do we go from there? Probably, we would want to publish the output, which we can do with out mutable access to `handles`.
+
+Instead, let's look at what the `random_graph` library does. Now, we aren't going to look at all the code, because there is a lot of random graph stuff, but from the point where we have a differential dataflow collection of edges, which we `probe`, onwards it looks like:
+
+```rust
+
+    let trace = 
+        // .. lots of stuff ..
+        .probe_with(probe)
+        .as_collection()
+        .arrange_by_key_u()
+        .trace;
+
+        let boxed: Box<Any> = Box::new(trace);
+        handles.insert(name.to_owned(), boxed);
+    }
+```
+
+We can now go and grab this stream, as we did up at the beginning of the `degr_dist` example. Of course, since the dictionary uses `Box<Any>`, we can stash any old type in there. Unless of course `Box<Any>` is broken across shared library boundaries, but it seems to work and it isn't like there is any documentation on that sort of thing anyway.
 
 ## Next steps
 
-Watching `println!` statements fly past is only so interesting. Which is to say: "not very".
-
-Here are some next steps to try and flesh out the Grapht project.
+Here are some next steps to try and flesh out the graph server project.
 
 ### Compacting histories
 

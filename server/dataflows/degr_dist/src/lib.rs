@@ -37,7 +37,7 @@ pub fn build(
                     .count_total_u()
                     .map(|(_src, cnt)| cnt as usize)
                     .count_total_u()
-                    // .inspect(|x| println!("count: {:?}", x))
+                    .inspect(|x| println!("count: {:?}", x))
                     .probe_with(probe);
                 }
             else {

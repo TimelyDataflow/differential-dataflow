@@ -149,10 +149,8 @@ fn main() {
             }
 
             worker.step();
-            std::thread::yield_now();
-
+            std::thread::yield_now();   // so that over-subscribed worker counts still feel interactive
         }
-
     });
 
     // print!("> ");
