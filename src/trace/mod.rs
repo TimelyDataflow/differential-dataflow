@@ -250,7 +250,8 @@ pub fn consolidate_by<T: Eq+Clone, L: Fn(&T, &T)->::std::cmp::Ordering, R: Diff>
 	let mut cursor = off;
 	for index in off .. vec.len() {
 		if !vec[index].1.is_zero() {
-			vec[cursor] = vec[index].clone();
+			vec.swap(cursor, index);
+			// vec[cursor] = vec[index].clone();
 			cursor += 1;
 		}
 	}
