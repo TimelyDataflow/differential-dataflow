@@ -11,32 +11,32 @@ pub mod weighted;
 pub mod unordered;
 
 use std::rc::Rc;
-use owning_ref::OwningRef;
+use owning_ref::{OwningRef, Erased};
 
 /// A collection of tuples, and types for building and enumerating them.
 ///
 /// There are some implicit assumptions about the elements in trie-structured data, mostly that
 /// the items have some `(key, val)` structure. Perhaps we will nail these down better in the
 /// future and get a better name for the trait.
-pub trait Trie<B>  : ::std::marker::Sized {
+pub trait Trie  : ::std::marker::Sized {
 	/// The type of item from which the type is constructed.
 	type Item;
 	/// The type of cursor used to navigate the type.
 	type Cursor: Cursor;
 	/// The type used to merge instances of the type together.
-	type MergeBuilder: MergeBuilder<B, Trie=Self>;
+	type MergeBuilder: MergeBuilder<Trie=Self>;
 	/// The type used to assemble instances of the type from its `Item`s.
-	type TupleBuilder: TupleBuilder<B, Trie=Self, Item=Self::Item>;
+	type TupleBuilder: TupleBuilder<Trie=Self, Item=Self::Item>;
 
 	/// The number of distinct keys, as distinct from the total number of tuples.
 	fn keys(&self) -> usize;
 	/// The total number of tuples in the collection.
 	fn tuples(&self) -> usize;
 	/// Returns a cursor capable of navigating the collection.
-	fn cursor(&self, owned_self: OwningRef<Rc<B>, Self>) -> Self::Cursor { self.cursor_from(owned_self, 0, self.keys()) }
+	fn cursor(&self, owned_self: OwningRef<Rc<Erased>, Self>) -> Self::Cursor { self.cursor_from(owned_self, 0, self.keys()) }
 	/// Returns a cursor over a range of data, commonly used by others to restrict navigation to 
 	/// sub-collections.
-	fn cursor_from(&self, owned_self: OwningRef<Rc<B>, Self>, lower: usize, upper: usize) -> Self::Cursor;
+	fn cursor_from(&self, owned_self: OwningRef<Rc<Erased>, Self>, lower: usize, upper: usize) -> Self::Cursor;
 
 	/// Merges two collections into a third.
 	///
@@ -52,9 +52,9 @@ pub trait Trie<B>  : ::std::marker::Sized {
 }
 
 /// A type used to assemble collections.
-pub trait Builder<B> {
+pub trait Builder {
 	/// The type of collection produced.
-	type Trie: Trie<B>;
+	type Trie: Trie;
 	/// Requests a commitment to the offset of the current-most sub-collection.
 	///
 	/// This is most often used by parent collections to indicate that some set of values are now
@@ -66,7 +66,7 @@ pub trait Builder<B> {
 }
 
 /// A type used to assemble collections by merging other instances.
-pub trait MergeBuilder<B> : Builder<B> {
+pub trait MergeBuilder : Builder {
 	/// Allocates an instance of the builder with sufficient capacity to contain the merged data.
 	fn with_capacity(other1: &Self::Trie, other2: &Self::Trie) -> Self;
 	/// Copies sub-collections of `other` into this collection.
@@ -76,7 +76,7 @@ pub trait MergeBuilder<B> : Builder<B> {
 }
 
 /// A type used to assemble collections from ordered sequences of tuples.
-pub trait TupleBuilder<B> : Builder<B> {
+pub trait TupleBuilder : Builder {
 	/// The type of item accepted for construction.
 	type Item;
 	/// Allocates a new builder.
