@@ -39,8 +39,8 @@ impl<K: Ord+Clone, L: Trie> Trie for OrderedLayer<K, L> {
 			let child_lower = self.offs[lower];
 			let child_upper = self.offs[lower + 1];
 			OrderedCursor {
-				keys: owned_self.clone().map(|x| &x.keys),
-				offs: owned_self.clone().map(|x| &x.offs),
+				keys: owned_self.clone().map(|x| &x.keys[..]),
+				offs: owned_self.clone().map(|x| &x.offs[..]),
 				bounds: (lower, upper),
 				child: self.vals.cursor_from(owned_self.map(|x| &x.vals), child_lower, child_upper),
 				pos: lower,
@@ -48,8 +48,8 @@ impl<K: Ord+Clone, L: Trie> Trie for OrderedLayer<K, L> {
 		}
 		else {
 			OrderedCursor {
-				keys: owned_self.clone().map(|x| &x.keys),
-				offs: owned_self.clone().map(|x| &x.offs),
+				keys: owned_self.clone().map(|x| &x.keys[..]),
+				offs: owned_self.clone().map(|x| &x.offs[..]),
 				bounds: (0, 0),
 				child: self.vals.cursor_from(owned_self.map(|x| &x.vals), 0, 0),
 				pos: 0,
@@ -190,8 +190,8 @@ impl<K: Ord+Clone, L: TupleBuilder> TupleBuilder for OrderedBuilder<K, L> {
 /// A cursor with a child cursor that is updated as we move.
 #[derive(Debug)]
 pub struct OrderedCursor<K: Ord, L: Cursor> {
-	keys: OwningRef<Rc<Erased>, Vec<K>>,
-	offs: OwningRef<Rc<Erased>, Vec<usize>>,
+	keys: OwningRef<Rc<Erased>, [K]>,
+	offs: OwningRef<Rc<Erased>, [usize]>,
 	pos: usize,
 	bounds: (usize, usize),
 	/// The cursor for the trie layer below this one.

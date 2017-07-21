@@ -80,7 +80,7 @@ impl<K: Clone+HashOrdered+Default, L: Trie> Trie for HashedLayer<K, L> {
 				shift: shift,
 				bounds: (lower, upper),
 				pos: pos,
-				keys: owned_self.clone().map(|x| &x.keys),
+				keys: owned_self.clone().map(|x| &x.keys[..]),
 				child: self.vals.cursor_from(owned_self.map(|x| &x.vals), self.keys[pos].get_lower(), self.keys[pos].get_upper())
 			}
 		}
@@ -89,7 +89,7 @@ impl<K: Clone+HashOrdered+Default, L: Trie> Trie for HashedLayer<K, L> {
 				shift: 0,
 				bounds: (0, 0),
 				pos: 0,
-				keys: owned_self.clone().map(|x| &x.keys), // &self.keys,
+				keys: owned_self.clone().map(|x| &x.keys[..]), // &self.keys,
 				child: self.vals.cursor_from(owned_self.map(|x| &x.vals), 0, 0),
 			}
 		}
@@ -405,7 +405,7 @@ pub struct HashedCursor<K: HashOrdered, L: Cursor> {
 	bounds: (usize, usize),	// bounds of slice of self.keys.
 	pos: usize,				// <-- current cursor position.
 
-	keys: OwningRef<Rc<Erased>, Vec<Entry<K>>>,
+	keys: OwningRef<Rc<Erased>, [Entry<K>]>,
 	/// A cursor for the layer below this one.
 	pub child: L,
 }

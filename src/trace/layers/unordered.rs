@@ -23,7 +23,7 @@ impl<K: Clone> Trie for UnorderedLayer<K> {
 	fn cursor_from(&self, owned_self: OwningRef<Rc<Erased>, Self>, lower: usize, upper: usize) -> Self::Cursor {	
 		// println!("unordered: {} .. {}", lower, upper);
 		UnorderedCursor {
-			vals: owned_self.map(|x| &x.vals),
+			vals: owned_self.map(|x| &x.vals[..]),
 			bounds: (lower, upper),
 			pos: lower,
 		}
@@ -70,7 +70,7 @@ impl<K: Clone> TupleBuilder for UnorderedBuilder<K> {
 /// This cursor does not support `seek`, though I'm not certain how to expose this.
 #[derive(Debug)]
 pub struct UnorderedCursor<K> {
-	vals: OwningRef<Rc<Erased>, Vec<K>>,
+	vals: OwningRef<Rc<Erased>, [K]>,
 	pos: usize,
 	bounds: (usize, usize),
 }

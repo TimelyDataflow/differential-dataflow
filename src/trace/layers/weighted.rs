@@ -22,8 +22,8 @@ impl<K: Ord+Clone> Trie for WeightedLayer<K> {
 	fn tuples(&self) -> usize { <WeightedLayer<K> as Trie>::keys(&self) }
 	fn cursor_from(&self, owned_self: OwningRef<Rc<Erased>, Self>, lower: usize, upper: usize) -> Self::Cursor {	
 		WeightedCursor {
-			keys: owned_self.clone().map(|x| &x.keys),
-			wgts: owned_self.clone().map(|x| &x.wgts),
+			keys: owned_self.clone().map(|x| &x.keys[..]),
+			wgts: owned_self.clone().map(|x| &x.wgts[..]),
 			bounds: (lower, upper),
 			pos: lower,
 		}
@@ -141,8 +141,8 @@ impl<K: Ord+Clone> TupleBuilder for WeightedBuilder<K> {
 
 /// A cursor with a child cursor that is updated as we move.
 pub struct WeightedCursor<K: Ord> {
-	keys: OwningRef<Rc<Erased>, Vec<K>>,
-	wgts: OwningRef<Rc<Erased>, Vec<isize>>,
+	keys: OwningRef<Rc<Erased>, [K]>,
+	wgts: OwningRef<Rc<Erased>, [isize]>,
 	pos: usize,
 	bounds: (usize, usize),
 }
