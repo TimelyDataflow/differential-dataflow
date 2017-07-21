@@ -9,7 +9,7 @@ use difference::Diff;
 use super::{Trie, Cursor, Builder, MergeBuilder, TupleBuilder};
 
 /// A layer of unordered values. 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub struct OrderedLeaf<K, R> {
     /// Unordered values.
     pub vals: Vec<(K, R)>,
