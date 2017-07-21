@@ -442,8 +442,8 @@ impl<G, K, V, R1, T1> JoinCore<G, K, V, R1> for Arranged<G,K,V,R1,T1>
         let mut trace2 = Some(other.trace.clone());
 
         // acknowledged frontier for each input.
-        let mut acknowledged1 = vec![G::Timestamp::min()];
-        let mut acknowledged2 = vec![G::Timestamp::min()];
+        let mut acknowledged1 = vec![G::Timestamp::minimum()];
+        let mut acknowledged2 = vec![G::Timestamp::minimum()];
 
         // deferred work of batches from each input.
         let mut todo1 = Vec::new();
@@ -484,22 +484,9 @@ impl<G, K, V, R1, T1> JoinCore<G, K, V, R1> for Arranged<G,K,V,R1,T1>
                 }
             });
 
-            // shut down or advance trace2. if the frontier is empty we can shut it down,
-            // and otherwise we can advance the trace by the acknowledged elements of the other input,
-            // as we may still use them as thresholds (ie we must preserve `le` wrt `acknowledged`).
-            if trace2.is_some() && notificator.frontier(0).len() == 0 { trace2 = None; }
-            if let Some(ref mut trace2) = trace2 {
-                trace2.advance_by(notificator.frontier(0));
-                trace2.distinguish_since(&acknowledged2[..]);
-            }
-
-            // shut down or advance trace1.
-            if trace1.is_some() && notificator.frontier(1).len() == 0 { trace1 = None; }
-            if let Some(ref mut trace1) = trace1 {
-                trace1.advance_by(notificator.frontier(1));
-                trace1.distinguish_since(&acknowledged1[..]);
-            }
-
+            // An arbitrary number, whose value guides the "responsiveness" of `join`; the operator
+            // yields after producing this many records, to allow downstream operators to work and 
+            // move the produced records around.
             let mut fuel = 1_000_000;
 
             // perform some amount of outstanding work. 
@@ -512,6 +499,24 @@ impl<G, K, V, R1, T1> JoinCore<G, K, V, R1> for Arranged<G,K,V,R1,T1>
             while todo2.len() > 0 && fuel > 0 {
                 todo2[0].work(output, &|k,v1,v2| result(k,v1,v2), &mut fuel);
                 if !todo2[0].work_remains() { todo2.remove(0); }
+            }
+
+            // shut down or advance trace2. if the frontier is empty we can shut it down,
+            // and otherwise we can advance the trace by the acknowledged elements of the other input,
+            // as we may still use them as thresholds (ie we must preserve `le` wrt `acknowledged`).
+            // NOTE: We release capabilities here to allow light work to complete, which may result in 
+            //       unique ownership which would enable `advance_mut`.
+            if trace2.is_some() && notificator.frontier(0).len() == 0 { trace2 = None; }
+            if let Some(ref mut trace2) = trace2 {
+                trace2.advance_by(notificator.frontier(0));
+                trace2.distinguish_since(&acknowledged2[..]);
+            }
+
+            // shut down or advance trace1.
+            if trace1.is_some() && notificator.frontier(1).len() == 0 { trace1 = None; }
+            if let Some(ref mut trace1) = trace1 {
+                trace1.advance_by(notificator.frontier(1));
+                trace1.distinguish_since(&acknowledged1[..]);
             }
 
         })

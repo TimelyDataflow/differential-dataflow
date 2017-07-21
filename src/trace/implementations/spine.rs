@@ -103,8 +103,8 @@ where
 	fn new() -> Self {
 		Spine { 
 			phantom: ::std::marker::PhantomData,
-			advance_frontier: vec![<T as Lattice>::min()],
-			through_frontier: vec![<T as Lattice>::min()],
+			advance_frontier: vec![<T as Lattice>::minimum()],
+			through_frontier: vec![<T as Lattice>::minimum()],
 			merging: Vec::new(),
 			pending: Vec::new(),
 		}
