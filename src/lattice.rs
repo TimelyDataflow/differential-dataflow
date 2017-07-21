@@ -16,10 +16,10 @@ pub trait Lattice : PartialOrder {
     /// ```
     /// use differential_dataflow::lattice::Lattice;
     ///
-    /// let min = <usize as Lattice>::min();
+    /// let min = <usize as Lattice>::minimum();
     /// assert_eq!(min, usize::min_value());
     /// ```
-    fn min() -> Self;
+    fn minimum() -> Self;
 
     /// The largest element of the type.
     ///
@@ -28,10 +28,10 @@ pub trait Lattice : PartialOrder {
     /// ```
     /// use differential_dataflow::lattice::Lattice;
     ///
-    /// let max = <usize as Lattice>::max();
+    /// let max = <usize as Lattice>::maximum();
     /// assert_eq!(max, usize::max_value());
     /// ```
-    fn max() -> Self;
+    fn maximum() -> Self;
 
     /// The smallest element greater than or equal to both arguments.
     ///
@@ -83,7 +83,7 @@ pub trait Lattice : PartialOrder {
     /// the sense that any other element with the same property (compares identically to times
     /// greater or equal to `frontier`) must be less or equal to the result.
     ///
-    /// When provided an empty frontier, the result is `<Self as Lattice>::max()`. It should
+    /// When provided an empty frontier, the result is `<Self as Lattice>::maximum()`. It should
     /// perhaps be distinguished by an `Option<Self>` type, but the `None` case only happens
     /// when `frontier` is empty, which the caller can see for themselves if they want to be
     /// clever.
@@ -126,7 +126,7 @@ pub trait Lattice : PartialOrder {
             result
         }  
         else {
-            Self::max()
+            Self::maximum()
         }
     }
 }
@@ -167,9 +167,9 @@ use timely::progress::nested::product::Product;
 
 impl<T1: Lattice, T2: Lattice> Lattice for Product<T1, T2> {
     #[inline(always)]
-    fn min() -> Self { Product::new(T1::min(), T2::min()) }
+    fn minimum() -> Self { Product::new(T1::minimum(), T2::minimum()) }
     #[inline(always)]
-    fn max() -> Self { Product::new(T1::max(), T2::max()) }
+    fn maximum() -> Self { Product::new(T1::maximum(), T2::maximum()) }
     #[inline(always)]
     fn join(&self, other: &Product<T1, T2>) -> Product<T1, T2> {
         Product {
@@ -203,9 +203,9 @@ use timely::progress::timestamp::RootTimestamp;
 
 impl Lattice for RootTimestamp {
     #[inline(always)]
-    fn min() -> RootTimestamp { RootTimestamp }
+    fn minimum() -> RootTimestamp { RootTimestamp }
     #[inline(always)]
-    fn max() -> RootTimestamp { RootTimestamp }
+    fn maximum() -> RootTimestamp { RootTimestamp }
     #[inline(always)]
     fn join(&self, _: &RootTimestamp) -> RootTimestamp { RootTimestamp }
     #[inline(always)]
@@ -216,9 +216,9 @@ impl TotalOrder for RootTimestamp { }
 
 impl Lattice for usize {
     #[inline(always)]
-    fn min() -> usize { usize::min_value() }
+    fn minimum() -> usize { usize::min_value() }
     #[inline(always)]
-    fn max() -> usize { usize::max_value() }
+    fn maximum() -> usize { usize::max_value() }
     #[inline(always)]
     fn join(&self, other: &usize) -> usize { ::std::cmp::max(*self, *other) }
     #[inline(always)]
@@ -229,9 +229,9 @@ impl TotalOrder for usize { }
 
 impl Lattice for u64 {
     #[inline(always)]
-    fn min() -> u64 { u64::min_value() }
+    fn minimum() -> u64 { u64::min_value() }
     #[inline(always)]
-    fn max() -> u64 { u64::max_value() }
+    fn maximum() -> u64 { u64::max_value() }
     #[inline(always)]
     fn join(&self, other: &u64) -> u64 { ::std::cmp::max(*self, *other) }
     #[inline(always)]
@@ -242,9 +242,9 @@ impl TotalOrder for u64 { }
 
 impl Lattice for u32 {
     #[inline(always)]
-    fn min() -> u32 { u32::min_value() }
+    fn minimum() -> u32 { u32::min_value() }
     #[inline(always)]
-    fn max() -> u32 { u32::max_value() }
+    fn maximum() -> u32 { u32::max_value() }
     #[inline(always)]
     fn join(&self, other: &u32) -> u32 { ::std::cmp::max(*self, *other) }
     #[inline(always)]
@@ -255,9 +255,9 @@ impl TotalOrder for u32 { }
 
 impl Lattice for i32 {
     #[inline(always)]
-    fn min() -> i32 { i32::min_value() }
+    fn minimum() -> i32 { i32::min_value() }
     #[inline(always)]
-    fn max() -> i32 { i32::max_value() }
+    fn maximum() -> i32 { i32::max_value() }
     #[inline(always)]
     fn join(&self, other: &i32) -> i32 { ::std::cmp::max(*self, *other) }
     #[inline(always)]
@@ -268,9 +268,9 @@ impl TotalOrder for i32 { }
 
 impl Lattice for () {
     #[inline(always)]
-    fn min() -> () { () }
+    fn minimum() -> () { () }
     #[inline(always)]
-    fn max() -> () { () }
+    fn maximum() -> () { () }
     #[inline(always)]
     fn join(&self, _other: &()) -> () { () }
     #[inline(always)]

@@ -22,7 +22,7 @@ pub struct RadixBatcher<K: HashOrdered, V, T: PartialOrd, R: Diff, B: Batch<K, V
 
 impl<K, V, T, R, B> RadixBatcher<K, V, T, R, B>
 where 
-    K: Ord+HashOrdered, 
+    K: Ord+HashOrdered,
     V: Ord,
     T: Lattice+Ord,
     R: Diff,
@@ -102,7 +102,7 @@ where
             sorted: 0,
             stash: Vec::new(),
             frontier: Antichain::new(),
-            lower: vec![T::min()],
+            lower: vec![T::minimum()],
         } 
     }
 

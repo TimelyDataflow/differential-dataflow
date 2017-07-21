@@ -77,7 +77,7 @@ where
             sorter: MSBRadixSorter::new(),
             sorted: None,
             frontier: Antichain::new(),
-            lower: vec![T::min()],
+            lower: vec![T::minimum()],
         } 
     }
 

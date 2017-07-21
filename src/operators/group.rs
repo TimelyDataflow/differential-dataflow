@@ -325,10 +325,10 @@ where
         let mut upper_limit = Vec::<G::Timestamp>::new();
 
         // tracks frontiers received from batches, for sanity.
-        let mut upper_received = vec![<G::Timestamp as Lattice>::min()];
+        let mut upper_received = vec![<G::Timestamp as Lattice>::minimum()];
 
         // We separately track the frontiers for what we have sent, and what we have sealed. 
-        let mut lower_issued = vec![<G::Timestamp as Lattice>::min()];
+        let mut lower_issued = vec![<G::Timestamp as Lattice>::minimum()];
 
         let id = self.stream.scope().index();
 
@@ -801,7 +801,7 @@ mod history_replay {
             }
 
             // Determine the meet of times in `batch` and `times`.
-            let mut meet = T::max();
+            let mut meet = T::maximum();
             if self.meets.len() > 0 { meet = meet.meet(&self.meets[0]); }
             if let Some(time) = self.batch_history.meet() { meet = meet.meet(&time); }
 
@@ -842,13 +842,13 @@ mod history_replay {
                   !self.batch_history.is_done() || self.synth_times.len() > 0 || times_slice.len() > 0 {
 
                 // Determine the next time we will process from the available source of times.
-                let mut next_time = T::max();
+                let mut next_time = T::maximum();
                 if let Some(time) = self.input_history.time() { if time.cmp(&next_time) == Ordering::Less { next_time = time.clone(); } }
                 if let Some(time) = self.output_history.time() { if time.cmp(&next_time) == Ordering::Less { next_time = time.clone(); } }
                 if let Some(time) = self.batch_history.time() { if time.cmp(&next_time) == Ordering::Less { next_time = time.clone(); } }
                 if let Some(time) = self.synth_times.first() { if time.cmp(&next_time) == Ordering::Less { next_time = time.clone(); } }
                 if let Some(time) = times_slice.first() { if time.cmp(&next_time) == Ordering::Less { next_time = time.clone(); } }
-                assert!(next_time != T::max());
+                assert!(next_time != T::maximum());
 
                 // advance input and output histories.
                 self.input_history.step_while_time_is(&next_time);
@@ -1028,7 +1028,7 @@ mod history_replay {
                 }
 
                 // Update `meet` to track the meet of each source of times.
-                meet = T::max();
+                meet = T::maximum();
                 if let Some(time) = self.batch_history.meet() { meet = meet.meet(time); }
                 if let Some(time) = self.input_history.meet() { meet = meet.meet(time); }
                 if let Some(time) = self.output_history.meet() { meet = meet.meet(time); }
@@ -1133,7 +1133,7 @@ mod history_replay_prior {
         {
             // The first thing we need to know is which times and values we are worried about.
             // We use `T::min` as the lower bound with which we join everything to avoid changing the times.
-            self.batch_history.reload(key, batch_cursor, &T::min());
+            self.batch_history.reload(key, batch_cursor, &T::minimum());
 
             // Determine a lower frontier of interesting times.
             // I'm not sure what we do with this other than a `debug_assert` and re-scan it to produce `meet`.
@@ -1155,7 +1155,7 @@ mod history_replay_prior {
 
             // All times we encounter will be at least `meet`, and so long as we just join with and compare 
             // against interesting times, it is safe to advance all historical times by `meet`. 
-            let mut meet = self.lower.iter().fold(T::max(), |meet, time| meet.meet(time));
+            let mut meet = self.lower.iter().fold(T::maximum(), |meet, time| meet.meet(time));
 
             // We build "histories" of the input and output, with respect to the times we may encounter in this
             // invocation of `compute`. This means we advance times by joining them with `meet`, which can yield
@@ -1206,7 +1206,7 @@ mod history_replay_prior {
                 while times_slice.len() > 0 || batch_slice.len() > 0 || input_slice.len() > 0 || output_slice.len() > 0 {
 
                     // Determine the next time.
-                    let mut next = T::max();
+                    let mut next = T::maximum();
                     if times_slice.len() > 0 && times_slice[0].cmp(&next) == Ordering::Less { next = times_slice[0].clone(); }
                     if batch_slice.len() > 0 && batch_slice[0].0.cmp(&next) == Ordering::Less { next = batch_slice[0].0.clone(); }
                     if input_slice.len() > 0 && input_slice[0].0.cmp(&next) == Ordering::Less { next = input_slice[0].0.clone(); }
@@ -1253,7 +1253,7 @@ mod history_replay_prior {
             while known_slice.len() > 0 || self.synth_times.len() > 0 {
 
                 // Determine the next time to process.
-                let mut next_time = T::max();
+                let mut next_time = T::maximum();
                 if known_slice.len() > 0 && next_time.cmp(&known_slice[0]) == Ordering::Greater {
                     next_time = known_slice[0].clone();
                 }
@@ -1462,9 +1462,9 @@ mod history_replay_prior {
                 // Update `meet`, and advance and deduplicate times in `self.times_current`.
                 // NOTE: This does not advance input or output collections, which is done when the are accumulated.
                 if meets_slice.len() > 0 || self.synth_times.len() > 0 {
-                    // Start from `T::max()` and take the meet with each synthetic time. Also meet with the first 
+                    // Start from `T::maximum()` and take the meet with each synthetic time. Also meet with the first 
                     // element of `meets_slice` if it exists.
-                    meet = self.synth_times.iter().fold(T::max(), |meet, time| meet.meet(time));
+                    meet = self.synth_times.iter().fold(T::maximum(), |meet, time| meet.meet(time));
                     if meets_slice.len() > 0 { meet = meet.meet(&meets_slice[0]); }
 
                     // Advance the contents of `self.times_current`.
