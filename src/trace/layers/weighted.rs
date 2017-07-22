@@ -1,7 +1,7 @@
 //! Implementation using ordered keys and exponential search.
 
 use std::rc::Rc;
-use owning_ref::OwningRef;
+use owning_ref::{OwningRef, Erased};
 use super::{Trie, Cursor, Builder, MergeBuilder, TupleBuilder};
 
 /// A layer with sorted keys and integer weights.
@@ -13,17 +13,17 @@ pub struct WeightedLayer<K: Ord> {
 	pub wgts: Vec<isize>,
 }
 
-impl<B, K: Ord+Clone> Trie<B> for WeightedLayer<K> {
+impl<K: Ord+Clone> Trie for WeightedLayer<K> {
 	type Item = (K, isize);
-	type Cursor = WeightedCursor<B, K>;
+	type Cursor = WeightedCursor<K>;
 	type MergeBuilder = WeightedBuilder<K>;
 	type TupleBuilder = WeightedBuilder<K>;
 	fn keys(&self) -> usize { self.keys.len() }
-	fn tuples(&self) -> usize { <WeightedLayer<K> as Trie<B>>::keys(&self) }
-	fn cursor_from(&self, owned_self: OwningRef<Rc<B>, Self>, lower: usize, upper: usize) -> Self::Cursor {	
+	fn tuples(&self) -> usize { <WeightedLayer<K> as Trie>::keys(&self) }
+	fn cursor_from(&self, owned_self: OwningRef<Rc<Erased>, Self>, lower: usize, upper: usize) -> Self::Cursor {	
 		WeightedCursor {
-			keys: owned_self.clone().map(|x| &x.keys),
-			wgts: owned_self.clone().map(|x| &x.wgts),
+			keys: owned_self.clone().map(|x| &x.keys[..]),
+			wgts: owned_self.clone().map(|x| &x.wgts[..]),
 			bounds: (lower, upper),
 			pos: lower,
 		}
@@ -39,7 +39,7 @@ pub struct WeightedBuilder<K: Ord> {
 	pub wgts: Vec<isize>,
 }
 
-impl<B, K: Ord+Clone> Builder<B> for WeightedBuilder<K> {
+impl<K: Ord+Clone> Builder for WeightedBuilder<K> {
 	type Trie = WeightedLayer<K>; 
 	fn boundary(&mut self) -> usize { 
 		self.is_new = true; 
@@ -53,12 +53,12 @@ impl<B, K: Ord+Clone> Builder<B> for WeightedBuilder<K> {
 	}
 }
 
-impl<B, K: Ord+Clone> MergeBuilder<B> for WeightedBuilder<K> {
+impl<K: Ord+Clone> MergeBuilder for WeightedBuilder<K> {
 	fn with_capacity(other1: &Self::Trie, other2: &Self::Trie) -> Self {
 		WeightedBuilder {
 			is_new: false,
-			keys: Vec::with_capacity(<WeightedLayer<K> as Trie<B>>::keys(other1) + <WeightedLayer<K> as Trie<B>>::keys(other2)),
-			wgts: Vec::with_capacity(<WeightedLayer<K> as Trie<B>>::keys(other1) + <WeightedLayer<K> as Trie<B>>::keys(other2)),
+			keys: Vec::with_capacity(<WeightedLayer<K> as Trie>::keys(other1) + <WeightedLayer<K> as Trie>::keys(other2)),
+			wgts: Vec::with_capacity(<WeightedLayer<K> as Trie>::keys(other1) + <WeightedLayer<K> as Trie>::keys(other2)),
 		}
 	}
 	fn copy_range(&mut self, other: &Self::Trie, lower: usize, upper: usize) {
@@ -77,7 +77,7 @@ impl<B, K: Ord+Clone> MergeBuilder<B> for WeightedBuilder<K> {
 				::std::cmp::Ordering::Less => {
 					// determine how far we can advance lower1 until we reach/pass lower2
 					let step = 1 + advance(&trie1.keys[(1+lower1)..upper1], |x| x < &trie2.keys[lower2]);
-					<WeightedBuilder<K> as MergeBuilder<B>>::copy_range(self, trie1, lower1, lower1 + step);
+					<WeightedBuilder<K> as MergeBuilder>::copy_range(self, trie1, lower1, lower1 + step);
 					lower1 += step;
 				}
 				::std::cmp::Ordering::Equal => {
@@ -93,20 +93,20 @@ impl<B, K: Ord+Clone> MergeBuilder<B> for WeightedBuilder<K> {
 				::std::cmp::Ordering::Greater => {
 					// determine how far we can advance lower2 until we reach/pass lower1
 					let step = 1 + advance(&trie2.keys[(1+lower2)..upper2], |x| x < &trie1.keys[lower1]);
-					<WeightedBuilder<K> as MergeBuilder<B>>::copy_range(self, trie2, lower2, lower2 + step);
+					<WeightedBuilder<K> as MergeBuilder>::copy_range(self, trie2, lower2, lower2 + step);
 					lower2 += step;
 				}
 			}
 		}
 
-		if lower1 < upper1 { <WeightedBuilder<K> as MergeBuilder<B>>::copy_range(self, trie1, lower1, upper1); }
-		if lower2 < upper2 { <WeightedBuilder<K> as MergeBuilder<B>>::copy_range(self, trie2, lower2, upper2); }
+		if lower1 < upper1 { <WeightedBuilder<K> as MergeBuilder>::copy_range(self, trie1, lower1, upper1); }
+		if lower2 < upper2 { <WeightedBuilder<K> as MergeBuilder>::copy_range(self, trie2, lower2, upper2); }
 
 		self.keys.len()
 	}
 }
 
-impl<B, K: Ord+Clone> TupleBuilder<B> for WeightedBuilder<K> {
+impl<K: Ord+Clone> TupleBuilder for WeightedBuilder<K> {
 
 	type Item = (K, isize);
 	fn new() -> Self { 
@@ -140,19 +140,19 @@ impl<B, K: Ord+Clone> TupleBuilder<B> for WeightedBuilder<K> {
 }
 
 /// A cursor with a child cursor that is updated as we move.
-pub struct WeightedCursor<B, K: Ord> {
-	keys: OwningRef<Rc<B>, Vec<K>>,
-	wgts: OwningRef<Rc<B>, Vec<isize>>,
+pub struct WeightedCursor<K: Ord> {
+	keys: OwningRef<Rc<Erased>, [K]>,
+	wgts: OwningRef<Rc<Erased>, [isize]>,
 	pos: usize,
 	bounds: (usize, usize),
 }
 
-impl<B, K: Ord> WeightedCursor<B, K> {
+impl<K: Ord> WeightedCursor<K> {
 	/// Recovers the weight of the item.
 	pub fn weight(&self) -> isize { self.wgts[self.bounds.0] }
 }
 
-impl<B, K: Ord> Cursor for WeightedCursor<B, K> {
+impl<K: Ord> Cursor for WeightedCursor<K> {
 	type Key = K;
 	fn key(&self) -> &Self::Key { &self.keys[self.pos] }
 	fn step(&mut self) {

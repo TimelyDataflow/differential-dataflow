@@ -44,19 +44,19 @@ pub struct HashValBatch<K: HashOrdered, V: Ord, T: Lattice, R> {
 }
 
 impl<K, V, T, R> BatchReader<K, V, T, R> for Rc<HashValBatch<K, V, T, R>>
-where K: Clone+Default+HashOrdered, V: Clone+Ord, T: Lattice+Ord+Clone+Default, R: Diff {
+where K: Clone+Default+HashOrdered+'static, V: Clone+Ord+'static, T: Lattice+Ord+Clone+Default+'static, R: Diff {
 	type Cursor = HashValCursor<K, V, T, R>;
 	fn cursor(&self) -> Self::Cursor { 
 		HashValCursor {
-			cursor: self.layer.cursor(OwningRef::new(self.clone()).map(|x| &x.layer)),
+			cursor: self.layer.cursor(OwningRef::new(self.clone()).map(|x| &x.layer).erase_owner()),
 		}
 	}
-	fn len(&self) -> usize { <HashedLayer<K, OrderedLayer<V, UnorderedLayer<(T, R)>>> as Trie<HashValBatch<K, V, T, R>>>::tuples(&self.layer) }
+	fn len(&self) -> usize { <HashedLayer<K, OrderedLayer<V, UnorderedLayer<(T, R)>>> as Trie>::tuples(&self.layer) }
 	fn description(&self) -> &Description<T> { &self.desc }
 }
 
 impl<K, V, T, R> Batch<K, V, T, R> for Rc<HashValBatch<K, V, T, R>>
-where K: Clone+Default+HashOrdered, V: Clone+Ord, T: Lattice+Ord+Clone+Default, R: Diff {
+where K: Clone+Default+HashOrdered+'static, V: Clone+Ord+'static, T: Lattice+Ord+Clone+Default+'static, R: Diff {
 	type Batcher = RadixBatcher<K, V, T, R, Self>;
 	type Builder = HashValBuilder<K, V, T, R>;
 	fn merge(&self, other: &Self) -> Self {
@@ -73,7 +73,7 @@ where K: Clone+Default+HashOrdered, V: Clone+Ord, T: Lattice+Ord+Clone+Default, 
 		};
 		
 		Rc::new(HashValBatch {
-			layer: <HashedLayer<K, OrderedLayer<V, UnorderedLayer<(T, R)>>> as Trie<HashValBatch<K, V, T, R>>>::merge(&self.layer, &other.layer),
+			layer: <HashedLayer<K, OrderedLayer<V, UnorderedLayer<(T, R)>>> as Trie>::merge(&self.layer, &other.layer),
 			desc: Description::new(self.desc.lower(), other.desc.upper(), since),
 		})
 	}
@@ -82,7 +82,7 @@ where K: Clone+Default+HashOrdered, V: Clone+Ord, T: Lattice+Ord+Clone+Default, 
 /// A cursor for navigating a single layer.
 #[derive(Debug)]
 pub struct HashValCursor<K: Clone+HashOrdered, V: Ord+Clone, T: Lattice+Ord+Clone, R: Copy> {
-	cursor: HashedCursor<HashValBatch<K, V, T, R>, K, OrderedCursor<HashValBatch<K, V, T, R>, V, UnorderedCursor<HashValBatch<K, V, T, R>, (T, R)>>>,
+	cursor: HashedCursor<K, OrderedCursor<V, UnorderedCursor<(T, R)>>>,
 }
 
 impl<K: Clone+HashOrdered, V: Ord+Clone, T: Lattice+Ord+Clone, R: Copy> Cursor<K, V, T, R> for HashValCursor<K, V, T, R> {
@@ -108,20 +108,20 @@ impl<K: Clone+HashOrdered, V: Ord+Clone, T: Lattice+Ord+Clone, R: Copy> Cursor<K
 
 /// A builder for creating layers from unsorted update tuples.
 pub struct HashValBuilder<K: HashOrdered, V: Ord, T: Ord+Lattice, R: Diff> {
-	builder: HashedBuilder<HashValBatch<K, V, T, R>, K, OrderedBuilder<HashValBatch<K, V, T, R>, V, UnorderedBuilder<(T, R)>>>,
+	builder: HashedBuilder<K, OrderedBuilder<V, UnorderedBuilder<(T, R)>>>,
 }
 
 impl<K, V, T, R> Builder<K, V, T, R, Rc<HashValBatch<K, V, T, R>>> for HashValBuilder<K, V, T, R> 
-where K: Clone+Default+HashOrdered, V: Ord+Clone, T: Lattice+Ord+Clone+Default, R: Diff {
+where K: Clone+Default+HashOrdered+'static, V: Ord+Clone+'static, T: Lattice+Ord+Clone+Default+'static, R: Diff {
 
 	fn new() -> Self { 
 		HashValBuilder { 
-			builder: HashedBuilder::<HashValBatch<K, V, T, R>, K, OrderedBuilder<HashValBatch<K, V, T, R>, V, UnorderedBuilder<(T, R)>>>::new() 
+			builder: HashedBuilder::<K, OrderedBuilder<V, UnorderedBuilder<(T, R)>>>::new() 
 		} 
 	}
 	fn with_capacity(cap: usize) -> Self { 
 		HashValBuilder { 
-			builder: HashedBuilder::<HashValBatch<K, V, T, R>, K, OrderedBuilder<HashValBatch<K, V, T, R>, V, UnorderedBuilder<(T, R)>>>::with_capacity(cap) 
+			builder: HashedBuilder::<K, OrderedBuilder<V, UnorderedBuilder<(T, R)>>>::with_capacity(cap) 
 		} 
 	}
 
@@ -152,21 +152,21 @@ pub struct HashKeyBatch<K: HashOrdered, T: Lattice, R> {
 }
 
 impl<K, T, R> BatchReader<K, (), T, R> for Rc<HashKeyBatch<K, T, R>>
-where K: Clone+Default+HashOrdered, T: Lattice+Ord+Clone+Default, R: Diff {
+where K: Clone+Default+HashOrdered+'static, T: Lattice+Ord+Clone+Default+'static, R: Diff {
 	type Cursor = HashKeyCursor<K, T, R>;
 	fn cursor(&self) -> Self::Cursor { 
 		HashKeyCursor {
 			empty: (),
 			valid: true,
-			cursor: self.layer.cursor(OwningRef::new(self.clone()).map(|x| &x.layer)),
+			cursor: self.layer.cursor(OwningRef::new(self.clone()).map(|x| &x.layer).erase_owner()),
 		} 
 	}
-	fn len(&self) -> usize { <HashedLayer<K, UnorderedLayer<(T, R)>> as Trie<HashKeyBatch<K, T, R>>>::tuples(&self.layer) }
+	fn len(&self) -> usize { <HashedLayer<K, UnorderedLayer<(T, R)>> as Trie>::tuples(&self.layer) }
 	fn description(&self) -> &Description<T> { &self.desc }
 }
 
 impl<K, T, R> Batch<K, (), T, R> for Rc<HashKeyBatch<K, T, R>>
-where K: Clone+Default+HashOrdered, T: Lattice+Ord+Clone+Default, R: Diff {
+where K: Clone+Default+HashOrdered+'static, T: Lattice+Ord+Clone+Default+'static, R: Diff {
 	type Batcher = RadixBatcher<K, (), T, R, Self>;
 	type Builder = HashKeyBuilder<K, T, R>;
 	fn merge(&self, other: &Self) -> Self {
@@ -183,7 +183,7 @@ where K: Clone+Default+HashOrdered, T: Lattice+Ord+Clone+Default, R: Diff {
 		};
 		
 		Rc::new(HashKeyBatch {
-			layer: <HashedLayer<K, UnorderedLayer<(T, R)>> as Trie<HashKeyBatch<K, T, R>>>::merge(&self.layer, &other.layer),
+			layer: <HashedLayer<K, UnorderedLayer<(T, R)>> as Trie>::merge(&self.layer, &other.layer),
 			desc: Description::new(self.desc.lower(), other.desc.upper(), since),
 		})
 	}
@@ -194,7 +194,7 @@ where K: Clone+Default+HashOrdered, T: Lattice+Ord+Clone+Default, R: Diff {
 pub struct HashKeyCursor<K: Clone+HashOrdered, T: Lattice+Ord+Clone, R: Copy> {
 	valid: bool,
 	empty: (),
-	cursor: HashedCursor<HashKeyBatch<K, T, R>, K, UnorderedCursor<HashKeyBatch<K, T, R>, (T, R)>>,
+	cursor: HashedCursor<K, UnorderedCursor<(T, R)>>,
 }
 
 impl<K: Clone+HashOrdered, T: Lattice+Ord+Clone, R: Copy> Cursor<K, (), T, R> for HashKeyCursor<K, T, R> {
@@ -220,20 +220,20 @@ impl<K: Clone+HashOrdered, T: Lattice+Ord+Clone, R: Copy> Cursor<K, (), T, R> fo
 
 /// A builder for creating layers from unsorted update tuples.
 pub struct HashKeyBuilder<K: HashOrdered, T: Ord+Lattice, R: Diff> {
-	builder: HashedBuilder<HashKeyBatch<K, T, R>, K, UnorderedBuilder<(T, R)>>,
+	builder: HashedBuilder<K, UnorderedBuilder<(T, R)>>,
 }
 
 impl<K, T, R> Builder<K, (), T, R, Rc<HashKeyBatch<K, T, R>>> for HashKeyBuilder<K, T, R> 
-where K: Clone+Default+HashOrdered, T: Lattice+Ord+Clone+Default, R: Diff {
+where K: Clone+Default+HashOrdered+'static, T: Lattice+Ord+Clone+Default+'static, R: Diff {
 
 	fn new() -> Self { 
 		HashKeyBuilder { 
-			builder: HashedBuilder::<HashKeyBatch<K, T, R>, K, UnorderedBuilder<(T, R)>>::new() 
+			builder: HashedBuilder::<K, UnorderedBuilder<(T, R)>>::new() 
 		} 
 	}
 	fn with_capacity(cap: usize) -> Self { 
 		HashKeyBuilder { 
-			builder: HashedBuilder::<HashKeyBatch<K, T, R>, K, UnorderedBuilder<(T, R)>>::with_capacity(cap) 
+			builder: HashedBuilder::<K, UnorderedBuilder<(T, R)>>::with_capacity(cap) 
 		} 
 	}
 
