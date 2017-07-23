@@ -15,15 +15,15 @@ pub struct UnorderedLayer<K> {
 
 impl<K: Clone> Trie for UnorderedLayer<K> {
 	type Item = K;
-	type Cursor = UnorderedCursor<K>;
+	type Cursor = UnorderedCursor;
 	type MergeBuilder = UnorderedBuilder<K>;
 	type TupleBuilder = UnorderedBuilder<K>;
 	fn keys(&self) -> usize { self.vals.len() }
 	fn tuples(&self) -> usize { <UnorderedLayer<K> as Trie>::keys(&self) }
-	fn cursor_from(&self, owned_self: OwningRef<Rc<Erased>, Self>, lower: usize, upper: usize) -> Self::Cursor {	
+	fn cursor_from(&self, lower: usize, upper: usize) -> Self::Cursor {	
 		// println!("unordered: {} .. {}", lower, upper);
 		UnorderedCursor {
-			vals: owned_self.map(|x| &x.vals[..]),
+			// vals: owned_self.map(|x| &x.vals[..]),
 			bounds: (lower, upper),
 			pos: lower,
 		}
@@ -69,29 +69,29 @@ impl<K: Clone> TupleBuilder for UnorderedBuilder<K> {
 ///
 /// This cursor does not support `seek`, though I'm not certain how to expose this.
 #[derive(Debug)]
-pub struct UnorderedCursor<K> {
-	vals: OwningRef<Rc<Erased>, [K]>,
+pub struct UnorderedCursor {
+	// vals: OwningRef<Rc<Erased>, [K]>,
 	pos: usize,
 	bounds: (usize, usize),
 }
 
-impl<K: Clone> Cursor for UnorderedCursor<K> {
+impl<K: Clone> Cursor<UnorderedLayer<K>> for UnorderedCursor {
 	type Key = K;
-	fn key(&self) -> &Self::Key { &self.vals[self.pos] }
-	fn step(&mut self) {
+	fn key<'a>(&self, storage: &'a UnorderedLayer<K>) -> &'a Self::Key { &storage.vals[self.pos] }
+	fn step(&mut self, _storage: &UnorderedLayer<K>) {
 		self.pos += 1; 
 		if !self.valid() {
 			self.pos = self.bounds.1;
 		}
 	}
-	fn seek(&mut self, _key: &Self::Key) {
+	fn seek(&mut self, _storage: &UnorderedLayer<K>, _key: &Self::Key) {
 		panic!("seeking in an UnorderedCursor");
 	}
-	fn valid(&self) -> bool { self.pos < self.bounds.1 }
-	fn rewind(&mut self) {
+	fn valid(&self, _storage: &UnorderedLayer<K>) -> bool { self.pos < self.bounds.1 }
+	fn rewind(&mut self, _storage: &UnorderedLayer<K>) {
 		self.pos = self.bounds.0;
 	}
-	fn reposition(&mut self, lower: usize, upper: usize) {
+	fn reposition(&mut self, _storage: &UnorderedLayer<K>, lower: usize, upper: usize) {
 		self.pos = lower;
 		self.bounds = (lower, upper);
 	}

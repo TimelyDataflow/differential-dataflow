@@ -1,8 +1,6 @@
 //! Implementation using ordered keys and exponential search.
 
-use std::rc::Rc;
 use super::{Trie, Cursor, Builder, MergeBuilder, TupleBuilder};
-use owning_ref::{OwningRef, Erased};
 
 /// A level of the trie, with keys and offsets into a lower layer.
 ///
@@ -22,36 +20,34 @@ pub struct OrderedLayer<K: Ord, L> {
 
 impl<K: Ord+Clone, L: Trie> Trie for OrderedLayer<K, L> {
 	type Item = (K, L::Item);
-	type Cursor = OrderedCursor<K, L::Cursor>;
+	type Cursor = OrderedCursor<L>;
 	type MergeBuilder = OrderedBuilder<K, L::MergeBuilder>;
 	type TupleBuilder = OrderedBuilder<K, L::TupleBuilder>;
 
 	fn keys(&self) -> usize { self.keys.len() }
 	fn tuples(&self) -> usize { self.vals.tuples() }
-	fn cursor_from(&self, owned_self: OwningRef<Rc<Erased>, Self>, lower: usize, upper: usize) -> Self::Cursor {
+	fn cursor_from(&self, lower: usize, upper: usize) -> Self::Cursor {
 		// let child_lower = if lower == 0 { 0 } else { self.offs[lower-1] };
 		// let child_upper = self.offs[lower];
 
 		if lower < upper {
 
-		debug_assert!(self.offs.len() > lower + 1);
-
 			let child_lower = self.offs[lower];
 			let child_upper = self.offs[lower + 1];
 			OrderedCursor {
-				keys: owned_self.clone().map(|x| &x.keys[..]),
-				offs: owned_self.clone().map(|x| &x.offs[..]),
+				// keys: owned_self.clone().map(|x| &x.keys[..]),
+				// offs: owned_self.clone().map(|x| &x.offs[..]),
 				bounds: (lower, upper),
-				child: self.vals.cursor_from(owned_self.map(|x| &x.vals), child_lower, child_upper),
+				child: self.vals.cursor_from(child_lower, child_upper),
 				pos: lower,
 			}		
 		}
 		else {
 			OrderedCursor {
-				keys: owned_self.clone().map(|x| &x.keys[..]),
-				offs: owned_self.clone().map(|x| &x.offs[..]),
+				// keys: owned_self.clone().map(|x| &x.keys[..]),
+				// offs: owned_self.clone().map(|x| &x.offs[..]),
 				bounds: (0, 0),
-				child: self.vals.cursor_from(owned_self.map(|x| &x.vals), 0, 0),
+				child: self.vals.cursor_from(0, 0),
 				pos: 0,
 			}	
 		}
@@ -189,46 +185,46 @@ impl<K: Ord+Clone, L: TupleBuilder> TupleBuilder for OrderedBuilder<K, L> {
 
 /// A cursor with a child cursor that is updated as we move.
 #[derive(Debug)]
-pub struct OrderedCursor<K: Ord, L: Cursor> {
-	keys: OwningRef<Rc<Erased>, [K]>,
-	offs: OwningRef<Rc<Erased>, [usize]>,
+pub struct OrderedCursor<L: Trie> {
+	// keys: OwningRef<Rc<Erased>, [K]>,
+	// offs: OwningRef<Rc<Erased>, [usize]>,
 	pos: usize,
 	bounds: (usize, usize),
 	/// The cursor for the trie layer below this one.
-	pub child: L,
+	pub child: L::Cursor,
 }
 
-impl<K: Ord, L: Cursor> Cursor for OrderedCursor<K, L> {
+impl<K: Ord, L: Trie> Cursor<OrderedLayer<K, L>> for OrderedCursor<L> {
 	type Key = K;
-	fn key(&self) -> &Self::Key { &self.keys[self.pos] }
-	fn step(&mut self) {
+	fn key<'a>(&self, storage: &'a OrderedLayer<K, L>) -> &'a Self::Key { &storage.keys[self.pos] }
+	fn step(&mut self, storage: &OrderedLayer<K, L>) {
 		self.pos += 1; 
-		if self.valid() {
-			self.child.reposition(self.offs[self.pos], self.offs[self.pos + 1]);
+		if self.valid(storage) {
+			self.child.reposition(&storage.vals, storage.offs[self.pos], storage.offs[self.pos + 1]);
 		}
 		else {
 			self.pos = self.bounds.1;
 		}
 	}
-	fn seek(&mut self, key: &Self::Key) {
-		self.pos += advance(&self.keys[self.pos .. self.bounds.1], |k| k.lt(key));
-		if self.valid() {
-			self.child.reposition(self.offs[self.pos], self.offs[self.pos + 1]);
+	fn seek(&mut self, storage: &OrderedLayer<K, L>, key: &Self::Key) {
+		self.pos += advance(&storage.keys[self.pos .. self.bounds.1], |k| k.lt(key));
+		if self.valid(storage) {
+			self.child.reposition(&storage.vals, storage.offs[self.pos], storage.offs[self.pos + 1]);
 		}
 	}
 	// fn size(&self) -> usize { self.bounds.1 - self.bounds.0 }
-	fn valid(&self) -> bool { self.pos < self.bounds.1 }
-	fn rewind(&mut self) {
+	fn valid(&self, _storage: &OrderedLayer<K, L>) -> bool { self.pos < self.bounds.1 }
+	fn rewind(&mut self, storage: &OrderedLayer<K, L>) {
 		self.pos = self.bounds.0;
-		if self.valid() {
-			self.child.reposition(self.offs[self.pos], self.offs[self.pos + 1]);
+		if self.valid(storage) {
+			self.child.reposition(&storage.vals, storage.offs[self.pos], storage.offs[self.pos + 1]);
 		}
 	}
-	fn reposition(&mut self, lower: usize, upper: usize) {
+	fn reposition(&mut self, storage: &OrderedLayer<K, L>, lower: usize, upper: usize) {
 		self.pos = lower;
 		self.bounds = (lower, upper);
-		if self.valid() {
-			self.child.reposition(self.offs[self.pos], self.offs[self.pos + 1]);
+		if self.valid(storage) {
+			self.child.reposition(&storage.vals, storage.offs[self.pos], storage.offs[self.pos + 1]);
 		}
 	}
 }

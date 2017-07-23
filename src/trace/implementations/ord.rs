@@ -9,7 +9,7 @@
 //! and should consume fewer resources (computation and memory) when it applies.
 
 use std::rc::Rc;
-use owning_ref::OwningRef;
+// use owning_ref::OwningRef;
 
 use ::Diff;
 use hashable::HashOrdered;
@@ -18,7 +18,7 @@ use trace::layers::{Trie, TupleBuilder};
 use trace::layers::Builder as TrieBuilder;
 use trace::layers::Cursor as TrieCursor;
 use trace::layers::ordered::{OrderedLayer, OrderedBuilder, OrderedCursor};
-use trace::layers::ordered_leaf::{OrderedLeaf, OrderedLeafBuilder, OrderedLeafCursor};
+use trace::layers::ordered_leaf::{OrderedLeaf, OrderedLeafBuilder};
 
 use lattice::Lattice;
 use trace::{Batch, BatchReader, Builder, Cursor};
@@ -44,11 +44,13 @@ pub struct OrdValBatch<K: Ord+HashOrdered, V: Ord, T: Lattice, R> {
 
 impl<K, V, T, R> BatchReader<K, V, T, R> for Rc<OrdValBatch<K, V, T, R>>
 where K: Ord+Clone+HashOrdered+'static, V: Ord+Clone+'static, T: Lattice+Ord+Clone+'static, R: Diff {
-	type Cursor = OrdValCursor<K, V, T, R>;
-	fn cursor(&self) -> Self::Cursor { 
-		OrdValCursor {
-			cursor: self.layer.cursor(OwningRef::new(self.clone()).map(|x| &x.layer).erase_owner())
-		}
+	type Cursor = OrdValCursor<V, T, R>;
+	fn cursor(&self) -> (Self::Cursor, <Self::Cursor as Cursor<K, V, T, R>>::Storage) { 
+		let cursor = OrdValCursor {
+			cursor: self.layer.cursor()
+		};
+
+		(cursor, self.clone())
 	}
 	fn len(&self) -> usize { <OrderedLayer<K, OrderedLayer<V, OrderedLeaf<T, R>>> as Trie>::tuples(&self.layer) }
 	fn description(&self) -> &Description<T> { &self.desc }
@@ -198,29 +200,33 @@ where K: Ord+Clone+HashOrdered+'static, V: Ord+Clone+'static, T: Lattice+Ord+Clo
 
 /// A cursor for navigating a single layer.
 #[derive(Debug)]
-pub struct OrdValCursor<K: Ord+Clone+HashOrdered, V: Ord+Clone, T: Lattice+Ord+Clone, R: Copy> {
-	cursor: OrderedCursor<K, OrderedCursor<V, OrderedLeafCursor<T, R>>>,
+pub struct OrdValCursor<V: Ord+Clone, T: Lattice+Ord+Clone, R: Diff> {
+	// cursor: OrderedCursor<K, OrderedCursor<V, OrderedLeafCursor<T, R>>>,
+	cursor: OrderedCursor<OrderedLayer<V, OrderedLeaf<T, R>>>,
 }
 
-impl<K, V, T, R> Cursor<K, V, T, R> for OrdValCursor<K, V, T, R> 
-where K: Ord+Clone+HashOrdered, V: Ord+Clone, T: Lattice+Ord+Clone, R: Copy {
-	fn key(&self) -> &K { &self.cursor.key() }
-	fn val(&self) -> &V { &self.cursor.child.key() }
-	fn map_times<L: FnMut(&T, R)>(&mut self, mut logic: L) {
-		self.cursor.child.child.rewind();
-		while self.cursor.child.child.valid() {
-			logic(&self.cursor.child.child.key().0, self.cursor.child.child.key().1);
-			self.cursor.child.child.step();
+impl<K, V, T, R> Cursor<K, V, T, R> for OrdValCursor<V, T, R> 
+where K: Ord+Clone+HashOrdered, V: Ord+Clone, T: Lattice+Ord+Clone, R: Diff {
+
+	type Storage = Rc<OrdValBatch<K, V, T, R>>;//OrderedLayer<K, OrderedLayer<V, OrderedLeaf<T, R>>>;
+
+	fn key<'a>(&self, storage: &'a Self::Storage) -> &'a K { &self.cursor.key(&storage.layer) }
+	fn val<'a>(&self, storage: &'a Self::Storage) -> &'a V { &self.cursor.child.key(&storage.layer.vals) }
+	fn map_times<L: FnMut(&T, R)>(&mut self, storage: &Self::Storage, mut logic: L) {
+		self.cursor.child.child.rewind(&storage.layer.vals.vals);
+		while self.cursor.child.child.valid(&storage.layer.vals.vals) {
+			logic(&self.cursor.child.child.key(&storage.layer.vals.vals).0, self.cursor.child.child.key(&storage.layer.vals.vals).1);
+			self.cursor.child.child.step(&storage.layer.vals.vals);
 		}
 	}
-	fn key_valid(&self) -> bool { self.cursor.valid() }
-	fn val_valid(&self) -> bool { self.cursor.child.valid() }
-	fn step_key(&mut self){ self.cursor.step(); }
-	fn seek_key(&mut self, key: &K) { self.cursor.seek(key); }
-	fn step_val(&mut self) { self.cursor.child.step(); }
-	fn seek_val(&mut self, val: &V) { self.cursor.child.seek(val); }
-	fn rewind_keys(&mut self) { self.cursor.rewind(); }
-	fn rewind_vals(&mut self) { self.cursor.child.rewind(); }
+	fn key_valid(&self, storage: &Self::Storage) -> bool { self.cursor.valid(&storage.layer) }
+	fn val_valid(&self, storage: &Self::Storage) -> bool { self.cursor.child.valid(&storage.layer.vals) }
+	fn step_key(&mut self, storage: &Self::Storage){ self.cursor.step(&storage.layer); }
+	fn seek_key(&mut self, storage: &Self::Storage, key: &K) { self.cursor.seek(&storage.layer, key); }
+	fn step_val(&mut self, storage: &Self::Storage) { self.cursor.child.step(&storage.layer.vals); }
+	fn seek_val(&mut self, storage: &Self::Storage, val: &V) { self.cursor.child.seek(&storage.layer.vals, val); }
+	fn rewind_keys(&mut self, storage: &Self::Storage) { self.cursor.rewind(&storage.layer); }
+	fn rewind_vals(&mut self, storage: &Self::Storage) { self.cursor.child.rewind(&storage.layer.vals); }
 }
 
 
@@ -271,13 +277,14 @@ pub struct OrdKeyBatch<K: Ord+HashOrdered, T: Lattice, R> {
 
 impl<K, T, R> BatchReader<K, (), T, R> for Rc<OrdKeyBatch<K, T, R>>
 where K: Ord+Clone+HashOrdered+'static, T: Lattice+Ord+Clone+'static, R: Diff {
-	type Cursor = OrdKeyCursor<K, T, R>;
-	fn cursor(&self) -> Self::Cursor { 
-		OrdKeyCursor {
+	type Cursor = OrdKeyCursor<T, R>;
+	fn cursor(&self) -> (Self::Cursor, <Self::Cursor as Cursor<K, (), T, R>>::Storage) { 
+		let cursor = OrdKeyCursor {
 			empty: (),
 			valid: true,
-			cursor: self.layer.cursor(OwningRef::new(self.clone()).map(|x| &x.layer).erase_owner()),
-		} 
+			cursor: self.layer.cursor(),
+		};
+		(cursor, self.clone())
 	}
 	fn len(&self) -> usize { <OrderedLayer<K, OrderedLeaf<T, R>> as Trie>::tuples(&self.layer) }
 	fn description(&self) -> &Description<T> { &self.desc }
@@ -401,30 +408,33 @@ where K: Ord+Clone+HashOrdered+'static, T: Lattice+Ord+Clone+'static, R: Diff {
 
 /// A cursor for navigating a single layer.
 #[derive(Debug)]
-pub struct OrdKeyCursor<K: Ord+Clone+HashOrdered, T: Lattice+Ord+Clone, R: Copy> {
+pub struct OrdKeyCursor<T: Lattice+Ord+Clone, R: Diff> {
 	valid: bool,
 	empty: (),
-	cursor: OrderedCursor<K, OrderedLeafCursor<T, R>>,
+	cursor: OrderedCursor<OrderedLeaf<T, R>>,
 }
 
-impl<K: Ord+Clone+HashOrdered, T: Lattice+Ord+Clone, R: Copy> Cursor<K, (), T, R> for OrdKeyCursor<K, T, R> {
-	fn key(&self) -> &K { &self.cursor.key() }
-	fn val(&self) -> &() { &self.empty }
-	fn map_times<L: FnMut(&T, R)>(&mut self, mut logic: L) {
-		self.cursor.child.rewind();
-		while self.cursor.child.valid() {
-			logic(&self.cursor.child.key().0, self.cursor.child.key().1);
-			self.cursor.child.step();
+impl<K: Ord+Clone+HashOrdered, T: Lattice+Ord+Clone, R: Diff> Cursor<K, (), T, R> for OrdKeyCursor<T, R> {
+
+	type Storage = Rc<OrdKeyBatch<K, T, R>>; // OrderedLayer<K, OrderedLeaf<T, R>>;
+
+	fn key<'a>(&self, storage: &'a Self::Storage) -> &'a K { &self.cursor.key(&storage.layer) }
+	fn val<'a>(&self, _storage: &'a Self::Storage) -> &'a () { unsafe { ::std::mem::transmute(&self.empty) } }
+	fn map_times<L: FnMut(&T, R)>(&mut self, storage: &Self::Storage, mut logic: L) {
+		self.cursor.child.rewind(&storage.layer.vals);
+		while self.cursor.child.valid(&storage.layer.vals) {
+			logic(&self.cursor.child.key(&storage.layer.vals).0, self.cursor.child.key(&storage.layer.vals).1);
+			self.cursor.child.step(&storage.layer.vals);
 		}
 	}
-	fn key_valid(&self) -> bool { self.cursor.valid() }
-	fn val_valid(&self) -> bool { self.valid }
-	fn step_key(&mut self){ self.cursor.step(); self.valid = true; }
-	fn seek_key(&mut self, key: &K) { self.cursor.seek(key); self.valid = true; }
-	fn step_val(&mut self) { self.valid = false; }
-	fn seek_val(&mut self, _val: &()) { }
-	fn rewind_keys(&mut self) { self.cursor.rewind(); self.valid = true; }
-	fn rewind_vals(&mut self) { self.valid = true; }
+	fn key_valid(&self, storage: &Self::Storage) -> bool { self.cursor.valid(&storage.layer) }
+	fn val_valid(&self, _storage: &Self::Storage) -> bool { self.valid }
+	fn step_key(&mut self, storage: &Self::Storage){ self.cursor.step(&storage.layer); self.valid = true; }
+	fn seek_key(&mut self, storage: &Self::Storage, key: &K) { self.cursor.seek(&storage.layer, key); self.valid = true; }
+	fn step_val(&mut self, _storage: &Self::Storage) { self.valid = false; }
+	fn seek_val(&mut self, _storage: &Self::Storage, _val: &()) { }
+	fn rewind_keys(&mut self, storage: &Self::Storage) { self.cursor.rewind(&storage.layer); self.valid = true; }
+	fn rewind_vals(&mut self, _storage: &Self::Storage) { self.valid = true; }
 }
 
 

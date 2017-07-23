@@ -15,15 +15,15 @@ pub struct WeightedLayer<K: Ord> {
 
 impl<K: Ord+Clone> Trie for WeightedLayer<K> {
 	type Item = (K, isize);
-	type Cursor = WeightedCursor<K>;
+	type Cursor = WeightedCursor;
 	type MergeBuilder = WeightedBuilder<K>;
 	type TupleBuilder = WeightedBuilder<K>;
 	fn keys(&self) -> usize { self.keys.len() }
 	fn tuples(&self) -> usize { <WeightedLayer<K> as Trie>::keys(&self) }
-	fn cursor_from(&self, owned_self: OwningRef<Rc<Erased>, Self>, lower: usize, upper: usize) -> Self::Cursor {	
+	fn cursor_from(&self, lower: usize, upper: usize) -> Self::Cursor {	
 		WeightedCursor {
-			keys: owned_self.clone().map(|x| &x.keys[..]),
-			wgts: owned_self.clone().map(|x| &x.wgts[..]),
+			// keys: owned_self.clone().map(|x| &x.keys[..]),
+			// wgts: owned_self.clone().map(|x| &x.wgts[..]),
 			bounds: (lower, upper),
 			pos: lower,
 		}
@@ -140,36 +140,36 @@ impl<K: Ord+Clone> TupleBuilder for WeightedBuilder<K> {
 }
 
 /// A cursor with a child cursor that is updated as we move.
-pub struct WeightedCursor<K: Ord> {
-	keys: OwningRef<Rc<Erased>, [K]>,
-	wgts: OwningRef<Rc<Erased>, [isize]>,
+pub struct WeightedCursor {
+	// keys: OwningRef<Rc<Erased>, [K]>,
+	// wgts: OwningRef<Rc<Erased>, [isize]>,
 	pos: usize,
 	bounds: (usize, usize),
 }
 
-impl<K: Ord> WeightedCursor<K> {
-	/// Recovers the weight of the item.
-	pub fn weight(&self) -> isize { self.wgts[self.bounds.0] }
-}
+// impl<K: Ord> WeightedCursor {
+// 	/// Recovers the weight of the item.
+// 	pub fn weight(&self, storage: &WeightedLayer<K>) -> isize { storage.wgts[self.bounds.0] }
+// }
 
-impl<K: Ord> Cursor for WeightedCursor<K> {
+impl<K: Ord> Cursor<WeightedLayer<K>> for WeightedCursor {
 	type Key = K;
-	fn key(&self) -> &Self::Key { &self.keys[self.pos] }
-	fn step(&mut self) {
+	fn key<'a>(&self, storage: &'a WeightedLayer<K>) -> &'a Self::Key { &storage.keys[self.pos] }
+	fn step(&mut self, _storage: &WeightedLayer<K>) {
 		self.pos += 1;
 		if !self.valid() {
 			self.pos = self.bounds.1;
 		}
 	}
-	fn seek(&mut self, key: &Self::Key) {
-		self.pos += advance(&self.keys[self.pos .. self.bounds.1], |k| k.lt(key));
+	fn seek(&mut self, storage: &WeightedLayer<K>, key: &Self::Key) {
+		self.pos += advance(&storage.keys[self.pos .. self.bounds.1], |k| k.lt(key));
 	}
 	// fn size(&self) -> usize { self.bounds.1 - self.bounds.0 }
-	fn valid(&self) -> bool { self.pos < self.bounds.1 }
-	fn rewind(&mut self) {
+	fn valid(&self, _storage: &WeightedLayer<K>) -> bool { self.pos < self.bounds.1 }
+	fn rewind(&mut self, _storage: &WeightedLayer<K>) {
 		self.pos = self.bounds.0;
 	}
-	fn reposition(&mut self, lower: usize, upper: usize) {
+	fn reposition(&mut self, _storage: &WeightedLayer<K>, lower: usize, upper: usize) {
 		self.pos = lower;
 		self.bounds = (lower, upper);
 	}

@@ -462,9 +462,9 @@ impl<G, K, V, R1, T1> JoinCore<G, K, V, R1> for Arranged<G,K,V,R1,T1>
             input1.for_each(|capability, data| {
                 if let Some(ref mut trace2) = trace2 {
                     for batch1 in data.drain(..) {
-                        let trace2_cursor = trace2.cursor_through(&acknowledged2[..]).unwrap();
-                        let batch1_cursor = batch1.item.cursor();
-                        todo1.push(Deferred::new(trace2_cursor, batch1_cursor, capability.clone(), |r2,r1| *r1 * *r2));
+                        let (trace2_cursor, trace2_storage) = trace2.cursor_through(&acknowledged2[..]).unwrap();
+                        let (batch1_cursor, batch1_storage) = batch1.item.cursor();
+                        todo1.push(Deferred::new(trace2_cursor, trace2_storage, batch1_cursor, batch1_storage, capability.clone(), |r2,r1| *r1 * *r2));
                         debug_assert!(batch1.item.description().lower() == &acknowledged1[..]);
                         acknowledged1 = batch1.item.description().upper().to_vec();
                     }
@@ -475,9 +475,9 @@ impl<G, K, V, R1, T1> JoinCore<G, K, V, R1> for Arranged<G,K,V,R1,T1>
             input2.for_each(|capability, data| {
                 if let Some(ref mut trace1) = trace1 {
                     for batch2 in data.drain(..) {
-                        let trace1_cursor = trace1.cursor_through(&acknowledged1[..]).unwrap();
-                        let batch2_cursor = batch2.item.cursor();
-                        todo2.push(Deferred::new(trace1_cursor, batch2_cursor, capability.clone(), |r1,r2| *r1 * *r2));
+                        let (trace1_cursor, trace1_storage) = trace1.cursor_through(&acknowledged1[..]).unwrap();
+                        let (batch2_cursor, batch2_storage) = batch2.item.cursor();
+                        todo2.push(Deferred::new(trace1_cursor, trace1_storage, batch2_cursor, batch2_storage, capability.clone(), |r1,r2| *r1 * *r2));
                         debug_assert!(batch2.item.description().lower() == &acknowledged2[..]);
                         acknowledged2 = batch2.item.description().upper().to_vec();
                     }
@@ -543,12 +543,14 @@ where
 {
     phant: ::std::marker::PhantomData<(K, V1, V2, R1, R2)>,
     trace: C1,
+    trace_storage: C1::Storage,
     batch: C2,
+    batch_storage: C2::Storage,
     capability: Capability<T>,
     mult: M,
     done: bool,
     temp: Vec<((D, T), R3)>,
-    thinker: JoinThinker<V1, V2, T, R1, R2>,
+    // thinker: JoinThinker<V1, V2, T, R1, R2>,
 }
 
 impl<K, V1, V2, T, R1, R2, R3, C1, C2, M, D> Deferred<K, V1, V2, T, R1, R2, R3, C1, C2, M, D>
@@ -565,16 +567,18 @@ where
     M: Fn(&R1,&R2)->R3,
     D: Ord+Clone+Data, 
 {
-    fn new(trace: C1, batch: C2, capability: Capability<T>, mult: M) -> Self {
+    fn new(trace: C1, trace_storage: C1::Storage, batch: C2, batch_storage: C2::Storage, capability: Capability<T>, mult: M) -> Self {
         Deferred {
             phant: ::std::marker::PhantomData,
             trace: trace,
+            trace_storage: trace_storage,
             batch: batch,
+            batch_storage: batch_storage,
             capability: capability,
             mult: mult,
             done: false,
             temp: Vec::new(),
-            thinker: JoinThinker::new(),
+            // thinker: JoinThinker::new(),
         }
     }
 
@@ -592,28 +596,32 @@ where
         let mut effort = 0;
         let mut session = output.session(&self.capability);
 
+        let trace_storage = &self.trace_storage;
+        let batch_storage = &self.batch_storage;
+
         let trace = &mut self.trace;
         let batch = &mut self.batch;
         let mult = &self.mult;
 
         let temp = &mut self.temp;
-        let thinker = &mut self.thinker;
+        // let thinker = &mut self.thinker;
+        let mut thinker = JoinThinker::new();
 
-        while batch.key_valid() && trace.key_valid() && effort < *fuel {
+        while batch.key_valid(batch_storage) && trace.key_valid(trace_storage) && effort < *fuel {
 
-            match trace.key().cmp(batch.key()) {
-                Ordering::Less => trace.seek_key(batch.key()),
-                Ordering::Greater => batch.seek_key(trace.key()),
+            match trace.key(trace_storage).cmp(batch.key(batch_storage)) {
+                Ordering::Less => trace.seek_key(trace_storage, batch.key(batch_storage)),
+                Ordering::Greater => batch.seek_key(batch_storage, trace.key(trace_storage)),
                 Ordering::Equal => {
 
-                    thinker.history1.edits.load(trace, |time| time.join(&meet));
-                    thinker.history2.edits.load(batch, |time| time.clone());
+                    thinker.history1.edits.load(trace, trace_storage, |time| time.join(&meet));
+                    thinker.history2.edits.load(batch, batch_storage, |time| time.clone());
 
                     assert_eq!(temp.len(), 0);
 
                     // populate `temp` with the results in the best way we know how.
                     thinker.think(|v1,v2,t,r1,r2| 
-                        for result in logic(batch.key(), v1, v2) {
+                        for result in logic(batch.key(batch_storage), v1, v2) {
                             temp.push(((result, t.clone()), mult(r1, r2)));
                         }
                     );
@@ -630,8 +638,8 @@ where
                         session.give((d, t, r));
                     }
 
-                    batch.step_key();
-                    trace.step_key();
+                    batch.step_key(batch_storage);
+                    trace.step_key(trace_storage);
 
                     thinker.history1.clear();
                     thinker.history2.clear();
@@ -639,19 +647,19 @@ where
             }
         }
 
-        self.done = !batch.key_valid() || !trace.key_valid();
+        self.done = !batch.key_valid(batch_storage) || !trace.key_valid(trace_storage);
 
         if effort > *fuel { *fuel = 0; }
         else              { *fuel -= effort; }
     }
 }
 
-struct JoinThinker<V1: Ord+Clone, V2: Ord+Clone, T: Lattice+Ord+Clone, R1: Diff, R2: Diff> {
-    pub history1: ValueHistory2<V1, T, R1>,
-    pub history2: ValueHistory2<V2, T, R2>,
+struct JoinThinker<'a, V1: Ord+Clone+'a, V2: Ord+Clone+'a, T: Lattice+Ord+Clone, R1: Diff, R2: Diff> {
+    pub history1: ValueHistory2<'a, V1, T, R1>,
+    pub history2: ValueHistory2<'a, V2, T, R2>,
 }
 
-impl<V1: Ord+Clone, V2: Ord+Clone, T: Lattice+Ord+Clone, R1: Diff, R2: Diff> JoinThinker<V1, V2, T, R1, R2> 
+impl<'a, V1: Ord+Clone, V2: Ord+Clone, T: Lattice+Ord+Clone, R1: Diff, R2: Diff> JoinThinker<'a, V1, V2, T, R1, R2> 
 where V1: Debug, V2: Debug, T: Debug
 {
     fn new() -> Self {

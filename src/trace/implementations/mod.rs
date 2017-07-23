@@ -46,8 +46,4 @@ mod batcher_merge;
 pub use self::batcher::RadixBatcher as Batcher;
 
 pub mod ord;
-pub mod hash;
-
-// pub mod rhh;
-// pub mod rhh_k;
-//
+// pub mod hash;

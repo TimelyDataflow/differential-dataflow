@@ -82,7 +82,7 @@ where K: Clone+Default+HashOrdered+'static, V: Clone+Ord+'static, T: Lattice+Ord
 /// A cursor for navigating a single layer.
 #[derive(Debug)]
 pub struct HashValCursor<K: Clone+HashOrdered, V: Ord+Clone, T: Lattice+Ord+Clone, R: Copy> {
-	cursor: HashedCursor<K, OrderedCursor<V, UnorderedCursor<(T, R)>>>,
+	cursor: HashedCursor<OrderedLayer<V, UnorderedLayer<(T, R)>>>,
 }
 
 impl<K: Clone+HashOrdered, V: Ord+Clone, T: Lattice+Ord+Clone, R: Copy> Cursor<K, V, T, R> for HashValCursor<K, V, T, R> {
@@ -194,7 +194,7 @@ where K: Clone+Default+HashOrdered+'static, T: Lattice+Ord+Clone+Default+'static
 pub struct HashKeyCursor<K: Clone+HashOrdered, T: Lattice+Ord+Clone, R: Copy> {
 	valid: bool,
 	empty: (),
-	cursor: HashedCursor<K, UnorderedCursor<(T, R)>>,
+	cursor: HashedCursor<UnorderedLayer<(T, R)>>,
 }
 
 impl<K: Clone+HashOrdered, T: Lattice+Ord+Clone, R: Copy> Cursor<K, (), T, R> for HashKeyCursor<K, T, R> {
