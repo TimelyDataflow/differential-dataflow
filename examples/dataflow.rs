@@ -50,7 +50,7 @@ fn main() {
             // retain the k largest counts. negate first to exploit ordering.
             let topk = counts.map(|((l,t), c)| (l, (-c, t)))
                              .group(move |_,s,t| {
-                                 t.extend(s[..k].iter().map(|&((_,t),_)| (t,1)));
+                                 t.extend(s[..k].iter().map(|&(&(_,t),_)| (t,1)));
                              });
 
             // entries corresponding to a @username, but a u32 instead.
@@ -159,6 +159,6 @@ fn connected_components<G: Scope>(edges: &Collection<G, Edge>) -> Collection<G, 
 
             inner.join_map(&edges, |_k,l,d| (*d,*l))
                  .concat(&nodes)
-                 .group(|_, s, t| { t.push((s[0].0, 1)); } )
+                 .group(|_, s, t| { t.push((*s[0].0, 1)); } )
          })
 }

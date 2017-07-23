@@ -4,21 +4,21 @@ extern crate timely_sort;
 extern crate differential_dataflow;
 // extern crate vec_map;
 
-use timely::dataflow::*;
-use timely::dataflow::operators::*;
+// use timely::dataflow::*;
+// use timely::dataflow::operators::*;
 
 use rand::{Rng, SeedableRng, StdRng};
 
 use differential_dataflow::input::Input;
-use differential_dataflow::trace::Trace;
-use differential_dataflow::{Collection, AsCollection};
-use differential_dataflow::operators::*;
+// use differential_dataflow::trace::Trace;
+// use differential_dataflow::{Collection, AsCollection};
+// use differential_dataflow::operators::*;
 // use differential_dataflow::operators::join::JoinArranged;
-use differential_dataflow::operators::group::GroupArranged;
+// use differential_dataflow::operators::group::GroupArranged;
 use differential_dataflow::operators::count::CountTotal;
-use differential_dataflow::operators::arrange::{ArrangeByKey, ArrangeBySelf};
-use differential_dataflow::lattice::Lattice;
-use differential_dataflow::trace::implementations::hash::HashValSpine as Spine;
+// use differential_dataflow::operators::arrange::{ArrangeByKey, ArrangeBySelf};
+// use differential_dataflow::lattice::Lattice;
+// use differential_dataflow::trace::implementations::hash::HashValSpine as Spine;
 
 fn main() {
 
@@ -26,8 +26,8 @@ fn main() {
     let edges: usize = std::env::args().nth(2).unwrap().parse().unwrap();
     let batch: usize = std::env::args().nth(3).unwrap().parse().unwrap();
 
-    let kc1 = std::env::args().find(|x| x == "kcore1").is_some();
-    let kc2 = std::env::args().find(|x| x == "kcore2").is_some();
+    // let kc1 = std::env::args().find(|x| x == "kcore1").is_some();
+    // let kc2 = std::env::args().find(|x| x == "kcore2").is_some();
 
     // define a new computational scope, in which to run BFS
     timely::execute_from_args(std::env::args().skip(4), move |worker| {
@@ -45,11 +45,11 @@ fn main() {
             // if kc2 { edges = kcore2(&edges, std::env::args().nth(4).unwrap().parse().unwrap()); }
 
             let degrs = edges.map(|(src, _dst)| src)
-                             .count();
+                             .count_total_u();
 
             // pull of count, and count.
-            let distr = degrs.map(|(_src, cnt)| cnt as usize)
-                             .count();
+            let distr = degrs.map(|(_src, cnt)| cnt as u32)
+                             .count_total_u();
 
             // show us something about the collection, notice when done.
             let probe = distr//.inspect(|x| println!("observed: {:?}", x))
@@ -58,48 +58,35 @@ fn main() {
             (input, probe)
         });
 
-        let timer = ::std::time::Instant::now();
-
         let seed: &[_] = &[1, 2, 3, index];
         let mut rng1: StdRng = SeedableRng::from_seed(seed);    // rng for edge additions
         let mut rng2: StdRng = SeedableRng::from_seed(seed);    // rng for edge additions
 
         // load up graph dataz
-        for edge in 0..edges {
-            if edge % peers == index {
-                input.insert((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)))
-            }
+        for _ in 0 .. (edges / peers) + if index < (edges % peers) { 1 } else { 0 } {
+            input.insert((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)))
         }
 
         input.advance_to(1);
         input.flush();
         worker.step_while(|| probe.less_than(input.time()));
 
-        if index == 0 {
-            // let timer = timer.elapsed();
-            // let nanos = timer.as_secs() * 1000000000 + timer.subsec_nanos() as u64;
-            println!("Loading finished after {:?}", timer.elapsed());
-        }
-
         if batch > 0 {
-
-            for round in 1 .. {
-
-                // only do the work of this worker.
-                if round % peers == index {
-                    input.advance_to(round);
+            for wave in 1 .. {
+                for round in 0 .. batch {
+                    input.advance_to(((wave * batch) + round) * peers + index);
                     input.insert((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)));
-                    input.remove((rng2.gen_range(0, nodes), rng2.gen_range(0, nodes)));
+                    input.remove((rng2.gen_range(0, nodes), rng2.gen_range(0, nodes)));                    
                 }
 
-                if round % batch == 0 {
-                    // all workers indicate they have finished with `round`.
-                    input.advance_to(round + 1);
-                    input.flush();
+                input.advance_to((wave + 1) * batch * peers);
+                input.flush();
 
-                    let timer = ::std::time::Instant::now();
-                    worker.step_while(|| probe.less_than(input.time()));
-                    println!("worker {}, round {} finished after {:?}", index, round, timer.elapsed());
+                let timer = ::std::time::Instant::now();
+                worker.step_while(|| probe.less_than(input.time()));
+
+                if index == 0 {
+                    println!("round {} finished after {:?}", wave * batch * peers, timer.elapsed());
                 }
             }
         }

@@ -115,6 +115,6 @@ where G::Timestamp: Lattice+Ord {
 
         inner.join_map_u(&edges, |_k,l,d| (*d, l+1))
              .concat(&nodes)
-             .group_u(|_, s, t| t.push((s[0].0, 1)))
+             .group_u(|_, s, t| t.push((*s[0].0, 1)))
      })
 }

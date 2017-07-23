@@ -57,13 +57,13 @@ pub trait Group<G: Scope, K: Data, V: Data, R: Diff> where G::Timestamp: Lattice
     ///         scope.new_collection_from(1 .. 10).1
     ///              .map(|x| (x / 3, x))
     ///              .group(|_key, src, dst| {
-    ///                  dst.push((src[0], 1))
+    ///                  dst.push((*src[0].0, 1))
     ///              });
     ///     });
     /// }
     /// ```
     fn group<L, V2: Data, R2: Diff>(&self, logic: L) -> Collection<G, (K, V2), R2>
-    where L: Fn(&K, &[(V, R)], &mut Vec<(V2, R2)>)+'static;
+    where L: Fn(&K, &[(&V, R)], &mut Vec<(V2, R2)>)+'static;
     /// Groups records by their first field, and applies reduction logic to the associated values.
     /// 
     /// This method is a specialization for when the key is an unsigned integer fit for distributing the data.
@@ -84,26 +84,26 @@ pub trait Group<G: Scope, K: Data, V: Data, R: Diff> where G::Timestamp: Lattice
     ///         scope.new_collection_from(1 .. 10u32).1
     ///              .map(|x| (x / 3, x))
     ///              .group_u(|_key, src, dst| {
-    ///                  dst.push((src[0], 1))
+    ///                  dst.push((*src[0].0, 1))
     ///              });
     ///     });
     /// }
     /// ```
     fn group_u<L, V2: Data, R2: Diff>(&self, logic: L) -> Collection<G, (K, V2), R2>
-    where L: Fn(&K, &[(V, R)], &mut Vec<(V2, R2)>)+'static, K: Unsigned+Copy;
+    where L: Fn(&K, &[(&V, R)], &mut Vec<(V2, R2)>)+'static, K: Unsigned+Copy;
 }
 
 impl<G: Scope, K: Data+Default+Hashable, V: Data, R: Diff> Group<G, K, V, R> for Collection<G, (K, V), R> 
     where G::Timestamp: Lattice+Ord+Debug, <K as Hashable>::Output: Data+Default {
     fn group<L, V2: Data, R2: Diff>(&self, logic: L) -> Collection<G, (K, V2), R2>
-        where L: Fn(&K, &[(V, R)], &mut Vec<(V2, R2)>)+'static {
+        where L: Fn(&K, &[(&V, R)], &mut Vec<(V2, R2)>)+'static {
         // self.arrange_by_key_hashed_cached()
         self.arrange_by_key_hashed()
             .group_arranged(move |k,s,t| logic(&k.item,s,t), DefaultValTrace::new())
             .as_collection(|k,v| (k.item.clone(), v.clone()))
     }
     fn group_u<L, V2: Data, R2: Diff>(&self, logic: L) -> Collection<G, (K, V2), R2>
-        where L: Fn(&K, &[(V, R)], &mut Vec<(V2, R2)>)+'static, K: Unsigned+Copy {
+        where L: Fn(&K, &[(&V, R)], &mut Vec<(V2, R2)>)+'static, K: Unsigned+Copy {
         self.map(|(k,v)| (UnsignedWrapper::from(k), v))
             .arrange(DefaultValTrace::new())
             .group_arranged(move |k,s,t| logic(&k.item,s,t), DefaultValTrace::new())
@@ -272,7 +272,7 @@ pub trait GroupArranged<G: Scope, K: Data, V: Data, R: Diff> where G::Timestamp:
     ///              .map(|x| (OrdWrapper { item: x / 3 }, x))
     ///              .arrange(OrdValSpine::new())
     ///              .group_arranged(
-    ///                  move |_key, src, dst| dst.push((src[0], 1)),
+    ///                  move |_key, src, dst| dst.push((*src[0].0, 1)),
     ///                  OrdValSpine::new()
     ///              );
     ///     });
@@ -284,7 +284,7 @@ pub trait GroupArranged<G: Scope, K: Data, V: Data, R: Diff> where G::Timestamp:
             R2: Diff,
             T2: Trace<K, V2, G::Timestamp, R2>+'static,
             T2::Batch: Batch<K, V2, G::Timestamp, R2>,
-            L: Fn(&K, &[(V, R)], &mut Vec<(V2, R2)>)+'static
+            L: Fn(&K, &[(&V, R)], &mut Vec<(V2, R2)>)+'static
             ; 
 }
 
@@ -300,7 +300,7 @@ where
             R2: Diff,
             T2: Trace<K, V2, G::Timestamp, R2>+'static,
             T2::Batch: Batch<K, V2, G::Timestamp, R2>,
-            L: Fn(&K, &[(V, R)], &mut Vec<(V2, R2)>)+'static {
+            L: Fn(&K, &[(&V, R)], &mut Vec<(V2, R2)>)+'static {
 
         let mut source_trace = self.trace.clone();
 
@@ -704,7 +704,7 @@ where
         C1: Cursor<K, V1, T, R1>, 
         C2: Cursor<K, V2, T, R2>, 
         C3: Cursor<K, V1, T, R1>, 
-        L: Fn(&K, &[(V1, R1)], &mut Vec<(V2, R2)>);
+        L: Fn(&K, &[(&V1, R1)], &mut Vec<(V2, R2)>);
 }
 
 
@@ -734,7 +734,7 @@ mod history_replay {
         batch_history: ValueHistory2<'a, V1, T, R1>,
         input_history: ValueHistory2<'a, V1, T, R1>,
         output_history: ValueHistory2<'a, V2, T, R2>,
-        input_buffer: Vec<(V1, R1)>,
+        input_buffer: Vec<(&'a V1, R1)>,
         output_buffer: Vec<(V2, R2)>,
         output_produced: Vec<((V2, T), R2)>,
         synth_times: Vec<T>,
@@ -782,7 +782,7 @@ mod history_replay {
             C1: Cursor<K, V1, T, R1>, 
             C2: Cursor<K, V2, T, R2>, 
             C3: Cursor<K, V1, T, R1>, 
-            L: Fn(&K, &[(V1, R1)], &mut Vec<(V2, R2)>) 
+            L: Fn(&K, &[(&V1, R1)], &mut Vec<(V2, R2)>) 
         {
 
             // The work to do is defined principally be the contents of `batch_cursor` and `times`, which
@@ -907,7 +907,7 @@ mod history_replay {
                         self.input_history.advance_buffer_by(&meet);
                         for &((value, ref time), diff) in self.input_history.buffer.iter() {
                             if time.less_equal(&next_time) {
-                                self.input_buffer.push((value.clone(), diff));
+                                self.input_buffer.push((value, diff));
                             }
                             else {
                                 self.temporary.push(next_time.join(time));
@@ -915,7 +915,7 @@ mod history_replay {
                         }
                         for &((value, ref time), diff) in self.batch_history.buffer.iter() {
                             if time.less_equal(&next_time) {
-                                self.input_buffer.push((value.clone(), diff));
+                                self.input_buffer.push((value, diff));
                             }
                             else {
                                 self.temporary.push(next_time.join(time));

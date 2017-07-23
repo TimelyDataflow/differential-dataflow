@@ -17,7 +17,7 @@ fn group() {
                         .to_stream(scope)
                         .as_collection();
 
-        col1.group(|_,s,t| t.push((s[0].0, s.len() as isize))).inner.capture()
+        col1.group(|_,s,t| t.push((*s[0].0, s.len() as isize))).inner.capture()
     });
 
     let extracted = data.extract();

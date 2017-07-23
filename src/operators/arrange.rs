@@ -264,7 +264,7 @@ where T: Lattice+Clone+'static, Tr: TraceReader<K,V,T,R> {
     ///         worker.dataflow(move |scope| {
     ///             trace.import(scope)
     ///                  .group_arranged(
-    ///                      move |_key, src, dst| dst.push((src[0], 1)),
+    ///                      move |_key, src, dst| dst.push((*src[0].0, 1)),
     ///                      OrdValSpine::new()
     ///                  );
     ///         });

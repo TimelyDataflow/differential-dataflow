@@ -66,6 +66,6 @@ where G::Timestamp: Lattice+Hash+Ord {
 
             inner.join_map(&edges, |_k,l,d| (*d,*l))
                  .concat(&nodes)
-                 .group(|_, s, t| { t.push((s[0].0, 1)); } )
+                 .group(|_, s, t| { t.push((*s[0].0, 1)); } )
          })
 }
