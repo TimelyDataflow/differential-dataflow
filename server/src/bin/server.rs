@@ -148,6 +148,10 @@ fn main() {
                 }
             }
 
+            // arguably we should pick a time (now) and `step_while` until it has passed. 
+            // this should ensure that we actually fully drain ranges of updates, rather
+            // than providing no guaranteed progress for e.g. iterative computations.
+
             worker.step();
             std::thread::yield_now();   // so that over-subscribed worker counts still feel interactive
         }
@@ -165,7 +169,7 @@ fn main() {
 
             match command.as_str() {
                 "help" => {
-                    println!("valid commands are: bind, exit, help, list, load");
+                    println!("valid commands are currently: bind, exit, help, list, load");
                 },
                 "bind" => {
                     println!("ideally this would load and bind a library to some delightful name");
