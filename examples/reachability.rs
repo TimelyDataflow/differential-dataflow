@@ -43,17 +43,9 @@ fn main() {
         let mut rng2: StdRng = SeedableRng::from_seed(seed);    // rng for edge deletions
 
         if worker.index() == 0 {
-            // trickle edges in to dataflow
-            for _ in 0..(edges/1000) {
-                for _ in 0..1000 {
-                    graph.insert((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)));
-                }
-                worker.step();
+            for _ in 0 .. edges {
+                graph.insert((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)));
             }
-        }
-
-        if worker.index() == 0 {
-            println!("loaded; elapsed: {:?}", timer.elapsed());
         }
 
         roots.advance_to(1); roots.flush();
@@ -63,7 +55,8 @@ fn main() {
         if worker.index() == 0 {
             println!("stable; elapsed: {:?}", timer.elapsed());
         }
-        for i in 0..10 {
+
+        for i in 0..1 {
             roots.insert(i);
             roots.advance_to(2 + i); roots.flush();
             graph.advance_to(2 + i); graph.flush();
@@ -85,7 +78,7 @@ fn main() {
                 }
             }
             roots.advance_to(round + 1); roots.flush();
-            graph.advance_to(round + 1); roots.flush();
+            graph.advance_to(round + 1); graph.flush();
 
             worker.step_while(|| probe.less_than(graph.time()));
 
@@ -100,18 +93,18 @@ fn main() {
 }
 
 // returns pairs (n, s) indicating node n can be reached from a root in s steps.
-fn reach<G: Scope>(edges: &Collection<G, Edge>, roots: &Collection<G, Node>) -> Collection<G, (Node, Node)>
+fn reach<G: Scope>(edges: &Collection<G, Edge>, roots: &Collection<G, Node>) -> Collection<G, Node>
 where G::Timestamp: Lattice+Ord {
-
-    let roots = roots.map(|x| (x,x));
 
     roots.iterate(|inner| {
 
         let edges = edges.enter(&inner.scope());
         let roots = roots.enter(&inner.scope());
 
-        inner.join_map(&edges, |_k,&l,&d| (d, l))
-             .concat(&roots)
-             .distinct()
+        edges
+            .semijoin_u(&roots)
+            .map(|(_s,d)| d)
+            .concat(&roots)
+            .distinct_u()
      })
 }
