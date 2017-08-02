@@ -9,7 +9,6 @@
 //! and should consume fewer resources (computation and memory) when it applies.
 
 use std::rc::Rc;
-use owning_ref::OwningRef;
 
 use ::Diff;
 use hashable::HashOrdered;
@@ -18,8 +17,8 @@ use trace::layers::{Trie, TupleBuilder};
 use trace::layers::Builder as TrieBuilder;
 use trace::layers::Cursor as TrieCursor;
 use trace::layers::hashed::{HashedLayer, HashedBuilder, HashedCursor};
-use trace::layers::ordered::{OrderedLayer, OrderedBuilder, OrderedCursor};
-use trace::layers::unordered::{UnorderedLayer, UnorderedBuilder, UnorderedCursor};
+use trace::layers::ordered::{OrderedLayer, OrderedBuilder};
+use trace::layers::ordered_leaf::{OrderedLeaf, OrderedLeafBuilder};
 
 use lattice::Lattice;
 use trace::{Batch, BatchReader, Builder, Cursor};
@@ -36,22 +35,27 @@ pub type HashKeySpine<K, T, R> = Spine<K, (), T, R, Rc<HashKeyBatch<K, T, R>>>;
 
 /// An immutable collection of update tuples, from a contiguous interval of logical times.
 #[derive(Debug)]
-pub struct HashValBatch<K: HashOrdered, V: Ord, T: Lattice, R> {
+pub struct HashValBatch<K: HashOrdered, V: Ord, T: Lattice, R: Diff> {
 	/// Where all the dataz is.
-	pub layer: HashedLayer<K, OrderedLayer<V, UnorderedLayer<(T, R)>>>,
+	pub layer: HashedLayer<K, OrderedLayer<V, OrderedLeaf<T, R>>>,
 	/// Description of the update times this layer represents.
 	pub desc: Description<T>,
 }
 
 impl<K, V, T, R> BatchReader<K, V, T, R> for Rc<HashValBatch<K, V, T, R>>
 where K: Clone+Default+HashOrdered+'static, V: Clone+Ord+'static, T: Lattice+Ord+Clone+Default+'static, R: Diff {
-	type Cursor = HashValCursor<K, V, T, R>;
-	fn cursor(&self) -> Self::Cursor { 
-		HashValCursor {
-			cursor: self.layer.cursor(OwningRef::new(self.clone()).map(|x| &x.layer).erase_owner()),
-		}
+	type Cursor = HashValCursor<V, T, R>;
+	fn cursor(&self) -> (Self::Cursor, <Self::Cursor as Cursor<K, V, T, R>>::Storage) { 
+		let cursor = HashValCursor {
+			cursor: self.layer.cursor()
+		};
+
+		(cursor, self.clone())
+		// HashValCursor {
+		// 	cursor: self.layer.cursor(OwningRef::new(self.clone()).map(|x| &x.layer).erase_owner()),
+		// }
 	}
-	fn len(&self) -> usize { <HashedLayer<K, OrderedLayer<V, UnorderedLayer<(T, R)>>> as Trie>::tuples(&self.layer) }
+	fn len(&self) -> usize { <HashedLayer<K, OrderedLayer<V, OrderedLeaf<T, R>>> as Trie>::tuples(&self.layer) }
 	fn description(&self) -> &Description<T> { &self.desc }
 }
 
@@ -73,7 +77,7 @@ where K: Clone+Default+HashOrdered+'static, V: Clone+Ord+'static, T: Lattice+Ord
 		};
 		
 		Rc::new(HashValBatch {
-			layer: <HashedLayer<K, OrderedLayer<V, UnorderedLayer<(T, R)>>> as Trie>::merge(&self.layer, &other.layer),
+			layer: <HashedLayer<K, OrderedLayer<V, OrderedLeaf<T, R>>> as Trie>::merge(&self.layer, &other.layer),
 			desc: Description::new(self.desc.lower(), other.desc.upper(), since),
 		})
 	}
@@ -81,34 +85,57 @@ where K: Clone+Default+HashOrdered+'static, V: Clone+Ord+'static, T: Lattice+Ord
 
 /// A cursor for navigating a single layer.
 #[derive(Debug)]
-pub struct HashValCursor<K: Clone+HashOrdered, V: Ord+Clone, T: Lattice+Ord+Clone, R: Copy> {
-	cursor: HashedCursor<OrderedLayer<V, UnorderedLayer<(T, R)>>>,
+pub struct HashValCursor<V: Ord+Clone, T: Lattice+Ord+Clone, R: Diff> {
+	cursor: HashedCursor<OrderedLayer<V, OrderedLeaf<T, R>>>,
 }
 
-impl<K: Clone+HashOrdered, V: Ord+Clone, T: Lattice+Ord+Clone, R: Copy> Cursor<K, V, T, R> for HashValCursor<K, V, T, R> {
-	fn key(&self) -> &K { &self.cursor.key() }
-	fn val(&self) -> &V { &self.cursor.child.key() }
-	fn map_times<L: FnMut(&T, R)>(&mut self, mut logic: L) {
-		self.cursor.child.child.rewind();
-		while self.cursor.child.child.valid() {
-			logic(&self.cursor.child.child.key().0, self.cursor.child.child.key().1);
-			self.cursor.child.child.step();
+// impl<K: Clone+HashOrdered, V: Ord+Clone, T: Lattice+Ord+Clone, R: Copy> Cursor<K, V, T, R> for HashValCursor<K, V, T, R> {
+// 	fn key(&self) -> &K { &self.cursor.key() }
+// 	fn val(&self) -> &V { &self.cursor.child.key() }
+// 	fn map_times<L: FnMut(&T, R)>(&mut self, mut logic: L) {
+// 		self.cursor.child.child.rewind();
+// 		while self.cursor.child.child.valid() {
+// 			logic(&self.cursor.child.child.key().0, self.cursor.child.child.key().1);
+// 			self.cursor.child.child.step();
+// 		}
+// 	}
+// 	fn key_valid(&self) -> bool { self.cursor.valid() }
+// 	fn val_valid(&self) -> bool { self.cursor.child.valid() }
+// 	fn step_key(&mut self){ self.cursor.step(); }
+// 	fn seek_key(&mut self, key: &K) { self.cursor.seek(key); }
+// 	fn step_val(&mut self) { self.cursor.child.step(); }
+// 	fn seek_val(&mut self, val: &V) { self.cursor.child.seek(val); }
+// 	fn rewind_keys(&mut self) { self.cursor.rewind(); }
+// 	fn rewind_vals(&mut self) { self.cursor.child.rewind(); }
+// }
+
+impl<K, V, T, R> Cursor<K, V, T, R> for HashValCursor<V, T, R> 
+where K: Clone+HashOrdered, V: Ord+Clone, T: Lattice+Ord+Clone, R: Diff {
+
+	type Storage = Rc<HashValBatch<K, V, T, R>>;//OrderedLayer<K, OrderedLayer<V, OrderedLeaf<T, R>>>;
+
+	fn key<'a>(&self, storage: &'a Self::Storage) -> &'a K { &self.cursor.key(&storage.layer) }
+	fn val<'a>(&self, storage: &'a Self::Storage) -> &'a V { &self.cursor.child.key(&storage.layer.vals) }
+	fn map_times<L: FnMut(&T, R)>(&mut self, storage: &Self::Storage, mut logic: L) {
+		self.cursor.child.child.rewind(&storage.layer.vals.vals);
+		while self.cursor.child.child.valid(&storage.layer.vals.vals) {
+			logic(&self.cursor.child.child.key(&storage.layer.vals.vals).0, self.cursor.child.child.key(&storage.layer.vals.vals).1);
+			self.cursor.child.child.step(&storage.layer.vals.vals);
 		}
 	}
-	fn key_valid(&self) -> bool { self.cursor.valid() }
-	fn val_valid(&self) -> bool { self.cursor.child.valid() }
-	fn step_key(&mut self){ self.cursor.step(); }
-	fn seek_key(&mut self, key: &K) { self.cursor.seek(key); }
-	fn step_val(&mut self) { self.cursor.child.step(); }
-	fn seek_val(&mut self, val: &V) { self.cursor.child.seek(val); }
-	fn rewind_keys(&mut self) { self.cursor.rewind(); }
-	fn rewind_vals(&mut self) { self.cursor.child.rewind(); }
+	fn key_valid(&self, storage: &Self::Storage) -> bool { self.cursor.valid(&storage.layer) }
+	fn val_valid(&self, storage: &Self::Storage) -> bool { self.cursor.child.valid(&storage.layer.vals) }
+	fn step_key(&mut self, storage: &Self::Storage){ self.cursor.step(&storage.layer); }
+	fn seek_key(&mut self, storage: &Self::Storage, key: &K) { self.cursor.seek(&storage.layer, key); }
+	fn step_val(&mut self, storage: &Self::Storage) { self.cursor.child.step(&storage.layer.vals); }
+	fn seek_val(&mut self, storage: &Self::Storage, val: &V) { self.cursor.child.seek(&storage.layer.vals, val); }
+	fn rewind_keys(&mut self, storage: &Self::Storage) { self.cursor.rewind(&storage.layer); }
+	fn rewind_vals(&mut self, storage: &Self::Storage) { self.cursor.child.rewind(&storage.layer.vals); }
 }
-
 
 /// A builder for creating layers from unsorted update tuples.
 pub struct HashValBuilder<K: HashOrdered, V: Ord, T: Ord+Lattice, R: Diff> {
-	builder: HashedBuilder<K, OrderedBuilder<V, UnorderedBuilder<(T, R)>>>,
+	builder: HashedBuilder<K, OrderedBuilder<V, OrderedLeafBuilder<T, R>>>,
 }
 
 impl<K, V, T, R> Builder<K, V, T, R, Rc<HashValBatch<K, V, T, R>>> for HashValBuilder<K, V, T, R> 
@@ -116,12 +143,12 @@ where K: Clone+Default+HashOrdered+'static, V: Ord+Clone+'static, T: Lattice+Ord
 
 	fn new() -> Self { 
 		HashValBuilder { 
-			builder: HashedBuilder::<K, OrderedBuilder<V, UnorderedBuilder<(T, R)>>>::new() 
+			builder: HashedBuilder::<K, OrderedBuilder<V, OrderedLeafBuilder<T, R>>>::new() 
 		} 
 	}
 	fn with_capacity(cap: usize) -> Self { 
 		HashValBuilder { 
-			builder: HashedBuilder::<K, OrderedBuilder<V, UnorderedBuilder<(T, R)>>>::with_capacity(cap) 
+			builder: HashedBuilder::<K, OrderedBuilder<V, OrderedLeafBuilder<T, R>>>::with_capacity(cap) 
 		} 
 	}
 
@@ -146,22 +173,31 @@ where K: Clone+Default+HashOrdered+'static, V: Ord+Clone+'static, T: Lattice+Ord
 #[derive(Debug)]
 pub struct HashKeyBatch<K: HashOrdered, T: Lattice, R> {
 	/// Where all the dataz is.
-	pub layer: HashedLayer<K, UnorderedLayer<(T, R)>>,
+	pub layer: HashedLayer<K, OrderedLeaf<T, R>>,
 	/// Description of the update times this layer represents.
 	pub desc: Description<T>,
 }
 
 impl<K, T, R> BatchReader<K, (), T, R> for Rc<HashKeyBatch<K, T, R>>
 where K: Clone+Default+HashOrdered+'static, T: Lattice+Ord+Clone+Default+'static, R: Diff {
-	type Cursor = HashKeyCursor<K, T, R>;
-	fn cursor(&self) -> Self::Cursor { 
-		HashKeyCursor {
+	type Cursor = HashKeyCursor<T, R>;
+	// fn cursor(&self) -> (Self::Cursor, <Self::Cursor as Cursor<K, V, T, R>>::Storage) { 
+
+	fn cursor(&self) -> (Self::Cursor, <Self::Cursor as Cursor<K, (), T, R>>::Storage) { 
+		let cursor = HashKeyCursor {
 			empty: (),
 			valid: true,
-			cursor: self.layer.cursor(OwningRef::new(self.clone()).map(|x| &x.layer).erase_owner()),
-		} 
+			cursor: self.layer.cursor(),
+		};
+		(cursor, self.clone())
+
+		// HashKeyCursor {
+		// 	empty: (),
+		// 	valid: true,
+		// 	cursor: self.layer.cursor(OwningRef::new(self.clone()).map(|x| &x.layer).erase_owner()),
+		// } 
 	}
-	fn len(&self) -> usize { <HashedLayer<K, UnorderedLayer<(T, R)>> as Trie>::tuples(&self.layer) }
+	fn len(&self) -> usize { <HashedLayer<K, OrderedLeaf<T, R>> as Trie>::tuples(&self.layer) }
 	fn description(&self) -> &Description<T> { &self.desc }
 }
 
@@ -183,7 +219,7 @@ where K: Clone+Default+HashOrdered+'static, T: Lattice+Ord+Clone+Default+'static
 		};
 		
 		Rc::new(HashKeyBatch {
-			layer: <HashedLayer<K, UnorderedLayer<(T, R)>> as Trie>::merge(&self.layer, &other.layer),
+			layer: <HashedLayer<K, OrderedLeaf<T, R>> as Trie>::merge(&self.layer, &other.layer),
 			desc: Description::new(self.desc.lower(), other.desc.upper(), since),
 		})
 	}
@@ -191,36 +227,58 @@ where K: Clone+Default+HashOrdered+'static, T: Lattice+Ord+Clone+Default+'static
 
 /// A cursor for navigating a single layer.
 #[derive(Debug)]
-pub struct HashKeyCursor<K: Clone+HashOrdered, T: Lattice+Ord+Clone, R: Copy> {
+pub struct HashKeyCursor<T: Lattice+Ord+Clone, R: Diff> {
 	valid: bool,
 	empty: (),
-	cursor: HashedCursor<UnorderedLayer<(T, R)>>,
+	cursor: HashedCursor<OrderedLeaf<T, R>>,
 }
 
-impl<K: Clone+HashOrdered, T: Lattice+Ord+Clone, R: Copy> Cursor<K, (), T, R> for HashKeyCursor<K, T, R> {
-	fn key(&self) -> &K { &self.cursor.key() }
-	fn val(&self) -> &() { &self.empty }
-	fn map_times<L: FnMut(&T, R)>(&mut self, mut logic: L) {
-		self.cursor.child.rewind();
-		while self.cursor.child.valid() {
-			logic(&self.cursor.child.key().0, self.cursor.child.key().1);
-			self.cursor.child.step();
+// impl<K: Clone+HashOrdered, T: Lattice+Ord+Clone, R: Copy> Cursor<K, (), T, R> for HashKeyCursor<K, T, R> {
+// 	fn key(&self) -> &K { &self.cursor.key() }
+// 	fn val(&self) -> &() { &self.empty }
+// 	fn map_times<L: FnMut(&T, R)>(&mut self, mut logic: L) {
+// 		self.cursor.child.rewind();
+// 		while self.cursor.child.valid() {
+// 			logic(&self.cursor.child.key().0, self.cursor.child.key().1);
+// 			self.cursor.child.step();
+// 		}
+// 	}
+// 	fn key_valid(&self) -> bool { self.cursor.valid() }
+// 	fn val_valid(&self) -> bool { self.valid }
+// 	fn step_key(&mut self){ self.cursor.step(); self.valid = true; }
+// 	fn seek_key(&mut self, key: &K) { self.cursor.seek(key); self.valid = true; }
+// 	fn step_val(&mut self) { self.valid = false; }
+// 	fn seek_val(&mut self, _val: &()) { }
+// 	fn rewind_keys(&mut self) { self.cursor.rewind(); self.valid = true; }
+// 	fn rewind_vals(&mut self) { self.valid = true; }
+// }
+
+impl<K: Clone+HashOrdered, T: Lattice+Ord+Clone, R: Diff> Cursor<K, (), T, R> for HashKeyCursor<T, R> {
+
+	type Storage = Rc<HashKeyBatch<K, T, R>>;
+
+	fn key<'a>(&self, storage: &'a Self::Storage) -> &'a K { &self.cursor.key(&storage.layer) }
+	fn val<'a>(&self, _storage: &'a Self::Storage) -> &'a () { unsafe { ::std::mem::transmute(&self.empty) } }
+	fn map_times<L: FnMut(&T, R)>(&mut self, storage: &Self::Storage, mut logic: L) {
+		self.cursor.child.rewind(&storage.layer.vals);
+		while self.cursor.child.valid(&storage.layer.vals) {
+			logic(&self.cursor.child.key(&storage.layer.vals).0, self.cursor.child.key(&storage.layer.vals).1);
+			self.cursor.child.step(&storage.layer.vals);
 		}
 	}
-	fn key_valid(&self) -> bool { self.cursor.valid() }
-	fn val_valid(&self) -> bool { self.valid }
-	fn step_key(&mut self){ self.cursor.step(); self.valid = true; }
-	fn seek_key(&mut self, key: &K) { self.cursor.seek(key); self.valid = true; }
-	fn step_val(&mut self) { self.valid = false; }
-	fn seek_val(&mut self, _val: &()) { }
-	fn rewind_keys(&mut self) { self.cursor.rewind(); self.valid = true; }
-	fn rewind_vals(&mut self) { self.valid = true; }
+	fn key_valid(&self, storage: &Self::Storage) -> bool { self.cursor.valid(&storage.layer) }
+	fn val_valid(&self, _storage: &Self::Storage) -> bool { self.valid }
+	fn step_key(&mut self, storage: &Self::Storage){ self.cursor.step(&storage.layer); self.valid = true; }
+	fn seek_key(&mut self, storage: &Self::Storage, key: &K) { self.cursor.seek(&storage.layer, key); self.valid = true; }
+	fn step_val(&mut self, _storage: &Self::Storage) { self.valid = false; }
+	fn seek_val(&mut self, _storage: &Self::Storage, _val: &()) { }
+	fn rewind_keys(&mut self, storage: &Self::Storage) { self.cursor.rewind(&storage.layer); self.valid = true; }
+	fn rewind_vals(&mut self, _storage: &Self::Storage) { self.valid = true; }
 }
-
 
 /// A builder for creating layers from unsorted update tuples.
 pub struct HashKeyBuilder<K: HashOrdered, T: Ord+Lattice, R: Diff> {
-	builder: HashedBuilder<K, UnorderedBuilder<(T, R)>>,
+	builder: HashedBuilder<K, OrderedLeafBuilder<T, R>>,
 }
 
 impl<K, T, R> Builder<K, (), T, R, Rc<HashKeyBatch<K, T, R>>> for HashKeyBuilder<K, T, R> 
@@ -228,12 +286,12 @@ where K: Clone+Default+HashOrdered+'static, T: Lattice+Ord+Clone+Default+'static
 
 	fn new() -> Self { 
 		HashKeyBuilder { 
-			builder: HashedBuilder::<K, UnorderedBuilder<(T, R)>>::new() 
+			builder: HashedBuilder::<K, OrderedLeafBuilder<T, R>>::new() 
 		} 
 	}
 	fn with_capacity(cap: usize) -> Self { 
 		HashKeyBuilder { 
-			builder: HashedBuilder::<K, UnorderedBuilder<(T, R)>>::with_capacity(cap) 
+			builder: HashedBuilder::<K, OrderedLeafBuilder<T, R>>::with_capacity(cap) 
 		} 
 	}
 

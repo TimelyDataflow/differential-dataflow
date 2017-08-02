@@ -1,13 +1,6 @@
 //! Implementation using ordered keys with hashes and robin hood hashing.
 
-// extern crate fnv;
-// extern crate timely_sort;
-
-use std::rc::Rc;
 use std::default::Default;
-// use std::hash::Hasher;
-
-use owning_ref::{OwningRef, Erased};
 
 use timely_sort::Unsigned;
 
@@ -55,7 +48,7 @@ impl<K: HashOrdered, L> HashedLayer<K, L> {
 
 impl<K: Clone+HashOrdered+Default, L: Trie> Trie for HashedLayer<K, L> {
 	type Item = (K, L::Item);
-	type Cursor = HashedCursor<L::Cursor>;
+	type Cursor = HashedCursor<L>;
 	type MergeBuilder = HashedBuilder<K, L::MergeBuilder>;
 	type TupleBuilder = HashedBuilder<K, L::TupleBuilder>;
 
@@ -420,10 +413,10 @@ impl<K: HashOrdered, L: Trie> Cursor<HashedLayer<K, L>> for HashedCursor<L> {
 			self.pos += 1;
 		}
 
-		if self.valid() {
+		if self.valid(storage) {
 			let child_lower = storage.keys[self.pos].get_lower();
 			let child_upper = storage.keys[self.pos].get_upper();
-			self.child.reposition(child_lower, child_upper);
+			self.child.reposition(&storage.vals, child_lower, child_upper);
 		}
 		else {
 			self.pos = self.bounds.1;
@@ -449,14 +442,14 @@ impl<K: HashOrdered, L: Trie> Cursor<HashedLayer<K, L>> for HashedCursor<L> {
 		//	(i) have self.pos == self.bounds.1 (and be invalid) or 
 		//	(ii) point at a valid entry with (entry_hash, entry) >= (key_hash, key).
 		if self.valid(storage) {
-			self.child.reposition(storage.keys[self.pos].get_lower(), storage.keys[self.pos].get_upper());			
+			self.child.reposition(&storage.vals, storage.keys[self.pos].get_lower(), storage.keys[self.pos].get_upper());
 		}
 	}
 	fn valid(&self, _storage: &HashedLayer<K, L>) -> bool { self.pos < self.bounds.1 }
 	fn rewind(&mut self, storage: &HashedLayer<K, L>) {
 		self.pos = self.bounds.0;
-		if self.valid() {
-			self.child.reposition(storage.keys[self.pos].get_lower(), storage.keys[self.pos].get_upper());			
+		if self.valid(storage) {
+			self.child.reposition(&storage.vals, storage.keys[self.pos].get_lower(), storage.keys[self.pos].get_upper());			
 		}
 	}
 	fn reposition(&mut self, storage: &HashedLayer<K, L>, lower: usize, upper: usize) {
@@ -476,8 +469,8 @@ impl<K: HashOrdered, L: Trie> Cursor<HashedLayer<K, L>> for HashedCursor<L> {
 			self.pos += 1;
 		}
 
-		if self.valid() {
-			self.child.reposition(storage.keys[self.pos].get_lower(), storage.keys[self.pos].get_upper());			
+		if self.valid(storage) {
+			self.child.reposition(&storage.vals, storage.keys[self.pos].get_lower(), storage.keys[self.pos].get_upper());			
 		}
 	}
 }
