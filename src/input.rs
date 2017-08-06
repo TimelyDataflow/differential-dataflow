@@ -182,8 +182,15 @@ impl<'a, T: Timestamp+Clone, D: Data, R: Diff> InputSession<T, D, R> {
 	}
 
 	/// Adds to the weight of an element in the collection.
-	pub fn update(&mut self, element: D, change: R) { 
-		self.buffer.push((element, self.time.clone(), change)); 
+	pub fn update(&mut self, element: D, change: R) {
+        if self.buffer.len() == self.buffer.capacity() {
+            if self.buffer.len() > 0 {
+                self.handle.send_batch(&mut self.buffer);
+            }
+            // TODO : This is a fairly arbitrary choice; should probably use `Context::default_size()` or such.
+            self.buffer.reserve(1024);
+        }
+		self.buffer.push((element, self.time.clone(), change));
 	}
 
 	/// Forces buffered data into the timely dataflow input, and advances its time to match that of the session.
