@@ -123,9 +123,9 @@ where G::Timestamp: Lattice+Ord {
          .join_core(&edges, |_,x,y| Some((x.clone(), y.clone())))
          // the next thing is the "topk" worker. sorry!
          .group_u(move |_,s,t| {
-             t.extend(s.iter().map(|&(x,y)| (x,y)));       // propose all inputs as outputs
-             t.sort_by(|x,y| (-x.1).cmp(&(-y.1)));  // sort by negative count (large numbers first)
-             t.truncate(k)                          // keep at most k of these
+             t.extend(s.iter().map(|&(x,y)| (*x,y)));   // propose all inputs as outputs
+             t.sort_by(|x,y| (-x.1).cmp(&(-y.1)));      // sort by negative count (large numbers first)
+             t.truncate(k)                              // keep at most k of these
          })
  }
 
@@ -172,7 +172,7 @@ where G::Timestamp: Lattice+Hash+Ord {
 
              inner.join_map_u(&edges, |_k,l,d| (*d,*l))
                   .concat(&nodes)
-                  .group_u(|_, s, t| { t.push((s[0].0, 1)); } )
+                  .group_u(|_, s, t| { t.push((*s[0].0, 1)); } )
          })
 }
 
@@ -191,6 +191,6 @@ where G::Timestamp: Lattice+Ord {
 
         inner.join_map_u(&edges, |_k,l,d| (*d, l+1))
              .concat(&nodes)
-             .group_u(|_, s, t| t.push((s[0].0, 1)))
+             .group_u(|_, s, t| t.push((*s[0].0, 1)))
      })
 }

@@ -147,7 +147,7 @@ where T: Lattice+Clone+'static, Tr: TraceReader<K,V,T,R> {
     fn distinguish_frontier(&mut self) -> &[T] { 
         &self.through[..]
     }
-    fn cursor_through(&mut self, frontier: &[T]) -> Option<Tr::Cursor> { self.trace.borrow_mut().trace.cursor_through(frontier) }
+    fn cursor_through(&mut self, frontier: &[T]) -> Option<(Tr::Cursor, <Tr::Cursor as Cursor<K, V, T, R>>::Storage)> { self.trace.borrow_mut().trace.cursor_through(frontier) }
     fn map_batches<F: FnMut(&Self::Batch)>(&mut self, f: F) { self.trace.borrow_mut().trace.map_batches(f) }
 }
 
@@ -264,7 +264,7 @@ where T: Lattice+Clone+'static, Tr: TraceReader<K,V,T,R> {
     ///         worker.dataflow(move |scope| {
     ///             trace.import(scope)
     ///                  .group_arranged(
-    ///                      move |_key, src, dst| dst.push((src[0], 1)),
+    ///                      move |_key, src, dst| dst.push((*src[0].0, 1)),
     ///                      OrdValSpine::new()
     ///                  );
     ///         });
@@ -405,17 +405,17 @@ impl<G: Scope, K, V, R, T> Arranged<G, K, V, R, T> where G::Timestamp: Lattice, 
                 let mut session = output.session(&time);
                 for wrapper in data.drain(..) {
                     let batch = wrapper.item;
-                    let mut cursor = batch.cursor();
-                    while cursor.key_valid() {
-                        let key: K = cursor.key().clone();      // TODO: pass ref in map_times
-                        while cursor.val_valid() {
-                            let val: V = cursor.val().clone();  // TODO: pass ref in map_times
-                            cursor.map_times(|time, diff| {
-                                session.give((logic(&key, &val), time.clone(), diff.clone()));
+                    let (mut cursor, storage) = batch.cursor();
+                    while cursor.key_valid(&storage) {
+                        let key: &K = cursor.key(&storage);
+                        while cursor.val_valid(&storage) {
+                            let val: &V = cursor.val(&storage);
+                            cursor.map_times(&storage, |time, diff| {
+                                session.give((logic(key, val), time.clone(), diff.clone()));
                             });
-                            cursor.step_val();
+                            cursor.step_val(&storage);
                         }
-                        cursor.step_key();
+                        cursor.step_key(&storage);
                     }
                 }
             });

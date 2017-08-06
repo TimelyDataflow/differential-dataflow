@@ -47,7 +47,7 @@ pub trait TraceReader<Key, Val, Time, R> {
 	type Cursor: Cursor<Key, Val, Time, R>;
 
 	/// Provides a cursor over updates contained in the trace.
-	fn cursor(&mut self) -> Self::Cursor {
+	fn cursor(&mut self) -> (Self::Cursor, <Self::Cursor as Cursor<Key, Val, Time, R>>::Storage) {
 		if let Some(cursor) = self.cursor_through(&[]) {
 			cursor
 		}
@@ -63,7 +63,7 @@ pub trait TraceReader<Key, Val, Time, R> {
 	/// the trace, and (ii) the trace has not been advanced beyond `upper`. Practically, the implementation should
 	/// be expected to look for a "clean cut" using `upper`, and if it finds such a cut can return a cursor. This
 	/// should allow `upper` such as `&[]` as used by `self.cursor()`, though it is difficult to imagine other uses.
-	fn cursor_through(&mut self, upper: &[Time]) -> Option<Self::Cursor>;
+	fn cursor_through(&mut self, upper: &[Time]) -> Option<(Self::Cursor, <Self::Cursor as Cursor<Key, Val, Time, R>>::Storage)>;
 
 	/// Advances the frontier of times the collection must be correctly accumulable through.
 	///
@@ -141,7 +141,7 @@ pub trait BatchReader<K, V, T, R> {
 	/// The type used to enumerate the batch's contents.
 	type Cursor: Cursor<K, V, T, R>;
 	/// Acquires a cursor to the batch's contents.
-	fn cursor(&self) -> Self::Cursor;
+	fn cursor(&self) -> (Self::Cursor, <Self::Cursor as Cursor<K, V, T, R>>::Storage);
 	/// The number of updates in the batch.
 	fn len(&self) -> usize;
 	/// Describes the times of the updates in the batch.
@@ -176,18 +176,18 @@ pub trait Batch<K, V, T, R> : BatchReader<K, V, T, R> where Self: ::std::marker:
 		let mut builder = Self::Builder::with_capacity(self.len());
 
 		let mut times = Vec::new();
-		let mut cursor = self.cursor();
+		let (mut cursor, storage) = self.cursor();
 
-		while cursor.key_valid() {
-			while cursor.val_valid() {
-				cursor.map_times(|time: &T, diff| times.push((time.advance_by(frontier), diff)));
+		while cursor.key_valid(&storage) {
+			while cursor.val_valid(&storage) {
+				cursor.map_times(&storage, |time: &T, diff| times.push((time.advance_by(frontier), diff)));
 				consolidate(&mut times, 0);
 				for (time, diff) in times.drain(..) {
-					builder.push((cursor.key().clone(), cursor.val().clone(), time, diff));
+					builder.push((cursor.key(&storage).clone(), cursor.val(&storage).clone(), time, diff));
 				}
-				cursor.step_val();
+				cursor.step_val(&storage);
 			}
-			cursor.step_key();
+			cursor.step_key(&storage);
 		}
 
 		builder.done(self.description().lower(), self.description().upper(), frontier)

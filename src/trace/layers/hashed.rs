@@ -1,13 +1,6 @@
 //! Implementation using ordered keys with hashes and robin hood hashing.
 
-// extern crate fnv;
-// extern crate timely_sort;
-
-use std::rc::Rc;
 use std::default::Default;
-// use std::hash::Hasher;
-
-use owning_ref::{OwningRef, Erased};
 
 use timely_sort::Unsigned;
 
@@ -55,13 +48,13 @@ impl<K: HashOrdered, L> HashedLayer<K, L> {
 
 impl<K: Clone+HashOrdered+Default, L: Trie> Trie for HashedLayer<K, L> {
 	type Item = (K, L::Item);
-	type Cursor = HashedCursor<K, L::Cursor>;
+	type Cursor = HashedCursor<L>;
 	type MergeBuilder = HashedBuilder<K, L::MergeBuilder>;
 	type TupleBuilder = HashedBuilder<K, L::TupleBuilder>;
 
 	fn keys(&self) -> usize { self.keys.len() }
 	fn tuples(&self) -> usize { self.vals.tuples() }
-	fn cursor_from(&self, owned_self: OwningRef<Rc<Erased>, Self>, lower: usize, upper: usize) -> Self::Cursor {
+	fn cursor_from(&self, lower: usize, upper: usize) -> Self::Cursor {
 
 		if lower < upper {
 
@@ -80,8 +73,8 @@ impl<K: Clone+HashOrdered+Default, L: Trie> Trie for HashedLayer<K, L> {
 				shift: shift,
 				bounds: (lower, upper),
 				pos: pos,
-				keys: owned_self.clone().map(|x| &x.keys[..]),
-				child: self.vals.cursor_from(owned_self.map(|x| &x.vals), self.keys[pos].get_lower(), self.keys[pos].get_upper())
+				// keys: owned_self.clone().map(|x| &x.keys[..]),
+				child: self.vals.cursor_from(self.keys[pos].get_lower(), self.keys[pos].get_upper())
 			}
 		}
 		else {
@@ -89,8 +82,8 @@ impl<K: Clone+HashOrdered+Default, L: Trie> Trie for HashedLayer<K, L> {
 				shift: 0,
 				bounds: (0, 0),
 				pos: 0,
-				keys: owned_self.clone().map(|x| &x.keys[..]), // &self.keys,
-				child: self.vals.cursor_from(owned_self.map(|x| &x.vals), 0, 0),
+				// keys: owned_self.clone().map(|x| &x.keys[..]), // &self.keys,
+				child: self.vals.cursor_from(0, 0),
 			}
 		}
 	}
@@ -400,38 +393,37 @@ impl<K: HashOrdered+Clone+Default, L: MergeBuilder> HashedBuilder<K, L> {
 
 /// A cursor with a child cursor that is updated as we move.
 #[derive(Debug)]
-pub struct HashedCursor<K: HashOrdered, L: Cursor> {
+pub struct HashedCursor<L: Trie> {
 	shift: usize,			// amount by which to shift hashes.
 	bounds: (usize, usize),	// bounds of slice of self.keys.
 	pos: usize,				// <-- current cursor position.
 
-	keys: OwningRef<Rc<Erased>, [Entry<K>]>,
 	/// A cursor for the layer below this one.
-	pub child: L,
+	pub child: L::Cursor,
 }
 
-impl<K: HashOrdered, L: Cursor> Cursor for HashedCursor<K, L> {
+impl<K: HashOrdered, L: Trie> Cursor<HashedLayer<K, L>> for HashedCursor<L> {
 	type Key = K;
-	fn key(&self) -> &Self::Key { &self.keys[self.pos].key }
-	fn step(&mut self) {
+	fn key<'a>(&self, storage: &'a HashedLayer<K, L>) -> &'a Self::Key { &storage.keys[self.pos].key }
+	fn step(&mut self, storage: &HashedLayer<K, L>) {
 
 		// look for next valid entry
 		self.pos += 1;
-		while self.pos < self.bounds.1 && !self.keys[self.pos].is_some() {
+		while self.pos < self.bounds.1 && !storage.keys[self.pos].is_some() {
 			self.pos += 1;
 		}
 
-		if self.valid() {
-			let child_lower = self.keys[self.pos].get_lower();
-			let child_upper = self.keys[self.pos].get_upper();
-			self.child.reposition(child_lower, child_upper);
+		if self.valid(storage) {
+			let child_lower = storage.keys[self.pos].get_lower();
+			let child_upper = storage.keys[self.pos].get_upper();
+			self.child.reposition(&storage.vals, child_lower, child_upper);
 		}
 		else {
 			self.pos = self.bounds.1;
 		}
 	}
 	#[inline(never)]
-	fn seek(&mut self, key: &Self::Key) {
+	fn seek(&mut self, storage: &HashedLayer<K, L>, key: &Self::Key) {
 		// leap to where the key *should* be, or at least be soon after.
 		// let key_hash = key.hashed();
 		
@@ -442,25 +434,25 @@ impl<K: HashOrdered, L: Cursor> Cursor for HashedCursor<K, L> {
 		}
 
 		// scan forward until we find a valid entry >= (key_hash, key)
-		while self.pos < self.bounds.1 && (!self.keys[self.pos].is_some() || &self.keys[self.pos].key < key)  {
+		while self.pos < self.bounds.1 && (!storage.keys[self.pos].is_some() || &storage.keys[self.pos].key < key)  {
 			self.pos += 1;
 		}
 
 		// self.pos should now either 
 		//	(i) have self.pos == self.bounds.1 (and be invalid) or 
 		//	(ii) point at a valid entry with (entry_hash, entry) >= (key_hash, key).
-		if self.valid() {
-			self.child.reposition(self.keys[self.pos].get_lower(), self.keys[self.pos].get_upper());			
+		if self.valid(storage) {
+			self.child.reposition(&storage.vals, storage.keys[self.pos].get_lower(), storage.keys[self.pos].get_upper());
 		}
 	}
-	fn valid(&self) -> bool { self.pos < self.bounds.1 }
-	fn rewind(&mut self) {
+	fn valid(&self, _storage: &HashedLayer<K, L>) -> bool { self.pos < self.bounds.1 }
+	fn rewind(&mut self, storage: &HashedLayer<K, L>) {
 		self.pos = self.bounds.0;
-		if self.valid() {
-			self.child.reposition(self.keys[self.pos].get_lower(), self.keys[self.pos].get_upper());			
+		if self.valid(storage) {
+			self.child.reposition(&storage.vals, storage.keys[self.pos].get_lower(), storage.keys[self.pos].get_upper());			
 		}
 	}
-	fn reposition(&mut self, lower: usize, upper: usize) {
+	fn reposition(&mut self, storage: &HashedLayer<K, L>, lower: usize, upper: usize) {
 
 		// sort out what the shift is.
 		// should be just before the first power of two strictly containing (lower, upper].
@@ -473,12 +465,12 @@ impl<K: HashOrdered, L: Cursor> Cursor for HashedCursor<K, L> {
 		self.bounds = (lower, upper);
 
 		self.pos = lower;	// set self.pos to something valid.
-		while self.pos < self.bounds.1 && !self.keys[self.pos].is_some() {
+		while self.pos < self.bounds.1 && !storage.keys[self.pos].is_some() {
 			self.pos += 1;
 		}
 
-		if self.valid() {
-			self.child.reposition(self.keys[self.pos].get_lower(), self.keys[self.pos].get_upper());			
+		if self.valid(storage) {
+			self.child.reposition(&storage.vals, storage.keys[self.pos].get_lower(), storage.keys[self.pos].get_upper());			
 		}
 	}
 }

@@ -12,56 +12,59 @@ pub mod cursor_list;
 /// A cursor for navigating ordered `(key, val, time, diff)` updates.
 pub trait Cursor<K, V, T, R> {
 	
+	/// Type the cursor addresses data in.
+	type Storage;
+
 	/// Indicates if the current key is valid.
 	///
 	/// A value of `false` indicates that the cursor has exhausted all keys.
-	fn key_valid(&self) -> bool;
+	fn key_valid(&self, storage: &Self::Storage) -> bool;
 	/// Indicates if the current value is valid.
 	///
 	/// A value of `false` indicates that the cursor has exhausted all values for this key.
-	fn val_valid(&self) -> bool;
+	fn val_valid(&self, storage: &Self::Storage) -> bool;
 
 	/// A reference to the current key. Asserts if invalid.
-	fn key(&self) -> &K;
+	fn key<'a>(&self, storage: &'a Self::Storage) -> &'a K;
 	/// A reference to the current value. Asserts if invalid.
-	fn val(&self) -> &V;
+	fn val<'a>(&self, storage: &'a Self::Storage) -> &'a V;
 	/// Applies `logic` to each pair of time and difference. Intended for mutation of the
 	/// closure's scope.
-	fn map_times<L: FnMut(&T, R)>(&mut self, logic: L);
+	fn map_times<L: FnMut(&T, R)>(&mut self, storage: &Self::Storage, logic: L);
 
 	/// Advances the cursor to the next key. Indicates if the key is valid.
-	fn step_key(&mut self);
+	fn step_key(&mut self, storage: &Self::Storage);
 	/// Advances the cursor to the specified key. Indicates if the key is valid.
-	fn seek_key(&mut self, key: &K);
+	fn seek_key(&mut self, storage: &Self::Storage, key: &K);
 	
 	/// Advances the cursor to the next value. Indicates if the value is valid.
-	fn step_val(&mut self);
+	fn step_val(&mut self, storage: &Self::Storage);
 	/// Advances the cursor to the specified value. Indicates if the value is valid.
-	fn seek_val(&mut self, val: &V);
+	fn seek_val(&mut self, storage: &Self::Storage, val: &V);
 
 	/// Rewinds the cursor to the first key.	
-	fn rewind_keys(&mut self);
+	fn rewind_keys(&mut self, storage: &Self::Storage);
 	/// Rewinds the cursor to the first value for current key.
-	fn rewind_vals(&mut self);
+	fn rewind_vals(&mut self, storage: &Self::Storage);
 }
 
 /// Debugging and testing utilities for Cursor.
 pub trait CursorDebug<K: Clone, V: Clone, T: Clone, R: Clone> : Cursor<K, V, T, R> {
 	/// Rewinds the cursor and outputs its contents to a Vec
-	fn to_vec(&mut self) -> Vec<((K, V), Vec<(T, R)>)> {
+	fn to_vec(&mut self, storage: &Self::Storage) -> Vec<((K, V), Vec<(T, R)>)> {
 		let mut out = Vec::new();
-		self.rewind_keys();
-		self.rewind_vals();
-		while self.key_valid() {
-			while self.val_valid() {
+		self.rewind_keys(storage);
+		self.rewind_vals(storage);
+		while self.key_valid(storage) {
+			while self.val_valid(storage) {
 				let mut kv_out = Vec::new();
-				self.map_times(|ts, r| {
+				self.map_times(storage, |ts, r| {
 					kv_out.push((ts.clone(), r));
 				});
-				out.push(((self.key().clone(), self.val().clone()), kv_out));
-				self.step_val();
+				out.push(((self.key(storage).clone(), self.val(storage).clone()), kv_out));
+				self.step_val(storage);
 			}
-			self.step_key();
+			self.step_key(storage);
 		}
 		out
 	}

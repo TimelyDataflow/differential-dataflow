@@ -92,7 +92,7 @@ where G::Timestamp: Lattice+Hash+Ord {
         let mut reached = false;
         let mut iter = vals.iter();
         while let Some(&(b, _)) = iter.next() {
-            if let Some(b) = b {
+            if let &Some(b) = b {
                 if b { reached = true; }
             }
         }
@@ -102,7 +102,7 @@ where G::Timestamp: Lattice+Hash+Ord {
 
 fn sequence<G: Scope, V: Data, F>(state: &Nodes<G, V>, edges: &Edges<G>, logic: F) -> Nodes<G, Option<V>>
 where G::Timestamp: Lattice+Hash+Ord,
-      F: Fn(&Node, &[(Option<V>, isize)])->V+'static {
+      F: Fn(&Node, &[(&Option<V>, isize)])->V+'static {
 
         // start iteration with None messages for all.
         state.map(|(node, _state)| (node, None))

@@ -47,7 +47,3 @@ pub use self::batcher::RadixBatcher as Batcher;
 
 pub mod ord;
 pub mod hash;
-
-// pub mod rhh;
-// pub mod rhh_k;
-//

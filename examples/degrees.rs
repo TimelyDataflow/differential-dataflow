@@ -45,17 +45,13 @@ fn main() {
             (input, probe)
         });
 
-        let timer = ::std::time::Instant::now();
-
         let seed: &[_] = &[1, 2, 3, index];
         let mut rng1: StdRng = SeedableRng::from_seed(seed);    // rng for edge additions
         let mut rng2: StdRng = SeedableRng::from_seed(seed);    // rng for edge additions
 
         // load up graph dataz
-        for edge in 0..edges {
-            if edge % peers == index {
-                input.insert((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)))
-            }
+        for _ in 0 .. (edges / peers) + if index < (edges % peers) { 1 } else { 0 } {
+            input.insert((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)))
         }
 
         input.advance_to(1);
@@ -71,7 +67,7 @@ fn main() {
                 for round in 0 .. batch {
                     input.advance_to(((wave * batch) + round) * peers + index);
                     input.insert((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)));
-                    input.remove((rng2.gen_range(0, nodes), rng2.gen_range(0, nodes)));
+                    input.remove((rng2.gen_range(0, nodes), rng2.gen_range(0, nodes)));                    
                 }
 
                 wave += 1;

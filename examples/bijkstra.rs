@@ -121,8 +121,7 @@ where G::Timestamp: Lattice+Ord {
         let reached = 
         forward
             .join_map_u(&reverse, |_, &(src,d1), &(dst,d2)| ((src, dst), d1 + d2))
-            .group(|_key, s, t| t.push((s[0].0, 1)));
-            // .inspect(|x| println!("reached: {:?}", x));
+            .group(|_key, s, t| t.push((*s[0].0, 1)));
 
         let active =
         reached
@@ -130,21 +129,19 @@ where G::Timestamp: Lattice+Ord {
             .negate()
             .map(|(srcdst,_)| srcdst)
             .concat(&goals)
-            // .inspect(|x| println!("active: {:?}", x))
             .consolidate();
 
         // Let's expand out forward queries that are active.
         let forward_active = active.map(|(x,_y)| x).distinct_u();
         let forward_next = 
         forward
-            // .inspect(|x| println!("forward: {:?}", x))
             .map(|(med, (src, dist))| (src, (med, dist)))
             .semijoin_u(&forward_active)
             .map(|(src, (med, dist))| (med, (src, dist)))
             .join_map_u(&edges, |_med, &(src, dist), &next| (next, (src, dist+1)))
             .concat(&forward)
             .map(|(next, (src, dist))| ((next, src), dist))
-            .group(|_key, s, t| t.push((s[0].0, 1)))
+            .group(|_key, s, t| t.push((*s[0].0, 1)))
             .map(|((next, src), dist)| (next, (src, dist)));
 
         forward.set(&forward_next);
@@ -153,14 +150,13 @@ where G::Timestamp: Lattice+Ord {
         let reverse_active = active.map(|(_x,y)| y).distinct_u();
         let reverse_next = 
         reverse
-            // .inspect(|x| println!("reverse: {:?}", x))
             .map(|(med, (rev, dist))| (rev, (med, dist)))
             .semijoin_u(&reverse_active)
             .map(|(rev, (med, dist))| (med, (rev, dist)))
             .join_map_u(&edges.map(|(x,y)| (y,x)), |_med, &(rev, dist), &next| (next, (rev, dist+1)))
             .concat(&reverse)
             .map(|(next, (rev, dist))| ((next, rev), dist))
-            .group(|_key, s, t| t.push((s[0].0, 1)))
+            .group(|_key, s, t| t.push((*s[0].0, 1)))
             .map(|((next,rev), dist)| (next, (rev, dist)));
 
         reverse.set(&reverse_next);

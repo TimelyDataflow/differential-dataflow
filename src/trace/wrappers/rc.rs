@@ -18,6 +18,7 @@ use timely::progress::frontier::MutableAntichain;
 
 use lattice::Lattice;
 use trace::TraceReader;
+use trace::cursor::Cursor;
 
 /// A wrapper around a trace which tracks the frontiers of all referees.
 /// 
@@ -108,7 +109,7 @@ impl<K,V,T,R,Tr> TraceReader<K, V, T, R> for TraceRc<K,V,T,R,Tr> where T: Lattic
     }
     fn distinguish_frontier(&mut self) -> &[T] { &self.through_frontier[..] }
     /// Creates a new cursor over the wrapped trace.
-    fn cursor_through(&mut self, frontier: &[T]) -> Option<Tr::Cursor> {
+    fn cursor_through(&mut self, frontier: &[T]) -> Option<(Tr::Cursor, <Tr::Cursor as Cursor<K, V, T, R>>::Storage)> {
         ::std::cell::RefCell::borrow_mut(&self.wrapper).trace.cursor_through(frontier)
     }
 

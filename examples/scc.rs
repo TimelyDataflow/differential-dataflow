@@ -18,8 +18,8 @@ use differential_dataflow::trace::Trace;
 use differential_dataflow::operators::group::GroupArranged;
 use differential_dataflow::operators::arrange::Arrange;
 use differential_dataflow::hashable::UnsignedWrapper;
-use differential_dataflow::trace::implementations::hash::HashValSpine as HashSpine;
-use differential_dataflow::trace::implementations::hash::HashKeySpine as KeyHashSpine;
+use differential_dataflow::trace::implementations::ord::OrdValSpine;// as HashSpine;
+use differential_dataflow::trace::implementations::ord::OrdKeySpine;// as OrdKeyHashSpine;
 
 
 type Node = u32;
@@ -105,12 +105,12 @@ where G::Timestamp: Lattice+Ord+Hash {
         // keep edges from active edge destinations.
 
         let active = edges.map(|(_,k)| (UnsignedWrapper::from(k), ()))
-                          .arrange(KeyHashSpine::new())
-                          .group_arranged(|_k,_s,t| t.push(((), 1)), KeyHashSpine::new());
+                          .arrange(OrdKeySpine::new())
+                          .group_arranged(|_k,_s,t| t.push(((), 1)), OrdKeySpine::new());
 
         graph.enter(&edges.scope())
              .map(|(k,v)| (UnsignedWrapper::from(k), v))
-             .arrange(HashSpine::new())
+             .arrange(OrdValSpine::new())
              .join_core(&active, |k,v,_| Some((k.item.clone(), v.clone())))
 
         // let active = edges.map(|(_,dst)| dst).distinct_u();
@@ -165,7 +165,7 @@ where G::Timestamp: Lattice+Ord+Hash {
 
              inner.join_map(&edges, |_k,l,d| (*d,*l))
                   .concat(&nodes)
-                  .group(|_, s, t| t.push((s[0].0, 1)))
+                  .group(|_, s, t| t.push((*s[0].0, 1)))
 
          })
 }

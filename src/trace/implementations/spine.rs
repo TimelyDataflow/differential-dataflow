@@ -8,6 +8,7 @@ use ::Diff;
 use lattice::Lattice;
 use trace::{Batch, BatchReader, Trace, TraceReader};
 use trace::cursor::cursor_list::CursorList;
+use trace::cursor::Cursor;
 
 /// An append-only collection of update tuples.
 ///
@@ -34,7 +35,7 @@ where
 	type Batch = B;
 	type Cursor = CursorList<K, V, T, R, <B as BatchReader<K, V, T, R>>::Cursor>;
 
-	fn cursor_through(&mut self, upper: &[T]) -> Option<Self::Cursor> {
+	fn cursor_through(&mut self, upper: &[T]) -> Option<(Self::Cursor, <Self::Cursor as Cursor<K, V, T, R>>::Storage)> {
 
 		// we shouldn't grab a cursor into a closed trace, right?
 		assert!(self.advance_frontier.len() > 0);
@@ -44,7 +45,13 @@ where
 		if upper.iter().all(|t1| self.through_frontier.iter().any(|t2| t2.less_equal(t1))) {
 
 			let mut cursors = Vec::new();
-			cursors.extend(self.merging.iter().filter(|b| b.len() > 0).map(|b| b.cursor()));
+			let mut storage = Vec::new();
+
+			for (cursor, store) in self.merging.iter().filter(|b| b.len() > 0).map(|b| b.cursor()) {
+				cursors.push(cursor);
+				storage.push(store);
+			}
+
 			for batch in &self.pending {
 				let include_lower = upper.iter().all(|t1| batch.lower().iter().any(|t2| t2.less_equal(t1)));
 				let include_upper = upper.iter().all(|t1| batch.upper().iter().any(|t2| t2.less_equal(t1)));
@@ -56,10 +63,12 @@ where
 
 				// include pending batches 
 				if include_upper {
-					cursors.push(batch.cursor());
+					let (cursor, store) = batch.cursor();
+					cursors.push(cursor);
+					storage.push(store);
 				}
 			}
-			Some(CursorList::new(cursors))
+			Some((CursorList::new(cursors, &storage), storage))
 		}
 		else {
 			None

@@ -130,12 +130,12 @@ where
 
         if let Some(batch) = self.sorted.take() {
 
-            let mut cursor = batch.cursor();
-            while cursor.key_valid() {
-                let key: K = cursor.key().clone();
-                while cursor.val_valid() {
-                    let val: V = cursor.val().clone();
-                    cursor.map_times(|time, diff| {
+            let (mut cursor, storage) = batch.cursor();
+            while cursor.key_valid(&storage) {
+                let key: &K = cursor.key(&storage);
+                while cursor.val_valid(&storage) {
+                    let val: &V = cursor.val(&storage);
+                    cursor.map_times(&storage, |time, diff| {
                         if upper.iter().any(|t| t.less_equal(time)) {
                             builder_keep.push((key.clone(), val.clone(), time.clone(), diff));
                             self.frontier.insert(time.clone());
@@ -144,9 +144,9 @@ where
                             builder_seal.push((key.clone(), val.clone(), time.clone(), diff));
                         }
                     });
-                    cursor.step_val();
+                    cursor.step_val(&storage);
                 }
-                cursor.step_key();
+                cursor.step_key(&storage);
             }
         }
 

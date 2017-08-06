@@ -1,9 +1,5 @@
 //! Implementation using ordered keys and exponential search.
 
-use std::rc::Rc;
-
-use owning_ref::{OwningRef, Erased};
-
 use difference::Diff;
 
 use super::{Trie, Cursor, Builder, MergeBuilder, TupleBuilder};
@@ -17,15 +13,15 @@ pub struct OrderedLeaf<K, R> {
 
 impl<K: Ord+Clone, R: Diff+Clone> Trie for OrderedLeaf<K, R> {
     type Item = (K, R);
-    type Cursor = OrderedLeafCursor<K, R>;
+    type Cursor = OrderedLeafCursor;
     type MergeBuilder = OrderedLeafBuilder<K, R>;
     type TupleBuilder = OrderedLeafBuilder<K, R>;
     fn keys(&self) -> usize { self.vals.len() }
     fn tuples(&self) -> usize { <OrderedLeaf<K, R> as Trie>::keys(&self) }
-    fn cursor_from(&self, owned_self: OwningRef<Rc<Erased>, Self>, lower: usize, upper: usize) -> Self::Cursor { 
+    fn cursor_from(&self, lower: usize, upper: usize) -> Self::Cursor { 
         // println!("unordered: {} .. {}", lower, upper);
         OrderedLeafCursor {
-            vals: owned_self.map(|x| &x.vals[..]),
+            // vals: owned_self.map(|x| &x.vals[..]),
             bounds: (lower, upper),
             pos: lower,
         }
@@ -110,29 +106,29 @@ impl<K: Ord+Clone, R: Diff+Clone> TupleBuilder for OrderedLeafBuilder<K, R> {
 ///
 /// This cursor does not support `seek`, though I'm not certain how to expose this.
 #[derive(Debug)]
-pub struct OrderedLeafCursor<K, R> {
-    vals: OwningRef<Rc<Erased>, [(K, R)]>,
+pub struct OrderedLeafCursor {
+    // vals: OwningRef<Rc<Erased>, [(K, R)]>,
     pos: usize,
     bounds: (usize, usize),
 }
 
-impl<K: Clone, R: Clone> Cursor for OrderedLeafCursor<K, R> {
+impl<K: Clone, R: Clone> Cursor<OrderedLeaf<K, R>> for OrderedLeafCursor {
     type Key = (K, R);
-    fn key(&self) -> &Self::Key { &self.vals[self.pos] }
-    fn step(&mut self) {
+    fn key<'a>(&self, storage: &'a OrderedLeaf<K, R>) -> &'a Self::Key { &storage.vals[self.pos] }
+    fn step(&mut self, storage: &OrderedLeaf<K, R>) {
         self.pos += 1; 
-        if !self.valid() {
+        if !self.valid(storage) {
             self.pos = self.bounds.1;
         }
     }
-    fn seek(&mut self, _key: &Self::Key) {
-        panic!("seeking in an OrderedLeafCursor");
+    fn seek(&mut self, _storage: &OrderedLeaf<K, R>, _key: &Self::Key) {
+        panic!("seeking in an OrderedLeafCursor; should be fine, panic is wrong.");
     }
-    fn valid(&self) -> bool { self.pos < self.bounds.1 }
-    fn rewind(&mut self) {
+    fn valid(&self, _storage: &OrderedLeaf<K, R>) -> bool { self.pos < self.bounds.1 }
+    fn rewind(&mut self, _storage: &OrderedLeaf<K, R>) {
         self.pos = self.bounds.0;
     }
-    fn reposition(&mut self, lower: usize, upper: usize) {
+    fn reposition(&mut self, _storage: &OrderedLeaf<K, R>, lower: usize, upper: usize) {
         self.pos = lower;
         self.bounds = (lower, upper);
     }

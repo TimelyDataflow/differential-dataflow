@@ -146,20 +146,20 @@ where
                 let mut session = output.session(&capability);
                 for batch in batches.drain(..).map(|x| x.item) {
 
-                    let mut batch_cursor = batch.cursor();
-                    let mut trace_cursor = trace.cursor_through(batch.lower()).unwrap();
+                    let (mut batch_cursor, batch_storage) = batch.cursor();
+                    let (mut trace_cursor, trace_storage) = trace.cursor_through(batch.lower()).unwrap();
 
-                    while batch_cursor.key_valid() {
+                    while batch_cursor.key_valid(&batch_storage) {
 
-                        let key: K = batch_cursor.key().clone();
+                        let key: K = batch_cursor.key(&batch_storage).clone();
                         let mut count = R::zero();
 
-                        trace_cursor.seek_key(batch_cursor.key());
-                        if trace_cursor.key_valid() && trace_cursor.key() == batch_cursor.key() {
-                            trace_cursor.map_times(|_, diff| count = count + diff);
+                        trace_cursor.seek_key(&trace_storage, batch_cursor.key(&batch_storage));
+                        if trace_cursor.key_valid(&trace_storage) && trace_cursor.key(&trace_storage) == batch_cursor.key(&batch_storage) {
+                            trace_cursor.map_times(&trace_storage, |_, diff| count = count + diff);
                         }
 
-                        batch_cursor.map_times(|time, diff| {
+                        batch_cursor.map_times(&batch_storage, |time, diff| {
 
                             if !count.is_zero() {
                                 session.give(((key.clone(), count), time.clone(), -1));
@@ -171,7 +171,7 @@ where
 
                         });
 
-                        batch_cursor.step_key();
+                        batch_cursor.step_key(&batch_storage);
                     }
 
                     // tidy up the shared input trace.
