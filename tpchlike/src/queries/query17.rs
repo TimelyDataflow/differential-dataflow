@@ -60,8 +60,8 @@ where G::Timestamp: TotalOrder+Ord {
             let threshold = (total / count) / 7;
 
             // produce as output those tuples with below-threshold quantity.
-            t.extend(s.iter().filter(|&&((quantity,_),_)| quantity < threshold)
-                             .map(|&((_,price),count)| (price, count)));
+            t.extend(s.iter().filter(|&&(&(quantity,_),_)| quantity < threshold)
+                             .map(|&(&(_,price),count)| (price, count)));
         })
         .explode(|(_part, price)| Some((0u8, price as isize)))
         .count_total_u()

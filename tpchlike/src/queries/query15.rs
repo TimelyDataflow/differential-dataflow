@@ -71,22 +71,22 @@ where G::Timestamp: TotalOrder+Ord {
             .map(|key| ((key % 1000) as u16, key))
             .group_u(|_k, s, t| {
                 let max = s.iter().map(|x| x.1).max().unwrap();
-                t.extend(s.iter().filter(|x| x.1 == max));
+                t.extend(s.iter().filter(|x| x.1 == max).map(|&(&a,b)| (a,b)));
             })
             .map(|(_,key)| ((key % 100) as u8, key))
             .group_u(|_k, s, t| {
                 let max = s.iter().map(|x| x.1).max().unwrap();
-                t.extend(s.iter().filter(|x| x.1 == max));
+                t.extend(s.iter().filter(|x| x.1 == max).map(|&(&a,b)| (a,b)));
             })
             .map(|(_,key)| ((key % 10) as u8, key))
             .group_u(|_k, s, t| {
                 let max = s.iter().map(|x| x.1).max().unwrap();
-                t.extend(s.iter().filter(|x| x.1 == max));
+                t.extend(s.iter().filter(|x| x.1 == max).map(|&(&a,b)| (a,b)));
             })
             .map(|(_,key)| (0u8, key))
             .group_u(|_k, s, t| {
                 let max = s.iter().map(|x| x.1).max().unwrap();
-                t.extend(s.iter().filter(|x| x.1 == max));
+                t.extend(s.iter().filter(|x| x.1 == max).map(|&(&a,b)| (a,b)));
             })
             .map(|(_, key)| key)
             .count_total_u();

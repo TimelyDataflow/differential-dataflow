@@ -70,7 +70,7 @@ where G::Timestamp: TotalOrder+Ord {
         .map(|(_, part_key)| (0u8, part_key))
         .group_u(|_part_key, s, t| {
             let threshold: isize = s.iter().map(|x| x.1 as isize).sum::<isize>() / 10000;
-            t.extend(s.iter().filter(|x| x.1 > threshold));
+            t.extend(s.iter().filter(|x| x.1 > threshold).map(|&(&a,b)| (a, b)));
         })
         .map(|(_, part_key)| part_key)
         .count_total_u()

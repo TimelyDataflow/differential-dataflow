@@ -103,7 +103,7 @@ where G::Timestamp: TotalOrder+Ord {
         .semijoin_u(&parts.map(|x| x.0))
         .group_u(|_x, s, t| {
             let minimum = (s[0].0).0;
-            t.extend(s.iter().take_while(|x| (x.0).0 == minimum));
+            t.extend(s.iter().take_while(|x| (x.0).0 == minimum).map(|&(&x,w)| (x,w)));
         });
 
     partsupps
