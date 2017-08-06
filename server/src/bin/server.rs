@@ -62,7 +62,7 @@ fn main() {
             let mut recvd = Vec::new();
 
             // a source that attempts to pull from `recv` and produce commands for everyone
-            timely::dataflow::operators::operator::source(dataflow, "InputCommands", move |mut capability| {
+            timely::dataflow::operators::generic::source(dataflow, "InputCommands", move |mut capability| {
 
                 // closure broadcasts any commands it grabs.
                 move |output| {
