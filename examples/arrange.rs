@@ -45,7 +45,7 @@ fn main() {
     	let mut graph = worker.dataflow(|scope| {
 
             // create a source operator which will produce random edges and delete them.
-            timely::dataflow::operators::operator::source(scope, "RandomGraph", |mut capability| {
+            timely::dataflow::operators::generic::source(scope, "RandomGraph", |mut capability| {
 
                 let seed: &[_] = &[1, 2, 3, index];
                 let mut rng1: StdRng = SeedableRng::from_seed(seed);    // rng for edge additions
