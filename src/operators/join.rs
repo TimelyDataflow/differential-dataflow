@@ -9,14 +9,12 @@ use std::cmp::Ordering;
 
 use timely::progress::Timestamp;
 use timely::dataflow::Scope;
-use timely::dataflow::operators::Binary;
+use timely::dataflow::operators::generic::{Binary, OutputHandle};
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Capability;
-use timely_sort::Unsigned;
-
-use timely::dataflow::operators::OutputHandle;
 use timely::dataflow::channels::pushers::tee::Tee;
 
+use timely_sort::Unsigned;
 
 use hashable::{Hashable, UnsignedWrapper, OrdWrapper};
 use ::{Data, Diff, Collection, AsCollection};

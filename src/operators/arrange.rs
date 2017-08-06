@@ -25,11 +25,9 @@ use std::collections::VecDeque;
 
 use timely::dataflow::operators::{Enter, Map};
 use timely::order::PartialOrder;
-use timely::dataflow::*;
-use timely::dataflow::operators::Unary;
+use timely::dataflow::{Scope, Stream};
+use timely::dataflow::operators::generic::{Unary, source};
 use timely::dataflow::channels::pact::{Pipeline, Exchange};
-// use timely::progress::nested::product::Product;
-// use timely::progress::frontier::MutableAntichain;
 use timely::progress::Timestamp;
 use timely::dataflow::operators::Capability;
 use timely::dataflow::scopes::Child;
@@ -276,7 +274,7 @@ where T: Lattice+Clone+'static, Tr: TraceReader<K,V,T,R> {
 
         let queue = self.new_listener();
 
-        let collection = ::timely::dataflow::operators::operator::source(scope, "ArrangedSource", move |capability| {
+        let collection = source(scope, "ArrangedSource", move |capability| {
             
             // capabilities the source maintains.
             let mut capabilities = vec![capability];
