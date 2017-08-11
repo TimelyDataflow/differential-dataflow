@@ -151,11 +151,11 @@ where
 
                     while batch_cursor.key_valid(&batch_storage) {
 
-                        let key: K = batch_cursor.key(&batch_storage).clone();
+                        let key = batch_cursor.key(&batch_storage);
                         let mut count = R::zero();
 
-                        trace_cursor.seek_key(&trace_storage, batch_cursor.key(&batch_storage));
-                        if trace_cursor.key_valid(&trace_storage) && trace_cursor.key(&trace_storage) == batch_cursor.key(&batch_storage) {
+                        trace_cursor.seek_key(&trace_storage, key);
+                        if trace_cursor.key_valid(&trace_storage) && trace_cursor.key(&trace_storage) == key {
                             trace_cursor.map_times(&trace_storage, |_, diff| count = count + diff);
                         }
 
