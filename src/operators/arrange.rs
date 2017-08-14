@@ -68,14 +68,14 @@ impl<T> ::abomonation::Abomonation for BatchWrapper<T> {
 
 /// A trace writer capability.
 pub struct TraceWriter<K, V, T, R, Tr>
-where T: Lattice+Clone+'static, Tr: Trace<K,V,T,R>, Tr::Batch: Batch<K,V,T,R> {
+where T: Lattice+Ord+Clone+'static, Tr: Trace<K,V,T,R>, Tr::Batch: Batch<K,V,T,R> {
     phantom: ::std::marker::PhantomData<(K, V, R)>,
     trace: Weak<RefCell<TraceBox<K, V, T, R, Tr>>>,
     queues: Rc<RefCell<Vec<Weak<RefCell<VecDeque<(Vec<T>, Option<(T, Tr::Batch)>)>>>>>>,
 }
 
 impl<K, V, T, R, Tr> TraceWriter<K, V, T, R, Tr>
-where T: Lattice+Clone+'static, Tr: Trace<K,V,T,R>, Tr::Batch: Batch<K,V,T,R> {
+where T: Lattice+Ord+Clone+'static, Tr: Trace<K,V,T,R>, Tr::Batch: Batch<K,V,T,R> {
 
     /// Advances the trace to `frontier`, providing batch data if it exists.
     pub fn seal(&mut self, frontier: &[T], data: Option<(T, Tr::Batch)>) {
@@ -99,7 +99,7 @@ where T: Lattice+Clone+'static, Tr: Trace<K,V,T,R>, Tr::Batch: Batch<K,V,T,R> {
 }
 
 impl<K, V, T, R, Tr> Drop for TraceWriter<K, V, T, R, Tr>
-where T: Lattice+Clone+'static, Tr: Trace<K,V,T,R>, Tr::Batch: Batch<K,V,T,R> {
+where T: Lattice+Ord+Clone+'static, Tr: Trace<K,V,T,R>, Tr::Batch: Batch<K,V,T,R> {
     fn drop(&mut self) {
         let mut borrow = self.queues.borrow_mut();
         for queue in borrow.iter_mut() {
@@ -117,7 +117,7 @@ where T: Lattice+Clone+'static, Tr: Trace<K,V,T,R>, Tr::Batch: Batch<K,V,T,R> {
 /// The `TraceAgent` is the default trace type produced by `arranged`, and it can be extracted
 /// from the dataflow in which it was defined, and imported into other dataflows.
 pub struct TraceAgent<K, V, T, R, Tr> 
-where T: Lattice+Clone+'static, Tr: TraceReader<K,V,T,R> {
+where T: Lattice+Ord+Clone+'static, Tr: TraceReader<K,V,T,R> {
     phantom: ::std::marker::PhantomData<(K, V, R)>,
     trace: Rc<RefCell<TraceBox<K, V, T, R, Tr>>>,
     queues: Weak<RefCell<Vec<Weak<RefCell<VecDeque<(Vec<T>, Option<(T, Tr::Batch)>)>>>>>>,
@@ -126,7 +126,7 @@ where T: Lattice+Clone+'static, Tr: TraceReader<K,V,T,R> {
 }
 
 impl<K, V, T, R, Tr> TraceReader<K, V, T, R> for TraceAgent<K, V, T, R, Tr> 
-where T: Lattice+Clone+'static, Tr: TraceReader<K,V,T,R> {
+where T: Lattice+Ord+Clone+'static, Tr: TraceReader<K,V,T,R> {
     type Batch = Tr::Batch;
     type Cursor = Tr::Cursor;
     fn advance_by(&mut self, frontier: &[T]) { 
@@ -150,7 +150,7 @@ where T: Lattice+Clone+'static, Tr: TraceReader<K,V,T,R> {
 }
 
 impl<K, V, T, R, Tr> TraceAgent<K, V, T, R, Tr> 
-where T: Lattice+Clone+'static, Tr: TraceReader<K,V,T,R> {
+where T: Lattice+Ord+Clone+'static, Tr: TraceReader<K,V,T,R> {
 
     /// Creates a new agent from a trace reader.
     pub fn new(trace: Tr) -> (Self, TraceWriter<K,V,T,R,Tr>) where Tr: Trace<K,V,T,R>, Tr::Batch: Batch<K,V,T,R> {
@@ -162,8 +162,8 @@ where T: Lattice+Clone+'static, Tr: TraceReader<K,V,T,R> {
             phantom: ::std::marker::PhantomData,
             trace: trace.clone(),
             queues: Rc::downgrade(&queues),
-            advance: trace.borrow().advance_frontiers.elements().to_vec(),
-            through: trace.borrow().through_frontiers.elements().to_vec(),
+            advance: trace.borrow().advance_frontiers.frontier().to_vec(),
+            through: trace.borrow().through_frontiers.frontier().to_vec(),
         };
 
         let writer = TraceWriter {
@@ -204,7 +204,7 @@ where T: Lattice+Clone+'static, Tr: TraceReader<K,V,T,R> {
 }
 
 impl<K, V, T, R, Tr> TraceAgent<K, V, T, R, Tr>
-where T: Lattice+Clone+'static, Tr: TraceReader<K,V,T,R> {
+where T: Lattice+Ord+Clone+'static, Tr: TraceReader<K,V,T,R> {
 
     /// Copies an existing collection into the supplied scope.
     /// 
@@ -318,7 +318,7 @@ where T: Lattice+Clone+'static, Tr: TraceReader<K,V,T,R> {
 }
 
 impl<K, V, T, R, Tr> Clone for TraceAgent<K, V, T, R, Tr>
-where T: Lattice+Clone+'static, Tr: TraceReader<K,V,T,R> {
+where T: Lattice+Ord+Clone+'static, Tr: TraceReader<K,V,T,R> {
     fn clone(&self) -> Self {
 
         // increase counts for wrapped `TraceBox`.
@@ -337,7 +337,7 @@ where T: Lattice+Clone+'static, Tr: TraceReader<K,V,T,R> {
 
 
 impl<K, V, T, R, Tr> Drop for TraceAgent<K, V, T, R, Tr>
-where T: Lattice+Clone+'static, Tr: TraceReader<K,V,T,R> {
+where T: Lattice+Ord+Clone+'static, Tr: TraceReader<K,V,T,R> {
     fn drop(&mut self) {
         // decrement borrow counts to remove all holds
         self.trace.borrow_mut().adjust_advance_frontier(&self.advance[..], &[]);
