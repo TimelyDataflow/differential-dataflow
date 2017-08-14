@@ -26,7 +26,7 @@ use trace::cursor::Cursor;
 /// This type is equivalent to a `RefCell`, in that it wraps the mutable state that multiple referrers 
 /// may influence.
 pub struct TraceBox<K, V, T, R, Tr> 
-where T: Lattice+Ord+Clone+'static, Tr: TraceReader<K,V,T,R> {
+where T: Lattice+Clone+'static, Tr: TraceReader<K,V,T,R> {
     phantom: ::std::marker::PhantomData<(K, V, R)>,
     /// accumulated holds on times for advancement.
     pub advance_frontiers: MutableAntichain<T>,
@@ -37,7 +37,7 @@ where T: Lattice+Ord+Clone+'static, Tr: TraceReader<K,V,T,R> {
 }
 
 impl<K,V,T,R,Tr> TraceBox<K,V,T,R,Tr>
-where T: Lattice+Ord+Clone+'static, Tr: TraceReader<K,V,T,R> {
+where T: Lattice+Clone+'static, Tr: TraceReader<K,V,T,R> {
     /// Moves an existing trace into a shareable trace wrapper.
     ///
     /// The trace may already exist and have non-initial advance and distinguish frontiers. The boxing
@@ -45,16 +45,14 @@ where T: Lattice+Ord+Clone+'static, Tr: TraceReader<K,V,T,R> {
     pub fn new(mut trace: Tr) -> Self {
 
         let mut advance = MutableAntichain::new();
-        advance.update_iter(trace.advance_frontier().iter().cloned().map(|time| (time, 1)));
-        // for time in trace.advance_frontier() {
-        //     advance.update(time, 1);
-        // }
+        for time in trace.advance_frontier() {
+            advance.update(time, 1);
+        }
 
         let mut through = MutableAntichain::new();
-        through.update_iter(trace.distinguish_frontier().iter().cloned().map(|time| (time, 1)));
-        // for time in trace.distinguish_frontier() {
-        //     through.update(time, 1);
-        // }
+        for time in trace.distinguish_frontier() {
+            through.update(time, 1);
+        }
 
         TraceBox {
             phantom: ::std::marker::PhantomData,
@@ -65,19 +63,15 @@ where T: Lattice+Ord+Clone+'static, Tr: TraceReader<K,V,T,R> {
     }
     /// Replaces elements of `lower` with those of `upper`.
     pub fn adjust_advance_frontier(&mut self, lower: &[T], upper: &[T]) {
-        self.advance_frontiers.update_iter(upper.iter().cloned().map(|t| (t,1)));
-        self.advance_frontiers.update_iter(lower.iter().cloned().map(|t| (t,-1)));
-        // for element in upper { self.advance_frontiers.update_and(element, 1, |_,_| {}); }
-        // for element in lower { self.advance_frontiers.update_and(element, -1, |_,_| {}); }
-        self.trace.advance_by(self.advance_frontiers.frontier());
+        for element in upper { self.advance_frontiers.update_and(element, 1, |_,_| {}); }
+        for element in lower { self.advance_frontiers.update_and(element, -1, |_,_| {}); }
+        self.trace.advance_by(self.advance_frontiers.elements());
     }
     /// Replaces elements of `lower` with those of `upper`.
     pub fn adjust_through_frontier(&mut self, lower: &[T], upper: &[T]) {
-        self.through_frontiers.update_iter(upper.iter().cloned().map(|t| (t,1)));
-        self.through_frontiers.update_iter(lower.iter().cloned().map(|t| (t,-1)));
-        // for element in upper { self.through_frontiers.update_and(element, 1, |_,_| {}); }
-        // for element in lower { self.through_frontiers.update_and(element, -1, |_,_| {}); }
-        self.trace.distinguish_since(self.through_frontiers.frontier());
+        for element in upper { self.through_frontiers.update_and(element, 1, |_,_| {}); }
+        for element in lower { self.through_frontiers.update_and(element, -1, |_,_| {}); }
+        self.trace.distinguish_since(self.through_frontiers.elements());
     }
 }
 
@@ -86,16 +80,14 @@ where T: Lattice+Ord+Clone+'static, Tr: TraceReader<K,V,T,R> {
 /// As long as the handle exists, the wrapped trace should continue to exist and will not advance its 
 /// timestamps past the frontier maintained by the handle. The intent is that such a handle appears as
 /// if it is a privately maintained trace, despite being backed by shared resources.
-pub struct TraceRc<K,V,T,R,Tr> where T: Lattice+Ord+Clone+'static, Tr: TraceReader<K,V,T,R> {
+pub struct TraceRc<K,V,T,R,Tr> where T: Lattice+Clone+'static, Tr: TraceReader<K,V,T,R> {
     advance_frontier: Vec<T>,
     through_frontier: Vec<T>,
     /// Wrapped trace. Please be gentle when using.
     pub wrapper: Rc<RefCell<TraceBox<K,V,T,R,Tr>>>,
 }
 
-impl<K,V,T,R,Tr> TraceReader<K, V, T, R> for TraceRc<K,V,T,R,Tr> 
-where T: Lattice+Ord+Clone+'static, 
-      Tr: TraceReader<K,V,T,R> {
+impl<K,V,T,R,Tr> TraceReader<K, V, T, R> for TraceRc<K,V,T,R,Tr> where T: Lattice+Clone+'static, Tr: TraceReader<K,V,T,R> {
     
     type Batch = Tr::Batch;
     type Cursor = Tr::Cursor;
@@ -126,15 +118,15 @@ where T: Lattice+Ord+Clone+'static,
     }
 }
 
-impl<K,V,T,R,Tr> TraceRc<K,V,T,R,Tr> where T: Lattice+Ord+Clone+'static, Tr: TraceReader<K,V,T,R> {
+impl<K,V,T,R,Tr> TraceRc<K,V,T,R,Tr> where T: Lattice+Clone+'static, Tr: TraceReader<K,V,T,R> {
     /// Allocates a new handle from an existing wrapped wrapper.
     pub fn make_from(trace: Tr) -> (Self, Rc<RefCell<TraceBox<K,V,T,R,Tr>>>) {
 
         let wrapped = Rc::new(RefCell::new(TraceBox::new(trace)));
 
         let handle = TraceRc {
-            advance_frontier: wrapped.borrow().advance_frontiers.frontier().to_vec(),
-            through_frontier: wrapped.borrow().through_frontiers.frontier().to_vec(),
+            advance_frontier: wrapped.borrow().advance_frontiers.elements().to_vec(),
+            through_frontier: wrapped.borrow().through_frontiers.elements().to_vec(),
             wrapper: wrapped.clone(),
         };
 
@@ -142,7 +134,7 @@ impl<K,V,T,R,Tr> TraceRc<K,V,T,R,Tr> where T: Lattice+Ord+Clone+'static, Tr: Tra
     }
 }
 
-impl<K, V, T: Lattice+Ord+Clone, R, Tr> Clone for TraceRc<K, V, T, R, Tr> where Tr: TraceReader<K, V, T, R> {
+impl<K, V, T: Lattice+Clone, R, Tr> Clone for TraceRc<K, V, T, R, Tr> where Tr: TraceReader<K, V, T, R> {
     fn clone(&self) -> Self {
         // increase ref counts for this frontier
         self.wrapper.borrow_mut().adjust_advance_frontier(&[], &self.advance_frontier[..]);
@@ -156,7 +148,7 @@ impl<K, V, T: Lattice+Ord+Clone, R, Tr> Clone for TraceRc<K, V, T, R, Tr> where 
 }
 
 impl<K, V, T, R, Tr> Drop for TraceRc<K, V, T, R, Tr>
-    where T: Lattice+Ord+Clone+'static, Tr: TraceReader<K, V, T, R> {
+    where T: Lattice+Clone+'static, Tr: TraceReader<K, V, T, R> {
     fn drop(&mut self) {
         self.wrapper.borrow_mut().adjust_advance_frontier(&self.advance_frontier[..], &[]);
         self.wrapper.borrow_mut().adjust_through_frontier(&self.through_frontier[..], &[]);
