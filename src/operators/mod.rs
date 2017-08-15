@@ -9,6 +9,7 @@ pub use self::consolidate::Consolidate;
 pub use self::iterate::Iterate;
 pub use self::join::{Join, JoinUnsigned, JoinCore};
 pub use self::count::CountTotal;
+pub use self::distinct::DistinctTotal;
 
 pub mod arrange;
 pub mod group;
@@ -16,6 +17,7 @@ pub mod consolidate;
 pub mod iterate;
 pub mod join;
 pub mod count;
+pub mod distinct;
 // pub mod min;
 
 use ::Diff;
