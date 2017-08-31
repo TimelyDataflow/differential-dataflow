@@ -37,7 +37,7 @@ use hashable::Hashable;
 /// parameter is the type of data in your collection, for example `String`, or `(u32, Vec<Option<()>>)`.
 /// The `R` parameter represents the types of changes that the data undergo, and is most commonly (and
 /// defaults to) `isize`, representing changes to the occurrence count of each record.
-#[derive(Clone)]
+// #[derive(Clone)]
 pub struct Collection<G: Scope, D, R: Diff = isize> {
     /// The underlying timely dataflow stream.
     ///
@@ -552,11 +552,11 @@ impl<'a, G: Scope, T: Timestamp, D: Data, R: Diff> Collection<Child<'a, G, T>, D
 /// Conversion to a differential dataflow Collection.
 pub trait AsCollection<G: Scope, D: Data, R: Diff> {
     /// Converts the type to a differential dataflow collection.
-    fn as_collection(&self) -> Collection<G, D, R>;
+    fn as_collection(self) -> Collection<G, D, R>;
 }
 
 impl<G: Scope, D: Data, R: Diff> AsCollection<G, D, R> for Stream<G, (D, G::Timestamp, R)> {
-    fn as_collection(&self) -> Collection<G, D, R> {
-        Collection::new(self.clone())
+    fn as_collection(self) -> Collection<G, D, R> {
+        Collection::new(self)
     }
 }
