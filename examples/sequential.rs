@@ -1,5 +1,3 @@
-extern crate rand;
-extern crate getopts;
 extern crate timely;
 extern crate graph_map;
 extern crate differential_dataflow;
@@ -12,9 +10,6 @@ use timely::dataflow::operators::*;
 use differential_dataflow::{Collection, Data};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::*;
-
-// use differential_dataflow::collection::trace::CollectionIterator;
-// use differential_dataflow::collection::basic::DifferenceIterator;
 
 use graph_map::GraphMMap;
 

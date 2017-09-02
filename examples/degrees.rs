@@ -1,6 +1,5 @@
 extern crate rand;
 extern crate timely;
-extern crate timely_sort;
 extern crate differential_dataflow;
 
 use rand::{Rng, SeedableRng, StdRng};
@@ -18,6 +17,8 @@ fn main() {
 
     // define a new computational scope, in which to run BFS
     timely::execute_from_args(std::env::args().skip(4), move |worker| {
+
+        let timer = ::std::time::Instant::now();
 
         let index = worker.index();
         let peers = worker.peers();
@@ -54,31 +55,106 @@ fn main() {
             input.insert((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)))
         }
 
-        input.advance_to(1);
+        input.advance_to(1u64);
         input.flush();
         worker.step_while(|| probe.less_than(input.time()));
 
-        // println!("round 0 finished after {:?} (loading)", timer.elapsed());
+        println!("round 0 finished after {:?} (loading)", timer.elapsed());
 
         if batch > 0 {
+
+            // // closed-loop latency-throughput test, parameterized by batch size.
+            // let timer = ::std::time::Instant::now();
+            // let mut wave = 1;
+            // while timer.elapsed().as_secs() < 10 {
+            //     for round in 0 .. batch {
+            //         input.advance_to(((wave * batch) + round) * peers + index);
+            //         input.insert((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)));
+            //         input.remove((rng2.gen_range(0, nodes), rng2.gen_range(0, nodes)));                    
+            //     }
+            //
+            //     wave += 1;
+            //     input.advance_to(wave * batch * peers);
+            //     input.flush();
+            //     worker.step_while(|| probe.less_than(input.time()));
+            // }
+            //
+            // let elapsed = timer.elapsed();
+            // let seconds = elapsed.as_secs() as f64 + (elapsed.subsec_nanos() as f64) / 1000000000.0;
+            // println!("{:?}, {:?}", seconds / (wave - 1) as f64, ((wave - 1) * batch * peers) as f64 / seconds);
+
+            let requests_per_sec = batch;
+            let ns_per_request = 1000000000 / requests_per_sec;
+            // let ns_per_request = batch;//1000000;  // corresponds to 1K requests / second.
+            let mut request_counter = 1;
+            let mut measurements = Vec::with_capacity(20 * requests_per_sec);
+
             let timer = ::std::time::Instant::now();
-            let mut wave = 1;
+
             while timer.elapsed().as_secs() < 10 {
-                for round in 0 .. batch {
-                    input.advance_to(((wave * batch) + round) * peers + index);
+
+                // Open-loop latency-throughput test, parameterized by offered rate `ns_per_request`.
+                let elapsed = timer.elapsed();
+                let elapsed_ns = elapsed.as_secs() * 1_000_000_000 + (elapsed.subsec_nanos() as u64);
+
+                // Introduce any requests that have "arrived" since last we were here.
+                // Request i "arrives" at `index + ns_per_request * (i + 1)`. 
+                while ((index + ns_per_request * request_counter) as u64) < elapsed_ns {
+                    input.advance_to((index + ns_per_request * request_counter) as u64);
                     input.insert((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)));
-                    input.remove((rng2.gen_range(0, nodes), rng2.gen_range(0, nodes)));                    
+                    input.remove((rng2.gen_range(0, nodes), rng2.gen_range(0, nodes)));
+                    request_counter += 1;
                 }
 
-                wave += 1;
-                input.advance_to(wave * batch * peers);
+                // Advance `input` as far as we can promise. 
+                // This *could* have been `index + ns_per_request * request_counter`, but that would have
+                // exploited our foreknowledge that inputs arrive at known rate; this is "more fair".
+                // input.advance_to(nanoseconds);
                 input.flush();
-                worker.step_while(|| probe.less_than(input.time()));
-            }
 
-            let elapsed = timer.elapsed();
-            let seconds = elapsed.as_secs() as f64 + (elapsed.subsec_nanos() as f64) / 1000000000.0;
-            println!("{:?}, {:?}", seconds / (wave - 1) as f64, ((wave - 1) * batch * peers) as f64 / seconds);
+                // Do one quantum of work
+                worker.step();
+
+                // Determine completed ns 
+                let acknowledged_ns: u64 = probe.with_frontier(|frontier| frontier[0].inner);
+
+                let elapsed = timer.elapsed();
+                let elapsed_ns = elapsed.as_secs() * 1_000_000_000 + (elapsed.subsec_nanos() as u64);
+
+                // any un-recorded measurements that are complete should be recorded.
+                while ((index + (measurements.len() + 1) * ns_per_request) as u64) < acknowledged_ns {
+                    let requested_at = (index + (measurements.len() + 1) * ns_per_request) as u64;
+                    measurements.push(elapsed_ns - requested_at);
+                }
+            }
+            
+            // input.close();
+            // while worker.step() {
+
+            //     // determine completed ns 
+            //     let acknowledged_ns: u64 = probe.with_frontier(|frontier| frontier[0].inner);
+
+            //     let elapsed = timer.elapsed();
+            //     let elapsed_ns = elapsed.as_secs() * 1_000_000_000 + (elapsed.subsec_nanos() as u64);
+
+            //     // any un-recorded measurements that are complete should be recorded.
+            //     while ((index + measurements.len() * ns_per_request) as u64) < acknowledged_ns {
+            //         let requested_at = (index + measurements.len() * ns_per_request) as u64;
+            //         measurements.push(elapsed_ns - requested_at);
+            //     }
+            // }
+
+            // for measurement in measurements {
+            //     println!("{}", measurement);
+            // }
+
+            measurements.sort();
+
+            let med = measurements[measurements.len() / 2];
+            let p99 = measurements[99 * measurements.len() / 100];
+            let max = measurements[measurements.len() - 1];
+
+            println!("{}\t{}\t{}\t(of {} measurements)", med, p99, max, measurements.len());
         }
     }).unwrap();
 }

@@ -1,5 +1,3 @@
-extern crate rand;
-extern crate getopts;
 extern crate timely;
 extern crate graph_map;
 extern crate differential_dataflow;

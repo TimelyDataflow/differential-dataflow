@@ -1,10 +1,13 @@
 extern crate rand;
 extern crate timely;
+extern crate timely_communication;
 extern crate differential_dataflow;
 
 use rand::{Rng, SeedableRng, StdRng};
 
 use std::sync::{Arc, Mutex};
+
+use timely_communication::Configuration;
 
 use timely::dataflow::*;
 use timely::dataflow::operators::Capture;
@@ -19,11 +22,11 @@ use differential_dataflow::lattice::Lattice;
 type Node = usize;
 type Edge = (Node, Node);
 
-#[test] fn bfs_10_20_1000() { test_sizes(10, 20, 200); }
-#[test] fn bfs_100_200_10() { test_sizes(100, 200, 10); }
-#[test] fn bfs_100_2000_1() { test_sizes(100, 2000, 1); }
+#[test] fn bfs_10_20_1000() { test_sizes(10, 20, 1000, Configuration::Process(3)); }
+#[test] fn bfs_100_200_10() { test_sizes(100, 200, 10, Configuration::Process(3)); }
+#[test] fn bfs_100_2000_1() { test_sizes(100, 2000, 1, Configuration::Process(3)); }
 
-fn test_sizes(nodes: usize, edges: usize, rounds: usize) {
+fn test_sizes(nodes: usize, edges: usize, rounds: usize, config: Configuration) {
 
     let root_list = vec![(1, 0, 1)];
     let mut edge_list = Vec::new();
@@ -42,7 +45,7 @@ fn test_sizes(nodes: usize, edges: usize, rounds: usize) {
     }
 
     let mut results1 = bfs_sequential(root_list.clone(), edge_list.clone());
-    let mut results2 = bfs_differential(root_list.clone(), edge_list.clone());
+    let mut results2 = bfs_differential(root_list.clone(), edge_list.clone(), config);
 
     results1.sort();
     results1.sort_by(|x,y| x.1.cmp(&y.1));
@@ -140,14 +143,16 @@ fn bfs_sequential(
 
 fn bfs_differential(
     roots_list: Vec<(usize, usize, isize)>, 
-    edges_list: Vec<((usize, usize), usize, isize)>) 
+    edges_list: Vec<((usize, usize), usize, isize)>,
+    config: Configuration,
+) 
 -> Vec<((usize, usize), usize, isize)>
 {
 
     let (send, recv) = ::std::sync::mpsc::channel();
     let send = Arc::new(Mutex::new(send));
 
-    timely::execute(timely::Configuration::Thread, move |worker| {
+    timely::execute(config, move |worker| {
         
         let mut roots_list = roots_list.clone();
         let mut edges_list = edges_list.clone();

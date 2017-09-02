@@ -1,4 +1,3 @@
-extern crate timely;
 extern crate differential_dataflow;
 
 use std::rc::Rc;
