@@ -25,7 +25,7 @@ use trace::{Batch, BatchReader, Builder, Cursor};
 use trace::description::Description;
 
 use super::spine::Spine;
-use super::batcher::RadixBatcher;
+use super::radix_batcher::RadixBatcher;
 
 /// A trace implementation using a spine of hash-map batches.
 pub type HashValSpine<K, V, T, R> = Spine<K, V, T, R, Rc<HashValBatch<K, V, T, R>>>;

@@ -40,10 +40,11 @@
 
 pub mod spine;
 
-mod batcher;
-mod batcher_merge;
+mod radix_batcher;
+mod merge_batcher;
 
-pub use self::batcher::RadixBatcher as Batcher;
+// pub use self::radix_batcher::RadixBatcher as Batcher;
+pub use self::merge_batcher::MergeBatcher as Batcher;
 
 pub mod ord;
 pub mod hash;

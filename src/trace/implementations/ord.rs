@@ -25,7 +25,7 @@ use trace::{Batch, BatchReader, Builder, Cursor};
 use trace::description::Description;
 
 use super::spine::Spine;
-use super::batcher::RadixBatcher;
+use super::Batcher;
 
 /// A trace implementation using a spine of hash-map batches.
 pub type OrdValSpine<K, V, T, R> = Spine<K, V, T, R, Rc<OrdValBatch<K, V, T, R>>>;
@@ -58,7 +58,7 @@ where K: Ord+Clone+HashOrdered+'static, V: Ord+Clone+'static, T: Lattice+Ord+Clo
 
 impl<K, V, T, R> Batch<K, V, T, R> for Rc<OrdValBatch<K, V, T, R>>
 where K: Ord+Clone+HashOrdered+'static, V: Ord+Clone+'static, T: Lattice+Ord+Clone+::std::fmt::Debug+'static, R: Diff {
-	type Batcher = RadixBatcher<K, V, T, R, Self>;
+	type Batcher = Batcher<K, V, T, R, Self>;
 	type Builder = OrdValBuilder<K, V, T, R>;
 	fn merge(&self, other: &Self) -> Self {
 
@@ -292,7 +292,7 @@ where K: Ord+Clone+HashOrdered+'static, T: Lattice+Ord+Clone+'static, R: Diff {
 
 impl<K, T, R> Batch<K, (), T, R> for Rc<OrdKeyBatch<K, T, R>>
 where K: Ord+Clone+HashOrdered+'static, T: Lattice+Ord+Clone+'static, R: Diff {
-	type Batcher = RadixBatcher<K, (), T, R, Self>;
+	type Batcher = Batcher<K, (), T, R, Self>;
 	type Builder = OrdKeyBuilder<K, T, R>;
 	fn merge(&self, other: &Self) -> Self {
 
