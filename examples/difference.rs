@@ -1,5 +1,4 @@
 extern crate timely;
-extern crate timely_sort;
 extern crate differential_dataflow;
 
 use differential_dataflow::input::Input;
@@ -21,28 +20,30 @@ fn main() {
 
         let mut input = worker.dataflow::<(), _, _>(|scope| {
 
-            let (input, data) = scope.new_collection::<(usize, isize), isize>();
+            let (input, data) = scope.new_collection::<_, isize>();
 
             // move `val` into the ring component.
             data.explode(|(x,y)| Some((x, DiffPair::new(y, 1))))
-                .consolidate();
+                .consolidate_u();
 
             input
         });
 
         let timer = ::std::time::Instant::now();
 
-        for val in 0 .. {
-        	// introduce some data with bounded key.
-        	input.insert((val % keys, (val as isize) % 100));
+        let mut val = 0 as usize;
+        loop {
 
-        	// we must still give the computation the opportunity to act.
-        	if val > 0 && val % batch == 0 { 
-        		worker.step(); 
-        		let elapsed = timer.elapsed();
-        		let secs = elapsed.as_secs() as f64 + (elapsed.subsec_nanos() as f64)/1000000000.0;
-        		println!("tuples: {:?},\telts/sec: {:?}", val, val as f64 / secs);
-        	}
+            for _ in 0 .. batch {
+        	    // introduce some data with bounded key.
+        	    input.insert(((val % keys), (val as isize) % 32));
+                val += 1;
+            }
+
+            worker.step(); 
+            let elapsed = timer.elapsed();
+            let secs = elapsed.as_secs() as f64 + (elapsed.subsec_nanos() as f64)/1000000000.0;
+            println!("tuples: {:?},\telts/sec: {:?}", val, val as f64 / secs);
         }
 
     }).unwrap();
