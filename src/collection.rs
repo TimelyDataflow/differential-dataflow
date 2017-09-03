@@ -61,7 +61,6 @@ impl<G: Scope, D: Data, R: Diff> Collection<G, D, R> where G::Timestamp: Data {
     /// # Examples
     ///
     /// ```
-    /// #
     /// extern crate timely;
     /// extern crate differential_dataflow;
     ///
@@ -92,7 +91,6 @@ impl<G: Scope, D: Data, R: Diff> Collection<G, D, R> where G::Timestamp: Data {
     /// # Examples
     ///
     /// ```
-    /// #
     /// extern crate timely;
     /// extern crate differential_dataflow;
     ///
@@ -122,7 +120,6 @@ impl<G: Scope, D: Data, R: Diff> Collection<G, D, R> where G::Timestamp: Data {
     /// # Examples
     ///
     /// ```
-    /// #
     /// extern crate timely;
     /// extern crate differential_dataflow;
     ///
@@ -153,7 +150,6 @@ impl<G: Scope, D: Data, R: Diff> Collection<G, D, R> where G::Timestamp: Data {
     /// # Examples
     ///
     /// ```
-    /// #
     /// extern crate timely;
     /// extern crate differential_dataflow;
     ///
@@ -183,7 +179,6 @@ impl<G: Scope, D: Data, R: Diff> Collection<G, D, R> where G::Timestamp: Data {
     /// # Examples
     ///
     /// ```
-    /// #
     /// extern crate timely;
     /// extern crate differential_dataflow;
     ///
@@ -213,7 +208,6 @@ impl<G: Scope, D: Data, R: Diff> Collection<G, D, R> where G::Timestamp: Data {
     /// # Examples
     ///
     /// ```
-    /// #
     /// extern crate timely;
     /// extern crate differential_dataflow;
     ///
@@ -245,7 +239,6 @@ impl<G: Scope, D: Data, R: Diff> Collection<G, D, R> where G::Timestamp: Data {
     /// #Examples
     ///
     /// ```
-    /// #
     /// extern crate timely;
     /// extern crate differential_dataflow;
     ///
@@ -281,7 +274,6 @@ impl<G: Scope, D: Data, R: Diff> Collection<G, D, R> where G::Timestamp: Data {
     /// # Examples
     ///
     /// ```
-    /// #
     /// extern crate timely;
     /// extern crate differential_dataflow;
     ///
@@ -316,7 +308,6 @@ impl<G: Scope, D: Data, R: Diff> Collection<G, D, R> where G::Timestamp: Data {
     /// # Examples
     ///
     /// ```
-    /// #
     /// extern crate timely;
     /// extern crate differential_dataflow;
     ///
@@ -367,7 +358,6 @@ impl<G: Scope, D: Data, R: Diff> Collection<G, D, R> where G::Timestamp: Data {
     /// # Examples
     ///
     /// ```
-    /// #
     /// extern crate timely;
     /// extern crate differential_dataflow;
     ///
@@ -397,7 +387,6 @@ impl<G: Scope, D: Data, R: Diff> Collection<G, D, R> where G::Timestamp: Data {
     /// # Examples
     ///
     /// ```
-    /// #
     /// extern crate timely;
     /// extern crate differential_dataflow;
     ///
@@ -445,7 +434,6 @@ impl<G: Scope, D: Data, R: Diff> Collection<G, D, R> where G::Timestamp: Data {
     /// # Examples
     ///
     /// ```
-    /// #
     /// extern crate timely;
     /// extern crate differential_dataflow;
     ///
@@ -483,7 +471,6 @@ impl<G: Scope, D: Data, R: Diff> Collection<G, D, R> where G::Timestamp: Data {
     /// # Examples
     ///
     /// ```
-    /// #
     /// extern crate timely;
     /// extern crate differential_dataflow;
     ///
@@ -520,7 +507,6 @@ impl<'a, G: Scope, T: Timestamp, D: Data, R: Diff> Collection<Child<'a, G, T>, D
     /// # Examples
     ///
     /// ```
-    /// #
     /// extern crate timely;
     /// extern crate differential_dataflow;
     ///

@@ -22,7 +22,6 @@ pub trait Consolidate<D: Data+Hashable> {
     /// # Examples
     ///
     /// ```
-    /// #
     /// extern crate timely;
     /// extern crate differential_dataflow;
     ///
@@ -50,7 +49,6 @@ pub trait Consolidate<D: Data+Hashable> {
     /// # Examples
     ///
     /// ```
-    /// #
     /// extern crate timely;
     /// extern crate differential_dataflow;
     ///

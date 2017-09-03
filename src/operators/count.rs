@@ -35,7 +35,6 @@ pub trait CountTotal<G: Scope, K: Data, R: Diff> where G::Timestamp: TotalOrder+
     /// # Examples
     ///
     /// ```
-    /// #
     /// extern crate timely;
     /// extern crate differential_dataflow;
     ///
@@ -59,7 +58,6 @@ pub trait CountTotal<G: Scope, K: Data, R: Diff> where G::Timestamp: TotalOrder+
     /// # Examples
     ///
     /// ```
-    /// #
     /// extern crate timely;
     /// extern crate differential_dataflow;
     ///
@@ -104,7 +102,6 @@ pub trait CountTotalCore<G: Scope, K: Data, R: Diff> where G::Timestamp: TotalOr
     /// # Examples
     ///
     /// ```
-    /// #
     /// extern crate timely;
     /// extern crate differential_dataflow;
     ///

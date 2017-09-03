@@ -229,7 +229,6 @@ where T: Lattice+Ord+Clone+'static, Tr: TraceReader<K,V,T,R> {
     /// # Examples
     ///
     /// ```
-    /// #
     /// extern crate timely;
     /// extern crate timely_communication;
     /// extern crate differential_dataflow;

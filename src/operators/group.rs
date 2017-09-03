@@ -44,7 +44,6 @@ pub trait Group<G: Scope, K: Data, V: Data, R: Diff> where G::Timestamp: Lattice
     /// # Examples
     ///
     /// ```
-    /// #
     /// extern crate timely;
     /// extern crate differential_dataflow;
     ///
@@ -71,7 +70,6 @@ pub trait Group<G: Scope, K: Data, V: Data, R: Diff> where G::Timestamp: Lattice
     /// # Examples
     ///
     /// ```
-    /// #
     /// extern crate timely;
     /// extern crate differential_dataflow;
     ///
@@ -118,7 +116,6 @@ pub trait Distinct<G: Scope, K: Data> where G::Timestamp: Lattice+Ord {
     /// # Examples
     ///
     /// ```
-    /// #
     /// extern crate timely;
     /// extern crate differential_dataflow;
     ///
@@ -142,7 +139,6 @@ pub trait Distinct<G: Scope, K: Data> where G::Timestamp: Lattice+Ord {
     /// # Examples
     ///
     /// ```
-    /// #
     /// extern crate timely;
     /// extern crate differential_dataflow;
     ///
@@ -184,7 +180,6 @@ pub trait Count<G: Scope, K: Data, R: Diff> where G::Timestamp: Lattice+Ord {
     /// # Examples
     ///
     /// ```
-    /// #
     /// extern crate timely;
     /// extern crate differential_dataflow;
     ///
@@ -208,7 +203,6 @@ pub trait Count<G: Scope, K: Data, R: Diff> where G::Timestamp: Lattice+Ord {
     /// # Examples
     ///
     /// ```
-    /// #
     /// extern crate timely;
     /// extern crate differential_dataflow;
     ///
@@ -253,7 +247,6 @@ pub trait GroupArranged<G: Scope, K: Data, V: Data, R: Diff> where G::Timestamp:
     /// # Examples
     ///
     /// ```
-    /// #
     /// extern crate timely;
     /// extern crate differential_dataflow;
     ///

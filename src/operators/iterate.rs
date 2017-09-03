@@ -50,7 +50,6 @@ pub trait Iterate<G: Scope, D: Data, R: Diff> {
     /// # Examples
     ///
     /// ```
-    /// #
     /// extern crate timely;
     /// extern crate differential_dataflow;
     ///
@@ -105,7 +104,6 @@ impl<G: Scope, D: Ord+Data+Debug, R: Diff> Iterate<G, D, R> for Collection<G, D,
 /// The following example is equivalent to the example for the `Iterate` trait.
 ///
 /// ```
-/// #
 /// extern crate timely;
 /// extern crate differential_dataflow;
 ///

@@ -38,7 +38,6 @@ pub trait Join<G: Scope, K: Data, V: Data, R: Diff> {
     /// # Examples
     ///
     /// ```
-    /// #
     /// extern crate timely;
     /// extern crate differential_dataflow;
     ///
@@ -68,7 +67,6 @@ pub trait Join<G: Scope, K: Data, V: Data, R: Diff> {
     /// # Examples
     ///
     /// ```
-    /// #
     /// extern crate timely;
     /// extern crate differential_dataflow;
     ///
@@ -99,7 +97,6 @@ pub trait Join<G: Scope, K: Data, V: Data, R: Diff> {
     /// # Examples
     ///
     /// ```
-    /// #
     /// extern crate timely;
     /// extern crate differential_dataflow;
     ///
@@ -126,7 +123,6 @@ pub trait Join<G: Scope, K: Data, V: Data, R: Diff> {
     /// # Examples
     ///
     /// ```
-    /// #
     /// extern crate timely;
     /// extern crate differential_dataflow;
     ///
@@ -157,7 +153,6 @@ pub trait JoinUnsigned<G: Scope, K: Data, V: Data, R: Diff> {
     /// # Examples
     ///
     /// ```
-    /// #
     /// extern crate timely;
     /// extern crate differential_dataflow;
     ///
@@ -186,7 +181,6 @@ pub trait JoinUnsigned<G: Scope, K: Data, V: Data, R: Diff> {
     /// # Examples
     ///
     /// ```
-    /// #
     /// extern crate timely;
     /// extern crate differential_dataflow;
     ///
@@ -217,7 +211,6 @@ pub trait JoinUnsigned<G: Scope, K: Data, V: Data, R: Diff> {
     /// # Examples
     ///
     /// ```
-    /// #
     /// extern crate timely;
     /// extern crate differential_dataflow;
     ///
@@ -245,7 +238,6 @@ pub trait JoinUnsigned<G: Scope, K: Data, V: Data, R: Diff> {
     /// # Examples
     ///
     /// ```
-    /// #
     /// extern crate timely;
     /// extern crate differential_dataflow;
     ///
@@ -345,7 +337,6 @@ pub trait JoinCore<G: Scope, K: 'static, V: 'static, R: Diff> where G::Timestamp
     /// # Examples
     ///
     /// ```
-    /// #
     /// extern crate timely;
     /// extern crate differential_dataflow;
     ///
