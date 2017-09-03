@@ -116,10 +116,12 @@ where
             }
         }
 
-        let keep = builder_keep.done(&upper[..], &upper[..], &upper[..]);
+        if upper.len() > 0 {
+            let keep = builder_keep.done(&upper[..], &upper[..], &upper[..]);
+            if keep.len() > 0 { self.sorted.push(keep); }
+        }
         let seal = builder_seal.done(&self.lower[..], &upper[..], &self.lower[..]);
         self.lower = upper.to_vec();
-        if keep.len() > 0 { self.sorted.push(keep); }
         seal
     }
 
