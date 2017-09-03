@@ -15,21 +15,22 @@
 
 use std::default::Default;
 
+use timely::order::TotalOrder;
 use timely::dataflow::*;
 use timely::dataflow::operators::Unary;
 use timely::dataflow::channels::pact::Pipeline;
 use timely_sort::Unsigned;
 
+use lattice::Lattice;
 use ::{Data, Collection, Diff};
 use hashable::{Hashable, UnsignedWrapper};
 use collection::AsCollection;
 use operators::arrange::{Arrange, Arranged, ArrangeBySelf};
-use lattice::TotalOrder;
 use trace::{BatchReader, Cursor, Trace, TraceReader};
 use trace::implementations::ord::OrdKeySpine as DefaultKeyTrace;
 
 /// Extension trait for the `count` differential dataflow method.
-pub trait CountTotal<G: Scope, K: Data, R: Diff> where G::Timestamp: TotalOrder+Ord {
+pub trait CountTotal<G: Scope, K: Data, R: Diff> where G::Timestamp: TotalOrder+Lattice+Ord {
     /// Counts the number of occurrences of each element.
     ///
     /// # Examples
@@ -77,7 +78,7 @@ pub trait CountTotal<G: Scope, K: Data, R: Diff> where G::Timestamp: TotalOrder+
 }
 
 impl<G: Scope, K: Data+Default+Hashable, R: Diff> CountTotal<G, K, R> for Collection<G, K, R>
-where G::Timestamp: TotalOrder+Ord {
+where G::Timestamp: TotalOrder+Lattice+Ord {
     fn count_total(&self) -> Collection<G, (K, R), isize> {
         self.arrange_by_self()
             .count_total_core()
@@ -93,7 +94,7 @@ where G::Timestamp: TotalOrder+Ord {
 
 
 /// Extension trait for the `group_arranged` differential dataflow method.
-pub trait CountTotalCore<G: Scope, K: Data, R: Diff> where G::Timestamp: TotalOrder+Ord {
+pub trait CountTotalCore<G: Scope, K: Data, R: Diff> where G::Timestamp: TotalOrder+Lattice+Ord {
     /// Applies `group` to arranged data, and returns an arrangement of output data.
     ///
     /// This method is used by the more ergonomic `group`, `distinct`, and `count` methods, although
@@ -128,7 +129,7 @@ pub trait CountTotalCore<G: Scope, K: Data, R: Diff> where G::Timestamp: TotalOr
 
 impl<G: Scope, K: Data, R: Diff, T1> CountTotalCore<G, K, R> for Arranged<G, K, (), R, T1>
 where 
-    G::Timestamp: TotalOrder+Ord,
+    G::Timestamp: TotalOrder+Lattice+Ord,
     T1: TraceReader<K, (), G::Timestamp, R>+Clone+'static,
     T1::Batch: BatchReader<K, (), G::Timestamp, R> {
 

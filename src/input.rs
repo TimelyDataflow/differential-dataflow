@@ -25,7 +25,6 @@ pub trait Input<'a, A: Allocate, T: Timestamp+Ord> {
     /// # Examples
     ///
     /// ```
-    /// #
     /// extern crate timely;
     /// extern crate timely_communication;
     /// extern crate differential_dataflow;
@@ -58,7 +57,6 @@ pub trait Input<'a, A: Allocate, T: Timestamp+Ord> {
     /// # Examples
     ///
     /// ```
-    /// #
     /// extern crate timely;
     /// extern crate timely_communication;
     /// extern crate differential_dataflow;
@@ -116,7 +114,6 @@ impl<'a, A: Allocate, T: Timestamp+Ord> Input<'a, A, T> for Child<'a, Root<A>, T
 /// # Examples
 ///
 /// ```
-/// #
 /// extern crate timely;
 /// extern crate timely_communication;
 /// extern crate differential_dataflow;

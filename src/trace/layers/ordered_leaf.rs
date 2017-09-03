@@ -50,9 +50,6 @@ impl<K: Ord+Clone, R: Diff+Clone> MergeBuilder for OrderedLeafBuilder<K, R> {
         self.vals.extend_from_slice(&other.vals[lower .. upper]);
     }
     fn push_merge(&mut self, other1: (&Self::Trie, usize, usize), other2: (&Self::Trie, usize, usize)) -> usize {
-        // self.copy_range(&other1.0, other1.1, other1.2);
-        // self.copy_range(&other2.0, other2.1, other2.2);
-        // self.vals.len()
 
         let (trie1, mut lower1, upper1) = other1;
         let (trie2, mut lower2, upper2) = other2;

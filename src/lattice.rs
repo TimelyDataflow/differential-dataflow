@@ -131,37 +131,37 @@ pub trait Lattice : PartialOrder {
     }
 }
 
-/// A carrier trait for totally ordered lattices.
-///
-/// Types that implement `TotalOrder` are stating that their `Lattice` is in fact a total order.
-/// This type is only used to restrict implementations to certain types of lattices.
-///
-/// This trait is automatically implemented for integer scalars, and for products of these types
-/// with "empty" timestamps (e.g. `RootTimestamp` and `()`). Be careful implementing this trait
-/// for your own timestamp types, as it may lead to the applicability of incorrect implementations.
-///
-/// Note that this trait is distinct from `Ord`; many implementors of `Lattice` also implement 
-/// `Ord` so that they may be sorted, deduplicated, etc. This implementation neither derives any
-/// information from an `Ord` implementation nor informs it in any way.
-///
-/// #Examples
-///
-/// ```
-/// use differential_dataflow::lattice::TotalOrder;
-///
-/// // The `join` and `meet` of totally ordered elements are always one of the two.
-/// fn invariant<T: TotalOrder>(elt1: T, elt2: T) {
-///     if elt1.less_equal(&elt2) {
-///         assert!(elt1.meet(&elt2) == elt1);
-///         assert!(elt1.join(&elt2) == elt2);
-///     }
-///     else {
-///         assert!(elt1.meet(&elt2) == elt2);
-///         assert!(elt1.join(&elt2) == elt1);
-///     }
-/// }
-/// ```
-pub trait TotalOrder : Lattice { }
+// /// A carrier trait for totally ordered lattices.
+// ///
+// /// Types that implement `TotalOrder` are stating that their `Lattice` is in fact a total order.
+// /// This type is only used to restrict implementations to certain types of lattices.
+// ///
+// /// This trait is automatically implemented for integer scalars, and for products of these types
+// /// with "empty" timestamps (e.g. `RootTimestamp` and `()`). Be careful implementing this trait
+// /// for your own timestamp types, as it may lead to the applicability of incorrect implementations.
+// ///
+// /// Note that this trait is distinct from `Ord`; many implementors of `Lattice` also implement 
+// /// `Ord` so that they may be sorted, deduplicated, etc. This implementation neither derives any
+// /// information from an `Ord` implementation nor informs it in any way.
+// ///
+// /// #Examples
+// ///
+// /// ```
+// /// use differential_dataflow::lattice::TotalOrder;
+// ///
+// /// // The `join` and `meet` of totally ordered elements are always one of the two.
+// /// fn invariant<T: TotalOrder>(elt1: T, elt2: T) {
+// ///     if elt1.less_equal(&elt2) {
+// ///         assert!(elt1.meet(&elt2) == elt1);
+// ///         assert!(elt1.join(&elt2) == elt2);
+// ///     }
+// ///     else {
+// ///         assert!(elt1.meet(&elt2) == elt2);
+// ///         assert!(elt1.join(&elt2) == elt1);
+// ///     }
+// /// }
+// /// ```
+// pub trait TotalOrder : Lattice { }
 
 use timely::progress::nested::product::Product;
 
@@ -186,95 +186,29 @@ impl<T1: Lattice, T2: Lattice> Lattice for Product<T1, T2> {
     }
 }
 
-/// A type that does not affect total orderedness.
-///
-/// This trait is not useful, but must be made public and documented or else Rust 
-/// complains about its existence in the constraints on the implementation of 
-/// public traits for public types.
-pub trait Empty : Lattice { }
-
-impl Empty for RootTimestamp { }
-impl Empty for () { }
-impl<T1: Empty, T2: Empty> Empty for Product<T1, T2> { }
-
-impl<T1, T2> TotalOrder for Product<T1, T2> where T1: Empty, T2: TotalOrder { } 
+macro_rules! implement_lattice {
+    ($index_type:ty, $minimum:expr, $maximum:expr) => (
+        impl Lattice for $index_type {
+            #[inline(always)] fn minimum() -> Self { $minimum }
+            #[inline(always)] fn maximum() -> Self { $maximum }
+            #[inline(always)] fn join(&self, other: &Self) -> Self { ::std::cmp::max(*self, *other) }
+            #[inline(always)] fn meet(&self, other: &Self) -> Self { ::std::cmp::min(*self, *other) }
+        }
+    )
+}
 
 use timely::progress::timestamp::RootTimestamp;
 
-impl Lattice for RootTimestamp {
-    #[inline(always)]
-    fn minimum() -> RootTimestamp { RootTimestamp }
-    #[inline(always)]
-    fn maximum() -> RootTimestamp { RootTimestamp }
-    #[inline(always)]
-    fn join(&self, _: &RootTimestamp) -> RootTimestamp { RootTimestamp }
-    #[inline(always)]
-    fn meet(&self, _: &RootTimestamp) -> RootTimestamp { RootTimestamp }
-}
+implement_lattice!(RootTimestamp, RootTimestamp, RootTimestamp);
+implement_lattice!(usize, usize::min_value(), usize::max_value());
+implement_lattice!(u64, u64::min_value(), u64::max_value());
+implement_lattice!(u32, u32::min_value(), u32::max_value());
+implement_lattice!(i32, i32::min_value(), i32::max_value());
+implement_lattice!((), (), ());
 
-impl TotalOrder for RootTimestamp { }
-
-impl Lattice for usize {
-    #[inline(always)]
-    fn minimum() -> usize { usize::min_value() }
-    #[inline(always)]
-    fn maximum() -> usize { usize::max_value() }
-    #[inline(always)]
-    fn join(&self, other: &usize) -> usize { ::std::cmp::max(*self, *other) }
-    #[inline(always)]
-    fn meet(&self, other: &usize) -> usize { ::std::cmp::min(*self, *other) }
-}
-
-impl TotalOrder for usize { }
-
-impl Lattice for u64 {
-    #[inline(always)]
-    fn minimum() -> u64 { u64::min_value() }
-    #[inline(always)]
-    fn maximum() -> u64 { u64::max_value() }
-    #[inline(always)]
-    fn join(&self, other: &u64) -> u64 { ::std::cmp::max(*self, *other) }
-    #[inline(always)]
-    fn meet(&self, other: &u64) -> u64 { ::std::cmp::min(*self, *other) }
-}
-
-impl TotalOrder for u64 { }
-
-impl Lattice for u32 {
-    #[inline(always)]
-    fn minimum() -> u32 { u32::min_value() }
-    #[inline(always)]
-    fn maximum() -> u32 { u32::max_value() }
-    #[inline(always)]
-    fn join(&self, other: &u32) -> u32 { ::std::cmp::max(*self, *other) }
-    #[inline(always)]
-    fn meet(&self, other: &u32) -> u32 { ::std::cmp::min(*self, *other) }
-}
-
-impl TotalOrder for u32 { }
-
-impl Lattice for i32 {
-    #[inline(always)]
-    fn minimum() -> i32 { i32::min_value() }
-    #[inline(always)]
-    fn maximum() -> i32 { i32::max_value() }
-    #[inline(always)]
-    fn join(&self, other: &i32) -> i32 { ::std::cmp::max(*self, *other) }
-    #[inline(always)]
-    fn meet(&self, other: &i32) -> i32 { ::std::cmp::min(*self, *other) }
-}
-
-impl TotalOrder for i32 { }
-
-impl Lattice for () {
-    #[inline(always)]
-    fn minimum() -> () { () }
-    #[inline(always)]
-    fn maximum() -> () { () }
-    #[inline(always)]
-    fn join(&self, _other: &()) -> () { () }
-    #[inline(always)]
-    fn meet(&self, _other: &()) -> () { () }
-}
-
-impl TotalOrder for () { }
+// impl TotalOrder for RootTimestamp { }
+// impl TotalOrder for usize { }
+// impl TotalOrder for u64 { }
+// impl TotalOrder for u32 { }
+// impl TotalOrder for i32 { }
+// impl TotalOrder for () { }

@@ -5,21 +5,22 @@
 
 use std::default::Default;
 
+use timely::order::TotalOrder;
 use timely::dataflow::*;
 use timely::dataflow::operators::Unary;
 use timely::dataflow::channels::pact::Pipeline;
 use timely_sort::Unsigned;
 
+use lattice::Lattice;
 use ::{Data, Collection, Diff};
 use hashable::{Hashable, UnsignedWrapper};
 use collection::AsCollection;
 use operators::arrange::{Arrange, Arranged, ArrangeBySelf};
-use lattice::TotalOrder;
 use trace::{BatchReader, Cursor, Trace, TraceReader};
 use trace::implementations::ord::OrdKeySpine as DefaultKeyTrace;
 
 /// Extension trait for the `distinct` differential dataflow method.
-pub trait DistinctTotal<G: Scope, K: Data, R: Diff> where G::Timestamp: TotalOrder+Ord {
+pub trait DistinctTotal<G: Scope, K: Data, R: Diff> where G::Timestamp: TotalOrder+Lattice+Ord {
     /// Reduces the collection to one occurrence of each distinct element.
     ///
     /// # Examples
@@ -68,7 +69,7 @@ pub trait DistinctTotal<G: Scope, K: Data, R: Diff> where G::Timestamp: TotalOrd
 }
 
 impl<G: Scope, K: Data+Default+Hashable, R: Diff> DistinctTotal<G, K, R> for Collection<G, K, R>
-where G::Timestamp: TotalOrder+Ord {
+where G::Timestamp: TotalOrder+Lattice+Ord {
     fn distinct_total(&self) -> Collection<G, K, isize> {
         self.arrange_by_self()
             .distinct_total_core()
@@ -84,7 +85,7 @@ where G::Timestamp: TotalOrder+Ord {
 
 
 /// Extension trait for the `distinct_total_core` differential dataflow method.
-pub trait DistinctTotalCore<G: Scope, K: Data, R: Diff> where G::Timestamp: TotalOrder+Ord {
+pub trait DistinctTotalCore<G: Scope, K: Data, R: Diff> where G::Timestamp: TotalOrder+Lattice+Ord {
     /// Applies `distinct` to arranged data, and returns a collection of output data.
     ///
     /// # Examples
@@ -116,7 +117,7 @@ pub trait DistinctTotalCore<G: Scope, K: Data, R: Diff> where G::Timestamp: Tota
 
 impl<G: Scope, K: Data, R: Diff, T1> DistinctTotalCore<G, K, R> for Arranged<G, K, (), R, T1>
 where 
-    G::Timestamp: TotalOrder+Ord,
+    G::Timestamp: TotalOrder+Lattice+Ord,
     T1: TraceReader<K, (), G::Timestamp, R>+Clone+'static,
     T1::Batch: BatchReader<K, (), G::Timestamp, R> {
 
