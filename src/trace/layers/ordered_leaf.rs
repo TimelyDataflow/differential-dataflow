@@ -65,7 +65,7 @@ impl<K: Ord+Clone, R: Diff+Clone> MergeBuilder for OrderedLeafBuilder<K, R> {
             match trie1.vals[lower1].0.cmp(&trie2.vals[lower2].0) {
                 ::std::cmp::Ordering::Less => {
                     // determine how far we can advance lower1 until we reach/pass lower2
-                    let step = 1 + advance(&trie1.vals[(1+lower1)..upper1], |x| x < &trie2.vals[lower2]);
+                    let step = 1 + advance(&trie1.vals[(1+lower1)..upper1], |x| x.0 < trie2.vals[lower2].0);
                     <OrderedLeafBuilder<K, R> as MergeBuilder>::copy_range(self, trie1, lower1, lower1 + step);
                     lower1 += step;
                 }
@@ -81,7 +81,7 @@ impl<K: Ord+Clone, R: Diff+Clone> MergeBuilder for OrderedLeafBuilder<K, R> {
                 } 
                 ::std::cmp::Ordering::Greater => {
                     // determine how far we can advance lower2 until we reach/pass lower1
-                    let step = 1 + advance(&trie2.vals[(1+lower2)..upper2], |x| x < &trie1.vals[lower1]);
+                    let step = 1 + advance(&trie2.vals[(1+lower2)..upper2], |x| x.0 < trie1.vals[lower1].0);
                     <OrderedLeafBuilder<K, R> as MergeBuilder>::copy_range(self, trie2, lower2, lower2 + step);
                     lower2 += step;
                 }
