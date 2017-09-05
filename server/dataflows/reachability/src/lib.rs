@@ -1,55 +1,32 @@
-extern crate timely;
-extern crate timely_communication;
 extern crate differential_dataflow;
 extern crate dd_server;
 
-use std::collections::HashMap;
-
-use timely_communication::Allocator;
-use timely::dataflow::scopes::{Child, Root};
-use timely::dataflow::operators::probe::Handle as ProbeHandle;
-
 use differential_dataflow::input::Input;
-use differential_dataflow::operators::{Group, Iterate, JoinCore, Consolidate};
-use differential_dataflow::operators::arrange::ArrangeByKey;
+use differential_dataflow::operators::{Iterate, JoinCore, Distinct};
+use differential_dataflow::operators::arrange::ArrangeBySelf;
 
-use dd_server::{RootTime, TraceHandle};
-
+use dd_server::{Environment, TraceHandle};
 
 #[no_mangle]
-pub fn build(
-    dataflow: &mut Child<Root<Allocator>,usize>, 
-    handles: &mut HashMap<String, TraceHandle>, 
-    probe: &mut ProbeHandle<RootTime>,
-    args: &[String]) 
-{
-    println!("initializing reachability dataflow");
+pub fn build((dataflow, handles, probe, args): Environment) -> Result<(), String> {
 
-    if let Some(handle) = handles.get_mut("random") {
+    if args.len() != 2 { return Err(format!("expected two arguments; instead: {:?}", args)); }
 
-        let edges = handle.import(dataflow);
-        let (_input, roots) = dataflow.new_collection::<_,isize>();
+    let edges = handles.get_mut::<TraceHandle>(&args[0])?.import(dataflow);
 
-        let roots = roots.map(|x| (x, 0));
+    let source = args[1].parse::<usize>().map_err(|_| format!("parse error, source: {:?}", args[1]))?; 
+    let (_input, roots) = dataflow.new_collection_from(Some(source));
 
-        // repeatedly update minimal distances each node can be reached from each root
-        roots.iterate(|dists| {
+    // repeatedly update minimal distances each node can be reached from each root
+    roots.iterate(|dists| {
+        let edges = edges.enter(&dists.scope());
+        let roots = roots.enter(&dists.scope());
+        dists.arrange_by_self_u()
+             .join_core(&edges, |_src, _, &dst| Some(dst))
+             .concat(&roots)
+             .distinct_u()
+    })
+    .probe_with(probe);
 
-            let edges = edges.enter(&dists.scope());
-            let roots = roots.enter(&dists.scope());
-
-            dists.arrange_by_key_u()
-                 .join_core(&edges, |_k,l,d| Some((*d, l+1)))
-                 .concat(&roots)
-                 .group_u(|_, s, t| t.push((s[0].0, 1)))
-        })
-        .map(|(_node, dist)| dist)
-        .consolidate()
-        .inspect(|x| println!("distance update: {:?}", x))
-        .probe_with(probe);
-
-    }
-    else {
-        println!("failed to find graph: random");
-    }
+    Ok(())
 }

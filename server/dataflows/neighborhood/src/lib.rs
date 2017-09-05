@@ -1,71 +1,36 @@
-extern crate timely;
-extern crate timely_communication;
 extern crate differential_dataflow;
 extern crate dd_server;
-
-use std::any::Any;
-use std::collections::HashMap;
-
-use timely_communication::Allocator;
-use timely::dataflow::scopes::{Child, Root};
-use timely::dataflow::operators::probe::Handle as ProbeHandle;
 
 use differential_dataflow::input::Input;
 use differential_dataflow::operators::JoinCore;
 use differential_dataflow::operators::Consolidate;
 use differential_dataflow::operators::arrange::ArrangeByKey;
 
-use dd_server::{RootTime, TraceHandle};
+use dd_server::{Environment, TraceHandle};
 
-
-// load ./dataflows/neighborhood/target/debug/libneighborhood.dylib build <graph_name> 0
+// load ./dataflows/neighborhood/target/release/libneighborhood.dylib build <graph_name> 0
 
 #[no_mangle]
-pub fn build(
-    dataflow: &mut Child<Root<Allocator>,usize>, 
-    handles: &mut HashMap<String, Box<Any>>, 
-    probe: &mut ProbeHandle<RootTime>,
-    args: &[String]) 
-{
-    println!("initializing neighborhood dataflow");
+pub fn build((dataflow, handles, probe, args): Environment) -> Result<(), String> {
 
-    if args.len() == 2 {
+    if args.len() != 2 { return Err(format!("expected two arguments; instead: {:?}", args)); }
 
-        let graph_name = &args[0];
-        if let Some(boxed) = handles.get_mut(graph_name) {
-            if let Some(mut handle) = boxed.downcast_mut::<TraceHandle>() {
+    let edges = handles.get_mut::<TraceHandle>(&args[0])?.import(dataflow);
 
-                if let Ok(source) = args[1].parse::<usize>() {
+    let source = args[1].parse::<usize>().map_err(|_| format!("parse error, source: {:?}", args[1]))?; 
+    let (_input, query) = dataflow.new_collection_from(Some(source));
 
-                    let edges = handle.import(dataflow);
-                    let (_input, query) = dataflow.new_collection_from(Some(source));
+    let timer = ::std::time::Instant::now();
 
-                    query
-                        .map(|x| (x, x))
-                        .arrange_by_key_u()
-                        .join_core(&edges, |_n, &q, &d| Some((d, q)))
-                        .arrange_by_key_u()
-                        .join_core(&edges, |_n, &q, &d| Some((d, q)))
-                        .arrange_by_key_u()
-                        .join_core(&edges, |_n, &q, &d| Some((d, q)))
-                        .map(|x| x.1)
-                        .consolidate()
-                        .inspect(|x| println!("{:?}", x))
-                        .probe_with(probe);
-                }
-                else {
-                    println!("failed to parse {:?} as usize", args[1]);
-                }
-            }
-            else {
-                println!("failed to downcast_mut to TraceHandle");
-            }
-        }
-        else {
-            println!("failed to find graph: {:?}", graph_name);
-        }
-    }
-    else {
-        println!("expected two arguments: <graph name> <source node>; instead: {:?}", args);
-    }
+    query
+        .map(|x| (x, x))
+        .arrange_by_key_u().join_core(&edges, |_n, &q, &d| Some((d, q)))
+        .arrange_by_key_u().join_core(&edges, |_n, &q, &d| Some((d, q)))
+        .arrange_by_key_u().join_core(&edges, |_n, &q, &d| Some((d, q)))
+        .map(|x| x.1)
+        .consolidate()
+        .inspect(move |x| println!("{:?}:\t{:?}", timer.elapsed(), x))
+        .probe_with(probe);
+
+    Ok(())
 }

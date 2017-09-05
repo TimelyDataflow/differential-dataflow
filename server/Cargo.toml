@@ -12,4 +12,4 @@ path="../"
 [dependencies]
 rand="0.3.13"
 libloading="*"
-timely_communication="*"
+timely_communication="0.1.8"
