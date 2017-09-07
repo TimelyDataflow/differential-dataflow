@@ -20,6 +20,7 @@ use hashable::{Hashable, UnsignedWrapper};
 use ::{Data, Collection, Diff};
 
 use timely::order::PartialOrder;
+use timely::progress::frontier::Antichain;
 use timely::dataflow::*;
 use timely::dataflow::operators::Unary;
 use timely::dataflow::channels::pact::Pipeline;
@@ -315,13 +316,13 @@ where
         let mut interesting_times = Vec::<G::Timestamp>::new();
 
         // space for assembling the upper bound of times to process.
-        let mut upper_limit = Vec::<G::Timestamp>::new();
+        let mut upper_limit = Antichain::<G::Timestamp>::new();
 
         // tracks frontiers received from batches, for sanity.
         let mut upper_received = vec![<G::Timestamp as Lattice>::minimum()];
 
         // We separately track the frontiers for what we have sent, and what we have sealed. 
-        let mut lower_issued = vec![<G::Timestamp as Lattice>::minimum()];
+        let mut lower_issued = Antichain::from_elem(<G::Timestamp as Lattice>::minimum());
 
         let id = self.stream.scope().index();
 
@@ -385,12 +386,8 @@ where
             // and so could plausibly be seen in the future (and so is not safe to retire).
             upper_limit.clear();
             for time1 in notificator.frontier(0) {
-                for time2 in &upper_received {
-                    let join = time1.join(time2);
-                    if !upper_limit.iter().any(|t| t.less_equal(&join)) {
-                        upper_limit.retain(|t| !join.less_equal(t));
-                        upper_limit.push(join);
-                    }
+                for time2 in upper_received.iter() {
+                    upper_limit.insert(time1.join(time2));
                 }
             }
 
@@ -400,7 +397,7 @@ where
             // as well as batch descriptions.
             //
             // We can (and should) advance source and output traces if `upper_limit` indicates this is possible.
-            if capabilities.iter().any(|c| !upper_limit.iter().any(|t| t.less_equal(&c.time()))) {
+            if capabilities.iter().any(|c| !upper_limit.less_equal(c.time())) {
 
                 // `interesting` contains "warnings" about keys and times that may need to be re-considered.
                 // We first extract those times from this list that lie in the interval we will process.
@@ -408,7 +405,7 @@ where
                 let mut new_interesting = Vec::new();
                 let mut exposed = Vec::new();
                 segment(&mut interesting, &mut exposed, &mut new_interesting, |&(_, ref time)| {
-                    !upper_limit.iter().any(|t| t.less_equal(&time))
+                    !upper_limit.less_equal(time)
                 });
                 interesting = new_interesting;
 
@@ -437,11 +434,6 @@ where
                 let batch_storage = &batch_storage;
 
                 let mut thinker = history_replay::HistoryReplayer::<V, V2, G::Timestamp, R, R2>::new();
-
-                // let timer = ::std::time::Instant::now();
-                // let mut compute_counter = 0;
-                // let mut output_counter = 0;
-                // let mut key_count = 0;
 
                 // We now march through the keys we must work on, drawing from `batch_cursors` and `exposed`.
                 //
@@ -476,10 +468,6 @@ where
                     // tidy up times, removing redundancy.
                     sort_dedup(&mut interesting_times);
 
-                    // let mut interesting_times2 = interesting_times.clone();
-                    // let mut buffers2 = buffers.clone();
-                    // let mut temporary2 = temporary.clone();
-
                     // do the per-key computation.
                     let _counters = thinker.compute(
                         &key, 
@@ -488,48 +476,18 @@ where
                         (&mut batch_cursor, batch_storage),
                         &mut interesting_times, 
                         &logic, 
-                        &upper_limit[..], 
+                        upper_limit.elements(), 
                         &mut buffers[..], 
                         &mut temporary,
                     );
-
-                    // source_cursor.rewind_vals();
-                    // output_cursor.rewind_vals();
-                    // batch_cursor.rewind_vals();
-
-                    // // do the per-key computation.
-                    // let counters = thinker1.compute(
-                    //     &key, 
-                    //     &mut source_cursor, 
-                    //     &mut output_cursor, 
-                    //     &mut batch_cursor,
-                    //     &mut interesting_times2, 
-                    //     &logic, 
-                    //     &upper_limit[..], 
-                    //     &mut buffers2[..], 
-                    //     &mut temporary2,
-                    // );
 
                     if batch_cursor.key_valid(batch_storage) && batch_cursor.key(batch_storage) == &key {
                         batch_cursor.step_key(batch_storage);
                     }
 
-                    // key_count += 1;
-                    // compute_counter += counters.0;
-                    // output_counter += counters.1;
-
-                    // assert!(interesting_times2.iter().all(|t| interesting_times.contains(t)));
-
-                    // if buffers != buffers2 {
-                    //     println!("PANIC: Output mis-match for key: {:?}", key);
-                    //     println!("expected: {:?}", buffers2);
-                    //     println!("actually: {:?}", buffers);
-                    // }
-                    // assert!(buffers == buffers2);
-
                     // Record future warnings about interesting times (and assert they should be "future").
                     for time in temporary.drain(..) { 
-                        assert!(upper_limit.iter().any(|t| t.less_equal(&time)));
+                        debug_assert!(upper_limit.less_equal(&time));
                         interesting.push((key.clone(), time)); 
                     }
 
@@ -549,39 +507,32 @@ where
                 for (index, builder) in builders.drain(..).enumerate() {
                     let mut local_upper = upper_limit.clone();
                     for capability in &capabilities[index + 1 ..] {
-                        let time = capability.time().clone();
-                        if !local_upper.iter().any(|t| t.less_equal(&time)) {
-                            local_upper.retain(|t| !time.less_than(t));
-                            local_upper.push(time);
-                        }
+                        local_upper.insert(capability.time().clone());
                     }
 
-                    if lower_issued != local_upper {
+                    if lower_issued.elements() != local_upper.elements() {
 
-                        let batch = builder.done(&lower_issued[..], &local_upper[..], &lower_issued[..]);
+                        let batch = builder.done(lower_issued.elements(), local_upper.elements(), lower_issued.elements());
 
                         // ship batch to the output, and commit to the output trace.
                         output.session(&capabilities[index]).give(BatchWrapper { item: batch.clone() });
-                        output_writer.seal(&local_upper[..], Some((capabilities[index].time().clone(), batch)));
+                        output_writer.seal(local_upper.elements(), Some((capabilities[index].time().clone(), batch)));
 
                         lower_issued = local_upper;
                     }
                 }
 
                 // Determine the frontier of our interesting times.
-                let mut frontier = Vec::<G::Timestamp>::new();
-                for &(_, ref time) in &interesting {                    
-                    if !frontier.iter().any(|t| t.less_equal(time)) {
-                        frontier.retain(|t| !time.less_than(t));
-                        frontier.push(time.clone());
-                    }
+                let mut frontier = Antichain::<G::Timestamp>::new();
+                for &(_, ref time) in &interesting {
+                    frontier.insert(time.clone());
                 }
 
                 // Update `capabilities` to reflect interesting pairs described by `frontier`.
                 let mut new_capabilities = Vec::new();
-                for time in frontier.drain(..) {
-                    if let Some(cap) = capabilities.iter().find(|c| c.time().less_equal(&time)) {
-                        new_capabilities.push(cap.delayed(&time));
+                for time in frontier.elements().iter() {
+                    if let Some(cap) = capabilities.iter().find(|c| c.time().less_equal(time)) {
+                        new_capabilities.push(cap.delayed(time));
                     }
                     else {
                         println!("{}:\tfailed to find capability less than new frontier time:", id);
@@ -593,18 +544,12 @@ where
                 capabilities = new_capabilities;
 
                 // ensure that observed progres is reflected in the output.
-                output_writer.seal(&upper_limit[..], None);
-
-    // let mut ul = upper_limit.clone();
-    // ul.sort();
-
-    // let avg_ns = if compute_counter > 0 { (timer.elapsed() / compute_counter as u32).subsec_nanos() } else { 0 };
-    // println!("(key, times) pairs:\t{:?}\t{:?}\t{:?}\tavg {:?}ns\t{:?}", compute_counter, output_counter, key_count, avg_ns, ul);
+                output_writer.seal(upper_limit.elements(), None);
             }
 
             // We only anticipate future times in advance of `upper_limit`.
-            source_trace.advance_by(&upper_limit[..]);
-            output_reader.advance_by(&upper_limit[..]);
+            source_trace.advance_by(upper_limit.elements());
+            output_reader.advance_by(upper_limit.elements());
 
             // We will only slice the data between future batches.
             source_trace.distinguish_since(&upper_received[..]);

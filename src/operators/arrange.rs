@@ -26,9 +26,10 @@ use std::collections::VecDeque;
 use timely::dataflow::operators::{Enter, Map};
 use timely::order::PartialOrder;
 use timely::dataflow::{Scope, Stream};
-use timely::dataflow::operators::generic::{Unary, source};
+use timely::dataflow::operators::generic::{Unary, Operator, source};
 use timely::dataflow::channels::pact::{Pipeline, Exchange};
 use timely::progress::Timestamp;
+use timely::progress::frontier::Antichain;
 use timely::dataflow::operators::Capability;
 use timely::dataflow::scopes::Child;
 
@@ -447,65 +448,55 @@ impl<G: Scope, K: Data+Hashable, V: Data, R: Diff> Arrange<G, K, V, R> for Colle
         let mut batcher = <T::Batch as Batch<K,V,G::Timestamp,R>>::Batcher::new();
 
         // Capabilities for the lower envelope of updates in `batcher`.
-        let mut capabilities = Vec::<Capability<G::Timestamp>>::new();
+        let mut capabilities = Antichain::<Capability<G::Timestamp>>::new();
 
         // fabricate a data-parallel operator using the `unary_notify` pattern.
         let exchange = Exchange::new(move |update: &((K,V),G::Timestamp,R)| (update.0).0.hashed().as_u64());
-        let stream = self.inner.unary_notify(exchange, "Arrange", vec![], move |input, output, notificator| {
+        let stream = self.inner.unary_frontier(exchange, "Arrange", move |_capability| 
+            move |input, output| {
 
             // As we receive data, we need to (i) stash the data and (ii) keep *enough* capabilities.
             // We don't have to keep all capabilities, but we need to be able to form output messages
             // when we realize that time intervals are complete.
 
             input.for_each(|cap, data| {
-
-                // add the capability to our list of capabilities.
-                capabilities.retain(|c| !cap.time().less_than(&c.time()));
-                if !capabilities.iter().any(|c| c.time().less_equal(&cap.time())) { 
-                    capabilities.push(cap);
-                }
-
+                capabilities.insert(cap);
                 batcher.push_batch(data.deref_mut());
             });
 
-            // Timely dataflow currently only allows one capability per message, and we may have multiple
-            // incomparable times for which we need to send data. This would normally require shattering
-            // all updates we might send into multiple batches, each associated with a capability. 
-            //
-            // Instead! We can cheat a bit. We can extract one batch, and just make sure to send all of 
-            // capabilities along in separate messages. This is a bit dubious, and we will want to make 
-            // sure that each operator that consumes batches (group, join, as_collection) understands this.
-            // 
-            // At the moment this is painful for non-group operators, who each rely on having the correct 
-            // capabilities at hand, and must find the right capability record-by-record otherwise. But, 
-            // something like this should ease some pain. (we could also just fix timely).
-
+            // The frontier may have advanced by multiple elements, which is an issue because 
+            // timely dataflow currently only allows one capability per message. This means we
+            // must pretend to process the frontier advances one element at a time, batching 
+            // and sending smaller bites than we might have otherwise done.
+            
             // If there is at least one capability no longer in advance of the input frontier ...
-            if capabilities.iter().any(|c| !notificator.frontier(0).iter().any(|t| t.less_equal(&c.time()))) {
+            if capabilities.elements().iter().any(|c| !input.frontier().less_equal(c.time())) {
+
+                let mut upper = Antichain::new();   // re-used allocation for sealing batches.
 
                 // For each capability not in advance of the input frontier ... 
-                for index in 0 .. capabilities.len() {
-                    if !notificator.frontier(0).iter().any(|t| t.less_equal(&capabilities[index].time())) {
+                for (index, capability) in capabilities.elements().iter().enumerate() {
 
+                    if !input.frontier().less_equal(capability.time()) {
+                        
                         // Assemble the upper bound on times we can commit with this capabilities.
-                        // This is determined both by the input frontier, and by subsequent capabilities
-                        // which may shadow this capability for some times.
-                        let mut upper = notificator.frontier(0).to_vec();
-                        for capability in &capabilities[(index + 1) .. ] {
-                            let time = capability.time().clone();
-                            if !upper.iter().any(|t| t.less_equal(&time)) {
-                                upper.retain(|t| !time.less_equal(t));
-                                upper.push(time);
-                            }
+                        // We must respect the input frontier, and *subsequent* capabilities, as 
+                        // we are pretending to retire the capability changes one by one.
+                        upper.clear();
+                        for time in input.frontier().frontier().iter() {
+                            upper.insert(time.clone());
+                        }
+                        for other_capability in &capabilities.elements()[(index + 1) .. ] {
+                            upper.insert(other_capability.time().clone());
                         }
 
                         // Extract updates not in advance of `upper`.
-                        let batch = batcher.seal(&upper[..]);
+                        let batch = batcher.seal(upper.elements());
 
-                        writer.seal(&upper[..], Some((capabilities[index].time().clone(), batch.clone())));
+                        writer.seal(upper.elements(), Some((capability.time().clone(), batch.clone())));
 
                         // send the batch to downstream consumers, empty or not.
-                        output.session(&capabilities[index]).give(BatchWrapper { item: batch });
+                        output.session(&capabilities.elements()[index]).give(BatchWrapper { item: batch });
                     }
                 }
 
@@ -514,38 +505,40 @@ impl<G: Scope, K: Data+Hashable, V: Data, R: Diff> Arrange<G, K, V, R> for Colle
                 // This may involve discarding capabilities, which is fine as any new updates arrive 
                 // in messages with new capabilities.
 
-                let mut new_capabilities = Vec::new();
+                let mut new_capabilities = Antichain::new();
                 for time in batcher.frontier() {
-                    if let Some(capability) = capabilities.iter().find(|c| c.time().less_equal(time)) {
-                        new_capabilities.push(capability.delayed(time));
+                    if let Some(capability) = capabilities.elements().iter().find(|c| c.time().less_equal(time)) {
+                        new_capabilities.insert(capability.delayed(time));
+                    }
+                    else {
+                        panic!("failed to find capability");
                     }
                 }
 
                 capabilities = new_capabilities;
-
-                // writer.seal(notificator.frontier(0), None);
-
-                // // This very aggressively pushes frontier information along. We may want to dial it back 
-                // // if we find that we are spamming folks.
-                // queues.upgrade().map(|queues| {
-                //     let mut borrow = queues.borrow_mut();
-                //     for queue in borrow.iter_mut() {
-                //         queue.upgrade().map(|queue| {
-                //             queue.borrow_mut().push_back((notificator.frontier(0).to_vec(), None));
-                //         });
-                //     }
-                //     borrow.retain(|w| w.upgrade().is_some());
-                // });
-
             }
 
-            writer.seal(notificator.frontier(0), None);
+            // Announce progress updates.
+            // TODO: This is very noisy; consider tracking the previous frontier, and issuing an update
+            //       if and when it changes.
+            writer.seal(input.frontier().frontier(), None);
         });
 
         Arranged { stream: stream, trace: reader }
     }
 }
 
+impl<G: Scope, K: Data+Hashable, R: Diff> Arrange<G, K, (), R> for Collection<G, K, R> where G::Timestamp: Lattice+Ord {
+
+    fn arrange<T>(&self, empty_trace: T) -> Arranged<G, K, (), R, TraceAgent<K, (), G::Timestamp, R, T>> 
+        where 
+            T: Trace<K, (), G::Timestamp, R>+'static,
+            T::Batch: Batch<K, (), G::Timestamp, R> 
+    {
+        self.map(|k| (k, ()))
+            .arrange(empty_trace)
+    }
+}
 /// Arranges something as `(Key,Val)` pairs according to a type `T` of trace.
 ///
 /// This arrangement requires `Key: Hashable`, and uses the `hashed()` method to place keys in a hashed
