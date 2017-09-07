@@ -16,9 +16,10 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Trace;
 // use differential_dataflow::operators::join::JoinArranged;
 use differential_dataflow::operators::group::GroupArranged;
-use differential_dataflow::operators::arrange::Arrange;
-use differential_dataflow::hashable::UnsignedWrapper;
-use differential_dataflow::trace::implementations::ord::OrdValSpine;// as HashSpine;
+use differential_dataflow::operators::arrange::{ArrangeByKey, ArrangeBySelf};
+// use differential_dataflow::hashable::UnsignedWrapper;
+
+// use differential_dataflow::trace::implementations::ord::OrdValSpine;// as HashSpine;
 use differential_dataflow::trace::implementations::ord::OrdKeySpine;// as OrdKeyHashSpine;
 
 
@@ -40,8 +41,8 @@ fn main() {
 
             let (input, mut edges) = scope.new_collection();
 
-            edges = _trim_and_flip_u(&edges);
-            edges = _trim_and_flip_u(&edges);
+            edges = _trim_and_flip(&edges);
+            edges = _trim_and_flip(&edges);
             // edges = _strongly_connected(&edges);
 
             if inspect {
@@ -99,35 +100,17 @@ fn main() {
     }).unwrap();
 }
 
-fn _trim_and_flip_u<G: Scope>(graph: &Collection<G, Edge>) -> Collection<G, Edge>
-where G::Timestamp: Lattice+Ord+Hash {
-    graph.iterate(|edges| {
-        // keep edges from active edge destinations.
-
-        let active = edges.map(|(_,k)| (UnsignedWrapper::from(k), ()))
-                          .arrange(OrdKeySpine::new())
-                          .group_arranged(|_k,_s,t| t.push(((), 1)), OrdKeySpine::new());
-
-        graph.enter(&edges.scope())
-             .map(|(k,v)| (UnsignedWrapper::from(k), v))
-             .arrange(OrdValSpine::new())
-             .join_core(&active, |k,v,_| Some((k.item.clone(), v.clone())))
-
-        // let active = edges.map(|(_,dst)| dst).distinct_u();
-        // graph.enter(&edges.scope())
-        //      .semijoin_u(&active)
-    })
-    .map_in_place(|x| mem::swap(&mut x.0, &mut x.1))
-}
-
 fn _trim_and_flip<G: Scope>(graph: &Collection<G, Edge>) -> Collection<G, Edge>
 where G::Timestamp: Lattice+Ord+Hash {
     graph.iterate(|edges| {
         // keep edges from active edge destinations.
-        let active = edges.map(|(_,dst)| dst).distinct();
-        // active.inner.inspect_batch(|t,xs| println!("{:?}\tcount: {:?}", t, xs));
+        let active = edges.map(|(src,_dst)| src)
+                          .arrange_by_self()
+                          .group_arranged(|_k,_s,t| t.push(((), 1)), OrdKeySpine::new());
+
         graph.enter(&edges.scope())
-             .semijoin(&active)
+             .arrange_by_key()
+             .join_core(&active, |k,v,_| Some((k.clone(), v.clone())))
     })
     .map_in_place(|x| mem::swap(&mut x.0, &mut x.1))
 }
@@ -149,8 +132,8 @@ fn _trim_edges<G: Scope>(cycle: &Collection<G, Edge>, edges: &Collection<G, Edge
 
     let labels = _reachability(&cycle, &nodes);
 
-    edges.join_map_u(&labels, |&e1,&e2,&l1| (e2,(e1,l1)))
-         .join_map_u(&labels, |&e2,&(e1,l1),&l2| ((e1,e2),(l1,l2)))
+    edges.join_map(&labels, |&e1,&e2,&l1| (e2,(e1,l1)))
+         .join_map(&labels, |&e2,&(e1,l1),&l2| ((e1,e2),(l1,l2)))
          .filter(|&(_,(l1,l2))| l1 == l2)
          .map(|((x1,x2),_)| (x2,x1))
 }

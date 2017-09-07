@@ -11,7 +11,7 @@ use differential_dataflow::operators::arrange::{ArrangeByKey, Arrange};
 use differential_dataflow::operators::group::GroupArranged;
 use differential_dataflow::trace::implementations::ord::OrdValSpine;
 use differential_dataflow::trace::{Trace, TraceReader};
-use differential_dataflow::hashable::{OrdWrapper, UnsignedWrapper};
+// use differential_dataflow::hashable::{OrdWrapper, UnsignedWrapper};
 use itertools::Itertools;
 
 type Result = std::sync::mpsc::Receiver<timely::dataflow::operators::capture::Event<timely::progress::nested::product::Product<timely::progress::timestamp::RootTimestamp, usize>, ((u64, i64), timely::progress::nested::product::Product<timely::progress::timestamp::RootTimestamp, usize>, i64)>>;
@@ -47,14 +47,14 @@ fn test_import() {
             let (mut input, mut trace) = worker.dataflow(|scope| {
                 let (input, edges) = scope.new_input();
                 let arranged = edges.as_collection()
-                                    .arrange_by_key_hashed();
+                                    .arrange_by_key();
                 (input, arranged.trace.clone())
             });
             let (captured,) = worker.dataflow(move |scope| {
                 let imported = trace.import(scope);
                 ::std::mem::drop(trace);
                 let captured = imported.group_arranged::<_, i64, _, _>(|_k, s, t| t.push((s.iter().map(|&(_, w)| w).sum(), 1i64)), OrdValSpine::new())
-                      .as_collection(|k: &OrdWrapper<u64>, c: &i64| (k.item.clone(), *c))
+                      .as_collection(|k: &u64, c: &i64| (k.clone(), *c))
                       .inner.exchange(|_| 0)
                       .capture();
                 (captured,)
@@ -102,7 +102,7 @@ fn test_import_completed_dataflow() {
             let (mut input, mut trace, probe) = worker.dataflow(|scope| {
                 let (input, edges) = scope.new_input();
                 let arranged = edges.as_collection()
-                                    .arrange_by_key_hashed();
+                                    .arrange_by_key();
                 (input, arranged.trace.clone(), arranged.stream.probe())
             });
 
@@ -123,7 +123,7 @@ fn test_import_completed_dataflow() {
                 let imported = trace.import(scope);
                 ::std::mem::drop(trace);
                 let stream = imported.group_arranged::<_, i64, _, _>(|_k, s, t| t.push((s.iter().map(|&(_, w)| w).sum(), 1i64)), OrdValSpine::new())
-                      .as_collection(|k: &OrdWrapper<u64>, c: &i64| (k.item.clone(), *c))
+                      .as_collection(|k: &u64, c: &i64| (k.clone(), *c))
                       .inner.exchange(|_| 0);
                 let probe = stream.probe();
                 let captured = stream.capture();
@@ -162,7 +162,6 @@ fn import_skewed() {
             let (mut input, mut trace) = worker.dataflow(|scope| {
                 let (input, edges) = scope.new_input();
                 let arranged = edges.as_collection()
-                                    .map(|(k,v)| (UnsignedWrapper::from(k), v))
                                     .arrange(OrdValSpine::new());
                 (input, arranged.trace.clone())
             });
@@ -175,7 +174,7 @@ fn import_skewed() {
             let (captured,) = worker.dataflow(move |scope| {
                 let imported = trace.import(scope);
                 let captured = imported
-                      .as_collection(|k: &UnsignedWrapper<u64>, c: &i64| (k.item.clone(), *c))
+                      .as_collection(|k: &u64, c: &i64| (k.clone(), *c))
                       .inner.exchange(|_| 0)
                       .capture();
                 (captured,)

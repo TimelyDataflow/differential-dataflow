@@ -120,7 +120,7 @@ where G::Timestamp: Lattice+Ord {
         // This is a cyclic join, which should scare us a bunch.
         let reached = 
         forward
-            .join_map_u(&reverse, |_, &(src,d1), &(dst,d2)| ((src, dst), d1 + d2))
+            .join_map(&reverse, |_, &(src,d1), &(dst,d2)| ((src, dst), d1 + d2))
             .group(|_key, s, t| t.push((*s[0].0, 1)));
 
         let active =
@@ -132,13 +132,13 @@ where G::Timestamp: Lattice+Ord {
             .consolidate();
 
         // Let's expand out forward queries that are active.
-        let forward_active = active.map(|(x,_y)| x).distinct_u();
+        let forward_active = active.map(|(x,_y)| x).distinct();
         let forward_next = 
         forward
             .map(|(med, (src, dist))| (src, (med, dist)))
-            .semijoin_u(&forward_active)
+            .semijoin(&forward_active)
             .map(|(src, (med, dist))| (med, (src, dist)))
-            .join_map_u(&edges, |_med, &(src, dist), &next| (next, (src, dist+1)))
+            .join_map(&edges, |_med, &(src, dist), &next| (next, (src, dist+1)))
             .concat(&forward)
             .map(|(next, (src, dist))| ((next, src), dist))
             .group(|_key, s, t| t.push((*s[0].0, 1)))
@@ -147,13 +147,13 @@ where G::Timestamp: Lattice+Ord {
         forward.set(&forward_next);
 
         // Let's expand out reverse queries that are active.
-        let reverse_active = active.map(|(_x,y)| y).distinct_u();
+        let reverse_active = active.map(|(_x,y)| y).distinct();
         let reverse_next = 
         reverse
             .map(|(med, (rev, dist))| (rev, (med, dist)))
-            .semijoin_u(&reverse_active)
+            .semijoin(&reverse_active)
             .map(|(rev, (med, dist))| (med, (rev, dist)))
-            .join_map_u(&edges.map(|(x,y)| (y,x)), |_med, &(rev, dist), &next| (next, (rev, dist+1)))
+            .join_map(&edges.map(|(x,y)| (y,x)), |_med, &(rev, dist), &next| (next, (rev, dist+1)))
             .concat(&reverse)
             .map(|(next, (rev, dist))| ((next, rev), dist))
             .group(|_key, s, t| t.push((*s[0].0, 1)))

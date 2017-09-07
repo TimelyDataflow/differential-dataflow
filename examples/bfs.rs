@@ -113,8 +113,8 @@ where G::Timestamp: Lattice+Ord {
         let edges = edges.enter(&inner.scope());
         let nodes = nodes.enter(&inner.scope());
 
-        inner.join_map_u(&edges, |_k,l,d| (*d, l+1))
+        inner.join_map(&edges, |_k,l,d| (*d, l+1))
              .concat(&nodes)
-             .group_u(|_, s, t| t.push((*s[0].0, 1)))
+             .group(|_, s, t| t.push((*s[0].0, 1)))
      })
 }

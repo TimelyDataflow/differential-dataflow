@@ -30,11 +30,11 @@ fn main() {
             let (input, edges) = scope.new_collection();
 
             let degrs = edges.map(|(src, _dst)| src)
-                             .count_total_u();
+                             .count_total();
 
             // pull of count, and count.
             let distr = degrs.map(|(_src, cnt)| cnt as usize)
-                             .count_total_u();
+                             .count_total();
 
             // show us something about the collection, notice when done.
             let probe = if inspect { 
