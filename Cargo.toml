@@ -13,8 +13,8 @@ repository = "https://github.com/frankmcsherry/differential-dataflow.git"
 keywords = ["differential", "dataflow"]
 license = "MIT"
 
-#[dependencies.graph_map]
-#git="https://github.com/frankmcsherry/graph-map.git"
+[dependencies.graph_map]
+git="https://github.com/frankmcsherry/graph-map.git"
 
 [dev-dependencies]
 getopts="0.2.14"
