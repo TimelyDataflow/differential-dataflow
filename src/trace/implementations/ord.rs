@@ -9,18 +9,15 @@
 //! and should consume fewer resources (computation and memory) when it applies.
 
 use std::rc::Rc;
-// use owning_ref::OwningRef;
 
 use ::Diff;
-use hashable::HashOrdered;
+use lattice::Lattice;
 
 use trace::layers::{Trie, TupleBuilder};
 use trace::layers::Builder as TrieBuilder;
 use trace::layers::Cursor as TrieCursor;
 use trace::layers::ordered::{OrderedLayer, OrderedBuilder, OrderedCursor};
 use trace::layers::ordered_leaf::{OrderedLeaf, OrderedLeafBuilder};
-
-use lattice::Lattice;
 use trace::{Batch, BatchReader, Builder, Cursor};
 use trace::description::Description;
 
@@ -35,7 +32,7 @@ pub type OrdKeySpine<K, T, R> = Spine<K, (), T, R, Rc<OrdKeyBatch<K, T, R>>>;
 
 /// An immutable collection of update tuples, from a contiguous interval of logical times.
 #[derive(Debug)]
-pub struct OrdValBatch<K: Ord+HashOrdered, V: Ord, T: Lattice, R> {
+pub struct OrdValBatch<K: Ord, V: Ord, T: Lattice, R> {
 	/// Where all the dataz is.
 	pub layer: OrderedLayer<K, OrderedLayer<V, OrderedLeaf<T, R>>>,
 	/// Description of the update times this layer represents.
@@ -43,7 +40,7 @@ pub struct OrdValBatch<K: Ord+HashOrdered, V: Ord, T: Lattice, R> {
 }
 
 impl<K, V, T, R> BatchReader<K, V, T, R> for Rc<OrdValBatch<K, V, T, R>>
-where K: Ord+Clone+HashOrdered+'static, V: Ord+Clone+'static, T: Lattice+Ord+Clone+'static, R: Diff {
+where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Ord+Clone+'static, R: Diff {
 	type Cursor = OrdValCursor<V, T, R>;
 	fn cursor(&self) -> (Self::Cursor, <Self::Cursor as Cursor<K, V, T, R>>::Storage) { 
 		let cursor = OrdValCursor {
@@ -57,7 +54,7 @@ where K: Ord+Clone+HashOrdered+'static, V: Ord+Clone+'static, T: Lattice+Ord+Clo
 }
 
 impl<K, V, T, R> Batch<K, V, T, R> for Rc<OrdValBatch<K, V, T, R>>
-where K: Ord+Clone+HashOrdered+'static, V: Ord+Clone+'static, T: Lattice+Ord+Clone+::std::fmt::Debug+'static, R: Diff {
+where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Ord+Clone+::std::fmt::Debug+'static, R: Diff {
 	type Batcher = Batcher<K, V, T, R, Self>;
 	type Builder = OrdValBuilder<K, V, T, R>;
 	fn merge(&self, other: &Self) -> Self {
@@ -206,7 +203,7 @@ pub struct OrdValCursor<V: Ord+Clone, T: Lattice+Ord+Clone, R: Diff> {
 }
 
 impl<K, V, T, R> Cursor<K, V, T, R> for OrdValCursor<V, T, R> 
-where K: Ord+Clone+HashOrdered, V: Ord+Clone, T: Lattice+Ord+Clone, R: Diff {
+where K: Ord+Clone, V: Ord+Clone, T: Lattice+Ord+Clone, R: Diff {
 
 	type Storage = Rc<OrdValBatch<K, V, T, R>>;//OrderedLayer<K, OrderedLayer<V, OrderedLeaf<T, R>>>;
 
@@ -231,12 +228,12 @@ where K: Ord+Clone+HashOrdered, V: Ord+Clone, T: Lattice+Ord+Clone, R: Diff {
 
 
 /// A builder for creating layers from unsorted update tuples.
-pub struct OrdValBuilder<K: Ord+HashOrdered, V: Ord, T: Ord+Lattice, R: Diff> {
+pub struct OrdValBuilder<K: Ord, V: Ord, T: Ord+Lattice, R: Diff> {
 	builder: OrderedBuilder<K, OrderedBuilder<V, OrderedLeafBuilder<T, R>>>,
 }
 
 impl<K, V, T, R> Builder<K, V, T, R, Rc<OrdValBatch<K, V, T, R>>> for OrdValBuilder<K, V, T, R> 
-where K: Ord+Clone+HashOrdered+'static, V: Ord+Clone+'static, T: Lattice+Ord+Clone+::std::fmt::Debug+'static, R: Diff {
+where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Ord+Clone+::std::fmt::Debug+'static, R: Diff {
 
 	fn new() -> Self { 
 		OrdValBuilder { 
@@ -268,7 +265,7 @@ where K: Ord+Clone+HashOrdered+'static, V: Ord+Clone+'static, T: Lattice+Ord+Clo
 
 /// An immutable collection of update tuples, from a contiguous interval of logical times.
 #[derive(Debug)]
-pub struct OrdKeyBatch<K: Ord+HashOrdered, T: Lattice, R> {
+pub struct OrdKeyBatch<K: Ord, T: Lattice, R> {
 	/// Where all the dataz is.
 	pub layer: OrderedLayer<K, OrderedLeaf<T, R>>,
 	/// Description of the update times this layer represents.
@@ -276,7 +273,7 @@ pub struct OrdKeyBatch<K: Ord+HashOrdered, T: Lattice, R> {
 }
 
 impl<K, T, R> BatchReader<K, (), T, R> for Rc<OrdKeyBatch<K, T, R>>
-where K: Ord+Clone+HashOrdered+'static, T: Lattice+Ord+Clone+'static, R: Diff {
+where K: Ord+Clone+'static, T: Lattice+Ord+Clone+'static, R: Diff {
 	type Cursor = OrdKeyCursor<T, R>;
 	fn cursor(&self) -> (Self::Cursor, <Self::Cursor as Cursor<K, (), T, R>>::Storage) { 
 		let cursor = OrdKeyCursor {
@@ -291,7 +288,7 @@ where K: Ord+Clone+HashOrdered+'static, T: Lattice+Ord+Clone+'static, R: Diff {
 }
 
 impl<K, T, R> Batch<K, (), T, R> for Rc<OrdKeyBatch<K, T, R>>
-where K: Ord+Clone+HashOrdered+'static, T: Lattice+Ord+Clone+'static, R: Diff {
+where K: Ord+Clone+'static, T: Lattice+Ord+Clone+'static, R: Diff {
 	type Batcher = Batcher<K, (), T, R, Self>;
 	type Builder = OrdKeyBuilder<K, T, R>;
 	fn merge(&self, other: &Self) -> Self {
@@ -414,7 +411,7 @@ pub struct OrdKeyCursor<T: Lattice+Ord+Clone, R: Diff> {
 	cursor: OrderedCursor<OrderedLeaf<T, R>>,
 }
 
-impl<K: Ord+Clone+HashOrdered, T: Lattice+Ord+Clone, R: Diff> Cursor<K, (), T, R> for OrdKeyCursor<T, R> {
+impl<K: Ord+Clone, T: Lattice+Ord+Clone, R: Diff> Cursor<K, (), T, R> for OrdKeyCursor<T, R> {
 
 	type Storage = Rc<OrdKeyBatch<K, T, R>>; // OrderedLayer<K, OrderedLeaf<T, R>>;
 
@@ -439,12 +436,12 @@ impl<K: Ord+Clone+HashOrdered, T: Lattice+Ord+Clone, R: Diff> Cursor<K, (), T, R
 
 
 /// A builder for creating layers from unsorted update tuples.
-pub struct OrdKeyBuilder<K: Ord+HashOrdered, T: Ord+Lattice, R: Diff> {
+pub struct OrdKeyBuilder<K: Ord, T: Ord+Lattice, R: Diff> {
 	builder: OrderedBuilder<K, OrderedLeafBuilder<T, R>>,
 }
 
 impl<K, T, R> Builder<K, (), T, R, Rc<OrdKeyBatch<K, T, R>>> for OrdKeyBuilder<K, T, R> 
-where K: Ord+Clone+HashOrdered+'static, T: Lattice+Ord+Clone+'static, R: Diff {
+where K: Ord+Clone+'static, T: Lattice+Ord+Clone+'static, R: Diff {
 
 	fn new() -> Self { 
 		OrdKeyBuilder { 

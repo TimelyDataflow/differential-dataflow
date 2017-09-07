@@ -6,8 +6,7 @@
 //! underlying system can more clearly see that no work must be done in the later case, and we can
 //! drop out of, e.g. iterative computations.
 
-use timely::dataflow::*;
-use timely_sort::Unsigned;
+use timely::dataflow::Scope;
 
 use ::{Collection, Data, Diff, Hashable};
 use operators::arrange::ArrangeBySelf;
@@ -41,33 +40,6 @@ pub trait Consolidate<D: Data+Hashable> {
     /// }
     /// ```
     fn consolidate(&self) -> Self;
-    /// Aggregates the weights of equal records into at most one record.
-    ///
-    /// This method uses the type `D` itself to partition the data. The data are 
-    /// accumulated in place, each held back until their timestamp has completed.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// extern crate timely;
-    /// extern crate differential_dataflow;
-    ///
-    /// use differential_dataflow::input::Input;
-    /// use differential_dataflow::operators::Consolidate;
-    ///
-    /// fn main() {
-    ///     ::timely::example(|scope| {
-    ///
-    ///         let x = scope.new_collection_from(1 .. 10u32).1;
-    ///
-    ///         x.negate()
-    ///          .concat(&x)
-    ///          .consolidate_u() // <-- ensures cancellation occurs
-    ///          .assert_empty();
-    ///     });
-    /// }
-    /// ```    
-    fn consolidate_u(&self) -> Self where D: Unsigned+Copy;
 }
 
 impl<G: Scope, D, R> Consolidate<D> for Collection<G, D, R>
@@ -77,9 +49,6 @@ where
     G::Timestamp: ::lattice::Lattice+Ord,
  {
     fn consolidate(&self) -> Self {
-       self.arrange_by_self().as_collection(|d,_| d.item.clone())
-    }
-    fn consolidate_u(&self) -> Self where D: Unsigned+Copy {
-       self.arrange_by_self_u().as_collection(|d,_| d.item.clone())
+       self.arrange_by_self().as_collection(|d,_| d.clone())
     }
 }

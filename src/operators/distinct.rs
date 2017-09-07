@@ -9,15 +9,13 @@ use timely::order::TotalOrder;
 use timely::dataflow::*;
 use timely::dataflow::operators::Unary;
 use timely::dataflow::channels::pact::Pipeline;
-use timely_sort::Unsigned;
 
 use lattice::Lattice;
 use ::{Data, Collection, Diff};
-use hashable::{Hashable, UnsignedWrapper};
+use hashable::Hashable;
 use collection::AsCollection;
-use operators::arrange::{Arrange, Arranged, ArrangeBySelf};
-use trace::{BatchReader, Cursor, Trace, TraceReader};
-use trace::implementations::ord::OrdKeySpine as DefaultKeyTrace;
+use operators::arrange::{Arranged, ArrangeBySelf};
+use trace::{BatchReader, Cursor, TraceReader};
 
 /// Extension trait for the `distinct` differential dataflow method.
 pub trait DistinctTotal<G: Scope, K: Data, R: Diff> where G::Timestamp: TotalOrder+Lattice+Ord {
@@ -42,30 +40,6 @@ pub trait DistinctTotal<G: Scope, K: Data, R: Diff> where G::Timestamp: TotalOrd
     /// }
     /// ```
     fn distinct_total(&self) -> Collection<G, K, isize>;
-    /// Reduces the collection to one occurrence of each distinct element.
-    /// 
-    /// This method is a specialization for when the key is an unsigned integer fit for distributing
-    /// the data.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// extern crate timely;
-    /// extern crate differential_dataflow;
-    ///
-    /// use differential_dataflow::input::Input;
-    /// use differential_dataflow::operators::DistinctTotal;
-    ///
-    /// fn main() {
-    ///     ::timely::example(|scope| {
-    ///         // report the number of occurrences of each key
-    ///         scope.new_collection_from(1 .. 10u32).1
-    ///              .map(|x| x / 3)
-    ///              .distinct_total_u();
-    ///     });
-    /// }
-    /// ```
-    fn distinct_total_u(&self) -> Collection<G, K, isize> where K: Unsigned+Copy;
 }
 
 impl<G: Scope, K: Data+Default+Hashable, R: Diff> DistinctTotal<G, K, R> for Collection<G, K, R>
@@ -73,13 +47,6 @@ where G::Timestamp: TotalOrder+Lattice+Ord {
     fn distinct_total(&self) -> Collection<G, K, isize> {
         self.arrange_by_self()
             .distinct_total_core()
-            .map(|k| k.item)
-    }
-    fn distinct_total_u(&self) -> Collection<G, K, isize> where K: Unsigned+Copy {
-        self.map(|k| (UnsignedWrapper::from(k), ()))
-            .arrange(DefaultKeyTrace::new())
-            .distinct_total_core()
-            .map(|k| k.item)
     }
 }
 

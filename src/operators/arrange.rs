@@ -1,20 +1,20 @@
 //! Arranges a collection into a re-usable trace structure.
 //!
-//! The `arrange` operator applies to a differential dataflow `Collection` and returns an `Arranged` 
-//! structure, provides access to both an indexed form of accepted updates as well as a stream of 
+//! The `arrange` operator applies to a differential dataflow `Collection` and returns an `Arranged`
+//! structure, provides access to both an indexed form of accepted updates as well as a stream of
 //! batches of newly arranged updates.
 //!
 //! Several operators (`join`, `group`, and `cogroup`, among others) are implemented against `Arranged`,
-//! and can be applied directly to arranged data instead of the collection. Internally, the operators 
-//! will borrow the shared state, and listen on the timely stream for shared batches of data. The 
+//! and can be applied directly to arranged data instead of the collection. Internally, the operators
+//! will borrow the shared state, and listen on the timely stream for shared batches of data. The
 //! resources to index the collection---communication, computation, and memory---are spent only once,
 //! and only one copy of the index needs to be maintained as the collection changes.
-//! 
-//! The arranged collection is stored in a trace, whose append-only operation means that it is safe to 
-//! share between the single `arrange` writer and multiple readers. Each reader is expected to interrogate 
+//!
+//! The arranged collection is stored in a trace, whose append-only operation means that it is safe to
+//! share between the single `arrange` writer and multiple readers. Each reader is expected to interrogate
 //! the trace only at times for which it knows the trace is complete, as indicated by the frontiers on its
 //! incoming channels. Failing to do this is "safe" in the Rust sense of memory safety, but the reader may
-//! see ill-defined data at times for which the trace is not complete. (All current implementations 
+//! see ill-defined data at times for which the trace is not complete. (All current implementations
 //! commit only completed data to the trace).
 
 use std::rc::{Rc, Weak};
@@ -35,8 +35,6 @@ use timely::dataflow::scopes::Child;
 
 use timely_sort::Unsigned;
 
-use hashable::{HashableWrapper, OrdWrapper, UnsignedWrapper};
-
 use ::{Data, Diff, Collection, AsCollection, Hashable};
 use lattice::Lattice;
 use trace::{Trace, TraceReader, Batch, BatchReader, Batcher, Cursor};
@@ -51,7 +49,7 @@ use trace::wrappers::rc::TraceBox;
 /// Wrapper type to permit transfer of `Rc` types, as in batch.
 ///
 /// The `BatchWrapper`s sole purpose in life is to implement `Abomonation` with methods that panic
-/// when called. This allows the wrapped data to be transited along timely's `Pipeline` channels. 
+/// when called. This allows the wrapped data to be transited along timely's `Pipeline` channels.
 /// The wrapper cannot fake out `Send`, and so cannot be used on timely's `Exchange` channels, which
 /// is good.
 #[derive(Clone,Eq,PartialEq,Debug)]
@@ -117,7 +115,7 @@ where T: Lattice+Ord+Clone+'static, Tr: Trace<K,V,T,R>, Tr::Batch: Batch<K,V,T,R
 ///
 /// The `TraceAgent` is the default trace type produced by `arranged`, and it can be extracted
 /// from the dataflow in which it was defined, and imported into other dataflows.
-pub struct TraceAgent<K, V, T, R, Tr> 
+pub struct TraceAgent<K, V, T, R, Tr>
 where T: Lattice+Ord+Clone+'static, Tr: TraceReader<K,V,T,R> {
     phantom: ::std::marker::PhantomData<(K, V, R)>,
     trace: Rc<RefCell<TraceBox<K, V, T, R, Tr>>>,
@@ -126,31 +124,31 @@ where T: Lattice+Ord+Clone+'static, Tr: TraceReader<K,V,T,R> {
     through: Vec<T>,
 }
 
-impl<K, V, T, R, Tr> TraceReader<K, V, T, R> for TraceAgent<K, V, T, R, Tr> 
+impl<K, V, T, R, Tr> TraceReader<K, V, T, R> for TraceAgent<K, V, T, R, Tr>
 where T: Lattice+Ord+Clone+'static, Tr: TraceReader<K,V,T,R> {
     type Batch = Tr::Batch;
     type Cursor = Tr::Cursor;
-    fn advance_by(&mut self, frontier: &[T]) { 
+    fn advance_by(&mut self, frontier: &[T]) {
         self.trace.borrow_mut().adjust_advance_frontier(&self.advance[..], frontier);
         self.advance.clear();
         self.advance.extend(frontier.iter().cloned());
     }
-    fn advance_frontier(&mut self) -> &[T] { 
+    fn advance_frontier(&mut self) -> &[T] {
         &self.advance[..]
     }
-    fn distinguish_since(&mut self, frontier: &[T]) { 
+    fn distinguish_since(&mut self, frontier: &[T]) {
         self.trace.borrow_mut().adjust_through_frontier(&self.through[..], frontier);
         self.through.clear();
         self.through.extend(frontier.iter().cloned());
     }
-    fn distinguish_frontier(&mut self) -> &[T] { 
+    fn distinguish_frontier(&mut self) -> &[T] {
         &self.through[..]
     }
     fn cursor_through(&mut self, frontier: &[T]) -> Option<(Tr::Cursor, <Tr::Cursor as Cursor<K, V, T, R>>::Storage)> { self.trace.borrow_mut().trace.cursor_through(frontier) }
     fn map_batches<F: FnMut(&Self::Batch)>(&mut self, f: F) { self.trace.borrow_mut().trace.map_batches(f) }
 }
 
-impl<K, V, T, R, Tr> TraceAgent<K, V, T, R, Tr> 
+impl<K, V, T, R, Tr> TraceAgent<K, V, T, R, Tr>
 where T: Lattice+Ord+Clone+'static, Tr: TraceReader<K,V,T,R> {
 
     /// Creates a new agent from a trace reader.
@@ -178,7 +176,7 @@ where T: Lattice+Ord+Clone+'static, Tr: TraceReader<K,V,T,R> {
 
     /// Attaches a new shared queue to the trace.
     ///
-    /// The queue will be immediately populated with existing historical batches from the trace, and until the reference 
+    /// The queue will be immediately populated with existing historical batches from the trace, and until the reference
     /// is dropped the queue will receive new batches as produced by the source `arrange` operator.
     pub fn new_listener(&mut self) -> Rc<RefCell<VecDeque<(Vec<T>, Option<(T, <Tr as TraceReader<K,V,T,R>>::Batch)>)>>> where T: Default {
 
@@ -208,19 +206,19 @@ impl<K, V, T, R, Tr> TraceAgent<K, V, T, R, Tr>
 where T: Lattice+Ord+Clone+'static, Tr: TraceReader<K,V,T,R> {
 
     /// Copies an existing collection into the supplied scope.
-    /// 
-    /// This method creates an `Arranged` collection that should appear indistinguishable from applying `arrange` 
-    /// directly to the source collection brought into the local scope. The only caveat is that the initial state 
+    ///
+    /// This method creates an `Arranged` collection that should appear indistinguishable from applying `arrange`
+    /// directly to the source collection brought into the local scope. The only caveat is that the initial state
     /// of the collection is its current state, and updates occur from this point forward. The historical changes
-    /// the collection experienced in the past are accumulated, and the distinctions from the initial collection 
+    /// the collection experienced in the past are accumulated, and the distinctions from the initial collection
     /// are no longer evident.
     ///
     /// The current behavior is that the introduced collection accumulates updates to some times less or equal
     /// to `self.advance_frontier()`. There is *not* currently a guarantee that the updates are accumulated *to*
-    /// the frontier, and the resulting collection history may be weirdly partial until this point. In particular, 
+    /// the frontier, and the resulting collection history may be weirdly partial until this point. In particular,
     /// the historical collection may move through configurations that did not actually occur, even if eventually
-    /// arriving at the correct collection. This is probably a bug; although we get to the right place in the end, 
-    /// the intermediate computation could do something that the original computation did not, like diverge. 
+    /// arriving at the correct collection. This is probably a bug; although we get to the right place in the end,
+    /// the intermediate computation could do something that the original computation did not, like diverge.
     ///
     /// I would expect the semantics to improve to "updates are advanced to `self.advance_frontier()`", which
     /// means the computation will run as if starting from exactly this frontier. It is not currently clear whose
@@ -275,10 +273,10 @@ where T: Lattice+Ord+Clone+'static, Tr: TraceReader<K,V,T,R> {
         let queue = self.new_listener();
 
         let collection = source(scope, "ArrangedSource", move |capability| {
-            
+
             // capabilities the source maintains.
             let mut capabilities = vec![capability];
-            
+
             move |output| {
 
                 let mut borrow = queue.borrow_mut();
@@ -347,7 +345,7 @@ where T: Lattice+Ord+Clone+'static, Tr: TraceReader<K,V,T,R> {
 
 /// An arranged collection of `(K,V)` values.
 ///
-/// An `Arranged` allows multiple differential operators to share the resources (communication, 
+/// An `Arranged` allows multiple differential operators to share the resources (communication,
 /// computation, memory) required to produce and maintain an indexed representation of a collection.
 pub struct Arranged<G: Scope, K, V, R, T> where G::Timestamp: Lattice+Ord, T: TraceReader<K, V, G::Timestamp, R>+Clone {
     /// A stream containing arranged updates.
@@ -362,8 +360,18 @@ pub struct Arranged<G: Scope, K, V, R, T> where G::Timestamp: Lattice+Ord, T: Tr
     // returns when invoked, so as to not duplicate work with multiple calls to `as_collection`.
 }
 
+impl<G: Scope, K, V, R, T>Clone for Arranged<G, K, V, R, T> 
+where G::Timestamp: Lattice+Ord, T: TraceReader<K, V, G::Timestamp, R>+Clone {
+    fn clone(&self) -> Self {
+        Arranged {
+            stream: self.stream.clone(),
+            trace: self.trace.clone(),
+        }
+    }
+}
+
 impl<G: Scope, K, V, R, T> Arranged<G, K, V, R, T> where G::Timestamp: Lattice+Ord, T: TraceReader<K, V, G::Timestamp, R>+Clone {
-    
+
     /// Brings an arranged collection into a nested scope.
     ///
     /// This method produces a proxy trace handle that uses the same backing data, but acts as if the timestamps
@@ -371,12 +379,12 @@ impl<G: Scope, K, V, R, T> Arranged<G, K, V, R, T> where G::Timestamp: Lattice+O
     /// not vary with the new timestamp coordinate.
     pub fn enter<'a, TInner>(&self, child: &Child<'a, G, TInner>)
         -> Arranged<Child<'a, G, TInner>, K, V, R, TraceEnter<K, V, G::Timestamp, R, T, TInner>>
-        where 
-            T::Batch: Clone, 
-            K: 'static, 
-            V: 'static, 
-            G::Timestamp: Clone+Default+'static, 
-            TInner: Lattice+Timestamp+Clone+Default+'static, 
+        where
+            T::Batch: Clone,
+            K: 'static,
+            V: 'static,
+            G::Timestamp: Clone+Default+'static,
+            TInner: Lattice+Timestamp+Clone+Default+'static,
             R: 'static {
 
         Arranged {
@@ -422,25 +430,31 @@ impl<G: Scope, K, V, R, T> Arranged<G, K, V, R, T> where G::Timestamp: Lattice+O
     }
 }
 
-/// Arranges something as `(Key,Val)` pairs according to a type `T` of trace.
-pub trait Arrange<G: Scope, K, V, R: Diff> where G::Timestamp: Lattice {
+/// A type that can be arranged into a trace of type `T`.
+///
+/// This trait is implemented for appropriately typed collections and all traces that might accommodate them, 
+/// as well as by arranged data for their corresponding trace type.
+pub trait Arrange<G: Scope, K, V, R: Diff, T> 
+where
+    G::Timestamp: Lattice,
+    T: Trace<K, V, G::Timestamp, R>+'static,
+    T::Batch: Batch<K, V, G::Timestamp, R> 
+    {
     /// Arranges a stream of `(Key, Val)` updates by `Key`. Accepts an empty instance of the trace type.
     ///
     /// This operator arranges a stream of values into a shared trace, whose contents it maintains.
     /// This trace is current for all times marked completed in the output stream, and probing this stream
     /// is the correct way to determine that times in the shared trace are committed.
-    fn arrange<T>(&self, empty_trace: T) -> Arranged<G, K, V, R, TraceAgent<K, V, G::Timestamp, R, T>> 
-        where 
-            T: Trace<K, V, G::Timestamp, R>+'static,
-            T::Batch: Batch<K, V, G::Timestamp, R>;
+    fn arrange(&self, empty_trace: T) -> Arranged<G, K, V, R, TraceAgent<K, V, G::Timestamp, R, T>>;
 }
 
-impl<G: Scope, K: Data+Hashable, V: Data, R: Diff> Arrange<G, K, V, R> for Collection<G, (K, V), R> where G::Timestamp: Lattice+Ord {
+impl<G: Scope, K: Data+Hashable, V: Data, R: Diff, T> Arrange<G, K, V, R, T> for Collection<G, (K, V), R> 
+where
+    G::Timestamp: Lattice+Ord,
+    T: Trace<K, V, G::Timestamp, R>+'static,
+    T::Batch: Batch<K, V, G::Timestamp, R> {
 
-    fn arrange<T>(&self, empty_trace: T) -> Arranged<G, K, V, R, TraceAgent<K, V, G::Timestamp, R, T>> 
-        where 
-            T: Trace<K, V, G::Timestamp, R>+'static,
-            T::Batch: Batch<K, V, G::Timestamp, R> {
+    fn arrange(&self, empty_trace: T) -> Arranged<G, K, V, R, TraceAgent<K, V, G::Timestamp, R, T>> {
 
         let (reader, mut writer) = TraceAgent::new(empty_trace);
 
@@ -452,7 +466,7 @@ impl<G: Scope, K: Data+Hashable, V: Data, R: Diff> Arrange<G, K, V, R> for Colle
 
         // fabricate a data-parallel operator using the `unary_notify` pattern.
         let exchange = Exchange::new(move |update: &((K,V),G::Timestamp,R)| (update.0).0.hashed().as_u64());
-        let stream = self.inner.unary_frontier(exchange, "Arrange", move |_capability| 
+        let stream = self.inner.unary_frontier(exchange, "Arrange", move |_capability|
             move |input, output| {
 
             // As we receive data, we need to (i) stash the data and (ii) keep *enough* capabilities.
@@ -464,23 +478,23 @@ impl<G: Scope, K: Data+Hashable, V: Data, R: Diff> Arrange<G, K, V, R> for Colle
                 batcher.push_batch(data.deref_mut());
             });
 
-            // The frontier may have advanced by multiple elements, which is an issue because 
+            // The frontier may have advanced by multiple elements, which is an issue because
             // timely dataflow currently only allows one capability per message. This means we
-            // must pretend to process the frontier advances one element at a time, batching 
+            // must pretend to process the frontier advances one element at a time, batching
             // and sending smaller bites than we might have otherwise done.
-            
+
             // If there is at least one capability no longer in advance of the input frontier ...
             if capabilities.elements().iter().any(|c| !input.frontier().less_equal(c.time())) {
 
                 let mut upper = Antichain::new();   // re-used allocation for sealing batches.
 
-                // For each capability not in advance of the input frontier ... 
+                // For each capability not in advance of the input frontier ...
                 for (index, capability) in capabilities.elements().iter().enumerate() {
 
                     if !input.frontier().less_equal(capability.time()) {
-                        
+
                         // Assemble the upper bound on times we can commit with this capabilities.
-                        // We must respect the input frontier, and *subsequent* capabilities, as 
+                        // We must respect the input frontier, and *subsequent* capabilities, as
                         // we are pretending to retire the capability changes one by one.
                         upper.clear();
                         for time in input.frontier().frontier().iter() {
@@ -502,7 +516,7 @@ impl<G: Scope, K: Data+Hashable, V: Data, R: Diff> Arrange<G, K, V, R> for Colle
 
                 // Having extracted and sent batches between each capability and the input frontier,
                 // we should downgrade all capabilities to match the batcher's lower update frontier.
-                // This may involve discarding capabilities, which is fine as any new updates arrive 
+                // This may involve discarding capabilities, which is fine as any new updates arrive
                 // in messages with new capabilities.
 
                 let mut new_capabilities = Antichain::new();
@@ -528,61 +542,50 @@ impl<G: Scope, K: Data+Hashable, V: Data, R: Diff> Arrange<G, K, V, R> for Colle
     }
 }
 
-impl<G: Scope, K: Data+Hashable, R: Diff> Arrange<G, K, (), R> for Collection<G, K, R> where G::Timestamp: Lattice+Ord {
+impl<G: Scope, K: Data+Hashable, R: Diff, T> Arrange<G, K, (), R, T> for Collection<G, K, R>
+where
+    G::Timestamp: Lattice+Ord,
+    T: Trace<K, (), G::Timestamp, R>+'static,
+    T::Batch: Batch<K, (), G::Timestamp, R> {
 
-    fn arrange<T>(&self, empty_trace: T) -> Arranged<G, K, (), R, TraceAgent<K, (), G::Timestamp, R, T>> 
-        where 
-            T: Trace<K, (), G::Timestamp, R>+'static,
-            T::Batch: Batch<K, (), G::Timestamp, R> 
-    {
+    fn arrange(&self, empty_trace: T) -> Arranged<G, K, (), R, TraceAgent<K, (), G::Timestamp, R, T>> {
         self.map(|k| (k, ()))
             .arrange(empty_trace)
     }
 }
+
+impl<G, K, V, R, T> Arrange<G, K, V, R, T> for Arranged<G, K, V, R, TraceAgent<K, V, G::Timestamp, R, T>>
+where 
+    G: Scope,
+    G::Timestamp: Lattice,
+    R: Diff,
+    T: Trace<K, V, G::Timestamp, R>+Clone+'static,
+    T::Batch: Batch<K, V, G::Timestamp, R> 
+ {
+    fn arrange(&self, _: T) -> Arranged<G, K, V, R, TraceAgent<K, V, G::Timestamp, R, T>> {
+        (*self).clone()
+    }
+}
+
 /// Arranges something as `(Key,Val)` pairs according to a type `T` of trace.
 ///
 /// This arrangement requires `Key: Hashable`, and uses the `hashed()` method to place keys in a hashed
 /// map. This can result in many hash calls, and in some cases it may help to first transform `K` to the
 /// pair `(u64, K)` of hash value and key.
-pub trait ArrangeByKey<G: Scope, K: Data+Default+Hashable, V: Data, R: Diff> 
+pub trait ArrangeByKey<G: Scope, K: Data+Default+Hashable, V: Data, R: Diff>
 where G::Timestamp: Lattice+Ord {
     /// Arranges a collection of `(Key, Val)` records by `Key`.
     ///
     /// This operator arranges a stream of values into a shared trace, whose contents it maintains.
     /// This trace is current for all times completed by the output stream, which can be used to
     /// safely identify the stable times and values in the trace.
-    fn arrange_by_key_hashed(&self) -> Arranged<G, OrdWrapper<K>, V, R, TraceAgent<OrdWrapper<K>, V, G::Timestamp, R, DefaultValTrace<OrdWrapper<K>, V, G::Timestamp, R>>>;
-    /// Arranges a collection of `(Key, Val)` records by `Key`.
-    ///
-    /// This operator arranges a stream of values into a shared trace, whose contents it maintains.
-    /// This trace is current for all times completed by the output stream, which can be used to
-    /// safely identify the stable times and values in the trace.
-    fn arrange_by_key_hashed_cached(&self) -> Arranged<G, HashableWrapper<K>, V, R, TraceAgent<HashableWrapper<K>, V, G::Timestamp, R, DefaultValTrace<HashableWrapper<K>, V, G::Timestamp, R>>>
-    where <K as Hashable>::Output: Default+Data;
-    /// Arranges a collection of `(Key, Val)` records by `Key`.
-    ///
-    /// This operator arranges a stream of values into a shared trace, whose contents it maintains.
-    /// This trace is current for all times completed by the output stream, which can be used to
-    /// safely identify the stable times and values in the trace.
-    fn arrange_by_key_u(&self) -> Arranged<G, UnsignedWrapper<K>, V, R, TraceAgent<UnsignedWrapper<K>, V, G::Timestamp, R, DefaultValTrace<UnsignedWrapper<K>, V, G::Timestamp, R>>>
-    where K: Unsigned+Copy;
+    fn arrange_by_key(&self) -> Arranged<G, K, V, R, TraceAgent<K, V, G::Timestamp, R, DefaultValTrace<K, V, G::Timestamp, R>>>;
 }
 
 impl<G: Scope, K: Data+Default+Hashable, V: Data, R: Diff> ArrangeByKey<G, K, V, R> for Collection<G, (K,V), R>
-where G::Timestamp: Lattice+Ord {        
-    fn arrange_by_key_hashed(&self) -> Arranged<G, OrdWrapper<K>, V, R, TraceAgent<OrdWrapper<K>, V, G::Timestamp, R, DefaultValTrace<OrdWrapper<K>, V, G::Timestamp, R>>> {
-        self.map(|(k,v)| (OrdWrapper {item:k},v))
-            .arrange(DefaultValTrace::new())
-    }
-    fn arrange_by_key_hashed_cached(&self) -> Arranged<G, HashableWrapper<K>, V, R, TraceAgent<HashableWrapper<K>, V, G::Timestamp, R, DefaultValTrace<HashableWrapper<K>, V, G::Timestamp, R>>> 
-    where <K as Hashable>::Output: Default+Data {
-        self.map(|(k,v)| (HashableWrapper::from(k),v))
-            .arrange(DefaultValTrace::new())
-    }
-    fn arrange_by_key_u(&self) -> Arranged<G, UnsignedWrapper<K>, V, R, TraceAgent<UnsignedWrapper<K>, V, G::Timestamp, R, DefaultValTrace<UnsignedWrapper<K>, V, G::Timestamp, R>>>
-    where K: Unsigned+Copy{
-        self.map(|(k,v)| (UnsignedWrapper {item:k},v))
-            .arrange(DefaultValTrace::new())
+where G::Timestamp: Lattice+Ord {
+    fn arrange_by_key(&self) -> Arranged<G, K, V, R, TraceAgent<K, V, G::Timestamp, R, DefaultValTrace<K, V, G::Timestamp, R>>> {
+        self.arrange(DefaultValTrace::new())
     }
 }
 
@@ -591,33 +594,21 @@ where G::Timestamp: Lattice+Ord {
 /// This arrangement requires `Key: Hashable`, and uses the `hashed()` method to place keys in a hashed
 /// map. This can result in many hash calls, and in some cases it may help to first transform `K` to the
 /// pair `(u64, K)` of hash value and key.
-pub trait ArrangeBySelf<G: Scope, K: Data+Hashable, R: Diff> 
+pub trait ArrangeBySelf<G: Scope, K: Data+Hashable, R: Diff>
 where G::Timestamp: Lattice+Ord {
     /// Arranges a collection of `Key` records by `Key`.
     ///
     /// This operator arranges a collection of records into a shared trace, whose contents it maintains.
     /// This trace is current for all times complete in the output stream, which can be used to safely
     /// identify the stable times and values in the trace.
-    fn arrange_by_self(&self) -> Arranged<G, OrdWrapper<K>, (), R, TraceAgent<OrdWrapper<K>, (), G::Timestamp, R, DefaultKeyTrace<OrdWrapper<K>, G::Timestamp, R>>>;
-    /// Arranges a collection of `Key` records by `Key`.
-    ///
-    /// This operator arranges a collection of records into a shared trace, whose contents it maintains.
-    /// This trace is current for all times complete in the output stream, which can be used to safely
-    /// identify the stable times and values in the trace.
-    fn arrange_by_self_u(&self) -> Arranged<G, UnsignedWrapper<K>, (), R, TraceAgent<UnsignedWrapper<K>, (), G::Timestamp, R, DefaultKeyTrace<UnsignedWrapper<K>, G::Timestamp, R>>>
-    where K: Unsigned+Copy;
+    fn arrange_by_self(&self) -> Arranged<G, K, (), R, TraceAgent<K, (), G::Timestamp, R, DefaultKeyTrace<K, G::Timestamp, R>>>;
 }
 
 
 impl<G: Scope, K: Data+Hashable, R: Diff> ArrangeBySelf<G, K, R> for Collection<G, K, R>
 where G::Timestamp: Lattice+Ord {
-    fn arrange_by_self(&self) -> Arranged<G, OrdWrapper<K>, (), R, TraceAgent<OrdWrapper<K>, (), G::Timestamp, R, DefaultKeyTrace<OrdWrapper<K>, G::Timestamp, R>>> {
-        self.map(|k| (OrdWrapper {item:k}, ()))
-            .arrange(DefaultKeyTrace::new())
-    }
-    fn arrange_by_self_u(&self) -> Arranged<G, UnsignedWrapper<K>, (), R, TraceAgent<UnsignedWrapper<K>, (), G::Timestamp, R, DefaultKeyTrace<UnsignedWrapper<K>, G::Timestamp, R>>>
-        where K: Unsigned+Copy {
-        self.map(|k| (UnsignedWrapper {item:k}, ()))
+    fn arrange_by_self(&self) -> Arranged<G, K, (), R, TraceAgent<K, (), G::Timestamp, R, DefaultKeyTrace<K, G::Timestamp, R>>> {
+        self.map(|k| (k, ()))
             .arrange(DefaultKeyTrace::new())
     }
 }

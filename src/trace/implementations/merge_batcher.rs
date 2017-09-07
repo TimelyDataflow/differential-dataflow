@@ -86,7 +86,7 @@ where
         let mut builder_seal = B::Builder::new();
 
         // TODO: make this `clear()` when that lands.
-        self.frontier = Antichain::new();
+        self.frontier.clear();
 
         while self.sorted.len() > 1 {
             let batch1 = self.sorted.pop().unwrap();

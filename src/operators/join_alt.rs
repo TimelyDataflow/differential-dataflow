@@ -14,12 +14,19 @@ use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Capability;
 use timely::dataflow::channels::pushers::tee::Tee;
 
-use hashable::Hashable;
+use timely_sort::Unsigned;
+
+use hashable::{Hashable, UnsignedWrapper, OrdWrapper};
 use ::{Data, Diff, Collection, AsCollection};
 use lattice::Lattice;
-use operators::arrange::{Arranged, ArrangeByKey, ArrangeBySelf};
-use trace::{BatchReader, Cursor, consolidate};
+use operators::arrange::{Arrange, Arranged, ArrangeByKey, ArrangeBySelf};
+use trace::{BatchReader, Cursor, Trace, consolidate};
 use operators::ValueHistory2;
+
+// use trace::implementations::hash::HashValSpine as DefaultValTrace;
+// use trace::implementations::hash::HashKeySpine as DefaultKeyTrace;
+use trace::implementations::ord::OrdValSpine as DefaultValTrace;
+use trace::implementations::ord::OrdKeySpine as DefaultKeyTrace;
 
 use trace::TraceReader;
 
@@ -138,6 +145,121 @@ pub trait Join<G: Scope, K: Data, V: Data, R: Diff> {
     where R2: Diff, R: Mul<R2, Output = R>;
 } 
 
+/// Join implementations for `(key,val)` data.
+pub trait JoinUnsigned<G: Scope, K: Data, V: Data, R: Diff> {
+
+    /// Matches pairs `(key,val1)` and `(key,val2)` based on `key` and then applies a function.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// extern crate timely;
+    /// extern crate differential_dataflow;
+    ///
+    /// use differential_dataflow::input::Input;
+    /// use differential_dataflow::operators::JoinUnsigned;
+    ///
+    /// fn main() {
+    ///     ::timely::example(|scope| {
+    ///
+    ///         let x = scope.new_collection_from(vec![(0u32, 1), (1, 3)]).1;
+    ///         let y = scope.new_collection_from(vec![(0, 'a'), (1, 'b')]).1;
+    ///         let z = scope.new_collection_from(vec![(0, 1, 'a'), (1, 3, 'b')]).1;
+    ///
+    ///         x.join_u(&y)
+    ///          .assert_eq(&z);
+    ///     });
+    /// }
+    /// ```
+    fn join_u<V2: Data, R2: Diff>(&self, other: &Collection<G, (K,V2), R2>) -> Collection<G, (K,V,V2), <R as Mul<R2>>::Output>
+    where R: Mul<R2>, <R as Mul<R2>>::Output: Diff {
+        self.join_map_u(other, |k,v,v2| (k.clone(),v.clone(),v2.clone()))
+    }
+
+    /// Matches pairs `(key,val1)` and `(key,val2)` based on `key` and then applies a function.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// extern crate timely;
+    /// extern crate differential_dataflow;
+    ///
+    /// use differential_dataflow::input::Input;
+    /// use differential_dataflow::operators::JoinUnsigned;
+    ///
+    /// fn main() {
+    ///     ::timely::example(|scope| {
+    ///
+    ///         let x = scope.new_collection_from(vec![(0u32, 1), (1, 3)]).1;
+    ///         let y = scope.new_collection_from(vec![(0, 'a'), (1, 'b')]).1;
+    ///         let z = scope.new_collection_from(vec![(1, 'a'), (3, 'b')]).1;
+    ///
+    ///         x.join_map_u(&y, |_key, &a, &b| (a,b))
+    ///          .assert_eq(&z);
+    ///     });
+    /// }
+    /// ```
+    fn join_map_u<V2, R2: Diff, D, L>(&self, other: &Collection<G, (K,V2), R2>, logic: L) -> Collection<G, D, <R as Mul<R2>>::Output> 
+    where R: Mul<R2>, <R as Mul<R2>>::Output: Diff, V2: Data, D: Data, L: Fn(&K, &V, &V2)->D+'static;
+
+    /// Matches pairs `(key,val1)` and `key` based on `key`, filtering the first collection by values present in the second.
+    ///
+    /// When the second collection contains frequencies that are either zero or one this is the more traditional
+    /// relational semijoin. When the second collection may contain multiplicities, this operation may scale up
+    /// the counts of the records in the first input.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// extern crate timely;
+    /// extern crate differential_dataflow;
+    ///
+    /// use differential_dataflow::input::Input;
+    /// use differential_dataflow::operators::JoinUnsigned;
+    ///
+    /// fn main() {
+    ///     ::timely::example(|scope| {
+    ///
+    ///         let x = scope.new_collection_from(vec![(0u32, 1), (1, 3)]).1;
+    ///         let y = scope.new_collection_from(vec![0, 2]).1;
+    ///         let z = scope.new_collection_from(vec![(0, 1)]).1;
+    ///
+    ///         x.semijoin_u(&y)
+    ///          .assert_eq(&z);
+    ///     });
+    /// }
+    /// ```
+    fn semijoin_u<R2>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), <R as Mul<R2>>::Output> 
+    where R2: Diff, R: Mul<R2>, <R as Mul<R2>>::Output: Diff;
+
+    /// Matches pairs `(key,val1)` and `key` based on `key`, discarding values 
+    /// in the first collection if their key is present in the second.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// extern crate timely;
+    /// extern crate differential_dataflow;
+    ///
+    /// use differential_dataflow::input::Input;
+    /// use differential_dataflow::operators::JoinUnsigned;
+    ///
+    /// fn main() {
+    ///     ::timely::example(|scope| {
+    ///
+    ///         let x = scope.new_collection_from(vec![(0u32, 1), (1, 3)]).1;
+    ///         let y = scope.new_collection_from(vec![0, 2]).1;
+    ///         let z = scope.new_collection_from(vec![(1, 3)]).1;
+    ///
+    ///         x.antijoin_u(&y)
+    ///          .assert_eq(&z);
+    ///     });
+    /// }
+    /// ```
+    fn antijoin_u<R2>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), R>
+    where R2: Diff, R: Mul<R2, Output=R>;
+} 
+
 impl<G, K, V, R> Join<G, K, V, R> for Collection<G, (K, V), R>
 where
     G: Scope, 
@@ -148,21 +270,53 @@ where
 {
     fn join_map<V2: Data, R2: Diff, D: Data, L>(&self, other: &Collection<G, (K, V2), R2>, logic: L) -> Collection<G, D, <R as Mul<R2>>::Output>
     where R: Mul<R2>, <R as Mul<R2>>::Output: Diff, L: Fn(&K, &V, &V2)->D+'static {
-        let arranged1 = self.arrange_by_key();
-        let arranged2 = other.arrange_by_key();
-        arranged1.join_core(&arranged2, move |k,v1,v2| Some(logic(k,v1,v2)))
+        let arranged1 = self.arrange_by_key_hashed();
+        let arranged2 = other.arrange_by_key_hashed();
+        arranged1.join_core(&arranged2, move |k,v1,v2| Some(logic(&k.item,v1,v2)))
     }
 
     fn semijoin<R2: Diff>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), <R as Mul<R2>>::Output> 
     where R: Mul<R2>, <R as Mul<R2>>::Output: Diff {
-        let arranged1 = self.arrange_by_key();
+        let arranged1 = self.arrange_by_key_hashed();
         let arranged2 = other.arrange_by_self();
-        arranged1.join_core(&arranged2, |k,v,_| Some((k.clone(), v.clone())))
+        arranged1.join_core(&arranged2, |k,v,_| Some((k.item.clone(), v.clone())))
     }
 
     fn antijoin<R2: Diff>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), R>
     where R: Mul<R2, Output=R> {
         self.concat(&self.semijoin(other).negate())
+    }
+}
+
+impl<G, K, V, R> JoinUnsigned<G, K, V, R> for Collection<G, (K, V), R>
+where
+    G: Scope, 
+    K: Data+Default+Hashable+Unsigned+Copy, 
+    V: Data,
+    R: Diff,
+    G::Timestamp: Lattice+Ord,
+{
+    fn join_map_u<V2, R2, D, L>(&self, other: &Collection<G, (K, V2), R2>, logic: L) -> Collection<G, D, <R as Mul<R2>>::Output>
+    where V2: Data, R2: Diff, R: Mul<R2>, <R as Mul<R2>>::Output: Diff, D: Data, L: Fn(&K, &V, &V2)->D+'static {
+        let arranged1 = self.map(|(k,v)| (UnsignedWrapper::from(k), v))
+                            .arrange(DefaultValTrace::new());
+        let arranged2 = other.map(|(k,v)| (UnsignedWrapper::from(k), v))
+                             .arrange(DefaultValTrace::new());
+        arranged1.join_core(&arranged2, move |k,v1,v2| Some(logic(&k.item,v1,v2)))
+    }
+
+    fn semijoin_u<R2>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), <R as Mul<R2>>::Output>
+    where R2: Diff, R: Mul<R2>, <R as Mul<R2>>::Output: Diff {
+        let arranged1 = self.map(|(k,v)| (UnsignedWrapper::from(k), v))
+                            .arrange(DefaultValTrace::new());
+        let arranged2 = other.map(|k| (UnsignedWrapper::from(k), ()))
+                             .arrange(DefaultKeyTrace::new());
+        arranged1.join_core(&arranged2, |k,v,_| Some((k.item.clone(), v.clone())))
+    }
+
+    fn antijoin_u<R2>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), R>
+    where R2: Diff, R: Mul<R2, Output=R> {
+        self.concat(&self.semijoin_u(other).negate())
     }
 }
 
@@ -225,7 +379,7 @@ pub trait JoinCore<G: Scope, K: 'static, V: 'static, R: Diff> where G::Timestamp
 }
 
 
-impl<G, K, V, R> JoinCore<G, K, V, R> for Collection<G, (K, V), R>
+impl<G, K, V, R> JoinCore<G, OrdWrapper<K>, V, R> for Collection<G, (K, V), R>
 where
     G: Scope, 
     K: Data+Default+Hashable, 
@@ -233,19 +387,19 @@ where
     R: Diff,
     G::Timestamp: Lattice+Ord,
 {
-    fn join_core<V2,T2,R2,I,L> (&self, stream2: &Arranged<G,K,V2,R2,T2>, result: L) -> Collection<G,I::Item,<R as Mul<R2>>::Output>
+    fn join_core<V2,T2,R2,I,L> (&self, stream2: &Arranged<G,OrdWrapper<K>,V2,R2,T2>, result: L) -> Collection<G,I::Item,<R as Mul<R2>>::Output>
     where 
         V2: Ord+Clone+Debug+'static,
-        T2: TraceReader<K, V2, G::Timestamp, R2>+Clone+'static,
-        T2::Batch: BatchReader<K, V2, G::Timestamp, R2>+'static,
+        T2: TraceReader<OrdWrapper<K>, V2, G::Timestamp, R2>+Clone+'static,
+        T2::Batch: BatchReader<OrdWrapper<K>, V2, G::Timestamp, R2>+'static,
         R2: Diff,
         R: Mul<R2>,
         <R as Mul<R2>>::Output: Diff,
         I: IntoIterator,
         I::Item: Data,
-        L: Fn(&K,&V,&V2)->I+'static {
+        L: Fn(&OrdWrapper<K>,&V,&V2)->I+'static {
 
-        self.arrange_by_key()
+        self.arrange_by_key_hashed()
             .join_core(stream2, result)
     }
 }
