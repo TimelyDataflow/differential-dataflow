@@ -59,24 +59,18 @@ fn main() {
         println!("performing BFS on {} nodes, {} edges:", nodes, edges);
 
         if worker.index() == 0 {
-
-            // trickle edges in to dataflow
-            for _ in 0..(edges/1000) {
-                for _ in 0..1000 {
-                    graph.insert((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)));
-                }
-                worker.step();
-            }
-            for _ in 0.. (edges % 1000) {
+            for _ in 0 .. edges {
                 graph.insert((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)));
             }
         }
 
-        println!("loaded; elapsed: {:?}", timer.elapsed());
+        println!("{:?}\tloaded", timer.elapsed());
 
         graph.advance_to(1);
         graph.flush();
         worker.step_while(|| probe.less_than(graph.time()));
+
+        println!("{:?}\tstable", timer.elapsed());
 
         for round in 0 .. rounds {
             for element in 0 .. batch {
@@ -88,12 +82,12 @@ fn main() {
             }
             graph.flush();
 
-            let timer = ::std::time::Instant::now();
+            let timer2 = ::std::time::Instant::now();
             worker.step_while(|| probe.less_than(&graph.time()));
 
             if worker.index() == 0 {
-                let elapsed = timer.elapsed();
-                println!("{:?}:\t{}", round, elapsed.as_secs() * 1000000000 + (elapsed.subsec_nanos() as u64));
+                let elapsed = timer2.elapsed();
+                println!("{:?}\t{:?}:\t{}", timer.elapsed(), round, elapsed.as_secs() * 1000000000 + (elapsed.subsec_nanos() as u64));
             }
         }
         println!("finished; elapsed: {:?}", timer.elapsed());

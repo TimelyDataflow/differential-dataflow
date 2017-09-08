@@ -92,21 +92,17 @@ impl<K: Ord+Clone, L: MergeBuilder> MergeBuilder for OrderedBuilder<K, L> {
 			vals: L::with_capacity(&other1.vals, &other2.vals),
 		}
 	}
+	#[inline(always)]
 	fn copy_range(&mut self, other: &Self::Trie, lower: usize, upper: usize) {
+		debug_assert!(lower < upper);
+		let other_basis = other.offs[lower];
+		let self_basis = self.offs.last().map(|&x| x).unwrap_or(0);
 
-		if lower < upper {
-			let other_basis = other.offs[lower];
-			let self_basis = self.offs.last().map(|&x| x).unwrap_or(0);
-
-			self.keys.extend_from_slice(&other.keys[lower .. upper]);
-			for index in lower .. upper {
-				self.offs.push((other.offs[index + 1] + self_basis) - other_basis);
-			}
-			self.vals.copy_range(&other.vals, other_basis, other.offs[upper]);
+		self.keys.extend_from_slice(&other.keys[lower .. upper]);
+		for index in lower .. upper {
+			self.offs.push((other.offs[index + 1] + self_basis) - other_basis);
 		}
-		else {
-			panic!("{}: lower !< upper: {}", lower, upper);
-		}
+		self.vals.copy_range(&other.vals, other_basis, other.offs[upper]);
 	}
 	fn push_merge(&mut self, other1: (&Self::Trie, usize, usize), other2: (&Self::Trie, usize, usize)) -> usize {
 		let (trie1, mut lower1, upper1) = other1;

@@ -51,9 +51,6 @@ where K: Clone+Default+HashOrdered+'static, V: Clone+Ord+'static, T: Lattice+Ord
 		};
 
 		(cursor, self.clone())
-		// HashValCursor {
-		// 	cursor: self.layer.cursor(OwningRef::new(self.clone()).map(|x| &x.layer).erase_owner()),
-		// }
 	}
 	fn len(&self) -> usize { <HashedLayer<K, OrderedLayer<V, OrderedLeaf<T, R>>> as Trie>::tuples(&self.layer) }
 	fn description(&self) -> &Description<T> { &self.desc }
@@ -88,26 +85,6 @@ where K: Clone+Default+HashOrdered+'static, V: Clone+Ord+'static, T: Lattice+Ord
 pub struct HashValCursor<V: Ord+Clone, T: Lattice+Ord+Clone, R: Diff> {
 	cursor: HashedCursor<OrderedLayer<V, OrderedLeaf<T, R>>>,
 }
-
-// impl<K: Clone+HashOrdered, V: Ord+Clone, T: Lattice+Ord+Clone, R: Copy> Cursor<K, V, T, R> for HashValCursor<K, V, T, R> {
-// 	fn key(&self) -> &K { &self.cursor.key() }
-// 	fn val(&self) -> &V { &self.cursor.child.key() }
-// 	fn map_times<L: FnMut(&T, R)>(&mut self, mut logic: L) {
-// 		self.cursor.child.child.rewind();
-// 		while self.cursor.child.child.valid() {
-// 			logic(&self.cursor.child.child.key().0, self.cursor.child.child.key().1);
-// 			self.cursor.child.child.step();
-// 		}
-// 	}
-// 	fn key_valid(&self) -> bool { self.cursor.valid() }
-// 	fn val_valid(&self) -> bool { self.cursor.child.valid() }
-// 	fn step_key(&mut self){ self.cursor.step(); }
-// 	fn seek_key(&mut self, key: &K) { self.cursor.seek(key); }
-// 	fn step_val(&mut self) { self.cursor.child.step(); }
-// 	fn seek_val(&mut self, val: &V) { self.cursor.child.seek(val); }
-// 	fn rewind_keys(&mut self) { self.cursor.rewind(); }
-// 	fn rewind_vals(&mut self) { self.cursor.child.rewind(); }
-// }
 
 impl<K, V, T, R> Cursor<K, V, T, R> for HashValCursor<V, T, R> 
 where K: Clone+HashOrdered, V: Ord+Clone, T: Lattice+Ord+Clone, R: Diff {
@@ -232,26 +209,6 @@ pub struct HashKeyCursor<T: Lattice+Ord+Clone, R: Diff> {
 	empty: (),
 	cursor: HashedCursor<OrderedLeaf<T, R>>,
 }
-
-// impl<K: Clone+HashOrdered, T: Lattice+Ord+Clone, R: Copy> Cursor<K, (), T, R> for HashKeyCursor<K, T, R> {
-// 	fn key(&self) -> &K { &self.cursor.key() }
-// 	fn val(&self) -> &() { &self.empty }
-// 	fn map_times<L: FnMut(&T, R)>(&mut self, mut logic: L) {
-// 		self.cursor.child.rewind();
-// 		while self.cursor.child.valid() {
-// 			logic(&self.cursor.child.key().0, self.cursor.child.key().1);
-// 			self.cursor.child.step();
-// 		}
-// 	}
-// 	fn key_valid(&self) -> bool { self.cursor.valid() }
-// 	fn val_valid(&self) -> bool { self.valid }
-// 	fn step_key(&mut self){ self.cursor.step(); self.valid = true; }
-// 	fn seek_key(&mut self, key: &K) { self.cursor.seek(key); self.valid = true; }
-// 	fn step_val(&mut self) { self.valid = false; }
-// 	fn seek_val(&mut self, _val: &()) { }
-// 	fn rewind_keys(&mut self) { self.cursor.rewind(); self.valid = true; }
-// 	fn rewind_vals(&mut self) { self.valid = true; }
-// }
 
 impl<K: Clone+HashOrdered, T: Lattice+Ord+Clone, R: Diff> Cursor<K, (), T, R> for HashKeyCursor<T, R> {
 
