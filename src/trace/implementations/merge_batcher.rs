@@ -5,14 +5,14 @@ use timely::progress::frontier::Antichain;
 use ::Diff;
 
 use lattice::Lattice;
-use trace::{Batch, Batcher, Builder, Cursor};
+use trace::{Batch, Batcher, Builder};
 
 /// Creates batches from unordered tuples.
-pub struct MergeBatcher<K: Ord, V: Ord, T: PartialOrd, R: Diff, B: Batch<K, V, T, R>> {
-    sorted: Vec<B>,
+pub struct MergeBatcher<K: Ord, V: Ord, T: Ord, R: Diff, B: Batch<K, V, T, R>> {
+    sorter: MergeSorter<(K, V), T, R>,
     lower: Vec<T>,
     frontier: Antichain<T>,
-    phantom: ::std::marker::PhantomData<(K,V,R)>,
+    phantom: ::std::marker::PhantomData<B>,
 }
 
 impl<K, V, T, R, B> Batcher<K, V, T, R, B> for MergeBatcher<K, V, T, R, B> 
@@ -25,7 +25,7 @@ where
 {
     fn new() -> Self { 
         MergeBatcher { 
-            sorted: Vec::new(),
+            sorter: MergeSorter::new(),
             frontier: Antichain::new(),
             lower: vec![T::minimum()],
             phantom: ::std::marker::PhantomData,
@@ -34,29 +34,7 @@ where
 
     #[inline(never)]
     fn push_batch(&mut self, batch: &mut Vec<((K,V),T,R)>) {
-
-        batch.sort_by(|&(ref kv1, ref t1, _),&(ref kv2, ref t2, _)| (kv1, t1).cmp(&(kv2, t2)));
-        for index in 1 .. batch.len() {
-            if batch[index].0 == batch[index - 1].0 && batch[index].1 == batch[index - 1].1 {
-                batch[index].2 = batch[index].2 + batch[index - 1].2;
-                batch[index - 1].2 = R::zero();
-            }
-        }
-        batch.retain(|x| !x.2.is_zero());
-
-        let mut builder = B::Builder::with_capacity(batch.len());
-        for ((key, val), time, diff) in batch.drain(..) {
-            builder.push((key, val, time, diff));
-        }
-
-        let batch = builder.done(&self.lower[..], &self.lower[..], &self.lower[..]);
-        self.sorted.push(batch);
-
-        while self.sorted.len() > 1 && self.sorted[self.sorted.len()-1].len() > self.sorted[self.sorted.len()-2].len() / 2 {
-            let batch1 = self.sorted.pop().unwrap();
-            let batch2 = self.sorted.pop().unwrap();
-            self.sorted.push(batch1.merge(&batch2));
-        }
+        self.sorter.push(::std::mem::replace(batch, Vec::new()));
     }
 
     // Sealing a batch means finding those updates with times not greater or equal to any time 
@@ -66,61 +44,47 @@ where
     #[inline(never)]
     fn seal(&mut self, upper: &[T]) -> B {
 
-        // We start with likely some buffers in `self.buffers`, and maybe a batch in `self.sorted`.
-        //
-        // These data are possibly a mix of times, which may include times greater or equal to elements
-        // of `upper`, which should *not* be included in the output batch. Consequently, we need to be
-        // ready to swing through both self.buffers and self.sorted and segment the data into what we
-        // seal and what we keep.
-        // 
-        // We can either segment and then sort, or sort and then segment. I'm not exactly clear on which
-        // is obviously better than the other, so for now let's do the easiest one. I'm not exatly clear
-        // which one is easier yet either.
-        //
-        // As we will need to be able to segment self.sorted, a batch, we can probably just write the 
-        // batch segmentation code, from one batch into two batches, and leave whatever we keep behind
-        // in `self.sorted`. That means we should 
+        let mut builder = B::Builder::new();
 
+        let mut merged = Vec::new();
+        self.sorter.finish_into(&mut merged);
 
-        let mut builder_keep = B::Builder::new();
-        let mut builder_seal = B::Builder::new();
+        let mut kept = Vec::new();
+        let mut keep = Vec::with_capacity(1024);
 
-        // TODO: make this `clear()` when that lands.
         self.frontier.clear();
 
-        while self.sorted.len() > 1 {
-            let batch1 = self.sorted.pop().unwrap();
-            let batch2 = self.sorted.pop().unwrap();
-            self.sorted.push(batch1.merge(&batch2));
-        }
+        // let mut keep_count = 0;
+        // let mut seal_count = 0;
 
-        if let Some(batch) = self.sorted.pop() {
-
-            let (mut cursor, storage) = batch.cursor();
-            while cursor.key_valid(&storage) {
-                let key: &K = cursor.key(&storage);
-                while cursor.val_valid(&storage) {
-                    let val: &V = cursor.val(&storage);
-                    cursor.map_times(&storage, |time, diff| {
-                        if upper.iter().any(|t| t.less_equal(time)) {
-                            builder_keep.push((key.clone(), val.clone(), time.clone(), diff));
-                            self.frontier.insert(time.clone());
-                        }
-                        else {
-                            builder_seal.push((key.clone(), val.clone(), time.clone(), diff));
-                        }
-                    });
-                    cursor.step_val(&storage);
+        for mut buffer in merged.drain(..) {
+            for ((key, val), time, diff) in buffer.drain(..) {
+                if upper.iter().any(|t| t.less_equal(&time)) {
+                    // keep_count += 1;
+                    self.frontier.insert(time.clone());
+                    keep.push(((key, val), time, diff));
+                    if keep.len() == keep.capacity() {
+                        kept.push(keep);
+                        // self.sorter.push(keep);
+                        keep = Vec::with_capacity(1024);
+                    }
                 }
-                cursor.step_key(&storage);
+                else {
+                    // seal_count += 1;
+                    builder.push((key, val, time, diff));
+                }
             }
         }
-
-        if upper.len() > 0 {
-            let keep = builder_keep.done(&upper[..], &upper[..], &upper[..]);
-            if keep.len() > 0 { self.sorted.push(keep); }
+        if keep.len() > 0 {
+            kept.push(keep);
         }
-        let seal = builder_seal.done(&self.lower[..], &upper[..], &self.lower[..]);
+        if kept.len() > 0 {
+            self.sorter.push_list(kept);
+        }
+
+        // println!("sealed: {:?}, kept: {:?}", seal_count, keep_count);
+
+        let seal = builder.done(&self.lower[..], &upper[..], &self.lower[..]);
         self.lower = upper.to_vec();
         seal
     }
@@ -129,4 +93,246 @@ where
     fn frontier(&mut self) -> &[T] {
         self.frontier.elements()
     }
+}
+
+
+use std::slice::{from_raw_parts};
+
+pub struct VecQueue<T> {
+    list: Vec<T>,
+    head: usize,
+    tail: usize,
+}
+
+impl<T> VecQueue<T> {
+    #[inline(always)]
+    pub fn new() -> Self { VecQueue::from(Vec::new()) }
+    #[inline(always)]
+    pub fn pop(&mut self) -> T {
+        debug_assert!(self.head < self.tail);
+        self.head += 1;
+        unsafe { ::std::ptr::read(self.list.as_mut_ptr().offset(((self.head as isize) - 1) )) }
+    }
+    #[inline(always)]
+    pub fn peek(&self) -> &T {
+        debug_assert!(self.head < self.tail);
+        unsafe { self.list.get_unchecked(self.head) }
+    }
+    #[inline(always)]
+    pub fn _peek_tail(&self) -> &T {
+        debug_assert!(self.head < self.tail);
+        unsafe { self.list.get_unchecked(self.tail-1) }
+    }
+    #[inline(always)]
+    pub fn _slice(&self) -> &[T] {
+        debug_assert!(self.head < self.tail);
+        unsafe { from_raw_parts(self.list.get_unchecked(self.head), self.tail - self.head) }
+    }
+    #[inline(always)]
+    pub fn from(mut list: Vec<T>) -> Self {
+        let tail = list.len();
+        unsafe { list.set_len(0); }
+        VecQueue {
+            list: list,
+            head: 0,
+            tail: tail,
+        }
+    }
+    // could leak, if self.head != self.tail.
+    #[inline(always)]
+    pub fn done(self) -> Vec<T> {
+        debug_assert!(self.head == self.tail);
+        self.list
+    }
+    #[inline(always)]
+    pub fn len(&self) -> usize { self.tail - self.head }
+    #[inline(always)]
+    pub fn is_empty(&self) -> bool { self.head == self.tail }
+}
+
+#[inline(always)]
+unsafe fn push_unchecked<T>(vec: &mut Vec<T>, element: T) {
+    debug_assert!(vec.len() < vec.capacity());
+    let len = vec.len();
+    ::std::ptr::write(vec.get_unchecked_mut(len), element);
+    vec.set_len(len + 1);
+}
+
+pub struct MergeSorter<D: Ord, T: Ord, R: Diff> {
+    queue: Vec<Vec<Vec<(D, T, R)>>>,    // each power-of-two length list of allocations.
+    stash: Vec<Vec<(D, T, R)>>,
+}
+
+impl<D: Ord, T: Ord, R: Diff> MergeSorter<D, T, R> {
+    pub fn new() -> Self { MergeSorter { queue: Vec::new(), stash: Vec::new() } }
+
+    #[inline(never)]
+    pub fn _sort(&mut self, list: &mut Vec<Vec<(D, T, R)>>) {
+        for batch in list.drain(..) {
+            self.push(batch);
+        }
+        self.finish_into(list);
+    }
+
+    #[inline]
+    pub fn push(&mut self, mut batch: Vec<(D, T, R)>) {
+        
+        batch.sort_unstable_by(|x,y| (&x.0, &x.1).cmp(&(&y.0, &y.1)));
+        for index in 1 .. batch.len() {
+            if batch[index].0 == batch[index - 1].0 && batch[index].1 == batch[index - 1].1 {
+                batch[index].2 = batch[index].2 + batch[index - 1].2;
+                batch[index - 1].2 = R::zero();
+            }
+        }
+        batch.retain(|x| !x.2.is_zero());
+
+        self.queue.push(vec![batch]);
+        while self.queue.len() > 1 && (self.queue[self.queue.len()-1].len() >= self.queue[self.queue.len()-2].len() / 2) {
+            let list1 = self.queue.pop().unwrap();
+            let list2 = self.queue.pop().unwrap();
+            let merged = self.merge_by(list1, list2);
+            self.queue.push(merged);
+        }
+    }
+
+    // This is awkward, because it isn't a power-of-two length any more, and we don't want 
+    // to break it down to be so.
+    pub fn push_list(&mut self, list: Vec<Vec<(D, T, R)>>) {
+        while self.queue.len() > 1 && self.queue[self.queue.len()-1].len() < list.len() {
+            let list1 = self.queue.pop().unwrap();
+            let list2 = self.queue.pop().unwrap();
+            let merged = self.merge_by(list1, list2);
+            self.queue.push(merged);            
+        }
+        self.queue.push(list);
+    }
+    
+    #[inline(never)]
+    pub fn finish_into(&mut self, target: &mut Vec<Vec<(D, T, R)>>) {
+        while self.queue.len() > 1 {
+            let list1 = self.queue.pop().unwrap();
+            let list2 = self.queue.pop().unwrap();
+            let merged = self.merge_by(list1, list2);
+            self.queue.push(merged);
+        }
+
+        if let Some(mut last) = self.queue.pop() {
+            ::std::mem::swap(&mut last, target);
+        }
+    }
+
+    // merges two sorted input lists into one sorted output list.
+    #[inline(never)]
+    fn merge_by(&mut self, list1: Vec<Vec<(D, T, R)>>, list2: Vec<Vec<(D, T, R)>>) -> Vec<Vec<(D, T, R)>> {
+        
+        use std::cmp::Ordering;
+
+        let mut output = Vec::new();
+        let mut result = Vec::with_capacity(1024);
+
+        let mut list1 = VecQueue::from(list1);
+        let mut list2 = VecQueue::from(list2);
+
+        let mut head1 = if !list1.is_empty() { VecQueue::from(list1.pop()) } else { VecQueue::new() }; 
+        let mut head2 = if !list2.is_empty() { VecQueue::from(list2.pop()) } else { VecQueue::new() }; 
+
+        // while we have valid data in each input, merge.
+        while !head1.is_empty() && !head2.is_empty() {
+
+            while (result.capacity() - result.len()) > 0 && head1.len() > 0 && head2.len() > 0 {
+                
+                let cmp = {
+                    let x = head1.peek();
+                    let y = head2.peek();
+                    (&x.0, &x.1).cmp(&(&y.0, &y.1)) 
+                };
+                match cmp {
+                    Ordering::Less    => { unsafe { push_unchecked(&mut result, head1.pop()); } }
+                    Ordering::Greater => { unsafe { push_unchecked(&mut result, head2.pop()); } }
+                    Ordering::Equal   => {
+                        let (data1, time1, diff1) = head1.pop();
+                        let (_data2, _time2, diff2) = head2.pop();
+                        let diff = diff1 + diff2;
+                        if !diff.is_zero() {
+                            unsafe { push_unchecked(&mut result, (data1, time1, diff)); }
+                        }
+                    }           
+                }
+            }
+            
+            if result.capacity() == result.len() {
+                output.push(result);
+                result = self.stash.pop().unwrap_or_else(|| Vec::with_capacity(1024)); 
+            }
+
+            if head1.is_empty() { 
+                let done1 = head1.done(); 
+                if done1.capacity() == 1024 { self.stash.push(done1); }
+                head1 = if !list1.is_empty() { VecQueue::from(list1.pop()) } else { VecQueue::new() }; 
+            }
+            if head2.is_empty() { 
+                let done2 = head2.done(); 
+                if done2.capacity() == 1024 { self.stash.push(done2); }
+                head2 = if !list2.is_empty() { VecQueue::from(list2.pop()) } else { VecQueue::new() }; 
+            }
+        }
+
+        if result.len() > 0 { output.push(result); }
+        else if result.capacity() > 0 { self.stash.push(result); }
+
+        if !head1.is_empty() {
+            let mut result = self.stash.pop().unwrap_or_else(|| Vec::with_capacity(1024));
+            for _ in 0 .. head1.len() { result.push(head1.pop()); }
+            output.push(result);
+        }
+        while !list1.is_empty() { 
+            output.push(list1.pop()); 
+        }
+
+        if !head2.is_empty() {
+            let mut result = self.stash.pop().unwrap_or(Vec::with_capacity(1024));
+            for _ in 0 .. head2.len() { result.push(head2.pop()); }
+            output.push(result);
+        }
+        while !list2.is_empty() { 
+            output.push(list2.pop()); 
+        }
+
+        output
+    }
+}
+
+/// Reports the number of elements satisfing the predicate.
+///
+/// This methods *relies strongly* on the assumption that the predicate
+/// stays false once it becomes false, a joint property of the predicate
+/// and the slice. This allows `advance` to use exponential search to 
+/// count the number of elements in time logarithmic in the result.
+#[inline(always)]
+pub fn _advance<T, F: Fn(&T)->bool>(slice: &[T], function: F) -> usize {
+
+	// start with no advance
+	let mut index = 0;
+	if index < slice.len() && function(&slice[index]) {
+
+		// advance in exponentially growing steps.
+		let mut step = 1;
+		while index + step < slice.len() && function(&slice[index + step]) {
+			index += step;
+			step = step << 1;
+		}
+
+		// advance in exponentially shrinking steps.
+		step = step >> 1;
+		while step > 0 {
+			if index + step < slice.len() && function(&slice[index + step]) {
+				index += step;
+			}
+			step = step >> 1;
+		}
+
+		index += 1;
+	}	
+
+	index
 }
