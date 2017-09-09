@@ -30,8 +30,16 @@ fn run_test<T>(test: T, expected: Vec<(Product<RootTimestamp, usize>, Vec<((u64,
     let captured = (test)(input_epochs);
     let mut results = captured.extract().into_iter().flat_map(|(_, data)| data).collect::<Vec<_>>();
     results.sort_by_key(|&(_, t, _)| t);
-    let out = results.into_iter().group_by(|&(_, t, _)| t).into_iter()
-        .map(|(t, vals)| (t, vals.map(|(v, _, w)| (v, w)).collect::<Vec<_>>())).collect::<Vec<_>>();
+    let out = 
+    results
+        .into_iter()
+        .group_by(|&(_, t, _)| t)
+        .into_iter()
+        .map(|(t, vals)| { 
+            let mut vec = vals.map(|(v, _, w)| (v, w)).collect::<Vec<_>>();
+            vec.sort();
+            (t, vec)
+        }).collect::<Vec<_>>();
     // println!("out: {:?}", out);
     assert_eq!(out, expected);
 }
@@ -119,7 +127,7 @@ fn test_import_completed_dataflow() {
 
             worker.step_while(|| !probe.done());
 
-            let (probe2, captured,) = worker.dataflow(move |scope| {
+            let (_probe2, captured,) = worker.dataflow(move |scope| {
                 let imported = trace.import(scope);
                 ::std::mem::drop(trace);
                 let stream = imported.group_arranged::<_, i64, _, _>(|_k, s, t| t.push((s.iter().map(|&(_, w)| w).sum(), 1i64)), OrdValSpine::new())
@@ -130,7 +138,7 @@ fn test_import_completed_dataflow() {
                 (probe, captured,)
             });
 
-            println!("probe2: {}", probe2.with_frontier(|f| format!("{:?}", f)));
+            // println!("probe2: {}", probe2.with_frontier(|f| format!("{:?}", f)));
 
             captured
         }).unwrap().join().into_iter().map(|x| x.unwrap()).next().unwrap()
