@@ -1,3 +1,4 @@
+use timely::order::TotalOrder;
 use timely::dataflow::*;
 use timely::dataflow::operators::probe::Handle as ProbeHandle;
 
@@ -7,8 +8,8 @@ use differential_dataflow::operators::group::GroupArranged;
 use differential_dataflow::trace::Trace;
 use differential_dataflow::trace::implementations::ord::OrdKeySpine as DefaultKeyTrace;
 use differential_dataflow::trace::implementations::ord::OrdValSpine as DefaultValTrace;
-use differential_dataflow::lattice::TotalOrder;
 use differential_dataflow::hashable::UnsignedWrapper;
+use differential_dataflow::lattice::Lattice;
 
 use ::Collections;
 
@@ -42,7 +43,7 @@ use ::Collections;
 // :n -1
 
 pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp> 
-where G::Timestamp: TotalOrder+Ord {
+where G::Timestamp: Lattice+TotalOrder+Ord {
 
     println!("TODO: Q04 could use count_u for [u8;15] 'priority'");
 
