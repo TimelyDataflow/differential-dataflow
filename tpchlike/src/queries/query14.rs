@@ -1,9 +1,10 @@
+use timely::order::TotalOrder;
 use timely::dataflow::*;
 use timely::dataflow::operators::probe::Handle as ProbeHandle;
 
 use differential_dataflow::operators::*;
-use differential_dataflow::lattice::TotalOrder;
 use differential_dataflow::difference::DiffPair;
+use differential_dataflow::lattice::Lattice;
 
 use ::Collections;
 use ::types::create_date;
@@ -34,7 +35,7 @@ fn starts_with(source: &[u8], query: &[u8]) -> bool {
 }
 
 pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp> 
-where G::Timestamp: TotalOrder+Ord {
+where G::Timestamp: Lattice+TotalOrder+Ord {
 
     println!("TODO: we add a () value because there is no semijoin for value-free collections");
 

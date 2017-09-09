@@ -1,14 +1,15 @@
+use timely::order::TotalOrder;
 use timely::dataflow::*;
 use timely::dataflow::operators::probe::Handle as ProbeHandle;
 
 use differential_dataflow::operators::*;
 use differential_dataflow::operators::arrange::Arrange;
 use differential_dataflow::operators::group::GroupArranged;
-use differential_dataflow::lattice::TotalOrder;
 use differential_dataflow::trace::Trace;
 use differential_dataflow::trace::implementations::ord::OrdKeySpine as DefaultKeyTrace;
 use differential_dataflow::trace::implementations::ord::OrdValSpine as DefaultValTrace;
 use differential_dataflow::hashable::UnsignedWrapper;
+use differential_dataflow::lattice::Lattice;
 
 use ::Collections;
 use ::types::create_date;
@@ -63,7 +64,7 @@ fn starts_with(source: &[u8], query: &[u8]) -> bool {
 }
 
 pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp> 
-where G::Timestamp: TotalOrder+Ord {
+where G::Timestamp: Lattice+TotalOrder+Ord {
 
     println!("TODO: Q20 uses a `group_arranged` to get an arrangement, but could use `count_total`");
 
