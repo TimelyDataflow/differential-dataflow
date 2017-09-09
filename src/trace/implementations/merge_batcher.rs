@@ -34,7 +34,7 @@ where
 
     #[inline(never)]
     fn push_batch(&mut self, batch: &mut Vec<((K,V),T,R)>) {
-        self.sorter.push(::std::mem::replace(batch, Vec::new()));
+        self.sorter.push(batch);
     }
 
     // Sealing a batch means finding those updates with times not greater or equal to any time 
@@ -54,9 +54,6 @@ where
 
         self.frontier.clear();
 
-        // let mut keep_count = 0;
-        // let mut seal_count = 0;
-
         for mut buffer in merged.drain(..) {
             for ((key, val), time, diff) in buffer.drain(..) {
                 if upper.iter().any(|t| t.less_equal(&time)) {
@@ -65,8 +62,7 @@ where
                     keep.push(((key, val), time, diff));
                     if keep.len() == keep.capacity() {
                         kept.push(keep);
-                        // self.sorter.push(keep);
-                        keep = Vec::with_capacity(1024);
+                        keep = self.sorter.empty();
                     }
                 }
                 else {
@@ -81,8 +77,6 @@ where
         if kept.len() > 0 {
             self.sorter.push_list(kept);
         }
-
-        // println!("sealed: {:?}, kept: {:?}", seal_count, keep_count);
 
         let seal = builder.done(&self.lower[..], &upper[..], &self.lower[..]);
         self.lower = upper.to_vec();
@@ -164,34 +158,50 @@ pub struct MergeSorter<D: Ord, T: Ord, R: Diff> {
 }
 
 impl<D: Ord, T: Ord, R: Diff> MergeSorter<D, T, R> {
+
+    #[inline]
     pub fn new() -> Self { MergeSorter { queue: Vec::new(), stash: Vec::new() } }
+
+    #[inline]
+    pub fn empty(&mut self) -> Vec<(D, T, R)> {
+        self.stash.pop().unwrap_or_else(|| Vec::with_capacity(1024))
+    }
 
     #[inline(never)]
     pub fn _sort(&mut self, list: &mut Vec<Vec<(D, T, R)>>) {
-        for batch in list.drain(..) {
-            self.push(batch);
+        for mut batch in list.drain(..) {
+            self.push(&mut batch);
         }
         self.finish_into(list);
     }
 
     #[inline]
-    pub fn push(&mut self, mut batch: Vec<(D, T, R)>) {
-        
-        batch.sort_unstable_by(|x,y| (&x.0, &x.1).cmp(&(&y.0, &y.1)));
-        for index in 1 .. batch.len() {
-            if batch[index].0 == batch[index - 1].0 && batch[index].1 == batch[index - 1].1 {
-                batch[index].2 = batch[index].2 + batch[index - 1].2;
-                batch[index - 1].2 = R::zero();
-            }
-        }
-        batch.retain(|x| !x.2.is_zero());
+    pub fn push(&mut self, batch: &mut Vec<(D, T, R)>) {
 
-        self.queue.push(vec![batch]);
-        while self.queue.len() > 1 && (self.queue[self.queue.len()-1].len() >= self.queue[self.queue.len()-2].len() / 2) {
-            let list1 = self.queue.pop().unwrap();
-            let list2 = self.queue.pop().unwrap();
-            let merged = self.merge_by(list1, list2);
-            self.queue.push(merged);
+        let mut batch = if self.stash.len() > 2 {
+            ::std::mem::replace(batch, self.stash.pop().unwrap())
+        }
+        else {
+            ::std::mem::replace(batch, Vec::new())
+        };
+        
+        if batch.len() > 0 {
+            batch.sort_unstable_by(|x,y| (&x.0, &x.1).cmp(&(&y.0, &y.1)));
+            for index in 1 .. batch.len() {
+                if batch[index].0 == batch[index - 1].0 && batch[index].1 == batch[index - 1].1 {
+                    batch[index].2 = batch[index].2 + batch[index - 1].2;
+                    batch[index - 1].2 = R::zero();
+                }
+            }
+            batch.retain(|x| !x.2.is_zero());
+
+            self.queue.push(vec![batch]);
+            while self.queue.len() > 1 && (self.queue[self.queue.len()-1].len() >= self.queue[self.queue.len()-2].len() / 2) {
+                let list1 = self.queue.pop().unwrap();
+                let list2 = self.queue.pop().unwrap();
+                let merged = self.merge_by(list1, list2);
+                self.queue.push(merged);
+            }
         }
     }
 
@@ -227,7 +237,8 @@ impl<D: Ord, T: Ord, R: Diff> MergeSorter<D, T, R> {
         
         use std::cmp::Ordering;
 
-        let mut output = Vec::new();
+        // TODO: `list1` and `list2` get dropped; would be better to reuse?
+        let mut output = Vec::with_capacity(list1.len() + list2.len());
         let mut result = Vec::with_capacity(1024);
 
         let mut list1 = VecQueue::from(list1);
