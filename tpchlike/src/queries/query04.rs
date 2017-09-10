@@ -45,12 +45,10 @@ use ::Collections;
 pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp> 
 where G::Timestamp: Lattice+TotalOrder+Ord {
 
-    println!("TODO: Q04 could use count_u for [u8;15] 'priority'");
-
     let lineitems = 
     collections
         .lineitems()
-        .flat_map(|l| if l.commit_date < l.receipt_date { Some((UnsignedWrapper::from(l.order_key), ())).into_iter() } else { None.into_iter() })
+        .flat_map(|l| if l.commit_date < l.receipt_date { Some((UnsignedWrapper::from(l.order_key), ())) } else { None })
         .arrange(DefaultKeyTrace::new())
         .group_arranged(|_k,_s,t| t.push(((), 1)), DefaultKeyTrace::new());
 

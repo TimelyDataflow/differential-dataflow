@@ -80,14 +80,14 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
     collections
         .nations()
         .map(|x| (x.region_key, (x.nation_key, x.name)))
-        .semijoin_u(&regions)
+        .semijoin(&regions)
         .map(|(_region_key, (nation_key, name))| (nation_key, name));
 
     let suppliers = 
     collections
         .suppliers()
         .map(|x| (x.nation_key, (x.acctbal, x.name, x.address.to_string(), x.phone, x.comment.to_string(), x.supp_key)))
-        .semijoin_u(&nations.map(|x| x.0))
+        .semijoin(&nations.map(|x| x.0))
         .map(|(nat, (acc, nam, add, phn, com, key))| (key, (nat, acc, nam, add, phn, com)));
 
     let parts = 
@@ -99,19 +99,19 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
     collections
         .partsupps()
         .map(|x| (x.supp_key, (x.part_key, x.supplycost)))
-        .semijoin_u(&suppliers.map(|x| x.0))
+        .semijoin(&suppliers.map(|x| x.0))
         .map(|(supp, (part, supply_cost))| (part, (supply_cost, supp)))
-        .semijoin_u(&parts.map(|x| x.0))
-        .group_u(|_x, s, t| {
+        .semijoin(&parts.map(|x| x.0))
+        .group(|_x, s, t| {
             let minimum = (s[0].0).0;
             t.extend(s.iter().take_while(|x| (x.0).0 == minimum).map(|&(&x,w)| (x,w)));
         });
 
     partsupps
-        .join_u(&parts)
+        .join(&parts)
         .map(|(part_key, (cost, supp), mfgr)| (supp, (cost, part_key, mfgr)))
-        .join_u(&suppliers)
+        .join(&suppliers)
         .map(|(_supp, (cost, part, mfgr), (nat, acc, nam, add, phn, com))| (nat, (cost, part, mfgr, acc, nam, add, phn, com)))
-        .join_u(&nations)
+        .join(&nations)
         .probe()
 }

@@ -77,7 +77,7 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
             if l.ship_date >= create_date(1994, 1, 1) && l.ship_date < create_date(1995, 1, 1) { Some((l.part_key, (l.supp_key, l.quantity))) }
             else { None }
         )
-        .semijoin_u(&partkeys)
+        .semijoin(&partkeys)
         .explode(|l| Some(((UnsignedWrapper::from(((l.0 as u64) << 32) + (l.1).0 as u64), ()), (l.1).1 as isize)))
         .arrange(DefaultKeyTrace::new())
         .group_arranged(|_k,s,t| t.push((s[0].1, 1)), DefaultValTrace::new());
@@ -86,7 +86,7 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
     collections
         .partsupps()
         .map(|ps| (ps.part_key, (ps.supp_key, ps.availqty)))
-        .semijoin_u(&partkeys)
+        .semijoin(&partkeys)
         .map(|(part_key, (supp_key, avail))| (UnsignedWrapper::from(((part_key as u64) << 32) + (supp_key as u64)), avail))
         .arrange(DefaultValTrace::new())
         .join_core(&available, |&key, &avail1, &avail2| 
@@ -101,8 +101,8 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
     collections
         .suppliers()
         .map(|s| (s.supp_key, (s.name, s.address.to_string(), s.nation_key)))
-        .semijoin_u(&suppliers)
+        .semijoin(&suppliers)
         .map(|(_, (name, addr, nation))| (nation, (name, addr)))
-        .join_u(&nations)
+        .join(&nations)
         .probe()
 }

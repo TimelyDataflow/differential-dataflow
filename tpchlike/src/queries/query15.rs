@@ -52,8 +52,6 @@ use ::types::create_date;
 pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp> 
 where G::Timestamp: Lattice+TotalOrder+Ord {
 
-    println!("TODO: query 15 takes a global aggregate with key 0u8, instead of ().");
-
     // revenue by supplier
     let revenue = 
         collections
@@ -70,31 +68,31 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
         revenue
             // do a hierarchical min, to improve update perf.
             .map(|key| ((key % 1000) as u16, key))
-            .group_u(|_k, s, t| {
+            .group(|_k, s, t| {
                 let max = s.iter().map(|x| x.1).max().unwrap();
                 t.extend(s.iter().filter(|x| x.1 == max).map(|&(&a,b)| (a,b)));
             })
             .map(|(_,key)| ((key % 100) as u8, key))
-            .group_u(|_k, s, t| {
+            .group(|_k, s, t| {
                 let max = s.iter().map(|x| x.1).max().unwrap();
                 t.extend(s.iter().filter(|x| x.1 == max).map(|&(&a,b)| (a,b)));
             })
             .map(|(_,key)| ((key % 10) as u8, key))
-            .group_u(|_k, s, t| {
+            .group(|_k, s, t| {
                 let max = s.iter().map(|x| x.1).max().unwrap();
                 t.extend(s.iter().filter(|x| x.1 == max).map(|&(&a,b)| (a,b)));
             })
-            .map(|(_,key)| (0u8, key))
-            .group_u(|_k, s, t| {
+            .map(|(_,key)| ((), key))
+            .group(|_k, s, t| {
                 let max = s.iter().map(|x| x.1).max().unwrap();
                 t.extend(s.iter().filter(|x| x.1 == max).map(|&(&a,b)| (a,b)));
             })
             .map(|(_, key)| key)
-            .count_total_u();
+            .count_total();
 
     collections
         .suppliers()
         .map(|s| (s.supp_key, (s.name, s.address.to_string(), s.phone)))
-        .join_u(&top_suppliers)
+        .join(&top_suppliers)
         .probe()
 }

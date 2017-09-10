@@ -80,14 +80,14 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
     let parts2 = parts.filter(|&(_key, (brand, container, size))| starts_with(&brand, b"Brand#23") && 1 <= size && size <= 10 && (starts_with(&container, b"MED BAG") || starts_with(&container, b"MED BOX") || starts_with(&container, b"MED PKG") || starts_with(&container, b"MED PACK"))).map(|x| x.0);
     let parts3 = parts.filter(|&(_key, (brand, container, size))| starts_with(&brand, b"Brand#34") && 1 <= size && size <= 15 && (starts_with(&container, b"LG CASE") || starts_with(&container, b"LG BOX") || starts_with(&container, b"LG PACK") || starts_with(&container, b"LG PCG"))).map(|x| x.0);
 
-    let result1 = lines1.semijoin_u(&parts1);
-    let result2 = lines2.semijoin_u(&parts2);
-    let result3 = lines3.semijoin_u(&parts3);
+    let result1 = lines1.semijoin(&parts1);
+    let result2 = lines2.semijoin(&parts2);
+    let result3 = lines3.semijoin(&parts3);
 
     result1
         .concat(&result2)
         .concat(&result3)
         .map(|(x,_)| x)
-        .count_total_u()
+        .count_total()
         .probe()
 }

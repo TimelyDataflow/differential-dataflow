@@ -54,6 +54,6 @@ pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Times
                 None
             }
         )
-        .count_total_u()
+        .count_total()
         .probe()
 }

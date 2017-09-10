@@ -52,8 +52,8 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
     collections
         .parts()
         .explode(|p| Some(((p.part_key, ()), DiffPair::new(1, if starts_with(&p.typ.as_bytes(), b"PROMO") { 1 } else { 0 }))))
-        .semijoin_u(&lineitems)
+        .semijoin(&lineitems)
         .map(|(part_key, _)| part_key)
-        .count_total_u()
+        .count_total()
         .probe()
 }

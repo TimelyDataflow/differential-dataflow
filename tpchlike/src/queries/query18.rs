@@ -76,6 +76,6 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
             }
             else { None }
         )
-        .join_u(&collections.customers().map(|c| (c.cust_key, c.name.to_string())))
+        .join(&collections.customers().map(|c| (c.cust_key, c.name.to_string())))
         .probe()
 }

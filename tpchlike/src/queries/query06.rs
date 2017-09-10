@@ -28,16 +28,14 @@ use ::types::create_date;
 pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp> 
 where G::Timestamp: Lattice+TotalOrder+Ord {
 
-    println!("TODO: Q06 does a global aggregation with 0u8 as a key rather than ().");
-
     collections
         .lineitems()
         .explode(|x|
             if create_date(1994, 1, 1) <= x.ship_date && x.ship_date < create_date(1995, 1, 1) && 5 <= x.discount && x.discount < 7 && x.quantity < 24 {
-                Some((0u8, (x.extended_price * x.discount / 100) as isize))
+                Some(((), (x.extended_price * x.discount / 100) as isize))
             }
             else { None }
         )
-        .count_total_u()
+        .count_total()
         .probe()
 }

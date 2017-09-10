@@ -49,7 +49,7 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
     let customers =
     collections
         .customers()
-        .flat_map(|c| if starts_with(&c.mktsegment[..], b"BUILDING") { Some(c.cust_key).into_iter() } else { None.into_iter() });
+        .flat_map(|c| if starts_with(&c.mktsegment[..], b"BUILDING") { Some(c.cust_key) } else { None });
 
     let lineitems = 
     collections
@@ -68,9 +68,9 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
         .map(|o| (o.cust_key, (o.order_key, o.order_date, o.ship_priority)));
 
     orders
-        .semijoin_u(&customers)
+        .semijoin(&customers)
         .map(|(_, (order_key, order_date, ship_priority))| (order_key, (order_date, ship_priority)))
-        .semijoin_u(&lineitems)
+        .semijoin(&lineitems)
         .count_total()
         .probe()
 }

@@ -11,7 +11,6 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Trace;
 use differential_dataflow::trace::implementations::ord::OrdKeySpine as DefaultKeyTrace;
 use differential_dataflow::trace::implementations::ord::OrdValSpine as DefaultValTrace;
-use differential_dataflow::hashable::UnsignedWrapper;
 
 use ::Collections;
 
@@ -78,19 +77,21 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
 
     let averages = 
     customers
-        .explode(|(cc, acctbal, _)| Some(((UnsignedWrapper::from(cc), ()), DiffPair::new(acctbal as isize, 1))))
+        .explode(|(cc, acctbal, _)| Some(((cc, ()), DiffPair::new(acctbal as isize, 1))))
         .arrange(DefaultKeyTrace::new())
         .group_arranged(|_k,s,t| t.push((s[0].1, 1)), DefaultValTrace::new());
 
     customers
         .map(|(cc, acct, key)| (key, (cc, acct)))
-        .antijoin_u(&collections.orders().map(|o| o.cust_key).distinct_u())
-        .map(|(_, (cc, acct))| (UnsignedWrapper::from(cc), acct))
+        .antijoin(&collections.orders().map(|o| o.cust_key).distinct())
+        .map(|(_, (cc, acct))| (cc, acct as isize))
         .arrange(DefaultValTrace::new())
-        .join_core(&averages, |&cc, &acct, &pair|
-            if acct as isize > (pair.element1 / pair.element2) { Some((cc.item, acct)) } else { None }
-        )
+        .join_core(&averages, |&cc, &acct, &pair| {
+            let acct : isize = acct;
+            let pair : DiffPair<isize, isize> = pair;
+            if acct > (pair.element1 / pair.element2) { Some((cc, acct)) } else { None }
+        })
         .explode(|(cc, acct)| Some((cc, DiffPair::new(acct as isize, 1))))
-        .count_total_u()
+        .count_total()
         .probe()
 }
