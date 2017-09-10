@@ -21,10 +21,10 @@ pub fn build((dataflow, handles, probe, args): Environment) -> Result<(), String
     roots.iterate(|dists| {
         let edges = edges.enter(&dists.scope());
         let roots = roots.enter(&dists.scope());
-        dists.arrange_by_self_u()
+        dists.arrange_by_self()
              .join_core(&edges, |_src, _, &dst| Some(dst))
              .concat(&roots)
-             .distinct_u()
+             .distinct()
     })
     .probe_with(probe);
 

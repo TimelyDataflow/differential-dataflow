@@ -138,7 +138,7 @@ pub fn build((dataflow, handles, probe, args): Environment) -> Result<(), String
         })
         .probe_with(probe)
         .as_collection()
-        .arrange_by_key_u()
+        .arrange_by_key()
         .trace;
 
     handles.set::<TraceHandle>(name.to_owned(), trace);
