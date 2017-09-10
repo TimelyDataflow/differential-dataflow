@@ -97,7 +97,7 @@ fn main() {
             })
             .probe_with(&mut probe)
             .as_collection()
-            .arrange_by_key_u()
+            .arrange_by_key()
             .trace
         });
 
@@ -121,10 +121,10 @@ fn main() {
                 let edges = edges.enter(&dists.scope());
                 let roots = roots.enter(&dists.scope());
 
-                dists.arrange_by_key_u()
+                dists.arrange_by_key()
                      .join_core(&edges, |_k,l,d| Some((*d, l+1)))
                      .concat(&roots)
-                     .group_u(|_, s, t| t.push((*s[0].0, 1)))
+                     .group(|_, s, t| t.push((*s[0].0, 1)))
             })
             .map(|(_node, dist)| dist)
             .consolidate()
@@ -140,11 +140,11 @@ fn main() {
             let (input, query) = scope.new_collection();
 
             query.map(|x| (x, x))
-                 .arrange_by_key_u()
+                 .arrange_by_key()
                  .join_core(&edges, |_n, &q, &d| Some((d, q)))
-                 .arrange_by_key_u()
+                 .arrange_by_key()
                  .join_core(&edges, |_n, &q, &d| Some((d, q)))
-                 .arrange_by_key_u()
+                 .arrange_by_key()
                  .join_core(&edges, |_n, &q, &d| Some((d, q)))
                  .filter(move |_| inspect)
                  .map(|x| x.1)

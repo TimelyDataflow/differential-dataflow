@@ -11,16 +11,15 @@ use timely::dataflow::scopes::{Child, Root};
 use timely::dataflow::operators::probe::Handle as ProbeHandle;
 
 // stuff for talking about shared trace types ...
-use differential_dataflow::hashable::UnsignedWrapper;
 use differential_dataflow::operators::arrange::TraceAgent;
 use differential_dataflow::trace::implementations::spine::Spine;
 use differential_dataflow::trace::implementations::ord::OrdValBatch;
 
 // These are all defined here so that users can be assured a common layout.
 pub type RootTime = timely::progress::nested::product::Product<timely::progress::timestamp::RootTimestamp, usize>;
-type TraceBatch = OrdValBatch<UnsignedWrapper<usize>, usize, RootTime, isize>;
-type TraceSpine = Spine<UnsignedWrapper<usize>, usize, RootTime, isize, Rc<TraceBatch>>;
-pub type TraceHandle = TraceAgent<UnsignedWrapper<usize>, usize, RootTime, isize, TraceSpine>;
+type TraceBatch = OrdValBatch<usize, usize, RootTime, isize>;
+type TraceSpine = Spine<usize, usize, RootTime, isize, Rc<TraceBatch>>;
+pub type TraceHandle = TraceAgent<usize, usize, RootTime, isize, TraceSpine>;
 
 /// Arguments provided to each shared library to help build their dataflows and register their results.
 pub type Environment<'a, 'b> = (

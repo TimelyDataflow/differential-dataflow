@@ -19,15 +19,13 @@ use timely::order::TotalOrder;
 use timely::dataflow::*;
 use timely::dataflow::operators::Unary;
 use timely::dataflow::channels::pact::Pipeline;
-use timely_sort::Unsigned;
 
 use lattice::Lattice;
 use ::{Data, Collection, Diff};
-use hashable::{Hashable, UnsignedWrapper};
+use hashable::Hashable;
 use collection::AsCollection;
-use operators::arrange::{Arrange, Arranged, ArrangeBySelf};
-use trace::{BatchReader, Cursor, Trace, TraceReader};
-use trace::implementations::ord::OrdKeySpine as DefaultKeyTrace;
+use operators::arrange::{Arranged, ArrangeBySelf};
+use trace::{BatchReader, Cursor, TraceReader};
 
 /// Extension trait for the `count` differential dataflow method.
 pub trait CountTotal<G: Scope, K: Data, R: Diff> where G::Timestamp: TotalOrder+Lattice+Ord {
@@ -52,29 +50,6 @@ pub trait CountTotal<G: Scope, K: Data, R: Diff> where G::Timestamp: TotalOrder+
     /// }
     /// ```
     fn count_total(&self) -> Collection<G, (K, R), isize>;
-    /// Counts the number of occurrences of each element.
-    /// 
-    /// This method is a specialization for when the key is an unsigned integer fit for distributing the data.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// extern crate timely;
-    /// extern crate differential_dataflow;
-    ///
-    /// use differential_dataflow::input::Input;
-    /// use differential_dataflow::operators::CountTotal;
-    ///
-    /// fn main() {
-    ///     ::timely::example(|scope| {
-    ///         // report the number of occurrences of each key
-    ///         scope.new_collection_from(1 .. 10u32).1
-    ///              .map(|x| x / 3)
-    ///              .count_total_u();
-    ///     });
-    /// }
-    /// ```
-    fn count_total_u(&self) -> Collection<G, (K, R), isize> where K: Unsigned+Copy;
 }
 
 impl<G: Scope, K: Data+Default+Hashable, R: Diff> CountTotal<G, K, R> for Collection<G, K, R>
@@ -82,13 +57,6 @@ where G::Timestamp: TotalOrder+Lattice+Ord {
     fn count_total(&self) -> Collection<G, (K, R), isize> {
         self.arrange_by_self()
             .count_total_core()
-            .map(|(k,c)| (k.item, c))
-    }
-    fn count_total_u(&self) -> Collection<G, (K, R), isize> where K: Unsigned+Copy {
-        self.map(|k| (UnsignedWrapper::from(k), ()))
-            .arrange(DefaultKeyTrace::new())
-            .count_total_core()
-            .map(|(k,c)| (k.item, c))
     }
 }
 

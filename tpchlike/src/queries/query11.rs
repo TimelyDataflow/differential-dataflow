@@ -49,8 +49,6 @@ fn starts_with(source: &[u8], query: &[u8]) -> bool {
 pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp> 
 where G::Timestamp: Lattice+TotalOrder+Ord {
 
-    println!("TODO: Q11 does a global aggregation with 0u8 as a key rather than ().");
-
     let nations =
     collections
         .nations()
@@ -61,19 +59,19 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
     collections
         .suppliers()
         .map(|s| (s.nation_key, s.supp_key))
-        .semijoin_u(&nations)
+        .semijoin(&nations)
         .map(|s| s.1);
 
     collections
         .partsupps()
         .explode(|x| Some(((x.supp_key, x.part_key), (x.supplycost as isize) * (x.availqty as isize))))
-        .semijoin_u(&suppliers)
-        .map(|(_, part_key)| (0u8, part_key))
-        .group_u(|_part_key, s, t| {
+        .semijoin(&suppliers)
+        .map(|(_, part_key)| ((), part_key))
+        .group(|_part_key, s, t| {
             let threshold: isize = s.iter().map(|x| x.1 as isize).sum::<isize>() / 10000;
             t.extend(s.iter().filter(|x| x.1 > threshold).map(|&(&a,b)| (a, b)));
         })
         .map(|(_, part_key)| part_key)
-        .count_total_u()
+        .count_total()
         .probe()
 }

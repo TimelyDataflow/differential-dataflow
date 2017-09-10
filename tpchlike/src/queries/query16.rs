@@ -59,7 +59,7 @@ fn substring2(source: &[u8], query1: &[u8], query2: &[u8]) -> bool {
 pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp> 
 where G::Timestamp: Lattice+TotalOrder+Ord {
 
-    println!("TODO: query 16 could use a count_u if it joins after to re-collect its attributes");
+    println!("TODO: query 16 could use a count if it joins after to re-collect its attributes");
 
     let suppliers =
     collections
@@ -75,7 +75,7 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
     let parts = collections
         .partsupps()
         .map(|ps| (ps.supp_key, ps.part_key))
-        .antijoin_u(&suppliers)
+        .antijoin(&suppliers)
         .map(|(_supp_key, part_key)| part_key);
 
     collections
@@ -86,7 +86,7 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
             }
             else { None }
         )
-        .semijoin_u(&parts)
+        .semijoin(&parts)
         .count_total()
         .probe()
 }

@@ -46,6 +46,7 @@ impl<K: Ord+Clone, R: Diff+Clone> MergeBuilder for OrderedLeafBuilder<K, R> {
             vals: Vec::with_capacity(<OrderedLeaf<K, R> as Trie>::keys(other1) + <OrderedLeaf<K, R> as Trie>::keys(other2)),
         }
     }
+    #[inline(always)]
     fn copy_range(&mut self, other: &Self::Trie, lower: usize, upper: usize) {
         self.vals.extend_from_slice(&other.vals[lower .. upper]);
     }

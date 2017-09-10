@@ -57,39 +57,43 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
     collections
         .nations()
         .map(|x| (x.region_key, (x.nation_key, x.name)))
-        .semijoin_u(&regions)
+        .semijoin(&regions)
         .map(|(_region_key, (nation_key, name))| (nation_key, name));
 
     let suppliers = 
     collections
         .suppliers()
         .map(|x| (x.nation_key, x.supp_key))
-        .join_u(&nations)
+        .join(&nations)
         .map(|(_nat, supp, name)| (supp, name));
 
     let customers = 
     collections
         .customers()
         .map(|c| (c.nation_key, c.cust_key))
-        .semijoin_u(&nations.map(|x| x.0))
+        .semijoin(&nations.map(|x| x.0))
         .map(|c| c.1);
         
     let orders =
     collections
         .orders()
-        .filter(|o| o.order_date >= create_date(1994, 1, 1) && o.order_date < create_date(1995, 1, 1))
-        .map(|o| (o.cust_key, o.order_key))
-        .semijoin_u(&customers)
+        .flat_map(|o| 
+            if o.order_date >= create_date(1994, 1, 1) && o.order_date < create_date(1995, 1, 1) { 
+                Some((o.cust_key, o.order_key)) 
+            } 
+            else { None }
+        )
+        .semijoin(&customers)
         .map(|o| o.1);
 
     let lineitems = collections
         .lineitems()
         .explode(|l| Some(((l.order_key, l.supp_key), (l.extended_price * (100 - l.discount) / 100) as isize)))
-        .semijoin_u(&orders)
+        .semijoin(&orders)
         .map(|(_order, supp)| supp);
 
     suppliers
-        .semijoin_u(&lineitems)
+        .semijoin(&lineitems)
         .map(|(_supp, name)| name)
         .count_total()
         .probe()

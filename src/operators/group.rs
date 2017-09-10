@@ -16,7 +16,7 @@
 use std::fmt::Debug;
 use std::default::Default;
 
-use hashable::{Hashable, UnsignedWrapper};
+use hashable::Hashable;
 use ::{Data, Collection, Diff};
 
 use timely::order::PartialOrder;
@@ -25,9 +25,8 @@ use timely::dataflow::*;
 use timely::dataflow::operators::Unary;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Capability;
-use timely_sort::Unsigned;
 
-use operators::arrange::{Arrange, Arranged, ArrangeByKey, ArrangeBySelf, BatchWrapper, TraceAgent};
+use operators::arrange::{Arranged, ArrangeByKey, ArrangeBySelf, BatchWrapper, TraceAgent};
 use lattice::Lattice;
 use trace::{Batch, BatchReader, Cursor, Trace, Builder};
 use trace::cursor::cursor_list::CursorList;
@@ -64,32 +63,6 @@ pub trait Group<G: Scope, K: Data, V: Data, R: Diff> where G::Timestamp: Lattice
     /// ```
     fn group<L, V2: Data, R2: Diff>(&self, logic: L) -> Collection<G, (K, V2), R2>
     where L: Fn(&K, &[(&V, R)], &mut Vec<(V2, R2)>)+'static;
-    /// Groups records by their first field, and applies reduction logic to the associated values.
-    /// 
-    /// This method is a specialization for when the key is an unsigned integer fit for distributing the data.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// extern crate timely;
-    /// extern crate differential_dataflow;
-    ///
-    /// use differential_dataflow::input::Input;
-    /// use differential_dataflow::operators::Group;
-    ///
-    /// fn main() {
-    ///     ::timely::example(|scope| {
-    ///         // report the first value for each group
-    ///         scope.new_collection_from(1 .. 10u32).1
-    ///              .map(|x| (x / 3, x))
-    ///              .group_u(|_key, src, dst| {
-    ///                  dst.push((*src[0].0, 1))
-    ///              });
-    ///     });
-    /// }
-    /// ```
-    fn group_u<L, V2: Data, R2: Diff>(&self, logic: L) -> Collection<G, (K, V2), R2>
-    where L: Fn(&K, &[(&V, R)], &mut Vec<(V2, R2)>)+'static, K: Unsigned+Copy;
 }
 
 impl<G: Scope, K: Data+Default+Hashable, V: Data, R: Diff> Group<G, K, V, R> for Collection<G, (K, V), R> 
@@ -97,16 +70,9 @@ impl<G: Scope, K: Data+Default+Hashable, V: Data, R: Diff> Group<G, K, V, R> for
     fn group<L, V2: Data, R2: Diff>(&self, logic: L) -> Collection<G, (K, V2), R2>
         where L: Fn(&K, &[(&V, R)], &mut Vec<(V2, R2)>)+'static {
         // self.arrange_by_key_hashed_cached()
-        self.arrange_by_key_hashed()
-            .group_arranged(move |k,s,t| logic(&k.item,s,t), DefaultValTrace::new())
-            .as_collection(|k,v| (k.item.clone(), v.clone()))
-    }
-    fn group_u<L, V2: Data, R2: Diff>(&self, logic: L) -> Collection<G, (K, V2), R2>
-        where L: Fn(&K, &[(&V, R)], &mut Vec<(V2, R2)>)+'static, K: Unsigned+Copy {
-        self.map(|(k,v)| (UnsignedWrapper::from(k), v))
-            .arrange(DefaultValTrace::new())
-            .group_arranged(move |k,s,t| logic(&k.item,s,t), DefaultValTrace::new())
-            .as_collection(|k,v| (k.item.clone(), v.clone()))
+        self.arrange_by_key()
+            .group_arranged(logic, DefaultValTrace::new())
+            .as_collection(|k,v| (k.clone(), v.clone()))
     }
 }
 
@@ -133,29 +99,6 @@ pub trait Distinct<G: Scope, K: Data> where G::Timestamp: Lattice+Ord {
     /// }
     /// ```
     fn distinct(&self) -> Collection<G, K, isize>;
-    /// Reduces the collection to one occurrence of each distinct element.
-    /// 
-    /// This method is a specialization for when the key is an unsigned integer fit for distributing the data.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// extern crate timely;
-    /// extern crate differential_dataflow;
-    ///
-    /// use differential_dataflow::input::Input;
-    /// use differential_dataflow::operators::Distinct;
-    ///
-    /// fn main() {
-    ///     ::timely::example(|scope| {
-    ///         // report at most one of each key.
-    ///         scope.new_collection_from(1 .. 10u32).1
-    ///              .map(|x| x / 3)
-    ///              .distinct_u();
-    ///     });
-    /// }
-    /// ```
-    fn distinct_u(&self) -> Collection<G, K, isize> where K: Unsigned+Copy;
 }
 
 impl<G: Scope, K: Data+Default+Hashable> Distinct<G, K> for Collection<G, K, isize> 
@@ -163,13 +106,7 @@ where G::Timestamp: Lattice+Ord+::std::fmt::Debug {
     fn distinct(&self) -> Collection<G, K, isize> {
         self.arrange_by_self()
             .group_arranged(|_k,_s,t| t.push(((), 1)), DefaultKeyTrace::new())
-            .as_collection(|k,_| k.item.clone())
-    }
-    fn distinct_u(&self) -> Collection<G, K, isize> where K: Unsigned+Copy {
-        self.map(|k| (UnsignedWrapper::from(k), ()))
-            .arrange(DefaultKeyTrace::new())
-            .group_arranged(|_k,_s,t| t.push(((), 1)), DefaultKeyTrace::new())
-            .as_collection(|k,_| k.item.clone())
+            .as_collection(|k,_| k.clone())
     }
 }
 
@@ -197,29 +134,6 @@ pub trait Count<G: Scope, K: Data, R: Diff> where G::Timestamp: Lattice+Ord {
     /// }
     /// ```
     fn count(&self) -> Collection<G, (K, R), isize>;
-    /// Counts the number of occurrences of each element.
-    /// 
-    /// This method is a specialization for when the key is an unsigned integer fit for distributing the data.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// extern crate timely;
-    /// extern crate differential_dataflow;
-    ///
-    /// use differential_dataflow::input::Input;
-    /// use differential_dataflow::operators::Count;
-    ///
-    /// fn main() {
-    ///     ::timely::example(|scope| {
-    ///         // report the number of occurrences of each key
-    ///         scope.new_collection_from(1 .. 10u32).1
-    ///              .map(|x| x / 3)
-    ///              .count_u();
-    ///     });
-    /// }
-    /// ```
-    fn count_u(&self) -> Collection<G, (K, R), isize> where K: Unsigned+Copy;
 }
 
 impl<G: Scope, K: Data+Default+Hashable, R: Diff> Count<G, K, R> for Collection<G, K, R>
@@ -227,13 +141,7 @@ impl<G: Scope, K: Data+Default+Hashable, R: Diff> Count<G, K, R> for Collection<
     fn count(&self) -> Collection<G, (K, R), isize> {
         self.arrange_by_self()
             .group_arranged(|_k,s,t| t.push((s[0].1, 1)), DefaultValTrace::new())
-            .as_collection(|k,&c| (k.item.clone(), c))
-    }
-    fn count_u(&self) -> Collection<G, (K, R), isize> where K: Unsigned+Copy {
-        self.map(|k| (UnsignedWrapper::from(k), ()))
-            .arrange(DefaultKeyTrace::new())
-            .group_arranged(|_k,s,t| t.push((s[0].1, 1)), DefaultValTrace::new())
-            .as_collection(|k,&c| (k.item.clone(), c))
+            .as_collection(|k,&c| (k.clone(), c))
     }
 }
 

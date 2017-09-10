@@ -24,7 +24,7 @@ fn main() {
 
             // move `val` into the ring component.
             data.explode(|(x,y)| Some((x, DiffPair::new(y, 1))))
-                .consolidate_u();
+                .consolidate();
 
             input
         });

@@ -66,17 +66,17 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
     collections
         .lineitems()
         .map(|l| (l.part_key, (l.supp_key, l.order_key, l.extended_price * (100 - l.discount) / 100, l.quantity)))
-        .semijoin_u(&parts)
+        .semijoin(&parts)
         .map(|(part_key, (supp_key, order_key, revenue, quantity))| ((part_key, supp_key), (order_key, revenue, quantity)))
         .join(&collections.partsupps().map(|ps| ((ps.part_key, ps.supp_key), ps.supplycost)))
         .explode(|((_part_key, supp_key), (order_key, revenue, quantity), supplycost)|
             Some(((order_key, supp_key), ((revenue - supplycost * quantity) as isize)))
         )
-        .join_u(&collections.orders().map(|o| (o.order_key, o.order_date >> 16)))
+        .join(&collections.orders().map(|o| (o.order_key, o.order_date >> 16)))
         .map(|(_, supp_key, order_year)| (supp_key, order_year))
-        .join_u(&collections.suppliers().map(|s| (s.supp_key, s.nation_key)))
+        .join(&collections.suppliers().map(|s| (s.supp_key, s.nation_key)))
         .map(|(_, order_year, nation_key)| (nation_key, order_year))
-        .join_u(&collections.nations().map(|n| (n.nation_key, n.name)))
+        .join(&collections.nations().map(|n| (n.nation_key, n.name)))
         .count_total()
         .probe()
 }

@@ -74,21 +74,21 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
     collections
         .customers()
         .map(|c| (c.nation_key, c.cust_key))
-        .join_u(&nations)
+        .join(&nations)
         .map(|(_nation_key, cust_key, name)| (cust_key, name));
 
     let orders = 
     collections
         .orders()
         .map(|o| (o.cust_key, o.order_key))
-        .join_u(&customers)
+        .join(&customers)
         .map(|(_cust_key, order_key, name)| (order_key, name));
 
     let suppliers = 
     collections
         .suppliers()
         .map(|s| (s.nation_key, s.supp_key))
-        .join_u(&nations)
+        .join(&nations)
         .map(|(_nation_key, supp_key, name)| (supp_key, name));
 
     collections
@@ -99,9 +99,9 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
             }
             else { None }
         )
-        .join_u(&suppliers)
+        .join(&suppliers)
         .map(|(_supp_key, (order_key, ship_date), name_s)| (order_key, (ship_date, name_s)))
-        .join_u(&orders)
+        .join(&orders)
         .map(|(_order_key, (ship_date, name_s), name_c)| (name_s, name_c, ship_date >> 16))
         .filter(|x| x.0 != x.1)
         .count_total()

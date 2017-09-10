@@ -30,11 +30,11 @@ fn main() {
             let (input, edges) = scope.new_collection();
 
             let degrs = edges.map(|(src, _dst)| src)
-                             .count_total_u();
+                             .count_total();
 
             // pull of count, and count.
             let distr = degrs.map(|(_src, cnt)| cnt as usize)
-                             .count_total_u();
+                             .count_total();
 
             // show us something about the collection, notice when done.
             let probe = if inspect { 
@@ -85,13 +85,12 @@ fn main() {
 
             let requests_per_sec = batch;
             let ns_per_request = 1000000000 / requests_per_sec;
-            // let ns_per_request = batch;//1000000;  // corresponds to 1K requests / second.
             let mut request_counter = 1;
             let mut measurements = Vec::with_capacity(20 * requests_per_sec);
 
             let timer = ::std::time::Instant::now();
 
-            while timer.elapsed().as_secs() < 10 {
+            while measurements.len() < requests_per_sec * 20 {
 
                 // Open-loop latency-throughput test, parameterized by offered rate `ns_per_request`.
                 let elapsed = timer.elapsed();
@@ -106,13 +105,7 @@ fn main() {
                     request_counter += 1;
                 }
 
-                // Advance `input` as far as we can promise. 
-                // This *could* have been `index + ns_per_request * request_counter`, but that would have
-                // exploited our foreknowledge that inputs arrive at known rate; this is "more fair".
-                // input.advance_to(nanoseconds);
                 input.flush();
-
-                // Do one quantum of work
                 worker.step();
 
                 // Determine completed ns 
@@ -127,27 +120,9 @@ fn main() {
                     measurements.push(elapsed_ns - requested_at);
                 }
             }
-            
-            // input.close();
-            // while worker.step() {
 
-            //     // determine completed ns 
-            //     let acknowledged_ns: u64 = probe.with_frontier(|frontier| frontier[0].inner);
-
-            //     let elapsed = timer.elapsed();
-            //     let elapsed_ns = elapsed.as_secs() * 1_000_000_000 + (elapsed.subsec_nanos() as u64);
-
-            //     // any un-recorded measurements that are complete should be recorded.
-            //     while ((index + measurements.len() * ns_per_request) as u64) < acknowledged_ns {
-            //         let requested_at = (index + measurements.len() * ns_per_request) as u64;
-            //         measurements.push(elapsed_ns - requested_at);
-            //     }
-            // }
-
-            // for measurement in measurements {
-            //     println!("{}", measurement);
-            // }
-
+            measurements.truncate(requests_per_sec * 20);
+            measurements.drain(0 .. (requests_per_sec * 10));
             measurements.sort();
 
             let med = measurements[measurements.len() / 2];

@@ -112,15 +112,15 @@ where G::Timestamp: Lattice+Ord {
                      .concat(&edges);
 
     // "arrange" edges, because we'll want to use it twice the same way.
-    let edges = edges.arrange_by_key_hashed();
+    let edges = edges.arrange_by_key();
     let query = query.arrange_by_self();
 
     // restrict attention to edges from query nodes
-    edges.join_core(&query, |k,v,_| Some((v.clone(), k.item.clone())))
-         .arrange_by_key_hashed()
+    edges.join_core(&query, |k,v,_| Some((v.clone(), k.clone())))
+         .arrange_by_key()
          .join_core(&edges, |_,x,y| Some((x.clone(), y.clone())))
          // the next thing is the "topk" worker. sorry!
-         .group_u(move |_,s,t| {
+         .group(move |_,s,t| {
              t.extend(s.iter().map(|&(x,y)| (*x,y)));   // propose all inputs as outputs
              t.sort_by(|x,y| (-x.1).cmp(&(-y.1)));      // sort by negative count (large numbers first)
              t.truncate(k)                              // keep at most k of these
@@ -139,10 +139,10 @@ where G::Timestamp: Lattice+Ord {
         let nodes = query.enter(&inner.scope());
 
         // edges from active sources activate their destinations
-        edges.semijoin_u(&inner)
+        edges.semijoin(&inner)
              .map(|(_,d)| d)
              .concat(&nodes)
-             .distinct_u()
+             .distinct()
     })
 }
 
@@ -168,9 +168,9 @@ where G::Timestamp: Lattice+Hash+Ord {
              let edges = edges.enter(&inner.scope());
              let nodes = nodes.enter_at(&inner.scope(), |r| 256 * (64 - r.0.leading_zeros() as u64));
 
-             inner.join_map_u(&edges, |_k,l,d| (*d,*l))
+             inner.join_map(&edges, |_k,l,d| (*d,*l))
                   .concat(&nodes)
-                  .group_u(|_, s, t| { t.push((*s[0].0, 1)); } )
+                  .group(|_, s, t| { t.push((*s[0].0, 1)); } )
          })
 }
 
@@ -187,8 +187,8 @@ where G::Timestamp: Lattice+Ord {
         let edges = edges.enter(&inner.scope());
         let nodes = nodes.enter(&inner.scope());
 
-        inner.join_map_u(&edges, |_k,l,d| (*d, l+1))
+        inner.join_map(&edges, |_k,l,d| (*d, l+1))
              .concat(&nodes)
-             .group_u(|_, s, t| t.push((*s[0].0, 1)))
+             .group(|_, s, t| t.push((*s[0].0, 1)))
      })
 }
