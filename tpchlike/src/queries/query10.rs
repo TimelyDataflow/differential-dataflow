@@ -78,7 +78,7 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
 
     collections
         .customers()
-        .map(|c| (c.cust_key, (c.name.to_string(), c.phone, c.address.to_string(), c.comment.to_string(), c.nation_key)))
+        .map(|c| (c.cust_key, (c.name, c.phone, c.address, c.comment, c.nation_key)))
         .semijoin(&orders)
         .map(|(cust_key, (name, phn, addr, comm, nation_key))| (nation_key, (cust_key, name, phn, addr, comm)))
         .join(&collections.nations().map(|n| (n.nation_key, n.name)))

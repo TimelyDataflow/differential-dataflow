@@ -37,7 +37,7 @@ fn starts_with(source: &[u8], query: &[u8]) -> bool {
 pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp> 
 where G::Timestamp: Lattice+TotalOrder+Ord {
 
-    println!("TODO: we add a () value because there is no semijoin for value-free collections");
+    println!("TODO: Q14 adds a () value because there is no semijoin for value-free collections");
 
     let lineitems = 
     collections

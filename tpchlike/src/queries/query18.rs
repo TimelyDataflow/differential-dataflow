@@ -8,7 +8,6 @@ use differential_dataflow::operators::group::GroupArranged;
 use differential_dataflow::trace::Trace;
 use differential_dataflow::trace::implementations::ord::OrdKeySpine as DefaultKeyTrace;
 use differential_dataflow::trace::implementations::ord::OrdValSpine as DefaultValTrace;
-use differential_dataflow::hashable::UnsignedWrapper;
 use differential_dataflow::lattice::Lattice;
 
 use ::Collections;
@@ -56,26 +55,18 @@ use ::Collections;
 pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp> 
 where G::Timestamp: Lattice+TotalOrder+Ord {
 
-    println!("TODO: Q18 could use filter trace wrapper (eval vs filter in `join_core`)");
-    println!("TODO: Q18 uses `group_arranged` to get arrangement, but could use count_total");
-
     let orders =
     collections
         .orders()
-        .map(|o| (UnsignedWrapper::from(o.order_key), (o.cust_key, o.order_date, o.total_price)))
-        .arrange(DefaultValTrace::new());
+        .map(|o| (o.order_key, (o.cust_key, o.order_date, o.total_price)));
 
     collections
         .lineitems()
-        .explode(|l| Some(((UnsignedWrapper::from(l.order_key), ()), l.quantity as isize)))
-        .arrange(DefaultKeyTrace::new())
-        .group_arranged(|_k,s,t| t.push((s[0].1, 1)), DefaultValTrace::new())
-        .join_core(&orders, |&o_key, &quant, &(cust_key, date, price)| 
-            if quant > 300 { 
-                Some((cust_key, (o_key, date, price, quant)))
-            }
-            else { None }
-        )
-        .join(&collections.customers().map(|c| (c.cust_key, c.name.to_string())))
+        .explode(|l| Some((l.order_key, l.quantity as isize)))
+        .count_total()
+        .filter(|&(_key, cnt)| cnt > 300)
+        .join(&orders)
+        .map(|(o_key, quant, (cust_key, date, price))| (cust_key, (o_key, date, price, quant)))
+        .join(&collections.customers().map(|c| (c.cust_key, c.name)))
         .probe()
 }

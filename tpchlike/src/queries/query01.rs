@@ -43,7 +43,7 @@ pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Times
         .lineitems()
         .explode(|item| 
             if item.ship_date < ::types::create_date(1998, 9, 1) {
-                Some((((item.return_flag[0] as u16) << 8) + item.line_status[0] as u16, 
+                Some(((item.return_flag[0], item.line_status[0]), 
                     DiffPair::new(item.quantity as isize, 
                     DiffPair::new(item.extended_price as isize,
                     DiffPair::new((item.extended_price * (100 - item.discount) / 100) as isize,

@@ -6,6 +6,7 @@ use differential_dataflow::operators::*;
 use differential_dataflow::difference::DiffPair;
 use differential_dataflow::operators::arrange::Arrange;
 use differential_dataflow::operators::group::GroupArranged;
+use differential_dataflow::operators::distinct::DistinctTotal;
 use differential_dataflow::lattice::Lattice;
 
 use differential_dataflow::trace::Trace;
@@ -68,9 +69,13 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
     collections
         .customers()
         .flat_map(|c| {
-            let cc: [u8;2] = [c.phone[0], c.phone[1]];
-            if (&cc == b"13" || &cc == b"31" || &cc == b"23" || &cc == b"29" || &cc == b"30" || &cc == b"18" || &cc == b"17") && c.acctbal > 0 {
-                Some((((cc[1] as u16) << 8) + cc[0] as u16, c.acctbal, c.cust_key))
+            if c.acctbal > 0 {
+                match &[c.phone[0], c.phone[1]] {
+                    b"13" | b"31" | b"23" | b"29" | b"30" | b"18" | b"17" => {
+                        Some((((c.phone[1] as u16) << 8) + c.phone[0] as u16, c.acctbal, c.cust_key))
+                    },
+                    _ => None,
+                }
             }
             else { None }
         });
@@ -83,7 +88,7 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
 
     customers
         .map(|(cc, acct, key)| (key, (cc, acct)))
-        .antijoin(&collections.orders().map(|o| o.cust_key).distinct())
+        .antijoin(&collections.orders().map(|o| o.cust_key).distinct_total())
         .map(|(_, (cc, acct))| (cc, acct as isize))
         .arrange(DefaultValTrace::new())
         .join_core(&averages, |&cc, &acct, &pair| {

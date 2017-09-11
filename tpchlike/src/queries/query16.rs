@@ -59,8 +59,6 @@ fn substring2(source: &[u8], query1: &[u8], query2: &[u8]) -> bool {
 pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp> 
 where G::Timestamp: Lattice+TotalOrder+Ord {
 
-    println!("TODO: query 16 could use a count if it joins after to re-collect its attributes");
-
     let suppliers =
     collections
         .suppliers()
@@ -82,7 +80,7 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
         .parts()
         .flat_map(|p| 
             if !starts_with(&p.brand, b"Brand45") && !starts_with(&p.typ.as_bytes(), b"MEDIUM POLISHED") && [49, 14, 23, 45, 19, 3, 36, 9].contains(&p.size) {
-                Some((p.part_key, (p.brand, p.typ.to_string(), p.size)))
+                Some((p.part_key, (p.brand, p.typ, p.size)))
             }
             else { None }
         )

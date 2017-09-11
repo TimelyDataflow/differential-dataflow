@@ -31,6 +31,22 @@ fn read_u10(string: &str) -> [u8;10] { let mut buff = [0;10]; copy_from_to(strin
 fn read_u15(string: &str) -> [u8;15] { let mut buff = [0;15]; copy_from_to(string.as_bytes(), &mut buff); buff }
 fn read_u25(string: &str) -> [u8;25] { let mut buff = [0;25]; copy_from_to(string.as_bytes(), &mut buff); buff }
 
+unsafe_abomonate!(AbomonationWrapper<ArrayString<[u8; 25]>>);
+unsafe_abomonate!(AbomonationWrapper<ArrayString<[u8; 40]>>);
+unsafe_abomonate!(AbomonationWrapper<ArrayString<[u8; 128]>>);
+
+#[derive(Ord,PartialOrd,Eq,PartialEq,Clone,Debug,Hash,Default)]
+pub struct AbomonationWrapper<T> {
+    pub element: T,
+}
+
+use ::std::ops::Deref;
+impl<T> Deref for AbomonationWrapper<T> {
+    type Target = T;
+    fn deref(&self) -> &Self::Target {
+        &self.element
+    }
+}
 
 unsafe_abomonate!(Part);
 
@@ -40,7 +56,7 @@ pub struct Part {
     pub name: ArrayString<[u8;56]>,
     pub mfgr: [u8; 25],
     pub brand: [u8; 10],
-    pub typ: ArrayString<[u8;25]>,
+    pub typ: AbomonationWrapper<ArrayString<[u8;25]>>,
     pub size: i32,
     pub container: [u8; 10],
     pub retail_price: i64,
@@ -58,7 +74,7 @@ impl<'a> From<&'a str> for Part {
             name: ArrayString::from(fields.next().unwrap()).unwrap(),
             mfgr: read_u25(fields.next().unwrap()),
             brand: read_u10(fields.next().unwrap()),
-            typ: ArrayString::from(fields.next().unwrap()).unwrap(),
+            typ: AbomonationWrapper { element: ArrayString::from(fields.next().unwrap()).unwrap() },
             size: fields.next().unwrap().parse().unwrap(),
             container: read_u10(fields.next().unwrap()),
             retail_price: (fields.next().unwrap().parse::<f64>().unwrap() * 100.0) as i64,
@@ -73,11 +89,11 @@ unsafe_abomonate!(Supplier);
 pub struct Supplier {
     pub supp_key: usize,
     pub name: [u8; 25],
-    pub address: ArrayString<[u8; 40]>,
+    pub address: AbomonationWrapper<ArrayString<[u8; 40]>>,
     pub nation_key: usize,
     pub phone: [u8; 15],
     pub acctbal: i64,
-    pub comment: ArrayString<[u8; 128]>,
+    pub comment: AbomonationWrapper<ArrayString<[u8; 128]>>,
 }
 
 impl<'a> From<&'a str> for Supplier {
@@ -89,11 +105,11 @@ impl<'a> From<&'a str> for Supplier {
         Supplier {
             supp_key: fields.next().unwrap().parse().unwrap(),
             name: read_u25(fields.next().unwrap()),
-            address: ArrayString::from(fields.next().unwrap()).unwrap(),
+            address: AbomonationWrapper { element: ArrayString::from(fields.next().unwrap()).unwrap() },
             nation_key: fields.next().unwrap().parse().unwrap(),
             phone: read_u15(fields.next().unwrap()),
             acctbal: (fields.next().unwrap().parse::<f64>().unwrap() * 100.0) as i64,
-            comment: ArrayString::from(fields.next().unwrap()).unwrap(),
+            comment: AbomonationWrapper { element: ArrayString::from(fields.next().unwrap()).unwrap() },
         }
     }
 }
@@ -130,13 +146,13 @@ unsafe_abomonate!(Customer);
 #[derive(Ord,PartialOrd,Eq,PartialEq,Clone,Debug,Hash)]
 pub struct Customer {
     pub cust_key: usize,
-    pub name: ArrayString<[u8;25]>,
-    pub address: ArrayString<[u8;40]>,
+    pub name: AbomonationWrapper<ArrayString<[u8;25]>>,
+    pub address: AbomonationWrapper<ArrayString<[u8;40]>>,
     pub nation_key: usize,
     pub phone: [u8; 15],
     pub acctbal: i64,
     pub mktsegment: [u8; 10],
-    pub comment: ArrayString<[u8;128]>,
+    pub comment: AbomonationWrapper<ArrayString<[u8;128]>>,
 }
 
 impl<'a> From<&'a str> for Customer {
@@ -148,13 +164,13 @@ impl<'a> From<&'a str> for Customer {
 
         Customer {
             cust_key: fields.next().unwrap().parse().unwrap(),
-            name: ArrayString::from(fields.next().unwrap()).unwrap(),
-            address: ArrayString::from(fields.next().unwrap()).unwrap(),
+            name: AbomonationWrapper { element: ArrayString::from(fields.next().unwrap()).unwrap() },
+            address: AbomonationWrapper { element: ArrayString::from(fields.next().unwrap()).unwrap() },
             nation_key: fields.next().unwrap().parse().unwrap(),
             phone: read_u15(fields.next().unwrap()),
             acctbal: (fields.next().unwrap().parse::<f64>().unwrap() * 100.0) as i64,
             mktsegment: read_u10(fields.next().unwrap()),
-            comment: ArrayString::from(fields.next().unwrap()).unwrap(),
+            comment: AbomonationWrapper { element: ArrayString::from(fields.next().unwrap()).unwrap() },
         }
     }
 }

@@ -137,9 +137,10 @@ fn main() {
             round += 1;
         }
 
+        let query_name = if query < 10 { format!("q0{}", query) } else { format!("q{}", query) };
         let elapsed = timer.elapsed();
         let nanos = elapsed.as_secs() * 1000000000 + elapsed.subsec_nanos() as u64;
-        println!("elapsed: {:?}, tuples: {:?}, rate: {:?}", timer.elapsed(), tuples, (tuples as f64) / (nanos as f64 / 1000000000.0));
+        println!("query: {}, elapsed: {:?}, tuples: {:?}, rate: {:?}", query_name, timer.elapsed(), tuples, (tuples as f64) / (nanos as f64 / 1000000000.0));
 
     }).unwrap();
 }
@@ -225,7 +226,7 @@ where T: for<'a> From<&'a str> {
         }
 
         if count % 10000 == 0 { 
-            print!("\rreading records from {:?}: {:?}", name, count); 
+            // print!("\rreading records from {:?}: {:?}", name, count); 
             ::std::io::stdout().flush().ok().expect("Could not flush stdout"); 
         }
 
@@ -233,7 +234,7 @@ where T: for<'a> From<&'a str> {
 
         line.clear();
     }
-    println!("\rreading records from {:?}: {:?}", name, count); 
+    // println!("\rreading records from {:?}: {:?}", name, count); 
     
     if buffer.len() > 0 {
         result.push(buffer);

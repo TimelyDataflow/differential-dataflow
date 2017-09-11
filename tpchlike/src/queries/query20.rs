@@ -8,7 +8,6 @@ use differential_dataflow::operators::group::GroupArranged;
 use differential_dataflow::trace::Trace;
 use differential_dataflow::trace::implementations::ord::OrdKeySpine as DefaultKeyTrace;
 use differential_dataflow::trace::implementations::ord::OrdValSpine as DefaultValTrace;
-use differential_dataflow::hashable::UnsignedWrapper;
 use differential_dataflow::lattice::Lattice;
 
 use ::Collections;
@@ -74,11 +73,13 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
     collections
         .lineitems()
         .flat_map(|l| 
-            if l.ship_date >= create_date(1994, 1, 1) && l.ship_date < create_date(1995, 1, 1) { Some((l.part_key, (l.supp_key, l.quantity))) }
+            if l.ship_date >= create_date(1994, 1, 1) && l.ship_date < create_date(1995, 1, 1) { 
+                Some((l.part_key, (l.supp_key, l.quantity))) 
+            }
             else { None }
         )
         .semijoin(&partkeys)
-        .explode(|l| Some(((UnsignedWrapper::from(((l.0 as u64) << 32) + (l.1).0 as u64), ()), (l.1).1 as isize)))
+        .explode(|l| Some(((((l.0 as u64) << 32) + (l.1).0 as u64, ()), (l.1).1 as isize)))
         .arrange(DefaultKeyTrace::new())
         .group_arranged(|_k,s,t| t.push((s[0].1, 1)), DefaultValTrace::new());
 
@@ -87,20 +88,22 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
         .partsupps()
         .map(|ps| (ps.part_key, (ps.supp_key, ps.availqty)))
         .semijoin(&partkeys)
-        .map(|(part_key, (supp_key, avail))| (UnsignedWrapper::from(((part_key as u64) << 32) + (supp_key as u64)), avail))
+        .map(|(part_key, (supp_key, avail))| (((part_key as u64) << 32) + (supp_key as u64), avail))
         .arrange(DefaultValTrace::new())
-        .join_core(&available, |&key, &avail1, &avail2| 
+        .join_core(&available, |&key, &avail1, &avail2| {
+            let key: u64 = key;
+            let avail2: isize = avail2;
             if avail1 > avail2 as i32 / 2 {
-                Some((key.item & (u32::max_value() as u64)) as usize)
+                Some((key & (u32::max_value() as u64)) as usize)
             }
             else { None }
-        );
+        });
 
     let nations = collections.nations.filter(|n| starts_with(&n.name, b"CANADA")).map(|n| (n.nation_key, n.name));
 
     collections
         .suppliers()
-        .map(|s| (s.supp_key, (s.name, s.address.to_string(), s.nation_key)))
+        .map(|s| (s.supp_key, (s.name, s.address, s.nation_key)))
         .semijoin(&suppliers)
         .map(|(_, (name, addr, nation))| (nation, (name, addr)))
         .join(&nations)

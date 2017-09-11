@@ -3,6 +3,7 @@ use timely::dataflow::*;
 use timely::dataflow::operators::probe::Handle as ProbeHandle;
 
 use differential_dataflow::operators::*;
+use differential_dataflow::operators::distinct::DistinctTotal;
 use differential_dataflow::lattice::Lattice;
 
 use ::Collections;
@@ -78,7 +79,7 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
         .semijoin(&orders);
 
     let lateitems = lineitems.filter(|l| (l.1).1);
-    let lateorders = lateitems.map(|l| l.0).distinct();
+    let lateorders = lateitems.map(|l| l.0).distinct_total();
 
     let problems = 
     lineitems
