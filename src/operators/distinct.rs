@@ -3,8 +3,6 @@
 //! The `distinct_total` and `distinct_total_u` operators are optimizations of the more general
 //! `distinct` and `distinct_u` operators for the case in which time is totally ordered.
 
-use std::default::Default;
-
 use timely::order::TotalOrder;
 use timely::dataflow::*;
 use timely::dataflow::operators::Unary;
@@ -42,7 +40,7 @@ pub trait DistinctTotal<G: Scope, K: Data, R: Diff> where G::Timestamp: TotalOrd
     fn distinct_total(&self) -> Collection<G, K, isize>;
 }
 
-impl<G: Scope, K: Data+Default+Hashable, R: Diff> DistinctTotal<G, K, R> for Collection<G, K, R>
+impl<G: Scope, K: Data+Hashable, R: Diff> DistinctTotal<G, K, R> for Collection<G, K, R>
 where G::Timestamp: TotalOrder+Lattice+Ord {
     fn distinct_total(&self) -> Collection<G, K, isize> {
         self.arrange_by_self()

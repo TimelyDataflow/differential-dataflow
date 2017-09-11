@@ -13,8 +13,6 @@
 //! This ordering can be exploited in several cases to avoid computation when only the first few
 //! elements are required.
 
-use std::default::Default;
-
 use timely::order::TotalOrder;
 use timely::dataflow::*;
 use timely::dataflow::operators::Unary;
@@ -52,7 +50,7 @@ pub trait CountTotal<G: Scope, K: Data, R: Diff> where G::Timestamp: TotalOrder+
     fn count_total(&self) -> Collection<G, (K, R), isize>;
 }
 
-impl<G: Scope, K: Data+Default+Hashable, R: Diff> CountTotal<G, K, R> for Collection<G, K, R>
+impl<G: Scope, K: Data+Hashable, R: Diff> CountTotal<G, K, R> for Collection<G, K, R>
 where G::Timestamp: TotalOrder+Lattice+Ord {
     fn count_total(&self) -> Collection<G, (K, R), isize> {
         self.arrange_by_self()

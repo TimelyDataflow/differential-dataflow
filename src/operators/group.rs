@@ -14,7 +14,6 @@
 //! elements are required.
 
 use std::fmt::Debug;
-use std::default::Default;
 
 use hashable::Hashable;
 use ::{Data, Collection, Diff};
@@ -65,8 +64,8 @@ pub trait Group<G: Scope, K: Data, V: Data, R: Diff> where G::Timestamp: Lattice
     where L: Fn(&K, &[(&V, R)], &mut Vec<(V2, R2)>)+'static;
 }
 
-impl<G: Scope, K: Data+Default+Hashable, V: Data, R: Diff> Group<G, K, V, R> for Collection<G, (K, V), R> 
-    where G::Timestamp: Lattice+Ord+Debug, <K as Hashable>::Output: Data+Default {
+impl<G: Scope, K: Data+Hashable, V: Data, R: Diff> Group<G, K, V, R> for Collection<G, (K, V), R>
+    where G::Timestamp: Lattice+Ord+Debug, <K as Hashable>::Output: Data {
     fn group<L, V2: Data, R2: Diff>(&self, logic: L) -> Collection<G, (K, V2), R2>
         where L: Fn(&K, &[(&V, R)], &mut Vec<(V2, R2)>)+'static {
         // self.arrange_by_key_hashed_cached()
@@ -101,7 +100,7 @@ pub trait Distinct<G: Scope, K: Data> where G::Timestamp: Lattice+Ord {
     fn distinct(&self) -> Collection<G, K, isize>;
 }
 
-impl<G: Scope, K: Data+Default+Hashable> Distinct<G, K> for Collection<G, K, isize> 
+impl<G: Scope, K: Data+Hashable> Distinct<G, K> for Collection<G, K, isize>
 where G::Timestamp: Lattice+Ord+::std::fmt::Debug {
     fn distinct(&self) -> Collection<G, K, isize> {
         self.arrange_by_self()
@@ -136,7 +135,7 @@ pub trait Count<G: Scope, K: Data, R: Diff> where G::Timestamp: Lattice+Ord {
     fn count(&self) -> Collection<G, (K, R), isize>;
 }
 
-impl<G: Scope, K: Data+Default+Hashable, R: Diff> Count<G, K, R> for Collection<G, K, R>
+impl<G: Scope, K: Data+Hashable, R: Diff> Count<G, K, R> for Collection<G, K, R>
  where G::Timestamp: Lattice+Ord+::std::fmt::Debug {
     fn count(&self) -> Collection<G, (K, R), isize> {
         self.arrange_by_self()

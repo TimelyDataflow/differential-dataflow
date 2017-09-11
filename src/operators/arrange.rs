@@ -572,7 +572,7 @@ where
 /// This arrangement requires `Key: Hashable`, and uses the `hashed()` method to place keys in a hashed
 /// map. This can result in many hash calls, and in some cases it may help to first transform `K` to the
 /// pair `(u64, K)` of hash value and key.
-pub trait ArrangeByKey<G: Scope, K: Data+Default+Hashable, V: Data, R: Diff>
+pub trait ArrangeByKey<G: Scope, K: Data+Hashable, V: Data, R: Diff>
 where G::Timestamp: Lattice+Ord {
     /// Arranges a collection of `(Key, Val)` records by `Key`.
     ///
@@ -582,7 +582,7 @@ where G::Timestamp: Lattice+Ord {
     fn arrange_by_key(&self) -> Arranged<G, K, V, R, TraceAgent<K, V, G::Timestamp, R, DefaultValTrace<K, V, G::Timestamp, R>>>;
 }
 
-impl<G: Scope, K: Data+Default+Hashable, V: Data, R: Diff> ArrangeByKey<G, K, V, R> for Collection<G, (K,V), R>
+impl<G: Scope, K: Data+Hashable, V: Data, R: Diff> ArrangeByKey<G, K, V, R> for Collection<G, (K,V), R>
 where G::Timestamp: Lattice+Ord {
     fn arrange_by_key(&self) -> Arranged<G, K, V, R, TraceAgent<K, V, G::Timestamp, R, DefaultValTrace<K, V, G::Timestamp, R>>> {
         self.arrange(DefaultValTrace::new())

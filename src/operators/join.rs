@@ -141,7 +141,7 @@ pub trait Join<G: Scope, K: Data, V: Data, R: Diff> {
 impl<G, K, V, R> Join<G, K, V, R> for Collection<G, (K, V), R>
 where
     G: Scope, 
-    K: Data+Default+Hashable, 
+    K: Data+Hashable,
     V: Data,
     R: Diff,
     G::Timestamp: Lattice+Ord,
@@ -227,8 +227,8 @@ pub trait JoinCore<G: Scope, K: 'static, V: 'static, R: Diff> where G::Timestamp
 
 impl<G, K, V, R> JoinCore<G, K, V, R> for Collection<G, (K, V), R>
 where
-    G: Scope, 
-    K: Data+Default+Hashable, 
+    G: Scope,
+    K: Data+Hashable,
     V: Data,
     R: Diff,
     G::Timestamp: Lattice+Ord,
