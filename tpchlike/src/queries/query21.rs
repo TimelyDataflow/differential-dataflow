@@ -3,7 +3,7 @@ use timely::dataflow::*;
 use timely::dataflow::operators::probe::Handle as ProbeHandle;
 
 use differential_dataflow::operators::*;
-use differential_dataflow::operators::distinct::DistinctTotal;
+use differential_dataflow::operators::ThresholdTotal;
 use differential_dataflow::lattice::Lattice;
 
 use ::Collections;
