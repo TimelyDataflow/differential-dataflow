@@ -3,11 +3,6 @@ use timely::dataflow::*;
 use timely::dataflow::operators::probe::Handle as ProbeHandle;
 
 use differential_dataflow::operators::*;
-use differential_dataflow::operators::arrange::Arrange;
-use differential_dataflow::operators::group::GroupArranged;
-use differential_dataflow::trace::Trace;
-use differential_dataflow::trace::implementations::ord::OrdKeySpine as DefaultKeyTrace;
-use differential_dataflow::trace::implementations::ord::OrdValSpine as DefaultValTrace;
 use differential_dataflow::lattice::Lattice;
 
 use ::Collections;

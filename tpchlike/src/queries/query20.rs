@@ -3,10 +3,8 @@ use timely::dataflow::*;
 use timely::dataflow::operators::probe::Handle as ProbeHandle;
 
 use differential_dataflow::operators::*;
-use differential_dataflow::operators::arrange::Arrange;
 use differential_dataflow::operators::group::GroupArranged;
 use differential_dataflow::trace::Trace;
-use differential_dataflow::trace::implementations::ord::OrdKeySpine as DefaultKeyTrace;
 use differential_dataflow::trace::implementations::ord::OrdValSpine as DefaultValTrace;
 use differential_dataflow::lattice::Lattice;
 
@@ -80,7 +78,6 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
         )
         .semijoin(&partkeys)
         .explode(|l| Some(((((l.0 as u64) << 32) + (l.1).0 as u64, ()), (l.1).1 as isize)))
-        .arrange(DefaultKeyTrace::new())
         .group_arranged(|_k,s,t| t.push((s[0].1, 1)), DefaultValTrace::new());
 
     let suppliers = 
@@ -89,7 +86,6 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
         .map(|ps| (ps.part_key, (ps.supp_key, ps.availqty)))
         .semijoin(&partkeys)
         .map(|(part_key, (supp_key, avail))| (((part_key as u64) << 32) + (supp_key as u64), avail))
-        .arrange(DefaultValTrace::new())
         .join_core(&available, |&key, &avail1, &avail2| {
             let key: u64 = key;
             let avail2: isize = avail2;

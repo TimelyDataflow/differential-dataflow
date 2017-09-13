@@ -4,13 +4,11 @@ use timely::dataflow::operators::probe::Handle as ProbeHandle;
 
 use differential_dataflow::operators::*;
 use differential_dataflow::difference::DiffPair;
-use differential_dataflow::operators::arrange::Arrange;
 use differential_dataflow::operators::group::GroupArranged;
 use differential_dataflow::operators::distinct::DistinctTotal;
 use differential_dataflow::lattice::Lattice;
 
 use differential_dataflow::trace::Trace;
-use differential_dataflow::trace::implementations::ord::OrdKeySpine as DefaultKeyTrace;
 use differential_dataflow::trace::implementations::ord::OrdValSpine as DefaultValTrace;
 
 use ::Collections;
@@ -83,14 +81,12 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
     let averages = 
     customers
         .explode(|(cc, acctbal, _)| Some(((cc, ()), DiffPair::new(acctbal as isize, 1))))
-        .arrange(DefaultKeyTrace::new())
         .group_arranged(|_k,s,t| t.push((s[0].1, 1)), DefaultValTrace::new());
 
     customers
         .map(|(cc, acct, key)| (key, (cc, acct)))
         .antijoin(&collections.orders().map(|o| o.cust_key).distinct_total())
         .map(|(_, (cc, acct))| (cc, acct as isize))
-        .arrange(DefaultValTrace::new())
         .join_core(&averages, |&cc, &acct, &pair| {
             let acct : isize = acct;
             let pair : DiffPair<isize, isize> = pair;

@@ -3,12 +3,9 @@ use timely::dataflow::*;
 use timely::dataflow::operators::probe::Handle as ProbeHandle;
 
 use differential_dataflow::operators::*;
-use differential_dataflow::operators::arrange::Arrange;
 use differential_dataflow::operators::group::GroupArranged;
 use differential_dataflow::trace::Trace;
 use differential_dataflow::trace::implementations::ord::OrdKeySpine as DefaultKeyTrace;
-use differential_dataflow::trace::implementations::ord::OrdValSpine as DefaultValTrace;
-use differential_dataflow::hashable::UnsignedWrapper;
 use differential_dataflow::lattice::Lattice;
 
 use ::Collections;
@@ -48,19 +45,17 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
     let lineitems = 
     collections
         .lineitems()
-        .flat_map(|l| if l.commit_date < l.receipt_date { Some((UnsignedWrapper::from(l.order_key), ())) } else { None })
-        .arrange(DefaultKeyTrace::new())
-        .group_arranged(|_k,_s,t| t.push(((), 1)), DefaultKeyTrace::new());
+        .flat_map(|l| if l.commit_date < l.receipt_date { Some((l.order_key, ())) } else { None })
+        .group_arranged(|_k,_s,t| t.push(((), 1)), DefaultKeyTrace::new()); // <-- Distinct
 
     collections
         .orders()
         .flat_map(|o| 
             if o.order_date >= ::types::create_date(1993, 7, 1) && o.order_date < ::types::create_date(1993, 10, 1) {
-                Some((UnsignedWrapper::from(o.order_key), o.order_priority))
+                Some((o.order_key, o.order_priority))
             }
             else { None }
         )
-        .arrange(DefaultValTrace::new())
         .join_core(&lineitems, |_k,v,_| Some(v.clone()))
         .count_total()
         .probe()
