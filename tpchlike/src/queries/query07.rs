@@ -74,22 +74,19 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
     collections
         .customers()
         .map(|c| (c.nation_key, c.cust_key))
-        .join(&nations)
-        .map(|(_nation_key, cust_key, name)| (cust_key, name));
+        .join_map(&nations, |_, &cust_key, &name| (cust_key, name));
 
     let orders = 
     collections
         .orders()
         .map(|o| (o.cust_key, o.order_key))
-        .join(&customers)
-        .map(|(_cust_key, order_key, name)| (order_key, name));
+        .join_map(&customers, |_, &order_key, &name| (order_key, name));
 
     let suppliers = 
     collections
         .suppliers()
         .map(|s| (s.nation_key, s.supp_key))
-        .join(&nations)
-        .map(|(_nation_key, supp_key, name)| (supp_key, name));
+        .join_map(&nations, |_, &supp_key, &name| (supp_key, name));
 
     collections
         .lineitems()
@@ -99,10 +96,8 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
             }
             else { None }
         )
-        .join(&suppliers)
-        .map(|(_supp_key, (order_key, ship_date), name_s)| (order_key, (ship_date, name_s)))
-        .join(&orders)
-        .map(|(_order_key, (ship_date, name_s), name_c)| (name_s, name_c, ship_date >> 16))
+        .join_map(&suppliers, |_, &(order_key, ship_date), &name_s| (order_key, (ship_date, name_s)))
+        .join_map(&orders, |_, &(ship_date, name_s), &name_c| (name_s, name_c, ship_date >> 16))
         .filter(|x| x.0 != x.1)
         .count_total()
         .probe()

@@ -3,6 +3,7 @@ use timely::dataflow::*;
 use timely::dataflow::operators::probe::Handle as ProbeHandle;
 
 use differential_dataflow::operators::*;
+use differential_dataflow::operators::arrange::{ArrangeBySelf, ArrangeByKey};
 use differential_dataflow::difference::DiffPair;
 use differential_dataflow::lattice::Lattice;
 
@@ -59,12 +60,13 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
         .orders()
         .explode(|o|
             if starts_with(&o.order_priority, b"1-URGENT") || starts_with(&o.order_priority, b"2-HIGH") {
-                Some(((o.order_key, ()), DiffPair::new(1, 0)))
+                Some((o.order_key, DiffPair::new(1, 0)))
             }
             else { 
-                Some(((o.order_key, ()), DiffPair::new(0, 1)))
+                Some((o.order_key, DiffPair::new(0, 1)))
             }
-        );
+        )
+        .arrange_by_self();
 
     let lineitems =
     collections
@@ -76,11 +78,11 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
                 Some((l.order_key, l.ship_mode))
             }
             else { None }
-        );
+        )
+        .arrange_by_key();
 
     orders
-        .join(&lineitems)
-        .map(|(_order, _, ship_mode)| ship_mode)
+        .join_core(&lineitems, |_, _, &ship_mode| Some(ship_mode))
         .count_total()
         .probe()
 }

@@ -3,6 +3,7 @@ use timely::dataflow::*;
 use timely::dataflow::operators::probe::Handle as ProbeHandle;
 
 use differential_dataflow::operators::*;
+use differential_dataflow::operators::arrange::ArrangeBySelf;
 use differential_dataflow::difference::DiffPair;
 use differential_dataflow::lattice::Lattice;
 
@@ -37,23 +38,22 @@ fn starts_with(source: &[u8], query: &[u8]) -> bool {
 pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp> 
 where G::Timestamp: Lattice+TotalOrder+Ord {
 
-    println!("TODO: Q14 adds a () value because there is no semijoin for value-free collections");
-
     let lineitems = 
     collections
         .lineitems()
         .explode(|l|
-            if create_date(1995,9,1) < l.ship_date && l.ship_date < create_date(1995,10,1) {
+            if create_date(1995,9,1) <= l.ship_date && l.ship_date < create_date(1995,10,1) {
                 Some((l.part_key, (l.extended_price * (100 - l.discount) / 100) as isize ))
             }
             else { None }            
-        );
+        )
+        .arrange_by_self();
 
     collections
         .parts()
-        .explode(|p| Some(((p.part_key, ()), DiffPair::new(1, if starts_with(&p.typ.as_bytes(), b"PROMO") { 1 } else { 0 }))))
-        .semijoin(&lineitems)
-        .map(|(part_key, _)| part_key)
+        .explode(|p| Some((p.part_key, DiffPair::new(1, if starts_with(&p.typ.as_bytes(), b"PROMO") { 1 } else { 0 }))))
+        .arrange_by_self()
+        .join_core(&lineitems, |&part_key, _, _| Some(part_key))
         .count_total()
         .probe()
 }

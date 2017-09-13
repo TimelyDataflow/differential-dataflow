@@ -3,6 +3,7 @@ use timely::dataflow::*;
 use timely::dataflow::operators::probe::Handle as ProbeHandle;
 
 use differential_dataflow::operators::*;
+use differential_dataflow::operators::arrange::ArrangeBySelf;
 use differential_dataflow::lattice::Lattice;
 
 use ::Collections;
@@ -58,8 +59,6 @@ fn starts_with(source: &[u8], query: &[u8]) -> bool {
 pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp> 
 where G::Timestamp: Lattice+TotalOrder+Ord {
 
-    println!("TODO: Q19 joins have spurious () value, because `intersect` doesn't exist");
-
     let lineitems =
     collections
         .lineitems()
@@ -70,24 +69,23 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
             else { None }
         );
 
-    let lines1 = lineitems.filter(|&(_, quant)| quant >= 1 && quant <= 11).map(|x| (x.0, ()));
-    let lines2 = lineitems.filter(|&(_, quant)| quant >= 10 && quant <= 20).map(|x| (x.0, ()));
-    let lines3 = lineitems.filter(|&(_, quant)| quant >= 20 && quant <= 30).map(|x| (x.0, ()));
+    let lines1 = lineitems.filter(|&(_, quant)| quant >= 1 && quant <= 11).map(|x| x.0).arrange_by_self();
+    let lines2 = lineitems.filter(|&(_, quant)| quant >= 10 && quant <= 20).map(|x| x.0).arrange_by_self();
+    let lines3 = lineitems.filter(|&(_, quant)| quant >= 20 && quant <= 30).map(|x| x.0).arrange_by_self();
 
     let parts = collections.parts().map(|p| (p.part_key, (p.brand, p.container, p.size)));
 
-    let parts1 = parts.filter(|&(_key, (brand, container, size))| starts_with(&brand, b"Brand#12") && 1 <= size && size <= 5 &&  (starts_with(&container, b"SM CASE") || starts_with(&container, b"SM BOX") || starts_with(&container, b"SM PACK") || starts_with(&container, b"MED PKG"))).map(|x| x.0);
-    let parts2 = parts.filter(|&(_key, (brand, container, size))| starts_with(&brand, b"Brand#23") && 1 <= size && size <= 10 && (starts_with(&container, b"MED BAG") || starts_with(&container, b"MED BOX") || starts_with(&container, b"MED PKG") || starts_with(&container, b"MED PACK"))).map(|x| x.0);
-    let parts3 = parts.filter(|&(_key, (brand, container, size))| starts_with(&brand, b"Brand#34") && 1 <= size && size <= 15 && (starts_with(&container, b"LG CASE") || starts_with(&container, b"LG BOX") || starts_with(&container, b"LG PACK") || starts_with(&container, b"LG PCG"))).map(|x| x.0);
+    let parts1 = parts.filter(|&(_key, (brand, container, size))| starts_with(&brand, b"Brand#12") && 1 <= size && size <= 5 &&  (starts_with(&container, b"SM CASE") || starts_with(&container, b"SM BOX") || starts_with(&container, b"SM PACK") || starts_with(&container, b"MED PKG"))).map(|x| x.0).arrange_by_self();
+    let parts2 = parts.filter(|&(_key, (brand, container, size))| starts_with(&brand, b"Brand#23") && 1 <= size && size <= 10 && (starts_with(&container, b"MED BAG") || starts_with(&container, b"MED BOX") || starts_with(&container, b"MED PKG") || starts_with(&container, b"MED PACK"))).map(|x| x.0).arrange_by_self();
+    let parts3 = parts.filter(|&(_key, (brand, container, size))| starts_with(&brand, b"Brand#34") && 1 <= size && size <= 15 && (starts_with(&container, b"LG CASE") || starts_with(&container, b"LG BOX") || starts_with(&container, b"LG PACK") || starts_with(&container, b"LG PCG"))).map(|x| x.0).arrange_by_self();
 
-    let result1 = lines1.semijoin(&parts1);
-    let result2 = lines2.semijoin(&parts2);
-    let result3 = lines3.semijoin(&parts3);
+    let result1 = lines1.join_core(&parts1, |&key,_,_| Some(key));
+    let result2 = lines2.join_core(&parts2, |&key,_,_| Some(key));
+    let result3 = lines3.join_core(&parts3, |&key,_,_| Some(key));
 
     result1
         .concat(&result2)
         .concat(&result3)
-        .map(|(x,_)| x)
         .count_total()
         .probe()
 }
