@@ -577,7 +577,6 @@ where
 mod history_replay {
 
     use std::fmt::Debug;
-    use std::cmp::Ordering;
 
     use ::Diff;
     use lattice::Lattice;
@@ -715,11 +714,11 @@ mod history_replay {
 
                 // Determine the next time we will process from the available source of times.
                 let mut next_time = T::maximum();
-                if let Some(time) = self.input_history.time() { if time < next_time { next_time = time.clone(); } }
-                if let Some(time) = self.output_history.time() { if time < next_time { next_time = time.clone(); } }
-                if let Some(time) = self.batch_history.time() { if time < next_time { next_time = time.clone(); } }
-                if let Some(time) = self.synth_times.first() { if time < next_time { next_time = time.clone(); } }
-                if let Some(time) = times_slice.first() { if time < next_time { next_time = time.clone(); } }
+                if let Some(time) = self.input_history.time() { if time < &next_time { next_time = time.clone(); } }
+                if let Some(time) = self.output_history.time() { if time < &next_time { next_time = time.clone(); } }
+                if let Some(time) = self.batch_history.time() { if time < &next_time { next_time = time.clone(); } }
+                if let Some(time) = self.synth_times.first() { if time < &next_time { next_time = time.clone(); } }
+                if let Some(time) = times_slice.first() { if time < &next_time { next_time = time.clone(); } }
                 assert!(next_time != T::maximum());
 
                 // advance input and output histories.
