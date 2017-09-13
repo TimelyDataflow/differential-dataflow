@@ -166,6 +166,35 @@ where
     }
 }
 
+impl<G, K, V, R, T> Join<G, K, V, R> for Arranged<G,K,V,R,T>
+    where
+        G: Scope,
+        G::Timestamp: Lattice+Ord+Debug,
+        K: Data+Hashable,
+        V: Data,
+        R: Diff,
+        T: TraceReader<K,V,G::Timestamp,R>+Clone+'static,
+        T::Batch: BatchReader<K,V,G::Timestamp,R>+'static+Debug {
+
+    fn join_map<V2: Data, R2: Diff, D: Data, L>(&self, other: &Collection<G, (K, V2), R2>, logic: L) -> Collection<G, D, <R as Mul<R2>>::Output>
+    where R: Mul<R2>, <R as Mul<R2>>::Output: Diff, L: Fn(&K, &V, &V2)->D+'static {
+        let arranged2 = other.arrange_by_key();
+        self.join_core(&arranged2, move |k,v1,v2| Some(logic(k,v1,v2)))
+    }
+
+    fn semijoin<R2: Diff>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), <R as Mul<R2>>::Output>
+    where R: Mul<R2>, <R as Mul<R2>>::Output: Diff {
+        let arranged2 = other.arrange_by_self();
+        self.join_core(&arranged2, |k,v,_| Some((k.clone(), v.clone())))
+    }
+
+    fn antijoin<R2: Diff>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), R>
+    where R: Mul<R2, Output=R> {
+        self.as_collection(|k,v| (k.clone(), v.clone()))
+            .concat(&self.semijoin(other).negate())
+    }
+}
+
 /// Matches the elements of two arranged traces.
 ///
 /// This method is used by the various `join` implementations, but it can also be used 

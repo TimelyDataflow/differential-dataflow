@@ -561,7 +561,7 @@ where
     R: Diff,
     T: Trace<K, V, G::Timestamp, R>+Clone+'static,
     T::Batch: Batch<K, V, G::Timestamp, R> 
- {
+{
     fn arrange(&self, _: T) -> Arranged<G, K, V, R, TraceAgent<K, V, G::Timestamp, R, T>> {
         (*self).clone()
     }

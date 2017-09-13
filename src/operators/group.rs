@@ -68,7 +68,6 @@ impl<G: Scope, K: Data+Hashable, V: Data, R: Diff> Group<G, K, V, R> for Collect
     where G::Timestamp: Lattice+Ord+Debug, <K as Hashable>::Output: Data {
     fn group<L, V2: Data, R2: Diff>(&self, logic: L) -> Collection<G, (K, V2), R2>
         where L: Fn(&K, &[(&V, R)], &mut Vec<(V2, R2)>)+'static {
-        // self.arrange_by_key_hashed_cached()
         self.arrange_by_key()
             .group_arranged(logic, DefaultValTrace::new())
             .as_collection(|k,v| (k.clone(), v.clone()))
@@ -187,6 +186,27 @@ pub trait GroupArranged<G: Scope, K: Data, V: Data, R: Diff> where G::Timestamp:
             T2::Batch: Batch<K, V2, G::Timestamp, R2>,
             L: Fn(&K, &[(&V, R)], &mut Vec<(V2, R2)>)+'static
             ; 
+}
+
+impl<G, K, V, R> GroupArranged<G, K, V, R> for Collection<G, (K, V), R>
+where
+    G: Scope,
+    G::Timestamp: Lattice+Ord,
+    K: Data+Hashable,
+    V: Data,
+    R: Diff,
+{
+    fn group_arranged<L, V2, T2, R2>(&self, logic: L, empty: T2) -> Arranged<G, K, V2, R2, TraceAgent<K, V2, G::Timestamp, R2, T2>>
+        where
+            V2: Data,
+            R2: Diff,
+            T2: Trace<K, V2, G::Timestamp, R2>+'static,
+            T2::Batch: Batch<K, V2, G::Timestamp, R2>,
+            L: Fn(&K, &[(&V, R)], &mut Vec<(V2, R2)>)+'static
+    {
+        self.arrange_by_key()
+            .group_arranged(logic, empty)
+    }
 }
 
 impl<G: Scope, K: Data, V: Data, T1, R: Diff> GroupArranged<G, K, V, R> for Arranged<G, K, V, R, T1>
@@ -695,11 +715,11 @@ mod history_replay {
 
                 // Determine the next time we will process from the available source of times.
                 let mut next_time = T::maximum();
-                if let Some(time) = self.input_history.time() { if time.cmp(&next_time) == Ordering::Less { next_time = time.clone(); } }
-                if let Some(time) = self.output_history.time() { if time.cmp(&next_time) == Ordering::Less { next_time = time.clone(); } }
-                if let Some(time) = self.batch_history.time() { if time.cmp(&next_time) == Ordering::Less { next_time = time.clone(); } }
-                if let Some(time) = self.synth_times.first() { if time.cmp(&next_time) == Ordering::Less { next_time = time.clone(); } }
-                if let Some(time) = times_slice.first() { if time.cmp(&next_time) == Ordering::Less { next_time = time.clone(); } }
+                if let Some(time) = self.input_history.time() { if time < next_time { next_time = time.clone(); } }
+                if let Some(time) = self.output_history.time() { if time < next_time { next_time = time.clone(); } }
+                if let Some(time) = self.batch_history.time() { if time < next_time { next_time = time.clone(); } }
+                if let Some(time) = self.synth_times.first() { if time < next_time { next_time = time.clone(); } }
+                if let Some(time) = times_slice.first() { if time < next_time { next_time = time.clone(); } }
                 assert!(next_time != T::maximum());
 
                 // advance input and output histories.
