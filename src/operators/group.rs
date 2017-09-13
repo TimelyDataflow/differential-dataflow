@@ -75,7 +75,32 @@ impl<G: Scope, K: Data+Hashable, V: Data, R: Diff> Group<G, K, V, R> for Collect
 }
 
 /// Extension trait for the `distinct` differential dataflow method.
-pub trait Distinct<G: Scope, K: Data> where G::Timestamp: Lattice+Ord {
+pub trait Threshold<G: Scope, K: Data, R1: Diff> where G::Timestamp: Lattice+Ord {
+    /// Transforms the multiplicity of records.
+    ///
+    /// The `threshold` function is obliged to map `R1::zero` to `R2::zero`, or at
+    /// least the computation may behave as if it does. Otherwise, the transformation
+    /// can be nearly arbitrary: the code does not assume any properties of `threshold`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// extern crate timely;
+    /// extern crate differential_dataflow;
+    ///
+    /// use differential_dataflow::input::Input;
+    /// use differential_dataflow::operators::Threshold;
+    ///
+    /// fn main() {
+    ///     ::timely::example(|scope| {
+    ///         // report at most one of each key.
+    ///         scope.new_collection_from(1 .. 10).1
+    ///              .map(|x| x / 3)
+    ///              .threshold(|c| c % 2);
+    ///     });
+    /// }
+    /// ```
+    fn threshold<R2: Diff, F: Fn(R1)->R2+'static>(&self, thresh: F) -> Collection<G, K, R2>;
     /// Reduces the collection to one occurrence of each distinct element.
     ///
     /// # Examples
@@ -85,7 +110,7 @@ pub trait Distinct<G: Scope, K: Data> where G::Timestamp: Lattice+Ord {
     /// extern crate differential_dataflow;
     ///
     /// use differential_dataflow::input::Input;
-    /// use differential_dataflow::operators::Distinct;
+    /// use differential_dataflow::operators::Threshold;
     ///
     /// fn main() {
     ///     ::timely::example(|scope| {
@@ -96,14 +121,16 @@ pub trait Distinct<G: Scope, K: Data> where G::Timestamp: Lattice+Ord {
     ///     });
     /// }
     /// ```
-    fn distinct(&self) -> Collection<G, K, isize>;
+    fn distinct(&self) -> Collection<G, K, isize> {
+        self.threshold(|c| if c.is_zero() { 0 } else { 1 })
+    }
 }
 
-impl<G: Scope, K: Data+Hashable> Distinct<G, K> for Collection<G, K, isize>
+impl<G: Scope, K: Data+Hashable, R1: Diff> Threshold<G, K, R1> for Collection<G, K, R1>
 where G::Timestamp: Lattice+Ord+::std::fmt::Debug {
-    fn distinct(&self) -> Collection<G, K, isize> {
+    fn threshold<R2: Diff, F: Fn(R1)->R2+'static>(&self, thresh: F) -> Collection<G, K, R2> {
         self.arrange_by_self()
-            .group_arranged(|_k,_s,t| t.push(((), 1)), DefaultKeyTrace::new())
+            .group_arranged(move |_k,s,t| t.push(((), thresh(s[0].1))), DefaultKeyTrace::new())
             .as_collection(|k,_| k.clone())
     }
 }
