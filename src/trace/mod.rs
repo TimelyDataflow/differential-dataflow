@@ -160,6 +160,8 @@ pub trait Batch<K, V, T, R> : BatchReader<K, V, T, R> where Self: ::std::marker:
 	type Batcher: Batcher<K, V, T, R, Self>;
 	/// A type used to assemble batches from ordered update sequences.
 	type Builder: Builder<K, V, T, R, Self>;
+	/// A type used to progressively merge batches.
+	type Merger: Merger<K, V, T, R, Self>;
 
 	/// Merges two consecutive batches.
 	///
@@ -167,6 +169,14 @@ pub trait Batch<K, V, T, R> : BatchReader<K, V, T, R> where Self: ::std::marker:
 	/// as the resulting batch does not have a contiguous description. If you would like to put an empty
 	/// interval between the two, you can create an empty interval and do two merges.
 	fn merge(&self, other: &Self) -> Self;
+
+	/// Initiates the merging of consecutive batches.
+	///
+	/// The result of this method can be exercised to eventually produce the same result
+	/// that a call to `self.merge(other)` would produce, but it can be done in a measured
+	/// fashion. This can help to avoid latency spikes where a large merge needs to happen.
+	fn begin_merge(&self, other: &Self) -> Self::Merger;
+
 	/// Advance times to `frontier` creating a new batch.
 	fn advance_ref(&self, frontier: &[T]) -> Self where K: Ord+Clone, V: Ord+Clone, T: Lattice+Ord+Clone, R: Diff {
 
@@ -230,6 +240,21 @@ pub trait Builder<K, V, T, R, Output: Batch<K, V, T, R>> {
 	}
 	/// Completes building and returns the batch.
 	fn done(self, lower: &[T], upper: &[T], since: &[T]) -> Output;
+}
+
+/// Represents a merge in progress.
+pub trait Merger<K, V, T, R, Output: Batch<K, V, T, R>> {
+	/// Perform some amount of work, decrementing `fuel`.
+	///
+	/// If `fuel` is non-zero after the call, the merging is complete and
+	/// one should call `done` to extract the merged results.
+	fn work(&mut self, fuel: &mut usize);
+	/// Extracts merged results.
+	///
+	/// This method should only be called after `work` has been called and
+	/// has not brought `fuel` to zero. Otherwise, the merge is still in 
+	/// progress.
+	fn done(self) -> Output;
 }
 
 /// Scans `vec[off..]` and consolidates differences of adjacent equivalent elements.

@@ -19,9 +19,7 @@ impl<K: Ord+Clone, R: Diff+Clone> Trie for OrderedLeaf<K, R> {
     fn keys(&self) -> usize { self.vals.len() }
     fn tuples(&self) -> usize { <OrderedLeaf<K, R> as Trie>::keys(&self) }
     fn cursor_from(&self, lower: usize, upper: usize) -> Self::Cursor { 
-        // println!("unordered: {} .. {}", lower, upper);
         OrderedLeafCursor {
-            // vals: owned_self.map(|x| &x.vals[..]),
             bounds: (lower, upper),
             pos: lower,
         }
@@ -105,7 +103,6 @@ impl<K: Ord+Clone, R: Diff+Clone> TupleBuilder for OrderedLeafBuilder<K, R> {
 /// This cursor does not support `seek`, though I'm not certain how to expose this.
 #[derive(Debug)]
 pub struct OrderedLeafCursor {
-    // vals: OwningRef<Rc<Erased>, [(K, R)]>,
     pos: usize,
     bounds: (usize, usize),
 }
