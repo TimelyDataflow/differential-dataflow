@@ -18,10 +18,13 @@ use trace::layers::Builder as TrieBuilder;
 use trace::layers::Cursor as TrieCursor;
 use trace::layers::ordered::{OrderedLayer, OrderedBuilder, OrderedCursor};
 use trace::layers::ordered_leaf::{OrderedLeaf, OrderedLeafBuilder};
-use trace::{Batch, BatchReader, Builder, Cursor};
+use trace::{Batch, BatchReader, Builder, Merger, Cursor};
 use trace::description::Description;
 
+use trace::layers::MergeBuilder;
+
 use super::spine::Spine;
+// use super::spine_fueled::Spine;
 use super::merge_batcher::MergeBatcher;
 
 /// A trace implementation using a spine of hash-map batches.
@@ -57,6 +60,7 @@ impl<K, V, T, R> Batch<K, V, T, R> for Rc<OrdValBatch<K, V, T, R>>
 where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Ord+Clone+::std::fmt::Debug+'static, R: Diff {
 	type Batcher = MergeBatcher<K, V, T, R, Self>;
 	type Builder = OrdValBuilder<K, V, T, R>;
+	type Merger = OrdValMerger<K, V, T, R>;
 	fn merge(&self, other: &Self) -> Self {
 
 		// Things are horribly wrong if this is not true.
@@ -74,6 +78,9 @@ where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Ord+Clone+::std::fm
 			layer: <OrderedLayer<K, OrderedLayer<V, OrderedLeaf<T, R>>> as Trie>::merge(&self.layer, &other.layer),  //self.layer.merge(&other.layer),
 			desc: Description::new(self.desc.lower(), other.desc.upper(), since),
 		})
+	}
+	fn begin_merge(&self, other: &Self) -> Self::Merger {
+		OrdValMerger::new(self, other)
 	}
 
 	fn advance_mut(&mut self, frontier: &[T]) where K: Ord+Clone, V: Ord+Clone, T: Lattice+Ord+Clone, R: Diff {
@@ -192,20 +199,98 @@ where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Ord+Clone+::std::fm
 			*self = self.advance_ref(frontier);
 		}
 	}
+}
 
+/// State for an in-progress merge.
+pub struct OrdValMerger<K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Ord+Clone+::std::fmt::Debug+'static, R: Diff> {
+	// first batch, and position therein.
+	batch1: Rc<OrdValBatch<K, V, T, R>>,
+	lower1: usize,
+	upper1: usize,
+	// second batch, and position therein.
+	batch2: Rc<OrdValBatch<K, V, T, R>>,
+	lower2: usize,
+	upper2: usize,
+	// result that we are currently assembling.
+	result: <OrderedLayer<K, OrderedLayer<V, OrderedLeaf<T, R>>> as Trie>::MergeBuilder,
+}
+
+impl<K, V, T, R> OrdValMerger<K, V, T, R>
+where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Ord+Clone+::std::fmt::Debug+'static, R: Diff {
+	fn new(batch1: &Rc<OrdValBatch<K, V, T, R>>, batch2: &Rc<OrdValBatch<K, V, T, R>>) -> Self {
+		OrdValMerger {
+			batch1: batch1.clone(),
+			lower1: 0,
+			upper1: batch1.layer.keys(),
+			batch2: batch2.clone(),
+			lower2: 0,
+			upper2: batch2.layer.keys(),
+			result: <<OrderedLayer<K, OrderedLayer<V, OrderedLeaf<T, R>>> as Trie>::MergeBuilder as MergeBuilder>::with_capacity(&batch1.layer, &batch2.layer),
+		}
+	}
+}
+
+impl<K, V, T, R> Merger<K, V, T, R, Rc<OrdValBatch<K, V, T, R>>> for OrdValMerger<K, V, T, R>
+where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Ord+Clone+::std::fmt::Debug+'static, R: Diff {
+	fn done(self) -> Rc<OrdValBatch<K, V, T, R>> {
+
+		assert!(self.lower1 == self.upper1);
+		assert!(self.lower2 == self.upper2);
+
+		// Things are horribly wrong if this is not true.
+		assert!(self.batch1.upper() == self.batch2.lower());
+
+		// one of self.desc.since or other.desc.since needs to be not behind the other...
+		let since = if self.batch1.description().since().iter().all(|t1| self.batch2.description().since().iter().any(|t2| t2.less_equal(t1))) {
+			self.batch2.description().since()
+		}
+		else {
+			self.batch1.description().since()
+		};
+
+		let result1 = self.result.done();
+		// let result2 = <OrderedLayer<K, OrderedLayer<V, OrderedLeaf<T, R>>> as Trie>::merge(&self.batch1.layer, &self.batch2.layer);
+		// assert!(result1 == result2);
+
+		Rc::new(OrdValBatch {
+			layer: result1,
+			desc: Description::new(self.batch1.lower(), self.batch2.upper(), since),
+		})
+	}
+	fn work(&mut self, fuel: &mut usize) {
+
+		let starting_updates = self.result.vals.vals.vals.len();
+		let mut effort = 0;
+
+		// while both mergees are still active
+		while self.lower1 < self.upper1 && self.lower2 < self.upper2 && effort < *fuel {
+			self.result.merge_step((&self.batch1.layer, &mut self.lower1, self.upper1), (&self.batch2.layer, &mut self.lower2, self.upper2));
+			effort = self.result.vals.vals.vals.len() - starting_updates;
+		}
+
+		if self.lower1 == self.upper1 || self.lower2 == self.upper2 {
+			// these are just copies, so let's bite the bullet and just do them.
+			if self.lower1 < self.upper1 { self.result.copy_range(&self.batch1.layer, self.lower1, self.upper1); self.lower1 = self.upper1; }
+			if self.lower2 < self.upper2 { self.result.copy_range(&self.batch2.layer, self.lower2, self.upper2); self.lower2 = self.upper2; }
+		}
+
+		effort = self.result.vals.vals.vals.len() - starting_updates;
+
+		if effort >= *fuel { *fuel = 0; }
+		else 			   { *fuel -= effort; }
+	}
 }
 
 /// A cursor for navigating a single layer.
 #[derive(Debug)]
 pub struct OrdValCursor<V: Ord+Clone, T: Lattice+Ord+Clone, R: Diff> {
-	// cursor: OrderedCursor<K, OrderedCursor<V, OrderedLeafCursor<T, R>>>,
 	cursor: OrderedCursor<OrderedLayer<V, OrderedLeaf<T, R>>>,
 }
 
 impl<K, V, T, R> Cursor<K, V, T, R> for OrdValCursor<V, T, R> 
 where K: Ord+Clone, V: Ord+Clone, T: Lattice+Ord+Clone, R: Diff {
 
-	type Storage = Rc<OrdValBatch<K, V, T, R>>;//OrderedLayer<K, OrderedLayer<V, OrderedLeaf<T, R>>>;
+	type Storage = Rc<OrdValBatch<K, V, T, R>>;
 
 	fn key<'a>(&self, storage: &'a Self::Storage) -> &'a K { &self.cursor.key(&storage.layer) }
 	fn val<'a>(&self, storage: &'a Self::Storage) -> &'a V { &self.cursor.child.key(&storage.layer.vals) }
@@ -242,7 +327,7 @@ where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Ord+Clone+::std::fm
 	}
 	fn with_capacity(cap: usize) -> Self { 
 		OrdValBuilder { 
-			builder: OrderedBuilder::<K, OrderedBuilder<V, OrderedLeafBuilder<T, R>>>::with_capacity(cap) 
+			builder: <OrderedBuilder<K, OrderedBuilder<V, OrderedLeafBuilder<T, R>>> as TupleBuilder>::with_capacity(cap)
 		} 
 	}
 
@@ -291,6 +376,7 @@ impl<K, T, R> Batch<K, (), T, R> for Rc<OrdKeyBatch<K, T, R>>
 where K: Ord+Clone+'static, T: Lattice+Ord+Clone+'static, R: Diff {
 	type Batcher = MergeBatcher<K, (), T, R, Self>;
 	type Builder = OrdKeyBuilder<K, T, R>;
+	type Merger = OrdKeyMerger<K, T, R>;
 	fn merge(&self, other: &Self) -> Self {
 
 		// Things are horribly wrong if this is not true.
@@ -308,6 +394,9 @@ where K: Ord+Clone+'static, T: Lattice+Ord+Clone+'static, R: Diff {
 			layer: <OrderedLayer<K, OrderedLeaf<T, R>> as Trie>::merge(&self.layer, &other.layer),
 			desc: Description::new(self.desc.lower(), other.desc.upper(), since),
 		})
+	}
+	fn begin_merge(&self, other: &Self) -> Self::Merger {
+		OrdKeyMerger::new(self, other)
 	}
 
 	// TODO: The following looks good to me, but causes a perf reduction in Eintopf when I uncomment it.
@@ -403,6 +492,87 @@ where K: Ord+Clone+'static, T: Lattice+Ord+Clone+'static, R: Diff {
 	}
 }
 
+/// State for an in-progress merge.
+pub struct OrdKeyMerger<K: Ord+Clone+'static, T: Lattice+Ord+Clone+'static, R: Diff> {
+	// first batch, and position therein.
+	batch1: Rc<OrdKeyBatch<K, T, R>>,
+	lower1: usize,
+	upper1: usize,
+	// second batch, and position therein.
+	batch2: Rc<OrdKeyBatch<K, T, R>>,
+	lower2: usize,
+	upper2: usize,
+	// result that we are currently assembling.
+	result: <OrderedLayer<K, OrderedLeaf<T, R>> as Trie>::MergeBuilder,
+}
+
+impl<K, T, R> OrdKeyMerger<K, T, R>
+where K: Ord+Clone+'static, T: Lattice+Ord+Clone+'static, R: Diff {
+	fn new(batch1: &Rc<OrdKeyBatch<K, T, R>>, batch2: &Rc<OrdKeyBatch<K, T, R>>) -> Self {
+		OrdKeyMerger {
+			batch1: batch1.clone(),
+			lower1: 0,
+			upper1: batch1.layer.keys(),
+			batch2: batch2.clone(),
+			lower2: 0,
+			upper2: batch2.layer.keys(),
+			result: <<OrderedLayer<K, OrderedLeaf<T, R>> as Trie>::MergeBuilder as MergeBuilder>::with_capacity(&batch1.layer, &batch2.layer),
+		}
+	}
+}
+
+impl<K, T, R> Merger<K, (), T, R, Rc<OrdKeyBatch<K, T, R>>> for OrdKeyMerger<K, T, R>
+where K: Ord+Clone+'static, T: Lattice+Ord+Clone+'static, R: Diff {
+	fn done(self) -> Rc<OrdKeyBatch<K, T, R>> {
+
+		assert!(self.lower1 == self.upper1);
+		assert!(self.lower2 == self.upper2);
+
+		// Things are horribly wrong if this is not true.
+		assert!(self.batch1.upper() == self.batch2.lower());
+
+		// one of self.desc.since or other.desc.since needs to be not behind the other...
+		let since = if self.batch1.description().since().iter().all(|t1| self.batch2.description().since().iter().any(|t2| t2.less_equal(t1))) {
+			self.batch2.description().since()
+		}
+		else {
+			self.batch1.description().since()
+		};
+
+		let result1 = self.result.done();
+		// let result2 = <OrderedLayer<K, OrderedLeaf<T, R>> as Trie>::merge(&self.batch1.layer, &self.batch2.layer);
+		// assert!(result1 == result2);
+
+		Rc::new(OrdKeyBatch {
+			layer: result1,
+			desc: Description::new(self.batch1.lower(), self.batch2.upper(), since),
+		})
+	}
+	fn work(&mut self, fuel: &mut usize) {
+
+		let starting_updates = self.result.vals.vals.len();
+		let mut effort = 0;
+
+		// while both mergees are still active
+		while self.lower1 < self.upper1 && self.lower2 < self.upper2 && effort < *fuel {
+			self.result.merge_step((&self.batch1.layer, &mut self.lower1, self.upper1), (&self.batch2.layer, &mut self.lower2, self.upper2));
+			effort = self.result.vals.vals.len() - starting_updates;
+		}
+
+		if self.lower1 == self.upper1 || self.lower2 == self.upper2 {
+			// these are just copies, so let's bite the bullet and just do them.
+			if self.lower1 < self.upper1 { self.result.copy_range(&self.batch1.layer, self.lower1, self.upper1); self.lower1 = self.upper1; }
+			if self.lower2 < self.upper2 { self.result.copy_range(&self.batch2.layer, self.lower2, self.upper2); self.lower2 = self.upper2; }
+		}
+
+		effort = self.result.vals.vals.len() - starting_updates;
+
+		if effort >= *fuel { *fuel = 0; }
+		else 			   { *fuel -= effort; }
+	}
+}
+
+
 /// A cursor for navigating a single layer.
 #[derive(Debug)]
 pub struct OrdKeyCursor<T: Lattice+Ord+Clone, R: Diff> {
@@ -413,7 +583,7 @@ pub struct OrdKeyCursor<T: Lattice+Ord+Clone, R: Diff> {
 
 impl<K: Ord+Clone, T: Lattice+Ord+Clone, R: Diff> Cursor<K, (), T, R> for OrdKeyCursor<T, R> {
 
-	type Storage = Rc<OrdKeyBatch<K, T, R>>; // OrderedLayer<K, OrderedLeaf<T, R>>;
+	type Storage = Rc<OrdKeyBatch<K, T, R>>;
 
 	fn key<'a>(&self, storage: &'a Self::Storage) -> &'a K { &self.cursor.key(&storage.layer) }
 	fn val<'a>(&self, _storage: &'a Self::Storage) -> &'a () { unsafe { ::std::mem::transmute(&self.empty) } }
@@ -451,7 +621,7 @@ where K: Ord+Clone+'static, T: Lattice+Ord+Clone+'static, R: Diff {
 
 	fn with_capacity(cap: usize) -> Self {
 		OrdKeyBuilder { 
-			builder: OrderedBuilder::<K, OrderedLeafBuilder<T, R>>::with_capacity(cap) 
+			builder: <OrderedBuilder<K, OrderedLeafBuilder<T, R>> as TupleBuilder>::with_capacity(cap)
 		} 
 	}
 
