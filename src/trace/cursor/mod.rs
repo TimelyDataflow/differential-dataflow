@@ -28,6 +28,16 @@ pub trait Cursor<K, V, T, R> {
 	fn key<'a>(&self, storage: &'a Self::Storage) -> &'a K;
 	/// A reference to the current value. Asserts if invalid.
 	fn val<'a>(&self, storage: &'a Self::Storage) -> &'a V;
+
+	/// Returns a reference to the current key, if valid.
+	fn get_key<'a>(&self, storage: &'a Self::Storage) -> Option<&'a K> {
+		if self.key_valid(storage) { Some(self.key(storage)) } else { None }
+	}
+	/// Returns a reference to the current value, if valid.
+	fn get_val<'a>(&self, storage: &'a Self::Storage) -> Option<&'a V> {
+		if self.val_valid(storage) { Some(self.val(storage)) } else { None }
+	}
+
 	/// Applies `logic` to each pair of time and difference. Intended for mutation of the
 	/// closure's scope.
 	fn map_times<L: FnMut(&T, R)>(&mut self, storage: &Self::Storage, logic: L);
