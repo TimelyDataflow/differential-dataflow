@@ -735,18 +735,12 @@ mod history_replay {
             let mut output_counter = 0;
 
             // We play history forward, continuing as long as we have any outstanding times.
-
-            while !self.input_history.is_done() || !self.output_history.is_done() || 
-                  !self.batch_history.is_done() || self.synth_times.len() > 0 || times_slice.len() > 0 {
-
-                // Determine the next time we will process from the available source of times.
-                let mut next_time = T::maximum();
-                if let Some(time) = self.input_history.time() { if time < &next_time { next_time = time.clone(); } }
-                if let Some(time) = self.output_history.time() { if time < &next_time { next_time = time.clone(); } }
-                if let Some(time) = self.batch_history.time() { if time < &next_time { next_time = time.clone(); } }
-                if let Some(time) = self.synth_times.first() { if time < &next_time { next_time = time.clone(); } }
-                if let Some(time) = times_slice.first() { if time < &next_time { next_time = time.clone(); } }
-                assert!(next_time != T::maximum());
+            while let Some(next_time) = [   self.input_history.time(),
+                                            self.output_history.time(),
+                                            self.batch_history.time(),
+                                            self.synth_times.last(),
+                                            times_slice.first(),
+                                        ].iter().cloned().filter_map(|t| t).min().map(|t| t.clone()) {
 
                 // advance input and output histories.
                 self.input_history.step_while_time_is(&next_time);
@@ -763,7 +757,7 @@ mod history_replay {
                     self.times_current.push(self.synth_times.pop().unwrap()); // <-- TODO: this could be a min-heap.
                     interesting = true;
                 }
-                while times_slice.len() > 0 && times_slice[0] == next_time {
+                while times_slice.first() == Some(&next_time) {
                     // We know nothing about why we were warned about `next_time`, and must include it to scare future times.
                     self.times_current.push(times_slice[0].clone());
                     times_slice = &times_slice[1..];
