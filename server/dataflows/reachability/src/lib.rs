@@ -2,7 +2,7 @@ extern crate differential_dataflow;
 extern crate dd_server;
 
 use differential_dataflow::input::Input;
-use differential_dataflow::operators::{Iterate, JoinCore, Distinct};
+use differential_dataflow::operators::{Iterate, JoinCore, Threshold};
 use differential_dataflow::operators::arrange::ArrangeBySelf;
 
 use dd_server::{Environment, TraceHandle};

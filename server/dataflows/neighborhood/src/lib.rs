@@ -4,7 +4,6 @@ extern crate dd_server;
 use differential_dataflow::input::Input;
 use differential_dataflow::operators::JoinCore;
 use differential_dataflow::operators::Consolidate;
-use differential_dataflow::operators::arrange::ArrangeByKey;
 
 use dd_server::{Environment, TraceHandle};
 
@@ -24,9 +23,9 @@ pub fn build((dataflow, handles, probe, args): Environment) -> Result<(), String
 
     query
         .map(|x| (x, x))
-        .arrange_by_key().join_core(&edges, |_n, &q, &d| Some((d, q)))
-        .arrange_by_key().join_core(&edges, |_n, &q, &d| Some((d, q)))
-        .arrange_by_key().join_core(&edges, |_n, &q, &d| Some((d, q)))
+        .join_core(&edges, |_n, &q, &d| Some((d, q)))
+        .join_core(&edges, |_n, &q, &d| Some((d, q)))
+        .join_core(&edges, |_n, &q, &d| Some((d, q)))
         .map(|x| x.1)
         .consolidate()
         .inspect(move |x| println!("{:?}:\t{:?}", timer.elapsed(), x))
