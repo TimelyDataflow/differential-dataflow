@@ -80,13 +80,13 @@ where G::Timestamp: Lattice+Hash+Ord {
                              });
 
     // select tuples with the first relation minimizing the proposals, join, then intersect.
-    let winners1 = winners.flat_map(|((src, dst), index)| if index == 1 { Some((src,dst)) } else { None })
+    let winners1 = winners.flat_map(|((src, dst), index)| if index == 1 { Some((src, dst)) } else { None })
                           .join_core(&forward, |&src, &dst, &ext| Some(((dst, ext), src)))
                           .join_core(&as_self, |&(dst, ext), &src, &()| Some(((dst, ext), src)))
                           .map(|((dst, ext), src)| (src, dst, ext));
 
     // select tuples with the second relation minimizing the proposals, join, then intersect.
-    let winners2 = winners.flat_map(|((src, dst), index)| if index == 2 { Some((dst,src)) } else { None })
+    let winners2 = winners.flat_map(|((src, dst), index)| if index == 2 { Some((dst, src)) } else { None })
                           .join_core(&forward, |&dst, &src, &ext| Some(((src, ext), dst)))
                           .join_core(&as_self, |&(src, ext), &dst, &()| Some(((src, ext), dst)))
                           .map(|((src, ext), dst)| (src, dst, ext));
