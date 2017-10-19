@@ -608,7 +608,7 @@ mod history_replay {
     use ::Diff;
     use lattice::Lattice;
     use trace::Cursor;
-    use operators::ValueHistory2;
+    use operators::ValueHistory;
 
     use super::{PerKeyCompute, consolidate, sort_dedup};
 
@@ -622,9 +622,9 @@ mod history_replay {
         R1: Diff,
         R2: Diff,
     {
-        batch_history: ValueHistory2<'a, V1, T, R1>,
-        input_history: ValueHistory2<'a, V1, T, R1>,
-        output_history: ValueHistory2<'a, V2, T, R2>,
+        batch_history: ValueHistory<'a, V1, T, R1>,
+        input_history: ValueHistory<'a, V1, T, R1>,
+        output_history: ValueHistory<'a, V2, T, R2>,
         input_buffer: Vec<(&'a V1, R1)>,
         output_buffer: Vec<(V2, R2)>,
         output_produced: Vec<((V2, T), R2)>,
@@ -644,9 +644,9 @@ mod history_replay {
     {
         fn new() -> Self {
             HistoryReplayer { 
-                batch_history: ValueHistory2::new(),
-                input_history: ValueHistory2::new(),
-                output_history: ValueHistory2::new(),
+                batch_history: ValueHistory::new(),
+                input_history: ValueHistory::new(),
+                output_history: ValueHistory::new(),
                 input_buffer: Vec::new(),
                 output_buffer: Vec::new(),
                 output_produced: Vec::new(),
@@ -683,9 +683,10 @@ mod history_replay {
 
             // Load the batch contents.
             self.batch_history.clear(); 
-            if batch_cursor.key_valid(batch_storage) && batch_cursor.key(batch_storage) == key {
+            if batch_cursor.get_key(batch_storage) == Some(key) {
                 self.batch_history.load(batch_cursor, batch_storage, |time| time.clone());
             }
+            let mut batch_replay = self.batch_history.replay();
 
             // We determine the meet of times we must reconsider (those from `batch` and `times`). This meet
             // can be used to advance other historical times, which may consolidate their representation. As
@@ -701,7 +702,7 @@ mod history_replay {
             // Determine the meet of times in `batch` and `times`.
             let mut meet = T::maximum();
             if self.meets.len() > 0 { meet = meet.meet(&self.meets[0]); }
-            if let Some(time) = self.batch_history.meet() { meet = meet.meet(&time); }
+            if let Some(time) = batch_replay.meet() { meet = meet.meet(&time); }
 
             // Having determined the meet, we can load the input and output histories, where we 
             // advance all times by joining them with `meet`. The resulting times are more compact
@@ -710,16 +711,18 @@ mod history_replay {
             // Load the input history.
             self.input_history.clear(); 
             source_cursor.seek_key(source_storage, key);
-            if source_cursor.key_valid(source_storage) && source_cursor.key(source_storage) == key {
+            if source_cursor.get_key(source_storage) == Some(key) {
                 self.input_history.load(source_cursor, source_storage, |time| time.join(&meet));
             }
+            let mut input_replay = self.input_history.replay();
 
             // Load the output history.
             self.output_history.clear();
             output_cursor.seek_key(output_storage, key);
-            if output_cursor.key_valid(output_storage) && output_cursor.key(output_storage) == key {
+            if output_cursor.get_key(output_storage) == Some(key) {
                self.output_history.load(output_cursor, output_storage, |time| time.join(&meet));
             }
+            let mut output_replay = self.output_history.replay();
 
             self.synth_times.clear();
             self.times_current.clear();
@@ -735,20 +738,20 @@ mod history_replay {
             let mut output_counter = 0;
 
             // We play history forward, continuing as long as we have any outstanding times.
-            while let Some(next_time) = [   self.input_history.time(),
-                                            self.output_history.time(),
-                                            self.batch_history.time(),
+            while let Some(next_time) = [   input_replay.time(),
+                                            output_replay.time(),
+                                            batch_replay.time(),
                                             self.synth_times.last(),
                                             times_slice.first(),
                                         ].iter().cloned().filter_map(|t| t).min().map(|t| t.clone()) {
 
                 // advance input and output histories.
-                self.input_history.step_while_time_is(&next_time);
-                self.output_history.step_while_time_is(&next_time);
+                input_replay.step_while_time_is(&next_time);
+                output_replay.step_while_time_is(&next_time);
 
                 // advance batch history, but capture whether an update exists at `next_time`.
-                let mut interesting = self.batch_history.step_while_time_is(&next_time);
-                if interesting { self.batch_history.advance_buffer_by(&meet); }
+                let mut interesting = batch_replay.step_while_time_is(&next_time);
+                if interesting { batch_replay.advance_buffer_by(&meet); }
 
                 // advance both `synth_times` and `times_slice`, marking the time interesting if in either.
                 while self.synth_times.last() == Some(&next_time) {
@@ -770,7 +773,7 @@ mod history_replay {
                 // are tracking may not have advanced far enough.
                 // TODO: `batch_history` may or may not be super compact at this point, and so this check might 
                 //       yield false positives if not sufficiently compact. Maybe we should into this and see.
-                interesting = interesting || self.batch_history.buffer.iter().any(|&((_, ref t),_)| t.less_equal(&next_time));
+                interesting = interesting || batch_replay.buffer().iter().any(|&((_, ref t),_)| t.less_equal(&next_time));
                 interesting = interesting || self.times_current.iter().any(|t| t.less_equal(&next_time));
 
                 // We should only process times that are not in advance of `upper_limit`. 
@@ -789,8 +792,8 @@ mod history_replay {
 
                         // Assemble the input collection at `next_time`. (`self.input_buffer` cleared just after use).
                         debug_assert!(self.input_buffer.is_empty());
-                        self.input_history.advance_buffer_by(&meet);
-                        for &((value, ref time), diff) in self.input_history.buffer.iter() {
+                        input_replay.advance_buffer_by(&meet);
+                        for &((value, ref time), diff) in input_replay.buffer().iter() {
                             if time.less_equal(&next_time) {
                                 self.input_buffer.push((value, diff));
                             }
@@ -798,7 +801,7 @@ mod history_replay {
                                 self.temporary.push(next_time.join(time));
                             }
                         }
-                        for &((value, ref time), diff) in self.batch_history.buffer.iter() {
+                        for &((value, ref time), diff) in batch_replay.buffer().iter() {
                             if time.less_equal(&next_time) {
                                 self.input_buffer.push((value, diff));
                             }
@@ -814,8 +817,8 @@ mod history_replay {
                             self.input_buffer.clear();
                         }            
 
-                        self.output_history.advance_buffer_by(&meet);
-                        for &((ref value, ref time), diff) in self.output_history.buffer.iter() {
+                        output_replay.advance_buffer_by(&meet);
+                        for &((ref value, ref time), diff) in output_replay.buffer().iter() {
                             if time.less_equal(&next_time) {
                                 self.output_buffer.push(((*value).clone(), -diff));
                             }
@@ -876,7 +879,7 @@ mod history_replay {
 
                     // Any time, even uninteresting times, must be joined with the current accumulation of 
                     // batch times as well as the current accumulation of `times_current`.
-                    for &((_, ref time), _) in self.batch_history.buffer.iter() {
+                    for &((_, ref time), _) in batch_replay.buffer().iter() {
                         if !time.less_equal(&next_time) {
                             self.temporary.push(time.join(&next_time));
                         }
@@ -921,9 +924,9 @@ mod history_replay {
 
                 // Update `meet` to track the meet of each source of times.
                 meet = T::maximum();
-                if let Some(time) = self.batch_history.meet() { meet = meet.meet(time); }
-                if let Some(time) = self.input_history.meet() { meet = meet.meet(time); }
-                if let Some(time) = self.output_history.meet() { meet = meet.meet(time); }
+                if let Some(time) = batch_replay.meet() { meet = meet.meet(time); }
+                if let Some(time) = input_replay.meet() { meet = meet.meet(time); }
+                if let Some(time) = output_replay.meet() { meet = meet.meet(time); }
                 for time in self.synth_times.iter() { meet = meet.meet(time); }
                 if let Some(time) = meets_slice.first() { meet = meet.meet(time); }
 

@@ -24,19 +24,6 @@ use ::Diff;
 use lattice::Lattice;
 use trace::{Cursor, consolidate};
 
-/// Some types used to sit in front of a Cursor<K, V, T, R> titrated through a frontier, allowing compaction of times.
-///
-/// The `EditList` type is where we accept updates from the cursor, and which in a future world might hold a copy of 
-/// the cursor so that it can lazily populate its updates. The edit list only collects updates and accumulates them, 
-/// which can involve some sorting of times to collapse them down. The list can be used immediately if there are not
-/// all that many updates, or it can be wrapped in a `ValueHistory`
-///
-/// The `ValueHistory` type wraps an edit list, and presents a time-ordered view of the edits which supports accepting
-/// updates from the edit list into a running accumulation, and compacting the accumulation with frontier information.
-/// The value history also exposes the running frontier information for remaining times in the history, but do note
-/// that this is not the frontier used for compacting the trace; this is supplied by the user, as the distinction is 
-/// important in something like `join`.
-
 /// An accumulation of (value, time, diff) updates.
 struct EditList<'a, V: 'a, T, R> {
     values: Vec<(&'a V, usize)>,
@@ -95,7 +82,7 @@ impl<'a, V:'a, T, R> EditList<'a, V, T, R> where T: Ord+Clone, R: Diff {
     }
 }
 
-struct ValueHistory2<'a, V: 'a, T, R> {
+struct ValueHistory<'a, V: 'a, T, R> {
 
     edits: EditList<'a, V, T, R>,
     history: Vec<(T, T, usize, usize)>,        // (time, meet, value_index, edit_offset)
@@ -103,9 +90,9 @@ struct ValueHistory2<'a, V: 'a, T, R> {
     buffer: Vec<((&'a V, T), R)>,               // where we accumulate / collapse updates.
 }
 
-impl<'a, V: Ord+Clone+'a, T: Lattice+Ord+Clone, R: Diff> ValueHistory2<'a, V, T, R> {
+impl<'a, V: Ord+Clone+'a, T: Lattice+Ord+Clone, R: Diff> ValueHistory<'a, V, T, R> {
     fn new() -> Self {
-        ValueHistory2 {
+        ValueHistory {
             edits: EditList::new(), // empty; will swap out for real list later
             history: Vec::new(),
             buffer: Vec::new(),
@@ -119,10 +106,10 @@ impl<'a, V: Ord+Clone+'a, T: Lattice+Ord+Clone, R: Diff> ValueHistory2<'a, V, T,
     fn load<K, C, L>(&mut self, cursor: &mut C, storage: &'a C::Storage, logic: L)
     where K: Eq, C: Cursor<K, V, T, R>, L: Fn(&T)->T { 
         self.edits.load(cursor, storage, logic);
-        self.order();
+        // self.order();
     }
     /// Organizes history based on current contents of edits.
-    fn order(&mut self) {
+    fn replay<'history>(&'history mut self) -> HistoryReplay<'a, 'history, V, T, R> {
 
         self.buffer.clear();
         self.history.clear();
@@ -141,16 +128,43 @@ impl<'a, V: Ord+Clone+'a, T: Lattice+Ord+Clone, R: Diff> ValueHistory2<'a, V, T,
         for index in 1 .. self.history.len() {
             self.history[index].1 = self.history[index].1.meet(&self.history[index-1].1);
         }
+
+        HistoryReplay {
+            replay: self
+        }
     }
-    fn time(&self) -> Option<&T> { self.history.last().map(|x| &x.0) }
-    fn meet(&self) -> Option<&T> { self.history.last().map(|x| &x.1) }
+}
+
+struct HistoryReplay<'storage, 'history, V, T, R>
+where
+    'storage: 'history,
+    V: Ord+'storage,
+    T: Lattice+Ord+Clone+'history,
+    R: Diff+'history,
+{
+    replay: &'history mut ValueHistory<'storage, V, T, R>
+}
+
+impl<'storage, 'history, V, T, R> HistoryReplay<'storage, 'history, V, T, R>
+where
+    'storage: 'history,
+    V: Ord+'storage,
+    T: Lattice+Ord+Clone+'history,
+    R: Diff+'history,
+{
+    fn time(&self) -> Option<&T> { self.replay.history.last().map(|x| &x.0) }
+    fn meet(&self) -> Option<&T> { self.replay.history.last().map(|x| &x.1) }
     fn edit(&self) -> Option<(&V, &T, R)> { 
-        self.history.last().map(|&(ref t, _, v, e)| (self.edits.values[v].0, t, self.edits.edits[e].1))
+        self.replay.history.last().map(|&(ref t, _, v, e)| (self.replay.edits.values[v].0, t, self.replay.edits.edits[e].1))
+    }
+
+    fn buffer(&self) -> &[((&'storage V, T), R)] {
+        &self.replay.buffer[..]
     }
 
     fn step(&mut self) {
-        let (time, _, value_index, edit_offset) = self.history.pop().unwrap();
-        self.buffer.push(((self.edits.values[value_index].0, time), self.edits.edits[edit_offset].1));
+        let (time, _, value_index, edit_offset) = self.replay.history.pop().unwrap();
+        self.replay.buffer.push(((self.replay.edits.values[value_index].0, time), self.replay.edits.edits[edit_offset].1));
     }
     fn step_while_time_is(&mut self, time: &T) -> bool {
         let mut found = false;
@@ -161,19 +175,23 @@ impl<'a, V: Ord+Clone+'a, T: Lattice+Ord+Clone, R: Diff> ValueHistory2<'a, V, T,
         found
     }
     fn advance_buffer_by(&mut self, meet: &T) {
-        for element in self.buffer.iter_mut() {
+        for element in self.replay.buffer.iter_mut() {
             (element.0).1 = (element.0).1.join(meet);
         }
-        consolidate(&mut self.buffer, 0);
+        consolidate(&mut self.replay.buffer, 0);
     }
-    fn is_done(&self) -> bool { self.history.len() == 0 }
+    fn is_done(&self) -> bool { self.replay.history.len() == 0 }
 
     fn _print(&self) where V: ::std::fmt::Debug, T: ::std::fmt::Debug, R: ::std::fmt::Debug {
-        for value_index in 0 .. self.edits.values.len() {
-            let lower = if value_index > 0 { self.edits.values[value_index-1].1 } else { 0 };
-            let upper = self.edits.values[value_index].1;
+        for value_index in 0 .. self.replay.edits.values.len() {
+            let lower = if value_index > 0 { self.replay.edits.values[value_index-1].1 } else { 0 };
+            let upper = self.replay.edits.values[value_index].1;
             for edit_index in lower .. upper {
-                println!("{:?}, {:?}, {:?}", self.edits.values[value_index].0, self.edits.edits[edit_index].0, self.edits.edits[edit_index].1);
+                println!("{:?}, {:?}, {:?}", 
+                    self.replay.edits.values[value_index].0, 
+                    self.replay.edits.edits[edit_index].0, 
+                    self.replay.edits.edits[edit_index].1
+                );
             }
         }
     }

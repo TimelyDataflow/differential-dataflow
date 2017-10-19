@@ -19,7 +19,7 @@ use ::{Data, Diff, Collection, AsCollection};
 use lattice::Lattice;
 use operators::arrange::{Arranged, ArrangeByKey, ArrangeBySelf};
 use trace::{BatchReader, Cursor, consolidate};
-use operators::ValueHistory2;
+use operators::ValueHistory;
 
 use trace::TraceReader;
 
@@ -519,8 +519,8 @@ where
 }
 
 struct JoinThinker<'a, V1: Ord+Clone+'a, V2: Ord+Clone+'a, T: Lattice+Ord+Clone, R1: Diff, R2: Diff> {
-    pub history1: ValueHistory2<'a, V1, T, R1>,
-    pub history2: ValueHistory2<'a, V2, T, R2>,
+    pub history1: ValueHistory<'a, V1, T, R1>,
+    pub history2: ValueHistory<'a, V2, T, R2>,
 }
 
 impl<'a, V1: Ord+Clone, V2: Ord+Clone, T: Lattice+Ord+Clone, R1: Diff, R2: Diff> JoinThinker<'a, V1, V2, T, R1, R2> 
@@ -528,8 +528,8 @@ where V1: Debug, V2: Debug, T: Debug
 {
     fn new() -> Self {
         JoinThinker {
-            history1: ValueHistory2::new(),
-            history2: ValueHistory2::new(),
+            history1: ValueHistory::new(),
+            history2: ValueHistory::new(),
         }
     }
 
@@ -545,8 +545,8 @@ where V1: Debug, V2: Debug, T: Debug
         }
         else {
 
-            self.history1.order();
-            self.history2.order();
+            let mut replay1 = self.history1.replay();
+            let mut replay2 = self.history2.replay();
 
             // TODO: It seems like there is probably a good deal of redundant `advance_buffer_by`
             //       in here. If a time is ever repeated, for example, the call will be identical
@@ -554,41 +554,41 @@ where V1: Debug, V2: Debug, T: Debug
             //       be worth the time to collapse (advance, re-sort) the data when a linear scan
             //       is sufficient.
 
-            while !self.history1.is_done() && !self.history2.is_done() {
+            while !replay1.is_done() && !replay2.is_done() {
 
-                if self.history1.time().unwrap().cmp(&self.history2.time().unwrap()) == ::std::cmp::Ordering::Less {
-                    self.history2.advance_buffer_by(self.history1.meet().unwrap());
-                    for &((ref val2, ref time2), ref diff2) in &self.history2.buffer {
-                        let (val1, time1, ref diff1) = self.history1.edit().unwrap();
+                if replay1.time().unwrap().cmp(&replay2.time().unwrap()) == ::std::cmp::Ordering::Less {
+                    replay2.advance_buffer_by(replay1.meet().unwrap());
+                    for &((ref val2, ref time2), ref diff2) in replay2.buffer().iter() {
+                        let (val1, time1, ref diff1) = replay1.edit().unwrap();
                         results(val1, val2, time1.join(time2), diff1, diff2);
                     }
-                    self.history1.step();
+                    replay1.step();
                 }
                 else {
-                    self.history1.advance_buffer_by(self.history2.meet().unwrap());
-                    for &((ref val1, ref time1), ref diff1) in &self.history1.buffer {
-                        let (val2, time2, ref diff2) = self.history2.edit().unwrap();
+                    replay1.advance_buffer_by(replay2.meet().unwrap());
+                    for &((ref val1, ref time1), ref diff1) in replay1.buffer().iter() {
+                        let (val2, time2, ref diff2) = replay2.edit().unwrap();
                         results(val1, val2, time1.join(time2), diff1, diff2);
                     }
-                    self.history2.step();
+                    replay2.step();
                 }
             }
 
-            while !self.history1.is_done() {
-                self.history2.advance_buffer_by(self.history1.meet().unwrap());
-                for &((ref val2, ref time2), ref diff2) in &self.history2.buffer {
-                    let (val1, time1, ref diff1) = self.history1.edit().unwrap();
+            while !replay1.is_done() {
+                replay2.advance_buffer_by(replay1.meet().unwrap());
+                for &((ref val2, ref time2), ref diff2) in replay2.buffer().iter() {
+                    let (val1, time1, ref diff1) = replay1.edit().unwrap();
                     results(val1, val2, time1.join(time2), diff1, diff2);
                 }
-                self.history1.step();                
+                replay1.step();                
             }
-            while !self.history2.is_done() {
-                self.history1.advance_buffer_by(self.history2.meet().unwrap());
-                for &((ref val1, ref time1), ref diff1) in &self.history1.buffer {
-                    let (val2, time2, ref diff2) = self.history2.edit().unwrap();
+            while !replay2.is_done() {
+                replay1.advance_buffer_by(replay2.meet().unwrap());
+                for &((ref val1, ref time1), ref diff1) in replay1.buffer().iter() {
+                    let (val2, time2, ref diff2) = replay2.edit().unwrap();
                     results(val1, val2, time1.join(time2), diff1, diff2);
                 }
-                self.history2.step();                
+                replay2.step();                
             }
         }
     }
