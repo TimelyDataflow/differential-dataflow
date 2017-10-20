@@ -11,7 +11,7 @@
 //! that update, if appropriate. For example, the function
 //!
 //! ```ignore
-//! |t| if t.inner < 10 { let mut t = t.clone(); t.inner = 10; Some(t) } else { None }
+//! |t| if t.inner <= 10 { let mut t = t.clone(); t.inner = 10; Some(t) } else { None }
 //! ```
 //!
 //! could be used to present all updates through inner iteration 10, but advanced to inner
@@ -19,9 +19,36 @@
 
 use std::rc::Rc;
 
+use timely::dataflow::Scope;
+use timely::dataflow::operators::Map;
+
+use operators::arrange::{Arranged, BatchWrapper};
 use lattice::Lattice;
 use trace::{TraceReader, BatchReader, Description};
 use trace::cursor::Cursor;
+
+/// Freezes updates to an arrangement using a supplied function.
+///
+/// This method is experimental, and should be used with care. The intent is that the function
+/// `func` can be used to restrict and lock in updates at a particular time, as suggested in the
+/// module-level documentation.
+pub fn freeze<G, K, V, R, T, F>(arranged: &Arranged<G, K, V, R, T>, func: F) -> Arranged<G, K, V, R, TraceFreeze<K, V, G::Timestamp, R, T, F>>
+where
+    G: Scope,
+    G::Timestamp: Lattice+Ord,
+    K: 'static,
+    V: 'static,
+    R: 'static,
+    T: TraceReader<K, V, G::Timestamp, R>+Clone,
+    F: Fn(&G::Timestamp)->Option<G::Timestamp>+'static,
+{
+    let func1 = Rc::new(func);
+    let func2 = func1.clone();
+    Arranged {
+        stream: arranged.stream.map(move |bw| BatchWrapper { item: BatchFreeze::make_from(bw.item, func1.clone()) }),
+        trace: TraceFreeze::make_from(arranged.trace.clone(), func2),
+    }
+}
 
 /// Wrapper to provide trace to nested scope.
 pub struct TraceFreeze<K, V, T, R, Tr, F> 
@@ -94,11 +121,11 @@ where
     F: Fn(&T)->Option<T>,
 {
     /// Makes a new trace wrapper
-    pub fn make_from(trace: Tr, func: F) -> Self {
+    pub fn make_from(trace: Tr, func: Rc<F>) -> Self {
         TraceFreeze {
             phantom: ::std::marker::PhantomData,
             trace: trace,
-            func: Rc::new(func),
+            func: func,
         }
     }
 }
