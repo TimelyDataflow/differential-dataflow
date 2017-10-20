@@ -288,7 +288,8 @@ impl<G, K, V, R1, T1> JoinCore<G, K, V, R1> for Arranged<G,K,V,R1,T1>
         V: Ord+Clone+Debug+'static, 
         R1: Diff,
         T1: TraceReader<K,V,G::Timestamp, R1>+Clone+'static,
-        T1::Batch: BatchReader<K,V,G::Timestamp,R1>+'static+Debug {
+        T1::Batch: BatchReader<K,V,G::Timestamp,R1>+'static,
+{
     fn join_core<V2,T2,R2,I,L>(&self, other: &Arranged<G,K,V2,R2,T2>, result: L) -> Collection<G,I::Item,<R1 as Mul<R2>>::Output> 
     where 
         V2: Ord+Clone+Debug+'static,
