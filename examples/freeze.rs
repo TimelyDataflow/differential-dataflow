@@ -59,7 +59,7 @@ fn main() {
                 });
                 let rule1 = freeze1.join_core(&rules.map(|(x,_y)| x).distinct().arrange_by_self(), |&k, &x, &()| Some((k,x)))
                                    .negate()
-                                   .concat(&rules)
+                                   .concat(&rules.inner.map_in_place(|dtr| dtr.1.inner = 1).as_collection())
                                    .inspect(|x| println!("rule1:\t{:?}", x));
 
                 let rule1 = &rule1.inner
