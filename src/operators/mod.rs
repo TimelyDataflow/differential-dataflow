@@ -93,7 +93,7 @@ struct ValueHistory<'a, V: 'a, T, R> {
 impl<'a, V: Ord+Clone+'a, T: Lattice+Ord+Clone, R: Diff> ValueHistory<'a, V, T, R> {
     fn new() -> Self {
         ValueHistory {
-            edits: EditList::new(), // empty; will swap out for real list later
+            edits: EditList::new(),
             history: Vec::new(),
             buffer: Vec::new(),
         }
@@ -106,8 +106,22 @@ impl<'a, V: Ord+Clone+'a, T: Lattice+Ord+Clone, R: Diff> ValueHistory<'a, V, T, 
     fn load<K, C, L>(&mut self, cursor: &mut C, storage: &'a C::Storage, logic: L)
     where K: Eq, C: Cursor<K, V, T, R>, L: Fn(&T)->T { 
         self.edits.load(cursor, storage, logic);
-        // self.order();
     }
+
+    /// Loads and replays a specified key.
+    ///
+    /// If the key is absent, the replayed history will be empty.
+    fn replay_key<'history, K, C, L>(&'history mut self, cursor: &mut C, storage: &'a C::Storage, key: &K, logic: L) -> HistoryReplay<'a, 'history, V, T, R>
+    where K: Eq, C: Cursor<K, V, T, R>, L: Fn(&T)->T
+    {
+        self.clear();
+        cursor.seek_key(storage, key);
+        if cursor.get_key(storage) == Some(key) {
+            self.load(cursor, storage, logic);
+        }
+        self.replay()
+    }
+
     /// Organizes history based on current contents of edits.
     fn replay<'history>(&'history mut self) -> HistoryReplay<'a, 'history, V, T, R> {
 
@@ -118,8 +132,6 @@ impl<'a, V: Ord+Clone+'a, T: Lattice+Ord+Clone, R: Diff> ValueHistory<'a, V, T, 
             let upper = self.edits.values[value_index].1;
             for edit_index in lower .. upper {
                 let time = self.edits.edits[edit_index].0.clone();
-                // assert!(value_index < self.values.len());
-                // assert!(edit_index < self.edits.len());
                 self.history.push((time.clone(), time.clone(), value_index, edit_index));
             }
         }

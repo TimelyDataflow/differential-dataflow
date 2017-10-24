@@ -398,8 +398,8 @@ where
                 while batch_cursor.key_valid(batch_storage) || exposed_position < exposed.len() {
 
                     // Determine the next key we will work on; could be synthetic, could be from a batch.
-                    let key1 = if exposed_position < exposed.len() { Some(exposed[exposed_position].0.clone()) } else { None };
-                    let key2 = if batch_cursor.key_valid(&batch_storage) { Some(batch_cursor.key(batch_storage).clone()) } else { None };
+                    let key1 = exposed.get(exposed_position).map(|x| x.0.clone());
+                    let key2 = batch_cursor.get_key(&batch_storage).map(|k| k.clone());
                     let key = match (key1, key2) {
                         (Some(key1), Some(key2)) => ::std::cmp::min(key1, key2),
                         (Some(key1), None)       => key1,
@@ -414,7 +414,7 @@ where
                     interesting_times.clear();
 
                     // Populate `interesting_times` with synthetic interesting times for this key.
-                    while exposed_position < exposed.len() && exposed[exposed_position].0 == key {
+                    while exposed.get(exposed_position).map(|x| &x.0) == Some(&key) {
                         interesting_times.push(exposed[exposed_position].1.clone());
                         exposed_position += 1;
                     }
@@ -430,12 +430,12 @@ where
                         (&mut batch_cursor, batch_storage),
                         &mut interesting_times, 
                         &logic, 
-                        upper_limit.elements(), 
+                        &upper_limit, 
                         &mut buffers[..], 
                         &mut temporary,
                     );
 
-                    if batch_cursor.key_valid(batch_storage) && batch_cursor.key(batch_storage) == &key {
+                    if batch_cursor.get_key(batch_storage) == Some(&key) {
                         batch_cursor.step_key(batch_storage);
                     }
 
@@ -588,7 +588,7 @@ where
         batch_cursor: (&mut C3, &'a C3::Storage),
         times: &mut Vec<T>, 
         logic: &L, 
-        upper_limit: &[T],
+        upper_limit: &Antichain<T>,
         outputs: &mut [(T, Vec<(V2, T, R2)>)],
         new_interesting: &mut Vec<T>) -> (usize, usize)
     where 
@@ -609,6 +609,7 @@ mod history_replay {
     use lattice::Lattice;
     use trace::Cursor;
     use operators::ValueHistory;
+    use timely::progress::Antichain;
 
     use super::{PerKeyCompute, consolidate, sort_dedup};
 
@@ -665,7 +666,7 @@ mod history_replay {
             (batch_cursor, batch_storage): (&mut C3, &'a C3::Storage),
             times: &mut Vec<T>, 
             logic: &L, 
-            upper_limit: &[T],
+            upper_limit: &Antichain<T>,
             outputs: &mut [(T, Vec<(V2, T, R2)>)],
             new_interesting: &mut Vec<T>) -> (usize, usize)
         where 
@@ -676,17 +677,16 @@ mod history_replay {
             L: Fn(&K, &[(&V1, R1)], &mut Vec<(V2, R2)>) 
         {
 
-            // The work to do is defined principally be the contents of `batch_cursor` and `times`, which
-            // together indicate the times at which we should re-evaluate the user logic on the accumulated
-            // inputs. Before anything else, we will want to extract this information, as it will allow us 
-            // to thin out other inputs as we load them.
+            // The work we need to perform is at times defined principally by the contents of `batch_cursor`
+            // and `times`, respectively "new work we just received" and "old times we were warned about".
+            //
+            // Our first step is to identify these times, so that we can use them to restrict the amount of
+            // information we need to recover from `input` and `output`; as all times of interest will have
+            // some time from `batch_cursor` or `times`, we can compute their meet and advance all other
+            // loaded times by performing the lattice `join` with this value.
 
             // Load the batch contents.
-            self.batch_history.clear(); 
-            if batch_cursor.get_key(batch_storage) == Some(key) {
-                self.batch_history.load(batch_cursor, batch_storage, |time| time.clone());
-            }
-            let mut batch_replay = self.batch_history.replay();
+            let mut batch_replay = self.batch_history.replay_key(batch_cursor, batch_storage, key, |time| time.clone());
 
             // We determine the meet of times we must reconsider (those from `batch` and `times`). This meet
             // can be used to advance other historical times, which may consolidate their representation. As
@@ -708,21 +708,9 @@ mod history_replay {
             // advance all times by joining them with `meet`. The resulting times are more compact
             // and guaranteed to accumulate identically for times greater or equal to `meet`.
 
-            // Load the input history.
-            self.input_history.clear(); 
-            source_cursor.seek_key(source_storage, key);
-            if source_cursor.get_key(source_storage) == Some(key) {
-                self.input_history.load(source_cursor, source_storage, |time| time.join(&meet));
-            }
-            let mut input_replay = self.input_history.replay();
-
-            // Load the output history.
-            self.output_history.clear();
-            output_cursor.seek_key(output_storage, key);
-            if output_cursor.get_key(output_storage) == Some(key) {
-               self.output_history.load(output_cursor, output_storage, |time| time.join(&meet));
-            }
-            let mut output_replay = self.output_history.replay();
+            // Load the input and output histories.
+            let mut input_replay = self.input_history.replay_key(source_cursor, source_storage, key, |time| time.join(&meet));
+            let mut output_replay = self.output_history.replay_key(output_cursor, output_storage, key, |time| time.join(&meet));
 
             self.synth_times.clear();
             self.times_current.clear();
@@ -737,23 +725,32 @@ mod history_replay {
             let mut compute_counter = 0;
             let mut output_counter = 0;
 
-            // We play history forward, continuing as long as we have any outstanding times.
-            while let Some(next_time) = [   input_replay.time(),
-                                            output_replay.time(),
-                                            batch_replay.time(),
-                                            self.synth_times.last(),
+            // We have candidate times from `batch` and `times`, as well as times identified by either
+            // `input` or `output`. Finally, we may have synthetic times produced as the join of times
+            // we consider in the course of evaluation. As long as any of these times exist, we need to
+            // keep examining times.
+            while let Some(next_time) = [   batch_replay.time(),
                                             times_slice.first(),
+                                            input_replay.time(),
+                                            output_replay.time(),
+                                            self.synth_times.last(),
                                         ].iter().cloned().filter_map(|t| t).min().map(|t| t.clone()) {
 
-                // advance input and output histories.
+                // Advance input and output history replayers. This marks applicable updates as active.
                 input_replay.step_while_time_is(&next_time);
                 output_replay.step_while_time_is(&next_time);
 
-                // advance batch history, but capture whether an update exists at `next_time`.
-                let mut interesting = batch_replay.step_while_time_is(&next_time);
+                // One of our goals is to determine if `next_time` is "interesting", meaning whether we
+                // have any evidence that we should re-evaluate the user logic at this time. For a time
+                // to be "interesting" it would need to be the join of times that include either a time
+                // from `batch`, `times`, or `synth`. Neither `input` nor `output` times are sufficient.
+                let mut interesting = false;
+
+                // Advance batch history, and capture whether an update exists at `next_time`.
+                interesting = batch_replay.step_while_time_is(&next_time);
                 if interesting { batch_replay.advance_buffer_by(&meet); }
 
-                // advance both `synth_times` and `times_slice`, marking the time interesting if in either.
+                // advance both `synth_times` and `times_slice`, marking this time interesting if in either.
                 while self.synth_times.last() == Some(&next_time) {
                     // We don't know enough about `next_time` to avoid putting it in to `times_current`.
                     // TODO: If we knew that the time derived from a canceled batch update, we could remove the time. 
@@ -781,7 +778,7 @@ mod history_replay {
                 // We have no particular guarantee that known times will not be in advance of `upper_limit`.
                 // We may have the guarantee that synthetic times will not be, as we test against the limit
                 // before we add the time to `synth_times`.
-                if !upper_limit.iter().any(|t| t.less_equal(&next_time)) {
+                if !upper_limit.less_equal(&next_time) {
 
                     // We should re-evaluate the computation if this is an interesting time.
                     // If the time is uninteresting (and our logic is sound) it is not possible for there to be 
@@ -896,7 +893,7 @@ mod history_replay {
                     let synth_len = self.synth_times.len();
                     for time in self.temporary.drain(..) {
                         // We can either service `join` now, or must delay for the future.
-                        if upper_limit.iter().any(|t| t.less_equal(&time)) {
+                        if upper_limit.less_equal(&time) {
                             debug_assert!(outputs.iter().any(|&(ref t,_)| t.less_equal(&time)));
                             new_interesting.push(time);
                         }
