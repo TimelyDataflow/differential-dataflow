@@ -39,7 +39,7 @@ fn main() {
         println!("loaded {} nodes, {} edges", nodes, edges.len());
 
         worker.dataflow::<(),_,_>(|scope| {
-            triangles(&Collection::new(edges.to_stream(scope)));
+            triangles(&Collection::new(edges.to_stream(scope))).inner.count().inspect(|x| println!("{:?}", x));
         });
 
     }).unwrap();

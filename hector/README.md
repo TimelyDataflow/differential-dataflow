@@ -105,3 +105,11 @@ Our approach will be to augment the ambient timestamps `T` with an integer, corr
     (a1, b1) <= (a2, b2)   when   (a1 < a2) or ((a1 == a2) and (b1 <= b2))
 
 this ordering allows two updates to be naturally ordered by their `T` when distinct, but when equal we order times by the associated relation index. This allows us to "pretend" to perform updates in the order of relation index, to avoid under- and double-counting updates, without actually maintaining multiple independent indices.
+
+In actual fact, it seems sufficient to use a lexicographic pair `(T, bool)`, and for the data to all be presented with timestamp `(T, true)`. This allows operators to collect either times `T` less than or less equal, by using respectively `(T, false)` and `(T, true)` as the query times. If the `T` themselves were totally ordered, we might simply try to steal a bit or insist the `T` be even numbered, but in the context of partially ordered `T` the additional lexicographic product seems necessary.
+
+### Design
+
+The prior dataflow implementation uses a single index to support the counting, proposing, and validating of extensions. Differential dataflow's multi-version `Trace` implementations make it hard to get random access to the same information (specifically, counts and fast look-ups for intersection).
+
+Instead, we will go with a multiple types of indices for each relation. These indices will almost surely have overlap, and ideally we will maintain as few distinct indices as possible.
