@@ -14,7 +14,7 @@ pub fn build((dataflow, handles, probe, args): Environment) -> Result<(), String
     handles
         .get_mut::<TraceHandle>(&args[0])?
         .import(dataflow)
-        .as_collection(|k,v| (k.item.clone(), v.clone()))
+        .as_collection(|k,v| (k.clone(), v.clone()))
         .map(|(src, _dst)| src as usize).count_total()
         .map(|(_src, cnt)| cnt as usize).count_total()
         .inspect(|x| println!("count: {:?}", x))
