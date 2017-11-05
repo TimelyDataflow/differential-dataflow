@@ -20,7 +20,7 @@ fn main() {
 
     timely::execute_from_args(std::env::args().skip(2), move |worker| {
 
-        let timer = std::time::Instant::now();
+        // let timer = std::time::Instant::now();
 
         let peers = worker.peers();
         let index = worker.index();
@@ -41,8 +41,8 @@ fn main() {
             CollectionIndex::from(&Collection::new(edges.to_stream(scope)))
         });
 
-        let mut index_xz = index.extend_using(|&(ref x, ref _y)| x);
-        let mut index_yz = index.extend_using(|&(ref _x, ref y)| y);
+        let mut index_xz = index.extend_using(|&(ref x, ref _y)| *x);
+        let mut index_yz = index.extend_using(|&(ref _x, ref y)| *y);
 
         let mut probe = Handle::new();
 
@@ -70,7 +70,8 @@ fn main() {
                 .concat(&validate1)
                 .inner
                 .count()
-                .inspect(move |x| println!("{:?}:\t{:?}", timer.elapsed(), x))
+                .inspect(move |x| println!("{:?}", x))
+                // .inspect(move |x| println!("{:?}:\t{:?}", timer.elapsed(), x))
                 .probe_with(&mut probe);
 
             edges_input
