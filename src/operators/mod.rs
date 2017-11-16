@@ -82,15 +82,15 @@ impl<'a, V:'a, T, R> EditList<'a, V, T, R> where T: Ord+Clone, R: Diff {
     }
 }
 
-struct ValueHistory<'a, V: 'a, T, R> {
+struct ValueHistory<'storage, V: 'storage, T, R> {
 
-    edits: EditList<'a, V, T, R>,
+    edits: EditList<'storage, V, T, R>,
     history: Vec<(T, T, usize, usize)>,        // (time, meet, value_index, edit_offset)
     // frontier: FrontierHistory<T>,           // tracks frontiers of remaining times.
-    buffer: Vec<((&'a V, T), R)>,               // where we accumulate / collapse updates.
+    buffer: Vec<((&'storage V, T), R)>,               // where we accumulate / collapse updates.
 }
 
-impl<'a, V: Ord+Clone+'a, T: Lattice+Ord+Clone, R: Diff> ValueHistory<'a, V, T, R> {
+impl<'storage, V: Ord+Clone+'storage, T: Lattice+Ord+Clone, R: Diff> ValueHistory<'storage, V, T, R> {
     fn new() -> Self {
         ValueHistory {
             edits: EditList::new(),
@@ -103,7 +103,7 @@ impl<'a, V: Ord+Clone+'a, T: Lattice+Ord+Clone, R: Diff> ValueHistory<'a, V, T, 
         self.history.clear();
         self.buffer.clear();
     }
-    fn load<K, C, L>(&mut self, cursor: &mut C, storage: &'a C::Storage, logic: L)
+    fn load<K, C, L>(&mut self, cursor: &mut C, storage: &'storage C::Storage, logic: L)
     where K: Eq, C: Cursor<K, V, T, R>, L: Fn(&T)->T { 
         self.edits.load(cursor, storage, logic);
     }
@@ -111,7 +111,13 @@ impl<'a, V: Ord+Clone+'a, T: Lattice+Ord+Clone, R: Diff> ValueHistory<'a, V, T, 
     /// Loads and replays a specified key.
     ///
     /// If the key is absent, the replayed history will be empty.
-    fn replay_key<'history, K, C, L>(&'history mut self, cursor: &mut C, storage: &'a C::Storage, key: &K, logic: L) -> HistoryReplay<'a, 'history, V, T, R>
+    fn replay_key<'history, K, C, L>(
+        &'history mut self,
+        cursor: &mut C,
+        storage: &'storage C::Storage,
+        key: &K,
+        logic: L
+    ) -> HistoryReplay<'storage, 'history, V, T, R>
     where K: Eq, C: Cursor<K, V, T, R>, L: Fn(&T)->T
     {
         self.clear();
@@ -123,7 +129,7 @@ impl<'a, V: Ord+Clone+'a, T: Lattice+Ord+Clone, R: Diff> ValueHistory<'a, V, T, 
     }
 
     /// Organizes history based on current contents of edits.
-    fn replay<'history>(&'history mut self) -> HistoryReplay<'a, 'history, V, T, R> {
+    fn replay<'history>(&'history mut self) -> HistoryReplay<'storage, 'history, V, T, R> {
 
         self.buffer.clear();
         self.history.clear();
