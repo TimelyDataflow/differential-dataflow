@@ -248,7 +248,7 @@ pub trait Merger<K, V, T, R, Output: Batch<K, V, T, R>> {
 	///
 	/// If `fuel` is non-zero after the call, the merging is complete and
 	/// one should call `done` to extract the merged results.
-	fn work(&mut self, fuel: &mut usize);
+	fn work(&mut self, source1: &Output, source2: &Output, fuel: &mut usize);
 	/// Extracts merged results.
 	///
 	/// This method should only be called after `work` has been called and

@@ -202,28 +202,42 @@ where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Ord+Clone+::std::fm
 /// State for an in-progress merge.
 pub struct OrdValMerger<K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Ord+Clone+::std::fmt::Debug+'static, R: Diff> {
 	// first batch, and position therein.
-	batch1: Rc<OrdValBatch<K, V, T, R>>,
+	// batch1: Rc<OrdValBatch<K, V, T, R>>,
 	lower1: usize,
 	upper1: usize,
 	// second batch, and position therein.
-	batch2: Rc<OrdValBatch<K, V, T, R>>,
+	// batch2: Rc<OrdValBatch<K, V, T, R>>,
 	lower2: usize,
 	upper2: usize,
 	// result that we are currently assembling.
 	result: <OrderedLayer<K, OrderedLayer<V, OrderedLeaf<T, R>>> as Trie>::MergeBuilder,
+	description: Description<T>,
 }
 
 impl<K, V, T, R> OrdValMerger<K, V, T, R>
 where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Ord+Clone+::std::fmt::Debug+'static, R: Diff {
 	fn new(batch1: &Rc<OrdValBatch<K, V, T, R>>, batch2: &Rc<OrdValBatch<K, V, T, R>>) -> Self {
+
+		assert!(batch1.upper() == batch2.lower());
+
+		let since = if batch1.description().since().iter().all(|t1| batch2.description().since().iter().any(|t2| t2.less_equal(t1))) {
+			batch2.description().since()
+		}
+		else {
+			batch1.description().since()
+		};
+
+		let description = Description::new(batch1.lower(), batch2.upper(), since);
+
 		OrdValMerger {
-			batch1: batch1.clone(),
+			// batch1: batch1.clone(),
 			lower1: 0,
 			upper1: batch1.layer.keys(),
-			batch2: batch2.clone(),
+			// batch2: batch2.clone(),
 			lower2: 0,
 			upper2: batch2.layer.keys(),
 			result: <<OrderedLayer<K, OrderedLayer<V, OrderedLeaf<T, R>>> as Trie>::MergeBuilder as MergeBuilder>::with_capacity(&batch1.layer, &batch2.layer),
+			description: description,
 		}
 	}
 }
@@ -236,40 +250,40 @@ where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Ord+Clone+::std::fm
 		assert!(self.lower2 == self.upper2);
 
 		// Things are horribly wrong if this is not true.
-		assert!(self.batch1.upper() == self.batch2.lower());
+		// assert!(self.batch1.upper() == self.batch2.lower());
 
 		// one of self.desc.since or other.desc.since needs to be not behind the other...
-		let since = if self.batch1.description().since().iter().all(|t1| self.batch2.description().since().iter().any(|t2| t2.less_equal(t1))) {
-			self.batch2.description().since()
-		}
-		else {
-			self.batch1.description().since()
-		};
+		// let since = if self.batch1.description().since().iter().all(|t1| self.batch2.description().since().iter().any(|t2| t2.less_equal(t1))) {
+		// 	self.batch2.description().since()
+		// }
+		// else {
+		// 	self.batch1.description().since()
+		// };
 
-		let result1 = self.result.done();
+		// let result1 = self.result.done();
 		// let result2 = <OrderedLayer<K, OrderedLayer<V, OrderedLeaf<T, R>>> as Trie>::merge(&self.batch1.layer, &self.batch2.layer);
 		// assert!(result1 == result2);
 
 		Rc::new(OrdValBatch {
-			layer: result1,
-			desc: Description::new(self.batch1.lower(), self.batch2.upper(), since),
+			layer: self.result.done(),
+			desc: self.description,//Description::new(self.batch1.lower(), self.batch2.upper(), since),
 		})
 	}
-	fn work(&mut self, fuel: &mut usize) {
+	fn work(&mut self, source1: &Rc<OrdValBatch<K,V,T,R>>, source2: &Rc<OrdValBatch<K,V,T,R>>, fuel: &mut usize) {
 
 		let starting_updates = self.result.vals.vals.vals.len();
 		let mut effort = 0;
 
 		// while both mergees are still active
 		while self.lower1 < self.upper1 && self.lower2 < self.upper2 && effort < *fuel {
-			self.result.merge_step((&self.batch1.layer, &mut self.lower1, self.upper1), (&self.batch2.layer, &mut self.lower2, self.upper2));
+			self.result.merge_step((&source1.layer, &mut self.lower1, self.upper1), (&source2.layer, &mut self.lower2, self.upper2));
 			effort = self.result.vals.vals.vals.len() - starting_updates;
 		}
 
 		if self.lower1 == self.upper1 || self.lower2 == self.upper2 {
 			// these are just copies, so let's bite the bullet and just do them.
-			if self.lower1 < self.upper1 { self.result.copy_range(&self.batch1.layer, self.lower1, self.upper1); self.lower1 = self.upper1; }
-			if self.lower2 < self.upper2 { self.result.copy_range(&self.batch2.layer, self.lower2, self.upper2); self.lower2 = self.upper2; }
+			if self.lower1 < self.upper1 { self.result.copy_range(&source1.layer, self.lower1, self.upper1); self.lower1 = self.upper1; }
+			if self.lower2 < self.upper2 { self.result.copy_range(&source2.layer, self.lower2, self.upper2); self.lower2 = self.upper2; }
 		}
 
 		effort = self.result.vals.vals.vals.len() - starting_updates;
@@ -492,28 +506,42 @@ where K: Ord+Clone+'static, T: Lattice+Ord+Clone+'static, R: Diff {
 /// State for an in-progress merge.
 pub struct OrdKeyMerger<K: Ord+Clone+'static, T: Lattice+Ord+Clone+'static, R: Diff> {
 	// first batch, and position therein.
-	batch1: Rc<OrdKeyBatch<K, T, R>>,
+	// batch1: Rc<OrdKeyBatch<K, T, R>>,
 	lower1: usize,
 	upper1: usize,
 	// second batch, and position therein.
-	batch2: Rc<OrdKeyBatch<K, T, R>>,
+	// batch2: Rc<OrdKeyBatch<K, T, R>>,
 	lower2: usize,
 	upper2: usize,
 	// result that we are currently assembling.
 	result: <OrderedLayer<K, OrderedLeaf<T, R>> as Trie>::MergeBuilder,
+	description: Description<T>,
 }
 
 impl<K, T, R> OrdKeyMerger<K, T, R>
 where K: Ord+Clone+'static, T: Lattice+Ord+Clone+'static, R: Diff {
 	fn new(batch1: &Rc<OrdKeyBatch<K, T, R>>, batch2: &Rc<OrdKeyBatch<K, T, R>>) -> Self {
+
+		assert!(batch1.upper() == batch2.lower());
+
+		let since = if batch1.description().since().iter().all(|t1| batch2.description().since().iter().any(|t2| t2.less_equal(t1))) {
+			batch2.description().since()
+		}
+		else {
+			batch1.description().since()
+		};
+
+		let description = Description::new(batch1.lower(), batch2.upper(), since);
+
 		OrdKeyMerger {
-			batch1: batch1.clone(),
+			// batch1: batch1.clone(),
 			lower1: 0,
 			upper1: batch1.layer.keys(),
-			batch2: batch2.clone(),
+			// batch2: batch2.clone(),
 			lower2: 0,
 			upper2: batch2.layer.keys(),
 			result: <<OrderedLayer<K, OrderedLeaf<T, R>> as Trie>::MergeBuilder as MergeBuilder>::with_capacity(&batch1.layer, &batch2.layer),
+			description: description,
 		}
 	}
 }
@@ -525,41 +553,38 @@ where K: Ord+Clone+'static, T: Lattice+Ord+Clone+'static, R: Diff {
 		assert!(self.lower1 == self.upper1);
 		assert!(self.lower2 == self.upper2);
 
-		// Things are horribly wrong if this is not true.
-		assert!(self.batch1.upper() == self.batch2.lower());
-
 		// one of self.desc.since or other.desc.since needs to be not behind the other...
-		let since = if self.batch1.description().since().iter().all(|t1| self.batch2.description().since().iter().any(|t2| t2.less_equal(t1))) {
-			self.batch2.description().since()
-		}
-		else {
-			self.batch1.description().since()
-		};
+		// let since = if self.batch1.description().since().iter().all(|t1| self.batch2.description().since().iter().any(|t2| t2.less_equal(t1))) {
+		// 	self.batch2.description().since()
+		// }
+		// else {
+		// 	self.batch1.description().since()
+		// };
 
-		let result1 = self.result.done();
+		// let result1 = self.result.done();
 		// let result2 = <OrderedLayer<K, OrderedLeaf<T, R>> as Trie>::merge(&self.batch1.layer, &self.batch2.layer);
 		// assert!(result1 == result2);
 
 		Rc::new(OrdKeyBatch {
-			layer: result1,
-			desc: Description::new(self.batch1.lower(), self.batch2.upper(), since),
+			layer: self.result.done(),
+			desc: self.description,
 		})
 	}
-	fn work(&mut self, fuel: &mut usize) {
+	fn work(&mut self, source1: &Rc<OrdKeyBatch<K,T,R>>, source2: &Rc<OrdKeyBatch<K,T,R>>, fuel: &mut usize) {
 
 		let starting_updates = self.result.vals.vals.len();
 		let mut effort = 0;
 
 		// while both mergees are still active
 		while self.lower1 < self.upper1 && self.lower2 < self.upper2 && effort < *fuel {
-			self.result.merge_step((&self.batch1.layer, &mut self.lower1, self.upper1), (&self.batch2.layer, &mut self.lower2, self.upper2));
+			self.result.merge_step((&source1.layer, &mut self.lower1, self.upper1), (&source2.layer, &mut self.lower2, self.upper2));
 			effort = self.result.vals.vals.len() - starting_updates;
 		}
 
 		if self.lower1 == self.upper1 || self.lower2 == self.upper2 {
 			// these are just copies, so let's bite the bullet and just do them.
-			if self.lower1 < self.upper1 { self.result.copy_range(&self.batch1.layer, self.lower1, self.upper1); self.lower1 = self.upper1; }
-			if self.lower2 < self.upper2 { self.result.copy_range(&self.batch2.layer, self.lower2, self.upper2); self.lower2 = self.upper2; }
+			if self.lower1 < self.upper1 { self.result.copy_range(&source1.layer, self.lower1, self.upper1); self.lower1 = self.upper1; }
+			if self.lower2 < self.upper2 { self.result.copy_range(&source2.layer, self.lower2, self.upper2); self.lower2 = self.upper2; }
 		}
 
 		effort = self.result.vals.vals.len() - starting_updates;

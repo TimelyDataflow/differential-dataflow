@@ -29,8 +29,8 @@ impl<K, V, T: Eq, R, B: Batch<K, V, T, R>> MergeState<K, V, T, R, B> {
         MergeState::Merging(batch1, batch2, begin_merge)
     }
     fn work(mut self, fuel: &mut usize) -> Self {
-        if let MergeState::Merging(_, _, ref mut in_progress) = self {
-            in_progress.work(fuel);
+        if let MergeState::Merging(ref source1, ref source2, ref mut in_progress) = self {
+            in_progress.work(source1, source2, fuel);
         }
         if *fuel > 0 {
             match self {
