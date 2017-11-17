@@ -34,7 +34,7 @@ pub type OrdKeySpine<K, T, R> = Spine<K, (), T, R, Rc<OrdKeyBatch<K, T, R>>>;
 
 
 /// An immutable collection of update tuples, from a contiguous interval of logical times.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct OrdValBatch<K: Ord, V: Ord, T: Lattice, R> {
 	/// Where all the dataz is.
 	pub layer: OrderedLayer<K, OrderedLayer<V, OrderedLeaf<T, R>>>,
@@ -42,19 +42,15 @@ pub struct OrdValBatch<K: Ord, V: Ord, T: Lattice, R> {
 	pub desc: Description<T>,
 }
 
-impl<K, V, T, R> BatchReader<K, V, T, R> for Rc<OrdValBatch<K, V, T, R>>
+impl<K, V, T, R> BatchReader<K, V, T, R> for OrdValBatch<K, V, T, R>
 where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Ord+Clone+'static, R: Diff {
 	type Cursor = OrdValCursor<V, T, R>;
-	fn cursor(&self) -> Self::Cursor { 
-		OrdValCursor {
-			cursor: self.layer.cursor()
-		}
-	}
+	fn cursor(&self) -> Self::Cursor { OrdValCursor { cursor: self.layer.cursor() } }
 	fn len(&self) -> usize { <OrderedLayer<K, OrderedLayer<V, OrderedLeaf<T, R>>> as Trie>::tuples(&self.layer) }
 	fn description(&self) -> &Description<T> { &self.desc }
 }
 
-impl<K, V, T, R> Batch<K, V, T, R> for Rc<OrdValBatch<K, V, T, R>>
+impl<K, V, T, R> Batch<K, V, T, R> for OrdValBatch<K, V, T, R>
 where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Ord+Clone+::std::fmt::Debug+'static, R: Diff {
 	type Batcher = MergeBatcher<K, V, T, R, Self>;
 	type Builder = OrdValBuilder<K, V, T, R>;
@@ -72,10 +68,10 @@ where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Ord+Clone+::std::fm
 			self.desc.since()
 		};
 		
-		Rc::new(OrdValBatch {
+		OrdValBatch {
 			layer: <OrderedLayer<K, OrderedLayer<V, OrderedLeaf<T, R>>> as Trie>::merge(&self.layer, &other.layer),  //self.layer.merge(&other.layer),
 			desc: Description::new(self.desc.lower(), other.desc.upper(), since),
-		})
+		}
 	}
 	fn begin_merge(&self, other: &Self) -> Self::Merger {
 		OrdValMerger::new(self, other)
@@ -83,130 +79,114 @@ where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Ord+Clone+::std::fm
 
 	fn advance_mut(&mut self, frontier: &[T]) where K: Ord+Clone, V: Ord+Clone, T: Lattice+Ord+Clone, R: Diff {
 
-		let mut advanced = false;
+		// We have unique ownership of the batch, and can advance times in place. 
+		// We must still sort, collapse, and remove empty updates.
 
-		// let test = true;
-		// let clone = if test { Some(self.advance_ref(frontier)) } else { None };
+		// We will zip throught the time leaves, calling advance on each, 
+		//    then zip through the value layer, sorting and collapsing each,
+		//    then zip through the key layer, collapsing each .. ?
 
-		if let Some(batch) = Rc::get_mut(self) {
+		// 1. For each (time, diff) pair, advance the time.
+		for time_diff in self.layer.vals.vals.vals.iter_mut() {
+			time_diff.0 = time_diff.0.advance_by(frontier);
+		}
 
-			// We have unique ownership of the batch, and can advance times in place. 
-			// We must still sort, collapse, and remove empty updates.
+		// 2. For each `(val, off)` pair, sort the range, compact, and rewrite `off`.
+		//    This may leave `val` with an empty range; filtering happens in step 3.
+		let mut write_position = 0;
+		for i in 0 .. self.layer.vals.keys.len() {
 
-			// We will zip throught the time leaves, calling advance on each, 
-			//    then zip through the value layer, sorting and collapsing each,
-			//    then zip through the key layer, collapsing each .. ?
+			// NB: batch.layer.vals.offs[i+1] will be used next iteration, and should not be changed.
+			//     we will change batch.layer.vals.offs[i] in this iteration, from `write_position`'s
+			//     initial value.
 
-			// 1. For each (time, diff) pair, advance the time.
-			for time_diff in &mut batch.layer.vals.vals.vals {
-				time_diff.0 = time_diff.0.advance_by(frontier);
-			}
+			let lower = self.layer.vals.offs[i];
+			let upper = self.layer.vals.offs[i+1];
 
-			// 2. For each `(val, off)` pair, sort the range, compact, and rewrite `off`.
-			//    This may leave `val` with an empty range; filtering happens in step 3.
-			let mut write_position = 0;
-			for i in 0 .. batch.layer.vals.keys.len() {
+			self.layer.vals.offs[i] = write_position;
 
-				// NB: batch.layer.vals.offs[i+1] will be used next iteration, and should not be changed.
-				//     we will change batch.layer.vals.offs[i] in this iteration, from `write_position`'s
-				//     initial value.
+			let updates = &mut self.layer.vals.vals.vals[..];
 
-				let lower = batch.layer.vals.offs[i];
-				let upper = batch.layer.vals.offs[i+1];
+			// sort the range by the times (ignore the diffs; they will collapse).
+			updates[lower .. upper].sort_by(|x,y| x.0.cmp(&y.0));
 
-				batch.layer.vals.offs[i] = write_position;
-
-				let updates = &mut batch.layer.vals.vals.vals[..];
-
-				// sort the range by the times (ignore the diffs; they will collapse).
-				updates[lower .. upper].sort_by(|x,y| x.0.cmp(&y.0));
-
-				for index in lower .. (upper - 1) {
-					if updates[index].0 == updates[index+1].0 {
-						updates[index+1].1 = updates[index+1].1 + updates[index].1;
-						updates[index].1 = R::zero();
-					}
-				}
-
-				for index in lower .. upper {
-					if !updates[index].1.is_zero() {
-						updates.swap(write_position, index);
-						write_position += 1;
-					}
+			for index in lower .. (upper - 1) {
+				if updates[index].0 == updates[index+1].0 {
+					updates[index+1].1 = updates[index+1].1 + updates[index].1;
+					updates[index].1 = R::zero();
 				}
 			}
-			batch.layer.vals.vals.vals.truncate(write_position);
-			batch.layer.vals.offs[batch.layer.vals.keys.len()] = write_position;
 
-			// 3. For each `(key, off)` pair, (values already sorted), filter vals, and rewrite `off`.
-			//    This may leave `key` with an empty range. Filtering happens in step 4.
-			let mut write_position = 0;
-			for i in 0 .. batch.layer.keys.len() {
-
-				// NB: batch.layer.offs[i+1] must remain as is for the next iteration. 
-				//     instead, we update batch.layer.offs[i]
-
-				let lower = batch.layer.offs[i];
-				let upper = batch.layer.offs[i+1];
-
-				batch.layer.offs[i] = write_position;
-
-				// values should already be sorted, but some might now be empty.
-				for index in lower .. upper {
-					let val_lower = batch.layer.vals.offs[index];
-					let val_upper = batch.layer.vals.offs[index+1];
-					if val_lower < val_upper {
-						batch.layer.vals.keys.swap(write_position, index);
-						batch.layer.vals.offs[write_position+1] = batch.layer.vals.offs[index+1];
-						write_position += 1;
-					}
-				}
-				// batch.layer.offs[i+1] = write_position;
-			}
-			batch.layer.vals.keys.truncate(write_position);
-			batch.layer.vals.offs.truncate(write_position + 1);
-			batch.layer.offs[batch.layer.keys.len()] = write_position;
-
-			// 4. Remove empty keys.
-			let mut write_position = 0;
-			for i in 0 .. batch.layer.keys.len() {
-
-				let lower = batch.layer.offs[i];
-				let upper = batch.layer.offs[i+1];
-
-				if lower < upper {
-					batch.layer.keys.swap(write_position, i);
-					// batch.layer.offs updated via `dedup` below; keeps me sane.
+			for index in lower .. upper {
+				if !updates[index].1.is_zero() {
+					updates.swap(write_position, index);
 					write_position += 1;
 				}
 			}
-			batch.layer.offs.dedup();
-			batch.layer.keys.truncate(write_position);
-			batch.layer.offs.truncate(write_position+1);
-
-			// if let Some(clone) = clone {
-			// 	if !clone.layer.eq(&batch.layer) {
-			// 		panic!("OrdValBatch::advance_mut: error");
-			// 	}
-			// }
-
-			advanced = true;
 		}
+		self.layer.vals.vals.vals.truncate(write_position);
+		self.layer.vals.offs[self.layer.vals.keys.len()] = write_position;
 
-		if !advanced {
-			*self = self.advance_ref(frontier);
+		// 3. For each `(key, off)` pair, (values already sorted), filter vals, and rewrite `off`.
+		//    This may leave `key` with an empty range. Filtering happens in step 4.
+		let mut write_position = 0;
+		for i in 0 .. self.layer.keys.len() {
+
+			// NB: batch.layer.offs[i+1] must remain as is for the next iteration. 
+			//     instead, we update batch.layer.offs[i]
+
+			let lower = self.layer.offs[i];
+			let upper = self.layer.offs[i+1];
+
+			self.layer.offs[i] = write_position;
+
+			// values should already be sorted, but some might now be empty.
+			for index in lower .. upper {
+				let val_lower = self.layer.vals.offs[index];
+				let val_upper = self.layer.vals.offs[index+1];
+				if val_lower < val_upper {
+					self.layer.vals.keys.swap(write_position, index);
+					self.layer.vals.offs[write_position+1] = self.layer.vals.offs[index+1];
+					write_position += 1;
+				}
+			}
+			// batch.layer.offs[i+1] = write_position;
 		}
+		self.layer.vals.keys.truncate(write_position);
+		self.layer.vals.offs.truncate(write_position + 1);
+		self.layer.offs[self.layer.keys.len()] = write_position;
+
+		// 4. Remove empty keys.
+		let mut write_position = 0;
+		for i in 0 .. self.layer.keys.len() {
+
+			let lower = self.layer.offs[i];
+			let upper = self.layer.offs[i+1];
+
+			if lower < upper {
+				self.layer.keys.swap(write_position, i);
+				// batch.layer.offs updated via `dedup` below; keeps me sane.
+				write_position += 1;
+			}
+		}
+		self.layer.offs.dedup();
+		self.layer.keys.truncate(write_position);
+		self.layer.offs.truncate(write_position+1);
+
+		// if let Some(clone) = clone {
+		// 	if !clone.layer.eq(&batch.layer) {
+		// 		panic!("OrdValBatch::advance_mut: error");
+		// 	}
+		// }
 	}
 }
 
 /// State for an in-progress merge.
 pub struct OrdValMerger<K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Ord+Clone+::std::fmt::Debug+'static, R: Diff> {
 	// first batch, and position therein.
-	// batch1: Rc<OrdValBatch<K, V, T, R>>,
 	lower1: usize,
 	upper1: usize,
 	// second batch, and position therein.
-	// batch2: Rc<OrdValBatch<K, V, T, R>>,
 	lower2: usize,
 	upper2: usize,
 	// result that we are currently assembling.
@@ -216,7 +196,7 @@ pub struct OrdValMerger<K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+O
 
 impl<K, V, T, R> OrdValMerger<K, V, T, R>
 where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Ord+Clone+::std::fmt::Debug+'static, R: Diff {
-	fn new(batch1: &Rc<OrdValBatch<K, V, T, R>>, batch2: &Rc<OrdValBatch<K, V, T, R>>) -> Self {
+	fn new(batch1: &OrdValBatch<K, V, T, R>, batch2: &OrdValBatch<K, V, T, R>) -> Self {
 
 		assert!(batch1.upper() == batch2.lower());
 
@@ -242,34 +222,19 @@ where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Ord+Clone+::std::fm
 	}
 }
 
-impl<K, V, T, R> Merger<K, V, T, R, Rc<OrdValBatch<K, V, T, R>>> for OrdValMerger<K, V, T, R>
+impl<K, V, T, R> Merger<K, V, T, R, OrdValBatch<K, V, T, R>> for OrdValMerger<K, V, T, R>
 where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Ord+Clone+::std::fmt::Debug+'static, R: Diff {
-	fn done(self) -> Rc<OrdValBatch<K, V, T, R>> {
+	fn done(self) -> OrdValBatch<K, V, T, R> {
 
 		assert!(self.lower1 == self.upper1);
 		assert!(self.lower2 == self.upper2);
 
-		// Things are horribly wrong if this is not true.
-		// assert!(self.batch1.upper() == self.batch2.lower());
-
-		// one of self.desc.since or other.desc.since needs to be not behind the other...
-		// let since = if self.batch1.description().since().iter().all(|t1| self.batch2.description().since().iter().any(|t2| t2.less_equal(t1))) {
-		// 	self.batch2.description().since()
-		// }
-		// else {
-		// 	self.batch1.description().since()
-		// };
-
-		// let result1 = self.result.done();
-		// let result2 = <OrderedLayer<K, OrderedLayer<V, OrderedLeaf<T, R>>> as Trie>::merge(&self.batch1.layer, &self.batch2.layer);
-		// assert!(result1 == result2);
-
-		Rc::new(OrdValBatch {
+		OrdValBatch {
 			layer: self.result.done(),
-			desc: self.description,//Description::new(self.batch1.lower(), self.batch2.upper(), since),
-		})
+			desc: self.description,
+		}
 	}
-	fn work(&mut self, source1: &Rc<OrdValBatch<K,V,T,R>>, source2: &Rc<OrdValBatch<K,V,T,R>>, fuel: &mut usize) {
+	fn work(&mut self, source1: &OrdValBatch<K,V,T,R>, source2: &OrdValBatch<K,V,T,R>, fuel: &mut usize) {
 
 		let starting_updates = self.result.vals.vals.vals.len();
 		let mut effort = 0;
@@ -302,7 +267,7 @@ pub struct OrdValCursor<V: Ord+Clone, T: Lattice+Ord+Clone, R: Diff> {
 impl<K, V, T, R> Cursor<K, V, T, R> for OrdValCursor<V, T, R> 
 where K: Ord+Clone, V: Ord+Clone, T: Lattice+Ord+Clone, R: Diff {
 
-	type Storage = Rc<OrdValBatch<K, V, T, R>>;
+	type Storage = OrdValBatch<K, V, T, R>;
 
 	fn key<'a>(&self, storage: &'a Self::Storage) -> &'a K { &self.cursor.key(&storage.layer) }
 	fn val<'a>(&self, storage: &'a Self::Storage) -> &'a V { &self.cursor.child.key(&storage.layer.vals) }
@@ -329,7 +294,7 @@ pub struct OrdValBuilder<K: Ord, V: Ord, T: Ord+Lattice, R: Diff> {
 	builder: OrderedBuilder<K, OrderedBuilder<V, OrderedLeafBuilder<T, R>>>,
 }
 
-impl<K, V, T, R> Builder<K, V, T, R, Rc<OrdValBatch<K, V, T, R>>> for OrdValBuilder<K, V, T, R> 
+impl<K, V, T, R> Builder<K, V, T, R, OrdValBatch<K, V, T, R>> for OrdValBuilder<K, V, T, R> 
 where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Ord+Clone+::std::fmt::Debug+'static, R: Diff {
 
 	fn new() -> Self { 
@@ -349,11 +314,11 @@ where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Ord+Clone+::std::fm
 	}
 
 	#[inline(never)]
-	fn done(self, lower: &[T], upper: &[T], since: &[T]) -> Rc<OrdValBatch<K, V, T, R>> {
-		Rc::new(OrdValBatch {
+	fn done(self, lower: &[T], upper: &[T], since: &[T]) -> OrdValBatch<K, V, T, R> {
+		OrdValBatch {
 			layer: self.builder.done(),
 			desc: Description::new(lower, upper, since)
-		})
+		}
 	}
 }
 
@@ -361,7 +326,7 @@ where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Ord+Clone+::std::fm
 
 
 /// An immutable collection of update tuples, from a contiguous interval of logical times.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct OrdKeyBatch<K: Ord, T: Lattice, R> {
 	/// Where all the dataz is.
 	pub layer: OrderedLayer<K, OrderedLeaf<T, R>>,
@@ -369,7 +334,7 @@ pub struct OrdKeyBatch<K: Ord, T: Lattice, R> {
 	pub desc: Description<T>,
 }
 
-impl<K, T, R> BatchReader<K, (), T, R> for Rc<OrdKeyBatch<K, T, R>>
+impl<K, T, R> BatchReader<K, (), T, R> for OrdKeyBatch<K, T, R>
 where K: Ord+Clone+'static, T: Lattice+Ord+Clone+'static, R: Diff {
 	type Cursor = OrdKeyCursor<T, R>;
 	fn cursor(&self) -> Self::Cursor { 
@@ -383,7 +348,7 @@ where K: Ord+Clone+'static, T: Lattice+Ord+Clone+'static, R: Diff {
 	fn description(&self) -> &Description<T> { &self.desc }
 }
 
-impl<K, T, R> Batch<K, (), T, R> for Rc<OrdKeyBatch<K, T, R>>
+impl<K, T, R> Batch<K, (), T, R> for OrdKeyBatch<K, T, R>
 where K: Ord+Clone+'static, T: Lattice+Ord+Clone+'static, R: Diff {
 	type Batcher = MergeBatcher<K, (), T, R, Self>;
 	type Builder = OrdKeyBuilder<K, T, R>;
@@ -401,10 +366,10 @@ where K: Ord+Clone+'static, T: Lattice+Ord+Clone+'static, R: Diff {
 			self.desc.since()
 		};
 		
-		Rc::new(OrdKeyBatch {
+		OrdKeyBatch {
 			layer: <OrderedLayer<K, OrderedLeaf<T, R>> as Trie>::merge(&self.layer, &other.layer),
 			desc: Description::new(self.desc.lower(), other.desc.upper(), since),
-		})
+		}
 	}
 	fn begin_merge(&self, other: &Self) -> Self::Merger {
 		OrdKeyMerger::new(self, other)
@@ -416,101 +381,84 @@ where K: Ord+Clone+'static, T: Lattice+Ord+Clone+'static, R: Diff {
 
 	fn advance_mut(&mut self, frontier: &[T]) where K: Ord+Clone, T: Lattice+Ord+Clone, R: Diff {
 	
-		let mut advanced = false;
-	
 		// let test = true;
 		// let clone = if test { Some(self.advance_ref(frontier)) } else { None };
 	
-		if let Some(batch) = Rc::get_mut(self) {
+		// if let Some(batch) = Rc::get_mut(self) {
 	
-			// We have unique ownership of the batch, and can advance times in place. 
-			// We must still sort, collapse, and remove empty updates.
-	
-			// We will zip through the time leaves, calling advance on each, 
-			//    then zip through the value layer, sorting and collapsing each,
-			//    then zip through the key layer, collapsing each .. ?
-	
-			// 1. For each (time, diff) pair, advance the time.
-			for time_diff in &mut batch.layer.vals.vals {
-				time_diff.0 = time_diff.0.advance_by(frontier);
-			}
-	
-			// 2. For each `(val, off)` pair, sort the range, compact, and rewrite `off`.
-			//    This may leave `val` with an empty range; filtering happens in step 3.
-			let mut write_position = 0;
-			for i in 0 .. batch.layer.keys.len() {
-	
-				// NB: batch.layer.vals.offs[i+1] will be used next iteration, and should not be changed.
-				//     we will change batch.layer.vals.offs[i] in this iteration, from `write_position`'s
-				//     initial value.
-	
-				let lower = batch.layer.offs[i];
-				let upper = batch.layer.offs[i+1];
-	
-				batch.layer.offs[i] = write_position;
-	
-				let updates = &mut batch.layer.vals.vals[..];
+		// We have unique ownership of the batch, and can advance times in place. 
+		// We must still sort, collapse, and remove empty updates.
 
-				// sort the range by the times (ignore the diffs; they will collapse).
-				updates[lower .. upper].sort_by(|x,y| x.0.cmp(&y.0));
-	
-				for index in lower .. (upper - 1) {
-					if updates[index].0 == updates[index+1].0 {
-						updates[index+1].1 = updates[index].1 + updates[index+1].1;
-						updates[index].1 = R::zero();
-					}
-				}
-	
-				for index in lower .. upper {
-					if !updates[index].1.is_zero() {
-						updates.swap(write_position, index);
-						write_position += 1;
-					}
+		// We will zip through the time leaves, calling advance on each, 
+		//    then zip through the value layer, sorting and collapsing each,
+		//    then zip through the key layer, collapsing each .. ?
+
+		// 1. For each (time, diff) pair, advance the time.
+		for time_diff in self.layer.vals.vals.iter_mut() {
+			time_diff.0 = time_diff.0.advance_by(frontier);
+		}
+
+		// 2. For each `(val, off)` pair, sort the range, compact, and rewrite `off`.
+		//    This may leave `val` with an empty range; filtering happens in step 3.
+		let mut write_position = 0;
+		for i in 0 .. self.layer.keys.len() {
+
+			// NB: batch.layer.vals.offs[i+1] will be used next iteration, and should not be changed.
+			//     we will change batch.layer.vals.offs[i] in this iteration, from `write_position`'s
+			//     initial value.
+
+			let lower = self.layer.offs[i];
+			let upper = self.layer.offs[i+1];
+
+			self.layer.offs[i] = write_position;
+
+			let updates = &mut self.layer.vals.vals[..];
+
+			// sort the range by the times (ignore the diffs; they will collapse).
+			updates[lower .. upper].sort_by(|x,y| x.0.cmp(&y.0));
+
+			for index in lower .. (upper - 1) {
+				if updates[index].0 == updates[index+1].0 {
+					updates[index+1].1 = updates[index].1 + updates[index+1].1;
+					updates[index].1 = R::zero();
 				}
 			}
-			batch.layer.vals.vals.truncate(write_position);
-			batch.layer.offs[batch.layer.keys.len()] = write_position;
-	
-			// 4. Remove empty keys.
-			let mut write_position = 0;
-			for i in 0 .. batch.layer.keys.len() {
-	
-				let lower = batch.layer.offs[i];
-				let upper = batch.layer.offs[i+1];
-	
-				if lower < upper {
-					batch.layer.keys.swap(write_position, i);
-					// batch.layer.offs updated via `dedup` below; keeps me sane.
+
+			for index in lower .. upper {
+				if !updates[index].1.is_zero() {
+					updates.swap(write_position, index);
 					write_position += 1;
 				}
 			}
-			batch.layer.offs.dedup();
-			batch.layer.keys.truncate(write_position);
-			batch.layer.offs.truncate(write_position+1);
-	
-			// if let Some(clone) = clone {
-			// 	if !clone.layer.eq(&batch.layer) {
-			// 		panic!("OrdKeyBatch::advance_mut: error");
-			// 	}
-			// }
-	
-			advanced = true;
 		}
-	
-		if !advanced {
-			*self = self.advance_ref(frontier);
+		self.layer.vals.vals.truncate(write_position);
+		self.layer.offs[self.layer.keys.len()] = write_position;
+
+		// 4. Remove empty keys.
+		let mut write_position = 0;
+		for i in 0 .. self.layer.keys.len() {
+
+			let lower = self.layer.offs[i];
+			let upper = self.layer.offs[i+1];
+
+			if lower < upper {
+				self.layer.keys.swap(write_position, i);
+				// batch.layer.offs updated via `dedup` below; keeps me sane.
+				write_position += 1;
+			}
 		}
+		self.layer.offs.dedup();
+		self.layer.keys.truncate(write_position);
+		self.layer.offs.truncate(write_position+1);
 	}
 }
 
 /// State for an in-progress merge.
 pub struct OrdKeyMerger<K: Ord+Clone+'static, T: Lattice+Ord+Clone+'static, R: Diff> {
 	// first batch, and position therein.
-	// batch1: Rc<OrdKeyBatch<K, T, R>>,
 	lower1: usize,
 	upper1: usize,
 	// second batch, and position therein.
-	// batch2: Rc<OrdKeyBatch<K, T, R>>,
 	lower2: usize,
 	upper2: usize,
 	// result that we are currently assembling.
@@ -520,7 +468,7 @@ pub struct OrdKeyMerger<K: Ord+Clone+'static, T: Lattice+Ord+Clone+'static, R: D
 
 impl<K, T, R> OrdKeyMerger<K, T, R>
 where K: Ord+Clone+'static, T: Lattice+Ord+Clone+'static, R: Diff {
-	fn new(batch1: &Rc<OrdKeyBatch<K, T, R>>, batch2: &Rc<OrdKeyBatch<K, T, R>>) -> Self {
+	fn new(batch1: &OrdKeyBatch<K, T, R>, batch2: &OrdKeyBatch<K, T, R>) -> Self {
 
 		assert!(batch1.upper() == batch2.lower());
 
@@ -534,10 +482,8 @@ where K: Ord+Clone+'static, T: Lattice+Ord+Clone+'static, R: Diff {
 		let description = Description::new(batch1.lower(), batch2.upper(), since);
 
 		OrdKeyMerger {
-			// batch1: batch1.clone(),
 			lower1: 0,
 			upper1: batch1.layer.keys(),
-			// batch2: batch2.clone(),
 			lower2: 0,
 			upper2: batch2.layer.keys(),
 			result: <<OrderedLayer<K, OrderedLeaf<T, R>> as Trie>::MergeBuilder as MergeBuilder>::with_capacity(&batch1.layer, &batch2.layer),
@@ -546,31 +492,19 @@ where K: Ord+Clone+'static, T: Lattice+Ord+Clone+'static, R: Diff {
 	}
 }
 
-impl<K, T, R> Merger<K, (), T, R, Rc<OrdKeyBatch<K, T, R>>> for OrdKeyMerger<K, T, R>
+impl<K, T, R> Merger<K, (), T, R, OrdKeyBatch<K, T, R>> for OrdKeyMerger<K, T, R>
 where K: Ord+Clone+'static, T: Lattice+Ord+Clone+'static, R: Diff {
-	fn done(self) -> Rc<OrdKeyBatch<K, T, R>> {
+	fn done(self) -> OrdKeyBatch<K, T, R> {
 
 		assert!(self.lower1 == self.upper1);
 		assert!(self.lower2 == self.upper2);
 
-		// one of self.desc.since or other.desc.since needs to be not behind the other...
-		// let since = if self.batch1.description().since().iter().all(|t1| self.batch2.description().since().iter().any(|t2| t2.less_equal(t1))) {
-		// 	self.batch2.description().since()
-		// }
-		// else {
-		// 	self.batch1.description().since()
-		// };
-
-		// let result1 = self.result.done();
-		// let result2 = <OrderedLayer<K, OrderedLeaf<T, R>> as Trie>::merge(&self.batch1.layer, &self.batch2.layer);
-		// assert!(result1 == result2);
-
-		Rc::new(OrdKeyBatch {
+		OrdKeyBatch {
 			layer: self.result.done(),
 			desc: self.description,
-		})
+		}
 	}
-	fn work(&mut self, source1: &Rc<OrdKeyBatch<K,T,R>>, source2: &Rc<OrdKeyBatch<K,T,R>>, fuel: &mut usize) {
+	fn work(&mut self, source1: &OrdKeyBatch<K,T,R>, source2: &OrdKeyBatch<K,T,R>, fuel: &mut usize) {
 
 		let starting_updates = self.result.vals.vals.len();
 		let mut effort = 0;
@@ -605,7 +539,7 @@ pub struct OrdKeyCursor<T: Lattice+Ord+Clone, R: Diff> {
 
 impl<K: Ord+Clone, T: Lattice+Ord+Clone, R: Diff> Cursor<K, (), T, R> for OrdKeyCursor<T, R> {
 
-	type Storage = Rc<OrdKeyBatch<K, T, R>>;
+	type Storage = OrdKeyBatch<K, T, R>;
 
 	fn key<'a>(&self, storage: &'a Self::Storage) -> &'a K { &self.cursor.key(&storage.layer) }
 	fn val<'a>(&self, _storage: &'a Self::Storage) -> &'a () { unsafe { ::std::mem::transmute(&self.empty) } }
@@ -632,7 +566,7 @@ pub struct OrdKeyBuilder<K: Ord, T: Ord+Lattice, R: Diff> {
 	builder: OrderedBuilder<K, OrderedLeafBuilder<T, R>>,
 }
 
-impl<K, T, R> Builder<K, (), T, R, Rc<OrdKeyBatch<K, T, R>>> for OrdKeyBuilder<K, T, R> 
+impl<K, T, R> Builder<K, (), T, R, OrdKeyBatch<K, T, R>> for OrdKeyBuilder<K, T, R> 
 where K: Ord+Clone+'static, T: Lattice+Ord+Clone+'static, R: Diff {
 
 	fn new() -> Self { 
@@ -653,11 +587,11 @@ where K: Ord+Clone+'static, T: Lattice+Ord+Clone+'static, R: Diff {
 	}
 
 	#[inline(never)]
-	fn done(self, lower: &[T], upper: &[T], since: &[T]) -> Rc<OrdKeyBatch<K, T, R>> {
-		Rc::new(OrdKeyBatch {
+	fn done(self, lower: &[T], upper: &[T], since: &[T]) -> OrdKeyBatch<K, T, R> {
+		OrdKeyBatch {
 			layer: self.builder.done(),
 			desc: Description::new(lower, upper, since)
-		})
+		}
 	}
 }
 
