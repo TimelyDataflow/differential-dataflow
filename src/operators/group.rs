@@ -316,9 +316,8 @@ where
                 for batch in batches.drain(..).map(|x| x.item) {
                     assert!(&upper_received[..] == batch.description().lower());
                     upper_received = batch.description().upper().to_vec();
-                    let (cursor, store) = batch.cursor();
-                    batch_cursors.push(cursor);
-                    batch_storage.push(store);
+                    batch_cursors.push(batch.cursor());
+                    batch_storage.push(batch);
                 }
 
                 // Ensure that `capabilities` covers the capability of the batch.

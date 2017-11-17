@@ -136,12 +136,12 @@ pub trait Trace<Key, Val, Time, R> : TraceReader<Key, Val, Time, R> where <Self 
 /// but do not expose ways to construct the batches. This trait is appropriate for views of the batch, and is
 /// especially useful for views derived from other sources in ways that prevent the construction of batches
 /// from the type of data in the view (for example, filtered views, or views with extended time coordinates).
-pub trait BatchReader<K, V, T, R> {
-
+pub trait BatchReader<K, V, T, R> where Self: Clone+::std::marker::Sized 
+{
 	/// The type used to enumerate the batch's contents.
-	type Cursor: Cursor<K, V, T, R>;
+	type Cursor: Cursor<K, V, T, R, Storage=Self>;
 	/// Acquires a cursor to the batch's contents.
-	fn cursor(&self) -> (Self::Cursor, <Self::Cursor as Cursor<K, V, T, R>>::Storage);
+	fn cursor(&self) -> Self::Cursor;
 	/// The number of updates in the batch.
 	fn len(&self) -> usize;
 	/// Describes the times of the updates in the batch.
@@ -186,18 +186,18 @@ pub trait Batch<K, V, T, R> : BatchReader<K, V, T, R> where Self: ::std::marker:
 		let mut builder = Self::Builder::with_capacity(self.len());
 
 		let mut times = Vec::new();
-		let (mut cursor, storage) = self.cursor();
+		let mut cursor = self.cursor();
 
-		while cursor.key_valid(&storage) {
-			while cursor.val_valid(&storage) {
-				cursor.map_times(&storage, |time: &T, diff| times.push((time.advance_by(frontier), diff)));
+		while cursor.key_valid(self) {
+			while cursor.val_valid(self) {
+				cursor.map_times(self, |time: &T, diff| times.push((time.advance_by(frontier), diff)));
 				consolidate(&mut times, 0);
 				for (time, diff) in times.drain(..) {
-					builder.push((cursor.key(&storage).clone(), cursor.val(&storage).clone(), time, diff));
+					builder.push((cursor.key(self).clone(), cursor.val(self).clone(), time, diff));
 				}
-				cursor.step_val(&storage);
+				cursor.step_val(self);
 			}
-			cursor.step_key(&storage);
+			cursor.step_key(self);
 		}
 
 		builder.done(self.description().lower(), self.description().upper(), frontier)

@@ -94,11 +94,11 @@ where
                 let mut session = output.session(&capability);
                 for batch in batches.drain(..).map(|x| x.item) {
 
-                    let (mut batch_cursor, batch_storage) = batch.cursor();
+                    let mut batch_cursor = batch.cursor();
                     let (mut trace_cursor, trace_storage) = trace.cursor_through(batch.lower()).unwrap();
 
-                    while batch_cursor.key_valid(&batch_storage) {
-                        let key = batch_cursor.key(&batch_storage);
+                    while batch_cursor.key_valid(&batch) {
+                        let key = batch_cursor.key(&batch);
                         let mut count = R::zero();
 
                         // Compute the multiplicity of this key before the current batch.
@@ -109,7 +109,7 @@ where
 
                         // Apply `thresh` both before and after `diff` is applied to `count`.
                         // If the result is non-zero, send it along.
-                        batch_cursor.map_times(&batch_storage, |time, diff| {
+                        batch_cursor.map_times(&batch, |time, diff| {
                             let old_weight = thresh(count);
                             count = count + diff;
                             let new_weight = thresh(count);
@@ -119,7 +119,7 @@ where
                             }
                         });
 
-                        batch_cursor.step_key(&batch_storage);
+                        batch_cursor.step_key(&batch);
                     }
 
                     // Tidy up the shared input trace.

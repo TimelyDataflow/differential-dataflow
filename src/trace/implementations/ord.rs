@@ -45,12 +45,10 @@ pub struct OrdValBatch<K: Ord, V: Ord, T: Lattice, R> {
 impl<K, V, T, R> BatchReader<K, V, T, R> for Rc<OrdValBatch<K, V, T, R>>
 where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Ord+Clone+'static, R: Diff {
 	type Cursor = OrdValCursor<V, T, R>;
-	fn cursor(&self) -> (Self::Cursor, <Self::Cursor as Cursor<K, V, T, R>>::Storage) { 
-		let cursor = OrdValCursor {
+	fn cursor(&self) -> Self::Cursor { 
+		OrdValCursor {
 			cursor: self.layer.cursor()
-		};
-
-		(cursor, self.clone())
+		}
 	}
 	fn len(&self) -> usize { <OrderedLayer<K, OrderedLayer<V, OrderedLeaf<T, R>>> as Trie>::tuples(&self.layer) }
 	fn description(&self) -> &Description<T> { &self.desc }
@@ -360,13 +358,12 @@ pub struct OrdKeyBatch<K: Ord, T: Lattice, R> {
 impl<K, T, R> BatchReader<K, (), T, R> for Rc<OrdKeyBatch<K, T, R>>
 where K: Ord+Clone+'static, T: Lattice+Ord+Clone+'static, R: Diff {
 	type Cursor = OrdKeyCursor<T, R>;
-	fn cursor(&self) -> (Self::Cursor, <Self::Cursor as Cursor<K, (), T, R>>::Storage) { 
-		let cursor = OrdKeyCursor {
+	fn cursor(&self) -> Self::Cursor { 
+		OrdKeyCursor {
 			empty: (),
 			valid: true,
 			cursor: self.layer.cursor(),
-		};
-		(cursor, self.clone())
+		}
 	}
 	fn len(&self) -> usize { <OrderedLayer<K, OrderedLeaf<T, R>> as Trie>::tuples(&self.layer) }
 	fn description(&self) -> &Description<T> { &self.desc }
