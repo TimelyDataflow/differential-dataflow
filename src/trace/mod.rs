@@ -335,8 +335,14 @@ pub mod rc_blanket_impls {
 		fn begin_merge(&self, other: &Self) -> Self::Merger { RcMerger { merger: B::begin_merge(self, other) } }
 
 		fn advance_mut(&mut self, frontier: &[T]) where K: Ord+Clone, V: Ord+Clone, T: Lattice+Ord+Clone, R: Diff {
+			let mut updated = false;
 			if let Some(batch) = Rc::get_mut(self) {
-				batch.advance_mut(frontier)
+				batch.advance_mut(frontier);
+				updated = true;
+			}
+
+			if !updated {
+				*self = self.advance_ref(frontier);
 			}
 		}
 	}
