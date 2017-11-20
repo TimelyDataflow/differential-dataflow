@@ -247,7 +247,7 @@ pub trait Merger<K, V, T, R, Output: Batch<K, V, T, R>> {
 	///
 	/// If `fuel` is non-zero after the call, the merging is complete and
 	/// one should call `done` to extract the merged results.
-	fn work(&mut self, source1: &Output, source2: &Output, fuel: &mut usize);
+	fn work(&mut self, source1: &Output, source2: &Output, frontier: &Option<Vec<T>>, fuel: &mut usize);
 	/// Extracts merged results.
 	///
 	/// This method should only be called after `work` has been called and
@@ -374,7 +374,7 @@ pub mod rc_blanket_impls {
 
 	/// Represents a merge in progress.
 	impl<K,V,T,R,B:Batch<K,V,T,R>> Merger<K, V, T, R, Rc<B>> for RcMerger<K,V,T,R,B> {
-		fn work(&mut self, source1: &Rc<B>, source2: &Rc<B>, fuel: &mut usize) { self.merger.work(source1, source2, fuel) }
+		fn work(&mut self, source1: &Rc<B>, source2: &Rc<B>, frontier: &Option<Vec<T>>, fuel: &mut usize) { self.merger.work(source1, source2, frontier, fuel) }
 		fn done(self) -> Rc<B> { Rc::new(self.merger.done()) }
 	}
 }
