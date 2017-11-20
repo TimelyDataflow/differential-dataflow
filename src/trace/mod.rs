@@ -136,12 +136,12 @@ pub trait Trace<Key, Val, Time, R> : TraceReader<Key, Val, Time, R> where <Self 
 /// but do not expose ways to construct the batches. This trait is appropriate for views of the batch, and is
 /// especially useful for views derived from other sources in ways that prevent the construction of batches
 /// from the type of data in the view (for example, filtered views, or views with extended time coordinates).
-pub trait BatchReader<K, V, T, R> {
-
+pub trait BatchReader<K, V, T, R> where Self: ::std::marker::Sized 
+{
 	/// The type used to enumerate the batch's contents.
-	type Cursor: Cursor<K, V, T, R>;
+	type Cursor: Cursor<K, V, T, R, Storage=Self>;
 	/// Acquires a cursor to the batch's contents.
-	fn cursor(&self) -> (Self::Cursor, <Self::Cursor as Cursor<K, V, T, R>>::Storage);
+	fn cursor(&self) -> Self::Cursor;
 	/// The number of updates in the batch.
 	fn len(&self) -> usize;
 	/// Describes the times of the updates in the batch.
@@ -151,7 +151,6 @@ pub trait BatchReader<K, V, T, R> {
 	fn lower(&self) -> &[T] { self.description().lower() }
 	/// All times in the batch are not greater or equal to any element of `upper`.
 	fn upper(&self) -> &[T] { self.description().upper() }
-
 }
 
 /// An immutable collection of updates.
@@ -186,18 +185,18 @@ pub trait Batch<K, V, T, R> : BatchReader<K, V, T, R> where Self: ::std::marker:
 		let mut builder = Self::Builder::with_capacity(self.len());
 
 		let mut times = Vec::new();
-		let (mut cursor, storage) = self.cursor();
+		let mut cursor = self.cursor();
 
-		while cursor.key_valid(&storage) {
-			while cursor.val_valid(&storage) {
-				cursor.map_times(&storage, |time: &T, diff| times.push((time.advance_by(frontier), diff)));
+		while cursor.key_valid(self) {
+			while cursor.val_valid(self) {
+				cursor.map_times(self, |time: &T, diff| times.push((time.advance_by(frontier), diff)));
 				consolidate(&mut times, 0);
 				for (time, diff) in times.drain(..) {
-					builder.push((cursor.key(&storage).clone(), cursor.val(&storage).clone(), time, diff));
+					builder.push((cursor.key(self).clone(), cursor.val(self).clone(), time, diff));
 				}
-				cursor.step_val(&storage);
+				cursor.step_val(self);
 			}
-			cursor.step_key(&storage);
+			cursor.step_key(self);
 		}
 
 		builder.done(self.description().lower(), self.description().upper(), frontier)
@@ -248,7 +247,7 @@ pub trait Merger<K, V, T, R, Output: Batch<K, V, T, R>> {
 	///
 	/// If `fuel` is non-zero after the call, the merging is complete and
 	/// one should call `done` to extract the merged results.
-	fn work(&mut self, fuel: &mut usize);
+	fn work(&mut self, source1: &Output, source2: &Output, fuel: &mut usize);
 	/// Extracts merged results.
 	///
 	/// This method should only be called after `work` has been called and
@@ -256,6 +255,134 @@ pub trait Merger<K, V, T, R, Output: Batch<K, V, T, R>> {
 	/// progress.
 	fn done(self) -> Output;
 }
+
+
+/// Blanket implementations for reference counted batches.
+pub mod rc_blanket_impls {
+
+	use std::rc::Rc;
+
+	use ::Diff;
+	use ::lattice::Lattice;
+	use super::{Batch, BatchReader, Batcher, Builder, Merger, Cursor, Description};
+
+	impl<K, V, T, R, B: BatchReader<K,V,T,R>> BatchReader<K,V,T,R> for Rc<B> {
+
+		/// The type used to enumerate the batch's contents.
+		type Cursor = RcBatchCursor<K, V, T, R, B>;
+		/// Acquires a cursor to the batch's contents.
+		fn cursor(&self) -> Self::Cursor {
+			RcBatchCursor::new((&**self).cursor())
+		}
+
+		/// The number of updates in the batch.
+		fn len(&self) -> usize { (&**self).len() }
+		/// Describes the times of the updates in the batch.
+		fn description(&self) -> &Description<T> { (&**self).description() }
+	}
+
+	/// Wrapper to provide cursor to nested scope.
+	pub struct RcBatchCursor<K, V, T, R, B: BatchReader<K, V, T, R>> {
+	    phantom: ::std::marker::PhantomData<(K, V, T, R)>,
+	    cursor: B::Cursor,
+	}
+
+	impl<K, V, T, R, B: BatchReader<K, V, T, R>> RcBatchCursor<K, V, T, R, B> {
+	    fn new(cursor: B::Cursor) -> Self {
+	        RcBatchCursor {
+	            cursor: cursor,
+	            phantom: ::std::marker::PhantomData,
+	        }
+	    }
+	}
+
+	impl<K, V, T, R, B: BatchReader<K, V, T, R>> Cursor<K, V, T, R> for RcBatchCursor<K, V, T, R, B> {
+
+	    type Storage = Rc<B>;
+
+	    #[inline(always)] fn key_valid(&self, storage: &Self::Storage) -> bool { self.cursor.key_valid(storage) }
+	    #[inline(always)] fn val_valid(&self, storage: &Self::Storage) -> bool { self.cursor.val_valid(storage) }
+
+	    #[inline(always)] fn key<'a>(&self, storage: &'a Self::Storage) -> &'a K { self.cursor.key(storage) }
+	    #[inline(always)] fn val<'a>(&self, storage: &'a Self::Storage) -> &'a V { self.cursor.val(storage) }
+
+	    #[inline(always)]
+	    fn map_times<L: FnMut(&T, R)>(&mut self, storage: &Self::Storage, logic: L) { 
+	    	self.cursor.map_times(storage, logic)
+	    }
+
+	    #[inline(always)] fn step_key(&mut self, storage: &Self::Storage) { self.cursor.step_key(storage) }
+	    #[inline(always)] fn seek_key(&mut self, storage: &Self::Storage, key: &K) { self.cursor.seek_key(storage, key) }
+	    
+	    #[inline(always)] fn step_val(&mut self, storage: &Self::Storage) { self.cursor.step_val(storage) }
+	    #[inline(always)] fn seek_val(&mut self, storage: &Self::Storage, val: &V) { self.cursor.seek_val(storage, val) }
+
+	    #[inline(always)] fn rewind_keys(&mut self, storage: &Self::Storage) { self.cursor.rewind_keys(storage) }
+	    #[inline(always)] fn rewind_vals(&mut self, storage: &Self::Storage) { self.cursor.rewind_vals(storage) }
+	}
+
+
+
+	/// An immutable collection of updates.
+	impl<K,V,T,R,B: Batch<K,V,T,R>> Batch<K, V, T, R> for Rc<B> {
+
+		type Batcher = RcBatcher<K, V, T, R, B>;
+		type Builder = RcBuilder<K, V, T, R, B>;
+		type Merger = RcMerger<K, V, T, R, B>;
+
+		fn merge(&self, other: &Self) -> Self { Rc::new(B::merge(self, other)) }
+
+		fn begin_merge(&self, other: &Self) -> Self::Merger { RcMerger { merger: B::begin_merge(self, other) } }
+
+		fn advance_mut(&mut self, frontier: &[T]) where K: Ord+Clone, V: Ord+Clone, T: Lattice+Ord+Clone, R: Diff {
+			let mut updated = false;
+			if let Some(batch) = Rc::get_mut(self) {
+				batch.advance_mut(frontier);
+				updated = true;
+			}
+
+			if !updated {
+				*self = self.advance_ref(frontier);
+			}
+		}
+	}
+
+	/// Wrapper type for batching reference counted batches.
+	pub struct RcBatcher<K,V,T,R,B:Batch<K,V,T,R>> { batcher: B::Batcher }
+
+	/// Functionality for collecting and batching updates.
+	impl<K,V,T,R,B:Batch<K,V,T,R>> Batcher<K, V, T, R, Rc<B>> for RcBatcher<K,V,T,R,B> {
+		fn new() -> Self { RcBatcher { batcher: <B::Batcher as Batcher<K,V,T,R,B>>::new() } }
+		fn push_batch(&mut self, batch: &mut Vec<((K, V), T, R)>) { self.batcher.push_batch(batch) }
+		fn seal(&mut self, upper: &[T]) -> Rc<B> { Rc::new(self.batcher.seal(upper)) }
+		fn frontier(&mut self) -> &[T] { self.batcher.frontier() }
+	}
+
+	/// Wrapper type for building reference counted batches.
+	pub struct RcBuilder<K,V,T,R,B:Batch<K,V,T,R>> { builder: B::Builder }
+
+	/// Functionality for building batches from ordered update sequences.
+	impl<K,V,T,R,B:Batch<K,V,T,R>> Builder<K, V, T, R, Rc<B>> for RcBuilder<K,V,T,R,B> {
+		fn new() -> Self { RcBuilder { builder: <B::Builder as Builder<K,V,T,R,B>>::new() } }
+		fn with_capacity(cap: usize) -> Self { RcBuilder { builder: <B::Builder as Builder<K,V,T,R,B>>::with_capacity(cap) } }
+		fn push(&mut self, element: (K, V, T, R)) { self.builder.push(element) }
+		fn done(self, lower: &[T], upper: &[T], since: &[T]) -> Rc<B> { Rc::new(self.builder.done(lower, upper, since)) }
+	}
+
+	/// Wrapper type for merging reference counted batches.
+	pub struct RcMerger<K,V,T,R,B:Batch<K,V,T,R>> { merger: B::Merger }
+
+	/// Represents a merge in progress.
+	impl<K,V,T,R,B:Batch<K,V,T,R>> Merger<K, V, T, R, Rc<B>> for RcMerger<K,V,T,R,B> {
+		fn work(&mut self, source1: &Rc<B>, source2: &Rc<B>, fuel: &mut usize) { self.merger.work(source1, source2, fuel) }
+		fn done(self) -> Rc<B> { Rc::new(self.merger.done()) }
+	}
+}
+
+
+
+
+
 
 /// Scans `vec[off..]` and consolidates differences of adjacent equivalent elements.
 pub fn consolidate<T: Ord+Clone, R: Diff>(vec: &mut Vec<(T, R)>, off: usize) {

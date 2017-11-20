@@ -360,7 +360,7 @@ pub struct Arranged<G: Scope, K, V, R, T> where G::Timestamp: Lattice+Ord, T: Tr
     // returns when invoked, so as to not duplicate work with multiple calls to `as_collection`.
 }
 
-impl<G: Scope, K, V, R, T>Clone for Arranged<G, K, V, R, T> 
+impl<G: Scope, K, V, R, T> Clone for Arranged<G, K, V, R, T> 
 where G::Timestamp: Lattice+Ord, T: TraceReader<K, V, G::Timestamp, R>+Clone {
     fn clone(&self) -> Self {
         Arranged {
@@ -411,17 +411,17 @@ impl<G: Scope, K, V, R, T> Arranged<G, K, V, R, T> where G::Timestamp: Lattice+O
                 let mut session = output.session(&time);
                 for wrapper in data.drain(..) {
                     let batch = wrapper.item;
-                    let (mut cursor, storage) = batch.cursor();
-                    while cursor.key_valid(&storage) {
-                        let key: &K = cursor.key(&storage);
-                        while cursor.val_valid(&storage) {
-                            let val: &V = cursor.val(&storage);
-                            cursor.map_times(&storage, |time, diff| {
+                    let mut cursor = batch.cursor();
+                    while cursor.key_valid(&batch) {
+                        let key: &K = cursor.key(&batch);
+                        while cursor.val_valid(&batch) {
+                            let val: &V = cursor.val(&batch);
+                            cursor.map_times(&batch, |time, diff| {
                                 session.give((logic(key, val), time.clone(), diff.clone()));
                             });
-                            cursor.step_val(&storage);
+                            cursor.step_val(&batch);
                         }
-                        cursor.step_key(&storage);
+                        cursor.step_key(&batch);
                     }
                 }
             });

@@ -47,7 +47,7 @@ where
 			let mut cursors = Vec::new();
 			let mut storage = Vec::new();
 
-			for (cursor, store) in self.merging.iter().filter(|b| b.len() > 0).map(|b| b.cursor()) {
+			for (cursor, store) in self.merging.iter().filter(|b| b.len() > 0).map(|b| (b.cursor(), b.clone())) {
 				cursors.push(cursor);
 				storage.push(store);
 			}
@@ -63,9 +63,8 @@ where
 
 				// include pending batches 
 				if include_upper {
-					let (cursor, store) = batch.cursor();
-					cursors.push(cursor);
-					storage.push(store);
+					cursors.push(batch.cursor());
+					storage.push(batch.clone());
 				}
 			}
 			Some((CursorList::new(cursors, &storage), storage))

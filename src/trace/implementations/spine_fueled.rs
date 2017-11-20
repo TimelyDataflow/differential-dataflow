@@ -29,8 +29,8 @@ impl<K, V, T: Eq, R, B: Batch<K, V, T, R>> MergeState<K, V, T, R, B> {
         MergeState::Merging(batch1, batch2, begin_merge)
     }
     fn work(mut self, fuel: &mut usize) -> Self {
-        if let MergeState::Merging(_, _, ref mut in_progress) = self {
-            in_progress.work(fuel);
+        if let MergeState::Merging(ref source1, ref source2, ref mut in_progress) = self {
+            in_progress.work(source1, source2, fuel);
         }
         if *fuel > 0 {
             match self {
@@ -60,6 +60,7 @@ pub struct Spine<K, V, T: Lattice+Ord, R: Diff, B: Batch<K, V, T, R>> {
     through_frontier: Vec<T>,            // Times after which the trace must be able to subset its inputs.
     merging: Vec<MergeState<K,V,T,R,B>>, // Several possibly shared collections of updates.
     pending: Vec<B>,                     // Batches at times in advance of `frontier`.
+    max_len: usize,
 }
 
 impl<K, V, T, R, B> TraceReader<K, V, T, R> for Spine<K, V, T, R, B> 
@@ -88,17 +89,14 @@ where
             for merge_state in self.merging.iter() {
                 match *merge_state {
                     MergeState::Merging(ref batch1, ref batch2, _) => { 
-                        let (cursor1, store1) = batch1.cursor();
-                        cursors.push(cursor1);
-                        storage.push(store1);
-                        let (cursor2, store2) = batch2.cursor();
-                        cursors.push(cursor2);
-                        storage.push(store2);
+                        cursors.push(batch1.cursor());
+                        storage.push(batch1.clone());
+                        cursors.push(batch2.cursor());
+                        storage.push(batch2.clone());
                     },
                     MergeState::Complete(ref batch) => {
-                        let (cursor, store) = batch.cursor();
-                        cursors.push(cursor);
-                        storage.push(store);
+                        cursors.push(batch.cursor());
+                        storage.push(batch.clone());
                     }
                 }
             }
@@ -114,9 +112,8 @@ where
 
                 // include pending batches 
                 if include_upper {
-                    let (cursor, store) = batch.cursor();
-                    cursors.push(cursor);
-                    storage.push(store);
+                    cursors.push(batch.cursor());
+                    storage.push(batch.clone());
                 }
             }
             Some((CursorList::new(cursors, &storage), storage))
@@ -170,6 +167,7 @@ where
             through_frontier: vec![<T as Lattice>::minimum()],
             merging: Vec::new(),
             pending: Vec::new(),
+            max_len: 0,
         }
     }
 
@@ -202,6 +200,63 @@ where
     #[inline(never)]
     fn consider_merges(&mut self) {
 
+        // This method performs incremental merging of batches, so that we never *need* to spend a 
+        // great deal of effort merging, but instead perform enough work to make progress on each 
+        // of the merges, so that by the time the batch is needed for a subsequent merge its own
+        // merge has completed. Done correctly, this should give us the same sequence of merges, 
+        // just completing them in perhaps different orders. 
+        //
+        // The reference merge pattern, from the eager implementation, is that we maintain batches 
+        // of geometrically decreasing size; when a new batch is introduced, we first merge all 
+        // batches smaller than the recently introduced batch, then repeatedly merge the smallest
+        // batch with the new batch as long as it (the smallest batch) does not contain twice the
+        // number of elements in the accumulated new batch (including elements merged with it).
+        //
+        // This reference merge pattern should maintain the invariant of at most a logarithmic 
+        // number of batches (because the number of updates halve with each batch), which should 
+        // leads to an amortized cost of log n for each inserted tuple (analysis missing).
+        //
+        // Our amortized implementation will start merges and then perform some amount of work on
+        // started merges. We want some discipline to ensure that we are able to complete each 
+        // started merge before we require the results again for a new merge from below (as this
+        // would require us to enqueue the more recent batch, at which point we risk growing 
+        // beyond our log n bound, at least without an alternate analysis).
+        //
+        // To maintain strict adherence to the referecne merge pattern, we need additional states
+        // in addition to "merge in progress" and "merge complete": it seems we need additionally
+        // "merge complete but awaiting completion of prior merge", for merges that would consider
+        // merging with a larger batch that results from an as-yet incomplete merge. Perhaps we can
+        // rig the distribution of effort so that such never happens, but if not we want the ability
+        // to reject merges with smaller batches if we might depart from the reference merge pattern.
+        // 
+        // A question is now "how should we distribute effort" among the in-progress merges? 
+        // 
+        // 1. Should we always work on the oldest merge, performing the work in the same order as it
+        //    would be done in the reference merge? No, as this would leave a pile of recently added
+        //    small batches awaiting merge effort, whose length increases unboundedly.
+        //
+        // 2. Should we always work on the most recent merges, minimizing the number of outstanding 
+        //    merges at any time (if not the amount of un-merged data)? Perhaps, though we must keep
+        //    some discipline about merge pattern (e.g. the reference pattern) to avoid merging and 
+        //    growing the smallest batches, violating the geometric decrease invariant. 
+        //    
+        //    If we cleave strongly to the reference merge pattern, we may have a hard time starting 
+        //    new merges, as any incomplete merge could result in an arbitrarily small result, and 
+        //    need to be merged with the next batch before any subsequent batch is merged with it.
+        //    We may require a different discipline to allow concurrent or out-of-order merges to 
+        //    occur.
+        //
+        // Perhaps we should consider merging by "number of tuples pre-cancelation", which have the
+        // delightful property that they only increase, and should less often block the merging of 
+        // subsequent batches, but which have the defect that by growing unboundedly the "log n" 
+        // bound we have also grows without bound, even as the accumluated differences stabilize.
+        //
+        // We could at various moments "correct" these estimates, drawing them down to at least twice
+        // the estimate of the size of the next batch, which would allow the estimates to stabilize
+        // as the sizes stabilize. Alternately, we could treat the size of any batch as at least twice
+        // the size of the next smaller batch, until the smaller batch is merged. It seems delicate
+        // to reason about the behavior here; delicate, but possible.
+
         // TODO: We could consider merging in batches here, rather than in sequence. 
         //       Little is currently known about whether this is important ...
         while self.pending.len() > 0 && 
@@ -210,7 +265,7 @@ where
             // this could be a VecDeque, if we ever notice this.
             let batch = self.pending.remove(0);
 
-            let mut fuel = 1_000_000 * (self.merging.len()) * batch.len();
+            let mut fuel = 8 * (self.merging.len()) * batch.len();
 
             // First, we want to complete any merges of batches smaller than `batch`.
             if self.merging.len() > 1 {
@@ -308,6 +363,11 @@ where
             //         }
             //     }
             // }
+        }
+
+        if self.merging.len() + self.pending.len() > self.max_len {
+            self.max_len = self.merging.len() + self.pending.len();
+            println!("max_len increased to {:?}", self.max_len);
         }
     }
 }

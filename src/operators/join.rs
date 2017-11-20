@@ -328,8 +328,8 @@ impl<G, K, V, R1, T1> JoinCore<G, K, V, R1> for Arranged<G,K,V,R1,T1>
                 if let Some(ref mut trace2) = trace2 {
                     for batch1 in data.drain(..) {
                         let (trace2_cursor, trace2_storage) = trace2.cursor_through(&acknowledged2[..]).unwrap();
-                        let (batch1_cursor, batch1_storage) = batch1.item.cursor();
-                        todo1.push(Deferred::new(trace2_cursor, trace2_storage, batch1_cursor, batch1_storage, capability.clone(), |r2,r1| *r1 * *r2));
+                        let batch1_cursor = batch1.item.cursor();
+                        todo1.push(Deferred::new(trace2_cursor, trace2_storage, batch1_cursor, batch1.item.clone(), capability.clone(), |r2,r1| *r1 * *r2));
                         debug_assert!(batch1.item.description().lower() == &acknowledged1[..]);
                         acknowledged1 = batch1.item.description().upper().to_vec();
                     }
@@ -341,8 +341,8 @@ impl<G, K, V, R1, T1> JoinCore<G, K, V, R1> for Arranged<G,K,V,R1,T1>
                 if let Some(ref mut trace1) = trace1 {
                     for batch2 in data.drain(..) {
                         let (trace1_cursor, trace1_storage) = trace1.cursor_through(&acknowledged1[..]).unwrap();
-                        let (batch2_cursor, batch2_storage) = batch2.item.cursor();
-                        todo2.push(Deferred::new(trace1_cursor, trace1_storage, batch2_cursor, batch2_storage, capability.clone(), |r1,r2| *r1 * *r2));
+                        let batch2_cursor = batch2.item.cursor();
+                        todo2.push(Deferred::new(trace1_cursor, trace1_storage, batch2_cursor, batch2.item.clone(), capability.clone(), |r1,r2| *r1 * *r2));
                         debug_assert!(batch2.item.description().lower() == &acknowledged2[..]);
                         acknowledged2 = batch2.item.description().upper().to_vec();
                     }
