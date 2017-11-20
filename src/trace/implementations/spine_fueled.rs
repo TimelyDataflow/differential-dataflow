@@ -12,7 +12,7 @@ use trace::cursor::Cursor;
 use trace::Merger;
 
 enum MergeState<K, V, T, R, B: Batch<K, V, T, R>> {
-    Merging(B, B, <B as Batch<K,V,T,R>>::Merger),
+    Merging(B, B, Option<Vec<T>>, <B as Batch<K,V,T,R>>::Merger),
     Complete(B),
 }
 
@@ -23,27 +23,27 @@ impl<K, V, T: Eq, R, B: Batch<K, V, T, R>> MergeState<K, V, T, R, B> {
             _ => false,
         }
     }
-    fn begin_merge(batch1: B, batch2: B) -> Self {
+    fn begin_merge(batch1: B, batch2: B, frontier: Option<Vec<T>>) -> Self {
         assert!(batch1.upper() == batch2.lower());
         let begin_merge = <B as Batch<K, V, T, R>>::begin_merge(&batch1, &batch2);
-        MergeState::Merging(batch1, batch2, begin_merge)
+        MergeState::Merging(batch1, batch2, frontier, begin_merge)
     }
     fn work(mut self, fuel: &mut usize) -> Self {
-        if let MergeState::Merging(ref source1, ref source2, ref mut in_progress) = self {
-            in_progress.work(source1, source2, fuel);
+        if let MergeState::Merging(ref source1, ref source2, ref frontier, ref mut in_progress) = self {
+            in_progress.work(source1, source2, frontier, fuel);
         }
         if *fuel > 0 {
             match self {
                 // ALLOC: Here is where we may de-allocate batches.
-                MergeState::Merging(_, _, finished) => MergeState::Complete(finished.done()),
+                MergeState::Merging(_, _, _, finished) => MergeState::Complete(finished.done()),
                 MergeState::Complete(x) => MergeState::Complete(x),
             }
         }
         else { self }
     }
-    fn len(&mut self) -> usize {
+    fn len(&self) -> usize {
         match *self {
-            MergeState::Merging(ref batch1, ref batch2, _) => batch1.len() + batch2.len(),
+            MergeState::Merging(ref batch1, ref batch2, _, _) => batch1.len() + batch2.len(),
             MergeState::Complete(ref batch) => batch.len(),
         }
     }
@@ -61,6 +61,8 @@ pub struct Spine<K, V, T: Lattice+Ord, R: Diff, B: Batch<K, V, T, R>> {
     merging: Vec<MergeState<K,V,T,R,B>>, // Several possibly shared collections of updates.
     pending: Vec<B>,                     // Batches at times in advance of `frontier`.
     max_len: usize,
+    max_dur: ::std::time::Duration,
+    reserve: usize,                      // fuel reserves.
 }
 
 impl<K, V, T, R, B> TraceReader<K, V, T, R> for Spine<K, V, T, R, B> 
@@ -88,7 +90,7 @@ where
 
             for merge_state in self.merging.iter() {
                 match *merge_state {
-                    MergeState::Merging(ref batch1, ref batch2, _) => { 
+                    MergeState::Merging(ref batch1, ref batch2, _, _) => { 
                         cursors.push(batch1.cursor());
                         storage.push(batch1.clone());
                         cursors.push(batch2.cursor());
@@ -139,7 +141,7 @@ where
     fn map_batches<F: FnMut(&Self::Batch)>(&mut self, mut f: F) {
         for batch in self.merging.iter() {
             match *batch {
-                MergeState::Merging(ref batch1, ref batch2, _) => { f(batch1); f(batch2); },
+                MergeState::Merging(ref batch1, ref batch2, _, _) => { f(batch1); f(batch2); },
                 MergeState::Complete(ref batch) => { f(batch); },
             }
         }
@@ -168,6 +170,8 @@ where
             merging: Vec::new(),
             pending: Vec::new(),
             max_len: 0,
+            max_dur: Default::default(),
+            reserve: 0,
         }
     }
 
@@ -200,62 +204,7 @@ where
     #[inline(never)]
     fn consider_merges(&mut self) {
 
-        // This method performs incremental merging of batches, so that we never *need* to spend a 
-        // great deal of effort merging, but instead perform enough work to make progress on each 
-        // of the merges, so that by the time the batch is needed for a subsequent merge its own
-        // merge has completed. Done correctly, this should give us the same sequence of merges, 
-        // just completing them in perhaps different orders. 
-        //
-        // The reference merge pattern, from the eager implementation, is that we maintain batches 
-        // of geometrically decreasing size; when a new batch is introduced, we first merge all 
-        // batches smaller than the recently introduced batch, then repeatedly merge the smallest
-        // batch with the new batch as long as it (the smallest batch) does not contain twice the
-        // number of elements in the accumulated new batch (including elements merged with it).
-        //
-        // This reference merge pattern should maintain the invariant of at most a logarithmic 
-        // number of batches (because the number of updates halve with each batch), which should 
-        // leads to an amortized cost of log n for each inserted tuple (analysis missing).
-        //
-        // Our amortized implementation will start merges and then perform some amount of work on
-        // started merges. We want some discipline to ensure that we are able to complete each 
-        // started merge before we require the results again for a new merge from below (as this
-        // would require us to enqueue the more recent batch, at which point we risk growing 
-        // beyond our log n bound, at least without an alternate analysis).
-        //
-        // To maintain strict adherence to the referecne merge pattern, we need additional states
-        // in addition to "merge in progress" and "merge complete": it seems we need additionally
-        // "merge complete but awaiting completion of prior merge", for merges that would consider
-        // merging with a larger batch that results from an as-yet incomplete merge. Perhaps we can
-        // rig the distribution of effort so that such never happens, but if not we want the ability
-        // to reject merges with smaller batches if we might depart from the reference merge pattern.
-        // 
-        // A question is now "how should we distribute effort" among the in-progress merges? 
-        // 
-        // 1. Should we always work on the oldest merge, performing the work in the same order as it
-        //    would be done in the reference merge? No, as this would leave a pile of recently added
-        //    small batches awaiting merge effort, whose length increases unboundedly.
-        //
-        // 2. Should we always work on the most recent merges, minimizing the number of outstanding 
-        //    merges at any time (if not the amount of un-merged data)? Perhaps, though we must keep
-        //    some discipline about merge pattern (e.g. the reference pattern) to avoid merging and 
-        //    growing the smallest batches, violating the geometric decrease invariant. 
-        //    
-        //    If we cleave strongly to the reference merge pattern, we may have a hard time starting 
-        //    new merges, as any incomplete merge could result in an arbitrarily small result, and 
-        //    need to be merged with the next batch before any subsequent batch is merged with it.
-        //    We may require a different discipline to allow concurrent or out-of-order merges to 
-        //    occur.
-        //
-        // Perhaps we should consider merging by "number of tuples pre-cancelation", which have the
-        // delightful property that they only increase, and should less often block the merging of 
-        // subsequent batches, but which have the defect that by growing unboundedly the "log n" 
-        // bound we have also grows without bound, even as the accumluated differences stabilize.
-        //
-        // We could at various moments "correct" these estimates, drawing them down to at least twice
-        // the estimate of the size of the next batch, which would allow the estimates to stabilize
-        // as the sizes stabilize. Alternately, we could treat the size of any batch as at least twice
-        // the size of the next smaller batch, until the smaller batch is merged. It seems delicate
-        // to reason about the behavior here; delicate, but possible.
+        let start = ::std::time::Instant::now();
 
         // TODO: We could consider merging in batches here, rather than in sequence. 
         //       Little is currently known about whether this is important ...
@@ -265,8 +214,6 @@ where
             // this could be a VecDeque, if we ever notice this.
             let batch = self.pending.remove(0);
 
-            let mut fuel = 8 * (self.merging.len()) * batch.len();
-
             // First, we want to complete any merges of batches smaller than `batch`.
             if self.merging.len() > 1 {
 
@@ -274,21 +221,27 @@ where
                 
                 while self.merging.last_mut().map(|x| x.len() < batch.len()) == Some(true) {
 
+                    // finish all smaller merges unconditionally.
                     let mut less_recent = self.merging.pop().unwrap();
-                    most_recent = most_recent.work(&mut fuel);
-                    less_recent = less_recent.work(&mut fuel);
+                    most_recent = most_recent.work(&mut usize::max_value());
+                    less_recent = less_recent.work(&mut usize::max_value());
 
                     match (less_recent, most_recent) {
                         (MergeState::Complete(less), MergeState::Complete(most)) => {
                             assert!(less.upper() == most.lower());
-                            most_recent = MergeState::begin_merge(less, most);
+                            most_recent = MergeState::begin_merge(less, most, None);
                         },
-                        _ => panic!("unmerged small data discovered; logic bug!"),
+                        _ => panic!("spine_fueled: unmerged small data discovered; logic bug!"),
                     }
                 }
 
                 self.merging.push(most_recent);
             }
+
+            // add some fuel to reserve, and get ready to spend some.
+            self.reserve += 4 * (self.merging.len()) * batch.len();
+            let mut fuel = self.reserve / 10;
+            self.reserve -= fuel;
 
             let mut most_recent = MergeState::Complete(batch);
 
@@ -300,20 +253,10 @@ where
 
                 match (less_recent, most_recent) {
 
-                    // TODO: This starts a merge here, even if the merge that "should" start is 
-                    //       between `less_recent` and `even_less_recent`, for example when they
-                    //       differ in size by less than a factor of two. This could draw out the
-                    //       length of self.merging, and violate "factor of two" invariants, which
-                    //       are important for performance.
-
-                    (MergeState::Complete(mut less), MergeState::Complete(mut most)) => {
+                    (MergeState::Complete(less), MergeState::Complete(most)) => {
                         assert!(less.upper() == most.lower());
-                        if self.merging.len() == 0 {
-                            less.advance_mut(&self.advance_frontier[..]);
-                            most.advance_mut(&self.advance_frontier[..]);
-                        }
-                        assert!(less.upper() == most.lower());
-                        most_recent = MergeState::begin_merge(less, most);
+                        let frontier = if self.merging.len() == 0 { Some(self.advance_frontier.clone()) } else { None };
+                        most_recent = MergeState::begin_merge(less, most, frontier);
                     }
                     (less, most) => { 
                         // Can't merge; stash `less` and assume stash `most` next round.
@@ -326,48 +269,57 @@ where
 
             self.merging.push(most_recent);
 
-            // Spend any remaining fuel.
-            for index in (0 .. self.merging.len()).rev() {
-                if fuel > 0 {
-                    let temp = self.merging.remove(index);
-                    self.merging.insert(index, temp.work(&mut fuel));
-                }
-            }
+            // as long as we have fuel to spend, and not all merges complete ...
+            while fuel > 0 && self.merging.iter().any(|b| !b.is_complete()) {
 
-            // Scan forward, looking for possible merges to start.
-            let mut index = 1;
-            while index < self.merging.len() {
-                if self.merging[index-1].len() < 2 * self.merging[index].len() && self.merging[index-1].is_complete() && self.merging[index].is_complete() {
-                    let less_recent = self.merging.remove(index-1);
-                    let more_recent = self.merging.remove(index-1);
-                    match (less_recent, more_recent) {
-                        (MergeState::Complete(less), MergeState::Complete(more)) => {
-                            self.merging.insert(index - 1, MergeState::begin_merge(less, more));
-                        },
-                        _ => panic!("unreachable"),
+                // Spend any remaining fuel.
+                for index in (0 .. self.merging.len()).rev() {
+                    if fuel > 0 {
+                        let temp = self.merging.remove(index);
+                        self.merging.insert(index, temp.work(&mut fuel));
                     }
                 }
-                else {
-                    index += 1;
+
+                // Scan forward, looking for possible merges to start.
+                let mut index = 1;
+                while index < self.merging.len() {
+                    if self.merging[index-1].len() < 2 * self.merging[index].len() && self.merging[index-1].is_complete() && self.merging[index].is_complete() {
+                        let less_recent = self.merging.remove(index-1);
+                        let more_recent = self.merging.remove(index-1);
+                        match (less_recent, more_recent) {
+                            (MergeState::Complete(less), MergeState::Complete(more)) => {
+                                let frontier = if index == 1 { Some(self.advance_frontier.clone()) } else { None };
+                                self.merging.insert(index - 1, MergeState::begin_merge(less, more, frontier));
+                            },
+                            _ => panic!("unreachable"),
+                        }
+                    }
+                    else {
+                        index += 1;
+                    }
                 }
             }
 
-            // TODO: We *may* still have fuel and could work on new merges.
-
-            // if self.merging.len() > 32 {
-            //     println!("len: {:?}", self.merging.len());
-            //     for batch in self.merging.iter_mut() {
-            //         match *batch {
-            //             MergeState::Merging(ref mut x, ref mut y, _) => { println!("  len({}, {})", x.len(), y.len()); },
-            //             MergeState::Complete(ref mut x) => { println!("  len({})", x.len()); },
-            //         }
-            //     }
-            // }
+            if fuel > 0 {
+                self.reserve = 0;
+            }
         }
 
-        if self.merging.len() + self.pending.len() > self.max_len {
-            self.max_len = self.merging.len() + self.pending.len();
-            println!("max_len increased to {:?}", self.max_len);
+        let elapsed = start.elapsed();
+        if elapsed > self.max_dur {
+            self.max_dur = elapsed;
+            // println!("max_dur increased to {:?}", self.max_dur);
         }
+
+        // if self.merging.len() + self.pending.len() > self.max_len {
+        //     self.max_len = self.merging.len() + self.pending.len();
+        //     println!("max_len increased to {:?}", self.max_len);
+        // }
+    }
+}
+
+impl<K, V, T: Lattice+Ord, R: Diff, B: Batch<K, V, T, R>> Drop for Spine<K, V, T, R, B> {
+    fn drop(&mut self) {
+        println!("max_duration: {:?}", self.max_dur);
     }
 }
