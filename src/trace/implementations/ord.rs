@@ -42,12 +42,6 @@ pub struct OrdValBatch<K: Ord, V: Ord, T: Lattice, R> {
 	pub desc: Description<T>,
 }
 
-impl<K: Ord, V: Ord, T: Lattice, R> Clone for OrdValBatch<K, V, T, R> {
-	fn clone(&self) -> Self {
-		panic!("Error: In OrdValBatch::clone()");
-	}
-}
-
 impl<K, V, T, R> BatchReader<K, V, T, R> for OrdValBatch<K, V, T, R>
 where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Ord+Clone+'static, R: Diff {
 	type Cursor = OrdValCursor<V, T, R>;
@@ -338,12 +332,6 @@ pub struct OrdKeyBatch<K: Ord, T: Lattice, R> {
 	pub layer: OrderedLayer<K, OrderedLeaf<T, R>>,
 	/// Description of the update times this layer represents.
 	pub desc: Description<T>,
-}
-
-impl<K: Ord, T: Lattice, R> Clone for OrdKeyBatch<K, T, R> {
-	fn clone(&self) -> Self {
-		panic!("Error: In OrdKeyBatch::clone()");
-	}
 }
 
 impl<K, T, R> BatchReader<K, (), T, R> for OrdKeyBatch<K, T, R>

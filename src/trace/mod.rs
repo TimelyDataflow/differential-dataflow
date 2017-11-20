@@ -136,7 +136,7 @@ pub trait Trace<Key, Val, Time, R> : TraceReader<Key, Val, Time, R> where <Self 
 /// but do not expose ways to construct the batches. This trait is appropriate for views of the batch, and is
 /// especially useful for views derived from other sources in ways that prevent the construction of batches
 /// from the type of data in the view (for example, filtered views, or views with extended time coordinates).
-pub trait BatchReader<K, V, T, R> where Self: Clone+::std::marker::Sized 
+pub trait BatchReader<K, V, T, R> where Self: ::std::marker::Sized 
 {
 	/// The type used to enumerate the batch's contents.
 	type Cursor: Cursor<K, V, T, R, Storage=Self>;
