@@ -58,28 +58,28 @@ fn main() {
             let mut probes = Vec::new();
 
             match query {
-                // 1 => probes.push(queries::query01::query(&mut collections)),
-                // 2 => probes.push(queries::query02::query(&mut collections)),
-                // 3 => probes.push(queries::query03::query(&mut collections)),
+                1 => probes.push(queries::query01::query(&mut collections)),
+                2 => probes.push(queries::query02::query(&mut collections)),
+                3 => probes.push(queries::query03::query(&mut collections)),
                 4 => probes.push(queries::query04::query(&mut collections)),
-                // 5 => probes.push(queries::query05::query(&mut collections)),
-                // 6 => probes.push(queries::query06::query(&mut collections)),
-                // 7 => probes.push(queries::query07::query(&mut collections)),
-                // 8 => probes.push(queries::query08::query(&mut collections)),
-                // 9 => probes.push(queries::query09::query(&mut collections)),
-                // 10 => probes.push(queries::query10::query(&mut collections)),
-                // 11 => probes.push(queries::query11::query(&mut collections)),
-                // 12 => probes.push(queries::query12::query(&mut collections)),
-                // 13 => probes.push(queries::query13::query(&mut collections)),
-                // 14 => probes.push(queries::query14::query(&mut collections)),
-                // 15 => probes.push(queries::query15::query(&mut collections)),
-                // 16 => probes.push(queries::query16::query(&mut collections)),
-                // 17 => probes.push(queries::query17::query(&mut collections)),
-                // 18 => probes.push(queries::query18::query(&mut collections)),
-                // 19 => probes.push(queries::query19::query(&mut collections)),
-                // 20 => probes.push(queries::query20::query(&mut collections)),
-                // 21 => probes.push(queries::query21::query(&mut collections)),
-                // 22 => probes.push(queries::query22::query(&mut collections)),
+                5 => probes.push(queries::query05::query(&mut collections)),
+                6 => probes.push(queries::query06::query(&mut collections)),
+                7 => probes.push(queries::query07::query(&mut collections)),
+                8 => probes.push(queries::query08::query(&mut collections)),
+                9 => probes.push(queries::query09::query(&mut collections)),
+                10 => probes.push(queries::query10::query(&mut collections)),
+                11 => probes.push(queries::query11::query(&mut collections)),
+                12 => probes.push(queries::query12::query(&mut collections)),
+                13 => probes.push(queries::query13::query(&mut collections)),
+                14 => probes.push(queries::query14::query(&mut collections)),
+                15 => probes.push(queries::query15::query(&mut collections)),
+                16 => probes.push(queries::query16::query(&mut collections)),
+                17 => probes.push(queries::query17::query(&mut collections)),
+                18 => probes.push(queries::query18::query(&mut collections)),
+                19 => probes.push(queries::query19::query(&mut collections)),
+                20 => probes.push(queries::query20::query(&mut collections)),
+                21 => probes.push(queries::query21::query(&mut collections)),
+                22 => probes.push(queries::query22::query(&mut collections)),
                 _ => panic!("query: {:?} unimplemented", query),
             }
 
@@ -98,14 +98,14 @@ fn main() {
         let mut suppliers = if used[7] { load::<Supplier>(prefix.as_str(), "supplier.tbl", index, peers, logical_batch, physical_batch, 7 ) } else { Vec::new() };
 
         let mut tuples = 0usize;
-        tuples += customers.iter().map(|x| x.len()).sum();
-        tuples += lineitems.iter().map(|x| x.len()).sum();
-        tuples += nations.iter().map(|x| x.len()).sum();
-        tuples += orders.iter().map(|x| x.len()).sum();
-        tuples += parts.iter().map(|x| x.len()).sum();
-        tuples += partsupps.iter().map(|x| x.len()).sum();
-        tuples += regions.iter().map(|x| x.len()).sum();
-        tuples += suppliers.iter().map(|x| x.len()).sum();
+        tuples += customers.iter().map(|x| x.len()).sum::<usize>();
+        tuples += lineitems.iter().map(|x| x.len()).sum::<usize>();
+        tuples += nations.iter().map(|x| x.len()).sum::<usize>();
+        tuples += orders.iter().map(|x| x.len()).sum::<usize>();
+        tuples += parts.iter().map(|x| x.len()).sum::<usize>();
+        tuples += partsupps.iter().map(|x| x.len()).sum::<usize>();
+        tuples += regions.iter().map(|x| x.len()).sum::<usize>();
+        tuples += suppliers.iter().map(|x| x.len()).sum::<usize>();
 
         let timer = Instant::now();
         let mut round = 0;
