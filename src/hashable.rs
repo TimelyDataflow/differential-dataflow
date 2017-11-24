@@ -55,16 +55,12 @@ impl<T: Unsigned+Copy> HashOrdered for UnsignedWrapper<T> { }
 // It would be great to use the macros for these, but I couldn't figure out how to get it
 // to work with constraints (i.e. `Hashable`) on the generic parameters.
 impl<T: Ord+Hashable+Abomonation> Abomonation for OrdWrapper<T> {
-
-    #[inline] unsafe fn entomb(&self, _writer: &mut Vec<u8>) {
-        self.item.entomb(_writer);
-    }
-    #[inline] unsafe fn embalm(&mut self) {
-        self.item.embalm();
+    #[inline] unsafe fn entomb<W: ::std::io::Write>(&self, write: &mut W) -> ::std::io::Result<()> {
+        self.item.entomb(write)
     }
     #[inline] unsafe fn exhume<'a,'b>(&'a mut self, mut bytes: &'b mut [u8]) -> Option<&'b mut [u8]> {
         let temp = bytes; 
-        bytes = if let Some(bytes) = self.item.exhume(temp) { bytes } else { return None };
+        bytes = self.item.exhume(temp)?;
         Some(bytes)
     }
 }
@@ -73,30 +69,24 @@ impl<T: Ord+Hashable+Abomonation> Abomonation for OrdWrapper<T> {
 // to work with constraints (i.e. `Hashable`) on the generic parameters.
 impl<T: Hashable+Abomonation> Abomonation for HashableWrapper<T> {
 
-    #[inline] unsafe fn entomb(&self, _writer: &mut Vec<u8>) {
-        self.item.entomb(_writer);
-    }
-    #[inline] unsafe fn embalm(&mut self) {
-        self.item.embalm();
+    #[inline] unsafe fn entomb<W: ::std::io::Write>(&self, write: &mut W) -> ::std::io::Result<()> {
+        self.item.entomb(write)
     }
     #[inline] unsafe fn exhume<'a,'b>(&'a mut self, mut bytes: &'b mut [u8]) -> Option<&'b mut [u8]> {
         let temp = bytes; 
-        bytes = if let Some(bytes) = self.item.exhume(temp) { bytes } else { return None };
+        bytes = self.item.exhume(temp)?;
         Some(bytes)
     }
 }
 
 impl<T: Unsigned+Copy+Hashable+Abomonation> Abomonation for UnsignedWrapper<T> {
 
-    #[inline] unsafe fn entomb(&self, _writer: &mut Vec<u8>) {
-        self.item.entomb(_writer);
-    }
-    #[inline] unsafe fn embalm(&mut self) {
-        self.item.embalm();
+    #[inline] unsafe fn entomb<W: ::std::io::Write>(&self, write: &mut W) -> ::std::io::Result<()> {
+        self.item.entomb(write)
     }
     #[inline] unsafe fn exhume<'a,'b>(&'a mut self, mut bytes: &'b mut [u8]) -> Option<&'b mut [u8]> {
         let temp = bytes; 
-        bytes = if let Some(bytes) = self.item.exhume(temp) { bytes } else { return None };
+        bytes = self.item.exhume(temp)?;
         Some(bytes)
     }
 }

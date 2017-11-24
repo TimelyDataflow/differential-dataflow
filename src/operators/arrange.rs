@@ -60,8 +60,7 @@ pub struct BatchWrapper<T> {
 
 // NOTE: This is all horrible. Don't look too hard.
 impl<T> ::abomonation::Abomonation for BatchWrapper<T> {
-   unsafe fn entomb(&self, _writer: &mut Vec<u8>) { panic!("BatchWrapper Abomonation impl") }
-   unsafe fn embalm(&mut self) { panic!("BatchWrapper Abomonation impl") }
+   unsafe fn entomb<W: ::std::io::Write>(&self, _write: &mut W) -> ::std::io::Result<()> { panic!("BatchWrapper Abomonation impl") }
    unsafe fn exhume<'a,'b>(&'a mut self, _bytes: &'b mut [u8]) -> Option<&'b mut [u8]> { panic!("BatchWrapper Abomonation impl")  }
 }
 
