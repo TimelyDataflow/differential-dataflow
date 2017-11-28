@@ -386,8 +386,7 @@ pub mod abomonated_blanket_impls {
 
 	extern crate abomonation;
 
-	use abomonation::Abomonation;
-	use abomonation::size::AbomonationSize;
+	use abomonation::{Abomonation, measure};
 	use abomonation::abomonated::Abomonated;
 
 	use super::{Batch, BatchReader, Batcher, Builder, Merger, Cursor, Description};
@@ -448,7 +447,7 @@ pub mod abomonated_blanket_impls {
 	}
 
 	/// An immutable collection of updates.
-	impl<K,V,T,R,B: Batch<K,V,T,R>+AbomonationSize> Batch<K, V, T, R> for Abomonated<B, Vec<u8>> {
+	impl<K,V,T,R,B: Batch<K,V,T,R>+Abomonation> Batch<K, V, T, R> for Abomonated<B, Vec<u8>> {
 
 		type Batcher = AbomonatedBatcher<K, V, T, R, B>;
 		type Builder = AbomonatedBuilder<K, V, T, R, B>;
@@ -456,7 +455,7 @@ pub mod abomonated_blanket_impls {
 
 		fn merge(&self, other: &Self) -> Self { 
 			let batch = B::merge(self, other);
-			let mut bytes = Vec::with_capacity(batch.measure());
+			let mut bytes = Vec::with_capacity(measure(&batch));
 			unsafe { abomonation::encode(&batch, &mut bytes).unwrap() };
 			unsafe { Abomonated::<B,_>::new(bytes).unwrap() }
 		}
@@ -468,12 +467,12 @@ pub mod abomonated_blanket_impls {
 	pub struct AbomonatedBatcher<K,V,T,R,B:Batch<K,V,T,R>> { batcher: B::Batcher }
 
 	/// Functionality for collecting and batching updates.
-	impl<K,V,T,R,B:Batch<K,V,T,R>+AbomonationSize> Batcher<K, V, T, R, Abomonated<B,Vec<u8>>> for AbomonatedBatcher<K,V,T,R,B> {
+	impl<K,V,T,R,B:Batch<K,V,T,R>+Abomonation> Batcher<K, V, T, R, Abomonated<B,Vec<u8>>> for AbomonatedBatcher<K,V,T,R,B> {
 		fn new() -> Self { AbomonatedBatcher { batcher: <B::Batcher as Batcher<K,V,T,R,B>>::new() } }
 		fn push_batch(&mut self, batch: &mut Vec<((K, V), T, R)>) { self.batcher.push_batch(batch) }
 		fn seal(&mut self, upper: &[T]) -> Abomonated<B, Vec<u8>> { 
 			let batch = self.batcher.seal(upper);
-			let mut bytes = Vec::with_capacity(batch.measure());
+			let mut bytes = Vec::with_capacity(measure(&batch));
 			unsafe { abomonation::encode(&batch, &mut bytes).unwrap() };
 			unsafe { Abomonated::<B,_>::new(bytes).unwrap() }
 		}
@@ -484,13 +483,13 @@ pub mod abomonated_blanket_impls {
 	pub struct AbomonatedBuilder<K,V,T,R,B:Batch<K,V,T,R>> { builder: B::Builder }
 
 	/// Functionality for building batches from ordered update sequences.
-	impl<K,V,T,R,B:Batch<K,V,T,R>+AbomonationSize> Builder<K, V, T, R, Abomonated<B,Vec<u8>>> for AbomonatedBuilder<K,V,T,R,B> {
+	impl<K,V,T,R,B:Batch<K,V,T,R>+Abomonation> Builder<K, V, T, R, Abomonated<B,Vec<u8>>> for AbomonatedBuilder<K,V,T,R,B> {
 		fn new() -> Self { AbomonatedBuilder { builder: <B::Builder as Builder<K,V,T,R,B>>::new() } }
 		fn with_capacity(cap: usize) -> Self { AbomonatedBuilder { builder: <B::Builder as Builder<K,V,T,R,B>>::with_capacity(cap) } }
 		fn push(&mut self, element: (K, V, T, R)) { self.builder.push(element) }
 		fn done(self, lower: &[T], upper: &[T], since: &[T]) -> Abomonated<B, Vec<u8>> { 
 			let batch = self.builder.done(lower, upper, since);
-			let mut bytes = Vec::with_capacity(batch.measure());
+			let mut bytes = Vec::with_capacity(measure(&batch));
 			unsafe { abomonation::encode(&batch, &mut bytes).unwrap() };
 			unsafe { Abomonated::<B,_>::new(bytes).unwrap() }
 		}
@@ -500,13 +499,13 @@ pub mod abomonated_blanket_impls {
 	pub struct AbomonatedMerger<K,V,T,R,B:Batch<K,V,T,R>> { merger: B::Merger }
 
 	/// Represents a merge in progress.
-	impl<K,V,T,R,B:Batch<K,V,T,R>+AbomonationSize> Merger<K, V, T, R, Abomonated<B,Vec<u8>>> for AbomonatedMerger<K,V,T,R,B> {
+	impl<K,V,T,R,B:Batch<K,V,T,R>+Abomonation> Merger<K, V, T, R, Abomonated<B,Vec<u8>>> for AbomonatedMerger<K,V,T,R,B> {
 		fn work(&mut self, source1: &Abomonated<B,Vec<u8>>, source2: &Abomonated<B,Vec<u8>>, frontier: &Option<Vec<T>>, fuel: &mut usize) { 
 			self.merger.work(source1, source2, frontier, fuel) 
 		}
 		fn done(self) -> Abomonated<B, Vec<u8>> { 
 			let batch = self.merger.done();
-			let mut bytes = Vec::with_capacity(batch.measure());
+			let mut bytes = Vec::with_capacity(measure(&batch));
 			unsafe { abomonation::encode(&batch, &mut bytes).unwrap() };
 			unsafe { Abomonated::<B,_>::new(bytes).unwrap() }
 		}
