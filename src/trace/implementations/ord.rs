@@ -27,19 +27,23 @@ use super::spine::Spine;
 // use super::spine_fueled::Spine;
 use super::merge_batcher::MergeBatcher;
 
-// use abomonation::abomonated::Abomonated;
+use abomonation::abomonated::Abomonated;
 
-/// A trace implementation using a spine of hash-map batches.
+/// A trace implementation using a spine of ordered lists.
 pub type OrdValSpine<K, V, T, R> = Spine<K, V, T, R, Rc<OrdValBatch<K, V, T, R>>>;
-// pub type OrdValSpine<K, V, T, R> = Spine<K, V, T, R, Rc<Abomonated<OrdValBatch<K, V, T, R>, Vec<u8>>>>;
 
-/// A trace implementation for empty values using a spine of hash-map batches.
+/// A trace implementation using a spine of abomonated ordered lists.
+pub type OrdValSpineAbom<K, V, T, R> = Spine<K, V, T, R, Rc<Abomonated<OrdValBatch<K, V, T, R>, Vec<u8>>>>;
+
+/// A trace implementation for empty values using a spine of ordered lists.
 pub type OrdKeySpine<K, T, R> = Spine<K, (), T, R, Rc<OrdKeyBatch<K, T, R>>>;
-// pub type OrdKeySpine<K, T, R> = Spine<K, (), T, R, Rc<Abomonated<OrdKeyBatch<K, T, R>, Vec<u8>>>>;
+
+/// A trace implementation for empty values using a spine of abomonated ordered lists.
+pub type OrdKeySpineAbom<K, T, R> = Spine<K, (), T, R, Rc<Abomonated<OrdKeyBatch<K, T, R>, Vec<u8>>>>;
 
 
 /// An immutable collection of update tuples, from a contiguous interval of logical times.
-#[derive(Debug)]
+#[derive(Debug, Abomonation)]
 pub struct OrdValBatch<K: Ord, V: Ord, T: Lattice, R> {
 	/// Where all the dataz is.
 	pub layer: OrderedLayer<K, OrderedLayer<V, OrderedLeaf<T, R>>>,
@@ -448,7 +452,7 @@ where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Ord+Clone+::std::fm
 
 
 /// An immutable collection of update tuples, from a contiguous interval of logical times.
-#[derive(Debug)]
+#[derive(Debug, Abomonation)]
 pub struct OrdKeyBatch<K: Ord, T: Lattice, R> {
 	/// Where all the dataz is.
 	pub layer: OrderedLayer<K, OrderedLeaf<T, R>>,
