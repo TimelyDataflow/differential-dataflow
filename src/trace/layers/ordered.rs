@@ -5,7 +5,7 @@ use super::{Trie, Cursor, Builder, MergeBuilder, TupleBuilder};
 /// A level of the trie, with keys and offsets into a lower layer.
 ///
 /// In this representation, the values for `keys[i]` are found at `vals[offs[i] .. offs[i+1]]`.
-#[derive(Debug, Eq, PartialEq, Clone)]
+#[derive(Debug, Eq, PartialEq, Clone, Abomonation)]
 pub struct OrderedLayer<K: Ord, L> {
 	/// The keys of the layer.
 	pub keys: Vec<K>,

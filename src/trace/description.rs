@@ -62,7 +62,7 @@
 /// frontier indicates a moment at which the times were observed. If `since` is strictly in 
 /// advance of `lower`, the contained times may be "advanced" to times which appear equivalent to
 /// any time after `since`.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Abomonation)]
 pub struct Description<Time> {
 	/// lower frontier of contained updates.
 	lower: Vec<Time>,
