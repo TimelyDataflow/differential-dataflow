@@ -21,7 +21,6 @@ pub fn build((dataflow, handles, probe, _timer, args): Environment) -> Result<()
         .as_collection(|k,v| (k.clone(), v.clone()))
         .map(|(src, _dst)| src as usize).count_total()
         .map(|(_src, cnt)| cnt as usize).count_total()
-        // .inspect(|x| println!("count: {:?}", x))
         .probe_with(probe);
 
     Ok(())

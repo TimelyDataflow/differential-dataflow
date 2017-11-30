@@ -20,7 +20,7 @@ use differential_dataflow::trace::TraceReader;
 
 use dd_server::{Environment, TraceHandle};
 
-// load ./dataflows/random_graph/target/release/librandom_graph.dylib build <graph_name> 1000 2000 1000000
+// load ./dataflows/random_graph/target/debug/librandom_graph.dylib build <graph_name> 1000 2000 1000000
 // load ./dataflows/random_graph/target/release/librandom_graph.dylib build <graph_name> 10000000 100000000 1000000
 // drop <graph_name>-capability
 
@@ -165,6 +165,8 @@ pub fn build((dataflow, handles, probe, timer, args): Environment) -> Result<(),
 
     handles.set::<Rc<RefCell<Option<TraceHandle>>>>(name.to_owned(), trace_handle);
     handles.set(format!("{}-capability", name), capability);
+
+    println!("handles set");
 
     Ok(())
 }

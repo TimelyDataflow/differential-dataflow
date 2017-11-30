@@ -74,6 +74,12 @@ fn main() {
                     if command.len() > 1 {
                         let operation = command.remove(0);
                         match operation.as_str() {
+                            "list" => {
+                                println!("worker {:?} listing", index);
+                                for key in handles.keys() {
+                                    println!("worker {:?} list: {:?}", index, key);
+                                }
+                            }
                             "load" => {
                                 
                                 if command.len() >= 2 {
@@ -142,7 +148,7 @@ fn main() {
                     "drop" => { send.send(elts).expect("failed to send command"); }
                     "exit" => { done = true; },
                     "load" => { send.send(elts).expect("failed to send command"); },
-                    "list" => { println!("this is where we would list loaded collections"); },
+                    "list" => { send.send(elts).expect("failed to send command"); },
                     _ => { println!("unrecognized command: {:?}", elts[0]); },
                 }
             }

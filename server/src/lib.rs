@@ -44,6 +44,9 @@ impl TraceHandler {
         let boxed = self.handles.get_mut(name).ok_or(format!("failed to find handle: {:?}", name))?;
         boxed.downcast_mut::<T>().ok_or(format!("failed to downcast: {}", name))
     }
+    pub fn keys(&self) -> ::std::collections::hash_map::Keys<String, Box<Any>> {
+        self.handles.keys()
+    }
     /// Assign a thing to key `name`, boxed as `Box<Any>`.
     pub fn set<T: Any>(&mut self, name: String, thing: T) {
         let boxed: Box<Any> = Box::new(thing);
