@@ -10,7 +10,7 @@ use dd_server::{Environment, TraceHandle};
 // load ./dataflows/degr_dist/target/release/libdegr_dist.dylib build <graph_name>
 
 #[no_mangle]
-pub fn build((dataflow, handles, probe, args): Environment) -> Result<(), String> {
+pub fn build((dataflow, handles, probe, _timer, args): Environment) -> Result<(), String> {
 
     if args.len() != 1 { return Err(format!("expected one argument, instead: {:?}", args)); }
 

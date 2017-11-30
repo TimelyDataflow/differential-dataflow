@@ -25,7 +25,7 @@ use dd_server::{Environment, TraceHandle};
 // drop <graph_name>-capability
 
 #[no_mangle]
-pub fn build((dataflow, handles, probe, args): Environment) -> Result<(), String> {
+pub fn build((dataflow, handles, probe, timer, args): Environment) -> Result<(), String> {
 
     // This call either starts or terminates the production of random graph edges.
     //
@@ -64,6 +64,8 @@ pub fn build((dataflow, handles, probe, args): Environment) -> Result<(), String
     let trace_handle: Rc<RefCell<Option<TraceHandle>>> = Rc::new(RefCell::new(None));
     let trace_handle_weak = Rc::downgrade(&trace_handle);
 
+    let timer = timer.clone();
+
     // create a trace from a source of random graph edges.
     let mut trace = 
         source(dataflow, "RandomGraph", |cap| {
@@ -71,18 +73,22 @@ pub fn build((dataflow, handles, probe, args): Environment) -> Result<(), String
             let index = dataflow.index();
             let peers = dataflow.peers();
 
+            // RNGs for edge addition and deletion.
             let seed: &[_] = &[1, 2, 3, index];
-            let mut rng1: StdRng = SeedableRng::from_seed(seed);    // rng for edge additions
-            let mut rng2: StdRng = SeedableRng::from_seed(seed);    // rng for edge deletions
+            let mut rng1: StdRng = SeedableRng::from_seed(seed);
+            let mut rng2: StdRng = SeedableRng::from_seed(seed);
 
             // numbers of times we've stepped each RNG.
             let mut additions = 0;
             let mut deletions = 0;
 
+            // record delay between system start-up and operator start-up.
+            let delay = timer.elapsed();
+            let delay_ns = (delay.as_secs() as usize) * 1_000_000_000 + (delay.subsec_nanos() as usize);
+
+            // stash capability in a rc::Weak.
             *capability.borrow_mut() = Some(cap);
             let capability = ::std::rc::Rc::downgrade(&capability);
-
-            let timer = ::std::time::Instant::now();
 
             move |output| {
 
@@ -109,7 +115,7 @@ pub fn build((dataflow, handles, probe, args): Environment) -> Result<(), String
                         let mut session = output.session(&capability);
 
                         // load initial graph.
-                        while additions < edges {
+                        while additions < edges + deletions {
                             time.inner = 0;
                             if additions % peers == index {
                                 time.inner = 0;
@@ -121,7 +127,7 @@ pub fn build((dataflow, handles, probe, args): Environment) -> Result<(), String
                         }
 
                         // ship any scheduled edge additions.
-                        while ns_per_request * (additions - edges) < elapsed_ns {
+                        while ns_per_request * (additions - edges) < (elapsed_ns - delay_ns) {
                             if additions % peers == index {
                                 time.inner = ns_per_request * (additions - edges);
                                 let src = rng1.gen_range(0, nodes);
@@ -132,7 +138,7 @@ pub fn build((dataflow, handles, probe, args): Environment) -> Result<(), String
                         }
 
                         // ship any scheduled edge deletions.
-                        while ns_per_request * deletions < elapsed_ns {
+                        while ns_per_request * deletions < (elapsed_ns - delay_ns) {
                             if deletions % peers == index {
                                 time.inner = ns_per_request * deletions;
                                 let src = rng2.gen_range(0, nodes);

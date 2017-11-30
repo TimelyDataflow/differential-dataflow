@@ -1,6 +1,9 @@
 extern crate differential_dataflow;
 extern crate dd_server;
 
+use std::rc::Rc;
+use std::cell::RefCell;
+
 use differential_dataflow::input::Input;
 use differential_dataflow::operators::{Iterate, JoinCore, Threshold};
 use differential_dataflow::operators::arrange::ArrangeBySelf;
@@ -8,7 +11,7 @@ use differential_dataflow::operators::arrange::ArrangeBySelf;
 use dd_server::{Environment, TraceHandle};
 
 #[no_mangle]
-pub fn build((dataflow, handles, probe, args): Environment) -> Result<(), String> {
+pub fn build((dataflow, handles, probe, _timer, args): Environment) -> Result<(), String> {
 
     if args.len() != 2 { return Err(format!("expected two arguments; instead: {:?}", args)); }
 

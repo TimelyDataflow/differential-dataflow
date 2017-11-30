@@ -85,7 +85,7 @@ fn main() {
                                         worker.dataflow_using(lib, |lib, child| {
                                             let result = unsafe {
                                                 lib.get::<Symbol<unsafe fn(Environment)->Result<(),String>>>(symbol_name.as_bytes())
-                                                .map(|func| func((child, &mut handles, &mut probe, &command[2..])))
+                                                .map(|func| func((child, &mut handles, &mut probe, &timer, &command[2..])))
                                             };
 
                                             match result {
@@ -118,7 +118,6 @@ fn main() {
             // than providing no guaranteed progress for e.g. iterative computations.
 
             worker.step();
-            // std::thread::yield_now();   // so that over-subscribed worker counts still feel interactive
         }
 
         println!("worker {}: command queue unavailable; exiting command loop.", worker.index());

@@ -5,6 +5,7 @@ extern crate differential_dataflow;
 use std::any::Any;
 use std::rc::Rc;
 use std::collections::HashMap;
+use std::time::Instant;
 
 use timely_communication::Allocator;
 use timely::dataflow::scopes::{Child, Root};
@@ -26,6 +27,7 @@ pub type Environment<'a, 'b> = (
     &'a mut Child<'b, Root<Allocator>,usize>,
     &'a mut TraceHandler,
     &'a mut ProbeHandle<RootTime>,
+    &'a Instant,
     &'a [String]
 );
 
