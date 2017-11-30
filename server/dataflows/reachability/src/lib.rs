@@ -12,7 +12,9 @@ pub fn build((dataflow, handles, probe, args): Environment) -> Result<(), String
 
     if args.len() != 2 { return Err(format!("expected two arguments; instead: {:?}", args)); }
 
-    let edges = handles.get_mut::<TraceHandle>(&args[0])?.import(dataflow);
+    let edges = handles
+        .get_mut::<Rc<RefCell<Option<TraceHandle>>>>(&args[0])?
+        .borrow_mut().as_mut().unwrap().import(dataflow);
 
     let source = args[1].parse::<usize>().map_err(|_| format!("parse error, source: {:?}", args[1]))?; 
     let (_input, roots) = dataflow.new_collection_from(Some(source));

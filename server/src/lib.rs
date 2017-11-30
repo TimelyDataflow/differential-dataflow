@@ -23,9 +23,9 @@ pub type TraceHandle = TraceAgent<usize, usize, RootTime, isize, TraceSpine>;
 
 /// Arguments provided to each shared library to help build their dataflows and register their results.
 pub type Environment<'a, 'b> = (
-    &'a mut Child<'b, Root<Allocator>,usize>, 
-    &'a mut TraceHandler, 
-    &'a mut ProbeHandle<RootTime>, 
+    &'a mut Child<'b, Root<Allocator>,usize>,
+    &'a mut TraceHandler,
+    &'a mut ProbeHandle<RootTime>,
     &'a [String]
 );
 
