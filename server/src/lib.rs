@@ -1,3 +1,4 @@
+extern crate libloading;
 extern crate timely;
 extern crate timely_communication;
 extern crate differential_dataflow;
@@ -6,6 +7,8 @@ use std::any::Any;
 use std::rc::Rc;
 use std::collections::HashMap;
 use std::time::Instant;
+
+use libloading::Library;
 
 use timely_communication::Allocator;
 use timely::dataflow::scopes::{Child, Root};
@@ -31,6 +34,44 @@ pub type Environment<'a, 'b> = (
     &'a [String]
 );
 
+/// A wrapper around types that keep their source libraries alive.
+///
+/// This type is meant to be a smart pointer for a type `T` that needs to keep
+/// a `Library` alive, perhaps because its methods would call in to the library.
+/// The type should have a specified drop order (viz RFC 1857) which guarentees
+/// that the shared library reference drops only after the element itself is 
+/// dropped. It also implements `Deref` and `DerefMut` to provide the experience
+/// of a `T` itself.
+///
+/// Nothing about this type actually *guarantees* that the code for type `T` is
+/// found in the wrapped library, and it is up to the user to wrap the correct
+/// libraries here.
+pub struct LibraryWrapper<T> {
+    /// The wrapped element.
+    element: T,
+    /// An unused field used to keep the reference count alive.
+    _library: Rc<Library>,
+}
+
+impl<T> LibraryWrapper<T> {
+    /// Creates a new instance of LibraryWrapper.
+    pub fn new(element: T, library: &Rc<Library>) -> Self {
+        LibraryWrapper {
+            element: element,
+            _library: library.clone(),
+        }
+    }
+}
+
+impl<T> ::std::ops::Deref for LibraryWrapper<T> {
+    type Target = T;
+    fn deref(&self) -> &T { &self.element }
+}
+
+impl<T> ::std::ops::DerefMut for LibraryWrapper<T> {
+    fn deref_mut(&mut self) -> &mut T { &mut self.element }
+}
+
 /// A wrapper around a `HashMap<String, Box<Any>>` that handles downcasting.
 pub struct TraceHandler {
     handles: HashMap<String, Box<Any>>,
@@ -44,6 +85,7 @@ impl TraceHandler {
         let boxed = self.handles.get_mut(name).ok_or(format!("failed to find handle: {:?}", name))?;
         boxed.downcast_mut::<T>().ok_or(format!("failed to downcast: {}", name))
     }
+    /// Enumerates the keys maintained in storage (for the `list` operation).
     pub fn keys(&self) -> ::std::collections::hash_map::Keys<String, Box<Any>> {
         self.handles.keys()
     }
