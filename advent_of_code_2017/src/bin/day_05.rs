@@ -1062,7 +1062,7 @@ fn main() {
         worker.dataflow::<(),_,_>(|scope| {
 
             let program = scope.new_collection_from(worker_input).1;
-            let address = scope.new_collection_from(Some((0,0))).1;
+            let address = scope.new_collection_from(if index == 0 { Some((0,0)) } else { None }).1;
 
             scope.scoped(|nested| {
 
@@ -1075,15 +1075,19 @@ fn main() {
                 fn part1(jump: isize) -> isize { jump+1 }
                 // fn part2(jump: isize) -> isize { if jump >= 3 { jump-1 } else { jump+1 } }
 
-                let new_program = instruction.map(move |(addr, jump, _)| (addr, part1(jump)))
-                                             .concat(&instruction.map(|(addr, jump, _)| (addr, jump)).negate())
-                                             .concat(&program)
-                                             .consolidate();
+                let new_program = 
+                instruction
+                    .map(move |(addr, jump, _)| (addr, part1(jump)))
+                    .concat(&instruction.map(|(addr, jump, _)| (addr, jump)).negate())
+                    .concat(&program)
+                    .consolidate();
 
-                let new_address = instruction.map(|(addr, jump, steps)| (addr + jump, steps + 1))
-                                             .concat(&instruction.map(|(addr, _, steps)| (addr, steps)).negate())
-                                             .concat(&address)
-                                             .consolidate();
+                let new_address = 
+                instruction
+                    .map(|(addr, jump, steps)| (addr + jump, steps + 1))
+                    .concat(&instruction.map(|(addr, _, steps)| (addr, steps)).negate())
+                    .concat(&address)
+                    .consolidate();
 
                 program.set(&new_program);
                 address.set(&new_address)
