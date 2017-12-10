@@ -37,7 +37,13 @@ fn main() {
             //   { next_invalid, garbage }
             //
             // where the first bool indicates that the next character should be ignored,
-            // and the second bool indicates that we are in a garbage scope.
+            // and the second bool indicates that we are in a garbage scope. We will 
+            // encode this as the values 0 .. 4, where
+            //
+            //  0: valid, non-garbage
+            //  1: valid, garbage
+            //  2: invalid, non-garbage
+            //  3: invalid, garbage
             //
             // Each character initially describes a substring of length one, but we will
             // build up the state transition for larger substrings, iteratively.
@@ -50,52 +56,37 @@ fn main() {
                         '>' => [0, 0, 0, 1],  // end any started garbage, if not ignored.
                         '!' => [2, 3, 0, 1],  // start/consume ignore bit; don't change garbage.
                         _   => [0, 1, 0, 1],  // consume ignore bit, don't change garbage.
-                    }));
+                    })
+                );
 
-            //                                     /-- zero --\  /-- transition function ----------------------------\
-            let ranges = pp_aggregate(transitions, [0, 1, 2, 3], |t1, t2| [t2[t1[0]], t2[t1[1]], t2[t1[2]], t2[t1[3]]]);
-            let values = pp_broadcast(ranges, 0, |state, trans| trans[*state]);
+            // determine the transitions for intervals of positions, then the state starting from zero.
+            let ranges = pp_aggregate(transitions, |t1, t2| [t2[t1[0]], t2[t1[1]], t2[t1[2]], t2[t1[3]]]);
+            let values = pp_broadcast(ranges, 0, [0, 1, 2, 3], |state, trans| trans[*state]);
 
-            // each index should have exactly one state; no disagreement!
-            values.group(|_, input, output| {
-                assert!(input.len() == 1); 
-                output.push(((), 1));
-            });
-
+            // line up (position, symbol, state).
             let symbols_state = input.join(&values);
 
-            // we now want to get the depth for each paren, so we are going to do the same thing as above,
-            // parallel-prefix addition and subtraction to track the depth. Each range will have an `isize`
-            // sum of '{' symbols minus the '{' symbols.
-            let parens =
-            symbols_state
-                .filter(|&(_pos, symbol, state)| state == 0 && (symbol == '{' || symbol == '}'))
-                .map(|(pos, symbol, _state)| (pos, symbol));
+            // restrict the positions down to those that are neither '!' nor themselves cancelled.
+            let active = symbols_state.filter(|&(_, symbol, state)| symbol != '!' && (state == 0 || state == 1));
 
-            let differences =
-            parens
-                .map(|(pos, symbol)| (pos, if symbol == '{' { 1 } else { -1 }));
-
-            let ranges = pp_aggregate(differences, 0, |sum1, sum2| sum1 + sum2);
-            let values = pp_broadcast(ranges, 0, |sum1, sum2| sum1 + sum2);
+            // part 1: accumulate for each '}' its depth.
+            let parens = active.filter(|&(_, symbol, state)| state == 0 && (symbol == '{' || symbol == '}'));
+            let depths = parens.map(|(pos, symbol, _)| (pos, if symbol == '{' { 1 } else { -1 }));
+            let ranges = pp_aggregate(depths, |sum1, sum2| sum1 + sum2);
+            let values = pp_broadcast(ranges, 0, 0, |sum1, sum2| sum1 + sum2);
 
             parens
-                .filter(|&(_pos, symbol)| symbol == '}')
+                .filter(|&(_pos, symbol, _)| symbol == '}')
+                .map(|(pos, symbol, _)| (pos, symbol))
                 .join(&values)
                 .explode(|(_pos, _sym, sum)| Some(((), sum)))
                 .consolidate()
                 .inspect(|x| println!("part1: {:?}", x.2));
 
-            // garbage should be `active` for which the state is garbage, minus one for each active '>'.
-            let closing = 
-            symbols_state
-                .filter(|&(_pos, sym, state)| sym == '>' && state != 2 && state != 3)
-                .map(|_| ());
-
-            symbols_state
-                .filter(|&(_pos, sym, state)| sym != '!' && state == 1)
+            // part 2: count garbage symbols except the closing '>'.
+            active
+                .filter(|&(_, symbol, state)| state == 1 && symbol != '>')
                 .map(|_| ())
-                .concat(&closing.negate())
                 .consolidate()
                 .inspect(|x| println!("part2: {:?}", x.2));
         });
@@ -103,57 +94,42 @@ fn main() {
     }).unwrap();
 }
 
-fn pp_aggregate<G, D, F>(collection: Collection<G, (usize, D)>, zero: D, combine: F) -> Collection<G, ((usize, usize), D)>
+/// Accumulate data in `collection` into all powers-of-two intervals containing them.
+fn pp_aggregate<G, D, F>(collection: Collection<G, (usize, D)>, combine: F) -> Collection<G, ((usize, usize), D)>
 where
     G: Scope,
     G::Timestamp: Lattice,
-    D: Data+::std::hash::Hash,
+    D: Data,
     F: Fn(D, &D) -> D + 'static,
 {
-
+    // initial ranges are at each index, and with width 2^0.
     let unit_ranges = collection.map(|(index, data)| ((index, 0), data));
 
-    let full_ranges =
     unit_ranges
         .iterate(|ranges| 
 
-            // every interval should be a power of two, and we want each to advertise themselves to the next
-            // power of two sized interval. This repeats until we span (0, usize::max_value()).
+            // Each available range, of size less than usize::max_value(), advertises itself as the range
+            // twice as large, aligned to integer multiples of its size. Each range, which may contain at
+            // most two elements, then summarizes itself using the `combine` function. Finally, we re-add
+            // the initial `unit_ranges` intervals, so that the set of ranges grows monotonically.
 
             ranges
-                .filter(|&(min_max, _)| min_max.1 < 63)
-                .map(|((pos, log), data)| {
-                    let new_log = log + 1;
-                    let new_pos = pos - (pos % (1 << new_log));
-                    ((new_pos, new_log), (pos, data))
-                })
+                .filter(|&((_pos, log), _)| log < 64)
+                .map(|((pos, log), data)| ((pos & !(1 << log), log + 1), (pos, data)))
                 .group(move |_, input, output| {
-                    let seed = (input[0].0).1.clone();
-                    let result = input[1..].iter().map(|x| &(x.0).1).fold(seed, |x,y| combine(x,y));
+                    let mut result = (input[0].0).1.clone();
+                    if input.len() > 1 { result = combine(result, &(input[1].0).1); }
                     output.push((result, 1));
                 })
                 .concat(&unit_ranges.enter(&ranges.scope()))
-        );
-
-    // each range proposes an empty first child, to provide for its second child if it has no sibling.
-    let zero_ranges =
-        full_ranges
-            .map(move |((pos, log),_)| ((pos, if log > 0 { log - 1 } else { 0 }), zero.clone()))
-            .antijoin(&full_ranges.map(|((pos, log),_)| (pos, log)));
-
-    full_ranges.concat(&zero_ranges).consolidate()
+        )
 }
 
-/// Produces the accumulated values at each of the `usize` locations in `requests`.
-///
-/// Elements of `requests` need not correspond to end bounds of `aggregates`, and in general we
-/// must assemble a path from each request to the latest upper bound before it. Our goal is to 
-/// find our way to the data element preceding the request, the aggregated value after which we
-/// want to capture for the request.
+/// Produces the accumulated values at each of the `usize` locations in `aggregates` (and others).
 fn pp_broadcast<G, D, B, F>(
-    aggregates: Collection<G, ((usize, usize), D)>, 
-    // requests: Collection<G, usize>,
+    ranges: Collection<G, ((usize, usize), D)>, 
     seed: B,
+    zero: D,
     combine: F) -> Collection<G, (usize, B)>
 where
     G: Scope,
@@ -162,6 +138,15 @@ where
     B: Data+::std::hash::Hash,
     F: Fn(&B, &D) -> B + 'static,
 {
+    // Each range proposes an empty first child, to provide for its second child if it has no sibling.
+    // This is important if we want to reconstruct 
+    let zero_ranges =
+        ranges
+            .map(move |((pos, log),_)| ((pos, if log > 0 { log - 1 } else { 0 }), zero.clone()))
+            .antijoin(&ranges.map(|((pos, log),_)| (pos, log)));
+
+    let aggregates = ranges.concat(&zero_ranges);
+
     let init_state = 
     Some(((0, seed), Default::default(), 1))
         .to_stream(&mut aggregates.scope())
@@ -170,6 +155,7 @@ where
     init_state
         .iterate(|state| {
             aggregates
+                .filter(|&((_, log),_)| log < 64)    // the log = 64 interval doesn't help us here (overflows).
                 .enter(&state.scope())
                 .map(|((pos, log), data)| (pos, (log, data)))
                 .join_map(state, move |&pos, &(log, ref data), state| (pos + (1 << log), combine(state, data)))
