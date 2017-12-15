@@ -65,12 +65,10 @@ where G::Timestamp: Lattice+Hash+Ord {
         // look for the first absent positive integer.
         // start at 1 in case we ever use NonZero<u32>.
 
-        let mut index = 0;
-        while index < vals.len() && vals[index].0.unwrap() == (index as u32) + 1 {
-          index += 1;
-        }
-
-        (index as u32) + 1
+        (1u32 ..)
+            .filter(|&i| vals.get(i as usize - 1).map(|x| x.0) != Some(&Some(i)))
+            .next()
+            .unwrap()
     })
 }
 
@@ -96,37 +94,32 @@ where G::Timestamp: Lattice+Hash+Ord {
 }
 
 fn sequence<G: Scope, V: Data, F>(state: &Nodes<G, V>, edges: &Edges<G>, logic: F) -> Nodes<G, Option<V>>
-where G::Timestamp: Lattice+Hash+Ord,
-      F: Fn(&Node, &[(&Option<V>, isize)])->V+'static {
+where
+    G::Timestamp: Lattice+Hash+Ord,
+    F: Fn(&Node, &[(&Option<V>, isize)])->V+'static
+{
 
-        // start iteration with None messages for all.
-        state.map(|(node, _state)| (node, None))
-             .iterate(|new_state| {
+    // start iteration with None messages for all.
+    state
+        .map(|(node, _state)| (node, None))
+        .iterate(|new_state| {
 
-                let edges = edges.enter(&new_state.scope());
-                let old_state = state.enter(&new_state.scope())
-                                     .map(|x| (x.0, Some(x.1)));
+            // immutable content: edges and initial state.
+            let edges = edges.enter(&new_state.scope());
+            let old_state = state.enter(&new_state.scope())
+                                 .map(|x| (x.0, Some(x.1)));
 
-                // break edges into forward and reverse directions.
-                let forward = edges.filter(|edge| edge.0 < edge.1); 
-                let reverse = edges.filter(|edge| edge.0 > edge.1); 
+            // break edges into forward and reverse directions.
+            let forward = edges.filter(|edge| edge.0 < edge.1);
+            let reverse = edges.filter(|edge| edge.0 > edge.1);
 
-                // new state goes along forward edges, old state along reverse edges
-                let new_messages = new_state.join_map(&forward, |_k,v,d| (*d,v.clone()));
-                let old_messages = old_state.join_map(&reverse, |_k,v,d| (*d,v.clone()));
+            // new state goes along forward edges, old state along reverse edges
+            let new_messages = new_state.join_map(&forward, |_k,v,d| (*d,v.clone()));
+            let old_messages = old_state.join_map(&reverse, |_k,v,d| (*d,v.clone()));
 
-                // merge messages; apply logic if no None messages remain.
-                let result = new_messages.concat(&old_messages)
-                                         .group(move |k, vs, t| {
-                                             if vs[0].0.is_some() {
-                                                 t.push((Some(logic(k, vs)), 1));
-                                             }
-                                             else {
-                                                 t.push((None, 1));
-                                             }
-                                         });
-
-                result.inner.count().inspect_batch(|t,xs| println!("count[{:?}]:\t{:?}", t, xs));
-                result
-             })
+            // merge messages; suppress computation if not all inputs available yet.
+            new_messages
+                .concat(&old_messages)  // /-- possibly too clever: None if any inputs None.
+                .group(move |k, vs, t| t.push((vs[0].0.as_ref().map(|_| logic(k, vs)), 1)))
+        })
 }
