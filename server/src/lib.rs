@@ -95,7 +95,8 @@ impl TraceHandler {
         assert!(boxed.downcast_ref::<T>().is_some());
         self.handles.insert(name, boxed);
     }
-    pub fn remove(&mut self, name: &str) {
-        self.handles.remove(name);
+    /// Removes the resource associated with `name`.
+    pub fn remove(&mut self, name: &str) -> Option<Box<Any>> {
+        self.handles.remove(name)
     }
 }

@@ -17,7 +17,7 @@ A graph is a collection of pairs `(Node, Node)`, and one standard analysis is to
 
 ```rust
 // create a a degree counting differential dataflow
-let (mut input, probe) = computation.scoped(|scope| {
+let (mut input, probe) = worker.dataflow(|scope| {
 
     // create edge input, count a few ways.
     let (input, edges) = scope.new_collection();
@@ -32,7 +32,7 @@ let (mut input, probe) = computation.scoped(|scope| {
 
     // show us something about the collection, notice when done.
     let probe = distr.inspect(|x| println!("observed: {:?}", x))
-                     .probe().0;
+                     .probe();
 
     (input, probe)
 });
