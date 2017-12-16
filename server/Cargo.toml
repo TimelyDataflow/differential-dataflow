@@ -11,3 +11,11 @@ rand="0.3.13"
 libloading="*"
 timely_communication = { git = "https://github.com/frankmcsherry/timely-dataflow" }
 timely = { git = "https://github.com/frankmcsherry/timely-dataflow" }
+
+#[workspace]
+#members = [
+#    "dataflows/random_graph",
+#    "dataflows/degr_dist",
+#    "dataflows/neighborhood",
+#    "dataflows/reachability"
+#]

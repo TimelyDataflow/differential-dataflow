@@ -44,66 +44,49 @@ and then
 
 These commands will build two shared libraries, `librandom_graph.dylib` and `libdegr_dist.dylib`, which we will use in our server!
 
-Ok, back to the server now. Load that puppy up again and 
+Ok, back to the server now. Load that puppy up again and type something after it:
 
     Echidnatron% cargo run --bin server
         Finished dev [unoptimized + debuginfo] target(s) in 0.0 secs
          Running `target/debug/server`
     load ./dataflows/random_graph/target/debug/librandom_graph.dylib build <graph_name> 1000 2000 10
 
-Ok. We have now bound to `<graph_name>` a random graph on 1,000 nodes comprising a sliding window over 2,000 edges, advanced ten edges at a time. If you would like to, you can change any of the arguments passed.
+Ok. We have now bound to the string `<graph_name>` a random graph on 1,000 nodes comprising a sliding window over 2,000 edges, which changes ten times every second. If you would like to, you can change any of the arguments passed, though if you increase the rate of change too much you may overload the system. Let's leave it how it is for now.
 
 Up next, let's attach the `degr_dist` computation to `<graph_name>` and see what we get:
 
     load ./dataflows/degr_dist/target/debug/libdegr_dist.dylib build <graph_name>
 
-You may have a moment now where nothing much happens. In fact, lots is happening behind the scenes; we are taking all of the produced history of `<graph_name>` and feeding it in to the `degr_dist` computation. Here we go:
+This will attach our pre-defined degree distribution computation, which goes and computes the stream of changes to the counts of nodes with each out-degree. 
 
-    count: ((1, 266), (Root, 0), 1)
-    count: ((1, 266), (Root, 1), -1)
-    count: ((1, 267), (Root, 1), 1)
-    count: ((1, 267), (Root, 2), -1)
-    count: ((1, 266), (Root, 2), 1)
-    count: ((1, 266), (Root, 4), -1)
-    count: ((1, 267), (Root, 4), 1)
-    ...
+Rather than blast all that information at us (it would only be tens of changes per second, but still), it reports on the distribution of latencies of changes: how long did it take a change from the time it should have entered the system, through to being observed in the output?
 
-We now start to get the history for count of `1`: initially there are 266 nodes with out-degree one, which increases to 267, then decreases back to 266, then increases, then ...
+The first line you'll see may look like so (it will depend on the performance of your system):
 
-    ...
-    count: ((1, 269), (Root, 999), -1)
-    count: ((1, 270), (Root, 999), 1)
-    count: ((1, 270), (Root, 1003), -1)
-    count: ((1, 269), (Root, 1003), 1)
-    ...
+    delays: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 8, 6, 16, 18, 64, 66, 0, 9, 0, 0, 0, 0, 0, 0, 0]
 
-It just keeps going talking about degree one, doesn't it? In fact, it probably goes on for quite a while unless you typed that second line really quickly. The reason being the graph starts changing, and does so pretty quickly. And, all of those changes are a part of the history that gets analyzed by the degree distribution computation. I did a quick copy/paste, in a fraction of a second, and even for me it managed some thirty thousand iterations:
+These counts report the number of observed latencies for each power-of-two number of microseconds. It seems that the lowest latency here is `(1 << 17)` microsecends, or roughly 131 milliseconds. That is a large number, but what is going on here is that the first line is the `degr_dist` computation catching up on historical data. Subsequent lines should look better:
 
-    ...
-    count: ((1, 273), (Root, 33109), -1)
-    count: ((1, 272), (Root, 33109), 1)
-    count: ((2, 283), (Root, 0), 1)
-    count: ((2, 283), (Root, 1), -1)
-    count: ((2, 281), (Root, 1), 1)
-    count: ((2, 281), (Root, 2), -1)
-    count: ((2, 282), (Root, 2), 1)
-    count: ((2, 282), (Root, 4), -1)
-    count: ((2, 281), (Root, 4), 1)
-    ...
+    delays: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    delays: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    delays: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    delays: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    delays: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    delays: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
 
-If we look further down we get the degree three counts:
+We are now at entries 11 and 12, corresponding to between one and four millisecond latencies. This number is still pretty large, and it is due to us running without release optimizations. If we turn those on, things look a bit better:
 
-    ...
-    count: ((2, 264), (Root, 33108), 1)
-    count: ((2, 264), (Root, 33109), -1)
-    count: ((2, 265), (Root, 33109), 1)
-    count: ((3, 164), (Root, 0), 1)
-    count: ((3, 164), (Root, 1), -1)
-    count: ((3, 165), (Root, 1), 1)
-    count: ((3, 165), (Root, 2), -1)
-    count: ((3, 166), (Root, 2), 1)
+    delays: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 8, 0, 16, 6, 26, 46, 14, 0, 9, 0, 0, 0, 0, 0, 0, 0]
+    delays: [0, 0, 0, 0, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    delays: [0, 0, 0, 0, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    delays: [0, 0, 0, 0, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    delays: [0, 0, 0, 0, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    delays: [0, 0, 0, 0, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    delays: [0, 0, 0, 0, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
 
-And so it goes. 
+We see a similar first batch of latencies, reflecting the gap between historical times and when I typed the second `load` line, followed by latencies that are all in the range of 65 to 128 microseconds range (the index incremented comes from `delay_us.next_power_of_two().trailing_zeros()` methods).
+
+This is an especially lightly loaded computation, and you can play around with the data generation parameters to get a feel for how the latencies respond as you increase the load.
 
 ## An example computation
 
@@ -111,59 +94,46 @@ Let's take a closer look at the `degr_dist` computation. What does it look like?
 
 You can find [the source](https://github.com/frankmcsherry/differential-dataflow/tree/master/grapht/dataflows/degr_dist) in the repository, but it's intentionally concise so let's just take a peek at [`dataflows/degr_dist/src/lib.rs`](https://github.com/frankmcsherry/differential-dataflow/blob/master/grapht/dataflows/degr_dist/src/lib.rs) where all of the logic lives:
 
-First, there is an epic amount of boilerplate that I would love to remove. Current attempts to wrap this up in an `Environment` type have failed (the FFI calls result in mis-interpreted arguments).
+First, there is the standard Rust boilerplate, calling out which crates and traits we want to use. These are complicated only because `degr_dist` uses these types, and could be much simpler with some wrapping.
 
 ```rust
 extern crate timely;
-extern crate timely_communication;
 extern crate differential_dataflow;
-extern crate grapht;
+extern crate dd_server;
 
-use std::any::Any;
-use std::collections::HashMap;
+use std::rc::Rc;
+use std::cell::RefCell;
 
-use timely_communication::Allocator;
-use timely::dataflow::scopes::{Child, Root};
-use timely::dataflow::operators::probe::Handle as ProbeHandle;
-
+use timely::dataflow::operators::inspect::Inspect;
+use timely::dataflow::operators::Probe;
 use differential_dataflow::operators::CountTotal;
-
-use grapht::{RootTime, TraceHandle};
+use dd_server::{Environment, TraceHandle};
 ```
 
 Once we get past the boilerplate, we get to define a method that takes some context about the larger world, and is free to build up some dataflow!
 
 ```rust
 #[no_mangle]
-pub fn build(
-    dataflow: &mut Child<Root<Allocator>,usize>, 
-    handles: &mut HashMap<String, Box<Any>>, 
-    probe: &mut ProbeHandle<RootTime>,
-    args: &[String]) 
-{
-    if args.len() == 1 {
+pub fn build((dataflow, handles, probe, _timer, args): Environment) -> Result<(), String> {
 
-        let graph_name = &args[0];
-        if let Some(handle) = handles.get_mut(graph_name) {
+    if args.len() != 1 { return Err(format!("expected one argument, instead: {:?}", args)); }
 
-            handle
-                .import(dataflow)
-                .as_collection(|k,v| (k.item.clone(), v.clone()))
-                .map(|(src, _dst)| src)
-                .count_total_u()
-                .map(|(_src, cnt)| cnt as usize)
-                .count_total_u()
-                .inspect(|x| println!("count: {:?}", x))
-                .probe_with(probe);
-        }
-        else {
-            println!("failed to find graph: {:?}", graph_name);
-        }
-    }
+    handles
+        .get_mut::<Rc<RefCell<Option<TraceHandle>>>>(&args[0])?
+        .borrow_mut().as_mut().unwrap()
+        .import(dataflow)
+        .as_collection(|k,v| (k.clone(), v.clone()))
+        .map(|(src, _dst)| src as usize).count_total()
+        .map(|(_src, cnt)| cnt as usize).count_total()
+        .probe_with(probe);
+
+    Ok(())
 }
 ```
 
-Nothing particularly magical here. We've stashed trace handles in `handles`, and `probe` is a probe handle we are expected to use (at least, if we'd like the worker to wait for our computation to catch up before moving ahead; we don't have to).
+I've deleted the code that does all the printing to the screen, because ideally real computations don't actually write that sort of stuff, but you can check it out in the repository link up above.
+
+You can drill down on some of the types, but `handles` is a `HashMap<String, Box<Any>>` in which we stash various things, including access to the random graph we created and are continually updating. We can look up the graph by name, import it in to our dataflow, and then write code using standard differential dataflow operators.
 
 ### Stashing outputs
 
@@ -172,7 +142,6 @@ Watching `println!` statements fly past is only so interesting. Which is to say:
 Instead, let's look at what the `random_graph` library does. Now, we aren't going to look at all the code, because there is a lot of random graph stuff, but from the point where we have a differential dataflow collection of edges, which we `probe`, onwards it looks like:
 
 ```rust
-
     let trace = 
         // .. lots of stuff ..
         .probe_with(probe)
@@ -180,23 +149,10 @@ Instead, let's look at what the `random_graph` library does. Now, we aren't goin
         .arrange_by_key_u()
         .trace;
 
-        let boxed: Box<Any> = Box::new(trace);
-        handles.insert(name.to_owned(), boxed);
-    }
+    *trace_handle.borrow_mut() = Some(trace);
+    handles.set::<Rc<RefCell<Option<TraceHandle>>>>(name.to_owned(), trace_handle);
 ```
 
-We can now go and grab this stream, as we did up at the beginning of the `degr_dist` example. Of course, since the dictionary uses `Box<Any>`, we can stash any old type in there. Unless of course `Box<Any>` is broken across shared library boundaries, but it seems to work and it isn't like there is any documentation on that sort of thing anyway.
+This looks like a bit of a mess, which is fair, but we are roughly wrapping up a trace handle so that it can be shared with others, and then registering it under `name.to_owned()` in the `handles` map.
 
-## Next steps
-
-Here are some next steps to try and flesh out the graph server project.
-
-### Compacting histories
-
-Right now the full graph history remains in effect, and there is differential dataflow infrastructure to allow it to self-compact: we would just keep information about the "current" state of the graph, and computations that attach get this current representation as one big "change". This means we wouldn't have to see the thirty thousand rounds of historical changes, or more if we weren't prompt with starting up our computations.
-
-### Terminating computations
-
-Differential dataflow computations "terminate" when there are no further changes to process. This means both that the inputs have stopped changing, and that changes in flight have all been resolved. Right now the example input `random_graph` changes forever, which means we don't need to check if this actually works. But, we could cause any input graph to "seize", ceasing changes and allowing dependent differential dataflow computations to wind down.
-
-We could also look into "detaching" an existing computation from its inputs; even though the inputs continue to change, we can suppress the changes in the interest of terminating and winding down the computation. This may be a bit more invasive, as the mechanisms we use to share traces do not have such a concept built in to them. This is a great example of kicking the tires of differential dataflow, and seeing what else we might need to make it more useful.
+In fact, we stash a few other things in the map, which allows any program that knows what to look for to get access to shared state. For example, we stash the capability that the random graph uses to produce its changes, so that anyone could drop the capability and cause the graph generation to cease.

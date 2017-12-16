@@ -9,11 +9,14 @@ use std::cell::RefCell;
 
 use rand::{Rng, SeedableRng, StdRng};
 
+use timely::progress::timestamp::RootTimestamp;
+use timely::progress::nested::product::Product;
 use timely::dataflow::operators::Probe;
 use timely::dataflow::operators::generic::operator::source;
 
 use differential_dataflow::AsCollection;
 use differential_dataflow::operators::arrange::ArrangeByKey;
+use differential_dataflow::trace::TraceReader;
 
 use dd_server::{Environment, TraceHandle};
 
@@ -22,9 +25,9 @@ use dd_server::{Environment, TraceHandle};
 // drop <graph_name>-capability
 
 #[no_mangle]
-pub fn build((dataflow, handles, probe, args): Environment) -> Result<(), String> {
+pub fn build((dataflow, handles, probe, timer, args): Environment) -> Result<(), String> {
 
-    // This call either starts or terminates the production of random graph edges.
+    // This call either starts the production of random graph edges.
     //
     // The arguments should be 
     //
@@ -32,11 +35,19 @@ pub fn build((dataflow, handles, probe, args): Environment) -> Result<(), String
     //
     // where <rate> is the target number of edge changes per second. The source 
     // will play out changes to keep up with this, and timestamp them as if they
-    // were emitted at the correct time. This currently uses a local timer, and
-    // should probably take / use a "system time" from the worker.
+    // were emitted at the correct time. The timestamps use the system `timer`,
+    // but only start whenever the method is called. This means that the data are
+    // not deterministic, but if you subtract the elapsed time between system start
+    // up and method call, they should be deterministic.
     //
     // The method also registers a capability with name `<graph_name>-capability`, 
     // and will continue to execute until this capability is dropped from `handles`.
+    // To terminate the operator it is sufficient to drop the capability, as the
+    // operator holds only a weak reference to it.
+    // 
+    // The operator also holds an `Weak<RefCell<Option<TraceHandle>>>` which it will
+    // attempt to borrow and call `advance_by` in order to advance the capability
+    // as it runs, to allow compaction and the maintenance of bounded state.
 
     if args.len() != 4 { return Err(format!("expected four arguments, instead: {:?}", args)); }
 
@@ -51,27 +62,51 @@ pub fn build((dataflow, handles, probe, args): Environment) -> Result<(), String
     // shared capability keeps graph generation going.
     let capability = Rc::new(RefCell::new(None));
 
+    // shared (optional) trace handle, so that the operator can advance capabilities.
+    let trace_handle: Rc<RefCell<Option<TraceHandle>>> = Rc::new(RefCell::new(None));
+    let trace_handle_weak = Rc::downgrade(&trace_handle);
+
+    let timer = timer.clone();
+
     // create a trace from a source of random graph edges.
-    let trace = 
+    let mut trace = 
         source(dataflow, "RandomGraph", |cap| {
 
             let index = dataflow.index();
             let peers = dataflow.peers();
 
+            // RNGs for edge addition and deletion.
             let seed: &[_] = &[1, 2, 3, index];
-            let mut rng1: StdRng = SeedableRng::from_seed(seed);    // rng for edge additions
-            let mut rng2: StdRng = SeedableRng::from_seed(seed);    // rng for edge deletions
+            let mut rng1: StdRng = SeedableRng::from_seed(seed);
+            let mut rng2: StdRng = SeedableRng::from_seed(seed);
 
             // numbers of times we've stepped each RNG.
             let mut additions = 0;
             let mut deletions = 0;
 
+            // record delay between system start-up and operator start-up.
+            let delay = timer.elapsed();
+            let delay_ns = (delay.as_secs() as usize) * 1_000_000_000 + (delay.subsec_nanos() as usize);
+
+            println!("{:?}: random graph generation started", delay);
+
+            // stash capability in a rc::Weak.
             *capability.borrow_mut() = Some(cap);
             let capability = ::std::rc::Rc::downgrade(&capability);
 
-            let timer = ::std::time::Instant::now();
-
             move |output| {
+
+                // Open-loop latency-throughput test, parameterized by offered rate `ns_per_request`.
+                let elapsed = timer.elapsed();
+                let elapsed_ns = (elapsed.as_secs() as usize) * 1_000_000_000 + (elapsed.subsec_nanos() as usize);
+
+                // attempt to advance the frontier of the trace handle.
+                if let Some(trace_handle) = trace_handle_weak.upgrade() {
+                    let mut borrow = trace_handle.borrow_mut();
+                    if let Some(ref mut trace_handle) = borrow.as_mut() {
+                        trace_handle.advance_by(&[Product::new(RootTimestamp, elapsed_ns)]);
+                    }
+                }
 
                 // if our capability has not been cancelled ...
                 if let Some(capability) = capability.upgrade() {
@@ -80,17 +115,11 @@ pub fn build((dataflow, handles, probe, args): Environment) -> Result<(), String
                     let capability = borrow.as_mut().unwrap();
                     let mut time = capability.time().clone();
 
-                    // Open-loop latency-throughput test, parameterized by offered rate `ns_per_request`.
-                    let elapsed = timer.elapsed();
-                    let elapsed_ns = (elapsed.as_secs() as usize) * 1_000_000_000 + (elapsed.subsec_nanos() as usize);
-
                     {   // scope to allow session to drop, un-borrow.
                         let mut session = output.session(&capability);
 
-                        let mut stepped = false;
-
                         // load initial graph.
-                        while additions < edges {
+                        while additions < edges + deletions {
                             time.inner = 0;
                             if additions % peers == index {
                                 time.inner = 0;
@@ -99,35 +128,28 @@ pub fn build((dataflow, handles, probe, args): Environment) -> Result<(), String
                                 session.give(((src, dst), time, 1));
                             }
                             additions += 1;
-                            stepped = true;
                         }
 
                         // ship any scheduled edge additions.
-                        while ns_per_request * (additions - edges) < elapsed_ns {
+                        while ns_per_request * (additions - edges) < (elapsed_ns - delay_ns) {
                             if additions % peers == index {
-                                time.inner = ns_per_request * (additions - edges);
+                                time.inner = delay_ns + ns_per_request * (additions - edges);
                                 let src = rng1.gen_range(0, nodes);
                                 let dst = rng1.gen_range(0, nodes);
                                 session.give(((src, dst), time, 1));
                             }
                             additions += 1;
-                            stepped = true;
                         }
 
                         // ship any scheduled edge deletions.
-                        while ns_per_request * deletions < elapsed_ns {
+                        while ns_per_request * deletions < (elapsed_ns - delay_ns) {
                             if deletions % peers == index {
-                                time.inner = ns_per_request * deletions;
+                                time.inner = delay_ns + ns_per_request * deletions;
                                 let src = rng2.gen_range(0, nodes);
                                 let dst = rng2.gen_range(0, nodes);
-                                session.give(((src, dst), time, 1));
+                                session.give(((src, dst), time, -1));
                             }
                             deletions += 1;
-                            stepped = true;
-                        }
-
-                        if stepped {
-                            // println!("tick: additions: {:?}, deletions: {:?}", additions, deletions);
                         }
                     }
 
@@ -141,8 +163,14 @@ pub fn build((dataflow, handles, probe, args): Environment) -> Result<(), String
         .arrange_by_key()
         .trace;
 
-    handles.set::<TraceHandle>(name.to_owned(), trace);
+    // release all blocks on merging.
+    trace.distinguish_since(&[]);
+    *trace_handle.borrow_mut() = Some(trace);
+
+    handles.set::<Rc<RefCell<Option<TraceHandle>>>>(name.to_owned(), trace_handle);
     handles.set(format!("{}-capability", name), capability);
+
+    println!("handles set");
 
     Ok(())
 }
