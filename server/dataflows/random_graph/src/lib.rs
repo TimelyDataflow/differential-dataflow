@@ -27,7 +27,7 @@ use dd_server::{Environment, TraceHandle};
 #[no_mangle]
 pub fn build((dataflow, handles, probe, timer, args): Environment) -> Result<(), String> {
 
-    // This call either starts or terminates the production of random graph edges.
+    // This call either starts the production of random graph edges.
     //
     // The arguments should be 
     //
@@ -35,13 +35,15 @@ pub fn build((dataflow, handles, probe, timer, args): Environment) -> Result<(),
     //
     // where <rate> is the target number of edge changes per second. The source 
     // will play out changes to keep up with this, and timestamp them as if they
-    // were emitted at the correct time. This currently uses a local timer, created
-    // when this method is called, and should probably take / use a "system time" 
-    // from the worker so that timestamps align. Until then, it is a fine test that
-    // things work even without synchronized timestamps.
+    // were emitted at the correct time. The timestamps use the system `timer`,
+    // but only start whenever the method is called. This means that the data are
+    // not deterministic, but if you subtract the elapsed time between system start
+    // up and method call, they should be deterministic.
     //
     // The method also registers a capability with name `<graph_name>-capability`, 
     // and will continue to execute until this capability is dropped from `handles`.
+    // To terminate the operator it is sufficient to drop the capability, as the
+    // operator holds only a weak reference to it.
     // 
     // The operator also holds an `Weak<RefCell<Option<TraceHandle>>>` which it will
     // attempt to borrow and call `advance_by` in order to advance the capability
