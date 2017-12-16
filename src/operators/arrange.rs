@@ -429,6 +429,94 @@ impl<G: Scope, K, V, R, T> Arranged<G, K, V, R, T> where G::Timestamp: Lattice+O
     }
 }
 
+/// Report values associated with keys at certain times.
+///
+/// This method consumes a stream of (key, time) queries and reports the corresponding stream of
+/// (key, value, time, diff) accumulations in the `self` trace.
+pub fn query<G: Scope, K, V, R, T>(queries: &Stream<G, (K, G::Timestamp)>, mut trace: T) -> Stream<G, (K, V, G::Timestamp, R)> 
+where
+    K: Data+Hashable,
+    V: Data,
+    G::Timestamp: Data+Lattice+Ord,
+    R: Diff,
+    T: TraceReader<K, V, G::Timestamp, R>+Clone+'static,
+{
+    // release `distinguish_since` capability.
+    trace.distinguish_since(&[]);
+
+    let mut trace = Some(trace);
+    let mut stash = ::std::collections::HashMap::new();
+    let mut frontier = Antichain::new();
+
+    // while the arrangement is already correctly distributed, the query stream may not be.
+    let exchange = Exchange::new(move |update: &(K,G::Timestamp)| update.0.hashed().as_u64());
+
+    queries.unary_frontier(exchange, "TraceQuery", move |_capability|
+        move |input, output| {
+
+            // drain the query input, stashing requests.
+            input.for_each(|capability, data|
+                stash.entry(capability)
+                     .or_insert(Vec::new())
+                     .extend(data.drain(..).map(|(k,t)| (k,t,1)))
+            );
+
+            if let Some(ref mut trace) = trace {
+
+                frontier.clear();
+                for time in trace.advance_frontier().iter() {
+                    frontier.insert(time.clone());
+                }
+
+                for (capability, prefixes) in stash.iter_mut() {
+
+                    // defer requests at incomplete times.
+                    // NOTE: not all updates may be at complete times, but if this test fails then none of them are.
+                    if !frontier.less_equal(capability.time()) {
+
+                        let mut session = output.session(capability);
+
+                        prefixes.sort_by(|x,y| x.0.cmp(&y.0));
+
+                        let (mut cursor, storage) = trace.cursor();
+
+                        for &mut (ref key, ref time, ref mut cnt) in prefixes.iter_mut() {
+
+                            if !frontier.less_equal(time) {
+                                cursor.seek_key(&storage, key);
+                                if cursor.get_key(&storage) == Some(key) {
+
+                                    while let Some(val) = cursor.get_val(&storage) {
+                                        let mut count = R::zero();
+                                        cursor.map_times(&storage, |t, d| if t.less_equal(time) { 
+                                            count = count + d;
+                                        });
+                                        if !count.is_zero() {
+                                            session.give((key.clone(), val.clone(), time.clone(), count));
+                                        }
+                                        cursor.step_val(&storage);
+                                    }
+
+                                }
+                                *cnt = 0;
+                            }
+                        }
+
+                        prefixes.retain(|ptd| ptd.2 != 0);
+                    }
+                }
+            }
+
+            // drop fully processed capabilities.
+            stash.retain(|_,prefixes| !prefixes.is_empty());
+            trace.as_mut().map(|trace| trace.advance_by(input.frontier().frontier()));
+            if input.frontier().is_empty() && stash.is_empty() {
+                trace = None;
+            }
+        }
+    )
+}
+
 /// A type that can be arranged into a trace of type `T`.
 ///
 /// This trait is implemented for appropriately typed collections and all traces that might accommodate them, 

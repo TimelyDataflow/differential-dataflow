@@ -79,8 +79,9 @@ impl<G: Scope, D: Data, R: Diff> Collection<G, D, R> where G::Timestamp: Data {
     where D2: Data, 
           L: Fn(D) -> D2 + 'static 
     {
-        self.inner.map(move |(data, time, delta)| (logic(data), time, delta))
-                  .as_collection()
+        self.inner
+            .map(move |(data, time, delta)| (logic(data), time, delta))
+            .as_collection()
     }
     /// Creates a new collection by applying the supplied function to each input element.
     ///
@@ -108,14 +109,15 @@ impl<G: Scope, D: Data, R: Diff> Collection<G, D, R> where G::Timestamp: Data {
     /// ```
     pub fn map_in_place<L>(&self, logic: L) -> Collection<G, D, R> 
     where L: Fn(&mut D) + 'static {
-        self.inner.map_in_place(move |&mut (ref mut data, _, _)| logic(data))
-                  .as_collection()
+        self.inner
+            .map_in_place(move |&mut (ref mut data, _, _)| logic(data))
+            .as_collection()
     }
     /// Creates a new collection by applying the supplied function to each input element and accumulating the results.
     ///
     /// This method extracts an iterator from each input element, and extracts the full contents of the iterator. Be 
-    /// warned that if the iterators produce substantial amounts of data, they are currently fully drained before attempting
-    /// to consolidate the results.
+    /// warned that if the iterators produce substantial amounts of data, they are currently fully drained before 
+    /// attempting to consolidate the results.
     ///
     /// # Examples
     ///
@@ -138,8 +140,9 @@ impl<G: Scope, D: Data, R: Diff> Collection<G, D, R> where G::Timestamp: Data {
               I: IntoIterator, 
               I::Item: Data,
               L: Fn(D) -> I + 'static {
-        self.inner.flat_map(move |(data, time, delta)| logic(data).into_iter().map(move |x| (x, time.clone(), delta)))
-                  .as_collection()
+        self.inner
+            .flat_map(move |(data, time, delta)| logic(data).into_iter().map(move |x| (x, time.clone(), delta)))
+            .as_collection()
     }
     /// Creates a new collection whose counts are the negation of those in the input.
     ///
@@ -171,8 +174,9 @@ impl<G: Scope, D: Data, R: Diff> Collection<G, D, R> where G::Timestamp: Data {
     /// }
     /// ```    
     pub fn negate(&self) -> Collection<G, D, R> {
-        self.inner.map_in_place(|x| x.2 = -x.2)
-                  .as_collection()
+        self.inner
+            .map_in_place(|x| x.2 = -x.2)
+            .as_collection()
     }
     /// Creates a new collection containing those input records satisfying the supplied predicate.
     ///
@@ -196,8 +200,9 @@ impl<G: Scope, D: Data, R: Diff> Collection<G, D, R> where G::Timestamp: Data {
     /// ```
     pub fn filter<L>(&self, logic: L) -> Collection<G, D, R> 
     where L: Fn(&D) -> bool + 'static {
-        self.inner.filter(move |&(ref data, _, _)| logic(data))
-                  .as_collection()
+        self.inner
+            .filter(move |&(ref data, _, _)| logic(data))
+            .as_collection()
     }
     /// Creates a new collection accumulating the contents of the two collections.
     ///
@@ -228,8 +233,9 @@ impl<G: Scope, D: Data, R: Diff> Collection<G, D, R> where G::Timestamp: Data {
     /// }
     /// ```
     pub fn concat(&self, other: &Collection<G, D, R>) -> Collection<G, D, R> {
-        self.inner.concat(&other.inner)
-                  .as_collection()
+        self.inner
+            .concat(&other.inner)
+            .as_collection()
     }
     /// Replaces each record with another, with a new difference type.
     ///
@@ -297,9 +303,10 @@ impl<G: Scope, D: Data, R: Diff> Collection<G, D, R> where G::Timestamp: Data {
     /// ```
     pub fn enter<'a, T>(&self, child: &Child<'a, G, T>) -> Collection<Child<'a, G, T>, D, R> 
     where T: Timestamp {
-        self.inner.enter(child)
-                  .map(|(data, time, diff)| (data, Product::new(time, Default::default()), diff))
-                  .as_collection()
+        self.inner
+            .enter(child)
+            .map(|(data, time, diff)| (data, Product::new(time, Default::default()), diff))
+            .as_collection()
     }
     /// Brings a Collection into a nested scope, at varying times.
     ///
@@ -337,12 +344,13 @@ impl<G: Scope, D: Data, R: Diff> Collection<G, D, R> where G::Timestamp: Data {
         let initial1 = ::std::rc::Rc::new(initial);
         let initial2 = initial1.clone();
 
-        self.inner.enter_at(child, move |x| (*initial1)(&x.0))
-                  .map(move |(data, time, diff)| {
-                      let new_time = Product::new(time, (*initial2)(&data));
-                      (data, new_time, diff)
-                  })
-                  .as_collection()
+        self.inner
+            .enter_at(child, move |x| (*initial1)(&x.0))
+            .map(move |(data, time, diff)| {
+                let new_time = Product::new(time, (*initial2)(&data));
+                (data, new_time, diff)
+            })
+            .as_collection()
     }
     /// Applies a supplied function to each update.
     ///
@@ -375,8 +383,9 @@ impl<G: Scope, D: Data, R: Diff> Collection<G, D, R> where G::Timestamp: Data {
     /// ```
     pub fn inspect<F>(&self, func: F) -> Collection<G, D, R> 
     where F: FnMut(&(D, G::Timestamp, R))+'static {
-        self.inner.inspect(func)
-                  .as_collection()
+        self.inner
+            .inspect(func)
+            .as_collection()
     }
     /// Applies a supplied function to each batch of updates.
     ///
@@ -404,15 +413,17 @@ impl<G: Scope, D: Data, R: Diff> Collection<G, D, R> where G::Timestamp: Data {
     /// ```
     pub fn inspect_batch<F>(&self, func: F) -> Collection<G, D, R> 
     where F: FnMut(&G::Timestamp, &[(D, G::Timestamp, R)])+'static {
-        self.inner.inspect_batch(func)
-                  .as_collection()
+        self.inner
+            .inspect_batch(func)
+            .as_collection()
     }
     /// Attaches a timely dataflow probe to the output of a Collection.
     ///
     /// This probe is used to determine when the state of the Collection has stabilized and can
     /// be read out. 
     pub fn probe(&self) -> probe::Handle<G::Timestamp> {
-        self.inner.probe()
+        self.inner
+            .probe()
     }
     /// Attaches a timely dataflow probe to the output of a Collection.
     ///
@@ -420,8 +431,10 @@ impl<G: Scope, D: Data, R: Diff> Collection<G, D, R> where G::Timestamp: Data {
     /// In addition, a probe is also often use to limit the number of rounds of input in flight at any moment; a
     /// computation can wait until the probe has caught up to the input before introducing more rounds of data, to
     /// avoid swamping the system.
-    pub fn probe_with(&self, handle: &mut ::timely::dataflow::operators::probe::Handle<G::Timestamp>) -> Collection<G, D, R> {
-        self.inner.probe_with(handle).as_collection()
+    pub fn probe_with(&self, handle: &mut probe::Handle<G::Timestamp>) -> Collection<G, D, R> {
+        self.inner
+            .probe_with(handle)
+            .as_collection()
     }
 
     /// Assert if the collections are ever different.
@@ -455,7 +468,8 @@ impl<G: Scope, D: Data, R: Diff> Collection<G, D, R> where G::Timestamp: Data {
     /// ```
     pub fn assert_eq(&self, other: &Self) 
     where D: ::Data+Hashable,
-          G::Timestamp: Lattice+Ord {
+          G::Timestamp: Lattice+Ord
+    {
         self.negate()
             .concat(other)
             .assert_empty();
@@ -464,9 +478,9 @@ impl<G: Scope, D: Data, R: Diff> Collection<G, D, R> where G::Timestamp: Data {
     /// Assert if the collection is ever non-empty.
     ///
     /// Because this is a dataflow fragment, the test is only applied as the computation is run. If the computation
-    /// is not run, or not run to completion, there may be un-exercised times at which the collection could be non-empty.
-    /// Typically, a timely dataflow computation runs to completion on drop, and so clean exit from a program should
-    /// indicate that this assertion never found cause to complain.
+    /// is not run, or not run to completion, there may be un-exercised times at which the collection could be 
+    /// non-empty. Typically, a timely dataflow computation runs to completion on drop, and so clean exit from a 
+    /// program should indicate that this assertion never found cause to complain.
     ///
     /// # Examples
     ///
@@ -488,8 +502,8 @@ impl<G: Scope, D: Data, R: Diff> Collection<G, D, R> where G::Timestamp: Data {
     /// ```
     pub fn assert_empty(&self) 
     where D: ::Data+Hashable, 
-          G::Timestamp: Lattice+Ord {
-
+          G::Timestamp: Lattice+Ord,
+    {
         use operators::consolidate::Consolidate;
         self.consolidate()
             .inspect(|_| assert!(false));
@@ -529,9 +543,10 @@ impl<'a, G: Scope, T: Timestamp, D: Data, R: Diff> Collection<Child<'a, G, T>, D
     /// }
     /// ```
     pub fn leave(&self) -> Collection<G, D, R> {
-        self.inner.leave()
-                  .map(|(data, time, diff)| (data, time.outer, diff))
-                  .as_collection()
+        self.inner
+            .leave()
+            .map(|(data, time, diff)| (data, time.outer, diff))
+            .as_collection()
     }
 }
 

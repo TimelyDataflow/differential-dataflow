@@ -743,10 +743,9 @@ mod history_replay {
                 // have any evidence that we should re-evaluate the user logic at this time. For a time
                 // to be "interesting" it would need to be the join of times that include either a time
                 // from `batch`, `times`, or `synth`. Neither `input` nor `output` times are sufficient.
-                let mut interesting = false;
 
                 // Advance batch history, and capture whether an update exists at `next_time`.
-                interesting = batch_replay.step_while_time_is(&next_time);
+                let mut interesting = batch_replay.step_while_time_is(&next_time);
                 if interesting { batch_replay.advance_buffer_by(&meet); }
 
                 // advance both `synth_times` and `times_slice`, marking this time interesting if in either.

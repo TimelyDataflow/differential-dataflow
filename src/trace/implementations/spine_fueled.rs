@@ -60,8 +60,8 @@ pub struct Spine<K, V, T: Lattice+Ord, R: Diff, B: Batch<K, V, T, R>> {
     through_frontier: Vec<T>,            // Times after which the trace must be able to subset its inputs.
     merging: Vec<MergeState<K,V,T,R,B>>, // Several possibly shared collections of updates.
     pending: Vec<B>,                     // Batches at times in advance of `frontier`.
-    max_len: usize,
-    max_dur: ::std::time::Duration,
+    // max_len: usize,
+    // max_dur: ::std::time::Duration,
     reserve: usize,                      // fuel reserves.
 }
 
@@ -169,8 +169,8 @@ where
             through_frontier: vec![<T as Lattice>::minimum()],
             merging: Vec::new(),
             pending: Vec::new(),
-            max_len: 0,
-            max_dur: Default::default(),
+            // max_len: 0,
+            // max_dur: Default::default(),
             reserve: 0,
         }
     }
@@ -204,7 +204,7 @@ where
     #[inline(never)]
     fn consider_merges(&mut self) {
 
-        let start = ::std::time::Instant::now();
+        // let start = ::std::time::Instant::now();
 
         // TODO: We could consider merging in batches here, rather than in sequence. 
         //       Little is currently known about whether this is important ...
@@ -305,21 +305,21 @@ where
             }
         }
 
-        let elapsed = start.elapsed();
-        if elapsed > self.max_dur {
-            self.max_dur = elapsed;
-            // println!("max_dur increased to {:?}", self.max_dur);
-        }
-
-        // if self.merging.len() + self.pending.len() > self.max_len {
-        //     self.max_len = self.merging.len() + self.pending.len();
-        //     println!("max_len increased to {:?}", self.max_len);
+        // let elapsed = start.elapsed();
+        // if elapsed > self.max_dur {
+        //     self.max_dur = elapsed;
+        //     // println!("max_dur increased to {:?}", self.max_dur);
         // }
+
+        // // if self.merging.len() + self.pending.len() > self.max_len {
+        // //     self.max_len = self.merging.len() + self.pending.len();
+        // //     println!("max_len increased to {:?}", self.max_len);
+        // // }
     }
 }
 
-impl<K, V, T: Lattice+Ord, R: Diff, B: Batch<K, V, T, R>> Drop for Spine<K, V, T, R, B> {
-    fn drop(&mut self) {
-        println!("max_duration: {:?}", self.max_dur);
-    }
-}
+// impl<K, V, T: Lattice+Ord, R: Diff, B: Batch<K, V, T, R>> Drop for Spine<K, V, T, R, B> {
+//     fn drop(&mut self) {
+//         println!("max_duration: {:?}", self.max_dur);
+//     }
+// }
