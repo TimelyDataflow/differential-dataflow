@@ -9,5 +9,5 @@ differential-dataflow = { path = "../../../" }
 dd_server = { path = "../../" }
 rand="0.3.13"
 
-#[lib]
-#crate-type = ["cdylib"]
+[lib]
+crate-type = ["dylib"]

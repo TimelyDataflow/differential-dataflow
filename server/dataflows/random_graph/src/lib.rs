@@ -20,7 +20,7 @@ use differential_dataflow::trace::TraceReader;
 
 use dd_server::{Environment, TraceHandle};
 
-// load ./dataflows/random_graph/target/debug/librandom_graph.dylib build <graph_name> 1000 2000 1000000
+// load ./dataflows/random_graph/target/release/librandom_graph.dylib build <graph_name> 1000 2000 1000000
 // load ./dataflows/random_graph/target/release/librandom_graph.dylib build <graph_name> 10000000 100000000 1000000
 // drop <graph_name>-capability
 
@@ -88,6 +88,8 @@ pub fn build((dataflow, handles, probe, timer, args): Environment) -> Result<(),
             let delay = timer.elapsed();
             let delay_ns = (delay.as_secs() as usize) * 1_000_000_000 + (delay.subsec_nanos() as usize);
 
+            println!("{:?}: random graph generation started", delay);
+
             // stash capability in a rc::Weak.
             *capability.borrow_mut() = Some(cap);
             let capability = ::std::rc::Rc::downgrade(&capability);
@@ -131,7 +133,7 @@ pub fn build((dataflow, handles, probe, timer, args): Environment) -> Result<(),
                         // ship any scheduled edge additions.
                         while ns_per_request * (additions - edges) < (elapsed_ns - delay_ns) {
                             if additions % peers == index {
-                                time.inner = ns_per_request * (additions - edges);
+                                time.inner = delay_ns + ns_per_request * (additions - edges);
                                 let src = rng1.gen_range(0, nodes);
                                 let dst = rng1.gen_range(0, nodes);
                                 session.give(((src, dst), time, 1));
@@ -142,7 +144,7 @@ pub fn build((dataflow, handles, probe, timer, args): Environment) -> Result<(),
                         // ship any scheduled edge deletions.
                         while ns_per_request * deletions < (elapsed_ns - delay_ns) {
                             if deletions % peers == index {
-                                time.inner = ns_per_request * deletions;
+                                time.inner = delay_ns + ns_per_request * deletions;
                                 let src = rng2.gen_range(0, nodes);
                                 let dst = rng2.gen_range(0, nodes);
                                 session.give(((src, dst), time, -1));
