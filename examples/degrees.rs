@@ -88,14 +88,16 @@ fn main() {
             }
             else {
 
-                let requests_per_sec = batch / peers;
+                let requests_per_sec = batch;
                 let ns_per_request = 1_000_000_000 / requests_per_sec;
-                let mut request_counter = 1;
-                let mut measurements = Vec::with_capacity(20 * requests_per_sec);
+                let mut request_counter = peers + index;    // skip first request for each.
+                let mut measurements = Vec::with_capacity(20 * requests_per_sec / peers);
 
                 let timer = ::std::time::Instant::now();
 
-                while measurements.len() < requests_per_sec * 21 {
+                let measurements_per_sec = requests_per_sec / peers;
+
+                while measurements.len() < measurements_per_sec * 21 {
 
                     // Open-loop latency-throughput test, parameterized by offered rate `ns_per_request`.
                     let elapsed = timer.elapsed();
@@ -103,13 +105,13 @@ fn main() {
 
                     // Introduce any requests that have "arrived" since last we were here.
                     // Request i "arrives" at `index + ns_per_request * (i + 1)`. 
-                    while ((index + ns_per_request * request_counter) as u64) < elapsed_ns {
-                        input.advance_to((index + ns_per_request * request_counter) as u64);
+                    while (((index + request_counter) * ns_per_request) as u64) < elapsed_ns {
+                        input.advance_to(((index + request_counter) * ns_per_request) as u64);
                         input.insert((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)));
                         input.remove((rng2.gen_range(0, nodes), rng2.gen_range(0, nodes)));
-                        input.advance_to((1 + index + ns_per_request * request_counter) as u64);
-                        request_counter += 1;
+                        request_counter += peers;
                     }
+                    input.advance_to(elapsed_ns);
                     input.flush();
 
                     while probe.less_than(input.time()) {
@@ -123,21 +125,22 @@ fn main() {
                     let elapsed_ns = elapsed.as_secs() * 1_000_000_000 + (elapsed.subsec_nanos() as u64);
 
                     // any un-recorded measurements that are complete should be recorded.
-                    while ((index + (measurements.len() + 1) * ns_per_request) as u64) < acknowledged_ns {
-                        let requested_at = (index + (measurements.len() + 1) * ns_per_request) as u64;
+                    while (((index + peers * (measurements.len() + 1)) * ns_per_request) as u64) < acknowledged_ns {
+                        let requested_at = ((index + peers * (measurements.len() + 1)) * ns_per_request) as u64;
                         measurements.push(elapsed_ns - requested_at);
                     }
                 }
 
-                measurements.truncate(requests_per_sec * 20);
-                measurements.drain(0 .. (requests_per_sec * 10));
+                measurements.truncate(20 * measurements_per_sec);
+                measurements.drain(0 .. (10 * measurements_per_sec));
                 measurements.sort();
 
+                let min = measurements[0];
                 let med = measurements[measurements.len() / 2];
                 let p99 = measurements[99 * measurements.len() / 100];
                 let max = measurements[measurements.len() - 1];
 
-                println!("{}\t{}\t{}\t(of {} measurements)", med, p99, max, measurements.len());
+                println!("{}\t{}\t{}\t{}\t(of {} measurements)", min, med, p99, max, measurements.len());
             }
         }
     }).unwrap();
