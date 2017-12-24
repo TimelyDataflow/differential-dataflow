@@ -140,7 +140,7 @@ fn main() {
                 let p99 = measurements[99 * measurements.len() / 100];
                 let max = measurements[measurements.len() - 1];
 
-                println!("{}\t{}\t{}\t{}\t(of {} measurements)", min, med, p99, max, measurements.len());
+                println!("worker {}:\t{}\t{}\t{}\t{}\t(of {} measurements)", index, min, med, p99, max, measurements.len());
             }
         }
     }).unwrap();
