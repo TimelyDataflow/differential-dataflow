@@ -5,8 +5,7 @@ extern crate dd_server;
 use std::rc::Rc;
 use std::cell::RefCell;
 
-use timely::dataflow::operators::inspect::Inspect;
-use timely::dataflow::operators::Probe;
+use timely::dataflow::operators::{Probe, Operator};
 use differential_dataflow::operators::CountTotal;
 use dd_server::{Environment, TraceHandle};
 
@@ -21,7 +20,7 @@ pub fn build((dataflow, handles, probe, _timer, args): Environment) -> Result<()
 
     println!("{:?}: degree monitoring started", timer.elapsed());
 
-    let mut delays = vec![0usize; 32];
+    let mut delays = vec![0usize; 64];
 
     handles
         .get_mut::<Rc<RefCell<Option<TraceHandle>>>>(&args[0])?
@@ -32,18 +31,30 @@ pub fn build((dataflow, handles, probe, _timer, args): Environment) -> Result<()
         .map(|(_src, cnt)| cnt as usize).count_total()
         // now we capture the observed latency on each record.
         .inner
-        .inspect_batch(move |_, data| {
+        .unary(::timely::dataflow::channels::pact::Pipeline, "MeasureLatency", |_cap| {
+            move |input, output| {
 
-            let mut delays = [0usize; 32];
+                let mut delays = [0usize; 64];
 
-            let elapsed = timer.elapsed();
-            let elapsed_ns = (elapsed.as_secs() as usize) * 1_000_000_000 + (elapsed.subsec_nanos() as usize);            
-            for &(_, ref time, _) in data.iter() {
-                let delay_us = (elapsed_ns - time.inner) / 1000;
-                let bin = delay_us.next_power_of_two().trailing_zeros() as usize;
-                delays[bin] += 1;
+                let elapsed = timer.elapsed();
+                let elapsed_ns = (elapsed.as_secs() as usize) * 1_000_000_000 + (elapsed.subsec_nanos() as usize);
+
+                input.for_each(|cap, data| {
+                    for &(_, ref time, _) in data.iter() {
+                        let delay_ns = elapsed_ns - time.inner;
+                        let bin = delay_ns.next_power_of_two().trailing_zeros() as usize;
+                        delays[bin] += 1;
+                    }
+                    output.session(&cap).give(());
+                });
+
+                println!("delays (samples taking at most):");
+                for i in 0 .. 64 {
+                    if delays[i] > 0 {
+                        println!("\t{}ns:\t{}", 1 << i, delays[i]);
+                    }
+                }
             }
-            println!("delays: {:?}", delays);
         })
         .probe_with(probe);
 
