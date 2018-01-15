@@ -1,5 +1,5 @@
 # Differential Dataflow
-An implementation of [differential dataflow](./differentialdataflow.pdf) using [timely dataflow](https://github.com/frankmcsherry/timely-dataflow) on [Rust](http://www.rust-lang.org).
+An implementation of [differential dataflow](./differentialdataflow.pdf) over [timely dataflow](https://github.com/frankmcsherry/timely-dataflow) on [Rust](http://www.rust-lang.org).
 
 ## Background
 
@@ -7,7 +7,32 @@ Differential dataflow is a data-parallel programming framework designed to effic
 
 Differential dataflow programs are written as functional transformations of collections of data, using familiar operators like `map`, `filter`, `join`, and `group`. Differential dataflow also includes more exotic operators such as `iterate`, which repeatedly applies a differential dataflow fragment to a collection. The programs are compiled down to [timely dataflow](https://github.com/frankmcsherry/timely-dataflow) computations.
 
-Once written, a differential dataflow responds to arbitrary changes to its initially empty input collections, reporting the corresponding changes to each of its output collections. Differential dataflow can react quickly because it only acts where changes in collections occur, and does no work elsewhere.
+For example, here is a differential dataflow fragment to compute the out-degree distribution of a directed graph (for each degree, the number of nodes with that many outgoing edges):
+
+```rust
+let out_degr_dist =
+edges.map(|(src, _dst)| src)    // extract source
+     .count();                  // count occurrences of source
+     .map(|(_src, deg)| deg)    // extract degree
+     .count();                  // count occurrences of degree
+```
+
+Alternately, here is a fragment that computes the set of nodes reachable from a set `roots` of starting nodes:
+
+```rust
+let reachable =
+roots.iterate(|reach|
+    edges.enter(&reach.scope())
+         .semijoin(reach)
+         .map(|(src, dst)| dst)
+         .concat(reach)
+         .distinct()
+)
+```
+
+Once written, a differential dataflow responds to arbitrary changes to its initially empty input collections, reporting the corresponding changes to each of its output collections. Differential dataflow can react quickly because it only acts where changes in collections occur, and does no work elsewhere. 
+
+In the examples above, we can add to and remove from `edges`, dynamically altering the graph, and get immediate feedback on how the results change. We could also add to and remove from `roots` altering the reachability query itself.
 
 Be sure to check out the [differential dataflow documentation](http://www.frankmcsherry.org/differential-dataflow/differential_dataflow/index.html), which is continually improving.
 
@@ -26,8 +51,8 @@ let (mut input, probe) = worker.dataflow(|scope| {
     let degrs = edges.map(|(src, _dst)| src)
                      .count();
 
-    // pull off count and count those.
-    let distr = degrs.map(|(_src, cnt)| cnt)
+    // pull off degree and count those.
+    let distr = degrs.map(|(_src, deg)| deg)
                      .count();
 
     // show us something about the collection, notice when done.
@@ -79,7 +104,7 @@ The second weird thing is that with only two edge changes we have six changes in
 
 ### Scaling up
 
-The appealing thing about differential dataflow is that it only does work where things change, so even if there is a lot of data, if not much changes it goes quite fast. Let's scale our 10 nodes and 50 edges up by a factor of one million:
+The appealing thing about differential dataflow is that it only does work where changes occur, so even if there is a lot of data, if not much changes it can still go quite fast. Let's scale our 10 nodes and 50 edges up by a factor of one million:
 
     Running `target/release/examples/degrees 10000000 50000000 1`
     observed: ((1, 336908), (Root, 0), 1)
@@ -105,9 +130,9 @@ The appealing thing about differential dataflow is that it only does work where 
     observed: ((22, 1), (Root, 0), 1)
     Loading finished after Duration { secs: 15, nanos: 485478768 }
 
-There are a lot more distinct degrees here. I sorted them because it was too painful to look at unsorted. You would normally get to see them unsorted, because they are just changes to a collection.
+There are a lot more distinct degrees here. I sorted them because it was too painful to look at the unsorted data. You would normally get to see the output unsorted, because they are just changes values in a collection.
 
-Let's do a single change again.
+Let's perform a single change again.
 
     observed: ((5, 1757098), (Root, 1), 1)
     observed: ((5, 1757099), (Root, 1), -1)
@@ -117,7 +142,7 @@ Let's do a single change again.
     observed: ((6, 1459807), (Root, 1), 1)
     worker 0, round 1 finished after Duration { secs: 0, nanos: 119917 }
 
-Although the initial computation took about six seconds, we get our changes in about 141 microseconds. That's pretty nice. Actually, it is small enough that the time to print things to the screen is a bit expensive, so let's comment that part out.
+Although the initial computation took about fifteen seconds, we get our changes in about 141 microseconds; that's about one hundred thousand times faster than re-running the computation. That's pretty nice. Actually, it is small enough that the time to print things to the screen is a bit expensive, so let's comment that part out.
 
 ```rust
     // show us something about the collection, notice when done.
@@ -140,7 +165,7 @@ Nice. This is some hundreds of microseconds per update, which means maybe ten th
 
 ### Scaling .. "along"?
 
-Differential dataflow is designed for throughput in addition to latency. We can increase the number of rounds it works on concurrently, increasing its effective throughput.
+Differential dataflow is designed for throughput in addition to latency. We can increase the number of rounds of updates it works on concurrently, which can increase its effective throughput. This does not change the output of the computation, except that we see larger batches of output changes at once.
 
 Notice that those times above are a few hundred microseconds for each single update. If we work on ten rounds of updates at once, we get times that look like this:
 
@@ -153,7 +178,7 @@ Notice that those times above are a few hundred microseconds for each single upd
     worker 0, round 50 finished after Duration { secs: 0, nanos: 188093 }
     ...
 
-These aren't much larger times, and we are doing 10x the work in each of them. In fact, we are doing the *exact same* computation as above, just batched differently. We still get out changes tagged with the round they happened in, even if that round isn't a multiple of ten (in this example), and they are exactly the same changes (or they should be) as in the single update a time example.
+This is appealing in that we finish the first 10 updates after 321 microseconds, whereas after the same amount of time we haven't finished the third update. The cost is that we learn about the first and second output updates later than we would have if we had fed input updates in one-by-one, but these are the only two updates for which that is the case.
 
 As we turn up the batching, performance improves. Here we work on one hundred rounds of updates at once:
 

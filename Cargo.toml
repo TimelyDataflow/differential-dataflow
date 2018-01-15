@@ -26,13 +26,15 @@ itertools="^0.6"
 abomonation = { git = "https://github.com/frankmcsherry/abomonation" }
 abomonation_derive = { git = "https://github.com/mystor/abomonation_derive" }
 timely_sort="0.1.6"
-timely_communication = { git = "https://github.com/frankmcsherry/timely-dataflow" }
-timely = { git = "https://github.com/frankmcsherry/timely-dataflow" }
+#timely_communication = { git = "https://github.com/frankmcsherry/timely-dataflow" }
+#timely = { git = "https://github.com/frankmcsherry/timely-dataflow" }
+timely_communication = { path = "../timely-dataflow/communication" }
+timely = { path = "../timely-dataflow/" }
 fnv="1.0.2"
 
 [features]
 default = []
-logging = ["timely/logging"]
+#logging = ["timely/logging"]
 
 [profile.release]
 opt-level = 3
