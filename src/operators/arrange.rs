@@ -451,7 +451,7 @@ where
     // while the arrangement is already correctly distributed, the query stream may not be.
     let exchange = Exchange::new(move |update: &(K,G::Timestamp)| update.0.hashed().as_u64());
 
-    queries.unary_frontier(exchange, "TraceQuery", move |_capability|
+    queries.unary_frontier(exchange, "TraceQuery", move |_capability, _info|
         move |input, output| {
 
             // drain the query input, stashing requests.
@@ -553,7 +553,7 @@ where
 
         // fabricate a data-parallel operator using the `unary_notify` pattern.
         let exchange = Exchange::new(move |update: &((K,V),G::Timestamp,R)| (update.0).0.hashed().as_u64());
-        let stream = self.inner.unary_frontier(exchange, "Arrange", move |_capability|
+        let stream = self.inner.unary_frontier(exchange, "Arrange", move |_capability, _info|
             move |input, output| {
 
             // As we receive data, we need to (i) stash the data and (ii) keep *enough* capabilities.
