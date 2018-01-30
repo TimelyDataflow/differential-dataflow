@@ -302,7 +302,7 @@ impl<D: Ord, T: Ord, R: Diff> MergeSorter<D, T, R> {
         }
 
         if !head2.is_empty() {
-            let mut result = self.stash.pop().unwrap_or(Vec::with_capacity(1024));
+            let mut result = self.stash.pop().unwrap_or_else(|| Vec::with_capacity(1024));
             for _ in 0 .. head2.len() { result.push(head2.pop()); }
             output.push(result);
         }
