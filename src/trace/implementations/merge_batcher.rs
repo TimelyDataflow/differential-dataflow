@@ -184,9 +184,9 @@ impl<D: Ord, T: Ord, R: Diff> MergeSorter<D, T, R> {
         else {
             ::std::mem::replace(batch, Vec::new())
         };
-        
+
         if batch.len() > 0 {
-            batch.sort_unstable_by(|x,y| (&x.0, &x.1).cmp(&(&y.0, &y.1)));
+            batch.sort_by(|x,y| (&x.0, &x.1).cmp(&(&y.0, &y.1)));
             for index in 1 .. batch.len() {
                 if batch[index].0 == batch[index - 1].0 && batch[index].1 == batch[index - 1].1 {
                     batch[index].2 = batch[index].2 + batch[index - 1].2;
@@ -194,6 +194,7 @@ impl<D: Ord, T: Ord, R: Diff> MergeSorter<D, T, R> {
                 }
             }
             batch.retain(|x| !x.2.is_zero());
+
 
             self.queue.push(vec![batch]);
             while self.queue.len() > 1 && (self.queue[self.queue.len()-1].len() >= self.queue[self.queue.len()-2].len() / 2) {
@@ -239,7 +240,7 @@ impl<D: Ord, T: Ord, R: Diff> MergeSorter<D, T, R> {
 
         // TODO: `list1` and `list2` get dropped; would be better to reuse?
         let mut output = Vec::with_capacity(list1.len() + list2.len());
-        let mut result = Vec::with_capacity(1024);
+        let mut result = self.stash.pop().unwrap_or(Vec::with_capacity(1024));
 
         let mut list1 = VecQueue::from(list1);
         let mut list2 = VecQueue::from(list2);
