@@ -240,7 +240,7 @@ impl<D: Ord, T: Ord, R: Diff> MergeSorter<D, T, R> {
 
         // TODO: `list1` and `list2` get dropped; would be better to reuse?
         let mut output = Vec::with_capacity(list1.len() + list2.len());
-        let mut result = self.stash.pop().unwrap_or(Vec::with_capacity(1024));
+        let mut result = self.stash.pop().unwrap_or_else(|| Vec::with_capacity(1024));
 
         let mut list1 = VecQueue::from(list1);
         let mut list2 = VecQueue::from(list2);
