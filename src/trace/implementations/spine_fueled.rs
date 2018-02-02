@@ -17,6 +17,19 @@ enum MergeState<K, V, T, R, B: Batch<K, V, T, R>> {
 }
 
 impl<K, V, T: Eq, R, B: Batch<K, V, T, R>> MergeState<K, V, T, R, B> {
+    fn complete(mut self) -> B {
+        if let MergeState::Merging(ref source1, ref source2, ref frontier, ref mut in_progress) = self {
+            let mut fuel = usize::max_value();
+            in_progress.work(source1, source2, frontier, &mut fuel);
+            assert!(fuel > 0);
+        }
+        match self {
+            // ALLOC: Here is where we may de-allocate batches.
+            MergeState::Merging(_, _, _, finished) => finished.done(),
+            MergeState::Complete(x) => x,
+        }
+    }
+
     fn is_complete(&self) -> bool {
         match *self {
             MergeState::Complete(_) => true,
@@ -58,11 +71,11 @@ pub struct Spine<K, V, T: Lattice+Ord, R: Diff, B: Batch<K, V, T, R>> {
     phantom: ::std::marker::PhantomData<(K, V, R)>,
     advance_frontier: Vec<T>,            // Times after which the trace must accumulate correctly.
     through_frontier: Vec<T>,            // Times after which the trace must be able to subset its inputs.
-    merging: Vec<MergeState<K,V,T,R,B>>, // Several possibly shared collections of updates.
+    merging: Vec<Option<MergeState<K,V,T,R,B>>>, // Several possibly shared collections of updates.
     pending: Vec<B>,                     // Batches at times in advance of `frontier`.
     // max_len: usize,
     // max_dur: ::std::time::Duration,
-    reserve: usize,                      // fuel reserves.
+    // reserve: usize,                      // fuel reserves.
 }
 
 impl<K, V, T, R, B> TraceReader<K, V, T, R> for Spine<K, V, T, R, B> 
@@ -88,18 +101,19 @@ where
             let mut cursors = Vec::new();
             let mut storage = Vec::new();
 
-            for merge_state in self.merging.iter() {
+            for merge_state in self.merging.iter().rev() {
                 match *merge_state {
-                    MergeState::Merging(ref batch1, ref batch2, _, _) => { 
+                    Some(MergeState::Merging(ref batch1, ref batch2, _, _)) => { 
                         cursors.push(batch1.cursor());
                         storage.push(batch1.clone());
                         cursors.push(batch2.cursor());
                         storage.push(batch2.clone());
                     },
-                    MergeState::Complete(ref batch) => {
+                    Some(MergeState::Complete(ref batch)) => {
                         cursors.push(batch.cursor());
                         storage.push(batch.clone());
-                    }
+                    },
+                    None => { }
                 }
             }
 
@@ -139,10 +153,11 @@ where
     fn distinguish_frontier(&mut self) -> &[T] { &self.through_frontier[..] }
 
     fn map_batches<F: FnMut(&Self::Batch)>(&mut self, mut f: F) {
-        for batch in self.merging.iter() {
+        for batch in self.merging.iter().rev() {
             match *batch {
-                MergeState::Merging(ref batch1, ref batch2, _, _) => { f(batch1); f(batch2); },
-                MergeState::Complete(ref batch) => { f(batch); },
+                Some(MergeState::Merging(ref batch1, ref batch2, _, _)) => { f(batch1); f(batch2); },
+                Some(MergeState::Complete(ref batch)) => { f(batch); },
+                None => { },
             }
         }
         for batch in self.pending.iter() {
@@ -171,7 +186,7 @@ where
             pending: Vec::new(),
             // max_len: 0,
             // max_dur: Default::default(),
-            reserve: 0,
+            // reserve: 0,
         }
     }
 
@@ -204,122 +219,111 @@ where
     #[inline(never)]
     fn consider_merges(&mut self) {
 
-        // let start = ::std::time::Instant::now();
+        // We have a new design here, in an attempt to rationalize progressive merging of batches.
+        //
+        // Batches arrive with a number of records, and are assigned a power-of-two "size", which is this
+        // number rounded up. Batches are placed in a slot based on their size, and each slot can either be
+        // 
+        //  i. empty,
+        //  ii. occupied by a batch,
+        //  iii. occupied by a merge in progress.
+        //
+        // As we introduce a new batch, we need to do a few things.
+        //
+        //  0. We determine a size for the batch, and an implied target slot.
+        //  1. For each slot smaller than the size of the batch, we should merge the batches so that the first
+        //     occupied slot is no less than the target slot of the new batch.
+        //  2. We perform size units of work for each merge in progress, starting from the large batches and
+        //     working backwards (so that we have had the chance to complete work before starting a new merge).
+        //  3. We install the new batch in the target slot, initiating a merge if necessary.
+        //
+        // At various points we may find that the number of updates in a batch is out of line with the size
+        // associated with the slot the batch currently occupies. In this case, we can slide a batch (or a merge
+        // in progress) down through empty slots, as long as the number of updates is no more than the associated
+        // size.
 
-        // TODO: We could consider merging in batches here, rather than in sequence. 
-        //       Little is currently known about whether this is important ...
         while self.pending.len() > 0 && 
               self.through_frontier.iter().all(|t1| self.pending[0].upper().iter().any(|t2| t2.less_equal(t1))) 
         {
             // this could be a VecDeque, if we ever notice this.
             let batch = self.pending.remove(0);
 
-            // First, we want to complete any merges of batches smaller than `batch`.
-            if self.merging.len() > 1 {
+            // println!("batch.len(): {:?}", batch.len());
 
-                let mut most_recent = self.merging.pop().unwrap();
-                
-                while self.merging.last_mut().map(|x| x.len() < batch.len()) == Some(true) {
+            // Step 0: Determine batch size and target slot.
+            let batch_size = batch.len().next_power_of_two();
+            let batch_index = batch_size.trailing_zeros() as usize;
+            while self.merging.len() <= batch_index { self.merging.push(None); }
 
-                    // finish all smaller merges unconditionally.
-                    let mut less_recent = self.merging.pop().unwrap();
-                    most_recent = most_recent.work(&mut usize::max_value());
-                    less_recent = less_recent.work(&mut usize::max_value());
+            if self.merging.len() > 32 { println!("len: {:?}", self.merging.len()); }
 
-                    match (less_recent, most_recent) {
-                        (MergeState::Complete(less), MergeState::Complete(most)) => {
-                            assert!(less.upper() == most.lower());
-                            most_recent = MergeState::begin_merge(less, most, None);
-                        },
-                        _ => panic!("spine_fueled: unmerged small data discovered; logic bug!"),
+            // Step 1: Forcibly merge batches in lower slots.
+            for position in 0 .. batch_index {
+                if let Some(mut batch) = self.merging[position].take() {
+                    let batch = batch.complete();
+                    if let Some(mut batch2) = self.merging[position+1].take() {
+                        let batch2 = batch2.complete();
+                        self.merging[position+1] = Some(MergeState::begin_merge(batch2, batch, None));
                     }
-                }
-
-                self.merging.push(most_recent);
-            }
-
-            // add some fuel to reserve, and get ready to spend some.
-            self.reserve += 4 * (self.merging.len()) * batch.len();
-            let mut fuel = self.reserve / 10;
-            self.reserve -= fuel;
-
-            let mut most_recent = MergeState::Complete(batch);
-
-            while fuel > 0 && self.merging.last_mut().map(|x| x.len() < 2 * most_recent.len()) == Some(true) {
-
-                let mut less_recent = self.merging.pop().unwrap();
-                most_recent = most_recent.work(&mut fuel);
-                less_recent = less_recent.work(&mut fuel);
-
-                match (less_recent, most_recent) {
-
-                    (MergeState::Complete(less), MergeState::Complete(most)) => {
-                        assert!(less.upper() == most.lower());
-                        let frontier = if self.merging.len() == 0 { Some(self.advance_frontier.clone()) } else { None };
-                        most_recent = MergeState::begin_merge(less, most, frontier);
-                    }
-                    (less, most) => { 
-                        // Can't merge; stash `less` and assume stash `most` next round.
-                        assert!(fuel == 0);
-                        most_recent = most;
-                        self.merging.push(less);
-                    }
+                    else {
+                        self.merging[position+1] = Some(MergeState::Complete(batch));
+                    };
                 }
             }
 
-            self.merging.push(most_recent);
-
-            // as long as we have fuel to spend, and not all merges complete ...
-            while fuel > 0 && self.merging.iter().any(|b| !b.is_complete()) {
-
-                // Spend any remaining fuel.
-                for index in (0 .. self.merging.len()).rev() {
-                    if fuel > 0 {
-                        let temp = self.merging.remove(index);
-                        self.merging.insert(index, temp.work(&mut fuel));
-                    }
-                }
-
-                // Scan forward, looking for possible merges to start.
-                let mut index = 1;
-                while index < self.merging.len() {
-                    if self.merging[index-1].len() < 2 * self.merging[index].len() && self.merging[index-1].is_complete() && self.merging[index].is_complete() {
-                        let less_recent = self.merging.remove(index-1);
-                        let more_recent = self.merging.remove(index-1);
-                        match (less_recent, more_recent) {
-                            (MergeState::Complete(less), MergeState::Complete(more)) => {
-                                let frontier = if index == 1 { Some(self.advance_frontier.clone()) } else { None };
-                                self.merging.insert(index - 1, MergeState::begin_merge(less, more, frontier));
-                            },
-                            _ => panic!("unreachable"),
+            // Step 2: Perform `size` work on each in-progress merge, from large to small.
+            let mut fuel;// = 0; //8 * batch_size * self.merging.len();
+            for position in (batch_index .. self.merging.len()).rev() {
+                fuel = 16 * batch_size;
+                if let Some(mut batch) = self.merging[position].take() {
+                    let batch = batch.work(&mut fuel);
+                    if batch.is_complete() {
+                        let batch = batch.complete();
+                        let intended_position = batch.len().next_power_of_two().trailing_zeros() as usize;
+                        if intended_position > position {
+                            while self.merging.len() <= intended_position { self.merging.push(None); }
+                            if let Some(batch2) = self.merging[position+1].take() {
+                                if !batch2.is_complete() {
+                                    println!("batch[{}] not complete (size: {:?})", position+1, batch2.len());
+                                    println!("sizes: {:?}", self.merging.iter().map(|x| x.as_ref().map(|y|y.len()).unwrap_or(0)).collect::<Vec<_>>());
+                                }
+                                assert!(batch2.is_complete());
+                                let batch2 = batch2.complete();
+                                let frontier = if position + 1 == self.merging.len() { Some(self.advance_frontier.clone()) } else { None };
+                                self.merging[position+1] = Some(MergeState::begin_merge(batch2, batch, frontier));
+                            }
+                            else {
+                                self.merging[position+1] = Some(MergeState::Complete(batch));
+                            };
+                        }
+                        else {
+                            self.merging[position] = Some(MergeState::Complete(batch));
                         }
                     }
                     else {
-                        index += 1;
+                        self.merging[position] = Some(batch);
                     }
                 }
             }
 
-            if fuel > 0 {
-                self.reserve = 0;
+            // Step 3: Insert new batch at target position
+            if let Some(batch2) = self.merging[batch_index].take() {
+                assert!(batch2.is_complete());
+                let batch2 = batch2.complete();
+                self.merging[batch_index] = Some(MergeState::begin_merge(batch2, batch, None));
+            }
+            else {
+                self.merging[batch_index] = Some(MergeState::Complete(batch));
+            }
+
+            // Step 4: Consider migrating complete batches to lower bins, if appropriate.
+            for index in (self.merging.len() .. 1).rev() {
+                if self.merging[index].as_ref().map(|x| x.is_complete() && x.len() < (1 << (index-1))).unwrap_or(false) {
+                    if self.merging[index-1].is_none() {
+                        self.merging[index-1] = self.merging[index].take();
+                    }
+                }
             }
         }
-
-        // let elapsed = start.elapsed();
-        // if elapsed > self.max_dur {
-        //     self.max_dur = elapsed;
-        //     // println!("max_dur increased to {:?}", self.max_dur);
-        // }
-
-        // // if self.merging.len() + self.pending.len() > self.max_len {
-        // //     self.max_len = self.merging.len() + self.pending.len();
-        // //     println!("max_len increased to {:?}", self.max_len);
-        // // }
     }
 }
-
-// impl<K, V, T: Lattice+Ord, R: Diff, B: Batch<K, V, T, R>> Drop for Spine<K, V, T, R, B> {
-//     fn drop(&mut self) {
-//         println!("max_duration: {:?}", self.max_dur);
-//     }
-// }
