@@ -91,13 +91,11 @@ fn main() {
                 let requests_per_sec = batch;
                 let ns_per_request = 1_000_000_000 / requests_per_sec;
                 let mut request_counter = peers + index;    // skip first request for each.
-                let mut measurements = Vec::with_capacity(20 * requests_per_sec / peers);
-
+                let mut ack_counter = peers + index;
+                let mut counts = vec![0u64; 64];
                 let timer = ::std::time::Instant::now();
 
-                let measurements_per_sec = requests_per_sec / peers;
-
-                while measurements.len() < measurements_per_sec * 21 {
+                loop {
 
                     // Open-loop latency-throughput test, parameterized by offered rate `ns_per_request`.
                     let elapsed = timer.elapsed();
@@ -125,22 +123,23 @@ fn main() {
                     let elapsed_ns = elapsed.as_secs() * 1_000_000_000 + (elapsed.subsec_nanos() as u64);
 
                     // any un-recorded measurements that are complete should be recorded.
-                    while (((index + peers * (measurements.len() + 1)) * ns_per_request) as u64) < acknowledged_ns {
-                        let requested_at = ((index + peers * (measurements.len() + 1)) * ns_per_request) as u64;
-                        measurements.push(elapsed_ns - requested_at);
+                    while ((ack_counter * ns_per_request) as u64) < acknowledged_ns {
+                        let requested_at = ((index + peers * ack_counter) * ns_per_request) as u64;
+                        let count_index = (elapsed_ns - requested_at).next_power_of_two().trailing_zeros() as usize;
+                        counts[count_index] += 1;
+                        ack_counter += peers;
+
+                        if (ack_counter & ((1 << 20) - 1)) == 0 {
+                            println!("latencies:");
+                            for index in 0 .. counts.len() {
+                                if counts[index] > 0 {
+                                    println!("\tcount[{}]:\t{}", index, counts[index]);
+                                }
+                            }
+                            counts = vec![0u64; 64];
+                        }
                     }
                 }
-
-                measurements.truncate(20 * measurements_per_sec);
-                measurements.drain(0 .. (10 * measurements_per_sec));
-                measurements.sort();
-
-                let min = measurements[0];
-                let med = measurements[measurements.len() / 2];
-                let p99 = measurements[99 * measurements.len() / 100];
-                let max = measurements[measurements.len() - 1];
-
-                println!("worker {}:\t{}\t{}\t{}\t{}\t(of {} measurements)", index, min, med, p99, max, measurements.len());
             }
         }
     }).unwrap();
