@@ -48,10 +48,12 @@ pub fn build((dataflow, handles, probe, _timer, args): Environment) -> Result<()
                     output.session(&cap).give(());
                 });
 
-                println!("delays (samples taking at most):");
-                for i in 0 .. 64 {
-                    if delays[i] > 0 {
-                        println!("\t{}ns:\t{}", 1 << i, delays[i]);
+                if delays.iter().any(|&x| x > 0) {
+                    println!("delays (samples taking at most):");
+                    for i in 0 .. 64 {
+                        if delays[i] > 0 {
+                            println!("\t{}ns:\t{}", 1u64 << i, delays[i]);
+                        }
                     }
                 }
             }
