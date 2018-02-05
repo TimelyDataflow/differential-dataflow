@@ -41,7 +41,7 @@
 pub mod spine;
 pub mod spine_fueled;
 
-mod radix_batcher;
+// mod radix_batcher;
 mod merge_batcher;
 
 // pub use self::radix_batcher::RadixBatcher as Batcher;
