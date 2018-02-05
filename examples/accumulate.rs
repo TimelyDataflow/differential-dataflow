@@ -5,13 +5,12 @@ extern crate differential_dataflow;
 use rand::{Rng, SeedableRng, StdRng};
 
 use differential_dataflow::input::Input;
-// use differential_dataflow::difference::DiffPair;
 use differential_dataflow::operators::Consolidate;
 
 fn main() {
 
     let keys: usize = std::env::args().nth(1).unwrap().parse().unwrap();
-    let batch: usize = std::env::args().nth(2).unwrap().parse().unwrap();
+    let batch: usize = 10_000;
 
     // This computation demonstrates in-place accumulation of arbitrarily large 
     // volumes of input data, consuming space bounded by the number of distinct keys.
