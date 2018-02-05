@@ -186,7 +186,7 @@ impl<D: Ord, T: Ord, R: Diff> MergeSorter<D, T, R> {
         };
 
         if batch.len() > 0 {
-            batch.sort_by(|x,y| (&x.0, &x.1).cmp(&(&y.0, &y.1)));
+            batch.sort_unstable_by(|x,y| (&x.0, &x.1).cmp(&(&y.0, &y.1)));
             for index in 1 .. batch.len() {
                 if batch[index].0 == batch[index - 1].0 && batch[index].1 == batch[index - 1].1 {
                     batch[index].2 = batch[index].2 + batch[index - 1].2;
