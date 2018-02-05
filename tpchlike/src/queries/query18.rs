@@ -60,8 +60,7 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
         .explode(|l| Some((l.order_key, l.quantity as isize)))
         .count_total()
         .filter(|&(_key, cnt)| cnt > 300)
-        .join(&orders)
-        .map(|(o_key, quant, (cust_key, date, price))| (cust_key, (o_key, date, price, quant)))
+        .join_map(&orders, |&o_key, &quant, &(cust_key, date, price)| (cust_key, (o_key, date, price, quant)))
         .join(&collections.customers().map(|c| (c.cust_key, c.name)))
         .probe()
 }

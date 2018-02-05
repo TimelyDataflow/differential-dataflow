@@ -56,7 +56,7 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
             let count: i64 = s.iter().map(|x| x.1 as i64).sum();
 
             // threshold we are asked to use.
-            let threshold = (total / count) / 7;
+            let threshold = total / (5 * count);
 
             // produce as output those tuples with below-threshold quantity.
             t.extend(s.iter().filter(|&&(&(quantity,_),_)| quantity < threshold)

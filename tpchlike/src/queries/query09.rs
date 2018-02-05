@@ -72,10 +72,8 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
         .explode(|((_part_key, supp_key), (order_key, revenue, quantity), supplycost)|
             Some(((order_key, supp_key), ((revenue - supplycost * quantity) as isize)))
         )
-        .join(&collections.orders().map(|o| (o.order_key, o.order_date >> 16)))
-        .map(|(_, supp_key, order_year)| (supp_key, order_year))
-        .join(&collections.suppliers().map(|s| (s.supp_key, s.nation_key)))
-        .map(|(_, order_year, nation_key)| (nation_key, order_year))
+        .join_map(&collections.orders().map(|o| (o.order_key, o.order_date >> 16)), |_, &supp_key, &order_year| (supp_key, order_year))
+        .join_map(&collections.suppliers().map(|s| (s.supp_key, s.nation_key)), |_, &order_year, &nation_key| (nation_key, order_year))
         .join(&collections.nations().map(|n| (n.nation_key, n.name)))
         .count_total()
         .probe()

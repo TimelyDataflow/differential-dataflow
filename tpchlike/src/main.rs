@@ -88,14 +88,14 @@ fn main() {
         });
 
         // customer.tbl lineitem.tbl    nation.tbl  orders.tbl  part.tbl    partsupp.tbl    region.tbl  supplier.tbl
-        let mut customers = if used[0] { load::<Customer>(prefix.as_str(), "customer.tbl", index, peers, logical_batch, physical_batch, 0) } else { Vec::new() };
-        let mut lineitems = if used[1] { load::<LineItem>(prefix.as_str(), "lineitem.tbl", index, peers, logical_batch, physical_batch, 1) } else { Vec::new() };
-        let mut nations = if used[2] { load::<Nation>(prefix.as_str(), "nation.tbl", index, peers, logical_batch, physical_batch, 2) } else { Vec::new() };
-        let mut orders = if used[3] { load::<Order>(prefix.as_str(), "orders.tbl", index, peers, logical_batch, physical_batch, 3) } else { Vec::new() };
-        let mut parts = if used[4] { load::<Part>(prefix.as_str(), "part.tbl", index, peers, logical_batch, physical_batch, 4) } else { Vec::new() };
-        let mut partsupps = if used[5] { load::<PartSupp>(prefix.as_str(), "partsupp.tbl", index, peers, logical_batch, physical_batch, 5) } else { Vec::new() };
-        let mut regions = if used[6] { load::<Region>(prefix.as_str(), "region.tbl", index, peers, logical_batch, physical_batch, 6) } else { Vec::new() };
-        let mut suppliers = if used[7] { load::<Supplier>(prefix.as_str(), "supplier.tbl", index, peers, logical_batch, physical_batch, 7 ) } else { Vec::new() };
+        let mut customers = if used[0] { load::<Customer>(prefix.as_str(), "customer.tbl", index, peers, logical_batch, physical_batch, 1) } else { Vec::new() };
+        let mut lineitems = if used[1] { load::<LineItem>(prefix.as_str(), "lineitem.tbl", index, peers, logical_batch, physical_batch, 2) } else { Vec::new() };
+        let mut nations = if used[2] { load::<Nation>(prefix.as_str(), "nation.tbl", index, peers, logical_batch, physical_batch, 3) } else { Vec::new() };
+        let mut orders = if used[3] { load::<Order>(prefix.as_str(), "orders.tbl", index, peers, logical_batch, physical_batch, 4) } else { Vec::new() };
+        let mut parts = if used[4] { load::<Part>(prefix.as_str(), "part.tbl", index, peers, logical_batch, physical_batch, 5) } else { Vec::new() };
+        let mut partsupps = if used[5] { load::<PartSupp>(prefix.as_str(), "partsupp.tbl", index, peers, logical_batch, physical_batch, 6) } else { Vec::new() };
+        let mut regions = if used[6] { load::<Region>(prefix.as_str(), "region.tbl", index, peers, logical_batch, physical_batch, 7) } else { Vec::new() };
+        let mut suppliers = if used[7] { load::<Supplier>(prefix.as_str(), "supplier.tbl", index, peers, logical_batch, physical_batch, 8) } else { Vec::new() };
 
         let mut tuples = 0usize;
         tuples += customers.iter().map(|x| x.len()).sum::<usize>();
@@ -106,6 +106,19 @@ fn main() {
         tuples += partsupps.iter().map(|x| x.len()).sum::<usize>();
         tuples += regions.iter().map(|x| x.len()).sum::<usize>();
         tuples += suppliers.iter().map(|x| x.len()).sum::<usize>();
+
+        // Synchronize before starting the timer.
+        let next_round = 1;
+        inputs.0.advance_to(next_round);
+        inputs.1.advance_to(next_round);
+        inputs.2.advance_to(next_round);
+        inputs.3.advance_to(next_round);
+        inputs.4.advance_to(next_round);
+        inputs.5.advance_to(next_round);
+        inputs.6.advance_to(next_round);
+        inputs.7.advance_to(next_round);
+        let time = inputs.0.time().clone(); 
+        worker.step_while(|| probes.iter().all(|p| p.less_than(&time)));
 
         let timer = Instant::now();
         let mut round = 0;
@@ -122,7 +135,7 @@ fn main() {
             if let Some(mut data) = suppliers.pop() { inputs.7.send_batch(&mut data); }
 
             // catch all inputs up to the same (next) round.
-            let next_round = 8 * (round + 1) * physical_batch;
+            let next_round = 1 + 8 * (round + 1) * physical_batch;
             inputs.0.advance_to(next_round);
             inputs.1.advance_to(next_round);
             inputs.2.advance_to(next_round);
@@ -132,10 +145,23 @@ fn main() {
             inputs.6.advance_to(next_round);
             inputs.7.advance_to(next_round);
 
-            let time = inputs.0.time(); 
+            let time = inputs.0.time().clone(); 
             worker.step_while(|| probes.iter().all(|p| p.less_than(&time)));
             round += 1;
         }
+
+        // Finish outstanding work before stopping the timer.
+        let next_round = usize::max_value();
+        inputs.0.advance_to(next_round);
+        inputs.1.advance_to(next_round);
+        inputs.2.advance_to(next_round);
+        inputs.3.advance_to(next_round);
+        inputs.4.advance_to(next_round);
+        inputs.5.advance_to(next_round);
+        inputs.6.advance_to(next_round);
+        inputs.7.advance_to(next_round);
+        let time = inputs.0.time().clone(); 
+        worker.step_while(|| probes.iter().all(|p| p.less_than(&time)));
 
         let query_name = if query < 10 { format!("q0{}", query) } else { format!("q{}", query) };
         let elapsed = timer.elapsed();
@@ -225,16 +251,10 @@ where T: for<'a> From<&'a str> {
             buffer.push((item, RootTimestamp::new(logical), 1));
         }
 
-        if count % 10000 == 0 { 
-            // print!("\rreading records from {:?}: {:?}", name, count); 
-            ::std::io::stdout().flush().ok().expect("Could not flush stdout"); 
-        }
-
         count += 1;
 
         line.clear();
     }
-    // println!("\rreading records from {:?}: {:?}", name, count); 
     
     if buffer.len() > 0 {
         result.push(buffer);
