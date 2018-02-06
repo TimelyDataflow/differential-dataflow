@@ -5,7 +5,7 @@ extern crate differential_dataflow;
 extern crate arrayvec;
 
 use std::fs::File;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader};
 use std::time::Instant;
 
 use timely::dataflow::*;
@@ -180,7 +180,9 @@ fn main() {
         let query_name = if query < 10 { format!("q0{}", query) } else { format!("q{}", query) };
         let elapsed = timer.elapsed();
         let nanos = elapsed.as_secs() * 1000000000 + elapsed.subsec_nanos() as u64;
-        println!("query: {}, elapsed: {:?}, tuples: {:?}, rate: {:?}", query_name, timer.elapsed(), tuples, (tuples as f64) / (nanos as f64 / 1000000000.0));
+        if index == 0 {
+            println!("query: {}, elapsed: {:?}, tuples: {:?}, rate: {:?}", query_name, timer.elapsed(), peers * tuples, ((peers * tuples) as f64) / (nanos as f64 / 1000000000.0));
+        }
 
     }).unwrap();
 }
