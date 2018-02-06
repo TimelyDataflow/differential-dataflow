@@ -88,14 +88,14 @@ fn main() {
         });
 
         // customer.tbl lineitem.tbl    nation.tbl  orders.tbl  part.tbl    partsupp.tbl    region.tbl  supplier.tbl
-        let mut customers = if used[0] { load::<Customer>(prefix.as_str(), "customer.tbl", index, peers, logical_batch, physical_batch, 1) } else { Vec::new() };
-        let mut lineitems = if used[1] { load::<LineItem>(prefix.as_str(), "lineitem.tbl", index, peers, logical_batch, physical_batch, 2) } else { Vec::new() };
-        let mut nations = if used[2] { load::<Nation>(prefix.as_str(), "nation.tbl", index, peers, logical_batch, physical_batch, 3) } else { Vec::new() };
-        let mut orders = if used[3] { load::<Order>(prefix.as_str(), "orders.tbl", index, peers, logical_batch, physical_batch, 4) } else { Vec::new() };
-        let mut parts = if used[4] { load::<Part>(prefix.as_str(), "part.tbl", index, peers, logical_batch, physical_batch, 5) } else { Vec::new() };
-        let mut partsupps = if used[5] { load::<PartSupp>(prefix.as_str(), "partsupp.tbl", index, peers, logical_batch, physical_batch, 6) } else { Vec::new() };
-        let mut regions = if used[6] { load::<Region>(prefix.as_str(), "region.tbl", index, peers, logical_batch, physical_batch, 7) } else { Vec::new() };
-        let mut suppliers = if used[7] { load::<Supplier>(prefix.as_str(), "supplier.tbl", index, peers, logical_batch, physical_batch, 8) } else { Vec::new() };
+        let mut customers = if used[0] { load::<Customer>(prefix.as_str(), "customer.tbl", index, peers, logical_batch, physical_batch, 0) } else { Vec::new() };
+        let mut lineitems = if used[1] { load::<LineItem>(prefix.as_str(), "lineitem.tbl", index, peers, logical_batch, physical_batch, 1) } else { Vec::new() };
+        let mut nations = if used[2] { load::<Nation>(prefix.as_str(), "nation.tbl", index, peers, logical_batch, physical_batch, 2) } else { Vec::new() };
+        let mut orders = if used[3] { load::<Order>(prefix.as_str(), "orders.tbl", index, peers, logical_batch, physical_batch, 3) } else { Vec::new() };
+        let mut parts = if used[4] { load::<Part>(prefix.as_str(), "part.tbl", index, peers, logical_batch, physical_batch, 4) } else { Vec::new() };
+        let mut partsupps = if used[5] { load::<PartSupp>(prefix.as_str(), "partsupp.tbl", index, peers, logical_batch, physical_batch, 5) } else { Vec::new() };
+        let mut regions = if used[6] { load::<Region>(prefix.as_str(), "region.tbl", index, peers, logical_batch, physical_batch, 6) } else { Vec::new() };
+        let mut suppliers = if used[7] { load::<Supplier>(prefix.as_str(), "supplier.tbl", index, peers, logical_batch, physical_batch, 7) } else { Vec::new() };
 
         let mut tuples = 0usize;
         tuples += customers.iter().map(|x| x.len()).sum::<usize>();
@@ -125,10 +125,24 @@ fn main() {
         while customers.len() > 0 || lineitems.len() > 0 || nations.len() > 0 || orders.len() > 0 || parts.len() > 0 || partsupps.len() > 0 || regions.len() > 0 || suppliers.len() > 0 {
 
             // introduce physical batch of data for each input with remaining data.
-            if let Some(mut data) = customers.pop() { inputs.0.send_batch(&mut data); }
-            if let Some(mut data) = lineitems.pop() { inputs.1.send_batch(&mut data); }
+            if let Some(mut data) = customers.pop() { 
+                assert!(data.iter().all(|t| inputs.0.time().le(&t.1)));
+                inputs.0.send_batch(&mut data); 
+            }
+            if let Some(mut data) = lineitems.pop() { 
+                for x in data.iter() {
+                    if !inputs.1.time().le(&x.1) {
+                        panic!("{:?} but {:?}", inputs.1.time(), &x.1);
+                    }
+                }
+                assert!(data.iter().all(|t| inputs.1.time().le(&t.1)));
+                inputs.1.send_batch(&mut data); 
+            }
             if let Some(mut data) = nations.pop() { inputs.2.send_batch(&mut data); }
-            if let Some(mut data) = orders.pop() { inputs.3.send_batch(&mut data); }
+            if let Some(mut data) = orders.pop() { 
+                assert!(data.iter().all(|t| inputs.3.time().le(&t.1)));
+                inputs.3.send_batch(&mut data); 
+            }
             if let Some(mut data) = parts.pop() { inputs.4.send_batch(&mut data); }
             if let Some(mut data) = partsupps.pop() { inputs.5.send_batch(&mut data); }
             if let Some(mut data) = regions.pop() { inputs.6.send_batch(&mut data); }
@@ -248,7 +262,7 @@ where T: for<'a> From<&'a str> {
             }
 
             let item = T::from(line.as_str());
-            buffer.push((item, RootTimestamp::new(logical), 1));
+            buffer.push((item, RootTimestamp::new(logical + 1), 1));
         }
 
         count += 1;
