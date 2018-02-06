@@ -96,6 +96,6 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
         .join(&suppliers)
         .explode(|(_, order_date, is_name)| Some((order_date, DiffPair::new(if is_name { 1 } else { 0 }, 1))))
         .count_total()
-        .inspect(|x| println!("{:?}", x))
+        // .inspect(|x| println!("{:?}", x))
         .probe()
 }
