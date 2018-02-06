@@ -86,5 +86,6 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
         )
         .semijoin(&parts)
         .count_total()
+        // .inspect(|x| println!("{:?}", x))
         .probe()
 }

@@ -36,8 +36,8 @@ use ::Collections;
 // :n -1
 
 fn substring2(source: &[u8], query1: &[u8], query2: &[u8]) -> bool {
-    if let Some(pos) = (0 .. (source.len() - query1.len())).position(|i| &source[i..][..query1.len()] == query1) {
-        (pos .. query2.len()).any(|i| &source[i..][..query2.len()] == query2)
+    if let Some(pos) = (0 .. (source.len() - (query1.len()+query2.len()))).position(|i| &source[i..][..query1.len()] == query1) {
+        ((pos + query1.len()) .. (source.len() - query2.len())).any(|i| &source[i..][..query2.len()] == query2)
     }
     else { false }
 }
@@ -55,7 +55,8 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
         .map(|c| c.cust_key)
         .concat(&orders)
         .count_total()
-        .map(|(_cust_key, count)| (count-1) as usize)
+        .map(|(_cust_key, count)| { if count == 41 { println!("{:?}", _cust_key); } (count-1) as usize } )
         .count_total()
+        // .inspect(|x| println!("{:?}", x))
         .probe()
 }

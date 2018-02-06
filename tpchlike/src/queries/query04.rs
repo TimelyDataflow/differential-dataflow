@@ -60,5 +60,6 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
         )
         .join_core(&lineitems, |_k,v,_| Some(v.clone()))
         .count_total()
+        // .inspect(|x| println!("{:?}", x))
         .probe()
 }

@@ -94,5 +94,6 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
         })
         .explode(|(cc, acct)| Some((cc, DiffPair::new(acct as isize, 1))))
         .count_total()
+        // .inspect(|x| println!("{:?}", x))
         .probe()
 }

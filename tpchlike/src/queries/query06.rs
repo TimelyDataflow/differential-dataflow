@@ -30,12 +30,13 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
 
     collections
         .lineitems()
-        .explode(|x|
-            if create_date(1994, 1, 1) <= x.ship_date && x.ship_date < create_date(1995, 1, 1) && 5 <= x.discount && x.discount < 7 && x.quantity < 24 {
+        .explode(|x| {
+            if (create_date(1994, 1, 1) <= x.ship_date) && (x.ship_date < create_date(1995, 1, 1)) && (5 <= x.discount) && (x.discount <= 7) && (x.quantity < 24) {
                 Some(((), (x.extended_price * x.discount / 100) as isize))
             }
             else { None }
-        )
+        })
         .count_total()
+        // .inspect(|x| println!("{:?}", x))
         .probe()
 }

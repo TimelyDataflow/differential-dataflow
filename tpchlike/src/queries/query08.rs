@@ -84,7 +84,7 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
         .join(&nations2)
         .map(|(_, supp_key, is_name)| (supp_key, is_name));
 
-    let parts = collections.parts.filter(|p| p.typ.as_str() == "ECONOMY ANODIZED STEEL").map(|p| p.part_key);
+    let parts = collections.parts().filter(|p| p.typ.as_str() == "ECONOMY ANODIZED STEEL").map(|p| p.part_key);
 
     collections
         .lineitems()
@@ -96,5 +96,6 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
         .join(&suppliers)
         .explode(|(_, order_date, is_name)| Some((order_date, DiffPair::new(if is_name { 1 } else { 0 }, 1))))
         .count_total()
+        .inspect(|x| println!("{:?}", x))
         .probe()
 }

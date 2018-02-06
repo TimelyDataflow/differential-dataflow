@@ -94,5 +94,6 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
         .suppliers()
         .map(|s| (s.supp_key, (s.name, s.address, s.phone)))
         .join(&top_suppliers)
+        // .inspect(|x| println!("{:?}", x))
         .probe()
 }

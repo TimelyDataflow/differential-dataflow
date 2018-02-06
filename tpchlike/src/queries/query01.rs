@@ -42,7 +42,7 @@ pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Times
     collections
         .lineitems()
         .explode(|item| 
-            if item.ship_date < ::types::create_date(1998, 9, 1) {
+            if item.ship_date <= ::types::create_date(1998, 9, 2) {
                 Some(((item.return_flag[0], item.line_status[0]), 
                     DiffPair::new(item.quantity as isize, 
                     DiffPair::new(item.extended_price as isize,
@@ -55,5 +55,6 @@ pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Times
             }
         )
         .count_total()
+        // .inspect(|x| println!("{:?}", x))
         .probe()
 }

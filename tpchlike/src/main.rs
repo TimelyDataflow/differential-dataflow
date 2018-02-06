@@ -125,24 +125,10 @@ fn main() {
         while customers.len() > 0 || lineitems.len() > 0 || nations.len() > 0 || orders.len() > 0 || parts.len() > 0 || partsupps.len() > 0 || regions.len() > 0 || suppliers.len() > 0 {
 
             // introduce physical batch of data for each input with remaining data.
-            if let Some(mut data) = customers.pop() { 
-                assert!(data.iter().all(|t| inputs.0.time().le(&t.1)));
-                inputs.0.send_batch(&mut data); 
-            }
-            if let Some(mut data) = lineitems.pop() { 
-                for x in data.iter() {
-                    if !inputs.1.time().le(&x.1) {
-                        panic!("{:?} but {:?}", inputs.1.time(), &x.1);
-                    }
-                }
-                assert!(data.iter().all(|t| inputs.1.time().le(&t.1)));
-                inputs.1.send_batch(&mut data); 
-            }
+            if let Some(mut data) = customers.pop() { inputs.0.send_batch(&mut data); }
+            if let Some(mut data) = lineitems.pop() { inputs.1.send_batch(&mut data); }
             if let Some(mut data) = nations.pop() { inputs.2.send_batch(&mut data); }
-            if let Some(mut data) = orders.pop() { 
-                assert!(data.iter().all(|t| inputs.3.time().le(&t.1)));
-                inputs.3.send_batch(&mut data); 
-            }
+            if let Some(mut data) = orders.pop() { inputs.3.send_batch(&mut data); }
             if let Some(mut data) = parts.pop() { inputs.4.send_batch(&mut data); }
             if let Some(mut data) = partsupps.pop() { inputs.5.send_batch(&mut data); }
             if let Some(mut data) = regions.pop() { inputs.6.send_batch(&mut data); }

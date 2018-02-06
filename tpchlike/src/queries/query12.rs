@@ -84,5 +84,6 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
     orders
         .join_core(&lineitems, |_, _, &ship_mode| Some(ship_mode))
         .count_total()
+        .inspect(|x| println!("{:?}", x))
         .probe()
 }

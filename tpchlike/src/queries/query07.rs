@@ -100,5 +100,6 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
         .join_map(&orders, |_, &(ship_date, name_s), &name_c| (name_s, name_c, ship_date >> 16))
         .filter(|x| x.0 != x.1)
         .count_total()
+        // .inspect(|x| println!("{:?}", x))
         .probe()
 }

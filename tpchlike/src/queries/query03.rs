@@ -64,7 +64,7 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
     let orders = 
     collections
         .orders()
-        .filter(|o| o.order_date < ::types::create_date(1995, 3, 15))
+        .filter(|o| o.order_date < create_date(1995, 3, 15))
         .map(|o| (o.cust_key, (o.order_key, o.order_date, o.ship_priority)));
 
     orders
@@ -72,5 +72,6 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
         .map(|(_, (order_key, order_date, ship_priority))| (order_key, (order_date, ship_priority)))
         .semijoin(&lineitems)
         .count_total()
+        // .inspect(|x| println!("{:?}", x))
         .probe()
 }

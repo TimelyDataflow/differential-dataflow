@@ -38,12 +38,12 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
     let parts = 
     collections
         .parts()   // We fluff out search strings to have the right lengths. \\
-        .flat_map(|x| 
-            if &x.brand == b"Brand#2300" && &x.container == b"MED BOX000" {
+        .flat_map(|x|  {
+            if &x.brand[..8] == b"Brand#23" && &x.container[..7] == b"MED BOX" {
                 Some(x.part_key)
             }
             else { None }
-        );
+        });
 
     collections
         .lineitems()
@@ -52,17 +52,15 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
         .group(|_k, s, t| {
 
             // determine the total and count of quantity.
-            let total: i64 = s.iter().map(|x| (x.0).0).sum();
+            let total: i64 = s.iter().map(|x| (x.0).0 * (x.1 as i64)).sum();
             let count: i64 = s.iter().map(|x| x.1 as i64).sum();
 
-            // threshold we are asked to use.
-            let threshold = total / (5 * count);
-
             // produce as output those tuples with below-threshold quantity.
-            t.extend(s.iter().filter(|&&(&(quantity,_),_)| quantity < threshold)
+            t.extend(s.iter().filter(|&&(&(quantity,_),_)| 5 * quantity * count < total)
                              .map(|&(&(_,price),count)| (price, count)));
         })
         .explode(|(_part, price)| Some(((), price as isize)))
         .count_total()
+        // .inspect(|x| println!("{:?}", x))
         .probe()
 }
