@@ -55,7 +55,7 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
         .map(|c| c.cust_key)
         .concat(&orders)
         .count_total()
-        .map(|(_cust_key, count)| { if count == 41 { println!("{:?}", _cust_key); } (count-1) as usize } )
+        .map(|(_cust_key, count)| (count-1) as usize)
         .count_total()
         // .inspect(|x| println!("{:?}", x))
         .probe()
