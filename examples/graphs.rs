@@ -16,7 +16,6 @@ use differential_dataflow::operators::arrange::ArrangeByKey;
 use differential_dataflow::operators::arrange::ArrangeBySelf;
 
 type Node = usize;
-type Edge = (Node, Node);
 
 fn main() {
 
@@ -232,7 +231,6 @@ where G::Timestamp: Lattice+Ord {
             .semijoin(&forward_active)
             .map(|(src, (med, dist))| (med, (src, dist)))
             .join_core(&forward_graph, |_med, &(src, dist), &next| Some((next, (src, dist+1))))
-            // .join_map(&edges, |_med, &(src, dist), &next| (next, (src, dist+1)))
             .concat(&forward)
             .map(|(next, (src, dist))| ((next, src), dist))
             .group(|_key, s, t| t.push((*s[0].0, 1)))
@@ -248,7 +246,6 @@ where G::Timestamp: Lattice+Ord {
             .semijoin(&reverse_active)
             .map(|(rev, (med, dist))| (med, (rev, dist)))
             .join_core(&reverse_graph, |_med, &(rev, dist), &next| Some((next, (rev, dist+1))))
-            // .join_map(&edges.map(|(x,y)| (y,x)), |_med, &(rev, dist), &next| (next, (rev, dist+1)))
             .concat(&reverse)
             .map(|(next, (rev, dist))| ((next, rev), dist))
             .group(|_key, s, t| t.push((*s[0].0, 1)))
