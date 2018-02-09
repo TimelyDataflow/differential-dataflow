@@ -19,8 +19,14 @@ use differential_dataflow::lattice::Lattice;
 
 use graph_map::GraphMMap;
 
+use differential_dataflow::trace::implementations::ord::OrdValSpine as DefaultValTrace;
+use differential_dataflow::operators::arrange::TraceAgent;
+use differential_dataflow::operators::arrange::Arranged;
+
+type Arrange<G: Scope, K, V, R> = Arranged<G, K, V, R, TraceAgent<K, V, G::Timestamp, R, DefaultValTrace<K, V, G::Timestamp, R>>>;
+
 type Node = u32;
-type Edge = (Node, Node);
+// type Edge = (Node, Node);
 
 fn main() {
 
@@ -33,162 +39,235 @@ fn main() {
         let peers = worker.peers();
         let index = worker.index();
 
-        // // What you might do if you used GraphMMap:
-        let graph = GraphMMap::new(&filename);
-
-        let (mut input, mut query, probe) = worker.dataflow::<u64,_,_>(|scope| {
+        let (mut input, probe) = worker.dataflow::<(),_,_>(|scope| {
 
             let (input, graph) = scope.new_collection();
-            let (rootz, query) = scope.new_collection();
+            // let (rootz, query) = scope.new_collection();
+
+            // each edge should exist in both directions.
+            let graph = graph.arrange_by_key();
 
             let probe = match program.as_str() {
-                "reach" => _reach(&graph, &query).probe(),
-                "cc"    => _connected_components(&graph).probe(),
-                "bfs"   => _bfs(&graph, &query).probe(),
-                "pymk"  => _pymk(&graph, &query, 10).probe(),
-                _       => panic!("must specify one of 'reach', 'cc', 'bfs'.")
+                "tc"    => _tc(&graph).probe(),
+                "sg"    => _sg(&graph).probe(),
+                // "reach" => _reach(&graph, &query).probe(),
+                // "cc"    => _connected_components(&graph).probe(),
+                // "bfs"   => _bfs(&graph, &query).probe(),
+                // "pymk"  => _pymk(&graph, &query, 10).probe(),
+                _       => panic!("must specify one of 'tc', 'sg', reach', 'cc', 'bfs', 'pymk'.")
             };
 
-            (input, rootz, probe)
+            (input, probe)
         });
         
 
         let timer = Instant::now();
 
-        // start loading up the graph
-        for node in 0..graph.nodes() {
-            if node % peers == index {
-                for &edge in graph.edges(node) {
-                    input.insert((node as u32, edge));
+        let mut nodes = 0;
+        if filename.ends_with(".txt") {
+
+            use std::io::{BufReader, BufRead};
+            use std::fs::File;
+
+            let file = BufReader::new(File::open(filename.clone()).unwrap());
+            for (count, readline) in file.lines().enumerate() {
+                let line = readline.ok().expect("read error");
+                if count % peers == index && !line.starts_with('#') {
+                    let mut elts = line[..].split_whitespace();
+                    let src: u32 = elts.next().unwrap().parse().ok().expect("malformed src");
+                    let dst: u32 = elts.next().unwrap().parse().ok().expect("malformed dst");
+                    if nodes < src { nodes = src; }
+                    if nodes < dst { nodes = dst; }
+                    input.insert((src, dst));
                 }
             }
         }
+        else {
+            // What you might do if you used GraphMMap:
+            let graph = GraphMMap::new(&filename);
 
-        // run until graph is loaded
-        input.advance_to(1); input.flush();
-        query.advance_to(1); query.flush();
-
-        input.close();
-
-        worker.step_while(|| probe.less_than(query.time()));
-
-        if index == 0 {
-            println!("loaded: {:?}", timer.elapsed());
-        }
-
-        // conduct latencies.capacity() measurements.
-        let mut latencies = Vec::with_capacity(11);
-
-        let seed: &[_] = &[1, 2, 3, 4];
-        let mut rng: StdRng = SeedableRng::from_seed(seed);    // rng for edge additions
-
-        for _count in 0..latencies.capacity() {
-            let timer = Instant::now();
-            if index == 0 {
-                query.insert((rng.gen_range(0, graph.nodes() as u32)));
+            // start loading up the graph
+            for node in 0..graph.nodes() {
+                if node % peers == index {
+                    for &edge in graph.edges(node) {
+                        input.insert((node as u32, edge));
+                    }
+                }
             }
-            let next = query.epoch() + 1;
-            // input.advance_to(next); input.flush();
-            query.advance_to(next); query.flush();
-            while probe.less_than(query.time()) { worker.step(); }
-            latencies.push(timer.elapsed());
+            nodes = graph.nodes() as u32;
         }
 
-        if index == 0 {
-            for lat in &latencies {
-                println!("latency: {:?}", lat);
-            }
-        }
+        println!("{:?}\tData ingested", timer.elapsed());
+
+        // // run until graph is loaded
+        // input.advance_to(1); input.flush();
+        // query.advance_to(1); query.flush();
+
+        // input.close();
+
+        // worker.step_while(|| probe.less_than(query.time()));
+
+        // if index == 0 {
+        //     println!("{:?}\tData indexed", timer.elapsed());
+        // }
+
+        // // conduct latencies.capacity() measurements.
+        // let mut latencies = Vec::with_capacity(11);
+
+        // let seed: &[_] = &[1, 2, 3, 4];
+        // let mut rng: StdRng = SeedableRng::from_seed(seed);    // rng for edge additions
+
+        // for _count in 0..latencies.capacity() {
+        //     let timer = Instant::now();
+        //     if index == 0 {
+        //         query.insert((rng.gen_range(0, nodes)));
+        //     }
+        //     let next = query.epoch() + 1;
+        //     // input.advance_to(next); input.flush();
+        //     query.advance_to(next); query.flush();
+        //     while probe.less_than(query.time()) { worker.step(); }
+        //     latencies.push(timer.elapsed());
+        // }
+
+        // if index == 0 {
+        //     for lat in &latencies {
+        //         println!("latency: {:?}", lat);
+        //     }
+        // }
 
     }).unwrap();
 }
 
-// returns pairs (root, friend-of-friend) for the top-k friends of friends by count.
-fn _pymk<G: Scope>(edges: &Collection<G, Edge>, query: &Collection<G, Node>, k: usize) -> Collection<G, (Node,Node)>
-where G::Timestamp: Lattice+Ord {
+// // returns pairs (root, friend-of-friend) for the top-k friends of friends by count.
+// fn _pymk<G: Scope>(edges: &Arrange<G, Node, Node, isize>, query: &Collection<G, Node>, k: usize) -> Collection<G, (Node,Node)>
+// where G::Timestamp: Lattice+Ord {
 
-    // symmetrize the graph
-    let edges = edges.map_in_place(|x: &mut (u32, u32)| ::std::mem::swap(&mut x.0, &mut x.1))
-                     .concat(&edges);
+//     let query = query.arrange_by_self();
 
-    // "arrange" edges, because we'll want to use it twice the same way.
-    let edges = edges.arrange_by_key();
-    let query = query.arrange_by_self();
+//     // restrict attention to edges from query nodes
+//     query.join_core(&edges, |k,_,v| Some((v.clone(), k.clone())))
+//          .join_core(&edges, |_,x,y| Some((x.clone(), y.clone())))
+//          // the next thing is the "topk" worker. sorry!
+//          .group(move |_,s,t| {
+//              t.extend(s.iter().map(|&(x,y)| (*x,y)));   // propose all inputs as outputs
+//              t.sort_by(|x,y| (-x.1).cmp(&(-y.1)));      // sort by negative count (large numbers first)
+//              t.truncate(k)                              // keep at most k of these
+//          })
+//  }
 
-    // restrict attention to edges from query nodes
-    edges.join_core(&query, |k,v,_| Some((v.clone(), k.clone())))
-         .arrange_by_key()
-         .join_core(&edges, |_,x,y| Some((x.clone(), y.clone())))
-         // the next thing is the "topk" worker. sorry!
-         .group(move |_,s,t| {
-             t.extend(s.iter().map(|&(x,y)| (*x,y)));   // propose all inputs as outputs
-             t.sort_by(|x,y| (-x.1).cmp(&(-y.1)));      // sort by negative count (large numbers first)
-             t.truncate(k)                              // keep at most k of these
-         })
- }
+// // returns pairs (n, s) indicating node n can be reached from a root in s steps.
+// fn _reach<G: Scope>(edges: &Arrange<G, Node, Node, isize>, query: &Collection<G, Node>) -> Collection<G, Node>
+// where G::Timestamp: Lattice+Ord {
+
+//     // initialize query as reaching themselves at distance 0
+//     // repeatedly update minimal distances each node can be reached from each root
+//     query.iterate(|inner| {
+
+//         let edges = edges.enter(&inner.scope());
+//         let nodes = query.enter(&inner.scope());
+
+//         // edges from active sources activate their destinations
+//         edges.semijoin(&inner)
+//              .map(|(_,d)| d)
+//              .concat(&nodes)
+//              .distinct()
+//     })
+// }
+
+
+// // returns pairs (node, label) indicating the connected component containing each node
+// fn _connected_components<G: Scope>(edges: &Arrange<G, Node, Node, isize>) -> Collection<G, (Node, Node)>
+// where G::Timestamp: Lattice+Hash+Ord {
+
+//     // each edge (x,y) means that we need at least a label for the min of x and y.
+//     let nodes = edges.as_collection(|&k,&v| (k,v))
+//                      .map_in_place(|pair| {
+//                         let min = std::cmp::min(pair.0, pair.1);
+//                         *pair = (min, min);
+//                      })
+//                      .consolidate();
+
+//     let edges = edges.as_collection(|&k,&v| (k,v));
+//     let edges = edges.map(|(x,y)| (y,x))
+//                      .concat(&edges)
+//                      .arrange_by_key();
+
+//     // don't actually use these labels, just grab the type
+//     nodes.filter(|_| false)
+//          .iterate(|inner| {
+//              let edges = edges.enter(&inner.scope());
+//              let nodes = nodes.enter_at(&inner.scope(), |r| 256 * (64 - r.0.leading_zeros() as u64));
+
+//              edges.join_map(&inner, |_k,d,l| (*d,*l))
+//                   .concat(&nodes)
+//                   .group(|_, s, t| { t.push((*s[0].0, 1)); } )
+//          })
+// }
+
+// // returns pairs (n, s) indicating node n can be reached from a root in s steps.
+// fn _bfs<G: Scope>(edges: &Arrange<G, Node, Node, isize>, query: &Collection<G, Node>) -> Collection<G, (Node, u32)>
+// where G::Timestamp: Lattice+Ord {
+
+//     // initialize query as reaching themselves at distance 0
+//     let nodes = query.map(|x| (x, 0));
+
+//     // repeatedly update minimal distances each node can be reached from each root
+//     nodes.iterate(|inner| {
+
+//         let edges = edges.enter(&inner.scope());
+//         let nodes = nodes.enter(&inner.scope());
+
+//         edges.join_map(&inner, |_k,d,l| (*d, l+1))
+//              .concat(&nodes)
+//              .group(|_, s, t| t.push((*s[0].0, 1)))
+//      })
+// }
+
 
 // returns pairs (n, s) indicating node n can be reached from a root in s steps.
-fn _reach<G: Scope>(edges: &Collection<G, Edge>, query: &Collection<G, Node>) -> Collection<G, Node>
+fn _tc<G: Scope>(edges: &Arrange<G, Node, Node, isize>) -> Collection<G, (Node, Node)>
 where G::Timestamp: Lattice+Ord {
 
-    // initialize query as reaching themselves at distance 0
+    use timely::dataflow::operators::Inspect;
+    use timely::dataflow::operators::Accumulate;
+
     // repeatedly update minimal distances each node can be reached from each root
-    query.iterate(|inner| {
+    edges
+        .as_collection(|&k,&v| (k,v))
+        .iterate(|inner| {
 
-        let edges = edges.enter(&inner.scope());
-        let nodes = query.enter(&inner.scope());
+            inner.inner.count().inspect_batch(|t,xs| println!("{:?}\t{:?}", t, xs));
 
-        // edges from active sources activate their destinations
-        edges.semijoin(&inner)
-             .map(|(_,d)| d)
-             .concat(&nodes)
-             .distinct()
-    })
+            let edges = edges.enter(&inner.scope());
+
+            inner
+                .map(|(x,y)| (y,x))
+                .join_core(&edges, |_y,&x,&z| Some((x, z)))
+                .concat(&edges.as_collection(|&k,&v| (k,v)))
+                .distinct()
+        }
+    )
 }
 
 
-// returns pairs (node, label) indicating the connected component containing each node
-fn _connected_components<G: Scope>(edges: &Collection<G, Edge>) -> Collection<G, (Node, Node)>
-where G::Timestamp: Lattice+Hash+Ord {
-
-    // each edge (x,y) means that we need at least a label for the min of x and y.
-    let nodes = edges.map_in_place(|pair| {
-                        let min = std::cmp::min(pair.0, pair.1);
-                        *pair = (min, min);
-                     })
-                     .consolidate();
-
-    // each edge should exist in both directions.
-    let edges = edges.map_in_place(|x| mem::swap(&mut x.0, &mut x.1))
-                     .concat(&edges);
-
-    // don't actually use these labels, just grab the type
-    nodes.filter(|_| false)
-         .iterate(|inner| {
-             let edges = edges.enter(&inner.scope());
-             let nodes = nodes.enter_at(&inner.scope(), |r| 256 * (64 - r.0.leading_zeros() as u64));
-
-             inner.join_map(&edges, |_k,l,d| (*d,*l))
-                  .concat(&nodes)
-                  .group(|_, s, t| { t.push((*s[0].0, 1)); } )
-         })
-}
-
 // returns pairs (n, s) indicating node n can be reached from a root in s steps.
-fn _bfs<G: Scope>(edges: &Collection<G, Edge>, query: &Collection<G, Node>) -> Collection<G, (Node, u32)>
+fn _sg<G: Scope>(edges: &Arrange<G, Node, Node, isize>) -> Collection<G, (Node, Node)>
 where G::Timestamp: Lattice+Ord {
 
-    // initialize query as reaching themselves at distance 0
-    let nodes = query.map(|x| (x, 0));
+    let peers = edges.join_core(&edges, |_, &x,&y| Some((x,y)));
 
     // repeatedly update minimal distances each node can be reached from each root
-    nodes.iterate(|inner| {
+    peers
+        .iterate(|inner| {
 
-        let edges = edges.enter(&inner.scope());
-        let nodes = nodes.enter(&inner.scope());
+            let edges = edges.enter(&inner.scope());
+            let peers = peers.enter(&inner.scope());
 
-        inner.join_map(&edges, |_k,l,d| (*d, l+1))
-             .concat(&nodes)
-             .group(|_, s, t| t.push((*s[0].0, 1)))
-     })
+            inner
+                .join_core(&edges, |_,&x,&z| Some((x, z)))
+                .join_core(&edges, |_,&x,&z| Some((x, z)))
+                .concat(&peers)
+                .distinct()
+        }
+    )
 }
