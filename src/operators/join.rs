@@ -169,12 +169,12 @@ where
 impl<G, K, V, R, T> Join<G, K, V, R> for Arranged<G,K,V,R,T>
     where
         G: Scope,
-        G::Timestamp: Lattice+Ord+Debug,
+        G::Timestamp: Lattice+Ord,
         K: Data+Hashable,
         V: Data,
         R: Diff,
         T: TraceReader<K,V,G::Timestamp,R>+Clone+'static,
-        T::Batch: BatchReader<K,V,G::Timestamp,R>+'static+Debug {
+        T::Batch: BatchReader<K,V,G::Timestamp,R>+'static {
 
     fn join_map<V2: Data, R2: Diff, D: Data, L>(&self, other: &Collection<G, (K, V2), R2>, logic: L) -> Collection<G, D, <R as Mul<R2>>::Output>
     where R: Mul<R2>, <R as Mul<R2>>::Output: Diff, L: Fn(&K, &V, &V2)->D+'static {
