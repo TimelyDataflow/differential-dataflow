@@ -110,9 +110,9 @@ where
                         // Apply `thresh` both before and after `diff` is applied to `count`.
                         // If the result is non-zero, send it along.
                         batch_cursor.map_times(&batch, |time, diff| {
-                            let old_weight = thresh(count);
+                            let old_weight = if count.is_zero() { R2::zero() } else { thresh(count) };
                             count = count + diff;
-                            let new_weight = thresh(count);
+                            let new_weight = if count.is_zero() { R2::zero() } else { thresh(count) };
                             let difference = new_weight - old_weight;
                             if !difference.is_zero() {
                                 session.give((key.clone(), time.clone(), difference));
