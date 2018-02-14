@@ -259,9 +259,9 @@ where
 
             // Step 1: Forcibly merge batches in lower slots.
             for position in 0 .. batch_index {
-                if let Some(mut batch) = self.merging[position].take() {
+                if let Some(batch) = self.merging[position].take() {
                     let batch = batch.complete();
-                    if let Some(mut batch2) = self.merging[position+1].take() {
+                    if let Some(batch2) = self.merging[position+1].take() {
                         let batch2 = batch2.complete();
                         self.merging[position+1] = Some(MergeState::begin_merge(batch2, batch, None));
                     }
@@ -275,7 +275,7 @@ where
             let mut fuel;// = 0; //8 * batch_size * self.merging.len();
             for position in (batch_index .. self.merging.len()).rev() {
                 fuel = 16 * batch_size;
-                if let Some(mut batch) = self.merging[position].take() {
+                if let Some(batch) = self.merging[position].take() {
                     let batch = batch.work(&mut fuel);
                     if batch.is_complete() {
                         let batch = batch.complete();
