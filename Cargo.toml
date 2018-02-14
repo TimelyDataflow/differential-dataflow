@@ -13,28 +13,22 @@ repository = "https://github.com/frankmcsherry/differential-dataflow.git"
 keywords = ["differential", "dataflow"]
 license = "MIT"
 
-[dependencies.graph_map]
-git="https://github.com/frankmcsherry/graph-map.git"
-
 [dev-dependencies]
 getopts="0.2.14"
 rand="0.3.13"
 byteorder="0.4.2"
 itertools="^0.6"
+serde_json = "1.0"
+#pikkr = { git = "https://github.com/pikkr/pikkr" }
+#graph_map = { git = "https://github.com/frankmcsherry/graph-map.git" }
 
 [dependencies]
-abomonation = { git = "https://github.com/frankmcsherry/abomonation" }
-abomonation_derive = { git = "https://github.com/mystor/abomonation_derive" }
+abomonation = "0.5"
+abomonation_derive = "0.3"
 timely_sort="0.1.6"
-timely_communication = { git = "https://github.com/frankmcsherry/timely-dataflow" }
-timely = { git = "https://github.com/frankmcsherry/timely-dataflow" }
-#timely_communication = { path = "../timely-dataflow/communication" }
-#timely = { path = "../timely-dataflow/" }
+timely_communication = "0.5"
+timely = "0.5"
 fnv="1.0.2"
-
-[features]
-default = []
-#logging = ["timely/logging"]
 
 [profile.release]
 opt-level = 3
@@ -42,3 +36,4 @@ debug = true
 rpath = false
 lto = false
 debug-assertions = false
+codegen-units=4
