@@ -379,7 +379,7 @@ where
                 }
 
                 // cursors for navigating input and output traces.
-                let (mut source_cursor, source_storage): (T1::Cursor, _) = source_trace.cursor_through(&lower_received[..]).unwrap();
+                let (mut source_cursor, source_storage): (T1::Cursor, _) = source_trace.cursor_through(&lower_received[..]).expect("failed to acquire source cursor");
                 let source_storage = &source_storage;
                 let (mut output_cursor, output_storage): (T2::Cursor, _) = output_reader.cursor(); // TODO: this panicked when as above; WHY???
                 let output_storage = &output_storage;
@@ -752,7 +752,7 @@ mod history_replay {
                 while self.synth_times.last() == Some(&next_time) {
                     // We don't know enough about `next_time` to avoid putting it in to `times_current`.
                     // TODO: If we knew that the time derived from a canceled batch update, we could remove the time. 
-                    self.times_current.push(self.synth_times.pop().unwrap()); // <-- TODO: this could be a min-heap.
+                    self.times_current.push(self.synth_times.pop().expect("failed to pop from synth_times")); // <-- TODO: this could be a min-heap.
                     interesting = true;
                 }
                 while times_slice.first() == Some(&next_time) {
@@ -847,7 +847,7 @@ mod history_replay {
                             // indicate a logical error somewhere along the way; either we release a capability 
                             // we should have kept, or we have computed the output incorrectly (or both!)
                             let idx = outputs.iter().rev().position(|&(ref time, _)| time.less_equal(&next_time));
-                            let idx = outputs.len() - idx.unwrap() - 1;
+                            let idx = outputs.len() - idx.expect("failed to find index") - 1;
                             for (val, diff) in self.output_buffer.drain(..) {
                                 self.output_produced.push(((val.clone(), next_time.clone()), diff));
                                 outputs[idx].1.push((val, next_time.clone(), diff));
