@@ -326,6 +326,7 @@ impl<G, K, V, R1, T1> JoinCore<G, K, V, R1> for Arranged<G,K,V,R1,T1>
             // drain input 1, prepare work.
             input1.for_each(|capability, data| {
                 if let Some(ref mut trace2) = trace2 {
+                    let capability = capability.retain();
                     for batch1 in data.drain(..) {
                         let (trace2_cursor, trace2_storage) = trace2.cursor_through(&acknowledged2[..]).unwrap();
                         let batch1_cursor = batch1.item.cursor();
@@ -339,6 +340,7 @@ impl<G, K, V, R1, T1> JoinCore<G, K, V, R1> for Arranged<G,K,V,R1,T1>
             // drain input 2, prepare work.
             input2.for_each(|capability, data| {
                 if let Some(ref mut trace1) = trace1 {
+                    let capability = capability.retain();
                     for batch2 in data.drain(..) {
                         let (trace1_cursor, trace1_storage) = trace1.cursor_through(&acknowledged1[..]).unwrap();
                         let batch2_cursor = batch2.item.cursor();

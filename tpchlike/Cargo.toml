@@ -7,4 +7,4 @@ authors = ["Frank McSherry <fmcsherry@me.com>"]
 timely = { git = "https://github.com/frankmcsherry/timely-dataflow" }
 differential-dataflow = { path = "../" }
 arrayvec = { git = "https://github.com/bluss/arrayvec" }
-abomonation = { git = "https://github.com/frankmcsherry/abomonation" }
+abomonation = "0.5"

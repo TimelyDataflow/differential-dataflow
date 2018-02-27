@@ -323,7 +323,7 @@ where
                 // Ensure that `capabilities` covers the capability of the batch.
                 capabilities.retain(|cap| !capability.time().less_than(&cap.time()));
                 if !capabilities.iter().any(|cap| cap.time().less_equal(&capability.time())) {
-                    capabilities.push(capability);
+                    capabilities.push(capability.retain());
                 }
             });
 
