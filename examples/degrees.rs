@@ -37,7 +37,7 @@ fn main() {
                              .count_total();
 
             // show us something about the collection, notice when done.
-            let probe = if inspect { 
+            let probe = if inspect {
                 distr.inspect(|x| println!("observed: {:?}", x))
                      .probe()
             }
@@ -102,7 +102,7 @@ fn main() {
                     let elapsed_ns = elapsed.as_secs() * 1_000_000_000 + (elapsed.subsec_nanos() as u64);
 
                     // Introduce any requests that have "arrived" since last we were here.
-                    // Request i "arrives" at `index + ns_per_request * (i + 1)`. 
+                    // Request i "arrives" at `index + ns_per_request * (i + 1)`.
                     while (((index + request_counter) * ns_per_request) as u64) < elapsed_ns {
                         input.advance_to(((index + request_counter) * ns_per_request) as u64);
                         input.insert((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)));

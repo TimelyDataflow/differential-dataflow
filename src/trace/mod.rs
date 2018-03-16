@@ -14,22 +14,21 @@ pub mod layers;
 pub mod wrappers;
 
 use ::Diff;
-use ::lattice::Lattice;
 pub use self::cursor::Cursor;
 pub use self::description::Description;
 
-// 	The traces and batch and cursors want the flexibility to appear as if they manage certain types of keys and 
+// 	The traces and batch and cursors want the flexibility to appear as if they manage certain types of keys and
 // 	values and such, while perhaps using other representations, I'm thinking mostly of wrappers around the keys
 // 	and vals that change the `Ord` implementation, or stash hash codes, or the like.
-// 	
+//
 // 	This complicates what requirements we make so that the trace is still usable by someone who knows only about
 // 	the base key and value types. For example, the complex types should likely dereference to the simpler types,
-//	so that the user can make sense of the result as if they were given references to the simpler types. At the 
+//	so that the user can make sense of the result as if they were given references to the simpler types. At the
 //  same time, the collection should be formable from base types (perhaps we need an `Into` or `From` constraint)
-//  and we should, somehow, be able to take a reference to the simple types to compare against the more complex 
-//  types. This second one is also like an `Into` or `From` constraint, except that we start with a reference and 
-//  really don't need anything more complex than a reference, but we can't form an owned copy of the complex type 
-//  without cloning it. 
+//  and we should, somehow, be able to take a reference to the simple types to compare against the more complex
+//  types. This second one is also like an `Into` or `From` constraint, except that we start with a reference and
+//  really don't need anything more complex than a reference, but we can't form an owned copy of the complex type
+//  without cloning it.
 //
 //  We could just start by cloning things. Worry about wrapping references later on.
 
@@ -56,7 +55,7 @@ pub trait TraceReader<Key, Val, Time, R> {
 		}
 	}
 
-	/// Acquires a cursor to the restriction of the collection's contents to updates at times not greater or 
+	/// Acquires a cursor to the restriction of the collection's contents to updates at times not greater or
 	/// equal to an element of `upper`.
 	///
 	/// This method is expected to work if called with an `upper` that (i) was an observed bound in batches from
@@ -67,7 +66,7 @@ pub trait TraceReader<Key, Val, Time, R> {
 
 	/// Advances the frontier of times the collection must be correctly accumulable through.
 	///
-	/// Practically, this allows the trace to advance times in updates it maintains as long as the advanced times 
+	/// Practically, this allows the trace to advance times in updates it maintains as long as the advanced times
 	/// still compare equivalently to any times greater or equal to some element of `frontier`. Times not greater
 	/// or equal to some element of `frontier` may no longer correctly accumulate, so do not advance a trace unless
 	/// you are quite sure you no longer require the distinction.
@@ -83,18 +82,18 @@ pub trait TraceReader<Key, Val, Time, R> {
 	/// Advances the frontier that may be used in `cursor_through`.
 	///
 	/// Practically, this allows the trace to merge batches whose upper frontier comes before `frontier`. The trace
-	/// is likely to be annoyed or confused if you use a frontier other than one observed as an upper bound of an 
+	/// is likely to be annoyed or confused if you use a frontier other than one observed as an upper bound of an
 	/// actual batch. This doesn't seem likely to be a problem, but get in touch if it is.
 	///
-	/// Calling `distinguish_since(&[])` indicates that all batches may be merged at any point, which essentially 
+	/// Calling `distinguish_since(&[])` indicates that all batches may be merged at any point, which essentially
 	/// disables the use of `cursor_through` with any parameter other than `&[]`, which is the behavior of `cursor`.
 	fn distinguish_since(&mut self, frontier: &[Time]);
 
 	/// Reports the frontier from which the collection may be subsetted.
 	///
-	/// The semantics are less elegant here, but the underlying trace will not merge batches in advance of this 
+	/// The semantics are less elegant here, but the underlying trace will not merge batches in advance of this
 	/// frontier, which ensures that operators can extract the subset of the trace at batch boundaries from this
-	/// frontier onward. These boundaries may be used in `cursor_through`, whereas boundaries not in advance of 
+	/// frontier onward. These boundaries may be used in `cursor_through`, whereas boundaries not in advance of
 	/// this frontier are not guaranteed to return a cursor.
 	fn distinguish_frontier(&mut self) -> &[Time];
 
@@ -114,7 +113,8 @@ pub trait TraceReader<Key, Val, Time, R> {
 ///
 /// The trace must be constructable from, and navigable by the `Key`, `Val`, `Time` types, but does not need
 /// to return them.
-pub trait Trace<Key, Val, Time, R> : TraceReader<Key, Val, Time, R> where <Self as TraceReader<Key, Val, Time, R>>::Batch: Batch<Key, Val, Time, R> {
+pub trait Trace<Key, Val, Time, R> : TraceReader<Key, Val, Time, R>
+where <Self as TraceReader<Key, Val, Time, R>>::Batch: Batch<Key, Val, Time, R> {
 
 	/// Allocates a new empty trace.
 	fn new() -> Self;
@@ -125,7 +125,7 @@ pub trait Trace<Key, Val, Time, R> : TraceReader<Key, Val, Time, R> where <Self 
 	/// intervals. If a batch arrives with a lower bound that does not equal the upper bound of the most recent
 	/// addition, the trace will add an empty batch. It is an error to then try to populate that region of time.
 	///
-	/// This restriction could be relaxed, especially if we discover ways in which batch interval order could 
+	/// This restriction could be relaxed, especially if we discover ways in which batch interval order could
 	/// commute. For now, the trace should complain, to the extent that it cares about contiguous intervals.
 	fn insert(&mut self, batch: Self::Batch);
 }
@@ -136,7 +136,7 @@ pub trait Trace<Key, Val, Time, R> : TraceReader<Key, Val, Time, R> where <Self 
 /// but do not expose ways to construct the batches. This trait is appropriate for views of the batch, and is
 /// especially useful for views derived from other sources in ways that prevent the construction of batches
 /// from the type of data in the view (for example, filtered views, or views with extended time coordinates).
-pub trait BatchReader<K, V, T, R> where Self: ::std::marker::Sized 
+pub trait BatchReader<K, V, T, R> where Self: ::std::marker::Sized
 {
 	/// The type used to enumerate the batch's contents.
 	type Cursor: Cursor<K, V, T, R, Storage=Self>;
@@ -162,61 +162,20 @@ pub trait Batch<K, V, T, R> : BatchReader<K, V, T, R> where Self: ::std::marker:
 	/// A type used to progressively merge batches.
 	type Merger: Merger<K, V, T, R, Self>;
 
-	/// Merges two consecutive batches.
-	///
-	/// Panics if `self.upper()` does not equal `other.lower()`. This is almost certainly a logic bug,
-	/// as the resulting batch does not have a contiguous description. If you would like to put an empty
-	/// interval between the two, you can create an empty interval and do two merges.
-	fn merge(&self, other: &Self) -> Self;
-
 	/// Initiates the merging of consecutive batches.
 	///
 	/// The result of this method can be exercised to eventually produce the same result
 	/// that a call to `self.merge(other)` would produce, but it can be done in a measured
 	/// fashion. This can help to avoid latency spikes where a large merge needs to happen.
-	fn begin_merge(&self, other: &Self) -> Self::Merger;
-
-	/// Advance times to `frontier` creating a new batch.
-	fn advance_ref(&self, frontier: &[T]) -> Self where K: Ord+Clone, V: Ord+Clone, T: Lattice+Ord+Clone, R: Diff {
-
-		assert!(frontier.len() > 0);
-
-		// TODO: This is almost certainly too much `with_capacity`.
-		let mut builder = Self::Builder::with_capacity(self.len());
-
-		let mut times = Vec::new();
-		let mut cursor = self.cursor();
-
-		while cursor.key_valid(self) {
-			while cursor.val_valid(self) {
-				cursor.map_times(self, |time: &T, diff| times.push((time.advance_by(frontier), diff)));
-				consolidate(&mut times, 0);
-				for (time, diff) in times.drain(..) {
-					builder.push((cursor.key(self).clone(), cursor.val(self).clone(), time, diff));
-				}
-				cursor.step_val(self);
-			}
-			cursor.step_key(self);
-		}
-
-		builder.done(self.description().lower(), self.description().upper(), frontier)
-	}
-	/// Advance times to `frontier` updating this batch.
-	///
-	/// This method gives batches the ability to collapse in-place when possible, and is the common 
-	/// entry point to advance batches. Most types of batches do have shared state, but `advance` is 
-	/// commonly invoked just after a batch is formed from a merge and when there is a unique owner 
-	/// of the shared state. 
-	#[inline(never)]
-	fn advance_mut(&mut self, frontier: &[T]) where K: Ord+Clone, V: Ord+Clone, T: Lattice+Ord+Clone, R: Diff {
-		*self = self.advance_ref(frontier);
+	fn begin_merge(&self, other: &Self) -> Self::Merger {
+		Self::Merger::new(self, other)
 	}
 }
 
 /// Functionality for collecting and batching updates.
 pub trait Batcher<K, V, T, R, Output: Batch<K, V, T, R>> {
 	/// Allocates a new empty batcher.
-	fn new() -> Self; 
+	fn new() -> Self;
 	/// Adds an unordered batch of elements to the batcher.
 	fn push_batch(&mut self, batch: &mut Vec<((K, V), T, R)>);
 	/// Returns all updates not greater or equal to an element of `upper`.
@@ -243,6 +202,8 @@ pub trait Builder<K, V, T, R, Output: Batch<K, V, T, R>> {
 
 /// Represents a merge in progress.
 pub trait Merger<K, V, T, R, Output: Batch<K, V, T, R>> {
+	/// Creates a new merger to merge the supplied batches.
+	fn new(source1: &Output, source2: &Output) -> Self;
 	/// Perform some amount of work, decrementing `fuel`.
 	///
 	/// If `fuel` is non-zero after the call, the merging is complete and
@@ -251,7 +212,7 @@ pub trait Merger<K, V, T, R, Output: Batch<K, V, T, R>> {
 	/// Extracts merged results.
 	///
 	/// This method should only be called after `work` has been called and
-	/// has not brought `fuel` to zero. Otherwise, the merge is still in 
+	/// has not brought `fuel` to zero. Otherwise, the merge is still in
 	/// progress.
 	fn done(self) -> Output;
 }
@@ -262,8 +223,6 @@ pub mod rc_blanket_impls {
 
 	use std::rc::Rc;
 
-	use ::Diff;
-	use ::lattice::Lattice;
 	use super::{Batch, BatchReader, Batcher, Builder, Merger, Cursor, Description};
 
 	impl<K, V, T, R, B: BatchReader<K,V,T,R>> BatchReader<K,V,T,R> for Rc<B> {
@@ -307,13 +266,13 @@ pub mod rc_blanket_impls {
 	    #[inline(always)] fn val<'a>(&self, storage: &'a Self::Storage) -> &'a V { self.cursor.val(storage) }
 
 	    #[inline(always)]
-	    fn map_times<L: FnMut(&T, R)>(&mut self, storage: &Self::Storage, logic: L) { 
+	    fn map_times<L: FnMut(&T, R)>(&mut self, storage: &Self::Storage, logic: L) {
 	    	self.cursor.map_times(storage, logic)
 	    }
 
 	    #[inline(always)] fn step_key(&mut self, storage: &Self::Storage) { self.cursor.step_key(storage) }
 	    #[inline(always)] fn seek_key(&mut self, storage: &Self::Storage, key: &K) { self.cursor.seek_key(storage, key) }
-	    
+
 	    #[inline(always)] fn step_val(&mut self, storage: &Self::Storage) { self.cursor.step_val(storage) }
 	    #[inline(always)] fn seek_val(&mut self, storage: &Self::Storage, val: &V) { self.cursor.seek_val(storage, val) }
 
@@ -321,30 +280,11 @@ pub mod rc_blanket_impls {
 	    #[inline(always)] fn rewind_vals(&mut self, storage: &Self::Storage) { self.cursor.rewind_vals(storage) }
 	}
 
-
-
 	/// An immutable collection of updates.
 	impl<K,V,T,R,B: Batch<K,V,T,R>> Batch<K, V, T, R> for Rc<B> {
-
 		type Batcher = RcBatcher<K, V, T, R, B>;
 		type Builder = RcBuilder<K, V, T, R, B>;
 		type Merger = RcMerger<K, V, T, R, B>;
-
-		fn merge(&self, other: &Self) -> Self { Rc::new(B::merge(self, other)) }
-
-		fn begin_merge(&self, other: &Self) -> Self::Merger { RcMerger { merger: B::begin_merge(self, other) } }
-
-		fn advance_mut(&mut self, frontier: &[T]) where K: Ord+Clone, V: Ord+Clone, T: Lattice+Ord+Clone, R: Diff {
-			let mut updated = false;
-			if let Some(batch) = Rc::get_mut(self) {
-				batch.advance_mut(frontier);
-				updated = true;
-			}
-
-			if !updated {
-				*self = self.advance_ref(frontier);
-			}
-		}
 	}
 
 	/// Wrapper type for batching reference counted batches.
@@ -374,11 +314,11 @@ pub mod rc_blanket_impls {
 
 	/// Represents a merge in progress.
 	impl<K,V,T,R,B:Batch<K,V,T,R>> Merger<K, V, T, R, Rc<B>> for RcMerger<K,V,T,R,B> {
+		fn new(source1: &Rc<B>, source2: &Rc<B>) -> Self { RcMerger { merger: B::begin_merge(source1, source2) } }
 		fn work(&mut self, source1: &Rc<B>, source2: &Rc<B>, frontier: &Option<Vec<T>>, fuel: &mut usize) { self.merger.work(source1, source2, frontier, fuel) }
 		fn done(self) -> Rc<B> { Rc::new(self.merger.done()) }
 	}
 }
-
 
 
 /// Blanket implementations for reference counted batches.
@@ -432,13 +372,13 @@ pub mod abomonated_blanket_impls {
 	    #[inline(always)] fn val<'a>(&self, storage: &'a Self::Storage) -> &'a V { self.cursor.val(storage) }
 
 	    #[inline(always)]
-	    fn map_times<L: FnMut(&T, R)>(&mut self, storage: &Self::Storage, logic: L) { 
+	    fn map_times<L: FnMut(&T, R)>(&mut self, storage: &Self::Storage, logic: L) {
 	    	self.cursor.map_times(storage, logic)
 	    }
 
 	    #[inline(always)] fn step_key(&mut self, storage: &Self::Storage) { self.cursor.step_key(storage) }
 	    #[inline(always)] fn seek_key(&mut self, storage: &Self::Storage, key: &K) { self.cursor.seek_key(storage, key) }
-	    
+
 	    #[inline(always)] fn step_val(&mut self, storage: &Self::Storage) { self.cursor.step_val(storage) }
 	    #[inline(always)] fn seek_val(&mut self, storage: &Self::Storage, val: &V) { self.cursor.seek_val(storage, val) }
 
@@ -448,19 +388,9 @@ pub mod abomonated_blanket_impls {
 
 	/// An immutable collection of updates.
 	impl<K,V,T,R,B: Batch<K,V,T,R>+Abomonation> Batch<K, V, T, R> for Abomonated<B, Vec<u8>> {
-
 		type Batcher = AbomonatedBatcher<K, V, T, R, B>;
 		type Builder = AbomonatedBuilder<K, V, T, R, B>;
 		type Merger = AbomonatedMerger<K, V, T, R, B>;
-
-		fn merge(&self, other: &Self) -> Self { 
-			let batch = B::merge(self, other);
-			let mut bytes = Vec::with_capacity(measure(&batch));
-			unsafe { abomonation::encode(&batch, &mut bytes).unwrap() };
-			unsafe { Abomonated::<B,_>::new(bytes).unwrap() }
-		}
-
-		fn begin_merge(&self, other: &Self) -> Self::Merger { AbomonatedMerger { merger: B::begin_merge(self, other) } }
 	}
 
 	/// Wrapper type for batching reference counted batches.
@@ -470,7 +400,7 @@ pub mod abomonated_blanket_impls {
 	impl<K,V,T,R,B:Batch<K,V,T,R>+Abomonation> Batcher<K, V, T, R, Abomonated<B,Vec<u8>>> for AbomonatedBatcher<K,V,T,R,B> {
 		fn new() -> Self { AbomonatedBatcher { batcher: <B::Batcher as Batcher<K,V,T,R,B>>::new() } }
 		fn push_batch(&mut self, batch: &mut Vec<((K, V), T, R)>) { self.batcher.push_batch(batch) }
-		fn seal(&mut self, upper: &[T]) -> Abomonated<B, Vec<u8>> { 
+		fn seal(&mut self, upper: &[T]) -> Abomonated<B, Vec<u8>> {
 			let batch = self.batcher.seal(upper);
 			let mut bytes = Vec::with_capacity(measure(&batch));
 			unsafe { abomonation::encode(&batch, &mut bytes).unwrap() };
@@ -487,7 +417,7 @@ pub mod abomonated_blanket_impls {
 		fn new() -> Self { AbomonatedBuilder { builder: <B::Builder as Builder<K,V,T,R,B>>::new() } }
 		fn with_capacity(cap: usize) -> Self { AbomonatedBuilder { builder: <B::Builder as Builder<K,V,T,R,B>>::with_capacity(cap) } }
 		fn push(&mut self, element: (K, V, T, R)) { self.builder.push(element) }
-		fn done(self, lower: &[T], upper: &[T], since: &[T]) -> Abomonated<B, Vec<u8>> { 
+		fn done(self, lower: &[T], upper: &[T], since: &[T]) -> Abomonated<B, Vec<u8>> {
 			let batch = self.builder.done(lower, upper, since);
 			let mut bytes = Vec::with_capacity(measure(&batch));
 			unsafe { abomonation::encode(&batch, &mut bytes).unwrap() };
@@ -500,10 +430,13 @@ pub mod abomonated_blanket_impls {
 
 	/// Represents a merge in progress.
 	impl<K,V,T,R,B:Batch<K,V,T,R>+Abomonation> Merger<K, V, T, R, Abomonated<B,Vec<u8>>> for AbomonatedMerger<K,V,T,R,B> {
-		fn work(&mut self, source1: &Abomonated<B,Vec<u8>>, source2: &Abomonated<B,Vec<u8>>, frontier: &Option<Vec<T>>, fuel: &mut usize) { 
-			self.merger.work(source1, source2, frontier, fuel) 
+		fn new(source1: &Abomonated<B,Vec<u8>>, source2: &Abomonated<B,Vec<u8>>) -> Self {
+			AbomonatedMerger { merger: B::begin_merge(source1, source2) }
 		}
-		fn done(self) -> Abomonated<B, Vec<u8>> { 
+		fn work(&mut self, source1: &Abomonated<B,Vec<u8>>, source2: &Abomonated<B,Vec<u8>>, frontier: &Option<Vec<T>>, fuel: &mut usize) {
+			self.merger.work(source1, source2, frontier, fuel)
+		}
+		fn done(self) -> Abomonated<B, Vec<u8>> {
 			let batch = self.merger.done();
 			let mut bytes = Vec::with_capacity(measure(&batch));
 			unsafe { abomonation::encode(&batch, &mut bytes).unwrap() };
@@ -513,14 +446,10 @@ pub mod abomonated_blanket_impls {
 }
 
 
-
-
-
 /// Scans `vec[off..]` and consolidates differences of adjacent equivalent elements.
 pub fn consolidate<T: Ord+Clone, R: Diff>(vec: &mut Vec<(T, R)>, off: usize) {
 	consolidate_by(vec, off, |x,y| x.cmp(&y));
 }
-
 
 /// Scans `vec[off..]` and consolidates differences of adjacent equivalent elements.
 pub fn consolidate_by<T: Eq+Clone, L: Fn(&T, &T)->::std::cmp::Ordering, R: Diff>(vec: &mut Vec<(T, R)>, off: usize, cmp: L) {
@@ -535,7 +464,6 @@ pub fn consolidate_by<T: Eq+Clone, L: Fn(&T, &T)->::std::cmp::Ordering, R: Diff>
 	for index in off .. vec.len() {
 		if !vec[index].1.is_zero() {
 			vec.swap(cursor, index);
-			// vec[cursor] = vec[index].clone();
 			cursor += 1;
 		}
 	}

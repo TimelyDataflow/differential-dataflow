@@ -1,7 +1,7 @@
 //! An append-only collection of update batches.
 //!
-//! The `Spine` is a general-purpose trace implementation based on collection and merging 
-//! immutable batches of updates. It is generic with respect to the batch type, and can be 
+//! The `Spine` is a general-purpose trace implementation based on collection and merging
+//! immutable batches of updates. It is generic with respect to the batch type, and can be
 //! instantiated for any implementor of `trace::Batch`.
 
 use ::Diff;
@@ -9,12 +9,13 @@ use lattice::Lattice;
 use trace::{Batch, BatchReader, Trace, TraceReader};
 use trace::cursor::cursor_list::CursorList;
 use trace::cursor::Cursor;
+use trace::Merger;
 
 /// An append-only collection of update tuples.
 ///
 /// A spine maintains a small number of immutable collections of update tuples, merging the collections when
 /// two have similar sizes. In this way, it allows the addition of more tuples, which may then be merged with
-/// other immutable collections. 
+/// other immutable collections.
 #[derive(Debug)]
 pub struct Spine<K, V, T: Lattice+Ord, R: Diff, B: Batch<K, V, T, R>> {
 	phantom: ::std::marker::PhantomData<(K, V, R)>,
@@ -24,11 +25,11 @@ pub struct Spine<K, V, T: Lattice+Ord, R: Diff, B: Batch<K, V, T, R>> {
 	pending: Vec<B>,			// Batches at times in advance of `frontier`.
 }
 
-impl<K, V, T, R, B> TraceReader<K, V, T, R> for Spine<K, V, T, R, B> 
-where 
-	K: Ord+Clone,			// Clone is required by `batch::advance_*` (in-place could remove).
-	V: Ord+Clone,			// Clone is required by `batch::advance_*` (in-place could remove).
-	T: Lattice+Ord+Clone,	// Clone is required by `advance_by` and `batch::advance_*`.
+impl<K, V, T, R, B> TraceReader<K, V, T, R> for Spine<K, V, T, R, B>
+where
+	K: Ord+Clone,
+	V: Ord+Clone,
+	T: Lattice+Ord+Clone,
 	R: Diff,
 	B: Batch<K, V, T, R>+Clone+'static,
 {
@@ -61,7 +62,7 @@ where
 					// return None;
 				}
 
-				// include pending batches 
+				// include pending batches
 				if include_upper {
 					cursors.push(batch.cursor());
 					storage.push(batch.clone());
@@ -99,17 +100,17 @@ where
 
 // A trace implementation for any key type that can be borrowed from or converted into `Key`.
 // TODO: Almost all this implementation seems to be generic with respect to the trace and batch types.
-impl<K, V, T, R, B> Trace<K, V, T, R> for Spine<K, V, T, R, B> 
-where 
-	K: Ord+Clone,			// Clone is required by `batch::advance_*` (in-place could remove).
-	V: Ord+Clone,			// Clone is required by `batch::advance_*` (in-place could remove).
-	T: Lattice+Ord+Clone,	// Clone is required by `advance_by` and `batch::advance_*`.
+impl<K, V, T, R, B> Trace<K, V, T, R> for Spine<K, V, T, R, B>
+where
+	K: Ord+Clone,
+	V: Ord+Clone,
+	T: Lattice+Ord+Clone,
 	R: Diff,
 	B: Batch<K, V, T, R>+Clone+'static,
 {
 
 	fn new() -> Self {
-		Spine { 
+		Spine {
 			phantom: ::std::marker::PhantomData,
 			advance_frontier: vec![<T as Lattice>::minimum()],
 			through_frontier: vec![<T as Lattice>::minimum()],
@@ -132,11 +133,11 @@ where
 	}
 }
 
-impl<K, V, T, R, B> Spine<K, V, T, R, B> 
-where 
-	K: Ord+Clone,			// Clone is required by `advance_mut`.
-	V: Ord+Clone,			// Clone is required by `advance_mut`.
-	T: Lattice+Ord+Clone,	// Clone is required by `advance_mut`.
+impl<K, V, T, R, B> Spine<K, V, T, R, B>
+where
+	K: Ord+Clone,
+	V: Ord+Clone,
+	T: Lattice+Ord+Clone,
 	R: Diff,
 	B: Batch<K, V, T, R>,
 {
@@ -144,10 +145,10 @@ where
 	#[inline(never)]
 	fn consider_merges(&mut self) {
 
-		// TODO: We could consider merging in batches here, rather than in sequence. 
+		// TODO: We could consider merging in batches here, rather than in sequence.
 		//       Little is currently known about whether this is important ...
-		while self.pending.len() > 0 && 
-		      self.through_frontier.iter().all(|t1| self.pending[0].upper().iter().any(|t2| t2.less_equal(t1))) 
+		while self.pending.len() > 0 &&
+		      self.through_frontier.iter().all(|t1| self.pending[0].upper().iter().any(|t2| t2.less_equal(t1)))
 		{
 			// this could be a VecDeque, if we ever notice this.
 			let batch = self.pending.remove(0);
@@ -156,7 +157,11 @@ where
 			while self.merging.len() >= 2 && self.merging[self.merging.len() - 2].len() < batch.len() {
 				let batch1 = self.merging.pop().unwrap();
 				let batch2 = self.merging.pop().unwrap();
-				let result = batch2.merge(&batch1);
+				let mut merge = batch2.begin_merge(&batch1);
+				let mut fuel = usize::max_value();
+				merge.work(&batch2, &batch1, &None, &mut fuel);
+				assert!(fuel > 0);
+				let result = merge.done();
 				self.merging.push(result);
 			}
 
@@ -166,16 +171,23 @@ where
 			let mut len = self.merging.len();
 			while len >= 2 && self.merging[len - 2].len() < 2 * self.merging[len - 1].len() {
 
-				let mut batch1 = self.merging.pop().unwrap();
-				let mut batch2 = self.merging.pop().unwrap();
+				let batch1 = self.merging.pop().unwrap();
+				let batch2 = self.merging.pop().unwrap();
 
+				let mut merge = batch2.begin_merge(&batch1);
 				// advance inputs, rather than outputs.
-				if self.merging.len() == 0 {
-					batch1.advance_mut(&self.advance_frontier[..]);
-					batch2.advance_mut(&self.advance_frontier[..]);
+				let mut fuel = usize::max_value();
+				let frontier = if self.merging.len() == 0 {
+					Some(self.advance_frontier.to_vec())
 				}
+				else {
+					None
+				};
 
-				let result = batch2.merge(&batch1);
+				merge.work(&batch2, &batch1, &frontier, &mut fuel);
+				assert!(fuel > 0);
+
+				let result = merge.done();
 
 				self.merging.push(result);
 				len = self.merging.len();

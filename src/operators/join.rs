@@ -1,6 +1,6 @@
 //! Match pairs of records based on a key.
 //!
-//! The various `join` implementations require that the units of each collection can be multiplied, and that 
+//! The various `join` implementations require that the units of each collection can be multiplied, and that
 //! the multiplication distributes over addition. That is, we will repeatedly evaluate (a + b) * c as (a * c)
 //! + (b * c), and if this is not equal to the former term, little is known about the actual output.
 use std::fmt::Debug;
@@ -49,7 +49,7 @@ pub trait Join<G: Scope, K: Data, V: Data, R: Diff> {
     ///     });
     /// }
     /// ```
-    fn join<V2: Data, R2: Diff>(&self, other: &Collection<G, (K,V2), R2>) -> Collection<G, (K,V,V2), <R as Mul<R2>>::Output> 
+    fn join<V2: Data, R2: Diff>(&self, other: &Collection<G, (K,V2), R2>) -> Collection<G, (K,V,V2), <R as Mul<R2>>::Output>
     where R: Mul<R2>, <R as Mul<R2>>::Output: Diff
     {
         self.join_map(other, |k,v,v2| (k.clone(),v.clone(),v2.clone()))
@@ -108,9 +108,9 @@ pub trait Join<G: Scope, K: Data, V: Data, R: Diff> {
     ///     });
     /// }
     /// ```
-    fn semijoin<R2>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), <R as Mul<R2>>::Output> 
+    fn semijoin<R2>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), <R as Mul<R2>>::Output>
     where R2: Diff, R: Mul<R2>, <R as Mul<R2>>::Output: Diff;
-    /// Matches pairs `(key, val)` and `key` based on `key`, discarding values 
+    /// Matches pairs `(key, val)` and `key` based on `key`, discarding values
     /// in the first collection if their key is present in the second.
     ///
     /// # Examples
@@ -136,11 +136,11 @@ pub trait Join<G: Scope, K: Data, V: Data, R: Diff> {
     /// ```
     fn antijoin<R2>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), R>
     where R2: Diff, R: Mul<R2, Output = R>;
-} 
+}
 
 impl<G, K, V, R> Join<G, K, V, R> for Collection<G, (K, V), R>
 where
-    G: Scope, 
+    G: Scope,
     K: Data+Hashable,
     V: Data,
     R: Diff,
@@ -153,7 +153,7 @@ where
         arranged1.join_core(&arranged2, move |k,v1,v2| Some(logic(k,v1,v2)))
     }
 
-    fn semijoin<R2: Diff>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), <R as Mul<R2>>::Output> 
+    fn semijoin<R2: Diff>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), <R as Mul<R2>>::Output>
     where R: Mul<R2>, <R as Mul<R2>>::Output: Diff {
         let arranged1 = self.arrange_by_key();
         let arranged2 = other.arrange_by_self();
@@ -197,16 +197,16 @@ impl<G, K, V, R, T> Join<G, K, V, R> for Arranged<G,K,V,R,T>
 
 /// Matches the elements of two arranged traces.
 ///
-/// This method is used by the various `join` implementations, but it can also be used 
+/// This method is used by the various `join` implementations, but it can also be used
 /// directly in the event that one has a handle to an `Arranged<G,T>`, perhaps because
 /// the arrangement is available for re-use, or from the output of a `group` operator.
 pub trait JoinCore<G: Scope, K: 'static, V: 'static, R: Diff> where G::Timestamp: Lattice+Ord {
     /// Joins two arranged collections with the same key type.
     ///
-    /// Each matching pair of records `(key, val1)` and `(key, val2)` are subjected to the `result` function, 
-    /// which produces something implementing `IntoIterator`, where the output collection will have 
+    /// Each matching pair of records `(key, val1)` and `(key, val2)` are subjected to the `result` function,
+    /// which produces something implementing `IntoIterator`, where the output collection will have
     ///
-    /// This trait is implemented for arrangements (`Arranged<G, T>`) rather than collections. The `Join` trait 
+    /// This trait is implemented for arrangements (`Arranged<G, T>`) rather than collections. The `Join` trait
     /// contains the implementations for collections.
     ///
     /// # Examples
@@ -240,7 +240,7 @@ pub trait JoinCore<G: Scope, K: 'static, V: 'static, R: Diff> where G::Timestamp
     /// }
     /// ```
     fn join_core<V2,T2,R2,I,L> (&self, stream2: &Arranged<G,K,V2,R2,T2>, result: L) -> Collection<G,I::Item,<R as Mul<R2>>::Output>
-    where 
+    where
         V2: Ord+Clone+Debug+'static,
         T2: TraceReader<K, V2, G::Timestamp, R2>+Clone+'static,
         T2::Batch: BatchReader<K, V2, G::Timestamp, R2>+'static,
@@ -263,7 +263,7 @@ where
     G::Timestamp: Lattice+Ord,
 {
     fn join_core<V2,T2,R2,I,L> (&self, stream2: &Arranged<G,K,V2,R2,T2>, result: L) -> Collection<G,I::Item,<R as Mul<R2>>::Output>
-    where 
+    where
         V2: Ord+Clone+Debug+'static,
         T2: TraceReader<K, V2, G::Timestamp, R2>+Clone+'static,
         T2::Batch: BatchReader<K, V2, G::Timestamp, R2>+'static,
@@ -279,19 +279,19 @@ where
     }
 }
 
-impl<G, K, V, R1, T1> JoinCore<G, K, V, R1> for Arranged<G,K,V,R1,T1> 
-    where 
+impl<G, K, V, R1, T1> JoinCore<G, K, V, R1> for Arranged<G,K,V,R1,T1>
+    where
         K: Ord,
-        G: Scope, 
+        G: Scope,
         G::Timestamp: Lattice+Ord+Debug,
-        K: Debug+Eq+'static, 
-        V: Ord+Clone+Debug+'static, 
+        K: Debug+Eq+'static,
+        V: Ord+Clone+Debug+'static,
         R1: Diff,
         T1: TraceReader<K,V,G::Timestamp, R1>+Clone+'static,
         T1::Batch: BatchReader<K,V,G::Timestamp,R1>+'static,
 {
-    fn join_core<V2,T2,R2,I,L>(&self, other: &Arranged<G,K,V2,R2,T2>, result: L) -> Collection<G,I::Item,<R1 as Mul<R2>>::Output> 
-    where 
+    fn join_core<V2,T2,R2,I,L>(&self, other: &Arranged<G,K,V2,R2,T2>, result: L) -> Collection<G,I::Item,<R1 as Mul<R2>>::Output>
+    where
         V2: Ord+Clone+Debug+'static,
         T2: TraceReader<K,V2,G::Timestamp,R2>+Clone+'static,
         T2::Batch: BatchReader<K, V2, G::Timestamp, R2>+'static,
@@ -352,17 +352,17 @@ impl<G, K, V, R1, T1> JoinCore<G, K, V, R1> for Arranged<G,K,V,R1,T1>
             });
 
             // An arbitrary number, whose value guides the "responsiveness" of `join`; the operator
-            // yields after producing this many records, to allow downstream operators to work and 
+            // yields after producing this many records, to allow downstream operators to work and
             // move the produced records around.
             let mut fuel = 1_000_000;
 
-            // perform some amount of outstanding work. 
+            // perform some amount of outstanding work.
             while todo1.len() > 0 && fuel > 0 {
                 todo1[0].work(output, &|k,v2,v1| result(k,v1,v2), &mut fuel);
                 if !todo1[0].work_remains() { todo1.remove(0); }
             }
 
-            // perform some amount of outstanding work. 
+            // perform some amount of outstanding work.
             while todo2.len() > 0 && fuel > 0 {
                 todo2[0].work(output, &|k,v1,v2| result(k,v1,v2), &mut fuel);
                 if !todo2[0].work_remains() { todo2.remove(0); }
@@ -371,18 +371,18 @@ impl<G, K, V, R1, T1> JoinCore<G, K, V, R1> for Arranged<G,K,V,R1,T1>
             // shut down or advance trace2. if the frontier is empty we can shut it down,
             // and otherwise we can advance the trace by the acknowledged elements of the other input,
             // as we may still use them as thresholds (ie we must preserve `le` wrt `acknowledged`).
-            // NOTE: We release capabilities here to allow light work to complete, which may result in 
+            // NOTE: We release capabilities here to allow light work to complete, which may result in
             //       unique ownership which would enable `advance_mut`.
             if trace2.is_some() && notificator.frontier(0).len() == 0 { trace2 = None; }
             if let Some(ref mut trace2) = trace2 {
-                trace2.advance_by(notificator.frontier(0));
+                trace2.advance_by(&notificator.frontier(0));
                 trace2.distinguish_since(&acknowledged2[..]);
             }
 
             // shut down or advance trace1.
             if trace1.is_some() && notificator.frontier(1).len() == 0 { trace1 = None; }
             if let Some(ref mut trace1) = trace1 {
-                trace1.advance_by(notificator.frontier(1));
+                trace1.advance_by(&notificator.frontier(1));
                 trace1.distinguish_since(&acknowledged1[..]);
             }
 
@@ -396,13 +396,13 @@ impl<G, K, V, R1, T1> JoinCore<G, K, V, R1> for Arranged<G,K,V,R1,T1>
 /// The structure wraps cursors which allow us to play out join computation at whatever rate we like.
 /// This allows us to avoid producing and buffering massive amounts of data, without giving the timely
 /// dataflow system a chance to run operators that can consume and aggregate the data.
-struct Deferred<K, V1, V2, T, R1, R2, R3, C1, C2, M, D> 
-where 
+struct Deferred<K, V1, V2, T, R1, R2, R3, C1, C2, M, D>
+where
     V1: Ord+Clone,
     V2: Ord+Clone,
-    T: Timestamp+Lattice+Ord+Debug, 
-    R1: Diff, 
-    R2: Diff, 
+    T: Timestamp+Lattice+Ord+Debug,
+    R1: Diff,
+    R2: Diff,
     C1: Cursor<K, V1, T, R1>,
     C2: Cursor<K, V2, T, R2>,
     M: Fn(&R1,&R2)->R3,
@@ -426,13 +426,13 @@ where
     V1: Ord+Clone+Debug,
     V2: Ord+Clone+Debug,
     T: Timestamp+Lattice+Ord+Debug,
-    R1: Diff, 
-    R2: Diff, 
+    R1: Diff,
+    R2: Diff,
     R3: Diff,
     C1: Cursor<K, V1, T, R1>,
     C2: Cursor<K, V2, T, R2>,
     M: Fn(&R1,&R2)->R3,
-    D: Ord+Clone+Data, 
+    D: Ord+Clone+Data,
 {
     fn new(trace: C1, trace_storage: C1::Storage, batch: C2, batch_storage: C2::Storage, capability: Capability<T>, mult: M) -> Self {
         Deferred {
@@ -449,13 +449,13 @@ where
         }
     }
 
-    fn work_remains(&self) -> bool { 
+    fn work_remains(&self) -> bool {
         !self.done
     }
 
     /// Process keys until at least `limit` output tuples produced, or the work is exhausted.
     #[inline(never)]
-    fn work<L, I>(&mut self, output: &mut OutputHandle<T, (D, T, R3), Tee<T, (D, T, R3)>>, logic: &L, fuel: &mut usize) 
+    fn work<L, I>(&mut self, output: &mut OutputHandle<T, (D, T, R3), Tee<T, (D, T, R3)>>, logic: &L, fuel: &mut usize)
     where I: IntoIterator<Item=D>, L: Fn(&K, &V1, &V2)->I {
 
         let meet = self.capability.time();
@@ -487,13 +487,13 @@ where
                     assert_eq!(temp.len(), 0);
 
                     // populate `temp` with the results in the best way we know how.
-                    thinker.think(|v1,v2,t,r1,r2| 
+                    thinker.think(|v1,v2,t,r1,r2|
                         for result in logic(batch.key(batch_storage), v1, v2) {
                             temp.push(((result, t.clone()), mult(r1, r2)));
                         }
                     );
 
-                    // TODO: This consolidation is optional, and it may not be very 
+                    // TODO: This consolidation is optional, and it may not be very
                     //       helpful. We might try harder to understand whether we
                     //       should do this work here, or downstream at consumers.
                     // TODO: Perhaps `thinker` should have the buffer, do smarter
@@ -526,7 +526,7 @@ struct JoinThinker<'a, V1: Ord+Clone+'a, V2: Ord+Clone+'a, T: Lattice+Ord+Clone,
     pub history2: ValueHistory<'a, V2, T, R2>,
 }
 
-impl<'a, V1: Ord+Clone, V2: Ord+Clone, T: Lattice+Ord+Clone, R1: Diff, R2: Diff> JoinThinker<'a, V1, V2, T, R1, R2> 
+impl<'a, V1: Ord+Clone, V2: Ord+Clone, T: Lattice+Ord+Clone, R1: Diff, R2: Diff> JoinThinker<'a, V1, V2, T, R1, R2>
 where V1: Debug, V2: Debug, T: Debug
 {
     fn new() -> Self {
@@ -583,7 +583,7 @@ where V1: Debug, V2: Debug, T: Debug
                     let (val1, time1, ref diff1) = replay1.edit().unwrap();
                     results(val1, val2, time1.join(time2), diff1, diff2);
                 }
-                replay1.step();                
+                replay1.step();
             }
             while !replay2.is_done() {
                 replay1.advance_buffer_by(replay2.meet().unwrap());
@@ -591,7 +591,7 @@ where V1: Debug, V2: Debug, T: Debug
                     let (val2, time2, ref diff2) = replay2.edit().unwrap();
                     results(val1, val2, time1.join(time2), diff1, diff2);
                 }
-                replay2.step();                
+                replay2.step();
             }
         }
     }

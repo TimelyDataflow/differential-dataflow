@@ -359,7 +359,7 @@ pub struct Arranged<G: Scope, K, V, R, T> where G::Timestamp: Lattice+Ord, T: Tr
     // returns when invoked, so as to not duplicate work with multiple calls to `as_collection`.
 }
 
-impl<G: Scope, K, V, R, T> Clone for Arranged<G, K, V, R, T> 
+impl<G: Scope, K, V, R, T> Clone for Arranged<G, K, V, R, T>
 where G::Timestamp: Lattice+Ord, T: TraceReader<K, V, G::Timestamp, R>+Clone {
     fn clone(&self) -> Self {
         Arranged {
@@ -433,7 +433,7 @@ impl<G: Scope, K, V, R, T> Arranged<G, K, V, R, T> where G::Timestamp: Lattice+O
 ///
 /// This method consumes a stream of (key, time) queries and reports the corresponding stream of
 /// (key, value, time, diff) accumulations in the `self` trace.
-pub fn query<G: Scope, K, V, R, T>(queries: &Stream<G, (K, G::Timestamp)>, mut trace: T) -> Stream<G, (K, V, G::Timestamp, R)> 
+pub fn query<G: Scope, K, V, R, T>(queries: &Stream<G, (K, G::Timestamp)>, mut trace: T) -> Stream<G, (K, V, G::Timestamp, R)>
 where
     K: Data+Hashable,
     V: Data,
@@ -488,7 +488,7 @@ where
 
                                     while let Some(val) = cursor.get_val(&storage) {
                                         let mut count = R::zero();
-                                        cursor.map_times(&storage, |t, d| if t.less_equal(time) { 
+                                        cursor.map_times(&storage, |t, d| if t.less_equal(time) {
                                             count = count + d;
                                         });
                                         if !count.is_zero() {
@@ -509,7 +509,7 @@ where
 
             // drop fully processed capabilities.
             stash.retain(|_,prefixes| !prefixes.is_empty());
-            trace.as_mut().map(|trace| trace.advance_by(input.frontier().frontier()));
+            trace.as_mut().map(|trace| trace.advance_by(&input.frontier().frontier()));
             if input.frontier().is_empty() && stash.is_empty() {
                 trace = None;
             }
@@ -519,13 +519,13 @@ where
 
 /// A type that can be arranged into a trace of type `T`.
 ///
-/// This trait is implemented for appropriately typed collections and all traces that might accommodate them, 
+/// This trait is implemented for appropriately typed collections and all traces that might accommodate them,
 /// as well as by arranged data for their corresponding trace type.
-pub trait Arrange<G: Scope, K, V, R: Diff, T> 
+pub trait Arrange<G: Scope, K, V, R: Diff, T>
 where
     G::Timestamp: Lattice,
     T: Trace<K, V, G::Timestamp, R>+'static,
-    T::Batch: Batch<K, V, G::Timestamp, R> 
+    T::Batch: Batch<K, V, G::Timestamp, R>
     {
     /// Arranges a stream of `(Key, Val)` updates by `Key`. Accepts an empty instance of the trace type.
     ///
@@ -535,7 +535,7 @@ where
     fn arrange(&self, empty_trace: T) -> Arranged<G, K, V, R, TraceAgent<K, V, G::Timestamp, R, T>>;
 }
 
-impl<G: Scope, K: Data+Hashable, V: Data, R: Diff, T> Arrange<G, K, V, R, T> for Collection<G, (K, V), R> 
+impl<G: Scope, K: Data+Hashable, V: Data, R: Diff, T> Arrange<G, K, V, R, T> for Collection<G, (K, V), R>
 where
     G::Timestamp: Lattice+Ord,
     T: Trace<K, V, G::Timestamp, R>+'static,
@@ -622,7 +622,7 @@ where
             // Announce progress updates.
             // TODO: This is very noisy; consider tracking the previous frontier, and issuing an update
             //       if and when it changes.
-            writer.seal(input.frontier().frontier(), None);
+            writer.seal(&input.frontier().frontier(), None);
         });
 
         Arranged { stream: stream, trace: reader }
@@ -642,12 +642,12 @@ where
 }
 
 impl<G, K, V, R, T> Arrange<G, K, V, R, T> for Arranged<G, K, V, R, TraceAgent<K, V, G::Timestamp, R, T>>
-where 
+where
     G: Scope,
     G::Timestamp: Lattice,
     R: Diff,
     T: Trace<K, V, G::Timestamp, R>+Clone+'static,
-    T::Batch: Batch<K, V, G::Timestamp, R> 
+    T::Batch: Batch<K, V, G::Timestamp, R>
 {
     fn arrange(&self, _: T) -> Arranged<G, K, V, R, TraceAgent<K, V, G::Timestamp, R, T>> {
         (*self).clone()

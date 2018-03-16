@@ -1,8 +1,8 @@
 //! Input sessions for simplified collection updates.
-//! 
-//! Although users can directly manipulate timely dataflow streams as collection inputs, 
+//!
+//! Although users can directly manipulate timely dataflow streams as collection inputs,
 //! the `InputSession` type can make this more efficient and less error-prone. Specifically,
-//! the type batches up updates with their logical times and ships them with coarsened 
+//! the type batches up updates with their logical times and ships them with coarsened
 //! timely dataflow capabilities, exposing more concurrency to the operator implementations
 //! than are evident from the logical times, which appear to execute in sequence.
 
@@ -87,12 +87,12 @@ pub trait Input<'a, A: Allocate, T: Timestamp+Ord> {
 }
 
 impl<'a, A: Allocate, T: Timestamp+Ord> Input<'a, A, T> for Child<'a, Root<A>, T> {
-    fn new_collection<D, R>(&mut self) -> (InputSession<T, D, R>, Collection<Child<'a, Root<A>, T>, D, R>) 
+    fn new_collection<D, R>(&mut self) -> (InputSession<T, D, R>, Collection<Child<'a, Root<A>, T>, D, R>)
     where D: Data, R: Diff{
 		let (handle, stream) = self.new_input();
 		(InputSession::from(handle), stream.as_collection())
     }
-    fn new_collection_from<I>(&mut self, data: I) -> (InputSession<T, I::Item, isize>, Collection<Child<'a, Root<A>, T>, I::Item, isize>) 
+    fn new_collection_from<I>(&mut self, data: I) -> (InputSession<T, I::Item, isize>, Collection<Child<'a, Root<A>, T>, I::Item, isize>)
     where I: IntoIterator+'static, I::Item: Data {
 
     	use timely::dataflow::operators::ToStream;
@@ -107,8 +107,8 @@ impl<'a, A: Allocate, T: Timestamp+Ord> Input<'a, A, T> for Child<'a, Root<A>, T
 /// An input session wrapping a single timely dataflow capability.
 ///
 /// Each timely dataflow message has a corresponding capability, which is a logical time in the
-/// timely dataflow system. Differential dataflow updates can happen at a much higher rate than 
-/// timely dataflow's progress tracking infrastructure supports, because the logical times are 
+/// timely dataflow system. Differential dataflow updates can happen at a much higher rate than
+/// timely dataflow's progress tracking infrastructure supports, because the logical times are
 /// promoted to data and updates are batched together. The `InputSession` type does this batching.
 ///
 /// # Examples
@@ -167,6 +167,20 @@ impl<T: Timestamp+Clone, D: Data> InputSession<T, D, isize> {
 	pub fn remove(&mut self, element: D) { self.update(element,-1); }
 }
 
+// impl<T: Timestamp+Clone, D: Data> InputSession<T, D, i64> {
+//     /// Adds an element to the collection.
+//     pub fn insert(&mut self, element: D) { self.update(element, 1); }
+//     /// Removes an element from the collection.
+//     pub fn remove(&mut self, element: D) { self.update(element,-1); }
+// }
+
+// impl<T: Timestamp+Clone, D: Data> InputSession<T, D, i32> {
+//     /// Adds an element to the collection.
+//     pub fn insert(&mut self, element: D) { self.update(element, 1); }
+//     /// Removes an element from the collection.
+//     pub fn remove(&mut self, element: D) { self.update(element,-1); }
+// }
+
 impl<'a, T: Timestamp+Clone, D: Data, R: Diff> InputSession<T, D, R> {
 
 	/// Creates a new session from a reference to an input handle.
@@ -198,13 +212,13 @@ impl<'a, T: Timestamp+Clone, D: Data, R: Diff> InputSession<T, D, R> {
 	pub fn flush(&mut self) {
 		self.handle.send_batch(&mut self.buffer);
 		if self.handle.epoch().less_than(&self.time.inner) {
-			self.handle.advance_to(self.time.inner.clone());		
+			self.handle.advance_to(self.time.inner.clone());
 		}
 	}
 
 	/// Advances the logical time for future records.
 	///
-	/// Importantly, this method does **not** immediately inform timely dataflow of the change. This happens only when 
+	/// Importantly, this method does **not** immediately inform timely dataflow of the change. This happens only when
 	/// the session is dropped or flushed. It is not correct to use this time as a basis for a computation's `step_while`
 	/// method unless the session has just been flushed.
 	pub fn advance_to(&mut self, time: T) {

@@ -4,17 +4,17 @@ extern crate graph_map;
 extern crate differential_dataflow;
 
 use std::time::Instant;
-use std::hash::Hash;
-use std::mem;
+// use std::hash::Hash;
+// use std::mem;
 
-use rand::{Rng, SeedableRng, StdRng};
+// use rand::{Rng, SeedableRng, StdRng};
 
 use timely::dataflow::*;
 
 use differential_dataflow::input::Input;
 use differential_dataflow::Collection;
 use differential_dataflow::operators::*;
-use differential_dataflow::operators::arrange::{ArrangeByKey, ArrangeBySelf};
+use differential_dataflow::operators::arrange::ArrangeByKey;
 use differential_dataflow::lattice::Lattice;
 
 use graph_map::GraphMMap;
@@ -32,14 +32,14 @@ fn main() {
 
     // snag a filename to use for the input graph.
     let filename = std::env::args().nth(1).unwrap();
-    let program = std::env::args().nth(2).unwrap(); 
+    let program = std::env::args().nth(2).unwrap();
 
     timely::execute_from_args(std::env::args().skip(1), move |worker| {
 
         let peers = worker.peers();
         let index = worker.index();
 
-        let (mut input, probe) = worker.dataflow::<(),_,_>(|scope| {
+        let (mut input, _probe) = worker.dataflow::<(),_,_>(|scope| {
 
             let (input, graph) = scope.new_collection();
             // let (rootz, query) = scope.new_collection();
@@ -59,7 +59,7 @@ fn main() {
 
             (input, probe)
         });
-        
+
 
         let timer = Instant::now();
 
@@ -94,7 +94,7 @@ fn main() {
                     }
                 }
             }
-            nodes = graph.nodes() as u32;
+            // nodes = graph.nodes() as u32;
         }
 
         println!("{:?}\tData ingested", timer.elapsed());

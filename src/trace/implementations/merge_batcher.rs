@@ -15,21 +15,21 @@ pub struct MergeBatcher<K: Ord, V: Ord, T: Ord, R: Diff, B: Batch<K, V, T, R>> {
     phantom: ::std::marker::PhantomData<B>,
 }
 
-impl<K, V, T, R, B> Batcher<K, V, T, R, B> for MergeBatcher<K, V, T, R, B> 
-where 
-    K: Ord+Clone, 
+impl<K, V, T, R, B> Batcher<K, V, T, R, B> for MergeBatcher<K, V, T, R, B>
+where
+    K: Ord+Clone,
     V: Ord+Clone,
     T: Lattice+Ord+Clone,
     R: Diff,
-    B: Batch<K, V, T, R>, 
+    B: Batch<K, V, T, R>,
 {
-    fn new() -> Self { 
-        MergeBatcher { 
+    fn new() -> Self {
+        MergeBatcher {
             sorter: MergeSorter::new(),
             frontier: Antichain::new(),
             lower: vec![T::minimum()],
             phantom: ::std::marker::PhantomData,
-        } 
+        }
     }
 
     #[inline(never)]
@@ -37,9 +37,9 @@ where
         self.sorter.push(batch);
     }
 
-    // Sealing a batch means finding those updates with times not greater or equal to any time 
+    // Sealing a batch means finding those updates with times not greater or equal to any time
     // in `upper`. All updates must have time greater or equal to the previously used `upper`,
-    // which we call `lower`, by assumption that after sealing a batcher we receive no more 
+    // which we call `lower`, by assumption that after sealing a batcher we receive no more
     // updates with times not greater or equal to `upper`.
     #[inline(never)]
     fn seal(&mut self, upper: &[T]) -> B {
@@ -105,7 +105,7 @@ impl<T> VecQueue<T> {
     pub fn pop(&mut self) -> T {
         debug_assert!(self.head < self.tail);
         self.head += 1;
-        unsafe { ::std::ptr::read(self.list.as_mut_ptr().offset(((self.head as isize) - 1) )) }
+        unsafe { ::std::ptr::read(self.list.as_mut_ptr().offset((self.head as isize) - 1)) }
     }
     #[inline(always)]
     pub fn peek(&self) -> &T {
@@ -206,18 +206,18 @@ impl<D: Ord, T: Ord, R: Diff> MergeSorter<D, T, R> {
         }
     }
 
-    // This is awkward, because it isn't a power-of-two length any more, and we don't want 
+    // This is awkward, because it isn't a power-of-two length any more, and we don't want
     // to break it down to be so.
     pub fn push_list(&mut self, list: Vec<Vec<(D, T, R)>>) {
         while self.queue.len() > 1 && self.queue[self.queue.len()-1].len() < list.len() {
             let list1 = self.queue.pop().unwrap();
             let list2 = self.queue.pop().unwrap();
             let merged = self.merge_by(list1, list2);
-            self.queue.push(merged);            
+            self.queue.push(merged);
         }
         self.queue.push(list);
     }
-    
+
     #[inline(never)]
     pub fn finish_into(&mut self, target: &mut Vec<Vec<(D, T, R)>>) {
         while self.queue.len() > 1 {
@@ -235,7 +235,7 @@ impl<D: Ord, T: Ord, R: Diff> MergeSorter<D, T, R> {
     // merges two sorted input lists into one sorted output list.
     #[inline(never)]
     fn merge_by(&mut self, list1: Vec<Vec<(D, T, R)>>, list2: Vec<Vec<(D, T, R)>>) -> Vec<Vec<(D, T, R)>> {
-        
+
         use std::cmp::Ordering;
 
         // TODO: `list1` and `list2` get dropped; would be better to reuse?
@@ -245,18 +245,18 @@ impl<D: Ord, T: Ord, R: Diff> MergeSorter<D, T, R> {
         let mut list1 = VecQueue::from(list1);
         let mut list2 = VecQueue::from(list2);
 
-        let mut head1 = if !list1.is_empty() { VecQueue::from(list1.pop()) } else { VecQueue::new() }; 
-        let mut head2 = if !list2.is_empty() { VecQueue::from(list2.pop()) } else { VecQueue::new() }; 
+        let mut head1 = if !list1.is_empty() { VecQueue::from(list1.pop()) } else { VecQueue::new() };
+        let mut head2 = if !list2.is_empty() { VecQueue::from(list2.pop()) } else { VecQueue::new() };
 
         // while we have valid data in each input, merge.
         while !head1.is_empty() && !head2.is_empty() {
 
             while (result.capacity() - result.len()) > 0 && head1.len() > 0 && head2.len() > 0 {
-                
+
                 let cmp = {
                     let x = head1.peek();
                     let y = head2.peek();
-                    (&x.0, &x.1).cmp(&(&y.0, &y.1)) 
+                    (&x.0, &x.1).cmp(&(&y.0, &y.1))
                 };
                 match cmp {
                     Ordering::Less    => { unsafe { push_unchecked(&mut result, head1.pop()); } }
@@ -268,24 +268,24 @@ impl<D: Ord, T: Ord, R: Diff> MergeSorter<D, T, R> {
                         if !diff.is_zero() {
                             unsafe { push_unchecked(&mut result, (data1, time1, diff)); }
                         }
-                    }           
+                    }
                 }
             }
-            
+
             if result.capacity() == result.len() {
                 output.push(result);
-                result = self.stash.pop().unwrap_or_else(|| Vec::with_capacity(1024)); 
+                result = self.stash.pop().unwrap_or_else(|| Vec::with_capacity(1024));
             }
 
-            if head1.is_empty() { 
-                let done1 = head1.done(); 
+            if head1.is_empty() {
+                let done1 = head1.done();
                 if done1.capacity() == 1024 { self.stash.push(done1); }
-                head1 = if !list1.is_empty() { VecQueue::from(list1.pop()) } else { VecQueue::new() }; 
+                head1 = if !list1.is_empty() { VecQueue::from(list1.pop()) } else { VecQueue::new() };
             }
-            if head2.is_empty() { 
-                let done2 = head2.done(); 
+            if head2.is_empty() {
+                let done2 = head2.done();
                 if done2.capacity() == 1024 { self.stash.push(done2); }
-                head2 = if !list2.is_empty() { VecQueue::from(list2.pop()) } else { VecQueue::new() }; 
+                head2 = if !list2.is_empty() { VecQueue::from(list2.pop()) } else { VecQueue::new() };
             }
         }
 
@@ -297,8 +297,8 @@ impl<D: Ord, T: Ord, R: Diff> MergeSorter<D, T, R> {
             for _ in 0 .. head1.len() { result.push(head1.pop()); }
             output.push(result);
         }
-        while !list1.is_empty() { 
-            output.push(list1.pop()); 
+        while !list1.is_empty() {
+            output.push(list1.pop());
         }
 
         if !head2.is_empty() {
@@ -306,8 +306,8 @@ impl<D: Ord, T: Ord, R: Diff> MergeSorter<D, T, R> {
             for _ in 0 .. head2.len() { result.push(head2.pop()); }
             output.push(result);
         }
-        while !list2.is_empty() { 
-            output.push(list2.pop()); 
+        while !list2.is_empty() {
+            output.push(list2.pop());
         }
 
         output
@@ -318,7 +318,7 @@ impl<D: Ord, T: Ord, R: Diff> MergeSorter<D, T, R> {
 ///
 /// This methods *relies strongly* on the assumption that the predicate
 /// stays false once it becomes false, a joint property of the predicate
-/// and the slice. This allows `advance` to use exponential search to 
+/// and the slice. This allows `advance` to use exponential search to
 /// count the number of elements in time logarithmic in the result.
 #[inline(always)]
 pub fn _advance<T, F: Fn(&T)->bool>(slice: &[T], function: F) -> usize {
@@ -344,7 +344,7 @@ pub fn _advance<T, F: Fn(&T)->bool>(slice: &[T], function: F) -> usize {
 		}
 
 		index += 1;
-	}	
+	}
 
 	index
 }

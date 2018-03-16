@@ -212,7 +212,7 @@ pub trait GroupArranged<G: Scope, K: Data, V: Data, R: Diff> where G::Timestamp:
             T2: Trace<K, V2, G::Timestamp, R2>+'static,
             T2::Batch: Batch<K, V2, G::Timestamp, R2>,
             L: Fn(&K, &[(&V, R)], &mut Vec<(V2, R2)>)+'static
-            ; 
+            ;
 }
 
 impl<G, K, V, R> GroupArranged<G, K, V, R> for Collection<G, (K, V), R>
@@ -237,13 +237,13 @@ where
 }
 
 impl<G: Scope, K: Data, V: Data, T1, R: Diff> GroupArranged<G, K, V, R> for Arranged<G, K, V, R, T1>
-where 
+where
     G::Timestamp: Lattice+Ord,
     T1: TraceReader<K, V, G::Timestamp, R>+Clone+'static,
     T1::Batch: BatchReader<K, V, G::Timestamp, R> {
-        
+
     fn group_arranged<L, V2, T2, R2>(&self, logic: L, empty: T2) -> Arranged<G, K, V2, R2, TraceAgent<K, V2, G::Timestamp, R2, T2>>
-        where 
+        where
             V2: Data,
             R2: Diff,
             T2: Trace<K, V2, G::Timestamp, R2>+'static,
@@ -261,7 +261,7 @@ where
         // let mut thinker = history_replay::HistoryReplayer::<V, V2, G::Timestamp, R, R2>::new();
         let mut temporary = Vec::<G::Timestamp>::new();
 
-        // Our implementation maintains a list of outstanding `(key, time)` synthetic interesting times, 
+        // Our implementation maintains a list of outstanding `(key, time)` synthetic interesting times,
         // as well as capabilities for these times (or their lower envelope, at least).
         let mut interesting = Vec::<(K, G::Timestamp)>::new();
         let mut capabilities = Vec::<Capability<G::Timestamp>>::new();
@@ -275,7 +275,7 @@ where
         // tracks frontiers received from batches, for sanity.
         let mut upper_received = vec![<G::Timestamp as Lattice>::minimum()];
 
-        // We separately track the frontiers for what we have sent, and what we have sealed. 
+        // We separately track the frontiers for what we have sent, and what we have sealed.
         let mut lower_issued = Antichain::from_elem(<G::Timestamp as Lattice>::minimum());
 
         let id = self.stream.scope().index();
@@ -286,19 +286,19 @@ where
             // The `group` operator receives fully formed batches, which each serve as an indication
             // that the frontier has advanced to the upper bound of their description.
             //
-            // Although we could act on each individually, several may have been sent, and it makes 
+            // Although we could act on each individually, several may have been sent, and it makes
             // sense to accumulate them first to coordinate their re-evaluation. We will need to pay
             // attention to which times need to be collected under which capability, so that we can
             // assemble output batches correctly. We will maintain several builders concurrently, and
             // place output updates into the appropriate builder.
             //
-            // It turns out we must use notificators, as we cannot await empty batches from arrange to 
+            // It turns out we must use notificators, as we cannot await empty batches from arrange to
             // indicate progress, as the arrange may not hold the capability to send such. Instead, we
-            // must watch for progress here (and the upper bound of received batches) to tell us how 
+            // must watch for progress here (and the upper bound of received batches) to tell us how
             // far we can process work.
-            // 
-            // We really want to retire all batches we receive, so we want a frontier which reflects 
-            // both information from batches as well as progress information. I think this means that 
+            //
+            // We really want to retire all batches we receive, so we want a frontier which reflects
+            // both information from batches as well as progress information. I think this means that
             // we keep times that are greater than or equal to a time in the other frontier, deduplicated.
 
             let mut batch_cursors = Vec::new();
@@ -329,7 +329,7 @@ where
 
             // The interval of times we can retire is upper bounded by both the most recently received batch
             // upper bound (`upper_received`) and by the input progress frontier (`notificator.frontier(0)`).
-            // Any new changes must be at times in advance of *both* of these antichains, as both the batch 
+            // Any new changes must be at times in advance of *both* of these antichains, as both the batch
             // and the frontier guarantee no more updates at times not in advance of them.
             //
             // I think the right thing to do is define a new frontier from the joins of elements in the two
@@ -338,7 +338,7 @@ where
             // At the same time, any element greater than some pairwise join is greater than either antichain,
             // and so could plausibly be seen in the future (and so is not safe to retire).
             upper_limit.clear();
-            for time1 in notificator.frontier(0) {
+            for time1 in notificator.frontier(0).iter() {
                 for time2 in upper_received.iter() {
                     upper_limit.insert(time1.join(time2));
                 }
@@ -362,14 +362,14 @@ where
                 });
                 interesting = new_interesting;
 
-                // Prepare an output buffer and builder for each capability. 
+                // Prepare an output buffer and builder for each capability.
                 //
-                // We buffer and build separately, as outputs are produced grouped by time, whereas the 
-                // builder wants to see outputs grouped by value. While the per-key computation could 
+                // We buffer and build separately, as outputs are produced grouped by time, whereas the
+                // builder wants to see outputs grouped by value. While the per-key computation could
                 // do the re-sorting itself, buffering per-key outputs lets us double check the results
                 // against other implementations for accuracy.
                 //
-                // TODO: It would be better if all updates went into one batch, but timely dataflow prevents 
+                // TODO: It would be better if all updates went into one batch, but timely dataflow prevents
                 //       this as long as it requires that there is only one capability for each message.
                 let mut buffers = Vec::<(G::Timestamp, Vec<(V2, G::Timestamp, R2)>)>::new();
                 let mut builders = Vec::new();
@@ -406,7 +406,7 @@ where
                         (None, None)             => unreachable!(),
                     };
 
-                    // `interesting_times` contains those times between `lower_issued` and `upper_limit` 
+                    // `interesting_times` contains those times between `lower_issued` and `upper_limit`
                     // that we need to re-consider. We now populate it, but perhaps this should be left
                     // to the per-key computation, which may be able to avoid examining the times of some
                     // values (for example, in the case of min/max/topk).
@@ -423,14 +423,14 @@ where
 
                     // do the per-key computation.
                     let _counters = thinker.compute(
-                        &key, 
+                        &key,
                         (&mut source_cursor, source_storage),
                         (&mut output_cursor, output_storage),
                         (&mut batch_cursor, batch_storage),
-                        &mut interesting_times, 
-                        &logic, 
-                        &upper_limit, 
-                        &mut buffers[..], 
+                        &mut interesting_times,
+                        &logic,
+                        &upper_limit,
+                        &mut buffers[..],
                         &mut temporary,
                     );
 
@@ -439,14 +439,14 @@ where
                     }
 
                     // Record future warnings about interesting times (and assert they should be "future").
-                    for time in temporary.drain(..) { 
+                    for time in temporary.drain(..) {
                         debug_assert!(upper_limit.less_equal(&time));
-                        interesting.push((key.clone(), time)); 
+                        interesting.push((key.clone(), time));
                     }
 
                     // Sort each buffer by value and move into the corresponding builder.
-                    // TODO: This makes assumptions about at least one of (i) the stability of `sort_by`, 
-                    //       (ii) that the buffers are time-ordered, and (iii) that the builders accept 
+                    // TODO: This makes assumptions about at least one of (i) the stability of `sort_by`,
+                    //       (ii) that the buffers are time-ordered, and (iii) that the builders accept
                     //       arbitrarily ordered times.
                     for index in 0 .. buffers.len() {
                         buffers[index].1.sort_by(|x,y| x.0.cmp(&y.0));
@@ -567,10 +567,10 @@ pub fn consolidate_from<T: Ord+Clone, R: Diff>(vec: &mut Vec<(T, R)>, off: usize
         }
     }
     vec.truncate(cursor);
-    
+
 }
 
-trait PerKeyCompute<'a, V1, V2, T, R1, R2> 
+trait PerKeyCompute<'a, V1, V2, T, R1, R2>
 where
     V1: Ord+Clone+'a,
     V2: Ord+Clone+'a,
@@ -581,20 +581,20 @@ where
     fn new() -> Self;
     fn compute<K, C1, C2, C3, L>(
         &mut self,
-        key: &K, 
-        source_cursor: (&mut C1, &'a C1::Storage), 
+        key: &K,
+        source_cursor: (&mut C1, &'a C1::Storage),
         output_cursor: (&mut C2, &'a C2::Storage),
         batch_cursor: (&mut C3, &'a C3::Storage),
-        times: &mut Vec<T>, 
-        logic: &L, 
+        times: &mut Vec<T>,
+        logic: &L,
         upper_limit: &Antichain<T>,
         outputs: &mut [(T, Vec<(V2, T, R2)>)],
         new_interesting: &mut Vec<T>) -> (usize, usize)
-    where 
+    where
         K: Eq+Clone+Debug,
-        C1: Cursor<K, V1, T, R1>, 
-        C2: Cursor<K, V2, T, R2>, 
-        C3: Cursor<K, V1, T, R1>, 
+        C1: Cursor<K, V1, T, R1>,
+        C2: Cursor<K, V2, T, R2>,
+        C3: Cursor<K, V1, T, R1>,
         L: Fn(&K, &[(&V1, R1)], &mut Vec<(V2, R2)>);
 }
 
@@ -612,9 +612,9 @@ mod history_replay {
 
     use super::{PerKeyCompute, consolidate, sort_dedup};
 
-    /// The `HistoryReplayer` is a compute strategy based on moving through existing inputs, interesting times, etc in 
+    /// The `HistoryReplayer` is a compute strategy based on moving through existing inputs, interesting times, etc in
     /// time order, maintaining consolidated representations of updates with respect to future interesting times.
-    pub struct HistoryReplayer<'a, V1, V2, T, R1, R2> 
+    pub struct HistoryReplayer<'a, V1, V2, T, R1, R2>
     where
         V1: Ord+Clone+'a,
         V2: Ord+Clone+'a,
@@ -634,7 +634,7 @@ mod history_replay {
         temporary: Vec<T>,
     }
 
-    impl<'a, V1, V2, T, R1, R2> PerKeyCompute<'a, V1, V2, T, R1, R2> for HistoryReplayer<'a, V1, V2, T, R1, R2> 
+    impl<'a, V1, V2, T, R1, R2> PerKeyCompute<'a, V1, V2, T, R1, R2> for HistoryReplayer<'a, V1, V2, T, R1, R2>
     where
         V1: Ord+Clone+Debug,
         V2: Ord+Clone+Debug,
@@ -643,7 +643,7 @@ mod history_replay {
         R2: Diff+Debug,
     {
         fn new() -> Self {
-            HistoryReplayer { 
+            HistoryReplayer {
                 batch_history: ValueHistory::new(),
                 input_history: ValueHistory::new(),
                 output_history: ValueHistory::new(),
@@ -659,21 +659,21 @@ mod history_replay {
         #[inline(never)]
         fn compute<K, C1, C2, C3, L>(
             &mut self,
-            key: &K, 
-            (source_cursor, source_storage): (&mut C1, &'a C1::Storage), 
+            key: &K,
+            (source_cursor, source_storage): (&mut C1, &'a C1::Storage),
             (output_cursor, output_storage): (&mut C2, &'a C2::Storage),
             (batch_cursor, batch_storage): (&mut C3, &'a C3::Storage),
-            times: &mut Vec<T>, 
-            logic: &L, 
+            times: &mut Vec<T>,
+            logic: &L,
             upper_limit: &Antichain<T>,
             outputs: &mut [(T, Vec<(V2, T, R2)>)],
             new_interesting: &mut Vec<T>) -> (usize, usize)
-        where 
+        where
             K: Eq+Clone+Debug,
-            C1: Cursor<K, V1, T, R1>, 
-            C2: Cursor<K, V2, T, R2>, 
-            C3: Cursor<K, V1, T, R1>, 
-            L: Fn(&K, &[(&V1, R1)], &mut Vec<(V2, R2)>) 
+            C1: Cursor<K, V1, T, R1>,
+            C2: Cursor<K, V2, T, R2>,
+            C3: Cursor<K, V1, T, R1>,
+            L: Fn(&K, &[(&V1, R1)], &mut Vec<(V2, R2)>)
         {
 
             // The work we need to perform is at times defined principally by the contents of `batch_cursor`
@@ -703,7 +703,7 @@ mod history_replay {
             if self.meets.len() > 0 { meet = meet.meet(&self.meets[0]); }
             if let Some(time) = batch_replay.meet() { meet = meet.meet(&time); }
 
-            // Having determined the meet, we can load the input and output histories, where we 
+            // Having determined the meet, we can load the input and output histories, where we
             // advance all times by joining them with `meet`. The resulting times are more compact
             // and guaranteed to accumulate identically for times greater or equal to `meet`.
 
@@ -715,7 +715,7 @@ mod history_replay {
             self.times_current.clear();
             self.output_produced.clear();
 
-            // The frontier of times we may still consider. 
+            // The frontier of times we may still consider.
             // Derived from frontiers of our update histories, supplied times, and synthetic times.
 
             let mut times_slice = &times[..];
@@ -751,7 +751,7 @@ mod history_replay {
                 // advance both `synth_times` and `times_slice`, marking this time interesting if in either.
                 while self.synth_times.last() == Some(&next_time) {
                     // We don't know enough about `next_time` to avoid putting it in to `times_current`.
-                    // TODO: If we knew that the time derived from a canceled batch update, we could remove the time. 
+                    // TODO: If we knew that the time derived from a canceled batch update, we could remove the time.
                     self.times_current.push(self.synth_times.pop().expect("failed to pop from synth_times")); // <-- TODO: this could be a min-heap.
                     interesting = true;
                 }
@@ -766,12 +766,12 @@ mod history_replay {
                 // Times could also be interesting if an interesting time is less than them, as they would join
                 // and become the time itself. They may not equal the current time because whatever frontier we
                 // are tracking may not have advanced far enough.
-                // TODO: `batch_history` may or may not be super compact at this point, and so this check might 
+                // TODO: `batch_history` may or may not be super compact at this point, and so this check might
                 //       yield false positives if not sufficiently compact. Maybe we should into this and see.
                 interesting = interesting || batch_replay.buffer().iter().any(|&((_, ref t),_)| t.less_equal(&next_time));
                 interesting = interesting || self.times_current.iter().any(|t| t.less_equal(&next_time));
 
-                // We should only process times that are not in advance of `upper_limit`. 
+                // We should only process times that are not in advance of `upper_limit`.
                 //
                 // We have no particular guarantee that known times will not be in advance of `upper_limit`.
                 // We may have the guarantee that synthetic times will not be, as we test against the limit
@@ -779,9 +779,9 @@ mod history_replay {
                 if !upper_limit.less_equal(&next_time) {
 
                     // We should re-evaluate the computation if this is an interesting time.
-                    // If the time is uninteresting (and our logic is sound) it is not possible for there to be 
+                    // If the time is uninteresting (and our logic is sound) it is not possible for there to be
                     // output produced. This sounds like a good test to have for debug builds!
-                    if interesting { 
+                    if interesting {
 
                         compute_counter += 1;
 
@@ -810,7 +810,7 @@ mod history_replay {
                         if self.input_buffer.len() > 0 {
                             logic(key, &self.input_buffer[..], &mut self.output_buffer);
                             self.input_buffer.clear();
-                        }            
+                        }
 
                         output_replay.advance_buffer_by(&meet);
                         for &((ref value, ref time), diff) in output_replay.buffer().iter() {
@@ -831,20 +831,20 @@ mod history_replay {
                         }
 
                         // Having subtracted output updates from user output, consolidate the results to determine
-                        // if there is anything worth reporting. Note: this also orders the results by value, so 
-                        // that could make the above merging plan even easier. 
+                        // if there is anything worth reporting. Note: this also orders the results by value, so
+                        // that could make the above merging plan even easier.
                         consolidate(&mut self.output_buffer);
 
-                        // Stash produced updates into both capability-indexed buffers and `output_produced`. 
-                        // The two locations are important, in that we will compact `output_produced` as we move 
+                        // Stash produced updates into both capability-indexed buffers and `output_produced`.
+                        // The two locations are important, in that we will compact `output_produced` as we move
                         // through times, but we cannot compact the output buffers because we need their actual
                         // times.
                         if self.output_buffer.len() > 0 {
 
                             output_counter += 1;
 
-                            // We *should* be able to find a capability for `next_time`. Any thing else would 
-                            // indicate a logical error somewhere along the way; either we release a capability 
+                            // We *should* be able to find a capability for `next_time`. Any thing else would
+                            // indicate a logical error somewhere along the way; either we release a capability
                             // we should have kept, or we have computed the output incorrectly (or both!)
                             let idx = outputs.iter().rev().position(|&(ref time, _)| time.less_equal(&next_time));
                             let idx = outputs.len() - idx.expect("failed to find index") - 1;
@@ -854,7 +854,7 @@ mod history_replay {
                             }
 
                             // Advance times in `self.output_produced` and consolidate the representation.
-                            // NOTE: We only do this when we add records; it could be that there are situations 
+                            // NOTE: We only do this when we add records; it could be that there are situations
                             //       where we want to consolidate even without changes (because an initially
                             //       large collection can now be collapsed).
                             for entry in &mut self.output_produced {
@@ -872,7 +872,7 @@ mod history_replay {
                     // skip `self.synth_times` as we haven't gotten to them yet, but we will and they will be
                     // joined against everything.
 
-                    // Any time, even uninteresting times, must be joined with the current accumulation of 
+                    // Any time, even uninteresting times, must be joined with the current accumulation of
                     // batch times as well as the current accumulation of `times_current`.
                     for &((_, ref time), _) in batch_replay.buffer().iter() {
                         if !time.less_equal(&next_time) {
@@ -904,10 +904,10 @@ mod history_replay {
                         self.synth_times.dedup();
                     }
                 }
-                else {  
+                else {
 
                     if interesting {
-                        // We cannot process `next_time` now, and must delay it. 
+                        // We cannot process `next_time` now, and must delay it.
                         //
                         // I think we are probably only here because of an uninteresting time declared interesting,
                         // as initial interesting times are filtered to be in interval, and synthetic times are also
