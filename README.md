@@ -3,7 +3,7 @@ An implementation of [differential dataflow](./differentialdataflow.pdf) over [t
 
 ## Background
 
-Differential dataflow is a data-parallel programming framework designed to efficiently process large volumes of data and to quickly respond to arbitrary changes in input collections. 
+Differential dataflow is a data-parallel programming framework designed to efficiently process large volumes of data and to quickly respond to arbitrary changes in input collections.
 
 Differential dataflow programs are written as functional transformations of collections of data, using familiar operators like `map`, `filter`, `join`, and `group`. Differential dataflow also includes more exotic operators such as `iterate`, which repeatedly applies a differential dataflow fragment to a collection. The programs are compiled down to [timely dataflow](https://github.com/frankmcsherry/timely-dataflow) computations.
 
@@ -30,13 +30,15 @@ roots.iterate(|reach|
 )
 ```
 
-Once written, a differential dataflow responds to arbitrary changes to its initially empty input collections, reporting the corresponding changes to each of its output collections. Differential dataflow can react quickly because it only acts where changes in collections occur, and does no work elsewhere. 
+Once written, a differential dataflow responds to arbitrary changes to its initially empty input collections, reporting the corresponding changes to each of its output collections. Differential dataflow can react quickly because it only acts where changes in collections occur, and does no work elsewhere.
 
 In the examples above, we can add to and remove from `edges`, dynamically altering the graph, and get immediate feedback on how the results change. We could also add to and remove from `roots` altering the reachability query itself.
 
 Be sure to check out the [differential dataflow documentation](http://www.frankmcsherry.org/differential-dataflow/differential_dataflow/index.html), which is continually improving.
 
 ## An example: counting degrees in a graph.
+
+Let's check out that out-degree distribution computation, to get a sense for how differential dataflow actually works.
 
 A graph is a collection of pairs `(Node, Node)`, and one standard analysis is to determine the number of times each `Node` occurs in the first position, its "degree". The number of nodes with each degree is a helpful graph statistic.
 
@@ -47,23 +49,25 @@ let (mut input, probe) = worker.dataflow(|scope| {
     // create edge input, count a few ways.
     let (input, edges) = scope.new_collection();
 
-    // pull off source and count them.
-    let degrs = edges.map(|(src, _dst)| src)
-                     .count();
-
-    // pull off degree and count those.
-    let distr = degrs.map(|(_src, deg)| deg)
-                     .count();
+    let out_degr_dist =
+    edges.map(|(src, _dst)| src)    // extract source
+         .count();                  // count occurrences of source
+         .map(|(_src, deg)| deg)    // extract degree
+         .count();                  // count occurrences of degree
 
     // show us something about the collection, notice when done.
-    let probe = distr.inspect(|x| println!("observed: {:?}", x))
-                     .probe();
+    let probe =
+    out_degr_dist
+        .inspect(|x| println!("observed: {:?}", x))
+        .probe();
 
     (input, probe)
 });
 ```
 
-If we feed this with some random graph data, say fifty random edges among ten nodes, we get output like
+The `input` and `probe` we return are how we get data into the dataflow, and how we notice when some amount of computation is complete. These are timely dataflow idioms, and we won't get in to them in more detali here.
+
+If we feed this computation with some random graph data, say fifty random edges among ten nodes, we get output like
 
     Running `target/release/examples/degrees 10 50 1`
     observed: ((5, 4), (Root, 0), 1)
@@ -98,7 +102,7 @@ How about a few more changes?
     observed: ((8, 1), (Root, 5), -1)
     worker 0, round 5 finished after Duration { secs: 0, nanos: 104017 }
 
-Well a few weird things happen here. First, rounds 2, 3, and 4 don't print anything. Seriously? It turns out that the random changes we made didn't affect any of the degree counts, we moved edges between nodes, preserving degrees. It can happen. 
+Well a few weird things happen here. First, rounds 2, 3, and 4 don't print anything. Seriously? It turns out that the random changes we made didn't affect any of the degree counts, we moved edges between nodes, preserving degrees. It can happen.
 
 The second weird thing is that with only two edge changes we have six changes in the output! It turns out we can have up to eight. The eight gets turned back into a seven, and a five gets turned into a six. But: going from five to six changes the count for each, and each change requires two record differences.
 
@@ -130,7 +134,7 @@ The appealing thing about differential dataflow is that it only does work where 
     observed: ((22, 1), (Root, 0), 1)
     Loading finished after Duration { secs: 15, nanos: 485478768 }
 
-There are a lot more distinct degrees here. I sorted them because it was too painful to look at the unsorted data. You would normally get to see the output unsorted, because they are just changes values in a collection.
+There are a lot more distinct degrees here. I sorted them because it was too painful to look at the unsorted data. You would normally get to see the output unsorted, because they are just changes to values in a collection.
 
 Let's perform a single change again.
 
@@ -142,7 +146,7 @@ Let's perform a single change again.
     observed: ((6, 1459807), (Root, 1), 1)
     worker 0, round 1 finished after Duration { secs: 0, nanos: 119917 }
 
-Although the initial computation took about fifteen seconds, we get our changes in about 141 microseconds; that's about one hundred thousand times faster than re-running the computation. That's pretty nice. Actually, it is small enough that the time to print things to the screen is a bit expensive, so let's comment that part out.
+Although the initial computation took about fifteen seconds, we get our changes in about 120 microseconds; that's about one hundred thousand times faster than re-running the computation. That's pretty nice. Actually, it is small enough that the time to print things to the screen is a bit expensive, so let's comment that part out.
 
 ```rust
     // show us something about the collection, notice when done.
@@ -191,7 +195,7 @@ As we turn up the batching, performance improves. Here we work on one hundred ro
     worker 0, round 500 finished after Duration { secs: 0, nanos: 1187122 }
     ...
 
-This now averages to about twelve microseconds for each update, which is getting closer to one hundred thousand updates per second. 
+This now averages to about twelve microseconds for each update, which is getting closer to one hundred thousand updates per second.
 
 Actually, let's just try that. Here are the numbers for one hundred thousand rounds of updates at a time:
 
@@ -220,7 +224,7 @@ If we bring two workers to bear, our 10 million node, 50 million edge computatio
     worker 1, round 2 finished after Duration { secs: 0, nanos: 154681 }
     ...
 
-That is a so-so reduction. You might notice that the times *increased* for the subsequent rounds. It turns out that multiple workers just get in each other's way when there isn't much work to do. 
+That is a so-so reduction. You might notice that the times *increased* for the subsequent rounds. It turns out that multiple workers just get in each other's way when there isn't much work to do.
 
 Fortunately, as we work on more and more rounds of updates at the same time, the benefit of multiple workers increases. Here are the numbers for ten rounds at a time:
 
@@ -258,34 +262,7 @@ These last numbers were about half a second with one worker, and are decently im
 
 There are several performance optimizations in differential dataflow designed to make the underlying operators as close to what you would expect to write, when possible. Additionally, by building on timely dataflow, you can drop in your own implementations a la carte where you know best.
 
-For example, we know that all of the keys involved in these two `count` methods are unsigned integers. We can use a special form of `count` called `count_u`, which just uses the values themselves to distribute and sort the records, rather than repeatedly hashing them.
-
-         Running `target/release/examples/degrees 10000000 50000000 10 -w2`
-    Loading finished after Duration { secs: 7, nanos: 462765111 }
-    worker 0, round 10 finished after Duration { secs: 0, nanos: 284091 }
-    worker 1, round 10 finished after Duration { secs: 0, nanos: 438691 }
-    worker 0, round 20 finished after Duration { secs: 0, nanos: 257730 }
-    worker 1, round 20 finished after Duration { secs: 0, nanos: 202014 }
-    ...
-
-         Running `target/release/examples/degrees 10000000 50000000 100 -w2`
-    Loading finished after Duration { secs: 7, nanos: 359640948 }
-    worker 0, round 100 finished after Duration { secs: 0, nanos: 726242 }
-    worker 1, round 100 finished after Duration { secs: 0, nanos: 742154 }
-    worker 1, round 200 finished after Duration { secs: 0, nanos: 555628 }
-    worker 0, round 200 finished after Duration { secs: 0, nanos: 580650 }
-    ...
-
-         Running `target/release/examples/degrees 10000000 50000000 100000 -w2`
-    Loading finished after Duration { secs: 7, nanos: 357319064 }
-    worker 0, round 100000 finished after Duration { secs: 0, nanos: 222533047 }
-    worker 1, round 100000 finished after Duration { secs: 0, nanos: 223707807 }
-    worker 0, round 200000 finished after Duration { secs: 0, nanos: 237145000 }
-    worker 1, round 200000 finished after Duration { secs: 0, nanos: 237228387 }
-    ...
-
-
-For another example, we also know in this case that the underlying collections go through a *sequence* of changes, meaning their timestamps are totally ordered. In this case we can use a much simpler implementation, `count_total_u`. The reduces the update times substantially, for each batch size:
+For example, we also know in this case that the underlying collections go through a *sequence* of changes, meaning their timestamps are totally ordered. In this case we can use a much simpler implementation, `count_total`. The reduces the update times substantially, for each batch size:
 
          Running `target/release/examples/degrees 10000000 50000000 10 -w2`
     Loading finished after Duration { secs: 5, nanos: 866946585 }
@@ -317,7 +294,7 @@ These times have now dropped quite a bit from where we started; we now absorb al
 
 The k-core of a graph is the largest subset of its edges so that all vertices with any incident edges have degree at least k. One way to find the k-core is to repeatedly delete all edges incident on vertices with degree less than k. Those edges going away might lower the degrees of other vertices, so we need to *iteratively* throwing away edges on vertices with degree less than k until we stop. Maybe we throw away all the edges, maybe we stop with some left over.
 
-Here is a direct implementation, in which we repeatedly take determine the set of active nodes (those with at least 
+Here is a direct implementation, in which we repeatedly take determine the set of active nodes (those with at least
 `k` edges point to or from them), and restrict the set `edges` to those with both `src` and `dst` present in `active`.
 
 ```rust
