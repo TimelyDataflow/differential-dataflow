@@ -3,6 +3,7 @@ extern crate abomonation;
 extern crate timely;
 extern crate differential_dataflow;
 extern crate arrayvec;
+extern crate regex;
 
 use std::fs::File;
 use std::io::{BufRead, BufReader};
@@ -54,7 +55,7 @@ fn main() {
                 psup.as_collection(),
                 regs.as_collection(),
                 supp.as_collection(),
-            );  
+            );
 
             let mut probes = Vec::new();
 
@@ -118,7 +119,7 @@ fn main() {
         inputs.5.advance_to(next_round);
         inputs.6.as_mut().map(|x| x.advance_to(next_round));
         inputs.7.advance_to(next_round);
-        let time = inputs.0.time().clone(); 
+        let time = inputs.0.time().clone();
         worker.step_while(|| probes.iter().all(|p| p.less_than(&time)));
 
         let timer = Instant::now();
@@ -146,7 +147,7 @@ fn main() {
             inputs.6.as_mut().map(|x| x.advance_to(next_round));
             inputs.7.advance_to(next_round);
 
-            let time = inputs.0.time().clone(); 
+            let time = inputs.0.time().clone();
             worker.step_while(|| probes.iter().all(|p| p.less_than(&time)));
             round += 1;
         }
@@ -161,7 +162,7 @@ fn main() {
         inputs.5.advance_to(next_round);
         inputs.6.as_mut().map(|x| x.advance_to(next_round));
         inputs.7.advance_to(next_round);
-        let time = inputs.0.time().clone(); 
+        let time = inputs.0.time().clone();
         worker.step_while(|| probes.iter().all(|p| p.less_than(&time)));
 
         let query_name = if query < 10 { format!("q0{}", query) } else { format!("q{}", query) };
@@ -222,8 +223,8 @@ impl<G: Scope> Collections<G> {
 }
 
 // Returns a sequence of physical batches of ready-to-go timestamped data. Not clear that `input` can exploit the pre-arrangement yet.
-fn load<T>(prefix: &str, name: &str, index: usize, peers: usize, logical_batch: usize, physical_batch: usize, off: usize) 
-    -> Vec<Vec<(T, Product<RootTimestamp, usize>, isize)>> 
+fn load<T>(prefix: &str, name: &str, index: usize, peers: usize, logical_batch: usize, physical_batch: usize, off: usize)
+    -> Vec<Vec<(T, Product<RootTimestamp, usize>, isize)>>
 where T: for<'a> From<&'a str> {
 
     let mut result = Vec::new();
@@ -237,7 +238,7 @@ where T: for<'a> From<&'a str> {
 
     let mut line = String::new();
 
-    while items_reader.read_line(&mut line).unwrap() > 0 { 
+    while items_reader.read_line(&mut line).unwrap() > 0 {
 
         if count % peers == index {
 
@@ -258,7 +259,7 @@ where T: for<'a> From<&'a str> {
 
         line.clear();
     }
-    
+
     if buffer.len() > 0 {
         result.push(buffer);
     }

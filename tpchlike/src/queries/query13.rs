@@ -5,6 +5,8 @@ use timely::dataflow::operators::probe::Handle as ProbeHandle;
 use differential_dataflow::operators::*;
 use differential_dataflow::lattice::Lattice;
 
+use regex::Regex;
+
 use ::Collections;
 
 // -- $ID$
@@ -35,20 +37,15 @@ use ::Collections;
 //     c_count desc;
 // :n -1
 
-fn substring2(source: &[u8], query1: &[u8], query2: &[u8]) -> bool {
-    if let Some(pos) = (0 .. (source.len() - (query1.len()+query2.len()))).position(|i| &source[i..][..query1.len()] == query1) {
-        ((pos + query1.len()) .. (source.len() - query2.len())).any(|i| &source[i..][..query2.len()] == query2)
-    }
-    else { false }
-}
-
-pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp> 
+pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp>
 where G::Timestamp: Lattice+TotalOrder+Ord {
+
+    let regex = Regex::new("special.*requests").expect("Regex construction failed");
 
     let orders =
     collections
         .orders()
-        .flat_map(|o| if !substring2(&o.comment.as_bytes(), b"special", b"requests") { Some(o.cust_key) } else { None } );
+        .flat_map(move |o| if !regex.is_match(&o.comment) { Some(o.cust_key) } else { None } );
 
     collections
         .customers()
