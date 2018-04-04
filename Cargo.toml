@@ -15,9 +15,9 @@ license = "MIT"
 
 [dev-dependencies]
 getopts="0.2.14"
-rand="0.3.13"
-byteorder="0.4.2"
-itertools="^0.6"
+rand="0.4"
+byteorder="1"
+itertools="^0.7"
 serde_json = "1.0"
 #pikkr = { git = "https://github.com/pikkr/pikkr" }
 graph_map = { git = "https://github.com/frankmcsherry/graph-map.git" }
