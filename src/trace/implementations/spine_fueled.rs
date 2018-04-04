@@ -1,7 +1,7 @@
 //! An append-only collection of update batches.
 //!
-//! The `Spine` is a general-purpose trace implementation based on collection and merging 
-//! immutable batches of updates. It is generic with respect to the batch type, and can be 
+//! The `Spine` is a general-purpose trace implementation based on collection and merging
+//! immutable batches of updates. It is generic with respect to the batch type, and can be
 //! instantiated for any implementor of `trace::Batch`.
 
 use ::Diff;
@@ -66,7 +66,7 @@ impl<K, V, T: Eq, R, B: Batch<K, V, T, R>> MergeState<K, V, T, R, B> {
 ///
 /// A spine maintains a small number of immutable collections of update tuples, merging the collections when
 /// two have similar sizes. In this way, it allows the addition of more tuples, which may then be merged with
-/// other immutable collections. 
+/// other immutable collections.
 pub struct Spine<K, V, T: Lattice+Ord, R: Diff, B: Batch<K, V, T, R>> {
     phantom: ::std::marker::PhantomData<(K, V, R)>,
     advance_frontier: Vec<T>,            // Times after which the trace must accumulate correctly.
@@ -78,11 +78,11 @@ pub struct Spine<K, V, T: Lattice+Ord, R: Diff, B: Batch<K, V, T, R>> {
     // reserve: usize,                      // fuel reserves.
 }
 
-impl<K, V, T, R, B> TraceReader<K, V, T, R> for Spine<K, V, T, R, B> 
-where 
+impl<K, V, T, R, B> TraceReader<K, V, T, R> for Spine<K, V, T, R, B>
+where
     K: Ord+Clone,           // Clone is required by `batch::advance_*` (in-place could remove).
     V: Ord+Clone,           // Clone is required by `batch::advance_*` (in-place could remove).
-    T: Lattice+Ord+Clone,   // Clone is required by `advance_by` and `batch::advance_*`.
+    T: Lattice+Ord+Clone+::std::fmt::Debug,   // Clone is required by `advance_by` and `batch::advance_*`.
     R: Diff,
     B: Batch<K, V, T, R>+Clone+'static,
 {
@@ -103,7 +103,7 @@ where
 
             for merge_state in self.merging.iter().rev() {
                 match *merge_state {
-                    Some(MergeState::Merging(ref batch1, ref batch2, _, _)) => { 
+                    Some(MergeState::Merging(ref batch1, ref batch2, _, _)) => {
                         cursors.push(batch1.cursor());
                         storage.push(batch1.clone());
                         cursors.push(batch2.cursor());
@@ -126,7 +126,7 @@ where
                     // return None;
                 }
 
-                // include pending batches 
+                // include pending batches
                 if include_upper {
                     cursors.push(batch.cursor());
                     storage.push(batch.clone());
@@ -168,17 +168,17 @@ where
 
 // A trace implementation for any key type that can be borrowed from or converted into `Key`.
 // TODO: Almost all this implementation seems to be generic with respect to the trace and batch types.
-impl<K, V, T, R, B> Trace<K, V, T, R> for Spine<K, V, T, R, B> 
-where 
+impl<K, V, T, R, B> Trace<K, V, T, R> for Spine<K, V, T, R, B>
+where
     K: Ord+Clone,           // Clone is required by `batch::advance_*` (in-place could remove).
     V: Ord+Clone,           // Clone is required by `batch::advance_*` (in-place could remove).
-    T: Lattice+Ord+Clone,   // Clone is required by `advance_by` and `batch::advance_*`.
+    T: Lattice+Ord+Clone+::std::fmt::Debug,   // Clone is required by `advance_by` and `batch::advance_*`.
     R: Diff,
     B: Batch<K, V, T, R>+Clone+'static,
 {
 
     fn new() -> Self {
-        Spine { 
+        Spine {
             phantom: ::std::marker::PhantomData,
             advance_frontier: vec![<T as Lattice>::minimum()],
             through_frontier: vec![<T as Lattice>::minimum()],
@@ -207,11 +207,11 @@ where
     }
 }
 
-impl<K, V, T, R, B> Spine<K, V, T, R, B> 
-where 
+impl<K, V, T, R, B> Spine<K, V, T, R, B>
+where
     K: Ord+Clone,           // Clone is required by `advance_mut`.
     V: Ord+Clone,           // Clone is required by `advance_mut`.
-    T: Lattice+Ord+Clone,   // Clone is required by `advance_mut`.
+    T: Lattice+Ord+Clone+::std::fmt::Debug,   // Clone is required by `advance_mut`.
     R: Diff,
     B: Batch<K, V, T, R>,
 {
@@ -223,7 +223,7 @@ where
         //
         // Batches arrive with a number of records, and are assigned a power-of-two "size", which is this
         // number rounded up. Batches are placed in a slot based on their size, and each slot can either be
-        // 
+        //
         //  i. empty,
         //  ii. occupied by a batch,
         //  iii. occupied by a merge in progress.
@@ -242,13 +242,17 @@ where
         // in progress) down through empty slots, as long as the number of updates is no more than the associated
         // size.
 
-        while self.pending.len() > 0 && 
-              self.through_frontier.iter().all(|t1| self.pending[0].upper().iter().any(|t2| t2.less_equal(t1))) 
+        // We maintain a few invariants as we execute, with the intent of maintaining a minimal
+        // representation. First, batches are ordered from newest to oldest.
+        //
+        //     1. merging[i].lower == merging[i+1].upper (unless either is None).
+        //     2. large batches never have small indices.
+
+        while self.pending.len() > 0 &&
+              self.through_frontier.iter().all(|t1| self.pending[0].upper().iter().any(|t2| t2.less_equal(t1)))
         {
             // this could be a VecDeque, if we ever notice this.
             let batch = self.pending.remove(0);
-
-            // println!("batch.len(): {:?}", batch.len());
 
             // Step 0: Determine batch size and target slot.
             let batch_size = batch.len().next_power_of_two();
@@ -271,10 +275,23 @@ where
                 }
             }
 
-            // Step 2: Perform `size` work on each in-progress merge, from large to small.
-            let mut fuel;// = 0; //8 * batch_size * self.merging.len();
+            // Step 2: Insert new batch at target position
+            if let Some(batch2) = self.merging[batch_index].take() {
+                let batch2 = batch2.complete();
+                let frontier = if batch_index == self.merging.len()-1 { Some(self.advance_frontier.clone()) } else { None };
+                self.merging[batch_index] = Some(MergeState::begin_merge(batch2, batch, frontier));
+            }
+            else {
+                self.merging[batch_index] = Some(MergeState::Complete(batch));
+            }
+
+            // Step 3: Perform `size` work on each in-progress merge, from large to small.
+            // let mut fuel = 80 * batch_size * self.merging.len();
             for position in (batch_index .. self.merging.len()).rev() {
-                fuel = 16 * batch_size;
+
+                let mut fuel = 8 * batch_size;
+
+                // We take the batch, because working requires ownership.
                 if let Some(batch) = self.merging[position].take() {
                     let batch = batch.work(&mut fuel);
                     if batch.is_complete() {
@@ -287,9 +304,10 @@ where
                                     println!("batch[{}] not complete (size: {:?})", position+1, batch2.len());
                                     println!("sizes: {:?}", self.merging.iter().map(|x| x.as_ref().map(|y|y.len()).unwrap_or(0)).collect::<Vec<_>>());
                                 }
-                                assert!(batch2.is_complete());
+                                // assert!(batch2.is_complete());
                                 let batch2 = batch2.complete();
-                                let frontier = if position + 1 == self.merging.len() { Some(self.advance_frontier.clone()) } else { None };
+                                // if this is the last position, engage compaction.
+                                let frontier = if position + 2 == self.merging.len() { Some(self.advance_frontier.clone()) } else { None };
                                 self.merging[position+1] = Some(MergeState::begin_merge(batch2, batch, frontier));
                             }
                             else {
@@ -306,24 +324,16 @@ where
                 }
             }
 
-            // Step 3: Insert new batch at target position
-            if let Some(batch2) = self.merging[batch_index].take() {
-                assert!(batch2.is_complete());
-                let batch2 = batch2.complete();
-                self.merging[batch_index] = Some(MergeState::begin_merge(batch2, batch, None));
-            }
-            else {
-                self.merging[batch_index] = Some(MergeState::Complete(batch));
-            }
 
             // Step 4: Consider migrating complete batches to lower bins, if appropriate.
-            for index in (self.merging.len() .. 1).rev() {
+            for index in (1 .. self.merging.len()).rev() {
                 if self.merging[index].as_ref().map(|x| x.is_complete() && x.len() < (1 << (index-1))).unwrap_or(false) {
                     if self.merging[index-1].is_none() {
                         self.merging[index-1] = self.merging[index].take();
                     }
                 }
             }
+            while self.merging.last().map(|x| x.is_none()) == Some(true) { self.merging.pop(); }
         }
     }
 }
