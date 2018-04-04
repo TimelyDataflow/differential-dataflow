@@ -391,7 +391,7 @@ where
                 // We now march through the keys we must work on, drawing from `batch_cursors` and `exposed`.
                 //
                 // We only keep valid cursors (those with more data) in `batch_cursors`, and so its length
-                // indicates whether more data remain. We move throuh `exposed` using `exposed_position`.
+                // indicates whether more data remain. We move through `exposed` using `exposed_position`.
                 // There could perhaps be a less provocative variable name.
                 let mut exposed_position = 0;
                 while batch_cursor.key_valid(batch_storage) || exposed_position < exposed.len() {

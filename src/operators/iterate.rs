@@ -25,7 +25,7 @@
 //! complicated. You must define a new variable from an existing stream (its initial value), and 
 //! then set it to be a function of this variable (and perhaps other collections and variables).
 //!
-//! A `Variable` derefences to a `Collection`, the one corresponding to its value in each iteration,
+//! A `Variable` dereferences to a `Collection`, the one corresponding to its value in each iteration,
 //! and it can be used in most situations where a collection can be used. The act of setting a 
 //! `Variable` consumes it and returns the corresponding `Collection`, preventing you from setting
 //! it multiple times.
