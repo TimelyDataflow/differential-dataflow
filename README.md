@@ -65,7 +65,7 @@ let (mut input, probe) = worker.dataflow(|scope| {
 });
 ```
 
-The `input` and `probe` we return are how we get data into the dataflow, and how we notice when some amount of computation is complete. These are timely dataflow idioms, and we won't get in to them in more detali here.
+The `input` and `probe` we return are how we get data into the dataflow, and how we notice when some amount of computation is complete. These are timely dataflow idioms, and we won't get in to them in more detail here.
 
 If we feed this computation with some random graph data, say fifty random edges among ten nodes, we get output like
 
@@ -214,7 +214,7 @@ This averages to about five or six microseconds per round of update, and now tha
 
 Differential dataflow is built on top of [timely dataflow](https://github.com/frankmcsherry/timely-dataflow), a distributed data-parallel runtime. Timely dataflow scales out to multiple independent workers, increasing the capacity of the system (at the cost of some coordination that cuts into latency).
 
-If we bring two workers to bear, our 10 million node, 50 million edge computation drops down from fiveteen seconds to just over eight seconds.
+If we bring two workers to bear, our 10 million node, 50 million edge computation drops down from fifteen seconds to just over eight seconds.
 
          Running `target/release/examples/degrees 10000000 50000000 1 -w2`
     Loading finished after Duration { secs: 8, nanos: 207375094 }
