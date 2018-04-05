@@ -259,7 +259,7 @@ where
 
         // let mut thinker1 = history_replay_prior::HistoryReplayer::<V, V2, G::Timestamp, R, R2>::new();
         // let mut thinker = history_replay::HistoryReplayer::<V, V2, G::Timestamp, R, R2>::new();
-        let mut temporary = Vec::<G::Timestamp>::new();
+        let mut new_interesting_times = Vec::<G::Timestamp>::new();
 
         // Our implementation maintains a list of outstanding `(key, time)` synthetic interesting times,
         // as well as capabilities for these times (or their lower envelope, at least).
@@ -355,12 +355,12 @@ where
                 // `interesting` contains "warnings" about keys and times that may need to be re-considered.
                 // We first extract those times from this list that lie in the interval we will process.
                 sort_dedup(&mut interesting);
-                let mut new_interesting = Vec::new();
-                let mut exposed = Vec::new();
-                segment(&mut interesting, &mut exposed, &mut new_interesting, |&(_, ref time)| {
-                    !upper_limit.less_equal(time)
-                });
-                interesting = new_interesting;
+                // `exposed` contains interesting (key, time)s now below `upper_limit`
+                let exposed = {
+                    let (exposed, new_interesting) = interesting.drain(..).partition(|&(_, ref time)| !upper_limit.less_equal(time));
+                    interesting = new_interesting;
+                    exposed
+                };
 
                 // Prepare an output buffer and builder for each capability.
                 //
@@ -391,7 +391,7 @@ where
                 // We now march through the keys we must work on, drawing from `batch_cursors` and `exposed`.
                 //
                 // We only keep valid cursors (those with more data) in `batch_cursors`, and so its length
-                // indicates whether more data remain. We move through `exposed` using `exposed_position`.
+                // indicates whether more data remain. We move through `exposed` using (index) `exposed_position`.
                 // There could perhaps be a less provocative variable name.
                 let mut exposed_position = 0;
                 while batch_cursor.key_valid(batch_storage) || exposed_position < exposed.len() {
@@ -412,7 +412,7 @@ where
                     // values (for example, in the case of min/max/topk).
                     interesting_times.clear();
 
-                    // Populate `interesting_times` with synthetic interesting times for this key.
+                    // Populate `interesting_times` with synthetic interesting times (below `upper_limit`) for this key.
                     while exposed.get(exposed_position).map(|x| &x.0) == Some(&key) {
                         interesting_times.push(exposed[exposed_position].1.clone());
                         exposed_position += 1;
@@ -431,7 +431,7 @@ where
                         &logic,
                         &upper_limit,
                         &mut buffers[..],
-                        &mut temporary,
+                        &mut new_interesting_times,
                     );
 
                     if batch_cursor.get_key(batch_storage) == Some(&key) {
@@ -439,7 +439,7 @@ where
                     }
 
                     // Record future warnings about interesting times (and assert they should be "future").
-                    for time in temporary.drain(..) {
+                    for time in new_interesting_times.drain(..) {
                         debug_assert!(upper_limit.less_equal(&time));
                         interesting.push((key.clone(), time));
                     }
@@ -520,18 +520,8 @@ fn sort_dedup<T: Ord>(list: &mut Vec<T>) {
     list.dedup();
 }
 
-#[inline(never)]
-fn segment<T, F: Fn(&T)->bool>(source: &mut Vec<T>, dest1: &mut Vec<T>, dest2: &mut Vec<T>, pred: F) {
-    for element in source.drain(..) {
-        if pred(&element) {
-            dest1.push(element);
-        }
-        else {
-            dest2.push(element);
-        }
-    }
-}
-
+/// Consolidats a vector of (element, diff) by sorting by element and collapsing all tuples with the same element.
+/// Elements with diff 0 will be removed.
 #[inline(never)]
 fn consolidate<T: Ord, R: Diff>(list: &mut Vec<(T, R)>) {
     list.sort_by(|x,y| x.0.cmp(&y.0));
@@ -544,7 +534,7 @@ fn consolidate<T: Ord, R: Diff>(list: &mut Vec<(T, R)>) {
     list.retain(|x| !x.1.is_zero());
 }
 
-/// Scans `vec[off..]` and consolidates differences of adjacent equivalent elements.
+/// Scans `vec[off..]` and consolidates differences of adjacent equivalent elements (after sorting by element).
 // #[inline(never)]
 pub fn consolidate_from<T: Ord+Clone, R: Diff>(vec: &mut Vec<(T, R)>, off: usize) {
 
