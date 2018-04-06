@@ -28,7 +28,7 @@ use timely::dataflow::operators::Capability;
 use operators::arrange::{Arranged, ArrangeByKey, ArrangeBySelf, BatchWrapper, TraceAgent};
 use lattice::Lattice;
 use trace::{Batch, BatchReader, Cursor, Trace, Builder};
-use trace::cursor::cursor_list::CursorList;
+use trace::cursor::CursorList;
 // use trace::implementations::hash::HashValSpine as DefaultValTrace;
 // use trace::implementations::hash::HashKeySpine as DefaultKeyTrace;
 use trace::implementations::ord::OrdValSpine as DefaultValTrace;
