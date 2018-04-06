@@ -1,18 +1,20 @@
 //! Traits and types for navigating order sequences of update tuples.
 //!
 //! The `Cursor` trait contains several methods for efficiently navigating ordered collections
-//! of tuples of the form `(key, val, time, diff)`. The cursor is different from an iterator 
-//! both because it allows navigation on multiple levels (key and val), but also because it 
+//! of tuples of the form `(key, val, time, diff)`. The cursor is different from an iterator
+//! both because it allows navigation on multiple levels (key and val), but also because it
 //! supports efficient seeking (via the `seek_key` and `seek_val` methods).
 
-// pub mod viewers;
 pub mod cursor_list;
 pub mod cursor_pair;
-// pub mod cache;
+pub mod cursor_list_neu;
+
+pub use self::cursor_list_neu::CursorList;
+// pub use self::cursor_list::CursorList;
 
 /// A cursor for navigating ordered `(key, val, time, diff)` updates.
 pub trait Cursor<K, V, T, R> {
-	
+
 	/// Type the cursor addresses data in.
 	type Storage;
 
@@ -47,13 +49,13 @@ pub trait Cursor<K, V, T, R> {
 	fn step_key(&mut self, storage: &Self::Storage);
 	/// Advances the cursor to the specified key. Indicates if the key is valid.
 	fn seek_key(&mut self, storage: &Self::Storage, key: &K);
-	
+
 	/// Advances the cursor to the next value. Indicates if the value is valid.
 	fn step_val(&mut self, storage: &Self::Storage);
 	/// Advances the cursor to the specified value. Indicates if the value is valid.
 	fn seek_val(&mut self, storage: &Self::Storage, val: &V);
 
-	/// Rewinds the cursor to the first key.	
+	/// Rewinds the cursor to the first key.
 	fn rewind_keys(&mut self, storage: &Self::Storage);
 	/// Rewinds the cursor to the first value for current key.
 	fn rewind_vals(&mut self, storage: &Self::Storage);

@@ -7,8 +7,8 @@
 use ::Diff;
 use lattice::Lattice;
 use trace::{Batch, BatchReader, Trace, TraceReader};
-use trace::cursor::cursor_list::CursorList;
-use trace::cursor::Cursor;
+// use trace::cursor::cursor_list::CursorList;
+use trace::cursor::{Cursor, CursorList};
 use trace::Merger;
 
 enum MergeState<K, V, T, R, B: Batch<K, V, T, R>> {

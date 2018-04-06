@@ -7,8 +7,8 @@
 use ::Diff;
 use lattice::Lattice;
 use trace::{Batch, BatchReader, Trace, TraceReader};
-use trace::cursor::cursor_list::CursorList;
-use trace::cursor::Cursor;
+// use trace::cursor::cursor_list::CursorList;
+use trace::cursor::{Cursor, CursorList};
 use trace::Merger;
 
 /// An append-only collection of update tuples.
