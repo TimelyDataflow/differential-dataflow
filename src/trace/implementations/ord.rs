@@ -23,8 +23,8 @@ use trace::description::Description;
 
 use trace::layers::MergeBuilder;
 
-use super::spine::Spine;
-// use super::spine_fueled::Spine;
+// use super::spine::Spine;
+use super::spine_fueled::Spine;
 use super::merge_batcher::MergeBatcher;
 
 use abomonation::abomonated::Abomonated;

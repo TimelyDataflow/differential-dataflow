@@ -2,13 +2,14 @@ extern crate differential_dataflow;
 
 use std::rc::Rc;
 
-use differential_dataflow::trace::implementations::ord::OrdValSpine;
-use differential_dataflow::trace::{Trace, TraceReader, Batch, Batcher};
-use differential_dataflow::trace::cursor::CursorDebug;
 use differential_dataflow::hashable::UnsignedWrapper;
 
 use differential_dataflow::trace::implementations::ord::OrdValBatch;
-use differential_dataflow::trace::implementations::spine::Spine;
+use differential_dataflow::trace::{Trace, TraceReader, Batch, Batcher};
+use differential_dataflow::trace::cursor::CursorDebug;
+use differential_dataflow::trace::implementations::spine_fueled::Spine;
+
+pub type OrdValSpine<K, V, T, R> = Spine<K, V, T, R, Rc<OrdValBatch<K, V, T, R>>>;
 
 type IntegerTrace = OrdValSpine<UnsignedWrapper<u64>, u64, usize, i64>;
 
@@ -43,7 +44,7 @@ fn test_trace() {
     assert_eq!(vec_1, vec![((1.into(), 2), vec![(0, 1)])]);
 
     let (mut cursor2, storage2) = trace.cursor_through(&[2]).unwrap();
-    let vec_2 = cursor2.to_vec(&storage2);    
+    let vec_2 = cursor2.to_vec(&storage2);
     println!("--> {:?}", vec_2);
     assert_eq!(vec_2, vec![
                ((1.into(), 2), vec![(0, 1)]),

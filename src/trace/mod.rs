@@ -128,6 +128,12 @@ where <Self as TraceReader<Key, Val, Time, R>>::Batch: Batch<Key, Val, Time, R> 
 	/// This restriction could be relaxed, especially if we discover ways in which batch interval order could
 	/// commute. For now, the trace should complain, to the extent that it cares about contiguous intervals.
 	fn insert(&mut self, batch: Self::Batch);
+
+	/// Introduces an empty batch concluding the trace.
+	///
+	/// This method should be logically equivalent to introducing an empty batch whose lower frontier equals
+	/// the upper frontier of the most recently introduced batch, and whose upper frontier is empty.
+	fn close(&mut self);
 }
 
 /// A batch of updates whose contents may be read.
