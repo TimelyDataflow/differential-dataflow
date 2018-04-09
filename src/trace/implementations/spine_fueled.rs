@@ -4,6 +4,8 @@
 //! immutable batches of updates. It is generic with respect to the batch type, and can be
 //! instantiated for any implementor of `trace::Batch`.
 
+use std::fmt::Debug;
+
 use ::Diff;
 use lattice::Lattice;
 use trace::{Batch, BatchReader, Trace, TraceReader};
@@ -73,16 +75,15 @@ pub struct Spine<K, V, T: Lattice+Ord, R: Diff, B: Batch<K, V, T, R>> {
     through_frontier: Vec<T>,            // Times after which the trace must be able to subset its inputs.
     merging: Vec<Option<MergeState<K,V,T,R,B>>>, // Several possibly shared collections of updates.
     pending: Vec<B>,                     // Batches at times in advance of `frontier`.
-    // max_len: usize,
-    // max_dur: ::std::time::Duration,
-    // reserve: usize,                      // fuel reserves.
+    upper: Vec<T>,
+    effort: usize,
 }
 
 impl<K, V, T, R, B> TraceReader<K, V, T, R> for Spine<K, V, T, R, B>
 where
     K: Ord+Clone,           // Clone is required by `batch::advance_*` (in-place could remove).
     V: Ord+Clone,           // Clone is required by `batch::advance_*` (in-place could remove).
-    T: Lattice+Ord+Clone+::std::fmt::Debug,   // Clone is required by `advance_by` and `batch::advance_*`.
+    T: Lattice+Ord+Clone+Debug,   // Clone is required by `advance_by` and `batch::advance_*`.
     R: Diff,
     B: Batch<K, V, T, R>+Clone+'static,
 {
@@ -170,24 +171,15 @@ where
 // TODO: Almost all this implementation seems to be generic with respect to the trace and batch types.
 impl<K, V, T, R, B> Trace<K, V, T, R> for Spine<K, V, T, R, B>
 where
-    K: Ord+Clone,           // Clone is required by `batch::advance_*` (in-place could remove).
-    V: Ord+Clone,           // Clone is required by `batch::advance_*` (in-place could remove).
-    T: Lattice+Ord+Clone+::std::fmt::Debug,   // Clone is required by `advance_by` and `batch::advance_*`.
+    K: Ord+Clone,
+    V: Ord+Clone,
+    T: Lattice+Ord+Clone+Debug,
     R: Diff,
     B: Batch<K, V, T, R>+Clone+'static,
 {
 
     fn new() -> Self {
-        Spine {
-            phantom: ::std::marker::PhantomData,
-            advance_frontier: vec![<T as Lattice>::minimum()],
-            through_frontier: vec![<T as Lattice>::minimum()],
-            merging: Vec::new(),
-            pending: Vec::new(),
-            // max_len: 0,
-            // max_dur: Default::default(),
-            // reserve: 0,
-        }
+        Self::with_effort(4)
     }
 
     // Ideally, this method acts as insertion of `batch`, even if we are not yet able to begin
@@ -197,6 +189,8 @@ where
 
         // we can ignore degenerate batches (TODO: learn where they come from; suppress them?)
         if batch.lower() != batch.upper() {
+            assert_eq!(batch.lower(), &self.upper[..]);
+            self.upper = batch.upper().to_vec();
             self.pending.push(batch);
             self.consider_merges();
         }
@@ -205,16 +199,46 @@ where
             assert!(batch.len() == 0);
         }
     }
+
+    fn close(&mut self) {
+        if self.upper != Vec::new() {
+            use trace::Builder;
+            let builder = B::Builder::new();
+            let batch = builder.done(&self.upper[..], &[], &self.upper[..]);
+            self.insert(batch);
+        }
+    }
 }
 
 impl<K, V, T, R, B> Spine<K, V, T, R, B>
 where
-    K: Ord+Clone,           // Clone is required by `advance_mut`.
-    V: Ord+Clone,           // Clone is required by `advance_mut`.
-    T: Lattice+Ord+Clone+::std::fmt::Debug,   // Clone is required by `advance_mut`.
+    K: Ord+Clone,
+    V: Ord+Clone,
+    T: Lattice+Ord+Clone+Debug,
     R: Diff,
     B: Batch<K, V, T, R>,
 {
+    /// Allocates a fueled `Spine` with a specified effort multiplier.
+    ///
+    /// This trace will merge batches progressively, with each inserted batch applying a multiple
+    /// of the batch's length in effort to each merge. The `effort` parameter is that multiplier.
+    /// This value should be at least one for the merging to happen; a value of zero is not helpful.
+    pub fn with_effort(mut effort: usize) -> Self {
+
+        // Zero effort is .. not smart.
+        if effort == 0 { effort = 1; }
+
+        Spine {
+            phantom: ::std::marker::PhantomData,
+            advance_frontier: vec![<T as Lattice>::minimum()],
+            through_frontier: vec![<T as Lattice>::minimum()],
+            merging: Vec::new(),
+            pending: Vec::new(),
+            upper: vec![<T as Lattice>::minimum()],
+            effort,
+        }
+    }
+
     // Migrate data from `self.pending` into `self.merging`.
     #[inline(never)]
     fn consider_merges(&mut self) {
@@ -222,25 +246,37 @@ where
         // We have a new design here, in an attempt to rationalize progressive merging of batches.
         //
         // Batches arrive with a number of records, and are assigned a power-of-two "size", which is this
-        // number rounded up. Batches are placed in a slot based on their size, and each slot can either be
+        // number rounded up to the next power of two. Batches are placed in a slot based on their size,
+        // and each slot can be one of:
         //
         //  i. empty,
         //  ii. occupied by a batch,
-        //  iii. occupied by a merge in progress.
+        //  iii. occupied by a merge in progress (two batches).
         //
-        // As we introduce a new batch, we need to do a few things.
+        // Our goal is to track the behavior of hypothetical ideal merge strategy, in which whenever two
+        // elements want to occupy the same slot, we merge them and re-evaluate which slot they should be in.
+        // Perhaps they are fine where they were, but most likely they want to advance to the next slot.
+        // If the next slot is free they move there and stop, and if it is occupied we continue to merge
+        // until we find a free slot (or introduce a new empty slot at the end of the list).
         //
-        //  0. We determine a size for the batch, and an implied target slot.
-        //  1. For each slot smaller than the size of the batch, we should merge the batches so that the first
-        //     occupied slot is no less than the target slot of the new batch.
-        //  2. We perform size units of work for each merge in progress, starting from the large batches and
-        //     working backwards (so that we have had the chance to complete work before starting a new merge).
-        //  3. We install the new batch in the target slot, initiating a merge if necessary.
+        // We do not actually want to execute the merges in this *sequence*, because it may involve a great
+        // deal of computation all at once, but we do want to execute this *set* of merges.
         //
-        // At various points we may find that the number of updates in a batch is out of line with the size
-        // associated with the slot the batch currently occupies. In this case, we can slide a batch (or a merge
-        // in progress) down through empty slots, as long as the number of updates is no more than the associated
-        // size.
+        // Our strategy is that we initiate merges and perform work progressively, and when a merge completes
+        // we immediately consider initiating a merge with the next slot (if appropriate). The intent is that
+        // any merge we initiate will cascade along exactly as in the eager merging case, as no new batch can
+        // overtake any merges in progress.
+        //
+        // Our main technical issue is that we need to ensure that merges complete before other batches want
+        // to initiate a merge with their resulting batch.
+        //
+        // To this end, as batches are introduced, we perform an amount of work on all existing merges that
+        // is proportional to the size of the introduced batch. The intent is that once a merge is initiated,
+        // in the eager case, we must introduce at least as many records as the slot the merge lands in before
+        // we will spill out of the slot the merge is departing. There is the technicality that the amount of
+        // work we perform on a merge is proportional to the new batch size *times* the number of slots above
+        // it until the next merge is reached. These slots could be merges in progress, if the one we work on
+        // would cascade in the reference merge sequence.
 
         // We maintain a few invariants as we execute, with the intent of maintaining a minimal
         // representation. First, batches are ordered from newest to oldest.
@@ -259,7 +295,7 @@ where
             let batch_index = batch_size.trailing_zeros() as usize;
             while self.merging.len() <= batch_index { self.merging.push(None); }
 
-            if self.merging.len() > 32 { println!("len: {:?}", self.merging.len()); }
+            if self.merging.len() > 32 { eprintln!("large progressive merge; len: {:?}", self.merging.len()); }
 
             // Step 1: Forcibly merge batches in lower slots.
             for position in 0 .. batch_index {
@@ -286,44 +322,56 @@ where
             }
 
             // Step 3: Perform `size` work on each in-progress merge, from large to small.
-            // let mut fuel = 80 * batch_size * self.merging.len();
+            //         For non-merges, accumulate fuel, as we may need to apply it to merges
+            //         that result at us.
+            let mut fuel = 0;
             for position in (batch_index .. self.merging.len()).rev() {
 
-                let mut fuel = 8 * batch_size;
+                // We add fuel for any merge that may lead to this location.
+                fuel += (2 * batch_size).saturating_mul(self.effort);
 
-                // We take the batch, because working requires ownership.
-                if let Some(batch) = self.merging[position].take() {
-                    let batch = batch.work(&mut fuel);
-                    if batch.is_complete() {
-                        let batch = batch.complete();
-                        let intended_position = batch.len().next_power_of_two().trailing_zeros() as usize;
-                        if intended_position > position {
-                            while self.merging.len() <= intended_position { self.merging.push(None); }
-                            if let Some(batch2) = self.merging[position+1].take() {
+                // We now move to the right, merging until we stop merging or run out of fuel.
+                let mut new_position = position;
+                while self.merging[new_position].as_ref().map(|x| !x.is_complete()).unwrap_or(false) && fuel > 0 {
+                    if let Some(mut batch) = self.merging[new_position].take() {
+
+                        // Apply work with accumulated fuel.
+                        batch = batch.work(&mut fuel);
+
+                        // If we have a complete batch, and it wants to be in the next slot ...
+                        if batch.is_complete() && batch.len() >= (1 << new_position) {//.next_power_of_two().trailing_zeros() as usize > new_position {
+
+                            new_position += 1;
+                            if self.merging.len() <= new_position { self.merging.push(None); }
+
+                            // If the next slot is actually occupied, must start a merge.
+                            if let Some(mut batch2) = self.merging[new_position].take() {
                                 if !batch2.is_complete() {
-                                    println!("batch[{}] not complete (size: {:?})", position+1, batch2.len());
-                                    println!("sizes: {:?}", self.merging.iter().map(|x| x.as_ref().map(|y|y.len()).unwrap_or(0)).collect::<Vec<_>>());
+                                    eprintln!("batch[{}] not complete (size: {:?})", new_position, batch2.len());
+                                    eprintln!("sizes: {:?}", self.merging.iter().map(|x| x.as_ref().map(|y|y.len()).unwrap_or(0)).collect::<Vec<_>>());
+                                    let mut temp_fuel = usize::max_value();
+                                    batch2 = batch2.work(&mut temp_fuel);
+                                    eprintln!("fuel shortage: {:?}", usize::max_value() - temp_fuel);
                                 }
-                                // assert!(batch2.is_complete());
+                                let batch1 = batch.complete();
                                 let batch2 = batch2.complete();
                                 // if this is the last position, engage compaction.
-                                let frontier = if position + 2 == self.merging.len() { Some(self.advance_frontier.clone()) } else { None };
-                                self.merging[position+1] = Some(MergeState::begin_merge(batch2, batch, frontier));
+                                let frontier = if new_position+1 == self.merging.len() { Some(self.advance_frontier.clone()) } else { None };
+                                self.merging[new_position] = Some(MergeState::begin_merge(batch2, batch1, frontier));
                             }
                             else {
-                                self.merging[position+1] = Some(MergeState::Complete(batch));
-                            };
+                                self.merging[new_position] = Some(batch);
+                            }
                         }
                         else {
-                            self.merging[position] = Some(MergeState::Complete(batch));
+                            self.merging[new_position] = Some(batch);
                         }
                     }
                     else {
-                        self.merging[position] = Some(batch);
+                        // We can't be here. The while condition ensures that an entry exists.
                     }
                 }
             }
-
 
             // Step 4: Consider migrating complete batches to lower bins, if appropriate.
             for index in (1 .. self.merging.len()).rev() {

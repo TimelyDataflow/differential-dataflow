@@ -22,6 +22,7 @@ use std::cell::RefCell;
 use std::default::Default;
 use std::ops::DerefMut;
 use std::collections::VecDeque;
+use std::fmt::Debug;
 
 use timely::dataflow::operators::{Enter, Map};
 use timely::order::PartialOrder;
@@ -88,9 +89,18 @@ where T: Lattice+Ord+Clone+'static, Tr: Trace<K,V,T,R>, Tr::Batch: Batch<K,V,T,R
         borrow.retain(|w| w.upgrade().is_some());
 
         // push data to the trace, if it still exists.
-        if let Some((_time, batch)) = data {
-            if let Some(trace) = self.trace.upgrade() {
+        if let Some(trace) = self.trace.upgrade() {
+            if let Some((_time, batch)) = data {
                 trace.borrow_mut().trace.insert(batch);
+            }
+            else if frontier.is_empty() {
+                trace.borrow_mut().trace.close();
+            }
+            else {
+                // TODO: Frontier progress without data and without closing the
+                //       trace should be recorded somewhere, probably in the trace
+                //       itself. This could be using empty batches, which seems a
+                //       bit of a waste, but is perhaps still important to do?
             }
         }
     }
@@ -99,6 +109,11 @@ where T: Lattice+Ord+Clone+'static, Tr: Trace<K,V,T,R>, Tr::Batch: Batch<K,V,T,R
 impl<K, V, T, R, Tr> Drop for TraceWriter<K, V, T, R, Tr>
 where T: Lattice+Ord+Clone+'static, Tr: Trace<K,V,T,R>, Tr::Batch: Batch<K,V,T,R> {
     fn drop(&mut self) {
+
+        // TODO: This method exists in case a TraceWriter is dropped without sealing
+        //       up through the empty frontier. Does this happen? Should it be an
+        //       error to do that sort of thing?
+
         let mut borrow = self.queues.borrow_mut();
         for queue in borrow.iter_mut() {
             queue.upgrade().map(|queue| {
@@ -148,7 +163,7 @@ where T: Lattice+Ord+Clone+'static, Tr: TraceReader<K,V,T,R> {
 }
 
 impl<K, V, T, R, Tr> TraceAgent<K, V, T, R, Tr>
-where T: Lattice+Ord+Clone+'static, Tr: TraceReader<K,V,T,R> {
+where T: Lattice+Ord+Clone+Debug+'static, Tr: TraceReader<K,V,T,R> {
 
     /// Creates a new agent from a trace reader.
     pub fn new(trace: Tr) -> (Self, TraceWriter<K,V,T,R,Tr>) where Tr: Trace<K,V,T,R>, Tr::Batch: Batch<K,V,T,R> {
@@ -183,7 +198,13 @@ where T: Lattice+Ord+Clone+'static, Tr: TraceReader<K,V,T,R> {
         let mut new_queue = VecDeque::new();
 
         // add the existing batches from the trace
-        self.trace.borrow_mut().trace.map_batches(|batch| new_queue.push_back((vec![T::default()], Some((T::default(), batch.clone())))));
+        let mut upper = vec![T::default()];
+        self.trace.borrow_mut().trace.map_batches(|batch| {
+            upper = batch.upper().to_vec();
+            new_queue.push_back((vec![T::default()], Some((T::default(), batch.clone()))));
+        });
+        // println!("new_listener, upper: {:?}", upper);
+        new_queue.push_back((upper, None));
 
         let reference = Rc::new(RefCell::new(new_queue));
 
@@ -280,6 +301,7 @@ where T: Lattice+Ord+Clone+'static, Tr: TraceReader<K,V,T,R> {
 
                 let mut borrow = queue.borrow_mut();
                 while let Some((frontier, sent)) = borrow.pop_front() {
+
                     // if data are associated, send em!
                     if let Some((time, batch)) = sent {
                         if let Some(cap) = capabilities.iter().find(|c| c.time().less_equal(&time)) {
@@ -301,7 +323,6 @@ where T: Lattice+Ord+Clone+'static, Tr: TraceReader<K,V,T,R> {
                             panic!("failed to find capability for {:?} in {:?}", time, capabilities);
                         }
                     }
-                    // println!("downgrading {:?} -> {:?}", capabilities, new_capabilities);
                     capabilities = new_capabilities;
                 }
             }

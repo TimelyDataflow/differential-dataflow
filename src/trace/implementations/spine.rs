@@ -4,6 +4,8 @@
 //! immutable batches of updates. It is generic with respect to the batch type, and can be
 //! instantiated for any implementor of `trace::Batch`.
 
+use std::fmt::Debug;
+
 use ::Diff;
 use lattice::Lattice;
 use trace::{Batch, BatchReader, Trace, TraceReader};
@@ -23,6 +25,7 @@ pub struct Spine<K, V, T: Lattice+Ord, R: Diff, B: Batch<K, V, T, R>> {
 	through_frontier: Vec<T>,	// Times after which the trace must be able to subset its inputs.
 	merging: Vec<B>,			// Several possibly shared collections of updates.
 	pending: Vec<B>,			// Batches at times in advance of `frontier`.
+	upper: Vec<T>,				// Upper frontier of most recently introduced batch.
 }
 
 impl<K, V, T, R, B> TraceReader<K, V, T, R> for Spine<K, V, T, R, B>
@@ -104,7 +107,7 @@ impl<K, V, T, R, B> Trace<K, V, T, R> for Spine<K, V, T, R, B>
 where
 	K: Ord+Clone,
 	V: Ord+Clone,
-	T: Lattice+Ord+Clone,
+	T: Lattice+Ord+Clone+Debug,
 	R: Diff,
 	B: Batch<K, V, T, R>+Clone+'static,
 {
@@ -116,6 +119,7 @@ where
 			through_frontier: vec![<T as Lattice>::minimum()],
 			merging: Vec::new(),
 			pending: Vec::new(),
+			upper: vec![<T as Lattice>::minimum()],
 		}
 	}
 	// Note: this does not perform progressive merging; that code is around somewhere though.
@@ -123,12 +127,23 @@ where
 
 		// we can ignore degenerate batches (TODO: learn where they come from; suppress them?)
 		if batch.lower() != batch.upper() {
+			assert_eq!(batch.lower(), &self.upper[..]);
+			self.upper = batch.upper().to_vec();
 			self.pending.push(batch);
 			self.consider_merges();
 		}
 		else {
 			// degenerate batches had best be empty.
 			assert!(batch.len() == 0);
+		}
+	}
+
+	fn close(&mut self) {
+        if self.upper != Vec::new() {
+			use trace::Builder;
+			let builder = B::Builder::new();
+			let batch = builder.done(&self.upper[..], &[], &self.upper[..]);
+			self.insert(batch);
 		}
 	}
 }
