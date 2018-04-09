@@ -33,7 +33,7 @@ fn main() {
     let keys: usize = std::env::args().nth(1).unwrap().parse().unwrap();
     let recs: usize = std::env::args().nth(2).unwrap().parse().unwrap();
     let rate: usize = std::env::args().nth(3).unwrap().parse().unwrap();
-    let work: usize = std::env::args().nth(4).unwrap().parse().unwrap();
+    let work: usize = std::env::args().nth(4).unwrap().parse().unwrap_or(usize::max_value());
     let comp: Comp = match std::env::args().nth(5).unwrap().as_str() {
         "exchange" => Comp::Exchange,
         "arrange" => Comp::Arrange,
@@ -140,7 +140,9 @@ fn main() {
 
                     let mut inserted_ns = 1;
 
-                    while ((timer.elapsed().as_secs() as usize) * rate) < (10 * keys) {
+                    let ack_target = 10 * keys;
+                    while ack_counter < ack_target {
+                    // while ((timer.elapsed().as_secs() as usize) * rate) < (10 * keys) {
 
                         // Open-loop latency-throughput test, parameterized by offered rate `ns_per_request`.
                         let elapsed = timer.elapsed();
@@ -150,7 +152,7 @@ fn main() {
                         let acknowledged_ns: u64 = probe.with_frontier(|frontier| frontier[0].inner);
 
                         // any un-recorded measurements that are complete should be recorded.
-                        while ((ack_counter * ns_per_request) as u64) < acknowledged_ns {
+                        while ((ack_counter * ns_per_request) as u64) < acknowledged_ns && ack_counter < ack_target {
                             let requested_at = (ack_counter * ns_per_request) as u64;
                             let count_index = (elapsed_ns - requested_at).next_power_of_two().trailing_zeros() as usize;
                             if (elapsed.as_secs() as usize) * rate > 5 * keys {
