@@ -88,13 +88,13 @@ pub trait CountTotalCore<G: Scope, K: Data, R: Diff> where G::Timestamp: TotalOr
     ///              .arrange(OrdKeySpine::new())
     ///              .count_total_core();
     ///     });
-    /// }    
+    /// }
     /// ```
     fn count_total_core(&self) -> Collection<G, (K, R), isize>;
 }
 
 impl<G: Scope, K: Data, R: Diff, T1> CountTotalCore<G, K, R> for Arranged<G, K, (), R, T1>
-where 
+where
     G::Timestamp: TotalOrder+Lattice+Ord,
     T1: TraceReader<K, (), G::Timestamp, R>+Clone+'static,
     T1::Batch: BatchReader<K, (), G::Timestamp, R> {

@@ -5,13 +5,14 @@ extern crate differential_dataflow;
 use rand::{Rng, SeedableRng, StdRng};
 
 use timely::dataflow::operators::{Exchange, Probe};
+use timely::progress::nested::product::Product;
+use timely::progress::timestamp::RootTimestamp;
 
 use differential_dataflow::input::Input;
-// use differential_dataflow::operators::Join;
-// use differential_dataflow::operators::Consolidate;
-use differential_dataflow::operators::arrange::ArrangeBySelf;
-// use differential_dataflow::operators::Count;
-use differential_dataflow::operators::CountTotal;
+use differential_dataflow::operators::arrange::Arrange;
+use differential_dataflow::operators::count::CountTotalCore;
+
+use differential_dataflow::trace::implementations::ord::OrdKeySpine;
 
 #[derive(Debug)]
 enum Comp {
@@ -32,7 +33,8 @@ fn main() {
     let keys: usize = std::env::args().nth(1).unwrap().parse().unwrap();
     let recs: usize = std::env::args().nth(2).unwrap().parse().unwrap();
     let rate: usize = std::env::args().nth(3).unwrap().parse().unwrap();
-    let comp: Comp = match std::env::args().nth(4).unwrap().as_str() {
+    let work: usize = std::env::args().nth(4).unwrap().parse().unwrap();
+    let comp: Comp = match std::env::args().nth(5).unwrap().as_str() {
         "exchange" => Comp::Exchange,
         "arrange" => Comp::Arrange,
         "count" => Comp::Count,
@@ -40,21 +42,19 @@ fn main() {
     };
     let mode: Mode = if std::env::args().any(|x| x == "open-loop") { Mode::OpenLoop } else { Mode::ClosedLoop };
 
-    println!("Experiment; keys: {:?}, recs: {:?}, rate: {:?}, comp: {:?}, mode: {:?}", keys, recs, rate, comp, mode);
-
     // define a new computational scope, in which to run BFS
     timely::execute_from_args(std::env::args().skip(4), move |worker| {
 
         // create a a degree counting differential dataflow
-        let (mut input, probe) = worker.dataflow(|scope| {
+        let (mut input, probe) = worker.dataflow::<u64,_,_>(|scope| {
 
             let (handle, data) = scope.new_collection();
 
             let probe = match comp {
                 Comp::Nothing => data.probe(),
-                Comp::Exchange => data.inner.exchange(|&(x,_,_)| x as u64).probe(),
-                Comp::Arrange => data.arrange_by_self().stream.probe(),
-                Comp::Count => data.count_total().probe(),
+                Comp::Exchange => data.inner.exchange(|&(x,_,_): &((usize,()),_,_)| x.0 as u64).probe(),
+                Comp::Arrange => data.arrange(OrdKeySpine::<usize, Product<RootTimestamp,u64>,isize>::with_effort(work)).stream.probe(),
+                Comp::Count => data.arrange(OrdKeySpine::<usize, Product<RootTimestamp,u64>,isize>::with_effort(work)).count_total_core().probe(),
             };
 
             (handle, probe)
@@ -70,7 +70,7 @@ fn main() {
         let timer = ::std::time::Instant::now();
 
         for _ in 0 .. ((recs as usize) / peers) + if index < ((recs as usize) % peers) { 1 } else { 0 } {
-            input.insert(rng1.gen_range(0, keys));
+            input.insert((rng1.gen_range(0, keys),()));
         }
 
         input.advance_to(1u64);
@@ -80,7 +80,8 @@ fn main() {
         if index == 0 {
             let elapsed1 = timer.elapsed();
             let elapsed1_ns = elapsed1.as_secs() * 1_000_000_000 + (elapsed1.subsec_nanos() as u64);
-            println!("{:?}\tdata loaded; rate: {:?}", elapsed1, 1000000000.0 * (recs as f64) / (elapsed1_ns as f64));
+            // println!("{:?}\tdata loaded; rate: {:?}", elapsed1, 1000000000.0 * (recs as f64) / (elapsed1_ns as f64));
+            println!("ARRANGE\tLOADING\t{}\t{:?}", peers, 1000000000.0 * (recs as f64) / (elapsed1_ns as f64));
         }
 
         if rate > 0 {
@@ -98,12 +99,12 @@ fn main() {
                     let mut wave = 1;
                     let mut elapsed = timer.elapsed();
 
-                    while elapsed.as_secs() < 65 {
+                    while elapsed.as_secs() < 25 {
 
                         for round in 0 .. rate {
                             input.advance_to((((wave * rate) + round) * peers + index) as u64);
-                            input.insert(rng1.gen_range(0, keys));
-                            input.remove(rng2.gen_range(0, keys));
+                            input.insert((rng1.gen_range(0, keys),()));
+                            input.remove((rng2.gen_range(0, keys),()));
                         }
                         wave += 1;
                         input.advance_to((wave * rate * peers) as u64);
@@ -125,7 +126,8 @@ fn main() {
                     let elapsed = timer.elapsed();
                     let seconds = elapsed.as_secs() as f64 + (elapsed.subsec_nanos() as f64) / 1000000000.0;
                     if index == 0 {
-                        println!("{:?}, {:?}", seconds / (wave - 1) as f64, 2.0 * ((wave - 1) * rate * peers) as f64 / seconds);
+                        // println!("{:?}, {:?}", seconds / (wave - 1) as f64, 2.0 * ((wave - 1) * rate * peers) as f64 / seconds);
+                        println!("ARRANGE\tTHROUGHPUT\t{}\t{:?}", peers, 2.0 * ((wave - 1) * rate * peers) as f64 / seconds);
                     }
 
                 },
@@ -138,7 +140,7 @@ fn main() {
 
                     let mut inserted_ns = 1;
 
-                    while timer.elapsed().as_secs() < 65 {
+                    while ((timer.elapsed().as_secs() as usize) * rate) < (10 * keys) {
 
                         // Open-loop latency-throughput test, parameterized by offered rate `ns_per_request`.
                         let elapsed = timer.elapsed();
@@ -151,7 +153,7 @@ fn main() {
                         while ((ack_counter * ns_per_request) as u64) < acknowledged_ns {
                             let requested_at = (ack_counter * ns_per_request) as u64;
                             let count_index = (elapsed_ns - requested_at).next_power_of_two().trailing_zeros() as usize;
-                            if elapsed.as_secs() > 5 {
+                            if (elapsed.as_secs() as usize) * rate > 5 * keys {
                                 // counts[count_index] += 1;
                                 let low_bits = ((elapsed_ns - requested_at) >> (count_index - 5)) & 0xF;
                                 counts[count_index][low_bits as usize] += 1;
@@ -182,8 +184,8 @@ fn main() {
 
                             while ((request_counter * ns_per_request) as u64) < target_ns {
                                 input.advance_to((request_counter * ns_per_request) as u64);
-                                input.insert(rng1.gen_range(0, keys));
-                                input.remove(rng2.gen_range(0, keys));
+                                input.insert((rng1.gen_range(0, keys),()));
+                                input.remove((rng2.gen_range(0, keys),()));
                                 request_counter += peers;
                             }
                             input.advance_to(target_ns);
@@ -198,16 +200,22 @@ fn main() {
             }
 
             if index == 0 {
-                println!("latencies:");
+
+                let mut results = Vec::new();
                 let total = counts.iter().map(|x| x.iter().sum::<u64>()).sum();
                 let mut sum = 0;
                 for index in (10 .. counts.len()).rev() {
                     for sub in (0 .. 16).rev() {
                         if sum > 0 && sum < total {
-                            println!("{}\t{}", (1 << (index-1)) + (sub << (index-5)), (sum as f64) / (total as f64));
+                            let latency = (1 << (index-1)) + (sub << (index-5));
+                            let fraction = (sum as f64) / (total as f64);
+                            results.push((latency, fraction));
                         }
                         sum += counts[index][sub];
                     }
+                }
+                for (latency, fraction) in results.drain(..).rev() {
+                    println!("ARRANGE\tLATENCY\t{}\t{}\t{}\t{}\t{}\t{:?}\t{:?}\t{}\t{}", peers, keys, recs, rate, work, comp, mode, latency, fraction);
                 }
             }
         }
