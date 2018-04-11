@@ -171,7 +171,10 @@ fn main() {
         let elapsed = timer.elapsed();
         let nanos = elapsed.as_secs() * 1000000000 + elapsed.subsec_nanos() as u64;
         if index == 0 {
-            println!("query: {}, elapsed: {:?}, tuples: {:?}, rate: {:?}", query_name, timer.elapsed(), peers * tuples, ((peers * tuples) as f64) / (nanos as f64 / 1000000000.0));
+            let rate = ((peers * tuples) as f64) / (nanos as f64 / 1000000000.0);
+            // Query, Logical, Physical, Workers, Rate
+            println!("{}\t{}\t{}\t{}\t{}", query_name, logical_batch, physical_batch, peers, rate);
+            // println!("query: {}, elapsed: {:?}, tuples: {:?}, rate: {:?}", query_name, timer.elapsed(), peers * tuples, ((peers * tuples) as f64) / (nanos as f64 / 1000000000.0));
         }
 
     }).unwrap();
