@@ -86,7 +86,7 @@ fn main() {
             }
 
             // return the various input handles, and the list of probes.
-            ((cust_in, line_in, Some(nats_in), ords_in, part_in, psup_in, Some(regs_in), supp_in), probes, collections.used)
+            ((Some(cust_in), Some(line_in), Some(nats_in), Some(ords_in), Some(part_in), Some(psup_in), Some(regs_in), Some(supp_in)), probes, collections.used)
         });
 
         // customer.tbl lineitem.tbl    nation.tbl  orders.tbl  part.tbl    partsupp.tbl    region.tbl  supplier.tbl
@@ -111,15 +111,16 @@ fn main() {
 
         // Synchronize before starting the timer.
         let next_round = 1;
-        inputs.0.advance_to(next_round);
-        inputs.1.advance_to(next_round);
+        inputs.0.as_mut().map(|x| x.advance_to(next_round));
+        inputs.1.as_mut().map(|x| x.advance_to(next_round));
         inputs.2.as_mut().map(|x| x.advance_to(next_round));
-        inputs.3.advance_to(next_round);
-        inputs.4.advance_to(next_round);
-        inputs.5.advance_to(next_round);
+        inputs.3.as_mut().map(|x| x.advance_to(next_round));
+        inputs.4.as_mut().map(|x| x.advance_to(next_round));
+        inputs.5.as_mut().map(|x| x.advance_to(next_round));
         inputs.6.as_mut().map(|x| x.advance_to(next_round));
-        inputs.7.advance_to(next_round);
-        let time = inputs.0.time().clone();
+        inputs.7.as_mut().map(|x| x.advance_to(next_round));
+
+        let time = RootTimestamp::new(next_round);
         worker.step_while(|| probes.iter().all(|p| p.less_than(&time)));
 
         let timer = Instant::now();
@@ -127,42 +128,43 @@ fn main() {
         while customers.len() > 0 || lineitems.len() > 0 || nations.len() > 0 || orders.len() > 0 || parts.len() > 0 || partsupps.len() > 0 || regions.len() > 0 || suppliers.len() > 0 {
 
             // introduce physical batch of data for each input with remaining data.
-            if let Some(mut data) = customers.pop() { inputs.0.send_batch(&mut data); }
-            if let Some(mut data) = lineitems.pop() { inputs.1.send_batch(&mut data); }
+            if let Some(mut data) = customers.pop() { inputs.0.as_mut().map(|x| x.send_batch(&mut data)); } else { if seal { inputs.0 = None; } }
+            if let Some(mut data) = lineitems.pop() { inputs.1.as_mut().map(|x| x.send_batch(&mut data)); } else { if seal { inputs.1 = None; } }
             if let Some(mut data) = nations.pop() { inputs.2.as_mut().map(|x| x.send_batch(&mut data)); } else { if seal { inputs.2 = None; } }
-            if let Some(mut data) = orders.pop() { inputs.3.send_batch(&mut data); }
-            if let Some(mut data) = parts.pop() { inputs.4.send_batch(&mut data); }
-            if let Some(mut data) = partsupps.pop() { inputs.5.send_batch(&mut data); }
+            if let Some(mut data) = orders.pop() { inputs.3.as_mut().map(|x| x.send_batch(&mut data)); } else { if seal { inputs.3 = None; } }
+            if let Some(mut data) = parts.pop() { inputs.4.as_mut().map(|x| x.send_batch(&mut data)); } else { if seal { inputs.4 = None; } }
+            if let Some(mut data) = partsupps.pop() { inputs.5.as_mut().map(|x| x.send_batch(&mut data)); } else { if seal { inputs.5 = None; } }
             if let Some(mut data) = regions.pop() { inputs.6.as_mut().map(|x| x.send_batch(&mut data)); } else { if seal { inputs.6 = None; } }
-            if let Some(mut data) = suppliers.pop() { inputs.7.send_batch(&mut data); }
+            if let Some(mut data) = suppliers.pop() { inputs.7.as_mut().map(|x| x.send_batch(&mut data)); } else { if seal { inputs.7 = None; } }
 
             // catch all inputs up to the same (next) round.
             let next_round = 1 + 8 * (round + 1) * physical_batch;
-            inputs.0.advance_to(next_round);
-            inputs.1.advance_to(next_round);
+            inputs.0.as_mut().map(|x| x.advance_to(next_round));
+            inputs.1.as_mut().map(|x| x.advance_to(next_round));
             inputs.2.as_mut().map(|x| x.advance_to(next_round));
-            inputs.3.advance_to(next_round);
-            inputs.4.advance_to(next_round);
-            inputs.5.advance_to(next_round);
+            inputs.3.as_mut().map(|x| x.advance_to(next_round));
+            inputs.4.as_mut().map(|x| x.advance_to(next_round));
+            inputs.5.as_mut().map(|x| x.advance_to(next_round));
             inputs.6.as_mut().map(|x| x.advance_to(next_round));
-            inputs.7.advance_to(next_round);
+            inputs.7.as_mut().map(|x| x.advance_to(next_round));
 
-            let time = inputs.0.time().clone();
+            let time = RootTimestamp::new(next_round);
             worker.step_while(|| probes.iter().all(|p| p.less_than(&time)));
             round += 1;
         }
 
         // Finish outstanding work before stopping the timer.
         let next_round = usize::max_value();
-        inputs.0.advance_to(next_round);
-        inputs.1.advance_to(next_round);
+        inputs.0.as_mut().map(|x| x.advance_to(next_round));
+        inputs.1.as_mut().map(|x| x.advance_to(next_round));
         inputs.2.as_mut().map(|x| x.advance_to(next_round));
-        inputs.3.advance_to(next_round);
-        inputs.4.advance_to(next_round);
-        inputs.5.advance_to(next_round);
+        inputs.3.as_mut().map(|x| x.advance_to(next_round));
+        inputs.4.as_mut().map(|x| x.advance_to(next_round));
+        inputs.5.as_mut().map(|x| x.advance_to(next_round));
         inputs.6.as_mut().map(|x| x.advance_to(next_round));
-        inputs.7.advance_to(next_round);
-        let time = inputs.0.time().clone();
+        inputs.7.as_mut().map(|x| x.advance_to(next_round));
+
+        let time = RootTimestamp::new(next_round);
         worker.step_while(|| probes.iter().all(|p| p.less_than(&time)));
 
         let query_name = if query < 10 { format!("q0{}", query) } else { format!("q{}", query) };
