@@ -1,6 +1,7 @@
 extern crate rand;
 extern crate timely;
 extern crate differential_dataflow;
+extern crate core_affinity;
 
 use rand::{Rng, SeedableRng, StdRng};
 
@@ -11,6 +12,7 @@ use timely::progress::timestamp::RootTimestamp;
 use differential_dataflow::input::Input;
 use differential_dataflow::operators::arrange::Arrange;
 use differential_dataflow::operators::count::CountTotalCore;
+use differential_dataflow::operators::JoinCore;
 
 use differential_dataflow::trace::implementations::ord::OrdKeySpine;
 
@@ -19,6 +21,7 @@ enum Comp {
     Nothing,
     Exchange,
     Arrange,
+    Maintain,
     Count,
 }
 
@@ -44,6 +47,10 @@ fn main() {
 
     // define a new computational scope, in which to run BFS
     timely::execute_from_args(std::env::args().skip(4), move |worker| {
+
+        let index = worker.index();
+        let core_ids = core_affinity::get_core_ids().unwrap();
+        core_affinity::set_for_current(core_ids[index]);
 
         // create a a degree counting differential dataflow
         let (mut input, probe) = worker.dataflow::<u64,_,_>(|scope| {
@@ -155,7 +162,7 @@ fn main() {
                         while ((ack_counter * ns_per_request) as u64) < acknowledged_ns && ack_counter < ack_target {
                             let requested_at = (ack_counter * ns_per_request) as u64;
                             let count_index = (elapsed_ns - requested_at).next_power_of_two().trailing_zeros() as usize;
-                            if (elapsed.as_secs() as usize) * rate > 5 * keys {
+                            if ack_counter > ack_target / 2 {
                                 // counts[count_index] += 1;
                                 let low_bits = ((elapsed_ns - requested_at) >> (count_index - 5)) & 0xF;
                                 counts[count_index][low_bits as usize] += 1;
@@ -178,9 +185,9 @@ fn main() {
                         // let scale = (inserted_ns - acknowledged_ns).next_power_of_two();
                         // let target_ns = elapsed_ns & !(scale - 1);
 
-                        // let target_ns = if acknowledged_ns >= inserted_ns { elapsed_ns } else { inserted_ns };
+                        let target_ns = if acknowledged_ns >= inserted_ns { elapsed_ns } else { inserted_ns };
 
-                        let target_ns = elapsed_ns & !((1 << 20) - 1);
+                        // let target_ns = elapsed_ns & !((1 << 16) - 1);
 
                         if inserted_ns < target_ns {
 
