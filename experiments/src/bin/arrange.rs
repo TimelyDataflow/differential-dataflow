@@ -21,7 +21,6 @@ enum Comp {
     Nothing,
     Exchange,
     Arrange,
-    Maintain,
     Count,
 }
 
