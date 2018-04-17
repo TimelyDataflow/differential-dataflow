@@ -9,9 +9,6 @@ rand="0.3.13"
 abomonation = "0.5"
 abomonation_derive = "0.3"
 timely_communication = "0.5"
-#timely_communication = { path = "../../timely-dataflow/communication"}
-#timely = "0.5"
-#timely = { path = "../../timely-dataflow/" }
 timely = { git = "https://github.com/frankmcsherry/timely-dataflow" }
-#differential-dataflow = "0.5"
 differential-dataflow = { path = "../" }
+graph_map = { git = "https://github.com/frankmcsherry/graph-map" }
