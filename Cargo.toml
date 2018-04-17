@@ -14,7 +14,6 @@ keywords = ["differential", "dataflow"]
 license = "MIT"
 
 [dev-dependencies]
-getopts="0.2.14"
 rand="0.4"
 byteorder="1"
 itertools="^0.7"
