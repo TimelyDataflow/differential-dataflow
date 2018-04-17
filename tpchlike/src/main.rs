@@ -4,6 +4,7 @@ extern crate timely;
 extern crate differential_dataflow;
 extern crate arrayvec;
 extern crate regex;
+extern crate core_affinity;
 
 use std::fs::File;
 use std::io::{BufRead, BufReader};
@@ -27,6 +28,9 @@ fn main() {
 
         let index = worker.index();
         let peers = worker.peers();
+
+        let core_ids = core_affinity::get_core_ids().unwrap();
+        core_affinity::set_for_current(core_ids[index]);
 
         let prefix = ::std::env::args().nth(1).unwrap();;
         let logical_batch = ::std::env::args().nth(2).unwrap().parse::<usize>().unwrap();
