@@ -96,10 +96,11 @@ fn main() {
             (q1_input, q2_input, q3_input, q4_input, state_input, graph_input)
         });
 
-        let seed: &[_] = &[1, 2, 3, index];
-        let mut rng1: StdRng = SeedableRng::from_seed(seed);    // rng for edge additions
+        let seed1: &[_] = &[1, 2, 3, index];
+        let mut rng1: StdRng = SeedableRng::from_seed(seed1);    // rng for edge additions
         // let mut rng2: StdRng = SeedableRng::from_seed(seed);    // rng for edge deletions
-        let mut rng3: StdRng = SeedableRng::from_seed(seed);    // rng for queries
+        let seed2: &[_] = &[1, 2, 4, index];
+        let mut rng3: StdRng = SeedableRng::from_seed(seed2);    // rng for queries
 
         if index == 0 { println!("performing workload on random graph with {} nodes, {} edges:", nodes, edges); }
 
