@@ -25,6 +25,7 @@ fn main() {
     let rate: usize  = std::env::args().nth(3).unwrap().parse().unwrap();
     let goal: usize  = std::env::args().nth(4).unwrap().parse().unwrap();
     let queries: usize  = std::env::args().nth(5).unwrap().parse().unwrap();
+    let shared: bool = std::env::args().any(|x| x == "share");
 
     // Our setting involves four read query types, and two updatable base relations.
     //
@@ -58,33 +59,70 @@ fn main() {
             let (state_input, state) = scope.new_collection();
             let (graph_input, graph) = scope.new_collection();
 
-            let state_indexed = state.arrange_by_key();
-            let graph_indexed = graph.map(|(src, dst)| (dst, src))
-                                     .concat(&graph)
-                                     .arrange_by_key();
+            if shared {
 
-            // Q1: Point lookups on `state`:
-            q1  .arrange_by_self()
-                .join_core(&state_indexed, |&query, &(), &state| Some((query, state)))
-                .probe_with(&mut probe);
+                let state_indexed = state.arrange_by_key();
+                let graph_indexed = graph.map(|(src, dst)| (dst, src))
+                                         .concat(&graph)
+                                         .arrange_by_key();
 
-            // Q2: One-hop lookups on `state`:
-            q2  .arrange_by_self()
-                .join_core(&graph_indexed, |&query, &(), &friend| Some((friend, query)))
-                .join_core(&state_indexed, |_friend, &query, &state| Some((query, state)))
-                .probe_with(&mut probe);
+                // Q1: Point lookups on `state`:
+                q1  .arrange_by_self()
+                    .join_core(&state_indexed, |&query, &(), &state| Some((query, state)))
+                    .probe_with(&mut probe);
 
-            // Q3: Two-hop lookups on `state`:
-            q3  .arrange_by_self()
-                .join_core(&graph_indexed, |&query, &(), &friend| Some((friend, query)))
-                .join_core(&graph_indexed, |_friend, &query, &friend2| Some((friend2, query)))
-                .join_core(&state_indexed, |_friend2, &query, &state| Some((query, state)))
-                .probe_with(&mut probe);
+                // Q2: One-hop lookups on `state`:
+                q2  .arrange_by_self()
+                    .join_core(&graph_indexed, |&query, &(), &friend| Some((friend, query)))
+                    .join_core(&state_indexed, |_friend, &query, &state| Some((query, state)))
+                    .probe_with(&mut probe);
 
-            // Q4: Shortest path queries:
-            bidijkstra(&graph_indexed, &graph_indexed, &q4)
-                .probe_with(&mut probe);
+                // Q3: Two-hop lookups on `state`:
+                q3  .arrange_by_self()
+                    .join_core(&graph_indexed, |&query, &(), &friend| Some((friend, query)))
+                    .join_core(&graph_indexed, |_friend, &query, &friend2| Some((friend2, query)))
+                    .join_core(&state_indexed, |_friend2, &query, &state| Some((query, state)))
+                    .probe_with(&mut probe);
 
+                // Q4: Shortest path queries:
+                bidijkstra(&graph_indexed, &graph_indexed, &q4, 2)
+                    .probe_with(&mut probe);
+
+                connected_components(&graph_indexed)
+                    .probe_with(&mut probe);
+
+            }
+            else {
+
+                // let state_indexed = state.arrange_by_key();
+                let graph = graph.map(|(src, dst)| (dst, src))
+                                 .concat(&graph);
+
+                // Q1: Point lookups on `state`:
+                q1  .arrange_by_self()
+                    .join_core(&state.arrange_by_key(), |&query, &(), &state| Some((query, state)))
+                    .probe_with(&mut probe);
+
+                // Q2: One-hop lookups on `state`:
+                q2  .arrange_by_self()
+                    .join_core(&graph.arrange_by_key(), |&query, &(), &friend| Some((friend, query)))
+                    .join_core(&state.arrange_by_key(), |_friend, &query, &state| Some((query, state)))
+                    .probe_with(&mut probe);
+
+                // Q3: Two-hop lookups on `state`:
+                q3  .arrange_by_self()
+                    .join_core(&graph.arrange_by_key(), |&query, &(), &friend| Some((friend, query)))
+                    .join_core(&graph.arrange_by_key(), |_friend, &query, &friend2| Some((friend2, query)))
+                    .join_core(&state.arrange_by_key(), |_friend2, &query, &state| Some((query, state)))
+                    .probe_with(&mut probe);
+
+                // Q4: Shortest path queries:
+                bidijkstra(&graph.arrange_by_key(), &graph.arrange_by_key(), &q4, 2)
+                    .probe_with(&mut probe);
+
+                connected_components(&graph.arrange_by_key())
+                    .probe_with(&mut probe);
+            }
             (q1_input, q2_input, q3_input, q4_input, state_input, graph_input)
         });
 
@@ -92,9 +130,9 @@ fn main() {
         let mut rng1: StdRng = SeedableRng::from_seed(seed);    // rng for edge additions
         let mut rng2: StdRng = SeedableRng::from_seed(seed);    // rng for edge deletions
         let mut rng3: StdRng = SeedableRng::from_seed(seed);    // rng for q1 additions
-        let mut rng4: StdRng = SeedableRng::from_seed(seed);    // rng for q1 deletions
-        let mut rng5: StdRng = SeedableRng::from_seed(seed);    // rng for q4 additions
-        let mut rng6: StdRng = SeedableRng::from_seed(seed);    // rng for q4 deletions
+        // let mut rng4: StdRng = SeedableRng::from_seed(seed);    // rng for q1 deletions
+        // let mut rng5: StdRng = SeedableRng::from_seed(seed);    // rng for q4 additions
+        // let mut rng6: StdRng = SeedableRng::from_seed(seed);    // rng for q4 deletions
 
         if index == 0 { println!("performing workload on random graph with {} nodes, {} edges:", nodes, edges); }
 
@@ -112,18 +150,20 @@ fn main() {
         let worker_window = queries/peers + if index < (queries % peers) { 1 } else { 0 };
         for _ in 0 .. worker_window {
             q1.insert(rng3.gen_range(0, nodes));
-            q4.insert((rng5.gen_range(0, nodes), rng5.gen_range(0, nodes)));
+            q2.insert(rng3.gen_range(0, nodes));
+            q3.insert(rng3.gen_range(0, nodes));
+            q4.insert((rng3.gen_range(0, nodes), rng3.gen_range(0, nodes)));
         }
 
-        q1.advance_to(1);    q1.flush();     // q1 queries start now.
+        q1.advance_to(usize::max_value());    q1.flush();     // q1 queries start now.
         q2.advance_to(usize::max_value());    q2.flush();     // q2 queries start here.
         q3.advance_to(usize::max_value());    q3.flush();     // q3 queries start here.
-        q4.advance_to(1);    q4.flush();     // q4 queries start here.
+        q4.advance_to(usize::max_value());    q4.flush();     // q4 queries start here.
         state.advance_to(usize::max_value()); state.flush();
-        graph.advance_to(1); graph.flush();
+        graph.advance_to(1);                  graph.flush();
 
         // finish graph loading work.
-        while probe.less_than(q1.time()) { worker.step(); }
+        while probe.less_than(graph.time()) { worker.step(); }
 
         if index == 0 { println!("{:?}\tgraph loaded", timer.elapsed()); }
 
@@ -136,8 +176,6 @@ fn main() {
 
         let timer = ::std::time::Instant::now();
         let mut counts = vec![[0usize; 16]; 64];
-
-        if index == 0 {
 
         let ack_target = goal * rate;
         while ack_counter < ack_target {
@@ -157,7 +195,7 @@ fn main() {
                     let low_bits = ((elapsed_ns - requested_at) >> (count_index - 5)) & 0xF;
                     counts[count_index][low_bits as usize] += 1;
                 }
-                ack_counter += 1;//peers;
+                ack_counter += peers;
             }
 
             // Now, should we introduce more records before stepping the worker?
@@ -184,35 +222,17 @@ fn main() {
             if inserted_ns < target_ns {
 
                 while (request_counter * ns_per_request) < target_ns {
-                    match request_counter % 3 {
-                        0 => {
-                            graph.advance_to(request_counter * ns_per_request);
-                            graph.insert((rng1.gen_range(0, nodes),rng1.gen_range(0, nodes)));
-                            graph.remove((rng2.gen_range(0, nodes),rng2.gen_range(0, nodes)));
-                        }
-                        1 => {
-                            q1.advance_to(request_counter * ns_per_request);
-                            q1.insert(rng3.gen_range(0, nodes));
-                            q1.remove(rng4.gen_range(0, nodes));
-                        }
-                        2 => {
-                            q4.advance_to(request_counter * ns_per_request);
-                            q4.insert((rng5.gen_range(0, nodes),rng5.gen_range(0, nodes)));
-                            q4.remove((rng6.gen_range(0, nodes),rng6.gen_range(0, nodes)));
-                        }
-                        _ => { panic!("not how numbers work"); }
-                    }
-                    request_counter += 1;//peers;
+                    graph.advance_to(request_counter * ns_per_request);
+                    graph.insert((rng1.gen_range(0, nodes),rng1.gen_range(0, nodes)));
+                    graph.remove((rng2.gen_range(0, nodes),rng2.gen_range(0, nodes)));
+                    request_counter += peers;
                 }
                 graph.advance_to(target_ns); graph.flush();
-                q1.advance_to(target_ns); q1.flush();
-                q4.advance_to(target_ns); q4.flush();
                 inserted_ns = target_ns;
             }
 
             worker.step();
         }
-    }
 
         if index == 0 {
 
@@ -247,7 +267,8 @@ type Arrange<G: Scope, K, V, R> = Arranged<G, K, V, R, TraceAgent<K, V, G::Times
 fn bidijkstra<G: Scope>(
     forward_graph: &Arrange<G, Node, Node, isize>,
     reverse_graph: &Arrange<G, Node, Node, isize>,
-    goals: &Collection<G, (Node, Node)>) -> Collection<G, ((Node, Node), u32)>
+    goals: &Collection<G, (Node, Node)>,
+    bound: u64) -> Collection<G, ((Node, Node), u32)>
 where G::Timestamp: Lattice+Ord {
 
     goals.scope().scoped(|inner| {
@@ -257,8 +278,8 @@ where G::Timestamp: Lattice+Ord {
         // is a corresponding destination or source that has not yet been reached.
 
         // forward and reverse (node, (root, dist))
-        let forward = Variable::from(goals.map(|(x,_)| (x,(x,0))).enter(inner));
-        let reverse = Variable::from(goals.map(|(_,y)| (y,(y,0))).enter(inner));
+        let forward = Variable::from_args(bound, 1, goals.map(|(x,_)| (x,(x,0))).enter(inner));
+        let reverse = Variable::from_args(bound, 1, goals.map(|(_,y)| (y,(y,0))).enter(inner));
 
         let goals = goals.enter(inner);
         let forward_graph = forward_graph.enter(inner);
@@ -314,4 +335,34 @@ where G::Timestamp: Lattice+Ord {
 
         reached.leave()
     })
+}
+
+fn connected_components<G: Scope>(graph: &Arrange<G, Node, Node, isize>) -> Collection<G, (Node, Node)>
+where G::Timestamp: Lattice {
+
+    // each edge (x,y) means that we need at least a label for the min of x and y.
+    let nodes =
+    graph
+        .as_collection(|&k,&v| {
+            let min = std::cmp::min(k,v);
+            (min, min)
+        })
+        .consolidate();
+
+    // don't actually use these labels, just grab the type
+    nodes
+        .filter(|_| false)
+        .iterate(|inner| {
+
+            let graph = graph.enter(&inner.scope());
+            let nodes = nodes.enter_at(&inner.scope(), |r| 256 * (64 - r.1.leading_zeros() as u64));
+
+            let inner = inner.arrange_by_key();
+
+            let prop = inner.join_core(&graph, |_k,l,d| Some((*d,*l)));
+
+            nodes
+                .concat(&prop)
+                .group(|_, s, t| { t.push((*s[0].0, 1)); })
+        })
 }
