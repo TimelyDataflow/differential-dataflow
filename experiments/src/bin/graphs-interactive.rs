@@ -88,7 +88,7 @@ fn main() {
                 .probe_with(&mut probe);
 
             // Q4: Shortest path queries:
-            bidijkstra(&graph_indexed, &graph_indexed, &q4)
+            bidijkstra(&graph_indexed, &graph_indexed, &q4, 2)
                 .filter(move |_| inspect)
                 .inspect(|x| println!("Q4: {:?}", x))
                 .probe_with(&mut probe);
@@ -195,7 +195,8 @@ type Arrange<G: Scope, K, V, R> = Arranged<G, K, V, R, TraceAgent<K, V, G::Times
 fn bidijkstra<G: Scope>(
     forward_graph: &Arrange<G, Node, Node, isize>,
     reverse_graph: &Arrange<G, Node, Node, isize>,
-    goals: &Collection<G, (Node, Node)>) -> Collection<G, ((Node, Node), u32)>
+    goals: &Collection<G, (Node, Node)>,
+    bound: u64) -> Collection<G, ((Node, Node), u32)>
 where G::Timestamp: Lattice+Ord {
 
     goals.scope().scoped(|inner| {
@@ -205,8 +206,8 @@ where G::Timestamp: Lattice+Ord {
         // is a corresponding destination or source that has not yet been reached.
 
         // forward and reverse (node, (root, dist))
-        let forward = Variable::from(goals.map(|(x,_)| (x,(x,0))).enter(inner));
-        let reverse = Variable::from(goals.map(|(_,y)| (y,(y,0))).enter(inner));
+        let forward = Variable::from_args(bound, 1, goals.map(|(x,_)| (x,(x,0))).enter(inner));
+        let reverse = Variable::from_args(bound, 1, goals.map(|(_,y)| (y,(y,0))).enter(inner));
 
         let goals = goals.enter(inner);
         let forward_graph = forward_graph.enter(inner);
