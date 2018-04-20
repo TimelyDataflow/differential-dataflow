@@ -124,16 +124,16 @@ fn main() {
         let seed: &[_] = &[1, 2, 3, index];
         let mut rng1: StdRng = SeedableRng::from_seed(seed);    // rng for edge additions
         let mut rng2: StdRng = SeedableRng::from_seed(seed);    // rng for edge deletions
-        let seed: &[_] = &[1, 2, 3, index];
+        let seed: &[_] = &[1, 2, 4, index];
         let mut rng3: StdRng = SeedableRng::from_seed(seed);    // rng for query additions
         let mut rng4: StdRng = SeedableRng::from_seed(seed);    // rng for q1 deletions
-        let seed: &[_] = &[1, 2, 3, index];
+        let seed: &[_] = &[1, 2, 5, index];
         let mut rng5: StdRng = SeedableRng::from_seed(seed);    // rng for query additions
         let mut rng6: StdRng = SeedableRng::from_seed(seed);    // rng for q1 deletions
-        let seed: &[_] = &[1, 2, 3, index];
+        let seed: &[_] = &[1, 2, 6, index];
         let mut rng7: StdRng = SeedableRng::from_seed(seed);    // rng for query additions
         let mut rng8: StdRng = SeedableRng::from_seed(seed);    // rng for q1 deletions
-        let seed: &[_] = &[1, 2, 3, index];
+        let seed: &[_] = &[1, 2, 7, index];
         let mut rng9: StdRng = SeedableRng::from_seed(seed);    // rng for query additions
         let mut rng0: StdRng = SeedableRng::from_seed(seed);    // rng for q1 deletions
 
