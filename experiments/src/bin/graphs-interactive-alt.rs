@@ -85,7 +85,7 @@ fn main() {
                     .probe_with(&mut probe);
 
                 // Q4: Shortest path queries:
-                bidijkstra(&graph_indexed, &graph_indexed, &q4, 2)
+                three_hop(&graph_indexed, &graph_indexed, &q4)
                     .probe_with(&mut probe);
 
                 connected_components(&graph_indexed)
@@ -117,7 +117,7 @@ fn main() {
                     .probe_with(&mut probe);
 
                 // Q4: Shortest path queries:
-                bidijkstra(&graph.arrange_by_key(), &graph.arrange_by_key(), &q4, 2)
+                three_hop(&graph.arrange_by_key(), &graph.arrange_by_key(), &q4)
                     .probe_with(&mut probe);
 
                 connected_components(&graph.arrange_by_key())
@@ -264,6 +264,33 @@ use differential_dataflow::operators::arrange::Arranged;
 type Arrange<G: Scope, K, V, R> = Arranged<G, K, V, R, TraceAgent<K, V, G::Timestamp, R, DefaultValTrace<K, V, G::Timestamp, R>>>;
 
 // returns pairs (n, s) indicating node n can be reached from a root in s steps.
+fn three_hop<G: Scope>(
+    forward_graph: &Arrange<G, Node, Node, isize>,
+    reverse_graph: &Arrange<G, Node, Node, isize>,
+    goals: &Collection<G, (Node, Node)>) -> Collection<G, ((Node, Node), u32)>
+where G::Timestamp: Lattice+Ord {
+
+    let sources = goals.map(|(x,_)| x);
+    let targets = goals.map(|(_,y)| y);
+
+    // Q3: Two-hop lookups on `state`:
+    let forward0 = sources.map(|x| (x, (x,0)));
+    let forward1 = forward0.join_core(&forward_graph, |&_, &(source,dist), &friend| Some((friend, (source, dist+1))));
+    let forward2 = forward1.join_core(&forward_graph, |&_, &(source,dist), &friend| Some((friend, (source, dist+1))));
+
+    let reverse0 = targets.map(|x| (x, (x,0)));
+    let reverse1 = reverse0.join_core(&reverse_graph, |&_, &(target,dist), &friend| Some((friend, (target, dist+1))));
+    let reverse2 = reverse1.join_core(&reverse_graph, |&_, &(target,dist), &friend| Some((friend, (target, dist+1))));
+
+    let forward = forward0.concat(&forward1).concat(&forward2);
+    let reverse = reverse0.concat(&reverse1).concat(&reverse2);
+
+    forward
+        .join_map(&reverse, |_,&(source, dist1),&(target, dist2)| ((source, target), dist1 + dist2))
+        .group(|_st,input,output| output.push((*input[0].0,1)))
+}
+
+// returns pairs (n, s) indicating node n can be reached from a root in s steps.
 fn bidijkstra<G: Scope>(
     forward_graph: &Arrange<G, Node, Node, isize>,
     reverse_graph: &Arrange<G, Node, Node, isize>,
@@ -336,6 +363,7 @@ where G::Timestamp: Lattice+Ord {
         reached.leave()
     })
 }
+
 
 fn connected_components<G: Scope>(graph: &Arrange<G, Node, Node, isize>) -> Collection<G, (Node, Node)>
 where G::Timestamp: Lattice {
