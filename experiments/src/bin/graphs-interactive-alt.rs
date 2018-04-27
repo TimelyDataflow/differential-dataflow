@@ -25,7 +25,8 @@ fn main() {
     let rate: usize  = std::env::args().nth(3).unwrap().parse().unwrap();
     let goal: usize  = std::env::args().nth(4).unwrap().parse().unwrap();
     let queries: usize  = std::env::args().nth(5).unwrap().parse().unwrap();
-    let shared: bool = std::env::args().any(|x| x == "share");
+    let shared: bool = std::env::args().nth(6).unwrap().as_str() == "share";
+    let use_bidijkstra: bool = std::env::args().nth(7).unwrap().as_str() == "bidijkstra";
 
     // Our setting involves four read query types, and two updatable base relations.
     //
@@ -85,8 +86,13 @@ fn main() {
                     .probe_with(&mut probe);
 
                 // Q4: Shortest path queries:
-                three_hop(&graph_indexed, &graph_indexed, &q4)
-                    .probe_with(&mut probe);
+                if use_bidijkstra {
+                    bidijkstra(&graph_indexed, &graph_indexed, &q4, 2)
+                        .probe_with(&mut probe);
+                } else {
+                    three_hop(&graph_indexed, &graph_indexed, &q4)
+                        .probe_with(&mut probe);
+                }
 
                 connected_components(&graph_indexed)
                     .probe_with(&mut probe);
@@ -117,8 +123,13 @@ fn main() {
                     .probe_with(&mut probe);
 
                 // Q4: Shortest path queries:
-                three_hop(&graph.arrange_by_key(), &graph.arrange_by_key(), &q4)
-                    .probe_with(&mut probe);
+                if use_bidijkstra {
+                    bidijkstra(&graph.arrange_by_key(), &graph.arrange_by_key(), &q4, 2)
+                        .probe_with(&mut probe);
+                } else {
+                    three_hop(&graph.arrange_by_key(), &graph.arrange_by_key(), &q4)
+                        .probe_with(&mut probe);
+                }
 
                 connected_components(&graph.arrange_by_key())
                     .probe_with(&mut probe);
@@ -134,7 +145,7 @@ fn main() {
         // let mut rng5: StdRng = SeedableRng::from_seed(seed);    // rng for q4 additions
         // let mut rng6: StdRng = SeedableRng::from_seed(seed);    // rng for q4 deletions
 
-        if index == 0 { println!("performing workload on random graph with {} nodes, {} edges:", nodes, edges); }
+        if index == 0 { eprintln!("performing workload on random graph with {} nodes, {} edges:", nodes, edges); }
 
         let worker_edges = edges/peers + if index < (edges % peers) { 1 } else { 0 };
         for _ in 0 .. worker_edges {
@@ -165,7 +176,7 @@ fn main() {
         // finish graph loading work.
         while probe.less_than(graph.time()) { worker.step(); }
 
-        if index == 0 { println!("{:?}\tgraph loaded", timer.elapsed()); }
+        if index == 0 { eprintln!("{:?}\tgraph loaded", timer.elapsed()); }
 
         let requests_per_sec = rate / 2;
         let ns_per_request = 1_000_000_000 / requests_per_sec;
@@ -250,7 +261,7 @@ fn main() {
                 }
             }
             for (latency, fraction) in results.drain(..).rev() {
-                println!("{}\t{}", latency, fraction);
+                println!("LATENCY\t{}\t{}", latency, fraction);
             }
         }
 

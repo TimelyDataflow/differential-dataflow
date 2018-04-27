@@ -25,7 +25,14 @@ fn main() {
     let rate: usize  = std::env::args().nth(3).unwrap().parse().unwrap();
     let goal: usize  = std::env::args().nth(4).unwrap().parse().unwrap();
     let queries: usize  = std::env::args().nth(5).unwrap().parse().unwrap();
-    let shared: bool = std::env::args().any(|x| x == "share");
+    let shared: bool = {
+        let is_shared = std::env::args().nth(6).unwrap();
+        match is_shared.as_str() {
+            "shared" => true,
+            "no" => false,
+            _ => panic!("invalid sharing mode"),
+        }
+    };
 
     // Our setting involves four read query types, and two updatable base relations.
     //
@@ -137,7 +144,7 @@ fn main() {
         let mut rng9: StdRng = SeedableRng::from_seed(seed);    // rng for query additions
         let mut rng0: StdRng = SeedableRng::from_seed(seed);    // rng for q1 deletions
 
-        if index == 0 { println!("performing workload on random graph with {} nodes, {} edges:", nodes, edges); }
+        if index == 0 { eprintln!("performing workload on random graph with {} nodes, {} edges:", nodes, edges); }
 
         let worker_edges = edges/peers + if index < (edges % peers) { 1 } else { 0 };
         for _ in 0 .. worker_edges {
@@ -167,7 +174,7 @@ fn main() {
         // finish graph loading work.
         while probe.less_than(graph.time()) { worker.step(); }
 
-        if index == 0 { println!("{:?}\tgraph loaded", timer.elapsed()); }
+        if index == 0 { eprintln!("{:?}\tgraph loaded", timer.elapsed()); }
 
         let requests_per_sec = rate / 2;
         let ns_per_request = 1_000_000_000 / requests_per_sec;
@@ -284,7 +291,7 @@ fn main() {
                 }
             }
             for (latency, fraction) in results.drain(..).rev() {
-                println!("{}\t{}", latency, fraction);
+                println!("LATENCY\t{}\t{}", latency, fraction);
             }
         }
 
