@@ -23,7 +23,7 @@ fn main() {
     let nodes: usize = std::env::args().nth(1).unwrap().parse().unwrap();
     let edges: usize = std::env::args().nth(2).unwrap().parse().unwrap();
     let batch: usize = std::env::args().nth(3).unwrap().parse().unwrap();
-    let inspect: bool = std::env::args().any(|x| x == "inspect");
+    // let inspect: bool = std::env::args().any(|x| x == "inspect");
 
     // Our setting involves four read query types, and two updatable base relations.
     //
@@ -65,16 +65,16 @@ fn main() {
             // Q1: Point lookups on `state`:
             q1  .arrange_by_self()
                 .join_core(&state_indexed, |&query, &(), &state| Some((query, state)))
-                .filter(move |_| inspect)
-                .inspect(|x| println!("Q1: {:?}", x))
+                // .filter(move |_| inspect)
+                // .inspect(|x| println!("Q1: {:?}", x))
                 .probe_with(&mut probe);
 
             // Q2: One-hop lookups on `state`:
             q2  .arrange_by_self()
                 .join_core(&graph_indexed, |&query, &(), &friend| Some((friend, query)))
                 .join_core(&state_indexed, |_friend, &query, &state| Some((query, state)))
-                .filter(move |_| inspect)
-                .inspect(|x| println!("Q2: {:?}", x))
+                // .filter(move |_| inspect)
+                // .inspect(|x| println!("Q2: {:?}", x))
                 .probe_with(&mut probe);
 
             // Q3: Two-hop lookups on `state`:
@@ -82,15 +82,15 @@ fn main() {
                 .join_core(&graph_indexed, |&query, &(), &friend| Some((friend, query)))
                 .join_core(&graph_indexed, |_friend, &query, &friend2| Some((friend2, query)))
                 .join_core(&state_indexed, |_friend2, &query, &state| Some((query, state)))
-                .filter(move |_| inspect)
-                .consolidate()
-                .inspect(|x| println!("Q3: {:?}", x))
+                // .filter(move |_| inspect)
+                // .consolidate()
+                // .inspect(|x| println!("Q3: {:?}", x))
                 .probe_with(&mut probe);
 
             // Q4: Shortest path queries:
             three_hop(&graph_indexed, &graph_indexed, &q4)
-                .filter(move |_| inspect)
-                .inspect(|x| println!("Q4: {:?}", x))
+                // .filter(move |_| inspect)
+                // .inspect(|x| println!("Q4: {:?}", x))
                 .probe_with(&mut probe);
 
             (q1_input, q2_input, q3_input, q4_input, state_input, graph_input)
@@ -131,12 +131,15 @@ fn main() {
         let worker_batch = batch/peers + if index < batch % peers { 1 } else { 0 };
 
         // Q1 testing:
+        let mut list = Vec::with_capacity(worker_batch);
         let timer_q1 = ::std::time::Instant::now();
         for round in 1 .. 1001 {
             for _ in 0 .. worker_batch {
-                q1.insert(rng3.gen_range(0, nodes));
+                list.push(rng3.gen_range(0, nodes));
             }
+            for &thing in list.iter() { q1.insert(thing); }
             q1.advance_to(round);
+            for &thing in list.iter() { q1.remove(thing); }
             q1.flush();
             while probe.less_than(q1.time()) { worker.step(); }
         }
@@ -144,12 +147,15 @@ fn main() {
         q1.close();
 
         // Q2 testing:
+        let mut list = Vec::with_capacity(worker_batch);
         let timer_q2 = ::std::time::Instant::now();
         for round in 1001 .. 2001 {
             for _ in 0 .. worker_batch {
-                q2.insert(rng3.gen_range(0, nodes));
+                list.push(rng3.gen_range(0, nodes));
             }
+            for &thing in list.iter() { q2.insert(thing); }
             q2.advance_to(round);
+            for &thing in list.iter() { q2.remove(thing); }
             q2.flush();
             while probe.less_than(q2.time()) { worker.step(); }
         }
@@ -157,12 +163,15 @@ fn main() {
         q2.close();
 
         // Q3 testing:
+        let mut list = Vec::with_capacity(worker_batch);
         let timer_q3 = ::std::time::Instant::now();
         for round in 2001 .. 3001 {
             for _ in 0 .. worker_batch {
-                q3.insert(rng3.gen_range(0, nodes));
+                list.push(rng3.gen_range(0, nodes));
             }
+            for &thing in list.iter() { q3.insert(thing); }
             q3.advance_to(round);
+            for &thing in list.iter() { q3.remove(thing); }
             q3.flush();
             while probe.less_than(q3.time()) { worker.step(); }
         }
@@ -170,12 +179,15 @@ fn main() {
         q3.close();
 
         // Q4 testing:
+        let mut list = Vec::with_capacity(worker_batch);
         let timer_q4 = ::std::time::Instant::now();
         for round in 3001 .. 4001 {
             for _ in 0 .. worker_batch {
-               q4.insert((rng3.gen_range(0, nodes), rng3.gen_range(0, nodes)));
+                list.push((rng3.gen_range(0, nodes), rng3.gen_range(0, nodes)));
             }
+            for &thing in list.iter() { q4.insert(thing); }
             q4.advance_to(round);
+            for &thing in list.iter() { q4.remove(thing); }
             q4.flush();
             while probe.less_than(q4.time()) { worker.step(); }
         }
