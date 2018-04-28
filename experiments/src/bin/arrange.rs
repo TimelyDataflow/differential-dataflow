@@ -12,7 +12,7 @@ use timely::progress::timestamp::RootTimestamp;
 use differential_dataflow::input::Input;
 use differential_dataflow::operators::arrange::Arrange;
 use differential_dataflow::operators::count::CountTotalCore;
-use differential_dataflow::operators::JoinCore;
+use differential_dataflow::operators::{Join, JoinCore};
 
 use differential_dataflow::trace::implementations::ord::OrdKeySpine;
 
@@ -21,6 +21,7 @@ enum Comp {
     Nothing,
     Exchange,
     Arrange,
+    Maintain,
     Count,
 }
 
@@ -30,19 +31,43 @@ enum Mode {
     ClosedLoop,
 }
 
+#[derive(Debug)]
+enum Duration {
+    Overwrite(usize),
+    Seconds(usize),
+}
+
 fn main() {
 
-    let keys: usize = std::env::args().nth(1).unwrap().parse().unwrap();
-    let recs: usize = std::env::args().nth(2).unwrap().parse().unwrap();
-    let rate: usize = std::env::args().nth(3).unwrap().parse().unwrap();
-    let work: usize = std::env::args().nth(4).unwrap().parse().unwrap_or(usize::max_value());
-    let comp: Comp = match std::env::args().nth(5).unwrap().as_str() {
+    let mut args = std::env::args();
+    args.next();
+
+    let keys: usize = args.next().unwrap().parse().unwrap();
+    let recs: usize = args.next().unwrap().parse().unwrap();
+    let rate: usize = args.next().unwrap().parse().unwrap();
+    let work: usize = args.next().unwrap().parse().unwrap_or(usize::max_value());
+    let comp: Comp = match args.next().unwrap().as_str() {
         "exchange" => Comp::Exchange,
         "arrange" => Comp::Arrange,
+        "maintain" => Comp::Maintain,
         "count" => Comp::Count,
-        _ => Comp::Nothing,
+        "nothing" => Comp::Nothing,
+        _ => panic!("invalid comp"),
     };
-    let mode: Mode = if std::env::args().any(|x| x == "open-loop") { Mode::OpenLoop } else { Mode::ClosedLoop };
+    let mode: Mode = match args.next().unwrap().as_str() {
+        "openloop" => Mode::OpenLoop,
+        "closedloop" => Mode::ClosedLoop,
+        _ => panic!("invalid mode"),
+    };
+    let duration: Duration = {
+        let duration_mode = args.next().unwrap();
+        let duration_param: usize = args.next().unwrap().parse().unwrap();
+        match duration_mode.as_str() {
+            "overwrite" => Duration::Overwrite(duration_param),
+            "seconds" => Duration::Seconds(duration_param),
+            _ => panic!("invalid duration mode"),
+        }
+    };
 
     // define a new computational scope, in which to run BFS
     timely::execute_from_args(std::env::args().skip(4), move |worker| {
@@ -60,6 +85,7 @@ fn main() {
                 Comp::Nothing => data.probe(),
                 Comp::Exchange => data.inner.exchange(|&(x,_,_): &((usize,()),_,_)| x.0 as u64).probe(),
                 Comp::Arrange => data.arrange(OrdKeySpine::<usize, Product<RootTimestamp,u64>,isize>::with_effort(work)).stream.probe(),
+                Comp::Maintain => data.arrange(OrdKeySpine::<usize, Product<RootTimestamp,u64>,isize>::with_effort(work)).join(&data.filter(|_| false)).probe(),
                 Comp::Count => data.arrange(OrdKeySpine::<usize, Product<RootTimestamp,u64>,isize>::with_effort(work)).count_total_core().probe(),
             };
 
@@ -146,7 +172,10 @@ fn main() {
 
                     let mut inserted_ns = 1;
 
-                    let ack_target = 10 * keys;
+                    let ack_target = match duration {
+                        Duration::Overwrite(times) => times * keys,
+                        Duration::Seconds(secs) => requests_per_sec * secs,
+                    };
                     while ack_counter < ack_target {
                     // while ((timer.elapsed().as_secs() as usize) * rate) < (10 * keys) {
 
@@ -223,7 +252,8 @@ fn main() {
                     }
                 }
                 for (latency, fraction) in results.drain(..).rev() {
-                    println!("ARRANGE\tLATENCY\t{}\t{}\t{}\t{}\t{}\t{:?}\t{:?}\t{}\t{}", peers, keys, recs, rate, work, comp, mode, latency, fraction);
+                    println!("ARRANGE\tLATENCYALL\t{}\t{}\t{}\t{}\t{}\t{:?}\t{:?}\t{}\t{}", peers, keys, recs, rate, work, comp, mode, latency, fraction);
+                    println!("ARRANGE\tLATENCYFRACTION\t{}\t{}", latency, fraction);
                 }
             }
         }
