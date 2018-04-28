@@ -29,11 +29,11 @@ eprint("commit: {}".format(current_commit))
 cluster_src_path = "/home/andreal/Src/differential-dataflow/experiments"
 cluster_server = "andreal@sgs-r820-01"
 
-def run_cmd(cmd, redirect=None, background=False):
+def run_cmd(cmd, redirect=None, background=False, node=""):
     full_cmd = "cd {}; {}".format(cluster_src_path, cmd)
     eprint("running: {}".format(full_cmd))
     if redirect is not None and os.path.exists(redirect):
         return execute("echo \"skipping {}\"".format(redirect), async=background)
     else:
-        return execute("ssh -t {} \"{}\"".format(cluster_server, full_cmd) +
+        return execute("ssh -t {}{} \"{}\"".format(cluster_server, node, full_cmd) +
                         (" > {}".format(redirect) if redirect else ""), async=background)
