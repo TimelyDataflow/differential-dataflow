@@ -45,17 +45,17 @@ def arrange():
                                 "dparam": dparam,
                             }
 
-                            n = 1
+                            n = 2
 
                             filename = experiment_setup(experiment_name, n, w, **config)
                             experiments.eprint("RUNNING {}".format(filename))
                             commands = [
-                                    "./target/release/arrange {} -n {} -p {} -w {}".format(
+                                    ("./target/release/arrange {} -h hostfile.txt -n {} -p {} -w {}".format(
                                         " ".join(str(x) for x in [keys, recs, rate, work, comp, mode, dmode, dparam]),
                                         n,
                                         p,
-                                        w) for p in range(0, n)]
+                                        w), p) for p in range(0, n)]
                             experiments.eprint("commands: {}".format(commands))
-                            processes = [experiments.run_cmd(command, filename, True) for command in commands]
+                            processes = [experiments.run_cmd(command, filename, True, node = str(p + 2)) for command, p in commands]
                             experiments.waitall(processes)
 
