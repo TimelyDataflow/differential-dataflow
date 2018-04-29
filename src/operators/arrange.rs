@@ -482,12 +482,17 @@ where
                      .extend(data.drain(..).map(|(k,t)| (k,t,1)))
             );
 
+            // We drop the trace when the `queries` input is closed.
             if let Some(ref mut trace) = trace {
 
                 frontier.clear();
-                for time in trace.advance_frontier().iter() {
-                    frontier.insert(time.clone());
-                }
+                frontier.insert(Default::default());
+                trace.map_batches(|batch| {
+                    frontier.clear();
+                    for time in batch.upper().iter() {
+                        frontier.insert(time.clone());
+                    }
+                });
 
                 for (capability, prefixes) in stash.iter_mut() {
 
@@ -528,10 +533,20 @@ where
                 }
             }
 
-            // drop fully processed capabilities.
+            // Drop fully processed capabilities.
             stash.retain(|_,prefixes| !prefixes.is_empty());
-            trace.as_mut().map(|trace| trace.advance_by(&input.frontier().frontier()));
-            if input.frontier().is_empty() && stash.is_empty() {
+
+            // Determine new frontier on queries that may be issued.
+            frontier.clear();
+            for capability in stash.keys() {
+                frontier.insert(capability.time().clone());
+            }
+            for time in input.frontier().frontier().iter() {
+                frontier.insert(time.clone());
+            }
+
+            trace.as_mut().map(|trace| trace.advance_by(frontier.elements()));
+            if frontier.elements().is_empty() {
                 trace = None;
             }
         }
