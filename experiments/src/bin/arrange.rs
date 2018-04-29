@@ -22,6 +22,7 @@ enum Comp {
     Exchange,
     Arrange,
     Maintain,
+    SelfJoin,
     Count,
 }
 
@@ -50,6 +51,7 @@ fn main() {
         "exchange" => Comp::Exchange,
         "arrange" => Comp::Arrange,
         "maintain" => Comp::Maintain,
+        "selfjoin" => Comp::SelfJoin,
         "count" => Comp::Count,
         "nothing" => Comp::Nothing,
         _ => panic!("invalid comp"),
@@ -86,6 +88,10 @@ fn main() {
                 Comp::Exchange => data.inner.exchange(|&(x,_,_): &((usize,()),_,_)| x.0 as u64).probe(),
                 Comp::Arrange => data.arrange(OrdKeySpine::<usize, Product<RootTimestamp,u64>,isize>::with_effort(work)).stream.probe(),
                 Comp::Maintain => data.arrange(OrdKeySpine::<usize, Product<RootTimestamp,u64>,isize>::with_effort(work)).join(&data.filter(|_| false)).probe(),
+                Comp::SelfJoin => {
+                    let arranged = data.arrange(OrdKeySpine::<usize, Product<RootTimestamp,u64>,isize>::with_effort(work));
+                    arranged.join_core(&arranged, |_key, &a, &b| if a == b { Some((a, b)) } else { None }).probe()
+                },
                 Comp::Count => data.arrange(OrdKeySpine::<usize, Product<RootTimestamp,u64>,isize>::with_effort(work)).count_total_core().probe(),
             };
 
