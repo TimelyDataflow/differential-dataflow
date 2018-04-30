@@ -216,15 +216,15 @@ fn main() {
                         // If such a multiple exists, we introduce records to that point and
                         // advance the input.
 
-                        let scale = (inserted_ns - acknowledged_ns).next_power_of_two();
-                        let target_ns = elapsed_ns & !(scale - 1);
+                        // let scale = (inserted_ns - acknowledged_ns).next_power_of_two();
+                        // let target_ns = elapsed_ns & !(scale - 1);
 
                         // let target_ns = if acknowledged_ns >= inserted_ns { elapsed_ns } else { inserted_ns };
 
                         // let target_ns = elapsed_ns & !((1 << 16) - 1);
 
-                        // let mut target_ns = elapsed_ns & !((1 << 22) - 1);
-                        // if target_ns > inserted_ns + 1_000_000_000 { target_ns = inserted_ns + 1_000_000_000; }
+                        let mut target_ns = elapsed_ns & !((1 << 22) - 1);
+                        if target_ns > inserted_ns + 1_000_000_000 { target_ns = inserted_ns + 1_000_000_000; }
 
                         if inserted_ns < target_ns {
 
@@ -266,6 +266,8 @@ fn main() {
                 }
             }
         }
+
+        ::std::thread::sleep_ms(2000);
 
     }).unwrap();
 }
