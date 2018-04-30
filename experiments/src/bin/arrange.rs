@@ -76,7 +76,7 @@ fn main() {
 
         let index = worker.index();
         let core_ids = core_affinity::get_core_ids().unwrap();
-        core_affinity::set_for_current(core_ids[index % 40]);
+        core_affinity::set_for_current(core_ids[index]);
 
         // create a a degree counting differential dataflow
         let (mut input, probe) = worker.dataflow::<u64,_,_>(|scope| {
@@ -223,7 +223,7 @@ fn main() {
 
                         // let target_ns = elapsed_ns & !((1 << 16) - 1);
 
-                        let mut target_ns = elapsed_ns & !((1 << 22) - 1);
+                        let mut target_ns = elapsed_ns & !((1 << 20) - 1);
                         if target_ns > inserted_ns + 1_000_000_000 { target_ns = inserted_ns + 1_000_000_000; }
 
                         if inserted_ns < target_ns {
@@ -266,8 +266,7 @@ fn main() {
                 }
             }
         }
-
-        ::std::thread::sleep_ms(2000);
-
     }).unwrap();
+
+    // ::std::thread::sleep_ms(5000);
 }
