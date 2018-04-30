@@ -72,11 +72,11 @@ fn main() {
     };
 
     // define a new computational scope, in which to run BFS
-    timely::execute_from_args(std::env::args().skip(4), move |worker| {
+    timely::execute_from_args(args, move |worker| {
 
         let index = worker.index();
         let core_ids = core_affinity::get_core_ids().unwrap();
-        core_affinity::set_for_current(core_ids[index]);
+        core_affinity::set_for_current(core_ids[index % 40]);
 
         // create a a degree counting differential dataflow
         let (mut input, probe) = worker.dataflow::<u64,_,_>(|scope| {
