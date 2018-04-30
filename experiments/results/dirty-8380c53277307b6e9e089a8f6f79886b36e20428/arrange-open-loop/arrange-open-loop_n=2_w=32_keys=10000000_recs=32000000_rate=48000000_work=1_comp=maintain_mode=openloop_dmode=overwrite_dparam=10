@@ -1,0 +1,3 @@
+ARRANGE	LOADING	64	41177697.5927904
+bash: line 1: 42104 Killed                  ./target/release/arrange 10000000 32000000 48000000 1 maintain openloop overwrite 10 -h hostfile.txt -n 2 -p 0 -w 32
+oop overwrite 10 -h hostfile.txt -n 2 -p 1 -w 32

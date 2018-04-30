@@ -1,0 +1,30 @@
+ARRANGE	LOADING	4	16306238.10624585
+batch[22] not complete (size: 7116211)
+sizes: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+fuel shortage: 254326
+batch[22] not complete (size: 7396708)
+sizes: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+fuel shortage: 525274
+batch[22] not complete (size: 7496515)
+sizes: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+fuel shortage: 2276704
+batch[22] not complete (size: 7686418)
+sizes: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+fuel shortage: 1014215
+batch[22] not complete (size: 6697474)
+sizes: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+fuel shortage: 1123575
+batch[22] not complete (size: 7210902)
+sizes: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+fuel shortage: 689973
+ARRANGE	LATENCYALL	4	10000000	32000000	4000000	1	SelfJoin	OpenLoop	9126805504	0.9281891942551356
+ARRANGE	LATENCYFRACTION	9126805504	0.9281891942551356
+ARRANGE	LATENCYALL	4	10000000	32000000	4000000	1	SelfJoin	OpenLoop	9663676416	0.610011648800932
+ARRANGE	LATENCYFRACTION	9663676416	0.610011648800932
+ARRANGE	LATENCYALL	4	10000000	32000000	4000000	1	SelfJoin	OpenLoop	10200547328	0.2153305772264462
+ARRANGE	LATENCYFRACTION	10200547328	0.2153305772264462
+ARRANGE	LATENCYALL	4	10000000	32000000	4000000	1	SelfJoin	OpenLoop	10737418240	0.042521763401741075
+ARRANGE	LATENCYFRACTION	10737418240	0.042521763401741075
+batch[22] not complete (size: 7572527)
+sizes: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+fuel shortage: 1116151
