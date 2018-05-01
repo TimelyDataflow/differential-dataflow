@@ -3,8 +3,8 @@ from executor import execute
 from os import listdir
 import sys
 
-commit = "dirty-8380c53277307b6e9e089a8f6f79886b36e20428"
-experiment = "arrange-open-loop"
+commit = "dirty-e74441d0c062c7ec8d6da9bbf1972bd9397b2670"
+experiment = "arrange"
 print("commit {}".format(commit))
 
 def eprint(*args):
@@ -31,7 +31,7 @@ eprint(params)
 def groupingstr(s):
     return '_'.join("{}={}".format(x[0], str(x[1])) for x in sorted(s, key=lambda x: x[0]))
 
-def i_load_varies():
+def i_load_varies(): # commit = "dirty-8380c53277307b6e9e089a8f6f79886b36e20428" experiment = "arrange-open-loop"
     tempdir = tempfile.mkdtemp("{}-{}".format(experiment, commit))
 
     filtering = { ('w', 16), }
@@ -66,18 +66,25 @@ def i_load_varies():
     # shutil.rmtree(tempdir)
 
 
-def iv_throughput():
+def iv_throughput(): # commit = "dirty-e74441d0c062c7ec8d6da9bbf1972bd9397b2670" experiment = "arrange"
     tempdir = tempfile.mkdtemp("{}-{}".format(experiment, commit))
 
-    filtering = { ('rate', 2000000), ('work', 4) }
-    plotscript = "set terminal pdf;  set title \"throughput\"; plot "
+    filtering = { ('rate', 10000), ('work', 4) }
+    plotscript = "set terminal pdf size 6cm,4cm; " \
+            "set bmargin at screen 0.2; " \
+            "set format x \"10^{%T}\"; " \
+            "set xlabel \"cores\"; " \
+            "set ylabel \"throughput (records/s)\"; " \
+            "set key left top Left reverse font \",10\"; " \
+            "plot "
     for comp in {'arrange', 'maintain', 'count'}:
-        eprint(comp, groupingstr(filtering))
         F = filtering.union({ ('comp', comp), })
+        # eprint(comp, groupingstr(filtering), [x for p, x in filedict if p.issuperset(F)])
         datafile = "{}/iv_throughput_{}".format(tempdir, groupingstr(F))
         execute('echo "" > {}'.format(datafile))
         for p, f in sorted(filedict, key=lambda x: dict(x[0])['w']):
             if p.issuperset(F):
+                # eprint("results/{}/{}/{}".format(commit, experiment, f))
                 assert(execute('cat results/{}/{}/{} | grep THROUGHPUT | cut -f 3,4 >> {}'.format(commit, experiment, f, datafile)))
         plotscript += "\"{}\" using 1:2 with linespoints title \"{}\", ".format(datafile, comp)
 
