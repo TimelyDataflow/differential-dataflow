@@ -20,7 +20,7 @@ def arrange():
     for w in reversed([4, 8, 16, 32]):
         for keys in [10000000]:
             for recs in [32000000]:
-                for rate in [1000000 * x for x in [2, 4, 8]]:
+                for rate in [10000]: # * x for x in [1]]: #, 2, 4, 8]]:
                     for work in [1, 4, "max"]:
                         for comp in [
                                 "exchange",
@@ -31,8 +31,8 @@ def arrange():
                                 "nothing",
                                 ]:
                             mode = "closedloop"
-                            dmode = "overwrite"
-                            dparam = "10"
+                            dmode = "seconds"
+                            dparam = "60"
 
                             config = {
                                 "keys": keys,
@@ -45,7 +45,7 @@ def arrange():
                                 "dparam": dparam,
                             }
 
-                            n = 2
+                            n = 1
 
                             filename = experiment_setup(experiment_name, n, w, **config)
                             experiments.eprint("RUNNING {}".format(filename))
@@ -56,6 +56,54 @@ def arrange():
                                         p,
                                         w), p) for p in range(0, n)]
                             experiments.eprint("commands: {}".format(commands))
-                            processes = [experiments.run_cmd(command, filename, True, node = str(p + 2)) for command, p in commands]
+                            processes = [experiments.run_cmd(command, filename, True, node = 3) for command, p in commands]
                             experiments.waitall(processes)
+
+def arrange_open_loop():
+    experiment_name = "arrange-open-loop"
+
+    experiments.eprint("### {} ###".format(experiment_name))
+    experiments.eprint(experiments.experdir(experiment_name))
+
+    for n in [1]:
+        for w in [32, 16, 8, 4, 2, 1]:
+            total_workers = n * w
+            for keys in [10000000, 20000000]:
+                for recs in [32000000, 64000000]:
+                    for rate in [1000000, 2000000, 1000000 * total_workers, 500000 * total_workers, 1500000 * total_workers]:  # total_workers * x for x in [500000, 750000]]: #1000000 * x for x in [2, 4, 8]]:
+                        for work in [1, 4, "max"]:
+                            for comp in [
+                                    "exchange",
+                                    "arrange",
+                                    "maintain",
+                                    "selfjoin",
+                                    "count",
+                                    "nothing",
+                                    ]:
+                                mode = "openloop"
+                                dmode = "overwrite"
+                                dparam = "30"
+
+                                config = {
+                                    "keys": keys,
+                                    "recs": recs,
+                                    "rate": rate,
+                                    "work": work,
+                                    "comp": comp,
+                                    "mode": mode,
+                                    "dmode": dmode,
+                                    "dparam": dparam,
+                                }
+
+                                filename = experiment_setup(experiment_name, n, w, **config)
+                                experiments.eprint("RUNNING {}".format(filename))
+                                commands = [
+                                        ("./target/release/arrange {} -h hostfile.txt -n {} -p {} -w {}".format(
+                                            " ".join(str(x) for x in [keys, recs, rate, work, comp, mode, dmode, dparam]),
+                                            n,
+                                            p,
+                                            w), p) for p in range(0, n)]
+                                experiments.eprint("commands: {}".format(commands))
+                                processes = [experiments.run_cmd(command, filename, True, node = str(p + 2)) for command, p in commands]
+                                experiments.waitall(processes)
 
