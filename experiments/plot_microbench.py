@@ -99,6 +99,43 @@ def ii_strong_scaling(): # commit = "dirty-e74441d0c062c7ec8d6da9bbf1972bd9397b2
 
     shutil.rmtree(tempdir)
 
+def iii_weak_scaling(): # commit = "dirty-e74441d0c062c7ec8d6da9bbf1972bd9397b2670" experiment = "arrange-open-loop"
+    tempdir = tempfile.mkdtemp("{}-{}".format(experiment, commit))
+
+    filtering = { ('keys', 10000000), ('recs', 32000000), }
+    for work in params['work']:
+        for comp in {'arrange', 'maintain', 'count'}:
+            F = filtering.union({ ('work', work), ('comp', comp), })
+            eprint(F)
+            # print('\n'.join(str(p) for p, f in sorted(filedict, key=lambda x: dict(x[0])['rate']) if p.issuperset(F)))
+            plotscript = "set terminal pdf size 6cm,4cm; set logscale x; set logscale y; " \
+                    "set bmargin at screen 0.2; " \
+                    "set xrange [50000:5000000000.0]; " \
+                    "set format x \"10^{%T}\"; " \
+                    "set yrange [0.005:1.01]; " \
+                    "set xlabel \"nanoseconds\"; " \
+                    "set format x \"10^{%T}\"; " \
+                    "set ylabel \"complementary cdf\"; " \
+                    "set key left bottom Left reverse font \",10\"; " \
+                    "plot "
+            dt = 2
+            data = False
+            for p, f in sorted(filedict, key=lambda x: dict(x[0])['w']):
+                if p.issuperset(F) and dict(p)['rate'] == dict(p)['w'] * 1000000:
+                    data = True
+                    datafile = "{}/iii_strong_scaling_{}".format(tempdir, f)
+                    assert(execute('cat results/{}/{}/{} | grep LATENCYFRACTION | cut -f 3,4 > {}'.format(commit, experiment, f, datafile)))
+                    plotscript += "\"{}\" using 1:2 with lines lw 2 dt {} title \"{}\", ".format(datafile, dt, dict(p)['w'])
+                    dt += 1
+
+            if data:
+                assert(execute('mkdir -p plots/{}/{}'.format(commit, experiment)))
+                eprint(plotscript)
+                assert(execute('gnuplot > plots/{}/{}/iii_strong_scaling_{}.pdf'.format(commit, experiment, groupingstr(F)), input=plotscript))
+                eprint('plots/{}/{}/iii_strong_scaling_{}.pdf'.format(commit, experiment, groupingstr(F)))
+
+    shutil.rmtree(tempdir)
+
 
 def iv_throughput(): # commit = "dirty-e74441d0c062c7ec8d6da9bbf1972bd9397b2670" experiment = "arrange"
     tempdir = tempfile.mkdtemp("{}-{}".format(experiment, commit))
