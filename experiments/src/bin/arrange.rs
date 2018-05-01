@@ -137,7 +137,11 @@ fn main() {
                     let mut wave = 1;
                     let mut elapsed = timer.elapsed();
 
-                    while elapsed.as_secs() < 25 {
+                    let seconds = match duration {
+                        Duration::Seconds(s) => s,
+                        _ => panic!("invalid duration for closedloop"),
+                    };
+                    while elapsed.as_secs() < (seconds as u64) {
 
                         for round in 0 .. rate {
                             input.advance_to((((wave * rate) + round) * peers + index) as u64);
