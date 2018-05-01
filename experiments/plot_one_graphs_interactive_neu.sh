@@ -1,4 +1,4 @@
-commit=dirty-a1fada910fb5725708e9bfd2b0e4ce921824455c
+commit=dirty-caca10b42c846b7e97b1323e72cca92fdc56e159
 
 mkdir -p plots/$commit/graphs-interactive-neu-one
 temp_dir=$(mktemp -d)
@@ -24,6 +24,8 @@ for g in `ls results/$commit/graphs-interactive-neu/*rate=1000000_* | cut -d '_'
   gnuplot -p -e "$plotscript" > plots/$commit/graphs-interactive-neu-one/$g.pdf
 done
 
+echo "--"
+
 gnuplot -p -e "\
 set terminal pdf size 6cm,4cm;
  set logscale x;
@@ -39,12 +41,12 @@ set terminal pdf size 6cm,4cm;
  set style line 1 linecolor rgb \"#000000\";
  set style line 2 linecolor rgb \"#888888\";
  plot \
- \"$temp_dir/graphs-interactive-neu_n=1_w=16_nodes=10000000_edges=32000000_rate=1000000_goal=5_queries=1_shared=no\" using 1:2 with lines ls 2 lw 2 dt (2, 6) title \"1 q\", \
- \"$temp_dir/graphs-interactive-neu_n=1_w=16_nodes=10000000_edges=32000000_rate=1000000_goal=5_queries=10000_shared=no\" using 1:2 with lines ls 2 lw 2 dt (14, 6) title \"10000 q\", \
- \"$temp_dir/graphs-interactive-neu_n=1_w=16_nodes=10000000_edges=32000000_rate=1000000_goal=5_queries=100000_shared=no\" using 1:2 with lines ls 2 lw 2 dt (23, 6) title \"100000 q\", \
- \"$temp_dir/graphs-interactive-neu_n=1_w=16_nodes=10000000_edges=32000000_rate=1000000_goal=5_queries=1_shared=shared\" using 1:2 with lines ls 1 lw 2 dt (2, 6) title \"1 q, sharing\", \
- \"$temp_dir/graphs-interactive-neu_n=1_w=16_nodes=10000000_edges=32000000_rate=1000000_goal=5_queries=10000_shared=shared\" using 1:2 with lines ls 1 lw 2 dt (14, 6) title \"10000 q, sharing\", \
- \"$temp_dir/graphs-interactive-neu_n=1_w=16_nodes=10000000_edges=32000000_rate=1000000_goal=5_queries=100000_shared=shared\" using 1:2 with lines ls 1 lw 2 dt (23, 6) title \"100000 q, sharing\", \
+ \"$temp_dir/graphs-interactive-neu_n=1_w=16_nodes=10000000_edges=32000000_rate=1000000_goal=60_queries=1_shared=no\" using 1:2 with lines ls 2 lw 2 dt (2, 6) title \"1 q\", \
+ \"$temp_dir/graphs-interactive-neu_n=1_w=16_nodes=10000000_edges=32000000_rate=1000000_goal=60_queries=10000_shared=no\" using 1:2 with lines ls 2 lw 2 dt (14, 6) title \"10000 q\", \
+ \"$temp_dir/graphs-interactive-neu_n=1_w=16_nodes=10000000_edges=32000000_rate=1000000_goal=60_queries=100000_shared=no\" using 1:2 with lines ls 2 lw 2 dt (23, 6) title \"100000 q\", \
+ \"$temp_dir/graphs-interactive-neu_n=1_w=16_nodes=10000000_edges=32000000_rate=1000000_goal=60_queries=1_shared=shared\" using 1:2 with lines ls 1 lw 2 dt (2, 6) title \"1 q, sharing\", \
+ \"$temp_dir/graphs-interactive-neu_n=1_w=16_nodes=10000000_edges=32000000_rate=1000000_goal=60_queries=10000_shared=shared\" using 1:2 with lines ls 1 lw 2 dt (14, 6) title \"10000 q, sharing\", \
+ \"$temp_dir/graphs-interactive-neu_n=1_w=16_nodes=10000000_edges=32000000_rate=1000000_goal=60_queries=100000_shared=shared\" using 1:2 with lines ls 1 lw 2 dt (23, 6) title \"100000 q, sharing\", \
  " > plots/$commit/graphs-interactive-neu-one/w=16_rate=1000000_manual.pdf
 
 
