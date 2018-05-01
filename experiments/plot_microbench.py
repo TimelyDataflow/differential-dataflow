@@ -50,11 +50,13 @@ def i_load_varies():
                     "set ylabel \"complementary cdf\"; " \
                     "set key left bottom Left reverse font \",10\"; " \
                     "plot "
+            dt = 2
             for p, f in sorted(filedict, key=lambda x: dict(x[0])['rate']):
                 if p.issuperset(F):
                     datafile = "{}/i_load_varies_{}".format(tempdir, f)
                     assert(execute('cat results/{}/{}/{} | grep LATENCYFRACTION | cut -f 3,4 > {}'.format(commit, experiment, f, datafile)))
-                    plotscript += "\"{}\" using 1:2 with lines title \"{}\", ".format(datafile, dict(p)['rate'])
+                    plotscript += "\"{}\" using 1:2 with lines lw 2 dt {} title \"{}\", ".format(datafile, dt, dict(p)['rate'])
+                    dt += 1
 
             assert(execute('mkdir -p plots/{}/{}'.format(commit, experiment)))
             eprint(plotscript)
