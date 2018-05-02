@@ -1,0 +1,2 @@
+ARRANGE	LOADING	32	50175470.4408597
+bash: line 1: 63072 Killed                  ./target/release/arrange 10000000 32000000 48000000 4 selfjoin openloop overwrite 30 -h hostfile.txt -n 1 -p 0 -w 32
