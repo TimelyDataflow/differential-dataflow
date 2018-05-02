@@ -3,9 +3,13 @@ from executor import execute
 from os import listdir
 import sys
 
-commit = "dirty-e74441d0c062c7ec8d6da9bbf1972bd9397b2670"
-experiment = "arrange-open-loop"
-print("commit {}".format(commit))
+commit = sys.argv[sys.argv.index('--commit') + 1]
+experiment = sys.argv[sys.argv.index('--experiment') + 1]
+
+# commit = "dirty-e74441d0c062c7ec8d6da9bbf1972bd9397b2670"
+# experiment = "arrange-open-loop"
+print("commit {}, experiment {}".format(commit, experiment))
+
 
 def eprint(*args):
     print(*args, file=sys.stderr)
@@ -34,7 +38,7 @@ def groupingstr(s):
 def i_load_varies(): # commit = "dirty-8380c53277307b6e9e089a8f6f79886b36e20428" experiment = "arrange-open-loop"
     tempdir = tempfile.mkdtemp("{}-{}".format(experiment, commit))
 
-    filtering = { ('w', 16), }
+    filtering = { ('w', 1), }
     for work in params['work']:
         for comp in {'arrange', 'maintain', 'count'}:
             F = filtering.union({ ('work', work), ('comp', comp), })
@@ -143,8 +147,8 @@ def iv_throughput(): # commit = "dirty-e74441d0c062c7ec8d6da9bbf1972bd9397b2670"
     filtering = { ('rate', 10000), ('work', 4) }
     plotscript = "set terminal pdf size 6cm,4cm; " \
             "set bmargin at screen 0.2; " \
-            "set format x \"10^{%T}\"; " \
             "set xlabel \"cores\"; " \
+            "set xrange [2:34]; " \
             "set ylabel \"throughput (records/s)\"; " \
             "set key left top Left reverse font \",10\"; " \
             "plot "
@@ -157,7 +161,7 @@ def iv_throughput(): # commit = "dirty-e74441d0c062c7ec8d6da9bbf1972bd9397b2670"
             if p.issuperset(F):
                 # eprint("results/{}/{}/{}".format(commit, experiment, f))
                 assert(execute('cat results/{}/{}/{} | grep THROUGHPUT | cut -f 3,4 >> {}'.format(commit, experiment, f, datafile)))
-        plotscript += "\"{}\" using 1:2 with linespoints title \"{}\", ".format(datafile, comp)
+        plotscript += "\"{}\" using 1:2:xtic(1) with linespoints title \"{}\", ".format(datafile, comp)
 
     assert(execute('mkdir -p plots/{}/{}'.format(commit, experiment)))
     eprint(plotscript)
@@ -166,4 +170,39 @@ def iv_throughput(): # commit = "dirty-e74441d0c062c7ec8d6da9bbf1972bd9397b2670"
 
     shutil.rmtree(tempdir)
 
+def v_amortization(): # commit = "" experiment = ""
+    tempdir = tempfile.mkdtemp("{}-{}".format(experiment, commit))
 
+    filtering = { ('keys', 10000000), ('recs', 32000000), ('rate', 1000000), }
+    for work in params['work']:
+        for comp in {'arrange', 'maintain', 'count'}:
+            F = filtering.union({ ('comp', comp), })
+            eprint(F)
+            # print('\n'.join(str(p) for p, f in sorted(filedict, key=lambda x: dict(x[0])['rate']) if p.issuperset(F)))
+            plotscript = "set terminal pdf size 6cm,4cm; set logscale x; set logscale y; " \
+                    "set bmargin at screen 0.2; " \
+                    "set xrange [50000:5000000000.0]; " \
+                    "set format x \"10^{%T}\"; " \
+                    "set yrange [0.005:1.01]; " \
+                    "set xlabel \"nanoseconds\"; " \
+                    "set format x \"10^{%T}\"; " \
+                    "set ylabel \"complementary cdf\"; " \
+                    "set key left bottom Left reverse font \",10\"; " \
+                    "plot "
+            dt = 2
+            data = False
+            for p, f in filedict: #sorted(filedict, key=lambda x: dict(x[0])['w']):
+                if p.issuperset(F):
+                    data = True
+                    datafile = "{}/v_amortization_{}".format(tempdir, f)
+                    assert(execute('cat results/{}/{}/{} | grep LATENCYFRACTION | cut -f 3,4 > {}'.format(commit, experiment, f, datafile)))
+                    plotscript += "\"{}\" using 1:2 with lines lw 2 dt {} title \"{}\", ".format(datafile, dt, dict(p)['work'])
+                    dt += 1
+
+            if data:
+                assert(execute('mkdir -p plots/{}/{}'.format(commit, experiment)))
+                eprint(plotscript)
+                assert(execute('gnuplot > plots/{}/{}/v_amortization_{}.pdf'.format(commit, experiment, groupingstr(F)), input=plotscript))
+                eprint('plots/{}/{}/v_amortization_{}.pdf'.format(commit, experiment, groupingstr(F)))
+
+    shutil.rmtree(tempdir)

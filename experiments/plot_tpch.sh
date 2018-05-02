@@ -90,7 +90,7 @@ gnuplot -p -e "\
    set xlabel \"query\";
    set xrange [0:23];
    set yrange [1:*];
-   set ylabel \"absolute throughput (tuples/sec)\";
+   set ylabel \"relative throughput\";
    set key left bottom Left reverse font \",10\";
    plot \
    \"$temp_dir/w1000000\" using 1:2 with lines lt 7 title \"w=10^6\", \
