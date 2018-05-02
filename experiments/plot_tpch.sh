@@ -1,4 +1,5 @@
 
+######################################
 temp_dir=$(mktemp -d)
 
 cat experiments-sf10-filtered.txt | awk '$3 == 1000000 && $4 == 1' | cut -f 1,5 > $temp_dir/w1
@@ -31,6 +32,33 @@ gnuplot -p -e "\
    \"$temp_dir/w8\" using 1:2  with lines lt 5 title \"w=8\", \
    \"$temp_dir/w4\" using 1:2  with lines lt 4 title \"w=4\", \
    \"$temp_dir/w2\" using 1:2  with lines lt 3 title \"w=2\"
-   " > plots/tpch_3.pdf # $ $temp_dir/w2 using 1:2:xtic(1) with lines title \"w=2\", $temp_dir/w4 using 1:2:xtic(1) with lines title \"w=4\", $temp_dir/w8 using 1:2:xtic(1) with lines title \"w=8\", $temp_dir/w16 using 1:2:xtic(1) with lines title \"w=16\", $temp_dir/w32 using 1:2:xtic(1) with lines title \"w=32\", " > plots/tpch_3.pdf
+   " > plots/tpch_3.pdf
+
+rm -R $temp_dir
+
+######################################
+temp_dir=$(mktemp -d)
+
+cat experiments-sf10-filtered.txt | awk '$3 == 1 && $4 == 1' | cut -f 1,5 > $temp_dir/b1_w1
+cat experiments-sf10-filtered.txt | awk '$3 == 1000000 && $4 == 1' | cut -f 1,5 > $temp_dir/b1000000_w1
+join $temp_dir/b1_w1 $temp_dir/b1000000_w1 > $temp_dir/w1
+cat experiments-sf10-filtered.txt | awk '$3 == 1000000 && $4 == 32' | cut -f 1,5 > $temp_dir/b1000000_w32
+
+gnuplot -p -e "\
+  set terminal pdf size 6cm,4cm;
+   set logscale y;
+   set rmargin at screen 0.9;
+   set bmargin at screen 0.2;
+   set xtics 2,4,22;
+   set xlabel \"query\";
+   set xrange [0:23];
+   set ylabel \"absolute throughput (tuples/sec)\";
+   set key left bottom Left reverse font \",10\";
+   plot \
+   \"$temp_dir/w1\" using 1:2 with lines lt 7 title \"w=1, b=1\", \
+   \"$temp_dir/w1\" using 1:3 with lines lt 7 title \"w=1, b=1M\", \
+   \"$temp_dir/b1000000_w32\" using 1:2 with lines lt 6 title \"w=32, b=1M\", \
+   \"experiments-hotdog.txt\" using 1:2 pointtype 6 ps .5 lc rgb \"black\" title \"hotdog\"
+   " > plots/tpch_1.pdf
 
 rm -R $temp_dir
