@@ -22,7 +22,7 @@ def arrange_closed_loop():
             for keys in [10000000]:
                 for recs in [32000000]:
                     for rate in [10000]: # * x for x in [1]]: #, 2, 4, 8]]:
-                        for work in [1, 4, "max"]:
+                        for work in [4,]:
                             for comp in [
                                     "exchange",
                                     "arrange",
@@ -71,7 +71,7 @@ def arrange_open_loop_load_varies():
             total_workers = n * w
             for keys in [10000000, 20000000]:
                 for recs in [32000000, 64000000]:
-                    for rate in [2000000, 1000000, 500000, 250000, 125000, 75000]:
+                    for rate in [1000000, 500000, 250000, 125000, 75000]:
                         for work in [1, 4, "max"]:
                             for comp in [
                                     "exchange",
@@ -115,19 +115,19 @@ def arrange_open_loop_strong_scaling():
     experiments.eprint(experiments.experdir(experiment_name))
 
     for n in [1]:
-        for w in [32, 16, 8, 4, 2, 1]:
+        for w in [16, 8, 4, 2, 1]: # 32
             total_workers = n * w
-            for keys in [10000000, 20000000]:
-                for recs in [32000000, 64000000]:
+            for keys in [10000000]: #, 20000000]:
+                for recs in [32000000]: # , 64000000]:
                     for rate in [750000, 1000000, 1250000]:
                         for work in [1, 4, "max"]:
                             for comp in [
-                                    "exchange",
-                                    "arrange",
+                                    # "exchange",
+                                    # "arrange",
                                     "maintain",
-                                    "selfjoin",
-                                    "count",
-                                    "nothing",
+                                    # "selfjoin",
+                                    # "count",
+                                    # "nothing",
                                     ]:
                                 mode = "openloop"
                                 dmode = "seconds"
@@ -163,19 +163,19 @@ def arrange_open_loop_weak_scaling():
     experiments.eprint(experiments.experdir(experiment_name))
 
     for n in [1]:
-        for w in [32, 16, 8, 4, 2, 1]:
+        for w in [16, 8, 4, 2, 1]:
             total_workers = n * w
-            for keys in [10000000, 20000000]:
-                for recs in [32000000, 64000000]:
+            for keys in [10000000]: # , 20000000]:
+                for recs in [32000000]: #, 64000000]:
                     for rate in [750000 * w, 1000000 * w, 1250000 * w]:
                         for work in [1, 4, "max"]:
                             for comp in [
-                                    "exchange",
+                                    # "exchange",
                                     "arrange",
                                     "maintain",
-                                    "selfjoin",
+                                    # "selfjoin",
                                     "count",
-                                    "nothing",
+                                    # "nothing",
                                     ]:
                                 mode = "openloop"
                                 dmode = "overwrite"
