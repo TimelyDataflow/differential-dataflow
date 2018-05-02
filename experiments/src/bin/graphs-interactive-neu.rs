@@ -152,9 +152,9 @@ fn main() {
         let worker_window = queries/peers + if index < (queries % peers) { 1 } else { 0 };
         for _ in 0 .. worker_window {
             q1.insert(rng3.gen_range(0, nodes));
-            q2.insert(rng3.gen_range(0, nodes));
-            q3.insert(rng3.gen_range(0, nodes));
-            q4.insert((rng3.gen_range(0, nodes), rng3.gen_range(0, nodes)));
+            q2.insert(rng5.gen_range(0, nodes));
+            q3.insert(rng7.gen_range(0, nodes));
+            q4.insert((rng9.gen_range(0, nodes), rng9.gen_range(0, nodes)));
         }
 
         q1.advance_to(1);    q1.flush();     // q1 queries start now.
