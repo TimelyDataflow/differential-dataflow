@@ -72,9 +72,9 @@ def i_load_varies(): # commit = "dirty-8380c53277307b6e9e089a8f6f79886b36e20428"
 def ii_strong_scaling(): # commit = "dirty-e74441d0c062c7ec8d6da9bbf1972bd9397b2670" experiment = "arrange-open-loop"
     tempdir = tempfile.mkdtemp("{}-{}".format(experiment, commit))
 
-    filtering = { ('rate', 2000000), }
+    filtering = { ('rate', 1000000), }
     for work in params['work']:
-        for comp in {'arrange', 'maintain', 'count'}:
+        for comp in { 'maintain', }:
             F = filtering.union({ ('work', work), ('comp', comp), })
             eprint(F)
             # print('\n'.join(str(p) for p, f in sorted(filedict, key=lambda x: dict(x[0])['rate']) if p.issuperset(F)))
@@ -82,14 +82,15 @@ def ii_strong_scaling(): # commit = "dirty-e74441d0c062c7ec8d6da9bbf1972bd9397b2
                     "set bmargin at screen 0.2; " \
                     "set xrange [50000:5000000000.0]; " \
                     "set format x \"10^{%T}\"; " \
-                    "set yrange [0.005:1.01]; " \
+                    "set yrange [*:1.01]; " \
                     "set xlabel \"nanoseconds\"; " \
-                    "set format x \"10^{%T}\"; " \
+                    "set format y \"10^{%T}\"; " \
                     "set ylabel \"complementary cdf\"; " \
                     "set key left bottom Left reverse font \",10\"; " \
                     "plot "
             dt = 2
             for p, f in sorted(filedict, key=lambda x: dict(x[0])['w']):
+                eprint(p)
                 if p.issuperset(F):
                     datafile = "{}/i_strong_scaling_{}".format(tempdir, f)
                     assert(execute('cat results/{}/{}/{} | grep LATENCYFRACTION | cut -f 3,4 > {}'.format(commit, experiment, f, datafile)))
