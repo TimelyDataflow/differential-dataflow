@@ -20,6 +20,24 @@ type Node = usize;
 
 fn main() {
 
+    ::std::thread::spawn(|| {
+        use std::io::Read;
+        let timer = ::std::time::Instant::now();
+        // let pid = std::process::id();
+        loop {
+            let mut stat_s = String::new();
+            let mut statm_f = ::std::fs::File::open("/proc/self/statm").expect("filez");
+            statm_f.read_to_string(&mut stat_s);
+            let pages: u64 = stat_s.split_whitespace().nth(1).expect("wooo").parse().expect("not a number");
+            let rss = pages * 1024;
+
+            let elapsed = timer.elapsed();
+            let elapsed_ns: usize = (elapsed.as_secs() * 1_000_000_000 + (elapsed.subsec_nanos() as u64)) as usize;
+            println!("RSS\t{}\t{}", elapsed_ns, rss);
+            ::std::thread::sleep_ms(100);
+        }
+    });
+
     let nodes: usize = std::env::args().nth(1).unwrap().parse().unwrap();
     let edges: usize = std::env::args().nth(2).unwrap().parse().unwrap();
     let rate: usize  = std::env::args().nth(3).unwrap().parse().unwrap();

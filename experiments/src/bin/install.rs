@@ -27,7 +27,7 @@ fn main() {
     // let rate: usize = args.next().unwrap().parse().unwrap();
     // let work: usize = args.next().unwrap().parse().unwrap_or(usize::max_value());
 
-    timely::execute_from_args(std::env::args(), move |worker| {
+    timely::execute_from_args(args, move |worker| {
 
         let index = worker.index();
         let core_ids = core_affinity::get_core_ids().unwrap();
@@ -60,7 +60,7 @@ fn main() {
         if index == 0 {
             eprintln!("{:?}", elapsed_load);
             let elapsed1_ns = elapsed_load.as_secs() * 1_000_000_000 + (elapsed_load.subsec_nanos() as u64);
-            println!("ARRANGE\tLOADING\t{}\t{}\t{}", peers, elapsed1_ns, 1000000000.0 * (recs as f64) / (elapsed1_ns as f64));
+            println!("INSTALL\tLOADING\t{}\t{}\t{}", peers, elapsed1_ns, 1000000000.0 * (recs as f64) / (elapsed1_ns as f64));
         }
 
         for i in 0 .. 16 {
@@ -99,7 +99,7 @@ fn main() {
                     }
                 }
                 for (latency, fraction) in results.drain(..).rev() {
-                    println!("{}\t{}\t{}", size, latency, fraction);
+                    println!("INSTALL\tLATENCY\t{}\t{}\t{}", size, latency, fraction);
                 }
             }
         }
