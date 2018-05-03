@@ -38,37 +38,37 @@ def groupingstr(s):
 def i_load_varies(): # commit = "dirty-8380c53277307b6e9e089a8f6f79886b36e20428" experiment = "arrange-open-loop"
     tempdir = tempfile.mkdtemp("{}-{}".format(experiment, commit))
 
-    filtering = { ('w', 1), }
-    for work in params['work']:
-        for comp in {'arrange', 'maintain', 'count'}:
-            F = filtering.union({ ('work', work), ('comp', comp), })
-            eprint(F)
-            # print('\n'.join(str(p) for p, f in sorted(filedict, key=lambda x: dict(x[0])['rate']) if p.issuperset(F)))
-            plotscript = "set terminal pdf size 6cm,4cm; set logscale x; set logscale y; " \
-                    "set bmargin at screen 0.2; " \
-                    "set xrange [50000:5000000000.0]; " \
-                    "set format x \"10^{%T}\"; " \
-                    "set yrange [*:1.01]; " \
-                    "set xlabel \"nanoseconds\"; " \
-                    "set format y \"10^{%T}\"; " \
-                    "set ylabel \"complementary cdf\"; " \
-                    "set key left bottom Left reverse font \",10\"; " \
-                    "plot "
+    filtering = { ('w', 1), ('comp', 'maintain'), ('dparam', 30), ('work', 4), }
+    F = filtering
+    eprint(F)
+    # print('\n'.join(str(p) for p, f in sorted(filedict, key=lambda x: dict(x[0])['rate']) if p.issuperset(F)))
+    plotscript = "set terminal pdf size 6cm,4cm; set logscale x; set logscale y; " \
+            "set bmargin at screen 0.2; " \
+            "set xrange [50000:5000000000.0]; " \
+            "set format x \"10^{%T}\"; " \
+            "set yrange [*:1.01]; " \
+            "set xlabel \"nanoseconds\"; " \
+            "set format y \"10^{%T}\"; " \
+            "set ylabel \"complementary cdf\"; " \
+            "set key left bottom Left reverse font \",10\"; " \
+            "plot "
 
-            rates_plotted = set()
-            dt = 2
-            for p, f in sorted(filedict, key=lambda x: dict(x[0])['rate']):
-                if p.issuperset(F) and dict(p)['rate'] not in rates_plotted:
-                    rates_plotted.add(dict(p)['rate'])
-                    datafile = "{}/i_load_varies_{}".format(tempdir, f)
-                    assert(execute('cat results/{}/{}/{} | grep LATENCYFRACTION | cut -f 3,4 > {}'.format(commit, experiment, f, datafile)))
-                    plotscript += "\"{}\" using 1:2 with lines lw 2 dt {} title \"{}\", ".format(datafile, dt, dict(p)['rate'])
-                    dt += 1
+    rates_plotted = set()
+    dt = 2
+    for p, f in sorted(filedict, key=lambda x: dict(x[0])['rate']):
+        eprint(p)
+        if p.issuperset(F) and dict(p)['rate'] not in rates_plotted and (dict(p)['keys'] / 10) == dict(p)['rate']:
+            rates_plotted.add(dict(p)['rate'])
+            eprint(p)
+            datafile = "{}/i_load_varies_{}".format(tempdir, f)
+            assert(execute('cat results/{}/{}/{} | grep LATENCYFRACTION | cut -f 3,4 > {}'.format(commit, experiment, f, datafile)))
+            plotscript += "\"{}\" using 1:2 with lines lw 2 dt {} title \"{}\", ".format(datafile, dt, dict(p)['rate'])
+            dt += 1
 
-            assert(execute('mkdir -p plots/{}/{}'.format(commit, experiment)))
-            eprint(plotscript)
-            assert(execute('gnuplot > plots/{}/{}/i_load_varies_{}.pdf'.format(commit, experiment, groupingstr(F)), input=plotscript))
-            eprint('plots/{}/{}/i_load_varies_{}.pdf'.format(commit, experiment, groupingstr(F)))
+    assert(execute('mkdir -p plots/{}/{}'.format(commit, experiment)))
+    eprint(plotscript)
+    assert(execute('gnuplot > plots/{}/{}/i_load_varies_{}.pdf'.format(commit, experiment, groupingstr(F)), input=plotscript))
+    eprint('plots/{}/{}/i_load_varies_{}.pdf'.format(commit, experiment, groupingstr(F)))
 
     shutil.rmtree(tempdir)
 

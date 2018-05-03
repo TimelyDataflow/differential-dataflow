@@ -73,18 +73,18 @@ def arrange_open_loop_load_varies():
                 rate = int(1000000 / factor)
                 keys = int(10000000 / factor)
                 for recs in [32000000]:
-                    for work in [1, 4, "max"]:
+                    for work in [4]:
                         for comp in [
-                                "exchange",
-                                "arrange",
+                                # "exchange",
+                                # "arrange",
                                 "maintain",
-                                "selfjoin",
-                                "count",
-                                "nothing",
+                                # "selfjoin",
+                                # "count",
+                                # "nothing",
                                 ]:
                             mode = "openloop"
                             dmode = "overwrite"
-                            dparam = "10"
+                            dparam = "30"
 
                             config = {
                                 "keys": keys,
@@ -106,7 +106,7 @@ def arrange_open_loop_load_varies():
                                         p,
                                         w), p) for p in range(0, n)]
                             experiments.eprint("commands: {}".format(commands))
-                            processes = [experiments.run_cmd(command, filename, True, node = 2) for command, p in commands]
+                            processes = [experiments.run_cmd(command, filename, True, node = 4) for command, p in commands]
                             experiments.waitall(processes)
 
 def arrange_open_loop_strong_scaling():
