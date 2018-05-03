@@ -35,6 +35,73 @@ eprint(params)
 def groupingstr(s):
     return '_'.join("{}={}".format(x[0], str(x[1])) for x in sorted(s, key=lambda x: x[0]))
 
+def i_single_query():
+    tempdir = tempfile.mkdtemp("{}-{}".format(experiment, commit))
+
+    filtering = { ('rate', 200000), ('w', 32), ('nodes', 10000000), ('edges', 32000000), }
+
+    plotscript = "set terminal pdf size 6cm,4cm; set logscale x; set logscale y; " \
+            "set bmargin at screen 0.2; " \
+            "set xlabel \"nanoseconds\"; " \
+            "set ylabel \"complementary cdf\"; " \
+            "set format x \"10^{%T}\"; " \
+            "set format y \"10^{%T}\"; " \
+            "set xrange [50000:5000000000.0]; " \
+            "set yrange [0.001:1.01]; " \
+            "set key left top Left reverse font \",10\"; " \
+            "set style fill  transparent solid 0.35 noborder; " \
+            "set style circle radius 10; " \
+            "plot "
+
+    dt = 2
+    for p, f in filedict:
+        if p.issuperset(filtering):
+            datafile = "{}/i_single_query_{}".format(tempdir, f)
+            # assert(execute('cat results/{}/{}/{} > {}'.format(commit, experiment, f, datafile)))
+            plotscript += "\"results/{}/{}/{}\" using 1:2 with lines dt {} title \"{}\", ".format(commit, experiment, f, dt, dict(p)['query'])
+            dt += 1
+
+    assert(execute('mkdir -p plots/{}/{}'.format(commit, experiment)))
+    eprint(plotscript)
+    assert(execute('gnuplot > plots/{}/{}/i_single_query_{}.pdf'.format(commit, experiment, groupingstr(filtering)), input=plotscript))
+    eprint('plots/{}/{}/i_single_query_{}.pdf'.format(commit, experiment, groupingstr(filtering)))
+
+    shutil.rmtree(tempdir)
+
+def ii_sharing():
+    tempdir = tempfile.mkdtemp("{}-{}".format(experiment, commit))
+
+    filtering = { ('rate', 200000), ('w', 32), ('nodes', 10000000), ('edges', 32000000), ('goal', 1800), }
+
+    plotscript = "set terminal pdf size 6cm,4cm; set logscale x; set logscale y; " \
+            "set bmargin at screen 0.2; " \
+            "set xlabel \"nanoseconds\"; " \
+            "set ylabel \"complementary cdf\"; " \
+            "set format x \"10^{%T}\"; " \
+            "set format y \"10^{%T}\"; " \
+            "set xrange [50000:5000000000.0]; " \
+            "set yrange [0.001:1.01]; " \
+            "set key left top Left reverse font \",10\"; " \
+            "set style fill  transparent solid 0.35 noborder; " \
+            "set style circle radius 10; " \
+            "plot "
+
+    dt = 2
+    for p, f in filedict:
+        if p.issuperset(filtering):
+            eprint(p)
+            datafile = "{}/ii_sharing_{}".format(tempdir, f)
+            assert(execute('cat results/{}/{}/{} | grep LATENCY | cut -f 2,3 > {}'.format(commit, experiment, f, datafile)))
+            plotscript += "\"{}\" using 1:2 with lines dt {} title \"{}\", ".format(datafile, dt, dict(p)['shared'])
+            dt += 1
+
+    assert(execute('mkdir -p plots/{}/{}'.format(commit, experiment)))
+    eprint(plotscript)
+    assert(execute('gnuplot > plots/{}/{}/ii_sharing_{}.pdf'.format(commit, experiment, groupingstr(filtering)), input=plotscript))
+    eprint('plots/{}/{}/ii_sharing_{}.pdf'.format(commit, experiment, groupingstr(filtering)))
+
+    shutil.rmtree(tempdir)
+
 def iii_memory_rss():
     tempdir = tempfile.mkdtemp("{}-{}".format(experiment, commit))
 
@@ -46,7 +113,7 @@ def iii_memory_rss():
                 "set bmargin at screen 0.2; " \
                 "set xrange [-200:3500]; " \
                 "set yrange [100000000:*]; " \
-                "set xlabel \"minutes\"; " \
+                "set xlabel \"seconds\"; " \
                 "set ylabel \"RSS (bytes)\"; " \
                 "set format y \"%.1s %c\"; " \
                 "set key left top Left reverse font \",10\"; " \

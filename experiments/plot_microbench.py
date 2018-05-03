@@ -48,7 +48,7 @@ def i_load_varies(): # commit = "dirty-8380c53277307b6e9e089a8f6f79886b36e20428"
                     "set bmargin at screen 0.2; " \
                     "set xrange [50000:5000000000.0]; " \
                     "set format x \"10^{%T}\"; " \
-                    "set yrange [0.005:1.01]; " \
+                    "set yrange [*:1.01]; " \
                     "set xlabel \"nanoseconds\"; " \
                     "set format x \"10^{%T}\"; " \
                     "set ylabel \"complementary cdf\"; " \
@@ -117,7 +117,7 @@ def iii_weak_scaling(): # commit = "dirty-e74441d0c062c7ec8d6da9bbf1972bd9397b26
                     "set bmargin at screen 0.2; " \
                     "set xrange [50000:5000000000.0]; " \
                     "set format x \"10^{%T}\"; " \
-                    "set yrange [0.005:1.01]; " \
+                    "set yrange [*:1.01]; " \
                     "set xlabel \"nanoseconds\"; " \
                     "set format x \"10^{%T}\"; " \
                     "set ylabel \"complementary cdf\"; " \
@@ -171,7 +171,7 @@ def iv_throughput(): # commit = "dirty-e74441d0c062c7ec8d6da9bbf1972bd9397b2670"
 
     shutil.rmtree(tempdir)
 
-def v_amortization(): # commit = "" experiment = ""
+def v_amortization(): # USE STRONG SCALING
     tempdir = tempfile.mkdtemp("{}-{}".format(experiment, commit))
 
     filtering = { ('keys', 10000000), ('recs', 32000000), ('rate', 1000000), }
@@ -184,7 +184,7 @@ def v_amortization(): # commit = "" experiment = ""
                     "set bmargin at screen 0.2; " \
                     "set xrange [50000:5000000000.0]; " \
                     "set format x \"10^{%T}\"; " \
-                    "set yrange [0.005:1.01]; " \
+                    "set yrange [0.001:1.01]; " \
                     "set xlabel \"nanoseconds\"; " \
                     "set format x \"10^{%T}\"; " \
                     "set ylabel \"complementary cdf\"; " \
@@ -193,11 +193,12 @@ def v_amortization(): # commit = "" experiment = ""
             dt = 2
             data = False
             for p, f in filedict: #sorted(filedict, key=lambda x: dict(x[0])['w']):
-                if p.issuperset(F):
+                if p.issuperset(F) and dict(p)['w'] in [1, 32]:
+                    eprint(p)
                     data = True
                     datafile = "{}/v_amortization_{}".format(tempdir, f)
                     assert(execute('cat results/{}/{}/{} | grep LATENCYFRACTION | cut -f 3,4 > {}'.format(commit, experiment, f, datafile)))
-                    plotscript += "\"{}\" using 1:2 with lines lw 2 dt {} title \"{}\", ".format(datafile, dt, dict(p)['work'])
+                    plotscript += "\"{}\" using 1:2 with lines lw 2 dt {} title \"{}\", ".format(datafile, dt, "w={}, work={}".format(dict(p)['w'], dict(p)['work']))
                     dt += 1
 
             if data:
