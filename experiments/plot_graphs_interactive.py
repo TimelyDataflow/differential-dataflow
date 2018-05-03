@@ -114,8 +114,8 @@ def iii_memory_rss():
                 "set xrange [-200:3500]; " \
                 "set yrange [100000000:*]; " \
                 "set xlabel \"seconds\"; " \
-                "set ylabel \"RSS (bytes)\"; " \
-                "set format y \"%.1s %c\"; " \
+                "set ylabel \"RSS\"; " \
+                "set format y \"%.0sB %c\"; " \
                 "set key left top Left reverse font \",10\"; " \
                 "set style fill  transparent solid 0.35 noborder; " \
                 "set style circle radius 10; " \
@@ -125,8 +125,8 @@ def iii_memory_rss():
         for p, f in filedict:
             if p.issuperset(F):
                 datafile = "{}/iii_memory_rss_{}".format(tempdir, f)
-                assert(execute('cat results/{}/{}/{} | grep RSS | cut -f 2,3 > {}'.format(commit, experiment, f, datafile)))
-                plotscript += "\"{}\" using ($1/1000000000):2 with circles title \"{}\", ".format(datafile, dict(p)['shared'])
+                assert(execute('cat results/{}/{}/{} | grep RSS | awk \'NR % 10 == 0\' | cut -f 2,3 > {}'.format(commit, experiment, f, datafile)))
+                plotscript += "\"{}\" using ($1/1000000000):2 with lines title \"{}\", ".format(datafile, dict(p)['shared'])
                 dt += 1
 
         assert(execute('mkdir -p plots/{}/{}'.format(commit, experiment)))

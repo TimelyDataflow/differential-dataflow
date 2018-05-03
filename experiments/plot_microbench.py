@@ -50,13 +50,16 @@ def i_load_varies(): # commit = "dirty-8380c53277307b6e9e089a8f6f79886b36e20428"
                     "set format x \"10^{%T}\"; " \
                     "set yrange [*:1.01]; " \
                     "set xlabel \"nanoseconds\"; " \
-                    "set format x \"10^{%T}\"; " \
+                    "set format y \"10^{%T}\"; " \
                     "set ylabel \"complementary cdf\"; " \
                     "set key left bottom Left reverse font \",10\"; " \
                     "plot "
+
+            rates_plotted = set()
             dt = 2
             for p, f in sorted(filedict, key=lambda x: dict(x[0])['rate']):
-                if p.issuperset(F):
+                if p.issuperset(F) and dict(p)['rate'] not in rates_plotted:
+                    rates_plotted.add(dict(p)['rate'])
                     datafile = "{}/i_load_varies_{}".format(tempdir, f)
                     assert(execute('cat results/{}/{}/{} | grep LATENCYFRACTION | cut -f 3,4 > {}'.format(commit, experiment, f, datafile)))
                     plotscript += "\"{}\" using 1:2 with lines lw 2 dt {} title \"{}\", ".format(datafile, dt, dict(p)['rate'])
@@ -88,10 +91,13 @@ def ii_strong_scaling(): # commit = "dirty-e74441d0c062c7ec8d6da9bbf1972bd9397b2
                     "set ylabel \"complementary cdf\"; " \
                     "set key left bottom Left reverse font \",10\"; " \
                     "plot "
+
+            w_plotted = set()
             dt = 2
             for p, f in sorted(filedict, key=lambda x: dict(x[0])['w']):
                 eprint(p)
-                if p.issuperset(F):
+                if p.issuperset(F) and dict(p)['w'] not in w_plotted:
+                    w_plotted.add(dict(p)['w'])
                     datafile = "{}/i_strong_scaling_{}".format(tempdir, f)
                     assert(execute('cat results/{}/{}/{} | grep LATENCYFRACTION | cut -f 3,4 > {}'.format(commit, experiment, f, datafile)))
                     plotscript += "\"{}\" using 1:2 with lines lw 2 dt {} title \"{}\", ".format(datafile, dt, dict(p)['w'])
@@ -125,8 +131,10 @@ def iii_weak_scaling(): # commit = "dirty-e74441d0c062c7ec8d6da9bbf1972bd9397b26
                     "plot "
             dt = 2
             data = False
+            w_plotted = set()
             for p, f in sorted(filedict, key=lambda x: dict(x[0])['w']):
-                if p.issuperset(F) and dict(p)['rate'] == dict(p)['w'] * 1000000:
+                if p.issuperset(F) and dict(p)['rate'] == dict(p)['w'] * 1000000 and dict(p)['w'] not in w_plotted:
+                    w_plotted.add(dict(p)['w'])
                     data = True
                     datafile = "{}/iii_strong_scaling_{}".format(tempdir, f)
                     assert(execute('cat results/{}/{}/{} | grep LATENCYFRACTION | cut -f 3,4 > {}'.format(commit, experiment, f, datafile)))
@@ -153,6 +161,8 @@ def iv_throughput(): # commit = "dirty-e74441d0c062c7ec8d6da9bbf1972bd9397b2670"
             "set ylabel \"throughput (records/s)\"; " \
             "set key left top Left reverse font \",10\"; " \
             "plot "
+
+    pt = [4, 6, 8]
     for comp in {'arrange', 'maintain', 'count'}:
         F = filtering.union({ ('comp', comp), })
         # eprint(comp, groupingstr(filtering), [x for p, x in filedict if p.issuperset(F)])
@@ -162,7 +172,8 @@ def iv_throughput(): # commit = "dirty-e74441d0c062c7ec8d6da9bbf1972bd9397b2670"
             if p.issuperset(F):
                 # eprint("results/{}/{}/{}".format(commit, experiment, f))
                 assert(execute('cat results/{}/{}/{} | grep THROUGHPUT | cut -f 3,4 >> {}'.format(commit, experiment, f, datafile)))
-        plotscript += "\"{}\" using 1:2:xtic(1) with linespoints title \"{}\", ".format(datafile, comp)
+        plotscript += "\"{}\" using 1:2:xtic(1) with linespoints pointtype {} pointsize 0.8 title \"{}\", ".format(datafile, pt[0], comp)
+        pt = pt[1:]
 
     assert(execute('mkdir -p plots/{}/{}'.format(commit, experiment)))
     eprint(plotscript)
