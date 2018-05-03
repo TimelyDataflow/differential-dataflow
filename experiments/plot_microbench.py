@@ -43,13 +43,15 @@ def i_load_varies(): # commit = "dirty-8380c53277307b6e9e089a8f6f79886b36e20428"
     F = filtering
     eprint(F)
     # print('\n'.join(str(p) for p, f in sorted(filedict, key=lambda x: dict(x[0])['rate']) if p.issuperset(F)))
-    plotscript = "set terminal pdf size 6cm,4cm; set logscale x; set logscale y; " \
+    plotscript = "set terminal pdf size 4.8cm,3.2cm; set logscale x; set logscale y; " \
             "set bmargin at screen 0.2; " \
-            "set xrange [50000:5000000000.0]; " \
+            "set xrange [10000:5000000000.0]; " \
+            "set key samplen 2; " \
             "set format x \"10^{%T}\"; " \
-            "set yrange [*:1.01]; " \
+            "set yrange [0.0001:1.01]; " \
             "set xlabel \"nanoseconds\"; " \
             "set format y \"10^{%T}\"; " \
+            "set bmargin at screen 0.25; " \
             "set ylabel \"complementary cdf\"; " \
             "set key left bottom Left reverse font \",10\"; " \
             "plot "
@@ -63,8 +65,8 @@ def i_load_varies(): # commit = "dirty-8380c53277307b6e9e089a8f6f79886b36e20428"
             eprint(p)
             datafile = "{}/i_load_varies_{}".format(tempdir, f)
             assert(execute('cat results/{}/{}/{} | grep LATENCYFRACTION | cut -f 3,4 > {}'.format(commit, experiment, f, datafile)))
-            plotscript += "\"{}\" using 1:2 with lines lw 2 dt {} title \"{}\", ".format(datafile, dt, dict(p)['rate'])
-            dt += 1
+            plotscript += "\"{}\" using 1:2 with lines lw 2 dt ({}, 2) title \"{}\", ".format(datafile, dt, dict(p)['rate'])
+            dt += 2
 
     assert(execute('mkdir -p plots/{}/{}'.format(commit, experiment)))
     eprint(plotscript)
@@ -114,7 +116,7 @@ def ii_strong_scaling(): # commit = "dirty-e74441d0c062c7ec8d6da9bbf1972bd9397b2
 def iii_weak_scaling(): # commit = "dirty-e74441d0c062c7ec8d6da9bbf1972bd9397b2670" experiment = "arrange-open-loop"
     tempdir = tempfile.mkdtemp("{}-{}".format(experiment, commit))
 
-    filtering = { ('keys', 10000000), ('recs', 32000000), }
+    filtering = { ('dparam', 10), }
     for work in params['work']:
         for comp in {'arrange', 'maintain', 'count'}:
             F = filtering.union({ ('work', work), ('comp', comp), })
@@ -134,19 +136,19 @@ def iii_weak_scaling(): # commit = "dirty-e74441d0c062c7ec8d6da9bbf1972bd9397b26
             data = False
             w_plotted = set()
             for p, f in sorted(filedict, key=lambda x: dict(x[0])['w']):
-                if p.issuperset(F) and dict(p)['rate'] == dict(p)['w'] * 1000000 and dict(p)['w'] not in w_plotted:
+                if p.issuperset(F) and dict(p)['rate'] == dict(p)['w'] * 1000000 and dict(p)['w'] * 10000000 == dict(p)['keys'] and dict(p)['w'] not in w_plotted:
                     w_plotted.add(dict(p)['w'])
                     data = True
-                    datafile = "{}/iii_strong_scaling_{}".format(tempdir, f)
+                    datafile = "{}/iii_weak_scaling_{}".format(tempdir, f)
                     assert(execute('cat results/{}/{}/{} | grep LATENCYFRACTION | cut -f 3,4 > {}'.format(commit, experiment, f, datafile)))
-                    plotscript += "\"{}\" using 1:2 with lines lw 2 dt {} title \"{}\", ".format(datafile, dt, dict(p)['w'])
+                    plotscript += "\"{}\" using 1:2 with lines lw 2 dt {} title \"{}\", ".format(datafile, dt, "{}, {}, {}".format(dict(p)['w'], dict(p)['rate'], dict(p)['keys']))
                     dt += 1
 
             if data:
                 assert(execute('mkdir -p plots/{}/{}'.format(commit, experiment)))
                 eprint(plotscript)
-                assert(execute('gnuplot > plots/{}/{}/iii_strong_scaling_{}.pdf'.format(commit, experiment, groupingstr(F)), input=plotscript))
-                eprint('plots/{}/{}/iii_strong_scaling_{}.pdf'.format(commit, experiment, groupingstr(F)))
+                assert(execute('gnuplot > plots/{}/{}/iii_weak_scaling_{}.pdf'.format(commit, experiment, groupingstr(F)), input=plotscript))
+                eprint('plots/{}/{}/iii_weak_scaling_{}.pdf'.format(commit, experiment, groupingstr(F)))
 
     shutil.rmtree(tempdir)
 
@@ -196,7 +198,7 @@ def v_amortization(): # USE STRONG SCALING
                     "set bmargin at screen 0.2; " \
                     "set xrange [50000:5000000000.0]; " \
                     "set format x \"10^{%T}\"; " \
-                    "set yrange [0.001:1.01]; " \
+                    "set yrange [*:1.01]; " \
                     "set xlabel \"nanoseconds\"; " \
                     "set format x \"10^{%T}\"; " \
                     "set ylabel \"complementary cdf\"; " \
