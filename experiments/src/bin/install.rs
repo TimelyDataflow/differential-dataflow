@@ -63,7 +63,7 @@ fn main() {
             println!("INSTALL\tLOADING\t{}\t{}\t{}", peers, elapsed1_ns, 1000000000.0 * (recs as f64) / (elapsed1_ns as f64));
         }
 
-        for i in 0 .. 16 {
+        for i in 0 .. 21 {
             let mut size = 1 << i;
             let worker_size = size / peers + if (size % peers) < index { 1 } else { 0 };
 

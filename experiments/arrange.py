@@ -24,12 +24,12 @@ def arrange_closed_loop():
                     for rate in [10000]: # * x for x in [1]]: #, 2, 4, 8]]:
                         for work in [4,]:
                             for comp in [
-                                    "exchange",
+                                    # "exchange",
                                     "arrange",
                                     "maintain",
-                                    "selfjoin",
+                                    # "selfjoin",
                                     "count",
-                                    "nothing",
+                                    # "nothing",
                                     ]:
                                 mode = "closedloop"
                                 dmode = "seconds"
@@ -57,7 +57,7 @@ def arrange_closed_loop():
                                             p,
                                             w), p) for p in range(0, n)]
                                 experiments.eprint("commands: {}".format(commands))
-                                processes = [experiments.run_cmd(command, filename, True, node = 3) for command, p in commands]
+                                processes = [experiments.run_cmd(command, filename, True, node = 4) for command, p in commands]
                                 experiments.waitall(processes)
 
 def arrange_open_loop_load_varies():

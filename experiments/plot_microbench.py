@@ -2,6 +2,7 @@ import shutil, tempfile
 from executor import execute
 from os import listdir
 import sys
+import math
 
 commit = sys.argv[sys.argv.index('--commit') + 1]
 experiment = sys.argv[sys.argv.index('--experiment') + 1]
@@ -219,3 +220,36 @@ def v_amortization(): # USE STRONG SCALING
                 eprint('plots/{}/{}/v_amortization_{}.pdf'.format(commit, experiment, groupingstr(F)))
 
     shutil.rmtree(tempdir)
+
+def vi_install():
+    tempdir = tempfile.mkdtemp("{}-{}".format(experiment, commit))
+
+    filtering = { ('keys', 10000000), ('recs', 32000000), ('w', 32), }
+    # print('\n'.join(str(p) for p, f in sorted(filedict, key=lambda x: dict(x[0])['rate']) if p.issuperset(F)))
+    plotscript = "set terminal pdf size 6cm,4cm; set logscale x; set logscale y; " \
+            "set bmargin at screen 0.2; " \
+            "set format x \"10^{%T}\"; " \
+            "set xlabel \"nanoseconds\"; " \
+            "set format y \"10^{%T}\"; " \
+            "set xrange [50000:5000000000.0]; " \
+            "set yrange [*:1.01]; " \
+            "set ylabel \"complementary cdf\"; " \
+            "set key right top Left reverse font \",10\"; " \
+            "plot "
+    dt = 2
+    for p, f in filedict: #sorted(filedict, key=lambda x: dict(x[0])['w']):
+        if p.issuperset(filtering):
+            eprint(p)
+            for size in [2**x for x in [0, 8, 16, 17, 18, 19, 20]]:
+                datafile = "{}/vi_install_{}_{}".format(tempdir, f, size)
+                eprint(datafile)
+                assert(execute('cat results/{}/{}/{} | grep LATENCY | awk \'$3 == {}\' | cut -f 3-5 > {}'.format(commit, experiment, f, size, datafile)))
+                plotscript += "\"{}\" using 2:3 with lines lw 2 dt {} title \"{}\", ".format(datafile, dt, "size=2^{{{}}}".format(int(math.log2(size))))
+                dt += 1
+
+    assert(execute('mkdir -p plots/{}/{}'.format(commit, experiment)))
+    eprint(plotscript)
+    assert(execute('gnuplot > plots/{}/{}/vi_install_{}.pdf'.format(commit, experiment, groupingstr(filtering)), input=plotscript))
+    eprint('plots/{}/{}/vi_install_{}.pdf'.format(commit, experiment, groupingstr(filtering)))
+
+    # shutil.rmtree(tempdir)
