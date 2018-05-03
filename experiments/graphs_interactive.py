@@ -59,12 +59,12 @@ def graphs_interactive_neu():
     experiments.eprint("### {} ###".format(experiment_name))
     experiments.eprint(experiments.experdir(experiment_name))
 
-    for w in reversed([16, 31]):
+    for w in [32]:
         for nodes in [10000000]:
             for edges in [32000000]:
-                for rate in [1000000]: # + x for x in [-250000, 0, 250000, 500000]]:
-                    for goal in [60]:
-                        for queries in [1, 10, 1000, 10000, 100000,]: # [0, 1000, 10000, 100000]:
+                for rate in [100000, 200000, 300000, 400000]: # + x for x in [-250000, 0, 250000, 500000]]:
+                    for goal in [1800,]:
+                        for queries in [32]: # [0, 1000, 10000, 100000]:
                             for shared in ["no", "shared"]:
                                 config = {
                                     "nodes": nodes,
@@ -86,5 +86,41 @@ def graphs_interactive_neu():
                                             p,
                                             w) for p in range(0, n)]
                                 experiments.eprint("commands: {}".format(commands))
-                                processes = [experiments.run_cmd(command, filename, True) for command in commands]
+                                processes = [experiments.run_cmd(command, filename, True, node = 3) for command in commands]
                                 experiments.waitall(processes)
+
+def graphs_interactive_neu_zwei():
+    # experiments.run_cmd("cargo build --release --bin graphs-interactive-neu")
+
+    experiment_name = "graphs-interactive-neu"
+
+    experiments.eprint("### {} ###".format(experiment_name))
+    experiments.eprint(experiments.experdir(experiment_name))
+
+    for w in [32]:
+        for nodes in [10000000]:
+            for edges in [32000000]:
+                for rate in [200000]: # + x for x in [-250000, 0, 250000, 500000]]:
+                    for goal in [int((edges / rate) * 2),]:
+                        for query in ["1", "2", "3", "4"]: # [0, 1000, 10000, 100000]:
+                            config = {
+                                "nodes": nodes,
+                                "edges": edges,
+                                "rate": rate,
+                                "goal": goal,
+                                "query": query,
+                            }
+
+                            n = 1
+
+                            filename = experiment_setup(experiment_name, n, w, **config)
+                            experiments.eprint("RUNNING {}".format(filename))
+                            commands = [
+                                    "./target/release/graphs-interactive-neu-zwei {} -n {} -p {} -w {}".format(
+                                        " ".join(str(x) for x in [nodes, edges, rate, goal, query]),
+                                        n,
+                                        p,
+                                        w) for p in range(0, n)]
+                            experiments.eprint("commands: {}".format(commands))
+                            processes = [experiments.run_cmd(command, filename, True, node = 3) for command in commands]
+                            experiments.waitall(processes)
