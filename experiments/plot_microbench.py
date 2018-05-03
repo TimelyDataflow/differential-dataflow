@@ -84,13 +84,15 @@ def ii_strong_scaling(): # commit = "dirty-e74441d0c062c7ec8d6da9bbf1972bd9397b2
             F = filtering.union({ ('work', work), ('comp', comp), })
             eprint(F)
             # print('\n'.join(str(p) for p, f in sorted(filedict, key=lambda x: dict(x[0])['rate']) if p.issuperset(F)))
-            plotscript = "set terminal pdf size 6cm,4cm; set logscale x; set logscale y; " \
+            plotscript = "set terminal pdf size 4.8cm,3.2cm; set logscale x; set logscale y; " \
                     "set bmargin at screen 0.2; " \
-                    "set xrange [50000:5000000000.0]; " \
+                    "set xrange [10000:5000000000.0]; " \
+                    "set key samplen 2; " \
                     "set format x \"10^{%T}\"; " \
-                    "set yrange [*:1.01]; " \
+                    "set yrange [0.0001:1.01]; " \
                     "set xlabel \"nanoseconds\"; " \
                     "set format y \"10^{%T}\"; " \
+                    "set bmargin at screen 0.25; " \
                     "set ylabel \"complementary cdf\"; " \
                     "set key left bottom Left reverse font \",10\"; " \
                     "plot "
@@ -103,8 +105,8 @@ def ii_strong_scaling(): # commit = "dirty-e74441d0c062c7ec8d6da9bbf1972bd9397b2
                     w_plotted.add(dict(p)['w'])
                     datafile = "{}/i_strong_scaling_{}".format(tempdir, f)
                     assert(execute('cat results/{}/{}/{} | grep LATENCYFRACTION | cut -f 3,4 > {}'.format(commit, experiment, f, datafile)))
-                    plotscript += "\"{}\" using 1:2 with lines lw 2 dt {} title \"{}\", ".format(datafile, dt, dict(p)['w'])
-                    dt += 1
+                    plotscript += "\"{}\" using 1:2 with lines lw 2 dt ({}, 2) title \"{}\", ".format(datafile, dt, dict(p)['w'])
+                    dt += 2
 
             assert(execute('mkdir -p plots/{}/{}'.format(commit, experiment)))
             eprint(plotscript)
@@ -116,33 +118,36 @@ def ii_strong_scaling(): # commit = "dirty-e74441d0c062c7ec8d6da9bbf1972bd9397b2
 def iii_weak_scaling(): # commit = "dirty-e74441d0c062c7ec8d6da9bbf1972bd9397b2670" experiment = "arrange-open-loop"
     tempdir = tempfile.mkdtemp("{}-{}".format(experiment, commit))
 
-    filtering = { ('dparam', 10), }
+    filtering = { ('dparam', 50), ('keys', 10000000), ('recs', 32000000), }
     for work in params['work']:
         for comp in {'arrange', 'maintain', 'count'}:
             F = filtering.union({ ('work', work), ('comp', comp), })
             eprint(F)
             # print('\n'.join(str(p) for p, f in sorted(filedict, key=lambda x: dict(x[0])['rate']) if p.issuperset(F)))
-            plotscript = "set terminal pdf size 6cm,4cm; set logscale x; set logscale y; " \
+            plotscript = "set terminal pdf size 4.8cm,3.2cm; set logscale x; set logscale y; " \
                     "set bmargin at screen 0.2; " \
-                    "set xrange [50000:5000000000.0]; " \
+                    "set xrange [10000:5000000000.0]; " \
+                    "set key samplen 2; " \
                     "set format x \"10^{%T}\"; " \
-                    "set yrange [*:1.01]; " \
+                    "set yrange [0.0001:1.01]; " \
                     "set xlabel \"nanoseconds\"; " \
-                    "set format x \"10^{%T}\"; " \
+                    "set format y \"10^{%T}\"; " \
+                    "set bmargin at screen 0.25; " \
                     "set ylabel \"complementary cdf\"; " \
                     "set key left bottom Left reverse font \",10\"; " \
                     "plot "
+
             dt = 2
             data = False
             w_plotted = set()
             for p, f in sorted(filedict, key=lambda x: dict(x[0])['w']):
-                if p.issuperset(F) and dict(p)['rate'] == dict(p)['w'] * 1000000 and dict(p)['w'] * 10000000 == dict(p)['keys'] and dict(p)['w'] not in w_plotted:
+                if p.issuperset(F) and dict(p)['rate'] == dict(p)['w'] * 1000000 and dict(p)['w'] not in w_plotted:
                     w_plotted.add(dict(p)['w'])
                     data = True
                     datafile = "{}/iii_weak_scaling_{}".format(tempdir, f)
                     assert(execute('cat results/{}/{}/{} | grep LATENCYFRACTION | cut -f 3,4 > {}'.format(commit, experiment, f, datafile)))
-                    plotscript += "\"{}\" using 1:2 with lines lw 2 dt {} title \"{}\", ".format(datafile, dt, "{}, {}, {}".format(dict(p)['w'], dict(p)['rate'], dict(p)['keys']))
-                    dt += 1
+                    plotscript += "\"{}\" using 1:2 with lines lw 2 dt ({}, 2) title \"{}\", ".format(datafile, dt, dict(p)['w'])
+                    dt += 2
 
             if data:
                 assert(execute('mkdir -p plots/{}/{}'.format(commit, experiment)))
@@ -157,16 +162,25 @@ def iv_throughput(): # commit = "dirty-e74441d0c062c7ec8d6da9bbf1972bd9397b2670"
     tempdir = tempfile.mkdtemp("{}-{}".format(experiment, commit))
 
     filtering = { ('rate', 10000), ('work', 4) }
-    plotscript = "set terminal pdf size 6cm,4cm; " \
+
+    plotscript = "set terminal pdf size 4.8cm,3.2cm; set logscale x; set logscale y; " \
             "set bmargin at screen 0.2; " \
+            "set xrange [0.8:38]; " \
             "set xlabel \"cores\"; " \
-            "set xrange [2:34]; " \
+            "set ytics offset 0.7; " \
+            "set bmargin at screen 0.25; " \
             "set ylabel \"throughput (records/s)\"; " \
+            "set format y \"10^{%T}\"; " \
             "set key left top Left reverse font \",10\"; " \
             "plot "
 
     pt = [4, 6, 8]
-    for comp in {'arrange', 'maintain', 'count'}:
+    titlemap = {
+            'arrange': 'batch formation',
+            'maintain': 'trace maintenance',
+            'count': 'count',
+    }
+    for comp in ['arrange', 'maintain', 'count']:
         F = filtering.union({ ('comp', comp), })
         # eprint(comp, groupingstr(filtering), [x for p, x in filedict if p.issuperset(F)])
         datafile = "{}/iv_throughput_{}".format(tempdir, groupingstr(F))
@@ -175,7 +189,7 @@ def iv_throughput(): # commit = "dirty-e74441d0c062c7ec8d6da9bbf1972bd9397b2670"
             if p.issuperset(F):
                 # eprint("results/{}/{}/{}".format(commit, experiment, f))
                 assert(execute('cat results/{}/{}/{} | grep THROUGHPUT | cut -f 3,4 >> {}'.format(commit, experiment, f, datafile)))
-        plotscript += "\"{}\" using 1:2:xtic(1) with linespoints pointtype {} pointsize 0.8 title \"{}\", ".format(datafile, pt[0], comp)
+        plotscript += "\"{}\" using 1:2:xtic(1) with linespoints pointtype {} pointsize 0.8 title \"{}\", ".format(datafile, pt[0], titlemap[comp])
         pt = pt[1:]
 
     assert(execute('mkdir -p plots/{}/{}'.format(commit, experiment)))
@@ -194,26 +208,43 @@ def v_amortization(): # USE STRONG SCALING
             F = filtering.union({ ('comp', comp), })
             eprint(F)
             # print('\n'.join(str(p) for p, f in sorted(filedict, key=lambda x: dict(x[0])['rate']) if p.issuperset(F)))
-            plotscript = "set terminal pdf size 6cm,4cm; set logscale x; set logscale y; " \
+            plotscript = "set terminal pdf size 4.8cm,3.2cm; set logscale x; set logscale y; " \
                     "set bmargin at screen 0.2; " \
-                    "set xrange [50000:5000000000.0]; " \
+                    "set xrange [10000:5000000000.0]; " \
+                    "set key samplen 2; " \
                     "set format x \"10^{%T}\"; " \
-                    "set yrange [*:1.01]; " \
+                    "set yrange [0.0001:1.01]; " \
                     "set xlabel \"nanoseconds\"; " \
-                    "set format x \"10^{%T}\"; " \
+                    "set format y \"10^{%T}\"; " \
+                    "set bmargin at screen 0.25; " \
                     "set ylabel \"complementary cdf\"; " \
                     "set key left bottom Left reverse font \",10\"; " \
                     "plot "
-            dt = 2
             data = False
-            for p, f in filedict: #sorted(filedict, key=lambda x: dict(x[0])['w']):
-                if p.issuperset(F) and dict(p)['w'] in [1, 32]:
+            w_plotted = set()
+            for p, f in sorted(filedict, key=lambda x: (dict(x[0])['w'], str(dict(x[0])['work']))):
+                if p.issuperset(F) and dict(p)['w'] in [1, 32] and (dict(p)['w'], dict(p)['work']) not in w_plotted:
+                    w_plotted.add((dict(p)['w'], dict(p)['work']))
                     eprint(p)
                     data = True
                     datafile = "{}/v_amortization_{}".format(tempdir, f)
                     assert(execute('cat results/{}/{}/{} | grep LATENCYFRACTION | cut -f 3,4 > {}'.format(commit, experiment, f, datafile)))
-                    plotscript += "\"{}\" using 1:2 with lines lw 2 dt {} title \"{}\", ".format(datafile, dt, "w={}, work={}".format(dict(p)['w'], dict(p)['work']))
-                    dt += 1
+                    w_dt = ({
+                        1: 1,
+                        32: 4,
+                    })[dict(p)['w']]
+                    work_dt = ({
+                        1: 4,
+                        4: 8,
+                        'max': 12,
+                    })[dict(p)['work']]
+                    work_s = ({
+                        1: 'lazy',
+                        4: 'default',
+                        'max': 'eager',
+                    })[dict(p)['work']]
+
+                    plotscript += "\"{}\" using 1:2 with lines lw 2 dt ({}, 2, {}, 2) title \"{}\", ".format(datafile, work_dt, w_dt, "{}, {}".format(dict(p)['w'], work_s))
 
             if data:
                 assert(execute('mkdir -p plots/{}/{}'.format(commit, experiment)))
