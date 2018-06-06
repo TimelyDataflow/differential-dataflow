@@ -33,6 +33,7 @@
 use std::fmt::Debug;
 use std::ops::Deref;
 
+use timely::progress::{Timestamp, PathSummary};
 use timely::progress::nested::product::Product;
 
 use timely::dataflow::*;
@@ -160,6 +161,46 @@ impl<'a, G: Scope, D: Data, R: Diff> Variable<'a, G, D, R> where G::Timestamp: L
 
 impl<'a, G: Scope, D: Data, R: Diff> Deref for Variable<'a, G, D, R> where G::Timestamp: Lattice {
     type Target = Collection<Child<'a, G, u64>, D, R>;
+    fn deref(&self) -> &Self::Target {
+        &self.collection
+    }
+}
+
+/// A recursive variable with a generic timestamp type.
+///
+/// This type generalizes `Variable` by permitting an arbitrary timestamp type, but incurs the additional
+/// cost of validating the step of the timestamp, which `Variable` does not do. This is technically a bug
+/// in `Variable`, as supplying a timestamp that overflows (using e.g. `enter_at`) would result in errors.
+pub struct CoreVariable<'a, G: Scope, D: Data, R: Diff, T: Timestamp+Lattice>
+where G::Timestamp: Lattice {
+    collection: Collection<Child<'a, G, T>, D, R>,
+    feedback: Handle<G::Timestamp, T,(D, Product<G::Timestamp, T>, R)>,
+    source: Collection<Child<'a, G, T>, D, R>,
+    step: <T as Timestamp>::Summary,
+}
+
+impl<'a, G: Scope, D: Data, R: Diff, T: Timestamp+Lattice> CoreVariable<'a, G, D, R, T> where G::Timestamp: Lattice {
+    /// Creates a new `Variable` and a `Stream` representing its output, from a supplied `source` stream.
+    pub fn from_args(max_steps: T, step: <T as Timestamp>::Summary, source: Collection<Child<'a, G, T>, D, R>) -> CoreVariable<'a, G, D, R, T> {
+        let (feedback, updates) = source.inner.scope().loop_variable(max_steps, step.clone());
+        let collection = Collection::new(updates).concat(&source);
+        CoreVariable { collection: collection, feedback: feedback, source: source, step: step }
+    }
+    /// Adds a new source of data to the `Variable`.
+    pub fn set(self, result: &Collection<Child<'a, G, T>, D, R>) -> Collection<Child<'a, G, T>, D, R> {
+        let step = self.step;
+        self.source.negate()
+                   .concat(result)
+                   .inner
+                   .flat_map(move |(x,t,d)| step.results_in(&t.inner).map(|t_inner| (x, Product::new(t.outer, t_inner), d)))
+                   .connect_loop(self.feedback);
+
+        self.collection
+    }
+}
+
+impl<'a, G: Scope, D: Data, R: Diff, T: Timestamp+Lattice> Deref for CoreVariable<'a, G, D, R, T> where G::Timestamp: Lattice {
+    type Target = Collection<Child<'a, G, T>, D, R>;
     fn deref(&self) -> &Self::Target {
         &self.collection
     }
