@@ -425,6 +425,22 @@ impl<G: Scope, K, V, R, T> Arranged<G, K, V, R, T> where G::Timestamp: Lattice+O
             K: Clone, V: Clone,
             L: Fn(&K, &V) -> D+'static,
     {
+        self.flat_map_ref(move |key, val| Some(logic(key,val)))
+    }
+
+    /// Extracts elements from an arrangement as a collection.
+    ///
+    /// The supplied logic may produce an iterator over output values, allowing either
+    /// filtering or flat mapping as part of the extraction.
+    pub fn flat_map_ref<I, L>(&self, logic: L) -> Collection<G, I::Item, R>
+        where
+            R: Diff,
+            T::Batch: Clone+'static,
+            K: Clone, V: Clone,
+            I: IntoIterator,
+            I::Item: Data,
+            L: Fn(&K, &V) -> I+'static,
+    {
         self.stream.unary_stream(Pipeline, "AsCollection", move |input, output| {
 
             input.for_each(|time, data| {
@@ -437,7 +453,9 @@ impl<G: Scope, K, V, R, T> Arranged<G, K, V, R, T> where G::Timestamp: Lattice+O
                         while cursor.val_valid(&batch) {
                             let val: &V = cursor.val(&batch);
                             cursor.map_times(&batch, |time, diff| {
-                                session.give((logic(key, val), time.clone(), diff.clone()));
+                                for datum in logic(key, val) {
+                                    session.give((datum, time.clone(), diff.clone()));
+                                }
                             });
                             cursor.step_val(&batch);
                         }
