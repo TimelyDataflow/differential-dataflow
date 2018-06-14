@@ -259,16 +259,19 @@ def vi_install():
 
     filtering = { ('keys', 10000000), ('recs', 32000000), ('w', 32), }
     # print('\n'.join(str(p) for p, f in sorted(filedict, key=lambda x: dict(x[0])['rate']) if p.issuperset(F)))
-    plotscript = "set terminal pdf size 6cm,4cm; set logscale x; set logscale y; " \
+    plotscript = "set terminal pdf size 4.8cm,3.2cm; set logscale x; set logscale y; " \
             "set bmargin at screen 0.2; " \
+            "set xrange [10000:5000000000.0]; " \
+            "set key samplen 2; " \
             "set format x \"10^{%T}\"; " \
+            "set yrange [0.0001:1.01]; " \
             "set xlabel \"nanoseconds\"; " \
             "set format y \"10^{%T}\"; " \
-            "set xrange [50000:5000000000.0]; " \
-            "set yrange [*:1.01]; " \
+            "set bmargin at screen 0.25; " \
             "set ylabel \"complementary cdf\"; " \
-            "set key right top Left reverse font \",10\"; " \
+            "set key left bottom Left reverse font \",10\"; " \
             "plot "
+
     dt = 2
     for p, f in filedict: #sorted(filedict, key=lambda x: dict(x[0])['w']):
         if p.issuperset(filtering):
@@ -277,8 +280,8 @@ def vi_install():
                 datafile = "{}/vi_install_{}_{}".format(tempdir, f, size)
                 eprint(datafile)
                 assert(execute('cat results/{}/{}/{} | grep LATENCY | awk \'$3 == {}\' | cut -f 3-5 > {}'.format(commit, experiment, f, size, datafile)))
-                plotscript += "\"{}\" using 2:3 with lines lw 2 dt {} title \"{}\", ".format(datafile, dt, "size=2^{{{}}}".format(int(math.log2(size))))
-                dt += 1
+                plotscript += "\"{}\" using 2:3 with lines lw 2 dt ({}, 2) title \"{}\", ".format(datafile, dt, "2^{{{}}}".format(int(math.log2(size))))
+                dt += 2
 
     assert(execute('mkdir -p plots/{}/{}'.format(commit, experiment)))
     eprint(plotscript)

@@ -16,22 +16,22 @@ cat experiments-sf10-filtered.txt | awk '$3 == 1000000 && $4 == 32' | cut -f 1,5
 join $temp_dir/w1 $temp_dir/tw32 | awk '{ print $1,$3/$2 }' > $temp_dir/w32
 
 gnuplot -p -e "\
-  set terminal pdf size 6cm,4cm;
+  set terminal pdf size 4.8cm,3.2cm;
    set logscale y;
-   set rmargin at screen 0.9;
-   set bmargin at screen 0.2;
    set xtics 2,4,22;
+   set bmargin at screen 0.25;
    set xlabel \"query\";
    set xrange [0:23];
-   set yrange [1:60];
+   set yrange [1:100];
    set ylabel \"relative throughput\";
    set key left top Left reverse font \",10\";
+   set key samplen 2;
    plot \
-   \"$temp_dir/w32\" using 1:2 with lines lt 7 title \"w=32\", \
-   \"$temp_dir/w16\" using 1:2 with lines lt 6 title \"w=16\", \
-   \"$temp_dir/w8\" using 1:2  with lines lt 5 title \"w=8\", \
-   \"$temp_dir/w4\" using 1:2  with lines lt 4 title \"w=4\", \
-   \"$temp_dir/w2\" using 1:2  with lines lt 3 title \"w=2\"
+     \"$temp_dir/w32\" using 1:2 with lines lt 7 lw 2 dt (2, 2) title \"w=32\", \
+   \"$temp_dir/w16\" using 1:2 with lines lt 6 lw 2 dt (4, 2) title \"w=16\", \
+   \"$temp_dir/w8\" using 1:2  with lines lt 5 lw 2 dt (6, 2) title \"w=8\", \
+   \"$temp_dir/w4\" using 1:2  with lines lt 4 lw 2 dt (8, 2) title \"w=4\", \
+   \"$temp_dir/w2\" using 1:2  with lines lt 3 lw 2 dt (10, 2) title \"w=2\"
    " > plots/tpch_3.pdf
 
 rm -R $temp_dir
@@ -45,20 +45,23 @@ join $temp_dir/b1_w1 $temp_dir/b1000000_w1 > $temp_dir/w1
 cat experiments-sf10-filtered.txt | awk '$3 == 1000000 && $4 == 32' | cut -f 1,5 > $temp_dir/b1000000_w32
 
 gnuplot -p -e "\
-  set terminal pdf size 6cm,4cm;
+  set terminal pdf size 4.8cm,3.2cm;
    set logscale y;
-   set rmargin at screen 0.9;
-   set bmargin at screen 0.2;
+   set bmargin at screen 0.25;
    set xtics 2,4,22;
    set xlabel \"query\";
    set xrange [0:23];
-   set ylabel \"absolute throughput (tuples/sec)\";
+   set yrange [1:*];
+   set ylabel \"throughput (tuples/sec)\";
+   set format y \"10^{%T}\";
+   set ytics offset 0.7;
    set key left bottom Left reverse font \",10\";
+   set key samplen 2;
    plot \
-   \"$temp_dir/w1\" using 1:2 with lines lt 7 title \"w=1, b=1\", \
-   \"$temp_dir/w1\" using 1:3 with lines lt 7 title \"w=1, b=1M\", \
-   \"$temp_dir/b1000000_w32\" using 1:2 with lines lt 6 title \"w=32, b=1M\", \
-   \"experiments-hotdog.txt\" using 1:2 pointtype 6 ps .5 lc rgb \"black\" title \"hotdog\"
+     \"$temp_dir/w1\" using 1:2 with lines lw 2 dt (2, 2) title \"w=1, b=1\", \
+     \"$temp_dir/w1\" using 1:3 with lines lw 2 dt (4, 2) title \"w=1, b=1M\", \
+     \"$temp_dir/b1000000_w32\" using 1:2 with lines lw 2 dt (6, 2) title \"w=32, b=1M\", \
+   \"experiments-hotdog.txt\" using 1:2 pointtype 6 ps .5 lc rgb \"black\" title \"DBToaster\"
    " > plots/tpch_1.pdf
 
 rm -R $temp_dir
@@ -82,10 +85,9 @@ cat experiments-sf10-filtered.txt | awk '$3 == 1000000 && $4 == 1' | cut -f 1,5 
 join $temp_dir/w1 $temp_dir/tw1000000 | awk '{ print $1,$3/$2 }' > $temp_dir/w1000000
 
 gnuplot -p -e "\
-  set terminal pdf size 6cm,4cm;
+  set terminal pdf size 4.8cm,3.2cm;
    set logscale y;
-   set rmargin at screen 0.9;
-   set bmargin at screen 0.2;
+   set bmargin at screen 0.25;
    set xtics 2,4,22;
    set xlabel \"query\";
    set xrange [0:23];
@@ -93,12 +95,12 @@ gnuplot -p -e "\
    set ylabel \"relative throughput\";
    set key left bottom Left reverse font \",10\";
    plot \
-   \"$temp_dir/w1000000\" using 1:2 with lines lt 7 title \"w=10^6\", \
-   \"$temp_dir/w100000\" using 1:2 with lines lt 6 title \"w=10^5\", \
-   \"$temp_dir/w10000\" using 1:2  with lines lt 5 title \"w=10^4\", \
-   \"$temp_dir/w1000\" using 1:2  with lines lt 4 title \"w=10^3\", \
-   \"$temp_dir/w100\" using 1:2  with lines lt 3 title \"w=10^2\", \
-   \"$temp_dir/w10\" using 1:2  with lines lt 3 title \"w=10^1\"
+     \"$temp_dir/w1000000\" using 1:2 with lines lt 7 lw 2 dt (2, 2) title \"b=10^6\", \
+     \"$temp_dir/w100000\" using 1:2 with lines lt 6 lw 2 dt (4, 2) title \"b=10^5\", \
+     \"$temp_dir/w10000\" using 1:2  with lines lt 5 lw 2 dt (6, 2) title \"b=10^4\", \
+     \"$temp_dir/w1000\" using 1:2  with lines lt 4 lw 2 dt (8, 2) title \"b=10^3\", \
+     \"$temp_dir/w100\" using 1:2  with lines lt 3 lw 2 dt (10, 2) title \"b=10^2\", \
+     \"$temp_dir/w10\" using 1:2  with lines lt 2 lw 2 dt (12, 2) title \"b=10^1\"
    " > plots/tpch_2.pdf
 
 rm -R $temp_dir

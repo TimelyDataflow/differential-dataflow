@@ -40,26 +40,33 @@ def i_single_query():
 
     filtering = { ('rate', 200000), ('w', 32), ('nodes', 10000000), ('edges', 32000000), }
 
-    plotscript = "set terminal pdf size 6cm,4cm; set logscale x; set logscale y; " \
+    plotscript = "set terminal pdf size 4.8cm,3.2cm; set logscale x; set logscale y; " \
             "set bmargin at screen 0.2; " \
-            "set xlabel \"nanoseconds\"; " \
-            "set ylabel \"complementary cdf\"; " \
+            "set xrange [10000:5000000000.0]; " \
+            "set key samplen 2; " \
             "set format x \"10^{%T}\"; " \
+            "set yrange [0.0001:1.01]; " \
+            "set xlabel \"nanoseconds\"; " \
             "set format y \"10^{%T}\"; " \
-            "set xrange [50000:5000000000.0]; " \
-            "set yrange [0.001:1.01]; " \
-            "set key left top Left reverse font \",10\"; " \
-            "set style fill  transparent solid 0.35 noborder; " \
-            "set style circle radius 10; " \
+            "set bmargin at screen 0.25; " \
+            "set ylabel \"complementary cdf\"; " \
+            "set key left bottom Left reverse font \",10\"; " \
             "plot "
 
+    query_names = {
+            1: 'lookup',
+            2: '1-hop',
+            3: '2-hop',
+            4: '4-hop',
+    }
+
     dt = 2
-    for p, f in filedict:
+    for p, f in sorted(filedict, key=lambda x: dict(x[0])['query']):
         if p.issuperset(filtering):
             datafile = "{}/i_single_query_{}".format(tempdir, f)
             # assert(execute('cat results/{}/{}/{} > {}'.format(commit, experiment, f, datafile)))
-            plotscript += "\"results/{}/{}/{}\" using 1:2 with lines dt {} title \"{}\", ".format(commit, experiment, f, dt, dict(p)['query'])
-            dt += 1
+            plotscript += "\"results/{}/{}/{}\" using 1:2 with lines lw 2 dt ({}, 2) title \"{}\", ".format(commit, experiment, f, dt, query_names[dict(p)['query']])
+            dt += 3
 
     assert(execute('mkdir -p plots/{}/{}'.format(commit, experiment)))
     eprint(plotscript)
@@ -73,27 +80,32 @@ def ii_sharing():
 
     filtering = { ('rate', 200000), ('w', 32), ('nodes', 10000000), ('edges', 32000000), ('goal', 1800), }
 
-    plotscript = "set terminal pdf size 6cm,4cm; set logscale x; set logscale y; " \
+    plotscript = "set terminal pdf size 4.8cm,3.2cm; set logscale x; set logscale y; " \
             "set bmargin at screen 0.2; " \
-            "set xlabel \"nanoseconds\"; " \
-            "set ylabel \"complementary cdf\"; " \
+            "set xrange [10000:5000000000.0]; " \
+            "set key samplen 2; " \
             "set format x \"10^{%T}\"; " \
+            "set yrange [0.0001:1.01]; " \
+            "set xlabel \"nanoseconds\"; " \
             "set format y \"10^{%T}\"; " \
-            "set xrange [50000:5000000000.0]; " \
-            "set yrange [0.001:1.01]; " \
-            "set key left top Left reverse font \",10\"; " \
-            "set style fill  transparent solid 0.35 noborder; " \
-            "set style circle radius 10; " \
+            "set bmargin at screen 0.25; " \
+            "set ylabel \"complementary cdf\"; " \
+            "set key left bottom Left reverse font \",10\"; " \
             "plot "
 
-    dt = 2
+    shared_names = {
+            'no': 'not shared',
+            'shared': 'shared',
+            }
+
+    dt = 4
     for p, f in filedict:
         if p.issuperset(filtering):
             eprint(p)
             datafile = "{}/ii_sharing_{}".format(tempdir, f)
             assert(execute('cat results/{}/{}/{} | grep LATENCY | cut -f 2,3 > {}'.format(commit, experiment, f, datafile)))
-            plotscript += "\"{}\" using 1:2 with lines dt {} title \"{}\", ".format(datafile, dt, dict(p)['shared'])
-            dt += 1
+            plotscript += "\"{}\" using 1:2 with lines lw 2 dt ({}, 2) title \"{}\", ".format(datafile, dt, shared_names[dict(p)['shared']])
+            dt += 4
 
     assert(execute('mkdir -p plots/{}/{}'.format(commit, experiment)))
     eprint(plotscript)
@@ -109,25 +121,32 @@ def iii_memory_rss():
     for rate in params['rate']:
         F = filtering.union({ ('rate', rate), ('goal', 1800) })
         eprint(F)
-        plotscript = "set terminal pdf size 6cm,4cm; set logscale y; " \
-                "set bmargin at screen 0.2; " \
+
+        plotscript = "set terminal pdf size 4.8cm,3.2cm; set logscale y; " \
+                "set bmargin at screen 0.25; " \
                 "set xrange [-200:3500]; " \
                 "set yrange [100000000:*]; " \
-                "set xlabel \"seconds\"; " \
-                "set ylabel \"RSS\"; " \
-                "set format y \"%.0sB %c\"; " \
+                "set xlabel \"elapsed seconds\"; " \
+                "set xtics 0,1000,3000; " \
+                "set ylabel \"resident set size\"; " \
+                "set format y \"%.0s %cB\"; " \
                 "set key left top Left reverse font \",10\"; " \
                 "set style fill  transparent solid 0.35 noborder; " \
                 "set style circle radius 10; " \
                 "plot "
+
+        shared_names = {
+                'no': 'not shared',
+                'shared': 'shared',
+                }
 
         dt = 2
         for p, f in filedict:
             if p.issuperset(F):
                 datafile = "{}/iii_memory_rss_{}".format(tempdir, f)
                 assert(execute('cat results/{}/{}/{} | grep RSS | awk \'NR % 10 == 0\' | cut -f 2,3 > {}'.format(commit, experiment, f, datafile)))
-                plotscript += "\"{}\" using ($1/1000000000):2 with lines title \"{}\", ".format(datafile, dict(p)['shared'])
-                dt += 1
+                plotscript += "\"{}\" using ($1/1000000000):2 with lines lw 1.5 title \"{}\", ".format(datafile, shared_names[dict(p)['shared']])
+                dt += 4
 
         assert(execute('mkdir -p plots/{}/{}'.format(commit, experiment)))
         eprint(plotscript)
