@@ -1,0 +1,156 @@
+<body>
+
+  <script src="https://d3js.org/d3.v5.min.js"></script>
+  <script src="https://rawgit.com/kawanet/msgpack-lite/master/dist/msgpack.min.js"></script>
+  <script type="text/javascript">
+var margin = {top: 30, right: 20, bottom: 30, left: 20},
+    width = 960,
+    barHeight = 20,
+    barWidth = (width - margin.left - margin.right) * 0.8;
+
+var i = 0,
+    duration = 400,
+    root;
+
+var diagonal = d3.linkHorizontal()
+    .x(function(d) { return d.y; })
+    .y(function(d) { return d.x; });
+
+var svg = d3.select("body").append("svg")
+    .attr("width", width) 
+  .append("g")
+    .attr("transform", "translate(" + margin.left + "," + margin.top + ")");
+
+function update(source) {
+
+  
+  var nodes = root.descendants();
+
+  var height = Math.max(500, nodes.length * barHeight + margin.top + margin.bottom);
+
+  d3.select("svg").transition()
+      .duration(duration)
+      .attr("height", height);
+
+  d3.select(self.frameElement).transition()
+      .duration(duration)
+      .style("height", height + "px");
+
+  
+  var index = -1;
+  root.eachBefore(function(n) {
+    n.x = ++index * barHeight;
+    n.y = n.depth * 20;
+  });
+
+  
+  var node = svg.selectAll(".node")
+    .data(nodes, function(d) { return d.id || (d.id = ++i); });
+
+  var nodeEnter = node.enter().append("g")
+      .attr("class", "node")
+      .attr("transform", function(d) { return "translate(" + source.y0 + "," + source.x0 + ")"; })
+      .style("opacity", 0);
+
+  
+  nodeEnter.append("rect")
+      .attr("y", -barHeight / 2)
+      .attr("height", barHeight)
+      .attr("width", barWidth)
+      .style("fill", color)
+      .on("click", click);
+
+  nodeEnter.append("text")
+      .attr("dy", 3.5)
+      .attr("dx", 5.5)
+      .text(function(d) { return d.data.name; });
+
+  
+  nodeEnter.transition()
+      .duration(duration)
+      .attr("transform", function(d) { return "translate(" + d.y + "," + d.x + ")"; })
+      .style("opacity", 1);
+
+  node.transition()
+      .duration(duration)
+      .attr("transform", function(d) { return "translate(" + d.y + "," + d.x + ")"; })
+      .style("opacity", 1)
+    .select("rect")
+      .style("fill", color);
+
+  
+  node.exit().transition()
+      .duration(duration)
+      .attr("transform", function(d) { return "translate(" + source.y + "," + source.x + ")"; })
+      .style("opacity", 0)
+      .remove();
+
+  
+  var link = svg.selectAll(".link")
+    .data(root.links(), function(d) { return d.target.id; });
+
+  
+  link.enter().insert("path", "g")
+      .attr("class", "link")
+      .attr("d", function(d) {
+        var o = {x: source.x0, y: source.y0};
+        return diagonal({source: o, target: o});
+      })
+    .transition()
+      .duration(duration)
+      .attr("d", diagonal);
+
+  
+  link.transition()
+      .duration(duration)
+      .attr("d", diagonal);
+
+  
+  link.exit().transition()
+      .duration(duration)
+      .attr("d", function(d) {
+        var o = {x: source.x, y: source.y};
+        return diagonal({source: o, target: o});
+      })
+      .remove();
+
+  
+  root.each(function(d) {
+    d.x0 = d.x;
+    d.y0 = d.y;
+  });
+}
+
+function click(d) {
+  if (d.children) {
+    d._children = d.children;
+    d.children = null;
+  } else {
+    d.children = d._children;
+    d._children = null;
+  }
+  update(d);
+}
+
+function color(d) {
+  return d._children ? "#3182bd" : d.children ? "#c6dbef" : "#fd8d3c";
+}
+  </script>
+  <script type="text/javascript">
+    let websocket = new WebSocket("ws://localhost:9000/ws/");
+    let all_messages = [];
+    root = {};
+    websocket.addEventListener('message', (event) => {
+      let data = JSON.parse(event.data);
+      let from = data.ChannelMessages.from;
+      let to = data.ChannelMessages.to;
+      let count = data.ChannelMessages.count;
+      all_messages.push({"name": from + " -> " + to, "children": [{"name": "count: " + count}]});
+      root = d3.hierarchy({"name": "root", "children": all_messages});
+      root.x0 = 0;
+      root.y0 = 0;
+      update(root);
+    });
+
+  </script>
+</body>

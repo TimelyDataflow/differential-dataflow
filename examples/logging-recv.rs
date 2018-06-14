@@ -1,5 +1,14 @@
 extern crate timely;
 extern crate differential_dataflow;
+extern crate actix;
+extern crate actix_web;
+extern crate futures;
+
+extern crate serde;
+#[macro_use] extern crate serde_derive;
+extern crate serde_json;
+
+use std::sync::{Arc, Mutex};
 
 use std::net::TcpListener;
 use timely::dataflow::operators::{Map, capture::{EventReader, Replay}};
@@ -12,8 +21,79 @@ use differential_dataflow::collection::AsCollection;
 use differential_dataflow::operators::Consolidate;
 use differential_dataflow::operators::Join;
 
+use actix::*;
+use actix_web::*;
+use std::path::PathBuf;
+use actix_web::{App, HttpRequest, Result, http::Method, fs::NamedFile};
+
+use futures::future::Future;
+
+use serde::Serialize;
+
+#[derive(Serialize)]
+enum LoggingUpdate {
+    ChannelMessages {
+        from: String,
+        to: String,
+        count: isize
+    },
+}
+
+impl actix::Message for LoggingUpdate {
+    type Result = ();
+}
+
+struct Ws {
+    addr: Arc<Mutex<Vec<Addr<Syn, Ws>>>>,
+}
+
+impl Actor for Ws {
+    type Context = ws::WebsocketContext<Self>;
+
+    fn started(&mut self, ctx: &mut Self::Context) {
+        let addr: Addr<Syn, Ws> = ctx.address();
+        self.addr.lock().unwrap().push(addr);
+    }
+}
+
+fn index(req: HttpRequest) -> Result<NamedFile> {
+    Ok(NamedFile::open("examples/index.html")?)
+}
+
+impl Handler<LoggingUpdate> for Ws {
+    type Result = ();
+
+    fn handle(&mut self, msg: LoggingUpdate, ctx: &mut Self::Context) {
+        ctx.text(serde_json::to_string(&msg).unwrap());
+    }
+}
+
+impl StreamHandler<ws::Message, ws::ProtocolError> for Ws {
+    fn handle(&mut self, msg: ws::Message, ctx: &mut Self::Context) {
+        match msg {
+            ws::Message::Ping(msg) => ctx.pong(&msg),
+            _ => (),
+        }
+    }
+}
+
 fn main() {
-    timely::execute_from_args(std::env::args(), |worker| {
+    let endpoint = Arc::new(Mutex::new(Vec::new()));
+    let endpoint_actix = endpoint.clone();
+    ::std::mem::drop(::std::thread::spawn(move || {
+        server::new(move || {
+            let endpoint_actix = endpoint_actix.clone();
+            App::new()
+                .resource("/ws/", move |r| {
+                    let endpoint_actix = endpoint_actix.clone();
+                    r.f(move |req| ws::start(req, Ws { addr: endpoint_actix.clone() }))
+                })
+                .resource("/", |r| r.method(Method::GET).f(index))
+        }).bind("0.0.0.0:9000").unwrap().run();
+    }));
+
+    timely::execute_from_args(std::env::args(), move |worker| {
+        let endpoint = endpoint.clone();
 
         let source_peers = std::env::args().nth(1).unwrap().parse::<usize>().unwrap();
 
@@ -68,7 +148,16 @@ fn main() {
             channels
                 .semijoin(&messages)
                 .consolidate()
-                .inspect(|x| println!("messages:\t({:?} -> {:?}):\t{:?}", ((x.0).1).0, ((x.0).1).1, x.2));
+                .inspect(move |x| {
+                    for chan in endpoint.lock().unwrap().iter_mut() {
+                        chan.send(LoggingUpdate::ChannelMessages {
+                            from: ((x.0).1).0.clone(),
+                            to: ((x.0).1).1.clone(),
+                            count: x.2,
+                        }).wait().unwrap();
+                    }
+                });
+                // .inspect(|x| println!("messages:\t({:?} -> {:?}):\t{:?}", ((x.0).1).0, ((x.0).1).1, x.2));
         })
     }).unwrap(); // asserts error-free execution
 }
