@@ -51,6 +51,7 @@ impl<'a, G: Scope, D: Default+Data+Hashable> Drop for Variable<'a, G, D> where G
         if let Some(feedback) = self.feedback.take() {
             self.current.distinct()
                         .inner
+                        .map(|(x,t,d)| (x, Product::new(t.outer, t.inner+1), d))
                         .connect_loop(feedback);
         }
     }
