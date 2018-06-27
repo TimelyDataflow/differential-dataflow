@@ -21,15 +21,15 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::TraceAgent;
 use differential_dataflow::operators::arrange::{ArrangeBySelf, ArrangeByKey};
 use differential_dataflow::trace::{Cursor, TraceReader, BatchReader};
-use differential_dataflow::trace::implementations::spine::Spine;
+use differential_dataflow::trace::implementations::spine_fueled::Spine;
 use differential_dataflow::trace::implementations::ord::{OrdValBatch, OrdKeyBatch};
 
 /// A type capable of extending a stream of prefixes.
 ///
-/** 
+/**
     Implementors of `PrefixExtension` provide types and methods for extending a differential dataflow collection,
     via the three methods `count`, `propose`, and `validate`.
-**/ 
+**/
 pub trait PrefixExtender<G: Scope> {
 
     /// The required type of prefix to extend.
@@ -58,7 +58,7 @@ type TraceKeySpine<K,T,R> = Spine<K, (), T, R, Rc<TraceKeyBatch<K,T,R>>>;
 type TraceKeyHandle<K,T,R> = TraceAgent<K, (), T, R, TraceKeySpine<K,T,R>>;
 
 
-pub struct CollectionIndex<K, V, T> 
+pub struct CollectionIndex<K, V, T>
 where
     K: Data,
     V: Data,
@@ -74,7 +74,7 @@ where
     validate_trace: TraceKeyHandle<(K, V), T, isize>,
 }
 
-impl<K, V, T> Clone for CollectionIndex<K, V, T> 
+impl<K, V, T> Clone for CollectionIndex<K, V, T>
 where
     K: Data+Hash,
     V: Data+Hash,
@@ -89,7 +89,7 @@ where
     }
 }
 
-impl<K, V, T> CollectionIndex<K, V, T> 
+impl<K, V, T> CollectionIndex<K, V, T>
 where
     K: Data+Hash,
     V: Data+Hash,
@@ -116,7 +116,7 @@ where
     }
 }
 
-pub struct CollectionExtender<K, V, T, P, F> 
+pub struct CollectionExtender<K, V, T, P, F>
 where
     K: Data,
     V: Data,
@@ -128,7 +128,7 @@ where
     key_selector: Rc<F>,
 }
 
-impl<G, K, V, P, F> PrefixExtender<G> for CollectionExtender<K, V, G::Timestamp, P, F> 
+impl<G, K, V, P, F> PrefixExtender<G> for CollectionExtender<K, V, G::Timestamp, P, F>
 where
     G: Scope,
     K: Data+Hash,
@@ -157,17 +157,17 @@ where
 
         let exchange = Exchange::new(move |update: &((P,usize,usize),G::Timestamp,isize)| logic1(&(update.0).0).hashed().as_u64());
 
-        prefixes.inner.binary_frontier(&counts.stream, exchange, Pipeline, "Count", move |_| move |input1, input2, output| {
+        prefixes.inner.binary_frontier(&counts.stream, exchange, Pipeline, "Count", move |_,_| move |input1, input2, output| {
 
             // drain the first input, stashing requests.
             input1.for_each(|capability, data|
-                stash.entry(capability)
+                stash.entry(capability.retain())
                      .or_insert(Vec::new())
                      .extend(data.drain(..))
              );
 
             // advance the `distinguish_since` frontier to allow all merges.
-            input2.for_each(|_, batches| 
+            input2.for_each(|_, batches|
                 for batch in batches.drain(..) {
                     if let Some(ref mut trace) = counts_trace {
                         trace.distinguish_since(batch.item.upper());
@@ -221,7 +221,7 @@ where
             stash.retain(|_,prefixes| !prefixes.is_empty());
 
             // advance the consolidation frontier (TODO: wierd lexicographic times!)
-            counts_trace.as_mut().map(|trace| trace.advance_by(input1.frontier().frontier()));
+            counts_trace.as_mut().map(|trace| trace.advance_by(&input1.frontier().frontier()));
 
             if input1.frontier().is_empty() && stash.is_empty() {
                 counts_trace = None;
@@ -246,17 +246,17 @@ where
 
         let exchange = Exchange::new(move |update: &(P,G::Timestamp,isize)| logic1(&update.0).hashed().as_u64());
 
-        prefixes.inner.binary_frontier(&propose.stream, exchange, Pipeline, "Propose", move |_| move |input1, input2, output| {
+        prefixes.inner.binary_frontier(&propose.stream, exchange, Pipeline, "Propose", move |_,_| move |input1, input2, output| {
 
             // drain the first input, stashing requests.
-            input1.for_each(|capability, data| 
-                stash.entry(capability)
+            input1.for_each(|capability, data|
+                stash.entry(capability.retain())
                      .or_insert(Vec::new())
                      .extend(data.drain(..))
              );
 
             // advance the `distinguish_since` frontier to allow all merges.
-            input2.for_each(|_, batches| 
+            input2.for_each(|_, batches|
                 for batch in batches.drain(..) {
                     if let Some(ref mut trace) = propose_trace {
                         trace.distinguish_since(batch.item.upper());
@@ -308,7 +308,7 @@ where
             stash.retain(|_,prefixes| !prefixes.is_empty());
 
             // advance the consolidation frontier (TODO: wierd lexicographic times!)
-            propose_trace.as_mut().map(|trace| trace.advance_by(input1.frontier().frontier()));
+            propose_trace.as_mut().map(|trace| trace.advance_by(&input1.frontier().frontier()));
 
             if input1.frontier().is_empty() && stash.is_empty() {
                 propose_trace = None;
@@ -332,21 +332,21 @@ where
         let logic1 = self.key_selector.clone();
         let logic2 = self.key_selector.clone();
 
-        let exchange = Exchange::new(move |update: &((P,V),G::Timestamp,isize)| 
+        let exchange = Exchange::new(move |update: &((P,V),G::Timestamp,isize)|
             (logic1(&(update.0).0).clone(), ((update.0).1).clone()).hashed().as_u64()
         );
 
-        extensions.inner.binary_frontier(&validate.stream, exchange, Pipeline, "Validate", move |_| move |input1, input2, output| {
+        extensions.inner.binary_frontier(&validate.stream, exchange, Pipeline, "Validate", move |_,_| move |input1, input2, output| {
 
             // drain the first input, stashing requests.
-            input1.for_each(|capability, data| 
-                stash.entry(capability)
+            input1.for_each(|capability, data|
+                stash.entry(capability.retain())
                      .or_insert(Vec::new())
                      .extend(data.drain(..))
              );
 
             // advance the `distinguish_since` frontier to allow all merges.
-            input2.for_each(|_, batches| 
+            input2.for_each(|_, batches|
                 for batch in batches.drain(..) {
                     if let Some(ref mut trace) = validate_trace {
                         trace.distinguish_since(batch.item.upper());
@@ -394,7 +394,7 @@ where
             stash.retain(|_,prefixes| !prefixes.is_empty());
 
             // advance the consolidation frontier (TODO: wierd lexicographic times!)
-            validate_trace.as_mut().map(|trace| trace.advance_by(input1.frontier().frontier()));
+            validate_trace.as_mut().map(|trace| trace.advance_by(&input1.frontier().frontier()));
 
             if input1.frontier().is_empty() && stash.is_empty() {
                 validate_trace = None;
@@ -404,6 +404,6 @@ where
 
     }
 
-} 
+}
 
 

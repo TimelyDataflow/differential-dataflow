@@ -81,7 +81,7 @@ fn main() {
         while index < edges2.len() {
             let limit = std::cmp::min(batching, edges2.len() - index);
             for offset in 0 .. limit {
-                edges.insert((edges2[index + offset].0));
+                edges.insert(edges2[index + offset].0);
                 edges.advance_to(index + offset + 1);
             }
             index += limit;
