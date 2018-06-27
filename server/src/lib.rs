@@ -16,7 +16,7 @@ use timely::dataflow::operators::probe::Handle as ProbeHandle;
 
 // stuff for talking about shared trace types ...
 use differential_dataflow::operators::arrange::TraceAgent;
-use differential_dataflow::trace::implementations::spine::Spine;
+use differential_dataflow::trace::implementations::spine_fueled::Spine;
 use differential_dataflow::trace::implementations::ord::OrdValBatch;
 
 // These are all defined here so that users can be assured a common layout.
@@ -39,7 +39,7 @@ pub type Environment<'a, 'b> = (
 /// This type is meant to be a smart pointer for a type `T` that needs to keep
 /// a `Library` alive, perhaps because its methods would call in to the library.
 /// The type should have a specified drop order (viz RFC 1857) which guarentees
-/// that the shared library reference drops only after the element itself is 
+/// that the shared library reference drops only after the element itself is
 /// dropped. It also implements `Deref` and `DerefMut` to provide the experience
 /// of a `T` itself.
 ///

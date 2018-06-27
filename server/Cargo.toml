@@ -9,7 +9,7 @@ path="../"
 [dependencies]
 rand="0.3.13"
 libloading="*"
-timely_communication = { git = "https://github.com/frankmcsherry/timely-dataflow" }
+timely_communication = "0.5"
 timely = { git = "https://github.com/frankmcsherry/timely-dataflow" }
 
 #[workspace]
