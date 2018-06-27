@@ -5,7 +5,7 @@
 
 use timely::order::TotalOrder;
 use timely::dataflow::*;
-use timely::dataflow::operators::Unary;
+use timely::dataflow::operators::Operator;
 use timely::dataflow::channels::pact::Pipeline;
 
 use lattice::Lattice;
@@ -63,7 +63,7 @@ pub trait ThresholdTotal<G: Scope, K: Data, R: Diff> where G::Timestamp: TotalOr
     /// }
     /// ```
     fn distinct_total(&self) -> Collection<G, K, isize> {
-        self.threshold_total(|c| if c.is_zero() { 0 } else { 1 })        
+        self.threshold_total(|c| if c.is_zero() { 0 } else { 1 })
     }
 }
 
@@ -76,7 +76,7 @@ where G::Timestamp: TotalOrder+Lattice+Ord {
 }
 
 impl<G: Scope, K: Data, R: Diff, T1> ThresholdTotal<G, K, R> for Arranged<G, K, (), R, T1>
-where 
+where
     G::Timestamp: TotalOrder+Lattice+Ord,
     T1: TraceReader<K, (), G::Timestamp, R>+Clone+'static,
     T1::Batch: BatchReader<K, (), G::Timestamp, R> {
@@ -85,10 +85,10 @@ where
 
         let mut trace = self.trace.clone();
 
-        self.stream.unary_stream(Pipeline, "ThresholdTotal", move |input, output| {
+        self.stream.unary(Pipeline, "ThresholdTotal", move |_,_| move |input, output| {
 
             let thresh = &thresh;
-    
+
             input.for_each(|capability, batches| {
 
                 let mut session = output.session(&capability);

@@ -15,7 +15,7 @@
 
 use timely::order::TotalOrder;
 use timely::dataflow::*;
-use timely::dataflow::operators::Unary;
+use timely::dataflow::operators::Operator;
 use timely::dataflow::channels::pact::Pipeline;
 
 use lattice::Lattice;
@@ -103,7 +103,7 @@ where
 
         let mut trace = self.trace.clone();
 
-        self.stream.unary_stream(Pipeline, "CountTotal", move |input, output| {
+        self.stream.unary(Pipeline, "CountTotal", move |_,_| move |input, output| {
 
             input.for_each(|capability, batches| {
 

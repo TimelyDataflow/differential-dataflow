@@ -27,7 +27,7 @@ use std::fmt::Debug;
 use timely::dataflow::operators::{Enter, Map};
 use timely::order::PartialOrder;
 use timely::dataflow::{Scope, Stream};
-use timely::dataflow::operators::generic::{Unary, Operator, source};
+use timely::dataflow::operators::generic::{Operator, source};
 use timely::dataflow::channels::pact::{Pipeline, Exchange};
 use timely::progress::Timestamp;
 use timely::progress::frontier::Antichain;
@@ -441,7 +441,7 @@ impl<G: Scope, K, V, R, T> Arranged<G, K, V, R, T> where G::Timestamp: Lattice+O
             I::Item: Data,
             L: Fn(&K, &V) -> I+'static,
     {
-        self.stream.unary_stream(Pipeline, "AsCollection", move |input, output| {
+        self.stream.unary(Pipeline, "AsCollection", move |_,_| move |input, output| {
 
             input.for_each(|time, data| {
                 let mut session = output.session(&time);

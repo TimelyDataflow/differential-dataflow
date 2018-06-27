@@ -9,7 +9,7 @@ use std::cmp::Ordering;
 
 use timely::progress::Timestamp;
 use timely::dataflow::Scope;
-use timely::dataflow::operators::generic::{Binary, OutputHandle};
+use timely::dataflow::operators::generic::{Operator, OutputHandle};
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Capability;
 use timely::dataflow::channels::pushers::tee::Tee;

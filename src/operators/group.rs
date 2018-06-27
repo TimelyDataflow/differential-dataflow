@@ -21,7 +21,7 @@ use ::{Data, Collection, Diff};
 use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
 use timely::dataflow::*;
-use timely::dataflow::operators::Unary;
+use timely::dataflow::operators::Operator;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Capability;
 
