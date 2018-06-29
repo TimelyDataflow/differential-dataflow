@@ -1,6 +1,5 @@
 extern crate rand;
 extern crate timely;
-extern crate timely_communication;
 extern crate differential_dataflow;
 
 use rand::{Rng, SeedableRng, StdRng};
@@ -10,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 use std::mem;
 
-use timely_communication::Configuration;
+use timely::Configuration;
 
 use timely::dataflow::*;
 use timely::dataflow::operators::Capture;

@@ -89,7 +89,6 @@ impl<T: timely::ExchangeData + Ord + Debug> Data for T { }
 extern crate fnv;
 extern crate timely;
 extern crate timely_sort;
-extern crate timely_communication;
 
 #[macro_use]
 extern crate abomonation_derive;
