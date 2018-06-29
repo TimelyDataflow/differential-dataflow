@@ -249,10 +249,9 @@ where T: Lattice+Ord+Clone+'static, Tr: TraceReader<K,V,T,R> {
     ///
     /// ```
     /// extern crate timely;
-    /// extern crate timely_communication;
     /// extern crate differential_dataflow;
     ///
-    /// use timely_communication::Configuration;
+    /// use timely::Configuration;
     /// use differential_dataflow::input::Input;
     /// use differential_dataflow::operators::arrange::Arrange;
     /// use differential_dataflow::operators::group::GroupArranged;

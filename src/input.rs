@@ -6,7 +6,7 @@
 //! timely dataflow capabilities, exposing more concurrency to the operator implementations
 //! than are evident from the logical times, which appear to execute in sequence.
 
-use timely_communication::Allocate;
+use timely::Allocate;
 
 use timely::progress::Timestamp;
 use timely::progress::timestamp::RootTimestamp;
@@ -26,10 +26,9 @@ pub trait Input<'a, A: Allocate, T: Timestamp+Ord> {
     ///
     /// ```
     /// extern crate timely;
-    /// extern crate timely_communication;
     /// extern crate differential_dataflow;
     ///
-    /// use timely_communication::Configuration;
+    /// use timely::Configuration;
     /// use differential_dataflow::input::Input;
     ///
     /// fn main() {
@@ -58,10 +57,9 @@ pub trait Input<'a, A: Allocate, T: Timestamp+Ord> {
     ///
     /// ```
     /// extern crate timely;
-    /// extern crate timely_communication;
     /// extern crate differential_dataflow;
     ///
-    /// use timely_communication::Configuration;
+    /// use timely::Configuration;
     /// use differential_dataflow::input::Input;
     ///
     /// fn main() {
@@ -115,10 +113,9 @@ impl<'a, A: Allocate, T: Timestamp+Ord> Input<'a, A, T> for Child<'a, Root<A>, T
 ///
 /// ```
 /// extern crate timely;
-/// extern crate timely_communication;
 /// extern crate differential_dataflow;
 ///
-/// use timely_communication::Configuration;
+/// use timely::Configuration;
 /// use differential_dataflow::input::Input;
 ///
 /// fn main() {

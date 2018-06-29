@@ -26,7 +26,6 @@ graph_map = { git = "https://github.com/frankmcsherry/graph-map.git" }
 abomonation = "0.5"
 abomonation_derive = "0.3"
 timely_sort="0.1.6"
-timely_communication = "0.5"
 timely = { git = "https://github.com/frankmcsherry/timely-dataflow" }
 fnv="1.0.2"
 
