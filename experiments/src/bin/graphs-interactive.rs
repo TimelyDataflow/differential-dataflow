@@ -201,7 +201,7 @@ use differential_dataflow::trace::implementations::ord::OrdValSpine as DefaultVa
 use differential_dataflow::operators::arrange::TraceAgent;
 use differential_dataflow::operators::arrange::Arranged;
 
-type Arrange<G: Scope, K, V, R> = Arranged<G, K, V, R, TraceAgent<K, V, G::Timestamp, R, DefaultValTrace<K, V, G::Timestamp, R>>>;
+type Arrange<G, K, V, R> = Arranged<G, K, V, R, TraceAgent<K, V, <G as ScopeParent>::Timestamp, R, DefaultValTrace<K, V, <G as ScopeParent>::Timestamp, R>>>;
 
 
 // returns pairs (n, s) indicating node n can be reached from a root in s steps.
@@ -232,7 +232,7 @@ where G::Timestamp: Lattice+Ord {
 }
 
 // returns pairs (n, s) indicating node n can be reached from a root in s steps.
-fn bidijkstra<G: Scope>(
+fn _bidijkstra<G: Scope>(
     forward_graph: &Arrange<G, Node, Node, isize>,
     reverse_graph: &Arrange<G, Node, Node, isize>,
     goals: &Collection<G, (Node, Node)>,

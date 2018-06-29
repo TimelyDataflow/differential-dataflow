@@ -66,12 +66,12 @@ fn main() {
         root_input.session(root_cap).give((0, RootTimestamp::new(Product::new(0, 0)), 1));
 
         // load initial edges
-        {
-            let mut session = edge_input.session(edge_cap.clone());
-            for _ in 0 .. worker_edges {
-                session.give(((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), RootTimestamp::new(Product::new(0, 0)), 1));
-            }
-        }
+        edge_input
+            .session(edge_cap.clone())
+            .give_iterator((0 .. worker_edges).map(|_|
+                ((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)),
+                    RootTimestamp::new(Product::new(0, 0)), 1)
+            ));
 
         let edge_cap_next = edge_cap.delayed(&RootTimestamp::new(Product::new(1, 0)));
 
@@ -81,13 +81,15 @@ fn main() {
         }
 
         for round in 1 .. rounds {
-            {
-                let mut session = edge_input.session(edge_cap.clone());
-                for _ in 0 .. worker_batch {
-                    session.give(((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), RootTimestamp::new(Product::new(0, round)), 1));
-                    session.give(((rng2.gen_range(0, nodes), rng2.gen_range(0, nodes)), RootTimestamp::new(Product::new(0, round)),-1));
-                }
-            }
+
+            edge_input
+                .session(edge_cap.clone())
+                .give_iterator((0 .. worker_batch).flat_map(|_| {
+                    let insert = ((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), RootTimestamp::new(Product::new(0, round)), 1);
+                    let remove = ((rng2.gen_range(0, nodes), rng2.gen_range(0, nodes)), RootTimestamp::new(Product::new(0, round)),-1);
+                    Some(insert).into_iter().chain(Some(remove).into_iter())
+                }));
+
             edge_cap.downgrade(&RootTimestamp::new(Product::new(0, round+1)));
             while probe.less_than(edge_cap.time()) {
                 worker.step();
@@ -95,48 +97,37 @@ fn main() {
         }
 
         edge_cap = edge_cap_next;
-        let edge_cap_next = edge_cap.delayed(&RootTimestamp::new(Product::new(2, 0)));
 
-        {
-            let mut session = edge_input.session(edge_cap.clone());
-            for _ in 0 .. worker_batch {
-                session.give(((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), RootTimestamp::new(Product::new(1, 0)), 1));
-            }
-        }
+        edge_input
+            .session(edge_cap.clone())
+            .give_iterator((0 .. worker_batch).map(|_| {
+                ((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), RootTimestamp::new(Product::new(1, 0)), 1)
+            }));
 
-        edge_cap.downgrade(&RootTimestamp::new(Product::new(1, rounds+1)));
-        while probe.less_than(edge_cap.time()) {
+        edge_cap.downgrade(&RootTimestamp::new(Product::new(2, 0)));
+        while probe.less_than(&RootTimestamp::new(Product::new(1, rounds+1))) {
             worker.step();
         }
 
-        edge_cap = edge_cap_next;
-        let edge_cap_next = edge_cap.delayed(&RootTimestamp::new(Product::new(3, 0)));
+        edge_input
+            .session(edge_cap.clone())
+            .give_iterator((0 .. worker_batch).map(|_| {
+                ((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), RootTimestamp::new(Product::new(2, 3)), 1)
+            }));
 
-        {
-            let mut session = edge_input.session(edge_cap.clone());
-            for _ in 0 .. worker_batch {
-                session.give(((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), RootTimestamp::new(Product::new(2, 3)), 1));
-            }
-        }
-
-        edge_cap.downgrade(&RootTimestamp::new(Product::new(2, rounds+1)));
-        while probe.less_than(edge_cap.time()) {
+        edge_cap.downgrade(&RootTimestamp::new(Product::new(3, 0)));
+        while probe.less_than(&RootTimestamp::new(Product::new(2, rounds+1))) {
             worker.step();
         }
 
+        edge_input
+            .session(edge_cap.clone())
+            .give_iterator((0 .. worker_batch).map(|_| {
+                ((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), RootTimestamp::new(Product::new(3, 1)), 1)
+            }));
 
-        edge_cap = edge_cap_next;
-        let edge_cap_next = edge_cap.delayed(&RootTimestamp::new(Product::new(4, 0)));
-
-        {
-            let mut session = edge_input.session(edge_cap.clone());
-            for _ in 0 .. worker_batch {
-                session.give(((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), RootTimestamp::new(Product::new(3, 1)), 1));
-            }
-        }
-
-        edge_cap.downgrade(&RootTimestamp::new(Product::new(3, rounds+1)));
-        while probe.less_than(edge_cap.time()) {
+        edge_cap.downgrade(&RootTimestamp::new(Product::new(4, 0)));
+        while probe.less_than(&RootTimestamp::new(Product::new(3, rounds+1))) {
             worker.step();
         }
 

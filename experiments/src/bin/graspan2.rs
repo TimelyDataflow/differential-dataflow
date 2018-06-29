@@ -9,17 +9,13 @@ use timely::dataflow::Scope;
 
 use differential_dataflow::operators::iterate::Variable;
 
-// use timely::dataflow::operators::{Accumulate, Inspect};
 use differential_dataflow::Collection;
 use differential_dataflow::input::Input;
-// use differential_dataflow::trace::Trace;
-// use differential_dataflow::trace::implementations::ord::OrdValSpine;
 use differential_dataflow::operators::*;
-use differential_dataflow::operators::iterate::CoreVariable;
-// use differential_dataflow::operators::group::GroupArranged;
+// use differential_dataflow::operators::iterate::CoreVariable;
 use differential_dataflow::operators::arrange::ArrangeByKey;
 
-type Iteration = u64;
+// type Iteration = u64;
 type Difference = i64;
 
 fn main() {
@@ -54,7 +50,7 @@ fn unoptimized() {
 
             let dereference = dereference.arrange_by_key();
 
-            let (value_flow, memory_alias) =
+            let (value_flow, memory_alias, value_alias) =
             scope
                 .scoped(|scope| {
 
@@ -120,13 +116,13 @@ fn unoptimized() {
                     memory_alias.set(&memory_alias_next);
                     // value_alias.set(&value_alias_next);
 
-                    (value_flow_next.leave(), memory_alias_next.leave())//, value_alias_next.leave())
+                    (value_flow_next.leave(), memory_alias_next.leave(), value_alias_next.leave())
 
                 });
 
-                // value_flow.map(|_| ()).consolidate().inspect(|x| println!("VF: {:?}", x));
-                // memory_alias.map(|_| ()).consolidate().inspect(|x| println!("MA: {:?}", x));
-                // value_alias.map(|_| ()).consolidate().inspect(|x| println!("VA: {:?}", x));
+                value_flow.map(|_| ()).consolidate().inspect(|x| println!("VF: {:?}", x));
+                memory_alias.map(|_| ()).consolidate().inspect(|x| println!("MA: {:?}", x));
+                value_alias.map(|_| ()).consolidate().inspect(|x| println!("VA: {:?}", x));
 
             (a_handle, d_handle)
         });

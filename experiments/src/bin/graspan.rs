@@ -48,15 +48,15 @@ fn main() {
                     // temp_result.map(|_| ()).consolidate().inspect(|x| println!("pre-agg:\t{:?}", x.2));
 
                     let result = temp_result
-                        .distinct_total();
+                        .distinct();
 
                     // result.map(|_| ()).consolidate().inspect(|x| println!("post-agg:\t{:?}", x.2));
 
                     result
                 })
-                // .map(|_| ())
-                // .consolidate()
-                // .inspect(|x| println!("{:?}", x))
+                .map(|_| ())
+                .consolidate()
+                .inspect(|x| println!("{:?}", x))
                 ;
 
             (n_handle, e_handle)

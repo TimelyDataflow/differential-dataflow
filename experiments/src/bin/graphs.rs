@@ -15,9 +15,9 @@ use differential_dataflow::input::Input;
 use differential_dataflow::Collection;
 use differential_dataflow::operators::*;
 use differential_dataflow::trace::Trace;
-use differential_dataflow::operators::arrange::ArrangeByKey;
+// use differential_dataflow::operators::arrange::ArrangeByKey;
 use differential_dataflow::operators::arrange::ArrangeBySelf;
-use differential_dataflow::operators::group::GroupArranged;
+// use differential_dataflow::operators::group::GroupArranged;
 use differential_dataflow::operators::arrange::Arrange;
 
 use differential_dataflow::trace::implementations::spine_fueled::Spine;
@@ -25,7 +25,7 @@ use differential_dataflow::trace::implementations::spine_fueled::Spine;
 type Node = usize;
 
 use differential_dataflow::trace::implementations::ord::OrdValBatch;
-use differential_dataflow::trace::implementations::ord::OrdValSpine;
+// use differential_dataflow::trace::implementations::ord::OrdValSpine;
 
 // type GraphTrace<N> = Spine<usize, N, Product<RootTimestamp, ()>, isize, Rc<GraphBatch<N>>>;
 type GraphTrace = Spine<Node, Node, Product<RootTimestamp, ()>, isize, Rc<OrdValBatch<Node, Node, Product<RootTimestamp, ()>, isize>>>;

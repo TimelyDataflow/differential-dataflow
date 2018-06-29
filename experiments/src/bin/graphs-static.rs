@@ -26,12 +26,12 @@ use differential_dataflow::AsCollection;
 
 use graph_map::GraphMMap;
 
-type Node = usize;
+type Node = u32;
+
+// use differential_dataflow::trace::implementations::graph::GraphBatch;
+// type GraphTrace = Spine<Node, Node, Product<RootTimestamp, ()>, isize, Rc<GraphBatch<Node>>>;
 
 use differential_dataflow::trace::implementations::ord::OrdValBatch;
-// use differential_dataflow::trace::implementations::ord::OrdValSpine;
-
-// type GraphTrace<N> = Spine<usize, N, Product<RootTimestamp, ()>, isize, Rc<GraphBatch<N>>>;
 type GraphTrace = Spine<Node, Node, Product<RootTimestamp, ()>, isize, Rc<OrdValBatch<Node, Node, Product<RootTimestamp, ()>, isize>>>;
 
 fn main() {
@@ -62,13 +62,6 @@ fn main() {
                                   })
                                   .to_stream(scope)
                                   .as_collection();
-
-            // let seed: &[_] = &[1, 2, 3, index];
-            // let mut rng1: StdRng = SeedableRng::from_seed(seed);
-            // let worker_edges = edges/peers + if index < (edges % peers) { 1 } else { 0 };
-            // let (_, graph) = scope.new_collection_from((0 .. worker_edges).map(move |_|
-            //     (rng1.gen_range(0, nodes) as Node, rng1.gen_range(0, nodes) as Node)
-            // ));
 
             edges.arrange(GraphTrace::new()).trace
         });

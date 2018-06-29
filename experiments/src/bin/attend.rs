@@ -5,18 +5,10 @@ extern crate differential_dataflow;
 
 use std::time::Instant;
 
-use timely::dataflow::*;
-
 use differential_dataflow::input::Input;
 use differential_dataflow::operators::*;
 
-use differential_dataflow::trace::implementations::ord::OrdValSpine as DefaultValTrace;
-use differential_dataflow::operators::arrange::TraceAgent;
-use differential_dataflow::operators::arrange::Arranged;
-
 use differential_dataflow::difference::DiffPair;
-
-type Arrange<G: Scope, K, V, R> = Arranged<G, K, V, R, TraceAgent<K, V, G::Timestamp, R, DefaultValTrace<K, V, G::Timestamp, R>>>;
 
 fn main() {
 
