@@ -1,13 +1,12 @@
 extern crate rand;
 extern crate timely;
-extern crate timely_communication;
 extern crate differential_dataflow;
 
 use rand::{Rng, SeedableRng, StdRng};
 
 use std::sync::{Arc, Mutex};
 
-use timely_communication::Configuration;
+use timely::Configuration;
 
 use timely::dataflow::*;
 use timely::dataflow::operators::Capture;

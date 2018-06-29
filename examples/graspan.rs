@@ -1,6 +1,5 @@
 extern crate indexmap;
 extern crate timely;
-extern crate timely_communication;
 extern crate differential_dataflow;
 
 use std::io::{BufRead, BufReader};
@@ -8,10 +7,10 @@ use std::fs::File;
 
 use indexmap::IndexMap;
 
-use timely_communication::Allocate;
+use timely::Allocate;
 
 use timely::dataflow::Scope;
-use timely::dataflow::scopes::{Root, Child};
+use timely::dataflow::scopes::{ScopeParent, Root, Child};
 use timely::progress::timestamp::RootTimestamp;
 use timely::progress::nested::product::Product;
 use timely::progress::Timestamp;
@@ -78,7 +77,7 @@ use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 
 type TraceKeyHandle<K,T,R> = TraceAgent<K, (), T, R, OrdKeySpine<K, T, R>>;
 type TraceValHandle<K,V,T,R> = TraceAgent<K, V, T, R, OrdValSpine<K, V, T, R>>;
-type Arrange<G: Scope, K, V, R> = Arranged<G, K, V, R, TraceValHandle<K, V, G::Timestamp, R>>;
+type Arrange<G, K, V, R> = Arranged<G, K, V, R, TraceValHandle<K, V, <G as ScopeParent>::Timestamp, R>>;
 
 /// An evolving set of edges.
 ///
