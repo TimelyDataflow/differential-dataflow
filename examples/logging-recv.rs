@@ -13,7 +13,7 @@ use differential_dataflow::operators::Consolidate;
 use differential_dataflow::operators::Join;
 
 fn main() {
-    timely::execute_from_args(std::env::args(), |worker| {
+    timely::execute_from_args(std::env::args().skip(2), |worker| {
 
         let source_peers = std::env::args().nth(1).unwrap().parse::<usize>().unwrap();
 

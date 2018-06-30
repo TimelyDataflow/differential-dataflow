@@ -26,7 +26,7 @@ fn main() {
     println!("performing reachability on {} nodes, {} edges:", nodes, edges);
 
     // define a new computational scope, in which to run BFS
-    timely::execute_from_args(std::env::args().skip(4), move |worker| {
+    timely::execute_from_args(std::env::args().skip(5), move |worker| {
         
         let timer = Instant::now();
 

@@ -12,11 +12,11 @@ fn main() {
     let nodes: u32 = std::env::args().nth(1).unwrap().parse().unwrap();
     let edges: usize = std::env::args().nth(2).unwrap().parse().unwrap();
     let batch: usize = std::env::args().nth(3).unwrap().parse().unwrap();
-
-    let inspect: bool = std::env::args().find(|x| x == "inspect").is_some();
+    let inspect: bool = std::env::args().nth(4).unwrap() == "inspect";
+    let open_loop: bool = std::env::args().nth(5).unwrap() == "open-loop";
 
     // define a new computational scope, in which to run BFS
-    timely::execute_from_args(std::env::args().skip(4), move |worker| {
+    timely::execute_from_args(std::env::args().skip(6), move |worker| {
 
         let timer = ::std::time::Instant::now();
 
@@ -63,7 +63,7 @@ fn main() {
 
         if batch > 0 {
 
-            if !::std::env::args().any(|x| x == "open-loop") {
+            if !open_loop {
 
                 // closed-loop latency-throughput test, parameterized by batch size.
                 let timer = ::std::time::Instant::now();
