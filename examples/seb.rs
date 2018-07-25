@@ -15,14 +15,14 @@ use differential_dataflow::input::InputSession;
 fn main() {
 
   // define a new timely dataflow computation. 
-  timely::execute_from_args(std::env::args(), move |worker| {
+  timely::execute_from_args(std::env::args().skip(6), move |worker| {
 
     // capture parameters of the experiment.
     let users: usize = std::env::args().nth(1).unwrap().parse().unwrap();
     let items: usize = std::env::args().nth(2).unwrap().parse().unwrap();
     let scale: usize = std::env::args().nth(3).unwrap().parse().unwrap();
     let batch: usize = std::env::args().nth(4).unwrap().parse().unwrap();
-    let noisy: bool = std::env::args().position(|x| x == "noisy").is_some();
+    let noisy: bool = std::env::args().nth(5).unwrap() == "noisy";
 
     let index = worker.index();
     let peers = worker.peers();

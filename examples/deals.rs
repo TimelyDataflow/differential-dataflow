@@ -35,7 +35,7 @@ fn main() {
     let filename = std::env::args().nth(1).unwrap();
     let program = std::env::args().nth(2).unwrap();
 
-    timely::execute_from_args(std::env::args().skip(1), move |worker| {
+    timely::execute_from_args(std::env::args().skip(3), move |worker| {
 
         let peers = worker.peers();
         let index = worker.index();

@@ -7,7 +7,7 @@ authors = ["Frank McSherry <fmcsherry@me.com>"]
 description = "An incremental data-parallel dataflow platform"
 
 # These URLs point to more information about the repository
-documentation = "https://github.com/frankmcsherry/differential-dataflow"
+documentation = "https://docs.rs/differential-dataflow"
 homepage = "https://github.com/frankmcsherry/differential-dataflow"
 repository = "https://github.com/frankmcsherry/differential-dataflow.git"
 keywords = ["differential", "dataflow"]

@@ -31,9 +31,9 @@ fn main() {
     let nodes: u32 = std::env::args().nth(1).unwrap().parse().unwrap();
     let edges: u32 = std::env::args().nth(2).unwrap().parse().unwrap();
     let batch: usize = std::env::args().nth(3).unwrap().parse().unwrap();
-    let inspect = std::env::args().find(|x| x == "inspect").is_some();
+    let inspect = std::env::args().nth(4).unwrap() == "inspect";
 
-    timely::execute_from_args(std::env::args().skip(4), move |worker| {
+    timely::execute_from_args(std::env::args().skip(5), move |worker| {
 
         let timer = ::std::time::Instant::now();
 

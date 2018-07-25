@@ -29,11 +29,11 @@ fn main() {
     let edges: usize = std::env::args().nth(2).unwrap().parse().unwrap();
     let batch: usize = std::env::args().nth(3).unwrap().parse().unwrap();
     let pre: usize = std::env::args().nth(4).unwrap().parse().unwrap();
-    let inspect: bool = std::env::args().position(|x| x == "inspect").is_some();
+    let inspect: bool = std::env::args().nth(5).unwrap() == "inspect";
 
 
     // define a new timely dataflow computation. 
-    timely::execute_from_args(std::env::args().skip(4), move |worker| {
+    timely::execute_from_args(std::env::args().skip(6), move |worker| {
 
         let timer = ::std::time::Instant::now();
 

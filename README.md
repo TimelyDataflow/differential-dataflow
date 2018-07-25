@@ -1,5 +1,5 @@
 # Differential Dataflow
-An implementation of [differential dataflow](./differentialdataflow.pdf) over [timely dataflow](https://github.com/frankmcsherry/timely-dataflow) on [Rust](http://www.rust-lang.org).
+An implementation of [differential dataflow](https://github.com/frankmcsherry/differential-dataflow/blob/master/differentialdataflow.pdf) over [timely dataflow](https://github.com/frankmcsherry/timely-dataflow) on [Rust](http://www.rust-lang.org).
 
 ## Background
 
@@ -34,7 +34,7 @@ Once written, a differential dataflow responds to arbitrary changes to its initi
 
 In the examples above, we can add to and remove from `edges`, dynamically altering the graph, and get immediate feedback on how the results change. We could also add to and remove from `roots` altering the reachability query itself.
 
-Be sure to check out the [differential dataflow documentation](http://www.frankmcsherry.org/differential-dataflow/differential_dataflow/index.html), which is continually improving.
+Be sure to check out the [differential dataflow documentation](https://docs.rs/differential-dataflow), which is continually improving.
 
 ## An example: counting degrees in a graph.
 
