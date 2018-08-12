@@ -4,7 +4,7 @@ extern crate differential_dataflow;
 
 use std::hash::Hash;
 use timely::dataflow::*;
-use timely::dataflow::operators::*;
+// use timely::dataflow::operators::*;
 
 use differential_dataflow::Collection;
 use differential_dataflow::lattice::Lattice;
@@ -22,25 +22,44 @@ fn main() {
 
     // snag a filename to use for the input graph.
     let filename = std::env::args().nth(1).unwrap();
+    let batch: usize = std::env::args().nth(2).unwrap().parse().unwrap();
 
     timely::execute_from_args(std::env::args().skip(2), move |worker| {
 
         let peers = worker.peers();
         let index = worker.index();
 
-        // // What you might do if you used GraphMMap:
+        let mut edges = worker.dataflow::<_,_,_>(|scope| {
+            use differential_dataflow::input::Input;
+            let (edges_handle, edges) = scope.new_collection();
+            triangles(&edges).map(|_| ()).count().inspect(|x| println!("{:?}", x));
+            edges_handle
+        });
+
+                // // What you might do if you used GraphMMap:
         let graph = GraphMMap::new(&filename);
         let nodes = graph.nodes();
-        let edges = (0..nodes).filter(move |node| node % peers == index)
-                              .flat_map(|node| graph.edges(node).iter().cloned().map(move |dst| ((node as u32, dst))))
-                              .map(|(src, dst)| ((src, dst), Default::default(), 1))
-                              .collect::<Vec<_>>();
+        for node in 0 .. nodes {
+            if node % peers == index {
+                edges.advance_to(node / batch);
+                for &dest in graph.edges(node) {
+                    edges.insert((node as u32, dest));
+                }
+                if node % batch == 0 {
+                    edges.flush();
+                    worker.step();
+                    println!("inserted through: {:?}", node);
+                }
+            }
+        }
 
-        println!("loaded {} nodes, {} edges", nodes, edges.len());
+        // let edges = (0..nodes).filter(move |node| node % peers == index)
+        //                       .flat_map(|node| graph.edges(node).iter().cloned().map(move |dst| ((node as u32, dst))))
+        //                       .map(|(src, dst)| ((src, dst), Default::default(), 1))
+        //                       .collect::<Vec<_>>();
 
-        worker.dataflow::<(),_,_>(|scope| {
-            triangles(&Collection::new(edges.to_stream(scope)));
-        });
+        // println!("loaded {} nodes, {} edges", nodes, edges.len());
+
 
     }).unwrap();
 }

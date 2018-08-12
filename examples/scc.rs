@@ -7,6 +7,7 @@ use std::mem;
 use rand::{Rng, SeedableRng, StdRng};
 
 use timely::dataflow::*;
+use timely::dataflow::operators::capture::EventWriter;
 
 use differential_dataflow::input::Input;
 use differential_dataflow::Collection;
@@ -43,7 +44,7 @@ fn main() {
 
             edges = _trim_and_flip(&edges);
             edges = _trim_and_flip(&edges);
-            // edges = _strongly_connected(&edges);
+            edges = _strongly_connected(&edges);
 
             if inspect {
                 let mut counter = 0;

@@ -6,6 +6,7 @@ use rand::{Rng, SeedableRng, StdRng};
 
 use timely::dataflow::*;
 use timely::dataflow::operators::probe::Handle;
+use timely::dataflow::operators::capture::EventWriter;
 
 use differential_dataflow::input::Input;
 use differential_dataflow::Collection;
@@ -23,9 +24,29 @@ fn main() {
     let rounds: u32 = std::env::args().nth(4).unwrap().parse().unwrap();
     let inspect: bool = std::env::args().nth(5).unwrap() == "inspect";
 
-    // define a new computational scope, in which to run BFS
-    timely::execute_from_args(std::env::args().skip(6), move |worker| {
-        
+    use timely::logging::{LoggerConfig, EventPusherTee};
+    let logger_config = LoggerConfig::new(
+        |setup| {
+            use std::net::TcpStream;
+            let addr = format!("127.0.0.1:{}", 8000 + setup.index);
+            let send = TcpStream::connect(addr).unwrap();
+            EventWriter::new(send)
+        },
+        |_setup| {
+            // No support for communication threads in this example.
+            unimplemented!();
+            use std::net::TcpStream;
+            let addr = format!("127.0.0.1:{}", 8001);
+            let send = TcpStream::connect(addr).unwrap();
+            EventWriter::new(send)
+        }
+    );
+
+    timely::execute_from_args_logging(std::env::args().skip(6), logger_config, move |worker| {
+
+    // // define a new computational scope, in which to run BFS
+    // timely::execute_from_args(std::env::args(), move |worker| {
+
         let timer = ::std::time::Instant::now();
 
         // define BFS dataflow; return handles to roots and edges inputs
@@ -78,7 +99,7 @@ fn main() {
                     graph.insert((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)));
                     graph.remove((rng2.gen_range(0, nodes), rng2.gen_range(0, nodes)));
                 }
-                graph.advance_to(2 + round * batch + element);                
+                graph.advance_to(2 + round * batch + element);
             }
             graph.flush();
 
