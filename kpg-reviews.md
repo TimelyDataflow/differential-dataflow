@@ -1,6 +1,6 @@
 Reviews, author response, and PC comments as available in the system. Review #86F is post-response, and none of the other reviews changed from their initial state.
 
-|             | OveMer | Nov | ExpMet | WriQua | RevExp |
+|             | Overall Merit | Novelty | Experimental Methodology | Writing Quality | Reviewer Expertise |
 |:------------|-------:|----:|-------:|-------:|-------:|
 | Review #86A |      2 |   2 |     3  |      2 |      2 |
 | Review #86B |      3 |   2 |     3  |      2 |      2 |
