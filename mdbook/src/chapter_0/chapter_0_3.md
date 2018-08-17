@@ -21,6 +21,7 @@ with
 The two new lines extract the count from each `(word, count)` pair, and then we just `count()` the results again. This shows us whether we have many common words, lots of unique words, or some mix of the two. It doesn't actually show us the words themselves, though.
 
 Let's run our computation again, with this new computation!
+
         Echidnatron% cargo run --example test 3 10
            Compiling differential-dataflow v0.6.0 (file:///Users/mcsherry/Projects/differential-dataflow)
             Finished dev [unoptimized + debuginfo] target(s) in 11.59s
