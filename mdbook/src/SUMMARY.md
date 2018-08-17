@@ -3,6 +3,7 @@
 [Differential Dataflow](./introduction.md)
 
 - [Motivation](./chapter_0/chapter_0.md)
+    - [Example 0: Getting started](./chapter_0/chapter_0_0.md)
     - [Example 1: Static data](./chapter_0/chapter_0_1.md)
     - [Example 2: Dynamic data](./chapter_0/chapter_0_2.md)
     - [Example 3: Stable computation](./chapter_0/chapter_0_3.md)

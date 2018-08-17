@@ -22,7 +22,7 @@ The two new lines extract the count from each `(word, count)` pair, and then we 
 
 Let's run our computation again, with this new computation!
 
-        Echidnatron% cargo run --example test 3 10
+        Echidnatron% cargo run -- 3 10
            Compiling differential-dataflow v0.6.0 (file:///Users/mcsherry/Projects/differential-dataflow)
             Finished dev [unoptimized + debuginfo] target(s) in 11.59s
              Running `target/debug/examples/test 3 10`
@@ -34,7 +34,7 @@ See how although there are changes through the first three rounds of input, the 
 
 Let's increase the number of rounds from ten to ten million:
 
-        Echidnatron% cargo run --example test 3 10000000
+        Echidnatron% cargo run -- 3 10000000
            Compiling differential-dataflow v0.6.0 (file:///Users/mcsherry/Projects/differential-dataflow)
             Finished dev [unoptimized + debuginfo] target(s) in 11.59s
              Running `target/debug/examples/test 3 10000000`

@@ -48,7 +48,7 @@ Let's keep the same differential dataflow computation, word counting, from the p
 
 When we execute this program, we should see the *changes* the output of the `count` operator undergoes.
 
-        Echidnatron% cargo run --example test 3 10
+        Echidnatron% cargo run -- 3 10
            Compiling differential-dataflow v0.6.0 (file:///Users/mcsherry/Projects/differential-dataflow)
             Finished dev [unoptimized + debuginfo] target(s) in 9.41s
              Running `target/debug/examples/test 3 10`

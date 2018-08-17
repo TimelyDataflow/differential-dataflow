@@ -48,7 +48,7 @@ When we execute this program, we should see the changes the output of the `count
 
 Here `data` will be pairs `(String, isize)` reporting pairs of words and their counts; this is determined by the computation we have written, and the type of data in the stream we inspect. The `time` type will essentially be an integer, but due to how timely dataflow works it will say this as `(Root, i)` for values of `i`. The `diff` type will be an `isize`, a signed integer, telling us how many times each `data` is observed.
 
-        Echidnatron% cargo run --example test -- 3 10
+        Echidnatron% cargo run -- 3 10
            Compiling differential-dataflow v0.6.0 (file:///Users/mcsherry/Projects/differential-dataflow)
             Finished dev [unoptimized + debuginfo] target(s) in 9.17s
              Running `target/debug/examples/test`
@@ -63,7 +63,7 @@ What might make less sense is why we bother to report things like `(Root, 0)` an
 
 Of course, we can also increase the amount of data like so
 
-        Echidnatron% cargo run --example test -- 3 10000000
+        Echidnatron% cargo run -- 3 10000000
            Compiling differential-dataflow v0.6.0 (file:///Users/mcsherry/Projects/differential-dataflow)
             Finished dev [unoptimized + debuginfo] target(s) in 9.17s
              Running `target/debug/examples/test`
@@ -74,7 +74,7 @@ Of course, we can also increase the amount of data like so
 
 and if we have the time to watch the output, we can increase the number of distinct values like so:
 
-        Echidnatron% cargo run --example test -- 3333333 10000000
+        Echidnatron% cargo run -- 3333333 10000000
            Compiling differential-dataflow v0.6.0 (file:///Users/mcsherry/Projects/differential-dataflow)
             Finished dev [unoptimized + debuginfo] target(s) in 9.17s
              Running `target/debug/examples/test`
