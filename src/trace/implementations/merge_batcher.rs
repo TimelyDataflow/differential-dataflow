@@ -177,7 +177,8 @@ impl<D: Ord, T: Ord, R: Diff> MergeSorter<D, T, R> {
 
     #[inline]
     pub fn push(&mut self, batch: &mut Vec<(D, T, R)>) {
-
+        // TODO: Reason about possible unbounded stash growth. How to / should we return them?
+        // TODO: Reason about mis-sized vectors, from deserialized data; should probably drop.
         let mut batch = if self.stash.len() > 2 {
             ::std::mem::replace(batch, self.stash.pop().unwrap())
         }

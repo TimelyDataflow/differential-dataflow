@@ -102,13 +102,14 @@ where
     fn count_total_core(&self) -> Collection<G, (K, R), isize> {
 
         let mut trace = self.trace.clone();
+        let mut buffer = Vec::new();
 
         self.stream.unary(Pipeline, "CountTotal", move |_,_| move |input, output| {
 
             input.for_each(|capability, batches| {
-
+                batches.swap(&mut buffer);
                 let mut session = output.session(&capability);
-                for batch in batches.drain(..).map(|x| x.item) {
+                for batch in buffer.drain(..).map(|x| x.item) {
 
                     let mut batch_cursor = batch.cursor();
                     let (mut trace_cursor, trace_storage) = trace.cursor_through(batch.lower()).unwrap();
