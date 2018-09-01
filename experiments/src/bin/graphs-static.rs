@@ -50,7 +50,7 @@ fn main() {
         let timer = ::std::time::Instant::now();
 
         let core_ids = core_affinity::get_core_ids().unwrap();
-        core_affinity::set_for_current(core_ids[index]);
+        core_affinity::set_for_current(core_ids[index % core_ids.len()]);
 
         // Phase 1: Forward index.
         let mut forward = worker.dataflow(|scope| {
@@ -70,6 +70,7 @@ fn main() {
 
         while worker.step() { }
         if index == 0 { println!("{:?}\tphase 1:\tforward graph indexed", timer.elapsed()); }
+        let timer = ::std::time::Instant::now();
 
         // Phase 2: Reachability.
         let mut roots = worker.dataflow(|scope| {
@@ -82,6 +83,7 @@ fn main() {
         roots.close();
         while worker.step() { }
         if index == 0 { println!("{:?}\tphase 2:\treach complete", timer.elapsed()); }
+        let timer = ::std::time::Instant::now();
 
         // Phase 3: Breadth-first distance labeling.
         let mut roots = worker.dataflow(|scope| {
@@ -94,6 +96,7 @@ fn main() {
         roots.close();
         while worker.step() { }
         if index == 0 { println!("{:?}\tphase 3:\tbfs complete", timer.elapsed()); }
+        let timer = ::std::time::Instant::now();
 
         // Phase 4: Reverse index.
         let mut reverse = worker.dataflow(|scope| {
@@ -105,6 +108,7 @@ fn main() {
         });
         while worker.step() { }
         if index == 0 { println!("{:?}\tphase 4:\treverse graph indexed", timer.elapsed()); }
+        let timer = ::std::time::Instant::now();
 
         // Phase 5: Undirected connectivity.
         worker.dataflow(|scope| { connected_components(scope, &mut forward, &mut reverse); });
