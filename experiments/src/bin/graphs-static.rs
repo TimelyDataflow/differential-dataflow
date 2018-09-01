@@ -27,12 +27,13 @@ use differential_dataflow::AsCollection;
 use graph_map::GraphMMap;
 
 type Node = u32;
+type Diff = i32;
 
 // use differential_dataflow::trace::implementations::graph::GraphBatch;
 // type GraphTrace = Spine<Node, Node, Product<RootTimestamp, ()>, isize, Rc<GraphBatch<Node>>>;
 
 use differential_dataflow::trace::implementations::ord::OrdValBatch;
-type GraphTrace = Spine<Node, Node, Product<RootTimestamp, ()>, i32, Rc<OrdValBatch<Node, Node, Product<RootTimestamp, ()>, i32>>>;
+type GraphTrace = Spine<Node, Node, Product<RootTimestamp, ()>, Diff, Rc<OrdValBatch<Node, Node, Product<RootTimestamp, ()>, Diff>>>;
 
 fn main() {
 
@@ -40,7 +41,7 @@ fn main() {
     // let edges: usize = std::env::args().nth(2).unwrap().parse().unwrap();
 
     let filename = std::env::args().nth(1).expect("Must supply filename");
-    let rootnode = std::env::args().nth(2).expect("Must supply root node");
+    let rootnode = std::env::args().nth(2).expect("Must supply root node").parse().expect("Invalid root node");
 
     timely::execute_from_args(std::env::args(), move |worker| {
 
@@ -77,7 +78,7 @@ fn main() {
             roots_input
         });
 
-        if index == 0 { roots.update(0, 1); }
+        if index == 0 { roots.update(rootnode, 1); }
         roots.close();
         while worker.step() { }
         if index == 0 { println!("{:?}\tphase 2:\treach complete", timer.elapsed()); }
@@ -89,7 +90,7 @@ fn main() {
             roots_input
         });
 
-        if index == 0 { roots.update(0, 1); }
+        if index == 0 { roots.update(rootnode, 1); }
         roots.close();
         while worker.step() { }
         if index == 0 { println!("{:?}\tphase 3:\tbfs complete", timer.elapsed()); }
@@ -117,12 +118,12 @@ fn main() {
 // use differential_dataflow::trace::implementations::ord::OrdValSpine;
 use differential_dataflow::operators::arrange::TraceAgent;
 
-type TraceHandle = TraceAgent<Node, Node, Product<RootTimestamp, ()>, i32, GraphTrace>;
+type TraceHandle = TraceAgent<Node, Node, Product<RootTimestamp, ()>, Diff, GraphTrace>;
 
 fn reach<G: Scope<Timestamp = Product<RootTimestamp, ()>>> (
     graph: &mut TraceHandle,
-    roots: Collection<G, Node, i32>
-) -> Collection<G, Node, i32> {
+    roots: Collection<G, Node, Diff>
+) -> Collection<G, Node, Diff> {
 
     let graph = graph.import(&roots.scope());
 
@@ -141,8 +142,8 @@ fn reach<G: Scope<Timestamp = Product<RootTimestamp, ()>>> (
 
 fn bfs<G: Scope<Timestamp = Product<RootTimestamp, ()>>> (
     graph: &mut TraceHandle,
-    roots: Collection<G, Node, i32>
-) -> Collection<G, (Node, u32), i32> {
+    roots: Collection<G, Node, Diff>
+) -> Collection<G, (Node, u32), Diff> {
 
     let graph = graph.import(&roots.scope());
     let roots = roots.map(|r| (r,0));
@@ -162,7 +163,7 @@ fn connected_components<G: Scope<Timestamp = Product<RootTimestamp, ()>>>(
     scope: &mut G,
     forward: &mut TraceHandle,
     reverse: &mut TraceHandle,
-) -> Collection<G, (Node, Node), i32> {
+) -> Collection<G, (Node, Node), Diff> {
 
     let forward = forward.import(scope);
     let reverse = reverse.import(scope);
