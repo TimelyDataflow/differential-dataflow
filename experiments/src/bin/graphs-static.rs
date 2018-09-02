@@ -18,15 +18,17 @@ use differential_dataflow::input::Input;
 use differential_dataflow::Collection;
 use differential_dataflow::operators::*;
 use differential_dataflow::trace::Trace;
-use differential_dataflow::operators::arrange::ArrangeByKey;
+// use differential_dataflow::operators::arrange::ArrangeByKey;
 use differential_dataflow::operators::arrange::ArrangeBySelf;
 use differential_dataflow::operators::arrange::Arrange;
+use differential_dataflow::operators::iterate::CoreVariable;
 use differential_dataflow::trace::implementations::spine_fueled::Spine;
 use differential_dataflow::AsCollection;
 
 use graph_map::GraphMMap;
 
 type Node = u32;
+type Iter = u32;
 type Diff = i32;
 
 // use differential_dataflow::trace::implementations::graph::GraphBatch;
@@ -36,9 +38,6 @@ use differential_dataflow::trace::implementations::ord::OrdValBatch;
 type GraphTrace = Spine<Node, Node, Product<RootTimestamp, ()>, Diff, Rc<OrdValBatch<Node, Node, Product<RootTimestamp, ()>, Diff>>>;
 
 fn main() {
-
-    // let nodes: Node = std::env::args().nth(1).unwrap().parse().unwrap();
-    // let edges: usize = std::env::args().nth(2).unwrap().parse().unwrap();
 
     let filename = std::env::args().nth(1).expect("Must supply filename");
     let rootnode = std::env::args().nth(2).expect("Must supply root node").parse().expect("Invalid root node");
@@ -131,16 +130,22 @@ fn reach<G: Scope<Timestamp = Product<RootTimestamp, ()>>> (
 
     let graph = graph.import(&roots.scope());
 
-    roots.iterate(|inner| {
+    // roots.iterate(|inner| {
+    roots.scope().scoped(|scope| {
 
-        let graph = graph.enter(&inner.scope());
-        let roots = roots.enter(&inner.scope());
+        let graph = graph.enter(scope);
+        let roots = roots.enter(scope);
 
+        let inner = CoreVariable::from_args(Iter::max_value(), 1, roots.clone());
+
+        let result =
         graph.join_core(&inner.arrange_by_self(), |_src,&dst,&()| Some(dst))
              .concat(&roots)
-             // .distinct_total()
-             .threshold_total(|c| if c == 0 { 0 } else { 1 })
-        })
+             .threshold_total(|c| if c == 0 { 0 } else { 1 });
+
+        inner.set(&result);
+        result.leave()
+    })
 }
 
 
@@ -152,15 +157,30 @@ fn bfs<G: Scope<Timestamp = Product<RootTimestamp, ()>>> (
     let graph = graph.import(&roots.scope());
     let roots = roots.map(|r| (r,0));
 
-    roots.iterate(|inner| {
+    roots.scope().scoped(|scope| {
 
-        let graph = graph.enter(&inner.scope());
-        let roots = roots.enter(&inner.scope());
+        let graph = graph.enter(scope);
+        let roots = roots.enter(scope);
 
+        let inner = CoreVariable::from_args(Iter::max_value(), 1, roots.clone());
+        let result =
         graph.join_map(&inner, |_src,&dest,&dist| (dest, dist+1))
              .concat(&roots)
-             .group(|_key, input, output| output.push((*input[0].0,1)))
+             .group(|_key, input, output| output.push((*input[0].0,1)));
+
+        inner.set(&result);
+        result.leave()
     })
+
+    // roots.iterate(|inner| {
+
+    //     let graph = graph.enter(&inner.scope());
+    //     let roots = roots.enter(&inner.scope());
+
+    //     graph.join_map(&inner, |_src,&dest,&dist| (dest, dist+1))
+    //          .concat(&roots)
+    //          .group(|_key, input, output| output.push((*input[0].0,1)))
+    // })
 }
 
 fn connected_components<G: Scope<Timestamp = Product<RootTimestamp, ()>>>(
@@ -173,30 +193,47 @@ fn connected_components<G: Scope<Timestamp = Product<RootTimestamp, ()>>>(
     let reverse = reverse.import(scope);
 
     // each edge (x,y) means that we need at least a label for the min of x and y.
-    let nodes =
-    forward
-        .as_collection(|&k,&v| {
-            let min = std::cmp::min(k,v);
-            (min, min)
-        })
-        .consolidate();
+    let nodes_f = forward.flat_map_ref(|k,v| if k < v { Some(*k) } else { None });
+    let nodes_r = reverse.flat_map_ref(|k,v| if k < v { Some(*k) } else { None });
+    let nodes = nodes_f.concat(&nodes_r).consolidate().map(|x| (x,x));
 
     // don't actually use these labels, just grab the type
-    nodes
-        .filter(|_| false)
-        .iterate(|inner| {
+    nodes.scope().scoped(|scope| {
 
-            let forward = forward.enter(&inner.scope());
-            let reverse = reverse.enter(&inner.scope());
-            let nodes = nodes.enter_at(&inner.scope(), |r| 256 * (64 - r.1.leading_zeros() as u64));
+        use differential_dataflow::operators::iterate::CoreVariable;
 
-            let inner = inner.arrange_by_key();
+        let forward = forward.enter(scope);
+        let reverse = reverse.enter(scope);
+        let nodes = nodes.enter_at(scope, |r| 256 * (64 - r.1.leading_zeros() as Iter));
 
-            let f_prop = inner.join_core(&forward, |_k,l,d| Some((*d,*l)));
-            let r_prop = inner.join_core(&reverse, |_k,l,d| Some((*d,*l)));
+        let inner = CoreVariable::from_args(Iter::max_value(), 1, nodes.filter(|_| false));
 
-            nodes
-                .concat(&f_prop).concat(&r_prop)
-                .group(|_, s, t| { t.push((*s[0].0, 1)); })
-        })
+        let f_prop = inner.join_core(&forward, |_k,l,d| Some((*d,*l)));
+        let r_prop = inner.join_core(&reverse, |_k,l,d| Some((*d,*l)));
+
+        let result =
+        nodes
+            .concat(&f_prop)
+            .concat(&r_prop)
+            .group(|_, s, t| { t.push((*s[0].0, 1)); });
+
+        inner.set(&result);
+        result.leave()
+    })
+        // .filter(|_| false)
+        // .iterate(|inner| {
+
+        //     let forward = forward.enter(&inner.scope());
+        //     let reverse = reverse.enter(&inner.scope());
+        //     let nodes = nodes.enter_at(&inner.scope(), |r| 256 * (64 - r.1.leading_zeros() as u64));
+
+        //     let inner = inner.arrange_by_key();
+
+        //     let f_prop = inner.join_core(&forward, |_k,l,d| Some((*d,*l)));
+        //     let r_prop = inner.join_core(&reverse, |_k,l,d| Some((*d,*l)));
+
+        //     nodes
+        //         .concat(&f_prop).concat(&r_prop)
+        //         .group(|_, s, t| { t.push((*s[0].0, 1)); })
+        // })
 }
