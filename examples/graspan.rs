@@ -7,7 +7,7 @@ use std::fs::File;
 
 use indexmap::IndexMap;
 
-use timely::Allocate;
+use timely::communication::Allocate;
 
 use timely::dataflow::Scope;
 use timely::dataflow::scopes::{ScopeParent, Root, Child};

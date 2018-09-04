@@ -314,6 +314,9 @@ impl<G, K, V, R1, T1> JoinCore<G, K, V, R1> for Arranged<G,K,V,R1,T1>
         let mut todo1 = Vec::new();
         let mut todo2 = Vec::new();
 
+        let mut input1_buffer = Vec::new();
+        let mut input2_buffer = Vec::new();
+
         self.stream.binary_notify(&other.stream, Pipeline, Pipeline, "Join", vec![], move |input1, input2, output, notificator| {
 
             // The join computation repeatedly accepts batches of updates from each of its inputs.
@@ -327,7 +330,8 @@ impl<G, K, V, R1, T1> JoinCore<G, K, V, R1> for Arranged<G,K,V,R1,T1>
             input1.for_each(|capability, data| {
                 if let Some(ref mut trace2) = trace2 {
                     let capability = capability.retain();
-                    for batch1 in data.drain(..) {
+                    data.swap(&mut input1_buffer);
+                    for batch1 in input1_buffer.drain(..) {
                         let (trace2_cursor, trace2_storage) = trace2.cursor_through(&acknowledged2[..]).unwrap();
                         let batch1_cursor = batch1.item.cursor();
                         todo1.push(Deferred::new(trace2_cursor, trace2_storage, batch1_cursor, batch1.item.clone(), capability.clone(), |r2,r1| *r1 * *r2));
@@ -341,7 +345,8 @@ impl<G, K, V, R1, T1> JoinCore<G, K, V, R1> for Arranged<G,K,V,R1,T1>
             input2.for_each(|capability, data| {
                 if let Some(ref mut trace1) = trace1 {
                     let capability = capability.retain();
-                    for batch2 in data.drain(..) {
+                    data.swap(&mut input2_buffer);
+                    for batch2 in input2_buffer.drain(..) {
                         let (trace1_cursor, trace1_storage) = trace1.cursor_through(&acknowledged1[..]).unwrap();
                         let batch2_cursor = batch2.item.cursor();
                         todo2.push(Deferred::new(trace1_cursor, trace1_storage, batch2_cursor, batch2.item.clone(), capability.clone(), |r1,r2| *r1 * *r2));

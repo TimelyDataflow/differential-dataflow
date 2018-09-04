@@ -20,7 +20,6 @@
 use std::rc::{Rc, Weak};
 use std::cell::RefCell;
 use std::default::Default;
-use std::ops::DerefMut;
 use std::collections::VecDeque;
 use std::fmt::Debug;
 
@@ -444,21 +443,21 @@ impl<G: Scope, K, V, R, T> Arranged<G, K, V, R, T> where G::Timestamp: Lattice+O
 
             input.for_each(|time, data| {
                 let mut session = output.session(&time);
-                for wrapper in data.drain(..) {
-                    let batch = wrapper.item;
+                for wrapper in data.iter() {
+                    let batch = &wrapper.item;
                     let mut cursor = batch.cursor();
-                    while cursor.key_valid(&batch) {
-                        let key: &K = cursor.key(&batch);
-                        while cursor.val_valid(&batch) {
-                            let val: &V = cursor.val(&batch);
-                            cursor.map_times(&batch, |time, diff| {
+                    while cursor.key_valid(batch) {
+                        let key: &K = cursor.key(batch);
+                        while cursor.val_valid(batch) {
+                            let val: &V = cursor.val(batch);
+                            cursor.map_times(batch, |time, diff| {
                                 for datum in logic(key, val) {
                                     session.give((datum, time.clone(), diff.clone()));
                                 }
                             });
-                            cursor.step_val(&batch);
+                            cursor.step_val(batch);
                         }
-                        cursor.step_key(&batch);
+                        cursor.step_key(batch);
                     }
                 }
             });
@@ -485,19 +484,20 @@ where
     let mut trace = Some(trace);
     let mut stash = ::std::collections::HashMap::new();
     let mut frontier = Antichain::new();
+    let mut buffer = Vec::new();
 
     // while the arrangement is already correctly distributed, the query stream may not be.
     let exchange = Exchange::new(move |update: &(K,G::Timestamp)| update.0.hashed().as_u64());
-
     queries.unary_frontier(exchange, "TraceQuery", move |_capability, _info|
         move |input, output| {
 
             // drain the query input, stashing requests.
-            input.for_each(|capability, data|
+            input.for_each(|capability, data| {
+                data.swap(&mut buffer);
                 stash.entry(capability.retain())
                      .or_insert(Vec::new())
-                     .extend(data.drain(..).map(|(k,t)| (k,t,1)))
-            );
+                     .extend(buffer.drain(..).map(|(k,t)| (k,t,1)))
+            });
 
             // We drop the trace when the `queries` input is closed.
             if let Some(ref mut trace) = trace {
@@ -604,6 +604,8 @@ where
         // Capabilities for the lower envelope of updates in `batcher`.
         let mut capabilities = Antichain::<Capability<G::Timestamp>>::new();
 
+        let mut buffer = Vec::new();
+
         // fabricate a data-parallel operator using the `unary_notify` pattern.
         let exchange = Exchange::new(move |update: &((K,V),G::Timestamp,R)| (update.0).0.hashed().as_u64());
         let stream = self.inner.unary_frontier(exchange, "Arrange", move |_capability, _info|
@@ -615,7 +617,8 @@ where
 
             input.for_each(|cap, data| {
                 capabilities.insert(cap.retain());
-                batcher.push_batch(data.deref_mut());
+                data.swap(&mut buffer);
+                batcher.push_batch(&mut buffer);
             });
 
             // The frontier may have advanced by multiple elements, which is an issue because

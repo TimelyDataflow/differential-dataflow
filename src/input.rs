@@ -6,7 +6,7 @@
 //! timely dataflow capabilities, exposing more concurrency to the operator implementations
 //! than are evident from the logical times, which appear to execute in sequence.
 
-use timely::Allocate;
+use timely::communication::Allocate;
 
 use timely::progress::Timestamp;
 use timely::progress::timestamp::RootTimestamp;

@@ -84,15 +84,16 @@ where
     fn threshold_total<R2: Diff, F:Fn(R)->R2+'static>(&self, thresh: F) -> Collection<G, K, R2> {
 
         let mut trace = self.trace.clone();
+        let mut buffer = Vec::new();
 
         self.stream.unary(Pipeline, "ThresholdTotal", move |_,_| move |input, output| {
 
             let thresh = &thresh;
 
             input.for_each(|capability, batches| {
-
+                batches.swap(&mut buffer);
                 let mut session = output.session(&capability);
-                for batch in batches.drain(..).map(|x| x.item) {
+                for batch in buffer.drain(..).map(|x| x.item) {
 
                     let mut batch_cursor = batch.cursor();
                     let (mut trace_cursor, trace_storage) = trace.cursor_through(batch.lower()).unwrap();

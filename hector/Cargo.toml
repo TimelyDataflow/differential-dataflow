@@ -10,6 +10,5 @@ git="https://github.com/frankmcsherry/graph-map.git"
 git = "https://github.com/frankmcsherry/timely-dataflow"
 
 [dependencies]
-#timely = "0.3.0"
 timely_sort="0.1.6"
 differential-dataflow = { path = "../" }

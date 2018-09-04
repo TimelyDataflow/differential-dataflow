@@ -277,6 +277,7 @@ where
 
         // We separately track the frontiers for what we have sent, and what we have sealed.
         let mut lower_issued = Antichain::from_elem(<G::Timestamp as Lattice>::minimum());
+        let mut input_buffer = Vec::new();
 
         let id = self.stream.scope().index();
 
@@ -312,8 +313,9 @@ where
             // times in the batch.
             input.for_each(|capability, batches| {
 
+                batches.swap(&mut input_buffer);
                 // In principle we could have multiple batches per message (in practice, it would be weird).
-                for batch in batches.drain(..).map(|x| x.item) {
+                for batch in input_buffer.drain(..).map(|x| x.item) {
                     assert!(&upper_received[..] == batch.description().lower());
                     upper_received = batch.description().upper().to_vec();
                     batch_cursors.push(batch.cursor());

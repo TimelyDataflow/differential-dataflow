@@ -157,23 +157,28 @@ where
 
         let exchange = Exchange::new(move |update: &((P,usize,usize),G::Timestamp,isize)| logic1(&(update.0).0).hashed().as_u64());
 
+        let mut buffer1 = Vec::new();
+        let mut buffer2 = Vec::new();
+
         prefixes.inner.binary_frontier(&counts.stream, exchange, Pipeline, "Count", move |_,_| move |input1, input2, output| {
 
             // drain the first input, stashing requests.
-            input1.for_each(|capability, data|
+            input1.for_each(|capability, data| {
+                data.swap(&mut buffer1);
                 stash.entry(capability.retain())
                      .or_insert(Vec::new())
-                     .extend(data.drain(..))
-             );
+                     .extend(buffer1.drain(..))
+            });
 
             // advance the `distinguish_since` frontier to allow all merges.
-            input2.for_each(|_, batches|
-                for batch in batches.drain(..) {
+            input2.for_each(|_, batches| {
+                batches.swap(&mut buffer2);
+                for batch in buffer2.drain(..) {
                     if let Some(ref mut trace) = counts_trace {
                         trace.distinguish_since(batch.item.upper());
                     }
                 }
-            );
+            });
 
             if let Some(ref mut trace) = counts_trace {
 
@@ -244,25 +249,30 @@ where
         let logic1 = self.key_selector.clone();
         let logic2 = self.key_selector.clone();
 
+        let mut buffer1 = Vec::new();
+        let mut buffer2 = Vec::new();
+
         let exchange = Exchange::new(move |update: &(P,G::Timestamp,isize)| logic1(&update.0).hashed().as_u64());
 
         prefixes.inner.binary_frontier(&propose.stream, exchange, Pipeline, "Propose", move |_,_| move |input1, input2, output| {
 
             // drain the first input, stashing requests.
-            input1.for_each(|capability, data|
+            input1.for_each(|capability, data| {
+                data.swap(&mut buffer1);
                 stash.entry(capability.retain())
                      .or_insert(Vec::new())
-                     .extend(data.drain(..))
-             );
+                     .extend(buffer1.drain(..))
+            });
 
             // advance the `distinguish_since` frontier to allow all merges.
-            input2.for_each(|_, batches|
-                for batch in batches.drain(..) {
+            input2.for_each(|_, batches| {
+                batches.swap(&mut buffer2);
+                for batch in buffer2.drain(..) {
                     if let Some(ref mut trace) = propose_trace {
                         trace.distinguish_since(batch.item.upper());
                     }
                 }
-            );
+            });
 
             if let Some(ref mut trace) = propose_trace {
 
@@ -332,6 +342,9 @@ where
         let logic1 = self.key_selector.clone();
         let logic2 = self.key_selector.clone();
 
+        let mut buffer1 = Vec::new();
+        let mut buffer2 = Vec::new();
+
         let exchange = Exchange::new(move |update: &((P,V),G::Timestamp,isize)|
             (logic1(&(update.0).0).clone(), ((update.0).1).clone()).hashed().as_u64()
         );
@@ -339,20 +352,22 @@ where
         extensions.inner.binary_frontier(&validate.stream, exchange, Pipeline, "Validate", move |_,_| move |input1, input2, output| {
 
             // drain the first input, stashing requests.
-            input1.for_each(|capability, data|
+            input1.for_each(|capability, data| {
+                data.swap(&mut buffer1);
                 stash.entry(capability.retain())
                      .or_insert(Vec::new())
-                     .extend(data.drain(..))
-             );
+                     .extend(buffer1.drain(..))
+            });
 
             // advance the `distinguish_since` frontier to allow all merges.
-            input2.for_each(|_, batches|
-                for batch in batches.drain(..) {
+            input2.for_each(|_, batches| {
+                batches.swap(&mut buffer2);
+                for batch in buffer2.drain(..) {
                     if let Some(ref mut trace) = validate_trace {
                         trace.distinguish_since(batch.item.upper());
                     }
                 }
-            );
+            });
 
             if let Some(ref mut trace) = validate_trace {
 
