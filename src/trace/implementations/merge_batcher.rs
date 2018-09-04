@@ -54,6 +54,7 @@ where
 
         self.frontier.clear();
 
+        // TODO: Re-use buffer, rather than dropping.
         for mut buffer in merged.drain(..) {
             for ((key, val), time, diff) in buffer.drain(..) {
                 if upper.iter().any(|t| t.less_equal(&time)) {

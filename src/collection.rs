@@ -355,7 +355,8 @@ impl<G: Scope, D: Data, R: Diff> Collection<G, D, R> where G::Timestamp: Data {
     /// Delays each difference by a supplied function.
     ///
     /// It is assumed that `func` only advances timestamps; this is not verified, and things may go horribly
-    /// wrong if that assumption is incorrect.
+    /// wrong if that assumption is incorrect. It is also critical that `func` be monotonic: if two times are
+    /// ordered, they should have the same order once `func` is applied to them.
     pub fn delay<F>(&self, func: F) -> Collection<G, D, R>
     where F: Fn(&G::Timestamp) -> G::Timestamp + 'static {
 
