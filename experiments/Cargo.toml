@@ -6,10 +6,8 @@ authors = ["Frank McSherry <fmcsherry@me.com>"]
 [dependencies]
 core_affinity = "0.5.9"
 rand="0.3.13"
-#abomonation = "0.5"
 abomonation = { git = "https://github.com/frankmcsherry/abomonation" }
 abomonation_derive = "0.3"
-#timely = "0.6"
-timely = { git = "https://github.com/frankmcsherry/timely-dataflow", branch = "dataplane_mockup" }
+timely = { git = "https://github.com/frankmcsherry/timely-dataflow" }
 differential-dataflow = { path = "../" }
 graph_map = { git = "https://github.com/frankmcsherry/graph-map" }

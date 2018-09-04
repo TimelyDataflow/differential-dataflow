@@ -18,17 +18,13 @@ indexmap = "1.0.1"
 rand="0.4"
 byteorder="1"
 itertools="^0.7"
-#serde_json = "1.0"
-#pikkr = { git = "https://github.com/pikkr/pikkr" }
 graph_map = { git = "https://github.com/frankmcsherry/graph-map.git" }
 
 [dependencies]
-#abomonation = "0.5"
 abomonation = { git = "https://github.com/frankmcsherry/abomonation" }
 abomonation_derive = "0.3"
 timely_sort="0.1.6"
-#timely = "0.6"
-timely = { git = "https://github.com/frankmcsherry/timely-dataflow", branch = "dataplane_mockup" }
+timely = { git = "https://github.com/frankmcsherry/timely-dataflow" }
 fnv="1.0.2"
 
 [profile.release]
