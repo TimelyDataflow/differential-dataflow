@@ -3,7 +3,7 @@ An implementation of [differential dataflow](https://github.com/frankmcsherry/di
 
 ## Background
 
-Differential dataflow is a data-parallel programming framework designed to efficiently process large volumes of data and to quickly respond to arbitrary changes in input collections.
+Differential dataflow is a data-parallel programming framework designed to efficiently process large volumes of data and to quickly respond to arbitrary changes in input collections. You can read more in the [differential dataflow mdbook](http://www.frankmcsherry.org/differential-dataflow/) and in the [differential dataflow documentation](https://docs.rs/differential-dataflow/0.5.0/differential_dataflow/).
 
 Differential dataflow programs are written as functional transformations of collections of data, using familiar operators like `map`, `filter`, `join`, and `group`. Differential dataflow also includes more exotic operators such as `iterate`, which repeatedly applies a differential dataflow fragment to a collection. The programs are compiled down to [timely dataflow](https://github.com/frankmcsherry/timely-dataflow) computations.
 
