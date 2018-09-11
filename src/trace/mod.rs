@@ -117,7 +117,7 @@ pub trait Trace<Key, Val, Time, R> : TraceReader<Key, Val, Time, R>
 where <Self as TraceReader<Key, Val, Time, R>>::Batch: Batch<Key, Val, Time, R> {
 
 	/// Allocates a new empty trace.
-	fn new() -> Self;
+	fn new(info: ::timely::dataflow::operators::generic::OperatorInfo, logging: Option<::logging::Logger>) -> Self;
 
 	/// Introduces a batch of updates to the trace.
 	///
