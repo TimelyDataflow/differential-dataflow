@@ -6,11 +6,24 @@ pub type Logger = ::timely::logging::Logger<DifferentialEvent>;
 /// Possible different differential events.
 #[derive(Debug, Clone, Abomonation, Ord, PartialOrd, Eq, PartialEq)]
 pub enum DifferentialEvent {
-    /// Arrangement related event.
+    /// Batch creation.
+    Batch(BatchEvent),
+    /// Merge start and stop events.
     Merge(MergeEvent),
     /// A merge failed to complete in time.
     MergeShortfall(MergeShortfall),
 }
+
+/// Either the start or end of a merge event.
+#[derive(Debug, Clone, Abomonation, Ord, PartialOrd, Eq, PartialEq)]
+pub struct BatchEvent {
+    /// Operator identifier.
+    pub operator: usize,
+    /// Which order of magnitude.
+    pub length: usize,
+}
+
+impl From<BatchEvent> for DifferentialEvent { fn from(e: BatchEvent) -> Self { DifferentialEvent::Batch(e) } }
 
 /// Either the start or end of a merge event.
 #[derive(Debug, Clone, Abomonation, Ord, PartialOrd, Eq, PartialEq)]

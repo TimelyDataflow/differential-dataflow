@@ -215,6 +215,11 @@ where
     // to the size of batch.
     fn insert(&mut self, batch: Self::Batch) {
 
+        self.logger.as_ref().map(|l| l.log(::logging::BatchEvent {
+            operator: self.operator.index(),
+            length: batch.len()
+        }));
+
         // we can ignore degenerate batches (TODO: learn where they come from; suppress them?)
         if batch.lower() != batch.upper() {
             assert_eq!(batch.lower(), &self.upper[..]);
@@ -354,6 +359,15 @@ where
             if let Some(batch2) = self.merging[batch_index].take() {
                 let batch2 = batch2.complete(&mut self.logger, self.operator.index(), batch_index);
                 let frontier = if batch_index == self.merging.len()-1 { Some(self.advance_frontier.clone()) } else { None };
+                self.logger.as_ref().map(|l| l.log(
+                    ::logging::MergeEvent {
+                        operator: self.operator.index(),
+                        scale: batch_index,
+                        length1: batch.len(),
+                        length2: batch2.len(),
+                        complete: None,
+                    }
+                ));
                 self.merging[batch_index] = Some(MergeState::begin_merge(batch2, batch, frontier));
             }
             else {
@@ -400,6 +414,15 @@ where
                                 let batch2 = batch2.complete(&mut self.logger, self.operator.index(), position);
                                 // if this is the last position, engage compaction.
                                 let frontier = if new_position+1 == self.merging.len() { Some(self.advance_frontier.clone()) } else { None };
+                                self.logger.as_ref().map(|l| l.log(
+                                    ::logging::MergeEvent {
+                                        operator: self.operator.index(),
+                                        scale: position,
+                                        length1: batch1.len(),
+                                        length2: batch2.len(),
+                                        complete: None,
+                                    }
+                                ));
                                 self.merging[new_position] = Some(MergeState::begin_merge(batch2, batch1, frontier));
                             }
                             else {
