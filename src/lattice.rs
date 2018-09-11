@@ -1,7 +1,7 @@
 //! Partially ordered elements with a least upper bound.
 //!
-//! Lattices form the basis of differential dataflow's efficient execution in the presence of 
-//! iterative sub-computations. All logical times in differential dataflow must implement the 
+//! Lattices form the basis of differential dataflow's efficient execution in the presence of
+//! iterative sub-computations. All logical times in differential dataflow must implement the
 //! `Lattice` trait, and all reasoning in operators are done it terms of `Lattice` methods.
 
 use timely::order::PartialOrder;
@@ -72,7 +72,7 @@ pub trait Lattice : PartialOrder {
     ///
     /// assert_eq!(meet, Product::new(3, 6));
     /// # }
-    /// ```    
+    /// ```
     fn meet(&self, &Self) -> Self;
 
     /// Advances self to the largest time indistinguishable under `frontier`.
@@ -124,7 +124,7 @@ pub trait Lattice : PartialOrder {
                 result = result.meet(&self.join(f));
             }
             result
-        }  
+        }
         else {
             Self::maximum()
         }
@@ -140,7 +140,7 @@ pub trait Lattice : PartialOrder {
 // /// with "empty" timestamps (e.g. `RootTimestamp` and `()`). Be careful implementing this trait
 // /// for your own timestamp types, as it may lead to the applicability of incorrect implementations.
 // ///
-// /// Note that this trait is distinct from `Ord`; many implementors of `Lattice` also implement 
+// /// Note that this trait is distinct from `Ord`; many implementors of `Lattice` also implement
 // /// `Ord` so that they may be sorted, deduplicated, etc. This implementation neither derives any
 // /// information from an `Ord` implementation nor informs it in any way.
 // ///
@@ -198,8 +198,10 @@ macro_rules! implement_lattice {
 }
 
 use timely::progress::timestamp::RootTimestamp;
+use std::time::Duration;
 
 implement_lattice!(RootTimestamp, RootTimestamp, RootTimestamp);
+implement_lattice!(Duration, Duration::new(0, 0), Duration::new(u64::max_value(), u32::max_value()));
 implement_lattice!(usize, usize::min_value(), usize::max_value());
 implement_lattice!(u64, u64::min_value(), u64::max_value());
 implement_lattice!(u32, u32::min_value(), u32::max_value());
