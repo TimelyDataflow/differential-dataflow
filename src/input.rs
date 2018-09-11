@@ -178,7 +178,24 @@ impl<T: Timestamp+Clone, D: Data> InputSession<T, D, isize> {
 //     pub fn remove(&mut self, element: D) { self.update(element,-1); }
 // }
 
-impl<'a, T: Timestamp+Clone, D: Data, R: Diff> InputSession<T, D, R> {
+impl<T: Timestamp+Clone, D: Data, R: Diff> InputSession<T, D, R> {
+
+    /// Introduces a handle as collection.
+    pub fn to_collection<'a, A: Allocate>(&mut self, scope: &mut Child<'a, Root<A>, T>) -> Collection<Child<'a, Root<A>, T>, D, R> {
+        scope
+            .input_from(&mut self.handle)
+            .as_collection()
+    }
+
+    /// Allocates a new input handle.
+    pub fn new() -> Self {
+        let handle = Handle::new();
+        InputSession {
+            time: handle.time().clone(),
+            buffer: Vec::new(),
+            handle,
+        }
+    }
 
 	/// Creates a new session from a reference to an input handle.
 	pub fn from(handle: Handle<T,(D,Product<RootTimestamp, T>,R)>) -> Self {
@@ -200,6 +217,19 @@ impl<'a, T: Timestamp+Clone, D: Data, R: Diff> InputSession<T, D, R> {
         }
 		self.buffer.push((element, self.time.clone(), change));
 	}
+
+    /// Adds to the weight of an element in the collection at a future time.
+    pub fn update_at(&mut self, element: D, time: T, change: R) {
+        assert!(self.time.inner.less_equal(&time));
+        if self.buffer.len() == self.buffer.capacity() {
+            if self.buffer.len() > 0 {
+                self.handle.send_batch(&mut self.buffer);
+            }
+            // TODO : This is a fairly arbitrary choice; should probably use `Context::default_size()` or such.
+            self.buffer.reserve(1024);
+        }
+        self.buffer.push((element, RootTimestamp::new(time), change));
+    }
 
 	/// Forces buffered data into the timely dataflow input, and advances its time to match that of the session.
 	///
