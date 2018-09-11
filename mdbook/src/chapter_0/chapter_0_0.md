@@ -1,20 +1,20 @@
-## Example 1: Getting started
+## Getting started
 
 The first thing you will need to do, if you want to follow along with the examples, is to acquire a copy of [Rust](https://www.rust-lang.org/). This is the programming language that differential dataflow uses, and it is in charge of building our projects.
 
-With Rust in hand, crack open a shell and make a new project, like so:
+With Rust in hand, crack open a shell and make a new project using Rust build manager `cargo`.
 
-        %> cargo new my_project
+        Echidnatron% cargo new my_project
 
 This should create a new folder called `my_project`, and you can wander in there and type
 
-        %> cargo run
+        Echidnatron% cargo run
 
-This will do something pointless, because we haven't gotten differential dataflow involved yet. I mean, it's Rust and you could learn that, but you probably want to be reading a different web page in that case.
+This will do something reassuring but pointless, like print `Hello, world!`, because we haven't gotten differential dataflow involved yet. I mean, it's Rust and you could learn that, but you probably want to read a different web page in that case.
 
 Instead, edit your `Cargo.toml` file, which tells Rust about your dependencies, to look like this:
 
-        >% cat Cargo.toml
+        Echidnatron% cat Cargo.toml
         [package]
         name = "my_project"
         version = "0.1.0"
@@ -23,7 +23,7 @@ Instead, edit your `Cargo.toml` file, which tells Rust about your dependencies, 
         [dependencies]
         timely = "0.5"
         differential-dataflow = "0.5"
-        >%
+        Echidnatron%
 
 You should only need to add those last two lines there, which bring in dependencies on both [timely dataflow](https://github.com/frankmcsherry/timely-dataflow) and [differential dataflow](https://github.com/frankmcsherry/differential-dataflow). We will be using both of those.
 

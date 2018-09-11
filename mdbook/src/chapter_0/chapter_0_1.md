@@ -1,90 +1,79 @@
-## Example 1: Static data
+## Step 1: Write a program.
 
-Differential dataflow programs are written against what may appear (intentionally) to be static datasets, using operations that look a bit like database (SQL) or big data (MapReduce) idioms. It is all a bit more complicated than that, but this is a good place to start from.
+You write differential dataflow programs against apparently static input collections, with operations that look a bit like database (SQL) or big data (MapReduce) idioms. This is actually a bit of a trick, because you will have the ablity to change the input data, but we'll pretend we don't know that yet.
 
-The following complete program creates an input collection of strings, and then reports the number of times each string occurs in the collection.
+Let's write a program with one input: a collection `manages` of pairs `(manager, person)` describing people and their direct reports. Our program will determine for each person their manager's manager. If you are familiar with SQL, this is an "equijoin", and we will write exactly that in differential dataflow.
+
+If you are following along at home, put this in your `src/main.rs` file.
 
 ```rust,no_run
     extern crate timely;
     extern crate differential_dataflow;
 
-    use differential_dataflow::input::Input;
-    use differential_dataflow::operators::Count;
+    use differential_dataflow::input::InputSession;
+    use differential_dataflow::operators::Join;
 
     fn main() {
 
-        // define a new computational scope, in which to run BFS
+        // define a new timely dataflow computation.
         timely::execute_from_args(std::env::args(), move |worker| {
 
-            let values: usize = std::env::args().nth(1).unwrap().parse().unwrap();
-            let rounds: usize = std::env::args().nth(2).unwrap().parse().unwrap();
+            // create an input collection of data.
+            let mut input = InputSession::new();
 
-            // create a counting differential dataflow.
-            let mut input = worker.dataflow(|scope| {
+            // define a new computation.
+            worker.dataflow(|scope| {
 
-                // create paired input and collection.
-                let (input, words) = scope.new_collection();
+                // create a new collection from our input.
+                let manages = input.to_collection(scope);
 
-                words.count()
-                     .inspect(|x| println!("seen: {:?}", x));
-
-                // return the input for manipulation.
-                input
+                // if (m2, m1) and (m1, p), then output (m1, m2, p)
+                manages
+                    .map(|(m2, m1)| (m1, m2))
+                    .join(&manages)
+                    .inspect(|x| println!("{:?}", x));
             });
 
-            // load some initial data.
+            // Load input (a binary tree).
             input.advance_to(0);
-            for value in 0 .. rounds {
-                input.insert((value % values).to_string());
+            for person in 0 .. 10 {
+                input.insert((person/2, person));
             }
 
-        }).unwrap();
+        }).expect("Computation terminated abnormally");
     }
 ```
 
-When we execute this program, we should see the changes the output of the `count` operator undergoes (as this is where we have placed the `inspect` operator which prints tuples that flow past it). Each update has the form
+This program has a bit of boilerplate, but at its heart it defines a new input `manages` and then joins it with itself, once the fields have been re-ordered. The intent is as stated in the comment:
+
+```rust,no_run
+    // if (m2, m1) and (m1, p), then output (m1, m2, p)
+```
+
+We want to report each pair `(m2, p)`, and we happen to also produce as evidence the `m1` connecting them.
+
+When we execute this program we get to see the skip-level reports for the small binary tree we loaded as input:
+
+        Echidnatron% cargo run --example hello
+           Compiling differential-dataflow v0.6.0 (file:///Users/mcsherry/Projects/differential-dataflow)
+            Finished dev [unoptimized + debuginfo] target(s) in 7.17s
+             Running `target/debug/examples/hello`
+        ((0, 0, 0), (Root, 0), 1)
+        ((0, 0, 1), (Root, 0), 1)
+        ((1, 0, 2), (Root, 0), 1)
+        ((1, 0, 3), (Root, 0), 1)
+        ((2, 1, 4), (Root, 0), 1)
+        ((2, 1, 5), (Root, 0), 1)
+        ((3, 1, 6), (Root, 0), 1)
+        ((3, 1, 7), (Root, 0), 1)
+        ((4, 2, 8), (Root, 0), 1)
+        ((4, 2, 9), (Root, 0), 1)
+        Echidnatron%
+
+This is a bit crazy, but what we are seeing is many triples of the form
 
         (data, time, diff)
 
-Here `data` will be pairs `(String, isize)` reporting pairs of words and their counts; this is determined by the computation we have written, and the type of data in the stream we inspect. The `time` type will essentially be an integer, but due to how timely dataflow works it will say this as `(Root, i)` for values of `i`. The `diff` type will be an `isize`, a signed integer, telling us how many times each `data` is observed.
+describing how the data have *changed*. That's right; our input is actually a *change* from the initially empty input. The output is showing us that at time `(Root, 0)` several tuples have had their frequency incremented by one. That is a fancy way of saying they are the output.
 
-        Echidnatron% cargo run -- 3 10
-           Compiling differential-dataflow v0.6.0 (file:///Users/mcsherry/Projects/differential-dataflow)
-            Finished dev [unoptimized + debuginfo] target(s) in 9.17s
-             Running `target/debug/examples/test`
-        seen: (("0", 4), (Root, 0), 1)
-        seen: (("1", 3), (Root, 0), 1)
-        seen: (("2", 3), (Root, 0), 1)
-        Echidnatron%
-
-Here we see three records, which makes sense as we only introduce three distinct values. And indeed, their reported counts are as they should be (zero occurs four times, one and two occur three times).
-
-What might make less sense is why we bother to report things like `(Root, 0)` and `1`. These are the `time` and `diff` fields from above, and they aren't very interesting at the moment because we introduced all of our data at once then don't change anything. They will become more interesting in just a moment, when we start changing the data.
-
-Of course, we can also increase the amount of data like so
-
-        Echidnatron% cargo run -- 3 10000000
-           Compiling differential-dataflow v0.6.0 (file:///Users/mcsherry/Projects/differential-dataflow)
-            Finished dev [unoptimized + debuginfo] target(s) in 9.17s
-             Running `target/debug/examples/test`
-        seen: (("0", 3333334), (Root, 0), 1)
-        seen: (("1", 3333333), (Root, 0), 1)
-        seen: (("2", 3333333), (Root, 0), 1)
-        Echidnatron%
-
-and if we have the time to watch the output, we can increase the number of distinct values like so:
-
-        Echidnatron% cargo run -- 3333333 10000000
-           Compiling differential-dataflow v0.6.0 (file:///Users/mcsherry/Projects/differential-dataflow)
-            Finished dev [unoptimized + debuginfo] target(s) in 9.17s
-             Running `target/debug/examples/test`
-        seen: (("0", 4), (Root, 0), 1)
-        seen: (("1", 3), (Root, 0), 1)
-        seen: (("10", 3), (Root, 0), 1)
-        ...
-        seen: (("999997", 3), (Root, 0), 1)
-        seen: (("999998", 3), (Root, 0), 1)
-        seen: (("999999", 3), (Root, 0), 1)
-        Echidnatron%
-
-At this point, we have something like a traditional big data batch processing experience! Let's fix that.
+This may make more sense in just a moment, when we want to *change* the input.

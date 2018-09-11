@@ -1,116 +1,102 @@
-## Example 2: Dynamic data
+## Step 2: Change its input.
 
-Let's keep the same differential dataflow computation, word counting, from the previous example. The only thing we are going to change here is how we introduce the data. After loading our initial data, we will start to supply *changes* to the input collection, by inserting and removing records at subsequent times.s
+We've written a program, one that produces skip-level reports from some `manages` relation. Let's see how we can *change* its input, and what the corresponding output changes will be.
+
+Our organization has gone from one where each manager has at most two reports, to one where each manager has three reports. Of course, this doesn't happen overnight; each day one of the employees will switch from their old manager to their new manager. Of course, the boss gets to stay the boss, because that is what boss means.
+
+The only change we'll make is to add the following just after we load up our initial org chart:
 
 ```rust,no_run
-    extern crate timely;
-    extern crate differential_dataflow;
-
-    use differential_dataflow::input::Input;
-    use differential_dataflow::operators::Count;
-
-    fn main() {
-
-        // define a new computational scope, in which to run BFS
-        timely::execute_from_args(std::env::args(), move |worker| {
-
-            let values: usize = std::env::args().nth(1).unwrap().parse().unwrap();
-            let rounds: usize = std::env::args().nth(2).unwrap().parse().unwrap();
-
-            // create a counting differential dataflow.
-            let mut input = worker.dataflow::<usize,_,_>(|scope| {
-
-                // create paired input and collection.
-                let (input, words) = scope.new_collection();
-
-                words.count()
-                     .inspect(|x| println!("seen: {:?}", x));
-
-                // return the input for manipulation.
-                input
-            });
-
-            // load some initial data.
-            input.advance_to(0);
-            for value in 0 .. rounds {
-                input.insert((value % values).to_string());
-            }
-
-            // ... and now let's change some data!
-            for round in 1 .. rounds {
-                input.advance_to(round);
-                input.insert(((round) % values).to_string());
-                input.remove(((round - 1) % values).to_string());
-            }
-        }).unwrap();
+    for person in 1 .. 10 {
+        input.advance_to(person);
+        input.remove((person/2, person));
+        input.insert((person/3, person));
     }
 ```
 
-When we execute this program, we should see the *changes* the output of the `count` operator undergoes.
+This moves us through new times, indicated by the line
 
-        Echidnatron% cargo run -- 3 10
+```rust,no_run
+        input.advance_to(person);
+```
+
+which advances the state of the `input` collection up to a timestamp `person`, which just happens to be integers that are conveniently just larger than the time `0` we used to load the data.
+
+Once we've advanced the time, we make some changes.
+
+```rust,no_run
+        input.remove((person/2, person));
+        input.insert((person/3, person));
+```
+
+This removes the prior management relation, and introduces a new one where the person reports to their newer, more over-worked manager.
+
+We do this for each of the non-boss employees and get to see a bunch of outputs.
+
+        Echidnatron% cargo run --example hello
            Compiling differential-dataflow v0.6.0 (file:///Users/mcsherry/Projects/differential-dataflow)
-            Finished dev [unoptimized + debuginfo] target(s) in 9.41s
-             Running `target/debug/examples/test 3 10`
-        seen: (("0", 3), (Root, 1), 1)
-        seen: (("0", 3), (Root, 3), -1)
-        seen: (("0", 3), (Root, 4), 1)
-        seen: (("0", 3), (Root, 6), -1)
-        seen: (("0", 3), (Root, 7), 1)
-        seen: (("0", 3), (Root, 9), -1)
-        seen: (("0", 4), (Root, 0), 1)
-        seen: (("0", 4), (Root, 1), -1)
-        seen: (("0", 4), (Root, 3), 1)
-        seen: (("0", 4), (Root, 4), -1)
-        seen: (("0", 4), (Root, 6), 1)
-        seen: (("0", 4), (Root, 7), -1)
-        seen: (("0", 4), (Root, 9), 1)
-        seen: (("1", 3), (Root, 0), 1)
-        seen: (("1", 3), (Root, 1), -1)
-        seen: (("1", 3), (Root, 2), 1)
-        seen: (("1", 3), (Root, 4), -1)
-        seen: (("1", 3), (Root, 5), 1)
-        seen: (("1", 3), (Root, 7), -1)
-        seen: (("1", 3), (Root, 8), 1)
-        seen: (("1", 4), (Root, 1), 1)
-        seen: (("1", 4), (Root, 2), -1)
-        seen: (("1", 4), (Root, 4), 1)
-        seen: (("1", 4), (Root, 5), -1)
-        seen: (("1", 4), (Root, 7), 1)
-        seen: (("1", 4), (Root, 8), -1)
-        seen: (("2", 3), (Root, 0), 1)
-        seen: (("2", 3), (Root, 2), -1)
-        seen: (("2", 3), (Root, 3), 1)
-        seen: (("2", 3), (Root, 5), -1)
-        seen: (("2", 3), (Root, 6), 1)
-        seen: (("2", 3), (Root, 8), -1)
-        seen: (("2", 3), (Root, 9), 1)
-        seen: (("2", 4), (Root, 2), 1)
-        seen: (("2", 4), (Root, 3), -1)
-        seen: (("2", 4), (Root, 5), 1)
-        seen: (("2", 4), (Root, 6), -1)
-        seen: (("2", 4), (Root, 8), 1)
-        seen: (("2", 4), (Root, 9), -1)
+            Finished dev [unoptimized + debuginfo] target(s) in 7.42s
+             Running `target/debug/examples/hello`
+        ((0, 0, 0), (Root, 0), 1)
+        ((0, 0, 1), (Root, 0), 1)
+        ((0, 0, 2), (Root, 2), 1)
+        ((1, 0, 2), (Root, 0), 1)
+        ((1, 0, 2), (Root, 2), -1)
+        ((1, 0, 3), (Root, 0), 1)
+        ((1, 0, 4), (Root, 4), 1)
+        ((1, 0, 5), (Root, 5), 1)
+        ((2, 0, 4), (Root, 2), 1)
+        ((2, 0, 4), (Root, 4), -1)
+        ((2, 0, 5), (Root, 2), 1)
+        ((2, 0, 5), (Root, 5), -1)
+        ((2, 0, 6), (Root, 6), 1)
+        ((2, 0, 7), (Root, 7), 1)
+        ((2, 0, 8), (Root, 8), 1)
+        ((2, 1, 4), (Root, 0), 1)
+        ((2, 1, 4), (Root, 2), -1)
+        ((2, 1, 5), (Root, 0), 1)
+        ((2, 1, 5), (Root, 2), -1)
+        ((3, 1, 6), (Root, 0), 1)
+        ((3, 1, 6), (Root, 6), -1)
+        ((3, 1, 7), (Root, 0), 1)
+        ((3, 1, 7), (Root, 7), -1)
+        ((3, 1, 9), (Root, 9), 1)
+        ((4, 1, 8), (Root, 4), 1)
+        ((4, 1, 8), (Root, 8), -1)
+        ((4, 1, 9), (Root, 4), 1)
+        ((4, 1, 9), (Root, 9), -1)
+        ((4, 2, 8), (Root, 0), 1)
+        ((4, 2, 8), (Root, 4), -1)
+        ((4, 2, 9), (Root, 0), 1)
+        ((4, 2, 9), (Root, 4), -1)
         Echidnatron%
 
-This is a bit of a mess, so let's pick out the changes at specific times. We still have our initial "changes" in the frst round of computation, where we load up our data.
+Gaaaaaaah! What in the !#$!?
 
-        seen: (("0", 4), (Root, 0), 1)
-        seen: (("1", 3), (Root, 0), 1)
-        seen: (("2", 3), (Root, 0), 1)
+It turns out our input changes result in output changes. Let's try and break this down and make some sense. If we group the columns by time, those `(Root, _)` fields, we see a bit more structure.
 
-From this point on we see *actual changes*, where records are removed and new records added in. For example, in the very next round we see these paired subtractions and additions:
+1. The `(Root, 0)` entries are exactly the same as for our prior computation, where we just loaded the data.
 
-        seen: (("0", 3), (Root, 1), 1)
-        seen: (("0", 4), (Root, 1), -1)
-        seen: (("1", 3), (Root, 1), -1)
-        seen: (("1", 4), (Root, 1), 1)
+2. There aren't any `(Root, 1)` entries (go check). That is because the input didn't change in our first step, because 1/2 == 1/3 == 0. Since the input didn't change, the output doesn't change.
 
-These indicate that the count for `"0"` we down by one (removing a count of four and inserting a count of three), and the count for `"1"` went up by one (removing a count of three and inserting a count of four). At each of the other times, we see similar paired interactions resulting from the data we have inserted and removed.
+3. The other times are more complicated.
 
-        seen: (("1", 3), (Root, 8), 1)
-        seen: (("1", 4), (Root, 8), -1)
-        seen: (("2", 3), (Root, 8), -1)
-        seen: (("2", 4), (Root, 8), 1)
+Let's look at times `(Root, 4)`.
 
-We see changes for each round up through `(Root, 9)`, at which point we stop changing the input collection, and so the output collection stops changing as well.
+        ((1, 0, 4), (Root, 4), 1)
+        ((2, 0, 4), (Root, 4), -1)
+        ((4, 1, 8), (Root, 4), 1)
+        ((4, 1, 9), (Root, 4), 1)
+        ((4, 2, 8), (Root, 4), -1)
+        ((4, 2, 9), (Root, 4), -1)
+
+There is a bit going on here. Four's manager changed from two to one, and while their skip-level manager remained zero the explanation changed. The first two lines record this change. The next four lines record the change in the skip-level manager of four's reports, eight and nine.
+
+At the end, `(Root, 9)`, things are a bit simpler because we have reached the employees with no reports, and so the only changes are their skip-level manager, without any implications for other people.
+
+        ((3, 1, 9), (Root, 9), 1)
+        ((4, 1, 9), (Root, 9), -1)
+
+Oof. Well, we probably *could* have figured these things out by hand, right?
+
+Let's check out some ways this gets more interesting.
