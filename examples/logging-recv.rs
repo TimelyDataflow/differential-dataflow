@@ -9,11 +9,11 @@ use timely::dataflow::operators::Map;
 use timely::progress::nested::product::Product;
 use timely::progress::timestamp::RootTimestamp;
 use timely::logging::TimelyEvent;
-use timely::dataflow::operators::{Operator, Concat, Filter};
+use timely::dataflow::operators::Filter;
 use timely::dataflow::operators::capture::{EventReader, Replay};
 
 use differential_dataflow::AsCollection;
-use differential_dataflow::operators::{Count, Consolidate, Join};
+use differential_dataflow::operators::{Consolidate, Join};
 use differential_dataflow::logging::DifferentialEvent;
 
 fn main() {
@@ -23,9 +23,19 @@ fn main() {
 
     let source_peers = args.next().expect("Must provide number of source peers").parse::<usize>().expect("Source peers must be an unsigned integer");
     let t_listener = TcpListener::bind("127.0.0.1:8000").unwrap();
-    let t_sockets = Arc::new(Mutex::new((0..source_peers).map(|_| Some(t_listener.incoming().next().unwrap().unwrap())).collect::<Vec<_>>()));
     let d_listener = TcpListener::bind("127.0.0.1:9000").unwrap();
-    let d_sockets = Arc::new(Mutex::new((0..source_peers).map(|_| Some(d_listener.incoming().next().unwrap().unwrap())).collect::<Vec<_>>()));
+    let t_sockets =
+    Arc::new(Mutex::new((0..source_peers).map(|_| {
+            let socket = t_listener.incoming().next().unwrap().unwrap();
+            socket.set_nonblocking(true).expect("failed to set nonblocking");
+            Some(socket)
+        }).collect::<Vec<_>>()));
+    let d_sockets =
+    Arc::new(Mutex::new((0..source_peers).map(|_| {
+            let socket = d_listener.incoming().next().unwrap().unwrap();
+            socket.set_nonblocking(true).expect("failed to set nonblocking");
+            Some(socket)
+        }).collect::<Vec<_>>()));
 
     timely::execute_from_args(std::env::args(), move |worker| {
 
@@ -89,9 +99,7 @@ fn main() {
                     }
                 })
                 .as_collection()
-                .consolidate()
-                .inspect(|x| println!("MEMORY: {:?}", x))
-                ;
+                .consolidate();
 
             operates
                 .inspect(|x| println!("OPERATES: {:?}", x))

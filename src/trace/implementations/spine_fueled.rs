@@ -216,7 +216,7 @@ where
     fn insert(&mut self, batch: Self::Batch) {
 
         self.logger.as_ref().map(|l| l.log(::logging::BatchEvent {
-            operator: self.operator.index(),
+            operator: self.operator.global(),
             length: batch.len()
         }));
 
@@ -335,12 +335,12 @@ where
             // Step 1: Forcibly merge batches in lower slots.
             for position in 0 .. batch_index {
                 if let Some(batch) = self.merging[position].take() {
-                    let batch = batch.complete(&mut self.logger, self.operator.index(), position);
+                    let batch = batch.complete(&mut self.logger, self.operator.global(), position);
                     if let Some(batch2) = self.merging[position+1].take() {
-                        let batch2 = batch2.complete(&mut self.logger, self.operator.index(), position);
+                        let batch2 = batch2.complete(&mut self.logger, self.operator.global(), position);
                         self.logger.as_ref().map(|l| l.log(
                             ::logging::MergeEvent {
-                                operator: self.operator.index(),
+                                operator: self.operator.global(),
                                 scale: position,
                                 length1: batch.len(),
                                 length2: batch2.len(),
@@ -357,11 +357,11 @@ where
 
             // Step 2: Insert new batch at target position
             if let Some(batch2) = self.merging[batch_index].take() {
-                let batch2 = batch2.complete(&mut self.logger, self.operator.index(), batch_index);
+                let batch2 = batch2.complete(&mut self.logger, self.operator.global(), batch_index);
                 let frontier = if batch_index == self.merging.len()-1 { Some(self.advance_frontier.clone()) } else { None };
                 self.logger.as_ref().map(|l| l.log(
                     ::logging::MergeEvent {
-                        operator: self.operator.index(),
+                        operator: self.operator.global(),
                         scale: batch_index,
                         length1: batch.len(),
                         length2: batch2.len(),
@@ -389,7 +389,7 @@ where
                     if let Some(mut batch) = self.merging[new_position].take() {
 
                         // Apply work with accumulated fuel.
-                        batch = batch.work(&mut fuel, &mut self.logger, self.operator.index(), position);
+                        batch = batch.work(&mut fuel, &mut self.logger, self.operator.global(), position);
 
                         // If we have a complete batch, and it wants to be in the next slot ...
                         if batch.is_complete() && batch.len() >= (1 << new_position) {//.next_power_of_two().trailing_zeros() as usize > new_position {
@@ -401,22 +401,22 @@ where
                             if let Some(mut batch2) = self.merging[new_position].take() {
                                 if !batch2.is_complete() {
                                     let mut temp_fuel = usize::max_value();
-                                    batch2 = batch2.work(&mut temp_fuel, &mut self.logger, self.operator.index(), position);
+                                    batch2 = batch2.work(&mut temp_fuel, &mut self.logger, self.operator.global(), position);
                                     self.logger.as_ref().map(|l| l.log(
                                         ::logging::MergeShortfall {
-                                            operator: self.operator.index(),
+                                            operator: self.operator.global(),
                                             scale: new_position,
                                             shortfall: usize::max_value() - temp_fuel,
                                         }
                                     ));
                                 }
-                                let batch1 = batch.complete(&mut self.logger, self.operator.index(), position);
-                                let batch2 = batch2.complete(&mut self.logger, self.operator.index(), position);
+                                let batch1 = batch.complete(&mut self.logger, self.operator.global(), position);
+                                let batch2 = batch2.complete(&mut self.logger, self.operator.global(), position);
                                 // if this is the last position, engage compaction.
                                 let frontier = if new_position+1 == self.merging.len() { Some(self.advance_frontier.clone()) } else { None };
                                 self.logger.as_ref().map(|l| l.log(
                                     ::logging::MergeEvent {
-                                        operator: self.operator.index(),
+                                        operator: self.operator.global(),
                                         scale: position,
                                         length1: batch1.len(),
                                         length2: batch2.len(),
