@@ -74,6 +74,23 @@ impl<G: Scope, K: Data+Hashable, V: Data, R: Diff> Group<G, K, V, R> for Collect
     }
 }
 
+// impl<G: Scope, K: Data+Hashable, V: Data, R: Diff> Group<G, K, V, R> for Collection<G, (K, V), R>
+
+impl<G: Scope, K: Data, V: Data, T1, R: Diff> Group<G, K, V, R> for Arranged<G, K, V, R, T1>
+where
+    G::Timestamp: Lattice+Ord,
+    T1: TraceReader<K, V, G::Timestamp, R>+Clone+'static,
+    T1::Batch: BatchReader<K, V, G::Timestamp, R> {
+
+    // where G::Timestamp: Lattice+Ord+Debug, <K as Hashable>::Output: Data {
+    fn group<L, V2: Data, R2: Diff>(&self, logic: L) -> Collection<G, (K, V2), R2>
+        where L: Fn(&K, &[(&V, R)], &mut Vec<(V2, R2)>)+'static {
+        self//.arrange_by_key()
+            .group_arranged::<_,_,DefaultValTrace<_,_,_,_>,_>(logic)
+            .as_collection(|k,v| (k.clone(), v.clone()))
+    }
+}
+
 /// Extension trait for the `distinct` differential dataflow method.
 pub trait Threshold<G: Scope, K: Data, R1: Diff> where G::Timestamp: Lattice+Ord {
     /// Transforms the multiplicity of records.
@@ -185,7 +202,6 @@ pub trait GroupArranged<G: Scope, K: Data, V: Data, R: Diff> where G::Timestamp:
     /// extern crate differential_dataflow;
     ///
     /// use differential_dataflow::input::Input;
-    /// use differential_dataflow::operators::arrange::Arrange;
     /// use differential_dataflow::operators::group::GroupArranged;
     /// use differential_dataflow::trace::Trace;
     /// use differential_dataflow::trace::implementations::ord::OrdValSpine;
@@ -195,13 +211,13 @@ pub trait GroupArranged<G: Scope, K: Data, V: Data, R: Diff> where G::Timestamp:
     ///     ::timely::example(|scope| {
     ///
     ///         // wrap and order input, then group manually.
+    ///         let trace =
     ///         scope.new_collection_from(1 .. 10u32).1
-    ///              .map(|x| (OrdWrapper { item: x / 3 }, x))
-    ///              .arrange(OrdValSpine::new())
-    ///              .group_arranged(
-    ///                  move |_key, src, dst| dst.push((*src[0].0, 1)),
-    ///                  OrdValSpine::new()
-    ///              );
+    ///              .map(|x| (x, x))
+    ///              .group_arranged::<_,_,OrdValSpine<_,_,_,_>,_>(
+    ///                  move |_key, src, dst| dst.push((*src[0].0, 1))
+    ///              )
+    ///              .trace;
     ///     });
     /// }
     /// ```

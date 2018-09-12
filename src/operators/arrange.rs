@@ -252,8 +252,8 @@ where T: Lattice+Ord+Clone+'static, Tr: TraceReader<K,V,T,R> {
     ///
     /// use timely::Configuration;
     /// use differential_dataflow::input::Input;
-    /// use differential_dataflow::operators::arrange::Arrange;
-    /// use differential_dataflow::operators::group::GroupArranged;
+    /// use differential_dataflow::operators::arrange::ArrangeBySelf;
+    /// use differential_dataflow::operators::group::Group;
     /// use differential_dataflow::trace::Trace;
     /// use differential_dataflow::trace::implementations::ord::OrdValSpine;
     /// use differential_dataflow::hashable::OrdWrapper;
@@ -265,8 +265,7 @@ where T: Lattice+Ord+Clone+'static, Tr: TraceReader<K,V,T,R> {
     ///         let mut trace = worker.dataflow::<u32,_,_>(|scope| {
     ///             // create input handle and collection.
     ///             scope.new_collection_from(0 .. 10).1
-    ///                  .map(|x| (OrdWrapper { item: x }, x))
-    ///                  .arrange(OrdValSpine::new())
+    ///                  .arrange_by_self()
     ///                  .trace
     ///         });
     ///
@@ -277,10 +276,7 @@ where T: Lattice+Ord+Clone+'static, Tr: TraceReader<K,V,T,R> {
     ///         // create a second dataflow
     ///         worker.dataflow(move |scope| {
     ///             trace.import(scope)
-    ///                  .group_arranged(
-    ///                      move |_key, src, dst| dst.push((*src[0].0, 1)),
-    ///                      OrdValSpine::new()
-    ///                  );
+    ///                  .group(move |_key, src, dst| dst.push((*src[0].0, 1)));
     ///         });
     ///
     ///     }).unwrap();

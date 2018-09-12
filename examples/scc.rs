@@ -105,9 +105,10 @@ fn _trim_and_flip<G: Scope>(graph: &Collection<G, Edge>) -> Collection<G, Edge>
 where G::Timestamp: Lattice+Ord+Hash {
     graph.iterate(|edges| {
         // keep edges from active edge destinations.
-        let active = edges.map(|(src,_dst)| src)
-                          .arrange_by_self()
-                          .group_arranged(|_k,_s,t| t.push(((), 1)), OrdKeySpine::new());
+        let active = //: OrdKeySpine<_,_,_> =
+        edges.map(|(src,_dst)| src)
+             .arrange_by_self()
+             .group_arranged::<_,_,OrdKeySpine<_,_,_>,_>(|_k,_s,t| t.push(((), 1)));
 
         graph.enter(&edges.scope())
              .arrange_by_key()
