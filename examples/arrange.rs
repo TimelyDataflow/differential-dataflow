@@ -32,7 +32,7 @@ fn main() {
     let inspect: bool = std::env::args().nth(5).unwrap() == "inspect";
 
 
-    // define a new timely dataflow computation. 
+    // define a new timely dataflow computation.
     timely::execute_from_args(std::env::args().skip(6), move |worker| {
 
         let timer = ::std::time::Instant::now();
@@ -99,8 +99,8 @@ fn main() {
             })
             .probe_with(&mut probe)
             .as_collection()
-            // .arrange_by_key()
-            .arrange(OrdValSpineAbom::new())
+            .arrange_by_key()
+            // .arrange::<OrdValSpineAbom>()
             .trace
         });
 

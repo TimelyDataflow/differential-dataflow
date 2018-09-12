@@ -67,7 +67,7 @@ fn main() {
             if !open_loop {
 
                 let mut counts = vec![0u64; 64];
-                let mut changed = 0;
+                let mut _changed = 0;
 
                 // closed-loop latency-throughput test, parameterized by batch size.
                 let timer = ::std::time::Instant::now();
