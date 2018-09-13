@@ -570,27 +570,43 @@ where
 ///
 /// This trait is implemented for appropriately typed collections and all traces that might accommodate them,
 /// as well as by arranged data for their corresponding trace type.
-pub trait Arrange<G: Scope, K, V, R: Diff, T>
+pub trait Arrange<G: Scope, K, V, R: Diff>
 where
     G::Timestamp: Lattice,
-    T: Trace<K, V, G::Timestamp, R>+'static,
-    T::Batch: Batch<K, V, G::Timestamp, R>
-    {
+{
     /// Arranges a stream of `(Key, Val)` updates by `Key`. Accepts an empty instance of the trace type.
     ///
     /// This operator arranges a stream of values into a shared trace, whose contents it maintains.
     /// This trace is current for all times marked completed in the output stream, and probing this stream
     /// is the correct way to determine that times in the shared trace are committed.
-    fn arrange(&self) -> Arranged<G, K, V, R, TraceAgent<K, V, G::Timestamp, R, T>>;
+    fn arrange<T>(&self) -> Arranged<G, K, V, R, TraceAgent<K, V, G::Timestamp, R, T>>
+    where
+        T: Trace<K, V, G::Timestamp, R>+'static,
+        T::Batch: Batch<K, V, G::Timestamp, R>,
+    {
+        self.arrange_named("Arrange")
+    }
+
+    /// Arranges a stream of `(Key, Val)` updates by `Key`. Accepts an empty instance of the trace type.
+    ///
+    /// This operator arranges a stream of values into a shared trace, whose contents it maintains.
+    /// This trace is current for all times marked completed in the output stream, and probing this stream
+    /// is the correct way to determine that times in the shared trace are committed.
+    fn arrange_named<T>(&self, name: &str) -> Arranged<G, K, V, R, TraceAgent<K, V, G::Timestamp, R, T>>
+    where
+        T: Trace<K, V, G::Timestamp, R>+'static,
+        T::Batch: Batch<K, V, G::Timestamp, R>;
 }
 
-impl<G: Scope, K: Data+Hashable, V: Data, R: Diff, T> Arrange<G, K, V, R, T> for Collection<G, (K, V), R>
+impl<G: Scope, K: Data+Hashable, V: Data, R: Diff> Arrange<G, K, V, R> for Collection<G, (K, V), R>
 where
     G::Timestamp: Lattice+Ord,
-    T: Trace<K, V, G::Timestamp, R>+'static,
-    T::Batch: Batch<K, V, G::Timestamp, R> {
-
-    fn arrange(&self) -> Arranged<G, K, V, R, TraceAgent<K, V, G::Timestamp, R, T>> {
+{
+    fn arrange_named<T>(&self, name: &str) -> Arranged<G, K, V, R, TraceAgent<K, V, G::Timestamp, R, T>>
+    where
+        T: Trace<K, V, G::Timestamp, R>+'static,
+        T::Batch: Batch<K, V, G::Timestamp, R>,
+    {
 
         let mut reader = None;
 
@@ -600,7 +616,7 @@ where
             let reader = &mut reader;
             let exchange = Exchange::new(move |update: &((K,V),G::Timestamp,R)| (update.0).0.hashed().as_u64());
 
-            self.inner.unary_frontier(exchange, "Arrange", move |_capability, _info| {
+            self.inner.unary_frontier(exchange, name, move |_capability, _info| {
 
                 // Attempt to acquire a logger for arrange events.
                 let logger = {
@@ -700,30 +716,32 @@ where
     }
 }
 
-impl<G: Scope, K: Data+Hashable, R: Diff, T> Arrange<G, K, (), R, T> for Collection<G, K, R>
+impl<G: Scope, K: Data+Hashable, R: Diff> Arrange<G, K, (), R> for Collection<G, K, R>
 where
     G::Timestamp: Lattice+Ord,
-    T: Trace<K, (), G::Timestamp, R>+'static,
-    T::Batch: Batch<K, (), G::Timestamp, R> {
-
-    fn arrange(&self) -> Arranged<G, K, (), R, TraceAgent<K, (), G::Timestamp, R, T>> {
-        self.map(|k| (k, ()))
-            .arrange()
-    }
-}
-
-impl<G, K, V, R, T> Arrange<G, K, V, R, T> for Arranged<G, K, V, R, TraceAgent<K, V, G::Timestamp, R, T>>
-where
-    G: Scope,
-    G::Timestamp: Lattice,
-    R: Diff,
-    T: Trace<K, V, G::Timestamp, R>+Clone+'static,
-    T::Batch: Batch<K, V, G::Timestamp, R>
 {
-    fn arrange(&self) -> Arranged<G, K, V, R, TraceAgent<K, V, G::Timestamp, R, T>> {
-        (*self).clone()
+    fn arrange_named<T>(&self, name: &str) -> Arranged<G, K, (), R, TraceAgent<K, (), G::Timestamp, R, T>>
+    where
+        T: Trace<K, (), G::Timestamp, R>+'static,
+        T::Batch: Batch<K, (), G::Timestamp, R>
+    {
+        self.map(|k| (k, ()))
+            .arrange_named(name)
     }
 }
+
+// impl<G, K, V, R, T> Arrange<G, K, V, R, T> for Arranged<G, K, V, R, TraceAgent<K, V, G::Timestamp, R, T>>
+// where
+//     G: Scope,
+//     G::Timestamp: Lattice,
+//     R: Diff,
+//     T: Trace<K, V, G::Timestamp, R>+Clone+'static,
+//     T::Batch: Batch<K, V, G::Timestamp, R>
+// {
+//     fn arrange_named(&self, _name: &str) -> Arranged<G, K, V, R, TraceAgent<K, V, G::Timestamp, R, T>> {
+//         (*self).clone()
+//     }
+// }
 
 /// Arranges something as `(Key,Val)` pairs according to a type `T` of trace.
 ///
