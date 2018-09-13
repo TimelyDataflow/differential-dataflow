@@ -7,11 +7,9 @@ use timely::dataflow::operators::capture::Extract;
 use timely::progress::timestamp::RootTimestamp;
 use timely::progress::nested::product::Product;
 use differential_dataflow::collection::AsCollection;
-use differential_dataflow::operators::arrange::{ArrangeByKey, Arrange};
-use differential_dataflow::operators::group::{Group, GroupArranged};
-use differential_dataflow::trace::implementations::ord::OrdValSpine;
-use differential_dataflow::trace::{Trace, TraceReader};
-// use differential_dataflow::hashable::{OrdWrapper, UnsignedWrapper};
+use differential_dataflow::operators::arrange::ArrangeByKey;
+use differential_dataflow::operators::group::Group;
+use differential_dataflow::trace::TraceReader;
 use itertools::Itertools;
 
 type Result = std::sync::mpsc::Receiver<timely::dataflow::operators::capture::Event<timely::progress::nested::product::Product<timely::progress::timestamp::RootTimestamp, usize>, ((u64, i64), timely::progress::nested::product::Product<timely::progress::timestamp::RootTimestamp, usize>, i64)>>;

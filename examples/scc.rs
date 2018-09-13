@@ -7,21 +7,15 @@ use std::mem;
 use rand::{Rng, SeedableRng, StdRng};
 
 use timely::dataflow::*;
-use timely::dataflow::operators::capture::EventWriter;
 
 use differential_dataflow::input::Input;
 use differential_dataflow::Collection;
 use differential_dataflow::operators::*;
 use differential_dataflow::lattice::Lattice;
 
-use differential_dataflow::trace::Trace;
-// use differential_dataflow::operators::join::JoinArranged;
 use differential_dataflow::operators::group::GroupArranged;
 use differential_dataflow::operators::arrange::{ArrangeByKey, ArrangeBySelf};
-// use differential_dataflow::hashable::UnsignedWrapper;
-
-// use differential_dataflow::trace::implementations::ord::OrdValSpine;// as HashSpine;
-use differential_dataflow::trace::implementations::ord::OrdKeySpine;// as OrdKeyHashSpine;
+use differential_dataflow::trace::implementations::ord::OrdKeySpine;
 
 
 type Node = u32;
