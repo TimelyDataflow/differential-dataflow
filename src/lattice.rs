@@ -201,7 +201,7 @@ use timely::progress::timestamp::RootTimestamp;
 use std::time::Duration;
 
 implement_lattice!(RootTimestamp, RootTimestamp, RootTimestamp);
-implement_lattice!(Duration, Duration::new(0, 0), Duration::new(u64::max_value(), u32::max_value()));
+implement_lattice!(Duration, Duration::new(0, 0), Duration::new(u64::max_value(), 1_000_000_000 - 1));
 implement_lattice!(usize, usize::min_value(), usize::max_value());
 implement_lattice!(u64, u64::min_value(), u64::max_value());
 implement_lattice!(u32, u32::min_value(), u32::max_value());
