@@ -27,7 +27,7 @@ fn main() {
 
     // define a new computational scope, in which to run BFS
     timely::execute_from_args(std::env::args().skip(5), move |worker| {
-        
+
         let timer = Instant::now();
 
         // define BFS dataflow; return handles to roots and edges inputs
@@ -102,7 +102,7 @@ where G::Timestamp: Lattice+Ord {
         let roots = roots.enter(&inner.scope());
 
         edges
-            .semijoin(&roots)
+            .semijoin(&inner)
             .map(|(_s,d)| d)
             .concat(&roots)
             .distinct()

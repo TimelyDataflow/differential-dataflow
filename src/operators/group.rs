@@ -13,8 +13,6 @@
 //! This ordering can be exploited in several cases to avoid computation when only the first few
 //! elements are required.
 
-use std::fmt::Debug;
-
 use hashable::Hashable;
 use ::{Data, Collection, Diff};
 
@@ -29,8 +27,6 @@ use operators::arrange::{Arranged, ArrangeByKey, ArrangeBySelf, BatchWrapper, Tr
 use lattice::Lattice;
 use trace::{Batch, BatchReader, Cursor, Trace, Builder};
 use trace::cursor::CursorList;
-// use trace::implementations::hash::HashValSpine as DefaultValTrace;
-// use trace::implementations::hash::HashKeySpine as DefaultKeyTrace;
 use trace::implementations::ord::OrdValSpine as DefaultValTrace;
 use trace::implementations::ord::OrdKeySpine as DefaultKeyTrace;
 
@@ -65,7 +61,7 @@ pub trait Group<G: Scope, K: Data, V: Data, R: Diff> where G::Timestamp: Lattice
 }
 
 impl<G: Scope, K: Data+Hashable, V: Data, R: Diff> Group<G, K, V, R> for Collection<G, (K, V), R>
-    where G::Timestamp: Lattice+Ord+Debug, <K as Hashable>::Output: Data {
+    where G::Timestamp: Lattice+Ord, <K as Hashable>::Output: Data {
     fn group<L, V2: Data, R2: Diff>(&self, logic: L) -> Collection<G, (K, V2), R2>
         where L: Fn(&K, &[(&V, R)], &mut Vec<(V2, R2)>)+'static {
         self.arrange_by_key()
@@ -74,19 +70,15 @@ impl<G: Scope, K: Data+Hashable, V: Data, R: Diff> Group<G, K, V, R> for Collect
     }
 }
 
-// impl<G: Scope, K: Data+Hashable, V: Data, R: Diff> Group<G, K, V, R> for Collection<G, (K, V), R>
-
 impl<G: Scope, K: Data, V: Data, T1, R: Diff> Group<G, K, V, R> for Arranged<G, K, V, R, T1>
 where
     G::Timestamp: Lattice+Ord,
     T1: TraceReader<K, V, G::Timestamp, R>+Clone+'static,
-    T1::Batch: BatchReader<K, V, G::Timestamp, R> {
-
-    // where G::Timestamp: Lattice+Ord+Debug, <K as Hashable>::Output: Data {
+    T1::Batch: BatchReader<K, V, G::Timestamp, R>
+{
     fn group<L, V2: Data, R2: Diff>(&self, logic: L) -> Collection<G, (K, V2), R2>
         where L: Fn(&K, &[(&V, R)], &mut Vec<(V2, R2)>)+'static {
-        self//.arrange_by_key()
-            .group_arranged::<_,_,DefaultValTrace<_,_,_,_>,_>(logic)
+        self.group_arranged::<_,_,DefaultValTrace<_,_,_,_>,_>(logic)
             .as_collection(|k,v| (k.clone(), v.clone()))
     }
 }
@@ -144,7 +136,7 @@ pub trait Threshold<G: Scope, K: Data, R1: Diff> where G::Timestamp: Lattice+Ord
 }
 
 impl<G: Scope, K: Data+Hashable, R1: Diff> Threshold<G, K, R1> for Collection<G, K, R1>
-where G::Timestamp: Lattice+Ord+::std::fmt::Debug {
+where G::Timestamp: Lattice+Ord {
     fn threshold<R2: Diff, F: Fn(R1)->R2+'static>(&self, thresh: F) -> Collection<G, K, R2> {
         self.arrange_by_self()
             .group_arranged::<_,_,DefaultKeyTrace<_,_,_>,_>(move |_k,s,t| t.push(((), thresh(s[0].1))))
@@ -152,6 +144,16 @@ where G::Timestamp: Lattice+Ord+::std::fmt::Debug {
     }
 }
 
+impl<G: Scope, K: Data, T1, R1: Diff> Threshold<G, K, R1> for Arranged<G, K, (), R1, T1>
+where
+    G::Timestamp: Lattice+Ord,
+    T1: TraceReader<K, (), G::Timestamp, R1>+Clone+'static,
+    T1::Batch: BatchReader<K, (), G::Timestamp, R1> {
+    fn threshold<R2: Diff, F: Fn(R1)->R2+'static>(&self, thresh: F) -> Collection<G, K, R2> {
+        self.group_arranged::<_,_,DefaultKeyTrace<_,_,_>,_>(move |_k,s,t| t.push(((), thresh(s[0].1))))
+            .as_collection(|k,_| k.clone())
+    }
+}
 
 /// Extension trait for the `count` differential dataflow method.
 pub trait Count<G: Scope, K: Data, R: Diff> where G::Timestamp: Lattice+Ord {
@@ -179,7 +181,9 @@ pub trait Count<G: Scope, K: Data, R: Diff> where G::Timestamp: Lattice+Ord {
 }
 
 impl<G: Scope, K: Data+Hashable, R: Diff> Count<G, K, R> for Collection<G, K, R>
- where G::Timestamp: Lattice+Ord+::std::fmt::Debug {
+where
+    G::Timestamp: Lattice+Ord,
+{
     fn count(&self) -> Collection<G, (K, R), isize> {
         self.arrange_by_self()
             .group_arranged::<_,_,DefaultValTrace<_,_,_,_>,_>(|_k,s,t| t.push((s[0].1, 1)))
@@ -187,6 +191,17 @@ impl<G: Scope, K: Data+Hashable, R: Diff> Count<G, K, R> for Collection<G, K, R>
     }
 }
 
+impl<G: Scope, K: Data, T1, R: Diff> Count<G, K, R> for Arranged<G, K, (), R, T1>
+where
+    G::Timestamp: Lattice+Ord,
+    T1: TraceReader<K, (), G::Timestamp, R>+Clone+'static,
+    T1::Batch: BatchReader<K, (), G::Timestamp, R>
+{
+    fn count(&self) -> Collection<G, (K, R), isize> {
+        self.group_arranged::<_,_,DefaultValTrace<_,_,_,_>,_>(|_k,s,t| t.push((s[0].1, 1)))
+            .as_collection(|k,&c| (k.clone(), c))
+    }
+}
 
 /// Extension trait for the `group_arranged` differential dataflow method.
 pub trait GroupArranged<G: Scope, K: Data, V: Data, R: Diff> where G::Timestamp: Lattice+Ord {
@@ -617,7 +632,7 @@ where
         outputs: &mut [(T, Vec<(V2, T, R2)>)],
         new_interesting: &mut Vec<T>) -> (usize, usize)
     where
-        K: Eq+Clone+Debug,
+        K: Eq+Clone,
         C1: Cursor<K, V1, T, R1>,
         C2: Cursor<K, V2, T, R2>,
         C3: Cursor<K, V1, T, R1>,
@@ -627,8 +642,6 @@ where
 
 /// Implementation based on replaying historical and new updates together.
 mod history_replay {
-
-    use std::fmt::Debug;
 
     use ::Diff;
     use lattice::Lattice;
@@ -662,11 +675,11 @@ mod history_replay {
 
     impl<'a, V1, V2, T, R1, R2> PerKeyCompute<'a, V1, V2, T, R1, R2> for HistoryReplayer<'a, V1, V2, T, R1, R2>
     where
-        V1: Ord+Clone+Debug,
-        V2: Ord+Clone+Debug,
-        T: Lattice+Ord+Clone+Debug,
-        R1: Diff+Debug,
-        R2: Diff+Debug,
+        V1: Ord+Clone,
+        V2: Ord+Clone,
+        T: Lattice+Ord+Clone,
+        R1: Diff,
+        R2: Diff,
     {
         fn new() -> Self {
             HistoryReplayer {
@@ -695,7 +708,7 @@ mod history_replay {
             outputs: &mut [(T, Vec<(V2, T, R2)>)],
             new_interesting: &mut Vec<T>) -> (usize, usize)
         where
-            K: Eq+Clone+Debug,
+            K: Eq+Clone,
             C1: Cursor<K, V1, T, R1>,
             C2: Cursor<K, V2, T, R2>,
             C3: Cursor<K, V1, T, R1>,

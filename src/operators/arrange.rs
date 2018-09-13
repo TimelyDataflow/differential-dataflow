@@ -38,8 +38,6 @@ use timely_sort::Unsigned;
 use ::{Data, Diff, Collection, AsCollection, Hashable};
 use lattice::Lattice;
 use trace::{Trace, TraceReader, Batch, BatchReader, Batcher, Cursor};
-// use trace::implementations::hash::HashValSpine as DefaultValTrace;
-// use trace::implementations::hash::HashKeySpine as DefaultKeyTrace;
 use trace::implementations::ord::OrdValSpine as DefaultValTrace;
 use trace::implementations::ord::OrdKeySpine as DefaultKeyTrace;
 
@@ -442,10 +440,8 @@ impl<G: Scope, K, V, R, T> Arranged<G, K, V, R, T> where G::Timestamp: Lattice+O
                 for wrapper in data.iter() {
                     let batch = &wrapper.item;
                     let mut cursor = batch.cursor();
-                    while cursor.key_valid(batch) {
-                        let key: &K = cursor.key(batch);
-                        while cursor.val_valid(batch) {
-                            let val: &V = cursor.val(batch);
+                    while let Some(key) = cursor.get_key(batch) {
+                        while let Some(val) = cursor.get_val(batch) {
                             cursor.map_times(batch, |time, diff| {
                                 for datum in logic(key, val) {
                                     session.give((datum, time.clone(), diff.clone()));
@@ -656,8 +652,6 @@ where
 
                 // If there is at least one capability no longer in advance of the input frontier ...
                 if capabilities.elements().iter().any(|c| !input.frontier().less_equal(c.time())) {
-
-                    // logger.as_ref().map(|x| x.log(format!("Arrange invoked!")));
 
                     let mut upper = Antichain::new();   // re-used allocation for sealing batches.
 

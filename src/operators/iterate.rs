@@ -86,7 +86,7 @@ impl<G: Scope, D: Ord+Data+Debug, R: Diff> Iterate<G, D, R> for Collection<G, D,
             // wrapped by `variable`, but it also results in substantially more
             // diffs produced; `result` is post-consolidation, and means fewer
             // records are yielded out of the loop.
-            let variable = Variable::from(self.enter(subgraph));
+            let variable = Variable::from_args(u64::max_value(), 1, self.enter(subgraph));
             let result = logic(&variable);
             variable.set(&result);
             result.leave()
@@ -94,7 +94,7 @@ impl<G: Scope, D: Ord+Data+Debug, R: Diff> Iterate<G, D, R> for Collection<G, D,
     }
 }
 
-/// A differential dataflow collection variable
+/// A recursively defined collection.
 ///
 /// The `Variable` struct allows differential dataflow programs requiring more sophisticated
 /// iterative patterns than singly recursive iteration. For example: in mutual recursion two
@@ -129,49 +129,7 @@ impl<G: Scope, D: Ord+Data+Debug, R: Diff> Iterate<G, D, R> for Collection<G, D,
 ///     })
 /// }
 /// ```
-pub struct Variable<'a, G: Scope, D: Data, R: Diff>
-where G::Timestamp: Lattice {
-    collection: Collection<Child<'a, G, u64>, D, R>,
-    feedback: Handle<G::Timestamp, u64,(D, Product<G::Timestamp, u64>, R)>,
-    source: Collection<Child<'a, G, u64>, D, R>,
-}
-
-impl<'a, G: Scope, D: Data, R: Diff> Variable<'a, G, D, R> where G::Timestamp: Lattice {
-    /// Creates a new `Variable` and a `Stream` representing its output, from a supplied `source` stream.
-    pub fn from_args(max_steps: u64, step: u64, source: Collection<Child<'a, G, u64>, D, R>) -> Variable<'a, G, D, R> {
-        let (feedback, updates) = source.inner.scope().loop_variable(max_steps, step);
-        let collection = Collection::new(updates).concat(&source);
-        Variable { collection: collection, feedback: feedback, source: source }
-    }
-    /// Creates a new `Variable` and a `Stream` representing its output, from a supplied `source` stream.
-    pub fn from(source: Collection<Child<'a, G, u64>, D, R>) -> Variable<'a, G, D, R> {
-        Self::from_args(u64::max_value(), 1, source)
-    }
-    /// Adds a new source of data to the `Variable`.
-    pub fn set(self, result: &Collection<Child<'a, G, u64>, D, R>) -> Collection<Child<'a, G, u64>, D, R> {
-        self.source.negate()
-                   .concat(result)
-                   .inner
-                   .map(|(x,t,d)| (x, Product::new(t.outer, t.inner+1), d))
-                   .connect_loop(self.feedback);
-
-        self.collection
-    }
-}
-
-impl<'a, G: Scope, D: Data, R: Diff> Deref for Variable<'a, G, D, R> where G::Timestamp: Lattice {
-    type Target = Collection<Child<'a, G, u64>, D, R>;
-    fn deref(&self) -> &Self::Target {
-        &self.collection
-    }
-}
-
-/// A recursive variable with a generic timestamp type.
-///
-/// This type generalizes `Variable` by permitting an arbitrary timestamp type, but incurs the additional
-/// cost of validating the step of the timestamp, which `Variable` does not do. This is technically a bug
-/// in `Variable`, as supplying a timestamp that overflows (using e.g. `enter_at`) would result in errors.
-pub struct CoreVariable<'a, G: Scope, D: Data, R: Diff, T: Timestamp+Lattice>
+pub struct Variable<'a, G: Scope, D: Data, R: Diff, T: Timestamp+Lattice>
 where G::Timestamp: Lattice {
     collection: Collection<Child<'a, G, T>, D, R>,
     feedback: Handle<G::Timestamp, T,(D, Product<G::Timestamp, T>, R)>,
@@ -179,29 +137,46 @@ where G::Timestamp: Lattice {
     step: <T as Timestamp>::Summary,
 }
 
-impl<'a, G: Scope, D: Data, R: Diff, T: Timestamp+Lattice> CoreVariable<'a, G, D, R, T> where G::Timestamp: Lattice {
-    /// Creates a new `Variable` and a `Stream` representing its output, from a supplied `source` stream.
-    pub fn from_args(max_steps: T, step: <T as Timestamp>::Summary, source: Collection<Child<'a, G, T>, D, R>) -> CoreVariable<'a, G, D, R, T> {
+impl<'a, G: Scope, D: Data, R: Diff, T: Timestamp+Lattice> Variable<'a, G, D, R, T> where G::Timestamp: Lattice {
+    /// Creates a new initially empty `Variable`.
+    pub fn new(max_steps: T, step: <T as Timestamp>::Summary, scope: &mut Child<'a, G, T>) -> Self {
+        use collection::AsCollection;
+        let empty = ::timely::dataflow::operators::generic::operator::empty(scope).as_collection();
+        Self::from_args(max_steps, step, empty)
+    }
+
+    /// Creates a new `Variable` from a supplied `source` stream.
+    pub fn from_args(max_steps: T, step: <T as Timestamp>::Summary, source: Collection<Child<'a, G, T>, D, R>) -> Self {
         let (feedback, updates) = source.inner.scope().loop_variable(max_steps, step.clone());
         let collection = Collection::new(updates).concat(&source);
-        CoreVariable { collection: collection, feedback: feedback, source: source, step: step }
+        Variable { collection: collection, feedback: feedback, source: source, step: step }
     }
+
     /// Adds a new source of data to the `Variable`.
     pub fn set(self, result: &Collection<Child<'a, G, T>, D, R>) -> Collection<Child<'a, G, T>, D, R> {
         let step = self.step;
-        self.source.negate()
-                   .concat(result)
-                   .inner
-                   .flat_map(move |(x,t,d)| step.results_in(&t.inner).map(|t_inner| (x, Product::new(t.outer, t_inner), d)))
-                   .connect_loop(self.feedback);
+        self.source
+            .negate()
+            .concat(result)
+            .inner
+            .flat_map(move |(x,t,d)| step.results_in(&t.inner).map(|t_inner| (x, Product::new(t.outer, t_inner), d)))
+            .connect_loop(self.feedback);
 
         self.collection
     }
 }
 
-impl<'a, G: Scope, D: Data, R: Diff, T: Timestamp+Lattice> Deref for CoreVariable<'a, G, D, R, T> where G::Timestamp: Lattice {
+impl<'a, G: Scope, D: Data, R: Diff, T: Timestamp+Lattice> Deref for Variable<'a, G, D, R, T> where G::Timestamp: Lattice {
     type Target = Collection<Child<'a, G, T>, D, R>;
     fn deref(&self) -> &Self::Target {
         &self.collection
+    }
+}
+
+impl<'a, G: Scope, D: Data, R: Diff> Variable<'a, G, D, R, u64> where G::Timestamp: Lattice {
+    /// Compatibility implementation of `from_args(u64::max_value(), 1, source)`.
+    #[deprecated]
+    pub fn from(source: Collection<Child<'a, G, u64>, D, R>) -> Self {
+        Self::from_args(u64::max_value(), 1, source)
     }
 }
