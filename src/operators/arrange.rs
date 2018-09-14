@@ -474,6 +474,9 @@ impl<G: Scope, K, V, R, T> Arranged<G, K, V, R, T> where G::Timestamp: Lattice+O
         queries.binary_frontier(&self.stream, exchange, Pipeline, "TraceQuery", move |_capability, _info| {
 
             let mut trace = Some(self.trace.clone());
+            // release `distinguish_since` capability.
+            trace.as_mut().unwrap().distinguish_since(&[]);
+
             let mut stash = Vec::new();
             let mut capability: Option<Capability<G::Timestamp>> = None;
 
