@@ -517,7 +517,7 @@ impl<G: Scope, K, V, R, T> Arranged<G, K, V, R, T> where G::Timestamp: Lattice+O
                         ::std::mem::swap(&mut stash, &mut retain);    // retain now the stashed queries.
 
                         // sort temp1 by key and then by time.
-                        active.sort();
+                        active.sort_unstable_by(|x,y| x.0.cmp(&y.0));
 
                         let (mut cursor, storage) = trace.as_mut().unwrap().cursor();
 
@@ -539,22 +539,34 @@ impl<G: Scope, K, V, R, T> Arranged<G, K, V, R, T> where G::Timestamp: Lattice+O
                             }
                         }
 
+                        // // V1: Stable under load
                         // let mut active_finger = 0;
                         // let (mut cursor, storage) = trace.cursor();
                         // while active_finger < active.len() {
                         //     let key = &active[active_finger].0;
-                        //     let time = &active[active_finger].1;
+                        //     let time = active[active_finger].clone();
+                        //     let mut same_key = active_finger;
+                        //     while &active.get(same_key).0 == Some(key) {
+                        //         same_key += 1;
+                        //     }
+
                         //     cursor.seek_key(key);
                         //     if cursor.get_key(&storage) == Some(key) {
                         //         while let Some(val) = cursor.get_val(&storage) {
                         //             cursor.map_times(&storage, |t,d| {
-                        //                 working1.push((t.clone, val.clone(), d));
+                        //                 working1.push((t.clone(), d));
                         //             })
+                        //             working.sort
+
+
                         //             cursor.step_val(&storage);
                         //         }
                         //     }
                         //     working1.sort_by(|x,y| x.0.cmp(&y.0));
-                   }
+
+                        //     active_finger += same_key;
+                        // }
+                    }
                 }
 
                 if drained {
