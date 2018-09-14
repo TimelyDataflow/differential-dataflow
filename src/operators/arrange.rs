@@ -24,7 +24,7 @@ use std::collections::VecDeque;
 use std::fmt::Debug;
 
 use timely::dataflow::operators::{Enter, Map};
-use timely::order::PartialOrder;
+use timely::order::{PartialOrder, TotalOrder};
 use timely::dataflow::{Scope, Stream};
 use timely::dataflow::operators::generic::{Operator, source};
 use timely::dataflow::channels::pact::{Pipeline, Exchange};
@@ -455,6 +455,132 @@ impl<G: Scope, K, V, R, T> Arranged<G, K, V, R, T> where G::Timestamp: Lattice+O
             });
         })
         .as_collection()
+    }
+
+    /// Report values associated with keys at certain times.
+    ///
+    /// This method consumes a stream of (key, time) queries and reports the corresponding stream of
+    /// (key, value, time, diff) accumulations in the `self` trace.
+    pub fn lookup(&self, queries: &Stream<G, (K, G::Timestamp)>) -> Stream<G, (K, V, G::Timestamp, R)>
+    where
+        G::Timestamp: Data+Lattice+Ord+TotalOrder,
+        K: Data+Hashable,
+        V: Data,
+        R: Diff,
+        T: 'static
+    {
+        // while the arrangement is already correctly distributed, the query stream may not be.
+        let exchange = Exchange::new(move |update: &(K,G::Timestamp)| update.0.hashed().as_u64());
+        queries.binary_frontier(&self.stream, exchange, Pipeline, "TraceQuery", move |_capability, _info| {
+
+            let mut trace = Some(self.trace.clone());
+            let mut stash = Vec::new();
+            let mut capability: Option<Capability<G::Timestamp>> = None;
+
+            let mut active = Vec::new();
+            let mut retain = Vec::new();
+
+            // let mut working1 = Vec::new();
+            // let mut working2 = Vec::new();
+
+            move |input1, input2, output| {
+
+                input1.for_each(|time, data| {
+                    // if the minimum capability "improves" retain it.
+                    if capability.is_none() || time.time().less_than(capability.as_ref().unwrap().time()) {
+                        capability = Some(time.retain());
+                    }
+                    stash.extend(data.iter().cloned());
+                });
+
+                // drain input2; we will consult `trace` directly.
+                input2.for_each(|_time, _data| { });
+
+                assert_eq!(capability.is_none(), stash.is_empty());
+
+                let mut drained = false;
+                if let Some(capability) = capability.as_mut() {
+                    if !input2.frontier().less_equal(capability.time()) {
+                        for datum in stash.drain(..) {
+                            if !input2.frontier().less_equal(&datum.1) {
+                                active.push(datum);
+                            }
+                            else {
+                                retain.push(datum);
+                            }
+                        }
+                        drained = !active.is_empty();
+
+                        ::std::mem::swap(&mut stash, &mut retain);    // retain now the stashed queries.
+
+                        // sort temp1 by key and then by time.
+                        active.sort();
+
+                        let (mut cursor, storage) = trace.as_mut().unwrap().cursor();
+
+                        // V0: Potentially quadratic under load.
+                        let mut session = output.session(&capability);
+                        for (key, time) in active.drain(..) {
+                            cursor.seek_key(&storage, &key);
+                            if cursor.get_key(&storage) == Some(&key) {
+                                while let Some(val) = cursor.get_val(&storage) {
+                                    let mut count = R::zero();
+                                    cursor.map_times(&storage, |t, d| if t.less_equal(&time) {
+                                        count = count + d;
+                                    });
+                                    if !count.is_zero() {
+                                        session.give((key.clone(), val.clone(), time.clone(), count));
+                                    }
+                                    cursor.step_val(&storage);
+                                }
+                            }
+                        }
+
+                        // let mut active_finger = 0;
+                        // let (mut cursor, storage) = trace.cursor();
+                        // while active_finger < active.len() {
+                        //     let key = &active[active_finger].0;
+                        //     let time = &active[active_finger].1;
+                        //     cursor.seek_key(key);
+                        //     if cursor.get_key(&storage) == Some(key) {
+                        //         while let Some(val) = cursor.get_val(&storage) {
+                        //             cursor.map_times(&storage, |t,d| {
+                        //                 working1.push((t.clone, val.clone(), d));
+                        //             })
+                        //             cursor.step_val(&storage);
+                        //         }
+                        //     }
+                        //     working1.sort_by(|x,y| x.0.cmp(&y.0));
+                   }
+                }
+
+                if drained {
+                    if stash.is_empty() { capability = None; }
+                    if let Some(capability) = capability.as_mut() {
+                        let mut min_time = stash[0].1.clone();
+                        for datum in stash[1..].iter() {
+                            if datum.1.less_than(&min_time) {
+                                min_time = datum.1.clone();
+                            }
+                        }
+                        capability.downgrade(&min_time);
+                    }
+                }
+
+                // Determine new frontier on queries that may be issued.
+                let frontier = [
+                    capability.as_ref().map(|c| c.time().clone()),
+                    input1.frontier().frontier().get(0).cloned(),
+                ].into_iter().cloned().filter_map(|t| t).min();
+
+                if let Some(frontier) = frontier {
+                    trace.as_mut().map(|t| t.advance_by(&[frontier]));
+                }
+                else {
+                    trace = None;
+                }
+            }
+        })
     }
 }
 

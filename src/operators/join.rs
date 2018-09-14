@@ -440,12 +440,12 @@ where
     fn new(trace: C1, trace_storage: C1::Storage, batch: C2, batch_storage: C2::Storage, capability: Capability<T>, mult: M) -> Self {
         Deferred {
             phant: ::std::marker::PhantomData,
-            trace: trace,
-            trace_storage: trace_storage,
-            batch: batch,
-            batch_storage: batch_storage,
-            capability: capability,
-            mult: mult,
+            trace,
+            trace_storage,
+            batch,
+            batch_storage,
+            capability,
+            mult,
             done: false,
             temp: Vec::new(),
             // thinker: JoinThinker::new(),

@@ -255,7 +255,7 @@ pub mod rc_blanket_impls {
 	impl<K, V, T, R, B: BatchReader<K, V, T, R>> RcBatchCursor<K, V, T, R, B> {
 	    fn new(cursor: B::Cursor) -> Self {
 	        RcBatchCursor {
-	            cursor: cursor,
+	            cursor,
 	            phantom: ::std::marker::PhantomData,
 	        }
 	    }
@@ -361,7 +361,7 @@ pub mod abomonated_blanket_impls {
 	impl<K, V, T, R, B: BatchReader<K, V, T, R>> AbomonatedBatchCursor<K, V, T, R, B> {
 	    fn new(cursor: B::Cursor) -> Self {
 	        AbomonatedBatchCursor {
-	            cursor: cursor,
+	            cursor,
 	            phantom: ::std::marker::PhantomData,
 	        }
 	    }

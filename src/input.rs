@@ -202,7 +202,7 @@ impl<T: Timestamp+Clone, D: Data, R: Diff> InputSession<T, D, R> {
 		InputSession {
 			time: handle.time().clone(),
 			buffer: Vec::new(),
-			handle: handle,
+			handle,
 		}
 	}
 

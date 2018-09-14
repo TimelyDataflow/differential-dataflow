@@ -16,11 +16,11 @@ pub struct CursorList<K, V, T, R, C: Cursor<K, V, T, R>> {
 
 impl<K, V, T, R, C: Cursor<K, V, T, R>> CursorList<K, V, T, R, C> where K: Ord, V: Ord {
     /// Creates a new cursor list from pre-existing cursors.
-    pub fn new(cursors: Vec<C>, storage: &Vec<C::Storage>) -> Self {
+    pub fn new(cursors: Vec<C>, storage: &[C::Storage]) -> Self {
 
         let mut result = CursorList {
             _phantom: ::std::marker::PhantomData,
-            cursors: cursors.into_iter().collect(),
+            cursors,
             min_key: Vec::new(),
             min_val: Vec::new(),
         };
@@ -30,7 +30,7 @@ impl<K, V, T, R, C: Cursor<K, V, T, R>> CursorList<K, V, T, R, C> where K: Ord, 
     }
 
     // Initialize min_key with the indices of cursors with the minimum key.
-    fn minimize_keys(&mut self, storage: &Vec<C::Storage>) {
+    fn minimize_keys(&mut self, storage: &[C::Storage]) {
 
         self.min_key.clear();
 
@@ -63,7 +63,7 @@ impl<K, V, T, R, C: Cursor<K, V, T, R>> CursorList<K, V, T, R, C> where K: Ord, 
     }
 
     // Initialize min_val with the indices of minimum key cursors with the minimum value.
-    fn minimize_vals(&mut self, storage: &Vec<C::Storage>) {
+    fn minimize_vals(&mut self, storage: &[C::Storage]) {
 
         self.min_val.clear();
 

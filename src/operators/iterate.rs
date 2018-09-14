@@ -120,7 +120,7 @@ impl<G: Scope, D: Ord+Data+Debug, R: Diff> Iterate<G, D, R> for Collection<G, D,
 ///         let numbers = scope.new_collection_from(1 .. 10u32).1;
 ///
 ///         scope.scoped(|nested| {
-///             let variable = Variable::from(numbers.enter(nested));
+///             let variable = Variable::new_from(numbers.enter(nested), u64::max_value(), 1);
 ///             let result = variable.map(|x| if x % 2 == 0 { x/2 } else { x })
 ///                                  .consolidate();
 ///             variable.set(&result)
@@ -149,7 +149,7 @@ impl<'a, G: Scope, D: Data, R: Diff, T: Timestamp+Lattice> Variable<'a, G, D, T,
     pub fn new_from(source: Collection<Child<'a, G, T>, D, R>, max_steps: T, step: <T as Timestamp>::Summary) -> Self {
         let (feedback, updates) = source.inner.scope().loop_variable(max_steps, step.clone());
         let collection = Collection::new(updates).concat(&source);
-        Variable { collection: collection, feedback: feedback, source: source, step: step }
+        Variable { collection, feedback, source, step }
     }
 
     /// Adds a new source of data to the `Variable`.
@@ -172,22 +172,3 @@ impl<'a, G: Scope, D: Data, R: Diff, T: Timestamp+Lattice> Deref for Variable<'a
         &self.collection
     }
 }
-
-// impl<'a, G: Scope, D: Data, R: Diff> Variable<'a, G, D, R, u64> where G::Timestamp: Lattice {
-//     /// Allocates a new variable from a source collection.
-//     pub fn from(source: Collection<Child<'a, G, u64>, D, R>) -> Self {
-//         Self::new_from(u64::max_value(), 1, source)
-//     }
-// }
-// impl<'a, G: Scope, D: Data, R: Diff> Variable<'a, G, D, R, u32> where G::Timestamp: Lattice {
-//     /// Allocates a new variable from a source collection.
-//     pub fn from(source: Collection<Child<'a, G, u32>, D, R>) -> Self {
-//         Self::new_from(u32::max_value(), 1, source)
-//     }
-// }
-// impl<'a, G: Scope, D: Data, R: Diff> Variable<'a, G, D, R, usize> where G::Timestamp: Lattice {
-//     /// Allocates a new variable from a source collection.
-//     pub fn from(source: Collection<Child<'a, G, usize>, D, R>) -> Self {
-//         Self::new_from(usize::max_value(), 1, source)
-//     }
-// }
