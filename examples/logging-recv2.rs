@@ -22,8 +22,11 @@ fn main() {
     let mut args = ::std::env::args();
     args.next().unwrap();
 
-    let work_peers = args.next().expect("Must provide number of source peers").parse::<usize>().expect("Source peers must be an unsigned integer");
-    let comm_peers = args.next().expect("Must provide number of source peers").parse::<usize>().expect("Source peers must be an unsigned integer");
+    let work_peers: usize = args.next().expect("Must provide number of source peers").parse().expect("Source peers must be an unsigned integer");
+    let comm_peers: usize = args.next().expect("Must provide number of source peers").parse().expect("Comms peers must be an unsigned integer");
+    let granularity: u64  = args.next().expect("Must provide report granularity in seconds").parse().expect("Granularity must be an unsigned integer");
+
+	println!("starting with work peers: {}, comm peers: {}, granularity: {}", work_peers, comm_peers, granularity);
 
     let t_listener = TcpListener::bind("127.0.0.1:8000").unwrap();
     let d_listener = TcpListener::bind("127.0.0.1:9000").unwrap();
@@ -76,12 +79,13 @@ fn main() {
             t_events
                 .filter(|x| x.1 == 0)
                 .flat_map(move |(ts, _worker, datum)| {
-                    let ts = Duration::from_secs(ts.as_secs() + 1);
+                    let ts = Duration::from_secs((ts.as_secs()/granularity + 1) * granularity);
                     if let TimelyEvent::Channels(event) = datum {
                         Some((event, RootTimestamp::new(ts), 1))
                     }
                     else { None }
                 })
+//                .inspect(|x| println!("???\t{:?}", x))
                 .as_collection()
                 // .consolidate()
                 .inspect(|x| println!("CHANNEL\t{:?}", x));
@@ -90,7 +94,7 @@ fn main() {
             t_events
                 .filter(|x| x.1 == 0)
                 .flat_map(move |(ts, _worker, datum)| {
-                    let ts = Duration::from_secs(ts.as_secs() + 1);
+                    let ts = Duration::from_secs((ts.as_secs()/granularity + 1) * granularity);
                     if let TimelyEvent::CommChannels(event) = datum {
                         Some((event, RootTimestamp::new(ts), 1))
                     }
@@ -104,8 +108,8 @@ fn main() {
             // let memory =
             d_events
                 // .inspect(|x| println!("MESSAGE\t{:?}", x))
-                .flat_map(|(ts, _worker, datum)| {
-                    let ts = Duration::from_secs(ts.as_secs() + 1);
+                .flat_map(move |(ts, _worker, datum)| {
+                    let ts = Duration::from_secs((ts.as_secs()/granularity + 1) * granularity);
                     if let CommunicationEvent::Message(x) = datum {
                         Some((x.header.channel, RootTimestamp::new(ts), x.header.length as isize))
                     }
