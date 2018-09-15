@@ -10,10 +10,11 @@ use indexmap::IndexMap;
 use timely::communication::Allocate;
 
 use timely::dataflow::Scope;
-use timely::dataflow::scopes::{ScopeParent, Root, Child};
+use timely::dataflow::scopes::{ScopeParent, Child};
 use timely::progress::timestamp::RootTimestamp;
 use timely::progress::nested::product::Product;
 use timely::progress::Timestamp;
+use timely::worker::Worker;
 
 use differential_dataflow::Collection;
 use differential_dataflow::lattice::Lattice;
@@ -157,7 +158,7 @@ impl Query {
     }
 
     /// Creates a dataflow implementing the query, and returns input and trace handles.
-    pub fn render_in<'a, A, T>(&self, scope: &mut Child<'a, Root<A>, T>) -> IndexMap<String, RelationHandles<T>>
+    pub fn render_in<'a, A, T>(&self, scope: &mut Child<'a, Worker<A>, T>) -> IndexMap<String, RelationHandles<T>>
     where A: Allocate, T: Timestamp+Lattice {
 
         // Create new input (handle, stream) pairs
