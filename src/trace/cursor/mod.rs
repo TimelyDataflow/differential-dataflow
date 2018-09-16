@@ -5,7 +5,7 @@
 //! both because it allows navigation on multiple levels (key and val), but also because it
 //! supports efficient seeking (via the `seek_key` and `seek_val` methods).
 
-pub mod cursor_list;
+// pub mod cursor_list;
 pub mod cursor_pair;
 pub mod cursor_list_neu;
 

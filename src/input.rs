@@ -13,7 +13,8 @@ use timely::progress::timestamp::RootTimestamp;
 use timely::progress::nested::product::Product;
 use timely::dataflow::operators::Input as TimelyInput;
 use timely::dataflow::operators::input::Handle;
-use timely::dataflow::scopes::{Child, Root};
+use timely::dataflow::scopes::Child;
+use timely::worker::Worker;
 
 use ::{Data, Diff};
 use collection::{Collection, AsCollection};
@@ -49,7 +50,7 @@ pub trait Input<'a, A: Allocate, T: Timestamp+Ord> {
     ///		}).unwrap();
     /// }
     /// ```
-    fn new_collection<D, R>(&mut self) -> (InputSession<T, D, R>, Collection<Child<'a, Root<A>, T>, D, R>)
+    fn new_collection<D, R>(&mut self) -> (InputSession<T, D, R>, Collection<Child<'a, Worker<A>, T>, D, R>)
     where D: Data, R: Diff;
     /// Create a new collection and input handle from initial data.
     ///
@@ -80,17 +81,17 @@ pub trait Input<'a, A: Allocate, T: Timestamp+Ord> {
     ///		}).unwrap();
     /// }
     /// ```
-    fn new_collection_from<I>(&mut self, data: I) -> (InputSession<T, I::Item, isize>, Collection<Child<'a, Root<A>, T>, I::Item, isize>)
+    fn new_collection_from<I>(&mut self, data: I) -> (InputSession<T, I::Item, isize>, Collection<Child<'a, Worker<A>, T>, I::Item, isize>)
     where I: IntoIterator+'static, I::Item: Data;
 }
 
-impl<'a, A: Allocate, T: Timestamp+Ord> Input<'a, A, T> for Child<'a, Root<A>, T> {
-    fn new_collection<D, R>(&mut self) -> (InputSession<T, D, R>, Collection<Child<'a, Root<A>, T>, D, R>)
+impl<'a, A: Allocate, T: Timestamp+Ord> Input<'a, A, T> for Child<'a, Worker<A>, T> {
+    fn new_collection<D, R>(&mut self) -> (InputSession<T, D, R>, Collection<Child<'a, Worker<A>, T>, D, R>)
     where D: Data, R: Diff{
 		let (handle, stream) = self.new_input();
 		(InputSession::from(handle), stream.as_collection())
     }
-    fn new_collection_from<I>(&mut self, data: I) -> (InputSession<T, I::Item, isize>, Collection<Child<'a, Root<A>, T>, I::Item, isize>)
+    fn new_collection_from<I>(&mut self, data: I) -> (InputSession<T, I::Item, isize>, Collection<Child<'a, Worker<A>, T>, I::Item, isize>)
     where I: IntoIterator+'static, I::Item: Data {
 
     	use timely::dataflow::operators::ToStream;
@@ -181,7 +182,7 @@ impl<T: Timestamp+Clone, D: Data> InputSession<T, D, isize> {
 impl<T: Timestamp+Clone, D: Data, R: Diff> InputSession<T, D, R> {
 
     /// Introduces a handle as collection.
-    pub fn to_collection<'a, A: Allocate>(&mut self, scope: &mut Child<'a, Root<A>, T>) -> Collection<Child<'a, Root<A>, T>, D, R> {
+    pub fn to_collection<'a, A: Allocate>(&mut self, scope: &mut Child<'a, Worker<A>, T>) -> Collection<Child<'a, Worker<A>, T>, D, R> {
         scope
             .input_from(&mut self.handle)
             .as_collection()
@@ -202,7 +203,7 @@ impl<T: Timestamp+Clone, D: Data, R: Diff> InputSession<T, D, R> {
 		InputSession {
 			time: handle.time().clone(),
 			buffer: Vec::new(),
-			handle: handle,
+			handle,
 		}
 	}
 

@@ -1,126 +1,112 @@
 extern crate timely;
 extern crate differential_dataflow;
 
+use std::sync::{Arc, Mutex};
 use std::net::TcpListener;
-use timely::dataflow::operators::{Inspect, Map, capture::{EventReader, Replay}};
+use std::time::Duration;
+
+use timely::dataflow::operators::Map;
 use timely::progress::nested::product::Product;
 use timely::progress::timestamp::RootTimestamp;
-use timely::logging::{TimelySetup, TimelyEvent, StartStop, ScheduleEvent};
-use timely::logging::TimelyEvent::{Operates, Channels, Messages, Schedule};
-use timely::dataflow::operators::aggregation::StateMachine;
-use timely::dataflow::channels::pact::Exchange;
-use timely::dataflow::operators::Operator;
+use timely::logging::TimelyEvent;
+use timely::dataflow::operators::Filter;
+use timely::dataflow::operators::capture::{EventReader, Replay};
 
-use differential_dataflow::collection::AsCollection;
-use differential_dataflow::operators::Consolidate;
-use differential_dataflow::operators::Join;
+use differential_dataflow::AsCollection;
+use differential_dataflow::operators::{Consolidate, Join};
+use differential_dataflow::logging::DifferentialEvent;
 
 fn main() {
-    timely::execute_from_args(std::env::args().skip(2), |worker| {
 
-        let source_peers = std::env::args().nth(1).unwrap().parse::<usize>().unwrap();
+    let mut args = ::std::env::args();
+    args.next().unwrap();
 
-        // create replayers from disjoint partition of source worker identifiers.
-        let replayers =
-        (0 .. source_peers)
-            .filter(|i| i % worker.peers() == worker.index())
-            .map(|i| TcpListener::bind(format!("127.0.0.1:{}", 8000 + i)).unwrap())
-            .collect::<Vec<_>>()
-            .into_iter()
-            .map(|l| l.incoming().next().unwrap().unwrap())
-            .map(|r| EventReader::<Product<RootTimestamp, u64>,(u64, TimelySetup, TimelyEvent),_>::new(r))
+    let source_peers = args.next().expect("Must provide number of source peers").parse::<usize>().expect("Source peers must be an unsigned integer");
+    let t_listener = TcpListener::bind("127.0.0.1:8000").unwrap();
+    let d_listener = TcpListener::bind("127.0.0.1:9000").unwrap();
+    let t_sockets =
+    Arc::new(Mutex::new((0..source_peers).map(|_| {
+            let socket = t_listener.incoming().next().unwrap().unwrap();
+            socket.set_nonblocking(true).expect("failed to set nonblocking");
+            Some(socket)
+        }).collect::<Vec<_>>()));
+    let d_sockets =
+    Arc::new(Mutex::new((0..source_peers).map(|_| {
+            let socket = d_listener.incoming().next().unwrap().unwrap();
+            socket.set_nonblocking(true).expect("failed to set nonblocking");
+            Some(socket)
+        }).collect::<Vec<_>>()));
+
+    timely::execute_from_args(std::env::args(), move |worker| {
+
+        let index = worker.index();
+        let peers = worker.peers();
+
+        let t_streams =
+        t_sockets
+            .lock()
+            .unwrap()
+            .iter_mut()
+            .enumerate()
+            .filter(|(i, _)| *i % peers == index)
+            .map(move |(_, s)| s.take().unwrap())
+            .map(|r| EventReader::<Product<RootTimestamp, Duration>, (Duration, usize, TimelyEvent),_>::new(r))
             .collect::<Vec<_>>();
 
-        worker.dataflow(|scope| {
+        let d_streams =
+        d_sockets
+            .lock()
+            .unwrap()
+            .iter_mut()
+            .enumerate()
+            .filter(|(i, _)| *i % peers == index)
+            .map(move |(_, s)| s.take().unwrap())
+            .map(|r| EventReader::<Product<RootTimestamp, Duration>, (Duration, usize, DifferentialEvent),_>::new(r))
+            .collect::<Vec<_>>();
 
-            let stream = replayers.replay_into(scope);
+        worker.dataflow::<_,_,_>(|scope| {
+
+            let t_events = t_streams.replay_into(scope);
+            let d_events = d_streams.replay_into(scope);
 
             let operates =
-                stream
-                    .flat_map(|(t,_,x)| if let Operates(event) = x { Some((event, RootTimestamp::new(t), 1 as isize)) } else { None })
-                    .as_collection()
-                    .inspect(|x| println!("Operates: {:?}", x.0));
+            t_events
+                .filter(|x| x.1 == 0)
+                .flat_map(move |(ts, _worker, datum)| {
+                    let ts = Duration::from_secs(ts.as_secs() + 1);
+                    if let TimelyEvent::Operates(event) = datum {
+                        Some(((event.id, (event.addr, event.name)), RootTimestamp::new(ts), 1))
+                    }
+                    else { None }
+                })
+                .as_collection();
 
-            let operates_by_addr =
-                operates
-                    .map(|event| (event.addr, event.name));
+            let memory =
+            d_events
+                .flat_map(|(ts, _worker, datum)| {
+                    let ts = Duration::from_secs(ts.as_secs() + 1);
+                    match datum {
+                        DifferentialEvent::Batch(x) => {
+                            Some((x.operator, RootTimestamp::new(ts), x.length as isize))
+                        },
+                        DifferentialEvent::Merge(m) => {
+                            if let Some(complete) = m.complete {
+                                Some((m.operator, RootTimestamp::new(ts), (complete as isize) - (m.length1 + m.length2) as isize))
+                            }
+                            else { None }
+                        },
+                        _ => None,
+                    }
+                })
+                .as_collection()
+                .consolidate();
 
-            let operates_by_index =
-                operates
-                    .map(|event| (event.id, event.name));
+            operates
+                .inspect(|x| println!("OPERATES: {:?}", x))
+                .semijoin(&memory)
+                .inspect(|x| println!("{:?}", x));
 
-            let channels =
-                stream
-                    .flat_map(|(t,_,x)| if let Channels(event) = x { Some((event, RootTimestamp::new(t), 1 as isize)) } else { None })
-                    .as_collection()
-                    .map(|event| (event.id, (event.scope_addr, event.source, event.target)))
-                    .inspect(|x| println!("Channels: {:?}", x.0));
+        });
 
-            // let schedule =
-            //     stream
-            //         .flat_map(|(t,_,x)| if let Schedule(event) = x { Some((t, event)) } else { None })
-            //         .unary_frontier(Exchange::new(|x: &(u64, ScheduleEvent)| x.1.id as u64), "ScheduleFlattener", |cap, info| {
-
-            //             let mut state = Vec::new();
-
-            //             move |input, output| {
-
-            //                 input.for_each(|cap, data| {
-
-            //                     let mut session = output.session(&cap);
-
-            //                     data.sort_by(|x,y| x.0.cmp(&y.0));
-            //                     for (time, event) in data.drain(..) {
-
-            //                         while state.len() <= event.id { state.push(None); }
-
-            //                         match event.start_stop {
-            //                             StartStop::Start => {
-            //                                 assert!(state[event.id].is_none());
-            //                                 state[event.id] = Some(time);
-            //                             },
-            //                             StartStop::Stop { activity: _ } => {
-            //                                 assert!(state[event.id].is_some());
-            //                                 let start = state[event.id].take().unwrap();
-            //                                 let stop = time;
-            //                                 session.give((event.id, RootTimestamp::new(u64::max_value()), (stop - start) as isize));
-            //                             },
-            //                         }
-            //                     }
-            //                 });
-
-            //             }
-            //         })
-            //         .as_collection()
-            //         .consolidate();
-
-            // operates_by_index
-            //     .semijoin(&schedule)
-            //     .inspect(|x| println!("Schedule: {:?} for {:?}ns", x.0, x.2));
-
-            let messages =
-                stream
-                    .flat_map(|(t,_,x)| if let Messages(event) = x { Some((event, RootTimestamp::new(t), 1)) } else { None })
-                    .map(|(event, _time, _)| (event.channel, _time, event.length as isize))
-                    .as_collection();
-
-            let channels =
-                channels
-                    .map(|(id, (addr, src, tgt))| {
-                        let mut src_addr = addr.clone();
-                        src_addr.push(src.0);
-                        let mut tgt_addr = addr.clone();
-                        tgt_addr.push(tgt.0);
-                        (id, ((src_addr, src.1), (tgt_addr, tgt.1)))
-                    })
-                    .map(|(id, ((src_id, src_port), target))| (src_id, (id, src_port, target)))
-                    .join_map(&operates_by_addr, |source_id, &(id, src_port, ref target), src_name| (target.0.clone(), (id, src_port, target.1, src_name.clone())))
-                    .join_map(&operates_by_addr, |target_id, &(id, src_port, tgt_port, ref src_name), tgt_name| (id, (src_name.clone(), tgt_name.clone())));
-
-            channels
-                .semijoin(&messages)
-                .consolidate()
-                .inspect(|x| println!("messages:\t({:?} -> {:?}):\t{:?}", ((x.0).1).0, ((x.0).1).1, x.2));
-        })
     }).unwrap(); // asserts error-free execution
 }

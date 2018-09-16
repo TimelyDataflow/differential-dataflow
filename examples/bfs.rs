@@ -11,6 +11,7 @@ use differential_dataflow::input::Input;
 use differential_dataflow::Collection;
 use differential_dataflow::operators::*;
 use differential_dataflow::lattice::Lattice;
+use differential_dataflow::logging::DifferentialEvent;
 
 type Node = u32;
 type Edge = (Node, Node);
@@ -25,6 +26,22 @@ fn main() {
 
     // define a new computational scope, in which to run BFS
     timely::execute_from_args(std::env::args(), move |worker| {
+
+        if let Ok(addr) = ::std::env::var("DIFFERENTIAL_LOG_ADDR") {
+
+            eprintln!("enabled DIFFERENTIAL logging to {}", addr);
+
+            if let Ok(stream) = ::std::net::TcpStream::connect(&addr) {
+                let writer = ::timely::dataflow::operators::capture::EventWriter::new(stream);
+                let mut logger = ::timely::logging::BatchLogger::new(writer);
+                worker.log_register().insert::<DifferentialEvent,_>("differential/arrange", move |time, data|
+                    logger.publish_batch(time, data)
+                );
+            }
+            else {
+                panic!("Could not connect to differential log address: {:?}", addr);
+            }
+        }
 
         let timer = ::std::time::Instant::now();
 

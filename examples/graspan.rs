@@ -10,10 +10,11 @@ use indexmap::IndexMap;
 use timely::communication::Allocate;
 
 use timely::dataflow::Scope;
-use timely::dataflow::scopes::{ScopeParent, Root, Child};
+use timely::dataflow::scopes::{ScopeParent, Child};
 use timely::progress::timestamp::RootTimestamp;
 use timely::progress::nested::product::Product;
 use timely::progress::Timestamp;
+use timely::worker::Worker;
 
 use differential_dataflow::Collection;
 use differential_dataflow::lattice::Lattice;
@@ -88,7 +89,7 @@ type Arrange<G, K, V, R> = Arranged<G, K, V, R, TraceValHandle<K, V, <G as Scope
 /// An edge variable provides arranged representations of its contents, even before they are
 /// completely defined, in support of recursively defined productions.
 pub struct EdgeVariable<'a, G: Scope> where G::Timestamp : Lattice {
-    variable: Variable<'a, G, Edge, isize>,
+    variable: Variable<'a, G, Edge, u64, isize>,
     current: Collection<Child<'a, G, u64>, Edge, isize>,
     forward: Option<Arrange<Child<'a, G, u64>, Node, Node, isize>>,
     reverse: Option<Arrange<Child<'a, G, u64>, Node, Node, isize>>,
@@ -97,7 +98,7 @@ pub struct EdgeVariable<'a, G: Scope> where G::Timestamp : Lattice {
 impl<'a, G: Scope> EdgeVariable<'a, G> where G::Timestamp : Lattice {
     /// Creates a new variable initialized with `source`.
     pub fn from(source: &Collection<Child<'a, G, u64>, Edge>) -> Self {
-        let variable = Variable::from(source.filter(|_| false));
+        let variable = Variable::new_from(source.filter(|_| false), u64::max_value(), 1);
         EdgeVariable {
             variable: variable,
             current: source.clone(),
@@ -157,7 +158,7 @@ impl Query {
     }
 
     /// Creates a dataflow implementing the query, and returns input and trace handles.
-    pub fn render_in<'a, A, T>(&self, scope: &mut Child<'a, Root<A>, T>) -> IndexMap<String, RelationHandles<T>>
+    pub fn render_in<'a, A, T>(&self, scope: &mut Child<'a, Worker<A>, T>) -> IndexMap<String, RelationHandles<T>>
     where A: Allocate, T: Timestamp+Lattice {
 
         // Create new input (handle, stream) pairs

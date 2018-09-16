@@ -216,7 +216,7 @@ pub trait JoinCore<G: Scope, K: 'static, V: 'static, R: Diff> where G::Timestamp
     /// extern crate differential_dataflow;
     ///
     /// use differential_dataflow::input::Input;
-    /// use differential_dataflow::operators::arrange::Arrange;
+    /// use differential_dataflow::operators::arrange::ArrangeByKey;
     /// use differential_dataflow::operators::join::JoinCore;
     /// use differential_dataflow::trace::Trace;
     /// use differential_dataflow::trace::implementations::ord::OrdValSpine;
@@ -226,11 +226,9 @@ pub trait JoinCore<G: Scope, K: 'static, V: 'static, R: Diff> where G::Timestamp
     ///     ::timely::example(|scope| {
     ///
     ///         let x = scope.new_collection_from(vec![(0u32, 1), (1, 3)]).1
-    ///                      .map(|(x,y)| (OrdWrapper { item: x }, y))
-    ///                      .arrange(OrdValSpine::new());
+    ///                      .arrange_by_key();
     ///         let y = scope.new_collection_from(vec![(0, 'a'), (1, 'b')]).1
-    ///                      .map(|(x,y)| (OrdWrapper { item: x }, y))
-    ///                      .arrange(OrdValSpine::new());
+    ///                      .arrange_by_key();
     ///
     ///         let z = scope.new_collection_from(vec![(1, 'a'), (3, 'b')]).1;
     ///
@@ -442,12 +440,12 @@ where
     fn new(trace: C1, trace_storage: C1::Storage, batch: C2, batch_storage: C2::Storage, capability: Capability<T>, mult: M) -> Self {
         Deferred {
             phant: ::std::marker::PhantomData,
-            trace: trace,
-            trace_storage: trace_storage,
-            batch: batch,
-            batch_storage: batch_storage,
-            capability: capability,
-            mult: mult,
+            trace,
+            trace_storage,
+            batch,
+            batch_storage,
+            capability,
+            mult,
             done: false,
             temp: Vec::new(),
             // thinker: JoinThinker::new(),

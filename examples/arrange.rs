@@ -8,20 +8,11 @@ use rand::{Rng, SeedableRng, StdRng};
 
 use differential_dataflow::input::Input;
 use differential_dataflow::AsCollection;
-use differential_dataflow::operators::arrange::{Arrange, ArrangeByKey};
+use differential_dataflow::operators::arrange::ArrangeByKey;
 use differential_dataflow::operators::group::Group;
 use differential_dataflow::operators::join::JoinCore;
 use differential_dataflow::operators::Iterate;
 use differential_dataflow::operators::Consolidate;
-
-use differential_dataflow::trace::Trace;
-use differential_dataflow::trace::implementations::ord::OrdValSpineAbom;
-
-// use differential_dataflow::trace::implementations::ord::OrdValSpine;
-// use differential_dataflow::trace::{Cursor, Trace};
-// use differential_dataflow::trace::Batch;
-// use differential_dataflow::hashable::OrdWrapper;
-// use differential_dataflow::trace::TraceReader;
 
 fn main() {
 
@@ -32,7 +23,7 @@ fn main() {
     let inspect: bool = std::env::args().nth(5).unwrap() == "inspect";
 
 
-    // define a new timely dataflow computation. 
+    // define a new timely dataflow computation.
     timely::execute_from_args(std::env::args().skip(6), move |worker| {
 
         let timer = ::std::time::Instant::now();
@@ -99,8 +90,8 @@ fn main() {
             })
             .probe_with(&mut probe)
             .as_collection()
-            // .arrange_by_key()
-            .arrange(OrdValSpineAbom::new())
+            .arrange_by_key()
+            // .arrange::<OrdValSpineAbom>()
             .trace
         });
 

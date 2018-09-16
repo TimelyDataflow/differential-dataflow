@@ -7,11 +7,9 @@ use timely::dataflow::operators::capture::Extract;
 use timely::progress::timestamp::RootTimestamp;
 use timely::progress::nested::product::Product;
 use differential_dataflow::collection::AsCollection;
-use differential_dataflow::operators::arrange::{ArrangeByKey, Arrange};
-use differential_dataflow::operators::group::GroupArranged;
-use differential_dataflow::trace::implementations::ord::OrdValSpine;
-use differential_dataflow::trace::{Trace, TraceReader};
-// use differential_dataflow::hashable::{OrdWrapper, UnsignedWrapper};
+use differential_dataflow::operators::arrange::ArrangeByKey;
+use differential_dataflow::operators::group::Group;
+use differential_dataflow::trace::TraceReader;
 use itertools::Itertools;
 
 type Result = std::sync::mpsc::Receiver<timely::dataflow::operators::capture::Event<timely::progress::nested::product::Product<timely::progress::timestamp::RootTimestamp, usize>, ((u64, i64), timely::progress::nested::product::Product<timely::progress::timestamp::RootTimestamp, usize>, i64)>>;
@@ -30,12 +28,12 @@ fn run_test<T>(test: T, expected: Vec<(Product<RootTimestamp, usize>, Vec<((u64,
     let captured = (test)(input_epochs);
     let mut results = captured.extract().into_iter().flat_map(|(_, data)| data).collect::<Vec<_>>();
     results.sort_by_key(|&(_, t, _)| t);
-    let out = 
+    let out =
     results
         .into_iter()
         .group_by(|&(_, t, _)| t)
         .into_iter()
-        .map(|(t, vals)| { 
+        .map(|(t, vals)| {
             let mut vec = vals.map(|(v, _, w)| (v, w)).collect::<Vec<_>>();
             vec.sort();
             (t, vec)
@@ -61,13 +59,14 @@ fn test_import() {
             let (captured,) = worker.dataflow(move |scope| {
                 let imported = trace.import(scope);
                 ::std::mem::drop(trace);
-                let captured = imported.group_arranged::<_, i64, _, _>(|_k, s, t| t.push((s.iter().map(|&(_, w)| w).sum(), 1i64)), OrdValSpine::new())
-                      .as_collection(|k: &u64, c: &i64| (k.clone(), *c))
-                      .inner.exchange(|_| 0)
-                      .capture();
+                let captured =
+                imported
+                    .group(|_k, s, t| t.push((s.iter().map(|&(_, w)| w).sum(), 1i64)))
+                    .inner
+                    .exchange(|_| 0)
+                    .capture();
                 (captured,)
             });
-
 
             for (t, changes) in input_epochs.into_iter().enumerate() {
                 if t != input.time().inner {
@@ -130,15 +129,15 @@ fn test_import_completed_dataflow() {
             let (_probe2, captured,) = worker.dataflow(move |scope| {
                 let imported = trace.import(scope);
                 ::std::mem::drop(trace);
-                let stream = imported.group_arranged::<_, i64, _, _>(|_k, s, t| t.push((s.iter().map(|&(_, w)| w).sum(), 1i64)), OrdValSpine::new())
-                      .as_collection(|k: &u64, c: &i64| (k.clone(), *c))
-                      .inner.exchange(|_| 0);
+                let stream =
+                imported
+                    .group(|_k, s, t| t.push((s.iter().map(|&(_, w)| w).sum(), 1i64)))
+                    .inner
+                    .exchange(|_| 0);
                 let probe = stream.probe();
                 let captured = stream.capture();
                 (probe, captured,)
             });
-
-            // println!("probe2: {}", probe2.with_frontier(|f| format!("{:?}", f)));
 
             captured
         }).unwrap().join().into_iter().map(|x| x.unwrap()).next().unwrap()
@@ -170,7 +169,7 @@ fn import_skewed() {
             let (mut input, mut trace) = worker.dataflow(|scope| {
                 let (input, edges) = scope.new_input();
                 let arranged = edges.as_collection()
-                                    .arrange(OrdValSpine::new());
+                                    .arrange_by_key();
                 (input, arranged.trace.clone())
             });
 
@@ -191,8 +190,8 @@ fn import_skewed() {
             captured
         }).unwrap().join().into_iter().map(|x| x.unwrap()).next().unwrap();
 
-        // Worker `index` sent `index` at time `index`, but advanced its handle to `peers - index`. 
-        // As its data should be shuffled back to it (we used an UnsignedWrapper) this means that 
+        // Worker `index` sent `index` at time `index`, but advanced its handle to `peers - index`.
+        // As its data should be shuffled back to it (we used an UnsignedWrapper) this means that
         // `index` should be present at time `max(index, peers-index)`.
 
         captured
