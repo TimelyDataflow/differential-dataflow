@@ -24,7 +24,7 @@ graph_map = { git = "https://github.com/frankmcsherry/graph-map.git" }
 abomonation = { git = "https://github.com/frankmcsherry/abomonation" }
 abomonation_derive = "0.3"
 timely_sort="0.1.6"
-timely = { git = "https://github.com/frankmcsherry/timely-dataflow", branch = "logging_revamp" }
+timely = { git = "https://github.com/frankmcsherry/timely-dataflow" }
 fnv="1.0.2"
 
 [profile.release]
