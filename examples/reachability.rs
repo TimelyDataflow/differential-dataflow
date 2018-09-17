@@ -88,10 +88,7 @@ fn main() {
             worker.step_while(|| probe.less_than(graph.time()));
 
             if worker.index() == 0 {
-                let elapsed = timer.elapsed();
-                let nanos = elapsed.as_secs() * 1_000_000_000 + elapsed.subsec_nanos() as u64;
-                // println!("wave {}: avg {:?}", wave, nanos / (batch as u32));
-                println!("{}", (nanos as f64) / 1000000000.0f64);
+                println!("{:?}", timer.elapsed());
             }
         }
     }).unwrap();
