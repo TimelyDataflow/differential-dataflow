@@ -17,11 +17,14 @@ use differential_dataflow::operators::arrange::ArrangeByKey;
 use differential_dataflow::trace::implementations::ord::OrdValSpine as DefaultValTrace;
 use differential_dataflow::operators::arrange::TraceAgent;
 use differential_dataflow::operators::arrange::Arranged;
+use differential_dataflow::operators::iterate::Variable;
 
 type Arrange<G, K, V, R> = Arranged<G, K, V, R, TraceAgent<K, V, <G as ScopeParent>::Timestamp, R, DefaultValTrace<K, V, <G as ScopeParent>::Timestamp, R>>>;
 
 type Node = u32;
 type Edge = (Node, Node);
+type Iter = u32;
+type Diff = i32;
 
 fn main() {
 
@@ -44,7 +47,7 @@ fn main() {
 
             match program.as_str() {
                 "tc"    => tc(&graph).filter(move |_| inspect).map(|_| ()).consolidate().inspect(|x| println!("tc count: {:?}", x)).probe(),
-                "sc"    => _strongly_connected(&graph.as_collection(|k,v| (*k,*v))).filter(move |_| inspect).map(|_| ()).consolidate().inspect(|x| println!("tc count: {:?}", x)).probe(),
+                // "sc"    => _strongly_connected(&graph.as_collection(|k,v| (*k,*v))).filter(move |_| inspect).map(|_| ()).consolidate().inspect(|x| println!("tc count: {:?}", x)).probe(),
                 "sg"    => sg(&graph).filter(move |_| inspect).map(|_| ()).consolidate().inspect(|x| println!("sg count: {:?}", x)).probe(),
                 _       => panic!("must specify one of 'tc', 'sg'.")
             };
@@ -68,7 +71,7 @@ fn main() {
                 let dst: u32 = elts.next().unwrap().parse().ok().expect("malformed dst");
                 if nodes < src { nodes = src; }
                 if nodes < dst { nodes = dst; }
-                input.insert((src, dst));
+                input.update((src, dst), 1);
             }
         }
 
@@ -138,47 +141,49 @@ where G::Timestamp: Lattice+Ord+Hash {
 }
 
 // returns pairs (n, s) indicating node n can be reached from a root in s steps.
-fn tc<G: Scope<Timestamp=Product<RootTimestamp, ()>>>(edges: &Arrange<G, Node, Node, isize>) -> Collection<G, (Node, Node)> {
-
-    use timely::dataflow::operators::Inspect;
-    use timely::dataflow::operators::Accumulate;
+fn tc<G: Scope<Timestamp=Product<RootTimestamp, ()>>>(edges: &Arrange<G, Node, Node, Diff>) -> Collection<G, Edge, Diff> {
 
     // repeatedly update minimal distances each node can be reached from each root
-    edges
-        .as_collection(|&k,&v| (k,v))
-        .iterate(|inner| {
+    edges.stream.scope().scoped(|scope| {
 
-            inner.inner.count().inspect_batch(|t,xs| println!("{:?}\t{:?}", t, xs));
-
+            let inner = Variable::new(scope, Iter::max_value(), 1);
             let edges = edges.enter(&inner.scope());
 
+            let result =
             inner
                 .map(|(x,y)| (y,x))
                 .join_core(&edges, |_y,&x,&z| Some((x, z)))
                 .concat(&edges.as_collection(|&k,&v| (k,v)))
-                .distinct_total()
+                .threshold_total(|_| 1);
+
+            inner.set(&result);
+            result.leave()
         }
     )
 }
 
 
 // returns pairs (n, s) indicating node n can be reached from a root in s steps.
-fn sg<G: Scope<Timestamp=Product<RootTimestamp, ()>>>(edges: &Arrange<G, Node, Node, isize>) -> Collection<G, (Node, Node)> {
+fn sg<G: Scope<Timestamp=Product<RootTimestamp, ()>>>(edges: &Arrange<G, Node, Node, Diff>) -> Collection<G, Edge, Diff> {
 
     let peers = edges.join_core(&edges, |_,&x,&y| Some((x,y))).filter(|&(x,y)| x != y);
 
     // repeatedly update minimal distances each node can be reached from each root
-    peers
-        .iterate(|inner| {
+    peers.scope().scoped(|scope| {
 
+            let inner = Variable::new(scope, Iter::max_value(), 1);
             let edges = edges.enter(&inner.scope());
             let peers = peers.enter(&inner.scope());
 
+            let result =
             inner
                 .join_core(&edges, |_,&x,&z| Some((x, z)))
                 .join_core(&edges, |_,&x,&z| Some((x, z)))
                 .concat(&peers)
-                .distinct_total()
+                .threshold_total(|_| 1);
+
+            inner.set(&result);
+            result.leave()
         }
     )
 }
