@@ -15,7 +15,7 @@ use differential_dataflow::input::Input;
 use differential_dataflow::Collection;
 use differential_dataflow::operators::*;
 use differential_dataflow::trace::Trace;
-// use differential_dataflow::operators::arrange::ArrangeByKey;
+use differential_dataflow::operators::arrange::ArrangeByKey;
 use differential_dataflow::operators::arrange::ArrangeBySelf;
 // use differential_dataflow::operators::group::GroupArranged;
 use differential_dataflow::operators::arrange::Arrange;
@@ -53,7 +53,7 @@ fn main() {
 
         let (mut graph, mut trace) = worker.dataflow(|scope| {
             let (graph_input, graph) = scope.new_collection();
-            let graph_indexed = graph.arrange(GraphTrace::new());
+            let graph_indexed = graph.arrange_by_key();
             // let graph_indexed = graph.arrange_by_key();
             (graph_input, graph_indexed.trace)
         });

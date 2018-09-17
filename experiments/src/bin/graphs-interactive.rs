@@ -246,8 +246,8 @@ where G::Timestamp: Lattice+Ord {
         // is a corresponding destination or source that has not yet been reached.
 
         // forward and reverse (node, (root, dist))
-        let forward = Variable::from_args(bound, 1, goals.map(|(x,_)| (x,(x,0))).enter(inner));
-        let reverse = Variable::from_args(bound, 1, goals.map(|(_,y)| (y,(y,0))).enter(inner));
+        let forward = Variable::new_from(goals.map(|(x,_)| (x,(x,0))).enter(inner), bound, 1);
+        let reverse = Variable::new_from(goals.map(|(_,y)| (y,(y,0))).enter(inner), bound, 1);
 
         let goals = goals.enter(inner);
         let forward_graph = forward_graph.enter(inner);

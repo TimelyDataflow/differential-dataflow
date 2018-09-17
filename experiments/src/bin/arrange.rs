@@ -6,15 +6,15 @@ extern crate core_affinity;
 use rand::{Rng, SeedableRng, StdRng};
 
 use timely::dataflow::operators::{Exchange, Probe};
-use timely::progress::nested::product::Product;
-use timely::progress::timestamp::RootTimestamp;
+// use timely::progress::nested::product::Product;
+// use timely::progress::timestamp::RootTimestamp;
 
 use differential_dataflow::input::Input;
-use differential_dataflow::operators::arrange::Arrange;
-use differential_dataflow::operators::count::CountTotalCore;
+use differential_dataflow::operators::arrange::ArrangeBySelf;
+use differential_dataflow::operators::count::CountTotal;
 use differential_dataflow::operators::threshold::ThresholdTotal;
 
-use differential_dataflow::trace::implementations::ord::OrdKeySpine;
+// use differential_dataflow::trace::implementations::ord::OrdKeySpine;
 
 #[derive(Debug)]
 enum Comp {
@@ -61,10 +61,12 @@ fn main() {
             let probe = match comp {
                 Comp::Nothing => data.probe(),
                 Comp::Exchange => data.inner.exchange(|&(x,_,_): &((usize,()),_,_)| x.0 as u64).probe(),
-                Comp::Arrange => data.arrange(OrdKeySpine::<usize, Product<RootTimestamp,u64>,isize>::with_effort(work)).stream.probe(),
-                Comp::Count => data.arrange(OrdKeySpine::<usize, Product<RootTimestamp,u64>,isize>::with_effort(work)).count_total_core().probe(),
-                Comp::Distinct => data.arrange(OrdKeySpine::<usize, Product<RootTimestamp,u64>,isize>::with_effort(work)).distinct_total().probe(),
+                Comp::Arrange => data.arrange_by_self().stream.probe(),
+                Comp::Count => data.arrange_by_self().count_total().probe(),
+                Comp::Distinct => data.arrange_by_self().distinct_total().probe(),
             };
+
+            // OrdKeySpine::<usize, Product<RootTimestamp,u64>,isize>::with_effort(work)
 
             (handle, probe)
         });
