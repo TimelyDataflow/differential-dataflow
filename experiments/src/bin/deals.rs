@@ -37,6 +37,10 @@ fn main() {
 
         let peers = worker.peers();
         let index = worker.index();
+        let timer = Instant::now();
+
+        let core_ids = core_affinity::get_core_ids().unwrap();
+        core_affinity::set_for_current(core_ids[index % core_ids.len()]);
 
         let mut input = worker.dataflow::<(),_,_>(|scope| {
 
@@ -54,8 +58,6 @@ fn main() {
 
             input
         });
-
-        let timer = Instant::now();
 
         let mut nodes = 0;
 
