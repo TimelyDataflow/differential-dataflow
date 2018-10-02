@@ -50,7 +50,7 @@ where
         self.sorter.finish_into(&mut merged);
 
         let mut kept = Vec::new();
-        let mut keep = Vec::with_capacity(1024);
+        let mut keep = Vec::new();
 
         self.frontier.clear();
 
@@ -60,23 +60,40 @@ where
                 if upper.iter().any(|t| t.less_equal(&time)) {
                     // keep_count += 1;
                     self.frontier.insert(time.clone());
-                    keep.push(((key, val), time, diff));
                     if keep.len() == keep.capacity() {
-                        kept.push(keep);
-                        keep = self.sorter.empty();
+                        if keep.len() > 0 {
+                            kept.push(keep);
+                            keep = self.sorter.empty();
+                        }
                     }
+                    keep.push(((key, val), time, diff));
                 }
                 else {
                     // seal_count += 1;
                     builder.push((key, val, time, diff));
                 }
             }
+            // Recycling buffer.
+            self.sorter.push(&mut buffer);
         }
+
+        // Finish the kept data.
         if keep.len() > 0 {
             kept.push(keep);
         }
         if kept.len() > 0 {
             self.sorter.push_list(kept);
+        }
+
+        // Drain buffers (fast reclaimation).
+        // TODO : This isn't obviously the best policy, but "safe" wrt footprint.
+        //        In particular, if we are reading serialized input data, we may
+        //        prefer to keep these buffers around to re-fill, if possible.
+        let mut buffer = Vec::new();
+        self.sorter.push(&mut buffer);
+        while buffer.capacity() > 0 {
+            buffer = Vec::new();
+            self.sorter.push(&mut buffer);
         }
 
         let seal = builder.done(&self.lower[..], &upper[..], &self.lower[..]);
