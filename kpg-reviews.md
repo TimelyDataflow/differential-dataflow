@@ -69,7 +69,7 @@ Intro
 
 Section 2
 
-*"preclude cycles along with timestamps do not strictly increase" -- seems like a bit limitation for generality. It means essentially, no looping over the data (as is often needed for ML workloads for example). Is that what you are addressing with indexing from a generality perspective?
+* "preclude cycles along with timestamps do not strictly increase" -- seems like a bit limitation for generality. It means essentially, no looping over the data (as is often needed for ML workloads for example). Is that what you are addressing with indexing from a generality perspective?
 * Section 2.3: It's good to have this diffing section, but it was still too abstract for me. Maybe you could continue the example in Figure 1 and show how it would be executed with indexes vs. without?
 
 Sections 3 and 4
@@ -79,7 +79,7 @@ Sections 3 and 4
 
 Section 5
 
-*Why are there no evaluation results comparing Naiad (or other differential dataflow implementation without indexes) on realistic workloads? Are some of your configurations equivalent to differential dataflow w/o indexes? From what I understood, the value of indexes is only illustrated on microbenchmarks.
+* Why are there no evaluation results comparing Naiad (or other differential dataflow implementation without indexes) on realistic workloads? Are some of your configurations equivalent to differential dataflow w/o indexes? From what I understood, the value of indexes is only illustrated on microbenchmarks.
 * Figure 4: what's DBpaster (as used in label) vs. DBToaster (as used in caption)?
 * I appreciate the thoroughness of evaluating on multiple different application domains! It does give support to your "generality" claim. I would have liked to understand whether it is the indexes or the differential dataflow model, or a combination of the two that provide general support. My guess is that it's the latter, but I would have wanted to see that in the graph: no indexes in differential dataflow is worse than specialized systems, which are worse than differential dataflow with indexes.
 
@@ -161,7 +161,8 @@ K-Pg is a data-processing framework that is general, scalable and responsive. Al
 The paper is very abstract for the readers who are not familiar with differential dataflow. It would be better to use examples to show the design and implementation of operators.
 
 Is there any comparison between the K-Pg and previous implementation of differential dataflow? Since K-Pg is complete re-implementation of differential dataflow, it would be better to show the performance improvement over existing implementation.
-###Comments for author
+
+### Comments for author
 This paper is well motivated and organized. The system design and implementation are reasonable and quite different from the existing general framework of data processing systems. Despite the comments mentioned previously, here are a few more comments for the paper.
 
 The paper talks about the design and implementation of K-Pg. However, it does not explicitly discuss the exact improvement that can brought by K-Pg. Despite the reduced memory consumption(evaluated) and network communication (not evaluated), it is not clear how K-Pg can reduce the computation. One is that the other workflow does not need to re-arrange again i.e. reduce the computation. The other is by using batch, the operator programming interfaces are changed. And the computation will be performed in a batched way. Are these the computation improvements? What other kinds improvements can be gotten? Some discussions can help.
@@ -176,13 +177,15 @@ Last paragraph Section 5.5 refers Figure 1, but it should be Table 1.
 
 ## Review #86F
 
-Paper summary
+### Paper summary
 There are a variety of scalable data processing systems: databases, timely dataflow, graph processing. The paper introduces a core concept called an "arrangement" whach carries along a log-structured index of a node's output that's easily sharable by subsequent dataflow input nodes. Index data are reference with handles that signal when old index data (or entire indices) can be garbage collected because no subsequent graph nodes will later reference it.
 
 This new structure is sufficient to reconstruct instances of many different types of specialized systems, and produce competetive performance.
-Strengths
+
+### Strengths
 An ambitious Grand Unified Theory that seems to pull it off: it subsumes problems from a spectrum of other systems, and often performs better BECAUSE of its cleanliness.
-Areas for improvement
+
+### Areas for improvement
 The paper bites off such an enormous mouthful that nothing gets proper treatment. I wanted illustrations of all the the architectural ideas, and the evaluation elided way more than one would hope.
 This is is the sort of synthesis that organizes and advances the field; I'm not surprised it's difficult to exhaustively make the case in 12 pages! The writing is very tight; the problem isn't presentation as much as the page limit.
 
@@ -190,7 +193,7 @@ The evaluation punts away distributed execution, excused because the improved co
 
 The evaluation references published numbers for baselines, rather than comparing apples-to-apples; in some places, the evaluation only reports a qualitative result, not the actual data for the reader to compare.
 
-Comments for author
+### Comments for author
 I was REALLY excited about the promise of a grand unified theory. But I had a hard time understanding this paper, in part because of my inexpertise, and partly because there are a LOT of ideas crammed into the paper. The writing is good, but the writing task is very demanding. I'm also concerned the evaluation is a little too summarized.
 
 p2 "nothing prevents the sharing of state within a worker (even across
