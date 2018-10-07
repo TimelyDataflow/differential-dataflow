@@ -30,31 +30,29 @@ impl<K, V, T, R, C: Cursor<K, V, T, R>> CursorList<K, V, T, R, C> where K: Ord, 
     }
 
     // Initialize min_key with the indices of cursors with the minimum key.
+    //
+    // This method scans the current keys of each cursor, and tracks the indices
+    // of cursors whose key equals the minimum valid key seen so far. As it goes,
+    // if it observes an improved key it clears the current list, updates the
+    // minimum key, and continues.
+    //
+    // Once finished, it invokes `minimize_vals()` to ensure the value cursor is
+    // in a consistent state as well.
     fn minimize_keys(&mut self, storage: &[C::Storage]) {
 
         self.min_key.clear();
 
         // Determine the index of the cursor with minimum key.
-        let mut min_key_index: Option<usize> = None;
+        let mut min_key_opt: Option<&K> = None;
         for (index, cursor) in self.cursors.iter().enumerate() {
-            if cursor.key_valid(&storage[index]) {
-                if let Some(min_index) = min_key_index {
-                    if cursor.key(&storage[index]).lt(self.cursors[min_index].key(&storage[min_index])) {
-                        min_key_index = Some(index);
-                    }
+            let key = cursor.get_key(&storage[index]);
+            if key.is_some() {
+                if min_key_opt.is_none() || key.lt(&min_key_opt) {
+                    min_key_opt = key;
+                    self.min_key.clear();
                 }
-                else {
-                    min_key_index = Some(index);
-                }
-            }
-        }
-        // Install each index with equal key.
-        if let Some(min_index) = min_key_index {
-            for (index, cursor) in self.cursors.iter().enumerate() {
-                if cursor.key_valid(&storage[index]) {
-                    if cursor.key(&storage[index]).eq(self.cursors[min_index].key(&storage[min_index])) {
-                        self.min_key.push(index);
-                    }
+                if key.eq(&min_key_opt) {
+                    self.min_key.push(index);
                 }
             }
         }
@@ -63,31 +61,26 @@ impl<K, V, T, R, C: Cursor<K, V, T, R>> CursorList<K, V, T, R, C> where K: Ord, 
     }
 
     // Initialize min_val with the indices of minimum key cursors with the minimum value.
+    //
+    // This method scans the current values of cursor with minimum keys, and tracks the
+    // indices of cursors whose value equals the minimum valid value seen so far. As it
+    // goes, if it observes an improved value it clears the current list, updates the minimum
+    // value, and continues.
     fn minimize_vals(&mut self, storage: &[C::Storage]) {
 
         self.min_val.clear();
 
         // Determine the index of the cursor with minimum value.
-        let mut min_val_index: Option<usize> = None;
+        let mut min_val: Option<&V> = None;
         for &index in self.min_key.iter() {
-            if self.cursors[index].val_valid(&storage[index]) {
-                if let Some(min_index) = min_val_index {
-                    if self.cursors[index].val(&storage[index]).lt(self.cursors[min_index].val(&storage[min_index])) {
-                        min_val_index = Some(index);
-                    }
+            let val = self.cursors[index].get_val(&storage[index]);
+            if val.is_some() {
+                if min_val.is_none() || val.lt(&min_val) {
+                    min_val = val;
+                    self.min_val.clear();
                 }
-                else {
-                    min_val_index = Some(index);
-                }
-            }
-        }
-        // Install each index with equal value.
-        if let Some(min_index) = min_val_index {
-            for &index in self.min_key.iter() {
-                if self.cursors[index].val_valid(&storage[index]) {
-                    if self.cursors[index].val(&storage[index]).eq(self.cursors[min_index].val(&storage[min_index])) {
-                        self.min_val.push(index);
-                    }
+                if val.eq(&min_val) {
+                    self.min_val.push(index);
                 }
             }
         }
@@ -111,14 +104,14 @@ where
     #[inline(always)]
     fn key<'a>(&self, storage: &'a Self::Storage) -> &'a K {
         debug_assert!(self.key_valid(storage));
-        assert!(self.cursors[self.min_key[0]].key_valid(&storage[self.min_key[0]]));
+        debug_assert!(self.cursors[self.min_key[0]].key_valid(&storage[self.min_key[0]]));
         self.cursors[self.min_key[0]].key(&storage[self.min_key[0]])
     }
     #[inline(always)]
     fn val<'a>(&self, storage: &'a Self::Storage) -> &'a V {
         debug_assert!(self.key_valid(storage));
         debug_assert!(self.val_valid(storage));
-        assert!(self.cursors[self.min_val[0]].val_valid(&storage[self.min_val[0]]));
+        debug_assert!(self.cursors[self.min_val[0]].val_valid(&storage[self.min_val[0]]));
         self.cursors[self.min_val[0]].val(&storage[self.min_val[0]])
     }
     #[inline(always)]
