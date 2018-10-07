@@ -14,7 +14,7 @@
 //! all paths from the input to the output of the loop involve consolidation, or (iii) you should
 //! be worried that logically cancelable differences may circulate indefinitely.
 //!
-//! #Details
+//! # Details
 //!
 //! The `iterate` method is written using a `Variable`, which lets you define your own iterative
 //! computations when `iterate` itself is not sufficient. This can happen when you have two
@@ -47,6 +47,12 @@ use lattice::Lattice;
 /// An extension trait for the `iterate` method.
 pub trait Iterate<G: Scope, D: Data, R: Diff> {
     /// Iteratively apply `logic` to the source collection until convergence.
+    ///
+    /// Importantly, this method does not automatically consolidate results.
+    /// It may be important to conclude with `consolidate()` to ensure that
+    /// logically empty collections that contain cancelling records do not
+    /// result in non-termination. Operators like `group`, `distinct`, and
+    /// `count` also perform consolidation, and are safe to conclude with.
     ///
     /// # Examples
     ///
