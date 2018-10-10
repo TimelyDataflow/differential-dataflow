@@ -40,7 +40,7 @@ fn test_sizes(nodes: usize, edges: usize, rounds: usize, config: Configuration) 
 
     for round in 1 .. rounds {
         edge_list.push(((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), round, 1));
-        edge_list.push(((rng2.gen_range(0, nodes), rng2.gen_range(0, nodes)), round,-1));        
+        edge_list.push(((rng2.gen_range(0, nodes), rng2.gen_range(0, nodes)), round,-1));
     }
 
     let mut results1 = bfs_sequential(root_list.clone(), edge_list.clone());
@@ -53,12 +53,12 @@ fn test_sizes(nodes: usize, edges: usize, rounds: usize, config: Configuration) 
 
     if results1 != results2 {
         println!("RESULTS INEQUAL!!!");
-        for x in &results1 { 
+        for x in &results1 {
             if !results2.contains(x) {
                 println!("  in seq, not diff: {:?}", x);
             }
         }
-        for x in &results2 { 
+        for x in &results2 {
             if !results1.contains(x) {
                 println!("  in diff, not seq: {:?}", x);
             }
@@ -71,17 +71,17 @@ fn test_sizes(nodes: usize, edges: usize, rounds: usize, config: Configuration) 
 
 
 fn bfs_sequential(
-    root_list: Vec<(usize, usize, isize)>, 
-    edge_list: Vec<((usize, usize), usize, isize)>) 
+    root_list: Vec<(usize, usize, isize)>,
+    edge_list: Vec<((usize, usize), usize, isize)>)
 -> Vec<((usize, usize), usize, isize)> {
 
     let mut nodes = 0;
-    for &(root, _, _) in &root_list { 
-        nodes = ::std::cmp::max(nodes, root + 1); 
+    for &(root, _, _) in &root_list {
+        nodes = ::std::cmp::max(nodes, root + 1);
     }
-    for &((src,dst), _, _) in &edge_list { 
-        nodes = ::std::cmp::max(nodes, src + 1); 
-        nodes = ::std::cmp::max(nodes, dst + 1); 
+    for &((src,dst), _, _) in &edge_list {
+        nodes = ::std::cmp::max(nodes, src + 1);
+        nodes = ::std::cmp::max(nodes, dst + 1);
     }
 
     let mut rounds = 0;
@@ -108,7 +108,7 @@ fn bfs_sequential(
             if val > 0 { dists[key] = 0; }
         }
 
-        let mut changes = true; 
+        let mut changes = true;
         while changes {
             changes = false;
             for (&(src, dst), &cnt) in edges.iter() {
@@ -141,10 +141,10 @@ fn bfs_sequential(
 }
 
 fn bfs_differential(
-    roots_list: Vec<(usize, usize, isize)>, 
+    roots_list: Vec<(usize, usize, isize)>,
     edges_list: Vec<((usize, usize), usize, isize)>,
     config: Configuration,
-) 
+)
 -> Vec<((usize, usize), usize, isize)>
 {
 
@@ -152,7 +152,7 @@ fn bfs_differential(
     let send = Arc::new(Mutex::new(send));
 
     timely::execute(config, move |worker| {
-        
+
         let mut roots_list = roots_list.clone();
         let mut edges_list = edges_list.clone();
 
@@ -181,11 +181,11 @@ fn bfs_differential(
         while roots_list.len() > 0 || edges_list.len() > 0 {
 
             while roots_list.last().map(|x| x.1) == Some(round) {
-                let (node, _time, diff) = roots_list.pop().unwrap();                
+                let (node, _time, diff) = roots_list.pop().unwrap();
                 roots.update(node, diff);
             }
             while edges_list.last().map(|x| x.1) == Some(round) {
-                let ((src, dst), _time, diff) = edges_list.pop().unwrap();                
+                let ((src, dst), _time, diff) = edges_list.pop().unwrap();
                 edges.update((src, dst), diff);
             }
 
@@ -198,7 +198,7 @@ fn bfs_differential(
 
     recv.extract()
         .into_iter()
-        .flat_map(|(_, list)| list.into_iter().map(|((dst,cnt),time,diff)| ((dst,cnt), time.inner, diff)))
+        .flat_map(|(_, list)| list.into_iter().map(|((dst,cnt),time,diff)| ((dst,cnt), time, diff)))
         .collect()
 }
 

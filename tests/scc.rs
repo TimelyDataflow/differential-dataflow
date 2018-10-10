@@ -215,7 +215,7 @@ fn scc_differential(
 
     recv.extract()
         .into_iter()
-        .flat_map(|(_, list)| list.into_iter().map(|((src,dst),time,diff)| ((src,dst), time.inner, diff)))
+        .flat_map(|(_, list)| list.into_iter().map(|((src,dst),time,diff)| ((src,dst), time, diff)))
         .collect()
 }
 

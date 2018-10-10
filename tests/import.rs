@@ -4,17 +4,16 @@ extern crate differential_dataflow;
 
 use timely::dataflow::operators::*;
 use timely::dataflow::operators::capture::Extract;
-use timely::progress::timestamp::RootTimestamp;
-use timely::progress::nested::product::Product;
+
 use differential_dataflow::collection::AsCollection;
 use differential_dataflow::operators::arrange::ArrangeByKey;
 use differential_dataflow::operators::group::Group;
 use differential_dataflow::trace::TraceReader;
 use itertools::Itertools;
 
-type Result = std::sync::mpsc::Receiver<timely::dataflow::operators::capture::Event<timely::progress::nested::product::Product<timely::progress::timestamp::RootTimestamp, usize>, ((u64, i64), timely::progress::nested::product::Product<timely::progress::timestamp::RootTimestamp, usize>, i64)>>;
+type Result = std::sync::mpsc::Receiver<timely::dataflow::operators::capture::Event<usize, ((u64, i64), usize, i64)>>;
 
-fn run_test<T>(test: T, expected: Vec<(Product<RootTimestamp, usize>, Vec<((u64, i64), i64)>)>) -> ()
+fn run_test<T>(test: T, expected: Vec<(usize, Vec<((u64, i64), i64)>)>) -> ()
         where T: FnOnce(Vec<Vec<((u64, u64), i64)>>)-> Result + ::std::panic::UnwindSafe
 {
     let input_epochs: Vec<Vec<((u64, u64), i64)>> = vec![
@@ -69,7 +68,7 @@ fn test_import() {
             });
 
             for (t, changes) in input_epochs.into_iter().enumerate() {
-                if t != input.time().inner {
+                if &t != input.time() {
                     input.advance_to(t);
                 }
                 let &time = input.time();
@@ -82,17 +81,17 @@ fn test_import() {
             captured
         }).unwrap().join().into_iter().map(|x| x.unwrap()).next().unwrap()
     }, vec![
-        (RootTimestamp::new(0), vec![
+        (0, vec![
              ((1, 2), 1), ((2, 1), 1), ((4, 1), 1)]),
-        (RootTimestamp::new(1), vec![
+        (1, vec![
              ((1, 1), 1), ((1, 2), -1), ((2, 1), -1)]),
-        (RootTimestamp::new(2), vec![
+        (2, vec![
              ((1, 1), -1), ((2, 1), 1)]),
-        (RootTimestamp::new(3), vec![
+        (3, vec![
              ((1, 2), 1), ((2, 1), -1), ((4, 1), -1)]),
-        (RootTimestamp::new(4), vec![
+        (4, vec![
              ((1, 1), 1), ((1, 2), -1), ((2, 1), 1), ((4, 1), 1)]),
-        (RootTimestamp::new(5), vec![
+        (5, vec![
              ((1, 1), -1), ((1, 2), 1), ((4, 1), -1)]),
     ]);
 }
@@ -114,7 +113,7 @@ fn test_import_completed_dataflow() {
             });
 
             for (t, changes) in input_epochs.into_iter().enumerate() {
-                if t != input.time().inner {
+                if &t != input.time() {
                     input.advance_to(t);
                 }
                 let &time = input.time();
@@ -142,17 +141,17 @@ fn test_import_completed_dataflow() {
             captured
         }).unwrap().join().into_iter().map(|x| x.unwrap()).next().unwrap()
     }, vec![
-        (RootTimestamp::new(0), vec![
+        (0, vec![
              ((1, 2), 1), ((2, 1), 1), ((4, 1), 1)]),
-        (RootTimestamp::new(1), vec![
+        (1, vec![
              ((1, 1), 1), ((1, 2), -1), ((2, 1), -1)]),
-        (RootTimestamp::new(2), vec![
+        (2, vec![
              ((1, 1), -1), ((2, 1), 1)]),
-        (RootTimestamp::new(3), vec![
+        (3, vec![
              ((1, 2), 1), ((2, 1), -1), ((4, 1), -1)]),
-        (RootTimestamp::new(4), vec![
+        (4, vec![
              ((1, 1), 1), ((1, 2), -1), ((2, 1), 1), ((4, 1), 1)]),
-        (RootTimestamp::new(5), vec![
+        (5, vec![
              ((1, 1), -1), ((1, 2), 1), ((4, 1), -1)]),
     ]);
 }
@@ -173,10 +172,10 @@ fn import_skewed() {
                 (input, arranged.trace.clone())
             });
 
-            input.send(((index as u64, 1), RootTimestamp::new(index), 1));
+            input.send(((index as u64, 1), index, 1));
             input.close();
 
-            trace.advance_by(&[RootTimestamp::new(peers - index)]);
+            trace.advance_by(&[peers - index]);
 
             let (captured,) = worker.dataflow(move |scope| {
                 let imported = trace.import(scope);
@@ -196,8 +195,8 @@ fn import_skewed() {
 
         captured
     }, vec![
-        (RootTimestamp::new(2), vec![((2, 1), 1)]),
-        (RootTimestamp::new(3), vec![((1, 1), 1), ((3, 1), 1)]),
-        (RootTimestamp::new(4), vec![((0, 1), 1)]),
+        (2, vec![((2, 1), 1)]),
+        (3, vec![((1, 1), 1), ((3, 1), 1)]),
+        (4, vec![((0, 1), 1)]),
     ]);
 }
