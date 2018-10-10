@@ -31,7 +31,6 @@ use timely::dataflow::channels::pact::{Pipeline, Exchange};
 use timely::progress::Timestamp;
 use timely::progress::frontier::Antichain;
 use timely::dataflow::operators::Capability;
-use timely::dataflow::scopes::Child;
 
 use timely_sort::Unsigned;
 
@@ -382,6 +381,8 @@ where G::Timestamp: Lattice+Ord, T: TraceReader<K, V, G::Timestamp, R>+Clone {
     }
 }
 
+use ::timely::dataflow::scopes::child::Iterative;
+
 impl<G: Scope, K, V, R, T> Arranged<G, K, V, R, T> where G::Timestamp: Lattice+Ord, T: TraceReader<K, V, G::Timestamp, R>+Clone {
 
     /// Brings an arranged collection into a nested scope.
@@ -389,8 +390,8 @@ impl<G: Scope, K, V, R, T> Arranged<G, K, V, R, T> where G::Timestamp: Lattice+O
     /// This method produces a proxy trace handle that uses the same backing data, but acts as if the timestamps
     /// have all been extended with an additional coordinate with the default value. The resulting collection does
     /// not vary with the new timestamp coordinate.
-    pub fn enter<'a, TInner>(&self, child: &Child<'a, G, TInner>)
-        -> Arranged<Child<'a, G, TInner>, K, V, R, TraceEnter<K, V, G::Timestamp, R, T, TInner>>
+    pub fn enter<'a, TInner>(&self, child: &Iterative<'a, G, TInner>)
+        -> Arranged<Iterative<'a, G, TInner>, K, V, R, TraceEnter<K, V, G::Timestamp, R, T, TInner>>
         where
             T::Batch: Clone,
             K: 'static,

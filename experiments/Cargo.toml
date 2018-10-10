@@ -8,6 +8,7 @@ core_affinity = "0.5.9"
 rand="0.3.13"
 abomonation = "0.7"
 abomonation_derive = "0.3"
-timely = "0.7"
-differential-dataflow = "0.7"
+#timely = "0.7"
+timely = { git = "https://github.com/frankmcsherry/timely-dataflow", branch = "subscope_rework" }
+differential-dataflow = { path = "../" }
 graph_map = { git = "https://github.com/frankmcsherry/graph-map" }

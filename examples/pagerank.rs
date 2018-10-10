@@ -1,0 +1,126 @@
+extern crate timely;
+extern crate graph_map;
+extern crate differential_dataflow;
+
+use timely::dataflow::*;
+
+use differential_dataflow::Collection;
+use differential_dataflow::lattice::Lattice;
+use differential_dataflow::operators::*;
+use differential_dataflow::operators::iterate::Variable;
+use differential_dataflow::input::InputSession;
+
+use graph_map::GraphMMap;
+
+type Node = u32;
+type Edge = (Node, Node);
+
+fn main() {
+
+    // snag a filename to use for the input graph.
+    let filename = std::env::args().nth(1).unwrap();
+    let iterations: usize = std::env::args().nth(2).unwrap().parse().unwrap();
+    let inspect = std::env::args().nth(3) == Some("inspect".to_string());
+
+    timely::execute_from_args(std::env::args().skip(2), move |worker| {
+
+        let peers = worker.peers();
+        let index = worker.index();
+        let timer = worker.timer();
+
+        let mut input = InputSession::new();
+        let mut probe = ProbeHandle::new();
+
+        worker.dataflow::<usize,_,_>(|scope| {
+            let edges = input.to_collection(scope);
+            pagerank(iterations, &edges)
+                .filter(move |_| inspect)
+                .consolidate()
+                .inspect(|x| println!("{:?}", x))
+                .probe_with(&mut probe);
+        });
+
+        // // What you might do if you used GraphMMap:
+        let graph = GraphMMap::new(&filename);
+        let mut node = index;
+        while node < graph.nodes() {
+            for &edge in graph.edges(node) {
+                input.insert((node as u32, edge));
+            }
+            node += peers;
+        }
+
+        input.advance_to(1);
+        input.flush();
+        while probe.less_than(input.time()) {
+            worker.step();
+        }
+
+        println!("{:?}\tinitial compute complete", timer.elapsed());
+
+        for node in 1 .. graph.nodes() {
+            if node % peers == index {
+                if !graph.edges(node).is_empty() {
+                    input.remove((node as u32, graph.edges(node)[0]));
+                }
+            }
+            input.advance_to(node + 1);
+            input.flush();
+            while probe.less_than(input.time()) {
+                worker.step();
+            }
+            println!("{:?}\tround {} complete", timer.elapsed(), node);
+        }
+
+    }).unwrap();
+}
+
+// Returns a weighted collection in which the weight of each node is proportional
+// to its PageRank in the input graph `edges`.
+fn pagerank<G>(iters: usize, edges: &Collection<G, Edge>) -> Collection<G, Node>
+where
+    G: Scope,
+    G::Timestamp: Lattice,
+{
+    // initialize many surfers at each node.
+    let nodes =
+    edges.flat_map(|(x,y)| Some(x).into_iter().chain(Some(y)))
+         .distinct();
+
+    // snag out-degrees for each node.
+    let degrs = edges.map(|(src,_dst)| src)
+                     .count();
+
+    edges.scope().scoped("PageRank", |inner| {
+
+        // Bring various collections into the scope.
+        let edges = edges.enter(inner);
+        let nodes = nodes.enter(inner);
+        let degrs = degrs.enter(inner);
+
+        // Initial and reset numbers of surfers at each node.
+        let inits = nodes.explode(|node| Some((node, 6_000_000)));
+        let reset = nodes.explode(|node| Some((node, 1_000_000)));
+
+        // Define a recursive variable to track surfers.
+        // We start from `inits` and cycle only `iters`.
+        let ranks = Variable::new_from(inits, iters, 1);
+
+        // Match each surfer with the degree, scale numbers down.
+        let to_push =
+        degrs.semijoin(&ranks)
+             .threshold(|(_node, degr), rank| (5 * rank) / (6 * degr))
+             .map(|(node, _degr)| node);
+
+        // Propagate surfers along links, blend in reset surfers.
+        let pushed =
+        edges.semijoin(&to_push)
+             .map(|(_node, dest)| dest)
+             .concat(&reset)
+             .consolidate();
+
+        // Bind the recursive variable, return its limit.
+        ranks.set(&pushed);
+        pushed.leave()
+    })
+}

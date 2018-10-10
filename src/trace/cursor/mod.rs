@@ -7,10 +7,9 @@
 
 // pub mod cursor_list;
 pub mod cursor_pair;
-pub mod cursor_list_neu;
+pub mod cursor_list;
 
-pub use self::cursor_list_neu::CursorList;
-// pub use self::cursor_list::CursorList;
+pub use self::cursor_list::CursorList;
 
 /// A cursor for navigating ordered `(key, val, time, diff)` updates.
 pub trait Cursor<K, V, T, R> {

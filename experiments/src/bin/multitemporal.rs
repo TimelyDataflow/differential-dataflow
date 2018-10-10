@@ -9,7 +9,7 @@ extern crate differential_dataflow;
 use rand::{Rng, SeedableRng, StdRng};
 
 use timely::dataflow::ProbeHandle;
-use timely::progress::timestamp::RootTimestamp;
+// use timely::progress::timestamp::RootTimestamp;
 
 use timely::dataflow::operators::unordered_input::UnorderedInput;
 
@@ -53,9 +53,11 @@ fn main() {
                     .concat(&roots)
                     .distinct()
             })
+            .consolidate()
+            .inspect(|x| println!("edge: {:?}", x))
             .map(|_| ())
             .consolidate()
-            .inspect(|x| println!("{:?}\tchanges: {:?}", x.1, x.2))
+            // .inspect(|x| println!("{:?}\tchanges: {:?}", x.1, x.2))
             .probe_with(&mut probe);
 
             (root_input, root_cap, edge_input, edge_cap)
@@ -68,74 +70,87 @@ fn main() {
         let worker_edges = edges / peers + if index < edges % peers { 1 } else { 0 };
         let worker_batch = batch / peers + if index < batch % peers { 1 } else { 0 };
 
+        // Times: (revision, event_time)
+
         // load initial root.
         root_input
             .session(root_cap)
-            .give((0, RootTimestamp::new(Pair::new(0, 0)), 1));
+            .give((0, Pair::new(0, 0), 1));
 
         // load initial edges
         edge_input
             .session(edge_cap.clone())
             .give_iterator((0 .. worker_edges).map(|_|
                 ((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)),
-                    RootTimestamp::new(Pair::new(0, 0)), 1)
+                    Pair::new(0, 0), 1)
             ));
 
-        let edge_cap_next = edge_cap.delayed(&RootTimestamp::new(Pair::new(1, 0)));
+        let edge_cap_next = edge_cap.delayed(&Pair::new(1, 0));
 
-        edge_cap.downgrade(&RootTimestamp::new(Pair::new(0, 1)));
+        // Caps = { (1,0) , (0,1) }
+
+        edge_cap.downgrade(&Pair::new(0, 1));
         while probe.less_than(edge_cap.time()) {
             worker.step();
         }
+
+        println!("Initial computation complete");
 
         for round in 1 .. rounds {
 
             edge_input
                 .session(edge_cap.clone())
                 .give_iterator((0 .. worker_batch).flat_map(|_| {
-                    let insert = ((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), RootTimestamp::new(Pair::new(0, round)), 1);
-                    let remove = ((rng2.gen_range(0, nodes), rng2.gen_range(0, nodes)), RootTimestamp::new(Pair::new(0, round)),-1);
+                    let insert = ((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), Pair::new(0, round), 1);
+                    let remove = ((rng2.gen_range(0, nodes), rng2.gen_range(0, nodes)), Pair::new(0, round),-1);
                     Some(insert).into_iter().chain(Some(remove).into_iter())
                 }));
 
-            edge_cap.downgrade(&RootTimestamp::new(Pair::new(0, round+1)));
+            edge_cap.downgrade(&Pair::new(0, round+1));
             while probe.less_than(edge_cap.time()) {
                 worker.step();
             }
+
+            // Caps = { (1,0), (0,round+1) }
+            println!("Initial round {} complete", round);
         }
 
+        // Caps = { (1,0) }
         edge_cap = edge_cap_next;
 
         edge_input
             .session(edge_cap.clone())
             .give_iterator((0 .. worker_batch).map(|_| {
-                ((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), RootTimestamp::new(Pair::new(1, 0)), 1)
+                ((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), Pair::new(1, 0), 1)
             }));
 
-        edge_cap.downgrade(&RootTimestamp::new(Pair::new(2, 0)));
-        while probe.less_than(&RootTimestamp::new(Pair::new(1, rounds+1))) {
+        // Caps = { (2,0) }
+        edge_cap.downgrade(&Pair::new(2, 0));
+        while probe.less_than(&Pair::new(1, rounds+1)) {
             worker.step();
         }
 
         edge_input
             .session(edge_cap.clone())
             .give_iterator((0 .. worker_batch).map(|_| {
-                ((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), RootTimestamp::new(Pair::new(2, 3)), 1)
+                ((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), Pair::new(2, 3), 1)
             }));
 
-        edge_cap.downgrade(&RootTimestamp::new(Pair::new(3, 0)));
-        while probe.less_than(&RootTimestamp::new(Pair::new(2, rounds+1))) {
+        // Caps = { (3,0) }
+        edge_cap.downgrade(&Pair::new(3, 0));
+        while probe.less_than(&Pair::new(2, rounds+1)) {
             worker.step();
         }
 
         edge_input
             .session(edge_cap.clone())
             .give_iterator((0 .. worker_batch).map(|_| {
-                ((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), RootTimestamp::new(Pair::new(3, 1)), 1)
+                ((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), Pair::new(3, 1), 1)
             }));
 
-        edge_cap.downgrade(&RootTimestamp::new(Pair::new(4, 0)));
-        while probe.less_than(&RootTimestamp::new(Pair::new(3, rounds+1))) {
+        // Caps = { (4,0) }
+        edge_cap.downgrade(&Pair::new(4, 0));
+        while probe.less_than(&Pair::new(3, rounds+1)) {
             worker.step();
         }
 
@@ -170,6 +185,13 @@ mod pair {
         fn less_equal(&self, other: &Self) -> bool {
             self.first.less_equal(&other.first) && self.second.less_equal(&other.second)
         }
+    }
+
+    use timely::progress::timestamp::Refines;
+    impl<S: Timestamp, T: Timestamp> Refines<()> for Pair<S, T> {
+        fn to_inner(outer: ()) -> Self { Default::default() }
+        fn to_outer(self) -> () { () }
+        fn summarize(summary: <Self>::Summary) -> () { () }
     }
 
     // Implement timely dataflow's `PathSummary` trait.

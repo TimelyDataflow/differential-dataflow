@@ -37,7 +37,7 @@ use timely::progress::{Timestamp, PathSummary};
 use timely::progress::nested::product::Product;
 
 use timely::dataflow::*;
-use timely::dataflow::scopes::Child;
+use timely::dataflow::scopes::child::Iterative as Child;
 use timely::dataflow::operators::*;
 use timely::dataflow::operators::feedback::Handle;
 
@@ -85,7 +85,7 @@ impl<G: Scope, D: Ord+Data+Debug, R: Diff> Iterate<G, D, R> for Collection<G, D,
         where G::Timestamp: Lattice,
               for<'a> F: FnOnce(&Collection<Child<'a, G, u64>, D, R>)->Collection<Child<'a, G, u64>, D, R> {
 
-        self.inner.scope().scoped(|subgraph| {
+        self.inner.scope().scoped("Iterate", |subgraph| {
             // create a new variable, apply logic, bind variable, return.
             //
             // this could be much more succinct if we returned the collection

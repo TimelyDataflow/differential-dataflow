@@ -38,13 +38,10 @@
 //! into 'ordered builder'". Then the builder would be bright enough to emit a "batch" for the composite
 //! trace, rather than just a batch of the type merged.
 
-// pub mod spine;
 pub mod spine_fueled;
 
-// mod radix_batcher;
 mod merge_batcher;
 
-// pub use self::radix_batcher::RadixBatcher as Batcher;
 pub use self::merge_batcher::MergeBatcher as Batcher;
 
 pub mod ord;

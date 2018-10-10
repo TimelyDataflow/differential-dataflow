@@ -1,3 +1,6 @@
+#[macro_use]
+extern crate abomonation_derive;
+extern crate abomonation;
 extern crate timely;
 extern crate timely_sort;
 extern crate differential_dataflow;
@@ -24,6 +27,8 @@ use differential_dataflow::trace::{Cursor, TraceReader, BatchReader};
 use differential_dataflow::trace::implementations::spine_fueled::Spine;
 use differential_dataflow::trace::implementations::ord::{OrdValBatch, OrdKeyBatch};
 
+pub mod lexicographic;
+
 /// A type capable of extending a stream of prefixes.
 ///
 /**
@@ -49,12 +54,9 @@ pub trait PrefixExtender<G: Scope> {
 }
 
 // These are all defined here so that users can be assured a common layout.
-type TraceValBatch<K,V,T,R> = OrdValBatch<K, V, T, R>;
-type TraceValSpine<K,V,T,R> = Spine<K, V, T, R, Rc<TraceValBatch<K,V,T,R>>>;
+type TraceValSpine<K,V,T,R> = Spine<K, V, T, R, Rc<OrdValBatch<K,V,T,R>>>;
 type TraceValHandle<K,V,T,R> = TraceAgent<K, V, T, R, TraceValSpine<K,V,T,R>>;
-
-type TraceKeyBatch<K,T,R> = OrdKeyBatch<K, T, R>;
-type TraceKeySpine<K,T,R> = Spine<K, (), T, R, Rc<TraceKeyBatch<K,T,R>>>;
+type TraceKeySpine<K,T,R> = Spine<K, (), T, R, Rc<OrdKeyBatch<K,T,R>>>;
 type TraceKeyHandle<K,T,R> = TraceAgent<K, (), T, R, TraceKeySpine<K,T,R>>;
 
 
@@ -95,7 +97,7 @@ where
     V: Data+Hash,
     T: Lattice+Data+Timestamp,
 {
-    pub fn from<G: Scope<Timestamp=T>>(collection: &Collection<G, (K, V), isize>) -> Self {
+    pub fn index<G: Scope<Timestamp=T>>(collection: &Collection<G, (K, V), isize>) -> Self {
         let counts = collection.map(|(k,_v)| k).arrange_by_self().trace;
         let propose = collection.arrange_by_key().trace;
         let validate = collection.arrange_by_self().trace;
@@ -160,6 +162,7 @@ where
         let mut buffer1 = Vec::new();
         let mut buffer2 = Vec::new();
 
+        // TODO: This should be a custom operator with no connection from the second input to the output.
         prefixes.inner.binary_frontier(&counts.stream, exchange, Pipeline, "Count", move |_,_| move |input1, input2, output| {
 
             // drain the first input, stashing requests.

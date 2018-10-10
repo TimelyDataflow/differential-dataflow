@@ -118,7 +118,6 @@ fn main() {
     }).unwrap();
 }
 
-// use differential_dataflow::trace::implementations::ord::OrdValSpine;
 use differential_dataflow::operators::arrange::TraceAgent;
 
 type TraceHandle = TraceAgent<Node, Node, Product<RootTimestamp, ()>, Diff, GraphTrace>;
@@ -130,7 +129,6 @@ fn reach<G: Scope<Timestamp = Product<RootTimestamp, ()>>> (
 
     let graph = graph.import(&roots.scope());
 
-    // roots.iterate(|inner| {
     roots.scope().scoped(|scope| {
 
         let graph = graph.enter(scope);
@@ -171,16 +169,6 @@ fn bfs<G: Scope<Timestamp = Product<RootTimestamp, ()>>> (
         inner.set(&result);
         result.leave()
     })
-
-    // roots.iterate(|inner| {
-
-    //     let graph = graph.enter(&inner.scope());
-    //     let roots = roots.enter(&inner.scope());
-
-    //     graph.join_map(&inner, |_src,&dest,&dist| (dest, dist+1))
-    //          .concat(&roots)
-    //          .group(|_key, input, output| output.push((*input[0].0,1)))
-    // })
 }
 
 fn connected_components<G: Scope<Timestamp = Product<RootTimestamp, ()>>>(
@@ -197,22 +185,29 @@ fn connected_components<G: Scope<Timestamp = Product<RootTimestamp, ()>>>(
     let nodes_r = reverse.flat_map_ref(|k,v| if k < v { Some(*k) } else { None });
     let nodes = nodes_f.concat(&nodes_r).consolidate().map(|x| (x,x));
 
-    // don't actually use these labels, just grab the type
-    nodes.scope().scoped(|scope| {
+    scope.scoped(|scope| {
 
-        use differential_dataflow::operators::iterate::Variable;
-
+        // import arrangements, nodes.
         let forward = forward.enter(scope);
         let reverse = reverse.enter(scope);
-        let nodes = nodes.enter_at(scope, |r| 256 * (64 - r.1.leading_zeros() as Iter));
+        let nodes = nodes.enter(scope);
 
+        use differential_dataflow::operators::iterate::Variable;
         let inner = Variable::new(scope, Iter::max_value(), 1);
 
-        let f_prop = inner.join_core(&forward, |_k,l,d| Some((*d,*l)));
-        let r_prop = inner.join_core(&reverse, |_k,l,d| Some((*d,*l)));
+        let labels = inner.arrange_by_key();
+        let f_prop = labels.join_core(&forward, |_k,l,d| Some((*d,*l)));
+        let r_prop = labels.join_core(&reverse, |_k,l,d| Some((*d,*l)));
+
+        use timely::dataflow::operators::{Map, Concat, Delay};
 
         let result =
         nodes
+            .inner
+            .map_in_place(|dtr| (dtr.1).inner = 256 * ((((::std::mem::size_of::<Node>() * 8) as u32) - (dtr.0).1.leading_zeros())))
+            .concat(&inner.filter(|_| false).inner)
+            .delay(|dtr,_| dtr.1.clone())
+            .as_collection()
             .concat(&f_prop)
             .concat(&r_prop)
             .group(|_, s, t| { t.push((*s[0].0, 1)); });
@@ -220,20 +215,57 @@ fn connected_components<G: Scope<Timestamp = Product<RootTimestamp, ()>>>(
         inner.set(&result);
         result.leave()
     })
-        // .filter(|_| false)
-        // .iterate(|inner| {
-
-        //     let forward = forward.enter(&inner.scope());
-        //     let reverse = reverse.enter(&inner.scope());
-        //     let nodes = nodes.enter_at(&inner.scope(), |r| 256 * (64 - r.1.leading_zeros() as u64));
-
-        //     let inner = inner.arrange_by_key();
-
-        //     let f_prop = inner.join_core(&forward, |_k,l,d| Some((*d,*l)));
-        //     let r_prop = inner.join_core(&reverse, |_k,l,d| Some((*d,*l)));
-
-        //     nodes
-        //         .concat(&f_prop).concat(&r_prop)
-        //         .group(|_, s, t| { t.push((*s[0].0, 1)); })
-        // })
 }
+
+
+
+fn _connected_components_odd<G: Scope<Timestamp = Product<RootTimestamp, ()>>>(
+    scope: &mut G,
+    forward: &mut TraceHandle,
+    reverse: &mut TraceHandle,
+) -> Collection<G, (Node, Node), Diff> {
+
+    let forward = forward.import(scope);
+    let reverse = reverse.import(scope);
+
+    // each edge (x,y) means that we need at least a label for the min of x and y.
+    let nodes_f = forward.flat_map_ref(|k,v| if k < v { Some(*k) } else { None });
+    let nodes_r = reverse.flat_map_ref(|k,v| if k < v { Some(*k) } else { None });
+    let nodes = nodes_f.concat(&nodes_r).consolidate().map(|x| (x,x));
+
+    nodes.scope().scoped(|scope| {
+
+        // import arrangements, nodes.
+        let forward = forward.enter(scope);
+        let reverse = reverse.enter(scope);
+        let nodes = nodes.enter(scope);
+
+        use differential_dataflow::operators::iterate::Variable;
+        let inner = Variable::new(scope, Iter::max_value(), 1);
+
+        // let labels = inner.arrange_by_key();
+
+        use timely::dataflow::operators::{Map, Concat, Delay};
+
+        let proposals =
+        nodes
+            .inner
+            .map_in_place(|dtr| (dtr.1).inner = 256 * ((((::std::mem::size_of::<Node>() * 8) as u32) - (dtr.0).1.leading_zeros())))
+            .concat(&inner.inner)
+            .delay(|dtr,_| dtr.1.clone())
+            .as_collection();
+
+        use differential_dataflow::operators::group::GroupArranged;
+
+        let labels =
+        proposals
+            .group_arranged::<_,_,Spine<Node, Node, _, Diff, Rc<OrdValBatch<Node, Node, _, Diff>>>,_>(|_, s, t| { t.push((*s[0].0, 1)); });
+
+        let f_prop = labels.join_core(&forward, |_k,l,d| Some((*d,*l)));
+        let r_prop = labels.join_core(&reverse, |_k,l,d| Some((*d,*l)));
+
+        inner.set(&f_prop.concat(&r_prop).consolidate());
+        labels.as_collection(|k,v| (*k,*v)).leave()
+    })
+}
+

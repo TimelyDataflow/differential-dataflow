@@ -42,17 +42,17 @@ pub trait Join<G: Scope, K: Data, V: Data, R: Diff> {
     ///
     ///         let x = scope.new_collection_from(vec![(0, 1), (1, 3)]).1;
     ///         let y = scope.new_collection_from(vec![(0, 'a'), (1, 'b')]).1;
-    ///         let z = scope.new_collection_from(vec![(0, 1, 'a'), (1, 3, 'b')]).1;
+    ///         let z = scope.new_collection_from(vec![(0, (1, 'a')), (1, (3, 'b'))]).1;
     ///
     ///         x.join(&y)
     ///          .assert_eq(&z);
     ///     });
     /// }
     /// ```
-    fn join<V2: Data, R2: Diff>(&self, other: &Collection<G, (K,V2), R2>) -> Collection<G, (K,V,V2), <R as Mul<R2>>::Output>
+    fn join<V2: Data, R2: Diff>(&self, other: &Collection<G, (K,V2), R2>) -> Collection<G, (K,(V,V2)), <R as Mul<R2>>::Output>
     where R: Mul<R2>, <R as Mul<R2>>::Output: Diff
     {
-        self.join_map(other, |k,v,v2| (k.clone(),v.clone(),v2.clone()))
+        self.join_map(other, |k,v,v2| (k.clone(),(v.clone(),v2.clone())))
     }
 
     /// Matches pairs `(key,val1)` and `(key,val2)` based on `key` and then applies a function.

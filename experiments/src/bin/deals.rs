@@ -1,6 +1,7 @@
 extern crate rand;
 extern crate timely;
 extern crate differential_dataflow;
+extern crate core_affinity;
 
 use std::time::Instant;
 use std::mem;

@@ -38,7 +38,7 @@ fn main() {
         println!("loaded {} nodes, {} edges", nodes, edges.len());
 
         let index = worker.dataflow::<usize,_,_>(|scope| {
-            CollectionIndex::from(&Collection::new(edges.to_stream(scope)))
+            CollectionIndex::index(&Collection::new(edges.to_stream(scope)))
         });
 
         let mut index_xz = index.extend_using(|&(ref x, ref _y)| *x);

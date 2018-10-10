@@ -14,7 +14,7 @@ use std::ops::Mul;
 use timely::Data;
 use timely::progress::Timestamp;
 use timely::progress::nested::product::Product;
-use timely::dataflow::scopes::Child;
+use timely::dataflow::scopes::{Child, child::Iterative};
 use timely::dataflow::{Scope, Stream};
 use timely::dataflow::operators::*;
 
@@ -302,12 +302,15 @@ impl<G: Scope, D: Data, R: Diff> Collection<G, D, R> where G::Timestamp: Data {
     /// }
     /// ```
     pub fn enter<'a, T>(&self, child: &Child<'a, G, T>) -> Collection<Child<'a, G, T>, D, R>
-    where T: Timestamp {
+    where
+        T: Refines<<G as ScopeParent>::Timestamp>,
+    {
         self.inner
             .enter(child)
-            .map(|(data, time, diff)| (data, Product::new(time, Default::default()), diff))
+            .map(|(data, time, diff)| (data, T::to_inner(time), diff))
             .as_collection()
     }
+
     /// Brings a Collection into a nested scope, at varying times.
     ///
     /// The `initial` function indicates the time at which each element of the Collection should appear.
@@ -336,10 +339,12 @@ impl<G: Scope, D: Data, R: Diff> Collection<G, D, R> where G::Timestamp: Data {
     ///     });
     /// }
     /// ```
-    pub fn enter_at<'a, T, F>(&self, child: &Child<'a, G, T>, initial: F) -> Collection<Child<'a, G, T>, D, R>
-    where T: Timestamp,
-          F: Fn(&D) -> T + 'static,
-          G::Timestamp: Hash, T: Hash {
+    pub fn enter_at<'a, T, F>(&self, child: &Iterative<'a, G, T>, initial: F) -> Collection<Iterative<'a, G, T>, D, R>
+    where
+        T: Timestamp+Hash,
+        F: Fn(&D) -> T + 'static,
+        G::Timestamp: Hash,
+    {
 
         let initial1 = ::std::rc::Rc::new(initial);
         let initial2 = initial1.clone();
@@ -352,6 +357,7 @@ impl<G: Scope, D: Data, R: Diff> Collection<G, D, R> where G::Timestamp: Data {
             })
             .as_collection()
     }
+
     /// Delays each difference by a supplied function.
     ///
     /// It is assumed that `func` only advances timestamps; this is not verified, and things may go horribly
@@ -532,7 +538,13 @@ impl<G: Scope, D: Data, R: Diff> Collection<G, D, R> where G::Timestamp: Data {
     }
 }
 
-impl<'a, G: Scope, T: Timestamp, D: Data, R: Diff> Collection<Child<'a, G, T>, D, R> {
+use timely::dataflow::scopes::ScopeParent;
+use timely::progress::timestamp::Refines;
+
+impl<'a, G: Scope, T: Timestamp, D: Data, R: Diff> Collection<Child<'a, G, T>, D, R>
+where
+    T: Refines<<G as ScopeParent>::Timestamp>,
+{
     /// Returns the final value of a Collection from a nested scope to its containing scope.
     ///
     /// # Examples
@@ -562,7 +574,7 @@ impl<'a, G: Scope, T: Timestamp, D: Data, R: Diff> Collection<Child<'a, G, T>, D
     pub fn leave(&self) -> Collection<G, D, R> {
         self.inner
             .leave()
-            .map(|(data, time, diff)| (data, time.outer, diff))
+            .map(|(data, time, diff)| (data, time.to_outer(), diff))
             .as_collection()
     }
 }

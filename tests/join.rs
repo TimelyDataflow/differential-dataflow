@@ -28,7 +28,7 @@ fn join() {
 
     let extracted = data.extract();
     assert_eq!(extracted.len(), 1);
-    assert_eq!(extracted[0].1, vec![((0,0,'a'), Default::default(), 1), ((1,2,'B'), Default::default(), 1)]);
+    assert_eq!(extracted[0].1, vec![((0,(0,'a')), Default::default(), 1), ((1,(2,'B')), Default::default(), 1)]);
 
 }
 
