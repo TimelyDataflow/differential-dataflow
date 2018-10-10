@@ -6,16 +6,13 @@ use std::net::TcpListener;
 use std::time::Duration;
 
 use timely::dataflow::operators::{Map, Inspect};
-use timely::progress::nested::product::Product;
-use timely::progress::timestamp::RootTimestamp;
 use timely::logging::TimelyEvent;
 use timely::communication::logging::{CommunicationEvent, CommunicationSetup};
 use timely::dataflow::operators::Filter;
 use timely::dataflow::operators::capture::{EventReader, Replay};
 
 use differential_dataflow::AsCollection;
-use differential_dataflow::operators::{Consolidate, Join};
-// use differential_dataflow::logging::DifferentialEvent;
+use differential_dataflow::operators::Consolidate;
 
 fn main() {
 
@@ -56,7 +53,7 @@ fn main() {
             .enumerate()
             .filter(|(i, _)| *i % peers == index)
             .map(move |(_, s)| s.take().unwrap())
-            .map(|r| EventReader::<Product<RootTimestamp, Duration>, (Duration, usize, TimelyEvent),_>::new(r))
+            .map(|r| EventReader::<Duration, (Duration, usize, TimelyEvent),_>::new(r))
             .collect::<Vec<_>>();
 
         let d_streams =
@@ -67,7 +64,7 @@ fn main() {
             .enumerate()
             .filter(|(i, _)| *i % peers == index)
             .map(move |(_, s)| s.take().unwrap())
-            .map(|r| EventReader::<Product<RootTimestamp, Duration>, (Duration, CommunicationSetup, CommunicationEvent),_>::new(r))
+            .map(|r| EventReader::<Duration, (Duration, CommunicationSetup, CommunicationEvent),_>::new(r))
             .collect::<Vec<_>>();
 
         worker.dataflow::<_,_,_>(|scope| {
@@ -81,7 +78,7 @@ fn main() {
                 .flat_map(move |(ts, _worker, datum)| {
                     let ts = Duration::from_secs((ts.as_secs()/granularity + 1) * granularity);
                     if let TimelyEvent::Channels(event) = datum {
-                        Some((event, RootTimestamp::new(ts), 1))
+                        Some((event, ts, 1))
                     }
                     else { None }
                 })
@@ -96,7 +93,7 @@ fn main() {
                 .flat_map(move |(ts, _worker, datum)| {
                     let ts = Duration::from_secs((ts.as_secs()/granularity + 1) * granularity);
                     if let TimelyEvent::CommChannels(event) = datum {
-                        Some((event, RootTimestamp::new(ts), 1))
+                        Some((event, ts, 1))
                     }
                     else { None }
                 })
@@ -111,7 +108,7 @@ fn main() {
                 .flat_map(move |(ts, _worker, datum)| {
                     let ts = Duration::from_secs((ts.as_secs()/granularity + 1) * granularity);
                     if let CommunicationEvent::Message(x) = datum {
-                        Some((x.header.channel, RootTimestamp::new(ts), x.header.length as isize))
+                        Some((x.header.channel, ts, x.header.length as isize))
                     }
                     else { None }
                 })

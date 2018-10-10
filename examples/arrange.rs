@@ -2,9 +2,10 @@ extern crate rand;
 extern crate timely;
 extern crate differential_dataflow;
 
-use timely::dataflow::operators::*;
-
 use rand::{Rng, SeedableRng, StdRng};
+
+use timely::dataflow::operators::*;
+use timely::progress::nested::product::Product;
 
 use differential_dataflow::input::Input;
 use differential_dataflow::AsCollection;
@@ -34,7 +35,7 @@ fn main() {
         let mut probe = timely::dataflow::operators::probe::Handle::new();
 
         // create a dataflow managing an ever-changing edge collection.
-    	let mut graph = worker.dataflow(|scope| {
+    	let mut graph = worker.dataflow::<Product<(),usize>,_,_>(|scope| {
 
             // create a source operator which will produce random edges and delete them.
             timely::dataflow::operators::generic::source(scope, "RandomGraph", |mut capability| {
@@ -165,8 +166,8 @@ fn main() {
 
                 time.inner += batch;
 
-                roots.advance_to(time.inner); roots.flush();
-                query.advance_to(time.inner); query.flush();
+                roots.advance_to(time); roots.flush();
+                query.advance_to(time); query.flush();
 
                 if index == 0 {
                     query.remove(round % nodes);

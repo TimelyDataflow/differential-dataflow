@@ -120,7 +120,7 @@ fn main() {
                     let elapsed_ns = elapsed.as_secs() * 1_000_000_000 + (elapsed.subsec_nanos() as u64);
 
                     // Determine completed ns.
-                    let acknowledged_ns: u64 = probe.with_frontier(|frontier| frontier[0].inner);
+                    let acknowledged_ns: u64 = probe.with_frontier(|frontier| frontier[0]);
 
                     // any un-recorded measurements that are complete should be recorded.
                     while ((ack_counter * ns_per_request) as u64) < acknowledged_ns {

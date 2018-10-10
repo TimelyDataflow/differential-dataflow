@@ -100,7 +100,7 @@ fn main() {
 fn bidijkstra<G: Scope>(edges: &Collection<G, Edge>, goals: &Collection<G, (Node, Node)>) -> Collection<G, ((Node, Node), u32)>
 where G::Timestamp: Lattice+Ord {
 
-    edges.scope().scoped::<u64,_,_>(|inner| {
+    edges.scope().iterative::<u64,_,_>(|inner| {
 
         // Our plan is to start evolving distances from both sources and destinations.
         // The evolution from a source or destination should continue as long as there

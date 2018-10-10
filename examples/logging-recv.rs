@@ -7,7 +7,6 @@ use std::time::Duration;
 
 use timely::dataflow::operators::Map;
 use timely::progress::nested::product::Product;
-use timely::progress::timestamp::RootTimestamp;
 use timely::logging::TimelyEvent;
 use timely::dataflow::operators::Filter;
 use timely::dataflow::operators::capture::{EventReader, Replay};
@@ -50,7 +49,7 @@ fn main() {
             .enumerate()
             .filter(|(i, _)| *i % peers == index)
             .map(move |(_, s)| s.take().unwrap())
-            .map(|r| EventReader::<Product<RootTimestamp, Duration>, (Duration, usize, TimelyEvent),_>::new(r))
+            .map(|r| EventReader::<Duration, (Duration, usize, TimelyEvent),_>::new(r))
             .collect::<Vec<_>>();
 
         let d_streams =
@@ -61,7 +60,7 @@ fn main() {
             .enumerate()
             .filter(|(i, _)| *i % peers == index)
             .map(move |(_, s)| s.take().unwrap())
-            .map(|r| EventReader::<Product<RootTimestamp, Duration>, (Duration, usize, DifferentialEvent),_>::new(r))
+            .map(|r| EventReader::<Duration, (Duration, usize, DifferentialEvent),_>::new(r))
             .collect::<Vec<_>>();
 
         worker.dataflow::<_,_,_>(|scope| {
@@ -75,7 +74,7 @@ fn main() {
                 .flat_map(move |(ts, _worker, datum)| {
                     let ts = Duration::from_secs(ts.as_secs() + 1);
                     if let TimelyEvent::Operates(event) = datum {
-                        Some(((event.id, (event.addr, event.name)), RootTimestamp::new(ts), 1))
+                        Some(((event.id, (event.addr, event.name)), ts, 1))
                     }
                     else { None }
                 })
@@ -87,11 +86,11 @@ fn main() {
                     let ts = Duration::from_secs(ts.as_secs() + 1);
                     match datum {
                         DifferentialEvent::Batch(x) => {
-                            Some((x.operator, RootTimestamp::new(ts), x.length as isize))
+                            Some((x.operator, ts, x.length as isize))
                         },
                         DifferentialEvent::Merge(m) => {
                             if let Some(complete) = m.complete {
-                                Some((m.operator, RootTimestamp::new(ts), (complete as isize) - (m.length1 + m.length2) as isize))
+                                Some((m.operator, ts, (complete as isize) - (m.length1 + m.length2) as isize))
                             }
                             else { None }
                         },

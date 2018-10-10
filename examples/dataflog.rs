@@ -3,7 +3,7 @@ extern crate differential_dataflow;
 
 use timely::progress::nested::product::Product;
 use timely::dataflow::*;
-use timely::dataflow::scopes::Child;
+use timely::dataflow::scopes::child::Iterative as  Child;
 use timely::dataflow::operators::*;
 use timely::dataflow::operators::feedback::Handle;
 
@@ -74,7 +74,7 @@ fn main() {
             let (_uin, u) = outer.new_collection::<(u32,u32,u32),isize>();
 
             // construct iterative derivation scope
-            let (_p, _q) = outer.scoped::<u64,_,_>(|inner| {
+            let (_p, _q) = outer.iterative::<u64,_,_>(|inner| {
 
                 // create new variables
                 let mut p = Variable::from(&p.enter(inner));

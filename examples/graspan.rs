@@ -7,14 +7,10 @@ use std::fs::File;
 
 use indexmap::IndexMap;
 
-use timely::communication::Allocate;
-
 use timely::dataflow::Scope;
-use timely::dataflow::scopes::{ScopeParent, Child};
-use timely::progress::timestamp::RootTimestamp;
-use timely::progress::nested::product::Product;
+use timely::dataflow::scopes::ScopeParent;
+use timely::dataflow::scopes::child::Iterative;
 use timely::progress::Timestamp;
-use timely::worker::Worker;
 
 use differential_dataflow::Collection;
 use differential_dataflow::lattice::Lattice;
@@ -90,14 +86,14 @@ type Arrange<G, K, V, R> = Arranged<G, K, V, R, TraceValHandle<K, V, <G as Scope
 /// completely defined, in support of recursively defined productions.
 pub struct EdgeVariable<'a, G: Scope> where G::Timestamp : Lattice {
     variable: Variable<'a, G, Edge, u64, isize>,
-    current: Collection<Child<'a, G, u64>, Edge, isize>,
-    forward: Option<Arrange<Child<'a, G, u64>, Node, Node, isize>>,
-    reverse: Option<Arrange<Child<'a, G, u64>, Node, Node, isize>>,
+    current: Collection<Iterative<'a, G, u64>, Edge, isize>,
+    forward: Option<Arrange<Iterative<'a, G, u64>, Node, Node, isize>>,
+    reverse: Option<Arrange<Iterative<'a, G, u64>, Node, Node, isize>>,
 }
 
 impl<'a, G: Scope> EdgeVariable<'a, G> where G::Timestamp : Lattice {
     /// Creates a new variable initialized with `source`.
-    pub fn from(source: &Collection<Child<'a, G, u64>, Edge>) -> Self {
+    pub fn from(source: &Collection<Iterative<'a, G, u64>, Edge>) -> Self {
         let variable = Variable::new_from(source.filter(|_| false), u64::max_value(), 1);
         EdgeVariable {
             variable: variable,
@@ -107,7 +103,7 @@ impl<'a, G: Scope> EdgeVariable<'a, G> where G::Timestamp : Lattice {
         }
     }
     /// Concatenates `production` into the definition of the variable.
-    pub fn add_production(&mut self, production: &Collection<Child<'a, G, u64>, Edge, isize>) {
+    pub fn add_production(&mut self, production: &Collection<Iterative<'a, G, u64>, Edge, isize>) {
         self.current = self.current.concat(production);
     }
     /// Finalizes the variable, connecting its recursive definition.
@@ -120,14 +116,14 @@ impl<'a, G: Scope> EdgeVariable<'a, G> where G::Timestamp : Lattice {
         self.variable.set(&distinct);
     }
     /// The collection arranged in the forward direction.
-    pub fn forward(&mut self) -> &Arrange<Child<'a, G, u64>, Node, Node, isize> {
+    pub fn forward(&mut self) -> &Arrange<Iterative<'a, G, u64>, Node, Node, isize> {
         if self.forward.is_none() {
             self.forward = Some(self.variable.arrange_by_key());
         }
         self.forward.as_ref().unwrap()
     }
     /// The collection arranged in the reverse direction.
-    pub fn reverse(&mut self) -> &Arrange<Child<'a, G, u64>, Node, Node, isize> {
+    pub fn reverse(&mut self) -> &Arrange<Iterative<'a, G, u64>, Node, Node, isize> {
         if self.reverse.is_none() {
             self.reverse = Some(self.variable.map(|(x,y)| (y,x)).arrange_by_key());
         }
@@ -140,7 +136,7 @@ pub struct RelationHandles<T: Timestamp+Lattice> {
     /// An input handle supporting arbitrary changes.
     pub input: InputSession<T, Edge, isize>,
     /// An output trace handle which can be used in other computations.
-    pub trace: TraceKeyHandle<Edge, Product<RootTimestamp, T>, isize>,
+    pub trace: TraceKeyHandle<Edge, T, isize>,
 }
 
 impl Query {
@@ -158,8 +154,8 @@ impl Query {
     }
 
     /// Creates a dataflow implementing the query, and returns input and trace handles.
-    pub fn render_in<'a, A, T>(&self, scope: &mut Child<'a, Worker<A>, T>) -> IndexMap<String, RelationHandles<T>>
-    where A: Allocate, T: Timestamp+Lattice {
+    pub fn render_in<G: Scope>(&self, scope: &mut G) -> IndexMap<String, RelationHandles<G::Timestamp>>
+    where G::Timestamp: Lattice+::timely::order::TotalOrder {
 
         // Create new input (handle, stream) pairs
         let mut input_map = IndexMap::new();
@@ -168,7 +164,7 @@ impl Query {
         }
 
         // We need a subscope to allow iterative development of variables.
-        scope.scoped(|subscope| {
+        scope.iterative(|subscope| {
 
             // create map from relation name to input handle and collection.
             let mut result_map = IndexMap::new();
