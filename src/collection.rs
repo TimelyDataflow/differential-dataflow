@@ -292,7 +292,7 @@ impl<G: Scope, D: Data, R: Diff> Collection<G, D, R> where G::Timestamp: Data {
     ///
     ///         let data = scope.new_collection_from(1 .. 10).1;
     ///
-    ///         let result = scope.scoped::<(),_,_>(|child| {
+    ///         let result = scope.region(|child| {
     ///             data.enter(child)
     ///                 .leave()
     ///         });
@@ -330,7 +330,7 @@ impl<G: Scope, D: Data, R: Diff> Collection<G, D, R> where G::Timestamp: Data {
     ///
     ///         let data = scope.new_collection_from(1 .. 10).1;
     ///
-    ///         let result = scope.scoped(|child| {
+    ///         let result = scope.iterative::<u64,_,_>(|child| {
     ///             data.enter_at(child, |x| *x)
     ///                 .leave()
     ///         });
@@ -562,7 +562,7 @@ where
     ///
     ///         let data = scope.new_collection_from(1 .. 10).1;
     ///
-    ///         let result = scope.scoped::<(),_,_>(|child| {
+    ///         let result = scope.region(|child| {
     ///             data.enter(child)
     ///                 .leave()
     ///         });

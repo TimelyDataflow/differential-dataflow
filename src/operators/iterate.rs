@@ -125,7 +125,7 @@ impl<G: Scope, D: Ord+Data+Debug, R: Diff> Iterate<G, D, R> for Collection<G, D,
 ///
 ///         let numbers = scope.new_collection_from(1 .. 10u32).1;
 ///
-///         scope.scoped(|nested| {
+///         scope.iterative(|nested| {
 ///             let variable = Variable::new_from(numbers.enter(nested), u64::max_value(), 1);
 ///             let result = variable.map(|x| if x % 2 == 0 { x/2 } else { x })
 ///                                  .consolidate();
