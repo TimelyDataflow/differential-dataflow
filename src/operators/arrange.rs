@@ -43,24 +43,6 @@ use trace::implementations::ord::OrdKeySpine as DefaultKeyTrace;
 use trace::wrappers::enter::{TraceEnter, BatchEnter};
 use trace::wrappers::rc::TraceBox;
 
-/// Wrapper type to permit transfer of `Rc` types, as in batch.
-///
-/// The `BatchWrapper`s sole purpose in life is to implement `Abomonation` with methods that panic
-/// when called. This allows the wrapped data to be transited along timely's `Pipeline` channels.
-/// The wrapper cannot fake out `Send`, and so cannot be used on timely's `Exchange` channels, which
-/// is good.
-#[derive(Clone,Eq,PartialEq,Debug)]
-pub struct BatchWrapper<T> {
-    /// The wrapped item.
-    pub item: T,
-}
-
-// NOTE: This is all horrible. Don't look too hard.
-impl<T> ::abomonation::Abomonation for BatchWrapper<T> {
-   unsafe fn entomb<W: ::std::io::Write>(&self, _write: &mut W) -> ::std::io::Result<()> { panic!("BatchWrapper Abomonation impl") }
-   unsafe fn exhume<'a,'b>(&'a mut self, _bytes: &'b mut [u8]) -> Option<&'b mut [u8]> { panic!("BatchWrapper Abomonation impl")  }
-}
-
 /// A trace writer capability.
 pub struct TraceWriter<K, V, T, R, Tr>
 where T: Lattice+Ord+Clone+'static, Tr: Trace<K,V,T,R>, Tr::Batch: Batch<K,V,T,R> {
@@ -297,7 +279,7 @@ where T: Lattice+Ord+Clone+'static, Tr: TraceReader<K,V,T,R> {
                     if let Some((time, batch)) = sent {
                         if let Some(cap) = capabilities.iter().find(|c| c.time().less_equal(&time)) {
                             let delayed = cap.delayed(&time);
-                            output.session(&delayed).give(BatchWrapper { item: batch });
+                            output.session(&delayed).give(batch);
                         }
                         else {
                             panic!("failed to find capability for {:?} in {:?}", time, capabilities);
@@ -364,7 +346,7 @@ pub struct Arranged<G: Scope, K, V, R, T> where G::Timestamp: Lattice+Ord, T: Tr
     /// This stream contains the same batches of updates the trace itself accepts, so there should
     /// be no additional overhead to receiving these records. The batches can be navigated just as
     /// the batches in the trace, by key and by value.
-    pub stream: Stream<G, BatchWrapper<T::Batch>>,
+    pub stream: Stream<G, T::Batch>,
     /// A shared trace, updated by the `Arrange` operator and readable by others.
     pub trace: T,
     // TODO : We might have an `Option<Collection<G, (K, V)>>` here, which `as_collection` sets and
@@ -401,7 +383,7 @@ impl<G: Scope, K, V, R, T> Arranged<G, K, V, R, T> where G::Timestamp: Lattice+O
             R: 'static {
 
         Arranged {
-            stream: self.stream.enter(child).map(|bw| BatchWrapper { item: BatchEnter::make_from(bw.item) }),
+            stream: self.stream.enter(child).map(|bw| BatchEnter::make_from(bw)),
             trace: TraceEnter::make_from(self.trace.clone()),
         }
     }
@@ -439,7 +421,7 @@ impl<G: Scope, K, V, R, T> Arranged<G, K, V, R, T> where G::Timestamp: Lattice+O
             input.for_each(|time, data| {
                 let mut session = output.session(&time);
                 for wrapper in data.iter() {
-                    let batch = &wrapper.item;
+                    let batch = &wrapper;
                     let mut cursor = batch.cursor();
                     while let Some(key) = cursor.get_key(batch) {
                         while let Some(val) = cursor.get_val(batch) {
@@ -735,7 +717,7 @@ where
                             writer.seal(upper.elements(), Some((capability.time().clone(), batch.clone())));
 
                             // send the batch to downstream consumers, empty or not.
-                            output.session(&capabilities.elements()[index]).give(BatchWrapper { item: batch });
+                            output.session(&capabilities.elements()[index]).give(batch);
                         }
                     }
 

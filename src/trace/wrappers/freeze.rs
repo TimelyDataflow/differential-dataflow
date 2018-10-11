@@ -6,7 +6,7 @@
 //! logical time (meaning: observing all edits less or equal to that time, advanced to that
 //! time), this should allow that behavior.
 //!
-//! Informally, this wrapper is parameterized by a function `F: Fn(&T)->Option<T>` which 
+//! Informally, this wrapper is parameterized by a function `F: Fn(&T)->Option<T>` which
 //! provides the opportunity to alter the time at which an update happens and to suppress
 //! that update, if appropriate. For example, the function
 //!
@@ -22,7 +22,7 @@ use std::rc::Rc;
 use timely::dataflow::Scope;
 use timely::dataflow::operators::Map;
 
-use operators::arrange::{Arranged, BatchWrapper};
+use operators::arrange::Arranged;
 use lattice::Lattice;
 use trace::{TraceReader, BatchReader, Description};
 use trace::cursor::Cursor;
@@ -45,13 +45,13 @@ where
     let func1 = Rc::new(func);
     let func2 = func1.clone();
     Arranged {
-        stream: arranged.stream.map(move |bw| BatchWrapper { item: BatchFreeze::make_from(bw.item, func1.clone()) }),
+        stream: arranged.stream.map(move |bw| BatchFreeze::make_from(bw, func1.clone())),
         trace: TraceFreeze::make_from(arranged.trace.clone(), func2),
     }
 }
 
 /// Wrapper to provide trace to nested scope.
-pub struct TraceFreeze<K, V, T, R, Tr, F> 
+pub struct TraceFreeze<K, V, T, R, Tr, F>
 where
     T: Lattice+Clone+'static,
     Tr: TraceReader<K, V, T, R>,
@@ -62,8 +62,8 @@ where
     func: Rc<F>,
 }
 
-impl<K,V,T,R,Tr,F> Clone for TraceFreeze<K, V, T, R, Tr, F> 
-where 
+impl<K,V,T,R,Tr,F> Clone for TraceFreeze<K, V, T, R, Tr, F>
+where
     T: Lattice+Clone+'static,
     Tr: TraceReader<K, V, T, R>+Clone,
     F: Fn(&T)->Option<T>,
@@ -90,7 +90,7 @@ where
     type Batch = BatchFreeze<K, V, T, R, Tr::Batch, F>;
     type Cursor = CursorFreeze<K, V, T, R, Tr::Cursor, F>;
 
-    fn map_batches<F2: FnMut(&Self::Batch)>(&mut self, mut f: F2) { 
+    fn map_batches<F2: FnMut(&Self::Batch)>(&mut self, mut f: F2) {
         let func = &self.func;
         self.trace.map_batches(|batch| {
             f(&Self::Batch::make_from(batch.clone(), func.clone()));
@@ -139,7 +139,7 @@ pub struct BatchFreeze<K, V, T, R, B, F> {
 }
 
 impl<K, V, T: Clone, R, B: Clone, F> Clone for BatchFreeze<K, V, T, R, B, F> {
-    fn clone(&self) -> Self { 
+    fn clone(&self) -> Self {
         BatchFreeze {
             phantom: ::std::marker::PhantomData,
             batch: self.batch.clone(),
@@ -148,7 +148,7 @@ impl<K, V, T: Clone, R, B: Clone, F> Clone for BatchFreeze<K, V, T, R, B, F> {
     }
 }
 
-impl<K, V, T, R, B, F> BatchReader<K, V, T, R> for BatchFreeze<K, V, T, R, B, F> 
+impl<K, V, T, R, B, F> BatchReader<K, V, T, R> for BatchFreeze<K, V, T, R, B, F>
 where
     B: BatchReader<K, V, T, R>,
     T: Clone+Default,
@@ -156,7 +156,7 @@ where
 {
     type Cursor = BatchCursorFreeze<K, V, T, R, B, F>;
 
-    fn cursor(&self) -> Self::Cursor { 
+    fn cursor(&self) -> Self::Cursor {
         BatchCursorFreeze::new(self.batch.cursor(), self.func.clone())
     }
     fn len(&self) -> usize { self.batch.len() }
@@ -196,7 +196,7 @@ impl<K, V, T, R, C: Cursor<K, V, T, R>, F> CursorFreeze<K, V, T, R, C, F> {
     }
 }
 
-impl<K, V, T, R, C, F> Cursor<K, V, T, R> for CursorFreeze<K, V, T, R, C, F> 
+impl<K, V, T, R, C, F> Cursor<K, V, T, R> for CursorFreeze<K, V, T, R, C, F>
 where
     C: Cursor<K, V, T, R>,
     F: Fn(&T)->Option<T>,
@@ -221,7 +221,7 @@ where
 
     #[inline(always)] fn step_key(&mut self, storage: &Self::Storage) { self.cursor.step_key(storage) }
     #[inline(always)] fn seek_key(&mut self, storage: &Self::Storage, key: &K) { self.cursor.seek_key(storage, key) }
-    
+
     #[inline(always)] fn step_val(&mut self, storage: &Self::Storage) { self.cursor.step_val(storage) }
     #[inline(always)] fn seek_val(&mut self, storage: &Self::Storage, val: &V) { self.cursor.seek_val(storage, val) }
 
@@ -247,7 +247,7 @@ impl<K, V, T, R, B: BatchReader<K, V, T, R>, F> BatchCursorFreeze<K, V, T, R, B,
     }
 }
 
-impl<K, V, T, R, B: BatchReader<K, V, T, R>, F> Cursor<K, V, T, R> for BatchCursorFreeze<K, V, T, R, B, F> 
+impl<K, V, T, R, B: BatchReader<K, V, T, R>, F> Cursor<K, V, T, R> for BatchCursorFreeze<K, V, T, R, B, F>
 where
     F: Fn(&T)->Option<T>,
 {
@@ -271,7 +271,7 @@ where
 
     #[inline(always)] fn step_key(&mut self, storage: &Self::Storage) { self.cursor.step_key(&storage.batch) }
     #[inline(always)] fn seek_key(&mut self, storage: &Self::Storage, key: &K) { self.cursor.seek_key(&storage.batch, key) }
-    
+
     #[inline(always)] fn step_val(&mut self, storage: &Self::Storage) { self.cursor.step_val(&storage.batch) }
     #[inline(always)] fn seek_val(&mut self, storage: &Self::Storage, val: &V) { self.cursor.seek_val(&storage.batch, val) }
 

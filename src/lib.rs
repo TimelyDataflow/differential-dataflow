@@ -93,6 +93,9 @@ extern crate timely_sort;
 #[macro_use]
 extern crate abomonation_derive;
 extern crate abomonation;
+#[macro_use]
+extern crate serde_derive;
+extern crate serde;
 
 pub mod hashable;
 pub mod operators;

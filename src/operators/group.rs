@@ -23,7 +23,7 @@ use timely::dataflow::operators::Operator;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Capability;
 
-use operators::arrange::{Arranged, ArrangeByKey, ArrangeBySelf, BatchWrapper, TraceAgent};
+use operators::arrange::{Arranged, ArrangeByKey, ArrangeBySelf, TraceAgent};
 use lattice::Lattice;
 use trace::{Batch, BatchReader, Cursor, Trace, Builder};
 use trace::cursor::CursorList;
@@ -361,7 +361,7 @@ where
 
                         batches.swap(&mut input_buffer);
                         // In principle we could have multiple batches per message (in practice, it would be weird).
-                        for batch in input_buffer.drain(..).map(|x| x.item) {
+                        for batch in input_buffer.drain(..) {
                             assert!(&upper_received[..] == batch.description().lower());
                             upper_received = batch.description().upper().to_vec();
                             batch_cursors.push(batch.cursor());
@@ -516,7 +516,7 @@ where
                                 let batch = builder.done(lower_issued.elements(), local_upper.elements(), lower_issued.elements());
 
                                 // ship batch to the output, and commit to the output trace.
-                                output.session(&capabilities[index]).give(BatchWrapper { item: batch.clone() });
+                                output.session(&capabilities[index]).give(batch.clone());
                                 output_writer.seal(local_upper.elements(), Some((capabilities[index].time().clone(), batch)));
 
                                 lower_issued = local_upper;

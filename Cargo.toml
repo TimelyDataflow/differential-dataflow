@@ -19,8 +19,11 @@ rand="0.4"
 byteorder="1"
 itertools="^0.7"
 graph_map = { git = "https://github.com/frankmcsherry/graph-map.git" }
+serde_json = "1.0"
 
 [dependencies]
+serde = "1.0"
+serde_derive = "1.0"
 abomonation = "0.7"
 abomonation_derive = "0.3"
 timely_sort="0.1.6"

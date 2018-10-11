@@ -331,10 +331,10 @@ impl<G, K, V, R1, T1> JoinCore<G, K, V, R1> for Arranged<G,K,V,R1,T1>
                     data.swap(&mut input1_buffer);
                     for batch1 in input1_buffer.drain(..) {
                         let (trace2_cursor, trace2_storage) = trace2.cursor_through(&acknowledged2[..]).unwrap();
-                        let batch1_cursor = batch1.item.cursor();
-                        todo1.push(Deferred::new(trace2_cursor, trace2_storage, batch1_cursor, batch1.item.clone(), capability.clone(), |r2,r1| *r1 * *r2));
-                        debug_assert!(batch1.item.description().lower() == &acknowledged1[..]);
-                        acknowledged1 = batch1.item.description().upper().to_vec();
+                        let batch1_cursor = batch1.cursor();
+                        todo1.push(Deferred::new(trace2_cursor, trace2_storage, batch1_cursor, batch1.clone(), capability.clone(), |r2,r1| *r1 * *r2));
+                        debug_assert!(batch1.description().lower() == &acknowledged1[..]);
+                        acknowledged1 = batch1.description().upper().to_vec();
                     }
                 }
             });
@@ -346,10 +346,10 @@ impl<G, K, V, R1, T1> JoinCore<G, K, V, R1> for Arranged<G,K,V,R1,T1>
                     data.swap(&mut input2_buffer);
                     for batch2 in input2_buffer.drain(..) {
                         let (trace1_cursor, trace1_storage) = trace1.cursor_through(&acknowledged1[..]).unwrap();
-                        let batch2_cursor = batch2.item.cursor();
-                        todo2.push(Deferred::new(trace1_cursor, trace1_storage, batch2_cursor, batch2.item.clone(), capability.clone(), |r1,r2| *r1 * *r2));
-                        debug_assert!(batch2.item.description().lower() == &acknowledged2[..]);
-                        acknowledged2 = batch2.item.description().upper().to_vec();
+                        let batch2_cursor = batch2.cursor();
+                        todo2.push(Deferred::new(trace1_cursor, trace1_storage, batch2_cursor, batch2.clone(), capability.clone(), |r1,r2| *r1 * *r2));
+                        debug_assert!(batch2.description().lower() == &acknowledged2[..]);
+                        acknowledged2 = batch2.description().upper().to_vec();
                     }
                 }
             });
