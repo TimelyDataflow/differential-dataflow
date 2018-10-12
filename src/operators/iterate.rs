@@ -37,7 +37,7 @@ use timely::progress::{Timestamp, PathSummary};
 use timely::progress::nested::product::Product;
 
 use timely::dataflow::*;
-use timely::dataflow::scopes::child::Iterative as Child;
+use timely::dataflow::scopes::child::Iterative;
 use timely::dataflow::operators::*;
 use timely::dataflow::operators::feedback::Handle;
 
@@ -77,13 +77,13 @@ pub trait Iterate<G: Scope, D: Data, R: Diff> {
     /// ```
     fn iterate<F>(&self, logic: F) -> Collection<G, D, R>
         where G::Timestamp: Lattice,
-              for<'a> F: FnOnce(&Collection<Child<'a, G, u64>, D, R>)->Collection<Child<'a, G, u64>, D, R>;
+              for<'a> F: FnOnce(&Collection<Iterative<'a, G, u64>, D, R>)->Collection<Iterative<'a, G, u64>, D, R>;
 }
 
 impl<G: Scope, D: Ord+Data+Debug, R: Diff> Iterate<G, D, R> for Collection<G, D, R> {
     fn iterate<F>(&self, logic: F) -> Collection<G, D, R>
         where G::Timestamp: Lattice,
-              for<'a> F: FnOnce(&Collection<Child<'a, G, u64>, D, R>)->Collection<Child<'a, G, u64>, D, R> {
+              for<'a> F: FnOnce(&Collection<Iterative<'a, G, u64>, D, R>)->Collection<Iterative<'a, G, u64>, D, R> {
 
         self.inner.scope().scoped("Iterate", |subgraph| {
             // create a new variable, apply logic, bind variable, return.
@@ -92,7 +92,7 @@ impl<G: Scope, D: Ord+Data+Debug, R: Diff> Iterate<G, D, R> for Collection<G, D,
             // wrapped by `variable`, but it also results in substantially more
             // diffs produced; `result` is post-consolidation, and means fewer
             // records are yielded out of the loop.
-            let variable = Variable::new_from(self.enter(subgraph), u64::max_value(), 1);
+            let variable = Variable::new_from(self.enter(subgraph), Product::new(Default::default(), 1));
             let result = logic(&variable);
             variable.set(&result);
             result.leave()
@@ -114,6 +114,7 @@ impl<G: Scope, D: Ord+Data+Debug, R: Diff> Iterate<G, D, R> for Collection<G, D,
 /// extern crate timely;
 /// extern crate differential_dataflow;
 ///
+/// use timely::progress::nested::product::Product;
 /// use timely::dataflow::Scope;
 ///
 /// use differential_dataflow::input::Input;
@@ -125,8 +126,9 @@ impl<G: Scope, D: Ord+Data+Debug, R: Diff> Iterate<G, D, R> for Collection<G, D,
 ///
 ///         let numbers = scope.new_collection_from(1 .. 10u32).1;
 ///
-///         scope.iterative(|nested| {
-///             let variable = Variable::new_from(numbers.enter(nested), u64::max_value(), 1);
+///         scope.iterative::<u64,_,_>(|nested| {
+///             let summary = Product::new(Default::default(), 1);
+///             let variable = Variable::new_from(numbers.enter(nested), summary);
 ///             let result = variable.map(|x| if x % 2 == 0 { x/2 } else { x })
 ///                                  .consolidate();
 ///             variable.set(&result)
@@ -135,45 +137,45 @@ impl<G: Scope, D: Ord+Data+Debug, R: Diff> Iterate<G, D, R> for Collection<G, D,
 ///     })
 /// }
 /// ```
-pub struct Variable<'a, G: Scope, D: Data, T: Timestamp+Lattice, R: Diff>
+pub struct Variable<G: Scope, D: Data, R: Diff>
 where G::Timestamp: Lattice {
-    collection: Collection<Child<'a, G, T>, D, R>,
-    feedback: Handle<G::Timestamp, T,(D, Product<G::Timestamp, T>, R)>,
-    source: Collection<Child<'a, G, T>, D, R>,
-    step: <T as Timestamp>::Summary,
+    collection: Collection<G, D, R>,
+    feedback: Handle<G::Timestamp, (D, G::Timestamp, R)>,
+    source: Collection<G, D, R>,
+    step: <G::Timestamp as Timestamp>::Summary,
 }
 
-impl<'a, G: Scope, D: Data, R: Diff, T: Timestamp+Lattice> Variable<'a, G, D, T, R> where G::Timestamp: Lattice {
+impl<G: Scope, D: Data, R: Diff> Variable<G, D, R> where G::Timestamp: Lattice {
     /// Creates a new initially empty `Variable`.
-    pub fn new(scope: &mut Child<'a, G, T>, max_steps: T, step: <T as Timestamp>::Summary) -> Self {
+    pub fn new(scope: &mut G, step: <G::Timestamp as Timestamp>::Summary) -> Self {
         use collection::AsCollection;
         let empty = ::timely::dataflow::operators::generic::operator::empty(scope).as_collection();
-        Self::new_from(empty, max_steps, step)
+        Self::new_from(empty, step)
     }
 
     /// Creates a new `Variable` from a supplied `source` stream.
-    pub fn new_from(source: Collection<Child<'a, G, T>, D, R>, max_steps: T, step: <T as Timestamp>::Summary) -> Self {
-        let (feedback, updates) = source.inner.scope().loop_variable(max_steps, step.clone());
+    pub fn new_from(source: Collection<G, D, R>, step: <G::Timestamp as Timestamp>::Summary) -> Self {
+        let (feedback, updates) = source.inner.scope().loop_variable(step.clone());
         let collection = Collection::new(updates).concat(&source);
         Variable { collection, feedback, source, step }
     }
 
     /// Adds a new source of data to the `Variable`.
-    pub fn set(self, result: &Collection<Child<'a, G, T>, D, R>) -> Collection<Child<'a, G, T>, D, R> {
+    pub fn set(self, result: &Collection<G, D, R>) -> Collection<G, D, R> {
         let step = self.step;
         self.source
             .negate()
             .concat(result)
             .inner
-            .flat_map(move |(x,t,d)| step.results_in(&t.inner).map(|t_inner| (x, Product::new(t.outer, t_inner), d)))
+            .flat_map(move |(x,t,d)| step.results_in(&t).map(|t| (x,t,d)))
             .connect_loop(self.feedback);
 
         self.collection
     }
 }
 
-impl<'a, G: Scope, D: Data, R: Diff, T: Timestamp+Lattice> Deref for Variable<'a, G, D, T, R> where G::Timestamp: Lattice {
-    type Target = Collection<Child<'a, G, T>, D, R>;
+impl<G: Scope, D: Data, R: Diff> Deref for Variable<G, D, R> where G::Timestamp: Lattice {
+    type Target = Collection<G, D, R>;
     fn deref(&self) -> &Self::Target {
         &self.collection
     }

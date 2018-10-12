@@ -28,7 +28,7 @@ abomonation = "0.7"
 abomonation_derive = "0.3"
 timely_sort="0.1.6"
 #timely = "0.7"
-timely = { git = "https://github.com/frankmcsherry/timely-dataflow" }
+timely = { git = "https://github.com/frankmcsherry/timely-dataflow", branch = "generalize_feedback" }
 fnv="1.0.2"
 
 [profile.release]

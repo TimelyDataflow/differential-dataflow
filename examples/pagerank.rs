@@ -2,13 +2,16 @@ extern crate timely;
 extern crate graph_map;
 extern crate differential_dataflow;
 
+use timely::progress::nested::product::Product;
 use timely::dataflow::*;
+use timely::dataflow::operators::BranchWhen;
 
 use differential_dataflow::Collection;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::*;
 use differential_dataflow::operators::iterate::Variable;
 use differential_dataflow::input::InputSession;
+use differential_dataflow::AsCollection;
 
 use graph_map::GraphMMap;
 
@@ -91,7 +94,7 @@ where
     let degrs = edges.map(|(src,_dst)| src)
                      .count();
 
-    edges.scope().scoped("PageRank", |inner| {
+    edges.scope().iterative::<usize,_,_>(|inner| {
 
         // Bring various collections into the scope.
         let edges = edges.enter(inner);
@@ -104,7 +107,7 @@ where
 
         // Define a recursive variable to track surfers.
         // We start from `inits` and cycle only `iters`.
-        let ranks = Variable::new_from(inits, iters, 1);
+        let ranks = Variable::new_from(inits, Product::new(Default::default(), 1));
 
         // Match each surfer with the degree, scale numbers down.
         let to_push =
@@ -117,7 +120,10 @@ where
         edges.semijoin(&to_push)
              .map(|(_node, dest)| dest)
              .concat(&reset)
-             .consolidate();
+             .consolidate()
+             .inner
+             .branch_when(move |t| t.inner < iters).0
+             .as_collection();
 
         // Bind the recursive variable, return its limit.
         ranks.set(&pushed);
