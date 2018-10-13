@@ -6,6 +6,7 @@ use std::io::{BufRead, BufReader};
 use std::fs::File;
 
 use timely::dataflow::Scope;
+use timely::progress::nested::product::Product;
 
 use differential_dataflow::operators::iterate::Variable;
 
@@ -15,7 +16,7 @@ use differential_dataflow::operators::*;
 // use differential_dataflow::operators::iterate::CoreVariable;
 use differential_dataflow::operators::arrange::ArrangeByKey;
 
-type Iteration = u64;
+type Iter = u64;
 type Difference = i64;
 
 fn main() {
@@ -52,18 +53,18 @@ fn unoptimized() {
 
             let (value_flow, memory_alias, value_alias) =
             scope
-                .scoped(|scope| {
+                .iterative::<Iter,_,_>(|scope| {
 
                     let nodes = nodes.enter(scope);
                     let assignment = assignment.enter(scope);
                     let dereference = dereference.enter(scope);
 
-                    // let value_flow = CoreVariable::<_,_,Difference,_>::from_args(Iteration::max_value(), 1, nodes.filter(|_| false).map(|n| (n,n)));
-                    // let memory_alias = CoreVariable::<_,_,Difference,_>::from_args(Iteration::max_value(), 1, nodes.filter(|_| false).map(|n| (n,n)));
-                    // let value_alias = CoreVariable::<_,_,Difference,_>::from_args(Iteration::max_value(), 1, nodes.filter(|_| false).map(|n| (n,n)));
+                    // let value_flow = CoreVariable::<_,_,Difference,_>::from_args(Iter::max_value(), 1, nodes.filter(|_| false).map(|n| (n,n)));
+                    // let memory_alias = CoreVariable::<_,_,Difference,_>::from_args(Iter::max_value(), 1, nodes.filter(|_| false).map(|n| (n,n)));
+                    // let value_alias = CoreVariable::<_,_,Difference,_>::from_args(Iter::max_value(), 1, nodes.filter(|_| false).map(|n| (n,n)));
 
-                    let value_flow = Variable::new(scope, Iteration::max_value(), 1);
-                    let memory_alias = Variable::new(scope, Iteration::max_value(), 1);
+                    let value_flow = Variable::new(scope, Product::new(Default::default(), 1));
+                    let memory_alias = Variable::new(scope, Product::new(Default::default(), 1));
                     // let value_alias = Variable::from(nodes.filter(|_| false).map(|n| (n,n)));
 
                     let value_flow_arranged = value_flow.arrange_by_key();
@@ -98,7 +99,7 @@ fn unoptimized() {
 
                     let value_flow_next =
                     value_flow_next
-                        .threshold_total(|x| if x > 0 { 1 as Difference } else { 0 });
+                        .threshold_total(|_,_| 1 as Difference);
 
                     // MA(a,b) <- D(x,a),VA(x,y),D(y,b)
                     let memory_alias_next: Collection<_,_,Difference> =
@@ -110,7 +111,7 @@ fn unoptimized() {
 
                     let memory_alias_next: Collection<_,_,Difference>  =
                     memory_alias_next
-                        .threshold_total(|x| if x > 0 { 1 as Difference } else { 0 });
+                        .threshold_total(|_,_| 1 as Difference);
 
                     value_flow.set(&value_flow_next);
                     memory_alias.set(&memory_alias_next);
@@ -186,14 +187,14 @@ fn optimized() {
 
             let (value_flow, memory_alias) =
             scope
-                .scoped(|scope| {
+                .iterative::<Iter,_,_>(|scope| {
 
                     let nodes = nodes.enter(scope);
                     let assignment = assignment.enter(scope);
                     let dereference = dereference.enter(scope);
 
-                    let value_flow = Variable::new(scope, Iteration::max_value(), 1);
-                    let memory_alias = Variable::new(scope, Iteration::max_value(), 1);
+                    let value_flow = Variable::new(scope, Product::new(Default::default(), 1));
+                    let memory_alias = Variable::new(scope, Product::new(Default::default(), 1));
 
                     let value_flow_arranged = value_flow.arrange_by_key();
                     let memory_alias_arranged = memory_alias.arrange_by_key();

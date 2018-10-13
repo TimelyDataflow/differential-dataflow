@@ -8,17 +8,12 @@ use rand::{Rng, SeedableRng, StdRng};
 
 use timely::dataflow::*;
 
-use timely::progress::nested::product::Product;
-use timely::progress::timestamp::RootTimestamp;
-
 use differential_dataflow::input::Input;
 use differential_dataflow::Collection;
 use differential_dataflow::operators::*;
 use differential_dataflow::trace::Trace;
 use differential_dataflow::operators::arrange::ArrangeByKey;
 use differential_dataflow::operators::arrange::ArrangeBySelf;
-// use differential_dataflow::operators::group::GroupArranged;
-use differential_dataflow::operators::arrange::Arrange;
 
 use differential_dataflow::trace::implementations::spine_fueled::Spine;
 
@@ -27,8 +22,8 @@ type Node = usize;
 use differential_dataflow::trace::implementations::ord::OrdValBatch;
 // use differential_dataflow::trace::implementations::ord::OrdValSpine;
 
-// type GraphTrace<N> = Spine<usize, N, Product<RootTimestamp, ()>, isize, Rc<GraphBatch<N>>>;
-type GraphTrace = Spine<Node, Node, Product<RootTimestamp, ()>, isize, Rc<OrdValBatch<Node, Node, Product<RootTimestamp, ()>, isize>>>;
+// type GraphTrace<N> = Spine<usize, N, (), isize, Rc<GraphBatch<N>>>;
+type GraphTrace = Spine<Node, Node, (), isize, Rc<OrdValBatch<Node, Node, (), isize>>>;
 
 fn main() {
 
@@ -103,9 +98,9 @@ fn main() {
 // use differential_dataflow::trace::implementations::ord::OrdValSpine;
 use differential_dataflow::operators::arrange::TraceAgent;
 
-type TraceHandle = TraceAgent<Node, Node, Product<RootTimestamp, ()>, isize, GraphTrace>;
+type TraceHandle = TraceAgent<Node, Node, (), isize, GraphTrace>;
 
-fn reach<G: Scope<Timestamp = Product<RootTimestamp, ()>>> (
+fn reach<G: Scope<Timestamp = ()>> (
     graph: &mut TraceHandle,
     roots: Collection<G, Node>
 ) -> Collection<G, Node> {
@@ -127,7 +122,7 @@ fn reach<G: Scope<Timestamp = Product<RootTimestamp, ()>>> (
 }
 
 
-fn bfs<G: Scope<Timestamp = Product<RootTimestamp, ()>>> (
+fn bfs<G: Scope<Timestamp = ()>> (
     graph: &mut TraceHandle,
     roots: Collection<G, Node>
 ) -> Collection<G, (Node, u32)> {
@@ -146,7 +141,7 @@ fn bfs<G: Scope<Timestamp = Product<RootTimestamp, ()>>> (
     })
 }
 
-// fn connected_components<G: Scope<Timestamp = Product<RootTimestamp, ()>>>(
+// fn connected_components<G: Scope<Timestamp = ()>>(
 //     graph: &mut TraceHandle<Node>
 // ) -> Collection<G, (Node, Node)> {
 

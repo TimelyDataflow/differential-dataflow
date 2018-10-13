@@ -7,6 +7,7 @@ use rand::{Rng, SeedableRng, StdRng};
 
 use timely::dataflow::*;
 use timely::dataflow::operators::probe::Handle;
+use timely::progress::nested::product::Product;
 
 use differential_dataflow::input::Input;
 use differential_dataflow::Collection;
@@ -17,6 +18,7 @@ use differential_dataflow::operators::arrange::ArrangeByKey;
 use differential_dataflow::operators::arrange::ArrangeBySelf;
 
 type Node = usize;
+type Iter = usize;
 
 fn main() {
 
@@ -187,7 +189,7 @@ fn main() {
             let elapsed_ns: usize = (elapsed.as_secs() * 1_000_000_000 + (elapsed.subsec_nanos() as u64)) as usize;
 
             // Determine completed ns.
-            let acknowledged_ns: usize = probe.with_frontier(|frontier| frontier[0].inner);
+            let acknowledged_ns: usize = probe.with_frontier(|frontier| frontier[0]);
 
             // any un-recorded measurements that are complete should be recorded.
             while (ack_counter * ns_per_request) < acknowledged_ns && ack_counter < ack_target {
@@ -328,19 +330,18 @@ where G::Timestamp: Lattice+Ord {
 fn _bidijkstra<G: Scope>(
     forward_graph: &Arrange<G, Node, Node, isize>,
     reverse_graph: &Arrange<G, Node, Node, isize>,
-    goals: &Collection<G, (Node, Node)>,
-    bound: u64) -> Collection<G, ((Node, Node), u32)>
+    goals: &Collection<G, (Node, Node)>) -> Collection<G, ((Node, Node), u32)>
 where G::Timestamp: Lattice+Ord {
 
-    goals.scope().scoped(|inner| {
+    goals.scope().iterative::<Iter,_,_>(|inner| {
 
         // Our plan is to start evolving distances from both sources and destinations.
         // The evolution from a source or destination should continue as long as there
         // is a corresponding destination or source that has not yet been reached.
 
         // forward and reverse (node, (root, dist))
-        let forward = Variable::new_from(goals.map(|(x,_)| (x,(x,0))).enter(inner), bound, 1);
-        let reverse = Variable::new_from(goals.map(|(_,y)| (y,(y,0))).enter(inner), bound, 1);
+        let forward = Variable::new_from(goals.map(|(x,_)| (x,(x,0))).enter(inner), Product::new(Default::default(), 1));
+        let reverse = Variable::new_from(goals.map(|(_,y)| (y,(y,0))).enter(inner), Product::new(Default::default(), 1));
 
         let goals = goals.enter(inner);
         let forward_graph = forward_graph.enter(inner);

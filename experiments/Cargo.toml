@@ -9,6 +9,6 @@ rand="0.3.13"
 abomonation = "0.7"
 abomonation_derive = "0.3"
 #timely = "0.7"
-timely = { git = "https://github.com/frankmcsherry/timely-dataflow", branch = "subscope_rework" }
+timely = { git = "https://github.com/frankmcsherry/timely-dataflow", branch = "generalize_feedback" }
 differential-dataflow = { path = "../" }
 graph_map = { git = "https://github.com/frankmcsherry/graph-map" }

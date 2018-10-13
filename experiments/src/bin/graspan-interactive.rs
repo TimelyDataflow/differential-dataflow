@@ -5,6 +5,7 @@ extern crate differential_dataflow;
 use std::io::{BufRead, BufReader};
 use std::fs::File;
 
+// use timely::progress::nested::product::Product;
 // use timely::dataflow::operators::{Accumulate, Inspect};
 use differential_dataflow::input::Input;
 // use differential_dataflow::trace::Trace;
@@ -99,7 +100,7 @@ fn main() {
                             "n" => {
 
                                 nodes.remove((src, dst));
-                                let round = nodes.time().inner;
+                                let round = nodes.time() + 0;
                                 nodes.advance_to(round + 1);
                                 nodes.flush();
 

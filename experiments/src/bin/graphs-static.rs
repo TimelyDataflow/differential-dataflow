@@ -1,4 +1,3 @@
-// extern crate rand;
 extern crate timely;
 extern crate differential_dataflow;
 extern crate graph_map;
@@ -6,21 +5,16 @@ extern crate core_affinity;
 
 use std::rc::Rc;
 
-// use rand::{Rng, SeedableRng, StdRng};
-
 use timely::dataflow::*;
 
 use timely::progress::nested::product::Product;
-use timely::progress::timestamp::RootTimestamp;
 use timely::dataflow::operators::ToStream;
 
 use differential_dataflow::input::Input;
 use differential_dataflow::Collection;
 use differential_dataflow::operators::*;
-// use differential_dataflow::trace::Trace;
 use differential_dataflow::operators::arrange::ArrangeByKey;
 use differential_dataflow::operators::arrange::ArrangeBySelf;
-// use differential_dataflow::operators::arrange::Arrange;
 use differential_dataflow::operators::iterate::Variable;
 use differential_dataflow::trace::implementations::spine_fueled::Spine;
 use differential_dataflow::AsCollection;
@@ -32,10 +26,10 @@ type Iter = u32;
 type Diff = i32;
 
 // use differential_dataflow::trace::implementations::graph::GraphBatch;
-// type GraphTrace = Spine<Node, Node, Product<RootTimestamp, ()>, isize, Rc<GraphBatch<Node>>>;
+// type GraphTrace = Spine<Node, Node, (), isize, Rc<GraphBatch<Node>>>;
 
 use differential_dataflow::trace::implementations::ord::OrdValBatch;
-type GraphTrace = Spine<Node, Node, Product<RootTimestamp, ()>, Diff, Rc<OrdValBatch<Node, Node, Product<RootTimestamp, ()>, Diff>>>;
+type GraphTrace = Spine<Node, Node, (), Diff, Rc<OrdValBatch<Node, Node, (), Diff>>>;
 
 fn main() {
 
@@ -59,7 +53,7 @@ fn main() {
             let edges = (0..nodes).filter(move |node| node % peers == index)
                                   .flat_map(move |node| {
                                       let vec = graph.edges(node).to_vec();
-                                      vec.into_iter().map(move |edge| ((node as Node, edge as Node), RootTimestamp::new(()), 1))
+                                      vec.into_iter().map(move |edge| ((node as Node, edge as Node), (), 1))
                                   })
                                   .to_stream(scope)
                                   .as_collection();
@@ -120,26 +114,26 @@ fn main() {
 
 use differential_dataflow::operators::arrange::TraceAgent;
 
-type TraceHandle = TraceAgent<Node, Node, Product<RootTimestamp, ()>, Diff, GraphTrace>;
+type TraceHandle = TraceAgent<Node, Node, (), Diff, GraphTrace>;
 
-fn reach<G: Scope<Timestamp = Product<RootTimestamp, ()>>> (
+fn reach<G: Scope<Timestamp = ()>> (
     graph: &mut TraceHandle,
     roots: Collection<G, Node, Diff>
 ) -> Collection<G, Node, Diff> {
 
     let graph = graph.import(&roots.scope());
 
-    roots.scope().scoped(|scope| {
+    roots.scope().iterative::<Iter,_,_>(|scope| {
 
         let graph = graph.enter(scope);
         let roots = roots.enter(scope);
 
-        let inner = Variable::new_from(roots.clone(), Iter::max_value(), 1);
+        let inner = Variable::new_from(roots.clone(), Product::new(Default::default(), 1));
 
         let result =
         graph.join_core(&inner.arrange_by_self(), |_src,&dst,&()| Some(dst))
              .concat(&roots)
-             .threshold_total(|c| if c == 0 { 0 } else { 1 });
+             .threshold_total(|_,_| 1);
 
         inner.set(&result);
         result.leave()
@@ -147,7 +141,7 @@ fn reach<G: Scope<Timestamp = Product<RootTimestamp, ()>>> (
 }
 
 
-fn bfs<G: Scope<Timestamp = Product<RootTimestamp, ()>>> (
+fn bfs<G: Scope<Timestamp = ()>> (
     graph: &mut TraceHandle,
     roots: Collection<G, Node, Diff>
 ) -> Collection<G, (Node, u32), Diff> {
@@ -155,12 +149,12 @@ fn bfs<G: Scope<Timestamp = Product<RootTimestamp, ()>>> (
     let graph = graph.import(&roots.scope());
     let roots = roots.map(|r| (r,0));
 
-    roots.scope().scoped(|scope| {
+    roots.scope().iterative::<Iter,_,_>(|scope| {
 
         let graph = graph.enter(scope);
         let roots = roots.enter(scope);
 
-        let inner = Variable::new_from(roots.clone(), Iter::max_value(), 1);
+        let inner = Variable::new_from(roots.clone(), Product::new(Default::default(), 1));
         let result =
         graph.join_map(&inner, |_src,&dest,&dist| (dest, dist+1))
              .concat(&roots)
@@ -171,7 +165,7 @@ fn bfs<G: Scope<Timestamp = Product<RootTimestamp, ()>>> (
     })
 }
 
-fn connected_components<G: Scope<Timestamp = Product<RootTimestamp, ()>>>(
+fn connected_components<G: Scope<Timestamp = ()>>(
     scope: &mut G,
     forward: &mut TraceHandle,
     reverse: &mut TraceHandle,
@@ -185,7 +179,7 @@ fn connected_components<G: Scope<Timestamp = Product<RootTimestamp, ()>>>(
     let nodes_r = reverse.flat_map_ref(|k,v| if k < v { Some(*k) } else { None });
     let nodes = nodes_f.concat(&nodes_r).consolidate().map(|x| (x,x));
 
-    scope.scoped(|scope| {
+    scope.iterative(|scope| {
 
         // import arrangements, nodes.
         let forward = forward.enter(scope);
@@ -193,7 +187,7 @@ fn connected_components<G: Scope<Timestamp = Product<RootTimestamp, ()>>>(
         let nodes = nodes.enter(scope);
 
         use differential_dataflow::operators::iterate::Variable;
-        let inner = Variable::new(scope, Iter::max_value(), 1);
+        let inner = Variable::new(scope, Product::new(Default::default(), 1));
 
         let labels = inner.arrange_by_key();
         let f_prop = labels.join_core(&forward, |_k,l,d| Some((*d,*l)));
@@ -219,7 +213,7 @@ fn connected_components<G: Scope<Timestamp = Product<RootTimestamp, ()>>>(
 
 
 
-fn _connected_components_odd<G: Scope<Timestamp = Product<RootTimestamp, ()>>>(
+fn _connected_components_odd<G: Scope<Timestamp = ()>>(
     scope: &mut G,
     forward: &mut TraceHandle,
     reverse: &mut TraceHandle,
@@ -233,7 +227,7 @@ fn _connected_components_odd<G: Scope<Timestamp = Product<RootTimestamp, ()>>>(
     let nodes_r = reverse.flat_map_ref(|k,v| if k < v { Some(*k) } else { None });
     let nodes = nodes_f.concat(&nodes_r).consolidate().map(|x| (x,x));
 
-    nodes.scope().scoped(|scope| {
+    nodes.scope().iterative(|scope| {
 
         // import arrangements, nodes.
         let forward = forward.enter(scope);
@@ -241,7 +235,7 @@ fn _connected_components_odd<G: Scope<Timestamp = Product<RootTimestamp, ()>>>(
         let nodes = nodes.enter(scope);
 
         use differential_dataflow::operators::iterate::Variable;
-        let inner = Variable::new(scope, Iter::max_value(), 1);
+        let inner = Variable::new(scope, Product::new(Default::default(), 1));
 
         // let labels = inner.arrange_by_key();
 
