@@ -38,7 +38,7 @@ use timely::progress::nested::product::Product;
 
 use timely::dataflow::*;
 use timely::dataflow::scopes::child::Iterative;
-use timely::dataflow::operators::*;
+use timely::dataflow::operators::{Feedback, ConnectLoop, Map};
 use timely::dataflow::operators::feedback::Handle;
 
 use ::{Data, Collection, Diff};
@@ -155,7 +155,7 @@ impl<G: Scope, D: Data, R: Diff> Variable<G, D, R> where G::Timestamp: Lattice {
 
     /// Creates a new `Variable` from a supplied `source` stream.
     pub fn new_from(source: Collection<G, D, R>, step: <G::Timestamp as Timestamp>::Summary) -> Self {
-        let (feedback, updates) = source.inner.scope().loop_variable(step.clone());
+        let (feedback, updates) = source.inner.scope().feedback(step.clone());
         let collection = Collection::new(updates).concat(&source);
         Variable { collection, feedback, source, step }
     }

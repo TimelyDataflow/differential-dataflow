@@ -27,7 +27,7 @@ where G::Timestamp: Lattice+Ord {
 impl<'a, G: Scope, D: Default+Data+Hashable> Variable<'a, G, D> where G::Timestamp: Lattice+Ord {
     /// Creates a new `Variable` from a supplied `source` stream.
     pub fn from(source: &Collection<Child<'a, G, u64>, D>) -> Variable<'a, G, D> {
-        let (feedback, cycle) = source.inner.scope().loop_variable(Product::new(Default::default(), 1));
+        let (feedback, cycle) = source.inner.scope().loop_variable(1);
         let cycle = Collection::new(cycle);
         let mut result = Variable { feedback: Some(feedback), current: cycle.clone(), cycle: cycle };
         result.add(source);

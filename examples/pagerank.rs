@@ -3,13 +3,11 @@ extern crate graph_map;
 extern crate differential_dataflow;
 
 use timely::progress::nested::product::Product;
-use timely::dataflow::*;
-use timely::dataflow::operators::BranchWhen;
+use timely::dataflow::{*, operators::Filter};
 
 use differential_dataflow::Collection;
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::operators::*;
-use differential_dataflow::operators::iterate::Variable;
+use differential_dataflow::operators::{*, iterate::Variable};
 use differential_dataflow::input::InputSession;
 use differential_dataflow::AsCollection;
 
@@ -17,6 +15,8 @@ use graph_map::GraphMMap;
 
 type Node = u32;
 type Edge = (Node, Node);
+type Iter = usize;
+type Diff = isize;
 
 fn main() {
 
@@ -48,7 +48,7 @@ fn main() {
         let mut node = index;
         while node < graph.nodes() {
             for &edge in graph.edges(node) {
-                input.insert((node as u32, edge));
+                input.update((node as Node, edge as Node), 1);
             }
             node += peers;
         }
@@ -64,7 +64,7 @@ fn main() {
         for node in 1 .. graph.nodes() {
             if node % peers == index {
                 if !graph.edges(node).is_empty() {
-                    input.remove((node as u32, graph.edges(node)[0]));
+                    input.update((node as Node, graph.edges(node)[0] as Node), -1);
                 }
             }
             input.advance_to(node + 1);
@@ -80,7 +80,7 @@ fn main() {
 
 // Returns a weighted collection in which the weight of each node is proportional
 // to its PageRank in the input graph `edges`.
-fn pagerank<G>(iters: usize, edges: &Collection<G, Edge>) -> Collection<G, Node>
+fn pagerank<G>(iters: usize, edges: &Collection<G, Edge, Diff>) -> Collection<G, Node, Diff>
 where
     G: Scope,
     G::Timestamp: Lattice,
@@ -94,7 +94,7 @@ where
     let degrs = edges.map(|(src,_dst)| src)
                      .count();
 
-    edges.scope().iterative::<usize,_,_>(|inner| {
+    edges.scope().iterative::<Iter,_,_>(|inner| {
 
         // Bring various collections into the scope.
         let edges = edges.enter(inner);
@@ -122,7 +122,7 @@ where
              .concat(&reset)
              .consolidate()
              .inner
-             .branch_when(move |t| t.inner < iters).0
+             .filter(move |(_d,t,_r)| t.inner < iters)
              .as_collection();
 
         // Bind the recursive variable, return its limit.
