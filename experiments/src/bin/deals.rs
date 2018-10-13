@@ -89,7 +89,7 @@ fn main() {
 }
 
 use timely::progress::nested::product::Product;
-use timely::progress::timestamp::RootTimestamp;
+// use timely::progress::timestamp::RootTimestamp;
 
 fn _trim_and_flip<G: Scope>(graph: &Collection<G, Edge>) -> Collection<G, Edge>
 where G::Timestamp: Lattice+Ord+Hash {
@@ -144,12 +144,12 @@ where G::Timestamp: Lattice+Ord+Hash {
 }
 
 // returns pairs (n, s) indicating node n can be reached from a root in s steps.
-fn tc<G: Scope<Timestamp=Product<RootTimestamp, ()>>>(edges: &Arrange<G, Node, Node, Diff>) -> Collection<G, Edge, Diff> {
+fn tc<G: Scope<Timestamp=()>>(edges: &Arrange<G, Node, Node, Diff>) -> Collection<G, Edge, Diff> {
 
     // repeatedly update minimal distances each node can be reached from each root
-    edges.stream.scope().scoped(|scope| {
+    edges.stream.scope().iterative::<Iter,_,_>(|scope| {
 
-            let inner = Variable::new(scope, Iter::max_value(), 1);
+            let inner = Variable::new(scope, Product::new(Default::default(), 1));
             let edges = edges.enter(&inner.scope());
 
             let result =
@@ -157,7 +157,7 @@ fn tc<G: Scope<Timestamp=Product<RootTimestamp, ()>>>(edges: &Arrange<G, Node, N
                 .map(|(x,y)| (y,x))
                 .join_core(&edges, |_y,&x,&z| Some((x, z)))
                 .concat(&edges.as_collection(|&k,&v| (k,v)))
-                .threshold_total(|_| 1);
+                .threshold_total(|_,_| 1);
 
             inner.set(&result);
             result.leave()
@@ -167,14 +167,14 @@ fn tc<G: Scope<Timestamp=Product<RootTimestamp, ()>>>(edges: &Arrange<G, Node, N
 
 
 // returns pairs (n, s) indicating node n can be reached from a root in s steps.
-fn sg<G: Scope<Timestamp=Product<RootTimestamp, ()>>>(edges: &Arrange<G, Node, Node, Diff>) -> Collection<G, Edge, Diff> {
+fn sg<G: Scope<Timestamp=()>>(edges: &Arrange<G, Node, Node, Diff>) -> Collection<G, Edge, Diff> {
 
     let peers = edges.join_core(&edges, |_,&x,&y| Some((x,y))).filter(|&(x,y)| x != y);
 
     // repeatedly update minimal distances each node can be reached from each root
-    peers.scope().scoped(|scope| {
+    peers.scope().iterative::<Iter,_,_>(|scope| {
 
-            let inner = Variable::new(scope, Iter::max_value(), 1);
+            let inner = Variable::new(scope, Product::new(Default::default(), 1));
             let edges = edges.enter(&inner.scope());
             let peers = peers.enter(&inner.scope());
 
@@ -183,7 +183,7 @@ fn sg<G: Scope<Timestamp=Product<RootTimestamp, ()>>>(edges: &Arrange<G, Node, N
                 .join_core(&edges, |_,&x,&z| Some((x, z)))
                 .join_core(&edges, |_,&x,&z| Some((x, z)))
                 .concat(&peers)
-                .threshold_total(|_| 1);
+                .threshold_total(|_,_| 1);
 
             inner.set(&result);
             result.leave()

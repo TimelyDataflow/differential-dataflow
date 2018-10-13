@@ -4,6 +4,7 @@ extern crate differential_dataflow;
 
 use rand::{Rng, SeedableRng, StdRng};
 
+use timely::progress::nested::product::Product;
 use timely::dataflow::*;
 use timely::dataflow::operators::probe::Handle;
 
@@ -107,8 +108,8 @@ where G::Timestamp: Lattice+Ord {
         // is a corresponding destination or source that has not yet been reached.
 
         // forward and reverse (node, (root, dist))
-        let forward = Variable::new_from(goals.map(|(x,_)| (x,(x,0))).enter(inner), u64::max_value(), 1);
-        let reverse = Variable::new_from(goals.map(|(_,y)| (y,(y,0))).enter(inner), u64::max_value(), 1);
+        let forward = Variable::new_from(goals.map(|(x,_)| (x,(x,0))).enter(inner), Product::new(Default::default(), 1));
+        let reverse = Variable::new_from(goals.map(|(_,y)| (y,(y,0))).enter(inner), Product::new(Default::default(), 1));
 
         let goals = goals.enter(inner);
         let edges = edges.enter(inner);

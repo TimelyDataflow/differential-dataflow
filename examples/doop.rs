@@ -59,22 +59,19 @@ type MethodInvocation = Instruction;
 
 /// Set-valued collection.
 pub struct Relation<'a, G: Scope, D: Data+Hashable> where G::Timestamp : Lattice {
-    variable: Variable<'a, G, D, Iter, Diff>,
+    variable: Variable<Child<'a, G, Iter>, D, Diff>,
     current: Collection<Child<'a, G, Iter>, D, Diff>,
 }
 
 impl<'a, G: Scope, D: Data+Hashable> Relation<'a, G, D> where G::Timestamp : Lattice {
     /// Creates a new variable initialized with `source`.
     pub fn new(scope: &mut Child<'a, G, Iter>) -> Self {
-        let variable = Variable::new(scope, Iter::max_value(), 1);
-        Relation {
-            variable: variable,
-            current: ::timely::dataflow::operators::generic::operator::empty(scope).as_collection(),
-        }
+        Self::new_from(&::timely::dataflow::operators::generic::operator::empty(scope).as_collection())
     }
     /// Creates a new variable initialized with `source`.
     pub fn new_from(source: &Collection<Child<'a, G, Iter>, D>) -> Self {
-        let variable = Variable::new_from(source.clone(), Iter::max_value(), 1);
+        use ::timely::progress::nested::product::Product;
+        let variable = Variable::new_from(source.clone(), Product::new(Default::default(), 1));
         Relation {
             variable: variable,
             current: source.clone(),

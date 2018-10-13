@@ -7,10 +7,10 @@ use std::fs::File;
 
 use indexmap::IndexMap;
 
+use timely::progress::Timestamp;
+use timely::progress::nested::product::Product;
 use timely::dataflow::Scope;
 use timely::dataflow::scopes::ScopeParent;
-use timely::dataflow::scopes::child::Iterative;
-use timely::progress::Timestamp;
 
 use differential_dataflow::Collection;
 use differential_dataflow::lattice::Lattice;
@@ -21,6 +21,8 @@ use differential_dataflow::operators::{Threshold, JoinCore, Consolidate};
 
 type Node = usize;
 type Edge = (Node, Node);
+type Iter = usize;
+type Diff = isize;
 
 /// A direction we might traverse an edge.
 #[derive(Debug)]
@@ -84,17 +86,17 @@ type Arrange<G, K, V, R> = Arranged<G, K, V, R, TraceValHandle<K, V, <G as Scope
 ///
 /// An edge variable provides arranged representations of its contents, even before they are
 /// completely defined, in support of recursively defined productions.
-pub struct EdgeVariable<'a, G: Scope> where G::Timestamp : Lattice {
-    variable: Variable<'a, G, Edge, u64, isize>,
-    current: Collection<Iterative<'a, G, u64>, Edge, isize>,
-    forward: Option<Arrange<Iterative<'a, G, u64>, Node, Node, isize>>,
-    reverse: Option<Arrange<Iterative<'a, G, u64>, Node, Node, isize>>,
+pub struct EdgeVariable<G: Scope> where G::Timestamp : Lattice {
+    variable: Variable<G, Edge, Diff>,
+    current: Collection<G, Edge, Diff>,
+    forward: Option<Arrange<G, Node, Node, Diff>>,
+    reverse: Option<Arrange<G, Node, Node, Diff>>,
 }
 
-impl<'a, G: Scope> EdgeVariable<'a, G> where G::Timestamp : Lattice {
+impl<G: Scope> EdgeVariable<G> where G::Timestamp : Lattice {
     /// Creates a new variable initialized with `source`.
-    pub fn from(source: &Collection<Iterative<'a, G, u64>, Edge>) -> Self {
-        let variable = Variable::new_from(source.filter(|_| false), u64::max_value(), 1);
+    pub fn from(source: &Collection<G, Edge>, step: <G::Timestamp as Timestamp>::Summary) -> Self {
+        let variable = Variable::new(&mut source.scope(), step);
         EdgeVariable {
             variable: variable,
             current: source.clone(),
@@ -103,7 +105,7 @@ impl<'a, G: Scope> EdgeVariable<'a, G> where G::Timestamp : Lattice {
         }
     }
     /// Concatenates `production` into the definition of the variable.
-    pub fn add_production(&mut self, production: &Collection<Iterative<'a, G, u64>, Edge, isize>) {
+    pub fn add_production(&mut self, production: &Collection<G, Edge, Diff>) {
         self.current = self.current.concat(production);
     }
     /// Finalizes the variable, connecting its recursive definition.
@@ -116,14 +118,14 @@ impl<'a, G: Scope> EdgeVariable<'a, G> where G::Timestamp : Lattice {
         self.variable.set(&distinct);
     }
     /// The collection arranged in the forward direction.
-    pub fn forward(&mut self) -> &Arrange<Iterative<'a, G, u64>, Node, Node, isize> {
+    pub fn forward(&mut self) -> &Arrange<G, Node, Node, Diff> {
         if self.forward.is_none() {
             self.forward = Some(self.variable.arrange_by_key());
         }
         self.forward.as_ref().unwrap()
     }
     /// The collection arranged in the reverse direction.
-    pub fn reverse(&mut self) -> &Arrange<Iterative<'a, G, u64>, Node, Node, isize> {
+    pub fn reverse(&mut self) -> &Arrange<G, Node, Node, Diff> {
         if self.reverse.is_none() {
             self.reverse = Some(self.variable.map(|(x,y)| (y,x)).arrange_by_key());
         }
@@ -134,9 +136,9 @@ impl<'a, G: Scope> EdgeVariable<'a, G> where G::Timestamp : Lattice {
 /// Handles to inputs and outputs of a computation.
 pub struct RelationHandles<T: Timestamp+Lattice> {
     /// An input handle supporting arbitrary changes.
-    pub input: InputSession<T, Edge, isize>,
+    pub input: InputSession<T, Edge, Diff>,
     /// An output trace handle which can be used in other computations.
-    pub trace: TraceKeyHandle<Edge, T, isize>,
+    pub trace: TraceKeyHandle<Edge, T, Diff>,
 }
 
 impl Query {
@@ -164,7 +166,7 @@ impl Query {
         }
 
         // We need a subscope to allow iterative development of variables.
-        scope.iterative(|subscope| {
+        scope.iterative::<Iter,_,_>(|subscope| {
 
             // create map from relation name to input handle and collection.
             let mut result_map = IndexMap::new();
@@ -172,7 +174,7 @@ impl Query {
 
             // create variables and result handles for each named relation.
             for (name, (input, collection)) in input_map.drain(..) {
-                let edge_variable = EdgeVariable::from(&collection.enter(subscope));
+                let edge_variable = EdgeVariable::from(&collection.enter(subscope), Product::new(Default::default(), 1));
                 let trace = edge_variable.variable.leave().arrange_by_self().trace;
                 result_map.insert(name.clone(), RelationHandles { input, trace });
                 variable_map.insert(name.clone(), edge_variable);
