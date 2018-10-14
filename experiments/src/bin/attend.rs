@@ -5,18 +5,10 @@ extern crate differential_dataflow;
 
 use std::time::Instant;
 
-use timely::dataflow::*;
-
 use differential_dataflow::input::Input;
 use differential_dataflow::operators::*;
 
-use differential_dataflow::trace::implementations::ord::OrdValSpine as DefaultValTrace;
-use differential_dataflow::operators::arrange::TraceAgent;
-use differential_dataflow::operators::arrange::Arranged;
-
 use differential_dataflow::difference::DiffPair;
-
-type Arrange<G: Scope, K, V, R> = Arranged<G, K, V, R, TraceAgent<K, V, G::Timestamp, R, DefaultValTrace<K, V, G::Timestamp, R>>>;
 
 fn main() {
 
@@ -33,14 +25,14 @@ fn main() {
             let (input, graph) = scope.new_collection();
 
             let organizers = graph.explode(|(x,y)| Some((x, DiffPair::new(1,0))).into_iter().chain(Some((y, DiffPair::new(0,1))).into_iter()))
-                                  .threshold_total(|w| if w.element2 == 0 { 1 } else { 0 });
+                                  .threshold_total(|_,w| if w.element2 == 0 { 1 } else { 0 });
 
             organizers
                 .iterate(|attend| {
                     graph.enter(&attend.scope())
                          .semijoin(attend)
                          .map(|(_,y)| y)
-                         .threshold_total(|w| if w >= 3 { 1 } else { 0 })
+                         .threshold_total(|_,w| if w >= 3 { 1 } else { 0 })
                          .concat(&organizers.enter(&attend.scope()))
                          .consolidate()
                 })

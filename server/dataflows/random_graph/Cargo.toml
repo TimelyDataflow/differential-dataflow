@@ -9,5 +9,7 @@ differential-dataflow = { path = "../../../" }
 dd_server = { path = "../../" }
 rand="0.3.13"
 
+streaming-harness-hdrhist = { git = "https://github.com/utaal/hdrhist-rust" }
+
 [lib]
 crate-type = ["dylib"]

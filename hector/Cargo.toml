@@ -6,10 +6,9 @@ authors = ["Frank McSherry <fmcsherry@me.com>"]
 [dependencies.graph_map]
 git="https://github.com/frankmcsherry/graph-map.git"
 
-[dependencies.timely]
-git = "https://github.com/frankmcsherry/timely-dataflow"
-
 [dependencies]
-#timely = "0.3.0"
+abomonation = "0.7"
+abomonation_derive = "0.3"
+timely = "0.7"
 timely_sort="0.1.6"
 differential-dataflow = { path = "../" }

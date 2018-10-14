@@ -9,7 +9,7 @@ use std::cmp::Ordering;
 
 use timely::progress::Timestamp;
 use timely::dataflow::Scope;
-use timely::dataflow::operators::generic::{Binary, OutputHandle};
+use timely::dataflow::operators::generic::{Operator, OutputHandle};
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Capability;
 use timely::dataflow::channels::pushers::tee::Tee;
@@ -42,17 +42,17 @@ pub trait Join<G: Scope, K: Data, V: Data, R: Diff> {
     ///
     ///         let x = scope.new_collection_from(vec![(0, 1), (1, 3)]).1;
     ///         let y = scope.new_collection_from(vec![(0, 'a'), (1, 'b')]).1;
-    ///         let z = scope.new_collection_from(vec![(0, 1, 'a'), (1, 3, 'b')]).1;
+    ///         let z = scope.new_collection_from(vec![(0, (1, 'a')), (1, (3, 'b'))]).1;
     ///
     ///         x.join(&y)
     ///          .assert_eq(&z);
     ///     });
     /// }
     /// ```
-    fn join<V2: Data, R2: Diff>(&self, other: &Collection<G, (K,V2), R2>) -> Collection<G, (K,V,V2), <R as Mul<R2>>::Output>
+    fn join<V2: Data, R2: Diff>(&self, other: &Collection<G, (K,V2), R2>) -> Collection<G, (K,(V,V2)), <R as Mul<R2>>::Output>
     where R: Mul<R2>, <R as Mul<R2>>::Output: Diff
     {
-        self.join_map(other, |k,v,v2| (k.clone(),v.clone(),v2.clone()))
+        self.join_map(other, |k,v,v2| (k.clone(),(v.clone(),v2.clone())))
     }
 
     /// Matches pairs `(key,val1)` and `(key,val2)` based on `key` and then applies a function.
@@ -216,7 +216,7 @@ pub trait JoinCore<G: Scope, K: 'static, V: 'static, R: Diff> where G::Timestamp
     /// extern crate differential_dataflow;
     ///
     /// use differential_dataflow::input::Input;
-    /// use differential_dataflow::operators::arrange::Arrange;
+    /// use differential_dataflow::operators::arrange::ArrangeByKey;
     /// use differential_dataflow::operators::join::JoinCore;
     /// use differential_dataflow::trace::Trace;
     /// use differential_dataflow::trace::implementations::ord::OrdValSpine;
@@ -226,11 +226,9 @@ pub trait JoinCore<G: Scope, K: 'static, V: 'static, R: Diff> where G::Timestamp
     ///     ::timely::example(|scope| {
     ///
     ///         let x = scope.new_collection_from(vec![(0u32, 1), (1, 3)]).1
-    ///                      .map(|(x,y)| (OrdWrapper { item: x }, y))
-    ///                      .arrange(OrdValSpine::new());
+    ///                      .arrange_by_key();
     ///         let y = scope.new_collection_from(vec![(0, 'a'), (1, 'b')]).1
-    ///                      .map(|(x,y)| (OrdWrapper { item: x }, y))
-    ///                      .arrange(OrdValSpine::new());
+    ///                      .arrange_by_key();
     ///
     ///         let z = scope.new_collection_from(vec![(1, 'a'), (3, 'b')]).1;
     ///
@@ -314,6 +312,9 @@ impl<G, K, V, R1, T1> JoinCore<G, K, V, R1> for Arranged<G,K,V,R1,T1>
         let mut todo1 = Vec::new();
         let mut todo2 = Vec::new();
 
+        let mut input1_buffer = Vec::new();
+        let mut input2_buffer = Vec::new();
+
         self.stream.binary_notify(&other.stream, Pipeline, Pipeline, "Join", vec![], move |input1, input2, output, notificator| {
 
             // The join computation repeatedly accepts batches of updates from each of its inputs.
@@ -327,12 +328,13 @@ impl<G, K, V, R1, T1> JoinCore<G, K, V, R1> for Arranged<G,K,V,R1,T1>
             input1.for_each(|capability, data| {
                 if let Some(ref mut trace2) = trace2 {
                     let capability = capability.retain();
-                    for batch1 in data.drain(..) {
+                    data.swap(&mut input1_buffer);
+                    for batch1 in input1_buffer.drain(..) {
                         let (trace2_cursor, trace2_storage) = trace2.cursor_through(&acknowledged2[..]).unwrap();
-                        let batch1_cursor = batch1.item.cursor();
-                        todo1.push(Deferred::new(trace2_cursor, trace2_storage, batch1_cursor, batch1.item.clone(), capability.clone(), |r2,r1| *r1 * *r2));
-                        debug_assert!(batch1.item.description().lower() == &acknowledged1[..]);
-                        acknowledged1 = batch1.item.description().upper().to_vec();
+                        let batch1_cursor = batch1.cursor();
+                        todo1.push(Deferred::new(trace2_cursor, trace2_storage, batch1_cursor, batch1.clone(), capability.clone(), |r2,r1| *r1 * *r2));
+                        debug_assert!(batch1.description().lower() == &acknowledged1[..]);
+                        acknowledged1 = batch1.description().upper().to_vec();
                     }
                 }
             });
@@ -341,12 +343,13 @@ impl<G, K, V, R1, T1> JoinCore<G, K, V, R1> for Arranged<G,K,V,R1,T1>
             input2.for_each(|capability, data| {
                 if let Some(ref mut trace1) = trace1 {
                     let capability = capability.retain();
-                    for batch2 in data.drain(..) {
+                    data.swap(&mut input2_buffer);
+                    for batch2 in input2_buffer.drain(..) {
                         let (trace1_cursor, trace1_storage) = trace1.cursor_through(&acknowledged1[..]).unwrap();
-                        let batch2_cursor = batch2.item.cursor();
-                        todo2.push(Deferred::new(trace1_cursor, trace1_storage, batch2_cursor, batch2.item.clone(), capability.clone(), |r1,r2| *r1 * *r2));
-                        debug_assert!(batch2.item.description().lower() == &acknowledged2[..]);
-                        acknowledged2 = batch2.item.description().upper().to_vec();
+                        let batch2_cursor = batch2.cursor();
+                        todo2.push(Deferred::new(trace1_cursor, trace1_storage, batch2_cursor, batch2.clone(), capability.clone(), |r1,r2| *r1 * *r2));
+                        debug_assert!(batch2.description().lower() == &acknowledged2[..]);
+                        acknowledged2 = batch2.description().upper().to_vec();
                     }
                 }
             });
@@ -437,12 +440,12 @@ where
     fn new(trace: C1, trace_storage: C1::Storage, batch: C2, batch_storage: C2::Storage, capability: Capability<T>, mult: M) -> Self {
         Deferred {
             phant: ::std::marker::PhantomData,
-            trace: trace,
-            trace_storage: trace_storage,
-            batch: batch,
-            batch_storage: batch_storage,
-            capability: capability,
-            mult: mult,
+            trace,
+            trace_storage,
+            batch,
+            batch_storage,
+            capability,
+            mult,
             done: false,
             temp: Vec::new(),
             // thinker: JoinThinker::new(),

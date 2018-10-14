@@ -1,9 +1,9 @@
 # Differential Dataflow
-An implementation of [differential dataflow](./differentialdataflow.pdf) over [timely dataflow](https://github.com/frankmcsherry/timely-dataflow) on [Rust](http://www.rust-lang.org).
+An implementation of [differential dataflow](https://github.com/frankmcsherry/differential-dataflow/blob/master/differentialdataflow.pdf) over [timely dataflow](https://github.com/frankmcsherry/timely-dataflow) on [Rust](http://www.rust-lang.org).
 
 ## Background
 
-Differential dataflow is a data-parallel programming framework designed to efficiently process large volumes of data and to quickly respond to arbitrary changes in input collections.
+Differential dataflow is a data-parallel programming framework designed to efficiently process large volumes of data and to quickly respond to arbitrary changes in input collections. You can read more in the [differential dataflow mdbook](http://www.frankmcsherry.org/differential-dataflow/) and in the [differential dataflow documentation](https://docs.rs/differential-dataflow/0.5.0/differential_dataflow/).
 
 Differential dataflow programs are written as functional transformations of collections of data, using familiar operators like `map`, `filter`, `join`, and `group`. Differential dataflow also includes more exotic operators such as `iterate`, which repeatedly applies a differential dataflow fragment to a collection. The programs are compiled down to [timely dataflow](https://github.com/frankmcsherry/timely-dataflow) computations.
 
@@ -34,7 +34,7 @@ Once written, a differential dataflow responds to arbitrary changes to its initi
 
 In the examples above, we can add to and remove from `edges`, dynamically altering the graph, and get immediate feedback on how the results change. We could also add to and remove from `roots` altering the reachability query itself.
 
-Be sure to check out the [differential dataflow documentation](http://www.frankmcsherry.org/differential-dataflow/differential_dataflow/index.html), which is continually improving.
+Be sure to check out the [differential dataflow documentation](https://docs.rs/differential-dataflow), which is continually improving.
 
 ## An example: counting degrees in a graph.
 

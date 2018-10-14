@@ -8,5 +8,9 @@ regex = "0.2"
 timely = { git = "https://github.com/frankmcsherry/timely-dataflow" }
 differential-dataflow = { path = "../" }
 arrayvec = { git = "https://github.com/bluss/arrayvec" }
-abomonation = "0.5"
+abomonation = { git = "https://github.com/frankmcsherry/abomonation" }
 core_affinity = "0.5.9"
+
+[profile.release]
+panic = "abort"
+

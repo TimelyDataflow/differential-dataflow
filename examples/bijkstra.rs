@@ -4,6 +4,7 @@ extern crate differential_dataflow;
 
 use rand::{Rng, SeedableRng, StdRng};
 
+use timely::progress::nested::product::Product;
 use timely::dataflow::*;
 use timely::dataflow::operators::probe::Handle;
 
@@ -26,7 +27,7 @@ fn main() {
 
     // define a new computational scope, in which to run BFS
     timely::execute_from_args(std::env::args().skip(6), move |worker| {
-        
+
         let timer = ::std::time::Instant::now();
 
         // define BFS dataflow; return handles to roots and edges inputs
@@ -80,7 +81,7 @@ fn main() {
                     graph.insert((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)));
                     graph.remove((rng2.gen_range(0, nodes), rng2.gen_range(0, nodes)));
                 }
-                graph.advance_to(3 + round * batch + element);                
+                graph.advance_to(3 + round * batch + element);
             }
             graph.flush();
 
@@ -100,15 +101,15 @@ fn main() {
 fn bidijkstra<G: Scope>(edges: &Collection<G, Edge>, goals: &Collection<G, (Node, Node)>) -> Collection<G, ((Node, Node), u32)>
 where G::Timestamp: Lattice+Ord {
 
-    edges.scope().scoped(|inner| {
+    edges.scope().iterative::<u64,_,_>(|inner| {
 
-        // Our plan is to start evolving distances from both sources and destinations. 
+        // Our plan is to start evolving distances from both sources and destinations.
         // The evolution from a source or destination should continue as long as there
         // is a corresponding destination or source that has not yet been reached.
 
         // forward and reverse (node, (root, dist))
-        let forward = Variable::from(goals.map(|(x,_)| (x,(x,0))).enter(inner));
-        let reverse = Variable::from(goals.map(|(_,y)| (y,(y,0))).enter(inner));
+        let forward = Variable::new_from(goals.map(|(x,_)| (x,(x,0))).enter(inner), Product::new(Default::default(), 1));
+        let reverse = Variable::new_from(goals.map(|(_,y)| (y,(y,0))).enter(inner), Product::new(Default::default(), 1));
 
         let goals = goals.enter(inner);
         let edges = edges.enter(inner);
@@ -118,7 +119,7 @@ where G::Timestamp: Lattice+Ord {
         //   done(src, dst) := forward(src, med), reverse(dst, med), goal(src, dst).
         //
         // This is a cyclic join, which should scare us a bunch.
-        let reached = 
+        let reached =
         forward
             .join_map(&reverse, |_, &(src,d1), &(dst,d2)| ((src, dst), d1 + d2))
             .group(|_key, s, t| t.push((*s[0].0, 1)));
@@ -133,7 +134,7 @@ where G::Timestamp: Lattice+Ord {
 
         // Let's expand out forward queries that are active.
         let forward_active = active.map(|(x,_y)| x).distinct();
-        let forward_next = 
+        let forward_next =
         forward
             .map(|(med, (src, dist))| (src, (med, dist)))
             .semijoin(&forward_active)
@@ -148,7 +149,7 @@ where G::Timestamp: Lattice+Ord {
 
         // Let's expand out reverse queries that are active.
         let reverse_active = active.map(|(_x,y)| y).distinct();
-        let reverse_next = 
+        let reverse_next =
         reverse
             .map(|(med, (rev, dist))| (rev, (med, dist)))
             .semijoin(&reverse_active)

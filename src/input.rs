@@ -6,30 +6,25 @@
 //! timely dataflow capabilities, exposing more concurrency to the operator implementations
 //! than are evident from the logical times, which appear to execute in sequence.
 
-use timely_communication::Allocate;
-
 use timely::progress::Timestamp;
-use timely::progress::timestamp::RootTimestamp;
-use timely::progress::nested::product::Product;
 use timely::dataflow::operators::Input as TimelyInput;
 use timely::dataflow::operators::input::Handle;
-use timely::dataflow::scopes::{Child, Root};
+use timely::dataflow::scopes::ScopeParent;
 
 use ::{Data, Diff};
 use collection::{Collection, AsCollection};
 
 /// Create a new collection and input handle to control the collection.
-pub trait Input<'a, A: Allocate, T: Timestamp+Ord> {
+pub trait Input : TimelyInput {
     /// Create a new collection and input handle to subsequently control the collection.
     ///
     /// # Examples
     ///
     /// ```
     /// extern crate timely;
-    /// extern crate timely_communication;
     /// extern crate differential_dataflow;
     ///
-    /// use timely_communication::Configuration;
+    /// use timely::Configuration;
     /// use differential_dataflow::input::Input;
     ///
     /// fn main() {
@@ -50,7 +45,7 @@ pub trait Input<'a, A: Allocate, T: Timestamp+Ord> {
     ///		}).unwrap();
     /// }
     /// ```
-    fn new_collection<D, R>(&mut self) -> (InputSession<T, D, R>, Collection<Child<'a, Root<A>, T>, D, R>)
+    fn new_collection<D, R>(&mut self) -> (InputSession<<Self as ScopeParent>::Timestamp, D, R>, Collection<Self, D, R>)
     where D: Data, R: Diff;
     /// Create a new collection and input handle from initial data.
     ///
@@ -58,10 +53,9 @@ pub trait Input<'a, A: Allocate, T: Timestamp+Ord> {
     ///
     /// ```
     /// extern crate timely;
-    /// extern crate timely_communication;
     /// extern crate differential_dataflow;
     ///
-    /// use timely_communication::Configuration;
+    /// use timely::Configuration;
     /// use differential_dataflow::input::Input;
     ///
     /// fn main() {
@@ -82,17 +76,18 @@ pub trait Input<'a, A: Allocate, T: Timestamp+Ord> {
     ///		}).unwrap();
     /// }
     /// ```
-    fn new_collection_from<I>(&mut self, data: I) -> (InputSession<T, I::Item, isize>, Collection<Child<'a, Root<A>, T>, I::Item, isize>)
+    fn new_collection_from<I>(&mut self, data: I) -> (InputSession<<Self as ScopeParent>::Timestamp, I::Item, isize>, Collection<Self, I::Item, isize>)
     where I: IntoIterator+'static, I::Item: Data;
 }
 
-impl<'a, A: Allocate, T: Timestamp+Ord> Input<'a, A, T> for Child<'a, Root<A>, T> {
-    fn new_collection<D, R>(&mut self) -> (InputSession<T, D, R>, Collection<Child<'a, Root<A>, T>, D, R>)
+use lattice::Lattice;
+impl<G: TimelyInput> Input for G where <G as ScopeParent>::Timestamp: Lattice {
+    fn new_collection<D, R>(&mut self) -> (InputSession<<G as ScopeParent>::Timestamp, D, R>, Collection<G, D, R>)
     where D: Data, R: Diff{
 		let (handle, stream) = self.new_input();
 		(InputSession::from(handle), stream.as_collection())
     }
-    fn new_collection_from<I>(&mut self, data: I) -> (InputSession<T, I::Item, isize>, Collection<Child<'a, Root<A>, T>, I::Item, isize>)
+    fn new_collection_from<I>(&mut self, data: I) -> (InputSession<<G as ScopeParent>::Timestamp, I::Item, isize>, Collection<G, I::Item, isize>)
     where I: IntoIterator+'static, I::Item: Data {
 
     	use timely::dataflow::operators::ToStream;
@@ -115,10 +110,9 @@ impl<'a, A: Allocate, T: Timestamp+Ord> Input<'a, A, T> for Child<'a, Root<A>, T
 ///
 /// ```
 /// extern crate timely;
-/// extern crate timely_communication;
 /// extern crate differential_dataflow;
 ///
-/// use timely_communication::Configuration;
+/// use timely::Configuration;
 /// use differential_dataflow::input::Input;
 ///
 /// fn main() {
@@ -155,9 +149,9 @@ impl<'a, A: Allocate, T: Timestamp+Ord> Input<'a, A, T> for Child<'a, Root<A>, T
 /// }
 /// ```
 pub struct InputSession<T: Timestamp+Clone, D: Data, R: Diff> {
-	time: Product<RootTimestamp, T>,
-	buffer: Vec<(D, Product<RootTimestamp, T>, R)>,
-	handle: Handle<T,(D,Product<RootTimestamp, T>,R)>,
+	time: T,
+	buffer: Vec<(D, T, R)>,
+	handle: Handle<T,(D,T,R)>,
 }
 
 impl<T: Timestamp+Clone, D: Data> InputSession<T, D, isize> {
@@ -181,14 +175,34 @@ impl<T: Timestamp+Clone, D: Data> InputSession<T, D, isize> {
 //     pub fn remove(&mut self, element: D) { self.update(element,-1); }
 // }
 
-impl<'a, T: Timestamp+Clone, D: Data, R: Diff> InputSession<T, D, R> {
+impl<T: Timestamp+Clone, D: Data, R: Diff> InputSession<T, D, R> {
+
+    /// Introduces a handle as collection.
+    pub fn to_collection<G: TimelyInput>(&mut self, scope: &mut G) -> Collection<G, D, R>
+    where
+        G: ScopeParent<Timestamp=T>,
+    {
+        scope
+            .input_from(&mut self.handle)
+            .as_collection()
+    }
+
+    /// Allocates a new input handle.
+    pub fn new() -> Self {
+        let handle: Handle<T,_> = Handle::new();
+        InputSession {
+            time: handle.time().clone(),
+            buffer: Vec::new(),
+            handle,
+        }
+    }
 
 	/// Creates a new session from a reference to an input handle.
-	pub fn from(handle: Handle<T,(D,Product<RootTimestamp, T>,R)>) -> Self {
+	pub fn from(handle: Handle<T,(D,T,R)>) -> Self {
 		InputSession {
 			time: handle.time().clone(),
 			buffer: Vec::new(),
-			handle: handle,
+			handle,
 		}
 	}
 
@@ -204,6 +218,19 @@ impl<'a, T: Timestamp+Clone, D: Data, R: Diff> InputSession<T, D, R> {
 		self.buffer.push((element, self.time.clone(), change));
 	}
 
+    /// Adds to the weight of an element in the collection at a future time.
+    pub fn update_at(&mut self, element: D, time: T, change: R) {
+        assert!(self.time.less_equal(&time));
+        if self.buffer.len() == self.buffer.capacity() {
+            if self.buffer.len() > 0 {
+                self.handle.send_batch(&mut self.buffer);
+            }
+            // TODO : This is a fairly arbitrary choice; should probably use `Context::default_size()` or such.
+            self.buffer.reserve(1024);
+        }
+        self.buffer.push((element, time, change));
+    }
+
 	/// Forces buffered data into the timely dataflow input, and advances its time to match that of the session.
 	///
 	/// It is important to call `flush` before expecting timely dataflow to report progress. Until this method is
@@ -211,8 +238,8 @@ impl<'a, T: Timestamp+Clone, D: Data, R: Diff> InputSession<T, D, R> {
 	/// called, all buffers are flushed and timely dataflow is advised that some logical times are no longer possible.
 	pub fn flush(&mut self) {
 		self.handle.send_batch(&mut self.buffer);
-		if self.handle.epoch().less_than(&self.time.inner) {
-			self.handle.advance_to(self.time.inner.clone());
+		if self.handle.epoch().less_than(&self.time) {
+			self.handle.advance_to(self.time.clone());
 		}
 	}
 
@@ -223,14 +250,14 @@ impl<'a, T: Timestamp+Clone, D: Data, R: Diff> InputSession<T, D, R> {
 	/// method unless the session has just been flushed.
 	pub fn advance_to(&mut self, time: T) {
 		assert!(self.handle.epoch().less_equal(&time));
-		assert!(&self.time.inner.less_equal(&time));
-		self.time = Product::new(RootTimestamp, time);
+		assert!(&self.time.less_equal(&time));
+		self.time = time;
 	}
 
 	/// Reveals the current time of the session.
-	pub fn epoch(&self) -> &T { &self.time.inner }
+	pub fn epoch(&self) -> &T { &self.time }
 	/// Reveals the current time of the session.
-	pub fn time(&self) -> &Product<RootTimestamp, T> { &self.time }
+	pub fn time(&self) -> &T { &self.time }
 
 	/// Closes the input, flushing and sealing the wrapped timely input.
 	pub fn close(self) { }

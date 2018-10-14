@@ -15,7 +15,7 @@
 
 use timely::order::TotalOrder;
 use timely::dataflow::*;
-use timely::dataflow::operators::Unary;
+use timely::dataflow::operators::Operator;
 use timely::dataflow::channels::pact::Pipeline;
 
 use lattice::Lattice;
@@ -54,61 +54,27 @@ impl<G: Scope, K: Data+Hashable, R: Diff> CountTotal<G, K, R> for Collection<G, 
 where G::Timestamp: TotalOrder+Lattice+Ord {
     fn count_total(&self) -> Collection<G, (K, R), isize> {
         self.arrange_by_self()
-            .count_total_core()
+            .count_total()
     }
 }
 
-
-/// Extension trait for the `group_arranged` differential dataflow method.
-pub trait CountTotalCore<G: Scope, K: Data, R: Diff> where G::Timestamp: TotalOrder+Lattice+Ord {
-    /// Applies `group` to arranged data, and returns an arrangement of output data.
-    ///
-    /// This method is used by the more ergonomic `group`, `distinct`, and `count` methods, although
-    /// it can be very useful if one needs to manually attach and re-use existing arranged collections.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// extern crate timely;
-    /// extern crate differential_dataflow;
-    ///
-    /// use differential_dataflow::input::Input;
-    /// use differential_dataflow::operators::arrange::Arrange;
-    /// use differential_dataflow::operators::count::CountTotalCore;
-    /// use differential_dataflow::trace::Trace;
-    /// use differential_dataflow::trace::implementations::ord::OrdKeySpine;
-    /// use differential_dataflow::hashable::OrdWrapper;
-    ///
-    /// fn main() {
-    ///     ::timely::example(|scope| {
-    ///
-    ///         // wrap and order input, then group manually.
-    ///         scope.new_collection_from(1 .. 10u32).1
-    ///              .map(|x| (OrdWrapper { item: x / 3 }, ()))
-    ///              .arrange(OrdKeySpine::new())
-    ///              .count_total_core();
-    ///     });
-    /// }
-    /// ```
-    fn count_total_core(&self) -> Collection<G, (K, R), isize>;
-}
-
-impl<G: Scope, K: Data, R: Diff, T1> CountTotalCore<G, K, R> for Arranged<G, K, (), R, T1>
+impl<G: Scope, K: Data, R: Diff, T1> CountTotal<G, K, R> for Arranged<G, K, (), R, T1>
 where
     G::Timestamp: TotalOrder+Lattice+Ord,
     T1: TraceReader<K, (), G::Timestamp, R>+Clone+'static,
     T1::Batch: BatchReader<K, (), G::Timestamp, R> {
 
-    fn count_total_core(&self) -> Collection<G, (K, R), isize> {
+    fn count_total(&self) -> Collection<G, (K, R), isize> {
 
         let mut trace = self.trace.clone();
+        let mut buffer = Vec::new();
 
-        self.stream.unary_stream(Pipeline, "CountTotal", move |input, output| {
+        self.stream.unary(Pipeline, "CountTotal", move |_,_| move |input, output| {
 
             input.for_each(|capability, batches| {
-
+                batches.swap(&mut buffer);
                 let mut session = output.session(&capability);
-                for batch in batches.drain(..).map(|x| x.item) {
+                for batch in buffer.drain(..) {
 
                     let mut batch_cursor = batch.cursor();
                     let (mut trace_cursor, trace_storage) = trace.cursor_through(batch.lower()).unwrap();

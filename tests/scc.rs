@@ -1,6 +1,5 @@
 extern crate rand;
 extern crate timely;
-extern crate timely_communication;
 extern crate differential_dataflow;
 
 use rand::{Rng, SeedableRng, StdRng};
@@ -10,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 use std::mem;
 
-use timely_communication::Configuration;
+use timely::Configuration;
 
 use timely::dataflow::*;
 use timely::dataflow::operators::Capture;
@@ -216,7 +215,7 @@ fn scc_differential(
 
     recv.extract()
         .into_iter()
-        .flat_map(|(_, list)| list.into_iter().map(|((src,dst),time,diff)| ((src,dst), time.inner, diff)))
+        .flat_map(|(_, list)| list.into_iter().map(|((src,dst),time,diff)| ((src,dst), time, diff)))
         .collect()
 }
 

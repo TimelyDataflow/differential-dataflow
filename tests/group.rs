@@ -1,7 +1,6 @@
 extern crate timely;
 extern crate differential_dataflow;
 
-use timely::progress::timestamp::RootTimestamp;
 use timely::dataflow::operators::{ToStream, Capture, Map};
 use timely::dataflow::operators::capture::Extract;
 use differential_dataflow::AsCollection;
@@ -34,7 +33,7 @@ fn group_scaling() {
         let scale = 100_000;
 
         (0 .. 1).to_stream(scope)
-                .flat_map(move |_| (0..scale).map(|i| ((), RootTimestamp::new(i), 1)))
+                .flat_map(move |_| (0..scale).map(|i| ((), i, 1)))
                 .as_collection()
                 .count()
                 .inner

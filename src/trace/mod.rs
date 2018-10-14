@@ -117,7 +117,7 @@ pub trait Trace<Key, Val, Time, R> : TraceReader<Key, Val, Time, R>
 where <Self as TraceReader<Key, Val, Time, R>>::Batch: Batch<Key, Val, Time, R> {
 
 	/// Allocates a new empty trace.
-	fn new() -> Self;
+	fn new(info: ::timely::dataflow::operators::generic::OperatorInfo, logging: Option<::logging::Logger>) -> Self;
 
 	/// Introduces a batch of updates to the trace.
 	///
@@ -255,7 +255,7 @@ pub mod rc_blanket_impls {
 	impl<K, V, T, R, B: BatchReader<K, V, T, R>> RcBatchCursor<K, V, T, R, B> {
 	    fn new(cursor: B::Cursor) -> Self {
 	        RcBatchCursor {
-	            cursor: cursor,
+	            cursor,
 	            phantom: ::std::marker::PhantomData,
 	        }
 	    }
@@ -361,7 +361,7 @@ pub mod abomonated_blanket_impls {
 	impl<K, V, T, R, B: BatchReader<K, V, T, R>> AbomonatedBatchCursor<K, V, T, R, B> {
 	    fn new(cursor: B::Cursor) -> Self {
 	        AbomonatedBatchCursor {
-	            cursor: cursor,
+	            cursor,
 	            phantom: ::std::marker::PhantomData,
 	        }
 	    }

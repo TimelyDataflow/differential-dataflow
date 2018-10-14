@@ -150,7 +150,7 @@ fn main() {
             let elapsed_ns: usize = (elapsed.as_secs() * 1_000_000_000 + (elapsed.subsec_nanos() as u64)) as usize;
 
             // Determine completed ns.
-            let acknowledged_ns: usize = probe.with_frontier(|frontier| frontier[0].inner);
+            let acknowledged_ns: usize = probe.with_frontier(|frontier| frontier[0]);
 
             // any un-recorded measurements that are complete should be recorded.
             while (ack_counter * ns_per_request) < acknowledged_ns && ack_counter < ack_target {
@@ -235,7 +235,7 @@ use differential_dataflow::trace::implementations::ord::OrdValSpine as DefaultVa
 use differential_dataflow::operators::arrange::TraceAgent;
 use differential_dataflow::operators::arrange::Arranged;
 
-type Arrange<G: Scope, K, V, R> = Arranged<G, K, V, R, TraceAgent<K, V, G::Timestamp, R, DefaultValTrace<K, V, G::Timestamp, R>>>;
+type Arrange<G, K, V, R> = Arranged<G, K, V, R, TraceAgent<K, V, <G as ScopeParent>::Timestamp, R, DefaultValTrace<K, V, <G as ScopeParent>::Timestamp, R>>>;
 
 // returns pairs (n, s) indicating node n can be reached from a root in s steps.
 fn three_hop<G: Scope>(

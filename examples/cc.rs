@@ -21,7 +21,7 @@ fn main() {
     // snag a filename to use for the input graph.
     let filename = std::env::args().nth(1).unwrap();
 
-    timely::execute_from_args(std::env::args().skip(1), move |worker| {
+    timely::execute_from_args(std::env::args().skip(2), move |worker| {
 
         let peers = worker.peers();
         let index = worker.index();

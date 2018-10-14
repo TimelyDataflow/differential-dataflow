@@ -38,7 +38,7 @@ fn main() {
         println!("loaded {} nodes, {} edges", nodes, edges.len());
 
         let index = worker.dataflow::<usize,_,_>(|scope| {
-            CollectionIndex::from(&Collection::new(edges.to_stream(scope)))
+            CollectionIndex::index(&Collection::new(edges.to_stream(scope)))
         });
 
         let mut index_xz = index.extend_using(|&(ref x, ref _y)| *x);
@@ -81,7 +81,7 @@ fn main() {
         while index < edges2.len() {
             let limit = std::cmp::min(batching, edges2.len() - index);
             for offset in 0 .. limit {
-                edges.insert((edges2[index + offset].0));
+                edges.insert(edges2[index + offset].0);
                 edges.advance_to(index + offset + 1);
             }
             index += limit;

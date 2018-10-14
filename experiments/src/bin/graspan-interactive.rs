@@ -99,7 +99,7 @@ fn main() {
                             "n" => {
 
                                 nodes.remove((src, dst));
-                                let round = nodes.time().inner;
+                                let round = nodes.time() + 0;
                                 nodes.advance_to(round + 1);
                                 nodes.flush();
 
@@ -114,7 +114,8 @@ fn main() {
                                 // println!("elapsed: {:?}", elapsed);
 
                                 // println!("round: {:?}", round);
-                                if round % 1000 == 999 {
+                                // TODO: isn't this if round % 1000 == 999 {
+                                if round == 999 {
                                     let mut results = Vec::new();
                                     let total = counts.iter().map(|x| x.iter().sum::<u64>()).sum();
                                     let mut sum = 0;

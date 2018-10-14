@@ -5,7 +5,7 @@
 
 use timely::order::TotalOrder;
 use timely::dataflow::*;
-use timely::dataflow::operators::Unary;
+use timely::dataflow::operators::Operator;
 use timely::dataflow::channels::pact::Pipeline;
 
 use lattice::Lattice;
@@ -33,11 +33,11 @@ pub trait ThresholdTotal<G: Scope, K: Data, R: Diff> where G::Timestamp: TotalOr
     ///         // report the number of occurrences of each key
     ///         scope.new_collection_from(1 .. 10).1
     ///              .map(|x| x / 3)
-    ///              .threshold_total(|c| c % 2);
+    ///              .threshold_total(|_,c| c % 2);
     ///     });
     /// }
     /// ```
-    fn threshold_total<R2: Diff, F: Fn(R)->R2+'static>(&self, thresh: F) -> Collection<G, K, R2>;
+    fn threshold_total<R2: Diff, F: Fn(&K,R)->R2+'static>(&self, thresh: F) -> Collection<G, K, R2>;
     /// Reduces the collection to one occurrence of each distinct element.
     ///
     /// This reduction only tests whether the weight associated with a record is non-zero, and otherwise
@@ -63,36 +63,37 @@ pub trait ThresholdTotal<G: Scope, K: Data, R: Diff> where G::Timestamp: TotalOr
     /// }
     /// ```
     fn distinct_total(&self) -> Collection<G, K, isize> {
-        self.threshold_total(|c| if c.is_zero() { 0 } else { 1 })        
+        self.threshold_total(|_,c| if c.is_zero() { 0 } else { 1 })
     }
 }
 
 impl<G: Scope, K: Data+Hashable, R: Diff> ThresholdTotal<G, K, R> for Collection<G, K, R>
 where G::Timestamp: TotalOrder+Lattice+Ord {
-    fn threshold_total<R2: Diff, F: Fn(R)->R2+'static>(&self, thresh: F) -> Collection<G, K, R2> {
+    fn threshold_total<R2: Diff, F: Fn(&K,R)->R2+'static>(&self, thresh: F) -> Collection<G, K, R2> {
         self.arrange_by_self()
             .threshold_total(thresh)
     }
 }
 
 impl<G: Scope, K: Data, R: Diff, T1> ThresholdTotal<G, K, R> for Arranged<G, K, (), R, T1>
-where 
+where
     G::Timestamp: TotalOrder+Lattice+Ord,
     T1: TraceReader<K, (), G::Timestamp, R>+Clone+'static,
     T1::Batch: BatchReader<K, (), G::Timestamp, R> {
 
-    fn threshold_total<R2: Diff, F:Fn(R)->R2+'static>(&self, thresh: F) -> Collection<G, K, R2> {
+    fn threshold_total<R2: Diff, F:Fn(&K,R)->R2+'static>(&self, thresh: F) -> Collection<G, K, R2> {
 
         let mut trace = self.trace.clone();
+        let mut buffer = Vec::new();
 
-        self.stream.unary_stream(Pipeline, "ThresholdTotal", move |input, output| {
+        self.stream.unary(Pipeline, "ThresholdTotal", move |_,_| move |input, output| {
 
             let thresh = &thresh;
-    
-            input.for_each(|capability, batches| {
 
+            input.for_each(|capability, batches| {
+                batches.swap(&mut buffer);
                 let mut session = output.session(&capability);
-                for batch in batches.drain(..).map(|x| x.item) {
+                for batch in buffer.drain(..) {
 
                     let mut batch_cursor = batch.cursor();
                     let (mut trace_cursor, trace_storage) = trace.cursor_through(batch.lower()).unwrap();
@@ -110,9 +111,9 @@ where
                         // Apply `thresh` both before and after `diff` is applied to `count`.
                         // If the result is non-zero, send it along.
                         batch_cursor.map_times(&batch, |time, diff| {
-                            let old_weight = if count.is_zero() { R2::zero() } else { thresh(count) };
+                            let old_weight = if count.is_zero() { R2::zero() } else { thresh(key, count) };
                             count = count + diff;
-                            let new_weight = if count.is_zero() { R2::zero() } else { thresh(count) };
+                            let new_weight = if count.is_zero() { R2::zero() } else { thresh(key, count) };
                             let difference = new_weight - old_weight;
                             if !difference.is_zero() {
                                 session.give((key.clone(), time.clone(), difference));

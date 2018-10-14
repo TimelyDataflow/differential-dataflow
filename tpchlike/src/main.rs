@@ -176,8 +176,8 @@ fn main() {
         let nanos = elapsed.as_secs() * 1000000000 + elapsed.subsec_nanos() as u64;
         if index == 0 {
             let rate = ((peers * tuples) as f64) / (nanos as f64 / 1000000000.0);
-            // Query, Logical, Physical, Workers, Rate
-            println!("{}\t{}\t{}\t{}\t{}", query_name, logical_batch, physical_batch, peers, rate);
+            // Query, Logical, Physical, Workers, Rate, Time
+            println!("{}\t{}\t{}\t{}\t{}\t{}", query_name, logical_batch, physical_batch, peers, rate, nanos);
             // println!("query: {}, elapsed: {:?}, tuples: {:?}, rate: {:?}", query_name, timer.elapsed(), peers * tuples, ((peers * tuples) as f64) / (nanos as f64 / 1000000000.0));
         }
 

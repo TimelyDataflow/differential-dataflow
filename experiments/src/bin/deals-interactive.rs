@@ -18,7 +18,7 @@ use differential_dataflow::trace::implementations::ord::OrdValSpine as DefaultVa
 use differential_dataflow::operators::arrange::TraceAgent;
 use differential_dataflow::operators::arrange::Arranged;
 
-type Arrange<G: Scope, K, V, R> = Arranged<G, K, V, R, TraceAgent<K, V, G::Timestamp, R, DefaultValTrace<K, V, G::Timestamp, R>>>;
+type Arrange<G, K, V, R> = Arranged<G, K, V, R, TraceAgent<K, V, <G as ScopeParent>::Timestamp, R, DefaultValTrace<K, V, <G as ScopeParent>::Timestamp, R>>>;
 
 type Node = u32;
 
@@ -247,7 +247,7 @@ where G::Timestamp: Lattice{
                 .concat(&magic.map(|x| (x,x)))
                 .distinct();
 
-            result.map(|_| ()).consolidate().inspect(|x| println!("\t{:?}", x));
+            // result.map(|_| ()).consolidate().inspect(|x| println!("\t{:?}", x));
             result
         })
         .semijoin(&sg_x);

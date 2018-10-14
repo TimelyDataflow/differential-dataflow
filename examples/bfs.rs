@@ -11,6 +11,7 @@ use differential_dataflow::input::Input;
 use differential_dataflow::Collection;
 use differential_dataflow::operators::*;
 use differential_dataflow::lattice::Lattice;
+use differential_dataflow::logging::DifferentialEvent;
 
 type Node = u32;
 type Edge = (Node, Node);
@@ -24,8 +25,24 @@ fn main() {
     let inspect: bool = std::env::args().nth(5).unwrap() == "inspect";
 
     // define a new computational scope, in which to run BFS
-    timely::execute_from_args(std::env::args().skip(6), move |worker| {
-        
+    timely::execute_from_args(std::env::args(), move |worker| {
+
+        if let Ok(addr) = ::std::env::var("DIFFERENTIAL_LOG_ADDR") {
+
+            eprintln!("enabled DIFFERENTIAL logging to {}", addr);
+
+            if let Ok(stream) = ::std::net::TcpStream::connect(&addr) {
+                let writer = ::timely::dataflow::operators::capture::EventWriter::new(stream);
+                let mut logger = ::timely::logging::BatchLogger::new(writer);
+                worker.log_register().insert::<DifferentialEvent,_>("differential/arrange", move |time, data|
+                    logger.publish_batch(time, data)
+                );
+            }
+            else {
+                panic!("Could not connect to differential log address: {:?}", addr);
+            }
+        }
+
         let timer = ::std::time::Instant::now();
 
         // define BFS dataflow; return handles to roots and edges inputs
@@ -78,7 +95,7 @@ fn main() {
                     graph.insert((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)));
                     graph.remove((rng2.gen_range(0, nodes), rng2.gen_range(0, nodes)));
                 }
-                graph.advance_to(2 + round * batch + element);                
+                graph.advance_to(2 + round * batch + element);
             }
             graph.flush();
 

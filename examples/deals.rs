@@ -10,6 +10,7 @@ use std::time::Instant;
 // use rand::{Rng, SeedableRng, StdRng};
 
 use timely::dataflow::*;
+use timely::dataflow::scopes::ScopeParent;
 
 use differential_dataflow::input::Input;
 use differential_dataflow::Collection;
@@ -23,7 +24,7 @@ use differential_dataflow::trace::implementations::ord::OrdValSpine as DefaultVa
 use differential_dataflow::operators::arrange::TraceAgent;
 use differential_dataflow::operators::arrange::Arranged;
 
-type Arrange<G: Scope, K, V, R> = Arranged<G, K, V, R, TraceAgent<K, V, G::Timestamp, R, DefaultValTrace<K, V, G::Timestamp, R>>>;
+type Arrange<G, K, V, R> = Arranged<G, K, V, R, TraceAgent<K, V, <G as ScopeParent>::Timestamp, R, DefaultValTrace<K, V, <G as ScopeParent>::Timestamp, R>>>;
 
 type Node = u32;
 // type Edge = (Node, Node);
@@ -34,7 +35,7 @@ fn main() {
     let filename = std::env::args().nth(1).unwrap();
     let program = std::env::args().nth(2).unwrap();
 
-    timely::execute_from_args(std::env::args().skip(1), move |worker| {
+    timely::execute_from_args(std::env::args().skip(3), move |worker| {
 
         let peers = worker.peers();
         let index = worker.index();

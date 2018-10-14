@@ -89,11 +89,13 @@ impl<T: timely::ExchangeData + Ord + Debug> Data for T { }
 extern crate fnv;
 extern crate timely;
 extern crate timely_sort;
-extern crate timely_communication;
 
 #[macro_use]
 extern crate abomonation_derive;
 extern crate abomonation;
+#[macro_use]
+extern crate serde_derive;
+extern crate serde;
 
 pub mod hashable;
 pub mod operators;
@@ -103,3 +105,4 @@ pub mod trace;
 pub mod input;
 pub mod difference;
 pub mod collection;
+pub mod logging;

@@ -2,26 +2,18 @@ extern crate rand;
 extern crate timely;
 extern crate differential_dataflow;
 
-use timely::dataflow::operators::*;
-
 use rand::{Rng, SeedableRng, StdRng};
+
+use timely::dataflow::operators::*;
+use timely::progress::nested::product::Product;
 
 use differential_dataflow::input::Input;
 use differential_dataflow::AsCollection;
-use differential_dataflow::operators::arrange::{Arrange, ArrangeByKey};
+use differential_dataflow::operators::arrange::ArrangeByKey;
 use differential_dataflow::operators::group::Group;
 use differential_dataflow::operators::join::JoinCore;
 use differential_dataflow::operators::Iterate;
 use differential_dataflow::operators::Consolidate;
-
-use differential_dataflow::trace::Trace;
-use differential_dataflow::trace::implementations::ord::OrdValSpineAbom;
-
-// use differential_dataflow::trace::implementations::ord::OrdValSpine;
-// use differential_dataflow::trace::{Cursor, Trace};
-// use differential_dataflow::trace::Batch;
-// use differential_dataflow::hashable::OrdWrapper;
-// use differential_dataflow::trace::TraceReader;
 
 fn main() {
 
@@ -29,11 +21,11 @@ fn main() {
     let edges: usize = std::env::args().nth(2).unwrap().parse().unwrap();
     let batch: usize = std::env::args().nth(3).unwrap().parse().unwrap();
     let pre: usize = std::env::args().nth(4).unwrap().parse().unwrap();
-    let inspect: bool = std::env::args().position(|x| x == "inspect").is_some();
+    let inspect: bool = std::env::args().nth(5).unwrap() == "inspect";
 
 
-    // define a new timely dataflow computation. 
-    timely::execute_from_args(std::env::args().skip(4), move |worker| {
+    // define a new timely dataflow computation.
+    timely::execute_from_args(std::env::args().skip(6), move |worker| {
 
         let timer = ::std::time::Instant::now();
 
@@ -43,7 +35,7 @@ fn main() {
         let mut probe = timely::dataflow::operators::probe::Handle::new();
 
         // create a dataflow managing an ever-changing edge collection.
-    	let mut graph = worker.dataflow(|scope| {
+    	let mut graph = worker.dataflow::<Product<(),usize>,_,_>(|scope| {
 
             // create a source operator which will produce random edges and delete them.
             timely::dataflow::operators::generic::source(scope, "RandomGraph", |mut capability| {
@@ -99,8 +91,8 @@ fn main() {
             })
             .probe_with(&mut probe)
             .as_collection()
-            // .arrange_by_key()
-            .arrange(OrdValSpineAbom::new())
+            .arrange_by_key()
+            // .arrange::<OrdValSpineAbom>()
             .trace
         });
 
@@ -174,8 +166,8 @@ fn main() {
 
                 time.inner += batch;
 
-                roots.advance_to(time.inner); roots.flush();
-                query.advance_to(time.inner); query.flush();
+                roots.advance_to(time); roots.flush();
+                query.advance_to(time); query.flush();
 
                 if index == 0 {
                     query.remove(round % nodes);

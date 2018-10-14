@@ -5,14 +5,14 @@
 //! "hashing" is used throughout, it is a misnomer; these traits relate to extracting reasonably distributed
 //! integers from the types, and hashing happens to be evocative of this.
 //!
-//! Differential dataflow operators need to co-locate data that are equivalent so that they may have 
+//! Differential dataflow operators need to co-locate data that are equivalent so that they may have
 //! the differences consolidated, and eventually cancelled. The chose approach is to extract an integer
 //! from the keys of the data, ensuring that elements with the same key arrive at the same worker, where
 //! the consolidation can occur.
-//! 
+//!
 //! The intent is that types should be able to indicate how this integer is determined, so that general
 //! data types can use a generic hash function, where as more specialized types such as uniformly
-//! distributed integers can perhaps do something simpler (like report their own value). 
+//! distributed integers can perhaps do something simpler (like report their own value).
 
 use std::hash::Hasher;
 use std::ops::Deref;
@@ -43,9 +43,9 @@ impl<T: ::std::hash::Hash> Hashable for T {
 }
 
 /// A marker trait for types whose `Ord` implementation orders first by `hashed()`.
-/// 
-/// Types implementing this trait *must* implement `Ord` and satisfy the property that two values 
-/// with different hashes have the same order as their hashes. This trait allows implementations 
+///
+/// Types implementing this trait *must* implement `Ord` and satisfy the property that two values
+/// with different hashes have the same order as their hashes. This trait allows implementations
 /// that sort by hash value to rely on the `Ord` implementation of the type.
 pub trait HashOrdered : Ord+Hashable { }
 impl<T: Ord+Hashable> HashOrdered for OrdWrapper<T> { }
@@ -59,7 +59,7 @@ impl<T: Ord+Hashable+Abomonation> Abomonation for OrdWrapper<T> {
         self.item.entomb(write)
     }
     #[inline] unsafe fn exhume<'a,'b>(&'a mut self, mut bytes: &'b mut [u8]) -> Option<&'b mut [u8]> {
-        let temp = bytes; 
+        let temp = bytes;
         bytes = self.item.exhume(temp)?;
         Some(bytes)
     }
@@ -73,7 +73,7 @@ impl<T: Hashable+Abomonation> Abomonation for HashableWrapper<T> {
         self.item.entomb(write)
     }
     #[inline] unsafe fn exhume<'a,'b>(&'a mut self, mut bytes: &'b mut [u8]) -> Option<&'b mut [u8]> {
-        let temp = bytes; 
+        let temp = bytes;
         bytes = self.item.exhume(temp)?;
         Some(bytes)
     }
@@ -85,14 +85,14 @@ impl<T: Unsigned+Copy+Hashable+Abomonation> Abomonation for UnsignedWrapper<T> {
         self.item.entomb(write)
     }
     #[inline] unsafe fn exhume<'a,'b>(&'a mut self, mut bytes: &'b mut [u8]) -> Option<&'b mut [u8]> {
-        let temp = bytes; 
+        let temp = bytes;
         bytes = self.item.exhume(temp)?;
         Some(bytes)
     }
 }
 
 
-/// A wrapper around hashable types that ensures an implementation of `Ord` that compares 
+/// A wrapper around hashable types that ensures an implementation of `Ord` that compares
 /// hash values first.
 #[derive(Clone, Eq, PartialEq, Debug, Default)]
 pub struct OrdWrapper<T: Ord+Hashable> {
@@ -109,7 +109,7 @@ impl<T: Ord+Hashable> PartialOrd for OrdWrapper<T> {
 impl<T: Ord+Hashable> Ord for OrdWrapper<T> {
     #[inline(always)]
     fn cmp(&self, other: &Self) -> ::std::cmp::Ordering {
-        (self.item.hashed(), &self.item).cmp(&(other.item.hashed(), &other.item))        
+        (self.item.hashed(), &self.item).cmp(&(other.item.hashed(), &other.item))
     }
 }
 
@@ -146,10 +146,10 @@ impl<T: Hashable> Deref for HashableWrapper<T> {
 
 impl<T: Hashable> From<T> for HashableWrapper<T> {
     #[inline(always)]
-    fn from(item: T) -> HashableWrapper<T> { 
+    fn from(item: T) -> HashableWrapper<T> {
         HashableWrapper {
             hash: item.hashed(),
-            item: item,
+            item,
         }
     }
 }
@@ -175,5 +175,5 @@ impl<T: Unsigned+Copy> Deref for UnsignedWrapper<T> {
 
 impl<T: Unsigned+Copy> From<T> for UnsignedWrapper<T> {
     #[inline(always)]
-    fn from(item: T) -> Self { UnsignedWrapper { item: item } }
+    fn from(item: T) -> Self { UnsignedWrapper { item } }
 }

@@ -1,11 +1,15 @@
 extern crate rand;
 extern crate timely;
 extern crate differential_dataflow;
+extern crate core_affinity;
 
 use std::time::Instant;
+use std::mem;
+use std::hash::Hash;
 
 use timely::dataflow::*;
 
+use differential_dataflow::lattice::Lattice;
 use differential_dataflow::input::Input;
 use differential_dataflow::Collection;
 use differential_dataflow::operators::*;
@@ -14,10 +18,14 @@ use differential_dataflow::operators::arrange::ArrangeByKey;
 use differential_dataflow::trace::implementations::ord::OrdValSpine as DefaultValTrace;
 use differential_dataflow::operators::arrange::TraceAgent;
 use differential_dataflow::operators::arrange::Arranged;
+use differential_dataflow::operators::iterate::Variable;
 
-type Arrange<G: Scope, K, V, R> = Arranged<G, K, V, R, TraceAgent<K, V, G::Timestamp, R, DefaultValTrace<K, V, G::Timestamp, R>>>;
+type Arrange<G, K, V, R> = Arranged<G, K, V, R, TraceAgent<K, V, <G as ScopeParent>::Timestamp, R, DefaultValTrace<K, V, <G as ScopeParent>::Timestamp, R>>>;
 
 type Node = u32;
+type Edge = (Node, Node);
+type Iter = u32;
+type Diff = i32;
 
 fn main() {
 
@@ -30,6 +38,10 @@ fn main() {
 
         let peers = worker.peers();
         let index = worker.index();
+        let timer = Instant::now();
+
+        let core_ids = core_affinity::get_core_ids().unwrap();
+        core_affinity::set_for_current(core_ids[index % core_ids.len()]);
 
         let mut input = worker.dataflow::<(),_,_>(|scope| {
 
@@ -40,14 +52,13 @@ fn main() {
 
             match program.as_str() {
                 "tc"    => tc(&graph).filter(move |_| inspect).map(|_| ()).consolidate().inspect(|x| println!("tc count: {:?}", x)).probe(),
+                // "sc"    => _strongly_connected(&graph.as_collection(|k,v| (*k,*v))).filter(move |_| inspect).map(|_| ()).consolidate().inspect(|x| println!("tc count: {:?}", x)).probe(),
                 "sg"    => sg(&graph).filter(move |_| inspect).map(|_| ()).consolidate().inspect(|x| println!("sg count: {:?}", x)).probe(),
                 _       => panic!("must specify one of 'tc', 'sg'.")
             };
 
             input
         });
-
-        let timer = Instant::now();
 
         let mut nodes = 0;
 
@@ -63,60 +74,119 @@ fn main() {
                 let dst: u32 = elts.next().unwrap().parse().ok().expect("malformed dst");
                 if nodes < src { nodes = src; }
                 if nodes < dst { nodes = dst; }
-                input.insert((src, dst));
+                input.update((src, dst), 1);
             }
         }
 
-        println!("{:?}\tData ingested", timer.elapsed());
+        if index == 0 { println!("{:?}\tData ingested", timer.elapsed()); }
+
+        input.close();
+        while worker.step() { }
+
+        if index == 0 { println!("{:?}\tComputation complete", timer.elapsed()); }
 
     }).unwrap();
 }
 
 use timely::progress::nested::product::Product;
-use timely::progress::timestamp::RootTimestamp;
+// use timely::progress::timestamp::RootTimestamp;
+
+fn _trim_and_flip<G: Scope>(graph: &Collection<G, Edge>) -> Collection<G, Edge>
+where G::Timestamp: Lattice+Ord+Hash {
+    graph.iterate(|edges| {
+        // keep edges from active edge destinations.
+        let active = edges.map(|(src,_dst)| src)
+                          .distinct();
+
+        graph.enter(&edges.scope())
+             .arrange_by_key()
+             .semijoin(&active)
+    })
+    .map_in_place(|x| mem::swap(&mut x.0, &mut x.1))
+}
+
+fn _strongly_connected<G: Scope>(graph: &Collection<G, Edge>) -> Collection<G, Edge>
+where G::Timestamp: Lattice+Ord+Hash {
+    graph.iterate(|inner| {
+        let edges = graph.enter(&inner.scope());
+        let trans = edges.map_in_place(|x| mem::swap(&mut x.0, &mut x.1));
+        _trim_edges(&_trim_edges(inner, &edges), &trans)
+    })
+}
+
+fn _trim_edges<G: Scope>(cycle: &Collection<G, Edge>, edges: &Collection<G, Edge>)
+    -> Collection<G, Edge> where G::Timestamp: Lattice+Ord+Hash {
+
+    let nodes = edges.map_in_place(|x| x.0 = x.1)
+                     .consolidate();
+
+    let labels = _reachability(&cycle, &nodes);
+
+    edges.join_map(&labels, |&e1,&e2,&l1| (e2,(e1,l1)))
+         .join_map(&labels, |&e2,&(e1,l1),&l2| ((e1,e2),(l1,l2)))
+         .filter(|&(_,(l1,l2))| l1 == l2)
+         .map(|((x1,x2),_)| (x2,x1))
+}
+
+fn _reachability<G: Scope>(edges: &Collection<G, Edge>, nodes: &Collection<G, (Node, Node)>) -> Collection<G, Edge>
+where G::Timestamp: Lattice+Ord+Hash {
+
+    edges.filter(|_| false)
+         .iterate(|inner| {
+             let edges = edges.enter(&inner.scope());
+             let nodes = nodes.enter_at(&inner.scope(), |r| 256 * (64 - (r.0 as u64).leading_zeros() as u64));
+
+             inner.join_map(&edges, |_k,l,d| (*d,*l))
+                  .concat(&nodes)
+                  .group(|_, s, t| t.push((*s[0].0, 1)))
+
+         })
+}
 
 // returns pairs (n, s) indicating node n can be reached from a root in s steps.
-fn tc<G: Scope<Timestamp=Product<RootTimestamp, ()>>>(edges: &Arrange<G, Node, Node, isize>) -> Collection<G, (Node, Node)> {
-
-    use timely::dataflow::operators::Inspect;
-    use timely::dataflow::operators::Accumulate;
+fn tc<G: Scope<Timestamp=()>>(edges: &Arrange<G, Node, Node, Diff>) -> Collection<G, Edge, Diff> {
 
     // repeatedly update minimal distances each node can be reached from each root
-    edges
-        .as_collection(|&k,&v| (k,v))
-        .iterate(|inner| {
+    edges.stream.scope().iterative::<Iter,_,_>(|scope| {
 
-            inner.inner.count().inspect_batch(|t,xs| println!("{:?}\t{:?}", t, xs));
-
+            let inner = Variable::new(scope, Product::new(Default::default(), 1));
             let edges = edges.enter(&inner.scope());
 
+            let result =
             inner
                 .map(|(x,y)| (y,x))
                 .join_core(&edges, |_y,&x,&z| Some((x, z)))
                 .concat(&edges.as_collection(|&k,&v| (k,v)))
-                .distinct_total()
+                .threshold_total(|_,_| 1);
+
+            inner.set(&result);
+            result.leave()
         }
     )
 }
 
 
 // returns pairs (n, s) indicating node n can be reached from a root in s steps.
-fn sg<G: Scope<Timestamp=Product<RootTimestamp, ()>>>(edges: &Arrange<G, Node, Node, isize>) -> Collection<G, (Node, Node)> {
+fn sg<G: Scope<Timestamp=()>>(edges: &Arrange<G, Node, Node, Diff>) -> Collection<G, Edge, Diff> {
 
     let peers = edges.join_core(&edges, |_,&x,&y| Some((x,y))).filter(|&(x,y)| x != y);
 
     // repeatedly update minimal distances each node can be reached from each root
-    peers
-        .iterate(|inner| {
+    peers.scope().iterative::<Iter,_,_>(|scope| {
 
+            let inner = Variable::new(scope, Product::new(Default::default(), 1));
             let edges = edges.enter(&inner.scope());
             let peers = peers.enter(&inner.scope());
 
+            let result =
             inner
                 .join_core(&edges, |_,&x,&z| Some((x, z)))
                 .join_core(&edges, |_,&x,&z| Some((x, z)))
                 .concat(&peers)
-                .distinct_total()
+                .threshold_total(|_,_| 1);
+
+            inner.set(&result);
+            result.leave()
         }
     )
 }

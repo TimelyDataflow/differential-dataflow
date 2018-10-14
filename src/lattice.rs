@@ -1,7 +1,7 @@
 //! Partially ordered elements with a least upper bound.
 //!
-//! Lattices form the basis of differential dataflow's efficient execution in the presence of 
-//! iterative sub-computations. All logical times in differential dataflow must implement the 
+//! Lattices form the basis of differential dataflow's efficient execution in the presence of
+//! iterative sub-computations. All logical times in differential dataflow must implement the
 //! `Lattice` trait, and all reasoning in operators are done it terms of `Lattice` methods.
 
 use timely::order::PartialOrder;
@@ -72,7 +72,7 @@ pub trait Lattice : PartialOrder {
     ///
     /// assert_eq!(meet, Product::new(3, 6));
     /// # }
-    /// ```    
+    /// ```
     fn meet(&self, &Self) -> Self;
 
     /// Advances self to the largest time indistinguishable under `frontier`.
@@ -124,44 +124,12 @@ pub trait Lattice : PartialOrder {
                 result = result.meet(&self.join(f));
             }
             result
-        }  
+        }
         else {
             Self::maximum()
         }
     }
 }
-
-// /// A carrier trait for totally ordered lattices.
-// ///
-// /// Types that implement `TotalOrder` are stating that their `Lattice` is in fact a total order.
-// /// This type is only used to restrict implementations to certain types of lattices.
-// ///
-// /// This trait is automatically implemented for integer scalars, and for products of these types
-// /// with "empty" timestamps (e.g. `RootTimestamp` and `()`). Be careful implementing this trait
-// /// for your own timestamp types, as it may lead to the applicability of incorrect implementations.
-// ///
-// /// Note that this trait is distinct from `Ord`; many implementors of `Lattice` also implement 
-// /// `Ord` so that they may be sorted, deduplicated, etc. This implementation neither derives any
-// /// information from an `Ord` implementation nor informs it in any way.
-// ///
-// /// #Examples
-// ///
-// /// ```
-// /// use differential_dataflow::lattice::TotalOrder;
-// ///
-// /// // The `join` and `meet` of totally ordered elements are always one of the two.
-// /// fn invariant<T: TotalOrder>(elt1: T, elt2: T) {
-// ///     if elt1.less_equal(&elt2) {
-// ///         assert!(elt1.meet(&elt2) == elt1);
-// ///         assert!(elt1.join(&elt2) == elt2);
-// ///     }
-// ///     else {
-// ///         assert!(elt1.meet(&elt2) == elt2);
-// ///         assert!(elt1.join(&elt2) == elt1);
-// ///     }
-// /// }
-// /// ```
-// pub trait TotalOrder : Lattice { }
 
 use timely::progress::nested::product::Product;
 
@@ -197,18 +165,11 @@ macro_rules! implement_lattice {
     )
 }
 
-use timely::progress::timestamp::RootTimestamp;
+use std::time::Duration;
 
-implement_lattice!(RootTimestamp, RootTimestamp, RootTimestamp);
+implement_lattice!(Duration, Duration::new(0, 0), Duration::new(u64::max_value(), 1_000_000_000 - 1));
 implement_lattice!(usize, usize::min_value(), usize::max_value());
 implement_lattice!(u64, u64::min_value(), u64::max_value());
 implement_lattice!(u32, u32::min_value(), u32::max_value());
 implement_lattice!(i32, i32::min_value(), i32::max_value());
 implement_lattice!((), (), ());
-
-// impl TotalOrder for RootTimestamp { }
-// impl TotalOrder for usize { }
-// impl TotalOrder for u64 { }
-// impl TotalOrder for u32 { }
-// impl TotalOrder for i32 { }
-// impl TotalOrder for () { }

@@ -8,7 +8,7 @@ use rand::{Rng, SeedableRng, StdRng};
 
 use timely::dataflow::*;
 
-use differential_dataflow::input::Input;
+use differential_dataflow::input::InputSession;
 use differential_dataflow::Collection;
 use differential_dataflow::operators::*;
 use differential_dataflow::lattice::Lattice;
@@ -18,24 +18,29 @@ type Edge = (Node, Node);
 
 fn main() {
 
-    let nodes: u32 = std::env::args().nth(1).unwrap().parse().unwrap();
-    let edges: u32 = std::env::args().nth(2).unwrap().parse().unwrap();
-    let batch: u32 = std::env::args().nth(3).unwrap().parse().unwrap();
-    let waves: u32 = std::env::args().nth(4).unwrap().parse().unwrap();
+    let mut args = std::env::args().skip(1);
+    let nodes: u32 = args.next().unwrap().parse().unwrap();
+    let edges: u32 = args.next().unwrap().parse().unwrap();
+    let batch: u32 = args.next().unwrap().parse().unwrap();
+    let waves: u32 = args.next().unwrap().parse().unwrap();
+    let inspect: bool = std::env::args().any(|x| x == "inspect");
 
     println!("performing reachability on {} nodes, {} edges:", nodes, edges);
 
     // define a new computational scope, in which to run BFS
-    timely::execute_from_args(std::env::args().skip(4), move |worker| {
-        
+    timely::execute_from_args(std::env::args(), move |worker| {
+
         let timer = Instant::now();
 
+        let mut roots = InputSession::new();
+        let mut graph = InputSession::new();
+        let mut probe = ProbeHandle::new();
+
         // define BFS dataflow; return handles to roots and edges inputs
-        let (mut graph, mut roots, probe) = worker.dataflow(|scope| {
-            let (root_input, roots) = scope.new_collection();
-            let (edge_input, graph) = scope.new_collection();
-            let probe = reach(&graph, &roots).probe();
-            (edge_input, root_input, probe)
+        worker.dataflow(|scope| {
+            let roots = roots.to_collection(scope);
+            let graph = graph.to_collection(scope);
+            reach(&graph, &roots, inspect).probe_with(&mut probe);
         });
 
         let seed: &[_] = &[1, 2, 3, 4];
@@ -83,17 +88,14 @@ fn main() {
             worker.step_while(|| probe.less_than(graph.time()));
 
             if worker.index() == 0 {
-                let elapsed = timer.elapsed();
-                let nanos = elapsed.as_secs() * 1_000_000_000 + elapsed.subsec_nanos() as u64;
-                // println!("wave {}: avg {:?}", wave, nanos / (batch as u32));
-                println!("{}", (nanos as f64) / 1000000000.0f64);
+                println!("{:?}", timer.elapsed());
             }
         }
     }).unwrap();
 }
 
 // returns pairs (n, s) indicating node n can be reached from a root in s steps.
-fn reach<G: Scope>(edges: &Collection<G, Edge>, roots: &Collection<G, Node>) -> Collection<G, Node>
+fn reach<G: Scope>(edges: &Collection<G, Edge>, roots: &Collection<G, Node>, inspect: bool) -> Collection<G, Node>
 where G::Timestamp: Lattice+Ord {
 
     roots.iterate(|inner| {
@@ -102,9 +104,10 @@ where G::Timestamp: Lattice+Ord {
         let roots = roots.enter(&inner.scope());
 
         edges
-            .semijoin(&roots)
+            .semijoin(&inner)
             .map(|(_s,d)| d)
             .concat(&roots)
+            .inspect(move |x| if inspect { println!("{:?}", x); })
             .distinct()
      })
 }

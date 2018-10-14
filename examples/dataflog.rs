@@ -3,7 +3,7 @@ extern crate differential_dataflow;
 
 use timely::progress::nested::product::Product;
 use timely::dataflow::*;
-use timely::dataflow::scopes::Child;
+use timely::dataflow::scopes::child::Iterative as  Child;
 use timely::dataflow::operators::*;
 use timely::dataflow::operators::feedback::Handle;
 
@@ -19,7 +19,7 @@ use differential_dataflow::lattice::Lattice;
 /// addition of collections, and a final `distinct` operator applied before connecting the definition.
 pub struct Variable<'a, G: Scope, D: Default+Data+Hashable>
 where G::Timestamp: Lattice+Ord {
-    feedback: Option<Handle<G::Timestamp, u64,(D, Product<G::Timestamp, u64>, isize)>>,
+    feedback: Option<Handle<Product<G::Timestamp, u64>, (D, Product<G::Timestamp, u64>, isize)>>,
     current: Collection<Child<'a, G, u64>, D>,
     cycle: Collection<Child<'a, G, u64>, D>,
 }
@@ -27,7 +27,7 @@ where G::Timestamp: Lattice+Ord {
 impl<'a, G: Scope, D: Default+Data+Hashable> Variable<'a, G, D> where G::Timestamp: Lattice+Ord {
     /// Creates a new `Variable` from a supplied `source` stream.
     pub fn from(source: &Collection<Child<'a, G, u64>, D>) -> Variable<'a, G, D> {
-        let (feedback, cycle) = source.inner.scope().loop_variable(u64::max_value(), 1);
+        let (feedback, cycle) = source.inner.scope().loop_variable(1);
         let cycle = Collection::new(cycle);
         let mut result = Variable { feedback: Some(feedback), current: cycle.clone(), cycle: cycle };
         result.add(source);
@@ -51,6 +51,7 @@ impl<'a, G: Scope, D: Default+Data+Hashable> Drop for Variable<'a, G, D> where G
         if let Some(feedback) = self.feedback.take() {
             self.current.distinct()
                         .inner
+                        .map(|(x,t,d)| (x, Product::new(t.outer, t.inner+1), d))
                         .connect_loop(feedback);
         }
     }
@@ -73,7 +74,7 @@ fn main() {
             let (_uin, u) = outer.new_collection::<(u32,u32,u32),isize>();
 
             // construct iterative derivation scope
-            let (_p, _q) = outer.scoped::<u64,_,_>(|inner| {
+            let (_p, _q) = outer.iterative::<u64,_,_>(|inner| {
 
                 // create new variables
                 let mut p = Variable::from(&p.enter(inner));

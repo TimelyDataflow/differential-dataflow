@@ -62,10 +62,8 @@ fn main() {
     let campaigns: usize = std::env::args().nth(1).unwrap().parse().unwrap();
     let ads_per: usize = std::env::args().nth(2).unwrap().parse().unwrap();
     let batch: usize = std::env::args().nth(3).unwrap().parse().unwrap();
-
     let inspect: bool = std::env::args().find(|x| x == "inspect").is_some();
 
-    // define a new computational scope, in which to run BFS
     timely::execute_from_args(std::env::args().skip(4), move |worker| {
 
         let timer = ::std::time::Instant::now();
@@ -112,14 +110,10 @@ fn main() {
         let mut rng_worker: StdRng = SeedableRng::from_seed(seed_worker);
 
         let mut typed_things = Vec::new();
-        for _ in 0 .. 1 { //00_000 {
+        for _ in 0 .. (1 << 16) {
             typed_things.push(View::rand_from(&mut rng_worker, &ad_identifiers[..]));
         }
 
-        let event_types = [EventType::View, EventType::Click, EventType::Purchase];
-
-        let mut typed_counter1 = 0;
-        let mut typed_counter2 = 0;
         let mut counter = 0;
         let mut next = 10;
         loop {
@@ -135,20 +129,18 @@ fn main() {
             }
 
             for _ in 0 .. batch {
-                typed_counter1 += 1;
-                typed_counter2 += 1;
-                if typed_counter1 >= 1000 { typed_counter1 = 0; }
-                if typed_counter2 >= 3 { typed_counter2 = 0; }
-                let mut thing = typed_things[0].clone();
-                thing.ad_id = ad_identifiers[typed_counter1];
-                thing.event_type = event_types[typed_counter2].clone();
-                if thing.event_type == EventType::Purchase {
-                    views.insert(thing.ad_id);
+                let mut rand_idx: usize = rng_worker.gen();
+                for _ in 0 .. 4 {
+                    let rand_thing = &typed_things[rand_idx % (1 << 16)];
+                    if rand_thing.event_type == EventType::Purchase {
+                        views.insert(rand_thing.ad_id);
+                    }
+                    rand_idx = rand_idx >> 16;
                 }
             }
 
             worker.step();
-            counter += batch;
+            counter += 4 * batch;
         }
     }).unwrap();
 }

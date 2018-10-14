@@ -1,31 +1,33 @@
 [package]
 
 name = "differential-dataflow"
-version = "0.5.0"
+version = "0.7.0"
 authors = ["Frank McSherry <fmcsherry@me.com>"]
 
 description = "An incremental data-parallel dataflow platform"
 
 # These URLs point to more information about the repository
-documentation = "https://github.com/frankmcsherry/differential-dataflow"
+documentation = "https://docs.rs/differential-dataflow"
 homepage = "https://github.com/frankmcsherry/differential-dataflow"
 repository = "https://github.com/frankmcsherry/differential-dataflow.git"
 keywords = ["differential", "dataflow"]
 license = "MIT"
 
 [dev-dependencies]
+indexmap = "1.0.1"
 rand="0.4"
 byteorder="1"
 itertools="^0.7"
-serde_json = "1.0"
-#pikkr = { git = "https://github.com/pikkr/pikkr" }
 graph_map = { git = "https://github.com/frankmcsherry/graph-map.git" }
+serde_json = "1.0"
 
 [dependencies]
-abomonation = "0.5"
+serde = "1.0"
+serde_derive = "1.0"
+abomonation = "0.7"
 abomonation_derive = "0.3"
 timely_sort="0.1.6"
-timely_communication = "0.5"
+#timely = "0.7"
 timely = { git = "https://github.com/frankmcsherry/timely-dataflow" }
 fnv="1.0.2"
 

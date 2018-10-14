@@ -20,50 +20,28 @@
 use std::rc::{Rc, Weak};
 use std::cell::RefCell;
 use std::default::Default;
-use std::ops::DerefMut;
 use std::collections::VecDeque;
 use std::fmt::Debug;
 
 use timely::dataflow::operators::{Enter, Map};
-use timely::order::PartialOrder;
+use timely::order::{PartialOrder, TotalOrder};
 use timely::dataflow::{Scope, Stream};
-use timely::dataflow::operators::generic::{Unary, Operator, source};
+use timely::dataflow::operators::generic::{Operator, source};
 use timely::dataflow::channels::pact::{Pipeline, Exchange};
 use timely::progress::Timestamp;
 use timely::progress::frontier::Antichain;
 use timely::dataflow::operators::Capability;
-use timely::dataflow::scopes::Child;
 
 use timely_sort::Unsigned;
 
 use ::{Data, Diff, Collection, AsCollection, Hashable};
 use lattice::Lattice;
 use trace::{Trace, TraceReader, Batch, BatchReader, Batcher, Cursor};
-// use trace::implementations::hash::HashValSpine as DefaultValTrace;
-// use trace::implementations::hash::HashKeySpine as DefaultKeyTrace;
 use trace::implementations::ord::OrdValSpine as DefaultValTrace;
 use trace::implementations::ord::OrdKeySpine as DefaultKeyTrace;
 
 use trace::wrappers::enter::{TraceEnter, BatchEnter};
 use trace::wrappers::rc::TraceBox;
-
-/// Wrapper type to permit transfer of `Rc` types, as in batch.
-///
-/// The `BatchWrapper`s sole purpose in life is to implement `Abomonation` with methods that panic
-/// when called. This allows the wrapped data to be transited along timely's `Pipeline` channels.
-/// The wrapper cannot fake out `Send`, and so cannot be used on timely's `Exchange` channels, which
-/// is good.
-#[derive(Clone,Eq,PartialEq,Debug)]
-pub struct BatchWrapper<T> {
-    /// The wrapped item.
-    pub item: T,
-}
-
-// NOTE: This is all horrible. Don't look too hard.
-impl<T> ::abomonation::Abomonation for BatchWrapper<T> {
-   unsafe fn entomb<W: ::std::io::Write>(&self, _write: &mut W) -> ::std::io::Result<()> { panic!("BatchWrapper Abomonation impl") }
-   unsafe fn exhume<'a,'b>(&'a mut self, _bytes: &'b mut [u8]) -> Option<&'b mut [u8]> { panic!("BatchWrapper Abomonation impl")  }
-}
 
 /// A trace writer capability.
 pub struct TraceWriter<K, V, T, R, Tr>
@@ -249,13 +227,12 @@ where T: Lattice+Ord+Clone+'static, Tr: TraceReader<K,V,T,R> {
     ///
     /// ```
     /// extern crate timely;
-    /// extern crate timely_communication;
     /// extern crate differential_dataflow;
     ///
-    /// use timely_communication::Configuration;
+    /// use timely::Configuration;
     /// use differential_dataflow::input::Input;
-    /// use differential_dataflow::operators::arrange::Arrange;
-    /// use differential_dataflow::operators::group::GroupArranged;
+    /// use differential_dataflow::operators::arrange::ArrangeBySelf;
+    /// use differential_dataflow::operators::group::Group;
     /// use differential_dataflow::trace::Trace;
     /// use differential_dataflow::trace::implementations::ord::OrdValSpine;
     /// use differential_dataflow::hashable::OrdWrapper;
@@ -267,8 +244,7 @@ where T: Lattice+Ord+Clone+'static, Tr: TraceReader<K,V,T,R> {
     ///         let mut trace = worker.dataflow::<u32,_,_>(|scope| {
     ///             // create input handle and collection.
     ///             scope.new_collection_from(0 .. 10).1
-    ///                  .map(|x| (OrdWrapper { item: x }, x))
-    ///                  .arrange(OrdValSpine::new())
+    ///                  .arrange_by_self()
     ///                  .trace
     ///         });
     ///
@@ -279,10 +255,7 @@ where T: Lattice+Ord+Clone+'static, Tr: TraceReader<K,V,T,R> {
     ///         // create a second dataflow
     ///         worker.dataflow(move |scope| {
     ///             trace.import(scope)
-    ///                  .group_arranged(
-    ///                      move |_key, src, dst| dst.push((*src[0].0, 1)),
-    ///                      OrdValSpine::new()
-    ///                  );
+    ///                  .group(move |_key, src, dst| dst.push((*src[0].0, 1)));
     ///         });
     ///
     ///     }).unwrap();
@@ -306,7 +279,7 @@ where T: Lattice+Ord+Clone+'static, Tr: TraceReader<K,V,T,R> {
                     if let Some((time, batch)) = sent {
                         if let Some(cap) = capabilities.iter().find(|c| c.time().less_equal(&time)) {
                             let delayed = cap.delayed(&time);
-                            output.session(&delayed).give(BatchWrapper { item: batch });
+                            output.session(&delayed).give(batch);
                         }
                         else {
                             panic!("failed to find capability for {:?} in {:?}", time, capabilities);
@@ -373,7 +346,7 @@ pub struct Arranged<G: Scope, K, V, R, T> where G::Timestamp: Lattice+Ord, T: Tr
     /// This stream contains the same batches of updates the trace itself accepts, so there should
     /// be no additional overhead to receiving these records. The batches can be navigated just as
     /// the batches in the trace, by key and by value.
-    pub stream: Stream<G, BatchWrapper<T::Batch>>,
+    pub stream: Stream<G, T::Batch>,
     /// A shared trace, updated by the `Arrange` operator and readable by others.
     pub trace: T,
     // TODO : We might have an `Option<Collection<G, (K, V)>>` here, which `as_collection` sets and
@@ -390,6 +363,9 @@ where G::Timestamp: Lattice+Ord, T: TraceReader<K, V, G::Timestamp, R>+Clone {
     }
 }
 
+use ::timely::dataflow::scopes::Child;
+use ::timely::progress::timestamp::Refines;
+
 impl<G: Scope, K, V, R, T> Arranged<G, K, V, R, T> where G::Timestamp: Lattice+Ord, T: TraceReader<K, V, G::Timestamp, R>+Clone {
 
     /// Brings an arranged collection into a nested scope.
@@ -404,11 +380,11 @@ impl<G: Scope, K, V, R, T> Arranged<G, K, V, R, T> where G::Timestamp: Lattice+O
             K: 'static,
             V: 'static,
             G::Timestamp: Clone+Default+'static,
-            TInner: Lattice+Timestamp+Clone+Default+'static,
+            TInner: Refines<G::Timestamp>+Lattice+Timestamp+Clone+Default+'static,
             R: 'static {
 
         Arranged {
-            stream: self.stream.enter(child).map(|bw| BatchWrapper { item: BatchEnter::make_from(bw.item) }),
+            stream: self.stream.enter(child).map(|bw| BatchEnter::make_from(bw)),
             trace: TraceEnter::make_from(self.trace.clone()),
         }
     }
@@ -425,255 +401,382 @@ impl<G: Scope, K, V, R, T> Arranged<G, K, V, R, T> where G::Timestamp: Lattice+O
             K: Clone, V: Clone,
             L: Fn(&K, &V) -> D+'static,
     {
-        self.stream.unary_stream(Pipeline, "AsCollection", move |input, output| {
+        self.flat_map_ref(move |key, val| Some(logic(key,val)))
+    }
+
+    /// Extracts elements from an arrangement as a collection.
+    ///
+    /// The supplied logic may produce an iterator over output values, allowing either
+    /// filtering or flat mapping as part of the extraction.
+    pub fn flat_map_ref<I, L>(&self, logic: L) -> Collection<G, I::Item, R>
+        where
+            R: Diff,
+            T::Batch: Clone+'static,
+            K: Clone, V: Clone,
+            I: IntoIterator,
+            I::Item: Data,
+            L: Fn(&K, &V) -> I+'static,
+    {
+        self.stream.unary(Pipeline, "AsCollection", move |_,_| move |input, output| {
 
             input.for_each(|time, data| {
                 let mut session = output.session(&time);
-                for wrapper in data.drain(..) {
-                    let batch = wrapper.item;
+                for wrapper in data.iter() {
+                    let batch = &wrapper;
                     let mut cursor = batch.cursor();
-                    while cursor.key_valid(&batch) {
-                        let key: &K = cursor.key(&batch);
-                        while cursor.val_valid(&batch) {
-                            let val: &V = cursor.val(&batch);
-                            cursor.map_times(&batch, |time, diff| {
-                                session.give((logic(key, val), time.clone(), diff.clone()));
-                            });
-                            cursor.step_val(&batch);
+                    while let Some(key) = cursor.get_key(batch) {
+                        while let Some(val) = cursor.get_val(batch) {
+                            for datum in logic(key, val) {
+                                cursor.map_times(batch, |time, diff| {
+                                    session.give((datum.clone(), time.clone(), diff.clone()));
+                                });
+                            }
+                            cursor.step_val(batch);
                         }
-                        cursor.step_key(&batch);
+                        cursor.step_key(batch);
                     }
                 }
             });
         })
         .as_collection()
     }
-}
 
-/// Report values associated with keys at certain times.
-///
-/// This method consumes a stream of (key, time) queries and reports the corresponding stream of
-/// (key, value, time, diff) accumulations in the `self` trace.
-pub fn query<G: Scope, K, V, R, T>(queries: &Stream<G, (K, G::Timestamp)>, mut trace: T) -> Stream<G, (K, V, G::Timestamp, R)>
-where
-    K: Data+Hashable,
-    V: Data,
-    G::Timestamp: Data+Lattice+Ord,
-    R: Diff,
-    T: TraceReader<K, V, G::Timestamp, R>+Clone+'static,
-{
-    // release `distinguish_since` capability.
-    trace.distinguish_since(&[]);
+    /// Report values associated with keys at certain times.
+    ///
+    /// This method consumes a stream of (key, time) queries and reports the corresponding stream of
+    /// (key, value, time, diff) accumulations in the `self` trace.
+    pub fn lookup(&self, queries: &Stream<G, (K, G::Timestamp)>) -> Stream<G, (K, V, G::Timestamp, R)>
+    where
+        G::Timestamp: Data+Lattice+Ord+TotalOrder,
+        K: Data+Hashable,
+        V: Data,
+        R: Diff,
+        T: 'static
+    {
+        // while the arrangement is already correctly distributed, the query stream may not be.
+        let exchange = Exchange::new(move |update: &(K,G::Timestamp)| update.0.hashed().as_u64());
+        queries.binary_frontier(&self.stream, exchange, Pipeline, "TraceQuery", move |_capability, _info| {
 
-    let mut trace = Some(trace);
-    let mut stash = ::std::collections::HashMap::new();
-    let mut frontier = Antichain::new();
+            let mut trace = Some(self.trace.clone());
+            // release `distinguish_since` capability.
+            trace.as_mut().unwrap().distinguish_since(&[]);
 
-    // while the arrangement is already correctly distributed, the query stream may not be.
-    let exchange = Exchange::new(move |update: &(K,G::Timestamp)| update.0.hashed().as_u64());
+            let mut stash = Vec::new();
+            let mut capability: Option<Capability<G::Timestamp>> = None;
 
-    queries.unary_frontier(exchange, "TraceQuery", move |_capability, _info|
-        move |input, output| {
+            let mut active = Vec::new();
+            let mut retain = Vec::new();
 
-            // drain the query input, stashing requests.
-            input.for_each(|capability, data|
-                stash.entry(capability.retain())
-                     .or_insert(Vec::new())
-                     .extend(data.drain(..).map(|(k,t)| (k,t,1)))
-            );
+            let mut working: Vec<(G::Timestamp, V, R)> = Vec::new();
+            let mut working2: Vec<(V, R)> = Vec::new();
 
-            if let Some(ref mut trace) = trace {
+            move |input1, input2, output| {
 
-                frontier.clear();
-                for time in trace.advance_frontier().iter() {
-                    frontier.insert(time.clone());
-                }
+                input1.for_each(|time, data| {
+                    // if the minimum capability "improves" retain it.
+                    if capability.is_none() || time.time().less_than(capability.as_ref().unwrap().time()) {
+                        capability = Some(time.retain());
+                    }
+                    stash.extend(data.iter().cloned());
+                });
 
-                for (capability, prefixes) in stash.iter_mut() {
+                // drain input2; we will consult `trace` directly.
+                input2.for_each(|_time, _data| { });
 
-                    // defer requests at incomplete times.
-                    // NOTE: not all updates may be at complete times, but if this test fails then none of them are.
-                    if !frontier.less_equal(capability.time()) {
+                assert_eq!(capability.is_none(), stash.is_empty());
 
-                        let mut session = output.session(capability);
-
-                        prefixes.sort_by(|x,y| x.0.cmp(&y.0));
-
-                        let (mut cursor, storage) = trace.cursor();
-
-                        for &mut (ref key, ref time, ref mut cnt) in prefixes.iter_mut() {
-
-                            if !frontier.less_equal(time) {
-                                cursor.seek_key(&storage, key);
-                                if cursor.get_key(&storage) == Some(key) {
-
-                                    while let Some(val) = cursor.get_val(&storage) {
-                                        let mut count = R::zero();
-                                        cursor.map_times(&storage, |t, d| if t.less_equal(time) {
-                                            count = count + d;
-                                        });
-                                        if !count.is_zero() {
-                                            session.give((key.clone(), val.clone(), time.clone(), count));
-                                        }
-                                        cursor.step_val(&storage);
-                                    }
-
-                                }
-                                *cnt = 0;
+                let mut drained = false;
+                if let Some(capability) = capability.as_mut() {
+                    if !input2.frontier().less_equal(capability.time()) {
+                        for datum in stash.drain(..) {
+                            if !input2.frontier().less_equal(&datum.1) {
+                                active.push(datum);
+                            }
+                            else {
+                                retain.push(datum);
                             }
                         }
+                        drained = !active.is_empty();
 
-                        prefixes.retain(|ptd| ptd.2 != 0);
+                        ::std::mem::swap(&mut stash, &mut retain);    // retain now the stashed queries.
+
+                        // sort temp1 by key and then by time.
+                        active.sort_unstable_by(|x,y| x.0.cmp(&y.0));
+
+                        let (mut cursor, storage) = trace.as_mut().unwrap().cursor();
+                        let mut session = output.session(&capability);
+
+                        // // V0: Potentially quadratic under load.
+                        // for (key, time) in active.drain(..) {
+                        //     cursor.seek_key(&storage, &key);
+                        //     if cursor.get_key(&storage) == Some(&key) {
+                        //         while let Some(val) = cursor.get_val(&storage) {
+                        //             let mut count = R::zero();
+                        //             cursor.map_times(&storage, |t, d| if t.less_equal(&time) {
+                        //                 count = count + d;
+                        //             });
+                        //             if !count.is_zero() {
+                        //                 session.give((key.clone(), val.clone(), time.clone(), count));
+                        //             }
+                        //             cursor.step_val(&storage);
+                        //         }
+                        //     }
+                        // }
+
+                        // V1: Stable under load
+                        let mut active_finger = 0;
+                        while active_finger < active.len() {
+
+                            let key = &active[active_finger].0;
+                            let mut same_key = active_finger;
+                            while active.get(same_key).map(|x| &x.0) == Some(key) {
+                                same_key += 1;
+                            }
+
+                            cursor.seek_key(&storage, key);
+                            if cursor.get_key(&storage) == Some(key) {
+
+                                let mut active = &active[active_finger .. same_key];
+
+                                while let Some(val) = cursor.get_val(&storage) {
+                                    cursor.map_times(&storage, |t,d| working.push((t.clone(), val.clone(), d)));
+                                    cursor.step_val(&storage);
+                                }
+
+                                working.sort_by(|x,y| x.0.cmp(&y.0));
+                                for (time, val, diff) in working.drain(..) {
+                                    if !active.is_empty() && active[0].1.less_than(&time) {
+                                        ::trace::consolidate(&mut working2, 0);
+                                        while !active.is_empty() && active[0].1.less_than(&time) {
+                                            for &(ref val, count) in working2.iter() {
+                                                session.give((key.clone(), val.clone(), active[0].1.clone(), count));
+                                            }
+                                            active = &active[1..];
+                                        }
+                                    }
+                                    working2.push((val, diff));
+                                }
+                                if !active.is_empty() {
+                                    ::trace::consolidate(&mut working2, 0);
+                                    while !active.is_empty() {
+                                        for &(ref val, count) in working2.iter() {
+                                            let count: R = count;
+                                            session.give((key.clone(), val.clone(), active[0].1.clone(), count));
+                                        }
+                                        active = &active[1..];
+                                    }
+                                }
+                            }
+                            active_finger = same_key;
+                        }
+                        active.clear();
                     }
                 }
-            }
 
-            // drop fully processed capabilities.
-            stash.retain(|_,prefixes| !prefixes.is_empty());
-            trace.as_mut().map(|trace| trace.advance_by(&input.frontier().frontier()));
-            if input.frontier().is_empty() && stash.is_empty() {
-                trace = None;
+                if drained {
+                    if stash.is_empty() { capability = None; }
+                    if let Some(capability) = capability.as_mut() {
+                        let mut min_time = stash[0].1.clone();
+                        for datum in stash[1..].iter() {
+                            if datum.1.less_than(&min_time) {
+                                min_time = datum.1.clone();
+                            }
+                        }
+                        capability.downgrade(&min_time);
+                    }
+                }
+
+                // Determine new frontier on queries that may be issued.
+                let frontier = [
+                    capability.as_ref().map(|c| c.time().clone()),
+                    input1.frontier().frontier().get(0).cloned(),
+                ].into_iter().cloned().filter_map(|t| t).min();
+
+                if let Some(frontier) = frontier {
+                    trace.as_mut().map(|t| t.advance_by(&[frontier]));
+                }
+                else {
+                    trace = None;
+                }
             }
-        }
-    )
+        })
+    }
 }
 
 /// A type that can be arranged into a trace of type `T`.
 ///
 /// This trait is implemented for appropriately typed collections and all traces that might accommodate them,
 /// as well as by arranged data for their corresponding trace type.
-pub trait Arrange<G: Scope, K, V, R: Diff, T>
+pub trait Arrange<G: Scope, K, V, R: Diff>
 where
     G::Timestamp: Lattice,
-    T: Trace<K, V, G::Timestamp, R>+'static,
-    T::Batch: Batch<K, V, G::Timestamp, R>
-    {
+{
     /// Arranges a stream of `(Key, Val)` updates by `Key`. Accepts an empty instance of the trace type.
     ///
     /// This operator arranges a stream of values into a shared trace, whose contents it maintains.
     /// This trace is current for all times marked completed in the output stream, and probing this stream
     /// is the correct way to determine that times in the shared trace are committed.
-    fn arrange(&self, empty_trace: T) -> Arranged<G, K, V, R, TraceAgent<K, V, G::Timestamp, R, T>>;
+    fn arrange<T>(&self) -> Arranged<G, K, V, R, TraceAgent<K, V, G::Timestamp, R, T>>
+    where
+        T: Trace<K, V, G::Timestamp, R>+'static,
+        T::Batch: Batch<K, V, G::Timestamp, R>,
+    {
+        self.arrange_named("Arrange")
+    }
+
+    /// Arranges a stream of `(Key, Val)` updates by `Key`. Accepts an empty instance of the trace type.
+    ///
+    /// This operator arranges a stream of values into a shared trace, whose contents it maintains.
+    /// This trace is current for all times marked completed in the output stream, and probing this stream
+    /// is the correct way to determine that times in the shared trace are committed.
+    fn arrange_named<T>(&self, name: &str) -> Arranged<G, K, V, R, TraceAgent<K, V, G::Timestamp, R, T>>
+    where
+        T: Trace<K, V, G::Timestamp, R>+'static,
+        T::Batch: Batch<K, V, G::Timestamp, R>;
 }
 
-impl<G: Scope, K: Data+Hashable, V: Data, R: Diff, T> Arrange<G, K, V, R, T> for Collection<G, (K, V), R>
+impl<G: Scope, K: Data+Hashable, V: Data, R: Diff> Arrange<G, K, V, R> for Collection<G, (K, V), R>
 where
     G::Timestamp: Lattice+Ord,
-    T: Trace<K, V, G::Timestamp, R>+'static,
-    T::Batch: Batch<K, V, G::Timestamp, R> {
+{
+    fn arrange_named<T>(&self, name: &str) -> Arranged<G, K, V, R, TraceAgent<K, V, G::Timestamp, R, T>>
+    where
+        T: Trace<K, V, G::Timestamp, R>+'static,
+        T::Batch: Batch<K, V, G::Timestamp, R>,
+    {
 
-    fn arrange(&self, empty_trace: T) -> Arranged<G, K, V, R, TraceAgent<K, V, G::Timestamp, R, T>> {
-
-        let (reader, mut writer) = TraceAgent::new(empty_trace);
-
-        // Where we will deposit received updates, and from which we extract batches.
-        let mut batcher = <T::Batch as Batch<K,V,G::Timestamp,R>>::Batcher::new();
-
-        // Capabilities for the lower envelope of updates in `batcher`.
-        let mut capabilities = Antichain::<Capability<G::Timestamp>>::new();
+        let mut reader = None;
 
         // fabricate a data-parallel operator using the `unary_notify` pattern.
-        let exchange = Exchange::new(move |update: &((K,V),G::Timestamp,R)| (update.0).0.hashed().as_u64());
-        let stream = self.inner.unary_frontier(exchange, "Arrange", move |_capability, _info|
-            move |input, output| {
+        let stream = {
 
-            // As we receive data, we need to (i) stash the data and (ii) keep *enough* capabilities.
-            // We don't have to keep all capabilities, but we need to be able to form output messages
-            // when we realize that time intervals are complete.
+            let reader = &mut reader;
+            let exchange = Exchange::new(move |update: &((K,V),G::Timestamp,R)| (update.0).0.hashed().as_u64());
 
-            input.for_each(|cap, data| {
-                capabilities.insert(cap.retain());
-                batcher.push_batch(data.deref_mut());
-            });
+            self.inner.unary_frontier(exchange, name, move |_capability, _info| {
 
-            // The frontier may have advanced by multiple elements, which is an issue because
-            // timely dataflow currently only allows one capability per message. This means we
-            // must pretend to process the frontier advances one element at a time, batching
-            // and sending smaller bites than we might have otherwise done.
+                // Attempt to acquire a logger for arrange events.
+                let logger = {
+                    let scope = self.scope();
+                    let register = scope.log_register();
+                    register.get::<::logging::DifferentialEvent>("differential/arrange")
+                };
 
-            // If there is at least one capability no longer in advance of the input frontier ...
-            if capabilities.elements().iter().any(|c| !input.frontier().less_equal(c.time())) {
+                // Where we will deposit received updates, and from which we extract batches.
+                let mut batcher = <T::Batch as Batch<K,V,G::Timestamp,R>>::Batcher::new();
 
-                let mut upper = Antichain::new();   // re-used allocation for sealing batches.
+                // Capabilities for the lower envelope of updates in `batcher`.
+                let mut capabilities = Antichain::<Capability<G::Timestamp>>::new();
 
-                // For each capability not in advance of the input frontier ...
-                for (index, capability) in capabilities.elements().iter().enumerate() {
+                let mut buffer = Vec::new();
 
-                    if !input.frontier().less_equal(capability.time()) {
+                let empty_trace = T::new(_info, logger);
+                let (reader_local, mut writer) = TraceAgent::new(empty_trace);
+                *reader = Some(reader_local);
 
-                        // Assemble the upper bound on times we can commit with this capabilities.
-                        // We must respect the input frontier, and *subsequent* capabilities, as
-                        // we are pretending to retire the capability changes one by one.
-                        upper.clear();
-                        for time in input.frontier().frontier().iter() {
-                            upper.insert(time.clone());
+                move |input, output| {
+
+                // As we receive data, we need to (i) stash the data and (ii) keep *enough* capabilities.
+                // We don't have to keep all capabilities, but we need to be able to form output messages
+                // when we realize that time intervals are complete.
+
+                input.for_each(|cap, data| {
+                    capabilities.insert(cap.retain());
+                    data.swap(&mut buffer);
+                    batcher.push_batch(&mut buffer);
+                });
+
+                // The frontier may have advanced by multiple elements, which is an issue because
+                // timely dataflow currently only allows one capability per message. This means we
+                // must pretend to process the frontier advances one element at a time, batching
+                // and sending smaller bites than we might have otherwise done.
+
+                // If there is at least one capability no longer in advance of the input frontier ...
+                if capabilities.elements().iter().any(|c| !input.frontier().less_equal(c.time())) {
+
+                    let mut upper = Antichain::new();   // re-used allocation for sealing batches.
+
+                    // For each capability not in advance of the input frontier ...
+                    for (index, capability) in capabilities.elements().iter().enumerate() {
+
+                        if !input.frontier().less_equal(capability.time()) {
+
+                            // Assemble the upper bound on times we can commit with this capabilities.
+                            // We must respect the input frontier, and *subsequent* capabilities, as
+                            // we are pretending to retire the capability changes one by one.
+                            upper.clear();
+                            for time in input.frontier().frontier().iter() {
+                                upper.insert(time.clone());
+                            }
+                            for other_capability in &capabilities.elements()[(index + 1) .. ] {
+                                upper.insert(other_capability.time().clone());
+                            }
+
+                            // Extract updates not in advance of `upper`.
+                            let batch = batcher.seal(upper.elements());
+
+                            writer.seal(upper.elements(), Some((capability.time().clone(), batch.clone())));
+
+                            // send the batch to downstream consumers, empty or not.
+                            output.session(&capabilities.elements()[index]).give(batch);
                         }
-                        for other_capability in &capabilities.elements()[(index + 1) .. ] {
-                            upper.insert(other_capability.time().clone());
-                        }
-
-                        // Extract updates not in advance of `upper`.
-                        let batch = batcher.seal(upper.elements());
-
-                        writer.seal(upper.elements(), Some((capability.time().clone(), batch.clone())));
-
-                        // send the batch to downstream consumers, empty or not.
-                        output.session(&capabilities.elements()[index]).give(BatchWrapper { item: batch });
                     }
+
+                    // Having extracted and sent batches between each capability and the input frontier,
+                    // we should downgrade all capabilities to match the batcher's lower update frontier.
+                    // This may involve discarding capabilities, which is fine as any new updates arrive
+                    // in messages with new capabilities.
+
+                    let mut new_capabilities = Antichain::new();
+                    for time in batcher.frontier() {
+                        if let Some(capability) = capabilities.elements().iter().find(|c| c.time().less_equal(time)) {
+                            new_capabilities.insert(capability.delayed(time));
+                        }
+                        else {
+                            panic!("failed to find capability");
+                        }
+                    }
+
+                    capabilities = new_capabilities;
                 }
 
-                // Having extracted and sent batches between each capability and the input frontier,
-                // we should downgrade all capabilities to match the batcher's lower update frontier.
-                // This may involve discarding capabilities, which is fine as any new updates arrive
-                // in messages with new capabilities.
+                // Announce progress updates.
+                // TODO: This is very noisy; consider tracking the previous frontier, and issuing an update
+                //       if and when it changes.
+                writer.seal(&input.frontier().frontier(), None);
+            }})
+        };
 
-                let mut new_capabilities = Antichain::new();
-                for time in batcher.frontier() {
-                    if let Some(capability) = capabilities.elements().iter().find(|c| c.time().less_equal(time)) {
-                        new_capabilities.insert(capability.delayed(time));
-                    }
-                    else {
-                        panic!("failed to find capability");
-                    }
-                }
-
-                capabilities = new_capabilities;
-            }
-
-            // Announce progress updates.
-            // TODO: This is very noisy; consider tracking the previous frontier, and issuing an update
-            //       if and when it changes.
-            writer.seal(&input.frontier().frontier(), None);
-        });
-
-        Arranged { stream: stream, trace: reader }
+        Arranged { stream: stream, trace: reader.unwrap() }
     }
 }
 
-impl<G: Scope, K: Data+Hashable, R: Diff, T> Arrange<G, K, (), R, T> for Collection<G, K, R>
+impl<G: Scope, K: Data+Hashable, R: Diff> Arrange<G, K, (), R> for Collection<G, K, R>
 where
     G::Timestamp: Lattice+Ord,
-    T: Trace<K, (), G::Timestamp, R>+'static,
-    T::Batch: Batch<K, (), G::Timestamp, R> {
-
-    fn arrange(&self, empty_trace: T) -> Arranged<G, K, (), R, TraceAgent<K, (), G::Timestamp, R, T>> {
-        self.map(|k| (k, ()))
-            .arrange(empty_trace)
-    }
-}
-
-impl<G, K, V, R, T> Arrange<G, K, V, R, T> for Arranged<G, K, V, R, TraceAgent<K, V, G::Timestamp, R, T>>
-where
-    G: Scope,
-    G::Timestamp: Lattice,
-    R: Diff,
-    T: Trace<K, V, G::Timestamp, R>+Clone+'static,
-    T::Batch: Batch<K, V, G::Timestamp, R>
 {
-    fn arrange(&self, _: T) -> Arranged<G, K, V, R, TraceAgent<K, V, G::Timestamp, R, T>> {
-        (*self).clone()
+    fn arrange_named<T>(&self, name: &str) -> Arranged<G, K, (), R, TraceAgent<K, (), G::Timestamp, R, T>>
+    where
+        T: Trace<K, (), G::Timestamp, R>+'static,
+        T::Batch: Batch<K, (), G::Timestamp, R>
+    {
+        self.map(|k| (k, ()))
+            .arrange_named(name)
     }
 }
+
+// impl<G, K, V, R, T> Arrange<G, K, V, R, T> for Arranged<G, K, V, R, TraceAgent<K, V, G::Timestamp, R, T>>
+// where
+//     G: Scope,
+//     G::Timestamp: Lattice,
+//     R: Diff,
+//     T: Trace<K, V, G::Timestamp, R>+Clone+'static,
+//     T::Batch: Batch<K, V, G::Timestamp, R>
+// {
+//     fn arrange_named(&self, _name: &str) -> Arranged<G, K, V, R, TraceAgent<K, V, G::Timestamp, R, T>> {
+//         (*self).clone()
+//     }
+// }
 
 /// Arranges something as `(Key,Val)` pairs according to a type `T` of trace.
 ///
@@ -693,7 +796,7 @@ where G::Timestamp: Lattice+Ord {
 impl<G: Scope, K: Data+Hashable, V: Data, R: Diff> ArrangeByKey<G, K, V, R> for Collection<G, (K,V), R>
 where G::Timestamp: Lattice+Ord {
     fn arrange_by_key(&self) -> Arranged<G, K, V, R, TraceAgent<K, V, G::Timestamp, R, DefaultValTrace<K, V, G::Timestamp, R>>> {
-        self.arrange(DefaultValTrace::new())
+        self.arrange()
     }
 }
 
@@ -717,6 +820,6 @@ impl<G: Scope, K: Data+Hashable, R: Diff> ArrangeBySelf<G, K, R> for Collection<
 where G::Timestamp: Lattice+Ord {
     fn arrange_by_self(&self) -> Arranged<G, K, (), R, TraceAgent<K, (), G::Timestamp, R, DefaultKeyTrace<K, G::Timestamp, R>>> {
         self.map(|k| (k, ()))
-            .arrange(DefaultKeyTrace::new())
+            .arrange()
     }
 }

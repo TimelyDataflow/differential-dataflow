@@ -13,14 +13,9 @@ use differential_dataflow::Collection;
 use differential_dataflow::operators::*;
 use differential_dataflow::lattice::Lattice;
 
-use differential_dataflow::trace::Trace;
-// use differential_dataflow::operators::join::JoinArranged;
 use differential_dataflow::operators::group::GroupArranged;
 use differential_dataflow::operators::arrange::{ArrangeByKey, ArrangeBySelf};
-// use differential_dataflow::hashable::UnsignedWrapper;
-
-// use differential_dataflow::trace::implementations::ord::OrdValSpine;// as HashSpine;
-use differential_dataflow::trace::implementations::ord::OrdKeySpine;// as OrdKeyHashSpine;
+use differential_dataflow::trace::implementations::ord::OrdKeySpine;
 
 
 type Node = u32;
@@ -31,9 +26,9 @@ fn main() {
     let nodes: u32 = std::env::args().nth(1).unwrap().parse().unwrap();
     let edges: u32 = std::env::args().nth(2).unwrap().parse().unwrap();
     let batch: usize = std::env::args().nth(3).unwrap().parse().unwrap();
-    let inspect = std::env::args().find(|x| x == "inspect").is_some();
+    let inspect = std::env::args().nth(4).unwrap() == "inspect";
 
-    timely::execute_from_args(std::env::args().skip(4), move |worker| {
+    timely::execute_from_args(std::env::args().skip(5), move |worker| {
 
         let timer = ::std::time::Instant::now();
 
@@ -43,7 +38,7 @@ fn main() {
 
             edges = _trim_and_flip(&edges);
             edges = _trim_and_flip(&edges);
-            // edges = _strongly_connected(&edges);
+            edges = _strongly_connected(&edges);
 
             if inspect {
                 let mut counter = 0;
@@ -104,9 +99,10 @@ fn _trim_and_flip<G: Scope>(graph: &Collection<G, Edge>) -> Collection<G, Edge>
 where G::Timestamp: Lattice+Ord+Hash {
     graph.iterate(|edges| {
         // keep edges from active edge destinations.
-        let active = edges.map(|(src,_dst)| src)
-                          .arrange_by_self()
-                          .group_arranged(|_k,_s,t| t.push(((), 1)), OrdKeySpine::new());
+        let active = //: OrdKeySpine<_,_,_> =
+        edges.map(|(src,_dst)| src)
+             .arrange_by_self()
+             .group_arranged::<_,_,OrdKeySpine<_,_,_>,_>(|_k,_s,t| t.push(((), 1)));
 
         graph.enter(&edges.scope())
              .arrange_by_key()
