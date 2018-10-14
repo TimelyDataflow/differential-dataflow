@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::net::TcpListener;
 use std::time::Duration;
 
-use timely::dataflow::operators::{Map, Inspect};
+use timely::dataflow::operators::Map;
 use timely::logging::TimelyEvent;
 use timely::communication::logging::{CommunicationEvent, CommunicationSetup};
 use timely::dataflow::operators::Filter;
