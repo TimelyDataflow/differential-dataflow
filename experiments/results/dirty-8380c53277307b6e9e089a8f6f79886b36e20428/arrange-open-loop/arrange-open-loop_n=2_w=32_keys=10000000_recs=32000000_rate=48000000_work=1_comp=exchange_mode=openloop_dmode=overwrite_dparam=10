@@ -1,1 +1,0 @@
-bash: line 1:  9292 Killed            bash: line 1: 41902 Killed                  ./target/release/arrange 10000000 32000000 48000000 1 exchange openloop overwrite 10 -h hostfile.txt -n 2 -p 0 -w 32
