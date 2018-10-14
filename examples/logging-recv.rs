@@ -6,7 +6,6 @@ use std::net::TcpListener;
 use std::time::Duration;
 
 use timely::dataflow::operators::Map;
-use timely::progress::nested::product::Product;
 use timely::logging::TimelyEvent;
 use timely::dataflow::operators::Filter;
 use timely::dataflow::operators::capture::{EventReader, Replay};

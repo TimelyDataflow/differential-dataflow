@@ -363,7 +363,8 @@ where G::Timestamp: Lattice+Ord, T: TraceReader<K, V, G::Timestamp, R>+Clone {
     }
 }
 
-use ::timely::dataflow::scopes::child::Iterative;
+use ::timely::dataflow::scopes::Child;
+use ::timely::progress::timestamp::Refines;
 
 impl<G: Scope, K, V, R, T> Arranged<G, K, V, R, T> where G::Timestamp: Lattice+Ord, T: TraceReader<K, V, G::Timestamp, R>+Clone {
 
@@ -372,14 +373,14 @@ impl<G: Scope, K, V, R, T> Arranged<G, K, V, R, T> where G::Timestamp: Lattice+O
     /// This method produces a proxy trace handle that uses the same backing data, but acts as if the timestamps
     /// have all been extended with an additional coordinate with the default value. The resulting collection does
     /// not vary with the new timestamp coordinate.
-    pub fn enter<'a, TInner>(&self, child: &Iterative<'a, G, TInner>)
-        -> Arranged<Iterative<'a, G, TInner>, K, V, R, TraceEnter<K, V, G::Timestamp, R, T, TInner>>
+    pub fn enter<'a, TInner>(&self, child: &Child<'a, G, TInner>)
+        -> Arranged<Child<'a, G, TInner>, K, V, R, TraceEnter<K, V, G::Timestamp, R, T, TInner>>
         where
             T::Batch: Clone,
             K: 'static,
             V: 'static,
             G::Timestamp: Clone+Default+'static,
-            TInner: Lattice+Timestamp+Clone+Default+'static,
+            TInner: Refines<G::Timestamp>+Lattice+Timestamp+Clone+Default+'static,
             R: 'static {
 
         Arranged {

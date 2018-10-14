@@ -67,7 +67,7 @@ fn main() {
             if !open_loop {
 
                 let mut counts = vec![0u64; 64];
-                let mut changed = 0;
+                // let mut changed = 0;
 
                 // closed-loop latency-throughput test, parameterized by batch size.
                 let timer = ::std::time::Instant::now();
@@ -78,7 +78,7 @@ fn main() {
                         input.insert((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)));
                         input.remove((rng2.gen_range(0, nodes), rng2.gen_range(0, nodes)));
                     }
-                    changed += 2 * batch;
+                    // changed += 2 * batch;
 
                     wave += 1;
                     input.advance_to((wave * batch * peers) as u64);
