@@ -2,6 +2,9 @@
 
 use super::{Trie, Cursor, Builder, MergeBuilder, TupleBuilder};
 
+/// An ordered layer builds itself.
+pub type OrderedBuilder<K, L> = OrderedLayer<K, L>;
+
 /// A level of the trie, with keys and offsets into a lower layer.
 ///
 /// In this representation, the values for `keys[i]` are found at `vals[offs[i] .. offs[i+1]]`.
@@ -21,8 +24,8 @@ pub struct OrderedLayer<K: Ord, L> {
 impl<K: Ord+Clone, L: Trie> Trie for OrderedLayer<K, L> {
 	type Item = (K, L::Item);
 	type Cursor = OrderedCursor<L>;
-	type MergeBuilder = OrderedBuilder<K, L::MergeBuilder>;
-	type TupleBuilder = OrderedBuilder<K, L::TupleBuilder>;
+	type MergeBuilder = OrderedLayer<K, L::MergeBuilder>;
+	type TupleBuilder = OrderedLayer<K, L::TupleBuilder>;
 
 	fn keys(&self) -> usize { self.keys.len() }
 	fn tuples(&self) -> usize { self.vals.tuples() }
@@ -36,31 +39,21 @@ impl<K: Ord+Clone, L: Trie> Trie for OrderedLayer<K, L> {
 				bounds: (lower, upper),
 				child: self.vals.cursor_from(child_lower, child_upper),
 				pos: lower,
-			}		
+			}
 		}
 		else {
 			OrderedCursor {
 				bounds: (0, 0),
 				child: self.vals.cursor_from(0, 0),
 				pos: 0,
-			}	
+			}
 		}
 	}
 }
 
-/// Assembles a layer of this 
-pub struct OrderedBuilder<K: Ord, L> {
-	/// Keys
-	pub keys: Vec<K>,
-	/// Offsets
-	pub offs: Vec<usize>,
-	/// The next layer down
-	pub vals: L,
-}
-
-impl<K: Ord+Clone, L: Builder> Builder for OrderedBuilder<K, L> {
-	type Trie = OrderedLayer<K, L::Trie>; 
-	fn boundary(&mut self) -> usize { 
+impl<K: Ord+Clone, L: Builder> Builder for OrderedLayer<K, L> {
+	type Trie = OrderedLayer<K, L::Trie>;
+	fn boundary(&mut self) -> usize {
 		self.offs[self.keys.len()] = self.vals.boundary();
 		self.keys.len()
 	}
@@ -76,11 +69,23 @@ impl<K: Ord+Clone, L: Builder> Builder for OrderedBuilder<K, L> {
 	}
 }
 
-impl<K: Ord+Clone, L: MergeBuilder> MergeBuilder for OrderedBuilder<K, L> {
+impl<K: Ord+Clone, L: MergeBuilder> MergeBuilder for OrderedLayer<K, L> {
+
+	fn merge_into(mut trie: Self::Trie) -> Self {
+		trie.keys.clear();
+		trie.offs.clear();
+		let vals = L::merge_into(trie.vals);
+		OrderedLayer {
+			keys: trie.keys,
+			offs: trie.offs,
+			vals,
+		}
+	}
+
 	fn with_capacity(other1: &Self::Trie, other2: &Self::Trie) -> Self {
 		let mut offs = Vec::with_capacity(other1.keys() + other2.keys() + 1);
 		offs.push(0);
-		OrderedBuilder {
+		OrderedLayer {
 			keys: Vec::with_capacity(other1.keys() + other2.keys()),
 			offs: offs,
 			vals: L::with_capacity(&other1.vals, &other2.vals),
@@ -117,7 +122,7 @@ impl<K: Ord+Clone, L: MergeBuilder> MergeBuilder for OrderedBuilder<K, L> {
 	}
 }
 
-impl<K: Ord+Clone, L: MergeBuilder> OrderedBuilder<K, L> {
+impl<K: Ord+Clone, L: MergeBuilder> OrderedLayer<K, L> {
 
 	/// Performs one step of merging.
 	#[inline]
@@ -158,16 +163,16 @@ impl<K: Ord+Clone, L: MergeBuilder> OrderedBuilder<K, L> {
 	}
 }
 
-impl<K: Ord+Clone, L: TupleBuilder> TupleBuilder for OrderedBuilder<K, L> {
+impl<K: Ord+Clone, L: TupleBuilder> TupleBuilder for OrderedLayer<K, L> {
 
 	type Item = (K, L::Item);
-	fn new() -> Self { OrderedBuilder { keys: Vec::new(), offs: vec![0], vals: L::new() } }
-	fn with_capacity(cap: usize) -> Self { 
+	fn new() -> Self { OrderedLayer { keys: Vec::new(), offs: vec![0], vals: L::new() } }
+	fn with_capacity(cap: usize) -> Self {
 		let mut offs = Vec::with_capacity(cap + 1);
 		offs.push(0);
-		OrderedBuilder{ 
-			keys: Vec::with_capacity(cap), 
-			offs: offs, 
+		OrderedLayer{
+			keys: Vec::with_capacity(cap),
+			offs: offs,
 			vals: L::with_capacity(cap),
 		}
 	}
@@ -201,7 +206,7 @@ impl<K: Ord, L: Trie> Cursor<OrderedLayer<K, L>> for OrderedCursor<L> {
 	type Key = K;
 	fn key<'a>(&self, storage: &'a OrderedLayer<K, L>) -> &'a Self::Key { &storage.keys[self.pos] }
 	fn step(&mut self, storage: &OrderedLayer<K, L>) {
-		self.pos += 1; 
+		self.pos += 1;
 		if self.valid(storage) {
 			self.child.reposition(&storage.vals, storage.offs[self.pos], storage.offs[self.pos + 1]);
 		}
@@ -236,7 +241,7 @@ impl<K: Ord, L: Trie> Cursor<OrderedLayer<K, L>> for OrderedCursor<L> {
 ///
 /// This methods *relies strongly* on the assumption that the predicate
 /// stays false once it becomes false, a joint property of the predicate
-/// and the slice. This allows `advance` to use exponential search to 
+/// and the slice. This allows `advance` to use exponential search to
 /// count the number of elements in time logarithmic in the result.
 #[inline(never)]
 pub fn advance<T, F: Fn(&T)->bool>(slice: &[T], function: F) -> usize {
@@ -262,7 +267,7 @@ pub fn advance<T, F: Fn(&T)->bool>(slice: &[T], function: F) -> usize {
 		}
 
 		index += 1;
-	}	
+	}
 
 	index
 }

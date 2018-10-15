@@ -173,8 +173,8 @@ pub trait Batch<K, V, T, R> : BatchReader<K, V, T, R> where Self: ::std::marker:
 	/// The result of this method can be exercised to eventually produce the same result
 	/// that a call to `self.merge(other)` would produce, but it can be done in a measured
 	/// fashion. This can help to avoid latency spikes where a large merge needs to happen.
-	fn begin_merge(&self, other: &Self) -> Self::Merger {
-		Self::Merger::new(self, other)
+	fn begin_merge(&self, other: &Self, into: &mut Option<Self>) -> Self::Merger {
+		Self::Merger::new(self, other, into)
 	}
 }
 
@@ -209,7 +209,7 @@ pub trait Builder<K, V, T, R, Output: Batch<K, V, T, R>> {
 /// Represents a merge in progress.
 pub trait Merger<K, V, T, R, Output: Batch<K, V, T, R>> {
 	/// Creates a new merger to merge the supplied batches.
-	fn new(source1: &Output, source2: &Output) -> Self;
+	fn new(source1: &Output, source2: &Output, into: &mut Option<Output>) -> Self;
 	/// Perform some amount of work, decrementing `fuel`.
 	///
 	/// If `fuel` is non-zero after the call, the merging is complete and
@@ -320,7 +320,18 @@ pub mod rc_blanket_impls {
 
 	/// Represents a merge in progress.
 	impl<K,V,T,R,B:Batch<K,V,T,R>> Merger<K, V, T, R, Rc<B>> for RcMerger<K,V,T,R,B> {
-		fn new(source1: &Rc<B>, source2: &Rc<B>) -> Self { RcMerger { merger: B::begin_merge(source1, source2) } }
+		fn new(source1: &Rc<B>, source2: &Rc<B>, into: &mut Option<Rc<B>>) -> Self {
+
+			let unwrap = into.as_ref().map(|x| Rc::strong_count(&x)) == Some(1);
+			let mut into = if unwrap {
+				Some(Rc::try_unwrap(into.take().unwrap()).ok().unwrap())
+			}
+			else {
+				None
+			};
+
+			RcMerger { merger: B::begin_merge(source1, source2, &mut into) }
+		}
 		fn work(&mut self, source1: &Rc<B>, source2: &Rc<B>, frontier: &Option<Vec<T>>, fuel: &mut usize) { self.merger.work(source1, source2, frontier, fuel) }
 		fn done(self) -> Rc<B> { Rc::new(self.merger.done()) }
 	}
@@ -436,8 +447,9 @@ pub mod abomonated_blanket_impls {
 
 	/// Represents a merge in progress.
 	impl<K,V,T,R,B:Batch<K,V,T,R>+Abomonation> Merger<K, V, T, R, Abomonated<B,Vec<u8>>> for AbomonatedMerger<K,V,T,R,B> {
-		fn new(source1: &Abomonated<B,Vec<u8>>, source2: &Abomonated<B,Vec<u8>>) -> Self {
-			AbomonatedMerger { merger: B::begin_merge(source1, source2) }
+		fn new(source1: &Abomonated<B,Vec<u8>>, source2: &Abomonated<B,Vec<u8>>, _into: &mut Option<Abomonated<B,Vec<u8>>>) -> Self {
+			// TODO: Consider re-using the underlying allocations.
+			AbomonatedMerger { merger: B::begin_merge(source1, source2, &mut None) }
 		}
 		fn work(&mut self, source1: &Abomonated<B,Vec<u8>>, source2: &Abomonated<B,Vec<u8>>, frontier: &Option<Vec<T>>, fuel: &mut usize) {
 			self.merger.work(source1, source2, frontier, fuel)

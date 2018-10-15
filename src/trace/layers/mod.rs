@@ -1,14 +1,12 @@
 //! Traits and types for building trie-based indices.
-//! 
+//!
 //! The trie structure has each each element of each layer indicate a range of elements
-//! in the next layer. Similarly, ranges of elements in the layer itself may correspond 
+//! in the next layer. Similarly, ranges of elements in the layer itself may correspond
 //! to single elements in the layer above.
 
 pub mod ordered;
 pub mod ordered_leaf;
-pub mod hashed;
-// pub mod weighted;
-// pub mod unordered;
+// pub mod hashed;
 
 /// A collection of tuples, and types for building and enumerating them.
 ///
@@ -31,7 +29,7 @@ pub trait Trie  : ::std::marker::Sized {
 	fn tuples(&self) -> usize;
 	/// Returns a cursor capable of navigating the collection.
 	fn cursor(&self) -> Self::Cursor { self.cursor_from(0, self.keys()) }
-	/// Returns a cursor over a range of data, commonly used by others to restrict navigation to 
+	/// Returns a cursor over a range of data, commonly used by others to restrict navigation to
 	/// sub-collections.
 	fn cursor_from(&self, lower: usize, upper: usize) -> Self::Cursor;
 
@@ -64,6 +62,8 @@ pub trait Builder {
 
 /// A type used to assemble collections by merging other instances.
 pub trait MergeBuilder : Builder {
+	/// Initiates a merge into a pre-existing (but empty) trie.
+	fn merge_into(Self::Trie) -> Self;
 	/// Allocates an instance of the builder with sufficient capacity to contain the merged data.
 	fn with_capacity(other1: &Self::Trie, other2: &Self::Trie) -> Self;
 	/// Copies sub-collections of `other` into this collection.
@@ -86,7 +86,7 @@ pub trait TupleBuilder : Builder {
 
 /// A type supporting navigation.
 ///
-/// The precise meaning of this navigation is not defined by the trait. It is likely that having 
+/// The precise meaning of this navigation is not defined by the trait. It is likely that having
 /// navigated around, the cursor will be different in some other way, but the `Cursor` trait does
 /// not explain how this is so.
 pub trait Cursor<Storage> {
@@ -102,6 +102,6 @@ pub trait Cursor<Storage> {
 	fn valid(&self, storage: &Storage) -> bool;
 	/// Rewinds the cursor to its initial state.
 	fn rewind(&mut self, storage: &Storage);
-	/// Repositions the cursor to a different range of values. 
+	/// Repositions the cursor to a different range of values.
 	fn reposition(&mut self, storage: &Storage, lower: usize, upper: usize);
 }

@@ -64,10 +64,6 @@ where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Ord+Clone+::std::fm
 	type Batcher = MergeBatcher<K, V, T, R, Self>;
 	type Builder = OrdValBuilder<K, V, T, R>;
 	type Merger = OrdValMerger<K, V, T, R>;
-
-	fn begin_merge(&self, other: &Self) -> Self::Merger {
-		OrdValMerger::new(self, other)
-	}
 }
 
 impl<K, V, T, R> OrdValBatch<K, V, T, R>
@@ -189,7 +185,7 @@ pub struct OrdValMerger<K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+O
 
 impl<K, V, T, R> Merger<K, V, T, R, OrdValBatch<K, V, T, R>> for OrdValMerger<K, V, T, R>
 where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Ord+Clone+::std::fmt::Debug+'static, R: Diff {
-	fn new(batch1: &OrdValBatch<K, V, T, R>, batch2: &OrdValBatch<K, V, T, R>) -> Self {
+	fn new(batch1: &OrdValBatch<K, V, T, R>, batch2: &OrdValBatch<K, V, T, R>, into: &mut Option<OrdValBatch<K, V, T, R>>) -> Self {
 
 		assert!(batch1.upper() == batch2.lower());
 
@@ -202,12 +198,18 @@ where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Ord+Clone+::std::fm
 
 		let description = Description::new(batch1.lower(), batch2.upper(), since);
 
+		// Determine where we want to write this all to.
+		let result = match into.take() {
+			Some(into) => into.layer,
+			None => <<OrderedLayer<K, OrderedLayer<V, OrderedLeaf<T, R>>> as Trie>::MergeBuilder as MergeBuilder>::with_capacity(&batch1.layer, &batch2.layer),
+		};
+
 		OrdValMerger {
 			lower1: 0,
 			upper1: batch1.layer.keys(),
 			lower2: 0,
 			upper2: batch2.layer.keys(),
-			result: <<OrderedLayer<K, OrderedLayer<V, OrderedLeaf<T, R>>> as Trie>::MergeBuilder as MergeBuilder>::with_capacity(&batch1.layer, &batch2.layer),
+			result,
 			description: description,
 		}
 	}
@@ -347,10 +349,6 @@ where K: Ord+Clone+'static, T: Lattice+Ord+Clone+'static, R: Diff {
 	type Batcher = MergeBatcher<K, (), T, R, Self>;
 	type Builder = OrdKeyBuilder<K, T, R>;
 	type Merger = OrdKeyMerger<K, T, R>;
-
-	fn begin_merge(&self, other: &Self) -> Self::Merger {
-		OrdKeyMerger::new(self, other)
-	}
 }
 
 impl<K, T, R> OrdKeyBatch<K, T, R>
@@ -442,7 +440,7 @@ pub struct OrdKeyMerger<K: Ord+Clone+'static, T: Lattice+Ord+Clone+'static, R: D
 
 impl<K, T, R> Merger<K, (), T, R, OrdKeyBatch<K, T, R>> for OrdKeyMerger<K, T, R>
 where K: Ord+Clone+'static, T: Lattice+Ord+Clone+'static, R: Diff {
-	fn new(batch1: &OrdKeyBatch<K, T, R>, batch2: &OrdKeyBatch<K, T, R>) -> Self {
+	fn new(batch1: &OrdKeyBatch<K, T, R>, batch2: &OrdKeyBatch<K, T, R>, into: &mut Option<OrdKeyBatch<K, T, R>>) -> Self {
 
 		assert!(batch1.upper() == batch2.lower());
 
@@ -455,12 +453,17 @@ where K: Ord+Clone+'static, T: Lattice+Ord+Clone+'static, R: Diff {
 
 		let description = Description::new(batch1.lower(), batch2.upper(), since);
 
+		let result = match into.take() {
+			Some(into) => into.layer,
+			None => <<OrderedLayer<K, OrderedLeaf<T, R>> as Trie>::MergeBuilder as MergeBuilder>::with_capacity(&batch1.layer, &batch2.layer),
+		};
+
 		OrdKeyMerger {
 			lower1: 0,
 			upper1: batch1.layer.keys(),
 			lower2: 0,
 			upper2: batch2.layer.keys(),
-			result: <<OrderedLayer<K, OrderedLeaf<T, R>> as Trie>::MergeBuilder as MergeBuilder>::with_capacity(&batch1.layer, &batch2.layer),
+			result,
 			description: description,
 		}
 	}

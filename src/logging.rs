@@ -40,6 +40,13 @@ pub struct MergeEvent {
     pub complete: Option<usize>,
 }
 
+impl MergeEvent {
+    /// Creates a new merge event from its members.
+    pub fn new(operator: usize, scale: usize, length1: usize, length2: usize, complete: Option<usize>) -> Self {
+        MergeEvent { operator, scale, length1, length2, complete }
+    }
+}
+
 impl From<MergeEvent> for DifferentialEvent { fn from(e: MergeEvent) -> Self { DifferentialEvent::Merge(e) } }
 
 /// A merge failed to complete in time.
@@ -53,4 +60,10 @@ pub struct MergeShortfall {
     pub shortfall: usize,
 }
 
+impl MergeShortfall {
+    /// Creates a new merge event from its members.
+    pub fn new(operator: usize, scale: usize, shortfall: usize) -> Self {
+        MergeShortfall { operator, scale, shortfall }
+    }
+}
 impl From<MergeShortfall> for DifferentialEvent { fn from(e: MergeShortfall) -> Self { DifferentialEvent::MergeShortfall(e) } }

@@ -9,86 +9,10 @@ use std::fmt::Debug;
 use ::Diff;
 use lattice::Lattice;
 use trace::{Batch, BatchReader, Trace, TraceReader};
-// use trace::cursor::cursor_list::CursorList;
-use trace::cursor::{Cursor, CursorList};
-use trace::Merger;
+use trace::{Merger, cursor::{Cursor, CursorList} };
+use logging::{MergeEvent, MergeShortfall};
 
 use ::timely::dataflow::operators::generic::OperatorInfo;
-
-enum MergeState<K, V, T, R, B: Batch<K, V, T, R>> {
-    Merging(B, B, Option<Vec<T>>, <B as Batch<K,V,T,R>>::Merger),
-    Complete(B),
-}
-
-impl<K, V, T: Eq, R, B: Batch<K, V, T, R>> MergeState<K, V, T, R, B> {
-    fn complete(mut self, logger: &mut Option<::logging::Logger>, operator: usize, scale: usize) -> B {
-        if let MergeState::Merging(ref source1, ref source2, ref frontier, ref mut in_progress) = self {
-            let mut fuel = usize::max_value();
-            in_progress.work(source1, source2, frontier, &mut fuel);
-            assert!(fuel > 0);
-        }
-        match self {
-            // ALLOC: Here is where we may de-allocate batches.
-            MergeState::Merging(b1, b2, _, finished) => {
-                let finished = finished.done();
-                logger.as_ref().map(|l|
-                    l.log(::logging::MergeEvent {
-                        operator,
-                        scale,
-                        length1: b1.len(),
-                        length2: b2.len(),
-                        complete: Some(finished.len()),
-                    })
-                );
-                finished
-            },
-            MergeState::Complete(x) => x,
-        }
-    }
-
-    fn is_complete(&self) -> bool {
-        match *self {
-            MergeState::Complete(_) => true,
-            _ => false,
-        }
-    }
-    fn begin_merge(batch1: B, batch2: B, frontier: Option<Vec<T>>) -> Self {
-        assert!(batch1.upper() == batch2.lower());
-        let begin_merge = <B as Batch<K, V, T, R>>::begin_merge(&batch1, &batch2);
-        MergeState::Merging(batch1, batch2, frontier, begin_merge)
-    }
-    fn work(mut self, fuel: &mut usize, logger: &mut Option<::logging::Logger>, operator: usize, scale: usize) -> Self {
-        if let MergeState::Merging(ref source1, ref source2, ref frontier, ref mut in_progress) = self {
-            in_progress.work(source1, source2, frontier, fuel);
-        }
-        if *fuel > 0 {
-            match self {
-                // ALLOC: Here is where we may de-allocate batches.
-                MergeState::Merging(b1, b2, _, finished) => {
-                    let finished = finished.done();
-                    logger.as_ref().map(|l|
-                        l.log(::logging::MergeEvent {
-                            operator,
-                            scale,
-                            length1: b1.len(),
-                            length2: b2.len(),
-                            complete: Some(finished.len()),
-                        })
-                    );
-                    MergeState::Complete(finished)
-                },
-                MergeState::Complete(x) => MergeState::Complete(x),
-            }
-        }
-        else { self }
-    }
-    fn len(&self) -> usize {
-        match *self {
-            MergeState::Merging(ref batch1, ref batch2, _, _) => batch1.len() + batch2.len(),
-            MergeState::Complete(ref batch) => batch.len(),
-        }
-    }
-}
 
 /// An append-only collection of update tuples.
 ///
@@ -101,7 +25,7 @@ pub struct Spine<K, V, T: Lattice+Ord, R: Diff, B: Batch<K, V, T, R>> {
     phantom: ::std::marker::PhantomData<(K, V, R)>,
     advance_frontier: Vec<T>,            // Times after which the trace must accumulate correctly.
     through_frontier: Vec<T>,            // Times after which the trace must be able to subset its inputs.
-    merging: Vec<Option<MergeState<K,V,T,R,B>>>, // Several possibly shared collections of updates.
+    merging: Vec<MergeLevel<K,V,T,R,B>>, // Several possibly shared collections of updates.
     pending: Vec<B>,                     // Batches at times in advance of `frontier`.
     upper: Vec<T>,
     effort: usize,
@@ -131,7 +55,7 @@ where
             let mut storage = Vec::new();
 
             for merge_state in self.merging.iter().rev() {
-                match *merge_state {
+                match *merge_state.merge_state() {
                     Some(MergeState::Merging(ref batch1, ref batch2, _, _)) => {
                         cursors.push(batch1.cursor());
                         storage.push(batch1.clone());
@@ -183,7 +107,7 @@ where
 
     fn map_batches<F: FnMut(&Self::Batch)>(&mut self, mut f: F) {
         for batch in self.merging.iter().rev() {
-            match *batch {
+            match *batch.merge_state() {
                 Some(MergeState::Merging(ref batch1, ref batch2, _, _)) => { f(batch1); f(batch2); },
                 Some(MergeState::Complete(ref batch)) => { f(batch); },
                 None => { },
@@ -207,7 +131,7 @@ where
 {
 
     fn new(info: ::timely::dataflow::operators::generic::OperatorInfo, logging: Option<::logging::Logger>) -> Self {
-        Self::with_effort(4, info, logging)
+        Self::with_effort(1, info, logging)
     }
 
     // Ideally, this method acts as insertion of `batch`, even if we are not yet able to begin
@@ -328,126 +252,202 @@ where
             // Step 0: Determine batch size and target slot.
             let batch_size = batch.len().next_power_of_two();
             let batch_index = batch_size.trailing_zeros() as usize;
-            while self.merging.len() <= batch_index { self.merging.push(None); }
+
+            while self.merging.len() <= batch_index+1 {
+                let len = self.merging.len();
+                self.merging.push(MergeLevel::new(len, self.operator.global_id));
+            }
 
             if self.merging.len() > 32 { eprintln!("large progressive merge; len: {:?}", self.merging.len()); }
 
-            // Step 1: Forcibly merge batches in lower slots.
-            for position in 0 .. batch_index {
-                if let Some(batch) = self.merging[position].take() {
-                    let batch = batch.complete(&mut self.logger, self.operator.global_id, position);
-                    if let Some(batch2) = self.merging[position+1].take() {
-                        let batch2 = batch2.complete(&mut self.logger, self.operator.global_id, position);
-                        self.logger.as_ref().map(|l| l.log(
-                            ::logging::MergeEvent {
-                                operator: self.operator.global_id,
-                                scale: position,
-                                length1: batch.len(),
-                                length2: batch2.len(),
-                                complete: None,
-                            }
-                        ));
-                        self.merging[position+1] = Some(MergeState::begin_merge(batch2, batch, None));
-                    }
-                    else {
-                        self.merging[position+1] = Some(MergeState::Complete(batch));
-                    };
-                }
-            }
-
-            // Step 2: Insert new batch at target position
-            if let Some(batch2) = self.merging[batch_index].take() {
-                let batch2 = batch2.complete(&mut self.logger, self.operator.global_id, batch_index);
-                let frontier = if batch_index == self.merging.len()-1 { Some(self.advance_frontier.clone()) } else { None };
-                self.logger.as_ref().map(|l| l.log(
-                    ::logging::MergeEvent {
-                        operator: self.operator.global_id,
-                        scale: batch_index,
-                        length1: batch.len(),
-                        length2: batch2.len(),
-                        complete: None,
-                    }
-                ));
-                self.merging[batch_index] = Some(MergeState::begin_merge(batch2, batch, frontier));
-            }
-            else {
-                self.merging[batch_index] = Some(MergeState::Complete(batch));
-            }
+            // We are going to try and maintain the invariant that there are never two
+            // MergeState::Merging entries adjacent to one another. If this holds, then
+            // we should never accidentally start a merge into a still-merging entry.
+            //
+            // We are going to try and do this by spending lots of fuel!
 
             // Step 3: Perform `size` work on each in-progress merge, from large to small.
             //         For non-merges, accumulate fuel, as we may need to apply it to merges
             //         that result at us.
-            let mut fuel = 0;
-            for position in (batch_index .. self.merging.len()).rev() {
-
-                // We add fuel for any merge that may lead to this location.
-                fuel += (2 * batch_size).saturating_mul(self.effort);
+            let mut fuel = 2 * self.effort * batch_size * self.merging.len();
+            for position in 0 .. self.merging.len() {
 
                 // We now move to the right, merging until we stop merging or run out of fuel.
-                let mut new_position = position;
-                while self.merging[new_position].as_ref().map(|x| !x.is_complete()).unwrap_or(false) && fuel > 0 {
-                    if let Some(mut batch) = self.merging[new_position].take() {
-
-                        // Apply work with accumulated fuel.
-                        batch = batch.work(&mut fuel, &mut self.logger, self.operator.global_id, position);
-
-                        // If we have a complete batch, and it wants to be in the next slot ...
-                        if batch.is_complete() && batch.len() >= (1 << new_position) {//.next_power_of_two().trailing_zeros() as usize > new_position {
-
-                            new_position += 1;
-                            if self.merging.len() <= new_position { self.merging.push(None); }
-
-                            // If the next slot is actually occupied, must start a merge.
-                            if let Some(mut batch2) = self.merging[new_position].take() {
-                                if !batch2.is_complete() {
-                                    let mut temp_fuel = usize::max_value();
-                                    batch2 = batch2.work(&mut temp_fuel, &mut self.logger, self.operator.global_id, position);
-                                    self.logger.as_ref().map(|l| l.log(
-                                        ::logging::MergeShortfall {
-                                            operator: self.operator.global_id,
-                                            scale: new_position,
-                                            shortfall: usize::max_value() - temp_fuel,
-                                        }
-                                    ));
-                                }
-                                let batch1 = batch.complete(&mut self.logger, self.operator.global_id, position);
-                                let batch2 = batch2.complete(&mut self.logger, self.operator.global_id, position);
-                                // if this is the last position, engage compaction.
-                                let frontier = if new_position+1 == self.merging.len() { Some(self.advance_frontier.clone()) } else { None };
-                                self.logger.as_ref().map(|l| l.log(
-                                    ::logging::MergeEvent {
-                                        operator: self.operator.global_id,
-                                        scale: position,
-                                        length1: batch1.len(),
-                                        length2: batch2.len(),
-                                        complete: None,
-                                    }
-                                ));
-                                self.merging[new_position] = Some(MergeState::begin_merge(batch2, batch1, frontier));
-                            }
-                            else {
-                                self.merging[new_position] = Some(batch);
-                            }
-                        }
-                        else {
-                            self.merging[new_position] = Some(batch);
-                        }
+                if let Some(batch) = self.merging[position].work(&mut fuel, &mut self.logger) {
+                    let new_position = position + 1;
+                    while self.merging.len() <= new_position {
+                        let len = self.merging.len();
+                        self.merging.push(MergeLevel::new(len, self.operator.global_id))
                     }
-                    else {
-                        // We can't be here. The while condition ensures that an entry exists.
-                    }
+                    assert!(!self.merging[new_position].is_double());
+
+                    // Advance timestamps if this is the last entry.
+                    let frontier = if new_position+1 == self.merging.len() { Some(self.advance_frontier.clone()) }
+                                   else { None };
+                    self.merging[position+1].merge_with(batch, frontier, &mut self.logger);
                 }
             }
+
+            // Step 1: Forcibly merge batches in lower slots, clearing destination.
+            for position in 0 .. (batch_index+1) {
+                assert!(!self.merging[position+1].is_double());
+                if let Some(batch) = self.merging[position].complete(&mut self.logger) {
+                    self.merging[position+1].merge_with(batch, None, &mut self.logger);
+                }
+            }
+
+            // Step 2: Insert new batch at target position.
+            self.merging[batch_index].merge_with(batch, None, &mut self.logger);
 
             // Step 4: Consider migrating complete batches to lower bins, if appropriate.
             for index in (1 .. self.merging.len()).rev() {
-                if self.merging[index].as_ref().map(|x| x.is_complete() && x.len() < (1 << (index-1))).unwrap_or(false) {
-                    if self.merging[index-1].is_none() {
-                        self.merging[index-1] = self.merging[index].take();
+                if self.merging[index-1].is_empty() {
+                    if let Some(batch) = self.merging[index].could_reduce() {
+                        self.merging[index-1].merge_with(batch, None, &mut self.logger);
                     }
                 }
             }
-            while self.merging.last().map(|x| x.is_none()) == Some(true) { self.merging.pop(); }
+
+            // Step 5: Delete any trailing empty levels.
+            while self.merging.last().map(|x| x.is_empty()) == Some(true) { self.merging.pop(); }
+        }
+    }
+}
+
+// State for one "power of two" level.
+struct MergeLevel<K, V, T, R, B: Batch<K, V, T, R>> {
+    state: Option<MergeState<K, V, T, R, B>>,
+    stash: Vec<B>,  // spare "empty" batches of size 1 << level.
+    level: usize,   // contains batches of size at most 1 << level.
+    op_id: usize,   // operator id (for logging).
+}
+
+enum MergeState<K, V, T, R, B: Batch<K, V, T, R>> {
+    Merging(B, B, Option<Vec<T>>, <B as Batch<K,V,T,R>>::Merger),
+    Complete(B),
+}
+
+impl<K, V, T: Eq, R, B: Batch<K, V, T, R>> MergeLevel<K, V, T, R, B> {
+    /// Creates a new merge level.
+    fn new(level: usize, op_id: usize) -> Self {
+        MergeLevel {
+            state: None,
+            stash: Vec::new(),
+            level,
+            op_id,
+        }
+    }
+    fn print(&self) {
+        println!("status[{}]: {}", self.level, if self.state.is_none() { "None" } else { if self.is_single() { "Single" } else { "Double" }});
+    }
+    /// A reference to the merge state.
+    fn merge_state(&self) -> &Option<MergeState<K, V, T, R, B>> {
+        &self.state
+    }
+    fn is_double(&self) -> bool {
+        if let Some(MergeState::Merging(_,_,_,_)) = self.state { true } else { false }
+    }
+    fn is_single(&self) -> bool {
+        if let Some(MergeState::Complete(_)) = self.state { true } else { false }
+    }
+
+    /// Returns true if there is no batch.
+    fn is_empty(&self) -> bool { self.state.is_none() }
+    /// Returns the batch if it is complete and larger than this slot calls for.
+    fn could_reduce(&mut self) -> Option<B> {
+        match self.state.take() {
+            Some(MergeState::Complete(x)) => {
+                if x.len().next_power_of_two() < (1 << self.level) {
+                    Some(x)
+                }
+                else {
+                    self.state = Some(MergeState::Complete(x));
+                    None
+                }
+            },
+            x => { self.state = x; None },
+         }
+    }
+    /// Performs a merge with a "newer" batch.
+    ///
+    /// If the current merge is still in progress it is completed immediately.
+    /// If the current merge is complete, a new merge is started.
+    fn merge_with(&mut self, batch_new: B, frontier: Option<Vec<T>>, logger: &mut Option<::logging::Logger>) {
+
+        // println!("entry {} merging! with {}", self.level, batch_new.len());
+
+        match self.state.take() {
+            Some(MergeState::Merging(_,_,_,_)) => {
+                panic!(format!("WHOAWTFNONONNONO: {}", self.level));
+            },
+            Some(MergeState::Complete(batch_old)) => {
+
+                logger.as_ref().map(|l| l.log(
+                    MergeEvent::new(self.op_id, self.level, batch_old.len(), batch_new.len(), None)
+                ));
+                assert!(batch_old.upper() == batch_new.lower());
+                // TODO: Steal stuff from our stash!
+                let begin_merge = <B as Batch<K, V, T, R>>::begin_merge(&batch_old, &batch_new, &mut None);
+                self.state = Some(MergeState::Merging(batch_old, batch_new, frontier, begin_merge));
+            },
+            None => {
+                self.state = Some(MergeState::Complete(batch_new));
+            },
+        }
+    }
+
+    /// Completes any merge and returns the batch if it was a merge.
+    fn complete(&mut self, logger: &mut Option<::logging::Logger>) -> Option<B> {
+        let mut fuel = usize::max_value();
+        let mut result = self.work(&mut fuel, logger);
+        while fuel == 0 {
+            fuel = usize::max_value();
+            result = self.work(&mut fuel, logger);
+        }
+        if result.is_some() {
+            result
+        }
+        else {
+            if let Some(MergeState::Complete(x)) = self.state.take() {
+                Some(x)
+            }
+            else {
+                None
+            }
+        }
+    }
+
+    /// Performs at most `fuel` work merging, returning any completed batch.
+    ///
+    /// If a merge completes the resulting batch is returned.
+    fn work(&mut self, fuel: &mut usize, logger: &mut Option<::logging::Logger>) -> Option<B> {
+        if let Some(merge) = self.state.take() {
+            match merge {
+                MergeState::Merging(b1, b2, frontier, mut in_progress) => {
+                    in_progress.work(&b1, &b2, &frontier, fuel);
+                    if *fuel > 0 {
+                        let done = in_progress.done();
+                        logger.as_ref().map(|l|
+                            l.log(MergeEvent::new(self.op_id, self.level, b1.len(), b2.len(), Some(done.len())))
+                        );
+                        // self.stash.push(b1);
+                        // self.stash.push(b2);
+                        self.state = None;
+                        Some(done)
+                    }
+                    else {
+                        self.state = Some(MergeState::Merging(b1, b2, frontier, in_progress));
+                        None
+                    }
+                },
+                MergeState::Complete(x) => {
+                    self.state = Some(MergeState::Complete(x));
+                    None
+                },
+            }
+        }
+        else {
+            None
         }
     }
 }

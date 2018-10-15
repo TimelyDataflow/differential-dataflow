@@ -4,7 +4,10 @@ use difference::Diff;
 
 use super::{Trie, Cursor, Builder, MergeBuilder, TupleBuilder};
 
-/// A layer of unordered values. 
+/// An ordered leaf builds itself.
+pub type OrderedLeafBuilder<K, R> = OrderedLeaf<K, R>;
+
+/// A layer of unordered values.
 #[derive(Debug, Eq, PartialEq, Clone, Abomonation)]
 pub struct OrderedLeaf<K, R> {
     /// Unordered values.
@@ -14,11 +17,11 @@ pub struct OrderedLeaf<K, R> {
 impl<K: Ord+Clone, R: Diff+Clone> Trie for OrderedLeaf<K, R> {
     type Item = (K, R);
     type Cursor = OrderedLeafCursor;
-    type MergeBuilder = OrderedLeafBuilder<K, R>;
-    type TupleBuilder = OrderedLeafBuilder<K, R>;
+    type MergeBuilder = Self;
+    type TupleBuilder = Self;
     fn keys(&self) -> usize { self.vals.len() }
     fn tuples(&self) -> usize { <OrderedLeaf<K, R> as Trie>::keys(&self) }
-    fn cursor_from(&self, lower: usize, upper: usize) -> Self::Cursor { 
+    fn cursor_from(&self, lower: usize, upper: usize) -> Self::Cursor {
         OrderedLeafCursor {
             bounds: (lower, upper),
             pos: lower,
@@ -26,19 +29,19 @@ impl<K: Ord+Clone, R: Diff+Clone> Trie for OrderedLeaf<K, R> {
     }
 }
 
-/// A builder for unordered values.
-pub struct OrderedLeafBuilder<K, R> {
-    /// Unordered values.
-    pub vals: Vec<(K, R)>,
-}
-
-impl<K: Ord+Clone, R: Diff+Clone> Builder for OrderedLeafBuilder<K, R> {
-    type Trie = OrderedLeaf<K, R>; 
-    fn boundary(&mut self) -> usize { self.vals.len() } 
+impl<K: Ord+Clone, R: Diff+Clone> Builder for OrderedLeaf<K, R> {
+    type Trie = OrderedLeaf<K, R>;
+    fn boundary(&mut self) -> usize { self.vals.len() }
     fn done(self) -> Self::Trie { OrderedLeaf { vals: self.vals } }
 }
 
-impl<K: Ord+Clone, R: Diff+Clone> MergeBuilder for OrderedLeafBuilder<K, R> {
+impl<K: Ord+Clone, R: Diff+Clone> MergeBuilder for OrderedLeaf<K, R> {
+
+    fn merge_into(mut trie: Self::Trie) -> Self {
+        trie.vals.clear();
+        trie
+    }
+
     fn with_capacity(other1: &Self::Trie, other2: &Self::Trie) -> Self {
         OrderedLeafBuilder {
             vals: Vec::with_capacity(<OrderedLeaf<K, R> as Trie>::keys(other1) + <OrderedLeaf<K, R> as Trie>::keys(other2)),
@@ -74,7 +77,7 @@ impl<K: Ord+Clone, R: Diff+Clone> MergeBuilder for OrderedLeafBuilder<K, R> {
 
                     lower1 += 1;
                     lower2 += 1;
-                } 
+                }
                 ::std::cmp::Ordering::Greater => {
                     // determine how far we can advance lower2 until we reach/pass lower1
                     let step = 1 + advance(&trie2.vals[(1+lower2)..upper2], |x| x.0 < trie1.vals[lower1].0);
@@ -91,7 +94,7 @@ impl<K: Ord+Clone, R: Diff+Clone> MergeBuilder for OrderedLeafBuilder<K, R> {
     }
 }
 
-impl<K: Ord+Clone, R: Diff+Clone> TupleBuilder for OrderedLeafBuilder<K, R> {
+impl<K: Ord+Clone, R: Diff+Clone> TupleBuilder for OrderedLeaf<K, R> {
     type Item = (K, R);
     fn new() -> Self { OrderedLeafBuilder { vals: Vec::new() } }
     fn with_capacity(cap: usize) -> Self { OrderedLeafBuilder { vals: Vec::with_capacity(cap) } }
@@ -111,7 +114,7 @@ impl<K: Clone, R: Clone> Cursor<OrderedLeaf<K, R>> for OrderedLeafCursor {
     type Key = (K, R);
     fn key<'a>(&self, storage: &'a OrderedLeaf<K, R>) -> &'a Self::Key { &storage.vals[self.pos] }
     fn step(&mut self, storage: &OrderedLeaf<K, R>) {
-        self.pos += 1; 
+        self.pos += 1;
         if !self.valid(storage) {
             self.pos = self.bounds.1;
         }
@@ -134,7 +137,7 @@ impl<K: Clone, R: Clone> Cursor<OrderedLeaf<K, R>> for OrderedLeafCursor {
 ///
 /// This methods *relies strongly* on the assumption that the predicate
 /// stays false once it becomes false, a joint property of the predicate
-/// and the slice. This allows `advance` to use exponential search to 
+/// and the slice. This allows `advance` to use exponential search to
 /// count the number of elements in time logarithmic in the result.
 #[inline(never)]
 pub fn advance<T, F: Fn(&T)->bool>(slice: &[T], function: F) -> usize {
@@ -160,7 +163,7 @@ pub fn advance<T, F: Fn(&T)->bool>(slice: &[T], function: F) -> usize {
         }
 
         index += 1;
-    }   
+    }
 
     index
 }
