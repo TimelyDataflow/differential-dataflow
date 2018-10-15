@@ -89,7 +89,7 @@ fn main() {
 
                 // Q4: Shortest path queries:
                 if use_bidijkstra {
-                    _bidijkstra(&graph_indexed, &graph_indexed, &q4, 2)
+                    _bidijkstra(&graph_indexed, &graph_indexed, &q4)
                         .probe_with(&mut probe);
                 } else {
                     three_hop(&graph_indexed, &graph_indexed, &q4)

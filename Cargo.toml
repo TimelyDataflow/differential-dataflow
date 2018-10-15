@@ -13,6 +13,10 @@ repository = "https://github.com/frankmcsherry/differential-dataflow.git"
 keywords = ["differential", "dataflow"]
 license = "MIT"
 
+[features]
+default = []
+custom-effort = []
+
 [dev-dependencies]
 indexmap = "1.0.1"
 rand="0.4"

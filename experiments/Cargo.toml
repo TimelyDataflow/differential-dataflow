@@ -10,5 +10,5 @@ abomonation = "0.7"
 abomonation_derive = "0.3"
 #timely = "0.7"
 timely = { git = "https://github.com/frankmcsherry/timely-dataflow" }
-differential-dataflow = { path = "../" }
+differential-dataflow = { path = "../", features = ["custom-effort"] }
 graph_map = { git = "https://github.com/frankmcsherry/graph-map" }
