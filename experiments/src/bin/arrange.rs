@@ -10,7 +10,7 @@ use timely::dataflow::operators::{Exchange, Probe};
 // use timely::progress::timestamp::RootTimestamp;
 
 use differential_dataflow::input::Input;
-use differential_dataflow::operators::arrange::{Arrange, ArrangeBySelf};
+use differential_dataflow::operators::arrange::{Arrange, ArrangeBySelf, ArrangeByKey};
 use differential_dataflow::operators::count::CountTotal;
 use differential_dataflow::operators::threshold::ThresholdTotal;
 use differential_dataflow::operators::{Join, JoinCore};
@@ -89,14 +89,14 @@ fn main() {
             let probe = match comp {
                 Comp::Nothing => data.probe(),
                 Comp::Exchange => data.inner.exchange(|&(x,_,_): &((usize,()),_,_)| x.0 as u64).probe(),
-                Comp::Arrange => data.arrange().stream.probe(),
-                Comp::Maintain => data.arrange().join(&data.filter(|_| false)).probe(),
+                Comp::Arrange => data.arrange_by_key().stream.probe(),
+                Comp::Maintain => data.arrange_by_key().join(&data.filter(|_| false)).probe(),
                 Comp::SelfJoin => {
-                    let arranged = data.arrange();
+                    let arranged = data.arrange_by_key();
                     arranged.join_core(&arranged, |_key, &a, &b| if a == b { Some((a, b)) } else { None }).probe()
                 },
-                Comp::Count => data.arrange().count_total().probe(),
-                Comp::Distinct => data.arrange().distinct_total().probe(),
+                Comp::Count => data.arrange_by_key().count_total().probe(),
+                Comp::Distinct => data.arrange_by_key().distinct_total().probe(),
             };
 
             // OrdKeySpine::<usize, Product<RootTimestamp,u64>,isize>::with_effort(work)
