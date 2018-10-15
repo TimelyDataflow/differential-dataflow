@@ -3,10 +3,6 @@ use timely::dataflow::*;
 use timely::dataflow::operators::probe::Handle as ProbeHandle;
 
 use differential_dataflow::operators::*;
-use differential_dataflow::operators::arrange::ArrangeBySelf;
-use differential_dataflow::operators::group::GroupArranged;
-use differential_dataflow::trace::Trace;
-use differential_dataflow::trace::implementations::ord::OrdKeySpine as DefaultKeyTrace;
 use differential_dataflow::lattice::Lattice;
 
 use ::Collections;
@@ -40,25 +36,25 @@ use ::Collections;
 //     o_orderpriority;
 // :n -1
 
-pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp> 
+pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp>
 where G::Timestamp: Lattice+TotalOrder+Ord {
 
-    let lineitems = 
+    let lineitems =
     collections
         .lineitems()
         .flat_map(|l| if l.commit_date < l.receipt_date { Some(l.order_key) } else { None })
-        .arrange_by_self()
-        .group_arranged(|_k,_s,t| t.push(((), 1)), DefaultKeyTrace::new()); // <-- Distinct
+        .distinct_total();
 
     collections
         .orders()
-        .flat_map(|o| 
+        .flat_map(|o|
             if o.order_date >= ::types::create_date(1993, 7, 1) && o.order_date < ::types::create_date(1993, 10, 1) {
                 Some((o.order_key, o.order_priority))
             }
             else { None }
         )
-        .join_core(&lineitems, |_k,v,_| Some(v.clone()))
+        .semijoin(&lineitems)
+        .map(|(_k,v)| v)
         .count_total()
         // .inspect(|x| println!("{:?}", x))
         .probe()

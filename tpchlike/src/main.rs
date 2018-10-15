@@ -12,8 +12,6 @@ use std::time::Instant;
 
 use timely::dataflow::*;
 use timely::dataflow::operators::*;
-use timely::progress::timestamp::RootTimestamp;
-use timely::progress::nested::product::Product;
 
 use differential_dataflow::{Collection, AsCollection};
 
@@ -124,7 +122,7 @@ fn main() {
         inputs.6.as_mut().map(|x| x.advance_to(next_round));
         inputs.7.as_mut().map(|x| x.advance_to(next_round));
 
-        let time = RootTimestamp::new(next_round);
+        let time = next_round;
         worker.step_while(|| probes.iter().all(|p| p.less_than(&time)));
 
         let timer = Instant::now();
@@ -152,7 +150,7 @@ fn main() {
             inputs.6.as_mut().map(|x| x.advance_to(next_round));
             inputs.7.as_mut().map(|x| x.advance_to(next_round));
 
-            let time = RootTimestamp::new(next_round);
+            let time = next_round;
             worker.step_while(|| probes.iter().all(|p| p.less_than(&time)));
             round += 1;
         }
@@ -168,7 +166,7 @@ fn main() {
         inputs.6.as_mut().map(|x| x.advance_to(next_round));
         inputs.7.as_mut().map(|x| x.advance_to(next_round));
 
-        let time = RootTimestamp::new(next_round);
+        let time = next_round;
         worker.step_while(|| probes.iter().all(|p| p.less_than(&time)));
 
         let query_name = if query < 10 { format!("q0{}", query) } else { format!("q{}", query) };
@@ -233,7 +231,7 @@ impl<G: Scope> Collections<G> {
 
 // Returns a sequence of physical batches of ready-to-go timestamped data. Not clear that `input` can exploit the pre-arrangement yet.
 fn load<T>(prefix: &str, name: &str, index: usize, peers: usize, logical_batch: usize, physical_batch: usize, off: usize)
-    -> Vec<Vec<(T, Product<RootTimestamp, usize>, isize)>>
+    -> Vec<Vec<(T, usize, isize)>>
 where T: for<'a> From<&'a str> {
 
     let mut result = Vec::new();
@@ -261,7 +259,7 @@ where T: for<'a> From<&'a str> {
             }
 
             let item = T::from(line.as_str());
-            buffer.push((item, RootTimestamp::new(logical + 1), 1));
+            buffer.push((item, logical + 1, 1));
         }
 
         count += 1;

@@ -4,7 +4,6 @@ use timely::dataflow::operators::probe::Handle as ProbeHandle;
 
 use differential_dataflow::operators::*;
 use differential_dataflow::operators::group::GroupArranged;
-use differential_dataflow::trace::Trace;
 use differential_dataflow::trace::implementations::ord::OrdValSpine as DefaultValTrace;
 use differential_dataflow::lattice::Lattice;
 
@@ -60,27 +59,27 @@ fn starts_with(source: &[u8], query: &[u8]) -> bool {
     source.len() >= query.len() && &source[..query.len()] == query
 }
 
-pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp> 
+pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp>
 where G::Timestamp: Lattice+TotalOrder+Ord {
 
     println!("TODO: Q20 uses a `group_arranged` to get an arrangement, but could use `count_total`");
 
     let partkeys = collections.parts.filter(|p| p.name.as_bytes() == b"forest").map(|p| p.part_key);
 
-    let available = 
+    let available =
     collections
         .lineitems()
-        .flat_map(|l| 
-            if l.ship_date >= create_date(1994, 1, 1) && l.ship_date < create_date(1995, 1, 1) { 
-                Some((l.part_key, (l.supp_key, l.quantity))) 
+        .flat_map(|l|
+            if l.ship_date >= create_date(1994, 1, 1) && l.ship_date < create_date(1995, 1, 1) {
+                Some((l.part_key, (l.supp_key, l.quantity)))
             }
             else { None }
         )
         .semijoin(&partkeys)
         .explode(|l| Some(((((l.0 as u64) << 32) + (l.1).0 as u64, ()), (l.1).1 as isize)))
-        .group_arranged(|_k,s,t| t.push((s[0].1, 1)), DefaultValTrace::new());
+        .group_arranged::<_,_,DefaultValTrace<_,_,_,_>,_>(|_k,s,t| t.push((s[0].1, 1)));
 
-    let suppliers = 
+    let suppliers =
     collections
         .partsupps()
         .map(|ps| (ps.part_key, (ps.supp_key, ps.availqty)))

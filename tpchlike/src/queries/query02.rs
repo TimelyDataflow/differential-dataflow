@@ -63,39 +63,39 @@ fn starts_with(source: &[u8], query: &[u8]) -> bool {
 }
 
 fn substring(source: &[u8], query: &[u8]) -> bool {
-    (0 .. (source.len() - query.len())).any(|offset| 
+    (0 .. (source.len() - query.len())).any(|offset|
         (0 .. query.len()).all(|i| source[i + offset] == query[i])
     )
 }
 
-pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp> 
+pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp>
 where G::Timestamp: Lattice+TotalOrder+Ord {
 
-    let regions = 
+    let regions =
     collections
         .regions()
         .flat_map(|x| if starts_with(&x.name[..], b"EUROPE") { Some(x.region_key) } else { None });
 
-    let nations = 
+    let nations =
     collections
         .nations()
         .map(|x| (x.region_key, (x.nation_key, x.name)))
         .semijoin(&regions)
         .map(|(_region_key, (nation_key, name))| (nation_key, name));
 
-    let suppliers = 
+    let suppliers =
     collections
         .suppliers()
         .map(|x| (x.nation_key, (x.acctbal, x.name, x.address, x.phone, x.comment, x.supp_key)))
         .semijoin(&nations.map(|x| x.0))
         .map(|(nat, (acc, nam, add, phn, com, key))| (key, (nat, acc, nam, add, phn, com)));
 
-    let parts = 
+    let parts =
     collections
         .parts()
         .flat_map(|x| if substring(x.typ.as_str().as_bytes(), b"BRASS") && x.size == 15 { Some((x.part_key, x.mfgr)) } else { None });
 
-    let partsupps = 
+    let partsupps =
     collections
         .partsupps()
         .map(|x| (x.supp_key, (x.part_key, x.supplycost)))
@@ -109,9 +109,9 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
 
     partsupps
         .join(&parts)
-        .map(|(part_key, (cost, supp), mfgr)| (supp, (cost, part_key, mfgr)))
+        .map(|(part_key, ((cost, supp), mfgr))| (supp, (cost, part_key, mfgr)))
         .join(&suppliers)
-        .map(|(_supp, (cost, part, mfgr), (nat, acc, nam, add, phn, com))| (nat, (cost, part, mfgr, acc, nam, add, phn, com)))
+        .map(|(_supp, ((cost, part, mfgr), (nat, acc, nam, add, phn, com)))| (nat, (cost, part, mfgr, acc, nam, add, phn, com)))
         .join(&nations)
         .probe()
 }

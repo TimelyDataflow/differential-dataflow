@@ -8,7 +8,6 @@ use differential_dataflow::operators::group::GroupArranged;
 use differential_dataflow::operators::ThresholdTotal;
 use differential_dataflow::lattice::Lattice;
 
-use differential_dataflow::trace::Trace;
 use differential_dataflow::trace::implementations::ord::OrdValSpine as DefaultValTrace;
 
 use ::Collections;
@@ -58,12 +57,12 @@ use ::Collections;
 //     cntrycode;
 // :n -1
 
-pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp> 
+pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp>
 where G::Timestamp: Lattice+TotalOrder+Ord {
 
     println!("TODO: Q22 uses a `group` for counting to get an arrangement; could use `count_total`");
 
-    let customers = 
+    let customers =
     collections
         .customers()
         .flat_map(|c| {
@@ -78,10 +77,10 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
             else { None }
         });
 
-    let averages = 
+    let averages =
     customers
         .explode(|(cc, acctbal, _)| Some(((cc, ()), DiffPair::new(acctbal as isize, 1))))
-        .group_arranged(|_k,s,t| t.push((s[0].1, 1)), DefaultValTrace::new());
+        .group_arranged::<_,_,DefaultValTrace<_,_,_,_>,_>(|_k,s,t| t.push((s[0].1, 1)));
 
     customers
         .map(|(cc, acct, key)| (key, (cc, acct)))

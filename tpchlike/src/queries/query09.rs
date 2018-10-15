@@ -48,12 +48,12 @@ use ::Collections;
 // :n -1
 
 fn substring(source: &[u8], query: &[u8]) -> bool {
-    (0 .. (source.len() - query.len())).any(|offset| 
+    (0 .. (source.len() - query.len())).any(|offset|
         (0 .. query.len()).all(|i| source[i + offset] == query[i])
     )
 }
 
-pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp> 
+pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp>
 where G::Timestamp: Lattice+TotalOrder+Ord {
 
     println!("TODO: Q09 join order may be pessimal; could pivot to put lineitems last");
@@ -69,7 +69,7 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
         .semijoin(&parts)
         .map(|(part_key, (supp_key, order_key, revenue, quantity))| ((part_key, supp_key), (order_key, revenue, quantity)))
         .join(&collections.partsupps().map(|ps| ((ps.part_key, ps.supp_key), ps.supplycost)))
-        .explode(|((_part_key, supp_key), (order_key, revenue, quantity), supplycost)|
+        .explode(|((_part_key, supp_key), ((order_key, revenue, quantity), supplycost))|
             Some(((order_key, supp_key), ((revenue - supplycost * quantity) as isize)))
         )
         .join_map(&collections.orders().map(|o| (o.order_key, o.order_date >> 16)), |_, &supp_key, &order_year| (supp_key, order_year))
