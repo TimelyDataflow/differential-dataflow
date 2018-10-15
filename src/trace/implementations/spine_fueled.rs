@@ -56,13 +56,13 @@ where
 
             for merge_state in self.merging.iter().rev() {
                 match *merge_state.merge_state() {
-                    Some(MergeState::Merging(ref batch1, ref batch2, _, _)) => {
+                    Some(MergeState::Double(ref batch1, ref batch2, _, _)) => {
                         cursors.push(batch1.cursor());
                         storage.push(batch1.clone());
                         cursors.push(batch2.cursor());
                         storage.push(batch2.clone());
                     },
-                    Some(MergeState::Complete(ref batch)) => {
+                    Some(MergeState::Single(ref batch)) => {
                         cursors.push(batch.cursor());
                         storage.push(batch.clone());
                     },
@@ -108,8 +108,8 @@ where
     fn map_batches<F: FnMut(&Self::Batch)>(&mut self, mut f: F) {
         for batch in self.merging.iter().rev() {
             match *batch.merge_state() {
-                Some(MergeState::Merging(ref batch1, ref batch2, _, _)) => { f(batch1); f(batch2); },
-                Some(MergeState::Complete(ref batch)) => { f(batch); },
+                Some(MergeState::Double(ref batch1, ref batch2, _, _)) => { f(batch1); f(batch2); },
+                Some(MergeState::Single(ref batch)) => { f(batch); },
                 None => { },
             }
         }
@@ -253,7 +253,8 @@ where
             let batch_size = batch.len().next_power_of_two();
             let batch_index = batch_size.trailing_zeros() as usize;
 
-            while self.merging.len() <= batch_index+1 {
+            // Ensure enough space to
+            while self.merging.len() <= batch_index + 1 {
                 let len = self.merging.len();
                 self.merging.push(MergeLevel::new(len, self.operator.global_id));
             }
@@ -261,7 +262,7 @@ where
             if self.merging.len() > 32 { eprintln!("large progressive merge; len: {:?}", self.merging.len()); }
 
             // We are going to try and maintain the invariant that there are never two
-            // MergeState::Merging entries adjacent to one another. If this holds, then
+            // MergeState::Double entries adjacent to one another. If this holds, then
             // we should never accidentally start a merge into a still-merging entry.
             //
             // We are going to try and do this by spending lots of fuel!
@@ -282,8 +283,10 @@ where
                     assert!(!self.merging[new_position].is_double());
 
                     // Advance timestamps if this is the last entry.
-                    let frontier = if new_position+1 == self.merging.len() { Some(self.advance_frontier.clone()) }
-                                   else { None };
+                    let mut frontier = None;
+                    if new_position+1 == self.merging.len() {
+                        frontier = Some(self.advance_frontier.clone());
+                    }
                     self.merging[position+1].merge_with(batch, frontier, &mut self.logger);
                 }
             }
@@ -323,8 +326,10 @@ struct MergeLevel<K, V, T, R, B: Batch<K, V, T, R>> {
 }
 
 enum MergeState<K, V, T, R, B: Batch<K, V, T, R>> {
-    Merging(B, B, Option<Vec<T>>, <B as Batch<K,V,T,R>>::Merger),
-    Complete(B),
+    /// Represents two batchs, old then new, and their in-progress merge.
+    Double(B, B, Option<Vec<T>>, <B as Batch<K,V,T,R>>::Merger),
+    /// A single batch.
+    Single(B),
 }
 
 impl<K, V, T: Eq, R, B: Batch<K, V, T, R>> MergeLevel<K, V, T, R, B> {
@@ -344,24 +349,25 @@ impl<K, V, T: Eq, R, B: Batch<K, V, T, R>> MergeLevel<K, V, T, R, B> {
     fn merge_state(&self) -> &Option<MergeState<K, V, T, R, B>> {
         &self.state
     }
+    /// True if the level holds two batches.
     fn is_double(&self) -> bool {
-        if let Some(MergeState::Merging(_,_,_,_)) = self.state { true } else { false }
+        if let Some(MergeState::Double(_,_,_,_)) = self.state { true } else { false }
     }
+    /// True if the level holds one batch.
     fn is_single(&self) -> bool {
-        if let Some(MergeState::Complete(_)) = self.state { true } else { false }
+        if let Some(MergeState::Single(_)) = self.state { true } else { false }
     }
-
-    /// Returns true if there is no batch.
+    /// True if the level holds no batch.
     fn is_empty(&self) -> bool { self.state.is_none() }
     /// Returns the batch if it is complete and larger than this slot calls for.
     fn could_reduce(&mut self) -> Option<B> {
         match self.state.take() {
-            Some(MergeState::Complete(x)) => {
+            Some(MergeState::Single(x)) => {
                 if x.len().next_power_of_two() < (1 << self.level) {
                     Some(x)
                 }
                 else {
-                    self.state = Some(MergeState::Complete(x));
+                    self.state = Some(MergeState::Single(x));
                     None
                 }
             },
@@ -377,10 +383,10 @@ impl<K, V, T: Eq, R, B: Batch<K, V, T, R>> MergeLevel<K, V, T, R, B> {
         // println!("entry {} merging! with {}", self.level, batch_new.len());
 
         match self.state.take() {
-            Some(MergeState::Merging(_,_,_,_)) => {
+            Some(MergeState::Double(_,_,_,_)) => {
                 panic!(format!("WHOAWTFNONONNONO: {}", self.level));
             },
-            Some(MergeState::Complete(batch_old)) => {
+            Some(MergeState::Single(batch_old)) => {
 
                 logger.as_ref().map(|l| l.log(
                     MergeEvent::new(self.op_id, self.level, batch_old.len(), batch_new.len(), None)
@@ -388,10 +394,10 @@ impl<K, V, T: Eq, R, B: Batch<K, V, T, R>> MergeLevel<K, V, T, R, B> {
                 assert!(batch_old.upper() == batch_new.lower());
                 // TODO: Steal stuff from our stash!
                 let begin_merge = <B as Batch<K, V, T, R>>::begin_merge(&batch_old, &batch_new, &mut None);
-                self.state = Some(MergeState::Merging(batch_old, batch_new, frontier, begin_merge));
+                self.state = Some(MergeState::Double(batch_old, batch_new, frontier, begin_merge));
             },
             None => {
-                self.state = Some(MergeState::Complete(batch_new));
+                self.state = Some(MergeState::Single(batch_new));
             },
         }
     }
@@ -408,7 +414,7 @@ impl<K, V, T: Eq, R, B: Batch<K, V, T, R>> MergeLevel<K, V, T, R, B> {
             result
         }
         else {
-            if let Some(MergeState::Complete(x)) = self.state.take() {
+            if let Some(MergeState::Single(x)) = self.state.take() {
                 Some(x)
             }
             else {
@@ -423,7 +429,7 @@ impl<K, V, T: Eq, R, B: Batch<K, V, T, R>> MergeLevel<K, V, T, R, B> {
     fn work(&mut self, fuel: &mut usize, logger: &mut Option<::logging::Logger>) -> Option<B> {
         if let Some(merge) = self.state.take() {
             match merge {
-                MergeState::Merging(b1, b2, frontier, mut in_progress) => {
+                MergeState::Double(b1, b2, frontier, mut in_progress) => {
                     in_progress.work(&b1, &b2, &frontier, fuel);
                     if *fuel > 0 {
                         let done = in_progress.done();
@@ -436,12 +442,12 @@ impl<K, V, T: Eq, R, B: Batch<K, V, T, R>> MergeLevel<K, V, T, R, B> {
                         Some(done)
                     }
                     else {
-                        self.state = Some(MergeState::Merging(b1, b2, frontier, in_progress));
+                        self.state = Some(MergeState::Double(b1, b2, frontier, in_progress));
                         None
                     }
                 },
-                MergeState::Complete(x) => {
-                    self.state = Some(MergeState::Complete(x));
+                MergeState::Single(x) => {
+                    self.state = Some(MergeState::Single(x));
                     None
                 },
             }
