@@ -25,13 +25,22 @@ fn main() {
     ::std::thread::spawn(|| {
         use std::io::Read;
         let timer = ::std::time::Instant::now();
+
+        let page_size: u64 = {
+            use std::process::Command;
+            let output = Command::new("/usr/bin/getconf")
+                                 .arg("PAGE_SIZE")
+                                 .output()
+                                 .expect("failed to execute getconf PAGE_SIZE");
+            String::from_utf8_lossy(&output.stdout).parse().expect("invalid PAGE_SIZE")
+        };
         // let pid = std::process::id();
         loop {
             let mut stat_s = String::new();
             let mut statm_f = ::std::fs::File::open("/proc/self/statm").expect("filez");
             statm_f.read_to_string(&mut stat_s);
             let pages: u64 = stat_s.split_whitespace().nth(1).expect("wooo").parse().expect("not a number");
-            let rss = pages * 1024;
+            let rss = pages * page_size;
 
             let elapsed = timer.elapsed();
             let elapsed_ns: usize = (elapsed.as_secs() * 1_000_000_000 + (elapsed.subsec_nanos() as u64)) as usize;
@@ -53,6 +62,7 @@ fn main() {
             _ => panic!("invalid sharing mode"),
         }
     };
+    let zerocopy_workers: usize = std::env::args().nth(7).unwrap().parse().unwrap();
 
     // Our setting involves four read query types, and two updatable base relations.
     //
@@ -64,7 +74,16 @@ fn main() {
     //  R1: "State": a pair of (node, T) for some type T that I don't currently know.
     //  R2: "Graph": pairs (node, node) indicating linkage between the two nodes.
 
-    timely::execute_from_args(std::env::args().skip(3), move |worker| {
+    eprintln!("thread allocators zerocopy");
+    let allocators =
+        ::timely::communication::allocator::zero_copy::allocator_process::ProcessBuilder::new_vector(zerocopy_workers);
+    timely::execute::execute_from(allocators, Box::new(()), move |worker| {
+    // timely::execute_from_args(std::env::args().skip(3), move |worker| {
+
+        let tmp = {
+            eprintln!("jemalloc alloc!");
+            Vec::<usize>::with_capacity(1 << 30)
+        };
 
         let index = worker.index();
         let peers = worker.peers();

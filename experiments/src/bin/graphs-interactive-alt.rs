@@ -29,6 +29,7 @@ fn main() {
     let queries: usize  = std::env::args().nth(5).unwrap().parse().unwrap();
     let shared: bool = std::env::args().nth(6).unwrap().as_str() == "share";
     let use_bidijkstra: bool = std::env::args().nth(7).unwrap().as_str() == "bidijkstra";
+    let zerocopy_workers: usize = std::env::args().nth(8).unwrap().parse().unwrap();
 
     // Our setting involves four read query types, and two updatable base relations.
     //
@@ -40,7 +41,16 @@ fn main() {
     //  R1: "State": a pair of (node, T) for some type T that I don't currently know.
     //  R2: "Graph": pairs (node, node) indicating linkage between the two nodes.
 
-    timely::execute_from_args(std::env::args().skip(3), move |worker| {
+    eprintln!("thread allocators zerocopy");
+    let allocators =
+        ::timely::communication::allocator::zero_copy::allocator_process::ProcessBuilder::new_vector(zerocopy_workers);
+    timely::execute::execute_from(allocators, Box::new(()), move |worker| {
+    // timely::execute_from_args(std::env::args().skip(3), move |worker| {
+
+        let tmp = {
+            eprintln!("jemalloc alloc!");
+            Vec::<usize>::with_capacity(1 << 30)
+        };
 
         let index = worker.index();
         let peers = worker.peers();

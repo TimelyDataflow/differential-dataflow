@@ -68,6 +68,8 @@ def i_load_varies(): # commit = "dirty-8380c53277307b6e9e089a8f6f79886b36e20428"
             plotscript += "\"{}\" using 1:2 with lines lw 2 dt ({}, 2) title \"{}\", ".format(datafile, dt, dict(p)['rate'])
             dt += 2
 
+    plotscript += "\n"
+
     assert(execute('mkdir -p plots/{}/{}'.format(commit, experiment)))
     eprint(plotscript)
     assert(execute('gnuplot > plots/{}/{}/i_load_varies_{}.pdf'.format(commit, experiment, groupingstr(F)), input=plotscript))
@@ -161,9 +163,9 @@ def iii_weak_scaling(): # commit = "dirty-e74441d0c062c7ec8d6da9bbf1972bd9397b26
 def iv_throughput(): # commit = "dirty-e74441d0c062c7ec8d6da9bbf1972bd9397b2670" experiment = "arrange"
     tempdir = tempfile.mkdtemp("{}-{}".format(experiment, commit))
 
-    filtering = { ('rate', 10000), ('work', 4) }
+    filtering = { ('rate', 100000), ('work', 4) }
 
-    plotscript = "set terminal pdf size 4.8cm,3.2cm; set logscale x; set logscale y; " \
+    plotscript = "set terminal pdf size 4.8cm,3.2cm; " \
             "set bmargin at screen 0.2; " \
             "set xrange [0.8:38]; " \
             "set xlabel \"cores\"; " \
@@ -187,17 +189,23 @@ def iv_throughput(): # commit = "dirty-e74441d0c062c7ec8d6da9bbf1972bd9397b2670"
         execute('echo "" > {}'.format(datafile))
         for p, f in sorted(filedict, key=lambda x: dict(x[0])['w']):
             if p.issuperset(F):
-                # eprint("results/{}/{}/{}".format(commit, experiment, f))
+                eprint("results/{}/{}/{}".format(commit, experiment, f))
                 assert(execute('cat results/{}/{}/{} | grep THROUGHPUT | cut -f 3,4 >> {}'.format(commit, experiment, f, datafile)))
         plotscript += "\"{}\" using 1:2:xtic(1) with linespoints pointtype {} pointsize 0.8 title \"{}\", ".format(datafile, pt[0], titlemap[comp])
         pt = pt[1:]
 
+    plotscript += "\n"
+
     assert(execute('mkdir -p plots/{}/{}'.format(commit, experiment)))
     eprint(plotscript)
-    assert(execute('gnuplot > plots/{}/{}/iv_throughput_{}.pdf'.format(commit, experiment, groupingstr(filtering)), input=plotscript))
+    plotfile = "{}/iv_throughput_plot.gnuplot".format(tempdir)
+    eprint(plotfile)
+    with open(plotfile, 'w') as f:
+        f.write(plotscript)
+    assert(execute('gnuplot < {} > plots/{}/{}/iv_throughput_{}.pdf'.format(plotfile, commit, experiment, groupingstr(filtering))))
     eprint('plots/{}/{}/iv_throughput_{}.pdf'.format(commit, experiment, groupingstr(filtering)))
 
-    shutil.rmtree(tempdir)
+    # shutil.rmtree(tempdir)
 
 def v_amortization(): # USE STRONG SCALING
     tempdir = tempfile.mkdtemp("{}-{}".format(experiment, commit))

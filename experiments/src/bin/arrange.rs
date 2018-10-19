@@ -40,6 +40,18 @@ enum Duration {
     Seconds(usize),
 }
 
+#[derive(Debug)]
+enum ZeroCopy {
+    No,
+    Thread,
+}
+
+#[derive(Debug)]
+enum Alloc {
+    Jemalloc,
+    JemallocAlloc,
+}
+
 fn main() {
 
     let mut args = std::env::args();
@@ -48,7 +60,6 @@ fn main() {
     let keys: usize = args.next().unwrap().parse().unwrap();
     let recs: usize = args.next().unwrap().parse().unwrap();
     let rate: usize = args.next().unwrap().parse().unwrap();
-    let work: usize = args.next().unwrap().parse().unwrap_or(usize::max_value());
     let comp: Comp = match args.next().unwrap().as_str() {
         "exchange" => Comp::Exchange,
         "arrange" => Comp::Arrange,
@@ -73,9 +84,35 @@ fn main() {
             _ => panic!("invalid duration mode"),
         }
     };
+    let zerocopy: ZeroCopy = {
+        let zerocopy_mode = args.next().unwrap();
+        match zerocopy_mode.as_str() {
+            "no" => ZeroCopy::No,
+            "thread" => ZeroCopy::Thread,
+            _ => panic!("boom"),
+        }
+    };
+    let zerocopy_workers: usize = args.next().unwrap().parse().unwrap();
+
+    let jemalloc: Alloc = {
+        let jemalloc_mode = args.next().unwrap();
+        match jemalloc_mode.as_str() {
+            "jemalloc" => Alloc::Jemalloc,
+            "jemallocalloc" => Alloc::JemallocAlloc,
+            _ => panic!("boom"),
+        }
+    };
 
     // define a new computational scope, in which to run BFS
-    timely::execute_from_args(args, move |worker| {
+    macro_rules! worker_closure { () => (move |worker| {
+
+        let tmp = match jemalloc {
+            Alloc::Jemalloc => Vec::<usize>::new(),
+            Alloc::JemallocAlloc => {
+                eprintln!("jemalloc alloc!");
+                Vec::<usize>::with_capacity(1 << 30)
+            },
+        };
 
         let index = worker.index();
         let core_ids = core_affinity::get_core_ids().unwrap();
@@ -175,7 +212,7 @@ fn main() {
                     let seconds = elapsed.as_secs() as f64 + (elapsed.subsec_nanos() as f64) / 1000000000.0;
                     if index == 0 {
                         // println!("{:?}, {:?}", seconds / (wave - 1) as f64, 2.0 * ((wave - 1) * rate * peers) as f64 / seconds);
-                        println!("ARRANGE\tTHROUGHPUT\t{}\t{:?}", peers, 2.0 * ((wave - 1) * rate * peers) as f64 / seconds);
+                        println!("ARRANGE\tTHROUGHPUT\t{}\t{:?}\t{:?}", peers, 2.0 * ((wave - 1) * rate * peers) as f64 / seconds, mode);
                     }
 
                 },
@@ -227,6 +264,7 @@ fn main() {
                         // advance the input.
 
                         // let scale = (inserted_ns - acknowledged_ns).next_power_of_two();
+                        // max (scale / 4, 1024)
                         // let target_ns = elapsed_ns & !(scale - 1);
 
                         // let target_ns = if acknowledged_ns >= inserted_ns { elapsed_ns } else { inserted_ns };
@@ -271,12 +309,21 @@ fn main() {
                     }
                 }
                 for (latency, fraction) in results.drain(..).rev() {
-                    println!("ARRANGE\tLATENCYALL\t{}\t{}\t{}\t{}\t{}\t{:?}\t{:?}\t{}\t{}", peers, keys, recs, rate, work, comp, mode, latency, fraction);
+                    println!("ARRANGE\tLATENCYALL\t{}\t{}\t{}\t{}\t{:?}\t{:?}\t{}\t{}", peers, keys, recs, rate, comp, mode, latency, fraction);
                     println!("ARRANGE\tLATENCYFRACTION\t{}\t{}", latency, fraction);
                 }
             }
         }
-    }).unwrap();
+    }) }
 
-    // ::std::thread::sleep_ms(5000);
+    match zerocopy {
+        ZeroCopy::No => timely::execute_from_args(args, worker_closure!()).unwrap(),
+        ZeroCopy::Thread => {
+            eprintln!("thread allocators zerocopy");
+            let allocators =
+                ::timely::communication::allocator::zero_copy::allocator_process::ProcessBuilder::new_vector(zerocopy_workers);
+            timely::execute::execute_from(allocators, Box::new(()), worker_closure!()).unwrap()
+        },
+    };
+
 }
