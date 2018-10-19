@@ -101,6 +101,7 @@ def arrange_open_loop_load_varies():
                             thp = "no"
                             zerocopy = "thread"
                             alloc = "jemallocalloc"
+                            inputstrategy = "poweroftwo"
 
                             config = OrderedDict([
                                 ("keys", keys),
@@ -114,6 +115,7 @@ def arrange_open_loop_load_varies():
                                 ("alloc", alloc),
                                 ("zerocopy", zerocopy),
                                 ("thp", thp),
+                                ("inputstrategy", inputstrategy),
                             ])
 
                             filename = experiment_setup(experiment_name, n, w, **config)
@@ -121,7 +123,7 @@ def arrange_open_loop_load_varies():
                             commands = [
                                     ("DIFFERENTIAL_EFFORT={} ./target/release/arrange {} -h hostfile.txt -n {} -p {} -w {}".format(
                                         work,
-                                        " ".join(str(x) for x in [keys, recs, rate, comp, mode, dmode, dparam, zerocopy, w, alloc]),
+                                        " ".join(str(x) for x in [keys, recs, rate, comp, mode, dmode, dparam, zerocopy, w, alloc, inputstrategy]),
                                         n,
                                         p,
                                         w), p) for p in range(0, n)]

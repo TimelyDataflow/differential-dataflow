@@ -52,6 +52,12 @@ enum Alloc {
     JemallocAlloc,
 }
 
+#[derive(Debug)]
+enum InputStrategy {
+    Ms,
+    PowerOfTwo,
+}
+
 fn main() {
 
     let mut args = std::env::args();
@@ -99,6 +105,15 @@ fn main() {
         match jemalloc_mode.as_str() {
             "jemalloc" => Alloc::Jemalloc,
             "jemallocalloc" => Alloc::JemallocAlloc,
+            _ => panic!("boom"),
+        }
+    };
+
+    let inputstrategy: InputStrategy = {
+        let inputstrategy_mode = args.next().unwrap();
+        match inputstrategy_mode.as_str() {
+            "ms" => InputStrategy::Ms,
+            "poweroftwo" => InputStrategy::PowerOfTwo,
             _ => panic!("boom"),
         }
     };
@@ -271,8 +286,19 @@ fn main() {
 
                         // let target_ns = elapsed_ns & !((1 << 16) - 1);
 
-                        let mut target_ns = elapsed_ns & !((1 << 20) - 1);
-                        if target_ns > inserted_ns + 1_000_000_000 { target_ns = inserted_ns + 1_000_000_000; }
+                        let target_ns = match inputstrategy {
+                            InputStrategy::Ms => {
+                                let mut target_ns = elapsed_ns & !((1 << 20) - 1);
+                                if target_ns > inserted_ns + 1_000_000_000 { target_ns = inserted_ns + 1_000_000_000; }
+                                target_ns
+                            },
+                            InputStrategy::PowerOfTwo => {
+                                let delta: u64 = inserted_ns - acknowledged_ns;
+                                let bits = ::std::mem::size_of::<u64>() * 8 - delta.leading_zeros() as usize;
+                                let scale = ::std::cmp::max((1 << bits) / 4, 1024);
+                                elapsed_ns & !(scale - 1)
+                            },
+                        };
 
                         if inserted_ns < target_ns {
 
