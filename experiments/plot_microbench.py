@@ -120,7 +120,8 @@ def ii_strong_scaling(): # commit = "dirty-e74441d0c062c7ec8d6da9bbf1972bd9397b2
 def iii_weak_scaling(): # commit = "dirty-e74441d0c062c7ec8d6da9bbf1972bd9397b2670" experiment = "arrange-open-loop"
     tempdir = tempfile.mkdtemp("{}-{}".format(experiment, commit))
 
-    filtering = { ('dparam', 50), ('keys', 10000000), ('recs', 32000000), }
+    # TODO filtering = { ('dparam', 10), ('keys', 10000000), ('recs', 32000000), }
+    filtering = { ('dparam', 10), }
     for work in params['work']:
         for comp in {'arrange', 'maintain', 'count'}:
             F = filtering.union({ ('work', work), ('comp', comp), })
@@ -143,7 +144,11 @@ def iii_weak_scaling(): # commit = "dirty-e74441d0c062c7ec8d6da9bbf1972bd9397b26
             data = False
             w_plotted = set()
             for p, f in sorted(filedict, key=lambda x: dict(x[0])['w']):
-                if p.issuperset(F) and dict(p)['rate'] == dict(p)['w'] * 1000000 and dict(p)['w'] not in w_plotted:
+                if (p.issuperset(F) and
+                        dict(p)['rate'] == dict(p)['w'] * 1000000 and
+                        dict(p)['recs'] == dict(p)['w'] * (32000000 / 32) and
+                        dict(p)['keys'] == dict(p)['w'] * (10000000 / 32) and
+                        dict(p)['w'] not in w_plotted):
                     w_plotted.add(dict(p)['w'])
                     data = True
                     datafile = "{}/iii_weak_scaling_{}".format(tempdir, f)
@@ -198,11 +203,8 @@ def iv_throughput(): # commit = "dirty-e74441d0c062c7ec8d6da9bbf1972bd9397b2670"
 
     assert(execute('mkdir -p plots/{}/{}'.format(commit, experiment)))
     eprint(plotscript)
-    plotfile = "{}/iv_throughput_plot.gnuplot".format(tempdir)
-    eprint(plotfile)
-    with open(plotfile, 'w') as f:
-        f.write(plotscript)
-    assert(execute('gnuplot < {} > plots/{}/{}/iv_throughput_{}.pdf'.format(plotfile, commit, experiment, groupingstr(filtering))))
+    # plotfile = "{}/iv_throughput_plot.gnuplot".format(tempdir)
+    assert(execute('gnuplot > plots/{}/{}/iv_throughput_{}.pdf'.format(plotfile, commit, experiment, groupingstr(filtering)), input=plotscript))
     eprint('plots/{}/{}/iv_throughput_{}.pdf'.format(commit, experiment, groupingstr(filtering)))
 
     # shutil.rmtree(tempdir)

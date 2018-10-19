@@ -194,8 +194,8 @@ def arrange_open_loop_weak_scaling():
     for n in [1]:
         for w in [16, 8, 4, 2, 1]:
             total_workers = n * w
-            for keys in [10000000 * total_workers]: # , 20000000]:
-                for recs in [32000000 * total_workers]: #, 64000000]:
+            for keys in [(10000000 / 32) * total_workers]: # , 20000000]:
+                for recs in [(32000000 / 32) * total_workers]: #, 64000000]:
                     for rate in [750000 * w, 1000000 * w]:
                         for work in [1, 4, "max"]:
                             for comp in [
