@@ -209,7 +209,10 @@ where
     fn new(info: ::timely::dataflow::operators::generic::OperatorInfo, logging: Option<::logging::Logger>) -> Self {
         let effort: usize = if cfg!(feature = "custom-effort") {
             ::std::env::var("DIFFERENTIAL_EFFORT").ok()
-                .and_then(|x| x.parse().ok()).expect("Missing or invalid DIFFERENTIAL_EFFORT")
+                .and_then(|x| match x.as_str() {
+                    "max" => Some(1_000_000),
+                    _ => x.parse().ok(),
+                }).expect("Missing or invalid DIFFERENTIAL_EFFORT")
         } else {
             4
         };
