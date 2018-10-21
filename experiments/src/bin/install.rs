@@ -24,10 +24,19 @@ fn main() {
 
     let keys: usize = args.next().unwrap().parse().unwrap();
     let recs: usize = args.next().unwrap().parse().unwrap();
+    let zerocopy_workers: usize = args.next().unwrap().parse().unwrap();
     // let rate: usize = args.next().unwrap().parse().unwrap();
     // let work: usize = args.next().unwrap().parse().unwrap_or(usize::max_value());
 
-    timely::execute_from_args(args, move |worker| {
+    let allocators =
+        ::timely::communication::allocator::zero_copy::allocator_process::ProcessBuilder::new_vector(zerocopy_workers);
+    timely::execute::execute_from(allocators, Box::new(()), move |worker| {
+    // timely::execute_from_args(args, move |worker| {
+
+        let tmp = {
+            eprintln!("jemalloc alloc!");
+            Vec::<usize>::with_capacity(1 << 30)
+        };
 
         let index = worker.index();
         let core_ids = core_affinity::get_core_ids().unwrap();

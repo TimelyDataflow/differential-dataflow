@@ -23,7 +23,7 @@ def graphs_interactive_alt():
     experiments.eprint("### {} ###".format(experiment_name))
     experiments.eprint(experiments.experdir(experiment_name))
 
-    for w in reversed([1, 2, 4, 8, 16, 31]):
+    for w in [32]:
         for nodes in [10000000]:
             for edges in [32000000]:
                 for rate in [2500 * x for x in [2, 4, 8]]:

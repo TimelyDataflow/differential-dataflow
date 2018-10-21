@@ -125,7 +125,7 @@ def iii_memory_rss():
         plotscript = "set terminal pdf size 4.8cm,3.2cm; set logscale y; " \
                 "set bmargin at screen 0.25; " \
                 "set xrange [-200:3500]; " \
-                "set yrange [100000000:*]; " \
+                "set yrange [100000:100000000000000.0]; " \
                 "set xlabel \"elapsed seconds\"; " \
                 "set xtics 0,1000,3000; " \
                 "set ylabel \"resident set size\"; " \
@@ -153,7 +153,7 @@ def iii_memory_rss():
         assert(execute('gnuplot > plots/{}/{}/iii_memory_rss_{}.pdf'.format(commit, experiment, groupingstr(F)), input=plotscript))
         eprint('plots/{}/{}/iii_memory_rss_{}.pdf'.format(commit, experiment, groupingstr(F)))
 
-    shutil.rmtree(tempdir)
+    # shutil.rmtree(tempdir)
 
 
 # def i_load_varies(): # commit = "dirty-8380c53277307b6e9e089a8f6f79886b36e20428" experiment = "arrange-open-loop"
