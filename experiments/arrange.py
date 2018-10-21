@@ -42,6 +42,7 @@ def arrange_closed_loop():
                                 thp = "no"
                                 zerocopy = "thread"
                                 alloc = "jemallocalloc"
+                                inputstrategy = "poweroftwo"
 
                                 config = OrderedDict([
                                     ("keys", keys),
@@ -55,6 +56,7 @@ def arrange_closed_loop():
                                     ("alloc", alloc),
                                     ("zerocopy", zerocopy),
                                     ("thp", thp),
+                                    ("inputstrategy", inputstrategy),
                                 ])
 
                                 n = 1
@@ -64,7 +66,7 @@ def arrange_closed_loop():
                                 commands = [
                                         ("DIFFERENTIAL_EFFORT={} ./target/release/arrange {} -h hostfile.txt -n {} -p {} -w {}".format(
                                             work,
-                                            " ".join(str(x) for x in [keys, recs, rate, comp, mode, dmode, dparam, zerocopy, w, alloc]),
+                                            " ".join(str(x) for x in [keys, recs, rate, comp, mode, dmode, dparam, zerocopy, w, alloc, inputstrategy]),
                                             n,
                                             p,
                                             w), p) for p in range(0, n)]
@@ -96,12 +98,12 @@ def arrange_open_loop_load_varies():
                                 ]:
                             mode = "openloop"
                             dmode = "overwrite"
-                            dparam = "30"
+                            dparam = "50"
 
                             thp = "no"
                             zerocopy = "thread"
                             alloc = "jemallocalloc"
-                            inputstrategy = "poweroftwo"
+                            inputstrategy = "ms"
 
                             config = OrderedDict([
                                 ("keys", keys),
@@ -138,7 +140,7 @@ def arrange_open_loop_strong_scaling():
     experiments.eprint(experiments.experdir(experiment_name))
 
     for n in [1]:
-        for w in [16, 8, 4, 2, 1]: # 32
+        for w in [32, 16, 8, 4, 2, 1]: # 32
             total_workers = n * w
             for keys in [10000000]: #, 20000000]:
                 for recs in [32000000]: # , 64000000]:
@@ -159,6 +161,7 @@ def arrange_open_loop_strong_scaling():
                                 thp = "no"
                                 zerocopy = "thread"
                                 alloc = "jemallocalloc"
+                                inputstrategy = "ms"
 
                                 config = OrderedDict([
                                     ("keys", keys),
@@ -172,6 +175,7 @@ def arrange_open_loop_strong_scaling():
                                     ("alloc", alloc),
                                     ("zerocopy", zerocopy),
                                     ("thp", thp),
+                                    ("inputstrategy", inputstrategy),
                                 ])
 
                                 filename = experiment_setup(experiment_name, n, w, **config)
@@ -179,7 +183,7 @@ def arrange_open_loop_strong_scaling():
                                 commands = [
                                         ("DIFFERENTIAL_EFFORT={} ./target/release/arrange {} -h hostfile.txt -n {} -p {} -w {}".format(
                                             work,
-                                            " ".join(str(x) for x in [keys, recs, rate, comp, mode, dmode, dparam, zerocopy, w, alloc]),
+                                            " ".join(str(x) for x in [keys, recs, rate, comp, mode, dmode, dparam, zerocopy, w, alloc, inputstrategy]),
                                             n,
                                             p,
                                             w), p) for p in range(0, n)]
@@ -194,52 +198,93 @@ def arrange_open_loop_weak_scaling():
     experiments.eprint(experiments.experdir(experiment_name))
 
     for n in [1]:
-        for w in [16, 8, 4, 2, 1]:
+        for w in [32, 16, 8, 4, 2, 1]:
             total_workers = n * w
-            for keys in [(10000000 / 32) * total_workers]: # , 20000000]:
-                for recs in [(32000000 / 32) * total_workers]: #, 64000000]:
-                    for rate in [750000 * w, 1000000 * w]:
+            for keys in [(10000000 // 32) * total_workers]: # , 20000000]:
+                for recs in [(32000000 // 32) * total_workers]: #, 64000000]:
+                    for rate in [1000000 * w]:
                         for work in [1, 4, "max"]:
-                            for comp in [
-                                    # "exchange",
-                                    "arrange",
-                                    "maintain",
-                                    # "selfjoin",
-                                    "count",
-                                    # "nothing",
-                                    ]:
-                                mode = "openloop"
-                                dmode = "overwrite"
-                                dparam = "10"
+                            for inputstrategy in ["ms"]:
+                                for comp in [
+                                        # "exchange",
+                                        "arrange",
+                                        "maintain",
+                                        # "selfjoin",
+                                        "count",
+                                        # "nothing",
+                                        ]:
+                                    mode = "openloop"
+                                    dmode = "overwrite"
+                                    dparam = "50"
 
-                                thp = "no"
-                                zerocopy = "thread"
-                                alloc = "jemallocalloc"
+                                    thp = "no"
+                                    zerocopy = "thread"
+                                    alloc = "jemallocalloc"
 
-                                config = OrderedDict([
-                                    ("keys", keys),
-                                    ("recs", recs),
-                                    ("rate", rate),
-                                    ("work", work),
-                                    ("comp", comp),
-                                    ("mode", mode),
-                                    ("dmode", dmode),
-                                    ("dparam", dparam),
-                                    ("alloc", alloc),
-                                    ("zerocopy", zerocopy),
-                                    ("thp", thp),
-                                ])
+                                    config = OrderedDict([
+                                        ("keys", keys),
+                                        ("recs", recs),
+                                        ("rate", rate),
+                                        ("work", work),
+                                        ("comp", comp),
+                                        ("mode", mode),
+                                        ("dmode", dmode),
+                                        ("dparam", dparam),
+                                        ("alloc", alloc),
+                                        ("zerocopy", zerocopy),
+                                        ("thp", thp),
+                                        ("inputstrategy", inputstrategy),
+                                    ])
 
-                                filename = experiment_setup(experiment_name, n, w, **config)
-                                experiments.eprint("RUNNING {}".format(filename))
-                                commands = [
-                                        ("DIFFERENTIAL_EFFORT={} ./target/release/arrange {} -h hostfile.txt -n {} -p {} -w {}".format(
-                                            work,
-                                            " ".join(str(x) for x in [keys, recs, rate, comp, mode, dmode, dparam, zerocopy, w, alloc]),
-                                            n,
-                                            p,
-                                            w), p) for p in range(0, n)]
-                                experiments.eprint("commands: {}".format(commands))
-                                processes = [experiments.run_cmd(command, filename, True, node = arg_node) for command, p in commands]
-                                experiments.waitall(processes)
+                                    filename = experiment_setup(experiment_name, n, w, **config)
+                                    experiments.eprint("RUNNING {}".format(filename))
+                                    commands = [
+                                            ("DIFFERENTIAL_EFFORT={} ./target/release/arrange {} -h hostfile.txt -n {} -p {} -w {}".format(
+                                                work,
+                                                " ".join(str(x) for x in [keys, recs, rate, comp, mode, dmode, dparam, zerocopy, w, alloc, inputstrategy]),
+                                                n,
+                                                p,
+                                                w), p) for p in range(0, n)]
+                                    experiments.eprint("commands: {}".format(commands))
+                                    processes = [experiments.run_cmd(command, filename, True, node = arg_node) for command, p in commands]
+                                    experiments.waitall(processes)
+
+def arrange_install():
+    experiment_name = "arrange-install"
+
+    experiments.eprint("### {} ###".format(experiment_name))
+    experiments.eprint(experiments.experdir(experiment_name))
+
+    for n in [1]:
+        for w in [32]:
+            total_workers = n * w
+            for keys in [10000000]: # , 20000000]:
+                for recs in [32000000]: #, 64000000]:
+                    work = 4
+
+                    thp = "no"
+                    zerocopy = "thread"
+                    alloc = "jemallocalloc"
+
+                    config = OrderedDict([
+                        ("keys", keys),
+                        ("recs", recs),
+                        ("work", work),
+                        ("alloc", alloc),
+                        ("zerocopy", zerocopy),
+                        ("thp", thp),
+                    ])
+
+                    filename = experiment_setup(experiment_name, n, w, **config)
+                    experiments.eprint("RUNNING {}".format(filename))
+                    commands = [
+                            ("DIFFERENTIAL_EFFORT={} ./target/release/install {} -h hostfile.txt -n {} -p {} -w {}".format(
+                                work,
+                                " ".join(str(x) for x in [keys, recs, w]),
+                                n,
+                                p,
+                                w), p) for p in range(0, n)]
+                    experiments.eprint("commands: {}".format(commands))
+                    processes = [experiments.run_cmd(command, filename, True, node = arg_node) for command, p in commands]
+                    experiments.waitall(processes)
 

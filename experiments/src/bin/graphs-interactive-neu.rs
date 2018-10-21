@@ -32,7 +32,7 @@ fn main() {
                                  .arg("PAGE_SIZE")
                                  .output()
                                  .expect("failed to execute getconf PAGE_SIZE");
-            String::from_utf8_lossy(&output.stdout).parse().expect("invalid PAGE_SIZE")
+            String::from_utf8_lossy(&output.stdout).trim().parse().expect("invalid PAGE_SIZE")
         };
         // let pid = std::process::id();
         loop {

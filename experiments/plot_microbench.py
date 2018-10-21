@@ -39,7 +39,7 @@ def groupingstr(s):
 def i_load_varies(): # commit = "dirty-8380c53277307b6e9e089a8f6f79886b36e20428" experiment = "arrange-open-loop"
     tempdir = tempfile.mkdtemp("{}-{}".format(experiment, commit))
 
-    filtering = { ('w', 1), ('comp', 'maintain'), ('dparam', 30), ('work', 4), }
+    filtering = { ('w', 1), ('comp', 'maintain'), ('dparam', 50), ('work', 4), ('recs', 32000000), ('inputstrategy', 'ms'), }
     F = filtering
     eprint(F)
     # print('\n'.join(str(p) for p, f in sorted(filedict, key=lambda x: dict(x[0])['rate']) if p.issuperset(F)))
@@ -83,7 +83,7 @@ def ii_strong_scaling(): # commit = "dirty-e74441d0c062c7ec8d6da9bbf1972bd9397b2
     filtering = { ('rate', 1000000), }
     for work in params['work']:
         for comp in { 'maintain', }:
-            F = filtering.union({ ('work', work), ('comp', comp), })
+            F = filtering.union({ ('work', work), ('comp', comp), ('keys', 10000000), ('recs', 32000000), ('inputstrategy', 'ms'), })
             eprint(F)
             # print('\n'.join(str(p) for p, f in sorted(filedict, key=lambda x: dict(x[0])['rate']) if p.issuperset(F)))
             plotscript = "set terminal pdf size 4.8cm,3.2cm; set logscale x; set logscale y; " \
@@ -102,18 +102,17 @@ def ii_strong_scaling(): # commit = "dirty-e74441d0c062c7ec8d6da9bbf1972bd9397b2
             w_plotted = set()
             dt = 2
             for p, f in sorted(filedict, key=lambda x: dict(x[0])['w']):
-                eprint(p)
                 if p.issuperset(F) and dict(p)['w'] not in w_plotted:
                     w_plotted.add(dict(p)['w'])
-                    datafile = "{}/i_strong_scaling_{}".format(tempdir, f)
+                    datafile = "{}/ii_strong_scaling_{}".format(tempdir, f)
                     assert(execute('cat results/{}/{}/{} | grep LATENCYFRACTION | cut -f 3,4 > {}'.format(commit, experiment, f, datafile)))
                     plotscript += "\"{}\" using 1:2 with lines lw 2 dt ({}, 2) title \"{}\", ".format(datafile, dt, dict(p)['w'])
                     dt += 2
 
             assert(execute('mkdir -p plots/{}/{}'.format(commit, experiment)))
             eprint(plotscript)
-            assert(execute('gnuplot > plots/{}/{}/i_strong_scaling_{}.pdf'.format(commit, experiment, groupingstr(F)), input=plotscript))
-            eprint('plots/{}/{}/i_strong_scaling_{}.pdf'.format(commit, experiment, groupingstr(F)))
+            assert(execute('gnuplot > plots/{}/{}/ii_strong_scaling_{}.pdf'.format(commit, experiment, groupingstr(F)), input=plotscript))
+            eprint('plots/{}/{}/ii_strong_scaling_{}.pdf'.format(commit, experiment, groupingstr(F)))
 
     shutil.rmtree(tempdir)
 
@@ -121,7 +120,7 @@ def iii_weak_scaling(): # commit = "dirty-e74441d0c062c7ec8d6da9bbf1972bd9397b26
     tempdir = tempfile.mkdtemp("{}-{}".format(experiment, commit))
 
     # TODO filtering = { ('dparam', 10), ('keys', 10000000), ('recs', 32000000), }
-    filtering = { ('dparam', 10), }
+    filtering = { ('dparam', 50), ('inputstrategy', 'ms'), }
     for work in params['work']:
         for comp in {'arrange', 'maintain', 'count'}:
             F = filtering.union({ ('work', work), ('comp', comp), })
@@ -144,10 +143,12 @@ def iii_weak_scaling(): # commit = "dirty-e74441d0c062c7ec8d6da9bbf1972bd9397b26
             data = False
             w_plotted = set()
             for p, f in sorted(filedict, key=lambda x: dict(x[0])['w']):
+                if p.issuperset(F):
+                    eprint(p)
                 if (p.issuperset(F) and
                         dict(p)['rate'] == dict(p)['w'] * 1000000 and
-                        dict(p)['recs'] == dict(p)['w'] * (32000000 / 32) and
-                        dict(p)['keys'] == dict(p)['w'] * (10000000 / 32) and
+                        dict(p)['recs'] == dict(p)['w'] * (32000000 // 32) and
+                        dict(p)['keys'] == dict(p)['w'] * (10000000 // 32) and
                         dict(p)['w'] not in w_plotted):
                     w_plotted.add(dict(p)['w'])
                     data = True
@@ -168,7 +169,7 @@ def iii_weak_scaling(): # commit = "dirty-e74441d0c062c7ec8d6da9bbf1972bd9397b26
 def iv_throughput(): # commit = "dirty-e74441d0c062c7ec8d6da9bbf1972bd9397b2670" experiment = "arrange"
     tempdir = tempfile.mkdtemp("{}-{}".format(experiment, commit))
 
-    filtering = { ('rate', 100000), ('work', 4) }
+    filtering = { ('rate', 100000), ('work', 4), ('keys', 10000000), ('recs', 32000000), ('inputstrategy', 'ms'), }
 
     plotscript = "set terminal pdf size 4.8cm,3.2cm; " \
             "set bmargin at screen 0.2; " \
@@ -212,7 +213,7 @@ def iv_throughput(): # commit = "dirty-e74441d0c062c7ec8d6da9bbf1972bd9397b2670"
 def v_amortization(): # USE STRONG SCALING
     tempdir = tempfile.mkdtemp("{}-{}".format(experiment, commit))
 
-    filtering = { ('keys', 10000000), ('recs', 32000000), ('rate', 1000000), }
+    filtering = { ('keys', 10000000), ('recs', 32000000), ('rate', 1000000), ('inputstrategy', 'ms'),  }
     for work in params['work']:
         for comp in {'arrange', 'maintain', 'count'}:
             F = filtering.union({ ('comp', comp), })

@@ -153,7 +153,7 @@ def iii_memory_rss():
         assert(execute('gnuplot > plots/{}/{}/iii_memory_rss_{}.pdf'.format(commit, experiment, groupingstr(F)), input=plotscript))
         eprint('plots/{}/{}/iii_memory_rss_{}.pdf'.format(commit, experiment, groupingstr(F)))
 
-    shutil.rmtree(tempdir)
+    # shutil.rmtree(tempdir)
 
 
 # def i_load_varies(): # commit = "dirty-8380c53277307b6e9e089a8f6f79886b36e20428" experiment = "arrange-open-loop"
