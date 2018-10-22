@@ -125,7 +125,7 @@ def iii_memory_rss():
         plotscript = "set terminal pdf size 4.8cm,3.2cm; set logscale y; " \
                 "set bmargin at screen 0.25; " \
                 "set xrange [-200:3500]; " \
-                "set yrange [100000:100000000000000.0]; " \
+                "set yrange [1000000000:1000000000000.0]; " \
                 "set xlabel \"elapsed seconds\"; " \
                 "set xtics 0,1000,3000; " \
                 "set ylabel \"resident set size\"; " \

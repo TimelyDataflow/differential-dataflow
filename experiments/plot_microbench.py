@@ -173,14 +173,19 @@ def iv_throughput(): # commit = "dirty-e74441d0c062c7ec8d6da9bbf1972bd9397b2670"
 
     plotscript = "set terminal pdf size 4.8cm,3.2cm; " \
             "set bmargin at screen 0.2; " \
-            "set xrange [0.8:38]; " \
+            "set xrange [-1:34]; " \
+            "set yrange [-10000000:160000000]; " \
+            "set xtics (1, 4, 8, 16, 32); " \
+            "set ytics 50000000; " \
             "set xlabel \"cores\"; " \
-            "set ytics offset 0.7; " \
             "set bmargin at screen 0.25; " \
             "set ylabel \"throughput (records/s)\"; " \
-            "set format y \"10^{%T}\"; " \
+            "set format y \"%.0s%c\"; " \
             "set key left top Left reverse font \",10\"; " \
             "plot "
+
+            # "set format y \"10^{%T}\"; " \
+            # "set ytics offset 0.7; " \
 
     pt = [4, 6, 8]
     titlemap = {
@@ -197,7 +202,7 @@ def iv_throughput(): # commit = "dirty-e74441d0c062c7ec8d6da9bbf1972bd9397b2670"
             if p.issuperset(F):
                 eprint("results/{}/{}/{}".format(commit, experiment, f))
                 assert(execute('cat results/{}/{}/{} | grep THROUGHPUT | cut -f 3,4 >> {}'.format(commit, experiment, f, datafile)))
-        plotscript += "\"{}\" using 1:2:xtic(1) with linespoints pointtype {} pointsize 0.8 title \"{}\", ".format(datafile, pt[0], titlemap[comp])
+        plotscript += "\"{}\" using 1:2 with linespoints pointtype {} pointsize 0.4 title \"{}\", ".format(datafile, pt[0], titlemap[comp])
         pt = pt[1:]
 
     plotscript += "\n"
@@ -205,7 +210,7 @@ def iv_throughput(): # commit = "dirty-e74441d0c062c7ec8d6da9bbf1972bd9397b2670"
     assert(execute('mkdir -p plots/{}/{}'.format(commit, experiment)))
     eprint(plotscript)
     # plotfile = "{}/iv_throughput_plot.gnuplot".format(tempdir)
-    assert(execute('gnuplot > plots/{}/{}/iv_throughput_{}.pdf'.format(plotfile, commit, experiment, groupingstr(filtering)), input=plotscript))
+    assert(execute('gnuplot > plots/{}/{}/iv_throughput_{}.pdf'.format(commit, experiment, groupingstr(filtering)), input=plotscript))
     eprint('plots/{}/{}/iv_throughput_{}.pdf'.format(commit, experiment, groupingstr(filtering)))
 
     # shutil.rmtree(tempdir)
