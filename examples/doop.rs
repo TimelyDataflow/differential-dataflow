@@ -148,8 +148,9 @@ fn load<'a>(filename: &str, interner: Rc<RefCell<StringInterner>>) -> impl Itera
         })
 }
 
-fn load1<'a>(filename: &str, interner: Rc<RefCell<StringInterner>>) -> impl Iterator<Item=(Symbol)>+'a {
-    read_file(filename)
+fn load1<'a>(index: usize, prefix: &str, filename: &str, interner: Rc<RefCell<StringInterner>>) -> impl Iterator<Item=(Symbol)>+'a {
+    read_file(&format!("{}{}", prefix, filename))
+        .filter(move |_| index == 0)
         .map(move |line| {
             let mut interner = interner.borrow_mut();
             let mut elts = line.split('\t');
@@ -159,8 +160,9 @@ fn load1<'a>(filename: &str, interner: Rc<RefCell<StringInterner>>) -> impl Iter
         })
 }
 
-fn load2<'a>(filename: &str, interner: Rc<RefCell<StringInterner>>) -> impl Iterator<Item=(Symbol, Symbol)>+'a {
-    read_file(filename)
+fn load2<'a>(index: usize, prefix: &str, filename: &str, interner: Rc<RefCell<StringInterner>>) -> impl Iterator<Item=(Symbol, Symbol)>+'a {
+    read_file(&format!("{}{}", prefix, filename))
+        .filter(move |_| index == 0)
         .map(move |line| {
             let mut interner = interner.borrow_mut();
             let mut elts = line.split('\t');
@@ -171,8 +173,9 @@ fn load2<'a>(filename: &str, interner: Rc<RefCell<StringInterner>>) -> impl Iter
         })
 }
 
-fn load3<'a>(filename: &str, interner: Rc<RefCell<StringInterner>>) -> impl Iterator<Item=(Symbol, Symbol, Symbol)>+'a {
-    read_file(filename)
+fn load3<'a>(index: usize, prefix: &str, filename: &str, interner: Rc<RefCell<StringInterner>>) -> impl Iterator<Item=(Symbol, Symbol, Symbol)>+'a {
+    read_file(&format!("{}{}", prefix, filename))
+        .filter(move |_| index == 0)
         .map(move |line| {
             let mut interner = interner.borrow_mut();
             let mut elts = line.split('\t');
@@ -184,8 +187,9 @@ fn load3<'a>(filename: &str, interner: Rc<RefCell<StringInterner>>) -> impl Iter
         })
 }
 
-fn load4<'a>(filename: &str, interner: Rc<RefCell<StringInterner>>) -> impl Iterator<Item=(Symbol, Symbol, Symbol, Symbol)>+'a {
-    read_file(filename)
+fn load4<'a>(index: usize, prefix: &str, filename: &str, interner: Rc<RefCell<StringInterner>>) -> impl Iterator<Item=(Symbol, Symbol, Symbol, Symbol)>+'a {
+    read_file(&format!("{}{}", prefix, filename))
+        .filter(move |_| index == 0)
         .map(move |line| {
             let mut interner = interner.borrow_mut();
             let mut elts = line.split('\t');
@@ -198,8 +202,9 @@ fn load4<'a>(filename: &str, interner: Rc<RefCell<StringInterner>>) -> impl Iter
         })
 }
 
-fn load5<'a>(filename: &str, interner: Rc<RefCell<StringInterner>>) -> impl Iterator<Item=(Symbol, Symbol, Symbol, Symbol, Symbol)>+'a {
-    read_file(filename)
+fn load5<'a>(index: usize, prefix: &str, filename: &str, interner: Rc<RefCell<StringInterner>>) -> impl Iterator<Item=(Symbol, Symbol, Symbol, Symbol, Symbol)>+'a {
+    read_file(&format!("{}{}", prefix, filename))
+        .filter(move |_| index == 0)
         .map(move |line| {
             let mut interner = interner.borrow_mut();
             let mut elts = line.split('\t');
@@ -213,8 +218,9 @@ fn load5<'a>(filename: &str, interner: Rc<RefCell<StringInterner>>) -> impl Iter
         })
 }
 
-fn load6<'a>(filename: &str, interner: Rc<RefCell<StringInterner>>) -> impl Iterator<Item=(Symbol, Symbol, Symbol, Symbol, Symbol, Symbol)>+'a {
-    read_file(filename)
+fn load6<'a>(index: usize, prefix: &str, filename: &str, interner: Rc<RefCell<StringInterner>>) -> impl Iterator<Item=(Symbol, Symbol, Symbol, Symbol, Symbol, Symbol)>+'a {
+    read_file(&format!("{}{}", prefix, filename))
+        .filter(move |_| index == 0)
         .map(move |line| {
             let mut interner = interner.borrow_mut();
             let mut elts = line.split('\t');
@@ -229,8 +235,9 @@ fn load6<'a>(filename: &str, interner: Rc<RefCell<StringInterner>>) -> impl Iter
         })
 }
 
-fn load7<'a>(filename: &str, interner: Rc<RefCell<StringInterner>>) -> impl Iterator<Item=(Symbol, Symbol, Symbol, Symbol, Symbol, Symbol, Symbol)>+'a {
-    read_file(filename)
+fn load7<'a>(index: usize, prefix: &str, filename: &str, interner: Rc<RefCell<StringInterner>>) -> impl Iterator<Item=(Symbol, Symbol, Symbol, Symbol, Symbol, Symbol, Symbol)>+'a {
+    read_file(&format!("{}{}", prefix, filename))
+        .filter(move |_| index == 0)
         .map(move |line| {
             let mut interner = interner.borrow_mut();
             let mut elts = line.split('\t');
@@ -249,13 +256,11 @@ fn load7<'a>(filename: &str, interner: Rc<RefCell<StringInterner>>) -> impl Iter
 fn main() {
 
     let mut args = std::env::args().skip(1);
-    let batch: usize = args.next().expect("must supply batch size").parse().expect("batch size must be an integer");
+    let prefix = args.next().expect("must supply path to facts");
 
     timely::execute_from_args(std::env::args(), move |worker| {
 
         let timer = ::std::time::Instant::now();
-
-        let peers = worker.peers();
         let index = worker.index();
 
         let mut probe = ProbeHandle::new();
@@ -277,41 +282,41 @@ fn main() {
         worker.dataflow::<usize,_,_>(|scope| {
 
             // For loading inputs
-            let (input1, ClassType) = scope.new_collection_from(load1("ClassType.facts", interner.clone())); inputs.0.push(input1);
-            let (input2, ArrayType) = scope.new_collection_from(load1("ArrayType.facts", interner.clone())); inputs.0.push(input2);
-            let (input3, InterfaceType) = scope.new_collection_from(load1("InterfaceType.facts", interner.clone())); inputs.0.push(input3);
-            // let Var_DeclaringMethod: Collection<_,(Symbol, Symbol)> = scope.new_collection_from(load2("Var-DeclaringMethod.facts", interner.clone())).1;
-            let (input4, ApplicationClass) = scope.new_collection_from(load1("ApplicationClass.facts", interner.clone())); inputs.0.push(input4);
-            let (input5, ThisVar) = scope.new_collection_from(load2("ThisVar.facts", interner.clone())); inputs.1.push(input5);
+            let (input1, ClassType) = scope.new_collection_from(load1(index, &prefix, "ClassType.facts", interner.clone())); inputs.0.push(input1);
+            let (input2, ArrayType) = scope.new_collection_from(load1(index, &prefix, "ArrayType.facts", interner.clone())); inputs.0.push(input2);
+            let (input3, InterfaceType) = scope.new_collection_from(load1(index, &prefix, "InterfaceType.facts", interner.clone())); inputs.0.push(input3);
+            // let Var_DeclaringMethod: Collection<_,(Symbol, Symbol)> = scope.new_collection_from(load2(index, &prefix, "Var-DeclaringMethod.facts", interner.clone())).1;
+            let (input4, ApplicationClass) = scope.new_collection_from(load1(index, &prefix, "ApplicationClass.facts", interner.clone())); inputs.0.push(input4);
+            let (input5, ThisVar) = scope.new_collection_from(load2(index, &prefix, "ThisVar.facts", interner.clone())); inputs.1.push(input5);
 
-            let (input6, _NormalHeap) = scope.new_collection_from(load2("NormalHeap.facts", interner.clone())); inputs.1.push(input6);
-            let (input7, _StringConstant) = scope.new_collection_from(load1("StringConstant.facts", interner.clone())); inputs.0.push(input7);
-            let (input8, _AssignHeapAllocation) = scope.new_collection_from(load6("AssignHeapAllocation.facts", interner.clone())); inputs.5.push(input8);
-            let (input9, _AssignLocal) = scope.new_collection_from(load5("AssignLocal.facts", interner.clone())); inputs.4.push(input9);
-            let (input10, _AssignCast) = scope.new_collection_from(load6("AssignCast.facts", interner.clone())); inputs.5.push(input10);
-            let (input11, _Field) = scope.new_collection_from(load4("Field.facts", interner.clone())); inputs.3.push(input11);
-            let (input12, _StaticMethodInvocation) = scope.new_collection_from(load4("StaticMethodInvocation.facts", interner.clone())); inputs.3.push(input12);
-            let (input13, _SpecialMethodInvocation) = scope.new_collection_from(load5("SpecialMethodInvocation.facts", interner.clone())); inputs.4.push(input13);
-            let (input14, _VirtualMethodInvocation) = scope.new_collection_from(load5("VirtualMethodInvocation.facts", interner.clone())); inputs.4.push(input14);
-            let (input15, _Method) = scope.new_collection_from(load7("Method.facts", interner.clone())); inputs.6.push(input15);
-            let (input16, _StoreInstanceField) = scope.new_collection_from(load6("StoreInstanceField.facts", interner.clone())); inputs.5.push(input16);
-            let (input17, _LoadInstanceField) = scope.new_collection_from(load6("LoadInstanceField.facts", interner.clone())); inputs.5.push(input17);
-            let (input18, _StoreStaticField) = scope.new_collection_from(load5("StoreStaticField.facts", interner.clone())); inputs.4.push(input18);
-            let (input19, _LoadStaticField) = scope.new_collection_from(load5("LoadStaticField.facts", interner.clone())); inputs.4.push(input19);
-            let (input20, _StoreArrayIndex) = scope.new_collection_from(load5("StoreArrayIndex.facts", interner.clone())); inputs.4.push(input20);
-            let (input21, _LoadArrayIndex) = scope.new_collection_from(load5("LoadArrayIndex.facts", interner.clone())); inputs.4.push(input21);
-            let (input22, _Return) = scope.new_collection_from(load4("Return.facts", interner.clone())); inputs.3.push(input22);
+            let (input6, _NormalHeap) = scope.new_collection_from(load2(index, &prefix, "NormalHeap.facts", interner.clone())); inputs.1.push(input6);
+            let (input7, _StringConstant) = scope.new_collection_from(load1(index, &prefix, "StringConstant.facts", interner.clone())); inputs.0.push(input7);
+            let (input8, _AssignHeapAllocation) = scope.new_collection_from(load6(index, &prefix, "AssignHeapAllocation.facts", interner.clone())); inputs.5.push(input8);
+            let (input9, _AssignLocal) = scope.new_collection_from(load5(index, &prefix, "AssignLocal.facts", interner.clone())); inputs.4.push(input9);
+            let (input10, _AssignCast) = scope.new_collection_from(load6(index, &prefix, "AssignCast.facts", interner.clone())); inputs.5.push(input10);
+            let (input11, _Field) = scope.new_collection_from(load4(index, &prefix, "Field.facts", interner.clone())); inputs.3.push(input11);
+            let (input12, _StaticMethodInvocation) = scope.new_collection_from(load4(index, &prefix, "StaticMethodInvocation.facts", interner.clone())); inputs.3.push(input12);
+            let (input13, _SpecialMethodInvocation) = scope.new_collection_from(load5(index, &prefix, "SpecialMethodInvocation.facts", interner.clone())); inputs.4.push(input13);
+            let (input14, _VirtualMethodInvocation) = scope.new_collection_from(load5(index, &prefix, "VirtualMethodInvocation.facts", interner.clone())); inputs.4.push(input14);
+            let (input15, _Method) = scope.new_collection_from(load7(index, &prefix, "Method.facts", interner.clone())); inputs.6.push(input15);
+            let (input16, _StoreInstanceField) = scope.new_collection_from(load6(index, &prefix, "StoreInstanceField.facts", interner.clone())); inputs.5.push(input16);
+            let (input17, _LoadInstanceField) = scope.new_collection_from(load6(index, &prefix, "LoadInstanceField.facts", interner.clone())); inputs.5.push(input17);
+            let (input18, _StoreStaticField) = scope.new_collection_from(load5(index, &prefix, "StoreStaticField.facts", interner.clone())); inputs.4.push(input18);
+            let (input19, _LoadStaticField) = scope.new_collection_from(load5(index, &prefix, "LoadStaticField.facts", interner.clone())); inputs.4.push(input19);
+            let (input20, _StoreArrayIndex) = scope.new_collection_from(load5(index, &prefix, "StoreArrayIndex.facts", interner.clone())); inputs.4.push(input20);
+            let (input21, _LoadArrayIndex) = scope.new_collection_from(load5(index, &prefix, "LoadArrayIndex.facts", interner.clone())); inputs.4.push(input21);
+            let (input22, _Return) = scope.new_collection_from(load4(index, &prefix, "Return.facts", interner.clone())); inputs.3.push(input22);
 
             // TODO: Loaded as an input.
-            let (input23, DirectSuperclass) = scope.new_collection_from(load2("DirectSuperclass.facts", interner.clone())); inputs.1.push(input23);
-            let (input24, DirectSuperinterface) = scope.new_collection_from(load2("DirectSuperinterface.facts", interner.clone())); inputs.1.push(input24);
-            let (input25, MainClass) = scope.new_collection_from(load1("MainClass.facts", interner.clone())); inputs.0.push(input25);
-            let (input26, Method_Modifier) = scope.new_collection_from(load2("Method-Modifier.facts", interner.clone())); inputs.1.push(input26);
-            let (input27, FormalParam) = scope.new_collection_from(load3("FormalParam.facts", interner.clone())); inputs.2.push(input27);
-            let (input28, Var_Type) = scope.new_collection_from(load2("Var-Type.facts", interner.clone())); inputs.1.push(input28);
-            let (input29, ComponentType) = scope.new_collection_from(load2("ComponentType.facts", interner.clone())); inputs.1.push(input29);
-            let (input30, AssignReturnValue) = scope.new_collection_from(load2("AssignReturnValue.facts", interner.clone())); inputs.1.push(input30);
-            let (input31, ActualParam) = scope.new_collection_from(load3("ActualParam.facts", interner.clone())); inputs.2.push(input31);
+            let (input23, DirectSuperclass) = scope.new_collection_from(load2(index, &prefix, "DirectSuperclass.facts", interner.clone())); inputs.1.push(input23);
+            let (input24, DirectSuperinterface) = scope.new_collection_from(load2(index, &prefix, "DirectSuperinterface.facts", interner.clone())); inputs.1.push(input24);
+            let (input25, MainClass) = scope.new_collection_from(load1(index, &prefix, "MainClass.facts", interner.clone())); inputs.0.push(input25);
+            let (input26, Method_Modifier) = scope.new_collection_from(load2(index, &prefix, "Method-Modifier.facts", interner.clone())); inputs.1.push(input26);
+            let (input27, FormalParam) = scope.new_collection_from(load3(index, &prefix, "FormalParam.facts", interner.clone())); inputs.2.push(input27);
+            let (input28, Var_Type) = scope.new_collection_from(load2(index, &prefix, "Var-Type.facts", interner.clone())); inputs.1.push(input28);
+            let (input29, ComponentType) = scope.new_collection_from(load2(index, &prefix, "ComponentType.facts", interner.clone())); inputs.1.push(input29);
+            let (input30, AssignReturnValue) = scope.new_collection_from(load2(index, &prefix, "AssignReturnValue.facts", interner.clone())); inputs.1.push(input30);
+            let (input31, ActualParam) = scope.new_collection_from(load3(index, &prefix, "ActualParam.facts", interner.clone())); inputs.2.push(input31);
 
             // Main schema
             let isType: Collection<_,Type> =
@@ -1131,36 +1136,40 @@ fn main() {
 
         });
 
-        for input in inputs.0.iter_mut() { input.advance_to(1); input.flush(); }
-        for input in inputs.1.iter_mut() { input.advance_to(1); input.flush(); }
-        for input in inputs.2.iter_mut() { input.advance_to(1); input.flush(); }
-        for input in inputs.3.iter_mut() { input.advance_to(1); input.flush(); }
-        for input in inputs.4.iter_mut() { input.advance_to(1); input.flush(); }
-        for input in inputs.5.iter_mut() { input.advance_to(1); input.flush(); }
-        for input in inputs.6.iter_mut() { input.advance_to(1); input.flush(); }
+        if worker.index() == 0 {
 
-        while probe.less_than(inputs.0[0].time()) { worker.step(); }
-
-        println!("{:?}\tcomputation initalized", timer.elapsed());
-
-        let mut methods_stuff = load7("Method.facts", interner.clone()).collect::<Vec<_>>();
-
-        let mut round = 2;
-        while let Some(methods_thing) = methods_stuff.pop() {
-
-            inputs.6[0].remove(methods_thing);
-            for input in inputs.0.iter_mut() { input.advance_to(2 + (round / batch)); input.flush(); }
-            for input in inputs.1.iter_mut() { input.advance_to(2 + (round / batch)); input.flush(); }
-            for input in inputs.2.iter_mut() { input.advance_to(2 + (round / batch)); input.flush(); }
-            for input in inputs.3.iter_mut() { input.advance_to(2 + (round / batch)); input.flush(); }
-            for input in inputs.4.iter_mut() { input.advance_to(2 + (round / batch)); input.flush(); }
-            for input in inputs.5.iter_mut() { input.advance_to(2 + (round / batch)); input.flush(); }
-            for input in inputs.6.iter_mut() { input.advance_to(2 + (round / batch)); input.flush(); }
+            for input in inputs.0.iter_mut() { input.advance_to(1); input.flush(); }
+            for input in inputs.1.iter_mut() { input.advance_to(1); input.flush(); }
+            for input in inputs.2.iter_mut() { input.advance_to(1); input.flush(); }
+            for input in inputs.3.iter_mut() { input.advance_to(1); input.flush(); }
+            for input in inputs.4.iter_mut() { input.advance_to(1); input.flush(); }
+            for input in inputs.5.iter_mut() { input.advance_to(1); input.flush(); }
+            for input in inputs.6.iter_mut() { input.advance_to(1); input.flush(); }
 
             while probe.less_than(inputs.0[0].time()) { worker.step(); }
-            println!("{:?}\tround {} complete", timer.elapsed(), round);
 
-            round += 1;
+            println!("{:?}\tcomputation initalized", timer.elapsed());
+
+            // Load methods from disk
+            let mut methods_stuff = load7(index, &prefix, "Method.facts", interner.clone()).collect::<Vec<_>>();
+            for (round, methods_thing) in methods_stuff.into_iter().enumerate() {
+
+                // remove, advance, re-insert.
+                inputs.6[0].remove(methods_thing.clone());
+                for input in inputs.0.iter_mut() { input.advance_to(2 + round); input.flush(); }
+                for input in inputs.1.iter_mut() { input.advance_to(2 + round); input.flush(); }
+                for input in inputs.2.iter_mut() { input.advance_to(2 + round); input.flush(); }
+                for input in inputs.3.iter_mut() { input.advance_to(2 + round); input.flush(); }
+                for input in inputs.4.iter_mut() { input.advance_to(2 + round); input.flush(); }
+                for input in inputs.5.iter_mut() { input.advance_to(2 + round); input.flush(); }
+                for input in inputs.6.iter_mut() { input.advance_to(2 + round); input.flush(); }
+                inputs.6[0].insert(methods_thing.clone());
+
+                // step worker until remove has resolved.
+                while probe.less_than(inputs.0[0].time()) { worker.step(); }
+                println!("{:?}\tround {} complete", timer.elapsed(), round);
+
+            }
         }
 
     }).expect("Timely computation did not complete cleanly");
