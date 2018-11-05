@@ -92,6 +92,21 @@ fn main() {
                 .filter(|x| x.1 == 0)
                 .flat_map(move |(ts, _worker, datum)| {
                     let ts = Duration::from_secs((ts.as_secs()/granularity + 1) * granularity);
+                    if let TimelyEvent::Operates(event) = datum {
+                        Some((event, ts, 1))
+                    }
+                    else { None }
+                })
+//                .inspect(|x| println!("???\t{:?}", x))
+                .as_collection()
+                // .consolidate()
+                .inspect(|x| println!("CHANNEL\t{:?}", x));
+                ;
+
+            t_events
+                .filter(|x| x.1 == 0)
+                .flat_map(move |(ts, _worker, datum)| {
+                    let ts = Duration::from_secs((ts.as_secs()/granularity + 1) * granularity);
                     if let TimelyEvent::CommChannels(event) = datum {
                         Some((event, ts, 1))
                     }

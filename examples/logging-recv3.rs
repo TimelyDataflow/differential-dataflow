@@ -26,8 +26,8 @@ fn main() {
 
 	println!("starting with work peers: {}, comm peers: {}, granularity: {}", work_peers, comm_peers, granularity);
 
-    let t_listener = TcpListener::bind("127.0.0.1:8000").unwrap();
-    let d_listener = TcpListener::bind("127.0.0.1:9000").unwrap();
+    let t_listener = TcpListener::bind("0.0.0.0:8000").unwrap();
+    let d_listener = TcpListener::bind("0.0.0.0:9000").unwrap();
     let t_sockets =
     Arc::new(Mutex::new((0..work_peers).map(|_| {
             let socket = t_listener.incoming().next().unwrap().unwrap();
@@ -110,7 +110,7 @@ fn main() {
                     else { None }
                 })
                 .as_collection()
-                .consolidate()
+                .count()
                 .inspect(|x| println!("SEND: {:?}", x));
 
             let recvs =
@@ -124,7 +124,7 @@ fn main() {
                     else { None }
                 })
                 .as_collection()
-                .consolidate()
+                .count()
                 .inspect(|x| println!("RECV: {:?}", x));
 
             let _late =

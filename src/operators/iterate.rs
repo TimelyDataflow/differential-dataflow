@@ -34,7 +34,7 @@ use std::fmt::Debug;
 use std::ops::Deref;
 
 use timely::progress::{Timestamp, PathSummary};
-use timely::progress::nested::product::Product;
+use timely::order::Product;
 
 use timely::dataflow::*;
 use timely::dataflow::scopes::child::Iterative;
@@ -114,7 +114,7 @@ impl<G: Scope, D: Ord+Data+Debug, R: Diff> Iterate<G, D, R> for Collection<G, D,
 /// extern crate timely;
 /// extern crate differential_dataflow;
 ///
-/// use timely::progress::nested::product::Product;
+/// use timely::order::Product;
 /// use timely::dataflow::Scope;
 ///
 /// use differential_dataflow::input::Input;

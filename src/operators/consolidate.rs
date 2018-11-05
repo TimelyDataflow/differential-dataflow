@@ -70,7 +70,7 @@ pub trait ConsolidateStream<D: Data+Hashable> {
     /// extern crate differential_dataflow;
     ///
     /// use differential_dataflow::input::Input;
-    /// use differential_dataflow::operators::ConsolidateStream;
+    /// use differential_dataflow::operators::consolidate::ConsolidateStream;
     ///
     /// fn main() {
     ///     ::timely::example(|scope| {
