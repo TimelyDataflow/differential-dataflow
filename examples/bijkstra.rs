@@ -4,7 +4,7 @@ extern crate differential_dataflow;
 
 use rand::{Rng, SeedableRng, StdRng};
 
-use timely::progress::nested::product::Product;
+use timely::order::Product;
 use timely::dataflow::*;
 use timely::dataflow::operators::probe::Handle;
 

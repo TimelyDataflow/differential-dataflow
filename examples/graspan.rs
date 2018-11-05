@@ -8,7 +8,7 @@ use std::fs::File;
 use indexmap::IndexMap;
 
 use timely::progress::Timestamp;
-use timely::progress::nested::product::Product;
+use timely::order::Product;
 use timely::dataflow::Scope;
 use timely::dataflow::scopes::ScopeParent;
 

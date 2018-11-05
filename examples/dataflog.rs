@@ -1,7 +1,7 @@
 extern crate timely;
 extern crate differential_dataflow;
 
-use timely::progress::nested::product::Product;
+use timely::order::Product;
 use timely::dataflow::*;
 use timely::dataflow::scopes::child::Iterative as  Child;
 use timely::dataflow::operators::*;

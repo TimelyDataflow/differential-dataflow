@@ -13,6 +13,7 @@ use timely::dataflow::operators::capture::{EventReader, Replay};
 
 use differential_dataflow::AsCollection;
 use differential_dataflow::operators::Consolidate;
+use differential_dataflow::operators::Count;
 
 fn main() {
 
@@ -25,8 +26,8 @@ fn main() {
 
 	println!("starting with work peers: {}, comm peers: {}, granularity: {}", work_peers, comm_peers, granularity);
 
-    let t_listener = TcpListener::bind("127.0.0.1:8000").unwrap();
-    let d_listener = TcpListener::bind("127.0.0.1:9000").unwrap();
+    let t_listener = TcpListener::bind("0.0.0.0:8000").unwrap();
+    let d_listener = TcpListener::bind("0.0.0.0:9000").unwrap();
     let t_sockets =
     Arc::new(Mutex::new((0..work_peers).map(|_| {
             let socket = t_listener.incoming().next().unwrap().unwrap();
@@ -72,7 +73,6 @@ fn main() {
             let t_events = t_streams.replay_into(scope);
             let d_events = d_streams.replay_into(scope);
 
-            // let operates =
             t_events
                 .filter(|x| x.1 == 0)
                 .flat_map(move |(ts, _worker, datum)| {
@@ -82,24 +82,7 @@ fn main() {
                     }
                     else { None }
                 })
-//                .inspect(|x| println!("???\t{:?}", x))
                 .as_collection()
-                // .consolidate()
-                .inspect(|x| println!("CHANNEL\t{:?}", x));
-                ;
-
-            t_events
-                .filter(|x| x.1 == 0)
-                .flat_map(move |(ts, _worker, datum)| {
-                    let ts = Duration::from_secs((ts.as_secs()/granularity + 1) * granularity);
-                    if let TimelyEvent::Operates(event) = datum {
-                        Some((event, ts, 1))
-                    }
-                    else { None }
-                })
-//                .inspect(|x| println!("???\t{:?}", x))
-                .as_collection()
-                // .consolidate()
                 .inspect(|x| println!("CHANNEL\t{:?}", x));
                 ;
 
@@ -113,13 +96,12 @@ fn main() {
                     else { None }
                 })
                 .as_collection()
-                // .consolidate()
                 .inspect(|x| println!("COMM_CHANNEL\t{:?}", x));
                 ;
 
-            // let memory =
+            let sends =
             d_events
-                // .inspect(|x| println!("MESSAGE\t{:?}", x))
+                .filter(|(_,thread,_)| thread.sender)
                 .flat_map(move |(ts, _worker, datum)| {
                     let ts = Duration::from_secs((ts.as_secs()/granularity + 1) * granularity);
                     if let CommunicationEvent::Message(x) = datum {
@@ -128,14 +110,28 @@ fn main() {
                     else { None }
                 })
                 .as_collection()
-                .consolidate()
-                .inspect(|x| println!("MESSAGE\t{:?}", x));
-                ;
+                .count()
+                .inspect(|x| println!("SEND: {:?}", x));
 
-            // operates
-            //     .inspect(|x| println!("OPERATES: {:?}", x))
-            //     .semijoin(&memory)
-            //     .inspect(|x| println!("{:?}", x));
+            let recvs =
+            d_events
+                .filter(|(_,thread,_)| !thread.sender)
+                .flat_map(move |(ts, _worker, datum)| {
+                    let ts = Duration::from_secs((ts.as_secs()/granularity + 1) * granularity);
+                    if let CommunicationEvent::Message(x) = datum {
+                        Some((x.header.channel, ts, x.header.length as isize))
+                    }
+                    else { None }
+                })
+                .as_collection()
+                .count()
+                .inspect(|x| println!("RECV: {:?}", x));
+
+            let _late =
+            sends
+                .concat(&recvs.negate())
+                .count()
+                .inspect(|x| println!("LATE: {:?}", x));
 
         });
 

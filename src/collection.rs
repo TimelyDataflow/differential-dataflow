@@ -13,7 +13,7 @@ use std::ops::Mul;
 
 use timely::Data;
 use timely::progress::Timestamp;
-use timely::progress::nested::product::Product;
+use timely::order::Product;
 use timely::dataflow::scopes::{Child, child::Iterative};
 use timely::dataflow::{Scope, Stream};
 use timely::dataflow::operators::*;

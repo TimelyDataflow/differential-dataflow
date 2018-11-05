@@ -58,13 +58,13 @@ fn starts_with(source: &[u8], query: &[u8]) -> bool {
     source.len() >= query.len() && &source[..query.len()] == query
 }
 
-pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp> 
+pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp>
 where G::Timestamp: Lattice+TotalOrder+Ord {
 
     let regions = collections.regions().filter(|r| starts_with(&r.name, b"AMERICA")).map(|r| r.region_key);
     let nations1 = collections.nations().map(|n| (n.region_key, n.nation_key)).semijoin(&regions).map(|x| x.1);
     let customers = collections.customers().map(|c| (c.nation_key, c.cust_key)).semijoin(&nations1).map(|x| x.1);
-    let orders = 
+    let orders =
     collections
         .orders()
         .flat_map(|o|
@@ -77,12 +77,12 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
         .map(|x| x.1);
 
     let nations2 = collections.nations.map(|n| (n.nation_key, starts_with(&n.name, b"BRAZIL")));
-    let suppliers = 
+    let suppliers =
     collections
         .suppliers()
         .map(|s| (s.nation_key, s.supp_key))
         .join(&nations2)
-        .map(|(_, supp_key, is_name)| (supp_key, is_name));
+        .map(|(_, (supp_key, is_name))| (supp_key, is_name));
 
     let parts = collections.parts().filter(|p| p.typ.as_str() == "ECONOMY ANODIZED STEEL").map(|p| p.part_key);
 
@@ -92,9 +92,9 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
         .semijoin(&parts)
         .map(|(_part_key, (supp_key, order_key))| (order_key, supp_key))
         .join(&orders)
-        .map(|(_order_key, supp_key, order_date)| (supp_key, order_date))
+        .map(|(_order_key, (supp_key, order_date))| (supp_key, order_date))
         .join(&suppliers)
-        .explode(|(_, order_date, is_name)| Some((order_date, DiffPair::new(if is_name { 1 } else { 0 }, 1))))
+        .explode(|(_, (order_date, is_name))| Some((order_date, DiffPair::new(if is_name { 1 } else { 0 }, 1))))
         .count_total()
         // .inspect(|x| println!("{:?}", x))
         .probe()

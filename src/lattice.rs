@@ -41,7 +41,7 @@ pub trait Lattice : PartialOrder {
     /// # extern crate timely;
     /// # extern crate differential_dataflow;
     /// # use timely::PartialOrder;
-    /// # use timely::progress::nested::product::Product;
+    /// # use timely::order::Product;
     /// # use differential_dataflow::lattice::Lattice;
     /// # fn main() {
     ///
@@ -62,7 +62,7 @@ pub trait Lattice : PartialOrder {
     /// # extern crate timely;
     /// # extern crate differential_dataflow;
     /// # use timely::PartialOrder;
-    /// # use timely::progress::nested::product::Product;
+    /// # use timely::order::Product;
     /// # use differential_dataflow::lattice::Lattice;
     /// # fn main() {
     ///
@@ -94,7 +94,7 @@ pub trait Lattice : PartialOrder {
     /// # extern crate timely;
     /// # extern crate differential_dataflow;
     /// # use timely::PartialOrder;
-    /// # use timely::progress::nested::product::Product;
+    /// # use timely::order::Product;
     /// # use differential_dataflow::lattice::Lattice;
     /// # fn main() {
     ///
@@ -131,7 +131,7 @@ pub trait Lattice : PartialOrder {
     }
 }
 
-use timely::progress::nested::product::Product;
+use timely::order::Product;
 
 impl<T1: Lattice, T2: Lattice> Lattice for Product<T1, T2> {
     #[inline(always)]

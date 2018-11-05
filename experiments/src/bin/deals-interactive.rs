@@ -1,3 +1,5 @@
+#![feature(duration_as_u128)]
+
 extern crate rand;
 extern crate timely;
 extern crate differential_dataflow;
@@ -28,9 +30,14 @@ fn main() {
     let filename = std::env::args().nth(1).unwrap();
     let rounds: usize = std::env::args().nth(2).unwrap().parse().unwrap();
     let batch: usize = std::env::args().nth(3).unwrap().parse().unwrap();
+    let workers: usize = std::env::args().nth(4).unwrap().parse().unwrap();
     let inspect = std::env::args().any(|x| x == "inspect");
 
-    timely::execute_from_args(std::env::args().skip(1), move |worker| {
+    use timely::communication::allocator::zero_copy::allocator_process::ProcessBuilder;
+    let allocators = ProcessBuilder::new_vector(workers);
+    timely::execute::execute_from(allocators, Box::new(()), move |worker| {
+
+    // timely::execute_from_args(std::env::args().skip(1), move |worker| {
 
         let peers = worker.peers();
         let index = worker.index();
@@ -81,95 +88,125 @@ fn main() {
         nodes.sort();
         nodes.dedup();
 
-        if index == 0 { println!("{:?}\tData ingested", timer.elapsed()); }
+        if index == 0 {
 
-        // run until graph is loaded
-        input.advance_to(1); input.flush();
-        query1.advance_to(1); query1.flush();
-        query2.advance_to(1); query2.flush();
-        query3.advance_to(1); query3.flush();
+            println!("{:?}\tData ingested", timer.elapsed());
 
-        worker.step_while(|| probe.less_than(input.time()));
+            let seed: &[_] = &[1, 2, 3, index];
+            let mut rng1: StdRng = SeedableRng::from_seed(seed);   // rng for additions
+            let mut rng2: StdRng = SeedableRng::from_seed(seed);   // rng for deletions
+            let mut rng3: StdRng = SeedableRng::from_seed(seed);   // rng for additions
+            let mut rng4: StdRng = SeedableRng::from_seed(seed);   // rng for deletions
+            let mut rng5: StdRng = SeedableRng::from_seed(seed);   // rng for additions
+            let mut rng6: StdRng = SeedableRng::from_seed(seed);   // rng for deletions
 
-        if index == 0 { println!("{:?}\tData indexed", timer.elapsed()); }
+            // Pre-insert first queries, so we can remove them.
+            let insert = *rng1.choose(&nodes[..]).unwrap();
+            // println!("initializing {}", insert);
+            query1.insert(insert);
+            query2.insert(*rng3.choose(&nodes[..]).unwrap());
+            query3.insert(*rng5.choose(&nodes[..]).unwrap());
 
-        let seed: &[_] = &[1, 2, 3, index];
-        let mut rng: StdRng = SeedableRng::from_seed(seed);    // rng for edge additions
+            // run until graph is loaded
+            input.advance_to(1); input.flush();
+            query1.advance_to(1); query1.flush();
+            query2.advance_to(1); query2.flush();
+            query3.advance_to(1); query3.flush();
 
-        let worker_batch = batch / peers + if index < batch % peers { 1 } else { 0 };
+            worker.step_while(|| probe.less_than(input.time()));
 
-        input.advance_to(1 + 1 * rounds); input.flush();
-        query2.advance_to(1 + 1 * rounds); query2.flush();
-        query3.advance_to(1 + 1 * rounds); query3.flush();
+            println!("{:?}\tData indexed", timer.elapsed());
 
-        // let mut latencies1 = Vec::with_capacity(rounds);
+            let worker_batch = batch;
 
-        for round in 1 .. (1 + 1 * rounds) {
-            let timer = Instant::now();
-            for _ in 0 .. worker_batch {
-                query1.insert(*rng.choose(&nodes[..]).unwrap());
+            input.advance_to(1 + 1 * rounds); input.flush();
+            query2.advance_to(1 + 1 * rounds); query2.flush();
+            query3.advance_to(1 + 1 * rounds); query3.flush();
+
+            let mut latencies1 = Vec::with_capacity(rounds);
+
+            for round in 1 .. (1 + 1 * rounds) {
+                let timer = Instant::now();
+                for _ in 0 .. worker_batch {
+                    let insert = *rng1.choose(&nodes[..]).unwrap();
+                    let remove = *rng2.choose(&nodes[..]).unwrap();
+                    // println!("replacing {} -> {}", remove, insert);
+                    query1.insert(insert);
+                    query1.remove(remove);
+                }
+                query1.advance_to(round);
+                query1.flush();
+                while probe.less_than(query1.time()) { worker.step(); }
+                latencies1.push(timer.elapsed().as_nanos());
             }
-            query1.advance_to(round);
-            query1.flush();
-            while probe.less_than(query1.time()) { worker.step(); }
-            if index == 0 { println!("query1: {:?}", timer.elapsed()); }
-        }
 
-        if index == 0 { println!("{:?}\tRound 1 complete", timer.elapsed()); }
+            if index == 0 { println!("{:?}\tRound 1 complete", timer.elapsed()); }
 
-        input.advance_to(1 + 2 * rounds); input.flush();
-        query1.advance_to(1 + 2 * rounds); query1.flush();
-        query3.advance_to(1 + 2 * rounds); query3.flush();
+            input.advance_to(1 + 2 * rounds); input.flush();
+            query1.advance_to(1 + 2 * rounds); query1.flush();
+            query3.advance_to(1 + 2 * rounds); query3.flush();
 
-        // let mut latencies2 = Vec::with_capacity(rounds);
+            let mut latencies2 = Vec::with_capacity(rounds);
 
-        for round in (1 + 1 * rounds) .. (1 + 2 * rounds) {
-            let timer = Instant::now();
-            for _ in 0 .. worker_batch {
-                query2.insert(*rng.choose(&nodes[..]).unwrap());
+            for round in (1 + 1 * rounds) .. (1 + 2 * rounds) {
+                let timer = Instant::now();
+                for _ in 0 .. worker_batch {
+                    query2.insert(*rng3.choose(&nodes[..]).unwrap());
+                    query2.remove(*rng4.choose(&nodes[..]).unwrap());
+                }
+                query2.advance_to(round);
+                query2.flush();
+                while probe.less_than(query2.time()) { worker.step(); }
+                latencies2.push(timer.elapsed().as_nanos());
+                // if index == 0 { println!("query2: {:?}", timer.elapsed()); }
             }
-            query2.advance_to(round);
-            query2.flush();
-            while probe.less_than(query2.time()) { worker.step(); }
-            if index == 0 { println!("query2: {:?}", timer.elapsed()); }
-        }
 
-        if index == 0 { println!("{:?}\tRound 2 complete", timer.elapsed()); }
+            if index == 0 { println!("{:?}\tRound 2 complete", timer.elapsed()); }
 
-        input.advance_to(1 + 3 * rounds); input.flush();
-        query1.advance_to(1 + 3 * rounds); query1.flush();
-        query2.advance_to(1 + 3 * rounds); query2.flush();
+            input.advance_to(1 + 3 * rounds); input.flush();
+            query1.advance_to(1 + 3 * rounds); query1.flush();
+            query2.advance_to(1 + 3 * rounds); query2.flush();
 
-        // let mut latencies3 = Vec::with_capacity(rounds);
+            let mut latencies3 = Vec::with_capacity(rounds);
 
-        for round in (1 + 2 * rounds) .. (1 + 3 * rounds) {
-            let timer = Instant::now();
-            for _ in 0 .. worker_batch {
-                query3.insert(*rng.choose(&nodes[..]).unwrap());
+            for round in (1 + 2 * rounds) .. (1 + 3 * rounds) {
+                let timer = Instant::now();
+                for _ in 0 .. worker_batch {
+                    query3.insert(*rng5.choose(&nodes[..]).unwrap());
+                    query3.remove(*rng6.choose(&nodes[..]).unwrap());
+                }
+                query3.advance_to(round);
+                query3.flush();
+                while probe.less_than(query3.time()) { worker.step(); }
+                latencies3.push(timer.elapsed().as_nanos());
+                // if index == 0 { println!("query3: {:?}", timer.elapsed()); }
             }
-            query3.advance_to(round);
-            query3.flush();
-            while probe.less_than(query3.time()) { worker.step(); }
-            if index == 0 { println!("query3: {:?}", timer.elapsed()); }
-        }
 
-        if index == 0 { println!("{:?}\tRound 3 complete", timer.elapsed()); }
+            if index == 0 { println!("{:?}\tRound 3 complete", timer.elapsed()); }
 
-        query1.close();
-        query2.close();
-        query3.close();
+            // query1.close();
+            // query2.close();
+            // query3.close();
 
-        // let mut latencies4 = Vec::with_capacity(rounds);
+            // // let mut latencies4 = Vec::with_capacity(rounds);
 
-        for round in (1 + 3 * rounds) .. (1 + 4 * rounds) {
-            let timer = Instant::now();
-            for _ in 0 .. worker_batch {
-                input.insert((*rng.choose(&nodes[..]).unwrap(), *rng.choose(&nodes[..]).unwrap()));
-            }
-            input.advance_to(round);
-            input.flush();
-            while probe.less_than(input.time()) { worker.step(); }
-            if index == 0 { println!("query4: {:?}", timer.elapsed()); }
+            // for round in (1 + 3 * rounds) .. (1 + 4 * rounds) {
+            //     let timer = Instant::now();
+            //     for _ in 0 .. worker_batch {
+            //         input.insert((*rng.choose(&nodes[..]).unwrap(), *rng.choose(&nodes[..]).unwrap()));
+            //     }
+            //     input.advance_to(round);
+            //     input.flush();
+            //     while probe.less_than(input.time()) { worker.step(); }
+            //     if index == 0 { println!("query4: {:?}", timer.elapsed()); }
+            // }
+
+            latencies1.sort();
+            for x in latencies1 { println!("q1:\t{:?}", x); }
+            latencies2.sort();
+            for x in latencies2 { println!("q2:\t{:?}", x); }
+            latencies3.sort();
+            for x in latencies3 { println!("q3:\t{:?}", x); }
         }
 
     }).unwrap();

@@ -8,8 +8,6 @@ use std::io::{BufRead, BufReader};
 use std::time::Instant;
 
 use timely::dataflow::operators::*;
-use timely::progress::timestamp::RootTimestamp;
-use timely::progress::nested::product::Product;
 
 use differential_dataflow::AsCollection;
 
@@ -138,7 +136,7 @@ fn main() {
 
 // Returns a sequence of physical batches of ready-to-go timestamped data. Not clear that `input` can exploit the pre-arrangement yet.
 fn load<T>(prefix: &str, name: &str, index: usize, peers: usize)
-    -> Vec<Vec<(T, Product<RootTimestamp, ()>, isize)>>
+    -> Vec<Vec<(T, (), isize)>>
 where T: for<'a> From<&'a str> {
 
     let mut buffer = Vec::new();
@@ -155,7 +153,7 @@ where T: for<'a> From<&'a str> {
 
         if count % peers == index {
             let item = T::from(line.as_str());
-            buffer.push((item, RootTimestamp::new(()), 1));
+            buffer.push((item, (), 1));
         }
 
         count += 1;

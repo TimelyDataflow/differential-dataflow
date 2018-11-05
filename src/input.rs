@@ -78,6 +78,37 @@ pub trait Input : TimelyInput {
     /// ```
     fn new_collection_from<I>(&mut self, data: I) -> (InputSession<<Self as ScopeParent>::Timestamp, I::Item, isize>, Collection<Self, I::Item, isize>)
     where I: IntoIterator+'static, I::Item: Data;
+    /// Create a new collection and input handle from initial data.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// extern crate timely;
+    /// extern crate differential_dataflow;
+    ///
+    /// use timely::Configuration;
+    /// use differential_dataflow::input::Input;
+    ///
+    /// fn main() {
+    ///     ::timely::execute(Configuration::Thread, |worker| {
+    ///
+    ///         let (mut handle, probe) = worker.dataflow::<(),_,_>(|scope| {
+    ///             // create input handle and collection.
+    ///             let (handle, data) = scope.new_collection_from(0 .. 10);
+    ///             let probe = data.map(|x| x * 2)
+    ///                             .inspect(|x| println!("{:?}", x))
+    ///                             .probe();
+    ///             (handle, probe)
+    ///         });
+    ///
+    ///         handle.insert(1);
+    ///         handle.insert(5);
+    ///
+    ///     }).unwrap();
+    /// }
+    /// ```
+    fn new_collection_from_raw<D, R, I>(&mut self, data: I) -> (InputSession<<Self as ScopeParent>::Timestamp, D, R>, Collection<Self, D, R>)
+    where I: IntoIterator<Item=(D,<Self as ScopeParent>::Timestamp,R)>+'static, D: Data, R: Diff+Data;
 }
 
 use lattice::Lattice;
@@ -89,15 +120,21 @@ impl<G: TimelyInput> Input for G where <G as ScopeParent>::Timestamp: Lattice {
     }
     fn new_collection_from<I>(&mut self, data: I) -> (InputSession<<G as ScopeParent>::Timestamp, I::Item, isize>, Collection<G, I::Item, isize>)
     where I: IntoIterator+'static, I::Item: Data {
-
-    	use timely::dataflow::operators::ToStream;
-
-		let (handle, stream) = self.new_input();
-		let source = data.into_iter().map(|d| (d, Default::default(), 1)).to_stream(self).as_collection();
-
-		(InputSession::from(handle), stream.as_collection().concat(&source))
+        self.new_collection_from_raw(data.into_iter().map(|d| (d, Default::default(), 1)))
     }
-}
+    fn new_collection_from_raw<D,R,I>(&mut self, data: I) -> (InputSession<<G as ScopeParent>::Timestamp, D, R>, Collection<G, D, R>)
+    where
+        D: Data,
+        R: Diff+Data,
+        I: IntoIterator<Item=(D,<Self as ScopeParent>::Timestamp,R)>+'static,
+    {
+        use timely::dataflow::operators::ToStream;
+
+        let (handle, stream) = self.new_input();
+        let source = data.to_stream(self).as_collection();
+
+        (InputSession::from(handle), stream.as_collection().concat(&source))
+    }}
 
 /// An input session wrapping a single timely dataflow capability.
 ///

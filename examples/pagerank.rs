@@ -2,7 +2,7 @@ extern crate timely;
 extern crate graph_map;
 extern crate differential_dataflow;
 
-use timely::progress::nested::product::Product;
+use timely::order::Product;
 use timely::dataflow::{*, operators::Filter};
 
 use differential_dataflow::Collection;
