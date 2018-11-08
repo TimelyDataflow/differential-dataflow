@@ -180,6 +180,11 @@ fn test_import_stalled_dataflow() {
 
         worker.step_while(|| probe1.less_than(input.time()));
 
+        input.advance_to(2);
+        input.flush();
+
+        worker.step_while(|| probe1.less_than(input.time()));
+
         let probe2 = worker.dataflow(|scope| {
             trace.import(scope).stream.probe()
         });
