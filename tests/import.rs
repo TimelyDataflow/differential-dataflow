@@ -5,8 +5,9 @@ extern crate differential_dataflow;
 use timely::dataflow::operators::*;
 use timely::dataflow::operators::capture::Extract;
 
+use differential_dataflow::input::InputSession;
 use differential_dataflow::collection::AsCollection;
-use differential_dataflow::operators::arrange::ArrangeByKey;
+use differential_dataflow::operators::arrange::{ArrangeByKey, ArrangeBySelf};
 use differential_dataflow::operators::group::Group;
 use differential_dataflow::trace::TraceReader;
 use itertools::Itertools;
@@ -154,6 +155,48 @@ fn test_import_completed_dataflow() {
         (5, vec![
              ((1, 1), -1), ((1, 2), 1), ((4, 1), -1)]),
     ]);
+}
+
+#[test]
+fn test_import_stalled_dataflow() {
+    // Runs the first dataflow to completion before constructing the subscriber.
+    timely::execute(timely::Configuration::Thread, move |worker| {
+
+        let mut input = InputSession::new();
+
+        let (mut trace, probe1) = worker.dataflow(|scope| {
+
+            let arranged =
+            input
+                .to_collection(scope)
+                .arrange_by_self();
+
+            (arranged.trace, arranged.stream.probe())
+        });
+
+        input.insert("Hello".to_owned());
+        input.advance_to(1);
+        input.flush();
+
+        worker.step_while(|| probe1.less_than(input.time()));
+
+        input.advance_to(2);
+        input.flush();
+
+        worker.step_while(|| probe1.less_than(input.time()));
+
+        let probe2 = worker.dataflow(|scope| {
+            trace.import(scope).stream.probe()
+        });
+
+        worker.step();
+        worker.step();
+        worker.step();
+        worker.step();
+
+        assert!(!probe2.less_than(input.time()));
+
+    });
 }
 
 #[ignore]

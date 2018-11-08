@@ -21,7 +21,6 @@ use std::rc::{Rc, Weak};
 use std::cell::RefCell;
 use std::default::Default;
 use std::collections::VecDeque;
-use std::fmt::Debug;
 
 use timely::dataflow::operators::{Enter, Map};
 use timely::order::{PartialOrder, TotalOrder};
@@ -48,7 +47,7 @@ pub struct TraceWriter<K, V, T, R, Tr>
 where T: Lattice+Ord+Clone+'static, Tr: Trace<K,V,T,R>, Tr::Batch: Batch<K,V,T,R> {
     phantom: ::std::marker::PhantomData<(K, V, R)>,
     trace: Weak<RefCell<TraceBox<K, V, T, R, Tr>>>,
-    queues: Rc<RefCell<Vec<Weak<RefCell<VecDeque<(Vec<T>, Option<(T, Tr::Batch)>)>>>>>>,
+    queues: Rc<RefCell<(Vec<T>,Vec<Weak<RefCell<VecDeque<(Vec<T>, Option<(T, Tr::Batch)>)>>>>)>>,
 }
 
 impl<K, V, T, R, Tr> TraceWriter<K, V, T, R, Tr>
@@ -59,12 +58,13 @@ where T: Lattice+Ord+Clone+'static, Tr: Trace<K,V,T,R>, Tr::Batch: Batch<K,V,T,R
 
         // push information to each listener that still exists.
         let mut borrow = self.queues.borrow_mut();
-        for queue in borrow.iter_mut() {
-            queue.upgrade().map(|queue| {
+        borrow.0 = frontier.to_vec();
+        for queue in borrow.1.iter_mut() {
+            if let Some(mut queue) = queue.upgrade() {
                 queue.borrow_mut().push_back((frontier.to_vec(), data.clone()));
-            });
+            }
         }
-        borrow.retain(|w| w.upgrade().is_some());
+        borrow.1.retain(|w| w.upgrade().is_some());
 
         // push data to the trace, if it still exists.
         if let Some(trace) = self.trace.upgrade() {
@@ -93,12 +93,12 @@ where T: Lattice+Ord+Clone+'static, Tr: Trace<K,V,T,R>, Tr::Batch: Batch<K,V,T,R
         //       error to do that sort of thing?
 
         let mut borrow = self.queues.borrow_mut();
-        for queue in borrow.iter_mut() {
+        for queue in borrow.1.iter_mut() {
             queue.upgrade().map(|queue| {
                 queue.borrow_mut().push_back((Vec::new(), None));
             });
         }
-        borrow.retain(|w| w.upgrade().is_some());
+        borrow.1.retain(|w| w.upgrade().is_some());
     }
 }
 
@@ -111,7 +111,7 @@ pub struct TraceAgent<K, V, T, R, Tr>
 where T: Lattice+Ord+Clone+'static, Tr: TraceReader<K,V,T,R> {
     phantom: ::std::marker::PhantomData<(K, V, R)>,
     trace: Rc<RefCell<TraceBox<K, V, T, R, Tr>>>,
-    queues: Weak<RefCell<Vec<Weak<RefCell<VecDeque<(Vec<T>, Option<(T, Tr::Batch)>)>>>>>>,
+    queues: Weak<RefCell<(Vec<T>,Vec<Weak<RefCell<VecDeque<(Vec<T>, Option<(T, Tr::Batch)>)>>>>)>>,
     advance: Vec<T>,
     through: Vec<T>,
 }
@@ -141,13 +141,13 @@ where T: Lattice+Ord+Clone+'static, Tr: TraceReader<K,V,T,R> {
 }
 
 impl<K, V, T, R, Tr> TraceAgent<K, V, T, R, Tr>
-where T: Lattice+Ord+Clone+Debug+'static, Tr: TraceReader<K,V,T,R> {
+where T: Timestamp+Lattice, Tr: TraceReader<K,V,T,R> {
 
     /// Creates a new agent from a trace reader.
     pub fn new(trace: Tr) -> (Self, TraceWriter<K,V,T,R,Tr>) where Tr: Trace<K,V,T,R>, Tr::Batch: Batch<K,V,T,R> {
 
         let trace = Rc::new(RefCell::new(TraceBox::new(trace)));
-        let queues = Rc::new(RefCell::new(Vec::new()));
+        let queues = Rc::new(RefCell::new((vec![Default::default()], Vec::new())));
 
         let reader = TraceAgent {
             phantom: ::std::marker::PhantomData,
@@ -176,20 +176,17 @@ where T: Lattice+Ord+Clone+Debug+'static, Tr: TraceReader<K,V,T,R> {
         let mut new_queue = VecDeque::new();
 
         // add the existing batches from the trace
-        let mut upper = vec![T::default()];
         self.trace.borrow_mut().trace.map_batches(|batch| {
-            upper = batch.upper().to_vec();
             new_queue.push_back((vec![T::default()], Some((T::default(), batch.clone()))));
         });
-        // println!("new_listener, upper: {:?}", upper);
-        new_queue.push_back((upper, None));
 
         let reference = Rc::new(RefCell::new(new_queue));
 
         // wraps the queue in a ref-counted ref cell and enqueue/return it.
         if let Some(queue) = self.queues.upgrade() {
             let mut borrow = queue.borrow_mut();
-            borrow.push(Rc::downgrade(&reference));
+            reference.borrow_mut().push_back((borrow.0.clone(), None));
+            borrow.1.push(Rc::downgrade(&reference));
         }
         else {
             // if the trace is closed, send a final signal.
@@ -823,3 +820,4 @@ where G::Timestamp: Lattice+Ord {
             .arrange()
     }
 }
+
