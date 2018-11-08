@@ -21,8 +21,8 @@ Instead, edit your `Cargo.toml` file, which tells Rust about your dependencies, 
         authors = ["Your Name <your_name@you.ch>"]
 
         [dependencies]
-        timely = "0.5"
-        differential-dataflow = "0.5"
+        timely = "0.7"
+        differential-dataflow = "0.7"
         Echidnatron%
 
 You should only need to add those last two lines there, which bring in dependencies on both [timely dataflow](https://github.com/frankmcsherry/timely-dataflow) and [differential dataflow](https://github.com/frankmcsherry/differential-dataflow). We will be using both of those.
