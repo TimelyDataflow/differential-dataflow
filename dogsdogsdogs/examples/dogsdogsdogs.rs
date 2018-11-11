@@ -2,7 +2,7 @@ extern crate timely;
 extern crate graph_map;
 extern crate differential_dataflow;
 
-extern crate hector;
+extern crate dogsdogsdogs;
 
 use timely::dataflow::operators::{ToStream, Partition, Accumulate, Inspect, Probe};
 use timely::dataflow::operators::probe::Handle;
@@ -10,7 +10,7 @@ use differential_dataflow::{Collection, AsCollection};
 use differential_dataflow::input::Input;
 use graph_map::GraphMMap;
 
-use hector::{CollectionIndex, PrefixExtender};
+use dogsdogsdogs::{CollectionIndex, PrefixExtender};
 
 fn main() {
 

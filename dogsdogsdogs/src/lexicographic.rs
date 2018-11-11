@@ -13,27 +13,25 @@
 
 /// A pair of timestamps, partially ordered by the product order.
 #[derive(Debug, Hash, Default, Clone, Eq, PartialEq, Ord, PartialOrd, Abomonation)]
-pub struct Pair<S, T> {
-    pub first: S,
-    pub second: T,
+pub struct AltNeu<T> {
+    pub time: T,
+    pub neu: bool,  // alt < neu in timestamp comparisons.
 }
 
-impl<S, T> Pair<S, T> {
-    /// Create a new pair.
-    pub fn new(first: S, second: T) -> Self {
-        Pair { first, second }
-    }
+impl<T> AltNeu<T> {
+    pub fn alt(time: T) -> Self { AltNeu { time, neu: false } }
+    pub fn neu(time: T) -> Self { AltNeu { time, neu: true } }
 }
 
 // Implement timely dataflow's `PartialOrder` trait.
 use timely::order::PartialOrder;
-impl<S: PartialOrder, T: PartialOrder> PartialOrder for Pair<S, T> {
+impl<T: PartialOrder> PartialOrder for AltNeu<T> {
     fn less_equal(&self, other: &Self) -> bool {
-        if self.first.eq(&other.first) {
-            self.second.less_equal(&other.second)
+        if self.time.eq(&other.time) {
+            self.neu <= other.neu
         }
         else {
-            self.first.less_equal(&other.first)
+            self.time.less_equal(&other.time)
         }
     }
 }
@@ -41,8 +39,8 @@ impl<S: PartialOrder, T: PartialOrder> PartialOrder for Pair<S, T> {
 // Implement timely dataflow's `PathSummary` trait.
 // This is preparation for the `Timestamp` implementation below.
 use timely::progress::PathSummary;
-impl<S: Timestamp, T: Timestamp> PathSummary<Pair<S,T>> for () {
-    fn results_in(&self, timestamp: &Pair<S, T>) -> Option<Pair<S,T>> {
+impl<T: Timestamp> PathSummary<AltNeu<T>> for () {
+    fn results_in(&self, timestamp: &AltNeu<T>) -> Option<AltNeu<T>> {
         Some(timestamp.clone())
     }
     fn followed_by(&self, other: &Self) -> Option<Self> {
@@ -52,37 +50,50 @@ impl<S: Timestamp, T: Timestamp> PathSummary<Pair<S,T>> for () {
 
 // Implement timely dataflow's `Timestamp` trait.
 use timely::progress::Timestamp;
-impl<S: Timestamp, T: Timestamp> Timestamp for Pair<S, T> {
+impl<T: Timestamp> Timestamp for AltNeu<T> {
     type Summary = ();
+}
+
+use timely::progress::timestamp::Refines;
+
+impl<T: Timestamp> Refines<T> for AltNeu<T> {
+    fn to_inner(other: T) -> Self {
+        AltNeu::alt(other)
+    }
+    fn to_outer(self: AltNeu<T>) -> T {
+        self.time
+    }
+    fn summarize(_path: ()) -> <T as Timestamp>::Summary {
+        Default::default()
+    }
 }
 
 // Implement differential dataflow's `Lattice` trait.
 // This extends the `PartialOrder` implementation with additional structure.
 use differential_dataflow::lattice::Lattice;
-impl<S: Lattice, T: Lattice> Lattice for Pair<S, T> {
-    fn minimum() -> Self { Pair { first: S::minimum(), second: T::minimum() }}
-    fn maximum() -> Self { Pair { first: S::maximum(), second: T::maximum() }}
+impl<T: Lattice> Lattice for AltNeu<T> {
+    fn minimum() -> Self { AltNeu::alt(T::minimum()) }
+    fn maximum() -> Self { AltNeu::neu(T::maximum()) }
     fn join(&self, other: &Self) -> Self {
-        let first = self.first.join(&other.first);
-        let mut second = T::minimum();
-        if first == self.first {
-            second = second.join(&self.second);
+        let time = self.time.join(&other.time);
+        let mut neu = false;
+        if time == self.time {
+            neu = neu || self.neu;
         }
-        if first == other.first {
-            second = second.join(&other.second);
+        if time == other.time {
+            neu = neu || other.neu;
         }
-
-        Pair { first, second }
+        AltNeu { time, neu }
     }
     fn meet(&self, other: &Self) -> Self {
-        let first = self.first.meet(&other.first);
-        let mut second = T::maximum();
-        if first == self.first {
-            second = second.meet(&self.second);
+        let time = self.time.meet(&other.time);
+        let mut neu = true;
+        if time == self.time {
+            neu = neu && self.neu;
         }
-        if first == other.first {
-            second = second.meet(&other.second);
+        if time == other.time {
+            neu = neu && other.neu;
         }
-        Pair { first, second }
+        AltNeu { time, neu }
     }
 }

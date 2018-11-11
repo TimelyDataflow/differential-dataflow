@@ -8,7 +8,6 @@ extern crate differential_dataflow;
 use std::rc::Rc;
 use std::collections::HashMap;
 use std::hash::Hash;
-// use std::ops::DerefMut;
 
 use timely::PartialOrder;
 use timely::dataflow::Scope;
@@ -20,7 +19,6 @@ use timely_sort::Unsigned;
 
 use differential_dataflow::{Data, Collection, AsCollection, Hashable};
 use differential_dataflow::lattice::Lattice;
-// use differential_dataflow::difference::Diff;
 use differential_dataflow::operators::arrange::TraceAgent;
 use differential_dataflow::operators::arrange::{ArrangeBySelf, ArrangeByKey};
 use differential_dataflow::trace::{Cursor, TraceReader, BatchReader};
@@ -36,21 +34,36 @@ pub mod lexicographic;
     via the three methods `count`, `propose`, and `validate`.
 **/
 pub trait PrefixExtender<G: Scope> {
-
     /// The required type of prefix to extend.
     type Prefix;
-
     /// The type to be produced as extension.
     type Extension;
-
     /// Annotates prefixes with the number of extensions the relation would propose.
     fn count(&mut self, &Collection<G, (Self::Prefix, usize, usize)>, usize) -> Collection<G, (Self::Prefix, usize, usize)>;
-
     /// Extends each prefix with corresponding extensions.
     fn propose(&mut self, &Collection<G, Self::Prefix>) -> Collection<G, (Self::Prefix, Self::Extension)>;
-
     /// Restricts proposed extensions by those the extender would have proposed.
     fn validate(&mut self, &Collection<G, (Self::Prefix, Self::Extension)>) -> Collection<G, (Self::Prefix, Self::Extension)>;
+}
+
+pub trait ProposeExtensionMethod<G: Scope, P> {
+    fn propose_using<PE: PrefixExtender<G, Prefix=P>>(&self, extender: &mut PE) -> Collection<G, (P, PE::Extension)>;
+}
+
+impl<G: Scope, P> ProposeExtensionMethod<G, P> for Collection<G, P> {
+    fn propose_using<PE: PrefixExtender<G, Prefix=P>>(&self, extender: &mut PE) -> Collection<G, (P, PE::Extension)> {
+        extender.propose(self)
+    }
+}
+
+pub trait ValidateExtensionMethod<G: Scope, P, E> {
+    fn validate_using<PE: PrefixExtender<G, Prefix=P, Extension=E>>(&self, extender: &mut PE) -> Collection<G, (P, E)>;
+}
+
+impl<G: Scope, P, E> ValidateExtensionMethod<G, P, E> for Collection<G, (P, E)> {
+    fn validate_using<PE: PrefixExtender<G, Prefix=P, Extension=E>>(&self, extender: &mut PE) -> Collection<G, (P, E)> {
+        extender.validate(self)
+    }
 }
 
 // These are all defined here so that users can be assured a common layout.
@@ -58,7 +71,6 @@ type TraceValSpine<K,V,T,R> = Spine<K, V, T, R, Rc<OrdValBatch<K,V,T,R>>>;
 type TraceValHandle<K,V,T,R> = TraceAgent<K, V, T, R, TraceValSpine<K,V,T,R>>;
 type TraceKeySpine<K,T,R> = Spine<K, (), T, R, Rc<OrdKeyBatch<K,T,R>>>;
 type TraceKeyHandle<K,T,R> = TraceAgent<K, (), T, R, TraceKeySpine<K,T,R>>;
-
 
 pub struct CollectionIndex<K, V, T>
 where
@@ -178,7 +190,7 @@ where
                 batches.swap(&mut buffer2);
                 for batch in buffer2.drain(..) {
                     if let Some(ref mut trace) = counts_trace {
-                        trace.distinguish_since(batch.item.upper());
+                        trace.distinguish_since(batch.upper());
                     }
                 }
             });
@@ -272,7 +284,7 @@ where
                 batches.swap(&mut buffer2);
                 for batch in buffer2.drain(..) {
                     if let Some(ref mut trace) = propose_trace {
-                        trace.distinguish_since(batch.item.upper());
+                        trace.distinguish_since(batch.upper());
                     }
                 }
             });
@@ -367,7 +379,7 @@ where
                 batches.swap(&mut buffer2);
                 for batch in buffer2.drain(..) {
                     if let Some(ref mut trace) = validate_trace {
-                        trace.distinguish_since(batch.item.upper());
+                        trace.distinguish_since(batch.upper());
                     }
                 }
             });
