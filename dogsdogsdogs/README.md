@@ -1,115 +1,204 @@
-## Worst-case optimal joins in differential dataflow
+## Worst-case optimal joins and delta queries in differential dataflow
 
-This project is an implementation of the worst-case optimal join dataflow framework presented in the [`dataflow-join`](https://github.com/frankmcsherry/dataflow-join) project, in the framework of [differential dataflow](https://github.com/frankmcsherry/differential-dataflow).
+This project collects differential dataflow operators sufficient to implement memory-efficient delta queries, and worst-case optimal delta queries in the framework of [differential dataflow](https://github.com/frankmcsherry/differential-dataflow). Many of the ideas are a transportation of work done in the [`dataflow-join`](https://github.com/frankmcsherry/dataflow-join) project.
 
 ---
 
-Recent work on so called "worst-case optimal" join computation demonstrated new ways to compute relational joins (and more), based on extending candidate tuples by entire attributes at a time (rather than "relation at a time" as in traditional binary joins). These algorithms can be substantially more efficient than existing algorithms, but the work is still relatively young and not all implementations are well understood.
+Imagine we have a collection of `(src, dst)` pairs describing a graph, and we want to determine the set of triangles:
 
-Our goal in this project is to transport [an existing dataflow implementation](https://github.com/frankmcsherry/dataflow-join) with support for incrementally changing input relations, to the framework of [differential dataflow](https://github.com/frankmcsherry/differential-dataflow) in which collections can change in more general ways, suitable for updating iterative computation.
+    triangles(a,b,c) := edge(a,b), edge(b,c), edge(a,c)
 
-### An outline
+Differential dataflow provides a binary `join` operator that matches records in its two inputs with the same key, and produces the pairs of values. While this operator serves its role well, its naive implementation needs to maintain each of its inputs in indexed form to respond quickly to changes on either input.
 
-A recent approach to worst-case optimal join computation operates by first ordering all attributes of the involved relations, and then attribute-by-attribute computing the relational join of all relations restricted to these attributes, in a special way. From the tuples in the join of the relations on the first k attributes, each tuple is extended by 
-
-1. identifying the relation that would propose the fewest distinct values for the k+1st attribute,
-2. having that relation propose those few distinct values as extensions, 
-3. having other relations validate the results by intersecting with their proposals.
-
-This scheme does work proportional to the fewest distinct values extending each tuple, and can be shown (by others) to do no more work than could be required to produce the output, for adversarially arranged input relations of the same size.
-
-### A start
-
-One can naively implement this algorithm in differential dataflow, as is done in the [`examples/ngo.rs`]() example. This example just does triangles (a join `t(x,y,z) := g(x,y), g(x,z), g(y,z)`), but the approach generalizes.
-
-First, the example forms a few indices from the source relation `edges` (which is `g` just above):
+In the example above, we might write
 
 ```rust
-    // arrange the edge relation three ways.
-    let as_self = edges.arrange_by_self();
-    let forward = edges.arrange_by_key();
-    let reverse = edges.map_in_place(|x| ::std::mem::swap(&mut x.0, &mut x.1))
-                       .arrange_by_key();
-
-    // arrange the count of extensions from each source.
-    let counts = edges.map(|(src, _dst)| src)
-                      .arrange_by_self();
+edges.join(&edges)
+     .map(|(a,(b,c))| ((b,c),a))
+     .semijoin(&edges)
+     .map(|((b,c),a)| (a,b,c));
 ```
 
-These are the edge as pairs themselves, then indexed by their source, then by their destination, and then an index of the number of candidates from each source. These indices are defined so that they can be re-used as appropriate, rather than having identical copies of the same indices constructed throughout the computation.
+This produces all triples `(a,b,c)` satisfying the triangle definition above, and it will update incrementally for arbitrary changes to the `edges` collection. Unfortunately, the first input to `semijoin` has size proportional to the sum of the squares of the degrees in the graph, which can be quite large.
 
-Second, we take the input edge tuples `(src, dst)` and for each field we weight the tuple by the number of extensions that would be proposed using that field as a key:
+The database community has a few remedies for this problem, and we will be borrowing two of them.
+
+### Delta queries
+
+Starting from the triangles query above, let's treat each of the three uses of `edges` as distinct relations.
+
+    triangles(a,b,c) := edge1(a,b), edge2(b,c), edge3(a,c)
+
+We can write relational "delta queries" for how the `triangles` collection should change as a function of changes to any of the input relations.
+
+    d_tris1(a,b,c) := d_edge1(a,b), edge2(b,c), edge3(a,c)
+    d_tris2(a,b,c) := d_edge2(b,c), edge1(a,b), edge3(a,c)
+    d_tris3(a,b,c) := d_edge3(a,c), edge1(a,b), edge2(b,c)
+
+All I've done here is written three rules by taking each relation in turn, replacing it by a version with a `d_` prefix, and then listing the remaining relations. Each of these queries tell us how to respond to a change to the associated relation.
+
+Delta queries are appealing because they can be implemented in a stateless manner, maintaining only the indexed representations of `edges` (probably indexed both by source and by destination). They do *not* need to maintain intermediate collections, as differential dataflow does by default.
+
+There is an important subtle detail, which the above example demonstrates: if there are simultaneous updates to many relations, we can't simply apply all delta queries at the same time. One change to `edges` could cause the three rules above to derive the same change multiple times. Instead, we need to execute the delta queries "in order", perhaps the order written above. Of course, we don't plan on actually doing that, but we can use timely dataflow's timestamps to impose a logical if not physical order on the execution.
+
+In [examples/delta_query.rs](https://github.com/frankmcsherry/differential-dataflow/blob/master/dogsdogsdogs/examples/delta_query.rs#L52-L79) we can write these three rules as so:
 
 ```rust
-    // extract ((src, dst), idx) tuples with weights equal to the number of extensions.
-    let cand_count1 = forward.join_core(&counts, |&src, &dst, &()| Some(((src, dst), 1)));
-    let cand_count2 = reverse.join_core(&counts, |&dst, &src, &()| Some(((src, dst), 2)));
+// d_tris1(a,b,c) := d_edge1(a,b), edge2(b,c), edge3(a,c)
+let d_tris1 = forward
+    .propose_using(&mut neu_forward.extend_using(|(_a,b)| *b))
+    .validate_using(&mut neu_forward.extend_using(|(a,_b)| *a))
+    .map(|((a,b),c)| (a,b,c));
+
+// d_tris2(a,b,c) := d_edge2(b,c), edge1(a,b), edge3(a,c)
+let d_tris2 = forward
+    .propose_using(&mut alt_reverse.extend_using(|(b,_c)| *b))
+    .validate_using(&mut neu_reverse.extend_using(|(_b,c)| *c))
+    .map(|((b,c),a)| (a,b,c));
+
+// d_tris3(a,b,c) := d_edge3(a,c), edge1(a,b), edge2(b,c)
+let d_tris3 = forward
+    .propose_using(&mut alt_forward.extend_using(|(a,_c)| *a))
+    .validate_using(&mut alt_reverse.extend_using(|(_a,c)| *c))
+    .map(|((a,c),b)| (a,b,c));
 ```
 
-Notice that we also tag the records with an identifier that distinguishes the two weightings, so that we can decide which of the two relations would propose fewer extensions.
+where the `alt` and `neu` prefixes refer to whether the data are old or new (old data can't "see" new data until the next timestamp), and the `forward` and `reverse` suffixes are the direction the data are indexed.
 
-Third, we determine for each tuple the relation with smallest weight, and therefore fewest distinct values for extension:
+There is clearly a lot of code jargon going on here, but this all works and maintains a fixed memory footprint, proportional to the number of edges rather than the number of intermediate triangle candidates.
+
+### Worst-case optimal joins
+
+If you don't know what these are you are in for a treat.
+
+Worst-case optimal joins are a new way of join processing that operate attribute-at-a-time, rather than relation-at-a-time, and which take time proportional to the worst-case possible result size set. For something like triangle computation, this is at most the number of edges raised to the power 1.5, which is better than the power 2, which is what a traditional relational engine would guarantee.
+
+There are several worst-case optimal join algorithms, but my favorite comes from [the dataflow-join repository](https://github.com/frankmcsherry/dataflow-join). The gist here is that whenever you have a tuple like `(a,b)` to which you are thinking about adding a new attribute `c`, best to take stock of the possible ways that the new attribute `c` might be added. For example, in
+
+    d_tris1(a,b,c) := d_edge1(a,b), edge2(b,c), edge3(a,c)
+
+the new `c` needs to be present in both `edge2` and in `edge3`. However, for a specific `(a,b)` pair, either of these two relations might propose more or fewer candidate `c` values. What if you were smart and first asked each relation to report the number of distinct values they would propose? Then you could have that relation propose the values, and the other relations validate these choices in time proportional to the number of proposals.
+
+You can perform this in native differential dataflow over in the [examples/ngo.rs](https://github.com/frankmcsherry/differential-dataflow/blob/master/examples/ngo.rs) example. While cool, this version has the defect that the differential implementation again maintains intermediate state. This state can be much smaller than the naive joins, but it can also be much larger than the input relations.
+
+Of course, we can combine the delta queries above with the worst-case optimal join processing, using all of the sweet loot in this project here. In [examples/delta_query_wcoj.rs](https://github.com/frankmcsherry/differential-dataflow/blob/master/dogsdogsdogs/examples/delta_query_wcoj.rs#L61-L87) we write the same delta queries, but implemented using worst-case optimal joins.
 
 ```rust
-    // determine for each (src, dst) tuple which index would propose the fewest extensions.
-    let winners = cand_count1.concat(&cand_count2)
-                             .group(|_srcdst, counts, output| {
-                                 let mut min_cnt = isize::max_value();
-                                 let mut min_idx = usize::max_value();
-                                 for &(&idx, cnt) in counts.iter() {
-                                     if min_cnt > cnt {
-                                         min_idx = idx;
-                                         min_cnt = cnt;
-                                     }
-                                 }
-                                 output.push((min_idx, 1));
-                             });
+// d_tris1(a,b,c) := d_edge1(a,b), edge2(b,c), edge3(a,c)
+let d_tris1 = forward
+    .extend(&mut [
+        &mut neu_forward.extend_using(|(_a,b)| *b),
+        &mut neu_forward.extend_using(|(a,_b)| *a),
+    ])
+    .map(|((a,b),c)| (a,b,c));
+
+// d_tris2(a,b,c) := d_edge2(b,c), edge1(a,b), edge3(a,c)
+let d_tris2 = forward
+    .extend(&mut [
+        &mut alt_reverse.extend_using(|(b,_c)| *b),
+        &mut neu_reverse.extend_using(|(_b,c)| *c),
+    ])
+    .map(|((b,c),a)| (a,b,c));
+
+// d_tris3(a,b,c) := d_edge3(a,c), edge1(a,b), edge2(b,c)
+let d_tris3 = forward
+    .extend(&mut [
+        &mut alt_forward.extend_using(|(a,_c)| *a),
+        &mut alt_reverse.extend_using(|(_a,c)| *c),
+    ])
+    .map(|((a,c),b)| (a,b,c));
 ```
 
-This is no more complicated than concatenating all of the proposals, and then using `group` to determine which of values `1` and `2` have the least weight.
+### Some numbers
 
-Finally, for each relation (here, each of `1` and `2`) we select out those elements for which the relation had the smallest weight, propose the extensions using `join`, and then filter the extensions by the other relations with a semijoin. Here is the fragment for the forward index, identified by `1`:
+Let's take these two implementations for a performance spin. None of these numbers are going to be nearly as exciting as for hand-rolled triangle counting implementations, sorry! However, they are fully differential, which means you could use them inside of an iterative Datalog computation, for example. Or with high refresh frequency, or distributed on multiple workers, etc. It's up to you to decide if these things are worth doing.
+
+We have a few examples, including a naive differential WCOJ (examples/ngo.rs), and the delta queries and worst-case optimal delta queries. For the moment, let's just look at the second two.
+
+If we spin up `examples/delta_query.rs` with the livejournal graph, asking it to introduce nodes (and all their edges) one at a time, we see
+
+```
+Echidnatron% cargo run --release --example delta_query -- ~/Projects/Datasets/livejournal 1
+    Finished release [optimized] target(s) in 0.07s
+     Running `target/release/examples/delta_query /Users/mcsherry/Projects/Datasets/livejournal 1`
+3.429001ms  Round 1 complete
+32.624059ms Round 2 complete
+38.686335ms Round 3 complete
+41.348212ms Round 4 complete
+44.279022ms Round 5 complete
+...
+```
+
+which looks like a great start. However, it goes really fast and quickly gets "stuck". If we wait a moment, we see
+
+```
+425.859742ms    Round 85 complete
+426.276961ms    Round 86 complete
+426.550825ms    Round 87 complete
+26.317746169s   Round 88 complete
+26.318698709s   Round 89 complete
+26.319160175s   Round 90 complete
+```
+
+which is pretty bad news.
+
+What happened here is a great example of why you want worst-case optimal joins. It turns out that node `87` has 13,127 out-going edges. That means that the third update rule in the delta query
 
 ```rust
-    // select tuples with the first relation minimizing the proposals, join, then intersect.
-    let winners1 = winners.flat_map(|((src, dst), index)| if index == 1 { Some((src, dst)) } else { None })
-                          .join_core(&forward, |&src, &dst, &ext| Some(((dst, ext), src)))
-                          .join_core(&as_self, |&(dst, ext), &src, &()| Some(((dst, ext), src)))
-                          .map(|((dst, ext), src)| (src, dst, ext));
+// d_tris3(a,b,c) := d_edge3(a,c), edge1(a,b), edge2(b,c)
+let d_tris3 = forward
+    .propose_using(&mut alt_forward.extend_using(|(a,_c)| *a))
+    .validate_using(&mut alt_reverse.extend_using(|(_a,c)| *c))
+    .map(|((a,c),b)| (a,b,c));
 ```
 
-The reverse index, identified by `2`, undergoes a similar computation using `index == 2` and `&reverse`, as well as slightly different field manipulation, and the results are concatenated together.
+takes in 13,127 changes and produces 172,318,129 proposals, being that number of changes. In this case, it was a horrible idea to ask `edge1` to propose changes to extend `d_edge3`. It would have been much better to ask `edge2` to do the proposals, especially because we are loading the graph in node order and there aren't so many reverse edges yet. Of course we don't want to bake that in as a rule, but the worst-case optimal implementation can figure this out automatically.
 
-### An improvement
+Let's see how `examples/delta_query_wcoj.rs` does:
 
-While the first approach above works, and has the "worst-case optimal" bound, it has a major limitation: it require random access to data whose size is linear in the amount of computation done, the worst-case optimal bound, rather than linear in the size of the input relations. This limits the approach to computations whose total work performed is bounded by the memory of the system it runs on.
+```
+Echidnatron% cargo run --release --example delta_query_wcoj -- ~/Projects/Datasets/livejournal 1
+    Finished release [optimized] target(s) in 0.14s
+     Running `target/release/examples/delta_query_wcoj /Users/mcsherry/Projects/Datasets/livejournal 1`
+3.649981ms  Round 1 complete
+5.279384ms  Round 2 complete
+6.196575ms  Round 3 complete
+6.990896ms  Round 4 complete
+7.662358ms  Round 5 complete
+...
+```
 
-We can improve the memory requirements to linear in the sizes of the input relations (with factors depending on the query complexity), following recent work (linked above) on dataflow implementations of the worst-case optimal join algorithms. Informally, the intuition is that we can describe independent update rules for each relation, rather than requiring a single computation that responds to updates to any of its inputs (the source of stress in the implementation above).
+Lots faster, you might have noticed. Even without the horrible behavior seen above, most of these nodes have degree in the hundreds, and the implementation is smart enough to use the reverse directions when appropriate.
 
-For example, in the triangle query `t(x,y,z) := g(x,y), g(x,z), g(y,z)` we can write independent update rules for `g(x,y)`, `g(x,z)`, and `g(y,z)`, using what are called "delta queries" in the databases community: the query that given a change to one relation determines the change to the whole query. The three delta queries are
+```
+84.9538ms   Round 85 complete
+87.320066ms Round 86 complete
+88.923623ms Round 87 complete
+144.530066ms    Round 88 complete
+145.450224ms    Round 89 complete
+146.103021ms    Round 90 complete
+...
+```
 
-    dtdxy(x,y,z) := dg(x,y), g(x,z), g(y,z)
-    dtdxz(x,y,z) := dg(x,z), g(x,y), g(y,z)
-    dtdyz(x,y,z) := dg(y,z), g(x,y), g(x,z)
+Node 87 still causes some mischief, but this has more to do with our computation ingesting those 13,127 edges and checking each of them to see what needs to be done. We still perform linear work, just not quadratic in this case.
 
-Each of these queries can be evaluated and maintained independently, importantly using join operators that only respond to changes in their `dg` inputs, and do no work for changes in the `g` inputs. As a result, the operators can be implemented to require only the maintained indices over `g`, which have size linear in the input relations, and not require any state proportional to the volume of `dg` changes they process.
+You can take the examples out for spins with bigger batching if you want higher throughput. I wouldn't recommend this for the vanilla delta query (it has problems enough) but you can do e.g.
 
-Unfortunately, for this to be correct we cannot simultaneously execute all update rules; doing so would risk either under- or double-counting updates that would show up in a second-order term. One way around this is to execute the rules "in order", so that concurrent changes are only visible for relations that have been updated. Each rule should accumulate updates using either `less_than` or `less_equal`, depending one whether the index is update after or before the rule, respectively.
+```
+Echidnatron% cargo run --release --example delta_query_wcoj -- ~/Projects/Datasets/livejournal 1000
+    Finished release [optimized] target(s) in 0.07s
+     Running `target/release/examples/delta_query_wcoj /Users/mcsherry/Projects/Datasets/livejournal 1000`
+675.443522ms    Round 1000 complete
+1.534094533s    Round 2000 complete
+2.341095966s    Round 3000 complete
+3.192567920s    Round 4000 complete
+3.952057645s    Round 5000 complete
+4.619403029s    Round 6000 complete
+5.617067697s    Round 7000 complete
+6.260885764s    Round 8000 complete
+7.649967738s    Round 9000 complete
+8.279152976s    Round 10000 complete
+...
+```
 
-### A Challenge
-
-This is the fundamental issues with differential dataflow: while it understands and preserves `less_equal` comparisons among times, it does not understand `less_than`, and may conflate two distinct times that are nonetheless equivalent from the `less_equal` point of view. This is currently fundamental to how differential dataflow operates, and that lattice join and meet operations work with respect to `less_equal` rather than `less_than`.
-
-Our approach will be to augment the ambient timestamps `T` with an integer, corresponding to a relation index, and using the *lexicographic* order over the pair `(T, usize)`: 
-
-    (a1, b1) <= (a2, b2)   when   (a1 < a2) or ((a1 == a2) and (b1 <= b2))
-
-this ordering allows two updates to be naturally ordered by their `T` when distinct, but when equal we order times by the associated relation index. This allows us to "pretend" to perform updates in the order of relation index, to avoid under- and double-counting updates, without actually maintaining multiple independent indices.
-
-In actual fact, it seems sufficient to use a lexicographic pair `(T, bool)`, and for the data to all be presented with timestamp `(T, true)`. This allows operators to collect either times `T` less than or less equal, by using respectively `(T, false)` and `(T, true)` as the query times. If the `T` themselves were totally ordered, we might simply try to steal a bit or insist the `T` be even numbered, but in the context of partially ordered `T` the additional lexicographic product seems necessary.
-
-### Design
-
-The prior dataflow implementation uses a single index to support the counting, proposing, and validating of extensions. Differential dataflow's multi-version `Trace` implementations make it hard to get random access to the same information (specifically, counts and fast look-ups for intersection).
-
-Instead, we will go with a multiple types of indices for each relation. These indices will almost surely have overlap, and ideally we will maintain as few distinct indices as possible.
+This is showing us that we can perform over one thousand distinct updates each second (note: not a batch of one thousand updates), though this number will probably drop off as we let it run (the graph fills out). There is still plenty to improve and work on, and at the moment this is more about unique functionality rather than raw performance.
