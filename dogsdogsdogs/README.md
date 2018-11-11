@@ -138,6 +138,7 @@ which looks like a great start. However, it goes really fast and quickly gets "s
 26.317746169s   Round 88 complete
 26.318698709s   Round 89 complete
 26.319160175s   Round 90 complete
+...
 ```
 
 which is pretty bad news.

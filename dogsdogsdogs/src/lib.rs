@@ -27,7 +27,7 @@ use differential_dataflow::trace::{Cursor, TraceReader, BatchReader};
 use differential_dataflow::trace::implementations::spine_fueled::Spine;
 use differential_dataflow::trace::implementations::ord::{OrdValBatch, OrdKeyBatch};
 
-pub mod lexicographic;
+pub mod altneu;
 
 /// A type capable of extending a stream of prefixes.
 ///

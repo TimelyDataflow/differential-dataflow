@@ -9,7 +9,7 @@ use timely::dataflow::operators::probe::Handle;
 use differential_dataflow::input::Input;
 use graph_map::GraphMMap;
 
-use dogsdogsdogs::{CollectionIndex, lexicographic::AltNeu};
+use dogsdogsdogs::{CollectionIndex, altneu::AltNeu};
 use dogsdogsdogs::{ProposeExtensionMethod};
 
 fn main() {
