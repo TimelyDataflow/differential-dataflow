@@ -142,7 +142,7 @@ which looks like a great start. However, it goes really fast and quickly gets "s
 
 which is pretty bad news.
 
-What happened here is a great example of why you want worst-case optimal joins. It turns out that node `87` has 13,127 out-going edges. That means that the third update rule in the delta query
+What happened here is a great example of why you want worst-case optimal joins. It turns out that node 87 has 13,127 out-going edges. That means that the third update rule in the delta query
 
 ```rust
 // d_tris3(a,b,c) := d_edge3(a,c), edge1(a,b), edge2(b,c)
@@ -152,7 +152,7 @@ let d_tris3 = forward
     .map(|((a,c),b)| (a,b,c));
 ```
 
-takes in 13,127 changes and produces 172,318,129 proposals, being that number of changes. In this case, it was a horrible idea to ask `edge1` to propose changes to extend `d_edge3`. It would have been much better to ask `edge2` to do the proposals, especially because we are loading the graph in node order and there aren't so many reverse edges yet. Of course we don't want to bake that in as a rule, but the worst-case optimal implementation can figure this out automatically.
+takes in 13,127 changes and produces 172,318,129 proposals, being that number of changes *squared*. In this case, it was a horrible idea to ask `edge1` to propose changes to extend `d_edge3`. It would have been much better to ask `edge2` to do the proposals, especially because we are loading the graph in node order and there aren't so many reverse edges yet. Of course we don't want to bake that in as a rule, but the worst-case optimal implementation can figure this out automatically.
 
 Let's see how `examples/delta_query_wcoj.rs` does:
 
