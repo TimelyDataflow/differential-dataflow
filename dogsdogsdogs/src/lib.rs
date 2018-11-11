@@ -14,6 +14,8 @@ use timely::dataflow::Scope;
 use timely::dataflow::channels::pact::{Pipeline, Exchange};
 use timely::dataflow::operators::Operator;
 use timely::progress::Timestamp;
+use timely::dataflow::operators::Partition;
+use timely::dataflow::operators::Concatenate;
 
 use timely_sort::Unsigned;
 
@@ -46,13 +48,41 @@ pub trait PrefixExtender<G: Scope> {
     fn validate(&mut self, &Collection<G, (Self::Prefix, Self::Extension)>) -> Collection<G, (Self::Prefix, Self::Extension)>;
 }
 
-pub trait ProposeExtensionMethod<G: Scope, P> {
+pub trait ProposeExtensionMethod<G: Scope, P: Data+Ord> {
     fn propose_using<PE: PrefixExtender<G, Prefix=P>>(&self, extender: &mut PE) -> Collection<G, (P, PE::Extension)>;
+    fn extend<E: Data+Ord>(&self, extenders: &mut [&mut PrefixExtender<G,Prefix=P,Extension=E>]) -> Collection<G, (P, E)>;
 }
 
-impl<G: Scope, P> ProposeExtensionMethod<G, P> for Collection<G, P> {
+impl<G: Scope, P: Data+Ord> ProposeExtensionMethod<G, P> for Collection<G, P> {
     fn propose_using<PE: PrefixExtender<G, Prefix=P>>(&self, extender: &mut PE) -> Collection<G, (P, PE::Extension)> {
         extender.propose(self)
+    }
+    fn extend<E: Data+Ord>(&self, extenders: &mut [&mut PrefixExtender<G,Prefix=P,Extension=E>]) -> Collection<G, (P, E)>
+    {
+
+        if extenders.len() == 1 {
+            extenders[0].propose(&self.clone())
+        }
+        else {
+            let mut counts = self.map(|p| (p, 1 << 31, 0));
+            for (index,extender) in extenders.iter_mut().enumerate() {
+                counts = extender.count(&counts, index);
+            }
+
+            let parts = counts.inner.partition(extenders.len() as u64, |((p, _, i),t,d)| (i as u64, (p,t,d)));
+
+            let mut results = Vec::new();
+            for (index, nominations) in parts.into_iter().enumerate() {
+                let mut extensions = extenders[index].propose(&nominations.as_collection());
+                for other in (0..extenders.len()).filter(|&x| x != index) {
+                    extensions = extenders[other].validate(&extensions);
+                }
+
+                results.push(extensions.inner);    // save extensions
+            }
+
+            self.scope().concatenate(results).as_collection()
+        }
     }
 }
 

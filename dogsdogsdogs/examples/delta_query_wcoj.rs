@@ -10,7 +10,7 @@ use differential_dataflow::input::Input;
 use graph_map::GraphMMap;
 
 use dogsdogsdogs::{CollectionIndex, lexicographic::AltNeu};
-use dogsdogsdogs::{ProposeExtensionMethod, ValidateExtensionMethod};
+use dogsdogsdogs::{ProposeExtensionMethod};
 
 fn main() {
 
@@ -59,21 +59,29 @@ fn main() {
                 // bound variable occurs in the first or second position.
 
                 //   dQ/dE1 := dE1(a,b), E2(b,c), E3(a,c)
-                let changes1 = forward
-                    .propose_using(&mut neu_forward.extend_using(|(_a,b)| *b))
-                    .validate_using(&mut neu_forward.extend_using(|(a,_b)| *a))
+                let changes1 =
+                forward
+                    .extend(&mut [
+                        &mut neu_forward.extend_using(|(_a,b)| *b),
+                        &mut neu_forward.extend_using(|(a,_b)| *a),
+                    ])
                     .map(|((a,b),c)| (a,b,c));
 
                 //   dQ/dE2 := dE2(b,c), E1(a,b), E3(a,c)
-                let changes2 = forward
-                    .propose_using(&mut alt_reverse.extend_using(|(b,_c)| *b))
-                    .validate_using(&mut neu_reverse.extend_using(|(_b,c)| *c))
+                let changes2 =
+                forward
+                    .extend(&mut [
+                        &mut alt_reverse.extend_using(|(b,_c)| *b),
+                        &mut neu_reverse.extend_using(|(_b,c)| *c),
+                    ])
                     .map(|((b,c),a)| (a,b,c));
 
                 //   dQ/dE3 := dE3(a,c), E1(a,b), E2(b,c)
                 let changes3 = forward
-                    .propose_using(&mut alt_forward.extend_using(|(a,_c)| *a))
-                    .validate_using(&mut alt_reverse.extend_using(|(_a,c)| *c))
+                    .extend(&mut [
+                        &mut alt_forward.extend_using(|(a,_c)| *a),
+                        &mut alt_reverse.extend_using(|(_a,c)| *c),
+                    ])
                     .map(|((a,c),b)| (a,b,c));
 
                 changes1.concat(&changes2).concat(&changes3).leave()
