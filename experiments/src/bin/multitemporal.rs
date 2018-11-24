@@ -54,10 +54,10 @@ fn main() {
                     .distinct()
             })
             .consolidate()
-            .inspect(|x| println!("edge: {:?}", x))
+            // .inspect(|x| println!("edge: {:?}", x))
             .map(|_| ())
             .consolidate()
-            // .inspect(|x| println!("{:?}\tchanges: {:?}", x.1, x.2))
+            .inspect(|x| println!("{:?}\tchanges: {:?}", x.1, x.2))
             .probe_with(&mut probe);
 
             (root_input, root_cap, edge_input, edge_cap)
@@ -116,6 +116,8 @@ fn main() {
         }
 
         // Caps = { (1,0) }
+        let edge_cap0 = edge_cap;
+        println!("{:?}", edge_cap0);
         edge_cap = edge_cap_next;
 
         edge_input
@@ -126,7 +128,7 @@ fn main() {
 
         // Caps = { (2,0) }
         edge_cap.downgrade(&Pair::new(2, 0));
-        while probe.less_than(&Pair::new(1, rounds+1)) {
+        while probe.less_equal(&Pair::new(1, rounds-1)) {
             worker.step();
         }
 
@@ -138,7 +140,7 @@ fn main() {
 
         // Caps = { (3,0) }
         edge_cap.downgrade(&Pair::new(3, 0));
-        while probe.less_than(&Pair::new(2, rounds+1)) {
+        while probe.less_equal(&Pair::new(2, rounds-1)) {
             worker.step();
         }
 
@@ -150,10 +152,15 @@ fn main() {
 
         // Caps = { (4,0) }
         edge_cap.downgrade(&Pair::new(4, 0));
-        while probe.less_than(&Pair::new(3, rounds+1)) {
+        while probe.less_equal(&Pair::new(3, rounds-1)) {
             worker.step();
         }
 
+        edge_input
+            .session(edge_cap0)
+            .give_iterator((0 .. worker_batch).map(|_| {
+                ((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), Pair::new(0, 10), 1)
+            }));
 
     }).unwrap();
 }
@@ -166,7 +173,7 @@ fn main() {
 mod pair {
 
     /// A pair of timestamps, partially ordered by the product order.
-    #[derive(Debug, Hash, Default, Clone, Eq, PartialEq, Ord, PartialOrd, Abomonation)]
+    #[derive(Hash, Default, Clone, Eq, PartialEq, Ord, PartialOrd, Abomonation)]
     pub struct Pair<S, T> {
         pub first: S,
         pub second: T,
@@ -189,9 +196,9 @@ mod pair {
 
     use timely::progress::timestamp::Refines;
     impl<S: Timestamp, T: Timestamp> Refines<()> for Pair<S, T> {
-        fn to_inner(outer: ()) -> Self { Default::default() }
+        fn to_inner(_outer: ()) -> Self { Default::default() }
         fn to_outer(self) -> () { () }
-        fn summarize(summary: <Self>::Summary) -> () { () }
+        fn summarize(_summary: <Self>::Summary) -> () { () }
     }
 
     // Implement timely dataflow's `PathSummary` trait.
@@ -252,4 +259,14 @@ mod pair {
             }
         }
     }
+
+    use std::fmt::{Formatter, Error, Debug};
+
+    /// Debug implementation to avoid seeing fully qualified path names.
+    impl<TOuter: Debug, TInner: Debug> Debug for Pair<TOuter, TInner> {
+    fn fmt(&self, f: &mut Formatter) -> Result<(), Error> {
+        f.write_str(&format!("({:?}, {:?})", self.first, self.second))
+    }
+}
+
 }
