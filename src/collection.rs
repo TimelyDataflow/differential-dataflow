@@ -96,7 +96,6 @@ impl<G: Scope, D: Data, R: Diff> Collection<G, D, R> where G::Timestamp: Data {
     /// extern crate differential_dataflow;
     ///
     /// use differential_dataflow::input::Input;
-    /// use differential_dataflow::operators::*;
     ///
     /// fn main() {
     ///     ::timely::example(|scope| {
@@ -126,7 +125,6 @@ impl<G: Scope, D: Data, R: Diff> Collection<G, D, R> where G::Timestamp: Data {
     /// extern crate differential_dataflow;
     ///
     /// use differential_dataflow::input::Input;
-    /// use differential_dataflow::operators::*;
     ///
     /// fn main() {
     ///     ::timely::example(|scope| {
@@ -157,7 +155,6 @@ impl<G: Scope, D: Data, R: Diff> Collection<G, D, R> where G::Timestamp: Data {
     /// extern crate differential_dataflow;
     ///
     /// use differential_dataflow::input::Input;
-    /// use differential_dataflow::operators::*;
     ///
     /// fn main() {
     ///     ::timely::example(|scope| {
@@ -187,7 +184,6 @@ impl<G: Scope, D: Data, R: Diff> Collection<G, D, R> where G::Timestamp: Data {
     /// extern crate differential_dataflow;
     ///
     /// use differential_dataflow::input::Input;
-    /// use differential_dataflow::operators::*;
     ///
     /// fn main() {
     ///     ::timely::example(|scope| {
@@ -217,7 +213,6 @@ impl<G: Scope, D: Data, R: Diff> Collection<G, D, R> where G::Timestamp: Data {
     /// extern crate differential_dataflow;
     ///
     /// use differential_dataflow::input::Input;
-    /// use differential_dataflow::operators::*;
     ///
     /// fn main() {
     ///     ::timely::example(|scope| {
@@ -249,7 +244,6 @@ impl<G: Scope, D: Data, R: Diff> Collection<G, D, R> where G::Timestamp: Data {
     /// extern crate differential_dataflow;
     ///
     /// use differential_dataflow::input::Input;
-    /// use differential_dataflow::operators::*;
     ///
     /// fn main() {
     ///     ::timely::example(|scope| {
@@ -285,7 +279,6 @@ impl<G: Scope, D: Data, R: Diff> Collection<G, D, R> where G::Timestamp: Data {
     ///
     /// use timely::dataflow::Scope;
     /// use differential_dataflow::input::Input;
-    /// use differential_dataflow::operators::*;
     ///
     /// fn main() {
     ///     ::timely::example(|scope| {
@@ -323,7 +316,6 @@ impl<G: Scope, D: Data, R: Diff> Collection<G, D, R> where G::Timestamp: Data {
     ///
     /// use timely::dataflow::Scope;
     /// use differential_dataflow::input::Input;
-    /// use differential_dataflow::operators::*;
     ///
     /// fn main() {
     ///     ::timely::example(|scope| {
@@ -393,7 +385,6 @@ impl<G: Scope, D: Data, R: Diff> Collection<G, D, R> where G::Timestamp: Data {
     /// extern crate differential_dataflow;
     ///
     /// use differential_dataflow::input::Input;
-    /// use differential_dataflow::operators::*;
     ///
     /// fn main() {
     ///     ::timely::example(|scope| {
@@ -423,7 +414,6 @@ impl<G: Scope, D: Data, R: Diff> Collection<G, D, R> where G::Timestamp: Data {
     /// extern crate differential_dataflow;
     ///
     /// use differential_dataflow::input::Input;
-    /// use differential_dataflow::operators::*;
     ///
     /// fn main() {
     ///     ::timely::example(|scope| {
@@ -474,7 +464,6 @@ impl<G: Scope, D: Data, R: Diff> Collection<G, D, R> where G::Timestamp: Data {
     /// extern crate differential_dataflow;
     ///
     /// use differential_dataflow::input::Input;
-    /// use differential_dataflow::operators::*;
     ///
     /// fn main() {
     ///     ::timely::example(|scope| {
@@ -512,7 +501,6 @@ impl<G: Scope, D: Data, R: Diff> Collection<G, D, R> where G::Timestamp: Data {
     /// extern crate differential_dataflow;
     ///
     /// use differential_dataflow::input::Input;
-    /// use differential_dataflow::operators::*;
     ///
     /// fn main() {
     ///     ::timely::example(|scope| {
@@ -555,7 +543,6 @@ where
     ///
     /// use timely::dataflow::Scope;
     /// use differential_dataflow::input::Input;
-    /// use differential_dataflow::operators::*;
     ///
     /// fn main() {
     ///     ::timely::example(|scope| {

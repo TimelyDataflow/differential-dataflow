@@ -43,6 +43,7 @@ use trace::wrappers::enter::{TraceEnter, BatchEnter};
 use trace::wrappers::enter_at::TraceEnter as TraceEnterAt;
 use trace::wrappers::enter_at::BatchEnter as BatchEnterAt;
 use trace::wrappers::rc::TraceBox;
+use trace::wrappers::filter::{TraceFilter, BatchFilter};
 
 /// A trace writer capability.
 pub struct TraceWriter<K, V, T, R, Tr>
@@ -411,6 +412,53 @@ impl<G: Scope, K, V, R, T> Arranged<G, K, V, R, T> where G::Timestamp: Lattice+O
         }
     }
 
+    /// Filters an arranged collection.
+    ///
+    /// This method produces a new arrangement backed by the same shared
+    /// arrangement as `self`, paired with user-specified logic that can
+    /// filter by key and value. The resulting collection is restricted
+    /// to the keys and values that return true under the user predicate.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// extern crate timely;
+    /// extern crate differential_dataflow;
+    ///
+    /// use differential_dataflow::input::Input;
+    /// use differential_dataflow::operators::arrange::ArrangeByKey;
+    ///
+    /// fn main() {
+    ///     ::timely::example(|scope| {
+    ///
+    ///         let arranged =
+    ///         scope.new_collection_from(0 .. 10).1
+    ///              .map(|x| (x, x+1))
+    ///              .arrange_by_key();
+    ///
+    ///         arranged
+    ///             .filter(|k,v| k == v)
+    ///             .as_collection(|k,v| (*k,*v))
+    ///             .assert_empty();
+    ///     });
+    /// }
+    /// ```
+    pub fn filter<F>(&self, logic: F)
+        -> Arranged<G, K, V, R, TraceFilter<K, V, G::Timestamp, R, T, F>>
+        where
+            T::Batch: Clone,
+            K: 'static,
+            V: 'static,
+            G::Timestamp: Clone+Default+'static,
+            R: 'static,
+            F: Fn(&K, &V)->bool+'static,
+    {
+        let logic = Rc::new(logic);
+        Arranged {
+            trace: TraceFilter::make_from(self.trace.clone(), logic.clone()),
+            stream: self.stream.map(move |bw| BatchFilter::make_from(bw, logic.clone())),
+        }
+    }
     /// Flattens the stream into a `Collection`.
     ///
     /// The underlying `Stream<G, BatchWrapper<T::Batch>>` is a much more efficient way to access the data,
