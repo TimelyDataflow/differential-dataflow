@@ -277,13 +277,14 @@ where T: Lattice+Ord+Clone+'static, Tr: TraceReader<K,V,T,R> {
 
                     // if data are associated, send em!
                     if let Some((time, batch)) = sent {
-                        if let Some(cap) = capabilities.iter().find(|c| c.time().less_equal(&time)) {
-                            let delayed = cap.delayed(&time);
-                            output.session(&delayed).give(batch);
-                        }
-                        else {
-                            panic!("failed to find capability for {:?} in {:?}", time, capabilities);
-                        }
+                        let delayed =
+                        capabilities
+                            .iter()
+                            .find(|c| c.time().less_equal(&time))
+                            .expect("failed to find capability")
+                            .delayed(&time);
+
+                        output.session(&delayed).give(batch);
                     }
 
                     // advance capabilities to look like `frontier`.

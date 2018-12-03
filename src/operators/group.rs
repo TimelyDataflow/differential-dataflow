@@ -60,8 +60,14 @@ pub trait Group<G: Scope, K: Data, V: Data, R: Diff> where G::Timestamp: Lattice
     where L: Fn(&K, &[(&V, R)], &mut Vec<(V2, R2)>)+'static;
 }
 
-impl<G: Scope, K: Data+Hashable, V: Data, R: Diff> Group<G, K, V, R> for Collection<G, (K, V), R>
-    where G::Timestamp: Lattice+Ord, <K as Hashable>::Output: Data {
+impl<G, K, V, R> Group<G, K, V, R> for Collection<G, (K, V), R>
+    where
+        G: Scope,
+        G::Timestamp: Lattice+Ord,
+        K: Data+Hashable,
+        V: Data,
+        R: Diff,
+ {
     fn group<L, V2: Data, R2: Diff>(&self, logic: L) -> Collection<G, (K, V2), R2>
         where L: Fn(&K, &[(&V, R)], &mut Vec<(V2, R2)>)+'static {
         self.arrange_by_key()
