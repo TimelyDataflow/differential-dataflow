@@ -18,7 +18,6 @@ indexmap = "1.0.1"
 rand="0.4"
 byteorder="1"
 itertools="^0.7"
-graph_map = { git = "https://github.com/frankmcsherry/graph-map.git" }
 serde_json = "1.0"
 
 [dependencies]
@@ -27,9 +26,9 @@ serde_derive = "1.0"
 abomonation = "0.7"
 abomonation_derive = "0.3"
 timely_sort="0.1.6"
-#timely = "0.7"
-timely = { git = "https://github.com/frankmcsherry/timely-dataflow" }
+timely = "0.8"
 fnv="1.0.2"
+graph_map = "0.1"
 
 [profile.release]
 opt-level = 3
