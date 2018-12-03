@@ -196,7 +196,7 @@ fn test_import_stalled_dataflow() {
 
         assert!(!probe2.less_than(input.time()));
 
-    });
+    }).expect("Timely computation failed");
 }
 
 #[ignore]
