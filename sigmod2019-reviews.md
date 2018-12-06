@@ -17,13 +17,17 @@
 6. **List 3 or more strong points, labelled S1, S2, S3, etc.**
 
     S1: A general framework and implementation for large scale data analytics that subsumes relational, stream and iterative processing pipelines.
+
     S2: The design based on differential data flows includes novel abstractions like the arrange operator.
+
     S3: The system outperforms the best of breed systems for relational, streaming and iterative tasks.
 
 7. **List 3 or more weak points, labelled W1, W2, W3, etc.**
 
     W1: The paper needs to be better written.
+
     W2: It is not clear how the implementation of the system conforms to the principles laid out in section 3.3
+
     W3: It is not clear what are all the ways arrangements are used, and which operators use arrangements.
 
 8. **Detailed evaluation. Number the paragraphs (D1, D2, D3, ...)**
@@ -57,13 +61,17 @@
 6. **List 3 or more strong points, labelled S1, S2, S3, etc.**
 
     S1. The implementation is modular
+
     S2. The authors compare against specialised systems
+
     S3. K-Pg can be used in diverse workflows
 
 7. **List 3 or more weak points, labelled W1, W2, W3, etc.**
 
     W1. The paper is difficult to follow.
+
     W2. The plots are not easy to read.
+
     W3. Latency plots are often omitted.
 
 8. **Detailed evaluation. Number the paragraphs (D1, D2, D3, ...)**
