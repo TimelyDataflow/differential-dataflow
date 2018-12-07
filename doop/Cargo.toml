@@ -5,5 +5,5 @@ authors = ["Frank McSherry <fmcsherry@me.com>"]
 
 [dependencies]
 indexmap = "1.0.1"
-timely = { git = "https://github.com/frankmcsherry/timely-dataflow" }
+timely = "0.8"
 differential-dataflow = { path = "../" }
