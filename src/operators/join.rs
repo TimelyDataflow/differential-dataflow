@@ -110,8 +110,15 @@ pub trait Join<G: Scope, K: Data, V: Data, R: Diff> {
     /// ```
     fn semijoin<R2>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), <R as Mul<R2>>::Output>
     where R2: Diff, R: Mul<R2>, <R as Mul<R2>>::Output: Diff;
-    /// Matches pairs `(key, val)` and `key` based on `key`, discarding values
-    /// in the first collection if their key is present in the second.
+    /// Subtracts the semijoin with `other` from `self`.
+    ///
+    /// In the case that `other` has multiplicities zero or one this results
+    /// in a relational antijoin, in which we discard input records whose key
+    /// is present in `other`. If the multiplicities could be other than zero
+    /// or one, the semantic interpretation of this operator is less clear.
+    ///
+    /// In almost all cases, you should ensure that `other` has multiplicities
+    /// that are zero or one, perhaps by using the `distinct` operator.
     ///
     /// # Examples
     ///
