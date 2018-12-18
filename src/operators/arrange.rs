@@ -265,7 +265,7 @@ where T: Lattice+Ord+Clone+'static, Tr: TraceReader<K,V,T,R> {
 
         let queue = self.new_listener();
 
-        let collection = source(scope, "ArrangedSource", move |capability| {
+        let collection = source(scope, "ArrangedSource", move |capability, _info| {
 
             // capabilities the source maintains.
             let mut capabilities = vec![capability];

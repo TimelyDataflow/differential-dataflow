@@ -76,8 +76,9 @@ pub trait Iterate<G: Scope, D: Data, R: Diff> {
     /// }
     /// ```
     fn iterate<F>(&self, logic: F) -> Collection<G, D, R>
-        where G::Timestamp: Lattice,
-              for<'a> F: FnOnce(&Collection<Iterative<'a, G, u64>, D, R>)->Collection<Iterative<'a, G, u64>, D, R>;
+        where
+            G::Timestamp: Lattice,
+            for<'a> F: FnOnce(&Collection<Iterative<'a, G, u64>, D, R>)->Collection<Iterative<'a, G, u64>, D, R>;
 }
 
 impl<G: Scope, D: Ord+Data+Debug, R: Diff> Iterate<G, D, R> for Collection<G, D, R> {
@@ -140,7 +141,7 @@ impl<G: Scope, D: Ord+Data+Debug, R: Diff> Iterate<G, D, R> for Collection<G, D,
 pub struct Variable<G: Scope, D: Data, R: Diff>
 where G::Timestamp: Lattice {
     collection: Collection<G, D, R>,
-    feedback: Handle<G::Timestamp, (D, G::Timestamp, R)>,
+    feedback: Handle<G, (D, G::Timestamp, R)>,
     source: Collection<G, D, R>,
     step: <G::Timestamp as Timestamp>::Summary,
 }

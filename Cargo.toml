@@ -26,7 +26,9 @@ serde_derive = "1.0"
 abomonation = "0.7"
 abomonation_derive = "0.3"
 timely_sort="0.1.6"
-timely = "0.8"
+#timely = "0.8"
+#timely = { git = "https://github.com/frankmcsherry/timely-dataflow", branch = "operate_rework" }
+timely = { path = "../timely-dataflow/" }
 fnv="1.0.2"
 graph_map = "0.1"
 
