@@ -17,7 +17,7 @@ pub type OrdValSpine<K, V, T, R> = Spine<K, V, T, R, Rc<OrdValBatch<K, V, T, R>>
 type IntegerTrace = OrdValSpine<UnsignedWrapper<u64>, u64, usize, i64>;
 
 fn get_trace() -> Spine<UnsignedWrapper<u64>, u64, usize, i64, Rc<OrdValBatch<UnsignedWrapper<u64>, u64, usize, i64>>> {
-    let op_info = OperatorInfo::new(0, 0);
+    let op_info = OperatorInfo::new(0, 0, &[]);
     let mut trace = IntegerTrace::new(op_info, None);
     {
         let mut batcher = <<
