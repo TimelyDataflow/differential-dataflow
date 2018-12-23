@@ -1,6 +1,6 @@
 ## The Join Operator
 
-The `join` operator takes two input collections, each of which must have records with a `(key, value)` structure, and must have the same type of `key`. For each pair of elements with matching key, one from each input, the join operator produces the output `(key, value1, vaule2)`.
+The `join` operator takes two input collections, each of which must have records with a `(key, value)` structure, and must have the same type of `key`. For each pair of elements with matching key, one from each input, the join operator produces the output `(key, value1, value2)`.
 
 Our example from earlier uses a join to match up pairs `(m2, m1)` and `(m1, p)` when the `m1` is in common. To do this, we first have to switch the records in the first collection around, so that they are keyed by `m1` instead of `m2`.
 
