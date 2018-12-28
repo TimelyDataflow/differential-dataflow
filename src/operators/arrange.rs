@@ -268,11 +268,20 @@ where T: Lattice+Ord+Clone+'static, Tr: TraceReader<K,V,T,R> {
     ///     }).unwrap();
     /// }
     /// ```
-    pub fn import<G: Scope<Timestamp=T>>(&mut self, scope: &G) -> Arranged<G, K, V, R, TraceAgent<K, V, T, R, Tr>> where T: Timestamp {
+    pub fn import<G: Scope<Timestamp=T>>(&mut self, scope: &G) -> Arranged<G, K, V, R, TraceAgent<K, V, T, R, Tr>>
+    where T: Timestamp
+    {
+        self.import_named(scope, "ArrangedSource")
+    }
+
+    /// Same as `import`, but allows to name the source.
+    pub fn import_named<G: Scope<Timestamp=T>>(&mut self, scope: &G, name: &str) -> Arranged<G, K, V, R, TraceAgent<K, V, T, R, Tr>>
+    where T: Timestamp
+    {
 
         let trace = self.clone();
 
-        let stream = source(scope, "ArrangedSource", move |capability, info| {
+        let stream = source(scope, name, move |capability, info| {
 
             let activator = scope.activator_for(&info.address[..]);
             let queue = self.new_listener(activator);
