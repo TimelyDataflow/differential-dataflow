@@ -322,80 +322,91 @@ impl<G, K, V, R1, T1> JoinCore<G, K, V, R1> for Arranged<G,K,V,R1,T1>
         let mut input1_buffer = Vec::new();
         let mut input2_buffer = Vec::new();
 
-        self.stream.binary_notify(&other.stream, Pipeline, Pipeline, "Join", vec![], move |input1, input2, output, notificator| {
+        self.stream.binary_frontier(&other.stream, Pipeline, Pipeline, "Join", move |_cap, info| {
 
-            // The join computation repeatedly accepts batches of updates from each of its inputs.
-            //
-            // For each accepted batch, it prepares a work-item to join the batch against previously "accepted"
-            // updates from its other input. It is important to track which updates have been accepted, through
-            // a combination of the input's frontier and the most recently received batch's upper bound, because
-            // we use a shared trace and there may be updates present that are in advance of this accepted bound.
+            use timely::scheduling::Activator;
+            let activations = self.stream.scope().activations().clone();
+            let activator = Activator::new(&info.address[..], activations);
 
-            // drain input 1, prepare work.
-            input1.for_each(|capability, data| {
+            move |input1, input2, output| {
+
+                // The join computation repeatedly accepts batches of updates from each of its inputs.
+                //
+                // For each accepted batch, it prepares a work-item to join the batch against previously "accepted"
+                // updates from its other input. It is important to track which updates have been accepted, through
+                // a combination of the input's frontier and the most recently received batch's upper bound, because
+                // we use a shared trace and there may be updates present that are in advance of this accepted bound.
+
+                // drain input 1, prepare work.
+                input1.for_each(|capability, data| {
+                    if let Some(ref mut trace2) = trace2 {
+                        let capability = capability.retain();
+                        data.swap(&mut input1_buffer);
+                        for batch1 in input1_buffer.drain(..) {
+                            let (trace2_cursor, trace2_storage) = trace2.cursor_through(&acknowledged2[..]).unwrap();
+                            let batch1_cursor = batch1.cursor();
+                            todo1.push(Deferred::new(trace2_cursor, trace2_storage, batch1_cursor, batch1.clone(), capability.clone(), |r2,r1| *r1 * *r2));
+                            debug_assert!(batch1.description().lower() == &acknowledged1[..]);
+                            acknowledged1 = batch1.description().upper().to_vec();
+                        }
+                    }
+                });
+
+                // drain input 2, prepare work.
+                input2.for_each(|capability, data| {
+                    if let Some(ref mut trace1) = trace1 {
+                        let capability = capability.retain();
+                        data.swap(&mut input2_buffer);
+                        for batch2 in input2_buffer.drain(..) {
+                            let (trace1_cursor, trace1_storage) = trace1.cursor_through(&acknowledged1[..]).unwrap();
+                            let batch2_cursor = batch2.cursor();
+                            todo2.push(Deferred::new(trace1_cursor, trace1_storage, batch2_cursor, batch2.clone(), capability.clone(), |r1,r2| *r1 * *r2));
+                            debug_assert!(batch2.description().lower() == &acknowledged2[..]);
+                            acknowledged2 = batch2.description().upper().to_vec();
+                        }
+                    }
+                });
+
+                // An arbitrary number, whose value guides the "responsiveness" of `join`; the operator
+                // yields after producing this many records, to allow downstream operators to work and
+                // move the produced records around.
+                let mut fuel = 1_000_000;
+
+                // perform some amount of outstanding work.
+                while !todo1.is_empty() && fuel > 0 {
+                    todo1[0].work(output, &|k,v2,v1| result(k,v1,v2), &mut fuel);
+                    if !todo1[0].work_remains() { todo1.remove(0); }
+                }
+
+                // perform some amount of outstanding work.
+                while !todo2.is_empty() && fuel > 0 {
+                    todo2[0].work(output, &|k,v1,v2| result(k,v1,v2), &mut fuel);
+                    if !todo2[0].work_remains() { todo2.remove(0); }
+                }
+
+                // Re-activate operator if work remains.
+                if !todo1.is_empty() || !todo2.is_empty() {
+                    activator.activate();
+                }
+
+                // shut down or advance trace2. if the frontier is empty we can shut it down,
+                // and otherwise we can advance the trace by the acknowledged elements of the other input,
+                // as we may still use them as thresholds (ie we must preserve `le` wrt `acknowledged`).
+                // NOTE: We release capabilities here to allow light work to complete, which may result in
+                //       unique ownership which would enable `advance_mut`.
+                if trace2.is_some() && input1.frontier().is_empty() { trace2 = None; }
                 if let Some(ref mut trace2) = trace2 {
-                    let capability = capability.retain();
-                    data.swap(&mut input1_buffer);
-                    for batch1 in input1_buffer.drain(..) {
-                        let (trace2_cursor, trace2_storage) = trace2.cursor_through(&acknowledged2[..]).unwrap();
-                        let batch1_cursor = batch1.cursor();
-                        todo1.push(Deferred::new(trace2_cursor, trace2_storage, batch1_cursor, batch1.clone(), capability.clone(), |r2,r1| *r1 * *r2));
-                        debug_assert!(batch1.description().lower() == &acknowledged1[..]);
-                        acknowledged1 = batch1.description().upper().to_vec();
-                    }
+                    trace2.advance_by(&input1.frontier().frontier()[..]);
+                    trace2.distinguish_since(&acknowledged2[..]);
                 }
-            });
 
-            // drain input 2, prepare work.
-            input2.for_each(|capability, data| {
+                // shut down or advance trace1.
+                if trace1.is_some() && input2.frontier().is_empty() { trace1 = None; }
                 if let Some(ref mut trace1) = trace1 {
-                    let capability = capability.retain();
-                    data.swap(&mut input2_buffer);
-                    for batch2 in input2_buffer.drain(..) {
-                        let (trace1_cursor, trace1_storage) = trace1.cursor_through(&acknowledged1[..]).unwrap();
-                        let batch2_cursor = batch2.cursor();
-                        todo2.push(Deferred::new(trace1_cursor, trace1_storage, batch2_cursor, batch2.clone(), capability.clone(), |r1,r2| *r1 * *r2));
-                        debug_assert!(batch2.description().lower() == &acknowledged2[..]);
-                        acknowledged2 = batch2.description().upper().to_vec();
-                    }
+                    trace1.advance_by(&input2.frontier().frontier()[..]);
+                    trace1.distinguish_since(&acknowledged1[..]);
                 }
-            });
-
-            // An arbitrary number, whose value guides the "responsiveness" of `join`; the operator
-            // yields after producing this many records, to allow downstream operators to work and
-            // move the produced records around.
-            let mut fuel = 1_000_000;
-
-            // perform some amount of outstanding work.
-            while todo1.len() > 0 && fuel > 0 {
-                todo1[0].work(output, &|k,v2,v1| result(k,v1,v2), &mut fuel);
-                if !todo1[0].work_remains() { todo1.remove(0); }
             }
-
-            // perform some amount of outstanding work.
-            while todo2.len() > 0 && fuel > 0 {
-                todo2[0].work(output, &|k,v1,v2| result(k,v1,v2), &mut fuel);
-                if !todo2[0].work_remains() { todo2.remove(0); }
-            }
-
-            // shut down or advance trace2. if the frontier is empty we can shut it down,
-            // and otherwise we can advance the trace by the acknowledged elements of the other input,
-            // as we may still use them as thresholds (ie we must preserve `le` wrt `acknowledged`).
-            // NOTE: We release capabilities here to allow light work to complete, which may result in
-            //       unique ownership which would enable `advance_mut`.
-            if trace2.is_some() && notificator.frontier(0).len() == 0 { trace2 = None; }
-            if let Some(ref mut trace2) = trace2 {
-                trace2.advance_by(&notificator.frontier(0));
-                trace2.distinguish_since(&acknowledged2[..]);
-            }
-
-            // shut down or advance trace1.
-            if trace1.is_some() && notificator.frontier(1).len() == 0 { trace1 = None; }
-            if let Some(ref mut trace1) = trace1 {
-                trace1.advance_by(&notificator.frontier(1));
-                trace1.distinguish_since(&acknowledged1[..]);
-            }
-
         })
         .as_collection()
     }
