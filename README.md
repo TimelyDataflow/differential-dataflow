@@ -1,11 +1,11 @@
 # Differential Dataflow
-An implementation of [differential dataflow](https://github.com/frankmcsherry/differential-dataflow/blob/master/differentialdataflow.pdf) over [timely dataflow](https://github.com/frankmcsherry/timely-dataflow) on [Rust](http://www.rust-lang.org).
+An implementation of [differential dataflow](https://github.com/timelydataflow/differential-dataflow/blob/master/differentialdataflow.pdf) over [timely dataflow](https://github.com/timelydataflow/timely-dataflow) on [Rust](http://www.rust-lang.org).
 
 ## Background
 
-Differential dataflow is a data-parallel programming framework designed to efficiently process large volumes of data and to quickly respond to arbitrary changes in input collections. You can read more in the [differential dataflow mdbook](http://www.frankmcsherry.org/differential-dataflow/) and in the [differential dataflow documentation](https://docs.rs/differential-dataflow/0.5.0/differential_dataflow/).
+Differential dataflow is a data-parallel programming framework designed to efficiently process large volumes of data and to quickly respond to arbitrary changes in input collections. You can read more in the [differential dataflow mdbook](https://timelydataflow.github.io/differential-dataflow/) and in the [differential dataflow documentation](https://docs.rs/differential-dataflow/0.8.0/differential_dataflow/).
 
-Differential dataflow programs are written as functional transformations of collections of data, using familiar operators like `map`, `filter`, `join`, and `group`. Differential dataflow also includes more exotic operators such as `iterate`, which repeatedly applies a differential dataflow fragment to a collection. The programs are compiled down to [timely dataflow](https://github.com/frankmcsherry/timely-dataflow) computations.
+Differential dataflow programs are written as functional transformations of collections of data, using familiar operators like `map`, `filter`, `join`, and `group`. Differential dataflow also includes more exotic operators such as `iterate`, which repeatedly applies a differential dataflow fragment to a collection. The programs are compiled down to [timely dataflow](https://github.com/timelydataflow/timely-dataflow) computations.
 
 For example, here is a differential dataflow fragment to compute the out-degree distribution of a directed graph (for each degree, the number of nodes with that many outgoing edges):
 
@@ -212,7 +212,7 @@ This averages to about five or six microseconds per round of update, and now tha
 
 ### Scaling out
 
-Differential dataflow is built on top of [timely dataflow](https://github.com/frankmcsherry/timely-dataflow), a distributed data-parallel runtime. Timely dataflow scales out to multiple independent workers, increasing the capacity of the system (at the cost of some coordination that cuts into latency).
+Differential dataflow is built on top of [timely dataflow](https://github.com/timelydataflow/timely-dataflow), a distributed data-parallel runtime. Timely dataflow scales out to multiple independent workers, increasing the capacity of the system (at the cost of some coordination that cuts into latency).
 
 If we bring two workers to bear, our 10 million node, 50 million edge computation drops down from fifteen seconds to just over eight seconds.
 
@@ -383,7 +383,7 @@ There is much more to do to have "serious" fault-tolerance,  but this is an inte
 
 ### Other issues
 
-The [issue tracker](https://github.com/frankmcsherry/differential-dataflow/issues) has several open issues relating to current performance defects or missing features. If you are interested in contributing, that would be great! If you have other questions, don't hesitate to get in touch.
+The [issue tracker](https://github.com/timelydataflow/differential-dataflow/issues) has several open issues relating to current performance defects or missing features. If you are interested in contributing, that would be great! If you have other questions, don't hesitate to get in touch.
 
 ## Acknowledgements
 
