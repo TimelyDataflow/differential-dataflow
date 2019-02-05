@@ -252,7 +252,9 @@ pub trait GroupArranged<G: Scope, K: Data, V: Data, R: Monoid> where G::Timestam
             L: Fn(&K, &[(&V, R)], &mut Vec<(V2, R2)>)+'static,
         {
             self.group_solve(move |key, input, output, change| {
-                logic(key, input, change);
+                if !input.is_empty() {
+                    logic(key, input, change);
+                }
                 change.extend(output.drain(..).map(|(x,d)| (x,-d)));
                 consolidate(change);
             })
@@ -890,7 +892,7 @@ mod history_replay {
                         consolidate(&mut self.output_buffer);
 
                         // Apply user logic if non-empty input and see what happens!
-                        if self.input_buffer.len() > 0 {
+                        if self.input_buffer.len() > 0 || self.output_buffer.len() > 0 {
                             logic(key, &self.input_buffer[..], &mut self.output_buffer, &mut self.update_buffer);
                             self.input_buffer.clear();
                             self.output_buffer.clear();
@@ -917,7 +919,7 @@ mod history_replay {
                         // Having subtracted output updates from user output, consolidate the results to determine
                         // if there is anything worth reporting. Note: this also orders the results by value, so
                         // that could make the above merging plan even easier.
-                        consolidate(&mut self.output_buffer);
+                        consolidate(&mut self.update_buffer);
 
                         // Stash produced updates into both capability-indexed buffers and `output_produced`.
                         // The two locations are important, in that we will compact `output_produced` as we move
