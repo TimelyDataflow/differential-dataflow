@@ -201,7 +201,7 @@ impl<G: Scope, D: Data, R: Abelian> Deref for Variable<G, D, R> where G::Timesta
 /// use timely::dataflow::Scope;
 ///
 /// use differential_dataflow::input::Input;
-/// use differential_dataflow::operators::iterate::Variable;
+/// use differential_dataflow::operators::iterate::MonoidVariable;
 /// use differential_dataflow::operators::Consolidate;
 ///
 /// fn main() {
@@ -211,7 +211,7 @@ impl<G: Scope, D: Data, R: Abelian> Deref for Variable<G, D, R> where G::Timesta
 ///
 ///         scope.iterative::<u64,_,_>(|nested| {
 ///             let summary = Product::new(Default::default(), 1);
-///             let variable = MonoidVariable::new(summary);
+///             let variable = MonoidVariable::<_,usize,isize>::new(nested, summary);
 ///             let result = variable.map(|x| if x % 2 == 0 { x/2 } else { x })
 ///                                  .consolidate();
 ///             variable.set(&result)

@@ -260,7 +260,11 @@ pub trait GroupArranged<G: Scope, K: Data, V: Data, R: Monoid> where G::Timestam
             })
         }
 
-    /// Solves for a new
+    /// Solves for output updates when presented with inputs and would-be outputs.
+    ///
+    /// Unlike `group_arranged`, this method may be called with an empty `input`,
+    /// and it may not be safe to index into the first element.
+    /// At least one of the two collections will be non-empty.
     fn group_solve<L, V2, T2, R2>(&self, logic: L) -> Arranged<G, K, V2, R2, TraceAgent<K, V2, G::Timestamp, R2, T2>>
         where
             V2: Data,
