@@ -59,7 +59,7 @@ pub struct DiffPair<R1, R2> {
 	pub element2: R2,
 }
 
-impl<R1: Diff, R2: Diff> DiffPair<R1, R2> {
+impl<R1, R2> DiffPair<R1, R2> {
 	/// Creates a new Diff pair from two elements.
 	#[inline(always)] pub fn new(elt1: R1, elt2: R2) -> Self {
 		DiffPair {
@@ -74,9 +74,9 @@ impl<R1: Diff, R2: Diff> Diff for DiffPair<R1, R2> {
 	#[inline(always)] fn zero() -> Self { DiffPair { element1: R1::zero(), element2: R2::zero() } }
 }
 
-impl<R1: Diff, R2: Diff> Add<DiffPair<R1, R2>> for DiffPair<R1, R2> {
-	type Output = Self;
-	#[inline(always)] fn add(self, rhs: Self) -> Self {
+impl<R1: Add, R2: Add> Add<DiffPair<R1, R2>> for DiffPair<R1, R2> {
+	type Output = DiffPair<<R1 as Add>::Output, <R2 as Add>::Output>;
+	#[inline(always)] fn add(self, rhs: Self) -> Self::Output {
 		DiffPair {
 			element1: self.element1 + rhs.element1,
 			element2: self.element2 + rhs.element2,
@@ -84,9 +84,9 @@ impl<R1: Diff, R2: Diff> Add<DiffPair<R1, R2>> for DiffPair<R1, R2> {
 	}
 }
 
-impl<R1: Diff, R2: Diff> Sub<DiffPair<R1, R2>> for DiffPair<R1, R2> {
-	type Output = DiffPair<R1, R2>;
-	#[inline(always)] fn sub(self, rhs: Self) -> Self {
+impl<R1: Sub, R2: Sub> Sub<DiffPair<R1, R2>> for DiffPair<R1, R2> {
+	type Output = DiffPair<<R1 as Sub>::Output, <R2 as Sub>::Output>;
+	#[inline(always)] fn sub(self, rhs: Self) -> Self::Output {
 		DiffPair {
 			element1: self.element1 - rhs.element1,
 			element2: self.element2 - rhs.element2,
@@ -94,9 +94,9 @@ impl<R1: Diff, R2: Diff> Sub<DiffPair<R1, R2>> for DiffPair<R1, R2> {
 	}
 }
 
-impl<R1: Diff, R2: Diff> Neg for DiffPair<R1, R2> {
-	type Output = Self;
-	#[inline(always)] fn neg(self) -> Self {
+impl<R1: Neg, R2: Neg> Neg for DiffPair<R1, R2> {
+	type Output = DiffPair<<R1 as Neg>::Output, <R2 as Neg>::Output>;
+	#[inline(always)] fn neg(self) -> Self::Output {
 		DiffPair {
 			element1: -self.element1,
 			element2: -self.element2,
@@ -104,8 +104,7 @@ impl<R1: Diff, R2: Diff> Neg for DiffPair<R1, R2> {
 	}
 }
 
-impl<T: Copy, R1: Diff+Mul<T>, R2: Diff+Mul<T>> Mul<T> for DiffPair<R1,R2>
-where <R1 as Mul<T>>::Output: Diff, <R2 as Mul<T>>::Output: Diff {
+impl<T: Copy, R1: Mul<T>, R2: Mul<T>> Mul<T> for DiffPair<R1,R2> {
 	type Output = DiffPair<<R1 as Mul<T>>::Output, <R2 as Mul<T>>::Output>;
 	fn mul(self, other: T) -> Self::Output {
 		DiffPair::new(
