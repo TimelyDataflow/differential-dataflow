@@ -42,7 +42,7 @@ use timely::dataflow::operators::{Feedback, ConnectLoop, Map};
 use timely::dataflow::operators::feedback::Handle;
 
 use ::{Data, Collection};
-use ::difference::Abelian;
+use ::difference::{Monoid, Abelian};
 use lattice::Lattice;
 
 /// An extension trait for the `iterate` method.
@@ -177,6 +177,77 @@ impl<G: Scope, D: Data, R: Abelian> Variable<G, D, R> where G::Timestamp: Lattic
 }
 
 impl<G: Scope, D: Data, R: Abelian> Deref for Variable<G, D, R> where G::Timestamp: Lattice {
+    type Target = Collection<G, D, R>;
+    fn deref(&self) -> &Self::Target {
+        &self.collection
+    }
+}
+
+/// A recursively defined collection.
+///
+/// The `Variable` struct allows differential dataflow programs requiring more sophisticated
+/// iterative patterns than singly recursive iteration. For example: in mutual recursion two
+/// collections evolve simultaneously.
+///
+/// # Examples
+///
+/// The following example is equivalent to the example for the `Iterate` trait.
+///
+/// ```
+/// extern crate timely;
+/// extern crate differential_dataflow;
+///
+/// use timely::order::Product;
+/// use timely::dataflow::Scope;
+///
+/// use differential_dataflow::input::Input;
+/// use differential_dataflow::operators::iterate::Variable;
+/// use differential_dataflow::operators::Consolidate;
+///
+/// fn main() {
+///     ::timely::example(|scope| {
+///
+///         let numbers = scope.new_collection_from(1 .. 10u32).1;
+///
+///         scope.iterative::<u64,_,_>(|nested| {
+///             let summary = Product::new(Default::default(), 1);
+///             let variable = MonoidVariable::new(summary);
+///             let result = variable.map(|x| if x % 2 == 0 { x/2 } else { x })
+///                                  .consolidate();
+///             variable.set(&result)
+///                     .leave()
+///         });
+///     })
+/// }
+/// ```
+pub struct MonoidVariable<G: Scope, D: Data, R: Monoid>
+where G::Timestamp: Lattice {
+    collection: Collection<G, D, R>,
+    feedback: Handle<G, (D, G::Timestamp, R)>,
+    step: <G::Timestamp as Timestamp>::Summary,
+}
+
+impl<G: Scope, D: Data, R: Monoid> MonoidVariable<G, D, R> where G::Timestamp: Lattice {
+    /// Creates a new initially empty `Variable`.
+    pub fn new(scope: &mut G, step: <G::Timestamp as Timestamp>::Summary) -> Self {
+        let (feedback, updates) = scope.feedback(step.clone());
+        let collection = Collection::new(updates);
+        MonoidVariable { collection, feedback, step }
+    }
+
+    /// Adds a new source of data to the `Variable`.
+    pub fn set(self, result: &Collection<G, D, R>) -> Collection<G, D, R> {
+        let step = self.step;
+        result
+            .inner
+            .flat_map(move |(x,t,d)| step.results_in(&t).map(|t| (x,t,d)))
+            .connect_loop(self.feedback);
+
+        self.collection
+    }
+}
+
+impl<G: Scope, D: Data, R: Monoid> Deref for MonoidVariable<G, D, R> where G::Timestamp: Lattice {
     type Target = Collection<G, D, R>;
     fn deref(&self) -> &Self::Target {
         &self.collection
