@@ -10,6 +10,8 @@ use std::ops::{Add, Sub, Neg, Mul};
 
 use ::Data;
 
+pub use self::Abelian as Diff;
+
 /// A type that can be treated as a difference.
 ///
 /// The mathematical requirements are, I believe, an Abelian group, in that we require addition, inverses,
