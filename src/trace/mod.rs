@@ -13,7 +13,7 @@ pub mod implementations;
 pub mod layers;
 pub mod wrappers;
 
-use ::Diff;
+use ::difference::Monoid;
 pub use self::cursor::Cursor;
 pub use self::description::Description;
 
@@ -453,12 +453,12 @@ pub mod abomonated_blanket_impls {
 
 
 /// Scans `vec[off..]` and consolidates differences of adjacent equivalent elements.
-pub fn consolidate<T: Ord+Clone, R: Diff>(vec: &mut Vec<(T, R)>, off: usize) {
+pub fn consolidate<T: Ord+Clone, R: Monoid>(vec: &mut Vec<(T, R)>, off: usize) {
 	consolidate_by(vec, off, |x,y| x.cmp(&y));
 }
 
 /// Scans `vec[off..]` and consolidates differences of adjacent equivalent elements.
-pub fn consolidate_by<T: Eq+Clone, L: Fn(&T, &T)->::std::cmp::Ordering, R: Diff>(vec: &mut Vec<(T, R)>, off: usize, cmp: L) {
+pub fn consolidate_by<T: Eq+Clone, L: Fn(&T, &T)->::std::cmp::Ordering, R: Monoid>(vec: &mut Vec<(T, R)>, off: usize, cmp: L) {
 	vec[off..].sort_by(|x,y| cmp(&x.0, &y.0));
 	for index in (off + 1) .. vec.len() {
 		if vec[index].0 == vec[index - 1].0 {

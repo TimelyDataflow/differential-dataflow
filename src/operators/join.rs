@@ -15,7 +15,8 @@ use timely::dataflow::operators::Capability;
 use timely::dataflow::channels::pushers::tee::Tee;
 
 use hashable::Hashable;
-use ::{Data, Diff, Collection, AsCollection};
+use ::{Data, Collection, AsCollection};
+use ::difference::{Monoid, Abelian};
 use lattice::Lattice;
 use operators::arrange::{Arranged, ArrangeByKey, ArrangeBySelf};
 use trace::{BatchReader, Cursor, consolidate};
@@ -24,7 +25,7 @@ use operators::ValueHistory;
 use trace::TraceReader;
 
 /// Join implementations for `(key,val)` data.
-pub trait Join<G: Scope, K: Data, V: Data, R: Diff> {
+pub trait Join<G: Scope, K: Data, V: Data, R: Monoid> {
 
     /// Matches pairs `(key,val1)` and `(key,val2)` based on `key` and then applies a function.
     ///
@@ -49,8 +50,8 @@ pub trait Join<G: Scope, K: Data, V: Data, R: Diff> {
     ///     });
     /// }
     /// ```
-    fn join<V2: Data, R2: Diff>(&self, other: &Collection<G, (K,V2), R2>) -> Collection<G, (K,(V,V2)), <R as Mul<R2>>::Output>
-    where R: Mul<R2>, <R as Mul<R2>>::Output: Diff
+    fn join<V2: Data, R2: Monoid>(&self, other: &Collection<G, (K,V2), R2>) -> Collection<G, (K,(V,V2)), <R as Mul<R2>>::Output>
+    where R: Mul<R2>, <R as Mul<R2>>::Output: Monoid
     {
         self.join_map(other, |k,v,v2| (k.clone(),(v.clone(),v2.clone())))
     }
@@ -78,8 +79,8 @@ pub trait Join<G: Scope, K: Data, V: Data, R: Diff> {
     ///     });
     /// }
     /// ```
-    fn join_map<V2, R2: Diff, D, L>(&self, other: &Collection<G, (K,V2), R2>, logic: L) -> Collection<G, D, <R as Mul<R2>>::Output>
-    where V2: Data, R: Mul<R2>, <R as Mul<R2>>::Output: Diff, D: Data, L: Fn(&K, &V, &V2)->D+'static;
+    fn join_map<V2, R2: Monoid, D, L>(&self, other: &Collection<G, (K,V2), R2>, logic: L) -> Collection<G, D, <R as Mul<R2>>::Output>
+    where V2: Data, R: Mul<R2>, <R as Mul<R2>>::Output: Monoid, D: Data, L: Fn(&K, &V, &V2)->D+'static;
 
     /// Matches pairs `(key, val)` and `key` based on `key`, producing the former with frequencies multiplied.
     ///
@@ -109,7 +110,7 @@ pub trait Join<G: Scope, K: Data, V: Data, R: Diff> {
     /// }
     /// ```
     fn semijoin<R2>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), <R as Mul<R2>>::Output>
-    where R2: Diff, R: Mul<R2>, <R as Mul<R2>>::Output: Diff;
+    where R2: Monoid, R: Mul<R2>, <R as Mul<R2>>::Output: Monoid;
     /// Subtracts the semijoin with `other` from `self`.
     ///
     /// In the case that `other` has multiplicities zero or one this results
@@ -142,7 +143,7 @@ pub trait Join<G: Scope, K: Data, V: Data, R: Diff> {
     /// }
     /// ```
     fn antijoin<R2>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), R>
-    where R2: Diff, R: Mul<R2, Output = R>;
+    where R2: Monoid, R: Mul<R2, Output = R>, R: Abelian;
 }
 
 impl<G, K, V, R> Join<G, K, V, R> for Collection<G, (K, V), R>
@@ -150,25 +151,25 @@ where
     G: Scope,
     K: Data+Hashable,
     V: Data,
-    R: Diff,
+    R: Monoid,
     G::Timestamp: Lattice+Ord,
 {
-    fn join_map<V2: Data, R2: Diff, D: Data, L>(&self, other: &Collection<G, (K, V2), R2>, logic: L) -> Collection<G, D, <R as Mul<R2>>::Output>
-    where R: Mul<R2>, <R as Mul<R2>>::Output: Diff, L: Fn(&K, &V, &V2)->D+'static {
+    fn join_map<V2: Data, R2: Monoid, D: Data, L>(&self, other: &Collection<G, (K, V2), R2>, logic: L) -> Collection<G, D, <R as Mul<R2>>::Output>
+    where R: Mul<R2>, <R as Mul<R2>>::Output: Monoid, L: Fn(&K, &V, &V2)->D+'static {
         let arranged1 = self.arrange_by_key();
         let arranged2 = other.arrange_by_key();
         arranged1.join_core(&arranged2, move |k,v1,v2| Some(logic(k,v1,v2)))
     }
 
-    fn semijoin<R2: Diff>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), <R as Mul<R2>>::Output>
-    where R: Mul<R2>, <R as Mul<R2>>::Output: Diff {
+    fn semijoin<R2: Monoid>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), <R as Mul<R2>>::Output>
+    where R: Mul<R2>, <R as Mul<R2>>::Output: Monoid {
         let arranged1 = self.arrange_by_key();
         let arranged2 = other.arrange_by_self();
         arranged1.join_core(&arranged2, |k,v,_| Some((k.clone(), v.clone())))
     }
 
-    fn antijoin<R2: Diff>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), R>
-    where R: Mul<R2, Output=R> {
+    fn antijoin<R2: Monoid>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), R>
+    where R: Mul<R2, Output=R>, R: Abelian {
         self.concat(&self.semijoin(other).negate())
     }
 }
@@ -179,24 +180,24 @@ impl<G, K, V, R, T> Join<G, K, V, R> for Arranged<G,K,V,R,T>
         G::Timestamp: Lattice+Ord,
         K: Data+Hashable,
         V: Data,
-        R: Diff,
+        R: Monoid,
         T: TraceReader<K,V,G::Timestamp,R>+Clone+'static,
         T::Batch: BatchReader<K,V,G::Timestamp,R>+'static {
 
-    fn join_map<V2: Data, R2: Diff, D: Data, L>(&self, other: &Collection<G, (K, V2), R2>, logic: L) -> Collection<G, D, <R as Mul<R2>>::Output>
-    where R: Mul<R2>, <R as Mul<R2>>::Output: Diff, L: Fn(&K, &V, &V2)->D+'static {
+    fn join_map<V2: Data, R2: Monoid, D: Data, L>(&self, other: &Collection<G, (K, V2), R2>, logic: L) -> Collection<G, D, <R as Mul<R2>>::Output>
+    where R: Mul<R2>, <R as Mul<R2>>::Output: Monoid, L: Fn(&K, &V, &V2)->D+'static {
         let arranged2 = other.arrange_by_key();
         self.join_core(&arranged2, move |k,v1,v2| Some(logic(k,v1,v2)))
     }
 
-    fn semijoin<R2: Diff>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), <R as Mul<R2>>::Output>
-    where R: Mul<R2>, <R as Mul<R2>>::Output: Diff {
+    fn semijoin<R2: Monoid>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), <R as Mul<R2>>::Output>
+    where R: Mul<R2>, <R as Mul<R2>>::Output: Monoid {
         let arranged2 = other.arrange_by_self();
         self.join_core(&arranged2, |k,v,_| Some((k.clone(), v.clone())))
     }
 
-    fn antijoin<R2: Diff>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), R>
-    where R: Mul<R2, Output=R> {
+    fn antijoin<R2: Monoid>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), R>
+    where R: Mul<R2, Output=R>, R: Abelian {
         self.as_collection(|k,v| (k.clone(), v.clone()))
             .concat(&self.semijoin(other).negate())
     }
@@ -207,7 +208,7 @@ impl<G, K, V, R, T> Join<G, K, V, R> for Arranged<G,K,V,R,T>
 /// This method is used by the various `join` implementations, but it can also be used
 /// directly in the event that one has a handle to an `Arranged<G,T>`, perhaps because
 /// the arrangement is available for re-use, or from the output of a `group` operator.
-pub trait JoinCore<G: Scope, K: 'static, V: 'static, R: Diff> where G::Timestamp: Lattice+Ord {
+pub trait JoinCore<G: Scope, K: 'static, V: 'static, R: Monoid> where G::Timestamp: Lattice+Ord {
     /// Joins two arranged collections with the same key type.
     ///
     /// Each matching pair of records `(key, val1)` and `(key, val2)` are subjected to the `result` function,
@@ -249,9 +250,9 @@ pub trait JoinCore<G: Scope, K: 'static, V: 'static, R: Diff> where G::Timestamp
         V2: Ord+Clone+Debug+'static,
         T2: TraceReader<K, V2, G::Timestamp, R2>+Clone+'static,
         T2::Batch: BatchReader<K, V2, G::Timestamp, R2>+'static,
-        R2: Diff,
+        R2: Monoid,
         R: Mul<R2>,
-        <R as Mul<R2>>::Output: Diff,
+        <R as Mul<R2>>::Output: Monoid,
         I: IntoIterator,
         I::Item: Data,
         L: Fn(&K,&V,&V2)->I+'static,
@@ -264,7 +265,7 @@ where
     G: Scope,
     K: Data+Hashable,
     V: Data,
-    R: Diff,
+    R: Monoid,
     G::Timestamp: Lattice+Ord,
 {
     fn join_core<V2,T2,R2,I,L> (&self, stream2: &Arranged<G,K,V2,R2,T2>, result: L) -> Collection<G,I::Item,<R as Mul<R2>>::Output>
@@ -272,9 +273,9 @@ where
         V2: Ord+Clone+Debug+'static,
         T2: TraceReader<K, V2, G::Timestamp, R2>+Clone+'static,
         T2::Batch: BatchReader<K, V2, G::Timestamp, R2>+'static,
-        R2: Diff,
+        R2: Monoid,
         R: Mul<R2>,
-        <R as Mul<R2>>::Output: Diff,
+        <R as Mul<R2>>::Output: Monoid,
         I: IntoIterator,
         I::Item: Data,
         L: Fn(&K,&V,&V2)->I+'static {
@@ -291,7 +292,7 @@ impl<G, K, V, R1, T1> JoinCore<G, K, V, R1> for Arranged<G,K,V,R1,T1>
         G::Timestamp: Lattice+Ord+Debug,
         K: Debug+Eq+'static,
         V: Ord+Clone+Debug+'static,
-        R1: Diff,
+        R1: Monoid,
         T1: TraceReader<K,V,G::Timestamp, R1>+Clone+'static,
         T1::Batch: BatchReader<K,V,G::Timestamp,R1>+'static,
 {
@@ -300,9 +301,9 @@ impl<G, K, V, R1, T1> JoinCore<G, K, V, R1> for Arranged<G,K,V,R1,T1>
         V2: Ord+Clone+Debug+'static,
         T2: TraceReader<K,V2,G::Timestamp,R2>+Clone+'static,
         T2::Batch: BatchReader<K, V2, G::Timestamp, R2>+'static,
-        R2: Diff,
+        R2: Monoid,
         R1: Mul<R2>,
-        <R1 as Mul<R2>>::Output: Diff,
+        <R1 as Mul<R2>>::Output: Monoid,
         I: IntoIterator,
         I::Item: Data,
         L: Fn(&K,&V,&V2)->I+'static {
@@ -422,8 +423,8 @@ where
     V1: Ord+Clone,
     V2: Ord+Clone,
     T: Timestamp+Lattice+Ord+Debug,
-    R1: Diff,
-    R2: Diff,
+    R1: Monoid,
+    R2: Monoid,
     C1: Cursor<K, V1, T, R1>,
     C2: Cursor<K, V2, T, R2>,
     M: Fn(&R1,&R2)->R3,
@@ -447,9 +448,9 @@ where
     V1: Ord+Clone+Debug,
     V2: Ord+Clone+Debug,
     T: Timestamp+Lattice+Ord+Debug,
-    R1: Diff,
-    R2: Diff,
-    R3: Diff,
+    R1: Monoid,
+    R2: Monoid,
+    R3: Monoid,
     C1: Cursor<K, V1, T, R1>,
     C2: Cursor<K, V2, T, R2>,
     M: Fn(&R1,&R2)->R3,
@@ -542,12 +543,12 @@ where
     }
 }
 
-struct JoinThinker<'a, V1: Ord+Clone+'a, V2: Ord+Clone+'a, T: Lattice+Ord+Clone, R1: Diff, R2: Diff> {
+struct JoinThinker<'a, V1: Ord+Clone+'a, V2: Ord+Clone+'a, T: Lattice+Ord+Clone, R1: Monoid, R2: Monoid> {
     pub history1: ValueHistory<'a, V1, T, R1>,
     pub history2: ValueHistory<'a, V2, T, R2>,
 }
 
-impl<'a, V1: Ord+Clone, V2: Ord+Clone, T: Lattice+Ord+Clone, R1: Diff, R2: Diff> JoinThinker<'a, V1, V2, T, R1, R2>
+impl<'a, V1: Ord+Clone, V2: Ord+Clone, T: Lattice+Ord+Clone, R1: Monoid, R2: Monoid> JoinThinker<'a, V1, V2, T, R1, R2>
 where V1: Debug, V2: Debug, T: Debug
 {
     fn new() -> Self {

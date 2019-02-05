@@ -76,7 +76,7 @@ use std::fmt::Debug;
 
 pub use collection::{Collection, AsCollection};
 pub use hashable::Hashable;
-pub use difference::Diff;
+pub use difference::Abelian as Diff;
 
 /// A composite trait for data types usable in differential dataflow.
 ///

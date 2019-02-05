@@ -16,7 +16,7 @@ use ::Data;
 /// and almost certainly use commutativity somewhere (it isn't clear if it is a requirement, as it isn't
 /// clear that there are semantics other than "we accumulate your differences"; I suspect we don't always
 /// accumulate them in the right order, so commutativity is important until we conclude otherwise).
-pub trait Diff : Add<Self, Output=Self> + Sub<Self, Output=Self> + Neg<Output=Self> + ::std::marker::Sized + Data + Copy {
+pub trait Monoid : Add<Self, Output=Self> + ::std::marker::Sized + Data + Copy {
 	/// Returns true if the element is the additive identity.
 	///
 	/// This is primarily used by differential dataflow to know when it is safe to delete and update.
@@ -30,17 +30,26 @@ pub trait Diff : Add<Self, Output=Self> + Sub<Self, Output=Self> + Neg<Output=Se
 	fn zero() -> Self;
 }
 
-impl Diff for isize {
+/// A commutative monoid with negation.
+///
+/// This trait represents a commutative group, here a commutative monoid with
+/// the additional support for subtraction and negation. An identity subtracted
+/// from itself or added to its negation should be the zero element from the
+/// underlying monoid.
+pub trait Abelian : Monoid + Sub<Self, Output=Self> + Neg<Output=Self> { }
+impl<T: Monoid + Sub<Self, Output=Self> + Neg<Output=Self>> Abelian for T { }
+
+impl Monoid for isize {
 	#[inline(always)] fn is_zero(&self) -> bool { *self == 0 }
 	#[inline(always)] fn zero() -> Self { 0 }
 }
 
-impl Diff for i64 {
+impl Monoid for i64 {
 	#[inline(always)] fn is_zero(&self) -> bool { *self == 0 }
 	#[inline(always)] fn zero() -> Self { 0 }
 }
 
-impl Diff for i32 {
+impl Monoid for i32 {
 	#[inline(always)] fn is_zero(&self) -> bool { *self == 0 }
 	#[inline(always)] fn zero() -> Self { 0 }
 }
@@ -69,7 +78,7 @@ impl<R1, R2> DiffPair<R1, R2> {
 	}
 }
 
-impl<R1: Diff, R2: Diff> Diff for DiffPair<R1, R2> {
+impl<R1: Monoid, R2: Monoid> Monoid for DiffPair<R1, R2> {
 	#[inline(always)] fn is_zero(&self) -> bool { self.element1.is_zero() && self.element2.is_zero() }
 	#[inline(always)] fn zero() -> Self { DiffPair { element1: R1::zero(), element2: R2::zero() } }
 }

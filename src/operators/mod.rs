@@ -1,7 +1,7 @@
 //! Specialize differential dataflow operators.
 //!
-//! Differential dataflow introduces a small number of specialized operators on collections. These 
-//! operators have specialized implementations to make them work efficiently, and are in addition 
+//! Differential dataflow introduces a small number of specialized operators on collections. These
+//! operators have specialized implementations to make them work efficiently, and are in addition
 //! to several operations defined directly on the `Collection` type (e.g. `map` and `filter`).
 
 pub use self::group::{Group, Threshold, Count, consolidate_from};
@@ -20,7 +20,7 @@ pub mod count;
 pub mod threshold;
 // pub mod min;
 
-use ::Diff;
+use ::difference::Monoid;
 use lattice::Lattice;
 use trace::{Cursor, consolidate};
 
@@ -30,7 +30,7 @@ struct EditList<'a, V: 'a, T, R> {
     edits: Vec<(T, R)>,
 }
 
-impl<'a, V:'a, T, R> EditList<'a, V, T, R> where T: Ord+Clone, R: Diff {
+impl<'a, V:'a, T, R> EditList<'a, V, T, R> where T: Ord+Clone, R: Monoid {
     /// Creates an empty list of edits.
     #[inline(always)]
     fn new() -> Self {
@@ -41,7 +41,7 @@ impl<'a, V:'a, T, R> EditList<'a, V, T, R> where T: Ord+Clone, R: Diff {
     }
     /// Loads the contents of a cursor.
     fn load<K, C, L>(&mut self, cursor: &mut C, storage: &'a C::Storage, logic: L)
-    where K: Eq, V: Clone, C: Cursor<K, V, T, R>, L: Fn(&T)->T { 
+    where K: Eq, V: Clone, C: Cursor<K, V, T, R>, L: Fn(&T)->T {
         self.clear();
         while cursor.val_valid(storage) {
             cursor.map_times(storage, |time1, diff1| self.push(logic(time1), diff1));
@@ -51,7 +51,7 @@ impl<'a, V:'a, T, R> EditList<'a, V, T, R> where T: Ord+Clone, R: Diff {
     }
     /// Clears the list of edits.
     #[inline(always)]
-    fn clear(&mut self) { 
+    fn clear(&mut self) {
         self.values.clear();
         self.edits.clear();
     }
@@ -90,7 +90,7 @@ struct ValueHistory<'storage, V: 'storage, T, R> {
     buffer: Vec<((&'storage V, T), R)>,               // where we accumulate / collapse updates.
 }
 
-impl<'storage, V: Ord+Clone+'storage, T: Lattice+Ord+Clone, R: Diff> ValueHistory<'storage, V, T, R> {
+impl<'storage, V: Ord+Clone+'storage, T: Lattice+Ord+Clone, R: Monoid> ValueHistory<'storage, V, T, R> {
     fn new() -> Self {
         ValueHistory {
             edits: EditList::new(),
@@ -104,7 +104,7 @@ impl<'storage, V: Ord+Clone+'storage, T: Lattice+Ord+Clone, R: Diff> ValueHistor
         self.buffer.clear();
     }
     fn load<K, C, L>(&mut self, cursor: &mut C, storage: &'storage C::Storage, logic: L)
-    where K: Eq, C: Cursor<K, V, T, R>, L: Fn(&T)->T { 
+    where K: Eq, C: Cursor<K, V, T, R>, L: Fn(&T)->T {
         self.edits.load(cursor, storage, logic);
     }
 
@@ -158,7 +158,7 @@ where
     'storage: 'history,
     V: Ord+'storage,
     T: Lattice+Ord+Clone+'history,
-    R: Diff+'history,
+    R: Monoid+'history,
 {
     replay: &'history mut ValueHistory<'storage, V, T, R>
 }
@@ -168,11 +168,11 @@ where
     'storage: 'history,
     V: Ord+'storage,
     T: Lattice+Ord+Clone+'history,
-    R: Diff+'history,
+    R: Monoid+'history,
 {
     fn time(&self) -> Option<&T> { self.replay.history.last().map(|x| &x.0) }
     fn meet(&self) -> Option<&T> { self.replay.history.last().map(|x| &x.1) }
-    fn edit(&self) -> Option<(&V, &T, R)> { 
+    fn edit(&self) -> Option<(&V, &T, R)> {
         self.replay.history.last().map(|&(ref t, _, v, e)| (self.replay.edits.values[v].0, t, self.replay.edits.edits[e].1))
     }
 
@@ -205,9 +205,9 @@ where
             let lower = if value_index > 0 { self.replay.edits.values[value_index-1].1 } else { 0 };
             let upper = self.replay.edits.values[value_index].1;
             for edit_index in lower .. upper {
-                println!("{:?}, {:?}, {:?}", 
-                    self.replay.edits.values[value_index].0, 
-                    self.replay.edits.edits[edit_index].0, 
+                println!("{:?}, {:?}, {:?}",
+                    self.replay.edits.values[value_index].0,
+                    self.replay.edits.edits[edit_index].0,
                     self.replay.edits.edits[edit_index].1
                 );
             }

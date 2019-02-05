@@ -41,11 +41,12 @@ use timely::dataflow::scopes::child::Iterative;
 use timely::dataflow::operators::{Feedback, ConnectLoop, Map};
 use timely::dataflow::operators::feedback::Handle;
 
-use ::{Data, Collection, Diff};
+use ::{Data, Collection};
+use ::difference::Abelian;
 use lattice::Lattice;
 
 /// An extension trait for the `iterate` method.
-pub trait Iterate<G: Scope, D: Data, R: Diff> {
+pub trait Iterate<G: Scope, D: Data, R: Abelian> {
     /// Iteratively apply `logic` to the source collection until convergence.
     ///
     /// Importantly, this method does not automatically consolidate results.
@@ -81,7 +82,7 @@ pub trait Iterate<G: Scope, D: Data, R: Diff> {
             for<'a> F: FnOnce(&Collection<Iterative<'a, G, u64>, D, R>)->Collection<Iterative<'a, G, u64>, D, R>;
 }
 
-impl<G: Scope, D: Ord+Data+Debug, R: Diff> Iterate<G, D, R> for Collection<G, D, R> {
+impl<G: Scope, D: Ord+Data+Debug, R: Abelian> Iterate<G, D, R> for Collection<G, D, R> {
     fn iterate<F>(&self, logic: F) -> Collection<G, D, R>
         where G::Timestamp: Lattice,
               for<'a> F: FnOnce(&Collection<Iterative<'a, G, u64>, D, R>)->Collection<Iterative<'a, G, u64>, D, R> {
@@ -138,7 +139,7 @@ impl<G: Scope, D: Ord+Data+Debug, R: Diff> Iterate<G, D, R> for Collection<G, D,
 ///     })
 /// }
 /// ```
-pub struct Variable<G: Scope, D: Data, R: Diff>
+pub struct Variable<G: Scope, D: Data, R: Abelian>
 where G::Timestamp: Lattice {
     collection: Collection<G, D, R>,
     feedback: Handle<G, (D, G::Timestamp, R)>,
@@ -146,7 +147,7 @@ where G::Timestamp: Lattice {
     step: <G::Timestamp as Timestamp>::Summary,
 }
 
-impl<G: Scope, D: Data, R: Diff> Variable<G, D, R> where G::Timestamp: Lattice {
+impl<G: Scope, D: Data, R: Abelian> Variable<G, D, R> where G::Timestamp: Lattice {
     /// Creates a new initially empty `Variable`.
     pub fn new(scope: &mut G, step: <G::Timestamp as Timestamp>::Summary) -> Self {
         use collection::AsCollection;
@@ -175,7 +176,7 @@ impl<G: Scope, D: Data, R: Diff> Variable<G, D, R> where G::Timestamp: Lattice {
     }
 }
 
-impl<G: Scope, D: Data, R: Diff> Deref for Variable<G, D, R> where G::Timestamp: Lattice {
+impl<G: Scope, D: Data, R: Abelian> Deref for Variable<G, D, R> where G::Timestamp: Lattice {
     type Target = Collection<G, D, R>;
     fn deref(&self) -> &Self::Target {
         &self.collection

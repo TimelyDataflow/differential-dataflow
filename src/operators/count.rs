@@ -19,14 +19,15 @@ use timely::dataflow::operators::Operator;
 use timely::dataflow::channels::pact::Pipeline;
 
 use lattice::Lattice;
-use ::{Data, Collection, Diff};
+use ::{Data, Collection};
+use ::difference::Monoid;
 use hashable::Hashable;
 use collection::AsCollection;
 use operators::arrange::{Arranged, ArrangeBySelf};
 use trace::{BatchReader, Cursor, TraceReader};
 
 /// Extension trait for the `count` differential dataflow method.
-pub trait CountTotal<G: Scope, K: Data, R: Diff> where G::Timestamp: TotalOrder+Lattice+Ord {
+pub trait CountTotal<G: Scope, K: Data, R: Monoid> where G::Timestamp: TotalOrder+Lattice+Ord {
     /// Counts the number of occurrences of each element.
     ///
     /// # Examples
@@ -50,7 +51,7 @@ pub trait CountTotal<G: Scope, K: Data, R: Diff> where G::Timestamp: TotalOrder+
     fn count_total(&self) -> Collection<G, (K, R), isize>;
 }
 
-impl<G: Scope, K: Data+Hashable, R: Diff> CountTotal<G, K, R> for Collection<G, K, R>
+impl<G: Scope, K: Data+Hashable, R: Monoid> CountTotal<G, K, R> for Collection<G, K, R>
 where G::Timestamp: TotalOrder+Lattice+Ord {
     fn count_total(&self) -> Collection<G, (K, R), isize> {
         self.arrange_by_self()
@@ -58,7 +59,7 @@ where G::Timestamp: TotalOrder+Lattice+Ord {
     }
 }
 
-impl<G: Scope, K: Data, R: Diff, T1> CountTotal<G, K, R> for Arranged<G, K, (), R, T1>
+impl<G: Scope, K: Data, R: Monoid, T1> CountTotal<G, K, R> for Arranged<G, K, (), R, T1>
 where
     G::Timestamp: TotalOrder+Lattice+Ord,
     T1: TraceReader<K, (), G::Timestamp, R>+Clone+'static,
