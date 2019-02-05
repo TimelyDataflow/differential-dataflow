@@ -1,15 +1,8 @@
 extern crate timely;
 extern crate interactive;
 
-use std::time::{Instant, Duration};
-
 use timely::synchronization::Sequencer;
 use interactive::{Manager, Command, Query, Rule, Plan};
-
-use interactive::plan::join::Join;
-use interactive::plan::project::Project;
-
-type Value = usize;
 
 fn main() {
 
@@ -18,18 +11,16 @@ fn main() {
 
     timely::execute_from_args(args, |worker| {
 
-        let timer = Instant::now();
+        let timer = ::std::time::Instant::now();
         let mut manager = Manager::new();
-        let mut sequencer = Some(Sequencer::<Command<Value>>::new(worker, Instant::now()));
+        let mut sequencer = Some(Sequencer::new(worker, timer));
 
         if worker.index() == 0 {
 
             let edges = (0 .. 100).map(|x| vec![x, (x+1)%100]).collect::<Vec<_>>();
 
             sequencer.as_mut().map(|x| x.push(Command::CreateInput("edges".to_string(), edges)));
-            worker.step();
             sequencer.as_mut().map(|x| x.push(Command::AdvanceTime(1)));
-            worker.step();
             sequencer.as_mut().map(|x| x.push(Command::Query(
                 Query {
                     rules: vec![Rule {
@@ -40,11 +31,18 @@ fn main() {
                     }]
                 }
             )));
-            worker.step();
             sequencer.as_mut().map(|x| x.push(Command::AdvanceTime(2)));
-            worker.step();
             sequencer.as_mut().map(|x| x.push(Command::CloseInput("edges".to_string())));
-            worker.step();
+            sequencer.as_mut().map(|x| x.push(Command::Query(
+                Query {
+                    rules: vec![Rule {
+                        name: "fof2".to_string(),
+                        plan: Plan::source("fof").join(Plan::source("fof"), vec![(0,1)])
+                                                   .project(vec![1,2])
+                                                   .inspect("fof2"),
+                    }]
+                }
+            )));
             sequencer.as_mut().map(|x| x.push(Command::Shutdown));
         }
 
@@ -53,7 +51,7 @@ fn main() {
         while !shutdown {
 
             if let Some(command) = sequencer.as_mut().unwrap().next() {
-                println!("{:?}\tExecuting {:#?}", timer.elapsed(), command);
+                println!("{:?}\tExecuting {:?}", timer.elapsed(), command);
                 if command == Command::Shutdown {
                     shutdown = true;
                     sequencer = None;
