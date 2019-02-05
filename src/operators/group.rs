@@ -249,7 +249,23 @@ pub trait GroupArranged<G: Scope, K: Data, V: Data, R: Monoid> where G::Timestam
             R2: Abelian,
             T2: Trace<K, V2, G::Timestamp, R2>+'static,
             T2::Batch: Batch<K, V2, G::Timestamp, R2>,
-            L: Fn(&K, &[(&V, R)], &mut Vec<(V2, R2)>)+'static
+            L: Fn(&K, &[(&V, R)], &mut Vec<(V2, R2)>)+'static,
+        {
+            self.group_solve(move |key, input, output, change| {
+                logic(key, input, change);
+                change.extend(output.drain(..).map(|(x,d)| (x,-d)));
+                consolidate(change);
+            })
+        }
+
+    /// Solves for a new
+    fn group_solve<L, V2, T2, R2>(&self, logic: L) -> Arranged<G, K, V2, R2, TraceAgent<K, V2, G::Timestamp, R2, T2>>
+        where
+            V2: Data,
+            R2: Monoid,
+            T2: Trace<K, V2, G::Timestamp, R2>+'static,
+            T2::Batch: Batch<K, V2, G::Timestamp, R2>,
+            L: Fn(&K, &[(&V, R)], &mut Vec<(V2,R2)>, &mut Vec<(V2, R2)>)+'static
             ;
 }
 
@@ -261,16 +277,16 @@ where
     V: Data,
     R: Monoid,
 {
-    fn group_arranged<L, V2, T2, R2>(&self, logic: L) -> Arranged<G, K, V2, R2, TraceAgent<K, V2, G::Timestamp, R2, T2>>
+    fn group_solve<L, V2, T2, R2>(&self, logic: L) -> Arranged<G, K, V2, R2, TraceAgent<K, V2, G::Timestamp, R2, T2>>
         where
             V2: Data,
-            R2: Abelian,
+            R2: Monoid,
             T2: Trace<K, V2, G::Timestamp, R2>+'static,
             T2::Batch: Batch<K, V2, G::Timestamp, R2>,
-            L: Fn(&K, &[(&V, R)], &mut Vec<(V2, R2)>)+'static
+            L: Fn(&K, &[(&V, R)], &mut Vec<(V2,R2)>, &mut Vec<(V2, R2)>)+'static
     {
         self.arrange_by_key()
-            .group_arranged(logic)
+            .group_solve(logic)
     }
 }
 
@@ -280,13 +296,13 @@ where
     T1: TraceReader<K, V, G::Timestamp, R>+Clone+'static,
     T1::Batch: BatchReader<K, V, G::Timestamp, R> {
 
-    fn group_arranged<L, V2, T2, R2>(&self, logic: L) -> Arranged<G, K, V2, R2, TraceAgent<K, V2, G::Timestamp, R2, T2>>
+    fn group_solve<L, V2, T2, R2>(&self, logic: L) -> Arranged<G, K, V2, R2, TraceAgent<K, V2, G::Timestamp, R2, T2>>
         where
             V2: Data,
-            R2: Abelian,
+            R2: Monoid,
             T2: Trace<K, V2, G::Timestamp, R2>+'static,
             T2::Batch: Batch<K, V2, G::Timestamp, R2>,
-            L: Fn(&K, &[(&V, R)], &mut Vec<(V2, R2)>)+'static {
+            L: Fn(&K, &[(&V, R)], &mut Vec<(V2,R2)>, &mut Vec<(V2, R2)>)+'static {
 
         let mut result_trace = None;
 
@@ -624,7 +640,7 @@ where
     V2: Ord+Clone+'a,
     T: Lattice+Ord+Clone,
     R1: Monoid,
-    R2: Abelian,
+    R2: Monoid,
 {
     fn new() -> Self;
     fn compute<K, C1, C2, C3, L>(
@@ -643,14 +659,14 @@ where
         C1: Cursor<K, V1, T, R1>,
         C2: Cursor<K, V2, T, R2>,
         C3: Cursor<K, V1, T, R1>,
-        L: Fn(&K, &[(&V1, R1)], &mut Vec<(V2, R2)>);
+        L: Fn(&K, &[(&V1, R1)], &mut Vec<(V2, R2)>, &mut Vec<(V2, R2)>);
 }
 
 
 /// Implementation based on replaying historical and new updates together.
 mod history_replay {
 
-    use ::difference::{Monoid, Abelian};
+    use ::difference::Monoid;
     use lattice::Lattice;
     use trace::Cursor;
     use operators::ValueHistory;
@@ -673,6 +689,7 @@ mod history_replay {
         output_history: ValueHistory<'a, V2, T, R2>,
         input_buffer: Vec<(&'a V1, R1)>,
         output_buffer: Vec<(V2, R2)>,
+        update_buffer: Vec<(V2, R2)>,
         output_produced: Vec<((V2, T), R2)>,
         synth_times: Vec<T>,
         meets: Vec<T>,
@@ -686,7 +703,7 @@ mod history_replay {
         V2: Ord+Clone,
         T: Lattice+Ord+Clone,
         R1: Monoid,
-        R2: Abelian,
+        R2: Monoid,
     {
         fn new() -> Self {
             HistoryReplayer {
@@ -695,6 +712,7 @@ mod history_replay {
                 output_history: ValueHistory::new(),
                 input_buffer: Vec::new(),
                 output_buffer: Vec::new(),
+                update_buffer: Vec::new(),
                 output_produced: Vec::new(),
                 synth_times: Vec::new(),
                 meets: Vec::new(),
@@ -719,7 +737,7 @@ mod history_replay {
             C1: Cursor<K, V1, T, R1>,
             C2: Cursor<K, V2, T, R2>,
             C3: Cursor<K, V1, T, R1>,
-            L: Fn(&K, &[(&V1, R1)], &mut Vec<(V2, R2)>)
+            L: Fn(&K, &[(&V1, R1)], &mut Vec<(V2, R2)>, &mut Vec<(V2, R2)>)
         {
 
             // The work we need to perform is at times defined principally by the contents of `batch_cursor`
@@ -852,16 +870,10 @@ mod history_replay {
                         }
                         consolidate(&mut self.input_buffer);
 
-                        // Apply user logic if non-empty input and see what happens!
-                        if self.input_buffer.len() > 0 {
-                            logic(key, &self.input_buffer[..], &mut self.output_buffer);
-                            self.input_buffer.clear();
-                        }
-
                         output_replay.advance_buffer_by(&meet);
                         for &((ref value, ref time), diff) in output_replay.buffer().iter() {
                             if time.less_equal(&next_time) {
-                                self.output_buffer.push(((*value).clone(), -diff));
+                                self.output_buffer.push(((*value).clone(), diff));
                             }
                             else {
                                 self.temporary.push(next_time.join(time));
@@ -869,12 +881,38 @@ mod history_replay {
                         }
                         for &((ref value, ref time), diff) in self.output_produced.iter() {
                             if time.less_equal(&next_time) {
-                                self.output_buffer.push(((*value).clone(), -diff));
+                                self.output_buffer.push(((*value).clone(), diff));
                             }
                             else {
                                 self.temporary.push(next_time.join(&time));
                             }
                         }
+                        consolidate(&mut self.output_buffer);
+
+                        // Apply user logic if non-empty input and see what happens!
+                        if self.input_buffer.len() > 0 {
+                            logic(key, &self.input_buffer[..], &mut self.output_buffer, &mut self.update_buffer);
+                            self.input_buffer.clear();
+                            self.output_buffer.clear();
+                        }
+
+                        // output_replay.advance_buffer_by(&meet);
+                        // for &((ref value, ref time), diff) in output_replay.buffer().iter() {
+                        //     if time.less_equal(&next_time) {
+                        //         self.output_buffer.push(((*value).clone(), -diff));
+                        //     }
+                        //     else {
+                        //         self.temporary.push(next_time.join(time));
+                        //     }
+                        // }
+                        // for &((ref value, ref time), diff) in self.output_produced.iter() {
+                        //     if time.less_equal(&next_time) {
+                        //         self.output_buffer.push(((*value).clone(), -diff));
+                        //     }
+                        //     else {
+                        //         self.temporary.push(next_time.join(&time));
+                        //     }
+                        // }
 
                         // Having subtracted output updates from user output, consolidate the results to determine
                         // if there is anything worth reporting. Note: this also orders the results by value, so
@@ -885,7 +923,7 @@ mod history_replay {
                         // The two locations are important, in that we will compact `output_produced` as we move
                         // through times, but we cannot compact the output buffers because we need their actual
                         // times.
-                        if self.output_buffer.len() > 0 {
+                        if self.update_buffer.len() > 0 {
 
                             output_counter += 1;
 
@@ -894,7 +932,7 @@ mod history_replay {
                             // we should have kept, or we have computed the output incorrectly (or both!)
                             let idx = outputs.iter().rev().position(|&(ref time, _)| time.less_equal(&next_time));
                             let idx = outputs.len() - idx.expect("failed to find index") - 1;
-                            for (val, diff) in self.output_buffer.drain(..) {
+                            for (val, diff) in self.update_buffer.drain(..) {
                                 self.output_produced.push(((val.clone(), next_time.clone()), diff));
                                 outputs[idx].1.push((val, next_time.clone(), diff));
                             }
