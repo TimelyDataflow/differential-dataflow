@@ -24,7 +24,7 @@ pub trait Monoid : Add<Self, Output=Self> + ::std::marker::Sized + Data + Copy {
 	/// This is primarily used by differential dataflow to know when it is safe to delete and update.
 	/// When a difference accumulates to zero, the difference has no effect on any accumulation and can
 	/// be removed.
-	fn is_zero(&self) -> bool;
+	fn is_zero(&self) -> bool { self.eq(&Self::zero()) }
 	/// The additive identity.
 	///
 	/// This method is primarily used by differential dataflow internals as part of consolidation, when
