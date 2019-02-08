@@ -14,7 +14,8 @@
 //! elements are required.
 
 use hashable::Hashable;
-use ::{Data, Collection, Diff};
+use ::{Data, Collection};
+use ::difference::{Monoid, Abelian};
 
 use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
@@ -33,7 +34,7 @@ use trace::implementations::ord::OrdKeySpine as DefaultKeyTrace;
 use trace::TraceReader;
 
 /// Extension trait for the `group` differential dataflow method.
-pub trait Group<G: Scope, K: Data, V: Data, R: Diff> where G::Timestamp: Lattice+Ord {
+pub trait Group<G: Scope, K: Data, V: Data, R: Monoid> where G::Timestamp: Lattice+Ord {
     /// Groups records by their first field, and applies reduction logic to the associated values.
     ///
     /// # Examples
@@ -56,7 +57,7 @@ pub trait Group<G: Scope, K: Data, V: Data, R: Diff> where G::Timestamp: Lattice
     ///     });
     /// }
     /// ```
-    fn group<L, V2: Data, R2: Diff>(&self, logic: L) -> Collection<G, (K, V2), R2>
+    fn group<L, V2: Data, R2: Abelian>(&self, logic: L) -> Collection<G, (K, V2), R2>
     where L: Fn(&K, &[(&V, R)], &mut Vec<(V2, R2)>)+'static;
 }
 
@@ -66,9 +67,9 @@ impl<G, K, V, R> Group<G, K, V, R> for Collection<G, (K, V), R>
         G::Timestamp: Lattice+Ord,
         K: Data+Hashable,
         V: Data,
-        R: Diff,
+        R: Monoid,
  {
-    fn group<L, V2: Data, R2: Diff>(&self, logic: L) -> Collection<G, (K, V2), R2>
+    fn group<L, V2: Data, R2: Abelian>(&self, logic: L) -> Collection<G, (K, V2), R2>
         where L: Fn(&K, &[(&V, R)], &mut Vec<(V2, R2)>)+'static {
         self.arrange_by_key()
             .group_arranged::<_,_,DefaultValTrace<_,_,_,_>,_>(logic)
@@ -76,13 +77,13 @@ impl<G, K, V, R> Group<G, K, V, R> for Collection<G, (K, V), R>
     }
 }
 
-impl<G: Scope, K: Data, V: Data, T1, R: Diff> Group<G, K, V, R> for Arranged<G, K, V, R, T1>
+impl<G: Scope, K: Data, V: Data, T1, R: Monoid> Group<G, K, V, R> for Arranged<G, K, V, R, T1>
 where
     G::Timestamp: Lattice+Ord,
     T1: TraceReader<K, V, G::Timestamp, R>+Clone+'static,
     T1::Batch: BatchReader<K, V, G::Timestamp, R>
 {
-    fn group<L, V2: Data, R2: Diff>(&self, logic: L) -> Collection<G, (K, V2), R2>
+    fn group<L, V2: Data, R2: Abelian>(&self, logic: L) -> Collection<G, (K, V2), R2>
         where L: Fn(&K, &[(&V, R)], &mut Vec<(V2, R2)>)+'static {
         self.group_arranged::<_,_,DefaultValTrace<_,_,_,_>,_>(logic)
             .as_collection(|k,v| (k.clone(), v.clone()))
@@ -90,7 +91,7 @@ where
 }
 
 /// Extension trait for the `distinct` differential dataflow method.
-pub trait Threshold<G: Scope, K: Data, R1: Diff> where G::Timestamp: Lattice+Ord {
+pub trait Threshold<G: Scope, K: Data, R1: Monoid> where G::Timestamp: Lattice+Ord {
     /// Transforms the multiplicity of records.
     ///
     /// The `threshold` function is obliged to map `R1::zero` to `R2::zero`, or at
@@ -115,7 +116,7 @@ pub trait Threshold<G: Scope, K: Data, R1: Diff> where G::Timestamp: Lattice+Ord
     ///     });
     /// }
     /// ```
-    fn threshold<R2: Diff, F: Fn(&K, R1)->R2+'static>(&self, thresh: F) -> Collection<G, K, R2>;
+    fn threshold<R2: Abelian, F: Fn(&K, R1)->R2+'static>(&self, thresh: F) -> Collection<G, K, R2>;
     /// Reduces the collection to one occurrence of each distinct element.
     ///
     /// # Examples
@@ -141,28 +142,28 @@ pub trait Threshold<G: Scope, K: Data, R1: Diff> where G::Timestamp: Lattice+Ord
     }
 }
 
-impl<G: Scope, K: Data+Hashable, R1: Diff> Threshold<G, K, R1> for Collection<G, K, R1>
+impl<G: Scope, K: Data+Hashable, R1: Monoid> Threshold<G, K, R1> for Collection<G, K, R1>
 where G::Timestamp: Lattice+Ord {
-    fn threshold<R2: Diff, F: Fn(&K,R1)->R2+'static>(&self, thresh: F) -> Collection<G, K, R2> {
+    fn threshold<R2: Abelian, F: Fn(&K,R1)->R2+'static>(&self, thresh: F) -> Collection<G, K, R2> {
         self.arrange_by_self()
             .group_arranged::<_,_,DefaultKeyTrace<_,_,_>,_>(move |k,s,t| t.push(((), thresh(k,s[0].1))))
             .as_collection(|k,_| k.clone())
     }
 }
 
-impl<G: Scope, K: Data, T1, R1: Diff> Threshold<G, K, R1> for Arranged<G, K, (), R1, T1>
+impl<G: Scope, K: Data, T1, R1: Monoid> Threshold<G, K, R1> for Arranged<G, K, (), R1, T1>
 where
     G::Timestamp: Lattice+Ord,
     T1: TraceReader<K, (), G::Timestamp, R1>+Clone+'static,
     T1::Batch: BatchReader<K, (), G::Timestamp, R1> {
-    fn threshold<R2: Diff, F: Fn(&K,R1)->R2+'static>(&self, thresh: F) -> Collection<G, K, R2> {
+    fn threshold<R2: Abelian, F: Fn(&K,R1)->R2+'static>(&self, thresh: F) -> Collection<G, K, R2> {
         self.group_arranged::<_,_,DefaultKeyTrace<_,_,_>,_>(move |k,s,t| t.push(((), thresh(k,s[0].1))))
             .as_collection(|k,_| k.clone())
     }
 }
 
 /// Extension trait for the `count` differential dataflow method.
-pub trait Count<G: Scope, K: Data, R: Diff> where G::Timestamp: Lattice+Ord {
+pub trait Count<G: Scope, K: Data, R: Monoid> where G::Timestamp: Lattice+Ord {
     /// Counts the number of occurrences of each element.
     ///
     /// # Examples
@@ -186,7 +187,7 @@ pub trait Count<G: Scope, K: Data, R: Diff> where G::Timestamp: Lattice+Ord {
     fn count(&self) -> Collection<G, (K, R), isize>;
 }
 
-impl<G: Scope, K: Data+Hashable, R: Diff> Count<G, K, R> for Collection<G, K, R>
+impl<G: Scope, K: Data+Hashable, R: Monoid> Count<G, K, R> for Collection<G, K, R>
 where
     G::Timestamp: Lattice+Ord,
 {
@@ -197,7 +198,7 @@ where
     }
 }
 
-impl<G: Scope, K: Data, T1, R: Diff> Count<G, K, R> for Arranged<G, K, (), R, T1>
+impl<G: Scope, K: Data, T1, R: Monoid> Count<G, K, R> for Arranged<G, K, (), R, T1>
 where
     G::Timestamp: Lattice+Ord,
     T1: TraceReader<K, (), G::Timestamp, R>+Clone+'static,
@@ -210,7 +211,7 @@ where
 }
 
 /// Extension trait for the `group_arranged` differential dataflow method.
-pub trait GroupArranged<G: Scope, K: Data, V: Data, R: Diff> where G::Timestamp: Lattice+Ord {
+pub trait GroupArranged<G: Scope, K: Data, V: Data, R: Monoid> where G::Timestamp: Lattice+Ord {
     /// Applies `group` to arranged data, and returns an arrangement of output data.
     ///
     /// This method is used by the more ergonomic `group`, `distinct`, and `count` methods, although
@@ -245,10 +246,32 @@ pub trait GroupArranged<G: Scope, K: Data, V: Data, R: Diff> where G::Timestamp:
     fn group_arranged<L, V2, T2, R2>(&self, logic: L) -> Arranged<G, K, V2, R2, TraceAgent<K, V2, G::Timestamp, R2, T2>>
         where
             V2: Data,
-            R2: Diff,
+            R2: Abelian,
             T2: Trace<K, V2, G::Timestamp, R2>+'static,
             T2::Batch: Batch<K, V2, G::Timestamp, R2>,
-            L: Fn(&K, &[(&V, R)], &mut Vec<(V2, R2)>)+'static
+            L: Fn(&K, &[(&V, R)], &mut Vec<(V2, R2)>)+'static,
+        {
+            self.group_solve(move |key, input, output, change| {
+                if !input.is_empty() {
+                    logic(key, input, change);
+                }
+                change.extend(output.drain(..).map(|(x,d)| (x,-d)));
+                consolidate(change);
+            })
+        }
+
+    /// Solves for output updates when presented with inputs and would-be outputs.
+    ///
+    /// Unlike `group_arranged`, this method may be called with an empty `input`,
+    /// and it may not be safe to index into the first element.
+    /// At least one of the two collections will be non-empty.
+    fn group_solve<L, V2, T2, R2>(&self, logic: L) -> Arranged<G, K, V2, R2, TraceAgent<K, V2, G::Timestamp, R2, T2>>
+        where
+            V2: Data,
+            R2: Monoid,
+            T2: Trace<K, V2, G::Timestamp, R2>+'static,
+            T2::Batch: Batch<K, V2, G::Timestamp, R2>,
+            L: Fn(&K, &[(&V, R)], &mut Vec<(V2,R2)>, &mut Vec<(V2, R2)>)+'static
             ;
 }
 
@@ -258,34 +281,34 @@ where
     G::Timestamp: Lattice+Ord,
     K: Data+Hashable,
     V: Data,
-    R: Diff,
+    R: Monoid,
 {
-    fn group_arranged<L, V2, T2, R2>(&self, logic: L) -> Arranged<G, K, V2, R2, TraceAgent<K, V2, G::Timestamp, R2, T2>>
+    fn group_solve<L, V2, T2, R2>(&self, logic: L) -> Arranged<G, K, V2, R2, TraceAgent<K, V2, G::Timestamp, R2, T2>>
         where
             V2: Data,
-            R2: Diff,
+            R2: Monoid,
             T2: Trace<K, V2, G::Timestamp, R2>+'static,
             T2::Batch: Batch<K, V2, G::Timestamp, R2>,
-            L: Fn(&K, &[(&V, R)], &mut Vec<(V2, R2)>)+'static
+            L: Fn(&K, &[(&V, R)], &mut Vec<(V2,R2)>, &mut Vec<(V2, R2)>)+'static
     {
         self.arrange_by_key()
-            .group_arranged(logic)
+            .group_solve(logic)
     }
 }
 
-impl<G: Scope, K: Data, V: Data, T1, R: Diff> GroupArranged<G, K, V, R> for Arranged<G, K, V, R, T1>
+impl<G: Scope, K: Data, V: Data, T1, R: Monoid> GroupArranged<G, K, V, R> for Arranged<G, K, V, R, T1>
 where
     G::Timestamp: Lattice+Ord,
     T1: TraceReader<K, V, G::Timestamp, R>+Clone+'static,
     T1::Batch: BatchReader<K, V, G::Timestamp, R> {
 
-    fn group_arranged<L, V2, T2, R2>(&self, logic: L) -> Arranged<G, K, V2, R2, TraceAgent<K, V2, G::Timestamp, R2, T2>>
+    fn group_solve<L, V2, T2, R2>(&self, logic: L) -> Arranged<G, K, V2, R2, TraceAgent<K, V2, G::Timestamp, R2, T2>>
         where
             V2: Data,
-            R2: Diff,
+            R2: Monoid,
             T2: Trace<K, V2, G::Timestamp, R2>+'static,
             T2::Batch: Batch<K, V2, G::Timestamp, R2>,
-            L: Fn(&K, &[(&V, R)], &mut Vec<(V2, R2)>)+'static {
+            L: Fn(&K, &[(&V, R)], &mut Vec<(V2,R2)>, &mut Vec<(V2, R2)>)+'static {
 
         let mut result_trace = None;
 
@@ -580,7 +603,7 @@ fn sort_dedup<T: Ord>(list: &mut Vec<T>) {
 /// Consolidats a vector of (element, diff) by sorting by element and collapsing all tuples with the same element.
 /// Elements with diff 0 will be removed.
 #[inline(never)]
-fn consolidate<T: Ord, R: Diff>(list: &mut Vec<(T, R)>) {
+fn consolidate<T: Ord, R: Monoid>(list: &mut Vec<(T, R)>) {
     list.sort_by(|x,y| x.0.cmp(&y.0));
     for index in 1 .. list.len() {
         if list[index].0 == list[index-1].0 {
@@ -593,7 +616,7 @@ fn consolidate<T: Ord, R: Diff>(list: &mut Vec<(T, R)>) {
 
 /// Scans `vec[off..]` and consolidates differences of adjacent equivalent elements (after sorting by element).
 // #[inline(never)]
-pub fn consolidate_from<T: Ord+Clone, R: Diff>(vec: &mut Vec<(T, R)>, off: usize) {
+pub fn consolidate_from<T: Ord+Clone, R: Monoid>(vec: &mut Vec<(T, R)>, off: usize) {
 
     // We should do an insertion-sort like initial scan which builds up sorted, consolidated runs.
     // In a world where there are not many results, we may never even need to call in to merge sort.
@@ -622,8 +645,8 @@ where
     V1: Ord+Clone+'a,
     V2: Ord+Clone+'a,
     T: Lattice+Ord+Clone,
-    R1: Diff,
-    R2: Diff,
+    R1: Monoid,
+    R2: Monoid,
 {
     fn new() -> Self;
     fn compute<K, C1, C2, C3, L>(
@@ -642,14 +665,14 @@ where
         C1: Cursor<K, V1, T, R1>,
         C2: Cursor<K, V2, T, R2>,
         C3: Cursor<K, V1, T, R1>,
-        L: Fn(&K, &[(&V1, R1)], &mut Vec<(V2, R2)>);
+        L: Fn(&K, &[(&V1, R1)], &mut Vec<(V2, R2)>, &mut Vec<(V2, R2)>);
 }
 
 
 /// Implementation based on replaying historical and new updates together.
 mod history_replay {
 
-    use ::Diff;
+    use ::difference::Monoid;
     use lattice::Lattice;
     use trace::Cursor;
     use operators::ValueHistory;
@@ -664,14 +687,15 @@ mod history_replay {
         V1: Ord+Clone+'a,
         V2: Ord+Clone+'a,
         T: Lattice+Ord+Clone,
-        R1: Diff,
-        R2: Diff,
+        R1: Monoid,
+        R2: Monoid,
     {
         batch_history: ValueHistory<'a, V1, T, R1>,
         input_history: ValueHistory<'a, V1, T, R1>,
         output_history: ValueHistory<'a, V2, T, R2>,
         input_buffer: Vec<(&'a V1, R1)>,
         output_buffer: Vec<(V2, R2)>,
+        update_buffer: Vec<(V2, R2)>,
         output_produced: Vec<((V2, T), R2)>,
         synth_times: Vec<T>,
         meets: Vec<T>,
@@ -684,8 +708,8 @@ mod history_replay {
         V1: Ord+Clone,
         V2: Ord+Clone,
         T: Lattice+Ord+Clone,
-        R1: Diff,
-        R2: Diff,
+        R1: Monoid,
+        R2: Monoid,
     {
         fn new() -> Self {
             HistoryReplayer {
@@ -694,6 +718,7 @@ mod history_replay {
                 output_history: ValueHistory::new(),
                 input_buffer: Vec::new(),
                 output_buffer: Vec::new(),
+                update_buffer: Vec::new(),
                 output_produced: Vec::new(),
                 synth_times: Vec::new(),
                 meets: Vec::new(),
@@ -718,7 +743,7 @@ mod history_replay {
             C1: Cursor<K, V1, T, R1>,
             C2: Cursor<K, V2, T, R2>,
             C3: Cursor<K, V1, T, R1>,
-            L: Fn(&K, &[(&V1, R1)], &mut Vec<(V2, R2)>)
+            L: Fn(&K, &[(&V1, R1)], &mut Vec<(V2, R2)>, &mut Vec<(V2, R2)>)
         {
 
             // The work we need to perform is at times defined principally by the contents of `batch_cursor`
@@ -851,16 +876,10 @@ mod history_replay {
                         }
                         consolidate(&mut self.input_buffer);
 
-                        // Apply user logic if non-empty input and see what happens!
-                        if self.input_buffer.len() > 0 {
-                            logic(key, &self.input_buffer[..], &mut self.output_buffer);
-                            self.input_buffer.clear();
-                        }
-
                         output_replay.advance_buffer_by(&meet);
                         for &((ref value, ref time), diff) in output_replay.buffer().iter() {
                             if time.less_equal(&next_time) {
-                                self.output_buffer.push(((*value).clone(), -diff));
+                                self.output_buffer.push(((*value).clone(), diff));
                             }
                             else {
                                 self.temporary.push(next_time.join(time));
@@ -868,23 +887,49 @@ mod history_replay {
                         }
                         for &((ref value, ref time), diff) in self.output_produced.iter() {
                             if time.less_equal(&next_time) {
-                                self.output_buffer.push(((*value).clone(), -diff));
+                                self.output_buffer.push(((*value).clone(), diff));
                             }
                             else {
                                 self.temporary.push(next_time.join(&time));
                             }
                         }
+                        consolidate(&mut self.output_buffer);
+
+                        // Apply user logic if non-empty input and see what happens!
+                        if self.input_buffer.len() > 0 || self.output_buffer.len() > 0 {
+                            logic(key, &self.input_buffer[..], &mut self.output_buffer, &mut self.update_buffer);
+                            self.input_buffer.clear();
+                            self.output_buffer.clear();
+                        }
+
+                        // output_replay.advance_buffer_by(&meet);
+                        // for &((ref value, ref time), diff) in output_replay.buffer().iter() {
+                        //     if time.less_equal(&next_time) {
+                        //         self.output_buffer.push(((*value).clone(), -diff));
+                        //     }
+                        //     else {
+                        //         self.temporary.push(next_time.join(time));
+                        //     }
+                        // }
+                        // for &((ref value, ref time), diff) in self.output_produced.iter() {
+                        //     if time.less_equal(&next_time) {
+                        //         self.output_buffer.push(((*value).clone(), -diff));
+                        //     }
+                        //     else {
+                        //         self.temporary.push(next_time.join(&time));
+                        //     }
+                        // }
 
                         // Having subtracted output updates from user output, consolidate the results to determine
                         // if there is anything worth reporting. Note: this also orders the results by value, so
                         // that could make the above merging plan even easier.
-                        consolidate(&mut self.output_buffer);
+                        consolidate(&mut self.update_buffer);
 
                         // Stash produced updates into both capability-indexed buffers and `output_produced`.
                         // The two locations are important, in that we will compact `output_produced` as we move
                         // through times, but we cannot compact the output buffers because we need their actual
                         // times.
-                        if self.output_buffer.len() > 0 {
+                        if self.update_buffer.len() > 0 {
 
                             output_counter += 1;
 
@@ -893,7 +938,7 @@ mod history_replay {
                             // we should have kept, or we have computed the output incorrectly (or both!)
                             let idx = outputs.iter().rev().position(|&(ref time, _)| time.less_equal(&next_time));
                             let idx = outputs.len() - idx.expect("failed to find index") - 1;
-                            for (val, diff) in self.output_buffer.drain(..) {
+                            for (val, diff) in self.update_buffer.drain(..) {
                                 self.output_produced.push(((val.clone(), next_time.clone()), diff));
                                 outputs[idx].1.push((val, next_time.clone(), diff));
                             }

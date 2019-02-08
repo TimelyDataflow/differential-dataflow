@@ -33,7 +33,8 @@ use timely::dataflow::operators::Capability;
 
 use timely_sort::Unsigned;
 
-use ::{Data, Diff, Collection, AsCollection, Hashable};
+use ::{Data, Collection, AsCollection, Hashable};
+use ::difference::Monoid;
 use lattice::Lattice;
 use trace::{Trace, TraceReader, Batch, BatchReader, Batcher, Cursor};
 use trace::implementations::ord::OrdValSpine as DefaultValTrace;
@@ -109,8 +110,9 @@ where T: Lattice+Ord+Clone+'static, Tr: Trace<K,V,T,R>, Tr::Batch: Batch<K,V,T,R
 
 use timely::scheduling::Activator;
 // Short names for strongly and weakly owned activators and shared queues.
-type TraceAgentQueueReader<K,V,T,R,Tr> = Rc<(Activator, RefCell<VecDeque<(Vec<T>, Option<(T, <Tr as TraceReader<K,V,T,R>>::Batch)>)>>)>;
-type TraceAgentQueueWriter<K,V,T,R,Tr> = Weak<(Activator, RefCell<VecDeque<(Vec<T>, Option<(T, <Tr as TraceReader<K,V,T,R>>::Batch)>)>>)>;
+type BatchQueue<K,V,T,R,Tr> = VecDeque<(Vec<T>, Option<(T, <Tr as TraceReader<K,V,T,R>>::Batch)>)>;
+type TraceAgentQueueReader<K,V,T,R,Tr> = Rc<(Activator, RefCell<BatchQueue<K,V,T,R,Tr>>)>;
+type TraceAgentQueueWriter<K,V,T,R,Tr> = Weak<(Activator, RefCell<BatchQueue<K,V,T,R,Tr>>)>;
 
 /// A `TraceReader` wrapper which can be imported into other dataflows.
 ///
@@ -145,7 +147,9 @@ where T: Lattice+Ord+Clone+'static, Tr: TraceReader<K,V,T,R> {
     fn distinguish_frontier(&mut self) -> &[T] {
         &self.through[..]
     }
-    fn cursor_through(&mut self, frontier: &[T]) -> Option<(Tr::Cursor, <Tr::Cursor as Cursor<K, V, T, R>>::Storage)> { self.trace.borrow_mut().trace.cursor_through(frontier) }
+    fn cursor_through(&mut self, frontier: &[T]) -> Option<(Tr::Cursor, <Tr::Cursor as Cursor<K, V, T, R>>::Storage)> {
+        self.trace.borrow_mut().trace.cursor_through(frontier)
+    }
     fn map_batches<F: FnMut(&Self::Batch)>(&mut self, f: F) { self.trace.borrow_mut().trace.map_batches(f) }
 }
 
@@ -483,7 +487,7 @@ impl<G: Scope, K, V, R, T> Arranged<G, K, V, R, T> where G::Timestamp: Lattice+O
     /// supplied as arguments to an operator using the same key-value structure.
     pub fn as_collection<D: Data, L>(&self, logic: L) -> Collection<G, D, R>
         where
-            R: Diff,
+            R: Monoid,
             T::Batch: Clone+'static,
             K: Clone, V: Clone,
             L: Fn(&K, &V) -> D+'static,
@@ -497,7 +501,7 @@ impl<G: Scope, K, V, R, T> Arranged<G, K, V, R, T> where G::Timestamp: Lattice+O
     /// filtering or flat mapping as part of the extraction.
     pub fn flat_map_ref<I, L>(&self, logic: L) -> Collection<G, I::Item, R>
         where
-            R: Diff,
+            R: Monoid,
             T::Batch: Clone+'static,
             K: Clone, V: Clone,
             I: IntoIterator,
@@ -537,7 +541,7 @@ impl<G: Scope, K, V, R, T> Arranged<G, K, V, R, T> where G::Timestamp: Lattice+O
         G::Timestamp: Data+Lattice+Ord+TotalOrder,
         K: Data+Hashable,
         V: Data,
-        R: Diff,
+        R: Monoid,
         T: 'static
     {
         // while the arrangement is already correctly distributed, the query stream may not be.
@@ -694,7 +698,7 @@ impl<G: Scope, K, V, R, T> Arranged<G, K, V, R, T> where G::Timestamp: Lattice+O
 ///
 /// This trait is implemented for appropriately typed collections and all traces that might accommodate them,
 /// as well as by arranged data for their corresponding trace type.
-pub trait Arrange<G: Scope, K, V, R: Diff>
+pub trait Arrange<G: Scope, K, V, R: Monoid>
 where
     G::Timestamp: Lattice,
 {
@@ -722,7 +726,7 @@ where
         T::Batch: Batch<K, V, G::Timestamp, R>;
 }
 
-impl<G: Scope, K: Data+Hashable, V: Data, R: Diff> Arrange<G, K, V, R> for Collection<G, (K, V), R>
+impl<G: Scope, K: Data+Hashable, V: Data, R: Monoid> Arrange<G, K, V, R> for Collection<G, (K, V), R>
 where
     G::Timestamp: Lattice+Ord,
 {
@@ -838,7 +842,7 @@ where
     }
 }
 
-impl<G: Scope, K: Data+Hashable, R: Diff> Arrange<G, K, (), R> for Collection<G, K, R>
+impl<G: Scope, K: Data+Hashable, R: Monoid> Arrange<G, K, (), R> for Collection<G, K, R>
 where
     G::Timestamp: Lattice+Ord,
 {
@@ -856,7 +860,7 @@ where
 // where
 //     G: Scope,
 //     G::Timestamp: Lattice,
-//     R: Diff,
+//     R: Monoid,
 //     T: Trace<K, V, G::Timestamp, R>+Clone+'static,
 //     T::Batch: Batch<K, V, G::Timestamp, R>
 // {
@@ -870,7 +874,7 @@ where
 /// This arrangement requires `Key: Hashable`, and uses the `hashed()` method to place keys in a hashed
 /// map. This can result in many hash calls, and in some cases it may help to first transform `K` to the
 /// pair `(u64, K)` of hash value and key.
-pub trait ArrangeByKey<G: Scope, K: Data+Hashable, V: Data, R: Diff>
+pub trait ArrangeByKey<G: Scope, K: Data+Hashable, V: Data, R: Monoid>
 where G::Timestamp: Lattice+Ord {
     /// Arranges a collection of `(Key, Val)` records by `Key`.
     ///
@@ -880,7 +884,7 @@ where G::Timestamp: Lattice+Ord {
     fn arrange_by_key(&self) -> Arranged<G, K, V, R, TraceAgent<K, V, G::Timestamp, R, DefaultValTrace<K, V, G::Timestamp, R>>>;
 }
 
-impl<G: Scope, K: Data+Hashable, V: Data, R: Diff> ArrangeByKey<G, K, V, R> for Collection<G, (K,V), R>
+impl<G: Scope, K: Data+Hashable, V: Data, R: Monoid> ArrangeByKey<G, K, V, R> for Collection<G, (K,V), R>
 where G::Timestamp: Lattice+Ord {
     fn arrange_by_key(&self) -> Arranged<G, K, V, R, TraceAgent<K, V, G::Timestamp, R, DefaultValTrace<K, V, G::Timestamp, R>>> {
         self.arrange()
@@ -892,7 +896,7 @@ where G::Timestamp: Lattice+Ord {
 /// This arrangement requires `Key: Hashable`, and uses the `hashed()` method to place keys in a hashed
 /// map. This can result in many hash calls, and in some cases it may help to first transform `K` to the
 /// pair `(u64, K)` of hash value and key.
-pub trait ArrangeBySelf<G: Scope, K: Data+Hashable, R: Diff>
+pub trait ArrangeBySelf<G: Scope, K: Data+Hashable, R: Monoid>
 where G::Timestamp: Lattice+Ord {
     /// Arranges a collection of `Key` records by `Key`.
     ///
@@ -903,7 +907,7 @@ where G::Timestamp: Lattice+Ord {
 }
 
 
-impl<G: Scope, K: Data+Hashable, R: Diff> ArrangeBySelf<G, K, R> for Collection<G, K, R>
+impl<G: Scope, K: Data+Hashable, R: Monoid> ArrangeBySelf<G, K, R> for Collection<G, K, R>
 where G::Timestamp: Lattice+Ord {
     fn arrange_by_self(&self) -> Arranged<G, K, (), R, TraceAgent<K, (), G::Timestamp, R, DefaultKeyTrace<K, G::Timestamp, R>>> {
         self.map(|k| (k, ()))

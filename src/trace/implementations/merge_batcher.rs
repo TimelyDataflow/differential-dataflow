@@ -2,13 +2,13 @@
 
 use timely::progress::frontier::Antichain;
 
-use ::Diff;
+use ::difference::Monoid;
 
 use lattice::Lattice;
 use trace::{Batch, Batcher, Builder};
 
 /// Creates batches from unordered tuples.
-pub struct MergeBatcher<K: Ord, V: Ord, T: Ord, R: Diff, B: Batch<K, V, T, R>> {
+pub struct MergeBatcher<K: Ord, V: Ord, T: Ord, R: Monoid, B: Batch<K, V, T, R>> {
     sorter: MergeSorter<(K, V), T, R>,
     lower: Vec<T>,
     frontier: Antichain<T>,
@@ -20,7 +20,7 @@ where
     K: Ord+Clone,
     V: Ord+Clone,
     T: Lattice+Ord+Clone,
-    R: Diff,
+    R: Monoid,
     B: Batch<K, V, T, R>,
 {
     fn new() -> Self {
@@ -170,12 +170,12 @@ unsafe fn push_unchecked<T>(vec: &mut Vec<T>, element: T) {
     vec.set_len(len + 1);
 }
 
-pub struct MergeSorter<D: Ord, T: Ord, R: Diff> {
+pub struct MergeSorter<D: Ord, T: Ord, R: Monoid> {
     queue: Vec<Vec<Vec<(D, T, R)>>>,    // each power-of-two length list of allocations.
     stash: Vec<Vec<(D, T, R)>>,
 }
 
-impl<D: Ord, T: Ord, R: Diff> MergeSorter<D, T, R> {
+impl<D: Ord, T: Ord, R: Monoid> MergeSorter<D, T, R> {
 
     #[inline]
     pub fn new() -> Self { MergeSorter { queue: Vec::new(), stash: Vec::new() } }
