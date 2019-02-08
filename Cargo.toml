@@ -19,6 +19,7 @@ rand="0.4"
 byteorder="1"
 itertools="^0.7"
 serde_json = "1.0"
+graph_map = "0.1"
 
 [dependencies]
 serde = "1.0"
@@ -30,7 +31,6 @@ timely_sort="0.1.6"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow" }
 #timely = { path = "../timely-dataflow/" }
 fnv="1.0.2"
-graph_map = "0.1"
 
 [profile.release]
 opt-level = 3
