@@ -1,3 +1,4 @@
+//! Commands accepted by the system.
 
 use std::hash::Hash;
 
@@ -7,6 +8,7 @@ use differential_dataflow::{Data};
 
 use super::{Query, Rule, Plan, Time, Diff, Manager};
 
+/// Commands accepted by the system.
 #[derive(Serialize, Deserialize, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub enum Command<Value> {
     /// Installs the query and publishes public rules.
@@ -25,6 +27,7 @@ pub enum Command<Value> {
 
 impl<Value: Data+Hash> Command<Value> {
 
+    /// Executes a command.
     pub fn execute<A: Allocate>(self, manager: &mut Manager<Value>, worker: &mut Worker<A>) {
 
         match self {

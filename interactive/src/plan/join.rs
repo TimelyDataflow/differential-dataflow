@@ -15,6 +15,7 @@ use {TraceManager, Time, Diff};
 /// sources.
 #[derive(Serialize, Deserialize, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct Join<Value> {
+    /// Pairs of indices whose values must be equal.
     pub keys: Vec<(usize, usize)>,
     /// Plan for the left input.
     pub plan1: Box<Plan<Value>>,

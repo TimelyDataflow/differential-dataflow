@@ -53,6 +53,7 @@ pub enum Predicate<Value> {
 }
 
 impl<Value: Ord> Predicate<Value> {
+    /// Indicates if the predicate is satisfied.
     pub fn satisfied(&self, values: &[Value]) -> bool {
         match self {
             Predicate::LessThan(index, other) => values[*index].lt(other.value(values)),

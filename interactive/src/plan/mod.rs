@@ -19,6 +19,7 @@ pub use self::filter::{Filter, Predicate};
 pub use self::join::Join;
 pub use self::project::Project;
 
+/// A type that can be rendered as a collection.
 pub trait Render : Sized {
 
     /// Value type produced.
@@ -56,18 +57,22 @@ pub enum Plan<Value> {
 }
 
 impl<V: Data+Hash> Plan<V> {
+    /// Retains only the values at the indicated indices.
     pub fn project(self, indices: Vec<usize>) -> Self {
         Plan::Project(Project {
             indices,
             plan: Box::new(self),
         })
     }
+    /// Reduces a collection to distinct tuples.
     pub fn distinct(self) -> Self {
         Plan::Distinct(Box::new(self))
     }
+    /// Merges multiple collections.
     pub fn concat(plans: Vec<Self>) -> Self {
         Plan::Concat(Concat { plans } )
     }
+    /// Equi-joins two collections using the specified pairs of keys.
     pub fn join(self, other: Plan<V>, keys: Vec<(usize, usize)>) -> Self {
         Plan::Join(Join {
             keys,
@@ -75,15 +80,19 @@ impl<V: Data+Hash> Plan<V> {
             plan2: Box::new(other),
         })
     }
+    /// Negates a collection (negating multiplicities).
     pub fn negate(self) -> Self {
         Plan::Negate(Box::new(self))
     }
+    /// Restricts collection to tuples satisfying the predicate.
     pub fn filter(self, predicate: Predicate<V>) -> Self {
         Plan::Filter(Filter { predicate, plan: Box::new(self) } )
     }
+    /// Loads a source of data by name.
     pub fn source(name: &str) -> Self {
         Plan::Source(name.to_string())
     }
+    /// Prints each tuple prefixed by `text`.
     pub fn inspect(self, text: &str) -> Self {
         Plan::Inspect(text.to_string(), Box::new(self))
     }

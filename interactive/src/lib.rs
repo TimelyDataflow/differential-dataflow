@@ -1,3 +1,11 @@
+//! Interactive differential dataflow
+//!
+//! This crate provides a demonstration of an interactive differential
+//! dataflow system, which accepts query plans as data and then directly
+//! implements them without compilation.
+
+#![forbid(missing_docs)]
+
 extern crate timely;
 extern crate differential_dataflow;
 extern crate serde;
@@ -13,7 +21,9 @@ pub use manager::{Manager, TraceManager, InputManager};
 pub mod command;
 pub use command::Command;
 
+/// System-wide notion of time.
 pub type Time = ::std::time::Duration;
+/// System-wide update type.
 pub type Diff = isize;
 
 /// Multiple related collection definitions.

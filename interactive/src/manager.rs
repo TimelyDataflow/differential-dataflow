@@ -1,3 +1,5 @@
+//! Management of inputs and traces.
+
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::time::Duration;
@@ -18,24 +20,34 @@ use differential_dataflow::logging::DifferentialEvent;
 
 use super::{Time, Diff, Plan};
 
+/// A trace handle for key-only data.
 pub type TraceKeyHandle<K, T, R> = TraceAgent<K, (), T, R, OrdKeySpine<K, T, R>>;
+/// A trace handle for key-value data.
 pub type TraceValHandle<K, V, T, R> = TraceAgent<K, V, T, R, OrdValSpine<K, V, T, R>>;
-
+/// A key-only trace handle binding `Time` and `Diff` using `Vec<V>` as data.
 pub type KeysOnlyHandle<V> = TraceKeyHandle<Vec<V>, Time, Diff>;
+/// A key-value trace handle binding `Time` and `Diff` using `Vec<V>` as data.
 pub type KeysValsHandle<V> = TraceValHandle<Vec<V>, Vec<V>, Time, Diff>;
 
+/// A type that can be converted to a vector of another type.
 pub trait AsVector<T> {
+    /// Converts `self` to a vector of `T`.
     fn as_vector(self) -> Vec<T>;
 }
 
+/// Manages inputs and traces.
 pub struct Manager<Value: Data> {
+    /// Manages input sessions.
     pub inputs: InputManager<Value>,
+    /// Manages maintained traces.
     pub traces: TraceManager<Value>,
+    /// Probes all computations.
     pub probe: ProbeHandle<Time>,
 }
 
 impl<Value: Data+Hash> Manager<Value> {
 
+    /// Creates a new empty manager.
     pub fn new() -> Self {
         Manager {
             inputs: InputManager::new(),
@@ -51,6 +63,7 @@ impl<Value: Data+Hash> Manager<Value> {
         self.traces.arrangements.clear();
     }
 
+    /// Inserts a new input session by name.
     pub fn insert_input(
         &mut self,
         name: String,
@@ -214,14 +227,18 @@ impl<Value: Data+Hash> Manager<Value> {
     }
 }
 
+/// Manages input sessions.
 pub struct InputManager<Value: Data> {
+    /// Input sessions by name.
     pub sessions: HashMap<String, InputSession<Time, Vec<Value>, Diff>>,
 }
 
 impl<Value: Data> InputManager<Value> {
 
+    /// Creates a new empty input manager.
     pub fn new() -> Self { Self { sessions: HashMap::new() } }
 
+    /// Advances the times of all managed inputs.
     pub fn advance_time(&mut self, time: &Time) {
         for session in self.sessions.values_mut() {
             session.advance_to(time.clone());
@@ -251,6 +268,7 @@ pub struct TraceManager<Value: Data> {
 
 impl<Value: Data+Hash> TraceManager<Value> {
 
+    /// Creates a new empty trace manager.
     pub fn new() -> Self { Self { inputs: HashMap::new(), arrangements: HashMap::new() } }
 
     /// Advances the frontier of each maintained trace.
