@@ -13,7 +13,7 @@ pub use manager::{Manager, TraceManager, InputManager};
 pub mod command;
 pub use command::Command;
 
-pub type Time = usize;
+pub type Time = ::std::time::Duration;
 pub type Diff = isize;
 
 /// Multiple related collection definitions.

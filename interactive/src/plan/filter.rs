@@ -48,6 +48,8 @@ pub enum Predicate<Value> {
     Any(Vec<Predicate<Value>>),
     /// All of a list of predicates.
     All(Vec<Predicate<Value>>),
+    /// The complement of a predicate.
+    Not(Box<Predicate<Value>>),
 }
 
 impl<Value: Ord> Predicate<Value> {
@@ -61,6 +63,7 @@ impl<Value: Ord> Predicate<Value> {
             Predicate::NotEqual(index, other) => values[*index].ne(other.value(values)),
             Predicate::Any(predicates) => predicates.iter().any(|p| p.satisfied(values)),
             Predicate::All(predicates) => predicates.iter().all(|p| p.satisfied(values)),
+            Predicate::Not(predicate) => !predicate.satisfied(values),
         }
     }
 }
