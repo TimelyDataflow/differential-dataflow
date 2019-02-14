@@ -71,7 +71,7 @@ impl<V: Data+Hash> Render for Join<V> {
         else {
             let keys = keys2.clone();
             let arrangement =
-            self.plan1
+            self.plan2
                 .render(scope, arrangements)
                 .map(move |tuple|
                     (
