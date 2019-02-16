@@ -35,5 +35,10 @@
     - [Real-time Streaming Input](./chapter_4/chapter_4_3.md)
 
 - [Arrangements](./chapter_5/chapter_5.md)
+    - [An arrangement example](./chapter_5/chapter_5_1.md)
+    - [Different arrangements](./chapter_5/chapter_5_2.md)
+    - [Sharing across dataflows](./chapter_5/chapter_5_3.md)
+    - [Trace wrappers](./chapter_5/chapter_5_4.md)
+
 
 - [Windows Enough and Time](./chapter_6/chapter_6.md)
