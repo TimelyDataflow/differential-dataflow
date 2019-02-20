@@ -117,7 +117,7 @@ fn main() {
 
         // Caps = { (1,0) }
         let edge_cap0 = edge_cap;
-        println!("{:?}", edge_cap0);
+        println!("{:?}", edge_cap0.time());
         edge_cap = edge_cap_next;
 
         edge_input
@@ -204,26 +204,6 @@ mod pair {
     // Implement timely dataflow's `PathSummary` trait.
     // This is preparation for the `Timestamp` implementation below.
     use timely::progress::PathSummary;
-    // impl<S: Timestamp, T: Timestamp> PathSummary<Pair<S,T>> for Pair<<S as Timestamp>::Summary, <T as Timestamp>::Summary> {
-    //     fn results_in(&self, timestamp: &Pair<S, T>) -> Option<Pair<S,T>> {
-    //         if let Some(s) = self.first.results_in(&timestamp.first) {
-    //             if let Some(t) = self.second.results_in(&timestamp.second) {
-    //                 Some(Pair::new(s,t))
-    //             }
-    //             else { None }
-    //         }
-    //         else { None }
-    //     }
-    //     fn followed_by(&self, other: &Self) -> Option<Self> {
-    //         if let Some(s) = self.first.followed_by(&other.first) {
-    //             if let Some(t) = self.second.followed_by(&other.second) {
-    //                 Some(Pair::new(s,t))
-    //             }
-    //             else { None }
-    //         }
-    //         else { None }
-    //     }
-    // }
 
     impl<S: Timestamp, T: Timestamp> PathSummary<Pair<S,T>> for () {
         fn results_in(&self, timestamp: &Pair<S, T>) -> Option<Pair<S,T>> {
@@ -237,7 +217,7 @@ mod pair {
     // Implement timely dataflow's `Timestamp` trait.
     use timely::progress::Timestamp;
     impl<S: Timestamp, T: Timestamp> Timestamp for Pair<S, T> {
-        type Summary = ();//Pair<<S as Timestamp>::Summary, <T as Timestamp>::Summary>;
+        type Summary = ();
     }
 
     // Implement differential dataflow's `Lattice` trait.
@@ -264,9 +244,9 @@ mod pair {
 
     /// Debug implementation to avoid seeing fully qualified path names.
     impl<TOuter: Debug, TInner: Debug> Debug for Pair<TOuter, TInner> {
-    fn fmt(&self, f: &mut Formatter) -> Result<(), Error> {
-        f.write_str(&format!("({:?}, {:?})", self.first, self.second))
+        fn fmt(&self, f: &mut Formatter) -> Result<(), Error> {
+            f.write_str(&format!("({:?}, {:?})", self.first, self.second))
+        }
     }
-}
 
 }
