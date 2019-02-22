@@ -18,7 +18,7 @@ pub use self::Abelian as Diff;
 /// and almost certainly use commutativity somewhere (it isn't clear if it is a requirement, as it isn't
 /// clear that there are semantics other than "we accumulate your differences"; I suspect we don't always
 /// accumulate them in the right order, so commutativity is important until we conclude otherwise).
-pub trait Monoid : AddAssign + ::std::marker::Sized + Data + Clone {
+pub trait Monoid : for<'a> AddAssign<&'a Self> + ::std::marker::Sized + Data + Clone {
 	/// Returns true if the element is the additive identity.
 	///
 	/// This is primarily used by differential dataflow to know when it is safe to delete and update.
@@ -86,10 +86,10 @@ impl<R1: Monoid, R2: Monoid> Monoid for DiffPair<R1, R2> {
 	}
 }
 
-impl<R1: AddAssign, R2: AddAssign> AddAssign<DiffPair<R1, R2>> for DiffPair<R1, R2> {
-	#[inline(always)] fn add_assign(&mut self, rhs: Self) {
-		self.element1 += rhs.element1;
-		self.element2 += rhs.element2;
+impl<'a, R1: AddAssign<&'a R1>, R2: AddAssign<&'a R2>> AddAssign<&'a DiffPair<R1, R2>> for DiffPair<R1, R2> {
+	#[inline(always)] fn add_assign(&mut self, rhs: &'a Self) {
+		self.element1 += &rhs.element1;
+		self.element2 += &rhs.element2;
 	}
 }
 
@@ -125,57 +125,57 @@ impl<T: Copy, R1: Mul<T>, R2: Mul<T>> Mul<T> for DiffPair<R1,R2> {
 // 	}
 // }
 
-/// A variable number of accumulable updates.
-#[derive(Abomonation, Ord, PartialOrd, Eq, PartialEq, Debug, Clone, Serialize, Deserialize)]
-pub struct DiffVector<R> {
-	buffer: Vec<R>,
-}
+// /// A variable number of accumulable updates.
+// #[derive(Abomonation, Ord, PartialOrd, Eq, PartialEq, Debug, Clone, Serialize, Deserialize)]
+// pub struct DiffVector<R> {
+// 	buffer: Vec<R>,
+// }
 
-impl<R: Monoid> Monoid for DiffVector<R> {
-	#[inline(always)] fn is_zero(&self) -> bool {
-		self.buffer.iter().all(|x| x.is_zero())
-	}
-	#[inline(always)] fn zero() -> Self {
-		Self { buffer: Vec::new() }
-	}
-}
+// impl<R: Monoid> Monoid for DiffVector<R> {
+// 	#[inline(always)] fn is_zero(&self) -> bool {
+// 		self.buffer.iter().all(|x| x.is_zero())
+// 	}
+// 	#[inline(always)] fn zero() -> Self {
+// 		Self { buffer: Vec::new() }
+// 	}
+// }
 
-impl<R: AddAssign> AddAssign<DiffVector<R>> for DiffVector<R> {
-	#[inline(always)]
-	fn add_assign(&mut self, mut rhs: Self) {
+// impl<R: AddAssign> AddAssign<DiffVector<R>> for DiffVector<R> {
+// 	#[inline(always)]
+// 	fn add_assign(&mut self, mut rhs: Self) {
 
-		// Swap arguments if other is longer.
-		if self.buffer.len() < rhs.buffer.len() {
-			::std::mem::swap(self, &mut rhs);
-		}
+// 		// Swap arguments if other is longer.
+// 		if self.buffer.len() < rhs.buffer.len() {
+// 			::std::mem::swap(self, &mut rhs);
+// 		}
 
-		// As other is not longer, apply updates without tests.
-		for (index, update) in rhs.buffer.into_iter().enumerate() {
-			self.buffer[index] += update;
-		}
-	}
-}
+// 		// As other is not longer, apply updates without tests.
+// 		for (index, update) in rhs.buffer.into_iter().enumerate() {
+// 			self.buffer[index] += update;
+// 		}
+// 	}
+// }
 
-impl<R: Neg<Output=R>+Clone> Neg for DiffVector<R> {
-	type Output = DiffVector<<R as Neg>::Output>;
-	#[inline(always)]
-	fn neg(mut self) -> Self::Output {
-		for update in self.buffer.iter_mut() {
-			*update = -update.clone();
-		}
-		self
-	}
-}
+// impl<R: Neg<Output=R>+Clone> Neg for DiffVector<R> {
+// 	type Output = DiffVector<<R as Neg>::Output>;
+// 	#[inline(always)]
+// 	fn neg(mut self) -> Self::Output {
+// 		for update in self.buffer.iter_mut() {
+// 			*update = -update.clone();
+// 		}
+// 		self
+// 	}
+// }
 
-impl<T: Copy, R: Mul<T>> Mul<T> for DiffVector<R> {
-	type Output = DiffVector<<R as Mul<T>>::Output>;
-	fn mul(self, other: T) -> Self::Output {
-		let buffer =
-		self.buffer
-			.into_iter()
-			.map(|x| x * other)
-			.collect();
+// impl<T: Copy, R: Mul<T>> Mul<T> for DiffVector<R> {
+// 	type Output = DiffVector<<R as Mul<T>>::Output>;
+// 	fn mul(self, other: T) -> Self::Output {
+// 		let buffer =
+// 		self.buffer
+// 			.into_iter()
+// 			.map(|x| x * other)
+// 			.collect();
 
-		DiffVector { buffer }
-	}
-}
+// 		DiffVector { buffer }
+// 	}
+// }

@@ -87,7 +87,7 @@ where
 
                         trace_cursor.seek_key(&trace_storage, key);
                         if trace_cursor.key_valid(&trace_storage) && trace_cursor.key(&trace_storage) == key {
-                            trace_cursor.map_times(&trace_storage, |_, diff| count += diff);
+                            trace_cursor.map_times(&trace_storage, |_, diff| count += &diff);
                         }
 
                         batch_cursor.map_times(&batch, |time, diff| {
@@ -95,7 +95,7 @@ where
                             if !count.is_zero() {
                                 session.give(((key.clone(), count.clone()), time.clone(), -1));
                             }
-                            count += diff;
+                            count += &diff;
                             if !count.is_zero() {
                                 session.give(((key.clone(), count.clone()), time.clone(), 1));
                             }

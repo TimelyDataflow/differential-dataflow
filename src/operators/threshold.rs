@@ -106,7 +106,7 @@ where
                         // Compute the multiplicity of this key before the current batch.
                         trace_cursor.seek_key(&trace_storage, key);
                         if trace_cursor.key_valid(&trace_storage) && trace_cursor.key(&trace_storage) == key {
-                            trace_cursor.map_times(&trace_storage, |_, diff| count += diff);
+                            trace_cursor.map_times(&trace_storage, |_, diff| count += &diff);
                         }
 
                         // Apply `thresh` both before and after `diff` is applied to `count`.
@@ -116,11 +116,11 @@ where
                             // Determine old and new weights.
                             // If a count is zero, the weight must be zero.
                             let old_weight = if count.is_zero() { R2::zero() } else { thresh(key, count.clone()) };
-                            count += diff;
+                            count += &diff;
                             let new_weight = if count.is_zero() { R2::zero() } else { thresh(key, count.clone()) };
 
                             let mut difference = -old_weight;
-                            difference += new_weight;
+                            difference += &new_weight;
                             if !difference.is_zero() {
                                 session.give((key.clone(), time.clone(), difference));
                             }

@@ -608,7 +608,7 @@ fn consolidate<T: Ord, R: Monoid>(list: &mut Vec<(T, R)>) {
     for index in 1 .. list.len() {
         if list[index].0 == list[index-1].0 {
             let prev = ::std::mem::replace(&mut list[index-1].1, R::zero());
-            list[index].1 += prev;
+            list[index].1 += &prev;
         }
     }
     list.retain(|x| !x.1.is_zero());
@@ -625,7 +625,7 @@ pub fn consolidate_from<T: Ord+Clone, R: Monoid>(vec: &mut Vec<(T, R)>, off: usi
     for index in (off + 1) .. vec.len() {
         if vec[index].0 == vec[index - 1].0 {
             let prev = ::std::mem::replace(&mut vec[index-1].1, R::zero());
-            vec[index].1 += prev;
+            vec[index].1 += &prev;
         }
     }
 

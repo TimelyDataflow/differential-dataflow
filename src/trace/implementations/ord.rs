@@ -112,7 +112,7 @@ where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Ord+Clone+::std::fm
 			for index in lower .. (upper - 1) {
 				if updates[index].0 == updates[index+1].0 {
 					let prev = ::std::mem::replace(&mut updates[index].1, R::zero());
-					updates[index+1].1 += prev;
+					updates[index+1].1 += &prev;
 				}
 			}
 
@@ -394,7 +394,7 @@ where K: Ord+Clone+'static, T: Lattice+Ord+Clone+'static, R: Monoid {
 			for index in lower .. (upper - 1) {
 				if updates[index].0 == updates[index+1].0 {
 					let prev = ::std::mem::replace(&mut updates[index].1, R::zero());
-					updates[index + 1].1 += prev;
+					updates[index + 1].1 += &prev;
 				}
 			}
 
