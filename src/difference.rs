@@ -6,7 +6,7 @@
 //! dataflow collections would then track for each record the total of counts and heights, which allows
 //! us to track something like the average.
 
-use std::ops::{Add, AddAssign, Sub, Neg, Mul};
+use std::ops::{AddAssign, Neg, Mul};
 
 use ::Data;
 
@@ -18,7 +18,7 @@ pub use self::Abelian as Diff;
 /// and almost certainly use commutativity somewhere (it isn't clear if it is a requirement, as it isn't
 /// clear that there are semantics other than "we accumulate your differences"; I suspect we don't always
 /// accumulate them in the right order, so commutativity is important until we conclude otherwise).
-pub trait Monoid : Add<Self, Output=Self> + AddAssign + ::std::marker::Sized + Data + Clone {
+pub trait Monoid : AddAssign + ::std::marker::Sized + Data + Clone {
 	/// Returns true if the element is the additive identity.
 	///
 	/// This is primarily used by differential dataflow to know when it is safe to delete and update.
@@ -38,8 +38,8 @@ pub trait Monoid : Add<Self, Output=Self> + AddAssign + ::std::marker::Sized + D
 /// the additional support for subtraction and negation. An identity subtracted
 /// from itself or added to its negation should be the zero element from the
 /// underlying monoid.
-pub trait Abelian : Monoid + Sub<Self, Output=Self> + Neg<Output=Self> { }
-impl<T: Monoid + Sub<Self, Output=Self> + Neg<Output=Self>> Abelian for T { }
+pub trait Abelian : Monoid + Neg<Output=Self> { }
+impl<T: Monoid + Neg<Output=Self>> Abelian for T { }
 
 impl Monoid for isize {
 	#[inline(always)] fn is_zero(&self) -> bool { *self == 0 }
@@ -85,30 +85,10 @@ impl<R1: Monoid, R2: Monoid> Monoid for DiffPair<R1, R2> {
 	#[inline(always)] fn zero() -> Self { DiffPair { element1: R1::zero(), element2: R2::zero() } }
 }
 
-impl<R1: Add, R2: Add> Add<DiffPair<R1, R2>> for DiffPair<R1, R2> {
-	type Output = DiffPair<<R1 as Add>::Output, <R2 as Add>::Output>;
-	#[inline(always)] fn add(self, rhs: Self) -> Self::Output {
-		DiffPair {
-			element1: self.element1 + rhs.element1,
-			element2: self.element2 + rhs.element2,
-		}
-	}
-}
-
 impl<R1: AddAssign, R2: AddAssign> AddAssign<DiffPair<R1, R2>> for DiffPair<R1, R2> {
 	#[inline(always)] fn add_assign(&mut self, rhs: Self) {
 		self.element1 += rhs.element1;
 		self.element2 += rhs.element2;
-	}
-}
-
-impl<R1: Sub, R2: Sub> Sub<DiffPair<R1, R2>> for DiffPair<R1, R2> {
-	type Output = DiffPair<<R1 as Sub>::Output, <R2 as Sub>::Output>;
-	#[inline(always)] fn sub(self, rhs: Self) -> Self::Output {
-		DiffPair {
-			element1: self.element1 - rhs.element1,
-			element2: self.element2 - rhs.element2,
-		}
 	}
 }
 
@@ -159,24 +139,6 @@ impl<R: Monoid> Monoid for DiffVector<R> {
 	}
 }
 
-impl<R: Add<Output=R>+Clone> Add<DiffVector<R>> for DiffVector<R> {
-	type Output = DiffVector<<R as Add>::Output>;
-	#[inline(always)]
-	fn add(mut self, mut rhs: Self) -> Self::Output {
-		// Swap arguments if other is longer.
-		if self.buffer.len() < rhs.buffer.len() {
-			::std::mem::swap(&mut self, &mut rhs);
-		}
-
-		// As other is not longer, apply updates without tests.
-		for (index, update) in rhs.buffer.into_iter().enumerate() {
-			self.buffer[index] = self.buffer[index].clone() + update;
-		}
-
-		self
-	}
-}
-
 impl<R: AddAssign> AddAssign<DiffVector<R>> for DiffVector<R> {
 	#[inline(always)]
 	fn add_assign(&mut self, mut rhs: Self) {
@@ -190,24 +152,6 @@ impl<R: AddAssign> AddAssign<DiffVector<R>> for DiffVector<R> {
 		for (index, update) in rhs.buffer.into_iter().enumerate() {
 			self.buffer[index] += update;
 		}
-	}
-}
-
-impl<R: Sub<Output=R>+Clone> Sub<DiffVector<R>> for DiffVector<R> {
-	type Output = DiffVector<<R as Sub>::Output>;
-	#[inline(always)]
-	fn sub(mut self, mut rhs: Self) -> Self::Output {
-		// Swap arguments if other is longer.
-		if self.buffer.len() < rhs.buffer.len() {
-			::std::mem::swap(&mut self, &mut rhs);
-		}
-
-		// As other is not longer, apply updates without tests.
-		for (index, update) in rhs.buffer.into_iter().enumerate() {
-			self.buffer[index] = self.buffer[index].clone() - update;
-		}
-
-		self
 	}
 }
 

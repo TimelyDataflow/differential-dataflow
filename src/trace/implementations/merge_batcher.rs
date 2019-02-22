@@ -281,11 +281,11 @@ impl<D: Ord, T: Ord, R: Monoid> MergeSorter<D, T, R> {
                     Ordering::Less    => { unsafe { push_unchecked(&mut result, head1.pop()); } }
                     Ordering::Greater => { unsafe { push_unchecked(&mut result, head2.pop()); } }
                     Ordering::Equal   => {
-                        let (data1, time1, diff1) = head1.pop();
+                        let (data1, time1, mut diff1) = head1.pop();
                         let (_data2, _time2, diff2) = head2.pop();
-                        let diff = diff1 + diff2;
-                        if !diff.is_zero() {
-                            unsafe { push_unchecked(&mut result, (data1, time1, diff)); }
+                        diff1 += diff2;
+                        if !diff1.is_zero() {
+                            unsafe { push_unchecked(&mut result, (data1, time1, diff1)); }
                         }
                     }
                 }

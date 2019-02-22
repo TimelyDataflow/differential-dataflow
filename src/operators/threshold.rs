@@ -112,10 +112,15 @@ where
                         // Apply `thresh` both before and after `diff` is applied to `count`.
                         // If the result is non-zero, send it along.
                         batch_cursor.map_times(&batch, |time, diff| {
+
+                            // Determine old and new weights.
+                            // If a count is zero, the weight must be zero.
                             let old_weight = if count.is_zero() { R2::zero() } else { thresh(key, count.clone()) };
                             count += diff;
                             let new_weight = if count.is_zero() { R2::zero() } else { thresh(key, count.clone()) };
-                            let difference = new_weight - old_weight;
+
+                            let mut difference = -old_weight;
+                            difference += new_weight;
                             if !difference.is_zero() {
                                 session.give((key.clone(), time.clone(), difference));
                             }
