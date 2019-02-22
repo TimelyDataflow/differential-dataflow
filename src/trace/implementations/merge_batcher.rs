@@ -208,8 +208,8 @@ impl<D: Ord, T: Ord, R: Monoid> MergeSorter<D, T, R> {
             batch.sort_unstable_by(|x,y| (&x.0, &x.1).cmp(&(&y.0, &y.1)));
             for index in 1 .. batch.len() {
                 if batch[index].0 == batch[index - 1].0 && batch[index].1 == batch[index - 1].1 {
-                    batch[index].2 = batch[index].2 + batch[index - 1].2;
-                    batch[index - 1].2 = R::zero();
+                    let prev = ::std::mem::replace(&mut batch[index - 1].2, R::zero());
+                    batch[index].2 += prev;
                 }
             }
             batch.retain(|x| !x.2.is_zero());
@@ -281,11 +281,11 @@ impl<D: Ord, T: Ord, R: Monoid> MergeSorter<D, T, R> {
                     Ordering::Less    => { unsafe { push_unchecked(&mut result, head1.pop()); } }
                     Ordering::Greater => { unsafe { push_unchecked(&mut result, head2.pop()); } }
                     Ordering::Equal   => {
-                        let (data1, time1, diff1) = head1.pop();
+                        let (data1, time1, mut diff1) = head1.pop();
                         let (_data2, _time2, diff2) = head2.pop();
-                        let diff = diff1 + diff2;
-                        if !diff.is_zero() {
-                            unsafe { push_unchecked(&mut result, (data1, time1, diff)); }
+                        diff1 += diff2;
+                        if !diff1.is_zero() {
+                            unsafe { push_unchecked(&mut result, (data1, time1, diff1)); }
                         }
                     }
                 }

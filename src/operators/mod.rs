@@ -76,7 +76,7 @@ impl<'a, V:'a, T, R> EditList<'a, V, T, R> where T: Ord+Clone, R: Monoid {
             let lower = if index == 0 { 0 } else { self.values[index-1].1 };
             let upper = self.values[index].1;
             for edit in lower .. upper {
-                logic(&self.values[index].0, &self.edits[edit].0, self.edits[edit].1);
+                logic(&self.values[index].0, &self.edits[edit].0, self.edits[edit].1.clone());
             }
         }
     }
@@ -173,7 +173,7 @@ where
     fn time(&self) -> Option<&T> { self.replay.history.last().map(|x| &x.0) }
     fn meet(&self) -> Option<&T> { self.replay.history.last().map(|x| &x.1) }
     fn edit(&self) -> Option<(&V, &T, R)> {
-        self.replay.history.last().map(|&(ref t, _, v, e)| (self.replay.edits.values[v].0, t, self.replay.edits.edits[e].1))
+        self.replay.history.last().map(|&(ref t, _, v, e)| (self.replay.edits.values[v].0, t, self.replay.edits.edits[e].1.clone()))
     }
 
     fn buffer(&self) -> &[((&'storage V, T), R)] {
@@ -182,7 +182,7 @@ where
 
     fn step(&mut self) {
         let (time, _, value_index, edit_offset) = self.replay.history.pop().unwrap();
-        self.replay.buffer.push(((self.replay.edits.values[value_index].0, time), self.replay.edits.edits[edit_offset].1));
+        self.replay.buffer.push(((self.replay.edits.values[value_index].0, time), self.replay.edits.edits[edit_offset].1.clone()));
     }
     fn step_while_time_is(&mut self, time: &T) -> bool {
         let mut found = false;

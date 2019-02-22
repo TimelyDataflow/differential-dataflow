@@ -639,8 +639,8 @@ impl<G: Scope, K, V, R, T> Arranged<G, K, V, R, T> where G::Timestamp: Lattice+O
                                     if !active.is_empty() && active[0].1.less_than(&time) {
                                         ::trace::consolidate(&mut working2, 0);
                                         while !active.is_empty() && active[0].1.less_than(&time) {
-                                            for &(ref val, count) in working2.iter() {
-                                                session.give((key.clone(), val.clone(), active[0].1.clone(), count));
+                                            for &(ref val, ref count) in working2.iter() {
+                                                session.give((key.clone(), val.clone(), active[0].1.clone(), count.clone()));
                                             }
                                             active = &active[1..];
                                         }
@@ -650,9 +650,8 @@ impl<G: Scope, K, V, R, T> Arranged<G, K, V, R, T> where G::Timestamp: Lattice+O
                                 if !active.is_empty() {
                                     ::trace::consolidate(&mut working2, 0);
                                     while !active.is_empty() {
-                                        for &(ref val, count) in working2.iter() {
-                                            let count: R = count;
-                                            session.give((key.clone(), val.clone(), active[0].1.clone(), count));
+                                        for &(ref val, ref count) in working2.iter() {
+                                            session.give((key.clone(), val.clone(), active[0].1.clone(), count.clone()));
                                         }
                                         active = &active[1..];
                                     }

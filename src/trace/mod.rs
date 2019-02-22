@@ -462,8 +462,8 @@ pub fn consolidate_by<T: Eq+Clone, L: Fn(&T, &T)->::std::cmp::Ordering, R: Monoi
 	vec[off..].sort_by(|x,y| cmp(&x.0, &y.0));
 	for index in (off + 1) .. vec.len() {
 		if vec[index].0 == vec[index - 1].0 {
-			vec[index].1 = vec[index].1 + vec[index - 1].1;
-			vec[index - 1].1 = R::zero();
+			let prev = ::std::mem::replace(&mut vec[index - 1].1, R::zero());
+			vec[index].1 += prev;
 		}
 	}
 	let mut cursor = off;

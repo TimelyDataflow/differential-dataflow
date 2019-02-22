@@ -139,7 +139,7 @@ impl<G: Scope, D: Data, R: Monoid> Collection<G, D, R> where G::Timestamp: Data 
               I::Item: Data,
               L: Fn(D) -> I + 'static {
         self.inner
-            .flat_map(move |(data, time, delta)| logic(data).into_iter().map(move |x| (x, time.clone(), delta)))
+            .flat_map(move |(data, time, delta)| logic(data).into_iter().map(move |x| (x, time.clone(), delta.clone())))
             .as_collection()
     }
     /// Creates a new collection containing those input records satisfying the supplied predicate.
@@ -232,7 +232,7 @@ impl<G: Scope, D: Data, R: Monoid> Collection<G, D, R> where G::Timestamp: Data 
           L: Fn(D)->I+'static,
     {
         self.inner
-            .flat_map(move |(x, t, d)| logic(x).into_iter().map(move |(x,d2)| (x, t.clone(), d2 * d)))
+            .flat_map(move |(x, t, d)| logic(x).into_iter().map(move |(x,d2)| (x, t.clone(), d2 * d.clone())))
             .as_collection()
     }
 
@@ -527,7 +527,7 @@ impl<G: Scope, D: Data, R: Abelian> Collection<G, D, R> where G::Timestamp: Data
     /// ```
     pub fn negate(&self) -> Collection<G, D, R> {
         self.inner
-            .map_in_place(|x| x.2 = -x.2)
+            .map_in_place(|x| x.2 = -x.2.clone())
             .as_collection()
     }
 

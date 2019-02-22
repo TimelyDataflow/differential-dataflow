@@ -6,7 +6,7 @@
 //! dataflow collections would then track for each record the total of counts and heights, which allows
 //! us to track something like the average.
 
-use std::ops::{Add, Sub, Neg, Mul};
+use std::ops::{AddAssign, Neg, Mul};
 
 use ::Data;
 
@@ -18,7 +18,7 @@ pub use self::Abelian as Diff;
 /// and almost certainly use commutativity somewhere (it isn't clear if it is a requirement, as it isn't
 /// clear that there are semantics other than "we accumulate your differences"; I suspect we don't always
 /// accumulate them in the right order, so commutativity is important until we conclude otherwise).
-pub trait Monoid : Add<Self, Output=Self> + ::std::marker::Sized + Data + Copy {
+pub trait Monoid : AddAssign + ::std::marker::Sized + Data + Clone {
 	/// Returns true if the element is the additive identity.
 	///
 	/// This is primarily used by differential dataflow to know when it is safe to delete and update.
@@ -38,21 +38,18 @@ pub trait Monoid : Add<Self, Output=Self> + ::std::marker::Sized + Data + Copy {
 /// the additional support for subtraction and negation. An identity subtracted
 /// from itself or added to its negation should be the zero element from the
 /// underlying monoid.
-pub trait Abelian : Monoid + Sub<Self, Output=Self> + Neg<Output=Self> { }
-impl<T: Monoid + Sub<Self, Output=Self> + Neg<Output=Self>> Abelian for T { }
+pub trait Abelian : Monoid + Neg<Output=Self> { }
+impl<T: Monoid + Neg<Output=Self>> Abelian for T { }
 
 impl Monoid for isize {
-	#[inline(always)] fn is_zero(&self) -> bool { *self == 0 }
 	#[inline(always)] fn zero() -> Self { 0 }
 }
 
 impl Monoid for i64 {
-	#[inline(always)] fn is_zero(&self) -> bool { *self == 0 }
 	#[inline(always)] fn zero() -> Self { 0 }
 }
 
 impl Monoid for i32 {
-	#[inline(always)] fn is_zero(&self) -> bool { *self == 0 }
 	#[inline(always)] fn zero() -> Self { 0 }
 }
 
@@ -81,27 +78,18 @@ impl<R1, R2> DiffPair<R1, R2> {
 }
 
 impl<R1: Monoid, R2: Monoid> Monoid for DiffPair<R1, R2> {
-	#[inline(always)] fn is_zero(&self) -> bool { self.element1.is_zero() && self.element2.is_zero() }
-	#[inline(always)] fn zero() -> Self { DiffPair { element1: R1::zero(), element2: R2::zero() } }
-}
-
-impl<R1: Add, R2: Add> Add<DiffPair<R1, R2>> for DiffPair<R1, R2> {
-	type Output = DiffPair<<R1 as Add>::Output, <R2 as Add>::Output>;
-	#[inline(always)] fn add(self, rhs: Self) -> Self::Output {
+	#[inline(always)] fn zero() -> Self {
 		DiffPair {
-			element1: self.element1 + rhs.element1,
-			element2: self.element2 + rhs.element2,
+			element1: R1::zero(),
+			element2: R2::zero(),
 		}
 	}
 }
 
-impl<R1: Sub, R2: Sub> Sub<DiffPair<R1, R2>> for DiffPair<R1, R2> {
-	type Output = DiffPair<<R1 as Sub>::Output, <R2 as Sub>::Output>;
-	#[inline(always)] fn sub(self, rhs: Self) -> Self::Output {
-		DiffPair {
-			element1: self.element1 - rhs.element1,
-			element2: self.element2 - rhs.element2,
-		}
+impl<R1: AddAssign, R2: AddAssign> AddAssign<DiffPair<R1, R2>> for DiffPair<R1, R2> {
+	#[inline(always)] fn add_assign(&mut self, rhs: Self) {
+		self.element1 += rhs.element1;
+		self.element2 += rhs.element2;
 	}
 }
 
@@ -136,3 +124,58 @@ impl<T: Copy, R1: Mul<T>, R2: Mul<T>> Mul<T> for DiffPair<R1,R2> {
 // 		)
 // 	}
 // }
+
+/// A variable number of accumulable updates.
+#[derive(Abomonation, Ord, PartialOrd, Eq, PartialEq, Debug, Clone, Serialize, Deserialize)]
+pub struct DiffVector<R> {
+	buffer: Vec<R>,
+}
+
+impl<R: Monoid> Monoid for DiffVector<R> {
+	#[inline(always)] fn is_zero(&self) -> bool {
+		self.buffer.iter().all(|x| x.is_zero())
+	}
+	#[inline(always)] fn zero() -> Self {
+		Self { buffer: Vec::new() }
+	}
+}
+
+impl<R: AddAssign> AddAssign<DiffVector<R>> for DiffVector<R> {
+	#[inline(always)]
+	fn add_assign(&mut self, mut rhs: Self) {
+
+		// Swap arguments if other is longer.
+		if self.buffer.len() < rhs.buffer.len() {
+			::std::mem::swap(self, &mut rhs);
+		}
+
+		// As other is not longer, apply updates without tests.
+		for (index, update) in rhs.buffer.into_iter().enumerate() {
+			self.buffer[index] += update;
+		}
+	}
+}
+
+impl<R: Neg<Output=R>+Clone> Neg for DiffVector<R> {
+	type Output = DiffVector<<R as Neg>::Output>;
+	#[inline(always)]
+	fn neg(mut self) -> Self::Output {
+		for update in self.buffer.iter_mut() {
+			*update = -update.clone();
+		}
+		self
+	}
+}
+
+impl<T: Copy, R: Mul<T>> Mul<T> for DiffVector<R> {
+	type Output = DiffVector<<R as Mul<T>>::Output>;
+	fn mul(self, other: T) -> Self::Output {
+		let buffer =
+		self.buffer
+			.into_iter()
+			.map(|x| x * other)
+			.collect();
+
+		DiffVector { buffer }
+	}
+}

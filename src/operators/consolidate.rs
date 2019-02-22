@@ -110,8 +110,8 @@ where
                         vector.sort_unstable_by(|x,y| (&x.0, &x.1).cmp(&(&y.0, &y.1)));
                         for index in 1 .. vector.len() {
                             if vector[index].0 == vector[index - 1].0 && vector[index].1 == vector[index - 1].1 {
-                                vector[index].2 = vector[index].2 + vector[index - 1].2;
-                                vector[index - 1].2 = R::zero();
+                                let prev = ::std::mem::replace(&mut vector[index - 1].2, R::zero());
+                                vector[index].2 += prev;
                             }
                         }
                         vector.retain(|x| !x.2.is_zero());
