@@ -208,8 +208,8 @@ impl<D: Ord, T: Ord, R: Monoid> MergeSorter<D, T, R> {
             batch.sort_unstable_by(|x,y| (&x.0, &x.1).cmp(&(&y.0, &y.1)));
             for index in 1 .. batch.len() {
                 if batch[index].0 == batch[index - 1].0 && batch[index].1 == batch[index - 1].1 {
-                    batch[index].2 = batch[index].2 + batch[index - 1].2;
-                    batch[index - 1].2 = R::zero();
+                    let prev = ::std::mem::replace(&mut batch[index - 1].2, R::zero());
+                    batch[index].2 += prev;
                 }
             }
             batch.retain(|x| !x.2.is_zero());

@@ -146,7 +146,7 @@ impl<G: Scope, K: Data+Hashable, R1: Monoid> Threshold<G, K, R1> for Collection<
 where G::Timestamp: Lattice+Ord {
     fn threshold<R2: Abelian, F: Fn(&K,R1)->R2+'static>(&self, thresh: F) -> Collection<G, K, R2> {
         self.arrange_by_self()
-            .group_arranged::<_,_,DefaultKeyTrace<_,_,_>,_>(move |k,s,t| t.push(((), thresh(k,s[0].1))))
+            .group_arranged::<_,_,DefaultKeyTrace<_,_,_>,_>(move |k,s,t| t.push(((), thresh(k, s[0].1.clone()))))
             .as_collection(|k,_| k.clone())
     }
 }
@@ -157,7 +157,7 @@ where
     T1: TraceReader<K, (), G::Timestamp, R1>+Clone+'static,
     T1::Batch: BatchReader<K, (), G::Timestamp, R1> {
     fn threshold<R2: Abelian, F: Fn(&K,R1)->R2+'static>(&self, thresh: F) -> Collection<G, K, R2> {
-        self.group_arranged::<_,_,DefaultKeyTrace<_,_,_>,_>(move |k,s,t| t.push(((), thresh(k,s[0].1))))
+        self.group_arranged::<_,_,DefaultKeyTrace<_,_,_>,_>(move |k,s,t| t.push(((), thresh(k, s[0].1.clone()))))
             .as_collection(|k,_| k.clone())
     }
 }
@@ -193,8 +193,8 @@ where
 {
     fn count(&self) -> Collection<G, (K, R), isize> {
         self.arrange_by_self()
-            .group_arranged::<_,_,DefaultValTrace<_,_,_,_>,_>(|_k,s,t| t.push((s[0].1, 1)))
-            .as_collection(|k,&c| (k.clone(), c))
+            .group_arranged::<_,_,DefaultValTrace<_,_,_,_>,_>(|_k,s,t| t.push((s[0].1.clone(), 1)))
+            .as_collection(|k,c| (k.clone(), c.clone()))
     }
 }
 
@@ -205,8 +205,8 @@ where
     T1::Batch: BatchReader<K, (), G::Timestamp, R>
 {
     fn count(&self) -> Collection<G, (K, R), isize> {
-        self.group_arranged::<_,_,DefaultValTrace<_,_,_,_>,_>(|_k,s,t| t.push((s[0].1, 1)))
-            .as_collection(|k,&c| (k.clone(), c))
+        self.group_arranged::<_,_,DefaultValTrace<_,_,_,_>,_>(|_k,s,t| t.push((s[0].1.clone(), 1)))
+            .as_collection(|k,c| (k.clone(), c.clone()))
     }
 }
 
@@ -600,15 +600,15 @@ fn sort_dedup<T: Ord>(list: &mut Vec<T>) {
     list.dedup();
 }
 
-/// Consolidats a vector of (element, diff) by sorting by element and collapsing all tuples with the same element.
+/// Consolidates a vector of (element, diff) by sorting by element and collapsing all tuples with the same element.
 /// Elements with diff 0 will be removed.
 #[inline(never)]
 fn consolidate<T: Ord, R: Monoid>(list: &mut Vec<(T, R)>) {
     list.sort_by(|x,y| x.0.cmp(&y.0));
     for index in 1 .. list.len() {
         if list[index].0 == list[index-1].0 {
-            list[index].1 = list[index].1 + list[index-1].1;
-            list[index-1].1 = R::zero();
+            let prev = ::std::mem::replace(&mut list[index-1].1, R::zero());
+            list[index].1 += prev;
         }
     }
     list.retain(|x| !x.1.is_zero());
@@ -624,8 +624,8 @@ pub fn consolidate_from<T: Ord+Clone, R: Monoid>(vec: &mut Vec<(T, R)>, off: usi
     vec[off..].sort_by(|x,y| x.0.cmp(&y.0));
     for index in (off + 1) .. vec.len() {
         if vec[index].0 == vec[index - 1].0 {
-            vec[index].1 = vec[index].1 + vec[index - 1].1;
-            vec[index - 1].1 = R::zero();
+            let prev = ::std::mem::replace(&mut vec[index-1].1, R::zero());
+            vec[index].1 += prev;
         }
     }
 
@@ -858,17 +858,17 @@ mod history_replay {
                         // Assemble the input collection at `next_time`. (`self.input_buffer` cleared just after use).
                         debug_assert!(self.input_buffer.is_empty());
                         input_replay.advance_buffer_by(&meet);
-                        for &((value, ref time), diff) in input_replay.buffer().iter() {
+                        for &((value, ref time), ref diff) in input_replay.buffer().iter() {
                             if time.less_equal(&next_time) {
-                                self.input_buffer.push((value, diff));
+                                self.input_buffer.push((value, diff.clone()));
                             }
                             else {
                                 self.temporary.push(next_time.join(time));
                             }
                         }
-                        for &((value, ref time), diff) in batch_replay.buffer().iter() {
+                        for &((value, ref time), ref diff) in batch_replay.buffer().iter() {
                             if time.less_equal(&next_time) {
-                                self.input_buffer.push((value, diff));
+                                self.input_buffer.push((value, diff.clone()));
                             }
                             else {
                                 self.temporary.push(next_time.join(time));
@@ -877,17 +877,17 @@ mod history_replay {
                         consolidate(&mut self.input_buffer);
 
                         output_replay.advance_buffer_by(&meet);
-                        for &((ref value, ref time), diff) in output_replay.buffer().iter() {
+                        for &((ref value, ref time), ref diff) in output_replay.buffer().iter() {
                             if time.less_equal(&next_time) {
-                                self.output_buffer.push(((*value).clone(), diff));
+                                self.output_buffer.push(((*value).clone(), diff.clone()));
                             }
                             else {
                                 self.temporary.push(next_time.join(time));
                             }
                         }
-                        for &((ref value, ref time), diff) in self.output_produced.iter() {
+                        for &((ref value, ref time), ref diff) in self.output_produced.iter() {
                             if time.less_equal(&next_time) {
-                                self.output_buffer.push(((*value).clone(), diff));
+                                self.output_buffer.push(((*value).clone(), diff.clone()));
                             }
                             else {
                                 self.temporary.push(next_time.join(&time));
@@ -939,7 +939,7 @@ mod history_replay {
                             let idx = outputs.iter().rev().position(|&(ref time, _)| time.less_equal(&next_time));
                             let idx = outputs.len() - idx.expect("failed to find index") - 1;
                             for (val, diff) in self.update_buffer.drain(..) {
-                                self.output_produced.push(((val.clone(), next_time.clone()), diff));
+                                self.output_produced.push(((val.clone(), next_time.clone()), diff.clone()));
                                 outputs[idx].1.push((val, next_time.clone(), diff));
                             }
 

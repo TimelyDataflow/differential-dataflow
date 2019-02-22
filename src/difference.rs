@@ -6,7 +6,7 @@
 //! dataflow collections would then track for each record the total of counts and heights, which allows
 //! us to track something like the average.
 
-use std::ops::{Add, Sub, Neg, Mul};
+use std::ops::{Add, AddAssign, Sub, Neg, Mul};
 
 use ::Data;
 
@@ -18,7 +18,7 @@ pub use self::Abelian as Diff;
 /// and almost certainly use commutativity somewhere (it isn't clear if it is a requirement, as it isn't
 /// clear that there are semantics other than "we accumulate your differences"; I suspect we don't always
 /// accumulate them in the right order, so commutativity is important until we conclude otherwise).
-pub trait Monoid : Add<Self, Output=Self> + ::std::marker::Sized + Data + Copy {
+pub trait Monoid : Add<Self, Output=Self> + AddAssign + ::std::marker::Sized + Data + Clone {
 	/// Returns true if the element is the additive identity.
 	///
 	/// This is primarily used by differential dataflow to know when it is safe to delete and update.
@@ -92,6 +92,13 @@ impl<R1: Add, R2: Add> Add<DiffPair<R1, R2>> for DiffPair<R1, R2> {
 			element1: self.element1 + rhs.element1,
 			element2: self.element2 + rhs.element2,
 		}
+	}
+}
+
+impl<R1: AddAssign, R2: AddAssign> AddAssign<DiffPair<R1, R2>> for DiffPair<R1, R2> {
+	#[inline(always)] fn add_assign(&mut self, rhs: Self) {
+		self.element1 += rhs.element1;
+		self.element2 += rhs.element2;
 	}
 }
 
