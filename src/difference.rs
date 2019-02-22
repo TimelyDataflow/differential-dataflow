@@ -21,9 +21,10 @@ pub use self::Abelian as Diff;
 pub trait Monoid : for<'a> AddAssign<&'a Self> + ::std::marker::Sized + Data + Clone {
 	/// Returns true if the element is the additive identity.
 	///
-	/// This is primarily used by differential dataflow to know when it is safe to delete and update.
+	/// This is primarily used by differential dataflow to know when it is safe to delete an update.
 	/// When a difference accumulates to zero, the difference has no effect on any accumulation and can
 	/// be removed.
+	#[inline(always)]
 	fn is_zero(&self) -> bool { self.eq(&Self::zero()) }
 	/// The additive identity.
 	///
