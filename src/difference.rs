@@ -42,17 +42,14 @@ pub trait Abelian : Monoid + Neg<Output=Self> { }
 impl<T: Monoid + Neg<Output=Self>> Abelian for T { }
 
 impl Monoid for isize {
-	#[inline(always)] fn is_zero(&self) -> bool { *self == 0 }
 	#[inline(always)] fn zero() -> Self { 0 }
 }
 
 impl Monoid for i64 {
-	#[inline(always)] fn is_zero(&self) -> bool { *self == 0 }
 	#[inline(always)] fn zero() -> Self { 0 }
 }
 
 impl Monoid for i32 {
-	#[inline(always)] fn is_zero(&self) -> bool { *self == 0 }
 	#[inline(always)] fn zero() -> Self { 0 }
 }
 
@@ -81,8 +78,12 @@ impl<R1, R2> DiffPair<R1, R2> {
 }
 
 impl<R1: Monoid, R2: Monoid> Monoid for DiffPair<R1, R2> {
-	#[inline(always)] fn is_zero(&self) -> bool { self.element1.is_zero() && self.element2.is_zero() }
-	#[inline(always)] fn zero() -> Self { DiffPair { element1: R1::zero(), element2: R2::zero() } }
+	#[inline(always)] fn zero() -> Self {
+		DiffPair {
+			element1: R1::zero(),
+			element2: R2::zero(),
+		}
+	}
 }
 
 impl<R1: AddAssign, R2: AddAssign> AddAssign<DiffPair<R1, R2>> for DiffPair<R1, R2> {
