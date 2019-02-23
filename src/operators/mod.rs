@@ -4,7 +4,7 @@
 //! operators have specialized implementations to make them work efficiently, and are in addition
 //! to several operations defined directly on the `Collection` type (e.g. `map` and `filter`).
 
-pub use self::group::{Group, Threshold, Count, consolidate_from};
+pub use self::reduce::{Reduce, Threshold, Count, consolidate_from};
 pub use self::consolidate::Consolidate;
 pub use self::iterate::Iterate;
 pub use self::join::{Join, JoinCore};
@@ -12,13 +12,12 @@ pub use self::count::CountTotal;
 pub use self::threshold::ThresholdTotal;
 
 pub mod arrange;
-pub mod group;
+pub mod reduce;
 pub mod consolidate;
 pub mod iterate;
 pub mod join;
 pub mod count;
 pub mod threshold;
-// pub mod min;
 
 use ::difference::Monoid;
 use lattice::Lattice;
