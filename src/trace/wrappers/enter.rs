@@ -188,7 +188,7 @@ where
     #[inline(always)] fn val<'a>(&self, storage: &'a Self::Storage) -> &'a V { self.cursor.val(storage) }
 
     #[inline(always)]
-    fn map_times<L: FnMut(&TInner, R)>(&mut self, storage: &Self::Storage, mut logic: L) {
+    fn map_times<L: FnMut(&TInner, &R)>(&mut self, storage: &Self::Storage, mut logic: L) {
         self.cursor.map_times(storage, |time, diff| {
             logic(&TInner::to_inner(time.clone()), diff)
         })
@@ -235,7 +235,7 @@ where
     #[inline(always)] fn val<'a>(&self, storage: &'a Self::Storage) -> &'a V { self.cursor.val(&storage.batch) }
 
     #[inline(always)]
-    fn map_times<L: FnMut(&TInner, R)>(&mut self, storage: &Self::Storage, mut logic: L) {
+    fn map_times<L: FnMut(&TInner, &R)>(&mut self, storage: &Self::Storage, mut logic: L) {
         self.cursor.map_times(&storage.batch, |time, diff| {
             logic(&TInner::to_inner(time.clone()), diff)
         })

@@ -119,7 +119,7 @@ pub trait Threshold<G: Scope, K: Data, R1: Monoid> where G::Timestamp: Lattice+O
     ///     });
     /// }
     /// ```
-    fn threshold<R2: Abelian, F: Fn(&K, R1)->R2+'static>(&self, thresh: F) -> Collection<G, K, R2>;
+    fn threshold<R2: Abelian, F: Fn(&K, &R1)->R2+'static>(&self, thresh: F) -> Collection<G, K, R2>;
     /// Reduces the collection to one occurrence of each distinct element.
     ///
     /// # Examples
@@ -147,9 +147,9 @@ pub trait Threshold<G: Scope, K: Data, R1: Monoid> where G::Timestamp: Lattice+O
 
 impl<G: Scope, K: Data+Hashable, R1: Monoid> Threshold<G, K, R1> for Collection<G, K, R1>
 where G::Timestamp: Lattice+Ord {
-    fn threshold<R2: Abelian, F: Fn(&K,R1)->R2+'static>(&self, thresh: F) -> Collection<G, K, R2> {
+    fn threshold<R2: Abelian, F: Fn(&K,&R1)->R2+'static>(&self, thresh: F) -> Collection<G, K, R2> {
         self.arrange_by_self()
-            .reduce_abelian::<_,_,DefaultKeyTrace<_,_,_>,_>(move |k,s,t| t.push(((), thresh(k, s[0].1.clone()))))
+            .reduce_abelian::<_,_,DefaultKeyTrace<_,_,_>,_>(move |k,s,t| t.push(((), thresh(k, &s[0].1))))
             .as_collection(|k,_| k.clone())
     }
 }
@@ -159,8 +159,8 @@ where
     G::Timestamp: Lattice+Ord,
     T1: TraceReader<K, (), G::Timestamp, R1>+Clone+'static,
     T1::Batch: BatchReader<K, (), G::Timestamp, R1> {
-    fn threshold<R2: Abelian, F: Fn(&K,R1)->R2+'static>(&self, thresh: F) -> Collection<G, K, R2> {
-        self.reduce_abelian::<_,_,DefaultKeyTrace<_,_,_>,_>(move |k,s,t| t.push(((), thresh(k, s[0].1.clone()))))
+    fn threshold<R2: Abelian, F: Fn(&K,&R1)->R2+'static>(&self, thresh: F) -> Collection<G, K, R2> {
+        self.reduce_abelian::<_,_,DefaultKeyTrace<_,_,_>,_>(move |k,s,t| t.push(((), thresh(k, &s[0].1))))
             .as_collection(|k,_| k.clone())
     }
 }
@@ -610,7 +610,7 @@ fn consolidate<T: Ord, R: Monoid>(list: &mut Vec<(T, R)>) {
     for index in 1 .. list.len() {
         if list[index].0 == list[index-1].0 {
             let prev = ::std::mem::replace(&mut list[index-1].1, R::zero());
-            list[index].1 += prev;
+            list[index].1 += &prev;
         }
     }
     list.retain(|x| !x.1.is_zero());
@@ -627,7 +627,7 @@ pub fn consolidate_from<T: Ord+Clone, R: Monoid>(vec: &mut Vec<(T, R)>, off: usi
     for index in (off + 1) .. vec.len() {
         if vec[index].0 == vec[index - 1].0 {
             let prev = ::std::mem::replace(&mut vec[index-1].1, R::zero());
-            vec[index].1 += prev;
+            vec[index].1 += &prev;
         }
     }
 

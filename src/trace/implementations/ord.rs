@@ -112,7 +112,7 @@ where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Ord+Clone+::std::fm
 			for index in lower .. (upper - 1) {
 				if updates[index].0 == updates[index+1].0 {
 					let prev = ::std::mem::replace(&mut updates[index].1, R::zero());
-					updates[index+1].1 += prev;
+					updates[index+1].1 += &prev;
 				}
 			}
 
@@ -265,10 +265,10 @@ where K: Ord+Clone, V: Ord+Clone, T: Lattice+Ord+Clone, R: Monoid {
 
 	fn key<'a>(&self, storage: &'a Self::Storage) -> &'a K { &self.cursor.key(&storage.layer) }
 	fn val<'a>(&self, storage: &'a Self::Storage) -> &'a V { &self.cursor.child.key(&storage.layer.vals) }
-	fn map_times<L: FnMut(&T, R)>(&mut self, storage: &Self::Storage, mut logic: L) {
+	fn map_times<L: FnMut(&T, &R)>(&mut self, storage: &Self::Storage, mut logic: L) {
 		self.cursor.child.child.rewind(&storage.layer.vals.vals);
 		while self.cursor.child.child.valid(&storage.layer.vals.vals) {
-			logic(&self.cursor.child.child.key(&storage.layer.vals.vals).0, self.cursor.child.child.key(&storage.layer.vals.vals).1.clone());
+			logic(&self.cursor.child.child.key(&storage.layer.vals.vals).0, &self.cursor.child.child.key(&storage.layer.vals.vals).1);
 			self.cursor.child.child.step(&storage.layer.vals.vals);
 		}
 	}
@@ -394,7 +394,7 @@ where K: Ord+Clone+'static, T: Lattice+Ord+Clone+'static, R: Monoid {
 			for index in lower .. (upper - 1) {
 				if updates[index].0 == updates[index+1].0 {
 					let prev = ::std::mem::replace(&mut updates[index].1, R::zero());
-					updates[index + 1].1 += prev;
+					updates[index + 1].1 += &prev;
 				}
 			}
 
@@ -519,10 +519,10 @@ impl<K: Ord+Clone, T: Lattice+Ord+Clone, R: Monoid> Cursor<K, (), T, R> for OrdK
 
 	fn key<'a>(&self, storage: &'a Self::Storage) -> &'a K { &self.cursor.key(&storage.layer) }
 	fn val<'a>(&self, _storage: &'a Self::Storage) -> &'a () { unsafe { ::std::mem::transmute(&self.empty) } }
-	fn map_times<L: FnMut(&T, R)>(&mut self, storage: &Self::Storage, mut logic: L) {
+	fn map_times<L: FnMut(&T, &R)>(&mut self, storage: &Self::Storage, mut logic: L) {
 		self.cursor.child.rewind(&storage.layer.vals);
 		while self.cursor.child.valid(&storage.layer.vals) {
-			logic(&self.cursor.child.key(&storage.layer.vals).0, self.cursor.child.key(&storage.layer.vals).1.clone());
+			logic(&self.cursor.child.key(&storage.layer.vals).0, &self.cursor.child.key(&storage.layer.vals).1);
 			self.cursor.child.step(&storage.layer.vals);
 		}
 	}

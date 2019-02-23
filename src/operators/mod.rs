@@ -43,7 +43,7 @@ impl<'a, V:'a, T, R> EditList<'a, V, T, R> where T: Ord+Clone, R: Monoid {
     where K: Eq, V: Clone, C: Cursor<K, V, T, R>, L: Fn(&T)->T {
         self.clear();
         while cursor.val_valid(storage) {
-            cursor.map_times(storage, |time1, diff1| self.push(logic(time1), diff1));
+            cursor.map_times(storage, |time1, diff1| self.push(logic(time1), diff1.clone()));
             self.seal(cursor.val(storage));
             cursor.step_val(storage);
         }

@@ -28,7 +28,7 @@ pub trait Identifiers<G: Scope, D: Data, R: Abelian> {
     ///              .identifiers()
     ///              // assert no conflicts
     ///              .map(|(data, id)| id)
-    ///              .threshold(|_id,cnt| if cnt > 1 { 1 } else { 0 })
+    ///              .threshold(|_id,cnt| if cnt > &1 { 1 } else { 0 })
     ///              .assert_empty();
     ///     });
     /// }
@@ -134,7 +134,7 @@ mod tests {
                 .concat(&init)
                 .map(|(round, num)| { (num, (round + num) / 10) })
                 .map(|(_data, id)| id)
-                .threshold(|_id,cnt| if cnt > 1 { 1 } else { 0 })
+                .threshold(|_id,cnt| if cnt > &1 { 1 } else { 0 })
                 .assert_empty();
         });
     }

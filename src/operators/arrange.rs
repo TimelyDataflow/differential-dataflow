@@ -630,7 +630,7 @@ impl<G: Scope, K, V, R, T> Arranged<G, K, V, R, T> where G::Timestamp: Lattice+O
                                 let mut active = &active[active_finger .. same_key];
 
                                 while let Some(val) = cursor.get_val(&storage) {
-                                    cursor.map_times(&storage, |t,d| working.push((t.clone(), val.clone(), d)));
+                                    cursor.map_times(&storage, |t,d| working.push((t.clone(), val.clone(), d.clone())));
                                     cursor.step_val(&storage);
                                 }
 

@@ -111,7 +111,7 @@ where
                         for index in 1 .. vector.len() {
                             if vector[index].0 == vector[index - 1].0 && vector[index].1 == vector[index - 1].1 {
                                 let prev = ::std::mem::replace(&mut vector[index - 1].2, R::zero());
-                                vector[index].2 += prev;
+                                vector[index].2 += &prev;
                             }
                         }
                         vector.retain(|x| !x.2.is_zero());

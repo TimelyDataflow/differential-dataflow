@@ -68,7 +68,7 @@ impl<K: Ord+Clone, R: Monoid+Clone> MergeBuilder for OrderedLeafBuilder<K, R> {
                 ::std::cmp::Ordering::Equal => {
 
                     let mut sum = trie1.vals[lower1].1.clone();
-                    sum += trie2.vals[lower2].1.clone();
+                    sum += &trie2.vals[lower2].1;
                     if !sum.is_zero() {
                         self.vals.push((trie1.vals[lower1].0.clone(), sum));
                     }
