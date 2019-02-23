@@ -32,10 +32,10 @@ use ::Collections;
 //   );
 // :n -1
 
-pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp> 
+pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp>
 where G::Timestamp: Lattice+TotalOrder+Ord {
 
-    let parts = 
+    let parts =
     collections
         .parts()   // We fluff out search strings to have the right lengths. \\
         .flat_map(|x|  {
@@ -49,7 +49,7 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
         .lineitems()
         .map(|x| (x.part_key, (x.quantity, x.extended_price)))
         .semijoin(&parts)
-        .group(|_k, s, t| {
+        .reduce(|_k, s, t| {
 
             // determine the total and count of quantity.
             let total: i64 = s.iter().map(|x| (x.0).0 * (x.1 as i64)).sum();

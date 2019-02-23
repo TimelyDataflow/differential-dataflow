@@ -46,7 +46,7 @@ fn starts_with(source: &[u8], query: &[u8]) -> bool {
     source.len() >= query.len() && &source[..query.len()] == query
 }
 
-pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp> 
+pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp>
 where G::Timestamp: Lattice+TotalOrder+Ord {
 
     let nations =
@@ -67,7 +67,7 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
         .explode(|x| Some(((x.supp_key, x.part_key), (x.supplycost as isize) * (x.availqty as isize))))
         .semijoin(&suppliers)
         .map(|(_, part_key)| ((), part_key))
-        .group(|_part_key, s, t| {
+        .reduce(|_part_key, s, t| {
             let threshold: isize = s.iter().map(|x| x.1 as isize).sum::<isize>() / 10000;
             t.extend(s.iter().filter(|x| x.1 > threshold).map(|&(&a,b)| (a, b)));
         })

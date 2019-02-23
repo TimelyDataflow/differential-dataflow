@@ -102,7 +102,7 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
         .semijoin(&suppliers.map(|x| x.0))
         .map(|(supp, (part, supply_cost))| (part, (supply_cost, supp)))
         .semijoin(&parts.map(|x| x.0))
-        .group(|_x, s, t| {
+        .reduce(|_x, s, t| {
             let minimum = (s[0].0).0;
             t.extend(s.iter().take_while(|x| (x.0).0 == minimum).map(|&(&x,w)| (x,w)));
         });
