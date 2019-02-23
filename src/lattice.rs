@@ -21,18 +21,6 @@ pub trait Lattice : PartialOrder {
     /// ```
     fn minimum() -> Self;
 
-    /// The largest element of the type.
-    ///
-    /// #Examples
-    ///
-    /// ```
-    /// use differential_dataflow::lattice::Lattice;
-    ///
-    /// let max = <usize as Lattice>::maximum();
-    /// assert_eq!(max, usize::max_value());
-    /// ```
-    fn maximum() -> Self;
-
     /// The smallest element greater than or equal to both arguments.
     ///
     /// # Examples
@@ -83,10 +71,9 @@ pub trait Lattice : PartialOrder {
     /// the sense that any other element with the same property (compares identically to times
     /// greater or equal to `frontier`) must be less or equal to the result.
     ///
-    /// When provided an empty frontier, the result is `<Self as Lattice>::maximum()`. It should
-    /// perhaps be distinguished by an `Option<Self>` type, but the `None` case only happens
-    /// when `frontier` is empty, which the caller can see for themselves if they want to be
-    /// clever.
+    /// When provided an empty frontier the method panics. The method's result should perhaps
+    /// be distinguished by an `Option<Self>` type, but the `None` case only happens when
+    /// `frontier` is empty, which the caller can see for themselves.
     ///
     /// # Examples
     ///
@@ -118,16 +105,11 @@ pub trait Lattice : PartialOrder {
     /// ```
     #[inline(always)]
     fn advance_by(&self, frontier: &[Self]) -> Self where Self: Sized{
-        if frontier.len() > 0 {
-            let mut result = self.join(&frontier[0]);
-            for f in &frontier[1..] {
-                result = result.meet(&self.join(f));
-            }
-            result
+        let mut result = self.join(&frontier[0]);
+        for f in &frontier[1..] {
+            result = result.meet(&self.join(f));
         }
-        else {
-            Self::maximum()
-        }
+        result
     }
 }
 
@@ -136,8 +118,6 @@ use timely::order::Product;
 impl<T1: Lattice, T2: Lattice> Lattice for Product<T1, T2> {
     #[inline(always)]
     fn minimum() -> Self { Product::new(T1::minimum(), T2::minimum()) }
-    #[inline(always)]
-    fn maximum() -> Self { Product::new(T1::maximum(), T2::maximum()) }
     #[inline(always)]
     fn join(&self, other: &Product<T1, T2>) -> Product<T1, T2> {
         Product {
@@ -155,10 +135,9 @@ impl<T1: Lattice, T2: Lattice> Lattice for Product<T1, T2> {
 }
 
 macro_rules! implement_lattice {
-    ($index_type:ty, $minimum:expr, $maximum:expr) => (
+    ($index_type:ty, $minimum:expr) => (
         impl Lattice for $index_type {
             #[inline(always)] fn minimum() -> Self { $minimum }
-            #[inline(always)] fn maximum() -> Self { $maximum }
             #[inline(always)] fn join(&self, other: &Self) -> Self { ::std::cmp::max(*self, *other) }
             #[inline(always)] fn meet(&self, other: &Self) -> Self { ::std::cmp::min(*self, *other) }
         }
@@ -167,9 +146,9 @@ macro_rules! implement_lattice {
 
 use std::time::Duration;
 
-implement_lattice!(Duration, Duration::new(0, 0), Duration::new(u64::max_value(), 1_000_000_000 - 1));
-implement_lattice!(usize, usize::min_value(), usize::max_value());
-implement_lattice!(u64, u64::min_value(), u64::max_value());
-implement_lattice!(u32, u32::min_value(), u32::max_value());
-implement_lattice!(i32, i32::min_value(), i32::max_value());
-implement_lattice!((), (), ());
+implement_lattice!(Duration, Duration::new(0, 0));
+implement_lattice!(usize, usize::min_value());
+implement_lattice!(u64, u64::min_value());
+implement_lattice!(u32, u32::min_value());
+implement_lattice!(i32, i32::min_value());
+implement_lattice!((), ());
