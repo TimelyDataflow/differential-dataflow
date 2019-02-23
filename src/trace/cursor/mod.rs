@@ -42,7 +42,7 @@ pub trait Cursor<K, V, T, R> {
 
 	/// Applies `logic` to each pair of time and difference. Intended for mutation of the
 	/// closure's scope.
-	fn map_times<L: FnMut(&T, R)>(&mut self, storage: &Self::Storage, logic: L);
+	fn map_times<L: FnMut(&T, &R)>(&mut self, storage: &Self::Storage, logic: L);
 
 	/// Advances the cursor to the next key. Indicates if the key is valid.
 	fn step_key(&mut self, storage: &Self::Storage);
@@ -71,7 +71,7 @@ pub trait CursorDebug<K: Clone, V: Clone, T: Clone, R: Clone> : Cursor<K, V, T, 
 			while self.val_valid(storage) {
 				let mut kv_out = Vec::new();
 				self.map_times(storage, |ts, r| {
-					kv_out.push((ts.clone(), r));
+					kv_out.push((ts.clone(), r.clone()));
 				});
 				out.push(((self.key(storage).clone(), self.val(storage).clone()), kv_out));
 				self.step_val(storage);

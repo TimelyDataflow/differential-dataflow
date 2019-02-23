@@ -18,12 +18,13 @@ pub use self::Abelian as Diff;
 /// and almost certainly use commutativity somewhere (it isn't clear if it is a requirement, as it isn't
 /// clear that there are semantics other than "we accumulate your differences"; I suspect we don't always
 /// accumulate them in the right order, so commutativity is important until we conclude otherwise).
-pub trait Monoid : AddAssign + ::std::marker::Sized + Data + Clone {
+pub trait Monoid : for<'a> AddAssign<&'a Self> + ::std::marker::Sized + Data + Clone {
 	/// Returns true if the element is the additive identity.
 	///
-	/// This is primarily used by differential dataflow to know when it is safe to delete and update.
+	/// This is primarily used by differential dataflow to know when it is safe to delete an update.
 	/// When a difference accumulates to zero, the difference has no effect on any accumulation and can
 	/// be removed.
+	#[inline(always)]
 	fn is_zero(&self) -> bool { self.eq(&Self::zero()) }
 	/// The additive identity.
 	///
@@ -86,10 +87,10 @@ impl<R1: Monoid, R2: Monoid> Monoid for DiffPair<R1, R2> {
 	}
 }
 
-impl<R1: AddAssign, R2: AddAssign> AddAssign<DiffPair<R1, R2>> for DiffPair<R1, R2> {
-	#[inline(always)] fn add_assign(&mut self, rhs: Self) {
-		self.element1 += rhs.element1;
-		self.element2 += rhs.element2;
+impl<'a, R1: AddAssign<&'a R1>, R2: AddAssign<&'a R2>> AddAssign<&'a DiffPair<R1, R2>> for DiffPair<R1, R2> {
+	#[inline(always)] fn add_assign(&mut self, rhs: &'a Self) {
+		self.element1 += &rhs.element1;
+		self.element2 += &rhs.element2;
 	}
 }
 
@@ -140,17 +141,18 @@ impl<R: Monoid> Monoid for DiffVector<R> {
 	}
 }
 
-impl<R: AddAssign> AddAssign<DiffVector<R>> for DiffVector<R> {
+impl<'a, R: AddAssign<&'a R>+Clone> AddAssign<&'a DiffVector<R>> for DiffVector<R> {
 	#[inline(always)]
-	fn add_assign(&mut self, mut rhs: Self) {
+	fn add_assign(&mut self, rhs: &'a Self) {
 
-		// Swap arguments if other is longer.
-		if self.buffer.len() < rhs.buffer.len() {
-			::std::mem::swap(self, &mut rhs);
+		// Ensure sufficient length to receive addition.
+		while self.buffer.len() < rhs.buffer.len() {
+			let element = &rhs.buffer[self.buffer.len()];
+			self.buffer.push(element.clone());
 		}
 
 		// As other is not longer, apply updates without tests.
-		for (index, update) in rhs.buffer.into_iter().enumerate() {
+		for (index, update) in rhs.buffer.iter().enumerate() {
 			self.buffer[index] += update;
 		}
 	}
