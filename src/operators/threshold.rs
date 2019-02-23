@@ -38,7 +38,7 @@ pub trait ThresholdTotal<G: Scope, K: Data, R: Monoid> where G::Timestamp: Total
     ///     });
     /// }
     /// ```
-    fn threshold_total<R2: Abelian, F: Fn(&K,R)->R2+'static>(&self, thresh: F) -> Collection<G, K, R2>;
+    fn threshold_total<R2: Abelian, F: Fn(&K,&R)->R2+'static>(&self, thresh: F) -> Collection<G, K, R2>;
     /// Reduces the collection to one occurrence of each distinct element.
     ///
     /// This reduction only tests whether the weight associated with a record is non-zero, and otherwise
@@ -70,7 +70,7 @@ pub trait ThresholdTotal<G: Scope, K: Data, R: Monoid> where G::Timestamp: Total
 
 impl<G: Scope, K: Data+Hashable, R: Monoid> ThresholdTotal<G, K, R> for Collection<G, K, R>
 where G::Timestamp: TotalOrder+Lattice+Ord {
-    fn threshold_total<R2: Abelian, F: Fn(&K,R)->R2+'static>(&self, thresh: F) -> Collection<G, K, R2> {
+    fn threshold_total<R2: Abelian, F: Fn(&K,&R)->R2+'static>(&self, thresh: F) -> Collection<G, K, R2> {
         self.arrange_by_self()
             .threshold_total(thresh)
     }
@@ -82,7 +82,7 @@ where
     T1: TraceReader<K, (), G::Timestamp, R>+Clone+'static,
     T1::Batch: BatchReader<K, (), G::Timestamp, R> {
 
-    fn threshold_total<R2: Abelian, F:Fn(&K,R)->R2+'static>(&self, thresh: F) -> Collection<G, K, R2> {
+    fn threshold_total<R2: Abelian, F:Fn(&K,&R)->R2+'static>(&self, thresh: F) -> Collection<G, K, R2> {
 
         let mut trace = self.trace.clone();
         let mut buffer = Vec::new();
@@ -115,9 +115,9 @@ where
 
                             // Determine old and new weights.
                             // If a count is zero, the weight must be zero.
-                            let old_weight = if count.is_zero() { R2::zero() } else { thresh(key, count.clone()) };
+                            let old_weight = if count.is_zero() { R2::zero() } else { thresh(key, &count) };
                             count += diff;
-                            let new_weight = if count.is_zero() { R2::zero() } else { thresh(key, count.clone()) };
+                            let new_weight = if count.is_zero() { R2::zero() } else { thresh(key, &count) };
 
                             let mut difference = -old_weight;
                             difference += &new_weight;

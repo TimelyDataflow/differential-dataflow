@@ -116,7 +116,7 @@ pub trait Threshold<G: Scope, K: Data, R1: Monoid> where G::Timestamp: Lattice+O
     ///     });
     /// }
     /// ```
-    fn threshold<R2: Abelian, F: Fn(&K, R1)->R2+'static>(&self, thresh: F) -> Collection<G, K, R2>;
+    fn threshold<R2: Abelian, F: Fn(&K, &R1)->R2+'static>(&self, thresh: F) -> Collection<G, K, R2>;
     /// Reduces the collection to one occurrence of each distinct element.
     ///
     /// # Examples
@@ -144,9 +144,9 @@ pub trait Threshold<G: Scope, K: Data, R1: Monoid> where G::Timestamp: Lattice+O
 
 impl<G: Scope, K: Data+Hashable, R1: Monoid> Threshold<G, K, R1> for Collection<G, K, R1>
 where G::Timestamp: Lattice+Ord {
-    fn threshold<R2: Abelian, F: Fn(&K,R1)->R2+'static>(&self, thresh: F) -> Collection<G, K, R2> {
+    fn threshold<R2: Abelian, F: Fn(&K,&R1)->R2+'static>(&self, thresh: F) -> Collection<G, K, R2> {
         self.arrange_by_self()
-            .group_arranged::<_,_,DefaultKeyTrace<_,_,_>,_>(move |k,s,t| t.push(((), thresh(k, s[0].1.clone()))))
+            .group_arranged::<_,_,DefaultKeyTrace<_,_,_>,_>(move |k,s,t| t.push(((), thresh(k, &s[0].1))))
             .as_collection(|k,_| k.clone())
     }
 }
@@ -156,8 +156,8 @@ where
     G::Timestamp: Lattice+Ord,
     T1: TraceReader<K, (), G::Timestamp, R1>+Clone+'static,
     T1::Batch: BatchReader<K, (), G::Timestamp, R1> {
-    fn threshold<R2: Abelian, F: Fn(&K,R1)->R2+'static>(&self, thresh: F) -> Collection<G, K, R2> {
-        self.group_arranged::<_,_,DefaultKeyTrace<_,_,_>,_>(move |k,s,t| t.push(((), thresh(k, s[0].1.clone()))))
+    fn threshold<R2: Abelian, F: Fn(&K,&R1)->R2+'static>(&self, thresh: F) -> Collection<G, K, R2> {
+        self.group_arranged::<_,_,DefaultKeyTrace<_,_,_>,_>(move |k,s,t| t.push(((), thresh(k, &s[0].1))))
             .as_collection(|k,_| k.clone())
     }
 }
