@@ -32,9 +32,9 @@ pub trait Reduce<G: Scope, K: Data, V: Data, R: Monoid> where G::Timestamp: Latt
     /// Input data must be structured as `(key, val)` pairs.
     /// The user-supplied reduction function takes as arguments
     ///
-    ///     1. a reference to the key,
-    ///     2. a reference to the slice of values and their accumulated updates,
-    ///     3. a mutuable reference to a vector to populate with output values and accumulated updates.
+    /// 1. a reference to the key,
+    /// 2. a reference to the slice of values and their accumulated updates,
+    /// 3. a mutuable reference to a vector to populate with output values and accumulated updates.
     ///
     /// The user logic is only invoked for non-empty input collections, and it is safe to assume that the
     /// slice of input values is non-empty. The values are presented in sorted order, as defined by their
@@ -227,7 +227,7 @@ pub trait ReduceCore<G: Scope, K: Data, V: Data, R: Monoid> where G::Timestamp: 
     /// extern crate differential_dataflow;
     ///
     /// use differential_dataflow::input::Input;
-    /// use differential_dataflow::operators::group::ReduceCore;
+    /// use differential_dataflow::operators::reduce::ReduceCore;
     /// use differential_dataflow::trace::Trace;
     /// use differential_dataflow::trace::implementations::ord::OrdValSpine;
     /// use differential_dataflow::hashable::OrdWrapper;
@@ -235,7 +235,6 @@ pub trait ReduceCore<G: Scope, K: Data, V: Data, R: Monoid> where G::Timestamp: 
     /// fn main() {
     ///     ::timely::example(|scope| {
     ///
-    ///         // wrap and order input, then group manually.
     ///         let trace =
     ///         scope.new_collection_from(1 .. 10u32).1
     ///              .map(|x| (x, x))
@@ -265,7 +264,7 @@ pub trait ReduceCore<G: Scope, K: Data, V: Data, R: Monoid> where G::Timestamp: 
 
     /// Solves for output updates when presented with inputs and would-be outputs.
     ///
-    /// Unlike `group_arranged`, this method may be called with an empty `input`,
+    /// Unlike `reduce_arranged`, this method may be called with an empty `input`,
     /// and it may not be safe to index into the first element.
     /// At least one of the two collections will be non-empty.
     fn reduce_core<L, V2, T2, R2>(&self, logic: L) -> Arranged<G, K, V2, R2, TraceAgent<K, V2, G::Timestamp, R2, T2>>

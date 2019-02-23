@@ -243,7 +243,7 @@ where T: Lattice+Ord+Clone+'static, Tr: TraceReader<K,V,T,R> {
     /// use timely::Configuration;
     /// use differential_dataflow::input::Input;
     /// use differential_dataflow::operators::arrange::ArrangeBySelf;
-    /// use differential_dataflow::operators::group::Group;
+    /// use differential_dataflow::operators::reduce::Reduce;
     /// use differential_dataflow::trace::Trace;
     /// use differential_dataflow::trace::implementations::ord::OrdValSpine;
     /// use differential_dataflow::hashable::OrdWrapper;
@@ -266,7 +266,7 @@ where T: Lattice+Ord+Clone+'static, Tr: TraceReader<K,V,T,R> {
     ///         // create a second dataflow
     ///         worker.dataflow(move |scope| {
     ///             trace.import(scope)
-    ///                  .group(move |_key, src, dst| dst.push((*src[0].0, 1)));
+    ///                  .reduce(move |_key, src, dst| dst.push((*src[0].0, 1)));
     ///         });
     ///
     ///     }).unwrap();
