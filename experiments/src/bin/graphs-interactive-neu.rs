@@ -7,7 +7,7 @@ use rand::{Rng, SeedableRng, StdRng};
 
 use timely::dataflow::*;
 use timely::dataflow::operators::probe::Handle;
-use timely::progress::nested::product::Product;
+use timely::order::Product;
 
 use differential_dataflow::input::Input;
 use differential_dataflow::Collection;
@@ -323,7 +323,7 @@ where G::Timestamp: Lattice+Ord {
 
     forward
         .join_map(&reverse, |_,&(source, dist1),&(target, dist2)| ((source, target), dist1 + dist2))
-        .group(|_st,input,output| output.push((*input[0].0,1)))
+        .reduce(|_st,input,output| output.push((*input[0].0,1)))
 }
 
 // returns pairs (n, s) indicating node n can be reached from a root in s steps.
@@ -355,7 +355,7 @@ where G::Timestamp: Lattice+Ord {
         let reached =
         forward
             .join_map(&reverse, |_, &(src,d1), &(dst,d2)| ((src, dst), d1 + d2))
-            .group(|_key, s, t| t.push((*s[0].0, 1)))
+            .reduce(|_key, s, t| t.push((*s[0].0, 1)))
             .semijoin(&goals);
 
         let active =
@@ -375,7 +375,7 @@ where G::Timestamp: Lattice+Ord {
             .join_core(&forward_graph, |_med, &(src, dist), &next| Some((next, (src, dist+1))))
             .concat(&forward)
             .map(|(next, (src, dist))| ((next, src), dist))
-            .group(|_key, s, t| t.push((*s[0].0, 1)))
+            .reduce(|_key, s, t| t.push((*s[0].0, 1)))
             .map(|((next, src), dist)| (next, (src, dist)));
 
         forward.set(&forward_next);
@@ -390,7 +390,7 @@ where G::Timestamp: Lattice+Ord {
             .join_core(&reverse_graph, |_med, &(rev, dist), &next| Some((next, (rev, dist+1))))
             .concat(&reverse)
             .map(|(next, (rev, dist))| ((next, rev), dist))
-            .group(|_key, s, t| t.push((*s[0].0, 1)))
+            .reduce(|_key, s, t| t.push((*s[0].0, 1)))
             .map(|((next,rev), dist)| (next, (rev, dist)));
 
         reverse.set(&reverse_next);

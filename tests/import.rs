@@ -8,7 +8,7 @@ use timely::dataflow::operators::capture::Extract;
 use differential_dataflow::input::InputSession;
 use differential_dataflow::collection::AsCollection;
 use differential_dataflow::operators::arrange::{ArrangeByKey, ArrangeBySelf};
-use differential_dataflow::operators::group::Group;
+use differential_dataflow::operators::reduce::Reduce;
 use differential_dataflow::trace::TraceReader;
 use itertools::Itertools;
 
@@ -61,7 +61,7 @@ fn test_import() {
                 ::std::mem::drop(trace);
                 let captured =
                 imported
-                    .group(|_k, s, t| t.push((s.iter().map(|&(_, w)| w).sum(), 1i64)))
+                    .reduce(|_k, s, t| t.push((s.iter().map(|&(_, w)| w).sum(), 1i64)))
                     .inner
                     .exchange(|_| 0)
                     .capture();
@@ -131,7 +131,7 @@ fn test_import_completed_dataflow() {
                 ::std::mem::drop(trace);
                 let stream =
                 imported
-                    .group(|_k, s, t| t.push((s.iter().map(|&(_, w)| w).sum(), 1i64)))
+                    .reduce(|_k, s, t| t.push((s.iter().map(|&(_, w)| w).sum(), 1i64)))
                     .inner
                     .exchange(|_| 0);
                 let probe = stream.probe();

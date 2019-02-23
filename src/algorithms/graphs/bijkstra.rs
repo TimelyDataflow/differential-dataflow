@@ -47,7 +47,7 @@ where
         let reached =
         forward
             .join_map(&reverse, |_, (src,d1), (dst,d2)| ((src.clone(), dst.clone()), *d1 + *d2))
-            .group(|_key, s, t| t.push((s[0].0.clone(), 1)));
+            .reduce(|_key, s, t| t.push((s[0].0.clone(), 1)));
 
         let active =
         reached
@@ -67,7 +67,7 @@ where
             .join_map(&edges, |_med, (src, dist), next| (next.clone(), (src.clone(), *dist+1)))
             .concat(&forward)
             .map(|(next, (src, dist))| ((next, src), dist))
-            .group(|_key, s, t| t.push((s[0].0.clone(), 1)))
+            .reduce(|_key, s, t| t.push((s[0].0.clone(), 1)))
             .map(|((next, src), dist)| (next, (src, dist)));
 
         forward.set(&forward_next);
@@ -82,7 +82,7 @@ where
             .join_map(&edges.map(|(x,y)| (y,x)), |_med, (rev, dist), next| (next.clone(), (rev.clone(), *dist+1)))
             .concat(&reverse)
             .map(|(next, (rev, dist))| ((next, rev), dist))
-            .group(|_key, s, t| t.push((s[0].0.clone(), 1)))
+            .reduce(|_key, s, t| t.push((s[0].0.clone(), 1)))
             .map(|((next,rev), dist)| (next, (rev, dist)));
 
         reverse.set(&reverse_next);

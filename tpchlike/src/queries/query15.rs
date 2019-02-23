@@ -49,11 +49,11 @@ use ::types::create_date;
 // drop view revenue:s;
 // :n -1
 
-pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp> 
+pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp>
 where G::Timestamp: Lattice+TotalOrder+Ord {
 
     // revenue by supplier
-    let revenue = 
+    let revenue =
         collections
             .lineitems()
             .explode(|item|
@@ -68,22 +68,22 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
         revenue
             // do a hierarchical min, to improve update perf.
             .map(|key| ((key % 1000) as u16, key))
-            .group(|_k, s, t| {
+            .reduce(|_k, s, t| {
                 let max = s.iter().map(|x| x.1).max().unwrap();
                 t.extend(s.iter().filter(|x| x.1 == max).map(|&(&a,b)| (a,b)));
             })
             .map(|(_,key)| ((key % 100) as u8, key))
-            .group(|_k, s, t| {
+            .reduce(|_k, s, t| {
                 let max = s.iter().map(|x| x.1).max().unwrap();
                 t.extend(s.iter().filter(|x| x.1 == max).map(|&(&a,b)| (a,b)));
             })
             .map(|(_,key)| ((key % 10) as u8, key))
-            .group(|_k, s, t| {
+            .reduce(|_k, s, t| {
                 let max = s.iter().map(|x| x.1).max().unwrap();
                 t.extend(s.iter().filter(|x| x.1 == max).map(|&(&a,b)| (a,b)));
             })
             .map(|(_,key)| ((), key))
-            .group(|_k, s, t| {
+            .reduce(|_k, s, t| {
                 let max = s.iter().map(|x| x.1).max().unwrap();
                 t.extend(s.iter().filter(|x| x.1 == max).map(|&(&a,b)| (a,b)));
             })

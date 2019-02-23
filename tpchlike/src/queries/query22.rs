@@ -4,7 +4,7 @@ use timely::dataflow::operators::probe::Handle as ProbeHandle;
 
 use differential_dataflow::operators::*;
 use differential_dataflow::difference::DiffPair;
-use differential_dataflow::operators::group::GroupArranged;
+use differential_dataflow::operators::reduce::ReduceCore;
 use differential_dataflow::operators::ThresholdTotal;
 use differential_dataflow::lattice::Lattice;
 
@@ -80,7 +80,7 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
     let averages =
     customers
         .explode(|(cc, acctbal, _)| Some(((cc, ()), DiffPair::new(acctbal as isize, 1))))
-        .group_arranged::<_,_,DefaultValTrace<_,_,_,_>,_>(|_k,s,t| t.push((s[0].1, 1)));
+        .reduce_abelian::<_,_,DefaultValTrace<_,_,_,_>,_>(|_k,s,t| t.push((s[0].1, 1)));
 
     customers
         .map(|(cc, acct, key)| (key, (cc, acct)))

@@ -10,7 +10,7 @@ use timely::order::Product;
 use differential_dataflow::input::Input;
 use differential_dataflow::AsCollection;
 use differential_dataflow::operators::arrange::ArrangeByKey;
-use differential_dataflow::operators::group::Group;
+use differential_dataflow::operators::reduce::Reduce;
 use differential_dataflow::operators::join::JoinCore;
 use differential_dataflow::operators::Iterate;
 use differential_dataflow::operators::Consolidate;
@@ -119,7 +119,7 @@ fn main() {
                 dists.arrange_by_key()
                      .join_core(&edges, |_k,l,d| Some((*d, l+1)))
                      .concat(&roots)
-                     .group(|_, s, t| t.push((*s[0].0, 1)))
+                     .reduce(|_, s, t| t.push((*s[0].0, 1)))
             })
             .map(|(_node, dist)| dist)
             .consolidate()

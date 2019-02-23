@@ -88,8 +88,7 @@ fn main() {
     }).unwrap();
 }
 
-use timely::progress::nested::product::Product;
-// use timely::progress::timestamp::RootTimestamp;
+use timely::order::Product;
 
 fn _trim_and_flip<G: Scope>(graph: &Collection<G, Edge>) -> Collection<G, Edge>
 where G::Timestamp: Lattice+Ord+Hash {
@@ -138,7 +137,7 @@ where G::Timestamp: Lattice+Ord+Hash {
 
              inner.join_map(&edges, |_k,l,d| (*d,*l))
                   .concat(&nodes)
-                  .group(|_, s, t| t.push((*s[0].0, 1)))
+                  .reduce(|_, s, t| t.push((*s[0].0, 1)))
 
          })
 }

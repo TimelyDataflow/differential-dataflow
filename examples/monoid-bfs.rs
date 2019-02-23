@@ -143,7 +143,7 @@ where G::Timestamp: Lattice+Ord {
     roots.scope().iterative::<u32,_,_>(|scope| {
 
         use differential_dataflow::operators::iterate::MonoidVariable;
-        use differential_dataflow::operators::group::GroupArranged;
+        use differential_dataflow::operators::reduce::ReduceCore;
         use differential_dataflow::trace::implementations::ord::OrdKeySpine as DefaultKeyTrace;
 
 
@@ -159,7 +159,7 @@ where G::Timestamp: Lattice+Ord {
             .join_map(&edges, |_k,&(),d| *d)
             .concat(&roots)
             .map(|x| (x,()))
-            .group_solve::<_,_,DefaultKeyTrace<_,_,_>,_>(|_key, input, output, updates| {
+            .reduce_core::<_,_,DefaultKeyTrace<_,_,_>,_>(|_key, input, output, updates| {
                 if output.is_empty() || input[0].1 < output[0].1 {
                     updates.push(((), input[0].1));
                 }

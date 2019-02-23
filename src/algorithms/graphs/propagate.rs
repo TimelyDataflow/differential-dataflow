@@ -23,7 +23,7 @@ where
 
              inner.join_map(&edges, |_k,l,d| (d.clone(),l.clone()))
                   .concat(&nodes)
-                  .group(|_, s, t| t.push((s[0].0.clone(), 1)))
+                  .reduce(|_, s, t| t.push((s[0].0.clone(), 1)))
 
          })
 }
@@ -44,7 +44,7 @@ where
 
              inner.join_map(&edges, |_k,l,d| (d.clone(),l.clone()))
                   .concat(&nodes)
-                  .group(|_, s, t| t.push((s[0].0.clone(), 1)))
+                  .reduce(|_, s, t| t.push((s[0].0.clone(), 1)))
 
          })
 }

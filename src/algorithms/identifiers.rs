@@ -53,11 +53,11 @@ where
         // with the lower round, breaking ties by record), and indicate
         // that the losers should increment their round and try again.
         //
-        // Non-obviously, this happens via a `group` operator that yields
+        // Non-obviously, this happens via a `reduce` operator that yields
         // additions and subtractions of losers, rather than reproducing
         // the winners. This is done under the premise that losers are
         // very rare, and maintaining winners in both the input and output
-        // of `group` is an unneccesary duplication.
+        // of `reduce` is an unneccesary duplication.
 
         use collection::AsCollection;
 
@@ -68,7 +68,7 @@ where
                 init.enter(&diff.scope())
                     .concat(&diff)
                     .map(|pair| (pair.hashed(), pair))
-                    .group(|_hash, input, output| {
+                    .reduce(|_hash, input, output| {
                         // keep round-positive records as changes.
                         let ((round, record), count) = &input[0];
                         if *round > 0 {
@@ -100,7 +100,7 @@ mod tests {
         // there are collisions, everyone gets a unique identifier.
 
         use ::input::Input;
-        use ::operators::{Threshold, Group};
+        use ::operators::{Threshold, Reduce};
         use ::operators::iterate::Iterate;
 
         ::timely::example(|scope| {
@@ -116,7 +116,7 @@ mod tests {
                     init.enter(&diff.scope())
                         .concat(&diff)
                         .map(|(round, num)| ((round + num) / 10, (round, num)))
-                        .group(|_hash, input, output| {
+                        .reduce(|_hash, input, output| {
                             // keep round-positive records as changes.
                             let ((round, record), count) = &input[0];
                             if *round > 0 {
