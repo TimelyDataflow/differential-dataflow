@@ -42,6 +42,29 @@ pub trait Lattice : PartialOrder {
     /// ```
     fn join(&self, &Self) -> Self;
 
+    /// Updates `self` to the smallest element greater than or equal to both arguments.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # extern crate timely;
+    /// # extern crate differential_dataflow;
+    /// # use timely::PartialOrder;
+    /// # use timely::order::Product;
+    /// # use differential_dataflow::lattice::Lattice;
+    /// # fn main() {
+    ///
+    /// let mut time1 = Product::new(3, 7);
+    /// let time2 = Product::new(4, 6);
+    /// time1.join_assign(&time2);
+    ///
+    /// assert_eq!(time1, Product::new(4, 7));
+    /// # }
+    /// ```
+    fn join_assign(&mut self, other: &Self) where Self: Sized {
+        *self = self.join(other);
+    }
+
     /// The largest element less than or equal to both arguments.
     ///
     /// # Examples
@@ -63,6 +86,29 @@ pub trait Lattice : PartialOrder {
     /// ```
     fn meet(&self, &Self) -> Self;
 
+    /// Updates `self` to the largest element less than or equal to both arguments.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # extern crate timely;
+    /// # extern crate differential_dataflow;
+    /// # use timely::PartialOrder;
+    /// # use timely::order::Product;
+    /// # use differential_dataflow::lattice::Lattice;
+    /// # fn main() {
+    ///
+    /// let mut time1 = Product::new(3, 7);
+    /// let time2 = Product::new(4, 6);
+    /// time1.meet_assign(&time2);
+    ///
+    /// assert_eq!(time1, Product::new(3, 6));
+    /// # }
+    /// ```
+    fn meet_assign(&mut self, other: &Self) where Self: Sized  {
+        *self = self.meet(other);
+    }
+
     /// Advances self to the largest time indistinguishable under `frontier`.
     ///
     /// This method produces the "largest" lattice element with the property that for every
@@ -71,9 +117,8 @@ pub trait Lattice : PartialOrder {
     /// the sense that any other element with the same property (compares identically to times
     /// greater or equal to `frontier`) must be less or equal to the result.
     ///
-    /// When provided an empty frontier the method panics. The method's result should perhaps
-    /// be distinguished by an `Option<Self>` type, but the `None` case only happens when
-    /// `frontier` is empty, which the caller can see for themselves.
+    /// When provided an empty frontier `self` is set to `minimum()`.
+    /// This is perhaps surprising, but is vacuuously correct and done to prevent a panic.
     ///
     /// # Examples
     ///
@@ -86,8 +131,9 @@ pub trait Lattice : PartialOrder {
     /// # fn main() {
     ///
     /// let time = Product::new(3, 7);
+    /// let mut advanced = Product::new(3, 7);
     /// let frontier = vec![Product::new(4, 8), Product::new(5, 3)];
-    /// let advanced = time.advance_by(&frontier[..]);
+    /// advanced.advance_by(&frontier[..]);
     ///
     /// // `time` and `advanced` are indistinguishable to elements >= an element of `frontier`
     /// for i in 0 .. 10 {
@@ -104,12 +150,14 @@ pub trait Lattice : PartialOrder {
     /// # }
     /// ```
     #[inline(always)]
-    fn advance_by(&self, frontier: &[Self]) -> Self where Self: Sized{
-        let mut result = self.join(&frontier[0]);
-        for f in &frontier[1..] {
-            result = result.meet(&self.join(f));
+    fn advance_by(&mut self, frontier: &[Self]) where Self: Sized {
+        if let Some(first) = frontier.get(0) {
+            let mut result = self.join(first);
+            for f in &frontier[1..] {
+                result.meet_assign(&self.join(f));
+            }
+            *self = result;
         }
-        result
     }
 }
 
