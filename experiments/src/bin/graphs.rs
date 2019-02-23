@@ -137,7 +137,7 @@ fn bfs<G: Scope<Timestamp = ()>> (
 
         graph.join_map(&inner, |_src,&dest,&dist| (dest, dist+1))
              .concat(&roots)
-             .group(|_key, input, output| output.push((*input[0].0,1)))
+             .reduce(|_key, input, output| output.push((*input[0].0,1)))
     })
 }
 
