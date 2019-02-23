@@ -126,57 +126,58 @@ impl<T: Copy, R1: Mul<T>, R2: Mul<T>> Mul<T> for DiffPair<R1,R2> {
 // 	}
 // }
 
-// /// A variable number of accumulable updates.
-// #[derive(Abomonation, Ord, PartialOrd, Eq, PartialEq, Debug, Clone, Serialize, Deserialize)]
-// pub struct DiffVector<R> {
-// 	buffer: Vec<R>,
-// }
+/// A variable number of accumulable updates.
+#[derive(Abomonation, Ord, PartialOrd, Eq, PartialEq, Debug, Clone, Serialize, Deserialize)]
+pub struct DiffVector<R> {
+	buffer: Vec<R>,
+}
 
-// impl<R: Monoid> Monoid for DiffVector<R> {
-// 	#[inline(always)] fn is_zero(&self) -> bool {
-// 		self.buffer.iter().all(|x| x.is_zero())
-// 	}
-// 	#[inline(always)] fn zero() -> Self {
-// 		Self { buffer: Vec::new() }
-// 	}
-// }
+impl<R: Monoid> Monoid for DiffVector<R> {
+	#[inline(always)] fn is_zero(&self) -> bool {
+		self.buffer.iter().all(|x| x.is_zero())
+	}
+	#[inline(always)] fn zero() -> Self {
+		Self { buffer: Vec::new() }
+	}
+}
 
-// impl<R: AddAssign> AddAssign<DiffVector<R>> for DiffVector<R> {
-// 	#[inline(always)]
-// 	fn add_assign(&mut self, mut rhs: Self) {
+impl<'a, R: AddAssign<&'a R>+Clone> AddAssign<&'a DiffVector<R>> for DiffVector<R> {
+	#[inline(always)]
+	fn add_assign(&mut self, rhs: &'a Self) {
 
-// 		// Swap arguments if other is longer.
-// 		if self.buffer.len() < rhs.buffer.len() {
-// 			::std::mem::swap(self, &mut rhs);
-// 		}
+		// Ensure sufficient length to receive addition.
+		while self.buffer.len() < rhs.buffer.len() {
+			let element = &rhs.buffer[self.buffer.len()];
+			self.buffer.push(element.clone());
+		}
 
-// 		// As other is not longer, apply updates without tests.
-// 		for (index, update) in rhs.buffer.into_iter().enumerate() {
-// 			self.buffer[index] += update;
-// 		}
-// 	}
-// }
+		// As other is not longer, apply updates without tests.
+		for (index, update) in rhs.buffer.iter().enumerate() {
+			self.buffer[index] += update;
+		}
+	}
+}
 
-// impl<R: Neg<Output=R>+Clone> Neg for DiffVector<R> {
-// 	type Output = DiffVector<<R as Neg>::Output>;
-// 	#[inline(always)]
-// 	fn neg(mut self) -> Self::Output {
-// 		for update in self.buffer.iter_mut() {
-// 			*update = -update.clone();
-// 		}
-// 		self
-// 	}
-// }
+impl<R: Neg<Output=R>+Clone> Neg for DiffVector<R> {
+	type Output = DiffVector<<R as Neg>::Output>;
+	#[inline(always)]
+	fn neg(mut self) -> Self::Output {
+		for update in self.buffer.iter_mut() {
+			*update = -update.clone();
+		}
+		self
+	}
+}
 
-// impl<T: Copy, R: Mul<T>> Mul<T> for DiffVector<R> {
-// 	type Output = DiffVector<<R as Mul<T>>::Output>;
-// 	fn mul(self, other: T) -> Self::Output {
-// 		let buffer =
-// 		self.buffer
-// 			.into_iter()
-// 			.map(|x| x * other)
-// 			.collect();
+impl<T: Copy, R: Mul<T>> Mul<T> for DiffVector<R> {
+	type Output = DiffVector<<R as Mul<T>>::Output>;
+	fn mul(self, other: T) -> Self::Output {
+		let buffer =
+		self.buffer
+			.into_iter()
+			.map(|x| x * other)
+			.collect();
 
-// 		DiffVector { buffer }
-// 	}
-// }
+		DiffVector { buffer }
+	}
+}
