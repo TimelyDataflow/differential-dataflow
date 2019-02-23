@@ -4,10 +4,10 @@ extern crate differential_dataflow;
 use timely::dataflow::operators::{ToStream, Capture, Map};
 use timely::dataflow::operators::capture::Extract;
 use differential_dataflow::AsCollection;
-use differential_dataflow::operators::{Group, Count};
+use differential_dataflow::operators::{Reduce, Count};
 
 #[test]
-fn group() {
+fn reduce() {
 
     let data = timely::example(|scope| {
 
@@ -16,7 +16,7 @@ fn group() {
                         .to_stream(scope)
                         .as_collection();
 
-        col1.group(|_,s,t| t.push((*s[0].0, s.len() as isize))).inner.capture()
+        col1.reduce(|_,s,t| t.push((*s[0].0, s.len() as isize))).inner.capture()
     });
 
     let extracted = data.extract();
@@ -25,7 +25,7 @@ fn group() {
 }
 
 #[test]
-fn group_scaling() {
+fn reduce_scaling() {
 
     let data = timely::example(|scope| {
 

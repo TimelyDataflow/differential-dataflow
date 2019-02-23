@@ -100,7 +100,7 @@ mod tests {
         // there are collisions, everyone gets a unique identifier.
 
         use ::input::Input;
-        use ::operators::{Threshold, Group};
+        use ::operators::{Threshold, Reduce};
         use ::operators::iterate::Iterate;
 
         ::timely::example(|scope| {
