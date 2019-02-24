@@ -243,3 +243,59 @@ fn import_skewed() {
         (4, vec![((0, 1), 1)]),
     ]);
 }
+
+#[test]
+fn test_import_unmanaged() {
+    run_test(|input_epochs| {
+        timely::execute(timely::Configuration::Process(4), move |worker| {
+            let ref input_epochs = input_epochs;
+            let index = worker.index();
+            let peers = worker.peers();
+
+            let (mut input, mut trace) = worker.dataflow(|scope| {
+                let (input, edges) = scope.new_input();
+                let arranged = edges.as_collection().arrange_by_key();
+                (input, arranged.trace.clone())
+            });
+            let (captured,) = worker.dataflow(move |scope| {
+                let imported = trace.import_unmanaged(scope, "Unmanaged1");
+                ::std::mem::drop(trace);
+                let captured = imported.arranged
+                    .reduce(|_k, s, t| t.push((s.iter().map(|&(_, w)| w).sum(), 1i64)))
+                    .inner
+                    .exchange(|_| 0)
+                    .capture();
+
+                ::std::mem::forget(imported.killswitch);
+                
+                (captured,)
+            });
+
+            for (t, changes) in input_epochs.into_iter().enumerate() {
+                if &t != input.time() {
+                    input.advance_to(t);
+                }
+                let &time = input.time();
+                for &((src, dst), w) in changes.into_iter().filter(|&&((src, _), _)| (src as usize) % peers == index) {
+                    input.send(((src, dst), time, w));
+                }
+            }
+            input.close();
+
+            captured
+        }).unwrap().join().into_iter().map(|x| x.unwrap()).next().unwrap()
+    }, vec![
+        (0, vec![
+             ((1, 2), 1), ((2, 1), 1), ((4, 1), 1)]),
+        (1, vec![
+             ((1, 1), 1), ((1, 2), -1), ((2, 1), -1)]),
+        (2, vec![
+             ((1, 1), -1), ((2, 1), 1)]),
+        (3, vec![
+             ((1, 2), 1), ((2, 1), -1), ((4, 1), -1)]),
+        (4, vec![
+             ((1, 1), 1), ((1, 2), -1), ((2, 1), 1), ((4, 1), 1)]),
+        (5, vec![
+             ((1, 1), -1), ((1, 2), 1), ((4, 1), -1)]),
+    ]);
+}
