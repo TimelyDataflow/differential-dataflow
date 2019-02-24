@@ -327,6 +327,73 @@ where T: Lattice+Ord+Clone+'static, Tr: TraceReader<K,V,T,R> {
 
         Arranged { stream, trace }
     }
+
+    /// Imports a trace into an unmanaged arrangement, which can be
+    /// cleaned up by its user.
+    pub fn import_unmanaged<G: Scope<Timestamp=T>>(&mut self, scope: &G, name: &str) -> Unmanaged<G, K, V, R, TraceAgent<K, V, T, R, Tr>>
+    where T: Timestamp
+    {
+
+        let trace = self.clone();
+
+        let killswitch = Rc::new(RefCell::new(None));
+        let killswitch_setter = Rc::downgrade(&killswitch);
+
+        let stream = source(scope, name, move |capability, info| {
+
+            let activator = scope.activator_for(&info.address[..]);
+
+            let queue = self.new_listener(activator);
+            let queue_weak = Rc::downgrade(&queue);
+
+            killswitch_setter
+                .upgrade()
+                .expect("Killswitch not available.")
+                .replace(Some(queue));
+
+            // capabilities the source maintains.
+            let mut capabilities = vec![capability];
+
+            move |output| {
+
+                if let Some(queue) = queue_weak.upgrade() {
+                    let mut borrow = queue.1.borrow_mut();
+                    while let Some((frontier, sent)) = borrow.pop_front() {
+
+                        // if data are associated, send em!
+                        if let Some((time, batch)) = sent {
+                            let delayed =
+                                capabilities
+                                .iter()
+                                .find(|c| c.time().less_equal(&time))
+                                .expect("failed to find capability")
+                                .delayed(&time);
+
+                            output.session(&delayed).give(batch);
+                        }
+
+                        // advance capabilities to look like `frontier`.
+                        let mut new_capabilities = Vec::new();
+                        for time in frontier.iter() {
+                            if let Some(cap) = capabilities.iter().find(|c| c.time().less_equal(&time)) {
+                                new_capabilities.push(cap.delayed(&time));
+                            }
+                            else {
+                                panic!("failed to find capability for {:?} in {:?}", time, capabilities);
+                            }
+                        }
+                        capabilities = new_capabilities;
+                    }
+                } else {
+                    println!("Queue died");
+                    capabilities.drain(..);
+                }
+            }
+        });
+
+        let arranged = Arranged { stream, trace, };
+        Unmanaged { arranged, killswitch }
+    }
 }
 
 impl<K, V, T, R, Tr> Clone for TraceAgent<K, V, T, R, Tr>
@@ -372,6 +439,22 @@ pub struct Arranged<G: Scope, K, V, R, T> where G::Timestamp: Lattice+Ord, T: Tr
     pub trace: T,
     // TODO : We might have an `Option<Collection<G, (K, V)>>` here, which `as_collection` sets and
     // returns when invoked, so as to not duplicate work with multiple calls to `as_collection`.
+}
+
+/// An unmanaged arrangement is a container struct for an arranagement
+/// and a strong reference to the batch queue backing it. Dropping the
+/// latter acts as a killswitch for the former.
+pub struct Unmanaged<G: Scope, K, V, R, T>
+where
+    G::Timestamp: Lattice+Ord,
+    T: TraceReader<K, V, G::Timestamp, R>+Clone,
+{
+    /// The arranged itself.
+    pub arranged: Arranged<G, K, V, R, T>,
+    /// A handle to the queue providing batches to this
+    /// arrangement. Upon dropping this, the arrangement will be
+    /// cleaned up.
+    pub killswitch: Rc<RefCell<Option<TraceAgentQueueReader<K, V, G::Timestamp, R, T>>>>,
 }
 
 impl<G: Scope, K, V, R, T> Clone for Arranged<G, K, V, R, T>
