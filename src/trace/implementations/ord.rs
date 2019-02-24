@@ -87,7 +87,7 @@ where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Ord+Clone+::std::fm
 
 		// 1. For each (time, diff) pair, advance the time.
 		for i in time_start .. layer.vals.vals.vals.len() {
-			layer.vals.vals.vals[i].0 = layer.vals.vals.vals[i].0.advance_by(frontier);
+			layer.vals.vals.vals[i].0.advance_by(frontier);
 		}
 
 		// 2. For each `(val, off)` pair, sort the range, compact, and rewrite `off`.
@@ -366,7 +366,7 @@ where K: Ord+Clone+'static, T: Lattice+Ord+Clone+'static, R: Monoid {
 
 		// 1. For each (time, diff) pair, advance the time.
 		for i in time_start .. layer.vals.vals.len() {
-			layer.vals.vals[i].0 = layer.vals.vals[i].0.advance_by(frontier);
+			layer.vals.vals[i].0.advance_by(frontier);
 		}
 		// for time_diff in self.layer.vals.vals.iter_mut() {
 		// 	time_diff.0 = time_diff.0.advance_by(frontier);
