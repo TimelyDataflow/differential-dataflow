@@ -266,7 +266,7 @@ fn test_import_unmanaged() {
                     .exchange(|_| 0)
                     .capture();
 
-                ::std::mem::forget(imported.killswitch);
+                ::std::boxed::Box::leak(::std::boxed::Box::new(imported.killswitch));
                 
                 (captured,)
             });
