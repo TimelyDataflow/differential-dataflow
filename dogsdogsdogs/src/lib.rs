@@ -149,7 +149,7 @@ where
 {
 
     pub fn index<G: Scope<Timestamp = T>>(collection: &Collection<G, (K, V), R>) -> Self {
-        // We need to count the number of (k, v) pairs and not rely on the given Monoid R and use its binary addition operation later.
+        // We need to count the number of (k, v) pairs and not rely on the given Monoid R and its binary addition operation.
         // We assume that input collections are distinct (k, v) pairs.
         let counts = collection
             .inner
