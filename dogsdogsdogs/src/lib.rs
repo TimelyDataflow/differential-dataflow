@@ -107,11 +107,12 @@ type TraceValHandle<K,V,T,R> = TraceAgent<K, V, T, R, TraceValSpine<K,V,T,R>>;
 type TraceKeySpine<K,T,R> = Spine<K, (), T, R, Rc<OrdKeyBatch<K,T,R>>>;
 type TraceKeyHandle<K,T,R> = TraceAgent<K, (), T, R, TraceKeySpine<K,T,R>>;
 
-pub struct CollectionIndex<K, V, T>
+pub struct CollectionIndex<K, V, T, R>
 where
     K: Data,
     V: Data,
     T: Lattice+Data,
+    R: Monoid+Mul<Output = R>,
 {
     /// A trace of type (K, ()), used to count extensions for each prefix.
     count_trace: TraceKeyHandle<K, T, isize>,
@@ -139,14 +140,30 @@ where
     }
 }
 
-impl<K, V, T> CollectionIndex<K, V, T>
+impl<K, V, T, R> CollectionIndex<K, V, T, R>
 where
     K: Data+Hash,
     V: Data+Hash,
     T: Lattice+Data+Timestamp,
+    R: Monoid+Mul<Output = R>,
 {
-    pub fn index<G: Scope<Timestamp=T>>(collection: &Collection<G, (K, V), isize>) -> Self {
-        let counts = collection.map(|(k,_v)| k).arrange_by_self().trace;
+
+    pub fn index<G: Scope<Timestamp = T>>(collection: &Collection<G, (K, V), R>) -> Self {
+        // We need to count the number of (k, v) pairs and not rely on the given Monoid R and use its binary addition operation later.
+        // We assume that input collections are distinct (k, v) pairs.
+        let counts = collection
+            .inner
+            .map(|(data, time, diff)| {
+                if diff.is_inverse() {
+                    (data, time, -1)
+                } else {
+                    (data, time, 1)
+                }
+            })
+            .as_collection()
+            .map(|(k, _v)| k)
+            .arrange_by_self()
+            .trace;
         let propose = collection.arrange_by_key().trace;
         let validate = collection.arrange_by_self().trace;
 
