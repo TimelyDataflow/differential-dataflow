@@ -75,7 +75,6 @@ impl<T: Timestamp> Refines<T> for AltNeu<T> {
 use differential_dataflow::lattice::Lattice;
 impl<T: Lattice> Lattice for AltNeu<T> {
     fn minimum() -> Self { AltNeu::alt(T::minimum()) }
-    fn maximum() -> Self { AltNeu::neu(T::maximum()) }
     fn join(&self, other: &Self) -> Self {
         let time = self.time.join(&other.time);
         let mut neu = false;
