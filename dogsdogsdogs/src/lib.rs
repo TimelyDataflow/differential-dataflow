@@ -365,7 +365,7 @@ where
                                 if cursor.get_key(&storage) == Some(&key) {
                                     while let Some(value) = cursor.get_val(&storage) {
                                         let mut count = R::zero();
-                                        cursor.map_times(&storage, |t, d| if t.less_equal(time) { count = count + d; });
+                                        cursor.map_times(&storage, |t, d| if t.less_equal(time) { count += d; });
                                         // assert!(count >= 0);
                                         if count > R::zero() {
                                             session.give(((prefix.clone(), value.clone()), time.clone(), diff.clone()));
@@ -459,7 +459,7 @@ where
                                 cursor.seek_key(&storage, &key);
                                 if cursor.get_key(&storage) == Some(&key) {
                                     let mut count = R::zero();
-                                    cursor.map_times(&storage, |t, d| if t.less_equal(time) { count = count + d; });
+                                    cursor.map_times(&storage, |t, d| if t.less_equal(time) { count += d; });
                                     // assert!(count >= 0);
                                     if count > R::zero(){
                                         session.give((prefix.clone(), time.clone(), diff.clone()));
