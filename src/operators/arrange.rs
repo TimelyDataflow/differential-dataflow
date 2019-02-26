@@ -280,52 +280,87 @@ where T: Lattice+Ord+Clone+'static, Tr: TraceReader<K,V,T,R> {
 
     /// Same as `import`, but allows to name the source.
     pub fn import_named<G: Scope<Timestamp=T>>(&mut self, scope: &G, name: &str) -> Arranged<G, K, V, R, TraceAgent<K, V, T, R, Tr>>
-    where T: Timestamp
+    where
+        T: Timestamp
     {
-
+        // Drop KillSwitch and return only arrangement.
+        self.import_core(scope, name).0
+    }
+    /// Same as `import`, but allows to name the source.
+    pub fn import_core<G: Scope<Timestamp=T>>(&mut self, scope: &G, name: &str) -> (Arranged<G, K, V, R, TraceAgent<K, V, T, R, Tr>>, ShutdownButton<TraceAgentQueueReader<K,V,T,R,Tr>>)
+    where
+        T: Timestamp
+    {
         let trace = self.clone();
 
-        let stream = source(scope, name, move |capability, info| {
+        let mut switch = None;
 
-            let activator = scope.activator_for(&info.address[..]);
-            let queue = self.new_listener(activator);
+        let stream =
+        {
+            let mut switch_ref = &mut switch;
 
-            // capabilities the source maintains.
-            let mut capabilities = vec![capability];
+            let stream = source(scope, name, move |capability, info| {
 
-            move |output| {
+                let activator = scope.activator_for(&info.address[..]);
+                let queue = Rc::new(RefCell::new(Some(self.new_listener(activator))));
+                *switch_ref = Some(ShutdownButton::new(queue.clone()));
 
-                let mut borrow = queue.1.borrow_mut();
-                while let Some((frontier, sent)) = borrow.pop_front() {
+                // capabilities the source maintains.
+                let mut capabilities = vec![capability];
 
-                    // if data are associated, send em!
-                    if let Some((time, batch)) = sent {
-                        let delayed =
-                        capabilities
-                            .iter()
-                            .find(|c| c.time().less_equal(&time))
-                            .expect("failed to find capability")
-                            .delayed(&time);
+                move |output| {
 
-                        output.session(&delayed).give(batch);
-                    }
+                    if let Some(ref mut queue) = *queue.borrow_mut() {
 
-                    // advance capabilities to look like `frontier`.
-                    let mut new_capabilities = Vec::new();
-                    for time in frontier.iter() {
-                        if let Some(cap) = capabilities.iter().find(|c| c.time().less_equal(&time)) {
-                            new_capabilities.push(cap.delayed(&time));
+                        let mut borrow = queue.1.borrow_mut();
+                        while let Some((frontier, sent)) = borrow.pop_front() {
+
+                            // if data are associated, send em!
+                            if let Some((time, batch)) = sent {
+                                let delayed =
+                                capabilities
+                                    .iter()
+                                    .find(|c| c.time().less_equal(&time))
+                                    .expect("failed to find capability")
+                                    .delayed(&time);
+
+                                output.session(&delayed).give(batch);
+                            }
+
+                            // advance capabilities to look like `frontier`.
+                            let mut new_capabilities = Vec::new();
+                            for time in frontier.iter() {
+                                if let Some(cap) = capabilities.iter().find(|c| c.time().less_equal(&time)) {
+                                    new_capabilities.push(cap.delayed(&time));
+                                }
+                                else {
+                                    panic!("failed to find capability for {:?} in {:?}", time, capabilities);
+                                }
+                            }
+                            capabilities = new_capabilities;
                         }
-                        else {
-                            panic!("failed to find capability for {:?} in {:?}", time, capabilities);
-                        }
                     }
-                    capabilities = new_capabilities;
                 }
-            }
-        });
+            });
 
-        Arranged { stream, trace }
+            stream
+        };
+
+        (Arranged { stream, trace }, switch.unwrap())
+    }
+}
+
+/// Wrapper than can drop a shared reference.
+pub struct ShutdownButton<T> {
+    reference: Rc<RefCell<Option<T>>>,
+}
+
+impl<T> ShutdownButton<T> {
+    /// Creates a new ShutdownButton.
+    pub fn new(reference: Rc<RefCell<Option<T>>>) -> Self { Self { reference } }
+    /// Push the shutdown button, dropping the shared object.
+    pub fn push(&mut self) {
+        *self.reference.borrow_mut() = None;
     }
 }
 
