@@ -9,7 +9,6 @@ extern crate differential_dataflow;
 use rand::{Rng, SeedableRng, StdRng};
 
 use timely::dataflow::ProbeHandle;
-// use timely::progress::timestamp::RootTimestamp;
 
 use timely::dataflow::operators::unordered_input::UnorderedInput;
 
@@ -225,7 +224,6 @@ mod pair {
     use differential_dataflow::lattice::Lattice;
     impl<S: Lattice, T: Lattice> Lattice for Pair<S, T> {
         fn minimum() -> Self { Pair { first: S::minimum(), second: T::minimum() }}
-        fn maximum() -> Self { Pair { first: S::maximum(), second: T::maximum() }}
         fn join(&self, other: &Self) -> Self {
             Pair {
                 first: self.first.join(&other.first),
@@ -249,4 +247,92 @@ mod pair {
         }
     }
 
+}
+
+/// This module contains a definition of a new timestamp time, a "pair" or product.
+///
+/// This is a minimal self-contained implementation, in that it doesn't borrow anything
+/// from the rest of the library other than the traits it needs to implement. With this
+/// type and its implementations, you can use it as a timestamp type.
+mod vector {
+
+    /// A pair of timestamps, partially ordered by the product order.
+    #[derive(Hash, Default, Clone, Eq, PartialEq, Ord, PartialOrd, Abomonation, Debug)]
+    pub struct Vector<T> {
+        pub vector: Vec<T>,
+    }
+
+    impl<T> Vector<T> {
+        /// Create a new pair.
+        pub fn new(vector: Vec<T>) -> Self {
+            Vector { vector }
+        }
+    }
+
+    // Implement timely dataflow's `PartialOrder` trait.
+    use timely::order::PartialOrder;
+    impl<T: PartialOrder+Default> PartialOrder for Vector<T> {
+        fn less_equal(&self, other: &Self) -> bool {
+            self.vector
+                .iter()
+                .enumerate()
+                .all(|(index, time)| time.less_equal(other.vector.get(index).unwrap_or(&Default::default())))
+        }
+    }
+
+    use timely::progress::timestamp::Refines;
+    impl<T: Timestamp> Refines<()> for Vector<T> {
+        fn to_inner(_outer: ()) -> Self { Default::default() }
+        fn to_outer(self) -> () { () }
+        fn summarize(_summary: <Self>::Summary) -> () { () }
+    }
+
+    // Implement timely dataflow's `PathSummary` trait.
+    // This is preparation for the `Timestamp` implementation below.
+    use timely::progress::PathSummary;
+
+    impl<T: Timestamp> PathSummary<Vector<T>> for () {
+        fn results_in(&self, timestamp: &Vector<T>) -> Option<Vector<T>> {
+            Some(timestamp.clone())
+        }
+        fn followed_by(&self, other: &Self) -> Option<Self> {
+            Some(other.clone())
+        }
+    }
+
+    // Implement timely dataflow's `Timestamp` trait.
+    use timely::progress::Timestamp;
+    impl<T: Timestamp> Timestamp for Vector<T> {
+        type Summary = ();
+    }
+
+    // Implement differential dataflow's `Lattice` trait.
+    // This extends the `PartialOrder` implementation with additional structure.
+    use differential_dataflow::lattice::Lattice;
+    impl<T: Lattice+Default+Clone> Lattice for Vector<T> {
+        fn minimum() -> Self { Self { vector: Vec::new() } }
+        fn join(&self, other: &Self) -> Self {
+            let min_len = ::std::cmp::min(self.vector.len(), other.vector.len());
+            let max_len = ::std::cmp::max(self.vector.len(), other.vector.len());
+            let mut vector = Vec::with_capacity(max_len);
+            for index in 0 .. min_len {
+                vector.push(self.vector[index].join(&other.vector[index]));
+            }
+            for time in &self.vector[min_len..] {
+                vector.push(time.clone());
+            }
+            for time in &other.vector[min_len..] {
+                vector.push(time.clone());
+            }
+            Self { vector }
+        }
+        fn meet(&self, other: &Self) -> Self {
+            let min_len = ::std::cmp::min(self.vector.len(), other.vector.len());
+            let mut vector = Vec::with_capacity(min_len);
+            for index in 0 .. min_len {
+                vector.push(self.vector[index].meet(&other.vector[index]));
+            }
+            Self { vector }
+        }
+    }
 }
