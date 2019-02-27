@@ -19,7 +19,7 @@ Most commonly, a differential dataflow input is managed by an `InputSession` ins
 
 ### New Collections
 
-You can also create input sessions from the `new_collection` and `new_collection_from` methods defined on timely dataflow scopes, by way of differential dataflows `Input` trait. These methods allow you to define a collection in-line, and optionally supply initial data for the collection.
+You can also create input sessions from the `new_collection` and `new_collection_from` methods defined on timely dataflow scopes, by way of differential dataflow's `Input` trait. These methods allow you to define a collection in-line, and optionally supply initial data for the collection.
 
 For example, above we could have written the above as:
 
@@ -40,6 +40,6 @@ Notice that we need to return the input from the closure, and bind it as the res
 
 ### As Collections
 
-Any timely dataflow stream of the correct record time, specifically `(data, time, diff)`, can be re-interpreted as a differential dataflow collection using the `AsCollection` trait, which provides a method `as_collection()`.
+Any timely dataflow stream of the correct record type, specifically `(data, time, diff)`, can be re-interpreted as a differential dataflow collection using the `AsCollection` trait, which provides a method `as_collection()`.
 
 This operator is helpful in the implementation of differential dataflow operators, when you need to dive in to timely dataflow specializations, and when you need to interoperate with timely dataflow computations. Perhaps you bring your data in from Kafka using timely dataflow; you must change it from a timely dataflow stream to a differential dataflow collection.
