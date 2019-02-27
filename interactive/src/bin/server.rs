@@ -76,7 +76,7 @@ fn main() {
     timely::execute_from_args(args, |worker| {
 
         let timer = ::std::time::Instant::now();
-        let mut manager = Manager::new();
+        let mut manager = Manager::<Value>::new();
 
         use std::rc::Rc;
         use timely::dataflow::operators::capture::event::link::EventLink;
@@ -84,113 +84,94 @@ fn main() {
 
         // Capture timely logging events.
         let timely_events = Rc::new(EventLink::new());
+        // Capture differential logging events.
+        let differential_events = Rc::new(EventLink::new());
+
+        manager.publish_timely_logging(worker, Some(timely_events.clone()));
+        manager.publish_differential_logging(worker, Some(differential_events.clone()));
+
         let mut timely_logger = BatchLogger::new(timely_events.clone());
         worker
             .log_register()
             .insert::<TimelyEvent,_>("timely", move |time, data| timely_logger.publish_batch(time, data));
 
-        // Capture differential logging events.
-        let differential_events = Rc::new(EventLink::new());
         let mut differential_logger = BatchLogger::new(differential_events.clone());
         worker
             .log_register()
             .insert::<DifferentialEvent,_>("differential/arrange", move |time, data| differential_logger.publish_batch(time, data));
 
-        manager.publish_timely_logging(worker, Some(timely_events));
-        manager.publish_differential_logging(worker, Some(differential_events));
 
-        let mut sequencer = Some(Sequencer::new(worker, timer));
+        let mut sequencer = Sequencer::new(worker, timer);
 
         if worker.index() == 0 {
 
-            sequencer.as_mut().map(|x| x.push(Command::Query(
+            sequencer.push(Command::Query(
                 Query {
                     rules: vec![
-                        Rule {
-                            name: "operates".to_string(),
-                            plan: Plan::source("logs/timely/operates").inspect("operates:"),
-                        },
-                        Rule {
-                            name: "channels".to_string(),
-                            plan: Plan::source("logs/timely/channels").inspect("channels:"),
-                        },
-                        // Rule {
-                        //     name: "schedule".to_string(),
-                        //     plan: Plan::source("logs/timely/schedule").inspect("schedule:"),
-                        // },
-                        // Rule {
-                        //     name: "messages".to_string(),
-                        //     plan: Plan::source("logs/timely/messages").inspect("messages:"),
-                        // },
-                        // Rule {
-                        //     name: "batch".to_string(),
-                        //     plan: Plan::source("logs/differential/arrange/batch").inspect("batch:"),
-                        // },
-                        // Rule {
-                        //     name: "merge".to_string(),
-                        //     plan: Plan::source("logs/differential/arrange/merge").inspect("merge:"),
-                        // },
-                        Rule {
-                            name: "active".to_string(),
-                            plan: Plan::source("logs/timely/operates")
-                                    .join(Plan::source("logs/differential/arrange/batch"), vec![(0,0)])
-                                    .inspect("active"),
-                        }
+            //             Rule {
+            //                 name: "operates".to_string(),
+            //                 plan: Plan::source("logs/timely/operates").inspect("operates:"),
+            //             },
+            //             Rule {
+            //                 name: "channels".to_string(),
+            //                 plan: Plan::source("logs/timely/channels").inspect("channels:"),
+            //             },
+            //             Rule {
+            //                 name: "schedule".to_string(),
+            //                 plan: Plan::source("logs/timely/schedule").inspect("schedule:"),
+            //             },
+            //             Rule {
+            //                 name: "messages".to_string(),
+            //                 plan: Plan::source("logs/timely/messages").inspect("messages:"),
+            //             },
+            //             Rule {
+            //                 name: "batch".to_string(),
+            //                 plan: Plan::source("logs/differential/arrange/batch").inspect("batch:"),
+            //             },
+            //             Rule {
+            //                 name: "merge".to_string(),
+            //                 plan: Plan::source("logs/differential/arrange/merge").inspect("merge:"),
+            //             },
+            //             Rule {
+            //                 name: "active".to_string(),
+            //                 plan: Plan::source("logs/timely/operates")
+            //                         .join(Plan::source("logs/differential/arrange/batch"), vec![(0,0)])
+            //                         .inspect("active"),
+            //             }
                     ]
                 }
-            )));
+            ));
 
-            // let edges = (0 .. 10).map(|x| vec![x, (x+1)%10]).collect::<Vec<_>>();
-
-            // sequencer.as_mut().map(|x| x.push(Command::CreateInput("edges".to_string(), edges)));
-            // sequencer.as_mut().map(|x| x.push(Command::AdvanceTime(timer.elapsed())));
-            // sequencer.as_mut().map(|x| x.push(Command::Query(
-            //     Query {
-            //         rules: vec![Rule {
-            //             name: "fof".to_string(),
-            //             plan: Plan::source("edges").join(Plan::source("edges"), vec![(0,1)])
-            //                                        .project(vec![1,2])
-            //                                        .inspect("fof"),
-            //         }]
-            //     }
-            // )));
-            // sequencer.as_mut().map(|x| x.push(Command::AdvanceTime(timer.elapsed())));
-            // sequencer.as_mut().map(|x| x.push(Command::CloseInput("edges".to_string())));
-            // sequencer.as_mut().map(|x| x.push(Command::Query(
-            //     Query {
-            //         rules: vec![Rule {
-            //             name: "fof2".to_string(),
-            //             plan: Plan::source("fof").join(Plan::source("fof"), vec![(0,1)])
-            //                                        .project(vec![1,2])
-            //                                        .inspect("fof2"),
-            //         }]
-            //     }
-            // )));
-
-            // sequencer.as_mut().map(|x| x.push(Command::Shutdown));
+            sequencer.push(Command::Shutdown);
         }
 
-        while sequencer.is_some() {
+        let mut shutdown = false;
+        while !shutdown {
 
-            if let Some(command) = sequencer.as_mut().unwrap().next() {
+            if let Some(command) = sequencer.next() {
                 println!("{:?}\tExecuting {:?}", timer.elapsed(), command);
                 if command == Command::Shutdown {
-
-                    // Disable sequencer for shut down.
-                    sequencer = None;
-
-                    // Deregister the logger, so that the logging dataflow
-                    // can shut down.
-                    worker
-                        .log_register()
-                        .insert::<TimelyEvent,_>("timely", move |_time, _data| { });
-
+                    shutdown = true;
                 }
                 command.execute(&mut manager, worker);
             }
 
             worker.step();
         }
+
+        println!("Shutting down");
+
+        // Disable sequencer for shut down.
+        drop(sequencer);
+
+        // Deregister loggers, so that the logging dataflows can shut down.
+        worker
+            .log_register()
+            .insert::<TimelyEvent,_>("timely", move |_time, _data| { });
+
+        worker
+            .log_register()
+            .insert::<DifferentialEvent,_>("differential/arrange", move |_time, _data| { });
 
     }).expect("Timely computation did not exit cleanly");
 }
