@@ -313,9 +313,8 @@ where
                 if let Some(ref mut capabilities) = *capabilities {
 
                     let mut borrow = queue.1.borrow_mut();
-                    while let Some((frontier, sent)) = borrow.pop_front() {
+                    for (frontier, sent) in borrow.drain(..) {
 
-                        // if data are associated, send em!
                         if let Some((time, batch)) = sent {
                             let delayed = capabilities.delayed(&time);
                             output.session(&delayed).give(batch);
