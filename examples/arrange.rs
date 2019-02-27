@@ -10,7 +10,7 @@ use timely::order::Product;
 use differential_dataflow::input::Input;
 use differential_dataflow::AsCollection;
 use differential_dataflow::operators::arrange::ArrangeByKey;
-use differential_dataflow::operators::group::Group;
+use differential_dataflow::operators::reduce::Reduce;
 use differential_dataflow::operators::join::JoinCore;
 use differential_dataflow::operators::Iterate;
 use differential_dataflow::operators::Consolidate;
@@ -38,7 +38,7 @@ fn main() {
     	let mut graph = worker.dataflow::<Product<(),usize>,_,_>(|scope| {
 
             // create a source operator which will produce random edges and delete them.
-            timely::dataflow::operators::generic::source(scope, "RandomGraph", |mut capability| {
+            timely::dataflow::operators::generic::source(scope, "RandomGraph", |mut capability, _info| {
 
                 let seed: &[_] = &[1, 2, 3, index];
                 let mut rng1: StdRng = SeedableRng::from_seed(seed);    // rng for edge additions
@@ -119,7 +119,7 @@ fn main() {
                 dists.arrange_by_key()
                      .join_core(&edges, |_k,l,d| Some((*d, l+1)))
                      .concat(&roots)
-                     .group(|_, s, t| t.push((*s[0].0, 1)))
+                     .reduce(|_, s, t| t.push((*s[0].0, 1)))
             })
             .map(|(_node, dist)| dist)
             .consolidate()

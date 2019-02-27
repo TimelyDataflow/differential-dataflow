@@ -15,7 +15,8 @@ use timely::dataflow::operators::Capability;
 use timely::dataflow::channels::pushers::tee::Tee;
 
 use hashable::Hashable;
-use ::{Data, Diff, Collection, AsCollection};
+use ::{Data, Collection, AsCollection};
+use ::difference::{Monoid, Abelian};
 use lattice::Lattice;
 use operators::arrange::{Arranged, ArrangeByKey, ArrangeBySelf};
 use trace::{BatchReader, Cursor, consolidate};
@@ -24,7 +25,7 @@ use operators::ValueHistory;
 use trace::TraceReader;
 
 /// Join implementations for `(key,val)` data.
-pub trait Join<G: Scope, K: Data, V: Data, R: Diff> {
+pub trait Join<G: Scope, K: Data, V: Data, R: Monoid> {
 
     /// Matches pairs `(key,val1)` and `(key,val2)` based on `key` and then applies a function.
     ///
@@ -49,8 +50,8 @@ pub trait Join<G: Scope, K: Data, V: Data, R: Diff> {
     ///     });
     /// }
     /// ```
-    fn join<V2: Data, R2: Diff>(&self, other: &Collection<G, (K,V2), R2>) -> Collection<G, (K,(V,V2)), <R as Mul<R2>>::Output>
-    where R: Mul<R2>, <R as Mul<R2>>::Output: Diff
+    fn join<V2: Data, R2: Monoid>(&self, other: &Collection<G, (K,V2), R2>) -> Collection<G, (K,(V,V2)), <R as Mul<R2>>::Output>
+    where R: Mul<R2>, <R as Mul<R2>>::Output: Monoid
     {
         self.join_map(other, |k,v,v2| (k.clone(),(v.clone(),v2.clone())))
     }
@@ -78,8 +79,8 @@ pub trait Join<G: Scope, K: Data, V: Data, R: Diff> {
     ///     });
     /// }
     /// ```
-    fn join_map<V2, R2: Diff, D, L>(&self, other: &Collection<G, (K,V2), R2>, logic: L) -> Collection<G, D, <R as Mul<R2>>::Output>
-    where V2: Data, R: Mul<R2>, <R as Mul<R2>>::Output: Diff, D: Data, L: Fn(&K, &V, &V2)->D+'static;
+    fn join_map<V2, R2: Monoid, D, L>(&self, other: &Collection<G, (K,V2), R2>, logic: L) -> Collection<G, D, <R as Mul<R2>>::Output>
+    where V2: Data, R: Mul<R2>, <R as Mul<R2>>::Output: Monoid, D: Data, L: Fn(&K, &V, &V2)->D+'static;
 
     /// Matches pairs `(key, val)` and `key` based on `key`, producing the former with frequencies multiplied.
     ///
@@ -109,9 +110,16 @@ pub trait Join<G: Scope, K: Data, V: Data, R: Diff> {
     /// }
     /// ```
     fn semijoin<R2>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), <R as Mul<R2>>::Output>
-    where R2: Diff, R: Mul<R2>, <R as Mul<R2>>::Output: Diff;
-    /// Matches pairs `(key, val)` and `key` based on `key`, discarding values
-    /// in the first collection if their key is present in the second.
+    where R2: Monoid, R: Mul<R2>, <R as Mul<R2>>::Output: Monoid;
+    /// Subtracts the semijoin with `other` from `self`.
+    ///
+    /// In the case that `other` has multiplicities zero or one this results
+    /// in a relational antijoin, in which we discard input records whose key
+    /// is present in `other`. If the multiplicities could be other than zero
+    /// or one, the semantic interpretation of this operator is less clear.
+    ///
+    /// In almost all cases, you should ensure that `other` has multiplicities
+    /// that are zero or one, perhaps by using the `distinct` operator.
     ///
     /// # Examples
     ///
@@ -135,7 +143,7 @@ pub trait Join<G: Scope, K: Data, V: Data, R: Diff> {
     /// }
     /// ```
     fn antijoin<R2>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), R>
-    where R2: Diff, R: Mul<R2, Output = R>;
+    where R2: Monoid, R: Mul<R2, Output = R>, R: Abelian;
 }
 
 impl<G, K, V, R> Join<G, K, V, R> for Collection<G, (K, V), R>
@@ -143,25 +151,25 @@ where
     G: Scope,
     K: Data+Hashable,
     V: Data,
-    R: Diff,
+    R: Monoid,
     G::Timestamp: Lattice+Ord,
 {
-    fn join_map<V2: Data, R2: Diff, D: Data, L>(&self, other: &Collection<G, (K, V2), R2>, logic: L) -> Collection<G, D, <R as Mul<R2>>::Output>
-    where R: Mul<R2>, <R as Mul<R2>>::Output: Diff, L: Fn(&K, &V, &V2)->D+'static {
+    fn join_map<V2: Data, R2: Monoid, D: Data, L>(&self, other: &Collection<G, (K, V2), R2>, logic: L) -> Collection<G, D, <R as Mul<R2>>::Output>
+    where R: Mul<R2>, <R as Mul<R2>>::Output: Monoid, L: Fn(&K, &V, &V2)->D+'static {
         let arranged1 = self.arrange_by_key();
         let arranged2 = other.arrange_by_key();
         arranged1.join_core(&arranged2, move |k,v1,v2| Some(logic(k,v1,v2)))
     }
 
-    fn semijoin<R2: Diff>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), <R as Mul<R2>>::Output>
-    where R: Mul<R2>, <R as Mul<R2>>::Output: Diff {
+    fn semijoin<R2: Monoid>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), <R as Mul<R2>>::Output>
+    where R: Mul<R2>, <R as Mul<R2>>::Output: Monoid {
         let arranged1 = self.arrange_by_key();
         let arranged2 = other.arrange_by_self();
         arranged1.join_core(&arranged2, |k,v,_| Some((k.clone(), v.clone())))
     }
 
-    fn antijoin<R2: Diff>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), R>
-    where R: Mul<R2, Output=R> {
+    fn antijoin<R2: Monoid>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), R>
+    where R: Mul<R2, Output=R>, R: Abelian {
         self.concat(&self.semijoin(other).negate())
     }
 }
@@ -172,24 +180,24 @@ impl<G, K, V, R, T> Join<G, K, V, R> for Arranged<G,K,V,R,T>
         G::Timestamp: Lattice+Ord,
         K: Data+Hashable,
         V: Data,
-        R: Diff,
+        R: Monoid,
         T: TraceReader<K,V,G::Timestamp,R>+Clone+'static,
         T::Batch: BatchReader<K,V,G::Timestamp,R>+'static {
 
-    fn join_map<V2: Data, R2: Diff, D: Data, L>(&self, other: &Collection<G, (K, V2), R2>, logic: L) -> Collection<G, D, <R as Mul<R2>>::Output>
-    where R: Mul<R2>, <R as Mul<R2>>::Output: Diff, L: Fn(&K, &V, &V2)->D+'static {
+    fn join_map<V2: Data, R2: Monoid, D: Data, L>(&self, other: &Collection<G, (K, V2), R2>, logic: L) -> Collection<G, D, <R as Mul<R2>>::Output>
+    where R: Mul<R2>, <R as Mul<R2>>::Output: Monoid, L: Fn(&K, &V, &V2)->D+'static {
         let arranged2 = other.arrange_by_key();
         self.join_core(&arranged2, move |k,v1,v2| Some(logic(k,v1,v2)))
     }
 
-    fn semijoin<R2: Diff>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), <R as Mul<R2>>::Output>
-    where R: Mul<R2>, <R as Mul<R2>>::Output: Diff {
+    fn semijoin<R2: Monoid>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), <R as Mul<R2>>::Output>
+    where R: Mul<R2>, <R as Mul<R2>>::Output: Monoid {
         let arranged2 = other.arrange_by_self();
         self.join_core(&arranged2, |k,v,_| Some((k.clone(), v.clone())))
     }
 
-    fn antijoin<R2: Diff>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), R>
-    where R: Mul<R2, Output=R> {
+    fn antijoin<R2: Monoid>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), R>
+    where R: Mul<R2, Output=R>, R: Abelian {
         self.as_collection(|k,v| (k.clone(), v.clone()))
             .concat(&self.semijoin(other).negate())
     }
@@ -200,7 +208,7 @@ impl<G, K, V, R, T> Join<G, K, V, R> for Arranged<G,K,V,R,T>
 /// This method is used by the various `join` implementations, but it can also be used
 /// directly in the event that one has a handle to an `Arranged<G,T>`, perhaps because
 /// the arrangement is available for re-use, or from the output of a `group` operator.
-pub trait JoinCore<G: Scope, K: 'static, V: 'static, R: Diff> where G::Timestamp: Lattice+Ord {
+pub trait JoinCore<G: Scope, K: 'static, V: 'static, R: Monoid> where G::Timestamp: Lattice+Ord {
     /// Joins two arranged collections with the same key type.
     ///
     /// Each matching pair of records `(key, val1)` and `(key, val2)` are subjected to the `result` function,
@@ -242,9 +250,9 @@ pub trait JoinCore<G: Scope, K: 'static, V: 'static, R: Diff> where G::Timestamp
         V2: Ord+Clone+Debug+'static,
         T2: TraceReader<K, V2, G::Timestamp, R2>+Clone+'static,
         T2::Batch: BatchReader<K, V2, G::Timestamp, R2>+'static,
-        R2: Diff,
+        R2: Monoid,
         R: Mul<R2>,
-        <R as Mul<R2>>::Output: Diff,
+        <R as Mul<R2>>::Output: Monoid,
         I: IntoIterator,
         I::Item: Data,
         L: Fn(&K,&V,&V2)->I+'static,
@@ -257,7 +265,7 @@ where
     G: Scope,
     K: Data+Hashable,
     V: Data,
-    R: Diff,
+    R: Monoid,
     G::Timestamp: Lattice+Ord,
 {
     fn join_core<V2,T2,R2,I,L> (&self, stream2: &Arranged<G,K,V2,R2,T2>, result: L) -> Collection<G,I::Item,<R as Mul<R2>>::Output>
@@ -265,9 +273,9 @@ where
         V2: Ord+Clone+Debug+'static,
         T2: TraceReader<K, V2, G::Timestamp, R2>+Clone+'static,
         T2::Batch: BatchReader<K, V2, G::Timestamp, R2>+'static,
-        R2: Diff,
+        R2: Monoid,
         R: Mul<R2>,
-        <R as Mul<R2>>::Output: Diff,
+        <R as Mul<R2>>::Output: Monoid,
         I: IntoIterator,
         I::Item: Data,
         L: Fn(&K,&V,&V2)->I+'static {
@@ -284,7 +292,7 @@ impl<G, K, V, R1, T1> JoinCore<G, K, V, R1> for Arranged<G,K,V,R1,T1>
         G::Timestamp: Lattice+Ord+Debug,
         K: Debug+Eq+'static,
         V: Ord+Clone+Debug+'static,
-        R1: Diff,
+        R1: Monoid,
         T1: TraceReader<K,V,G::Timestamp, R1>+Clone+'static,
         T1::Batch: BatchReader<K,V,G::Timestamp,R1>+'static,
 {
@@ -293,9 +301,9 @@ impl<G, K, V, R1, T1> JoinCore<G, K, V, R1> for Arranged<G,K,V,R1,T1>
         V2: Ord+Clone+Debug+'static,
         T2: TraceReader<K,V2,G::Timestamp,R2>+Clone+'static,
         T2::Batch: BatchReader<K, V2, G::Timestamp, R2>+'static,
-        R2: Diff,
+        R2: Monoid,
         R1: Mul<R2>,
-        <R1 as Mul<R2>>::Output: Diff,
+        <R1 as Mul<R2>>::Output: Monoid,
         I: IntoIterator,
         I::Item: Data,
         L: Fn(&K,&V,&V2)->I+'static {
@@ -315,80 +323,91 @@ impl<G, K, V, R1, T1> JoinCore<G, K, V, R1> for Arranged<G,K,V,R1,T1>
         let mut input1_buffer = Vec::new();
         let mut input2_buffer = Vec::new();
 
-        self.stream.binary_notify(&other.stream, Pipeline, Pipeline, "Join", vec![], move |input1, input2, output, notificator| {
+        self.stream.binary_frontier(&other.stream, Pipeline, Pipeline, "Join", move |_cap, info| {
 
-            // The join computation repeatedly accepts batches of updates from each of its inputs.
-            //
-            // For each accepted batch, it prepares a work-item to join the batch against previously "accepted"
-            // updates from its other input. It is important to track which updates have been accepted, through
-            // a combination of the input's frontier and the most recently received batch's upper bound, because
-            // we use a shared trace and there may be updates present that are in advance of this accepted bound.
+            use timely::scheduling::Activator;
+            let activations = self.stream.scope().activations().clone();
+            let activator = Activator::new(&info.address[..], activations);
 
-            // drain input 1, prepare work.
-            input1.for_each(|capability, data| {
+            move |input1, input2, output| {
+
+                // The join computation repeatedly accepts batches of updates from each of its inputs.
+                //
+                // For each accepted batch, it prepares a work-item to join the batch against previously "accepted"
+                // updates from its other input. It is important to track which updates have been accepted, through
+                // a combination of the input's frontier and the most recently received batch's upper bound, because
+                // we use a shared trace and there may be updates present that are in advance of this accepted bound.
+
+                // drain input 1, prepare work.
+                input1.for_each(|capability, data| {
+                    if let Some(ref mut trace2) = trace2 {
+                        let capability = capability.retain();
+                        data.swap(&mut input1_buffer);
+                        for batch1 in input1_buffer.drain(..) {
+                            let (trace2_cursor, trace2_storage) = trace2.cursor_through(&acknowledged2[..]).unwrap();
+                            let batch1_cursor = batch1.cursor();
+                            todo1.push(Deferred::new(trace2_cursor, trace2_storage, batch1_cursor, batch1.clone(), capability.clone(), |r2,r1| (r1.clone()) * (r2.clone())));
+                            debug_assert!(batch1.description().lower() == &acknowledged1[..]);
+                            acknowledged1 = batch1.description().upper().to_vec();
+                        }
+                    }
+                });
+
+                // drain input 2, prepare work.
+                input2.for_each(|capability, data| {
+                    if let Some(ref mut trace1) = trace1 {
+                        let capability = capability.retain();
+                        data.swap(&mut input2_buffer);
+                        for batch2 in input2_buffer.drain(..) {
+                            let (trace1_cursor, trace1_storage) = trace1.cursor_through(&acknowledged1[..]).unwrap();
+                            let batch2_cursor = batch2.cursor();
+                            todo2.push(Deferred::new(trace1_cursor, trace1_storage, batch2_cursor, batch2.clone(), capability.clone(), |r1,r2| (r1.clone()) * (r2.clone())));
+                            debug_assert!(batch2.description().lower() == &acknowledged2[..]);
+                            acknowledged2 = batch2.description().upper().to_vec();
+                        }
+                    }
+                });
+
+                // An arbitrary number, whose value guides the "responsiveness" of `join`; the operator
+                // yields after producing this many records, to allow downstream operators to work and
+                // move the produced records around.
+                let mut fuel = 1_000_000;
+
+                // perform some amount of outstanding work.
+                while !todo1.is_empty() && fuel > 0 {
+                    todo1[0].work(output, &|k,v2,v1| result(k,v1,v2), &mut fuel);
+                    if !todo1[0].work_remains() { todo1.remove(0); }
+                }
+
+                // perform some amount of outstanding work.
+                while !todo2.is_empty() && fuel > 0 {
+                    todo2[0].work(output, &|k,v1,v2| result(k,v1,v2), &mut fuel);
+                    if !todo2[0].work_remains() { todo2.remove(0); }
+                }
+
+                // Re-activate operator if work remains.
+                if !todo1.is_empty() || !todo2.is_empty() {
+                    activator.activate();
+                }
+
+                // shut down or advance trace2. if the frontier is empty we can shut it down,
+                // and otherwise we can advance the trace by the acknowledged elements of the other input,
+                // as we may still use them as thresholds (ie we must preserve `le` wrt `acknowledged`).
+                // NOTE: We release capabilities here to allow light work to complete, which may result in
+                //       unique ownership which would enable `advance_mut`.
+                if trace2.is_some() && input1.frontier().is_empty() { trace2 = None; }
                 if let Some(ref mut trace2) = trace2 {
-                    let capability = capability.retain();
-                    data.swap(&mut input1_buffer);
-                    for batch1 in input1_buffer.drain(..) {
-                        let (trace2_cursor, trace2_storage) = trace2.cursor_through(&acknowledged2[..]).unwrap();
-                        let batch1_cursor = batch1.cursor();
-                        todo1.push(Deferred::new(trace2_cursor, trace2_storage, batch1_cursor, batch1.clone(), capability.clone(), |r2,r1| *r1 * *r2));
-                        debug_assert!(batch1.description().lower() == &acknowledged1[..]);
-                        acknowledged1 = batch1.description().upper().to_vec();
-                    }
+                    trace2.advance_by(&input1.frontier().frontier()[..]);
+                    trace2.distinguish_since(&acknowledged2[..]);
                 }
-            });
 
-            // drain input 2, prepare work.
-            input2.for_each(|capability, data| {
+                // shut down or advance trace1.
+                if trace1.is_some() && input2.frontier().is_empty() { trace1 = None; }
                 if let Some(ref mut trace1) = trace1 {
-                    let capability = capability.retain();
-                    data.swap(&mut input2_buffer);
-                    for batch2 in input2_buffer.drain(..) {
-                        let (trace1_cursor, trace1_storage) = trace1.cursor_through(&acknowledged1[..]).unwrap();
-                        let batch2_cursor = batch2.cursor();
-                        todo2.push(Deferred::new(trace1_cursor, trace1_storage, batch2_cursor, batch2.clone(), capability.clone(), |r1,r2| *r1 * *r2));
-                        debug_assert!(batch2.description().lower() == &acknowledged2[..]);
-                        acknowledged2 = batch2.description().upper().to_vec();
-                    }
+                    trace1.advance_by(&input2.frontier().frontier()[..]);
+                    trace1.distinguish_since(&acknowledged1[..]);
                 }
-            });
-
-            // An arbitrary number, whose value guides the "responsiveness" of `join`; the operator
-            // yields after producing this many records, to allow downstream operators to work and
-            // move the produced records around.
-            let mut fuel = 1_000_000;
-
-            // perform some amount of outstanding work.
-            while todo1.len() > 0 && fuel > 0 {
-                todo1[0].work(output, &|k,v2,v1| result(k,v1,v2), &mut fuel);
-                if !todo1[0].work_remains() { todo1.remove(0); }
             }
-
-            // perform some amount of outstanding work.
-            while todo2.len() > 0 && fuel > 0 {
-                todo2[0].work(output, &|k,v1,v2| result(k,v1,v2), &mut fuel);
-                if !todo2[0].work_remains() { todo2.remove(0); }
-            }
-
-            // shut down or advance trace2. if the frontier is empty we can shut it down,
-            // and otherwise we can advance the trace by the acknowledged elements of the other input,
-            // as we may still use them as thresholds (ie we must preserve `le` wrt `acknowledged`).
-            // NOTE: We release capabilities here to allow light work to complete, which may result in
-            //       unique ownership which would enable `advance_mut`.
-            if trace2.is_some() && notificator.frontier(0).len() == 0 { trace2 = None; }
-            if let Some(ref mut trace2) = trace2 {
-                trace2.advance_by(&notificator.frontier(0));
-                trace2.distinguish_since(&acknowledged2[..]);
-            }
-
-            // shut down or advance trace1.
-            if trace1.is_some() && notificator.frontier(1).len() == 0 { trace1 = None; }
-            if let Some(ref mut trace1) = trace1 {
-                trace1.advance_by(&notificator.frontier(1));
-                trace1.distinguish_since(&acknowledged1[..]);
-            }
-
         })
         .as_collection()
     }
@@ -404,8 +423,8 @@ where
     V1: Ord+Clone,
     V2: Ord+Clone,
     T: Timestamp+Lattice+Ord+Debug,
-    R1: Diff,
-    R2: Diff,
+    R1: Monoid,
+    R2: Monoid,
     C1: Cursor<K, V1, T, R1>,
     C2: Cursor<K, V2, T, R2>,
     M: Fn(&R1,&R2)->R3,
@@ -429,9 +448,9 @@ where
     V1: Ord+Clone+Debug,
     V2: Ord+Clone+Debug,
     T: Timestamp+Lattice+Ord+Debug,
-    R1: Diff,
-    R2: Diff,
-    R3: Diff,
+    R1: Monoid,
+    R2: Monoid,
+    R3: Monoid,
     C1: Cursor<K, V1, T, R1>,
     C2: Cursor<K, V2, T, R2>,
     M: Fn(&R1,&R2)->R3,
@@ -524,12 +543,12 @@ where
     }
 }
 
-struct JoinThinker<'a, V1: Ord+Clone+'a, V2: Ord+Clone+'a, T: Lattice+Ord+Clone, R1: Diff, R2: Diff> {
+struct JoinThinker<'a, V1: Ord+Clone+'a, V2: Ord+Clone+'a, T: Lattice+Ord+Clone, R1: Monoid, R2: Monoid> {
     pub history1: ValueHistory<'a, V1, T, R1>,
     pub history2: ValueHistory<'a, V2, T, R2>,
 }
 
-impl<'a, V1: Ord+Clone, V2: Ord+Clone, T: Lattice+Ord+Clone, R1: Diff, R2: Diff> JoinThinker<'a, V1, V2, T, R1, R2>
+impl<'a, V1: Ord+Clone, V2: Ord+Clone, T: Lattice+Ord+Clone, R1: Monoid, R2: Monoid> JoinThinker<'a, V1, V2, T, R1, R2>
 where V1: Debug, V2: Debug, T: Debug
 {
     fn new() -> Self {

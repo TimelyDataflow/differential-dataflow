@@ -8,7 +8,8 @@
 
 use timely::dataflow::Scope;
 
-use ::{Collection, Data, Diff, Hashable};
+use ::{Collection, Data, Hashable};
+use ::difference::Monoid;
 use operators::arrange::ArrangeBySelf;
 
 /// An extension method for consolidating weighted streams.
@@ -45,7 +46,7 @@ pub trait Consolidate<D: Data+Hashable> {
 impl<G: Scope, D, R> Consolidate<D> for Collection<G, D, R>
 where
     D: Data+Hashable,
-    R: Diff,
+    R: Monoid,
     G::Timestamp: ::lattice::Lattice+Ord,
  {
     fn consolidate(&self) -> Self {
@@ -90,7 +91,7 @@ pub trait ConsolidateStream<D: Data+Hashable> {
 impl<G: Scope, D, R> ConsolidateStream<D> for Collection<G, D, R>
 where
     D: Data+Hashable,
-    R: Diff,
+    R: Monoid,
     G::Timestamp: ::lattice::Lattice+Ord,
  {
     fn consolidate_stream(&self) -> Self {
@@ -109,8 +110,8 @@ where
                         vector.sort_unstable_by(|x,y| (&x.0, &x.1).cmp(&(&y.0, &y.1)));
                         for index in 1 .. vector.len() {
                             if vector[index].0 == vector[index - 1].0 && vector[index].1 == vector[index - 1].1 {
-                                vector[index].2 = vector[index].2 + vector[index - 1].2;
-                                vector[index - 1].2 = R::zero();
+                                let prev = ::std::mem::replace(&mut vector[index - 1].2, R::zero());
+                                vector[index].2 += &prev;
                             }
                         }
                         vector.retain(|x| !x.2.is_zero());

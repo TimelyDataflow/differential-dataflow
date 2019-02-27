@@ -10,7 +10,7 @@
 
 use std::rc::Rc;
 
-use ::Diff;
+use ::difference::Monoid;
 use lattice::Lattice;
 
 use trace::layers::{Trie, TupleBuilder};
@@ -52,7 +52,7 @@ pub struct OrdValBatch<K: Ord, V: Ord, T: Lattice, R> {
 }
 
 impl<K, V, T, R> BatchReader<K, V, T, R> for OrdValBatch<K, V, T, R>
-where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Ord+Clone+'static, R: Diff {
+where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Ord+Clone+'static, R: Monoid {
 	type Cursor = OrdValCursor<V, T, R>;
 	fn cursor(&self) -> Self::Cursor { OrdValCursor { cursor: self.layer.cursor() } }
 	fn len(&self) -> usize { <OrderedLayer<K, OrderedLayer<V, OrderedLeaf<T, R>>> as Trie>::tuples(&self.layer) }
@@ -60,14 +60,14 @@ where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Ord+Clone+'static, 
 }
 
 impl<K, V, T, R> Batch<K, V, T, R> for OrdValBatch<K, V, T, R>
-where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Ord+Clone+::std::fmt::Debug+'static, R: Diff {
+where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Ord+Clone+::std::fmt::Debug+'static, R: Monoid {
 	type Batcher = MergeBatcher<K, V, T, R, Self>;
 	type Builder = OrdValBuilder<K, V, T, R>;
 	type Merger = OrdValMerger<K, V, T, R>;
 }
 
 impl<K, V, T, R> OrdValBatch<K, V, T, R>
-where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Ord+Clone+::std::fmt::Debug+'static, R: Diff {
+where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Ord+Clone+::std::fmt::Debug+'static, R: Monoid {
 	fn advance_builder_from(layer: &mut OrderedBuilder<K, OrderedBuilder<V, OrderedLeafBuilder<T, R>>>, frontier: &[T], key_pos: usize) {
 
 		let key_start = key_pos;
@@ -83,7 +83,7 @@ where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Ord+Clone+::std::fm
 
 		// 1. For each (time, diff) pair, advance the time.
 		for i in time_start .. layer.vals.vals.vals.len() {
-			layer.vals.vals.vals[i].0 = layer.vals.vals.vals[i].0.advance_by(frontier);
+			layer.vals.vals.vals[i].0.advance_by(frontier);
 		}
 
 		// 2. For each `(val, off)` pair, sort the range, compact, and rewrite `off`.
@@ -107,8 +107,8 @@ where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Ord+Clone+::std::fm
 
 			for index in lower .. (upper - 1) {
 				if updates[index].0 == updates[index+1].0 {
-					updates[index+1].1 = updates[index+1].1 + updates[index].1;
-					updates[index].1 = R::zero();
+					let prev = ::std::mem::replace(&mut updates[index].1, R::zero());
+					updates[index+1].1 += &prev;
 				}
 			}
 
@@ -171,7 +171,7 @@ where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Ord+Clone+::std::fm
 }
 
 /// State for an in-progress merge.
-pub struct OrdValMerger<K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Ord+Clone+::std::fmt::Debug+'static, R: Diff> {
+pub struct OrdValMerger<K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Ord+Clone+::std::fmt::Debug+'static, R: Monoid> {
 	// first batch, and position therein.
 	lower1: usize,
 	upper1: usize,
@@ -184,7 +184,7 @@ pub struct OrdValMerger<K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+O
 }
 
 impl<K, V, T, R> Merger<K, V, T, R, OrdValBatch<K, V, T, R>> for OrdValMerger<K, V, T, R>
-where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Ord+Clone+::std::fmt::Debug+'static, R: Diff {
+where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Ord+Clone+::std::fmt::Debug+'static, R: Monoid {
 	fn new(batch1: &OrdValBatch<K, V, T, R>, batch2: &OrdValBatch<K, V, T, R>, into: &mut Option<OrdValBatch<K, V, T, R>>) -> Self {
 
 		assert!(batch1.upper() == batch2.lower());
@@ -256,21 +256,21 @@ where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Ord+Clone+::std::fm
 
 /// A cursor for navigating a single layer.
 #[derive(Debug)]
-pub struct OrdValCursor<V: Ord+Clone, T: Lattice+Ord+Clone, R: Diff> {
+pub struct OrdValCursor<V: Ord+Clone, T: Lattice+Ord+Clone, R: Monoid> {
 	cursor: OrderedCursor<OrderedLayer<V, OrderedLeaf<T, R>>>,
 }
 
 impl<K, V, T, R> Cursor<K, V, T, R> for OrdValCursor<V, T, R>
-where K: Ord+Clone, V: Ord+Clone, T: Lattice+Ord+Clone, R: Diff {
+where K: Ord+Clone, V: Ord+Clone, T: Lattice+Ord+Clone, R: Monoid {
 
 	type Storage = OrdValBatch<K, V, T, R>;
 
 	fn key<'a>(&self, storage: &'a Self::Storage) -> &'a K { &self.cursor.key(&storage.layer) }
 	fn val<'a>(&self, storage: &'a Self::Storage) -> &'a V { &self.cursor.child.key(&storage.layer.vals) }
-	fn map_times<L: FnMut(&T, R)>(&mut self, storage: &Self::Storage, mut logic: L) {
+	fn map_times<L: FnMut(&T, &R)>(&mut self, storage: &Self::Storage, mut logic: L) {
 		self.cursor.child.child.rewind(&storage.layer.vals.vals);
 		while self.cursor.child.child.valid(&storage.layer.vals.vals) {
-			logic(&self.cursor.child.child.key(&storage.layer.vals.vals).0, self.cursor.child.child.key(&storage.layer.vals.vals).1);
+			logic(&self.cursor.child.child.key(&storage.layer.vals.vals).0, &self.cursor.child.child.key(&storage.layer.vals.vals).1);
 			self.cursor.child.child.step(&storage.layer.vals.vals);
 		}
 	}
@@ -286,12 +286,12 @@ where K: Ord+Clone, V: Ord+Clone, T: Lattice+Ord+Clone, R: Diff {
 
 
 /// A builder for creating layers from unsorted update tuples.
-pub struct OrdValBuilder<K: Ord, V: Ord, T: Ord+Lattice, R: Diff> {
+pub struct OrdValBuilder<K: Ord, V: Ord, T: Ord+Lattice, R: Monoid> {
 	builder: OrderedBuilder<K, OrderedBuilder<V, OrderedLeafBuilder<T, R>>>,
 }
 
 impl<K, V, T, R> Builder<K, V, T, R, OrdValBatch<K, V, T, R>> for OrdValBuilder<K, V, T, R>
-where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Ord+Clone+::std::fmt::Debug+'static, R: Diff {
+where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Ord+Clone+::std::fmt::Debug+'static, R: Monoid {
 
 	fn new() -> Self {
 		OrdValBuilder {
@@ -331,7 +331,7 @@ pub struct OrdKeyBatch<K: Ord, T: Lattice, R> {
 }
 
 impl<K, T, R> BatchReader<K, (), T, R> for OrdKeyBatch<K, T, R>
-where K: Ord+Clone+'static, T: Lattice+Ord+Clone+'static, R: Diff {
+where K: Ord+Clone+'static, T: Lattice+Ord+Clone+'static, R: Monoid {
 	type Cursor = OrdKeyCursor<T, R>;
 	fn cursor(&self) -> Self::Cursor {
 		OrdKeyCursor {
@@ -345,14 +345,14 @@ where K: Ord+Clone+'static, T: Lattice+Ord+Clone+'static, R: Diff {
 }
 
 impl<K, T, R> Batch<K, (), T, R> for OrdKeyBatch<K, T, R>
-where K: Ord+Clone+'static, T: Lattice+Ord+Clone+'static, R: Diff {
+where K: Ord+Clone+'static, T: Lattice+Ord+Clone+'static, R: Monoid {
 	type Batcher = MergeBatcher<K, (), T, R, Self>;
 	type Builder = OrdKeyBuilder<K, T, R>;
 	type Merger = OrdKeyMerger<K, T, R>;
 }
 
 impl<K, T, R> OrdKeyBatch<K, T, R>
-where K: Ord+Clone+'static, T: Lattice+Ord+Clone+'static, R: Diff {
+where K: Ord+Clone+'static, T: Lattice+Ord+Clone+'static, R: Monoid {
 	fn advance_builder_from(layer: &mut OrderedBuilder<K, OrderedLeafBuilder<T, R>>, frontier: &[T], key_pos: usize) {
 
 		let key_start = key_pos;
@@ -364,7 +364,7 @@ where K: Ord+Clone+'static, T: Lattice+Ord+Clone+'static, R: Diff {
 
 		// 1. For each (time, diff) pair, advance the time.
 		for i in time_start .. layer.vals.vals.len() {
-			layer.vals.vals[i].0 = layer.vals.vals[i].0.advance_by(frontier);
+			layer.vals.vals[i].0.advance_by(frontier);
 		}
 		// for time_diff in self.layer.vals.vals.iter_mut() {
 		// 	time_diff.0 = time_diff.0.advance_by(frontier);
@@ -391,8 +391,8 @@ where K: Ord+Clone+'static, T: Lattice+Ord+Clone+'static, R: Diff {
 
 			for index in lower .. (upper - 1) {
 				if updates[index].0 == updates[index+1].0 {
-					updates[index+1].1 = updates[index].1 + updates[index+1].1;
-					updates[index].1 = R::zero();
+					let prev = ::std::mem::replace(&mut updates[index].1, R::zero());
+					updates[index + 1].1 += &prev;
 				}
 			}
 
@@ -426,7 +426,7 @@ where K: Ord+Clone+'static, T: Lattice+Ord+Clone+'static, R: Diff {
 }
 
 /// State for an in-progress merge.
-pub struct OrdKeyMerger<K: Ord+Clone+'static, T: Lattice+Ord+Clone+'static, R: Diff> {
+pub struct OrdKeyMerger<K: Ord+Clone+'static, T: Lattice+Ord+Clone+'static, R: Monoid> {
 	// first batch, and position therein.
 	lower1: usize,
 	upper1: usize,
@@ -439,7 +439,7 @@ pub struct OrdKeyMerger<K: Ord+Clone+'static, T: Lattice+Ord+Clone+'static, R: D
 }
 
 impl<K, T, R> Merger<K, (), T, R, OrdKeyBatch<K, T, R>> for OrdKeyMerger<K, T, R>
-where K: Ord+Clone+'static, T: Lattice+Ord+Clone+'static, R: Diff {
+where K: Ord+Clone+'static, T: Lattice+Ord+Clone+'static, R: Monoid {
 	fn new(batch1: &OrdKeyBatch<K, T, R>, batch2: &OrdKeyBatch<K, T, R>, into: &mut Option<OrdKeyBatch<K, T, R>>) -> Self {
 
 		assert!(batch1.upper() == batch2.lower());
@@ -510,22 +510,22 @@ where K: Ord+Clone+'static, T: Lattice+Ord+Clone+'static, R: Diff {
 
 /// A cursor for navigating a single layer.
 #[derive(Debug)]
-pub struct OrdKeyCursor<T: Lattice+Ord+Clone, R: Diff> {
+pub struct OrdKeyCursor<T: Lattice+Ord+Clone, R: Monoid> {
 	valid: bool,
 	empty: (),
 	cursor: OrderedCursor<OrderedLeaf<T, R>>,
 }
 
-impl<K: Ord+Clone, T: Lattice+Ord+Clone, R: Diff> Cursor<K, (), T, R> for OrdKeyCursor<T, R> {
+impl<K: Ord+Clone, T: Lattice+Ord+Clone, R: Monoid> Cursor<K, (), T, R> for OrdKeyCursor<T, R> {
 
 	type Storage = OrdKeyBatch<K, T, R>;
 
 	fn key<'a>(&self, storage: &'a Self::Storage) -> &'a K { &self.cursor.key(&storage.layer) }
 	fn val<'a>(&self, _storage: &'a Self::Storage) -> &'a () { unsafe { ::std::mem::transmute(&self.empty) } }
-	fn map_times<L: FnMut(&T, R)>(&mut self, storage: &Self::Storage, mut logic: L) {
+	fn map_times<L: FnMut(&T, &R)>(&mut self, storage: &Self::Storage, mut logic: L) {
 		self.cursor.child.rewind(&storage.layer.vals);
 		while self.cursor.child.valid(&storage.layer.vals) {
-			logic(&self.cursor.child.key(&storage.layer.vals).0, self.cursor.child.key(&storage.layer.vals).1);
+			logic(&self.cursor.child.key(&storage.layer.vals).0, &self.cursor.child.key(&storage.layer.vals).1);
 			self.cursor.child.step(&storage.layer.vals);
 		}
 	}
@@ -541,12 +541,12 @@ impl<K: Ord+Clone, T: Lattice+Ord+Clone, R: Diff> Cursor<K, (), T, R> for OrdKey
 
 
 /// A builder for creating layers from unsorted update tuples.
-pub struct OrdKeyBuilder<K: Ord, T: Ord+Lattice, R: Diff> {
+pub struct OrdKeyBuilder<K: Ord, T: Ord+Lattice, R: Monoid> {
 	builder: OrderedBuilder<K, OrderedLeafBuilder<T, R>>,
 }
 
 impl<K, T, R> Builder<K, (), T, R, OrdKeyBatch<K, T, R>> for OrdKeyBuilder<K, T, R>
-where K: Ord+Clone+'static, T: Lattice+Ord+Clone+'static, R: Diff {
+where K: Ord+Clone+'static, T: Lattice+Ord+Clone+'static, R: Monoid {
 
 	fn new() -> Self {
 		OrdKeyBuilder {

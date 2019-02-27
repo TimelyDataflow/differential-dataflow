@@ -6,17 +6,21 @@ We are going to have to turn off the output printing here. We'll also break it d
 
 First, we produce the skip-level management.
 
+```ignore
         Echidnatron% time cargo run --release --example hello 10000000
         cargo run --release --example hello 10000000 -w1  2.74s user 1.00s system 98% cpu 3.786 total
         Echidnatron%
+```
 
 Four seconds. We have no clue if this is a good or bad time.
 
 Second, we produce the skip-level management and then modify it 10 million times.
 
+```ignore
         Echidnatron% time cargo run --release --example hello 10000000
         cargo run --release --example hello 10000000  10.64s user 2.22s system 99% cpu 12.939 total
         Echidnatron%
+```
 
 About thirteen seconds now.
 

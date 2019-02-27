@@ -10,7 +10,7 @@ Perhaps you have a collections of `(Manager, Employee)` pairs indicating who man
 
 Let's describe an iterative computation that starts from manager-employee relation, and repeatedly expands it to include transitive management relationships.
 
-```rust,no_run
+```rust,ignore
     manager_employee
         .iterate(|manages| {
             // if x manages y, and y manages z, then x manages z (transitively).
@@ -29,7 +29,7 @@ More generally, you may want to describe iterative computations with i. multiple
 
 Timely dataflow provides "scopes", which are nested dataflows in which you can augment timestamps with further information, for example a "round of iteration" for a loop. Our first step to construct a general iterative computation is to create a new scope within the current scope.
 
-```rust,no_run
+```rust,ignore
     // if you don't otherwise have the scope ..
     let scope = manager_employee.scope();
 
@@ -42,7 +42,7 @@ Timely dataflow provides "scopes", which are nested dataflows in which you can a
 
 Each timely dataflow stream, and differential dataflow collection, are associated with a scope. To use a collection that is outside our subscope, we will need to bring it in to the subscope. This is done with the `enter` operator.
 
-```rust,no_run
+```rust,ignore
     // if you don't otherwise have the scope ..
     let scope = manager_employee.scope();
 
@@ -56,7 +56,7 @@ Each timely dataflow stream, and differential dataflow collection, are associate
 
 To create an iterative computation, we now need to define some variables that can be updated in each round of iteration. Differential dataflow provides a [Variable](https://github.com/frankmcsherry/differential-dataflow/blob/master/src/operators/iterate.rs#L132-L137) struct that does exactly this. We create a variable by specifying its initial value (a collection), and then `set` the definition of the collection which will instruct it how to update.
 
-```rust,no_run
+```rust,ignore
     // if you don't otherwise have the scope ..
     let scope = manager_employee.scope();
 
@@ -80,7 +80,7 @@ To create an iterative computation, we now need to define some variables that ca
 
 Finally, we probably want to return the final value of the variable, what it converges to (assuming it does so). There is a `leave` operator that matches the `enter` operator we used to bring data into the scope; it produces the final value of the collection it is called on:
 
-```rust,no_run
+```rust,ignore
     // if you don't otherwise have the scope ..
     let scope = manager_employee.scope();
 

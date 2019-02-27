@@ -6,14 +6,13 @@ use std::io::{BufRead, BufReader};
 use std::fs::File;
 
 use timely::dataflow::Scope;
-use timely::progress::nested::product::Product;
+use timely::order::Product;
 
 use differential_dataflow::operators::iterate::Variable;
 
 use differential_dataflow::Collection;
 use differential_dataflow::input::Input;
 use differential_dataflow::operators::*;
-// use differential_dataflow::operators::iterate::CoreVariable;
 use differential_dataflow::operators::arrange::ArrangeByKey;
 
 type Iter = u64;

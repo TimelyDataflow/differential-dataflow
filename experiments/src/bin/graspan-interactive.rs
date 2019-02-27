@@ -11,7 +11,6 @@ use differential_dataflow::input::Input;
 // use differential_dataflow::trace::Trace;
 // use differential_dataflow::trace::implementations::ord::OrdValSpine;
 use differential_dataflow::operators::*;
-// use differential_dataflow::operators::group::GroupArranged;
 use differential_dataflow::operators::arrange::ArrangeByKey;
 
 fn main() {

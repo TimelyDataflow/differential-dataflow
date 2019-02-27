@@ -17,7 +17,7 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::input::Input;
 use differential_dataflow::operators::iterate::Variable;
 use differential_dataflow::operators::{Threshold, Join, JoinCore, Consolidate};
-use differential_dataflow::operators::arrange::{ArrangeByKey, ArrangeBySelf};
+use differential_dataflow::operators::arrange::ArrangeByKey;
 
 // Type aliases for differential execution.
 type Time = u32;
@@ -71,7 +71,7 @@ impl<'a, G: Scope, D: Data+Hashable> Relation<'a, G, D> where G::Timestamp : Lat
     }
     /// Creates a new variable initialized with `source`.
     pub fn new_from(source: &Collection<Child<'a, G, Iter>, D, Diff>) -> Self {
-        use ::timely::progress::nested::product::Product;
+        use ::timely::order::Product;
         let variable = Variable::new_from(source.clone(), Product::new(Default::default(), 1));
         Relation {
             variable: variable,

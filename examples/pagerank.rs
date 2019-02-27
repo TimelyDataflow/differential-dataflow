@@ -15,14 +15,15 @@ use graph_map::GraphMMap;
 
 type Node = u32;
 type Edge = (Node, Node);
-type Iter = usize;
+type Time = u32;
+type Iter = u32;
 type Diff = isize;
 
 fn main() {
 
     // snag a filename to use for the input graph.
     let filename = std::env::args().nth(1).unwrap();
-    let iterations: usize = std::env::args().nth(2).unwrap().parse().unwrap();
+    let iterations: Iter = std::env::args().nth(2).unwrap().parse().unwrap();
     let inspect = std::env::args().nth(3) == Some("inspect".to_string());
 
     timely::execute_from_args(std::env::args().skip(2), move |worker| {
@@ -34,7 +35,7 @@ fn main() {
         let mut input = InputSession::new();
         let mut probe = ProbeHandle::new();
 
-        worker.dataflow::<usize,_,_>(|scope| {
+        worker.dataflow::<Time,_,_>(|scope| {
             let edges = input.to_collection(scope);
             pagerank(iterations, &edges)
                 .filter(move |_| inspect)
@@ -67,7 +68,7 @@ fn main() {
                     input.update((node as Node, graph.edges(node)[0] as Node), -1);
                 }
             }
-            input.advance_to(node + 1);
+            input.advance_to((node + 1) as Time);
             input.flush();
             while probe.less_than(input.time()) {
                 worker.step();
@@ -80,7 +81,7 @@ fn main() {
 
 // Returns a weighted collection in which the weight of each node is proportional
 // to its PageRank in the input graph `edges`.
-fn pagerank<G>(iters: usize, edges: &Collection<G, Edge, Diff>) -> Collection<G, Node, Diff>
+fn pagerank<G>(iters: Iter, edges: &Collection<G, Edge, Diff>) -> Collection<G, Node, Diff>
 where
     G: Scope,
     G::Timestamp: Lattice,

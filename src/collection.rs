@@ -18,7 +18,7 @@ use timely::dataflow::scopes::{Child, child::Iterative};
 use timely::dataflow::{Scope, Stream};
 use timely::dataflow::operators::*;
 
-use ::Diff;
+use ::difference::{Monoid, Abelian};
 use lattice::Lattice;
 use hashable::Hashable;
 
@@ -38,7 +38,7 @@ use hashable::Hashable;
 /// The `R` parameter represents the types of changes that the data undergo, and is most commonly (and
 /// defaults to) `isize`, representing changes to the occurrence count of each record.
 #[derive(Clone)]
-pub struct Collection<G: Scope, D, R: Diff = isize> {
+pub struct Collection<G: Scope, D, R: Monoid = isize> {
     /// The underlying timely dataflow stream.
     ///
     /// This field is exposed to support direct timely dataflow manipulation when required, but it is
@@ -46,7 +46,7 @@ pub struct Collection<G: Scope, D, R: Diff = isize> {
     pub inner: Stream<G, (D, G::Timestamp, R)>
 }
 
-impl<G: Scope, D: Data, R: Diff> Collection<G, D, R> where G::Timestamp: Data {
+impl<G: Scope, D: Data, R: Monoid> Collection<G, D, R> where G::Timestamp: Data {
     /// Creates a new Collection from a timely dataflow stream.
     ///
     /// This method seems to be rarely used, with the `as_collection` method on streams being a more
@@ -96,7 +96,6 @@ impl<G: Scope, D: Data, R: Diff> Collection<G, D, R> where G::Timestamp: Data {
     /// extern crate differential_dataflow;
     ///
     /// use differential_dataflow::input::Input;
-    /// use differential_dataflow::operators::*;
     ///
     /// fn main() {
     ///     ::timely::example(|scope| {
@@ -126,7 +125,6 @@ impl<G: Scope, D: Data, R: Diff> Collection<G, D, R> where G::Timestamp: Data {
     /// extern crate differential_dataflow;
     ///
     /// use differential_dataflow::input::Input;
-    /// use differential_dataflow::operators::*;
     ///
     /// fn main() {
     ///     ::timely::example(|scope| {
@@ -141,41 +139,7 @@ impl<G: Scope, D: Data, R: Diff> Collection<G, D, R> where G::Timestamp: Data {
               I::Item: Data,
               L: Fn(D) -> I + 'static {
         self.inner
-            .flat_map(move |(data, time, delta)| logic(data).into_iter().map(move |x| (x, time.clone(), delta)))
-            .as_collection()
-    }
-    /// Creates a new collection whose counts are the negation of those in the input.
-    ///
-    /// This method is most commonly used with `concat` to get those element in one collection but not another.
-    /// However, differential dataflow computations are still defined for all values of the difference type `R`,
-    /// including negative counts.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// extern crate timely;
-    /// extern crate differential_dataflow;
-    ///
-    /// use differential_dataflow::input::Input;
-    /// use differential_dataflow::operators::*;
-    ///
-    /// fn main() {
-    ///     ::timely::example(|scope| {
-    ///
-    ///         let data = scope.new_collection_from(1 .. 10).1;
-    ///
-    ///         let odds = data.filter(|x| x % 2 == 1);
-    ///         let evens = data.filter(|x| x % 2 == 0);
-    ///
-    ///         odds.negate()
-    ///             .concat(&data)
-    ///             .assert_eq(&evens);
-    ///     });
-    /// }
-    /// ```
-    pub fn negate(&self) -> Collection<G, D, R> {
-        self.inner
-            .map_in_place(|x| x.2 = -x.2)
+            .flat_map(move |(data, time, delta)| logic(data).into_iter().map(move |x| (x, time.clone(), delta.clone())))
             .as_collection()
     }
     /// Creates a new collection containing those input records satisfying the supplied predicate.
@@ -187,7 +151,6 @@ impl<G: Scope, D: Data, R: Diff> Collection<G, D, R> where G::Timestamp: Data {
     /// extern crate differential_dataflow;
     ///
     /// use differential_dataflow::input::Input;
-    /// use differential_dataflow::operators::*;
     ///
     /// fn main() {
     ///     ::timely::example(|scope| {
@@ -217,7 +180,6 @@ impl<G: Scope, D: Data, R: Diff> Collection<G, D, R> where G::Timestamp: Data {
     /// extern crate differential_dataflow;
     ///
     /// use differential_dataflow::input::Input;
-    /// use differential_dataflow::operators::*;
     ///
     /// fn main() {
     ///     ::timely::example(|scope| {
@@ -249,7 +211,6 @@ impl<G: Scope, D: Data, R: Diff> Collection<G, D, R> where G::Timestamp: Data {
     /// extern crate differential_dataflow;
     ///
     /// use differential_dataflow::input::Input;
-    /// use differential_dataflow::operators::*;
     ///
     /// fn main() {
     ///     ::timely::example(|scope| {
@@ -265,13 +226,13 @@ impl<G: Scope, D: Data, R: Diff> Collection<G, D, R> where G::Timestamp: Data {
     /// ```
     pub fn explode<D2, R2, I, L>(&self, logic: L) -> Collection<G, D2, <R2 as Mul<R>>::Output>
     where D2: Data,
-          R2: Diff+Mul<R>,
-          <R2 as Mul<R>>::Output: Data+Diff,
+          R2: Monoid+Mul<R>,
+          <R2 as Mul<R>>::Output: Data+Monoid,
           I: IntoIterator<Item=(D2,R2)>,
           L: Fn(D)->I+'static,
     {
         self.inner
-            .flat_map(move |(x, t, d)| logic(x).into_iter().map(move |(x,d2)| (x, t.clone(), d2 * d)))
+            .flat_map(move |(x, t, d)| logic(x).into_iter().map(move |(x,d2)| (x, t.clone(), d2 * d.clone())))
             .as_collection()
     }
 
@@ -285,7 +246,6 @@ impl<G: Scope, D: Data, R: Diff> Collection<G, D, R> where G::Timestamp: Data {
     ///
     /// use timely::dataflow::Scope;
     /// use differential_dataflow::input::Input;
-    /// use differential_dataflow::operators::*;
     ///
     /// fn main() {
     ///     ::timely::example(|scope| {
@@ -323,7 +283,6 @@ impl<G: Scope, D: Data, R: Diff> Collection<G, D, R> where G::Timestamp: Data {
     ///
     /// use timely::dataflow::Scope;
     /// use differential_dataflow::input::Input;
-    /// use differential_dataflow::operators::*;
     ///
     /// fn main() {
     ///     ::timely::example(|scope| {
@@ -393,7 +352,6 @@ impl<G: Scope, D: Data, R: Diff> Collection<G, D, R> where G::Timestamp: Data {
     /// extern crate differential_dataflow;
     ///
     /// use differential_dataflow::input::Input;
-    /// use differential_dataflow::operators::*;
     ///
     /// fn main() {
     ///     ::timely::example(|scope| {
@@ -423,7 +381,6 @@ impl<G: Scope, D: Data, R: Diff> Collection<G, D, R> where G::Timestamp: Data {
     /// extern crate differential_dataflow;
     ///
     /// use differential_dataflow::input::Input;
-    /// use differential_dataflow::operators::*;
     ///
     /// fn main() {
     ///     ::timely::example(|scope| {
@@ -460,44 +417,6 @@ impl<G: Scope, D: Data, R: Diff> Collection<G, D, R> where G::Timestamp: Data {
             .as_collection()
     }
 
-    /// Assert if the collections are ever different.
-    ///
-    /// Because this is a dataflow fragment, the test is only applied as the computation is run. If the computation
-    /// is not run, or not run to completion, there may be un-exercised times at which the collections could vary.
-    /// Typically, a timely dataflow computation runs to completion on drop, and so clean exit from a program should
-    /// indicate that this assertion never found cause to complain.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// extern crate timely;
-    /// extern crate differential_dataflow;
-    ///
-    /// use differential_dataflow::input::Input;
-    /// use differential_dataflow::operators::*;
-    ///
-    /// fn main() {
-    ///     ::timely::example(|scope| {
-    ///
-    ///         let data = scope.new_collection_from(1 .. 10).1;
-    ///
-    ///         let odds = data.filter(|x| x % 2 == 1);
-    ///         let evens = data.filter(|x| x % 2 == 0);
-    ///
-    ///         odds.concat(&evens)
-    ///             .assert_eq(&data);
-    ///     });
-    /// }
-    /// ```
-    pub fn assert_eq(&self, other: &Self)
-    where D: ::Data+Hashable,
-          G::Timestamp: Lattice+Ord
-    {
-        self.negate()
-            .concat(other)
-            .assert_empty();
-    }
-
     /// Assert if the collection is ever non-empty.
     ///
     /// Because this is a dataflow fragment, the test is only applied as the computation is run. If the computation
@@ -512,7 +431,6 @@ impl<G: Scope, D: Data, R: Diff> Collection<G, D, R> where G::Timestamp: Data {
     /// extern crate differential_dataflow;
     ///
     /// use differential_dataflow::input::Input;
-    /// use differential_dataflow::operators::*;
     ///
     /// fn main() {
     ///     ::timely::example(|scope| {
@@ -541,7 +459,7 @@ impl<G: Scope, D: Data, R: Diff> Collection<G, D, R> where G::Timestamp: Data {
 use timely::dataflow::scopes::ScopeParent;
 use timely::progress::timestamp::Refines;
 
-impl<'a, G: Scope, T: Timestamp, D: Data, R: Diff> Collection<Child<'a, G, T>, D, R>
+impl<'a, G: Scope, T: Timestamp, D: Data, R: Monoid> Collection<Child<'a, G, T>, D, R>
 where
     T: Refines<<G as ScopeParent>::Timestamp>,
 {
@@ -555,7 +473,6 @@ where
     ///
     /// use timely::dataflow::Scope;
     /// use differential_dataflow::input::Input;
-    /// use differential_dataflow::operators::*;
     ///
     /// fn main() {
     ///     ::timely::example(|scope| {
@@ -579,13 +496,87 @@ where
     }
 }
 
+impl<G: Scope, D: Data, R: Abelian> Collection<G, D, R> where G::Timestamp: Data {
+    /// Creates a new collection whose counts are the negation of those in the input.
+    ///
+    /// This method is most commonly used with `concat` to get those element in one collection but not another.
+    /// However, differential dataflow computations are still defined for all values of the difference type `R`,
+    /// including negative counts.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// extern crate timely;
+    /// extern crate differential_dataflow;
+    ///
+    /// use differential_dataflow::input::Input;
+    ///
+    /// fn main() {
+    ///     ::timely::example(|scope| {
+    ///
+    ///         let data = scope.new_collection_from(1 .. 10).1;
+    ///
+    ///         let odds = data.filter(|x| x % 2 == 1);
+    ///         let evens = data.filter(|x| x % 2 == 0);
+    ///
+    ///         odds.negate()
+    ///             .concat(&data)
+    ///             .assert_eq(&evens);
+    ///     });
+    /// }
+    /// ```
+    pub fn negate(&self) -> Collection<G, D, R> {
+        self.inner
+            .map_in_place(|x| x.2 = -x.2.clone())
+            .as_collection()
+    }
+
+
+    /// Assert if the collections are ever different.
+    ///
+    /// Because this is a dataflow fragment, the test is only applied as the computation is run. If the computation
+    /// is not run, or not run to completion, there may be un-exercised times at which the collections could vary.
+    /// Typically, a timely dataflow computation runs to completion on drop, and so clean exit from a program should
+    /// indicate that this assertion never found cause to complain.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// extern crate timely;
+    /// extern crate differential_dataflow;
+    ///
+    /// use differential_dataflow::input::Input;
+    ///
+    /// fn main() {
+    ///     ::timely::example(|scope| {
+    ///
+    ///         let data = scope.new_collection_from(1 .. 10).1;
+    ///
+    ///         let odds = data.filter(|x| x % 2 == 1);
+    ///         let evens = data.filter(|x| x % 2 == 0);
+    ///
+    ///         odds.concat(&evens)
+    ///             .assert_eq(&data);
+    ///     });
+    /// }
+    /// ```
+    pub fn assert_eq(&self, other: &Self)
+    where D: ::Data+Hashable,
+          G::Timestamp: Lattice+Ord
+    {
+        self.negate()
+            .concat(other)
+            .assert_empty();
+    }
+}
+
 /// Conversion to a differential dataflow Collection.
-pub trait AsCollection<G: Scope, D: Data, R: Diff> {
+pub trait AsCollection<G: Scope, D: Data, R: Monoid> {
     /// Converts the type to a differential dataflow collection.
     fn as_collection(&self) -> Collection<G, D, R>;
 }
 
-impl<G: Scope, D: Data, R: Diff> AsCollection<G, D, R> for Stream<G, (D, G::Timestamp, R)> {
+impl<G: Scope, D: Data, R: Monoid> AsCollection<G, D, R> for Stream<G, (D, G::Timestamp, R)> {
     fn as_collection(&self) -> Collection<G, D, R> {
         Collection::new(self.clone())
     }

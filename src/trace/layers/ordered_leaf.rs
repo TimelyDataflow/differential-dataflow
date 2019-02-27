@@ -1,6 +1,6 @@
 //! Implementation using ordered keys and exponential search.
 
-use difference::Diff;
+use ::difference::Monoid;
 
 use super::{Trie, Cursor, Builder, MergeBuilder, TupleBuilder};
 
@@ -14,7 +14,7 @@ pub struct OrderedLeaf<K, R> {
     pub vals: Vec<(K, R)>,
 }
 
-impl<K: Ord+Clone, R: Diff+Clone> Trie for OrderedLeaf<K, R> {
+impl<K: Ord+Clone, R: Monoid+Clone> Trie for OrderedLeaf<K, R> {
     type Item = (K, R);
     type Cursor = OrderedLeafCursor;
     type MergeBuilder = Self;
@@ -29,13 +29,13 @@ impl<K: Ord+Clone, R: Diff+Clone> Trie for OrderedLeaf<K, R> {
     }
 }
 
-impl<K: Ord+Clone, R: Diff+Clone> Builder for OrderedLeaf<K, R> {
+impl<K: Ord+Clone, R: Monoid+Clone> Builder for OrderedLeaf<K, R> {
     type Trie = OrderedLeaf<K, R>;
     fn boundary(&mut self) -> usize { self.vals.len() }
     fn done(self) -> Self::Trie { OrderedLeaf { vals: self.vals } }
 }
 
-impl<K: Ord+Clone, R: Diff+Clone> MergeBuilder for OrderedLeaf<K, R> {
+impl<K: Ord+Clone, R: Monoid+Clone> MergeBuilder for OrderedLeaf<K, R> {
 
     fn merge_into(mut trie: Self::Trie) -> Self {
         trie.vals.clear();
@@ -70,7 +70,8 @@ impl<K: Ord+Clone, R: Diff+Clone> MergeBuilder for OrderedLeaf<K, R> {
                 }
                 ::std::cmp::Ordering::Equal => {
 
-                    let sum = trie1.vals[lower1].1 + trie2.vals[lower2].1;
+                    let mut sum = trie1.vals[lower1].1.clone();
+                    sum += &trie2.vals[lower2].1;
                     if !sum.is_zero() {
                         self.vals.push((trie1.vals[lower1].0.clone(), sum));
                     }
@@ -94,7 +95,7 @@ impl<K: Ord+Clone, R: Diff+Clone> MergeBuilder for OrderedLeaf<K, R> {
     }
 }
 
-impl<K: Ord+Clone, R: Diff+Clone> TupleBuilder for OrderedLeaf<K, R> {
+impl<K: Ord+Clone, R: Monoid+Clone> TupleBuilder for OrderedLeaf<K, R> {
     type Item = (K, R);
     fn new() -> Self { OrderedLeafBuilder { vals: Vec::new() } }
     fn with_capacity(cap: usize) -> Self { OrderedLeafBuilder { vals: Vec::with_capacity(cap) } }

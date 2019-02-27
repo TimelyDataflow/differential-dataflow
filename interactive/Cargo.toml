@@ -1,0 +1,10 @@
+[package]
+name = "interactive"
+version = "0.1.0"
+authors = ["Frank McSherry <fmcsherry@me.com>"]
+
+[dependencies]
+serde = "1"
+serde_derive = "1"
+differential-dataflow = { path = "../" }
+timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", features = ["bincode"] }

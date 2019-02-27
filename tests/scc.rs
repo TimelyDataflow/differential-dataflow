@@ -254,7 +254,7 @@ where G::Timestamp: Lattice+Ord+Hash {
 
              inner.join_map(&edges, |_k,l,d| (*d,*l))
                   .concat(&nodes)
-                  .group(|_, s, t| t.push((*s[0].0, 1)))
+                  .reduce(|_, s, t| t.push((*s[0].0, 1)))
 
          })
 }

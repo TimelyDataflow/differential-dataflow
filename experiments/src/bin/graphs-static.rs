@@ -7,7 +7,7 @@ use std::rc::Rc;
 
 use timely::dataflow::*;
 
-use timely::progress::nested::product::Product;
+use timely::order::Product;
 use timely::dataflow::operators::ToStream;
 
 use differential_dataflow::input::Input;
@@ -158,7 +158,7 @@ fn bfs<G: Scope<Timestamp = ()>> (
         let result =
         graph.join_map(&inner, |_src,&dest,&dist| (dest, dist+1))
              .concat(&roots)
-             .group(|_key, input, output| output.push((*input[0].0,1)));
+             .reduce(|_key, input, output| output.push((*input[0].0,1)));
 
         inner.set(&result);
         result.leave()
@@ -204,7 +204,7 @@ fn connected_components<G: Scope<Timestamp = ()>>(
             .as_collection()
             .concat(&f_prop)
             .concat(&r_prop)
-            .group(|_, s, t| { t.push((*s[0].0, 1)); });
+            .reduce(|_, s, t| { t.push((*s[0].0, 1)); });
 
         inner.set(&result);
         result.leave()
@@ -249,11 +249,11 @@ fn _connected_components_odd<G: Scope<Timestamp = ()>>(
             .delay(|dtr,_| dtr.1.clone())
             .as_collection();
 
-        use differential_dataflow::operators::group::GroupArranged;
+        use differential_dataflow::operators::reduce::ReduceCore;
 
         let labels =
         proposals
-            .group_arranged::<_,_,Spine<Node, Node, _, Diff, Rc<OrdValBatch<Node, Node, _, Diff>>>,_>(|_, s, t| { t.push((*s[0].0, 1)); });
+            .reduce_abelian::<_,_,Spine<Node, Node, _, Diff, Rc<OrdValBatch<Node, Node, _, Diff>>>,_>(|_, s, t| { t.push((*s[0].0, 1)); });
 
         let f_prop = labels.join_core(&forward, |_k,l,d| Some((*d,*l)));
         let r_prop = labels.join_core(&reverse, |_k,l,d| Some((*d,*l)));

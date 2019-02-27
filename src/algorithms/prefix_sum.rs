@@ -55,7 +55,7 @@ where
     let unit_ranges = collection.map(|((index, key), data)| ((index, 0, key), data));
 
     unit_ranges
-        .iterate(|ranges| 
+        .iterate(|ranges|
 
             // Each available range, of size less than usize::max_value(), advertises itself as the range
             // twice as large, aligned to integer multiples of its size. Each range, which may contain at
@@ -65,7 +65,7 @@ where
             ranges
                 .filter(|&((_pos, log, _), _)| log < 64)
                 .map(|((pos, log, key), data)| ((pos >> 1, log + 1, key), (pos, data)))
-                .group(move |&(_pos, _log, ref key), input, output| {
+                .reduce(move |&(_pos, _log, ref key), input, output| {
                     let mut result = (input[0].0).1.clone();
                     if input.len() > 1 { result = combine(key, &result, &(input[1].0).1); }
                     output.push((result, 1));
@@ -76,7 +76,7 @@ where
 
 /// Produces the accumulated values at each of the `usize` locations in `queries`.
 pub fn broadcast<G, K, D, F>(
-    ranges: Collection<G, ((usize, usize, K), D)>, 
+    ranges: Collection<G, ((usize, usize, K), D)>,
     queries: Collection<G, (usize, K)>,
     zero: D,
     combine: F) -> Collection<G, ((usize, K), D)>
@@ -109,8 +109,8 @@ where
     // We could reduce the amount of data by producing the requests iteratively, with a distinct in
     // the loop to pre-suppress duplicate requests. This comes at a complexity cost, though.
     let requests =
-        queries 
-            .flat_map(|(idx, key)| 
+        queries
+            .flat_map(|(idx, key)|
                 (0 .. 64)
                     .filter(move |i| (idx & (1usize << i)) != 0)    // set bits require help.
                     .map(move |i| ((idx >> i) - 1, i, key.clone())) // width 2^i interval.
@@ -133,7 +133,7 @@ where
     let used_ranges = full_ranges.concat(&zero_ranges);
 
     // Each key should initiate a value of `zero` at position `0`.
-    let init_states = 
+    let init_states =
         queries
             .map(move |(_, key)| ((0, key), zero2.clone()))
             .distinct();
@@ -144,7 +144,7 @@ where
             used_ranges
                 .enter(&states.scope())
                 .map(|((pos, log, key), data)| ((pos << log, key), (log, data)))
-                .join_map(states, move |&(pos, ref key), &(log, ref data), state| 
+                .join_map(states, move |&(pos, ref key), &(log, ref data), state|
                     ((pos + (1 << log), key.clone()), combine(key, state, data)))
                 .concat(&init_states.enter(&states.scope()))
                 .distinct()

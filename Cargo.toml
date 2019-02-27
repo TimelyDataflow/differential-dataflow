@@ -1,15 +1,15 @@
 [package]
 
 name = "differential-dataflow"
-version = "0.7.0"
+version = "0.8.0"
 authors = ["Frank McSherry <fmcsherry@me.com>"]
 
 description = "An incremental data-parallel dataflow platform"
 
 # These URLs point to more information about the repository
 documentation = "https://docs.rs/differential-dataflow"
-homepage = "https://github.com/frankmcsherry/differential-dataflow"
-repository = "https://github.com/frankmcsherry/differential-dataflow.git"
+homepage = "https://github.com/TimelyDataflow/differential-dataflow"
+repository = "https://github.com/TimelyDataflow/differential-dataflow.git"
 keywords = ["differential", "dataflow"]
 license = "MIT"
 
@@ -18,8 +18,8 @@ indexmap = "1.0.1"
 rand="0.4"
 byteorder="1"
 itertools="^0.7"
-graph_map = { git = "https://github.com/frankmcsherry/graph-map.git" }
 serde_json = "1.0"
+graph_map = "0.1"
 
 [dependencies]
 serde = "1.0"
@@ -27,8 +27,9 @@ serde_derive = "1.0"
 abomonation = "0.7"
 abomonation_derive = "0.3"
 timely_sort="0.1.6"
-#timely = "0.7"
-timely = { git = "https://github.com/frankmcsherry/timely-dataflow" }
+#timely = "0.8"
+timely = { git = "https://github.com/TimelyDataflow/timely-dataflow" }
+#timely = { path = "../timely-dataflow/" }
 fnv="1.0.2"
 
 [profile.release]

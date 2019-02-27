@@ -60,7 +60,7 @@ fn starts_with(source: &[u8], query: &[u8]) -> bool {
     source.len() >= query.len() && &source[..query.len()] == query
 }
 
-pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp> 
+pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp>
 where G::Timestamp: Lattice+TotalOrder+Ord {
 
     let orders =
@@ -81,14 +81,14 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
     let lateitems = lineitems.filter(|l| (l.1).1);
     let lateorders = lateitems.map(|l| l.0).distinct_total();
 
-    let problems = 
+    let problems =
     lineitems
         .map(|(order_key, (_supp_key, is_late))| (order_key, is_late))
         .semijoin(&lateorders)    //- on_time and late, but just one late -\\
-        .group(|_order_key, s, t| if s.len() == 2 && s[1].1 == 1 { t.push(((), 1)); })
+        .reduce(|_order_key, s, t| if s.len() == 2 && s[1].1 == 1 { t.push(((), 1)); })
         .map(|(order_key, _)| order_key);
 
-    let latesupps = 
+    let latesupps =
     lateitems
         .semijoin(&problems)
         .map(|(_order_key, (supp_key, _))| supp_key);
