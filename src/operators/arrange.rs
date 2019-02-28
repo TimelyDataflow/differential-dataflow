@@ -289,7 +289,62 @@ where
         // Drop ShutdownButton and return only the arrangement.
         self.import_core(scope, name).0
     }
-    /// Same as `import`, but allows to name the source.
+    /// Imports an arrangement into the supplied scope.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// extern crate timely;
+    /// extern crate differential_dataflow;
+    ///
+    /// use timely::Configuration;
+    /// use timely::dataflow::ProbeHandle;
+    /// use timely::dataflow::operators::Probe;
+    /// use differential_dataflow::input::InputSession;
+    /// use differential_dataflow::operators::arrange::ArrangeBySelf;
+    /// use differential_dataflow::operators::reduce::Reduce;
+    /// use differential_dataflow::trace::Trace;
+    /// use differential_dataflow::trace::implementations::ord::OrdValSpine;
+    /// use differential_dataflow::hashable::OrdWrapper;
+    ///
+    /// fn main() {
+    ///     ::timely::execute(Configuration::Thread, |worker| {
+    ///
+    ///         let mut input = InputSession::<_,(),isize>::new();
+    ///         let mut probe = ProbeHandle::new();
+    ///
+    ///         // create a first dataflow
+    ///         let mut trace = worker.dataflow::<u32,_,_>(|scope| {
+    ///             // create input handle and collection.
+    ///             input.to_collection(scope)
+    ///                  .arrange_by_self()
+    ///                  .trace
+    ///         });
+    ///
+    ///         // do some work.
+    ///         worker.step();
+    ///         worker.step();
+    ///
+    ///         // create a second dataflow
+    ///         let mut shutdown = worker.dataflow(|scope| {
+    ///             let (arrange, button) = trace.import_core(scope, "Import");
+    ///             arrange.stream.probe_with(&mut probe);
+    ///             button
+    ///         });
+    ///
+    ///         worker.step();
+    ///         worker.step();
+    ///         assert!(!probe.done());
+    ///
+    ///         shutdown.press();
+    ///
+    ///         worker.step();
+    ///         worker.step();
+    ///         assert!(probe.done());
+    ///
+    ///     }).unwrap();
+    /// }
+    /// ```
     pub fn import_core<G: Scope<Timestamp=T>>(&mut self, scope: &G, name: &str) -> (Arranged<G, K, V, R, TraceAgent<K, V, T, R, Tr>>, ShutdownButton<CapabilitySet<T>>)
     where
         T: Timestamp
@@ -297,50 +352,64 @@ where
         let trace = self.clone();
 
         // Capabilities shared with a shutdown button.
-        let capabilities = Rc::new(RefCell::new(Some(CapabilitySet::new())));
-        let shutdown_button = ShutdownButton::new(capabilities.clone());
+        // let shutdown_button = ShutdownButton::new(capabilities.clone());
 
-        let stream = source(scope, name, move |capability, info| {
+        let mut shutdown_button = None;
 
-            let activator = scope.activator_for(&info.address[..]);
-            let queue = self.new_listener(activator);
+        let stream = {
 
-            capabilities.borrow_mut().as_mut().unwrap().insert(capability);
+            let mut shutdown_button_ref = &mut shutdown_button;
+            source(scope, name, move |capability, info| {
 
-            move |output| {
+                let capabilities = Rc::new(RefCell::new(Some(CapabilitySet::new())));
 
-                let mut capabilities = capabilities.borrow_mut();
-                if let Some(ref mut capabilities) = *capabilities {
+                let activator = scope.activator_for(&info.address[..]);
+                let queue = self.new_listener(activator);
 
-                    let mut borrow = queue.1.borrow_mut();
-                    for (frontier, sent) in borrow.drain(..) {
+                let activator = scope.activator_for(&info.address[..]);
+                *shutdown_button_ref = Some(ShutdownButton::new(capabilities.clone(), activator));
 
-                        if let Some((time, batch)) = sent {
-                            let delayed = capabilities.delayed(&time);
-                            output.session(&delayed).give(batch);
+                capabilities.borrow_mut().as_mut().unwrap().insert(capability);
+
+                move |output| {
+
+                    let mut capabilities = capabilities.borrow_mut();
+                    if let Some(ref mut capabilities) = *capabilities {
+
+                        let mut borrow = queue.1.borrow_mut();
+                        for (frontier, sent) in borrow.drain(..) {
+
+                            if let Some((time, batch)) = sent {
+                                let delayed = capabilities.delayed(&time);
+                                output.session(&delayed).give(batch);
+                            }
+
+                            capabilities.downgrade(&frontier[..]);
                         }
-
-                        capabilities.downgrade(&frontier[..]);
                     }
                 }
-            }
-        });
+            })
+        };
 
-        (Arranged { stream, trace }, shutdown_button)
+        (Arranged { stream, trace }, shutdown_button.unwrap())
     }
 }
 
 /// Wrapper than can drop shared references.
 pub struct ShutdownButton<T> {
     reference: Rc<RefCell<Option<T>>>,
+    activator: Activator,
 }
 
 impl<T> ShutdownButton<T> {
     /// Creates a new ShutdownButton.
-    pub fn new(reference: Rc<RefCell<Option<T>>>) -> Self { Self { reference } }
+    pub fn new(reference: Rc<RefCell<Option<T>>>, activator: Activator) -> Self {
+        Self { reference, activator }
+    }
     /// Push the shutdown button, dropping the shared objects.
-    pub fn push(&mut self) {
+    pub fn press(&mut self) {
         *self.reference.borrow_mut() = None;
+        self.activator.activate();
     }
 }
 
