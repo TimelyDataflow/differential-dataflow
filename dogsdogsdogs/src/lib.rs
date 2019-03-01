@@ -151,13 +151,15 @@ where
 
     pub fn index<G: Scope<Timestamp = T>>(collection: &Collection<G, (K, V), R>) -> Self {
         // We need to count the number of (k, v) pairs and not rely on the given Monoid R and its binary addition operation.
-        let counts = collection
+        // counts and validate can share the base arrangement
+        let arranged = collection.arrange_by_self();
+        let counts = arranged
             .distinct()
             .map(|(k, _v)| k)
             .arrange_by_self()
             .trace;
         let propose = collection.arrange_by_key().trace;
-        let validate = collection.arrange_by_self().trace;
+        let validate = arranged.trace;
 
         CollectionIndex {
             count_trace: counts,
