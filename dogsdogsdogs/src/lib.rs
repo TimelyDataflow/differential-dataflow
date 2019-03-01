@@ -16,7 +16,7 @@ use std::ops::Mul;
 use timely::PartialOrder;
 use timely::dataflow::Scope;
 use timely::dataflow::channels::pact::{Pipeline, Exchange};
-use timely::dataflow::operators::{Operator, Map};
+use timely::dataflow::operators::Operator;
 use timely::progress::Timestamp;
 use timely::dataflow::operators::Partition;
 use timely::dataflow::operators::Concatenate;
@@ -24,6 +24,7 @@ use timely::dataflow::operators::Concatenate;
 use timely_sort::Unsigned;
 
 use differential_dataflow::{Data, Collection, AsCollection, Hashable};
+use differential_dataflow::operators::Threshold;
 use differential_dataflow::difference::{Monoid};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::TraceAgent;
@@ -150,17 +151,8 @@ where
 
     pub fn index<G: Scope<Timestamp = T>>(collection: &Collection<G, (K, V), R>) -> Self {
         // We need to count the number of (k, v) pairs and not rely on the given Monoid R and its binary addition operation.
-        // We assume that input collections are distinct (k, v) pairs.
         let counts = collection
-            .inner
-            .map(|(data, time, diff)| {
-                if diff.is_inverse() {
-                    (data, time, -1)
-                } else {
-                    (data, time, 1)
-                }
-            })
-            .as_collection()
+            .distinct()
             .map(|(k, _v)| k)
             .arrange_by_self()
             .trace;
