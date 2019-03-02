@@ -280,7 +280,7 @@ where
                             }
                         }
 
-                        prefixes.retain(|ptd| ptd.2 != R::zero());
+                        prefixes.retain(|ptd| !ptd.2.is_zero());
                     }
                 }
             }
@@ -360,9 +360,9 @@ where
                                     while let Some(value) = cursor.get_val(&storage) {
                                         let mut count = R::zero();
                                         cursor.map_times(&storage, |t, d| if t.less_equal(time) { count += d; });
-                                        // assert!(count >= 0);
-                                        if count > R::zero() {
-                                            session.give(((prefix.clone(), value.clone()), time.clone(), diff.clone() * count));
+                                        let prod = count * diff.clone();
+                                        if !prod.is_zero() {
+                                            session.give(((prefix.clone(), value.clone()), time.clone(), prod));
                                         }
                                         cursor.step_val(&storage);
                                     }
@@ -372,7 +372,7 @@ where
                             }
                         }
 
-                        prefixes.retain(|ptd| ptd.2 != R::zero());
+                        prefixes.retain(|ptd| !ptd.2.is_zero());
                     }
                 }
             }
@@ -454,16 +454,16 @@ where
                                 if cursor.get_key(&storage) == Some(&key) {
                                     let mut count = R::zero();
                                     cursor.map_times(&storage, |t, d| if t.less_equal(time) { count += d; });
-                                    // assert!(count >= 0);
-                                    if count > R::zero(){
-                                        session.give((prefix.clone(), time.clone(), diff.clone() * count));
+                                    let prod = count * diff.clone();
+                                    if !prod.is_zero(){
+                                        session.give((prefix.clone(), time.clone(), prod));
                                     }
                                 }
                                 *diff = R::zero();
                             }
                         }
 
-                        prefixes.retain(|ptd| ptd.2 != R::zero());
+                        prefixes.retain(|ptd| !ptd.2.is_zero());
                     }
                 }
             }
