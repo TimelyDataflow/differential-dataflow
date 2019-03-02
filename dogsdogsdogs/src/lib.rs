@@ -362,7 +362,7 @@ where
                                         cursor.map_times(&storage, |t, d| if t.less_equal(time) { count += d; });
                                         // assert!(count >= 0);
                                         if count > R::zero() {
-                                            session.give(((prefix.clone(), value.clone()), time.clone(), diff.clone()));
+                                            session.give(((prefix.clone(), value.clone()), time.clone(), diff.clone() * count));
                                         }
                                         cursor.step_val(&storage);
                                     }
@@ -456,7 +456,7 @@ where
                                     cursor.map_times(&storage, |t, d| if t.less_equal(time) { count += d; });
                                     // assert!(count >= 0);
                                     if count > R::zero(){
-                                        session.give((prefix.clone(), time.clone(), diff.clone()));
+                                        session.give((prefix.clone(), time.clone(), diff.clone() * count));
                                     }
                                 }
                                 *diff = R::zero();
