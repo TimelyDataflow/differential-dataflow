@@ -74,9 +74,9 @@ pub struct Query {
 use differential_dataflow::trace::implementations::ord::{OrdValSpine, OrdKeySpine};
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 
-type TraceKeyHandle<K,T,R> = TraceAgent<K, (), T, R, OrdKeySpine<K, T, R>>;
-type TraceValHandle<K,V,T,R> = TraceAgent<K, V, T, R, OrdValSpine<K, V, T, R>>;
-type Arrange<G, K, V, R> = Arranged<G, K, V, R, TraceValHandle<K, V, <G as ScopeParent>::Timestamp, R>>;
+type TraceKeyHandle<K,T,R> = TraceAgent<OrdKeySpine<K, T, R>>;
+type TraceValHandle<K,V,T,R> = TraceAgent<OrdValSpine<K, V, T, R>>;
+type Arrange<G,K,V,R> = Arranged<G, TraceValHandle<K, V, <G as ScopeParent>::Timestamp, R>>;
 
 /// An evolving set of edges.
 ///

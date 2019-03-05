@@ -107,7 +107,7 @@ pub struct Spine<K, V, T: Lattice+Ord, R: Monoid, B: Batch<K, V, T, R>> {
     effort: usize,
 }
 
-impl<K, V, T, R, B> TraceReader<K, V, T, R> for Spine<K, V, T, R, B>
+impl<K, V, T, R, B> TraceReader for Spine<K, V, T, R, B>
 where
     K: Ord+Clone,           // Clone is required by `batch::advance_*` (in-place could remove).
     V: Ord+Clone,           // Clone is required by `batch::advance_*` (in-place could remove).
@@ -115,6 +115,11 @@ where
     R: Monoid,
     B: Batch<K, V, T, R>+Clone+'static,
 {
+    type Key = K;
+    type Val = V;
+    type Time = T;
+    type R = R;
+
     type Batch = B;
     type Cursor = CursorList<K, V, T, R, <B as BatchReader<K, V, T, R>>::Cursor>;
 
@@ -197,7 +202,7 @@ where
 
 // A trace implementation for any key type that can be borrowed from or converted into `Key`.
 // TODO: Almost all this implementation seems to be generic with respect to the trace and batch types.
-impl<K, V, T, R, B> Trace<K, V, T, R> for Spine<K, V, T, R, B>
+impl<K, V, T, R, B> Trace for Spine<K, V, T, R, B>
 where
     K: Ord+Clone,
     V: Ord+Clone,

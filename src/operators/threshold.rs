@@ -76,13 +76,17 @@ where G::Timestamp: TotalOrder+Lattice+Ord {
     }
 }
 
-impl<G: Scope, K: Data, R: Monoid, T1> ThresholdTotal<G, K, R> for Arranged<G, K, (), R, T1>
+impl<G: Scope, T1> ThresholdTotal<G, T1::Key, T1::R> for Arranged<G, T1>
 where
     G::Timestamp: TotalOrder+Lattice+Ord,
-    T1: TraceReader<K, (), G::Timestamp, R>+Clone+'static,
-    T1::Batch: BatchReader<K, (), G::Timestamp, R> {
+    T1: TraceReader<Val=(), Time=G::Timestamp>+Clone+'static,
+    T1::Key: Data,
+    T1::R: Monoid,
+    T1::Batch: BatchReader<T1::Key, (), G::Timestamp, T1::R>,
+    T1::Cursor: Cursor<T1::Key, (), G::Timestamp, T1::R>,
+{
 
-    fn threshold_total<R2: Abelian, F:Fn(&K,&R)->R2+'static>(&self, thresh: F) -> Collection<G, K, R2> {
+    fn threshold_total<R2: Abelian, F:Fn(&T1::Key,&T1::R)->R2+'static>(&self, thresh: F) -> Collection<G, T1::Key, R2> {
 
         let mut trace = self.trace.clone();
         let mut buffer = Vec::new();
@@ -101,7 +105,7 @@ where
 
                     while batch_cursor.key_valid(&batch) {
                         let key = batch_cursor.key(&batch);
-                        let mut count = R::zero();
+                        let mut count = <T1::R>::zero();
 
                         // Compute the multiplicity of this key before the current batch.
                         trace_cursor.seek_key(&trace_storage, key);
