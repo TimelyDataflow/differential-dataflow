@@ -49,8 +49,8 @@ use trace::wrappers::filter::{TraceFilter, BatchFilter};
 /// A trace writer capability.
 pub struct TraceWriter<Tr>
 where
-    Tr::Time: Lattice+Ord+Clone+'static,
     Tr: Trace,
+    Tr::Time: Lattice+Ord+Clone+'static,
     Tr::Batch: Batch<Tr::Key,Tr::Val,Tr::Time,Tr::R>,
 {
     trace: Weak<RefCell<TraceBox<Tr>>>,
@@ -59,8 +59,8 @@ where
 
 impl<Tr> TraceWriter<Tr>
 where
-    Tr::Time: Lattice+Ord+Clone+'static,
     Tr: Trace,
+    Tr::Time: Lattice+Ord+Clone+'static,
     Tr::Batch: Batch<Tr::Key,Tr::Val,Tr::Time,Tr::R>,
 {
     /// Advances the trace to `frontier`, providing batch data if it exists.
@@ -97,8 +97,8 @@ where
 
 impl<Tr> Drop for TraceWriter<Tr>
 where
-    Tr::Time: Lattice+Ord+Clone+'static,
     Tr: Trace,
+    Tr::Time: Lattice+Ord+Clone+'static,
     Tr::Batch: Batch<Tr::Key,Tr::Val,Tr::Time,Tr::R>,
 {
     fn drop(&mut self) {
@@ -130,8 +130,8 @@ type TraceAgentQueueWriter<Tr> = Weak<(Activator, RefCell<BatchQueue<Tr>>)>;
 /// from the dataflow in which it was defined, and imported into other dataflows.
 pub struct TraceAgent<Tr>
 where
-    Tr::Time: Lattice+Ord+Clone+'static,
     Tr: TraceReader,
+    Tr::Time: Lattice+Ord+Clone+'static,
 {
     trace: Rc<RefCell<TraceBox<Tr>>>,
     queues: Weak<RefCell<(Vec<Tr::Time>,Vec<TraceAgentQueueWriter<Tr>>)>>,
@@ -141,8 +141,8 @@ where
 
 impl<Tr> TraceReader for TraceAgent<Tr>
 where
-    Tr::Time: Lattice+Ord+Clone+'static,
     Tr: TraceReader,
+    Tr::Time: Lattice+Ord+Clone+'static,
 {
     type Key = Tr::Key;
     type Val = Tr::Val;
@@ -175,8 +175,8 @@ where
 
 impl<Tr> TraceAgent<Tr>
 where
-    Tr::Time: Timestamp+Lattice,
     Tr: TraceReader,
+    Tr::Time: Timestamp+Lattice,
 {
 
     /// Creates a new agent from a trace reader.
@@ -239,8 +239,8 @@ where
 
 impl<Tr> TraceAgent<Tr>
 where
-    Tr::Time: Lattice+Ord+Clone+'static,
     Tr: TraceReader,
+    Tr::Time: Lattice+Ord+Clone+'static,
 {
     /// Copies an existing collection into the supplied scope.
     ///
@@ -444,8 +444,8 @@ impl<T> ShutdownButton<T> {
 
 impl<Tr> Clone for TraceAgent<Tr>
 where
-    Tr::Time: Lattice+Ord+Clone+'static,
     Tr: TraceReader,
+    Tr::Time: Lattice+Ord+Clone+'static,
 {
     fn clone(&self) -> Self {
 
@@ -465,8 +465,8 @@ where
 
 impl<Tr> Drop for TraceAgent<Tr>
 where
-    Tr::Time: Lattice+Ord+Clone+'static,
     Tr: TraceReader,
+    Tr::Time: Lattice+Ord+Clone+'static,
 {
     fn drop(&mut self) {
         // decrement borrow counts to remove all holds
@@ -529,7 +529,6 @@ where
     pub fn enter<'a, TInner>(&self, child: &Child<'a, G, TInner>)
         -> Arranged<Child<'a, G, TInner>, TraceEnter<Tr, TInner>>
         where
-            Tr::Batch: Clone,
             Tr::Key: 'static,
             Tr::Val: 'static,
             Tr::R: 'static,
@@ -550,7 +549,6 @@ where
     pub fn enter_at<'a, TInner, F>(&self, child: &Child<'a, G, TInner>, logic: F)
         -> Arranged<Child<'a, G, TInner>, TraceEnterAt<Tr, TInner, F>>
         where
-            Tr::Batch: Clone,
             Tr::Key: 'static,
             Tr::Val: 'static,
             Tr::R: 'static,
@@ -599,7 +597,6 @@ where
     pub fn filter<F>(&self, logic: F)
         -> Arranged<G, TraceFilter<Tr, F>>
         where
-            Tr::Batch: Clone,
             Tr::Key: 'static,
             Tr::Val: 'static,
             Tr::R: 'static,
@@ -619,9 +616,6 @@ where
     /// supplied as arguments to an operator using the same key-value structure.
     pub fn as_collection<D: Data, L>(&self, logic: L) -> Collection<G, D, Tr::R>
         where
-            Tr::Batch: Clone+'static,
-            Tr::Key: Clone,
-            Tr::Val: Clone,
             Tr::R: Monoid,
             L: Fn(&Tr::Key, &Tr::Val) -> D+'static,
     {
@@ -634,9 +628,6 @@ where
     /// filtering or flat mapping as part of the extraction.
     pub fn flat_map_ref<I, L>(&self, logic: L) -> Collection<G, I::Item, Tr::R>
         where
-            Tr::Batch: Clone+'static,
-            Tr::Key: Clone,
-            Tr::Val: Clone,
             Tr::R: Monoid,
             I: IntoIterator,
             I::Item: Data,
@@ -1022,7 +1013,9 @@ where G::Timestamp: Lattice+Ord {
 }
 
 impl<G: Scope, K: Data+Hashable, V: Data, R: Monoid> ArrangeByKey<G, K, V, R> for Collection<G, (K,V), R>
-where G::Timestamp: Lattice+Ord {
+where
+    G::Timestamp: Lattice+Ord
+{
     fn arrange_by_key(&self) -> Arranged<G, TraceAgent<DefaultValTrace<K, V, G::Timestamp, R>>> {
         self.arrange()
     }
@@ -1034,7 +1027,9 @@ where G::Timestamp: Lattice+Ord {
 /// map. This can result in many hash calls, and in some cases it may help to first transform `K` to the
 /// pair `(u64, K)` of hash value and key.
 pub trait ArrangeBySelf<G: Scope, K: Data+Hashable, R: Monoid>
-where G::Timestamp: Lattice+Ord {
+where
+    G::Timestamp: Lattice+Ord
+{
     /// Arranges a collection of `Key` records by `Key`.
     ///
     /// This operator arranges a collection of records into a shared trace, whose contents it maintains.
@@ -1045,7 +1040,9 @@ where G::Timestamp: Lattice+Ord {
 
 
 impl<G: Scope, K: Data+Hashable, R: Monoid> ArrangeBySelf<G, K, R> for Collection<G, K, R>
-where G::Timestamp: Lattice+Ord {
+where
+    G::Timestamp: Lattice+Ord
+{
     fn arrange_by_self(&self) -> Arranged<G, TraceAgent<DefaultKeyTrace<K, G::Timestamp, R>>> {
         self.map(|k| (k, ()))
             .arrange()
