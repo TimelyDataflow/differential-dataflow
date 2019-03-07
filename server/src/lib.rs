@@ -1,6 +1,5 @@
 extern crate libloading;
 extern crate timely;
-extern crate timely_communication;
 extern crate differential_dataflow;
 
 use std::any::Any;
@@ -10,8 +9,9 @@ use std::time::Instant;
 
 use libloading::Library;
 
-use timely_communication::Allocator;
-use timely::dataflow::scopes::{Child, Root};
+use timely::communication::Allocator;
+use timely::worker::Worker;
+use timely::dataflow::scopes::Child;
 use timely::dataflow::operators::probe::Handle as ProbeHandle;
 
 // stuff for talking about shared trace types ...
@@ -20,14 +20,14 @@ use differential_dataflow::trace::implementations::spine_fueled::Spine;
 use differential_dataflow::trace::implementations::ord::OrdValBatch;
 
 // These are all defined here so that users can be assured a common layout.
-pub type RootTime = timely::progress::nested::product::Product<timely::progress::timestamp::RootTimestamp, usize>;
+pub type RootTime = usize;
 type TraceBatch = OrdValBatch<usize, usize, RootTime, isize>;
 type TraceSpine = Spine<usize, usize, RootTime, isize, Rc<TraceBatch>>;
 pub type TraceHandle = TraceAgent<usize, usize, RootTime, isize, TraceSpine>;
 
 /// Arguments provided to each shared library to help build their dataflows and register their results.
 pub type Environment<'a, 'b> = (
-    &'a mut Child<'b, Root<Allocator>,usize>,
+    &'a mut Child<'b, Worker<Allocator>,usize>,
     &'a mut TraceHandler,
     &'a mut ProbeHandle<RootTime>,
     &'a Instant,
