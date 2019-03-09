@@ -46,7 +46,7 @@ use ::difference::{Monoid, Abelian};
 use lattice::Lattice;
 
 /// An extension trait for the `iterate` method.
-pub trait Iterate<G: Scope, D: Data, R: Abelian> {
+pub trait Iterate<G: Scope, D: Data, R: Monoid> {
     /// Iteratively apply `logic` to the source collection until convergence.
     ///
     /// Importantly, this method does not automatically consolidate results.
@@ -99,6 +99,30 @@ impl<G: Scope, D: Ord+Data+Debug, R: Abelian> Iterate<G, D, R> for Collection<G,
             variable.set(&result);
             result.leave()
         })
+    }
+}
+
+impl<G: Scope, D: Ord+Data+Debug, R: Monoid> Iterate<G, D, R> for G {
+    fn iterate<F>(&self, logic: F) -> Collection<G, D, R>
+        where G::Timestamp: Lattice,
+              for<'a> F: FnOnce(&Collection<Iterative<'a, G, u64>, D, R>)->Collection<Iterative<'a, G, u64>, D, R> {
+
+        // TODO: This makes me think we have the wrong ownership pattern here.
+        let mut clone = self.clone();
+        clone
+            .scoped("Iterate", |subgraph| {
+                // create a new variable, apply logic, bind variable, return.
+                //
+                // this could be much more succinct if we returned the collection
+                // wrapped by `variable`, but it also results in substantially more
+                // diffs produced; `result` is post-consolidation, and means fewer
+                // records are yielded out of the loop.
+                let variable = MonoidVariable::new(subgraph, Product::new(Default::default(), 1));
+                let result = logic(&variable);
+                variable.set(&result);
+                result.leave()
+            }
+        )
     }
 }
 
