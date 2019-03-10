@@ -7,6 +7,7 @@
 //! us to track something like the average.
 
 use std::ops::{AddAssign, Neg, Mul};
+use std::iter::Iterator;
 
 use ::Data;
 
@@ -137,6 +138,14 @@ impl<R> DiffVector<R> {
     #[inline(always)]
     pub fn new(vec: Vec<R>) -> DiffVector<R> {
         DiffVector { buffer: vec }
+    }
+}
+
+impl<R> IntoIterator for DiffVector<R> {
+    type Item = R;
+    type IntoIter = ::std::vec::IntoIter<R>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.buffer.into_iter()
     }
 }
 
