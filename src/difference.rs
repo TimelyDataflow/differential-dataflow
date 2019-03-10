@@ -132,6 +132,14 @@ pub struct DiffVector<R> {
 	buffer: Vec<R>,
 }
 
+impl<R> DiffVector<R> {
+    /// Create new DiffVector from Vec
+    #[inline(always)]
+    pub fn new(vec: Vec<R>) -> DiffVector<R> {
+        DiffVector { buffer: vec }
+    }
+}
+
 impl<R: Monoid> Monoid for DiffVector<R> {
 	#[inline(always)] fn is_zero(&self) -> bool {
 		self.buffer.iter().all(|x| x.is_zero())
