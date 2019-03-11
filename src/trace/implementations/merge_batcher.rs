@@ -117,30 +117,30 @@ pub struct VecQueue<T> {
 }
 
 impl<T> VecQueue<T> {
-    #[inline(always)]
+    #[inline]
     pub fn new() -> Self { VecQueue::from(Vec::new()) }
-    #[inline(always)]
+    #[inline]
     pub fn pop(&mut self) -> T {
         debug_assert!(self.head < self.tail);
         self.head += 1;
         unsafe { ::std::ptr::read(self.list.as_mut_ptr().offset((self.head as isize) - 1)) }
     }
-    #[inline(always)]
+    #[inline]
     pub fn peek(&self) -> &T {
         debug_assert!(self.head < self.tail);
         unsafe { self.list.get_unchecked(self.head) }
     }
-    #[inline(always)]
+    #[inline]
     pub fn _peek_tail(&self) -> &T {
         debug_assert!(self.head < self.tail);
         unsafe { self.list.get_unchecked(self.tail-1) }
     }
-    #[inline(always)]
+    #[inline]
     pub fn _slice(&self) -> &[T] {
         debug_assert!(self.head < self.tail);
         unsafe { from_raw_parts(self.list.get_unchecked(self.head), self.tail - self.head) }
     }
-    #[inline(always)]
+    #[inline]
     pub fn from(mut list: Vec<T>) -> Self {
         let tail = list.len();
         unsafe { list.set_len(0); }
@@ -151,18 +151,18 @@ impl<T> VecQueue<T> {
         }
     }
     // could leak, if self.head != self.tail.
-    #[inline(always)]
+    #[inline]
     pub fn done(self) -> Vec<T> {
         debug_assert!(self.head == self.tail);
         self.list
     }
-    #[inline(always)]
+    #[inline]
     pub fn len(&self) -> usize { self.tail - self.head }
-    #[inline(always)]
+    #[inline]
     pub fn is_empty(&self) -> bool { self.head == self.tail }
 }
 
-#[inline(always)]
+#[inline]
 unsafe fn push_unchecked<T>(vec: &mut Vec<T>, element: T) {
     debug_assert!(vec.len() < vec.capacity());
     let len = vec.len();
@@ -339,7 +339,7 @@ impl<D: Ord, T: Ord, R: Monoid> MergeSorter<D, T, R> {
 /// stays false once it becomes false, a joint property of the predicate
 /// and the slice. This allows `advance` to use exponential search to
 /// count the number of elements in time logarithmic in the result.
-#[inline(always)]
+#[inline]
 pub fn _advance<T, F: Fn(&T)->bool>(slice: &[T], function: F) -> usize {
 
 	// start with no advance
