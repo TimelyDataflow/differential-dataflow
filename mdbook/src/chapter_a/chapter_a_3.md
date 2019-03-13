@@ -55,7 +55,7 @@ We can make the same changes for the interactive loading, but we'll synchronize 
 This starts to print out a mess of data, indicating not only how long it takes to start up the computation, but also how long each individual round of updates takes.
 
 ```ignore
-        Echidnatron% cargo run --release --example hello 10000000
+        Echidnatron% cargo run --release -- 10000000
             Finished release [optimized + debuginfo] target(s) in 0.06s
              Running `target/release/examples/hello 10000000`
         4.092895186s    data loaded
