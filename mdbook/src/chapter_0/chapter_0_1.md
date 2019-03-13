@@ -58,9 +58,7 @@ We want to report each pair `(m2, p)`, and we happen to also produce as evidence
 When we execute this program we get to see the skip-level reports for the small binary tree we loaded as input:
 
         Echidnatron% cargo run -- 10
-           Compiling differential-dataflow v0.6.0 (file:///Users/mcsherry/Projects/differential-dataflow)
-            Finished dev [unoptimized + debuginfo] target(s) in 7.17s
-             Running `target/debug/examples/hello`
+             Running `target/debug/my_project`
         ((0, 0, 0), (Root, 0), 1)
         ((0, 0, 1), (Root, 0), 1)
         ((1, 0, 2), (Root, 0), 1)

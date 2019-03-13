@@ -56,8 +56,8 @@ This starts to print out a mess of data, indicating not only how long it takes t
 
 ```ignore
         Echidnatron% cargo run --release -- 10000000
-            Finished release [optimized + debuginfo] target(s) in 0.06s
-             Running `target/release/examples/hello 10000000`
+            Finished release [optimized] target(s) in 0.24s
+             Running `target/release/my_project 10000000`
         4.092895186s    data loaded
         4.092975626s    step 1 complete
         4.093021676s    step 2 complete

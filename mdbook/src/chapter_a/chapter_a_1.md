@@ -10,7 +10,9 @@ First, we produce the skip-level management (with the "change its input" code co
 
 ```ignore
         Echidnatron% time cargo run --release -- 10000000
-        cargo run --release --example hello 10000000 -w1  2.74s user 1.00s system 98% cpu 3.786 total
+            Finished release [optimized] target(s) in 0.24s
+             Running `target/release/my_project 10000000`
+        cargo run --release my_project 10000000 -w1  2.74s user 1.00s system 98% cpu 3.786 total
         Echidnatron%
 ```
 
@@ -20,7 +22,9 @@ Second, we produce the skip-level management and then modify it 10 million times
 
 ```ignore
         Echidnatron% time cargo run --release -- 10000000
-        cargo run --release --example hello 10000000  10.64s user 2.22s system 99% cpu 12.939 total
+            Finished release [optimized] target(s) in 0.24s
+             Running `target/release/my_project 10000000`
+        cargo run --release my_project 10000000  10.64s user 2.22s system 99% cpu 12.939 total
         Echidnatron%
 ```
 
