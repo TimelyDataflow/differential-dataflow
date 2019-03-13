@@ -43,7 +43,7 @@ The convenience method `count` wraps the `reduce` operator, and performs the com
 
 ### Distinct
 
-The `distinct` operator is another convenience operator, and it takes any input collection to one in which each input record occurs exactly once. The distinct operator is a great way to recover set semantics despite differential dataflow's native multiset semantics.
+The `distinct` operator is another convenience operator, and it takes any input collection to one in which each input record occurs at most once. The distinct operator is a great way to recover set semantics despite differential dataflow's native multiset semantics.
 
 ### Threshold
 
