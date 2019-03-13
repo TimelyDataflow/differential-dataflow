@@ -1,12 +1,12 @@
-## The Group Operator
+## The Reduce Operator
 
-The `group` operator takes an input collection whose records have a `(key, value)` structure, and it applies a user-supplied closure to each group of values with the same key.
+The `reduce` operator takes an input collection whose records have a `(key, value)` structure, and it applies a user-supplied reduction closure to each group of values with the same key.
 
 For example, to produce for each manager their managee with the lowest identifier, we might write
 
 ```rust,no_run
     manages
-        .group(|_key, input, output| {
+        .reduce(|_key, input, output| {
             let mut min_index = 0;
 
             // Each element of input is a `(&Value, Count)`
@@ -39,7 +39,7 @@ Speaking of which ...
 
 ### Count
 
-The convenience method `count` wraps the `group` operator, and performs the common operation much more easily. The count operator takes arbitrary input collections, and produces a collection as output whose records are pairs of input records and their accumulated count.
+The convenience method `count` wraps the `reduce` operator, and performs the common operation much more easily. The count operator takes arbitrary input collections, and produces a collection as output whose records are pairs of input records and their accumulated count.
 
 ### Distinct
 

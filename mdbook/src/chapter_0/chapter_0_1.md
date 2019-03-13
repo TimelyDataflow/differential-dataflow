@@ -2,7 +2,7 @@
 
 You write differential dataflow programs against apparently static input collections, with operations that look a bit like database (SQL) or big data (MapReduce) idioms. This is actually a bit of a trick, because you will have the ablity to change the input data, but we'll pretend we don't know that yet.
 
-Let's write a program with one input: a collection `manages` of pairs `(manager, person)` describing people and their direct reports. Our program will determine for each person their manager's manager. If you are familiar with SQL, this is an "equijoin", and we will write exactly that in differential dataflow.
+Let's write a program with one input: a collection `manages` of pairs `(manager, person)` describing people and their direct reports. Our program will determine for each person their manager's manager (where the boss manages the boss's own self). If you are familiar with SQL, this is an "equijoin", and we will write exactly that in differential dataflow.
 
 If you are following along at home, put this in your `src/main.rs` file.
 
@@ -34,9 +34,12 @@ If you are following along at home, put this in your `src/main.rs` file.
                     .inspect(|x| println!("{:?}", x));
             });
 
+            // Read a size for our organization from the arguments.
+            let size = std::env::args().nth(1).unwrap().parse().unwrap();
+
             // Load input (a binary tree).
             input.advance_to(0);
-            for person in 0 .. 10 {
+            for person in 0 .. size {
                 input.insert((person/2, person));
             }
 
@@ -54,7 +57,7 @@ We want to report each pair `(m2, p)`, and we happen to also produce as evidence
 
 When we execute this program we get to see the skip-level reports for the small binary tree we loaded as input:
 
-        Echidnatron% cargo run --example hello
+        Echidnatron% cargo run -- 10
            Compiling differential-dataflow v0.6.0 (file:///Users/mcsherry/Projects/differential-dataflow)
             Finished dev [unoptimized + debuginfo] target(s) in 7.17s
              Running `target/debug/examples/hello`

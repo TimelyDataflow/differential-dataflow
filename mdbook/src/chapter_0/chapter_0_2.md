@@ -7,7 +7,7 @@ Our organization has gone from one where each manager has at most two reports, t
 The only change we'll make is to add the following just after we load up our initial org chart:
 
 ```rust,no_run
-    for person in 1 .. 10 {
+    for person in 1 .. size {
         input.advance_to(person);
         input.remove((person/2, person));
         input.insert((person/3, person));
