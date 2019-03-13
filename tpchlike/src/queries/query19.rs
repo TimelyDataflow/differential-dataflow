@@ -56,13 +56,13 @@ fn starts_with(source: &[u8], query: &[u8]) -> bool {
     source.len() >= query.len() && &source[..query.len()] == query
 }
 
-pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp> 
+pub fn query<G: Scope>(collections: &mut Collections<G>, probe: &mut ProbeHandle<G::Timestamp>)
 where G::Timestamp: Lattice+TotalOrder+Ord {
 
     let lineitems =
     collections
         .lineitems()
-        .explode(|x| 
+        .explode(|x|
             if (starts_with(&x.ship_mode, b"AIR") || starts_with(&x.ship_mode, b"AIR REG")) && starts_with(&x.ship_instruct, b"DELIVER IN PERSON") {
                 Some(((x.part_key, x.quantity), (x.extended_price * (100 - x.discount) / 100) as isize))
             }
@@ -88,5 +88,5 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
         .concat(&result3)
         .count_total()
         // .inspect(|x| println!("{:?}", x))
-        .probe()
+        .probe_with(probe);
 }

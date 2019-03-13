@@ -47,7 +47,7 @@ use ::Collections;
 //     o_orderdate;
 // :n 100
 
-pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp> 
+pub fn query<G: Scope>(collections: &mut Collections<G>, probe: &mut ProbeHandle<G::Timestamp>)
 where G::Timestamp: Lattice+TotalOrder+Ord {
 
     let orders =
@@ -62,5 +62,5 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
         .filter(|&(_key, cnt)| cnt > 300)
         .join_map(&orders, |&o_key, &quant, &(cust_key, date, price)| (cust_key, (o_key, date, price, quant)))
         .join(&collections.customers().map(|c| (c.cust_key, c.name)))
-        .probe()
+        .probe_with(probe);
 }

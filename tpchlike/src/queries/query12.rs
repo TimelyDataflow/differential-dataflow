@@ -50,19 +50,19 @@ fn starts_with(source: &[u8], query: &[u8]) -> bool {
     source.len() >= query.len() && &source[..query.len()] == query
 }
 
-pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp> 
+pub fn query<G: Scope>(collections: &mut Collections<G>, probe: &mut ProbeHandle<G::Timestamp>)
 where G::Timestamp: Lattice+TotalOrder+Ord {
 
     println!("TODO: Q12 does contortions because isize doesn't implement Mul<DiffPair<isize, isize>>.");
 
-    let orders = 
+    let orders =
     collections
         .orders()
         .explode(|o|
             if starts_with(&o.order_priority, b"1-URGENT") || starts_with(&o.order_priority, b"2-HIGH") {
                 Some((o.order_key, DiffPair::new(1, 0)))
             }
-            else { 
+            else {
                 Some((o.order_key, DiffPair::new(0, 1)))
             }
         )
@@ -71,9 +71,9 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
     let lineitems =
     collections
         .lineitems()
-        .flat_map(|l| 
-            if (starts_with(&l.ship_mode, b"MAIL") || starts_with(&l.ship_mode, b"SHIP")) && 
-                l.commit_date < l.receipt_date && l.ship_date < l.commit_date && 
+        .flat_map(|l|
+            if (starts_with(&l.ship_mode, b"MAIL") || starts_with(&l.ship_mode, b"SHIP")) &&
+                l.commit_date < l.receipt_date && l.ship_date < l.commit_date &&
                 create_date(1994,1,1) <= l.receipt_date && l.receipt_date < create_date(1995,1,1) {
                 Some((l.order_key, l.ship_mode))
             }
@@ -85,5 +85,5 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
         .join_core(&lineitems, |_, _, &ship_mode| Some(ship_mode))
         .count_total()
         // .inspect(|x| println!("{:?}", x))
-        .probe()
+        .probe_with(probe);
 }

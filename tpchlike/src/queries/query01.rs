@@ -6,7 +6,7 @@ use differential_dataflow::operators::*;
 use differential_dataflow::difference::DiffPair;
 use differential_dataflow::lattice::Lattice;
 
-use ::Collections;
+use {Collections, Arrangements};
 
 // -- $ID$
 // -- TPC-H/TPC-R Pricing Summary Report Query (Q1)
@@ -37,24 +37,54 @@ use ::Collections;
 //     l_linestatus;
 // :n -1
 
-pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp> where G::Timestamp: Lattice+TotalOrder+Ord {
-
+pub fn query<G: Scope>(collections: &mut Collections<G>, probe: &mut ProbeHandle<G::Timestamp>)
+where
+    G::Timestamp: Lattice+TotalOrder+Ord
+{
     collections
         .lineitems()
-        .explode(|item| 
+        .explode(|item|
             if item.ship_date <= ::types::create_date(1998, 9, 2) {
-                Some(((item.return_flag[0], item.line_status[0]), 
-                    DiffPair::new(item.quantity as isize, 
+                Some(((item.return_flag[0], item.line_status[0]),
+                    DiffPair::new(item.quantity as isize,
                     DiffPair::new(item.extended_price as isize,
                     DiffPair::new((item.extended_price * (100 - item.discount) / 100) as isize,
                     DiffPair::new((item.extended_price * (100 - item.discount) * (100 + item.tax) / 10000) as isize,
                     DiffPair::new(item.discount as isize, 1)))))))
             }
-            else { 
+            else {
                 None
             }
         )
         .count_total()
         // .inspect(|x| println!("{:?}", x))
-        .probe()
+        .probe_with(probe);
+}
+
+pub fn query_arranged<G: Scope>(
+    collections: &mut Collections<G>,
+    _arrangements: &mut Arrangements,
+    probe: &mut ProbeHandle<G::Timestamp>
+)
+where
+    G::Timestamp: Lattice+TotalOrder+Ord
+{
+    collections
+        .lineitems()
+        .explode(|item|
+            if item.ship_date <= ::types::create_date(1998, 9, 2) {
+                Some(((item.return_flag[0], item.line_status[0]),
+                    DiffPair::new(item.quantity as isize,
+                    DiffPair::new(item.extended_price as isize,
+                    DiffPair::new((item.extended_price * (100 - item.discount) / 100) as isize,
+                    DiffPair::new((item.extended_price * (100 - item.discount) * (100 + item.tax) / 10000) as isize,
+                    DiffPair::new(item.discount as isize, 1)))))))
+            }
+            else {
+                None
+            }
+        )
+        .count_total()
+        // .inspect(|x| println!("{:?}", x))
+        .probe_with(probe);
 }

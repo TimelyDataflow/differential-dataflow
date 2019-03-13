@@ -68,7 +68,7 @@ fn substring(source: &[u8], query: &[u8]) -> bool {
     )
 }
 
-pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp>
+pub fn query<G: Scope>(collections: &mut Collections<G>, probe: &mut ProbeHandle<G::Timestamp>)
 where G::Timestamp: Lattice+TotalOrder+Ord {
 
     let regions =
@@ -113,5 +113,5 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
         .join(&suppliers)
         .map(|(_supp, ((cost, part, mfgr), (nat, acc, nam, add, phn, com)))| (nat, (cost, part, mfgr, acc, nam, add, phn, com)))
         .join(&nations)
-        .probe()
+        .probe_with(probe);
 }

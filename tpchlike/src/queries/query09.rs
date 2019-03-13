@@ -53,7 +53,7 @@ fn substring(source: &[u8], query: &[u8]) -> bool {
     )
 }
 
-pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp>
+pub fn query<G: Scope>(collections: &mut Collections<G>, probe: &mut ProbeHandle<G::Timestamp>)
 where G::Timestamp: Lattice+TotalOrder+Ord {
 
     println!("TODO: Q09 join order may be pessimal; could pivot to put lineitems last");
@@ -76,5 +76,5 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
         .join_map(&collections.suppliers().map(|s| (s.supp_key, s.nation_key)), |_, &order_year, &nation_key| (nation_key, order_year))
         .join(&collections.nations().map(|n| (n.nation_key, n.name)))
         .count_total()
-        .probe()
+        .probe_with(probe);
 }

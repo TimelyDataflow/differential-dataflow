@@ -35,17 +35,17 @@ fn starts_with(source: &[u8], query: &[u8]) -> bool {
     source.len() >= query.len() && &source[..query.len()] == query
 }
 
-pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp> 
+pub fn query<G: Scope>(collections: &mut Collections<G>, probe: &mut ProbeHandle<G::Timestamp>)
 where G::Timestamp: Lattice+TotalOrder+Ord {
 
-    let lineitems = 
+    let lineitems =
     collections
         .lineitems()
         .explode(|l|
             if create_date(1995,9,1) <= l.ship_date && l.ship_date < create_date(1995,10,1) {
                 Some((l.part_key, (l.extended_price * (100 - l.discount) / 100) as isize ))
             }
-            else { None }            
+            else { None }
         )
         .arrange_by_self();
 
@@ -56,5 +56,5 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
         .join_core(&lineitems, |&_part_key, _, _| Some(()))
         .count_total()
         // .inspect(|x| println!("{:?}", x))
-        .probe()
+        .probe_with(probe);
 }

@@ -57,7 +57,7 @@ use ::Collections;
 //     cntrycode;
 // :n -1
 
-pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp>
+pub fn query<G: Scope>(collections: &mut Collections<G>, probe: &mut ProbeHandle<G::Timestamp>)
 where G::Timestamp: Lattice+TotalOrder+Ord {
 
     println!("TODO: Q22 uses a `group` for counting to get an arrangement; could use `count_total`");
@@ -94,5 +94,5 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
         .explode(|(cc, acct)| Some((cc, DiffPair::new(acct as isize, 1))))
         .count_total()
         // .inspect(|x| println!("{:?}", x))
-        .probe()
+        .probe_with(probe);
 }

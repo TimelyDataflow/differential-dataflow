@@ -58,7 +58,7 @@ fn starts_with(source: &[u8], query: &[u8]) -> bool {
     source.len() >= query.len() && &source[..query.len()] == query
 }
 
-pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp>
+pub fn query<G: Scope>(collections: &mut Collections<G>, probe: &mut ProbeHandle<G::Timestamp>)
 where G::Timestamp: Lattice+TotalOrder+Ord {
 
     let regions = collections.regions().filter(|r| starts_with(&r.name, b"AMERICA")).map(|r| r.region_key);
@@ -97,5 +97,5 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
         .explode(|(_, (order_date, is_name))| Some((order_date, DiffPair::new(if is_name { 1 } else { 0 }, 1))))
         .count_total()
         // .inspect(|x| println!("{:?}", x))
-        .probe()
+        .probe_with(probe);
 }

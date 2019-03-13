@@ -32,7 +32,7 @@ use ::Collections;
 //   );
 // :n -1
 
-pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp>
+pub fn query<G: Scope>(collections: &mut Collections<G>, probe: &mut ProbeHandle<G::Timestamp>)
 where G::Timestamp: Lattice+TotalOrder+Ord {
 
     let parts =
@@ -62,5 +62,5 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
         .explode(|(_part, price)| Some(((), price as isize)))
         .count_total()
         // .inspect(|x| println!("{:?}", x))
-        .probe()
+        .probe_with(probe);
 }

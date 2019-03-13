@@ -51,7 +51,7 @@ fn starts_with(source: &[u8], query: &[u8]) -> bool {
     source.len() >= query.len() && &source[..query.len()] == query
 }
 
-pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp>
+pub fn query<G: Scope>(collections: &mut Collections<G>, probe: &mut ProbeHandle<G::Timestamp>)
 where G::Timestamp: Lattice+TotalOrder+Ord {
 
     let regex = Regex::new("Customer.*Complaints").expect("Regex construction failed");
@@ -79,5 +79,5 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
         .map(|(_, brand_type_size)| brand_type_size)
         .count_total()
         // .inspect(|x| println!("{:?}", x))
-        .probe()
+        .probe_with(probe);
 }

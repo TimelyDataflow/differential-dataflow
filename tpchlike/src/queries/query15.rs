@@ -49,7 +49,7 @@ use ::types::create_date;
 // drop view revenue:s;
 // :n -1
 
-pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp>
+pub fn query<G: Scope>(collections: &mut Collections<G>, probe: &mut ProbeHandle<G::Timestamp>)
 where G::Timestamp: Lattice+TotalOrder+Ord {
 
     // revenue by supplier
@@ -95,5 +95,5 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
         .map(|s| (s.supp_key, (s.name, s.address, s.phone)))
         .join(&top_suppliers)
         // .inspect(|x| println!("{:?}", x))
-        .probe()
+        .probe_with(probe);
 }

@@ -46,7 +46,7 @@ fn starts_with(source: &[u8], query: &[u8]) -> bool {
     source.len() >= query.len() && &source[..query.len()] == query
 }
 
-pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp>
+pub fn query<G: Scope>(collections: &mut Collections<G>, probe: &mut ProbeHandle<G::Timestamp>)
 where G::Timestamp: Lattice+TotalOrder+Ord {
 
     let nations =
@@ -73,5 +73,5 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
         })
         .map(|(_, part_key)| part_key)
         .count_total()
-        .probe()
+        .probe_with(probe);
 }

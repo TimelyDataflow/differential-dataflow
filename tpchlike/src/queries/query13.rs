@@ -37,7 +37,7 @@ use ::Collections;
 //     c_count desc;
 // :n -1
 
-pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp>
+pub fn query<G: Scope>(collections: &mut Collections<G>, probe: &mut ProbeHandle<G::Timestamp>)
 where G::Timestamp: Lattice+TotalOrder+Ord {
 
     let regex = Regex::new("special.*requests").expect("Regex construction failed");
@@ -55,5 +55,5 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
         .map(|(_cust_key, count)| (count-1) as usize)
         .count_total()
         // .inspect(|x| println!("{:?}", x))
-        .probe()
+        .probe_with(probe);
 }

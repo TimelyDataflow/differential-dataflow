@@ -5,7 +5,7 @@ use timely::dataflow::operators::probe::Handle as ProbeHandle;
 use differential_dataflow::operators::*;
 use differential_dataflow::lattice::Lattice;
 
-use ::Collections;
+use {Collections, Arrangements};
 use ::types::create_date;
 
 // -- $ID$
@@ -38,12 +38,11 @@ use ::types::create_date;
 //     o_orderdate;
 // :n 10
 
-
 fn starts_with(source: &[u8], query: &[u8]) -> bool {
     source.len() >= query.len() && &source[..query.len()] == query
 }
 
-pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp> 
+pub fn query<G: Scope>(collections: &mut Collections<G>, probe: &mut ProbeHandle<G::Timestamp>)
 where G::Timestamp: Lattice+TotalOrder+Ord {
 
     let customers =
@@ -51,17 +50,17 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
         .customers()
         .flat_map(|c| if starts_with(&c.mktsegment[..], b"BUILDING") { Some(c.cust_key) } else { None });
 
-    let lineitems = 
+    let lineitems =
     collections
         .lineitems()
-        .explode(|l| 
+        .explode(|l|
             if l.ship_date > create_date(1995, 3, 15) {
                 Some((l.order_key, (l.extended_price * (100 - l.discount) / 100) as isize))
             }
             else { None }
         );
 
-    let orders = 
+    let orders =
     collections
         .orders()
         .filter(|o| o.order_date < create_date(1995, 3, 15))
@@ -73,5 +72,47 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
         .semijoin(&lineitems)
         .count_total()
         // .inspect(|x| println!("{:?}", x))
-        .probe()
+        .probe_with(probe);
+}
+
+pub fn query_arranged<G: Scope<Timestamp=usize>>(
+    collections: &mut Collections<G>,
+    arrangements: &mut Arrangements,
+    probe: &mut ProbeHandle<G::Timestamp>
+)
+{
+    use differential_dataflow::operators::arrange::ArrangeBySelf;
+
+    let lineitems =
+    collections
+        .lineitems()
+        .explode(|l|
+            if l.ship_date > create_date(1995, 3, 15) {
+                Some((l.order_key, (l.extended_price * (100 - l.discount) / 100) as isize))
+            }
+            else { None }
+        )
+        .arrange_by_self();
+
+    arrangements
+        .orders
+        .import(&collections.orders().scope())
+        .join_core(&lineitems, |_k, o, &()| {
+            if o.order_date < create_date(1995, 3, 15) {
+                Some((o.cust_key, (o.order_key, o.order_date, o.ship_priority)))
+            }
+            else {
+                None
+            }
+        })
+        .join_core(&arrangements.customers.import(&collections.customers().scope()), |_k,o,c| {
+            if starts_with(&c.mktsegment[..], b"BUILDING") {
+                Some(o.clone())
+            }
+            else {
+                None
+            }
+        })
+        .count_total()
+        .probe_with(probe);
 }

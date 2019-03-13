@@ -25,7 +25,7 @@ use ::types::create_date;
 //     and l_quantity < :3;
 // :n -1
 
-pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp>
+pub fn query<G: Scope>(collections: &mut Collections<G>, probe: &mut ProbeHandle<G::Timestamp>)
 where G::Timestamp: Lattice+TotalOrder+Ord {
 
     collections
@@ -38,5 +38,5 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
         })
         .count_total()
         // .inspect(|x| println!("{:?}", x))
-        .probe()
+        .probe_with(probe);
 }

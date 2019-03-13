@@ -51,13 +51,13 @@ fn starts_with(source: &[u8], query: &[u8]) -> bool {
     source.len() >= query.len() && &source[..query.len()] == query
 }
 
-pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp> 
+pub fn query<G: Scope>(collections: &mut Collections<G>, probe: &mut ProbeHandle<G::Timestamp>)
 where G::Timestamp: Lattice+TotalOrder+Ord {
 
-    let lineitems = 
+    let lineitems =
     collections
         .lineitems()
-        .explode(|x| 
+        .explode(|x|
             if starts_with(&x.return_flag, b"R") {
                 Some((x.order_key, (x.extended_price * (100 - x.discount)) as isize))
             }
@@ -67,7 +67,7 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
     let orders =
     collections
         .orders()
-        .flat_map(|o| 
+        .flat_map(|o|
             if create_date(1993,10,1) < o.order_date && o.order_date <= create_date(1994,1,1) {
                 Some((o.order_key, o.cust_key))
             }
@@ -83,5 +83,5 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
         .map(|(cust_key, (name, phn, addr, comm, nation_key))| (nation_key, (cust_key, name, phn, addr, comm)))
         .join(&collections.nations().map(|n| (n.nation_key, n.name)))
         .count_total()
-        .probe()
+        .probe_with(probe);
 }

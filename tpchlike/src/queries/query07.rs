@@ -59,7 +59,7 @@ fn starts_with(source: &[u8], query: &[u8]) -> bool {
     source.len() >= query.len() && &source[..query.len()] == query
 }
 
-pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp> 
+pub fn query<G: Scope>(collections: &mut Collections<G>, probe: &mut ProbeHandle<G::Timestamp>)
 where G::Timestamp: Lattice+TotalOrder+Ord {
 
     println!("TODO: Q07 could use `join_core` to fuse map and filter");
@@ -70,19 +70,19 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
         .filter(|n| starts_with(&n.name, b"FRANCE") || starts_with(&n.name, b"GERMANY"))
         .map(|n| (n.nation_key, n.name));
 
-    let customers = 
+    let customers =
     collections
         .customers()
         .map(|c| (c.nation_key, c.cust_key))
         .join_map(&nations, |_, &cust_key, &name| (cust_key, name));
 
-    let orders = 
+    let orders =
     collections
         .orders()
         .map(|o| (o.cust_key, o.order_key))
         .join_map(&customers, |_, &order_key, &name| (order_key, name));
 
-    let suppliers = 
+    let suppliers =
     collections
         .suppliers()
         .map(|s| (s.nation_key, s.supp_key))
@@ -101,5 +101,5 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
         .filter(|x| x.0 != x.1)
         .count_total()
         // .inspect(|x| println!("{:?}", x))
-        .probe()
+        .probe_with(probe);
 }
