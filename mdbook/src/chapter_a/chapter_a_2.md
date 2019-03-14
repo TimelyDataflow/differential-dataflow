@@ -37,16 +37,20 @@ We can also make the same changes to the code that supplies the change, where ea
 I'm on a laptop with two cores. Let's load the data again, without modifying it, but let's use two worker threads (with the `-w2` argument)
 
 ```ignore
-        Echidnatron% time cargo run --release --example hello 10000000 -w2
-        cargo run --release --example hello 10000000 -w2  3.34s user 1.27s system 191% cpu 2.402 total
+        Echidnatron% time cargo run --release -- 10000000 -w2
+            Finished release [optimized] target(s) in 0.24s
+             Running `target/release/my_project 10000000 -w2`
+        cargo run --release -- 10000000 -w2  3.34s user 1.27s system 191% cpu 2.402 total
         Echidnatron%
 ```
 
 Now let's try loading and doing ten million modifications, but with two worker threads.
 
 ```ignore
-        Echidnatron% time cargo run --release --example hello 10000000 -w2
-        cargo run --release --example hello 10000000 -w2  13.06s user 3.14s system 196% cpu 8.261 total
+        Echidnatron% time cargo run --release -- 10000000 -w2
+            Finished release [optimized] target(s) in 0.24s
+             Running `target/release/my_project 10000000 -w2`
+        cargo run --release -- 10000000 -w2  13.06s user 3.14s system 196% cpu 8.261 total
         Echidnatron%
 ```
 
