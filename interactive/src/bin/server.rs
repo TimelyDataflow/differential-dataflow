@@ -2,89 +2,36 @@ extern crate timely;
 extern crate differential_dataflow;
 extern crate interactive;
 
-extern crate serde;
-#[macro_use]
-extern crate serde_derive;
-
 use timely::synchronization::Sequencer;
-use interactive::{Manager, Command, Query, Rule, Plan};
+use interactive::{Manager, Command, Value};
 
-#[derive(Serialize, Deserialize, Debug, Clone, Hash, Eq, PartialEq, Ord, PartialOrd)]
-pub enum Value {
-    Bool(bool),
-    Usize(usize),
-    String(String),
-    Address(Vec<usize>),
-    Duration(::std::time::Duration),
-}
-
-use interactive::manager::AsVector;
 use timely::logging::TimelyEvent;
-
-impl AsVector<Value> for TimelyEvent {
-    fn as_vector(self) -> Vec<Value> {
-        match self {
-            TimelyEvent::Operates(x) => {
-                vec![Value::Usize(x.id), Value::Address(x.addr), Value::String(x.name)]
-            },
-            TimelyEvent::Channels(x) => {
-                vec![Value::Usize(x.id), Value::Address(x.scope_addr), Value::Usize(x.source.0), Value::Usize(x.source.1), Value::Usize(x.target.0), Value::Usize(x.target.1)]
-            },
-            TimelyEvent::Schedule(x) => {
-                vec![Value::Usize(x.id), Value::Bool(x.start_stop == ::timely::logging::StartStop::Start)]
-            },
-            TimelyEvent::Messages(x) => {
-                vec![Value::Usize(x.channel), Value::Bool(x.is_send), Value::Usize(x.source), Value::Usize(x.target), Value::Usize(x.seq_no), Value::Usize(x.length)]
-            },
-            _ => { vec![] },
-        }
-    }
-}
-
 use differential_dataflow::logging::DifferentialEvent;
-
-impl AsVector<Value> for DifferentialEvent {
-    fn as_vector(self) -> Vec<Value> {
-        match self {
-            DifferentialEvent::Batch(x) => {
-                vec![
-                    Value::Usize(x.operator),
-                    Value::Usize(x.length),
-                ]
-            },
-            DifferentialEvent::Merge(x) => {
-                vec![
-                    Value::Usize(x.operator),
-                    Value::Usize(x.scale),
-                    Value::Usize(x.length1),
-                    Value::Usize(x.length2),
-                    Value::Usize(x.complete.unwrap_or(0)),
-                    Value::Bool(x.complete.is_some()),
-                ]
-            },
-            _ => { vec![] },
-        }
-    }
-}
-
 
 fn main() {
 
     let mut args = std::env::args();
     args.next();
 
-    timely::execute_from_args(args, |worker| {
+    use std::sync::{Arc, Mutex};
+    use std::collections::VecDeque;
+
+    let command_queue = Arc::new(Mutex::new(VecDeque::<Command<Value>>::new()));
+    let command_queue2 = command_queue.clone();
+
+    let guards =
+    timely::execute_from_args(args, move |worker| {
 
         let timer = ::std::time::Instant::now();
         let mut manager = Manager::<Value>::new();
+
+        let recv = command_queue.clone();
 
         use std::rc::Rc;
         use timely::dataflow::operators::capture::event::link::EventLink;
         use timely::logging::BatchLogger;
 
-        // Capture timely logging events.
         let timely_events = Rc::new(EventLink::new());
-        // Capture differential logging events.
         let differential_events = Rc::new(EventLink::new());
 
         manager.publish_timely_logging(worker, Some(timely_events.clone()));
@@ -100,58 +47,24 @@ fn main() {
             .log_register()
             .insert::<DifferentialEvent,_>("differential/arrange", move |time, data| differential_logger.publish_batch(time, data));
 
-
         let mut sequencer = Sequencer::new(worker, timer);
 
-        if worker.index() == 0 {
+        let mut done = false;
+        while !done {
 
-            sequencer.push(Command::Query(
-                Query {
-                    rules: vec![
-            //             Rule {
-            //                 name: "operates".to_string(),
-            //                 plan: Plan::source("logs/timely/operates").inspect("operates:"),
-            //             },
-            //             Rule {
-            //                 name: "channels".to_string(),
-            //                 plan: Plan::source("logs/timely/channels").inspect("channels:"),
-            //             },
-            //             Rule {
-            //                 name: "schedule".to_string(),
-            //                 plan: Plan::source("logs/timely/schedule").inspect("schedule:"),
-            //             },
-            //             Rule {
-            //                 name: "messages".to_string(),
-            //                 plan: Plan::source("logs/timely/messages").inspect("messages:"),
-            //             },
-            //             Rule {
-            //                 name: "batch".to_string(),
-            //                 plan: Plan::source("logs/differential/arrange/batch").inspect("batch:"),
-            //             },
-            //             Rule {
-            //                 name: "merge".to_string(),
-            //                 plan: Plan::source("logs/differential/arrange/merge").inspect("merge:"),
-            //             },
-            //             Rule {
-            //                 name: "active".to_string(),
-            //                 plan: Plan::source("logs/timely/operates")
-            //                         .join(Plan::source("logs/differential/arrange/batch"), vec![(0,0)])
-            //                         .inspect("active"),
-            //             }
-                    ]
+            {   // Check out channel status.
+                let mut lock = recv.lock().expect("Mutex poisoned");
+                while let Some(command) = lock.pop_front() {
+                    sequencer.push(command);
                 }
-            ));
+            }
 
-            sequencer.push(Command::Shutdown);
-        }
-
-        let mut shutdown = false;
-        while !shutdown {
-
+            // Dequeue and act on commands.
+            // One at a time, so that Shutdown works.
             if let Some(command) = sequencer.next() {
                 println!("{:?}\tExecuting {:?}", timer.elapsed(), command);
                 if command == Command::Shutdown {
-                    shutdown = true;
+                    done = true;
                 }
                 command.execute(&mut manager, worker);
             }
@@ -173,5 +86,32 @@ fn main() {
             .log_register()
             .insert::<DifferentialEvent,_>("differential/arrange", move |_time, _data| { });
 
-    }).expect("Timely computation did not exit cleanly");
+    }).expect("Timely computation did not initialize cleanly");
+
+    println!("Now accepting commands");
+
+    // Detached thread for client connections.
+    std::thread::Builder::new()
+        .name("Listener".to_string())
+        .spawn(move || {
+
+            use std::net::TcpListener;
+            let listener = TcpListener::bind("127.0.0.1:8000".to_string()).expect("failed to bind listener");
+            for mut stream in listener.incoming() {
+                let mut stream = stream.expect("listener error");
+                let send = command_queue2.clone();
+                std::thread::Builder::new()
+                    .name("Client".to_string())
+                    .spawn(move || {
+                        while let Ok(command) = bincode::deserialize_from::<_,Command<Value>>(&mut stream) {
+                            send.lock()
+                                .expect("mutex poisoned")
+                                .push_back(command);
+                        }
+                    })
+                    .expect("failed to create thread");
+            }
+
+        })
+        .expect("Failed to spawn listen thread");
 }
