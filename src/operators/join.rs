@@ -313,8 +313,8 @@ impl<G, K, V, R1, T1> JoinCore<G, K, V, R1> for Arranged<G,K,V,R1,T1>
         let mut trace2 = Some(other.trace.clone());
 
         // acknowledged frontier for each input.
-        let mut acknowledged1 = vec![G::Timestamp::minimum()];
-        let mut acknowledged2 = vec![G::Timestamp::minimum()];
+        let mut acknowledged1: Option<Vec<G::Timestamp>> = None;
+        let mut acknowledged2: Option<Vec<G::Timestamp>> = None;
 
         // deferred work of batches from each input.
         let mut todo1 = Vec::new();
@@ -344,11 +344,14 @@ impl<G, K, V, R1, T1> JoinCore<G, K, V, R1> for Arranged<G,K,V,R1,T1>
                         let capability = capability.retain();
                         data.swap(&mut input1_buffer);
                         for batch1 in input1_buffer.drain(..) {
-                            let (trace2_cursor, trace2_storage) = trace2.cursor_through(&acknowledged2[..]).unwrap();
-                            let batch1_cursor = batch1.cursor();
-                            todo1.push(Deferred::new(trace2_cursor, trace2_storage, batch1_cursor, batch1.clone(), capability.clone(), |r2,r1| (r1.clone()) * (r2.clone())));
-                            debug_assert!(batch1.description().lower() == &acknowledged1[..]);
-                            acknowledged1 = batch1.description().upper().to_vec();
+                            if let Some(acknowledged2) = &acknowledged2 {
+                                // TODO : cursor_through may be problematic for pre-merged traces.
+                                let (trace2_cursor, trace2_storage) = trace2.cursor_through(&acknowledged2[..]).unwrap();
+                                let batch1_cursor = batch1.cursor();
+                                todo1.push(Deferred::new(trace2_cursor, trace2_storage, batch1_cursor, batch1.clone(), capability.clone(), |r2,r1| (r1.clone()) * (r2.clone())));
+                                // debug_assert!(batch1.description().lower() == &acknowledged1[..]);
+                            }
+                            acknowledged1 = Some(batch1.description().upper().to_vec());
                         }
                     }
                 });
@@ -359,11 +362,14 @@ impl<G, K, V, R1, T1> JoinCore<G, K, V, R1> for Arranged<G,K,V,R1,T1>
                         let capability = capability.retain();
                         data.swap(&mut input2_buffer);
                         for batch2 in input2_buffer.drain(..) {
-                            let (trace1_cursor, trace1_storage) = trace1.cursor_through(&acknowledged1[..]).unwrap();
-                            let batch2_cursor = batch2.cursor();
-                            todo2.push(Deferred::new(trace1_cursor, trace1_storage, batch2_cursor, batch2.clone(), capability.clone(), |r1,r2| (r1.clone()) * (r2.clone())));
-                            debug_assert!(batch2.description().lower() == &acknowledged2[..]);
-                            acknowledged2 = batch2.description().upper().to_vec();
+                            if let Some(acknowledged1) = &acknowledged1 {
+                                // TODO : cursor_through may be problematic for pre-merged traces.
+                                let (trace1_cursor, trace1_storage) = trace1.cursor_through(&acknowledged1[..]).unwrap();
+                                let batch2_cursor = batch2.cursor();
+                                todo2.push(Deferred::new(trace1_cursor, trace1_storage, batch2_cursor, batch2.clone(), capability.clone(), |r1,r2| (r1.clone()) * (r2.clone())));
+                                // debug_assert!(batch2.description().lower() == &acknowledged2[..]);
+                            }
+                            acknowledged2 = Some(batch2.description().upper().to_vec());
                         }
                     }
                 });
@@ -398,14 +404,18 @@ impl<G, K, V, R1, T1> JoinCore<G, K, V, R1> for Arranged<G,K,V,R1,T1>
                 if trace2.is_some() && input1.frontier().is_empty() { trace2 = None; }
                 if let Some(ref mut trace2) = trace2 {
                     trace2.advance_by(&input1.frontier().frontier()[..]);
-                    trace2.distinguish_since(&acknowledged2[..]);
+                    if let Some(acknowledged2) = &acknowledged2 {
+                        trace2.distinguish_since(&acknowledged2[..]);
+                    }
                 }
 
                 // shut down or advance trace1.
                 if trace1.is_some() && input2.frontier().is_empty() { trace1 = None; }
                 if let Some(ref mut trace1) = trace1 {
                     trace1.advance_by(&input2.frontier().frontier()[..]);
-                    trace1.distinguish_since(&acknowledged1[..]);
+                    if let Some(acknowledged1) = &acknowledged1 {
+                        trace1.distinguish_since(&acknowledged1[..]);
+                    }
                 }
             }
         })
