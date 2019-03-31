@@ -7,7 +7,7 @@ use differential_dataflow::lattice::Lattice;
 
 use regex::Regex;
 
-use ::Collections;
+use {Collections, Context};
 
 // -- $ID$
 // -- TPC-H/TPC-R Parts/Supplier Relationship Query (Q16)
@@ -80,4 +80,35 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
         .count_total()
         // .inspect(|x| println!("{:?}", x))
         .probe_with(probe);
+}
+
+pub fn query_arranged<G: Scope<Timestamp=usize>>(
+    context: &mut Context<G>,
+)
+{
+    let part = context.parts();
+
+    let regex = Regex::new("Customer.*Complaints").expect("Regex construction failed");
+
+    let suppliers =
+    context
+        .collections
+        .suppliers()
+        .flat_map(move |s| if regex.is_match(&s.comment) { Some(s.supp_key) } else { None } );
+
+    context
+        .collections
+        .partsupps()
+        .map(|ps| (ps.part_key, ps.supp_key))
+        .join_core(&part, |_pk,&sk,p| {
+            if !starts_with(&p.brand, b"Brand#45") && !starts_with(&p.typ.as_bytes(), b"MEDIUM POLISHED") && [49, 14, 23, 45, 19, 3, 36, 9].contains(&p.size) {
+                Some((sk, (p.brand, p.typ, p.size)))
+            }
+            else { None }
+
+        })
+        .antijoin(&suppliers)
+        .map(|(_sk, stuff)| stuff)
+        .count_total()
+        .probe_with(&mut context.probe);
 }

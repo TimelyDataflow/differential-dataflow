@@ -35,7 +35,7 @@ unsafe_abomonate!(AbomonationWrapper<ArrayString<[u8; 25]>>);
 unsafe_abomonate!(AbomonationWrapper<ArrayString<[u8; 40]>>);
 unsafe_abomonate!(AbomonationWrapper<ArrayString<[u8; 128]>>);
 
-#[derive(Ord,PartialOrd,Eq,PartialEq,Clone,Debug,Hash,Default)]
+#[derive(Ord,PartialOrd,Eq,PartialEq,Clone,Copy,Debug,Hash,Default)]
 pub struct AbomonationWrapper<T> {
     pub element: T,
 }

@@ -6,7 +6,7 @@ use differential_dataflow::operators::*;
 use differential_dataflow::difference::DiffPair;
 use differential_dataflow::lattice::Lattice;
 
-use ::Collections;
+use {Collections, Context};
 use ::types::create_date;
 
 // -- $ID$
@@ -98,4 +98,40 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
         .count_total()
         // .inspect(|x| println!("{:?}", x))
         .probe_with(probe);
+}
+
+pub fn query_arranged<G: Scope<Timestamp=usize>>(
+    context: &mut Context<G>,
+)
+{
+    let customer = context.customers();
+    let order = context.orders();
+    let part = context.parts();
+    let supplier = context.suppliers();
+    let nation = context.nations();
+    let region = context.regions();
+
+    context
+        .collections
+        .lineitems()
+        .explode(|l| Some(((l.part_key, (l.order_key, l.supp_key)), ((l.extended_price * (100 - l.discount)) as isize / 100))))
+        .join_core(&part, |_pk,&(ok,sk),p| {
+            if p.typ.as_str() == "ECONOMY ANODIZED STEEL" { Some((ok,sk)) } else { None }
+        })
+        .join_core(&order, |_ok,&sk,o| {
+            if create_date(1995,1,1) <= o.order_date && o.order_date <= create_date(1996, 12, 31) {
+                Some((o.cust_key, (sk,o.order_date >> 16)))
+            }
+            else { None }
+        })
+        .join_core(&customer, |_ck,&(sk,yr),c| Some((c.nation_key, (sk,yr))))
+        .join_core(&nation, |_nk,&(sk,yr),n| Some((n.region_key, (sk,yr))))
+        .join_core(&region, |_rk,&(sk,yr),r| {
+            if starts_with(&r.name, b"AMERICA") { Some((sk,yr,true)) } else { Some((sk,yr,false)) }
+        })
+        .explode(|(sk,yr,is_name)| Some(((sk,yr), DiffPair::new(if is_name { 1 } else { 0 }, 1))))
+        .join_core(&supplier, |_sk,&yr,s| Some((s.nation_key, yr)))
+        .join_core(&nation, |_nk,&yr,n| Some((n.name,yr)))
+        .count_total()
+        .probe_with(&mut context.probe);
 }

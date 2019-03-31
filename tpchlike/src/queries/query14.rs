@@ -7,7 +7,7 @@ use differential_dataflow::operators::arrange::ArrangeBySelf;
 use differential_dataflow::difference::DiffPair;
 use differential_dataflow::lattice::Lattice;
 
-use ::Collections;
+use {Collections, Context};
 use ::types::create_date;
 
 // -- $ID$
@@ -57,4 +57,26 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
         .count_total()
         // .inspect(|x| println!("{:?}", x))
         .probe_with(probe);
+}
+
+pub fn query_arranged<G: Scope<Timestamp=usize>>(
+    context: &mut Context<G>,
+)
+{
+    let part = context.parts();
+
+    context
+        .collections
+        .lineitems()
+        .explode(|l|
+            if create_date(1995,9,1) <= l.ship_date && l.ship_date < create_date(1995,10,1) {
+                Some((l.part_key, (l.extended_price * (100 - l.discount) / 100) as isize ))
+            }
+            else { None }
+        )
+        .arrange_by_self()
+        .join_core(&part, |_pk,&(),p| Some(DiffPair::new(1, if starts_with(&p.typ.as_bytes(), b"PROMO") { 1 } else { 0 })))
+        .explode(|dp| Some(((),dp)))
+        .count_total()
+        .probe_with(&mut context.probe);
 }

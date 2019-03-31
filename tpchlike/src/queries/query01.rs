@@ -6,7 +6,7 @@ use differential_dataflow::operators::*;
 use differential_dataflow::difference::DiffPair;
 use differential_dataflow::lattice::Lattice;
 
-use {Collections, Arrangements};
+use {Context, Collections};
 
 // -- $ID$
 // -- TPC-H/TPC-R Pricing Summary Report Query (Q1)
@@ -61,15 +61,14 @@ where
         .probe_with(probe);
 }
 
-pub fn query_arranged<G: Scope>(
-    collections: &mut Collections<G>,
-    _arrangements: &mut Arrangements,
-    probe: &mut ProbeHandle<G::Timestamp>
+pub fn query_arranged<G: Scope<Timestamp=usize>>(
+    context: &mut Context<G>,
 )
 where
     G::Timestamp: Lattice+TotalOrder+Ord
 {
-    collections
+    context
+        .collections
         .lineitems()
         .explode(|item|
             if item.ship_date <= ::types::create_date(1998, 9, 2) {
@@ -86,5 +85,5 @@ where
         )
         .count_total()
         // .inspect(|x| println!("{:?}", x))
-        .probe_with(probe);
+        .probe_with(&mut context.probe);
 }

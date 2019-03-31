@@ -9,7 +9,7 @@ use std::time::Instant;
 
 use timely::dataflow::operators::*;
 use differential_dataflow::AsCollection;
-use tpchlike::{Collections, Arrangements, types::*, queries};
+use tpchlike::{Context, Collections, types::*, queries};
 
 fn main() {
 
@@ -25,7 +25,7 @@ fn main() {
         let prefix = ::std::env::args().nth(1).unwrap();;
         let logical_batch = ::std::env::args().nth(2).unwrap().parse::<usize>().unwrap();
         let physical_batch = ::std::env::args().nth(3).unwrap().parse::<usize>().unwrap();
-        let query: usize = ::std::env::args().nth(4).unwrap().parse().unwrap();
+        let arrange: bool = ::std::env::args().nth(4).unwrap().parse().unwrap();
         let seal: bool = ::std::env::args().any(|x| x == "seal-inputs");
 
         let (mut inputs, probe, used, mut traces) = worker.dataflow::<usize,_,_>(move |scope| {
@@ -40,7 +40,7 @@ fn main() {
             let (regs_in, regs) = scope.new_input();
             let (supp_in, supp) = scope.new_input();
 
-            let mut collections = Collections::new(
+            let collections = Collections::new(
                 cust.as_collection(),
                 line.as_collection(),
                 nats.as_collection(),
@@ -51,34 +51,34 @@ fn main() {
                 supp.as_collection(),
             );
 
-            use timely::dataflow::ProbeHandle;
+            // use timely::dataflow::ProbeHandle;
 
-            let mut probe = ProbeHandle::new();
+            let mut context = Context::new(scope.clone(), collections);
 
-            let mut arrangements = Arrangements::new(&mut collections, &mut probe);
+            context.index = arrange;
 
-            queries::query01::query_arranged(&mut collections, &mut arrangements, &mut probe);
-            // queries::query02::query_arranged(&mut collections, &mut arrangements, &mut probe);
-            queries::query03::query_arranged(&mut collections, &mut arrangements, &mut probe);
-            // queries::query04::query_arranged(&mut collections, &mut arrangements, &mut probe);
-            // queries::query05::query_arranged(&mut collections, &mut arrangements, &mut probe);
-            // queries::query06::query_arranged(&mut collections, &mut arrangements, &mut probe);
-            // queries::query07::query_arranged(&mut collections, &mut arrangements, &mut probe);
-            // queries::query08::query_arranged(&mut collections, &mut arrangements, &mut probe);
-            // queries::query09::query_arranged(&mut collections, &mut arrangements, &mut probe);
-            // queries::query10::query_arranged(&mut collections, &mut arrangements, &mut probe);
-            // queries::query11::query_arranged(&mut collections, &mut arrangements, &mut probe);
-            // queries::query12::query_arranged(&mut collections, &mut arrangements, &mut probe);
-            // queries::query13::query_arranged(&mut collections, &mut arrangements, &mut probe);
-            // queries::query14::query_arranged(&mut collections, &mut arrangements, &mut probe);
-            // queries::query15::query_arranged(&mut collections, &mut arrangements, &mut probe);
-            // queries::query16::query_arranged(&mut collections, &mut arrangements, &mut probe);
-            // queries::query17::query_arranged(&mut collections, &mut arrangements, &mut probe);
-            // queries::query18::query_arranged(&mut collections, &mut arrangements, &mut probe);
-            // queries::query19::query_arranged(&mut collections, &mut arrangements, &mut probe);
-            // queries::query20::query_arranged(&mut collections, &mut arrangements, &mut probe);
-            // queries::query21::query_arranged(&mut collections, &mut arrangements, &mut probe);
-            // queries::query22::query_arranged(&mut collections, &mut arrangements, &mut probe);
+            queries::query01::query_arranged(&mut context);
+            queries::query02::query_arranged(&mut context);
+            queries::query03::query_arranged(&mut context);
+            queries::query04::query_arranged(&mut context);
+            queries::query05::query_arranged(&mut context);
+            queries::query06::query_arranged(&mut context);
+            queries::query07::query_arranged(&mut context);
+            queries::query08::query_arranged(&mut context);
+            queries::query09::query_arranged(&mut context);
+            queries::query10::query_arranged(&mut context);
+            // queries::query11::query_arranged(&mut context);
+            queries::query12::query_arranged(&mut context);
+            queries::query13::query_arranged(&mut context);
+            queries::query14::query_arranged(&mut context);
+            queries::query15::query_arranged(&mut context);
+            queries::query16::query_arranged(&mut context);
+            queries::query17::query_arranged(&mut context);
+            queries::query18::query_arranged(&mut context);
+            queries::query19::query_arranged(&mut context);
+            // queries::query20::query_arranged(&mut context);
+            // queries::query21::query_arranged(&mut context);
+            // queries::query22::query_arranged(&mut context);
 
             // return the various input handles, and the list of probes.
             let inputs = (
@@ -92,7 +92,7 @@ fn main() {
                 Some(supp_in),
             );
 
-            (inputs, probe, collections.used(), arrangements)
+            (inputs, context.probe, context.collections.used(), context.arrangements)
         });
 
         // customer.tbl lineitem.tbl    nation.tbl  orders.tbl  part.tbl    partsupp.tbl    region.tbl  supplier.tbl
@@ -180,13 +180,13 @@ fn main() {
         let time = next_round;
         worker.step_while(|| probe.less_than(&time));
 
-        let query_name = if query < 10 { format!("q0{}", query) } else { format!("q{}", query) };
+        // let query_name = if query < 10 { format!("q0{}", query) } else { format!("q{}", query) };
         let elapsed = timer.elapsed();
         let nanos = elapsed.as_secs() * 1000000000 + elapsed.subsec_nanos() as u64;
         if index == 0 {
             let rate = ((peers * tuples) as f64) / (nanos as f64 / 1000000000.0);
             // Query, Logical, Physical, Workers, Rate, Time
-            println!("{}\t{}\t{}\t{}\t{}\t{}", query_name, logical_batch, physical_batch, peers, rate, nanos);
+            println!("{}\t{}\t{}\t{}\t{}", logical_batch, physical_batch, peers, rate, nanos);
             // println!("query: {}, elapsed: {:?}, tuples: {:?}, rate: {:?}", query_name, timer.elapsed(), peers * tuples, ((peers * tuples) as f64) / (nanos as f64 / 1000000000.0));
         }
 

@@ -8,11 +8,69 @@ extern crate regex;
 use timely::dataflow::*;
 
 use differential_dataflow::Collection;
+use differential_dataflow::operators::arrange::ArrangeByKey;
 
 pub mod types;
 pub mod queries;
 
 pub use types::*;
+
+pub struct Context<G: Scope<Timestamp=usize>> {
+    pub index: bool,
+    pub scope: G,
+    pub probe: ProbeHandle<usize>,
+    pub collections: Collections<G>,
+    pub arrangements: Arrangements,
+}
+
+impl<G: Scope<Timestamp=usize>> Context<G> {
+    pub fn new(scope: G, mut collections: Collections<G>) -> Self {
+        let mut probe = ProbeHandle::new();
+        let arrangements = Arrangements::new(&mut collections, &mut probe);
+        Self { index: true, scope, probe, collections, arrangements }
+    }
+
+    pub fn advance_by(&mut self, frontier: &[usize]) {
+        self.arrangements.advance_by(frontier);
+    }
+
+    pub fn customers(&mut self) -> ArrangedScope<G, Customer> {
+        if self.index { self.arrangements.customers.import(&mut self.scope) }
+        else {
+            self.collections.customers().map(|x| (x.cust_key, x)).arrange_by_key()
+        }
+    }
+    pub fn nations(&mut self) -> ArrangedScope<G, Nation> {
+        if self.index { self.arrangements.nations.import(&mut self.scope) }
+        else {
+            self.collections.nations().map(|x| (x.nation_key, x)).arrange_by_key()
+        }
+    }
+    pub fn orders(&mut self) -> ArrangedScope<G, Order> {
+        if self.index { self.arrangements.orders.import(&mut self.scope) }
+        else {
+            self.collections.orders().map(|x| (x.order_key, x)).arrange_by_key()
+        }
+    }
+    pub fn parts(&mut self) -> ArrangedScope<G, Part> {
+        if self.index { self.arrangements.parts.import(&mut self.scope) }
+        else {
+            self.collections.parts().map(|x| (x.part_key, x)).arrange_by_key()
+        }
+    }
+    pub fn regions(&mut self) -> ArrangedScope<G, Region> {
+        if self.index { self.arrangements.regions.import(&mut self.scope) }
+        else {
+            self.collections.regions().map(|x| (x.region_key, x)).arrange_by_key()
+        }
+    }
+    pub fn suppliers(&mut self) -> ArrangedScope<G, Supplier> {
+        if self.index { self.arrangements.suppliers.import(&mut self.scope) }
+        else {
+            self.collections.suppliers().map(|x| (x.supp_key, x)).arrange_by_key()
+        }
+    }
+}
 
 pub struct Collections<G: Scope> {
     customers: Collection<G, Customer, isize>,
@@ -65,8 +123,9 @@ impl<G: Scope> Collections<G> {
 
 
 use differential_dataflow::trace::implementations::ord::OrdValSpine as DefaultValTrace;
-use differential_dataflow::operators::arrange::TraceAgent;
+use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 
+type ArrangedScope<G, T> = Arranged<G, usize, T, isize, ArrangedIndex<T>>;
 type ArrangedIndex<T> = TraceAgent<usize, T, usize, isize, DefaultValTrace<usize, T, usize, isize>>;
 
 pub struct Arrangements {

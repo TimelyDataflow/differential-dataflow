@@ -5,7 +5,7 @@ use timely::dataflow::operators::probe::Handle as ProbeHandle;
 use differential_dataflow::operators::*;
 use differential_dataflow::lattice::Lattice;
 
-use {Collections, Arrangements};
+use {Collections, Context};
 use ::types::create_date;
 
 // -- $ID$
@@ -76,15 +76,16 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
 }
 
 pub fn query_arranged<G: Scope<Timestamp=usize>>(
-    collections: &mut Collections<G>,
-    arrangements: &mut Arrangements,
-    probe: &mut ProbeHandle<G::Timestamp>
+    context: &mut Context<G>,
 )
 {
     use differential_dataflow::operators::arrange::ArrangeBySelf;
 
-    let lineitems =
-    collections
+    let orders = context.orders();
+    let customers = context.customers();
+
+    context
+        .collections
         .lineitems()
         .explode(|l|
             if l.ship_date > create_date(1995, 3, 15) {
@@ -92,12 +93,8 @@ pub fn query_arranged<G: Scope<Timestamp=usize>>(
             }
             else { None }
         )
-        .arrange_by_self();
-
-    arrangements
-        .orders
-        .import(&collections.orders().scope())
-        .join_core(&lineitems, |_k, o, &()| {
+        .arrange_by_self()
+        .join_core(&orders, |_k, &(), o| {
             if o.order_date < create_date(1995, 3, 15) {
                 Some((o.cust_key, (o.order_key, o.order_date, o.ship_priority)))
             }
@@ -105,7 +102,7 @@ pub fn query_arranged<G: Scope<Timestamp=usize>>(
                 None
             }
         })
-        .join_core(&arrangements.customers.import(&collections.customers().scope()), |_k,o,c| {
+        .join_core(&customers, |_k,o,c| {
             if starts_with(&c.mktsegment[..], b"BUILDING") {
                 Some(o.clone())
             }
@@ -114,5 +111,5 @@ pub fn query_arranged<G: Scope<Timestamp=usize>>(
             }
         })
         .count_total()
-        .probe_with(probe);
+        .probe_with(&mut context.probe);
 }
