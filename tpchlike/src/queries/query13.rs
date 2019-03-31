@@ -7,7 +7,7 @@ use differential_dataflow::lattice::Lattice;
 
 use regex::Regex;
 
-use ::Collections;
+use {Collections, Context};
 
 // -- $ID$
 // -- TPC-H/TPC-R Customer Distribution Query (Q13)
@@ -56,4 +56,27 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
         .count_total()
         // .inspect(|x| println!("{:?}", x))
         .probe_with(probe);
+}
+
+pub fn query_arranged<G: Scope<Timestamp=usize>>(
+    context: &mut Context<G>,
+)
+{
+    let regex = Regex::new("special.*requests").expect("Regex construction failed");
+
+    let orders =
+    context
+        .collections
+        .orders()
+        .flat_map(move |o| if !regex.is_match(&o.comment) { Some(o.cust_key) } else { None } );
+
+    context
+        .collections
+        .customers()
+        .map(|c| c.cust_key)
+        .concat(&orders)
+        .count_total()
+        .map(|(_cust_key, count)| (count-1) as usize)
+        .count_total()
+        .probe_with(&mut context.probe);
 }

@@ -5,7 +5,7 @@ use timely::dataflow::operators::probe::Handle as ProbeHandle;
 use differential_dataflow::operators::*;
 use differential_dataflow::lattice::Lattice;
 
-use ::Collections;
+use {Collections, Context};
 use ::types::create_date;
 
 // -- $ID$
@@ -96,4 +96,55 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
         .join(&top_suppliers)
         // .inspect(|x| println!("{:?}", x))
         .probe_with(probe);
+}
+
+pub fn query_arranged<G: Scope<Timestamp=usize>>(
+    context: &mut Context<G>,
+)
+{
+    let supplier = context.suppliers();
+
+    // revenue by supplier
+    let revenue =
+    context
+        .collections
+        .lineitems()
+        .explode(|item|
+            if create_date(1996, 1, 1) <= item.ship_date && item.ship_date < create_date(1996,4,1) {
+                Some((item.supp_key, (item.extended_price * (100 - item.discount) / 100) as isize))
+            }
+            else { None }
+        );
+
+    // suppliers with maximum revenue
+    let top_suppliers =
+    revenue
+        // do a hierarchical min, to improve update perf.
+        .map(|key| ((key % 1000) as u16, key))
+        .reduce(|_k, s, t| {
+            let max = s.iter().map(|x| x.1).max().unwrap();
+            t.extend(s.iter().filter(|x| x.1 == max).map(|&(&a,b)| (a,b)));
+        })
+        .map(|(_,key)| ((key % 100) as u8, key))
+        .reduce(|_k, s, t| {
+            let max = s.iter().map(|x| x.1).max().unwrap();
+            t.extend(s.iter().filter(|x| x.1 == max).map(|&(&a,b)| (a,b)));
+        })
+        .map(|(_,key)| ((key % 10) as u8, key))
+        .reduce(|_k, s, t| {
+            let max = s.iter().map(|x| x.1).max().unwrap();
+            t.extend(s.iter().filter(|x| x.1 == max).map(|&(&a,b)| (a,b)));
+        })
+        .map(|(_,key)| ((), key))
+        .reduce(|_k, s, t| {
+            let max = s.iter().map(|x| x.1).max().unwrap();
+            t.extend(s.iter().filter(|x| x.1 == max).map(|&(&a,b)| (a,b)));
+        })
+        .map(|(_, key)| key)
+        .count_total();
+
+    top_suppliers
+        .join_core(&supplier, |_sk,&rev,s| Some((s.supp_key, s.name, s.address, s.phone, rev)))
+        .count_total()
+        .probe_with(&mut context.probe);
 }

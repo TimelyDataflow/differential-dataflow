@@ -5,7 +5,7 @@ use timely::dataflow::operators::probe::Handle as ProbeHandle;
 use differential_dataflow::operators::*;
 use differential_dataflow::lattice::Lattice;
 
-use ::Collections;
+use {Collections, Context};
 
 // -- $ID$
 // -- TPC-H/TPC-R Minimum Cost Supplier Query (Q2)
@@ -114,4 +114,46 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
         .map(|(_supp, ((cost, part, mfgr), (nat, acc, nam, add, phn, com)))| (nat, (cost, part, mfgr, acc, nam, add, phn, com)))
         .join(&nations)
         .probe_with(probe);
+}
+
+pub fn query_arranged<G: Scope<Timestamp=usize>>(
+    context: &mut Context<G>,
+)
+{
+    let suppliers = context.suppliers();
+    let nations = context.nations();
+    let regions = context.regions();
+    let parts = context.parts();
+
+    let relevant_suppliers =
+    context
+        .collections
+        .partsupps()
+        .map(|x| (x.supp_key, (x.part_key, x.supplycost)))
+        .join_core(&suppliers, |&sk, &(pk,sc), s| Some((s.nation_key, (pk,sc,sk))))
+        .join_core(&nations, |_nk, &(pk,sc,sk), n| Some((n.region_key, (pk,sc,sk,n.name))))
+        .join_core(&regions, |_rk, &(pk,sc,sk,nm), r| {
+            if starts_with(&r.name[..], b"EUROPE") { Some((pk,(sc,sk,nm))) } else { None }
+        });
+
+    let cheapest_suppliers =
+    relevant_suppliers
+        .reduce(|_pk, s, t| {
+            let minimum = (s[0].0).0;
+            t.extend(s.iter().take_while(|x| (x.0).0 == minimum).map(|&(&x,w)| (x,w)));
+        });
+
+    cheapest_suppliers
+        .join_core(&parts, |&pk,&(sc,sk,nm),p| {
+            if substring(p.typ.as_str().as_bytes(), b"BRASS") && p.size == 15 {
+                Some((sk, (sc,pk,nm,p.mfgr)))
+            }
+            else {
+                None
+            }
+        })
+        .join_core(&suppliers, |_sk,&(sc,pk,nm,pm),s| {
+            Some((sc,pk,nm,pm,s.acctbal,s.name,s.address,s.phone,s.comment))
+        })
+        .probe_with(&mut context.probe);
 }

@@ -5,7 +5,7 @@ use timely::dataflow::operators::probe::Handle as ProbeHandle;
 use differential_dataflow::operators::*;
 use differential_dataflow::lattice::Lattice;
 
-use ::Collections;
+use {Collections, Context};
 
 // -- $ID$
 // -- TPC-H/TPC-R Product Type Profit Measure Query (Q9)
@@ -77,4 +77,38 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
         .join(&collections.nations().map(|n| (n.nation_key, n.name)))
         .count_total()
         .probe_with(probe);
+}
+
+pub fn query_arranged<G: Scope<Timestamp=usize>>(
+    context: &mut Context<G>,
+)
+{
+    let order = context.orders();
+    let part = context.parts();
+    let supplier = context.suppliers();
+    let nation = context.nations();
+
+    let lineitems =
+    context
+        .collections
+        .lineitems()
+        .map(|l| ((l.part_key, l.supp_key), (l.order_key, l.extended_price * (100 - l.discount) / 100, l.quantity)));
+
+    context
+        .collections
+        .partsupps()
+        .map(|ps| (ps.part_key, (ps.supp_key, ps.supplycost)))
+        .join_core(&part, |&pk,&(sk,sc),p| {
+            if substring(&p.name.as_bytes(), b"green") {
+                Some(((pk,sk),sc))
+            }
+            else { None }
+        })
+        .join_map(&lineitems, |&(_pk,sk),&sc,&(ok,ep,qu)| (ok,(sk, ep - (qu*sc))))
+        .explode(|(ok,(sk,am))| Some(((ok,sk), am as isize)))
+        .join_core(&order, |_ok,&sk,o| Some((sk,o.order_date >> 16)))
+        .join_core(&supplier, |_sk,&yr,s| Some((s.nation_key, yr)))
+        .join_core(&nation, |_nk,&yr,n| Some((n.name,yr)))
+        .count_total()
+        .probe_with(&mut context.probe);
 }
