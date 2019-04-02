@@ -21,7 +21,7 @@ For example, to produce for each manager their managee with the lowest identifie
         });
 ```
 
-The group operator has some tricky Rust details about how it is expressed. The type of closure you must provide is technically
+The reduce operator has some tricky Rust details about how it is expressed. The type of closure you must provide is technically
 
 ```rust,no_run
         Fn(&Key, &[(&Val, Cnt)], &mut Vec<(Val2, Cnt2)>)
