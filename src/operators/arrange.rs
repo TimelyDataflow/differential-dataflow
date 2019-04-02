@@ -33,7 +33,7 @@ use timely::dataflow::operators::{Capability, CapabilitySet};
 
 use timely_sort::Unsigned;
 
-use ::{Data, Collection, AsCollection, Hashable};
+use ::{Data, ExchangeData, Collection, AsCollection, Hashable};
 use ::difference::Monoid;
 use lattice::Lattice;
 use trace::{Trace, TraceReader, Batch, BatchReader, Batcher, Cursor};
@@ -623,8 +623,8 @@ impl<G: Scope, K, V, R, T> Arranged<G, K, V, R, T> where G::Timestamp: Lattice+O
     pub fn lookup(&self, queries: &Stream<G, (K, G::Timestamp)>) -> Stream<G, (K, V, G::Timestamp, R)>
     where
         G::Timestamp: Data+Lattice+Ord+TotalOrder,
-        K: Data+Hashable,
-        V: Data,
+        K: ExchangeData+Hashable,
+        V: ExchangeData,
         R: Monoid,
         T: 'static
     {
@@ -809,7 +809,7 @@ where
         T::Batch: Batch<K, V, G::Timestamp, R>;
 }
 
-impl<G: Scope, K: Data+Hashable, V: Data, R: Monoid> Arrange<G, K, V, R> for Collection<G, (K, V), R>
+impl<G: Scope, K: ExchangeData+Hashable, V: ExchangeData, R: Monoid+ExchangeData> Arrange<G, K, V, R> for Collection<G, (K, V), R>
 where
     G::Timestamp: Lattice+Ord,
 {
@@ -925,7 +925,7 @@ where
     }
 }
 
-impl<G: Scope, K: Data+Hashable, R: Monoid> Arrange<G, K, (), R> for Collection<G, K, R>
+impl<G: Scope, K: ExchangeData+Hashable, R: ExchangeData+Monoid> Arrange<G, K, (), R> for Collection<G, K, R>
 where
     G::Timestamp: Lattice+Ord,
 {
@@ -967,7 +967,7 @@ where G::Timestamp: Lattice+Ord {
     fn arrange_by_key(&self) -> Arranged<G, K, V, R, TraceAgent<K, V, G::Timestamp, R, DefaultValTrace<K, V, G::Timestamp, R>>>;
 }
 
-impl<G: Scope, K: Data+Hashable, V: Data, R: Monoid> ArrangeByKey<G, K, V, R> for Collection<G, (K,V), R>
+impl<G: Scope, K: ExchangeData+Hashable, V: ExchangeData, R: ExchangeData+Monoid> ArrangeByKey<G, K, V, R> for Collection<G, (K,V), R>
 where G::Timestamp: Lattice+Ord {
     fn arrange_by_key(&self) -> Arranged<G, K, V, R, TraceAgent<K, V, G::Timestamp, R, DefaultValTrace<K, V, G::Timestamp, R>>> {
         self.arrange()
@@ -990,7 +990,7 @@ where G::Timestamp: Lattice+Ord {
 }
 
 
-impl<G: Scope, K: Data+Hashable, R: Monoid> ArrangeBySelf<G, K, R> for Collection<G, K, R>
+impl<G: Scope, K: ExchangeData+Hashable, R: ExchangeData+Monoid> ArrangeBySelf<G, K, R> for Collection<G, K, R>
 where G::Timestamp: Lattice+Ord {
     fn arrange_by_self(&self) -> Arranged<G, K, (), R, TraceAgent<K, (), G::Timestamp, R, DefaultKeyTrace<K, G::Timestamp, R>>> {
         self.map(|k| (k, ()))

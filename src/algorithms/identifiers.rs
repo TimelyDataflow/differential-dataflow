@@ -2,13 +2,13 @@
 
 use timely::dataflow::Scope;
 
-use ::{Collection, Data, Hashable};
+use ::{Collection, ExchangeData, Hashable};
 use ::lattice::Lattice;
 use ::operators::*;
 use ::difference::Abelian;
 
 /// Assign unique identifiers to elements of a collection.
-pub trait Identifiers<G: Scope, D: Data, R: Abelian> {
+pub trait Identifiers<G: Scope, D: ExchangeData, R: ExchangeData+Abelian> {
     /// Assign unique identifiers to elements of a collection.
     ///
     /// # Example
@@ -40,8 +40,8 @@ impl<G, D, R> Identifiers<G, D, R> for Collection<G, D, R>
 where
     G: Scope,
     G::Timestamp: Lattice,
-    D: Data+::std::hash::Hash,
-    R: Abelian,
+    D: ExchangeData+::std::hash::Hash,
+    R: ExchangeData+Abelian,
 {
     fn identifiers(&self) -> Collection<G, (D, u64), R> {
 

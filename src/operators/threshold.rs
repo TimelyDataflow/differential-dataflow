@@ -9,7 +9,7 @@ use timely::dataflow::operators::Operator;
 use timely::dataflow::channels::pact::Pipeline;
 
 use lattice::Lattice;
-use ::{Data, Collection};
+use ::{ExchangeData, Collection};
 use ::difference::{Monoid, Abelian};
 use hashable::Hashable;
 use collection::AsCollection;
@@ -17,7 +17,7 @@ use operators::arrange::{Arranged, ArrangeBySelf};
 use trace::{BatchReader, Cursor, TraceReader};
 
 /// Extension trait for the `distinct` differential dataflow method.
-pub trait ThresholdTotal<G: Scope, K: Data, R: Monoid> where G::Timestamp: TotalOrder+Lattice+Ord {
+pub trait ThresholdTotal<G: Scope, K: ExchangeData, R: ExchangeData+Monoid> where G::Timestamp: TotalOrder+Lattice+Ord {
     /// Reduces the collection to one occurrence of each distinct element.
     ///
     /// # Examples
@@ -68,7 +68,7 @@ pub trait ThresholdTotal<G: Scope, K: Data, R: Monoid> where G::Timestamp: Total
     }
 }
 
-impl<G: Scope, K: Data+Hashable, R: Monoid> ThresholdTotal<G, K, R> for Collection<G, K, R>
+impl<G: Scope, K: ExchangeData+Hashable, R: ExchangeData+Monoid> ThresholdTotal<G, K, R> for Collection<G, K, R>
 where G::Timestamp: TotalOrder+Lattice+Ord {
     fn threshold_total<R2: Abelian, F: Fn(&K,&R)->R2+'static>(&self, thresh: F) -> Collection<G, K, R2> {
         self.arrange_by_self()
@@ -76,7 +76,7 @@ where G::Timestamp: TotalOrder+Lattice+Ord {
     }
 }
 
-impl<G: Scope, K: Data, R: Monoid, T1> ThresholdTotal<G, K, R> for Arranged<G, K, (), R, T1>
+impl<G: Scope, K: ExchangeData, R: ExchangeData+Monoid, T1> ThresholdTotal<G, K, R> for Arranged<G, K, (), R, T1>
 where
     G::Timestamp: TotalOrder+Lattice+Ord,
     T1: TraceReader<K, (), G::Timestamp, R>+Clone+'static,

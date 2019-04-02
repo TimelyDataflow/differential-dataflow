@@ -15,7 +15,7 @@ use timely::dataflow::operators::Capability;
 use timely::dataflow::channels::pushers::tee::Tee;
 
 use hashable::Hashable;
-use ::{Data, Collection, AsCollection};
+use ::{Data, ExchangeData, Collection, AsCollection};
 use ::difference::{Monoid, Abelian};
 use lattice::Lattice;
 use operators::arrange::{Arranged, ArrangeByKey, ArrangeBySelf};
@@ -50,8 +50,13 @@ pub trait Join<G: Scope, K: Data, V: Data, R: Monoid> {
     ///     });
     /// }
     /// ```
-    fn join<V2: Data, R2: Monoid>(&self, other: &Collection<G, (K,V2), R2>) -> Collection<G, (K,(V,V2)), <R as Mul<R2>>::Output>
-    where R: Mul<R2>, <R as Mul<R2>>::Output: Monoid
+    fn join<V2, R2>(&self, other: &Collection<G, (K,V2), R2>) -> Collection<G, (K,(V,V2)), <R as Mul<R2>>::Output>
+    where
+        K: ExchangeData,
+        V2: ExchangeData,
+        R2: ExchangeData+Monoid,
+        R: Mul<R2>,
+        <R as Mul<R2>>::Output: Monoid
     {
         self.join_map(other, |k,v,v2| (k.clone(),(v.clone(),v2.clone())))
     }
@@ -79,8 +84,8 @@ pub trait Join<G: Scope, K: Data, V: Data, R: Monoid> {
     ///     });
     /// }
     /// ```
-    fn join_map<V2, R2: Monoid, D, L>(&self, other: &Collection<G, (K,V2), R2>, logic: L) -> Collection<G, D, <R as Mul<R2>>::Output>
-    where V2: Data, R: Mul<R2>, <R as Mul<R2>>::Output: Monoid, D: Data, L: Fn(&K, &V, &V2)->D+'static;
+    fn join_map<V2, R2, D, L>(&self, other: &Collection<G, (K,V2), R2>, logic: L) -> Collection<G, D, <R as Mul<R2>>::Output>
+    where K: ExchangeData, V2: ExchangeData, R2: ExchangeData+Monoid, R: Mul<R2>, <R as Mul<R2>>::Output: Monoid, D: Data, L: Fn(&K, &V, &V2)->D+'static;
 
     /// Matches pairs `(key, val)` and `key` based on `key`, producing the former with frequencies multiplied.
     ///
@@ -110,7 +115,7 @@ pub trait Join<G: Scope, K: Data, V: Data, R: Monoid> {
     /// }
     /// ```
     fn semijoin<R2>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), <R as Mul<R2>>::Output>
-    where R2: Monoid, R: Mul<R2>, <R as Mul<R2>>::Output: Monoid;
+    where K: ExchangeData, R2: ExchangeData+Monoid, R: Mul<R2>, <R as Mul<R2>>::Output: Monoid;
     /// Subtracts the semijoin with `other` from `self`.
     ///
     /// In the case that `other` has multiplicities zero or one this results
@@ -143,32 +148,32 @@ pub trait Join<G: Scope, K: Data, V: Data, R: Monoid> {
     /// }
     /// ```
     fn antijoin<R2>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), R>
-    where R2: Monoid, R: Mul<R2, Output = R>, R: Abelian;
+    where K: ExchangeData, R2: ExchangeData+Monoid, R: Mul<R2, Output = R>, R: Abelian;
 }
 
 impl<G, K, V, R> Join<G, K, V, R> for Collection<G, (K, V), R>
 where
     G: Scope,
-    K: Data+Hashable,
-    V: Data,
-    R: Monoid,
+    K: ExchangeData+Hashable,
+    V: ExchangeData,
+    R: ExchangeData+Monoid,
     G::Timestamp: Lattice+Ord,
 {
-    fn join_map<V2: Data, R2: Monoid, D: Data, L>(&self, other: &Collection<G, (K, V2), R2>, logic: L) -> Collection<G, D, <R as Mul<R2>>::Output>
+    fn join_map<V2: ExchangeData, R2: ExchangeData+Monoid, D: Data, L>(&self, other: &Collection<G, (K, V2), R2>, logic: L) -> Collection<G, D, <R as Mul<R2>>::Output>
     where R: Mul<R2>, <R as Mul<R2>>::Output: Monoid, L: Fn(&K, &V, &V2)->D+'static {
         let arranged1 = self.arrange_by_key();
         let arranged2 = other.arrange_by_key();
         arranged1.join_core(&arranged2, move |k,v1,v2| Some(logic(k,v1,v2)))
     }
 
-    fn semijoin<R2: Monoid>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), <R as Mul<R2>>::Output>
+    fn semijoin<R2: ExchangeData+Monoid>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), <R as Mul<R2>>::Output>
     where R: Mul<R2>, <R as Mul<R2>>::Output: Monoid {
         let arranged1 = self.arrange_by_key();
         let arranged2 = other.arrange_by_self();
         arranged1.join_core(&arranged2, |k,v,_| Some((k.clone(), v.clone())))
     }
 
-    fn antijoin<R2: Monoid>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), R>
+    fn antijoin<R2: ExchangeData+Monoid>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), R>
     where R: Mul<R2, Output=R>, R: Abelian {
         self.concat(&self.semijoin(other).negate())
     }
@@ -184,20 +189,20 @@ impl<G, K, V, R, T> Join<G, K, V, R> for Arranged<G,K,V,R,T>
         T: TraceReader<K,V,G::Timestamp,R>+Clone+'static,
         T::Batch: BatchReader<K,V,G::Timestamp,R>+'static {
 
-    fn join_map<V2: Data, R2: Monoid, D: Data, L>(&self, other: &Collection<G, (K, V2), R2>, logic: L) -> Collection<G, D, <R as Mul<R2>>::Output>
-    where R: Mul<R2>, <R as Mul<R2>>::Output: Monoid, L: Fn(&K, &V, &V2)->D+'static {
+    fn join_map<V2: ExchangeData, R2: ExchangeData+Monoid, D: Data, L>(&self, other: &Collection<G, (K, V2), R2>, logic: L) -> Collection<G, D, <R as Mul<R2>>::Output>
+    where K: ExchangeData, R: Mul<R2>, <R as Mul<R2>>::Output: Monoid, L: Fn(&K, &V, &V2)->D+'static {
         let arranged2 = other.arrange_by_key();
         self.join_core(&arranged2, move |k,v1,v2| Some(logic(k,v1,v2)))
     }
 
-    fn semijoin<R2: Monoid>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), <R as Mul<R2>>::Output>
-    where R: Mul<R2>, <R as Mul<R2>>::Output: Monoid {
+    fn semijoin<R2: ExchangeData+Monoid>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), <R as Mul<R2>>::Output>
+    where K: ExchangeData, R: Mul<R2>, <R as Mul<R2>>::Output: Monoid {
         let arranged2 = other.arrange_by_self();
         self.join_core(&arranged2, |k,v,_| Some((k.clone(), v.clone())))
     }
 
-    fn antijoin<R2: Monoid>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), R>
-    where R: Mul<R2, Output=R>, R: Abelian {
+    fn antijoin<R2: ExchangeData+Monoid>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), R>
+    where K: ExchangeData, R: Mul<R2, Output=R>, R: Abelian {
         self.as_collection(|k,v| (k.clone(), v.clone()))
             .concat(&self.semijoin(other).negate())
     }
@@ -263,9 +268,9 @@ pub trait JoinCore<G: Scope, K: 'static, V: 'static, R: Monoid> where G::Timesta
 impl<G, K, V, R> JoinCore<G, K, V, R> for Collection<G, (K, V), R>
 where
     G: Scope,
-    K: Data+Hashable,
-    V: Data,
-    R: Monoid,
+    K: ExchangeData+Hashable,
+    V: ExchangeData,
+    R: ExchangeData+Monoid,
     G::Timestamp: Lattice+Ord,
 {
     fn join_core<V2,T2,R2,I,L> (&self, stream2: &Arranged<G,K,V2,R2,T2>, result: L) -> Collection<G,I::Item,<R as Mul<R2>>::Output>
