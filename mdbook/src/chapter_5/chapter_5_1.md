@@ -2,7 +2,7 @@
 
 Imagine you have collection that describes a relation among people, perhaps "x knows y", and you would like to query the "friends of friends" relation: for a given person x, who are the people known by friends of x?
 
-Let's first build this naively, starting from two inputs: `knows` containing the pairs of the relation and `query` containing pairs `(query_id, source)` that allow us to interactively interrogate the data.
+Let's first build this naively, starting from two inputs: `knows` containing the pairs of the relation and `query` containing pairs `(source, query_id)` that allow us to interactively interrogate the data.
 
 ```rust
 extern crate timely;

@@ -7,6 +7,7 @@
 //! us to track something like the average.
 
 use std::ops::{AddAssign, Neg, Mul};
+use std::iter::Iterator;
 
 use ::Data;
 
@@ -130,6 +131,22 @@ impl<T: Copy, R1: Mul<T>, R2: Mul<T>> Mul<T> for DiffPair<R1,R2> {
 #[derive(Abomonation, Ord, PartialOrd, Eq, PartialEq, Debug, Clone, Serialize, Deserialize)]
 pub struct DiffVector<R> {
 	buffer: Vec<R>,
+}
+
+impl<R> DiffVector<R> {
+    /// Create new DiffVector from Vec
+    #[inline(always)]
+    pub fn new(vec: Vec<R>) -> DiffVector<R> {
+        DiffVector { buffer: vec }
+    }
+}
+
+impl<R> IntoIterator for DiffVector<R> {
+    type Item = R;
+    type IntoIter = ::std::vec::IntoIter<R>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.buffer.into_iter()
+    }
 }
 
 impl<R: Monoid> Monoid for DiffVector<R> {

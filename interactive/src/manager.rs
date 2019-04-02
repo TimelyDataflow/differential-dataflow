@@ -56,11 +56,49 @@ impl<Value: Data+Hash> Manager<Value> {
         }
     }
 
+    /// Enables logging of timely and differential events.
+    pub fn enable_logging<A: Allocate>(&mut self, worker: &mut Worker<A>)
+    where
+        TimelyEvent: AsVector<Value>,
+        DifferentialEvent: AsVector<Value>,
+    {
+
+        use std::rc::Rc;
+        use timely::dataflow::operators::capture::event::link::EventLink;
+        use timely::logging::BatchLogger;
+
+        let timely_events = Rc::new(EventLink::new());
+        let differential_events = Rc::new(EventLink::new());
+
+        self.publish_timely_logging(worker, Some(timely_events.clone()));
+        self.publish_differential_logging(worker, Some(differential_events.clone()));
+
+        let mut timely_logger = BatchLogger::new(timely_events.clone());
+        worker
+            .log_register()
+            .insert::<TimelyEvent,_>("timely", move |time, data| timely_logger.publish_batch(time, data));
+
+        let mut differential_logger = BatchLogger::new(differential_events.clone());
+        worker
+            .log_register()
+            .insert::<DifferentialEvent,_>("differential/arrange", move |time, data| differential_logger.publish_batch(time, data));
+
+    }
+
     /// Clear the managed inputs and traces.
-    pub fn shutdown(&mut self) {
+    pub fn shutdown<A: Allocate>(&mut self, worker: &mut Worker<A>) {
         self.inputs.sessions.clear();
         self.traces.inputs.clear();
         self.traces.arrangements.clear();
+
+        // Deregister loggers, so that the logging dataflows can shut down.
+        worker
+            .log_register()
+            .insert::<TimelyEvent,_>("timely", move |_time, _data| { });
+
+        worker
+            .log_register()
+            .insert::<DifferentialEvent,_>("differential/arrange", move |_time, _data| { });
     }
 
     /// Inserts a new input session by name.

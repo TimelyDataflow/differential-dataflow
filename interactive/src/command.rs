@@ -95,7 +95,7 @@ impl<Value: Data+Hash> Command<Value> {
 
             Command::Shutdown => {
                 println!("Shutdown received");
-                manager.shutdown();
+                manager.shutdown(worker);
             }
         }
 

@@ -4,7 +4,7 @@ version = "0.1.0"
 authors = ["Frank McSherry <fmcsherry@me.com>"]
 
 [dependencies]
-timely = { git = "https://github.com/frankmcsherry/timely-dataflow" }
+timely = { git = "https://github.com/TimelyDataflow/timely-dataflow" }
 differential-dataflow = { path = "../../../" }
 dd_server = { path = "../../" }
 

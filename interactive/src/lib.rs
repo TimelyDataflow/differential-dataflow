@@ -6,6 +6,7 @@
 
 #![forbid(missing_docs)]
 
+extern crate bincode;
 extern crate timely;
 extern crate differential_dataflow;
 extern crate serde;
@@ -33,6 +34,18 @@ pub struct Query<Value> {
     pub rules: Vec<Rule<Value>>,
 }
 
+impl<Value> Query<Value> {
+    /// Creates a new, empty query.
+    pub fn new() -> Self {
+        Query { rules: Vec::new() }
+    }
+    /// Adds a rule to an existing query.
+    pub fn add_rule(mut self, rule: Rule<Value>) -> Self {
+        self.rules.push(rule);
+        self
+    }
+}
+
 /// Definition of a single collection.
 #[derive(Serialize, Deserialize, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct Rule<Value> {
@@ -40,4 +53,73 @@ pub struct Rule<Value> {
     pub name: String,
     /// Plan describing contents of the rule.
     pub plan: Plan<Value>,
+}
+
+/// An example value type
+#[derive(Serialize, Deserialize, Debug, Clone, Hash, Eq, PartialEq, Ord, PartialOrd)]
+pub enum Value {
+    /// boolean
+    Bool(bool),
+    /// integer
+    Usize(usize),
+    /// string
+    String(String),
+    /// operator address
+    Address(Vec<usize>),
+    /// duration
+    Duration(::std::time::Duration),
+}
+
+use manager::AsVector;
+use timely::logging::TimelyEvent;
+
+impl AsVector<Value> for TimelyEvent {
+    fn as_vector(self) -> Vec<Value> {
+        match self {
+            TimelyEvent::Operates(x) => {
+                vec![Value::Usize(x.id), Value::Address(x.addr), Value::String(x.name)]
+            },
+            TimelyEvent::Channels(x) => {
+                vec![Value::Usize(x.id), Value::Address(x.scope_addr), Value::Usize(x.source.0), Value::Usize(x.source.1), Value::Usize(x.target.0), Value::Usize(x.target.1)]
+            },
+            TimelyEvent::Schedule(x) => {
+                vec![Value::Usize(x.id), Value::Bool(x.start_stop == ::timely::logging::StartStop::Start)]
+            },
+            TimelyEvent::Messages(x) => {
+                vec![Value::Usize(x.channel), Value::Bool(x.is_send), Value::Usize(x.source), Value::Usize(x.target), Value::Usize(x.seq_no), Value::Usize(x.length)]
+            },
+            _ => { vec![] },
+        }
+    }
+}
+
+use differential_dataflow::logging::DifferentialEvent;
+
+impl AsVector<Value> for DifferentialEvent {
+    fn as_vector(self) -> Vec<Value> {
+        match self {
+            DifferentialEvent::Batch(x) => {
+                vec![
+                    Value::Usize(x.operator),
+                    Value::Usize(x.length),
+                ]
+            },
+            DifferentialEvent::Merge(x) => {
+                vec![
+                    Value::Usize(x.operator),
+                    Value::Usize(x.scale),
+                    Value::Usize(x.length1),
+                    Value::Usize(x.length2),
+                    Value::Usize(x.complete.unwrap_or(0)),
+                    Value::Bool(x.complete.is_some()),
+                ]
+            },
+            _ => { vec![] },
+        }
+    }
+}
+
+/// Serializes a command into a socket.
+pub fn bincode_socket(socket: &mut std::net::TcpStream, command: &Command<Value>) {
+    bincode::serialize_into(socket, command).expect("bincode: serialization failed");
 }

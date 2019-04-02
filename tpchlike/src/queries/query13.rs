@@ -7,7 +7,7 @@ use differential_dataflow::lattice::Lattice;
 
 use regex::Regex;
 
-use ::Collections;
+use {Collections, Context};
 
 // -- $ID$
 // -- TPC-H/TPC-R Customer Distribution Query (Q13)
@@ -37,7 +37,7 @@ use ::Collections;
 //     c_count desc;
 // :n -1
 
-pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp>
+pub fn query<G: Scope>(collections: &mut Collections<G>, probe: &mut ProbeHandle<G::Timestamp>)
 where G::Timestamp: Lattice+TotalOrder+Ord {
 
     let regex = Regex::new("special.*requests").expect("Regex construction failed");
@@ -55,5 +55,28 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
         .map(|(_cust_key, count)| (count-1) as usize)
         .count_total()
         // .inspect(|x| println!("{:?}", x))
-        .probe()
+        .probe_with(probe);
+}
+
+pub fn query_arranged<G: Scope<Timestamp=usize>>(
+    context: &mut Context<G>,
+)
+{
+    let regex = Regex::new("special.*requests").expect("Regex construction failed");
+
+    let orders =
+    context
+        .collections
+        .orders()
+        .flat_map(move |o| if !regex.is_match(&o.comment) { Some(o.cust_key) } else { None } );
+
+    context
+        .collections
+        .customers()
+        .map(|c| c.cust_key)
+        .concat(&orders)
+        .count_total()
+        .map(|(_cust_key, count)| (count-1) as usize)
+        .count_total()
+        .probe_with(&mut context.probe);
 }

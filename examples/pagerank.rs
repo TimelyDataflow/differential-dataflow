@@ -117,14 +117,19 @@ where
              .map(|(node, _degr)| node);
 
         // Propagate surfers along links, blend in reset surfers.
-        let pushed =
+        let mut pushed =
         edges.semijoin(&to_push)
              .map(|(_node, dest)| dest)
              .concat(&reset)
-             .consolidate()
+             .consolidate();
+
+        if iters > 0 {
+            pushed =
+            pushed
              .inner
              .filter(move |(_d,t,_r)| t.inner < iters)
              .as_collection();
+        }
 
         // Bind the recursive variable, return its limit.
         ranks.set(&pushed);

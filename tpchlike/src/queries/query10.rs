@@ -5,7 +5,7 @@ use timely::dataflow::operators::probe::Handle as ProbeHandle;
 use differential_dataflow::operators::*;
 use differential_dataflow::lattice::Lattice;
 
-use ::Collections;
+use {Collections, Context};
 use ::types::create_date;
 
 // -- $ID$
@@ -51,13 +51,13 @@ fn starts_with(source: &[u8], query: &[u8]) -> bool {
     source.len() >= query.len() && &source[..query.len()] == query
 }
 
-pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp> 
+pub fn query<G: Scope>(collections: &mut Collections<G>, probe: &mut ProbeHandle<G::Timestamp>)
 where G::Timestamp: Lattice+TotalOrder+Ord {
 
-    let lineitems = 
+    let lineitems =
     collections
         .lineitems()
-        .explode(|x| 
+        .explode(|x|
             if starts_with(&x.return_flag, b"R") {
                 Some((x.order_key, (x.extended_price * (100 - x.discount)) as isize))
             }
@@ -67,7 +67,7 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
     let orders =
     collections
         .orders()
-        .flat_map(|o| 
+        .flat_map(|o|
             if create_date(1993,10,1) < o.order_date && o.order_date <= create_date(1994,1,1) {
                 Some((o.order_key, o.cust_key))
             }
@@ -83,5 +83,40 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
         .map(|(cust_key, (name, phn, addr, comm, nation_key))| (nation_key, (cust_key, name, phn, addr, comm)))
         .join(&collections.nations().map(|n| (n.nation_key, n.name)))
         .count_total()
-        .probe()
+        .probe_with(probe);
+}
+
+pub fn query_arranged<G: Scope<Timestamp=usize>>(
+    context: &mut Context<G>,
+)
+{
+    let order = context.orders();
+    let customer = context.customers();
+    let nation = context.nations();
+
+    use differential_dataflow::operators::arrange::ArrangeBySelf;
+
+    context
+        .collections
+        .lineitems()
+        .explode(|x|
+            if starts_with(&x.return_flag, b"R") {
+                Some((x.order_key, (x.extended_price * (100 - x.discount)) as isize))
+            }
+            else { None }
+        )
+        .arrange_by_self()
+        .join_core(&order, |_ok,&(),o| {
+            if create_date(1993,10,1) < o.order_date && o.order_date <= create_date(1994,1,1) {
+                Some(o.cust_key)
+            }
+            else { None }
+        })
+        .arrange_by_self()
+        .join_core(&customer, |&ck,&(),c| {
+            Some((c.nation_key, (ck,c.name,c.acctbal,c.address,c.phone,c.comment)))
+        })
+        .join_core(&nation, |_nk,&data,n| Some((n.name, data)))
+        .count_total()
+        .probe_with(&mut context.probe);
 }

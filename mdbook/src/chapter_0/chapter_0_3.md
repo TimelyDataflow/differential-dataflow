@@ -6,19 +6,21 @@ We are going to make our example program a bit more exciting, in a few different
 
 Ten people is a pretty small organization. Let's do ten million instead.
 
-We are going to have to turn off the output printing here. We'll also break it down two ways, just loading up the initial computation, and then doing that plus all of the changes to the reporting structure. We haven't learned how to interactively load all of the input and await results yet (in just a moment), so we will only see elapsed times measuring the throughput, not the latency.
+We are going to have to turn off the output printing here, so comment out the `inspect()` line (but keep the semicolon). Also, we'll need to add the `--release` flag to our command line, so that we optimize our binary and don't try running debug code for millions of steps.
 
-First producing the collection of skip-level management.
+We'll break down the results of our modified computation two ways, just loading up the initial computation, and then doing that plus all of the changes to the reporting structure. We haven't learned how to interactively load all of the input and await results yet (in just a moment), so we will only see elapsed times measuring the throughput, not the latency.
 
-    Echidnatron% time cargo run --release --example hello 10000000
+First, if we just produce the collection of skip-level management (with the step two code from before):
+
+    Echidnatron% time cargo run --release -- 10000000
     cargo run --release --example hello 10000000 -w1  2.74s user 1.00s system 98% cpu 3.786 total
     Echidnatron%
 
 Four seconds. We have no clue if this is a good or bad time.
 
-Second we produce the skip-level management and then modify it 10 million times.
+Second, if we produce the skip-level management and then modify it 10 million times (including the step two code from before):
 
-    Echidnatron% time cargo run --release --example hello 10000000
+    Echidnatron% time cargo run --release -- 10000000
     cargo run --release --example hello 10000000  10.64s user 2.22s system 99% cpu 12.939 total
     Echidnatron%
 
@@ -43,13 +45,13 @@ We can also make the same changes to the code that supplies the change, where ea
 
 I'm on a laptop with two cores. Let's load the data again, without modifying it, but let's use two worker threads (with the `-w2` argument)
 
-    Echidnatron% time cargo run --release --example hello 10000000 -w2
+    Echidnatron% time cargo run --release -- 10000000 -w2
     cargo run --release --example hello 10000000 -w2  3.34s user 1.27s system 191% cpu 2.402 total
     Echidnatron%
 
 Now let's try loading and doing ten million modifications, but with two worker threads.
 
-    Echidnatron% time cargo run --release --example hello 10000000 -w2
+    Echidnatron% time cargo run --release -- 10000000 -w2
     cargo run --release --example hello 10000000 -w2  13.06s user 3.14s system 196% cpu 8.261 total
     Echidnatron%
 

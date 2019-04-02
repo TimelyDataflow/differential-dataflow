@@ -59,7 +59,7 @@ fn starts_with(source: &[u8], query: &[u8]) -> bool {
     source.len() >= query.len() && &source[..query.len()] == query
 }
 
-pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp>
+pub fn query<G: Scope>(collections: &mut Collections<G>, probe: &mut ProbeHandle<G::Timestamp>)
 where G::Timestamp: Lattice+TotalOrder+Ord {
 
     println!("TODO: Q20 uses a `reduce_abelian` to get an arrangement, but could use `count_total`");
@@ -102,5 +102,5 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
         .semijoin(&suppliers)
         .map(|(_, (name, addr, nation))| (nation, (name, addr)))
         .join(&nations)
-        .probe()
+        .probe_with(probe);
 }

@@ -3,15 +3,14 @@ extern crate rand;
 extern crate timely;
 extern crate differential_dataflow;
 extern crate dd_server;
-extern crate streaming_harness_hdrhist;
+extern crate hdrhist;
 
 use std::rc::Rc;
 use std::cell::RefCell;
 
 use rand::{Rng, SeedableRng, StdRng};
 
-use timely::progress::timestamp::RootTimestamp;
-use timely::progress::nested::product::Product;
+use timely::scheduling::Scheduler;
 use timely::dataflow::operators::Probe;
 use timely::dataflow::operators::generic::operator::source;
 
@@ -71,9 +70,10 @@ pub fn build((dataflow, handles, probe, timer, args): Environment) -> Result<(),
 
     // create a trace from a source of random graph edges.
     let mut trace =
-        source(dataflow, "RandomGraph", |cap| {
+        source(dataflow, "RandomGraph", |cap, info| {
 
-            let mut hist = streaming_harness_hdrhist::HDRHist::new();
+            let activator = dataflow.activator_for(&info.address[..]);
+            let mut hist = hdrhist::HDRHist::new();
 
             let probe2 = probe.clone();
 
@@ -106,12 +106,14 @@ pub fn build((dataflow, handles, probe, timer, args): Environment) -> Result<(),
 
             move |output| {
 
+                activator.activate();
+
                 // Open-loop latency-throughput test, parameterized by offered rate `ns_per_request`.
                 let elapsed = timer.elapsed();
                 let elapsed_ns = (elapsed.as_secs() as usize) * 1_000_000_000 + (elapsed.subsec_nanos() as usize);
 
                 // Determine completed ns.
-                let acknowledged_ns: usize = probe2.with_frontier(|frontier| frontier[0].inner);
+                let acknowledged_ns: usize = probe2.with_frontier(|frontier| frontier[0]);
 
                 if dirty {
                     if (recorded_ns >> 30) != (acknowledged_ns >> 30) {
@@ -128,13 +130,11 @@ pub fn build((dataflow, handles, probe, timer, args): Environment) -> Result<(),
                     recorded_ns += recording_step_ns;
                 }
 
-
-
                 // attempt to advance the frontier of the trace handle.
                 if let Some(trace_handle) = trace_handle_weak.upgrade() {
                     let mut borrow = trace_handle.borrow_mut();
                     if let Some(ref mut trace_handle) = borrow.as_mut() {
-                        trace_handle.advance_by(&[Product::new(RootTimestamp, elapsed_ns)]);
+                        trace_handle.advance_by(&[elapsed_ns]);
                     }
                 }
 
@@ -143,19 +143,17 @@ pub fn build((dataflow, handles, probe, timer, args): Environment) -> Result<(),
 
                     let mut borrow = capability.borrow_mut();
                     let capability = borrow.as_mut().unwrap();
-                    let mut time = capability.time().clone();
+                    // let mut time = capability.time().clone();
 
                     {   // scope to allow session to drop, un-borrow.
                         let mut session = output.session(&capability);
 
                         // load initial graph.
                         while additions < edges + deletions {
-                            time.inner = 0;
                             if additions % peers == index {
-                                time.inner = 0;
                                 let src = rng1.gen_range(0, nodes);
                                 let dst = rng1.gen_range(0, nodes);
-                                session.give(((src, dst), time, 1));
+                                session.give(((src, dst), 0, 1));
                             }
                             additions += 1;
                         }
@@ -163,7 +161,7 @@ pub fn build((dataflow, handles, probe, timer, args): Environment) -> Result<(),
                         // ship any scheduled edge additions.
                         while ns_per_request * (additions - edges) < (elapsed_ns - delay_ns) {
                             if additions % peers == index {
-                                time.inner = delay_ns + ns_per_request * (additions - edges);
+                                let time = delay_ns + ns_per_request * (additions - edges);
                                 let src = rng1.gen_range(0, nodes);
                                 let dst = rng1.gen_range(0, nodes);
                                 session.give(((src, dst), time, 1));
@@ -174,7 +172,7 @@ pub fn build((dataflow, handles, probe, timer, args): Environment) -> Result<(),
                         // ship any scheduled edge deletions.
                         while ns_per_request * deletions < (elapsed_ns - delay_ns) {
                             if deletions % peers == index {
-                                time.inner = delay_ns + ns_per_request * deletions;
+                                let time = delay_ns + ns_per_request * deletions;
                                 let src = rng2.gen_range(0, nodes);
                                 let dst = rng2.gen_range(0, nodes);
                                 session.give(((src, dst), time, -1));
@@ -183,8 +181,7 @@ pub fn build((dataflow, handles, probe, timer, args): Environment) -> Result<(),
                         }
                     }
 
-                    time.inner = elapsed_ns;
-                    capability.downgrade(&time);
+                    capability.downgrade(&elapsed_ns);
                 }
             }
         })
