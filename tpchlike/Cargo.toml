@@ -5,7 +5,8 @@ authors = ["Frank McSherry <fmcsherry@me.com>"]
 
 [dependencies]
 regex = "0.2"
-timely = { git = "https://github.com/TimelyDataflow/timely-dataflow" }
+timely = "0.9"
+#timely = { git = "https://github.com/TimelyDataflow/timely-dataflow" }
 differential-dataflow = { path = "../" }
 arrayvec = { git = "https://github.com/bluss/arrayvec" }
 abomonation = "0.7"

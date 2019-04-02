@@ -5,6 +5,8 @@ extern crate differential_dataflow;
 extern crate arrayvec;
 extern crate regex;
 
+use std::rc::Rc;
+
 use timely::dataflow::*;
 
 use differential_dataflow::Collection;
@@ -74,7 +76,7 @@ impl<G: Scope<Timestamp=usize>> Context<G> {
 
 pub struct Collections<G: Scope> {
     customers: Collection<G, Customer, isize>,
-    lineitems: Collection<G, LineItem, isize>,
+    lineitems: Collection<G, Rc<LineItem>, isize>,
     nations: Collection<G, Nation, isize>,
     orders: Collection<G, Order, isize>,
     parts: Collection<G, Part, isize>,
@@ -87,7 +89,7 @@ pub struct Collections<G: Scope> {
 impl<G: Scope> Collections<G> {
     pub fn new(
         customers: Collection<G, Customer, isize>,
-        lineitems: Collection<G, LineItem, isize>,
+        lineitems: Collection<G, Rc<LineItem>, isize>,
         nations: Collection<G, Nation, isize>,
         orders: Collection<G, Order, isize>,
         parts: Collection<G, Part, isize>,
@@ -110,7 +112,7 @@ impl<G: Scope> Collections<G> {
     }
 
     pub fn customers(&mut self) -> &Collection<G, Customer, isize> { self.used[0] = true; &self.customers }
-    pub fn lineitems(&mut self) -> &Collection<G, LineItem, isize> { self.used[1] = true; &self.lineitems }
+    pub fn lineitems(&mut self) -> &Collection<G, Rc<LineItem>, isize> { self.used[1] = true; &self.lineitems }
     pub fn nations(&mut self) -> &Collection<G, Nation, isize> { self.used[2] = true; &self.nations }
     pub fn orders(&mut self) -> &Collection<G, Order, isize> { self.used[3] = true; &self.orders }
     pub fn parts(&mut self) -> &Collection<G, Part, isize> { self.used[4] = true; &self.parts }
