@@ -80,7 +80,7 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
     let averages =
     customers
         .explode(|(cc, acctbal, _)| Some(((cc, ()), DiffPair::new(acctbal as isize, 1))))
-        .reduce_abelian::<_,_,DefaultValTrace<_,_,_,_>,_>(|_k,s,t| t.push((s[0].1, 1)));
+        .reduce_abelian::<_,DefaultValTrace<_,_,_,_>>(|_k,s,t| t.push((s[0].1, 1)));
 
     customers
         .map(|(cc, acct, key)| (key, (cc, acct)))
