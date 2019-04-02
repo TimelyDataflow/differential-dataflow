@@ -20,9 +20,7 @@ fn get_trace() -> Spine<UnsignedWrapper<u64>, u64, usize, i64, Rc<OrdValBatch<Un
     let op_info = OperatorInfo::new(0, 0, &[]);
     let mut trace = IntegerTrace::new(op_info, None);
     {
-        let mut batcher = <<
-            IntegerTrace as TraceReader<UnsignedWrapper<u64>, u64, usize, i64>>::Batch as Batch<
-            UnsignedWrapper<u64>, u64, usize, i64>>::Batcher::new();
+        let mut batcher = <<IntegerTrace as TraceReader>::Batch as Batch<UnsignedWrapper<u64>, u64, usize, i64>>::Batcher::new();
 
         batcher.push_batch(&mut vec![
             ((1.into(), 2), 0, 1),

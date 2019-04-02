@@ -75,20 +75,21 @@ impl<G, K, V, R> Reduce<G, K, V, R> for Collection<G, (K, V), R>
     fn reduce<L, V2: Data, R2: Abelian>(&self, logic: L) -> Collection<G, (K, V2), R2>
         where L: Fn(&K, &[(&V, R)], &mut Vec<(V2, R2)>)+'static {
         self.arrange_by_key()
-            .reduce_abelian::<_,_,DefaultValTrace<_,_,_,_>,_>(logic)
+            .reduce_abelian::<_,DefaultValTrace<_,_,_,_>>(logic)
             .as_collection(|k,v| (k.clone(), v.clone()))
     }
 }
 
-impl<G: Scope, K: Data, V: Data, T1, R: Monoid> Reduce<G, K, V, R> for Arranged<G, K, V, R, T1>
+impl<G: Scope, K: Data, V: Data, T1, R: Monoid> Reduce<G, K, V, R> for Arranged<G, T1>
 where
     G::Timestamp: Lattice+Ord,
-    T1: TraceReader<K, V, G::Timestamp, R>+Clone+'static,
-    T1::Batch: BatchReader<K, V, G::Timestamp, R>
+    T1: TraceReader<Key=K, Val=V, Time=G::Timestamp, R=R>+Clone+'static,
+    T1::Batch: BatchReader<K, V, G::Timestamp, R>,
+    T1::Cursor: Cursor<K, V, G::Timestamp, R>,
 {
     fn reduce<L, V2: Data, R2: Abelian>(&self, logic: L) -> Collection<G, (K, V2), R2>
         where L: Fn(&K, &[(&V, R)], &mut Vec<(V2, R2)>)+'static {
-        self.reduce_abelian::<_,_,DefaultValTrace<_,_,_,_>,_>(logic)
+        self.reduce_abelian::<_,DefaultValTrace<_,_,_,_>>(logic)
             .as_collection(|k,v| (k.clone(), v.clone()))
     }
 }
@@ -149,18 +150,20 @@ impl<G: Scope, K: Data+Hashable, R1: Monoid> Threshold<G, K, R1> for Collection<
 where G::Timestamp: Lattice+Ord {
     fn threshold<R2: Abelian, F: Fn(&K,&R1)->R2+'static>(&self, thresh: F) -> Collection<G, K, R2> {
         self.arrange_by_self()
-            .reduce_abelian::<_,_,DefaultKeyTrace<_,_,_>,_>(move |k,s,t| t.push(((), thresh(k, &s[0].1))))
+            .reduce_abelian::<_,DefaultKeyTrace<_,_,_>>(move |k,s,t| t.push(((), thresh(k, &s[0].1))))
             .as_collection(|k,_| k.clone())
     }
 }
 
-impl<G: Scope, K: Data, T1, R1: Monoid> Threshold<G, K, R1> for Arranged<G, K, (), R1, T1>
+impl<G: Scope, K: Data, T1, R1: Monoid> Threshold<G, K, R1> for Arranged<G, T1>
 where
     G::Timestamp: Lattice+Ord,
-    T1: TraceReader<K, (), G::Timestamp, R1>+Clone+'static,
-    T1::Batch: BatchReader<K, (), G::Timestamp, R1> {
+    T1: TraceReader<Key=K, Val=(), Time=G::Timestamp, R=R1>+Clone+'static,
+    T1::Batch: BatchReader<K, (), G::Timestamp, R1>,
+    T1::Cursor: Cursor<K, (), G::Timestamp, R1>,
+{
     fn threshold<R2: Abelian, F: Fn(&K,&R1)->R2+'static>(&self, thresh: F) -> Collection<G, K, R2> {
-        self.reduce_abelian::<_,_,DefaultKeyTrace<_,_,_>,_>(move |k,s,t| t.push(((), thresh(k, &s[0].1))))
+        self.reduce_abelian::<_,DefaultKeyTrace<_,_,_>>(move |k,s,t| t.push(((), thresh(k, &s[0].1))))
             .as_collection(|k,_| k.clone())
     }
 }
@@ -196,19 +199,20 @@ where
 {
     fn count(&self) -> Collection<G, (K, R), isize> {
         self.arrange_by_self()
-            .reduce_abelian::<_,_,DefaultValTrace<_,_,_,_>,_>(|_k,s,t| t.push((s[0].1.clone(), 1)))
+            .reduce_abelian::<_,DefaultValTrace<_,_,_,_>>(|_k,s,t| t.push((s[0].1.clone(), 1)))
             .as_collection(|k,c| (k.clone(), c.clone()))
     }
 }
 
-impl<G: Scope, K: Data, T1, R: Monoid> Count<G, K, R> for Arranged<G, K, (), R, T1>
+impl<G: Scope, K: Data, T1, R: Monoid> Count<G, K, R> for Arranged<G, T1>
 where
     G::Timestamp: Lattice+Ord,
-    T1: TraceReader<K, (), G::Timestamp, R>+Clone+'static,
-    T1::Batch: BatchReader<K, (), G::Timestamp, R>
+    T1: TraceReader<Key=K, Val=(), Time=G::Timestamp, R=R>+Clone+'static,
+    T1::Batch: BatchReader<K, (), G::Timestamp, R>,
+    T1::Cursor: Cursor<K, (), G::Timestamp, R>,
 {
     fn count(&self) -> Collection<G, (K, R), isize> {
-        self.reduce_abelian::<_,_,DefaultValTrace<_,_,_,_>,_>(|_k,s,t| t.push((s[0].1.clone(), 1)))
+        self.reduce_abelian::<_,DefaultValTrace<_,_,_,_>>(|_k,s,t| t.push((s[0].1.clone(), 1)))
             .as_collection(|k,c| (k.clone(), c.clone()))
     }
 }
@@ -238,22 +242,23 @@ pub trait ReduceCore<G: Scope, K: Data, V: Data, R: Monoid> where G::Timestamp: 
     ///         let trace =
     ///         scope.new_collection_from(1 .. 10u32).1
     ///              .map(|x| (x, x))
-    ///              .reduce_abelian::<_,_,OrdValSpine<_,_,_,_>,_>(
+    ///              .reduce_abelian::<_,OrdValSpine<_,_,_,_>>(
     ///                  move |_key, src, dst| dst.push((*src[0].0, 1))
     ///              )
     ///              .trace;
     ///     });
     /// }
     /// ```
-    fn reduce_abelian<L, V2, T2, R2>(&self, logic: L) -> Arranged<G, K, V2, R2, TraceAgent<K, V2, G::Timestamp, R2, T2>>
+    fn reduce_abelian<L, T2>(&self, logic: L) -> Arranged<G, TraceAgent<T2>>
         where
-            V2: Data,
-            R2: Abelian,
-            T2: Trace<K, V2, G::Timestamp, R2>+'static,
-            T2::Batch: Batch<K, V2, G::Timestamp, R2>,
-            L: Fn(&K, &[(&V, R)], &mut Vec<(V2, R2)>)+'static,
+            T2: Trace+TraceReader<Key=K, Time=G::Timestamp>+'static,
+            T2::Val: Data,
+            T2::R: Abelian,
+            T2::Batch: Batch<K, T2::Val, G::Timestamp, T2::R>,
+            T2::Cursor: Cursor<K, T2::Val, G::Timestamp, T2::R>,
+            L: Fn(&K, &[(&V, R)], &mut Vec<(T2::Val, T2::R)>)+'static,
         {
-            self.reduce_core(move |key, input, output, change| {
+            self.reduce_core::<_,T2>(move |key, input, output, change| {
                 if !input.is_empty() {
                     logic(key, input, change);
                 }
@@ -267,13 +272,14 @@ pub trait ReduceCore<G: Scope, K: Data, V: Data, R: Monoid> where G::Timestamp: 
     /// Unlike `reduce_arranged`, this method may be called with an empty `input`,
     /// and it may not be safe to index into the first element.
     /// At least one of the two collections will be non-empty.
-    fn reduce_core<L, V2, T2, R2>(&self, logic: L) -> Arranged<G, K, V2, R2, TraceAgent<K, V2, G::Timestamp, R2, T2>>
+    fn reduce_core<L, T2>(&self, logic: L) -> Arranged<G, TraceAgent<T2>>
         where
-            V2: Data,
-            R2: Monoid,
-            T2: Trace<K, V2, G::Timestamp, R2>+'static,
-            T2::Batch: Batch<K, V2, G::Timestamp, R2>,
-            L: Fn(&K, &[(&V, R)], &mut Vec<(V2,R2)>, &mut Vec<(V2, R2)>)+'static
+            T2: Trace+TraceReader<Key=K, Time=G::Timestamp>+'static,
+            T2::Val: Data,
+            T2::R: Monoid,
+            T2::Batch: Batch<K, T2::Val, G::Timestamp, T2::R>,
+            T2::Cursor: Cursor<K, T2::Val, G::Timestamp, T2::R>,
+            L: Fn(&K, &[(&V, R)], &mut Vec<(T2::Val,T2::R)>, &mut Vec<(T2::Val,T2::R)>)+'static
             ;
 }
 
@@ -285,32 +291,35 @@ where
     V: Data,
     R: Monoid,
 {
-    fn reduce_core<L, V2, T2, R2>(&self, logic: L) -> Arranged<G, K, V2, R2, TraceAgent<K, V2, G::Timestamp, R2, T2>>
+    fn reduce_core<L, T2>(&self, logic: L) -> Arranged<G, TraceAgent<T2>>
         where
-            V2: Data,
-            R2: Monoid,
-            T2: Trace<K, V2, G::Timestamp, R2>+'static,
-            T2::Batch: Batch<K, V2, G::Timestamp, R2>,
-            L: Fn(&K, &[(&V, R)], &mut Vec<(V2,R2)>, &mut Vec<(V2, R2)>)+'static
+            T2::Val: Data,
+            T2::R: Monoid,
+            T2: Trace+TraceReader<Key=K, Time=G::Timestamp>+'static,
+            T2::Batch: Batch<K, T2::Val, G::Timestamp, T2::R>,
+            T2::Cursor: Cursor<K, T2::Val, G::Timestamp, T2::R>,
+            L: Fn(&K, &[(&V, R)], &mut Vec<(T2::Val,T2::R)>, &mut Vec<(T2::Val, T2::R)>)+'static
     {
         self.arrange_by_key()
             .reduce_core(logic)
     }
 }
 
-impl<G: Scope, K: Data, V: Data, T1, R: Monoid> ReduceCore<G, K, V, R> for Arranged<G, K, V, R, T1>
+impl<G: Scope, K: Data, V: Data, T1, R: Monoid> ReduceCore<G, K, V, R> for Arranged<G, T1>
 where
     G::Timestamp: Lattice+Ord,
-    T1: TraceReader<K, V, G::Timestamp, R>+Clone+'static,
-    T1::Batch: BatchReader<K, V, G::Timestamp, R> {
-
-    fn reduce_core<L, V2, T2, R2>(&self, logic: L) -> Arranged<G, K, V2, R2, TraceAgent<K, V2, G::Timestamp, R2, T2>>
+    T1: TraceReader<Key=K, Val=V, Time=G::Timestamp, R=R>+Clone+'static,
+    T1::Batch: BatchReader<K, V, G::Timestamp, R>,
+    T1::Cursor: Cursor<K, V, G::Timestamp, R>,
+{
+    fn reduce_core<L, T2>(&self, logic: L) -> Arranged<G, TraceAgent<T2>>
         where
-            V2: Data,
-            R2: Monoid,
-            T2: Trace<K, V2, G::Timestamp, R2>+'static,
-            T2::Batch: Batch<K, V2, G::Timestamp, R2>,
-            L: Fn(&K, &[(&V, R)], &mut Vec<(V2,R2)>, &mut Vec<(V2, R2)>)+'static {
+            T2: Trace+TraceReader<Key=K, Time=G::Timestamp>+'static,
+            T2::Val: Data,
+            T2::R: Monoid,
+            T2::Batch: Batch<K, T2::Val, G::Timestamp, T2::R>,
+            T2::Cursor: Cursor<K, T2::Val, G::Timestamp, T2::R>,
+            L: Fn(&K, &[(&V, R)], &mut Vec<(T2::Val,T2::R)>, &mut Vec<(T2::Val, T2::R)>)+'static {
 
         let mut result_trace = None;
 
@@ -450,11 +459,11 @@ where
                         //
                         // TODO: It would be better if all updates went into one batch, but timely dataflow prevents
                         //       this as long as it requires that there is only one capability for each message.
-                        let mut buffers = Vec::<(G::Timestamp, Vec<(V2, G::Timestamp, R2)>)>::new();
+                        let mut buffers = Vec::<(G::Timestamp, Vec<(T2::Val, G::Timestamp, T2::R)>)>::new();
                         let mut builders = Vec::new();
                         for i in 0 .. capabilities.len() {
                             buffers.push((capabilities[i].time().clone(), Vec::new()));
-                            builders.push(<T2::Batch as Batch<K,V2,G::Timestamp,R2>>::Builder::new());
+                            builders.push(<T2::Batch as Batch<K,T2::Val,G::Timestamp,T2::R>>::Builder::new());
                         }
 
                         // cursors for navigating input and output traces.
@@ -465,7 +474,7 @@ where
                         let (mut batch_cursor, batch_storage) = (CursorList::new(batch_cursors, &batch_storage), batch_storage);
                         let batch_storage = &batch_storage;
 
-                        let mut thinker = history_replay::HistoryReplayer::<V, V2, G::Timestamp, R, R2>::new();
+                        let mut thinker = history_replay::HistoryReplayer::<V, T2::Val, G::Timestamp, R, T2::R>::new();
 
                         // We now march through the keys we must work on, drawing from `batch_cursors` and `exposed`.
                         //
