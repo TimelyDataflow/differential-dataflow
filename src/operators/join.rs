@@ -179,30 +179,31 @@ where
     }
 }
 
-impl<G, K, V, R, T> Join<G, K, V, R> for Arranged<G,K,V,R,T>
-    where
-        G: Scope,
-        G::Timestamp: Lattice+Ord,
-        K: Data+Hashable,
-        V: Data,
-        R: Monoid,
-        T: TraceReader<K,V,G::Timestamp,R>+Clone+'static,
-        T::Batch: BatchReader<K,V,G::Timestamp,R>+'static {
-
-    fn join_map<V2: ExchangeData, R2: ExchangeData+Monoid, D: Data, L>(&self, other: &Collection<G, (K, V2), R2>, logic: L) -> Collection<G, D, <R as Mul<R2>>::Output>
-    where K: ExchangeData, R: Mul<R2>, <R as Mul<R2>>::Output: Monoid, L: Fn(&K, &V, &V2)->D+'static {
+impl<G, Tr> Join<G, Tr::Key, Tr::Val, Tr::R> for Arranged<G, Tr>
+where
+    G: Scope,
+    G::Timestamp: Lattice+Ord,
+    Tr: TraceReader<Time=G::Timestamp>+Clone+'static,
+    Tr::Key: Data+Hashable,
+    Tr::Val: Data,
+    Tr::R: Monoid,
+    Tr::Batch: BatchReader<Tr::Key,Tr::Val,G::Timestamp,Tr::R>+'static,
+    Tr::Cursor: Cursor<Tr::Key,Tr::Val,G::Timestamp,Tr::R>+'static,
+{
+    fn join_map<V2: ExchangeData, R2: ExchangeData+Monoid, D: Data, L>(&self, other: &Collection<G, (Tr::Key, V2), R2>, logic: L) -> Collection<G, D, <Tr::R as Mul<R2>>::Output>
+    where Tr::Key: ExchangeData, Tr::R: Mul<R2>, <Tr::R as Mul<R2>>::Output: Monoid, L: Fn(&Tr::Key, &Tr::Val, &V2)->D+'static {
         let arranged2 = other.arrange_by_key();
         self.join_core(&arranged2, move |k,v1,v2| Some(logic(k,v1,v2)))
     }
 
-    fn semijoin<R2: ExchangeData+Monoid>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), <R as Mul<R2>>::Output>
-    where K: ExchangeData, R: Mul<R2>, <R as Mul<R2>>::Output: Monoid {
+    fn semijoin<R2: ExchangeData+Monoid>(&self, other: &Collection<G, Tr::Key, R2>) -> Collection<G, (Tr::Key, Tr::Val), <Tr::R as Mul<R2>>::Output>
+    where Tr::Key: ExchangeData, Tr::R: Mul<R2>, <Tr::R as Mul<R2>>::Output: Monoid {
         let arranged2 = other.arrange_by_self();
         self.join_core(&arranged2, |k,v,_| Some((k.clone(), v.clone())))
     }
 
-    fn antijoin<R2: ExchangeData+Monoid>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), R>
-    where K: ExchangeData, R: Mul<R2, Output=R>, R: Abelian {
+    fn antijoin<R2: ExchangeData+Monoid>(&self, other: &Collection<G, Tr::Key, R2>) -> Collection<G, (Tr::Key, Tr::Val), Tr::R>
+    where Tr::Key: ExchangeData, Tr::R: Mul<R2, Output=Tr::R>, Tr::R: Abelian {
         self.as_collection(|k,v| (k.clone(), v.clone()))
             .concat(&self.semijoin(other).negate())
     }
@@ -250,17 +251,18 @@ pub trait JoinCore<G: Scope, K: 'static, V: 'static, R: Monoid> where G::Timesta
     ///     });
     /// }
     /// ```
-    fn join_core<V2,T2,R2,I,L> (&self, stream2: &Arranged<G,K,V2,R2,T2>, result: L) -> Collection<G,I::Item,<R as Mul<R2>>::Output>
+    fn join_core<Tr2,I,L> (&self, stream2: &Arranged<G,Tr2>, result: L) -> Collection<G,I::Item,<R as Mul<Tr2::R>>::Output>
     where
-        V2: Ord+Clone+Debug+'static,
-        T2: TraceReader<K, V2, G::Timestamp, R2>+Clone+'static,
-        T2::Batch: BatchReader<K, V2, G::Timestamp, R2>+'static,
-        R2: Monoid,
-        R: Mul<R2>,
-        <R as Mul<R2>>::Output: Monoid,
+        Tr2: TraceReader<Key=K, Time=G::Timestamp>+Clone+'static,
+        Tr2::Batch: BatchReader<K, Tr2::Val, G::Timestamp, Tr2::R>+'static,
+        Tr2::Cursor: Cursor<K, Tr2::Val, G::Timestamp, Tr2::R>+'static,
+        Tr2::Val: Ord+Clone+Debug+'static,
+        Tr2::R: Monoid,
+        R: Mul<Tr2::R>,
+        <R as Mul<Tr2::R>>::Output: Monoid,
         I: IntoIterator,
         I::Item: Data,
-        L: Fn(&K,&V,&V2)->I+'static,
+        L: Fn(&K,&V,&Tr2::Val)->I+'static,
         ;
 }
 
@@ -273,45 +275,47 @@ where
     R: ExchangeData+Monoid,
     G::Timestamp: Lattice+Ord,
 {
-    fn join_core<V2,T2,R2,I,L> (&self, stream2: &Arranged<G,K,V2,R2,T2>, result: L) -> Collection<G,I::Item,<R as Mul<R2>>::Output>
+    fn join_core<Tr2,I,L> (&self, stream2: &Arranged<G,Tr2>, result: L) -> Collection<G,I::Item,<R as Mul<Tr2::R>>::Output>
     where
-        V2: Ord+Clone+Debug+'static,
-        T2: TraceReader<K, V2, G::Timestamp, R2>+Clone+'static,
-        T2::Batch: BatchReader<K, V2, G::Timestamp, R2>+'static,
-        R2: Monoid,
-        R: Mul<R2>,
-        <R as Mul<R2>>::Output: Monoid,
+        Tr2: TraceReader<Key=K, Time=G::Timestamp>+Clone+'static,
+        Tr2::Batch: BatchReader<K, Tr2::Val, G::Timestamp, Tr2::R>+'static,
+        Tr2::Cursor: Cursor<K, Tr2::Val, G::Timestamp, Tr2::R>+'static,
+        Tr2::Val: Ord+Clone+Debug+'static,
+        Tr2::R: Monoid,
+        R: Mul<Tr2::R>,
+        <R as Mul<Tr2::R>>::Output: Monoid,
         I: IntoIterator,
         I::Item: Data,
-        L: Fn(&K,&V,&V2)->I+'static {
-
+        L: Fn(&K,&V,&Tr2::Val)->I+'static,
+    {
         self.arrange_by_key()
             .join_core(stream2, result)
     }
 }
 
-impl<G, K, V, R1, T1> JoinCore<G, K, V, R1> for Arranged<G,K,V,R1,T1>
+impl<G, T1> JoinCore<G, T1::Key, T1::Val, T1::R> for Arranged<G,T1>
     where
-        K: Ord,
         G: Scope,
         G::Timestamp: Lattice+Ord+Debug,
-        K: Debug+Eq+'static,
-        V: Ord+Clone+Debug+'static,
-        R1: Monoid,
-        T1: TraceReader<K,V,G::Timestamp, R1>+Clone+'static,
-        T1::Batch: BatchReader<K,V,G::Timestamp,R1>+'static,
+        T1: TraceReader<Time=G::Timestamp>+Clone+'static,
+        T1::Key: Ord+Debug+'static,
+        T1::Val: Ord+Clone+Debug+'static,
+        T1::R: Monoid,
+        T1::Batch: BatchReader<T1::Key,T1::Val,G::Timestamp,T1::R>+'static,
+        T1::Cursor: Cursor<T1::Key,T1::Val,G::Timestamp,T1::R>+'static,
 {
-    fn join_core<V2,T2,R2,I,L>(&self, other: &Arranged<G,K,V2,R2,T2>, result: L) -> Collection<G,I::Item,<R1 as Mul<R2>>::Output>
+    fn join_core<Tr2,I,L>(&self, other: &Arranged<G,Tr2>, result: L) -> Collection<G,I::Item,<T1::R as Mul<Tr2::R>>::Output>
     where
-        V2: Ord+Clone+Debug+'static,
-        T2: TraceReader<K,V2,G::Timestamp,R2>+Clone+'static,
-        T2::Batch: BatchReader<K, V2, G::Timestamp, R2>+'static,
-        R2: Monoid,
-        R1: Mul<R2>,
-        <R1 as Mul<R2>>::Output: Monoid,
+        Tr2::Val: Ord+Clone+Debug+'static,
+        Tr2: TraceReader<Key=T1::Key,Time=G::Timestamp>+Clone+'static,
+        Tr2::Batch: BatchReader<T1::Key, Tr2::Val, G::Timestamp, Tr2::R>+'static,
+        Tr2::Cursor: Cursor<T1::Key, Tr2::Val, G::Timestamp, Tr2::R>+'static,
+        Tr2::R: Monoid,
+        T1::R: Mul<Tr2::R>,
+        <T1::R as Mul<Tr2::R>>::Output: Monoid,
         I: IntoIterator,
         I::Item: Data,
-        L: Fn(&K,&V,&V2)->I+'static {
+        L: Fn(&T1::Key,&T1::Val,&Tr2::Val)->I+'static {
 
         // handles to shared trace data structures.
         let mut trace1 = Some(self.trace.clone());

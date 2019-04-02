@@ -127,8 +127,8 @@ impl<G: Scope> Collections<G> {
 use differential_dataflow::trace::implementations::ord::OrdValSpine as DefaultValTrace;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 
-type ArrangedScope<G, T> = Arranged<G, usize, T, isize, ArrangedIndex<T>>;
-type ArrangedIndex<T> = TraceAgent<usize, T, usize, isize, DefaultValTrace<usize, T, usize, isize>>;
+type ArrangedScope<G, T> = Arranged<G, ArrangedIndex<T>>;
+type ArrangedIndex<T> = TraceAgent<DefaultValTrace<usize, T, usize, isize>>;
 
 pub struct Arrangements {
     customers:  ArrangedIndex<Customer>,

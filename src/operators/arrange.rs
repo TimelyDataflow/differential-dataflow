@@ -47,18 +47,24 @@ use trace::wrappers::rc::TraceBox;
 use trace::wrappers::filter::{TraceFilter, BatchFilter};
 
 /// A trace writer capability.
-pub struct TraceWriter<K, V, T, R, Tr>
-where T: Lattice+Ord+Clone+'static, Tr: Trace<K,V,T,R>, Tr::Batch: Batch<K,V,T,R> {
-    phantom: ::std::marker::PhantomData<(K, V, R)>,
-    trace: Weak<RefCell<TraceBox<K, V, T, R, Tr>>>,
-    queues: Rc<RefCell<(Vec<T>,Vec<TraceAgentQueueWriter<K,V,T,R,Tr>>)>>,
+pub struct TraceWriter<Tr>
+where
+    Tr: Trace,
+    Tr::Time: Lattice+Ord+Clone+'static,
+    Tr::Batch: Batch<Tr::Key,Tr::Val,Tr::Time,Tr::R>,
+{
+    trace: Weak<RefCell<TraceBox<Tr>>>,
+    queues: Rc<RefCell<(Vec<Tr::Time>,Vec<TraceAgentQueueWriter<Tr>>)>>,
 }
 
-impl<K, V, T, R, Tr> TraceWriter<K, V, T, R, Tr>
-where T: Lattice+Ord+Clone+'static, Tr: Trace<K,V,T,R>, Tr::Batch: Batch<K,V,T,R> {
-
+impl<Tr> TraceWriter<Tr>
+where
+    Tr: Trace,
+    Tr::Time: Lattice+Ord+Clone+'static,
+    Tr::Batch: Batch<Tr::Key,Tr::Val,Tr::Time,Tr::R>,
+{
     /// Advances the trace to `frontier`, providing batch data if it exists.
-    pub fn seal(&mut self, frontier: &[T], data: Option<(T, Tr::Batch)>) {
+    pub fn seal(&mut self, frontier: &[Tr::Time], data: Option<(Tr::Time, Tr::Batch)>) {
 
         // push information to each listener that still exists.
         let mut borrow = self.queues.borrow_mut();
@@ -89,8 +95,12 @@ where T: Lattice+Ord+Clone+'static, Tr: Trace<K,V,T,R>, Tr::Batch: Batch<K,V,T,R
     }
 }
 
-impl<K, V, T, R, Tr> Drop for TraceWriter<K, V, T, R, Tr>
-where T: Lattice+Ord+Clone+'static, Tr: Trace<K,V,T,R>, Tr::Batch: Batch<K,V,T,R> {
+impl<Tr> Drop for TraceWriter<Tr>
+where
+    Tr: Trace,
+    Tr::Time: Lattice+Ord+Clone+'static,
+    Tr::Batch: Batch<Tr::Key,Tr::Val,Tr::Time,Tr::R>,
+{
     fn drop(&mut self) {
 
         // TODO: This method exists in case a TraceWriter is dropped without sealing
@@ -110,60 +120,75 @@ where T: Lattice+Ord+Clone+'static, Tr: Trace<K,V,T,R>, Tr::Batch: Batch<K,V,T,R
 
 use timely::scheduling::Activator;
 // Short names for strongly and weakly owned activators and shared queues.
-type BatchQueue<K,V,T,R,Tr> = VecDeque<(Vec<T>, Option<(T, <Tr as TraceReader<K,V,T,R>>::Batch)>)>;
-type TraceAgentQueueReader<K,V,T,R,Tr> = Rc<(Activator, RefCell<BatchQueue<K,V,T,R,Tr>>)>;
-type TraceAgentQueueWriter<K,V,T,R,Tr> = Weak<(Activator, RefCell<BatchQueue<K,V,T,R,Tr>>)>;
+type BatchQueue<Tr> = VecDeque<(Vec<<Tr as TraceReader>::Time>, Option<(<Tr as TraceReader>::Time, <Tr as TraceReader>::Batch)>)>;
+type TraceAgentQueueReader<Tr> = Rc<(Activator, RefCell<BatchQueue<Tr>>)>;
+type TraceAgentQueueWriter<Tr> = Weak<(Activator, RefCell<BatchQueue<Tr>>)>;
 
 /// A `TraceReader` wrapper which can be imported into other dataflows.
 ///
 /// The `TraceAgent` is the default trace type produced by `arranged`, and it can be extracted
 /// from the dataflow in which it was defined, and imported into other dataflows.
-pub struct TraceAgent<K, V, T, R, Tr>
-where T: Lattice+Ord+Clone+'static, Tr: TraceReader<K,V,T,R> {
-    phantom: ::std::marker::PhantomData<(K, V, R)>,
-    trace: Rc<RefCell<TraceBox<K, V, T, R, Tr>>>,
-    queues: Weak<RefCell<(Vec<T>,Vec<TraceAgentQueueWriter<K,V,T,R,Tr>>)>>,
-    advance: Vec<T>,
-    through: Vec<T>,
+pub struct TraceAgent<Tr>
+where
+    Tr: TraceReader,
+    Tr::Time: Lattice+Ord+Clone+'static,
+{
+    trace: Rc<RefCell<TraceBox<Tr>>>,
+    queues: Weak<RefCell<(Vec<Tr::Time>,Vec<TraceAgentQueueWriter<Tr>>)>>,
+    advance: Vec<Tr::Time>,
+    through: Vec<Tr::Time>,
 }
 
-impl<K, V, T, R, Tr> TraceReader<K, V, T, R> for TraceAgent<K, V, T, R, Tr>
-where T: Lattice+Ord+Clone+'static, Tr: TraceReader<K,V,T,R> {
+impl<Tr> TraceReader for TraceAgent<Tr>
+where
+    Tr: TraceReader,
+    Tr::Time: Lattice+Ord+Clone+'static,
+{
+    type Key = Tr::Key;
+    type Val = Tr::Val;
+    type Time = Tr::Time;
+    type R = Tr::R;
+
     type Batch = Tr::Batch;
     type Cursor = Tr::Cursor;
-    fn advance_by(&mut self, frontier: &[T]) {
+    fn advance_by(&mut self, frontier: &[Tr::Time]) {
         self.trace.borrow_mut().adjust_advance_frontier(&self.advance[..], frontier);
         self.advance.clear();
         self.advance.extend(frontier.iter().cloned());
     }
-    fn advance_frontier(&mut self) -> &[T] {
+    fn advance_frontier(&mut self) -> &[Tr::Time] {
         &self.advance[..]
     }
-    fn distinguish_since(&mut self, frontier: &[T]) {
+    fn distinguish_since(&mut self, frontier: &[Tr::Time]) {
         self.trace.borrow_mut().adjust_through_frontier(&self.through[..], frontier);
         self.through.clear();
         self.through.extend(frontier.iter().cloned());
     }
-    fn distinguish_frontier(&mut self) -> &[T] {
+    fn distinguish_frontier(&mut self) -> &[Tr::Time] {
         &self.through[..]
     }
-    fn cursor_through(&mut self, frontier: &[T]) -> Option<(Tr::Cursor, <Tr::Cursor as Cursor<K, V, T, R>>::Storage)> {
+    fn cursor_through(&mut self, frontier: &[Tr::Time]) -> Option<(Tr::Cursor, <Tr::Cursor as Cursor<Tr::Key, Tr::Val, Tr::Time, Tr::R>>::Storage)> {
         self.trace.borrow_mut().trace.cursor_through(frontier)
     }
     fn map_batches<F: FnMut(&Self::Batch)>(&mut self, f: F) { self.trace.borrow_mut().trace.map_batches(f) }
 }
 
-impl<K, V, T, R, Tr> TraceAgent<K, V, T, R, Tr>
-where T: Timestamp+Lattice, Tr: TraceReader<K,V,T,R> {
+impl<Tr> TraceAgent<Tr>
+where
+    Tr: TraceReader,
+    Tr::Time: Timestamp+Lattice,
+{
 
     /// Creates a new agent from a trace reader.
-    pub fn new(trace: Tr) -> (Self, TraceWriter<K,V,T,R,Tr>) where Tr: Trace<K,V,T,R>, Tr::Batch: Batch<K,V,T,R> {
-
+    pub fn new(trace: Tr) -> (Self, TraceWriter<Tr>)
+    where
+        Tr: Trace,
+        Tr::Batch: Batch<Tr::Key,Tr::Val,Tr::Time,Tr::R>,
+    {
         let trace = Rc::new(RefCell::new(TraceBox::new(trace)));
         let queues = Rc::new(RefCell::new((vec![Default::default()], Vec::new())));
 
         let reader = TraceAgent {
-            phantom: ::std::marker::PhantomData,
             trace: trace.clone(),
             queues: Rc::downgrade(&queues),
             advance: trace.borrow().advance_frontiers.frontier().to_vec(),
@@ -171,7 +196,6 @@ where T: Timestamp+Lattice, Tr: TraceReader<K,V,T,R> {
         };
 
         let writer = TraceWriter {
-            phantom: ::std::marker::PhantomData,
             trace: Rc::downgrade(&trace),
             queues: queues,
         };
@@ -183,14 +207,16 @@ where T: Timestamp+Lattice, Tr: TraceReader<K,V,T,R> {
     ///
     /// The queue will be immediately populated with existing historical batches from the trace, and until the reference
     /// is dropped the queue will receive new batches as produced by the source `arrange` operator.
-    pub fn new_listener(&mut self, activator: Activator) -> TraceAgentQueueReader<K,V,T,R,Tr> where T: Default {
-
+    pub fn new_listener(&mut self, activator: Activator) -> TraceAgentQueueReader<Tr>
+    where
+        Tr::Time: Default
+    {
         // create a new queue for progress and batch information.
         let mut new_queue = VecDeque::new();
 
         // add the existing batches from the trace
         self.trace.borrow_mut().trace.map_batches(|batch| {
-            new_queue.push_back((vec![T::default()], Some((T::default(), batch.clone()))));
+            new_queue.push_back((vec![<Tr::Time>::default()], Some((<Tr::Time>::default(), batch.clone()))));
         });
 
         let reference = Rc::new((activator, RefCell::new(new_queue)));
@@ -211,10 +237,10 @@ where T: Timestamp+Lattice, Tr: TraceReader<K,V,T,R> {
     }
 }
 
-impl<K, V, T, R, Tr> TraceAgent<K, V, T, R, Tr>
+impl<Tr> TraceAgent<Tr>
 where
-    T: Lattice+Ord+Clone+'static,
-    Tr: TraceReader<K,V,T,R>
+    Tr: TraceReader,
+    Tr::Time: Lattice+Ord+Clone+'static,
 {
     /// Copies an existing collection into the supplied scope.
     ///
@@ -274,17 +300,19 @@ where
     ///     }).unwrap();
     /// }
     /// ```
-    pub fn import<G: Scope<Timestamp=T>>(&mut self, scope: &G) -> Arranged<G, K, V, R, TraceAgent<K, V, T, R, Tr>>
+    pub fn import<G>(&mut self, scope: &G) -> Arranged<G, TraceAgent<Tr>>
     where
-        T: Timestamp
+        G: Scope<Timestamp=Tr::Time>,
+        Tr::Time: Timestamp,
     {
         self.import_named(scope, "ArrangedSource")
     }
 
     /// Same as `import`, but allows to name the source.
-    pub fn import_named<G: Scope<Timestamp=T>>(&mut self, scope: &G, name: &str) -> Arranged<G, K, V, R, TraceAgent<K, V, T, R, Tr>>
+    pub fn import_named<G>(&mut self, scope: &G, name: &str) -> Arranged<G, TraceAgent<Tr>>
     where
-        T: Timestamp
+        G: Scope<Timestamp=Tr::Time>,
+        Tr::Time: Timestamp,
     {
         // Drop ShutdownButton and return only the arrangement.
         self.import_core(scope, name).0
@@ -345,9 +373,10 @@ where
     ///     }).unwrap();
     /// }
     /// ```
-    pub fn import_core<G: Scope<Timestamp=T>>(&mut self, scope: &G, name: &str) -> (Arranged<G, K, V, R, TraceAgent<K, V, T, R, Tr>>, ShutdownButton<CapabilitySet<T>>)
+    pub fn import_core<G>(&mut self, scope: &G, name: &str) -> (Arranged<G, TraceAgent<Tr>>, ShutdownButton<CapabilitySet<Tr::Time>>)
     where
-        T: Timestamp
+        G: Scope<Timestamp=Tr::Time>,
+        Tr::Time: Timestamp,
     {
         let trace = self.clone();
 
@@ -413,8 +442,11 @@ impl<T> ShutdownButton<T> {
     }
 }
 
-impl<K, V, T, R, Tr> Clone for TraceAgent<K, V, T, R, Tr>
-where T: Lattice+Ord+Clone+'static, Tr: TraceReader<K,V,T,R> {
+impl<Tr> Clone for TraceAgent<Tr>
+where
+    Tr: TraceReader,
+    Tr::Time: Lattice+Ord+Clone+'static,
+{
     fn clone(&self) -> Self {
 
         // increase counts for wrapped `TraceBox`.
@@ -422,7 +454,6 @@ where T: Lattice+Ord+Clone+'static, Tr: TraceReader<K,V,T,R> {
         self.trace.borrow_mut().adjust_through_frontier(&[], &self.through[..]);
 
         TraceAgent {
-            phantom: ::std::marker::PhantomData,
             trace: self.trace.clone(),
             queues: self.queues.clone(),
             advance: self.advance.clone(),
@@ -432,8 +463,11 @@ where T: Lattice+Ord+Clone+'static, Tr: TraceReader<K,V,T,R> {
 }
 
 
-impl<K, V, T, R, Tr> Drop for TraceAgent<K, V, T, R, Tr>
-where T: Lattice+Ord+Clone+'static, Tr: TraceReader<K,V,T,R> {
+impl<Tr> Drop for TraceAgent<Tr>
+where
+    Tr: TraceReader,
+    Tr::Time: Lattice+Ord+Clone+'static,
+{
     fn drop(&mut self) {
         // decrement borrow counts to remove all holds
         self.trace.borrow_mut().adjust_advance_frontier(&self.advance[..], &[]);
@@ -445,21 +479,30 @@ where T: Lattice+Ord+Clone+'static, Tr: TraceReader<K,V,T,R> {
 ///
 /// An `Arranged` allows multiple differential operators to share the resources (communication,
 /// computation, memory) required to produce and maintain an indexed representation of a collection.
-pub struct Arranged<G: Scope, K, V, R, T> where G::Timestamp: Lattice+Ord, T: TraceReader<K, V, G::Timestamp, R>+Clone {
+pub struct Arranged<G: Scope, Tr>
+where
+    G::Timestamp: Lattice+Ord,
+    Tr: TraceReader+Clone,
+{
     /// A stream containing arranged updates.
     ///
     /// This stream contains the same batches of updates the trace itself accepts, so there should
     /// be no additional overhead to receiving these records. The batches can be navigated just as
     /// the batches in the trace, by key and by value.
-    pub stream: Stream<G, T::Batch>,
+    pub stream: Stream<G, Tr::Batch>,
     /// A shared trace, updated by the `Arrange` operator and readable by others.
-    pub trace: T,
+    pub trace: Tr,
     // TODO : We might have an `Option<Collection<G, (K, V)>>` here, which `as_collection` sets and
     // returns when invoked, so as to not duplicate work with multiple calls to `as_collection`.
 }
 
-impl<G: Scope, K, V, R, T> Clone for Arranged<G, K, V, R, T>
-where G::Timestamp: Lattice+Ord, T: TraceReader<K, V, G::Timestamp, R>+Clone {
+impl<G: Scope, Tr> Clone for Arranged<G, Tr>
+where
+    G::Timestamp: Lattice+Ord,
+    Tr: TraceReader<Time=G::Timestamp> + Clone,
+    Tr::Batch: BatchReader<Tr::Key, Tr::Val, G::Timestamp, Tr::R>,
+    Tr::Cursor: Cursor<Tr::Key, Tr::Val, G::Timestamp, Tr::R>,
+{
     fn clone(&self) -> Self {
         Arranged {
             stream: self.stream.clone(),
@@ -471,22 +514,26 @@ where G::Timestamp: Lattice+Ord, T: TraceReader<K, V, G::Timestamp, R>+Clone {
 use ::timely::dataflow::scopes::Child;
 use ::timely::progress::timestamp::Refines;
 
-impl<G: Scope, K, V, R, T> Arranged<G, K, V, R, T> where G::Timestamp: Lattice+Ord, T: TraceReader<K, V, G::Timestamp, R>+Clone {
-
+impl<G: Scope, Tr> Arranged<G, Tr>
+where
+    G::Timestamp: Lattice+Ord,
+    Tr: TraceReader<Time=G::Timestamp> + Clone,
+    Tr::Batch: BatchReader<Tr::Key, Tr::Val, G::Timestamp, Tr::R>,
+    Tr::Cursor: Cursor<Tr::Key, Tr::Val, G::Timestamp, Tr::R>,
+{
     /// Brings an arranged collection into a nested scope.
     ///
     /// This method produces a proxy trace handle that uses the same backing data, but acts as if the timestamps
     /// have all been extended with an additional coordinate with the default value. The resulting collection does
     /// not vary with the new timestamp coordinate.
     pub fn enter<'a, TInner>(&self, child: &Child<'a, G, TInner>)
-        -> Arranged<Child<'a, G, TInner>, K, V, R, TraceEnter<K, V, G::Timestamp, R, T, TInner>>
+        -> Arranged<Child<'a, G, TInner>, TraceEnter<Tr, TInner>>
         where
-            T::Batch: Clone,
-            K: 'static,
-            V: 'static,
+            Tr::Key: 'static,
+            Tr::Val: 'static,
+            Tr::R: 'static,
             G::Timestamp: Clone+Default+'static,
             TInner: Refines<G::Timestamp>+Lattice+Timestamp+Clone+Default+'static,
-            R: 'static,
     {
         Arranged {
             stream: self.stream.enter(child).map(|bw| BatchEnter::make_from(bw)),
@@ -500,15 +547,14 @@ impl<G: Scope, K, V, R, T> Arranged<G, K, V, R, T> where G::Timestamp: Lattice+O
     /// have all been extended with an additional coordinate with the default value. The resulting collection does
     /// not vary with the new timestamp coordinate.
     pub fn enter_at<'a, TInner, F>(&self, child: &Child<'a, G, TInner>, logic: F)
-        -> Arranged<Child<'a, G, TInner>, K, V, R, TraceEnterAt<K, V, G::Timestamp, R, T, TInner, F>>
+        -> Arranged<Child<'a, G, TInner>, TraceEnterAt<Tr, TInner, F>>
         where
-            T::Batch: Clone,
-            K: 'static,
-            V: 'static,
+            Tr::Key: 'static,
+            Tr::Val: 'static,
+            Tr::R: 'static,
             G::Timestamp: Clone+Default+'static,
             TInner: Refines<G::Timestamp>+Lattice+Timestamp+Clone+Default+'static,
-            R: 'static,
-            F: Fn(&K, &V, &G::Timestamp)->TInner+'static,
+            F: Fn(&Tr::Key, &Tr::Val, &G::Timestamp)->TInner+'static,
     {
         let logic = Rc::new(logic);
         Arranged {
@@ -549,14 +595,13 @@ impl<G: Scope, K, V, R, T> Arranged<G, K, V, R, T> where G::Timestamp: Lattice+O
     /// }
     /// ```
     pub fn filter<F>(&self, logic: F)
-        -> Arranged<G, K, V, R, TraceFilter<K, V, G::Timestamp, R, T, F>>
+        -> Arranged<G, TraceFilter<Tr, F>>
         where
-            T::Batch: Clone,
-            K: 'static,
-            V: 'static,
+            Tr::Key: 'static,
+            Tr::Val: 'static,
+            Tr::R: 'static,
             G::Timestamp: Clone+Default+'static,
-            R: 'static,
-            F: Fn(&K, &V)->bool+'static,
+            F: Fn(&Tr::Key, &Tr::Val)->bool+'static,
     {
         let logic = Rc::new(logic);
         Arranged {
@@ -569,12 +614,10 @@ impl<G: Scope, K, V, R, T> Arranged<G, K, V, R, T> where G::Timestamp: Lattice+O
     /// The underlying `Stream<G, BatchWrapper<T::Batch>>` is a much more efficient way to access the data,
     /// and this method should only be used when the data need to be transformed or exchanged, rather than
     /// supplied as arguments to an operator using the same key-value structure.
-    pub fn as_collection<D: Data, L>(&self, logic: L) -> Collection<G, D, R>
+    pub fn as_collection<D: Data, L>(&self, logic: L) -> Collection<G, D, Tr::R>
         where
-            R: Monoid,
-            T::Batch: Clone+'static,
-            K: Clone, V: Clone,
-            L: Fn(&K, &V) -> D+'static,
+            Tr::R: Monoid,
+            L: Fn(&Tr::Key, &Tr::Val) -> D+'static,
     {
         self.flat_map_ref(move |key, val| Some(logic(key,val)))
     }
@@ -583,14 +626,12 @@ impl<G: Scope, K, V, R, T> Arranged<G, K, V, R, T> where G::Timestamp: Lattice+O
     ///
     /// The supplied logic may produce an iterator over output values, allowing either
     /// filtering or flat mapping as part of the extraction.
-    pub fn flat_map_ref<I, L>(&self, logic: L) -> Collection<G, I::Item, R>
+    pub fn flat_map_ref<I, L>(&self, logic: L) -> Collection<G, I::Item, Tr::R>
         where
-            R: Monoid,
-            T::Batch: Clone+'static,
-            K: Clone, V: Clone,
+            Tr::R: Monoid,
             I: IntoIterator,
             I::Item: Data,
-            L: Fn(&K, &V) -> I+'static,
+            L: Fn(&Tr::Key, &Tr::Val) -> I+'static,
     {
         self.stream.unary(Pipeline, "AsCollection", move |_,_| move |input, output| {
 
@@ -620,16 +661,16 @@ impl<G: Scope, K, V, R, T> Arranged<G, K, V, R, T> where G::Timestamp: Lattice+O
     ///
     /// This method consumes a stream of (key, time) queries and reports the corresponding stream of
     /// (key, value, time, diff) accumulations in the `self` trace.
-    pub fn lookup(&self, queries: &Stream<G, (K, G::Timestamp)>) -> Stream<G, (K, V, G::Timestamp, R)>
+    pub fn lookup(&self, queries: &Stream<G, (Tr::Key, G::Timestamp)>) -> Stream<G, (Tr::Key, Tr::Val, G::Timestamp, Tr::R)>
     where
         G::Timestamp: Data+Lattice+Ord+TotalOrder,
-        K: ExchangeData+Hashable,
-        V: ExchangeData,
-        R: Monoid,
-        T: 'static
+        Tr::Key: ExchangeData+Hashable,
+        Tr::Val: ExchangeData,
+        Tr::R: ExchangeData+Monoid,
+        Tr: 'static,
     {
         // while the arrangement is already correctly distributed, the query stream may not be.
-        let exchange = Exchange::new(move |update: &(K,G::Timestamp)| update.0.hashed().as_u64());
+        let exchange = Exchange::new(move |update: &(Tr::Key,G::Timestamp)| update.0.hashed().as_u64());
         queries.binary_frontier(&self.stream, exchange, Pipeline, "TraceQuery", move |_capability, _info| {
 
             let mut trace = Some(self.trace.clone());
@@ -642,8 +683,8 @@ impl<G: Scope, K, V, R, T> Arranged<G, K, V, R, T> where G::Timestamp: Lattice+O
             let mut active = Vec::new();
             let mut retain = Vec::new();
 
-            let mut working: Vec<(G::Timestamp, V, R)> = Vec::new();
-            let mut working2: Vec<(V, R)> = Vec::new();
+            let mut working: Vec<(G::Timestamp, Tr::Val, Tr::R)> = Vec::new();
+            let mut working2: Vec<(Tr::Val, Tr::R)> = Vec::new();
 
             move |input1, input2, output| {
 
@@ -790,10 +831,11 @@ where
     /// This operator arranges a stream of values into a shared trace, whose contents it maintains.
     /// This trace is current for all times marked completed in the output stream, and probing this stream
     /// is the correct way to determine that times in the shared trace are committed.
-    fn arrange<T>(&self) -> Arranged<G, K, V, R, TraceAgent<K, V, G::Timestamp, R, T>>
+    fn arrange<Tr>(&self) -> Arranged<G, TraceAgent<Tr>>
     where
-        T: Trace<K, V, G::Timestamp, R>+'static,
-        T::Batch: Batch<K, V, G::Timestamp, R>,
+        Tr: Trace+TraceReader<Key=K,Val=V,Time=G::Timestamp,R=R>+'static,
+        Tr::Batch: Batch<K, V, G::Timestamp, R>,
+        Tr::Cursor: Cursor<K, V, G::Timestamp, R>,
     {
         self.arrange_named("Arrange")
     }
@@ -803,22 +845,24 @@ where
     /// This operator arranges a stream of values into a shared trace, whose contents it maintains.
     /// This trace is current for all times marked completed in the output stream, and probing this stream
     /// is the correct way to determine that times in the shared trace are committed.
-    fn arrange_named<T>(&self, name: &str) -> Arranged<G, K, V, R, TraceAgent<K, V, G::Timestamp, R, T>>
+    fn arrange_named<Tr>(&self, name: &str) -> Arranged<G, TraceAgent<Tr>>
     where
-        T: Trace<K, V, G::Timestamp, R>+'static,
-        T::Batch: Batch<K, V, G::Timestamp, R>;
+        Tr: Trace+TraceReader<Key=K,Val=V,Time=G::Timestamp,R=R>+'static,
+        Tr::Batch: Batch<K, V, G::Timestamp, R>,
+        Tr::Cursor: Cursor<K, V, G::Timestamp, R>,
+        ;
 }
 
 impl<G: Scope, K: ExchangeData+Hashable, V: ExchangeData, R: Monoid+ExchangeData> Arrange<G, K, V, R> for Collection<G, (K, V), R>
 where
     G::Timestamp: Lattice+Ord,
 {
-    fn arrange_named<T>(&self, name: &str) -> Arranged<G, K, V, R, TraceAgent<K, V, G::Timestamp, R, T>>
+    fn arrange_named<Tr>(&self, name: &str) -> Arranged<G, TraceAgent<Tr>>
     where
-        T: Trace<K, V, G::Timestamp, R>+'static,
-        T::Batch: Batch<K, V, G::Timestamp, R>,
+        Tr: Trace+TraceReader<Key=K,Val=V,Time=G::Timestamp,R=R>+'static,
+        Tr::Batch: Batch<K, V, G::Timestamp, R>,
+        Tr::Cursor: Cursor<K, V, G::Timestamp, R>,
     {
-
         let mut reader = None;
 
         // fabricate a data-parallel operator using the `unary_notify` pattern.
@@ -837,14 +881,14 @@ where
                 };
 
                 // Where we will deposit received updates, and from which we extract batches.
-                let mut batcher = <T::Batch as Batch<K,V,G::Timestamp,R>>::Batcher::new();
+                let mut batcher = <Tr::Batch as Batch<K,V,G::Timestamp,R>>::Batcher::new();
 
                 // Capabilities for the lower envelope of updates in `batcher`.
                 let mut capabilities = Antichain::<Capability<G::Timestamp>>::new();
 
                 let mut buffer = Vec::new();
 
-                let empty_trace = T::new(_info, logger);
+                let empty_trace = Tr::new(_info, logger);
                 let (reader_local, mut writer) = TraceAgent::new(empty_trace);
                 *reader = Some(reader_local);
 
@@ -929,10 +973,11 @@ impl<G: Scope, K: ExchangeData+Hashable, R: ExchangeData+Monoid> Arrange<G, K, (
 where
     G::Timestamp: Lattice+Ord,
 {
-    fn arrange_named<T>(&self, name: &str) -> Arranged<G, K, (), R, TraceAgent<K, (), G::Timestamp, R, T>>
+    fn arrange_named<Tr>(&self, name: &str) -> Arranged<G, TraceAgent<Tr>>
     where
-        T: Trace<K, (), G::Timestamp, R>+'static,
-        T::Batch: Batch<K, (), G::Timestamp, R>
+        Tr: Trace+TraceReader<Key=K, Val=(), Time=G::Timestamp, R=R>+'static,
+        Tr::Batch: Batch<K, (), G::Timestamp, R>,
+        Tr::Cursor: Cursor<K, (), G::Timestamp, R>,
     {
         self.map(|k| (k, ()))
             .arrange_named(name)
@@ -964,12 +1009,14 @@ where G::Timestamp: Lattice+Ord {
     /// This operator arranges a stream of values into a shared trace, whose contents it maintains.
     /// This trace is current for all times completed by the output stream, which can be used to
     /// safely identify the stable times and values in the trace.
-    fn arrange_by_key(&self) -> Arranged<G, K, V, R, TraceAgent<K, V, G::Timestamp, R, DefaultValTrace<K, V, G::Timestamp, R>>>;
+    fn arrange_by_key(&self) -> Arranged<G, TraceAgent<DefaultValTrace<K, V, G::Timestamp, R>>>;
 }
 
 impl<G: Scope, K: ExchangeData+Hashable, V: ExchangeData, R: ExchangeData+Monoid> ArrangeByKey<G, K, V, R> for Collection<G, (K,V), R>
-where G::Timestamp: Lattice+Ord {
-    fn arrange_by_key(&self) -> Arranged<G, K, V, R, TraceAgent<K, V, G::Timestamp, R, DefaultValTrace<K, V, G::Timestamp, R>>> {
+where
+    G::Timestamp: Lattice+Ord
+{
+    fn arrange_by_key(&self) -> Arranged<G, TraceAgent<DefaultValTrace<K, V, G::Timestamp, R>>> {
         self.arrange()
     }
 }
@@ -980,19 +1027,23 @@ where G::Timestamp: Lattice+Ord {
 /// map. This can result in many hash calls, and in some cases it may help to first transform `K` to the
 /// pair `(u64, K)` of hash value and key.
 pub trait ArrangeBySelf<G: Scope, K: Data+Hashable, R: Monoid>
-where G::Timestamp: Lattice+Ord {
+where
+    G::Timestamp: Lattice+Ord
+{
     /// Arranges a collection of `Key` records by `Key`.
     ///
     /// This operator arranges a collection of records into a shared trace, whose contents it maintains.
     /// This trace is current for all times complete in the output stream, which can be used to safely
     /// identify the stable times and values in the trace.
-    fn arrange_by_self(&self) -> Arranged<G, K, (), R, TraceAgent<K, (), G::Timestamp, R, DefaultKeyTrace<K, G::Timestamp, R>>>;
+    fn arrange_by_self(&self) -> Arranged<G, TraceAgent<DefaultKeyTrace<K, G::Timestamp, R>>>;
 }
 
 
 impl<G: Scope, K: ExchangeData+Hashable, R: ExchangeData+Monoid> ArrangeBySelf<G, K, R> for Collection<G, K, R>
-where G::Timestamp: Lattice+Ord {
-    fn arrange_by_self(&self) -> Arranged<G, K, (), R, TraceAgent<K, (), G::Timestamp, R, DefaultKeyTrace<K, G::Timestamp, R>>> {
+where
+    G::Timestamp: Lattice+Ord
+{
+    fn arrange_by_self(&self) -> Arranged<G, TraceAgent<DefaultKeyTrace<K, G::Timestamp, R>>> {
         self.map(|k| (k, ()))
             .arrange()
     }
