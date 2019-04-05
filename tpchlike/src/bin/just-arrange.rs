@@ -63,29 +63,6 @@ fn main() {
 
             context.index = arrange;
 
-            queries::query01::query_arranged(&mut context);
-            queries::query02::query_arranged(&mut context);
-            queries::query03::query_arranged(&mut context);
-            queries::query04::query_arranged(&mut context);
-            queries::query05::query_arranged(&mut context);
-            queries::query06::query_arranged(&mut context);
-            queries::query07::query_arranged(&mut context);
-            queries::query08::query_arranged(&mut context);
-            queries::query09::query_arranged(&mut context);
-            queries::query10::query_arranged(&mut context);
-            // queries::query11::query_arranged(&mut context);
-            queries::query12::query_arranged(&mut context);
-            queries::query13::query_arranged(&mut context);
-            queries::query14::query_arranged(&mut context);
-            queries::query15::query_arranged(&mut context);
-            queries::query16::query_arranged(&mut context);
-            queries::query17::query_arranged(&mut context);
-            queries::query18::query_arranged(&mut context);
-            queries::query19::query_arranged(&mut context);
-            // queries::query20::query_arranged(&mut context);
-            // queries::query21::query_arranged(&mut context);
-            // queries::query22::query_arranged(&mut context);
-
             // return the various input handles, and the list of probes.
             let inputs = (
                 Some(cust_in),
