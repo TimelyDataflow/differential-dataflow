@@ -825,7 +825,7 @@ where
 pub trait Arrange<G: Scope, K, V, R: Monoid>
 where
     G::Timestamp: Lattice,
-    K: Data+Hashable,
+    K: Data,
     V: Data,
 {
     /// Arranges a stream of `(Key, Val)` updates by `Key`. Accepts an empty instance of the trace type.
@@ -835,6 +835,7 @@ where
     /// is the correct way to determine that times in the shared trace are committed.
     fn arrange<Tr>(&self) -> Arranged<G, TraceAgent<Tr>>
     where
+        K: Hashable,
         Tr: Trace+TraceReader<Key=K,Val=V,Time=G::Timestamp,R=R>+'static,
         Tr::Batch: Batch<K, V, G::Timestamp, R>,
         Tr::Cursor: Cursor<K, V, G::Timestamp, R>,
@@ -849,6 +850,7 @@ where
     /// is the correct way to determine that times in the shared trace are committed.
     fn arrange_named<Tr>(&self, name: &str) -> Arranged<G, TraceAgent<Tr>>
     where
+        K: Hashable,
         Tr: Trace+TraceReader<Key=K,Val=V,Time=G::Timestamp,R=R>+'static,
         Tr::Batch: Batch<K, V, G::Timestamp, R>,
         Tr::Cursor: Cursor<K, V, G::Timestamp, R>,
