@@ -26,7 +26,7 @@ use timely::dataflow::operators::{Enter, Map};
 use timely::order::{PartialOrder, TotalOrder};
 use timely::dataflow::{Scope, Stream};
 use timely::dataflow::operators::generic::{Operator, source};
-use timely::dataflow::channels::pact::{Pipeline, Exchange};
+use timely::dataflow::channels::pact::{ParallelizationContract, Pipeline, Exchange};
 use timely::progress::Timestamp;
 use timely::progress::frontier::Antichain;
 use timely::dataflow::operators::{Capability, CapabilitySet};
@@ -825,6 +825,8 @@ where
 pub trait Arrange<G: Scope, K, V, R: Monoid>
 where
     G::Timestamp: Lattice,
+    K: Data+Hashable,
+    V: Data,
 {
     /// Arranges a stream of `(Key, Val)` updates by `Key`. Accepts an empty instance of the trace type.
     ///
@@ -850,15 +852,32 @@ where
         Tr: Trace+TraceReader<Key=K,Val=V,Time=G::Timestamp,R=R>+'static,
         Tr::Batch: Batch<K, V, G::Timestamp, R>,
         Tr::Cursor: Cursor<K, V, G::Timestamp, R>,
-        ;
+    {
+        let exchange = Exchange::new(move |update: &((K,V),G::Timestamp,R)| (update.0).0.hashed().as_u64());
+        self.arrange_core(exchange, name)
+    }
+
+    /// Arranges a stream of `(Key, Val)` updates by `Key`. Accepts an empty instance of the trace type.
+    ///
+    /// This operator arranges a stream of values into a shared trace, whose contents it maintains.
+    /// This trace is current for all times marked completed in the output stream, and probing this stream
+    /// is the correct way to determine that times in the shared trace are committed.
+    fn arrange_core<P, Tr>(&self, pact: P, name: &str) -> Arranged<G, TraceAgent<Tr>>
+    where
+        P: ParallelizationContract<G::Timestamp, ((K,V),G::Timestamp,R)>,
+        Tr: Trace+TraceReader<Key=K,Val=V,Time=G::Timestamp,R=R>+'static,
+        Tr::Batch: Batch<K, V, G::Timestamp, R>,
+        Tr::Cursor: Cursor<K, V, G::Timestamp, R>,
+    ;
 }
 
 impl<G: Scope, K: Data+Hashable, V: Data, R: Monoid> Arrange<G, K, V, R> for Collection<G, (K, V), R>
 where
     G::Timestamp: Lattice+Ord,
-{
-    fn arrange_named<Tr>(&self, name: &str) -> Arranged<G, TraceAgent<Tr>>
+{    
+    fn arrange_core<P, Tr>(&self, pact: P, name: &str) -> Arranged<G, TraceAgent<Tr>>
     where
+        P: ParallelizationContract<G::Timestamp, ((K,V),G::Timestamp,R)>,
         Tr: Trace+TraceReader<Key=K,Val=V,Time=G::Timestamp,R=R>+'static,
         Tr::Batch: Batch<K, V, G::Timestamp, R>,
         Tr::Cursor: Cursor<K, V, G::Timestamp, R>,
@@ -869,9 +888,8 @@ where
         let stream = {
 
             let reader = &mut reader;
-            let exchange = Exchange::new(move |update: &((K,V),G::Timestamp,R)| (update.0).0.hashed().as_u64());
 
-            self.inner.unary_frontier(exchange, name, move |_capability, _info| {
+            self.inner.unary_frontier(pact, name, move |_capability, _info| {
 
                 // Attempt to acquire a logger for arrange events.
                 let logger = {
@@ -973,14 +991,15 @@ impl<G: Scope, K: Data+Hashable, R: Monoid> Arrange<G, K, (), R> for Collection<
 where
     G::Timestamp: Lattice+Ord,
 {
-    fn arrange_named<Tr>(&self, name: &str) -> Arranged<G, TraceAgent<Tr>>
+    fn arrange_core<P, Tr>(&self, pact: P, name: &str) -> Arranged<G, TraceAgent<Tr>>
     where
+        P: ParallelizationContract<G::Timestamp, ((K,()),G::Timestamp,R)>,
         Tr: Trace+TraceReader<Key=K, Val=(), Time=G::Timestamp, R=R>+'static,
         Tr::Batch: Batch<K, (), G::Timestamp, R>,
         Tr::Cursor: Cursor<K, (), G::Timestamp, R>,
     {
         self.map(|k| (k, ()))
-            .arrange_named(name)
+            .arrange_core(pact, name)
     }
 }
 
