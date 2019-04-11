@@ -74,14 +74,14 @@ Alternately, we can use the same relation to find people living at a given addre
 
 As the underlying `ordered_by` and `person_address` collections change, the derived `deliver_to` and `can_sign_for` collections will change as well, maintaining correct and consistent results corresponding to the inputs.
 
-## Group
+## Reduce
 
-The `group` operator applies to one input collection whose records have the form `(key, val)`, and it allows you produce output as an arbitrary function of the key and the list of values. The following example starts from the list of all orders, and produces any duplicate packages in the ordering system (those with count two or greater).
+The `reduce` operator applies to one input collection whose records have the form `(key, val)`, and it allows you produce output as an arbitrary function of the key and the list of values. The following example starts from the list of all orders, and produces any duplicate packages in the ordering system (those with count two or greater).
 
 ```rust,ignore
     ordered_by
         .map(|(package, person)| (person, package))
-        .group(|person, packages, duplicates| {
+        .reduce(|person, packages, duplicates| {
             for (package, count) in packages.iter() {
                 if count > 1 {
                     duplicates.push((package.clone(), count));
