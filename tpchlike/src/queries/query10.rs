@@ -5,7 +5,7 @@ use timely::dataflow::operators::probe::Handle as ProbeHandle;
 use differential_dataflow::operators::*;
 use differential_dataflow::lattice::Lattice;
 
-use {Collections, Context};
+use {Arrangements, Experiment, Collections};
 use ::types::create_date;
 
 // -- $ID$
@@ -87,18 +87,20 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
 }
 
 pub fn query_arranged<G: Scope<Timestamp=usize>>(
-    context: &mut Context<G>,
+    scope: &mut G,
+    probe: &mut ProbeHandle<usize>,
+    experiment: &mut Experiment,
+    arrangements: &mut Arrangements,
 )
+where
+    G::Timestamp: Lattice+TotalOrder+Ord
 {
-    let order = context.orders();
-    let customer = context.customers();
-    let nation = context.nations();
+    let arrangements = arrangements.in_scope(scope, experiment);
 
     use differential_dataflow::operators::arrange::ArrangeBySelf;
 
-    context
-        .collections
-        .lineitems()
+    experiment
+        .lineitem(scope)
         .explode(|x|
             if starts_with(&x.return_flag, b"R") {
                 Some((x.order_key, (x.extended_price * (100 - x.discount)) as isize))
@@ -106,17 +108,17 @@ pub fn query_arranged<G: Scope<Timestamp=usize>>(
             else { None }
         )
         .arrange_by_self()
-        .join_core(&order, |_ok,&(),o| {
+        .join_core(&arrangements.order, |_ok,&(),o| {
             if create_date(1993,10,1) < o.order_date && o.order_date <= create_date(1994,1,1) {
                 Some(o.cust_key)
             }
             else { None }
         })
         .arrange_by_self()
-        .join_core(&customer, |&ck,&(),c| {
+        .join_core(&arrangements.customer, |&ck,&(),c| {
             Some((c.nation_key, (ck,c.name,c.acctbal,c.address,c.phone,c.comment)))
         })
-        .join_core(&nation, |_nk,&data,n| Some((n.name, data)))
+        .join_core(&arrangements.nation, |_nk,&data,n| Some((n.name, data)))
         .count_total()
-        .probe_with(&mut context.probe);
+        .probe_with(probe);
 }

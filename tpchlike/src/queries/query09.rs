@@ -5,7 +5,7 @@ use timely::dataflow::operators::probe::Handle as ProbeHandle;
 use differential_dataflow::operators::*;
 use differential_dataflow::lattice::Lattice;
 
-use {Collections, Context};
+use {Arrangements, Experiment, Collections};
 
 // -- $ID$
 // -- TPC-H/TPC-R Product Type Profit Measure Query (Q9)
@@ -80,35 +80,30 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
 }
 
 pub fn query_arranged<G: Scope<Timestamp=usize>>(
-    context: &mut Context<G>,
+    scope: &mut G,
+    probe: &mut ProbeHandle<usize>,
+    experiment: &mut Experiment,
+    arrangements: &mut Arrangements,
 )
+where
+    G::Timestamp: Lattice+TotalOrder+Ord
 {
-    let order = context.orders();
-    let part = context.parts();
-    let supplier = context.suppliers();
-    let nation = context.nations();
+    let arrangements = arrangements.in_scope(scope, experiment);
 
-    let lineitems =
-    context
-        .collections
-        .lineitems()
-        .map(|l| ((l.part_key, l.supp_key), (l.order_key, l.extended_price * (100 - l.discount) / 100, l.quantity)));
-
-    context
-        .collections
-        .partsupps()
-        .map(|ps| (ps.part_key, (ps.supp_key, ps.supplycost)))
-        .join_core(&part, |&pk,&(sk,sc),p| {
+    experiment
+        .lineitem(scope)
+        .map(|l| (l.part_key, (l.supp_key, l.order_key, l.extended_price * (100 - l.discount) / 100, l.quantity)))
+        .join_core(&arrangements.part, |&pk,&(sk,ok,ep,qu),p| {
             if substring(&p.name.as_bytes(), b"green") {
-                Some(((pk,sk),sc))
+                Some(((pk,sk),(ok,ep,qu)))
             }
             else { None }
         })
-        .join_map(&lineitems, |&(_pk,sk),&sc,&(ok,ep,qu)| (ok,(sk, ep - (qu*sc))))
+        .join_core(&arrangements.partsupp, |&(_pk,sk),&(ok,ep,qu),s| Some((ok, (sk, ep - (qu * s.supplycost)))))
         .explode(|(ok,(sk,am))| Some(((ok,sk), am as isize)))
-        .join_core(&order, |_ok,&sk,o| Some((sk,o.order_date >> 16)))
-        .join_core(&supplier, |_sk,&yr,s| Some((s.nation_key, yr)))
-        .join_core(&nation, |_nk,&yr,n| Some((n.name,yr)))
+        .join_core(&arrangements.order, |_ok,&sk,o| Some((sk,o.order_date >> 16)))
+        .join_core(&arrangements.supplier, |_sk,&yr,s| Some((s.nation_key, yr)))
+        .join_core(&arrangements.nation, |_nk,&yr,n| Some((n.name,yr)))
         .count_total()
-        .probe_with(&mut context.probe);
+        .probe_with(probe);
 }

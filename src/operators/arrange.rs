@@ -835,7 +835,9 @@ where
     /// is the correct way to determine that times in the shared trace are committed.
     fn arrange<Tr>(&self) -> Arranged<G, TraceAgent<Tr>>
     where
-        K: Hashable,
+        K: ExchangeData+Hashable,
+        V: ExchangeData,
+        R: ExchangeData,
         Tr: Trace+TraceReader<Key=K,Val=V,Time=G::Timestamp,R=R>+'static,
         Tr::Batch: Batch<K, V, G::Timestamp, R>,
         Tr::Cursor: Cursor<K, V, G::Timestamp, R>,
@@ -850,7 +852,9 @@ where
     /// is the correct way to determine that times in the shared trace are committed.
     fn arrange_named<Tr>(&self, name: &str) -> Arranged<G, TraceAgent<Tr>>
     where
-        K: Hashable,
+        K: ExchangeData+Hashable,
+        V: ExchangeData,
+        R: ExchangeData,
         Tr: Trace+TraceReader<Key=K,Val=V,Time=G::Timestamp,R=R>+'static,
         Tr::Batch: Batch<K, V, G::Timestamp, R>,
         Tr::Cursor: Cursor<K, V, G::Timestamp, R>,
@@ -876,7 +880,7 @@ where
 impl<G: Scope, K: ExchangeData+Hashable, V: ExchangeData, R: Monoid+ExchangeData> Arrange<G, K, V, R> for Collection<G, (K, V), R>
 where
     G::Timestamp: Lattice+Ord,
-{    
+{
     fn arrange_core<P, Tr>(&self, pact: P, name: &str) -> Arranged<G, TraceAgent<Tr>>
     where
         P: ParallelizationContract<G::Timestamp, ((K,V),G::Timestamp,R)>,
