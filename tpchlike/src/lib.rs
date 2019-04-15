@@ -20,14 +20,14 @@ pub mod queries;
 pub use types::*;
 
 pub struct InputHandles {
-    pub customer:   InputHandle<usize, (Customer, usize, isize)>,
-    pub lineitem:   InputHandle<usize, (Rc<LineItem>, usize, isize)>,
-    pub nation:     InputHandle<usize, (Nation, usize, isize)>,
-    pub order:      InputHandle<usize, (Order, usize, isize)>,
-    pub part:       InputHandle<usize, (Part, usize, isize)>,
-    pub partsupp:   InputHandle<usize, (PartSupp, usize, isize)>,
-    pub region:     InputHandle<usize, (Region, usize, isize)>,
-    pub supplier:   InputHandle<usize, (Supplier, usize, isize)>,
+    pub customer: InputHandle<usize, (Customer, usize, isize)>,
+    pub lineitem: InputHandle<usize, (Rc<LineItem>, usize, isize)>,
+    pub nation: InputHandle<usize, (Nation, usize, isize)>,
+    pub order: InputHandle<usize, (Order, usize, isize)>,
+    pub part: InputHandle<usize, (Part, usize, isize)>,
+    pub partsupp: InputHandle<usize, (PartSupp, usize, isize)>,
+    pub region: InputHandle<usize, (Region, usize, isize)>,
+    pub supplier: InputHandle<usize, (Supplier, usize, isize)>,
 }
 
 impl InputHandles {
@@ -43,40 +43,25 @@ impl InputHandles {
             supplier: InputHandle::new(),
         }
     }
-    pub fn advance_to(&mut self, time: usize) {
-        self.customer.advance_to(time);
-        self.lineitem.advance_to(time);
-        self.nation.advance_to(time);
-        self.order.advance_to(time);
-        self.part.advance_to(time);
-        self.partsupp.advance_to(time);
-        self.region.advance_to(time);
-        self.supplier.advance_to(time);
+    pub fn advance_to(&mut self, round: usize) {
+        self.customer.advance_to(round);
+        self.lineitem.advance_to(round);
+        self.nation.advance_to(round);
+        self.order.advance_to(round);
+        self.part.advance_to(round);
+        self.partsupp.advance_to(round);
+        self.region.advance_to(round);
+        self.supplier.advance_to(round);
     }
-}
-
-pub struct Experiment {
-    pub index: usize,
-    pub lineitem: InputHandle<usize, (Rc<LineItem>, usize, isize)>,
-    pub buttons: Vec<ShutdownButton<CapabilitySet<usize>>>,
-}
-
-impl Experiment {
-    pub fn new(index: usize) -> Self {
-        Self {
-            index,
-            lineitem: InputHandle::new(),
-            buttons: Vec::new(),
-        }
-    }
-    pub fn lineitem<G: Scope<Timestamp=usize>>(&mut self, scope: &mut G) -> Collection<G, Rc<LineItem>, isize> {
-        use timely::dataflow::operators::Input;
-        use differential_dataflow::AsCollection;
-
-        scope.input_from(&mut self.lineitem).as_collection()
-    }
-    pub fn close(mut self) {
-        for mut button in self.buttons.drain(..) { button.press(); }
+    pub fn close(self) {
+        self.customer.close();
+        self.lineitem.close();
+        self.nation.close();
+        self.order.close();
+        self.part.close();
+        self.partsupp.close();
+        self.region.close();
+        self.supplier.close();
     }
 }
 
@@ -257,7 +242,33 @@ impl Arrangements {
         self.nation.advance_by(frontier);
         self.order.advance_by(frontier);
         self.part.advance_by(frontier);
+        self.partsupp.advance_by(frontier);
         self.region.advance_by(frontier);
         self.supplier.advance_by(frontier);
+    }
+}
+
+pub struct Experiment {
+    pub index: usize,
+    pub lineitem: InputHandle<usize, (Rc<LineItem>, usize, isize)>,
+    pub buttons: Vec<ShutdownButton<CapabilitySet<usize>>>,
+}
+
+impl Experiment {
+    pub fn new(index: usize) -> Self {
+        Self {
+            index,
+            lineitem: InputHandle::new(),
+            buttons: Vec::new(),
+        }
+    }
+    pub fn lineitem<G: Scope<Timestamp=usize>>(&mut self, scope: &mut G) -> Collection<G, Rc<LineItem>, isize> {
+        use timely::dataflow::operators::Input;
+        use differential_dataflow::AsCollection;
+        scope.input_from(&mut self.lineitem).as_collection()
+    }
+    pub fn close(mut self) {
+        self.lineitem.close();
+        for mut button in self.buttons.drain(..) { button.press(); }
     }
 }

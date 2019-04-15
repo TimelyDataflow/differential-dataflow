@@ -102,10 +102,14 @@ pub fn query_arranged<G: Scope<Timestamp=usize>>(
     probe: &mut ProbeHandle<usize>,
     experiment: &mut Experiment,
     arrangements: &mut Arrangements,
+    round: usize,
 )
 where
     G::Timestamp: Lattice+TotalOrder+Ord
 {
+    use timely::dataflow::operators::Map;
+    use differential_dataflow::AsCollection;
+
     let arrangements = arrangements.in_scope(scope, experiment);
 
     let customers =
@@ -121,14 +125,24 @@ where
                 }
             }
             else { None }
-        });
+        })
+        .inner
+        .map(move |(d,t,r)| (d, ::std::cmp::max(t,round),r))
+        .as_collection();
 
     let averages =
     customers
         .explode(|(cc, acctbal, _)| Some(((cc, ()), DiffPair::new(acctbal as isize, 1))))
         .reduce_abelian::<_,DefaultValTrace<_,_,_,_>>(|_k,s,t| t.push((s[0].1, 1)));
 
-    let orders = arrangements.order.as_collection(|_,o| o.cust_key).distinct_total();
+    let orders =
+    arrangements
+        .order
+        .as_collection(|_,o| o.cust_key)
+        .inner
+        .map(move |(d,t,r)| (d, ::std::cmp::max(t,round),r))
+        .as_collection()
+        .distinct_total();
 
     customers
         .map(|(cc, acct, key)| (key, (cc, acct)))

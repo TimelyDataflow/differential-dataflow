@@ -118,13 +118,12 @@ where
 
     experiment
         .lineitem(scope)
-        .flat_map(|l|
+        .explode(|l|
             if l.ship_date >= create_date(1994, 1, 1) && l.ship_date < create_date(1995, 1, 1) {
-                Some((l.part_key, (l.supp_key, l.quantity)))
+                Some(((l.part_key, l.supp_key), l.quantity as isize))
             }
             else { None }
         )
-        .explode(|(pk,(sk,qu))| Some(((pk,sk), qu as isize)))
         .join_core(&arrangements.part, |&pk,&sk,p|
             if p.name.as_bytes() == b"forest" { Some((pk,sk)) } else { None }
         )

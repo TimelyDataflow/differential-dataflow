@@ -81,15 +81,22 @@ pub fn query_arranged<G: Scope<Timestamp=usize>>(
     probe: &mut ProbeHandle<usize>,
     experiment: &mut Experiment,
     arrangements: &mut Arrangements,
+    round: usize,
 )
 where
     G::Timestamp: Lattice+TotalOrder+Ord
 {
+    use timely::dataflow::operators::Map;
+    use differential_dataflow::AsCollection;
+
     let arrangements = arrangements.in_scope(scope, experiment);
 
     arrangements
         .partsupp
         .as_collection(|_,ps| ((ps.supp_key, ps.part_key), (ps.supplycost as isize) * (ps.availqty as isize)))
+        .inner
+        .map(move |(d,t,r)| (d, ::std::cmp::max(t,round),r))
+        .as_collection()
         .explode(|((sk,pk),prod)| Some(((sk,pk),prod)))
         .join_core(&arrangements.supplier, |_sk,&pk,s| Some((s.nation_key, pk)))
         .join_core(&arrangements.nation, |_nk,&pk,n|

@@ -79,7 +79,7 @@ fn main() {
                 let mut experiment = Experiment::new(query);
                 match query {
                      0 => queries::query01::query_arranged(scope, &mut probe, &mut experiment, &mut traces),
-                     1 => queries::query02::query_arranged(scope, &mut probe, &mut experiment, &mut traces),
+                     1 => queries::query02::query_arranged(scope, &mut probe, &mut experiment, &mut traces, this_round-1),
                      2 => queries::query03::query_arranged(scope, &mut probe, &mut experiment, &mut traces),
                      3 => queries::query04::query_arranged(scope, &mut probe, &mut experiment, &mut traces),
                      4 => queries::query05::query_arranged(scope, &mut probe, &mut experiment, &mut traces),
@@ -88,18 +88,18 @@ fn main() {
                      7 => queries::query08::query_arranged(scope, &mut probe, &mut experiment, &mut traces),
                      8 => queries::query09::query_arranged(scope, &mut probe, &mut experiment, &mut traces),
                      9 => queries::query10::query_arranged(scope, &mut probe, &mut experiment, &mut traces),
-                    10 => queries::query11::query_arranged(scope, &mut probe, &mut experiment, &mut traces),
+                    10 => queries::query11::query_arranged(scope, &mut probe, &mut experiment, &mut traces, this_round-1),
                     11 => queries::query12::query_arranged(scope, &mut probe, &mut experiment, &mut traces),
-                    12 => queries::query13::query_arranged(scope, &mut probe, &mut experiment, &mut traces),
+                    12 => queries::query13::query_arranged(scope, &mut probe, &mut experiment, &mut traces, this_round-1),
                     13 => queries::query14::query_arranged(scope, &mut probe, &mut experiment, &mut traces),
                     14 => queries::query15::query_arranged(scope, &mut probe, &mut experiment, &mut traces),
-                    15 => queries::query16::query_arranged(scope, &mut probe, &mut experiment, &mut traces),
+                    15 => queries::query16::query_arranged(scope, &mut probe, &mut experiment, &mut traces, this_round-1),
                     16 => queries::query17::query_arranged(scope, &mut probe, &mut experiment, &mut traces),
                     17 => queries::query18::query_arranged(scope, &mut probe, &mut experiment, &mut traces),
                     18 => queries::query19::query_arranged(scope, &mut probe, &mut experiment, &mut traces),
                     19 => queries::query20::query_arranged(scope, &mut probe, &mut experiment, &mut traces),
                     20 => queries::query21::query_arranged(scope, &mut probe, &mut experiment, &mut traces),
-                    21 => queries::query22::query_arranged(scope, &mut probe, &mut experiment, &mut traces),
+                    21 => queries::query22::query_arranged(scope, &mut probe, &mut experiment, &mut traces, this_round-1),
                     _ => { },
                 }
                 experiment.lineitem.advance_to(this_round);
@@ -116,8 +116,10 @@ fn main() {
             let next_round = 1 + 8 * (round + 1) * physical_batch;
 
             // introduce physical batch of data for each input with remaining data.
-            if let Some(mut data) = customers.pop() { inputs.customer.send_batch(&mut data); }
+            let mut total_length = 0;
+            if let Some(mut data) = customers.pop() { total_length += data.len(); inputs.customer.send_batch(&mut data); }
             if let Some(mut data) = lineitems.pop() {
+                total_length += data.len();
                 let mut data = data.drain(..).map(|(x,y,z)| (Rc::new(x),y,z)).collect::<Vec<_>>();
                 let mut temp = Vec::new();
                 for experiment in experiments.iter_mut() {
@@ -127,12 +129,12 @@ fn main() {
                 }
                 inputs.lineitem.send_batch(&mut data);
             }
-            if let Some(mut data) = nations.pop() { inputs.nation.send_batch(&mut data); }
-            if let Some(mut data) = orders.pop() { inputs.order.send_batch(&mut data); }
-            if let Some(mut data) = parts.pop() { inputs.part.send_batch(&mut data); }
-            if let Some(mut data) = partsupps.pop() { inputs.partsupp.send_batch(&mut data); }
-            if let Some(mut data) = regions.pop() { inputs.region.send_batch(&mut data); }
-            if let Some(mut data) = suppliers.pop() { inputs.supplier.send_batch(&mut data); }
+            if let Some(mut data) = nations.pop() { total_length += data.len(); inputs.nation.send_batch(&mut data); }
+            if let Some(mut data) = orders.pop() { total_length += data.len(); inputs.order.send_batch(&mut data); }
+            if let Some(mut data) = parts.pop() { total_length += data.len(); inputs.part.send_batch(&mut data); }
+            if let Some(mut data) = partsupps.pop() { total_length += data.len(); inputs.partsupp.send_batch(&mut data); }
+            if let Some(mut data) = regions.pop() { total_length += data.len(); inputs.region.send_batch(&mut data); }
+            if let Some(mut data) = suppliers.pop() { total_length += data.len(); inputs.supplier.send_batch(&mut data); }
 
             inputs.advance_to(next_round);
             traces.advance_by(&[next_round]);
@@ -141,7 +143,7 @@ fn main() {
             worker.step_while(|| probe.less_than(&next_round));
             let work = timer.elapsed() - start;
 
-            println!("{:?}\tround {}\tinstalled {} in {:?}\tupdated in {:?}", timer.elapsed(), round, query, install.as_nanos(), work.as_nanos());
+            println!("{:?}\tround {}\tinstalled {} in {:?}\tupdated {} in {:?}", timer.elapsed(), round, query, install.as_nanos(), total_length, work.as_nanos());
 
             round += 1;
         }
