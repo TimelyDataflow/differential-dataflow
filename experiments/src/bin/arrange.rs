@@ -10,17 +10,20 @@ use timely::dataflow::operators::{Exchange, Probe};
 // use timely::progress::timestamp::RootTimestamp;
 
 use differential_dataflow::input::Input;
-use differential_dataflow::operators::arrange::ArrangeBySelf;
+use differential_dataflow::operators::arrange::{Arrange, ArrangeBySelf, ArrangeByKey};
 use differential_dataflow::operators::count::CountTotal;
 use differential_dataflow::operators::threshold::ThresholdTotal;
+use differential_dataflow::operators::{Join, JoinCore};
 
-// use differential_dataflow::trace::implementations::ord::OrdKeySpine;
+use differential_dataflow::trace::implementations::ord::OrdKeySpine;
 
 #[derive(Debug)]
 enum Comp {
     Nothing,
     Exchange,
     Arrange,
+    Maintain,
+    SelfJoin,
     Count,
     Distinct,
 }
@@ -31,23 +34,100 @@ enum Mode {
     ClosedLoop,
 }
 
+#[derive(Debug)]
+enum Duration {
+    Overwrite(usize),
+    Seconds(usize),
+}
+
+#[derive(Debug)]
+enum ZeroCopy {
+    No,
+    Thread,
+}
+
+#[derive(Debug)]
+enum Alloc {
+    Jemalloc,
+    JemallocAlloc,
+}
+
+#[derive(Debug)]
+enum InputStrategy {
+    Ms,
+    PowerOfTwo,
+}
+
 fn main() {
 
-    let keys: usize = std::env::args().nth(1).unwrap().parse().unwrap();
-    let recs: usize = std::env::args().nth(2).unwrap().parse().unwrap();
-    let rate: usize = std::env::args().nth(3).unwrap().parse().unwrap();
-    let work: usize = std::env::args().nth(4).unwrap().parse().unwrap_or(usize::max_value());
-    let comp: Comp = match std::env::args().nth(5).unwrap().as_str() {
+    let mut args = std::env::args();
+    args.next();
+
+    let keys: usize = args.next().unwrap().parse().unwrap();
+    let recs: usize = args.next().unwrap().parse().unwrap();
+    let rate: usize = args.next().unwrap().parse().unwrap();
+    let comp: Comp = match args.next().unwrap().as_str() {
         "exchange" => Comp::Exchange,
         "arrange" => Comp::Arrange,
+        "maintain" => Comp::Maintain,
+        "selfjoin" => Comp::SelfJoin,
         "count" => Comp::Count,
         "distinct" => Comp::Distinct,
-        _ => Comp::Nothing,
+        "nothing" => Comp::Nothing,
+        _ => panic!("invalid comp"),
     };
-    let mode: Mode = if std::env::args().any(|x| x == "open-loop") { Mode::OpenLoop } else { Mode::ClosedLoop };
+    let mode: Mode = match args.next().unwrap().as_str() {
+        "openloop" => Mode::OpenLoop,
+        "closedloop" => Mode::ClosedLoop,
+        _ => panic!("invalid mode"),
+    };
+    let duration: Duration = {
+        let duration_mode = args.next().unwrap();
+        let duration_param: usize = args.next().unwrap().parse().unwrap();
+        match duration_mode.as_str() {
+            "overwrite" => Duration::Overwrite(duration_param),
+            "seconds" => Duration::Seconds(duration_param),
+            _ => panic!("invalid duration mode"),
+        }
+    };
+    let zerocopy: ZeroCopy = {
+        let zerocopy_mode = args.next().unwrap();
+        match zerocopy_mode.as_str() {
+            "no" => ZeroCopy::No,
+            "thread" => ZeroCopy::Thread,
+            _ => panic!("boom"),
+        }
+    };
+    let zerocopy_workers: usize = args.next().unwrap().parse().unwrap();
+
+    let jemalloc: Alloc = {
+        let jemalloc_mode = args.next().unwrap();
+        match jemalloc_mode.as_str() {
+            "jemalloc" => Alloc::Jemalloc,
+            "jemallocalloc" => Alloc::JemallocAlloc,
+            _ => panic!("boom"),
+        }
+    };
+
+    let inputstrategy: InputStrategy = {
+        let inputstrategy_mode = args.next().unwrap();
+        match inputstrategy_mode.as_str() {
+            "ms" => InputStrategy::Ms,
+            "poweroftwo" => InputStrategy::PowerOfTwo,
+            _ => panic!("boom"),
+        }
+    };
 
     // define a new computational scope, in which to run BFS
-    timely::execute_from_args(std::env::args().skip(4), move |worker| {
+    macro_rules! worker_closure { () => (move |worker| {
+
+        let tmp = match jemalloc {
+            Alloc::Jemalloc => Vec::<usize>::new(),
+            Alloc::JemallocAlloc => {
+                eprintln!("jemalloc alloc!");
+                Vec::<usize>::with_capacity(1 << 30)
+            },
+        };
 
         let index = worker.index();
         let core_ids = core_affinity::get_core_ids().unwrap();
@@ -61,9 +141,14 @@ fn main() {
             let probe = match comp {
                 Comp::Nothing => data.probe(),
                 Comp::Exchange => data.inner.exchange(|&(x,_,_): &((usize,()),_,_)| x.0 as u64).probe(),
-                Comp::Arrange => data.arrange_by_self().stream.probe(),
-                Comp::Count => data.arrange_by_self().count_total().probe(),
-                Comp::Distinct => data.arrange_by_self().distinct_total().probe(),
+                Comp::Arrange => data.arrange_by_key().stream.probe(),
+                Comp::Maintain => data.arrange_by_key().join(&data.filter(|_| false)).probe(),
+                Comp::SelfJoin => {
+                    let arranged = data.arrange_by_key();
+                    arranged.join_core(&arranged, |_key, &a, &b| if a == b { Some((a, b)) } else { None }).probe()
+                },
+                Comp::Count => data.arrange_by_key().count_total().probe(),
+                Comp::Distinct => data.arrange_by_key().distinct_total().probe(),
             };
 
             // OrdKeySpine::<usize, Product<RootTimestamp,u64>,isize>::with_effort(work)
@@ -110,7 +195,11 @@ fn main() {
                     let mut wave = 1;
                     let mut elapsed = timer.elapsed();
 
-                    while elapsed.as_secs() < 25 {
+                    let seconds = match duration {
+                        Duration::Seconds(s) => s,
+                        _ => panic!("invalid duration for closedloop"),
+                    };
+                    while elapsed.as_secs() < (seconds as u64) {
 
                         for round in 0 .. rate {
                             input.advance_to((((wave * rate) + round) * peers + index) as u64);
@@ -138,7 +227,7 @@ fn main() {
                     let seconds = elapsed.as_secs() as f64 + (elapsed.subsec_nanos() as f64) / 1000000000.0;
                     if index == 0 {
                         // println!("{:?}, {:?}", seconds / (wave - 1) as f64, 2.0 * ((wave - 1) * rate * peers) as f64 / seconds);
-                        println!("ARRANGE\tTHROUGHPUT\t{}\t{:?}", peers, 2.0 * ((wave - 1) * rate * peers) as f64 / seconds);
+                        println!("ARRANGE\tTHROUGHPUT\t{}\t{:?}\t{:?}", peers, 2.0 * ((wave - 1) * rate * peers) as f64 / seconds, mode);
                     }
 
                 },
@@ -151,7 +240,10 @@ fn main() {
 
                     let mut inserted_ns = 1;
 
-                    let ack_target = 10 * keys;
+                    let ack_target = match duration {
+                        Duration::Overwrite(times) => times * keys,
+                        Duration::Seconds(secs) => requests_per_sec * secs,
+                    };
                     while ack_counter < ack_target {
                     // while ((timer.elapsed().as_secs() as usize) * rate) < (10 * keys) {
 
@@ -187,11 +279,26 @@ fn main() {
                         // advance the input.
 
                         // let scale = (inserted_ns - acknowledged_ns).next_power_of_two();
+                        // max (scale / 4, 1024)
                         // let target_ns = elapsed_ns & !(scale - 1);
 
-                        let target_ns = if acknowledged_ns >= inserted_ns { elapsed_ns } else { inserted_ns };
+                        // let target_ns = if acknowledged_ns >= inserted_ns { elapsed_ns } else { inserted_ns };
 
                         // let target_ns = elapsed_ns & !((1 << 16) - 1);
+
+                        let target_ns = match inputstrategy {
+                            InputStrategy::Ms => {
+                                let mut target_ns = elapsed_ns & !((1 << 20) - 1);
+                                if target_ns > inserted_ns + 1_000_000_000 { target_ns = inserted_ns + 1_000_000_000; }
+                                target_ns
+                            },
+                            InputStrategy::PowerOfTwo => {
+                                let delta: u64 = inserted_ns - acknowledged_ns;
+                                let bits = ::std::mem::size_of::<u64>() * 8 - delta.leading_zeros() as usize;
+                                let scale = ::std::cmp::max((1 << bits) / 4, 1024);
+                                elapsed_ns & !(scale - 1)
+                            },
+                        };
 
                         if inserted_ns < target_ns {
 
@@ -228,10 +335,21 @@ fn main() {
                     }
                 }
                 for (latency, fraction) in results.drain(..).rev() {
-                    println!("ARRANGE\tLATENCY\t{}\t{}\t{}\t{}\t{}\t{:?}\t{:?}\t{}\t{}", peers, keys, recs, rate, work, comp, mode, latency, fraction);
+                    println!("ARRANGE\tLATENCYALL\t{}\t{}\t{}\t{}\t{:?}\t{:?}\t{}\t{}", peers, keys, recs, rate, comp, mode, latency, fraction);
+                    println!("ARRANGE\tLATENCYFRACTION\t{}\t{}", latency, fraction);
                 }
             }
         }
+    }) }
 
-    }).unwrap();
+    match zerocopy {
+        ZeroCopy::No => timely::execute_from_args(args, worker_closure!()).unwrap(),
+        ZeroCopy::Thread => {
+            eprintln!("thread allocators zerocopy");
+            let allocators =
+                ::timely::communication::allocator::zero_copy::allocator_process::ProcessBuilder::new_vector(zerocopy_workers);
+            timely::execute::execute_from(allocators, Box::new(()), worker_closure!()).unwrap()
+        },
+    };
+
 }

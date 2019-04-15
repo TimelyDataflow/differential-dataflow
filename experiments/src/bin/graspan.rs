@@ -47,6 +47,7 @@ fn main() {
                     // temp_result.map(|_| ()).consolidate().inspect(|x| println!("pre-agg:\t{:?}", x.2));
 
                     let result = temp_result
+                        // TODO: not distinct_total?
                         .distinct();
 
                     // result.map(|_| ()).consolidate().inspect(|x| println!("post-agg:\t{:?}", x.2));

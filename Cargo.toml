@@ -14,6 +14,10 @@ keywords = ["differential", "dataflow"]
 license = "MIT"
 readme = "README.md"
 
+[features]
+default = []
+custom-effort = []
+
 [dev-dependencies]
 indexmap = "1.0.1"
 rand="0.4"

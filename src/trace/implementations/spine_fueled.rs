@@ -212,7 +212,20 @@ where
 {
 
     fn new(info: ::timely::dataflow::operators::generic::OperatorInfo, logging: Option<::logging::Logger>) -> Self {
-        Self::with_effort(4, info, logging)
+        let effort: usize = if cfg!(feature = "custom-effort") {
+            ::std::env::var("DIFFERENTIAL_EFFORT").ok()
+                .and_then(|x| match x.as_str() {
+                    "max" => Some(1_000_000),
+                    _ => x.parse().ok(),
+                }).expect("Missing or invalid DIFFERENTIAL_EFFORT")
+        } else {
+            4
+        };
+        Self::with_effort(effort, info, logging)
+    }
+
+    fn with_effort(effort: usize, info: ::timely::dataflow::operators::generic::OperatorInfo, logging: Option<::logging::Logger>) -> Self {
+        Self::with_effort(effort, info, logging)
     }
 
     // Ideally, this method acts as insertion of `batch`, even if we are not yet able to begin

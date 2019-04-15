@@ -1,0 +1,8 @@
+coloredlogs==9.0
+executor==19.1
+fasteners==0.14.1
+humanfriendly==4.10
+monotonic==1.4
+property-manager==2.2
+six==1.11.0
+verboselogs==1.7

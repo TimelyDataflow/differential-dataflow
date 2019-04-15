@@ -5,7 +5,6 @@ extern crate differential_dataflow;
 use std::io::{BufRead, BufReader};
 use std::fs::File;
 
-// use timely::progress::nested::product::Product;
 // use timely::dataflow::operators::{Accumulate, Inspect};
 use differential_dataflow::input::Input;
 // use differential_dataflow::trace::Trace;
@@ -114,6 +113,7 @@ fn main() {
                                 // println!("elapsed: {:?}", elapsed);
 
                                 // println!("round: {:?}", round);
+                                // TODO: isn't this if round % 1000 == 999 {
                                 if round == 999 {
                                     let mut results = Vec::new();
                                     let total = counts.iter().map(|x| x.iter().sum::<u64>()).sum();

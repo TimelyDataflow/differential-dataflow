@@ -128,6 +128,9 @@ where <Self as TraceReader>::Batch: Batch<Self::Key, Self::Val, Self::Time, Self
 	/// Allocates a new empty trace.
 	fn new(info: ::timely::dataflow::operators::generic::OperatorInfo, logging: Option<::logging::Logger>) -> Self;
 
+	/// Allocates a new empty trace, setting the effort.
+	fn with_effort(effort: usize, info: ::timely::dataflow::operators::generic::OperatorInfo, logging: Option<::logging::Logger>) -> Self;
+
 	/// Introduces a batch of updates to the trace.
 	///
 	/// Batches describe the time intervals they contain, and they should be added to the trace in contiguous

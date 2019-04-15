@@ -22,12 +22,47 @@ type Iter = usize;
 
 fn main() {
 
+    ::std::thread::spawn(|| {
+        use std::io::Read;
+        let timer = ::std::time::Instant::now();
+
+        let page_size: u64 = {
+            use std::process::Command;
+            let output = Command::new("/usr/bin/getconf")
+                                 .arg("PAGE_SIZE")
+                                 .output()
+                                 .expect("failed to execute getconf PAGE_SIZE");
+            String::from_utf8_lossy(&output.stdout).trim().parse().expect("invalid PAGE_SIZE")
+        };
+        // let pid = std::process::id();
+        loop {
+            let mut stat_s = String::new();
+            let mut statm_f = ::std::fs::File::open("/proc/self/statm").expect("filez");
+            statm_f.read_to_string(&mut stat_s);
+            let pages: u64 = stat_s.split_whitespace().nth(1).expect("wooo").parse().expect("not a number");
+            let rss = pages * page_size;
+
+            let elapsed = timer.elapsed();
+            let elapsed_ns: usize = (elapsed.as_secs() * 1_000_000_000 + (elapsed.subsec_nanos() as u64)) as usize;
+            println!("RSS\t{}\t{}", elapsed_ns, rss);
+            ::std::thread::sleep_ms(100);
+        }
+    });
+
     let nodes: usize = std::env::args().nth(1).unwrap().parse().unwrap();
     let edges: usize = std::env::args().nth(2).unwrap().parse().unwrap();
     let rate: usize  = std::env::args().nth(3).unwrap().parse().unwrap();
     let goal: usize  = std::env::args().nth(4).unwrap().parse().unwrap();
     let queries: usize  = std::env::args().nth(5).unwrap().parse().unwrap();
-    let shared: bool = std::env::args().any(|x| x == "share");
+    let shared: bool = {
+        let is_shared = std::env::args().nth(6).unwrap();
+        match is_shared.as_str() {
+            "shared" => true,
+            "no" => false,
+            _ => panic!("invalid sharing mode"),
+        }
+    };
+    let zerocopy_workers: usize = std::env::args().nth(7).unwrap().parse().unwrap();
 
     // Our setting involves four read query types, and two updatable base relations.
     //
@@ -39,7 +74,16 @@ fn main() {
     //  R1: "State": a pair of (node, T) for some type T that I don't currently know.
     //  R2: "Graph": pairs (node, node) indicating linkage between the two nodes.
 
-    timely::execute_from_args(std::env::args().skip(3), move |worker| {
+    eprintln!("thread allocators zerocopy");
+    let allocators =
+        ::timely::communication::allocator::zero_copy::allocator_process::ProcessBuilder::new_vector(zerocopy_workers);
+    timely::execute::execute_from(allocators, Box::new(()), move |worker| {
+    // timely::execute_from_args(std::env::args().skip(3), move |worker| {
+
+        let tmp = {
+            eprintln!("jemalloc alloc!");
+            Vec::<usize>::with_capacity(1 << 30)
+        };
 
         let index = worker.index();
         let peers = worker.peers();
@@ -139,7 +183,7 @@ fn main() {
         let mut rng9: StdRng = SeedableRng::from_seed(seed);    // rng for query additions
         let mut rng0: StdRng = SeedableRng::from_seed(seed);    // rng for q1 deletions
 
-        if index == 0 { println!("performing workload on random graph with {} nodes, {} edges:", nodes, edges); }
+        if index == 0 { eprintln!("performing workload on random graph with {} nodes, {} edges:", nodes, edges); }
 
         let worker_edges = edges/peers + if index < (edges % peers) { 1 } else { 0 };
         for _ in 0 .. worker_edges {
@@ -169,7 +213,7 @@ fn main() {
         // finish graph loading work.
         while probe.less_than(graph.time()) { worker.step(); }
 
-        if index == 0 { println!("{:?}\tgraph loaded", timer.elapsed()); }
+        if index == 0 { eprintln!("{:?}\tgraph loaded", timer.elapsed()); }
 
         let requests_per_sec = rate / 2;
         let ns_per_request = 1_000_000_000 / requests_per_sec;
@@ -286,7 +330,7 @@ fn main() {
                 }
             }
             for (latency, fraction) in results.drain(..).rev() {
-                println!("{}\t{}", latency, fraction);
+                println!("LATENCY\t{}\t{}", latency, fraction);
             }
         }
 
