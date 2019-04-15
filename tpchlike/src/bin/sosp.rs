@@ -73,10 +73,10 @@ fn main() {
 
             let query = rng.gen_range(0, 22);
 
+            let token = std::rc::Rc::new(());
+            let mut experiment = Experiment::new(query, &token);
             // install new dataflows, retire old dataflow
-            worker.dataflow::<usize,_,_>(|scope| {
-
-                let mut experiment = Experiment::new(query);
+            worker.dataflow_core::<usize,_,_,_>("dataflow", None, token, |_,scope| {
                 match query {
                      0 => queries::query01::query_arranged(scope, &mut probe, &mut experiment, &mut traces),
                      1 => queries::query02::query_arranged(scope, &mut probe, &mut experiment, &mut traces, this_round-1),
@@ -105,21 +105,23 @@ fn main() {
                 experiment.lineitem.advance_to(this_round);
                 experiments.push(experiment);
             });
-            if experiments.len() > concurrent {
-                experiments.remove(0).close();
-            }
             let start = timer.elapsed();
             worker.step_while(|| probe.less_than(&this_round));
             let install = timer.elapsed() - start;
+
+            let start = timer.elapsed();
+            if experiments.len() > concurrent {
+                let token = experiments.remove(0).close();
+                worker.step_while(|| token.upgrade().is_some());
+            }
+            let uninstall = timer.elapsed() - start;
 
             // catch all inputs up to the same (next) round.
             let next_round = 1 + 8 * (round + 1) * physical_batch;
 
             // introduce physical batch of data for each input with remaining data.
-            let mut total_length = 0;
-            if let Some(mut data) = customers.pop() { total_length += data.len(); inputs.customer.send_batch(&mut data); }
+            if let Some(mut data) = customers.pop() { inputs.customer.send_batch(&mut data); }
             if let Some(mut data) = lineitems.pop() {
-                total_length += data.len();
                 let mut data = data.drain(..).map(|(x,y,z)| (Rc::new(x),y,z)).collect::<Vec<_>>();
                 let mut temp = Vec::new();
                 for experiment in experiments.iter_mut() {
@@ -129,12 +131,12 @@ fn main() {
                 }
                 inputs.lineitem.send_batch(&mut data);
             }
-            if let Some(mut data) = nations.pop() { total_length += data.len(); inputs.nation.send_batch(&mut data); }
-            if let Some(mut data) = orders.pop() { total_length += data.len(); inputs.order.send_batch(&mut data); }
-            if let Some(mut data) = parts.pop() { total_length += data.len(); inputs.part.send_batch(&mut data); }
-            if let Some(mut data) = partsupps.pop() { total_length += data.len(); inputs.partsupp.send_batch(&mut data); }
-            if let Some(mut data) = regions.pop() { total_length += data.len(); inputs.region.send_batch(&mut data); }
-            if let Some(mut data) = suppliers.pop() { total_length += data.len(); inputs.supplier.send_batch(&mut data); }
+            if let Some(mut data) = nations.pop() { inputs.nation.send_batch(&mut data); }
+            if let Some(mut data) = orders.pop() { inputs.order.send_batch(&mut data); }
+            if let Some(mut data) = parts.pop() { inputs.part.send_batch(&mut data); }
+            if let Some(mut data) = partsupps.pop() { inputs.partsupp.send_batch(&mut data); }
+            if let Some(mut data) = regions.pop() { inputs.region.send_batch(&mut data); }
+            if let Some(mut data) = suppliers.pop() { inputs.supplier.send_batch(&mut data); }
 
             inputs.advance_to(next_round);
             traces.advance_by(&[next_round]);
@@ -143,7 +145,7 @@ fn main() {
             worker.step_while(|| probe.less_than(&next_round));
             let work = timer.elapsed() - start;
 
-            println!("{:?}\tround {}\tinstalled {} in {:?}\tupdated {} in {:?}", timer.elapsed(), round, query, install.as_nanos(), total_length, work.as_nanos());
+            println!("{:?}\t{}\t{}\t{:?}\t{:?}\t{:?}", timer.elapsed(), round, query, install.as_nanos(), uninstall.as_nanos(), work.as_nanos());
 
             round += 1;
         }
