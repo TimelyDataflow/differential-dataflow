@@ -62,7 +62,8 @@ fn main() {
         worker.step_while(|| probe.less_than(&time));
 
         use rand::prelude::*;
-        let mut rng = rand::thread_rng();
+
+        let mut rng = rand::StdRng::from_seed([118, 39, 61, 247, 119, 151, 11, 119, 114, 143, 176, 45, 64, 22, 164, 27, 121, 167, 7, 140, 73, 116, 9, 12, 88, 177, 22, 198, 32, 93, 173, 156]);
 
         let timer = Instant::now();
         let mut experiments = Vec::<Experiment>::new();
