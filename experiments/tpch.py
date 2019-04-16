@@ -19,6 +19,9 @@ def experiment_setup(experiment_name, n, w, **config):
         "_".join(["{}={}".format(k, str(v)) for k, v in config.items()]))
 
 def i_tpchlike_mixing():
+    physical_batch = int(sys.argv[sys.argv.index('--physical_batch') + 1])
+    experiments.eprint("physical batch {}".format(physical_batch))
+
     experiments.run_cmd("cd ../tpchlike; . ~/eth_proxy.sh; cargo build --release --bin sosp", node=arg_node)
 
     experiment_name = "i-tpchlike-mixing"
@@ -27,9 +30,8 @@ def i_tpchlike_mixing():
     experiments.eprint(experiments.experdir(experiment_name))
 
     n = 1
-    w = 16
+    w = 32 
     logical_batch = 1
-    physical_batch = 10000
     concurrent = 10
     seal_inputs = 'dontseal'
     for arrange in ['false', 'true']: # 'false'
@@ -47,7 +49,7 @@ def i_tpchlike_mixing():
         filename = experiment_setup(experiment_name, n, w, **config)
         experiments.eprint("RUNNING {}".format(filename))
         commands = [
-                ("../tpchlike/target/release/sosp {} -h hostfile.txt -n {} -p {} -w {}".format(
+                ("hwloc-bind pu:0-39 -- ../tpchlike/target/release/sosp {} -h hostfile.txt -n {} -p {} -w {}".format(
                     " ".join(str(x) for x in [prefix, logical_batch, physical_batch, concurrent, arrange, seal_inputs]),
                     n,
                     p,

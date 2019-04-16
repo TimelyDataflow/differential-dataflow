@@ -13,6 +13,32 @@ use timely::dataflow::ProbeHandle;
 use tpchlike::{Arrangements, Experiment, InputHandles, types::*, queries};
 
 fn main() {
+    ::std::thread::spawn(|| {
+        use std::io::Read;
+        let timer = ::std::time::Instant::now();
+
+        let page_size: u64 = {
+            use std::process::Command;
+            let output = Command::new("/usr/bin/getconf")
+                                 .arg("PAGE_SIZE")
+                                 .output()
+                                 .expect("failed to execute getconf PAGE_SIZE");
+            String::from_utf8_lossy(&output.stdout).trim().parse().expect("invalid PAGE_SIZE")
+        };
+        // let pid = std::process::id();
+        loop {
+            let mut stat_s = String::new();
+            let mut statm_f = ::std::fs::File::open("/proc/self/statm").expect("filez");
+            statm_f.read_to_string(&mut stat_s);
+            let pages: u64 = stat_s.split_whitespace().nth(1).expect("wooo").parse().expect("not a number");
+            let rss = pages * page_size;
+
+            let elapsed = timer.elapsed();
+            let elapsed_ns: usize = (elapsed.as_secs() * 1_000_000_000 + (elapsed.subsec_nanos() as u64)) as usize;
+            println!("[RSS]\t{}\t{}", elapsed_ns, rss);
+            ::std::thread::sleep_ms(100);
+        }
+    });
 
     timely::execute_from_args(std::env::args().skip(4), |worker| {
 
@@ -146,7 +172,7 @@ fn main() {
             worker.step_while(|| probe.less_than(&next_round));
             let work = timer.elapsed() - start;
 
-            println!("{:?}\t{}\t{}\t{:?}\t{:?}\t{:?}", timer.elapsed(), round, query, install.as_nanos(), uninstall.as_nanos(), work.as_nanos());
+            println!("[MEASURE]\t{:?}\t{}\t{}\t{:?}\t{:?}\t{:?}", timer.elapsed(), round, query, install.as_nanos(), uninstall.as_nanos(), work.as_nanos());
 
             round += 1;
         }
