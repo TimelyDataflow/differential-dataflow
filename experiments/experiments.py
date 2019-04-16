@@ -2,7 +2,7 @@
 import sys, os
 from executor import execute
 
-is_worktree_clean = execute("cd `git rev-parse --show-toplevel`; git diff-index --quiet HEAD -- src/ Cargo.toml experiments/src/ experiments/Cargo.toml", check=False)
+is_worktree_clean = execute("cd `git rev-parse --show-toplevel`; git diff-index --quiet HEAD -- src/ Cargo.toml experiments/src/ experiments/Cargo.toml tpchlike/src tpchlike/Cargo.toml", check=False)
 
 if not is_worktree_clean:
     shall = input("Work directory dirty. Continue? (y/N) ").lower() == 'y'
