@@ -248,16 +248,19 @@ impl Arrangements {
     }
 }
 
+use std::rc::Weak;
 pub struct Experiment {
     pub index: usize,
+    pub token: Weak<()>,
     pub lineitem: InputHandle<usize, (Rc<LineItem>, usize, isize)>,
     pub buttons: Vec<ShutdownButton<CapabilitySet<usize>>>,
 }
 
 impl Experiment {
-    pub fn new(index: usize) -> Self {
+    pub fn new(index: usize, token: &Rc<()>) -> Self {
         Self {
             index,
+            token: std::rc::Rc::downgrade(token),
             lineitem: InputHandle::new(),
             buttons: Vec::new(),
         }
@@ -267,8 +270,9 @@ impl Experiment {
         use differential_dataflow::AsCollection;
         scope.input_from(&mut self.lineitem).as_collection()
     }
-    pub fn close(mut self) {
+    pub fn close(mut self) -> Weak<()> {
         self.lineitem.close();
         for mut button in self.buttons.drain(..) { button.press(); }
+        self.token
     }
 }
