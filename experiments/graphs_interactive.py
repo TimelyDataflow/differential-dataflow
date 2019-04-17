@@ -5,6 +5,7 @@ import experiments
 from collections import OrderedDict
 
 arg_node = int(sys.argv[sys.argv.index('--node') + 1])
+experiments.eprint("node {}".format(arg_node))
 
 def experiment_setup(experiment_name, n, w, **config):
     experiments.ensuredir(experiment_name)
@@ -56,7 +57,7 @@ def graphs_interactive_alt():
                                     experiments.waitall(processes)
 
 def graphs_interactive_neu():
-    # experiments.run_cmd("cargo build --release --bin graphs-interactive-neu")
+    experiments.run_cmd(". ~/eth_proxy.sh; cargo build --release --bin graphs-interactive-neu", node = arg_node)
 
     experiment_name = "graphs-interactive-neu"
 
