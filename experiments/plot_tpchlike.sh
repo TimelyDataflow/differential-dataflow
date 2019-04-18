@@ -1,4 +1,4 @@
-commit=dirty-780a95ec9f
+commit=5b0a6d19e5
 
 mkdir -p plots/$commit/i-tpchlike-mixing
 temp_dir=$(mktemp -d)
