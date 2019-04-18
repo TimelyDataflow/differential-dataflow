@@ -67,7 +67,7 @@ def graphs_interactive_neu():
     for w in [32]:
         for nodes in [10000000]:
             for edges in [32000000]:
-                for rate in [100000, 200000, 300000, 400000]: # + x for x in [-250000, 0, 250000, 500000]]:
+                for rate in [x * 20000 for x in range(1, 21)]: # + x for x in [-250000, 0, 250000, 500000]]:
                     for goal in [1800,]:
                         for queries in [32]: # [0, 1000, 10000, 100000]:
                             for shared in ["no", "shared"]:
