@@ -67,7 +67,7 @@ def graphs_interactive_neu():
     for w in [32]:
         for nodes in [10000000]:
             for edges in [32000000]:
-                for rate in [x * 20000 for x in range(1, 21)]: # + x for x in [-250000, 0, 250000, 500000]]:
+                for rate in [x * 20000 for x in range(10, 21)]: # + x for x in [-250000, 0, 250000, 500000]]:
                     for goal in [1800,]:
                         for queries in [32]: # [0, 1000, 10000, 100000]:
                             for shared in ["no", "shared"]:
@@ -96,6 +96,7 @@ def graphs_interactive_neu():
 
 def graphs_interactive_neu_zwei():
     # experiments.run_cmd("cargo build --release --bin graphs-interactive-neu")
+    experiments.run_cmd(". ~/eth_proxy.sh; cargo build --release --bin graphs-interactive-neu-zwei", node = arg_node)
 
     experiment_name = "graphs-interactive-neu-zwei"
 
