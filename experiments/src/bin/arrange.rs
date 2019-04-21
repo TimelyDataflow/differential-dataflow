@@ -3,6 +3,9 @@ extern crate timely;
 extern crate differential_dataflow;
 extern crate core_affinity;
 
+#[cfg(feature = "jemalloc")]
+extern crate jemallocator;
+
 use rand::{Rng, SeedableRng, StdRng};
 
 use timely::dataflow::operators::{Exchange, Probe};
@@ -16,6 +19,9 @@ use differential_dataflow::operators::threshold::ThresholdTotal;
 use differential_dataflow::operators::{Join, JoinCore};
 
 use differential_dataflow::trace::implementations::ord::OrdKeySpine;
+
+#[cfg(feature = "jemalloc")]
+#[global_allocator] static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
 
 #[derive(Debug)]
 enum Comp {

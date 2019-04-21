@@ -12,3 +12,8 @@ timely = "0.9"
 #timely = { git = "https://github.com/frankmcsherry/timely-dataflow" }
 differential-dataflow = { path = "../", features = ["custom-effort"] }
 graph_map = { git = "https://github.com/frankmcsherry/graph-map" }
+jemallocator = { version = "0.3.0", optional = true }
+
+[features]
+default = []
+jemalloc = ["jemallocator"]
