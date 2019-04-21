@@ -42,15 +42,16 @@ def i_single_query():
 
     plotscript = "set terminal pdf size 5.2cm,3.5cm font \"Arial,10\"; set logscale x; set logscale y; " \
             "set bmargin at screen 0.2; " \
-            "set xrange [10000:5000000000.0]; " \
+            "set xrange [0.00001:5.0]; " \
             "set key samplen 2; " \
-            "set format x \"10^{%T}\"; " \
+            "set format x \"%.0s%cs\"; " \
+            "set xtics rotate by -20 offset -0.6,0; " \
             "set yrange [0.0001:1.01]; " \
-            "set xlabel \"nanoseconds\" offset 0,0.3; " \
+            "set xlabel \"latency\" offset 0,0; " \
             "set format y \"10^{%T}\"; " \
             "set bmargin at screen 0.25; " \
             "set ylabel \"complementary cdf\"; " \
-            "set key left bottom Left reverse font \",10\"; " \
+            "set key left bottom Left reverse font \",9\"; " \
             "plot "
 
     query_names = {
@@ -65,7 +66,7 @@ def i_single_query():
         if p.issuperset(filtering):
             datafile = "{}/i_single_query_{}".format(tempdir, f)
             # assert(execute('cat results/{}/{}/{} > {}'.format(commit, experiment, f, datafile)))
-            plotscript += "\"results/{}/{}/{}\" using 1:2 with lines lw 2 dt ({}, 2) title \"{}\", ".format(commit, experiment, f, dt, query_names[dict(p)['query']])
+            plotscript += "\"results/{}/{}/{}\" using ($1/1000000000):2 with lines lw 2 dt ({}, 2) title \"{}\", ".format(commit, experiment, f, dt, query_names[dict(p)['query']])
             dt += 3
 
     assert(execute('mkdir -p plots/{}/{}'.format(commit, experiment)))
@@ -89,7 +90,7 @@ def ii_sharing():
 
     plotscript = "set terminal pdf size 5.2cm,3.5cm font \"Arial,10\"; set logscale x; set logscale y; " \
             "set bmargin at screen 0.2; " \
-            "set xrange [10000:5000000000.0]; " \
+            "set xrange [0.00001:5.0]; " \
             "set key samplen 2; " \
             "set format x \"10^{%T}\"; " \
             "set yrange [0.0001:1.01]; " \
@@ -123,8 +124,8 @@ def ii_sharing():
     shutil.rmtree(tempdir)
 
 def iv_boomerang():
-    commit = "f74b611db1"
-    experiment = "graphs-interactive-neu"
+    commit = "73399ca494"
+    experiment = "graphs-interactive-neu-boomerang"
 
     filedict, params = prepare(commit, experiment)
 
@@ -133,7 +134,7 @@ def iv_boomerang():
 
     filtering = { ('w', 32), ('nodes', 10000000), ('edges', 32000000), ('goal', 1800), }
 
-    plotscript = "set terminal pdf size 5.2cm,3.5cm font \"Arial,10\"; set logscale y; " \
+    plotscript = "set terminal pdf size 5.2cm,3.5cm font \"Arial,10\"; " \
             "set bmargin at screen 0.2; " \
             "set key samplen 2; " \
             "set format y \"10^{%T}\"; " \
@@ -161,7 +162,7 @@ def iv_boomerang():
             for p, f in filedict:
                 if p.issuperset(rate_filtering):
                     eprint(p)
-                    maxlat = execute('cat results/{}/{}/{} | grep LATENCY | awk \'{{ if ($3 < .001) {{ print $2 }} }}\' | cut -f 2 | head -n 1'.format(commit, experiment, f), capture=True)
+                    maxlat = execute('cat results/{}/{}/{} | grep LATENCY | awk \'{{ if ($3 < .01) {{ print $2 }} }}\' | cut -f 2 | head -n 1'.format(commit, experiment, f), capture=True)
                     execute('echo "{}" "{}" >> {}'.format(rate, maxlat, datafile))
         eprint(datafile)
         plotscript += "\"{}\" using 1:2 with linespoints lw 2 dt ({}, 2) title \"{}\", ".format(datafile, dt, shared_names[sharing])

@@ -4,14 +4,6 @@ from os import listdir
 import sys
 import math
 
-commit = sys.argv[sys.argv.index('--commit') + 1]
-experiment = sys.argv[sys.argv.index('--experiment') + 1]
-
-# commit = "dirty-e74441d0c062c7ec8d6da9bbf1972bd9397b2670"
-# experiment = "arrange-open-loop"
-print("commit {}, experiment {}".format(commit, experiment))
-
-
 def eprint(*args):
     print(*args, file=sys.stderr)
 
@@ -25,31 +17,39 @@ def parsename(name):
         return (k, v)
     return (name, sorted([parsekv(kv) for kv in params], key=lambda x: x[0]))
 
-allfiles = [(parsename(f), f) for f in listdir("results/{}/{}".format(commit, experiment))]
-allparams = list(zip(*allfiles))[0]
-pivoted = list(zip(*list(zip(*allparams))[1]))
-assert(all(all(y[0] == x[0][0] for y in x) for x in pivoted))
-params = dict(list((x[0][0], set(list(zip(*x))[1])) for x in pivoted))
-filedict = list((set(p[1]), f) for p, f in allfiles)
-eprint(params)
+def prepare(commit, experiment):
+    print("commit {}, experiment {}".format(commit, experiment))
+    allfiles = [(parsename(f), f) for f in listdir("results/{}/{}".format(commit, experiment))]
+    allparams = list(zip(*allfiles))[0]
+    pivoted = list(zip(*list(zip(*allparams))[1]))
+    assert(all(all(y[0] == x[0][0] for y in x) for x in pivoted))
+    params = dict(list((x[0][0], set(list(zip(*x))[1])) for x in pivoted))
+    filedict = list((set(p[1]), f) for p, f in allfiles)
+    eprint(params)
+    return (filedict, params)
 
 def groupingstr(s):
     return '_'.join("{}={}".format(x[0], str(x[1])) for x in sorted(s, key=lambda x: x[0]))
 
 def i_load_varies(): # commit = "dirty-8380c53277307b6e9e089a8f6f79886b36e20428" experiment = "arrange-open-loop"
+    commit = "73399ca494"
+    experiment = "arrange-open-loop-load-varies"
+
+    filedict, params = prepare(commit, experiment)
+
     tempdir = tempfile.mkdtemp("{}-{}".format(experiment, commit))
 
     filtering = { ('w', 1), ('comp', 'maintain'), ('dparam', 50), ('work', 4), ('recs', 32000000), ('inputstrategy', 'ms'), }
     F = filtering
     eprint(F)
     # print('\n'.join(str(p) for p, f in sorted(filedict, key=lambda x: dict(x[0])['rate']) if p.issuperset(F)))
-    plotscript = "set terminal pdf size 4.8cm,3.2cm; set logscale x; set logscale y; " \
+    plotscript = "set terminal pdf size 5.2cm,3.5cm font \"Arial,10\"; set logscale x; set logscale y; " \
             "set bmargin at screen 0.2; " \
             "set xrange [10000:5000000000.0]; " \
             "set key samplen 2; " \
             "set format x \"10^{%T}\"; " \
             "set yrange [0.0001:1.01]; " \
-            "set xlabel \"nanoseconds\"; " \
+            "set xlabel \"nanoseconds\" offset 0,0.3; " \
             "set format y \"10^{%T}\"; " \
             "set bmargin at screen 0.25; " \
             "set ylabel \"complementary cdf\"; " \
@@ -78,6 +78,11 @@ def i_load_varies(): # commit = "dirty-8380c53277307b6e9e089a8f6f79886b36e20428"
     shutil.rmtree(tempdir)
 
 def ii_strong_scaling(): # commit = "dirty-e74441d0c062c7ec8d6da9bbf1972bd9397b2670" experiment = "arrange-open-loop"
+    commit = "73399ca494"
+    experiment = "arrange-open-loop"
+
+    filedict, params = prepare(commit, experiment)
+
     tempdir = tempfile.mkdtemp("{}-{}".format(experiment, commit))
 
     filtering = { ('rate', 1000000), }
@@ -86,13 +91,13 @@ def ii_strong_scaling(): # commit = "dirty-e74441d0c062c7ec8d6da9bbf1972bd9397b2
             F = filtering.union({ ('work', work), ('comp', comp), ('keys', 10000000), ('recs', 32000000), ('inputstrategy', 'ms'), })
             eprint(F)
             # print('\n'.join(str(p) for p, f in sorted(filedict, key=lambda x: dict(x[0])['rate']) if p.issuperset(F)))
-            plotscript = "set terminal pdf size 4.8cm,3.2cm; set logscale x; set logscale y; " \
+            plotscript = "set terminal pdf size 5.2cm,3.5cm font \"Arial,10\"; set logscale x; set logscale y; " \
                     "set bmargin at screen 0.2; " \
                     "set xrange [10000:5000000000.0]; " \
                     "set key samplen 2; " \
                     "set format x \"10^{%T}\"; " \
                     "set yrange [0.0001:1.01]; " \
-                    "set xlabel \"nanoseconds\"; " \
+                    "set xlabel \"nanoseconds\" offset 0,0.3; " \
                     "set format y \"10^{%T}\"; " \
                     "set bmargin at screen 0.25; " \
                     "set ylabel \"complementary cdf\"; " \
@@ -117,6 +122,11 @@ def ii_strong_scaling(): # commit = "dirty-e74441d0c062c7ec8d6da9bbf1972bd9397b2
     shutil.rmtree(tempdir)
 
 def iii_weak_scaling(): # commit = "dirty-e74441d0c062c7ec8d6da9bbf1972bd9397b2670" experiment = "arrange-open-loop"
+    commit = "73399ca494"
+    experiment = "arrange-open-loop"
+
+    filedict, params = prepare(commit, experiment)
+
     tempdir = tempfile.mkdtemp("{}-{}".format(experiment, commit))
 
     # TODO filtering = { ('dparam', 10), ('keys', 10000000), ('recs', 32000000), }
@@ -126,13 +136,13 @@ def iii_weak_scaling(): # commit = "dirty-e74441d0c062c7ec8d6da9bbf1972bd9397b26
             F = filtering.union({ ('work', work), ('comp', comp), })
             eprint(F)
             # print('\n'.join(str(p) for p, f in sorted(filedict, key=lambda x: dict(x[0])['rate']) if p.issuperset(F)))
-            plotscript = "set terminal pdf size 4.8cm,3.2cm; set logscale x; set logscale y; " \
+            plotscript = "set terminal pdf size 5.2cm,3.5cm font \"Arial,10\"; set logscale x; set logscale y; " \
                     "set bmargin at screen 0.2; " \
                     "set xrange [10000:5000000000.0]; " \
                     "set key samplen 2; " \
                     "set format x \"10^{%T}\"; " \
                     "set yrange [0.0001:1.01]; " \
-                    "set xlabel \"nanoseconds\"; " \
+                    "set xlabel \"nanoseconds\" offset 0,0.3; " \
                     "set format y \"10^{%T}\"; " \
                     "set bmargin at screen 0.25; " \
                     "set ylabel \"complementary cdf\"; " \
@@ -167,17 +177,22 @@ def iii_weak_scaling(): # commit = "dirty-e74441d0c062c7ec8d6da9bbf1972bd9397b26
 
 
 def iv_throughput(): # commit = "dirty-e74441d0c062c7ec8d6da9bbf1972bd9397b2670" experiment = "arrange"
+    commit = "73399ca494"
+    experiment = "arrange"
+
+    filedict, params = prepare(commit, experiment)
+
     tempdir = tempfile.mkdtemp("{}-{}".format(experiment, commit))
 
     filtering = { ('rate', 100000), ('work', 4), ('keys', 10000000), ('recs', 32000000), ('inputstrategy', 'ms'), }
 
-    plotscript = "set terminal pdf size 4.8cm,3.2cm; " \
+    plotscript = "set terminal pdf size 5.2cm,3.5cm font \"Arial,10\"; " \
             "set bmargin at screen 0.2; " \
             "set xrange [-1:34]; " \
             "set yrange [-10000000:160000000]; " \
             "set xtics (1, 4, 8, 16, 32); " \
             "set ytics 50000000; " \
-            "set xlabel \"cores\"; " \
+            "set xlabel \"cores\" offset 0,0.3; " \
             "set bmargin at screen 0.25; " \
             "set ylabel \"throughput (records/s)\"; " \
             "set format y \"%.0s%c\"; " \
@@ -216,6 +231,11 @@ def iv_throughput(): # commit = "dirty-e74441d0c062c7ec8d6da9bbf1972bd9397b2670"
     # shutil.rmtree(tempdir)
 
 def v_amortization(): # USE STRONG SCALING
+    commit = "73399ca494"
+    experiment = "arrange-open-loop"
+
+    filedict, params = prepare(commit, experiment)
+
     tempdir = tempfile.mkdtemp("{}-{}".format(experiment, commit))
 
     filtering = { ('keys', 10000000), ('recs', 32000000), ('rate', 1000000), ('inputstrategy', 'ms'),  }
@@ -224,13 +244,13 @@ def v_amortization(): # USE STRONG SCALING
             F = filtering.union({ ('comp', comp), })
             eprint(F)
             # print('\n'.join(str(p) for p, f in sorted(filedict, key=lambda x: dict(x[0])['rate']) if p.issuperset(F)))
-            plotscript = "set terminal pdf size 4.8cm,3.2cm; set logscale x; set logscale y; " \
+            plotscript = "set terminal pdf size 5.2cm,3.5cm font \"Arial,10\"; set logscale x; set logscale y; " \
                     "set bmargin at screen 0.2; " \
                     "set xrange [10000:5000000000.0]; " \
                     "set key samplen 2; " \
                     "set format x \"10^{%T}\"; " \
                     "set yrange [0.0001:1.01]; " \
-                    "set xlabel \"nanoseconds\"; " \
+                    "set xlabel \"nanoseconds\" offset 0,0.3; " \
                     "set format y \"10^{%T}\"; " \
                     "set bmargin at screen 0.25; " \
                     "set ylabel \"complementary cdf\"; " \
@@ -271,17 +291,22 @@ def v_amortization(): # USE STRONG SCALING
     shutil.rmtree(tempdir)
 
 def vi_install():
+    commit = "73399ca494"
+    experiment = "arrange-open-loop"
+
+    filedict, params = prepare(commit, experiment)
+
     tempdir = tempfile.mkdtemp("{}-{}".format(experiment, commit))
 
     filtering = { ('keys', 10000000), ('recs', 32000000), ('w', 32), }
     # print('\n'.join(str(p) for p, f in sorted(filedict, key=lambda x: dict(x[0])['rate']) if p.issuperset(F)))
-    plotscript = "set terminal pdf size 4.8cm,3.2cm; set logscale x; set logscale y; " \
+    plotscript = "set terminal pdf size 5.2cm,3.5cm font \"Arial,10\"; set logscale x; set logscale y; " \
             "set bmargin at screen 0.2; " \
             "set xrange [10000:5000000000.0]; " \
             "set key samplen 2; " \
             "set format x \"10^{%T}\"; " \
             "set yrange [0.0001:1.01]; " \
-            "set xlabel \"nanoseconds\"; " \
+            "set xlabel \"nanoseconds\" offset 0,0.3; " \
             "set format y \"10^{%T}\"; " \
             "set bmargin at screen 0.25; " \
             "set ylabel \"complementary cdf\"; " \

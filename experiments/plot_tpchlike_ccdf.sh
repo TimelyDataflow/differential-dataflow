@@ -6,7 +6,7 @@ echo 'temp_dir' $temp_dir
 
 colors=("red" "blue")
 
-common="set terminal pdf size 5.2cm,3.5cm font \"Arial,10\"; set logscale x; set format x \"%.0s %cs\"; set xlabel \"latency\" offset 0,.5; set ylabel \"complementary cdf\" offset 1.5,0; "
+common="set terminal pdf size 5.2cm,3.5cm font \"Arial,10\"; set logscale x; set format x \"%.0s %cs\"; set xlabel \"latency\" offset 0,.5; set ylabel \"complementary cdf\" offset 1.5,0; set arrow from graph 0, 0.5 to graph 1, 0.5 nohead lt rgb \"red\"; set label \"median\" at graph .75, 0.55 font \",9\" textcolor \"red\"; set arrow from graph 0, 0.1 to graph 1, 0.1 nohead lt rgb \"red\"; set label \"p90\" at graph .84, 0.15 font \",9\" textcolor \"red\"; set key right top Left reverse font \",9\"; "
 
 for g in `ls results/$commit/i-tpchlike-mixing | cut -d '_' -f 4-6 | sort | uniq`; do
   plotscript="$common plot "

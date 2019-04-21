@@ -3,6 +3,9 @@ extern crate timely;
 extern crate differential_dataflow;
 extern crate core_affinity;
 
+#[cfg(feature = "jemalloc")]
+extern crate jemallocator;
+
 use rand::{Rng, SeedableRng, StdRng};
 
 // use timely::dataflow::operators::{Exchange, Probe};
@@ -16,6 +19,9 @@ use differential_dataflow::operators::Join;
 
 // use differential_dataflow::trace::implementations::ord::OrdKeySpine;
 use differential_dataflow::operators::arrange::ArrangeByKey;
+
+#[cfg(feature = "jemalloc")]
+#[global_allocator] static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
 
 fn main() {
 

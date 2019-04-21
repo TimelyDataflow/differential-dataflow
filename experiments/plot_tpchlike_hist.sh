@@ -82,4 +82,4 @@ for g in `ls results/$commit/i-tpchlike-mixing | cut -d '_' -f 4-6 | sort | uniq
   gnuplot -p -e "$plotscript" > plots/$commit/i-tpchlike-mixing/hist-work-$g.pdf
 done
 
-rm -R $temp_dir
+# rm -R $temp_dir

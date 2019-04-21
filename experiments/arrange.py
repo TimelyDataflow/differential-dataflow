@@ -76,6 +76,7 @@ def arrange_closed_loop():
 
 def arrange_open_loop_load_varies():
     experiment_name = "arrange-open-loop-load-varies"
+    experiments.run_cmd("cargo build --release --bin arrange", node = arg_node)
 
     experiments.eprint("### {} ###".format(experiment_name))
     experiments.eprint(experiments.experdir(experiment_name))
@@ -135,6 +136,7 @@ def arrange_open_loop_load_varies():
 
 def arrange_open_loop_strong_scaling():
     experiment_name = "arrange-open-loop-strong-scaling"
+    experiments.run_cmd("cargo build --release --bin arrange", node = arg_node)
 
     experiments.eprint("### {} ###".format(experiment_name))
     experiments.eprint(experiments.experdir(experiment_name))
@@ -193,6 +195,7 @@ def arrange_open_loop_strong_scaling():
 
 def arrange_open_loop_weak_scaling():
     experiment_name = "arrange-open-loop-weak-scaling"
+    experiments.run_cmd("cargo build --release --bin arrange", node = arg_node)
 
     experiments.eprint("### {} ###".format(experiment_name))
     experiments.eprint(experiments.experdir(experiment_name))
@@ -251,6 +254,7 @@ def arrange_open_loop_weak_scaling():
 
 def arrange_install():
     experiment_name = "arrange-install"
+    experiments.run_cmd("cargo build --release --bin install", node = arg_node)
 
     experiments.eprint("### {} ###".format(experiment_name))
     experiments.eprint(experiments.experdir(experiment_name))
