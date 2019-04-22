@@ -79,7 +79,7 @@ def i_load_varies(): # commit = "dirty-8380c53277307b6e9e089a8f6f79886b36e20428"
 
 def ii_strong_scaling(): # commit = "dirty-e74441d0c062c7ec8d6da9bbf1972bd9397b2670" experiment = "arrange-open-loop"
     commit = "73399ca494"
-    experiment = "arrange-open-loop"
+    experiment = "arrange-open-loop-strong-scaling"
 
     filedict, params = prepare(commit, experiment)
 
@@ -123,7 +123,7 @@ def ii_strong_scaling(): # commit = "dirty-e74441d0c062c7ec8d6da9bbf1972bd9397b2
 
 def iii_weak_scaling(): # commit = "dirty-e74441d0c062c7ec8d6da9bbf1972bd9397b2670" experiment = "arrange-open-loop"
     commit = "73399ca494"
-    experiment = "arrange-open-loop"
+    experiment = "arrange-open-loop-weak-scaling"
 
     filedict, params = prepare(commit, experiment)
 
@@ -178,7 +178,7 @@ def iii_weak_scaling(): # commit = "dirty-e74441d0c062c7ec8d6da9bbf1972bd9397b26
 
 def iv_throughput(): # commit = "dirty-e74441d0c062c7ec8d6da9bbf1972bd9397b2670" experiment = "arrange"
     commit = "73399ca494"
-    experiment = "arrange"
+    experiment = "arrange-closed-loop-0"
 
     filedict, params = prepare(commit, experiment)
 

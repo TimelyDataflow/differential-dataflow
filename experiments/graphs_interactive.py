@@ -57,15 +57,16 @@ def graphs_interactive_alt():
                                     experiments.waitall(processes)
 
 def graphs_interactive_neu_boomerang():
-    experiment_name = "graphs-interactive-neu-boomerang-jemalloc"
-    graphs_interactive_neu_base(experiment_name, [20000 + x * 40000 for x in range(10, 21)])
+    segment = int(sys.argv[sys.argv.index('--segment') + 1])
+    experiment_name = "graphs-interactive-neu-boomerang"
+    graphs_interactive_neu_base(experiment_name, [int((1.3**x) * 10000) for x in range(20 + segment, 21 + segment)])
 
 def graphs_interactive_neu():
-    experiment_name = "graphs-interactive-neu-jemalloc"
+    experiment_name = "graphs-interactive-neu"
     graphs_interactive_neu_base(experiment_name, [200000])
 
 def graphs_interactive_neu_base(experiment_name, rates_a):
-    experiments.run_cmd(". ~/eth_proxy.sh; cargo build --release --bin graphs-interactive-neu --features jemalloc", node = arg_node)
+    experiments.run_cmd(". ~/eth_proxy.sh; cargo build --release --bin graphs-interactive-neu", node = arg_node)
 
     experiments.eprint("### {} ###".format(experiment_name))
     experiments.eprint(experiments.experdir(experiment_name))
@@ -76,7 +77,7 @@ def graphs_interactive_neu_base(experiment_name, rates_a):
                 for rate in rates_a: # + x for x in [-250000, 0, 250000, 500000]]:
                     for goal in [1800,]:
                         for queries in [32]: # [0, 1000, 10000, 100000]:
-                            for shared in ["no", "shared"]:
+                            for shared in ["shared"]:
                                 config = OrderedDict([
                                     ("nodes", nodes),
                                     ("edges", edges),
@@ -102,9 +103,9 @@ def graphs_interactive_neu_base(experiment_name, rates_a):
 
 def graphs_interactive_neu_zwei():
     # experiments.run_cmd("cargo build --release --bin graphs-interactive-neu")
-    experiments.run_cmd(". ~/eth_proxy.sh; cargo build --release --bin graphs-interactive-neu-zwei --features jemalloc", node = arg_node)
+    experiments.run_cmd(". ~/eth_proxy.sh; cargo build --release --bin graphs-interactive-neu-zwei", node = arg_node)
 
-    experiment_name = "graphs-interactive-neu-zwei-jemalloc"
+    experiment_name = "graphs-interactive-neu-zwei"
 
     experiments.eprint("### {} ###".format(experiment_name))
     experiments.eprint(experiments.experdir(experiment_name))

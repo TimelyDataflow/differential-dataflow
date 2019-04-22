@@ -6,13 +6,13 @@ echo 'temp_dir' $temp_dir
 
 colors=("red" "blue")
 
-common="set terminal pdf size 5.2cm,3.5cm font \"Arial,10\"; set key samplen 2; set key opaque left top Left reverse; set ytics 5,5; set format y \"%.0f%%\"; "
+common="set terminal pdf size 5.2cm,3.5cm font \"Arial,10\"; set key samplen 2; set key opaque left top Left reverse; set ytics 5,5; set format y \"%.0f%%\"; set style line 1 lc \"#38618C\"; set style line 2 lc \"#28A361\"; "
 multiplot="set multiplot layout 2,1 margins 0.15,0.95,.25,.95 spacing 0,.05; "
 
 for g in `ls results/$commit/i-tpchlike-mixing | cut -d '_' -f 4-6 | sort | uniq`; do
-  plotscript="$common set tmargin 0; set bmargin 0; set lmargin 1; set rmargin 1; set key opaque top left; set style fill transparent solid 1 noborder; set logscale x; set format x \"%.0s %cs\"; $multiplot; set xrange [0.0001:5]; "
+  plotscript="$common set tmargin 0; set bmargin 0; set lmargin 1; set rmargin 1; set key opaque top left; set style fill transparent solid 1 noborder; set logscale x; set format x \"%.0s%cs\"; $multiplot; set xrange [0.0001:5]; "
   echo GROUP $g
-  dt=0
+  dt=1
   for file in `ls results/$commit/i-tpchlike-mixing/*_$(echo $g | sed 's/_/_*/')_*`; do
     f=$(basename $file)
     echo $f
@@ -23,12 +23,12 @@ for g in `ls results/$commit/i-tpchlike-mixing | cut -d '_' -f 4-6 | sort | uniq
     else
       title="shared"
     fi
-    if [ $dt -eq 0 ]; then
-      plotscript="$plotscript unset xtics; unset xlabel; "
+    if [ $dt -eq 1 ]; then
+      plotscript="$plotscript set xtics; set format x \"\"; unset xlabel; "
     else
-      plotscript="$plotscript set xtics; set xlabel \"latency\" offset 0,.4; "
+      plotscript="$plotscript set xtics; set format x \"%.0s%cs\"; set xlabel \"latency\" offset 0,.4; "
     fi
-    plotscript="$plotscript plot \"$temp_dir/install-$f\" using (\$1/1000000000):(\$2*100) with boxes lw 2 dt $dt lc \"${colors[$dt]}\" title \"$title\"; "
+    plotscript="$plotscript plot \"$temp_dir/install-$f\" using (\$1/1000000000):(\$2*100) with boxes ls $dt title \"$title\"; "
     dt=$(expr $dt + 1)
   done
   gnuplot -p -e "$plotscript" > plots/$commit/i-tpchlike-mixing/hist-install-$g.pdf
