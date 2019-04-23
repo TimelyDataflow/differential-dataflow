@@ -100,6 +100,13 @@ def ii_sharing():
             "set ylabel \"complementary cdf\"; " \
             "set key right top Left reverse font \",9\"; " \
             "set rmargin 1; " \
+            "set style rect fc lt -1 fs solid 1 noborder; " \
+            "set arrow from graph 0, first 0.05 to graph 1, first 0.05 nohead lt rgb \"red\"; " \
+            "set obj 1 rect at graph .187,0.68 size .5,.1 fc rgb \"white\" front; " \
+            "set label \"p95\" at graph .15, 0.68 font \",9\" textcolor \"red\" front; " \
+            "set arrow from graph 0, first 0.01 to graph 1, first 0.01 nohead lt rgb \"red\"; " \
+            "set obj 2 rect at graph .187,0.5 size .5,.1 fc rgb \"white\" front; " \
+            "set label \"p99\" at graph .15, 0.50 font \",9\" textcolor \"red\" front; " \
             "plot "
 
     shared_names = {
@@ -151,6 +158,7 @@ def iv_boomerang():
             "set key left top Left reverse font \",10\"; " \
             "set pointsize 0.6; " \
             "set rmargin 1; " \
+            "set arrow from graph 0, first 1 to graph 1, first 1 nohead lt rgb \"red\"; " \
             "plot "
 
     shared_names = {

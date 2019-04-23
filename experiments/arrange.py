@@ -16,7 +16,8 @@ def experiment_setup(experiment_name, n, w, **config):
         "_".join(["{}={}".format(k, str(v)) for k, v in config.items()]))
 
 def arrange_closed_loop():
-    for run in [0]: # range(0, 10):
+    experiments.run_cmd("cargo build --release --bin arrange", node = arg_node)
+    for run in range(0, 10):
         experiment_name = "arrange-closed-loop-{}".format(run)
 
         experiments.eprint("### {} ###".format(experiment_name))
@@ -42,7 +43,7 @@ def arrange_closed_loop():
                                 thp = "no"
                                 zerocopy = "thread"
                                 alloc = "jemallocalloc"
-                                inputstrategy = "poweroftwo"
+                                inputstrategy = "ms"
 
                                 config = OrderedDict([
                                     ("keys", keys),

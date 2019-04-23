@@ -28,11 +28,27 @@ def prepare(commit, experiment):
     eprint(params)
     return (filedict, params)
 
+def commonscript():
+    plotscript = "set terminal pdf size 5.2cm,3.5cm font \"Arial,10\"; set logscale x; set logscale y; " \
+            "set bmargin at screen 0.2; " \
+            "set xrange [0.00001:5.0]; " \
+            "set xtics rotate by -20 offset -0.8,0; " \
+            "set key samplen 2; " \
+            "set format x \"%.0s%cs\"; " \
+            "set yrange [0.0001:1.01]; " \
+            "set xlabel \"latency\" offset 0,0.3; " \
+            "set format y \"10^{%T}\"; " \
+            "set bmargin at screen 0.25; " \
+            "set ylabel \"complementary cdf\"; " \
+            "set rmargin 1; " \
+            "set key left bottom Left reverse font \",9\"; "
+    return plotscript
+
 def groupingstr(s):
     return '_'.join("{}={}".format(x[0], str(x[1])) for x in sorted(s, key=lambda x: x[0]))
 
 def i_load_varies(): # commit = "dirty-8380c53277307b6e9e089a8f6f79886b36e20428" experiment = "arrange-open-loop"
-    commit = "73399ca494"
+    commit = "aa1aff5380"
     experiment = "arrange-open-loop-load-varies"
 
     filedict, params = prepare(commit, experiment)
@@ -43,17 +59,14 @@ def i_load_varies(): # commit = "dirty-8380c53277307b6e9e089a8f6f79886b36e20428"
     F = filtering
     eprint(F)
     # print('\n'.join(str(p) for p, f in sorted(filedict, key=lambda x: dict(x[0])['rate']) if p.issuperset(F)))
-    plotscript = "set terminal pdf size 5.2cm,3.5cm font \"Arial,10\"; set logscale x; set logscale y; " \
-            "set bmargin at screen 0.2; " \
-            "set xrange [10000:5000000000.0]; " \
-            "set key samplen 2; " \
-            "set format x \"10^{%T}\"; " \
-            "set yrange [0.0001:1.01]; " \
-            "set xlabel \"nanoseconds\" offset 0,0.3; " \
-            "set format y \"10^{%T}\"; " \
-            "set bmargin at screen 0.25; " \
-            "set ylabel \"complementary cdf\"; " \
-            "set key left bottom Left reverse font \",10\"; " \
+    plotscript = commonscript() + \
+            "set style rect fc lt -1 fs solid 1 noborder; " \
+            "set arrow from graph 0.32, first 0.05 to graph 1, first 0.05 nohead lt rgb \"red\"; " \
+            "set obj 1 rect at graph .887,0.68 size .5,.1 fc rgb \"white\" front; " \
+            "set label \"p95\" at graph .85, 0.68 font \",9\" textcolor \"red\" front; " \
+            "set arrow from graph 0.32, first 0.01 to graph 1, first 0.01 nohead lt rgb \"red\"; " \
+            "set obj 2 rect at graph .887,0.5 size .5,.1 fc rgb \"white\" front; " \
+            "set label \"p99\" at graph .85, 0.50 font \",9\" textcolor \"red\" front; " \
             "plot "
 
     rates_plotted = set()
@@ -65,7 +78,7 @@ def i_load_varies(): # commit = "dirty-8380c53277307b6e9e089a8f6f79886b36e20428"
             eprint(p)
             datafile = "{}/i_load_varies_{}".format(tempdir, f)
             assert(execute('cat results/{}/{}/{} | grep LATENCYFRACTION | cut -f 3,4 > {}'.format(commit, experiment, f, datafile)))
-            plotscript += "\"{}\" using 1:2 with lines lw 2 dt ({}, 2) title \"{}\", ".format(datafile, dt, dict(p)['rate'])
+            plotscript += "\"{}\" using ($1/1000000000.0):2 with lines lw 2 dt ({}, 2) title \"{}\", ".format(datafile, dt, dict(p)['rate'])
             dt += 2
 
     plotscript += "\n"
@@ -78,7 +91,7 @@ def i_load_varies(): # commit = "dirty-8380c53277307b6e9e089a8f6f79886b36e20428"
     shutil.rmtree(tempdir)
 
 def ii_strong_scaling(): # commit = "dirty-e74441d0c062c7ec8d6da9bbf1972bd9397b2670" experiment = "arrange-open-loop"
-    commit = "73399ca494"
+    commit = "aa1aff5380"
     experiment = "arrange-open-loop-strong-scaling"
 
     filedict, params = prepare(commit, experiment)
@@ -91,18 +104,7 @@ def ii_strong_scaling(): # commit = "dirty-e74441d0c062c7ec8d6da9bbf1972bd9397b2
             F = filtering.union({ ('work', work), ('comp', comp), ('keys', 10000000), ('recs', 32000000), ('inputstrategy', 'ms'), })
             eprint(F)
             # print('\n'.join(str(p) for p, f in sorted(filedict, key=lambda x: dict(x[0])['rate']) if p.issuperset(F)))
-            plotscript = "set terminal pdf size 5.2cm,3.5cm font \"Arial,10\"; set logscale x; set logscale y; " \
-                    "set bmargin at screen 0.2; " \
-                    "set xrange [10000:5000000000.0]; " \
-                    "set key samplen 2; " \
-                    "set format x \"10^{%T}\"; " \
-                    "set yrange [0.0001:1.01]; " \
-                    "set xlabel \"nanoseconds\" offset 0,0.3; " \
-                    "set format y \"10^{%T}\"; " \
-                    "set bmargin at screen 0.25; " \
-                    "set ylabel \"complementary cdf\"; " \
-                    "set key left bottom Left reverse font \",10\"; " \
-                    "plot "
+            plotscript = commonscript() + "plot "
 
             w_plotted = set()
             dt = 2
@@ -111,18 +113,19 @@ def ii_strong_scaling(): # commit = "dirty-e74441d0c062c7ec8d6da9bbf1972bd9397b2
                     w_plotted.add(dict(p)['w'])
                     datafile = "{}/ii_strong_scaling_{}".format(tempdir, f)
                     assert(execute('cat results/{}/{}/{} | grep LATENCYFRACTION | cut -f 3,4 > {}'.format(commit, experiment, f, datafile)))
-                    plotscript += "\"{}\" using 1:2 with lines lw 2 dt ({}, 2) title \"{}\", ".format(datafile, dt, dict(p)['w'])
+                    plotscript += "\"{}\" using ($1/1000000000.0):2 with lines lw 2 dt ({}, 2) title \"{}\", ".format(datafile, dt, dict(p)['w'])
                     dt += 2
 
             assert(execute('mkdir -p plots/{}/{}'.format(commit, experiment)))
             eprint(plotscript)
-            assert(execute('gnuplot > plots/{}/{}/ii_strong_scaling_{}.pdf'.format(commit, experiment, groupingstr(F)), input=plotscript))
+            execute('cat > {}/plotscript.plt'.format(tempdir), input=plotscript)
+            assert(execute('gnuplot {}/plotscript.plt > plots/{}/{}/ii_strong_scaling_{}.pdf'.format(tempdir, commit, experiment, groupingstr(F))))
             eprint('plots/{}/{}/ii_strong_scaling_{}.pdf'.format(commit, experiment, groupingstr(F)))
 
     shutil.rmtree(tempdir)
 
 def iii_weak_scaling(): # commit = "dirty-e74441d0c062c7ec8d6da9bbf1972bd9397b2670" experiment = "arrange-open-loop"
-    commit = "73399ca494"
+    commit = "aa1aff5380"
     experiment = "arrange-open-loop-weak-scaling"
 
     filedict, params = prepare(commit, experiment)
@@ -136,18 +139,7 @@ def iii_weak_scaling(): # commit = "dirty-e74441d0c062c7ec8d6da9bbf1972bd9397b26
             F = filtering.union({ ('work', work), ('comp', comp), })
             eprint(F)
             # print('\n'.join(str(p) for p, f in sorted(filedict, key=lambda x: dict(x[0])['rate']) if p.issuperset(F)))
-            plotscript = "set terminal pdf size 5.2cm,3.5cm font \"Arial,10\"; set logscale x; set logscale y; " \
-                    "set bmargin at screen 0.2; " \
-                    "set xrange [10000:5000000000.0]; " \
-                    "set key samplen 2; " \
-                    "set format x \"10^{%T}\"; " \
-                    "set yrange [0.0001:1.01]; " \
-                    "set xlabel \"nanoseconds\" offset 0,0.3; " \
-                    "set format y \"10^{%T}\"; " \
-                    "set bmargin at screen 0.25; " \
-                    "set ylabel \"complementary cdf\"; " \
-                    "set key left bottom Left reverse font \",10\"; " \
-                    "plot "
+            plotscript = commonscript() + "plot "
 
             dt = 2
             data = False
@@ -164,20 +156,21 @@ def iii_weak_scaling(): # commit = "dirty-e74441d0c062c7ec8d6da9bbf1972bd9397b26
                     data = True
                     datafile = "{}/iii_weak_scaling_{}".format(tempdir, f)
                     assert(execute('cat results/{}/{}/{} | grep LATENCYFRACTION | cut -f 3,4 > {}'.format(commit, experiment, f, datafile)))
-                    plotscript += "\"{}\" using 1:2 with lines lw 2 dt ({}, 2) title \"{}\", ".format(datafile, dt, dict(p)['w'])
+                    plotscript += "\"{}\" using ($1/1000000000.0):2 with lines lw 2 dt ({}, 2) title \"{}\", ".format(datafile, dt, dict(p)['w'])
                     dt += 2
 
             if data:
                 assert(execute('mkdir -p plots/{}/{}'.format(commit, experiment)))
                 eprint(plotscript)
-                assert(execute('gnuplot > plots/{}/{}/iii_weak_scaling_{}.pdf'.format(commit, experiment, groupingstr(F)), input=plotscript))
+                execute('cat > {}/plotscript.plt'.format(tempdir), input=plotscript)
+                assert(execute('gnuplot {}/plotscript.plt > plots/{}/{}/iii_weak_scaling_{}.pdf'.format(tempdir, commit, experiment, groupingstr(F))))
                 eprint('plots/{}/{}/iii_weak_scaling_{}.pdf'.format(commit, experiment, groupingstr(F)))
 
     shutil.rmtree(tempdir)
 
 
 def iv_throughput(): # commit = "dirty-e74441d0c062c7ec8d6da9bbf1972bd9397b2670" experiment = "arrange"
-    commit = "73399ca494"
+    commit = "aa1aff5380"
     experiment = "arrange-closed-loop-0"
 
     filedict, params = prepare(commit, experiment)
@@ -196,7 +189,8 @@ def iv_throughput(): # commit = "dirty-e74441d0c062c7ec8d6da9bbf1972bd9397b2670"
             "set bmargin at screen 0.25; " \
             "set ylabel \"throughput (records/s)\"; " \
             "set format y \"%.0s%c\"; " \
-            "set key left top Left reverse font \",10\"; " \
+            "set key left top Left reverse font \",9\"; " \
+            "set rmargin 1; " \
             "plot "
 
             # "set format y \"10^{%T}\"; " \
@@ -231,8 +225,8 @@ def iv_throughput(): # commit = "dirty-e74441d0c062c7ec8d6da9bbf1972bd9397b2670"
     # shutil.rmtree(tempdir)
 
 def v_amortization(): # USE STRONG SCALING
-    commit = "73399ca494"
-    experiment = "arrange-open-loop"
+    commit = "aa1aff5380"
+    experiment = "arrange-open-loop-strong-scaling"
 
     filedict, params = prepare(commit, experiment)
 
@@ -244,18 +238,7 @@ def v_amortization(): # USE STRONG SCALING
             F = filtering.union({ ('comp', comp), })
             eprint(F)
             # print('\n'.join(str(p) for p, f in sorted(filedict, key=lambda x: dict(x[0])['rate']) if p.issuperset(F)))
-            plotscript = "set terminal pdf size 5.2cm,3.5cm font \"Arial,10\"; set logscale x; set logscale y; " \
-                    "set bmargin at screen 0.2; " \
-                    "set xrange [10000:5000000000.0]; " \
-                    "set key samplen 2; " \
-                    "set format x \"10^{%T}\"; " \
-                    "set yrange [0.0001:1.01]; " \
-                    "set xlabel \"nanoseconds\" offset 0,0.3; " \
-                    "set format y \"10^{%T}\"; " \
-                    "set bmargin at screen 0.25; " \
-                    "set ylabel \"complementary cdf\"; " \
-                    "set key left bottom Left reverse font \",10\"; " \
-                    "plot "
+            plotscript = commonscript() + "plot "
             data = False
             w_plotted = set()
             for p, f in sorted(filedict, key=lambda x: (dict(x[0])['w'], str(dict(x[0])['work']))):
@@ -280,7 +263,7 @@ def v_amortization(): # USE STRONG SCALING
                         'max': 'eager',
                     })[dict(p)['work']]
 
-                    plotscript += "\"{}\" using 1:2 with lines lw 2 dt ({}, 2, {}, 2) title \"{}\", ".format(datafile, work_dt, w_dt, "{}, {}".format(dict(p)['w'], work_s))
+                    plotscript += "\"{}\" using ($1/1000000000.0):2 with lines lw 2 dt ({}, 2, {}, 2) title \"{}\", ".format(datafile, work_dt, w_dt, "{}, {}".format(dict(p)['w'], work_s))
 
             if data:
                 assert(execute('mkdir -p plots/{}/{}'.format(commit, experiment)))
@@ -291,8 +274,8 @@ def v_amortization(): # USE STRONG SCALING
     shutil.rmtree(tempdir)
 
 def vi_install():
-    commit = "73399ca494"
-    experiment = "arrange-open-loop"
+    commit = "aa1aff5380"
+    experiment = "arrange-install"
 
     filedict, params = prepare(commit, experiment)
 
@@ -300,18 +283,7 @@ def vi_install():
 
     filtering = { ('keys', 10000000), ('recs', 32000000), ('w', 32), }
     # print('\n'.join(str(p) for p, f in sorted(filedict, key=lambda x: dict(x[0])['rate']) if p.issuperset(F)))
-    plotscript = "set terminal pdf size 5.2cm,3.5cm font \"Arial,10\"; set logscale x; set logscale y; " \
-            "set bmargin at screen 0.2; " \
-            "set xrange [10000:5000000000.0]; " \
-            "set key samplen 2; " \
-            "set format x \"10^{%T}\"; " \
-            "set yrange [0.0001:1.01]; " \
-            "set xlabel \"nanoseconds\" offset 0,0.3; " \
-            "set format y \"10^{%T}\"; " \
-            "set bmargin at screen 0.25; " \
-            "set ylabel \"complementary cdf\"; " \
-            "set key left bottom Left reverse font \",10\"; " \
-            "plot "
+    plotscript = commonscript() + "plot "
 
     dt = 2
     for p, f in filedict: #sorted(filedict, key=lambda x: dict(x[0])['w']):
@@ -321,12 +293,21 @@ def vi_install():
                 datafile = "{}/vi_install_{}_{}".format(tempdir, f, size)
                 eprint(datafile)
                 assert(execute('cat results/{}/{}/{} | grep LATENCY | awk \'$3 == {}\' | cut -f 3-5 > {}'.format(commit, experiment, f, size, datafile)))
-                plotscript += "\"{}\" using 2:3 with lines lw 2 dt ({}, 2) title \"{}\", ".format(datafile, dt, "2^{{{}}}".format(int(math.log2(size))))
+                plotscript += "\"{}\" using ($2/1000000000.0):3 with lines lw 2 dt ({}, 2) title \"{}\", ".format(datafile, dt, "2^{{{}}}".format(int(math.log2(size))))
                 dt += 2
 
     assert(execute('mkdir -p plots/{}/{}'.format(commit, experiment)))
     eprint(plotscript)
-    assert(execute('gnuplot > plots/{}/{}/vi_install_{}.pdf'.format(commit, experiment, groupingstr(filtering)), input=plotscript))
+    execute('cat > {}/plotscript.plt'.format(tempdir), input=plotscript)
+    assert(execute('gnuplot {}/plotscript.plt > plots/{}/{}/vi_install_{}.pdf'.format(tempdir, commit, experiment, groupingstr(filtering))))
     eprint('plots/{}/{}/vi_install_{}.pdf'.format(commit, experiment, groupingstr(filtering)))
 
     # shutil.rmtree(tempdir)
+
+def run_all():
+    i_load_varies()
+    ii_strong_scaling()
+    iii_weak_scaling()
+    iv_throughput()
+    v_amortization()
+    vi_install()

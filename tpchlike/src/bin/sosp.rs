@@ -40,23 +40,26 @@ fn main() {
         }
     });
 
-    timely::execute_from_args(std::env::args().skip(4), |worker| {
+    let mut args = ::std::env::args();
+    args.next();
+    let prefix = args.next().unwrap();
+    let logical_batch = args.next().unwrap().parse::<usize>().expect("logical batch must be an integer");
+    let physical_batch = args.next().unwrap().parse::<usize>().expect("physical batch must be an integer");
+    let concurrent = args.next().unwrap().parse::<usize>().expect("concurrency must be an integer");
+    let arrange: bool = args.next().unwrap().parse().unwrap();
+    let zerocopy_workers: usize = args.next().unwrap().parse().unwrap();
+    eprintln!("{:?} workers", zerocopy_workers);
+    let seal: bool = ::std::env::args().any(|x| x == "seal-inputs");
 
+    let allocators =
+        ::timely::communication::allocator::zero_copy::allocator_process::ProcessBuilder::new_vector(zerocopy_workers);
+    timely::execute::execute_from(allocators, Box::new(()), move |worker| {
         let timer = worker.timer();
         let index = worker.index();
         let peers = worker.peers();
 
         let core_ids = core_affinity::get_core_ids().unwrap();
         core_affinity::set_for_current(core_ids[index]);
-
-        let mut args = ::std::env::args();
-        args.next();
-        let prefix = args.next().unwrap();
-        let logical_batch = args.next().unwrap().parse::<usize>().expect("logical batch must be an integer");
-        let physical_batch = args.next().unwrap().parse::<usize>().expect("physical batch must be an integer");
-        let concurrent = args.next().unwrap().parse::<usize>().expect("concurrency must be an integer");
-        let arrange: bool = args.next().unwrap().parse().unwrap();
-        let seal: bool = ::std::env::args().any(|x| x == "seal-inputs");
 
         // Build all indices, as we plan to use all of them.
         let (mut inputs, mut probe, mut traces) = worker.dataflow::<usize,_,_>(move |scope| {

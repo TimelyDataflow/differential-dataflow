@@ -51,7 +51,7 @@ def i_tpchlike_mixing():
         experiments.eprint("RUNNING {}".format(filename))
         commands = [
                 ("../tpchlike/target/release/sosp {} -h hostfile.txt -n {} -p {} -w {}".format(
-                    " ".join(str(x) for x in [prefix, logical_batch, physical_batch, concurrent, arrange, seal_inputs]),
+                    " ".join(str(x) for x in [prefix, logical_batch, physical_batch, concurrent, arrange, w, seal_inputs]),
                     n,
                     p,
                     w), p) for p in range(0, n)]
