@@ -58,15 +58,15 @@ def graphs_interactive_alt():
 
 def graphs_interactive_neu_boomerang():
     segment = int(sys.argv[sys.argv.index('--segment') + 1])
-    experiment_name = "graphs-interactive-neu-boomerang"
-    graphs_interactive_neu_base(experiment_name, [int((1.3**x) * 10000) for x in range(20 + segment, 21 + segment)])
+    experiment_name = "graphs-interactive-neu-boomerang-jemalloc"
+    graphs_interactive_neu_base(experiment_name, [int((1.3**x) * 10000) for x in range(5 * segment, 5 + 5 * segment)])
 
 def graphs_interactive_neu():
-    experiment_name = "graphs-interactive-neu"
+    experiment_name = "graphs-interactive-neu-jemalloc"
     graphs_interactive_neu_base(experiment_name, [200000])
 
 def graphs_interactive_neu_base(experiment_name, rates_a):
-    experiments.run_cmd(". ~/eth_proxy.sh; cargo build --release --bin graphs-interactive-neu", node = arg_node)
+    experiments.run_cmd(". ~/eth_proxy.sh; cargo build --release --bin graphs-interactive-neu --features jemalloc", node = arg_node)
 
     experiments.eprint("### {} ###".format(experiment_name))
     experiments.eprint(experiments.experdir(experiment_name))
@@ -103,9 +103,9 @@ def graphs_interactive_neu_base(experiment_name, rates_a):
 
 def graphs_interactive_neu_zwei():
     # experiments.run_cmd("cargo build --release --bin graphs-interactive-neu")
-    experiments.run_cmd(". ~/eth_proxy.sh; cargo build --release --bin graphs-interactive-neu-zwei", node = arg_node)
+    experiments.run_cmd(". ~/eth_proxy.sh; cargo build --release --bin graphs-interactive-neu-zwei --features jemalloc", node = arg_node)
 
-    experiment_name = "graphs-interactive-neu-zwei"
+    experiment_name = "graphs-interactive-neu-zwei-jemalloc"
 
     experiments.eprint("### {} ###".format(experiment_name))
     experiments.eprint(experiments.experdir(experiment_name))

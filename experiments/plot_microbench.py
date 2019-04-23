@@ -171,7 +171,7 @@ def iii_weak_scaling(): # commit = "dirty-e74441d0c062c7ec8d6da9bbf1972bd9397b26
 
 def iv_throughput(): # commit = "dirty-e74441d0c062c7ec8d6da9bbf1972bd9397b2670" experiment = "arrange"
     commit = "aa1aff5380"
-    experiment = "arrange-closed-loop-0"
+    experiment = "arrange-closed-loop-1"
 
     filedict, params = prepare(commit, experiment)
 

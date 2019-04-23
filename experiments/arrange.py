@@ -16,9 +16,9 @@ def experiment_setup(experiment_name, n, w, **config):
         "_".join(["{}={}".format(k, str(v)) for k, v in config.items()]))
 
 def arrange_closed_loop():
-    experiments.run_cmd("cargo build --release --bin arrange", node = arg_node)
-    for run in range(0, 10):
-        experiment_name = "arrange-closed-loop-{}".format(run)
+    experiments.run_cmd("cargo build --release --bin arrange --features jemalloc", node = arg_node)
+    for run in [0]:
+        experiment_name = "arrange-closed-loop-jemalloc"
 
         experiments.eprint("### {} ###".format(experiment_name))
         experiments.eprint(experiments.experdir(experiment_name))
@@ -76,8 +76,8 @@ def arrange_closed_loop():
                                 experiments.waitall(processes)
 
 def arrange_open_loop_load_varies():
-    experiment_name = "arrange-open-loop-load-varies"
-    experiments.run_cmd("cargo build --release --bin arrange", node = arg_node)
+    experiment_name = "arrange-open-loop-load-varies-jemalloc"
+    experiments.run_cmd("cargo build --release --bin arrange --features jemalloc", node = arg_node)
 
     experiments.eprint("### {} ###".format(experiment_name))
     experiments.eprint(experiments.experdir(experiment_name))
@@ -136,8 +136,8 @@ def arrange_open_loop_load_varies():
                             experiments.waitall(processes)
 
 def arrange_open_loop_strong_scaling():
-    experiment_name = "arrange-open-loop-strong-scaling"
-    experiments.run_cmd("cargo build --release --bin arrange", node = arg_node)
+    experiment_name = "arrange-open-loop-strong-scaling-jemalloc"
+    experiments.run_cmd("cargo build --release --bin arrange --features jemalloc", node = arg_node)
 
     experiments.eprint("### {} ###".format(experiment_name))
     experiments.eprint(experiments.experdir(experiment_name))
@@ -195,8 +195,8 @@ def arrange_open_loop_strong_scaling():
                                 experiments.waitall(processes)
 
 def arrange_open_loop_weak_scaling():
-    experiment_name = "arrange-open-loop-weak-scaling"
-    experiments.run_cmd("cargo build --release --bin arrange", node = arg_node)
+    experiment_name = "arrange-open-loop-weak-scaling-jemalloc"
+    experiments.run_cmd("cargo build --release --bin arrange --features jemalloc", node = arg_node)
 
     experiments.eprint("### {} ###".format(experiment_name))
     experiments.eprint(experiments.experdir(experiment_name))
@@ -254,8 +254,8 @@ def arrange_open_loop_weak_scaling():
                                     experiments.waitall(processes)
 
 def arrange_install():
-    experiment_name = "arrange-install"
-    experiments.run_cmd("cargo build --release --bin install", node = arg_node)
+    experiment_name = "arrange-install-jemalloc"
+    experiments.run_cmd("cargo build --release --bin install --features jemalloc", node = arg_node)
 
     experiments.eprint("### {} ###".format(experiment_name))
     experiments.eprint(experiments.experdir(experiment_name))

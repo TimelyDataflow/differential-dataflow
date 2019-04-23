@@ -21,11 +21,13 @@ def experiment_setup(experiment_name, n, w, **config):
 def i_tpchlike_mixing():
     # physical_batch = int(sys.argv[sys.argv.index('--physical_batch') + 1])
     physical_batch = 10000
+    arrange = sys.argv[sys.argv.index('--arrange') + 1]
     experiments.eprint("physical batch {}".format(physical_batch))
+    experiments.eprint("arrange {}".format(arrange))
 
-    experiments.run_cmd("cd ../tpchlike; . ~/eth_proxy.sh; cargo build --release --bin sosp", node=arg_node)
+    experiments.run_cmd("cd ../tpchlike; . ~/eth_proxy.sh; cargo build --release --bin sosp --features jemalloc", node=arg_node)
 
-    experiment_name = "i-tpchlike-mixing"
+    experiment_name = "i-tpchlike-mixing-jemalloc"
 
     experiments.eprint("### {} ###".format(experiment_name))
     experiments.eprint(experiments.experdir(experiment_name))
@@ -35,7 +37,8 @@ def i_tpchlike_mixing():
     logical_batch = 1
     concurrent = 10
     seal_inputs = 'dontseal'
-    for arrange in ['false', 'true']: # 'false'
+    #for arrange in ['false', 'true']: # 'false'
+    for tmptmp in [0]:
         # zerocopy = "no"
         # alloc = "jemallocalloc"
 

@@ -4,6 +4,9 @@ extern crate differential_dataflow;
 extern crate core_affinity;
 extern crate tpchlike;
 
+#[cfg(feature = "jemalloc")]
+extern crate jemallocator;
+
 use std::rc::Rc;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
@@ -11,6 +14,9 @@ use std::time::Instant;
 
 use timely::dataflow::ProbeHandle;
 use tpchlike::{Arrangements, Experiment, InputHandles, types::*, queries};
+
+#[cfg(feature = "jemalloc")]
+#[global_allocator] static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
 
 fn main() {
     ::std::thread::spawn(|| {
