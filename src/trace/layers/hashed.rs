@@ -126,11 +126,11 @@ pub struct HashedBuilder<K: HashOrdered, L> {
 
 impl<K: HashOrdered+Clone+Default, L> HashedBuilder<K, L> {
 
-	#[inline(always)]
+	#[inline]
 	fn _lower(&self, index: usize) -> usize {
 		self.keys[index].get_lower()
 	}
-	#[inline(always)]
+	#[inline]
 	fn _upper(&self, index: usize) -> usize {
 		self.keys[index].get_upper()
 	}
@@ -319,7 +319,7 @@ impl<K: HashOrdered+Clone+Default, L: TupleBuilder> TupleBuilder for HashedBuild
 			vals: L::with_capacity(cap),
 		} 
 	}
-	#[inline(always)]
+	#[inline]
 	fn push_tuple(&mut self, (key, val): (K, L::Item)) {
 
 		// we build up self.temp, and rely on self.boundary() to drain self.temp.

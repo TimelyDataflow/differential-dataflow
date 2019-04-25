@@ -62,7 +62,7 @@ impl<K: Clone> TupleBuilder for UnorderedBuilder<K> {
 	type Item = K;
 	fn new() -> Self { UnorderedBuilder { vals: Vec::new() } }
 	fn with_capacity(cap: usize) -> Self { UnorderedBuilder { vals: Vec::with_capacity(cap) } }
-	#[inline(always)] fn push_tuple(&mut self, tuple: K) { self.vals.push(tuple) }
+	#[inline] fn push_tuple(&mut self, tuple: K) { self.vals.push(tuple) }
 }
 
 /// A cursor for walking through an unordered sequence of values.

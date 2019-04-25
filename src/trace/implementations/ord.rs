@@ -302,7 +302,7 @@ where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Ord+Clone+::std::fm
 		}
 	}
 
-	#[inline(always)]
+	#[inline]
 	fn push(&mut self, (key, val, time, diff): (K, V, T, R)) {
 		self.builder.push_tuple((key, (val, (time, diff))));
 	}
@@ -557,7 +557,7 @@ where K: Ord+Clone+'static, T: Lattice+Ord+Clone+'static, R: Monoid {
 		}
 	}
 
-	#[inline(always)]
+	#[inline]
 	fn push(&mut self, (key, _, time, diff): (K, (), T, R)) {
 		self.builder.push_tuple((key, (time, diff)));
 	}

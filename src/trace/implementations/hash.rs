@@ -129,7 +129,7 @@ where K: Clone+Default+HashOrdered+'static, V: Ord+Clone+'static, T: Lattice+Ord
 		} 
 	}
 
-	#[inline(always)]
+	#[inline]
 	fn push(&mut self, (key, val, time, diff): (K, V, T, R)) {
 		self.builder.push_tuple((key, (val, (time, diff))));
 	}
@@ -252,7 +252,7 @@ where K: Clone+Default+HashOrdered+'static, T: Lattice+Ord+Clone+Default+'static
 		} 
 	}
 
-	#[inline(always)]
+	#[inline]
 	fn push(&mut self, (key, _, time, diff): (K, (), T, R)) {
 		self.builder.push_tuple((key, (time, diff)));
 	}

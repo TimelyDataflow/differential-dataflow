@@ -250,7 +250,7 @@ where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Ord+Clone+::std::fm
 	fn new() -> Self { VecBuilder { list: Vec::new() } }
 	fn with_capacity(cap: usize) -> Self { VecBuilder { list: Vec::with_capacity(cap) } }
 
-	#[inline(always)]
+	#[inline]
 	fn push(&mut self, (key, val, time, diff): (K, V, T, R)) { self.list.push((key,val,time,diff)); }
 
 	#[inline(never)]

@@ -31,7 +31,7 @@ struct EditList<'a, V: 'a, T, R> {
 
 impl<'a, V:'a, T, R> EditList<'a, V, T, R> where T: Ord+Clone, R: Monoid {
     /// Creates an empty list of edits.
-    #[inline(always)]
+    #[inline]
     fn new() -> Self {
         EditList {
             values: Vec::new(),
@@ -49,20 +49,20 @@ impl<'a, V:'a, T, R> EditList<'a, V, T, R> where T: Ord+Clone, R: Monoid {
         }
     }
     /// Clears the list of edits.
-    #[inline(always)]
+    #[inline]
     fn clear(&mut self) {
         self.values.clear();
         self.edits.clear();
     }
     fn len(&self) -> usize { self.edits.len() }
     /// Inserts a new edit for an as-yet undetermined value.
-    #[inline(always)]
+    #[inline]
     fn push(&mut self, time: T, diff: R) {
         // TODO: Could attempt "insertion-sort" like behavior here, where we collapse if possible.
         self.edits.push((time, diff));
     }
     /// Associates all edits pushed since the previous `seal_value` call with `value`.
-    #[inline(always)]
+    #[inline]
     fn seal(&mut self, value: &'a V) {
         let prev = self.values.last().map(|x| x.1).unwrap_or(0);
         consolidate_from(&mut self.edits, prev);

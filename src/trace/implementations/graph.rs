@@ -214,7 +214,7 @@ impl<N> Builder<Node, N, Product<RootTimestamp,()>, isize, GraphBatch<N>> for Gr
         }
     }
 
-    #[inline(always)]
+    #[inline]
     fn push(&mut self, (key, val, _time, _diff): (Node, N, Product<RootTimestamp,()>, isize)) {
         while self.nodes.len() <= (key as usize) / self.peers {
             self.keys.push((self.peers * self.nodes.len() + self.index) as Node);
