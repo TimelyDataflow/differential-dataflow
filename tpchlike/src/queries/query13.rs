@@ -7,7 +7,7 @@ use differential_dataflow::lattice::Lattice;
 
 use regex::Regex;
 
-use {Collections, Context};
+use {Arrangements, Experiment, Collections};
 
 // -- $ID$
 // -- TPC-H/TPC-R Customer Distribution Query (Q13)
@@ -59,24 +59,39 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
 }
 
 pub fn query_arranged<G: Scope<Timestamp=usize>>(
-    context: &mut Context<G>,
+    scope: &mut G,
+    probe: &mut ProbeHandle<usize>,
+    experiment: &mut Experiment,
+    arrangements: &mut Arrangements,
+    round: usize,
 )
+where
+    G::Timestamp: Lattice+TotalOrder+Ord
 {
+    use timely::dataflow::operators::Map;
+    use differential_dataflow::AsCollection;
+
+    let arrangements = arrangements.in_scope(scope, experiment);
+
     let regex = Regex::new("special.*requests").expect("Regex construction failed");
 
     let orders =
-    context
-        .collections
-        .orders()
-        .flat_map(move |o| if !regex.is_match(&o.comment) { Some(o.cust_key) } else { None } );
+    arrangements
+        .order
+        .flat_map_ref(move |_,o| if !regex.is_match(&o.comment) { Some(o.cust_key) } else { None } )
+        .inner
+        .map(move |(d,t,r)| (d, ::std::cmp::max(t,round),r))
+        .as_collection();
 
-    context
-        .collections
-        .customers()
-        .map(|c| c.cust_key)
+    arrangements
+        .customer
+        .as_collection(|&c,_| c)
+        .inner
+        .map(move |(d,t,r)| (d, ::std::cmp::max(t,round),r))
+        .as_collection()
         .concat(&orders)
         .count_total()
         .map(|(_cust_key, count)| (count-1) as usize)
         .count_total()
-        .probe_with(&mut context.probe);
+        .probe_with(probe);
 }

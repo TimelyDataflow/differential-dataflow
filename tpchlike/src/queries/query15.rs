@@ -5,7 +5,7 @@ use timely::dataflow::operators::probe::Handle as ProbeHandle;
 use differential_dataflow::operators::*;
 use differential_dataflow::lattice::Lattice;
 
-use {Collections, Context};
+use {Arrangements, Experiment, Collections};
 use ::types::create_date;
 
 // -- $ID$
@@ -99,16 +99,20 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
 }
 
 pub fn query_arranged<G: Scope<Timestamp=usize>>(
-    context: &mut Context<G>,
+    scope: &mut G,
+    probe: &mut ProbeHandle<usize>,
+    experiment: &mut Experiment,
+    arrangements: &mut Arrangements,
 )
+where
+    G::Timestamp: Lattice+TotalOrder+Ord
 {
-    let supplier = context.suppliers();
+    let arrangements = arrangements.in_scope(scope, experiment);
 
     // revenue by supplier
     let revenue =
-    context
-        .collections
-        .lineitems()
+    experiment
+        .lineitem(scope)
         .explode(|item|
             if create_date(1996, 1, 1) <= item.ship_date && item.ship_date < create_date(1996,4,1) {
                 Some((item.supp_key, (item.extended_price * (100 - item.discount) / 100) as isize))
@@ -144,7 +148,7 @@ pub fn query_arranged<G: Scope<Timestamp=usize>>(
         .count_total();
 
     top_suppliers
-        .join_core(&supplier, |_sk,&rev,s| Some((s.supp_key, s.name, s.address, s.phone, rev)))
+        .join_core(&arrangements.supplier, |_sk,&rev,s| Some((s.supp_key, s.name, s.address, s.phone, rev)))
         .count_total()
-        .probe_with(&mut context.probe);
+        .probe_with(probe);
 }

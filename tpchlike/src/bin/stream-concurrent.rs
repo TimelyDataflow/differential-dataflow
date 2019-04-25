@@ -9,14 +9,15 @@ use std::io::{BufRead, BufReader};
 use std::time::Instant;
 
 use timely::dataflow::operators::*;
+
 use differential_dataflow::AsCollection;
-use tpchlike::{Context, Collections, types::*, queries};
+
+use tpchlike::{Collections, types::*, queries};
 
 fn main() {
 
     timely::execute_from_args(std::env::args().skip(4), |worker| {
 
-        let timer = worker.timer();
         let index = worker.index();
         let peers = worker.peers();
 
@@ -26,15 +27,13 @@ fn main() {
         let prefix = ::std::env::args().nth(1).unwrap();;
         let logical_batch = ::std::env::args().nth(2).unwrap().parse::<usize>().unwrap();
         let physical_batch = ::std::env::args().nth(3).unwrap().parse::<usize>().unwrap();
-        let arrange: bool = ::std::env::args().nth(4).unwrap().parse().unwrap();
         let seal: bool = ::std::env::args().any(|x| x == "seal-inputs");
-        let window: bool = ::std::env::args().any(|x| x == "window");
 
-        let (mut inputs, probe, used, mut traces) = worker.dataflow::<usize,_,_>(move |scope| {
+        let (mut inputs, probe, used) = worker.dataflow::<usize,_,_>(move |scope| {
 
             // create new inputs to use in workers!
             let (cust_in, cust) = scope.new_input();
-            let (line_in, mut line) = scope.new_input();
+            let (line_in, line) = scope.new_input();
             let (nats_in, nats) = scope.new_input();
             let (ords_in, ords) = scope.new_input();
             let (part_in, part) = scope.new_input();
@@ -42,11 +41,7 @@ fn main() {
             let (regs_in, regs) = scope.new_input();
             let (supp_in, supp) = scope.new_input();
 
-            if window {
-                line = line.map(|(x,y,z): (LineItem, usize, isize)| (x,y+1,-z)).concat(&line);
-            }
-
-            let collections = Collections::new(
+            let mut collections = Collections::new(
                 cust.as_collection(),
                 line.map(|(d,t,r)| (Rc::new(d),t,r)).as_collection(),
                 nats.as_collection(),
@@ -57,48 +52,33 @@ fn main() {
                 supp.as_collection(),
             );
 
-            // use timely::dataflow::ProbeHandle;
+            let mut probe = timely::dataflow::ProbeHandle::new();
 
-            let mut context = Context::new(scope.clone(), collections);
-
-            context.index = arrange;
-
-            queries::query01::query_arranged(&mut context);
-            queries::query02::query_arranged(&mut context);
-            queries::query03::query_arranged(&mut context);
-            queries::query04::query_arranged(&mut context);
-            queries::query05::query_arranged(&mut context);
-            queries::query06::query_arranged(&mut context);
-            queries::query07::query_arranged(&mut context);
-            queries::query08::query_arranged(&mut context);
-            queries::query09::query_arranged(&mut context);
-            queries::query10::query_arranged(&mut context);
-            // queries::query11::query_arranged(&mut context);
-            queries::query12::query_arranged(&mut context);
-            queries::query13::query_arranged(&mut context);
-            queries::query14::query_arranged(&mut context);
-            queries::query15::query_arranged(&mut context);
-            queries::query16::query_arranged(&mut context);
-            queries::query17::query_arranged(&mut context);
-            queries::query18::query_arranged(&mut context);
-            queries::query19::query_arranged(&mut context);
-            // queries::query20::query_arranged(&mut context);
-            // queries::query21::query_arranged(&mut context);
-            // queries::query22::query_arranged(&mut context);
+            queries::query01::query(&mut collections, &mut probe);
+            queries::query02::query(&mut collections, &mut probe);
+            queries::query03::query(&mut collections, &mut probe);
+            queries::query04::query(&mut collections, &mut probe);
+            queries::query05::query(&mut collections, &mut probe);
+            queries::query06::query(&mut collections, &mut probe);
+            queries::query07::query(&mut collections, &mut probe);
+            queries::query08::query(&mut collections, &mut probe);
+            queries::query09::query(&mut collections, &mut probe);
+            queries::query10::query(&mut collections, &mut probe);
+            // queries::query11::query(&mut collections, &mut probe);
+            queries::query12::query(&mut collections, &mut probe);
+            queries::query13::query(&mut collections, &mut probe);
+            queries::query14::query(&mut collections, &mut probe);
+            queries::query15::query(&mut collections, &mut probe);
+            queries::query16::query(&mut collections, &mut probe);
+            queries::query17::query(&mut collections, &mut probe);
+            queries::query18::query(&mut collections, &mut probe);
+            queries::query19::query(&mut collections, &mut probe);
+            // queries::query20::query(&mut collections, &mut probe);
+            // queries::query21::query(&mut collections, &mut probe);
+            // queries::query22::query(&mut collections, &mut probe);
 
             // return the various input handles, and the list of probes.
-            let inputs = (
-                Some(cust_in),
-                Some(line_in),
-                Some(nats_in),
-                Some(ords_in),
-                Some(part_in),
-                Some(psup_in),
-                Some(regs_in),
-                Some(supp_in),
-            );
-
-            (inputs, context.probe, context.collections.used(), context.arrangements)
+            ((Some(cust_in), Some(line_in), Some(nats_in), Some(ords_in), Some(part_in), Some(psup_in), Some(regs_in), Some(supp_in)), probe, collections.used())
         });
 
         // customer.tbl lineitem.tbl    nation.tbl  orders.tbl  part.tbl    partsupp.tbl    region.tbl  supplier.tbl
@@ -110,8 +90,6 @@ fn main() {
         let mut partsupps = if used[5] { load::<PartSupp>(prefix.as_str(), "partsupp.tbl", index, peers, logical_batch, physical_batch, 5) } else { Vec::new() };
         let mut regions = if used[6] { load::<Region>(prefix.as_str(), "region.tbl", index, peers, logical_batch, physical_batch, 6) } else { Vec::new() };
         let mut suppliers = if used[7] { load::<Supplier>(prefix.as_str(), "supplier.tbl", index, peers, logical_batch, physical_batch, 7) } else { Vec::new() };
-
-        println!("{:?}\tInput loaded", timer.elapsed());
 
         let mut tuples = 0usize;
         tuples += customers.iter().map(|x| x.len()).sum::<usize>();
@@ -141,8 +119,6 @@ fn main() {
         let mut round = 0;
         while customers.len() > 0 || lineitems.len() > 0 || nations.len() > 0 || orders.len() > 0 || parts.len() > 0 || partsupps.len() > 0 || regions.len() > 0 || suppliers.len() > 0 {
 
-            println!("{:?}\tInjecting data for round {}", timer.elapsed(), round);
-
             // introduce physical batch of data for each input with remaining data.
             if let Some(mut data) = customers.pop() { inputs.0.as_mut().map(|x| x.send_batch(&mut data)); } else { if seal { inputs.0 = None; } }
             if let Some(mut data) = lineitems.pop() { inputs.1.as_mut().map(|x| x.send_batch(&mut data)); } else { if seal { inputs.1 = None; } }
@@ -165,9 +141,6 @@ fn main() {
             inputs.7.as_mut().map(|x| x.advance_to(next_round));
 
             let time = next_round;
-
-            traces.advance_by(&[next_round]);
-
             worker.step_while(|| probe.less_than(&time));
             round += 1;
         }

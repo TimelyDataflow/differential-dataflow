@@ -5,7 +5,7 @@ use timely::dataflow::operators::probe::Handle as ProbeHandle;
 use differential_dataflow::operators::*;
 use differential_dataflow::lattice::Lattice;
 
-use {Collections, Context};
+use {Arrangements, Experiment, Collections};
 use ::types::create_date;
 
 // -- $ID$
@@ -76,25 +76,25 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
 }
 
 pub fn query_arranged<G: Scope<Timestamp=usize>>(
-    context: &mut Context<G>,
+    scope: &mut G,
+    probe: &mut ProbeHandle<usize>,
+    experiment: &mut Experiment,
+    arrangements: &mut Arrangements,
 )
+where
+    G::Timestamp: Lattice+TotalOrder+Ord
 {
-    use differential_dataflow::operators::arrange::ArrangeBySelf;
+    let arrangements = arrangements.in_scope(scope, experiment);
 
-    let orders = context.orders();
-    let customers = context.customers();
-
-    context
-        .collections
-        .lineitems()
+    experiment
+        .lineitem(scope)
         .explode(|l|
             if l.ship_date > create_date(1995, 3, 15) {
-                Some((l.order_key, (l.extended_price * (100 - l.discount) / 100) as isize))
+                Some(((l.order_key, ()), (l.extended_price * (100 - l.discount) / 100) as isize))
             }
             else { None }
         )
-        .arrange_by_self()
-        .join_core(&orders, |_k, &(), o| {
+        .join_core(&arrangements.order, |_k, &(), o| {
             if o.order_date < create_date(1995, 3, 15) {
                 Some((o.cust_key, (o.order_key, o.order_date, o.ship_priority)))
             }
@@ -102,7 +102,7 @@ pub fn query_arranged<G: Scope<Timestamp=usize>>(
                 None
             }
         })
-        .join_core(&customers, |_k,o,c| {
+        .join_core(&arrangements.customer, |_k,o,c| {
             if starts_with(&c.mktsegment[..], b"BUILDING") {
                 Some(o.clone())
             }
@@ -111,5 +111,5 @@ pub fn query_arranged<G: Scope<Timestamp=usize>>(
             }
         })
         .count_total()
-        .probe_with(&mut context.probe);
+        .probe_with(probe);
 }

@@ -8,12 +8,12 @@
 
 use timely::dataflow::Scope;
 
-use ::{Collection, Data, Hashable};
+use ::{Collection, ExchangeData, Hashable};
 use ::difference::Monoid;
 use operators::arrange::ArrangeBySelf;
 
 /// An extension method for consolidating weighted streams.
-pub trait Consolidate<D: Data+Hashable> {
+pub trait Consolidate<D: ExchangeData+Hashable> {
     /// Aggregates the weights of equal records into at most one record.
     ///
     /// This method uses the type `D`'s `hashed()` method to partition the data. The data are
@@ -45,8 +45,8 @@ pub trait Consolidate<D: Data+Hashable> {
 
 impl<G: Scope, D, R> Consolidate<D> for Collection<G, D, R>
 where
-    D: Data+Hashable,
-    R: Monoid,
+    D: ExchangeData+Hashable,
+    R: ExchangeData+Monoid,
     G::Timestamp: ::lattice::Lattice+Ord,
  {
     fn consolidate(&self) -> Self {
@@ -55,7 +55,7 @@ where
 }
 
 /// An extension method for consolidating weighted streams.
-pub trait ConsolidateStream<D: Data+Hashable> {
+pub trait ConsolidateStream<D: ExchangeData+Hashable> {
     /// Aggregates the weights of equal records.
     ///
     /// Unlike `consolidate`, this method does not exchange data and does not
@@ -90,8 +90,8 @@ pub trait ConsolidateStream<D: Data+Hashable> {
 
 impl<G: Scope, D, R> ConsolidateStream<D> for Collection<G, D, R>
 where
-    D: Data+Hashable,
-    R: Monoid,
+    D: ExchangeData+Hashable,
+    R: ExchangeData+Monoid,
     G::Timestamp: ::lattice::Lattice+Ord,
  {
     fn consolidate_stream(&self) -> Self {

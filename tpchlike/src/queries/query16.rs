@@ -7,7 +7,7 @@ use differential_dataflow::lattice::Lattice;
 
 use regex::Regex;
 
-use {Collections, Context};
+use {Arrangements, Experiment, Collections};
 
 // -- $ID$
 // -- TPC-H/TPC-R Parts/Supplier Relationship Query (Q16)
@@ -83,24 +83,37 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
 }
 
 pub fn query_arranged<G: Scope<Timestamp=usize>>(
-    context: &mut Context<G>,
+    scope: &mut G,
+    probe: &mut ProbeHandle<usize>,
+    experiment: &mut Experiment,
+    arrangements: &mut Arrangements,
+    round: usize,
 )
+where
+    G::Timestamp: Lattice+TotalOrder+Ord
 {
-    let part = context.parts();
+    use timely::dataflow::operators::Map;
+    use differential_dataflow::AsCollection;
+
+    let arrangements = arrangements.in_scope(scope, experiment);
 
     let regex = Regex::new("Customer.*Complaints").expect("Regex construction failed");
 
     let suppliers =
-    context
-        .collections
-        .suppliers()
-        .flat_map(move |s| if regex.is_match(&s.comment) { Some(s.supp_key) } else { None } );
+    arrangements
+        .supplier
+        .flat_map_ref(move |_,s| if regex.is_match(&s.comment) { Some(s.supp_key) } else { None } )
+        .inner
+        .map(move |(d,t,r)| (d, ::std::cmp::max(t,round),r))
+        .as_collection();
 
-    context
-        .collections
-        .partsupps()
-        .map(|ps| (ps.part_key, ps.supp_key))
-        .join_core(&part, |_pk,&sk,p| {
+    arrangements
+        .partsupp
+        .as_collection(|&psk,_| psk)
+        .inner
+        .map(move |(d,t,r)| (d, ::std::cmp::max(t,round),r))
+        .as_collection()
+        .join_core(&arrangements.part, |_pk,&sk,p| {
             if !starts_with(&p.brand, b"Brand#45") && !starts_with(&p.typ.as_bytes(), b"MEDIUM POLISHED") && [49, 14, 23, 45, 19, 3, 36, 9].contains(&p.size) {
                 Some((sk, (p.brand, p.typ, p.size)))
             }
@@ -110,5 +123,5 @@ pub fn query_arranged<G: Scope<Timestamp=usize>>(
         .antijoin(&suppliers)
         .map(|(_sk, stuff)| stuff)
         .count_total()
-        .probe_with(&mut context.probe);
+        .probe_with(probe);
 }

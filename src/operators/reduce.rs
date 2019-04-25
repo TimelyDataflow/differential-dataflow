@@ -6,7 +6,7 @@
 //! The function is expected to populate a list of output values.
 
 use hashable::Hashable;
-use ::{Data, Collection};
+use ::{Data, ExchangeData, Collection};
 use ::difference::{Monoid, Abelian};
 
 use timely::order::PartialOrder;
@@ -68,9 +68,9 @@ impl<G, K, V, R> Reduce<G, K, V, R> for Collection<G, (K, V), R>
     where
         G: Scope,
         G::Timestamp: Lattice+Ord,
-        K: Data+Hashable,
-        V: Data,
-        R: Monoid,
+        K: ExchangeData+Hashable,
+        V: ExchangeData,
+        R: ExchangeData+Monoid,
  {
     fn reduce<L, V2: Data, R2: Abelian>(&self, logic: L) -> Collection<G, (K, V2), R2>
         where L: Fn(&K, &[(&V, R)], &mut Vec<(V2, R2)>)+'static {
@@ -146,7 +146,7 @@ pub trait Threshold<G: Scope, K: Data, R1: Monoid> where G::Timestamp: Lattice+O
     }
 }
 
-impl<G: Scope, K: Data+Hashable, R1: Monoid> Threshold<G, K, R1> for Collection<G, K, R1>
+impl<G: Scope, K: ExchangeData+Hashable, R1: ExchangeData+Monoid> Threshold<G, K, R1> for Collection<G, K, R1>
 where G::Timestamp: Lattice+Ord {
     fn threshold<R2: Abelian, F: Fn(&K,&R1)->R2+'static>(&self, thresh: F) -> Collection<G, K, R2> {
         self.arrange_by_self()
@@ -193,7 +193,7 @@ pub trait Count<G: Scope, K: Data, R: Monoid> where G::Timestamp: Lattice+Ord {
     fn count(&self) -> Collection<G, (K, R), isize>;
 }
 
-impl<G: Scope, K: Data+Hashable, R: Monoid> Count<G, K, R> for Collection<G, K, R>
+impl<G: Scope, K: ExchangeData+Hashable, R: ExchangeData+Monoid> Count<G, K, R> for Collection<G, K, R>
 where
     G::Timestamp: Lattice+Ord,
 {
@@ -287,9 +287,9 @@ impl<G, K, V, R> ReduceCore<G, K, V, R> for Collection<G, (K, V), R>
 where
     G: Scope,
     G::Timestamp: Lattice+Ord,
-    K: Data+Hashable,
-    V: Data,
-    R: Monoid,
+    K: ExchangeData+Hashable,
+    V: ExchangeData,
+    R: ExchangeData+Monoid,
 {
     fn reduce_core<L, T2>(&self, logic: L) -> Arranged<G, TraceAgent<T2>>
         where

@@ -3,6 +3,7 @@ extern crate differential_dataflow;
 extern crate core_affinity;
 extern crate tpchlike;
 
+use std::rc::Rc;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::time::Instant;
@@ -43,7 +44,7 @@ fn main() {
 
             let mut collections = Collections::new(
                 cust.as_collection(),
-                line.as_collection(),
+                line.map(|(d,t,r)| (Rc::new(d),t,r)).as_collection(),
                 nats.as_collection(),
                 ords.as_collection(),
                 part.as_collection(),

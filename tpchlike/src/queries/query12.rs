@@ -7,7 +7,7 @@ use differential_dataflow::operators::arrange::{ArrangeBySelf, ArrangeByKey};
 use differential_dataflow::difference::DiffPair;
 use differential_dataflow::lattice::Lattice;
 
-use {Collections, Context};
+use {Arrangements, Experiment, Collections};
 use ::types::create_date;
 
 // -- $ID$
@@ -89,14 +89,18 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
 }
 
 pub fn query_arranged<G: Scope<Timestamp=usize>>(
-    context: &mut Context<G>,
+    scope: &mut G,
+    probe: &mut ProbeHandle<usize>,
+    experiment: &mut Experiment,
+    arrangements: &mut Arrangements,
 )
+where
+    G::Timestamp: Lattice+TotalOrder+Ord
 {
-    let order = context.orders();
+    let arrangements = arrangements.in_scope(scope, experiment);
 
-    context
-        .collections
-        .lineitems()
+    experiment
+        .lineitem(scope)
         .flat_map(|l|
             if (starts_with(&l.ship_mode, b"MAIL") || starts_with(&l.ship_mode, b"SHIP")) &&
                 l.commit_date < l.receipt_date && l.ship_date < l.commit_date &&
@@ -105,10 +109,10 @@ pub fn query_arranged<G: Scope<Timestamp=usize>>(
             }
             else { None }
         )
-        .join_core(&order, |_ok,&sm,o| {
+        .join_core(&arrangements.order, |_ok,&sm,o| {
             Some((sm, starts_with(&o.order_priority, b"1-URGENT") || starts_with(&o.order_priority, b"2-HIGH")))
         })
         .explode(|(sm,priority)| Some((sm, if priority { DiffPair::new(1, 0) } else { DiffPair::new(1, 0) })))
         .count_total()
-        .probe_with(&mut context.probe);
+        .probe_with(probe);
 }
