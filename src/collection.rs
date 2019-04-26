@@ -581,3 +581,41 @@ impl<G: Scope, D: Data, R: Monoid> AsCollection<G, D, R> for Stream<G, (D, G::Ti
         Collection::new(self.clone())
     }
 }
+
+/// Concatenates multiple collections.
+///
+/// This method has the effect of a sequence of calls to `concat`, but it does
+/// so in one operator rather than a chain of many operators.
+///
+/// # Examples
+///
+/// ```
+/// extern crate timely;
+/// extern crate differential_dataflow;
+///
+/// use differential_dataflow::input::Input;
+///
+/// fn main() {
+///     ::timely::example(|scope| {
+///
+///         let data = scope.new_collection_from(1 .. 10).1;
+///
+///         let odds = data.filter(|x| x % 2 == 1);
+///         let evens = data.filter(|x| x % 2 == 0);
+///
+///         differential_dataflow::collection::concatenate(scope, vec![odds, evens])
+///             .assert_eq(&data);
+///     });
+/// }
+/// ```
+pub fn concatenate<G, D, R, I>(scope: &mut G, iterator: I) -> Collection<G, D, R>
+where
+    G: Scope,
+    D: Data,
+    R: Monoid,
+    I: IntoIterator<Item=Collection<G, D, R>>,
+{
+    scope
+        .concatenate(iterator.into_iter().map(|x| x.inner))
+        .as_collection()
+}
