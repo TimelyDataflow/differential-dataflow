@@ -1,6 +1,6 @@
-commit=5b0a6d19e5
+commit=dbdb2b5408
 
-mkdir -p plots/$commit/i-tpchlike-mixing
+mkdir -p plots/$commit/i-tpchlike-mixing-jemalloc
 temp_dir=$(mktemp -d)
 echo 'temp_dir' $temp_dir
 
@@ -9,11 +9,11 @@ colors=("red" "blue")
 common="set terminal pdf size 5.2cm,3.5cm font \"Arial,10\"; set key samplen 2; set key opaque left top Left reverse; set ytics 5,5; set format y \"%.0f%%\"; set style line 1 lc \"#38618C\"; set style line 2 lc \"#28A361\"; "
 multiplot="set multiplot layout 2,1 margins 0.15,0.95,.25,.95 spacing 0,.05; "
 
-for g in `ls results/$commit/i-tpchlike-mixing | cut -d '_' -f 4-6 | sort | uniq`; do
+for g in `ls results/$commit/i-tpchlike-mixing-jemalloc | cut -d '_' -f 4-6 | sort | uniq`; do
   plotscript="$common set tmargin 0; set bmargin 0; set lmargin 1; set rmargin 1; set key opaque top left; set style fill transparent solid 1 noborder; set logscale x; set format x \"%.0s%cs\"; $multiplot; set xrange [0.0001:5]; "
   echo GROUP $g
   dt=1
-  for file in `ls results/$commit/i-tpchlike-mixing/*_$(echo $g | sed 's/_/_*/')_*`; do
+  for file in `ls results/$commit/i-tpchlike-mixing-jemalloc/*_$(echo $g | sed 's/_/_*/')_*`; do
     f=$(basename $file)
     echo $f
     cat $file | grep '\[MEASURE\]' | awk '{ if ($3 != prev) { prev = $3; cur = $5; print cur } else { cur = $5 >= cur ? $5 : cur; }; }' | hdrhist hist > $temp_dir/install-$f
@@ -31,14 +31,14 @@ for g in `ls results/$commit/i-tpchlike-mixing | cut -d '_' -f 4-6 | sort | uniq
     plotscript="$plotscript plot \"$temp_dir/install-$f\" using (\$1/1000000000):(\$2*100) with boxes ls $dt title \"$title\"; "
     dt=$(expr $dt + 1)
   done
-  gnuplot -p -e "$plotscript" > plots/$commit/i-tpchlike-mixing/hist-install-$g.pdf
+  gnuplot -p -e "$plotscript" > plots/$commit/i-tpchlike-mixing-jemalloc/hist-install-$g.pdf
 done
 
-for g in `ls results/$commit/i-tpchlike-mixing | cut -d '_' -f 4-6 | sort | uniq`; do
+for g in `ls results/$commit/i-tpchlike-mixing-jemalloc | cut -d '_' -f 4-6 | sort | uniq`; do
   plotscript="$common set tmargin 0; set bmargin 0; set lmargin 1; set rmargin 1; set key opaque top left; set style fill transparent solid 1 noborder; set logscale x; set format x \"%.0s %cs\"; $multiplot; set xrange [0.0001:5]; "
   echo GROUP $g
   dt=0
-  for file in `ls results/$commit/i-tpchlike-mixing/*_$(echo $g | sed 's/_/_*/')_*`; do
+  for file in `ls results/$commit/i-tpchlike-mixing-jemalloc/*_$(echo $g | sed 's/_/_*/')_*`; do
     f=$(basename $file)
     echo $f
     cat $file | grep '\[MEASURE\]' | awk '{ if ($3 != prev) { prev = $3; cur = $6; print cur } else { cur = $6 >= cur ? $6 : cur; }; }' | hdrhist hist > $temp_dir/uninstall-$f
@@ -55,14 +55,14 @@ for g in `ls results/$commit/i-tpchlike-mixing | cut -d '_' -f 4-6 | sort | uniq
     plotscript="$plotscript plot \"$temp_dir/uninstall-$f\" using (\$1/1000000000):(\$2*100) with boxes lw 2 dt $dt lc \"${colors[$dt]}\" title \"$(echo $f | cut -d '_' -f 7)\"; "
     dt=$(expr $dt + 1)
   done
-  gnuplot -p -e "$plotscript" > plots/$commit/i-tpchlike-mixing/hist-uninstall-$g.pdf
+  gnuplot -p -e "$plotscript" > plots/$commit/i-tpchlike-mixing-jemalloc/hist-uninstall-$g.pdf
 done
 
-for g in `ls results/$commit/i-tpchlike-mixing | cut -d '_' -f 4-6 | sort | uniq`; do
+for g in `ls results/$commit/i-tpchlike-mixing-jemalloc | cut -d '_' -f 4-6 | sort | uniq`; do
   plotscript="$common set tmargin 0; set bmargin 0; set lmargin 1; set rmargin 1; set key opaque top left; set style fill transparent solid 1 noborder; set logscale x; set format x \"%.0s %cs\"; $multiplot; set xrange [0.0001:5]; "
   echo GROUP $g
   dt=0
-  for file in `ls results/$commit/i-tpchlike-mixing/*_$(echo $g | sed 's/_/_*/')_*`; do
+  for file in `ls results/$commit/i-tpchlike-mixing-jemalloc/*_$(echo $g | sed 's/_/_*/')_*`; do
     f=$(basename $file)
     echo $f
     cat $file | grep '\[MEASURE\]' | awk '{ if ($3 != prev) { prev = $3; cur = $7; print cur } else { cur = $7 >= cur ? $7 : cur; }; }' | hdrhist hist > $temp_dir/work-$f
@@ -79,7 +79,7 @@ for g in `ls results/$commit/i-tpchlike-mixing | cut -d '_' -f 4-6 | sort | uniq
     plotscript="$plotscript plot \"$temp_dir/work-$f\" using (\$1/1000000000):(\$2*100) with boxes lw 2 dt $dt lc \"${colors[$dt]}\" title \"$(echo $f | cut -d '_' -f 7)\"; "
     dt=$(expr $dt + 1)
   done
-  gnuplot -p -e "$plotscript" > plots/$commit/i-tpchlike-mixing/hist-work-$g.pdf
+  gnuplot -p -e "$plotscript" > plots/$commit/i-tpchlike-mixing-jemalloc/hist-work-$g.pdf
 done
 
 # rm -R $temp_dir

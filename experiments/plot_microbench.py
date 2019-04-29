@@ -48,8 +48,8 @@ def groupingstr(s):
     return '_'.join("{}={}".format(x[0], str(x[1])) for x in sorted(s, key=lambda x: x[0]))
 
 def i_load_varies(): # commit = "dirty-8380c53277307b6e9e089a8f6f79886b36e20428" experiment = "arrange-open-loop"
-    commit = "aa1aff5380"
-    experiment = "arrange-open-loop-load-varies"
+    commit = "dbdb2b5408"
+    experiment = "arrange-open-loop-load-varies-jemalloc"
 
     filedict, params = prepare(commit, experiment)
 
@@ -64,14 +64,15 @@ def i_load_varies(): # commit = "dirty-8380c53277307b6e9e089a8f6f79886b36e20428"
             "set arrow from graph 0.32, first 0.05 to graph 1, first 0.05 nohead lt rgb \"red\"; " \
             "set obj 1 rect at graph .887,0.68 size .5,.1 fc rgb \"white\" front; " \
             "set label \"p95\" at graph .85, 0.68 font \",9\" textcolor \"red\" front; " \
-            "set arrow from graph 0.32, first 0.01 to graph 1, first 0.01 nohead lt rgb \"red\"; " \
+            "set arrow from graph 0.35, first 0.01 to graph 1, first 0.01 nohead lt rgb \"red\"; " \
             "set obj 2 rect at graph .887,0.5 size .5,.1 fc rgb \"white\" front; " \
             "set label \"p99\" at graph .85, 0.50 font \",9\" textcolor \"red\" front; " \
+            "set key left bottom Left reverse font \",9\" title \"tuples/sec\" font \",9\" Left; " \
             "plot "
 
     rates_plotted = set()
     dt = 2
-    for p, f in sorted(filedict, key=lambda x: dict(x[0])['rate']):
+    for p, f in sorted(filedict, key=lambda x: dict(x[0])['rate'], reverse=True):
         eprint(p)
         if p.issuperset(F) and dict(p)['rate'] not in rates_plotted and (dict(p)['keys'] / 10) == dict(p)['rate']:
             rates_plotted.add(dict(p)['rate'])
@@ -91,8 +92,8 @@ def i_load_varies(): # commit = "dirty-8380c53277307b6e9e089a8f6f79886b36e20428"
     shutil.rmtree(tempdir)
 
 def ii_strong_scaling(): # commit = "dirty-e74441d0c062c7ec8d6da9bbf1972bd9397b2670" experiment = "arrange-open-loop"
-    commit = "aa1aff5380"
-    experiment = "arrange-open-loop-strong-scaling"
+    commit = "dbdb2b5408"
+    experiment = "arrange-open-loop-strong-scaling-jemalloc"
 
     filedict, params = prepare(commit, experiment)
 
@@ -104,7 +105,16 @@ def ii_strong_scaling(): # commit = "dirty-e74441d0c062c7ec8d6da9bbf1972bd9397b2
             F = filtering.union({ ('work', work), ('comp', comp), ('keys', 10000000), ('recs', 32000000), ('inputstrategy', 'ms'), })
             eprint(F)
             # print('\n'.join(str(p) for p, f in sorted(filedict, key=lambda x: dict(x[0])['rate']) if p.issuperset(F)))
-            plotscript = commonscript() + "plot "
+            plotscript = commonscript() + \
+                "set style rect fc lt -1 fs solid 1 noborder; " \
+                "set arrow from graph 0.25, first 0.05 to graph 1, first 0.05 nohead lt rgb \"red\"; " \
+                "set obj 1 rect at graph .887,0.68 size .5,.1 fc rgb \"white\" front; " \
+                "set label \"p95\" at graph .85, 0.68 font \",9\" textcolor \"red\" front; " \
+                "set arrow from graph 0.25, first 0.01 to graph 1, first 0.01 nohead lt rgb \"red\"; " \
+                "set obj 2 rect at graph .887,0.5 size .5,.1 fc rgb \"white\" front; " \
+                "set label \"p99\" at graph .85, 0.50 font \",9\" textcolor \"red\" front; " \
+                "set key left bottom Left reverse font \",9\" title \"workers\" font \",9\" Left; " \
+                "plot "
 
             w_plotted = set()
             dt = 2
@@ -125,8 +135,8 @@ def ii_strong_scaling(): # commit = "dirty-e74441d0c062c7ec8d6da9bbf1972bd9397b2
     shutil.rmtree(tempdir)
 
 def iii_weak_scaling(): # commit = "dirty-e74441d0c062c7ec8d6da9bbf1972bd9397b2670" experiment = "arrange-open-loop"
-    commit = "aa1aff5380"
-    experiment = "arrange-open-loop-weak-scaling"
+    commit = "dbdb2b5408"
+    experiment = "arrange-open-loop-weak-scaling-jemalloc"
 
     filedict, params = prepare(commit, experiment)
 
@@ -139,7 +149,16 @@ def iii_weak_scaling(): # commit = "dirty-e74441d0c062c7ec8d6da9bbf1972bd9397b26
             F = filtering.union({ ('work', work), ('comp', comp), })
             eprint(F)
             # print('\n'.join(str(p) for p, f in sorted(filedict, key=lambda x: dict(x[0])['rate']) if p.issuperset(F)))
-            plotscript = commonscript() + "plot "
+            plotscript = commonscript() + \
+                "set style rect fc lt -1 fs solid 1 noborder; " \
+                "set arrow from graph 0.25, first 0.05 to graph 1, first 0.05 nohead lt rgb \"red\"; " \
+                "set obj 1 rect at graph .887,0.68 size .5,.1 fc rgb \"white\" front; " \
+                "set label \"p95\" at graph .85, 0.68 font \",9\" textcolor \"red\" front; " \
+                "set arrow from graph 0.25, first 0.01 to graph 1, first 0.01 nohead lt rgb \"red\"; " \
+                "set obj 2 rect at graph .887,0.5 size .5,.1 fc rgb \"white\" front; " \
+                "set label \"p99\" at graph .85, 0.50 font \",9\" textcolor \"red\" front; " \
+                "set key left bottom Left reverse font \",9\" title \"workers\" font \",9\" Left; " \
+                "plot "
 
             dt = 2
             data = False
@@ -170,8 +189,8 @@ def iii_weak_scaling(): # commit = "dirty-e74441d0c062c7ec8d6da9bbf1972bd9397b26
 
 
 def iv_throughput(): # commit = "dirty-e74441d0c062c7ec8d6da9bbf1972bd9397b2670" experiment = "arrange"
-    commit = "aa1aff5380"
-    experiment = "arrange-closed-loop-1"
+    commit = "baeaf98c72"
+    experiment = "arrange-closed-loop-jemalloc"
 
     filedict, params = prepare(commit, experiment)
 
@@ -185,11 +204,12 @@ def iv_throughput(): # commit = "dirty-e74441d0c062c7ec8d6da9bbf1972bd9397b2670"
             "set yrange [-10000000:160000000]; " \
             "set xtics (1, 4, 8, 16, 32); " \
             "set ytics 50000000; " \
-            "set xlabel \"cores\" offset 0,0.3; " \
+            "set xlabel \"workers\" offset 0,0.3; " \
             "set bmargin at screen 0.25; " \
             "set ylabel \"throughput (records/s)\"; " \
             "set format y \"%.0s%c\"; " \
             "set key left top Left reverse font \",9\"; " \
+            "set pointsize 0.6; " \
             "set rmargin 1; " \
             "plot "
 
@@ -211,7 +231,7 @@ def iv_throughput(): # commit = "dirty-e74441d0c062c7ec8d6da9bbf1972bd9397b2670"
             if p.issuperset(F):
                 eprint("results/{}/{}/{}".format(commit, experiment, f))
                 assert(execute('cat results/{}/{}/{} | grep THROUGHPUT | cut -f 3,4 >> {}'.format(commit, experiment, f, datafile)))
-        plotscript += "\"{}\" using 1:2 with linespoints pointtype {} pointsize 0.4 title \"{}\", ".format(datafile, pt[0], titlemap[comp])
+        plotscript += "\"{}\" using 1:2 with linespoints pointtype {} title \"{}\", ".format(datafile, pt[0], titlemap[comp])
         pt = pt[1:]
 
     plotscript += "\n"
@@ -225,8 +245,8 @@ def iv_throughput(): # commit = "dirty-e74441d0c062c7ec8d6da9bbf1972bd9397b2670"
     # shutil.rmtree(tempdir)
 
 def v_amortization(): # USE STRONG SCALING
-    commit = "aa1aff5380"
-    experiment = "arrange-open-loop-strong-scaling"
+    commit = "dbdb2b5408"
+    experiment = "arrange-open-loop-strong-scaling-jemalloc"
 
     filedict, params = prepare(commit, experiment)
 
@@ -238,7 +258,15 @@ def v_amortization(): # USE STRONG SCALING
             F = filtering.union({ ('comp', comp), })
             eprint(F)
             # print('\n'.join(str(p) for p, f in sorted(filedict, key=lambda x: dict(x[0])['rate']) if p.issuperset(F)))
-            plotscript = commonscript() + "plot "
+            plotscript = commonscript() + \
+                "set style rect fc lt -1 fs solid 1 noborder; " \
+                "set arrow from graph 0.33, first 0.05 to graph 1, first 0.05 nohead lt rgb \"red\"; " \
+                "set obj 1 rect at graph .887,0.68 size .5,.1 fc rgb \"white\" front; " \
+                "set label \"p95\" at graph .85, 0.68 font \",9\" textcolor \"red\" front; " \
+                "set arrow from graph 0.33, first 0.01 to graph 1, first 0.01 nohead lt rgb \"red\"; " \
+                "set obj 2 rect at graph .887,0.5 size .5,.1 fc rgb \"white\" front; " \
+                "set label \"p99\" at graph .85, 0.50 font \",9\" textcolor \"red\" front; " \
+                "plot "
             data = False
             w_plotted = set()
             for p, f in sorted(filedict, key=lambda x: (dict(x[0])['w'], str(dict(x[0])['work']))):
@@ -268,14 +296,15 @@ def v_amortization(): # USE STRONG SCALING
             if data:
                 assert(execute('mkdir -p plots/{}/{}'.format(commit, experiment)))
                 eprint(plotscript)
-                assert(execute('gnuplot > plots/{}/{}/v_amortization_{}.pdf'.format(commit, experiment, groupingstr(F)), input=plotscript))
+                execute('cat > {}/plotscript.plt'.format(tempdir), input=plotscript)
+                assert(execute('gnuplot {}/plotscript.plt > plots/{}/{}/v_amortization_{}.pdf'.format(tempdir, commit, experiment, groupingstr(F))))
                 eprint('plots/{}/{}/v_amortization_{}.pdf'.format(commit, experiment, groupingstr(F)))
 
     shutil.rmtree(tempdir)
 
 def vi_install():
-    commit = "aa1aff5380"
-    experiment = "arrange-install"
+    commit = "dbdb2b5408"
+    experiment = "arrange-install-jemalloc"
 
     filedict, params = prepare(commit, experiment)
 
@@ -283,7 +312,16 @@ def vi_install():
 
     filtering = { ('keys', 10000000), ('recs', 32000000), ('w', 32), }
     # print('\n'.join(str(p) for p, f in sorted(filedict, key=lambda x: dict(x[0])['rate']) if p.issuperset(F)))
-    plotscript = commonscript() + "plot "
+    plotscript = commonscript() + \
+        "set style rect fc lt -1 fs solid 1 noborder; " \
+        "set arrow from graph 0.26, first 0.05 to graph 1, first 0.05 nohead lt rgb \"red\"; " \
+        "set obj 1 rect at graph .887,0.68 size .5,.1 fc rgb \"white\" front; " \
+        "set label \"p95\" at graph .85, 0.68 font \",9\" textcolor \"red\" front; " \
+        "set arrow from graph 0.26, first 0.01 to graph 1, first 0.01 nohead lt rgb \"red\"; " \
+        "set obj 2 rect at graph .887,0.5 size .5,.1 fc rgb \"white\" front; " \
+        "set label \"p99\" at graph .85, 0.50 font \",9\" textcolor \"red\" front; " \
+        "set key left bottom Left reverse font \",9\" title \"size\" font \",9\" Left; " \
+        "plot "
 
     dt = 2
     for p, f in filedict: #sorted(filedict, key=lambda x: dict(x[0])['w']):

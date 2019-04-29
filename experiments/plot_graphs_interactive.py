@@ -78,8 +78,8 @@ def i_single_query():
     shutil.rmtree(tempdir)
 
 def ii_sharing():
-    commit = "5b0a6d19e5"
-    experiment = "graphs-interactive-neu"
+    commit = "dbdb2b5408"
+    experiment = "graphs-interactive-neu-jemalloc"
 
     filedict, params = prepare(commit, experiment)
 
@@ -132,8 +132,8 @@ def ii_sharing():
     shutil.rmtree(tempdir)
 
 def iv_boomerang():
-    commit = "8c4da22fc5"
-    experiment = "graphs-interactive-neu-boomerang"
+    commit = "dbdb2b5408"
+    experiment = "graphs-interactive-neu-boomerang-jemalloc"
 
     filedict, params = prepare(commit, experiment)
 
@@ -152,13 +152,12 @@ def iv_boomerang():
             "set key samplen 2; " \
             "set format y \"%.0s%cs\"; " \
             "set format x \"10^{%T}\"; " \
-            "set xlabel \"offered load\" offset 0,0.3; " \
+            "set xlabel \"offered load (tuples/sec)\" offset 0,0.3; " \
             "set bmargin at screen 0.25; " \
-            "set ylabel \"nanoseconds\"; " \
+            "set ylabel \"p99 latency\"; " \
             "set key left top Left reverse font \",10\"; " \
             "set pointsize 0.6; " \
             "set rmargin 1; " \
-            "set arrow from graph 0, first 1 to graph 1, first 1 nohead lt rgb \"red\"; " \
             "plot "
 
     shared_names = {
@@ -173,6 +172,7 @@ def iv_boomerang():
         sharing_filtering = filtering.union({ ('shared', sharing) })
         thisname = "_".join("{}={}".format(a, b) for a, b in sharing_filtering)
         datafile = "{}/iv_boomerang_{}".format(tempdir, thisname)
+        maxrate = 0
         for rate in sorted(params['rate']):
             rate_filtering = sharing_filtering.union({ ('rate', rate) })
             for p, f in filedict:
@@ -197,8 +197,8 @@ def iv_boomerang():
     shutil.rmtree(tempdir)
 
 def iii_memory_rss():
-    commit = "5b0a6d19e5"
-    experiment = "graphs-interactive-neu"
+    commit = "dbdb2b5408"
+    experiment = "graphs-interactive-neu-jemalloc"
 
     filedict, params = prepare(commit, experiment)
 
@@ -213,15 +213,16 @@ def iii_memory_rss():
                 "set style line 1 lw 2 lc \"#38618C\" dt 1; set style line 2 lw 2 lc \"#28A361\" dt 1; " \
                 "set bmargin at screen 0.25; " \
                 "set xrange [-200:]; " \
-                "set yrange [1000000000:200000000000.0]; " \
+                "set yrange [1000000000:100000000000.0]; " \
                 "set xlabel \"elapsed seconds\" offset 0,0.3; " \
                 "set xtics 0,1000,3000; " \
+                "set ytics (1000000000.0,10000000000.0,40000000000.0); " \
                 "set ylabel \"resident set size\"; " \
                 "set format y \"%.0s %cB\"; " \
                 "unset key; " \
                 "set style fill  transparent solid 0.35 noborder; " \
-                "set label \"not shared\" at graph .7, graph .72 font \",9\" textcolor \"#38618C\"; " \
-                "set label \"shared\" at graph .7, graph .41 font \",9\" textcolor \"#28A361\"; " \
+                "set label \"not shared\" at graph .7, graph .69 font \",9\" textcolor \"#38618C\"; " \
+                "set label \"shared\" at graph .7, graph .38 font \",9\" textcolor \"#28A361\"; " \
                 "set style circle radius 10; " \
                 "set rmargin 1; " \
                 "plot "
