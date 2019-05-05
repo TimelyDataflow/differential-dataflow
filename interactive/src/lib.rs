@@ -44,6 +44,10 @@ impl<Value> Query<Value> {
         self.rules.push(rule);
         self
     }
+    /// Converts the query into a command.
+    pub fn into_command(self) -> Command<Value> {
+        Command::Query(self)
+    }
 }
 
 /// Definition of a single collection.
@@ -53,6 +57,13 @@ pub struct Rule<Value> {
     pub name: String,
     /// Plan describing contents of the rule.
     pub plan: Plan<Value>,
+}
+
+impl<Value> Rule<Value> {
+    /// Converts the rule into a singleton query.
+    pub fn into_query(self) -> Query<Value> {
+        Query::new().add_rule(self)
+    }
 }
 
 /// An example value type

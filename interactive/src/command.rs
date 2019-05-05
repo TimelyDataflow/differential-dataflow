@@ -1,6 +1,7 @@
 //! Commands accepted by the system.
 
 use std::hash::Hash;
+use std::io::Write;
 
 use timely::communication::Allocate;
 use timely::worker::Worker;
@@ -98,7 +99,10 @@ impl<Value: ExchangeData+Hash> Command<Value> {
                 manager.shutdown(worker);
             }
         }
-
     }
 
+    /// Serialize the command at a writer.
+    pub fn serialize_into<W: Write>(&self, writer: W) {
+        bincode::serialize_into(writer, self).expect("bincode: serialization failed");
+    }
 }

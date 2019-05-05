@@ -333,9 +333,6 @@ impl<Value: ExchangeData+Hash> TraceManager<Value> {
 
     /// Installs an unkeyed arrangement for a specified plan.
     pub fn set_unkeyed(&mut self, plan: &Plan<Value>, handle: &KeysOnlyHandle<Value>) {
-
-        println!("Setting unkeyed: {:?}", plan);
-
         use differential_dataflow::trace::TraceReader;
         let mut handle = handle.clone();
         handle.distinguish_since(&[]);

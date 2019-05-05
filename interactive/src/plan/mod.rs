@@ -44,6 +44,8 @@ pub enum Plan<Value> {
     Distinct(Box<Plan<Value>>),
     /// Concat
     Concat(Concat<Value>),
+    /// Consolidate
+    Consolidate(Box<Plan<Value>>),
     /// Equijoin
     Join(Join<Value>),
     /// Negation
@@ -68,9 +70,17 @@ impl<V: ExchangeData+Hash> Plan<V> {
     pub fn distinct(self) -> Self {
         Plan::Distinct(Box::new(self))
     }
+    /// Merges two collections.
+    pub fn concat(self, other: Self) -> Self {
+        Plan::Concat(Concat { plans: vec![self, other] } )
+    }
     /// Merges multiple collections.
-    pub fn concat(plans: Vec<Self>) -> Self {
+    pub fn concatenate(plans: Vec<Self>) -> Self {
         Plan::Concat(Concat { plans } )
+    }
+    /// Merges multiple collections.
+    pub fn consolidate(self) -> Self {
+        Plan::Consolidate(Box::new(self))
     }
     /// Equi-joins two collections using the specified pairs of keys.
     pub fn join(self, other: Plan<V>, keys: Vec<(usize, usize)>) -> Self {
@@ -95,6 +105,13 @@ impl<V: ExchangeData+Hash> Plan<V> {
     /// Prints each tuple prefixed by `text`.
     pub fn inspect(self, text: &str) -> Self {
         Plan::Inspect(text.to_string(), Box::new(self))
+    }
+    /// Convert the plan into a named rule.
+    pub fn into_rule(self, name: &str) -> crate::Rule<V> {
+        crate::Rule {
+            name: name.to_string(),
+            plan: self,
+        }
     }
 }
 
@@ -132,6 +149,15 @@ impl<V: ExchangeData+Hash> Render for Plan<V> {
 
             },
             Plan::Concat(concat) => concat.render(scope, arrangements),
+            Plan::Consolidate(consolidate) => {
+                if let Some(mut trace) = arrangements.get_unkeyed(&self) {
+                    trace.import(scope).as_collection(|k,&()| k.clone())
+                }
+                else {
+                    use differential_dataflow::operators::Consolidate;
+                    consolidate.render(scope, arrangements).consolidate()
+                }
+            },
             Plan::Join(join) => join.render(scope, arrangements),
             Plan::Negate(negate) => {
                 negate.render(scope, arrangements).negate()
