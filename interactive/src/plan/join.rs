@@ -6,7 +6,7 @@ use timely::dataflow::Scope;
 
 use differential_dataflow::operators::JoinCore;
 
-use differential_dataflow::{Collection, Data};
+use differential_dataflow::{Collection, ExchangeData};
 use plan::{Plan, Render};
 use {TraceManager, Time, Diff};
 
@@ -23,7 +23,7 @@ pub struct Join<Value> {
     pub plan2: Box<Plan<Value>>,
 }
 
-impl<V: Data+Hash> Render for Join<V> {
+impl<V: ExchangeData+Hash> Render for Join<V> {
 
     type Value = V;
 

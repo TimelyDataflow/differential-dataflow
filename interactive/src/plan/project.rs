@@ -4,7 +4,7 @@ use std::hash::Hash;
 
 use timely::dataflow::Scope;
 
-use differential_dataflow::{Collection, Data};
+use differential_dataflow::{Collection, ExchangeData};
 use plan::{Plan, Render};
 use {TraceManager, Time, Diff};
 
@@ -21,7 +21,7 @@ pub struct Project<V> {
     pub plan: Box<Plan<V>>,
 }
 
-impl<V: Data+Hash> Render for Project<V> {
+impl<V: ExchangeData+Hash> Render for Project<V> {
 
     type Value = V;
 

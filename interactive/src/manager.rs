@@ -11,7 +11,7 @@ use timely::logging::TimelyEvent;
 
 use timely::dataflow::operators::capture::event::EventIterator;
 
-use differential_dataflow::Data;
+use differential_dataflow::ExchangeData;
 use differential_dataflow::trace::implementations::ord::{OrdKeySpine, OrdValSpine};
 use differential_dataflow::operators::arrange::TraceAgent;
 use differential_dataflow::input::InputSession;
@@ -21,9 +21,9 @@ use differential_dataflow::logging::DifferentialEvent;
 use super::{Time, Diff, Plan};
 
 /// A trace handle for key-only data.
-pub type TraceKeyHandle<K, T, R> = TraceAgent<K, (), T, R, OrdKeySpine<K, T, R>>;
+pub type TraceKeyHandle<K, T, R> = TraceAgent<OrdKeySpine<K, T, R>>;
 /// A trace handle for key-value data.
-pub type TraceValHandle<K, V, T, R> = TraceAgent<K, V, T, R, OrdValSpine<K, V, T, R>>;
+pub type TraceValHandle<K, V, T, R> = TraceAgent<OrdValSpine<K, V, T, R>>;
 /// A key-only trace handle binding `Time` and `Diff` using `Vec<V>` as data.
 pub type KeysOnlyHandle<V> = TraceKeyHandle<Vec<V>, Time, Diff>;
 /// A key-value trace handle binding `Time` and `Diff` using `Vec<V>` as data.
@@ -36,7 +36,7 @@ pub trait AsVector<T> {
 }
 
 /// Manages inputs and traces.
-pub struct Manager<Value: Data> {
+pub struct Manager<Value: ExchangeData> {
     /// Manages input sessions.
     pub inputs: InputManager<Value>,
     /// Manages maintained traces.
@@ -45,7 +45,7 @@ pub struct Manager<Value: Data> {
     pub probe: ProbeHandle<Time>,
 }
 
-impl<Value: Data+Hash> Manager<Value> {
+impl<Value: ExchangeData+Hash> Manager<Value> {
 
     /// Creates a new empty manager.
     pub fn new() -> Self {
@@ -266,12 +266,12 @@ impl<Value: Data+Hash> Manager<Value> {
 }
 
 /// Manages input sessions.
-pub struct InputManager<Value: Data> {
+pub struct InputManager<Value: ExchangeData> {
     /// Input sessions by name.
     pub sessions: HashMap<String, InputSession<Time, Vec<Value>, Diff>>,
 }
 
-impl<Value: Data> InputManager<Value> {
+impl<Value: ExchangeData> InputManager<Value> {
 
     /// Creates a new empty input manager.
     pub fn new() -> Self { Self { sessions: HashMap::new() } }
@@ -290,7 +290,7 @@ impl<Value: Data> InputManager<Value> {
 ///
 /// Manages a map from plan (describing a collection)
 /// to various arranged forms of that collection.
-pub struct TraceManager<Value: Data> {
+pub struct TraceManager<Value: ExchangeData> {
 
     /// Arrangements where the record itself is they key.
     ///
@@ -304,7 +304,7 @@ pub struct TraceManager<Value: Data> {
 
 }
 
-impl<Value: Data+Hash> TraceManager<Value> {
+impl<Value: ExchangeData+Hash> TraceManager<Value> {
 
     /// Creates a new empty trace manager.
     pub fn new() -> Self { Self { inputs: HashMap::new(), arrangements: HashMap::new() } }

@@ -4,7 +4,7 @@ use std::hash::Hash;
 
 use timely::communication::Allocate;
 use timely::worker::Worker;
-use differential_dataflow::{Data};
+use differential_dataflow::ExchangeData;
 
 use super::{Query, Rule, Plan, Time, Diff, Manager};
 
@@ -25,7 +25,7 @@ pub enum Command<Value> {
     Shutdown,
 }
 
-impl<Value: Data+Hash> Command<Value> {
+impl<Value: ExchangeData+Hash> Command<Value> {
 
     /// Executes a command.
     pub fn execute<A: Allocate>(self, manager: &mut Manager<Value>, worker: &mut Worker<A>) {

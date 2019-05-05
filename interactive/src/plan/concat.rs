@@ -4,7 +4,7 @@ use std::hash::Hash;
 
 use timely::dataflow::Scope;
 
-use differential_dataflow::{Collection, Data};
+use differential_dataflow::{Collection, ExchangeData};
 use plan::{Plan, Render};
 use {TraceManager, Time, Diff};
 
@@ -15,7 +15,7 @@ pub struct Concat<V> {
     pub plans: Vec<Plan<V>>,
 }
 
-impl<V: Data+Hash> Render for Concat<V> {
+impl<V: ExchangeData+Hash> Render for Concat<V> {
 
     type Value = V;
 

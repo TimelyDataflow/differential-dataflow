@@ -3,7 +3,7 @@
 use std::hash::Hash;
 
 use timely::dataflow::Scope;
-use differential_dataflow::{Collection, Data};
+use differential_dataflow::{Collection, ExchangeData};
 
 use {TraceManager, Time, Diff};
 
@@ -23,7 +23,7 @@ pub use self::project::Project;
 pub trait Render : Sized {
 
     /// Value type produced.
-    type Value: Data;
+    type Value: ExchangeData;
 
     /// Renders the instance as a collection in the supplied scope.
     ///
@@ -56,7 +56,7 @@ pub enum Plan<Value> {
     Inspect(String, Box<Plan<Value>>),
 }
 
-impl<V: Data+Hash> Plan<V> {
+impl<V: ExchangeData+Hash> Plan<V> {
     /// Retains only the values at the indicated indices.
     pub fn project(self, indices: Vec<usize>) -> Self {
         Plan::Project(Project {
@@ -98,7 +98,7 @@ impl<V: Data+Hash> Plan<V> {
     }
 }
 
-impl<V: Data+Hash> Render for Plan<V> {
+impl<V: ExchangeData+Hash> Render for Plan<V> {
 
     type Value = V;
 
@@ -110,11 +110,27 @@ impl<V: Data+Hash> Render for Plan<V> {
         match self {
             Plan::Project(projection) => projection.render(scope, arrangements),
             Plan::Distinct(distinct) => {
-                // TODO: Check for existing arrangement.
-                use differential_dataflow::operators::Threshold;
-                distinct.render(scope, arrangements).distinct()
+
+                use differential_dataflow::operators::reduce::ReduceCore;
+                use differential_dataflow::operators::arrange::ArrangeBySelf;
+                use differential_dataflow::trace::implementations::ord::OrdKeySpine;
+
+                let input =
+                if let Some(mut trace) = arrangements.get_unkeyed(&self) {
+                    trace.import(scope)
+                }
+                else {
+                    let input_arrangement = distinct.render(scope, arrangements).arrange_by_self();
+                    arrangements.set_unkeyed(&distinct, &input_arrangement.trace);
+                    input_arrangement
+                };
+
+                let output = input.reduce_abelian::<_,OrdKeySpine<_,_,_>>(move |_,_,t| t.push(((), 1)));
+
+                arrangements.set_unkeyed(&self, &output.trace);
+                output.as_collection(|k,&()| k.clone())
+
             },
-            // Plan::Count(count) => count.render(scope, arrangements),
             Plan::Concat(concat) => concat.render(scope, arrangements),
             Plan::Join(join) => join.render(scope, arrangements),
             Plan::Negate(negate) => {
