@@ -23,7 +23,7 @@ use timely::dataflow::operators::Concatenate;
 
 use timely_sort::Unsigned;
 
-use differential_dataflow::{Data, Collection, AsCollection, Hashable};
+use differential_dataflow::{ExchangeData, Collection, AsCollection, Hashable};
 use differential_dataflow::operators::Threshold;
 use differential_dataflow::difference::{Monoid};
 use differential_dataflow::lattice::Lattice;
@@ -54,16 +54,16 @@ pub trait PrefixExtender<G: Scope, R: Monoid+Mul<Output = R>> {
     fn validate(&mut self, &Collection<G, (Self::Prefix, Self::Extension), R>) -> Collection<G, (Self::Prefix, Self::Extension), R>;
 }
 
-pub trait ProposeExtensionMethod<G: Scope, P: Data+Ord, R: Monoid+Mul<Output = R>> {
+pub trait ProposeExtensionMethod<G: Scope, P: ExchangeData+Ord, R: Monoid+Mul<Output = R>> {
     fn propose_using<PE: PrefixExtender<G, R, Prefix=P>>(&self, extender: &mut PE) -> Collection<G, (P, PE::Extension), R>;
-    fn extend<E: Data+Ord>(&self, extenders: &mut [&mut PrefixExtender<G,R,Prefix=P,Extension=E>]) -> Collection<G, (P, E), R>;
+    fn extend<E: ExchangeData+Ord>(&self, extenders: &mut [&mut PrefixExtender<G,R,Prefix=P,Extension=E>]) -> Collection<G, (P, E), R>;
 }
 
-impl<G: Scope, P: Data+Ord, R: Monoid+Mul<Output = R>> ProposeExtensionMethod<G, P, R> for Collection<G, P, R> {
+impl<G: Scope, P: ExchangeData+Ord, R: Monoid+Mul<Output = R>> ProposeExtensionMethod<G, P, R> for Collection<G, P, R> {
     fn propose_using<PE: PrefixExtender<G, R, Prefix=P>>(&self, extender: &mut PE) -> Collection<G, (P, PE::Extension), R> {
         extender.propose(self)
     }
-    fn extend<E: Data+Ord>(&self, extenders: &mut [&mut PrefixExtender<G,R,Prefix=P,Extension=E>]) -> Collection<G, (P, E), R>
+    fn extend<E: ExchangeData+Ord>(&self, extenders: &mut [&mut PrefixExtender<G,R,Prefix=P,Extension=E>]) -> Collection<G, (P, E), R>
     {
 
         if extenders.len() == 1 {
@@ -104,15 +104,15 @@ impl<G: Scope, R: Monoid+Mul<Output = R>, P, E> ValidateExtensionMethod<G, R, P,
 
 // These are all defined here so that users can be assured a common layout.
 type TraceValSpine<K,V,T,R> = Spine<K, V, T, R, Rc<OrdValBatch<K,V,T,R>>>;
-type TraceValHandle<K,V,T,R> = TraceAgent<K, V, T, R, TraceValSpine<K,V,T,R>>;
+type TraceValHandle<K,V,T,R> = TraceAgent<TraceValSpine<K,V,T,R>>;
 type TraceKeySpine<K,T,R> = Spine<K, (), T, R, Rc<OrdKeyBatch<K,T,R>>>;
-type TraceKeyHandle<K,T,R> = TraceAgent<K, (), T, R, TraceKeySpine<K,T,R>>;
+type TraceKeyHandle<K,T,R> = TraceAgent<TraceKeySpine<K,T,R>>;
 
 pub struct CollectionIndex<K, V, T, R>
 where
-    K: Data,
-    V: Data,
-    T: Lattice+Data,
+    K: ExchangeData,
+    V: ExchangeData,
+    T: Lattice+ExchangeData,
     R: Monoid+Mul<Output = R>,
 {
     /// A trace of type (K, ()), used to count extensions for each prefix.
@@ -127,9 +127,9 @@ where
 
 impl<K, V, T, R> Clone for CollectionIndex<K, V, T, R>
 where
-    K: Data+Hash,
-    V: Data+Hash,
-    T: Lattice+Data+Timestamp,
+    K: ExchangeData+Hash,
+    V: ExchangeData+Hash,
+    T: Lattice+ExchangeData+Timestamp,
     R: Monoid+Mul<Output = R>,
 {
     fn clone(&self) -> Self {
@@ -143,10 +143,10 @@ where
 
 impl<K, V, T, R> CollectionIndex<K, V, T, R>
 where
-    K: Data+Hash,
-    V: Data+Hash,
-    T: Lattice+Data+Timestamp,
-    R: Monoid+Mul<Output = R>,
+    K: ExchangeData+Hash,
+    V: ExchangeData+Hash,
+    T: Lattice+ExchangeData+Timestamp,
+    R: Monoid+Mul<Output = R>+ExchangeData,
 {
 
     pub fn index<G: Scope<Timestamp = T>>(collection: &Collection<G, (K, V), R>) -> Self {
@@ -178,9 +178,9 @@ where
 
 pub struct CollectionExtender<K, V, T, R, P, F>
 where
-    K: Data,
-    V: Data,
-    T: Lattice+Data,
+    K: ExchangeData,
+    V: ExchangeData,
+    T: Lattice+ExchangeData,
     R: Monoid+Mul<Output = R>,
     F: Fn(&P)->K,
 {
@@ -192,11 +192,11 @@ where
 impl<G, K, V, R, P, F> PrefixExtender<G, R> for CollectionExtender<K, V, G::Timestamp, R, P, F>
 where
     G: Scope,
-    K: Data+Hash,
-    V: Data+Hash,
-    P: Data,
-    G::Timestamp: Lattice+Data,
-    R: Monoid+Mul<Output = R>,
+    K: ExchangeData+Hash,
+    V: ExchangeData+Hash,
+    P: ExchangeData,
+    G::Timestamp: Lattice+ExchangeData,
+    R: Monoid+Mul<Output = R>+ExchangeData,
     F: Fn(&P)->K+'static,
 {
 

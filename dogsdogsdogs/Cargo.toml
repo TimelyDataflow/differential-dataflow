@@ -11,6 +11,6 @@ abomonation = "0.7"
 abomonation_derive = "0.3"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow" }
 timely_sort="0.1.6"
-differential-dataflow = { path = "../" }
+differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow", rev = "443ec7c66752cd00cc90c2e3b8791a47af6b6d7f" }
 serde = "1"
 serde_derive = "1"

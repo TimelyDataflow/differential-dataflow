@@ -67,7 +67,7 @@ where G::Timestamp: Lattice+Hash+Ord {
 
     // determine for each (src, dst) tuple which index would propose the fewest extensions.
     let winners = cand_count1.concat(&cand_count2)
-                             .group(|_srcdst, counts, output| {
+                             .reduce(|_srcdst, counts, output| {
                                  let mut min_cnt = isize::max_value();
                                  let mut min_idx = usize::max_value();
                                  for &(&idx, cnt) in counts.iter() {
