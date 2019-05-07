@@ -9,31 +9,26 @@ extern crate serde_derive;
 extern crate serde;
 
 use std::rc::Rc;
-use std::collections::HashMap;
 use std::hash::Hash;
 use std::ops::Mul;
 
-use timely::PartialOrder;
 use timely::dataflow::Scope;
-use timely::dataflow::channels::pact::{Pipeline, Exchange};
-use timely::dataflow::operators::Operator;
 use timely::progress::Timestamp;
 use timely::dataflow::operators::Partition;
 use timely::dataflow::operators::Concatenate;
 
-use timely_sort::Unsigned;
-
-use differential_dataflow::{ExchangeData, Collection, AsCollection, Hashable};
+use differential_dataflow::{ExchangeData, Collection, AsCollection};
 use differential_dataflow::operators::Threshold;
-use differential_dataflow::difference::{Monoid};
+use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::TraceAgent;
 use differential_dataflow::operators::arrange::{ArrangeBySelf, ArrangeByKey};
-use differential_dataflow::trace::{Cursor, TraceReader, BatchReader};
 use differential_dataflow::trace::implementations::spine_fueled::Spine;
 use differential_dataflow::trace::implementations::ord::{OrdValBatch, OrdKeyBatch};
 
 pub mod altneu;
+
+mod operators;
 
 /// A type capable of extending a stream of prefixes.
 ///
@@ -59,11 +54,21 @@ pub trait ProposeExtensionMethod<G: Scope, P: ExchangeData+Ord, R: Monoid+Mul<Ou
     fn extend<E: ExchangeData+Ord>(&self, extenders: &mut [&mut PrefixExtender<G,R,Prefix=P,Extension=E>]) -> Collection<G, (P, E), R>;
 }
 
-impl<G: Scope, P: ExchangeData+Ord, R: Monoid+Mul<Output = R>> ProposeExtensionMethod<G, P, R> for Collection<G, P, R> {
-    fn propose_using<PE: PrefixExtender<G, R, Prefix=P>>(&self, extender: &mut PE) -> Collection<G, (P, PE::Extension), R> {
+impl<G, P, R> ProposeExtensionMethod<G, P, R> for Collection<G, P, R>
+where
+    G: Scope,
+    P: ExchangeData+Ord,
+    R: Monoid+Mul<Output = R>,
+{
+    fn propose_using<PE>(&self, extender: &mut PE) -> Collection<G, (P, PE::Extension), R>
+    where
+        PE: PrefixExtender<G, R, Prefix=P>
+    {
         extender.propose(self)
     }
-    fn extend<E: ExchangeData+Ord>(&self, extenders: &mut [&mut PrefixExtender<G,R,Prefix=P,Extension=E>]) -> Collection<G, (P, E), R>
+    fn extend<E>(&self, extenders: &mut [&mut PrefixExtender<G,R,Prefix=P,Extension=E>]) -> Collection<G, (P, E), R>
+    where
+        E: ExchangeData+Ord
     {
 
         if extenders.len() == 1 {
@@ -199,289 +204,21 @@ where
     R: Monoid+Mul<Output = R>+ExchangeData,
     F: Fn(&P)->K+'static,
 {
-
     type Prefix = P;
     type Extension = V;
 
     fn count(&mut self, prefixes: &Collection<G, (P, usize, usize), R>, index: usize) -> Collection<G, (P, usize, usize), R> {
-
-        // This method takes a stream of `(prefix, time, diff)` changes, and we want to produce the corresponding
-        // stream of `((prefix, count), time, diff)` changes, just by looking up `count` in `count_trace`. We are
-        // just doing a stream of changes and a stream of look-ups, no consolidation or any funny business like
-        // that. We *could* organize the input differences by key and save some time, or we could skip that.
-
         let counts = self.indices.count_trace.import(&prefixes.scope());
-        let mut counts_trace = Some(counts.trace.clone());
-
-        let mut stash = HashMap::new();
-        let logic1 = self.key_selector.clone();
-        let logic2 = self.key_selector.clone();
-
-        let exchange = Exchange::new(move |update: &((P,usize,usize),G::Timestamp,R)| logic1(&(update.0).0).hashed().as_u64());
-
-        let mut buffer1 = Vec::new();
-        let mut buffer2 = Vec::new();
-
-        // TODO: This should be a custom operator with no connection from the second input to the output.
-        prefixes.inner.binary_frontier(&counts.stream, exchange, Pipeline, "Count", move |_,_| move |input1, input2, output| {
-
-            // drain the first input, stashing requests.
-            input1.for_each(|capability, data| {
-                data.swap(&mut buffer1);
-                stash.entry(capability.retain())
-                     .or_insert(Vec::new())
-                     .extend(buffer1.drain(..))
-            });
-
-            // advance the `distinguish_since` frontier to allow all merges.
-            input2.for_each(|_, batches| {
-                batches.swap(&mut buffer2);
-                for batch in buffer2.drain(..) {
-                    if let Some(ref mut trace) = counts_trace {
-                        trace.distinguish_since(batch.upper());
-                    }
-                }
-            });
-
-            if let Some(ref mut trace) = counts_trace {
-
-                for (capability, prefixes) in stash.iter_mut() {
-
-                    // defer requests at incomplete times.
-                    // NOTE: not all updates may be at complete times, but if this test fails then none of them are.
-                    if !input2.frontier.less_equal(capability.time()) {
-
-                        let mut session = output.session(capability);
-
-                        // sort requests for in-order cursor traversal. could consolidate?
-                        prefixes.sort_by(|x,y| logic2(&(x.0).0).cmp(&logic2(&(y.0).0)));
-
-                        let (mut cursor, storage) = trace.cursor();
-
-                        for &mut ((ref prefix, old_count, old_index), ref time, ref mut diff) in prefixes.iter_mut() {
-                            if !input2.frontier.less_equal(time) {
-                                let key = logic2(prefix);
-                                cursor.seek_key(&storage, &key);
-                                if cursor.get_key(&storage) == Some(&key) {
-                                    let mut count = 0;
-                                    cursor.map_times(&storage, |t, d| if t.less_equal(time) { count += d; });
-                                    // assert!(count >= 0);
-                                    let count = count as usize;
-                                    if count > 0 {
-                                        if count < old_count {
-                                            session.give(((prefix.clone(), count, index), time.clone(), diff.clone()));
-                                        }
-                                        else {
-                                            session.give(((prefix.clone(), old_count, old_index), time.clone(), diff.clone()));
-                                        }
-                                    }
-                                }
-                                *diff = R::zero();
-                            }
-                        }
-
-                        prefixes.retain(|ptd| !ptd.2.is_zero());
-                    }
-                }
-            }
-
-            // drop fully processed capabilities.
-            stash.retain(|_,prefixes| !prefixes.is_empty());
-
-            // advance the consolidation frontier (TODO: wierd lexicographic times!)
-            counts_trace.as_mut().map(|trace| trace.advance_by(&input1.frontier().frontier()));
-
-            if input1.frontier().is_empty() && stash.is_empty() {
-                counts_trace = None;
-            }
-
-        }).as_collection()
+        operators::count::count(prefixes, counts, self.key_selector.clone(), index)
     }
 
     fn propose(&mut self, prefixes: &Collection<G, P, R>) -> Collection<G, (P, V), R> {
-
-        // This method takes a stream of `(prefix, time, diff)` changes, and we want to produce the corresponding
-        // stream of `((prefix, count), time, diff)` changes, just by looking up `count` in `count_trace`. We are
-        // just doing a stream of changes and a stream of look-ups, no consolidation or any funny business like
-        // that. We *could* organize the input differences by key and save some time, or we could skip that.
-
         let propose = self.indices.propose_trace.import(&prefixes.scope());
-        let mut propose_trace = Some(propose.trace.clone());
-
-        let mut stash = HashMap::new();
-        let logic1 = self.key_selector.clone();
-        let logic2 = self.key_selector.clone();
-
-        let mut buffer1 = Vec::new();
-        let mut buffer2 = Vec::new();
-
-        let exchange = Exchange::new(move |update: &(P,G::Timestamp,R)| logic1(&update.0).hashed().as_u64());
-
-        prefixes.inner.binary_frontier(&propose.stream, exchange, Pipeline, "Propose", move |_,_| move |input1, input2, output| {
-
-            // drain the first input, stashing requests.
-            input1.for_each(|capability, data| {
-                data.swap(&mut buffer1);
-                stash.entry(capability.retain())
-                     .or_insert(Vec::new())
-                     .extend(buffer1.drain(..))
-            });
-
-            // advance the `distinguish_since` frontier to allow all merges.
-            input2.for_each(|_, batches| {
-                batches.swap(&mut buffer2);
-                for batch in buffer2.drain(..) {
-                    if let Some(ref mut trace) = propose_trace {
-                        trace.distinguish_since(batch.upper());
-                    }
-                }
-            });
-
-            if let Some(ref mut trace) = propose_trace {
-
-                for (capability, prefixes) in stash.iter_mut() {
-
-                    // defer requests at incomplete times.
-                    // NOTE: not all updates may be at complete times, but if this test fails then none of them are.
-                    if !input2.frontier.less_equal(capability.time()) {
-
-                        let mut session = output.session(capability);
-
-                        // sort requests for in-order cursor traversal. could consolidate?
-                        prefixes.sort_by(|x,y| logic2(&x.0).cmp(&logic2(&y.0)));
-
-                        let (mut cursor, storage) = trace.cursor();
-
-                        for &mut (ref prefix, ref time, ref mut diff) in prefixes.iter_mut() {
-                            if !input2.frontier.less_equal(time) {
-                                let key = logic2(prefix);
-                                cursor.seek_key(&storage, &key);
-                                if cursor.get_key(&storage) == Some(&key) {
-                                    while let Some(value) = cursor.get_val(&storage) {
-                                        let mut count = R::zero();
-                                        cursor.map_times(&storage, |t, d| if t.less_equal(time) { count += d; });
-                                        let prod = count * diff.clone();
-                                        if !prod.is_zero() {
-                                            session.give(((prefix.clone(), value.clone()), time.clone(), prod));
-                                        }
-                                        cursor.step_val(&storage);
-                                    }
-                                    cursor.rewind_vals(&storage);
-                                }
-                                *diff = R::zero();
-                            }
-                        }
-
-                        prefixes.retain(|ptd| !ptd.2.is_zero());
-                    }
-                }
-            }
-
-            // drop fully processed capabilities.
-            stash.retain(|_,prefixes| !prefixes.is_empty());
-
-            // advance the consolidation frontier (TODO: wierd lexicographic times!)
-            propose_trace.as_mut().map(|trace| trace.advance_by(&input1.frontier().frontier()));
-
-            if input1.frontier().is_empty() && stash.is_empty() {
-                propose_trace = None;
-            }
-
-        }).as_collection()
+        operators::propose::propose(prefixes, propose, self.key_selector.clone())
     }
 
     fn validate(&mut self, extensions: &Collection<G, (P, V), R>) -> Collection<G, (P, V), R> {
-
-
-        // This method takes a stream of `(prefix, time, diff)` changes, and we want to produce the corresponding
-        // stream of `((prefix, count), time, diff)` changes, just by looking up `count` in `count_trace`. We are
-        // just doing a stream of changes and a stream of look-ups, no consolidation or any funny business like
-        // that. We *could* organize the input differences by key and save some time, or we could skip that.
-
         let validate = self.indices.validate_trace.import(&extensions.scope());
-        let mut validate_trace = Some(validate.trace.clone());
-
-        let mut stash = HashMap::new();
-        let logic1 = self.key_selector.clone();
-        let logic2 = self.key_selector.clone();
-
-        let mut buffer1 = Vec::new();
-        let mut buffer2 = Vec::new();
-
-        let exchange = Exchange::new(move |update: &((P,V),G::Timestamp,R)|
-            (logic1(&(update.0).0).clone(), ((update.0).1).clone()).hashed().as_u64()
-        );
-
-        extensions.inner.binary_frontier(&validate.stream, exchange, Pipeline, "Validate", move |_,_| move |input1, input2, output| {
-
-            // drain the first input, stashing requests.
-            input1.for_each(|capability, data| {
-                data.swap(&mut buffer1);
-                stash.entry(capability.retain())
-                     .or_insert(Vec::new())
-                     .extend(buffer1.drain(..))
-            });
-
-            // advance the `distinguish_since` frontier to allow all merges.
-            input2.for_each(|_, batches| {
-                batches.swap(&mut buffer2);
-                for batch in buffer2.drain(..) {
-                    if let Some(ref mut trace) = validate_trace {
-                        trace.distinguish_since(batch.upper());
-                    }
-                }
-            });
-
-            if let Some(ref mut trace) = validate_trace {
-
-                for (capability, prefixes) in stash.iter_mut() {
-
-                    // defer requests at incomplete times.
-                    // NOTE: not all updates may be at complete times, but if this test fails then none of them are.
-                    if !input2.frontier.less_equal(capability.time()) {
-
-                        let mut session = output.session(capability);
-
-                        // sort requests for in-order cursor traversal. could consolidate?
-                        prefixes.sort_by(|x,y| (logic2(&(x.0).0), &((x.0).1)).cmp(&(logic2(&(y.0).0), &((y.0).1))));
-
-                        let (mut cursor, storage) = trace.cursor();
-
-                        for &mut (ref prefix, ref time, ref mut diff) in prefixes.iter_mut() {
-                            if !input2.frontier.less_equal(time) {
-                                let key = (logic2(&prefix.0), (prefix.1).clone());
-                                cursor.seek_key(&storage, &key);
-                                if cursor.get_key(&storage) == Some(&key) {
-                                    let mut count = R::zero();
-                                    cursor.map_times(&storage, |t, d| if t.less_equal(time) { count += d; });
-                                    let prod = count * diff.clone();
-                                    if !prod.is_zero(){
-                                        session.give((prefix.clone(), time.clone(), prod));
-                                    }
-                                }
-                                *diff = R::zero();
-                            }
-                        }
-
-                        prefixes.retain(|ptd| !ptd.2.is_zero());
-                    }
-                }
-            }
-
-            // drop fully processed capabilities.
-            stash.retain(|_,prefixes| !prefixes.is_empty());
-
-            // advance the consolidation frontier (TODO: wierd lexicographic times!)
-            validate_trace.as_mut().map(|trace| trace.advance_by(&input1.frontier().frontier()));
-
-            if input1.frontier().is_empty() && stash.is_empty() {
-                validate_trace = None;
-            }
-
-        }).as_collection()
-
+        operators::validate::validate(extensions, validate, self.key_selector.clone())
     }
-
 }
-
-
