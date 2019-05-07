@@ -28,7 +28,7 @@ use differential_dataflow::trace::implementations::ord::{OrdValBatch, OrdKeyBatc
 
 pub mod altneu;
 
-mod operators;
+pub mod operators;
 
 /// A type capable of extending a stream of prefixes.
 ///

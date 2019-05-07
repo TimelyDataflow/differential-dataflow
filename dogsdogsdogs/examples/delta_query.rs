@@ -9,8 +9,7 @@ use timely::dataflow::operators::probe::Handle;
 use differential_dataflow::input::Input;
 use graph_map::GraphMMap;
 
-use dogsdogsdogs::{CollectionIndex, altneu::AltNeu};
-use dogsdogsdogs::{ProposeExtensionMethod, ValidateExtensionMethod};
+use dogsdogsdogs::altneu::AltNeu;
 
 fn main() {
 
@@ -33,21 +32,39 @@ fn main() {
 
             let (edges_input, edges) = scope.new_collection();
 
-            let forward = edges.clone();
-            let reverse = edges.map(|(x,y)| (y,x));
+            // Graph oriented both ways, indexed by key.
+            use differential_dataflow::operators::arrange::ArrangeByKey;
+            let forward_key = edges.arrange_by_key();
+            let reverse_key = edges.map(|(x,y)| (y,x))
+                                   .arrange_by_key();
+
+            // Graph oriented both ways, indexed by (key, val).
+            use differential_dataflow::operators::arrange::ArrangeBySelf;
+            let forward_self = edges.arrange_by_self();
+            let reverse_self = edges.map(|(x,y)| (y,x))
+                                    .arrange_by_self();
+
+            // // Graph oriented both ways, counts of distinct vals for each key.
+            // // Not required without worst-case-optimal join strategy.
+            // let forward_count = edges.map(|(x,y)| x).arrange_by_self();
+            // let reverse_count = edges.map(|(x,y)| y).arrange_by_self();
 
             // Q(a,b,c) :=  E1(a,b),  E2(b,c),  E3(a,c)
             let triangles = scope.scoped::<AltNeu<usize>,_,_>("DeltaQuery (Triangles)", |inner| {
 
-                // Each relation we'll need.
-                let forward = forward.enter(inner);
-                let reverse = reverse.enter(inner);
+                // Grab the stream of changes.
+                let changes = edges.enter(inner);
 
-                // Without using wrappers yet, maintain an "old" and a "new" copy of edges.
-                let alt_forward = CollectionIndex::index(&forward);
-                let alt_reverse = CollectionIndex::index(&reverse);
-                let neu_forward = CollectionIndex::index(&forward.delay(|time| AltNeu::neu(time.time.clone())));
-                let neu_reverse = CollectionIndex::index(&reverse.delay(|time| AltNeu::neu(time.time.clone())));
+                // Each relation we'll need.
+                let forward_key_alt = forward_key.enter_at(inner, |_,_,t| AltNeu::alt(t.clone()));
+                let reverse_key_alt = reverse_key.enter_at(inner, |_,_,t| AltNeu::alt(t.clone()));
+                let forward_key_neu = forward_key.enter_at(inner, |_,_,t| AltNeu::neu(t.clone()));
+                // let reverse_key_neu = reverse_key.enter_at(inner, |_,_,t| AltNeu::neu(t.clone()));
+
+                // let forward_self_alt = forward_self.enter_at(inner, |_,_,t| AltNeu::alt(t.clone()));
+                let reverse_self_alt = reverse_self.enter_at(inner, |_,_,t| AltNeu::alt(t.clone()));
+                let forward_self_neu = forward_self.enter_at(inner, |_,_,t| AltNeu::neu(t.clone()));
+                let reverse_self_neu = reverse_self.enter_at(inner, |_,_,t| AltNeu::neu(t.clone()));
 
                 // For each relation, we form a delta query driven by changes to that relation.
                 //
@@ -58,23 +75,27 @@ fn main() {
                 // Each joined relation is directed { forward, reverse } by whether the
                 // bound variable occurs in the first or second position.
 
+                use std::rc::Rc;
+                let key1 = Rc::new(|x: &(u32, u32)| x.0);
+                let key2 = Rc::new(|x: &(u32, u32)| x.1);
+
+                use dogsdogsdogs::operators::propose;
+                use dogsdogsdogs::operators::validate;
+
                 //   dQ/dE1 := dE1(a,b), E2(b,c), E3(a,c)
-                let changes1 = forward
-                    .propose_using(&mut neu_forward.extend_using(|(_a,b)| *b))
-                    .validate_using(&mut neu_forward.extend_using(|(a,_b)| *a))
-                    .map(|((a,b),c)| (a,b,c));
+                let changes1 = propose(&changes, forward_key_neu.clone(), key2.clone());
+                let changes1 = validate(&changes1, forward_self_neu.clone(), key1.clone());
+                let changes1 = changes1.map(|((a,b),c)| (a,b,c));
 
                 //   dQ/dE2 := dE2(b,c), E1(a,b), E3(a,c)
-                let changes2 = forward
-                    .propose_using(&mut alt_reverse.extend_using(|(b,_c)| *b))
-                    .validate_using(&mut neu_reverse.extend_using(|(_b,c)| *c))
-                    .map(|((b,c),a)| (a,b,c));
+                let changes2 = propose(&changes, reverse_key_alt, key1.clone());
+                let changes2 = validate(&changes2, reverse_self_neu, key2.clone());
+                let changes2 = changes2.map(|((b,c),a)| (a,b,c));
 
                 //   dQ/dE3 := dE3(a,c), E1(a,b), E2(b,c)
-                let changes3 = forward
-                    .propose_using(&mut alt_forward.extend_using(|(a,_c)| *a))
-                    .validate_using(&mut alt_reverse.extend_using(|(_a,c)| *c))
-                    .map(|((a,c),b)| (a,b,c));
+                let changes3 = propose(&changes, forward_key_alt, key1.clone());
+                let changes3 = validate(&changes3, reverse_self_alt, key2.clone());
+                let changes3 = changes3.map(|((a,c),b)| (a,b,c));
 
                 changes1.concat(&changes2).concat(&changes3).leave()
             });
