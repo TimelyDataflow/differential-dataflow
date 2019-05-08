@@ -97,7 +97,7 @@ impl<V: ExchangeData+Hash> Render for MultiwayJoin<V> {
         // This is done to avoid double counting updates; any concurrent changes will be
         // accounted for by the last relation for which there is a concurrent update.
 
-        println!("{:?}", self);
+        // println!("{:?}", self);
 
         // Attributes we may need from any and all relations.
         let mut relevant_attributes = Vec::new();
