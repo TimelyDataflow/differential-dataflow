@@ -32,6 +32,8 @@ fn main() {
         ],
         vec![(0,0), (1,0), (1,1)],
     )
+        .project(vec![])
+        .consolidate()
         .inspect("triangles")
         .into_rule("triangles")
         .into_query()
@@ -48,6 +50,31 @@ fn main() {
         Command::<Value>::UpdateInput("Edges".to_string(), updates).serialize_into(&mut socket);
         Command::<Value>::AdvanceTime(Duration::from_secs(node_0 as u64 + 1)).serialize_into(&mut socket);
     }
+
+    Plan::<Value>::multiway_join(
+        vec![
+            Plan::source("Edges"),  // R0(a,b)
+            Plan::source("Edges"),  // R1(a,c)
+            Plan::source("Edges"),  // R2(a,d)
+            Plan::source("Edges"),  // R3(b,c)
+            Plan::source("Edges"),  // R4(b,d)
+            Plan::source("Edges"),  // R5(c,d)
+        ],
+        vec![
+            vec![(0,0), (0,1), (0,2)], // a
+            vec![(1,0), (0,3), (0,4)], // b
+            vec![(1,1), (1,3), (0,5)], // c
+            vec![(1,2), (1,4), (1,5)], // d
+        ],
+        vec![(0,0), (1,0), (1,1), (1,2)],
+    )
+        .project(vec![])
+        .consolidate()
+        .inspect("4cliques")
+        .into_rule("4cliques")
+        .into_query()
+        .into_command()
+        .serialize_into(&mut socket);
 
     Command::<Value>::Shutdown.serialize_into(&mut socket);
 }
