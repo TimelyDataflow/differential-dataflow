@@ -62,9 +62,30 @@ impl<V: ExchangeData+Hash> Render for MultiwayJoin<V> {
         scope: &mut S,
         arrangements: &mut TraceManager<Self::Value>) -> Collection<S, Vec<Self::Value>, Diff>
     {
-        // The plan here is that each stream of changes comes in, and has a delta query.
-        // For each each stream, we need to work through each other relation ensuring that
-        // each new relation we add has some attributes in common with the developing set.
+        // The idea here is the following:
+        //
+        // For each stream, we will determine a streaming delta query, in which changes
+        // are joined against indexed forms of the other relations using `dogsdogsdogs`
+        // stateless `propose` operators.
+        //
+        // For a query Q(x,y,z) := A(x,y), B(y,z), C(x,z) we might write dataflows like:
+        //
+        //   dQdA := dA(x,y), B(y,z), C(x,z)
+        //   dQdB := dB(y,z), A(x,y), C(x,z)
+        //   dQdC := dC(x,y), A(x,y), B(y,z)
+        //
+        // where each line is read from left to right as a sequence of `propose` joins,
+        // which respond to timestamped delta changes by joining with the maintained
+        // relation at that corresponding time.
+        //
+        // We take some care to make sure that when these joins are performed, a delta
+        // interacts with relations as if we updated A, then B, then C, as if in sequence.
+        // That is, when a dB delta joins A it observes all updates to A at times less or
+        // equal to the delta's timestamp, but when a dB delta joins C it observes only
+        // updates to C at times strictly less than the delta's timestamp.
+        //
+        // This is done to avoid double counting updates; any concurrent changes will be
+        // accounted for by the last relation for which there is a concurrent update.
 
         // Attributes we may need from any and all relations.
         let mut relevant_attributes = Vec::new();
@@ -200,6 +221,10 @@ impl<V: ExchangeData+Hash> Render for MultiwayJoin<V> {
                         dogsdogsdogs::operators::propose(&changes, arrangement, key_selector)
                     }
                     .map(|(mut prefix, extensions)| { prefix.extend(extensions.into_iter()); prefix });
+
+                    // TODO: Equality constraints strictly within a relation have the effect
+                    //       of "filtering" data, but they are ignored at the moment. We should
+                    //       check for these and do something about it.
                 }
 
                 // Extract `self.results` in order, using `attributes`.
