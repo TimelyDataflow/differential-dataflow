@@ -28,6 +28,7 @@ use std::hash::Hash;
 
 use timely::dataflow::Scope;
 
+use differential_dataflow::operators::Consolidate;
 use differential_dataflow::operators::arrange::{ArrangeBySelf, ArrangeByKey};
 
 use differential_dataflow::{Collection, ExchangeData};
@@ -52,6 +53,15 @@ pub struct MultiwayJoin<Value> {
     /// appear in more than one list, those two lists should be merged.
     pub equalities: Vec<Vec<(usize, usize)>>,
 }
+
+// TODO: This logic fails to perform restrictions in cases where a join does not
+//       occur. One example could be:
+//
+//              result(a,b,c) := R1(a,b), R2(b,c,c)
+//
+//       In this case, the requirement that the 2nd and 3rd columns of R2 be equal
+//       is not surfaced in any join, and is instead a filter that should be applied
+//       directly to R2 (before or after the join with R1; either could be best).
 
 impl<V: ExchangeData+Hash> Render for MultiwayJoin<V> {
 
@@ -87,6 +97,8 @@ impl<V: ExchangeData+Hash> Render for MultiwayJoin<V> {
         // This is done to avoid double counting updates; any concurrent changes will be
         // accounted for by the last relation for which there is a concurrent update.
 
+        println!("{:?}", self);
+
         // Attributes we may need from any and all relations.
         let mut relevant_attributes = Vec::new();
         relevant_attributes.extend(self.results.iter().cloned());
@@ -94,11 +106,15 @@ impl<V: ExchangeData+Hash> Render for MultiwayJoin<V> {
         relevant_attributes.sort();
         relevant_attributes.dedup();
 
+        // println!("Relevant attributes: {:?}", relevant_attributes);
+
         // Into which we accumulate change streams.
         let mut accumulated_changes = Vec::new();
 
         // For each participating relation, we build a delta query dataflow.
         for (index, plan) in self.sources.iter().enumerate() {
+
+            // println!("building dataflow for relation {}", index);
 
             // Restrict down to relevant attributes.
             let mut attributes: Vec<(usize, usize)> =
@@ -109,11 +125,16 @@ impl<V: ExchangeData+Hash> Render for MultiwayJoin<V> {
                 .collect::<Vec<_>>();
 
             let attributes_init = attributes.clone();
+            // println!("\tinitial attributes: {:?}", attributes);
 
             // Ensure the plan is rendered and cached.
             if arrangements.get_unkeyed(&plan).is_none() {
+                // println!("\tbuilding/caching source plan");
                 let collection = plan.render(scope, arrangements);
                 arrangements.set_unkeyed(plan, &collection.arrange_by_self().trace);
+            }
+            else {
+                // println!("\tsource plan found");
             }
             let changes =
             arrangements
@@ -122,7 +143,7 @@ impl<V: ExchangeData+Hash> Render for MultiwayJoin<V> {
                 .import(scope)
                 .as_collection(|val,&()| val.clone())
                 .map(move |tuple| attributes_init.iter().map(|&(attr,_)|
-                        tuple[attr].clone()).collect::<Vec<_>>()
+                    tuple[attr].clone()).collect::<Vec<_>>()
                 );
 
             // Before constructing the dataflow, which takes a borrow on `scope`,
@@ -136,6 +157,8 @@ impl<V: ExchangeData+Hash> Render for MultiwayJoin<V> {
             // relation, and so can be effectively joined.
             let join_order = plan_join_order(index, &self.equalities);
             let mut join_plan = Vec::new();
+
+            // println!("\tjoin order: {:?}", join_order);
 
             // Skipping `index`, join in each relation in sequence.
             for join_idx in join_order.into_iter().skip(1) {
@@ -156,6 +179,8 @@ impl<V: ExchangeData+Hash> Render for MultiwayJoin<V> {
                     .cloned()
                     .collect::<Vec<_>>();
 
+                // println!("\tkeys: {:?}, priors: {:?}, vals: {:?}", keys, priors, vals);
+
                 let mut projection = Vec::new();
                 for &attr in keys.iter() {
                     projection.push(attr);
@@ -173,6 +198,7 @@ impl<V: ExchangeData+Hash> Render for MultiwayJoin<V> {
                 let plan = self.sources[join_idx].clone().project(projection);
 
                 if arrangements.get_keyed(&plan, &keys[..]).is_none() {
+                    // println!("\tbuilding key: {:?}, plan: {:?}", keys, plan);
                     let keys_clone = keys.clone();
                     let arrangement =
                     plan.render(scope, arrangements)
@@ -180,6 +206,9 @@ impl<V: ExchangeData+Hash> Render for MultiwayJoin<V> {
                         .arrange_by_key();
 
                     arrangements.set_keyed(&plan, &keys[..], &arrangement.trace);
+                }
+                else {
+                    // println!("\tplan found: {:?}, {:?}", keys, plan);
                 }
 
                 let arrangement =
@@ -193,7 +222,9 @@ impl<V: ExchangeData+Hash> Render for MultiwayJoin<V> {
 
                 join_plan.push((join_idx, key_selector, arrangement));
 
+                attributes.extend(keys.into_iter().map(|x| (x, join_idx)));
                 attributes.extend(vals.into_iter());
+                // println!("\tattributes: {:?}", attributes);
             }
 
             // Build the dataflow.
@@ -203,7 +234,10 @@ impl<V: ExchangeData+Hash> Render for MultiwayJoin<V> {
             let changes = scope.clone().scoped::<AltNeu<_>,_,_>(&scope_name, |inner| {
 
                 // This should default to an `AltNeu::Alt` timestamp.
-                let mut changes = changes.enter(inner);
+                let mut changes =
+                changes
+                    .enter(inner)
+                    ;
 
                 for (join_idx, key_selector, mut trace) in join_plan.into_iter() {
 
@@ -220,7 +254,8 @@ impl<V: ExchangeData+Hash> Render for MultiwayJoin<V> {
                         let arrangement = trace.import(scope).enter_at(inner, |_,_,t| AltNeu::neu(t.clone()));
                         dogsdogsdogs::operators::propose(&changes, arrangement, key_selector)
                     }
-                    .map(|(mut prefix, extensions)| { prefix.extend(extensions.into_iter()); prefix });
+                    .map(|(mut prefix, extensions)| { prefix.extend(extensions.into_iter()); prefix })
+                    ;
 
                     // TODO: Equality constraints strictly within a relation have the effect
                     //       of "filtering" data, but they are ignored at the moment. We should
@@ -228,11 +263,28 @@ impl<V: ExchangeData+Hash> Render for MultiwayJoin<V> {
                 }
 
                 // Extract `self.results` in order, using `attributes`.
-                let extract_map =
-                self.results
-                    .iter()
-                    .map(move |x| attributes.iter().position(|i| i == x).expect("Output attribute not found!"))
-                    .collect::<Vec<_>>();
+                //
+                // The specific attribute requested in `self.results` may not be present in
+                // `attributes` when it is equal to another present attribute. So, we should
+                // look around in `self.equalities` also.
+                let mut extract_map = Vec::new();
+                for result in self.results.iter() {
+                    if let Some(position) = attributes.iter().position(|i| i == result) {
+                        extract_map.push(position);
+                    }
+                    else {
+                        for constraint in self.equalities.iter() {
+                            if constraint.contains(result) {
+                                if let Some(position) = constraint.iter().flat_map(|x| attributes.iter().position(|i| i == x)).next() {
+                                    extract_map.push(position);
+                                }
+                                else {
+                                    println!("WTF NOTHING FOUND NOOOOO!!!");
+                                }
+                            }
+                        }
+                    }
+                }
 
                 changes
                     .map(move |tuple| extract_map.iter().map(|&i| tuple[i].clone()).collect::<Vec<_>>())
@@ -243,6 +295,7 @@ impl<V: ExchangeData+Hash> Render for MultiwayJoin<V> {
         }
 
         differential_dataflow::collection::concatenate(scope, accumulated_changes.into_iter())
+            .consolidate()
     }
 }
 
