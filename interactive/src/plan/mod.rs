@@ -18,6 +18,7 @@ pub mod sfw;
 pub use self::concat::Concat;
 pub use self::filter::{Filter, Predicate};
 pub use self::join::Join;
+pub use self::sfw::MultiwayJoin;
 pub use self::project::Project;
 
 /// A type that can be rendered as a collection.
@@ -49,6 +50,8 @@ pub enum Plan<Value> {
     Consolidate(Box<Plan<Value>>),
     /// Equijoin
     Join(Join<Value>),
+    /// MultiwayJoin
+    MultiwayJoin(MultiwayJoin<Value>),
     /// Negation
     Negate(Box<Plan<Value>>),
     /// Filters bindings by one of the built-in predicates
@@ -89,6 +92,22 @@ impl<V: ExchangeData+Hash> Plan<V> {
             keys,
             plan1: Box::new(self),
             plan2: Box::new(other),
+        })
+    }
+    /// Equi-joins multiple collections using lists of equality constraints.
+    ///
+    /// The list `equalities` should contain equivalence classes of pairs of
+    /// attribute index and source index, and the `multiway_join` method will
+    /// ensure that each equivalence class has equal values in each attribute.
+    pub fn multiway_join(
+        sources: Vec<Self>,
+        equalities: Vec<Vec<(usize, usize)>>,
+        results: Vec<(usize, usize)>
+    ) -> Self {
+        Plan::MultiwayJoin(MultiwayJoin {
+            results,
+            sources,
+            equalities,
         })
     }
     /// Negates a collection (negating multiplicities).
@@ -160,6 +179,7 @@ impl<V: ExchangeData+Hash> Render for Plan<V> {
                 }
             },
             Plan::Join(join) => join.render(scope, arrangements),
+            Plan::MultiwayJoin(join) => join.render(scope, arrangements),
             Plan::Negate(negate) => {
                 negate.render(scope, arrangements).negate()
             },

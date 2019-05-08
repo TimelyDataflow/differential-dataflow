@@ -44,7 +44,7 @@ pub struct MultiwayJoin<Value> {
     /// A list of (attribute index, input) pairs to extract.
     pub results: Vec<(usize, usize)>,
     /// A list of source collections.
-    pub sources: Vec<Box<Plan<Value>>>,
+    pub sources: Vec<Plan<Value>>,
     /// Equality constraints.
     ///
     /// Equality constraints are presented as lists of `(attr, input)` equivalence classes.
