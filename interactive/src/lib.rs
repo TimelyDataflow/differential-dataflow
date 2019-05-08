@@ -9,6 +9,7 @@
 extern crate bincode;
 extern crate timely;
 extern crate differential_dataflow;
+extern crate dogsdogsdogs;
 extern crate serde;
 #[macro_use]
 extern crate serde_derive;

@@ -12,6 +12,7 @@ pub mod concat;
 pub mod filter;
 pub mod join;
 pub mod project;
+pub mod sfw;
 
 // pub use self::count::Count;
 pub use self::concat::Concat;
