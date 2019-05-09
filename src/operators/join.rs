@@ -355,7 +355,11 @@ impl<G, T1> JoinCore<G, T1::Key, T1::Val, T1::R> for Arranged<G,T1>
                         for batch1 in input1_buffer.drain(..) {
                             if let Some(acknowledged2) = &acknowledged2 {
                                 // TODO : cursor_through may be problematic for pre-merged traces.
-                                let (trace2_cursor, trace2_storage) = trace2.cursor_through(&acknowledged2[..]).unwrap();
+                                let (trace2_cursor, trace2_storage) = trace2.cursor_through(&acknowledged2[..])
+                                    .unwrap_or_else(|| {
+                                        let frontier = trace2.distinguish_frontier().to_vec();
+                                        trace2.cursor_through(&frontier).unwrap()
+                                    });
                                 let batch1_cursor = batch1.cursor();
                                 todo1.push(Deferred::new(trace2_cursor, trace2_storage, batch1_cursor, batch1.clone(), capability.clone(), |r2,r1| (r1.clone()) * (r2.clone())));
                                 // debug_assert!(batch1.description().lower() == &acknowledged1[..]);
@@ -373,7 +377,11 @@ impl<G, T1> JoinCore<G, T1::Key, T1::Val, T1::R> for Arranged<G,T1>
                         for batch2 in input2_buffer.drain(..) {
                             if let Some(acknowledged1) = &acknowledged1 {
                                 // TODO : cursor_through may be problematic for pre-merged traces.
-                                let (trace1_cursor, trace1_storage) = trace1.cursor_through(&acknowledged1[..]).unwrap();
+                                let (trace1_cursor, trace1_storage) = trace1.cursor_through(&acknowledged1[..])
+                                    .unwrap_or_else(|| {
+                                        let frontier = trace1.distinguish_frontier().to_vec();
+                                        trace1.cursor_through(&frontier).unwrap()
+                                    });
                                 let batch2_cursor = batch2.cursor();
                                 todo2.push(Deferred::new(trace1_cursor, trace1_storage, batch2_cursor, batch2.clone(), capability.clone(), |r1,r2| (r1.clone()) * (r2.clone())));
                                 // debug_assert!(batch2.description().lower() == &acknowledged2[..]);
