@@ -5,31 +5,38 @@ use std::io::Write;
 
 use timely::communication::Allocate;
 use timely::worker::Worker;
+
+use timely::logging::TimelyEvent;
+use differential_dataflow::logging::DifferentialEvent;
+
 use differential_dataflow::ExchangeData;
 
 use super::{Query, Rule, Plan, Time, Diff, Manager};
+use manager::LoggingValue;
 
 /// Commands accepted by the system.
 #[derive(Serialize, Deserialize, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub enum Command<Value> {
+pub enum Command<V> {
     /// Installs the query and publishes public rules.
-    Query(Query<Value>),
+    Query(Query<V>),
     /// Advances all inputs and traces to `time`, and advances computation.
     AdvanceTime(Time),
     /// Creates a new named input, with initial input.
-    CreateInput(String, Vec<Vec<Value>>),
+    CreateInput(String, Vec<Vec<V>>),
     /// Introduces updates to a specified input.
-    UpdateInput(String, Vec<(Vec<Value>, Time, Diff)>),
+    UpdateInput(String, Vec<(Vec<V>, Time, Diff)>),
     /// Closes a specified input.
     CloseInput(String),
+    /// Attaches a logging source. (address, flavor, number, granularity, name_as)
+    SourceLogging(String, String, usize, u64, String),
     /// Terminates the system.
     Shutdown,
 }
 
-impl<Value: ExchangeData+Hash> Command<Value> {
+impl<V: ExchangeData+Hash+LoggingValue> Command<V> {
 
     /// Executes a command.
-    pub fn execute<A: Allocate>(self, manager: &mut Manager<Value>, worker: &mut Worker<A>) {
+    pub fn execute<A: Allocate>(self, manager: &mut Manager<V>, worker: &mut Worker<A>) {
 
         match self {
 
@@ -93,6 +100,61 @@ impl<Value: ExchangeData+Hash> Command<Value> {
             Command::CloseInput(name) => {
                 manager.inputs.sessions.remove(&name);
             },
+
+            Command::SourceLogging(address, flavor, number, granularity, name_as) => {
+
+                match flavor.as_str() {
+                    "timely" => {
+
+                        let mut streams = Vec::new();
+
+                        // Only one worker can bind to listen.
+                        if worker.index() == 0 {
+
+                            use std::time::Duration;
+                            use std::net::TcpListener;
+                            use timely::dataflow::operators::capture::EventReader;
+
+                            println!("Awaiting timely logging connections ({})", number);
+
+                            // e.g. "127.0.0.1:8000"
+                            let listener = TcpListener::bind(address).unwrap();
+                            for index in 0 .. number {
+                                println!("\tTimely logging connection {} of {}", index, number);
+                                let socket = listener.incoming().next().unwrap().unwrap();
+                                socket.set_nonblocking(true).expect("failed to set nonblocking");
+                                streams.push(EventReader::<Duration, (Duration, usize, TimelyEvent),_>::new(socket));
+                            }
+
+                            println!("\tAll logging connections established");
+                        }
+                        crate::logging::publish_timely_logging(manager, worker, granularity, &name_as, streams);
+                    },
+                    "differential" => {
+
+                        let mut streams = Vec::new();
+
+                        // Only one worker can bind to listen.
+                        if worker.index() == 0 {
+
+                            use std::time::Duration;
+                            use std::net::TcpListener;
+                            use timely::dataflow::operators::capture::EventReader;
+
+                            // "127.0.0.1:8000"
+                            let listener = TcpListener::bind(address).unwrap();
+                            for _ in 0 .. number {
+                                let socket = listener.incoming().next().unwrap().unwrap();
+                                socket.set_nonblocking(true).expect("failed to set nonblocking");
+                                streams.push(EventReader::<Duration, (Duration, usize, DifferentialEvent),_>::new(socket));
+                            }
+                        }
+                        crate::logging::publish_differential_logging(manager, worker, granularity, &name_as, streams);
+                    },
+                    _ => { println!("{}", format!("Unknown logging flavor: {}", flavor)); }
+                }
+
+            }
 
             Command::Shutdown => {
                 println!("Shutdown received");

@@ -23,6 +23,8 @@ pub use manager::{Manager, TraceManager, InputManager};
 pub mod command;
 pub use command::Command;
 
+pub mod logging;
+
 /// System-wide notion of time.
 pub type Time = ::std::time::Duration;
 /// System-wide update type.
@@ -82,12 +84,12 @@ pub enum Value {
     Duration(::std::time::Duration),
 }
 
-use manager::AsVector;
+use manager::VectorFrom;
 use timely::logging::TimelyEvent;
 
-impl AsVector<Value> for TimelyEvent {
-    fn as_vector(self) -> Vec<Value> {
-        match self {
+impl VectorFrom<TimelyEvent> for Value {
+    fn vector_from(item: TimelyEvent) -> Vec<Value> {
+        match item {
             TimelyEvent::Operates(x) => {
                 vec![Value::Usize(x.id), Value::Address(x.addr), Value::String(x.name)]
             },
@@ -107,9 +109,9 @@ impl AsVector<Value> for TimelyEvent {
 
 use differential_dataflow::logging::DifferentialEvent;
 
-impl AsVector<Value> for DifferentialEvent {
-    fn as_vector(self) -> Vec<Value> {
-        match self {
+impl VectorFrom<DifferentialEvent> for Value {
+    fn vector_from(item: DifferentialEvent) -> Vec<Value> {
+        match item {
             DifferentialEvent::Batch(x) => {
                 vec![
                     Value::Usize(x.operator),

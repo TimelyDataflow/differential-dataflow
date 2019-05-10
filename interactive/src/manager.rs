@@ -30,10 +30,14 @@ pub type KeysOnlyHandle<V> = TraceKeyHandle<Vec<V>, Time, Diff>;
 pub type KeysValsHandle<V> = TraceValHandle<Vec<V>, Vec<V>, Time, Diff>;
 
 /// A type that can be converted to a vector of another type.
-pub trait AsVector<T> {
-    /// Converts `self` to a vector of `T`.
-    fn as_vector(self) -> Vec<T>;
+pub trait VectorFrom<T> : Sized {
+    /// Converts `T` to a vector of `Self`.
+    fn vector_from(item: T) -> Vec<Self>;
 }
+
+/// A composite trait for values accommodating logging types.
+pub trait LoggingValue : VectorFrom<TimelyEvent>+VectorFrom<DifferentialEvent> { }
+impl<V: VectorFrom<TimelyEvent>+VectorFrom<DifferentialEvent>> LoggingValue for V { }
 
 /// Manages inputs and traces.
 pub struct Manager<Value: ExchangeData> {
@@ -45,7 +49,7 @@ pub struct Manager<Value: ExchangeData> {
     pub probe: ProbeHandle<Time>,
 }
 
-impl<Value: ExchangeData+Hash> Manager<Value> {
+impl<Value: ExchangeData+Hash+LoggingValue> Manager<Value> {
 
     /// Creates a new empty manager.
     pub fn new() -> Self {
@@ -57,11 +61,7 @@ impl<Value: ExchangeData+Hash> Manager<Value> {
     }
 
     /// Enables logging of timely and differential events.
-    pub fn enable_logging<A: Allocate>(&mut self, worker: &mut Worker<A>)
-    where
-        TimelyEvent: AsVector<Value>,
-        DifferentialEvent: AsVector<Value>,
-    {
+    pub fn enable_logging<A: Allocate>(&mut self, worker: &mut Worker<A>) {
 
         use std::rc::Rc;
         use timely::dataflow::operators::capture::event::link::EventLink;
@@ -122,146 +122,20 @@ impl<Value: ExchangeData+Hash> Manager<Value> {
     pub fn publish_timely_logging<A, I>(&mut self, worker: &mut Worker<A>, events: I)
     where
         A: Allocate,
-        TimelyEvent: AsVector<Value>,
         I : IntoIterator,
         <I as IntoIterator>::Item: EventIterator<Duration, (Duration, usize, TimelyEvent)>+'static
     {
-        let (operates, channels, schedule, messages) =
-        worker.dataflow(move |scope| {
-
-            use timely::dataflow::operators::capture::Replay;
-            use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
-
-            let input = events.replay_into(scope);
-
-            let mut demux = OperatorBuilder::new("Timely Logging Demux".to_string(), scope.clone());
-
-            use timely::dataflow::channels::pact::Pipeline;
-            let mut input = demux.new_input(&input, Pipeline);
-
-            let (mut operates_out, operates) = demux.new_output();
-            let (mut channels_out, channels) = demux.new_output();
-            let (mut schedule_out, schedule) = demux.new_output();
-            let (mut messages_out, messages) = demux.new_output();
-
-            let mut demux_buffer = Vec::new();
-
-            demux.build(move |_capability| {
-
-                move |_frontiers| {
-
-                    let mut operates = operates_out.activate();
-                    let mut channels = channels_out.activate();
-                    let mut schedule = schedule_out.activate();
-                    let mut messages = messages_out.activate();
-
-                    input.for_each(|time, data| {
-                        data.swap(&mut demux_buffer);
-                        let mut operates_session = operates.session(&time);
-                        let mut channels_session = channels.session(&time);
-                        let mut schedule_session = schedule.session(&time);
-                        let mut messages_session = messages.session(&time);
-
-                        for (time, _worker, datum) in demux_buffer.drain(..) {
-                            match datum {
-                                TimelyEvent::Operates(_) => {
-                                    operates_session.give((datum.as_vector(), time, 1));
-                                },
-                                TimelyEvent::Channels(_) => {
-                                    channels_session.give((datum.as_vector(), time, 1));
-                                },
-                                TimelyEvent::Schedule(_) => {
-                                    schedule_session.give((datum.as_vector(), time, 1));
-                                },
-                                TimelyEvent::Messages(_) => {
-                                    messages_session.give((datum.as_vector(), time, 1));
-                                },
-                                _ => { },
-                            }
-                        }
-                    });
-                }
-            });
-
-            use differential_dataflow::collection::AsCollection;
-            use differential_dataflow::operators::arrange::ArrangeBySelf;
-            let operates = operates.as_collection().arrange_by_self().trace;
-            let channels = channels.as_collection().arrange_by_self().trace;
-            let schedule = schedule.as_collection().arrange_by_self().trace;
-            let messages = messages.as_collection().arrange_by_self().trace;
-
-            (operates, channels, schedule, messages)
-        });
-
-        self.traces.set_unkeyed(&Plan::Source("logs/timely/operates".to_string()), &operates);
-        self.traces.set_unkeyed(&Plan::Source("logs/timely/channels".to_string()), &channels);
-        self.traces.set_unkeyed(&Plan::Source("logs/timely/schedule".to_string()), &schedule);
-        self.traces.set_unkeyed(&Plan::Source("logs/timely/messages".to_string()), &messages);
+        crate::logging::publish_timely_logging(self, worker, 1, "interactive", events)
     }
 
     /// Timely logging capture and arrangement.
     pub fn publish_differential_logging<A, I>(&mut self, worker: &mut Worker<A>, events: I)
     where
         A: Allocate,
-        DifferentialEvent: AsVector<Value>,
         I : IntoIterator,
         <I as IntoIterator>::Item: EventIterator<Duration, (Duration, usize, DifferentialEvent)>+'static
     {
-        let (merge,batch) =
-        worker.dataflow(move |scope| {
-
-            use timely::dataflow::operators::capture::Replay;
-            use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
-
-            let input = events.replay_into(scope);
-
-            let mut demux = OperatorBuilder::new("Differential Logging Demux".to_string(), scope.clone());
-
-            use timely::dataflow::channels::pact::Pipeline;
-            let mut input = demux.new_input(&input, Pipeline);
-
-            let (mut batch_out, batch) = demux.new_output();
-            let (mut merge_out, merge) = demux.new_output();
-
-            let mut demux_buffer = Vec::new();
-
-            demux.build(move |_capability| {
-
-                move |_frontiers| {
-
-                    let mut batch = batch_out.activate();
-                    let mut merge = merge_out.activate();
-
-                    input.for_each(|time, data| {
-                        data.swap(&mut demux_buffer);
-                        let mut batch_session = batch.session(&time);
-                        let mut merge_session = merge.session(&time);
-
-                        for (time, _worker, datum) in demux_buffer.drain(..) {
-                            match datum {
-                                DifferentialEvent::Batch(_) => {
-                                    batch_session.give((datum.as_vector(), time, 1));
-                                },
-                                DifferentialEvent::Merge(_) => {
-                                    merge_session.give((datum.as_vector(), time, 1));
-                                },
-                                _ => { },
-                            }
-                        }
-                    });
-                }
-            });
-
-            use differential_dataflow::collection::AsCollection;
-            use differential_dataflow::operators::arrange::ArrangeBySelf;
-            let batch = batch.as_collection().arrange_by_self().trace;
-            let merge = merge.as_collection().arrange_by_self().trace;
-
-            (merge,batch)
-        });
-
-        self.traces.set_unkeyed(&Plan::Source("logs/differential/arrange/batch".to_string()), &batch);
-        self.traces.set_unkeyed(&Plan::Source("logs/differential/arrange/merge".to_string()), &merge);
+        crate::logging::publish_differential_logging(self, worker, 1, "interactive", events)
     }
 }
 
