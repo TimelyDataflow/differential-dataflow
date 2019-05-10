@@ -111,7 +111,7 @@ impl<K, V, T, R, B> TraceReader for Spine<K, V, T, R, B>
 where
     K: Ord+Clone,           // Clone is required by `batch::advance_*` (in-place could remove).
     V: Ord+Clone,           // Clone is required by `batch::advance_*` (in-place could remove).
-    T: Lattice+Ord+Clone+Debug,   // Clone is required by `advance_by` and `batch::advance_*`.
+    T: Lattice+Ord+Clone+Debug+Default,
     R: Monoid,
     B: Batch<K, V, T, R>+Clone+'static,
 {
@@ -122,6 +122,10 @@ where
 
     type Batch = B;
     type Cursor = CursorList<K, V, T, R, <B as BatchReader<K, V, T, R>>::Cursor>;
+
+    // fn upper(&self) -> &[T] {
+    //     &self.upper[..]
+    // }
 
     fn cursor_through(&mut self, upper: &[T]) -> Option<(Self::Cursor, <Self::Cursor as Cursor<K, V, T, R>>::Storage)> {
 
@@ -206,7 +210,7 @@ impl<K, V, T, R, B> Trace for Spine<K, V, T, R, B>
 where
     K: Ord+Clone,
     V: Ord+Clone,
-    T: Lattice+Ord+Clone+Debug,
+    T: Lattice+Ord+Clone+Debug+Default,
     R: Monoid,
     B: Batch<K, V, T, R>+Clone+'static,
 {
@@ -225,21 +229,16 @@ where
             length: batch.len()
         }));
 
-        // we can ignore degenerate batches (TODO: learn where they come from; suppress them?)
-        if batch.lower() != batch.upper() {
-            assert_eq!(batch.lower(), &self.upper[..]);
-            self.upper = batch.upper().to_vec();
-            self.pending.push(batch);
-            self.consider_merges();
-        }
-        else {
-            // degenerate batches had best be empty.
-            assert!(batch.len() == 0);
-        }
+        assert!(batch.lower() != batch.upper());
+        assert_eq!(batch.lower(), &self.upper[..]);
+
+        self.upper = batch.upper().to_vec();
+        self.pending.push(batch);
+        self.consider_merges();
     }
 
     fn close(&mut self) {
-        if self.upper != Vec::new() {
+        if !self.upper.is_empty() {
             use trace::Builder;
             let builder = B::Builder::new();
             let batch = builder.done(&self.upper[..], &[], &self.upper[..]);
@@ -252,7 +251,7 @@ impl<K, V, T, R, B> Spine<K, V, T, R, B>
 where
     K: Ord+Clone,
     V: Ord+Clone,
-    T: Lattice+Ord+Clone+Debug,
+    T: Lattice+Ord+Clone+Debug+Default,
     R: Monoid,
     B: Batch<K, V, T, R>,
 {
@@ -274,7 +273,7 @@ where
             through_frontier: vec![<T as Lattice>::minimum()],
             merging: Vec::new(),
             pending: Vec::new(),
-            upper: vec![<T as Lattice>::minimum()],
+            upper: vec![Default::default()],
             effort,
         }
     }

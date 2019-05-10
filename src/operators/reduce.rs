@@ -402,7 +402,7 @@ where
                         batches.swap(&mut input_buffer);
                         // In principle we could have multiple batches per message (in practice, it would be weird).
                         for batch in input_buffer.drain(..) {
-                            assert!(&upper_received[..] == batch.description().lower());
+                            // assert!(&upper_received[..] == batch.description().lower());
                             upper_received = batch.description().upper().to_vec();
                             batch_cursors.push(batch.cursor());
                             batch_storage.push(batch);
@@ -557,7 +557,7 @@ where
 
                                 // ship batch to the output, and commit to the output trace.
                                 output.session(&capabilities[index]).give(batch.clone());
-                                output_writer.seal(local_upper.elements(), Some((capabilities[index].time().clone(), batch)));
+                                output_writer.insert(batch, Some(capabilities[index].time().clone()));
 
                                 lower_issued = local_upper;
                             }
@@ -585,7 +585,7 @@ where
                         capabilities = new_capabilities;
 
                         // ensure that observed progres is reflected in the output.
-                        output_writer.seal(upper_limit.elements(), None);
+                        output_writer.seal(upper_limit.elements());
                     }
 
                     // We only anticipate future times in advance of `upper_limit`.

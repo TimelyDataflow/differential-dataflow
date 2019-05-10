@@ -54,6 +54,11 @@ pub trait TraceReader {
 	/// The type used to enumerate the collections contents.
 	type Cursor: Cursor<Self::Key, Self::Val, Self::Time, Self::R>;
 
+	// /// The upper frontier of committed times.
+	// ///
+	// ///
+	// fn upper(&self) -> &[Self::Time];
+
 	/// Provides a cursor over updates contained in the trace.
 	fn cursor(&mut self) -> (Self::Cursor, <Self::Cursor as Cursor<Self::Key, Self::Val, Self::Time, Self::R>>::Storage) {
 		if let Some(cursor) = self.cursor_through(&[]) {
@@ -185,6 +190,10 @@ pub trait Batch<K, V, T, R> : BatchReader<K, V, T, R> where Self: ::std::marker:
 	fn begin_merge(&self, other: &Self) -> Self::Merger {
 		Self::Merger::new(self, other)
 	}
+	// ///
+	// fn empty(lower: &[T], upper: &[T], since: &[T]) -> Output {
+	// 	<Self::Builder>::new().done(lower, upper, since)
+	// }
 }
 
 /// Functionality for collecting and batching updates.
