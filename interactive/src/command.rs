@@ -1,6 +1,6 @@
 //! Commands accepted by the system.
 
-use std::hash::Hash;
+// use std::hash::Hash;
 use std::io::Write;
 
 use timely::communication::Allocate;
@@ -9,22 +9,22 @@ use timely::worker::Worker;
 use timely::logging::TimelyEvent;
 use differential_dataflow::logging::DifferentialEvent;
 
-use differential_dataflow::ExchangeData;
+// use differential_dataflow::ExchangeData;
 
-use super::{Query, Rule, Plan, Time, Diff, Manager};
-use manager::LoggingValue;
+use super::{Value, Query, Rule, Plan, Time, Diff, Manager};
+// use manager::LoggingValue;
 
 /// Commands accepted by the system.
 #[derive(Serialize, Deserialize, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub enum Command<V> {
+pub enum Command {
     /// Installs the query and publishes public rules.
-    Query(Query<V>),
+    Query(Query<Value>),
     /// Advances all inputs and traces to `time`, and advances computation.
     AdvanceTime(Time),
     /// Creates a new named input, with initial input.
-    CreateInput(String, Vec<Vec<V>>),
+    CreateInput(String, Vec<Vec<Value>>),
     /// Introduces updates to a specified input.
-    UpdateInput(String, Vec<(Vec<V>, Time, Diff)>),
+    UpdateInput(String, Vec<(Vec<Value>, Time, Diff)>),
     /// Closes a specified input.
     CloseInput(String),
     /// Attaches a logging source. (address, flavor, number, granularity, name_as)
@@ -33,10 +33,10 @@ pub enum Command<V> {
     Shutdown,
 }
 
-impl<V: ExchangeData+Hash+LoggingValue> Command<V> {
+impl Command {
 
     /// Executes a command.
-    pub fn execute<A: Allocate>(self, manager: &mut Manager<V>, worker: &mut Worker<A>) {
+    pub fn execute<A: Allocate>(self, manager: &mut Manager<Value>, worker: &mut Worker<A>) {
 
         match self {
 

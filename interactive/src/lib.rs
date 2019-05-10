@@ -37,18 +37,21 @@ pub struct Query<Value> {
     pub rules: Vec<Rule<Value>>,
 }
 
-impl<Value> Query<Value> {
+impl<V> Query<V> {
     /// Creates a new, empty query.
     pub fn new() -> Self {
         Query { rules: Vec::new() }
     }
     /// Adds a rule to an existing query.
-    pub fn add_rule(mut self, rule: Rule<Value>) -> Self {
+    pub fn add_rule(mut self, rule: Rule<V>) -> Self {
         self.rules.push(rule);
         self
     }
+}
+
+impl Query<Value> {
     /// Converts the query into a command.
-    pub fn into_command(self) -> Command<Value> {
+    pub fn into_command(self) -> Command {
         Command::Query(self)
     }
 }
@@ -134,6 +137,6 @@ impl VectorFrom<DifferentialEvent> for Value {
 }
 
 /// Serializes a command into a socket.
-pub fn bincode_socket(socket: &mut std::net::TcpStream, command: &Command<Value>) {
+pub fn bincode_socket(socket: &mut std::net::TcpStream, command: &Command) {
     bincode::serialize_into(socket, command).expect("bincode: serialization failed");
 }

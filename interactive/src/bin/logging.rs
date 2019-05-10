@@ -6,11 +6,11 @@ fn main() {
 
     let mut socket = std::net::TcpStream::connect("127.0.0.1:8000".to_string()).expect("failed to connect");
 
-    Command::<Value>::SourceLogging(
+    Command::SourceLogging(
          "127.0.0.1:9000".to_string(),  // port the server should listen on.
         "timely".to_string(),           // flavor of logging (of "timely", "differential").
         1,                              // number of worker connections to await.
-        10_000_000,                  // maximum granularity in nanoseconds.
+        1_000_000_000,                  // maximum granularity in nanoseconds.
         "remote".to_string()            // name to use for publication.
     ).serialize_into(&mut socket);
 
@@ -28,19 +28,19 @@ fn main() {
         .into_command()
         .serialize_into(&mut socket);
 
-    Plan::<Value>::source("logs/remote/timely/schedule")
+    Plan::<Value>::source("logs/remote/timely/schedule/histogram")
         .inspect("schedule")
         .into_rule("schedule")
         .into_query()
         .into_command()
         .serialize_into(&mut socket);
 
-    Plan::<Value>::source("logs/remote/timely/messages")
-        .inspect("messages")
-        .into_rule("messages")
-        .into_query()
-        .into_command()
-        .serialize_into(&mut socket);
+    // Plan::<Value>::source("logs/remote/timely/messages")
+    //     .inspect("messages")
+    //     .into_rule("messages")
+    //     .into_query()
+    //     .into_command()
+    //     .serialize_into(&mut socket);
 
-    Command::<Value>::Shutdown.serialize_into(&mut socket);
+    Command::Shutdown.serialize_into(&mut socket);
 }

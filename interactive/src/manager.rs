@@ -2,14 +2,14 @@
 
 use std::collections::HashMap;
 use std::hash::Hash;
-use std::time::Duration;
+// use std::time::Duration;
 
 use timely::dataflow::ProbeHandle;
 use timely::communication::Allocate;
 use timely::worker::Worker;
 use timely::logging::TimelyEvent;
 
-use timely::dataflow::operators::capture::event::EventIterator;
+// use timely::dataflow::operators::capture::event::EventIterator;
 
 use differential_dataflow::ExchangeData;
 use differential_dataflow::trace::implementations::ord::{OrdKeySpine, OrdValSpine};
@@ -60,30 +60,30 @@ impl<Value: ExchangeData+Hash+LoggingValue> Manager<Value> {
         }
     }
 
-    /// Enables logging of timely and differential events.
-    pub fn enable_logging<A: Allocate>(&mut self, worker: &mut Worker<A>) {
+    // /// Enables logging of timely and differential events.
+    // pub fn enable_logging<A: Allocate>(&mut self, worker: &mut Worker<A>) {
 
-        use std::rc::Rc;
-        use timely::dataflow::operators::capture::event::link::EventLink;
-        use timely::logging::BatchLogger;
+    //     use std::rc::Rc;
+    //     use timely::dataflow::operators::capture::event::link::EventLink;
+    //     use timely::logging::BatchLogger;
 
-        let timely_events = Rc::new(EventLink::new());
-        let differential_events = Rc::new(EventLink::new());
+    //     let timely_events = Rc::new(EventLink::new());
+    //     let differential_events = Rc::new(EventLink::new());
 
-        self.publish_timely_logging(worker, Some(timely_events.clone()));
-        self.publish_differential_logging(worker, Some(differential_events.clone()));
+    //     self.publish_timely_logging(worker, Some(timely_events.clone()));
+    //     self.publish_differential_logging(worker, Some(differential_events.clone()));
 
-        let mut timely_logger = BatchLogger::new(timely_events.clone());
-        worker
-            .log_register()
-            .insert::<TimelyEvent,_>("timely", move |time, data| timely_logger.publish_batch(time, data));
+    //     let mut timely_logger = BatchLogger::new(timely_events.clone());
+    //     worker
+    //         .log_register()
+    //         .insert::<TimelyEvent,_>("timely", move |time, data| timely_logger.publish_batch(time, data));
 
-        let mut differential_logger = BatchLogger::new(differential_events.clone());
-        worker
-            .log_register()
-            .insert::<DifferentialEvent,_>("differential/arrange", move |time, data| differential_logger.publish_batch(time, data));
+    //     let mut differential_logger = BatchLogger::new(differential_events.clone());
+    //     worker
+    //         .log_register()
+    //         .insert::<DifferentialEvent,_>("differential/arrange", move |time, data| differential_logger.publish_batch(time, data));
 
-    }
+    // }
 
     /// Clear the managed inputs and traces.
     pub fn shutdown<A: Allocate>(&mut self, worker: &mut Worker<A>) {
@@ -118,25 +118,25 @@ impl<Value: ExchangeData+Hash+LoggingValue> Manager<Value> {
         self.traces.advance_time(time);
     }
 
-    /// Timely logging capture and arrangement.
-    pub fn publish_timely_logging<A, I>(&mut self, worker: &mut Worker<A>, events: I)
-    where
-        A: Allocate,
-        I : IntoIterator,
-        <I as IntoIterator>::Item: EventIterator<Duration, (Duration, usize, TimelyEvent)>+'static
-    {
-        crate::logging::publish_timely_logging(self, worker, 1, "interactive", events)
-    }
+    // /// Timely logging capture and arrangement.
+    // pub fn publish_timely_logging<A, I>(&mut self, worker: &mut Worker<A>, events: I)
+    // where
+    //     A: Allocate,
+    //     I : IntoIterator,
+    //     <I as IntoIterator>::Item: EventIterator<Duration, (Duration, usize, TimelyEvent)>+'static
+    // {
+    //     crate::logging::publish_timely_logging(self, worker, 1, "interactive", events)
+    // }
 
-    /// Timely logging capture and arrangement.
-    pub fn publish_differential_logging<A, I>(&mut self, worker: &mut Worker<A>, events: I)
-    where
-        A: Allocate,
-        I : IntoIterator,
-        <I as IntoIterator>::Item: EventIterator<Duration, (Duration, usize, DifferentialEvent)>+'static
-    {
-        crate::logging::publish_differential_logging(self, worker, 1, "interactive", events)
-    }
+    // /// Timely logging capture and arrangement.
+    // pub fn publish_differential_logging<A, I>(&mut self, worker: &mut Worker<A>, events: I)
+    // where
+    //     A: Allocate,
+    //     I : IntoIterator,
+    //     <I as IntoIterator>::Item: EventIterator<Duration, (Duration, usize, DifferentialEvent)>+'static
+    // {
+    //     crate::logging::publish_differential_logging(self, worker, 1, "interactive", events)
+    // }
 }
 
 /// Manages input sessions.
