@@ -13,6 +13,9 @@ pub mod implementations;
 pub mod layers;
 pub mod wrappers;
 
+use timely::progress::Antichain;
+use timely::progress::Timestamp;
+
 use ::difference::Monoid;
 pub use self::cursor::Cursor;
 pub use self::description::Description;
@@ -53,11 +56,6 @@ pub trait TraceReader {
 
 	/// The type used to enumerate the collections contents.
 	type Cursor: Cursor<Self::Key, Self::Val, Self::Time, Self::R>;
-
-	// /// The upper frontier of committed times.
-	// ///
-	// ///
-	// fn upper(&self) -> &[Self::Time];
 
 	/// Provides a cursor over updates contained in the trace.
 	fn cursor(&mut self) -> (Self::Cursor, <Self::Cursor as Cursor<Self::Key, Self::Val, Self::Time, Self::R>>::Storage) {
@@ -117,6 +115,23 @@ pub trait TraceReader {
 	/// the stream of batches moving past the trace. It could also be a fine basis for a default implementation of the
 	/// cursor methods, as they (by default) just move through batches accumulating cursors into a cursor list.
 	fn map_batches<F: FnMut(&Self::Batch)>(&mut self, f: F);
+
+	/// Reads the upper frontier of committed times.
+	///
+	///
+	fn read_upper(&mut self, target: &mut Antichain<Self::Time>)
+	where
+		Self::Time: Timestamp,
+	{
+		target.clear();
+		target.insert(Default::default());
+		self.map_batches(|batch| {
+			target.clear();
+			for time in batch.upper().iter().cloned() {
+				target.insert(time);
+			}
+		});
+	}
 
 }
 

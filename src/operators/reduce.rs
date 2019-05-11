@@ -400,9 +400,7 @@ where
                     input.for_each(|capability, batches| {
 
                         batches.swap(&mut input_buffer);
-                        // In principle we could have multiple batches per message (in practice, it would be weird).
                         for batch in input_buffer.drain(..) {
-                            // assert!(&upper_received[..] == batch.description().lower());
                             upper_received = batch.description().upper().to_vec();
                             batch_cursors.push(batch.cursor());
                             batch_storage.push(batch);
@@ -415,22 +413,7 @@ where
                         }
                     });
 
-                    // The interval of times we can retire is upper bounded by both the most recently received batch
-                    // upper bound (`upper_received`) and by the input progress frontier (`notificator.frontier(0)`).
-                    // Any new changes must be at times in advance of *both* of these antichains, as both the batch
-                    // and the frontier guarantee no more updates at times not in advance of them.
-                    //
-                    // I think the right thing to do is define a new frontier from the joins of elements in the two
-                    // antichains. Elements we will see in the future must be greater or equal to elements in both
-                    // antichains, and so much be greater or equal to some pairwise join of the antichain elements.
-                    // At the same time, any element greater than some pairwise join is greater than either antichain,
-                    // and so could plausibly be seen in the future (and so is not safe to retire).
-                    upper_limit.clear();
-                    for time1 in input.frontier().frontier().iter() {
-                        for time2 in upper_received.iter() {
-                            upper_limit.insert(time1.join(time2));
-                        }
-                    }
+                    source_trace.read_upper(&mut upper_limit);
 
                     // If we have no capabilities, then we (i) should not produce any outputs and (ii) could not send
                     // any produced outputs even if they were (incorrectly) produced. We cannot even send empty batches

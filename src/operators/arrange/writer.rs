@@ -55,8 +55,6 @@ where
     /// batch and which is suitable for use as a capability.
     pub fn insert(&mut self, batch: Tr::Batch, hint: Option<Tr::Time>) {
 
-        // println!("WRITTEN\t{:?}, {:?}", batch.description(), hint);
-
         // Something is wrong if not a sequence.
         assert!(&self.upper[..] == batch.lower());
         assert!(batch.lower() != batch.upper());
@@ -68,10 +66,8 @@ where
         let mut borrow = self.queues.borrow_mut();
         for queue in borrow.iter_mut() {
             if let Some(pair) = queue.upgrade() {
-                // println!("PUSHING: {:?}", hint);
                 pair.1.borrow_mut().push_back(TraceReplayInstruction::Batch(batch.clone(), hint.clone()));
                 pair.1.borrow_mut().push_back(TraceReplayInstruction::Frontier(batch.upper().to_vec()));
-                // pair.1.borrow_mut().push_back((batch.upper().to_vec(), batch.clone(), hint.clone()));
                 pair.0.activate();
             }
         }

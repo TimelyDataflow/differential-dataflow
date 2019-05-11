@@ -47,6 +47,7 @@ where
 
     type Batch = Tr::Batch;
     type Cursor = Tr::Cursor;
+
     fn advance_by(&mut self, frontier: &[Tr::Time]) {
         self.trace.borrow_mut().adjust_advance_frontier(&self.advance[..], frontier);
         self.advance.clear();
@@ -280,9 +281,6 @@ where
     {
         let trace = self.clone();
 
-        // Capabilities shared with a shutdown button.
-        // let shutdown_button = ShutdownButton::new(capabilities.clone());
-
         let mut shutdown_button = None;
 
         let stream = {
@@ -309,29 +307,16 @@ where
                         for instruction in borrow.drain(..) {
                             match instruction {
                                 TraceReplayInstruction::Frontier(frontier) => {
-                                    // println!("DOWNGRADE: {:?}", frontier);
                                     capabilities.downgrade(&frontier[..]);
                                 },
                                 TraceReplayInstruction::Batch(batch, hint) => {
                                     if let Some(time) = hint {
-                                        // println!("TIME: {:?}", time);
                                         let delayed = capabilities.delayed(&time);
                                         output.session(&delayed).give(batch);
                                     }
                                 }
                             }
                         }
-                        // for (frontier, batch, hint) in borrow.drain(..) {
-
-                        //     println!("REPLAY\t{:?}, {:?}, {:?}", frontier, batch.description(), hint);
-
-                        //     if let Some(time) = hint {
-                        //         let delayed = capabilities.delayed(&time);
-                        //         output.session(&delayed).give(batch);
-                        //     }
-
-                        //     capabilities.downgrade(&frontier[..]);
-                        // }
                     }
                 }
             })

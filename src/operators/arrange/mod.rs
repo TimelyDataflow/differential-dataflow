@@ -5,8 +5,7 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 
 use timely::scheduling::Activator;
-use lattice::Lattice;
-use trace::{Trace, TraceReader, Batch};
+use trace::TraceReader;
 
 /// Operating instructions on how to replay a trace.
 pub enum TraceReplayInstruction<Tr>
