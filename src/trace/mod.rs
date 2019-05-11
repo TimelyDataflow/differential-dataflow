@@ -179,6 +179,8 @@ pub trait BatchReader<K, V, T, R> where Self: ::std::marker::Sized
 	fn cursor(&self) -> Self::Cursor;
 	/// The number of updates in the batch.
 	fn len(&self) -> usize;
+	/// True if the batch is empty.
+	fn is_empty(&self) -> usize { self.len() == 0 }
 	/// Describes the times of the updates in the batch.
 	fn description(&self) -> &Description<T>;
 

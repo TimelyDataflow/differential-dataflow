@@ -123,13 +123,19 @@ where
     type Batch = B;
     type Cursor = CursorList<K, V, T, R, <B as BatchReader<K, V, T, R>>::Cursor>;
 
-    // fn upper(&self) -> &[T] {
-    //     &self.upper[..]
-    // }
-
     fn cursor_through(&mut self, upper: &[T]) -> Option<(Self::Cursor, <Self::Cursor as Cursor<K, V, T, R>>::Storage)> {
 
-        // we shouldn't grab a cursor into a closed trace, right?
+        // The supplied `upper` should have the property that for each of our
+        // batch `lower` and `upper` frontiers, the supplied upper is comparable
+        // to the frontier; it should not be incomparable, because the frontiers
+        // that we created form a total order. If it is, there is a bug.
+        //
+        // We should acquire a cursor including all batches whose upper is less
+        // or equal to the supplied upper, excluding all batches whose lower is
+        // greater or equal to the supplied upper, and if a batch straddles the
+        // supplied upper it had better be empty.
+
+        // We shouldn't grab a cursor into a closed trace, right?
         assert!(self.advance_frontier.len() > 0);
 
         // Check that `upper` is greater or equal to `self.through_frontier`.
@@ -142,14 +148,20 @@ where
             for merge_state in self.merging.iter().rev() {
                 match *merge_state {
                     Some(MergeState::Merging(ref batch1, ref batch2, _, _)) => {
-                        cursors.push(batch1.cursor());
-                        storage.push(batch1.clone());
-                        cursors.push(batch2.cursor());
-                        storage.push(batch2.clone());
+                        if !batch1.is_empty() {
+                            cursors.push(batch1.cursor());
+                            storage.push(batch1.clone());
+                        }
+                        if !batch2.is_empty() {
+                            cursors.push(batch2.cursor());
+                            storage.push(batch2.clone());
+                        }
                     },
                     Some(MergeState::Complete(ref batch)) => {
-                        cursors.push(batch.cursor());
-                        storage.push(batch.clone());
+                        if !batch.is_empty() {
+                            cursors.push(batch.cursor());
+                            storage.push(batch.clone());
+                        }
                     },
                     None => { }
                 }
@@ -161,11 +173,10 @@ where
 
                 if include_lower != include_upper && upper != batch.lower() {
                     panic!("`cursor_through`: `upper` straddles batch");
-                    // return None;
                 }
 
                 // include pending batches
-                if include_upper {
+                if include_upper && !batch.is_empty() {
                     cursors.push(batch.cursor());
                     storage.push(batch.clone());
                 }

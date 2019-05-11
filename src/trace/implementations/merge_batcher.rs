@@ -46,54 +46,59 @@ where
 
         let mut builder = B::Builder::new();
 
-        let mut merged = Vec::new();
-        self.sorter.finish_into(&mut merged);
+        // If all of our updates are greater or equal to an element of `upper`,
+        // we will mint an empty batch and can skip the process.
+        if self.frontier.elements().iter().all(|t1| upper.iter().any(|t2| t2.less_equal(t1))) {
 
-        let mut kept = Vec::new();
-        let mut keep = Vec::new();
+            let mut merged = Vec::new();
+            self.sorter.finish_into(&mut merged);
 
-        self.frontier.clear();
+            let mut kept = Vec::new();
+            let mut keep = Vec::new();
 
-        // TODO: Re-use buffer, rather than dropping.
-        for mut buffer in merged.drain(..) {
-            for ((key, val), time, diff) in buffer.drain(..) {
-                if upper.iter().any(|t| t.less_equal(&time)) {
-                    // keep_count += 1;
-                    self.frontier.insert(time.clone());
-                    if keep.len() == keep.capacity() {
-                        if keep.len() > 0 {
-                            kept.push(keep);
-                            keep = self.sorter.empty();
+            self.frontier.clear();
+
+            // TODO: Re-use buffer, rather than dropping.
+            for mut buffer in merged.drain(..) {
+                for ((key, val), time, diff) in buffer.drain(..) {
+                    if upper.iter().any(|t| t.less_equal(&time)) {
+                        // keep_count += 1;
+                        self.frontier.insert(time.clone());
+                        if keep.len() == keep.capacity() {
+                            if keep.len() > 0 {
+                                kept.push(keep);
+                                keep = self.sorter.empty();
+                            }
                         }
+                        keep.push(((key, val), time, diff));
                     }
-                    keep.push(((key, val), time, diff));
+                    else {
+                        // seal_count += 1;
+                        builder.push((key, val, time, diff));
+                    }
                 }
-                else {
-                    // seal_count += 1;
-                    builder.push((key, val, time, diff));
-                }
+                // Recycling buffer.
+                self.sorter.push(&mut buffer);
             }
-            // Recycling buffer.
-            self.sorter.push(&mut buffer);
-        }
 
-        // Finish the kept data.
-        if keep.len() > 0 {
-            kept.push(keep);
-        }
-        if kept.len() > 0 {
-            self.sorter.push_list(kept);
-        }
+            // Finish the kept data.
+            if keep.len() > 0 {
+                kept.push(keep);
+            }
+            if kept.len() > 0 {
+                self.sorter.push_list(kept);
+            }
 
-        // Drain buffers (fast reclaimation).
-        // TODO : This isn't obviously the best policy, but "safe" wrt footprint.
-        //        In particular, if we are reading serialized input data, we may
-        //        prefer to keep these buffers around to re-fill, if possible.
-        let mut buffer = Vec::new();
-        self.sorter.push(&mut buffer);
-        while buffer.capacity() > 0 {
-            buffer = Vec::new();
+            // Drain buffers (fast reclaimation).
+            // TODO : This isn't obviously the best policy, but "safe" wrt footprint.
+            //        In particular, if we are reading serialized input data, we may
+            //        prefer to keep these buffers around to re-fill, if possible.
+            let mut buffer = Vec::new();
             self.sorter.push(&mut buffer);
+            while buffer.capacity() > 0 {
+                buffer = Vec::new();
+                self.sorter.push(&mut buffer);
+            }
         }
 
         let seal = builder.done(&self.lower[..], &upper[..], &self.lower[..]);
