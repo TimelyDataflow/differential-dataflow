@@ -180,7 +180,7 @@ pub trait BatchReader<K, V, T, R> where Self: ::std::marker::Sized
 	/// The number of updates in the batch.
 	fn len(&self) -> usize;
 	/// True if the batch is empty.
-	fn is_empty(&self) -> usize { self.len() == 0 }
+	fn is_empty(&self) -> bool { self.len() == 0 }
 	/// Describes the times of the updates in the batch.
 	fn description(&self) -> &Description<T>;
 
