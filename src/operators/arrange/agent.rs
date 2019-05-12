@@ -120,7 +120,6 @@ where
             .map_batches(|batch| {
                 new_queue.push_back(TraceReplayInstruction::Batch(batch.clone(), Some(Default::default())));
                 upper = Some(batch.upper().to_vec());
-                // new_queue.push_back((vec![Default::default()], batch.clone(), Some(Default::default())));
             });
 
         if let Some(upper) = upper {

@@ -99,10 +99,10 @@ pub struct Spine<K, V, T: Lattice+Ord, R: Monoid, B: Batch<K, V, T, R>> {
     operator: OperatorInfo,
     logger: Option<::logging::Logger>,
     phantom: ::std::marker::PhantomData<(K, V, R)>,
-    advance_frontier: Vec<T>,            // Times after which the trace must accumulate correctly.
-    through_frontier: Vec<T>,            // Times after which the trace must be able to subset its inputs.
-    merging: Vec<Option<MergeState<K,V,T,R,B>>>, // Several possibly shared collections of updates.
-    pending: Vec<B>,                     // Batches at times in advance of `frontier`.
+    advance_frontier: Vec<T>,                   // Times after which the trace must accumulate correctly.
+    through_frontier: Vec<T>,                   // Times after which the trace must be able to subset its inputs.
+    merging: Vec<Option<MergeState<K,V,T,R,B>>>,// Several possibly shared collections of updates.
+    pending: Vec<B>,                       // Batches at times in advance of `frontier`.
     upper: Vec<T>,
     effort: usize,
 }
@@ -140,34 +140,45 @@ where
 
         // Check that `upper` is greater or equal to `self.through_frontier`.
         // Otherwise, the cut could be in `self.merging` and it is user error anyhow.
-        if upper.iter().all(|t1| self.through_frontier.iter().any(|t2| t2.less_equal(t1))) {
+        assert!(upper.iter().all(|t1| self.through_frontier.iter().any(|t2| t2.less_equal(t1))));
 
-            let mut cursors = Vec::new();
-            let mut storage = Vec::new();
+        let mut cursors = Vec::new();
+        let mut storage = Vec::new();
 
-            for merge_state in self.merging.iter().rev() {
-                match *merge_state {
-                    Some(MergeState::Merging(ref batch1, ref batch2, _, _)) => {
-                        if !batch1.is_empty() {
-                            cursors.push(batch1.cursor());
-                            storage.push(batch1.clone());
-                        }
-                        if !batch2.is_empty() {
-                            cursors.push(batch2.cursor());
-                            storage.push(batch2.clone());
-                        }
-                    },
-                    Some(MergeState::Complete(ref batch)) => {
-                        if !batch.is_empty() {
-                            cursors.push(batch.cursor());
-                            storage.push(batch.clone());
-                        }
-                    },
-                    None => { }
-                }
+        for merge_state in self.merging.iter().rev() {
+            match *merge_state {
+                Some(MergeState::Merging(ref batch1, ref batch2, _, _)) => {
+                    if !batch1.is_empty() {
+                        cursors.push(batch1.cursor());
+                        storage.push(batch1.clone());
+                    }
+                    if !batch2.is_empty() {
+                        cursors.push(batch2.cursor());
+                        storage.push(batch2.clone());
+                    }
+                },
+                Some(MergeState::Complete(ref batch)) => {
+                    if !batch.is_empty() {
+                        cursors.push(batch.cursor());
+                        storage.push(batch.clone());
+                    }
+                },
+                None => { }
             }
+        }
 
-            for batch in &self.pending {
+        for batch in self.pending.iter() {
+
+            if !batch.is_empty() {
+
+                // For a non-empty `batch`, it is a catastrophic error if `upper`
+                // requires some-but-not-all of the updates in the batch. We can
+                // determine this from `upper` and the lower and upper bounds of
+                // the batch itself.
+                //
+                // TODO: It is not clear if this is the 100% correct logic, due
+                // to the possible non-total-orderedness of the frontiers.
+
                 let include_lower = upper.iter().all(|t1| batch.lower().iter().any(|t2| t2.less_equal(t1)));
                 let include_upper = upper.iter().all(|t1| batch.upper().iter().any(|t2| t2.less_equal(t1)));
 
@@ -176,16 +187,14 @@ where
                 }
 
                 // include pending batches
-                if include_upper && !batch.is_empty() {
+                if include_upper {
                     cursors.push(batch.cursor());
                     storage.push(batch.clone());
                 }
             }
-            Some((CursorList::new(cursors, &storage), storage))
         }
-        else {
-            None
-        }
+
+        Some((CursorList::new(cursors, &storage), storage))
     }
     fn advance_by(&mut self, frontier: &[T]) {
         self.advance_frontier = frontier.to_vec();
@@ -244,6 +253,8 @@ where
         assert_eq!(batch.lower(), &self.upper[..]);
 
         self.upper = batch.upper().to_vec();
+
+        // TODO: Consolidate or discard empty batches.
         self.pending.push(batch);
         self.consider_merges();
     }

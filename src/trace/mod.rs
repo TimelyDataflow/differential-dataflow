@@ -109,7 +109,7 @@ pub trait TraceReader {
 	/// this frontier are not guaranteed to return a cursor.
 	fn distinguish_frontier(&mut self) -> &[Self::Time];
 
-	/// Maps some logic across the batches the collection manages.
+	/// Maps logic across the non-empty sequence of batches in the trace.
 	///
 	/// This is currently used only to extract historical data to prime late-starting operators who want to reproduce
 	/// the stream of batches moving past the trace. It could also be a fine basis for a default implementation of the
