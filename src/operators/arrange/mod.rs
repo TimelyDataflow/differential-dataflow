@@ -67,6 +67,6 @@ pub mod agent;
 pub mod arrangement;
 
 pub use self::writer::TraceWriter;
-pub use self::agent::TraceAgent;
+pub use self::agent::{TraceAgent, ShutdownButton};
 
-pub use self::arrangement::{Arranged, ArrangeByKey, ArrangeBySelf};
+pub use self::arrangement::{Arranged, Arrange, ArrangeByKey, ArrangeBySelf};
