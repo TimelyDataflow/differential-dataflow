@@ -17,19 +17,17 @@
 //! see ill-defined data at times for which the trace is not complete. (All current implementations
 //! commit only completed data to the trace).
 
-use std::rc::{Rc, Weak};
-use std::cell::RefCell;
+use std::rc::Rc;
 use std::default::Default;
-use std::collections::VecDeque;
 
 use timely::dataflow::operators::{Enter, Map};
 use timely::order::{PartialOrder, TotalOrder};
 use timely::dataflow::{Scope, Stream};
-use timely::dataflow::operators::generic::{Operator, source};
+use timely::dataflow::operators::generic::Operator;
 use timely::dataflow::channels::pact::{ParallelizationContract, Pipeline, Exchange};
 use timely::progress::Timestamp;
 use timely::progress::frontier::Antichain;
-use timely::dataflow::operators::{Capability, CapabilitySet};
+use timely::dataflow::operators::Capability;
 
 use timely_sort::Unsigned;
 
@@ -43,437 +41,9 @@ use trace::implementations::ord::OrdKeySpine as DefaultKeyTrace;
 use trace::wrappers::enter::{TraceEnter, BatchEnter};
 use trace::wrappers::enter_at::TraceEnter as TraceEnterAt;
 use trace::wrappers::enter_at::BatchEnter as BatchEnterAt;
-use trace::wrappers::rc::TraceBox;
 use trace::wrappers::filter::{TraceFilter, BatchFilter};
 
-/// A trace writer capability.
-pub struct TraceWriter<Tr>
-where
-    Tr: Trace,
-    Tr::Time: Lattice+Ord+Clone+'static,
-    Tr::Batch: Batch<Tr::Key,Tr::Val,Tr::Time,Tr::R>,
-{
-    trace: Weak<RefCell<TraceBox<Tr>>>,
-    queues: Rc<RefCell<(Vec<Tr::Time>,Vec<TraceAgentQueueWriter<Tr>>)>>,
-}
-
-impl<Tr> TraceWriter<Tr>
-where
-    Tr: Trace,
-    Tr::Time: Lattice+Ord+Clone+'static,
-    Tr::Batch: Batch<Tr::Key,Tr::Val,Tr::Time,Tr::R>,
-{
-    /// Advances the trace to `frontier`, providing batch data if it exists.
-    pub fn seal(&mut self, frontier: &[Tr::Time], data: Option<(Tr::Time, Tr::Batch)>) {
-
-        // push information to each listener that still exists.
-        let mut borrow = self.queues.borrow_mut();
-        borrow.0 = frontier.to_vec();
-        for queue in borrow.1.iter_mut() {
-            if let Some(pair) = queue.upgrade() {
-                pair.1.borrow_mut().push_back((frontier.to_vec(), data.clone()));
-                pair.0.activate();
-            }
-        }
-        borrow.1.retain(|w| w.upgrade().is_some());
-
-        // push data to the trace, if it still exists.
-        if let Some(trace) = self.trace.upgrade() {
-            if let Some((_time, batch)) = data {
-                trace.borrow_mut().trace.insert(batch);
-            }
-            else if frontier.is_empty() {
-                trace.borrow_mut().trace.close();
-            }
-            else {
-                // TODO: Frontier progress without data and without closing the
-                //       trace should be recorded somewhere, probably in the trace
-                //       itself. This could be using empty batches, which seems a
-                //       bit of a waste, but is perhaps still important to do?
-            }
-        }
-    }
-}
-
-impl<Tr> Drop for TraceWriter<Tr>
-where
-    Tr: Trace,
-    Tr::Time: Lattice+Ord+Clone+'static,
-    Tr::Batch: Batch<Tr::Key,Tr::Val,Tr::Time,Tr::R>,
-{
-    fn drop(&mut self) {
-
-        // TODO: This method exists in case a TraceWriter is dropped without sealing
-        //       up through the empty frontier. Does this happen? Should it be an
-        //       error to do that sort of thing?
-
-        let mut borrow = self.queues.borrow_mut();
-        for queue in borrow.1.iter_mut() {
-            queue.upgrade().map(|pair| {
-                pair.1.borrow_mut().push_back((Vec::new(), None));
-                pair.0.activate();
-            });
-        }
-        borrow.1.retain(|w| w.upgrade().is_some());
-    }
-}
-
-use timely::scheduling::Activator;
-// Short names for strongly and weakly owned activators and shared queues.
-type BatchQueue<Tr> = VecDeque<(Vec<<Tr as TraceReader>::Time>, Option<(<Tr as TraceReader>::Time, <Tr as TraceReader>::Batch)>)>;
-type TraceAgentQueueReader<Tr> = Rc<(Activator, RefCell<BatchQueue<Tr>>)>;
-type TraceAgentQueueWriter<Tr> = Weak<(Activator, RefCell<BatchQueue<Tr>>)>;
-
-/// A `TraceReader` wrapper which can be imported into other dataflows.
-///
-/// The `TraceAgent` is the default trace type produced by `arranged`, and it can be extracted
-/// from the dataflow in which it was defined, and imported into other dataflows.
-pub struct TraceAgent<Tr>
-where
-    Tr: TraceReader,
-    Tr::Time: Lattice+Ord+Clone+'static,
-{
-    trace: Rc<RefCell<TraceBox<Tr>>>,
-    queues: Weak<RefCell<(Vec<Tr::Time>,Vec<TraceAgentQueueWriter<Tr>>)>>,
-    advance: Vec<Tr::Time>,
-    through: Vec<Tr::Time>,
-}
-
-impl<Tr> TraceReader for TraceAgent<Tr>
-where
-    Tr: TraceReader,
-    Tr::Time: Lattice+Ord+Clone+'static,
-{
-    type Key = Tr::Key;
-    type Val = Tr::Val;
-    type Time = Tr::Time;
-    type R = Tr::R;
-
-    type Batch = Tr::Batch;
-    type Cursor = Tr::Cursor;
-    fn advance_by(&mut self, frontier: &[Tr::Time]) {
-        self.trace.borrow_mut().adjust_advance_frontier(&self.advance[..], frontier);
-        self.advance.clear();
-        self.advance.extend(frontier.iter().cloned());
-    }
-    fn advance_frontier(&mut self) -> &[Tr::Time] {
-        &self.advance[..]
-    }
-    fn distinguish_since(&mut self, frontier: &[Tr::Time]) {
-        self.trace.borrow_mut().adjust_through_frontier(&self.through[..], frontier);
-        self.through.clear();
-        self.through.extend(frontier.iter().cloned());
-    }
-    fn distinguish_frontier(&mut self) -> &[Tr::Time] {
-        &self.through[..]
-    }
-    fn cursor_through(&mut self, frontier: &[Tr::Time]) -> Option<(Tr::Cursor, <Tr::Cursor as Cursor<Tr::Key, Tr::Val, Tr::Time, Tr::R>>::Storage)> {
-        self.trace.borrow_mut().trace.cursor_through(frontier)
-    }
-    fn map_batches<F: FnMut(&Self::Batch)>(&mut self, f: F) { self.trace.borrow_mut().trace.map_batches(f) }
-}
-
-impl<Tr> TraceAgent<Tr>
-where
-    Tr: TraceReader,
-    Tr::Time: Timestamp+Lattice,
-{
-
-    /// Creates a new agent from a trace reader.
-    pub fn new(trace: Tr) -> (Self, TraceWriter<Tr>)
-    where
-        Tr: Trace,
-        Tr::Batch: Batch<Tr::Key,Tr::Val,Tr::Time,Tr::R>,
-    {
-        let trace = Rc::new(RefCell::new(TraceBox::new(trace)));
-        let queues = Rc::new(RefCell::new((vec![Default::default()], Vec::new())));
-
-        let reader = TraceAgent {
-            trace: trace.clone(),
-            queues: Rc::downgrade(&queues),
-            advance: trace.borrow().advance_frontiers.frontier().to_vec(),
-            through: trace.borrow().through_frontiers.frontier().to_vec(),
-        };
-
-        let writer = TraceWriter {
-            trace: Rc::downgrade(&trace),
-            queues: queues,
-        };
-
-        (reader, writer)
-    }
-
-    /// Attaches a new shared queue to the trace.
-    ///
-    /// The queue will be immediately populated with existing historical batches from the trace, and until the reference
-    /// is dropped the queue will receive new batches as produced by the source `arrange` operator.
-    pub fn new_listener(&mut self, activator: Activator) -> TraceAgentQueueReader<Tr>
-    where
-        Tr::Time: Default
-    {
-        // create a new queue for progress and batch information.
-        let mut new_queue = VecDeque::new();
-
-        // add the existing batches from the trace
-        self.trace.borrow_mut().trace.map_batches(|batch| {
-            new_queue.push_back((vec![<Tr::Time>::default()], Some((<Tr::Time>::default(), batch.clone()))));
-        });
-
-        let reference = Rc::new((activator, RefCell::new(new_queue)));
-
-        // wraps the queue in a ref-counted ref cell and enqueue/return it.
-        if let Some(queue) = self.queues.upgrade() {
-            let mut borrow = queue.borrow_mut();
-            reference.1.borrow_mut().push_back((borrow.0.clone(), None));
-            borrow.1.push(Rc::downgrade(&reference));
-        }
-        else {
-            // if the trace is closed, send a final signal.
-            reference.1.borrow_mut().push_back((Vec::new(), None));
-        }
-        reference.0.activate();
-
-        reference
-    }
-}
-
-impl<Tr> TraceAgent<Tr>
-where
-    Tr: TraceReader,
-    Tr::Time: Lattice+Ord+Clone+'static,
-{
-    /// Copies an existing collection into the supplied scope.
-    ///
-    /// This method creates an `Arranged` collection that should appear indistinguishable from applying `arrange`
-    /// directly to the source collection brought into the local scope. The only caveat is that the initial state
-    /// of the collection is its current state, and updates occur from this point forward. The historical changes
-    /// the collection experienced in the past are accumulated, and the distinctions from the initial collection
-    /// are no longer evident.
-    ///
-    /// The current behavior is that the introduced collection accumulates updates to some times less or equal
-    /// to `self.advance_frontier()`. There is *not* currently a guarantee that the updates are accumulated *to*
-    /// the frontier, and the resulting collection history may be weirdly partial until this point. In particular,
-    /// the historical collection may move through configurations that did not actually occur, even if eventually
-    /// arriving at the correct collection. This is probably a bug; although we get to the right place in the end,
-    /// the intermediate computation could do something that the original computation did not, like diverge.
-    ///
-    /// I would expect the semantics to improve to "updates are advanced to `self.advance_frontier()`", which
-    /// means the computation will run as if starting from exactly this frontier. It is not currently clear whose
-    /// responsibility this should be (the trace/batch should only reveal these times, or an operator should know
-    /// to advance times before using them).
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// extern crate timely;
-    /// extern crate differential_dataflow;
-    ///
-    /// use timely::Configuration;
-    /// use differential_dataflow::input::Input;
-    /// use differential_dataflow::operators::arrange::ArrangeBySelf;
-    /// use differential_dataflow::operators::reduce::Reduce;
-    /// use differential_dataflow::trace::Trace;
-    /// use differential_dataflow::trace::implementations::ord::OrdValSpine;
-    /// use differential_dataflow::hashable::OrdWrapper;
-    ///
-    /// fn main() {
-    ///     ::timely::execute(Configuration::Thread, |worker| {
-    ///
-    ///         // create a first dataflow
-    ///         let mut trace = worker.dataflow::<u32,_,_>(|scope| {
-    ///             // create input handle and collection.
-    ///             scope.new_collection_from(0 .. 10).1
-    ///                  .arrange_by_self()
-    ///                  .trace
-    ///         });
-    ///
-    ///         // do some work.
-    ///         worker.step();
-    ///         worker.step();
-    ///
-    ///         // create a second dataflow
-    ///         worker.dataflow(move |scope| {
-    ///             trace.import(scope)
-    ///                  .reduce(move |_key, src, dst| dst.push((*src[0].0, 1)));
-    ///         });
-    ///
-    ///     }).unwrap();
-    /// }
-    /// ```
-    pub fn import<G>(&mut self, scope: &G) -> Arranged<G, TraceAgent<Tr>>
-    where
-        G: Scope<Timestamp=Tr::Time>,
-        Tr::Time: Timestamp,
-    {
-        self.import_named(scope, "ArrangedSource")
-    }
-
-    /// Same as `import`, but allows to name the source.
-    pub fn import_named<G>(&mut self, scope: &G, name: &str) -> Arranged<G, TraceAgent<Tr>>
-    where
-        G: Scope<Timestamp=Tr::Time>,
-        Tr::Time: Timestamp,
-    {
-        // Drop ShutdownButton and return only the arrangement.
-        self.import_core(scope, name).0
-    }
-    /// Imports an arrangement into the supplied scope.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// extern crate timely;
-    /// extern crate differential_dataflow;
-    ///
-    /// use timely::Configuration;
-    /// use timely::dataflow::ProbeHandle;
-    /// use timely::dataflow::operators::Probe;
-    /// use differential_dataflow::input::InputSession;
-    /// use differential_dataflow::operators::arrange::ArrangeBySelf;
-    /// use differential_dataflow::operators::reduce::Reduce;
-    /// use differential_dataflow::trace::Trace;
-    /// use differential_dataflow::trace::implementations::ord::OrdValSpine;
-    /// use differential_dataflow::hashable::OrdWrapper;
-    ///
-    /// fn main() {
-    ///     ::timely::execute(Configuration::Thread, |worker| {
-    ///
-    ///         let mut input = InputSession::<_,(),isize>::new();
-    ///         let mut probe = ProbeHandle::new();
-    ///
-    ///         // create a first dataflow
-    ///         let mut trace = worker.dataflow::<u32,_,_>(|scope| {
-    ///             // create input handle and collection.
-    ///             input.to_collection(scope)
-    ///                  .arrange_by_self()
-    ///                  .trace
-    ///         });
-    ///
-    ///         // do some work.
-    ///         worker.step();
-    ///         worker.step();
-    ///
-    ///         // create a second dataflow
-    ///         let mut shutdown = worker.dataflow(|scope| {
-    ///             let (arrange, button) = trace.import_core(scope, "Import");
-    ///             arrange.stream.probe_with(&mut probe);
-    ///             button
-    ///         });
-    ///
-    ///         worker.step();
-    ///         worker.step();
-    ///         assert!(!probe.done());
-    ///
-    ///         shutdown.press();
-    ///
-    ///         worker.step();
-    ///         worker.step();
-    ///         assert!(probe.done());
-    ///
-    ///     }).unwrap();
-    /// }
-    /// ```
-    pub fn import_core<G>(&mut self, scope: &G, name: &str) -> (Arranged<G, TraceAgent<Tr>>, ShutdownButton<CapabilitySet<Tr::Time>>)
-    where
-        G: Scope<Timestamp=Tr::Time>,
-        Tr::Time: Timestamp,
-    {
-        let trace = self.clone();
-
-        // Capabilities shared with a shutdown button.
-        // let shutdown_button = ShutdownButton::new(capabilities.clone());
-
-        let mut shutdown_button = None;
-
-        let stream = {
-
-            let mut shutdown_button_ref = &mut shutdown_button;
-            source(scope, name, move |capability, info| {
-
-                let capabilities = Rc::new(RefCell::new(Some(CapabilitySet::new())));
-
-                let activator = scope.activator_for(&info.address[..]);
-                let queue = self.new_listener(activator);
-
-                let activator = scope.activator_for(&info.address[..]);
-                *shutdown_button_ref = Some(ShutdownButton::new(capabilities.clone(), activator));
-
-                capabilities.borrow_mut().as_mut().unwrap().insert(capability);
-
-                move |output| {
-
-                    let mut capabilities = capabilities.borrow_mut();
-                    if let Some(ref mut capabilities) = *capabilities {
-
-                        let mut borrow = queue.1.borrow_mut();
-                        for (frontier, sent) in borrow.drain(..) {
-
-                            if let Some((time, batch)) = sent {
-                                let delayed = capabilities.delayed(&time);
-                                output.session(&delayed).give(batch);
-                            }
-
-                            capabilities.downgrade(&frontier[..]);
-                        }
-                    }
-                }
-            })
-        };
-
-        (Arranged { stream, trace }, shutdown_button.unwrap())
-    }
-}
-
-/// Wrapper than can drop shared references.
-pub struct ShutdownButton<T> {
-    reference: Rc<RefCell<Option<T>>>,
-    activator: Activator,
-}
-
-impl<T> ShutdownButton<T> {
-    /// Creates a new ShutdownButton.
-    pub fn new(reference: Rc<RefCell<Option<T>>>, activator: Activator) -> Self {
-        Self { reference, activator }
-    }
-    /// Push the shutdown button, dropping the shared objects.
-    pub fn press(&mut self) {
-        *self.reference.borrow_mut() = None;
-        self.activator.activate();
-    }
-}
-
-impl<Tr> Clone for TraceAgent<Tr>
-where
-    Tr: TraceReader,
-    Tr::Time: Lattice+Ord+Clone+'static,
-{
-    fn clone(&self) -> Self {
-
-        // increase counts for wrapped `TraceBox`.
-        self.trace.borrow_mut().adjust_advance_frontier(&[], &self.advance[..]);
-        self.trace.borrow_mut().adjust_through_frontier(&[], &self.through[..]);
-
-        TraceAgent {
-            trace: self.trace.clone(),
-            queues: self.queues.clone(),
-            advance: self.advance.clone(),
-            through: self.through.clone(),
-        }
-    }
-}
-
-
-impl<Tr> Drop for TraceAgent<Tr>
-where
-    Tr: TraceReader,
-    Tr::Time: Lattice+Ord+Clone+'static,
-{
-    fn drop(&mut self) {
-        // decrement borrow counts to remove all holds
-        self.trace.borrow_mut().adjust_advance_frontier(&self.advance[..], &[]);
-        self.trace.borrow_mut().adjust_through_frontier(&self.through[..], &[]);
-    }
-}
+use super::TraceAgent;
 
 /// An arranged collection of `(K,V)` values.
 ///
@@ -877,9 +447,13 @@ where
     ;
 }
 
-impl<G: Scope, K: ExchangeData+Hashable, V: ExchangeData, R: Monoid+ExchangeData> Arrange<G, K, V, R> for Collection<G, (K, V), R>
+impl<G, K, V, R> Arrange<G, K, V, R> for Collection<G, (K, V), R>
 where
+    G: Scope,
     G::Timestamp: Lattice+Ord,
+    K: ExchangeData+Hashable,
+    V: ExchangeData,
+    R: Monoid+ExchangeData,
 {
     fn arrange_core<P, Tr>(&self, pact: P, name: &str) -> Arranged<G, TraceAgent<Tr>>
     where
@@ -888,7 +462,22 @@ where
         Tr::Batch: Batch<K, V, G::Timestamp, R>,
         Tr::Cursor: Cursor<K, V, G::Timestamp, R>,
     {
-        let mut reader = None;
+        // The `Arrange` operator is tasked with reacting to an advancing input
+        // frontier by producing the sequence of batches whose lower and upper
+        // bounds are those frontiers, containing updates at times greater or
+        // equal to lower and not greater or equal to upper.
+        //
+        // The operator uses its batch type's `Batcher`, which accepts update
+        // triples and responds to requests to "seal" batches (presented as new
+        // upper frontiers).
+        //
+        // Each sealed batch is presented to the trace, and if at all possible
+        // transmitted along the outgoing channel. Empty batches may not have
+        // a corresponding capability, as they are only retained for actual data
+        // held by the batcher, which may prevents the operator from sending an
+        // empty batch.
+
+        let mut reader: Option<TraceAgent<Tr>> = None;
 
         // fabricate a data-parallel operator using the `unary_notify` pattern.
         let stream = {
@@ -897,7 +486,7 @@ where
 
             self.inner.unary_frontier(pact, name, move |_capability, _info| {
 
-                // Attempt to acquire a logger for arrange events.
+                // Acquire a logger for arrange events.
                 let logger = {
                     let scope = self.scope();
                     let register = scope.log_register();
@@ -916,77 +505,99 @@ where
                 let (reader_local, mut writer) = TraceAgent::new(empty_trace);
                 *reader = Some(reader_local);
 
+                let mut input_frontier = Vec::new();
+
                 move |input, output| {
 
-                // As we receive data, we need to (i) stash the data and (ii) keep *enough* capabilities.
-                // We don't have to keep all capabilities, but we need to be able to form output messages
-                // when we realize that time intervals are complete.
+                    // As we receive data, we need to (i) stash the data and (ii) keep *enough* capabilities.
+                    // We don't have to keep all capabilities, but we need to be able to form output messages
+                    // when we realize that time intervals are complete.
 
-                input.for_each(|cap, data| {
-                    capabilities.insert(cap.retain());
-                    data.swap(&mut buffer);
-                    batcher.push_batch(&mut buffer);
-                });
+                    input.for_each(|cap, data| {
+                        capabilities.insert(cap.retain());
+                        data.swap(&mut buffer);
+                        batcher.push_batch(&mut buffer);
+                    });
 
-                // The frontier may have advanced by multiple elements, which is an issue because
-                // timely dataflow currently only allows one capability per message. This means we
-                // must pretend to process the frontier advances one element at a time, batching
-                // and sending smaller bites than we might have otherwise done.
+                    // The frontier may have advanced by multiple elements, which is an issue because
+                    // timely dataflow currently only allows one capability per message. This means we
+                    // must pretend to process the frontier advances one element at a time, batching
+                    // and sending smaller bites than we might have otherwise done.
 
-                // If there is at least one capability no longer in advance of the input frontier ...
-                if capabilities.elements().iter().any(|c| !input.frontier().less_equal(c.time())) {
+                    // We should perform no work if the frontier has not advanced.
+                    if &input.frontier().frontier()[..] != &input_frontier[..] {
 
-                    let mut upper = Antichain::new();   // re-used allocation for sealing batches.
+                        // There are two cases to handle with some care:
+                        //
+                        // 1. If any held capabilities are not in advance of the new input frontier,
+                        //    we must carve out updates now in advance of the new input frontier and
+                        //    transmit them as batches, which requires appropriate *single* capabilites;
+                        //    Until timely dataflow supports multiple capabilities on messages, at least.
+                        //
+                        // 2. If there are no held capabilities in advance of the new input frontier,
+                        //    then there are no updates not in advance of the new input frontier and
+                        //    we can simply create an empty input batch with the new upper frontier
+                        //    and feed this to the trace agent (but not along the timely output).
 
-                    // For each capability not in advance of the input frontier ...
-                    for (index, capability) in capabilities.elements().iter().enumerate() {
+                        // If there is at least one capability not in advance of the input frontier ...
+                        if capabilities.elements().iter().any(|c| !input.frontier().less_equal(c.time())) {
 
-                        if !input.frontier().less_equal(capability.time()) {
+                            let mut upper = Antichain::new();   // re-used allocation for sealing batches.
 
-                            // Assemble the upper bound on times we can commit with this capabilities.
-                            // We must respect the input frontier, and *subsequent* capabilities, as
-                            // we are pretending to retire the capability changes one by one.
-                            upper.clear();
-                            for time in input.frontier().frontier().iter() {
-                                upper.insert(time.clone());
+                            // For each capability not in advance of the input frontier ...
+                            for (index, capability) in capabilities.elements().iter().enumerate() {
+
+                                if !input.frontier().less_equal(capability.time()) {
+
+                                    // Assemble the upper bound on times we can commit with this capabilities.
+                                    // We must respect the input frontier, and *subsequent* capabilities, as
+                                    // we are pretending to retire the capability changes one by one.
+                                    upper.clear();
+                                    for time in input.frontier().frontier().iter() {
+                                        upper.insert(time.clone());
+                                    }
+                                    for other_capability in &capabilities.elements()[(index + 1) .. ] {
+                                        upper.insert(other_capability.time().clone());
+                                    }
+
+                                    // Extract updates not in advance of `upper`.
+                                    let batch = batcher.seal(upper.elements());
+
+                                    writer.insert(batch.clone(), Some(capability.time().clone()));
+
+                                    // send the batch to downstream consumers, empty or not.
+                                    output.session(&capabilities.elements()[index]).give(batch);
+                                }
                             }
-                            for other_capability in &capabilities.elements()[(index + 1) .. ] {
-                                upper.insert(other_capability.time().clone());
+
+                            // Having extracted and sent batches between each capability and the input frontier,
+                            // we should downgrade all capabilities to match the batcher's lower update frontier.
+                            // This may involve discarding capabilities, which is fine as any new updates arrive
+                            // in messages with new capabilities.
+
+                            let mut new_capabilities = Antichain::new();
+                            for time in batcher.frontier() {
+                                if let Some(capability) = capabilities.elements().iter().find(|c| c.time().less_equal(time)) {
+                                    new_capabilities.insert(capability.delayed(time));
+                                }
+                                else {
+                                    panic!("failed to find capability");
+                                }
                             }
 
-                            // Extract updates not in advance of `upper`.
-                            let batch = batcher.seal(upper.elements());
-
-                            writer.seal(upper.elements(), Some((capability.time().clone(), batch.clone())));
-
-                            // send the batch to downstream consumers, empty or not.
-                            output.session(&capabilities.elements()[index]).give(batch);
-                        }
-                    }
-
-                    // Having extracted and sent batches between each capability and the input frontier,
-                    // we should downgrade all capabilities to match the batcher's lower update frontier.
-                    // This may involve discarding capabilities, which is fine as any new updates arrive
-                    // in messages with new capabilities.
-
-                    let mut new_capabilities = Antichain::new();
-                    for time in batcher.frontier() {
-                        if let Some(capability) = capabilities.elements().iter().find(|c| c.time().less_equal(time)) {
-                            new_capabilities.insert(capability.delayed(time));
+                            capabilities = new_capabilities;
                         }
                         else {
-                            panic!("failed to find capability");
+                            // Announce progress updates, even without data.
+                            input_frontier.clear();
+                            input_frontier.extend(input.frontier().frontier().iter().cloned());
+                            let _batch = batcher.seal(&input.frontier().frontier()[..]);
+                            writer.seal(&input.frontier().frontier());
                         }
+
                     }
-
-                    capabilities = new_capabilities;
                 }
-
-                // Announce progress updates.
-                // TODO: This is very noisy; consider tracking the previous frontier, and issuing an update
-                //       if and when it changes.
-                writer.seal(&input.frontier().frontier(), None);
-            }})
+            })
         };
 
         Arranged { stream: stream, trace: reader.unwrap() }

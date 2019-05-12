@@ -13,6 +13,9 @@ pub mod implementations;
 pub mod layers;
 pub mod wrappers;
 
+use timely::progress::Antichain;
+use timely::progress::Timestamp;
+
 use ::difference::Monoid;
 pub use self::cursor::Cursor;
 pub use self::description::Description;
@@ -106,12 +109,29 @@ pub trait TraceReader {
 	/// this frontier are not guaranteed to return a cursor.
 	fn distinguish_frontier(&mut self) -> &[Self::Time];
 
-	/// Maps some logic across the batches the collection manages.
+	/// Maps logic across the non-empty sequence of batches in the trace.
 	///
 	/// This is currently used only to extract historical data to prime late-starting operators who want to reproduce
 	/// the stream of batches moving past the trace. It could also be a fine basis for a default implementation of the
 	/// cursor methods, as they (by default) just move through batches accumulating cursors into a cursor list.
 	fn map_batches<F: FnMut(&Self::Batch)>(&mut self, f: F);
+
+	/// Reads the upper frontier of committed times.
+	///
+	///
+	fn read_upper(&mut self, target: &mut Antichain<Self::Time>)
+	where
+		Self::Time: Timestamp,
+	{
+		target.clear();
+		target.insert(Default::default());
+		self.map_batches(|batch| {
+			target.clear();
+			for time in batch.upper().iter().cloned() {
+				target.insert(time);
+			}
+		});
+	}
 
 }
 
@@ -159,6 +179,8 @@ pub trait BatchReader<K, V, T, R> where Self: ::std::marker::Sized
 	fn cursor(&self) -> Self::Cursor;
 	/// The number of updates in the batch.
 	fn len(&self) -> usize;
+	/// True if the batch is empty.
+	fn is_empty(&self) -> bool { self.len() == 0 }
 	/// Describes the times of the updates in the batch.
 	fn description(&self) -> &Description<T>;
 
@@ -185,6 +207,10 @@ pub trait Batch<K, V, T, R> : BatchReader<K, V, T, R> where Self: ::std::marker:
 	fn begin_merge(&self, other: &Self) -> Self::Merger {
 		Self::Merger::new(self, other)
 	}
+	// ///
+	// fn empty(lower: &[T], upper: &[T], since: &[T]) -> Output {
+	// 	<Self::Builder>::new().done(lower, upper, since)
+	// }
 }
 
 /// Functionality for collecting and batching updates.

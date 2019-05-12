@@ -43,7 +43,7 @@ fn run_test<T>(test: T, expected: Vec<(usize, Vec<((u64, i64), i64)>)>) -> ()
 }
 
 #[test]
-fn test_import() {
+fn test_import_vanilla() {
     run_test(|input_epochs| {
         timely::execute(timely::Configuration::Process(4), move |worker| {
             let ref input_epochs = input_epochs;
@@ -193,6 +193,9 @@ fn test_import_stalled_dataflow() {
         worker.step();
         worker.step();
         worker.step();
+
+        println!("input:\t{:?}", input.time());
+        probe2.with_frontier(|f| println!("{:?}", &f[..]));
 
         assert!(!probe2.less_than(input.time()));
 

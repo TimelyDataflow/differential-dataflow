@@ -99,10 +99,10 @@ pub struct Spine<K, V, T: Lattice+Ord, R: Monoid, B: Batch<K, V, T, R>> {
     operator: OperatorInfo,
     logger: Option<::logging::Logger>,
     phantom: ::std::marker::PhantomData<(K, V, R)>,
-    advance_frontier: Vec<T>,            // Times after which the trace must accumulate correctly.
-    through_frontier: Vec<T>,            // Times after which the trace must be able to subset its inputs.
-    merging: Vec<Option<MergeState<K,V,T,R,B>>>, // Several possibly shared collections of updates.
-    pending: Vec<B>,                     // Batches at times in advance of `frontier`.
+    advance_frontier: Vec<T>,                   // Times after which the trace must accumulate correctly.
+    through_frontier: Vec<T>,                   // Times after which the trace must be able to subset its inputs.
+    merging: Vec<Option<MergeState<K,V,T,R,B>>>,// Several possibly shared collections of updates.
+    pending: Vec<B>,                       // Batches at times in advance of `frontier`.
     upper: Vec<T>,
     effort: usize,
 }
@@ -111,7 +111,7 @@ impl<K, V, T, R, B> TraceReader for Spine<K, V, T, R, B>
 where
     K: Ord+Clone,           // Clone is required by `batch::advance_*` (in-place could remove).
     V: Ord+Clone,           // Clone is required by `batch::advance_*` (in-place could remove).
-    T: Lattice+Ord+Clone+Debug,   // Clone is required by `advance_by` and `batch::advance_*`.
+    T: Lattice+Ord+Clone+Debug+Default,
     R: Monoid,
     B: Batch<K, V, T, R>+Clone+'static,
 {
@@ -125,39 +125,65 @@ where
 
     fn cursor_through(&mut self, upper: &[T]) -> Option<(Self::Cursor, <Self::Cursor as Cursor<K, V, T, R>>::Storage)> {
 
-        // we shouldn't grab a cursor into a closed trace, right?
+        // The supplied `upper` should have the property that for each of our
+        // batch `lower` and `upper` frontiers, the supplied upper is comparable
+        // to the frontier; it should not be incomparable, because the frontiers
+        // that we created form a total order. If it is, there is a bug.
+        //
+        // We should acquire a cursor including all batches whose upper is less
+        // or equal to the supplied upper, excluding all batches whose lower is
+        // greater or equal to the supplied upper, and if a batch straddles the
+        // supplied upper it had better be empty.
+
+        // We shouldn't grab a cursor into a closed trace, right?
         assert!(self.advance_frontier.len() > 0);
 
         // Check that `upper` is greater or equal to `self.through_frontier`.
         // Otherwise, the cut could be in `self.merging` and it is user error anyhow.
-        if upper.iter().all(|t1| self.through_frontier.iter().any(|t2| t2.less_equal(t1))) {
+        assert!(upper.iter().all(|t1| self.through_frontier.iter().any(|t2| t2.less_equal(t1))));
 
-            let mut cursors = Vec::new();
-            let mut storage = Vec::new();
+        let mut cursors = Vec::new();
+        let mut storage = Vec::new();
 
-            for merge_state in self.merging.iter().rev() {
-                match *merge_state {
-                    Some(MergeState::Merging(ref batch1, ref batch2, _, _)) => {
+        for merge_state in self.merging.iter().rev() {
+            match *merge_state {
+                Some(MergeState::Merging(ref batch1, ref batch2, _, _)) => {
+                    if !batch1.is_empty() {
                         cursors.push(batch1.cursor());
                         storage.push(batch1.clone());
+                    }
+                    if !batch2.is_empty() {
                         cursors.push(batch2.cursor());
                         storage.push(batch2.clone());
-                    },
-                    Some(MergeState::Complete(ref batch)) => {
+                    }
+                },
+                Some(MergeState::Complete(ref batch)) => {
+                    if !batch.is_empty() {
                         cursors.push(batch.cursor());
                         storage.push(batch.clone());
-                    },
-                    None => { }
-                }
+                    }
+                },
+                None => { }
             }
+        }
 
-            for batch in &self.pending {
+        for batch in self.pending.iter() {
+
+            if !batch.is_empty() {
+
+                // For a non-empty `batch`, it is a catastrophic error if `upper`
+                // requires some-but-not-all of the updates in the batch. We can
+                // determine this from `upper` and the lower and upper bounds of
+                // the batch itself.
+                //
+                // TODO: It is not clear if this is the 100% correct logic, due
+                // to the possible non-total-orderedness of the frontiers.
+
                 let include_lower = upper.iter().all(|t1| batch.lower().iter().any(|t2| t2.less_equal(t1)));
                 let include_upper = upper.iter().all(|t1| batch.upper().iter().any(|t2| t2.less_equal(t1)));
 
                 if include_lower != include_upper && upper != batch.lower() {
                     panic!("`cursor_through`: `upper` straddles batch");
-                    // return None;
                 }
 
                 // include pending batches
@@ -166,11 +192,9 @@ where
                     storage.push(batch.clone());
                 }
             }
-            Some((CursorList::new(cursors, &storage), storage))
         }
-        else {
-            None
-        }
+
+        Some((CursorList::new(cursors, &storage), storage))
     }
     fn advance_by(&mut self, frontier: &[T]) {
         self.advance_frontier = frontier.to_vec();
@@ -206,7 +230,7 @@ impl<K, V, T, R, B> Trace for Spine<K, V, T, R, B>
 where
     K: Ord+Clone,
     V: Ord+Clone,
-    T: Lattice+Ord+Clone+Debug,
+    T: Lattice+Ord+Clone+Debug+Default,
     R: Monoid,
     B: Batch<K, V, T, R>+Clone+'static,
 {
@@ -225,21 +249,18 @@ where
             length: batch.len()
         }));
 
-        // we can ignore degenerate batches (TODO: learn where they come from; suppress them?)
-        if batch.lower() != batch.upper() {
-            assert_eq!(batch.lower(), &self.upper[..]);
-            self.upper = batch.upper().to_vec();
-            self.pending.push(batch);
-            self.consider_merges();
-        }
-        else {
-            // degenerate batches had best be empty.
-            assert!(batch.len() == 0);
-        }
+        assert!(batch.lower() != batch.upper());
+        assert_eq!(batch.lower(), &self.upper[..]);
+
+        self.upper = batch.upper().to_vec();
+
+        // TODO: Consolidate or discard empty batches.
+        self.pending.push(batch);
+        self.consider_merges();
     }
 
     fn close(&mut self) {
-        if self.upper != Vec::new() {
+        if !self.upper.is_empty() {
             use trace::Builder;
             let builder = B::Builder::new();
             let batch = builder.done(&self.upper[..], &[], &self.upper[..]);
@@ -252,7 +273,7 @@ impl<K, V, T, R, B> Spine<K, V, T, R, B>
 where
     K: Ord+Clone,
     V: Ord+Clone,
-    T: Lattice+Ord+Clone+Debug,
+    T: Lattice+Ord+Clone+Debug+Default,
     R: Monoid,
     B: Batch<K, V, T, R>,
 {
@@ -274,7 +295,7 @@ where
             through_frontier: vec![<T as Lattice>::minimum()],
             merging: Vec::new(),
             pending: Vec::new(),
-            upper: vec![<T as Lattice>::minimum()],
+            upper: vec![Default::default()],
             effort,
         }
     }
