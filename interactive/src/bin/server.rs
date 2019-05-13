@@ -14,7 +14,7 @@ fn main() {
     let mut args = std::env::args();
     args.next();
 
-    let (root_send, root_recv) = std::sync::mpsc::channel::<(Sender<Command>, Thread)>();
+    let (root_send, root_recv) = std::sync::mpsc::channel::<(Sender<Command<Value>>, Thread)>();
     let root_send = Arc::new(Mutex::new(root_send));
 
     std::thread::Builder::new()
@@ -32,7 +32,7 @@ fn main() {
                 std::thread::Builder::new()
                     .name("Client".to_string())
                     .spawn(move || {
-                        while let Ok(command) = bincode::deserialize_from::<_,Command>(&mut stream) {
+                        while let Ok(command) = bincode::deserialize_from::<_,Command<Value>>(&mut stream) {
                             send.send(command).expect("command send failed");
                             thread.unpark();
                         }
@@ -56,7 +56,7 @@ fn main() {
         let timer = ::std::time::Instant::now();
 
         let mut manager = Manager::<Value>::new();
-        let mut sequencer: Option<Sequencer<Command>> = Some(Sequencer::new(worker, timer));
+        let mut sequencer: Option<Sequencer<Command<Value>>> = Some(Sequencer::new(worker, timer));
 
         while sequencer.is_some() {
 

@@ -6,7 +6,7 @@ fn main() {
 
     let mut socket = std::net::TcpStream::connect("127.0.0.1:8000".to_string()).expect("failed to connect");
 
-    Command::SourceLogging(
+    Command::<Value>::SourceLogging(
          "127.0.0.1:9000".to_string(),  // port the server should listen on.
         "timely".to_string(),           // flavor of logging (of "timely", "differential").
         1,                              // number of worker connections to await.
@@ -21,19 +21,26 @@ fn main() {
         .into_command()
         .serialize_into(&mut socket);
 
-    Plan::<Value>::source("logs/remote/timely/channels")
-        .inspect("channels")
-        .into_rule("channels")
+    Plan::<Value>::source("logs/remote/timely/shutdown")
+        .inspect("shutdown")
+        .into_rule("shutdown")
         .into_query()
         .into_command()
         .serialize_into(&mut socket);
 
-    Plan::<Value>::source("logs/remote/timely/schedule/histogram")
-        .inspect("schedule")
-        .into_rule("schedule")
-        .into_query()
-        .into_command()
-        .serialize_into(&mut socket);
+    // Plan::<Value>::source("logs/remote/timely/channels")
+    //     .inspect("channels")
+    //     .into_rule("channels")
+    //     .into_query()
+    //     .into_command()
+    //     .serialize_into(&mut socket);
+
+    // Plan::<Value>::source("logs/remote/timely/schedule")
+    //     .inspect("schedule")
+    //     .into_rule("schedule")
+    //     .into_query()
+    //     .into_command()
+    //     .serialize_into(&mut socket);
 
     // Plan::<Value>::source("logs/remote/timely/messages")
     //     .inspect("messages")
@@ -42,5 +49,5 @@ fn main() {
     //     .into_command()
     //     .serialize_into(&mut socket);
 
-    Command::Shutdown.serialize_into(&mut socket);
+    Command::<Value>::Shutdown.serialize_into(&mut socket);
 }

@@ -8,7 +8,7 @@ fn main() {
     let mut socket = std::net::TcpStream::connect("127.0.0.1:8000".to_string()).expect("failed to connect");
 
     // Create initially empty set of edges.
-    Command::CreateInput("Edges".to_string(), Vec::new()).serialize_into(&mut socket);
+    Command::<Value>::CreateInput("Edges".to_string(), Vec::new()).serialize_into(&mut socket);
 
     let nodes = 5;
 
@@ -19,8 +19,8 @@ fn main() {
             .map(|x| vec![Value::Usize(node_0), Value::Usize(x)])
             .map(|e| (e, Duration::from_secs(node_0 as u64), 1))
             .collect::<Vec<_>>();
-        Command::UpdateInput("Edges".to_string(), updates).serialize_into(&mut socket);
-        Command::AdvanceTime(Duration::from_secs(node_0 as u64 + 1)).serialize_into(&mut socket);
+        Command::<Value>::UpdateInput("Edges".to_string(), updates).serialize_into(&mut socket);
+        Command::<Value>::AdvanceTime(Duration::from_secs(node_0 as u64 + 1)).serialize_into(&mut socket);
     }
 
     Plan::<Value>::multiway_join(
@@ -47,8 +47,8 @@ fn main() {
             .map(|x| vec![Value::Usize(node_0), Value::Usize(x)])
             .map(|e| (e, Duration::from_secs(node_0 as u64), 1))
             .collect::<Vec<_>>();
-        Command::UpdateInput("Edges".to_string(), updates).serialize_into(&mut socket);
-        Command::AdvanceTime(Duration::from_secs(node_0 as u64 + 1)).serialize_into(&mut socket);
+        Command::<Value>::UpdateInput("Edges".to_string(), updates).serialize_into(&mut socket);
+        Command::<Value>::AdvanceTime(Duration::from_secs(node_0 as u64 + 1)).serialize_into(&mut socket);
     }
 
     Plan::<Value>::multiway_join(
@@ -76,5 +76,5 @@ fn main() {
         .into_command()
         .serialize_into(&mut socket);
 
-    Command::Shutdown.serialize_into(&mut socket);
+    Command::<Value>::Shutdown.serialize_into(&mut socket);
 }

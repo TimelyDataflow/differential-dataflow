@@ -51,7 +51,7 @@ impl<V> Query<V> {
 
 impl Query<Value> {
     /// Converts the query into a command.
-    pub fn into_command(self) -> Command {
+    pub fn into_command(self) -> Command<Value> {
         Command::Query(self)
     }
 }
@@ -105,6 +105,18 @@ impl VectorFrom<TimelyEvent> for Value {
             TimelyEvent::Messages(x) => {
                 vec![Value::Usize(x.channel), Value::Bool(x.is_send), Value::Usize(x.source), Value::Usize(x.target), Value::Usize(x.seq_no), Value::Usize(x.length)]
             },
+            TimelyEvent::Shutdown(x) => {
+                vec![Value::Usize(x.id)]
+            }
+            // TimelyEvent::Park(x) => {
+            //     match x {
+            //         ParkUnpark::Park(x)
+            //     }
+            //     vec![]
+            // }
+            TimelyEvent::Text(x) => {
+                vec![Value::String(x)]
+            }
             _ => { vec![] },
         }
     }
@@ -137,6 +149,6 @@ impl VectorFrom<DifferentialEvent> for Value {
 }
 
 /// Serializes a command into a socket.
-pub fn bincode_socket(socket: &mut std::net::TcpStream, command: &Command) {
+pub fn bincode_socket(socket: &mut std::net::TcpStream, command: &Command<Value>) {
     bincode::serialize_into(socket, command).expect("bincode: serialization failed");
 }
