@@ -195,8 +195,8 @@ macro_rules! implement_lattice {
 use std::time::Duration;
 
 implement_lattice!(Duration, Duration::new(0, 0));
-implement_lattice!(usize, usize::min_value());
-implement_lattice!(u64, u64::min_value());
-implement_lattice!(u32, u32::min_value());
-implement_lattice!(i32, i32::min_value());
+implement_lattice!(usize, 0);
+implement_lattice!(u64, 0);
+implement_lattice!(u32, 0);
+implement_lattice!(i32, 0);
 implement_lattice!((), ());
