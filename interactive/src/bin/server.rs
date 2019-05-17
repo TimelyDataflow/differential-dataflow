@@ -7,7 +7,8 @@ use std::sync::mpsc::Sender;
 use std::thread::Thread;
 
 use timely::synchronization::Sequencer;
-use interactive::{Manager, Command, Value};
+use interactive::{Command, Manager};
+use interactive::concrete::Value;
 
 fn main() {
 

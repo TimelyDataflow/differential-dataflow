@@ -6,7 +6,7 @@ use timely::dataflow::Scope;
 
 use differential_dataflow::{Collection, ExchangeData};
 use plan::{Plan, Render};
-use {TraceManager, Time, Diff};
+use {TraceManager, Time, Diff, Datum};
 
 /// What to compare against.
 ///
@@ -73,21 +73,21 @@ impl<Value: Ord> Predicate<Value> {
 /// predicate. Frontends are responsible for ensuring that the source
 /// binds the argument symbols.
 #[derive(Serialize, Deserialize, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub struct Filter<V> {
+pub struct Filter<V: Datum> {
     /// Logical predicate to apply.
     pub predicate: Predicate<V>,
     /// Plan for the data source.
     pub plan: Box<Plan<V>>,
 }
 
-impl<V: ExchangeData+Hash> Render for Filter<V> {
+impl<V: ExchangeData+Hash+Datum> Render for Filter<V> {
 
     type Value = V;
 
     fn render<S: Scope<Timestamp = Time>>(
         &self,
         scope: &mut S,
-        arrangements: &mut TraceManager<Self::Value>) -> Collection<S, Vec<Self::Value>, Diff>
+        arrangements: &mut TraceManager<V>) -> Collection<S, Vec<Self::Value>, Diff>
     {
         let predicate = self.predicate.clone();
         self.plan

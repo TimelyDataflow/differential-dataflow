@@ -18,7 +18,7 @@ use differential_dataflow::input::InputSession;
 
 use differential_dataflow::logging::DifferentialEvent;
 
-use super::{Time, Diff, Plan};
+use crate::{Time, Diff, Plan, Datum};
 
 /// A trace handle for key-only data.
 pub type TraceKeyHandle<K, T, R> = TraceAgent<OrdKeySpine<K, T, R>>;
@@ -29,27 +29,20 @@ pub type KeysOnlyHandle<V> = TraceKeyHandle<Vec<V>, Time, Diff>;
 /// A key-value trace handle binding `Time` and `Diff` using `Vec<V>` as data.
 pub type KeysValsHandle<V> = TraceValHandle<Vec<V>, Vec<V>, Time, Diff>;
 
-/// A type that can be converted to a vector of another type.
-pub trait VectorFrom<T> : Sized {
-    /// Converts `T` to a vector of `Self`.
-    fn vector_from(item: T) -> Vec<Self>;
-}
-
-/// A composite trait for values accommodating logging types.
-pub trait LoggingValue : VectorFrom<TimelyEvent>+VectorFrom<DifferentialEvent> { }
-impl<V: VectorFrom<TimelyEvent>+VectorFrom<DifferentialEvent>> LoggingValue for V { }
-
 /// Manages inputs and traces.
-pub struct Manager<Value: ExchangeData> {
+pub struct Manager<V: ExchangeData+Datum> {
     /// Manages input sessions.
-    pub inputs: InputManager<Value>,
+    pub inputs: InputManager<V>,
     /// Manages maintained traces.
-    pub traces: TraceManager<Value>,
+    pub traces: TraceManager<V>,
     /// Probes all computations.
     pub probe: ProbeHandle<Time>,
 }
 
-impl<Value: ExchangeData+Hash+LoggingValue> Manager<Value> {
+impl<V: ExchangeData+Datum> Manager<V>
+// where
+//     V: ExchangeData+Hash+LoggingValue,
+{
 
     /// Creates a new empty manager.
     pub fn new() -> Self {
@@ -105,8 +98,8 @@ impl<Value: ExchangeData+Hash+LoggingValue> Manager<Value> {
     pub fn insert_input(
         &mut self,
         name: String,
-        input: InputSession<Time, Vec<Value>, Diff>,
-        trace: KeysOnlyHandle<Value>)
+        input: InputSession<Time, Vec<V>, Diff>,
+        trace: KeysOnlyHandle<V>)
     {
         self.inputs.sessions.insert(name.clone(), input);
         self.traces.set_unkeyed(&Plan::Source(name), &trace);
@@ -140,12 +133,12 @@ impl<Value: ExchangeData+Hash+LoggingValue> Manager<Value> {
 }
 
 /// Manages input sessions.
-pub struct InputManager<Value: ExchangeData> {
+pub struct InputManager<V: ExchangeData> {
     /// Input sessions by name.
-    pub sessions: HashMap<String, InputSession<Time, Vec<Value>, Diff>>,
+    pub sessions: HashMap<String, InputSession<Time, Vec<V>, Diff>>,
 }
 
-impl<Value: ExchangeData> InputManager<Value> {
+impl<V: ExchangeData> InputManager<V> {
 
     /// Creates a new empty input manager.
     pub fn new() -> Self { Self { sessions: HashMap::new() } }
@@ -164,24 +157,29 @@ impl<Value: ExchangeData> InputManager<Value> {
 ///
 /// Manages a map from plan (describing a collection)
 /// to various arranged forms of that collection.
-pub struct TraceManager<Value: ExchangeData> {
+pub struct TraceManager<V: ExchangeData+Datum> {
 
     /// Arrangements where the record itself is they key.
     ///
     /// This contains both input collections, which are here cached so that
     /// they can be re-used, intermediate collections that are cached, and
     /// any collections that are explicitly published.
-    inputs: HashMap<Plan<Value>, KeysOnlyHandle<Value>>,
+    inputs: HashMap<Plan<V>, KeysOnlyHandle<V>>,
 
     /// Arrangements of collections by key.
-    arrangements: HashMap<Plan<Value>, HashMap<Vec<usize>, KeysValsHandle<Value>>>,
+    arrangements: HashMap<Plan<V>, HashMap<Vec<usize>, KeysValsHandle<V>>>,
 
 }
 
-impl<Value: ExchangeData+Hash> TraceManager<Value> {
+impl<V: ExchangeData+Hash+Datum> TraceManager<V> {
 
     /// Creates a new empty trace manager.
-    pub fn new() -> Self { Self { inputs: HashMap::new(), arrangements: HashMap::new() } }
+    pub fn new() -> Self {
+        Self {
+            inputs: HashMap::new(),
+            arrangements: HashMap::new()
+        }
+    }
 
     /// Advances the frontier of each maintained trace.
     pub fn advance_time(&mut self, time: &Time) {
@@ -199,14 +197,14 @@ impl<Value: ExchangeData+Hash> TraceManager<Value> {
     }
 
     /// Recover an arrangement by plan and keys, if it is cached.
-    pub fn get_unkeyed(&self, plan: &Plan<Value>) -> Option<KeysOnlyHandle<Value>> {
+    pub fn get_unkeyed(&self, plan: &Plan<V>) -> Option<KeysOnlyHandle<V>> {
         self.inputs
             .get(plan)
             .map(|x| x.clone())
     }
 
     /// Installs an unkeyed arrangement for a specified plan.
-    pub fn set_unkeyed(&mut self, plan: &Plan<Value>, handle: &KeysOnlyHandle<Value>) {
+    pub fn set_unkeyed(&mut self, plan: &Plan<V>, handle: &KeysOnlyHandle<V>) {
         use differential_dataflow::trace::TraceReader;
         let mut handle = handle.clone();
         handle.distinguish_since(&[]);
@@ -215,14 +213,14 @@ impl<Value: ExchangeData+Hash> TraceManager<Value> {
     }
 
     /// Recover an arrangement by plan and keys, if it is cached.
-    pub fn get_keyed(&self, plan: &Plan<Value>, keys: &[usize]) -> Option<KeysValsHandle<Value>> {
+    pub fn get_keyed(&self, plan: &Plan<V>, keys: &[usize]) -> Option<KeysValsHandle<V>> {
         self.arrangements
             .get(plan)
             .and_then(|map| map.get(keys).map(|x| x.clone()))
     }
 
     /// Installs a keyed arrangement for a specified plan and sequence of keys.
-    pub fn set_keyed(&mut self, plan: &Plan<Value>, keys: &[usize], handle: &KeysValsHandle<Value>) {
+    pub fn set_keyed(&mut self, plan: &Plan<V>, keys: &[usize], handle: &KeysValsHandle<V>) {
         use differential_dataflow::trace::TraceReader;
         let mut handle = handle.clone();
         handle.distinguish_since(&[]);

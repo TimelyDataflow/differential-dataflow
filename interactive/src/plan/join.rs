@@ -8,13 +8,13 @@ use differential_dataflow::operators::JoinCore;
 
 use differential_dataflow::{Collection, ExchangeData};
 use plan::{Plan, Render};
-use {TraceManager, Time, Diff};
+use {TraceManager, Time, Diff, Datum};
 
 /// A plan stage joining two source relations on the specified
 /// symbols. Throws if any of the join symbols isn't bound by both
 /// sources.
 #[derive(Serialize, Deserialize, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub struct Join<Value> {
+pub struct Join<Value: Datum> {
     /// Pairs of indices whose values must be equal.
     pub keys: Vec<(usize, usize)>,
     /// Plan for the left input.
@@ -23,14 +23,14 @@ pub struct Join<Value> {
     pub plan2: Box<Plan<Value>>,
 }
 
-impl<V: ExchangeData+Hash> Render for Join<V> {
+impl<V: ExchangeData+Hash+Datum> Render for Join<V> {
 
     type Value = V;
 
     fn render<S: Scope<Timestamp = Time>>(
         &self,
         scope: &mut S,
-        arrangements: &mut TraceManager<Self::Value>) -> Collection<S, Vec<Self::Value>, Diff>
+        arrangements: &mut TraceManager<V>) -> Collection<S, Vec<Self::Value>, Diff>
     {
         use differential_dataflow::operators::arrange::ArrangeByKey;
 

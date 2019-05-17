@@ -33,7 +33,7 @@ use differential_dataflow::operators::arrange::{ArrangeBySelf, ArrangeByKey};
 
 use differential_dataflow::{Collection, ExchangeData};
 use plan::{Plan, Render};
-use {TraceManager, Time, Diff};
+use {TraceManager, Time, Diff, Datum};
 
 /// A multiway join of muliple relations.
 ///
@@ -41,11 +41,11 @@ use {TraceManager, Time, Diff};
 /// we can more efficiently design incremental update strategies without materializing
 /// and indexing intermediate relations.
 #[derive(Serialize, Deserialize, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub struct MultiwayJoin<Value> {
+pub struct MultiwayJoin<V: Datum> {
     /// A list of (attribute index, input) pairs to extract.
     pub results: Vec<(usize, usize)>,
     /// A list of source collections.
-    pub sources: Vec<Plan<Value>>,
+    pub sources: Vec<Plan<V>>,
     /// Equality constraints.
     ///
     /// Equality constraints are presented as lists of `(attr, input)` equivalence classes.
@@ -63,14 +63,14 @@ pub struct MultiwayJoin<Value> {
 //       is not surfaced in any join, and is instead a filter that should be applied
 //       directly to R2 (before or after the join with R1; either could be best).
 
-impl<V: ExchangeData+Hash> Render for MultiwayJoin<V> {
+impl<V: ExchangeData+Hash+Datum> Render for MultiwayJoin<V> {
 
     type Value = V;
 
     fn render<S: Scope<Timestamp = Time>>(
         &self,
         scope: &mut S,
-        arrangements: &mut TraceManager<Self::Value>) -> Collection<S, Vec<Self::Value>, Diff>
+        arrangements: &mut TraceManager<V>) -> Collection<S, Vec<Self::Value>, Diff>
     {
         // The idea here is the following:
         //

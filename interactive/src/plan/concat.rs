@@ -6,23 +6,23 @@ use timely::dataflow::Scope;
 
 use differential_dataflow::{Collection, ExchangeData};
 use plan::{Plan, Render};
-use {TraceManager, Time, Diff};
+use {TraceManager, Time, Diff, Datum};
 
 /// Merges the source collections.
 #[derive(Serialize, Deserialize, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub struct Concat<V> {
+pub struct Concat<V: Datum> {
     /// Plan for the data source.
     pub plans: Vec<Plan<V>>,
 }
 
-impl<V: ExchangeData+Hash> Render for Concat<V> {
+impl<V: ExchangeData+Hash+Datum> Render for Concat<V> {
 
     type Value = V;
 
     fn render<S: Scope<Timestamp = Time>>(
         &self,
         scope: &mut S,
-        arrangements: &mut TraceManager<Self::Value>) -> Collection<S, Vec<Self::Value>, Diff>
+        arrangements: &mut TraceManager<V>) -> Collection<S, Vec<Self::Value>, Diff>
     {
         use timely::dataflow::operators::Concatenate;
         use differential_dataflow::AsCollection;

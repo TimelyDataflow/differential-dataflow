@@ -25,19 +25,41 @@ pub use command::Command;
 
 pub mod logging;
 
+pub mod concrete;
+
 /// System-wide notion of time.
 pub type Time = ::std::time::Duration;
 /// System-wide update type.
 pub type Diff = isize;
 
-/// Multiple related collection definitions.
-#[derive(Serialize, Deserialize, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub struct Query<Value> {
-    /// A list of bindings of names to plans.
-    pub rules: Vec<Rule<Value>>,
+use std::hash::Hash;
+use std::fmt::Debug;
+use serde::{Serialize, Deserialize};
+
+/// Types capable of use as data in interactive.
+pub trait Datum : Hash+Sized+Debug {
+    /// A type that can act on slices of data.
+    type Expression : Clone+Debug+Eq+Ord+Hash+Serialize+for<'a>Deserialize<'a>;
+    /// Applies an expression to a slice of data.
+    fn subject_to(data: &[Self], expr: &Self::Expression) -> Self;
+    /// Creates a expression that implements projection.
+    fn projection(index: usize) -> Self::Expression;
 }
 
-impl<V> Query<V> {
+/// A type that can be converted to a vector of another type.
+pub trait VectorFrom<T> : Sized {
+    /// Converts `T` to a vector of `Self`.
+    fn vector_from(item: T) -> Vec<Self>;
+}
+
+/// Multiple related collection definitions.
+#[derive(Serialize, Deserialize, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+pub struct Query<V: Datum> {
+    /// A list of bindings of names to plans.
+    pub rules: Vec<Rule<V>>,
+}
+
+impl<V: Datum> Query<V> {
     /// Creates a new, empty query.
     pub fn new() -> Self {
         Query { rules: Vec::new() }
@@ -49,106 +71,25 @@ impl<V> Query<V> {
     }
 }
 
-impl Query<Value> {
+impl<V: Datum> Query<V> {
     /// Converts the query into a command.
-    pub fn into_command(self) -> Command<Value> {
+    pub fn into_command(self) -> Command<V> {
         Command::Query(self)
     }
 }
 
 /// Definition of a single collection.
 #[derive(Serialize, Deserialize, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub struct Rule<Value> {
+pub struct Rule<V: Datum> {
     /// Name of the rule.
     pub name: String,
     /// Plan describing contents of the rule.
-    pub plan: Plan<Value>,
+    pub plan: Plan<V>,
 }
 
-impl<Value> Rule<Value> {
+impl<V: Datum> Rule<V> {
     /// Converts the rule into a singleton query.
-    pub fn into_query(self) -> Query<Value> {
+    pub fn into_query(self) -> Query<V> {
         Query::new().add_rule(self)
     }
-}
-
-/// An example value type
-#[derive(Serialize, Deserialize, Debug, Clone, Hash, Eq, PartialEq, Ord, PartialOrd)]
-pub enum Value {
-    /// boolean
-    Bool(bool),
-    /// integer
-    Usize(usize),
-    /// string
-    String(String),
-    /// operator address
-    Address(Vec<usize>),
-    /// duration
-    Duration(::std::time::Duration),
-}
-
-use manager::VectorFrom;
-use timely::logging::TimelyEvent;
-
-impl VectorFrom<TimelyEvent> for Value {
-    fn vector_from(item: TimelyEvent) -> Vec<Value> {
-        match item {
-            TimelyEvent::Operates(x) => {
-                vec![Value::Usize(x.id), Value::Address(x.addr), Value::String(x.name)]
-            },
-            TimelyEvent::Channels(x) => {
-                vec![Value::Usize(x.id), Value::Address(x.scope_addr), Value::Usize(x.source.0), Value::Usize(x.source.1), Value::Usize(x.target.0), Value::Usize(x.target.1)]
-            },
-            TimelyEvent::Schedule(x) => {
-                vec![Value::Usize(x.id), Value::Bool(x.start_stop == ::timely::logging::StartStop::Start)]
-            },
-            TimelyEvent::Messages(x) => {
-                vec![Value::Usize(x.channel), Value::Bool(x.is_send), Value::Usize(x.source), Value::Usize(x.target), Value::Usize(x.seq_no), Value::Usize(x.length)]
-            },
-            TimelyEvent::Shutdown(x) => {
-                vec![Value::Usize(x.id)]
-            }
-            // TimelyEvent::Park(x) => {
-            //     match x {
-            //         ParkUnpark::Park(x)
-            //     }
-            //     vec![]
-            // }
-            TimelyEvent::Text(x) => {
-                vec![Value::String(x)]
-            }
-            _ => { vec![] },
-        }
-    }
-}
-
-use differential_dataflow::logging::DifferentialEvent;
-
-impl VectorFrom<DifferentialEvent> for Value {
-    fn vector_from(item: DifferentialEvent) -> Vec<Value> {
-        match item {
-            DifferentialEvent::Batch(x) => {
-                vec![
-                    Value::Usize(x.operator),
-                    Value::Usize(x.length),
-                ]
-            },
-            DifferentialEvent::Merge(x) => {
-                vec![
-                    Value::Usize(x.operator),
-                    Value::Usize(x.scale),
-                    Value::Usize(x.length1),
-                    Value::Usize(x.length2),
-                    Value::Usize(x.complete.unwrap_or(0)),
-                    Value::Bool(x.complete.is_some()),
-                ]
-            },
-            _ => { vec![] },
-        }
-    }
-}
-
-/// Serializes a command into a socket.
-pub fn bincode_socket(socket: &mut std::net::TcpStream, command: &Command<Value>) {
-    bincode::serialize_into(socket, command).expect("bincode: serialization failed");
 }

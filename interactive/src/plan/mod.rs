@@ -11,21 +11,25 @@ use {TraceManager, Time, Diff};
 pub mod concat;
 pub mod filter;
 pub mod join;
-pub mod project;
+// pub mod project;
+pub mod map;
 pub mod sfw;
+
+use crate::Datum;
 
 // pub use self::count::Count;
 pub use self::concat::Concat;
 pub use self::filter::{Filter, Predicate};
 pub use self::join::Join;
 pub use self::sfw::MultiwayJoin;
-pub use self::project::Project;
+// pub use self::project::Project;
+pub use self::map::Map;
 
 /// A type that can be rendered as a collection.
 pub trait Render : Sized {
 
     /// Value type produced.
-    type Value: ExchangeData;
+    type Value: ExchangeData+Datum;
 
     /// Renders the instance as a collection in the supplied scope.
     ///
@@ -39,34 +43,36 @@ pub trait Render : Sized {
 
 /// Possible query plan types.
 #[derive(Serialize, Deserialize, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub enum Plan<Value> {
-    /// Projection / Permutation
-    Project(Project<Value>),
+pub enum Plan<V: Datum> {
+    /// Map
+    Map(Map<V>),
+    // /// Projection / Permutation
+    // Project(Project<V>),
     /// Distinct
-    Distinct(Box<Plan<Value>>),
+    Distinct(Box<Plan<V>>),
     /// Concat
-    Concat(Concat<Value>),
+    Concat(Concat<V>),
     /// Consolidate
-    Consolidate(Box<Plan<Value>>),
+    Consolidate(Box<Plan<V>>),
     /// Equijoin
-    Join(Join<Value>),
+    Join(Join<V>),
     /// MultiwayJoin
-    MultiwayJoin(MultiwayJoin<Value>),
+    MultiwayJoin(MultiwayJoin<V>),
     /// Negation
-    Negate(Box<Plan<Value>>),
+    Negate(Box<Plan<V>>),
     /// Filters bindings by one of the built-in predicates
-    Filter(Filter<Value>),
+    Filter(Filter<V>),
     /// Sources data from another relation.
     Source(String),
     /// Prints resulting updates.
-    Inspect(String, Box<Plan<Value>>),
+    Inspect(String, Box<Plan<V>>),
 }
 
-impl<V: ExchangeData+Hash> Plan<V> {
+impl<V: ExchangeData+Hash+Datum> Plan<V> {
     /// Retains only the values at the indicated indices.
     pub fn project(self, indices: Vec<usize>) -> Self {
-        Plan::Project(Project {
-            indices,
+        Plan::Map(Map {
+            expressions: indices.into_iter().map(|i| V::projection(i)).collect(),
             plan: Box::new(self),
         })
     }
@@ -135,7 +141,7 @@ impl<V: ExchangeData+Hash> Plan<V> {
     }
 }
 
-impl<V: ExchangeData+Hash> Render for Plan<V> {
+impl<V: ExchangeData+Hash+Datum> Render for Plan<V> {
 
     type Value = V;
 
@@ -145,7 +151,8 @@ impl<V: ExchangeData+Hash> Render for Plan<V> {
         arrangements: &mut TraceManager<Self::Value>) -> Collection<S, Vec<Self::Value>, Diff>
     {
         match self {
-            Plan::Project(projection) => projection.render(scope, arrangements),
+            // Plan::Project(projection) => projection.render(scope, arrangements),
+            Plan::Map(expressions) => expressions.render(scope, arrangements),
             Plan::Distinct(distinct) => {
 
                 use differential_dataflow::operators::reduce::ReduceCore;

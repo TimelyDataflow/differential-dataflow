@@ -11,12 +11,12 @@ use differential_dataflow::logging::DifferentialEvent;
 
 use differential_dataflow::ExchangeData;
 
-use super::{Value, Query, Rule, Plan, Time, Diff, Manager};
-use manager::LoggingValue;
+use super::{Query, Rule, Plan, Time, Diff, Manager, Datum};
+use crate::logging::LoggingValue;
 
 /// Commands accepted by the system.
 #[derive(Serialize, Deserialize, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub enum Command<V> {
+pub enum Command<V: Datum> {
     /// Installs the query and publishes public rules.
     Query(Query<V>),
     /// Advances all inputs and traces to `time`, and advances computation.
@@ -33,7 +33,18 @@ pub enum Command<V> {
     Shutdown,
 }
 
-impl<V: ExchangeData+Hash+LoggingValue> Command<V> {
+impl<V: Datum> From<Query<V>> for Command<V> {
+    fn from(query: Query<V>) -> Self { Command::Query(query) }
+}
+
+impl<V: Datum> From<Rule<V>> for Command<V> {
+    fn from(rule: Rule<V>) -> Self { Command::Query(Query::new().add_rule(rule)) }
+}
+
+impl<V: Datum> Command<V>
+where
+    V: ExchangeData+Hash+LoggingValue,
+{
 
     /// Executes a command.
     pub fn execute<A: Allocate>(self, manager: &mut Manager<V>, worker: &mut Worker<A>) {

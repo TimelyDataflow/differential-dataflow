@@ -11,10 +11,12 @@ use timely::dataflow::operators::capture::event::EventIterator;
 use differential_dataflow::ExchangeData;
 use differential_dataflow::logging::DifferentialEvent;
 
-use crate::{Value, Plan};
-use crate::manager::{VectorFrom, Manager};
+use crate::{Plan, VectorFrom, Datum};
+use crate::manager::Manager;
 
-use manager::LoggingValue;
+/// A composite trait for values accommodating logging types.
+pub trait LoggingValue : VectorFrom<TimelyEvent>+VectorFrom<DifferentialEvent> { }
+impl<V: VectorFrom<TimelyEvent>+VectorFrom<DifferentialEvent>> LoggingValue for V { }
 
 /// Timely logging capture and arrangement.
 pub fn publish_timely_logging<V, A, I>(
@@ -25,7 +27,7 @@ pub fn publish_timely_logging<V, A, I>(
     events: I
 )
 where
-    V: ExchangeData+Hash+LoggingValue,
+    V: ExchangeData+Hash+LoggingValue+Datum,
     A: Allocate,
     I : IntoIterator,
     <I as IntoIterator>::Item: EventIterator<Duration, (Duration, usize, TimelyEvent)>+'static
@@ -33,8 +35,8 @@ where
     let (operates, channels, schedule, messages, shutdown, park, text) =
     worker.dataflow(move |scope| {
 
-        use timely::dataflow::operators::Map;
-        use timely::dataflow::operators::Operator;
+        // use timely::dataflow::operators::Map;
+        // use timely::dataflow::operators::Operator;
         use timely::dataflow::operators::capture::Replay;
         use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 
@@ -212,7 +214,7 @@ pub fn publish_differential_logging<V, A, I>(
     events: I
 )
 where
-    V: ExchangeData+Hash+LoggingValue,
+    V: ExchangeData+Hash+LoggingValue+Datum,
     A: Allocate,
     I : IntoIterator,
     <I as IntoIterator>::Item: EventIterator<Duration, (Duration, usize, DifferentialEvent)>+'static

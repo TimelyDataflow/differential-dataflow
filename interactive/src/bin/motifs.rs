@@ -1,14 +1,16 @@
 extern crate interactive;
 
 use std::time::Duration;
-use interactive::{Command, Plan, Value};
+use interactive::{Command, Plan};
+use interactive::concrete::{Session, Value};
 
 fn main() {
 
-    let mut socket = std::net::TcpStream::connect("127.0.0.1:8000".to_string()).expect("failed to connect");
+    let socket = std::net::TcpStream::connect("127.0.0.1:8000".to_string()).expect("failed to connect");
+    let mut session = Session::new(socket);
 
     // Create initially empty set of edges.
-    Command::<Value>::CreateInput("Edges".to_string(), Vec::new()).serialize_into(&mut socket);
+    session.issue(Command::CreateInput("Edges".to_string(), Vec::new()));
 
     let nodes = 5;
 
@@ -19,11 +21,12 @@ fn main() {
             .map(|x| vec![Value::Usize(node_0), Value::Usize(x)])
             .map(|e| (e, Duration::from_secs(node_0 as u64), 1))
             .collect::<Vec<_>>();
-        Command::<Value>::UpdateInput("Edges".to_string(), updates).serialize_into(&mut socket);
-        Command::<Value>::AdvanceTime(Duration::from_secs(node_0 as u64 + 1)).serialize_into(&mut socket);
+        session.issue(Command::UpdateInput("Edges".to_string(), updates));
+        session.issue(Command::AdvanceTime(Duration::from_secs(node_0 as u64 + 1)));
     }
 
-    Plan::<Value>::multiway_join(
+    session.issue(
+    Plan::multiway_join(
         vec![Plan::source("Edges"), Plan::source("Edges"), Plan::source("Edges")],
         vec![
             vec![(0,1), (1,0)], // b == b
@@ -36,9 +39,7 @@ fn main() {
         .consolidate()
         .inspect("triangles")
         .into_rule("triangles")
-        .into_query()
-        .into_command()
-        .serialize_into(&mut socket);
+        );
 
 
     for node_0 in (nodes / 2) .. nodes {
@@ -47,11 +48,12 @@ fn main() {
             .map(|x| vec![Value::Usize(node_0), Value::Usize(x)])
             .map(|e| (e, Duration::from_secs(node_0 as u64), 1))
             .collect::<Vec<_>>();
-        Command::<Value>::UpdateInput("Edges".to_string(), updates).serialize_into(&mut socket);
-        Command::<Value>::AdvanceTime(Duration::from_secs(node_0 as u64 + 1)).serialize_into(&mut socket);
+        session.issue(Command::UpdateInput("Edges".to_string(), updates));
+        session.issue(Command::AdvanceTime(Duration::from_secs(node_0 as u64 + 1)));
     }
 
-    Plan::<Value>::multiway_join(
+    session.issue(
+    Plan::multiway_join(
         vec![
             Plan::source("Edges"),  // R0(a,b)
             Plan::source("Edges"),  // R1(a,c)
@@ -72,9 +74,7 @@ fn main() {
         .consolidate()
         .inspect("4cliques")
         .into_rule("4cliques")
-        .into_query()
-        .into_command()
-        .serialize_into(&mut socket);
+        );
 
-    Command::<Value>::Shutdown.serialize_into(&mut socket);
+    session.issue(Command::Shutdown);
 }

@@ -6,7 +6,7 @@ use timely::dataflow::Scope;
 
 use differential_dataflow::{Collection, ExchangeData};
 use plan::{Plan, Render};
-use {TraceManager, Time, Diff};
+use {TraceManager, Time, Diff, Datum};
 
 /// A plan which retains values at specified locations.
 ///
@@ -14,27 +14,31 @@ use {TraceManager, Time, Diff};
 /// to variable names, and simply selects out the indicated sequence of values,
 /// panicking if some input record is insufficiently long.
 #[derive(Serialize, Deserialize, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub struct Project<V> {
+pub struct Map<V: Datum> {
     /// Sequence (and order) of indices to be retained.
-    pub indices: Vec<usize>,
+    pub expressions: Vec<V::Expression>,
     /// Plan for the data source.
     pub plan: Box<Plan<V>>,
 }
 
-impl<V: ExchangeData+Hash> Render for Project<V> {
-
+impl<V: ExchangeData+Hash+Datum> Render for Map<V> {
     type Value = V;
 
     fn render<S: Scope<Timestamp = Time>>(
         &self,
         scope: &mut S,
-        arrangements: &mut TraceManager<Self::Value>) -> Collection<S, Vec<Self::Value>, Diff>
+        arrangements: &mut TraceManager<V>) -> Collection<S, Vec<Self::Value>, Diff>
     {
-        let indices = self.indices.clone();
+        let expressions = self.expressions.clone();
 
         // TODO: re-use `tuple` allocation.
         self.plan
             .render(scope, arrangements)
-            .map(move |tuple| indices.iter().map(|index| tuple[*index].clone()).collect())
+            .map(move |tuple|
+                expressions
+                    .iter()
+                    .map(|expr| V::subject_to(&tuple[..], expr))
+                    .collect()
+            )
     }
 }
