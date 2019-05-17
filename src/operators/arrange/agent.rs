@@ -329,7 +329,6 @@ where
 
 /// Wrapper than can drop shared references.
 pub struct ShutdownButton<T> {
-    on_drop: bool,
     reference: Rc<RefCell<Option<T>>>,
     activator: Activator,
 }
@@ -337,24 +336,31 @@ pub struct ShutdownButton<T> {
 impl<T> ShutdownButton<T> {
     /// Creates a new ShutdownButton.
     pub fn new(reference: Rc<RefCell<Option<T>>>, activator: Activator) -> Self {
-        Self { on_drop: false, reference, activator }
+        Self { reference, activator }
     }
     /// Push the shutdown button, dropping the shared objects.
     pub fn press(&mut self) {
         *self.reference.borrow_mut() = None;
         self.activator.activate();
     }
-    /// Sets the button to auto-press on drop.
-    pub fn press_on_drop(&mut self) {
-        self.on_drop = true;
+    /// Hotwires the button to one that is pressed if dropped.
+    pub fn press_on_drop(self) -> ShutdownDeadmans<T> {
+        ShutdownDeadmans {
+            button: self
+        }
     }
 }
 
-impl<T> Drop for ShutdownButton<T> {
+/// A deadman's switch version of a shutdown button.
+///
+/// This type hosts a shutdown button and will press it when dropped.
+pub struct ShutdownDeadmans<T> {
+    button: ShutdownButton<T>,
+}
+
+impl<T> Drop for ShutdownDeadmans<T> {
     fn drop(&mut self) {
-        if self.on_drop {
-            self.press();
-        }
+        self.button.press();
     }
 }
 
