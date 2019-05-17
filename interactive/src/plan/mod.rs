@@ -8,21 +8,17 @@ use differential_dataflow::{Collection, ExchangeData};
 use {TraceManager, Time, Diff};
 
 // pub mod count;
-pub mod concat;
 pub mod filter;
 pub mod join;
-// pub mod project;
 pub mod map;
 pub mod sfw;
 
 use crate::Datum;
 
 // pub use self::count::Count;
-pub use self::concat::Concat;
 pub use self::filter::{Filter, Predicate};
 pub use self::join::Join;
 pub use self::sfw::MultiwayJoin;
-// pub use self::project::Project;
 pub use self::map::Map;
 
 /// A type that can be rendered as a collection.
@@ -46,12 +42,10 @@ pub trait Render : Sized {
 pub enum Plan<V: Datum> {
     /// Map
     Map(Map<V>),
-    // /// Projection / Permutation
-    // Project(Project<V>),
     /// Distinct
     Distinct(Box<Plan<V>>),
     /// Concat
-    Concat(Concat<V>),
+    Concat(Vec<Plan<V>>),
     /// Consolidate
     Consolidate(Box<Plan<V>>),
     /// Equijoin
@@ -82,11 +76,11 @@ impl<V: ExchangeData+Hash+Datum> Plan<V> {
     }
     /// Merges two collections.
     pub fn concat(self, other: Self) -> Self {
-        Plan::Concat(Concat { plans: vec![self, other] } )
+        Plan::Concat(vec![self, other])
     }
     /// Merges multiple collections.
     pub fn concatenate(plans: Vec<Self>) -> Self {
-        Plan::Concat(Concat { plans } )
+        Plan::Concat(plans)
     }
     /// Merges multiple collections.
     pub fn consolidate(self) -> Self {
@@ -175,7 +169,21 @@ impl<V: ExchangeData+Hash+Datum> Render for Plan<V> {
                 output.as_collection(|k,&()| k.clone())
 
             },
-            Plan::Concat(concat) => concat.render(scope, arrangements),
+            Plan::Concat(concat) => {
+
+                use timely::dataflow::operators::Concatenate;
+                use differential_dataflow::AsCollection;
+
+                let plans =
+                concat
+                    .iter()
+                    .map(|plan| plan.render(scope, arrangements).inner)
+                    .collect::<Vec<_>>();
+
+                scope
+                    .concatenate(plans)
+                    .as_collection()
+            }
             Plan::Consolidate(consolidate) => {
                 if let Some(mut trace) = arrangements.get_unkeyed(&self) {
                     trace.import(scope).as_collection(|k,&()| k.clone())

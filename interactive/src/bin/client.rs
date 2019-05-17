@@ -25,8 +25,7 @@ fn main() {
             .join(Plan::source("Edges"), vec![(0, 0)])
             .project(vec![1])
             .inspect("one-hop")
-            .into_rule("One-hop")
-    );
+            .into_rule("One-hop"));
 
     session.issue(Command::AdvanceTime(Duration::from_secs(1)));
     session.issue(Command::UpdateInput("Nodes".to_string(), vec![(vec![Value::Usize(0)], Duration::from_secs(1), 1)]));
@@ -55,8 +54,7 @@ fn main() {
             .join(Plan::source("Edges"), vec![(0, 0)])
             .project(vec![1])
             .inspect("ten-hop")
-            .into_rule("Ten-hop")
-        );
+            .into_rule("Ten-hop"));
 
     session.issue(Command::AdvanceTime(Duration::from_secs(3)));
     session.issue(Command::Shutdown);

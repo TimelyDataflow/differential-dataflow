@@ -18,31 +18,29 @@ fn main() {
     ));
 
     session.issue(
-    Plan::source("logs/remote/timely/operates")
-        .inspect("operates")
-        .into_rule("operates")
-        );
+        Plan::source("logs/remote/timely/operates")
+            .inspect("operates")
+            .into_rule("operates"));
 
     session.issue(
-    Plan::source("logs/remote/timely/shutdown")
-        .inspect("shutdown")
-        .into_rule("shutdown")
-        );
+        Plan::source("logs/remote/timely/shutdown")
+            .inspect("shutdown")
+            .into_rule("shutdown"));
 
-    // Plan::source("logs/remote/timely/channels")
-    //     .inspect("channels")
-    //     .into_rule("channels")
-    //     );
+    // session.issue(
+    //     Plan::source("logs/remote/timely/channels")
+    //         .inspect("channels")
+    //         .into_rule("channels"));
 
-    // Plan::source("logs/remote/timely/schedule")
-    //     .inspect("schedule")
-    //     .into_rule("schedule")
-    //     );
+    // session.issue(
+    //     Plan::source("logs/remote/timely/schedule")
+    //         .inspect("schedule")
+    //         .into_rule("schedule"));
 
-    // Plan::source("logs/remote/timely/messages")
-    //     .inspect("messages")
-    //     .into_rule("messages")
-    //     );
+    // session.issue(
+    //     Plan::source("logs/remote/timely/messages")
+    //         .inspect("messages")
+    //         .into_rule("messages"));
 
     session.issue(Command::Shutdown);
 }

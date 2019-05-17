@@ -15,107 +15,104 @@ fn main() {
 
     // Determine errors in the xy plane.
     session.issue(
-    Plan::source("XYZ")
-        .project(vec![0,1])
-        .distinct()
-        .negate()
-        .concat(Plan::source("XYGoal"))
-        .consolidate()
-        // .inspect("xy error")
-        .into_rule("XYErrors")
-        );
+        Plan::source("XYZ")
+            .project(vec![0,1])
+            .distinct()
+            .negate()
+            .concat(Plan::source("XYGoal"))
+            .consolidate()
+            // .inspect("xy error")
+            .into_rule("XYErrors"));
 
     // Determine errors in the xy plane.
     session.issue(
-    Plan::source("XYZ")
-        .project(vec![0,2])
-        .distinct()
-        .negate()
-        .concat(Plan::source("XZGoal"))
-        .consolidate()
-        // .inspect("xz error")
-        .into_rule("XZErrors")
-        );
+        Plan::source("XYZ")
+            .project(vec![0,2])
+            .distinct()
+            .negate()
+            .concat(Plan::source("XZGoal"))
+            .consolidate()
+            // .inspect("xz error")
+            .into_rule("XZErrors"));
 
     session.issue(Command::AdvanceTime(Duration::from_secs(1)));
 
     session.issue(
-    Command::UpdateInput(
-        "XYGoal".to_string(),
-        vec![
-            (vec![Value::Usize(0), Value::Usize(0)], Duration::from_secs(1), 1),
-            (vec![Value::Usize(0), Value::Usize(1)], Duration::from_secs(1), 1),
-            (vec![Value::Usize(0), Value::Usize(3)], Duration::from_secs(1), 1),
-            (vec![Value::Usize(0), Value::Usize(4)], Duration::from_secs(1), 1),
-            (vec![Value::Usize(1), Value::Usize(1)], Duration::from_secs(1), 1),
-            (vec![Value::Usize(1), Value::Usize(3)], Duration::from_secs(1), 1),
-            (vec![Value::Usize(2), Value::Usize(1)], Duration::from_secs(1), 1),
-            (vec![Value::Usize(2), Value::Usize(2)], Duration::from_secs(1), 1),
-            (vec![Value::Usize(3), Value::Usize(2)], Duration::from_secs(1), 1),
-            (vec![Value::Usize(3), Value::Usize(3)], Duration::from_secs(1), 1),
-            (vec![Value::Usize(3), Value::Usize(4)], Duration::from_secs(1), 1),
-            (vec![Value::Usize(4), Value::Usize(0)], Duration::from_secs(1), 1),
-            (vec![Value::Usize(4), Value::Usize(1)], Duration::from_secs(1), 1),
-            (vec![Value::Usize(4), Value::Usize(2)], Duration::from_secs(1), 1),
-        ],
-    ));
+        Command::UpdateInput(
+            "XYGoal".to_string(),
+            vec![
+                (vec![Value::Usize(0), Value::Usize(0)], Duration::from_secs(1), 1),
+                (vec![Value::Usize(0), Value::Usize(1)], Duration::from_secs(1), 1),
+                (vec![Value::Usize(0), Value::Usize(3)], Duration::from_secs(1), 1),
+                (vec![Value::Usize(0), Value::Usize(4)], Duration::from_secs(1), 1),
+                (vec![Value::Usize(1), Value::Usize(1)], Duration::from_secs(1), 1),
+                (vec![Value::Usize(1), Value::Usize(3)], Duration::from_secs(1), 1),
+                (vec![Value::Usize(2), Value::Usize(1)], Duration::from_secs(1), 1),
+                (vec![Value::Usize(2), Value::Usize(2)], Duration::from_secs(1), 1),
+                (vec![Value::Usize(3), Value::Usize(2)], Duration::from_secs(1), 1),
+                (vec![Value::Usize(3), Value::Usize(3)], Duration::from_secs(1), 1),
+                (vec![Value::Usize(3), Value::Usize(4)], Duration::from_secs(1), 1),
+                (vec![Value::Usize(4), Value::Usize(0)], Duration::from_secs(1), 1),
+                (vec![Value::Usize(4), Value::Usize(1)], Duration::from_secs(1), 1),
+                (vec![Value::Usize(4), Value::Usize(2)], Duration::from_secs(1), 1),
+            ],
+        ));
 
     session.issue(
-    Command::UpdateInput(
-        "XZGoal".to_string(),
-        vec![
-            (vec![Value::Usize(0), Value::Usize(2)], Duration::from_secs(1), 1),
-            (vec![Value::Usize(0), Value::Usize(3)], Duration::from_secs(1), 1),
-            (vec![Value::Usize(0), Value::Usize(4)], Duration::from_secs(1), 1),
-            (vec![Value::Usize(1), Value::Usize(2)], Duration::from_secs(1), 1),
-            (vec![Value::Usize(1), Value::Usize(4)], Duration::from_secs(1), 1),
-            (vec![Value::Usize(2), Value::Usize(1)], Duration::from_secs(1), 1),
-            (vec![Value::Usize(2), Value::Usize(2)], Duration::from_secs(1), 1),
-            (vec![Value::Usize(2), Value::Usize(3)], Duration::from_secs(1), 1),
-            (vec![Value::Usize(3), Value::Usize(0)], Duration::from_secs(1), 1),
-            (vec![Value::Usize(3), Value::Usize(1)], Duration::from_secs(1), 1),
-            (vec![Value::Usize(3), Value::Usize(3)], Duration::from_secs(1), 1),
-            (vec![Value::Usize(3), Value::Usize(4)], Duration::from_secs(1), 1),
-            (vec![Value::Usize(4), Value::Usize(1)], Duration::from_secs(1), 1),
-            (vec![Value::Usize(4), Value::Usize(4)], Duration::from_secs(1), 1),
-        ],
-    ));
+        Command::UpdateInput(
+            "XZGoal".to_string(),
+            vec![
+                (vec![Value::Usize(0), Value::Usize(2)], Duration::from_secs(1), 1),
+                (vec![Value::Usize(0), Value::Usize(3)], Duration::from_secs(1), 1),
+                (vec![Value::Usize(0), Value::Usize(4)], Duration::from_secs(1), 1),
+                (vec![Value::Usize(1), Value::Usize(2)], Duration::from_secs(1), 1),
+                (vec![Value::Usize(1), Value::Usize(4)], Duration::from_secs(1), 1),
+                (vec![Value::Usize(2), Value::Usize(1)], Duration::from_secs(1), 1),
+                (vec![Value::Usize(2), Value::Usize(2)], Duration::from_secs(1), 1),
+                (vec![Value::Usize(2), Value::Usize(3)], Duration::from_secs(1), 1),
+                (vec![Value::Usize(3), Value::Usize(0)], Duration::from_secs(1), 1),
+                (vec![Value::Usize(3), Value::Usize(1)], Duration::from_secs(1), 1),
+                (vec![Value::Usize(3), Value::Usize(3)], Duration::from_secs(1), 1),
+                (vec![Value::Usize(3), Value::Usize(4)], Duration::from_secs(1), 1),
+                (vec![Value::Usize(4), Value::Usize(1)], Duration::from_secs(1), 1),
+                (vec![Value::Usize(4), Value::Usize(4)], Duration::from_secs(1), 1),
+            ],
+        ));
 
     // Determine errors in the xy plane.
     session.issue(
-    Plan::source("XYErrors")
-        .distinct()
-        .project(vec![])
-        .concat(Plan::source("XZErrors").distinct().project(vec![]))
-        .consolidate()
-        .inspect("error")
-        .into_rule("Errors")
-        );
+        Plan::source("XYErrors")
+            .distinct()
+            .project(vec![])
+            .concat(Plan::source("XZErrors").distinct().project(vec![]))
+            .consolidate()
+            .inspect("error")
+            .into_rule("Errors"));
 
     session.issue(Command::AdvanceTime(Duration::from_secs(2)));
 
     session.issue(
-    Command::UpdateInput(
-        "XYZ".to_string(),
-        vec![
-            (vec![Value::Usize(0), Value::Usize(0), Value::Usize(2)], Duration::from_secs(2), 1),
-            (vec![Value::Usize(0), Value::Usize(1), Value::Usize(3)], Duration::from_secs(2), 1),
-            (vec![Value::Usize(0), Value::Usize(3), Value::Usize(4)], Duration::from_secs(2), 1),
-            (vec![Value::Usize(0), Value::Usize(4), Value::Usize(4)], Duration::from_secs(2), 1),
-            (vec![Value::Usize(1), Value::Usize(1), Value::Usize(2)], Duration::from_secs(2), 1),
-            (vec![Value::Usize(1), Value::Usize(3), Value::Usize(4)], Duration::from_secs(2), 1),
-            (vec![Value::Usize(2), Value::Usize(1), Value::Usize(1)], Duration::from_secs(2), 1),
-            (vec![Value::Usize(2), Value::Usize(2), Value::Usize(2)], Duration::from_secs(2), 1),
-            (vec![Value::Usize(2), Value::Usize(2), Value::Usize(3)], Duration::from_secs(2), 1),
-            (vec![Value::Usize(3), Value::Usize(2), Value::Usize(0)], Duration::from_secs(2), 1),
-            (vec![Value::Usize(3), Value::Usize(3), Value::Usize(1)], Duration::from_secs(2), 1),
-            (vec![Value::Usize(3), Value::Usize(4), Value::Usize(3)], Duration::from_secs(2), 1),
-            (vec![Value::Usize(3), Value::Usize(4), Value::Usize(4)], Duration::from_secs(2), 1),
-            (vec![Value::Usize(4), Value::Usize(0), Value::Usize(1)], Duration::from_secs(2), 1),
-            (vec![Value::Usize(4), Value::Usize(1), Value::Usize(4)], Duration::from_secs(2), 1),
-            (vec![Value::Usize(4), Value::Usize(2), Value::Usize(4)], Duration::from_secs(2), 1),
-        ],
-    ));
+        Command::UpdateInput(
+            "XYZ".to_string(),
+            vec![
+                (vec![Value::Usize(0), Value::Usize(0), Value::Usize(2)], Duration::from_secs(2), 1),
+                (vec![Value::Usize(0), Value::Usize(1), Value::Usize(3)], Duration::from_secs(2), 1),
+                (vec![Value::Usize(0), Value::Usize(3), Value::Usize(4)], Duration::from_secs(2), 1),
+                (vec![Value::Usize(0), Value::Usize(4), Value::Usize(4)], Duration::from_secs(2), 1),
+                (vec![Value::Usize(1), Value::Usize(1), Value::Usize(2)], Duration::from_secs(2), 1),
+                (vec![Value::Usize(1), Value::Usize(3), Value::Usize(4)], Duration::from_secs(2), 1),
+                (vec![Value::Usize(2), Value::Usize(1), Value::Usize(1)], Duration::from_secs(2), 1),
+                (vec![Value::Usize(2), Value::Usize(2), Value::Usize(2)], Duration::from_secs(2), 1),
+                (vec![Value::Usize(2), Value::Usize(2), Value::Usize(3)], Duration::from_secs(2), 1),
+                (vec![Value::Usize(3), Value::Usize(2), Value::Usize(0)], Duration::from_secs(2), 1),
+                (vec![Value::Usize(3), Value::Usize(3), Value::Usize(1)], Duration::from_secs(2), 1),
+                (vec![Value::Usize(3), Value::Usize(4), Value::Usize(3)], Duration::from_secs(2), 1),
+                (vec![Value::Usize(3), Value::Usize(4), Value::Usize(4)], Duration::from_secs(2), 1),
+                (vec![Value::Usize(4), Value::Usize(0), Value::Usize(1)], Duration::from_secs(2), 1),
+                (vec![Value::Usize(4), Value::Usize(1), Value::Usize(4)], Duration::from_secs(2), 1),
+                (vec![Value::Usize(4), Value::Usize(2), Value::Usize(4)], Duration::from_secs(2), 1),
+            ],
+        ));
 
     session.issue(Command::AdvanceTime(Duration::from_secs(2)));
     session.issue(Command::Shutdown);

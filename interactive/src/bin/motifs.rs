@@ -26,20 +26,19 @@ fn main() {
     }
 
     session.issue(
-    Plan::multiway_join(
-        vec![Plan::source("Edges"), Plan::source("Edges"), Plan::source("Edges")],
-        vec![
-            vec![(0,1), (1,0)], // b == b
-            vec![(0,0), (0,2)], // a == a
-            vec![(1,1), (1,2)], // c == c
-        ],
-        vec![(0,0), (1,0), (1,1)],
-    )
+        Plan::multiway_join(
+            vec![Plan::source("Edges"), Plan::source("Edges"), Plan::source("Edges")],
+            vec![
+                vec![(0,1), (1,0)], // b == b
+                vec![(0,0), (0,2)], // a == a
+                vec![(1,1), (1,2)], // c == c
+            ],
+            vec![(0,0), (1,0), (1,1)],
+        )
         .project(vec![])
         .consolidate()
         .inspect("triangles")
-        .into_rule("triangles")
-        );
+        .into_rule("triangles"));
 
 
     for node_0 in (nodes / 2) .. nodes {
@@ -53,28 +52,27 @@ fn main() {
     }
 
     session.issue(
-    Plan::multiway_join(
-        vec![
-            Plan::source("Edges"),  // R0(a,b)
-            Plan::source("Edges"),  // R1(a,c)
-            Plan::source("Edges"),  // R2(a,d)
-            Plan::source("Edges"),  // R3(b,c)
-            Plan::source("Edges"),  // R4(b,d)
-            Plan::source("Edges"),  // R5(c,d)
-        ],
-        vec![
-            vec![(0,0), (0,1), (0,2)], // a
-            vec![(1,0), (0,3), (0,4)], // b
-            vec![(1,1), (1,3), (0,5)], // c
-            vec![(1,2), (1,4), (1,5)], // d
-        ],
-        vec![(0,0), (1,0), (1,1), (1,2)],
-    )
+        Plan::multiway_join(
+            vec![
+                Plan::source("Edges"),  // R0(a,b)
+                Plan::source("Edges"),  // R1(a,c)
+                Plan::source("Edges"),  // R2(a,d)
+                Plan::source("Edges"),  // R3(b,c)
+                Plan::source("Edges"),  // R4(b,d)
+                Plan::source("Edges"),  // R5(c,d)
+            ],
+            vec![
+                vec![(0,0), (0,1), (0,2)], // a
+                vec![(1,0), (0,3), (0,4)], // b
+                vec![(1,1), (1,3), (0,5)], // c
+                vec![(1,2), (1,4), (1,5)], // d
+            ],
+            vec![(0,0), (1,0), (1,1), (1,2)],
+        )
         .project(vec![])
         .consolidate()
         .inspect("4cliques")
-        .into_rule("4cliques")
-        );
+        .into_rule("4cliques"));
 
     session.issue(Command::Shutdown);
 }
