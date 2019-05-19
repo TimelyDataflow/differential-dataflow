@@ -188,10 +188,12 @@ impl<V: ExchangeData+Hash+Datum> TraceManager<V> {
         let frontier = &[time.clone()];
         for trace in self.inputs.values_mut() {
             trace.advance_by(frontier);
+            trace.distinguish_since(frontier);
         }
         for map in self.arrangements.values_mut() {
             for trace in map.values_mut() {
-                trace.advance_by(frontier)
+                trace.advance_by(frontier);
+                trace.distinguish_since(frontier);
             }
         }
     }
@@ -207,7 +209,6 @@ impl<V: ExchangeData+Hash+Datum> TraceManager<V> {
     pub fn set_unkeyed(&mut self, plan: &Plan<V>, handle: &KeysOnlyHandle<V>) {
         use differential_dataflow::trace::TraceReader;
         let mut handle = handle.clone();
-        handle.distinguish_since(&[]);
         self.inputs
             .insert(plan.clone(), handle);
     }
@@ -223,7 +224,6 @@ impl<V: ExchangeData+Hash+Datum> TraceManager<V> {
     pub fn set_keyed(&mut self, plan: &Plan<V>, keys: &[usize], handle: &KeysValsHandle<V>) {
         use differential_dataflow::trace::TraceReader;
         let mut handle = handle.clone();
-        handle.distinguish_since(&[]);
         self.arrangements
             .entry(plan.clone())
             .or_insert(HashMap::new())
