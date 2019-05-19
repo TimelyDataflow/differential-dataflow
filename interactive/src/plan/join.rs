@@ -30,7 +30,9 @@ impl<V: ExchangeData+Hash+Datum> Render for Join<V> {
     fn render<S: Scope<Timestamp = Time>>(
         &self,
         scope: &mut S,
-        arrangements: &mut TraceManager<V>) -> Collection<S, Vec<Self::Value>, Diff>
+        collections: &mut std::collections::HashMap<Plan<Self::Value>, Collection<S, Vec<Self::Value>, Diff>>,
+        arrangements: &mut TraceManager<Self::Value>,
+    ) -> Collection<S, Vec<Self::Value>, Diff>
     {
         use differential_dataflow::operators::arrange::ArrangeByKey;
 
@@ -44,7 +46,7 @@ impl<V: ExchangeData+Hash+Datum> Render for Join<V> {
             let keys = keys1.clone();
             let arrangement =
             self.plan1
-                .render(scope, arrangements)
+                .render(scope, collections, arrangements)
                 .map(move |tuple|
                     (
                         // TODO: Re-use `tuple` for values.
@@ -73,7 +75,7 @@ impl<V: ExchangeData+Hash+Datum> Render for Join<V> {
             let keys = keys2.clone();
             let arrangement =
             self.plan2
-                .render(scope, arrangements)
+                .render(scope, collections, arrangements)
                 .map(move |tuple|
                     (
                         // TODO: Re-use `tuple` for values.

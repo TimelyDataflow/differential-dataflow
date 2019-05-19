@@ -207,10 +207,8 @@ impl<V: ExchangeData+Hash+Datum> TraceManager<V> {
 
     /// Installs an unkeyed arrangement for a specified plan.
     pub fn set_unkeyed(&mut self, plan: &Plan<V>, handle: &KeysOnlyHandle<V>) {
-        use differential_dataflow::trace::TraceReader;
-        let mut handle = handle.clone();
         self.inputs
-            .insert(plan.clone(), handle);
+            .insert(plan.clone(), handle.clone());
     }
 
     /// Recover an arrangement by plan and keys, if it is cached.
@@ -222,12 +220,10 @@ impl<V: ExchangeData+Hash+Datum> TraceManager<V> {
 
     /// Installs a keyed arrangement for a specified plan and sequence of keys.
     pub fn set_keyed(&mut self, plan: &Plan<V>, keys: &[usize], handle: &KeysValsHandle<V>) {
-        use differential_dataflow::trace::TraceReader;
-        let mut handle = handle.clone();
         self.arrangements
             .entry(plan.clone())
             .or_insert(HashMap::new())
-            .insert(keys.to_vec(), handle);
+            .insert(keys.to_vec(), handle.clone());
     }
 
 }

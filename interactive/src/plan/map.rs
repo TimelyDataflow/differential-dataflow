@@ -27,13 +27,15 @@ impl<V: ExchangeData+Hash+Datum> Render for Map<V> {
     fn render<S: Scope<Timestamp = Time>>(
         &self,
         scope: &mut S,
-        arrangements: &mut TraceManager<V>) -> Collection<S, Vec<Self::Value>, Diff>
+        collections: &mut std::collections::HashMap<Plan<Self::Value>, Collection<S, Vec<Self::Value>, Diff>>,
+        arrangements: &mut TraceManager<Self::Value>,
+    ) -> Collection<S, Vec<Self::Value>, Diff>
     {
         let expressions = self.expressions.clone();
 
         // TODO: re-use `tuple` allocation.
         self.plan
-            .render(scope, arrangements)
+            .render(scope, collections, arrangements)
             .map(move |tuple|
                 expressions
                     .iter()

@@ -53,15 +53,31 @@ where
 
             Command::Query(query) => {
 
+                // Query construction requires a bit of guff to allow us to
+                // re-use as much stuff as possible. It *seems* we need to
+                // be able to cache and re-use:
+                //
+                //   1. Collections.
+                //   2. Arrangements.
+                //   3. External traces.
+                //
+                // Although (2.) and (3.) look pretty similar, arrangements
+                // provide better progress tracking information than imported
+                // traces, and the types present in imported traces are not
+                // the same as those in arrangements.
+
                 worker.dataflow(|scope| {
 
                     use timely::dataflow::operators::Probe;
                     use differential_dataflow::operators::arrange::ArrangeBySelf;
                     use plan::Render;
 
+                    let mut collections = std::collections::HashMap::new();
+                    // let mut arrangements = std::collections::HashMap::new();
+
                     for Rule { name, plan } in query.rules.into_iter() {
                         let collection =
-                        plan.render(scope, &mut manager.traces)
+                        plan.render(scope, &mut collections, &mut manager.traces)
                             .arrange_by_self();
 
                         collection.stream.probe_with(&mut manager.probe);

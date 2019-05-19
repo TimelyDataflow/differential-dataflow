@@ -70,7 +70,9 @@ impl<V: ExchangeData+Hash+Datum> Render for MultiwayJoin<V> {
     fn render<S: Scope<Timestamp = Time>>(
         &self,
         scope: &mut S,
-        arrangements: &mut TraceManager<V>) -> Collection<S, Vec<Self::Value>, Diff>
+        collections: &mut std::collections::HashMap<Plan<Self::Value>, Collection<S, Vec<Self::Value>, Diff>>,
+        arrangements: &mut TraceManager<Self::Value>,
+    ) -> Collection<S, Vec<Self::Value>, Diff>
     {
         // The idea here is the following:
         //
@@ -130,7 +132,7 @@ impl<V: ExchangeData+Hash+Datum> Render for MultiwayJoin<V> {
             // Ensure the plan is rendered and cached.
             if arrangements.get_unkeyed(&plan).is_none() {
                 // println!("\tbuilding/caching source plan");
-                let collection = plan.render(scope, arrangements);
+                let collection = plan.render(scope, collections, arrangements);
                 arrangements.set_unkeyed(plan, &collection.arrange_by_self().trace);
             }
             else {
@@ -201,7 +203,7 @@ impl<V: ExchangeData+Hash+Datum> Render for MultiwayJoin<V> {
                     // println!("\tbuilding key: {:?}, plan: {:?}", keys, plan);
                     let keys_clone = keys.clone();
                     let arrangement =
-                    plan.render(scope, arrangements)
+                    plan.render(scope, collections, arrangements)
                         .map(move |tuple| (keys_clone.iter().map(|&i| tuple[i].clone()).collect::<Vec<_>>(), tuple))
                         .arrange_by_key();
 

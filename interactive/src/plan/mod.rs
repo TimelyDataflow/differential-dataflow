@@ -34,7 +34,9 @@ pub trait Render : Sized {
     fn render<S: Scope<Timestamp = Time>>(
         &self,
         scope: &mut S,
-        arrangements: &mut TraceManager<Self::Value>) -> Collection<S, Vec<Self::Value>, Diff>;
+        collections: &mut std::collections::HashMap<Plan<Self::Value>, Collection<S, Vec<Self::Value>, Diff>>,
+        arrangements: &mut TraceManager<Self::Value>,
+    ) -> Collection<S, Vec<Self::Value>, Diff>;
 }
 
 /// Possible query plan types.
@@ -142,75 +144,85 @@ impl<V: ExchangeData+Hash+Datum> Render for Plan<V> {
     fn render<S: Scope<Timestamp = Time>>(
         &self,
         scope: &mut S,
-        arrangements: &mut TraceManager<Self::Value>) -> Collection<S, Vec<Self::Value>, Diff>
+        collections: &mut std::collections::HashMap<Plan<Self::Value>, Collection<S, Vec<Self::Value>, Diff>>,
+        arrangements: &mut TraceManager<Self::Value>,
+    ) -> Collection<S, Vec<Self::Value>, Diff>
     {
-        match self {
-            // Plan::Project(projection) => projection.render(scope, arrangements),
-            Plan::Map(expressions) => expressions.render(scope, arrangements),
-            Plan::Distinct(distinct) => {
+        if collections.get(self).is_none() {
 
-                use differential_dataflow::operators::reduce::ReduceCore;
-                use differential_dataflow::operators::arrange::ArrangeBySelf;
-                use differential_dataflow::trace::implementations::ord::OrdKeySpine;
+            let collection =
+            match self {
+                // Plan::Project(projection) => projection.render(scope, collections, arrangements),
+                Plan::Map(expressions) => expressions.render(scope, collections, arrangements),
+                Plan::Distinct(distinct) => {
 
-                let input =
-                if let Some(mut trace) = arrangements.get_unkeyed(&self) {
-                    trace.import(scope)
+                    use differential_dataflow::operators::reduce::ReduceCore;
+                    use differential_dataflow::operators::arrange::ArrangeBySelf;
+                    use differential_dataflow::trace::implementations::ord::OrdKeySpine;
+
+                    let input =
+                    if let Some(mut trace) = arrangements.get_unkeyed(&self) {
+                        trace.import(scope)
+                    }
+                    else {
+                        let input_arrangement = distinct.render(scope, collections, arrangements).arrange_by_self();
+                        arrangements.set_unkeyed(&distinct, &input_arrangement.trace);
+                        input_arrangement
+                    };
+
+                    let output = input.reduce_abelian::<_,OrdKeySpine<_,_,_>>(move |_,_,t| t.push(((), 1)));
+
+                    arrangements.set_unkeyed(&self, &output.trace);
+                    output.as_collection(|k,&()| k.clone())
+
+                },
+                Plan::Concat(concat) => {
+
+                    use timely::dataflow::operators::Concatenate;
+                    use differential_dataflow::AsCollection;
+
+                    let plans =
+                    concat
+                        .iter()
+                        .map(|plan| plan.render(scope, collections, arrangements).inner)
+                        .collect::<Vec<_>>();
+
+                    scope
+                        .concatenate(plans)
+                        .as_collection()
                 }
-                else {
-                    let input_arrangement = distinct.render(scope, arrangements).arrange_by_self();
-                    arrangements.set_unkeyed(&distinct, &input_arrangement.trace);
-                    input_arrangement
-                };
+                Plan::Consolidate(consolidate) => {
+                    if let Some(mut trace) = arrangements.get_unkeyed(&self) {
+                        trace.import(scope).as_collection(|k,&()| k.clone())
+                    }
+                    else {
+                        use differential_dataflow::operators::Consolidate;
+                        consolidate.render(scope, collections, arrangements).consolidate()
+                    }
+                },
+                Plan::Join(join) => join.render(scope, collections, arrangements),
+                Plan::MultiwayJoin(join) => join.render(scope, collections, arrangements),
+                Plan::Negate(negate) => {
+                    negate.render(scope, collections, arrangements).negate()
+                },
+                Plan::Filter(filter) => filter.render(scope, collections, arrangements),
+                Plan::Source(source) => {
+                    arrangements
+                        .get_unkeyed(self)
+                        .expect(&format!("Failed to find source collection: {:?}", source))
+                        .import(scope)
+                        .as_collection(|k,()| k.to_vec())
+                },
+                Plan::Inspect(text, plan) => {
+                    let text = text.clone();
+                    plan.render(scope, collections, arrangements)
+                        .inspect(move |x| println!("{}\t{:?}", text, x))
+                },
+            };
 
-                let output = input.reduce_abelian::<_,OrdKeySpine<_,_,_>>(move |_,_,t| t.push(((), 1)));
-
-                arrangements.set_unkeyed(&self, &output.trace);
-                output.as_collection(|k,&()| k.clone())
-
-            },
-            Plan::Concat(concat) => {
-
-                use timely::dataflow::operators::Concatenate;
-                use differential_dataflow::AsCollection;
-
-                let plans =
-                concat
-                    .iter()
-                    .map(|plan| plan.render(scope, arrangements).inner)
-                    .collect::<Vec<_>>();
-
-                scope
-                    .concatenate(plans)
-                    .as_collection()
-            }
-            Plan::Consolidate(consolidate) => {
-                if let Some(mut trace) = arrangements.get_unkeyed(&self) {
-                    trace.import(scope).as_collection(|k,&()| k.clone())
-                }
-                else {
-                    use differential_dataflow::operators::Consolidate;
-                    consolidate.render(scope, arrangements).consolidate()
-                }
-            },
-            Plan::Join(join) => join.render(scope, arrangements),
-            Plan::MultiwayJoin(join) => join.render(scope, arrangements),
-            Plan::Negate(negate) => {
-                negate.render(scope, arrangements).negate()
-            },
-            Plan::Filter(filter) => filter.render(scope, arrangements),
-            Plan::Source(source) => {
-                arrangements
-                    .get_unkeyed(self)
-                    .expect(&format!("Failed to find source collection: {:?}", source))
-                    .import(scope)
-                    .as_collection(|k,()| k.to_vec())
-            },
-            Plan::Inspect(text, plan) => {
-                let text = text.clone();
-                plan.render(scope, arrangements)
-                    .inspect(move |x| println!("{}\t{:?}", text, x))
-            },
+            collections.insert(self.clone(), collection);
         }
+
+        collections.get(self).expect("We just installed this").clone()
     }
 }
