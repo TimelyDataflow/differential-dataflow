@@ -31,19 +31,31 @@ where
     F: Fn(&P)->Tr::Key+Clone+'static,
     P: ExchangeData,
 {
-    propose_then(
+    crate::operators::lookup_then(
         prefixes,
         arrangement,
         move |p: &P, k: &mut Tr::Key| { *k = key_selector(p); },
         |prefix, value| (prefix.clone(), value.clone())
     )
 }
+
+// pub fn lookup_map<G, D, R, Tr, F, DOut, ROut, S>(
+//     prefixes: &Collection<G, D, R>,
+//     arrangement: Arranged<G, Tr>,
+//     key_selector: F,
+//     output_func: S,
+// ) -> Collection<G, O, Tr::R>
+// where
+//     F: FnMut(&D, &mut Tr::Key),
+//     S: FnMut(&D, &Tr::Val, &Tr::R) -> (DOut, ROut),
+//     ...
+
 /// Proposes extensions to a stream of prefixes.
 ///
 /// This method takes a stream of prefixes and for each determines a
 /// key with `key_selector` and then proposes all pair af the prefix
 /// and values associated with the key in `arrangement`.
-pub fn propose_then<G, Tr, F, P, O, S>(
+pub fn lookup_then<G, Tr, F, P, O, S>(
     prefixes: &Collection<G, P, Tr::R>,
     arrangement: Arranged<G, Tr>,
     key_selector: F,

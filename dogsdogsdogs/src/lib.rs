@@ -8,7 +8,6 @@ extern crate differential_dataflow;
 extern crate serde_derive;
 extern crate serde;
 
-use std::rc::Rc;
 use std::hash::Hash;
 use std::ops::Mul;
 
@@ -23,11 +22,8 @@ use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::TraceAgent;
 use differential_dataflow::operators::arrange::{ArrangeBySelf, ArrangeByKey};
-use differential_dataflow::trace::implementations::spine_fueled::Spine;
-use differential_dataflow::trace::implementations::ord::{OrdValBatch, OrdKeyBatch};
 
 pub mod altneu;
-
 pub mod operators;
 
 /// A type capable of extending a stream of prefixes.
@@ -108,10 +104,9 @@ impl<G: Scope, R: Monoid+Mul<Output = R>, P, E> ValidateExtensionMethod<G, R, P,
 }
 
 // These are all defined here so that users can be assured a common layout.
-type TraceValSpine<K,V,T,R> = Spine<K, V, T, R, Rc<OrdValBatch<K,V,T,R>>>;
-type TraceValHandle<K,V,T,R> = TraceAgent<TraceValSpine<K,V,T,R>>;
-type TraceKeySpine<K,T,R> = Spine<K, (), T, R, Rc<OrdKeyBatch<K,T,R>>>;
-type TraceKeyHandle<K,T,R> = TraceAgent<TraceKeySpine<K,T,R>>;
+use differential_dataflow::trace::implementations::ord::{OrdKeySpine, OrdValSpine};
+type TraceValHandle<K,V,T,R> = TraceAgent<OrdValSpine<K,V,T,R>>;
+type TraceKeyHandle<K,T,R> = TraceAgent<OrdKeySpine<K,T,R>>;
 
 pub struct CollectionIndex<K, V, T, R>
 where
