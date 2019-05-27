@@ -1,4 +1,3 @@
-use std::rc::Rc;
 use std::collections::HashMap;
 use std::ops::Mul;
 
@@ -24,7 +23,7 @@ use differential_dataflow::trace::{Cursor, TraceReader, BatchReader};
 pub fn count<G, Tr, R, F, P>(
     prefixes: &Collection<G, (P, usize, usize), R>,
     arrangement: Arranged<G, Tr>,
-    key_selector: Rc<F>,
+    key_selector: F,
     index: usize,
 ) -> Collection<G, (P, usize, usize), R>
 where
@@ -35,7 +34,7 @@ where
     Tr::Batch: BatchReader<Tr::Key, (), Tr::Time, Tr::R>,
     Tr::Cursor: Cursor<Tr::Key, (), Tr::Time, Tr::R>,
     R: Monoid+Mul<Output = R>+ExchangeData,
-    F: Fn(&P)->Tr::Key+'static,
+    F: Fn(&P)->Tr::Key+Clone+'static,
     P: ExchangeData,
 {
     // This method takes a stream of `(prefix, time, diff)` changes, and we want to produce the corresponding

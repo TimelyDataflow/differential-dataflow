@@ -172,11 +172,11 @@ where
             validate_trace: validate,
         }
     }
-    pub fn extend_using<P, F: Fn(&P)->K>(&self, logic: F) -> CollectionExtender<K, V, T, R, P, F> {
+    pub fn extend_using<P, F: Fn(&P)->K+Clone>(&self, logic: F) -> CollectionExtender<K, V, T, R, P, F> {
         CollectionExtender {
             phantom: std::marker::PhantomData,
             indices: self.clone(),
-            key_selector: Rc::new(logic),
+            key_selector: logic,
         }
     }
 }
@@ -187,22 +187,22 @@ where
     V: ExchangeData,
     T: Lattice+ExchangeData+Default,
     R: Monoid+Mul<Output = R>+ExchangeData,
-    F: Fn(&P)->K,
+    F: Fn(&P)->K+Clone,
 {
     phantom: std::marker::PhantomData<P>,
     indices: CollectionIndex<K, V, T, R>,
-    key_selector: Rc<F>,
+    key_selector: F,
 }
 
 impl<G, K, V, R, P, F> PrefixExtender<G, R> for CollectionExtender<K, V, G::Timestamp, R, P, F>
 where
     G: Scope,
-    K: ExchangeData+Hash,
-    V: ExchangeData+Hash,
+    K: ExchangeData+Hash+Default,
+    V: ExchangeData+Hash+Default,
     P: ExchangeData,
     G::Timestamp: Lattice+ExchangeData,
     R: Monoid+Mul<Output = R>+ExchangeData,
-    F: Fn(&P)->K+'static,
+    F: Fn(&P)->K+Clone+'static,
 {
     type Prefix = P;
     type Extension = V;
