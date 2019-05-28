@@ -31,11 +31,11 @@ where
     F: Fn(&P)->Tr::Key+Clone+'static,
     P: ExchangeData,
 {
-    crate::operators::lookup_then(
+    crate::operators::lookup_map(
         prefixes,
         arrangement,
         move |p: &P, k: &mut Tr::Key| { *k = key_selector(p); },
-        |prefix, value| (prefix.clone(), value.clone())
+        |prefix, diff, value, sum| ((prefix.clone(), value.clone()), diff.clone() * sum.clone())
     )
 }
 
@@ -55,12 +55,12 @@ where
 /// This method takes a stream of prefixes and for each determines a
 /// key with `key_selector` and then proposes all pair af the prefix
 /// and values associated with the key in `arrangement`.
-pub fn lookup_then<G, Tr, F, P, O, S>(
-    prefixes: &Collection<G, P, Tr::R>,
+pub fn lookup_map<G, D, R, Tr, F, DOut, ROut, S>(
+    prefixes: &Collection<G, D, R>,
     arrangement: Arranged<G, Tr>,
     key_selector: F,
     output_func: S,
-) -> Collection<G, O, Tr::R>
+) -> Collection<G, DOut, ROut>
 where
     G: Scope,
     G::Timestamp: Lattice,
@@ -69,11 +69,13 @@ where
     Tr::Val: Clone,
     Tr::Batch: BatchReader<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
     Tr::Cursor: Cursor<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
-    Tr::R: Monoid+Mul<Output = Tr::R>+ExchangeData,
-    F: Fn(&P, &mut Tr::Key)+Clone+'static,
-    P: ExchangeData,
-    O: Clone+'static,
-    S: Fn(&P, &Tr::Val)->O+'static,
+    Tr::R: Monoid+ExchangeData,
+    F: Fn(&D, &mut Tr::Key)+Clone+'static,
+    D: ExchangeData,
+    R: ExchangeData+Monoid,
+    DOut: Clone+'static,
+    ROut: Monoid,
+    S: Fn(&D, &R, &Tr::Val, &Tr::R)->(DOut, ROut)+'static,
 {
     let propose_stream = arrangement.stream;
     let mut propose_trace = Some(arrangement.trace);
@@ -86,7 +88,7 @@ where
     let mut buffer2 = Vec::new();
 
     let mut key: Tr::Key = Default::default();
-    let exchange = Exchange::new(move |update: &(P,G::Timestamp,Tr::R)| {
+    let exchange = Exchange::new(move |update: &(D,G::Timestamp,R)| {
         logic1(&update.0, &mut key);
         key.hashed().as_u64()
     });
@@ -141,15 +143,17 @@ where
                                 while let Some(value) = cursor.get_val(&storage) {
                                     let mut count = Tr::R::zero();
                                     cursor.map_times(&storage, |t, d| if t.less_equal(time) { count += d; });
-                                    let prod = count * diff.clone();
-                                    if !prod.is_zero() {
-                                        session.give((output_func(&prefix, &value), time.clone(), prod));
+                                    if !count.is_zero() {
+                                        let (dout, rout) = output_func(prefix, diff, value, &count);
+                                        if !rout.is_zero() {
+                                            session.give((dout, time.clone(), rout));
+                                        }
                                     }
                                     cursor.step_val(&storage);
                                 }
                                 cursor.rewind_vals(&storage);
                             }
-                            *diff = Tr::R::zero();
+                            *diff = R::zero();
                         }
                     }
 

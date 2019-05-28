@@ -31,10 +31,10 @@ where
     F: Fn(&P)->K+Clone+'static,
     P: ExchangeData,
 {
-    crate::operators::lookup_then(
+    crate::operators::lookup_map(
         extensions,
         arrangement,
         move |(pre,val),key| { *key = (key_selector(pre), val.clone()); },
-        |(pre,val),&()| (pre.clone(), val.clone()),
+        |(pre,val),r,&(),_| ((pre.clone(), val.clone()), r.clone()),
     )
 }
