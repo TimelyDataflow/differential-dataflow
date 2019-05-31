@@ -111,6 +111,24 @@ where
         }
     }
 
+    /// Brings an arranged collection into a nested region.
+    ///
+    /// This method only applies to *regions*, which are subscopes with the same timestamp
+    /// as their containing scope. In this case, the trace type does not need to change.
+    pub fn enter_region<'a>(&self, child: &Child<'a, G, G::Timestamp>)
+        -> Arranged<Child<'a, G, G::Timestamp>, Tr>
+        where
+            Tr::Key: 'static,
+            Tr::Val: 'static,
+            Tr::R: 'static,
+            G::Timestamp: Clone+Default+'static,
+    {
+        Arranged {
+            stream: self.stream.enter(child),
+            trace: self.trace.clone(),
+        }
+    }
+
     /// Brings an arranged collection into a nested scope.
     ///
     /// This method produces a proxy trace handle that uses the same backing data, but acts as if the timestamps
@@ -385,6 +403,26 @@ where
                 }
             }
         })
+    }
+}
+
+impl<'a, G: Scope, Tr> Arranged<Child<'a, G, G::Timestamp>, Tr>
+where
+    G::Timestamp: Lattice+Ord,
+    Tr: TraceReader<Time=G::Timestamp> + Clone,
+    Tr::Batch: BatchReader<Tr::Key, Tr::Val, G::Timestamp, Tr::R>,
+    Tr::Cursor: Cursor<Tr::Key, Tr::Val, G::Timestamp, Tr::R>,
+{
+    /// Brings an arranged collection out of a nested region.
+    ///
+    /// This method only applies to *regions*, which are subscopes with the same timestamp
+    /// as their containing scope. In this case, the trace type does not need to change.
+    pub fn leave_region(&self) -> Arranged<G, Tr> {
+        use timely::dataflow::operators::Leave;
+        Arranged {
+            stream: self.stream.leave(),
+            trace: self.trace.clone(),
+        }
     }
 }
 
