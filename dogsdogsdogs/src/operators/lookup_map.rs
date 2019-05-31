@@ -58,7 +58,7 @@ where
 
     let mut key1: Tr::Key = Default::default();
     let mut key2: Tr::Key = Default::default();
-    prefixes.inner.binary_frontier(&propose_stream, exchange, Pipeline, "Propose", move |_,_| move |input1, input2, output| {
+    prefixes.inner.binary_frontier(&propose_stream, exchange, Pipeline, "LookupMap", move |_,_| move |input1, input2, output| {
 
         // drain the first input, stashing requests.
         input1.for_each(|capability, data| {
