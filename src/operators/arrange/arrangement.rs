@@ -413,7 +413,7 @@ where
     Tr::Batch: BatchReader<Tr::Key, Tr::Val, G::Timestamp, Tr::R>,
     Tr::Cursor: Cursor<Tr::Key, Tr::Val, G::Timestamp, Tr::R>,
 {
-    /// Brings an arranged collection into a nested region.
+    /// Brings an arranged collection out of a nested region.
     ///
     /// This method only applies to *regions*, which are subscopes with the same timestamp
     /// as their containing scope. In this case, the trace type does not need to change.
