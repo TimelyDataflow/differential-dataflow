@@ -149,6 +149,19 @@ impl<R> IntoIterator for DiffVector<R> {
     }
 }
 
+impl<R> std::ops::Deref for DiffVector<R> {
+	type Target = [R];
+	fn deref(&self) -> &Self::Target {
+		&self.buffer[..]
+	}
+}
+
+impl<R> std::ops::DerefMut for DiffVector<R> {
+	fn deref_mut(&mut self) -> &mut Self::Target {
+		&mut self.buffer[..]
+	}
+}
+
 impl<R: Monoid> Monoid for DiffVector<R> {
 	#[inline] fn is_zero(&self) -> bool {
 		self.buffer.iter().all(|x| x.is_zero())
