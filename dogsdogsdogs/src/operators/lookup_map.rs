@@ -100,12 +100,13 @@ where
                     for &mut (ref prefix, ref time, ref mut diff) in prefixes.iter_mut() {
                         if !input2.frontier.less_equal(time) {
                             logic2(prefix, &mut key1);
-                            // let key = logic2(prefix);
                             cursor.seek_key(&storage, &key1);
                             if cursor.get_key(&storage) == Some(&key1) {
                                 while let Some(value) = cursor.get_val(&storage) {
                                     let mut count = Tr::R::zero();
-                                    cursor.map_times(&storage, |t, d| if t.less_equal(time) { count += d; });
+                                    cursor.map_times(&storage, |t, d| {
+                                        if t.less_equal(time) { count += d; }
+                                    });
                                     if !count.is_zero() {
                                         let (dout, rout) = output_func(prefix, diff, value, &count);
                                         if !rout.is_zero() {
@@ -128,8 +129,15 @@ where
         // drop fully processed capabilities.
         stash.retain(|_,prefixes| !prefixes.is_empty());
 
-        // advance the consolidation frontier (TODO: wierd lexicographic times!)
-        propose_trace.as_mut().map(|trace| trace.advance_by(&input1.frontier().frontier()));
+        // The consolidation frontier depends on both input1 and stash.
+        let mut frontier = timely::progress::frontier::Antichain::new();
+        for time in input1.frontier().frontier().to_vec() {
+            frontier.insert(time);
+        }
+        for key in stash.keys() {
+            frontier.insert(key.time().clone());
+        }
+        propose_trace.as_mut().map(|trace| trace.advance_by(frontier.elements()));
 
         if input1.frontier().is_empty() && stash.is_empty() {
             propose_trace = None;
