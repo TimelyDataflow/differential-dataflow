@@ -343,6 +343,25 @@ impl<T> ShutdownButton<T> {
         *self.reference.borrow_mut() = None;
         self.activator.activate();
     }
+    /// Hotwires the button to one that is pressed if dropped.
+    pub fn press_on_drop(self) -> ShutdownDeadmans<T> {
+        ShutdownDeadmans {
+            button: self
+        }
+    }
+}
+
+/// A deadman's switch version of a shutdown button.
+///
+/// This type hosts a shutdown button and will press it when dropped.
+pub struct ShutdownDeadmans<T> {
+    button: ShutdownButton<T>,
+}
+
+impl<T> Drop for ShutdownDeadmans<T> {
+    fn drop(&mut self) {
+        self.button.press();
+    }
 }
 
 impl<Tr> Clone for TraceAgent<Tr>
