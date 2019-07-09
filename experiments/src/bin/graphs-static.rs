@@ -114,7 +114,7 @@ fn main() {
 
 use differential_dataflow::operators::arrange::TraceAgent;
 
-type TraceHandle = TraceAgent<Node, Node, (), Diff, GraphTrace>;
+type TraceHandle = TraceAgent<GraphTrace>;
 
 fn reach<G: Scope<Timestamp = ()>> (
     graph: &mut TraceHandle,
@@ -253,7 +253,7 @@ fn _connected_components_odd<G: Scope<Timestamp = ()>>(
 
         let labels =
         proposals
-            .reduce_abelian::<_,_,Spine<Node, Node, _, Diff, Rc<OrdValBatch<Node, Node, _, Diff>>>,_>(|_, s, t| { t.push((*s[0].0, 1)); });
+            .reduce_abelian::<_,Spine<Node, Node, _, Diff, Rc<OrdValBatch<Node, Node, _, Diff>>>>(|_, s, t| { t.push((*s[0].0, 1)); });
 
         let f_prop = labels.join_core(&forward, |_k,l,d| Some((*d,*l)));
         let r_prop = labels.join_core(&reverse, |_k,l,d| Some((*d,*l)));
