@@ -284,7 +284,7 @@ where
 
         let stream = {
 
-            let mut shutdown_button_ref = &mut shutdown_button;
+            let shutdown_button_ref = &mut shutdown_button;
             source(scope, name, move |capability, info| {
 
                 let capabilities = Rc::new(RefCell::new(Some(CapabilitySet::new())));
