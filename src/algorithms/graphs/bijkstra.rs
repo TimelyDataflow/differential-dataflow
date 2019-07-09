@@ -47,11 +47,11 @@ where
         let reached =
         forward
             .join_map(&reverse, |_, (src,d1), (dst,d2)| ((src.clone(), dst.clone()), *d1 + *d2))
-            .reduce(|_key, s, t| t.push((s[0].0.clone(), 1)));
+            .reduce(|_key, s, t| t.push((s[0].0.clone(), 1)))
+            .semijoin(&goals);
 
         let active =
         reached
-            .semijoin(&goals)
             .negate()
             .map(|(srcdst,_)| srcdst)
             .concat(&goals)
