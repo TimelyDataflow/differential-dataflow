@@ -47,6 +47,10 @@ impl Monoid for isize {
 	#[inline] fn zero() -> Self { 0 }
 }
 
+impl Monoid for i128 {
+	#[inline] fn zero() -> Self { 0 }
+}
+
 impl Monoid for i64 {
 	#[inline] fn zero() -> Self { 0 }
 }
@@ -55,6 +59,15 @@ impl Monoid for i32 {
 	#[inline] fn zero() -> Self { 0 }
 }
 
+impl Monoid for i16 {
+	#[inline] fn zero() -> Self { 0 }
+}
+
+impl Monoid for i8 {
+	#[inline] fn zero() -> Self { 0 }
+}
+
+ 
 /// The difference defined by a pair of difference elements.
 ///
 /// This type is essentially a "pair", though in Rust the tuple types do not derive the numeric
