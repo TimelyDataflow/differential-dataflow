@@ -105,6 +105,7 @@ pub struct Spine<K, V, T: Lattice+Ord, R: Semigroup, B: Batch<K, V, T, R>> {
     pending: Vec<B>,                       // Batches at times in advance of `frontier`.
     upper: Vec<T>,
     effort: usize,
+    activator: Option<timely::scheduling::activate::Activator>,
 }
 
 impl<K, V, T, R, B> TraceReader for Spine<K, V, T, R, B>
@@ -235,8 +236,16 @@ where
     B: Batch<K, V, T, R>+Clone+'static,
 {
 
-    fn new(info: ::timely::dataflow::operators::generic::OperatorInfo, logging: Option<::logging::Logger>) -> Self {
-        Self::with_effort(4, info, logging)
+    fn new(
+        info: ::timely::dataflow::operators::generic::OperatorInfo, 
+        logging: Option<::logging::Logger>,
+        activator: Option<timely::scheduling::activate::Activator>,
+    ) -> Self {
+        Self::with_effort(4, info, logging, activator)
+    }
+
+    fn exert(&mut self, batch_size: usize, batch_index: usize) {
+        self.work_for(batch_size, batch_index);
     }
 
     // Ideally, this method acts as insertion of `batch`, even if we are not yet able to begin
@@ -282,7 +291,12 @@ where
     /// This trace will merge batches progressively, with each inserted batch applying a multiple
     /// of the batch's length in effort to each merge. The `effort` parameter is that multiplier.
     /// This value should be at least one for the merging to happen; a value of zero is not helpful.
-    pub fn with_effort(mut effort: usize, operator: OperatorInfo, logger: Option<::logging::Logger>) -> Self {
+    pub fn with_effort(
+        mut effort: usize, 
+        operator: OperatorInfo, 
+        logger: Option<::logging::Logger>,
+        activator: Option<timely::scheduling::activate::Activator>,
+    ) -> Self {
 
         // Zero effort is .. not smart.
         if effort == 0 { effort = 1; }
@@ -297,6 +311,7 @@ where
             pending: Vec::new(),
             upper: vec![Default::default()],
             effort,
+            activator,
         }
     }
 
@@ -400,80 +415,116 @@ where
                 self.merging[batch_index] = Some(MergeState::Complete(batch));
             }
 
-            // Step 3: Perform `size` work on each in-progress merge, from large to small.
-            //         For non-merges, accumulate fuel, as we may need to apply it to merges
-            //         that result at us.
-            let mut fuel = 0;
-            for position in (batch_index .. self.merging.len()).rev() {
+            self.work_for(batch_size, batch_index);
+        }
+    }
 
-                // We add fuel for any merge that may lead to this location.
-                fuel += (2 * batch_size).saturating_mul(self.effort);
+    /// Performs merging work commensurate with `batch_size` records.
+    ///
+    /// This method is public so that it can be invoked by external parties.
+    /// In principle, this work might be better suited to a thread pool with 
+    /// more insight into available cycles. As long as the method is used as
+    /// above, the merging work needs to happen immediately (or thereabouts)
+    /// to avoid falling behind on merges.
+    pub fn work_for(&mut self, batch_size: usize, batch_index: usize) {
 
-                // We now move to the right, merging until we stop merging or run out of fuel.
-                let mut new_position = position;
-                while self.merging[new_position].as_ref().map(|x| !x.is_complete()).unwrap_or(false) && fuel > 0 {
-                    if let Some(mut batch) = self.merging[new_position].take() {
+        // Step 3: Perform `size` work on each in-progress merge, from large to small.
+        //         For non-merges, accumulate fuel, as we may need to apply it to merges
+        //         that result at us.
+        let mut fuel = 0;
+        for position in (batch_index .. self.merging.len()).rev() {
 
-                        // Apply work with accumulated fuel.
-                        batch = batch.work(&mut fuel, &mut self.logger, self.operator.global_id, position);
+            // We add fuel for any merge that may lead to this location.
+            fuel += (2 * batch_size).saturating_mul(self.effort);
 
-                        // If we have a complete batch, and it wants to be in the next slot ...
-                        if batch.is_complete() && batch.len() >= (1 << new_position) {//.next_power_of_two().trailing_zeros() as usize > new_position {
+            // We now move to the right, merging until we stop merging or run out of fuel.
+            let mut new_position = position;
+            while self.merging[new_position].as_ref().map(|x| !x.is_complete()).unwrap_or(false) && fuel > 0 {
+                if let Some(mut batch) = self.merging[new_position].take() {
 
-                            new_position += 1;
-                            if self.merging.len() <= new_position { self.merging.push(None); }
+                    // Apply work with accumulated fuel.
+                    batch = batch.work(&mut fuel, &mut self.logger, self.operator.global_id, position);
 
-                            // If the next slot is actually occupied, must start a merge.
-                            if let Some(mut batch2) = self.merging[new_position].take() {
-                                if !batch2.is_complete() {
-                                    let mut temp_fuel = usize::max_value();
-                                    batch2 = batch2.work(&mut temp_fuel, &mut self.logger, self.operator.global_id, position);
-                                    self.logger.as_ref().map(|l| l.log(
-                                        ::logging::MergeShortfall {
-                                            operator: self.operator.global_id,
-                                            scale: new_position,
-                                            shortfall: usize::max_value() - temp_fuel,
-                                        }
-                                    ));
-                                }
-                                let batch1 = batch.complete(&mut self.logger, self.operator.global_id, position);
-                                let batch2 = batch2.complete(&mut self.logger, self.operator.global_id, position);
-                                // if this is the last position, engage compaction.
-                                let frontier = if new_position+1 == self.merging.len() { Some(self.advance_frontier.clone()) } else { None };
+                    // If we have a complete batch, and it wants to be in the next slot ...
+                    if batch.is_complete() && batch.len() >= (1 << new_position) {//.next_power_of_two().trailing_zeros() as usize > new_position {
+
+                        new_position += 1;
+                        if self.merging.len() <= new_position { self.merging.push(None); }
+
+                        // If the next slot is actually occupied, must start a merge.
+                        if let Some(mut batch2) = self.merging[new_position].take() {
+                            if !batch2.is_complete() {
+                                let mut temp_fuel = usize::max_value();
+                                batch2 = batch2.work(&mut temp_fuel, &mut self.logger, self.operator.global_id, position);
                                 self.logger.as_ref().map(|l| l.log(
-                                    ::logging::MergeEvent {
+                                    ::logging::MergeShortfall {
                                         operator: self.operator.global_id,
-                                        scale: position,
-                                        length1: batch1.len(),
-                                        length2: batch2.len(),
-                                        complete: None,
+                                        scale: new_position,
+                                        shortfall: usize::max_value() - temp_fuel,
                                     }
                                 ));
-                                self.merging[new_position] = Some(MergeState::begin_merge(batch2, batch1, frontier));
                             }
-                            else {
-                                self.merging[new_position] = Some(batch);
-                            }
+                            let batch1 = batch.complete(&mut self.logger, self.operator.global_id, position);
+                            let batch2 = batch2.complete(&mut self.logger, self.operator.global_id, position);
+                            // if this is the last position, engage compaction.
+                            let frontier = if new_position+1 == self.merging.len() { Some(self.advance_frontier.clone()) } else { None };
+                            self.logger.as_ref().map(|l| l.log(
+                                ::logging::MergeEvent {
+                                    operator: self.operator.global_id,
+                                    scale: position,
+                                    length1: batch1.len(),
+                                    length2: batch2.len(),
+                                    complete: None,
+                                }
+                            ));
+                            self.merging[new_position] = Some(MergeState::begin_merge(batch2, batch1, frontier));
                         }
                         else {
                             self.merging[new_position] = Some(batch);
                         }
                     }
                     else {
-                        // We can't be here. The while condition ensures that an entry exists.
+                        self.merging[new_position] = Some(batch);
                     }
                 }
+                else {
+                    // We can't be here. The while condition ensures that an entry exists.
+                }
             }
+        }
 
-            // Step 4: Consider migrating complete batches to lower bins, if appropriate.
-            for index in (1 .. self.merging.len()).rev() {
-                if self.merging[index].as_ref().map(|x| x.is_complete() && x.len() < (1 << (index-1))).unwrap_or(false) {
-                    if self.merging[index-1].is_none() {
-                        self.merging[index-1] = self.merging[index].take();
-                    }
+        // Step 4: Consider migrating complete batches to lower bins, if appropriate.
+        for index in (1 .. self.merging.len()).rev() {
+            if self.merging[index].as_ref().map(|x| x.is_complete() && x.len() < (1 << (index-1))).unwrap_or(false) {
+                if self.merging[index-1].is_none() {
+                    self.merging[index-1] = self.merging[index].take();
                 }
             }
-            while self.merging.last().map(|x| x.is_none()) == Some(true) { self.merging.pop(); }
+        }
+        while self.merging.last().map(|x| x.is_none()) == Some(true) { self.merging.pop(); }
+
+        if let Some(activator) = self.activator.as_mut() {
+            let mut should_activate = false;
+            let mut status = String::new();
+            for batch in self.merging.iter() {
+                if let Some(batch) = batch {
+                    if !batch.is_complete() {
+                        should_activate = true;
+                        status.push('M');
+                    }
+                    else {
+                        status.push('C');
+                    }
+
+                }
+                else {
+                    status.push('E');
+                }
+            }
+            println!("activator present; should_activate: {:?},\t{:?}", should_activate, status);
+            if should_activate {
+                activator.activate();
+            }
         }
     }
 }
