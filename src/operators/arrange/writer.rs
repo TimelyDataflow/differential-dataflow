@@ -48,6 +48,13 @@ where
         Self { upper, trace, queues }
     }
 
+    /// Exerts merge effort, even without additional updates.
+    pub fn exert(&mut self) {
+        if let Some(trace) = self.trace.upgrade() {
+            trace.borrow_mut().trace.exert(1024, 0);
+        }
+    }
+
     /// Advances the trace by `batch`.
     ///
     /// The `hint` argument is either `None` in the case of an empty batch,
