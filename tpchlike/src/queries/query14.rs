@@ -7,7 +7,7 @@ use differential_dataflow::operators::arrange::ArrangeBySelf;
 use differential_dataflow::difference::DiffPair;
 use differential_dataflow::lattice::Lattice;
 
-use ::Collections;
+use {Arrangements, Experiment, Collections};
 use ::types::create_date;
 
 // -- $ID$
@@ -35,17 +35,17 @@ fn starts_with(source: &[u8], query: &[u8]) -> bool {
     source.len() >= query.len() && &source[..query.len()] == query
 }
 
-pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp> 
+pub fn query<G: Scope>(collections: &mut Collections<G>, probe: &mut ProbeHandle<G::Timestamp>)
 where G::Timestamp: Lattice+TotalOrder+Ord {
 
-    let lineitems = 
+    let lineitems =
     collections
         .lineitems()
         .explode(|l|
             if create_date(1995,9,1) <= l.ship_date && l.ship_date < create_date(1995,10,1) {
                 Some((l.part_key, (l.extended_price * (100 - l.discount) / 100) as isize ))
             }
-            else { None }            
+            else { None }
         )
         .arrange_by_self();
 
@@ -56,5 +56,31 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
         .join_core(&lineitems, |&_part_key, _, _| Some(()))
         .count_total()
         // .inspect(|x| println!("{:?}", x))
-        .probe()
+        .probe_with(probe);
+}
+
+pub fn query_arranged<G: Scope<Timestamp=usize>>(
+    scope: &mut G,
+    probe: &mut ProbeHandle<usize>,
+    experiment: &mut Experiment,
+    arrangements: &mut Arrangements,
+)
+where
+    G::Timestamp: Lattice+TotalOrder+Ord
+{
+    let arrangements = arrangements.in_scope(scope, experiment);
+
+    experiment
+        .lineitem(scope)
+        .explode(|l|
+            if create_date(1995,9,1) <= l.ship_date && l.ship_date < create_date(1995,10,1) {
+                Some((l.part_key, (l.extended_price * (100 - l.discount) / 100) as isize ))
+            }
+            else { None }
+        )
+        .arrange_by_self()
+        .join_core(&arrangements.part, |_pk,&(),p| Some(DiffPair::new(1, if starts_with(&p.typ.as_bytes(), b"PROMO") { 1 } else { 0 })))
+        .explode(|dp| Some(((),dp)))
+        .count_total()
+        .probe_with(probe);
 }

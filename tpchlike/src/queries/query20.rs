@@ -7,7 +7,7 @@ use differential_dataflow::operators::reduce::ReduceCore;
 use differential_dataflow::trace::implementations::ord::OrdValSpine as DefaultValTrace;
 use differential_dataflow::lattice::Lattice;
 
-use ::Collections;
+use {Arrangements, Experiment, Collections};
 use ::types::create_date;
 
 // -- $ID$
@@ -59,7 +59,7 @@ fn starts_with(source: &[u8], query: &[u8]) -> bool {
     source.len() >= query.len() && &source[..query.len()] == query
 }
 
-pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp>
+pub fn query<G: Scope>(collections: &mut Collections<G>, probe: &mut ProbeHandle<G::Timestamp>)
 where G::Timestamp: Lattice+TotalOrder+Ord {
 
     println!("TODO: Q20 uses a `reduce_abelian` to get an arrangement, but could use `count_total`");
@@ -77,7 +77,7 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
         )
         .semijoin(&partkeys)
         .explode(|l| Some(((((l.0 as u64) << 32) + (l.1).0 as u64, ()), (l.1).1 as isize)))
-        .reduce_abelian::<_,_,DefaultValTrace<_,_,_,_>,_>(|_k,s,t| t.push((s[0].1, 1)));
+        .reduce_abelian::<_,DefaultValTrace<_,_,_,_>>(|_k,s,t| t.push((s[0].1, 1)));
 
     let suppliers =
     collections
@@ -102,5 +102,39 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
         .semijoin(&suppliers)
         .map(|(_, (name, addr, nation))| (nation, (name, addr)))
         .join(&nations)
-        .probe()
+        .probe_with(probe);
+}
+
+pub fn query_arranged<G: Scope<Timestamp=usize>>(
+    scope: &mut G,
+    probe: &mut ProbeHandle<usize>,
+    experiment: &mut Experiment,
+    arrangements: &mut Arrangements,
+)
+where
+    G::Timestamp: Lattice+TotalOrder+Ord
+{
+    let arrangements = arrangements.in_scope(scope, experiment);
+
+    experiment
+        .lineitem(scope)
+        .explode(|l|
+            if l.ship_date >= create_date(1994, 1, 1) && l.ship_date < create_date(1995, 1, 1) {
+                Some(((l.part_key, l.supp_key), l.quantity as isize))
+            }
+            else { None }
+        )
+        .join_core(&arrangements.part, |&pk,&sk,p|
+            if p.name.as_bytes() == b"forest" { Some((pk,sk)) } else { None }
+        )
+        .count_total()
+        .join_core(&arrangements.partsupp, |&(_pk,sk),tot,ps| {
+            if (ps.availqty as isize) > tot / 2 { Some((sk, ())) } else { None }
+        })
+        .distinct_total()
+        .join_core(&arrangements.supplier, |_sk,&(),s| Some((s.nation_key, (s.name, s.address))))
+        .join_core(&arrangements.nation, |_nk,&(nm,ad),n|
+            if starts_with(&n.name, b"CANADA") { Some((nm,ad)) } else { None }
+        )
+        .probe_with(probe);
 }

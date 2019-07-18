@@ -6,7 +6,7 @@ use differential_dataflow::operators::*;
 use differential_dataflow::operators::ThresholdTotal;
 use differential_dataflow::lattice::Lattice;
 
-use ::Collections;
+use {Arrangements, Experiment, Collections};
 
 // -- $ID$
 // -- TPC-H/TPC-R Suppliers Who Kept Orders Waiting Query (Q21)
@@ -60,7 +60,7 @@ fn starts_with(source: &[u8], query: &[u8]) -> bool {
     source.len() >= query.len() && &source[..query.len()] == query
 }
 
-pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp>
+pub fn query<G: Scope>(collections: &mut Collections<G>, probe: &mut ProbeHandle<G::Timestamp>)
 where G::Timestamp: Lattice+TotalOrder+Ord {
 
     let orders =
@@ -100,5 +100,40 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
         .map(|(_, (name, nation))| (nation, name))
         .semijoin(&collections.nations().filter(|n| starts_with(&n.name, b"SAUDI ARABIA")).map(|n| n.nation_key))
         .count_total()
-        .probe()
+        .probe_with(probe);
+}
+pub fn query_arranged<G: Scope<Timestamp=usize>>(
+    scope: &mut G,
+    probe: &mut ProbeHandle<usize>,
+    experiment: &mut Experiment,
+    arrangements: &mut Arrangements,
+)
+where
+    G::Timestamp: Lattice+TotalOrder+Ord
+{
+    let arrangements = arrangements.in_scope(scope, experiment);
+
+    experiment
+        .lineitem(scope)
+        .map(|l| (l.order_key, (l.receipt_date > l.commit_date, l.supp_key)))
+        .reduce(|_ok,input,output| {
+
+            let late_supp = (input[0].0).1;
+            let only_late = input[1..].iter().all(|(x,_)| !x.0);
+            let other_supp = input[1..].iter().any(|(x,_)| x.1 != late_supp);
+
+            if only_late && other_supp {
+                output.push((late_supp, 1));
+            }
+
+        })
+        .join_core(&arrangements.order, |_ok,&sk,o| {
+            if starts_with(&o.order_status, b"F") { Some((sk, ())) } else { None }
+        })
+        .join_core(&arrangements.supplier, |_sk,&(),s| Some((s.nation_key, s.name)))
+        .join_core(&arrangements.nation, |_nk,&nm,n|
+            if starts_with(&n.name, b"SAUDI ARABIA") { Some(nm) } else { None }
+        )
+        .count_total()
+        .probe_with(probe);
 }

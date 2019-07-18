@@ -13,6 +13,9 @@ pub mod implementations;
 pub mod layers;
 pub mod wrappers;
 
+use timely::progress::Antichain;
+use timely::progress::Timestamp;
+
 use ::difference::Monoid;
 pub use self::cursor::Cursor;
 pub use self::description::Description;
@@ -37,16 +40,25 @@ pub use self::description::Description;
 /// This is a restricted interface to the more general `Trace` trait, which extends this trait with further methods
 /// to update the contents of the trace. These methods are used to examine the contents, and to update the reader's
 /// capabilities (which may release restrictions on the mutations to the underlying trace and cause work to happen).
-pub trait TraceReader<Key, Val, Time, R> {
+pub trait TraceReader {
+
+	/// Key by which updates are indexed.
+	type Key;
+	/// Values associated with keys.
+	type Val;
+	/// Timestamps associated with updates
+	type Time;
+	/// Associated update.
+	type R;
 
 	/// The type of an immutable collection of updates.
-	type Batch: BatchReader<Key, Val, Time, R>+Clone+'static;
+	type Batch: BatchReader<Self::Key, Self::Val, Self::Time, Self::R>+Clone+'static;
 
 	/// The type used to enumerate the collections contents.
-	type Cursor: Cursor<Key, Val, Time, R>;
+	type Cursor: Cursor<Self::Key, Self::Val, Self::Time, Self::R>;
 
 	/// Provides a cursor over updates contained in the trace.
-	fn cursor(&mut self) -> (Self::Cursor, <Self::Cursor as Cursor<Key, Val, Time, R>>::Storage) {
+	fn cursor(&mut self) -> (Self::Cursor, <Self::Cursor as Cursor<Self::Key, Self::Val, Self::Time, Self::R>>::Storage) {
 		if let Some(cursor) = self.cursor_through(&[]) {
 			cursor
 		}
@@ -62,7 +74,7 @@ pub trait TraceReader<Key, Val, Time, R> {
 	/// the trace, and (ii) the trace has not been advanced beyond `upper`. Practically, the implementation should
 	/// be expected to look for a "clean cut" using `upper`, and if it finds such a cut can return a cursor. This
 	/// should allow `upper` such as `&[]` as used by `self.cursor()`, though it is difficult to imagine other uses.
-	fn cursor_through(&mut self, upper: &[Time]) -> Option<(Self::Cursor, <Self::Cursor as Cursor<Key, Val, Time, R>>::Storage)>;
+	fn cursor_through(&mut self, upper: &[Self::Time]) -> Option<(Self::Cursor, <Self::Cursor as Cursor<Self::Key, Self::Val, Self::Time, Self::R>>::Storage)>;
 
 	/// Advances the frontier of times the collection must be correctly accumulable through.
 	///
@@ -70,14 +82,14 @@ pub trait TraceReader<Key, Val, Time, R> {
 	/// still compare equivalently to any times greater or equal to some element of `frontier`. Times not greater
 	/// or equal to some element of `frontier` may no longer correctly accumulate, so do not advance a trace unless
 	/// you are quite sure you no longer require the distinction.
-	fn advance_by(&mut self, frontier: &[Time]);
+	fn advance_by(&mut self, frontier: &[Self::Time]);
 
 	/// Reports the frontier from which all time comparisions should be accurate.
 	///
 	/// Times that are not greater or equal to some element of the advance frontier may accumulate inaccurately as
 	/// the trace may have lost the ability to distinguish between such times. Accumulations are only guaranteed to
 	/// be accurate from the frontier onwards.
-	fn advance_frontier(&mut self) -> &[Time];
+	fn advance_frontier(&mut self) -> &[Self::Time];
 
 	/// Advances the frontier that may be used in `cursor_through`.
 	///
@@ -87,7 +99,7 @@ pub trait TraceReader<Key, Val, Time, R> {
 	///
 	/// Calling `distinguish_since(&[])` indicates that all batches may be merged at any point, which essentially
 	/// disables the use of `cursor_through` with any parameter other than `&[]`, which is the behavior of `cursor`.
-	fn distinguish_since(&mut self, frontier: &[Time]);
+	fn distinguish_since(&mut self, frontier: &[Self::Time]);
 
 	/// Reports the frontier from which the collection may be subsetted.
 	///
@@ -95,14 +107,31 @@ pub trait TraceReader<Key, Val, Time, R> {
 	/// frontier, which ensures that operators can extract the subset of the trace at batch boundaries from this
 	/// frontier onward. These boundaries may be used in `cursor_through`, whereas boundaries not in advance of
 	/// this frontier are not guaranteed to return a cursor.
-	fn distinguish_frontier(&mut self) -> &[Time];
+	fn distinguish_frontier(&mut self) -> &[Self::Time];
 
-	/// Maps some logic across the batches the collection manages.
+	/// Maps logic across the non-empty sequence of batches in the trace.
 	///
 	/// This is currently used only to extract historical data to prime late-starting operators who want to reproduce
 	/// the stream of batches moving past the trace. It could also be a fine basis for a default implementation of the
 	/// cursor methods, as they (by default) just move through batches accumulating cursors into a cursor list.
 	fn map_batches<F: FnMut(&Self::Batch)>(&mut self, f: F);
+
+	/// Reads the upper frontier of committed times.
+	///
+	///
+	fn read_upper(&mut self, target: &mut Antichain<Self::Time>)
+	where
+		Self::Time: Timestamp,
+	{
+		target.clear();
+		target.insert(Default::default());
+		self.map_batches(|batch| {
+			target.clear();
+			for time in batch.upper().iter().cloned() {
+				target.insert(time);
+			}
+		});
+	}
 
 }
 
@@ -113,8 +142,8 @@ pub trait TraceReader<Key, Val, Time, R> {
 ///
 /// The trace must be constructable from, and navigable by the `Key`, `Val`, `Time` types, but does not need
 /// to return them.
-pub trait Trace<Key, Val, Time, R> : TraceReader<Key, Val, Time, R>
-where <Self as TraceReader<Key, Val, Time, R>>::Batch: Batch<Key, Val, Time, R> {
+pub trait Trace : TraceReader
+where <Self as TraceReader>::Batch: Batch<Self::Key, Self::Val, Self::Time, Self::R> {
 
 	/// Allocates a new empty trace.
 	fn new(info: ::timely::dataflow::operators::generic::OperatorInfo, logging: Option<::logging::Logger>) -> Self;
@@ -150,6 +179,8 @@ pub trait BatchReader<K, V, T, R> where Self: ::std::marker::Sized
 	fn cursor(&self) -> Self::Cursor;
 	/// The number of updates in the batch.
 	fn len(&self) -> usize;
+	/// True if the batch is empty.
+	fn is_empty(&self) -> bool { self.len() == 0 }
 	/// Describes the times of the updates in the batch.
 	fn description(&self) -> &Description<T>;
 
@@ -176,6 +207,10 @@ pub trait Batch<K, V, T, R> : BatchReader<K, V, T, R> where Self: ::std::marker:
 	fn begin_merge(&self, other: &Self, into: &mut Option<Self>) -> Self::Merger {
 		Self::Merger::new(self, other, into)
 	}
+	// ///
+	// fn empty(lower: &[T], upper: &[T], since: &[T]) -> Output {
+	// 	<Self::Builder>::new().done(lower, upper, since)
+	// }
 }
 
 /// Functionality for collecting and batching updates.
@@ -265,25 +300,25 @@ pub mod rc_blanket_impls {
 
 	    type Storage = Rc<B>;
 
-	    #[inline(always)] fn key_valid(&self, storage: &Self::Storage) -> bool { self.cursor.key_valid(storage) }
-	    #[inline(always)] fn val_valid(&self, storage: &Self::Storage) -> bool { self.cursor.val_valid(storage) }
+	    #[inline] fn key_valid(&self, storage: &Self::Storage) -> bool { self.cursor.key_valid(storage) }
+	    #[inline] fn val_valid(&self, storage: &Self::Storage) -> bool { self.cursor.val_valid(storage) }
 
-	    #[inline(always)] fn key<'a>(&self, storage: &'a Self::Storage) -> &'a K { self.cursor.key(storage) }
-	    #[inline(always)] fn val<'a>(&self, storage: &'a Self::Storage) -> &'a V { self.cursor.val(storage) }
+	    #[inline] fn key<'a>(&self, storage: &'a Self::Storage) -> &'a K { self.cursor.key(storage) }
+	    #[inline] fn val<'a>(&self, storage: &'a Self::Storage) -> &'a V { self.cursor.val(storage) }
 
-	    #[inline(always)]
+	    #[inline]
 	    fn map_times<L: FnMut(&T, &R)>(&mut self, storage: &Self::Storage, logic: L) {
 	    	self.cursor.map_times(storage, logic)
 	    }
 
-	    #[inline(always)] fn step_key(&mut self, storage: &Self::Storage) { self.cursor.step_key(storage) }
-	    #[inline(always)] fn seek_key(&mut self, storage: &Self::Storage, key: &K) { self.cursor.seek_key(storage, key) }
+	    #[inline] fn step_key(&mut self, storage: &Self::Storage) { self.cursor.step_key(storage) }
+	    #[inline] fn seek_key(&mut self, storage: &Self::Storage, key: &K) { self.cursor.seek_key(storage, key) }
 
-	    #[inline(always)] fn step_val(&mut self, storage: &Self::Storage) { self.cursor.step_val(storage) }
-	    #[inline(always)] fn seek_val(&mut self, storage: &Self::Storage, val: &V) { self.cursor.seek_val(storage, val) }
+	    #[inline] fn step_val(&mut self, storage: &Self::Storage) { self.cursor.step_val(storage) }
+	    #[inline] fn seek_val(&mut self, storage: &Self::Storage, val: &V) { self.cursor.seek_val(storage, val) }
 
-	    #[inline(always)] fn rewind_keys(&mut self, storage: &Self::Storage) { self.cursor.rewind_keys(storage) }
-	    #[inline(always)] fn rewind_vals(&mut self, storage: &Self::Storage) { self.cursor.rewind_vals(storage) }
+	    #[inline] fn rewind_keys(&mut self, storage: &Self::Storage) { self.cursor.rewind_keys(storage) }
+	    #[inline] fn rewind_vals(&mut self, storage: &Self::Storage) { self.cursor.rewind_vals(storage) }
 	}
 
 	/// An immutable collection of updates.
@@ -382,25 +417,25 @@ pub mod abomonated_blanket_impls {
 
 	    type Storage = Abomonated<B, Vec<u8>>;
 
-	    #[inline(always)] fn key_valid(&self, storage: &Self::Storage) -> bool { self.cursor.key_valid(storage) }
-	    #[inline(always)] fn val_valid(&self, storage: &Self::Storage) -> bool { self.cursor.val_valid(storage) }
+	    #[inline] fn key_valid(&self, storage: &Self::Storage) -> bool { self.cursor.key_valid(storage) }
+	    #[inline] fn val_valid(&self, storage: &Self::Storage) -> bool { self.cursor.val_valid(storage) }
 
-	    #[inline(always)] fn key<'a>(&self, storage: &'a Self::Storage) -> &'a K { self.cursor.key(storage) }
-	    #[inline(always)] fn val<'a>(&self, storage: &'a Self::Storage) -> &'a V { self.cursor.val(storage) }
+	    #[inline] fn key<'a>(&self, storage: &'a Self::Storage) -> &'a K { self.cursor.key(storage) }
+	    #[inline] fn val<'a>(&self, storage: &'a Self::Storage) -> &'a V { self.cursor.val(storage) }
 
-	    #[inline(always)]
+	    #[inline]
 	    fn map_times<L: FnMut(&T, &R)>(&mut self, storage: &Self::Storage, logic: L) {
 	    	self.cursor.map_times(storage, logic)
 	    }
 
-	    #[inline(always)] fn step_key(&mut self, storage: &Self::Storage) { self.cursor.step_key(storage) }
-	    #[inline(always)] fn seek_key(&mut self, storage: &Self::Storage, key: &K) { self.cursor.seek_key(storage, key) }
+	    #[inline] fn step_key(&mut self, storage: &Self::Storage) { self.cursor.step_key(storage) }
+	    #[inline] fn seek_key(&mut self, storage: &Self::Storage, key: &K) { self.cursor.seek_key(storage, key) }
 
-	    #[inline(always)] fn step_val(&mut self, storage: &Self::Storage) { self.cursor.step_val(storage) }
-	    #[inline(always)] fn seek_val(&mut self, storage: &Self::Storage, val: &V) { self.cursor.seek_val(storage, val) }
+	    #[inline] fn step_val(&mut self, storage: &Self::Storage) { self.cursor.step_val(storage) }
+	    #[inline] fn seek_val(&mut self, storage: &Self::Storage, val: &V) { self.cursor.seek_val(storage, val) }
 
-	    #[inline(always)] fn rewind_keys(&mut self, storage: &Self::Storage) { self.cursor.rewind_keys(storage) }
-	    #[inline(always)] fn rewind_vals(&mut self, storage: &Self::Storage) { self.cursor.rewind_vals(storage) }
+	    #[inline] fn rewind_keys(&mut self, storage: &Self::Storage) { self.cursor.rewind_keys(storage) }
+	    #[inline] fn rewind_vals(&mut self, storage: &Self::Storage) { self.cursor.rewind_vals(storage) }
 	}
 
 	/// An immutable collection of updates.

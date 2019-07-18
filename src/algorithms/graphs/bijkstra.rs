@@ -5,7 +5,7 @@ use std::hash::Hash;
 use timely::order::Product;
 use timely::dataflow::*;
 
-use ::{Collection, Data};
+use ::{Collection, ExchangeData};
 use ::operators::*;
 use ::lattice::Lattice;
 use ::operators::iterate::Variable;
@@ -24,7 +24,7 @@ pub fn bidijkstra<G, N>(edges: &Collection<G, (N,N)>, goals: &Collection<G, (N,N
 where
     G: Scope,
     G::Timestamp: Lattice+Ord,
-    N: Data+Hash,
+    N: ExchangeData+Hash,
 {
     edges.scope().iterative::<u64,_,_>(|inner| {
 
@@ -47,11 +47,11 @@ where
         let reached =
         forward
             .join_map(&reverse, |_, (src,d1), (dst,d2)| ((src.clone(), dst.clone()), *d1 + *d2))
-            .reduce(|_key, s, t| t.push((s[0].0.clone(), 1)));
+            .reduce(|_key, s, t| t.push((s[0].0.clone(), 1)))
+            .semijoin(&goals);
 
         let active =
         reached
-            .semijoin(&goals)
             .negate()
             .map(|(srcdst,_)| srcdst)
             .concat(&goals)

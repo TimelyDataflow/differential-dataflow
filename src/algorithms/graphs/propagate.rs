@@ -4,7 +4,7 @@ use std::hash::Hash;
 
 use timely::dataflow::*;
 
-use ::{Collection, Data};
+use ::{Collection, ExchangeData};
 use ::operators::*;
 use ::lattice::Lattice;
 
@@ -13,8 +13,8 @@ pub fn propagate<G, N, L>(edges: &Collection<G, (N,N)>, nodes: &Collection<G,(N,
 where
     G: Scope,
     G::Timestamp: Lattice+Ord,
-    N: Data+Hash,
-    L: Data,
+    N: ExchangeData+Hash,
+    L: ExchangeData,
 {
     nodes.filter(|_| false)
          .iterate(|inner| {
@@ -33,8 +33,8 @@ pub fn propagate_at<G, N, L, F>(edges: &Collection<G, (N,N)>, nodes: &Collection
 where
     G: Scope,
     G::Timestamp: Lattice+Ord,
-    N: Data+Hash,
-    L: Data,
+    N: ExchangeData+Hash,
+    L: ExchangeData,
     F: Fn(&L)->u64+'static,
 {
     nodes.filter(|_| false)

@@ -5,7 +5,7 @@ use timely::dataflow::operators::probe::Handle as ProbeHandle;
 use differential_dataflow::operators::*;
 use differential_dataflow::lattice::Lattice;
 
-use ::Collections;
+use {Arrangements, Experiment, Collections};
 
 // -- $ID$
 // -- TPC-H/TPC-R Large Volume Customer Query (Q18)
@@ -47,7 +47,7 @@ use ::Collections;
 //     o_orderdate;
 // :n 100
 
-pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp> 
+pub fn query<G: Scope>(collections: &mut Collections<G>, probe: &mut ProbeHandle<G::Timestamp>)
 where G::Timestamp: Lattice+TotalOrder+Ord {
 
     let orders =
@@ -62,5 +62,27 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
         .filter(|&(_key, cnt)| cnt > 300)
         .join_map(&orders, |&o_key, &quant, &(cust_key, date, price)| (cust_key, (o_key, date, price, quant)))
         .join(&collections.customers().map(|c| (c.cust_key, c.name)))
-        .probe()
+        .probe_with(probe);
+}
+
+pub fn query_arranged<G: Scope<Timestamp=usize>>(
+    scope: &mut G,
+    probe: &mut ProbeHandle<usize>,
+    experiment: &mut Experiment,
+    arrangements: &mut Arrangements,
+)
+where
+    G::Timestamp: Lattice+TotalOrder+Ord
+{
+    let arrangements = arrangements.in_scope(scope, experiment);
+
+    experiment
+        .lineitem(scope)
+        .explode(|l| Some((l.order_key, l.quantity as isize)))
+        .count_total()
+        .filter(|&(_key, cnt)| cnt > 300)
+        .join_core(&arrangements.order, |_ok,&cnt,o| Some((o.cust_key, (o.order_date, o.total_price, cnt))))
+        .join_core(&arrangements.customer, |&ck,&(od,tp,cnt),c| Some((ck,c.name,od,tp,cnt)))
+        .count_total()
+        .probe_with(probe);
 }

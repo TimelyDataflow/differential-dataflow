@@ -5,7 +5,7 @@ use std::hash::Hash;
 
 use timely::dataflow::*;
 
-use ::{Collection, Data};
+use ::{Collection, ExchangeData};
 use ::operators::*;
 use ::lattice::Lattice;
 
@@ -16,7 +16,7 @@ pub fn trim<G, N>(graph: &Collection<G, (N,N)>) -> Collection<G, (N,N)>
 where
     G: Scope,
     G::Timestamp: Lattice+Ord,
-    N: Data+Hash,
+    N: ExchangeData+Hash,
 {
     graph.iterate(|edges| {
         // keep edges from active edge destinations.
@@ -34,7 +34,7 @@ pub fn strongly_connected<G, N>(graph: &Collection<G, (N,N)>) -> Collection<G, (
 where
     G: Scope,
     G::Timestamp: Lattice+Ord,
-    N: Data+Hash,
+    N: ExchangeData+Hash,
 {
     graph.iterate(|inner| {
         let edges = graph.enter(&inner.scope());
@@ -48,7 +48,7 @@ fn trim_edges<G, N>(cycle: &Collection<G, (N,N)>, edges: &Collection<G, (N,N)>)
 where
     G: Scope,
     G::Timestamp: Lattice+Ord,
-    N: Data+Hash,
+    N: ExchangeData+Hash,
 {
     let nodes = edges.map_in_place(|x| x.0 = x.1.clone())
                      .consolidate();

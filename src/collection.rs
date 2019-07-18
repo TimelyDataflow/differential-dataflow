@@ -199,6 +199,41 @@ impl<G: Scope, D: Data, R: Monoid> Collection<G, D, R> where G::Timestamp: Data 
             .concat(&other.inner)
             .as_collection()
     }
+    /// Creates a new collection accumulating the contents of the two collections.
+    ///
+    /// Despite the name, differential dataflow collections are unordered. This method is so named because the
+    /// implementation is the concatenation of the stream of updates, but it corresponds to the addition of the
+    /// two collections.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// extern crate timely;
+    /// extern crate differential_dataflow;
+    ///
+    /// use differential_dataflow::input::Input;
+    ///
+    /// fn main() {
+    ///     ::timely::example(|scope| {
+    ///
+    ///         let data = scope.new_collection_from(1 .. 10).1;
+    ///
+    ///         let odds = data.filter(|x| x % 2 == 1);
+    ///         let evens = data.filter(|x| x % 2 == 0);
+    ///
+    ///         odds.concatenate(Some(evens))
+    ///             .assert_eq(&data);
+    ///     });
+    /// }
+    /// ```
+    pub fn concatenate<I>(&self, sources: I) -> Collection<G, D, R>
+    where
+        I: IntoIterator<Item=Collection<G, D, R>>
+    {
+        self.inner
+            .concatenate(sources.into_iter().map(|x| x.inner))
+            .as_collection()
+    }
     /// Replaces each record with another, with a new difference type.
     ///
     /// This method is most commonly used to take records containing aggregatable data (e.g. numbers to be summed)
@@ -442,7 +477,8 @@ impl<G: Scope, D: Data, R: Monoid> Collection<G, D, R> where G::Timestamp: Data 
     /// }
     /// ```
     pub fn assert_empty(&self)
-    where D: ::Data+Hashable,
+    where D: ::ExchangeData+Hashable,
+          R: ::ExchangeData+Hashable,
           G::Timestamp: Lattice+Ord,
     {
         use operators::consolidate::Consolidate;
@@ -561,7 +597,8 @@ impl<G: Scope, D: Data, R: Abelian> Collection<G, D, R> where G::Timestamp: Data
     /// }
     /// ```
     pub fn assert_eq(&self, other: &Self)
-    where D: ::Data+Hashable,
+    where D: ::ExchangeData+Hashable,
+          R: ::ExchangeData+Hashable,
           G::Timestamp: Lattice+Ord
     {
         self.negate()
@@ -580,4 +617,42 @@ impl<G: Scope, D: Data, R: Monoid> AsCollection<G, D, R> for Stream<G, (D, G::Ti
     fn as_collection(&self) -> Collection<G, D, R> {
         Collection::new(self.clone())
     }
+}
+
+/// Concatenates multiple collections.
+///
+/// This method has the effect of a sequence of calls to `concat`, but it does
+/// so in one operator rather than a chain of many operators.
+///
+/// # Examples
+///
+/// ```
+/// extern crate timely;
+/// extern crate differential_dataflow;
+///
+/// use differential_dataflow::input::Input;
+///
+/// fn main() {
+///     ::timely::example(|scope| {
+///
+///         let data = scope.new_collection_from(1 .. 10).1;
+///
+///         let odds = data.filter(|x| x % 2 == 1);
+///         let evens = data.filter(|x| x % 2 == 0);
+///
+///         differential_dataflow::collection::concatenate(scope, vec![odds, evens])
+///             .assert_eq(&data);
+///     });
+/// }
+/// ```
+pub fn concatenate<G, D, R, I>(scope: &mut G, iterator: I) -> Collection<G, D, R>
+where
+    G: Scope,
+    D: Data,
+    R: Monoid,
+    I: IntoIterator<Item=Collection<G, D, R>>,
+{
+    scope
+        .concatenate(iterator.into_iter().map(|x| x.inner))
+        .as_collection()
 }

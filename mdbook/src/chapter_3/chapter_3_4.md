@@ -4,7 +4,7 @@ Differential dataflow will perform relatively little work until it believes it h
 
 The `InputSession` type provides a method `advance_to(time)`, which moves the internal time of the session forward to `time`, and prevents you from supplying input changes at times that are not greater or equal to `time`. This is a very strong statement made to the differential dataflow infrastructure that you have stopped changing this input at all times not greater or equal to this input time, and the system can now start to make progress determining the corresponding output changes.
 
-Cruciall, the calls to `advance_to` will be buffered until you call `input.flush()`, which exposes this information to the underlying timely dataflow system. This allows you to call `advance_to` as frequently as once per record, without overwhelming the underlying system.
+Crucially, the calls to `advance_to` will be buffered until you call `input.flush()`, which exposes this information to the underlying timely dataflow system. This allows you to call `advance_to` as frequently as once per record, without overwhelming the underlying system.
 
 **IMPORTANT**: Before expecting differential and timely dataflow to actually make forward progress, make sure you have advanced and flushed your inputs.
 

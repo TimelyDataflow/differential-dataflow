@@ -15,7 +15,7 @@ use timely::dataflow::operators::Capability;
 use timely::dataflow::channels::pushers::tee::Tee;
 
 use hashable::Hashable;
-use ::{Data, Collection, AsCollection};
+use ::{Data, ExchangeData, Collection, AsCollection};
 use ::difference::{Monoid, Abelian};
 use lattice::Lattice;
 use operators::arrange::{Arranged, ArrangeByKey, ArrangeBySelf};
@@ -50,8 +50,13 @@ pub trait Join<G: Scope, K: Data, V: Data, R: Monoid> {
     ///     });
     /// }
     /// ```
-    fn join<V2: Data, R2: Monoid>(&self, other: &Collection<G, (K,V2), R2>) -> Collection<G, (K,(V,V2)), <R as Mul<R2>>::Output>
-    where R: Mul<R2>, <R as Mul<R2>>::Output: Monoid
+    fn join<V2, R2>(&self, other: &Collection<G, (K,V2), R2>) -> Collection<G, (K,(V,V2)), <R as Mul<R2>>::Output>
+    where
+        K: ExchangeData,
+        V2: ExchangeData,
+        R2: ExchangeData+Monoid,
+        R: Mul<R2>,
+        <R as Mul<R2>>::Output: Monoid
     {
         self.join_map(other, |k,v,v2| (k.clone(),(v.clone(),v2.clone())))
     }
@@ -79,8 +84,8 @@ pub trait Join<G: Scope, K: Data, V: Data, R: Monoid> {
     ///     });
     /// }
     /// ```
-    fn join_map<V2, R2: Monoid, D, L>(&self, other: &Collection<G, (K,V2), R2>, logic: L) -> Collection<G, D, <R as Mul<R2>>::Output>
-    where V2: Data, R: Mul<R2>, <R as Mul<R2>>::Output: Monoid, D: Data, L: Fn(&K, &V, &V2)->D+'static;
+    fn join_map<V2, R2, D, L>(&self, other: &Collection<G, (K,V2), R2>, logic: L) -> Collection<G, D, <R as Mul<R2>>::Output>
+    where K: ExchangeData, V2: ExchangeData, R2: ExchangeData+Monoid, R: Mul<R2>, <R as Mul<R2>>::Output: Monoid, D: Data, L: Fn(&K, &V, &V2)->D+'static;
 
     /// Matches pairs `(key, val)` and `key` based on `key`, producing the former with frequencies multiplied.
     ///
@@ -110,7 +115,7 @@ pub trait Join<G: Scope, K: Data, V: Data, R: Monoid> {
     /// }
     /// ```
     fn semijoin<R2>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), <R as Mul<R2>>::Output>
-    where R2: Monoid, R: Mul<R2>, <R as Mul<R2>>::Output: Monoid;
+    where K: ExchangeData, R2: ExchangeData+Monoid, R: Mul<R2>, <R as Mul<R2>>::Output: Monoid;
     /// Subtracts the semijoin with `other` from `self`.
     ///
     /// In the case that `other` has multiplicities zero or one this results
@@ -143,61 +148,62 @@ pub trait Join<G: Scope, K: Data, V: Data, R: Monoid> {
     /// }
     /// ```
     fn antijoin<R2>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), R>
-    where R2: Monoid, R: Mul<R2, Output = R>, R: Abelian;
+    where K: ExchangeData, R2: ExchangeData+Monoid, R: Mul<R2, Output = R>, R: Abelian;
 }
 
 impl<G, K, V, R> Join<G, K, V, R> for Collection<G, (K, V), R>
 where
     G: Scope,
-    K: Data+Hashable,
-    V: Data,
-    R: Monoid,
+    K: ExchangeData+Hashable,
+    V: ExchangeData,
+    R: ExchangeData+Monoid,
     G::Timestamp: Lattice+Ord,
 {
-    fn join_map<V2: Data, R2: Monoid, D: Data, L>(&self, other: &Collection<G, (K, V2), R2>, logic: L) -> Collection<G, D, <R as Mul<R2>>::Output>
+    fn join_map<V2: ExchangeData, R2: ExchangeData+Monoid, D: Data, L>(&self, other: &Collection<G, (K, V2), R2>, logic: L) -> Collection<G, D, <R as Mul<R2>>::Output>
     where R: Mul<R2>, <R as Mul<R2>>::Output: Monoid, L: Fn(&K, &V, &V2)->D+'static {
         let arranged1 = self.arrange_by_key();
         let arranged2 = other.arrange_by_key();
         arranged1.join_core(&arranged2, move |k,v1,v2| Some(logic(k,v1,v2)))
     }
 
-    fn semijoin<R2: Monoid>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), <R as Mul<R2>>::Output>
+    fn semijoin<R2: ExchangeData+Monoid>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), <R as Mul<R2>>::Output>
     where R: Mul<R2>, <R as Mul<R2>>::Output: Monoid {
         let arranged1 = self.arrange_by_key();
         let arranged2 = other.arrange_by_self();
         arranged1.join_core(&arranged2, |k,v,_| Some((k.clone(), v.clone())))
     }
 
-    fn antijoin<R2: Monoid>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), R>
+    fn antijoin<R2: ExchangeData+Monoid>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), R>
     where R: Mul<R2, Output=R>, R: Abelian {
         self.concat(&self.semijoin(other).negate())
     }
 }
 
-impl<G, K, V, R, T> Join<G, K, V, R> for Arranged<G,K,V,R,T>
-    where
-        G: Scope,
-        G::Timestamp: Lattice+Ord,
-        K: Data+Hashable,
-        V: Data,
-        R: Monoid,
-        T: TraceReader<K,V,G::Timestamp,R>+Clone+'static,
-        T::Batch: BatchReader<K,V,G::Timestamp,R>+'static {
-
-    fn join_map<V2: Data, R2: Monoid, D: Data, L>(&self, other: &Collection<G, (K, V2), R2>, logic: L) -> Collection<G, D, <R as Mul<R2>>::Output>
-    where R: Mul<R2>, <R as Mul<R2>>::Output: Monoid, L: Fn(&K, &V, &V2)->D+'static {
+impl<G, Tr> Join<G, Tr::Key, Tr::Val, Tr::R> for Arranged<G, Tr>
+where
+    G: Scope,
+    G::Timestamp: Lattice+Ord,
+    Tr: TraceReader<Time=G::Timestamp>+Clone+'static,
+    Tr::Key: Data+Hashable,
+    Tr::Val: Data,
+    Tr::R: Monoid,
+    Tr::Batch: BatchReader<Tr::Key,Tr::Val,G::Timestamp,Tr::R>+'static,
+    Tr::Cursor: Cursor<Tr::Key,Tr::Val,G::Timestamp,Tr::R>+'static,
+{
+    fn join_map<V2: ExchangeData, R2: ExchangeData+Monoid, D: Data, L>(&self, other: &Collection<G, (Tr::Key, V2), R2>, logic: L) -> Collection<G, D, <Tr::R as Mul<R2>>::Output>
+    where Tr::Key: ExchangeData, Tr::R: Mul<R2>, <Tr::R as Mul<R2>>::Output: Monoid, L: Fn(&Tr::Key, &Tr::Val, &V2)->D+'static {
         let arranged2 = other.arrange_by_key();
         self.join_core(&arranged2, move |k,v1,v2| Some(logic(k,v1,v2)))
     }
 
-    fn semijoin<R2: Monoid>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), <R as Mul<R2>>::Output>
-    where R: Mul<R2>, <R as Mul<R2>>::Output: Monoid {
+    fn semijoin<R2: ExchangeData+Monoid>(&self, other: &Collection<G, Tr::Key, R2>) -> Collection<G, (Tr::Key, Tr::Val), <Tr::R as Mul<R2>>::Output>
+    where Tr::Key: ExchangeData, Tr::R: Mul<R2>, <Tr::R as Mul<R2>>::Output: Monoid {
         let arranged2 = other.arrange_by_self();
         self.join_core(&arranged2, |k,v,_| Some((k.clone(), v.clone())))
     }
 
-    fn antijoin<R2: Monoid>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), R>
-    where R: Mul<R2, Output=R>, R: Abelian {
+    fn antijoin<R2: ExchangeData+Monoid>(&self, other: &Collection<G, Tr::Key, R2>) -> Collection<G, (Tr::Key, Tr::Val), Tr::R>
+    where Tr::Key: ExchangeData, Tr::R: Mul<R2, Output=Tr::R>, Tr::R: Abelian {
         self.as_collection(|k,v| (k.clone(), v.clone()))
             .concat(&self.semijoin(other).negate())
     }
@@ -245,17 +251,18 @@ pub trait JoinCore<G: Scope, K: 'static, V: 'static, R: Monoid> where G::Timesta
     ///     });
     /// }
     /// ```
-    fn join_core<V2,T2,R2,I,L> (&self, stream2: &Arranged<G,K,V2,R2,T2>, result: L) -> Collection<G,I::Item,<R as Mul<R2>>::Output>
+    fn join_core<Tr2,I,L> (&self, stream2: &Arranged<G,Tr2>, result: L) -> Collection<G,I::Item,<R as Mul<Tr2::R>>::Output>
     where
-        V2: Ord+Clone+Debug+'static,
-        T2: TraceReader<K, V2, G::Timestamp, R2>+Clone+'static,
-        T2::Batch: BatchReader<K, V2, G::Timestamp, R2>+'static,
-        R2: Monoid,
-        R: Mul<R2>,
-        <R as Mul<R2>>::Output: Monoid,
+        Tr2: TraceReader<Key=K, Time=G::Timestamp>+Clone+'static,
+        Tr2::Batch: BatchReader<K, Tr2::Val, G::Timestamp, Tr2::R>+'static,
+        Tr2::Cursor: Cursor<K, Tr2::Val, G::Timestamp, Tr2::R>+'static,
+        Tr2::Val: Ord+Clone+Debug+'static,
+        Tr2::R: Monoid,
+        R: Mul<Tr2::R>,
+        <R as Mul<Tr2::R>>::Output: Monoid,
         I: IntoIterator,
         I::Item: Data,
-        L: Fn(&K,&V,&V2)->I+'static,
+        L: Fn(&K,&V,&Tr2::Val)->I+'static,
         ;
 }
 
@@ -263,58 +270,60 @@ pub trait JoinCore<G: Scope, K: 'static, V: 'static, R: Monoid> where G::Timesta
 impl<G, K, V, R> JoinCore<G, K, V, R> for Collection<G, (K, V), R>
 where
     G: Scope,
-    K: Data+Hashable,
-    V: Data,
-    R: Monoid,
+    K: ExchangeData+Hashable,
+    V: ExchangeData,
+    R: ExchangeData+Monoid,
     G::Timestamp: Lattice+Ord,
 {
-    fn join_core<V2,T2,R2,I,L> (&self, stream2: &Arranged<G,K,V2,R2,T2>, result: L) -> Collection<G,I::Item,<R as Mul<R2>>::Output>
+    fn join_core<Tr2,I,L> (&self, stream2: &Arranged<G,Tr2>, result: L) -> Collection<G,I::Item,<R as Mul<Tr2::R>>::Output>
     where
-        V2: Ord+Clone+Debug+'static,
-        T2: TraceReader<K, V2, G::Timestamp, R2>+Clone+'static,
-        T2::Batch: BatchReader<K, V2, G::Timestamp, R2>+'static,
-        R2: Monoid,
-        R: Mul<R2>,
-        <R as Mul<R2>>::Output: Monoid,
+        Tr2: TraceReader<Key=K, Time=G::Timestamp>+Clone+'static,
+        Tr2::Batch: BatchReader<K, Tr2::Val, G::Timestamp, Tr2::R>+'static,
+        Tr2::Cursor: Cursor<K, Tr2::Val, G::Timestamp, Tr2::R>+'static,
+        Tr2::Val: Ord+Clone+Debug+'static,
+        Tr2::R: Monoid,
+        R: Mul<Tr2::R>,
+        <R as Mul<Tr2::R>>::Output: Monoid,
         I: IntoIterator,
         I::Item: Data,
-        L: Fn(&K,&V,&V2)->I+'static {
-
+        L: Fn(&K,&V,&Tr2::Val)->I+'static,
+    {
         self.arrange_by_key()
             .join_core(stream2, result)
     }
 }
 
-impl<G, K, V, R1, T1> JoinCore<G, K, V, R1> for Arranged<G,K,V,R1,T1>
+impl<G, T1> JoinCore<G, T1::Key, T1::Val, T1::R> for Arranged<G,T1>
     where
-        K: Ord,
         G: Scope,
         G::Timestamp: Lattice+Ord+Debug,
-        K: Debug+Eq+'static,
-        V: Ord+Clone+Debug+'static,
-        R1: Monoid,
-        T1: TraceReader<K,V,G::Timestamp, R1>+Clone+'static,
-        T1::Batch: BatchReader<K,V,G::Timestamp,R1>+'static,
+        T1: TraceReader<Time=G::Timestamp>+Clone+'static,
+        T1::Key: Ord+Debug+'static,
+        T1::Val: Ord+Clone+Debug+'static,
+        T1::R: Monoid,
+        T1::Batch: BatchReader<T1::Key,T1::Val,G::Timestamp,T1::R>+'static,
+        T1::Cursor: Cursor<T1::Key,T1::Val,G::Timestamp,T1::R>+'static,
 {
-    fn join_core<V2,T2,R2,I,L>(&self, other: &Arranged<G,K,V2,R2,T2>, result: L) -> Collection<G,I::Item,<R1 as Mul<R2>>::Output>
+    fn join_core<Tr2,I,L>(&self, other: &Arranged<G,Tr2>, result: L) -> Collection<G,I::Item,<T1::R as Mul<Tr2::R>>::Output>
     where
-        V2: Ord+Clone+Debug+'static,
-        T2: TraceReader<K,V2,G::Timestamp,R2>+Clone+'static,
-        T2::Batch: BatchReader<K, V2, G::Timestamp, R2>+'static,
-        R2: Monoid,
-        R1: Mul<R2>,
-        <R1 as Mul<R2>>::Output: Monoid,
+        Tr2::Val: Ord+Clone+Debug+'static,
+        Tr2: TraceReader<Key=T1::Key,Time=G::Timestamp>+Clone+'static,
+        Tr2::Batch: BatchReader<T1::Key, Tr2::Val, G::Timestamp, Tr2::R>+'static,
+        Tr2::Cursor: Cursor<T1::Key, Tr2::Val, G::Timestamp, Tr2::R>+'static,
+        Tr2::R: Monoid,
+        T1::R: Mul<Tr2::R>,
+        <T1::R as Mul<Tr2::R>>::Output: Monoid,
         I: IntoIterator,
         I::Item: Data,
-        L: Fn(&K,&V,&V2)->I+'static {
+        L: Fn(&T1::Key,&T1::Val,&Tr2::Val)->I+'static {
 
         // handles to shared trace data structures.
         let mut trace1 = Some(self.trace.clone());
         let mut trace2 = Some(other.trace.clone());
 
         // acknowledged frontier for each input.
-        let mut acknowledged1 = vec![G::Timestamp::minimum()];
-        let mut acknowledged2 = vec![G::Timestamp::minimum()];
+        let mut acknowledged1: Option<Vec<G::Timestamp>> = None;
+        let mut acknowledged2: Option<Vec<G::Timestamp>> = None;
 
         // deferred work of batches from each input.
         let mut todo1 = Vec::new();
@@ -344,11 +353,14 @@ impl<G, K, V, R1, T1> JoinCore<G, K, V, R1> for Arranged<G,K,V,R1,T1>
                         let capability = capability.retain();
                         data.swap(&mut input1_buffer);
                         for batch1 in input1_buffer.drain(..) {
-                            let (trace2_cursor, trace2_storage) = trace2.cursor_through(&acknowledged2[..]).unwrap();
-                            let batch1_cursor = batch1.cursor();
-                            todo1.push(Deferred::new(trace2_cursor, trace2_storage, batch1_cursor, batch1.clone(), capability.clone(), |r2,r1| (r1.clone()) * (r2.clone())));
-                            debug_assert!(batch1.description().lower() == &acknowledged1[..]);
-                            acknowledged1 = batch1.description().upper().to_vec();
+                            if let Some(acknowledged2) = &acknowledged2 {
+                                // TODO : cursor_through may be problematic for pre-merged traces.
+                                let (trace2_cursor, trace2_storage) = trace2.cursor_through(&acknowledged2[..]).unwrap();
+                                let batch1_cursor = batch1.cursor();
+                                todo1.push(Deferred::new(trace2_cursor, trace2_storage, batch1_cursor, batch1.clone(), capability.clone(), |r2,r1| (r1.clone()) * (r2.clone())));
+                                // debug_assert!(batch1.description().lower() == &acknowledged1[..]);
+                            }
+                            acknowledged1 = Some(batch1.description().upper().to_vec());
                         }
                     }
                 });
@@ -359,11 +371,14 @@ impl<G, K, V, R1, T1> JoinCore<G, K, V, R1> for Arranged<G,K,V,R1,T1>
                         let capability = capability.retain();
                         data.swap(&mut input2_buffer);
                         for batch2 in input2_buffer.drain(..) {
-                            let (trace1_cursor, trace1_storage) = trace1.cursor_through(&acknowledged1[..]).unwrap();
-                            let batch2_cursor = batch2.cursor();
-                            todo2.push(Deferred::new(trace1_cursor, trace1_storage, batch2_cursor, batch2.clone(), capability.clone(), |r1,r2| (r1.clone()) * (r2.clone())));
-                            debug_assert!(batch2.description().lower() == &acknowledged2[..]);
-                            acknowledged2 = batch2.description().upper().to_vec();
+                            if let Some(acknowledged1) = &acknowledged1 {
+                                // TODO : cursor_through may be problematic for pre-merged traces.
+                                let (trace1_cursor, trace1_storage) = trace1.cursor_through(&acknowledged1[..]).unwrap();
+                                let batch2_cursor = batch2.cursor();
+                                todo2.push(Deferred::new(trace1_cursor, trace1_storage, batch2_cursor, batch2.clone(), capability.clone(), |r1,r2| (r1.clone()) * (r2.clone())));
+                                // debug_assert!(batch2.description().lower() == &acknowledged2[..]);
+                            }
+                            acknowledged2 = Some(batch2.description().upper().to_vec());
                         }
                     }
                 });
@@ -398,14 +413,18 @@ impl<G, K, V, R1, T1> JoinCore<G, K, V, R1> for Arranged<G,K,V,R1,T1>
                 if trace2.is_some() && input1.frontier().is_empty() { trace2 = None; }
                 if let Some(ref mut trace2) = trace2 {
                     trace2.advance_by(&input1.frontier().frontier()[..]);
-                    trace2.distinguish_since(&acknowledged2[..]);
+                    if let Some(acknowledged2) = &acknowledged2 {
+                        trace2.distinguish_since(&acknowledged2[..]);
+                    }
                 }
 
                 // shut down or advance trace1.
                 if trace1.is_some() && input2.frontier().is_empty() { trace1 = None; }
                 if let Some(ref mut trace1) = trace1 {
                     trace1.advance_by(&input2.frontier().frontier()[..]);
-                    trace1.distinguish_since(&acknowledged1[..]);
+                    if let Some(acknowledged1) = &acknowledged1 {
+                        trace1.distinguish_since(&acknowledged1[..]);
+                    }
                 }
             }
         })

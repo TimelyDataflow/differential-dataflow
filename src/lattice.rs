@@ -149,7 +149,7 @@ pub trait Lattice : PartialOrder {
     /// assert_eq!(advanced, Product::new(4, 7));
     /// # }
     /// ```
-    #[inline(always)]
+    #[inline]
     fn advance_by(&mut self, frontier: &[Self]) where Self: Sized {
         if let Some(first) = frontier.get(0) {
             let mut result = self.join(first);
@@ -164,16 +164,16 @@ pub trait Lattice : PartialOrder {
 use timely::order::Product;
 
 impl<T1: Lattice, T2: Lattice> Lattice for Product<T1, T2> {
-    #[inline(always)]
+    #[inline]
     fn minimum() -> Self { Product::new(T1::minimum(), T2::minimum()) }
-    #[inline(always)]
+    #[inline]
     fn join(&self, other: &Product<T1, T2>) -> Product<T1, T2> {
         Product {
             outer: self.outer.join(&other.outer),
             inner: self.inner.join(&other.inner),
         }
     }
-    #[inline(always)]
+    #[inline]
     fn meet(&self, other: &Product<T1, T2>) -> Product<T1, T2> {
         Product {
             outer: self.outer.meet(&other.outer),
@@ -185,9 +185,9 @@ impl<T1: Lattice, T2: Lattice> Lattice for Product<T1, T2> {
 macro_rules! implement_lattice {
     ($index_type:ty, $minimum:expr) => (
         impl Lattice for $index_type {
-            #[inline(always)] fn minimum() -> Self { $minimum }
-            #[inline(always)] fn join(&self, other: &Self) -> Self { ::std::cmp::max(*self, *other) }
-            #[inline(always)] fn meet(&self, other: &Self) -> Self { ::std::cmp::min(*self, *other) }
+            #[inline] fn minimum() -> Self { $minimum }
+            #[inline] fn join(&self, other: &Self) -> Self { ::std::cmp::max(*self, *other) }
+            #[inline] fn meet(&self, other: &Self) -> Self { ::std::cmp::min(*self, *other) }
         }
     )
 }
@@ -195,8 +195,8 @@ macro_rules! implement_lattice {
 use std::time::Duration;
 
 implement_lattice!(Duration, Duration::new(0, 0));
-implement_lattice!(usize, usize::min_value());
-implement_lattice!(u64, u64::min_value());
-implement_lattice!(u32, u32::min_value());
-implement_lattice!(i32, i32::min_value());
+implement_lattice!(usize, 0);
+implement_lattice!(u64, 0);
+implement_lattice!(u32, 0);
+implement_lattice!(i32, 0);
 implement_lattice!((), ());

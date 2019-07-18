@@ -5,7 +5,7 @@ use abomonation::Abomonation;
 
 pub type Date = u32;
 
-#[inline(always)]
+#[inline]
 pub fn create_date(year: u16, month: u8, day: u8) -> u32 {
     ((year as u32) << 16) + ((month as u32) << 8) + (day as u32)
 }
@@ -35,7 +35,7 @@ unsafe_abomonate!(AbomonationWrapper<ArrayString<[u8; 25]>>);
 unsafe_abomonate!(AbomonationWrapper<ArrayString<[u8; 40]>>);
 unsafe_abomonate!(AbomonationWrapper<ArrayString<[u8; 128]>>);
 
-#[derive(Ord,PartialOrd,Eq,PartialEq,Clone,Debug,Hash,Default)]
+#[derive(Ord,PartialOrd,Eq,PartialEq,Clone,Copy,Debug,Hash,Default)]
 pub struct AbomonationWrapper<T> {
     pub element: T,
 }

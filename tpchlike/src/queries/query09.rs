@@ -5,7 +5,7 @@ use timely::dataflow::operators::probe::Handle as ProbeHandle;
 use differential_dataflow::operators::*;
 use differential_dataflow::lattice::Lattice;
 
-use ::Collections;
+use {Arrangements, Experiment, Collections};
 
 // -- $ID$
 // -- TPC-H/TPC-R Product Type Profit Measure Query (Q9)
@@ -53,7 +53,7 @@ fn substring(source: &[u8], query: &[u8]) -> bool {
     )
 }
 
-pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp>
+pub fn query<G: Scope>(collections: &mut Collections<G>, probe: &mut ProbeHandle<G::Timestamp>)
 where G::Timestamp: Lattice+TotalOrder+Ord {
 
     println!("TODO: Q09 join order may be pessimal; could pivot to put lineitems last");
@@ -76,5 +76,34 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
         .join_map(&collections.suppliers().map(|s| (s.supp_key, s.nation_key)), |_, &order_year, &nation_key| (nation_key, order_year))
         .join(&collections.nations().map(|n| (n.nation_key, n.name)))
         .count_total()
-        .probe()
+        .probe_with(probe);
+}
+
+pub fn query_arranged<G: Scope<Timestamp=usize>>(
+    scope: &mut G,
+    probe: &mut ProbeHandle<usize>,
+    experiment: &mut Experiment,
+    arrangements: &mut Arrangements,
+)
+where
+    G::Timestamp: Lattice+TotalOrder+Ord
+{
+    let arrangements = arrangements.in_scope(scope, experiment);
+
+    experiment
+        .lineitem(scope)
+        .map(|l| (l.part_key, (l.supp_key, l.order_key, l.extended_price * (100 - l.discount) / 100, l.quantity)))
+        .join_core(&arrangements.part, |&pk,&(sk,ok,ep,qu),p| {
+            if substring(&p.name.as_bytes(), b"green") {
+                Some(((pk,sk),(ok,ep,qu)))
+            }
+            else { None }
+        })
+        .join_core(&arrangements.partsupp, |&(_pk,sk),&(ok,ep,qu),s| Some((ok, (sk, ep - (qu * s.supplycost)))))
+        .explode(|(ok,(sk,am))| Some(((ok,sk), am as isize)))
+        .join_core(&arrangements.order, |_ok,&sk,o| Some((sk,o.order_date >> 16)))
+        .join_core(&arrangements.supplier, |_sk,&yr,s| Some((s.nation_key, yr)))
+        .join_core(&arrangements.nation, |_nk,&yr,n| Some((n.name,yr)))
+        .count_total()
+        .probe_with(probe);
 }

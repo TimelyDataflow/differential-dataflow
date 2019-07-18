@@ -2,50 +2,47 @@
 
 use std::collections::HashMap;
 use std::hash::Hash;
-use std::time::Duration;
+// use std::time::Duration;
 
 use timely::dataflow::ProbeHandle;
 use timely::communication::Allocate;
 use timely::worker::Worker;
 use timely::logging::TimelyEvent;
 
-use timely::dataflow::operators::capture::event::EventIterator;
+// use timely::dataflow::operators::capture::event::EventIterator;
 
-use differential_dataflow::Data;
+use differential_dataflow::ExchangeData;
 use differential_dataflow::trace::implementations::ord::{OrdKeySpine, OrdValSpine};
 use differential_dataflow::operators::arrange::TraceAgent;
 use differential_dataflow::input::InputSession;
 
 use differential_dataflow::logging::DifferentialEvent;
 
-use super::{Time, Diff, Plan};
+use crate::{Time, Diff, Plan, Datum};
 
 /// A trace handle for key-only data.
-pub type TraceKeyHandle<K, T, R> = TraceAgent<K, (), T, R, OrdKeySpine<K, T, R>>;
+pub type TraceKeyHandle<K, T, R> = TraceAgent<OrdKeySpine<K, T, R>>;
 /// A trace handle for key-value data.
-pub type TraceValHandle<K, V, T, R> = TraceAgent<K, V, T, R, OrdValSpine<K, V, T, R>>;
+pub type TraceValHandle<K, V, T, R> = TraceAgent<OrdValSpine<K, V, T, R>>;
 /// A key-only trace handle binding `Time` and `Diff` using `Vec<V>` as data.
 pub type KeysOnlyHandle<V> = TraceKeyHandle<Vec<V>, Time, Diff>;
 /// A key-value trace handle binding `Time` and `Diff` using `Vec<V>` as data.
 pub type KeysValsHandle<V> = TraceValHandle<Vec<V>, Vec<V>, Time, Diff>;
 
-/// A type that can be converted to a vector of another type.
-pub trait AsVector<T> {
-    /// Converts `self` to a vector of `T`.
-    fn as_vector(self) -> Vec<T>;
-}
-
 /// Manages inputs and traces.
-pub struct Manager<Value: Data> {
+pub struct Manager<V: ExchangeData+Datum> {
     /// Manages input sessions.
-    pub inputs: InputManager<Value>,
+    pub inputs: InputManager<V>,
     /// Manages maintained traces.
-    pub traces: TraceManager<Value>,
+    pub traces: TraceManager<V>,
     /// Probes all computations.
     pub probe: ProbeHandle<Time>,
 }
 
-impl<Value: Data+Hash> Manager<Value> {
+impl<V: ExchangeData+Datum> Manager<V>
+// where
+//     V: ExchangeData+Hash+LoggingValue,
+{
 
     /// Creates a new empty manager.
     pub fn new() -> Self {
@@ -56,19 +53,53 @@ impl<Value: Data+Hash> Manager<Value> {
         }
     }
 
+    // /// Enables logging of timely and differential events.
+    // pub fn enable_logging<A: Allocate>(&mut self, worker: &mut Worker<A>) {
+
+    //     use std::rc::Rc;
+    //     use timely::dataflow::operators::capture::event::link::EventLink;
+    //     use timely::logging::BatchLogger;
+
+    //     let timely_events = Rc::new(EventLink::new());
+    //     let differential_events = Rc::new(EventLink::new());
+
+    //     self.publish_timely_logging(worker, Some(timely_events.clone()));
+    //     self.publish_differential_logging(worker, Some(differential_events.clone()));
+
+    //     let mut timely_logger = BatchLogger::new(timely_events.clone());
+    //     worker
+    //         .log_register()
+    //         .insert::<TimelyEvent,_>("timely", move |time, data| timely_logger.publish_batch(time, data));
+
+    //     let mut differential_logger = BatchLogger::new(differential_events.clone());
+    //     worker
+    //         .log_register()
+    //         .insert::<DifferentialEvent,_>("differential/arrange", move |time, data| differential_logger.publish_batch(time, data));
+
+    // }
+
     /// Clear the managed inputs and traces.
-    pub fn shutdown(&mut self) {
+    pub fn shutdown<A: Allocate>(&mut self, worker: &mut Worker<A>) {
         self.inputs.sessions.clear();
         self.traces.inputs.clear();
         self.traces.arrangements.clear();
+
+        // Deregister loggers, so that the logging dataflows can shut down.
+        worker
+            .log_register()
+            .insert::<TimelyEvent,_>("timely", move |_time, _data| { });
+
+        worker
+            .log_register()
+            .insert::<DifferentialEvent,_>("differential/arrange", move |_time, _data| { });
     }
 
     /// Inserts a new input session by name.
     pub fn insert_input(
         &mut self,
         name: String,
-        input: InputSession<Time, Vec<Value>, Diff>,
-        trace: KeysOnlyHandle<Value>)
+        input: InputSession<Time, Vec<V>, Diff>,
+        trace: KeysOnlyHandle<V>)
     {
         self.inputs.sessions.insert(name.clone(), input);
         self.traces.set_unkeyed(&Plan::Source(name), &trace);
@@ -80,160 +111,34 @@ impl<Value: Data+Hash> Manager<Value> {
         self.traces.advance_time(time);
     }
 
-    /// Timely logging capture and arrangement.
-    pub fn publish_timely_logging<A, I>(&mut self, worker: &mut Worker<A>, events: I)
-    where
-        A: Allocate,
-        TimelyEvent: AsVector<Value>,
-        I : IntoIterator,
-        <I as IntoIterator>::Item: EventIterator<Duration, (Duration, usize, TimelyEvent)>+'static
-    {
-        let (operates, channels, schedule, messages) =
-        worker.dataflow(move |scope| {
+    // /// Timely logging capture and arrangement.
+    // pub fn publish_timely_logging<A, I>(&mut self, worker: &mut Worker<A>, events: I)
+    // where
+    //     A: Allocate,
+    //     I : IntoIterator,
+    //     <I as IntoIterator>::Item: EventIterator<Duration, (Duration, usize, TimelyEvent)>+'static
+    // {
+    //     crate::logging::publish_timely_logging(self, worker, 1, "interactive", events)
+    // }
 
-            use timely::dataflow::operators::capture::Replay;
-            use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
-
-            let input = events.replay_into(scope);
-
-            let mut demux = OperatorBuilder::new("Timely Logging Demux".to_string(), scope.clone());
-
-            use timely::dataflow::channels::pact::Pipeline;
-            let mut input = demux.new_input(&input, Pipeline);
-
-            let (mut operates_out, operates) = demux.new_output();
-            let (mut channels_out, channels) = demux.new_output();
-            let (mut schedule_out, schedule) = demux.new_output();
-            let (mut messages_out, messages) = demux.new_output();
-
-            let mut demux_buffer = Vec::new();
-
-            demux.build(move |_capability| {
-
-                move |_frontiers| {
-
-                    let mut operates = operates_out.activate();
-                    let mut channels = channels_out.activate();
-                    let mut schedule = schedule_out.activate();
-                    let mut messages = messages_out.activate();
-
-                    input.for_each(|time, data| {
-                        data.swap(&mut demux_buffer);
-                        let mut operates_session = operates.session(&time);
-                        let mut channels_session = channels.session(&time);
-                        let mut schedule_session = schedule.session(&time);
-                        let mut messages_session = messages.session(&time);
-
-                        for (time, _worker, datum) in demux_buffer.drain(..) {
-                            match datum {
-                                TimelyEvent::Operates(_) => {
-                                    operates_session.give((datum.as_vector(), time, 1));
-                                },
-                                TimelyEvent::Channels(_) => {
-                                    channels_session.give((datum.as_vector(), time, 1));
-                                },
-                                TimelyEvent::Schedule(_) => {
-                                    schedule_session.give((datum.as_vector(), time, 1));
-                                },
-                                TimelyEvent::Messages(_) => {
-                                    messages_session.give((datum.as_vector(), time, 1));
-                                },
-                                _ => { },
-                            }
-                        }
-                    });
-                }
-            });
-
-            use differential_dataflow::collection::AsCollection;
-            use differential_dataflow::operators::arrange::ArrangeBySelf;
-            let operates = operates.as_collection().arrange_by_self().trace;
-            let channels = channels.as_collection().arrange_by_self().trace;
-            let schedule = schedule.as_collection().arrange_by_self().trace;
-            let messages = messages.as_collection().arrange_by_self().trace;
-
-            (operates, channels, schedule, messages)
-        });
-
-        self.traces.set_unkeyed(&Plan::Source("logs/timely/operates".to_string()), &operates);
-        self.traces.set_unkeyed(&Plan::Source("logs/timely/channels".to_string()), &channels);
-        self.traces.set_unkeyed(&Plan::Source("logs/timely/schedule".to_string()), &schedule);
-        self.traces.set_unkeyed(&Plan::Source("logs/timely/messages".to_string()), &messages);
-    }
-
-    /// Timely logging capture and arrangement.
-    pub fn publish_differential_logging<A, I>(&mut self, worker: &mut Worker<A>, events: I)
-    where
-        A: Allocate,
-        DifferentialEvent: AsVector<Value>,
-        I : IntoIterator,
-        <I as IntoIterator>::Item: EventIterator<Duration, (Duration, usize, DifferentialEvent)>+'static
-    {
-        let (merge,batch) =
-        worker.dataflow(move |scope| {
-
-            use timely::dataflow::operators::capture::Replay;
-            use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
-
-            let input = events.replay_into(scope);
-
-            let mut demux = OperatorBuilder::new("Differential Logging Demux".to_string(), scope.clone());
-
-            use timely::dataflow::channels::pact::Pipeline;
-            let mut input = demux.new_input(&input, Pipeline);
-
-            let (mut batch_out, batch) = demux.new_output();
-            let (mut merge_out, merge) = demux.new_output();
-
-            let mut demux_buffer = Vec::new();
-
-            demux.build(move |_capability| {
-
-                move |_frontiers| {
-
-                    let mut batch = batch_out.activate();
-                    let mut merge = merge_out.activate();
-
-                    input.for_each(|time, data| {
-                        data.swap(&mut demux_buffer);
-                        let mut batch_session = batch.session(&time);
-                        let mut merge_session = merge.session(&time);
-
-                        for (time, _worker, datum) in demux_buffer.drain(..) {
-                            match datum {
-                                DifferentialEvent::Batch(_) => {
-                                    batch_session.give((datum.as_vector(), time, 1));
-                                },
-                                DifferentialEvent::Merge(_) => {
-                                    merge_session.give((datum.as_vector(), time, 1));
-                                },
-                                _ => { },
-                            }
-                        }
-                    });
-                }
-            });
-
-            use differential_dataflow::collection::AsCollection;
-            use differential_dataflow::operators::arrange::ArrangeBySelf;
-            let batch = batch.as_collection().arrange_by_self().trace;
-            let merge = merge.as_collection().arrange_by_self().trace;
-
-            (merge,batch)
-        });
-
-        self.traces.set_unkeyed(&Plan::Source("logs/differential/arrange/batch".to_string()), &batch);
-        self.traces.set_unkeyed(&Plan::Source("logs/differential/arrange/merge".to_string()), &merge);
-    }
+    // /// Timely logging capture and arrangement.
+    // pub fn publish_differential_logging<A, I>(&mut self, worker: &mut Worker<A>, events: I)
+    // where
+    //     A: Allocate,
+    //     I : IntoIterator,
+    //     <I as IntoIterator>::Item: EventIterator<Duration, (Duration, usize, DifferentialEvent)>+'static
+    // {
+    //     crate::logging::publish_differential_logging(self, worker, 1, "interactive", events)
+    // }
 }
 
 /// Manages input sessions.
-pub struct InputManager<Value: Data> {
+pub struct InputManager<V: ExchangeData> {
     /// Input sessions by name.
-    pub sessions: HashMap<String, InputSession<Time, Vec<Value>, Diff>>,
+    pub sessions: HashMap<String, InputSession<Time, Vec<V>, Diff>>,
 }
 
-impl<Value: Data> InputManager<Value> {
+impl<V: ExchangeData> InputManager<V> {
 
     /// Creates a new empty input manager.
     pub fn new() -> Self { Self { sessions: HashMap::new() } }
@@ -252,24 +157,29 @@ impl<Value: Data> InputManager<Value> {
 ///
 /// Manages a map from plan (describing a collection)
 /// to various arranged forms of that collection.
-pub struct TraceManager<Value: Data> {
+pub struct TraceManager<V: ExchangeData+Datum> {
 
     /// Arrangements where the record itself is they key.
     ///
     /// This contains both input collections, which are here cached so that
     /// they can be re-used, intermediate collections that are cached, and
     /// any collections that are explicitly published.
-    inputs: HashMap<Plan<Value>, KeysOnlyHandle<Value>>,
+    inputs: HashMap<Plan<V>, KeysOnlyHandle<V>>,
 
     /// Arrangements of collections by key.
-    arrangements: HashMap<Plan<Value>, HashMap<Vec<usize>, KeysValsHandle<Value>>>,
+    arrangements: HashMap<Plan<V>, HashMap<Vec<usize>, KeysValsHandle<V>>>,
 
 }
 
-impl<Value: Data+Hash> TraceManager<Value> {
+impl<V: ExchangeData+Hash+Datum> TraceManager<V> {
 
     /// Creates a new empty trace manager.
-    pub fn new() -> Self { Self { inputs: HashMap::new(), arrangements: HashMap::new() } }
+    pub fn new() -> Self {
+        Self {
+            inputs: HashMap::new(),
+            arrangements: HashMap::new()
+        }
+    }
 
     /// Advances the frontier of each maintained trace.
     pub fn advance_time(&mut self, time: &Time) {
@@ -278,49 +188,42 @@ impl<Value: Data+Hash> TraceManager<Value> {
         let frontier = &[time.clone()];
         for trace in self.inputs.values_mut() {
             trace.advance_by(frontier);
+            trace.distinguish_since(frontier);
         }
         for map in self.arrangements.values_mut() {
             for trace in map.values_mut() {
-                trace.advance_by(frontier)
+                trace.advance_by(frontier);
+                trace.distinguish_since(frontier);
             }
         }
     }
 
     /// Recover an arrangement by plan and keys, if it is cached.
-    pub fn get_unkeyed(&self, plan: &Plan<Value>) -> Option<KeysOnlyHandle<Value>> {
+    pub fn get_unkeyed(&self, plan: &Plan<V>) -> Option<KeysOnlyHandle<V>> {
         self.inputs
             .get(plan)
             .map(|x| x.clone())
     }
 
     /// Installs an unkeyed arrangement for a specified plan.
-    pub fn set_unkeyed(&mut self, plan: &Plan<Value>, handle: &KeysOnlyHandle<Value>) {
-
-        println!("Setting unkeyed: {:?}", plan);
-
-        use differential_dataflow::trace::TraceReader;
-        let mut handle = handle.clone();
-        handle.distinguish_since(&[]);
+    pub fn set_unkeyed(&mut self, plan: &Plan<V>, handle: &KeysOnlyHandle<V>) {
         self.inputs
-            .insert(plan.clone(), handle);
+            .insert(plan.clone(), handle.clone());
     }
 
     /// Recover an arrangement by plan and keys, if it is cached.
-    pub fn get_keyed(&self, plan: &Plan<Value>, keys: &[usize]) -> Option<KeysValsHandle<Value>> {
+    pub fn get_keyed(&self, plan: &Plan<V>, keys: &[usize]) -> Option<KeysValsHandle<V>> {
         self.arrangements
             .get(plan)
             .and_then(|map| map.get(keys).map(|x| x.clone()))
     }
 
     /// Installs a keyed arrangement for a specified plan and sequence of keys.
-    pub fn set_keyed(&mut self, plan: &Plan<Value>, keys: &[usize], handle: &KeysValsHandle<Value>) {
-        use differential_dataflow::trace::TraceReader;
-        let mut handle = handle.clone();
-        handle.distinguish_since(&[]);
+    pub fn set_keyed(&mut self, plan: &Plan<V>, keys: &[usize], handle: &KeysValsHandle<V>) {
         self.arrangements
             .entry(plan.clone())
             .or_insert(HashMap::new())
-            .insert(keys.to_vec(), handle);
+            .insert(keys.to_vec(), handle.clone());
     }
 
 }

@@ -6,7 +6,7 @@ use differential_dataflow::operators::*;
 use differential_dataflow::difference::DiffPair;
 use differential_dataflow::lattice::Lattice;
 
-use ::Collections;
+use {Arrangements, Experiment, Collections};
 use ::types::create_date;
 
 // -- $ID$
@@ -58,7 +58,7 @@ fn starts_with(source: &[u8], query: &[u8]) -> bool {
     source.len() >= query.len() && &source[..query.len()] == query
 }
 
-pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp>
+pub fn query<G: Scope>(collections: &mut Collections<G>, probe: &mut ProbeHandle<G::Timestamp>)
 where G::Timestamp: Lattice+TotalOrder+Ord {
 
     let regions = collections.regions().filter(|r| starts_with(&r.name, b"AMERICA")).map(|r| r.region_key);
@@ -97,5 +97,40 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
         .explode(|(_, (order_date, is_name))| Some((order_date, DiffPair::new(if is_name { 1 } else { 0 }, 1))))
         .count_total()
         // .inspect(|x| println!("{:?}", x))
-        .probe()
+        .probe_with(probe);
+}
+
+pub fn query_arranged<G: Scope<Timestamp=usize>>(
+    scope: &mut G,
+    probe: &mut ProbeHandle<usize>,
+    experiment: &mut Experiment,
+    arrangements: &mut Arrangements,
+)
+where
+    G::Timestamp: Lattice+TotalOrder+Ord
+{
+    let arrangements = arrangements.in_scope(scope, experiment);
+
+    experiment
+        .lineitem(scope)
+        .explode(|l| Some(((l.part_key, (l.order_key, l.supp_key)), ((l.extended_price * (100 - l.discount)) as isize / 100))))
+        .join_core(&arrangements.part, |_pk,&(ok,sk),p| {
+            if p.typ.as_str() == "ECONOMY ANODIZED STEEL" { Some((ok,sk)) } else { None }
+        })
+        .join_core(&arrangements.order, |_ok,&sk,o| {
+            if create_date(1995,1,1) <= o.order_date && o.order_date <= create_date(1996, 12, 31) {
+                Some((o.cust_key, (sk,o.order_date >> 16)))
+            }
+            else { None }
+        })
+        .join_core(&arrangements.customer, |_ck,&(sk,yr),c| Some((c.nation_key, (sk,yr))))
+        .join_core(&arrangements.nation, |_nk,&(sk,yr),n| Some((n.region_key, (sk,yr))))
+        .join_core(&arrangements.region, |_rk,&(sk,yr),r| {
+            if starts_with(&r.name, b"AMERICA") { Some((sk,yr,true)) } else { Some((sk,yr,false)) }
+        })
+        .explode(|(sk,yr,is_name)| Some(((sk,yr), DiffPair::new(if is_name { 1 } else { 0 }, 1))))
+        .join_core(&arrangements.supplier, |_sk,&yr,s| Some((s.nation_key, yr)))
+        .join_core(&arrangements.nation, |_nk,&yr,n| Some((n.name,yr)))
+        .count_total()
+        .probe_with(probe);
 }

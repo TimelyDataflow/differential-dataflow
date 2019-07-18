@@ -7,6 +7,7 @@
 //! us to track something like the average.
 
 use std::ops::{AddAssign, Neg, Mul};
+use std::iter::Iterator;
 
 use ::Data;
 
@@ -24,7 +25,7 @@ pub trait Monoid : for<'a> AddAssign<&'a Self> + ::std::marker::Sized + Data + C
 	/// This is primarily used by differential dataflow to know when it is safe to delete an update.
 	/// When a difference accumulates to zero, the difference has no effect on any accumulation and can
 	/// be removed.
-	#[inline(always)]
+	#[inline]
 	fn is_zero(&self) -> bool { self.eq(&Self::zero()) }
 	/// The additive identity.
 	///
@@ -43,17 +44,30 @@ pub trait Abelian : Monoid + Neg<Output=Self> { }
 impl<T: Monoid + Neg<Output=Self>> Abelian for T { }
 
 impl Monoid for isize {
-	#[inline(always)] fn zero() -> Self { 0 }
+	#[inline] fn zero() -> Self { 0 }
+}
+
+impl Monoid for i128 {
+	#[inline] fn zero() -> Self { 0 }
 }
 
 impl Monoid for i64 {
-	#[inline(always)] fn zero() -> Self { 0 }
+	#[inline] fn zero() -> Self { 0 }
 }
 
 impl Monoid for i32 {
-	#[inline(always)] fn zero() -> Self { 0 }
+	#[inline] fn zero() -> Self { 0 }
 }
 
+impl Monoid for i16 {
+	#[inline] fn zero() -> Self { 0 }
+}
+
+impl Monoid for i8 {
+	#[inline] fn zero() -> Self { 0 }
+}
+
+ 
 /// The difference defined by a pair of difference elements.
 ///
 /// This type is essentially a "pair", though in Rust the tuple types do not derive the numeric
@@ -70,7 +84,7 @@ pub struct DiffPair<R1, R2> {
 
 impl<R1, R2> DiffPair<R1, R2> {
 	/// Creates a new Diff pair from two elements.
-	#[inline(always)] pub fn new(elt1: R1, elt2: R2) -> Self {
+	#[inline] pub fn new(elt1: R1, elt2: R2) -> Self {
 		DiffPair {
 			element1: elt1,
 			element2: elt2,
@@ -79,7 +93,7 @@ impl<R1, R2> DiffPair<R1, R2> {
 }
 
 impl<R1: Monoid, R2: Monoid> Monoid for DiffPair<R1, R2> {
-	#[inline(always)] fn zero() -> Self {
+	#[inline] fn zero() -> Self {
 		DiffPair {
 			element1: R1::zero(),
 			element2: R2::zero(),
@@ -88,7 +102,7 @@ impl<R1: Monoid, R2: Monoid> Monoid for DiffPair<R1, R2> {
 }
 
 impl<'a, R1: AddAssign<&'a R1>, R2: AddAssign<&'a R2>> AddAssign<&'a DiffPair<R1, R2>> for DiffPair<R1, R2> {
-	#[inline(always)] fn add_assign(&mut self, rhs: &'a Self) {
+	#[inline] fn add_assign(&mut self, rhs: &'a Self) {
 		self.element1 += &rhs.element1;
 		self.element2 += &rhs.element2;
 	}
@@ -96,7 +110,7 @@ impl<'a, R1: AddAssign<&'a R1>, R2: AddAssign<&'a R2>> AddAssign<&'a DiffPair<R1
 
 impl<R1: Neg, R2: Neg> Neg for DiffPair<R1, R2> {
 	type Output = DiffPair<<R1 as Neg>::Output, <R2 as Neg>::Output>;
-	#[inline(always)] fn neg(self) -> Self::Output {
+	#[inline] fn neg(self) -> Self::Output {
 		DiffPair {
 			element1: -self.element1,
 			element2: -self.element2,
@@ -132,17 +146,46 @@ pub struct DiffVector<R> {
 	buffer: Vec<R>,
 }
 
+impl<R> DiffVector<R> {
+    /// Create new DiffVector from Vec
+    #[inline(always)]
+    pub fn new(vec: Vec<R>) -> DiffVector<R> {
+        DiffVector { buffer: vec }
+    }
+}
+
+impl<R> IntoIterator for DiffVector<R> {
+    type Item = R;
+    type IntoIter = ::std::vec::IntoIter<R>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.buffer.into_iter()
+    }
+}
+
+impl<R> std::ops::Deref for DiffVector<R> {
+	type Target = [R];
+	fn deref(&self) -> &Self::Target {
+		&self.buffer[..]
+	}
+}
+
+impl<R> std::ops::DerefMut for DiffVector<R> {
+	fn deref_mut(&mut self) -> &mut Self::Target {
+		&mut self.buffer[..]
+	}
+}
+
 impl<R: Monoid> Monoid for DiffVector<R> {
-	#[inline(always)] fn is_zero(&self) -> bool {
+	#[inline] fn is_zero(&self) -> bool {
 		self.buffer.iter().all(|x| x.is_zero())
 	}
-	#[inline(always)] fn zero() -> Self {
+	#[inline] fn zero() -> Self {
 		Self { buffer: Vec::new() }
 	}
 }
 
 impl<'a, R: AddAssign<&'a R>+Clone> AddAssign<&'a DiffVector<R>> for DiffVector<R> {
-	#[inline(always)]
+	#[inline]
 	fn add_assign(&mut self, rhs: &'a Self) {
 
 		// Ensure sufficient length to receive addition.
@@ -160,7 +203,7 @@ impl<'a, R: AddAssign<&'a R>+Clone> AddAssign<&'a DiffVector<R>> for DiffVector<
 
 impl<R: Neg<Output=R>+Clone> Neg for DiffVector<R> {
 	type Output = DiffVector<<R as Neg>::Output>;
-	#[inline(always)]
+	#[inline]
 	fn neg(mut self) -> Self::Output {
 		for update in self.buffer.iter_mut() {
 			*update = -update.clone();

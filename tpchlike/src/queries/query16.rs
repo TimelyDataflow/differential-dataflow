@@ -7,7 +7,7 @@ use differential_dataflow::lattice::Lattice;
 
 use regex::Regex;
 
-use ::Collections;
+use {Arrangements, Experiment, Collections};
 
 // -- $ID$
 // -- TPC-H/TPC-R Parts/Supplier Relationship Query (Q16)
@@ -51,7 +51,7 @@ fn starts_with(source: &[u8], query: &[u8]) -> bool {
     source.len() >= query.len() && &source[..query.len()] == query
 }
 
-pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp>
+pub fn query<G: Scope>(collections: &mut Collections<G>, probe: &mut ProbeHandle<G::Timestamp>)
 where G::Timestamp: Lattice+TotalOrder+Ord {
 
     let regex = Regex::new("Customer.*Complaints").expect("Regex construction failed");
@@ -79,5 +79,49 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
         .map(|(_, brand_type_size)| brand_type_size)
         .count_total()
         // .inspect(|x| println!("{:?}", x))
-        .probe()
+        .probe_with(probe);
+}
+
+pub fn query_arranged<G: Scope<Timestamp=usize>>(
+    scope: &mut G,
+    probe: &mut ProbeHandle<usize>,
+    experiment: &mut Experiment,
+    arrangements: &mut Arrangements,
+    round: usize,
+)
+where
+    G::Timestamp: Lattice+TotalOrder+Ord
+{
+    use timely::dataflow::operators::Map;
+    use differential_dataflow::AsCollection;
+
+    let arrangements = arrangements.in_scope(scope, experiment);
+
+    let regex = Regex::new("Customer.*Complaints").expect("Regex construction failed");
+
+    let suppliers =
+    arrangements
+        .supplier
+        .flat_map_ref(move |_,s| if regex.is_match(&s.comment) { Some(s.supp_key) } else { None } )
+        .inner
+        .map(move |(d,t,r)| (d, ::std::cmp::max(t,round),r))
+        .as_collection();
+
+    arrangements
+        .partsupp
+        .as_collection(|&psk,_| psk)
+        .inner
+        .map(move |(d,t,r)| (d, ::std::cmp::max(t,round),r))
+        .as_collection()
+        .join_core(&arrangements.part, |_pk,&sk,p| {
+            if !starts_with(&p.brand, b"Brand#45") && !starts_with(&p.typ.as_bytes(), b"MEDIUM POLISHED") && [49, 14, 23, 45, 19, 3, 36, 9].contains(&p.size) {
+                Some((sk, (p.brand, p.typ, p.size)))
+            }
+            else { None }
+
+        })
+        .antijoin(&suppliers)
+        .map(|(_sk, stuff)| stuff)
+        .count_total()
+        .probe_with(probe);
 }

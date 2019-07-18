@@ -91,7 +91,7 @@ impl<K: Ord+Clone, L: MergeBuilder> MergeBuilder for OrderedLayer<K, L> {
 			vals: L::with_capacity(&other1.vals, &other2.vals),
 		}
 	}
-	#[inline(always)]
+	#[inline]
 	fn copy_range(&mut self, other: &Self::Trie, lower: usize, upper: usize) {
 		debug_assert!(lower < upper);
 		let other_basis = other.offs[lower];
@@ -176,7 +176,7 @@ impl<K: Ord+Clone, L: TupleBuilder> TupleBuilder for OrderedLayer<K, L> {
 			vals: L::with_capacity(cap),
 		}
 	}
-	#[inline(always)]
+	#[inline]
 	fn push_tuple(&mut self, (key, val): (K, L::Item)) {
 
 		// if first element, prior element finish, or different element, need to push and maybe punctuate.

@@ -7,7 +7,7 @@ Our organization has gone from one where each manager has at most two reports, t
 The only change we'll make is to add the following just after we load up our initial org chart:
 
 ```rust,no_run
-    for person in 1 .. 10 {
+    for person in 1 .. size {
         input.advance_to(person);
         input.remove((person/2, person));
         input.insert((person/3, person));
@@ -33,10 +33,8 @@ This removes the prior management relation, and introduces a new one where the p
 
 We do this for each of the non-boss employees and get to see a bunch of outputs.
 
-        Echidnatron% cargo run --example hello
-           Compiling differential-dataflow v0.6.0 (file:///Users/mcsherry/Projects/differential-dataflow)
-            Finished dev [unoptimized + debuginfo] target(s) in 7.42s
-             Running `target/debug/examples/hello`
+        Echidnatron% cargo run -- 10
+             Running `target/debug/my_project`
         ((0, 0, 0), (Root, 0), 1)
         ((0, 0, 1), (Root, 0), 1)
         ((0, 0, 2), (Root, 2), 1)

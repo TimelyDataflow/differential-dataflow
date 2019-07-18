@@ -47,7 +47,7 @@ impl<K: Ord+Clone, R: Monoid+Clone> MergeBuilder for OrderedLeaf<K, R> {
             vals: Vec::with_capacity(<OrderedLeaf<K, R> as Trie>::keys(other1) + <OrderedLeaf<K, R> as Trie>::keys(other2)),
         }
     }
-    #[inline(always)]
+    #[inline]
     fn copy_range(&mut self, other: &Self::Trie, lower: usize, upper: usize) {
         self.vals.extend_from_slice(&other.vals[lower .. upper]);
     }
@@ -99,7 +99,7 @@ impl<K: Ord+Clone, R: Monoid+Clone> TupleBuilder for OrderedLeaf<K, R> {
     type Item = (K, R);
     fn new() -> Self { OrderedLeafBuilder { vals: Vec::new() } }
     fn with_capacity(cap: usize) -> Self { OrderedLeafBuilder { vals: Vec::with_capacity(cap) } }
-    #[inline(always)] fn push_tuple(&mut self, tuple: (K, R)) { self.vals.push(tuple) }
+    #[inline] fn push_tuple(&mut self, tuple: (K, R)) { self.vals.push(tuple) }
 }
 
 /// A cursor for walking through an unordered sequence of values.

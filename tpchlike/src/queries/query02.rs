@@ -5,7 +5,7 @@ use timely::dataflow::operators::probe::Handle as ProbeHandle;
 use differential_dataflow::operators::*;
 use differential_dataflow::lattice::Lattice;
 
-use ::Collections;
+use {Arrangements, Experiment, Collections};
 
 // -- $ID$
 // -- TPC-H/TPC-R Minimum Cost Supplier Query (Q2)
@@ -68,7 +68,7 @@ fn substring(source: &[u8], query: &[u8]) -> bool {
     )
 }
 
-pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp>
+pub fn query<G: Scope>(collections: &mut Collections<G>, probe: &mut ProbeHandle<G::Timestamp>)
 where G::Timestamp: Lattice+TotalOrder+Ord {
 
     let regions =
@@ -113,5 +113,55 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
         .join(&suppliers)
         .map(|(_supp, ((cost, part, mfgr), (nat, acc, nam, add, phn, com)))| (nat, (cost, part, mfgr, acc, nam, add, phn, com)))
         .join(&nations)
-        .probe()
+        .probe_with(probe);
+}
+
+pub fn query_arranged<G: Scope<Timestamp=usize>>(
+    scope: &mut G,
+    probe: &mut ProbeHandle<usize>,
+    experiment: &mut Experiment,
+    arrangements: &mut Arrangements,
+    round: usize,
+)
+where
+    G::Timestamp: Lattice+TotalOrder+Ord
+{
+    use timely::dataflow::operators::Map;
+    use differential_dataflow::AsCollection;
+
+    let arrangements = arrangements.in_scope(scope, experiment);
+
+    let relevant_suppliers =
+    arrangements
+        .partsupp
+        .as_collection(|_,x| (x.supp_key, (x.part_key, x.supplycost)))
+        .inner
+        .map(move |(d,t,r)| (d, ::std::cmp::max(t,round),r))
+        .as_collection()
+        .join_core(&arrangements.supplier, |&sk, &(pk,sc), s| Some((s.nation_key, (pk,sc,sk))))
+        .join_core(&arrangements.nation, |_nk, &(pk,sc,sk), n| Some((n.region_key, (pk,sc,sk,n.name))))
+        .join_core(&arrangements.region, |_rk, &(pk,sc,sk,nm), r| {
+            if starts_with(&r.name[..], b"EUROPE") { Some((pk,(sc,sk,nm))) } else { None }
+        });
+
+    let cheapest_suppliers =
+    relevant_suppliers
+        .reduce(|_pk, s, t| {
+            let minimum = (s[0].0).0;
+            t.extend(s.iter().take_while(|x| (x.0).0 == minimum).map(|&(&x,w)| (x,w)));
+        });
+
+    cheapest_suppliers
+        .join_core(&arrangements.part, |&pk,&(sc,sk,nm),p| {
+            if substring(p.typ.as_str().as_bytes(), b"BRASS") && p.size == 15 {
+                Some((sk, (sc,pk,nm,p.mfgr)))
+            }
+            else {
+                None
+            }
+        })
+        .join_core(&arrangements.supplier, |_sk,&(sc,pk,nm,pm),s| {
+            Some((sc,pk,nm,pm,s.acctbal,s.name,s.address,s.phone,s.comment))
+        })
+        .probe_with(probe);
 }

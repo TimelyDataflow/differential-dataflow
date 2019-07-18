@@ -18,7 +18,7 @@
     - [Concat](./chapter_2/chapter_2_3.md)
     - [Consolidate](./chapter_2/chapter_2_4.md)
     - [Join](./chapter_2/chapter_2_5.md)
-    - [Group](./chapter_2/chapter_2_6.md)
+    - [Reduce](./chapter_2/chapter_2_6.md)
     - [Iterate](./chapter_2/chapter_2_7.md)
     - [Arrange](./chapter_2/chapter_2_8.md)
 

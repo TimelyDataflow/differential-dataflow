@@ -2,7 +2,7 @@
 
 use timely::dataflow::Scope;
 
-use ::{Collection, Data};
+use ::{Collection, ExchangeData};
 use ::lattice::Lattice;
 use ::operators::*;
 
@@ -23,8 +23,8 @@ impl<G, K, D> PrefixSum<G, K, D> for Collection<G, ((usize, K), D)>
 where
     G: Scope,
     G::Timestamp: Lattice,
-    K: Data+::std::hash::Hash,
-    D: Data+::std::hash::Hash,
+    K: ExchangeData+::std::hash::Hash,
+    D: ExchangeData+::std::hash::Hash,
 {
     fn prefix_sum<F>(&self, zero: D, combine: F) -> Self where F: Fn(&K,&D,&D)->D + 'static {
         self.prefix_sum_at(self.map(|(x,_)| x), zero, combine)
@@ -47,8 +47,8 @@ pub fn aggregate<G, K, D, F>(collection: Collection<G, ((usize, K), D)>, combine
 where
     G: Scope,
     G::Timestamp: Lattice,
-    K: Data+::std::hash::Hash,
-    D: Data+::std::hash::Hash,
+    K: ExchangeData+::std::hash::Hash,
+    D: ExchangeData+::std::hash::Hash,
     F: Fn(&K,&D,&D)->D + 'static,
 {
     // initial ranges are at each index, and with width 2^0.
@@ -83,8 +83,8 @@ pub fn broadcast<G, K, D, F>(
 where
     G: Scope,
     G::Timestamp: Lattice+Ord+::std::fmt::Debug,
-    K: Data+::std::hash::Hash,
-    D: Data+::std::hash::Hash,
+    K: ExchangeData+::std::hash::Hash,
+    D: ExchangeData+::std::hash::Hash,
     F: Fn(&K,&D,&D)->D + 'static,
 {
 

@@ -4,7 +4,7 @@ use std::hash::Hash;
 
 use timely::dataflow::*;
 
-use ::{Collection, Data};
+use ::{Collection, ExchangeData};
 use ::operators::*;
 use ::lattice::Lattice;
 
@@ -13,7 +13,7 @@ pub fn bfs<G, N>(edges: &Collection<G, (N,N)>, roots: &Collection<G, N>) -> Coll
 where
     G: Scope,
     G::Timestamp: Lattice+Ord,
-    N: Data+Hash,
+    N: ExchangeData+Hash,
 {
     // initialize roots as reaching themselves at distance 0
     let nodes = roots.map(|x| (x, 0));

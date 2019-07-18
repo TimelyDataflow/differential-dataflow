@@ -5,7 +5,7 @@ use timely::dataflow::operators::probe::Handle as ProbeHandle;
 use differential_dataflow::operators::*;
 use differential_dataflow::lattice::Lattice;
 
-use ::Collections;
+use {Arrangements, Experiment, Collections};
 use ::types::create_date;
 
 // -- $ID$
@@ -44,7 +44,7 @@ fn starts_with(source: &[u8], query: &[u8]) -> bool {
     source.len() >= query.len() && &source[..query.len()] == query
 }
 
-pub fn query<G: Scope>(collections: &mut Collections<G>) -> ProbeHandle<G::Timestamp>
+pub fn query<G: Scope>(collections: &mut Collections<G>, probe: &mut ProbeHandle<G::Timestamp>)
 where G::Timestamp: Lattice+TotalOrder+Ord {
 
     let regions =
@@ -98,5 +98,40 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
         .map(|((_supp, nat), ())| nat)
         .count_total()
         // .inspect(|x| println!("{:?}", x))
-        .probe()
+        .probe_with(probe);
+}
+
+pub fn query_arranged<G: Scope<Timestamp=usize>>(
+    scope: &mut G,
+    probe: &mut ProbeHandle<usize>,
+    experiment: &mut Experiment,
+    arrangements: &mut Arrangements,
+)
+where
+    G::Timestamp: Lattice+TotalOrder+Ord
+{
+    let arrangements = arrangements.in_scope(scope, experiment);
+
+    experiment
+        .lineitem(scope)
+        .explode(|l| Some(((l.order_key, l.supp_key), (l.extended_price * (100 - l.discount) / 100) as isize)))
+        .join_core(&arrangements.order, |_ok, &sk, o| {
+            if o.order_date >= create_date(1994, 1, 1) && o.order_date < create_date(1995, 1, 1) {
+                Some((o.cust_key, sk))
+            }
+            else { None }
+        })
+        .join_core(&arrangements.customer, |_ck, &sk, c| Some((sk,c.nation_key)))
+        .join_core(&arrangements.supplier, |_sk, &nk, s| {
+            if s.nation_key == nk {
+                Some((nk, ()))
+            }
+            else { None }
+        })
+        .join_core(&arrangements.nation, |_nk, &(), n| Some((n.region_key, n.name)))
+        .join_core(&arrangements.region, |_rk, &name, r| {
+            if starts_with(&r.name[..], b"ASIA") { Some(name) } else { None }
+        })
+        .count_total()
+        .probe_with(probe);
 }

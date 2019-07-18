@@ -12,7 +12,8 @@ use std::cell::RefCell;
 use timely::dataflow::{Scope, ProbeHandle};
 use timely::dataflow::scopes::child::Iterative as Child;
 
-use differential_dataflow::{AsCollection, Collection, Data, Hashable};
+use differential_dataflow::{AsCollection, Collection, Hashable};
+use differential_dataflow::ExchangeData as Data;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::input::Input;
 use differential_dataflow::operators::iterate::Variable;
