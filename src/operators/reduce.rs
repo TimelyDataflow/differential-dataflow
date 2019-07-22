@@ -61,7 +61,7 @@ pub trait Reduce<G: Scope, K: Data, V: Data, R: Monoid> where G::Timestamp: Latt
     /// }
     /// ```
     fn reduce<L, V2: Data, R2: Abelian>(&self, logic: L) -> Collection<G, (K, V2), R2>
-    where L: Fn(&K, &[(&V, R)], &mut Vec<(V2, R2)>)+'static;
+    where L: FnMut(&K, &[(&V, R)], &mut Vec<(V2, R2)>)+'static;
 }
 
 impl<G, K, V, R> Reduce<G, K, V, R> for Collection<G, (K, V), R>
@@ -73,7 +73,7 @@ impl<G, K, V, R> Reduce<G, K, V, R> for Collection<G, (K, V), R>
         R: ExchangeData+Monoid,
  {
     fn reduce<L, V2: Data, R2: Abelian>(&self, logic: L) -> Collection<G, (K, V2), R2>
-        where L: Fn(&K, &[(&V, R)], &mut Vec<(V2, R2)>)+'static {
+        where L: FnMut(&K, &[(&V, R)], &mut Vec<(V2, R2)>)+'static {
         self.arrange_by_key()
             .reduce_abelian::<_,DefaultValTrace<_,_,_,_>>(logic)
             .as_collection(|k,v| (k.clone(), v.clone()))
@@ -88,7 +88,7 @@ where
     T1::Cursor: Cursor<K, V, G::Timestamp, R>,
 {
     fn reduce<L, V2: Data, R2: Abelian>(&self, logic: L) -> Collection<G, (K, V2), R2>
-        where L: Fn(&K, &[(&V, R)], &mut Vec<(V2, R2)>)+'static {
+        where L: FnMut(&K, &[(&V, R)], &mut Vec<(V2, R2)>)+'static {
         self.reduce_abelian::<_,DefaultValTrace<_,_,_,_>>(logic)
             .as_collection(|k,v| (k.clone(), v.clone()))
     }
@@ -120,7 +120,7 @@ pub trait Threshold<G: Scope, K: Data, R1: Monoid> where G::Timestamp: Lattice+O
     ///     });
     /// }
     /// ```
-    fn threshold<R2: Abelian, F: Fn(&K, &R1)->R2+'static>(&self, thresh: F) -> Collection<G, K, R2>;
+    fn threshold<R2: Abelian, F: FnMut(&K, &R1)->R2+'static>(&self, thresh: F) -> Collection<G, K, R2>;
     /// Reduces the collection to one occurrence of each distinct element.
     ///
     /// # Examples
@@ -148,7 +148,7 @@ pub trait Threshold<G: Scope, K: Data, R1: Monoid> where G::Timestamp: Lattice+O
 
 impl<G: Scope, K: ExchangeData+Hashable, R1: ExchangeData+Monoid> Threshold<G, K, R1> for Collection<G, K, R1>
 where G::Timestamp: Lattice+Ord {
-    fn threshold<R2: Abelian, F: Fn(&K,&R1)->R2+'static>(&self, thresh: F) -> Collection<G, K, R2> {
+    fn threshold<R2: Abelian, F: FnMut(&K,&R1)->R2+'static>(&self, mut thresh: F) -> Collection<G, K, R2> {
         self.arrange_by_self()
             .reduce_abelian::<_,DefaultKeyTrace<_,_,_>>(move |k,s,t| t.push(((), thresh(k, &s[0].1))))
             .as_collection(|k,_| k.clone())
@@ -162,7 +162,7 @@ where
     T1::Batch: BatchReader<K, (), G::Timestamp, R1>,
     T1::Cursor: Cursor<K, (), G::Timestamp, R1>,
 {
-    fn threshold<R2: Abelian, F: Fn(&K,&R1)->R2+'static>(&self, thresh: F) -> Collection<G, K, R2> {
+    fn threshold<R2: Abelian, F: FnMut(&K,&R1)->R2+'static>(&self, mut thresh: F) -> Collection<G, K, R2> {
         self.reduce_abelian::<_,DefaultKeyTrace<_,_,_>>(move |k,s,t| t.push(((), thresh(k, &s[0].1))))
             .as_collection(|k,_| k.clone())
     }
@@ -249,14 +249,14 @@ pub trait ReduceCore<G: Scope, K: Data, V: Data, R: Monoid> where G::Timestamp: 
     ///     });
     /// }
     /// ```
-    fn reduce_abelian<L, T2>(&self, logic: L) -> Arranged<G, TraceAgent<T2>>
+    fn reduce_abelian<L, T2>(&self, mut logic: L) -> Arranged<G, TraceAgent<T2>>
         where
             T2: Trace+TraceReader<Key=K, Time=G::Timestamp>+'static,
             T2::Val: Data,
             T2::R: Abelian,
             T2::Batch: Batch<K, T2::Val, G::Timestamp, T2::R>,
             T2::Cursor: Cursor<K, T2::Val, G::Timestamp, T2::R>,
-            L: Fn(&K, &[(&V, R)], &mut Vec<(T2::Val, T2::R)>)+'static,
+            L: FnMut(&K, &[(&V, R)], &mut Vec<(T2::Val, T2::R)>)+'static,
         {
             self.reduce_core::<_,T2>(move |key, input, output, change| {
                 if !input.is_empty() {
@@ -279,7 +279,7 @@ pub trait ReduceCore<G: Scope, K: Data, V: Data, R: Monoid> where G::Timestamp: 
             T2::R: Monoid,
             T2::Batch: Batch<K, T2::Val, G::Timestamp, T2::R>,
             T2::Cursor: Cursor<K, T2::Val, G::Timestamp, T2::R>,
-            L: Fn(&K, &[(&V, R)], &mut Vec<(T2::Val,T2::R)>, &mut Vec<(T2::Val,T2::R)>)+'static
+            L: FnMut(&K, &[(&V, R)], &mut Vec<(T2::Val,T2::R)>, &mut Vec<(T2::Val,T2::R)>)+'static
             ;
 }
 
@@ -298,7 +298,7 @@ where
             T2: Trace+TraceReader<Key=K, Time=G::Timestamp>+'static,
             T2::Batch: Batch<K, T2::Val, G::Timestamp, T2::R>,
             T2::Cursor: Cursor<K, T2::Val, G::Timestamp, T2::R>,
-            L: Fn(&K, &[(&V, R)], &mut Vec<(T2::Val,T2::R)>, &mut Vec<(T2::Val, T2::R)>)+'static
+            L: FnMut(&K, &[(&V, R)], &mut Vec<(T2::Val,T2::R)>, &mut Vec<(T2::Val, T2::R)>)+'static
     {
         self.arrange_by_key()
             .reduce_core(logic)
@@ -312,14 +312,14 @@ where
     T1::Batch: BatchReader<K, V, G::Timestamp, R>,
     T1::Cursor: Cursor<K, V, G::Timestamp, R>,
 {
-    fn reduce_core<L, T2>(&self, logic: L) -> Arranged<G, TraceAgent<T2>>
+    fn reduce_core<L, T2>(&self, mut logic: L) -> Arranged<G, TraceAgent<T2>>
         where
             T2: Trace+TraceReader<Key=K, Time=G::Timestamp>+'static,
             T2::Val: Data,
             T2::R: Monoid,
             T2::Batch: Batch<K, T2::Val, G::Timestamp, T2::R>,
             T2::Cursor: Cursor<K, T2::Val, G::Timestamp, T2::R>,
-            L: Fn(&K, &[(&V, R)], &mut Vec<(T2::Val,T2::R)>, &mut Vec<(T2::Val, T2::R)>)+'static {
+            L: FnMut(&K, &[(&V, R)], &mut Vec<(T2::Val,T2::R)>, &mut Vec<(T2::Val, T2::R)>)+'static {
 
         let mut result_trace = None;
 
@@ -499,7 +499,7 @@ where
                                 (&mut output_cursor, output_storage),
                                 (&mut batch_cursor, batch_storage),
                                 &mut interesting_times,
-                                &logic,
+                                &mut logic,
                                 &upper_limit,
                                 &mut buffers[..],
                                 &mut new_interesting_times,
@@ -650,7 +650,7 @@ where
         output_cursor: (&mut C2, &'a C2::Storage),
         batch_cursor: (&mut C3, &'a C3::Storage),
         times: &mut Vec<T>,
-        logic: &L,
+        logic: &mut L,
         upper_limit: &Antichain<T>,
         outputs: &mut [(T, Vec<(V2, T, R2)>)],
         new_interesting: &mut Vec<T>) -> (usize, usize)
@@ -659,7 +659,7 @@ where
         C1: Cursor<K, V1, T, R1>,
         C2: Cursor<K, V2, T, R2>,
         C3: Cursor<K, V1, T, R1>,
-        L: Fn(&K, &[(&V1, R1)], &mut Vec<(V2, R2)>, &mut Vec<(V2, R2)>);
+        L: FnMut(&K, &[(&V1, R1)], &mut Vec<(V2, R2)>, &mut Vec<(V2, R2)>);
 }
 
 
@@ -728,7 +728,7 @@ mod history_replay {
             (output_cursor, output_storage): (&mut C2, &'a C2::Storage),
             (batch_cursor, batch_storage): (&mut C3, &'a C3::Storage),
             times: &mut Vec<T>,
-            logic: &L,
+            logic: &mut L,
             upper_limit: &Antichain<T>,
             outputs: &mut [(T, Vec<(V2, T, R2)>)],
             new_interesting: &mut Vec<T>) -> (usize, usize)
@@ -737,7 +737,7 @@ mod history_replay {
             C1: Cursor<K, V1, T, R1>,
             C2: Cursor<K, V2, T, R2>,
             C3: Cursor<K, V1, T, R1>,
-            L: Fn(&K, &[(&V1, R1)], &mut Vec<(V2, R2)>, &mut Vec<(V2, R2)>)
+            L: FnMut(&K, &[(&V1, R1)], &mut Vec<(V2, R2)>, &mut Vec<(V2, R2)>)
         {
 
             // The work we need to perform is at times defined principally by the contents of `batch_cursor`
