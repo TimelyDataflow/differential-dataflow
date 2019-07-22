@@ -85,7 +85,7 @@ pub trait Join<G: Scope, K: Data, V: Data, R: Monoid> {
     /// }
     /// ```
     fn join_map<V2, R2, D, L>(&self, other: &Collection<G, (K,V2), R2>, logic: L) -> Collection<G, D, <R as Mul<R2>>::Output>
-    where K: ExchangeData, V2: ExchangeData, R2: ExchangeData+Monoid, R: Mul<R2>, <R as Mul<R2>>::Output: Monoid, D: Data, L: Fn(&K, &V, &V2)->D+'static;
+    where K: ExchangeData, V2: ExchangeData, R2: ExchangeData+Monoid, R: Mul<R2>, <R as Mul<R2>>::Output: Monoid, D: Data, L: FnMut(&K, &V, &V2)->D+'static;
 
     /// Matches pairs `(key, val)` and `key` based on `key`, producing the former with frequencies multiplied.
     ///
@@ -159,8 +159,8 @@ where
     R: ExchangeData+Monoid,
     G::Timestamp: Lattice+Ord,
 {
-    fn join_map<V2: ExchangeData, R2: ExchangeData+Monoid, D: Data, L>(&self, other: &Collection<G, (K, V2), R2>, logic: L) -> Collection<G, D, <R as Mul<R2>>::Output>
-    where R: Mul<R2>, <R as Mul<R2>>::Output: Monoid, L: Fn(&K, &V, &V2)->D+'static {
+    fn join_map<V2: ExchangeData, R2: ExchangeData+Monoid, D: Data, L>(&self, other: &Collection<G, (K, V2), R2>, mut logic: L) -> Collection<G, D, <R as Mul<R2>>::Output>
+    where R: Mul<R2>, <R as Mul<R2>>::Output: Monoid, L: FnMut(&K, &V, &V2)->D+'static {
         let arranged1 = self.arrange_by_key();
         let arranged2 = other.arrange_by_key();
         arranged1.join_core(&arranged2, move |k,v1,v2| Some(logic(k,v1,v2)))
@@ -190,8 +190,8 @@ where
     Tr::Batch: BatchReader<Tr::Key,Tr::Val,G::Timestamp,Tr::R>+'static,
     Tr::Cursor: Cursor<Tr::Key,Tr::Val,G::Timestamp,Tr::R>+'static,
 {
-    fn join_map<V2: ExchangeData, R2: ExchangeData+Monoid, D: Data, L>(&self, other: &Collection<G, (Tr::Key, V2), R2>, logic: L) -> Collection<G, D, <Tr::R as Mul<R2>>::Output>
-    where Tr::Key: ExchangeData, Tr::R: Mul<R2>, <Tr::R as Mul<R2>>::Output: Monoid, L: Fn(&Tr::Key, &Tr::Val, &V2)->D+'static {
+    fn join_map<V2: ExchangeData, R2: ExchangeData+Monoid, D: Data, L>(&self, other: &Collection<G, (Tr::Key, V2), R2>, mut logic: L) -> Collection<G, D, <Tr::R as Mul<R2>>::Output>
+    where Tr::Key: ExchangeData, Tr::R: Mul<R2>, <Tr::R as Mul<R2>>::Output: Monoid, L: FnMut(&Tr::Key, &Tr::Val, &V2)->D+'static {
         let arranged2 = other.arrange_by_key();
         self.join_core(&arranged2, move |k,v1,v2| Some(logic(k,v1,v2)))
     }
@@ -262,7 +262,7 @@ pub trait JoinCore<G: Scope, K: 'static, V: 'static, R: Monoid> where G::Timesta
         <R as Mul<Tr2::R>>::Output: Monoid,
         I: IntoIterator,
         I::Item: Data,
-        L: Fn(&K,&V,&Tr2::Val)->I+'static,
+        L: FnMut(&K,&V,&Tr2::Val)->I+'static,
         ;
 }
 
@@ -286,7 +286,7 @@ where
         <R as Mul<Tr2::R>>::Output: Monoid,
         I: IntoIterator,
         I::Item: Data,
-        L: Fn(&K,&V,&Tr2::Val)->I+'static,
+        L: FnMut(&K,&V,&Tr2::Val)->I+'static,
     {
         self.arrange_by_key()
             .join_core(stream2, result)
@@ -304,7 +304,7 @@ impl<G, T1> JoinCore<G, T1::Key, T1::Val, T1::R> for Arranged<G,T1>
         T1::Batch: BatchReader<T1::Key,T1::Val,G::Timestamp,T1::R>+'static,
         T1::Cursor: Cursor<T1::Key,T1::Val,G::Timestamp,T1::R>+'static,
 {
-    fn join_core<Tr2,I,L>(&self, other: &Arranged<G,Tr2>, result: L) -> Collection<G,I::Item,<T1::R as Mul<Tr2::R>>::Output>
+    fn join_core<Tr2,I,L>(&self, other: &Arranged<G,Tr2>, mut result: L) -> Collection<G,I::Item,<T1::R as Mul<Tr2::R>>::Output>
     where
         Tr2::Val: Ord+Clone+Debug+'static,
         Tr2: TraceReader<Key=T1::Key,Time=G::Timestamp>+Clone+'static,
@@ -315,7 +315,7 @@ impl<G, T1> JoinCore<G, T1::Key, T1::Val, T1::R> for Arranged<G,T1>
         <T1::R as Mul<Tr2::R>>::Output: Monoid,
         I: IntoIterator,
         I::Item: Data,
-        L: Fn(&T1::Key,&T1::Val,&Tr2::Val)->I+'static {
+        L: FnMut(&T1::Key,&T1::Val,&Tr2::Val)->I+'static {
 
         // handles to shared trace data structures.
         let mut trace1 = Some(self.trace.clone());
@@ -390,13 +390,13 @@ impl<G, T1> JoinCore<G, T1::Key, T1::Val, T1::R> for Arranged<G,T1>
 
                 // perform some amount of outstanding work.
                 while !todo1.is_empty() && fuel > 0 {
-                    todo1[0].work(output, &|k,v2,v1| result(k,v1,v2), &mut fuel);
+                    todo1[0].work(output, &mut |k,v2,v1| result(k,v1,v2), &mut fuel);
                     if !todo1[0].work_remains() { todo1.remove(0); }
                 }
 
                 // perform some amount of outstanding work.
                 while !todo2.is_empty() && fuel > 0 {
-                    todo2[0].work(output, &|k,v1,v2| result(k,v1,v2), &mut fuel);
+                    todo2[0].work(output, &mut |k,v1,v2| result(k,v1,v2), &mut fuel);
                     if !todo2[0].work_remains() { todo2.remove(0); }
                 }
 
@@ -446,7 +446,7 @@ where
     R2: Monoid,
     C1: Cursor<K, V1, T, R1>,
     C2: Cursor<K, V2, T, R2>,
-    M: Fn(&R1,&R2)->R3,
+    M: FnMut(&R1,&R2)->R3,
     D: Ord+Clone+Data,
 {
     phant: ::std::marker::PhantomData<(K, V1, V2, R1, R2)>,
@@ -472,7 +472,7 @@ where
     R3: Monoid,
     C1: Cursor<K, V1, T, R1>,
     C2: Cursor<K, V2, T, R2>,
-    M: Fn(&R1,&R2)->R3,
+    M: FnMut(&R1,&R2)->R3,
     D: Ord+Clone+Data,
 {
     fn new(trace: C1, trace_storage: C1::Storage, batch: C2, batch_storage: C2::Storage, capability: Capability<T>, mult: M) -> Self {
@@ -496,8 +496,8 @@ where
 
     /// Process keys until at least `limit` output tuples produced, or the work is exhausted.
     #[inline(never)]
-    fn work<L, I>(&mut self, output: &mut OutputHandle<T, (D, T, R3), Tee<T, (D, T, R3)>>, logic: &L, fuel: &mut usize)
-    where I: IntoIterator<Item=D>, L: Fn(&K, &V1, &V2)->I {
+    fn work<L, I>(&mut self, output: &mut OutputHandle<T, (D, T, R3), Tee<T, (D, T, R3)>>, logic: &mut L, fuel: &mut usize)
+    where I: IntoIterator<Item=D>, L: FnMut(&K, &V1, &V2)->I {
 
         let meet = self.capability.time();
 
@@ -509,7 +509,7 @@ where
 
         let trace = &mut self.trace;
         let batch = &mut self.batch;
-        let mult = &self.mult;
+        let mult = &mut self.mult;
 
         let temp = &mut self.temp;
         // let thinker = &mut self.thinker;
