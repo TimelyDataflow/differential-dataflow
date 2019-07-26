@@ -64,7 +64,7 @@ pub trait ThresholdTotal<G: Scope, K: ExchangeData, R: ExchangeData+Monoid> wher
     /// }
     /// ```
     fn distinct_total(&self) -> Collection<G, K, isize> {
-        self.threshold_total(|_,c| if c.is_zero() { 0 } else { 1 })
+        self.threshold_total(|_,c| if c.is_zero() { 0isize } else { 1isize })
     }
 }
 
@@ -105,12 +105,15 @@ where
 
                     while batch_cursor.key_valid(&batch) {
                         let key = batch_cursor.key(&batch);
-                        let mut count = <T1::R>::zero();
+                        let mut count = None;
 
                         // Compute the multiplicity of this key before the current batch.
                         trace_cursor.seek_key(&trace_storage, key);
                         if trace_cursor.key_valid(&trace_storage) && trace_cursor.key(&trace_storage) == key {
-                            trace_cursor.map_times(&trace_storage, |_, diff| count += diff);
+                            trace_cursor.map_times(&trace_storage, |_, diff| {
+                                count.as_mut().map(|c| *c += diff);
+                                if count.is_none() { count = Some(diff.clone()); }
+                            });
                         }
 
                         // Apply `thresh` both before and after `diff` is applied to `count`.
@@ -119,14 +122,23 @@ where
 
                             // Determine old and new weights.
                             // If a count is zero, the weight must be zero.
-                            let old_weight = if count.is_zero() { R2::zero() } else { thresh(key, &count) };
-                            count += diff;
-                            let new_weight = if count.is_zero() { R2::zero() } else { thresh(key, &count) };
+                            let old_weight = count.as_ref().map(|c| thresh(key, c));
+                            count.as_mut().map(|c| *c += diff);
+                            if count.is_none() { count = Some(diff.clone()); }
+                            let new_weight = count.as_ref().map(|c| thresh(key, c));
 
-                            let mut difference = -old_weight;
-                            difference += &new_weight;
-                            if !difference.is_zero() {
-                                session.give((key.clone(), time.clone(), difference));
+                            let difference =
+                            match (old_weight, new_weight) {
+                                (Some(old), Some(new)) => { let mut diff = -old; diff += &new; Some(diff) },
+                                (Some(old), None) => { Some(-old) },
+                                (None, Some(new)) => { Some(new) },
+                                (None, None) => None,
+                            };
+
+                            if let Some(difference) = difference {
+                                if !difference.is_zero() {
+                                    session.give((key.clone(), time.clone(), difference));
+                                }
                             }
                         });
 

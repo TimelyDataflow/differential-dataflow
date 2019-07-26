@@ -205,16 +205,7 @@ impl<D: Ord, T: Ord, R: Monoid> MergeSorter<D, T, R> {
         };
 
         if batch.len() > 0 {
-            batch.sort_unstable_by(|x,y| (&x.0, &x.1).cmp(&(&y.0, &y.1)));
-            for index in 1 .. batch.len() {
-                if batch[index].0 == batch[index - 1].0 && batch[index].1 == batch[index - 1].1 {
-                    let prev = ::std::mem::replace(&mut batch[index - 1].2, R::zero());
-                    batch[index].2 += &prev;
-                }
-            }
-            batch.retain(|x| !x.2.is_zero());
-
-
+            crate::consolidation::consolidate_updates(&mut batch);
             self.queue.push(vec![batch]);
             while self.queue.len() > 1 && (self.queue[self.queue.len()-1].len() >= self.queue[self.queue.len()-2].len() / 2) {
                 let list1 = self.queue.pop().unwrap();

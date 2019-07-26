@@ -107,20 +107,11 @@ where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Ord+Clone+::std::fm
 			let updates = &mut layer.vals.vals.vals[..];
 
 			// sort the range by the times (ignore the diffs; they will collapse).
-			updates[lower .. upper].sort_by(|x,y| x.0.cmp(&y.0));
+			let count = crate::consolidation::consolidate_slice(&mut updates[lower .. upper]);
 
-			for index in lower .. (upper - 1) {
-				if updates[index].0 == updates[index+1].0 {
-					let prev = ::std::mem::replace(&mut updates[index].1, R::zero());
-					updates[index+1].1 += &prev;
-				}
-			}
-
-			for index in lower .. upper {
-				if !updates[index].1.is_zero() {
-					updates.swap(write_position, index);
-					write_position += 1;
-				}
+			for index in lower .. (lower + count) {
+				updates.swap(write_position, index);
+				write_position += 1;
 			}
 		}
 		layer.vals.vals.vals.truncate(write_position);
@@ -389,20 +380,11 @@ where K: Ord+Clone+'static, T: Lattice+Ord+Clone+'static, R: Monoid {
 			let updates = &mut layer.vals.vals[..];
 
 			// sort the range by the times (ignore the diffs; they will collapse).
-			updates[lower .. upper].sort_by(|x,y| x.0.cmp(&y.0));
+		 	let count = crate::consolidation::consolidate_slice(&mut updates[lower .. upper]);
 
-			for index in lower .. (upper - 1) {
-				if updates[index].0 == updates[index+1].0 {
-					let prev = ::std::mem::replace(&mut updates[index].1, R::zero());
-					updates[index + 1].1 += &prev;
-				}
-			}
-
-			for index in lower .. upper {
-				if !updates[index].1.is_zero() {
-					updates.swap(write_position, index);
-					write_position += 1;
-				}
+			for index in lower .. (lower + count) {
+				updates.swap(write_position, index);
+				write_position += 1;
 			}
 		}
 		layer.vals.vals.truncate(write_position);

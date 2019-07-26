@@ -25,13 +25,10 @@ pub trait Monoid : for<'a> AddAssign<&'a Self> + ::std::marker::Sized + Data + C
 	/// This is primarily used by differential dataflow to know when it is safe to delete an update.
 	/// When a difference accumulates to zero, the difference has no effect on any accumulation and can
 	/// be removed.
-	#[inline]
-	fn is_zero(&self) -> bool { self.eq(&Self::zero()) }
-	/// The additive identity.
 	///
-	/// This method is primarily used by differential dataflow internals as part of consolidation, when
-	/// one value is accumulated elsewhere and must be replaced by valid but harmless value.
-	fn zero() -> Self;
+	/// A semigroup is not obligated to have a zero element, and this method could always return
+	/// false in such a setting.
+	fn is_zero(&self) -> bool;
 }
 
 /// A commutative monoid with negation.
@@ -44,28 +41,29 @@ pub trait Abelian : Monoid + Neg<Output=Self> { }
 impl<T: Monoid + Neg<Output=Self>> Abelian for T { }
 
 impl Monoid for isize {
-	#[inline] fn zero() -> Self { 0 }
+	#[inline] fn is_zero(&self) -> bool { self == &0 }
 }
 
 impl Monoid for i128 {
-	#[inline] fn zero() -> Self { 0 }
+	#[inline] fn is_zero(&self) -> bool { self == &0 }
 }
 
 impl Monoid for i64 {
-	#[inline] fn zero() -> Self { 0 }
+	#[inline] fn is_zero(&self) -> bool { self == &0 }
 }
 
 impl Monoid for i32 {
-	#[inline] fn zero() -> Self { 0 }
+	#[inline] fn is_zero(&self) -> bool { self == &0 }
 }
 
 impl Monoid for i16 {
-	#[inline] fn zero() -> Self { 0 }
+	#[inline] fn is_zero(&self) -> bool { self == &0 }
 }
 
 impl Monoid for i8 {
-	#[inline] fn zero() -> Self { 0 }
+	#[inline] fn is_zero(&self) -> bool { self == &0 }
 }
+
 
  
 /// The difference defined by a pair of difference elements.
@@ -93,11 +91,8 @@ impl<R1, R2> DiffPair<R1, R2> {
 }
 
 impl<R1: Monoid, R2: Monoid> Monoid for DiffPair<R1, R2> {
-	#[inline] fn zero() -> Self {
-		DiffPair {
-			element1: R1::zero(),
-			element2: R2::zero(),
-		}
+	#[inline] fn is_zero(&self) -> bool {
+		self.element1.is_zero() && self.element2.is_zero()
 	}
 }
 
@@ -178,9 +173,6 @@ impl<R> std::ops::DerefMut for DiffVector<R> {
 impl<R: Monoid> Monoid for DiffVector<R> {
 	#[inline] fn is_zero(&self) -> bool {
 		self.buffer.iter().all(|x| x.is_zero())
-	}
-	#[inline] fn zero() -> Self {
-		Self { buffer: Vec::new() }
 	}
 }
 

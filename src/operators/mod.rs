@@ -4,7 +4,7 @@
 //! operators have specialized implementations to make them work efficiently, and are in addition
 //! to several operations defined directly on the `Collection` type (e.g. `map` and `filter`).
 
-pub use self::reduce::{Reduce, Threshold, Count, consolidate_from};
+pub use self::reduce::{Reduce, Threshold, Count};
 pub use self::consolidate::Consolidate;
 pub use self::iterate::Iterate;
 pub use self::join::{Join, JoinCore};
@@ -21,7 +21,7 @@ pub mod threshold;
 
 use ::difference::Monoid;
 use lattice::Lattice;
-use trace::{Cursor, consolidate};
+use trace::Cursor;
 
 /// An accumulation of (value, time, diff) updates.
 struct EditList<'a, V: 'a, T, R> {
@@ -65,7 +65,7 @@ impl<'a, V:'a, T, R> EditList<'a, V, T, R> where T: Ord+Clone, R: Monoid {
     #[inline]
     fn seal(&mut self, value: &'a V) {
         let prev = self.values.last().map(|x| x.1).unwrap_or(0);
-        consolidate_from(&mut self.edits, prev);
+        crate::consolidation::consolidate_from(&mut self.edits, prev);
         if self.edits.len() > prev {
             self.values.push((value, self.edits.len()));
         }
@@ -195,7 +195,7 @@ where
         for element in self.replay.buffer.iter_mut() {
             (element.0).1 = (element.0).1.join(meet);
         }
-        consolidate(&mut self.replay.buffer, 0);
+        crate::consolidation::consolidate(&mut self.replay.buffer);
     }
     fn is_done(&self) -> bool { self.replay.history.len() == 0 }
 

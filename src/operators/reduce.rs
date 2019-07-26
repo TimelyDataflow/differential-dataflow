@@ -263,7 +263,7 @@ pub trait ReduceCore<G: Scope, K: Data, V: Data, R: Monoid> where G::Timestamp: 
                     logic(key, input, change);
                 }
                 change.extend(output.drain(..).map(|(x,d)| (x,-d)));
-                consolidate(change);
+                crate::consolidation::consolidate(change);
             })
         }
 
@@ -594,46 +594,6 @@ fn sort_dedup<T: Ord>(list: &mut Vec<T>) {
     list.dedup();
 }
 
-/// Consolidates a vector of (element, diff) by sorting by element and collapsing all tuples with the same element.
-/// Elements with diff 0 will be removed.
-#[inline(never)]
-fn consolidate<T: Ord, R: Monoid>(list: &mut Vec<(T, R)>) {
-    list.sort_by(|x,y| x.0.cmp(&y.0));
-    for index in 1 .. list.len() {
-        if list[index].0 == list[index-1].0 {
-            let prev = ::std::mem::replace(&mut list[index-1].1, R::zero());
-            list[index].1 += &prev;
-        }
-    }
-    list.retain(|x| !x.1.is_zero());
-}
-
-/// Scans `vec[off..]` and consolidates differences of adjacent equivalent elements (after sorting by element).
-// #[inline(never)]
-pub fn consolidate_from<T: Ord+Clone, R: Monoid>(vec: &mut Vec<(T, R)>, off: usize) {
-
-    // We should do an insertion-sort like initial scan which builds up sorted, consolidated runs.
-    // In a world where there are not many results, we may never even need to call in to merge sort.
-
-    vec[off..].sort_by(|x,y| x.0.cmp(&y.0));
-    for index in (off + 1) .. vec.len() {
-        if vec[index].0 == vec[index - 1].0 {
-            let prev = ::std::mem::replace(&mut vec[index-1].1, R::zero());
-            vec[index].1 += &prev;
-        }
-    }
-
-    let mut cursor = off;
-    for index in off .. vec.len() {
-        if !vec[index].1.is_zero() {
-            vec[cursor] = vec[index].clone();
-            cursor += 1;
-        }
-    }
-    vec.truncate(cursor);
-
-}
-
 trait PerKeyCompute<'a, V1, V2, T, R1, R2>
 where
     V1: Ord+Clone+'a,
@@ -672,7 +632,7 @@ mod history_replay {
     use operators::ValueHistory;
     use timely::progress::Antichain;
 
-    use super::{PerKeyCompute, consolidate, sort_dedup};
+    use super::{PerKeyCompute, sort_dedup};
 
     /// The `HistoryReplayer` is a compute strategy based on moving through existing inputs, interesting times, etc in
     /// time order, maintaining consolidated representations of updates with respect to future interesting times.
@@ -894,7 +854,7 @@ mod history_replay {
                                 self.temporary.push(next_time.join(time));
                             }
                         }
-                        consolidate(&mut self.input_buffer);
+                        crate::consolidation::consolidate(&mut self.input_buffer);
 
                         meet.as_ref().map(|meet| output_replay.advance_buffer_by(&meet));
                         for &((ref value, ref time), ref diff) in output_replay.buffer().iter() {
@@ -913,7 +873,7 @@ mod history_replay {
                                 self.temporary.push(next_time.join(&time));
                             }
                         }
-                        consolidate(&mut self.output_buffer);
+                        crate::consolidation::consolidate(&mut self.output_buffer);
 
                         // Apply user logic if non-empty input and see what happens!
                         if self.input_buffer.len() > 0 || self.output_buffer.len() > 0 {
@@ -943,7 +903,7 @@ mod history_replay {
                         // Having subtracted output updates from user output, consolidate the results to determine
                         // if there is anything worth reporting. Note: this also orders the results by value, so
                         // that could make the above merging plan even easier.
-                        consolidate(&mut self.update_buffer);
+                        crate::consolidation::consolidate(&mut self.update_buffer);
 
                         // Stash produced updates into both capability-indexed buffers and `output_produced`.
                         // The two locations are important, in that we will compact `output_produced` as we move
@@ -972,7 +932,7 @@ mod history_replay {
                                     (entry.0).1 = (entry.0).1.join(&meet);
                                 }
                             }
-                            consolidate(&mut self.output_produced);
+                            crate::consolidation::consolidate(&mut self.output_produced);
                         }
                     }
 
@@ -1071,5 +1031,3 @@ mod history_replay {
         }
     }
 }
-
-

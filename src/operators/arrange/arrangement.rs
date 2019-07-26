@@ -350,7 +350,7 @@ where
                                 working.sort_by(|x,y| x.0.cmp(&y.0));
                                 for (time, val, diff) in working.drain(..) {
                                     if !active.is_empty() && active[0].1.less_than(&time) {
-                                        ::trace::consolidate(&mut working2, 0);
+                                        crate::consolidation::consolidate(&mut working2);
                                         while !active.is_empty() && active[0].1.less_than(&time) {
                                             for &(ref val, ref count) in working2.iter() {
                                                 session.give((key.clone(), val.clone(), active[0].1.clone(), count.clone()));
@@ -361,7 +361,7 @@ where
                                     working2.push((val, diff));
                                 }
                                 if !active.is_empty() {
-                                    ::trace::consolidate(&mut working2, 0);
+                                    crate::consolidation::consolidate(&mut working2);
                                     while !active.is_empty() {
                                         for &(ref val, ref count) in working2.iter() {
                                             session.give((key.clone(), val.clone(), active[0].1.clone(), count.clone()));

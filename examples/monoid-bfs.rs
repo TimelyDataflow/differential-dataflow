@@ -45,7 +45,7 @@ impl Mul<Self> for MinSum {
 }
 
 impl Monoid for MinSum {
-    fn zero() -> MinSum { MinSum { value: u32::max_value() } }
+    fn is_zero(&self) -> bool { false }
 }
 
 fn main() {
