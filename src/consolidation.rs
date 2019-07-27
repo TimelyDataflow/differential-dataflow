@@ -39,9 +39,11 @@ pub fn consolidate_slice<T: Ord, R: Monoid>(slice: &mut [(T, R)]) -> usize {
             // increases by one). As `index` is always in bounds, and `offset` starts at zero, it too is
             // always in bounds.
             //
-            // LLVM appears to struggle to optimize out Rust's split_at_mut, which would prove disjointness 
+            // LLVM appears to struggle to optimize out Rust's split_at_mut, which would prove disjointness
             // using run-time tests.
             unsafe {
+
+                assert!(offset < index);
 
                 // LOOP INVARIANT: offset < index
                 let ptr1 = slice.as_mut_ptr().offset(offset as isize);
@@ -54,15 +56,27 @@ pub fn consolidate_slice<T: Ord, R: Monoid>(slice: &mut [(T, R)]) -> usize {
                     if !(*ptr1).1.is_zero() {
                         offset += 1;
                     }
+                    let ptr1 = slice.as_mut_ptr().offset(offset as isize);
                     std::mem::swap(&mut *ptr1, &mut *ptr2);
                 }
+
+                // if slice[offset].0 == slice[index].0 {
+                //     let (lo, hi) = slice.split_at_mut(index);
+                //     lo[offset].1 += &hi[0].1;
+                // }
+                // else {
+                //     if slice[offset].1.is_zero() {
+                //         offset += 1;
+                //     }
+
+                // }
 
             }
         }
         if !slice[offset].1.is_zero() {
             offset += 1;
         }
-        
+
         offset
     }
     else {
@@ -103,7 +117,7 @@ pub fn consolidate_updates_slice<D: Ord, T: Ord, R: Monoid>(slice: &mut [(D, T, 
             // increases by one). As `index` is always in bounds, and `offset` starts at zero, it too is
             // always in bounds.
             //
-            // LLVM appears to struggle to optimize out Rust's split_at_mut, which would prove disjointness 
+            // LLVM appears to struggle to optimize out Rust's split_at_mut, which would prove disjointness
             // using run-time tests.
             unsafe {
 
@@ -118,6 +132,7 @@ pub fn consolidate_updates_slice<D: Ord, T: Ord, R: Monoid>(slice: &mut [(D, T, 
                     if !(*ptr1).2.is_zero() {
                         offset += 1;
                     }
+                    let ptr1 = slice.as_mut_ptr().offset(offset as isize);
                     std::mem::swap(&mut *ptr1, &mut *ptr2);
                 }
 
