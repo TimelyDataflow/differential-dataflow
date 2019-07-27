@@ -22,35 +22,51 @@ pub fn consolidate_from<T: Ord, R: Monoid>(vec: &mut Vec<(T, R)>, offset: usize)
 }
 
 /// Sorts and consolidates a slice, returning the valid prefix length.
-pub fn consolidate_slice<T: Ord, R: Monoid>(vec: &mut [(T, R)]) -> usize {
+pub fn consolidate_slice<T: Ord, R: Monoid>(slice: &mut [(T, R)]) -> usize {
 
     // We could do an insertion-sort like initial scan which builds up sorted, consolidated runs.
     // In a world where there are not many results, we may never even need to call in to merge sort.
-    if vec.len() > 1 {
+    if slice.len() > 1 {
+
+        slice.sort_by(|x,y| x.0.cmp(&y.0));
+
         let mut offset = 0;
-        vec.sort_by(|x,y| x.0.cmp(&y.0));
-        for index in 1 .. vec.len() {
-            if vec[offset].0 == vec[index].0 {
-                // TODO: LLVM does not optimize this to the point that it avoids a variety of compares.
-                //       We could consider an unsafe implementation, if the performance here registers.
-                let (lo, hi) = vec.split_at_mut(index);
-                lo[offset].1 += &hi[0].1;
-            }
-            else {
-                if !vec[offset].1.is_zero() {
-                    offset += 1;
+        for index in 1 .. slice.len() {
+
+            // The following unsafe block elides various bounds checks, using the reasoning that `offset`
+            // is always strictly less than `index` at the beginning of each iteration. This is initially
+            // true, and in each iteration `offset` can increase by at most one (whereas `index` always
+            // increases by one). As `index` is always in bounds, and `offset` starts at zero, it too is
+            // always in bounds.
+            //
+            // LLVM appears to struggle to optimize out Rust's split_at_mut, which would prove disjointness 
+            // using run-time tests.
+            unsafe {
+
+                // LOOP INVARIANT: offset < index
+                let ptr1 = slice.as_mut_ptr().offset(offset as isize);
+                let ptr2 = slice.as_mut_ptr().offset(index as isize);
+
+                if (*ptr1).0 == (*ptr2).0 {
+                    (*ptr1).1 += &(*ptr2).1;
                 }
-                vec.swap(offset, index);
+                else {
+                    if !(*ptr1).1.is_zero() {
+                        offset += 1;
+                    }
+                    std::mem::swap(&mut *ptr1, &mut *ptr2);
+                }
+
             }
         }
-        if !vec[offset].1.is_zero() {
+        if !slice[offset].1.is_zero() {
             offset += 1;
         }
         
         offset
     }
     else {
-        vec.len()
+        slice.len()
     }
 }
 
@@ -70,34 +86,50 @@ pub fn consolidate_updates_from<D: Ord, T: Ord, R: Monoid>(vec: &mut Vec<(D, T, 
 }
 
 /// Sorts and consolidates a slice, returning the valid prefix length.
-pub fn consolidate_updates_slice<D: Ord, T: Ord, R: Monoid>(vec: &mut [(D, T, R)]) -> usize {
+pub fn consolidate_updates_slice<D: Ord, T: Ord, R: Monoid>(slice: &mut [(D, T, R)]) -> usize {
 
     // We could do an insertion-sort like initial scan which builds up sorted, consolidated runs.
     // In a world where there are not many results, we may never even need to call in to merge sort.
-    if vec.len() > 1 {
+    if slice.len() > 1 {
+
+        slice.sort_unstable_by(|x,y| (&x.0, &x.1).cmp(&(&y.0, &y.1)));
+
         let mut offset = 0;
-        vec.sort_by(|x,y| (&x.0, &x.1).cmp(&(&y.0, &y.1)));
-        for index in 1 .. vec.len() {
-            if vec[offset].0 == vec[index].0 && vec[offset].1 == vec[index].1 {
-                // TODO: LLVM does not optimize this to the point that it avoids a variety of compares.
-                //       We could consider an unsafe implementation, if the performance here registers.
-                let (lo, hi) = vec.split_at_mut(index);
-                lo[offset].2 += &hi[0].2;
-            }
-            else {
-                if !vec[offset].2.is_zero() {
-                    offset += 1;
+        for index in 1 .. slice.len() {
+
+            // The following unsafe block elides various bounds checks, using the reasoning that `offset`
+            // is always strictly less than `index` at the beginning of each iteration. This is initially
+            // true, and in each iteration `offset` can increase by at most one (whereas `index` always
+            // increases by one). As `index` is always in bounds, and `offset` starts at zero, it too is
+            // always in bounds.
+            //
+            // LLVM appears to struggle to optimize out Rust's split_at_mut, which would prove disjointness 
+            // using run-time tests.
+            unsafe {
+
+                // LOOP INVARIANT: offset < index
+                let ptr1 = slice.as_mut_ptr().offset(offset as isize);
+                let ptr2 = slice.as_mut_ptr().offset(index as isize);
+
+                if (*ptr1).0 == (*ptr2).0 && (*ptr1).1 == (*ptr2).1 {
+                    (*ptr1).2 += &(*ptr2).2;
                 }
-                vec.swap(offset, index);
+                else {
+                    if !(*ptr1).2.is_zero() {
+                        offset += 1;
+                    }
+                    std::mem::swap(&mut *ptr1, &mut *ptr2);
+                }
+
             }
         }
-        if !vec[offset].2.is_zero() {
+        if !slice[offset].2.is_zero() {
             offset += 1;
         }
 
         offset
     }
     else {
-        vec.len()
+        slice.len()
     }
 }
