@@ -2,7 +2,7 @@
 
 use ::difference::Monoid;
 
-use super::{Trie, Cursor, Builder, MergeBuilder, TupleBuilder};
+use super::{Trie, Cursor, Builder, MergeBuilder, TupleBuilder, advance};
 
 /// A layer of unordered values.
 #[derive(Debug, Eq, PartialEq, Clone, Abomonation)]
@@ -128,40 +128,4 @@ impl<K: Clone, R: Clone> Cursor<OrderedLeaf<K, R>> for OrderedLeafCursor {
         self.pos = lower;
         self.bounds = (lower, upper);
     }
-}
-
-
-/// Reports the number of elements satisfing the predicate.
-///
-/// This methods *relies strongly* on the assumption that the predicate
-/// stays false once it becomes false, a joint property of the predicate
-/// and the slice. This allows `advance` to use exponential search to
-/// count the number of elements in time logarithmic in the result.
-#[inline(never)]
-pub fn advance<T, F: Fn(&T)->bool>(slice: &[T], function: F) -> usize {
-
-    // start with no advance
-    let mut index = 0;
-    if index < slice.len() && function(&slice[index]) {
-
-        // advance in exponentially growing steps.
-        let mut step = 1;
-        while index + step < slice.len() && function(&slice[index + step]) {
-            index += step;
-            step = step << 1;
-        }
-
-        // advance in exponentially shrinking steps.
-        step = step >> 1;
-        while step > 0 {
-            if index + step < slice.len() && function(&slice[index + step]) {
-                index += step;
-            }
-            step = step >> 1;
-        }
-
-        index += 1;
-    }
-
-    index
 }
