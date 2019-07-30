@@ -59,18 +59,6 @@ pub fn consolidate_slice<T: Ord, R: Monoid>(slice: &mut [(T, R)]) -> usize {
                     let ptr1 = slice.as_mut_ptr().offset(offset as isize);
                     std::mem::swap(&mut *ptr1, &mut *ptr2);
                 }
-
-                // if slice[offset].0 == slice[index].0 {
-                //     let (lo, hi) = slice.split_at_mut(index);
-                //     lo[offset].1 += &hi[0].1;
-                // }
-                // else {
-                //     if slice[offset].1.is_zero() {
-                //         offset += 1;
-                //     }
-
-                // }
-
             }
         }
         if !slice[offset].1.is_zero() {
