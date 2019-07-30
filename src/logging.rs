@@ -3,6 +3,19 @@
 /// Logger for differential dataflow events.
 pub type Logger = ::timely::logging::Logger<DifferentialEvent>;
 
+/// Enables logging of differential dataflow events.
+pub fn enable<A, W>(worker: &mut timely::worker::Worker<A>, writer: W) -> Option<Box<std::any::Any+'static>>
+where
+    A: timely::communication::Allocate,
+    W: std::io::Write+'static,
+{
+    let writer = ::timely::dataflow::operators::capture::EventWriter::new(writer);
+    let mut logger = ::timely::logging::BatchLogger::new(writer);
+    worker
+        .log_register()
+        .insert::<DifferentialEvent,_>("differential/arrange", move |time, data| logger.publish_batch(time, data))
+}
+
 /// Possible different differential events.
 #[derive(Debug, Clone, Abomonation, Ord, PartialOrd, Eq, PartialEq)]
 pub enum DifferentialEvent {
