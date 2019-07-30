@@ -20,14 +20,14 @@ use timely::dataflow::channels::pact::Pipeline;
 
 use lattice::Lattice;
 use ::{ExchangeData, Collection};
-use ::difference::Monoid;
+use ::difference::Semigroup;
 use hashable::Hashable;
 use collection::AsCollection;
 use operators::arrange::{Arranged, ArrangeBySelf};
 use trace::{BatchReader, Cursor, TraceReader};
 
 /// Extension trait for the `count` differential dataflow method.
-pub trait CountTotal<G: Scope, K: ExchangeData, R: Monoid> where G::Timestamp: TotalOrder+Lattice+Ord {
+pub trait CountTotal<G: Scope, K: ExchangeData, R: Semigroup> where G::Timestamp: TotalOrder+Lattice+Ord {
     /// Counts the number of occurrences of each element.
     ///
     /// # Examples
@@ -51,7 +51,7 @@ pub trait CountTotal<G: Scope, K: ExchangeData, R: Monoid> where G::Timestamp: T
     fn count_total(&self) -> Collection<G, (K, R), isize>;
 }
 
-impl<G: Scope, K: ExchangeData+Hashable, R: ExchangeData+Monoid> CountTotal<G, K, R> for Collection<G, K, R>
+impl<G: Scope, K: ExchangeData+Hashable, R: ExchangeData+Semigroup> CountTotal<G, K, R> for Collection<G, K, R>
 where G::Timestamp: TotalOrder+Lattice+Ord {
     fn count_total(&self) -> Collection<G, (K, R), isize> {
         self.arrange_by_self()
@@ -64,7 +64,7 @@ where
     G::Timestamp: TotalOrder+Lattice+Ord,
     T1: TraceReader<Val=(), Time=G::Timestamp>+Clone+'static,
     T1::Key: ExchangeData,
-    T1::R: ExchangeData+Monoid,
+    T1::R: ExchangeData+Semigroup,
     T1::Batch: BatchReader<T1::Key, (), G::Timestamp, T1::R>,
     T1::Cursor: Cursor<T1::Key, (), G::Timestamp, T1::R>,
 {
@@ -99,14 +99,14 @@ where
 
                         batch_cursor.map_times(&batch, |time, diff| {
 
-                            if let Some(count) = count.as_ref() { 
+                            if let Some(count) = count.as_ref() {
                                 if !count.is_zero() {
                                     session.give(((key.clone(), count.clone()), time.clone(), -1));
                                 }
                             }
                             count.as_mut().map(|c| *c += diff);
                             if count.is_none() { count = Some(diff.clone()); }
-                            if let Some(count) = count.as_ref() { 
+                            if let Some(count) = count.as_ref() {
                                 if !count.is_zero() {
                                     session.give(((key.clone(), count.clone()), time.clone(), 1));
                                 }

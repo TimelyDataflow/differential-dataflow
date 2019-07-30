@@ -11,15 +11,21 @@ use std::iter::Iterator;
 
 use ::Data;
 
+pub use self::Semigroup as Monoid;
 pub use self::Abelian as Diff;
 
-/// A type that can be treated as a difference.
+/// A type with addition and a test for zero.
 ///
-/// The mathematical requirements are, I believe, an Abelian group, in that we require addition, inverses,
-/// and almost certainly use commutativity somewhere (it isn't clear if it is a requirement, as it isn't
-/// clear that there are semantics other than "we accumulate your differences"; I suspect we don't always
-/// accumulate them in the right order, so commutativity is important until we conclude otherwise).
-pub trait Monoid : for<'a> AddAssign<&'a Self> + ::std::marker::Sized + Data + Clone {
+/// These traits are currently the minimal requirements for a type to be a "difference" in differential
+/// dataflow. Addition allows differential dataflow to compact multiple updates to the same data, and
+/// the test for zero allows differential dataflow to retire updates that have no effect. There is no
+/// requirement that the test for zero ever return true, and the zero value does not need to inhabit the
+/// type.
+///
+/// There is a light presumption of commutativity here, in that while we will largely perform addition
+/// in order of timestamps, for many types of timestamps there is no total order and consequently no
+/// obvious order to respect. Non-commutative semigroups should be used with care.
+pub trait Semigroup : for<'a> AddAssign<&'a Self> + ::std::marker::Sized + Data + Clone {
 	/// Returns true if the element is the additive identity.
 	///
 	/// This is primarily used by differential dataflow to know when it is safe to delete an update.
@@ -31,41 +37,40 @@ pub trait Monoid : for<'a> AddAssign<&'a Self> + ::std::marker::Sized + Data + C
 	fn is_zero(&self) -> bool;
 }
 
-/// A commutative monoid with negation.
+/// A `Semigroup` with negation.
 ///
-/// This trait represents a commutative group, here a commutative monoid with
-/// the additional support for subtraction and negation. An identity subtracted
-/// from itself or added to its negation should be the zero element from the
-/// underlying monoid.
-pub trait Abelian : Monoid + Neg<Output=Self> { }
-impl<T: Monoid + Neg<Output=Self>> Abelian for T { }
+/// This trait extends the requirements of `Semigroup` to include a negation operator.
+/// Several differential dataflow operators require negation in order to retract prior outputs, but
+/// not quite as many as you might imagine.
+pub trait Abelian : Semigroup + Neg<Output=Self> { }
+impl<T: Semigroup + Neg<Output=Self>> Abelian for T { }
 
-impl Monoid for isize {
+impl Semigroup for isize {
 	#[inline] fn is_zero(&self) -> bool { self == &0 }
 }
 
-impl Monoid for i128 {
+impl Semigroup for i128 {
 	#[inline] fn is_zero(&self) -> bool { self == &0 }
 }
 
-impl Monoid for i64 {
+impl Semigroup for i64 {
 	#[inline] fn is_zero(&self) -> bool { self == &0 }
 }
 
-impl Monoid for i32 {
+impl Semigroup for i32 {
 	#[inline] fn is_zero(&self) -> bool { self == &0 }
 }
 
-impl Monoid for i16 {
+impl Semigroup for i16 {
 	#[inline] fn is_zero(&self) -> bool { self == &0 }
 }
 
-impl Monoid for i8 {
+impl Semigroup for i8 {
 	#[inline] fn is_zero(&self) -> bool { self == &0 }
 }
 
 
- 
+
 /// The difference defined by a pair of difference elements.
 ///
 /// This type is essentially a "pair", though in Rust the tuple types do not derive the numeric
@@ -90,7 +95,7 @@ impl<R1, R2> DiffPair<R1, R2> {
 	}
 }
 
-impl<R1: Monoid, R2: Monoid> Monoid for DiffPair<R1, R2> {
+impl<R1: Semigroup, R2: Semigroup> Semigroup for DiffPair<R1, R2> {
 	#[inline] fn is_zero(&self) -> bool {
 		self.element1.is_zero() && self.element2.is_zero()
 	}
@@ -170,7 +175,7 @@ impl<R> std::ops::DerefMut for DiffVector<R> {
 	}
 }
 
-impl<R: Monoid> Monoid for DiffVector<R> {
+impl<R: Semigroup> Semigroup for DiffVector<R> {
 	#[inline] fn is_zero(&self) -> bool {
 		self.buffer.iter().all(|x| x.is_zero())
 	}

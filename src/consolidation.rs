@@ -1,13 +1,13 @@
-//! Common logic for the consolidation of vectors of monoids.
+//! Common logic for the consolidation of vectors of Semigroups.
 //!
 //! Often we find ourselves with collections of records with associated weights (often
 //! integers) where we want to reduce the collection to the point that each record occurs
 //! at most once, with the accumulated weights. These methods supply that functionality.
 
-use crate::difference::Monoid;
+use crate::difference::Semigroup;
 
 /// Sorts and consolidates `vec`.
-pub fn consolidate<T: Ord, R: Monoid>(vec: &mut Vec<(T, R)>) {
+pub fn consolidate<T: Ord, R: Semigroup>(vec: &mut Vec<(T, R)>) {
     consolidate_from(vec, 0);
 }
 
@@ -16,13 +16,13 @@ pub fn consolidate<T: Ord, R: Monoid>(vec: &mut Vec<(T, R)>) {
 /// This method will sort `vec[offset..]` and then consolidate runs with the same first
 /// element of a pair by accumulating the second elements of the pairs. Should the final
 /// accumulation be zero, the element is discarded.
-pub fn consolidate_from<T: Ord, R: Monoid>(vec: &mut Vec<(T, R)>, offset: usize) {
+pub fn consolidate_from<T: Ord, R: Semigroup>(vec: &mut Vec<(T, R)>, offset: usize) {
     let length = consolidate_slice(&mut vec[offset..]);
     vec.truncate(offset + length);
 }
 
 /// Sorts and consolidates a slice, returning the valid prefix length.
-pub fn consolidate_slice<T: Ord, R: Monoid>(slice: &mut [(T, R)]) -> usize {
+pub fn consolidate_slice<T: Ord, R: Semigroup>(slice: &mut [(T, R)]) -> usize {
 
     // We could do an insertion-sort like initial scan which builds up sorted, consolidated runs.
     // In a world where there are not many results, we may never even need to call in to merge sort.
@@ -73,7 +73,7 @@ pub fn consolidate_slice<T: Ord, R: Monoid>(slice: &mut [(T, R)]) -> usize {
 }
 
 /// Sorts and consolidates `vec`.
-pub fn consolidate_updates<D: Ord, T: Ord, R: Monoid>(vec: &mut Vec<(D, T, R)>) {
+pub fn consolidate_updates<D: Ord, T: Ord, R: Semigroup>(vec: &mut Vec<(D, T, R)>) {
     consolidate_updates_from(vec, 0);
 }
 
@@ -82,13 +82,13 @@ pub fn consolidate_updates<D: Ord, T: Ord, R: Monoid>(vec: &mut Vec<(D, T, R)>) 
 /// This method will sort `vec[offset..]` and then consolidate runs with the same first
 /// element of a pair by accumulating the second elements of the pairs. Should the final
 /// accumulation be zero, the element is discarded.
-pub fn consolidate_updates_from<D: Ord, T: Ord, R: Monoid>(vec: &mut Vec<(D, T, R)>, offset: usize) {
+pub fn consolidate_updates_from<D: Ord, T: Ord, R: Semigroup>(vec: &mut Vec<(D, T, R)>, offset: usize) {
     let length = consolidate_updates_slice(&mut vec[offset..]);
     vec.truncate(offset + length);
 }
 
 /// Sorts and consolidates a slice, returning the valid prefix length.
-pub fn consolidate_updates_slice<D: Ord, T: Ord, R: Monoid>(slice: &mut [(D, T, R)]) -> usize {
+pub fn consolidate_updates_slice<D: Ord, T: Ord, R: Semigroup>(slice: &mut [(D, T, R)]) -> usize {
 
     // We could do an insertion-sort like initial scan which builds up sorted, consolidated runs.
     // In a world where there are not many results, we may never even need to call in to merge sort.

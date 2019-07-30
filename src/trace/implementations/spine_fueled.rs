@@ -6,7 +6,7 @@
 
 use std::fmt::Debug;
 
-use ::difference::Monoid;
+use ::difference::Semigroup;
 use lattice::Lattice;
 use trace::{Batch, BatchReader, Trace, TraceReader};
 // use trace::cursor::cursor_list::CursorList;
@@ -95,7 +95,7 @@ impl<K, V, T: Eq, R, B: Batch<K, V, T, R>> MergeState<K, V, T, R, B> {
 /// A spine maintains a small number of immutable collections of update tuples, merging the collections when
 /// two have similar sizes. In this way, it allows the addition of more tuples, which may then be merged with
 /// other immutable collections.
-pub struct Spine<K, V, T: Lattice+Ord, R: Monoid, B: Batch<K, V, T, R>> {
+pub struct Spine<K, V, T: Lattice+Ord, R: Semigroup, B: Batch<K, V, T, R>> {
     operator: OperatorInfo,
     logger: Option<::logging::Logger>,
     phantom: ::std::marker::PhantomData<(K, V, R)>,
@@ -112,7 +112,7 @@ where
     K: Ord+Clone,           // Clone is required by `batch::advance_*` (in-place could remove).
     V: Ord+Clone,           // Clone is required by `batch::advance_*` (in-place could remove).
     T: Lattice+Ord+Clone+Debug+Default,
-    R: Monoid,
+    R: Semigroup,
     B: Batch<K, V, T, R>+Clone+'static,
 {
     type Key = K;
@@ -231,7 +231,7 @@ where
     K: Ord+Clone,
     V: Ord+Clone,
     T: Lattice+Ord+Clone+Debug+Default,
-    R: Monoid,
+    R: Semigroup,
     B: Batch<K, V, T, R>+Clone+'static,
 {
 
@@ -274,7 +274,7 @@ where
     K: Ord+Clone,
     V: Ord+Clone,
     T: Lattice+Ord+Clone+Debug+Default,
-    R: Monoid,
+    R: Semigroup,
     B: Batch<K, V, T, R>,
 {
     /// Allocates a fueled `Spine` with a specified effort multiplier.

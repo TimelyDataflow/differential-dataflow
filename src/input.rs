@@ -12,7 +12,7 @@ use timely::dataflow::operators::input::Handle;
 use timely::dataflow::scopes::ScopeParent;
 
 use ::Data;
-use ::difference::Monoid;
+use ::difference::Semigroup;
 use collection::{Collection, AsCollection};
 
 /// Create a new collection and input handle to control the collection.
@@ -47,7 +47,7 @@ pub trait Input : TimelyInput {
     /// }
     /// ```
     fn new_collection<D, R>(&mut self) -> (InputSession<<Self as ScopeParent>::Timestamp, D, R>, Collection<Self, D, R>)
-    where D: Data, R: Monoid;
+    where D: Data, R: Semigroup;
     /// Create a new collection and input handle from initial data.
     ///
     /// # Examples
@@ -109,13 +109,13 @@ pub trait Input : TimelyInput {
     /// }
     /// ```
     fn new_collection_from_raw<D, R, I>(&mut self, data: I) -> (InputSession<<Self as ScopeParent>::Timestamp, D, R>, Collection<Self, D, R>)
-    where I: IntoIterator<Item=(D,<Self as ScopeParent>::Timestamp,R)>+'static, D: Data, R: Monoid+Data;
+    where I: IntoIterator<Item=(D,<Self as ScopeParent>::Timestamp,R)>+'static, D: Data, R: Semigroup+Data;
 }
 
 use lattice::Lattice;
 impl<G: TimelyInput> Input for G where <G as ScopeParent>::Timestamp: Lattice {
     fn new_collection<D, R>(&mut self) -> (InputSession<<G as ScopeParent>::Timestamp, D, R>, Collection<G, D, R>)
-    where D: Data, R: Monoid{
+    where D: Data, R: Semigroup{
 		let (handle, stream) = self.new_input();
 		(InputSession::from(handle), stream.as_collection())
     }
@@ -126,7 +126,7 @@ impl<G: TimelyInput> Input for G where <G as ScopeParent>::Timestamp: Lattice {
     fn new_collection_from_raw<D,R,I>(&mut self, data: I) -> (InputSession<<G as ScopeParent>::Timestamp, D, R>, Collection<G, D, R>)
     where
         D: Data,
-        R: Monoid+Data,
+        R: Semigroup+Data,
         I: IntoIterator<Item=(D,<Self as ScopeParent>::Timestamp,R)>+'static,
     {
         use timely::dataflow::operators::ToStream;
@@ -186,7 +186,7 @@ impl<G: TimelyInput> Input for G where <G as ScopeParent>::Timestamp: Lattice {
 ///		}).unwrap();
 /// }
 /// ```
-pub struct InputSession<T: Timestamp+Clone, D: Data, R: Monoid> {
+pub struct InputSession<T: Timestamp+Clone, D: Data, R: Semigroup> {
 	time: T,
 	buffer: Vec<(D, T, R)>,
 	handle: Handle<T,(D,T,R)>,
@@ -213,7 +213,7 @@ impl<T: Timestamp+Clone, D: Data> InputSession<T, D, isize> {
 //     pub fn remove(&mut self, element: D) { self.update(element,-1); }
 // }
 
-impl<T: Timestamp+Clone, D: Data, R: Monoid> InputSession<T, D, R> {
+impl<T: Timestamp+Clone, D: Data, R: Semigroup> InputSession<T, D, R> {
 
     /// Introduces a handle as collection.
     pub fn to_collection<G: TimelyInput>(&mut self, scope: &mut G) -> Collection<G, D, R>
@@ -301,7 +301,7 @@ impl<T: Timestamp+Clone, D: Data, R: Monoid> InputSession<T, D, R> {
 	pub fn close(self) { }
 }
 
-impl<T: Timestamp+Clone, D: Data, R: Monoid> Drop for InputSession<T, D, R> {
+impl<T: Timestamp+Clone, D: Data, R: Semigroup> Drop for InputSession<T, D, R> {
 	fn drop(&mut self) {
 		self.flush();
 	}

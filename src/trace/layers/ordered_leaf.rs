@@ -1,6 +1,6 @@
 //! Implementation using ordered keys and exponential search.
 
-use ::difference::Monoid;
+use ::difference::Semigroup;
 
 use super::{Trie, Cursor, Builder, MergeBuilder, TupleBuilder, advance};
 
@@ -11,7 +11,7 @@ pub struct OrderedLeaf<K, R> {
     pub vals: Vec<(K, R)>,
 }
 
-impl<K: Ord+Clone, R: Monoid+Clone> Trie for OrderedLeaf<K, R> {
+impl<K: Ord+Clone, R: Semigroup+Clone> Trie for OrderedLeaf<K, R> {
     type Item = (K, R);
     type Cursor = OrderedLeafCursor;
     type MergeBuilder = OrderedLeafBuilder<K, R>;
@@ -32,13 +32,13 @@ pub struct OrderedLeafBuilder<K, R> {
     pub vals: Vec<(K, R)>,
 }
 
-impl<K: Ord+Clone, R: Monoid+Clone> Builder for OrderedLeafBuilder<K, R> {
+impl<K: Ord+Clone, R: Semigroup+Clone> Builder for OrderedLeafBuilder<K, R> {
     type Trie = OrderedLeaf<K, R>;
     fn boundary(&mut self) -> usize { self.vals.len() }
     fn done(self) -> Self::Trie { OrderedLeaf { vals: self.vals } }
 }
 
-impl<K: Ord+Clone, R: Monoid+Clone> MergeBuilder for OrderedLeafBuilder<K, R> {
+impl<K: Ord+Clone, R: Semigroup+Clone> MergeBuilder for OrderedLeafBuilder<K, R> {
     fn with_capacity(other1: &Self::Trie, other2: &Self::Trie) -> Self {
         OrderedLeafBuilder {
             vals: Vec::with_capacity(<OrderedLeaf<K, R> as Trie>::keys(other1) + <OrderedLeaf<K, R> as Trie>::keys(other2)),
@@ -92,7 +92,7 @@ impl<K: Ord+Clone, R: Monoid+Clone> MergeBuilder for OrderedLeafBuilder<K, R> {
     }
 }
 
-impl<K: Ord+Clone, R: Monoid+Clone> TupleBuilder for OrderedLeafBuilder<K, R> {
+impl<K: Ord+Clone, R: Semigroup+Clone> TupleBuilder for OrderedLeafBuilder<K, R> {
     type Item = (K, R);
     fn new() -> Self { OrderedLeafBuilder { vals: Vec::new() } }
     fn with_capacity(cap: usize) -> Self { OrderedLeafBuilder { vals: Vec::with_capacity(cap) } }

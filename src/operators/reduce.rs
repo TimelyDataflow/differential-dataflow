@@ -7,7 +7,7 @@
 
 use hashable::Hashable;
 use ::{Data, ExchangeData, Collection};
-use ::difference::{Monoid, Abelian};
+use ::difference::{Semigroup, Abelian};
 
 use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
@@ -26,7 +26,7 @@ use trace::implementations::ord::OrdKeySpine as DefaultKeyTrace;
 use trace::TraceReader;
 
 /// Extension trait for the `reduce` differential dataflow method.
-pub trait Reduce<G: Scope, K: Data, V: Data, R: Monoid> where G::Timestamp: Lattice+Ord {
+pub trait Reduce<G: Scope, K: Data, V: Data, R: Semigroup> where G::Timestamp: Lattice+Ord {
     /// Applies a reduction function on records grouped by key.
     ///
     /// Input data must be structured as `(key, val)` pairs.
@@ -70,7 +70,7 @@ impl<G, K, V, R> Reduce<G, K, V, R> for Collection<G, (K, V), R>
         G::Timestamp: Lattice+Ord,
         K: ExchangeData+Hashable,
         V: ExchangeData,
-        R: ExchangeData+Monoid,
+        R: ExchangeData+Semigroup,
  {
     fn reduce<L, V2: Data, R2: Abelian>(&self, logic: L) -> Collection<G, (K, V2), R2>
         where L: FnMut(&K, &[(&V, R)], &mut Vec<(V2, R2)>)+'static {
@@ -80,7 +80,7 @@ impl<G, K, V, R> Reduce<G, K, V, R> for Collection<G, (K, V), R>
     }
 }
 
-impl<G: Scope, K: Data, V: Data, T1, R: Monoid> Reduce<G, K, V, R> for Arranged<G, T1>
+impl<G: Scope, K: Data, V: Data, T1, R: Semigroup> Reduce<G, K, V, R> for Arranged<G, T1>
 where
     G::Timestamp: Lattice+Ord,
     T1: TraceReader<Key=K, Val=V, Time=G::Timestamp, R=R>+Clone+'static,
@@ -95,7 +95,7 @@ where
 }
 
 /// Extension trait for the `threshold` and `distinct` differential dataflow methods.
-pub trait Threshold<G: Scope, K: Data, R1: Monoid> where G::Timestamp: Lattice+Ord {
+pub trait Threshold<G: Scope, K: Data, R1: Semigroup> where G::Timestamp: Lattice+Ord {
     /// Transforms the multiplicity of records.
     ///
     /// The `threshold` function is obliged to map `R1::zero` to `R2::zero`, or at
@@ -146,7 +146,7 @@ pub trait Threshold<G: Scope, K: Data, R1: Monoid> where G::Timestamp: Lattice+O
     }
 }
 
-impl<G: Scope, K: ExchangeData+Hashable, R1: ExchangeData+Monoid> Threshold<G, K, R1> for Collection<G, K, R1>
+impl<G: Scope, K: ExchangeData+Hashable, R1: ExchangeData+Semigroup> Threshold<G, K, R1> for Collection<G, K, R1>
 where G::Timestamp: Lattice+Ord {
     fn threshold<R2: Abelian, F: FnMut(&K,&R1)->R2+'static>(&self, mut thresh: F) -> Collection<G, K, R2> {
         self.arrange_by_self()
@@ -155,7 +155,7 @@ where G::Timestamp: Lattice+Ord {
     }
 }
 
-impl<G: Scope, K: Data, T1, R1: Monoid> Threshold<G, K, R1> for Arranged<G, T1>
+impl<G: Scope, K: Data, T1, R1: Semigroup> Threshold<G, K, R1> for Arranged<G, T1>
 where
     G::Timestamp: Lattice+Ord,
     T1: TraceReader<Key=K, Val=(), Time=G::Timestamp, R=R1>+Clone+'static,
@@ -169,7 +169,7 @@ where
 }
 
 /// Extension trait for the `count` differential dataflow method.
-pub trait Count<G: Scope, K: Data, R: Monoid> where G::Timestamp: Lattice+Ord {
+pub trait Count<G: Scope, K: Data, R: Semigroup> where G::Timestamp: Lattice+Ord {
     /// Counts the number of occurrences of each element.
     ///
     /// # Examples
@@ -193,7 +193,7 @@ pub trait Count<G: Scope, K: Data, R: Monoid> where G::Timestamp: Lattice+Ord {
     fn count(&self) -> Collection<G, (K, R), isize>;
 }
 
-impl<G: Scope, K: ExchangeData+Hashable, R: ExchangeData+Monoid> Count<G, K, R> for Collection<G, K, R>
+impl<G: Scope, K: ExchangeData+Hashable, R: ExchangeData+Semigroup> Count<G, K, R> for Collection<G, K, R>
 where
     G::Timestamp: Lattice+Ord,
 {
@@ -204,7 +204,7 @@ where
     }
 }
 
-impl<G: Scope, K: Data, T1, R: Monoid> Count<G, K, R> for Arranged<G, T1>
+impl<G: Scope, K: Data, T1, R: Semigroup> Count<G, K, R> for Arranged<G, T1>
 where
     G::Timestamp: Lattice+Ord,
     T1: TraceReader<Key=K, Val=(), Time=G::Timestamp, R=R>+Clone+'static,
@@ -218,7 +218,7 @@ where
 }
 
 /// Extension trait for the `group_arranged` differential dataflow method.
-pub trait ReduceCore<G: Scope, K: Data, V: Data, R: Monoid> where G::Timestamp: Lattice+Ord {
+pub trait ReduceCore<G: Scope, K: Data, V: Data, R: Semigroup> where G::Timestamp: Lattice+Ord {
     /// Applies `group` to arranged data, and returns an arrangement of output data.
     ///
     /// This method is used by the more ergonomic `group`, `distinct`, and `count` methods, although
@@ -276,7 +276,7 @@ pub trait ReduceCore<G: Scope, K: Data, V: Data, R: Monoid> where G::Timestamp: 
         where
             T2: Trace+TraceReader<Key=K, Time=G::Timestamp>+'static,
             T2::Val: Data,
-            T2::R: Monoid,
+            T2::R: Semigroup,
             T2::Batch: Batch<K, T2::Val, G::Timestamp, T2::R>,
             T2::Cursor: Cursor<K, T2::Val, G::Timestamp, T2::R>,
             L: FnMut(&K, &[(&V, R)], &mut Vec<(T2::Val,T2::R)>, &mut Vec<(T2::Val,T2::R)>)+'static
@@ -289,12 +289,12 @@ where
     G::Timestamp: Lattice+Ord,
     K: ExchangeData+Hashable,
     V: ExchangeData,
-    R: ExchangeData+Monoid,
+    R: ExchangeData+Semigroup,
 {
     fn reduce_core<L, T2>(&self, logic: L) -> Arranged<G, TraceAgent<T2>>
         where
             T2::Val: Data,
-            T2::R: Monoid,
+            T2::R: Semigroup,
             T2: Trace+TraceReader<Key=K, Time=G::Timestamp>+'static,
             T2::Batch: Batch<K, T2::Val, G::Timestamp, T2::R>,
             T2::Cursor: Cursor<K, T2::Val, G::Timestamp, T2::R>,
@@ -305,7 +305,7 @@ where
     }
 }
 
-impl<G: Scope, K: Data, V: Data, T1, R: Monoid> ReduceCore<G, K, V, R> for Arranged<G, T1>
+impl<G: Scope, K: Data, V: Data, T1, R: Semigroup> ReduceCore<G, K, V, R> for Arranged<G, T1>
 where
     G::Timestamp: Lattice+Ord,
     T1: TraceReader<Key=K, Val=V, Time=G::Timestamp, R=R>+Clone+'static,
@@ -316,7 +316,7 @@ where
         where
             T2: Trace+TraceReader<Key=K, Time=G::Timestamp>+'static,
             T2::Val: Data,
-            T2::R: Monoid,
+            T2::R: Semigroup,
             T2::Batch: Batch<K, T2::Val, G::Timestamp, T2::R>,
             T2::Cursor: Cursor<K, T2::Val, G::Timestamp, T2::R>,
             L: FnMut(&K, &[(&V, R)], &mut Vec<(T2::Val,T2::R)>, &mut Vec<(T2::Val, T2::R)>)+'static {
@@ -599,8 +599,8 @@ where
     V1: Ord+Clone+'a,
     V2: Ord+Clone+'a,
     T: Lattice+Ord+Clone,
-    R1: Monoid,
-    R2: Monoid,
+    R1: Semigroup,
+    R2: Semigroup,
 {
     fn new() -> Self;
     fn compute<K, C1, C2, C3, L>(
@@ -626,7 +626,7 @@ where
 /// Implementation based on replaying historical and new updates together.
 mod history_replay {
 
-    use ::difference::Monoid;
+    use ::difference::Semigroup;
     use lattice::Lattice;
     use trace::Cursor;
     use operators::ValueHistory;
@@ -641,8 +641,8 @@ mod history_replay {
         V1: Ord+Clone+'a,
         V2: Ord+Clone+'a,
         T: Lattice+Ord+Clone,
-        R1: Monoid,
-        R2: Monoid,
+        R1: Semigroup,
+        R2: Semigroup,
     {
         batch_history: ValueHistory<'a, V1, T, R1>,
         input_history: ValueHistory<'a, V1, T, R1>,
@@ -662,8 +662,8 @@ mod history_replay {
         V1: Ord+Clone,
         V2: Ord+Clone,
         T: Lattice+Ord+Clone,
-        R1: Monoid,
-        R2: Monoid,
+        R1: Semigroup,
+        R2: Semigroup,
     {
         fn new() -> Self {
             HistoryReplayer {

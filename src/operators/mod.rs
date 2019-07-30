@@ -19,7 +19,7 @@ pub mod join;
 pub mod count;
 pub mod threshold;
 
-use ::difference::Monoid;
+use ::difference::Semigroup;
 use lattice::Lattice;
 use trace::Cursor;
 
@@ -29,7 +29,7 @@ struct EditList<'a, V: 'a, T, R> {
     edits: Vec<(T, R)>,
 }
 
-impl<'a, V:'a, T, R> EditList<'a, V, T, R> where T: Ord+Clone, R: Monoid {
+impl<'a, V:'a, T, R> EditList<'a, V, T, R> where T: Ord+Clone, R: Semigroup {
     /// Creates an empty list of edits.
     #[inline]
     fn new() -> Self {
@@ -89,7 +89,7 @@ struct ValueHistory<'storage, V: 'storage, T, R> {
     buffer: Vec<((&'storage V, T), R)>,               // where we accumulate / collapse updates.
 }
 
-impl<'storage, V: Ord+Clone+'storage, T: Lattice+Ord+Clone, R: Monoid> ValueHistory<'storage, V, T, R> {
+impl<'storage, V: Ord+Clone+'storage, T: Lattice+Ord+Clone, R: Semigroup> ValueHistory<'storage, V, T, R> {
     fn new() -> Self {
         ValueHistory {
             edits: EditList::new(),
@@ -157,7 +157,7 @@ where
     'storage: 'history,
     V: Ord+'storage,
     T: Lattice+Ord+Clone+'history,
-    R: Monoid+'history,
+    R: Semigroup+'history,
 {
     replay: &'history mut ValueHistory<'storage, V, T, R>
 }
@@ -167,7 +167,7 @@ where
     'storage: 'history,
     V: Ord+'storage,
     T: Lattice+Ord+Clone+'history,
-    R: Monoid+'history,
+    R: Semigroup+'history,
 {
     fn time(&self) -> Option<&T> { self.replay.history.last().map(|x| &x.0) }
     fn meet(&self) -> Option<&T> { self.replay.history.last().map(|x| &x.1) }

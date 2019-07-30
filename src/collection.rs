@@ -18,7 +18,7 @@ use timely::dataflow::scopes::{Child, child::Iterative};
 use timely::dataflow::{Scope, Stream};
 use timely::dataflow::operators::*;
 
-use ::difference::{Monoid, Abelian};
+use ::difference::{Semigroup, Abelian};
 use lattice::Lattice;
 use hashable::Hashable;
 
@@ -38,7 +38,7 @@ use hashable::Hashable;
 /// The `R` parameter represents the types of changes that the data undergo, and is most commonly (and
 /// defaults to) `isize`, representing changes to the occurrence count of each record.
 #[derive(Clone)]
-pub struct Collection<G: Scope, D, R: Monoid = isize> {
+pub struct Collection<G: Scope, D, R: Semigroup = isize> {
     /// The underlying timely dataflow stream.
     ///
     /// This field is exposed to support direct timely dataflow manipulation when required, but it is
@@ -46,7 +46,7 @@ pub struct Collection<G: Scope, D, R: Monoid = isize> {
     pub inner: Stream<G, (D, G::Timestamp, R)>
 }
 
-impl<G: Scope, D: Data, R: Monoid> Collection<G, D, R> where G::Timestamp: Data {
+impl<G: Scope, D: Data, R: Semigroup> Collection<G, D, R> where G::Timestamp: Data {
     /// Creates a new Collection from a timely dataflow stream.
     ///
     /// This method seems to be rarely used, with the `as_collection` method on streams being a more
@@ -261,8 +261,8 @@ impl<G: Scope, D: Data, R: Monoid> Collection<G, D, R> where G::Timestamp: Data 
     /// ```
     pub fn explode<D2, R2, I, L>(&self, logic: L) -> Collection<G, D2, <R2 as Mul<R>>::Output>
     where D2: Data,
-          R2: Monoid+Mul<R>,
-          <R2 as Mul<R>>::Output: Data+Monoid,
+          R2: Semigroup+Mul<R>,
+          <R2 as Mul<R>>::Output: Data+Semigroup,
           I: IntoIterator<Item=(D2,R2)>,
           L: Fn(D)->I+'static,
     {
@@ -495,7 +495,7 @@ impl<G: Scope, D: Data, R: Monoid> Collection<G, D, R> where G::Timestamp: Data 
 use timely::dataflow::scopes::ScopeParent;
 use timely::progress::timestamp::Refines;
 
-impl<'a, G: Scope, T: Timestamp, D: Data, R: Monoid> Collection<Child<'a, G, T>, D, R>
+impl<'a, G: Scope, T: Timestamp, D: Data, R: Semigroup> Collection<Child<'a, G, T>, D, R>
 where
     T: Refines<<G as ScopeParent>::Timestamp>,
 {
@@ -608,12 +608,12 @@ impl<G: Scope, D: Data, R: Abelian> Collection<G, D, R> where G::Timestamp: Data
 }
 
 /// Conversion to a differential dataflow Collection.
-pub trait AsCollection<G: Scope, D: Data, R: Monoid> {
+pub trait AsCollection<G: Scope, D: Data, R: Semigroup> {
     /// Converts the type to a differential dataflow collection.
     fn as_collection(&self) -> Collection<G, D, R>;
 }
 
-impl<G: Scope, D: Data, R: Monoid> AsCollection<G, D, R> for Stream<G, (D, G::Timestamp, R)> {
+impl<G: Scope, D: Data, R: Semigroup> AsCollection<G, D, R> for Stream<G, (D, G::Timestamp, R)> {
     fn as_collection(&self) -> Collection<G, D, R> {
         Collection::new(self.clone())
     }
@@ -649,7 +649,7 @@ pub fn concatenate<G, D, R, I>(scope: &mut G, iterator: I) -> Collection<G, D, R
 where
     G: Scope,
     D: Data,
-    R: Monoid,
+    R: Semigroup,
     I: IntoIterator<Item=Collection<G, D, R>>,
 {
     scope

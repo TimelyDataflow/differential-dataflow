@@ -29,7 +29,7 @@ pub struct MinSum {
 }
 
 use std::ops::{AddAssign, Mul};
-use differential_dataflow::difference::Monoid;
+use differential_dataflow::difference::Semigroup;
 
 impl<'a> AddAssign<&'a Self> for MinSum {
     fn add_assign(&mut self, rhs: &'a Self) {
@@ -44,7 +44,7 @@ impl Mul<Self> for MinSum {
     }
 }
 
-impl Monoid for MinSum {
+impl Semigroup for MinSum {
     fn is_zero(&self) -> bool { false }
 }
 
@@ -142,13 +142,13 @@ where G::Timestamp: Lattice+Ord {
     // repeatedly update minimal distances each node can be reached from each root
     roots.scope().iterative::<u32,_,_>(|scope| {
 
-        use differential_dataflow::operators::iterate::MonoidVariable;
+        use differential_dataflow::operators::iterate::SemigroupVariable;
         use differential_dataflow::operators::reduce::ReduceCore;
         use differential_dataflow::trace::implementations::ord::OrdKeySpine as DefaultKeyTrace;
 
 
         use timely::order::Product;
-        let variable = MonoidVariable::new(scope, Product::new(Default::default(), 1));
+        let variable = SemigroupVariable::new(scope, Product::new(Default::default(), 1));
 
         let edges = edges.enter(scope);
         let roots = roots.enter(scope);

@@ -16,7 +16,7 @@ pub mod wrappers;
 use timely::progress::Antichain;
 use timely::progress::Timestamp;
 
-// use ::difference::Monoid;
+// use ::difference::Semigroup;
 pub use self::cursor::Cursor;
 pub use self::description::Description;
 
