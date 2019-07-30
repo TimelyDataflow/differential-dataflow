@@ -91,7 +91,8 @@ where
         //        prefer to keep these buffers around to re-fill, if possible.
         let mut buffer = Vec::new();
         self.sorter.push(&mut buffer);
-        while buffer.capacity() > 0 {
+        // We recycle buffers with allocations (capacity, and not zero-sized).
+        while buffer.capacity() > 0 && std::mem::size_of::<((K,V),T,R)>() > 0 {
             buffer = Vec::new();
             self.sorter.push(&mut buffer);
         }
