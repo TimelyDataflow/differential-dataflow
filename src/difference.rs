@@ -11,7 +11,7 @@ use std::iter::Iterator;
 
 use ::Data;
 
-pub use self::Semigroup as Monoid;
+#[deprecated]
 pub use self::Abelian as Diff;
 
 /// A type with addition and a test for zero.
@@ -37,14 +37,6 @@ pub trait Semigroup : for<'a> AddAssign<&'a Self> + ::std::marker::Sized + Data 
 	fn is_zero(&self) -> bool;
 }
 
-/// A `Semigroup` with negation.
-///
-/// This trait extends the requirements of `Semigroup` to include a negation operator.
-/// Several differential dataflow operators require negation in order to retract prior outputs, but
-/// not quite as many as you might imagine.
-pub trait Abelian : Semigroup + Neg<Output=Self> { }
-impl<T: Semigroup + Neg<Output=Self>> Abelian for T { }
-
 impl Semigroup for isize {
 	#[inline] fn is_zero(&self) -> bool { self == &0 }
 }
@@ -69,6 +61,53 @@ impl Semigroup for i8 {
 	#[inline] fn is_zero(&self) -> bool { self == &0 }
 }
 
+/// A semigroup with an explicit zero element.
+#[deprecated]
+pub trait Monoid : Semigroup {
+	/// A zero element under the semigroup addition operator.
+	fn zero() -> Self;
+}
+
+#[allow(deprecated)]
+impl Monoid for isize {
+	#[inline] fn zero() -> Self { 0 }
+}
+
+#[allow(deprecated)]
+impl Monoid for i128 {
+	#[inline] fn zero() -> Self { 0 }
+}
+
+#[allow(deprecated)]
+impl Monoid for i64 {
+	#[inline] fn zero() -> Self { 0 }
+}
+
+#[allow(deprecated)]
+impl Monoid for i32 {
+	#[inline] fn zero() -> Self { 0 }
+}
+
+#[allow(deprecated)]
+impl Monoid for i16 {
+	#[inline] fn zero() -> Self { 0 }
+}
+
+#[allow(deprecated)]
+impl Monoid for i8 {
+	#[inline] fn zero() -> Self { 0 }
+}
+
+
+/// A `Monoid` with negation.
+///
+/// This trait extends the requirements of `Semigroup` to include a negation operator.
+/// Several differential dataflow operators require negation in order to retract prior outputs, but
+/// not quite as many as you might imagine.
+#[allow(deprecated)]
+pub trait Abelian : Monoid + Neg<Output=Self> { }
+#[allow(deprecated)]
+impl<T: Monoid + Neg<Output=Self>> Abelian for T { }
 
 
 /// The difference defined by a pair of difference elements.
