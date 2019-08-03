@@ -337,6 +337,7 @@ impl<G, T1> JoinCore<G, T1::Key, T1::Val, T1::R> for Arranged<G,T1>
             use timely::scheduling::Activator;
             let activations = self.stream.scope().activations().clone();
             let activator = Activator::new(&info.address[..], activations);
+            let mut antichain = timely::progress::frontier::Antichain::new();
 
             move |input1, input2, output| {
 
@@ -365,6 +366,21 @@ impl<G, T1> JoinCore<G, T1::Key, T1::Val, T1::R> for Arranged<G,T1>
                     }
                 });
 
+                // We may learn that input frontiers have advanced without sending batches.
+                acknowledged1
+                    .as_mut()
+                    .map(|ack| {
+                        antichain.clear();
+                        for ack in ack.iter() {
+                            for time in input1.frontier().frontier().iter() {
+                                antichain.insert(ack.join(time));
+                            }
+                        }
+                        ack.clear();
+                        ack.extend(antichain.elements().iter().cloned());
+                    });
+
+
                 // drain input 2, prepare work.
                 input2.for_each(|capability, data| {
                     if let Some(ref mut trace1) = trace1 {
@@ -382,6 +398,20 @@ impl<G, T1> JoinCore<G, T1::Key, T1::Val, T1::R> for Arranged<G,T1>
                         }
                     }
                 });
+
+                // We may learn that input frontiers have advanced without sending batches.
+                acknowledged2
+                    .as_mut()
+                    .map(|ack| {
+                        antichain.clear();
+                        for ack in ack.iter() {
+                            for time in input2.frontier().frontier().iter() {
+                                antichain.insert(ack.join(time));
+                            }
+                        }
+                        ack.clear();
+                        ack.extend(antichain.elements().iter().cloned());
+                    });
 
                 // An arbitrary number, whose value guides the "responsiveness" of `join`; the operator
                 // yields after producing this many records, to allow downstream operators to work and
@@ -405,11 +435,7 @@ impl<G, T1> JoinCore<G, T1::Key, T1::Val, T1::R> for Arranged<G,T1>
                     activator.activate();
                 }
 
-                // shut down or advance trace2. if the frontier is empty we can shut it down,
-                // and otherwise we can advance the trace by the acknowledged elements of the other input,
-                // as we may still use them as thresholds (ie we must preserve `le` wrt `acknowledged`).
-                // NOTE: We release capabilities here to allow light work to complete, which may result in
-                //       unique ownership which would enable `advance_mut`.
+                // shut down or advance trace2.
                 if trace2.is_some() && input1.frontier().is_empty() { trace2 = None; }
                 if let Some(ref mut trace2) = trace2 {
                     trace2.advance_by(&input1.frontier().frontier()[..]);
