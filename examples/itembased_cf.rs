@@ -4,10 +4,14 @@ extern crate rand;
 
 use differential_dataflow::input::InputSession;
 use differential_dataflow::operators::{Join,CountTotal,Count};
+use differential_dataflow::operators::arrange::ArrangeByKey;
+use differential_dataflow::operators::join::JoinCore;
 
 use rand::{Rng, SeedableRng, StdRng};
 
-
+// A differential version of item-based collaborative filtering using Jaccard similarity for
+// comparing item interaction histories. See Algorithm 1 in https://ssc.io/pdf/amnesia.pdf
+// for details.
 fn main() {
 
     timely::execute_from_args(std::env::args(), move |worker| {
@@ -18,14 +22,14 @@ fn main() {
 
             let interactions = interactions_input.to_collection(scope);
 
-            // Find all users with more than 5 and less than 500 interactions
+            // Find all users with less than 500 interactions
             let users_with_enough_interactions = interactions
                 .map(|(user, _item)| user)
                 .count_total()
-                .filter(move |(_user, count): &(u32, isize)| *count > 5 && *count < 500)
+                .filter(move |(_user, count): &(u32, isize)| *count < 500)
                 .map(|(user, _count)| user);
 
-            // Remove users with too few or too many interactions
+            // Remove users with too many interactions
             let remaining_interactions = interactions
                 .semijoin(&users_with_enough_interactions);
 
@@ -33,26 +37,35 @@ fn main() {
                 .map(|(_user, item)| item)
                 .count_total();
 
+            let arranged_remaining_interactions = remaining_interactions.arrange_by_key();
+
             // Compute the number of cooccurrences of each item pair
-            let cooccurrences = remaining_interactions
-                .join_map(&remaining_interactions, |_user, &item_a, &item_b| (item_a, item_b))
-                .filter(|&(item_a, item_b)| item_a > item_b)
+            let cooccurrences = arranged_remaining_interactions
+                .join_core(&arranged_remaining_interactions, |_user, &item_a, &item_b| {
+                    if item_a > item_b { Some((item_a, item_b)) } else { None }
+                })
                 .count();
+
+            let arranged_num_interactions_per_item = num_interactions_per_item.arrange_by_key();
 
             // Compute the jaccard similarity between item pairs (= number of users that interacted
             // with both items / number of users that interacted with at least one of the items)
             let jaccard_similarities = cooccurrences
+                // Find the number of interactions for item_a
                 .map(|((item_a, item_b), num_cooc)| (item_a, (item_b, num_cooc)))
-                .join_map(&num_interactions_per_item, |&item_a, &(item_b, num_cooc), &occ_a| {
-                    (item_b, (item_a, num_cooc, occ_a))
-                })
-                .join_map(
-                    &num_interactions_per_item,
+                .join_core(
+                    &arranged_num_interactions_per_item,
+                    |&item_a, &(item_b, num_cooc), &occ_a| Some((item_b, (item_a, num_cooc, occ_a)))
+                )
+                // Find the number of interactions for item_b
+                .join_core(
+                    &arranged_num_interactions_per_item,
                     |&item_b, &(item_a, num_cooc, occ_a), &occ_b| {
-                        ((item_a, item_b), (num_cooc, occ_a, occ_b))
+                        Some(((item_a, item_b), (num_cooc, occ_a, occ_b)))
                     },
                 )
-                // We have to do this calculation in a map due to the lack of a total order for f64
+                // Compute Jaccard similarty, has to be done in a map due to the lack of a
+                // total order for f64 (which seems to break the consolidation in join)
                 .map(|((item_a, item_b), (num_cooc, occ_a, occ_b))| {
                     let jaccard = num_cooc as f64 / (occ_a + occ_b - num_cooc) as f64;
                     ((item_a, item_b), jaccard)
