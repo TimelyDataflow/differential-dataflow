@@ -356,14 +356,14 @@ where
                 // buffers and logic for computing per-key interesting times "efficiently".
                 let mut interesting_times = Vec::<G::Timestamp>::new();
 
-                // space for assembling the upper bound of times to process.
-                let mut upper_limit = Antichain::<G::Timestamp>::new();
+                // Upper and lower frontiers for the pending input and output batches to process.
+                let mut upper_limit = Antichain::from_elem(<G::Timestamp as Lattice>::minimum());
+                let mut lower_limit = Antichain::from_elem(<G::Timestamp as Lattice>::minimum());
 
-                // tracks frontiers received from batches, for sanity.
-                let mut upper_received = vec![<G::Timestamp as Lattice>::minimum()];
+                // Output batches may need to be built piecemeal, and these temp storage help there.
+                let mut output_upper = Antichain::from_elem(<G::Timestamp as Lattice>::minimum());
+                let mut output_lower = Antichain::from_elem(<G::Timestamp as Lattice>::minimum());
 
-                // We separately track the frontiers for what we have sent, and what we have sealed.
-                let mut lower_issued = Antichain::from_elem(<G::Timestamp as Lattice>::minimum());
                 let mut input_buffer = Vec::new();
 
                 let id = self.stream.scope().index();
@@ -391,9 +391,6 @@ where
                     let mut batch_cursors = Vec::new();
                     let mut batch_storage = Vec::new();
 
-                    // The only purpose of `lower_received` was to allow slicing off old input.
-                    let lower_received = upper_received.clone();
-
                     // Drain the input stream of batches, validating the contiguity of the batch descriptions and
                     // capturing a cursor for each of the batches as well as ensuring we hold a capability for the
                     // times in the batch.
@@ -401,7 +398,7 @@ where
 
                         batches.swap(&mut input_buffer);
                         for batch in input_buffer.drain(..) {
-                            upper_received = batch.description().upper().to_vec();
+                            // upper_received = batch.description().upper().to_vec();
                             batch_cursors.push(batch.cursor());
                             batch_storage.push(batch);
                         }
@@ -413,6 +410,8 @@ where
                         }
                     });
 
+                    // Downgrade upper to lower limit, repopulate upper limit.
+                    std::mem::swap(&mut upper_limit, &mut lower_limit);
                     source_trace.read_upper(&mut upper_limit);
 
                     // If we have no capabilities, then we (i) should not produce any outputs and (ii) could not send
@@ -450,9 +449,9 @@ where
                         }
 
                         // cursors for navigating input and output traces.
-                        let (mut source_cursor, source_storage): (T1::Cursor, _) = source_trace.cursor_through(&lower_received[..]).expect("failed to acquire source cursor");
+                        let (mut source_cursor, source_storage): (T1::Cursor, _) = source_trace.cursor_through(lower_limit.elements()).expect("failed to acquire source cursor");
                         let source_storage = &source_storage;
-                        let (mut output_cursor, output_storage): (T2::Cursor, _) = output_reader.cursor(); // TODO: this panicked when as above; WHY???
+                        let (mut output_cursor, output_storage): (T2::Cursor, _) = output_reader.cursor_through(lower_limit.elements()).expect("failed to acquire output cursor");
                         let output_storage = &output_storage;
                         let (mut batch_cursor, batch_storage) = (CursorList::new(batch_cursors, &batch_storage), batch_storage);
                         let batch_storage = &batch_storage;
@@ -529,22 +528,31 @@ where
 
                         // build and ship each batch (because only one capability per message).
                         for (index, builder) in builders.drain(..).enumerate() {
-                            let mut local_upper = upper_limit.clone();
+
+                            // Form the upper limit of the next batch, which includes all times greater
+                            // than the input batch, or the capabilities from i + 1 onward.
+                            output_upper.clear();
+                            output_upper.extend(upper_limit.elements().iter().cloned());
                             for capability in &capabilities[index + 1 ..] {
-                                local_upper.insert(capability.time().clone());
+                                output_upper.insert(capability.time().clone());
                             }
 
-                            if lower_issued.elements() != local_upper.elements() {
+                            if output_upper.elements() != output_lower.elements() {
 
-                                let batch = builder.done(lower_issued.elements(), local_upper.elements(), lower_issued.elements());
+                                let batch = builder.done(output_lower.elements(), output_upper.elements(), output_lower.elements());
 
                                 // ship batch to the output, and commit to the output trace.
                                 output.session(&capabilities[index]).give(batch.clone());
                                 output_writer.insert(batch, Some(capabilities[index].time().clone()));
 
-                                lower_issued = local_upper;
+                                output_lower.clear();
+                                output_lower.extend(output_upper.elements().iter().cloned());
                             }
                         }
+
+                        // This should be true, as the final iteration introduces no capabilities, and
+                        // uses exactly `upper_limit` to determine the upper bound. Good to check though.
+                        assert!(output_upper.elements() == upper_limit.elements());
 
                         // Determine the frontier of our interesting times.
                         let mut frontier = Antichain::<G::Timestamp>::new();
@@ -576,8 +584,8 @@ where
                     output_reader.advance_by(upper_limit.elements());
 
                     // We will only slice the data between future batches.
-                    source_trace.distinguish_since(&upper_received[..]);
-                    output_reader.distinguish_since(&upper_received[..]);
+                    source_trace.distinguish_since(upper_limit.elements());
+                    output_reader.distinguish_since(upper_limit.elements());
                 }
             }
         )
@@ -1071,5 +1079,3 @@ mod history_replay {
         }
     }
 }
-
-
