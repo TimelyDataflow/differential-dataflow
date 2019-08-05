@@ -4,7 +4,7 @@
 //! operators have specialized implementations to make them work efficiently, and are in addition
 //! to several operations defined directly on the `Collection` type (e.g. `map` and `filter`).
 
-pub use self::reduce::{Reduce, Threshold, Count, consolidate_from};
+pub use self::reduce::{Reduce, Threshold, Count};
 pub use self::consolidate::Consolidate;
 pub use self::iterate::Iterate;
 pub use self::join::{Join, JoinCore};
@@ -19,9 +19,9 @@ pub mod join;
 pub mod count;
 pub mod threshold;
 
-use ::difference::Monoid;
+use ::difference::Semigroup;
 use lattice::Lattice;
-use trace::{Cursor, consolidate};
+use trace::Cursor;
 
 /// An accumulation of (value, time, diff) updates.
 struct EditList<'a, V: 'a, T, R> {
@@ -29,7 +29,7 @@ struct EditList<'a, V: 'a, T, R> {
     edits: Vec<(T, R)>,
 }
 
-impl<'a, V:'a, T, R> EditList<'a, V, T, R> where T: Ord+Clone, R: Monoid {
+impl<'a, V:'a, T, R> EditList<'a, V, T, R> where T: Ord+Clone, R: Semigroup {
     /// Creates an empty list of edits.
     #[inline]
     fn new() -> Self {
@@ -65,7 +65,7 @@ impl<'a, V:'a, T, R> EditList<'a, V, T, R> where T: Ord+Clone, R: Monoid {
     #[inline]
     fn seal(&mut self, value: &'a V) {
         let prev = self.values.last().map(|x| x.1).unwrap_or(0);
-        consolidate_from(&mut self.edits, prev);
+        crate::consolidation::consolidate_from(&mut self.edits, prev);
         if self.edits.len() > prev {
             self.values.push((value, self.edits.len()));
         }
@@ -89,7 +89,7 @@ struct ValueHistory<'storage, V: 'storage, T, R> {
     buffer: Vec<((&'storage V, T), R)>,               // where we accumulate / collapse updates.
 }
 
-impl<'storage, V: Ord+Clone+'storage, T: Lattice+Ord+Clone, R: Monoid> ValueHistory<'storage, V, T, R> {
+impl<'storage, V: Ord+Clone+'storage, T: Lattice+Ord+Clone, R: Semigroup> ValueHistory<'storage, V, T, R> {
     fn new() -> Self {
         ValueHistory {
             edits: EditList::new(),
@@ -157,7 +157,7 @@ where
     'storage: 'history,
     V: Ord+'storage,
     T: Lattice+Ord+Clone+'history,
-    R: Monoid+'history,
+    R: Semigroup+'history,
 {
     replay: &'history mut ValueHistory<'storage, V, T, R>
 }
@@ -167,7 +167,7 @@ where
     'storage: 'history,
     V: Ord+'storage,
     T: Lattice+Ord+Clone+'history,
-    R: Monoid+'history,
+    R: Semigroup+'history,
 {
     fn time(&self) -> Option<&T> { self.replay.history.last().map(|x| &x.0) }
     fn meet(&self) -> Option<&T> { self.replay.history.last().map(|x| &x.1) }
@@ -195,7 +195,7 @@ where
         for element in self.replay.buffer.iter_mut() {
             (element.0).1 = (element.0).1.join(meet);
         }
-        consolidate(&mut self.replay.buffer, 0);
+        crate::consolidation::consolidate(&mut self.replay.buffer);
     }
     fn is_done(&self) -> bool { self.replay.history.len() == 0 }
 

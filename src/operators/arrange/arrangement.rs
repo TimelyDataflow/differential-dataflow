@@ -32,7 +32,7 @@ use timely::dataflow::operators::Capability;
 use timely_sort::Unsigned;
 
 use ::{Data, ExchangeData, Collection, AsCollection, Hashable};
-use ::difference::Monoid;
+use ::difference::Semigroup;
 use lattice::Lattice;
 use trace::{Trace, TraceReader, Batch, BatchReader, Batcher, Cursor};
 use trace::implementations::ord::OrdValSpine as DefaultValTrace;
@@ -204,7 +204,7 @@ where
     /// supplied as arguments to an operator using the same key-value structure.
     pub fn as_collection<D: Data, L>(&self, logic: L) -> Collection<G, D, Tr::R>
         where
-            Tr::R: Monoid,
+            Tr::R: Semigroup,
             L: Fn(&Tr::Key, &Tr::Val) -> D+'static,
     {
         self.flat_map_ref(move |key, val| Some(logic(key,val)))
@@ -216,7 +216,7 @@ where
     /// filtering or flat mapping as part of the extraction.
     pub fn flat_map_ref<I, L>(&self, logic: L) -> Collection<G, I::Item, Tr::R>
         where
-            Tr::R: Monoid,
+            Tr::R: Semigroup,
             I: IntoIterator,
             I::Item: Data,
             L: Fn(&Tr::Key, &Tr::Val) -> I+'static,
@@ -254,7 +254,7 @@ where
         G::Timestamp: Data+Lattice+Ord+TotalOrder,
         Tr::Key: ExchangeData+Hashable,
         Tr::Val: ExchangeData,
-        Tr::R: ExchangeData+Monoid,
+        Tr::R: ExchangeData+Semigroup,
         Tr: 'static,
     {
         // while the arrangement is already correctly distributed, the query stream may not be.
@@ -350,7 +350,7 @@ where
                                 working.sort_by(|x,y| x.0.cmp(&y.0));
                                 for (time, val, diff) in working.drain(..) {
                                     if !active.is_empty() && active[0].1.less_than(&time) {
-                                        ::trace::consolidate(&mut working2, 0);
+                                        crate::consolidation::consolidate(&mut working2);
                                         while !active.is_empty() && active[0].1.less_than(&time) {
                                             for &(ref val, ref count) in working2.iter() {
                                                 session.give((key.clone(), val.clone(), active[0].1.clone(), count.clone()));
@@ -361,7 +361,7 @@ where
                                     working2.push((val, diff));
                                 }
                                 if !active.is_empty() {
-                                    ::trace::consolidate(&mut working2, 0);
+                                    crate::consolidation::consolidate(&mut working2);
                                     while !active.is_empty() {
                                         for &(ref val, ref count) in working2.iter() {
                                             session.give((key.clone(), val.clone(), active[0].1.clone(), count.clone()));
@@ -430,7 +430,7 @@ where
 ///
 /// This trait is implemented for appropriately typed collections and all traces that might accommodate them,
 /// as well as by arranged data for their corresponding trace type.
-pub trait Arrange<G: Scope, K, V, R: Monoid>
+pub trait Arrange<G: Scope, K, V, R: Semigroup>
 where
     G::Timestamp: Lattice,
     K: Data,
@@ -491,7 +491,7 @@ where
     G::Timestamp: Lattice+Ord,
     K: ExchangeData+Hashable,
     V: ExchangeData,
-    R: Monoid+ExchangeData,
+    R: Semigroup+ExchangeData,
 {
     fn arrange_core<P, Tr>(&self, pact: P, name: &str) -> Arranged<G, TraceAgent<Tr>>
     where
@@ -649,7 +649,7 @@ where
     }
 }
 
-impl<G: Scope, K: ExchangeData+Hashable, R: ExchangeData+Monoid> Arrange<G, K, (), R> for Collection<G, K, R>
+impl<G: Scope, K: ExchangeData+Hashable, R: ExchangeData+Semigroup> Arrange<G, K, (), R> for Collection<G, K, R>
 where
     G::Timestamp: Lattice+Ord,
 {
@@ -669,7 +669,7 @@ where
 // where
 //     G: Scope,
 //     G::Timestamp: Lattice,
-//     R: Monoid,
+//     R: Semigroup,
 //     T: Trace<K, V, G::Timestamp, R>+Clone+'static,
 //     T::Batch: Batch<K, V, G::Timestamp, R>
 // {
@@ -683,7 +683,7 @@ where
 /// This arrangement requires `Key: Hashable`, and uses the `hashed()` method to place keys in a hashed
 /// map. This can result in many hash calls, and in some cases it may help to first transform `K` to the
 /// pair `(u64, K)` of hash value and key.
-pub trait ArrangeByKey<G: Scope, K: Data+Hashable, V: Data, R: Monoid>
+pub trait ArrangeByKey<G: Scope, K: Data+Hashable, V: Data, R: Semigroup>
 where G::Timestamp: Lattice+Ord {
     /// Arranges a collection of `(Key, Val)` records by `Key`.
     ///
@@ -693,7 +693,7 @@ where G::Timestamp: Lattice+Ord {
     fn arrange_by_key(&self) -> Arranged<G, TraceAgent<DefaultValTrace<K, V, G::Timestamp, R>>>;
 }
 
-impl<G: Scope, K: ExchangeData+Hashable, V: ExchangeData, R: ExchangeData+Monoid> ArrangeByKey<G, K, V, R> for Collection<G, (K,V), R>
+impl<G: Scope, K: ExchangeData+Hashable, V: ExchangeData, R: ExchangeData+Semigroup> ArrangeByKey<G, K, V, R> for Collection<G, (K,V), R>
 where
     G::Timestamp: Lattice+Ord
 {
@@ -707,7 +707,7 @@ where
 /// This arrangement requires `Key: Hashable`, and uses the `hashed()` method to place keys in a hashed
 /// map. This can result in many hash calls, and in some cases it may help to first transform `K` to the
 /// pair `(u64, K)` of hash value and key.
-pub trait ArrangeBySelf<G: Scope, K: Data+Hashable, R: Monoid>
+pub trait ArrangeBySelf<G: Scope, K: Data+Hashable, R: Semigroup>
 where
     G::Timestamp: Lattice+Ord
 {
@@ -720,7 +720,7 @@ where
 }
 
 
-impl<G: Scope, K: ExchangeData+Hashable, R: ExchangeData+Monoid> ArrangeBySelf<G, K, R> for Collection<G, K, R>
+impl<G: Scope, K: ExchangeData+Hashable, R: ExchangeData+Semigroup> ArrangeBySelf<G, K, R> for Collection<G, K, R>
 where
     G::Timestamp: Lattice+Ord
 {
@@ -729,4 +729,3 @@ where
             .arrange()
     }
 }
-

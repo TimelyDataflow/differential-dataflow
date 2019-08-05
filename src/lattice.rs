@@ -117,8 +117,7 @@ pub trait Lattice : PartialOrder {
     /// the sense that any other element with the same property (compares identically to times
     /// greater or equal to `frontier`) must be less or equal to the result.
     ///
-    /// When provided an empty frontier `self` is set to `minimum()`.
-    /// This is perhaps surprising, but is vacuuously correct and done to prevent a panic.
+    /// When provided an empty frontier `self` is not modified.
     ///
     /// # Examples
     ///
@@ -196,7 +195,10 @@ use std::time::Duration;
 
 implement_lattice!(Duration, Duration::new(0, 0));
 implement_lattice!(usize, 0);
+implement_lattice!(u128, 0);
 implement_lattice!(u64, 0);
 implement_lattice!(u32, 0);
+implement_lattice!(u16, 0);
+implement_lattice!(u8, 0);
 implement_lattice!(i32, 0);
 implement_lattice!((), ());

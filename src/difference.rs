@@ -11,63 +11,105 @@ use std::iter::Iterator;
 
 use ::Data;
 
+#[deprecated]
 pub use self::Abelian as Diff;
 
-/// A type that can be treated as a difference.
+/// A type with addition and a test for zero.
 ///
-/// The mathematical requirements are, I believe, an Abelian group, in that we require addition, inverses,
-/// and almost certainly use commutativity somewhere (it isn't clear if it is a requirement, as it isn't
-/// clear that there are semantics other than "we accumulate your differences"; I suspect we don't always
-/// accumulate them in the right order, so commutativity is important until we conclude otherwise).
-pub trait Monoid : for<'a> AddAssign<&'a Self> + ::std::marker::Sized + Data + Clone {
+/// These traits are currently the minimal requirements for a type to be a "difference" in differential
+/// dataflow. Addition allows differential dataflow to compact multiple updates to the same data, and
+/// the test for zero allows differential dataflow to retire updates that have no effect. There is no
+/// requirement that the test for zero ever return true, and the zero value does not need to inhabit the
+/// type.
+///
+/// There is a light presumption of commutativity here, in that while we will largely perform addition
+/// in order of timestamps, for many types of timestamps there is no total order and consequently no
+/// obvious order to respect. Non-commutative semigroups should be used with care.
+pub trait Semigroup : for<'a> AddAssign<&'a Self> + ::std::marker::Sized + Data + Clone {
 	/// Returns true if the element is the additive identity.
 	///
 	/// This is primarily used by differential dataflow to know when it is safe to delete an update.
 	/// When a difference accumulates to zero, the difference has no effect on any accumulation and can
 	/// be removed.
-	#[inline]
-	fn is_zero(&self) -> bool { self.eq(&Self::zero()) }
-	/// The additive identity.
 	///
-	/// This method is primarily used by differential dataflow internals as part of consolidation, when
-	/// one value is accumulated elsewhere and must be replaced by valid but harmless value.
+	/// A semigroup is not obligated to have a zero element, and this method could always return
+	/// false in such a setting.
+	fn is_zero(&self) -> bool;
+}
+
+impl Semigroup for isize {
+	#[inline] fn is_zero(&self) -> bool { self == &0 }
+}
+
+impl Semigroup for i128 {
+	#[inline] fn is_zero(&self) -> bool { self == &0 }
+}
+
+impl Semigroup for i64 {
+	#[inline] fn is_zero(&self) -> bool { self == &0 }
+}
+
+impl Semigroup for i32 {
+	#[inline] fn is_zero(&self) -> bool { self == &0 }
+}
+
+impl Semigroup for i16 {
+	#[inline] fn is_zero(&self) -> bool { self == &0 }
+}
+
+impl Semigroup for i8 {
+	#[inline] fn is_zero(&self) -> bool { self == &0 }
+}
+
+/// A semigroup with an explicit zero element.
+#[deprecated]
+pub trait Monoid : Semigroup {
+	/// A zero element under the semigroup addition operator.
 	fn zero() -> Self;
 }
 
-/// A commutative monoid with negation.
-///
-/// This trait represents a commutative group, here a commutative monoid with
-/// the additional support for subtraction and negation. An identity subtracted
-/// from itself or added to its negation should be the zero element from the
-/// underlying monoid.
-pub trait Abelian : Monoid + Neg<Output=Self> { }
-impl<T: Monoid + Neg<Output=Self>> Abelian for T { }
-
+#[allow(deprecated)]
 impl Monoid for isize {
 	#[inline] fn zero() -> Self { 0 }
 }
 
+#[allow(deprecated)]
 impl Monoid for i128 {
 	#[inline] fn zero() -> Self { 0 }
 }
 
+#[allow(deprecated)]
 impl Monoid for i64 {
 	#[inline] fn zero() -> Self { 0 }
 }
 
+#[allow(deprecated)]
 impl Monoid for i32 {
 	#[inline] fn zero() -> Self { 0 }
 }
 
+#[allow(deprecated)]
 impl Monoid for i16 {
 	#[inline] fn zero() -> Self { 0 }
 }
 
+#[allow(deprecated)]
 impl Monoid for i8 {
 	#[inline] fn zero() -> Self { 0 }
 }
 
- 
+
+/// A `Monoid` with negation.
+///
+/// This trait extends the requirements of `Semigroup` to include a negation operator.
+/// Several differential dataflow operators require negation in order to retract prior outputs, but
+/// not quite as many as you might imagine.
+#[allow(deprecated)]
+pub trait Abelian : Monoid + Neg<Output=Self> { }
+#[allow(deprecated)]
+impl<T: Monoid + Neg<Output=Self>> Abelian for T { }
+
+
 /// The difference defined by a pair of difference elements.
 ///
 /// This type is essentially a "pair", though in Rust the tuple types do not derive the numeric
@@ -92,12 +134,9 @@ impl<R1, R2> DiffPair<R1, R2> {
 	}
 }
 
-impl<R1: Monoid, R2: Monoid> Monoid for DiffPair<R1, R2> {
-	#[inline] fn zero() -> Self {
-		DiffPair {
-			element1: R1::zero(),
-			element2: R2::zero(),
-		}
+impl<R1: Semigroup, R2: Semigroup> Semigroup for DiffPair<R1, R2> {
+	#[inline] fn is_zero(&self) -> bool {
+		self.element1.is_zero() && self.element2.is_zero()
 	}
 }
 
@@ -175,12 +214,9 @@ impl<R> std::ops::DerefMut for DiffVector<R> {
 	}
 }
 
-impl<R: Monoid> Monoid for DiffVector<R> {
+impl<R: Semigroup> Semigroup for DiffVector<R> {
 	#[inline] fn is_zero(&self) -> bool {
 		self.buffer.iter().all(|x| x.is_zero())
-	}
-	#[inline] fn zero() -> Self {
-		Self { buffer: Vec::new() }
 	}
 }
 

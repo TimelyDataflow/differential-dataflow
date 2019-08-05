@@ -10,14 +10,14 @@ use timely::dataflow::channels::pact::Pipeline;
 
 use lattice::Lattice;
 use ::{ExchangeData, Collection};
-use ::difference::{Monoid, Abelian};
+use ::difference::{Semigroup, Abelian};
 use hashable::Hashable;
 use collection::AsCollection;
 use operators::arrange::{Arranged, ArrangeBySelf};
 use trace::{BatchReader, Cursor, TraceReader};
 
 /// Extension trait for the `distinct` differential dataflow method.
-pub trait ThresholdTotal<G: Scope, K: ExchangeData, R: ExchangeData+Monoid> where G::Timestamp: TotalOrder+Lattice+Ord {
+pub trait ThresholdTotal<G: Scope, K: ExchangeData, R: ExchangeData+Semigroup> where G::Timestamp: TotalOrder+Lattice+Ord {
     /// Reduces the collection to one occurrence of each distinct element.
     ///
     /// # Examples
@@ -64,11 +64,11 @@ pub trait ThresholdTotal<G: Scope, K: ExchangeData, R: ExchangeData+Monoid> wher
     /// }
     /// ```
     fn distinct_total(&self) -> Collection<G, K, isize> {
-        self.threshold_total(|_,c| if c.is_zero() { 0 } else { 1 })
+        self.threshold_total(|_,c| if c.is_zero() { 0isize } else { 1isize })
     }
 }
 
-impl<G: Scope, K: ExchangeData+Hashable, R: ExchangeData+Monoid> ThresholdTotal<G, K, R> for Collection<G, K, R>
+impl<G: Scope, K: ExchangeData+Hashable, R: ExchangeData+Semigroup> ThresholdTotal<G, K, R> for Collection<G, K, R>
 where G::Timestamp: TotalOrder+Lattice+Ord {
     fn threshold_total<R2: Abelian, F: Fn(&K,&R)->R2+'static>(&self, thresh: F) -> Collection<G, K, R2> {
         self.arrange_by_self()
@@ -81,7 +81,7 @@ where
     G::Timestamp: TotalOrder+Lattice+Ord,
     T1: TraceReader<Val=(), Time=G::Timestamp>+Clone+'static,
     T1::Key: ExchangeData,
-    T1::R: ExchangeData+Monoid,
+    T1::R: ExchangeData+Semigroup,
     T1::Batch: BatchReader<T1::Key, (), G::Timestamp, T1::R>,
     T1::Cursor: Cursor<T1::Key, (), G::Timestamp, T1::R>,
 {
@@ -105,12 +105,15 @@ where
 
                     while batch_cursor.key_valid(&batch) {
                         let key = batch_cursor.key(&batch);
-                        let mut count = <T1::R>::zero();
+                        let mut count = None;
 
                         // Compute the multiplicity of this key before the current batch.
                         trace_cursor.seek_key(&trace_storage, key);
                         if trace_cursor.key_valid(&trace_storage) && trace_cursor.key(&trace_storage) == key {
-                            trace_cursor.map_times(&trace_storage, |_, diff| count += diff);
+                            trace_cursor.map_times(&trace_storage, |_, diff| {
+                                count.as_mut().map(|c| *c += diff);
+                                if count.is_none() { count = Some(diff.clone()); }
+                            });
                         }
 
                         // Apply `thresh` both before and after `diff` is applied to `count`.
@@ -119,14 +122,23 @@ where
 
                             // Determine old and new weights.
                             // If a count is zero, the weight must be zero.
-                            let old_weight = if count.is_zero() { R2::zero() } else { thresh(key, &count) };
-                            count += diff;
-                            let new_weight = if count.is_zero() { R2::zero() } else { thresh(key, &count) };
+                            let old_weight = count.as_ref().map(|c| thresh(key, c));
+                            count.as_mut().map(|c| *c += diff);
+                            if count.is_none() { count = Some(diff.clone()); }
+                            let new_weight = count.as_ref().map(|c| thresh(key, c));
 
-                            let mut difference = -old_weight;
-                            difference += &new_weight;
-                            if !difference.is_zero() {
-                                session.give((key.clone(), time.clone(), difference));
+                            let difference =
+                            match (old_weight, new_weight) {
+                                (Some(old), Some(new)) => { let mut diff = -old; diff += &new; Some(diff) },
+                                (Some(old), None) => { Some(-old) },
+                                (None, Some(new)) => { Some(new) },
+                                (None, None) => None,
+                            };
+
+                            if let Some(difference) = difference {
+                                if !difference.is_zero() {
+                                    session.give((key.clone(), time.clone(), difference));
+                                }
                             }
                         });
 
