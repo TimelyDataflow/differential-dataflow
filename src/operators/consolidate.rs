@@ -9,7 +9,7 @@
 use timely::dataflow::Scope;
 
 use ::{Collection, ExchangeData, Hashable};
-use ::difference::Monoid;
+use ::difference::Semigroup;
 use operators::arrange::ArrangeBySelf;
 
 /// An extension method for consolidating weighted streams.
@@ -46,7 +46,7 @@ pub trait Consolidate<D: ExchangeData+Hashable> {
 impl<G: Scope, D, R> Consolidate<D> for Collection<G, D, R>
 where
     D: ExchangeData+Hashable,
-    R: ExchangeData+Monoid,
+    R: ExchangeData+Semigroup,
     G::Timestamp: ::lattice::Lattice+Ord,
  {
     fn consolidate(&self) -> Self {
@@ -91,7 +91,7 @@ pub trait ConsolidateStream<D: ExchangeData+Hashable> {
 impl<G: Scope, D, R> ConsolidateStream<D> for Collection<G, D, R>
 where
     D: ExchangeData+Hashable,
-    R: ExchangeData+Monoid,
+    R: ExchangeData+Semigroup,
     G::Timestamp: ::lattice::Lattice+Ord,
  {
     fn consolidate_stream(&self) -> Self {
@@ -107,14 +107,7 @@ where
                 move |input, output| {
                     input.for_each(|time, data| {
                         data.swap(&mut vector);
-                        vector.sort_unstable_by(|x,y| (&x.0, &x.1).cmp(&(&y.0, &y.1)));
-                        for index in 1 .. vector.len() {
-                            if vector[index].0 == vector[index - 1].0 && vector[index].1 == vector[index - 1].1 {
-                                let prev = ::std::mem::replace(&mut vector[index - 1].2, R::zero());
-                                vector[index].2 += &prev;
-                            }
-                        }
-                        vector.retain(|x| !x.2.is_zero());
+                        crate::consolidation::consolidate_updates(&mut vector);
                         output.session(&time).give_vec(&mut vector);
                     })
                 }

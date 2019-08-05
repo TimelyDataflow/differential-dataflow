@@ -2,13 +2,13 @@
 
 use timely::progress::frontier::Antichain;
 
-use ::difference::Monoid;
+use ::difference::Semigroup;
 
 use lattice::Lattice;
 use trace::{Batch, Batcher, Builder};
 
 /// Creates batches from unordered tuples.
-pub struct MergeBatcher<K: Ord, V: Ord, T: Ord, R: Monoid, B: Batch<K, V, T, R>> {
+pub struct MergeBatcher<K: Ord, V: Ord, T: Ord, R: Semigroup, B: Batch<K, V, T, R>> {
     sorter: MergeSorter<(K, V), T, R>,
     lower: Vec<T>,
     frontier: Antichain<T>,
@@ -20,7 +20,7 @@ where
     K: Ord+Clone,
     V: Ord+Clone,
     T: Lattice+Ord+Clone,
-    R: Monoid,
+    R: Semigroup,
     B: Batch<K, V, T, R>,
 {
     fn new() -> Self {
@@ -91,7 +91,8 @@ where
         //        prefer to keep these buffers around to re-fill, if possible.
         let mut buffer = Vec::new();
         self.sorter.push(&mut buffer);
-        while buffer.capacity() > 0 {
+        // We recycle buffers with allocations (capacity, and not zero-sized).
+        while buffer.capacity() > 0 && std::mem::size_of::<((K,V),T,R)>() > 0 {
             buffer = Vec::new();
             self.sorter.push(&mut buffer);
         }
@@ -170,12 +171,12 @@ unsafe fn push_unchecked<T>(vec: &mut Vec<T>, element: T) {
     vec.set_len(len + 1);
 }
 
-pub struct MergeSorter<D: Ord, T: Ord, R: Monoid> {
+pub struct MergeSorter<D: Ord, T: Ord, R: Semigroup> {
     queue: Vec<Vec<Vec<(D, T, R)>>>,    // each power-of-two length list of allocations.
     stash: Vec<Vec<(D, T, R)>>,
 }
 
-impl<D: Ord, T: Ord, R: Monoid> MergeSorter<D, T, R> {
+impl<D: Ord, T: Ord, R: Semigroup> MergeSorter<D, T, R> {
 
     #[inline]
     pub fn new() -> Self { MergeSorter { queue: Vec::new(), stash: Vec::new() } }
@@ -205,16 +206,7 @@ impl<D: Ord, T: Ord, R: Monoid> MergeSorter<D, T, R> {
         };
 
         if batch.len() > 0 {
-            batch.sort_unstable_by(|x,y| (&x.0, &x.1).cmp(&(&y.0, &y.1)));
-            for index in 1 .. batch.len() {
-                if batch[index].0 == batch[index - 1].0 && batch[index].1 == batch[index - 1].1 {
-                    let prev = ::std::mem::replace(&mut batch[index - 1].2, R::zero());
-                    batch[index].2 += &prev;
-                }
-            }
-            batch.retain(|x| !x.2.is_zero());
-
-
+            crate::consolidation::consolidate_updates(&mut batch);
             self.queue.push(vec![batch]);
             while self.queue.len() > 1 && (self.queue[self.queue.len()-1].len() >= self.queue[self.queue.len()-2].len() / 2) {
                 let list1 = self.queue.pop().unwrap();

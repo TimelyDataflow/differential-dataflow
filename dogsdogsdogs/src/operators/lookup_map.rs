@@ -8,7 +8,7 @@ use timely::dataflow::operators::Operator;
 use timely_sort::Unsigned;
 
 use differential_dataflow::{ExchangeData, Collection, AsCollection, Hashable};
-use differential_dataflow::difference::Monoid;
+use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::trace::{Cursor, TraceReader, BatchReader};
@@ -32,12 +32,12 @@ where
     Tr::Val: Clone,
     Tr::Batch: BatchReader<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
     Tr::Cursor: Cursor<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
-    Tr::R: Monoid+ExchangeData,
+    Tr::R: Semigroup+ExchangeData,
     F: Fn(&D, &mut Tr::Key)+Clone+'static,
     D: ExchangeData,
-    R: ExchangeData+Monoid,
+    R: ExchangeData+Semigroup,
     DOut: Clone+'static,
-    ROut: Monoid,
+    ROut: Semigroup,
     S: Fn(&D, &R, &Tr::Val, &Tr::R)->(DOut, ROut)+'static,
 {
     let propose_stream = arrangement.stream;

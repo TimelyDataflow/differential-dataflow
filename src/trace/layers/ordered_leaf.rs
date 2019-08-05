@@ -1,8 +1,8 @@
 //! Implementation using ordered keys and exponential search.
 
-use ::difference::Monoid;
+use ::difference::Semigroup;
 
-use super::{Trie, Cursor, Builder, MergeBuilder, TupleBuilder};
+use super::{Trie, Cursor, Builder, MergeBuilder, TupleBuilder, advance};
 
 /// A layer of unordered values.
 #[derive(Debug, Eq, PartialEq, Clone, Abomonation)]
@@ -11,7 +11,7 @@ pub struct OrderedLeaf<K, R> {
     pub vals: Vec<(K, R)>,
 }
 
-impl<K: Ord+Clone, R: Monoid+Clone> Trie for OrderedLeaf<K, R> {
+impl<K: Ord+Clone, R: Semigroup+Clone> Trie for OrderedLeaf<K, R> {
     type Item = (K, R);
     type Cursor = OrderedLeafCursor;
     type MergeBuilder = OrderedLeafBuilder<K, R>;
@@ -32,13 +32,13 @@ pub struct OrderedLeafBuilder<K, R> {
     pub vals: Vec<(K, R)>,
 }
 
-impl<K: Ord+Clone, R: Monoid+Clone> Builder for OrderedLeafBuilder<K, R> {
+impl<K: Ord+Clone, R: Semigroup+Clone> Builder for OrderedLeafBuilder<K, R> {
     type Trie = OrderedLeaf<K, R>;
     fn boundary(&mut self) -> usize { self.vals.len() }
     fn done(self) -> Self::Trie { OrderedLeaf { vals: self.vals } }
 }
 
-impl<K: Ord+Clone, R: Monoid+Clone> MergeBuilder for OrderedLeafBuilder<K, R> {
+impl<K: Ord+Clone, R: Semigroup+Clone> MergeBuilder for OrderedLeafBuilder<K, R> {
     fn with_capacity(other1: &Self::Trie, other2: &Self::Trie) -> Self {
         OrderedLeafBuilder {
             vals: Vec::with_capacity(<OrderedLeaf<K, R> as Trie>::keys(other1) + <OrderedLeaf<K, R> as Trie>::keys(other2)),
@@ -92,7 +92,7 @@ impl<K: Ord+Clone, R: Monoid+Clone> MergeBuilder for OrderedLeafBuilder<K, R> {
     }
 }
 
-impl<K: Ord+Clone, R: Monoid+Clone> TupleBuilder for OrderedLeafBuilder<K, R> {
+impl<K: Ord+Clone, R: Semigroup+Clone> TupleBuilder for OrderedLeafBuilder<K, R> {
     type Item = (K, R);
     fn new() -> Self { OrderedLeafBuilder { vals: Vec::new() } }
     fn with_capacity(cap: usize) -> Self { OrderedLeafBuilder { vals: Vec::with_capacity(cap) } }
@@ -128,40 +128,4 @@ impl<K: Clone, R: Clone> Cursor<OrderedLeaf<K, R>> for OrderedLeafCursor {
         self.pos = lower;
         self.bounds = (lower, upper);
     }
-}
-
-
-/// Reports the number of elements satisfing the predicate.
-///
-/// This methods *relies strongly* on the assumption that the predicate
-/// stays false once it becomes false, a joint property of the predicate
-/// and the slice. This allows `advance` to use exponential search to
-/// count the number of elements in time logarithmic in the result.
-#[inline(never)]
-pub fn advance<T, F: Fn(&T)->bool>(slice: &[T], function: F) -> usize {
-
-    // start with no advance
-    let mut index = 0;
-    if index < slice.len() && function(&slice[index]) {
-
-        // advance in exponentially growing steps.
-        let mut step = 1;
-        while index + step < slice.len() && function(&slice[index + step]) {
-            index += step;
-            step = step << 1;
-        }
-
-        // advance in exponentially shrinking steps.
-        step = step >> 1;
-        while step > 0 {
-            if index + step < slice.len() && function(&slice[index + step]) {
-                index += step;
-            }
-            step = step >> 1;
-        }
-
-        index += 1;
-    }
-
-    index
 }

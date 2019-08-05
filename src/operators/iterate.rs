@@ -42,11 +42,11 @@ use timely::dataflow::operators::{Feedback, ConnectLoop, Map};
 use timely::dataflow::operators::feedback::Handle;
 
 use ::{Data, Collection};
-use ::difference::{Monoid, Abelian};
+use ::difference::{Semigroup, Abelian};
 use lattice::Lattice;
 
 /// An extension trait for the `iterate` method.
-pub trait Iterate<G: Scope, D: Data, R: Monoid> {
+pub trait Iterate<G: Scope, D: Data, R: Semigroup> {
     /// Iteratively apply `logic` to the source collection until convergence.
     ///
     /// Importantly, this method does not automatically consolidate results.
@@ -102,7 +102,7 @@ impl<G: Scope, D: Ord+Data+Debug, R: Abelian> Iterate<G, D, R> for Collection<G,
     }
 }
 
-impl<G: Scope, D: Ord+Data+Debug, R: Monoid> Iterate<G, D, R> for G {
+impl<G: Scope, D: Ord+Data+Debug, R: Semigroup> Iterate<G, D, R> for G {
     fn iterate<F>(&self, logic: F) -> Collection<G, D, R>
         where G::Timestamp: Lattice,
               for<'a> F: FnOnce(&Collection<Iterative<'a, G, u64>, D, R>)->Collection<Iterative<'a, G, u64>, D, R> {
@@ -117,7 +117,7 @@ impl<G: Scope, D: Ord+Data+Debug, R: Monoid> Iterate<G, D, R> for G {
                 // wrapped by `variable`, but it also results in substantially more
                 // diffs produced; `result` is post-consolidation, and means fewer
                 // records are yielded out of the loop.
-                let variable = MonoidVariable::new(subgraph, Product::new(Default::default(), 1));
+                let variable = SemigroupVariable::new(subgraph, Product::new(Default::default(), 1));
                 let result = logic(&variable);
                 variable.set(&result);
                 result.leave()
@@ -225,7 +225,7 @@ impl<G: Scope, D: Data, R: Abelian> Deref for Variable<G, D, R> where G::Timesta
 /// use timely::dataflow::Scope;
 ///
 /// use differential_dataflow::input::Input;
-/// use differential_dataflow::operators::iterate::MonoidVariable;
+/// use differential_dataflow::operators::iterate::SemigroupVariable;
 /// use differential_dataflow::operators::Consolidate;
 ///
 /// fn main() {
@@ -235,7 +235,7 @@ impl<G: Scope, D: Data, R: Abelian> Deref for Variable<G, D, R> where G::Timesta
 ///
 ///         scope.iterative::<u64,_,_>(|nested| {
 ///             let summary = Product::new(Default::default(), 1);
-///             let variable = MonoidVariable::<_,usize,isize>::new(nested, summary);
+///             let variable = SemigroupVariable::<_,usize,isize>::new(nested, summary);
 ///             let result = variable.map(|x| if x % 2 == 0 { x/2 } else { x })
 ///                                  .consolidate();
 ///             variable.set(&result)
@@ -244,19 +244,19 @@ impl<G: Scope, D: Data, R: Abelian> Deref for Variable<G, D, R> where G::Timesta
 ///     })
 /// }
 /// ```
-pub struct MonoidVariable<G: Scope, D: Data, R: Monoid>
+pub struct SemigroupVariable<G: Scope, D: Data, R: Semigroup>
 where G::Timestamp: Lattice {
     collection: Collection<G, D, R>,
     feedback: Handle<G, (D, G::Timestamp, R)>,
     step: <G::Timestamp as Timestamp>::Summary,
 }
 
-impl<G: Scope, D: Data, R: Monoid> MonoidVariable<G, D, R> where G::Timestamp: Lattice {
+impl<G: Scope, D: Data, R: Semigroup> SemigroupVariable<G, D, R> where G::Timestamp: Lattice {
     /// Creates a new initially empty `Variable`.
     pub fn new(scope: &mut G, step: <G::Timestamp as Timestamp>::Summary) -> Self {
         let (feedback, updates) = scope.feedback(step.clone());
         let collection = Collection::new(updates);
-        MonoidVariable { collection, feedback, step }
+        SemigroupVariable { collection, feedback, step }
     }
 
     /// Adds a new source of data to the `Variable`.
@@ -271,7 +271,7 @@ impl<G: Scope, D: Data, R: Monoid> MonoidVariable<G, D, R> where G::Timestamp: L
     }
 }
 
-impl<G: Scope, D: Data, R: Monoid> Deref for MonoidVariable<G, D, R> where G::Timestamp: Lattice {
+impl<G: Scope, D: Data, R: Semigroup> Deref for SemigroupVariable<G, D, R> where G::Timestamp: Lattice {
     type Target = Collection<G, D, R>;
     fn deref(&self) -> &Self::Target {
         &self.collection
