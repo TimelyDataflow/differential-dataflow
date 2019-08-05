@@ -337,7 +337,6 @@ impl<G, T1> JoinCore<G, T1::Key, T1::Val, T1::R> for Arranged<G,T1>
             use timely::scheduling::Activator;
             let activations = self.stream.scope().activations().clone();
             let activator = Activator::new(&info.address[..], activations);
-            let mut antichain = timely::progress::frontier::Antichain::new();
 
             move |input1, input2, output| {
 
@@ -376,17 +375,6 @@ impl<G, T1> JoinCore<G, T1::Key, T1::Val, T1::R> for Arranged<G,T1>
                     }
                 });
 
-                // We may learn that input frontiers have advanced without sending batches.
-                if let Some(acknowledged1) = acknowledged1.as_mut() {
-                    antichain.clear();
-                    for element in acknowledged1.elements() {
-                        for frontier in input1.frontier().frontier().iter() {
-                            antichain.insert(element.join(frontier));
-                        }
-                    }
-                    std::mem::swap(&mut antichain, acknowledged1);
-                }
-
                 // drain input 2, prepare work.
                 input2.for_each(|capability, data| {
                     if let Some(ref mut trace1) = trace1 {
@@ -414,17 +402,6 @@ impl<G, T1> JoinCore<G, T1::Key, T1::Val, T1::R> for Arranged<G,T1>
                     }
                 });
 
-                // We may learn that input frontiers have advanced without sending batches.
-                if let Some(acknowledged2) = acknowledged2.as_mut() {
-                    antichain.clear();
-                    for element in acknowledged2.elements() {
-                        for frontier in input2.frontier().frontier().iter() {
-                            antichain.insert(element.join(frontier));
-                        }
-                    }
-                    std::mem::swap(&mut antichain, acknowledged2);
-                }
-
                 // An arbitrary number, whose value guides the "responsiveness" of `join`; the operator
                 // yields after producing this many records, to allow downstream operators to work and
                 // move the produced records around.
@@ -451,7 +428,8 @@ impl<G, T1> JoinCore<G, T1::Key, T1::Val, T1::R> for Arranged<G,T1>
                 if trace2.is_some() && input1.frontier().is_empty() { trace2 = None; }
                 if let Some(ref mut trace2) = trace2 {
                     trace2.advance_by(&input1.frontier().frontier()[..]);
-                    if let Some(acknowledged2) = &acknowledged2 {
+                    if let Some(acknowledged2) = &mut acknowledged2 {
+                        trace2.advance_upper(acknowledged2);
                         trace2.distinguish_since(acknowledged2.elements());
                     }
                 }
@@ -460,7 +438,8 @@ impl<G, T1> JoinCore<G, T1::Key, T1::Val, T1::R> for Arranged<G,T1>
                 if trace1.is_some() && input2.frontier().is_empty() { trace1 = None; }
                 if let Some(ref mut trace1) = trace1 {
                     trace1.advance_by(&input2.frontier().frontier()[..]);
-                    if let Some(acknowledged1) = &acknowledged1 {
+                    if let Some(acknowledged1) = &mut acknowledged1 {
+                        trace1.advance_upper(acknowledged1);
                         trace1.distinguish_since(acknowledged1.elements());
                     }
                 }

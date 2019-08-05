@@ -94,7 +94,7 @@ where
         self.stream.unary(Pipeline, "ThresholdTotal", move |_,_| {
 
             // tracks the upper limit of known-complete timestamps.
-            let mut upper_limit = timely::progress::frontier::Antichain::new();
+            let mut upper_limit = timely::progress::frontier::Antichain::from_elem(<G::Timestamp>::minimum());
 
             move |input, output| {
 
@@ -107,6 +107,9 @@ where
 
                         let mut batch_cursor = batch.cursor();
                         let (mut trace_cursor, trace_storage) = trace.cursor_through(batch.lower()).unwrap();
+
+                        upper_limit.clear();
+                        upper_limit.extend(batch.upper().iter().cloned());
 
                         while batch_cursor.key_valid(&batch) {
                             let key = batch_cursor.key(&batch);
@@ -153,7 +156,7 @@ where
                 });
 
                 // tidy up the shared input trace.
-                trace.read_upper(&mut upper_limit);
+                trace.advance_upper(&mut upper_limit);
                 trace.advance_by(upper_limit.elements());
                 trace.distinguish_since(upper_limit.elements());
             }

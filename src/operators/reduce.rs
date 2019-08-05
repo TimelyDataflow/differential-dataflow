@@ -391,6 +391,10 @@ where
                     let mut batch_cursors = Vec::new();
                     let mut batch_storage = Vec::new();
 
+                    // Downgrate previous upper limit to be current lower limit.
+                    lower_limit.clear();
+                    lower_limit.extend(upper_limit.elements().iter().cloned());
+
                     // Drain the input stream of batches, validating the contiguity of the batch descriptions and
                     // capturing a cursor for each of the batches as well as ensuring we hold a capability for the
                     // times in the batch.
@@ -398,6 +402,8 @@ where
 
                         batches.swap(&mut input_buffer);
                         for batch in input_buffer.drain(..) {
+                            upper_limit.clear();
+                            upper_limit.extend(batch.upper().iter().cloned());
                             batch_cursors.push(batch.cursor());
                             batch_storage.push(batch);
                         }
@@ -409,9 +415,8 @@ where
                         }
                     });
 
-                    // Downgrade upper to lower limit, repopulate upper limit.
-                    std::mem::swap(&mut upper_limit, &mut lower_limit);
-                    source_trace.read_upper(&mut upper_limit);
+                    // Pull in any subsequent empty batches we believe to exist.
+                    source_trace.advance_upper(&mut upper_limit);
 
                     // If we have no capabilities, then we (i) should not produce any outputs and (ii) could not send
                     // any produced outputs even if they were (incorrectly) produced. We cannot even send empty batches
