@@ -76,6 +76,9 @@ where
 
         self.stream.unary(Pipeline, "CountTotal", move |_,_| move |input, output| {
 
+            // tracks the upper limit of known-complete timestamps.
+            let mut upper_limit = timely::progress::frontier::Antichain::new();
+
             input.for_each(|capability, batches| {
                 batches.swap(&mut buffer);
                 let mut session = output.session(&capability);
@@ -90,7 +93,7 @@ where
                         let mut count = None;
 
                         trace_cursor.seek_key(&trace_storage, key);
-                        if trace_cursor.key_valid(&trace_storage) && trace_cursor.key(&trace_storage) == key {
+                        if trace_cursor.get_key(&trace_storage) == Some(key) {
                             trace_cursor.map_times(&trace_storage, |_, diff| {
                                 count.as_mut().map(|c| *c += diff);
                                 if count.is_none() { count = Some(diff.clone()); }
@@ -111,17 +114,17 @@ where
                                     session.give(((key.clone(), count.clone()), time.clone(), 1));
                                 }
                             }
-
                         });
 
                         batch_cursor.step_key(&batch);
                     }
-
-                    // tidy up the shared input trace.
-                    trace.advance_by(batch.upper());
-                    trace.distinguish_since(batch.upper());
                 }
             });
+
+            // tidy up the shared input trace.
+            trace.read_upper(&mut upper_limit);
+            trace.advance_by(upper_limit.elements());
+            trace.distinguish_since(upper_limit.elements());
         })
         .as_collection()
     }

@@ -398,7 +398,6 @@ where
 
                         batches.swap(&mut input_buffer);
                         for batch in input_buffer.drain(..) {
-                            // upper_received = batch.description().upper().to_vec();
                             batch_cursors.push(batch.cursor());
                             batch_storage.push(batch);
                         }
