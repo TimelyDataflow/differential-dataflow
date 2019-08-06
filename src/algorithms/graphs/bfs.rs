@@ -15,6 +15,24 @@ where
     G::Timestamp: Lattice+Ord,
     N: ExchangeData+Hash,
 {
+    use operators::arrange::arrangement::ArrangeByKey;
+    let edges = edges.arrange_by_key();
+    bfs_arranged(&edges, roots)
+}
+
+use crate::trace::TraceReader;
+use crate::operators::arrange::Arranged;
+
+/// Returns pairs (node, dist) indicating distance of each node from a root.
+pub fn bfs_arranged<G, N, Tr>(edges: &Arranged<G, Tr>, roots: &Collection<G, N>) -> Collection<G, (N, u32)>
+where
+    G: Scope,
+    G::Timestamp: Lattice+Ord,
+    N: ExchangeData+Hash,
+    Tr: TraceReader<Key=N, Val=N, Time=G::Timestamp, R=isize>+Clone+'static,
+    Tr::Batch: crate::trace::BatchReader<N, N, G::Timestamp, Tr::R>+'static,
+    Tr::Cursor: crate::trace::Cursor<N, N, G::Timestamp, Tr::R>+'static,
+{
     // initialize roots as reaching themselves at distance 0
     let nodes = roots.map(|x| (x, 0));
 
@@ -24,7 +42,7 @@ where
         let edges = edges.enter(&inner.scope());
         let nodes = nodes.enter(&inner.scope());
 
-        inner.join_map(&edges, |_k,l,d| (d.clone(), l+1))
+        inner.join_core(&edges, |_k,l,d| Some((d.clone(), l+1)))
              .concat(&nodes)
              .reduce(|_, s, t| t.push((s[0].0.clone(), 1)))
      })

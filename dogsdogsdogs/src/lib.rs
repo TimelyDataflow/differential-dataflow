@@ -18,7 +18,7 @@ use timely::dataflow::operators::Concatenate;
 
 use differential_dataflow::{ExchangeData, Collection, AsCollection};
 use differential_dataflow::operators::Threshold;
-use differential_dataflow::difference::Semigroup;
+use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::TraceAgent;
 use differential_dataflow::operators::arrange::{ArrangeBySelf, ArrangeByKey};
@@ -32,7 +32,7 @@ pub mod operators;
     Implementors of `PrefixExtension` provide types and methods for extending a differential dataflow collection,
     via the three methods `count`, `propose`, and `validate`.
 **/
-pub trait PrefixExtender<G: Scope, R: Semigroup+Mul<Output = R>> {
+pub trait PrefixExtender<G: Scope, R: Monoid+Mul<Output = R>> {
     /// The required type of prefix to extend.
     type Prefix;
     /// The type to be produced as extension.
@@ -45,7 +45,7 @@ pub trait PrefixExtender<G: Scope, R: Semigroup+Mul<Output = R>> {
     fn validate(&mut self, &Collection<G, (Self::Prefix, Self::Extension), R>) -> Collection<G, (Self::Prefix, Self::Extension), R>;
 }
 
-pub trait ProposeExtensionMethod<G: Scope, P: ExchangeData+Ord, R: Semigroup+Mul<Output = R>> {
+pub trait ProposeExtensionMethod<G: Scope, P: ExchangeData+Ord, R: Monoid+Mul<Output = R>> {
     fn propose_using<PE: PrefixExtender<G, R, Prefix=P>>(&self, extender: &mut PE) -> Collection<G, (P, PE::Extension), R>;
     fn extend<E: ExchangeData+Ord>(&self, extenders: &mut [&mut PrefixExtender<G,R,Prefix=P,Extension=E>]) -> Collection<G, (P, E), R>;
 }
@@ -54,7 +54,7 @@ impl<G, P, R> ProposeExtensionMethod<G, P, R> for Collection<G, P, R>
 where
     G: Scope,
     P: ExchangeData+Ord,
-    R: Semigroup+Mul<Output = R>,
+    R: Monoid+Mul<Output = R>,
 {
     fn propose_using<PE>(&self, extender: &mut PE) -> Collection<G, (P, PE::Extension), R>
     where
@@ -93,11 +93,11 @@ where
     }
 }
 
-pub trait ValidateExtensionMethod<G: Scope, R: Semigroup+Mul<Output = R>, P, E> {
+pub trait ValidateExtensionMethod<G: Scope, R: Monoid+Mul<Output = R>, P, E> {
     fn validate_using<PE: PrefixExtender<G, R, Prefix=P, Extension=E>>(&self, extender: &mut PE) -> Collection<G, (P, E), R>;
 }
 
-impl<G: Scope, R: Semigroup+Mul<Output = R>, P, E> ValidateExtensionMethod<G, R, P, E> for Collection<G, (P, E), R> {
+impl<G: Scope, R: Monoid+Mul<Output = R>, P, E> ValidateExtensionMethod<G, R, P, E> for Collection<G, (P, E), R> {
     fn validate_using<PE: PrefixExtender<G, R, Prefix=P, Extension=E>>(&self, extender: &mut PE) -> Collection<G, (P, E), R> {
         extender.validate(self)
     }
@@ -113,7 +113,7 @@ where
     K: ExchangeData,
     V: ExchangeData,
     T: Lattice+ExchangeData+Default,
-    R: Semigroup+Mul<Output = R>+ExchangeData,
+    R: Monoid+Mul<Output = R>+ExchangeData,
 {
     /// A trace of type (K, ()), used to count extensions for each prefix.
     count_trace: TraceKeyHandle<K, T, isize>,
@@ -130,7 +130,7 @@ where
     K: ExchangeData+Hash,
     V: ExchangeData+Hash,
     T: Lattice+ExchangeData+Timestamp,
-    R: Semigroup+Mul<Output = R>+ExchangeData,
+    R: Monoid+Mul<Output = R>+ExchangeData,
 {
     fn clone(&self) -> Self {
         CollectionIndex {
@@ -146,11 +146,11 @@ where
     K: ExchangeData+Hash,
     V: ExchangeData+Hash,
     T: Lattice+ExchangeData+Timestamp,
-    R: Semigroup+Mul<Output = R>+ExchangeData,
+    R: Monoid+Mul<Output = R>+ExchangeData,
 {
 
     pub fn index<G: Scope<Timestamp = T>>(collection: &Collection<G, (K, V), R>) -> Self {
-        // We need to count the number of (k, v) pairs and not rely on the given Semigroup R and its binary addition operation.
+        // We need to count the number of (k, v) pairs and not rely on the given Monoid R and its binary addition operation.
         // counts and validate can share the base arrangement
         let arranged = collection.arrange_by_self();
         let counts = arranged
@@ -181,7 +181,7 @@ where
     K: ExchangeData,
     V: ExchangeData,
     T: Lattice+ExchangeData+Default,
-    R: Semigroup+Mul<Output = R>+ExchangeData,
+    R: Monoid+Mul<Output = R>+ExchangeData,
     F: Fn(&P)->K+Clone,
 {
     phantom: std::marker::PhantomData<P>,
@@ -196,7 +196,7 @@ where
     V: ExchangeData+Hash+Default,
     P: ExchangeData,
     G::Timestamp: Lattice+ExchangeData,
-    R: Semigroup+Mul<Output = R>+ExchangeData,
+    R: Monoid+Mul<Output = R>+ExchangeData,
     F: Fn(&P)->K+Clone+'static,
 {
     type Prefix = P;

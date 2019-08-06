@@ -26,7 +26,35 @@ where
     G::Timestamp: Lattice+Ord,
     N: ExchangeData+Hash,
 {
-    edges.scope().iterative::<u64,_,_>(|inner| {
+    use operators::arrange::arrangement::ArrangeByKey;
+    let forward = edges.arrange_by_key();
+    let reverse = edges.map(|(x,y)| (y,x)).arrange_by_key();
+    bidijkstra_arranged(&forward, &reverse, goals)
+}
+
+use crate::trace::TraceReader;
+use crate::operators::arrange::Arranged;
+
+/// Bi-directional Dijkstra search using arranged forward and reverse edge collections.
+pub fn bidijkstra_arranged<G, N, Tr>(
+    forward: &Arranged<G, Tr>,
+    reverse: &Arranged<G, Tr>,
+    goals: &Collection<G, (N,N)>
+) -> Collection<G, ((N,N), u32)>
+where
+    G: Scope,
+    G::Timestamp: Lattice+Ord,
+    N: ExchangeData+Hash,
+    Tr: TraceReader<Key=N, Val=N, Time=G::Timestamp, R=isize>+Clone+'static,
+    Tr::Batch: crate::trace::BatchReader<N, N, G::Timestamp, Tr::R>+'static,
+    Tr::Cursor: crate::trace::Cursor<N, N, G::Timestamp, Tr::R>+'static,
+{
+    forward
+        .stream
+        .scope().iterative::<u64,_,_>(|inner| {
+
+            let forward_edges = forward.enter(inner);
+            let reverse_edges = reverse.enter(inner);
 
         // Our plan is to start evolving distances from both sources and destinations.
         // The evolution from a source or destination should continue as long as there
@@ -37,7 +65,7 @@ where
         let reverse = Variable::new_from(goals.map(|(_,y)| (y.clone(),(y.clone(),0))).enter(inner), Product::new(Default::default(), 1));
 
         let goals = goals.enter(inner);
-        let edges = edges.enter(inner);
+        // let edges = edges.enter(inner);
 
         // Let's determine which (src, dst) pairs are ready to return.
         //
@@ -64,7 +92,7 @@ where
             .map(|(med, (src, dist))| (src, (med, dist)))
             .semijoin(&forward_active)
             .map(|(src, (med, dist))| (med, (src, dist)))
-            .join_map(&edges, |_med, (src, dist), next| (next.clone(), (src.clone(), *dist+1)))
+            .join_core(&forward_edges, |_med, (src, dist), next| Some((next.clone(), (src.clone(), *dist+1))))
             .concat(&forward)
             .map(|(next, (src, dist))| ((next, src), dist))
             .reduce(|_key, s, t| t.push((s[0].0.clone(), 1)))
@@ -79,7 +107,7 @@ where
             .map(|(med, (rev, dist))| (rev, (med, dist)))
             .semijoin(&reverse_active)
             .map(|(rev, (med, dist))| (med, (rev, dist)))
-            .join_map(&edges.map(|(x,y)| (y,x)), |_med, (rev, dist), next| (next.clone(), (rev.clone(), *dist+1)))
+            .join_core(&reverse_edges, |_med, (rev, dist), next| Some((next.clone(), (rev.clone(), *dist+1))))
             .concat(&reverse)
             .map(|(next, (rev, dist))| ((next, rev), dist))
             .reduce(|_key, s, t| t.push((s[0].0.clone(), 1)))
