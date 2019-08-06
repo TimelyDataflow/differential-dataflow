@@ -322,8 +322,8 @@ impl<G, T1> JoinCore<G, T1::Key, T1::Val, T1::R> for Arranged<G,T1>
         let mut trace2 = Some(other.trace.clone());
 
         // acknowledged frontier for each input.
-        let mut acknowledged1: Option<Vec<G::Timestamp>> = None;
-        let mut acknowledged2: Option<Vec<G::Timestamp>> = None;
+        let mut acknowledged1: Option<timely::progress::frontier::Antichain<G::Timestamp>> = None;
+        let mut acknowledged2: Option<timely::progress::frontier::Antichain<G::Timestamp>> = None;
 
         // deferred work of batches from each input.
         let mut todo1 = Vec::new();
@@ -355,12 +355,22 @@ impl<G, T1> JoinCore<G, T1::Key, T1::Val, T1::R> for Arranged<G,T1>
                         for batch1 in input1_buffer.drain(..) {
                             if let Some(acknowledged2) = &acknowledged2 {
                                 // TODO : cursor_through may be problematic for pre-merged traces.
-                                let (trace2_cursor, trace2_storage) = trace2.cursor_through(&acknowledged2[..]).unwrap();
+                                // A trace should provide the contract that whatever its `distinguish_since` capability,
+                                // it is safe (and reasonable) to await delivery of batches up through that frontier.
+                                // In this case, we should be able to await (not block on) the arrival of these batches.
+                                let (trace2_cursor, trace2_storage) = trace2.cursor_through(acknowledged2.elements()).unwrap();
                                 let batch1_cursor = batch1.cursor();
                                 todo1.push(Deferred::new(trace2_cursor, trace2_storage, batch1_cursor, batch1.clone(), capability.clone(), |r2,r1| (r1.clone()) * (r2.clone())));
-                                // debug_assert!(batch1.description().lower() == &acknowledged1[..]);
                             }
-                            acknowledged1 = Some(batch1.description().upper().to_vec());
+
+                            // It would be alarming (incorrect) to receieve a batch that does not advance the acknowledged
+                            // frontier, as each batch must be greater than previous batches, and the input.
+                            if acknowledged1.is_none() { acknowledged1 = Some(timely::progress::frontier::Antichain::from_elem(<G::Timestamp>::minimum())); }
+                            if let Some(acknowledged1) = &mut acknowledged1 {
+                                assert!(batch1.upper().iter().all(|t| acknowledged1.less_equal(t)));
+                                acknowledged1.clear();
+                                acknowledged1.extend(batch1.upper().iter().cloned());
+                            }
                         }
                     }
                 });
@@ -373,12 +383,21 @@ impl<G, T1> JoinCore<G, T1::Key, T1::Val, T1::R> for Arranged<G,T1>
                         for batch2 in input2_buffer.drain(..) {
                             if let Some(acknowledged1) = &acknowledged1 {
                                 // TODO : cursor_through may be problematic for pre-merged traces.
-                                let (trace1_cursor, trace1_storage) = trace1.cursor_through(&acknowledged1[..]).unwrap();
+                                // A trace should provide the contract that whatever its `distinguish_since` capability,
+                                // it is safe (and reasonable) to await delivery of batches up through that frontier.
+                                // In this case, we should be able to await (not block on) the arrival of these batches.
+                                let (trace1_cursor, trace1_storage) = trace1.cursor_through(acknowledged1.elements()).unwrap();
                                 let batch2_cursor = batch2.cursor();
                                 todo2.push(Deferred::new(trace1_cursor, trace1_storage, batch2_cursor, batch2.clone(), capability.clone(), |r1,r2| (r1.clone()) * (r2.clone())));
-                                // debug_assert!(batch2.description().lower() == &acknowledged2[..]);
                             }
-                            acknowledged2 = Some(batch2.description().upper().to_vec());
+                            // It would be alarming (incorrect) to receieve a batch that does not advance the acknowledged
+                            // frontier, as each batch must be greater than previous batches, and the input.
+                            if acknowledged2.is_none() { acknowledged2 = Some(timely::progress::frontier::Antichain::from_elem(<G::Timestamp>::minimum())); }
+                            if let Some(acknowledged2) = &mut acknowledged2 {
+                                assert!(batch2.upper().iter().all(|t| acknowledged2.less_equal(t)));
+                                acknowledged2.clear();
+                                acknowledged2.extend(batch2.upper().iter().cloned());
+                            }
                         }
                     }
                 });
@@ -405,16 +424,13 @@ impl<G, T1> JoinCore<G, T1::Key, T1::Val, T1::R> for Arranged<G,T1>
                     activator.activate();
                 }
 
-                // shut down or advance trace2. if the frontier is empty we can shut it down,
-                // and otherwise we can advance the trace by the acknowledged elements of the other input,
-                // as we may still use them as thresholds (ie we must preserve `le` wrt `acknowledged`).
-                // NOTE: We release capabilities here to allow light work to complete, which may result in
-                //       unique ownership which would enable `advance_mut`.
+                // shut down or advance trace2.
                 if trace2.is_some() && input1.frontier().is_empty() { trace2 = None; }
                 if let Some(ref mut trace2) = trace2 {
                     trace2.advance_by(&input1.frontier().frontier()[..]);
-                    if let Some(acknowledged2) = &acknowledged2 {
-                        trace2.distinguish_since(&acknowledged2[..]);
+                    if let Some(acknowledged2) = &mut acknowledged2 {
+                        trace2.advance_upper(acknowledged2);
+                        trace2.distinguish_since(acknowledged2.elements());
                     }
                 }
 
@@ -422,8 +438,9 @@ impl<G, T1> JoinCore<G, T1::Key, T1::Val, T1::R> for Arranged<G,T1>
                 if trace1.is_some() && input2.frontier().is_empty() { trace1 = None; }
                 if let Some(ref mut trace1) = trace1 {
                     trace1.advance_by(&input2.frontier().frontier()[..]);
-                    if let Some(acknowledged1) = &acknowledged1 {
-                        trace1.distinguish_since(&acknowledged1[..]);
+                    if let Some(acknowledged1) = &mut acknowledged1 {
+                        trace1.advance_upper(acknowledged1);
+                        trace1.distinguish_since(acknowledged1.elements());
                     }
                 }
             }

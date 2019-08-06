@@ -136,7 +136,7 @@ where
         // supplied upper it had better be empty.
 
         // We shouldn't grab a cursor into a closed trace, right?
-        assert!(self.advance_frontier.len() > 0);
+        assert!(self.advance_frontier.len() > 0, "cursor_through({:?}) called for closed trace", upper);
 
         // Check that `upper` is greater or equal to `self.through_frontier`.
         // Otherwise, the cut could be in `self.merging` and it is user error anyhow.

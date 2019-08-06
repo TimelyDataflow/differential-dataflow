@@ -91,65 +91,75 @@ where
         let mut trace = self.trace.clone();
         let mut buffer = Vec::new();
 
-        self.stream.unary(Pipeline, "ThresholdTotal", move |_,_| move |input, output| {
+        self.stream.unary(Pipeline, "ThresholdTotal", move |_,_| {
 
-            let thresh = &thresh;
+            // tracks the upper limit of known-complete timestamps.
+            let mut upper_limit = timely::progress::frontier::Antichain::from_elem(<G::Timestamp>::minimum());
 
-            input.for_each(|capability, batches| {
-                batches.swap(&mut buffer);
-                let mut session = output.session(&capability);
-                for batch in buffer.drain(..) {
+            move |input, output| {
 
-                    let mut batch_cursor = batch.cursor();
-                    let (mut trace_cursor, trace_storage) = trace.cursor_through(batch.lower()).unwrap();
+                let thresh = &thresh;
 
-                    while batch_cursor.key_valid(&batch) {
-                        let key = batch_cursor.key(&batch);
-                        let mut count = None;
+                input.for_each(|capability, batches| {
+                    batches.swap(&mut buffer);
+                    let mut session = output.session(&capability);
+                    for batch in buffer.drain(..) {
 
-                        // Compute the multiplicity of this key before the current batch.
-                        trace_cursor.seek_key(&trace_storage, key);
-                        if trace_cursor.key_valid(&trace_storage) && trace_cursor.key(&trace_storage) == key {
-                            trace_cursor.map_times(&trace_storage, |_, diff| {
+                        let mut batch_cursor = batch.cursor();
+                        let (mut trace_cursor, trace_storage) = trace.cursor_through(batch.lower()).unwrap();
+
+                        upper_limit.clear();
+                        upper_limit.extend(batch.upper().iter().cloned());
+
+                        while batch_cursor.key_valid(&batch) {
+                            let key = batch_cursor.key(&batch);
+                            let mut count = None;
+
+                            // Compute the multiplicity of this key before the current batch.
+                            trace_cursor.seek_key(&trace_storage, key);
+                            if trace_cursor.get_key(&trace_storage) == Some(key) {
+                                trace_cursor.map_times(&trace_storage, |_, diff| {
+                                    count.as_mut().map(|c| *c += diff);
+                                    if count.is_none() { count = Some(diff.clone()); }
+                                });
+                            }
+
+                            // Apply `thresh` both before and after `diff` is applied to `count`.
+                            // If the result is non-zero, send it along.
+                            batch_cursor.map_times(&batch, |time, diff| {
+
+                                // Determine old and new weights.
+                                // If a count is zero, the weight must be zero.
+                                let old_weight = count.as_ref().map(|c| thresh(key, c));
                                 count.as_mut().map(|c| *c += diff);
                                 if count.is_none() { count = Some(diff.clone()); }
-                            });
-                        }
+                                let new_weight = count.as_ref().map(|c| thresh(key, c));
 
-                        // Apply `thresh` both before and after `diff` is applied to `count`.
-                        // If the result is non-zero, send it along.
-                        batch_cursor.map_times(&batch, |time, diff| {
+                                let difference =
+                                match (old_weight, new_weight) {
+                                    (Some(old), Some(new)) => { let mut diff = -old; diff += &new; Some(diff) },
+                                    (Some(old), None) => { Some(-old) },
+                                    (None, Some(new)) => { Some(new) },
+                                    (None, None) => None,
+                                };
 
-                            // Determine old and new weights.
-                            // If a count is zero, the weight must be zero.
-                            let old_weight = count.as_ref().map(|c| thresh(key, c));
-                            count.as_mut().map(|c| *c += diff);
-                            if count.is_none() { count = Some(diff.clone()); }
-                            let new_weight = count.as_ref().map(|c| thresh(key, c));
-
-                            let difference =
-                            match (old_weight, new_weight) {
-                                (Some(old), Some(new)) => { let mut diff = -old; diff += &new; Some(diff) },
-                                (Some(old), None) => { Some(-old) },
-                                (None, Some(new)) => { Some(new) },
-                                (None, None) => None,
-                            };
-
-                            if let Some(difference) = difference {
-                                if !difference.is_zero() {
-                                    session.give((key.clone(), time.clone(), difference));
+                                if let Some(difference) = difference {
+                                    if !difference.is_zero() {
+                                        session.give((key.clone(), time.clone(), difference));
+                                    }
                                 }
-                            }
-                        });
+                            });
 
-                        batch_cursor.step_key(&batch);
+                            batch_cursor.step_key(&batch);
+                        }
                     }
+                });
 
-                    // Tidy up the shared input trace.
-                    trace.advance_by(batch.upper());
-                    trace.distinguish_since(batch.upper());
-                }
-            });
+                // tidy up the shared input trace.
+                trace.advance_upper(&mut upper_limit);
+                trace.advance_by(upper_limit.elements());
+                trace.distinguish_since(upper_limit.elements());
+            }
         })
         .as_collection()
     }
