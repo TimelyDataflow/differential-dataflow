@@ -541,11 +541,11 @@ where
 
                 let activator =
                 if ::std::env::var("DIFFERENTIAL_EAGER_MERGE") == Ok("ZOMGYES".to_owned()) {
-                    println!("activation requested");
+                    // println!("activation requested");
                     Some(self.scope().activator_for(&info.address[..]))
                 }
                 else {
-                    println!("activation not requested");
+                    // println!("activation not requested");
                     None
                 };
 

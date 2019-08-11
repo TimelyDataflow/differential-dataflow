@@ -237,14 +237,16 @@ where
 {
 
     fn new(
-        info: ::timely::dataflow::operators::generic::OperatorInfo, 
+        info: ::timely::dataflow::operators::generic::OperatorInfo,
         logging: Option<::logging::Logger>,
         activator: Option<timely::scheduling::activate::Activator>,
     ) -> Self {
         Self::with_effort(4, info, logging, activator)
     }
 
-    fn exert(&mut self, batch_size: usize, batch_index: usize) {
+    fn exert(&mut self, effort: usize) {
+        let batch_size = effort.next_power_of_two();
+        let batch_index = batch_size.trailing_zeros() as usize;
         self.work_for(batch_size, batch_index);
     }
 
@@ -292,8 +294,8 @@ where
     /// of the batch's length in effort to each merge. The `effort` parameter is that multiplier.
     /// This value should be at least one for the merging to happen; a value of zero is not helpful.
     pub fn with_effort(
-        mut effort: usize, 
-        operator: OperatorInfo, 
+        mut effort: usize,
+        operator: OperatorInfo,
         logger: Option<::logging::Logger>,
         activator: Option<timely::scheduling::activate::Activator>,
     ) -> Self {
@@ -422,7 +424,7 @@ where
     /// Performs merging work commensurate with `batch_size` records.
     ///
     /// This method is public so that it can be invoked by external parties.
-    /// In principle, this work might be better suited to a thread pool with 
+    /// In principle, this work might be better suited to a thread pool with
     /// more insight into available cycles. As long as the method is used as
     /// above, the merging work needs to happen immediately (or thereabouts)
     /// to avoid falling behind on merges.

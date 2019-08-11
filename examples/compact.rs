@@ -1,8 +1,6 @@
 extern crate timely;
 extern crate differential_dataflow;
 
-use timely::dataflow::operators::*;
-
 use differential_dataflow::input::Input;
 use differential_dataflow::operators::Threshold;
 
