@@ -115,7 +115,7 @@ fn main() {
                 if worker.index() == 0 {
                     graph.update_at(
                         (rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)),
-                        round+1,
+                        1 + round * batch + element,
                         MinSum { value: rng1.gen_range(0, weight) },
                     );
                 }
