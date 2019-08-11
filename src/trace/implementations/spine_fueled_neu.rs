@@ -31,6 +31,7 @@ pub struct Spine<K, V, T: Lattice+Ord, R: Semigroup, B: Batch<K, V, T, R>> {
     upper: Vec<T>,
     effort: usize,
     activator: Option<timely::scheduling::activate::Activator>,
+    timer: std::time::Instant,
 }
 
 impl<K, V, T, R, B> TraceReader for Spine<K, V, T, R, B>
@@ -174,10 +175,41 @@ where
     /// though of as analogous to inserting as many empty updates,
     /// where the trace is permitted to perform proportionate work.
     fn exert(&mut self, mut effort: usize) {
-        // We could do many things here. My sense is that we might
-        // prioritize completing existing merges, and in their absence
-        // start introducing empty batches to advance batch compaction.
-        self.apply_fuel(&mut effort);
+
+        // If all merges are complete and multiple batches remain,
+        // introduce empty batches to prompt merging.
+        if !self.reduced() {
+
+            let timer = std::time::Instant::now();
+
+            // determine the upper bound of self.merging.
+            let upper = if let Some(batch) = self.merging.iter().filter(|b| !b.is_vacant()).next() {
+                match batch {
+                    MergeState::Vacant => unreachable!(),
+                    MergeState::Single(b) => b.upper(),
+                    MergeState::Double(b1,b2,_,_) => b2.upper(),
+                }.to_vec()
+            }
+            else {
+                vec![Default::default()]
+            };
+
+            let empty = <B as Batch<K, V, T, R>>::empty(&upper[..], &upper[..], &upper[..]);
+            self.introduce_batch(empty, effort.next_power_of_two().trailing_zeros() as usize);
+
+            // We could do many things here. My sense is that we might
+            // prioritize completing existing merges, and in their absence
+            // start introducing empty batches to advance batch compaction.
+            // self.apply_fuel(&mut effort);
+            // println!("{:?}\tExerted: {:?}\t{:?}", self.timer.elapsed(), timer.elapsed(), self.describe());
+
+
+            // We are here because we were not in reduced form.
+            if let Some(activator) = &self.activator {
+                activator.activate();
+            }
+
+        }
     }
 
     // Ideally, this method acts as insertion of `batch`, even if we are not yet able to begin
@@ -218,6 +250,12 @@ where
     R: Semigroup,
     B: Batch<K, V, T, R>,
 {
+    /// True iff there is at most one batch in `self.merging`.
+    fn reduced(&self) -> bool {
+        let count = self.merging.iter().filter(|b| !b.is_vacant()).count();
+        count <= 1
+    }
+
     fn describe(&self) -> Vec<usize> {
         self.merging
             .iter()
@@ -255,6 +293,7 @@ where
             upper: vec![Default::default()],
             effort,
             activator,
+            timer: std::time::Instant::now(),
         }
     }
 
@@ -271,7 +310,7 @@ where
             self.introduce_batch(batch, index.trailing_zeros() as usize);
 
             // Having performed all of our work, if more than one batch remains reschedule ourself.
-            if self.merging.len() > 2 && self.merging[..self.merging.len()-1].iter().any(|b| !b.is_vacant()) {
+            if !self.reduced() {
                 if let Some(activator) = &self.activator {
                     activator.activate();
                 }

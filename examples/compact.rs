@@ -57,7 +57,7 @@ fn main() {
                 // println!("{:?}\tround {} unloaded", timer.elapsed(), next);
             }
             handle.advance_to(records + value);
-            handle.insert(value);
+            handle.remove(value);
             value += worker.peers();
         }
 

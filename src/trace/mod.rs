@@ -247,10 +247,10 @@ pub trait Batch<K, V, T, R> : BatchReader<K, V, T, R> where Self: ::std::marker:
 	fn begin_merge(&self, other: &Self) -> Self::Merger {
 		Self::Merger::new(self, other)
 	}
-	// ///
-	// fn empty(lower: &[T], upper: &[T], since: &[T]) -> Output {
-	// 	<Self::Builder>::new().done(lower, upper, since)
-	// }
+	///
+	fn empty(lower: &[T], upper: &[T], since: &[T]) -> Self {
+		<Self::Builder>::new().done(lower, upper, since)
+	}
 }
 
 /// Functionality for collecting and batching updates.
