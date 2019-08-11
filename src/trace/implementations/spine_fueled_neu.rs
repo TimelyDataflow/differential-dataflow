@@ -454,15 +454,15 @@ where
         // We expect this should happen at various points if we have enough
         // fuel rolling around.
 
-        // let done = false;
-        // while !done {
-
-
-
-        // }
-
+        let mut length = self.merging.len();
+        if self.merging[length-1].is_single() {
+            while (self.merging[length-1].len().next_power_of_two().trailing_zeros() as usize) < length && length > 1 && self.merging[length-2].is_vacant() {
+                let batch = self.merging.pop().unwrap();
+                self.merging[length-2] = batch;
+                length = self.merging.len();
+            }
+        }
     }
-
 }
 
 
@@ -481,9 +481,23 @@ enum MergeState<K, V, T, R, B: Batch<K, V, T, R>> {
 
 impl<K, V, T: Eq, R, B: Batch<K, V, T, R>> MergeState<K, V, T, R, B> {
 
+    /// The number of actual updates contained in the level.
+    fn len(&self) -> usize {
+        match self {
+            MergeState::Vacant => 0,
+            MergeState::Single(b) => b.len(),
+            MergeState::Double(b1,b2,_,_) => b1.len() + b2.len(),
+        }
+    }
+
     /// True only for the MergeState::Vacant variant.
     fn is_vacant(&self) -> bool {
         if let MergeState::Vacant = self { true } else { false }
+    }
+
+    /// True only for the MergeState::Single variant.
+    fn is_single(&self) -> bool {
+        if let MergeState::Single(_) = self { true } else { false }
     }
 
     /// Immediately complete any merge.
