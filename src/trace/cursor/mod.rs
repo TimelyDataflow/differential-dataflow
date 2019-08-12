@@ -44,14 +44,14 @@ pub trait Cursor<K, V, T, R> {
 	/// closure's scope.
 	fn map_times<L: FnMut(&T, &R)>(&mut self, storage: &Self::Storage, logic: L);
 
-	/// Advances the cursor to the next key. Indicates if the key is valid.
+	/// Advances the cursor to the next key.
 	fn step_key(&mut self, storage: &Self::Storage);
-	/// Advances the cursor to the specified key. Indicates if the key is valid.
+	/// Advances the cursor to the specified key.
 	fn seek_key(&mut self, storage: &Self::Storage, key: &K);
 
-	/// Advances the cursor to the next value. Indicates if the value is valid.
+	/// Advances the cursor to the next value.
 	fn step_val(&mut self, storage: &Self::Storage);
-	/// Advances the cursor to the specified value. Indicates if the value is valid.
+	/// Advances the cursor to the specified value.
 	fn seek_val(&mut self, storage: &Self::Storage, val: &V);
 
 	/// Rewinds the cursor to the first key.
