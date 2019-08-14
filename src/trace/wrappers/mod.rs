@@ -2,7 +2,7 @@
 
 pub mod enter;
 pub mod enter_at;
-pub mod enter_frontier;
+pub mod frontier;
 pub mod rc;
 
 pub mod filter;

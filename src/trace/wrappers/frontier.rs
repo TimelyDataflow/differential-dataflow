@@ -131,7 +131,6 @@ where
 pub struct CursorFrontier<K, V, T, R, C: Cursor<K, V, T, R>> {
     phantom: ::std::marker::PhantomData<(K, V, T, R)>,
     cursor: C,
-    // logic: Rc<F>,
     frontier: Vec<T>,
 }
 
@@ -140,7 +139,6 @@ impl<K, V, T: Clone, R, C: Cursor<K, V, T, R>> CursorFrontier<K, V, T, R, C> {
         CursorFrontier {
             phantom: ::std::marker::PhantomData,
             cursor,
-            // logic,
             frontier: frontier.to_vec(),
         }
     }
@@ -150,7 +148,6 @@ impl<K, V, T, R, C> Cursor<K, V, T, R> for CursorFrontier<K, V, T, R, C>
 where
     C: Cursor<K, V, T, R>,
     T: Timestamp+Lattice,
-    // F: Fn(&K, &V)->bool+'static
 {
     type Storage = C::Storage;
 
@@ -187,7 +184,6 @@ where
 pub struct BatchCursorFrontier<K, V, T, R, B: BatchReader<K, V, T, R>> {
     phantom: ::std::marker::PhantomData<(K, V, R)>,
     cursor: B::Cursor,
-    // logic: Rc<F>,
     frontier: Vec<T>,
 }
 
@@ -196,7 +192,6 @@ impl<K, V, T: Clone, R, B: BatchReader<K, V, T, R>> BatchCursorFrontier<K, V, T,
         BatchCursorFrontier {
             phantom: ::std::marker::PhantomData,
             cursor,
-            // logic,
             frontier: frontier.to_vec(),
         }
     }
@@ -205,7 +200,6 @@ impl<K, V, T: Clone, R, B: BatchReader<K, V, T, R>> BatchCursorFrontier<K, V, T,
 impl<K, V, T, R, B: BatchReader<K, V, T, R>> Cursor<K, V, T, R> for BatchCursorFrontier<K, V, T, R, B>
 where
     T: Timestamp+Lattice,
-    // F: Fn(&K, &V)->bool+'static,
 {
     type Storage = BatchFrontier<K, V, T, R, B>;
 
