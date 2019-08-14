@@ -407,7 +407,16 @@ where
     {
         // This frontier describes our only guarantee on the compaction frontier.
         let frontier = self.advance_frontier().to_vec();
+        self.import_frontier_core(scope, name, frontier)
+    }
 
+    /// Import a trace advanced to a specific frontier.
+    pub fn import_frontier_core<G>(&mut self, scope: &G, name: &str, frontier:Vec<Tr::Time>) -> (Arranged<G, TraceFrontier<TraceAgent<Tr>>>, ShutdownButton<CapabilitySet<Tr::Time>>)
+    where
+        G: Scope<Timestamp=Tr::Time>,
+        Tr::Time: Timestamp+ Lattice+Ord+Clone+'static,
+        Tr: TraceReader,
+    {
         let trace = self.clone();
         let trace = TraceFrontier::make_from(trace, &frontier[..]);
 
