@@ -280,11 +280,10 @@ where
     }
 }
 
+
 impl<K, V, T, R, B> Spine<K, V, T, R, B>
 where
-    K: Ord+Clone,
-    V: Ord+Clone,
-    T: Lattice+Ord+Clone+Debug+Default,
+    T: Lattice+Ord,
     R: Semigroup,
     B: Batch<K, V, T, R>,
 {
@@ -307,7 +306,16 @@ where
             }
         }
     }
+}
 
+impl<K, V, T, R, B> Spine<K, V, T, R, B>
+where
+    K: Ord+Clone,
+    V: Ord+Clone,
+    T: Lattice+Ord+Clone+Debug+Default,
+    R: Semigroup,
+    B: Batch<K, V, T, R>,
+{
     /// Allocates a fueled `Spine` with a specified effort multiplier.
     ///
     /// This trace will merge batches progressively, with each inserted batch applying a multiple
