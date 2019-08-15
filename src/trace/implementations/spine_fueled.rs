@@ -199,8 +199,7 @@ where
     fn advance_by(&mut self, frontier: &[T]) {
         self.advance_frontier = frontier.to_vec();
         if self.advance_frontier.len() == 0 {
-            self.pending.clear();
-            self.merging.clear();
+            self.drop_batches();
         }
     }
     fn advance_frontier(&mut self) -> &[T] { &self.advance_frontier[..] }
@@ -277,7 +276,20 @@ where
     B: Batch<K, V, T, R>,
 {
     fn drop(&mut self) {
+        self.drop_batches();
+    }
+}
 
+impl<K, V, T, R, B> Spine<K, V, T, R, B>
+where
+    K: Ord+Clone,
+    V: Ord+Clone,
+    T: Lattice+Ord+Clone+Debug+Default,
+    R: Semigroup,
+    B: Batch<K, V, T, R>,
+{
+    /// Drops and logs batches. Used in advance_by and drop.
+    fn drop_batches(&mut self) {
         if let Some(logger) = &self.logger {
             for batch in self.merging.drain(..) {
                 if let Some(batch) = batch {
@@ -295,16 +307,7 @@ where
             }
         }
     }
-}
 
-impl<K, V, T, R, B> Spine<K, V, T, R, B>
-where
-    K: Ord+Clone,
-    V: Ord+Clone,
-    T: Lattice+Ord+Clone+Debug+Default,
-    R: Semigroup,
-    B: Batch<K, V, T, R>,
-{
     /// Allocates a fueled `Spine` with a specified effort multiplier.
     ///
     /// This trace will merge batches progressively, with each inserted batch applying a multiple
