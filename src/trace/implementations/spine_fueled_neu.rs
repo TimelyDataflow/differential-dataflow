@@ -74,23 +74,35 @@ where
 
         for merge_state in self.merging.iter().rev() {
             match merge_state {
-                MergeState::Double(ref batch1, ref batch2, _, _) => {
-                    if !batch1.is_empty() {
-                        cursors.push(batch1.cursor());
-                        storage.push(batch1.clone());
-                    }
-                    if !batch2.is_empty() {
-                        cursors.push(batch2.cursor());
-                        storage.push(batch2.clone());
+                MergeState::Double(variant) => {
+                    match variant {
+                        MergeVariant::InProgress(batch1, batch2, _, _) => {
+                            if !batch1.is_empty() {
+                                cursors.push(batch1.cursor());
+                                storage.push(batch1.clone());
+                            }
+                            if !batch2.is_empty() {
+                                cursors.push(batch2.cursor());
+                                storage.push(batch2.clone());
+                            }
+                        },
+                        MergeVariant::Complete(Some(batch)) => {
+                            if !batch.is_empty() {
+                                cursors.push(batch.cursor());
+                                storage.push(batch.clone());
+                            }
+                        }
+                        MergeVariant::Complete(None) => { },
                     }
                 },
-                MergeState::Single(ref batch) => {
+                MergeState::Single(Some(batch)) => {
                     if !batch.is_empty() {
                         cursors.push(batch.cursor());
                         storage.push(batch.clone());
                     }
                 },
-                MergeState::Vacant => { }
+                MergeState::Single(None) => { },
+                MergeState::Vacant => { },
             }
         }
 
@@ -140,9 +152,10 @@ where
     fn map_batches<F: FnMut(&Self::Batch)>(&mut self, mut f: F) {
         for batch in self.merging.iter().rev() {
             match batch {
-                MergeState::Double(batch1, batch2, _, _) => { f(batch1); f(batch2); },
-                MergeState::Single(batch) => { f(batch); },
-                MergeState::Vacant => { },
+                MergeState::Double(MergeVariant::InProgress(batch1, batch2, _, _)) => { f(batch1); f(batch2); },
+                MergeState::Double(MergeVariant::Complete(Some(batch))) => { f(batch) },
+                MergeState::Single(Some(batch)) => { f(batch) },
+                _ => { },
             }
         }
         for batch in self.pending.iter() {
@@ -180,27 +193,14 @@ where
         // introduce empty batches to prompt merging.
         if !self.reduced() {
 
-            // determine the upper bound of self.merging.
-            let upper = if let Some(batch) = self.merging.iter().filter(|b| !b.is_vacant()).next() {
-                match batch {
-                    MergeState::Vacant => unreachable!(),
-                    MergeState::Single(b) => b.upper(),
-                    MergeState::Double(_b1,b2,_,_) => b2.upper(),
-                }.to_vec()
-            }
-            else {
-                vec![Default::default()]
-            };
-
-            let empty = <B as Batch<K, V, T, R>>::empty(&upper[..], &upper[..], &upper[..]);
+            // Introduce an empty batch with roughly *effort number of virtual updates.
             let level = (*effort as usize).next_power_of_two().trailing_zeros() as usize;
-            self.introduce_batch(empty, level);
+            self.introduce_batch(None, level);
 
             // We are here because we were not in reduced form.
             if let Some(activator) = &self.activator {
                 activator.activate();
             }
-
         }
     }
 
@@ -224,6 +224,7 @@ where
         self.consider_merges();
     }
 
+    /// Completes the trace with a final empty batch.
     fn close(&mut self) {
         if !self.upper.is_empty() {
             use trace::Builder;
@@ -248,8 +249,7 @@ where
     /// We do not yet have logic in place to determine if compaction would improve a trace, so
     /// for now we are ignoring that.
     fn reduced(&self) -> bool {
-        let count = self.merging.iter().filter(|b| !b.is_vacant()).count();
-        count <= 1
+        self.merging.iter().filter(|b| b.non_trivial()).count() <= 1
     }
 
     /// Describes the merge progress of layers in the trace.
@@ -261,7 +261,7 @@ where
             .map(|b| match b {
                 MergeState::Vacant => 0,
                 MergeState::Single(_) => 1,
-                MergeState::Double(_,_,_,_) => 2
+                MergeState::Double(_) => 2
             })
             .collect()
     }
@@ -310,7 +310,7 @@ where
         {
             let batch = self.pending.remove(0);
             let index = batch.len().next_power_of_two();
-            self.introduce_batch(batch, index.trailing_zeros() as usize);
+            self.introduce_batch(Some(batch), index.trailing_zeros() as usize);
 
             // Having performed all of our work, if more than one batch remains reschedule ourself.
             if !self.reduced() {
@@ -326,7 +326,7 @@ where
     /// The level indication is often related to the size of the batch, but
     /// it can also be used to artificially fuel the computation by supplying
     /// empty batches at non-trivial indices, to move merges along.
-    pub fn introduce_batch(&mut self, batch: B, batch_index: usize) {
+    pub fn introduce_batch(&mut self, batch: Option<B>, batch_index: usize) {
 
         // This spine is represented as a list of layers, where each element in the list is either
         //
@@ -400,11 +400,9 @@ where
         if batch_index > 32 { println!("Large batch index: {}", batch_index); }
         let mut fuel = 4 << batch_index;
         fuel *= self.effort;
-        let merges: usize = self.merging.iter().map(|b| match b {
-            MergeState::Vacant => 0,
-            MergeState::Single(_) => 0,
-            MergeState::Double(_,_,_,_) => 1,
-        }).sum();
+        let merges: usize = self.merging.iter().map(|b|
+            if let MergeState::Double(MergeVariant::InProgress(_,_,_,_)) = b { 1 } else { 0 }
+        ).sum();
         fuel *= merges;
         // Convert to an `isize` so we can observe shortfall.
         let mut fuel = fuel as isize;
@@ -453,24 +451,18 @@ where
             self.merging.push(MergeState::Vacant);
         }
 
+        //  Merges should skip over vacant and structurally empty batches.
         let merge =
         self.merging[.. index+1]
             .iter_mut()
-            .fold(None, |merge, level|
-                match (merge, level.complete()) {
-                    (Some(batch_new), Some(batch_old)) => {
-                        MergeState::begin_merge(batch_old, batch_new, None).complete()
-                    },
-                    (None, batch) => batch,
-                    (merge, None) => merge,
-                }
-            );
+            .flat_map(|level| level.complete())
+            .fold(None, |merge, level| MergeState::begin_merge(merge, Some(level), None).complete());
 
         // We have collected all batches at levels less or equal to index, which represents
         // 2^{index+1} updates. It now belongs at level index+1, which we hope has resolved
         // any merging through the prior application of fuel.
         if let Some(batch) = merge {
-            self.insert_at(batch, index + 1);
+            self.insert_at(Some(batch), index + 1);
         }
     }
 
@@ -483,11 +475,10 @@ where
     /// from insufficient fuel applied to lower levels).
     pub fn apply_fuel(&mut self, fuel: &mut isize) {
         for index in 0 .. self.merging.len() {
-            let worked = self.merging[index].work(fuel);
-            if let Some((old, new, merged)) = worked {
-                drop(old);
-                drop(new);
-                self.insert_at(merged, index+1);
+            self.merging[index].work(fuel);
+            if self.merging[index].is_complete() {
+                let complete = self.merging[index].complete();
+                self.insert_at(complete, index+1);
             }
         }
     }
@@ -496,11 +487,11 @@ where
     ///
     /// This is a non-public internal method that can panic if we try and insert into a
     /// layer which already contains two batches (and is in the process of merging).
-    fn insert_at(&mut self, batch: B, index: usize) {
+    fn insert_at(&mut self, batch: Option<B>, index: usize) {
         while self.merging.len() <= index {
             self.merging.push(MergeState::Vacant);
         }
-        let frontier = if index == self.merging.len()-1 { Some(self.advance_frontier.clone()) } else { None };
+        let frontier = Some(self.advance_frontier.clone());
         self.merging[index].insert(batch, frontier);
     }
 
@@ -533,9 +524,12 @@ enum MergeState<K, V, T, R, B: Batch<K, V, T, R>> {
     /// An empty layer, containing no updates.
     Vacant,
     /// A layer containing a single batch.
-    Single(B),
+    ///
+    /// The `None` variant is used to represent a structurally empty batch present
+    /// to ensure the progress of maintenance work.
+    Single(Option<B>),
     /// A layer containing two batch, in the process of merging.
-    Double(B, B, Option<Vec<T>>, <B as Batch<K,V,T,R>>::Merger),
+    Double(MergeVariant<K, V, T, R, B>),
 }
 
 impl<K, V, T: Eq, R, B: Batch<K, V, T, R>> MergeState<K, V, T, R, B> {
@@ -543,9 +537,10 @@ impl<K, V, T: Eq, R, B: Batch<K, V, T, R>> MergeState<K, V, T, R, B> {
     /// The number of actual updates contained in the level.
     fn len(&self) -> usize {
         match self {
-            MergeState::Vacant => 0,
-            MergeState::Single(b) => b.len(),
-            MergeState::Double(b1,b2,_,_) => b1.len() + b2.len(),
+            MergeState::Single(Some(b)) => b.len(),
+            MergeState::Double(MergeVariant::InProgress(b1,b2,_,_)) => b1.len() + b2.len(),
+            MergeState::Double(MergeVariant::Complete(Some(b))) => b.len(),
+            _ => 0,
         }
     }
 
@@ -554,36 +549,47 @@ impl<K, V, T: Eq, R, B: Batch<K, V, T, R>> MergeState<K, V, T, R, B> {
         if let MergeState::Vacant = self { true } else { false }
     }
 
+    /// True only for the MergeState::Vacant variant.
+    fn non_trivial(&self) -> bool {
+        match self {
+            MergeState::Double(MergeVariant::Complete(None)) => false,
+            MergeState::Single(None) => false,
+            MergeState::Vacant => false,
+            _ => true,
+        }
+    }
+
     /// True only for the MergeState::Single variant.
     fn is_single(&self) -> bool {
         if let MergeState::Single(_) = self { true } else { false }
     }
 
+    /// True only for the MergeState::Double variant.
+    fn is_double(&self) -> bool {
+        if let MergeState::Double(_) = self { true } else { false }
+    }
+
     /// Immediately complete any merge.
     ///
-    /// A vacant layer returns `None`, other variants return the merged batch.
-    /// This consumes the layer, though we should probably consider returning
-    /// the resources of the underlying source batches if we can manage that.
+    /// The result is either a batch, if there is a non-trivial batch to return
+    /// or `None` if there is no meaningful batch to return. This does not distinguish
+    /// between Vacant entries and structurally empty batches, which should be done
+    /// with the `is_complete()` method.
     fn complete(&mut self) -> Option<B>  {
         match std::mem::replace(self, MergeState::Vacant) {
             MergeState::Vacant => None,
-            MergeState::Single(batch) => Some(batch),
-            MergeState::Double(b1, b2, frontier, mut merge) => {
-                let mut fuel = isize::max_value();
-                merge.work(&b1, &b2, &frontier, &mut fuel);
-                assert!(fuel > 0);
-                let finished = merge.done();
-                // logger.as_ref().map(|l|
-                //     l.log(::logging::MergeEvent {
-                //         operator,
-                //         scale,
-                //         length1: b1.len(),
-                //         length2: b2.len(),
-                //         complete: Some(finished.len()),
-                //     })
-                // );
-                Some(finished)
-            },
+            MergeState::Single(batch) => batch,
+            MergeState::Double(variant) => variant.complete(),
+        }
+    }
+
+    /// True iff the layer is a complete merge, ready for extraction.
+    fn is_complete(&mut self) -> bool {
+        if let MergeState::Double(MergeVariant::Complete(_)) = self {
+            true
+        }
+        else {
+            false
         }
     }
 
@@ -592,32 +598,10 @@ impl<K, V, T: Eq, R, B: Batch<K, V, T, R>> MergeState<K, V, T, R, B> {
     /// If the merge completes, the resulting batch is returned.
     /// If a batch is returned, it is the obligation of the caller
     /// to correctly install the result.
-    fn work(&mut self, fuel: &mut isize) -> Option<(B, B, B)> {
-        match std::mem::replace(self, MergeState::Vacant) {
-            MergeState::Double(b1, b2, frontier, mut merge) => {
-                merge.work(&b1, &b2, &frontier, fuel);
-                if *fuel > 0 {
-                    let finished = merge.done();
-                    // logger.as_ref().map(|l|
-                    //     l.log(::logging::MergeEvent {
-                    //         operator,
-                    //         scale,
-                    //         length1: b1.len(),
-                    //         length2: b2.len(),
-                    //         complete: Some(finished.len()),
-                    //     })
-                    // );
-                    Some((b1, b2, finished))
-                }
-                else {
-                    *self = MergeState::Double(b1, b2, frontier, merge);
-                    None
-                }
-            }
-            x => {
-                *self = x;
-                None
-            },
+    fn work(&mut self, fuel: &mut isize) {
+        // We only perform work for merges in progress.
+        if let MergeState::Double(layer) = self {
+            layer.work(fuel);
         }
     }
 
@@ -627,12 +611,15 @@ impl<K, V, T: Eq, R, B: Batch<K, V, T, R>> MergeState<K, V, T, R, B> {
     }
 
     /// Inserts a batch and begins a merge if needed.
-    fn insert(&mut self, batch: B, frontier: Option<Vec<T>>) {
+    ///
+    /// The return value is true when the merge has completed and the
+    /// resulting batch is immediately available for promotion.
+    fn insert(&mut self, batch: Option<B>, frontier: Option<Vec<T>>) {
         match self.take() {
             MergeState::Vacant => {
                 *self = MergeState::Single(batch);
-            },
-            MergeState::Single(batch_old) => {
+            }
+            MergeState::Single(old) => {
                 // logger.as_ref().map(|l| l.log(
                 //     ::logging::MergeEvent {
                 //         operator,
@@ -642,18 +629,58 @@ impl<K, V, T: Eq, R, B: Batch<K, V, T, R>> MergeState<K, V, T, R, B> {
                 //         complete: None,
                 //     }
                 // ));
-                *self = MergeState::begin_merge(batch_old, batch, frontier);
+                *self = MergeState::begin_merge(old, batch, frontier);
             }
-            MergeState::Double(_,_,_,_) => {
-                panic!("Attempted to insert batch into incomplete merge!");
+            MergeState::Double(_) => {
+                panic!("Attempted to insert batch into incomplete merge!")
             }
         };
     }
 
-    fn begin_merge(batch1: B, batch2: B, frontier: Option<Vec<T>>) -> Self {
-        assert!(batch1.upper() == batch2.lower());
-        let begin_merge = <B as Batch<K, V, T, R>>::begin_merge(&batch1, &batch2);
-        MergeState::Double(batch1, batch2, frontier, begin_merge)
+    fn begin_merge(batch1: Option<B>, batch2: Option<B>, frontier: Option<Vec<T>>) -> MergeState<K, V, T, R, B> {
+        let variant =
+        match (batch1, batch2) {
+            (Some(batch1),Some(batch2)) => {
+                assert!(batch1.upper() == batch2.lower());
+                let begin_merge = <B as Batch<K, V, T, R>>::begin_merge(&batch1, &batch2);
+                MergeVariant::InProgress(batch1, batch2, frontier, begin_merge)
+            }
+            (None, x) => MergeVariant::Complete(x),
+            (x, None) => MergeVariant::Complete(x),
+        };
+
+        MergeState::Double(variant)
+    }
+}
+
+enum MergeVariant<K, V, T, R, B: Batch<K, V, T, R>> {
+    /// Describes an actual in-progress merge between two non-trivial batches.
+    InProgress(B, B, Option<Vec<T>>, <B as Batch<K,V,T,R>>::Merger),
+    /// A merge that requires no further work. May or may not represent a non-trivial batch.
+    Complete(Option<B>),
+}
+
+impl<K, V, T, R, B: Batch<K, V, T, R>> MergeVariant<K, V, T, R, B> {
+
+    /// Completes and extracts the batch, unless structurally empty.
+    fn complete(mut self) -> Option<B> {
+        let mut fuel = isize::max_value();
+        self.work(&mut fuel);
+        if let MergeVariant::Complete(batch) = self { batch }
+        else { panic!("Failed to complete a merge!"); }
     }
 
+    // Applies some amount of work, potentially completing the merge.
+    fn work(&mut self, fuel: &mut isize) {
+        let variant = std::mem::replace(self, MergeVariant::Complete(None));
+        if let MergeVariant::InProgress(b1,b2,frontier,mut merge) = variant {
+            merge.work(&b1,&b2,&frontier,fuel);
+            if *fuel > 0 {
+                *self = MergeVariant::Complete(Some(merge.done()));
+                }
+            else {
+                *self = MergeVariant::InProgress(b1,b2,frontier,merge);
+            }
+        }
+    }
 }
