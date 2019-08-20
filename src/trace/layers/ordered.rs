@@ -130,6 +130,7 @@ impl<K: Ord+Clone, L: MergeBuilder> OrderedBuilder<K, L> {
 			::std::cmp::Ordering::Less => {
 				// determine how far we can advance lower1 until we reach/pass lower2
 				let step = 1 + advance(&trie1.keys[(1 + *lower1)..upper1], |x| x < &trie2.keys[*lower2]);
+                let step = std::cmp::min(step, 1_000);
 				self.copy_range(trie1, *lower1, *lower1 + step);
 				*lower1 += step;
 			},
@@ -151,6 +152,7 @@ impl<K: Ord+Clone, L: MergeBuilder> OrderedBuilder<K, L> {
 			::std::cmp::Ordering::Greater => {
 				// determine how far we can advance lower2 until we reach/pass lower1
 				let step = 1 + advance(&trie2.keys[(1 + *lower2)..upper2], |x| x < &trie1.keys[*lower1]);
+                let step = std::cmp::min(step, 1_000);
 				self.copy_range(trie2, *lower2, *lower2 + step);
 				*lower2 += step;
 			},

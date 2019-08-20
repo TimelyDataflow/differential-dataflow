@@ -172,22 +172,20 @@ where
     /// Apply some amount of effort to trace maintenance.
     ///
     /// The units of effort are updates, and the method should be
-    /// though of as analogous to inserting as many empty updates,
+    /// thought of as analogous to inserting as many empty updates,
     /// where the trace is permitted to perform proportionate work.
-    fn exert(&mut self, mut effort: usize) {
+    fn exert(&mut self, effort: &mut isize) {
 
         // If all merges are complete and multiple batches remain,
         // introduce empty batches to prompt merging.
         if !self.reduced() {
-
-            let timer = std::time::Instant::now();
 
             // determine the upper bound of self.merging.
             let upper = if let Some(batch) = self.merging.iter().filter(|b| !b.is_vacant()).next() {
                 match batch {
                     MergeState::Vacant => unreachable!(),
                     MergeState::Single(b) => b.upper(),
-                    MergeState::Double(b1,b2,_,_) => b2.upper(),
+                    MergeState::Double(_b1,b2,_,_) => b2.upper(),
                 }.to_vec()
             }
             else {
@@ -195,14 +193,8 @@ where
             };
 
             let empty = <B as Batch<K, V, T, R>>::empty(&upper[..], &upper[..], &upper[..]);
-            self.introduce_batch(empty, effort.next_power_of_two().trailing_zeros() as usize);
-
-            // We could do many things here. My sense is that we might
-            // prioritize completing existing merges, and in their absence
-            // start introducing empty batches to advance batch compaction.
-            // self.apply_fuel(&mut effort);
-            // println!("{:?}\tExerted: {:?}\t{:?}", self.timer.elapsed(), timer.elapsed(), self.describe());
-
+            let level = (*effort as usize).next_power_of_two().trailing_zeros() as usize;
+            self.introduce_batch(empty, level);
 
             // We are here because we were not in reduced form.
             if let Some(activator) = &self.activator {
@@ -251,11 +243,18 @@ where
     B: Batch<K, V, T, R>,
 {
     /// True iff there is at most one batch in `self.merging`.
+    ///
+    /// When true, there is no maintenance work to perform in the trace, other than compaction.
+    /// We do not yet have logic in place to determine if compaction would improve a trace, so
+    /// for now we are ignoring that.
     fn reduced(&self) -> bool {
         let count = self.merging.iter().filter(|b| !b.is_vacant()).count();
         count <= 1
     }
 
+    /// Describes the merge progress of layers in the trace.
+    ///
+    /// Intended for diagnostics rather that public consumption.
     fn describe(&self) -> Vec<usize> {
         self.merging
             .iter()
@@ -297,14 +296,18 @@ where
         }
     }
 
-    // Migrate data from `self.pending` into `self.merging`.
+    /// Migrate data from `self.pending` into `self.merging`.
+    ///
+    /// This method reflects on the bookmarks held by others that may prevent merging, and in the
+    /// case that new batches can be introduced to the pile of mergeable batches, it gets on that.
     #[inline(never)]
     fn consider_merges(&mut self) {
 
+        // TODO: Consider merging pending batches before introducing them.
+        // TODO: We could use a `VecDeque` here to draw from the front and append to the back.
         while self.pending.len() > 0 &&
               self.through_frontier.iter().all(|t1| self.pending[0].upper().iter().any(|t2| t2.less_equal(t1)))
         {
-            // this could be a VecDeque, if we ever notice this.
             let batch = self.pending.remove(0);
             let index = batch.len().next_power_of_two();
             self.introduce_batch(batch, index.trailing_zeros() as usize);
@@ -339,17 +342,24 @@ where
         // may actually contain fewer elements. This allows us to decouple the physical representation
         // from logical amounts of effort invested in each batch. It allows us to begin compaction and
         // to reduce the number of updates, without compromising our ability to continue to move
-        // updates along the spine.
+        // updates along the spine. We are explicitly making the trade-off that while some batches
+        // might compact at lower levels, we want to treat them as if they contained their full set of
+        // updates for accounting reasons (to apply work to higher levels).
         //
         // We attempt to maintain the invariant that no two adjacent levels have pairs of batches.
         // This invariant exists to make sure we have the breathing room to initiate but not
-        // immediately complete merges. As soon as a layer contains two batches we initiate a merge
-        // into a batch of the next sized layer, and we start to apply fuel to this merge. When it
-        // completes, we install the newly merged batch in the next layer and uninstall the two
-        // batches from their layer.
+        // immediately complete merges.
+        //
+        // 1. As soon as a layer contains two batches we initiate a merge into a batch of the next layer.
+        // 2. Because of our invariant, the next layer contains at most one batch, and could accept the
+        //    results of the merge immediately, should we apply enough effort to the merge.
+        // 3. As new batches are introduced, we apply effort to existing merges. We prioritize merges at
+        //    lower layers, which has the intent that (with the right constants) these merges complete
+        //    early but there is still enough surplus for merges at higher layers. Check the math.
+        // 4. When a merge completes it vacates an entire level, which is great for the invariant.
         //
         // When a merge completes, it vacates an entire level. Assuming we have maintained our invariant,
-        // the number of updates below that level (say "k") is at most
+        // the `Double` layers must be spaced, and the number of updates below level `k` is at most
         //
         //         2^k-1 + 2*2^k-2 + 2^k-3 + 2*2^k-4 + ...
         //       = \---  2^k  ---/ + \--- 2^k-2 ---/ + ...
@@ -388,9 +398,16 @@ where
         // progress receives fuel for each introduced batch, and so multiply
         // by that as well.
         if batch_index > 32 { println!("Large batch index: {}", batch_index); }
-        let mut fuel = 1 << batch_index;
+        let mut fuel = 4 << batch_index;
         fuel *= self.effort;
-        fuel *= self.merging.len();
+        let merges: usize = self.merging.iter().map(|b| match b {
+            MergeState::Vacant => 0,
+            MergeState::Single(_) => 0,
+            MergeState::Double(_,_,_,_) => 1,
+        }).sum();
+        fuel *= merges;
+        // Convert to an `isize` so we can observe shortfall.
+        let mut fuel = fuel as isize;
 
         // Step 1.  Apply fuel to each in-progress merge.
         //
@@ -464,10 +481,13 @@ where
     /// layer. This invariant ensures that we can always apply an unbounded amount of
     /// fuel and not encounter merges in to merging layers (the "safety" does not result
     /// from insufficient fuel applied to lower levels).
-    pub fn apply_fuel(&mut self, fuel: &mut usize) {
+    pub fn apply_fuel(&mut self, fuel: &mut isize) {
         for index in 0 .. self.merging.len() {
-            if let Some(batch) = self.merging[index].work(fuel) {
-                self.insert_at(batch, index+1);
+            let worked = self.merging[index].work(fuel);
+            if let Some((old, new, merged)) = worked {
+                drop(old);
+                drop(new);
+                self.insert_at(merged, index+1);
             }
         }
     }
@@ -549,7 +569,7 @@ impl<K, V, T: Eq, R, B: Batch<K, V, T, R>> MergeState<K, V, T, R, B> {
             MergeState::Vacant => None,
             MergeState::Single(batch) => Some(batch),
             MergeState::Double(b1, b2, frontier, mut merge) => {
-                let mut fuel = usize::max_value();
+                let mut fuel = isize::max_value();
                 merge.work(&b1, &b2, &frontier, &mut fuel);
                 assert!(fuel > 0);
                 let finished = merge.done();
@@ -572,7 +592,7 @@ impl<K, V, T: Eq, R, B: Batch<K, V, T, R>> MergeState<K, V, T, R, B> {
     /// If the merge completes, the resulting batch is returned.
     /// If a batch is returned, it is the obligation of the caller
     /// to correctly install the result.
-    fn work(&mut self, fuel: &mut usize) -> Option<B> {
+    fn work(&mut self, fuel: &mut isize) -> Option<(B, B, B)> {
         match std::mem::replace(self, MergeState::Vacant) {
             MergeState::Double(b1, b2, frontier, mut merge) => {
                 merge.work(&b1, &b2, &frontier, fuel);
@@ -587,7 +607,7 @@ impl<K, V, T: Eq, R, B: Batch<K, V, T, R>> MergeState<K, V, T, R, B> {
                     //         complete: Some(finished.len()),
                     //     })
                     // );
-                    Some(finished)
+                    Some((b1, b2, finished))
                 }
                 else {
                     *self = MergeState::Double(b1, b2, frontier, merge);

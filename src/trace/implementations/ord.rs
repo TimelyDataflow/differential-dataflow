@@ -212,34 +212,54 @@ where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Ord+Clone+::std::fm
 			desc: self.description,
 		}
 	}
-	fn work(&mut self, source1: &OrdValBatch<K,V,T,R>, source2: &OrdValBatch<K,V,T,R>, frontier: &Option<Vec<T>>, fuel: &mut usize) {
+	fn work(&mut self, source1: &OrdValBatch<K,V,T,R>, source2: &OrdValBatch<K,V,T,R>, frontier: &Option<Vec<T>>, fuel: &mut isize) {
 
 		let starting_updates = self.result.vals.vals.vals.len();
-		let mut effort = 0;
+		let mut effort = 0isize;
 
 		let initial_key_pos = self.result.keys.len();
 
 		// while both mergees are still active
 		while self.lower1 < self.upper1 && self.lower2 < self.upper2 && effort < *fuel {
 			self.result.merge_step((&source1.layer, &mut self.lower1, self.upper1), (&source2.layer, &mut self.lower2, self.upper2));
-			effort = self.result.vals.vals.vals.len() - starting_updates;
+			effort = (self.result.vals.vals.vals.len() - starting_updates) as isize;
 		}
 
+        // Merging is complete; only copying remains. Copying is probably faster than merging, so could take some liberties here.
 		if self.lower1 == self.upper1 || self.lower2 == self.upper2 {
-			// these are just copies, so let's bite the bullet and just do them.
-			if self.lower1 < self.upper1 { self.result.copy_range(&source1.layer, self.lower1, self.upper1); self.lower1 = self.upper1; }
-			if self.lower2 < self.upper2 { self.result.copy_range(&source2.layer, self.lower2, self.upper2); self.lower2 = self.upper2; }
+            // Limit merging by remaining fuel.
+            let remaining_fuel = *fuel - effort;
+            if remaining_fuel > 0 {
+                if self.lower1 < self.upper1 {
+                    let mut to_copy = remaining_fuel as usize;
+                    if to_copy < 1_000 { to_copy = 1_000; }
+                    if to_copy > (self.upper1 - self.lower1) { to_copy = self.upper1 - self.lower1; }
+                    self.result.copy_range(&source1.layer, self.lower1, self.lower1 + to_copy);
+                    self.lower1 += to_copy;
+                }
+                if self.lower2 < self.upper2 {
+                    // self.result.copy_range(&source2.layer, self.lower2, self.upper2); self.lower2 = self.upper2;
+                    let mut to_copy = remaining_fuel as usize;
+                    if to_copy < 1_000 { to_copy = 1_000; }
+                    if to_copy > (self.upper2 - self.lower2) { to_copy = self.upper2 - self.lower2; }
+                    self.result.copy_range(&source2.layer, self.lower2, self.lower2 + to_copy);
+                    self.lower2 += to_copy;
+                }
+            }
 		}
 
-		effort = self.result.vals.vals.vals.len() - starting_updates;
+		effort = (self.result.vals.vals.vals.len() - starting_updates) as isize;
 
 		// if we are supplied a frontier, we should compact.
 		if let Some(frontier) = frontier.as_ref() {
 			OrdValBatch::advance_builder_from(&mut self.result, frontier, initial_key_pos)
 		}
 
-		if effort >= *fuel { *fuel = 0; }
-		else 			   { *fuel -= effort; }
+        *fuel -= effort;
+
+        if *fuel < -1_000_000 {
+            println!("Massive deficit OrdVal::work: {}", fuel);
+        }
 	}
 }
 
@@ -456,33 +476,59 @@ where K: Ord+Clone+'static, T: Lattice+Ord+Clone+'static, R: Semigroup {
 			desc: self.description,
 		}
 	}
-	fn work(&mut self, source1: &OrdKeyBatch<K,T,R>, source2: &OrdKeyBatch<K,T,R>, frontier: &Option<Vec<T>>, fuel: &mut usize) {
+	fn work(&mut self, source1: &OrdKeyBatch<K,T,R>, source2: &OrdKeyBatch<K,T,R>, frontier: &Option<Vec<T>>, fuel: &mut isize) {
 
 		let starting_updates = self.result.vals.vals.len();
-		let mut effort = 0;
+		let mut effort = 0isize;
 
 		let initial_key_pos = self.result.keys.len();
 
 		// while both mergees are still active
 		while self.lower1 < self.upper1 && self.lower2 < self.upper2 && effort < *fuel {
 			self.result.merge_step((&source1.layer, &mut self.lower1, self.upper1), (&source2.layer, &mut self.lower2, self.upper2));
-			effort = self.result.vals.vals.len() - starting_updates;
+			effort = (self.result.vals.vals.len() - starting_updates) as isize;
 		}
 
+		// if self.lower1 == self.upper1 || self.lower2 == self.upper2 {
+		// 	// these are just copies, so let's bite the bullet and just do them.
+		// 	if self.lower1 < self.upper1 { self.result.copy_range(&source1.layer, self.lower1, self.upper1); self.lower1 = self.upper1; }
+		// 	if self.lower2 < self.upper2 { self.result.copy_range(&source2.layer, self.lower2, self.upper2); self.lower2 = self.upper2; }
+		// }
+        // Merging is complete; only copying remains. Copying is probably faster than merging, so could take some liberties here.
 		if self.lower1 == self.upper1 || self.lower2 == self.upper2 {
-			// these are just copies, so let's bite the bullet and just do them.
-			if self.lower1 < self.upper1 { self.result.copy_range(&source1.layer, self.lower1, self.upper1); self.lower1 = self.upper1; }
-			if self.lower2 < self.upper2 { self.result.copy_range(&source2.layer, self.lower2, self.upper2); self.lower2 = self.upper2; }
+            // Limit merging by remaining fuel.
+            let remaining_fuel = *fuel - effort;
+            if remaining_fuel > 0 {
+                if self.lower1 < self.upper1 {
+                    let mut to_copy = remaining_fuel as usize;
+                    if to_copy < 1_000 { to_copy = 1_000; }
+                    if to_copy > (self.upper1 - self.lower1) { to_copy = self.upper1 - self.lower1; }
+                    self.result.copy_range(&source1.layer, self.lower1, self.lower1 + to_copy);
+                    self.lower1 += to_copy;
+                }
+                if self.lower2 < self.upper2 {
+                    // self.result.copy_range(&source2.layer, self.lower2, self.upper2); self.lower2 = self.upper2;
+                    let mut to_copy = remaining_fuel as usize;
+                    if to_copy < 1_000 { to_copy = 1_000; }
+                    if to_copy > (self.upper2 - self.lower2) { to_copy = self.upper2 - self.lower2; }
+                    self.result.copy_range(&source2.layer, self.lower2, self.lower2 + to_copy);
+                    self.lower2 += to_copy;
+                }
+            }
 		}
 
-		effort = self.result.vals.vals.len() - starting_updates;
+
+        effort = (self.result.vals.vals.len() - starting_updates) as isize;
 
 		if let Some(frontier) = frontier.as_ref() {
 			OrdKeyBatch::advance_builder_from(&mut self.result, frontier, initial_key_pos);
 		}
 
-		if effort >= *fuel { *fuel = 0; }
-		else 			   { *fuel -= effort; }
+        *fuel -= effort;
+
+        if *fuel < -1_000_000 {
+            println!("Massive deficit OrdKey::work: {}", fuel);
+        }
 	}
 }
 
