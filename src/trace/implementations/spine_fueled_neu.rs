@@ -337,6 +337,9 @@ where
         //   2. MergeState::Single  a single batch
         //   3. MergeState::Double  a pair of batches
         //
+        // Each "batch" has the option to be `None`, indicating a non-batch that nonetheless acts
+        // as a number of updates proportionate to the level at which it exists (for bookkeeping).
+        //
         // Each of the batches at layer i contains at most 2^i elements. The sequence of batches
         // should have the upper bound of one match the lower bound of the next. Batches may be
         // logically empty, with matching upper and lower bounds, as a bookkeeping mechanism.
@@ -380,6 +383,46 @@ where
         // well before the empty space below them becomes occupied, at which point we could downgrade them
         // without risk (because there are no higher batches to be concerned about).
 
+        // ## Mathematics
+        //
+        // When a merge is initiated, there should be a non-negative *deficit* of updates before the layers
+        // below could plausibly produce a new batch for the currently merging layer. We must determine a
+        // factor of proportionality, so that newly arrived updates provide at least that amount of "fuel"
+        // towards the merging layer.
+        //
+        // ### Deficit:
+        //
+        // A new merge is initiated only in response to the completion of a prior merge, and when a prior
+        // merge completes it vacates its entire level. Assuming we have maintaned the invariant that no
+        // adjacent levels house pairs of batches, then we can bound the total number of updates at levels
+        // below that of the completed merge (let's call it "k"):
+        //
+        // As just a moment ago there were two batches at layer k, there can be at most one batch at layer
+        // k-1, then two at layer k-2, and so on alternating. The number of updates is therefore bounded by
+        //
+        //         2^k-1 + 2*2^k-2 + 2^k-3 + 2*2^k-4 + ...
+        //       = \---  2^k  ---/ + \--- 2^k-2 ---/ + ...
+        //      <= 2^k+1 - 2^k-1 - 2^k-3 - ...
+        //
+        // The last inequality reveals that there *should* be a deficit of at least 2^k-1 plus a bit more.
+        //
+        // ### Fueling
+        //
+        // We have at most 2^k+1 computation to perform to complete a merge at level k+1, and a lower bound
+        // of 2^k-1 on the number of updates we will accept before the merge *must* be completed. If each
+        // inserted update applies four units of fuel to each in-progress merge, we should be good to go.
+        // Perhaps importantly, the fuel should be applied before the updates are inserted, just to make
+        // sure there is room.
+        //
+        // ### Fuel sharing
+        //
+        // We like the idea of applying fuel preferentially to merges at *lower* levels, under the idea that
+        // they are easier to complete, and we benefit from fewer total merges in progress. This does delay
+        // the completion of merges at higher levels, and may not obviously be a total win. If we choose to
+        // do this, we should make sure that we correctly account for completed merges at low layers: they
+        // should still extract fuel from new updates even though they have completed, at least until they
+        // have paid back any "debt" to higher layers by continuing to provide fuel as updates arrive.
+
         // Step 0.  Determine an amount of fuel to use for the computation.
         //
         //          Fuel is used to drive maintenance of the data structure,
@@ -403,10 +446,10 @@ where
         if batch_index > 32 { println!("Large batch index: {}", batch_index); }
         let mut fuel = 4 << batch_index;
         fuel *= self.effort;
-        let merges: usize = self.merging.iter().map(|b|
-            if let MergeState::Double(MergeVariant::InProgress(_,_,_,_)) = b { 1 } else { 0 }
-        ).sum();
-        fuel *= merges;
+        // let merges: usize = self.merging.iter().map(|b|
+        //     if let MergeState::Double(MergeVariant::InProgress(_,_,_,_)) = b { 1 } else { 0 }
+        // ).sum();
+        // fuel *= merges;
         // Convert to an `isize` so we can observe shortfall.
         let mut fuel = fuel as isize;
 
@@ -477,8 +520,13 @@ where
     /// fuel and not encounter merges in to merging layers (the "safety" does not result
     /// from insufficient fuel applied to lower levels).
     pub fn apply_fuel(&mut self, fuel: &mut isize) {
+        // Apply fuel to each merge; do not share across layers at the moment.
+        // This is an interesting idea, but we don't have accounting in place yet.
+        // Specifically, we need completed merges at lower layers to "pay back" any
+        // debt they may have taken on by borrowing against the fuel of higher layers.
         for index in 0 .. self.merging.len() {
-            self.merging[index].work(fuel);
+            let mut fuel = *fuel;
+            self.merging[index].work(&mut fuel);
             if self.merging[index].is_complete() {
                 let complete = self.merging[index].complete();
                 self.insert_at(complete, index+1);
