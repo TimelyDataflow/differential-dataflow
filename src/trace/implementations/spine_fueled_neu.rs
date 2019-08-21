@@ -189,11 +189,13 @@ where
     /// where the trace is permitted to perform proportionate work.
     fn exert(&mut self, effort: &mut isize) {
 
-        // println!("{:?}", self.describe());
-
         // If all merges are complete and multiple batches remain,
         // introduce empty batches to prompt merging.
         if !self.reduced() {
+
+            // TODO : consider directly invoking `apply_fuel` and only introducing batches
+            // should the fuel not be fully consumed. This delays the introduction of
+            // empty batches which does a number on the balanced-ness of merging.
 
             // Introduce an empty batch with roughly *effort number of virtual updates.
             let level = (*effort as usize).next_power_of_two().trailing_zeros() as usize;
@@ -251,21 +253,26 @@ where
     /// We do not yet have logic in place to determine if compaction would improve a trace, so
     /// for now we are ignoring that.
     fn reduced(&self) -> bool {
-        self.merging.iter().filter(|b| b.non_trivial()).count() <= 1
+        let mut non_empty = 0;
+        for index in 0 .. self.merging.len() {
+            if self.merging[index].is_double() { return false; }
+            if self.merging[index].non_trivial() { non_empty += 1; }
+            if non_empty > 1 { return false; }
+        }
+        true
     }
 
     /// Describes the merge progress of layers in the trace.
     ///
     /// Intended for diagnostics rather that public consumption.
-    fn describe(&self) -> Vec<usize> {
+    fn describe(&self) -> Vec<(usize, usize)> {
         self.merging
             .iter()
-            // .map(|b| match b {
-            //     MergeState::Vacant => 0,
-            //     MergeState::Single(_) => 1,
-            //     MergeState::Double(_) => 2,
-            // })
-            .map(|b| b.len())
+            .map(|b| match b {
+                MergeState::Vacant => (0, 0),
+                x @ MergeState::Single(_) => (1, x.len()),
+                x @ MergeState::Double(_) => (2, x.len()),
+            })
             .collect()
     }
 
@@ -356,33 +363,6 @@ where
         // This invariant exists to make sure we have the breathing room to initiate but not
         // immediately complete merges.
         //
-        // 1. As soon as a layer contains two batches we initiate a merge into a batch of the next layer.
-        // 2. Because of our invariant, the next layer contains at most one batch, and could accept the
-        //    results of the merge immediately, should we apply enough effort to the merge.
-        // 3. As new batches are introduced, we apply effort to existing merges. We prioritize merges at
-        //    lower layers, which has the intent that (with the right constants) these merges complete
-        //    early but there is still enough surplus for merges at higher layers. Check the math.
-        // 4. When a merge completes it vacates an entire level, which is great for the invariant.
-        //
-        // When a merge completes, it vacates an entire level. Assuming we have maintained our invariant,
-        // the `Double` layers must be spaced, and the number of updates below level `k` is at most
-        //
-        //         2^k-1 + 2*2^k-2 + 2^k-3 + 2*2^k-4 + ...
-        //       = \---  2^k  ---/ + \--- 2^k-2 ---/ + ...
-        //      <=
-        //         2^k+1 - 2^k-1 - 2^k-3 - ...
-        //
-        // Fortunately, the now empty layer k needs 2^k+1 updates before it will initiate a new merge,
-        // and the collection must accept 2^k-1 updates before such a merge could possibly be initiated.
-        // This means that if each introduced merge applies a proportionate amount of fuel to the merge,
-        // we should be able to complete any merge at the next level before a new one is proposed.
-        //
-        // This reasoning can likely be extended to justify other manipulations of the spine, in particular
-        // tidying the area around the largest batch, which we likely want to draw down whenever possible.
-        // If sufficient merging fuel is applied to the largest merges, we might expect them to complete
-        // well before the empty space below them becomes occupied, at which point we could downgrade them
-        // without risk (because there are no higher batches to be concerned about).
-
         // ## Mathematics
         //
         // When a merge is initiated, there should be a non-negative *deficit* of updates before the layers
@@ -473,19 +453,17 @@ where
         //          size proportional to the batch size itself.
         self.roll_up(batch_index);
 
-        // Step 4. This insertion should be into an empty layer. It is a
+        // Step 3. This insertion should be into an empty layer. It is a
         //         logical error otherwise, as we may be violating our
         //         invariant, from which all derives.
         self.insert_at(batch, batch_index);
 
-        // Step 3. Tidy the largest layers.
+        // Step 4. Tidy the largest layers.
         //
         //         It is important that we not tidy only smaller layers,
         //         as their ascension is what ensures the merging and
         //         eventual compaction of the largest layers.
         self.tidy_layers();
-
-        // println!("{:?}", self.describe());
     }
 
     /// Ensures that layers up through and including `index` are empty.
