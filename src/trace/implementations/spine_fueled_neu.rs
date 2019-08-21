@@ -189,6 +189,8 @@ where
     /// where the trace is permitted to perform proportionate work.
     fn exert(&mut self, effort: &mut isize) {
 
+        // println!("{:?}", self.describe());
+
         // If all merges are complete and multiple batches remain,
         // introduce empty batches to prompt merging.
         if !self.reduced() {
@@ -258,11 +260,12 @@ where
     fn describe(&self) -> Vec<usize> {
         self.merging
             .iter()
-            .map(|b| match b {
-                MergeState::Vacant => 0,
-                MergeState::Single(_) => 1,
-                MergeState::Double(_) => 2
-            })
+            // .map(|b| match b {
+            //     MergeState::Vacant => 0,
+            //     MergeState::Single(_) => 1,
+            //     MergeState::Double(_) => 2,
+            // })
+            .map(|b| b.len())
             .collect()
     }
 
@@ -438,6 +441,8 @@ where
         //         as their ascension is what ensures the merging and
         //         eventual compaction of the largest layers.
         self.tidy_layers();
+
+        // println!("{:?}", self.describe());
     }
 
     /// Ensures that layers up through and including `index` are empty.
@@ -456,14 +461,12 @@ where
         self.merging[.. index+1]
             .iter_mut()
             .flat_map(|level| level.complete())
-            .fold(None, |merge, level| MergeState::begin_merge(merge, Some(level), None).complete());
+            .fold(None, |merge, level| MergeState::begin_merge(Some(level), merge, None).complete());
 
         // We have collected all batches at levels less or equal to index, which represents
         // 2^{index+1} updates. It now belongs at level index+1, which we hope has resolved
         // any merging through the prior application of fuel.
-        if let Some(batch) = merge {
-            self.insert_at(Some(batch), index + 1);
-        }
+        self.insert_at(merge, index + 1);
     }
 
     /// Applies an amount of fuel to merges in progress.
@@ -528,7 +531,7 @@ enum MergeState<K, V, T, R, B: Batch<K, V, T, R>> {
     /// The `None` variant is used to represent a structurally empty batch present
     /// to ensure the progress of maintenance work.
     Single(Option<B>),
-    /// A layer containing two batch, in the process of merging.
+    /// A layer containing two batches, in the process of merging.
     Double(MergeVariant<K, V, T, R, B>),
 }
 
@@ -681,6 +684,9 @@ impl<K, V, T, R, B: Batch<K, V, T, R>> MergeVariant<K, V, T, R, B> {
             else {
                 *self = MergeVariant::InProgress(b1,b2,frontier,merge);
             }
+        }
+        else {
+            *self = variant;
         }
     }
 }
