@@ -4,7 +4,7 @@
 pub type Logger = ::timely::logging::Logger<DifferentialEvent>;
 
 /// Enables logging of differential dataflow events.
-pub fn enable<A, W>(worker: &mut timely::worker::Worker<A>, writer: W) -> Option<Box<std::any::Any+'static>>
+pub fn enable<A, W>(worker: &mut timely::worker::Worker<A>, writer: W) -> Option<Box<dyn std::any::Any+'static>>
 where
     A: timely::communication::Allocate,
     W: std::io::Write+'static,
