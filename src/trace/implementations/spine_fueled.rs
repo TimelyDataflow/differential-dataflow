@@ -200,8 +200,7 @@ where
     fn advance_by(&mut self, frontier: &[T]) {
         self.advance_frontier = frontier.to_vec();
         if self.advance_frontier.len() == 0 {
-            self.pending.clear();
-            self.merging.clear();
+            self.drop_batches();
         }
     }
     fn advance_frontier(&mut self) -> &[T] { &self.advance_frontier[..] }
@@ -276,6 +275,46 @@ where
             let builder = B::Builder::new();
             let batch = builder.done(&self.upper[..], &[], &self.upper[..]);
             self.insert(batch);
+        }
+    }
+}
+
+// Drop implementation allows us to log batch drops, to zero out maintained totals.
+impl<K, V, T, R, B> Drop for Spine<K, V, T, R, B>
+where
+    T: Lattice+Ord,
+    R: Semigroup,
+    B: Batch<K, V, T, R>,
+{
+    fn drop(&mut self) {
+        self.drop_batches();
+    }
+}
+
+
+impl<K, V, T, R, B> Spine<K, V, T, R, B>
+where
+    T: Lattice+Ord,
+    R: Semigroup,
+    B: Batch<K, V, T, R>,
+{
+    /// Drops and logs batches. Used in advance_by and drop.
+    fn drop_batches(&mut self) {
+        if let Some(logger) = &self.logger {
+            for batch in self.merging.drain(..) {
+                if let Some(batch) = batch {
+                    logger.log(::logging::DropEvent {
+                        operator: self.operator.global_id,
+                        length: batch.len(),
+                    });
+                }
+            }
+            for batch in self.pending.drain(..) {
+                logger.log(::logging::DropEvent {
+                    operator: self.operator.global_id,
+                    length: batch.len(),
+                });
+            }
         }
     }
 }

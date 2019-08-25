@@ -20,6 +20,9 @@ use timely::scheduling::Activator;
 use super::{TraceWriter, TraceAgentQueueWriter, TraceAgentQueueReader, Arranged};
 use super::TraceReplayInstruction;
 
+use crate::trace::wrappers::frontier::{TraceFrontier, BatchFrontier};
+
+
 /// A `TraceReader` wrapper which can be imported into other dataflows.
 ///
 /// The `TraceAgent` is the default trace type produced by `arranged`, and it can be extracted
@@ -217,6 +220,7 @@ where
         // Drop ShutdownButton and return only the arrangement.
         self.import_core(scope, name).0
     }
+
     /// Imports an arrangement into the supplied scope.
     ///
     /// # Examples
@@ -312,6 +316,142 @@ where
                                     if let Some(time) = hint {
                                         let delayed = capabilities.delayed(&time);
                                         output.session(&delayed).give(batch);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            })
+        };
+
+        (Arranged { stream, trace }, shutdown_button.unwrap())
+    }
+
+    /// Imports an arrangement into the supplied scope.
+    ///
+    /// This variant of import uses the `advance_frontier` to forcibly advance timestamps in updates.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// extern crate timely;
+    /// extern crate differential_dataflow;
+    ///
+    /// use timely::Configuration;
+    /// use timely::dataflow::ProbeHandle;
+    /// use timely::dataflow::operators::Probe;
+    /// use timely::dataflow::operators::Inspect;
+    /// use differential_dataflow::input::InputSession;
+    /// use differential_dataflow::operators::arrange::ArrangeBySelf;
+    /// use differential_dataflow::operators::reduce::Reduce;
+    /// use differential_dataflow::trace::Trace;
+    /// use differential_dataflow::trace::TraceReader;
+    /// use differential_dataflow::trace::implementations::ord::OrdValSpine;
+    /// use differential_dataflow::hashable::OrdWrapper;
+    /// use differential_dataflow::input::Input;
+    ///
+    /// fn main() {
+    ///     ::timely::execute(Configuration::Thread, |worker| {
+    ///
+    ///         let mut probe = ProbeHandle::new();
+    ///
+    ///         // create a first dataflow
+    ///         let (mut handle, mut trace) = worker.dataflow::<u32,_,_>(|scope| {
+    ///             // create input handle and collection.
+    ///             let (handle, stream) = scope.new_collection();
+    ///             let trace = stream.arrange_by_self().trace;
+    ///             (handle, trace)
+    ///         });
+    ///
+    ///         handle.insert(0); handle.advance_to(1); handle.flush(); worker.step();
+    ///         handle.remove(0); handle.advance_to(2); handle.flush(); worker.step();
+    ///         handle.insert(1); handle.advance_to(3); handle.flush(); worker.step();
+    ///         handle.remove(1); handle.advance_to(4); handle.flush(); worker.step();
+    ///         handle.insert(0); handle.advance_to(5); handle.flush(); worker.step();
+    ///
+    ///         trace.advance_by(&[5]);
+    ///
+    ///         // create a second dataflow
+    ///         let mut shutdown = worker.dataflow(|scope| {
+    ///             let (arrange, button) = trace.import_frontier(scope, "Import");
+    ///             arrange
+    ///                 .as_collection(|k,v| (*k,*v))
+    ///                 .inner
+    ///                 .inspect(|(d,t,r)| {
+    ///                     assert!(t >= &5);
+    ///                 })
+    ///                 .probe_with(&mut probe);
+    ///
+    ///             button
+    ///         });
+    ///
+    ///         worker.step();
+    ///         worker.step();
+    ///         assert!(!probe.done());
+    ///
+    ///         shutdown.press();
+    ///
+    ///         worker.step();
+    ///         worker.step();
+    ///         assert!(probe.done());
+    ///
+    ///     }).unwrap();
+    /// }
+    /// ```
+    pub fn import_frontier<G>(&mut self, scope: &G, name: &str) -> (Arranged<G, TraceFrontier<TraceAgent<Tr>>>, ShutdownButton<CapabilitySet<Tr::Time>>)
+    where
+        G: Scope<Timestamp=Tr::Time>,
+        Tr::Time: Timestamp+ Lattice+Ord+Clone+'static,
+        Tr: TraceReader,
+    {
+        // This frontier describes our only guarantee on the compaction frontier.
+        let frontier = self.advance_frontier().to_vec();
+        self.import_frontier_core(scope, name, frontier)
+    }
+
+    /// Import a trace advanced to a specific frontier.
+    pub fn import_frontier_core<G>(&mut self, scope: &G, name: &str, frontier:Vec<Tr::Time>) -> (Arranged<G, TraceFrontier<TraceAgent<Tr>>>, ShutdownButton<CapabilitySet<Tr::Time>>)
+    where
+        G: Scope<Timestamp=Tr::Time>,
+        Tr::Time: Timestamp+ Lattice+Ord+Clone+'static,
+        Tr: TraceReader,
+    {
+        let trace = self.clone();
+        let trace = TraceFrontier::make_from(trace, &frontier[..]);
+
+        let mut shutdown_button = None;
+
+        let stream = {
+
+            let shutdown_button_ref = &mut shutdown_button;
+            source(scope, name, move |capability, info| {
+
+                let capabilities = Rc::new(RefCell::new(Some(CapabilitySet::new())));
+
+                let activator = scope.activator_for(&info.address[..]);
+                let queue = self.new_listener(activator);
+
+                let activator = scope.activator_for(&info.address[..]);
+                *shutdown_button_ref = Some(ShutdownButton::new(capabilities.clone(), activator));
+
+                capabilities.borrow_mut().as_mut().unwrap().insert(capability);
+
+                move |output| {
+
+                    let mut capabilities = capabilities.borrow_mut();
+                    if let Some(ref mut capabilities) = *capabilities {
+
+                        let mut borrow = queue.1.borrow_mut();
+                        for instruction in borrow.drain(..) {
+                            match instruction {
+                                TraceReplayInstruction::Frontier(frontier) => {
+                                    capabilities.downgrade(&frontier[..]);
+                                },
+                                TraceReplayInstruction::Batch(batch, hint) => {
+                                    if let Some(time) = hint {
+                                        let delayed = capabilities.delayed(&time);
+                                        output.session(&delayed).give(BatchFrontier::make_from(batch, &frontier[..]));
                                     }
                                 }
                             }

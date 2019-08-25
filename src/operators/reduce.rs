@@ -61,6 +61,12 @@ pub trait Reduce<G: Scope, K: Data, V: Data, R: Semigroup> where G::Timestamp: L
     /// }
     /// ```
     fn reduce<L, V2: Data, R2: Abelian>(&self, logic: L) -> Collection<G, (K, V2), R2>
+    where L: FnMut(&K, &[(&V, R)], &mut Vec<(V2, R2)>)+'static {
+        self.reduce_named("Reduce", logic)
+    }
+
+    /// As `reduce` with the ability to name the operator.
+    fn reduce_named<L, V2: Data, R2: Abelian>(&self, name: &str, logic: L) -> Collection<G, (K, V2), R2>
     where L: FnMut(&K, &[(&V, R)], &mut Vec<(V2, R2)>)+'static;
 }
 
@@ -72,11 +78,10 @@ impl<G, K, V, R> Reduce<G, K, V, R> for Collection<G, (K, V), R>
         V: ExchangeData,
         R: ExchangeData+Semigroup,
  {
-    fn reduce<L, V2: Data, R2: Abelian>(&self, logic: L) -> Collection<G, (K, V2), R2>
+    fn reduce_named<L, V2: Data, R2: Abelian>(&self, name: &str, logic: L) -> Collection<G, (K, V2), R2>
         where L: FnMut(&K, &[(&V, R)], &mut Vec<(V2, R2)>)+'static {
         self.arrange_by_key()
-            .reduce_abelian::<_,DefaultValTrace<_,_,_,_>>(logic)
-            .as_collection(|k,v| (k.clone(), v.clone()))
+            .reduce_named(name, logic)
     }
 }
 
@@ -87,9 +92,9 @@ where
     T1::Batch: BatchReader<K, V, G::Timestamp, R>,
     T1::Cursor: Cursor<K, V, G::Timestamp, R>,
 {
-    fn reduce<L, V2: Data, R2: Abelian>(&self, logic: L) -> Collection<G, (K, V2), R2>
+    fn reduce_named<L, V2: Data, R2: Abelian>(&self, name: &str, logic: L) -> Collection<G, (K, V2), R2>
         where L: FnMut(&K, &[(&V, R)], &mut Vec<(V2, R2)>)+'static {
-        self.reduce_abelian::<_,DefaultValTrace<_,_,_,_>>(logic)
+        self.reduce_abelian::<_,DefaultValTrace<_,_,_,_>>(name, logic)
             .as_collection(|k,v| (k.clone(), v.clone()))
     }
 }
@@ -120,7 +125,13 @@ pub trait Threshold<G: Scope, K: Data, R1: Semigroup> where G::Timestamp: Lattic
     ///     });
     /// }
     /// ```
-    fn threshold<R2: Abelian, F: FnMut(&K, &R1)->R2+'static>(&self, thresh: F) -> Collection<G, K, R2>;
+    fn threshold<R2: Abelian, F: FnMut(&K, &R1)->R2+'static>(&self, thresh: F) -> Collection<G, K, R2> {
+        self.threshold_named("Threshold", thresh)
+    }
+
+    /// A `threshold` with the ability to name the operator.
+    fn threshold_named<R2: Abelian, F: FnMut(&K, &R1)->R2+'static>(&self, name: &str, thresh: F) -> Collection<G, K, R2>;
+
     /// Reduces the collection to one occurrence of each distinct element.
     ///
     /// # Examples
@@ -142,16 +153,15 @@ pub trait Threshold<G: Scope, K: Data, R1: Semigroup> where G::Timestamp: Lattic
     /// }
     /// ```
     fn distinct(&self) -> Collection<G, K, isize> {
-        self.threshold(|_,c| if c.is_zero() { 0 } else { 1 })
+        self.threshold_named("Distinct", |_,c| if c.is_zero() { 0 } else { 1 })
     }
 }
 
 impl<G: Scope, K: ExchangeData+Hashable, R1: ExchangeData+Semigroup> Threshold<G, K, R1> for Collection<G, K, R1>
 where G::Timestamp: Lattice+Ord {
-    fn threshold<R2: Abelian, F: FnMut(&K,&R1)->R2+'static>(&self, mut thresh: F) -> Collection<G, K, R2> {
+    fn threshold_named<R2: Abelian, F: FnMut(&K,&R1)->R2+'static>(&self, name: &str, thresh: F) -> Collection<G, K, R2> {
         self.arrange_by_self()
-            .reduce_abelian::<_,DefaultKeyTrace<_,_,_>>(move |k,s,t| t.push(((), thresh(k, &s[0].1))))
-            .as_collection(|k,_| k.clone())
+            .threshold_named(name, thresh)
     }
 }
 
@@ -162,8 +172,8 @@ where
     T1::Batch: BatchReader<K, (), G::Timestamp, R1>,
     T1::Cursor: Cursor<K, (), G::Timestamp, R1>,
 {
-    fn threshold<R2: Abelian, F: FnMut(&K,&R1)->R2+'static>(&self, mut thresh: F) -> Collection<G, K, R2> {
-        self.reduce_abelian::<_,DefaultKeyTrace<_,_,_>>(move |k,s,t| t.push(((), thresh(k, &s[0].1))))
+    fn threshold_named<R2: Abelian, F: FnMut(&K,&R1)->R2+'static>(&self, name: &str, mut thresh: F) -> Collection<G, K, R2> {
+        self.reduce_abelian::<_,DefaultKeyTrace<_,_,_>>(name, move |k,s,t| t.push(((), thresh(k, &s[0].1))))
             .as_collection(|k,_| k.clone())
     }
 }
@@ -199,8 +209,7 @@ where
 {
     fn count(&self) -> Collection<G, (K, R), isize> {
         self.arrange_by_self()
-            .reduce_abelian::<_,DefaultValTrace<_,_,_,_>>(|_k,s,t| t.push((s[0].1.clone(), 1)))
-            .as_collection(|k,c| (k.clone(), c.clone()))
+            .count()
     }
 }
 
@@ -212,7 +221,7 @@ where
     T1::Cursor: Cursor<K, (), G::Timestamp, R>,
 {
     fn count(&self) -> Collection<G, (K, R), isize> {
-        self.reduce_abelian::<_,DefaultValTrace<_,_,_,_>>(|_k,s,t| t.push((s[0].1.clone(), 1)))
+        self.reduce_abelian::<_,DefaultValTrace<_,_,_,_>>("Count", |_k,s,t| t.push((s[0].1.clone(), 1)))
             .as_collection(|k,c| (k.clone(), c.clone()))
     }
 }
@@ -243,13 +252,14 @@ pub trait ReduceCore<G: Scope, K: Data, V: Data, R: Semigroup> where G::Timestam
     ///         scope.new_collection_from(1 .. 10u32).1
     ///              .map(|x| (x, x))
     ///              .reduce_abelian::<_,OrdValSpine<_,_,_,_>>(
+    ///                 "Example",
     ///                  move |_key, src, dst| dst.push((*src[0].0, 1))
     ///              )
     ///              .trace;
     ///     });
     /// }
     /// ```
-    fn reduce_abelian<L, T2>(&self, mut logic: L) -> Arranged<G, TraceAgent<T2>>
+    fn reduce_abelian<L, T2>(&self, name: &str, mut logic: L) -> Arranged<G, TraceAgent<T2>>
         where
             T2: Trace+TraceReader<Key=K, Time=G::Timestamp>+'static,
             T2::Val: Data,
@@ -258,7 +268,7 @@ pub trait ReduceCore<G: Scope, K: Data, V: Data, R: Semigroup> where G::Timestam
             T2::Cursor: Cursor<K, T2::Val, G::Timestamp, T2::R>,
             L: FnMut(&K, &[(&V, R)], &mut Vec<(T2::Val, T2::R)>)+'static,
         {
-            self.reduce_core::<_,T2>(move |key, input, output, change| {
+            self.reduce_core::<_,T2>(name, move |key, input, output, change| {
                 if !input.is_empty() {
                     logic(key, input, change);
                 }
@@ -272,7 +282,7 @@ pub trait ReduceCore<G: Scope, K: Data, V: Data, R: Semigroup> where G::Timestam
     /// Unlike `reduce_arranged`, this method may be called with an empty `input`,
     /// and it may not be safe to index into the first element.
     /// At least one of the two collections will be non-empty.
-    fn reduce_core<L, T2>(&self, logic: L) -> Arranged<G, TraceAgent<T2>>
+    fn reduce_core<L, T2>(&self, name: &str, logic: L) -> Arranged<G, TraceAgent<T2>>
         where
             T2: Trace+TraceReader<Key=K, Time=G::Timestamp>+'static,
             T2::Val: Data,
@@ -291,7 +301,7 @@ where
     V: ExchangeData,
     R: ExchangeData+Semigroup,
 {
-    fn reduce_core<L, T2>(&self, logic: L) -> Arranged<G, TraceAgent<T2>>
+    fn reduce_core<L, T2>(&self, name: &str, logic: L) -> Arranged<G, TraceAgent<T2>>
         where
             T2::Val: Data,
             T2::R: Semigroup,
@@ -301,7 +311,7 @@ where
             L: FnMut(&K, &[(&V, R)], &mut Vec<(T2::Val,T2::R)>, &mut Vec<(T2::Val, T2::R)>)+'static
     {
         self.arrange_by_key()
-            .reduce_core(logic)
+            .reduce_core(name, logic)
     }
 }
 
@@ -312,7 +322,7 @@ where
     T1::Batch: BatchReader<K, V, G::Timestamp, R>,
     T1::Cursor: Cursor<K, V, G::Timestamp, R>,
 {
-    fn reduce_core<L, T2>(&self, mut logic: L) -> Arranged<G, TraceAgent<T2>>
+    fn reduce_core<L, T2>(&self, name: &str, mut logic: L) -> Arranged<G, TraceAgent<T2>>
         where
             T2: Trace+TraceReader<Key=K, Time=G::Timestamp>+'static,
             T2::Val: Data,
@@ -327,7 +337,7 @@ where
         let stream = {
 
             let result_trace = &mut result_trace;
-            self.stream.unary_frontier(Pipeline, "Reduce", move |_capability, operator_info| {
+            self.stream.unary_frontier(Pipeline, name, move |_capability, operator_info| {
 
                 let logger = {
                     let scope = self.stream.scope();
