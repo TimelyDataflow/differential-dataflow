@@ -1,23 +1,29 @@
 //! Directed label reachability.
 
 use std::hash::Hash;
+use std::ops::Mul;
 
 use timely::dataflow::*;
 
 use ::{Collection, ExchangeData};
 use ::operators::*;
 use ::lattice::Lattice;
+use ::difference::Abelian;
+use ::operators::arrange::arrangement::ArrangeByKey;
 
 /// Propagates labels forward, retaining the minimum label.
 ///
 /// This algorithm naively propagates all labels at once, much like standard label propagation.
 /// To more carefully control the label propagation, consider `propagate_core` which supports a
 /// method to limit the introduction of labels.
-pub fn propagate<G, N, L>(edges: &Collection<G, (N,N)>, nodes: &Collection<G,(N,L)>) -> Collection<G,(N,L)>
+pub fn propagate<G, N, L, R>(edges: &Collection<G, (N,N), R>, nodes: &Collection<G,(N,L),R>) -> Collection<G,(N,L),R>
 where
     G: Scope,
     G::Timestamp: Lattice+Ord,
     N: ExchangeData+Hash,
+    R: ExchangeData+Abelian,
+    R: Mul<R, Output=R>,
+    R: From<i8>,
     L: ExchangeData,
 {
     propagate_core(&edges.arrange_by_key(), nodes, |_label| 0)
@@ -28,11 +34,14 @@ where
 /// This algorithm naively propagates all labels at once, much like standard label propagation.
 /// To more carefully control the label propagation, consider `propagate_core` which supports a
 /// method to limit the introduction of labels.
-pub fn propagate_at<G, N, L, F>(edges: &Collection<G, (N,N)>, nodes: &Collection<G,(N,L)>, logic: F) -> Collection<G,(N,L)>
+pub fn propagate_at<G, N, L, F, R>(edges: &Collection<G, (N,N), R>, nodes: &Collection<G,(N,L),R>, logic: F) -> Collection<G,(N,L),R>
 where
     G: Scope,
     G::Timestamp: Lattice+Ord,
     N: ExchangeData+Hash,
+    R: ExchangeData+Abelian,
+    R: Mul<R, Output=R>,
+    R: From<i8>,
     L: ExchangeData,
     F: Fn(&L)->u64+'static,
 {
@@ -41,20 +50,22 @@ where
 
 use trace::TraceReader;
 use operators::arrange::arrangement::Arranged;
-use operators::arrange::arrangement::ArrangeByKey;
 
 /// Propagates labels forward, retaining the minimum label.
 ///
 /// This variant takes a pre-arranged edge collection, to facilitate re-use, and allows
 /// a method `logic` to specify the rounds in which we introduce various labels. The output
 /// of `logic should be a number in the interval [0,64],
-pub fn propagate_core<G, N, L, Tr, F>(edges: &Arranged<G,Tr>, nodes: &Collection<G,(N,L)>, logic: F) -> Collection<G,(N,L)>
+pub fn propagate_core<G, N, L, Tr, F, R>(edges: &Arranged<G,Tr>, nodes: &Collection<G,(N,L),R>, logic: F) -> Collection<G,(N,L),R>
 where
     G: Scope,
     G::Timestamp: Lattice+Ord,
     N: ExchangeData+Hash,
+    R: ExchangeData+Abelian,
+    R: Mul<R, Output=R>,
+    R: From<i8>,
     L: ExchangeData,
-    Tr: TraceReader<Key=N, Val=N, Time=G::Timestamp, R=isize>+Clone+'static,
+    Tr: TraceReader<Key=N, Val=N, Time=G::Timestamp, R=R>+Clone+'static,
     Tr::Batch: crate::trace::BatchReader<N, N, G::Timestamp, Tr::R>+'static,
     Tr::Cursor: crate::trace::Cursor<N, N, G::Timestamp, Tr::R>+'static,
     F: Fn(&L)->u64+'static,
@@ -90,9 +101,9 @@ where
         let labels =
         proposals
             .concat(&nodes)
-            .reduce_abelian::<_,DefaultValTrace<_,_,_,_>>("Propagate", |_, s, t| t.push((s[0].0.clone(), 1)));
+            .reduce_abelian::<_,DefaultValTrace<_,_,_,_>>("Propagate", |_, s, t| t.push((s[0].0.clone(), R::from(1 as i8))));
 
-        let propagate: Collection<_, (N, L)> =
+        let propagate: Collection<_, (N, L), R> =
         labels
             .join_core(&edges, |_k, l: &L, d| Some((d.clone(), l.clone())));
 
