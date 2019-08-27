@@ -45,5 +45,4 @@ mod merge_batcher;
 pub use self::merge_batcher::MergeBatcher as Batcher;
 
 pub mod ord;
-pub mod ord32;
 // pub mod hash;
