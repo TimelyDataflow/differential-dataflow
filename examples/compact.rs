@@ -6,8 +6,10 @@ use differential_dataflow::operators::Threshold;
 
 fn main() {
 
-    let records: usize = std::env::args().nth(1).unwrap().parse().unwrap();
-    let batch: usize = std::env::args().nth(2).unwrap().parse().unwrap();
+    let large: usize = std::env::args().nth(1).unwrap().parse().unwrap();
+    let small: usize = std::env::args().nth(2).unwrap().parse().unwrap();
+    let batch: usize = std::env::args().nth(3).unwrap().parse().unwrap();
+    let total: usize = std::env::args().nth(4).unwrap().parse().unwrap();
 
     // define a new timely dataflow computation.
     timely::execute_from_args(std::env::args().skip(3), move |worker| {
@@ -27,7 +29,7 @@ fn main() {
 
         let mut next = batch;
         let mut value = worker.index();
-        while value < records {
+        while value < total {
             if value >= next {
                 handle.advance_to(next);
                 handle.flush();
@@ -36,11 +38,12 @@ fn main() {
                 // println!("{:?}\tround {} loaded", timer.elapsed(), next);
             }
             handle.advance_to(value);
-            handle.insert(value);
+            handle.insert(value % large);
+            handle.insert(value % small);
             value += worker.peers();
         }
 
-        handle.advance_to(records);
+        handle.advance_to(total);
         handle.flush();
         while probe.less_than(handle.time()) { worker.step(); }
 
@@ -48,20 +51,21 @@ fn main() {
 
         let mut next = batch;
         let mut value = worker.index();
-        while value < records {
+        while value < total {
             if value >= next {
-                handle.advance_to(records + next);
+                handle.advance_to(total + next);
                 handle.flush();
                 next += batch;
                 while probe.less_than(handle.time()) { worker.step(); }
                 // println!("{:?}\tround {} unloaded", timer.elapsed(), next);
             }
-            handle.advance_to(records + value);
-            handle.remove(value);
+            handle.advance_to(total + value);
+            handle.remove(value % large);
+            handle.remove(value % small);
             value += worker.peers();
         }
 
-        handle.advance_to(records + records);
+        handle.advance_to(total + total);
         handle.flush();
         while probe.less_than(handle.time()) { worker.step(); }
 
