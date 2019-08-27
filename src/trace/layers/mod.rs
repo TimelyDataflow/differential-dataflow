@@ -5,7 +5,6 @@
 //! to single elements in the layer above.
 
 pub mod ordered;
-pub mod ordered32;
 pub mod ordered_leaf;
 // pub mod hashed;
 // pub mod weighted;
