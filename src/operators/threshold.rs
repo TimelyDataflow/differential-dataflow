@@ -64,8 +64,18 @@ pub trait ThresholdTotal<G: Scope, K: ExchangeData, R: ExchangeData+Semigroup> w
     /// }
     /// ```
     fn distinct_total(&self) -> Collection<G, K, isize> {
-        self.threshold_total(|_,c| if c.is_zero() { 0isize } else { 1isize })
+        self.distinct_total_core()
     }
+
+    /// Distinct for general integer differences.
+    ///
+    /// This method allows `distinct` to produce collections whose difference
+    /// type is something other than an `isize` integer, for example perhaps an
+    /// `i32`.
+    fn distinct_total_core<R2: Abelian+From<i8>>(&self) -> Collection<G, K, R2> {
+        self.threshold_total(|_,_| R2::from(1i8))
+    }
+
 }
 
 impl<G: Scope, K: ExchangeData+Hashable, R: ExchangeData+Semigroup> ThresholdTotal<G, K, R> for Collection<G, K, R>
