@@ -10,10 +10,10 @@ use timely::dataflow::Scope;
 
 use ::{Collection, ExchangeData, Hashable};
 use ::difference::Semigroup;
-use operators::arrange::ArrangeBySelf;
+use operators::arrange::arrangement::Arrange;
 
 /// An extension method for consolidating weighted streams.
-pub trait Consolidate<D: ExchangeData+Hashable> {
+pub trait Consolidate<D: ExchangeData+Hashable> : Sized {
     /// Aggregates the weights of equal records into at most one record.
     ///
     /// This method uses the type `D`'s `hashed()` method to partition the data. The data are
@@ -40,7 +40,12 @@ pub trait Consolidate<D: ExchangeData+Hashable> {
     ///     });
     /// }
     /// ```
-    fn consolidate(&self) -> Self;
+    fn consolidate(&self) -> Self {
+        self.consolidate_named("Consolidate")
+    }
+
+    /// As `consolidate` but with the ability to name the operator.
+    fn consolidate_named(&self, name: &str) -> Self;
 }
 
 impl<G: Scope, D, R> Consolidate<D> for Collection<G, D, R>
@@ -49,8 +54,11 @@ where
     R: ExchangeData+Semigroup,
     G::Timestamp: ::lattice::Lattice+Ord,
  {
-    fn consolidate(&self) -> Self {
-        self.arrange_by_self().as_collection(|d,_| d.clone())
+    fn consolidate_named(&self, name: &str) -> Self {
+        use trace::implementations::ord::OrdKeySpine as DefaultKeyTrace;
+        self.map(|k| (k, ()))
+            .arrange_named::<DefaultKeyTrace<_,_,_>>(name)
+            .as_collection(|d: &D, _| d.clone())
     }
 }
 
