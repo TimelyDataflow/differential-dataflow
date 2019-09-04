@@ -8,6 +8,7 @@ use std::fs::File;
 use timely::dataflow::Scope;
 use timely::order::Product;
 
+use differential_dataflow::difference::Present;
 use differential_dataflow::input::Input;
 use differential_dataflow::trace::implementations::ord::OrdValSpine;
 use differential_dataflow::operators::*;
@@ -17,7 +18,6 @@ use differential_dataflow::operators::iterate::SemigroupVariable;
 type Node = u32;
 type Time = ();
 type Iter = u32;
-type Diff = i32;
 type Offs = u32;
 
 fn main() {
@@ -52,7 +52,8 @@ fn main() {
                 labels.join_core(&edges, |_b, a, c| Some((*c, *a)))
                       .concat(&nodes)
                       .arrange::<OrdValSpine<_,_,_,_,Offs>>()
-                      .distinct_total_core::<Diff>();
+                    //   .distinct_total_core::<Diff>();
+                      .threshold_semigroup(|_,_,x| if x.is_none() { Some(Present) } else { None });
 
                 labels.set(&next);
                 next.leave()
@@ -81,8 +82,8 @@ fn main() {
                     let dst: Node = elts.next().unwrap().parse().ok().expect("malformed dst");
                     let typ: &str = elts.next().unwrap();
                     match typ {
-                        "n" => { nodes.update((src, dst), 1 as Diff); },
-                        "e" => { edges.update((src, dst), 1 as Diff); },
+                        "n" => { nodes.update((src, dst), Present); },
+                        "e" => { edges.update((src, dst), Present); },
                         unk => { panic!("unknown type: {}", unk)},
                     }
                 }
