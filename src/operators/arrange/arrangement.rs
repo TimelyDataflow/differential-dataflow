@@ -539,14 +539,13 @@ where
 
                 let mut buffer = Vec::new();
 
-                let activator =
-                if ::std::env::var("DIFFERENTIAL_EAGER_MERGE") == Ok("ZOMGYES".to_owned()) {
-                    // println!("activation requested");
-                    Some(self.scope().activator_for(&info.address[..]))
+                let (activator, effort) =
+                if let Ok(text) = ::std::env::var("DIFFERENTIAL_EAGER_MERGE") {
+                    let effort = text.parse::<isize>().expect("DIFFERENTIAL_EAGER_MERGE must be set to an integer");
+                    (Some(self.scope().activator_for(&info.address[..])), Some(effort))
                 }
                 else {
-                    // println!("activation not requested");
-                    None
+                    (None, Some(1_000))
                 };
 
                 let empty_trace = Tr::new(info, logger, activator);
@@ -651,7 +650,10 @@ where
                         input_frontier.clear();
                         input_frontier.extend(input.frontier().frontier().iter().cloned());
                     }
-                    writer.exert();
+
+                    if let Some(mut fuel) = effort.clone() {
+                        writer.exert(&mut fuel);
+                    }
                 }
             })
         };
