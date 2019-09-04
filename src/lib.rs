@@ -24,7 +24,7 @@
 //! occurs, giving us a sense for the distribution of degrees in the graph.
 //!
 //! ```ignore
-//! // create a a degree counting differential dataflow
+//! // create a degree counting differential dataflow
 //! let (mut input, probe) = worker.dataflow(|scope| {
 //!
 //!     // create edge input, count a few ways.

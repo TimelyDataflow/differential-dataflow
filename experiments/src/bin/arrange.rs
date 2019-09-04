@@ -53,7 +53,7 @@ fn main() {
         let core_ids = core_affinity::get_core_ids().unwrap();
         core_affinity::set_for_current(core_ids[index]);
 
-        // create a a degree counting differential dataflow
+        // create a degree counting differential dataflow
         let (mut input, probe) = worker.dataflow::<u64,_,_>(|scope| {
 
             let (handle, data) = scope.new_collection();
