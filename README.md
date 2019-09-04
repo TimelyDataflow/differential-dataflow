@@ -43,7 +43,7 @@ Let's check out that out-degree distribution computation, to get a sense for how
 A graph is a collection of pairs `(Node, Node)`, and one standard analysis is to determine the number of times each `Node` occurs in the first position, its "degree". The number of nodes with each degree is a helpful graph statistic.
 
 ```rust
-// create a a degree counting differential dataflow
+// create a degree counting differential dataflow
 let (mut input, probe) = worker.dataflow(|scope| {
 
     // create edge input, count a few ways.
