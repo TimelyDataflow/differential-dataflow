@@ -84,8 +84,6 @@ pub struct MergeShortfall {
 
 impl From<MergeShortfall> for DifferentialEvent { fn from(e: MergeShortfall) -> Self { DifferentialEvent::MergeShortfall(e) } }
 
-
-
 /// Either the start or end of a merge event.
 #[derive(Debug, Clone, Abomonation, Ord, PartialOrd, Eq, PartialEq)]
 pub struct TraceShare {

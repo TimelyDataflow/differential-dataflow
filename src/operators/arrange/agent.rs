@@ -37,7 +37,7 @@ where
     advance: Vec<Tr::Time>,
     through: Vec<Tr::Time>,
 
-    info: ::timely::dataflow::operators::generic::OperatorInfo,
+    operator: ::timely::dataflow::operators::generic::OperatorInfo,
     logging: Option<::logging::Logger>,
 }
 
@@ -82,7 +82,7 @@ where
     Tr::Time: Timestamp+Lattice,
 {
     /// Creates a new agent from a trace reader.
-    pub fn new(trace: Tr, info: ::timely::dataflow::operators::generic::OperatorInfo, logging: Option<::logging::Logger>) -> (Self, TraceWriter<Tr>)
+    pub fn new(trace: Tr, operator: ::timely::dataflow::operators::generic::OperatorInfo, logging: Option<::logging::Logger>) -> (Self, TraceWriter<Tr>)
     where
         Tr: Trace,
         Tr::Batch: Batch<Tr::Key,Tr::Val,Tr::Time,Tr::R>,
@@ -92,7 +92,7 @@ where
 
         if let Some(logging) = &logging {
             logging.log(
-                ::logging::TraceShare { operator: info.global_id, diff: 1 }
+                ::logging::TraceShare { operator: operator.global_id, diff: 1 }
             );
         }
 
@@ -101,7 +101,7 @@ where
             queues: Rc::downgrade(&queues),
             advance: trace.borrow().advance_frontiers.frontier().to_vec(),
             through: trace.borrow().through_frontiers.frontier().to_vec(),
-            info,
+            operator,
             logging,
         };
 
@@ -524,7 +524,7 @@ where
 
         if let Some(logging) = &self.logging {
             logging.log(
-                ::logging::TraceShare { operator: self.info.global_id, diff: 1 }
+                ::logging::TraceShare { operator: self.operator.global_id, diff: 1 }
             );
         }
 
@@ -537,7 +537,7 @@ where
             queues: self.queues.clone(),
             advance: self.advance.clone(),
             through: self.through.clone(),
-            info: self.info.clone(),
+            operator: self.operator.clone(),
             logging: self.logging.clone(),
         }
     }
@@ -554,7 +554,7 @@ where
 
         if let Some(logging) = &self.logging {
             logging.log(
-                ::logging::TraceShare { operator: self.info.global_id, diff: -1 }
+                ::logging::TraceShare { operator: self.operator.global_id, diff: -1 }
             );
         }
 
