@@ -543,7 +543,6 @@ where
     }
 }
 
-
 impl<Tr> Drop for TraceAgent<Tr>
 where
     Tr: TraceReader,
@@ -551,13 +550,11 @@ where
 {
     fn drop(&mut self) {
 
-
         if let Some(logging) = &self.logging {
             logging.log(
                 ::logging::TraceShare { operator: self.operator.global_id, diff: -1 }
             );
         }
-
 
         // decrement borrow counts to remove all holds
         self.trace.borrow_mut().adjust_advance_frontier(&self.advance[..], &[]);
