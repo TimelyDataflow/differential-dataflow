@@ -539,8 +539,8 @@ where
 
                 let mut buffer = Vec::new();
 
-                let empty_trace = Tr::new(_info, logger);
-                let (reader_local, mut writer) = TraceAgent::new(empty_trace);
+                let empty_trace = Tr::new(_info.clone(), logger.clone());
+                let (reader_local, mut writer) = TraceAgent::new(empty_trace, _info, logger);
                 *reader = Some(reader_local);
 
                 // Initialize to the minimal input frontier.

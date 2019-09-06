@@ -27,6 +27,8 @@ pub enum DifferentialEvent {
     Drop(DropEvent),
     /// A merge failed to complete in time.
     MergeShortfall(MergeShortfall),
+    /// Trace sharing event.
+    TraceShare(TraceShare),
 }
 
 /// Either the start or end of a merge event.
@@ -81,3 +83,16 @@ pub struct MergeShortfall {
 }
 
 impl From<MergeShortfall> for DifferentialEvent { fn from(e: MergeShortfall) -> Self { DifferentialEvent::MergeShortfall(e) } }
+
+
+
+/// Either the start or end of a merge event.
+#[derive(Debug, Clone, Abomonation, Ord, PartialOrd, Eq, PartialEq)]
+pub struct TraceShare {
+    /// Operator identifier.
+    pub operator: usize,
+    /// Change in number of shares.
+    pub diff: isize,
+}
+
+impl From<TraceShare> for DifferentialEvent { fn from(e: TraceShare) -> Self { DifferentialEvent::TraceShare(e) } }
