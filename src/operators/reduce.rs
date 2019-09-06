@@ -354,11 +354,10 @@ where
                     register.get::<::logging::DifferentialEvent>("differential/arrange")
                 };
 
-                let empty = T2::new(operator_info, logger);
+                let empty = T2::new(operator_info.clone(), logger.clone());
                 let mut source_trace = self.trace.clone();
 
-
-                let (mut output_reader, mut output_writer) = TraceAgent::new(empty);
+                let (mut output_reader, mut output_writer) = TraceAgent::new(empty, operator_info, logger);
 
                 // let mut output_trace = TraceRc::make_from(agent).0;
                 *result_trace = Some(output_reader.clone());
