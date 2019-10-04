@@ -74,7 +74,7 @@ where
         let mut trace = self.trace.clone();
         let mut buffer = Vec::new();
 
-        self.stream.unary(Pipeline, "CountTotal", move |_,_| move |input, output| {
+        self.stream.unary_frontier(Pipeline, "CountTotal", move |_,_| move |input, output| {
 
             // tracks the upper limit of known-complete timestamps.
             let mut upper_limit = timely::progress::frontier::Antichain::from_elem(<G::Timestamp>::minimum());
