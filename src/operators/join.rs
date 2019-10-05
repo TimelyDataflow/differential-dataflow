@@ -322,8 +322,9 @@ impl<G, T1> JoinCore<G, T1::Key, T1::Val, T1::R> for Arranged<G,T1>
         let mut trace2 = Some(other.trace.clone());
 
         // acknowledged frontier for each input.
-        let mut acknowledged1: Option<timely::progress::frontier::Antichain<G::Timestamp>> = None;
-        let mut acknowledged2: Option<timely::progress::frontier::Antichain<G::Timestamp>> = None;
+        use timely::progress::frontier::Antichain;
+        let mut acknowledged1: Option<Antichain<G::Timestamp>> = None;
+        let mut acknowledged2: Option<Antichain<G::Timestamp>> = None;
 
         // deferred work of batches from each input.
         let mut todo1 = Vec::new();
@@ -428,6 +429,10 @@ impl<G, T1> JoinCore<G, T1::Key, T1::Val, T1::R> for Arranged<G,T1>
                 if trace2.is_some() && input1.frontier().is_empty() { trace2 = None; }
                 if let Some(ref mut trace2) = trace2 {
                     trace2.advance_by(&input1.frontier().frontier()[..]);
+                    // At this point, if we haven't seen any input batches we should establish a frontier anyhow.
+                    if acknowledged2.is_none() {
+                        acknowledged2 = Some(Antichain::from_elem(<G::Timestamp>::minimum()));
+                    }
                     if let Some(acknowledged2) = &mut acknowledged2 {
                         trace2.advance_upper(acknowledged2);
                         trace2.distinguish_since(acknowledged2.elements());
@@ -438,6 +443,10 @@ impl<G, T1> JoinCore<G, T1::Key, T1::Val, T1::R> for Arranged<G,T1>
                 if trace1.is_some() && input2.frontier().is_empty() { trace1 = None; }
                 if let Some(ref mut trace1) = trace1 {
                     trace1.advance_by(&input2.frontier().frontier()[..]);
+                    // At this point, if we haven't seen any input batches we should establish a frontier anyhow.
+                    if acknowledged1.is_none() {
+                        acknowledged1 = Some(Antichain::from_elem(<G::Timestamp>::minimum()));
+                    }
                     if let Some(acknowledged1) = &mut acknowledged1 {
                         trace1.advance_upper(acknowledged1);
                         trace1.distinguish_since(acknowledged1.elements());
