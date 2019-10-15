@@ -551,6 +551,12 @@ where
                                 }
                             }
 
+                            // We start sealing output batches from the lower limit (previous upper limit).
+                            // In principle, we could update `lower_limit` itself, and it should arrive at
+                            // `upper_limit` by the end of the process.
+                            output_lower.clear();
+                            output_lower.extend(lower_limit.elements().iter().cloned());
+
                             // build and ship each batch (because only one capability per message).
                             for (index, builder) in builders.drain(..).enumerate() {
 
