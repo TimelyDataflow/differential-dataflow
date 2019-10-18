@@ -5,7 +5,7 @@ authors = ["Frank McSherry <fmcsherry@me.com>"]
 
 [dependencies]
 abomonation = "0.7"
-abomonation_derive = "0.4"
+abomonation_derive = "0.5"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow" }
 timely_sort="0.1.6"
 differential-dataflow = { path = "../" }
