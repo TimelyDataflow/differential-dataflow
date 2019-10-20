@@ -3,6 +3,78 @@
 //! The `Spine` is a general-purpose trace implementation based on collection and merging
 //! immutable batches of updates. It is generic with respect to the batch type, and can be
 //! instantiated for any implementor of `trace::Batch`.
+//!
+//! ## Design
+//!
+//! This spine is represented as a list of layers, where each element in the list is either
+//!
+//!   1. MergeState::Vacant  empty
+//!   2. MergeState::Single  a single batch
+//!   3. MergeState::Double  a pair of batches
+//!
+//! Each "batch" has the option to be `None`, indicating a non-batch that nonetheless acts
+//! as a number of updates proportionate to the level at which it exists (for bookkeeping).
+//!
+//! Each of the batches at layer i contains at most 2^i elements. The sequence of batches
+//! should have the upper bound of one match the lower bound of the next. Batches may be
+//! logically empty, with matching upper and lower bounds, as a bookkeeping mechanism.
+//!
+//! Each batch at layer i is treated as if it contains exactly 2^i elements, even though it
+//! may actually contain fewer elements. This allows us to decouple the physical representation
+//! from logical amounts of effort invested in each batch. It allows us to begin compaction and
+//! to reduce the number of updates, without compromising our ability to continue to move
+//! updates along the spine. We are explicitly making the trade-off that while some batches
+//! might compact at lower levels, we want to treat them as if they contained their full set of
+//! updates for accounting reasons (to apply work to higher levels).
+//!
+//! We attempt to maintain the invariant that no two adjacent levels have pairs of batches.
+//! This invariant exists to make sure we have the breathing room to initiate but not
+//! immediately complete merges.
+//!
+//! ## Mathematics
+//!
+//! When a merge is initiated, there should be a non-negative *deficit* of updates before the layers
+//! below could plausibly produce a new batch for the currently merging layer. We must determine a
+//! factor of proportionality, so that newly arrived updates provide at least that amount of "fuel"
+//! towards the merging layer.
+//!
+//! ### Deficit:
+//!
+//! A new merge is initiated only in response to the completion of a prior merge, and when a prior
+//! merge completes it vacates its entire level. Assuming we have maintaned the invariant that no
+//! adjacent levels house pairs of batches, then we can bound the total number of updates at levels
+//! below that of the completed merge (let's call it "k"):
+//!
+//! As just a moment ago there were two batches at layer k, there can be at most one batch at layer
+//! k-1, then two at layer k-2, and so on alternating. The number of updates is therefore bounded by
+//!
+//!         2^k-1 + 2*2^k-2 + 2^k-3 + 2*2^k-4 + ...
+//!       = \---  2^k  ---/ + \--- 2^k-2 ---/ + ...
+//!      <= 2^k+1 - 2^k-1 - 2^k-3 - ...
+//!
+//! The last inequality reveals that there *should* be a deficit of at least 2^k-1 plus a bit more.
+//!
+//! Generally, we can track the sum of the number of apparent records up through each layer, from
+//! which we can determine this deficit. We want to ensure a relationship between the deficit and
+//! the remaining amount of work to perform to complete a merge, at each layer of the trace.
+//!
+//! ### Fueling
+//!
+//! We have at most 2^k+1 computation to perform to complete a merge at level k+1, and a lower bound
+//! of 2^k-1 on the number of updates we will accept before the merge *must* be completed. If each
+//! inserted update applies four units of fuel to each in-progress merge, we should be good to go.
+//! Perhaps importantly, the fuel should be applied before the updates are inserted, just to make
+//! sure there is room.
+//!
+//! ### Fuel sharing
+//!
+//! We like the idea of applying fuel preferentially to merges at *lower* levels, under the idea that
+//! they are easier to complete, and we benefit from fewer total merges in progress. This does delay
+//! the completion of merges at higher levels, and may not obviously be a total win. If we choose to
+//! do this, we should make sure that we correctly account for completed merges at low layers: they
+//! should still extract fuel from new updates even though they have completed, at least until they
+//! have paid back any "debt" to higher layers by continuing to provide fuel as updates arrive.
+
 
 use std::fmt::Debug;
 
@@ -264,7 +336,7 @@ where
 
     /// Describes the merge progress of layers in the trace.
     ///
-    /// Intended for diagnostics rather that public consumption.
+    /// Intended for diagnostics rather than public consumption.
     fn describe(&self) -> Vec<(usize, usize)> {
         self.merging
             .iter()
@@ -338,71 +410,6 @@ where
     /// empty batches at non-trivial indices, to move merges along.
     pub fn introduce_batch(&mut self, batch: Option<B>, batch_index: usize) {
 
-        // This spine is represented as a list of layers, where each element in the list is either
-        //
-        //   1. MergeState::Vacant  empty
-        //   2. MergeState::Single  a single batch
-        //   3. MergeState::Double  a pair of batches
-        //
-        // Each "batch" has the option to be `None`, indicating a non-batch that nonetheless acts
-        // as a number of updates proportionate to the level at which it exists (for bookkeeping).
-        //
-        // Each of the batches at layer i contains at most 2^i elements. The sequence of batches
-        // should have the upper bound of one match the lower bound of the next. Batches may be
-        // logically empty, with matching upper and lower bounds, as a bookkeeping mechanism.
-        //
-        // Each batch at layer i is treated as if it contains exactly 2^i elements, even though it
-        // may actually contain fewer elements. This allows us to decouple the physical representation
-        // from logical amounts of effort invested in each batch. It allows us to begin compaction and
-        // to reduce the number of updates, without compromising our ability to continue to move
-        // updates along the spine. We are explicitly making the trade-off that while some batches
-        // might compact at lower levels, we want to treat them as if they contained their full set of
-        // updates for accounting reasons (to apply work to higher levels).
-        //
-        // We attempt to maintain the invariant that no two adjacent levels have pairs of batches.
-        // This invariant exists to make sure we have the breathing room to initiate but not
-        // immediately complete merges.
-        //
-        // ## Mathematics
-        //
-        // When a merge is initiated, there should be a non-negative *deficit* of updates before the layers
-        // below could plausibly produce a new batch for the currently merging layer. We must determine a
-        // factor of proportionality, so that newly arrived updates provide at least that amount of "fuel"
-        // towards the merging layer.
-        //
-        // ### Deficit:
-        //
-        // A new merge is initiated only in response to the completion of a prior merge, and when a prior
-        // merge completes it vacates its entire level. Assuming we have maintaned the invariant that no
-        // adjacent levels house pairs of batches, then we can bound the total number of updates at levels
-        // below that of the completed merge (let's call it "k"):
-        //
-        // As just a moment ago there were two batches at layer k, there can be at most one batch at layer
-        // k-1, then two at layer k-2, and so on alternating. The number of updates is therefore bounded by
-        //
-        //         2^k-1 + 2*2^k-2 + 2^k-3 + 2*2^k-4 + ...
-        //       = \---  2^k  ---/ + \--- 2^k-2 ---/ + ...
-        //      <= 2^k+1 - 2^k-1 - 2^k-3 - ...
-        //
-        // The last inequality reveals that there *should* be a deficit of at least 2^k-1 plus a bit more.
-        //
-        // ### Fueling
-        //
-        // We have at most 2^k+1 computation to perform to complete a merge at level k+1, and a lower bound
-        // of 2^k-1 on the number of updates we will accept before the merge *must* be completed. If each
-        // inserted update applies four units of fuel to each in-progress merge, we should be good to go.
-        // Perhaps importantly, the fuel should be applied before the updates are inserted, just to make
-        // sure there is room.
-        //
-        // ### Fuel sharing
-        //
-        // We like the idea of applying fuel preferentially to merges at *lower* levels, under the idea that
-        // they are easier to complete, and we benefit from fewer total merges in progress. This does delay
-        // the completion of merges at higher levels, and may not obviously be a total win. If we choose to
-        // do this, we should make sure that we correctly account for completed merges at low layers: they
-        // should still extract fuel from new updates even though they have completed, at least until they
-        // have paid back any "debt" to higher layers by continuing to provide fuel as updates arrive.
-
         // Step 0.  Determine an amount of fuel to use for the computation.
         //
         //          Fuel is used to drive maintenance of the data structure,
@@ -430,6 +437,7 @@ where
         //     if let MergeState::Double(MergeVariant::InProgress(_,_,_,_)) = b { 1 } else { 0 }
         // ).sum();
         // fuel *= merges;
+        // fuel *= self.merging.len();
         // Convert to an `isize` so we can observe shortfall.
         let mut fuel = fuel as isize;
 
@@ -441,21 +449,27 @@ where
         //          the updates.
         self.apply_fuel(&mut fuel);
 
-        // Step 2.  Before installing the batch we must ensure the invariant
-        //          that no adjacent layers contain two batches. We can make
-        //          this happen by forcibly completing all merges at layers
-        //          lower than `batch_index`
+        // Step 2.  We must ensure the invariant that adjacent layers do not
+        //          contain two batches will be satisfied when we insert the
+        //          batch. We forcibly completing all merges at layers lower
+        //          than and including `batch_index`, so that the new batch
+        //          is inserted into an empty layer.
         //
-        //          This can be interpreted as the introduction of some
+        //          We could relax this to "strictly less than `batch_index`"
+        //          if the layer above has only a single batch in it, which
+        //          seems not implausible if it has been the focus of effort.
+        //
+        //          This should be interpreted as the introduction of some
         //          volume of fake updates, and we will need to fuel merges
         //          by a proportional amount to ensure that they are not
-        //          surprised later on. These fake updates should have total
-        //          size proportional to the batch size itself.
+        //          surprised later on. The number of fake updates should
+        //          correspond to the deficit for the layer, which perhaps
+        //          we should track explicitly.
         self.roll_up(batch_index);
 
         // Step 3. This insertion should be into an empty layer. It is a
         //         logical error otherwise, as we may be violating our
-        //         invariant, from which all derives.
+        //         invariant, from which all wonderment derives.
         self.insert_at(batch, batch_index);
 
         // Step 4. Tidy the largest layers.
