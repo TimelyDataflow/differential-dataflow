@@ -22,7 +22,7 @@ pub trait ThresholdTotal<G: Scope, K: ExchangeData, R: ExchangeData+Semigroup> w
     fn threshold_semigroup<R2, F>(&self, thresh: F) -> Collection<G, K, R2>
     where
         R2: Semigroup,
-        F: Fn(&K,&R,Option<&R>)->Option<R2>+'static,
+        F: FnMut(&K,&R,Option<&R>)->Option<R2>+'static,
         ;
     /// Reduces the collection to one occurrence of each distinct element.
     ///
@@ -44,7 +44,7 @@ pub trait ThresholdTotal<G: Scope, K: ExchangeData, R: ExchangeData+Semigroup> w
     ///     });
     /// }
     /// ```
-    fn threshold_total<R2: Abelian, F: Fn(&K,&R)->R2+'static>(&self, thresh: F) -> Collection<G, K, R2> {
+    fn threshold_total<R2: Abelian, F: FnMut(&K,&R)->R2+'static>(&self, mut thresh: F) -> Collection<G, K, R2> {
         self.threshold_semigroup(move |key, new, old| {
             let mut new = thresh(key, new);
             if let Some(old) = old { new += &-thresh(key, old); }
@@ -92,7 +92,11 @@ pub trait ThresholdTotal<G: Scope, K: ExchangeData, R: ExchangeData+Semigroup> w
 
 impl<G: Scope, K: ExchangeData+Hashable, R: ExchangeData+Semigroup> ThresholdTotal<G, K, R> for Collection<G, K, R>
 where G::Timestamp: TotalOrder+Lattice+Ord {
-    fn threshold_semigroup<R2: Semigroup, F: Fn(&K,&R,Option<&R>)->Option<R2>+'static>(&self, thresh: F) -> Collection<G, K, R2> {
+    fn threshold_semigroup<R2, F>(&self, thresh: F) -> Collection<G, K, R2>
+    where
+        R2: Semigroup,
+        F: FnMut(&K,&R,Option<&R>)->Option<R2>+'static,
+    {
         self.arrange_by_self()
             .threshold_semigroup(thresh)
     }
@@ -107,7 +111,11 @@ where
     T1::Batch: BatchReader<T1::Key, (), G::Timestamp, T1::R>,
     T1::Cursor: Cursor<T1::Key, (), G::Timestamp, T1::R>,
 {
-    fn threshold_semigroup<R2: Semigroup, F:Fn(&T1::Key,&T1::R,Option<&T1::R>)->Option<R2>+'static>(&self, thresh: F) -> Collection<G, T1::Key, R2> {
+    fn threshold_semigroup<R2, F>(&self, mut thresh: F) -> Collection<G, T1::Key, R2>
+    where
+        R2: Semigroup,
+        F: FnMut(&T1::Key,&T1::R,Option<&T1::R>)->Option<R2>+'static,
+    {
 
         let mut trace = self.trace.clone();
         let mut buffer = Vec::new();
@@ -118,8 +126,6 @@ where
             let mut upper_limit = timely::progress::frontier::Antichain::from_elem(<G::Timestamp>::minimum());
 
             move |input, output| {
-
-                let thresh = &thresh;
 
                 input.for_each(|capability, batches| {
                     batches.swap(&mut buffer);

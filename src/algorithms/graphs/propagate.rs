@@ -43,7 +43,7 @@ where
     R: Mul<R, Output=R>,
     R: From<i8>,
     L: ExchangeData,
-    F: Fn(&L)->u64+'static,
+    F: Fn(&L)->u64+Clone+'static,
 {
     propagate_core(&edges.arrange_by_key(), nodes, logic)
 }
@@ -68,7 +68,7 @@ where
     Tr: TraceReader<Key=N, Val=N, Time=G::Timestamp, R=R>+Clone+'static,
     Tr::Batch: crate::trace::BatchReader<N, N, G::Timestamp, Tr::R>+'static,
     Tr::Cursor: crate::trace::Cursor<N, N, G::Timestamp, Tr::R>+'static,
-    F: Fn(&L)->u64+'static,
+    F: Fn(&L)->u64+Clone+'static,
 {
     // Morally the code performs the following iterative computation. However, in the interest of a simplified
     // dataflow graph and reduced memory footprint we instead have a wordier version below. The core differences

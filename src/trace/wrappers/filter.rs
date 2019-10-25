@@ -1,7 +1,5 @@
 //! Wrapper for filtered trace.
 
-use std::rc::Rc;
-
 use timely::progress::Timestamp;
 
 use trace::{TraceReader, BatchReader, Description};
@@ -10,12 +8,13 @@ use trace::cursor::Cursor;
 /// Wrapper to provide trace to nested scope.
 pub struct TraceFilter<Tr, F> {
     trace: Tr,
-    logic: Rc<F>,
+    logic: F,
 }
 
 impl<Tr,F> Clone for TraceFilter<Tr, F>
 where
     Tr: TraceReader+Clone,
+    F: Clone,
 {
     fn clone(&self) -> Self {
         TraceFilter {
@@ -33,7 +32,7 @@ where
     Tr::Val: 'static,
     Tr::Time: Timestamp,
     Tr::R: 'static,
-    F: Fn(&Tr::Key, &Tr::Val)->bool+'static,
+    F: FnMut(&Tr::Key, &Tr::Val)->bool+Clone+'static,
 {
     type Key = Tr::Key;
     type Val = Tr::Val;
@@ -66,7 +65,7 @@ where
     Tr::Time: Timestamp,
 {
     /// Makes a new trace wrapper
-    pub fn make_from(trace: Tr, logic: Rc<F>) -> Self {
+    pub fn make_from(trace: Tr, logic: F) -> Self {
         TraceFilter {
             trace,
             logic,
@@ -79,10 +78,10 @@ where
 pub struct BatchFilter<K, V, T, R, B, F> {
     phantom: ::std::marker::PhantomData<(K, V, T, R)>,
     batch: B,
-    logic: Rc<F>,
+    logic: F,
 }
 
-impl<K, V, T, R, B: Clone, F> Clone for BatchFilter<K, V, T, R, B, F> {
+impl<K, V, T, R, B: Clone, F: Clone> Clone for BatchFilter<K, V, T, R, B, F> {
     fn clone(&self) -> Self {
         BatchFilter {
             phantom: ::std::marker::PhantomData,
@@ -96,7 +95,7 @@ impl<K, V, T, R, B, F> BatchReader<K, V, T, R> for BatchFilter<K, V, T, R, B, F>
 where
     B: BatchReader<K, V, T, R>,
     T: Timestamp,
-    F: Fn(&K, &V)->bool+'static
+    F: FnMut(&K, &V)->bool+Clone+'static
 {
     type Cursor = BatchCursorFilter<K, V, T, R, B, F>;
 
@@ -113,7 +112,7 @@ where
     T: Timestamp,
 {
     /// Makes a new batch wrapper
-    pub fn make_from(batch: B, logic: Rc<F>) -> Self {
+    pub fn make_from(batch: B, logic: F) -> Self {
         BatchFilter {
             phantom: ::std::marker::PhantomData,
             batch,
@@ -126,11 +125,11 @@ where
 pub struct CursorFilter<K, V, T, R, C: Cursor<K, V, T, R>, F> {
     phantom: ::std::marker::PhantomData<(K, V, T, R)>,
     cursor: C,
-    logic: Rc<F>,
+    logic: F,
 }
 
 impl<K, V, T, R, C: Cursor<K, V, T, R>, F> CursorFilter<K, V, T, R, C, F> {
-    fn new(cursor: C, logic: Rc<F>) -> Self {
+    fn new(cursor: C, logic: F) -> Self {
         CursorFilter {
             phantom: ::std::marker::PhantomData,
             cursor,
@@ -143,7 +142,7 @@ impl<K, V, T, R, C, F> Cursor<K, V, T, R> for CursorFilter<K, V, T, R, C, F>
 where
     C: Cursor<K, V, T, R>,
     T: Timestamp,
-    F: Fn(&K, &V)->bool+'static
+    F: FnMut(&K, &V)->bool+'static
 {
     type Storage = C::Storage;
 
@@ -178,11 +177,11 @@ where
 pub struct BatchCursorFilter<K, V, T, R, B: BatchReader<K, V, T, R>, F> {
     phantom: ::std::marker::PhantomData<(K, V, R)>,
     cursor: B::Cursor,
-    logic: Rc<F>,
+    logic: F,
 }
 
 impl<K, V, T, R, B: BatchReader<K, V, T, R>, F> BatchCursorFilter<K, V, T, R, B, F> {
-    fn new(cursor: B::Cursor, logic: Rc<F>) -> Self {
+    fn new(cursor: B::Cursor, logic: F) -> Self {
         BatchCursorFilter {
             phantom: ::std::marker::PhantomData,
             cursor,
@@ -194,7 +193,7 @@ impl<K, V, T, R, B: BatchReader<K, V, T, R>, F> BatchCursorFilter<K, V, T, R, B,
 impl<K, V, T, R, B: BatchReader<K, V, T, R>, F> Cursor<K, V, T, R> for BatchCursorFilter<K, V, T, R, B, F>
 where
     T: Timestamp,
-    F: Fn(&K, &V)->bool+'static,
+    F: FnMut(&K, &V)->bool+'static,
 {
     type Storage = BatchFilter<K, V, T, R, B, F>;
 
