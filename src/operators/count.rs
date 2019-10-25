@@ -68,7 +68,6 @@ where
     T1::Batch: BatchReader<T1::Key, (), G::Timestamp, T1::R>,
     T1::Cursor: Cursor<T1::Key, (), G::Timestamp, T1::R>,
 {
-
     fn count_total(&self) -> Collection<G, (T1::Key, T1::R), isize> {
 
         let mut trace = self.trace.clone();

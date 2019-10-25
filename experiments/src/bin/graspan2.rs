@@ -146,13 +146,13 @@ fn unoptimized() {
             }
         }
 
-        if index == 0 { println!("{:?}:\tData loaded", timer.elapsed()); }
+        if index == 0 { println!("{:?}:\tData loaded", timer.elapsed().as_nanos()); }
 
         a.close();
         d.close();
         while worker.step() { }
 
-        if index == 0 { println!("{:?}:\tComputation complete", timer.elapsed()); }
+        if index == 0 { println!("{:?}:\tComputation complete", timer.elapsed().as_nanos()); }
     }).unwrap();
 }
 
@@ -270,13 +270,13 @@ fn optimized() {
             }
         }
 
-        if index == 0 { println!("{:?}:\tData loaded", timer.elapsed()); }
+        if index == 0 { println!("{:?}:\tData loaded", timer.elapsed().as_nanos()); }
 
         a.close();
         d.close();
         while worker.step() { }
 
-        if index == 0 { println!("{:?}:\tComputation complete", timer.elapsed()); }
+        if index == 0 { println!("{:?}:\tComputation complete", timer.elapsed().as_nanos()); }
 
     }).unwrap();
 }
