@@ -545,7 +545,8 @@ where
                     (Some(self.scope().activator_for(&info.address[..])), Some(effort))
                 }
                 else {
-                    (None, Some(1_000))
+                    // (None, Some(1_000))
+                    (None, None)
                 };
 
                 let empty_trace = Tr::new(info, logger, activator);

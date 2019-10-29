@@ -27,44 +27,37 @@
 //! might compact at lower levels, we want to treat them as if they contained their full set of
 //! updates for accounting reasons (to apply work to higher levels).
 //!
-//! We attempt to maintain the invariant that no two adjacent levels have pairs of batches.
-//! This invariant exists to make sure we have the breathing room to initiate but not
-//! immediately complete merges.
+//! We maintain the invariant that for any in-progress merge at level k there should be fewer
+//! than 2^k records at levels lower than k. That is, even if we were to apply an unbounded
+//! amount of effort to those records, we would not have enough records to prompt a merge into
+//! the in-progress merge. Ideally, we maintain the extended invariant that for any in-progress
+//! merge at level k, the remaining effort required (number of records minus applied effort) is
+//! less than the number of records that would need to be added to reach 2^k records in layers
+//! below.
 //!
 //! ## Mathematics
 //!
 //! When a merge is initiated, there should be a non-negative *deficit* of updates before the layers
 //! below could plausibly produce a new batch for the currently merging layer. We must determine a
 //! factor of proportionality, so that newly arrived updates provide at least that amount of "fuel"
-//! towards the merging layer.
+//! towards the merging layer, so that the merge completes before lower levels invade.
 //!
 //! ### Deficit:
 //!
-//! A new merge is initiated only in response to the completion of a prior merge, and when a prior
-//! merge completes it vacates its entire level. Assuming we have maintaned the invariant that no
-//! adjacent levels house pairs of batches, then we can bound the total number of updates at levels
-//! below that of the completed merge (let's call it "k"):
+//! A new merge is initiated only in response to the completion of a prior merge, or the introduction
+//! of new records from outside. The latter case is special, and will maintain our invariant trivially,
+//! so we will focus on the former case.
 //!
-//! As just a moment ago there were two batches at layer k, there can be at most one batch at layer
-//! k-1, then two at layer k-2, and so on alternating. The number of updates is therefore bounded by
+//! When a merge at level k completes, assuming we have maintained our invariant then there should be
+//! fewer than 2^k records at lower levels. The newly created merge at level k+1 will require up to
+//! 2^k+2 units of work, and should not expect a new batch until strictly more than 2^k records are
+//! added. This means that a factor of proportionality of four should be sufficient to ensure that
+//! the merge completes before a new merge is initiated.
 //!
-//!         2^k-1 + 2*2^k-2 + 2^k-3 + 2*2^k-4 + ...
-//!       = \---  2^k  ---/ + \--- 2^k-2 ---/ + ...
-//!      <= 2^k+1 - 2^k-1 - 2^k-3 - ...
-//!
-//! The last inequality reveals that there *should* be a deficit of at least 2^k-1 plus a bit more.
-//!
-//! Generally, we can track the sum of the number of apparent records up through each layer, from
-//! which we can determine this deficit. We want to ensure a relationship between the deficit and
-//! the remaining amount of work to perform to complete a merge, at each layer of the trace.
-//!
-//! ### Fueling
-//!
-//! We have at most 2^k+1 computation to perform to complete a merge at level k+1, and a lower bound
-//! of 2^k-1 on the number of updates we will accept before the merge *must* be completed. If each
-//! inserted update applies four units of fuel to each in-progress merge, we should be good to go.
-//! Perhaps importantly, the fuel should be applied before the updates are inserted, just to make
-//! sure there is room.
+//! When new records get introduced, we will need to roll up any batches at lower levels, which we
+//! treat as the introduction of records. Each of these virtual records introduced should either be
+//! accounted for the fuel it should contribute, as it results in the promotion of batches closer to
+//! in-progress merges.
 //!
 //! ### Fuel sharing
 //!
@@ -251,7 +244,7 @@ where
         logging: Option<::logging::Logger>,
         activator: Option<timely::scheduling::activate::Activator>,
     ) -> Self {
-        Self::with_effort(4, info, logging, activator)
+        Self::with_effort(1, info, logging, activator)
     }
 
     /// Apply some amount of effort to trace maintenance.
@@ -431,14 +424,18 @@ where
         // progress receives fuel for each introduced batch, and so multiply
         // by that as well.
         if batch_index > 32 { println!("Large batch index: {}", batch_index); }
-        let mut fuel = 4 << batch_index;
+
+        // We believe that eight units of fuel is sufficient for each introduced
+        // record, accounted as four for each record, and a potential four more
+        // for each virtual record associated with promoting existing smaller
+        // batches. We could try and make this be less, or be scaled to merges
+        // based on their deficit at time of instantiation. For now, we remain
+        // conservative.
+        let mut fuel = 8 << batch_index;
+        // Scale up by the effort parameter, which is calibrated to one as the
+        // minimum amount of effort.
         fuel *= self.effort;
-        // let merges: usize = self.merging.iter().map(|b|
-        //     if let MergeState::Double(MergeVariant::InProgress(_,_,_,_)) = b { 1 } else { 0 }
-        // ).sum();
-        // fuel *= merges;
-        fuel *= self.merging.len();
-        // Convert to an `isize` so we can observe shortfall.
+        // Convert to an `isize` so we can observe any fuel shortfall.
         let mut fuel = fuel as isize;
 
         // Step 1.  Apply fuel to each in-progress merge.
@@ -482,12 +479,11 @@ where
 
     /// Ensures that an insertion at layer `index` will succeed.
     ///
-    /// This method is used to prepare for the insertion of a single batch
-    /// at `index`, which should maintain the invariant that no adjacent
-    /// layers both contain `MergeState::Double` variants. All layers with
-    /// smaller index are merged in to layer `index`, which may then need
-    /// to be merged in to layer `index + 1` if it contains two batches, as
-    /// an insertion at layer `index` would then fail.
+    /// This method needs to ensure the invariant that any in-progress merge
+    /// is at most half way to being presented with another batch of the size
+    /// the layer. It is also subject to the constraint that all prior batches
+    /// should occur at higher levels, which requires it to "roll up" batches
+    /// present at lower levels before the method is called.
     fn roll_up(&mut self, index: usize) {
 
         // Ensure entries sufficient for `index`.
@@ -500,7 +496,7 @@ where
 
             // Collect and merge all batches at layers up to but not including `index`.
             let merge =
-            self.merging[.. index + 1]
+            self.merging[.. index]
                 .iter_mut()
                 .flat_map(|level| level.complete())
                 .fold(None, |merge, level| MergeState::begin_merge(Some(level), merge, None).complete());
@@ -508,14 +504,24 @@ where
             // These collected batches could belong at either layer `index` or `index + 1`
             // depending on their magnitude.
 
-            // We now have two batches intended for layer `index`, which should be merged
-            // and then inserted at
+            // We have fueled the merges as if we were introducing a batch at level `index + 1`,
+            // by doubling the allocation to account for virtual records. As a consequence, we
+            // should be able to place the merged batch at either `index` or `index + 1` as
+            // appropriate, and then place the batch at `index`.
+            //
+            // A natural way to do this is to merge up to (but not including) `index`, and then
+            // insert the result at `index`. If the result is a Single we walk away, and if it
+            // is a Double we complete the merge and promote it to the next level. This likely
+            // is determined by whether `index` was initially empty or not, and it may actually
+            // be very important to do this correctly, for correct accounting of virtual records.
+            // Specifically, if we promote something up to level `index + 1` that could be twice
+            // as many virtual records as we actually have access to.
+            self.insert_at(merge, index);
 
-
-            // We have collected all batches at levels less or equal to index, which represents
-            // 2^{index+1} updates. It now belongs at level index+1, which we hope has resolved
-            // any merging through the prior application of fuel.
-            self.insert_at(merge, index + 1);
+            if self.merging[index].is_double() {
+                let merged = self.merging[index].complete();
+                self.insert_at(merged, index + 1);
+            }
         }
     }
 
@@ -538,8 +544,8 @@ where
         // as a new batch; we do not need to carefully pace the cascade in order to
         // avoid the possibility of imposing on incomplete merges in higher layers.
         for index in 0 .. self.merging.len() {
-            // let mut fuel = *fuel;
-            self.merging[index].work(fuel);
+            let mut fuel = *fuel;
+            self.merging[index].work(&mut fuel);
             if self.merging[index].is_complete() {
                 let complete = self.merging[index].complete();
                 self.insert_at(complete, index+1);
@@ -550,7 +556,7 @@ where
     /// Inserts a batch at a specific location.
     ///
     /// This is a non-public internal method that can panic if we try and insert into a
-    /// layer which already contains two batches (and is in the process of merging).
+    /// layer which already contains two batches (and is still in the process of merging).
     fn insert_at(&mut self, batch: Option<B>, index: usize) {
         while self.merging.len() <= index {
             self.merging.push(MergeState::Vacant);
@@ -721,7 +727,7 @@ impl<K, V, T: Eq, R, B: Batch<K, V, T, R>> MergeState<K, V, T, R, B> {
                 let zeros1 = batch1.len().next_power_of_two().leading_zeros() as isize;
                 let zeros2 = batch2.len().next_power_of_two().leading_zeros() as isize;
                 if zeros1 != zeros2 {
-                    println!("{:?}\t{:?}\t{:?}", (zeros1 - zeros2), batch1.len(), batch2.len());
+                    // println!("{:?}\t{:?}\t{:?}", (zeros1 - zeros2), batch1.len(), batch2.len());
                 }
                 MergeVariant::InProgress(batch1, batch2, frontier, begin_merge)
             }
