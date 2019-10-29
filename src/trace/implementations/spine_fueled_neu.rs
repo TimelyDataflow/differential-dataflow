@@ -437,7 +437,7 @@ where
         //     if let MergeState::Double(MergeVariant::InProgress(_,_,_,_)) = b { 1 } else { 0 }
         // ).sum();
         // fuel *= merges;
-        // fuel *= self.merging.len();
+        fuel *= self.merging.len();
         // Convert to an `isize` so we can observe shortfall.
         let mut fuel = fuel as isize;
 
@@ -480,28 +480,43 @@ where
         self.tidy_layers();
     }
 
-    /// Ensures that layers up through and including `index` are empty.
+    /// Ensures that an insertion at layer `index` will succeed.
     ///
     /// This method is used to prepare for the insertion of a single batch
     /// at `index`, which should maintain the invariant that no adjacent
-    /// layers both contain `MergeState::Double` variants.
+    /// layers both contain `MergeState::Double` variants. All layers with
+    /// smaller index are merged in to layer `index`, which may then need
+    /// to be merged in to layer `index + 1` if it contains two batches, as
+    /// an insertion at layer `index` would then fail.
     fn roll_up(&mut self, index: usize) {
 
+        // Ensure entries sufficient for `index`.
         while self.merging.len() <= index {
             self.merging.push(MergeState::Vacant);
         }
 
-        //  Merges should skip over vacant and structurally empty batches.
-        let merge =
-        self.merging[.. index+1]
-            .iter_mut()
-            .flat_map(|level| level.complete())
-            .fold(None, |merge, level| MergeState::begin_merge(Some(level), merge, None).complete());
+        // If all batches below the point of insertion are vacant, we can skip this.
+        if self.merging[.. index].iter().any(|m| !m.is_vacant()) {
 
-        // We have collected all batches at levels less or equal to index, which represents
-        // 2^{index+1} updates. It now belongs at level index+1, which we hope has resolved
-        // any merging through the prior application of fuel.
-        self.insert_at(merge, index + 1);
+            // Collect and merge all batches at layers up to but not including `index`.
+            let merge =
+            self.merging[.. index + 1]
+                .iter_mut()
+                .flat_map(|level| level.complete())
+                .fold(None, |merge, level| MergeState::begin_merge(Some(level), merge, None).complete());
+
+            // These collected batches could belong at either layer `index` or `index + 1`
+            // depending on their magnitude.
+
+            // We now have two batches intended for layer `index`, which should be merged
+            // and then inserted at
+
+
+            // We have collected all batches at levels less or equal to index, which represents
+            // 2^{index+1} updates. It now belongs at level index+1, which we hope has resolved
+            // any merging through the prior application of fuel.
+            self.insert_at(merge, index + 1);
+        }
     }
 
     /// Applies an amount of fuel to merges in progress.
@@ -516,9 +531,15 @@ where
         // This is an interesting idea, but we don't have accounting in place yet.
         // Specifically, we need completed merges at lower layers to "pay back" any
         // debt they may have taken on by borrowing against the fuel of higher layers.
+        //
+        // We immediately promote completed merges to the next level, and apply fuel
+        // to any merge that might result. This is safe under the invariant that all
+        // merges complete before we have enough records to introduce to their layer
+        // as a new batch; we do not need to carefully pace the cascade in order to
+        // avoid the possibility of imposing on incomplete merges in higher layers.
         for index in 0 .. self.merging.len() {
-            let mut fuel = *fuel;
-            self.merging[index].work(&mut fuel);
+            // let mut fuel = *fuel;
+            self.merging[index].work(fuel);
             if self.merging[index].is_complete() {
                 let complete = self.merging[index].complete();
                 self.insert_at(complete, index+1);
@@ -549,7 +570,7 @@ where
 
         let mut length = self.merging.len();
         if self.merging[length-1].is_single() {
-            while (self.merging[length-1].len().next_power_of_two().trailing_zeros() as usize) < length && length > 1 && self.merging[length-2].is_vacant() {
+            while (self.merging[length-1].len().next_power_of_two().trailing_zeros() as usize) < (length-1) && length > 1 && self.merging[length-2].is_vacant() {
                 let batch = self.merging.pop().unwrap();
                 self.merging[length-2] = batch;
                 length = self.merging.len();
@@ -680,12 +701,28 @@ impl<K, V, T: Eq, R, B: Batch<K, V, T, R>> MergeState<K, V, T, R, B> {
         };
     }
 
+    /// Initiates the merge of an "old" batch with a "new" batch.
+    ///
+    /// The upper frontier of the old batch should match the lower
+    /// frontier of the new batch, with the resulting batch describing
+    /// their composed interval, from the lower frontier of the old
+    /// batch to the upper frontier of the new batch.
+    ///
+    /// Either batch may be `None` which corresponds to a structurally
+    /// empty batch whose upper and lower froniers are equal. This
+    /// option exists purely for bookkeeping purposes, and no computation
+    /// is performed to merge the two batches.
     fn begin_merge(batch1: Option<B>, batch2: Option<B>, frontier: Option<Vec<T>>) -> MergeState<K, V, T, R, B> {
         let variant =
         match (batch1, batch2) {
-            (Some(batch1),Some(batch2)) => {
+            (Some(batch1), Some(batch2)) => {
                 assert!(batch1.upper() == batch2.lower());
                 let begin_merge = <B as Batch<K, V, T, R>>::begin_merge(&batch1, &batch2);
+                let zeros1 = batch1.len().next_power_of_two().leading_zeros() as isize;
+                let zeros2 = batch2.len().next_power_of_two().leading_zeros() as isize;
+                if zeros1 != zeros2 {
+                    println!("{:?}\t{:?}\t{:?}", (zeros1 - zeros2), batch1.len(), batch2.len());
+                }
                 MergeVariant::InProgress(batch1, batch2, frontier, begin_merge)
             }
             (None, x) => MergeVariant::Complete(x),

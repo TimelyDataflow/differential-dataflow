@@ -71,7 +71,7 @@ fn main() {
 
         println!("{:?}\tdata unloaded", timer.elapsed());
 
-        while worker.step() { }
+        while worker.step_or_park(None) { }
 
     }).unwrap();
 }
