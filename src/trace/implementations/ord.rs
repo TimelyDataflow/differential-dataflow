@@ -278,7 +278,6 @@ where
                     self.lower1 += to_copy;
                 }
                 if self.lower2 < self.upper2 {
-                    // self.result.copy_range(&source2.layer, self.lower2, self.upper2); self.lower2 = self.upper2;
                     let mut to_copy = remaining_fuel as usize;
                     if to_copy < 1_000 { to_copy = 1_000; }
                     if to_copy > (self.upper2 - self.lower2) { to_copy = self.upper2 - self.lower2; }
@@ -298,7 +297,7 @@ where
         *fuel -= effort;
 
         if *fuel < -1_000_000 {
-            println!("Massive deficit OrdVal::work: {}", fuel);
+            eprintln!("Massive deficit OrdVal::work: {}", fuel);
         }
 	}
 }
@@ -603,7 +602,6 @@ where
                     self.lower1 += to_copy;
                 }
                 if self.lower2 < self.upper2 {
-                    // self.result.copy_range(&source2.layer, self.lower2, self.upper2); self.lower2 = self.upper2;
                     let mut to_copy = remaining_fuel as usize;
                     if to_copy < 1_000 { to_copy = 1_000; }
                     if to_copy > (self.upper2 - self.lower2) { to_copy = self.upper2 - self.lower2; }
@@ -623,7 +621,7 @@ where
         *fuel -= effort;
 
         if *fuel < -1_000_000 {
-            println!("Massive deficit OrdKey::work: {}", fuel);
+            eprintln!("Massive deficit OrdKey::work: {}", fuel);
         }
 	}
 }

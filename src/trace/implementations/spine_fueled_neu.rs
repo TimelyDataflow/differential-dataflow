@@ -253,20 +253,21 @@ where
     /// thought of as analogous to inserting as many empty updates,
     /// where the trace is permitted to perform proportionate work.
     fn exert(&mut self, effort: &mut isize) {
-
-        // If all merges are complete and multiple batches remain,
-        // introduce empty batches to prompt merging.
+        // If there is work to be done, ...
+        self.tidy_layers();
         if !self.reduced() {
 
-            // TODO : consider directly invoking `apply_fuel` and only introducing batches
-            // should the fuel not be fully consumed. This delays the introduction of
-            // empty batches which does a number on the balanced-ness of merging.
-
-            // Introduce an empty batch with roughly *effort number of virtual updates.
-            let level = (*effort as usize).next_power_of_two().trailing_zeros() as usize;
-            self.introduce_batch(None, level);
-
-            // We are here because we were not in reduced form.
+            // If any merges exist, we can directly call `apply_fuel`.
+            if self.merging.iter().any(|b| b.is_double()) {
+                self.apply_fuel(effort);
+            }
+            // Otherwise, we'll need to introduce fake updates to move merges along.
+            else {
+                // Introduce an empty batch with roughly *effort number of virtual updates.
+                let level = (*effort as usize).next_power_of_two().trailing_zeros() as usize;
+                self.introduce_batch(None, level);
+            }
+            // We were not in reduced form, so let's check again in the future.
             if let Some(activator) = &self.activator {
                 activator.activate();
             }
@@ -386,12 +387,12 @@ where
             let batch = self.pending.remove(0);
             let index = batch.len().next_power_of_two();
             self.introduce_batch(Some(batch), index.trailing_zeros() as usize);
+        }
 
-            // Having performed all of our work, if more than one batch remains reschedule ourself.
-            if !self.reduced() {
-                if let Some(activator) = &self.activator {
-                    activator.activate();
-                }
+        // Having performed all of our work, if more than one batch remains reschedule ourself.
+        if !self.reduced() {
+            if let Some(activator) = &self.activator {
+                activator.activate();
             }
         }
     }
@@ -479,11 +480,11 @@ where
 
     /// Ensures that an insertion at layer `index` will succeed.
     ///
-    /// This method needs to ensure the invariant that any in-progress merge
-    /// is at most half way to being presented with another batch of the size
-    /// the layer. It is also subject to the constraint that all prior batches
+    /// This method is subject to the constraint that all existing batches
     /// should occur at higher levels, which requires it to "roll up" batches
-    /// present at lower levels before the method is called.
+    /// present at lower levels before the method is called. In doing this,
+    /// we should not introduce more virtual records than 2^index, as that
+    /// is the amount of excess fuel we have budgeted for completing merges.
     fn roll_up(&mut self, index: usize) {
 
         // Ensure entries sufficient for `index`.
@@ -491,33 +492,22 @@ where
             self.merging.push(MergeState::Vacant);
         }
 
-        // If all batches below the point of insertion are vacant, we can skip this.
+        // We only need to roll up if there are non-vacant layers.
         if self.merging[.. index].iter().any(|m| !m.is_vacant()) {
 
             // Collect and merge all batches at layers up to but not including `index`.
-            let merge =
+            let merged =
             self.merging[.. index]
                 .iter_mut()
                 .flat_map(|level| level.complete())
                 .fold(None, |merge, level| MergeState::begin_merge(Some(level), merge, None).complete());
 
-            // These collected batches could belong at either layer `index` or `index + 1`
-            // depending on their magnitude.
+            // The merged results should be introduced at level `index`, which should
+            // be ready to absorb them (possibly creating a new merge at the time).
+            self.insert_at(merged, index);
 
-            // We have fueled the merges as if we were introducing a batch at level `index + 1`,
-            // by doubling the allocation to account for virtual records. As a consequence, we
-            // should be able to place the merged batch at either `index` or `index + 1` as
-            // appropriate, and then place the batch at `index`.
-            //
-            // A natural way to do this is to merge up to (but not including) `index`, and then
-            // insert the result at `index`. If the result is a Single we walk away, and if it
-            // is a Double we complete the merge and promote it to the next level. This likely
-            // is determined by whether `index` was initially empty or not, and it may actually
-            // be very important to do this correctly, for correct accounting of virtual records.
-            // Specifically, if we promote something up to level `index + 1` that could be twice
-            // as many virtual records as we actually have access to.
-            self.insert_at(merge, index);
-
+            // If the insertion results in a merge, we should complete it to ensure
+            // the upcoming insertion at `index` does not panic.
             if self.merging[index].is_double() {
                 let merged = self.merging[index].complete();
                 self.insert_at(merged, index + 1);
@@ -527,25 +517,30 @@ where
 
     /// Applies an amount of fuel to merges in progress.
     ///
-    /// The intended invariants maintain that each merge in progress completes before
-    /// there are enough records in lower levels to fully populate one batch at its
-    /// layer. This invariant ensures that we can always apply an unbounded amount of
-    /// fuel and not encounter merges in to merging layers (the "safety" does not result
-    /// from insufficient fuel applied to lower levels).
+    /// The supplied `fuel` is for each in progress merge, and if we want to spend
+    /// the fuel non-uniformly (e.g. prioritizing merges at low layers) we could do
+    /// so in order to maintain fewer batches on average (at the risk of completing
+    /// merges of large batches later, but tbh probably not much later).
     pub fn apply_fuel(&mut self, fuel: &mut isize) {
-        // Apply fuel to each merge; do not share across layers at the moment.
-        // This is an interesting idea, but we don't have accounting in place yet.
-        // Specifically, we need completed merges at lower layers to "pay back" any
-        // debt they may have taken on by borrowing against the fuel of higher layers.
-        //
-        // We immediately promote completed merges to the next level, and apply fuel
-        // to any merge that might result. This is safe under the invariant that all
-        // merges complete before we have enough records to introduce to their layer
-        // as a new batch; we do not need to carefully pace the cascade in order to
-        // avoid the possibility of imposing on incomplete merges in higher layers.
+        // For the moment our strategy is to apply fuel independently to each merge
+        // in progress, rather than prioritizing small merges. This sounds like a
+        // great idea, but we need better accounting in place to ensure that merges
+        // that borrow against later layers but then complete still "acquire" fuel
+        // to pay back their debts.
         for index in 0 .. self.merging.len() {
+            // Give each level independent fuel, for now.
             let mut fuel = *fuel;
             self.merging[index].work(&mut fuel);
+            // `fuel` could have a deficit at this point, meaning we over-spent when
+            // we took a merge step. We could ignore this, or maintain the deficit
+            // and account future fuel against it before spending again. It isn't
+            // clear why that would be especially helpful to do; we might want to
+            // avoid overspends at multiple layers in the same invocation (to limit
+            // latencies), but there is probably a rich policy space here.
+
+            // If a merge completes, we can immediately merge it in to the next
+            // level, which is "guaranteed" to be complete at this point, by our
+            // fueling discipline.
             if self.merging[index].is_complete() {
                 let complete = self.merging[index].complete();
                 self.insert_at(complete, index+1);
@@ -575,11 +570,13 @@ where
         // fuel rolling around.
 
         let mut length = self.merging.len();
-        if self.merging[length-1].is_single() {
-            while (self.merging[length-1].len().next_power_of_two().trailing_zeros() as usize) < (length-1) && length > 1 && self.merging[length-2].is_vacant() {
-                let batch = self.merging.pop().unwrap();
-                self.merging[length-2] = batch;
-                length = self.merging.len();
+        if length > 0 {
+            if self.merging[length-1].is_single() {
+                while (self.merging[length-1].len().next_power_of_two().trailing_zeros() as usize) < (length-1) && length > 1 && self.merging[length-2].is_vacant() {
+                    let batch = self.merging.pop().unwrap();
+                    self.merging[length-2] = batch;
+                    length = self.merging.len();
+                }
             }
         }
     }

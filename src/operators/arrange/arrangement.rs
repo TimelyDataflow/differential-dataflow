@@ -545,7 +545,6 @@ where
                     (Some(self.scope().activator_for(&info.address[..])), Some(effort))
                 }
                 else {
-                    // (None, Some(1_000))
                     (None, None)
                 };
 
@@ -678,19 +677,6 @@ where
             .arrange_core(pact, name)
     }
 }
-
-// impl<G, K, V, R, T> Arrange<G, K, V, R, T> for Arranged<G, K, V, R, TraceAgent<K, V, G::Timestamp, R, T>>
-// where
-//     G: Scope,
-//     G::Timestamp: Lattice,
-//     R: Semigroup,
-//     T: Trace<K, V, G::Timestamp, R>+Clone+'static,
-//     T::Batch: Batch<K, V, G::Timestamp, R>
-// {
-//     fn arrange_named(&self, _name: &str) -> Arranged<G, K, V, R, TraceAgent<K, V, G::Timestamp, R, T>> {
-//         (*self).clone()
-//     }
-// }
 
 /// Arranges something as `(Key,Val)` pairs according to a type `T` of trace.
 ///
