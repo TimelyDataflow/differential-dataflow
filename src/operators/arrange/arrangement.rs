@@ -393,7 +393,7 @@ where
                 let frontier = [
                     capability.as_ref().map(|c| c.time().clone()),
                     input1.frontier().frontier().get(0).cloned(),
-                ].into_iter().cloned().filter_map(|t| t).min();
+                ].iter().cloned().filter_map(|t| t).min();
 
                 if let Some(frontier) = frontier {
                     trace.as_mut().map(|t| t.advance_by(&[frontier]));
