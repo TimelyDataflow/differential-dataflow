@@ -611,18 +611,48 @@ where
     fn tidy_layers(&mut self) {
 
         // If the largest layer is complete (not merging), we can attempt
-        // to draw it down to the next layer if either that layer is empty,
-        // or if it is a singleton and the layer below it is not merging.
-        // We expect this should happen at various points if we have enough
-        // fuel rolling around.
-
-        let mut length = self.merging.len();
-        if length > 0 {
+        // to draw it down to the next layer. This is permitted if we can
+        // maintain our invariant that below each merge there are at most
+        // half the records that would be required to invade the merge.
+        if !self.merging.is_empty() {
+            let mut length = self.merging.len();
             if self.merging[length-1].is_single() {
-                while (self.merging[length-1].len().next_power_of_two().trailing_zeros() as usize) < (length-1) && length > 1 && self.merging[length-2].is_vacant() {
-                    let batch = self.merging.pop().unwrap();
-                    self.merging[length-2] = batch;
-                    length = self.merging.len();
+
+                // To move a batch down, we require that it contain few
+                // enough records that the lower level is appropriate,
+                // and that moving the batch would not create a merge
+                // violating our invariant.
+
+                let appropriate_level = self.merging[length-1].len().next_power_of_two().trailing_zeros() as usize;
+
+                // Rip through any vacant or structurally empty batches.
+                while (appropriate_level < length-1) && length > 1 {
+
+                    match self.merging[length-2].take() {
+                        // Vacant or structurally empty batches can be absorbed.
+                        MergeState::Vacant | MergeState::Single(None) => {
+                            self.merging.remove(length-2);
+                            length = self.merging.len();
+                        }
+                        // Single batches may initiate a merge, if sizes are
+                        // within bounds, but terminate the loop either way.
+                        MergeState::Single(Some(batch)) => {
+                            let smaller: usize = self.merging[..(length-2)].iter().map(|b| b.len()).sum();
+                            if smaller <= (1 << length) / 8 {
+                                self.merging.remove(length-2);
+                                self.insert_at(Some(batch), length-2);
+                            }
+                            else {
+                                self.merging[length-2] = MergeState::Single(Some(batch));
+                            }
+                            return;
+                        }
+                        // If a merge is in progress there is nothing to do.
+                        MergeState::Double(state) => {
+                            self.merging[length-2] = MergeState::Double(state);
+                            return;
+                        }
+                    }
                 }
             }
         }
