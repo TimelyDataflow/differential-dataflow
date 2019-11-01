@@ -625,8 +625,8 @@ where
 
                 let appropriate_level = self.merging[length-1].len().next_power_of_two().trailing_zeros() as usize;
 
-                // Rip through any vacant or structurally empty batches.
-                while (appropriate_level < length-1) && length > 1 {
+                // Continue only as far as is appropriate
+                while appropriate_level < length-1 {
 
                     match self.merging[length-2].take() {
                         // Vacant or structurally empty batches can be absorbed.
