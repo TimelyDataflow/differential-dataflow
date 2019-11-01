@@ -75,9 +75,9 @@ impl<G: Scope, D: Data, R: Semigroup> Collection<G, D, R> where G::Timestamp: Da
     ///     });
     /// }
     /// ```
-    pub fn map<D2, L>(&self, logic: L) -> Collection<G, D2, R>
+    pub fn map<D2, L>(&self, mut logic: L) -> Collection<G, D2, R>
     where D2: Data,
-          L: Fn(D) -> D2 + 'static
+          L: FnMut(D) -> D2 + 'static
     {
         self.inner
             .map(move |(data, time, delta)| (logic(data), time, delta))
@@ -106,8 +106,8 @@ impl<G: Scope, D: Data, R: Semigroup> Collection<G, D, R> where G::Timestamp: Da
     ///     });
     /// }
     /// ```
-    pub fn map_in_place<L>(&self, logic: L) -> Collection<G, D, R>
-    where L: Fn(&mut D) + 'static {
+    pub fn map_in_place<L>(&self, mut logic: L) -> Collection<G, D, R>
+    where L: FnMut(&mut D) + 'static {
         self.inner
             .map_in_place(move |&mut (ref mut data, _, _)| logic(data))
             .as_collection()
@@ -133,11 +133,11 @@ impl<G: Scope, D: Data, R: Semigroup> Collection<G, D, R> where G::Timestamp: Da
     ///     });
     /// }
     /// ```
-    pub fn flat_map<I, L>(&self, logic: L) -> Collection<G, I::Item, R>
+    pub fn flat_map<I, L>(&self, mut logic: L) -> Collection<G, I::Item, R>
         where G::Timestamp: Clone,
               I: IntoIterator,
               I::Item: Data,
-              L: Fn(D) -> I + 'static {
+              L: FnMut(D) -> I + 'static {
         self.inner
             .flat_map(move |(data, time, delta)| logic(data).into_iter().map(move |x| (x, time.clone(), delta.clone())))
             .as_collection()
@@ -161,8 +161,8 @@ impl<G: Scope, D: Data, R: Semigroup> Collection<G, D, R> where G::Timestamp: Da
     ///     });
     /// }
     /// ```
-    pub fn filter<L>(&self, logic: L) -> Collection<G, D, R>
-    where L: Fn(&D) -> bool + 'static {
+    pub fn filter<L>(&self, mut logic: L) -> Collection<G, D, R>
+    where L: FnMut(&D) -> bool + 'static {
         self.inner
             .filter(move |&(ref data, _, _)| logic(data))
             .as_collection()
@@ -259,12 +259,12 @@ impl<G: Scope, D: Data, R: Semigroup> Collection<G, D, R> where G::Timestamp: Da
     ///     });
     /// }
     /// ```
-    pub fn explode<D2, R2, I, L>(&self, logic: L) -> Collection<G, D2, <R2 as Mul<R>>::Output>
+    pub fn explode<D2, R2, I, L>(&self, mut logic: L) -> Collection<G, D2, <R2 as Mul<R>>::Output>
     where D2: Data,
           R2: Semigroup+Mul<R>,
           <R2 as Mul<R>>::Output: Data+Semigroup,
           I: IntoIterator<Item=(D2,R2)>,
-          L: Fn(D)->I+'static,
+          L: FnMut(D)->I+'static,
     {
         self.inner
             .flat_map(move |(x, t, d)| logic(x).into_iter().map(move |(x,d2)| (x, t.clone(), d2 * d.clone())))
@@ -336,17 +336,17 @@ impl<G: Scope, D: Data, R: Semigroup> Collection<G, D, R> where G::Timestamp: Da
     pub fn enter_at<'a, T, F>(&self, child: &Iterative<'a, G, T>, initial: F) -> Collection<Iterative<'a, G, T>, D, R>
     where
         T: Timestamp+Hash,
-        F: Fn(&D) -> T + 'static,
+        F: FnMut(&D) -> T + Clone + 'static,
         G::Timestamp: Hash,
     {
 
-        let initial1 = ::std::rc::Rc::new(initial);
-        let initial2 = initial1.clone();
+        let mut initial1 = initial.clone();
+        let mut initial2 = initial.clone();
 
         self.inner
-            .enter_at(child, move |x| (*initial1)(&x.0))
+            .enter_at(child, move |x| initial1(&x.0))
             .map(move |(data, time, diff)| {
-                let new_time = Product::new(time, (*initial2)(&data));
+                let new_time = Product::new(time, initial2(&data));
                 (data, new_time, diff)
             })
             .as_collection()
@@ -359,10 +359,10 @@ impl<G: Scope, D: Data, R: Semigroup> Collection<G, D, R> where G::Timestamp: Da
     /// ordered, they should have the same order once `func` is applied to them (this is because we advance the
     /// timely capability with the same logic, and it must remain `less_equal` to all of the data timestamps).
     pub fn delay<F>(&self, func: F) -> Collection<G, D, R>
-    where F: Fn(&G::Timestamp) -> G::Timestamp + 'static {
+    where F: FnMut(&G::Timestamp) -> G::Timestamp + Clone + 'static {
 
-        let func1 = ::std::rc::Rc::new(func);
-        let func2 = func1.clone();
+        let mut func1 = func.clone();
+        let mut func2 = func.clone();
 
         self.inner
             .delay_batch(move |x| func1(x))

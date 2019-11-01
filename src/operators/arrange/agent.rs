@@ -36,6 +36,9 @@ where
     queues: Weak<RefCell<Vec<TraceAgentQueueWriter<Tr>>>>,
     advance: Vec<Tr::Time>,
     through: Vec<Tr::Time>,
+
+    operator: ::timely::dataflow::operators::generic::OperatorInfo,
+    logging: Option<::logging::Logger>,
 }
 
 impl<Tr> TraceReader for TraceAgent<Tr>
@@ -79,7 +82,7 @@ where
     Tr::Time: Timestamp+Lattice,
 {
     /// Creates a new agent from a trace reader.
-    pub fn new(trace: Tr) -> (Self, TraceWriter<Tr>)
+    pub fn new(trace: Tr, operator: ::timely::dataflow::operators::generic::OperatorInfo, logging: Option<::logging::Logger>) -> (Self, TraceWriter<Tr>)
     where
         Tr: Trace,
         Tr::Batch: Batch<Tr::Key,Tr::Val,Tr::Time,Tr::R>,
@@ -87,11 +90,19 @@ where
         let trace = Rc::new(RefCell::new(TraceBox::new(trace)));
         let queues = Rc::new(RefCell::new(Vec::new()));
 
+        if let Some(logging) = &logging {
+            logging.log(
+                ::logging::TraceShare { operator: operator.global_id, diff: 1 }
+            );
+        }
+
         let reader = TraceAgent {
             trace: trace.clone(),
             queues: Rc::downgrade(&queues),
             advance: trace.borrow().advance_frontiers.frontier().to_vec(),
             through: trace.borrow().through_frontiers.frontier().to_vec(),
+            operator,
+            logging,
         };
 
         let writer = TraceWriter::new(
@@ -511,6 +522,12 @@ where
 {
     fn clone(&self) -> Self {
 
+        if let Some(logging) = &self.logging {
+            logging.log(
+                ::logging::TraceShare { operator: self.operator.global_id, diff: 1 }
+            );
+        }
+
         // increase counts for wrapped `TraceBox`.
         self.trace.borrow_mut().adjust_advance_frontier(&[], &self.advance[..]);
         self.trace.borrow_mut().adjust_through_frontier(&[], &self.through[..]);
@@ -520,10 +537,11 @@ where
             queues: self.queues.clone(),
             advance: self.advance.clone(),
             through: self.through.clone(),
+            operator: self.operator.clone(),
+            logging: self.logging.clone(),
         }
     }
 }
-
 
 impl<Tr> Drop for TraceAgent<Tr>
 where
@@ -531,6 +549,13 @@ where
     Tr::Time: Lattice+Ord+Clone+'static,
 {
     fn drop(&mut self) {
+
+        if let Some(logging) = &self.logging {
+            logging.log(
+                ::logging::TraceShare { operator: self.operator.global_id, diff: -1 }
+            );
+        }
+
         // decrement borrow counts to remove all holds
         self.trace.borrow_mut().adjust_advance_frontier(&self.advance[..], &[]);
         self.trace.borrow_mut().adjust_through_frontier(&self.through[..], &[]);

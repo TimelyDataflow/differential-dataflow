@@ -97,7 +97,6 @@ pub struct Spine<K, V, T: Lattice+Ord, R: Semigroup, B: Batch<K, V, T, R>> {
     upper: Vec<T>,
     effort: usize,
     activator: Option<timely::scheduling::activate::Activator>,
-    timer: std::time::Instant,
 }
 
 impl<K, V, T, R, B> TraceReader for Spine<K, V, T, R, B>
@@ -333,6 +332,7 @@ where
     /// Describes the merge progress of layers in the trace.
     ///
     /// Intended for diagnostics rather than public consumption.
+    #[allow(dead_code)]
     fn describe(&self) -> Vec<(usize, usize)> {
         self.merging
             .iter()
@@ -370,7 +370,6 @@ where
             upper: vec![Default::default()],
             effort,
             activator,
-            timer: std::time::Instant::now(),
         }
     }
 
@@ -533,7 +532,7 @@ where
             // Give each level independent fuel, for now.
             let mut fuel = *fuel;
             // Pass along various logging stuffs, in case we need to report success.
-            let batches = self.merging[index].work(&mut fuel);
+            self.merging[index].work(&mut fuel);
             // `fuel` could have a deficit at this point, meaning we over-spent when
             // we took a merge step. We could ignore this, or maintain the deficit
             // and account future fuel against it before spending again. It isn't
@@ -770,7 +769,7 @@ impl<K, V, T, R, B: Batch<K, V, T, R>> MergeVariant<K, V, T, R, B> {
     /// or a batch and optionally input batches from which it derived.
     fn complete(mut self) -> Option<(B, Option<(B, B)>)> {
         let mut fuel = isize::max_value();
-        let batches = self.work(&mut fuel);
+        self.work(&mut fuel);
         if let MergeVariant::Complete(batch) = self { batch }
         else { panic!("Failed to complete a merge!"); }
     }

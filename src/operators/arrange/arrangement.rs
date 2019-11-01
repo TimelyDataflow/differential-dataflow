@@ -17,7 +17,6 @@
 //! see ill-defined data at times for which the trace is not complete. (All current implementations
 //! commit only completed data to the trace).
 
-use std::rc::Rc;
 use std::default::Default;
 
 use timely::dataflow::operators::{Enter, Map};
@@ -142,12 +141,13 @@ where
             Tr::R: 'static,
             G::Timestamp: Clone+Default+'static,
             TInner: Refines<G::Timestamp>+Lattice+Timestamp+Clone+Default+'static,
-            F: Fn(&Tr::Key, &Tr::Val, &G::Timestamp)->TInner+'static,
+            F: FnMut(&Tr::Key, &Tr::Val, &G::Timestamp)->TInner+Clone+'static,
     {
-        let logic = Rc::new(logic);
+        let logic1 = logic.clone();
+        let logic2 = logic.clone();
         Arranged {
-            trace: TraceEnterAt::make_from(self.trace.clone(), logic.clone()),
-            stream: self.stream.enter(child).map(move |bw| BatchEnterAt::make_from(bw, logic.clone())),
+            trace: TraceEnterAt::make_from(self.trace.clone(), logic1),
+            stream: self.stream.enter(child).map(move |bw| BatchEnterAt::make_from(bw, logic2.clone())),
         }
     }
 
@@ -189,12 +189,13 @@ where
             Tr::Val: 'static,
             Tr::R: 'static,
             G::Timestamp: Clone+Default+'static,
-            F: Fn(&Tr::Key, &Tr::Val)->bool+'static,
+            F: FnMut(&Tr::Key, &Tr::Val)->bool+Clone+'static,
     {
-        let logic = Rc::new(logic);
+        let logic1 = logic.clone();
+        let logic2 = logic.clone();
         Arranged {
-            trace: TraceFilter::make_from(self.trace.clone(), logic.clone()),
-            stream: self.stream.map(move |bw| BatchFilter::make_from(bw, logic.clone())),
+            trace: TraceFilter::make_from(self.trace.clone(), logic1),
+            stream: self.stream.map(move |bw| BatchFilter::make_from(bw, logic2.clone())),
         }
     }
     /// Flattens the stream into a `Collection`.
@@ -202,10 +203,10 @@ where
     /// The underlying `Stream<G, BatchWrapper<T::Batch>>` is a much more efficient way to access the data,
     /// and this method should only be used when the data need to be transformed or exchanged, rather than
     /// supplied as arguments to an operator using the same key-value structure.
-    pub fn as_collection<D: Data, L>(&self, logic: L) -> Collection<G, D, Tr::R>
+    pub fn as_collection<D: Data, L>(&self, mut logic: L) -> Collection<G, D, Tr::R>
         where
             Tr::R: Semigroup,
-            L: Fn(&Tr::Key, &Tr::Val) -> D+'static,
+            L: FnMut(&Tr::Key, &Tr::Val) -> D+'static,
     {
         self.flat_map_ref(move |key, val| Some(logic(key,val)))
     }
@@ -214,12 +215,12 @@ where
     ///
     /// The supplied logic may produce an iterator over output values, allowing either
     /// filtering or flat mapping as part of the extraction.
-    pub fn flat_map_ref<I, L>(&self, logic: L) -> Collection<G, I::Item, Tr::R>
+    pub fn flat_map_ref<I, L>(&self, mut logic: L) -> Collection<G, I::Item, Tr::R>
         where
             Tr::R: Semigroup,
             I: IntoIterator,
             I::Item: Data,
-            L: Fn(&Tr::Key, &Tr::Val) -> I+'static,
+            L: FnMut(&Tr::Key, &Tr::Val) -> I+'static,
     {
         self.stream.unary(Pipeline, "AsCollection", move |_,_| move |input, output| {
 
@@ -539,6 +540,7 @@ where
 
                 let mut buffer = Vec::new();
 
+
                 let (activator, effort) =
                 if let Ok(text) = ::std::env::var("DIFFERENTIAL_EAGER_MERGE") {
                     let effort = text.parse::<isize>().expect("DIFFERENTIAL_EAGER_MERGE must be set to an integer");
@@ -548,8 +550,9 @@ where
                     (None, None)
                 };
 
-                let empty_trace = Tr::new(info, logger, activator);
-                let (reader_local, mut writer) = TraceAgent::new(empty_trace);
+                let empty_trace = Tr::new(info.clone(), logger.clone(), activator);
+                let (reader_local, mut writer) = TraceAgent::new(empty_trace, info, logger);
+
                 *reader = Some(reader_local);
 
                 // Initialize to the minimal input frontier.

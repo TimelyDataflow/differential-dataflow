@@ -68,13 +68,12 @@ where
     T1::Batch: BatchReader<T1::Key, (), G::Timestamp, T1::R>,
     T1::Cursor: Cursor<T1::Key, (), G::Timestamp, T1::R>,
 {
-
     fn count_total(&self) -> Collection<G, (T1::Key, T1::R), isize> {
 
         let mut trace = self.trace.clone();
         let mut buffer = Vec::new();
 
-        self.stream.unary(Pipeline, "CountTotal", move |_,_| move |input, output| {
+        self.stream.unary_frontier(Pipeline, "CountTotal", move |_,_| move |input, output| {
 
             // tracks the upper limit of known-complete timestamps.
             let mut upper_limit = timely::progress::frontier::Antichain::from_elem(<G::Timestamp>::minimum());

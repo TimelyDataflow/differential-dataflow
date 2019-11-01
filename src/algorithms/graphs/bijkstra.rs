@@ -64,6 +64,9 @@ where
         let forward = Variable::new_from(goals.map(|(x,_)| (x.clone(),(x.clone(),0))).enter(inner), Product::new(Default::default(), 1));
         let reverse = Variable::new_from(goals.map(|(_,y)| (y.clone(),(y.clone(),0))).enter(inner), Product::new(Default::default(), 1));
 
+        forward.map(|_| ()).consolidate().inspect(|x| println!("forward: {:?}", x));
+        reverse.map(|_| ()).consolidate().inspect(|x| println!("reverse: {:?}", x));
+
         let goals = goals.enter(inner);
         // let edges = edges.enter(inner);
 
@@ -98,6 +101,8 @@ where
             .reduce(|_key, s, t| t.push((s[0].0.clone(), 1)))
             .map(|((next, src), dist)| (next, (src, dist)));
 
+        forward_next.map(|_| ()).consolidate().inspect(|x| println!("forward_next: {:?}", x));
+
         forward.set(&forward_next);
 
         // Let's expand out reverse queries that are active.
@@ -112,6 +117,8 @@ where
             .map(|(next, (rev, dist))| ((next, rev), dist))
             .reduce(|_key, s, t| t.push((s[0].0.clone(), 1)))
             .map(|((next,rev), dist)| (next, (rev, dist)));
+
+        reverse_next.map(|_| ()).consolidate().inspect(|x| println!("reverse_next: {:?}", x));
 
         reverse.set(&reverse_next);
 

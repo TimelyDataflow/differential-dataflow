@@ -32,24 +32,26 @@ roots.iterate(|reach|
 
 Once written, a differential dataflow responds to arbitrary changes to its initially empty input collections, reporting the corresponding changes to each of its output collections. Differential dataflow can react quickly because it only acts where changes in collections occur, and does no work elsewhere.
 
-In the examples above, we can add to and remove from `edges`, dynamically altering the graph, and get immediate feedback on how the results change. We could also add to and remove from `roots` altering the reachability query itself.
+In the examples above, we can add to and remove from `edges`, dynamically altering the graph, and get immediate feedback on how the results change: if the degree distribution shifts we'll see the changes, and if nodes are now (or no longer) reachable we'll hear about that too. We could also add to and remove from `roots`, more fundamentally altering the reachability query itself.
 
 Be sure to check out the [differential dataflow documentation](https://docs.rs/differential-dataflow), which is continually improving.
 
 ## An example: counting degrees in a graph.
 
-Let's check out that out-degree distribution computation, to get a sense for how differential dataflow actually works.
+Let's check out that out-degree distribution computation, to get a sense for how differential dataflow actually works. This example is [examples/hello.rs](https://github.com/TimelyDataflow/differential-dataflow/blob/master/examples/hello.rs) in this repository, if you'd like to follow along.
 
 A graph is a collection of pairs `(Node, Node)`, and one standard analysis is to determine the number of times each `Node` occurs in the first position, its "degree". The number of nodes with each degree is a helpful graph statistic.
 
+To determine the out-degree distribution, we create a new timely dataflow scope in which we describe our computation and how we plan to interact with it.
+
 ```rust
-// create a a degree counting differential dataflow
+// create a degree counting differential dataflow
 let (mut input, probe) = worker.dataflow(|scope| {
 
     // create edge input, count a few ways.
     let (input, edges) = scope.new_collection();
 
-    let out_degr_dist =
+    let out_degr_distr =
     edges.map(|(src, _dst)| src)    // extract source
          .count();                  // count occurrences of source
          .map(|(_src, deg)| deg)    // extract degree
@@ -57,7 +59,7 @@ let (mut input, probe) = worker.dataflow(|scope| {
 
     // show us something about the collection, notice when done.
     let probe =
-    out_degr_dist
+    out_degr_distr
         .inspect(|x| println!("observed: {:?}", x))
         .probe();
 
@@ -65,104 +67,104 @@ let (mut input, probe) = worker.dataflow(|scope| {
 });
 ```
 
-The `input` and `probe` we return are how we get data into the dataflow, and how we notice when some amount of computation is complete. These are timely dataflow idioms, and we won't get in to them in more detail here.
+The `input` and `probe` we return are how we get data into the dataflow, and how we notice when some amount of computation is complete. These are timely dataflow idioms, and we won't get in to them in more detail here (check out [the timely dataflow repository](https://github.com/timelydataflow/timely-dataflow)).
 
 If we feed this computation with some random graph data, say fifty random edges among ten nodes, we get output like
 
-    Running `target/release/examples/degrees 10 50 1`
-    observed: ((5, 4), (Root, 0), 1)
-    observed: ((4, 2), (Root, 0), 1)
-    observed: ((7, 1), (Root, 0), 1)
-    observed: ((6, 2), (Root, 0), 1)
-    observed: ((3, 1), (Root, 0), 1)
-    Loading finished after 312139
+    Echidnatron% cargo run --release --example hello -- 10 50 1 inspect
+        Finished release [optimized + debuginfo] target(s) in 0.05s
+        Running `target/release/examples/hello 10 50 1 inspect`
+    observed: ((3, 1), 0, 1)
+    observed: ((4, 2), 0, 1)
+    observed: ((5, 4), 0, 1)
+    observed: ((6, 2), 0, 1)
+    observed: ((7, 1), 0, 1)
+    round 0 finished after 772.464µs (loading)
 
-This shows us the records that passed the `inspect` operator, revealing the contents of the collection: there are five distinct degrees, three through seven in some order. The records have the form `((degree, count), time, delta)` where the `time` field says this is the first round of data, and the `delta` field tells us that each record is coming into existence. If the corresponding record were departing the collection, it would be a negative number.
+This shows us the records that passed the `inspect` operator, revealing the contents of the collection: there are five distinct degrees, three through seven. The records have the form `((degree, count), time, delta)` where the `time` field says this is the first round of data, and the `delta` field tells us that each record is coming into existence. If the corresponding record were departing the collection, it would be a negative number.
 
 Let's update the input by removing one edge and adding a new random edge:
 
-    observed: ((7, 1), (Root, 1), -1)
-    observed: ((8, 1), (Root, 1), 1)
-    observed: ((3, 1), (Root, 1), -1)
-    observed: ((2, 1), (Root, 1), 1)
-    worker 0, round 1 finished after Duration { secs: 0, nanos: 139268 }
+    observed: ((2, 1), 1, 1)
+    observed: ((3, 1), 1, -1)
+    observed: ((7, 1), 1, -1)
+    observed: ((8, 1), 1, 1)
+    round 1 finished after 149.701µs
 
-We see here some changes! Those degree three and seven nodes have been replaced by degree two and eight nodes; looks like one lost an edge and gave it to the other!
+We see here some changes! Those degree three and seven nodes have been replaced by degree two and eight nodes; looks like one node lost an edge and gave it to the other!
 
 How about a few more changes?
 
-    worker 0, round 2 finished after Duration { secs: 0, nanos: 81286 }
-    worker 0, round 3 finished after Duration { secs: 0, nanos: 73066 }
-    worker 0, round 4 finished after Duration { secs: 0, nanos: 64023 }
-    observed: ((5, 3), (Root, 5), 1)
-    observed: ((5, 4), (Root, 5), -1)
-    observed: ((7, 1), (Root, 5), 1)
-    observed: ((6, 2), (Root, 5), -1)
-    observed: ((6, 3), (Root, 5), 1)
-    observed: ((8, 1), (Root, 5), -1)
-    worker 0, round 5 finished after Duration { secs: 0, nanos: 104017 }
+    round 2 finished after 127.444µs
+    round 3 finished after 100.628µs
+    round 4 finished after 130.609µs
+    observed: ((5, 3), 5, 1)
+    observed: ((5, 4), 5, -1)
+    observed: ((6, 2), 5, -1)
+    observed: ((6, 3), 5, 1)
+    observed: ((7, 1), 5, 1)
+    observed: ((8, 1), 5, -1)
+    round 5 finished after 161.82µs
 
 Well a few weird things happen here. First, rounds 2, 3, and 4 don't print anything. Seriously? It turns out that the random changes we made didn't affect any of the degree counts, we moved edges between nodes, preserving degrees. It can happen.
 
-The second weird thing is that with only two edge changes we have six changes in the output! It turns out we can have up to eight. The eight gets turned back into a seven, and a five gets turned into a six. But: going from five to six changes the count for each, and each change requires two record differences.
+The second weird thing is that in round 5, with only two edge changes we have six changes in the output! It turns out we can have up to eight. The degree eight gets turned back into a seven, and a five gets turned into a six. But: going from five to six *changes* the count for each, and each change requires two record differences. Eight and seven were more concise because their counts were only one, meaning just arrival and departure of records rather than changes.
 
 ### Scaling up
 
 The appealing thing about differential dataflow is that it only does work where changes occur, so even if there is a lot of data, if not much changes it can still go quite fast. Let's scale our 10 nodes and 50 edges up by a factor of one million:
 
-    Running `target/release/examples/degrees 10000000 50000000 1`
-    observed: ((1, 336908), (Root, 0), 1)
-    observed: ((2, 843854), (Root, 0), 1)
-    observed: ((3, 1404462), (Root, 0), 1)
-    observed: ((4, 1751921), (Root, 0), 1)
-    observed: ((5, 1757099), (Root, 0), 1)
-    observed: ((6, 1459805), (Root, 0), 1)
-    observed: ((7, 1042894), (Root, 0), 1)
-    observed: ((8, 653178), (Root, 0), 1)
-    observed: ((9, 363983), (Root, 0), 1)
-    observed: ((10, 181423), (Root, 0), 1)
-    observed: ((11, 82478), (Root, 0), 1)
-    observed: ((12, 34407), (Root, 0), 1)
-    observed: ((13, 13216), (Root, 0), 1)
-    observed: ((14, 4842), (Root, 0), 1)
-    observed: ((15, 1561), (Root, 0), 1)
-    observed: ((16, 483), (Root, 0), 1)
-    observed: ((17, 143), (Root, 0), 1)
-    observed: ((18, 38), (Root, 0), 1)
-    observed: ((19, 8), (Root, 0), 1)
-    observed: ((20, 3), (Root, 0), 1)
-    observed: ((22, 1), (Root, 0), 1)
-    Loading finished after Duration { secs: 15, nanos: 485478768 }
+    Echidnatron% cargo run --release --example hello -- 10000000 50000000 1 inspect
+        Finished release [optimized + debuginfo] target(s) in 0.04s
+        Running `target/release/examples/hello 10000000 50000000 1 inspect`
+    observed: ((1, 336908), 0, 1)
+    observed: ((2, 843854), 0, 1)
+    observed: ((3, 1404462), 0, 1)
+    observed: ((4, 1751921), 0, 1)
+    observed: ((5, 1757099), 0, 1)
+    observed: ((6, 1459805), 0, 1)
+    observed: ((7, 1042894), 0, 1)
+    observed: ((8, 653178), 0, 1)
+    observed: ((9, 363983), 0, 1)
+    observed: ((10, 181423), 0, 1)
+    observed: ((11, 82478), 0, 1)
+    observed: ((12, 34407), 0, 1)
+    observed: ((13, 13216), 0, 1)
+    observed: ((14, 4842), 0, 1)
+    observed: ((15, 1561), 0, 1)
+    observed: ((16, 483), 0, 1)
+    observed: ((17, 143), 0, 1)
+    observed: ((18, 38), 0, 1)
+    observed: ((19, 8), 0, 1)
+    observed: ((20, 3), 0, 1)
+    observed: ((22, 1), 0, 1)
+    round 0 finished after 15.470465014s (loading)
 
 There are a lot more distinct degrees here. I sorted them because it was too painful to look at the unsorted data. You would normally get to see the output unsorted, because they are just changes to values in a collection.
 
 Let's perform a single change again.
 
-    observed: ((5, 1757098), (Root, 1), 1)
-    observed: ((5, 1757099), (Root, 1), -1)
-    observed: ((7, 1042893), (Root, 1), 1)
-    observed: ((7, 1042894), (Root, 1), -1)
-    observed: ((6, 1459805), (Root, 1), -1)
-    observed: ((6, 1459807), (Root, 1), 1)
-    worker 0, round 1 finished after Duration { secs: 0, nanos: 119917 }
+    observed: ((5, 1757098), 1, 1)
+    observed: ((5, 1757099), 1, -1)
+    observed: ((6, 1459805), 1, -1)
+    observed: ((6, 1459807), 1, 1)
+    observed: ((7, 1042893), 1, 1)
+    observed: ((7, 1042894), 1, -1)
+    round 1 finished after 228.451µs
 
-Although the initial computation took about fifteen seconds, we get our changes in about 120 microseconds; that's about one hundred thousand times faster than re-running the computation. That's pretty nice. Actually, it is small enough that the time to print things to the screen is a bit expensive, so let's comment that part out.
-
-```rust
-    // show us something about the collection, notice when done.
-    let probe = distr//.inspect(|x| println!("observed: {:?}", x))
-                     .probe().0;
-```
+Although the initial computation took about fifteen seconds, we get our changes in about 120 microseconds; that's about one hundred thousand times faster than re-running the computation. That's pretty nice. Actually, it is small enough that the time to print things to the screen is a bit expensive, so let's stop doing that.
 
 Now we can just watch as changes roll past and look at the times.
 
-         Running `target/release/examples/degrees 10000000 50000000 1`
-    Loading finished after Duration { secs: 15, nanos: 632757755 }
-    worker 0, round 1 finished after Duration { secs: 0, nanos: 141124 }
-    worker 0, round 2 finished after Duration { secs: 0, nanos: 105730 }
-    worker 0, round 3 finished after Duration { secs: 0, nanos: 106172 }
-    worker 0, round 4 finished after Duration { secs: 0, nanos: 168487 }
-    worker 0, round 5 finished after Duration { secs: 0, nanos: 62194 }
+    Echidnatron% cargo run --release --example hello -- 10000000 50000000 1 no_inspect
+        Finished release [optimized + debuginfo] target(s) in 0.04s
+        Running `target/release/examples/hello 10000000 50000000 1 no_inspect`
+    round 0 finished after 15.586969662s (loading)
+    round 1 finished after 1.070239ms
+    round 2 finished after 2.303187ms
+    round 3 finished after 208.45µs
+    round 4 finished after 163.224µs
+    round 5 finished after 118.792µs
     ...
 
 Nice. This is some hundreds of microseconds per update, which means maybe ten thousand updates per second. It's not a horrible number for my laptop, but it isn't the right answer yet.
@@ -173,42 +175,46 @@ Differential dataflow is designed for throughput in addition to latency. We can 
 
 Notice that those times above are a few hundred microseconds for each single update. If we work on ten rounds of updates at once, we get times that look like this:
 
-         Running `target/release/examples/degrees 10000000 50000000 10`
-    Loading finished after Duration { secs: 15, nanos: 665081016 }
-    worker 0, round 10 finished after Duration { secs: 0, nanos: 321328 }
-    worker 0, round 20 finished after Duration { secs: 0, nanos: 220047 }
-    worker 0, round 30 finished after Duration { secs: 0, nanos: 234313 }
-    worker 0, round 40 finished after Duration { secs: 0, nanos: 311963 }
-    worker 0, round 50 finished after Duration { secs: 0, nanos: 188093 }
+    Echidnatron% cargo run --release --example hello -- 10000000 50000000 10 no_inspect
+        Finished release [optimized + debuginfo] target(s) in 0.04s
+        Running `target/release/examples/hello 10000000 50000000 10 no_inspect`
+    round 0 finished after 15.556475008s (loading)
+    round 10 finished after 421.219µs
+    round 20 finished after 1.56369ms
+    round 30 finished after 338.54µs
+    round 40 finished after 351.843µs
+    round 50 finished after 339.608µs
     ...
 
-This is appealing in that we finish the first 10 updates after 321 microseconds, whereas after the same amount of time we haven't finished the third update. The cost is that we learn about the first and second output updates later than we would have if we had fed input updates in one-by-one, but these are the only two updates for which that is the case.
+This is appealing in that rounds of ten aren't much more expensive than single updates, and we finish the first ten rounds in much less time than it takes to perform the first ten updates one at a time. Every round after that is just bonus time.
 
 As we turn up the batching, performance improves. Here we work on one hundred rounds of updates at once:
 
-         Running `target/release/examples/degrees 10000000 50000000 100`
-    Loading finished after Duration { secs: 15, nanos: 612717043 }
-    worker 0, round 100 finished after Duration { secs: 0, nanos: 1237368 }
-    worker 0, round 200 finished after Duration { secs: 0, nanos: 1184419 }
-    worker 0, round 300 finished after Duration { secs: 0, nanos: 1169537 }
-    worker 0, round 400 finished after Duration { secs: 0, nanos: 1275858 }
-    worker 0, round 500 finished after Duration { secs: 0, nanos: 1187122 }
+    Echidnatron% cargo run --release --example hello -- 10000000 50000000 100 no_inspect
+        Finished release [optimized + debuginfo] target(s) in 0.04s
+        Running `target/release/examples/hello 10000000 50000000 100 no_inspect`
+    round 0 finished after 15.528724145s (loading)
+    round 100 finished after 2.567577ms
+    round 200 finished after 1.861168ms
+    round 300 finished after 1.753794ms
+    round 400 finished after 1.528285ms
+    round 500 finished after 1.416605ms
     ...
 
-This now averages to about twelve microseconds for each update, which is getting closer to one hundred thousand updates per second.
+We are still improving, and continue to do so as we increase the batch sizes. When processing 100,000 updates at a time we take about half a second for each batch. This is less "interactive" but a higher throughput.
 
-Actually, let's just try that. Here are the numbers for one hundred thousand rounds of updates at a time:
-
-         Running `target/release/examples/degrees 10000000 50000000 100000`
-    Loading finished after Duration { secs: 15, nanos: 554954141 }
-    worker 0, round 100000 finished after Duration { secs: 0, nanos: 529935399 }
-    worker 0, round 200000 finished after Duration { secs: 0, nanos: 580862749 }
-    worker 0, round 300000 finished after Duration { secs: 0, nanos: 537156939 }
-    worker 0, round 400000 finished after Duration { secs: 0, nanos: 709743753 }
-    worker 0, round 500000 finished after Duration { secs: 0, nanos: 546691982 }
+    Echidnatron% cargo run --release --example hello -- 10000000 50000000 100000 no_inspect
+        Finished release [optimized + debuginfo] target(s) in 0.04s
+        Running `target/release/examples/hello 10000000 50000000 100000 no_inspect`
+    round 0 finished after 15.65053789s (loading)
+    round 100000 finished after 505.210924ms
+    round 200000 finished after 524.069497ms
+    round 300000 finished after 470.77752ms
+    round 400000 finished after 621.325393ms
+    round 500000 finished after 472.791742ms
     ...
 
-This averages to about five or six microseconds per round of update, and now that I think about it each update was actually two changes, wasn't it. Good for you, differential dataflow!
+This averages to about five microseconds on average; a fair bit faster than the hundred microseconds for individual updates! And now that I think about it each update was actually two changes, wasn't it. Good for you, differential dataflow!
 
 ### Scaling out
 
@@ -216,44 +222,56 @@ Differential dataflow is built on top of [timely dataflow](https://github.com/ti
 
 If we bring two workers to bear, our 10 million node, 50 million edge computation drops down from fifteen seconds to just over eight seconds.
 
-         Running `target/release/examples/degrees 10000000 50000000 1 -w2`
-    Loading finished after Duration { secs: 8, nanos: 207375094 }
-    worker 0, round 1 finished after Duration { secs: 0, nanos: 119399 }
-    worker 1, round 1 finished after Duration { secs: 0, nanos: 241527 }
-    worker 0, round 2 finished after Duration { secs: 0, nanos: 222533 }
-    worker 1, round 2 finished after Duration { secs: 0, nanos: 154681 }
+    Echidnatron% cargo run --release --example hello -- 10000000 50000000 1 no_inspect -w2
+        Finished release [optimized + debuginfo] target(s) in 0.04s
+        Running `target/release/examples/hello 10000000 50000000 1 no_inspect -w2`
+    round 0 finished after 8.065386177s (loading)
+    round 1 finished after 275.373µs
+    round 2 finished after 759.632µs
+    round 3 finished after 171.671µs
+    round 4 finished after 745.078µs
+    round 5 finished after 213.146µs
     ...
 
 That is a so-so reduction. You might notice that the times *increased* for the subsequent rounds. It turns out that multiple workers just get in each other's way when there isn't much work to do.
 
 Fortunately, as we work on more and more rounds of updates at the same time, the benefit of multiple workers increases. Here are the numbers for ten rounds at a time:
 
-         Running `target/release/examples/degrees 10000000 50000000 10 -w2`
-    Loading finished after Duration { secs: 8, nanos: 575313222 }
-    worker 0, round 10 finished after Duration { secs: 0, nanos: 267152 }
-    worker 1, round 10 finished after Duration { secs: 0, nanos: 325377 }
-    worker 1, round 20 finished after Duration { secs: 0, nanos: 201332 }
-    worker 0, round 20 finished after Duration { secs: 0, nanos: 252631 }
+    Echidnatron% cargo run --release --example hello -- 10000000 50000000 10 no_inspect -w2
+        Finished release [optimized + debuginfo] target(s) in 0.04s
+        Running `target/release/examples/hello 10000000 50000000 10 no_inspect -w2`
+    round 0 finished after 8.083000954s (loading)
+    round 10 finished after 1.901946ms
+    round 20 finished after 3.092976ms
+    round 30 finished after 889.63µs
+    round 40 finished after 409.001µs
+    round 50 finished after 320.248µs
     ...
 
 One hundred rounds at a time:
 
-         Running `target/release/examples/degrees 10000000 50000000 100 -w2`
-    Loading finished after Duration { secs: 8, nanos: 877454322 }
-    worker 0, round 100 finished after Duration { secs: 0, nanos: 764008 }
-    worker 1, round 100 finished after Duration { secs: 0, nanos: 810008 }
-    worker 0, round 200 finished after Duration { secs: 0, nanos: 696741 }
-    worker 1, round 200 finished after Duration { secs: 0, nanos: 730942 }
+    Echidnatron% cargo run --release --example hello -- 10000000 50000000 100 no_inspect -w2
+        Finished release [optimized + debuginfo] target(s) in 0.04s
+        Running `target/release/examples/hello 10000000 50000000 100 no_inspect -w2`
+    round 0 finished after 8.121800831s (loading)
+    round 100 finished after 2.52821ms
+    round 200 finished after 3.119036ms
+    round 300 finished after 1.63147ms
+    round 400 finished after 1.008668ms
+    round 500 finished after 941.426µs
     ...
 
 One hundred thousand rounds at a time:
 
-    Running `target/release/examples/degrees 10000000 50000000 100000 -w2`
-    Loading finished after Duration { secs: 8, nanos: 789885099 }
-    worker 0, round 100000 finished after Duration { secs: 0, nanos: 322398063 }
-    worker 1, round 100000 finished after Duration { secs: 0, nanos: 322534039 }
-    worker 0, round 200000 finished after Duration { secs: 0, nanos: 340302572 }
-    worker 1, round 200000 finished after Duration { secs: 0, nanos: 340617938 }
+    Echidnatron% cargo run --release --example hello -- 10000000 50000000 100000 no_inspect -w2
+        Finished release [optimized + debuginfo] target(s) in 0.04s
+        Running `target/release/examples/hello 10000000 50000000 100000 no_inspect -w2`
+    round 0 finished after 8.200755198s (loading)
+    round 100000 finished after 275.262419ms
+    round 200000 finished after 279.291957ms
+    round 300000 finished after 259.137138ms
+    round 400000 finished after 340.624124ms
+    round 500000 finished after 259.870938ms
     ...
 
 These last numbers were about half a second with one worker, and are decently improved with the second worker.
@@ -264,31 +282,40 @@ There are several performance optimizations in differential dataflow designed to
 
 For example, we also know in this case that the underlying collections go through a *sequence* of changes, meaning their timestamps are totally ordered. In this case we can use a much simpler implementation, `count_total`. The reduces the update times substantially, for each batch size:
 
-         Running `target/release/examples/degrees 10000000 50000000 10 -w2`
-    Loading finished after Duration { secs: 5, nanos: 866946585 }
-    worker 1, round 10 finished after Duration { secs: 0, nanos: 149072 }
-    worker 0, round 10 finished after Duration { secs: 0, nanos: 93686 }
-    worker 0, round 20 finished after Duration { secs: 0, nanos: 134797 }
-    worker 1, round 20 finished after Duration { secs: 0, nanos: 144141 }
+    Echidnatron% cargo run --release --example hello -- 10000000 50000000 10 no_inspect -w2
+        Finished release [optimized + debuginfo] target(s) in 0.04s
+        Running `target/release/examples/hello 10000000 50000000 10 no_inspect -w2`
+    round 0 finished after 5.985084002s (loading)
+    round 10 finished after 1.802729ms
+    round 20 finished after 2.202838ms
+    round 30 finished after 192.902µs
+    round 40 finished after 198.342µs
+    round 50 finished after 187.725µs
     ...
 
-         Running `target/release/examples/degrees 10000000 50000000 100 -w2`
-    Loading finished after Duration { secs: 5, nanos: 927197087 }
-    worker 0, round 100 finished after Duration { secs: 0, nanos: 382786 }
-    worker 1, round 100 finished after Duration { secs: 0, nanos: 430597 }
-    worker 1, round 200 finished after Duration { secs: 0, nanos: 436174 }
-    worker 0, round 200 finished after Duration { secs: 0, nanos: 449252 }
+    Echidnatron% cargo run --release --example hello -- 10000000 50000000 100 no_inspect -w2
+        Finished release [optimized + debuginfo] target(s) in 0.04s
+        Running `target/release/examples/hello 10000000 50000000 100 no_inspect -w2`
+    round 0 finished after 5.588270073s (loading)
+    round 100 finished after 3.114716ms
+    round 200 finished after 2.657691ms
+    round 300 finished after 890.972µs
+    round 400 finished after 448.537µs
+    round 500 finished after 384.565µs
     ...
 
-         Running `target/release/examples/degrees 10000000 50000000 100000 -w2`
-    Loading finished after Duration { secs: 5, nanos: 923657540 }
-    worker 0, round 100000 finished after Duration { secs: 0, nanos: 111166331 }
-    worker 1, round 100000 finished after Duration { secs: 0, nanos: 111733061 }
-    worker 0, round 200000 finished after Duration { secs: 0, nanos: 114145529 }
-    worker 1, round 200000 finished after Duration { secs: 0, nanos: 115295166 }
+    Echidnatron% cargo run --release --example hello -- 10000000 50000000 100000 no_inspect -w2
+        Finished release [optimized + debuginfo] target(s) in 0.04s
+        Running `target/release/examples/hello 10000000 50000000 100000 no_inspect -w2`
+    round 0 finished after 6.486550581s (loading)
+    round 100000 finished after 89.096615ms
+    round 200000 finished after 79.469464ms
+    round 300000 finished after 72.568018ms
+    round 400000 finished after 93.456272ms
+    round 500000 finished after 73.954886ms
     ...
 
-These times have now dropped quite a bit from where we started; we now absorb almost one million rounds of updates per second, and produce correct (not just consistent) answers even while distributed across multiple workers.
+These times have now dropped quite a bit from where we started; we now absorb over one million rounds of updates per second, and produce correct (not just consistent) answers even while distributed across multiple workers.
 
 ## A second example: k-core computation
 
@@ -351,40 +378,8 @@ I think this is all great, both that it works at all and that it even seems to w
 
 ## Roadmap
 
-There are several interesting things still to do with differential dataflow. Here is the roadmap of what I am hoping to do (though, holler if you'd like to stick your nose in and help out, or ever just comment):
-
-### Compacting traces
-
-As computation proceeds, some older times become indistinguishable. Once we hit round 1,000, we don't really care about the difference between updates at round 500 versus round 600; all updates before round 1,000 are "done". Updates at indistinguishable times can be merged, which is an important part of differential dataflow running forever and ever.
-
-The underlying data stores are now able to compact their representations when provided with guarantees about which future times will be encountered. This results in stable incremental update times even after millions of batches of rounds of updates.
-
-This compaction works across shared use of the traces, in that multiple operators can use the same state and provide different opinions about which future times will be encountered. The trace implementation is bright enough to track the lower bound of these opinions, and compact conservatively to continue to permit sharing of resources.
-
-**MERGED**
-
-### Fine-grained timestamps
-
-Differential dataflow used to strongly rely on the fact that all times in a batch of updates would be identical. This introduces substantial overheads for fine-grained updates, where there are perhaps just a few updates with each timestamp; each must be put in its own batch, and introduce coordination overhead for the underlying timely dataflow runtime.
-
-The underlying streams of updates are now able to be batched arbitrarily, with timestamps promoted to data fields. Differential dataflow can now batch updates at different times, and the operator implementations can retire time *intervals* rather than individual times, often with improved performance.
-
-There is now some complexity in the operator implementations, each of which emulates "sequential playback" of the updates on a key-by-key basis. The intent is that they should do no more work than one would do if updates were provided one at a time, but without the associated system overhead.
-
-**MERGED**
-
-### Fault-tolerance
-
-The functional nature of differential dataflow computations means that it can commit to output updates for various times once they are produced, because as long as the input are also committed, the computation should always produce the same output. Internally, differential dataflow stores data as indexed collections of immutable lists, and each list is self-describing: each indicates an interval of logical time and contains exactly the updates in that interval.
-
-The internal data stores are sufficient to quickly bring a differential dataflow computation back to life if failed or otherwise shut down. The immutable nature makes them well suited for persisting to disk and replicating as appropriate. It seems reasonable to investigate how much or little extra is required to quickly recover a stopped differential dataflow computation from persisted versions of its immutable collections.
-
-There is much more to do to have "serious" fault-tolerance,  but this is an interesting first step to explore.
-
-### Other issues
-
 The [issue tracker](https://github.com/timelydataflow/differential-dataflow/issues) has several open issues relating to current performance defects or missing features. If you are interested in contributing, that would be great! If you have other questions, don't hesitate to get in touch.
 
 ## Acknowledgements
 
-In addition to contributions to this repository, differential dataflow is based on work at the now defunct Microsoft Research lab in Silicon Valley. Collaborators have included: Martin Abadi, Paul Barham, Rebecca Isaacs, Michael Isard, Derek Murray, and Gordon Plotkin. Work on this project continued at the Systems Group of ETH Zürich, and was informed by discussions with Zaheer Chothia, Andrea Lattuada, John Liagouris, and Darko Makreshanski.
+In addition to contributions to this repository, differential dataflow is based on work at the now defunct Microsoft Research lab in Silicon Valley, and continued at the Systems Group of ETH Zürich. Numerous collaborators at each institution (among others) have contributed both ideas and implementations.

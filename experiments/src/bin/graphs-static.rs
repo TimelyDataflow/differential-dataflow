@@ -15,7 +15,7 @@ use differential_dataflow::Collection;
 use differential_dataflow::operators::*;
 use differential_dataflow::operators::arrange::ArrangeByKey;
 use differential_dataflow::operators::arrange::ArrangeBySelf;
-use differential_dataflow::operators::iterate::Variable;
+use differential_dataflow::operators::iterate::SemigroupVariable;
 use differential_dataflow::trace::implementations::spine_fueled::Spine;
 use differential_dataflow::AsCollection;
 
@@ -128,7 +128,7 @@ fn reach<G: Scope<Timestamp = ()>> (
         let graph = graph.enter(scope);
         let roots = roots.enter(scope);
 
-        let inner = Variable::new_from(roots.clone(), Product::new(Default::default(), 1));
+        let inner = SemigroupVariable::new(scope, Product::new(Default::default(), 1));
 
         let result =
         graph.join_core(&inner.arrange_by_self(), |_src,&dst,&()| Some(dst))
@@ -154,7 +154,7 @@ fn bfs<G: Scope<Timestamp = ()>> (
         let graph = graph.enter(scope);
         let roots = roots.enter(scope);
 
-        let inner = Variable::new_from(roots.clone(), Product::new(Default::default(), 1));
+        let inner = SemigroupVariable::new(scope, Product::new(Default::default(), 1));
         let result =
         graph.join_map(&inner, |_src,&dest,&dist| (dest, dist+1))
              .concat(&roots)
@@ -186,8 +186,7 @@ fn connected_components<G: Scope<Timestamp = ()>>(
         let reverse = reverse.enter(scope);
         let nodes = nodes.enter(scope);
 
-        use differential_dataflow::operators::iterate::Variable;
-        let inner = Variable::new(scope, Product::new(Default::default(), 1));
+        let inner = SemigroupVariable::new(scope, Product::new(Default::default(), 1));
 
         let labels = inner.arrange_by_key();
         let f_prop = labels.join_core(&forward, |_k,l,d| Some((*d,*l)));
@@ -210,56 +209,3 @@ fn connected_components<G: Scope<Timestamp = ()>>(
         result.leave()
     })
 }
-
-
-
-fn _connected_components_odd<G: Scope<Timestamp = ()>>(
-    scope: &mut G,
-    forward: &mut TraceHandle,
-    reverse: &mut TraceHandle,
-) -> Collection<G, (Node, Node), Diff> {
-
-    let forward = forward.import(scope);
-    let reverse = reverse.import(scope);
-
-    // each edge (x,y) means that we need at least a label for the min of x and y.
-    let nodes_f = forward.flat_map_ref(|k,v| if k < v { Some(*k) } else { None });
-    let nodes_r = reverse.flat_map_ref(|k,v| if k < v { Some(*k) } else { None });
-    let nodes = nodes_f.concat(&nodes_r).consolidate().map(|x| (x,x));
-
-    nodes.scope().iterative(|scope| {
-
-        // import arrangements, nodes.
-        let forward = forward.enter(scope);
-        let reverse = reverse.enter(scope);
-        let nodes = nodes.enter(scope);
-
-        use differential_dataflow::operators::iterate::Variable;
-        let inner = Variable::new(scope, Product::new(Default::default(), 1));
-
-        // let labels = inner.arrange_by_key();
-
-        use timely::dataflow::operators::{Map, Concat, Delay};
-
-        let proposals =
-        nodes
-            .inner
-            .map_in_place(|dtr| (dtr.1).inner = 256 * ((((::std::mem::size_of::<Node>() * 8) as u32) - (dtr.0).1.leading_zeros())))
-            .concat(&inner.inner)
-            .delay(|dtr,_| dtr.1.clone())
-            .as_collection();
-
-        use differential_dataflow::operators::reduce::ReduceCore;
-
-        let labels =
-        proposals
-            .reduce_abelian::<_,Spine<Node, Node, _, Diff, Rc<OrdValBatch<Node, Node, _, Diff>>>>(|_, s, t| { t.push((*s[0].0, 1)); });
-
-        let f_prop = labels.join_core(&forward, |_k,l,d| Some((*d,*l)));
-        let r_prop = labels.join_core(&reverse, |_k,l,d| Some((*d,*l)));
-
-        inner.set(&f_prop.concat(&r_prop).consolidate());
-        labels.as_collection(|k,v| (*k,*v)).leave()
-    })
-}
-

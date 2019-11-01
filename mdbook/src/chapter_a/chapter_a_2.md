@@ -29,7 +29,7 @@ We can also make the same changes to the code that supplies the change, where ea
     while person < people {
         input.remove((person/2, person));
         input.insert((person/3, person));
-        input.advance_to(person); input.flush();
+        input.advance_to(person);
         person += peers;
     }
 ```
