@@ -637,7 +637,20 @@ where
                         // Single batches may initiate a merge, if sizes are
                         // within bounds, but terminate the loop either way.
                         MergeState::Single(Some(batch)) => {
-                            let smaller: usize = self.merging[..(length-2)].iter().map(|b| b.len()).sum();
+
+                            // Determine the number of records that might lead
+                            // to a merge. Importantly, this is not the number
+                            // of actual records, but the sum of upper bounds
+                            // based on indices.
+                            let mut smaller = 0;
+                            for (index, batch) in self.merging[..(length-2)].iter().enumerate() {
+                                match batch {
+                                    MergeState::Vacant => { },
+                                    MergeState::Single(_) => { smaller += 1 << index; },
+                                    MergeState::Double(_) => { smaller += 2 << index; },
+                                }
+                            }
+
                             if smaller <= (1 << length) / 8 {
                                 self.merging.remove(length-2);
                                 self.insert_at(Some(batch), length-2);
