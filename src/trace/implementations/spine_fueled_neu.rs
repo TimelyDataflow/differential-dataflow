@@ -385,9 +385,28 @@ where
         while self.pending.len() > 0 &&
               self.through_frontier.iter().all(|t1| self.pending[0].upper().iter().any(|t2| t2.less_equal(t1)))
         {
-            let batch = self.pending.remove(0);
-            let index = batch.len().next_power_of_two();
-            self.introduce_batch(Some(batch), index.trailing_zeros() as usize);
+            // Batch can be taken in optimized insertion.
+            // Otherwise it is inserted normally at the end of the method.
+            let mut batch = Some(self.pending.remove(0));
+
+            // If `batch` and the most recently inserted batch are both empty, we can just fuse them.
+            // We can also replace a structurally empty batch with this empty batch, preserving the
+            // apparent record count but now with non-trivial lower and upper bounds.
+            if batch.as_ref().unwrap().len() == 0 {
+                if let Some(position) = self.merging.iter().position(|m| !m.is_vacant()) {
+                    if self.merging[position].is_single() && self.merging[position].len() == 0 {
+                        self.insert_at(batch.take(), position);
+                        let merged = self.complete_at(position);
+                        self.merging[position] = MergeState::Single(merged);
+                    }
+                }
+            }
+
+            // Normal insertion for the batch.
+            if let Some(batch) = batch {
+                let index = batch.len().next_power_of_two();
+                self.introduce_batch(Some(batch), index.trailing_zeros() as usize);
+            }
         }
 
         // Having performed all of our work, if more than one batch remains reschedule ourself.
