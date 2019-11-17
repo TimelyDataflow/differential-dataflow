@@ -314,7 +314,7 @@ where
     R: Semigroup,
     B: Batch<K, V, T, R>,
 {
-    /// True iff there is at most one batch in `self.merging`.
+    /// True iff there is at most one non-empty batch in `self.merging`.
     ///
     /// When true, there is no maintenance work to perform in the trace, other than compaction.
     /// We do not yet have logic in place to determine if compaction would improve a trace, so
@@ -323,7 +323,7 @@ where
         let mut non_empty = 0;
         for index in 0 .. self.merging.len() {
             if self.merging[index].is_double() { return false; }
-            if self.merging[index].non_trivial() { non_empty += 1; }
+            if self.merging[index].len() > 0 { non_empty += 1; }
             if non_empty > 1 { return false; }
         }
         true
@@ -704,16 +704,6 @@ impl<K, V, T: Eq, R, B: Batch<K, V, T, R>> MergeState<K, V, T, R, B> {
     /// True only for the MergeState::Vacant variant.
     fn is_vacant(&self) -> bool {
         if let MergeState::Vacant = self { true } else { false }
-    }
-
-    /// True only for the MergeState::Vacant variant.
-    fn non_trivial(&self) -> bool {
-        match self {
-            MergeState::Double(MergeVariant::Complete(None)) => false,
-            MergeState::Single(None) => false,
-            MergeState::Vacant => false,
-            _ => true,
-        }
     }
 
     /// True only for the MergeState::Single variant.
