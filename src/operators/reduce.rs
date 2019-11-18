@@ -354,7 +354,18 @@ where
                     register.get::<::logging::DifferentialEvent>("differential/arrange")
                 };
 
-                let empty = T2::new(operator_info.clone(), logger.clone());
+                // Determine if we should regularly exert the trace maintenance machinery,
+                // and with what amount of effort each time.
+                let (activator, effort) =
+                if let Ok(text) = ::std::env::var("DIFFERENTIAL_EAGER_MERGE") {
+                    let effort = text.parse::<isize>().expect("DIFFERENTIAL_EAGER_MERGE must be set to an integer");
+                    (Some(self.stream.scope().activator_for(&operator_info.address[..])), Some(effort))
+                }
+                else {
+                    (None, None)
+                };
+
+                let empty = T2::new(operator_info.clone(), logger.clone(), activator);
                 let mut source_trace = self.trace.clone();
 
                 let (mut output_reader, mut output_writer) = TraceAgent::new(empty, operator_info, logger);
@@ -620,6 +631,11 @@ where
                         // We will only slice the data between future batches.
                         source_trace.distinguish_since(upper_limit.elements());
                         output_reader.distinguish_since(upper_limit.elements());
+                    }
+
+                    // Exert trace maintenance if we have been so requested.
+                    if let Some(mut fuel) = effort.clone() {
+                        output_writer.exert(&mut fuel);
                     }
                 }
             }

@@ -105,7 +105,7 @@ mod tests {
 
         ::timely::example(|scope| {
 
-            let input = scope.new_collection_from(1 .. 10).1;
+            let input = scope.new_collection_from(1 .. 4).1;
 
             use collection::AsCollection;
 
@@ -117,6 +117,7 @@ mod tests {
                         .concat(&diff)
                         .map(|(round, num)| ((round + num) / 10, (round, num)))
                         .reduce(|_hash, input, output| {
+                            println!("Input: {:?}", input);
                             // keep round-positive records as changes.
                             let ((round, record), count) = &input[0];
                             if *round > 0 {
@@ -129,6 +130,7 @@ mod tests {
                                 output.push(((*round+1, record.clone()), *count));
                             }
                         })
+                        .inspect(|x| println!("{:?}", x))
                         .map(|(_hash, pair)| pair)
                 )
                 .concat(&init)

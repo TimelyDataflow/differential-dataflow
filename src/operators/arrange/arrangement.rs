@@ -523,7 +523,7 @@ where
 
             let reader = &mut reader;
 
-            self.inner.unary_frontier(pact, name, move |_capability, _info| {
+            self.inner.unary_frontier(pact, name, move |_capability, info| {
 
                 // Acquire a logger for arrange events.
                 let logger = {
@@ -540,8 +540,19 @@ where
 
                 let mut buffer = Vec::new();
 
-                let empty_trace = Tr::new(_info.clone(), logger.clone());
-                let (reader_local, mut writer) = TraceAgent::new(empty_trace, _info, logger);
+
+                let (activator, effort) =
+                if let Ok(text) = ::std::env::var("DIFFERENTIAL_EAGER_MERGE") {
+                    let effort = text.parse::<isize>().expect("DIFFERENTIAL_EAGER_MERGE must be set to an integer");
+                    (Some(self.scope().activator_for(&info.address[..])), Some(effort))
+                }
+                else {
+                    (None, None)
+                };
+
+                let empty_trace = Tr::new(info.clone(), logger.clone(), activator);
+                let (reader_local, mut writer) = TraceAgent::new(empty_trace, info, logger);
+
                 *reader = Some(reader_local);
 
                 // Initialize to the minimal input frontier.
@@ -642,6 +653,10 @@ where
                         input_frontier.clear();
                         input_frontier.extend(input.frontier().frontier().iter().cloned());
                     }
+
+                    if let Some(mut fuel) = effort.clone() {
+                        writer.exert(&mut fuel);
+                    }
                 }
             })
         };
@@ -665,19 +680,6 @@ where
             .arrange_core(pact, name)
     }
 }
-
-// impl<G, K, V, R, T> Arrange<G, K, V, R, T> for Arranged<G, K, V, R, TraceAgent<K, V, G::Timestamp, R, T>>
-// where
-//     G: Scope,
-//     G::Timestamp: Lattice,
-//     R: Semigroup,
-//     T: Trace<K, V, G::Timestamp, R>+Clone+'static,
-//     T::Batch: Batch<K, V, G::Timestamp, R>
-// {
-//     fn arrange_named(&self, _name: &str) -> Arranged<G, K, V, R, TraceAgent<K, V, G::Timestamp, R, T>> {
-//         (*self).clone()
-//     }
-// }
 
 /// Arranges something as `(Key,Val)` pairs according to a type `T` of trace.
 ///
