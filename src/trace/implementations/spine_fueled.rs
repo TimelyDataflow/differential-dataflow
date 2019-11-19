@@ -199,9 +199,14 @@ where
     }
     fn advance_by(&mut self, frontier: &[T]) {
         self.advance_frontier = frontier.to_vec();
-        if self.advance_frontier.len() == 0 {
-            self.drop_batches();
-        }
+
+        // Commenting out for now; causes problems in `read_upper()`.
+        // If one has an urgent need to release these resources, it
+        // is probably best just to drop the trace.
+
+        // if self.advance_frontier.len() == 0 {
+        //     self.drop_batches();
+        // }
     }
     fn advance_frontier(&mut self) -> &[T] { &self.advance_frontier[..] }
     fn distinguish_since(&mut self, frontier: &[T]) {
