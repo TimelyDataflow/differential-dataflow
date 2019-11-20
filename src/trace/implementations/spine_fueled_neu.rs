@@ -75,7 +75,6 @@ use ::logging::Logger;
 use ::difference::Semigroup;
 use lattice::Lattice;
 use trace::{Batch, BatchReader, Trace, TraceReader};
-// use trace::cursor::cursor_list::CursorList;
 use trace::cursor::{Cursor, CursorList};
 use trace::Merger;
 
@@ -202,10 +201,15 @@ where
     }
     fn advance_by(&mut self, frontier: &[T]) {
         self.advance_frontier = frontier.to_vec();
-        if self.advance_frontier.len() == 0 {
-            self.pending.clear();
-            self.merging.clear();
-        }
+
+        // Commenting out for now; causes problems in `read_upper()`.
+        // If one has an urgent need to release these resources, it
+        // is probably best just to drop the trace.
+
+        // if self.advance_frontier.len() == 0 {
+        //     self.pending.clear();
+        //     self.merging.clear();
+        // }
     }
     fn advance_frontier(&mut self) -> &[T] { &self.advance_frontier[..] }
     fn distinguish_since(&mut self, frontier: &[T]) {
@@ -302,6 +306,65 @@ where
             let builder = B::Builder::new();
             let batch = builder.done(&self.upper[..], &[], &self.upper[..]);
             self.insert(batch);
+        }
+    }
+}
+
+// Drop implementation allows us to log batch drops, to zero out maintained totals.
+impl<K, V, T, R, B> Drop for Spine<K, V, T, R, B>
+where
+    T: Lattice+Ord,
+    R: Semigroup,
+    B: Batch<K, V, T, R>,
+{
+    fn drop(&mut self) {
+        self.drop_batches();
+    }
+}
+
+
+impl<K, V, T, R, B> Spine<K, V, T, R, B>
+where
+    T: Lattice+Ord,
+    R: Semigroup,
+    B: Batch<K, V, T, R>,
+{
+    /// Drops and logs batches. Used in advance_by and drop.
+    fn drop_batches(&mut self) {
+        if let Some(logger) = &self.logger {
+            for batch in self.merging.drain(..) {
+                match batch {
+                    MergeState::Single(Some(batch)) => {
+                        logger.log(::logging::DropEvent {
+                            operator: self.operator.global_id,
+                            length: batch.len(),
+                        });
+                    },
+                    MergeState::Double(MergeVariant::InProgress(batch1, batch2, _, _)) => {
+                        logger.log(::logging::DropEvent {
+                            operator: self.operator.global_id,
+                            length: batch1.len(),
+                        });
+                        logger.log(::logging::DropEvent {
+                            operator: self.operator.global_id,
+                            length: batch2.len(),
+                        });
+                    },
+                    MergeState::Double(MergeVariant::Complete(Some((batch, _)))) => {
+                        logger.log(::logging::DropEvent {
+                            operator: self.operator.global_id,
+                            length: batch.len(),
+                        });
+                    }
+                    _ => { },
+                }
+            }
+            for batch in self.pending.drain(..) {
+                logger.log(::logging::DropEvent {
+                    operator: self.operator.global_id,
+                    length: batch.len(),
+                });
+            }
         }
     }
 }
