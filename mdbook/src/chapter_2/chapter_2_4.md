@@ -2,7 +2,7 @@
 
 The `consolidate` operator takes an input collection, and does nothing other than possibly changing its physical representation. It leaves the same sets of elements at the same times with the same logical counts.
 
-What `consolidate` does do is ensure that each element at each time has at most one physical tuple. Generally, we might have multiple updates to the same element at the same time, expressed as independent updates. The `consolidate` operator adds all of these updates together before moving the udpate along.
+What `consolidate` does do is ensure that each element at each time has at most one physical tuple. Generally, we might have multiple updates to the same element at the same time, expressed as independent updates. The `consolidate` operator adds all of these updates together before moving the update along.
 
 As an example, if we were to inspect
 
