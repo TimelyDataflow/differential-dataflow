@@ -6,8 +6,8 @@ authors = ["Frank McSherry <fmcsherry@me.com>"]
 [dependencies]
 rand = "0.6.5"
 regex = "0.2"
-timely = "0.9"
-#timely = { git = "https://github.com/TimelyDataflow/timely-dataflow" }
+#timely = "0.11"
+timely = { git = "https://github.com/TimelyDataflow/timely-dataflow" }
 differential-dataflow = { path = "../" }
 arrayvec = { git = "https://github.com/bluss/arrayvec" }
 abomonation = "0.7"
@@ -15,4 +15,3 @@ core_affinity = "0.5.9"
 
 [profile.release]
 panic = "abort"
-
