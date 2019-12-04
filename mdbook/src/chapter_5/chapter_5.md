@@ -1,6 +1,6 @@
 # Arrangements
 
-Differential dataflow acts on *collections* of data, each of which we think of as a growing set of update triples `(data, time, diff)`. Arrangements are a new way to represent a set of updates, which can be substantially more efficient that our approaches so far (and all other stream processors to date).
+Differential dataflow acts on *collections* of data, each of which we think of as a growing set of update triples `(data, time, diff)`. Arrangements are a new way to represent a set of updates, which can be substantially more efficient than our approaches so far (and all other stream processors to date).
 
 Thus far, we have implemented differential collections as streams of update triples, which we connect as inputs to our various differential operators. At any moment an operator might receive a few more update triples and need to react to them. Or an operator might receive the signal that some timestamp `time` is now complete and we should expect no more updates bearing that timestamp.
 
