@@ -17,6 +17,6 @@ As we update the `queries` relation, we change which elements of `labels` are pa
 
 Even more importantly, our computation *maintains* the results of these queries as `labels` changes, perhaps due to changes in its input `edges` collection. When we add an element to `queries` we are installing a standing query that will monitor the label of the query, and report all changes to it, until such a point as we uninstall the query by removing it from `queries`.
 
-Constrast this with an approach where the connectivity results are stashed in a key-value store, one that you probe for node labels. While you may read back two labels that are the same, were they actually the same at the same moment? If the labels are not the same, does that mean they were not the same or are they perhaps changing in tandem as the graph changes?
+Contrast this with an approach where the connectivity results are stashed in a key-value store, one that you probe for node labels. While you may read back two labels that are the same, were they actually the same at the same moment? If the labels are not the same, does that mean they were not the same or are they perhaps changing in tandem as the graph changes?
 
 Differential dataflow prevents these ambiguities through its commitment to producing the correct answer, and clearly explaining a consistent history of changes through logical timestamps.

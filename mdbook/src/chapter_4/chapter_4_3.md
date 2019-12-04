@@ -2,7 +2,7 @@
 
 Our examples so far have involved careful manipulation of the input, making changes and advancing time. What happens when we want to connect all of this to an external source that can change at arbitrary rates, and which might not wait for us to complete some work before issuing new changes?
 
-Imagine an external data source that we can poll for changes, and when polled responds with all outstanding changes and the logical times at which each occurred. There is a fairly natural pattern we can write that exposes these changes to differential dataflow and asks it to resolve all changes concurrently, which retaining the logical times of each of the input changes.
+Imagine an external data source that we can poll for changes, and when polled responds with all outstanding changes and the logical times at which each occurred. There is a fairly natural pattern we can write that exposes these changes to differential dataflow and asks it to resolve all changes concurrently, while retaining the logical times of each of the input changes.
 
 ```rust,no_run
     while !source.done() {
