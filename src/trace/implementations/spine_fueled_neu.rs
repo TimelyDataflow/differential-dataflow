@@ -102,7 +102,7 @@ impl<K, V, T, R, B> TraceReader for Spine<K, V, T, R, B>
 where
     K: Ord+Clone,           // Clone is required by `batch::advance_*` (in-place could remove).
     V: Ord+Clone,           // Clone is required by `batch::advance_*` (in-place could remove).
-    T: Lattice+Ord+Clone+Debug+Default,
+    T: Lattice+Ord+Clone+Debug,
     R: Semigroup,
     B: Batch<K, V, T, R>+Clone+'static,
 {
@@ -239,7 +239,7 @@ impl<K, V, T, R, B> Trace for Spine<K, V, T, R, B>
 where
     K: Ord+Clone,
     V: Ord+Clone,
-    T: Lattice+Ord+Clone+Debug+Default,
+    T: Lattice+Ord+Clone+Debug,
     R: Semigroup,
     B: Batch<K, V, T, R>+Clone+'static,
 {
@@ -373,7 +373,7 @@ impl<K, V, T, R, B> Spine<K, V, T, R, B>
 where
     K: Ord+Clone,
     V: Ord+Clone,
-    T: Lattice+Ord+Clone+Debug+Default,
+    T: Lattice+Ord+Clone+Debug,
     R: Semigroup,
     B: Batch<K, V, T, R>,
 {
@@ -426,11 +426,11 @@ where
             operator,
             logger,
             phantom: ::std::marker::PhantomData,
-            advance_frontier: vec![<T as Lattice>::minimum()],
-            through_frontier: vec![<T as Lattice>::minimum()],
+            advance_frontier: vec![<T as timely::progress::Timestamp>::minimum()],
+            through_frontier: vec![<T as timely::progress::Timestamp>::minimum()],
             merging: Vec::new(),
             pending: Vec::new(),
-            upper: vec![Default::default()],
+            upper: vec![<T as timely::progress::Timestamp>::minimum()],
             effort,
             activator,
         }

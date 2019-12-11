@@ -17,8 +17,6 @@
 //! see ill-defined data at times for which the trace is not complete. (All current implementations
 //! commit only completed data to the trace).
 
-use std::default::Default;
-
 use timely::dataflow::operators::{Enter, Map};
 use timely::order::{PartialOrder, TotalOrder};
 use timely::dataflow::{Scope, Stream};
@@ -101,8 +99,8 @@ where
             Tr::Key: 'static,
             Tr::Val: 'static,
             Tr::R: 'static,
-            G::Timestamp: Clone+Default+'static,
-            TInner: Refines<G::Timestamp>+Lattice+Timestamp+Clone+Default+'static,
+            G::Timestamp: Clone+'static,
+            TInner: Refines<G::Timestamp>+Lattice+Timestamp+Clone+'static,
     {
         Arranged {
             stream: self.stream.enter(child).map(|bw| BatchEnter::make_from(bw)),
@@ -120,7 +118,7 @@ where
             Tr::Key: 'static,
             Tr::Val: 'static,
             Tr::R: 'static,
-            G::Timestamp: Clone+Default+'static,
+            G::Timestamp: Clone+'static,
     {
         Arranged {
             stream: self.stream.enter(child),
@@ -139,8 +137,8 @@ where
             Tr::Key: 'static,
             Tr::Val: 'static,
             Tr::R: 'static,
-            G::Timestamp: Clone+Default+'static,
-            TInner: Refines<G::Timestamp>+Lattice+Timestamp+Clone+Default+'static,
+            G::Timestamp: Clone+'static,
+            TInner: Refines<G::Timestamp>+Lattice+Timestamp+Clone+'static,
             F: FnMut(&Tr::Key, &Tr::Val, &G::Timestamp)->TInner+Clone+'static,
     {
         let logic1 = logic.clone();
@@ -188,7 +186,7 @@ where
             Tr::Key: 'static,
             Tr::Val: 'static,
             Tr::R: 'static,
-            G::Timestamp: Clone+Default+'static,
+            G::Timestamp: Clone+'static,
             F: FnMut(&Tr::Key, &Tr::Val)->bool+Clone+'static,
     {
         let logic1 = logic.clone();
@@ -556,7 +554,7 @@ where
                 *reader = Some(reader_local);
 
                 // Initialize to the minimal input frontier.
-                let mut input_frontier = vec![Default::default()];
+                let mut input_frontier = vec![<G::Timestamp as Timestamp>::minimum()];
 
                 move |input, output| {
 

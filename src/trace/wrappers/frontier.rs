@@ -160,7 +160,7 @@ where
     #[inline]
     fn map_times<L: FnMut(&T,&R)>(&mut self, storage: &Self::Storage, mut logic: L) {
         let frontier = &self.frontier[..];
-        let mut temp: T = Default::default();
+        let mut temp: T = <T as timely::progress::Timestamp>::minimum();
         self.cursor.map_times(storage, |time, diff| {
             temp.clone_from(time);
             temp.advance_by(frontier);
@@ -212,7 +212,7 @@ where
     #[inline]
     fn map_times<L: FnMut(&T,&R)>(&mut self, storage: &Self::Storage, mut logic: L) {
         let frontier = &self.frontier[..];
-        let mut temp: T = Default::default();
+        let mut temp: T = <T as timely::progress::Timestamp>::minimum();
         self.cursor.map_times(&storage.batch, |time, diff| {
             temp.clone_from(time);
             temp.advance_by(frontier);

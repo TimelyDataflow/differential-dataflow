@@ -123,7 +123,7 @@ where
         self.stream.unary_frontier(Pipeline, "ThresholdTotal", move |_,_| {
 
             // tracks the upper limit of known-complete timestamps.
-            let mut upper_limit = timely::progress::frontier::Antichain::from_elem(<G::Timestamp>::minimum());
+            let mut upper_limit = timely::progress::frontier::Antichain::from_elem(<G::Timestamp as timely::progress::Timestamp>::minimum());
 
             move |input, output| {
 

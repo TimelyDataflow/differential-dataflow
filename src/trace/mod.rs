@@ -124,7 +124,7 @@ pub trait TraceReader {
 		Self::Time: Timestamp,
 	{
 		target.clear();
-		target.insert(Default::default());
+		target.insert(<Self::Time as timely::progress::Timestamp>::minimum());
 		self.map_batches(|batch| {
 			target.clear();
 			for time in batch.upper().iter().cloned() {

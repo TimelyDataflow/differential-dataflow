@@ -386,12 +386,12 @@ where
                 let mut interesting_times = Vec::<G::Timestamp>::new();
 
                 // Upper and lower frontiers for the pending input and output batches to process.
-                let mut upper_limit = Antichain::from_elem(<G::Timestamp as Lattice>::minimum());
-                let mut lower_limit = Antichain::from_elem(<G::Timestamp as Lattice>::minimum());
+                let mut upper_limit = Antichain::from_elem(<G::Timestamp as timely::progress::Timestamp>::minimum());
+                let mut lower_limit = Antichain::from_elem(<G::Timestamp as timely::progress::Timestamp>::minimum());
 
                 // Output batches may need to be built piecemeal, and these temp storage help there.
-                let mut output_upper = Antichain::from_elem(<G::Timestamp as Lattice>::minimum());
-                let mut output_lower = Antichain::from_elem(<G::Timestamp as Lattice>::minimum());
+                let mut output_upper = Antichain::from_elem(<G::Timestamp as timely::progress::Timestamp>::minimum());
+                let mut output_lower = Antichain::from_elem(<G::Timestamp as timely::progress::Timestamp>::minimum());
 
                 let mut input_buffer = Vec::new();
 

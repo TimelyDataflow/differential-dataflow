@@ -2,7 +2,6 @@
 
 use std::rc::{Rc, Weak};
 use std::cell::RefCell;
-use std::default::Default;
 use std::collections::VecDeque;
 
 use timely::dataflow::Scope;
@@ -106,7 +105,7 @@ where
         };
 
         let writer = TraceWriter::new(
-            vec![Default::default()],
+            vec![<Tr::Time as Timestamp>::minimum()],
             Rc::downgrade(&trace),
             queues,
         );
@@ -120,8 +119,6 @@ where
     /// The queue will be immediately populated with existing historical batches from the trace, and until the reference
     /// is dropped the queue will receive new batches as produced by the source `arrange` operator.
     pub fn new_listener(&mut self, activator: Activator) -> TraceAgentQueueReader<Tr>
-    where
-        Tr::Time: Default
     {
         // create a new queue for progress and batch information.
         let mut new_queue = VecDeque::new();
@@ -132,7 +129,7 @@ where
             .borrow_mut()
             .trace
             .map_batches(|batch| {
-                new_queue.push_back(TraceReplayInstruction::Batch(batch.clone(), Some(Default::default())));
+                new_queue.push_back(TraceReplayInstruction::Batch(batch.clone(), Some(<Tr::Time as Timestamp>::minimum())));
                 upper = Some(batch.upper().to_vec());
             });
 
