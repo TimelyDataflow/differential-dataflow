@@ -76,7 +76,7 @@ where
         self.stream.unary_frontier(Pipeline, "CountTotal", move |_,_| move |input, output| {
 
             // tracks the upper limit of known-complete timestamps.
-            let mut upper_limit = timely::progress::frontier::Antichain::from_elem(<G::Timestamp>::minimum());
+            let mut upper_limit = timely::progress::frontier::Antichain::from_elem(<G::Timestamp as timely::progress::Timestamp>::minimum());
 
             input.for_each(|capability, batches| {
                 batches.swap(&mut buffer);

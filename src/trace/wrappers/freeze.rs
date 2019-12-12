@@ -83,7 +83,7 @@ where
     Tr::Batch: Clone,
     Tr::Key: 'static,
     Tr::Val: 'static,
-    Tr::Time: Lattice+Clone+Default+'static,
+    Tr::Time: Lattice+Clone+'static,
     Tr::R: 'static,
     F: Fn(&Tr::Time)->Option<Tr::Time>+'static,
 {
@@ -121,7 +121,7 @@ where
     Tr::Batch: Clone,
     Tr::Key: 'static,
     Tr::Val: 'static,
-    Tr::Time: Lattice+Clone+Default+'static,
+    Tr::Time: Lattice+Clone+'static,
     Tr::R: 'static,
     F: Fn(&Tr::Time)->Option<Tr::Time>,
 {
@@ -155,7 +155,7 @@ impl<K, V, T: Clone, R, B: Clone, F> Clone for BatchFreeze<K, V, T, R, B, F> {
 impl<K, V, T, R, B, F> BatchReader<K, V, T, R> for BatchFreeze<K, V, T, R, B, F>
 where
     B: BatchReader<K, V, T, R>,
-    T: Clone+Default,
+    T: Clone,
     F: Fn(&T)->Option<T>,
 {
     type Cursor = BatchCursorFreeze<K, V, T, R, B, F>;

@@ -5,21 +5,10 @@
 //! `Lattice` trait, and all reasoning in operators are done it terms of `Lattice` methods.
 
 use timely::order::PartialOrder;
+use timely::progress::Timestamp;
 
 /// A bounded partially ordered type supporting joins and meets.
-pub trait Lattice : PartialOrder {
-
-    /// The smallest element of the type.
-    ///
-    /// #Examples
-    ///
-    /// ```
-    /// use differential_dataflow::lattice::Lattice;
-    ///
-    /// let min = <usize as Lattice>::minimum();
-    /// assert_eq!(min, usize::min_value());
-    /// ```
-    fn minimum() -> Self;
+pub trait Lattice : PartialOrder+Timestamp {
 
     /// The smallest element greater than or equal to both arguments.
     ///
@@ -164,8 +153,6 @@ use timely::order::Product;
 
 impl<T1: Lattice, T2: Lattice> Lattice for Product<T1, T2> {
     #[inline]
-    fn minimum() -> Self { Product::new(T1::minimum(), T2::minimum()) }
-    #[inline]
     fn join(&self, other: &Product<T1, T2>) -> Product<T1, T2> {
         Product {
             outer: self.outer.join(&other.outer),
@@ -184,7 +171,6 @@ impl<T1: Lattice, T2: Lattice> Lattice for Product<T1, T2> {
 macro_rules! implement_lattice {
     ($index_type:ty, $minimum:expr) => (
         impl Lattice for $index_type {
-            #[inline] fn minimum() -> Self { $minimum }
             #[inline] fn join(&self, other: &Self) -> Self { ::std::cmp::max(*self, *other) }
             #[inline] fn meet(&self, other: &Self) -> Self { ::std::cmp::min(*self, *other) }
         }
