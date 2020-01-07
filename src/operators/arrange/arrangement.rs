@@ -131,8 +131,8 @@ where
     /// This method produces a proxy trace handle that uses the same backing data, but acts as if the timestamps
     /// have all been extended with an additional coordinate with the default value. The resulting collection does
     /// not vary with the new timestamp coordinate.
-    pub fn enter_at<'a, TInner, F>(&self, child: &Child<'a, G, TInner>, logic: F)
-        -> Arranged<Child<'a, G, TInner>, TraceEnterAt<Tr, TInner, F>>
+    pub fn enter_at<'a, TInner, F, P>(&self, child: &Child<'a, G, TInner>, logic: F, prior: P)
+        -> Arranged<Child<'a, G, TInner>, TraceEnterAt<Tr, TInner, F, P>>
         where
             Tr::Key: 'static,
             Tr::Val: 'static,
@@ -140,11 +140,12 @@ where
             G::Timestamp: Clone+'static,
             TInner: Refines<G::Timestamp>+Lattice+Timestamp+Clone+'static,
             F: FnMut(&Tr::Key, &Tr::Val, &G::Timestamp)->TInner+Clone+'static,
-    {
+            P: FnMut(&TInner)->Tr::Time+Clone+'static,
+        {
         let logic1 = logic.clone();
         let logic2 = logic.clone();
         Arranged {
-            trace: TraceEnterAt::make_from(self.trace.clone(), logic1),
+            trace: TraceEnterAt::make_from(self.trace.clone(), logic1, prior),
             stream: self.stream.enter(child).map(move |bw| BatchEnterAt::make_from(bw, logic2.clone())),
         }
     }
