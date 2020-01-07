@@ -56,15 +56,15 @@ fn main() {
                 let changes = edges.enter(inner);
 
                 // Each relation we'll need.
-                let forward_key_alt = forward_key.enter_at(inner, |_,_,t| AltNeu::alt(t.clone()));
-                let reverse_key_alt = reverse_key.enter_at(inner, |_,_,t| AltNeu::alt(t.clone()));
-                let forward_key_neu = forward_key.enter_at(inner, |_,_,t| AltNeu::neu(t.clone()));
-                // let reverse_key_neu = reverse_key.enter_at(inner, |_,_,t| AltNeu::neu(t.clone()));
+                let forward_key_alt = forward_key.enter_at(inner, |_,_,t| AltNeu::alt(t.clone()), |t| t.time.saturating_sub(1));
+                let reverse_key_alt = reverse_key.enter_at(inner, |_,_,t| AltNeu::alt(t.clone()), |t| t.time.saturating_sub(1));
+                let forward_key_neu = forward_key.enter_at(inner, |_,_,t| AltNeu::neu(t.clone()), |t| t.time.saturating_sub(1));
+                // let reverse_key_neu = reverse_key.enter_at(inner, |_,_,t| AltNeu::neu(t.clone()), |t| t.time.saturating_sub(1));
 
-                // let forward_self_alt = forward_self.enter_at(inner, |_,_,t| AltNeu::alt(t.clone()));
-                let reverse_self_alt = reverse_self.enter_at(inner, |_,_,t| AltNeu::alt(t.clone()));
-                let forward_self_neu = forward_self.enter_at(inner, |_,_,t| AltNeu::neu(t.clone()));
-                let reverse_self_neu = reverse_self.enter_at(inner, |_,_,t| AltNeu::neu(t.clone()));
+                // let forward_self_alt = forward_self.enter_at(inner, |_,_,t| AltNeu::alt(t.clone()), |t| t.time.saturating_sub(1));
+                let reverse_self_alt = reverse_self.enter_at(inner, |_,_,t| AltNeu::alt(t.clone()), |t| t.time.saturating_sub(1));
+                let forward_self_neu = forward_self.enter_at(inner, |_,_,t| AltNeu::neu(t.clone()), |t| t.time.saturating_sub(1));
+                let reverse_self_neu = reverse_self.enter_at(inner, |_,_,t| AltNeu::neu(t.clone()), |t| t.time.saturating_sub(1));
 
                 // For each relation, we form a delta query driven by changes to that relation.
                 //

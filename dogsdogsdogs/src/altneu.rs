@@ -54,6 +54,7 @@ impl<T: Timestamp> PathSummary<AltNeu<T>> for () {
 use timely::progress::Timestamp;
 impl<T: Timestamp> Timestamp for AltNeu<T> {
     type Summary = ();
+    fn minimum() -> Self { AltNeu::alt(T::minimum()) }
 }
 
 use timely::progress::timestamp::Refines;
@@ -74,7 +75,6 @@ impl<T: Timestamp> Refines<T> for AltNeu<T> {
 // This extends the `PartialOrder` implementation with additional structure.
 use differential_dataflow::lattice::Lattice;
 impl<T: Lattice> Lattice for AltNeu<T> {
-    fn minimum() -> Self { AltNeu::alt(T::minimum()) }
     fn join(&self, other: &Self) -> Self {
         let time = self.time.join(&other.time);
         let mut neu = false;
