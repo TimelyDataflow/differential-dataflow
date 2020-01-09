@@ -20,7 +20,7 @@ use differential_dataflow::trace::{Cursor, TraceReader, BatchReader};
 /// and values associated with the key in `arrangement`.
 pub fn lookup_map<G, D, R, Tr, F, DOut, ROut, S>(
     prefixes: &Collection<G, D, R>,
-    arrangement: Arranged<G, Tr>,
+    mut arrangement: Arranged<G, Tr>,
     key_selector: F,
     output_func: S,
 ) -> Collection<G, DOut, ROut>
@@ -40,15 +40,16 @@ where
     ROut: Monoid,
     S: Fn(&D, &R, &Tr::Val, &Tr::R)->(DOut, ROut)+'static,
 {
-    let propose_stream = arrangement.stream;
+    // No need to block physical merging for this operator.
+    arrangement.trace.distinguish_since(&[]);
     let mut propose_trace = Some(arrangement.trace);
+    let propose_stream = arrangement.stream;
 
     let mut stash = HashMap::new();
     let logic1 = key_selector.clone();
     let logic2 = key_selector.clone();
 
-    let mut buffer1 = Vec::new();
-    let mut buffer2 = Vec::new();
+    let mut buffer = Vec::new();
 
     let mut key: Tr::Key = Default::default();
     let exchange = Exchange::new(move |update: &(D,G::Timestamp,R)| {
@@ -58,25 +59,20 @@ where
 
     let mut key1: Tr::Key = Default::default();
     let mut key2: Tr::Key = Default::default();
+
     prefixes.inner.binary_frontier(&propose_stream, exchange, Pipeline, "LookupMap", move |_,_| move |input1, input2, output| {
 
         // drain the first input, stashing requests.
         input1.for_each(|capability, data| {
-            data.swap(&mut buffer1);
+            data.swap(&mut buffer);
             stash.entry(capability.retain())
                  .or_insert(Vec::new())
-                 .extend(buffer1.drain(..))
+                 .extend(buffer.drain(..))
         });
 
-        // advance the `distinguish_since` frontier to allow all merges.
-        input2.for_each(|_, batches| {
-            batches.swap(&mut buffer2);
-            for batch in buffer2.drain(..) {
-                if let Some(ref mut trace) = propose_trace {
-                    trace.distinguish_since(batch.upper());
-                }
-            }
-        });
+        // Drain input batches; although we do not observe them, we want access to the input
+        // to observe the frontier and to drive scheduling.
+        input2.for_each(|_, _| { });
 
         if let Some(ref mut trace) = propose_trace {
 
@@ -124,12 +120,13 @@ where
                     prefixes.retain(|ptd| !ptd.2.is_zero());
                 }
             }
+
         }
 
         // drop fully processed capabilities.
         stash.retain(|_,prefixes| !prefixes.is_empty());
 
-        // The consolidation frontier depends on both input1 and stash.
+        // The logical merging frontier depends on both input1 and stash.
         let mut frontier = timely::progress::frontier::Antichain::new();
         for time in input1.frontier().frontier().to_vec() {
             frontier.insert(time);
