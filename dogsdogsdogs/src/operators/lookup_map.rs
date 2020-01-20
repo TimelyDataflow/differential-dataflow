@@ -23,12 +23,15 @@ pub fn lookup_map<G, D, R, Tr, F, DOut, ROut, S>(
     mut arrangement: Arranged<G, Tr>,
     key_selector: F,
     output_func: S,
+    supplied_key0: Tr::Key,
+    supplied_key1: Tr::Key,
+    supplied_key2: Tr::Key,
 ) -> Collection<G, DOut, ROut>
 where
     G: Scope,
     G::Timestamp: Lattice,
     Tr: TraceReader<Time=G::Timestamp>+Clone+'static,
-    Tr::Key: Ord+Hashable+Default,
+    Tr::Key: Ord+Hashable,
     Tr::Val: Clone,
     Tr::Batch: BatchReader<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
     Tr::Cursor: Cursor<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
@@ -51,14 +54,14 @@ where
 
     let mut buffer = Vec::new();
 
-    let mut key: Tr::Key = Default::default();
+    let mut key: Tr::Key = supplied_key0;
     let exchange = Exchange::new(move |update: &(D,G::Timestamp,R)| {
         logic1(&update.0, &mut key);
         key.hashed().as_u64()
     });
 
-    let mut key1: Tr::Key = Default::default();
-    let mut key2: Tr::Key = Default::default();
+    let mut key1: Tr::Key = supplied_key1;
+    let mut key2: Tr::Key = supplied_key2;
 
     prefixes.inner.binary_frontier(&propose_stream, exchange, Pipeline, "LookupMap", move |_,_| move |input1, input2, output| {
 
