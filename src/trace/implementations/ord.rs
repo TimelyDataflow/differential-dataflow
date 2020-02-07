@@ -296,9 +296,9 @@ where
 
         *fuel -= effort;
 
-        if *fuel < -1_000_000 {
-            eprintln!("Massive deficit OrdVal::work: {}", fuel);
-        }
+        // if *fuel < -1_000_000 {
+        //     eprintln!("Massive deficit OrdVal::work: {}", fuel);
+        // }
 	}
 }
 
@@ -620,9 +620,9 @@ where
 
         *fuel -= effort;
 
-        if *fuel < -1_000_000 {
-            eprintln!("Massive deficit OrdKey::work: {}", fuel);
-        }
+        // if *fuel < -1_000_000 {
+        //     eprintln!("Massive deficit OrdKey::work: {}", fuel);
+        // }
 	}
 }
 
