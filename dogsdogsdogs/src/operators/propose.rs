@@ -9,6 +9,13 @@ use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::trace::{Cursor, TraceReader, BatchReader};
 
 /// Proposes extensions to a prefix stream.
+///
+/// This method takes a collection `prefixes` and an arrangement `arrangement` and for each
+/// update in the collection joins with the accumulated arranged records at a time less or
+/// equal to that of the update. Note that this is not a join by itself, but can be used to
+/// create a join if the `prefixes` collection is also arranged and responds to changes that
+/// `arrangement` undergoes. More complicated patterns are also appropriate, as in the case
+/// of delta queries.
 pub fn propose<G, Tr, F, P>(
     prefixes: &Collection<G, P, Tr::R>,
     arrangement: Arranged<G, Tr>,
@@ -30,7 +37,10 @@ where
         prefixes,
         arrangement,
         move |p: &P, k: &mut Tr::Key| { *k = key_selector(p); },
-        |prefix, diff, value, sum| ((prefix.clone(), value.clone()), diff.clone() * sum.clone())
+        |prefix, diff, value, sum| ((prefix.clone(), value.clone()), diff.clone() * sum.clone()),
+        Default::default(),
+        Default::default(),
+        Default::default(),
     )
 }
 
@@ -60,6 +70,9 @@ where
         prefixes,
         arrangement,
         move |p: &P, k: &mut Tr::Key| { *k = key_selector(p); },
-        |prefix, diff, value, _sum| ((prefix.clone(), value.clone()), diff.clone())
+        |prefix, diff, value, _sum| ((prefix.clone(), value.clone()), diff.clone()),
+        Default::default(),
+        Default::default(),
+        Default::default(),
     )
 }

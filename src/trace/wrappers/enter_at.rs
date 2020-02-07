@@ -8,7 +8,14 @@ use trace::{TraceReader, BatchReader, Description};
 use trace::cursor::Cursor;
 
 /// Wrapper to provide trace to nested scope.
-pub struct TraceEnter<Tr, TInner, F>
+///
+/// Each wrapped update is presented with a timestamp determined by `logic`.
+///
+/// At the same time, we require a method `prior` that can "invert" timestamps,
+/// and which will be applied to compaction frontiers as they are communicated
+/// back to the wrapped traces. A better explanation is pending, and until that
+/// happens use this construct at your own peril!
+pub struct TraceEnter<Tr, TInner, F, G>
 where
     Tr: TraceReader,
 {
@@ -16,12 +23,14 @@ where
     stash1: Vec<Tr::Time>,
     stash2: Vec<TInner>,
     logic: F,
+    prior: G,
 }
 
-impl<Tr,TInner,F> Clone for TraceEnter<Tr, TInner,F>
+impl<Tr,TInner,F,G> Clone for TraceEnter<Tr, TInner, F, G>
 where
     Tr: TraceReader+Clone,
     F: Clone,
+    G: Clone,
 {
     fn clone(&self) -> Self {
         TraceEnter {
@@ -29,11 +38,12 @@ where
             stash1: Vec::new(),
             stash2: Vec::new(),
             logic: self.logic.clone(),
+            prior: self.prior.clone(),
         }
     }
 }
 
-impl<Tr, TInner,F> TraceReader for TraceEnter<Tr, TInner,F>
+impl<Tr, TInner, F, G> TraceReader for TraceEnter<Tr, TInner, F, G>
 where
     Tr: TraceReader,
     Tr::Batch: Clone,
@@ -44,6 +54,7 @@ where
     Tr::R: 'static,
     F: 'static,
     F: FnMut(&Tr::Key, &Tr::Val, &Tr::Time)->TInner+Clone,
+    G: FnMut(&TInner)->Tr::Time+Clone+'static,
 {
     type Key = Tr::Key;
     type Val = Tr::Val;
@@ -63,7 +74,7 @@ where
     fn advance_by(&mut self, frontier: &[TInner]) {
         self.stash1.clear();
         for time in frontier.iter() {
-            self.stash1.push(time.clone().to_outer());
+            self.stash1.push((self.prior)(time));
         }
         self.trace.advance_by(&self.stash1[..]);
     }
@@ -78,7 +89,7 @@ where
     fn distinguish_since(&mut self, frontier: &[TInner]) {
         self.stash1.clear();
         for time in frontier.iter() {
-            self.stash1.push(time.clone().to_outer());
+            self.stash1.push((self.prior)(time));
         }
         self.trace.distinguish_since(&self.stash1[..]);
     }
@@ -99,19 +110,20 @@ where
     }
 }
 
-impl<Tr, TInner, F> TraceEnter<Tr, TInner,F>
+impl<Tr, TInner, F, G> TraceEnter<Tr, TInner, F, G>
 where
     Tr: TraceReader,
     Tr::Time: Timestamp,
     TInner: Refines<Tr::Time>+Lattice,
 {
     /// Makes a new trace wrapper
-    pub fn make_from(trace: Tr, logic: F) -> Self {
+    pub fn make_from(trace: Tr, logic: F, prior: G) -> Self {
         TraceEnter {
             trace: trace,
             stash1: Vec::new(),
             stash2: Vec::new(),
             logic,
+            prior,
         }
     }
 }

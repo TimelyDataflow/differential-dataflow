@@ -39,6 +39,9 @@ where
             let s = *s as usize;
             if *c < s { ((p.clone(), *c, *i), r.clone()) }
             else      { ((p.clone(), s, index), r.clone()) }
-        }
+        },
+        Default::default(),
+        Default::default(),
+        Default::default(),
     )
 }
