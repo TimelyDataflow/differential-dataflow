@@ -24,6 +24,7 @@ use differential_dataflow::operators::arrange::TraceAgent;
 use differential_dataflow::operators::arrange::{ArrangeBySelf, ArrangeByKey};
 
 pub mod altneu;
+pub mod calculus;
 pub mod operators;
 
 /// A type capable of extending a stream of prefixes.
