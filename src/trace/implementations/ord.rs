@@ -14,7 +14,7 @@ use std::marker::PhantomData;
 use std::fmt::Debug;
 
 use ::difference::Semigroup;
-use lattice::Lattice;
+use lattice::{Lattice, antichain_join};
 
 use trace::layers::{Trie, TupleBuilder};
 use trace::layers::Builder as TrieBuilder;
@@ -224,14 +224,9 @@ where
 
 		assert!(batch1.upper() == batch2.lower());
 
-		let since = if batch1.description().since().iter().all(|t1| batch2.description().since().iter().any(|t2| t2.less_equal(t1))) {
-			batch2.description().since()
-		}
-		else {
-			batch1.description().since()
-		};
+		let since = antichain_join(batch1.description().since(), batch2.description().since());
 
-		let description = Description::new(batch1.lower(), batch2.upper(), since);
+		let description = Description::new(batch1.lower(), batch2.upper(), since.elements());
 
 		OrdValMerger {
 			lower1: 0,
@@ -291,7 +286,9 @@ where
 
 		// if we are supplied a frontier, we should compact.
 		if let Some(frontier) = frontier.as_ref() {
-			OrdValBatch::advance_builder_from(&mut self.result, frontier, initial_key_pos)
+			OrdValBatch::advance_builder_from(&mut self.result, frontier, initial_key_pos);
+			let new_since = antichain_join(self.description.since(), &frontier[..]);
+			self.description = Description::new(self.description.lower(), self.description.upper(), new_since.elements());
 		}
 
         *fuel -= effort;
@@ -543,14 +540,9 @@ where
 
 		assert!(batch1.upper() == batch2.lower());
 
-		let since = if batch1.description().since().iter().all(|t1| batch2.description().since().iter().any(|t2| t2.less_equal(t1))) {
-			batch2.description().since()
-		}
-		else {
-			batch1.description().since()
-		};
+		let since = antichain_join(batch1.description().since(), batch2.description().since());
 
-		let description = Description::new(batch1.lower(), batch2.upper(), since);
+		let description = Description::new(batch1.lower(), batch2.upper(), since.elements());
 
 		OrdKeyMerger {
 			lower1: 0,
@@ -616,6 +608,8 @@ where
 
 		if let Some(frontier) = frontier.as_ref() {
 			OrdKeyBatch::advance_builder_from(&mut self.result, frontier, initial_key_pos);
+			let new_since = antichain_join(self.description.since(), &frontier[..]);
+			self.description = Description::new(self.description.lower(), self.description.upper(), new_since.elements());
 		}
 
         *fuel -= effort;
