@@ -140,7 +140,7 @@ where
             match merge_state {
                 MergeState::Double(variant) => {
                     match variant {
-                        MergeVariant::InProgress(batch1, batch2, _, _) => {
+                        MergeVariant::InProgress(batch1, batch2, _) => {
                             if !batch1.is_empty() {
                                 cursors.push(batch1.cursor());
                                 storage.push(batch1.clone());
@@ -221,7 +221,7 @@ where
     fn map_batches<F: FnMut(&Self::Batch)>(&mut self, mut f: F) {
         for batch in self.merging.iter().rev() {
             match batch {
-                MergeState::Double(MergeVariant::InProgress(batch1, batch2, _, _)) => { f(batch1); f(batch2); },
+                MergeState::Double(MergeVariant::InProgress(batch1, batch2, _)) => { f(batch1); f(batch2); },
                 MergeState::Double(MergeVariant::Complete(Some((batch, _)))) => { f(batch) },
                 MergeState::Single(Some(batch)) => { f(batch) },
                 _ => { },
@@ -340,7 +340,7 @@ where
                             length: batch.len(),
                         });
                     },
-                    MergeState::Double(MergeVariant::InProgress(batch1, batch2, _, _)) => {
+                    MergeState::Double(MergeVariant::InProgress(batch1, batch2, _)) => {
                         logger.log(::logging::DropEvent {
                             operator: self.operator.global_id,
                             length: batch1.len(),
@@ -658,8 +658,8 @@ where
                         complete: None,
                     }
                 ));
-                let frontier = Some(self.advance_frontier.clone());
-                self.merging[index] = MergeState::begin_merge(old, batch, frontier);
+                let compaction_frontier = Some(&self.advance_frontier[..]);
+                self.merging[index] = MergeState::begin_merge(old, batch, compaction_frontier);
             }
             MergeState::Double(_) => {
                 panic!("Attempted to insert batch into incomplete merge!")
@@ -777,7 +777,7 @@ impl<K, V, T: Eq, R, B: Batch<K, V, T, R>> MergeState<K, V, T, R, B> {
     fn len(&self) -> usize {
         match self {
             MergeState::Single(Some(b)) => b.len(),
-            MergeState::Double(MergeVariant::InProgress(b1,b2,_,_)) => b1.len() + b2.len(),
+            MergeState::Double(MergeVariant::InProgress(b1,b2,_)) => b1.len() + b2.len(),
             MergeState::Double(MergeVariant::Complete(Some((b, _)))) => b.len(),
             _ => 0,
         }
@@ -852,13 +852,13 @@ impl<K, V, T: Eq, R, B: Batch<K, V, T, R>> MergeState<K, V, T, R, B> {
     /// empty batch whose upper and lower froniers are equal. This
     /// option exists purely for bookkeeping purposes, and no computation
     /// is performed to merge the two batches.
-    fn begin_merge(batch1: Option<B>, batch2: Option<B>, frontier: Option<Vec<T>>) -> MergeState<K, V, T, R, B> {
+    fn begin_merge(batch1: Option<B>, batch2: Option<B>, compaction_frontier: Option<&[T]>) -> MergeState<K, V, T, R, B> {
         let variant =
         match (batch1, batch2) {
             (Some(batch1), Some(batch2)) => {
                 assert!(batch1.upper() == batch2.lower());
-                let begin_merge = <B as Batch<K, V, T, R>>::begin_merge(&batch1, &batch2);
-                MergeVariant::InProgress(batch1, batch2, frontier, begin_merge)
+                let begin_merge = <B as Batch<K, V, T, R>>::begin_merge(&batch1, &batch2, compaction_frontier);
+                MergeVariant::InProgress(batch1, batch2, begin_merge)
             }
             (None, Some(x)) => MergeVariant::Complete(Some((x, None))),
             (Some(x), None) => MergeVariant::Complete(Some((x, None))),
@@ -871,7 +871,7 @@ impl<K, V, T: Eq, R, B: Batch<K, V, T, R>> MergeState<K, V, T, R, B> {
 
 enum MergeVariant<K, V, T, R, B: Batch<K, V, T, R>> {
     /// Describes an actual in-progress merge between two non-trivial batches.
-    InProgress(B, B, Option<Vec<T>>, <B as Batch<K,V,T,R>>::Merger),
+    InProgress(B, B, <B as Batch<K,V,T,R>>::Merger),
     /// A merge that requires no further work. May or may not represent a non-trivial batch.
     Complete(Option<(B, Option<(B, B)>)>),
 }
@@ -895,13 +895,13 @@ impl<K, V, T, R, B: Batch<K, V, T, R>> MergeVariant<K, V, T, R, B> {
     /// This allows the caller to manage the released resources.
     fn work(&mut self, fuel: &mut isize) {
         let variant = std::mem::replace(self, MergeVariant::Complete(None));
-        if let MergeVariant::InProgress(b1,b2,frontier,mut merge) = variant {
-            merge.work(&b1,&b2,&frontier,fuel);
+        if let MergeVariant::InProgress(b1,b2,mut merge) = variant {
+            merge.work(&b1,&b2,fuel);
             if *fuel > 0 {
                 *self = MergeVariant::Complete(Some((merge.done(), Some((b1,b2)))));
             }
             else {
-                *self = MergeVariant::InProgress(b1,b2,frontier,merge);
+                *self = MergeVariant::InProgress(b1,b2,merge);
             }
         }
         else {
