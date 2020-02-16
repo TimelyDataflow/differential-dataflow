@@ -304,7 +304,7 @@ where
         if !self.upper.is_empty() {
             use trace::Builder;
             let builder = B::Builder::new();
-            let batch = builder.done(&self.upper[..], &[], &self.upper[..]);
+            let batch = builder.done(&self.upper[..], &[], &[T::minimum()]);
             self.insert(batch);
         }
     }
