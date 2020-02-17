@@ -40,11 +40,9 @@ where
     fn differentiate<'a>(&self, child: &Child<'a, G, AltNeu<G::Timestamp>>) -> Collection<Child<'a, G, AltNeu<G::Timestamp>>, D, R> {
         self.enter(child)
             .inner
-            .flat_map(|mut dtr| {
-                let alt = dtr.clone();
-                dtr.1.neu = true;
-                dtr.2 = dtr.2.neg();
-                let neu = dtr;
+            .flat_map(|(data, time, diff)| {
+                let neu = (data.clone(), AltNeu::neu(time.time.clone()), diff.clone().neg());
+                let alt = (data, time, diff);
                 Some(alt).into_iter().chain(Some(neu))
             })
             .as_collection()
