@@ -327,8 +327,8 @@ impl<G, T1> JoinCore<G, T1::Key, T1::Val, T1::R> for Arranged<G,T1>
         let mut acknowledged2: Option<Antichain<G::Timestamp>> = None;
 
         // deferred work of batches from each input.
-        let mut todo1 = Vec::new();
-        let mut todo2 = Vec::new();
+        let mut todo1 = std::collections::VecDeque::new();
+        let mut todo2 = std::collections::VecDeque::new();
 
         let mut input1_buffer = Vec::new();
         let mut input2_buffer = Vec::new();
@@ -361,7 +361,7 @@ impl<G, T1> JoinCore<G, T1::Key, T1::Val, T1::R> for Arranged<G,T1>
                                 // In this case, we should be able to await (not block on) the arrival of these batches.
                                 let (trace2_cursor, trace2_storage) = trace2.cursor_through(acknowledged2.elements()).unwrap();
                                 let batch1_cursor = batch1.cursor();
-                                todo1.push(Deferred::new(trace2_cursor, trace2_storage, batch1_cursor, batch1.clone(), capability.clone(), |r2,r1| (r1.clone()) * (r2.clone())));
+                                todo1.push_back(Deferred::new(trace2_cursor, trace2_storage, batch1_cursor, batch1.clone(), capability.clone(), |r2,r1| (r1.clone()) * (r2.clone())));
                             }
 
                             // It would be alarming (incorrect) to receieve a batch that does not advance the acknowledged
@@ -392,7 +392,7 @@ impl<G, T1> JoinCore<G, T1::Key, T1::Val, T1::R> for Arranged<G,T1>
                                 // In this case, we should be able to await (not block on) the arrival of these batches.
                                 let (trace1_cursor, trace1_storage) = trace1.cursor_through(acknowledged1.elements()).unwrap();
                                 let batch2_cursor = batch2.cursor();
-                                todo2.push(Deferred::new(trace1_cursor, trace1_storage, batch2_cursor, batch2.clone(), capability.clone(), |r1,r2| (r1.clone()) * (r2.clone())));
+                                todo2.push_back(Deferred::new(trace1_cursor, trace1_storage, batch2_cursor, batch2.clone(), capability.clone(), |r1,r2| (r1.clone()) * (r2.clone())));
                             }
                             // It would be alarming (incorrect) to receieve a batch that does not advance the acknowledged
                             // frontier, as each batch must be greater than previous batches, and the input.
@@ -419,15 +419,15 @@ impl<G, T1> JoinCore<G, T1::Key, T1::Val, T1::R> for Arranged<G,T1>
                 // perform some amount of outstanding work.
                 let mut fuel = 1_000_000;
                 while !todo1.is_empty() && fuel > 0 {
-                    todo1[0].work(output, &mut |k,v2,v1| result(k,v1,v2), &mut fuel);
-                    if !todo1[0].work_remains() { todo1.remove(0); }
+                    todo1.front_mut().unwrap().work(output, &mut |k,v2,v1| result(k,v1,v2), &mut fuel);
+                    if !todo1.front().unwrap().work_remains() { todo1.pop_front(); }
                 }
 
                 // perform some amount of outstanding work.
                 let mut fuel = 1_000_000;
                 while !todo2.is_empty() && fuel > 0 {
-                    todo2[0].work(output, &mut |k,v1,v2| result(k,v1,v2), &mut fuel);
-                    if !todo2[0].work_remains() { todo2.remove(0); }
+                    todo2.front_mut().unwrap().work(output, &mut |k,v1,v2| result(k,v1,v2), &mut fuel);
+                    if !todo2.front().unwrap().work_remains() { todo2.pop_front(); }
                 }
 
                 // Re-activate operator if work remains.
