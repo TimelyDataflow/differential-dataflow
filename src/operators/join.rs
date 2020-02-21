@@ -408,18 +408,23 @@ impl<G, T1> JoinCore<G, T1::Key, T1::Val, T1::R> for Arranged<G,T1>
                     }
                 });
 
-                // An arbitrary number, whose value guides the "responsiveness" of `join`; the operator
-                // yields after producing this many records, to allow downstream operators to work and
-                // move the produced records around.
-                let mut fuel = 1_000_000;
+                // For each of the inputs, we do some amount of work (measured in terms of number
+                // of output records produced). This is meant to yield control to allow downstream
+                // operators to consume and reduce the output, but it it also means to provide some
+                // degree of responsiveness. There is a potential risk here that if we fall behind
+                // then the increasing queues hold back physical compaction of the underlying traces
+                // which results in unintentionally quadratic processing time (each batch of either
+                // input must scan all batches from the other input).
 
                 // perform some amount of outstanding work.
+                let mut fuel = 1_000_000;
                 while !todo1.is_empty() && fuel > 0 {
                     todo1[0].work(output, &mut |k,v2,v1| result(k,v1,v2), &mut fuel);
                     if !todo1[0].work_remains() { todo1.remove(0); }
                 }
 
                 // perform some amount of outstanding work.
+                let mut fuel = 1_000_000;
                 while !todo2.is_empty() && fuel > 0 {
                     todo2[0].work(output, &mut |k,v1,v2| result(k,v1,v2), &mut fuel);
                     if !todo2[0].work_remains() { todo2.remove(0); }
