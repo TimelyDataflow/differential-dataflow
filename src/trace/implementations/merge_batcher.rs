@@ -97,7 +97,7 @@ where
             self.sorter.push(&mut buffer);
         }
 
-        let seal = builder.done(&self.lower[..], &upper[..], &self.lower[..]);
+        let seal = builder.done(&self.lower[..], &upper[..], &[T::minimum()]);
         self.lower = upper.to_vec();
         seal
     }

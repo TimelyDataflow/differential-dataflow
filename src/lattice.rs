@@ -5,7 +5,7 @@
 //! `Lattice` trait, and all reasoning in operators are done it terms of `Lattice` methods.
 
 use timely::order::PartialOrder;
-use timely::progress::Timestamp;
+use timely::progress::{Timestamp, Antichain};
 
 /// A bounded partially ordered type supporting joins and meets.
 pub trait Lattice : PartialOrder+Timestamp {
@@ -193,3 +193,33 @@ implement_lattice!(i32, 0);
 implement_lattice!(i16, 0);
 implement_lattice!(i8, 0);
 implement_lattice!((), ());
+
+/// Given two slices representing minimal antichains,
+/// returns the "smallest" minimal antichain "greater or equal" to them.
+///
+/// # Examples
+///
+/// ```
+/// # extern crate timely;
+/// # extern crate differential_dataflow;
+/// # use timely::PartialOrder;
+/// # use timely::order::Product;
+/// # use differential_dataflow::lattice::Lattice;
+/// # use differential_dataflow::lattice::antichain_join;
+/// # fn main() {
+///
+/// let f1 = &[Product::new(3, 7), Product::new(5, 6)];
+/// let f2 = &[Product::new(4, 6)];
+/// let join = antichain_join(f1, f2);
+/// assert_eq!(join.elements(), &[Product::new(4, 7), Product::new(5, 6)]);
+/// # }
+/// ```
+pub fn antichain_join<T: Lattice>(one: &[T], other: &[T]) -> Antichain<T> {
+    let mut upper = Antichain::new();
+    for time1 in one {
+        for time2 in other {
+            upper.insert(time1.join(time2));
+        }
+    }
+    upper
+}

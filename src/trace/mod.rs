@@ -229,8 +229,8 @@ pub trait Batch<K, V, T, R> : BatchReader<K, V, T, R> where Self: ::std::marker:
 	/// The result of this method can be exercised to eventually produce the same result
 	/// that a call to `self.merge(other)` would produce, but it can be done in a measured
 	/// fashion. This can help to avoid latency spikes where a large merge needs to happen.
-	fn begin_merge(&self, other: &Self) -> Self::Merger {
-		Self::Merger::new(self, other)
+	fn begin_merge(&self, other: &Self, compaction_frontier: Option<&[T]>) -> Self::Merger {
+		Self::Merger::new(self, other, compaction_frontier)
 	}
 	///
 	fn empty(lower: &[T], upper: &[T], since: &[T]) -> Self {
@@ -268,13 +268,14 @@ pub trait Builder<K, V, T, R, Output: Batch<K, V, T, R>> {
 
 /// Represents a merge in progress.
 pub trait Merger<K, V, T, R, Output: Batch<K, V, T, R>> {
-	/// Creates a new merger to merge the supplied batches.
-	fn new(source1: &Output, source2: &Output) -> Self;
+	/// Creates a new merger to merge the supplied batches, optionally compacting
+	/// up to the supplied frontier.
+	fn new(source1: &Output, source2: &Output, compaction_frontier: Option<&[T]>) -> Self;
 	/// Perform some amount of work, decrementing `fuel`.
 	///
 	/// If `fuel` is non-zero after the call, the merging is complete and
 	/// one should call `done` to extract the merged results.
-	fn work(&mut self, source1: &Output, source2: &Output, frontier: &Option<Vec<T>>, fuel: &mut isize);
+	fn work(&mut self, source1: &Output, source2: &Output, fuel: &mut isize);
 	/// Extracts merged results.
 	///
 	/// This method should only be called after `work` has been called and
@@ -380,8 +381,8 @@ pub mod rc_blanket_impls {
 
 	/// Represents a merge in progress.
 	impl<K,V,T,R,B:Batch<K,V,T,R>> Merger<K, V, T, R, Rc<B>> for RcMerger<K,V,T,R,B> {
-		fn new(source1: &Rc<B>, source2: &Rc<B>) -> Self { RcMerger { merger: B::begin_merge(source1, source2) } }
-		fn work(&mut self, source1: &Rc<B>, source2: &Rc<B>, frontier: &Option<Vec<T>>, fuel: &mut isize) { self.merger.work(source1, source2, frontier, fuel) }
+		fn new(source1: &Rc<B>, source2: &Rc<B>, compaction_frontier: Option<&[T]>) -> Self { RcMerger { merger: B::begin_merge(source1, source2, compaction_frontier) } }
+		fn work(&mut self, source1: &Rc<B>, source2: &Rc<B>, fuel: &mut isize) { self.merger.work(source1, source2, fuel) }
 		fn done(self) -> Rc<B> { Rc::new(self.merger.done()) }
 	}
 }
@@ -496,11 +497,11 @@ pub mod abomonated_blanket_impls {
 
 	/// Represents a merge in progress.
 	impl<K,V,T,R,B:Batch<K,V,T,R>+Abomonation> Merger<K, V, T, R, Abomonated<B,Vec<u8>>> for AbomonatedMerger<K,V,T,R,B> {
-		fn new(source1: &Abomonated<B,Vec<u8>>, source2: &Abomonated<B,Vec<u8>>) -> Self {
-			AbomonatedMerger { merger: B::begin_merge(source1, source2) }
+		fn new(source1: &Abomonated<B,Vec<u8>>, source2: &Abomonated<B,Vec<u8>>, compaction_frontier: Option<&[T]>) -> Self {
+			AbomonatedMerger { merger: B::begin_merge(source1, source2, compaction_frontier) }
 		}
-		fn work(&mut self, source1: &Abomonated<B,Vec<u8>>, source2: &Abomonated<B,Vec<u8>>, frontier: &Option<Vec<T>>, fuel: &mut isize) {
-			self.merger.work(source1, source2, frontier, fuel)
+		fn work(&mut self, source1: &Abomonated<B,Vec<u8>>, source2: &Abomonated<B,Vec<u8>>, fuel: &mut isize) {
+			self.merger.work(source1, source2, fuel)
 		}
 		fn done(self) -> Abomonated<B, Vec<u8>> {
 			let batch = self.merger.done();
