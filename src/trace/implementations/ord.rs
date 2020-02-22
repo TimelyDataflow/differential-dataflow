@@ -225,14 +225,10 @@ where
 
 		assert!(batch1.upper() == batch2.lower());
 
-		let since = {
-			let since = antichain_join(batch1.description().since(), batch2.description().since());
-			if let Some(compaction_frontier) = compaction_frontier {
-				antichain_join(since.elements(), compaction_frontier)
-			} else {
-				since
-			}
-		};
+		let mut since = antichain_join(batch1.description().since(), batch2.description().since());
+		if let Some(compaction_frontier) = compaction_frontier {
+			since = antichain_join(since.elements(), compaction_frontier);
+		}
 
 		let description = Description::new(batch1.lower(), batch2.upper(), since.elements());
 
@@ -548,14 +544,10 @@ where
 
 		assert!(batch1.upper() == batch2.lower());
 
-		let since = {
-			let since = antichain_join(batch1.description().since(), batch2.description().since());
-			if let Some(compaction_frontier) = compaction_frontier {
-				antichain_join(since.elements(), compaction_frontier)
-			} else {
-				since
-			}
-		};
+		let mut since = antichain_join(batch1.description().since(), batch2.description().since());
+		if let Some(compaction_frontier) = compaction_frontier {
+			since = antichain_join(since.elements(), compaction_frontier);
+		}
 
 		let description = Description::new(batch1.lower(), batch2.upper(), since.elements());
 
