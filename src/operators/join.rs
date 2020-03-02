@@ -369,7 +369,7 @@ impl<G, T1> JoinCore<G, T1::Key, T1::Val, T1::R> for Arranged<G,T1>
                             if acknowledged1.is_none() { acknowledged1 = Some(timely::progress::frontier::Antichain::from_elem(<G::Timestamp>::minimum())); }
                             if let Some(acknowledged1) = &mut acknowledged1 {
                                 if !(batch1.upper().iter().all(|t| acknowledged1.less_equal(t))) {
-                                    panic!("Batch1 upper not beyond acknowledged frontier: {:?}, {:?}", batch1.upper(), acknowledged1);
+                                    panic!("Batch1 upper not beyond acknowledged frontier: {:?}, {:?}; batch1.is_empty(): {}", batch1.upper(), acknowledged1, batch1.is_empty());
                                 }
                                 // assert!(batch1.upper().iter().all(|t| acknowledged1.less_equal(t)));
                                 acknowledged1.clear();
@@ -399,7 +399,7 @@ impl<G, T1> JoinCore<G, T1::Key, T1::Val, T1::R> for Arranged<G,T1>
                             if acknowledged2.is_none() { acknowledged2 = Some(timely::progress::frontier::Antichain::from_elem(<G::Timestamp>::minimum())); }
                             if let Some(acknowledged2) = &mut acknowledged2 {
                                 if !(batch2.upper().iter().all(|t| acknowledged2.less_equal(t))) {
-                                    panic!("Batch2 upper not beyond acknowledged frontier: {:?}, {:?}", batch2.upper(), acknowledged2);
+                                    panic!("Batch2 upper not beyond acknowledged frontier: {:?}, {:?}; batch2.is_empty(): {}", batch2.upper(), acknowledged2, batch2.is_empty());
                                 }
                                 acknowledged2.clear();
                                 acknowledged2.extend(batch2.upper().iter().cloned());
