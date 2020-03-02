@@ -2,6 +2,7 @@
 name = "dogsdogsdogs"
 version = "0.1.0"
 authors = ["Frank McSherry <fmcsherry@me.com>"]
+license = "MIT"
 
 [dependencies]
 abomonation = "0.7"
