@@ -354,24 +354,30 @@ impl<G, T1> JoinCore<G, T1::Key, T1::Val, T1::R> for Arranged<G,T1>
                         let capability = capability.retain();
                         data.swap(&mut input1_buffer);
                         for batch1 in input1_buffer.drain(..) {
-                            if let Some(acknowledged2) = &acknowledged2 {
-                                // TODO : cursor_through may be problematic for pre-merged traces.
-                                // A trace should provide the contract that whatever its `distinguish_since` capability,
-                                // it is safe (and reasonable) to await delivery of batches up through that frontier.
-                                // In this case, we should be able to await (not block on) the arrival of these batches.
-                                let (trace2_cursor, trace2_storage) = trace2.cursor_through(acknowledged2.elements()).unwrap();
-                                let batch1_cursor = batch1.cursor();
-                                todo1.push_back(Deferred::new(trace2_cursor, trace2_storage, batch1_cursor, batch1.clone(), capability.clone(), |r2,r1| (r1.clone()) * (r2.clone())));
+                            if !batch1.is_empty() {
+                                if let Some(acknowledged2) = &acknowledged2 {
+                                    // TODO : cursor_through may be problematic for pre-merged traces.
+                                    // A trace should provide the contract that whatever its `distinguish_since` capability,
+                                    // it is safe (and reasonable) to await delivery of batches up through that frontier.
+                                    // In this case, we should be able to await (not block on) the arrival of these batches.
+                                    let (trace2_cursor, trace2_storage) = trace2.cursor_through(acknowledged2.elements()).unwrap();
+                                    let batch1_cursor = batch1.cursor();
+                                    todo1.push_back(Deferred::new(trace2_cursor, trace2_storage, batch1_cursor, batch1.clone(), capability.clone(), |r2,r1| (r1.clone()) * (r2.clone())));
+                                }
                             }
 
-                            // It would be alarming (incorrect) to receieve a batch that does not advance the acknowledged
-                            // frontier, as each batch must be greater than previous batches, and the input.
+                            // It would be alarming (incorrect) to receieve a non-empty batch that does not advance the
+                            // acknowledged frontier, as each batch must be greater than previous batches, and the input.
+                            // Empty batches may be received as information races between frontier forwarding of the trace
+                            // and the empty batches themselves (which can be sent as part of trace importing).
                             if acknowledged1.is_none() { acknowledged1 = Some(timely::progress::frontier::Antichain::from_elem(<G::Timestamp>::minimum())); }
                             if let Some(acknowledged1) = &mut acknowledged1 {
                                 if !(batch1.upper().iter().all(|t| acknowledged1.less_equal(t))) {
-                                    panic!("Batch1 upper not beyond acknowledged frontier: {:?}, {:?}; batch1.is_empty(): {}", batch1.upper(), acknowledged1, batch1.is_empty());
+                                    if !batch1.is_empty() {
+                                        panic!("Non-empty batch1 upper not beyond acknowledged frontier: {:?}, {:?}", batch1.upper(), acknowledged1);
+                                    }
+                                    else { eprintln!("Empty batch1 observed at Join"); }
                                 }
-                                // assert!(batch1.upper().iter().all(|t| acknowledged1.less_equal(t)));
                                 acknowledged1.clear();
                                 acknowledged1.extend(batch1.upper().iter().cloned());
                             }
@@ -385,21 +391,28 @@ impl<G, T1> JoinCore<G, T1::Key, T1::Val, T1::R> for Arranged<G,T1>
                         let capability = capability.retain();
                         data.swap(&mut input2_buffer);
                         for batch2 in input2_buffer.drain(..) {
-                            if let Some(acknowledged1) = &acknowledged1 {
-                                // TODO : cursor_through may be problematic for pre-merged traces.
-                                // A trace should provide the contract that whatever its `distinguish_since` capability,
-                                // it is safe (and reasonable) to await delivery of batches up through that frontier.
-                                // In this case, we should be able to await (not block on) the arrival of these batches.
-                                let (trace1_cursor, trace1_storage) = trace1.cursor_through(acknowledged1.elements()).unwrap();
-                                let batch2_cursor = batch2.cursor();
-                                todo2.push_back(Deferred::new(trace1_cursor, trace1_storage, batch2_cursor, batch2.clone(), capability.clone(), |r1,r2| (r1.clone()) * (r2.clone())));
+                            if !batch2.is_empty() {
+                                if let Some(acknowledged1) = &acknowledged1 {
+                                    // TODO : cursor_through may be problematic for pre-merged traces.
+                                    // A trace should provide the contract that whatever its `distinguish_since` capability,
+                                    // it is safe (and reasonable) to await delivery of batches up through that frontier.
+                                    // In this case, we should be able to await (not block on) the arrival of these batches.
+                                    let (trace1_cursor, trace1_storage) = trace1.cursor_through(acknowledged1.elements()).unwrap();
+                                    let batch2_cursor = batch2.cursor();
+                                    todo2.push_back(Deferred::new(trace1_cursor, trace1_storage, batch2_cursor, batch2.clone(), capability.clone(), |r1,r2| (r1.clone()) * (r2.clone())));
+                                }
                             }
-                            // It would be alarming (incorrect) to receieve a batch that does not advance the acknowledged
-                            // frontier, as each batch must be greater than previous batches, and the input.
+                            // It would be alarming (incorrect) to receieve a non-empty batch that does not advance the
+                            // acknowledged frontier, as each batch must be greater than previous batches, and the input.
+                            // Empty batches may be received as information races between frontier forwarding of the trace
+                            // and the empty batches themselves (which can be sent as part of trace importing).
                             if acknowledged2.is_none() { acknowledged2 = Some(timely::progress::frontier::Antichain::from_elem(<G::Timestamp>::minimum())); }
                             if let Some(acknowledged2) = &mut acknowledged2 {
                                 if !(batch2.upper().iter().all(|t| acknowledged2.less_equal(t))) {
-                                    panic!("Batch2 upper not beyond acknowledged frontier: {:?}, {:?}; batch2.is_empty(): {}", batch2.upper(), acknowledged2, batch2.is_empty());
+                                    if !batch2.is_empty() {
+                                        panic!("Non-empty batch2 upper not beyond acknowledged frontier: {:?}, {:?}", batch2.upper(), acknowledged2);
+                                    }
+                                    else { eprintln!("Empty batch2 observed at Join"); }
                                 }
                                 acknowledged2.clear();
                                 acknowledged2.extend(batch2.upper().iter().cloned());

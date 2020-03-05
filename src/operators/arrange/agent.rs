@@ -322,8 +322,10 @@ where
                                 },
                                 TraceReplayInstruction::Batch(batch, hint) => {
                                     if let Some(time) = hint {
-                                        let delayed = capabilities.delayed(&time);
-                                        output.session(&delayed).give(batch);
+                                        if !batch.is_empty() {
+                                            let delayed = capabilities.delayed(&time);
+                                            output.session(&delayed).give(batch);
+                                        }
                                     }
                                 }
                             }
@@ -458,8 +460,10 @@ where
                                 },
                                 TraceReplayInstruction::Batch(batch, hint) => {
                                     if let Some(time) = hint {
-                                        let delayed = capabilities.delayed(&time);
-                                        output.session(&delayed).give(BatchFrontier::make_from(batch, &frontier[..]));
+                                        if !batch.is_empty() {
+                                            let delayed = capabilities.delayed(&time);
+                                            output.session(&delayed).give(BatchFrontier::make_from(batch, &frontier[..]));
+                                        }
                                     }
                                 }
                             }
