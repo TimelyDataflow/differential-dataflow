@@ -376,7 +376,6 @@ impl<G, T1> JoinCore<G, T1::Key, T1::Val, T1::R> for Arranged<G,T1>
                                     if !batch1.is_empty() {
                                         panic!("Non-empty batch1 upper not beyond acknowledged frontier: {:?}, {:?}", batch1.upper(), acknowledged1);
                                     }
-                                    else { eprintln!("Empty batch1 observed at Join"); }
                                 }
                                 acknowledged1.clear();
                                 acknowledged1.extend(batch1.upper().iter().cloned());
@@ -412,7 +411,6 @@ impl<G, T1> JoinCore<G, T1::Key, T1::Val, T1::R> for Arranged<G,T1>
                                     if !batch2.is_empty() {
                                         panic!("Non-empty batch2 upper not beyond acknowledged frontier: {:?}, {:?}", batch2.upper(), acknowledged2);
                                     }
-                                    else { eprintln!("Empty batch2 observed at Join"); }
                                 }
                                 acknowledged2.clear();
                                 acknowledged2.extend(batch2.upper().iter().cloned());
