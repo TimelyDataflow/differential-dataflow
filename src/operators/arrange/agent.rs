@@ -7,6 +7,7 @@ use std::collections::VecDeque;
 use timely::dataflow::Scope;
 use timely::dataflow::operators::generic::source;
 use timely::progress::Timestamp;
+use timely::progress::{Antichain, frontier::AntichainRef};
 use timely::dataflow::operators::CapabilitySet;
 
 use lattice::Lattice;
@@ -33,8 +34,8 @@ where
 {
     trace: Rc<RefCell<TraceBox<Tr>>>,
     queues: Weak<RefCell<Vec<TraceAgentQueueWriter<Tr>>>>,
-    advance: Vec<Tr::Time>,
-    through: Vec<Tr::Time>,
+    advance: Antichain<Tr::Time>,
+    through: Antichain<Tr::Time>,
 
     operator: ::timely::dataflow::operators::generic::OperatorInfo,
     logging: Option<::logging::Logger>,
@@ -53,23 +54,23 @@ where
     type Batch = Tr::Batch;
     type Cursor = Tr::Cursor;
 
-    fn advance_by(&mut self, frontier: &[Tr::Time]) {
-        self.trace.borrow_mut().adjust_advance_frontier(&self.advance[..], frontier);
+    fn advance_by(&mut self, frontier: AntichainRef<Tr::Time>) {
+        self.trace.borrow_mut().adjust_advance_frontier(self.advance.elements(), frontier);
         self.advance.clear();
         self.advance.extend(frontier.iter().cloned());
     }
-    fn advance_frontier(&mut self) -> &[Tr::Time] {
-        &self.advance[..]
+    fn advance_frontier(&mut self) -> AntichainRef<Tr::Time> {
+        self.advance.elements()
     }
-    fn distinguish_since(&mut self, frontier: &[Tr::Time]) {
-        self.trace.borrow_mut().adjust_through_frontier(&self.through[..], frontier);
+    fn distinguish_since(&mut self, frontier: AntichainRef<Tr::Time>) {
+        self.trace.borrow_mut().adjust_through_frontier(self.through.elements(), frontier);
         self.through.clear();
         self.through.extend(frontier.iter().cloned());
     }
-    fn distinguish_frontier(&mut self) -> &[Tr::Time] {
-        &self.through[..]
+    fn distinguish_frontier(&mut self) -> AntichainRef<Tr::Time> {
+        self.through.elements()
     }
-    fn cursor_through(&mut self, frontier: &[Tr::Time]) -> Option<(Tr::Cursor, <Tr::Cursor as Cursor<Tr::Key, Tr::Val, Tr::Time, Tr::R>>::Storage)> {
+    fn cursor_through(&mut self, frontier: AntichainRef<Tr::Time>) -> Option<(Tr::Cursor, <Tr::Cursor as Cursor<Tr::Key, Tr::Val, Tr::Time, Tr::R>>::Storage)> {
         self.trace.borrow_mut().trace.cursor_through(frontier)
     }
     fn map_batches<F: FnMut(&Self::Batch)>(&mut self, f: F) { self.trace.borrow_mut().trace.map_batches(f) }
@@ -98,8 +99,8 @@ where
         let reader = TraceAgent {
             trace: trace.clone(),
             queues: Rc::downgrade(&queues),
-            advance: trace.borrow().advance_frontiers.frontier().to_vec(),
-            through: trace.borrow().through_frontiers.frontier().to_vec(),
+            advance: trace.borrow().advance_frontiers.frontier().to_owned(),
+            through: trace.borrow().through_frontiers.frontier().to_owned(),
             operator,
             logging,
         };
@@ -130,7 +131,7 @@ where
             .trace
             .map_batches(|batch| {
                 new_queue.push_back(TraceReplayInstruction::Batch(batch.clone(), Some(<Tr::Time as Timestamp>::minimum())));
-                upper = Some(batch.upper().to_vec());
+                upper = Some(batch.upper().clone());
             });
 
         if let Some(upper) = upper {
@@ -318,7 +319,7 @@ where
                         for instruction in borrow.drain(..) {
                             match instruction {
                                 TraceReplayInstruction::Frontier(frontier) => {
-                                    capabilities.downgrade(&frontier[..]);
+                                    capabilities.downgrade(&frontier.elements()[..]);
                                 },
                                 TraceReplayInstruction::Batch(batch, hint) => {
                                     if let Some(time) = hint {
@@ -349,6 +350,7 @@ where
     /// extern crate differential_dataflow;
     ///
     /// use timely::Configuration;
+    /// use timely::progress::frontier::AntichainRef;
     /// use timely::dataflow::ProbeHandle;
     /// use timely::dataflow::operators::Probe;
     /// use timely::dataflow::operators::Inspect;
@@ -380,7 +382,7 @@ where
     ///         handle.remove(1); handle.advance_to(4); handle.flush(); worker.step();
     ///         handle.insert(0); handle.advance_to(5); handle.flush(); worker.step();
     ///
-    ///         trace.advance_by(&[5]);
+    ///         trace.advance_by(AntichainRef::new(&[5]));
     ///
     ///         // create a second dataflow
     ///         let mut shutdown = worker.dataflow(|scope| {
@@ -421,14 +423,14 @@ where
     }
 
     /// Import a trace advanced to a specific frontier.
-    pub fn import_frontier_core<G>(&mut self, scope: &G, name: &str, frontier:Vec<Tr::Time>) -> (Arranged<G, TraceFrontier<TraceAgent<Tr>>>, ShutdownButton<CapabilitySet<Tr::Time>>)
+    pub fn import_frontier_core<G>(&mut self, scope: &G, name: &str, frontier: Vec<Tr::Time>) -> (Arranged<G, TraceFrontier<TraceAgent<Tr>>>, ShutdownButton<CapabilitySet<Tr::Time>>)
     where
         G: Scope<Timestamp=Tr::Time>,
         Tr::Time: Timestamp+ Lattice+Ord+Clone+'static,
         Tr: TraceReader,
     {
         let trace = self.clone();
-        let trace = TraceFrontier::make_from(trace, &frontier[..]);
+        let trace = TraceFrontier::make_from(trace, AntichainRef::new(&frontier[..]));
 
         let mut shutdown_button = None;
 
@@ -456,13 +458,13 @@ where
                         for instruction in borrow.drain(..) {
                             match instruction {
                                 TraceReplayInstruction::Frontier(frontier) => {
-                                    capabilities.downgrade(&frontier[..]);
+                                    capabilities.downgrade(&frontier.elements()[..]);
                                 },
                                 TraceReplayInstruction::Batch(batch, hint) => {
                                     if let Some(time) = hint {
                                         if !batch.is_empty() {
                                             let delayed = capabilities.delayed(&time);
-                                            output.session(&delayed).give(BatchFrontier::make_from(batch, &frontier[..]));
+                                            output.session(&delayed).give(BatchFrontier::make_from(batch, AntichainRef::new(&frontier[..])));
                                         }
                                     }
                                 }
@@ -530,8 +532,8 @@ where
         }
 
         // increase counts for wrapped `TraceBox`.
-        self.trace.borrow_mut().adjust_advance_frontier(&[], &self.advance[..]);
-        self.trace.borrow_mut().adjust_through_frontier(&[], &self.through[..]);
+        self.trace.borrow_mut().adjust_advance_frontier(AntichainRef::new(&[]), self.advance.elements());
+        self.trace.borrow_mut().adjust_through_frontier(AntichainRef::new(&[]), self.through.elements());
 
         TraceAgent {
             trace: self.trace.clone(),
@@ -558,7 +560,7 @@ where
         }
 
         // decrement borrow counts to remove all holds
-        self.trace.borrow_mut().adjust_advance_frontier(&self.advance[..], &[]);
-        self.trace.borrow_mut().adjust_through_frontier(&self.through[..], &[]);
+        self.trace.borrow_mut().adjust_advance_frontier(self.advance.elements(), AntichainRef::new(&[]));
+        self.trace.borrow_mut().adjust_through_frontier(self.through.elements(), AntichainRef::new(&[]));
     }
 }

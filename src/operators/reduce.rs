@@ -432,8 +432,7 @@ where
 
                         batches.swap(&mut input_buffer);
                         for batch in input_buffer.drain(..) {
-                            upper_limit.clear();
-                            upper_limit.extend(batch.upper().iter().cloned());
+                            upper_limit.clone_from(batch.upper());
                             batch_cursors.push(batch.cursor());
                             batch_storage.push(batch);
                         }
@@ -582,7 +581,7 @@ where
 
                                 if output_upper.elements() != output_lower.elements() {
 
-                                    let batch = builder.done(output_lower.elements(), output_upper.elements(), &[G::Timestamp::minimum()]);
+                                    let batch = builder.done(output_lower.clone(), output_upper.clone(), Antichain::from_elem(G::Timestamp::minimum()));
 
                                     // ship batch to the output, and commit to the output trace.
                                     output.session(&capabilities[index]).give(batch.clone());
@@ -619,10 +618,10 @@ where
                             capabilities = new_capabilities;
 
                             // ensure that observed progres is reflected in the output.
-                            output_writer.seal(upper_limit.elements());
+                            output_writer.seal(upper_limit.clone());
                         }
                         else {
-                            output_writer.seal(upper_limit.elements());
+                            output_writer.seal(upper_limit.clone());
                         }
 
                         // We only anticipate future times in advance of `upper_limit`.

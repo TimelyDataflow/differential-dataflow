@@ -4,6 +4,7 @@ extern crate differential_dataflow;
 use std::rc::Rc;
 
 use timely::dataflow::operators::generic::OperatorInfo;
+use timely::progress::{Antichain, frontier::AntichainRef};
 
 use differential_dataflow::hashable::UnsignedWrapper;
 
@@ -29,7 +30,7 @@ fn get_trace() -> Spine<UnsignedWrapper<u64>, u64, usize, i64, Rc<OrdValBatch<Un
         ]);
 
         let batch_ts = &[1, 2, 3];
-        let batches = batch_ts.iter().map(move |i| batcher.seal(&[*i]));
+        let batches = batch_ts.iter().map(move |i| batcher.seal(Antichain::from_elem(*i)));
         for b in batches {
             trace.insert(b);
         }
@@ -41,11 +42,11 @@ fn get_trace() -> Spine<UnsignedWrapper<u64>, u64, usize, i64, Rc<OrdValBatch<Un
 fn test_trace() {
     let mut trace = get_trace();
 
-    let (mut cursor1, storage1) = trace.cursor_through(&[1]).unwrap();
+    let (mut cursor1, storage1) = trace.cursor_through(AntichainRef::new(&[1])).unwrap();
     let vec_1 = cursor1.to_vec(&storage1);
     assert_eq!(vec_1, vec![((1.into(), 2), vec![(0, 1)])]);
 
-    let (mut cursor2, storage2) = trace.cursor_through(&[2]).unwrap();
+    let (mut cursor2, storage2) = trace.cursor_through(AntichainRef::new(&[2])).unwrap();
     let vec_2 = cursor2.to_vec(&storage2);
     println!("--> {:?}", vec_2);
     assert_eq!(vec_2, vec![
@@ -53,7 +54,7 @@ fn test_trace() {
                ((2.into(), 3), vec![(1, 1)]),
     ]);
 
-    let (mut cursor3, storage3) = trace.cursor_through(&[3]).unwrap();
+    let (mut cursor3, storage3) = trace.cursor_through(AntichainRef::new(&[3])).unwrap();
     let vec_3 = cursor3.to_vec(&storage3);
     assert_eq!(vec_3, vec![
                ((1.into(), 2), vec![(0, 1)]),

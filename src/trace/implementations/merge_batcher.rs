@@ -10,7 +10,7 @@ use trace::{Batch, Batcher, Builder};
 /// Creates batches from unordered tuples.
 pub struct MergeBatcher<K: Ord, V: Ord, T: Ord, R: Semigroup, B: Batch<K, V, T, R>> {
     sorter: MergeSorter<(K, V), T, R>,
-    lower: Vec<T>,
+    lower: Antichain<T>,
     frontier: Antichain<T>,
     phantom: ::std::marker::PhantomData<B>,
 }
@@ -27,7 +27,7 @@ where
         MergeBatcher {
             sorter: MergeSorter::new(),
             frontier: Antichain::new(),
-            lower: vec![T::minimum()],
+            lower: Antichain::from_elem(T::minimum()),
             phantom: ::std::marker::PhantomData,
         }
     }
@@ -42,7 +42,7 @@ where
     // which we call `lower`, by assumption that after sealing a batcher we receive no more
     // updates with times not greater or equal to `upper`.
     #[inline(never)]
-    fn seal(&mut self, upper: &[T]) -> B {
+    fn seal(&mut self, upper: Antichain<T>) -> B {
 
         let mut builder = B::Builder::new();
 
@@ -57,7 +57,7 @@ where
         // TODO: Re-use buffer, rather than dropping.
         for mut buffer in merged.drain(..) {
             for ((key, val), time, diff) in buffer.drain(..) {
-                if upper.iter().any(|t| t.less_equal(&time)) {
+                if upper.less_equal(&time) {
                     // keep_count += 1;
                     self.frontier.insert(time.clone());
                     if keep.len() == keep.capacity() {
@@ -97,13 +97,13 @@ where
             self.sorter.push(&mut buffer);
         }
 
-        let seal = builder.done(&self.lower[..], &upper[..], &[T::minimum()]);
-        self.lower = upper.to_vec();
+        let seal = builder.done(self.lower.clone(), upper.clone(), Antichain::from_elem(T::minimum()));
+        self.lower = upper;
         seal
     }
 
     // the frontier of elements remaining after the most recent call to `self.seal`.
-    fn frontier(&mut self) -> &[T] {
+    fn frontier(&mut self) -> timely::progress::frontier::AntichainRef<T> {
         self.frontier.elements()
     }
 }

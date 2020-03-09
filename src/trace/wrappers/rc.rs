@@ -14,7 +14,7 @@
 use std::rc::Rc;
 use std::cell::RefCell;
 
-use timely::progress::frontier::MutableAntichain;
+use timely::progress::{Antichain, frontier::{AntichainRef, MutableAntichain}};
 
 use lattice::Lattice;
 use trace::TraceReader;
@@ -68,20 +68,16 @@ where
         }
     }
     /// Replaces elements of `lower` with those of `upper`.
-    pub fn adjust_advance_frontier(&mut self, lower: &[Tr::Time], upper: &[Tr::Time]) {
+    pub fn adjust_advance_frontier(&mut self, lower: AntichainRef<Tr::Time>, upper: AntichainRef<Tr::Time>) {
         self.advance_frontiers.update_iter(upper.iter().cloned().map(|t| (t,1)));
         self.advance_frontiers.update_iter(lower.iter().cloned().map(|t| (t,-1)));
-        // for element in upper { self.advance_frontiers.update_and(element, 1, |_,_| {}); }
-        // for element in lower { self.advance_frontiers.update_and(element, -1, |_,_| {}); }
-        self.trace.advance_by(&self.advance_frontiers.frontier());
+        self.trace.advance_by(self.advance_frontiers.frontier());
     }
     /// Replaces elements of `lower` with those of `upper`.
-    pub fn adjust_through_frontier(&mut self, lower: &[Tr::Time], upper: &[Tr::Time]) {
+    pub fn adjust_through_frontier(&mut self, lower: AntichainRef<Tr::Time>, upper: AntichainRef<Tr::Time>) {
         self.through_frontiers.update_iter(upper.iter().cloned().map(|t| (t,1)));
         self.through_frontiers.update_iter(lower.iter().cloned().map(|t| (t,-1)));
-        // for element in upper { self.through_frontiers.update_and(element, 1, |_,_| {}); }
-        // for element in lower { self.through_frontiers.update_and(element, -1, |_,_| {}); }
-        self.trace.distinguish_since(&self.through_frontiers.frontier());
+        self.trace.distinguish_since(self.through_frontiers.frontier());
     }
 }
 
@@ -95,8 +91,8 @@ where
     Tr::Time: Lattice+Ord+Clone+'static,
     Tr: TraceReader,
 {
-    advance_frontier: Vec<Tr::Time>,
-    through_frontier: Vec<Tr::Time>,
+    advance_frontier: Antichain<Tr::Time>,
+    through_frontier: Antichain<Tr::Time>,
     /// Wrapped trace. Please be gentle when using.
     pub wrapper: Rc<RefCell<TraceBox<Tr>>>,
 }
@@ -119,19 +115,19 @@ where
     /// This change may not have immediately observable effects. It informs the shared trace that this
     /// handle no longer requires access to times other than those in the future of `frontier`, but if
     /// there are other handles to the same trace, it may not yet be able to compact.
-    fn advance_by(&mut self, frontier: &[Tr::Time]) {
-        self.wrapper.borrow_mut().adjust_advance_frontier(&self.advance_frontier[..], frontier);
-        self.advance_frontier = frontier.to_vec();
+    fn advance_by(&mut self, frontier: AntichainRef<Tr::Time>) {
+        self.wrapper.borrow_mut().adjust_advance_frontier(self.advance_frontier.elements(), frontier);
+        self.advance_frontier = frontier.to_owned();
     }
-    fn advance_frontier(&mut self) -> &[Tr::Time] { &self.advance_frontier[..] }
+    fn advance_frontier(&mut self) -> AntichainRef<Tr::Time> { self.advance_frontier.elements() }
     /// Allows the trace to compact batches of times before `frontier`.
-    fn distinguish_since(&mut self, frontier: &[Tr::Time]) {
-        self.wrapper.borrow_mut().adjust_through_frontier(&self.through_frontier[..], frontier);
-        self.through_frontier = frontier.to_vec();
+    fn distinguish_since(&mut self, frontier: AntichainRef<Tr::Time>) {
+        self.wrapper.borrow_mut().adjust_through_frontier(self.through_frontier.elements(), frontier);
+        self.through_frontier = frontier.to_owned();
     }
-    fn distinguish_frontier(&mut self) -> &[Tr::Time] { &self.through_frontier[..] }
+    fn distinguish_frontier(&mut self) -> AntichainRef<Tr::Time> { self.through_frontier.elements() }
     /// Creates a new cursor over the wrapped trace.
-    fn cursor_through(&mut self, frontier: &[Tr::Time]) -> Option<(Tr::Cursor, <Tr::Cursor as Cursor<Tr::Key, Tr::Val, Tr::Time, Tr::R>>::Storage)> {
+    fn cursor_through(&mut self, frontier: AntichainRef<Tr::Time>) -> Option<(Tr::Cursor, <Tr::Cursor as Cursor<Tr::Key, Tr::Val, Tr::Time, Tr::R>>::Storage)> {
         ::std::cell::RefCell::borrow_mut(&self.wrapper).trace.cursor_through(frontier)
     }
 
@@ -151,8 +147,8 @@ where
         let wrapped = Rc::new(RefCell::new(TraceBox::new(trace)));
 
         let handle = TraceRc {
-            advance_frontier: wrapped.borrow().advance_frontiers.frontier().to_vec(),
-            through_frontier: wrapped.borrow().through_frontiers.frontier().to_vec(),
+            advance_frontier: wrapped.borrow().advance_frontiers.frontier().to_owned(),
+            through_frontier: wrapped.borrow().through_frontiers.frontier().to_owned(),
             wrapper: wrapped.clone(),
         };
 
@@ -167,8 +163,8 @@ where
 {
     fn clone(&self) -> Self {
         // increase ref counts for this frontier
-        self.wrapper.borrow_mut().adjust_advance_frontier(&[], &self.advance_frontier[..]);
-        self.wrapper.borrow_mut().adjust_through_frontier(&[], &self.through_frontier[..]);
+        self.wrapper.borrow_mut().adjust_advance_frontier(AntichainRef::new(&[]), self.advance_frontier.elements());
+        self.wrapper.borrow_mut().adjust_through_frontier(AntichainRef::new(&[]), self.through_frontier.elements());
         TraceRc {
             advance_frontier: self.advance_frontier.clone(),
             through_frontier: self.through_frontier.clone(),
@@ -183,9 +179,9 @@ where
     Tr: TraceReader,
 {
     fn drop(&mut self) {
-        self.wrapper.borrow_mut().adjust_advance_frontier(&self.advance_frontier[..], &[]);
-        self.wrapper.borrow_mut().adjust_through_frontier(&self.through_frontier[..], &[]);
-        self.advance_frontier = Vec::new();
-        self.through_frontier = Vec::new();
+        self.wrapper.borrow_mut().adjust_advance_frontier(self.advance_frontier.elements(), AntichainRef::new(&[]));
+        self.wrapper.borrow_mut().adjust_through_frontier(self.through_frontier.elements(), AntichainRef::new(&[]));
+        self.advance_frontier = Antichain::new();
+        self.through_frontier = Antichain::new();
     }
 }

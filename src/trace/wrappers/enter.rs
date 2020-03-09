@@ -3,6 +3,7 @@
 // use timely::progress::nested::product::Product;
 use timely::progress::timestamp::Refines;
 use timely::progress::Timestamp;
+use timely::progress::{Antichain, frontier::AntichainRef};
 
 use lattice::Lattice;
 use trace::{TraceReader, BatchReader, Description};
@@ -55,42 +56,42 @@ where
         })
     }
 
-    fn advance_by(&mut self, frontier: &[TInner]) {
+    fn advance_by(&mut self, frontier: AntichainRef<TInner>) {
         self.stash1.clear();
         for time in frontier.iter() {
             self.stash1.push(time.clone().to_outer());
         }
-        self.trace.advance_by(&self.stash1[..]);
+        self.trace.advance_by(AntichainRef::new(&self.stash1[..]));
     }
-    fn advance_frontier(&mut self) -> &[TInner] {
+    fn advance_frontier(&mut self) -> AntichainRef<TInner> {
         self.stash2.clear();
         for time in self.trace.advance_frontier().iter() {
             self.stash2.push(TInner::to_inner(time.clone()));
         }
-        &self.stash2[..]
+        AntichainRef::new(&self.stash2[..])
     }
 
-    fn distinguish_since(&mut self, frontier: &[TInner]) {
+    fn distinguish_since(&mut self, frontier: AntichainRef<TInner>) {
         self.stash1.clear();
         for time in frontier.iter() {
             self.stash1.push(time.clone().to_outer());
         }
-        self.trace.distinguish_since(&self.stash1[..]);
+        self.trace.distinguish_since(AntichainRef::new(&self.stash1[..]));
     }
-    fn distinguish_frontier(&mut self) -> &[TInner] {
+    fn distinguish_frontier(&mut self) -> AntichainRef<TInner> {
         self.stash2.clear();
         for time in self.trace.distinguish_frontier().iter() {
             self.stash2.push(TInner::to_inner(time.clone()));
         }
-        &self.stash2[..]
+        AntichainRef::new(&self.stash2[..])
     }
 
-    fn cursor_through(&mut self, upper: &[TInner]) -> Option<(Self::Cursor, <Self::Cursor as Cursor<Tr::Key, Tr::Val, TInner, Tr::R>>::Storage)> {
+    fn cursor_through(&mut self, upper: AntichainRef<TInner>) -> Option<(Self::Cursor, <Self::Cursor as Cursor<Tr::Key, Tr::Val, TInner, Tr::R>>::Storage)> {
         self.stash1.clear();
         for time in upper.iter() {
             self.stash1.push(time.clone().to_outer());
         }
-        self.trace.cursor_through(&self.stash1[..]).map(|(x,y)| (CursorEnter::new(x), y))
+        self.trace.cursor_through(AntichainRef::new(&self.stash1[..])).map(|(x,y)| (CursorEnter::new(x), y))
     }
 }
 
@@ -151,14 +152,14 @@ where
 {
     /// Makes a new batch wrapper
     pub fn make_from(batch: B) -> Self {
-        let lower: Vec<_> = batch.description().lower().iter().map(|x| TInner::to_inner(x.clone())).collect();
-        let upper: Vec<_> = batch.description().upper().iter().map(|x| TInner::to_inner(x.clone())).collect();
-        let since: Vec<_> = batch.description().since().iter().map(|x| TInner::to_inner(x.clone())).collect();
+        let lower: Vec<_> = batch.description().lower().elements().iter().map(|x| TInner::to_inner(x.clone())).collect();
+        let upper: Vec<_> = batch.description().upper().elements().iter().map(|x| TInner::to_inner(x.clone())).collect();
+        let since: Vec<_> = batch.description().since().elements().iter().map(|x| TInner::to_inner(x.clone())).collect();
 
         BatchEnter {
             phantom: ::std::marker::PhantomData,
             batch: batch,
-            description: Description::new(&lower[..], &upper[..], &since[..])
+            description: Description::new(Antichain::from(lower), Antichain::from(upper), Antichain::from(since))
         }
     }
 }

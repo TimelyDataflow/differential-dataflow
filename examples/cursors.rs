@@ -38,6 +38,7 @@ use std::fmt::Debug;
 use std::collections::BTreeMap;
 
 use timely::dataflow::operators::probe::Handle;
+use timely::progress::frontier::AntichainRef;
 
 use differential_dataflow::input::Input;
 use differential_dataflow::operators::arrange::ArrangeByKey;
@@ -77,8 +78,8 @@ fn main() {
             graph.close();
             for i in 1..rounds + 1 {
                 /* Advance the trace frontier to enable trace compaction. */
-                graph_trace.distinguish_since(&[i]);
-                graph_trace.advance_by(&[i]);
+                graph_trace.distinguish_since(AntichainRef::new(&[i]));
+                graph_trace.advance_by(AntichainRef::new(&[i]));
                 worker.step_while(|| probe.less_than(&i));
                 dump_cursor(i, worker.index(), &mut graph_trace);
             }
@@ -92,8 +93,8 @@ fn main() {
                 }
                 graph.advance_to(i);
                 graph.flush();
-                graph_trace.distinguish_since(&[i]);
-                graph_trace.advance_by(&[i]);
+                graph_trace.distinguish_since(AntichainRef::new(&[i]));
+                graph_trace.advance_by(AntichainRef::new(&[i]));
                 worker.step_while(|| probe.less_than(graph.time()));
                 dump_cursor(i, worker.index(), &mut graph_trace);
             }

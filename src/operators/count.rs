@@ -84,9 +84,8 @@ where
                 for batch in buffer.drain(..) {
 
                     let mut batch_cursor = batch.cursor();
-                    let (mut trace_cursor, trace_storage) = trace.cursor_through(batch.lower()).unwrap();
-                    upper_limit.clear();
-                    upper_limit.extend(batch.upper().iter().cloned());
+                    let (mut trace_cursor, trace_storage) = trace.cursor_through(batch.lower().elements()).unwrap();
+                    upper_limit.clone_from(batch.upper());
 
                     while batch_cursor.key_valid(&batch) {
 

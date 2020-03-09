@@ -5,7 +5,7 @@
 //! `Lattice` trait, and all reasoning in operators are done it terms of `Lattice` methods.
 
 use timely::order::PartialOrder;
-use timely::progress::Antichain;
+use timely::progress::{Antichain, frontier::AntichainRef};
 
 /// A bounded partially ordered type supporting joins and meets.
 pub trait Lattice : PartialOrder {
@@ -118,10 +118,12 @@ pub trait Lattice : PartialOrder {
     /// # use differential_dataflow::lattice::Lattice;
     /// # fn main() {
     ///
+    /// use timely::progress::frontier::AntichainRef;
+    ///
     /// let time = Product::new(3, 7);
     /// let mut advanced = Product::new(3, 7);
     /// let frontier = vec![Product::new(4, 8), Product::new(5, 3)];
-    /// advanced.advance_by(&frontier[..]);
+    /// advanced.advance_by(AntichainRef::new(&frontier[..]));
     ///
     /// // `time` and `advanced` are indistinguishable to elements >= an element of `frontier`
     /// for i in 0 .. 10 {
@@ -138,10 +140,11 @@ pub trait Lattice : PartialOrder {
     /// # }
     /// ```
     #[inline]
-    fn advance_by(&mut self, frontier: &[Self]) where Self: Sized {
-        if let Some(first) = frontier.get(0) {
+    fn advance_by(&mut self, frontier: AntichainRef<Self>) where Self: Sized {
+        let mut iter = frontier.iter();
+        if let Some(first) = iter.next() {
             let mut result = self.join(first);
-            for f in &frontier[1..] {
+            for f in iter {
                 result.meet_assign(&self.join(f));
             }
             *self = result;
@@ -196,9 +199,9 @@ implement_lattice!((), ());
 
 /// Returns the "smallest" minimal antichain "greater or equal" to both inputs.
 ///
-/// This method is primarily meant for cases where one cannot call use the methods
-/// of `Antichain`'s `PartialOrder` implementation, such as when one has references
-/// rather than owned antichains.
+/// This method is primarily meant for cases where one cannot use the methods
+/// of `Antichain`'s `PartialOrder` implementation, such as when one has only
+/// references rather than owned antichains.
 ///
 /// # Examples
 ///
@@ -214,7 +217,7 @@ implement_lattice!((), ());
 /// let f1 = &[Product::new(3, 7), Product::new(5, 6)];
 /// let f2 = &[Product::new(4, 6)];
 /// let join = antichain_join(f1, f2);
-/// assert_eq!(join.elements(), &[Product::new(4, 7), Product::new(5, 6)]);
+/// assert_eq!(&*join.elements(), &[Product::new(4, 7), Product::new(5, 6)]);
 /// # }
 /// ```
 pub fn antichain_join<T: Lattice>(one: &[T], other: &[T]) -> Antichain<T> {
@@ -229,9 +232,9 @@ pub fn antichain_join<T: Lattice>(one: &[T], other: &[T]) -> Antichain<T> {
 
 /// Returns the "greatest" minimal antichain "less or equal" to both inputs.
 ///
-/// This method is primarily meant for cases where one cannot call use the methods
-/// of `Antichain`'s `PartialOrder` implementation, such as when one has references
-/// rather than owned antichains.
+/// This method is primarily meant for cases where one cannot use the methods
+/// of `Antichain`'s `PartialOrder` implementation, such as when one has only
+/// references rather than owned antichains.
 ///
 /// # Examples
 ///
@@ -247,7 +250,7 @@ pub fn antichain_join<T: Lattice>(one: &[T], other: &[T]) -> Antichain<T> {
 /// let f1 = &[Product::new(3, 7), Product::new(5, 6)];
 /// let f2 = &[Product::new(4, 6)];
 /// let meet = antichain_meet(f1, f2);
-/// assert_eq!(meet.elements(), &[Product::new(3, 7), Product::new(4, 6)]);
+/// assert_eq!(&*meet.elements(), &[Product::new(3, 7), Product::new(4, 6)]);
 /// # }
 /// ```
 pub fn antichain_meet<T: Lattice+Clone>(one: &[T], other: &[T]) -> Antichain<T> {
@@ -264,8 +267,8 @@ pub fn antichain_meet<T: Lattice+Clone>(one: &[T], other: &[T]) -> Antichain<T> 
 impl<T: Lattice+Clone> Lattice for Antichain<T> {
     fn join(&self, other: &Self) -> Self {
         let mut upper = Antichain::new();
-        for time1 in self.elements() {
-            for time2 in other.elements() {
+        for time1 in self.elements().iter() {
+            for time2 in other.elements().iter() {
                 upper.insert(time1.join(time2));
             }
         }
@@ -273,10 +276,10 @@ impl<T: Lattice+Clone> Lattice for Antichain<T> {
     }
     fn meet(&self, other: &Self) -> Self {
         let mut upper = Antichain::new();
-        for time1 in self.elements() {
+        for time1 in self.elements().iter() {
             upper.insert(time1.clone());
         }
-        for time2 in other.elements() {
+        for time2 in other.elements().iter() {
             upper.insert(time2.clone());
         }
         upper

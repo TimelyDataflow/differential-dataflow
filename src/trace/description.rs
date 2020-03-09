@@ -55,6 +55,8 @@
 //! will often be a logic bug, as `since` does not advance without a corresponding advance in
 //! times at which data may possibly be sent.
 
+use timely::{PartialOrder, progress::Antichain};
+
 /// Describes an interval of partially ordered times.
 ///
 /// A `Description` indicates a set of partially ordered times, and a moment at which they are
@@ -65,31 +67,31 @@
 #[derive(Clone, Debug, Abomonation)]
 pub struct Description<Time> {
 	/// lower frontier of contained updates.
-	lower: Vec<Time>,
+	lower: Antichain<Time>,
 	/// upper frontier of contained updates.
-	upper: Vec<Time>,
+	upper: Antichain<Time>,
 	/// frontier used for update compaction.
-	since: Vec<Time>,
+	since: Antichain<Time>,
 }
 
-impl<Time: Clone> Description<Time> {
+impl<Time: PartialOrder+Clone> Description<Time> {
 	/// Returns a new description from its component parts.
-	pub fn new(lower: &[Time], upper: &[Time], since: &[Time]) -> Self {
-		assert!(lower.len() > 0);	// this should always be true.
-		// assert!(upper.len() > 0);	// this may not always be true.
+	pub fn new(lower: Antichain<Time>, upper: Antichain<Time>, since: Antichain<Time>) -> Self {
+		assert!(lower.elements().len() > 0);	// this should always be true.
+		// assert!(upper.len() > 0);			// this may not always be true.
 		Description {
-			lower: lower.to_vec(),
-			upper: upper.to_vec(),
-			since: since.to_vec(),
+			lower,
+			upper,
+			since,
 		}
 	}
 }
 
 impl<Time> Description<Time> {
 	/// The lower envelope for times in the interval.
-	pub fn lower(&self) -> &[Time] { &self.lower[..] }
+	pub fn lower(&self) -> &Antichain<Time> { &self.lower }
 	/// The upper envelope for times in the interval.
-	pub fn upper(&self) -> &[Time] { &self.upper[..] }
+	pub fn upper(&self) -> &Antichain<Time> { &self.upper }
 	/// Times from whose future the interval may be observed.
-	pub fn since(&self) -> &[Time] { &self.since[..] }
+	pub fn since(&self) -> &Antichain<Time> { &self.since }
 }

@@ -13,7 +13,7 @@ pub mod implementations;
 pub mod layers;
 pub mod wrappers;
 
-use timely::progress::Antichain;
+use timely::progress::{Antichain, frontier::AntichainRef};
 use timely::progress::Timestamp;
 
 // use ::difference::Semigroup;
@@ -59,7 +59,7 @@ pub trait TraceReader {
 
 	/// Provides a cursor over updates contained in the trace.
 	fn cursor(&mut self) -> (Self::Cursor, <Self::Cursor as Cursor<Self::Key, Self::Val, Self::Time, Self::R>>::Storage) {
-		if let Some(cursor) = self.cursor_through(&[]) {
+		if let Some(cursor) = self.cursor_through(AntichainRef::new(&[])) {
 			cursor
 		}
 		else {
@@ -74,7 +74,7 @@ pub trait TraceReader {
 	/// the trace, and (ii) the trace has not been advanced beyond `upper`. Practically, the implementation should
 	/// be expected to look for a "clean cut" using `upper`, and if it finds such a cut can return a cursor. This
 	/// should allow `upper` such as `&[]` as used by `self.cursor()`, though it is difficult to imagine other uses.
-	fn cursor_through(&mut self, upper: &[Self::Time]) -> Option<(Self::Cursor, <Self::Cursor as Cursor<Self::Key, Self::Val, Self::Time, Self::R>>::Storage)>;
+	fn cursor_through(&mut self, upper: AntichainRef<Self::Time>) -> Option<(Self::Cursor, <Self::Cursor as Cursor<Self::Key, Self::Val, Self::Time, Self::R>>::Storage)>;
 
 	/// Advances the frontier of times the collection must be correctly accumulable through.
 	///
@@ -82,14 +82,14 @@ pub trait TraceReader {
 	/// still compare equivalently to any times greater or equal to some element of `frontier`. Times not greater
 	/// or equal to some element of `frontier` may no longer correctly accumulate, so do not advance a trace unless
 	/// you are quite sure you no longer require the distinction.
-	fn advance_by(&mut self, frontier: &[Self::Time]);
+	fn advance_by(&mut self, frontier: AntichainRef<Self::Time>);
 
 	/// Reports the frontier from which all time comparisions should be accurate.
 	///
 	/// Times that are not greater or equal to some element of the advance frontier may accumulate inaccurately as
 	/// the trace may have lost the ability to distinguish between such times. Accumulations are only guaranteed to
 	/// be accurate from the frontier onwards.
-	fn advance_frontier(&mut self) -> &[Self::Time];
+	fn advance_frontier(&mut self) -> AntichainRef<Self::Time>;
 
 	/// Advances the frontier that may be used in `cursor_through`.
 	///
@@ -99,7 +99,7 @@ pub trait TraceReader {
 	///
 	/// Calling `distinguish_since(&[])` indicates that all batches may be merged at any point, which essentially
 	/// disables the use of `cursor_through` with any parameter other than `&[]`, which is the behavior of `cursor`.
-	fn distinguish_since(&mut self, frontier: &[Self::Time]);
+	fn distinguish_since(&mut self, frontier: AntichainRef<Self::Time>);
 
 	/// Reports the frontier from which the collection may be subsetted.
 	///
@@ -107,7 +107,7 @@ pub trait TraceReader {
 	/// frontier, which ensures that operators can extract the subset of the trace at batch boundaries from this
 	/// frontier onward. These boundaries may be used in `cursor_through`, whereas boundaries not in advance of
 	/// this frontier are not guaranteed to return a cursor.
-	fn distinguish_frontier(&mut self) -> &[Self::Time];
+	fn distinguish_frontier(&mut self) -> AntichainRef<Self::Time>;
 
 	/// Maps logic across the non-empty sequence of batches in the trace.
 	///
@@ -126,10 +126,7 @@ pub trait TraceReader {
 		target.clear();
 		target.insert(<Self::Time as timely::progress::Timestamp>::minimum());
 		self.map_batches(|batch| {
-			target.clear();
-			for time in batch.upper().iter().cloned() {
-				target.insert(time);
-			}
+			target.clone_from(batch.upper());
 		});
 	}
 
@@ -144,9 +141,8 @@ pub trait TraceReader {
         Self::Time: Timestamp,
     {
         self.map_batches(|batch| {
-            if batch.is_empty() && batch.lower() == upper.elements() {
-                upper.clear();
-                upper.extend(batch.upper().iter().cloned());
+            if batch.is_empty() && batch.lower() == upper {
+				upper.clone_from(batch.upper());
             }
         });
     }
@@ -196,7 +192,9 @@ where <Self as TraceReader>::Batch: Batch<Self::Key, Self::Val, Self::Time, Self
 /// but do not expose ways to construct the batches. This trait is appropriate for views of the batch, and is
 /// especially useful for views derived from other sources in ways that prevent the construction of batches
 /// from the type of data in the view (for example, filtered views, or views with extended time coordinates).
-pub trait BatchReader<K, V, T, R> where Self: ::std::marker::Sized
+pub trait BatchReader<K, V, T, R>
+where
+	Self: ::std::marker::Sized,
 {
 	/// The type used to enumerate the batch's contents.
 	type Cursor: Cursor<K, V, T, R, Storage=Self>;
@@ -210,9 +208,9 @@ pub trait BatchReader<K, V, T, R> where Self: ::std::marker::Sized
 	fn description(&self) -> &Description<T>;
 
 	/// All times in the batch are greater or equal to an element of `lower`.
-	fn lower(&self) -> &[T] { self.description().lower() }
+	fn lower(&self) -> &Antichain<T> { self.description().lower() }
 	/// All times in the batch are not greater or equal to any element of `upper`.
-	fn upper(&self) -> &[T] { self.description().upper() }
+	fn upper(&self) -> &Antichain<T> { self.description().upper() }
 }
 
 /// An immutable collection of updates.
@@ -229,11 +227,11 @@ pub trait Batch<K, V, T, R> : BatchReader<K, V, T, R> where Self: ::std::marker:
 	/// The result of this method can be exercised to eventually produce the same result
 	/// that a call to `self.merge(other)` would produce, but it can be done in a measured
 	/// fashion. This can help to avoid latency spikes where a large merge needs to happen.
-	fn begin_merge(&self, other: &Self, compaction_frontier: Option<&[T]>) -> Self::Merger {
+	fn begin_merge(&self, other: &Self, compaction_frontier: Option<AntichainRef<T>>) -> Self::Merger {
 		Self::Merger::new(self, other, compaction_frontier)
 	}
-	///
-	fn empty(lower: &[T], upper: &[T], since: &[T]) -> Self {
+	/// Creates an empty batch with the stated bounds.
+	fn empty(lower: Antichain<T>, upper: Antichain<T>, since: Antichain<T>) -> Self {
 		<Self::Builder>::new().done(lower, upper, since)
 	}
 }
@@ -245,9 +243,9 @@ pub trait Batcher<K, V, T, R, Output: Batch<K, V, T, R>> {
 	/// Adds an unordered batch of elements to the batcher.
 	fn push_batch(&mut self, batch: &mut Vec<((K, V), T, R)>);
 	/// Returns all updates not greater or equal to an element of `upper`.
-	fn seal(&mut self, upper: &[T]) -> Output;
+	fn seal(&mut self, upper: Antichain<T>) -> Output;
 	/// Returns the lower envelope of contained update times.
-	fn frontier(&mut self) -> &[T];
+	fn frontier(&mut self) -> timely::progress::frontier::AntichainRef<T>;
 }
 
 /// Functionality for building batches from ordered update sequences.
@@ -263,14 +261,14 @@ pub trait Builder<K, V, T, R, Output: Batch<K, V, T, R>> {
 		for item in iter { self.push(item); }
 	}
 	/// Completes building and returns the batch.
-	fn done(self, lower: &[T], upper: &[T], since: &[T]) -> Output;
+	fn done(self, lower: Antichain<T>, upper: Antichain<T>, since: Antichain<T>) -> Output;
 }
 
 /// Represents a merge in progress.
 pub trait Merger<K, V, T, R, Output: Batch<K, V, T, R>> {
 	/// Creates a new merger to merge the supplied batches, optionally compacting
 	/// up to the supplied frontier.
-	fn new(source1: &Output, source2: &Output, compaction_frontier: Option<&[T]>) -> Self;
+	fn new(source1: &Output, source2: &Output, compaction_frontier: Option<AntichainRef<T>>) -> Self;
 	/// Perform some amount of work, decrementing `fuel`.
 	///
 	/// If `fuel` is non-zero after the call, the merging is complete and
@@ -290,6 +288,7 @@ pub mod rc_blanket_impls {
 
 	use std::rc::Rc;
 
+	use timely::progress::{Antichain, frontier::AntichainRef};
 	use super::{Batch, BatchReader, Batcher, Builder, Merger, Cursor, Description};
 
 	impl<K, V, T, R, B: BatchReader<K,V,T,R>> BatchReader<K,V,T,R> for Rc<B> {
@@ -361,8 +360,8 @@ pub mod rc_blanket_impls {
 	impl<K,V,T,R,B:Batch<K,V,T,R>> Batcher<K, V, T, R, Rc<B>> for RcBatcher<K,V,T,R,B> {
 		fn new() -> Self { RcBatcher { batcher: <B::Batcher as Batcher<K,V,T,R,B>>::new() } }
 		fn push_batch(&mut self, batch: &mut Vec<((K, V), T, R)>) { self.batcher.push_batch(batch) }
-		fn seal(&mut self, upper: &[T]) -> Rc<B> { Rc::new(self.batcher.seal(upper)) }
-		fn frontier(&mut self) -> &[T] { self.batcher.frontier() }
+		fn seal(&mut self, upper: Antichain<T>) -> Rc<B> { Rc::new(self.batcher.seal(upper)) }
+		fn frontier(&mut self) -> timely::progress::frontier::AntichainRef<T> { self.batcher.frontier() }
 	}
 
 	/// Wrapper type for building reference counted batches.
@@ -373,7 +372,7 @@ pub mod rc_blanket_impls {
 		fn new() -> Self { RcBuilder { builder: <B::Builder as Builder<K,V,T,R,B>>::new() } }
 		fn with_capacity(cap: usize) -> Self { RcBuilder { builder: <B::Builder as Builder<K,V,T,R,B>>::with_capacity(cap) } }
 		fn push(&mut self, element: (K, V, T, R)) { self.builder.push(element) }
-		fn done(self, lower: &[T], upper: &[T], since: &[T]) -> Rc<B> { Rc::new(self.builder.done(lower, upper, since)) }
+		fn done(self, lower: Antichain<T>, upper: Antichain<T>, since: Antichain<T>) -> Rc<B> { Rc::new(self.builder.done(lower, upper, since)) }
 	}
 
 	/// Wrapper type for merging reference counted batches.
@@ -381,7 +380,7 @@ pub mod rc_blanket_impls {
 
 	/// Represents a merge in progress.
 	impl<K,V,T,R,B:Batch<K,V,T,R>> Merger<K, V, T, R, Rc<B>> for RcMerger<K,V,T,R,B> {
-		fn new(source1: &Rc<B>, source2: &Rc<B>, compaction_frontier: Option<&[T]>) -> Self { RcMerger { merger: B::begin_merge(source1, source2, compaction_frontier) } }
+		fn new(source1: &Rc<B>, source2: &Rc<B>, compaction_frontier: Option<AntichainRef<T>>) -> Self { RcMerger { merger: B::begin_merge(source1, source2, compaction_frontier) } }
 		fn work(&mut self, source1: &Rc<B>, source2: &Rc<B>, fuel: &mut isize) { self.merger.work(source1, source2, fuel) }
 		fn done(self) -> Rc<B> { Rc::new(self.merger.done()) }
 	}
@@ -395,6 +394,7 @@ pub mod abomonated_blanket_impls {
 
 	use abomonation::{Abomonation, measure};
 	use abomonation::abomonated::Abomonated;
+	use timely::progress::{Antichain, frontier::AntichainRef};
 
 	use super::{Batch, BatchReader, Batcher, Builder, Merger, Cursor, Description};
 
@@ -467,13 +467,13 @@ pub mod abomonated_blanket_impls {
 	impl<K,V,T,R,B:Batch<K,V,T,R>+Abomonation> Batcher<K, V, T, R, Abomonated<B,Vec<u8>>> for AbomonatedBatcher<K,V,T,R,B> {
 		fn new() -> Self { AbomonatedBatcher { batcher: <B::Batcher as Batcher<K,V,T,R,B>>::new() } }
 		fn push_batch(&mut self, batch: &mut Vec<((K, V), T, R)>) { self.batcher.push_batch(batch) }
-		fn seal(&mut self, upper: &[T]) -> Abomonated<B, Vec<u8>> {
+		fn seal(&mut self, upper: Antichain<T>) -> Abomonated<B, Vec<u8>> {
 			let batch = self.batcher.seal(upper);
 			let mut bytes = Vec::with_capacity(measure(&batch));
 			unsafe { abomonation::encode(&batch, &mut bytes).unwrap() };
 			unsafe { Abomonated::<B,_>::new(bytes).unwrap() }
 		}
-		fn frontier(&mut self) -> &[T] { self.batcher.frontier() }
+		fn frontier(&mut self) -> timely::progress::frontier::AntichainRef<T> { self.batcher.frontier() }
 	}
 
 	/// Wrapper type for building reference counted batches.
@@ -484,7 +484,7 @@ pub mod abomonated_blanket_impls {
 		fn new() -> Self { AbomonatedBuilder { builder: <B::Builder as Builder<K,V,T,R,B>>::new() } }
 		fn with_capacity(cap: usize) -> Self { AbomonatedBuilder { builder: <B::Builder as Builder<K,V,T,R,B>>::with_capacity(cap) } }
 		fn push(&mut self, element: (K, V, T, R)) { self.builder.push(element) }
-		fn done(self, lower: &[T], upper: &[T], since: &[T]) -> Abomonated<B, Vec<u8>> {
+		fn done(self, lower: Antichain<T>, upper: Antichain<T>, since: Antichain<T>) -> Abomonated<B, Vec<u8>> {
 			let batch = self.builder.done(lower, upper, since);
 			let mut bytes = Vec::with_capacity(measure(&batch));
 			unsafe { abomonation::encode(&batch, &mut bytes).unwrap() };
@@ -497,7 +497,7 @@ pub mod abomonated_blanket_impls {
 
 	/// Represents a merge in progress.
 	impl<K,V,T,R,B:Batch<K,V,T,R>+Abomonation> Merger<K, V, T, R, Abomonated<B,Vec<u8>>> for AbomonatedMerger<K,V,T,R,B> {
-		fn new(source1: &Abomonated<B,Vec<u8>>, source2: &Abomonated<B,Vec<u8>>, compaction_frontier: Option<&[T]>) -> Self {
+		fn new(source1: &Abomonated<B,Vec<u8>>, source2: &Abomonated<B,Vec<u8>>, compaction_frontier: Option<AntichainRef<T>>) -> Self {
 			AbomonatedMerger { merger: B::begin_merge(source1, source2, compaction_frontier) }
 		}
 		fn work(&mut self, source1: &Abomonated<B,Vec<u8>>, source2: &Abomonated<B,Vec<u8>>, fuel: &mut isize) {
