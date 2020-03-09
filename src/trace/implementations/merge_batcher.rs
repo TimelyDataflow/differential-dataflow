@@ -19,7 +19,7 @@ impl<K, V, T, R, B> Batcher<K, V, T, R, B> for MergeBatcher<K, V, T, R, B>
 where
     K: Ord+Clone,
     V: Ord+Clone,
-    T: Lattice+Ord+Clone,
+    T: Lattice+timely::progress::Timestamp+Ord+Clone,
     R: Semigroup,
     B: Batch<K, V, T, R>,
 {

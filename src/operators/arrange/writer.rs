@@ -22,7 +22,7 @@ use super::TraceReplayInstruction;
 pub struct TraceWriter<Tr>
 where
     Tr: Trace,
-    Tr::Time: Lattice+Ord+Clone+std::fmt::Debug+'static,
+    Tr::Time: Lattice+Timestamp+Ord+Clone+std::fmt::Debug+'static,
     Tr::Batch: Batch<Tr::Key,Tr::Val,Tr::Time,Tr::R>,
 {
     /// Current upper limit.
@@ -36,7 +36,7 @@ where
 impl<Tr> TraceWriter<Tr>
 where
     Tr: Trace,
-    Tr::Time: Lattice+Ord+Clone+std::fmt::Debug+'static,
+    Tr::Time: Lattice+Timestamp+Ord+Clone+std::fmt::Debug+'static,
     Tr::Batch: Batch<Tr::Key,Tr::Val,Tr::Time,Tr::R>,
 {
     /// Creates a new `TraceWriter`.
@@ -105,7 +105,7 @@ where
 impl<Tr> Drop for TraceWriter<Tr>
 where
     Tr: Trace,
-    Tr::Time: Lattice+Ord+Clone+std::fmt::Debug+'static,
+    Tr::Time: Lattice+Timestamp+Ord+Clone+std::fmt::Debug+'static,
     Tr::Batch: Batch<Tr::Key,Tr::Val,Tr::Time,Tr::R>,
 {
     fn drop(&mut self) {

@@ -78,7 +78,7 @@ impl<K, V, T, R, O> Batch<K, V, T, R> for OrdValBatch<K, V, T, R, O>
 where
     K: Ord+Clone+'static,
     V: Ord+Clone+'static,
-    T: Lattice+Ord+Clone+::std::fmt::Debug+'static,
+    T: Lattice+timely::progress::Timestamp+Ord+Clone+::std::fmt::Debug+'static,
     R: Semigroup,
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug
 {
@@ -217,7 +217,7 @@ impl<K, V, T, R, O> Merger<K, V, T, R, OrdValBatch<K, V, T, R, O>> for OrdValMer
 where
     K: Ord+Clone+'static,
     V: Ord+Clone+'static,
-    T: Lattice+Ord+Clone+::std::fmt::Debug+'static,
+    T: Lattice+timely::progress::Timestamp+Ord+Clone+::std::fmt::Debug+'static,
     R: Semigroup,
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug
 {
@@ -360,7 +360,7 @@ impl<K, V, T, R, O> Builder<K, V, T, R, OrdValBatch<K, V, T, R, O>> for OrdValBu
 where
     K: Ord+Clone+'static,
     V: Ord+Clone+'static,
-    T: Lattice+Ord+Clone+::std::fmt::Debug+'static,
+    T: Lattice+timely::progress::Timestamp+Ord+Clone+::std::fmt::Debug+'static,
     R: Semigroup,
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug
 {
@@ -430,7 +430,7 @@ where
 impl<K, T, R, O> Batch<K, (), T, R> for OrdKeyBatch<K, T, R, O>
 where
     K: Ord+Clone+'static,
-    T: Lattice+Ord+Clone+'static,
+    T: Lattice+timely::progress::Timestamp+Ord+Clone+'static,
     R: Semigroup,
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug
 {
@@ -536,7 +536,7 @@ where
 impl<K, T, R, O> Merger<K, (), T, R, OrdKeyBatch<K, T, R, O>> for OrdKeyMerger<K, T, R, O>
 where
     K: Ord+Clone+'static,
-    T: Lattice+Ord+Clone+'static,
+    T: Lattice+timely::progress::Timestamp+Ord+Clone+'static,
     R: Semigroup,
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug
 {
@@ -681,7 +681,7 @@ where
 impl<K, T, R, O> Builder<K, (), T, R, OrdKeyBatch<K, T, R, O>> for OrdKeyBuilder<K, T, R, O>
 where
     K: Ord+Clone+'static,
-    T: Lattice+Ord+Clone+'static,
+    T: Lattice+timely::progress::Timestamp+Ord+Clone+'static,
     R: Semigroup,
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug
 {
