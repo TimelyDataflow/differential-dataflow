@@ -66,6 +66,8 @@ pub mod writer;
 pub mod agent;
 pub mod arrangement;
 
+pub mod upsert;
+
 pub use self::writer::TraceWriter;
 pub use self::agent::{TraceAgent, ShutdownButton};
 
