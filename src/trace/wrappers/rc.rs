@@ -116,16 +116,16 @@ where
     /// handle no longer requires access to times other than those in the future of `frontier`, but if
     /// there are other handles to the same trace, it may not yet be able to compact.
     fn advance_by(&mut self, frontier: AntichainRef<Tr::Time>) {
-        self.wrapper.borrow_mut().adjust_advance_frontier(self.advance_frontier.elements(), frontier);
+        self.wrapper.borrow_mut().adjust_advance_frontier(self.advance_frontier.borrow(), frontier);
         self.advance_frontier = frontier.to_owned();
     }
-    fn advance_frontier(&mut self) -> AntichainRef<Tr::Time> { self.advance_frontier.elements() }
+    fn advance_frontier(&mut self) -> AntichainRef<Tr::Time> { self.advance_frontier.borrow() }
     /// Allows the trace to compact batches of times before `frontier`.
     fn distinguish_since(&mut self, frontier: AntichainRef<Tr::Time>) {
-        self.wrapper.borrow_mut().adjust_through_frontier(self.through_frontier.elements(), frontier);
+        self.wrapper.borrow_mut().adjust_through_frontier(self.through_frontier.borrow(), frontier);
         self.through_frontier = frontier.to_owned();
     }
-    fn distinguish_frontier(&mut self) -> AntichainRef<Tr::Time> { self.through_frontier.elements() }
+    fn distinguish_frontier(&mut self) -> AntichainRef<Tr::Time> { self.through_frontier.borrow() }
     /// Creates a new cursor over the wrapped trace.
     fn cursor_through(&mut self, frontier: AntichainRef<Tr::Time>) -> Option<(Tr::Cursor, <Tr::Cursor as Cursor<Tr::Key, Tr::Val, Tr::Time, Tr::R>>::Storage)> {
         ::std::cell::RefCell::borrow_mut(&self.wrapper).trace.cursor_through(frontier)
@@ -163,8 +163,8 @@ where
 {
     fn clone(&self) -> Self {
         // increase ref counts for this frontier
-        self.wrapper.borrow_mut().adjust_advance_frontier(AntichainRef::new(&[]), self.advance_frontier.elements());
-        self.wrapper.borrow_mut().adjust_through_frontier(AntichainRef::new(&[]), self.through_frontier.elements());
+        self.wrapper.borrow_mut().adjust_advance_frontier(AntichainRef::new(&[]), self.advance_frontier.borrow());
+        self.wrapper.borrow_mut().adjust_through_frontier(AntichainRef::new(&[]), self.through_frontier.borrow());
         TraceRc {
             advance_frontier: self.advance_frontier.clone(),
             through_frontier: self.through_frontier.clone(),
@@ -179,8 +179,8 @@ where
     Tr: TraceReader,
 {
     fn drop(&mut self) {
-        self.wrapper.borrow_mut().adjust_advance_frontier(self.advance_frontier.elements(), AntichainRef::new(&[]));
-        self.wrapper.borrow_mut().adjust_through_frontier(self.through_frontier.elements(), AntichainRef::new(&[]));
+        self.wrapper.borrow_mut().adjust_advance_frontier(self.advance_frontier.borrow(), AntichainRef::new(&[]));
+        self.wrapper.borrow_mut().adjust_through_frontier(self.through_frontier.borrow(), AntichainRef::new(&[]));
         self.advance_frontier = Antichain::new();
         self.through_frontier = Antichain::new();
     }

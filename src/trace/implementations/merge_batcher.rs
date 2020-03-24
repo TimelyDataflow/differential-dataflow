@@ -104,7 +104,7 @@ where
 
     // the frontier of elements remaining after the most recent call to `self.seal`.
     fn frontier(&mut self) -> timely::progress::frontier::AntichainRef<T> {
-        self.frontier.elements()
+        self.frontier.borrow()
     }
 }
 

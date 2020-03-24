@@ -55,20 +55,20 @@ where
     type Cursor = Tr::Cursor;
 
     fn advance_by(&mut self, frontier: AntichainRef<Tr::Time>) {
-        self.trace.borrow_mut().adjust_advance_frontier(self.advance.elements(), frontier);
+        self.trace.borrow_mut().adjust_advance_frontier(self.advance.borrow(), frontier);
         self.advance.clear();
         self.advance.extend(frontier.iter().cloned());
     }
     fn advance_frontier(&mut self) -> AntichainRef<Tr::Time> {
-        self.advance.elements()
+        self.advance.borrow()
     }
     fn distinguish_since(&mut self, frontier: AntichainRef<Tr::Time>) {
-        self.trace.borrow_mut().adjust_through_frontier(self.through.elements(), frontier);
+        self.trace.borrow_mut().adjust_through_frontier(self.through.borrow(), frontier);
         self.through.clear();
         self.through.extend(frontier.iter().cloned());
     }
     fn distinguish_frontier(&mut self) -> AntichainRef<Tr::Time> {
-        self.through.elements()
+        self.through.borrow()
     }
     fn cursor_through(&mut self, frontier: AntichainRef<Tr::Time>) -> Option<(Tr::Cursor, <Tr::Cursor as Cursor<Tr::Key, Tr::Val, Tr::Time, Tr::R>>::Storage)> {
         self.trace.borrow_mut().trace.cursor_through(frontier)
@@ -319,7 +319,7 @@ where
                         for instruction in borrow.drain(..) {
                             match instruction {
                                 TraceReplayInstruction::Frontier(frontier) => {
-                                    capabilities.downgrade(&frontier.elements()[..]);
+                                    capabilities.downgrade(&frontier.borrow()[..]);
                                 },
                                 TraceReplayInstruction::Batch(batch, hint) => {
                                     if let Some(time) = hint {
@@ -458,7 +458,7 @@ where
                         for instruction in borrow.drain(..) {
                             match instruction {
                                 TraceReplayInstruction::Frontier(frontier) => {
-                                    capabilities.downgrade(&frontier.elements()[..]);
+                                    capabilities.downgrade(&frontier.borrow()[..]);
                                 },
                                 TraceReplayInstruction::Batch(batch, hint) => {
                                     if let Some(time) = hint {
@@ -532,8 +532,8 @@ where
         }
 
         // increase counts for wrapped `TraceBox`.
-        self.trace.borrow_mut().adjust_advance_frontier(AntichainRef::new(&[]), self.advance.elements());
-        self.trace.borrow_mut().adjust_through_frontier(AntichainRef::new(&[]), self.through.elements());
+        self.trace.borrow_mut().adjust_advance_frontier(AntichainRef::new(&[]), self.advance.borrow());
+        self.trace.borrow_mut().adjust_through_frontier(AntichainRef::new(&[]), self.through.borrow());
 
         TraceAgent {
             trace: self.trace.clone(),
@@ -560,7 +560,7 @@ where
         }
 
         // decrement borrow counts to remove all holds
-        self.trace.borrow_mut().adjust_advance_frontier(self.advance.elements(), AntichainRef::new(&[]));
-        self.trace.borrow_mut().adjust_through_frontier(self.through.elements(), AntichainRef::new(&[]));
+        self.trace.borrow_mut().adjust_advance_frontier(self.advance.borrow(), AntichainRef::new(&[]));
+        self.trace.borrow_mut().adjust_through_frontier(self.through.borrow(), AntichainRef::new(&[]));
     }
 }

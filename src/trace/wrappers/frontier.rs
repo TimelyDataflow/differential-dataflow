@@ -51,7 +51,7 @@ where
     type Cursor = CursorFrontier<Tr::Key, Tr::Val, Tr::Time, Tr::R, Tr::Cursor>;
 
     fn map_batches<F: FnMut(&Self::Batch)>(&mut self, mut f: F) {
-        let frontier = self.frontier.elements();
+        let frontier = self.frontier.borrow();
         self.trace.map_batches(|batch| f(&Self::Batch::make_from(batch.clone(), frontier)))
     }
 
@@ -62,7 +62,7 @@ where
     fn distinguish_frontier(&mut self) -> AntichainRef<Tr::Time> { self.trace.distinguish_frontier() }
 
     fn cursor_through(&mut self, upper: AntichainRef<Tr::Time>) -> Option<(Self::Cursor, <Self::Cursor as Cursor<Tr::Key, Tr::Val, Tr::Time, Tr::R>>::Storage)> {
-        let frontier = self.frontier.elements();
+        let frontier = self.frontier.borrow();
         self.trace.cursor_through(upper).map(|(x,y)| (CursorFrontier::new(x, frontier), y))
     }
 }
@@ -107,7 +107,7 @@ where
     type Cursor = BatchCursorFrontier<K, V, T, R, B>;
 
     fn cursor(&self) -> Self::Cursor {
-        BatchCursorFrontier::new(self.batch.cursor(), self.frontier.elements())
+        BatchCursorFrontier::new(self.batch.cursor(), self.frontier.borrow())
     }
     fn len(&self) -> usize { self.batch.len() }
     fn description(&self) -> &Description<T> { &self.batch.description() }
@@ -160,7 +160,7 @@ where
 
     #[inline]
     fn map_times<L: FnMut(&T,&R)>(&mut self, storage: &Self::Storage, mut logic: L) {
-        let frontier = self.frontier.elements();
+        let frontier = self.frontier.borrow();
         let mut temp: T = <T as timely::progress::Timestamp>::minimum();
         self.cursor.map_times(storage, |time, diff| {
             temp.clone_from(time);
@@ -212,7 +212,7 @@ where
 
     #[inline]
     fn map_times<L: FnMut(&T,&R)>(&mut self, storage: &Self::Storage, mut logic: L) {
-        let frontier = self.frontier.elements();
+        let frontier = self.frontier.borrow();
         let mut temp: T = <T as timely::progress::Timestamp>::minimum();
         self.cursor.map_times(&storage.batch, |time, diff| {
             temp.clone_from(time);

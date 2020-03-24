@@ -133,7 +133,7 @@ where
                     for batch in buffer.drain(..) {
 
                         let mut batch_cursor = batch.cursor();
-                        let (mut trace_cursor, trace_storage) = trace.cursor_through(batch.lower().elements()).unwrap();
+                        let (mut trace_cursor, trace_storage) = trace.cursor_through(batch.lower().borrow()).unwrap();
 
                         upper_limit.clone_from(batch.upper());
 
@@ -186,8 +186,8 @@ where
 
                 // tidy up the shared input trace.
                 trace.advance_upper(&mut upper_limit);
-                trace.advance_by(upper_limit.elements());
-                trace.distinguish_since(upper_limit.elements());
+                trace.advance_by(upper_limit.borrow());
+                trace.distinguish_since(upper_limit.borrow());
             }
         })
         .as_collection()

@@ -423,7 +423,7 @@ where
 
                     // Downgrate previous upper limit to be current lower limit.
                     lower_limit.clear();
-                    lower_limit.extend(upper_limit.elements().iter().cloned());
+                    lower_limit.extend(upper_limit.borrow().iter().cloned());
 
                     // Drain the input stream of batches, validating the contiguity of the batch descriptions and
                     // capturing a cursor for each of the batches as well as ensuring we hold a capability for the
@@ -485,9 +485,9 @@ where
                             }
 
                             // cursors for navigating input and output traces.
-                            let (mut source_cursor, source_storage): (T1::Cursor, _) = source_trace.cursor_through(lower_limit.elements()).expect("failed to acquire source cursor");
+                            let (mut source_cursor, source_storage): (T1::Cursor, _) = source_trace.cursor_through(lower_limit.borrow()).expect("failed to acquire source cursor");
                             let source_storage = &source_storage;
-                            let (mut output_cursor, output_storage): (T2::Cursor, _) = output_reader.cursor_through(lower_limit.elements()).expect("failed to acquire output cursor");
+                            let (mut output_cursor, output_storage): (T2::Cursor, _) = output_reader.cursor_through(lower_limit.borrow()).expect("failed to acquire output cursor");
                             let output_storage = &output_storage;
                             let (mut batch_cursor, batch_storage) = (CursorList::new(batch_cursors, &batch_storage), batch_storage);
                             let batch_storage = &batch_storage;
@@ -566,7 +566,7 @@ where
                             // In principle, we could update `lower_limit` itself, and it should arrive at
                             // `upper_limit` by the end of the process.
                             output_lower.clear();
-                            output_lower.extend(lower_limit.elements().iter().cloned());
+                            output_lower.extend(lower_limit.borrow().iter().cloned());
 
                             // build and ship each batch (because only one capability per message).
                             for (index, builder) in builders.drain(..).enumerate() {
@@ -574,12 +574,12 @@ where
                                 // Form the upper limit of the next batch, which includes all times greater
                                 // than the input batch, or the capabilities from i + 1 onward.
                                 output_upper.clear();
-                                output_upper.extend(upper_limit.elements().iter().cloned());
+                                output_upper.extend(upper_limit.borrow().iter().cloned());
                                 for capability in &capabilities[index + 1 ..] {
                                     output_upper.insert(capability.time().clone());
                                 }
 
-                                if output_upper.elements() != output_lower.elements() {
+                                if output_upper.borrow() != output_lower.borrow() {
 
                                     let batch = builder.done(output_lower.clone(), output_upper.clone(), Antichain::from_elem(G::Timestamp::minimum()));
 
@@ -588,13 +588,13 @@ where
                                     output_writer.insert(batch, Some(capabilities[index].time().clone()));
 
                                     output_lower.clear();
-                                    output_lower.extend(output_upper.elements().iter().cloned());
+                                    output_lower.extend(output_upper.borrow().iter().cloned());
                                 }
                             }
 
                             // This should be true, as the final iteration introduces no capabilities, and
                             // uses exactly `upper_limit` to determine the upper bound. Good to check though.
-                            assert!(output_upper.elements() == upper_limit.elements());
+                            assert!(output_upper.borrow() == upper_limit.borrow());
 
                             // Determine the frontier of our interesting times.
                             let mut frontier = Antichain::<G::Timestamp>::new();
@@ -604,7 +604,7 @@ where
 
                             // Update `capabilities` to reflect interesting pairs described by `frontier`.
                             let mut new_capabilities = Vec::new();
-                            for time in frontier.elements().iter() {
+                            for time in frontier.borrow().iter() {
                                 if let Some(cap) = capabilities.iter().find(|c| c.time().less_equal(time)) {
                                     new_capabilities.push(cap.delayed(time));
                                 }
@@ -625,12 +625,12 @@ where
                         }
 
                         // We only anticipate future times in advance of `upper_limit`.
-                        source_trace.advance_by(upper_limit.elements());
-                        output_reader.advance_by(upper_limit.elements());
+                        source_trace.advance_by(upper_limit.borrow());
+                        output_reader.advance_by(upper_limit.borrow());
 
                         // We will only slice the data between future batches.
-                        source_trace.distinguish_since(upper_limit.elements());
-                        output_reader.distinguish_since(upper_limit.elements());
+                        source_trace.distinguish_since(upper_limit.borrow());
+                        output_reader.distinguish_since(upper_limit.borrow());
                     }
 
                     // Exert trace maintenance if we have been so requested.

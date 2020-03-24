@@ -129,12 +129,12 @@ where
         // supplied upper it had better be empty.
 
         // We shouldn't grab a cursor into a closed trace, right?
-        assert!(self.advance_frontier.elements().len() > 0);
+        assert!(self.advance_frontier.borrow().len() > 0);
 
         // Check that `upper` is greater or equal to `self.through_frontier`.
         // Otherwise, the cut could be in `self.merging` and it is user error anyhow.
         // assert!(upper.iter().all(|t1| self.through_frontier.iter().any(|t2| t2.less_equal(t1))));
-        assert!(PartialOrder::less_equal(&self.through_frontier.elements(), &upper));
+        assert!(PartialOrder::less_equal(&self.through_frontier.borrow(), &upper));
 
         let mut cursors = Vec::new();
         let mut storage = Vec::new();
@@ -185,10 +185,10 @@ where
                 // TODO: It is not clear if this is the 100% correct logic, due
                 // to the possible non-total-orderedness of the frontiers.
 
-                let include_lower = PartialOrder::less_equal(&batch.lower().elements(), &upper);
-                let include_upper = PartialOrder::less_equal(&batch.upper().elements(), &upper);
+                let include_lower = PartialOrder::less_equal(&batch.lower().borrow(), &upper);
+                let include_upper = PartialOrder::less_equal(&batch.upper().borrow(), &upper);
 
-                if include_lower != include_upper && upper != batch.lower().elements() {
+                if include_lower != include_upper && upper != batch.lower().borrow() {
                     panic!("`cursor_through`: `upper` straddles batch");
                 }
 
@@ -206,12 +206,12 @@ where
         // TODO: Re-use allocation
         self.advance_frontier = frontier.to_owned();
     }
-    fn advance_frontier(&mut self) -> AntichainRef<T> { self.advance_frontier.elements() }
+    fn advance_frontier(&mut self) -> AntichainRef<T> { self.advance_frontier.borrow() }
     fn distinguish_since(&mut self, frontier: AntichainRef<T>) {
         self.through_frontier = frontier.to_owned();
         self.consider_merges();
     }
-    fn distinguish_frontier(&mut self) -> AntichainRef<T> { self.through_frontier.elements() }
+    fn distinguish_frontier(&mut self) -> AntichainRef<T> { self.through_frontier.borrow() }
 
     fn map_batches<F: FnMut(&Self::Batch)>(&mut self, mut f: F) {
         for batch in self.merging.iter().rev() {
@@ -296,7 +296,7 @@ where
 
     /// Completes the trace with a final empty batch.
     fn close(&mut self) {
-        if !self.upper.elements().is_empty() {
+        if !self.upper.borrow().is_empty() {
             use trace::Builder;
             let builder = B::Builder::new();
             let batch = builder.done(self.upper.clone(), Antichain::new(), Antichain::from_elem(T::minimum()));
@@ -653,7 +653,7 @@ where
                         complete: None,
                     }
                 ));
-                let compaction_frontier = Some(self.advance_frontier.elements());
+                let compaction_frontier = Some(self.advance_frontier.borrow());
                 self.merging[index] = MergeState::begin_merge(old, batch, compaction_frontier);
             }
             MergeState::Double(_) => {

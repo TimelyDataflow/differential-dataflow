@@ -293,7 +293,7 @@ where
 
 		// if we are supplied a frontier, we should compact.
 		if self.should_compact {
-			OrdValBatch::advance_builder_from(&mut self.result, self.description.since().elements(), initial_key_pos);
+			OrdValBatch::advance_builder_from(&mut self.result, self.description.since().borrow(), initial_key_pos);
 		}
 
         *fuel -= effort;
@@ -618,7 +618,7 @@ where
 
 		// if we are supplied a frontier, we should compact.
 		if self.should_compact {
-			OrdKeyBatch::advance_builder_from(&mut self.result, self.description.since().elements(), initial_key_pos);
+			OrdKeyBatch::advance_builder_from(&mut self.result, self.description.since().borrow(), initial_key_pos);
 		}
 
         *fuel -= effort;

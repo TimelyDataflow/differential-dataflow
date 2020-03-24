@@ -361,7 +361,7 @@ impl<G, T1> JoinCore<G, T1::Key, T1::Val, T1::R> for Arranged<G,T1>
                                     // A trace should provide the contract that whatever its `distinguish_since` capability,
                                     // it is safe (and reasonable) to await delivery of batches up through that frontier.
                                     // In this case, we should be able to await (not block on) the arrival of these batches.
-                                    let (trace2_cursor, trace2_storage) = trace2.cursor_through(acknowledged2.elements()).unwrap();
+                                    let (trace2_cursor, trace2_storage) = trace2.cursor_through(acknowledged2.borrow()).unwrap();
                                     let batch1_cursor = batch1.cursor();
                                     todo1.push_back(Deferred::new(trace2_cursor, trace2_storage, batch1_cursor, batch1.clone(), capability.clone(), |r2,r1| (r1.clone()) * (r2.clone())));
                                 }
@@ -396,7 +396,7 @@ impl<G, T1> JoinCore<G, T1::Key, T1::Val, T1::R> for Arranged<G,T1>
                                     // A trace should provide the contract that whatever its `distinguish_since` capability,
                                     // it is safe (and reasonable) to await delivery of batches up through that frontier.
                                     // In this case, we should be able to await (not block on) the arrival of these batches.
-                                    let (trace1_cursor, trace1_storage) = trace1.cursor_through(acknowledged1.elements()).unwrap();
+                                    let (trace1_cursor, trace1_storage) = trace1.cursor_through(acknowledged1.borrow()).unwrap();
                                     let batch2_cursor = batch2.cursor();
                                     todo2.push_back(Deferred::new(trace1_cursor, trace1_storage, batch2_cursor, batch2.clone(), capability.clone(), |r1,r2| (r1.clone()) * (r2.clone())));
                                 }
@@ -455,7 +455,7 @@ impl<G, T1> JoinCore<G, T1::Key, T1::Val, T1::R> for Arranged<G,T1>
                     }
                     if let Some(acknowledged2) = &mut acknowledged2 {
                         trace2.advance_upper(acknowledged2);
-                        trace2.distinguish_since(acknowledged2.elements());
+                        trace2.distinguish_since(acknowledged2.borrow());
                     }
                 }
 
@@ -469,7 +469,7 @@ impl<G, T1> JoinCore<G, T1::Key, T1::Val, T1::R> for Arranged<G,T1>
                     }
                     if let Some(acknowledged1) = &mut acknowledged1 {
                         trace1.advance_upper(acknowledged1);
-                        trace1.distinguish_since(acknowledged1.elements());
+                        trace1.distinguish_since(acknowledged1.borrow());
                     }
                 }
             }
