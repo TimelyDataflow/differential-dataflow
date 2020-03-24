@@ -60,11 +60,7 @@ where
                 register.get::<::logging::DifferentialEvent>("differential/arrange")
             };
 
-            // Capabilities for the lower envelope of updates in `batcher`.
-            let mut capabilities = Antichain::<Capability<G::Timestamp>>::new();
-
-            let mut buffer = Vec::new();
-
+            // Establish compaction effort to apply even without updates.
             let (activator, effort) =
             if let Ok(text) = ::std::env::var("DIFFERENTIAL_EAGER_MERGE") {
                 let effort = text.parse::<isize>().expect("DIFFERENTIAL_EAGER_MERGE must be set to an integer");
@@ -74,25 +70,24 @@ where
                 (None, None)
             };
 
+            // Tracks the lower envelope of times in `priority_queue`.
+            let mut capabilities = Antichain::<Capability<G::Timestamp>>::new();
+            let mut buffer = Vec::new();
+            // Form the trace we will both use internally and publish.
             let empty_trace = Tr::new(info.clone(), logger.clone(), activator);
             let (mut reader_local, mut writer) = TraceAgent::new(empty_trace, info, logger);
-
+            // Capture the reader outside the builder scope.
             *reader = Some(reader_local.clone());
 
-            // Initialize to the minimal input frontier.
-            // Tracks the upper bound of minted batches, use to populate the lower bound of new batches.
+            // Tracks the input frontier, used to populate the lower bound of new batches.
             let mut input_frontier = Antichain::from_elem(<G::Timestamp as Timestamp>::minimum());
 
-            // For stashing input upserts, ordered primarily by time (then by key, but we'll
-            // need to re-sort them anyhow).
+            // For stashing input upserts, ordered increasing by time (`BinaryHeap` is a max-heap).
             let mut priority_queue = BinaryHeap::<std::cmp::Reverse<(G::Timestamp, Tr::Key, Option<Tr::Val>)>>::new();
 
             move |input, output| {
 
-                // As we receive data, we need to (i) stash the data and (ii) keep *enough* capabilities.
-                // We don't have to keep all capabilities, but we need to be able to form output messages
-                // when we realize that time intervals are complete.
-
+                // Stash capabilities and associated data (ordered by time).
                 input.for_each(|cap, data| {
                     capabilities.insert(cap.retain());
                     data.swap(&mut buffer);
@@ -101,31 +96,11 @@ where
                     }
                 });
 
-                // The frontier may have advanced by multiple elements, which is an issue because
-                // timely dataflow currently only allows one capability per message. This means we
-                // must pretend to process the frontier advances one element at a time, batching
-                // and sending smaller bites than we might have otherwise done.
-
-                // Assert that the frontier never regresses.
-                assert!(input.frontier().frontier().iter().all(|t1| input_frontier.elements().iter().any(|t2: &G::Timestamp| t2.less_equal(t1))));
-
-                // Test to see if strict progress has occurred (any of the old frontier less equal
-                // to the new frontier).
+                // Test to see if strict progress has occurred, which happens whenever any element of
+                // the old frontier is not greater or equal to the new frontier. It is only in this
+                // case that we have any data processing to do.
                 let progress = input_frontier.elements().iter().any(|t2| !input.frontier().less_equal(t2));
-
                 if progress {
-
-                    // There are two cases to handle with some care:
-                    //
-                    // 1. If any held capabilities are not in advance of the new input frontier,
-                    //    we must carve out updates now in advance of the new input frontier and
-                    //    transmit them as batches, which requires appropriate *single* capabilites;
-                    //    Until timely dataflow supports multiple capabilities on messages, at least.
-                    //
-                    // 2. If there are no held capabilities in advance of the new input frontier,
-                    //    then there are no updates not in advance of the new input frontier and
-                    //    we can simply create an empty input batch with the new upper frontier
-                    //    and feed this to the trace agent (but not along the timely output).
 
                     // If there is at least one capability not in advance of the input frontier ...
                     if capabilities.elements().iter().any(|c| !input.frontier().less_equal(c.time())) {
@@ -148,7 +123,6 @@ where
                                     upper.insert(other_capability.time().clone());
                                 }
 
-                                // START NEW CODE
                                 // Extract upserts available to process as of this `upper`.
                                 let mut to_process = HashMap::new();
                                 while priority_queue.peek().map(|std::cmp::Reverse((t,_k,_v))| !upper.less_equal(t)).unwrap_or(false) {
@@ -160,6 +134,7 @@ where
                                 let (mut trace_cursor, trace_storage) = reader_local.cursor();
                                 for (key, mut list) in to_process.drain() {
 
+                                    // The prior value associated with the key.
                                     let mut prev_value: Option<Tr::Val> = None;
 
                                     // Attempt to find the key in the trace.
@@ -179,36 +154,27 @@ where
                                         trace_cursor.step_key(&trace_storage);
                                     }
 
+                                    // Sort the list of upserts to `key` by their time, suppress multiple updates.
                                     list.sort();
-                                    // Two updates at the exact same time should produce only one actual
-                                    // change, ideally to a deterministically chosen value.
-                                    let mut cursor = 1;
-                                    while cursor < list.len() {
-                                        if list[cursor-1].0 == list[cursor].0 {
-                                            list.remove(cursor);
-                                        }
-                                        else {
-                                            cursor += 1;
-                                        }
-                                    }
+                                    list.dedup_by(|(t1,_), (t2,_)| t1 == t2);
                                     // Process distinct times
                                     for (time, next) in list {
-                                        if let Some(prev) = prev_value {
-                                            builder.push((key.clone(), prev, time.clone(), -1));
+                                        if prev_value != next {
+                                            if let Some(prev) = prev_value {
+                                                builder.push((key.clone(), prev, time.clone(), -1));
+                                            }
+                                            if let Some(next) = next.as_ref() {
+                                                builder.push((key.clone(), next.clone(), time.clone(), 1));
+                                            }
+                                            prev_value = next;
                                         }
-                                        if let Some(next) = next.as_ref() {
-                                            builder.push((key.clone(), next.clone(), time.clone(), 1));
-                                        }
-                                        prev_value = next;
                                     }
                                 }
                                 let batch = builder.done(input_frontier.elements(), upper.elements(), &[G::Timestamp::minimum()]);
                                 input_frontier.clone_from(&upper);
 
-                                // END NEW CODE
+                                // Communicate `batch` to the arrangement and the stream.
                                 writer.insert(batch.clone(), Some(capability.time().clone()));
-
-                                // send the batch to downstream consumers, empty or not.
                                 output.session(&capabilities.elements()[index]).give(batch);
                             }
                         }
@@ -235,8 +201,13 @@ where
                         writer.seal(&input.frontier().frontier()[..]);
                     }
 
+                    // Update our view of the input frontier.
                     input_frontier.clear();
                     input_frontier.extend(input.frontier().frontier().iter().cloned());
+
+                    // Downgrade capabilities for `reader_local`.
+                    reader_local.advance_by(input_frontier.elements());
+                    reader_local.distinguish_since(input_frontier.elements());
                 }
 
                 if let Some(mut fuel) = effort.clone() {
