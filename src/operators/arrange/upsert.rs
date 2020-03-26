@@ -238,9 +238,15 @@ where
                                     to_process.entry(key).or_insert(Vec::new()).push((time, std::cmp::Reverse(val)));
                                 }
 
-                                let mut builder = <Tr::Batch as Batch<Tr::Key,Tr::Val,G::Timestamp,Tr::R>>::Builder::new();
+                                // Put (key, list) into key order, to match cursor enumeration.
+                                let mut to_process = to_process.into_iter().collect::<Vec<_>>();
+                                to_process.sort();
+
+                                // Prepare a cursor to the existing arrangement, and a batch builder for
+                                // new stuff that we add.
                                 let (mut trace_cursor, trace_storage) = reader_local.cursor();
-                                for (key, mut list) in to_process.drain() {
+                                let mut builder = <Tr::Batch as Batch<Tr::Key,Tr::Val,G::Timestamp,Tr::R>>::Builder::new();
+                                for (key, mut list) in to_process.drain(..) {
 
                                     // The prior value associated with the key.
                                     let mut prev_value: Option<Tr::Val> = None;
