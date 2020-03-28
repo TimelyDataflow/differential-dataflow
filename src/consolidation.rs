@@ -66,9 +66,10 @@ pub fn consolidate_slice<T: Ord, R: Semigroup>(slice: &mut [(T, R)]) -> usize {
         }
 
         offset
-    }
-    else {
-        slice.len()
+    } else if slice.len() == 1 && !slice[0].1.is_zero() {
+        1
+    } else {
+        0
     }
 }
 
@@ -131,8 +132,61 @@ pub fn consolidate_updates_slice<D: Ord, T: Ord, R: Semigroup>(slice: &mut [(D, 
         }
 
         offset
+    } else if slice.len() == 1 && !slice[0].2.is_zero() {
+        1
+    } else {
+        0
     }
-    else {
-        slice.len()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_consolidate() {
+        let test_cases = vec![
+            (
+                vec![("a", -1), ("b", -2), ("a", 1)],
+                vec![("b", -2)],
+            ),
+            (
+                vec![("a", -1), ("b", 0), ("a", 1)],
+                vec![],
+            ),
+            (
+                vec![("a", 0)],
+                vec![],
+            ),
+        ];
+
+        for (mut input, output) in test_cases {
+            consolidate(&mut input);
+            assert_eq!(input, output);
+        }
+    }
+
+
+    #[test]
+    fn test_consolidate_updates() {
+        let test_cases = vec![
+            (
+                vec![("a", 1, -1), ("b", 1, -2), ("a", 1, 1)],
+                vec![("b", 1, -2)],
+            ),
+            (
+                vec![("a", 1, -1), ("b", 1, 0), ("a", 1, 1)],
+                vec![],
+            ),
+            (
+                vec![("a", 1, 0)],
+                vec![],
+            ),
+        ];
+
+        for (mut input, output) in test_cases {
+            consolidate_updates(&mut input);
+            assert_eq!(input, output);
+        }
     }
 }
