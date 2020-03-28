@@ -80,7 +80,7 @@ pub fn consolidate_slice<T: Ord, R: Semigroup>(slice: &mut [(T, R)]) -> usize {
 /// Sorts and consolidates `vec`.
 ///
 /// This method will sort `vec` and then consolidate runs of more than one entry with
-/// identical first two elements by accumulating the third elements of the pairs. Should the final
+/// identical first two elements by accumulating the third elements of the triples. Should the final
 /// accumulation be zero, the element is discarded.
 pub fn consolidate_updates<D: Ord, T: Ord, R: Semigroup>(vec: &mut Vec<(D, T, R)>) {
     consolidate_updates_from(vec, 0);
@@ -89,7 +89,7 @@ pub fn consolidate_updates<D: Ord, T: Ord, R: Semigroup>(vec: &mut Vec<(D, T, R)
 /// Sorts and consolidate `vec[offset..]`.
 ///
 /// This method will sort `vec[offset..]` and then consolidate runs of more than one entry with
-/// identical first two elements by accumulating the third elements of the pairs. Should the final
+/// identical first two elements by accumulating the third elements of the triples. Should the final
 /// accumulation be zero, the element is discarded.
 pub fn consolidate_updates_from<D: Ord, T: Ord, R: Semigroup>(vec: &mut Vec<(D, T, R)>, offset: usize) {
     let length = consolidate_updates_slice(&mut vec[offset..]);
@@ -157,6 +157,10 @@ mod tests {
                 vec![],
             ),
             (
+                vec![("a", 0)],
+                vec![],
+            ),
+            (
                 vec![("a", 0), ("b", 0)],
                 vec![],
             ),
@@ -182,6 +186,10 @@ mod tests {
             ),
             (
                 vec![("a", 1, 0)],
+                vec![],
+            ),
+            (
+                vec![("a", 1, 0), ("b", 1, 0)],
                 vec![],
             ),
         ];
