@@ -4,7 +4,7 @@ Graph computation covers a lot of ground, and we will pick just one example here
 
 Imagine you have a collection containing pairs `(source, target)` of graph edges, and you would like to determine which nodes can reach which other nodes along graph edges (using either direction).
 
-One algorithm for this graph connectively is "label propagation", in which each graph node maintains a label (initially its own name) and all nodes repeatedly exchange labels and maintain the smallest label they have yet seen. This process converges to a limit where each node has the smallest label in its connected component.
+One algorithm for this graph connectivity is "label propagation", in which each graph node maintains a label (initially its own name) and all nodes repeatedly exchange labels and maintain the smallest label they have yet seen. This process converges to a limit where each node has the smallest label in its connected component.
 
 Let's write this computation starting from a collection `edges`, using differential dataflow.
 

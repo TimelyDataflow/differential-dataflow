@@ -8,4 +8,4 @@ This relatively simple set-up, write programs and then change inputs, leads to a
 
 ---
 
-Differential dataflow arose from [work at Microsoft Research](https://www.microsoft.com/en-us/research/wp-content/uploads/2013/11/naiad_sosp2013.pdf), where we aimed to build a high-level framework that could both compute and incrementally maintain non-trivial algoithms.
+Differential dataflow arose from [work at Microsoft Research](https://www.microsoft.com/en-us/research/wp-content/uploads/2013/11/naiad_sosp2013.pdf), where we aimed to build a high-level framework that could both compute and incrementally maintain non-trivial algorithms.
