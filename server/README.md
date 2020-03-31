@@ -65,7 +65,7 @@ The first line you'll see may look like so (it will depend on the performance of
 
     delays: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 8, 6, 16, 18, 64, 66, 0, 9, 0, 0, 0, 0, 0, 0, 0]
 
-These counts report the number of observed latencies for each power-of-two number of microseconds. It seems that the lowest latency here is `(1 << 17)` microsecends, or roughly 131 milliseconds. That is a large number, but what is going on here is that the first line is the `degr_dist` computation catching up on historical data. Subsequent lines should look better:
+These counts report the number of observed latencies for each power-of-two number of microseconds. It seems that the lowest latency here is `(1 << 17)` microseconds, or roughly 131 milliseconds. That is a large number, but what is going on here is that the first line is the `degr_dist` computation catching up on historical data. Subsequent lines should look better:
 
     delays: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
     delays: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]

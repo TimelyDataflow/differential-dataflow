@@ -2,7 +2,7 @@
 
 The `iterate` operator takes a starting input collection and a closure to repeatedly apply to this input collection. The output of the iterate operator is the collection that results from an unbounded number of applications of this closure to the input. Ideally this process converges, as otherwise the computation will run forever!
 
-As an example, we can take our `manages` relation and determine for all employees all managers above them in the organizational chat. To do this, we start from the `manages` relation and write a closure that extends any transitive management pairs by "one hop" along the management relation, usig a join operation.
+As an example, we can take our `manages` relation and determine for all employees all managers above them in the organizational chat. To do this, we start from the `manages` relation and write a closure that extends any transitive management pairs by "one hop" along the management relation, using a join operation.
 
 ```rust,no_run
     manages   // transitive contains (manager, person) for many hops.
@@ -26,7 +26,7 @@ Although the first three lines of the closure may look like our skip-level manag
 
 ### Enter
 
-The `enter` operator is a helpful method that brings collections outside a loop into the loop, unchanging as the iterations procede.
+The `enter` operator is a helpful method that brings collections outside a loop into the loop, unchanging as the iterations proceed.
 
 In the example above, we could rewrite
 

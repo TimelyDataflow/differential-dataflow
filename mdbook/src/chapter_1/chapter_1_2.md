@@ -92,6 +92,6 @@ The `reduce` operator applies to one input collection whose records have the for
 
 There are some subtle details here, ones that will likely trip you up (as they trip up me):
 
-The second and third arguments (the input and output, here `packages` and `duplicates`) contain pairs `(val, count)`. This is great when we want to count things that occur many times (in that `("word", 1000000)` is more succint than one million copies of `"word"), but in casual use we need to remember that even when we expect the numbers to be mostly one, we need to use them.
+The second and third arguments (the input and output, here `packages` and `duplicates`) contain pairs `(val, count)`. This is great when we want to count things that occur many times (in that `("word", 1000000)` is more succinct than one million copies of `"word"), but in casual use we need to remember that even when we expect the numbers to be mostly one, we need to use them.
 
 In actual fact the input (`packages`) contains pairs of type `(&Val, Count)`, which in Rust-isms mean that you only get to view the associated value, you do not get to take ownership of it. This means that if we want to reproduce it in the output we need to do something like `.clone()` to get a new copy. If it were a string, or had other allocated data behind it, our read-only access to that data means we need to spend the time to create new copies for the output.

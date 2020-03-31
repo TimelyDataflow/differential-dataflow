@@ -1,6 +1,6 @@
 ## Step 1: Write a program.
 
-You write differential dataflow programs against apparently static input collections, with operations that look a bit like database (SQL) or big data (MapReduce) idioms. This is actually a bit of a trick, because you will have the ablity to change the input data, but we'll pretend we don't know that yet.
+You write differential dataflow programs against apparently static input collections, with operations that look a bit like database (SQL) or big data (MapReduce) idioms. This is actually a bit of a trick, because you will have the ability to change the input data, but we'll pretend we don't know that yet.
 
 Let's write a program with one input: a collection `manages` of pairs `(manager, person)` describing people and their direct reports. Our program will determine for each person their manager's manager (where the boss manages the boss's own self). If you are familiar with SQL, this is an "equijoin", and we will write exactly that in differential dataflow.
 
