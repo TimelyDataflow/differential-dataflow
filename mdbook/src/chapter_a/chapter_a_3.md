@@ -22,7 +22,7 @@ We can then use this probe to limit the introduction of new data, by waiting for
 
 ```rust,ignore
     let mut person = worker.index();
-    while person < people {
+    while person < size {
         input.insert((person/2, person));
         person += worker.peers();
     }
@@ -31,7 +31,7 @@ We can then use this probe to limit the introduction of new data, by waiting for
     input.advance_to(1);
     input.flush();
     while probe.less_than(&input.time()) { worker.step(); }
-    println!("{:?}\tdata loaded", timer.elapsed());
+    println!("{:?}\tdata loaded", worker.timer().elapsed());
 ```
 
 These four new lines are each important, especially the one that prints things out. The other three do a bit of magic that get timely dataflow to work for us until we are certain that inputs have been completely processed.
@@ -40,15 +40,15 @@ We can make the same changes for the interactive loading, but we'll synchronize 
 
 ```rust,ignore
     // make changes, but await completion.
-    let mut person = 1 + index;
-    while person < people {
+    let mut person = 1 + worker.index();
+    while person < size {
         input.remove((person/2, person));
         input.insert((person/3, person));
         input.advance_to(person);
         input.flush();
         while probe.less_than(&input.time()) { worker.step(); }
-        println!("{:?}\tstep {} complete", timer.elapsed(), person);
-        person += peers;
+        println!("{:?}\tstep {} complete", worker.timer().elapsed(), person);
+        person += worker.peers();
     }
 ```
 

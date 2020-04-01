@@ -59,16 +59,16 @@ When we execute this program we get to see the skip-level reports for the small 
 
         Echidnatron% cargo run -- 10
              Running `target/debug/my_project`
-        ((0, 0, 0), (Root, 0), 1)
-        ((0, 0, 1), (Root, 0), 1)
-        ((1, 0, 2), (Root, 0), 1)
-        ((1, 0, 3), (Root, 0), 1)
-        ((2, 1, 4), (Root, 0), 1)
-        ((2, 1, 5), (Root, 0), 1)
-        ((3, 1, 6), (Root, 0), 1)
-        ((3, 1, 7), (Root, 0), 1)
-        ((4, 2, 8), (Root, 0), 1)
-        ((4, 2, 9), (Root, 0), 1)
+            ((0, (0, 0)), 0, 1)
+            ((0, (0, 1)), 0, 1)
+            ((1, (0, 2)), 0, 1)
+            ((1, (0, 3)), 0, 1)
+            ((2, (1, 4)), 0, 1)
+            ((2, (1, 5)), 0, 1)
+            ((3, (1, 6)), 0, 1)
+            ((3, (1, 7)), 0, 1)
+            ((4, (2, 8)), 0, 1)
+            ((4, (2, 9)), 0, 1)
         Echidnatron%
 
 This is a bit crazy, but what we are seeing is many triples of the form

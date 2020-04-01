@@ -35,65 +35,65 @@ We do this for each of the non-boss employees and get to see a bunch of outputs.
 
         Echidnatron% cargo run -- 10
              Running `target/debug/my_project`
-        ((0, 0, 0), (Root, 0), 1)
-        ((0, 0, 1), (Root, 0), 1)
-        ((0, 0, 2), (Root, 2), 1)
-        ((1, 0, 2), (Root, 0), 1)
-        ((1, 0, 2), (Root, 2), -1)
-        ((1, 0, 3), (Root, 0), 1)
-        ((1, 0, 4), (Root, 4), 1)
-        ((1, 0, 5), (Root, 5), 1)
-        ((2, 0, 4), (Root, 2), 1)
-        ((2, 0, 4), (Root, 4), -1)
-        ((2, 0, 5), (Root, 2), 1)
-        ((2, 0, 5), (Root, 5), -1)
-        ((2, 0, 6), (Root, 6), 1)
-        ((2, 0, 7), (Root, 7), 1)
-        ((2, 0, 8), (Root, 8), 1)
-        ((2, 1, 4), (Root, 0), 1)
-        ((2, 1, 4), (Root, 2), -1)
-        ((2, 1, 5), (Root, 0), 1)
-        ((2, 1, 5), (Root, 2), -1)
-        ((3, 1, 6), (Root, 0), 1)
-        ((3, 1, 6), (Root, 6), -1)
-        ((3, 1, 7), (Root, 0), 1)
-        ((3, 1, 7), (Root, 7), -1)
-        ((3, 1, 9), (Root, 9), 1)
-        ((4, 1, 8), (Root, 4), 1)
-        ((4, 1, 8), (Root, 8), -1)
-        ((4, 1, 9), (Root, 4), 1)
-        ((4, 1, 9), (Root, 9), -1)
-        ((4, 2, 8), (Root, 0), 1)
-        ((4, 2, 8), (Root, 4), -1)
-        ((4, 2, 9), (Root, 0), 1)
-        ((4, 2, 9), (Root, 4), -1)
+            ((0, (0, 0)), 0, 1)
+            ((0, (0, 1)), 0, 1)
+            ((0, (0, 2)), 2, 1)
+            ((1, (0, 2)), 0, 1)
+            ((1, (0, 2)), 2, -1)
+            ((1, (0, 3)), 0, 1)
+            ((1, (0, 4)), 4, 1)
+            ((1, (0, 5)), 5, 1)
+            ((2, (0, 4)), 2, 1)
+            ((2, (0, 4)), 4, -1)
+            ((2, (0, 5)), 2, 1)
+            ((2, (0, 5)), 5, -1)
+            ((2, (0, 6)), 6, 1)
+            ((2, (0, 7)), 7, 1)
+            ((2, (0, 8)), 8, 1)
+            ((2, (1, 4)), 0, 1)
+            ((2, (1, 4)), 2, -1)
+            ((2, (1, 5)), 0, 1)
+            ((2, (1, 5)), 2, -1)
+            ((3, (1, 6)), 0, 1)
+            ((3, (1, 6)), 6, -1)
+            ((3, (1, 7)), 0, 1)
+            ((3, (1, 7)), 7, -1)
+            ((3, (1, 9)), 9, 1)
+            ((4, (1, 8)), 4, 1)
+            ((4, (1, 8)), 8, -1)
+            ((4, (1, 9)), 4, 1)
+            ((4, (1, 9)), 9, -1)
+            ((4, (2, 8)), 0, 1)
+            ((4, (2, 8)), 4, -1)
+            ((4, (2, 9)), 0, 1)
+            ((4, (2, 9)), 4, -1)
         Echidnatron%
 
 Gaaaaaaah! What in the !#$!?
 
-It turns out our input changes result in output changes. Let's try and break this down and make some sense. If we group the columns by time, those `(Root, _)` fields, we see a bit more structure.
+It turns out our input changes result in output changes. Let's try and break this down and make some sense. If we group the columns by time, the second element of the tuples, we see a bit more structure.
 
-1. The `(Root, 0)` entries are exactly the same as for our prior computation, where we just loaded the data.
+1. The entries with time `0` are exactly the same as for our prior computation, where we just loaded the data.
 
-2. There aren't any `(Root, 1)` entries (go check). That is because the input didn't change in our first step, because 1/2 == 1/3 == 0. Since the input didn't change, the output doesn't change.
+2. There aren't any entries at time `1` (go check). That is because the input didn't change in our first step, because 1/2 == 1/3 == 0. Since the input didn't change, the output doesn't change.
 
 3. The other times are more complicated.
 
-Let's look at times `(Root, 4)`.
+Let's look at the entries for time `4`.
 
-        ((1, 0, 4), (Root, 4), 1)
-        ((2, 0, 4), (Root, 4), -1)
-        ((4, 1, 8), (Root, 4), 1)
-        ((4, 1, 9), (Root, 4), 1)
-        ((4, 2, 8), (Root, 4), -1)
-        ((4, 2, 9), (Root, 4), -1)
+        ((1, (0, 4)), 4, 1)
+        ((2, (0, 4)), 4, -1)
+        ((4, (1, 8)), 4, 1)
+        ((4, (1, 9)), 4, 1)
+        ((4, (2, 8)), 4, -1)
+        ((4, (2, 9)), 4, -1)
 
 There is a bit going on here. Four's manager changed from two to one, and while their skip-level manager remained zero the explanation changed. The first two lines record this change. The next four lines record the change in the skip-level manager of four's reports, eight and nine.
 
-At the end, `(Root, 9)`, things are a bit simpler because we have reached the employees with no reports, and so the only changes are their skip-level manager, without any implications for other people.
+At the end, time `9`, things are a bit simpler because we have reached the employees with no reports, and so the only changes are their skip-level manager, without any implications for other people.
 
-        ((3, 1, 9), (Root, 9), 1)
-        ((4, 1, 9), (Root, 9), -1)
+        ((3, (1, 9)), 9, 1)
+        ((4, (1, 9)), 9, -1)
 
 Oof. Well, we probably *could* have figured these things out by hand, right?
 
