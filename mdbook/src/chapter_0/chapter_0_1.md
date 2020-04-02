@@ -27,7 +27,7 @@ If you are following along at home, put this in your `src/main.rs` file.
                 // create a new collection from our input.
                 let manages = input.to_collection(scope);
 
-                // if (m2, m1) and (m1, p), then output (m1, m2, p)
+                // if (m2, m1) and (m1, p), then output (m1, (m2, p))
                 manages
                     .map(|(m2, m1)| (m1, m2))
                     .join(&manages)
@@ -50,7 +50,7 @@ If you are following along at home, put this in your `src/main.rs` file.
 This program has a bit of boilerplate, but at its heart it defines a new input `manages` and then joins it with itself, once the fields have been re-ordered. The intent is as stated in the comment:
 
 ```rust,no_run
-    // if (m2, m1) and (m1, p), then output (m1, m2, p)
+    // if (m2, m1) and (m1, p), then output (m1, (m2, p))
 ```
 
 We want to report each pair `(m2, p)`, and we happen to also produce as evidence the `m1` connecting them.

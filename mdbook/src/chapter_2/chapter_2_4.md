@@ -15,8 +15,8 @@ As an example, if we were to inspect
 
 we might see two copies of the same element:
 
-        ((0,0), (Root, 0), 1)
-        ((0,0), (Root, 0), 1)
+        ((0, 0), 0, 1)
+        ((0, 0), 0, 1)
 
 However, by introducing `consolidate`
 
@@ -30,6 +30,6 @@ However, by introducing `consolidate`
 
 we are guaranteed to see at most one `(0,0)` update at each time:
 
-        ((0,0), (Root, 0), 2)
+        ((0, 0), 0, 2)
 
 The `consolidate` operator is mostly useful before `inspect`ing data, but it can also be important for efficiency; knowing when to spend the additional computation to consolidate the representation of your data is an advanced topic!

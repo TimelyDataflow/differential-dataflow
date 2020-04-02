@@ -68,7 +68,7 @@ Instead of loading all of our changes and only waiting for the result, we can lo
         // create a new collection from an input session.
         let manages = input.to_collection(scope);
 
-        // if (m2, m1) and (m1, p), then output (m1, m2, p)
+        // if (m2, m1) and (m1, p), then output (m1, (m2, p))
         manages
             .map(|(m2, m1)| (m1, m2))
             .join(&manages)

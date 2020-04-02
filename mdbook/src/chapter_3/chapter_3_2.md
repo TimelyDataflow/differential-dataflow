@@ -13,7 +13,7 @@ For example, recall our example of interacting with our management computation, 
         // create a new collection from an input session.
         let manages = input.to_collection(scope);
 
-        // if (m2, m1) and (m1, p), then output (m1, m2, p)
+        // if (m2, m1) and (m1, p), then output (m1, (m2, p))
         manages
             .map(|(m2, m1)| (m1, m2))
             .join(&manages)
