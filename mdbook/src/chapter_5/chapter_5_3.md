@@ -2,8 +2,6 @@
 
 Arrangements have the additional appealing property that they can be shared not only within a dataflow, but *across* dataflows.
 
-Imagine we take our `knows` collection from before, and want to make it available for others to use
-
 Imagine we want to build and maintain a relatively large and continually changing collection. But we want to do this in a way that allows an arbitrary number of subsequent queries to access the collection at almost no additional cost.
 
 The following example demonstrates going from an interactive input session (`input`) to an arrangement (`trace`) returned from the dataflow and available for use by others.

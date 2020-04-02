@@ -10,7 +10,7 @@ As an example, we can take our `manages` relation and determine for all employee
             transitive
                 .map(|(mk, m1)| (m1, mk))
                 .join(&transitive)
-                .map(|(m1, mk, p)| (mk, p))
+                .map(|(m1, (mk, p))| (mk, p))
                 .concat(&transitive)
                 .distinct()
         });
@@ -34,12 +34,12 @@ In the example above, we could rewrite
     manages   // transitive contains (manager, person) for many hops.
         .iterate(|transitive| {
 
-            let manages = manages.enter(transivite.scope());
+            let manages = manages.enter(transitive.scope());
 
             transitive
                 .map(|(mk, m1)| (m1, mk))
                 .join(&manages)
-                .map(|(m1, mk, p)| (mk, p))
+                .map(|(m1, (mk, p))| (mk, p))
                 .concat(&manages)
                 .distinct()
         });

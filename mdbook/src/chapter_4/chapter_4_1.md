@@ -18,7 +18,7 @@ Let's write this computation starting from a collection `edges`, using different
             let labels = labels.enter(inner.scope());
             let edges = edges.enter(inner.scope());
             inner.join(&edges)
-                 .map(|(_src,lbl,dst)| (dst,lbl))
+                 .map(|(_src,(lbl,dst))| (dst,lbl))
                  .concat(&labels)
                  .reduce(|_dst, lbls, out| {
                      let min_lbl =

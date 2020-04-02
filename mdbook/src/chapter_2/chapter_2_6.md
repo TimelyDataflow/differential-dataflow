@@ -11,7 +11,7 @@ For example, to produce for each manager their managee with the lowest identifie
 
             // Each element of input is a `(&Value, Count)`
             for index in 1 .. input.len() {
-                if input[min_index] > input[index].0 {
+                if input[min_index].0 > input[index].0 {
                     min_index = index;
                 }
             }

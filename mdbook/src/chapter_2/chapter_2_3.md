@@ -14,7 +14,7 @@ This collection likely has at most one copy of each record, unless perhaps any m
 
 Importantly, `concat` doesn't do the hard work of ensuring that there is only one physical of each element. If we inspect the output of the `concat` above, we might see
 
-        ((0,0), (Root, 0), 1)
-        ((0,0), (Root, 0), 1)
+        ((0, 0), 0, 1)
+        ((0, 0), 0, 1)
 
 Although these are two updates to the same element at the same time, `concat` is a bit lazy (read: efficient) and doesn't do the hard work until we ask it. For that, we'll need the `consolidate` operator.

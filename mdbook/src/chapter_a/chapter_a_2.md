@@ -5,7 +5,7 @@ Differential dataflow works great using multiple threads and computers. It even 
 For this to work out, we'll want to ask each worker to load up a fraction of the input. If we just run the same code with multiple workers, then each of the workers will run
 
 ```rust,ignore
-    for person in 0 .. people {
+    for person in 0 .. size {
         input.insert((person/2, person));
     }
 ```
@@ -16,7 +16,7 @@ Instead, each timely dataflow worker has methods `index()` and `peers()`, which 
 
 ```rust,ignore
     let mut person = worker.index();
-    while person < people {
+    while person < size {
         input.insert((person/2, person));
         person += worker.peers();
     }
@@ -25,12 +25,12 @@ Instead, each timely dataflow worker has methods `index()` and `peers()`, which 
 We can also make the same changes to the code that supplies the change, where each worker is responsible for those people whose number equals `worker.index()` modulo `worker.peers()`.
 
 ```rust,ignore
-    let mut person = index;
-    while person < people {
+    let mut person = worker.index();
+    while person < size {
         input.remove((person/2, person));
         input.insert((person/3, person));
         input.advance_to(person);
-        person += peers;
+        person += worker.peers();
     }
 ```
 
