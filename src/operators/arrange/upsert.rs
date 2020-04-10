@@ -192,6 +192,7 @@ where
 
             // For stashing input upserts, ordered increasing by time (`BinaryHeap` is a max-heap).
             let mut priority_queue = BinaryHeap::<std::cmp::Reverse<(G::Timestamp, Tr::Key, Option<Tr::Val>)>>::new();
+            let mut updates = Vec::new();
 
             move |input, output| {
 
@@ -271,17 +272,21 @@ where
                                     // Sort the list of upserts to `key` by their time, suppress multiple updates.
                                     list.sort();
                                     list.dedup_by(|(t1,_), (t2,_)| t1 == t2);
-                                    // Process distinct times
                                     for (time, std::cmp::Reverse(next)) in list {
                                         if prev_value != next {
                                             if let Some(prev) = prev_value {
-                                                builder.push((key.clone(), prev, time.clone(), -1));
+                                                updates.push((key.clone(), prev, time.clone(), -1));
                                             }
                                             if let Some(next) = next.as_ref() {
-                                                builder.push((key.clone(), next.clone(), time.clone(), 1));
+                                                updates.push((key.clone(), next.clone(), time.clone(), 1));
                                             }
                                             prev_value = next;
                                         }
+                                    }
+                                    // Must insert updates in (key, val, time) order.
+                                    updates.sort();
+                                    for update in updates.drain(..) {
+                                        builder.push(update);
                                     }
                                 }
                                 let batch = builder.done(input_frontier.elements(), upper.elements(), &[G::Timestamp::minimum()]);
