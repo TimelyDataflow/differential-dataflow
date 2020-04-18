@@ -53,7 +53,7 @@ let (mut input, probe) = worker.dataflow(|scope| {
 
     let out_degr_distr =
     edges.map(|(src, _dst)| src)    // extract source
-         .count();                  // count occurrences of source
+         .count()                   // count occurrences of source
          .map(|(_src, deg)| deg)    // extract degree
          .count();                  // count occurrences of degree
 
