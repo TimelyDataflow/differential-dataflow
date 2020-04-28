@@ -59,7 +59,7 @@ pub trait TraceReader {
 
 	/// Provides a cursor over updates contained in the trace.
 	fn cursor(&mut self) -> (Self::Cursor, <Self::Cursor as Cursor<Self::Key, Self::Val, Self::Time, Self::R>>::Storage) {
-		if let Some(cursor) = self.cursor_through(AntichainRef::new(&[])) {
+		if let Some(cursor) = self.cursor_through(Antichain::new().borrow()) {
 			cursor
 		}
 		else {

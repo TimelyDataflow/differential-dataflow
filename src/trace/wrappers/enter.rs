@@ -15,8 +15,8 @@ where
     Tr: TraceReader,
 {
     trace: Tr,
-    stash1: Vec<Tr::Time>,
-    stash2: Vec<TInner>,
+    stash1: Antichain<Tr::Time>,
+    stash2: Antichain<TInner>,
 }
 
 impl<Tr,TInner> Clone for TraceEnter<Tr, TInner>
@@ -26,8 +26,8 @@ where
     fn clone(&self) -> Self {
         TraceEnter {
             trace: self.trace.clone(),
-            stash1: Vec::new(),
-            stash2: Vec::new(),
+            stash1: Antichain::new(),
+            stash2: Antichain::new(),
         }
     }
 }
@@ -59,39 +59,39 @@ where
     fn advance_by(&mut self, frontier: AntichainRef<TInner>) {
         self.stash1.clear();
         for time in frontier.iter() {
-            self.stash1.push(time.clone().to_outer());
+            self.stash1.insert(time.clone().to_outer());
         }
-        self.trace.advance_by(AntichainRef::new(&self.stash1[..]));
+        self.trace.advance_by(self.stash1.borrow());
     }
     fn advance_frontier(&mut self) -> AntichainRef<TInner> {
         self.stash2.clear();
         for time in self.trace.advance_frontier().iter() {
-            self.stash2.push(TInner::to_inner(time.clone()));
+            self.stash2.insert(TInner::to_inner(time.clone()));
         }
-        AntichainRef::new(&self.stash2[..])
+        self.stash2.borrow()
     }
 
     fn distinguish_since(&mut self, frontier: AntichainRef<TInner>) {
         self.stash1.clear();
         for time in frontier.iter() {
-            self.stash1.push(time.clone().to_outer());
+            self.stash1.insert(time.clone().to_outer());
         }
-        self.trace.distinguish_since(AntichainRef::new(&self.stash1[..]));
+        self.trace.distinguish_since(self.stash1.borrow());
     }
     fn distinguish_frontier(&mut self) -> AntichainRef<TInner> {
         self.stash2.clear();
         for time in self.trace.distinguish_frontier().iter() {
-            self.stash2.push(TInner::to_inner(time.clone()));
+            self.stash2.insert(TInner::to_inner(time.clone()));
         }
-        AntichainRef::new(&self.stash2[..])
+        self.stash2.borrow()
     }
 
     fn cursor_through(&mut self, upper: AntichainRef<TInner>) -> Option<(Self::Cursor, <Self::Cursor as Cursor<Tr::Key, Tr::Val, TInner, Tr::R>>::Storage)> {
         self.stash1.clear();
         for time in upper.iter() {
-            self.stash1.push(time.clone().to_outer());
+            self.stash1.insert(time.clone().to_outer());
         }
-        self.trace.cursor_through(AntichainRef::new(&self.stash1[..])).map(|(x,y)| (CursorEnter::new(x), y))
+        self.trace.cursor_through(self.stash1.borrow()).map(|(x,y)| (CursorEnter::new(x), y))
     }
 }
 
@@ -105,8 +105,8 @@ where
     pub fn make_from(trace: Tr) -> Self {
         TraceEnter {
             trace: trace,
-            stash1: Vec::new(),
-            stash2: Vec::new(),
+            stash1: Antichain::new(),
+            stash2: Antichain::new(),
         }
     }
 }

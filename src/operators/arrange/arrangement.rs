@@ -263,7 +263,7 @@ where
 
             let mut trace = Some(self.trace.clone());
             // release `distinguish_since` capability.
-            trace.as_mut().unwrap().distinguish_since(AntichainRef::new(&[]));
+            trace.as_mut().unwrap().distinguish_since(Antichain::new().borrow());
 
             let mut stash = Vec::new();
             let mut capability: Option<Capability<G::Timestamp>> = None;

@@ -118,19 +118,19 @@ pub trait Lattice : PartialOrder {
     /// # use differential_dataflow::lattice::Lattice;
     /// # fn main() {
     ///
-    /// use timely::progress::frontier::AntichainRef;
+    /// use timely::progress::frontier::{Antichain, AntichainRef};
     ///
     /// let time = Product::new(3, 7);
     /// let mut advanced = Product::new(3, 7);
-    /// let frontier = vec![Product::new(4, 8), Product::new(5, 3)];
-    /// advanced.advance_by(AntichainRef::new(&frontier[..]));
+    /// let frontier = Antichain::from(vec![Product::new(4, 8), Product::new(5, 3)]);
+    /// advanced.advance_by(frontier.borrow());
     ///
     /// // `time` and `advanced` are indistinguishable to elements >= an element of `frontier`
     /// for i in 0 .. 10 {
     ///     for j in 0 .. 10 {
     ///         let test = Product::new(i, j);
     ///         // for `test` in the future of `frontier` ..
-    ///         if frontier.iter().any(|t| t.less_equal(&test)) {
+    ///         if frontier.less_equal(&test) {
     ///             assert_eq!(time.less_equal(&test), advanced.less_equal(&test));
     ///         }
     ///     }

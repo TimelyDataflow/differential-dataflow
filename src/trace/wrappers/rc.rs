@@ -163,8 +163,8 @@ where
 {
     fn clone(&self) -> Self {
         // increase ref counts for this frontier
-        self.wrapper.borrow_mut().adjust_advance_frontier(AntichainRef::new(&[]), self.advance_frontier.borrow());
-        self.wrapper.borrow_mut().adjust_through_frontier(AntichainRef::new(&[]), self.through_frontier.borrow());
+        self.wrapper.borrow_mut().adjust_advance_frontier(Antichain::new().borrow(), self.advance_frontier.borrow());
+        self.wrapper.borrow_mut().adjust_through_frontier(Antichain::new().borrow(), self.through_frontier.borrow());
         TraceRc {
             advance_frontier: self.advance_frontier.clone(),
             through_frontier: self.through_frontier.clone(),
@@ -179,8 +179,8 @@ where
     Tr: TraceReader,
 {
     fn drop(&mut self) {
-        self.wrapper.borrow_mut().adjust_advance_frontier(self.advance_frontier.borrow(), AntichainRef::new(&[]));
-        self.wrapper.borrow_mut().adjust_through_frontier(self.through_frontier.borrow(), AntichainRef::new(&[]));
+        self.wrapper.borrow_mut().adjust_advance_frontier(self.advance_frontier.borrow(), Antichain::new().borrow());
+        self.wrapper.borrow_mut().adjust_through_frontier(self.through_frontier.borrow(), Antichain::new().borrow());
         self.advance_frontier = Antichain::new();
         self.through_frontier = Antichain::new();
     }

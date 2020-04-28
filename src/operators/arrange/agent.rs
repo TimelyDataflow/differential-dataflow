@@ -418,19 +418,19 @@ where
         Tr: TraceReader,
     {
         // This frontier describes our only guarantee on the compaction frontier.
-        let frontier = self.advance_frontier().to_vec();
+        let frontier = self.advance_frontier().to_owned();
         self.import_frontier_core(scope, name, frontier)
     }
 
     /// Import a trace advanced to a specific frontier.
-    pub fn import_frontier_core<G>(&mut self, scope: &G, name: &str, frontier: Vec<Tr::Time>) -> (Arranged<G, TraceFrontier<TraceAgent<Tr>>>, ShutdownButton<CapabilitySet<Tr::Time>>)
+    pub fn import_frontier_core<G>(&mut self, scope: &G, name: &str, frontier: Antichain<Tr::Time>) -> (Arranged<G, TraceFrontier<TraceAgent<Tr>>>, ShutdownButton<CapabilitySet<Tr::Time>>)
     where
         G: Scope<Timestamp=Tr::Time>,
         Tr::Time: Timestamp+ Lattice+Ord+Clone+'static,
         Tr: TraceReader,
     {
         let trace = self.clone();
-        let trace = TraceFrontier::make_from(trace, AntichainRef::new(&frontier[..]));
+        let trace = TraceFrontier::make_from(trace, frontier.borrow());
 
         let mut shutdown_button = None;
 
@@ -464,7 +464,7 @@ where
                                     if let Some(time) = hint {
                                         if !batch.is_empty() {
                                             let delayed = capabilities.delayed(&time);
-                                            output.session(&delayed).give(BatchFrontier::make_from(batch, AntichainRef::new(&frontier[..])));
+                                            output.session(&delayed).give(BatchFrontier::make_from(batch, frontier.borrow()));
                                         }
                                     }
                                 }
@@ -532,8 +532,9 @@ where
         }
 
         // increase counts for wrapped `TraceBox`.
-        self.trace.borrow_mut().adjust_advance_frontier(AntichainRef::new(&[]), self.advance.borrow());
-        self.trace.borrow_mut().adjust_through_frontier(AntichainRef::new(&[]), self.through.borrow());
+        let empty_frontier = Antichain::new();
+        self.trace.borrow_mut().adjust_advance_frontier(empty_frontier.borrow(), self.advance.borrow());
+        self.trace.borrow_mut().adjust_through_frontier(empty_frontier.borrow(), self.through.borrow());
 
         TraceAgent {
             trace: self.trace.clone(),
@@ -560,7 +561,8 @@ where
         }
 
         // decrement borrow counts to remove all holds
-        self.trace.borrow_mut().adjust_advance_frontier(self.advance.borrow(), AntichainRef::new(&[]));
-        self.trace.borrow_mut().adjust_through_frontier(self.through.borrow(), AntichainRef::new(&[]));
+        let empty_frontier = Antichain::new();
+        self.trace.borrow_mut().adjust_advance_frontier(self.advance.borrow(), empty_frontier.borrow());
+        self.trace.borrow_mut().adjust_through_frontier(self.through.borrow(), empty_frontier.borrow());
     }
 }
