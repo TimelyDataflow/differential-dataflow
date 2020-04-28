@@ -289,7 +289,7 @@ where
                                         builder.push(update);
                                     }
                                 }
-                                let batch = builder.done(input_frontier.elements(), upper.elements(), &[G::Timestamp::minimum()]);
+                                let batch = builder.done(input_frontier.clone(), upper.clone(), Antichain::from_elem(G::Timestamp::minimum()));
                                 input_frontier.clone_from(&upper);
 
                                 // Communicate `batch` to the arrangement and the stream.
@@ -317,7 +317,7 @@ where
                     }
                     else {
                         // Announce progress updates, even without data.
-                        writer.seal(&input.frontier().frontier()[..]);
+                        writer.seal(input.frontier().frontier().to_owned());
                     }
 
                     // Update our view of the input frontier.
@@ -325,8 +325,8 @@ where
                     input_frontier.extend(input.frontier().frontier().iter().cloned());
 
                     // Downgrade capabilities for `reader_local`.
-                    reader_local.advance_by(input_frontier.elements());
-                    reader_local.distinguish_since(input_frontier.elements());
+                    reader_local.advance_by(input_frontier.borrow());
+                    reader_local.distinguish_since(input_frontier.borrow());
                 }
 
                 if let Some(mut fuel) = effort.clone() {
