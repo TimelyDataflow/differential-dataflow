@@ -4,6 +4,7 @@ extern crate differential_dataflow;
 
 use timely::dataflow::operators::*;
 use timely::dataflow::operators::capture::Extract;
+use timely::progress::frontier::AntichainRef;
 
 use differential_dataflow::input::InputSession;
 use differential_dataflow::collection::AsCollection;
@@ -221,7 +222,7 @@ fn import_skewed() {
             input.send(((index as u64, 1), index, 1));
             input.close();
 
-            trace.advance_by(&[peers - index]);
+            trace.advance_by(AntichainRef::new(&[peers - index]));
 
             let (captured,) = worker.dataflow(move |scope| {
                 let imported = trace.import(scope);

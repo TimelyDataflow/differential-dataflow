@@ -21,6 +21,7 @@ use std::rc::Rc;
 
 use timely::dataflow::Scope;
 use timely::dataflow::operators::Map;
+use timely::progress::frontier::AntichainRef;
 
 use operators::arrange::Arranged;
 use lattice::Lattice;
@@ -102,13 +103,13 @@ where
         })
     }
 
-    fn advance_by(&mut self, frontier: &[Tr::Time]) { self.trace.advance_by(frontier) }
-    fn advance_frontier(&mut self) -> &[Tr::Time] { self.trace.advance_frontier() }
+    fn advance_by(&mut self, frontier: AntichainRef<Tr::Time>) { self.trace.advance_by(frontier) }
+    fn advance_frontier(&mut self) -> AntichainRef<Tr::Time> { self.trace.advance_frontier() }
 
-    fn distinguish_since(&mut self, frontier: &[Tr::Time]) { self.trace.distinguish_since(frontier) }
-    fn distinguish_frontier(&mut self) -> &[Tr::Time] { self.trace.distinguish_frontier() }
+    fn distinguish_since(&mut self, frontier: AntichainRef<Tr::Time>) { self.trace.distinguish_since(frontier) }
+    fn distinguish_frontier(&mut self) -> AntichainRef<Tr::Time> { self.trace.distinguish_frontier() }
 
-    fn cursor_through(&mut self, upper: &[Tr::Time]) -> Option<(Self::Cursor, <Self::Cursor as Cursor<Tr::Key, Tr::Val, Tr::Time, Tr::R>>::Storage)> {
+    fn cursor_through(&mut self, upper: AntichainRef<Tr::Time>) -> Option<(Self::Cursor, <Self::Cursor as Cursor<Tr::Key, Tr::Val, Tr::Time, Tr::R>>::Storage)> {
         let func = &self.func;
         self.trace.cursor_through(upper)
             .map(|(cursor, storage)| (CursorFreeze::new(cursor, func.clone()), storage))

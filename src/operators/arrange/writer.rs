@@ -8,7 +8,7 @@ use std::cell::RefCell;
 
 use lattice::Lattice;
 use trace::{Trace, Batch, BatchReader};
-use timely::progress::Timestamp;
+use timely::progress::{Antichain, Timestamp};
 
 use trace::wrappers::rc::TraceBox;
 
@@ -22,11 +22,11 @@ use super::TraceReplayInstruction;
 pub struct TraceWriter<Tr>
 where
     Tr: Trace,
-    Tr::Time: Lattice+Ord+Clone+std::fmt::Debug+'static,
+    Tr::Time: Lattice+Timestamp+Ord+Clone+std::fmt::Debug+'static,
     Tr::Batch: Batch<Tr::Key,Tr::Val,Tr::Time,Tr::R>,
 {
     /// Current upper limit.
-    upper: Vec<Tr::Time>,
+    upper: Antichain<Tr::Time>,
     /// Shared trace, possibly absent (due to weakness).
     trace: Weak<RefCell<TraceBox<Tr>>>,
     /// A sequence of private queues into which batches are written.
@@ -36,7 +36,7 @@ where
 impl<Tr> TraceWriter<Tr>
 where
     Tr: Trace,
-    Tr::Time: Lattice+Ord+Clone+std::fmt::Debug+'static,
+    Tr::Time: Lattice+Timestamp+Ord+Clone+std::fmt::Debug+'static,
     Tr::Batch: Batch<Tr::Key,Tr::Val,Tr::Time,Tr::R>,
 {
     /// Creates a new `TraceWriter`.
@@ -46,7 +46,9 @@ where
         queues: Rc<RefCell<Vec<TraceAgentQueueWriter<Tr>>>>
     ) -> Self
     {
-        Self { upper, trace, queues }
+        let mut temp = Antichain::new();
+        temp.extend(upper.into_iter());
+        Self { upper: temp, trace, queues }
     }
 
     /// Exerts merge effort, even without additional updates.
@@ -64,21 +66,20 @@ where
     pub fn insert(&mut self, batch: Tr::Batch, hint: Option<Tr::Time>) {
 
         // Something is wrong if not a sequence.
-        if !(&self.upper[..] == batch.lower()) {
+        if !(&self.upper == batch.lower()) {
             println!("{:?} vs {:?}", self.upper, batch.lower());
         }
-        assert!(&self.upper[..] == batch.lower());
+        assert!(&self.upper == batch.lower());
         assert!(batch.lower() != batch.upper());
 
-        self.upper.clear();
-        self.upper.extend(batch.upper().iter().cloned());
+        self.upper.clone_from(batch.upper());
 
         // push information to each listener that still exists.
         let mut borrow = self.queues.borrow_mut();
         for queue in borrow.iter_mut() {
             if let Some(pair) = queue.upgrade() {
                 pair.1.borrow_mut().push_back(TraceReplayInstruction::Batch(batch.clone(), hint.clone()));
-                pair.1.borrow_mut().push_back(TraceReplayInstruction::Frontier(batch.upper().to_vec()));
+                pair.1.borrow_mut().push_back(TraceReplayInstruction::Frontier(batch.upper().clone()));
                 pair.0.activate();
             }
         }
@@ -92,11 +93,11 @@ where
     }
 
     /// Inserts an empty batch up to `upper`.
-    pub fn seal(&mut self, upper: &[Tr::Time]) {
-        if &self.upper[..] != upper {
+    pub fn seal(&mut self, upper: Antichain<Tr::Time>) {
+        if self.upper != upper {
             use trace::Builder;
             let builder = <Tr::Batch as Batch<Tr::Key,Tr::Val,Tr::Time,Tr::R>>::Builder::new();
-            let batch = builder.done(&self.upper[..], upper, &[Tr::Time::minimum()]);
+            let batch = builder.done(self.upper.clone(), upper, Antichain::from_elem(Tr::Time::minimum()));
             self.insert(batch, None);
         }
     }
@@ -105,10 +106,10 @@ where
 impl<Tr> Drop for TraceWriter<Tr>
 where
     Tr: Trace,
-    Tr::Time: Lattice+Ord+Clone+std::fmt::Debug+'static,
+    Tr::Time: Lattice+Timestamp+Ord+Clone+std::fmt::Debug+'static,
     Tr::Batch: Batch<Tr::Key,Tr::Val,Tr::Time,Tr::R>,
 {
     fn drop(&mut self) {
-        self.seal(&[])
+        self.seal(Antichain::new())
     }
 }

@@ -13,8 +13,10 @@ use std::convert::{TryFrom, TryInto};
 use std::marker::PhantomData;
 use std::fmt::Debug;
 
+use timely::progress::{Antichain, frontier::AntichainRef};
+
 use ::difference::Semigroup;
-use lattice::{Lattice, antichain_join};
+use lattice::Lattice;
 
 use trace::layers::{Trie, TupleBuilder};
 use trace::layers::Builder as TrieBuilder;
@@ -78,7 +80,7 @@ impl<K, V, T, R, O> Batch<K, V, T, R> for OrdValBatch<K, V, T, R, O>
 where
     K: Ord+Clone+'static,
     V: Ord+Clone+'static,
-    T: Lattice+Ord+Clone+::std::fmt::Debug+'static,
+    T: Lattice+timely::progress::Timestamp+Ord+Clone+::std::fmt::Debug+'static,
     R: Semigroup,
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug
 {
@@ -86,7 +88,7 @@ where
 	type Builder = OrdValBuilder<K, V, T, R, O>;
 	type Merger = OrdValMerger<K, V, T, R, O>;
 
-	fn begin_merge(&self, other: &Self, compaction_frontier: Option<&[T]>) -> Self::Merger {
+	fn begin_merge(&self, other: &Self, compaction_frontier: Option<AntichainRef<T>>) -> Self::Merger {
 		OrdValMerger::new(self, other, compaction_frontier)
 	}
 }
@@ -99,7 +101,7 @@ where
     R: Semigroup,
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug
 {
-	fn advance_builder_from(layer: &mut OrderedBuilder<K, OrderedBuilder<V, OrderedLeafBuilder<T, R>, O>, O>, frontier: &[T], key_pos: usize) {
+	fn advance_builder_from(layer: &mut OrderedBuilder<K, OrderedBuilder<V, OrderedLeafBuilder<T, R>, O>, O>, frontier: AntichainRef<T>, key_pos: usize) {
 
 		let key_start = key_pos;
 		let val_start: usize = layer.offs[key_pos].try_into().unwrap();
@@ -217,20 +219,20 @@ impl<K, V, T, R, O> Merger<K, V, T, R, OrdValBatch<K, V, T, R, O>> for OrdValMer
 where
     K: Ord+Clone+'static,
     V: Ord+Clone+'static,
-    T: Lattice+Ord+Clone+::std::fmt::Debug+'static,
+    T: Lattice+timely::progress::Timestamp+Ord+Clone+::std::fmt::Debug+'static,
     R: Semigroup,
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug
 {
-	fn new(batch1: &OrdValBatch<K, V, T, R, O>, batch2: &OrdValBatch<K, V, T, R, O>, compaction_frontier: Option<&[T]>) -> Self {
+	fn new(batch1: &OrdValBatch<K, V, T, R, O>, batch2: &OrdValBatch<K, V, T, R, O>, compaction_frontier: Option<AntichainRef<T>>) -> Self {
 
 		assert!(batch1.upper() == batch2.lower());
 
-		let mut since = antichain_join(batch1.description().since(), batch2.description().since());
+		let mut since = batch1.description().since().join(batch2.description().since());
 		if let Some(compaction_frontier) = compaction_frontier {
-			since = antichain_join(since.elements(), compaction_frontier);
+			since = since.join(&compaction_frontier.to_owned());
 		}
 
-		let description = Description::new(batch1.lower(), batch2.upper(), since.elements());
+		let description = Description::new(batch1.lower().clone(), batch2.upper().clone(), since);
 
 		OrdValMerger {
 			lower1: 0,
@@ -291,7 +293,7 @@ where
 
 		// if we are supplied a frontier, we should compact.
 		if self.should_compact {
-			OrdValBatch::advance_builder_from(&mut self.result, self.description.since(), initial_key_pos);
+			OrdValBatch::advance_builder_from(&mut self.result, self.description.since().borrow(), initial_key_pos);
 		}
 
         *fuel -= effort;
@@ -360,7 +362,7 @@ impl<K, V, T, R, O> Builder<K, V, T, R, OrdValBatch<K, V, T, R, O>> for OrdValBu
 where
     K: Ord+Clone+'static,
     V: Ord+Clone+'static,
-    T: Lattice+Ord+Clone+::std::fmt::Debug+'static,
+    T: Lattice+timely::progress::Timestamp+Ord+Clone+::std::fmt::Debug+'static,
     R: Semigroup,
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug
 {
@@ -382,7 +384,7 @@ where
 	}
 
 	#[inline(never)]
-	fn done(self, lower: &[T], upper: &[T], since: &[T]) -> OrdValBatch<K, V, T, R, O> {
+	fn done(self, lower: Antichain<T>, upper: Antichain<T>, since: Antichain<T>) -> OrdValBatch<K, V, T, R, O> {
 		OrdValBatch {
 			layer: self.builder.done(),
 			desc: Description::new(lower, upper, since)
@@ -430,7 +432,7 @@ where
 impl<K, T, R, O> Batch<K, (), T, R> for OrdKeyBatch<K, T, R, O>
 where
     K: Ord+Clone+'static,
-    T: Lattice+Ord+Clone+'static,
+    T: Lattice+timely::progress::Timestamp+Ord+Clone+'static,
     R: Semigroup,
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug
 {
@@ -438,7 +440,7 @@ where
 	type Builder = OrdKeyBuilder<K, T, R, O>;
 	type Merger = OrdKeyMerger<K, T, R, O>;
 
-	fn begin_merge(&self, other: &Self, compaction_frontier: Option<&[T]>) -> Self::Merger {
+	fn begin_merge(&self, other: &Self, compaction_frontier: Option<AntichainRef<T>>) -> Self::Merger {
 		OrdKeyMerger::new(self, other, compaction_frontier)
 	}
 }
@@ -450,7 +452,7 @@ where
     R: Semigroup,
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug
 {
-	fn advance_builder_from(layer: &mut OrderedBuilder<K, OrderedLeafBuilder<T, R>, O>, frontier: &[T], key_pos: usize) {
+	fn advance_builder_from(layer: &mut OrderedBuilder<K, OrderedLeafBuilder<T, R>, O>, frontier: AntichainRef<T>, key_pos: usize) {
 
 		let key_start = key_pos;
 		let time_start: usize = layer.offs[key_pos].try_into().unwrap();
@@ -536,20 +538,20 @@ where
 impl<K, T, R, O> Merger<K, (), T, R, OrdKeyBatch<K, T, R, O>> for OrdKeyMerger<K, T, R, O>
 where
     K: Ord+Clone+'static,
-    T: Lattice+Ord+Clone+'static,
+    T: Lattice+timely::progress::Timestamp+Ord+Clone+'static,
     R: Semigroup,
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug
 {
-	fn new(batch1: &OrdKeyBatch<K, T, R, O>, batch2: &OrdKeyBatch<K, T, R, O>, compaction_frontier: Option<&[T]>) -> Self {
+	fn new(batch1: &OrdKeyBatch<K, T, R, O>, batch2: &OrdKeyBatch<K, T, R, O>, compaction_frontier: Option<AntichainRef<T>>) -> Self {
 
 		assert!(batch1.upper() == batch2.lower());
 
-		let mut since = antichain_join(batch1.description().since(), batch2.description().since());
+		let mut since = batch1.description().since().join(batch2.description().since());
 		if let Some(compaction_frontier) = compaction_frontier {
-			since = antichain_join(since.elements(), compaction_frontier);
+			since = since.join(&compaction_frontier.to_owned());
 		}
 
-		let description = Description::new(batch1.lower(), batch2.upper(), since.elements());
+		let description = Description::new(batch1.lower().clone(), batch2.upper().clone(), since);
 
 		OrdKeyMerger {
 			lower1: 0,
@@ -616,7 +618,7 @@ where
 
 		// if we are supplied a frontier, we should compact.
 		if self.should_compact {
-			OrdKeyBatch::advance_builder_from(&mut self.result, self.description.since(), initial_key_pos);
+			OrdKeyBatch::advance_builder_from(&mut self.result, self.description.since().borrow(), initial_key_pos);
 		}
 
         *fuel -= effort;
@@ -681,7 +683,7 @@ where
 impl<K, T, R, O> Builder<K, (), T, R, OrdKeyBatch<K, T, R, O>> for OrdKeyBuilder<K, T, R, O>
 where
     K: Ord+Clone+'static,
-    T: Lattice+Ord+Clone+'static,
+    T: Lattice+timely::progress::Timestamp+Ord+Clone+'static,
     R: Semigroup,
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug
 {
@@ -704,7 +706,7 @@ where
 	}
 
 	#[inline(never)]
-	fn done(self, lower: &[T], upper: &[T], since: &[T]) -> OrdKeyBatch<K, T, R, O> {
+	fn done(self, lower: Antichain<T>, upper: Antichain<T>, since: Antichain<T>) -> OrdKeyBatch<K, T, R, O> {
 		OrdKeyBatch {
 			layer: self.builder.done(),
 			desc: Description::new(lower, upper, since)

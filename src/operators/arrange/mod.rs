@@ -44,6 +44,7 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 
 use timely::scheduling::Activator;
+use timely::progress::Antichain;
 use trace::TraceReader;
 
 /// Operating instructions on how to replay a trace.
@@ -52,7 +53,7 @@ where
     Tr: TraceReader,
 {
     /// Describes a frontier advance.
-    Frontier(Vec<Tr::Time>),
+    Frontier(Antichain<Tr::Time>),
     /// Describes a batch of data and a capability hint.
     Batch(Tr::Batch, Option<Tr::Time>),
 }

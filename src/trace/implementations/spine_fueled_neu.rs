@@ -79,6 +79,8 @@ use trace::cursor::{Cursor, CursorList};
 use trace::Merger;
 
 use ::timely::dataflow::operators::generic::OperatorInfo;
+use ::timely::progress::{Antichain, frontier::AntichainRef};
+use ::timely::order::PartialOrder;
 
 /// An append-only collection of update tuples.
 ///
@@ -89,11 +91,11 @@ pub struct Spine<K, V, T: Lattice+Ord, R: Semigroup, B: Batch<K, V, T, R>> {
     operator: OperatorInfo,
     logger: Option<Logger>,
     phantom: ::std::marker::PhantomData<(K, V, R)>,
-    advance_frontier: Vec<T>,                   // Times after which the trace must accumulate correctly.
-    through_frontier: Vec<T>,                   // Times after which the trace must be able to subset its inputs.
+    advance_frontier: Antichain<T>,                   // Times after which the trace must accumulate correctly.
+    through_frontier: Antichain<T>,                   // Times after which the trace must be able to subset its inputs.
     merging: Vec<MergeState<K,V,T,R,B>>,// Several possibly shared collections of updates.
     pending: Vec<B>,                       // Batches at times in advance of `frontier`.
-    upper: Vec<T>,
+    upper: Antichain<T>,
     effort: usize,
     activator: Option<timely::scheduling::activate::Activator>,
 }
@@ -102,7 +104,7 @@ impl<K, V, T, R, B> TraceReader for Spine<K, V, T, R, B>
 where
     K: Ord+Clone,           // Clone is required by `batch::advance_*` (in-place could remove).
     V: Ord+Clone,           // Clone is required by `batch::advance_*` (in-place could remove).
-    T: Lattice+Ord+Clone+Debug,
+    T: Lattice+timely::progress::Timestamp+Ord+Clone+Debug,
     R: Semigroup,
     B: Batch<K, V, T, R>+Clone+'static,
 {
@@ -114,7 +116,7 @@ where
     type Batch = B;
     type Cursor = CursorList<K, V, T, R, <B as BatchReader<K, V, T, R>>::Cursor>;
 
-    fn cursor_through(&mut self, upper: &[T]) -> Option<(Self::Cursor, <Self::Cursor as Cursor<K, V, T, R>>::Storage)> {
+    fn cursor_through(&mut self, upper: AntichainRef<T>) -> Option<(Self::Cursor, <Self::Cursor as Cursor<K, V, T, R>>::Storage)> {
 
         // The supplied `upper` should have the property that for each of our
         // batch `lower` and `upper` frontiers, the supplied upper is comparable
@@ -127,11 +129,12 @@ where
         // supplied upper it had better be empty.
 
         // We shouldn't grab a cursor into a closed trace, right?
-        assert!(self.advance_frontier.len() > 0);
+        assert!(self.advance_frontier.borrow().len() > 0);
 
         // Check that `upper` is greater or equal to `self.through_frontier`.
         // Otherwise, the cut could be in `self.merging` and it is user error anyhow.
-        assert!(upper.iter().all(|t1| self.through_frontier.iter().any(|t2| t2.less_equal(t1))));
+        // assert!(upper.iter().all(|t1| self.through_frontier.iter().any(|t2| t2.less_equal(t1))));
+        assert!(PartialOrder::less_equal(&self.through_frontier.borrow(), &upper));
 
         let mut cursors = Vec::new();
         let mut storage = Vec::new();
@@ -182,10 +185,10 @@ where
                 // TODO: It is not clear if this is the 100% correct logic, due
                 // to the possible non-total-orderedness of the frontiers.
 
-                let include_lower = upper.iter().all(|t1| batch.lower().iter().any(|t2| t2.less_equal(t1)));
-                let include_upper = upper.iter().all(|t1| batch.upper().iter().any(|t2| t2.less_equal(t1)));
+                let include_lower = PartialOrder::less_equal(&batch.lower().borrow(), &upper);
+                let include_upper = PartialOrder::less_equal(&batch.upper().borrow(), &upper);
 
-                if include_lower != include_upper && upper != batch.lower() {
+                if include_lower != include_upper && upper != batch.lower().borrow() {
                     panic!("`cursor_through`: `upper` straddles batch");
                 }
 
@@ -199,24 +202,16 @@ where
 
         Some((CursorList::new(cursors, &storage), storage))
     }
-    fn advance_by(&mut self, frontier: &[T]) {
-        self.advance_frontier = frontier.to_vec();
-
-        // Commenting out for now; causes problems in `read_upper()`.
-        // If one has an urgent need to release these resources, it
-        // is probably best just to drop the trace.
-
-        // if self.advance_frontier.len() == 0 {
-        //     self.pending.clear();
-        //     self.merging.clear();
-        // }
+    fn advance_by(&mut self, frontier: AntichainRef<T>) {
+        // TODO: Re-use allocation
+        self.advance_frontier = frontier.to_owned();
     }
-    fn advance_frontier(&mut self) -> &[T] { &self.advance_frontier[..] }
-    fn distinguish_since(&mut self, frontier: &[T]) {
-        self.through_frontier = frontier.to_vec();
+    fn advance_frontier(&mut self) -> AntichainRef<T> { self.advance_frontier.borrow() }
+    fn distinguish_since(&mut self, frontier: AntichainRef<T>) {
+        self.through_frontier = frontier.to_owned();
         self.consider_merges();
     }
-    fn distinguish_frontier(&mut self) -> &[T] { &self.through_frontier[..] }
+    fn distinguish_frontier(&mut self) -> AntichainRef<T> { self.through_frontier.borrow() }
 
     fn map_batches<F: FnMut(&Self::Batch)>(&mut self, mut f: F) {
         for batch in self.merging.iter().rev() {
@@ -239,7 +234,7 @@ impl<K, V, T, R, B> Trace for Spine<K, V, T, R, B>
 where
     K: Ord+Clone,
     V: Ord+Clone,
-    T: Lattice+Ord+Clone+Debug,
+    T: Lattice+timely::progress::Timestamp+Ord+Clone+Debug,
     R: Semigroup,
     B: Batch<K, V, T, R>+Clone+'static,
 {
@@ -290,9 +285,9 @@ where
         }));
 
         assert!(batch.lower() != batch.upper());
-        assert_eq!(batch.lower(), &self.upper[..]);
+        assert_eq!(batch.lower(), &self.upper);
 
-        self.upper = batch.upper().to_vec();
+        self.upper.clone_from(batch.upper());
 
         // TODO: Consolidate or discard empty batches.
         self.pending.push(batch);
@@ -301,10 +296,10 @@ where
 
     /// Completes the trace with a final empty batch.
     fn close(&mut self) {
-        if !self.upper.is_empty() {
+        if !self.upper.borrow().is_empty() {
             use trace::Builder;
             let builder = B::Builder::new();
-            let batch = builder.done(&self.upper[..], &[], &[T::minimum()]);
+            let batch = builder.done(self.upper.clone(), Antichain::new(), Antichain::from_elem(T::minimum()));
             self.insert(batch);
         }
     }
@@ -373,7 +368,7 @@ impl<K, V, T, R, B> Spine<K, V, T, R, B>
 where
     K: Ord+Clone,
     V: Ord+Clone,
-    T: Lattice+Ord+Clone+Debug,
+    T: Lattice+timely::progress::Timestamp+Ord+Clone+Debug,
     R: Semigroup,
     B: Batch<K, V, T, R>,
 {
@@ -426,11 +421,11 @@ where
             operator,
             logger,
             phantom: ::std::marker::PhantomData,
-            advance_frontier: vec![<T as timely::progress::Timestamp>::minimum()],
-            through_frontier: vec![<T as timely::progress::Timestamp>::minimum()],
+            advance_frontier: Antichain::from_elem(<T as timely::progress::Timestamp>::minimum()),
+            through_frontier: Antichain::from_elem(<T as timely::progress::Timestamp>::minimum()),
             merging: Vec::new(),
             pending: Vec::new(),
-            upper: vec![<T as timely::progress::Timestamp>::minimum()],
+            upper: Antichain::from_elem(<T as timely::progress::Timestamp>::minimum()),
             effort,
             activator,
         }
@@ -445,8 +440,8 @@ where
 
         // TODO: Consider merging pending batches before introducing them.
         // TODO: We could use a `VecDeque` here to draw from the front and append to the back.
-        while self.pending.len() > 0 &&
-              self.through_frontier.iter().all(|t1| self.pending[0].upper().iter().any(|t2| t2.less_equal(t1)))
+        while self.pending.len() > 0 && PartialOrder::less_equal(self.pending[0].upper(), &self.through_frontier)
+            //   self.through_frontier.iter().all(|t1| self.pending[0].upper().iter().any(|t2| t2.less_equal(t1)))
         {
             // Batch can be taken in optimized insertion.
             // Otherwise it is inserted normally at the end of the method.
@@ -658,7 +653,7 @@ where
                         complete: None,
                     }
                 ));
-                let compaction_frontier = Some(&self.advance_frontier[..]);
+                let compaction_frontier = Some(self.advance_frontier.borrow());
                 self.merging[index] = MergeState::begin_merge(old, batch, compaction_frontier);
             }
             MergeState::Double(_) => {
@@ -852,7 +847,7 @@ impl<K, V, T: Eq, R, B: Batch<K, V, T, R>> MergeState<K, V, T, R, B> {
     /// empty batch whose upper and lower froniers are equal. This
     /// option exists purely for bookkeeping purposes, and no computation
     /// is performed to merge the two batches.
-    fn begin_merge(batch1: Option<B>, batch2: Option<B>, compaction_frontier: Option<&[T]>) -> MergeState<K, V, T, R, B> {
+    fn begin_merge(batch1: Option<B>, batch2: Option<B>, compaction_frontier: Option<AntichainRef<T>>) -> MergeState<K, V, T, R, B> {
         let variant =
         match (batch1, batch2) {
             (Some(batch1), Some(batch2)) => {

@@ -5,6 +5,7 @@
 //! present deterministic times, independent of the compaction strategy.
 
 use timely::progress::Timestamp;
+use timely::progress::{Antichain, frontier::AntichainRef};
 
 use trace::{TraceReader, BatchReader, Description};
 use trace::cursor::Cursor;
@@ -16,7 +17,7 @@ where
     Tr: TraceReader,
 {
     trace: Tr,
-    frontier: Vec<Tr::Time>,
+    frontier: Antichain<Tr::Time>,
 }
 
 impl<Tr> Clone for TraceFrontier<Tr>
@@ -50,18 +51,18 @@ where
     type Cursor = CursorFrontier<Tr::Key, Tr::Val, Tr::Time, Tr::R, Tr::Cursor>;
 
     fn map_batches<F: FnMut(&Self::Batch)>(&mut self, mut f: F) {
-        let frontier = &self.frontier[..];
+        let frontier = self.frontier.borrow();
         self.trace.map_batches(|batch| f(&Self::Batch::make_from(batch.clone(), frontier)))
     }
 
-    fn advance_by(&mut self, frontier: &[Tr::Time]) { self.trace.advance_by(frontier) }
-    fn advance_frontier(&mut self) -> &[Tr::Time] { self.trace.advance_frontier() }
+    fn advance_by(&mut self, frontier: AntichainRef<Tr::Time>) { self.trace.advance_by(frontier) }
+    fn advance_frontier(&mut self) -> AntichainRef<Tr::Time> { self.trace.advance_frontier() }
 
-    fn distinguish_since(&mut self, frontier: &[Tr::Time]) { self.trace.distinguish_since(frontier) }
-    fn distinguish_frontier(&mut self) -> &[Tr::Time] { self.trace.distinguish_frontier() }
+    fn distinguish_since(&mut self, frontier: AntichainRef<Tr::Time>) { self.trace.distinguish_since(frontier) }
+    fn distinguish_frontier(&mut self) -> AntichainRef<Tr::Time> { self.trace.distinguish_frontier() }
 
-    fn cursor_through(&mut self, upper: &[Tr::Time]) -> Option<(Self::Cursor, <Self::Cursor as Cursor<Tr::Key, Tr::Val, Tr::Time, Tr::R>>::Storage)> {
-        let frontier = &self.frontier[..];
+    fn cursor_through(&mut self, upper: AntichainRef<Tr::Time>) -> Option<(Self::Cursor, <Self::Cursor as Cursor<Tr::Key, Tr::Val, Tr::Time, Tr::R>>::Storage)> {
+        let frontier = self.frontier.borrow();
         self.trace.cursor_through(upper).map(|(x,y)| (CursorFrontier::new(x, frontier), y))
     }
 }
@@ -72,10 +73,10 @@ where
     Tr::Time: Timestamp,
 {
     /// Makes a new trace wrapper
-    pub fn make_from(trace: Tr, frontier: &[Tr::Time]) -> Self {
+    pub fn make_from(trace: Tr, frontier: AntichainRef<Tr::Time>) -> Self {
         TraceFrontier {
             trace,
-            frontier: frontier.to_vec(),
+            frontier: frontier.to_owned(),
         }
     }
 }
@@ -85,7 +86,7 @@ where
 pub struct BatchFrontier<K, V, T, R, B> {
     phantom: ::std::marker::PhantomData<(K, V, T, R)>,
     batch: B,
-    frontier: Vec<T>,
+    frontier: Antichain<T>,
 }
 
 impl<K, V, T: Clone, R, B: Clone> Clone for BatchFrontier<K, V, T, R, B> {
@@ -93,7 +94,7 @@ impl<K, V, T: Clone, R, B: Clone> Clone for BatchFrontier<K, V, T, R, B> {
         BatchFrontier {
             phantom: ::std::marker::PhantomData,
             batch: self.batch.clone(),
-            frontier: self.frontier.clone(),
+            frontier: self.frontier.to_owned(),
         }
     }
 }
@@ -106,7 +107,7 @@ where
     type Cursor = BatchCursorFrontier<K, V, T, R, B>;
 
     fn cursor(&self) -> Self::Cursor {
-        BatchCursorFrontier::new(self.batch.cursor(), &self.frontier[..])
+        BatchCursorFrontier::new(self.batch.cursor(), self.frontier.borrow())
     }
     fn len(&self) -> usize { self.batch.len() }
     fn description(&self) -> &Description<T> { &self.batch.description() }
@@ -118,11 +119,11 @@ where
     T: Timestamp+Lattice,
 {
     /// Makes a new batch wrapper
-    pub fn make_from(batch: B, frontier: &[T]) -> Self {
+    pub fn make_from(batch: B, frontier: AntichainRef<T>) -> Self {
         BatchFrontier {
             phantom: ::std::marker::PhantomData,
             batch,
-            frontier: frontier.to_vec(),
+            frontier: frontier.to_owned(),
         }
     }
 }
@@ -131,15 +132,15 @@ where
 pub struct CursorFrontier<K, V, T, R, C: Cursor<K, V, T, R>> {
     phantom: ::std::marker::PhantomData<(K, V, T, R)>,
     cursor: C,
-    frontier: Vec<T>,
+    frontier: Antichain<T>,
 }
 
 impl<K, V, T: Clone, R, C: Cursor<K, V, T, R>> CursorFrontier<K, V, T, R, C> {
-    fn new(cursor: C, frontier: &[T]) -> Self {
+    fn new(cursor: C, frontier: AntichainRef<T>) -> Self {
         CursorFrontier {
             phantom: ::std::marker::PhantomData,
             cursor,
-            frontier: frontier.to_vec(),
+            frontier: frontier.to_owned(),
         }
     }
 }
@@ -159,7 +160,7 @@ where
 
     #[inline]
     fn map_times<L: FnMut(&T,&R)>(&mut self, storage: &Self::Storage, mut logic: L) {
-        let frontier = &self.frontier[..];
+        let frontier = self.frontier.borrow();
         let mut temp: T = <T as timely::progress::Timestamp>::minimum();
         self.cursor.map_times(storage, |time, diff| {
             temp.clone_from(time);
@@ -184,15 +185,15 @@ where
 pub struct BatchCursorFrontier<K, V, T, R, B: BatchReader<K, V, T, R>> {
     phantom: ::std::marker::PhantomData<(K, V, R)>,
     cursor: B::Cursor,
-    frontier: Vec<T>,
+    frontier: Antichain<T>,
 }
 
 impl<K, V, T: Clone, R, B: BatchReader<K, V, T, R>> BatchCursorFrontier<K, V, T, R, B> {
-    fn new(cursor: B::Cursor, frontier: &[T]) -> Self {
+    fn new(cursor: B::Cursor, frontier: AntichainRef<T>) -> Self {
         BatchCursorFrontier {
             phantom: ::std::marker::PhantomData,
             cursor,
-            frontier: frontier.to_vec(),
+            frontier: frontier.to_owned(),
         }
     }
 }
@@ -211,7 +212,7 @@ where
 
     #[inline]
     fn map_times<L: FnMut(&T,&R)>(&mut self, storage: &Self::Storage, mut logic: L) {
-        let frontier = &self.frontier[..];
+        let frontier = self.frontier.borrow();
         let mut temp: T = <T as timely::progress::Timestamp>::minimum();
         self.cursor.map_times(&storage.batch, |time, diff| {
             temp.clone_from(time);

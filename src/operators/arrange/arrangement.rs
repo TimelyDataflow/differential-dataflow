@@ -23,7 +23,7 @@ use timely::dataflow::{Scope, Stream};
 use timely::dataflow::operators::generic::Operator;
 use timely::dataflow::channels::pact::{ParallelizationContract, Pipeline, Exchange};
 use timely::progress::Timestamp;
-use timely::progress::frontier::Antichain;
+use timely::progress::{Antichain, frontier::AntichainRef};
 use timely::dataflow::operators::Capability;
 
 use timely_sort::Unsigned;
@@ -263,7 +263,7 @@ where
 
             let mut trace = Some(self.trace.clone());
             // release `distinguish_since` capability.
-            trace.as_mut().unwrap().distinguish_since(&[]);
+            trace.as_mut().unwrap().distinguish_since(Antichain::new().borrow());
 
             let mut stash = Vec::new();
             let mut capability: Option<Capability<G::Timestamp>> = None;
@@ -390,13 +390,14 @@ where
                 }
 
                 // Determine new frontier on queries that may be issued.
+                // TODO: This code looks very suspect; explain better or fix.
                 let frontier = [
                     capability.as_ref().map(|c| c.time().clone()),
                     input1.frontier().frontier().get(0).cloned(),
                 ].into_iter().cloned().filter_map(|t| t).min();
 
                 if let Some(frontier) = frontier {
-                    trace.as_mut().map(|t| t.advance_by(&[frontier]));
+                    trace.as_mut().map(|t| t.advance_by(AntichainRef::new(&[frontier])));
                 }
                 else {
                     trace = None;
@@ -617,7 +618,7 @@ where
                                     }
 
                                     // Extract updates not in advance of `upper`.
-                                    let batch = batcher.seal(upper.elements());
+                                    let batch = batcher.seal(upper.clone());
 
                                     writer.insert(batch.clone(), Some(capability.time().clone()));
 
@@ -632,7 +633,7 @@ where
                             // in messages with new capabilities.
 
                             let mut new_capabilities = Antichain::new();
-                            for time in batcher.frontier() {
+                            for time in batcher.frontier().iter() {
                                 if let Some(capability) = capabilities.elements().iter().find(|c| c.time().less_equal(time)) {
                                     new_capabilities.insert(capability.delayed(time));
                                 }
@@ -645,8 +646,8 @@ where
                         }
                         else {
                             // Announce progress updates, even without data.
-                            let _batch = batcher.seal(&input.frontier().frontier()[..]);
-                            writer.seal(&input.frontier().frontier());
+                            let _batch = batcher.seal(input.frontier().frontier().to_owned());
+                            writer.seal(input.frontier().frontier().to_owned());
                         }
 
                         input_frontier.clear();
