@@ -153,39 +153,41 @@ impl Arrangements {
         use differential_dataflow::AsCollection;
         use differential_dataflow::trace::TraceReader;
 
+        let empty_frontier = timely::progress::Antichain::new();
+        let empty_frontier = empty_frontier.borrow();
         let mut arranged = scope.input_from(&mut inputs.customer).as_collection().map(|x| (x.cust_key, x)).arrange_by_key();
         arranged.stream.probe_with(probe);
-        arranged.trace.distinguish_since(&[]);
+        arranged.trace.distinguish_since(empty_frontier);
         let customer = arranged.trace;
 
         let mut arranged = scope.input_from(&mut inputs.nation).as_collection().map(|x| (x.nation_key, x)).arrange_by_key();
         arranged.stream.probe_with(probe);
-        arranged.trace.distinguish_since(&[]);
+        arranged.trace.distinguish_since(empty_frontier);
         let nation = arranged.trace;
 
         let mut arranged = scope.input_from(&mut inputs.order).as_collection().map(|x| (x.order_key, x)).arrange_by_key();
         arranged.stream.probe_with(probe);
-        arranged.trace.distinguish_since(&[]);
+        arranged.trace.distinguish_since(empty_frontier);
         let order = arranged.trace;
 
         let mut arranged = scope.input_from(&mut inputs.part).as_collection().map(|x| (x.part_key, x)).arrange_by_key();
         arranged.stream.probe_with(probe);
-        arranged.trace.distinguish_since(&[]);
+        arranged.trace.distinguish_since(empty_frontier);
         let part = arranged.trace;
 
         let mut arranged = scope.input_from(&mut inputs.partsupp).as_collection().map(|x| ((x.part_key, x.supp_key), x)).arrange_by_key();
         arranged.stream.probe_with(probe);
-        arranged.trace.distinguish_since(&[]);
+        arranged.trace.distinguish_since(empty_frontier);
         let partsupp = arranged.trace;
 
         let mut arranged = scope.input_from(&mut inputs.region).as_collection().map(|x| (x.region_key, x)).arrange_by_key();
         arranged.stream.probe_with(probe);
-        arranged.trace.distinguish_since(&[]);
+        arranged.trace.distinguish_since(empty_frontier);
         let region = arranged.trace;
 
         let mut arranged = scope.input_from(&mut inputs.supplier).as_collection().map(|x| (x.supp_key, x)).arrange_by_key();
         arranged.stream.probe_with(probe);
-        arranged.trace.distinguish_since(&[]);
+        arranged.trace.distinguish_since(empty_frontier);
         let supplier = arranged.trace;
 
         Arrangements {
@@ -237,7 +239,8 @@ impl Arrangements {
     pub fn advance_by(&mut self, frontier: &[usize]) {
 
         use differential_dataflow::trace::TraceReader;
-
+        use timely::progress::frontier::AntichainRef;
+        let frontier = AntichainRef::new(frontier);
         self.customer.advance_by(frontier);
         self.nation.advance_by(frontier);
         self.order.advance_by(frontier);

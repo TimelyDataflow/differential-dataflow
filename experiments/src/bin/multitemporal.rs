@@ -195,7 +195,7 @@ mod pair {
 
     use timely::progress::timestamp::Refines;
     impl<S: Timestamp, T: Timestamp> Refines<()> for Pair<S, T> {
-        fn to_inner(_outer: ()) -> Self { Default::default() }
+        fn to_inner(_outer: ()) -> Self { Self::minimum() }
         fn to_outer(self) -> () { () }
         fn summarize(_summary: <Self>::Summary) -> () { () }
     }
@@ -216,6 +216,7 @@ mod pair {
     // Implement timely dataflow's `Timestamp` trait.
     use timely::progress::Timestamp;
     impl<S: Timestamp, T: Timestamp> Timestamp for Pair<S, T> {
+        fn minimum() -> Self { Pair { first: S::minimum(), second: T::minimum() }}
         type Summary = ();
     }
 
@@ -223,7 +224,6 @@ mod pair {
     // This extends the `PartialOrder` implementation with additional structure.
     use differential_dataflow::lattice::Lattice;
     impl<S: Lattice, T: Lattice> Lattice for Pair<S, T> {
-        fn minimum() -> Self { Pair { first: S::minimum(), second: T::minimum() }}
         fn join(&self, other: &Self) -> Self {
             Pair {
                 first: self.first.join(&other.first),
@@ -271,18 +271,18 @@ mod vector {
 
     // Implement timely dataflow's `PartialOrder` trait.
     use timely::order::PartialOrder;
-    impl<T: PartialOrder+Default> PartialOrder for Vector<T> {
+    impl<T: PartialOrder+Timestamp> PartialOrder for Vector<T> {
         fn less_equal(&self, other: &Self) -> bool {
             self.vector
                 .iter()
                 .enumerate()
-                .all(|(index, time)| time.less_equal(other.vector.get(index).unwrap_or(&Default::default())))
+                .all(|(index, time)| time.less_equal(other.vector.get(index).unwrap_or(&T::minimum())))
         }
     }
 
     use timely::progress::timestamp::Refines;
     impl<T: Timestamp> Refines<()> for Vector<T> {
-        fn to_inner(_outer: ()) -> Self { Default::default() }
+        fn to_inner(_outer: ()) -> Self { Self { vector: Vec::new() } }
         fn to_outer(self) -> () { () }
         fn summarize(_summary: <Self>::Summary) -> () { () }
     }
@@ -303,14 +303,14 @@ mod vector {
     // Implement timely dataflow's `Timestamp` trait.
     use timely::progress::Timestamp;
     impl<T: Timestamp> Timestamp for Vector<T> {
+        fn minimum() -> Self { Self { vector: Vec::new() } }
         type Summary = ();
     }
 
     // Implement differential dataflow's `Lattice` trait.
     // This extends the `PartialOrder` implementation with additional structure.
     use differential_dataflow::lattice::Lattice;
-    impl<T: Lattice+Default+Clone> Lattice for Vector<T> {
-        fn minimum() -> Self { Self { vector: Vec::new() } }
+    impl<T: Lattice+Timestamp+Clone> Lattice for Vector<T> {
         fn join(&self, other: &Self) -> Self {
             let min_len = ::std::cmp::min(self.vector.len(), other.vector.len());
             let max_len = ::std::cmp::max(self.vector.len(), other.vector.len());

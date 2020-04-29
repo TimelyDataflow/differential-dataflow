@@ -235,7 +235,7 @@ use differential_dataflow::trace::implementations::ord::OrdValSpine as DefaultVa
 use differential_dataflow::operators::arrange::TraceAgent;
 use differential_dataflow::operators::arrange::Arranged;
 
-type Arrange<G, K, V, R> = Arranged<G, K, V, R, TraceAgent<K, V, <G as ScopeParent>::Timestamp, R, DefaultValTrace<K, V, <G as ScopeParent>::Timestamp, R>>>;
+type Arrange<G, K, V, R> = Arranged<G, TraceAgent<DefaultValTrace<K, V, <G as ScopeParent>::Timestamp, R>>>;
 
 // returns pairs (n, s) indicating node n can be reached from a root in s steps.
 fn three_hop<G: Scope>(

@@ -98,7 +98,7 @@ fn main() {
 // use differential_dataflow::trace::implementations::ord::OrdValSpine;
 use differential_dataflow::operators::arrange::TraceAgent;
 
-type TraceHandle = TraceAgent<Node, Node, (), isize, GraphTrace>;
+type TraceHandle = TraceAgent<GraphTrace>;
 
 fn reach<G: Scope<Timestamp = ()>> (
     graph: &mut TraceHandle,

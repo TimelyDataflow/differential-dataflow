@@ -93,7 +93,7 @@ fn unoptimized() {
                     value_flow_next
                         .arrange::<OrdKeySpine<_,_,_,Offs>>()
                         // .distinct_total_core::<Diff>()
-                        .threshold_semigroup(|_,_,x| if x.is_none() { Some(Present) } else { None });
+                        .threshold_semigroup(|_,_,x| if x.is_none() { Some(Present) } else { None })
                         ;
 
                     // MA(a,b) <- D(x,a),VA(x,y),D(y,b)
@@ -107,7 +107,7 @@ fn unoptimized() {
                     memory_alias_next
                         .arrange::<OrdKeySpine<_,_,_,Offs>>()
                         // .distinct_total_core::<Diff>()
-                        .threshold_semigroup(|_,_,x| if x.is_none() { Some(Present) } else { None });
+                        .threshold_semigroup(|_,_,x| if x.is_none() { Some(Present) } else { None })
                         ;
 
                     value_flow.set(&value_flow_next);
@@ -207,7 +207,7 @@ fn optimized() {
                         .concat(&nodes.map(|n| (n,n)))
                         .arrange::<OrdKeySpine<_,_,_,Offs>>()
                         // .distinct_total_core::<Diff>()
-                        .threshold_semigroup(|_,_,x| if x.is_none() { Some(Present) } else { None });
+                        .threshold_semigroup(|_,_,x| if x.is_none() { Some(Present) } else { None })
                         ;
 
                     // VFD(a,b) <- VF(a,x),D(x,b)
@@ -232,7 +232,7 @@ fn optimized() {
                         .concat(&memory_alias_next)
                         .arrange::<OrdKeySpine<_,_,_,Offs>>()
                         // .distinct_total_core::<Diff>()
-                        .threshold_semigroup(|_,_,x| if x.is_none() { Some(Present) } else { None });
+                        .threshold_semigroup(|_,_,x| if x.is_none() { Some(Present) } else { None })
                         ;
 
                     value_flow.set(&value_flow_next);

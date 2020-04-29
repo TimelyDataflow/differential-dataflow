@@ -1,5 +1,3 @@
-#![feature(duration_as_u128)]
-
 extern crate rand;
 extern crate timely;
 extern crate differential_dataflow;
@@ -20,7 +18,7 @@ use differential_dataflow::trace::implementations::ord::OrdValSpine as DefaultVa
 use differential_dataflow::operators::arrange::TraceAgent;
 use differential_dataflow::operators::arrange::Arranged;
 
-type Arrange<G, K, V, R> = Arranged<G, K, V, R, TraceAgent<K, V, <G as ScopeParent>::Timestamp, R, DefaultValTrace<K, V, <G as ScopeParent>::Timestamp, R>>>;
+type Arrange<G, K, V, R> = Arranged<G, TraceAgent<DefaultValTrace<K, V, <G as ScopeParent>::Timestamp, R>>>;
 
 type Node = u32;
 

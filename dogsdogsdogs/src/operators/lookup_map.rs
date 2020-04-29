@@ -4,6 +4,7 @@ use timely::PartialOrder;
 use timely::dataflow::Scope;
 use timely::dataflow::channels::pact::{Pipeline, Exchange};
 use timely::dataflow::operators::Operator;
+use timely::progress::Antichain;
 
 use timely_sort::Unsigned;
 
@@ -44,7 +45,7 @@ where
     S: Fn(&D, &R, &Tr::Val, &Tr::R)->(DOut, ROut)+'static,
 {
     // No need to block physical merging for this operator.
-    arrangement.trace.distinguish_since(&[]);
+    arrangement.trace.distinguish_since(Antichain::new().borrow());
     let mut propose_trace = Some(arrangement.trace);
     let propose_stream = arrangement.stream;
 
@@ -137,7 +138,7 @@ where
         for key in stash.keys() {
             frontier.insert(key.time().clone());
         }
-        propose_trace.as_mut().map(|trace| trace.advance_by(frontier.elements()));
+        propose_trace.as_mut().map(|trace| trace.advance_by(frontier.borrow()));
 
         if input1.frontier().is_empty() && stash.is_empty() {
             propose_trace = None;

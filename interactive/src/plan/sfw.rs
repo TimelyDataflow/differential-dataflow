@@ -218,9 +218,9 @@ impl<V: ExchangeData+Hash+Datum> Render for MultiwayJoin<V> {
                     .get_keyed(&plan, &keys[..])
                     .expect("Surely we just ensured this");
 
-                let key_selector = std::rc::Rc::new(move |change: &Vec<V>|
+                let key_selector = move |change: &Vec<V>|
                     priors.iter().map(|&p| change[p].clone()).collect::<Vec<_>>()
-                );
+                ;
 
                 join_plan.push((join_idx, key_selector, arrangement));
 
@@ -249,11 +249,11 @@ impl<V: ExchangeData+Hash+Datum> Render for MultiwayJoin<V> {
                     // tuple in the cursor.
                     changes =
                     if join_idx < index {
-                        let arrangement = trace.import(scope).enter_at(inner, |_,_,t| AltNeu::alt(t.clone()));
+                        let arrangement = trace.import(scope).enter_at(inner, |_,_,t| AltNeu::alt(t.clone()), unimplemented!());
                         dogsdogsdogs::operators::propose(&changes, arrangement, key_selector)
                     }
                     else {
-                        let arrangement = trace.import(scope).enter_at(inner, |_,_,t| AltNeu::neu(t.clone()));
+                        let arrangement = trace.import(scope).enter_at(inner, |_,_,t| AltNeu::neu(t.clone()), unimplemented!());
                         dogsdogsdogs::operators::propose(&changes, arrangement, key_selector)
                     }
                     .map(|(mut prefix, extensions)| { prefix.extend(extensions.into_iter()); prefix })

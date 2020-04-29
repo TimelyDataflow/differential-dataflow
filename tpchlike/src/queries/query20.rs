@@ -77,7 +77,7 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
         )
         .semijoin(&partkeys)
         .explode(|l| Some(((((l.0 as u64) << 32) + (l.1).0 as u64, ()), (l.1).1 as isize)))
-        .reduce_abelian::<_,DefaultValTrace<_,_,_,_>>(|_k,s,t| t.push((s[0].1, 1)));
+        .reduce_abelian::<_,DefaultValTrace<_,_,_,_>>("Reduce", |_k,s,t| t.push((s[0].1, 1)));
 
     let suppliers =
     collections

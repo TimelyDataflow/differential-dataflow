@@ -40,6 +40,8 @@ fn main() {
         let core_ids = core_affinity::get_core_ids().unwrap();
         core_affinity::set_for_current(core_ids[index % core_ids.len()]);
 
+        let inspect = true;
+
         let mut input = worker.dataflow::<(),_,_>(|scope| {
 
             let (input, graph) = scope.new_collection();

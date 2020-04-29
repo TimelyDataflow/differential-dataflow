@@ -184,16 +184,16 @@ impl<V: ExchangeData+Hash+Datum> TraceManager<V> {
     /// Advances the frontier of each maintained trace.
     pub fn advance_time(&mut self, time: &Time) {
         use differential_dataflow::trace::TraceReader;
-
-        let frontier = &[time.clone()];
+        use timely::progress::frontier::Antichain;
+        let frontier = Antichain::from_elem(time.clone());
         for trace in self.inputs.values_mut() {
-            trace.advance_by(frontier);
-            trace.distinguish_since(frontier);
+            trace.advance_by(frontier.borrow());
+            trace.distinguish_since(frontier.borrow());
         }
         for map in self.arrangements.values_mut() {
             for trace in map.values_mut() {
-                trace.advance_by(frontier);
-                trace.distinguish_since(frontier);
+                trace.advance_by(frontier.borrow());
+                trace.distinguish_since(frontier.borrow());
             }
         }
     }

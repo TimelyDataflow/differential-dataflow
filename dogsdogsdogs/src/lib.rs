@@ -113,7 +113,7 @@ pub struct CollectionIndex<K, V, T, R>
 where
     K: ExchangeData,
     V: ExchangeData,
-    T: Lattice+ExchangeData,
+    T: Lattice+ExchangeData+Timestamp,
     R: Monoid+Mul<Output = R>+ExchangeData,
 {
     /// A trace of type (K, ()), used to count extensions for each prefix.
@@ -181,7 +181,7 @@ pub struct CollectionExtender<K, V, T, R, P, F>
 where
     K: ExchangeData,
     V: ExchangeData,
-    T: Lattice+ExchangeData,
+    T: Lattice+ExchangeData+Timestamp,
     R: Monoid+Mul<Output = R>+ExchangeData,
     F: Fn(&P)->K+Clone,
 {

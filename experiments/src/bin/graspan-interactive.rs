@@ -103,7 +103,7 @@ fn main() {
                                 nodes.advance_to(round + 1);
                                 nodes.flush();
 
-                                let mut timer = std::time::Instant::now();
+                                let timer = std::time::Instant::now();
                                 while probe.less_than(&nodes.time()) { worker.step(); }
 
                                 let elapsed = timer.elapsed();
