@@ -91,10 +91,29 @@ impl<T: Unsigned+Copy+Hashable+Abomonation> Abomonation for UnsignedWrapper<T> {
     }
 }
 
+/// A wrapper for people who don't have time to write nested wrapper.
+/// Wrap up an item of some type that implements `Ord` and `Hashable` traits.
+pub type OrdHashableWrapper<T> = OrdWrapper<HashableWrapper<T>>;
+
+impl<T: Ord+Hashable> OrdHashableWrapper<T> {
+    /// A simple method to avoid writing `a = item.into()` then `b = a.into()`.
+    pub fn new(item: T) -> Self {
+        let hashable_item: HashableWrapper<T> = item.into();
+        OrdWrapper { item: hashable_item }
+    }
+}
+
+impl<T: Ord+Hashable> From<T> for OrdHashableWrapper<T> {
+    #[inline]
+    fn from(item: T) -> Self { 
+        let hashable_wrapper: HashableWrapper<T> = item.into();
+        OrdWrapper { item: hashable_wrapper }
+    }
+}
 
 /// A wrapper around hashable types that ensures an implementation of `Ord` that compares
 /// hash values first.
-#[derive(Clone, Eq, PartialEq, Debug, Default)]
+#[derive(Clone, Eq, PartialEq, Debug, Default, Serialize, Deserialize)]
 pub struct OrdWrapper<T: Ord+Hashable> {
     /// The item, so you can grab it.
     pub item: T
@@ -106,6 +125,7 @@ impl<T: Ord+Hashable> PartialOrd for OrdWrapper<T> {
         (self.item.hashed(), &self.item).partial_cmp(&(other.item.hashed(), &other.item))
     }
 }
+
 impl<T: Ord+Hashable> Ord for OrdWrapper<T> {
     #[inline]
     fn cmp(&self, other: &Self) -> ::std::cmp::Ordering {
@@ -125,7 +145,7 @@ impl<T: Ord+Hashable> Deref for OrdWrapper<T> {
 
 
 /// Wrapper to stash hash value with the actual value.
-#[derive(Clone, Default, Ord, PartialOrd, Eq, PartialEq, Debug, Copy)]
+#[derive(Clone, Default, Ord, PartialOrd, Eq, PartialEq, Debug, Copy, Serialize, Deserialize)]
 pub struct HashableWrapper<T: Hashable> {
     hash: T::Output,
     /// The item, for reference.
@@ -155,7 +175,7 @@ impl<T: Hashable> From<T> for HashableWrapper<T> {
 }
 
 /// A wrapper around an unsigned integer, providing `hashed` as the value itself.
-#[derive(Clone, Ord, PartialOrd, Eq, PartialEq, Default, Debug, Copy)]
+#[derive(Clone, Ord, PartialOrd, Eq, PartialEq, Default, Debug, Copy, Serialize, Deserialize)]
 pub struct UnsignedWrapper<T: Unsigned+Copy> {
     /// The item.
     pub item: T,
