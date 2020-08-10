@@ -118,6 +118,15 @@ where
 
     fn cursor_through(&mut self, upper: AntichainRef<T>) -> Option<(Self::Cursor, <Self::Cursor as Cursor<K, V, T, R>>::Storage)> {
 
+        // If `upper` is the minimum frontier, we can return an empty cursor.
+        // This can happen with operators that are written to expect the ability to acquire cursors
+        // for their prior frontiers, and which start at `[T::minimum()]`, such as `Reduce`, sadly.
+        if upper.less_equal(&T::minimum()) {
+            let mut cursors = Vec::new();
+            let mut storage = Vec::new();
+            return Some((CursorList::new(cursors, &storage), storage));
+        }
+
         // The supplied `upper` should have the property that for each of our
         // batch `lower` and `upper` frontiers, the supplied upper is comparable
         // to the frontier; it should not be incomparable, because the frontiers
