@@ -205,6 +205,8 @@ where
     fn advance_by(&mut self, frontier: AntichainRef<T>) {
         // TODO: Re-use allocation
         self.advance_frontier = frontier.to_owned();
+        // Advancing the frontier may call for further compaction of batches.
+        self.activator.as_mut().map(|x| x.activate());
     }
     fn advance_frontier(&mut self) -> AntichainRef<T> { self.advance_frontier.borrow() }
     fn distinguish_since(&mut self, frontier: AntichainRef<T>) {
@@ -372,17 +374,38 @@ where
     R: Semigroup,
     B: Batch<K, V, T, R>,
 {
-    /// True iff there is at most one non-empty batch in `self.merging`.
+    /// True iff there is no additional physical compaction work to perform.
     ///
-    /// When true, there is no maintenance work to perform in the trace, other than compaction.
-    /// We do not yet have logic in place to determine if compaction would improve a trace, so
-    /// for now we are ignoring that.
+    /// This method is used to indicate whether or not physical compaction is worth pursuing.
+    /// If there is more than one non-empty batch, or if the single non-empty batch appears
+    /// to benefit from logical compaction, the method returns false.
     fn reduced(&self) -> bool {
-        let mut non_empty = 0;
+        let mut non_empty_pos = None;
+        // If more than one batch is non-empty, we can immediately return.
         for index in 0 .. self.merging.len() {
             if self.merging[index].is_double() { return false; }
-            if self.merging[index].len() > 0 { non_empty += 1; }
-            if non_empty > 1 { return false; }
+            if self.merging[index].len() > 0 {
+                if non_empty_pos.is_some() {
+                    return false;
+                } else {
+                    non_empty_pos = Some(index);
+                }
+            }
+        }
+        // Determine if the single batch could be compacted.
+        if let Some(pos) = non_empty_pos {
+            // Other variants would be surprising, given the above logic.
+            if let MergeState::Single(maybe_batch) = &self.merging[pos] {
+                // Potential compaction is only an issue for real batches.
+                if let Some(batch) = maybe_batch {
+                    // If the batch is obviously not logically compact, and would be more so if merged, ...
+                    let not_compacted = !<_ as PartialOrder>::less_equal(batch.upper(), batch.description().since());
+                    let would_compact = batch.description().since().borrow() != self.advance_frontier.borrow();
+                    if not_compacted && would_compact {
+                        return false;
+                    }
+                }
+            }
         }
         true
     }
