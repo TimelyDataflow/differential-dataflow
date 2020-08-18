@@ -617,17 +617,20 @@ pub mod sink {
     /// will *not* perform the consolidation on the stream's behalf. If this is not
     /// performed before calling the method, the recorded output may not be correctly
     /// reconstructed by readers.
-    pub fn build<G, BS, D, T, R>(
+    pub fn build<G, BS, D, T, R, S>(
         stream: &Stream<G, (D, T, R)>,
         sink_hash: u64,
         updates_sink: Weak<RefCell<BS>>,
         progress_sink: Weak<RefCell<BS>>,
+        mut serialize_u: S,
+        mut serialize_p: S,
     ) where
         G: Scope<Timestamp = T>,
         BS: BytesSink + 'static,
         D: ExchangeData + Hash + Serialize + for<'a> Deserialize<'a>,
         T: ExchangeData + Hash + Serialize + for<'a> Deserialize<'a> + Timestamp + Lattice,
         R: ExchangeData + Hash + Serialize + for<'a> Deserialize<'a>,
+        S: FnMut(&Message<D, T, R>, &mut Vec<u8>) + 'static,
     {
         // First we record the updates that stream in.
         // We can simply record all updates, under the presumption that the have been consolidated and so any record we see is in fact guaranteed to happen.
@@ -648,7 +651,8 @@ pub mod sink {
 
                         // Now record the update to the writer.
                         let message = Message::Updates(updates.replace(Vec::new()));
-                        let bytes = bincode::serialize(&message).unwrap();
+                        let mut bytes = Vec::new();
+                        serialize_u(&message, &mut bytes);
                         bytes_queue.push_back(bytes);
 
                         // Transmit timestamp counts downstream.
@@ -723,7 +727,8 @@ pub mod sink {
                             counts: announce,
                         };
                         let message = Message::<D, T, R>::Progress(progress);
-                        let bytes = bincode::serialize(&message).unwrap();
+                        let mut bytes = Vec::new();
+                        serialize_p(&message, &mut bytes);
                         bytes_queue.push_back(bytes);
 
                         // Advance our frontier to track our progress utterance.
