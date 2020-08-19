@@ -40,15 +40,9 @@ pub struct Progress<T> {
     pub counts: Vec<(T, usize)>,
 }
 
-/// A simple source of byte slices.
-pub trait BytesSource {
-    /// Returns either bytes, or indicates transient unavailability.
-    fn poll(&mut self) -> Option<&[u8]>;
-}
-
 /// An iterator that yields with a `None` every so often.
 pub struct YieldingIter<I> {
-    /// When set, a time from which
+    /// When set, a time after which we should return `None`.
     start: Option<std::time::Instant>,
     after: std::time::Duration,
     iter: I,
@@ -88,9 +82,9 @@ impl<I: Iterator> Iterator for YieldingIter<I> {
 }
 
 /// A simple sink for byte slices.
-pub trait BytesSink {
+pub trait Writer<T> {
     /// Returns an amount of time to wait before retrying, or `None` for success.
-    fn poll(&mut self, bytes: &[u8]) -> Option<Duration>;
+    fn poll(&mut self, item: &T) -> Option<Duration>;
     /// Indicates if the sink has committed all sent data and can be safely dropped.
     fn done(&self) -> bool;
 }
@@ -101,9 +95,11 @@ pub mod iterator {
     use super::{Message, Progress};
     use crate::lattice::Lattice;
     use std::hash::Hash;
+    use timely::order::PartialOrder;
     use timely::progress::{
         frontier::{AntichainRef, MutableAntichain},
         Antichain,
+        Timestamp,
     };
 
     /// A direct implementation of a deduplicating, re-ordering iterator.
@@ -192,7 +188,7 @@ pub mod iterator {
                 // A progress message is actionable if `self.progress_frontier` is greater or
                 // equal to the message's lower bound.
                 while let Some(position) = self.progress_queue.iter().position(|p| {
-                    <_ as timely::order::PartialOrder>::less_equal(
+                    <_ as PartialOrder>::less_equal(
                         &AntichainRef::new(&p.lower),
                         &self.progress_frontier.borrow(),
                     )
@@ -206,14 +202,14 @@ pub mod iterator {
                     self.messages_frontier
                         .update_iter(progress.counts.drain(..).map(|(t, c)| (t, c as i64)));
                     // Extend the frontier to be times greater or equal to both progress.upper and self.progress_frontier.
-                    let mut new_frontier = timely::progress::Antichain::new();
+                    let mut new_frontier = Antichain::new();
                     for time1 in progress.upper {
                         for time2 in self.progress_frontier.elements() {
                             new_frontier.insert(time1.join(time2));
                         }
                     }
                     self.progress_queue.retain(|p| {
-                        !<_ as timely::order::PartialOrder>::less_equal(
+                        !<_ as PartialOrder>::less_equal(
                             &AntichainRef::new(&p.upper),
                             &new_frontier.borrow(),
                         )
@@ -243,7 +239,7 @@ pub mod iterator {
     impl<D, T, R, I> Iter<I, D, T, R>
     where
         I: Iterator<Item = Message<D, T, R>>,
-        T: Hash + Ord + Lattice + Clone + timely::progress::Timestamp,
+        T: Hash + Ord + Lattice + Clone + Timestamp,
         D: Hash + Eq + Clone,
         R: Hash + Eq + Clone,
     {
@@ -302,8 +298,7 @@ pub mod source {
     use std::cell::RefCell;
     use std::hash::Hash;
     use std::rc::Rc;
-    use timely::dataflow::operators::{Capability, CapabilitySet};
-    use timely::dataflow::{Scope, Stream};
+    use timely::dataflow::{Scope, Stream, operators::{Capability, CapabilitySet}};
     use timely::progress::Timestamp;
     use timely::scheduling::SyncActivator;
 
@@ -453,14 +448,14 @@ pub mod source {
             // Filters may be pushed ahead of this operator, but because of deduplication we
             // may not push projections ahead of this operator (at least, not without fields
             // that are known to form keys, and even then only carefully).
-            let mut pending = std::collections::HashSet::new();
+            let mut pending = std::collections::HashMap::new();
             let mut change_batch = ChangeBatch::<T>::new();
             move |frontiers| {
                 // Thin out deduplication buffer.
                 // This is the moment in a more advanced implementation where we might send
                 // the data for the first time, maintaining only one copy of each update live
                 // at a time in the system.
-                pending.retain(|(_row, time, _diff)| frontiers[0].less_equal(time));
+                // pending.retain(|(_row, time), _diff| frontiers[0].less_equal(time));
 
                 // Deduplicate newly received updates, sending new updates and timestamp counts.
                 let mut changes = changes_out.activate();
@@ -468,13 +463,15 @@ pub mod source {
                 while let Some((capability, updates)) = input.next() {
                     let mut changes_session = changes.session(&capability);
                     let mut counts_session = counts.session(&capability);
-                    for update in updates.iter() {
-                        if frontiers[0].less_equal(&update.1) {
-                            if pending.insert(update.clone()) {
-                                change_batch.update((update.1).clone(), -1);
-                                changes_session.give(update.clone());
+                    for (data, time, diff) in updates.iter() {
+                        // if frontiers[0].less_equal(time) {
+                            if let Some(prior) = pending.insert((data.clone(), time.clone()), diff.clone()) {
+                                assert_eq!(&prior, diff);
+                            } else {
+                                change_batch.update(time.clone(), -1);
+                                changes_session.give((data.clone(), time.clone(), diff.clone()));
                             }
-                        }
+                        // }
                     }
                     if !change_batch.is_empty() {
                         counts_session.give_iterator(change_batch.drain());
@@ -597,19 +594,20 @@ pub mod source {
 /// Methods for recording update streams to binary bundles.
 pub mod sink {
 
-    use serde::{Deserialize, Serialize};
     use std::hash::Hash;
-
-    use crate::{lattice::Lattice, ExchangeData};
-    use timely::progress::Timestamp;
-
-    use super::{BytesSink, Message, Progress};
     use std::cell::RefCell;
     use std::rc::Weak;
-    use timely::dataflow::operators::generic::operator::Operator;
+
+    use serde::{Deserialize, Serialize};
+
+    use timely::order::PartialOrder;
+    use timely::progress::{Antichain, ChangeBatch, Timestamp};
     use timely::dataflow::{Scope, Stream};
-    use timely::progress::Antichain;
-    use timely::progress::ChangeBatch;
+    use timely::dataflow::channels::pact::{Exchange, Pipeline};
+    use timely::dataflow::operators::generic::{FrontieredInputHandle, builder_rc::OperatorBuilder};
+
+    use crate::{lattice::Lattice, ExchangeData};
+    use super::{Writer, Message, Progress};
 
     /// Constructs a sink, for recording the updates in `stream`.
     ///
@@ -617,31 +615,33 @@ pub mod sink {
     /// will *not* perform the consolidation on the stream's behalf. If this is not
     /// performed before calling the method, the recorded output may not be correctly
     /// reconstructed by readers.
-    pub fn build<G, BS, D, T, R, S>(
+    pub fn build<G, BS, D, T, R>(
         stream: &Stream<G, (D, T, R)>,
         sink_hash: u64,
         updates_sink: Weak<RefCell<BS>>,
         progress_sink: Weak<RefCell<BS>>,
-        mut serialize_u: S,
-        mut serialize_p: S,
     ) where
         G: Scope<Timestamp = T>,
-        BS: BytesSink + 'static,
+        BS: Writer<Message<D,T,R>> + 'static,
         D: ExchangeData + Hash + Serialize + for<'a> Deserialize<'a>,
         T: ExchangeData + Hash + Serialize + for<'a> Deserialize<'a> + Timestamp + Lattice,
         R: ExchangeData + Hash + Serialize + for<'a> Deserialize<'a>,
-        S: FnMut(&Message<D, T, R>, &mut Vec<u8>) + 'static,
     {
         // First we record the updates that stream in.
-        // We can simply record all updates, under the presumption that the have been consolidated and so any record we see is in fact guaranteed to happen.
-        let updates = stream.unary(
-            timely::dataflow::channels::pact::Pipeline,
-            "UpdateWriter",
-            move |_cap, _info| {
-                // Track the number of updates at each timestamp.
-                let mut timestamps: ChangeBatch<T> = timely::progress::ChangeBatch::new();
-                let mut bytes_queue = std::collections::VecDeque::new();
-                move |input, output| {
+        // We can simply record all updates, under the presumption that the have been consolidated
+        // and so any record we see is in fact guaranteed to happen.
+        let mut builder = OperatorBuilder::new("UpdatesWriter".to_owned(), stream.scope());
+        let reactivator = stream.scope().activator_for(&builder.operator_info().address);
+        let mut input = builder.new_input(&stream, Pipeline);
+        let (mut updates_out, updates) = builder.new_output();
+
+        builder.build_reschedule(
+            move |_capability| {
+                let mut timestamps = ChangeBatch::new();
+                let mut send_queue = std::collections::VecDeque::new();
+                move |_frontiers| {
+                    let mut output = updates_out.activate();
+
                     // We want to drain inputs always...
                     input.for_each(|capability, updates| {
                         // Write each update out, and record the timestamp.
@@ -650,10 +650,7 @@ pub mod sink {
                         }
 
                         // Now record the update to the writer.
-                        let message = Message::Updates(updates.replace(Vec::new()));
-                        let mut bytes = Vec::new();
-                        serialize_u(&message, &mut bytes);
-                        bytes_queue.push_back(bytes);
+                        send_queue.push_back(Message::Updates(updates.replace(Vec::new())));
 
                         // Transmit timestamp counts downstream.
                         output
@@ -665,32 +662,46 @@ pub mod sink {
                     // ... but needn't do anything more if our sink is closed.
                     if let Some(sink) = updates_sink.upgrade() {
                         let mut sink = sink.borrow_mut();
-                        while let Some(bytes) = bytes_queue.front() {
-                            if let Some(duration) = sink.poll(&bytes) {
-                                // TODO(frank): break out of loop; reschedule in `duration` time.
+                        while let Some(message) = send_queue.front() {
+                            if let Some(duration) = sink.poll(&message) {
+                                // Reschedule after `duration` and then bail.
+                                reactivator.activate_after(duration);
+                                return true;
                             } else {
-                                bytes_queue.pop_front();
+                                send_queue.pop_front();
                             }
                         }
+                        // Signal incompleteness if messages remain to be sent.
+                        !sink.done() || !send_queue.is_empty()
                     } else {
-                        bytes_queue.clear();
+                        // We have been terminated, but may still receive indefinite data.
+                        send_queue.clear();
+                        // Signal that there are no outstanding writes.
+                        false
                     }
                 }
             },
         );
 
+        // We use a lower-level builder here to get access to the operator address, for rescheduling.
+        let mut builder = OperatorBuilder::new("ProgressWriter".to_owned(), stream.scope());
+        let reactivator = stream.scope().activator_for(&builder.operator_info().address);
+        let mut input = builder.new_input(&updates, Exchange::new(move |_| sink_hash));
+        let should_write = stream.scope().index() == (sink_hash as usize) % stream.scope().peers();
+
         // We now record the numbers of updates at each timestamp between lower and upper bounds.
         // Track the advancing frontier, to know when to produce utterances.
-        let mut frontier: Antichain<T> = timely::progress::Antichain::from_elem(T::minimum());
+        let mut frontier = Antichain::from_elem(T::minimum());
         // Track accumulated counts for timestamps.
-        let mut timestamps = timely::progress::ChangeBatch::new();
+        let mut timestamps = ChangeBatch::new();
         // Stash for serialized data yet to send.
-        let mut bytes_queue = std::collections::VecDeque::new();
+        let mut send_queue = std::collections::VecDeque::new();
         let mut retain = Vec::new();
-        updates.sink(
-            timely::dataflow::channels::pact::Exchange::new(move |_| sink_hash),
-            "ProgressWriter",
-            move |input| {
+
+        builder.build_reschedule(|_capabilities| {
+            move |frontiers| {
+                let mut input = FrontieredInputHandle::new(&mut input, &frontiers[0]);
+
                 // We want to drain inputs no matter what.
                 // We could do this after the next step, as we are certain these timestamps will
                 // not be part of a closed frontier (as they have not yet been read). This has the
@@ -699,55 +710,61 @@ pub mod sink {
                     timestamps.extend(counts.iter().cloned());
                 });
 
-                if let Some(sink) = progress_sink.upgrade() {
-                    let mut sink = sink.borrow_mut();
+                if should_write {
+                    if let Some(sink) = progress_sink.upgrade() {
+                        let mut sink = sink.borrow_mut();
 
-                    // If our frontier advances strictly, we have the opportunity to issue a progress statement.
-                    if <_ as timely::order::PartialOrder>::less_than(
-                        &frontier.borrow(),
-                        &input.frontier.frontier(),
-                    ) {
-                        let new_frontier = input.frontier.frontier();
+                        // If our frontier advances strictly, we have the opportunity to issue a progress statement.
+                        if <_ as PartialOrder>::less_than(
+                            &frontier.borrow(),
+                            &input.frontier.frontier(),
+                        ) {
+                            let new_frontier = input.frontier.frontier();
 
-                        // Extract the timestamp counts to announce.
-                        let mut announce = Vec::new();
-                        for (time, count) in timestamps.drain() {
-                            if !new_frontier.less_equal(&time) {
-                                announce.push((time, count as usize));
-                            } else {
-                                retain.push((time, count));
+                            // Extract the timestamp counts to announce.
+                            let mut announce = Vec::new();
+                            for (time, count) in timestamps.drain() {
+                                if !new_frontier.less_equal(&time) {
+                                    announce.push((time, count as usize));
+                                } else {
+                                    retain.push((time, count));
+                                }
+                            }
+                            timestamps.extend(retain.drain(..));
+
+                            // Announce the lower bound, upper bound, and timestamp counts.
+                            let progress = Progress {
+                                lower: frontier.elements().to_vec(),
+                                upper: new_frontier.to_vec(),
+                                counts: announce,
+                            };
+                            send_queue.push_back(Message::Progress(progress));
+
+                            // Advance our frontier to track our progress utterance.
+                            frontier = input.frontier.frontier().to_owned();
+
+                            while let Some(message) = send_queue.front() {
+                                if let Some(duration) = sink.poll(&message) {
+                                    // Reschedule after `duration` and then bail.
+                                    reactivator.activate_after(duration);
+                                    // Signal that work remains to be done.
+                                    return true;
+                                } else {
+                                    send_queue.pop_front();
+                                }
                             }
                         }
-                        timestamps.extend(retain.drain(..));
-
-                        // Announce the lower bound, upper bound, and timestamp counts.
-                        let progress = Progress {
-                            lower: frontier.elements().to_vec(),
-                            upper: new_frontier.to_vec(),
-                            counts: announce,
-                        };
-                        let message = Message::<D, T, R>::Progress(progress);
-                        let mut bytes = Vec::new();
-                        serialize_p(&message, &mut bytes);
-                        bytes_queue.push_back(bytes);
-
-                        // Advance our frontier to track our progress utterance.
-                        frontier = input.frontier.frontier().to_owned();
-
-                        while let Some(bytes) = bytes_queue.front() {
-                            if let Some(duration) = sink.poll(&bytes) {
-                                // TODO(frank): break out of loop; reschedule in `duration` time.
-                            } else {
-                                bytes_queue.pop_front();
-                            }
-                        }
+                        // Signal incompleteness if messages remain to be sent.
+                        !sink.done() || !send_queue.is_empty()
+                    } else {
+                        timestamps.clear();
+                        send_queue.clear();
+                        // Signal that there are no outstanding writes.
+                        false
                     }
-                } else {
-                    timestamps.clear();
-                    bytes_queue.clear();
-                }
-            },
-        )
+                } else { false }
+            }
+        });
     }
 }
 
@@ -858,10 +875,7 @@ pub mod sink {
 //             self.source
 //                 .consumer
 //                 .poll(std::time::Duration::from_millis(0))
-//                 .and_then(|result| {
-//                     // println!("Result: {:?}", result);
-//                     result.ok()
-//                 })
+//                 .and_then(|result| result.ok())
 //                 .and_then(|message| {
 //                     message.payload().and_then(|message| bincode::deserialize::<super::Message<D, T, R>>(message).ok())
 //                 })
