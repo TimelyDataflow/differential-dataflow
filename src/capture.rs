@@ -455,7 +455,7 @@ pub mod source {
                 // This is the moment in a more advanced implementation where we might send
                 // the data for the first time, maintaining only one copy of each update live
                 // at a time in the system.
-                // pending.retain(|(_row, time), _diff| frontiers[0].less_equal(time));
+                pending.retain(|(_row, time), _diff| frontiers[0].less_equal(time));
 
                 // Deduplicate newly received updates, sending new updates and timestamp counts.
                 let mut changes = changes_out.activate();
@@ -464,14 +464,14 @@ pub mod source {
                     let mut changes_session = changes.session(&capability);
                     let mut counts_session = counts.session(&capability);
                     for (data, time, diff) in updates.iter() {
-                        // if frontiers[0].less_equal(time) {
+                        if frontiers[0].less_equal(time) {
                             if let Some(prior) = pending.insert((data.clone(), time.clone()), diff.clone()) {
                                 assert_eq!(&prior, diff);
                             } else {
                                 change_batch.update(time.clone(), -1);
                                 changes_session.give((data.clone(), time.clone(), diff.clone()));
                             }
-                        // }
+                        }
                     }
                     if !change_batch.is_empty() {
                         counts_session.give_iterator(change_batch.drain());
