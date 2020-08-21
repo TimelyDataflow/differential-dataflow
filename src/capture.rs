@@ -278,8 +278,7 @@ pub mod iterator {
             to_send.extend(updates.iter().cloned());
             to_send.extend(progress.iter().cloned());
         }
-        use rand::seq::SliceRandom;
-        (&mut to_send[..]).shuffle(&mut rng);
+        rng.shuffle(&mut to_send[..]);
 
         let mut Iter = Iter::new(to_send.into_iter());
 
