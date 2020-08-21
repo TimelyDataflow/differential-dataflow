@@ -255,38 +255,6 @@ pub mod iterator {
             }
         }
     }
-
-    #[test]
-    fn test_order() {
-        let mut updates = (0..10)
-            .map(|i| Message::Updates(vec![((), i, 0)]))
-            .collect::<Vec<_>>();
-        let mut progress = (0..10)
-            .map(|i| {
-                Message::Progress(Progress {
-                    lower: vec![i],
-                    upper: vec![i + 1],
-                    counts: vec![(i, 1)],
-                })
-            })
-            .collect::<Vec<_>>();
-
-        let mut rng = rand::thread_rng();
-
-        let mut to_send = Vec::new();
-        for _ in 0..10 {
-            to_send.extend(updates.iter().cloned());
-            to_send.extend(progress.iter().cloned());
-        }
-        rng.shuffle(&mut to_send[..]);
-
-        let mut Iter = Iter::new(to_send.into_iter());
-
-        for (u, p) in Iter {
-            println!("U: {:?}", u);
-            println!("P: {:?}", p);
-        }
-    }
 }
 
 /// Methods for recovering update streams from binary bundles.
