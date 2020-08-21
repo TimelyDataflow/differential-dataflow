@@ -111,3 +111,4 @@ pub mod difference;
 pub mod collection;
 pub mod logging;
 pub mod consolidation;
+pub mod capture;

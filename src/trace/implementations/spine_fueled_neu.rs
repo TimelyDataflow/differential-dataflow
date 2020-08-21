@@ -122,8 +122,8 @@ where
         // This can happen with operators that are written to expect the ability to acquire cursors
         // for their prior frontiers, and which start at `[T::minimum()]`, such as `Reduce`, sadly.
         if upper.less_equal(&T::minimum()) {
-            let mut cursors = Vec::new();
-            let mut storage = Vec::new();
+            let cursors = Vec::new();
+            let storage = Vec::new();
             return Some((CursorList::new(cursors, &storage), storage));
         }
 
