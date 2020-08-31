@@ -135,7 +135,7 @@ pub use self::pair::DiffPair;
 mod pair {
 
 	use std::ops::{AddAssign, Neg, Mul};
-	use super::Semigroup;
+	use super::{Semigroup, Monoid};
 
 	/// The difference defined by a pair of difference elements.
 	///
@@ -194,6 +194,15 @@ mod pair {
 		}
 	}
 
+	impl<R1: Monoid, R2: Monoid> Monoid for DiffPair<R1, R2> {
+		fn zero() -> Self {
+			Self {
+				element1: R1::zero(),
+				element2: R2::zero(),
+			}
+		}
+	}
+
 	// // TODO: This currently causes rustc to trip a recursion limit, because who knows why.
 	// impl<R1: Diff, R2: Diff> Mul<DiffPair<R1,R2>> for isize
 	// where isize: Mul<R1>, isize: Mul<R2>, <isize as Mul<R1>>::Output: Diff, <isize as Mul<R2>>::Output: Diff {
@@ -211,7 +220,7 @@ pub use self::vector::DiffVector;
 mod vector {
 
 	use std::ops::{AddAssign, Neg, Mul};
-	use super::Semigroup;
+	use super::{Semigroup, Monoid};
 
 	/// A variable number of accumulable updates.
 	#[derive(Abomonation, Ord, PartialOrd, Eq, PartialEq, Debug, Clone, Serialize, Deserialize)]
@@ -292,6 +301,12 @@ mod vector {
 				.collect();
 
 			DiffVector { buffer }
+		}
+	}
+
+	impl<R: Semigroup> Monoid for DiffVector<R> {
+		fn zero() -> Self {
+			Self { buffer: Vec::new() }
 		}
 	}
 }
