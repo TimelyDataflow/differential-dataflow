@@ -238,6 +238,13 @@ where
                                     let std::cmp::Reverse((time, key, val)) = priority_queue.pop().expect("Priority queue just ensured non-empty");
                                     to_process.entry(key).or_insert(Vec::new()).push((time, std::cmp::Reverse(val)));
                                 }
+                                // Reduce the allocation behind the priority queue if it is presently excessive.
+                                // A factor of four is used to avoid repeated doubling and shrinking.
+                                // TODO: if the queue were a sequence of geometrically sized allocations, we could
+                                // shed the additional capacity without copying any data.
+                                if priority_queue.capacity() > 4 * priority_queue.len() {
+                                    priority_queue.shrink_to_fit();
+                                }
 
                                 // Put (key, list) into key order, to match cursor enumeration.
                                 let mut to_process = to_process.into_iter().collect::<Vec<_>>();
