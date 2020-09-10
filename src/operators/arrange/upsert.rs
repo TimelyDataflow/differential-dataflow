@@ -241,7 +241,7 @@ where
                                 // Reduce the allocation behind the priority queue if it is presently excessive.
                                 // A factor of four is used to avoid repeated doubling and shrinking.
                                 // TODO: if the queue were a sequence of geometrically sized allocations, we could
-                                // shed the additional copacity without copying any data.
+                                // shed the additional capacity without copying any data.
                                 if priority_queue.capacity() > 4 * priority_queue.len() {
                                     priority_queue.shrink_to_fit();
                                 }
