@@ -71,6 +71,8 @@
 //! of the new and old counts of the old and new degrees of the affected node).
 
 #![forbid(missing_docs)]
+#![allow(array_into_iter)]
+
 
 use std::fmt::Debug;
 
@@ -92,6 +94,7 @@ impl<T: timely::ExchangeData + Ord + Debug> ExchangeData for T { }
 
 extern crate fnv;
 extern crate timely;
+extern crate columnation;
 
 #[macro_use]
 extern crate abomonation_derive;

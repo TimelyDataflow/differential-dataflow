@@ -13,6 +13,7 @@ pub mod implementations;
 pub mod layers;
 pub mod wrappers;
 
+use timely::communication::message::RefOrMut;
 use timely::progress::{Antichain, frontier::AntichainRef};
 use timely::progress::Timestamp;
 
@@ -290,7 +291,7 @@ pub trait Batcher<Output: Batch> {
     /// Allocates a new empty batcher.
     fn new() -> Self;
     /// Adds an unordered batch of elements to the batcher.
-    fn push_batch(&mut self, batch: &mut Vec<((Output::Key, Output::Val), Output::Time, Output::R)>);
+    fn push_batch(&mut self, batch: RefOrMut<Vec<((Output::Key, Output::Val), Output::Time, Output::R)>>);
     /// Returns all updates not greater or equal to an element of `upper`.
     fn seal(&mut self, upper: Antichain<Output::Time>) -> Output;
     /// Returns the lower envelope of contained update times.
@@ -336,6 +337,7 @@ pub trait Merger<Output: Batch> {
 pub mod rc_blanket_impls {
 
     use std::rc::Rc;
+    use timely::communication::message::RefOrMut;
 
     use timely::progress::{Antichain, frontier::AntichainRef};
     use super::{Batch, BatchReader, Batcher, Builder, Merger, Cursor, Description};
@@ -415,7 +417,7 @@ pub mod rc_blanket_impls {
     /// Functionality for collecting and batching updates.
     impl<B:Batch> Batcher<Rc<B>> for RcBatcher<B> {
         fn new() -> Self { RcBatcher { batcher: <B::Batcher as Batcher<B>>::new() } }
-        fn push_batch(&mut self, batch: &mut Vec<((B::Key, B::Val), B::Time, B::R)>) { self.batcher.push_batch(batch) }
+        fn push_batch(&mut self, batch: RefOrMut<Vec<((B::Key, B::Val), B::Time, B::R)>>) { self.batcher.push_batch(batch) }
         fn seal(&mut self, upper: Antichain<B::Time>) -> Rc<B> { Rc::new(self.batcher.seal(upper)) }
         fn frontier(&mut self) -> timely::progress::frontier::AntichainRef<B::Time> { self.batcher.frontier() }
     }
@@ -450,6 +452,7 @@ pub mod abomonated_blanket_impls {
 
     use abomonation::{Abomonation, measure};
     use abomonation::abomonated::Abomonated;
+    use timely::communication::message::RefOrMut;
     use timely::progress::{Antichain, frontier::AntichainRef};
 
     use super::{Batch, BatchReader, Batcher, Builder, Merger, Cursor, Description};
@@ -530,7 +533,7 @@ pub mod abomonated_blanket_impls {
     /// Functionality for collecting and batching updates.
     impl<B:Batch+Abomonation> Batcher<Abomonated<B,Vec<u8>>> for AbomonatedBatcher<B> {
         fn new() -> Self { AbomonatedBatcher { batcher: <B::Batcher as Batcher<B>>::new() } }
-        fn push_batch(&mut self, batch: &mut Vec<((B::Key, B::Val), B::Time, B::R)>) { self.batcher.push_batch(batch) }
+        fn push_batch(&mut self, batch: RefOrMut<Vec<((B::Key, B::Val), B::Time, B::R)>>) { self.batcher.push_batch(batch) }
         fn seal(&mut self, upper: Antichain<B::Time>) -> Abomonated<B, Vec<u8>> {
             let batch = self.batcher.seal(upper);
             let mut bytes = Vec::with_capacity(measure(&batch));
