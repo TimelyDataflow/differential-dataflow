@@ -78,5 +78,5 @@ fn main() {
 }
 ```
 
-Our computation now contains only one copy of the potentially large and fast-changing `knows` collection. This not only saves on memory for collection, but is also saves on the computation and communication required to maintain the indexed representation as the collection changes.
+Our computation now contains only one copy of the potentially large and fast-changing `knows` collection. This not only saves on memory for collection, but it also saves on the computation and communication required to maintain the indexed representation as the collection changes.
 
