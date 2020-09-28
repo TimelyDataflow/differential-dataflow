@@ -334,8 +334,10 @@ pub mod source {
 
         // Step 1: The MESSAGES operator.
         let mut messages_op = OperatorBuilder::new("CDCV2_Messages".to_string(), scope.clone());
-        let activator = scope.sync_activator_for(&messages_op.operator_info().address);
-        let activator2 = scope.activator_for(&messages_op.operator_info().address);
+        let address = messages_op.operator_info().address;
+        let activator = scope.sync_activator_for(&address);
+        let activator2 = scope.activator_for(&address);
+        let activations = scope.activations();
         let mut source = source_builder(activator);
         let (mut updates_out, updates) = messages_op.new_output();
         let (mut progress_out, progress) = messages_op.new_output();
@@ -343,7 +345,9 @@ pub mod source {
         messages_op.build(move |capabilities| {
             // Read messages from some source; shuffle them to UPDATES and PROGRESS; share capability with FEEDBACK.
             // First, wrap capabilities in a rc refcell so that they can be downgraded to weak references.
+            use timely::scheduling::activate::ActivateOnDrop;
             let capability_sets = (CapabilitySet::from_elem(capabilities[0].clone()), CapabilitySet::from_elem(capabilities[1].clone()));
+            let capability_sets = ActivateOnDrop::new(capability_sets, Rc::new(address), activations);
             let strong_capabilities = Rc::new(RefCell::new(capability_sets));
             let local_capabilities = Rc::downgrade(&strong_capabilities);
             tokens_mut.push(strong_capabilities);
@@ -353,7 +357,7 @@ pub mod source {
             move |_frontiers| {
                 // First check to ensure that we haven't been terminated by someone dropping our tokens.
                 if let Some(capabilities) = local_capabilities.upgrade() {
-                    let (updates_caps, progress_caps) = &mut *capabilities.borrow_mut();
+                    let (updates_caps, progress_caps) = &mut **capabilities.borrow_mut();
                     // Consult our shared frontier, and ensure capabilities are downgraded to it.
                     let shared_frontier = local_frontier.borrow();
                     updates_caps.downgrade(&shared_frontier.frontier());
