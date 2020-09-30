@@ -701,7 +701,7 @@ where
     G::Timestamp: Lattice+Ord
 {
     fn arrange_by_key(&self) -> Arranged<G, TraceAgent<DefaultValTrace<K, V, G::Timestamp, R>>> {
-        self.arrange()
+        self.arrange_named("ArrangeByKey")
     }
 }
 
@@ -729,6 +729,6 @@ where
 {
     fn arrange_by_self(&self) -> Arranged<G, TraceAgent<DefaultKeyTrace<K, G::Timestamp, R>>> {
         self.map(|k| (k, ()))
-            .arrange()
+            .arrange_named("ArrangeBySelf")
     }
 }
