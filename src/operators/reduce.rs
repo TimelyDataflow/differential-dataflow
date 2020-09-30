@@ -81,7 +81,7 @@ impl<G, K, V, R> Reduce<G, K, V, R> for Collection<G, (K, V), R>
  {
     fn reduce_named<L, V2: Data, R2: Abelian>(&self, name: &str, logic: L) -> Collection<G, (K, V2), R2>
         where L: FnMut(&K, &[(&V, R)], &mut Vec<(V2, R2)>)+'static {
-        self.arrange_by_key()
+        self.arrange_by_key_named(&format!("Arrange: {}", name))
             .reduce_named(name, logic)
     }
 }
@@ -170,7 +170,7 @@ pub trait Threshold<G: Scope, K: Data, R1: Semigroup> where G::Timestamp: Lattic
 impl<G: Scope, K: ExchangeData+Hashable, R1: ExchangeData+Semigroup> Threshold<G, K, R1> for Collection<G, K, R1>
 where G::Timestamp: Lattice+Ord {
     fn threshold_named<R2: Abelian, F: FnMut(&K,&R1)->R2+'static>(&self, name: &str, thresh: F) -> Collection<G, K, R2> {
-        self.arrange_by_self()
+        self.arrange_by_self_named(&format!("Arrange: {}", name))
             .threshold_named(name, thresh)
     }
 }
@@ -218,7 +218,7 @@ where
     G::Timestamp: Lattice+Ord,
 {
     fn count(&self) -> Collection<G, (K, R), isize> {
-        self.arrange_by_self()
+        self.arrange_by_self_named("Arrange: Count")
             .count()
     }
 }
@@ -320,7 +320,7 @@ where
             T2::Cursor: Cursor<K, T2::Val, G::Timestamp, T2::R>,
             L: FnMut(&K, &[(&V, R)], &mut Vec<(T2::Val,T2::R)>, &mut Vec<(T2::Val, T2::R)>)+'static
     {
-        self.arrange_by_key()
+        self.arrange_by_key_named(&format!("Arrange: {}", name))
             .reduce_core(name, logic)
     }
 }

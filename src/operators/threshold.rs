@@ -97,7 +97,7 @@ where G::Timestamp: TotalOrder+Lattice+Ord {
         R2: Semigroup,
         F: FnMut(&K,&R,Option<&R>)->Option<R2>+'static,
     {
-        self.arrange_by_self()
+        self.arrange_by_self_named("Arrange: ThresholdTotal")
             .threshold_semigroup(thresh)
     }
 }

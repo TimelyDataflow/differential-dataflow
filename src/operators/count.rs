@@ -54,7 +54,7 @@ pub trait CountTotal<G: Scope, K: ExchangeData, R: Semigroup> where G::Timestamp
 impl<G: Scope, K: ExchangeData+Hashable, R: ExchangeData+Semigroup> CountTotal<G, K, R> for Collection<G, K, R>
 where G::Timestamp: TotalOrder+Lattice+Ord {
     fn count_total(&self) -> Collection<G, (K, R), isize> {
-        self.arrange_by_self()
+        self.arrange_by_self_named("Arrange: CountTotal")
             .count_total()
     }
 }
