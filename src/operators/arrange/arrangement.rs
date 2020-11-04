@@ -214,15 +214,31 @@ where
     ///
     /// The supplied logic may produce an iterator over output values, allowing either
     /// filtering or flat mapping as part of the extraction.
-    pub fn flat_map_ref<I, L>(&self, mut logic: L) -> Collection<G, I::Item, Tr::R>
+    pub fn flat_map_ref<I, L>(&self, logic: L) -> Collection<G, I::Item, Tr::R>
         where
             Tr::R: Semigroup,
             I: IntoIterator,
             I::Item: Data,
             L: FnMut(&Tr::Key, &Tr::Val) -> I+'static,
     {
-        self.stream.unary(Pipeline, "AsCollection", move |_,_| move |input, output| {
+        Self::flat_map_batches(&self.stream, logic)
+    }
 
+    /// Extracts elements from a stream of batches as a collection.
+    ///
+    /// The supplied logic may produce an iterator over output values, allowing either
+    /// filtering or flat mapping as part of the extraction.
+    ///
+    /// This method exists for streams of batches without the corresponding arrangement.
+    /// If you have the arrangement, its `flat_map_ref` method is equivalent to this.
+    pub fn flat_map_batches<I, L>(stream: &Stream<G, Tr::Batch>, mut logic: L) -> Collection<G, I::Item, Tr::R>
+    where
+        Tr::R: Semigroup,
+        I: IntoIterator,
+        I::Item: Data,
+        L: FnMut(&Tr::Key, &Tr::Val) -> I+'static,
+    {
+        stream.unary(Pipeline, "AsCollection", move |_,_| move |input, output| {
             input.for_each(|time, data| {
                 let mut session = output.session(&time);
                 for wrapper in data.iter() {
