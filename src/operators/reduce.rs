@@ -5,9 +5,11 @@
 //! to the key and the list of values.
 //! The function is expected to populate a list of output values.
 
+use std::ops::Mul;
+
 use hashable::Hashable;
 use ::{Data, ExchangeData, Collection};
-use ::difference::{Semigroup, Abelian};
+use ::difference::{Semigroup, Abelian, Monoid};
 
 use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
@@ -18,6 +20,7 @@ use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Capability;
 
 use operators::arrange::{Arranged, ArrangeByKey, ArrangeBySelf, TraceAgent};
+use operators::join::JoinCore;
 use lattice::Lattice;
 use trace::{Batch, BatchReader, Cursor, Trace, Builder};
 use trace::cursor::CursorList;
@@ -233,6 +236,62 @@ where
     fn count(&self) -> Collection<G, (K, R), isize> {
         self.reduce_abelian::<_,DefaultValTrace<_,_,_,_>>("Count", |_k,s,t| t.push((s[0].1.clone(), 1)))
             .as_collection(|k,c| (k.clone(), c.clone()))
+    }
+}
+
+/// Extension trait for the `histogram` differential dataflow method.
+pub trait Histogram<G: Scope, K: Data, R: Semigroup>
+where
+    G::Timestamp: Lattice + Ord,
+{
+    /// Counts the number of occurrences of each element in the `keys` argument.
+    ///
+    /// The output will only include counts for keys in the `keys` argument
+    /// and not for any others. It will include a `0`-valued entry for keys
+    /// which don't appear in the data.
+    /// 
+    /// This is logically equivalent to:
+    /// ```ignore
+    /// self.semijoin(keys).count().concat(keys.antijoin(self.distinct()).map(|x| (x, 0)))
+    /// ```
+    /// 
+    /// `histogram` is awkward when `keys` is not distinct
+    fn histogram(&self, keys: &Self) -> Collection<G, (K, R), isize>;
+}
+
+impl<
+        G: Scope,
+        K: ExchangeData + Hashable,
+        R: ExchangeData + Monoid + Mul<R, Output = R> + Abelian,
+    > Histogram<G, K, R> for Collection<G, K, R>
+where
+    G::Timestamp: Lattice + Ord,
+    isize: Mul<R, Output = isize>,
+{
+    fn histogram(&self, keys: &Self) -> Collection<G, (K, R), isize> {
+        let arranged_self = self.arrange_by_self_named("Arrange: Histogram Values");
+        let arranged_keys = keys.arrange_by_self_named("Arrange: Histogram Keys");
+        arranged_self.histogram(&arranged_keys)
+    }
+}
+
+impl<G: Scope, K: ExchangeData + Hashable, T1, R: ExchangeData + Monoid + Mul<R, Output = R>>
+    Histogram<G, K, R> for Arranged<G, T1>
+where
+    G::Timestamp: Lattice + Ord,
+    T1: TraceReader<Key = K, Val = (), Time = G::Timestamp, R = R> + Clone + 'static,
+    T1::Batch: BatchReader<K, (), G::Timestamp, R>,
+    T1::Cursor: Cursor<K, (), G::Timestamp, R>,
+    isize: Mul<R, Output = isize>,
+{
+    fn histogram(&self, keys: &Self) -> Collection<G, (K, R), isize> {
+        let semijoin_counts = self.join_core(&keys, |k, (), ()| Some(k.clone())).count();
+        let key_zeros = keys
+            .as_collection(|k, ()| (k.clone(), Monoid::zero()))
+            .explode(|x| Some((x, 1)));
+        let semijoin_zeros = semijoin_counts.map(|(k, _)| (k, Monoid::zero()));
+        let antijoin_zeros = key_zeros.concat(&semijoin_zeros.negate());
+        semijoin_counts.concat(&antijoin_zeros)
     }
 }
 
