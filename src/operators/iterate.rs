@@ -188,12 +188,17 @@ impl<G: Scope, D: Data, R: Abelian> Variable<G, D, R> where G::Timestamp: Lattic
 
     /// Adds a new source of data to the `Variable`.
     pub fn set(self, result: &Collection<G, D, R>) -> Collection<G, D, R> {
+        let in_result = self.source.negate().concat(result);
+        self.set_concat(&in_result)
+    }
+
+
+    /// Concat a new source of data to the data already in the `Variable`.
+    pub fn set_concat(self, result: &Collection<G, D, R>) -> Collection<G, D, R> {
         let step = self.step;
-        self.source
-            .negate()
-            .concat(result)
+        result
             .inner
-            .flat_map(move |(x,t,d)| step.results_in(&t).map(|t| (x,t,d)))
+            .flat_map(move |(x, t, d)| step.results_in(&t).map(|t| (x, t, d)))
             .connect_loop(self.feedback);
 
         self.collection
