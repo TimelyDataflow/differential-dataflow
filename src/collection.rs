@@ -352,6 +352,17 @@ impl<G: Scope, D: Data, R: Semigroup> Collection<G, D, R> where G::Timestamp: Da
             .as_collection()
     }
 
+    /// Brings a Collection into a nested region.
+    ///
+    /// This method is a specialization of `enter` to the case where the nested scope is a region.
+    /// It removes the need for an operator that adjusts the timestamp.
+    pub fn enter_region<'a>(&self, child: &Child<'a, G, <G as ScopeParent>::Timestamp>) -> Collection<Child<'a, G, <G as ScopeParent>::Timestamp>, D, R>
+    {
+        self.inner
+            .enter(child)
+            .as_collection()
+    }
+
     /// Delays each difference by a supplied function.
     ///
     /// It is assumed that `func` only advances timestamps; this is not verified, and things may go horribly
@@ -528,6 +539,19 @@ where
         self.inner
             .leave()
             .map(|(data, time, diff)| (data, time.to_outer(), diff))
+            .as_collection()
+    }
+}
+
+impl<'a, G: Scope, D: Data, R: Semigroup> Collection<Child<'a, G, G::Timestamp>, D, R>
+{
+    /// Returns the value of a Collection from a nested region to its containing scope.
+    ///
+    /// This method is a specialization of `leave` to the case that of a nested region.
+    /// It removes the need for an operator that adjusts the timestamp.
+    pub fn leave_region(&self) -> Collection<G, D, R> {
+        self.inner
+            .leave()
             .as_collection()
     }
 }
