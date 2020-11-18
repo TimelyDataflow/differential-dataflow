@@ -198,7 +198,7 @@ impl<G: Scope, D: Data, R: Abelian> Variable<G, D, R> where G::Timestamp: Lattic
         let step = self.step;
         result
             .inner
-            .flat_map(move |(x, t, d)| step.results_in(&t).map(|t| (x, t, d)))
+            .flat_map(move |(x,t,d)| step.results_in(&t).map(|t| (x,t,d)))
             .connect_loop(self.feedback);
 
         self.collection
