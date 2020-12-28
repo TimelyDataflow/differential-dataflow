@@ -30,7 +30,7 @@ You should only need to add those last two lines there, which bring in dependenc
 If you would like to point at the most current code release, hosted on github, you can replace the dependencies with:
 
         [dependencies]
-        timely = { git = "https://github.com/TimelyDataflow/timely" }
+        timely = { git = "https://github.com/TimelyDataflow/timely-dataflow" }
         differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow" }
 
 
