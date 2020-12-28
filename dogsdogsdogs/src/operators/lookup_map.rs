@@ -37,7 +37,7 @@ where
     Tr::Batch: BatchReader<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
     Tr::Cursor: Cursor<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
     Tr::R: Monoid+ExchangeData,
-    F: Fn(&D, &mut Tr::Key)+Clone+'static,
+    F: FnMut(&D, &mut Tr::Key)+Clone+'static,
     D: ExchangeData,
     R: ExchangeData+Monoid,
     DOut: Clone+'static,
