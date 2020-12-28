@@ -23,7 +23,7 @@ pub fn lookup_map<G, D, R, Tr, F, DOut, ROut, S>(
     prefixes: &Collection<G, D, R>,
     mut arrangement: Arranged<G, Tr>,
     key_selector: F,
-    output_func: S,
+    mut output_func: S,
     supplied_key0: Tr::Key,
     supplied_key1: Tr::Key,
     supplied_key2: Tr::Key,
@@ -42,7 +42,7 @@ where
     R: ExchangeData+Monoid,
     DOut: Clone+'static,
     ROut: Monoid,
-    S: Fn(&D, &R, &Tr::Val, &Tr::R)->(DOut, ROut)+'static,
+    S: FnMut(&D, &R, &Tr::Val, &Tr::R)->(DOut, ROut)+'static,
 {
     // No need to block physical merging for this operator.
     arrangement.trace.distinguish_since(Antichain::new().borrow());
@@ -50,8 +50,8 @@ where
     let propose_stream = arrangement.stream;
 
     let mut stash = HashMap::new();
-    let logic1 = key_selector.clone();
-    let logic2 = key_selector.clone();
+    let mut logic1 = key_selector.clone();
+    let mut logic2 = key_selector.clone();
 
     let mut buffer = Vec::new();
 
