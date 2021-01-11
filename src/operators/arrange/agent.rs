@@ -180,7 +180,7 @@ where
     /// extern crate timely;
     /// extern crate differential_dataflow;
     ///
-    /// use timely::Configuration;
+    /// use timely::Config;
     /// use differential_dataflow::input::Input;
     /// use differential_dataflow::operators::arrange::ArrangeBySelf;
     /// use differential_dataflow::operators::reduce::Reduce;
@@ -189,7 +189,7 @@ where
     /// use differential_dataflow::hashable::OrdWrapper;
     ///
     /// fn main() {
-    ///     ::timely::execute(Configuration::Thread, |worker| {
+    ///     ::timely::execute(Config::thread(), |worker| {
     ///
     ///         // create a first dataflow
     ///         let mut trace = worker.dataflow::<u32,_,_>(|scope| {
@@ -238,7 +238,7 @@ where
     /// extern crate timely;
     /// extern crate differential_dataflow;
     ///
-    /// use timely::Configuration;
+    /// use timely::Config;
     /// use timely::dataflow::ProbeHandle;
     /// use timely::dataflow::operators::Probe;
     /// use differential_dataflow::input::InputSession;
@@ -249,7 +249,7 @@ where
     /// use differential_dataflow::hashable::OrdWrapper;
     ///
     /// fn main() {
-    ///     ::timely::execute(Configuration::Thread, |worker| {
+    ///     ::timely::execute(Config::thread(), |worker| {
     ///
     ///         let mut input = InputSession::<_,(),isize>::new();
     ///         let mut probe = ProbeHandle::new();
@@ -349,7 +349,7 @@ where
     /// extern crate timely;
     /// extern crate differential_dataflow;
     ///
-    /// use timely::Configuration;
+    /// use timely::Config;
     /// use timely::progress::frontier::AntichainRef;
     /// use timely::dataflow::ProbeHandle;
     /// use timely::dataflow::operators::Probe;
@@ -364,7 +364,7 @@ where
     /// use differential_dataflow::input::Input;
     ///
     /// fn main() {
-    ///     ::timely::execute(Configuration::Thread, |worker| {
+    ///     ::timely::execute(Config::thread(), |worker| {
     ///
     ///         let mut probe = ProbeHandle::new();
     ///

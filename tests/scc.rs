@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 use std::mem;
 
-use timely::Configuration;
+use timely::Config;
 
 use timely::dataflow::*;
 use timely::dataflow::operators::Capture;
@@ -24,11 +24,11 @@ use differential_dataflow::lattice::Lattice;
 type Node = usize;
 type Edge = (Node, Node);
 
-#[test] fn scc_10_20_1000() { test_sizes(10, 20, 1000, Configuration::Process(3)); }
-#[test] fn scc_100_200_10() { test_sizes(100, 200, 10, Configuration::Process(3)); }
-#[test] fn scc_100_2000_1() { test_sizes(100, 2000, 1, Configuration::Process(3)); }
+#[test] fn scc_10_20_1000() { test_sizes(10, 20, 1000, Config::process(3)); }
+#[test] fn scc_100_200_10() { test_sizes(100, 200, 10, Config::process(3)); }
+#[test] fn scc_100_2000_1() { test_sizes(100, 2000, 1, Config::process(3)); }
 
-fn test_sizes(nodes: usize, edges: usize, rounds: usize, config: Configuration) {
+fn test_sizes(nodes: usize, edges: usize, rounds: usize, config: Config) {
 
     let mut edge_list = Vec::new();
 
@@ -167,7 +167,7 @@ fn assign(node: usize, root: usize, reverse: &HashMap<usize, Vec<usize>>, compon
 
 fn scc_differential(
     edges_list: Vec<((usize, usize), usize, isize)>,
-    config: Configuration,
+    config: Config,
 )
 -> Vec<((usize, usize), usize, isize)>
 {

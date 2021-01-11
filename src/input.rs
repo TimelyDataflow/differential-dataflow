@@ -25,11 +25,11 @@ pub trait Input : TimelyInput {
     /// extern crate timely;
     /// extern crate differential_dataflow;
     ///
-    /// use timely::Configuration;
+    /// use timely::Config;
     /// use differential_dataflow::input::Input;
     ///
     /// fn main() {
-    ///     ::timely::execute(Configuration::Thread, |worker| {
+    ///     ::timely::execute(Config::thread(), |worker| {
     ///
     ///			let (mut handle, probe) = worker.dataflow::<(),_,_>(|scope| {
     ///				// create input handle and collection.
@@ -56,11 +56,11 @@ pub trait Input : TimelyInput {
     /// extern crate timely;
     /// extern crate differential_dataflow;
     ///
-    /// use timely::Configuration;
+    /// use timely::Config;
     /// use differential_dataflow::input::Input;
     ///
     /// fn main() {
-    ///     ::timely::execute(Configuration::Thread, |worker| {
+    ///     ::timely::execute(Config::thread(), |worker| {
     ///
     ///			let (mut handle, probe) = worker.dataflow::<(),_,_>(|scope| {
     ///				// create input handle and collection.
@@ -87,11 +87,11 @@ pub trait Input : TimelyInput {
     /// extern crate timely;
     /// extern crate differential_dataflow;
     ///
-    /// use timely::Configuration;
+    /// use timely::Config;
     /// use differential_dataflow::input::Input;
     ///
     /// fn main() {
-    ///     ::timely::execute(Configuration::Thread, |worker| {
+    ///     ::timely::execute(Config::thread(), |worker| {
     ///
     ///         let (mut handle, probe) = worker.dataflow::<(),_,_>(|scope| {
     ///             // create input handle and collection.
@@ -150,11 +150,11 @@ impl<G: TimelyInput> Input for G where <G as ScopeParent>::Timestamp: Lattice {
 /// extern crate timely;
 /// extern crate differential_dataflow;
 ///
-/// use timely::Configuration;
+/// use timely::Config;
 /// use differential_dataflow::input::Input;
 ///
 /// fn main() {
-///     ::timely::execute(Configuration::Thread, |worker| {
+///     ::timely::execute(Config::thread(), |worker| {
 ///
 ///			let (mut handle, probe) = worker.dataflow(|scope| {
 ///				// create input handle and collection.

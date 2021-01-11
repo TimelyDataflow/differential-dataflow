@@ -46,7 +46,7 @@ fn run_test<T>(test: T, expected: Vec<(usize, Vec<((u64, i64), i64)>)>) -> ()
 #[test]
 fn test_import_vanilla() {
     run_test(|input_epochs| {
-        timely::execute(timely::Configuration::Process(4), move |worker| {
+        timely::execute(timely::Config::process(4), move |worker| {
             let ref input_epochs = input_epochs;
             let index = worker.index();
             let peers = worker.peers();
@@ -102,7 +102,7 @@ fn test_import_vanilla() {
 fn test_import_completed_dataflow() {
     // Runs the first dataflow to completion before constructing the subscriber.
     run_test(|input_epochs| {
-        timely::execute(timely::Configuration::Process(4), move |worker| {
+        timely::execute(timely::Config::process(4), move |worker| {
             let ref input_epochs = input_epochs;
             let index = worker.index();
             let peers = worker.peers();
@@ -161,7 +161,7 @@ fn test_import_completed_dataflow() {
 #[test]
 fn test_import_stalled_dataflow() {
     // Runs the first dataflow to completion before constructing the subscriber.
-    timely::execute(timely::Configuration::Thread, move |worker| {
+    timely::execute(timely::Config::thread(), move |worker| {
 
         let mut input = InputSession::new();
 
@@ -208,7 +208,7 @@ fn test_import_stalled_dataflow() {
 fn import_skewed() {
 
     run_test(|_input| {
-        let captured = timely::execute(timely::Configuration::Process(4), |worker| {
+        let captured = timely::execute(timely::Config::process(4), |worker| {
             let index = worker.index();
             let peers = worker.peers();
 
