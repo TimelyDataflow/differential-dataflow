@@ -135,8 +135,8 @@ impl Config {
 }
 
 /// Introduces differential options to a timely configuration.
-pub fn configure(config: &mut timely::Config, options: &Config) {
+pub fn configure(config: &mut timely::WorkerConfig, options: &Config) {
     if let Some(effort) = options.idle_merge_effort {
-        config.worker.set("differential/idle_merge_effort".to_string(), effort);
+        config.set("differential/idle_merge_effort".to_string(), effort);
     }
 }
