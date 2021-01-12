@@ -112,3 +112,31 @@ pub mod collection;
 pub mod logging;
 pub mod consolidation;
 pub mod capture;
+
+/// Configuration options for differential dataflow.
+#[derive(Default)]
+pub struct Config {
+    /// An amount of arrangement effort to spend each scheduling quantum.
+    ///
+    /// The default value of `None` will not schedule operators that maintain arrangements
+    /// other than when computation is required. Setting the value to `Some(effort)` will
+    /// cause these operators to reschedule themselves as long as their arrangemnt has not
+    /// reached a compact representation, and each scheduling quantum they will perform
+    /// compaction work as if `effort` records had been added to the arrangement.
+    pub idle_merge_effort: Option<isize>
+}
+
+impl Config {
+    /// Assign an amount of effort to apply to idle arrangement operators.
+    pub fn idle_merge_effort(mut self, effort: Option<isize>) -> Self {
+        self.idle_merge_effort = effort;
+        self
+    }
+}
+
+/// Introduces differential options to a timely configuration.
+pub fn configure(config: &mut timely::Config, options: &Config) {
+    if let Some(effort) = options.idle_merge_effort {
+        config.worker.set("differential/idle_merge_effort".to_string(), effort);
+    }
+}

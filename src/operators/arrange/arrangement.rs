@@ -558,8 +558,7 @@ where
 
 
                 let (activator, effort) =
-                if let Ok(text) = ::std::env::var("DIFFERENTIAL_EAGER_MERGE") {
-                    let effort = text.parse::<isize>().expect("DIFFERENTIAL_EAGER_MERGE must be set to an integer");
+                if let Some(effort) = self.inner.scope().config().get::<isize>("differential/idle_merge_effort").cloned() {
                     (Some(self.scope().activator_for(&info.address[..])), Some(effort))
                 }
                 else {

@@ -358,8 +358,7 @@ where
                 // Determine if we should regularly exert the trace maintenance machinery,
                 // and with what amount of effort each time.
                 let (activator, effort) =
-                if let Ok(text) = ::std::env::var("DIFFERENTIAL_EAGER_MERGE") {
-                    let effort = text.parse::<isize>().expect("DIFFERENTIAL_EAGER_MERGE must be set to an integer");
+                if let Some(effort) = self.stream.scope().config().get::<isize>("differential/idle_merge_effort").cloned() {
                     (Some(self.stream.scope().activator_for(&operator_info.address[..])), Some(effort))
                 }
                 else {
