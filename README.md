@@ -5,7 +5,7 @@ An implementation of [differential dataflow](https://github.com/timelydataflow/d
 
 Differential dataflow is a data-parallel programming framework designed to efficiently process large volumes of data and to quickly respond to arbitrary changes in input collections. You can read more in the [differential dataflow mdbook](https://timelydataflow.github.io/differential-dataflow/) and in the [differential dataflow documentation](https://docs.rs/differential-dataflow/).
 
-Differential dataflow programs are written as functional transformations of collections of data, using familiar operators like `map`, `filter`, `join`, and `group`. Differential dataflow also includes more exotic operators such as `iterate`, which repeatedly applies a differential dataflow fragment to a collection. The programs are compiled down to [timely dataflow](https://github.com/timelydataflow/timely-dataflow) computations.
+Differential dataflow programs are written as functional transformations of collections of data, using familiar operators like `map`, `filter`, `join`, and `reduce`. Differential dataflow also includes more exotic operators such as `iterate`, which repeatedly applies a differential dataflow fragment to a collection. The programs are compiled down to [timely dataflow](https://github.com/timelydataflow/timely-dataflow) computations.
 
 For example, here is a differential dataflow fragment to compute the out-degree distribution of a directed graph (for each degree, the number of nodes with that many outgoing edges):
 
@@ -152,7 +152,7 @@ Let's perform a single change again.
     observed: ((7, 1042894), 1, -1)
     round 1 finished after 228.451µs
 
-Although the initial computation took about fifteen seconds, we get our changes in about 120 microseconds; that's about one hundred thousand times faster than re-running the computation. That's pretty nice. Actually, it is small enough that the time to print things to the screen is a bit expensive, so let's stop doing that.
+Although the initial computation took about fifteen seconds, we get our changes in about 230 microseconds; that's about one hundred thousand times faster than re-running the computation. That's pretty nice. Actually, it is small enough that the time to print things to the screen is a bit expensive, so let's stop doing that.
 
 Now we can just watch as changes roll past and look at the times.
 
