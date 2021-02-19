@@ -217,6 +217,8 @@ where
     }
     fn get_logical_compaction(&mut self) -> AntichainRef<T> { self.logical_frontier.borrow() }
     fn set_physical_compaction(&mut self, frontier: AntichainRef<T>) {
+        // We should never request to rewind the frontier.
+        debug_assert!(PartialOrder::less_equal(&self.physical_frontier.borrow(), &frontier), "FAIL\tthrough frontier !<= new frontier {:?} {:?}\n", self.physical_frontier, frontier);
         self.physical_frontier = frontier.to_owned();
         self.consider_merges();
     }

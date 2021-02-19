@@ -63,6 +63,7 @@ where
         self.advance.borrow()
     }
     fn set_physical_compaction(&mut self, frontier: AntichainRef<Tr::Time>) {
+        debug_assert!(timely::PartialOrder::less_equal(&self.through.borrow(), &frontier));
         self.trace.borrow_mut().adjust_through_frontier(self.through.borrow(), frontier);
         self.through.clear();
         self.through.extend(frontier.iter().cloned());
