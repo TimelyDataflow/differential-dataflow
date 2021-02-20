@@ -88,6 +88,9 @@ pub trait TraceReader {
     ///
     /// By advancing the logical compaction frontier, the caller unblocks merging of otherwise equivalent udates,
     /// but loses the ability to observe historical detail that is not beyond `frontier`.
+    ///
+    /// It is an error to call this method with a frontier not beyond the most recent arguments to this method,
+    /// or the initial value of `get_logical_compaction()` if this method has not yet been called.
 	fn set_logical_compaction(&mut self, frontier: AntichainRef<Self::Time>);
 
     /// Deprecated form of `set_logical_compaction`.
@@ -121,6 +124,9 @@ pub trait TraceReader {
     ///
     /// By advancing the physical compaction frontier, the caller unblocks the merging of batches of updates,
     /// but loses the ability to create a cursor through any frontier not beyond `frontier`.
+    ///
+    /// It is an error to call this method with a frontier not beyond the most recent arguments to this method,
+    /// or the initial value of `get_physical_compaction()` if this method has not yet been called.
 	fn set_physical_compaction(&mut self, frontier: AntichainRef<Self::Time>);
 
     /// Deprecated form of `set_physical_compaction`.

@@ -99,8 +99,8 @@ pub struct Spine<K, V, T: Lattice+Ord, R: Semigroup, B: Batch<K, V, T, R>> {
     operator: OperatorInfo,
     logger: Option<::logging::Logger>,
     phantom: ::std::marker::PhantomData<(K, V, R)>,
-    get_logical_compaction: Vec<T>,                   // Times after which the trace must accumulate correctly.
-    through_frontier: Vec<T>,                   // Times after which the trace must be able to subset its inputs.
+    logical_frontier: Vec<T>,                   // Times after which the trace must accumulate correctly.
+    physical_frontier: Vec<T>,                   // Times after which the trace must be able to subset its inputs.
     merging: Vec<Option<MergeState<K,V,T,R,B>>>,// Several possibly shared collections of updates.
     pending: Vec<B>,                       // Batches at times in advance of `frontier`.
     upper: Vec<T>,
@@ -137,11 +137,11 @@ where
         // supplied upper it had better be empty.
 
         // We shouldn't grab a cursor into a closed trace, right?
-        assert!(self.get_logical_compaction.len() > 0, "cursor_through({:?}) called for closed trace", upper);
+        assert!(self.logical_frontier.len() > 0, "cursor_through({:?}) called for closed trace", upper);
 
-        // Check that `upper` is greater or equal to `self.through_frontier`.
+        // Check that `upper` is greater or equal to `self.physical_frontier`.
         // Otherwise, the cut could be in `self.merging` and it is user error anyhow.
-        assert!(upper.iter().all(|t1| self.through_frontier.iter().any(|t2| t2.less_equal(t1))));
+        assert!(upper.iter().all(|t1| self.physical_frontier.iter().any(|t2| t2.less_equal(t1))));
 
         let mut cursors = Vec::new();
         let mut storage = Vec::new();
@@ -198,22 +198,22 @@ where
         Some((CursorList::new(cursors, &storage), storage))
     }
     fn set_logical_compaction(&mut self, frontier: &[T]) {
-        self.get_logical_compaction = frontier.to_vec();
+        self.logical_frontier = frontier.to_vec();
 
         // Commenting out for now; causes problems in `read_upper()`.
         // If one has an urgent need to release these resources, it
         // is probably best just to drop the trace.
 
-        // if self.get_logical_compaction.len() == 0 {
+        // if self.logical_frontier.len() == 0 {
         //     self.drop_batches();
         // }
     }
-    fn get_logical_compaction(&mut self) -> &[T] { &self.get_logical_compaction[..] }
+    fn get_logical_compaction(&mut self) -> &[T] { &self.logical_frontier[..] }
     fn set_physical_compaction(&mut self, frontier: &[T]) {
-        self.through_frontier = frontier.to_vec();
+        self.physical_frontier = frontier.to_vec();
         self.consider_merges();
     }
-    fn get_physical_compaction(&mut self) -> &[T] { &self.through_frontier[..] }
+    fn get_physical_compaction(&mut self) -> &[T] { &self.physical_frontier[..] }
 
     fn map_batches<F: FnMut(&Self::Batch)>(&mut self, mut f: F) {
         for batch in self.merging.iter().rev() {
@@ -351,8 +351,8 @@ where
             operator,
             logger,
             phantom: ::std::marker::PhantomData,
-            get_logical_compaction: vec![<T as Lattice>::minimum()],
-            through_frontier: vec![<T as Lattice>::minimum()],
+            logical_frontier: vec![<T as Lattice>::minimum()],
+            physical_frontier: vec![<T as Lattice>::minimum()],
             merging: Vec::new(),
             pending: Vec::new(),
             upper: vec![Default::default()],
@@ -407,7 +407,7 @@ where
         //     2. large batches never have small indices.
 
         while self.pending.len() > 0 &&
-              self.through_frontier.iter().all(|t1| self.pending[0].upper().iter().any(|t2| t2.less_equal(t1)))
+              self.physical_frontier.iter().all(|t1| self.pending[0].upper().iter().any(|t2| t2.less_equal(t1)))
         {
             // this could be a VecDeque, if we ever notice this.
             let batch = self.pending.remove(0);
