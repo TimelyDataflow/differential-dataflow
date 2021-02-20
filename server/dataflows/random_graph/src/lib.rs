@@ -46,7 +46,7 @@ pub fn build((dataflow, handles, probe, timer, args): Environment) -> Result<(),
     // operator holds only a weak reference to it.
     //
     // The operator also holds an `Weak<RefCell<Option<TraceHandle>>>` which it will
-    // attempt to borrow and call `advance_by` in order to advance the capability
+    // attempt to borrow and call `set_logical_compaction` in order to advance the capability
     // as it runs, to allow compaction and the maintenance of bounded state.
 
     if args.len() != 4 { return Err(format!("expected four arguments, instead: {:?}", args)); }
@@ -134,7 +134,7 @@ pub fn build((dataflow, handles, probe, timer, args): Environment) -> Result<(),
                 if let Some(trace_handle) = trace_handle_weak.upgrade() {
                     let mut borrow = trace_handle.borrow_mut();
                     if let Some(ref mut trace_handle) = borrow.as_mut() {
-                        trace_handle.advance_by(&[elapsed_ns]);
+                        trace_handle.set_logical_compaction(&[elapsed_ns]);
                     }
                 }
 
@@ -191,7 +191,7 @@ pub fn build((dataflow, handles, probe, timer, args): Environment) -> Result<(),
         .trace;
 
     // release all blocks on merging.
-    trace.distinguish_since(&[]);
+    trace.set_physical_compaction(&[]);
     *trace_handle.borrow_mut() = Some(trace);
 
     handles.set::<Rc<RefCell<Option<TraceHandle>>>>(name.to_owned(), trace_handle);

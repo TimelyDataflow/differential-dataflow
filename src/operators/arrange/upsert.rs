@@ -331,8 +331,8 @@ where
                     input_frontier.extend(input.frontier().frontier().iter().cloned());
 
                     // Downgrade capabilities for `reader_local`.
-                    reader_local.advance_by(input_frontier.borrow());
-                    reader_local.distinguish_since(input_frontier.borrow());
+                    reader_local.set_logical_compaction(input_frontier.borrow());
+                    reader_local.set_physical_compaction(input_frontier.borrow());
                 }
 
                 if let Some(mut fuel) = effort.clone() {

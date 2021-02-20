@@ -78,8 +78,8 @@ fn main() {
             graph.close();
             for i in 1..rounds + 1 {
                 /* Advance the trace frontier to enable trace compaction. */
-                graph_trace.distinguish_since(AntichainRef::new(&[i]));
-                graph_trace.advance_by(AntichainRef::new(&[i]));
+                graph_trace.set_physical_compaction(AntichainRef::new(&[i]));
+                graph_trace.set_logical_compaction(AntichainRef::new(&[i]));
                 worker.step_while(|| probe.less_than(&i));
                 dump_cursor(i, worker.index(), &mut graph_trace);
             }
@@ -93,8 +93,8 @@ fn main() {
                 }
                 graph.advance_to(i);
                 graph.flush();
-                graph_trace.distinguish_since(AntichainRef::new(&[i]));
-                graph_trace.advance_by(AntichainRef::new(&[i]));
+                graph_trace.set_physical_compaction(AntichainRef::new(&[i]));
+                graph_trace.set_logical_compaction(AntichainRef::new(&[i]));
                 worker.step_while(|| probe.less_than(graph.time()));
                 dump_cursor(i, worker.index(), &mut graph_trace);
             }

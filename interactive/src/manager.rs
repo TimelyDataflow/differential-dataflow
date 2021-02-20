@@ -187,13 +187,13 @@ impl<V: ExchangeData+Hash+Datum> TraceManager<V> {
         use timely::progress::frontier::Antichain;
         let frontier = Antichain::from_elem(time.clone());
         for trace in self.inputs.values_mut() {
-            trace.advance_by(frontier.borrow());
-            trace.distinguish_since(frontier.borrow());
+            trace.set_logical_compaction(frontier.borrow());
+            trace.set_physical_compaction(frontier.borrow());
         }
         for map in self.arrangements.values_mut() {
             for trace in map.values_mut() {
-                trace.advance_by(frontier.borrow());
-                trace.distinguish_since(frontier.borrow());
+                trace.set_logical_compaction(frontier.borrow());
+                trace.set_physical_compaction(frontier.borrow());
             }
         }
     }

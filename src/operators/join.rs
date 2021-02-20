@@ -360,7 +360,7 @@ impl<G, T1> JoinCore<G, T1::Key, T1::Val, T1::R> for Arranged<G,T1>
                             if !batch1.is_empty() {
                                 if let Some(acknowledged2) = &acknowledged2 {
                                     // TODO : cursor_through may be problematic for pre-merged traces.
-                                    // A trace should provide the contract that whatever its `distinguish_since` capability,
+                                    // A trace should provide the contract that whatever its `set_physical_compaction` capability,
                                     // it is safe (and reasonable) to await delivery of batches up through that frontier.
                                     // In this case, we should be able to await (not block on) the arrival of these batches.
                                     let (trace2_cursor, trace2_storage) = trace2.cursor_through(acknowledged2.borrow()).unwrap();
@@ -395,7 +395,7 @@ impl<G, T1> JoinCore<G, T1::Key, T1::Val, T1::R> for Arranged<G,T1>
                             if !batch2.is_empty() {
                                 if let Some(acknowledged1) = &acknowledged1 {
                                     // TODO : cursor_through may be problematic for pre-merged traces.
-                                    // A trace should provide the contract that whatever its `distinguish_since` capability,
+                                    // A trace should provide the contract that whatever its `set_physical_compaction` capability,
                                     // it is safe (and reasonable) to await delivery of batches up through that frontier.
                                     // In this case, we should be able to await (not block on) the arrival of these batches.
                                     let (trace1_cursor, trace1_storage) = trace1.cursor_through(acknowledged1.borrow()).unwrap();
@@ -450,28 +450,28 @@ impl<G, T1> JoinCore<G, T1::Key, T1::Val, T1::R> for Arranged<G,T1>
                 // shut down or advance trace2.
                 if trace2.is_some() && input1.frontier().is_empty() { trace2 = None; }
                 if let Some(ref mut trace2) = trace2 {
-                    trace2.advance_by(input1.frontier().frontier());
+                    trace2.set_logical_compaction(input1.frontier().frontier());
                     // At this point, if we haven't seen any input batches we should establish a frontier anyhow.
                     if acknowledged2.is_none() {
                         acknowledged2 = Some(Antichain::from_elem(<G::Timestamp>::minimum()));
                     }
                     if let Some(acknowledged2) = &mut acknowledged2 {
                         trace2.advance_upper(acknowledged2);
-                        trace2.distinguish_since(acknowledged2.borrow());
+                        trace2.set_physical_compaction(acknowledged2.borrow());
                     }
                 }
 
                 // shut down or advance trace1.
                 if trace1.is_some() && input2.frontier().is_empty() { trace1 = None; }
                 if let Some(ref mut trace1) = trace1 {
-                    trace1.advance_by(input2.frontier().frontier());
+                    trace1.set_logical_compaction(input2.frontier().frontier());
                     // At this point, if we haven't seen any input batches we should establish a frontier anyhow.
                     if acknowledged1.is_none() {
                         acknowledged1 = Some(Antichain::from_elem(<G::Timestamp>::minimum()));
                     }
                     if let Some(acknowledged1) = &mut acknowledged1 {
                         trace1.advance_upper(acknowledged1);
-                        trace1.distinguish_since(acknowledged1.borrow());
+                        trace1.set_physical_compaction(acknowledged1.borrow());
                     }
                 }
             }

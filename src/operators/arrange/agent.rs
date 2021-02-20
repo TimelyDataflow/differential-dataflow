@@ -54,20 +54,20 @@ where
     type Batch = Tr::Batch;
     type Cursor = Tr::Cursor;
 
-    fn advance_by(&mut self, frontier: AntichainRef<Tr::Time>) {
-        self.trace.borrow_mut().adjust_advance_frontier(self.advance.borrow(), frontier);
+    fn set_logical_compaction(&mut self, frontier: AntichainRef<Tr::Time>) {
+        self.trace.borrow_mut().adjust_get_logical_compaction(self.advance.borrow(), frontier);
         self.advance.clear();
         self.advance.extend(frontier.iter().cloned());
     }
-    fn advance_frontier(&mut self) -> AntichainRef<Tr::Time> {
+    fn get_logical_compaction(&mut self) -> AntichainRef<Tr::Time> {
         self.advance.borrow()
     }
-    fn distinguish_since(&mut self, frontier: AntichainRef<Tr::Time>) {
+    fn set_physical_compaction(&mut self, frontier: AntichainRef<Tr::Time>) {
         self.trace.borrow_mut().adjust_through_frontier(self.through.borrow(), frontier);
         self.through.clear();
         self.through.extend(frontier.iter().cloned());
     }
-    fn distinguish_frontier(&mut self) -> AntichainRef<Tr::Time> {
+    fn get_physical_compaction(&mut self) -> AntichainRef<Tr::Time> {
         self.through.borrow()
     }
     fn cursor_through(&mut self, frontier: AntichainRef<Tr::Time>) -> Option<(Tr::Cursor, <Tr::Cursor as Cursor<Tr::Key, Tr::Val, Tr::Time, Tr::R>>::Storage)> {
@@ -99,7 +99,7 @@ where
         let reader = TraceAgent {
             trace: trace.clone(),
             queues: Rc::downgrade(&queues),
-            advance: trace.borrow().advance_frontiers.frontier().to_owned(),
+            advance: trace.borrow().get_logical_compactions.frontier().to_owned(),
             through: trace.borrow().through_frontiers.frontier().to_owned(),
             operator,
             logging,
@@ -163,13 +163,13 @@ where
     /// are no longer evident.
     ///
     /// The current behavior is that the introduced collection accumulates updates to some times less or equal
-    /// to `self.advance_frontier()`. There is *not* currently a guarantee that the updates are accumulated *to*
+    /// to `self.get_logical_compaction()`. There is *not* currently a guarantee that the updates are accumulated *to*
     /// the frontier, and the resulting collection history may be weirdly partial until this point. In particular,
     /// the historical collection may move through configurations that did not actually occur, even if eventually
     /// arriving at the correct collection. This is probably a bug; although we get to the right place in the end,
     /// the intermediate computation could do something that the original computation did not, like diverge.
     ///
-    /// I would expect the semantics to improve to "updates are advanced to `self.advance_frontier()`", which
+    /// I would expect the semantics to improve to "updates are advanced to `self.get_logical_compaction()`", which
     /// means the computation will run as if starting from exactly this frontier. It is not currently clear whose
     /// responsibility this should be (the trace/batch should only reveal these times, or an operator should know
     /// to advance times before using them).
@@ -341,7 +341,7 @@ where
 
     /// Imports an arrangement into the supplied scope.
     ///
-    /// This variant of import uses the `advance_frontier` to forcibly advance timestamps in updates.
+    /// This variant of import uses the `get_logical_compaction` to forcibly advance timestamps in updates.
     ///
     /// # Examples
     ///
@@ -382,7 +382,7 @@ where
     ///         handle.remove(1); handle.advance_to(4); handle.flush(); worker.step();
     ///         handle.insert(0); handle.advance_to(5); handle.flush(); worker.step();
     ///
-    ///         trace.advance_by(AntichainRef::new(&[5]));
+    ///         trace.set_logical_compaction(AntichainRef::new(&[5]));
     ///
     ///         // create a second dataflow
     ///         let mut shutdown = worker.dataflow(|scope| {
@@ -418,7 +418,7 @@ where
         Tr: TraceReader,
     {
         // This frontier describes our only guarantee on the compaction frontier.
-        let frontier = self.advance_frontier().to_owned();
+        let frontier = self.get_logical_compaction().to_owned();
         self.import_frontier_core(scope, name, frontier)
     }
 
@@ -533,7 +533,7 @@ where
 
         // increase counts for wrapped `TraceBox`.
         let empty_frontier = Antichain::new();
-        self.trace.borrow_mut().adjust_advance_frontier(empty_frontier.borrow(), self.advance.borrow());
+        self.trace.borrow_mut().adjust_get_logical_compaction(empty_frontier.borrow(), self.advance.borrow());
         self.trace.borrow_mut().adjust_through_frontier(empty_frontier.borrow(), self.through.borrow());
 
         TraceAgent {
@@ -562,7 +562,7 @@ where
 
         // decrement borrow counts to remove all holds
         let empty_frontier = Antichain::new();
-        self.trace.borrow_mut().adjust_advance_frontier(self.advance.borrow(), empty_frontier.borrow());
+        self.trace.borrow_mut().adjust_get_logical_compaction(self.advance.borrow(), empty_frontier.borrow());
         self.trace.borrow_mut().adjust_through_frontier(self.through.borrow(), empty_frontier.borrow());
     }
 }

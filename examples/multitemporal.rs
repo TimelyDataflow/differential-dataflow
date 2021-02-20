@@ -22,7 +22,7 @@ use pair::Pair;
 
 fn main() {
 
-   timely::execute_from_args(std::env::args(), move |worker| {
+    timely::execute_from_args(std::env::args(), move |worker| {
 
         // Used to determine if our output has caught up to our input.
         let mut probe: ProbeHandle<Pair<isize, isize>> = ProbeHandle::new();
@@ -49,7 +49,7 @@ fn main() {
         });
 
         // Do not hold back physical compaction.
-        trace.distinguish_since(AntichainRef::new(&[]));
+        trace.set_physical_compaction(AntichainRef::new(&[]));
 
         println!("Multi-temporal histogram; valid commands are (integer arguments):");
         println!("  update   value time1 time2 change");
@@ -86,13 +86,13 @@ fn main() {
                         },
                         ("advance-output", 2) => {
                             let time = Pair::new(arguments[0], arguments[1]);
-                            if trace.advance_frontier().less_equal(&time) {
-                                trace.advance_by(AntichainRef::new(&[time]));
+                            if trace.get_logical_compaction().less_equal(&time) {
+                                trace.set_logical_compaction(AntichainRef::new(&[time]));
                                 while probe.less_than(capability.time()) {
                                     worker.step();
                                 }
                             } else {
-                                println!("Requested time {:?} not readable (output from {:?})", time, trace.advance_frontier());
+                                println!("Requested time {:?} not readable (output from {:?})", time, trace.get_logical_compaction());
                             }
                         },
                         ("query", 2) => {
@@ -100,8 +100,8 @@ fn main() {
                             let query_time = Pair::new(arguments[0], arguments[1]);
                             if capability.time().less_equal(&query_time) {
                                 println!("Query time ({:?}) is still open (input from {:?}).", query_time, capability.time());
-                            } else if !trace.advance_frontier().less_equal(&query_time) {
-                                println!("Query time ({:?}) no longer available in output (output from {:?}).", query_time, trace.advance_frontier());
+                            } else if !trace.get_logical_compaction().less_equal(&query_time) {
+                                println!("Query time ({:?}) no longer available in output (output from {:?}).", query_time, trace.get_logical_compaction());
                             }
                             else {
                                 println!("Report at {:?}", query_time);

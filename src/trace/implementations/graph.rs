@@ -51,14 +51,14 @@ where
         }
         else { None }
     }
-    fn advance_by(&mut self, frontier: &[Product<RootTimestamp,()>]) {
-        self.spine.advance_by(frontier)
+    fn set_logical_compaction(&mut self, frontier: &[Product<RootTimestamp,()>]) {
+        self.spine.set_logical_compaction(frontier)
     }
-    fn advance_frontier(&mut self) -> &[Product<RootTimestamp,()>] { self.spine.advance_frontier() }
-    fn distinguish_since(&mut self, frontier: &[Product<RootTimestamp,()>]) {
-        self.spine.distinguish_since(frontier)
+    fn get_logical_compaction(&mut self) -> &[Product<RootTimestamp,()>] { self.spine.get_logical_compaction() }
+    fn set_physical_compaction(&mut self, frontier: &[Product<RootTimestamp,()>]) {
+        self.spine.set_physical_compaction(frontier)
     }
-    fn distinguish_frontier(&mut self) -> &[Product<RootTimestamp,()>] { &self.spine.distinguish_frontier() }
+    fn get_physical_compaction(&mut self) -> &[Product<RootTimestamp,()>] { &self.spine.get_physical_compaction() }
 
     fn map_batches<F: FnMut(&Self::Batch)>(&mut self, f: F) {
         self.spine.map_batches(f)

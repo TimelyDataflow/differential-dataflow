@@ -56,31 +56,31 @@ where
         })
     }
 
-    fn advance_by(&mut self, frontier: AntichainRef<TInner>) {
+    fn set_logical_compaction(&mut self, frontier: AntichainRef<TInner>) {
         self.stash1.clear();
         for time in frontier.iter() {
             self.stash1.insert(time.clone().to_outer());
         }
-        self.trace.advance_by(self.stash1.borrow());
+        self.trace.set_logical_compaction(self.stash1.borrow());
     }
-    fn advance_frontier(&mut self) -> AntichainRef<TInner> {
+    fn get_logical_compaction(&mut self) -> AntichainRef<TInner> {
         self.stash2.clear();
-        for time in self.trace.advance_frontier().iter() {
+        for time in self.trace.get_logical_compaction().iter() {
             self.stash2.insert(TInner::to_inner(time.clone()));
         }
         self.stash2.borrow()
     }
 
-    fn distinguish_since(&mut self, frontier: AntichainRef<TInner>) {
+    fn set_physical_compaction(&mut self, frontier: AntichainRef<TInner>) {
         self.stash1.clear();
         for time in frontier.iter() {
             self.stash1.insert(time.clone().to_outer());
         }
-        self.trace.distinguish_since(self.stash1.borrow());
+        self.trace.set_physical_compaction(self.stash1.borrow());
     }
-    fn distinguish_frontier(&mut self) -> AntichainRef<TInner> {
+    fn get_physical_compaction(&mut self) -> AntichainRef<TInner> {
         self.stash2.clear();
-        for time in self.trace.distinguish_frontier().iter() {
+        for time in self.trace.get_physical_compaction().iter() {
             self.stash2.insert(TInner::to_inner(time.clone()));
         }
         self.stash2.borrow()

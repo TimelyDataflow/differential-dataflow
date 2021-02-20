@@ -124,8 +124,8 @@ where
 
                 // tidy up the shared input trace.
                 trace.advance_upper(&mut upper_limit);
-                trace.advance_by(upper_limit.borrow());
-                trace.distinguish_since(upper_limit.borrow());
+                trace.set_logical_compaction(upper_limit.borrow());
+                trace.set_physical_compaction(upper_limit.borrow());
             }
         })
         .as_collection()

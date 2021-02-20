@@ -624,12 +624,12 @@ where
                         }
 
                         // We only anticipate future times in advance of `upper_limit`.
-                        source_trace.advance_by(upper_limit.borrow());
-                        output_reader.advance_by(upper_limit.borrow());
+                        source_trace.set_logical_compaction(upper_limit.borrow());
+                        output_reader.set_logical_compaction(upper_limit.borrow());
 
                         // We will only slice the data between future batches.
-                        source_trace.distinguish_since(upper_limit.borrow());
-                        output_reader.distinguish_since(upper_limit.borrow());
+                        source_trace.set_physical_compaction(upper_limit.borrow());
+                        output_reader.set_physical_compaction(upper_limit.borrow());
                     }
 
                     // Exert trace maintenance if we have been so requested.
