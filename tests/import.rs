@@ -222,7 +222,7 @@ fn import_skewed() {
             input.send(((index as u64, 1), index, 1));
             input.close();
 
-            trace.advance_by(AntichainRef::new(&[peers - index]));
+            trace.set_logical_compaction(AntichainRef::new(&[peers - index]));
 
             let (captured,) = worker.dataflow(move |scope| {
                 let imported = trace.import(scope);

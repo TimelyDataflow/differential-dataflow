@@ -139,7 +139,7 @@ fn main() {
             if let Some(mut data) = suppliers.pop() { inputs.supplier.send_batch(&mut data); }
 
             inputs.advance_to(next_round);
-            traces.advance_by(&[next_round]);
+            traces.set_logical_compaction(&[next_round]);
 
             let start = timer.elapsed();
             worker.step_while(|| probe.less_than(&next_round));

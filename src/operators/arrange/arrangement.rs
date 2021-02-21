@@ -278,8 +278,8 @@ where
         queries.binary_frontier(&self.stream, exchange, Pipeline, "TraceQuery", move |_capability, _info| {
 
             let mut trace = Some(self.trace.clone());
-            // release `distinguish_since` capability.
-            trace.as_mut().unwrap().distinguish_since(Antichain::new().borrow());
+            // release `set_physical_compaction` capability.
+            trace.as_mut().unwrap().set_physical_compaction(Antichain::new().borrow());
 
             let mut stash = Vec::new();
             let mut capability: Option<Capability<G::Timestamp>> = None;
@@ -413,7 +413,7 @@ where
                 ].into_iter().cloned().filter_map(|t| t).min();
 
                 if let Some(frontier) = frontier {
-                    trace.as_mut().map(|t| t.advance_by(AntichainRef::new(&[frontier])));
+                    trace.as_mut().map(|t| t.set_logical_compaction(AntichainRef::new(&[frontier])));
                 }
                 else {
                     trace = None;

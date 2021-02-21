@@ -65,25 +65,3 @@ fn test_trace() {
     let vec_4 = cursor4.to_vec(&storage4);
     assert_eq!(vec_4, vec_3);
 }
-
-// #[test]
-// fn test_advance() {
-//     let mut trace = get_trace();
-
-//     trace.advance_by(&[2]);
-//     trace.distinguish_since(&[2]);
-
-//     let (mut cursor1, storage1) = trace.cursor_through(&[2]).unwrap();
-
-//     assert_eq!(
-//         cursor1.to_vec(&storage1),
-//         vec![((1.into(), 2), vec![(2, 1)]), ((2.into(), 3), vec![(2, 1)])]);
-
-//     trace.distinguish_since(&[3]);
-
-//     let (mut cursor2, storage2) = trace.cursor_through(&[3]).unwrap();
-
-//     assert_eq!(
-//         cursor2.to_vec(&storage2),
-//         vec![((1.into(), 2), vec![(2, 1)]), ((2.into(), 3), vec![(2, 1), (2, -1)])]);
-// }

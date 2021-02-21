@@ -94,6 +94,6 @@ When we extract a trace from an arrangement, we acquire the ability to replay th
 
 A `TraceHandle` (the type of `trace`) has two important methods. Their names are not great, and subject to change in the future. Their idioms may also change as more information flows in about users and use cases.
 
-1. `advance_by(frontier)`. This method informs `trace` that it will no longer be called upon to handle queries for times not in advance of `frontier`, a set of timestamps. This gives the arrangement permission to coalesce otherwise indistinguishable timestamps, which it will start to do once all handles have advanced.
+1. `set_logical_compaction(frontier)`. This method informs `trace` that it will no longer be called upon to handle queries for times not in advance of `frontier`, a set of timestamps. This gives the arrangement permission to coalesce otherwise indistinguishable timestamps, which it will start to do once all handles have advanced.
 
-2. `distinguish_since(frontier)`. This method unblocks the merging of physical batches. It is very rare that a user wants to do anything with this other than call `trace.distinguish_since(&[])`, which unblocks all merging. Certain operators, namely `join`, do need to carefully manipulate this method.
+2. `set_physical_compaction(frontier)`. This method unblocks the merging of physical batches. It is very rare that a user wants to do anything with this other than call `trace.set_physical_compaction(&[])`, which unblocks all merging. Certain operators, namely `join`, do need to carefully manipulate this method.

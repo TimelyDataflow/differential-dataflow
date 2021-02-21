@@ -45,7 +45,7 @@ where
     S: FnMut(&D, &R, &Tr::Val, &Tr::R)->(DOut, ROut)+'static,
 {
     // No need to block physical merging for this operator.
-    arrangement.trace.distinguish_since(Antichain::new().borrow());
+    arrangement.trace.set_physical_compaction(Antichain::new().borrow());
     let mut propose_trace = Some(arrangement.trace);
     let propose_stream = arrangement.stream;
 
@@ -138,7 +138,7 @@ where
         for key in stash.keys() {
             frontier.insert(key.time().clone());
         }
-        propose_trace.as_mut().map(|trace| trace.advance_by(frontier.borrow()));
+        propose_trace.as_mut().map(|trace| trace.set_logical_compaction(frontier.borrow()));
 
         if input1.frontier().is_empty() && stash.is_empty() {
             propose_trace = None;

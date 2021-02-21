@@ -166,7 +166,7 @@ fn main() {
 
             let time = next_round;
 
-            traces.advance_by(&[next_round]);
+            traces.set_logical_compaction(&[next_round]);
 
             worker.step_while(|| probe.less_than(&time));
             round += 1;

@@ -91,8 +91,8 @@ pub struct Spine<K, V, T: Lattice+Ord, R: Semigroup, B: Batch<K, V, T, R>> {
     operator: OperatorInfo,
     logger: Option<Logger>,
     phantom: ::std::marker::PhantomData<(K, V, R)>,
-    advance_frontier: Antichain<T>,                   // Times after which the trace must accumulate correctly.
-    through_frontier: Antichain<T>,                   // Times after which the trace must be able to subset its inputs.
+    logical_frontier: Antichain<T>,                   // Times after which the trace must accumulate correctly.
+    physical_frontier: Antichain<T>,                   // Times after which the trace must be able to subset its inputs.
     merging: Vec<MergeState<K,V,T,R,B>>,// Several possibly shared collections of updates.
     pending: Vec<B>,                       // Batches at times in advance of `frontier`.
     upper: Antichain<T>,
@@ -138,12 +138,12 @@ where
         // supplied upper it had better be empty.
 
         // We shouldn't grab a cursor into a closed trace, right?
-        assert!(self.advance_frontier.borrow().len() > 0);
+        assert!(self.logical_frontier.borrow().len() > 0);
 
-        // Check that `upper` is greater or equal to `self.through_frontier`.
+        // Check that `upper` is greater or equal to `self.physical_frontier`.
         // Otherwise, the cut could be in `self.merging` and it is user error anyhow.
-        // assert!(upper.iter().all(|t1| self.through_frontier.iter().any(|t2| t2.less_equal(t1))));
-        assert!(PartialOrder::less_equal(&self.through_frontier.borrow(), &upper));
+        // assert!(upper.iter().all(|t1| self.physical_frontier.iter().any(|t2| t2.less_equal(t1))));
+        assert!(PartialOrder::less_equal(&self.physical_frontier.borrow(), &upper));
 
         let mut cursors = Vec::new();
         let mut storage = Vec::new();
@@ -211,16 +211,16 @@ where
 
         Some((CursorList::new(cursors, &storage), storage))
     }
-    fn advance_by(&mut self, frontier: AntichainRef<T>) {
+    fn set_logical_compaction(&mut self, frontier: AntichainRef<T>) {
         // TODO: Re-use allocation
-        self.advance_frontier = frontier.to_owned();
+        self.logical_frontier = frontier.to_owned();
     }
-    fn advance_frontier(&mut self) -> AntichainRef<T> { self.advance_frontier.borrow() }
-    fn distinguish_since(&mut self, frontier: AntichainRef<T>) {
-        self.through_frontier = frontier.to_owned();
+    fn get_logical_compaction(&mut self) -> AntichainRef<T> { self.logical_frontier.borrow() }
+    fn set_physical_compaction(&mut self, frontier: AntichainRef<T>) {
+        self.physical_frontier = frontier.to_owned();
         self.consider_merges();
     }
-    fn distinguish_frontier(&mut self) -> AntichainRef<T> { self.through_frontier.borrow() }
+    fn get_physical_compaction(&mut self) -> AntichainRef<T> { self.physical_frontier.borrow() }
 
     fn map_batches<F: FnMut(&Self::Batch)>(&mut self, mut f: F) {
         for batch in self.merging.iter().rev() {
@@ -333,7 +333,7 @@ where
     R: Semigroup,
     B: Batch<K, V, T, R>,
 {
-    /// Drops and logs batches. Used in advance_by and drop.
+    /// Drops and logs batches. Used in `set_logical_compaction` and drop.
     fn drop_batches(&mut self) {
         if let Some(logger) = &self.logger {
             for batch in self.merging.drain(..) {
@@ -430,8 +430,8 @@ where
             operator,
             logger,
             phantom: ::std::marker::PhantomData,
-            advance_frontier: Antichain::from_elem(<T as timely::progress::Timestamp>::minimum()),
-            through_frontier: Antichain::from_elem(<T as timely::progress::Timestamp>::minimum()),
+            logical_frontier: Antichain::from_elem(<T as timely::progress::Timestamp>::minimum()),
+            physical_frontier: Antichain::from_elem(<T as timely::progress::Timestamp>::minimum()),
             merging: Vec::new(),
             pending: Vec::new(),
             upper: Antichain::from_elem(<T as timely::progress::Timestamp>::minimum()),
@@ -449,8 +449,8 @@ where
 
         // TODO: Consider merging pending batches before introducing them.
         // TODO: We could use a `VecDeque` here to draw from the front and append to the back.
-        while self.pending.len() > 0 && PartialOrder::less_equal(self.pending[0].upper(), &self.through_frontier)
-            //   self.through_frontier.iter().all(|t1| self.pending[0].upper().iter().any(|t2| t2.less_equal(t1)))
+        while self.pending.len() > 0 && PartialOrder::less_equal(self.pending[0].upper(), &self.physical_frontier)
+            //   self.physical_frontier.iter().all(|t1| self.pending[0].upper().iter().any(|t2| t2.less_equal(t1)))
         {
             // Batch can be taken in optimized insertion.
             // Otherwise it is inserted normally at the end of the method.
@@ -662,7 +662,7 @@ where
                         complete: None,
                     }
                 ));
-                let compaction_frontier = Some(self.advance_frontier.borrow());
+                let compaction_frontier = Some(self.logical_frontier.borrow());
                 self.merging[index] = MergeState::begin_merge(old, batch, compaction_frontier);
             }
             MergeState::Double(_) => {

@@ -31,7 +31,7 @@ where
     Tr: TraceReader
 {
     /// accumulated holds on times for advancement.
-    pub advance_frontiers: MutableAntichain<Tr::Time>,
+    pub get_logical_compactions: MutableAntichain<Tr::Time>,
     /// accumulated holds on times for distinction.
     pub through_frontiers: MutableAntichain<Tr::Time>,
     /// The wrapped trace.
@@ -50,34 +50,34 @@ where
     pub fn new(mut trace: Tr) -> Self {
 
         let mut advance = MutableAntichain::new();
-        advance.update_iter(trace.advance_frontier().iter().cloned().map(|t| (t,1)));
-        // for time in trace.advance_frontier() {
+        advance.update_iter(trace.get_logical_compaction().iter().cloned().map(|t| (t,1)));
+        // for time in trace.get_logical_compaction() {
         //     advance.update(time, 1);
         // }
 
         let mut through = MutableAntichain::new();
-        through.update_iter(trace.distinguish_frontier().iter().cloned().map(|t| (t,1)));
-        // for time in trace.distinguish_frontier() {
+        through.update_iter(trace.get_physical_compaction().iter().cloned().map(|t| (t,1)));
+        // for time in trace.get_physical_compaction() {
         //     through.update(time, 1);
         // }
 
         TraceBox {
-            advance_frontiers: advance,
+            get_logical_compactions: advance,
             through_frontiers: through,
             trace: trace,
         }
     }
     /// Replaces elements of `lower` with those of `upper`.
-    pub fn adjust_advance_frontier(&mut self, lower: AntichainRef<Tr::Time>, upper: AntichainRef<Tr::Time>) {
-        self.advance_frontiers.update_iter(upper.iter().cloned().map(|t| (t,1)));
-        self.advance_frontiers.update_iter(lower.iter().cloned().map(|t| (t,-1)));
-        self.trace.advance_by(self.advance_frontiers.frontier());
+    pub fn adjust_get_logical_compaction(&mut self, lower: AntichainRef<Tr::Time>, upper: AntichainRef<Tr::Time>) {
+        self.get_logical_compactions.update_iter(upper.iter().cloned().map(|t| (t,1)));
+        self.get_logical_compactions.update_iter(lower.iter().cloned().map(|t| (t,-1)));
+        self.trace.set_logical_compaction(self.get_logical_compactions.frontier());
     }
     /// Replaces elements of `lower` with those of `upper`.
     pub fn adjust_through_frontier(&mut self, lower: AntichainRef<Tr::Time>, upper: AntichainRef<Tr::Time>) {
         self.through_frontiers.update_iter(upper.iter().cloned().map(|t| (t,1)));
         self.through_frontiers.update_iter(lower.iter().cloned().map(|t| (t,-1)));
-        self.trace.distinguish_since(self.through_frontiers.frontier());
+        self.trace.set_physical_compaction(self.through_frontiers.frontier());
     }
 }
 
@@ -91,7 +91,7 @@ where
     Tr::Time: Lattice+Ord+Clone+'static,
     Tr: TraceReader,
 {
-    advance_frontier: Antichain<Tr::Time>,
+    get_logical_compaction: Antichain<Tr::Time>,
     through_frontier: Antichain<Tr::Time>,
     /// Wrapped trace. Please be gentle when using.
     pub wrapper: Rc<RefCell<TraceBox<Tr>>>,
@@ -115,17 +115,17 @@ where
     /// This change may not have immediately observable effects. It informs the shared trace that this
     /// handle no longer requires access to times other than those in the future of `frontier`, but if
     /// there are other handles to the same trace, it may not yet be able to compact.
-    fn advance_by(&mut self, frontier: AntichainRef<Tr::Time>) {
-        self.wrapper.borrow_mut().adjust_advance_frontier(self.advance_frontier.borrow(), frontier);
-        self.advance_frontier = frontier.to_owned();
+    fn set_logical_compaction(&mut self, frontier: AntichainRef<Tr::Time>) {
+        self.wrapper.borrow_mut().adjust_get_logical_compaction(self.get_logical_compaction.borrow(), frontier);
+        self.get_logical_compaction = frontier.to_owned();
     }
-    fn advance_frontier(&mut self) -> AntichainRef<Tr::Time> { self.advance_frontier.borrow() }
+    fn get_logical_compaction(&mut self) -> AntichainRef<Tr::Time> { self.get_logical_compaction.borrow() }
     /// Allows the trace to compact batches of times before `frontier`.
-    fn distinguish_since(&mut self, frontier: AntichainRef<Tr::Time>) {
+    fn set_physical_compaction(&mut self, frontier: AntichainRef<Tr::Time>) {
         self.wrapper.borrow_mut().adjust_through_frontier(self.through_frontier.borrow(), frontier);
         self.through_frontier = frontier.to_owned();
     }
-    fn distinguish_frontier(&mut self) -> AntichainRef<Tr::Time> { self.through_frontier.borrow() }
+    fn get_physical_compaction(&mut self) -> AntichainRef<Tr::Time> { self.through_frontier.borrow() }
     /// Creates a new cursor over the wrapped trace.
     fn cursor_through(&mut self, frontier: AntichainRef<Tr::Time>) -> Option<(Tr::Cursor, <Tr::Cursor as Cursor<Tr::Key, Tr::Val, Tr::Time, Tr::R>>::Storage)> {
         ::std::cell::RefCell::borrow_mut(&self.wrapper).trace.cursor_through(frontier)
@@ -147,7 +147,7 @@ where
         let wrapped = Rc::new(RefCell::new(TraceBox::new(trace)));
 
         let handle = TraceRc {
-            advance_frontier: wrapped.borrow().advance_frontiers.frontier().to_owned(),
+            get_logical_compaction: wrapped.borrow().get_logical_compactions.frontier().to_owned(),
             through_frontier: wrapped.borrow().through_frontiers.frontier().to_owned(),
             wrapper: wrapped.clone(),
         };
@@ -163,10 +163,10 @@ where
 {
     fn clone(&self) -> Self {
         // increase ref counts for this frontier
-        self.wrapper.borrow_mut().adjust_advance_frontier(Antichain::new().borrow(), self.advance_frontier.borrow());
+        self.wrapper.borrow_mut().adjust_get_logical_compaction(Antichain::new().borrow(), self.get_logical_compaction.borrow());
         self.wrapper.borrow_mut().adjust_through_frontier(Antichain::new().borrow(), self.through_frontier.borrow());
         TraceRc {
-            advance_frontier: self.advance_frontier.clone(),
+            get_logical_compaction: self.get_logical_compaction.clone(),
             through_frontier: self.through_frontier.clone(),
             wrapper: self.wrapper.clone(),
         }
@@ -179,9 +179,9 @@ where
     Tr: TraceReader,
 {
     fn drop(&mut self) {
-        self.wrapper.borrow_mut().adjust_advance_frontier(self.advance_frontier.borrow(), Antichain::new().borrow());
+        self.wrapper.borrow_mut().adjust_get_logical_compaction(self.get_logical_compaction.borrow(), Antichain::new().borrow());
         self.wrapper.borrow_mut().adjust_through_frontier(self.through_frontier.borrow(), Antichain::new().borrow());
-        self.advance_frontier = Antichain::new();
+        self.get_logical_compaction = Antichain::new();
         self.through_frontier = Antichain::new();
     }
 }
