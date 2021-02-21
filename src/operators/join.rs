@@ -333,19 +333,14 @@ impl<G, T1> JoinCore<G, T1::Key, T1::Val, T1::R> for Arranged<G,T1>
 
             // Our initial invariants are that for each trace, physical compaction is less or equal the trace's upper bound.
             // These invariants ensure that we can reference observed batch frontiers from `_start_upper` onward, as long as
-            // we maintain our physical compaction capabilities appropriately.
+            // we maintain our physical compaction capabilities appropriately. These assertions are tested as we load up the
+            // initial work for the two traces, and before the operator is constructed.
 
-            // I can't say with confidence what should happen if this isn't the case, as it means we are unable to subset
-            // the current data without waiting for data that have not yet been created.
-            let mut trace1_start_upper = Antichain::new();
-            trace1.read_upper(&mut trace1_start_upper);
-            assert!(PartialOrder::less_equal(&trace1.get_physical_compaction(), &trace1_start_upper.borrow()));
-
-            let mut trace2_start_upper = Antichain::new();
-            trace2.read_upper(&mut trace2_start_upper);
-            assert!(PartialOrder::less_equal(&trace2.get_physical_compaction(), &trace2_start_upper.borrow()));
-
-            // acknowledged frontier for each input.
+            // Acknowledged frontier for each input.
+            // These two are used exclusively to track batch boundaries on which we may want/need to call `cursor_through`.
+            // They will drive our physical compaction of each trace, and we want to maintain at all times that each is beyond
+            // the physical compaction frontier of their corresponding trace.
+            // Should we ever *drop* a trace, these are 1. much harder to maintain correctly, but 2. no longer used.
             use timely::progress::frontier::Antichain;
             let mut acknowledged1 = Antichain::from_elem(<G::Timestamp>::minimum());
             let mut acknowledged2 = Antichain::from_elem(<G::Timestamp>::minimum());
@@ -363,6 +358,11 @@ impl<G, T1> JoinCore<G, T1::Key, T1::Val, T1::R> for Arranged<G,T1>
                 // `input1` with logic that would have otherwise been here. Check out the next loop
                 // for the structure.
             });
+            // At this point, `ack1` should exactly equal `trace1.read_upper()`, as they are both determined by
+            // iterating through batches and capturing the upper bound. This is a great moment to assert that
+            // `trace1`'s physical compaction frontier is before the frontier of completed times in `trace1`.
+            // TODO: in the case that this does not hold, instead "upgrade" the physical compaction frontier.
+            assert!(PartialOrder::less_equal(&trace1.get_physical_compaction(), &acknowledged1.borrow()));
 
             trace2.map_batches(|batch2| {
                 acknowledged2.clone_from(batch2.upper());
@@ -375,10 +375,15 @@ impl<G, T1> JoinCore<G, T1::Key, T1::Val, T1::R> for Arranged<G,T1>
                 // that property.
                 todo2.push_back(Deferred::new(trace1_cursor, trace1_storage, batch2_cursor, batch2.clone(), capability.clone()));
             });
+            // At this point, `ack2` should exactly equal `trace2.read_upper()`, as they are both determined by
+            // iterating through batches and capturing the upper bound. This is a great moment to assert that
+            // `trace2`'s physical compaction frontier is before the frontier of completed times in `trace2`.
+            // TODO: in the case that this does not hold, instead "upgrade" the physical compaction frontier.
+            assert!(PartialOrder::less_equal(&trace2.get_physical_compaction(), &acknowledged2.borrow()));
 
             // Droppable handles to shared trace data structures.
-            let mut trace1 = Some(trace1);
-            let mut trace2 = Some(trace2);
+            let mut trace1_option = Some(trace1);
+            let mut trace2_option = Some(trace2);
 
             // Swappable buffers for input extraction.
             let mut input1_buffer = Vec::new();
@@ -386,6 +391,8 @@ impl<G, T1> JoinCore<G, T1::Key, T1::Val, T1::R> for Arranged<G,T1>
 
             move |input1, input2, output| {
 
+                // 1. Consuming input.
+                //
                 // The join computation repeatedly accepts batches of updates from each of its inputs.
                 //
                 // For each accepted batch, it prepares a work-item to join the batch against previously "accepted"
@@ -399,7 +406,8 @@ impl<G, T1> JoinCore<G, T1::Key, T1::Val, T1::R> for Arranged<G,T1>
 
                 // Drain input 1, prepare work.
                 input1.for_each(|capability, data| {
-                    if let Some(ref mut trace2) = trace2 {
+                    // This test *should* always pass, as we only drop a trace in response to the other input emptying.
+                    if let Some(ref mut trace2) = trace2_option {
                         let capability = capability.retain();
                         data.swap(&mut input1_buffer);
                         for batch1 in input1_buffer.drain(..) {
@@ -416,15 +424,18 @@ impl<G, T1> JoinCore<G, T1::Key, T1::Val, T1::R> for Arranged<G,T1>
                                 // To update `acknowledged1` we might presume that `batch1.lower` should equal it, but we
                                 // may have skipped over empty batches. Still, the batches are in-order, and we should be
                                 // able to just assume the most recent `batch1.upper`
+                                debug_assert!(PartialOrder::less_equal(&acknowledged1, batch1.upper()));
                                 acknowledged1.clone_from(batch1.upper());
                             }
                         }
                     }
+                    else { panic!("`trace2_option` dropped before `input1` emptied!"); }
                 });
 
                 // Drain input 2, prepare work.
                 input2.for_each(|capability, data| {
-                    if let Some(ref mut trace1) = trace1 {
+                    // This test *should* always pass, as we only drop a trace in response to the other input emptying.
+                    if let Some(ref mut trace1) = trace1_option {
                         let capability = capability.retain();
                         data.swap(&mut input2_buffer);
                         for batch2 in input2_buffer.drain(..) {
@@ -438,15 +449,27 @@ impl<G, T1> JoinCore<G, T1::Key, T1::Val, T1::R> for Arranged<G,T1>
                                     todo2.push_back(Deferred::new(trace1_cursor, trace1_storage, batch2_cursor, batch2.clone(), capability.clone()));
                                 }
 
-                                // To update `acknowledged1` we might presume that `batch1.lower` should equal it, but we
+                                // To update `acknowledged2` we might presume that `batch2.lower` should equal it, but we
                                 // may have skipped over empty batches. Still, the batches are in-order, and we should be
-                                // able to just assume the most recent `batch1.upper`
+                                // able to just assume the most recent `batch2.upper`
+                                debug_assert!(PartialOrder::less_equal(&acknowledged2, batch2.upper()));
                                 acknowledged2.clone_from(batch2.upper());
                             }
                         }
                     }
+                    else { panic!("`trace1_option` dropped before `input2` emptied!"); }
                 });
 
+                // Advance acknowledged frontiers through any empty regions that we may not receive as batches.
+                if let Some(trace1) = trace1_option.as_mut() {
+                    trace1.advance_upper(&mut acknowledged1);
+                }
+                if let Some(trace2) = trace2_option.as_mut() {
+                    trace2.advance_upper(&mut acknowledged2);
+                }
+
+                // 2. Join computation.
+                //
                 // For each of the inputs, we do some amount of work (measured in terms of number
                 // of output records produced). This is meant to yield control to allow downstream
                 // operators to consume and reduce the output, but it it also means to provide some
@@ -455,7 +478,7 @@ impl<G, T1> JoinCore<G, T1::Key, T1::Val, T1::R> for Arranged<G,T1>
                 // which results in unintentionally quadratic processing time (each batch of either
                 // input must scan all batches from the other input).
 
-                // perform some amount of outstanding work.
+                // Perform some amount of outstanding work.
                 let mut fuel = 1_000_000;
                 while !todo1.is_empty() && fuel > 0 {
                     todo1.front_mut().unwrap().work(
@@ -467,7 +490,7 @@ impl<G, T1> JoinCore<G, T1::Key, T1::Val, T1::R> for Arranged<G,T1>
                     if !todo1.front().unwrap().work_remains() { todo1.pop_front(); }
                 }
 
-                // perform some amount of outstanding work.
+                // Perform some amount of outstanding work.
                 let mut fuel = 1_000_000;
                 while !todo2.is_empty() && fuel > 0 {
                     todo2.front_mut().unwrap().work(
@@ -484,24 +507,43 @@ impl<G, T1> JoinCore<G, T1::Key, T1::Val, T1::R> for Arranged<G,T1>
                     activator.activate();
                 }
 
-                // shut down or advance trace2.
-                if trace2.is_some() && input1.frontier().is_empty() { trace2 = None; }
-                if let Some(ref mut trace2) = trace2 {
-                    trace2.set_logical_compaction(input1.frontier().frontier());
-                    trace2.advance_upper(&mut acknowledged2);
-                    // We validated that `ack2` was at least `distinguish_since()` at start-up.
-                    // It has only advanced since then, so this should be safe to do.
-                    trace2.set_physical_compaction(acknowledged2.borrow());
+                // 3. Trace maintenance.
+                //
+                // Importantly, we use `input.frontier()` here rather than `acknowledged` to track
+                // the progress of an input, because should we ever drop one of the traces we will
+                // lose the ability to extract information from anything other than the input.
+                // For example, if we dropped `trace2` we would not be able to use `advance_upper`
+                // to keep `acknowledged2` up to date wrt empty batches, and would hold back logical
+                // compaction of `trace1`.
+
+                // Maintain `trace1`. Drop if `input2` is empty. or advance based on future needs.
+                if let Some(trace1) = trace1_option.as_mut() {
+                    if input2.frontier().is_empty() { trace1_option = None; }
+                    else {
+                        // Allow `trace1` to logically compact up to the frontier we may yet receive,
+                        // in the opposing input (`input2`). All `input2` times will be beyond this
+                        // frontier, and joined times only need to be accurate when advanced to it.
+                        trace1.set_logical_compaction(input2.frontier().frontier());
+                        // Allow `trace1` to physically compact up to the upper bound of batches we
+                        // have received in its input (`input1`). We will not require a cursor that
+                        // is not beyond this bound.
+                        trace1.set_physical_compaction(acknowledged1.borrow());
+                    }
                 }
 
-                // shut down or advance trace1.
-                if trace1.is_some() && input2.frontier().is_empty() { trace1 = None; }
-                if let Some(ref mut trace1) = trace1 {
-                    trace1.set_logical_compaction(input2.frontier().frontier());
-                    trace1.advance_upper(&mut acknowledged1);
-                    // We validated that `ack1` was at least `distinguish_since()` at start-up.
-                    // It has only advanced since then, so this should be safe to do.
-                    trace1.set_physical_compaction(acknowledged1.borrow());
+                // Maintain `trace2`. Drop if `input1` is empty. or advance based on future needs.
+                if let Some(trace2) = trace2_option.as_mut() {
+                    if input1.frontier().is_empty() { trace2_option = None;}
+                    else {
+                        // Allow `trace2` to logically compact up to the frontier we may yet receive,
+                        // in the opposing input (`input1`). All `input1` times will be beyond this
+                        // frontier, and joined times only need to be accurate when advanced to it.
+                        trace2.set_logical_compaction(input1.frontier().frontier());
+                        // Allow `trace2` to physically compact up to the upper bound of batches we
+                        // have received in its input (`input2`). We will not require a cursor that
+                        // is not beyond this bound.
+                        trace2.set_physical_compaction(acknowledged2.borrow());
+                    }
                 }
             }
         })
