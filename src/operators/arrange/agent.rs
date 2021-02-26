@@ -55,7 +55,7 @@ where
     type Cursor = Tr::Cursor;
 
     fn set_logical_compaction(&mut self, frontier: AntichainRef<Tr::Time>) {
-        self.trace.borrow_mut().adjust_get_logical_compaction(self.advance.borrow(), frontier);
+        self.trace.borrow_mut().adjust_logical_compaction(self.advance.borrow(), frontier);
         self.advance.clear();
         self.advance.extend(frontier.iter().cloned());
     }
@@ -64,7 +64,7 @@ where
     }
     fn set_physical_compaction(&mut self, frontier: AntichainRef<Tr::Time>) {
         debug_assert!(timely::PartialOrder::less_equal(&self.through.borrow(), &frontier));
-        self.trace.borrow_mut().adjust_through_frontier(self.through.borrow(), frontier);
+        self.trace.borrow_mut().adjust_physical_compaction(self.through.borrow(), frontier);
         self.through.clear();
         self.through.extend(frontier.iter().cloned());
     }
@@ -100,8 +100,8 @@ where
         let reader = TraceAgent {
             trace: trace.clone(),
             queues: Rc::downgrade(&queues),
-            advance: trace.borrow().get_logical_compactions.frontier().to_owned(),
-            through: trace.borrow().through_frontiers.frontier().to_owned(),
+            advance: trace.borrow().logical_compaction.frontier().to_owned(),
+            through: trace.borrow().physical_compaction.frontier().to_owned(),
             operator,
             logging,
         };
@@ -534,8 +534,8 @@ where
 
         // increase counts for wrapped `TraceBox`.
         let empty_frontier = Antichain::new();
-        self.trace.borrow_mut().adjust_get_logical_compaction(empty_frontier.borrow(), self.advance.borrow());
-        self.trace.borrow_mut().adjust_through_frontier(empty_frontier.borrow(), self.through.borrow());
+        self.trace.borrow_mut().adjust_logical_compaction(empty_frontier.borrow(), self.advance.borrow());
+        self.trace.borrow_mut().adjust_physical_compaction(empty_frontier.borrow(), self.through.borrow());
 
         TraceAgent {
             trace: self.trace.clone(),
@@ -563,7 +563,7 @@ where
 
         // decrement borrow counts to remove all holds
         let empty_frontier = Antichain::new();
-        self.trace.borrow_mut().adjust_get_logical_compaction(self.advance.borrow(), empty_frontier.borrow());
-        self.trace.borrow_mut().adjust_through_frontier(self.through.borrow(), empty_frontier.borrow());
+        self.trace.borrow_mut().adjust_logical_compaction(self.advance.borrow(), empty_frontier.borrow());
+        self.trace.borrow_mut().adjust_physical_compaction(self.through.borrow(), empty_frontier.borrow());
     }
 }
