@@ -34,8 +34,8 @@ where
 {
     trace: Rc<RefCell<TraceBox<Tr>>>,
     queues: Weak<RefCell<Vec<TraceAgentQueueWriter<Tr>>>>,
-    advance: Antichain<Tr::Time>,
-    through: Antichain<Tr::Time>,
+    logical_compaction: Antichain<Tr::Time>,
+    physical_compaction: Antichain<Tr::Time>,
 
     operator: ::timely::dataflow::operators::generic::OperatorInfo,
     logging: Option<::logging::Logger>,
@@ -55,21 +55,21 @@ where
     type Cursor = Tr::Cursor;
 
     fn set_logical_compaction(&mut self, frontier: AntichainRef<Tr::Time>) {
-        self.trace.borrow_mut().adjust_get_logical_compaction(self.advance.borrow(), frontier);
-        self.advance.clear();
-        self.advance.extend(frontier.iter().cloned());
+        self.trace.borrow_mut().adjust_logical_compaction(self.logical_compaction.borrow(), frontier);
+        self.logical_compaction.clear();
+        self.logical_compaction.extend(frontier.iter().cloned());
     }
     fn get_logical_compaction(&mut self) -> AntichainRef<Tr::Time> {
-        self.advance.borrow()
+        self.logical_compaction.borrow()
     }
     fn set_physical_compaction(&mut self, frontier: AntichainRef<Tr::Time>) {
-        debug_assert!(timely::PartialOrder::less_equal(&self.through.borrow(), &frontier));
-        self.trace.borrow_mut().adjust_through_frontier(self.through.borrow(), frontier);
-        self.through.clear();
-        self.through.extend(frontier.iter().cloned());
+        debug_assert!(timely::PartialOrder::less_equal(&self.physical_compaction.borrow(), &frontier));
+        self.trace.borrow_mut().adjust_physical_compaction(self.physical_compaction.borrow(), frontier);
+        self.physical_compaction.clear();
+        self.physical_compaction.extend(frontier.iter().cloned());
     }
     fn get_physical_compaction(&mut self) -> AntichainRef<Tr::Time> {
-        self.through.borrow()
+        self.physical_compaction.borrow()
     }
     fn cursor_through(&mut self, frontier: AntichainRef<Tr::Time>) -> Option<(Tr::Cursor, <Tr::Cursor as Cursor<Tr::Key, Tr::Val, Tr::Time, Tr::R>>::Storage)> {
         self.trace.borrow_mut().trace.cursor_through(frontier)
@@ -100,8 +100,8 @@ where
         let reader = TraceAgent {
             trace: trace.clone(),
             queues: Rc::downgrade(&queues),
-            advance: trace.borrow().get_logical_compactions.frontier().to_owned(),
-            through: trace.borrow().through_frontiers.frontier().to_owned(),
+            logical_compaction: trace.borrow().logical_compaction.frontier().to_owned(),
+            physical_compaction: trace.borrow().physical_compaction.frontier().to_owned(),
             operator,
             logging,
         };
@@ -534,14 +534,14 @@ where
 
         // increase counts for wrapped `TraceBox`.
         let empty_frontier = Antichain::new();
-        self.trace.borrow_mut().adjust_get_logical_compaction(empty_frontier.borrow(), self.advance.borrow());
-        self.trace.borrow_mut().adjust_through_frontier(empty_frontier.borrow(), self.through.borrow());
+        self.trace.borrow_mut().adjust_logical_compaction(empty_frontier.borrow(), self.logical_compaction.borrow());
+        self.trace.borrow_mut().adjust_physical_compaction(empty_frontier.borrow(), self.physical_compaction.borrow());
 
         TraceAgent {
             trace: self.trace.clone(),
             queues: self.queues.clone(),
-            advance: self.advance.clone(),
-            through: self.through.clone(),
+            logical_compaction: self.logical_compaction.clone(),
+            physical_compaction: self.physical_compaction.clone(),
             operator: self.operator.clone(),
             logging: self.logging.clone(),
         }
@@ -563,7 +563,7 @@ where
 
         // decrement borrow counts to remove all holds
         let empty_frontier = Antichain::new();
-        self.trace.borrow_mut().adjust_get_logical_compaction(self.advance.borrow(), empty_frontier.borrow());
-        self.trace.borrow_mut().adjust_through_frontier(self.through.borrow(), empty_frontier.borrow());
+        self.trace.borrow_mut().adjust_logical_compaction(self.logical_compaction.borrow(), empty_frontier.borrow());
+        self.trace.borrow_mut().adjust_physical_compaction(self.physical_compaction.borrow(), empty_frontier.borrow());
     }
 }
