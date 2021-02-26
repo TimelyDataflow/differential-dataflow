@@ -516,30 +516,30 @@ impl<G, T1> JoinCore<G, T1::Key, T1::Val, T1::R> for Arranged<G,T1>
                 // to keep `acknowledged2` up to date wrt empty batches, and would hold back logical
                 // compaction of `trace1`.
 
-                // Maintain `trace1`. Drop if `input2` is empty. or advance based on future needs.
+                // Maintain `trace1`. Drop if `input2` is empty, or advance based on future needs.
                 if let Some(trace1) = trace1_option.as_mut() {
                     if input2.frontier().is_empty() { trace1_option = None; }
                     else {
-                        // Allow `trace1` to logically compact up to the frontier we may yet receive,
+                        // Allow `trace1` to compact logically up to the frontier we may yet receive,
                         // in the opposing input (`input2`). All `input2` times will be beyond this
                         // frontier, and joined times only need to be accurate when advanced to it.
                         trace1.set_logical_compaction(input2.frontier().frontier());
-                        // Allow `trace1` to physically compact up to the upper bound of batches we
+                        // Allow `trace1` to compact physically up to the upper bound of batches we
                         // have received in its input (`input1`). We will not require a cursor that
                         // is not beyond this bound.
                         trace1.set_physical_compaction(acknowledged1.borrow());
                     }
                 }
 
-                // Maintain `trace2`. Drop if `input1` is empty. or advance based on future needs.
+                // Maintain `trace2`. Drop if `input1` is empty, or advance based on future needs.
                 if let Some(trace2) = trace2_option.as_mut() {
                     if input1.frontier().is_empty() { trace2_option = None;}
                     else {
-                        // Allow `trace2` to logically compact up to the frontier we may yet receive,
+                        // Allow `trace2` to compact logically up to the frontier we may yet receive,
                         // in the opposing input (`input1`). All `input1` times will be beyond this
                         // frontier, and joined times only need to be accurate when advanced to it.
                         trace2.set_logical_compaction(input1.frontier().frontier());
-                        // Allow `trace2` to physically compact up to the upper bound of batches we
+                        // Allow `trace2` to compact physically up to the upper bound of batches we
                         // have received in its input (`input2`). We will not require a cursor that
                         // is not beyond this bound.
                         trace2.set_physical_compaction(acknowledged2.borrow());
