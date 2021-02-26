@@ -19,7 +19,7 @@ fn main() {
         let mut probe = timely::dataflow::operators::probe::Handle::new();
 
         // create a dataflow managing an ever-changing edge collection.
-    	let mut handle = worker.dataflow(|scope| {
+        let mut handle = worker.dataflow(|scope| {
             let (handle, input) = scope.new_collection();
             input.distinct().probe_with(&mut probe);
             handle

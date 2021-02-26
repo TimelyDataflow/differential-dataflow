@@ -334,28 +334,28 @@ impl<D: Ord, T: Ord, R: Semigroup> MergeSorter<D, T, R> {
 #[inline]
 pub fn _advance<T, F: Fn(&T)->bool>(slice: &[T], function: F) -> usize {
 
-	// start with no advance
-	let mut index = 0;
-	if index < slice.len() && function(&slice[index]) {
+    // start with no advance
+    let mut index = 0;
+    if index < slice.len() && function(&slice[index]) {
 
-		// advance in exponentially growing steps.
-		let mut step = 1;
-		while index + step < slice.len() && function(&slice[index + step]) {
-			index += step;
-			step = step << 1;
-		}
+        // advance in exponentially growing steps.
+        let mut step = 1;
+        while index + step < slice.len() && function(&slice[index + step]) {
+            index += step;
+            step = step << 1;
+        }
 
-		// advance in exponentially shrinking steps.
-		step = step >> 1;
-		while step > 0 {
-			if index + step < slice.len() && function(&slice[index + step]) {
-				index += step;
-			}
-			step = step >> 1;
-		}
+        // advance in exponentially shrinking steps.
+        step = step >> 1;
+        while step > 0 {
+            if index + step < slice.len() && function(&slice[index + step]) {
+                index += step;
+            }
+            step = step >> 1;
+        }
 
-		index += 1;
-	}
+        index += 1;
+    }
 
-	index
+    index
 }
