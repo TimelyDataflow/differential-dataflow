@@ -49,21 +49,14 @@ where
     /// process will fish these out and make sure that they are used for the initial read capabilities.
     pub fn new(mut trace: Tr) -> Self {
 
-        let mut advance = MutableAntichain::new();
-        advance.update_iter(trace.get_logical_compaction().iter().cloned().map(|t| (t,1)));
-        // for time in trace.get_logical_compaction() {
-        //     advance.update(time, 1);
-        // }
-
-        let mut through = MutableAntichain::new();
-        through.update_iter(trace.get_physical_compaction().iter().cloned().map(|t| (t,1)));
-        // for time in trace.get_physical_compaction() {
-        //     through.update(time, 1);
-        // }
+        let mut logical_compaction = MutableAntichain::new();
+        logical_compaction.update_iter(trace.get_logical_compaction().iter().cloned().map(|t| (t,1)));
+        let mut physical_compaction = MutableAntichain::new();
+        physical_compaction.update_iter(trace.get_physical_compaction().iter().cloned().map(|t| (t,1)));
 
         TraceBox {
-            logical_compaction: advance,
-            physical_compaction: through,
+            logical_compaction,
+            physical_compaction,
             trace: trace,
         }
     }
