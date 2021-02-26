@@ -66,32 +66,32 @@ use timely::{PartialOrder, progress::Antichain};
 /// any time after `since`.
 #[derive(Clone, Debug, Abomonation)]
 pub struct Description<Time> {
-	/// lower frontier of contained updates.
-	lower: Antichain<Time>,
-	/// upper frontier of contained updates.
-	upper: Antichain<Time>,
-	/// frontier used for update compaction.
-	since: Antichain<Time>,
+    /// lower frontier of contained updates.
+    lower: Antichain<Time>,
+    /// upper frontier of contained updates.
+    upper: Antichain<Time>,
+    /// frontier used for update compaction.
+    since: Antichain<Time>,
 }
 
 impl<Time: PartialOrder+Clone> Description<Time> {
-	/// Returns a new description from its component parts.
-	pub fn new(lower: Antichain<Time>, upper: Antichain<Time>, since: Antichain<Time>) -> Self {
-		assert!(lower.elements().len() > 0);	// this should always be true.
-		// assert!(upper.len() > 0);			// this may not always be true.
-		Description {
-			lower,
-			upper,
-			since,
-		}
-	}
+    /// Returns a new description from its component parts.
+    pub fn new(lower: Antichain<Time>, upper: Antichain<Time>, since: Antichain<Time>) -> Self {
+        assert!(lower.elements().len() > 0);    // this should always be true.
+        // assert!(upper.len() > 0);            // this may not always be true.
+        Description {
+            lower,
+            upper,
+            since,
+        }
+    }
 }
 
 impl<Time> Description<Time> {
-	/// The lower envelope for times in the interval.
-	pub fn lower(&self) -> &Antichain<Time> { &self.lower }
-	/// The upper envelope for times in the interval.
-	pub fn upper(&self) -> &Antichain<Time> { &self.upper }
-	/// Times from whose future the interval may be observed.
-	pub fn since(&self) -> &Antichain<Time> { &self.since }
+    /// The lower envelope for times in the interval.
+    pub fn lower(&self) -> &Antichain<Time> { &self.lower }
+    /// The upper envelope for times in the interval.
+    pub fn upper(&self) -> &Antichain<Time> { &self.upper }
+    /// Times from whose future the interval may be observed.
+    pub fn since(&self) -> &Antichain<Time> { &self.since }
 }

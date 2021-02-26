@@ -31,19 +31,19 @@ pub trait Input : TimelyInput {
     /// fn main() {
     ///     ::timely::execute(Config::thread(), |worker| {
     ///
-    ///			let (mut handle, probe) = worker.dataflow::<(),_,_>(|scope| {
-    ///				// create input handle and collection.
-    ///				let (handle, data) = scope.new_collection();
-    ///         	let probe = data.map(|x| x * 2)
-    ///				            	.inspect(|x| println!("{:?}", x))
-    ///				            	.probe();
-    ///				(handle, probe)
-    ///     	});
+    ///            let (mut handle, probe) = worker.dataflow::<(),_,_>(|scope| {
+    ///                // create input handle and collection.
+    ///                let (handle, data) = scope.new_collection();
+    ///             let probe = data.map(|x| x * 2)
+    ///                                .inspect(|x| println!("{:?}", x))
+    ///                                .probe();
+    ///                (handle, probe)
+    ///         });
     ///
-    ///			handle.insert(1);
-    ///			handle.insert(5);
+    ///            handle.insert(1);
+    ///            handle.insert(5);
     ///
-    ///		}).unwrap();
+    ///        }).unwrap();
     /// }
     /// ```
     fn new_collection<D, R>(&mut self) -> (InputSession<<Self as ScopeParent>::Timestamp, D, R>, Collection<Self, D, R>)
@@ -62,19 +62,19 @@ pub trait Input : TimelyInput {
     /// fn main() {
     ///     ::timely::execute(Config::thread(), |worker| {
     ///
-    ///			let (mut handle, probe) = worker.dataflow::<(),_,_>(|scope| {
-    ///				// create input handle and collection.
-    ///				let (handle, data) = scope.new_collection_from(0 .. 10);
-    ///         	let probe = data.map(|x| x * 2)
-    ///				            	.inspect(|x| println!("{:?}", x))
-    ///				            	.probe();
-    ///				(handle, probe)
-    ///     	});
+    ///            let (mut handle, probe) = worker.dataflow::<(),_,_>(|scope| {
+    ///                // create input handle and collection.
+    ///                let (handle, data) = scope.new_collection_from(0 .. 10);
+    ///             let probe = data.map(|x| x * 2)
+    ///                                .inspect(|x| println!("{:?}", x))
+    ///                                .probe();
+    ///                (handle, probe)
+    ///         });
     ///
-    ///			handle.insert(1);
-    ///			handle.insert(5);
+    ///            handle.insert(1);
+    ///            handle.insert(5);
     ///
-    ///		}).unwrap();
+    ///        }).unwrap();
     /// }
     /// ```
     fn new_collection_from<I>(&mut self, data: I) -> (InputSession<<Self as ScopeParent>::Timestamp, I::Item, isize>, Collection<Self, I::Item, isize>)
@@ -116,8 +116,8 @@ use lattice::Lattice;
 impl<G: TimelyInput> Input for G where <G as ScopeParent>::Timestamp: Lattice {
     fn new_collection<D, R>(&mut self) -> (InputSession<<G as ScopeParent>::Timestamp, D, R>, Collection<G, D, R>)
     where D: Data, R: Semigroup{
-		let (handle, stream) = self.new_input();
-		(InputSession::from(handle), stream.as_collection())
+        let (handle, stream) = self.new_input();
+        (InputSession::from(handle), stream.as_collection())
     }
     fn new_collection_from<I>(&mut self, data: I) -> (InputSession<<G as ScopeParent>::Timestamp, I::Item, isize>, Collection<G, I::Item, isize>)
     where I: IntoIterator+'static, I::Item: Data {
@@ -156,47 +156,47 @@ impl<G: TimelyInput> Input for G where <G as ScopeParent>::Timestamp: Lattice {
 /// fn main() {
 ///     ::timely::execute(Config::thread(), |worker| {
 ///
-///			let (mut handle, probe) = worker.dataflow(|scope| {
-///				// create input handle and collection.
-///				let (handle, data) = scope.new_collection_from(0 .. 10);
-///         	let probe = data.map(|x| x * 2)
-///				            	.inspect(|x| println!("{:?}", x))
-///				            	.probe();
-///				(handle, probe)
-///     	});
+///            let (mut handle, probe) = worker.dataflow(|scope| {
+///                // create input handle and collection.
+///                let (handle, data) = scope.new_collection_from(0 .. 10);
+///             let probe = data.map(|x| x * 2)
+///                                .inspect(|x| println!("{:?}", x))
+///                                .probe();
+///                (handle, probe)
+///         });
 ///
-///			handle.insert(3);
-///			handle.advance_to(1);
-///			handle.insert(5);
-///			handle.advance_to(2);
-///			handle.flush();
+///            handle.insert(3);
+///            handle.advance_to(1);
+///            handle.insert(5);
+///            handle.advance_to(2);
+///            handle.flush();
 ///
-///			while probe.less_than(handle.time()) {
-///				worker.step();
-///			}
+///            while probe.less_than(handle.time()) {
+///                worker.step();
+///            }
 ///
-///			handle.remove(5);
-///			handle.advance_to(3);
-///			handle.flush();
+///            handle.remove(5);
+///            handle.advance_to(3);
+///            handle.flush();
 ///
-///			while probe.less_than(handle.time()) {
-///				worker.step();
-///			}
+///            while probe.less_than(handle.time()) {
+///                worker.step();
+///            }
 ///
-///		}).unwrap();
+///        }).unwrap();
 /// }
 /// ```
 pub struct InputSession<T: Timestamp+Clone, D: Data, R: Semigroup> {
-	time: T,
-	buffer: Vec<(D, T, R)>,
-	handle: Handle<T,(D,T,R)>,
+    time: T,
+    buffer: Vec<(D, T, R)>,
+    handle: Handle<T,(D,T,R)>,
 }
 
 impl<T: Timestamp+Clone, D: Data> InputSession<T, D, isize> {
-	/// Adds an element to the collection.
-	pub fn insert(&mut self, element: D) { self.update(element, 1); }
-	/// Removes an element from the collection.
-	pub fn remove(&mut self, element: D) { self.update(element,-1); }
+    /// Adds an element to the collection.
+    pub fn insert(&mut self, element: D) { self.update(element, 1); }
+    /// Removes an element from the collection.
+    pub fn remove(&mut self, element: D) { self.update(element,-1); }
 }
 
 // impl<T: Timestamp+Clone, D: Data> InputSession<T, D, i64> {
@@ -235,17 +235,17 @@ impl<T: Timestamp+Clone, D: Data, R: Semigroup> InputSession<T, D, R> {
         }
     }
 
-	/// Creates a new session from a reference to an input handle.
-	pub fn from(handle: Handle<T,(D,T,R)>) -> Self {
-		InputSession {
-			time: handle.time().clone(),
-			buffer: Vec::new(),
-			handle,
-		}
-	}
+    /// Creates a new session from a reference to an input handle.
+    pub fn from(handle: Handle<T,(D,T,R)>) -> Self {
+        InputSession {
+            time: handle.time().clone(),
+            buffer: Vec::new(),
+            handle,
+        }
+    }
 
-	/// Adds to the weight of an element in the collection.
-	pub fn update(&mut self, element: D, change: R) {
+    /// Adds to the weight of an element in the collection.
+    pub fn update(&mut self, element: D, change: R) {
         if self.buffer.len() == self.buffer.capacity() {
             if self.buffer.len() > 0 {
                 self.handle.send_batch(&mut self.buffer);
@@ -253,8 +253,8 @@ impl<T: Timestamp+Clone, D: Data, R: Semigroup> InputSession<T, D, R> {
             // TODO : This is a fairly arbitrary choice; should probably use `Context::default_size()` or such.
             self.buffer.reserve(1024);
         }
-		self.buffer.push((element, self.time.clone(), change));
-	}
+        self.buffer.push((element, self.time.clone(), change));
+    }
 
     /// Adds to the weight of an element in the collection at a future time.
     pub fn update_at(&mut self, element: D, time: T, change: R) {
@@ -269,40 +269,40 @@ impl<T: Timestamp+Clone, D: Data, R: Semigroup> InputSession<T, D, R> {
         self.buffer.push((element, time, change));
     }
 
-	/// Forces buffered data into the timely dataflow input, and advances its time to match that of the session.
-	///
-	/// It is important to call `flush` before expecting timely dataflow to report progress. Until this method is
-	/// called, all updates may still be in internal buffers and not exposed to timely dataflow. Once the method is
-	/// called, all buffers are flushed and timely dataflow is advised that some logical times are no longer possible.
-	pub fn flush(&mut self) {
-		self.handle.send_batch(&mut self.buffer);
-		if self.handle.epoch().less_than(&self.time) {
-			self.handle.advance_to(self.time.clone());
-		}
-	}
+    /// Forces buffered data into the timely dataflow input, and advances its time to match that of the session.
+    ///
+    /// It is important to call `flush` before expecting timely dataflow to report progress. Until this method is
+    /// called, all updates may still be in internal buffers and not exposed to timely dataflow. Once the method is
+    /// called, all buffers are flushed and timely dataflow is advised that some logical times are no longer possible.
+    pub fn flush(&mut self) {
+        self.handle.send_batch(&mut self.buffer);
+        if self.handle.epoch().less_than(&self.time) {
+            self.handle.advance_to(self.time.clone());
+        }
+    }
 
-	/// Advances the logical time for future records.
-	///
-	/// Importantly, this method does **not** immediately inform timely dataflow of the change. This happens only when
-	/// the session is dropped or flushed. It is not correct to use this time as a basis for a computation's `step_while`
-	/// method unless the session has just been flushed.
-	pub fn advance_to(&mut self, time: T) {
-		assert!(self.handle.epoch().less_equal(&time));
-		assert!(&self.time.less_equal(&time));
-		self.time = time;
-	}
+    /// Advances the logical time for future records.
+    ///
+    /// Importantly, this method does **not** immediately inform timely dataflow of the change. This happens only when
+    /// the session is dropped or flushed. It is not correct to use this time as a basis for a computation's `step_while`
+    /// method unless the session has just been flushed.
+    pub fn advance_to(&mut self, time: T) {
+        assert!(self.handle.epoch().less_equal(&time));
+        assert!(&self.time.less_equal(&time));
+        self.time = time;
+    }
 
-	/// Reveals the current time of the session.
-	pub fn epoch(&self) -> &T { &self.time }
-	/// Reveals the current time of the session.
-	pub fn time(&self) -> &T { &self.time }
+    /// Reveals the current time of the session.
+    pub fn epoch(&self) -> &T { &self.time }
+    /// Reveals the current time of the session.
+    pub fn time(&self) -> &T { &self.time }
 
-	/// Closes the input, flushing and sealing the wrapped timely input.
-	pub fn close(self) { }
+    /// Closes the input, flushing and sealing the wrapped timely input.
+    pub fn close(self) { }
 }
 
 impl<T: Timestamp+Clone, D: Data, R: Semigroup> Drop for InputSession<T, D, R> {
-	fn drop(&mut self) {
-		self.flush();
-	}
+    fn drop(&mut self) {
+        self.flush();
+    }
 }
