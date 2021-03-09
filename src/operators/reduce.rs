@@ -253,7 +253,6 @@ pub trait ReduceCore<G: Scope, K: Data, V: Data, R: Semigroup> where G::Timestam
     /// use differential_dataflow::operators::reduce::ReduceCore;
     /// use differential_dataflow::trace::Trace;
     /// use differential_dataflow::trace::implementations::ord::OrdValSpine;
-    /// use differential_dataflow::hashable::OrdWrapper;
     ///
     /// fn main() {
     ///     ::timely::example(|scope| {
