@@ -224,7 +224,7 @@ where
     }
     fn get_physical_compaction(&mut self) -> AntichainRef<T> { self.physical_frontier.borrow() }
 
-    fn map_batches<F: FnMut(&Self::Batch)>(&mut self, mut f: F) {
+    fn map_batches<F: FnMut(&Self::Batch)>(&self, mut f: F) {
         for batch in self.merging.iter().rev() {
             match batch {
                 MergeState::Double(MergeVariant::InProgress(batch1, batch2, _)) => { f(batch1); f(batch2); },

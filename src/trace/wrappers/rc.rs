@@ -124,8 +124,8 @@ where
         ::std::cell::RefCell::borrow_mut(&self.wrapper).trace.cursor_through(frontier)
     }
 
-    fn map_batches<F: FnMut(&Self::Batch)>(&mut self, f: F) {
-        ::std::cell::RefCell::borrow_mut(&self.wrapper).trace.map_batches(f)
+    fn map_batches<F: FnMut(&Self::Batch)>(&self, f: F) {
+        ::std::cell::RefCell::borrow(&self.wrapper).trace.map_batches(f)
     }
 }
 

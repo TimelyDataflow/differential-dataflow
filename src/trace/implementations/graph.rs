@@ -60,7 +60,7 @@ where
     }
     fn get_physical_compaction(&mut self) -> &[Product<RootTimestamp,()>] { &self.spine.get_physical_compaction() }
 
-    fn map_batches<F: FnMut(&Self::Batch)>(&mut self, f: F) {
+    fn map_batches<F: FnMut(&Self::Batch)>(&self, f: F) {
         self.spine.map_batches(f)
     }
 }
