@@ -6,8 +6,6 @@ use timely::dataflow::channels::pact::{Pipeline, Exchange};
 use timely::dataflow::operators::Operator;
 use timely::progress::Antichain;
 
-use timely_sort::Unsigned;
-
 use differential_dataflow::{ExchangeData, Collection, AsCollection, Hashable};
 use differential_dataflow::difference::{Semigroup, Monoid};
 use differential_dataflow::lattice::Lattice;
@@ -58,7 +56,7 @@ where
     let mut key: Tr::Key = supplied_key0;
     let exchange = Exchange::new(move |update: &(D,G::Timestamp,R)| {
         logic1(&update.0, &mut key);
-        key.hashed().as_u64()
+        key.hashed().into()
     });
 
     let mut key1: Tr::Key = supplied_key1;

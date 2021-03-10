@@ -115,8 +115,6 @@ use timely::progress::Timestamp;
 use timely::progress::Antichain;
 use timely::dataflow::operators::Capability;
 
-use timely_sort::Unsigned;
-
 use ::{ExchangeData, Hashable};
 use lattice::Lattice;
 use trace::{Trace, TraceReader, Batch, Cursor};
@@ -157,7 +155,7 @@ where
 
         let reader = &mut reader;
 
-        let exchange = Exchange::new(move |update: &(Tr::Key,Option<Tr::Val>,G::Timestamp)| (update.0).hashed().as_u64());
+        let exchange = Exchange::new(move |update: &(Tr::Key,Option<Tr::Val>,G::Timestamp)| (update.0).hashed().into());
 
         stream.unary_frontier(exchange, name, move |_capability, info| {
 

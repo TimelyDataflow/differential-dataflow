@@ -26,8 +26,6 @@ use timely::progress::Timestamp;
 use timely::progress::{Antichain, frontier::AntichainRef};
 use timely::dataflow::operators::Capability;
 
-use timely_sort::Unsigned;
-
 use ::{Data, ExchangeData, Collection, AsCollection, Hashable};
 use ::difference::Semigroup;
 use lattice::Lattice;
@@ -274,7 +272,7 @@ where
         Tr: 'static,
     {
         // while the arrangement is already correctly distributed, the query stream may not be.
-        let exchange = Exchange::new(move |update: &(Tr::Key,G::Timestamp)| update.0.hashed().as_u64());
+        let exchange = Exchange::new(move |update: &(Tr::Key,G::Timestamp)| update.0.hashed().into());
         queries.binary_frontier(&self.stream, exchange, Pipeline, "TraceQuery", move |_capability, _info| {
 
             let mut trace = Some(self.trace.clone());
@@ -484,7 +482,7 @@ where
         Tr::Batch: Batch<K, V, G::Timestamp, R>,
         Tr::Cursor: Cursor<K, V, G::Timestamp, R>,
     {
-        let exchange = Exchange::new(move |update: &((K,V),G::Timestamp,R)| (update.0).0.hashed().as_u64());
+        let exchange = Exchange::new(move |update: &((K,V),G::Timestamp,R)| (update.0).0.hashed().into());
         self.arrange_core(exchange, name)
     }
 

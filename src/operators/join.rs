@@ -237,7 +237,6 @@ pub trait JoinCore<G: Scope, K: 'static, V: 'static, R: Semigroup> where G::Time
     /// use differential_dataflow::operators::join::JoinCore;
     /// use differential_dataflow::trace::Trace;
     /// use differential_dataflow::trace::implementations::ord::OrdValSpine;
-    /// use differential_dataflow::hashable::OrdWrapper;
     ///
     /// fn main() {
     ///     ::timely::example(|scope| {
