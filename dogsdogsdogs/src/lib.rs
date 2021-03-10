@@ -2,7 +2,6 @@
 extern crate abomonation_derive;
 extern crate abomonation;
 extern crate timely;
-extern crate timely_sort;
 extern crate differential_dataflow;
 #[macro_use]
 extern crate serde_derive;
