@@ -50,7 +50,7 @@ where
     type Batch = BatchFrontier<Tr::Key, Tr::Val, Tr::Time, Tr::R, Tr::Batch>;
     type Cursor = CursorFrontier<Tr::Key, Tr::Val, Tr::Time, Tr::R, Tr::Cursor>;
 
-    fn map_batches<F: FnMut(&Self::Batch)>(&mut self, mut f: F) {
+    fn map_batches<F: FnMut(&Self::Batch)>(&self, mut f: F) {
         let frontier = self.frontier.borrow();
         self.trace.map_batches(|batch| f(&Self::Batch::make_from(batch.clone(), frontier)))
     }

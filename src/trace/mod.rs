@@ -154,7 +154,7 @@ pub trait TraceReader {
     /// This is currently used only to extract historical data to prime late-starting operators who want to reproduce
     /// the stream of batches moving past the trace. It could also be a fine basis for a default implementation of the
     /// cursor methods, as they (by default) just move through batches accumulating cursors into a cursor list.
-    fn map_batches<F: FnMut(&Self::Batch)>(&mut self, f: F);
+    fn map_batches<F: FnMut(&Self::Batch)>(&self, f: F);
 
     /// Reads the upper frontier of committed times.
     ///

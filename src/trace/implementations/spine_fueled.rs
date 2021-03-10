@@ -215,7 +215,7 @@ where
     }
     fn get_physical_compaction(&mut self) -> &[T] { &self.physical_frontier[..] }
 
-    fn map_batches<F: FnMut(&Self::Batch)>(&mut self, mut f: F) {
+    fn map_batches<F: FnMut(&Self::Batch)>(&self, mut f: F) {
         for batch in self.merging.iter().rev() {
             match *batch {
                 Some(MergeState::Merging(ref batch1, ref batch2, _, _)) => { f(batch1); f(batch2); },

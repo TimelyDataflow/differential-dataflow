@@ -96,7 +96,7 @@ where
     type Batch = BatchFreeze<Tr::Key, Tr::Val, Tr::Time, Tr::R, Tr::Batch, F>;
     type Cursor = CursorFreeze<Tr::Key, Tr::Val, Tr::Time, Tr::R, Tr::Cursor, F>;
 
-    fn map_batches<F2: FnMut(&Self::Batch)>(&mut self, mut f: F2) {
+    fn map_batches<F2: FnMut(&Self::Batch)>(&self, mut f: F2) {
         let func = &self.func;
         self.trace.map_batches(|batch| {
             f(&Self::Batch::make_from(batch.clone(), func.clone()));

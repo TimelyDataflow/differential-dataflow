@@ -50,7 +50,7 @@ where
     type Batch = BatchEnter<Tr::Key, Tr::Val, Tr::Time, Tr::R, Tr::Batch, TInner>;
     type Cursor = CursorEnter<Tr::Key, Tr::Val, Tr::Time, Tr::R, Tr::Cursor, TInner>;
 
-    fn map_batches<F: FnMut(&Self::Batch)>(&mut self, mut f: F) {
+    fn map_batches<F: FnMut(&Self::Batch)>(&self, mut f: F) {
         self.trace.map_batches(|batch| {
             f(&Self::Batch::make_from(batch.clone()));
         })

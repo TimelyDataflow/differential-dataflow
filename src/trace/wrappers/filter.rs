@@ -43,7 +43,7 @@ where
     type Batch = BatchFilter<Tr::Key, Tr::Val, Tr::Time, Tr::R, Tr::Batch, F>;
     type Cursor = CursorFilter<Tr::Key, Tr::Val, Tr::Time, Tr::R, Tr::Cursor, F>;
 
-    fn map_batches<F2: FnMut(&Self::Batch)>(&mut self, mut f: F2) {
+    fn map_batches<F2: FnMut(&Self::Batch)>(&self, mut f: F2) {
         let logic = self.logic.clone();
         self.trace
             .map_batches(|batch| f(&Self::Batch::make_from(batch.clone(), logic.clone())))
