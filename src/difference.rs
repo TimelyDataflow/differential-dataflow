@@ -310,3 +310,99 @@ mod vector {
         }
     }
 }
+
+pub use self::array::DiffArray;
+mod array {
+    use std::convert::TryInto;
+    use std::ops::{AddAssign, Neg, Mul};
+    use super::{Semigroup, Monoid};
+
+    /// Like a [`DiffVector`](super::DiffVector), but the elements are stored
+    /// in an array rather than a vector.
+    #[derive(Abomonation, Ord, PartialOrd, Eq, PartialEq, Debug, Clone)]
+    pub struct DiffArray<R, const N: usize> {
+        buffer: [R; N],
+    }
+
+    impl<R, const N: usize> DiffArray<R, N> {
+        /// Creates a new `DiffArray` from an array.
+        #[inline(always)]
+        pub fn new(arr: [R; N]) -> DiffArray<R, N> {
+            DiffArray { buffer: arr }
+        }
+    }
+
+    impl<R, const N: usize> IntoIterator for DiffArray<R, N> {
+        type Item = R;
+        type IntoIter = ::std::array::IntoIter<R, N>;
+
+        fn into_iter(self) -> Self::IntoIter {
+            ::std::array::IntoIter::new(self.buffer)
+        }
+    }
+
+    impl<R, const N: usize> std::ops::Deref for DiffArray<R, N> {
+        type Target = [R];
+
+        fn deref(&self) -> &Self::Target {
+            &self.buffer[..]
+        }
+    }
+
+    impl<R, const N: usize> std::ops::DerefMut for DiffArray<R, N> {
+        fn deref_mut(&mut self) -> &mut Self::Target {
+            &mut self.buffer[..]
+        }
+    }
+
+    impl<R: Semigroup, const N: usize> Semigroup for DiffArray<R, N> {
+        #[inline]
+        fn is_zero(&self) -> bool {
+            self.buffer.iter().all(|x| x.is_zero())
+        }
+    }
+
+    impl<'a, R: AddAssign<&'a R>+Clone, const N: usize> AddAssign<&'a DiffArray<R, N>> for DiffArray<R, N> {
+        #[inline]
+        fn add_assign(&mut self, rhs: &'a Self) {
+            for (index, update) in rhs.buffer.iter().enumerate() {
+                self.buffer[index] += update;
+            }
+        }
+    }
+
+    impl<R: Neg<Output = R> + Clone, const N: usize> Neg for DiffArray<R, N> {
+        type Output = DiffArray<<R as Neg>::Output, N>;
+
+        #[inline]
+        fn neg(mut self) -> Self::Output {
+            for update in self.buffer.iter_mut() {
+                *update = -update.clone();
+            }
+            self
+        }
+    }
+
+    impl<T: Copy, R: Mul<T>, const N: usize> Mul<T> for DiffArray<R, N> {
+        type Output = DiffArray<<R as Mul<T>>::Output, N>;
+
+        fn mul(self, other: T) -> Self::Output {
+            // It would be nice to avoid the intermediate vector here, but
+            // seems to be impossible to do safely, and doing so unsafely
+            // is risky without some new MaybeUninit APIs:
+            // https://github.com/rust-lang/rust/pull/80600.
+            let buffer: Vec<_> = ::std::array::IntoIter::new(self.buffer)
+                .map(|x| x * other)
+                .collect();
+            DiffArray {
+                buffer: buffer.try_into().unwrap_or_else(|_| unreachable!()),
+            }
+        }
+    }
+
+    impl<R: Monoid + Copy, const N: usize> Monoid for DiffArray<R, N> {
+        fn zero() -> Self {
+            Self { buffer: [R::zero(); N] }
+        }
+    }
+}
