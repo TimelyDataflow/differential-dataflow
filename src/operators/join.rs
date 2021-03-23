@@ -4,7 +4,6 @@
 //! the multiplication distributes over addition. That is, we will repeatedly evaluate (a + b) * c as (a * c)
 //! + (b * c), and if this is not equal to the former term, little is known about the actual output.
 use std::fmt::Debug;
-use std::ops::Mul;
 use std::cmp::Ordering;
 
 use timely::order::PartialOrder;
@@ -17,7 +16,7 @@ use timely::dataflow::channels::pushers::tee::Tee;
 
 use hashable::Hashable;
 use ::{Data, ExchangeData, Collection, AsCollection};
-use ::difference::{Semigroup, Abelian};
+use ::difference::{Semigroup, Abelian, Multiply};
 use lattice::Lattice;
 use operators::arrange::{Arranged, ArrangeByKey, ArrangeBySelf};
 use trace::{BatchReader, Cursor};
@@ -53,13 +52,13 @@ pub trait Join<G: Scope, K: Data, V: Data, R: Semigroup> {
     ///     });
     /// }
     /// ```
-    fn join<V2, R2>(&self, other: &Collection<G, (K,V2), R2>) -> Collection<G, (K,(V,V2)), <R as Mul<R2>>::Output>
+    fn join<V2, R2>(&self, other: &Collection<G, (K,V2), R2>) -> Collection<G, (K,(V,V2)), <R as Multiply<R2>>::Output>
     where
         K: ExchangeData,
         V2: ExchangeData,
         R2: ExchangeData+Semigroup,
-        R: Mul<R2>,
-        <R as Mul<R2>>::Output: Semigroup
+        R: Multiply<R2>,
+        <R as Multiply<R2>>::Output: Semigroup
     {
         self.join_map(other, |k,v,v2| (k.clone(),(v.clone(),v2.clone())))
     }
@@ -87,8 +86,8 @@ pub trait Join<G: Scope, K: Data, V: Data, R: Semigroup> {
     ///     });
     /// }
     /// ```
-    fn join_map<V2, R2, D, L>(&self, other: &Collection<G, (K,V2), R2>, logic: L) -> Collection<G, D, <R as Mul<R2>>::Output>
-    where K: ExchangeData, V2: ExchangeData, R2: ExchangeData+Semigroup, R: Mul<R2>, <R as Mul<R2>>::Output: Semigroup, D: Data, L: FnMut(&K, &V, &V2)->D+'static;
+    fn join_map<V2, R2, D, L>(&self, other: &Collection<G, (K,V2), R2>, logic: L) -> Collection<G, D, <R as Multiply<R2>>::Output>
+    where K: ExchangeData, V2: ExchangeData, R2: ExchangeData+Semigroup, R: Multiply<R2>, <R as Multiply<R2>>::Output: Semigroup, D: Data, L: FnMut(&K, &V, &V2)->D+'static;
 
     /// Matches pairs `(key, val)` and `key` based on `key`, producing the former with frequencies multiplied.
     ///
@@ -117,8 +116,8 @@ pub trait Join<G: Scope, K: Data, V: Data, R: Semigroup> {
     ///     });
     /// }
     /// ```
-    fn semijoin<R2>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), <R as Mul<R2>>::Output>
-    where K: ExchangeData, R2: ExchangeData+Semigroup, R: Mul<R2>, <R as Mul<R2>>::Output: Semigroup;
+    fn semijoin<R2>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), <R as Multiply<R2>>::Output>
+    where K: ExchangeData, R2: ExchangeData+Semigroup, R: Multiply<R2>, <R as Multiply<R2>>::Output: Semigroup;
     /// Subtracts the semijoin with `other` from `self`.
     ///
     /// In the case that `other` has multiplicities zero or one this results
@@ -151,7 +150,7 @@ pub trait Join<G: Scope, K: Data, V: Data, R: Semigroup> {
     /// }
     /// ```
     fn antijoin<R2>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), R>
-    where K: ExchangeData, R2: ExchangeData+Semigroup, R: Mul<R2, Output = R>, R: Abelian;
+    where K: ExchangeData, R2: ExchangeData+Semigroup, R: Multiply<R2, Output = R>, R: Abelian;
 }
 
 impl<G, K, V, R> Join<G, K, V, R> for Collection<G, (K, V), R>
@@ -162,22 +161,22 @@ where
     R: ExchangeData+Semigroup,
     G::Timestamp: Lattice+Ord,
 {
-    fn join_map<V2: ExchangeData, R2: ExchangeData+Semigroup, D: Data, L>(&self, other: &Collection<G, (K, V2), R2>, mut logic: L) -> Collection<G, D, <R as Mul<R2>>::Output>
-    where R: Mul<R2>, <R as Mul<R2>>::Output: Semigroup, L: FnMut(&K, &V, &V2)->D+'static {
+    fn join_map<V2: ExchangeData, R2: ExchangeData+Semigroup, D: Data, L>(&self, other: &Collection<G, (K, V2), R2>, mut logic: L) -> Collection<G, D, <R as Multiply<R2>>::Output>
+    where R: Multiply<R2>, <R as Multiply<R2>>::Output: Semigroup, L: FnMut(&K, &V, &V2)->D+'static {
         let arranged1 = self.arrange_by_key();
         let arranged2 = other.arrange_by_key();
         arranged1.join_core(&arranged2, move |k,v1,v2| Some(logic(k,v1,v2)))
     }
 
-    fn semijoin<R2: ExchangeData+Semigroup>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), <R as Mul<R2>>::Output>
-    where R: Mul<R2>, <R as Mul<R2>>::Output: Semigroup {
+    fn semijoin<R2: ExchangeData+Semigroup>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), <R as Multiply<R2>>::Output>
+    where R: Multiply<R2>, <R as Multiply<R2>>::Output: Semigroup {
         let arranged1 = self.arrange_by_key();
         let arranged2 = other.arrange_by_self();
         arranged1.join_core(&arranged2, |k,v,_| Some((k.clone(), v.clone())))
     }
 
     fn antijoin<R2: ExchangeData+Semigroup>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), R>
-    where R: Mul<R2, Output=R>, R: Abelian {
+    where R: Multiply<R2, Output=R>, R: Abelian {
         self.concat(&self.semijoin(other).negate())
     }
 }
@@ -193,20 +192,20 @@ where
     Tr::Batch: BatchReader<Tr::Key,Tr::Val,G::Timestamp,Tr::R>+'static,
     Tr::Cursor: Cursor<Tr::Key,Tr::Val,G::Timestamp,Tr::R>+'static,
 {
-    fn join_map<V2: ExchangeData, R2: ExchangeData+Semigroup, D: Data, L>(&self, other: &Collection<G, (Tr::Key, V2), R2>, mut logic: L) -> Collection<G, D, <Tr::R as Mul<R2>>::Output>
-    where Tr::Key: ExchangeData, Tr::R: Mul<R2>, <Tr::R as Mul<R2>>::Output: Semigroup, L: FnMut(&Tr::Key, &Tr::Val, &V2)->D+'static {
+    fn join_map<V2: ExchangeData, R2: ExchangeData+Semigroup, D: Data, L>(&self, other: &Collection<G, (Tr::Key, V2), R2>, mut logic: L) -> Collection<G, D, <Tr::R as Multiply<R2>>::Output>
+    where Tr::Key: ExchangeData, Tr::R: Multiply<R2>, <Tr::R as Multiply<R2>>::Output: Semigroup, L: FnMut(&Tr::Key, &Tr::Val, &V2)->D+'static {
         let arranged2 = other.arrange_by_key();
         self.join_core(&arranged2, move |k,v1,v2| Some(logic(k,v1,v2)))
     }
 
-    fn semijoin<R2: ExchangeData+Semigroup>(&self, other: &Collection<G, Tr::Key, R2>) -> Collection<G, (Tr::Key, Tr::Val), <Tr::R as Mul<R2>>::Output>
-    where Tr::Key: ExchangeData, Tr::R: Mul<R2>, <Tr::R as Mul<R2>>::Output: Semigroup {
+    fn semijoin<R2: ExchangeData+Semigroup>(&self, other: &Collection<G, Tr::Key, R2>) -> Collection<G, (Tr::Key, Tr::Val), <Tr::R as Multiply<R2>>::Output>
+    where Tr::Key: ExchangeData, Tr::R: Multiply<R2>, <Tr::R as Multiply<R2>>::Output: Semigroup {
         let arranged2 = other.arrange_by_self();
         self.join_core(&arranged2, |k,v,_| Some((k.clone(), v.clone())))
     }
 
     fn antijoin<R2: ExchangeData+Semigroup>(&self, other: &Collection<G, Tr::Key, R2>) -> Collection<G, (Tr::Key, Tr::Val), Tr::R>
-    where Tr::Key: ExchangeData, Tr::R: Mul<R2, Output=Tr::R>, Tr::R: Abelian {
+    where Tr::Key: ExchangeData, Tr::R: Multiply<R2, Output=Tr::R>, Tr::R: Abelian {
         self.as_collection(|k,v| (k.clone(), v.clone()))
             .concat(&self.semijoin(other).negate())
     }
@@ -253,15 +252,15 @@ pub trait JoinCore<G: Scope, K: 'static, V: 'static, R: Semigroup> where G::Time
     ///     });
     /// }
     /// ```
-    fn join_core<Tr2,I,L> (&self, stream2: &Arranged<G,Tr2>, result: L) -> Collection<G,I::Item,<R as Mul<Tr2::R>>::Output>
+    fn join_core<Tr2,I,L> (&self, stream2: &Arranged<G,Tr2>, result: L) -> Collection<G,I::Item,<R as Multiply<Tr2::R>>::Output>
     where
         Tr2: TraceReader<Key=K, Time=G::Timestamp>+Clone+'static,
         Tr2::Batch: BatchReader<K, Tr2::Val, G::Timestamp, Tr2::R>+'static,
         Tr2::Cursor: Cursor<K, Tr2::Val, G::Timestamp, Tr2::R>+'static,
         Tr2::Val: Ord+Clone+Debug+'static,
         Tr2::R: Semigroup,
-        R: Mul<Tr2::R>,
-        <R as Mul<Tr2::R>>::Output: Semigroup,
+        R: Multiply<Tr2::R>,
+        <R as Multiply<Tr2::R>>::Output: Semigroup,
         I: IntoIterator,
         I::Item: Data,
         L: FnMut(&K,&V,&Tr2::Val)->I+'static,
@@ -277,15 +276,15 @@ where
     R: ExchangeData+Semigroup,
     G::Timestamp: Lattice+Ord,
 {
-    fn join_core<Tr2,I,L> (&self, stream2: &Arranged<G,Tr2>, result: L) -> Collection<G,I::Item,<R as Mul<Tr2::R>>::Output>
+    fn join_core<Tr2,I,L> (&self, stream2: &Arranged<G,Tr2>, result: L) -> Collection<G,I::Item,<R as Multiply<Tr2::R>>::Output>
     where
         Tr2: TraceReader<Key=K, Time=G::Timestamp>+Clone+'static,
         Tr2::Batch: BatchReader<K, Tr2::Val, G::Timestamp, Tr2::R>+'static,
         Tr2::Cursor: Cursor<K, Tr2::Val, G::Timestamp, Tr2::R>+'static,
         Tr2::Val: Ord+Clone+Debug+'static,
         Tr2::R: Semigroup,
-        R: Mul<Tr2::R>,
-        <R as Mul<Tr2::R>>::Output: Semigroup,
+        R: Multiply<Tr2::R>,
+        <R as Multiply<Tr2::R>>::Output: Semigroup,
         I: IntoIterator,
         I::Item: Data,
         L: FnMut(&K,&V,&Tr2::Val)->I+'static,
@@ -306,15 +305,15 @@ impl<G, T1> JoinCore<G, T1::Key, T1::Val, T1::R> for Arranged<G,T1>
         T1::Batch: BatchReader<T1::Key,T1::Val,G::Timestamp,T1::R>+'static,
         T1::Cursor: Cursor<T1::Key,T1::Val,G::Timestamp,T1::R>+'static,
 {
-    fn join_core<Tr2,I,L>(&self, other: &Arranged<G,Tr2>, mut result: L) -> Collection<G,I::Item,<T1::R as Mul<Tr2::R>>::Output>
+    fn join_core<Tr2,I,L>(&self, other: &Arranged<G,Tr2>, mut result: L) -> Collection<G,I::Item,<T1::R as Multiply<Tr2::R>>::Output>
     where
         Tr2::Val: Ord+Clone+Debug+'static,
         Tr2: TraceReader<Key=T1::Key,Time=G::Timestamp>+Clone+'static,
         Tr2::Batch: BatchReader<T1::Key, Tr2::Val, G::Timestamp, Tr2::R>+'static,
         Tr2::Cursor: Cursor<T1::Key, Tr2::Val, G::Timestamp, Tr2::R>+'static,
         Tr2::R: Semigroup,
-        T1::R: Mul<Tr2::R>,
-        <T1::R as Mul<Tr2::R>>::Output: Semigroup,
+        T1::R: Multiply<Tr2::R>,
+        <T1::R as Multiply<Tr2::R>>::Output: Semigroup,
         I: IntoIterator,
         I::Item: Data,
         L: FnMut(&T1::Key,&T1::Val,&Tr2::Val)->I+'static {
@@ -490,7 +489,7 @@ impl<G, T1> JoinCore<G, T1::Key, T1::Val, T1::R> for Arranged<G,T1>
                     todo1.front_mut().unwrap().work(
                         output,
                         |k,v2,v1| result(k,v1,v2),
-                        |r2,r1| (r1.clone()) * (r2.clone()),
+                        |r2,r1| (r1.clone()).multiply(r2),
                         &mut fuel
                     );
                     if !todo1.front().unwrap().work_remains() { todo1.pop_front(); }
@@ -502,7 +501,7 @@ impl<G, T1> JoinCore<G, T1::Key, T1::Val, T1::R> for Arranged<G,T1>
                     todo2.front_mut().unwrap().work(
                         output,
                         |k,v1,v2| result(k,v1,v2),
-                        |r1,r2| (r1.clone()) * (r2.clone()),
+                        |r1,r2| (r1.clone()).multiply(r2),
                         &mut fuel
                     );
                     if !todo2.front().unwrap().work_remains() { todo2.pop_front(); }

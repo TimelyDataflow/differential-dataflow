@@ -275,7 +275,7 @@ impl<D: Ord, T: Ord, R: Semigroup> MergeSorter<D, T, R> {
                     Ordering::Equal   => {
                         let (data1, time1, mut diff1) = head1.pop();
                         let (_data2, _time2, diff2) = head2.pop();
-                        diff1 += &diff2;
+                        diff1.plus_equals(&diff2);
                         if !diff1.is_zero() {
                             unsafe { push_unchecked(&mut result, (data1, time1, diff1)); }
                         }

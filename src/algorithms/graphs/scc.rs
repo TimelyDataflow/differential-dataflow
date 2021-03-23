@@ -2,14 +2,13 @@
 
 use std::mem;
 use std::hash::Hash;
-use std::ops::Mul;
 
 use timely::dataflow::*;
 
 use ::{Collection, ExchangeData};
 use ::operators::*;
 use ::lattice::Lattice;
-use ::difference::Abelian;
+use ::difference::{Abelian, Multiply};
 
 use super::propagate::propagate;
 
@@ -20,7 +19,7 @@ where
     G::Timestamp: Lattice+Ord,
     N: ExchangeData+Hash,
     R: ExchangeData + Abelian,
-    R: Mul<R, Output=R>,
+    R: Multiply<R, Output=R>,
     R: From<i8>,
 {
     graph.iterate(|edges| {
@@ -41,7 +40,7 @@ where
     G::Timestamp: Lattice+Ord,
     N: ExchangeData+Hash,
     R: ExchangeData + Abelian,
-    R: Mul<R, Output=R>,
+    R: Multiply<R, Output=R>,
     R: From<i8>
 {
     graph.iterate(|inner| {
@@ -58,7 +57,7 @@ where
     G::Timestamp: Lattice+Ord,
     N: ExchangeData+Hash,
     R: ExchangeData + Abelian,
-    R: Mul<R, Output=R>,
+    R: Multiply<R, Output=R>,
     R: From<i8>
 {
     let nodes = edges.map_in_place(|x| x.0 = x.1.clone())

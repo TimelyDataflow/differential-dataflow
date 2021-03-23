@@ -9,7 +9,6 @@
 //! implementations, and to support efficient incremental updates to the collections.
 
 use std::hash::Hash;
-use std::ops::Mul;
 
 use timely::Data;
 use timely::progress::Timestamp;
@@ -18,7 +17,7 @@ use timely::dataflow::scopes::{Child, child::Iterative};
 use timely::dataflow::{Scope, Stream};
 use timely::dataflow::operators::*;
 
-use ::difference::{Semigroup, Abelian};
+use ::difference::{Semigroup, Abelian, Multiply};
 use lattice::Lattice;
 use hashable::Hashable;
 
@@ -259,15 +258,15 @@ impl<G: Scope, D: Data, R: Semigroup> Collection<G, D, R> where G::Timestamp: Da
     ///     });
     /// }
     /// ```
-    pub fn explode<D2, R2, I, L>(&self, mut logic: L) -> Collection<G, D2, <R2 as Mul<R>>::Output>
+    pub fn explode<D2, R2, I, L>(&self, mut logic: L) -> Collection<G, D2, <R2 as Multiply<R>>::Output>
     where D2: Data,
-          R2: Semigroup+Mul<R>,
-          <R2 as Mul<R>>::Output: Data+Semigroup,
+          R2: Semigroup+Multiply<R>,
+          <R2 as Multiply<R>>::Output: Data+Semigroup,
           I: IntoIterator<Item=(D2,R2)>,
           L: FnMut(D)->I+'static,
     {
         self.inner
-            .flat_map(move |(x, t, d)| logic(x).into_iter().map(move |(x,d2)| (x, t.clone(), d2 * d.clone())))
+            .flat_map(move |(x, t, d)| logic(x).into_iter().map(move |(x,d2)| (x, t.clone(), d2.multiply(&d))))
             .as_collection()
     }
 
@@ -587,7 +586,7 @@ impl<G: Scope, D: Data, R: Abelian> Collection<G, D, R> where G::Timestamp: Data
     /// ```
     pub fn negate(&self) -> Collection<G, D, R> {
         self.inner
-            .map_in_place(|x| x.2 = -x.2.clone())
+            .map_in_place(|x| x.2 = x.2.clone().negate())
             .as_collection()
     }
 

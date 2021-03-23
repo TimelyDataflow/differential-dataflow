@@ -1,10 +1,9 @@
-use std::ops::Mul;
 use std::hash::Hash;
 
 use timely::dataflow::Scope;
 
 use differential_dataflow::{ExchangeData, Collection};
-use differential_dataflow::difference::Monoid;
+use differential_dataflow::difference::{Monoid, Multiply};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::trace::{Cursor, TraceReader, BatchReader};
@@ -27,7 +26,7 @@ where
     V: ExchangeData+Hash+Default,
     Tr::Batch: BatchReader<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
     Tr::Cursor: Cursor<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
-    Tr::R: Monoid+Mul<Output = Tr::R>+ExchangeData,
+    Tr::R: Monoid+Multiply<Output = Tr::R>+ExchangeData,
     F: Fn(&P)->K+Clone+'static,
     P: ExchangeData,
 {

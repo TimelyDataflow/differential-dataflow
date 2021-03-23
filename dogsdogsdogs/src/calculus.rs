@@ -41,7 +41,7 @@ where
         self.enter(child)
             .inner
             .flat_map(|(data, time, diff)| {
-                let neu = (data.clone(), AltNeu::neu(time.time.clone()), diff.clone().neg());
+                let neu = (data.clone(), AltNeu::neu(time.time.clone()), diff.clone().negate());
                 let alt = (data, time, diff);
                 Some(alt).into_iter().chain(Some(neu))
             })

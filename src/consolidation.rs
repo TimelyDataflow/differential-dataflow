@@ -59,7 +59,7 @@ pub fn consolidate_slice<T: Ord, R: Semigroup>(slice: &mut [(T, R)]) -> usize {
             let ptr2 = slice.as_mut_ptr().offset(index as isize);
 
             if (*ptr1).0 == (*ptr2).0 {
-                (*ptr1).1 += &(*ptr2).1;
+                (*ptr1).1.plus_equals(&(*ptr2).1);
             }
             else {
                 if !(*ptr1).1.is_zero() {
@@ -122,7 +122,7 @@ pub fn consolidate_updates_slice<D: Ord, T: Ord, R: Semigroup>(slice: &mut [(D, 
             let ptr2 = slice.as_mut_ptr().offset(index as isize);
 
             if (*ptr1).0 == (*ptr2).0 && (*ptr1).1 == (*ptr2).1 {
-                (*ptr1).2 += &(*ptr2).2;
+                (*ptr1).2.plus_equals(&(*ptr2).2);
             }
             else {
                 if !(*ptr1).2.is_zero() {
