@@ -28,24 +28,20 @@ pub struct MinSum {
     value: u32,
 }
 
-use std::ops::{AddAssign, Mul};
-use differential_dataflow::difference::Semigroup;
-
-impl<'a> AddAssign<&'a Self> for MinSum {
-    fn add_assign(&mut self, rhs: &'a Self) {
-        self.value = std::cmp::min(self.value, rhs.value);
-    }
-}
-
-impl Mul<Self> for MinSum {
-    type Output = Self;
-    fn mul(self, rhs: Self) -> Self {
-        MinSum { value: self.value + rhs.value }
-    }
-}
+use differential_dataflow::difference::{Semigroup, Multiply};
 
 impl Semigroup for MinSum {
+    fn plus_equals(&mut self, rhs: &Self) {
+        self.value = std::cmp::min(self.value, rhs.value);
+    }
     fn is_zero(&self) -> bool { false }
+}
+
+impl Multiply<Self> for MinSum {
+    type Output = Self;
+    fn multiply(self, rhs: &Self) -> Self {
+        MinSum { value: self.value + rhs.value }
+    }
 }
 
 fn main() {
