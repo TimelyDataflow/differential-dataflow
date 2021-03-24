@@ -47,7 +47,7 @@ pub trait ThresholdTotal<G: Scope, K: ExchangeData, R: ExchangeData+Semigroup> w
     fn threshold_total<R2: Abelian, F: FnMut(&K,&R)->R2+'static>(&self, mut thresh: F) -> Collection<G, K, R2> {
         self.threshold_semigroup(move |key, new, old| {
             let mut new = thresh(key, new);
-            if let Some(old) = old { new += &-thresh(key, old); }
+            if let Some(old) = old { new.plus_equals(&thresh(key, old).negate()); }
             if !new.is_zero() { Some(new) } else { None }
         })
     }
@@ -139,13 +139,13 @@ where
 
                         while batch_cursor.key_valid(&batch) {
                             let key = batch_cursor.key(&batch);
-                            let mut count = None;
+                            let mut count: Option<T1::R> = None;
 
                             // Compute the multiplicity of this key before the current batch.
                             trace_cursor.seek_key(&trace_storage, key);
                             if trace_cursor.get_key(&trace_storage) == Some(key) {
                                 trace_cursor.map_times(&trace_storage, |_, diff| {
-                                    count.as_mut().map(|c| *c += diff);
+                                    count.as_mut().map(|c| c.plus_equals(diff));
                                     if count.is_none() { count = Some(diff.clone()); }
                                 });
                             }
@@ -158,7 +158,7 @@ where
                                 match &count {
                                     Some(old) => {
                                         let mut temp = old.clone();
-                                        temp += diff;
+                                        temp.plus_equals(diff);
                                         thresh(key, &temp, Some(old))
                                     },
                                     None => { thresh(key, diff, None) },
@@ -166,7 +166,7 @@ where
 
                                 // Either add or assign `diff` to `count`.
                                 if let Some(count) = &mut count {
-                                    *count += diff;
+                                    count.plus_equals(diff);
                                 }
                                 else {
                                     count = Some(diff.clone());

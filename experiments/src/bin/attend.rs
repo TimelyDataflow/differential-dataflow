@@ -8,8 +8,6 @@ use std::time::Instant;
 use differential_dataflow::input::Input;
 use differential_dataflow::operators::*;
 
-use differential_dataflow::difference::DiffPair;
-
 fn main() {
 
     // snag a filename to use for the input graph.
@@ -24,8 +22,8 @@ fn main() {
 
             let (input, graph) = scope.new_collection();
 
-            let organizers = graph.explode(|(x,y)| Some((x, DiffPair::new(1,0))).into_iter().chain(Some((y, DiffPair::new(0,1))).into_iter()))
-                                  .threshold_total(|_,w| if w.element2 == 0 { 1 } else { 0 });
+            let organizers = graph.explode(|(x,y)| Some((x, (1,0))).into_iter().chain(Some((y, (0,1))).into_iter()))
+                                  .threshold_total(|_,w| if w.1 == 0 { 1 } else { 0 });
 
             organizers
                 .iterate(|attend| {

@@ -91,12 +91,12 @@ where
                         while batch_cursor.key_valid(&batch) {
 
                             let key = batch_cursor.key(&batch);
-                            let mut count = None;
+                            let mut count: Option<T1::R> = None;
 
                             trace_cursor.seek_key(&trace_storage, key);
                             if trace_cursor.get_key(&trace_storage) == Some(key) {
                                 trace_cursor.map_times(&trace_storage, |_, diff| {
-                                    count.as_mut().map(|c| *c += diff);
+                                    count.as_mut().map(|c| c.plus_equals(diff));
                                     if count.is_none() { count = Some(diff.clone()); }
                                 });
                             }
@@ -108,7 +108,7 @@ where
                                         session.give(((key.clone(), count.clone()), time.clone(), -1));
                                     }
                                 }
-                                count.as_mut().map(|c| *c += diff);
+                                count.as_mut().map(|c| c.plus_equals(diff));
                                 if count.is_none() { count = Some(diff.clone()); }
                                 if let Some(count) = count.as_ref() {
                                     if !count.is_zero() {

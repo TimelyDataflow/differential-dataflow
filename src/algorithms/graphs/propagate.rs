@@ -1,14 +1,13 @@
 //! Directed label reachability.
 
 use std::hash::Hash;
-use std::ops::Mul;
 
 use timely::dataflow::*;
 
 use ::{Collection, ExchangeData};
 use ::operators::*;
 use ::lattice::Lattice;
-use ::difference::Abelian;
+use ::difference::{Abelian, Multiply};
 use ::operators::arrange::arrangement::ArrangeByKey;
 
 /// Propagates labels forward, retaining the minimum label.
@@ -22,7 +21,7 @@ where
     G::Timestamp: Lattice+Ord,
     N: ExchangeData+Hash,
     R: ExchangeData+Abelian,
-    R: Mul<R, Output=R>,
+    R: Multiply<R, Output=R>,
     R: From<i8>,
     L: ExchangeData,
 {
@@ -40,7 +39,7 @@ where
     G::Timestamp: Lattice+Ord,
     N: ExchangeData+Hash,
     R: ExchangeData+Abelian,
-    R: Mul<R, Output=R>,
+    R: Multiply<R, Output=R>,
     R: From<i8>,
     L: ExchangeData,
     F: Fn(&L)->u64+Clone+'static,
@@ -62,7 +61,7 @@ where
     G::Timestamp: Lattice+Ord,
     N: ExchangeData+Hash,
     R: ExchangeData+Abelian,
-    R: Mul<R, Output=R>,
+    R: Multiply<R, Output=R>,
     R: From<i8>,
     L: ExchangeData,
     Tr: TraceReader<Key=N, Val=N, Time=G::Timestamp, R=R>+Clone+'static,

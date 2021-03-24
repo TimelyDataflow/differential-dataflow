@@ -103,7 +103,7 @@ where
                                 while let Some(value) = cursor.get_val(&storage) {
                                     let mut count = Tr::R::zero();
                                     cursor.map_times(&storage, |t, d| {
-                                        if t.less_equal(time) { count += d; }
+                                        if t.less_equal(time) { count.plus_equals(d); }
                                     });
                                     if !count.is_zero() {
                                         let (dout, rout) = output_func(prefix, diff, value, &count);

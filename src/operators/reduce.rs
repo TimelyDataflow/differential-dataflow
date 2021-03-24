@@ -281,7 +281,7 @@ pub trait ReduceCore<G: Scope, K: Data, V: Data, R: Semigroup> where G::Timestam
                 if !input.is_empty() {
                     logic(key, input, change);
                 }
-                change.extend(output.drain(..).map(|(x,d)| (x,-d)));
+                change.extend(output.drain(..).map(|(x,d)| (x, d.negate())));
                 crate::consolidation::consolidate(change);
             })
         }

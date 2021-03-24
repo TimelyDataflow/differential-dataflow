@@ -1,9 +1,7 @@
-use std::ops::Mul;
-
 use timely::dataflow::Scope;
 
 use differential_dataflow::{ExchangeData, Collection, Hashable};
-use differential_dataflow::difference::Monoid;
+use differential_dataflow::difference::{Monoid, Multiply};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::trace::{Cursor, TraceReader, BatchReader};
@@ -29,7 +27,7 @@ where
     Tr::Val: Clone,
     Tr::Batch: BatchReader<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
     Tr::Cursor: Cursor<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
-    Tr::R: Monoid+Mul<Output = Tr::R>+ExchangeData,
+    Tr::R: Monoid+Multiply<Output = Tr::R>+ExchangeData,
     F: Fn(&P)->Tr::Key+Clone+'static,
     P: ExchangeData,
 {
@@ -37,7 +35,7 @@ where
         prefixes,
         arrangement,
         move |p: &P, k: &mut Tr::Key| { *k = key_selector(p); },
-        |prefix, diff, value, sum| ((prefix.clone(), value.clone()), diff.clone() * sum.clone()),
+        |prefix, diff, value, sum| ((prefix.clone(), value.clone()), diff.clone().multiply(sum)),
         Default::default(),
         Default::default(),
         Default::default(),
@@ -62,7 +60,7 @@ where
     Tr::Val: Clone,
     Tr::Batch: BatchReader<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
     Tr::Cursor: Cursor<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
-    Tr::R: Monoid+Mul<Output = Tr::R>+ExchangeData,
+    Tr::R: Monoid+Multiply<Output = Tr::R>+ExchangeData,
     F: Fn(&P)->Tr::Key+Clone+'static,
     P: ExchangeData,
 {
