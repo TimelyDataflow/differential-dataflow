@@ -405,10 +405,10 @@ where
 
                 // Determine new frontier on queries that may be issued.
                 // TODO: This code looks very suspect; explain better or fix.
-                let frontier = [
+                let frontier = std::array::IntoIter::new([
                     capability.as_ref().map(|c| c.time().clone()),
                     input1.frontier().frontier().get(0).cloned(),
-                ].into_iter().cloned().filter_map(|t| t).min();
+                ]).filter_map(|t| t).min();
 
                 if let Some(frontier) = frontier {
                     trace.as_mut().map(|t| t.set_logical_compaction(AntichainRef::new(&[frontier])));
