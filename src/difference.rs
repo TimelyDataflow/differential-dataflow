@@ -36,67 +36,11 @@ pub trait Semigroup : ::std::marker::Sized + Data + Clone {
     fn is_zero(&self) -> bool;
 }
 
-impl Semigroup for isize {
-    #[inline] fn plus_equals(&mut self, rhs: &Self) { *self += rhs; }
-    #[inline] fn is_zero(&self) -> bool { self == &0 }
-}
-
-impl Semigroup for i128 {
-    #[inline] fn plus_equals(&mut self, rhs: &Self) { *self += rhs; }
-    #[inline] fn is_zero(&self) -> bool { self == &0 }
-}
-
-impl Semigroup for i64 {
-    #[inline] fn plus_equals(&mut self, rhs: &Self) { *self += rhs; }
-    #[inline] fn is_zero(&self) -> bool { self == &0 }
-}
-
-impl Semigroup for i32 {
-    #[inline] fn plus_equals(&mut self, rhs: &Self) { *self += rhs; }
-    #[inline] fn is_zero(&self) -> bool { self == &0 }
-}
-
-impl Semigroup for i16 {
-    #[inline] fn plus_equals(&mut self, rhs: &Self) { *self += rhs; }
-    #[inline] fn is_zero(&self) -> bool { self == &0 }
-}
-
-impl Semigroup for i8 {
-    #[inline] fn plus_equals(&mut self, rhs: &Self) { *self += rhs; }
-    #[inline] fn is_zero(&self) -> bool { self == &0 }
-}
-
-
 /// A semigroup with an explicit zero element.
 pub trait Monoid : Semigroup {
     /// A zero element under the semigroup addition operator.
     fn zero() -> Self;
 }
-
-impl Monoid for isize {
-    #[inline] fn zero() -> Self { 0 }
-}
-
-impl Monoid for i128 {
-    #[inline] fn zero() -> Self { 0 }
-}
-
-impl Monoid for i64 {
-    #[inline] fn zero() -> Self { 0 }
-}
-
-impl Monoid for i32 {
-    #[inline] fn zero() -> Self { 0 }
-}
-
-impl Monoid for i16 {
-    #[inline] fn zero() -> Self { 0 }
-}
-
-impl Monoid for i8 {
-    #[inline] fn zero() -> Self { 0 }
-}
-
 
 /// A `Monoid` with negation.
 ///
@@ -108,31 +52,6 @@ pub trait Abelian : Monoid {
     fn negate(self) -> Self;
 }
 
-
-impl Abelian for isize {
-    #[inline] fn negate(self) -> Self { -self }
-}
-
-impl Abelian for i128 {
-    #[inline] fn negate(self) -> Self { -self }
-}
-
-impl Abelian for i64 {
-    #[inline] fn negate(self) -> Self { -self }
-}
-
-impl Abelian for i32 {
-    #[inline] fn negate(self) -> Self { -self }
-}
-
-impl Abelian for i16 {
-    #[inline] fn negate(self) -> Self { -self }
-}
-
-impl Abelian for i8 {
-    #[inline] fn negate(self) -> Self { -self }
-}
-
 /// A replacement for `std::ops::Mul` for types that do not implement it.
 pub trait Multiply<Rhs = Self> {
     /// Output type per the `Mul` trait.
@@ -141,8 +60,22 @@ pub trait Multiply<Rhs = Self> {
     fn multiply(self, rhs: &Rhs) -> Self::Output;
 }
 
-macro_rules! multiply_derive {
+/// Implementation for built-in signed integers.
+macro_rules! builtin_implementation {
     ($t:ty) => {
+        impl Semigroup for $t {
+            #[inline] fn plus_equals(&mut self, rhs: &Self) { *self += rhs; }
+            #[inline] fn is_zero(&self) -> bool { self == &0 }
+        }
+
+        impl Monoid for $t {
+            #[inline] fn zero() -> Self { 0 }
+        }
+
+        impl Abelian for $t {
+            #[inline] fn negate(self) -> Self { -self }
+        }
+
         impl Multiply<Self> for $t {
             type Output = Self;
             fn multiply(self, rhs: &Self) -> Self { self * rhs}
@@ -150,12 +83,43 @@ macro_rules! multiply_derive {
     };
 }
 
-multiply_derive!(i8);
-multiply_derive!(i16);
-multiply_derive!(i32);
-multiply_derive!(i64);
-multiply_derive!(i128);
-multiply_derive!(isize);
+builtin_implementation!(i8);
+builtin_implementation!(i16);
+builtin_implementation!(i32);
+builtin_implementation!(i64);
+builtin_implementation!(i128);
+builtin_implementation!(isize);
+
+/// Implementations for wrapping signed integers, which have a different zero.
+macro_rules! wrapping_implementation {
+    ($t:ty) => {
+        impl Semigroup for $t {
+            #[inline] fn plus_equals(&mut self, rhs: &Self) { *self += rhs; }
+            #[inline] fn is_zero(&self) -> bool { self == &std::num::Wrapping(0) }
+        }
+
+        impl Monoid for $t {
+            #[inline] fn zero() -> Self { std::num::Wrapping(0) }
+        }
+
+        impl Abelian for $t {
+            #[inline] fn negate(self) -> Self { -self }
+        }
+
+        impl Multiply<Self> for $t {
+            type Output = Self;
+            fn multiply(self, rhs: &Self) -> Self { self * rhs}
+        }
+    };
+}
+
+wrapping_implementation!(std::num::Wrapping<i8>);
+wrapping_implementation!(std::num::Wrapping<i16>);
+wrapping_implementation!(std::num::Wrapping<i32>);
+wrapping_implementation!(std::num::Wrapping<i64>);
+wrapping_implementation!(std::num::Wrapping<i128>);
+wrapping_implementation!(std::num::Wrapping<isize>);
+
 
 pub use self::present::Present;
 mod present {
@@ -189,6 +153,7 @@ mod tuples {
 
     use super::{Semigroup, Monoid, Abelian, Multiply};
 
+    /// Implementations for tuples. The two arguments must have the same length.
     macro_rules! tuple_implementation {
         ( ($($name:ident)*), ($($name2:ident)*) ) => (
             impl<$($name: Semigroup),*> Semigroup for ($($name,)*) {
