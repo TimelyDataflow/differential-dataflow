@@ -131,7 +131,28 @@ pub trait Threshold<G: Scope, K: Data, R1: Semigroup> where G::Timestamp: Lattic
     }
 
     /// A `threshold` with the ability to name the operator.
-    fn threshold_named<R2: Abelian, F: FnMut(&K, &R1)->R2+'static>(&self, name: &str, thresh: F) -> Collection<G, K, R2>;
+    fn threshold_named<R2: Abelian, F: FnMut(&K, &R1)->R2+'static>(&self, name: &str, thresh: F) -> Collection<G, K, R2> {
+        self.threshold_core::<R2, _, DefaultKeyTrace<_, _, _>>(name, thresh)
+            .as_collection(|key: &K, &()| key.clone())
+    }
+
+    /// A `threshold` that returns the manifested arrangement
+    fn threshold_arranged<R2, F>(&self, threshold: F) -> Arranged<G, TraceAgent<DefaultKeyTrace<K, G::Timestamp, R2>>>
+    where
+        R2: Abelian,
+        F: FnMut(&K, &R1) -> R2 + 'static,
+    {
+        self.threshold_core("Threshold", threshold)
+    }
+
+    /// The inner logic behind `threshold`, allows naming the operator and returns an arrangement
+    fn threshold_core<R2, F, Tr>(&self, name: &str, threshold: F) -> Arranged<G, TraceAgent<Tr>>
+    where
+        R2: Abelian,
+        F: FnMut(&K, &R1) -> R2 + 'static,
+        Tr: Trace + TraceReader<Key = K, Val = (), Time = G::Timestamp, R = R2> + 'static,
+        Tr::Batch: Batch<K, (), G::Timestamp, R2>,
+        Tr::Cursor: Cursor<K, (), G::Timestamp, R2>;
 
     /// Reduces the collection to one occurrence of each distinct element.
     ///
@@ -163,28 +184,74 @@ pub trait Threshold<G: Scope, K: Data, R1: Semigroup> where G::Timestamp: Lattic
     /// type is something other than an `isize` integer, for example perhaps an
     /// `i32`.
     fn distinct_core<R2: Abelian+From<i8>>(&self) -> Collection<G, K, R2> {
-        self.threshold_named("Distinct", |_,_| R2::from(1i8))
+        self.distinct_arranged()
+            .as_collection(|key, &()| key.clone())
+    }
+
+    /// Distinct for general integer differences that returns an [arrangement](Arranged)
+    ///
+    /// This method allows `distinct` to produce collections whose difference
+    /// type is something other than an `isize` integer, for example perhaps an
+    /// `i32`.
+    fn distinct_arranged<R2>(&self) -> Arranged<G, TraceAgent<DefaultKeyTrace<K, G::Timestamp, R2>>>
+    where
+        R2: Abelian + From<i8>,
+    {
+        self.distinct_arranged_core("Distinct")
+    }
+
+    /// Distinct for general integer differences that returns an [arrangement](Arranged)
+    ///
+    /// This method allows `distinct` to produce collections whose difference
+    /// type is something other than an `isize` integer, for example perhaps an
+    /// `i32`.
+    fn distinct_arranged_core<R2, Tr>(&self, name: &str) -> Arranged<G, TraceAgent<Tr>>
+    where
+        R2: Abelian + From<i8>,
+        Tr: Trace + TraceReader<Key = K, Val = (), Time = G::Timestamp, R = R2> + 'static,
+        Tr::Batch: Batch<K, (), G::Timestamp, R2>,
+        Tr::Cursor: Cursor<K, (), G::Timestamp, R2>,
+    {
+        self.threshold_core(name, |_, _| R2::from(1i8))
     }
 }
 
-impl<G: Scope, K: ExchangeData+Hashable, R1: ExchangeData+Semigroup> Threshold<G, K, R1> for Collection<G, K, R1>
-where G::Timestamp: Lattice+Ord {
-    fn threshold_named<R2: Abelian, F: FnMut(&K,&R1)->R2+'static>(&self, name: &str, thresh: F) -> Collection<G, K, R2> {
+impl<G: Scope, K: ExchangeData + Hashable, R1: ExchangeData + Semigroup> Threshold<G, K, R1>
+    for Collection<G, K, R1>
+where
+    G::Timestamp: Lattice + Ord,
+{
+    fn threshold_core<R2, F, Tr>(&self, name: &str, thresh: F) -> Arranged<G, TraceAgent<Tr>>
+    where
+        R2: Abelian,
+        F: FnMut(&K, &R1) -> R2 + 'static,
+        Tr: Trace + TraceReader<Key = K, Val = (), Time = G::Timestamp, R = R2> + 'static,
+        Tr::Batch: Batch<K, (), G::Timestamp, R2>,
+        Tr::Cursor: Cursor<K, (), G::Timestamp, R2>,
+    {
         self.arrange_by_self_named(&format!("Arrange: {}", name))
-            .threshold_named(name, thresh)
+            .threshold_core(name, thresh)
     }
 }
 
 impl<G: Scope, K: Data, T1, R1: Semigroup> Threshold<G, K, R1> for Arranged<G, T1>
 where
-    G::Timestamp: Lattice+Ord,
-    T1: TraceReader<Key=K, Val=(), Time=G::Timestamp, R=R1>+Clone+'static,
+    G::Timestamp: Lattice + Ord,
+    T1: TraceReader<Key = K, Val = (), Time = G::Timestamp, R = R1> + Clone + 'static,
     T1::Batch: BatchReader<K, (), G::Timestamp, R1>,
     T1::Cursor: Cursor<K, (), G::Timestamp, R1>,
 {
-    fn threshold_named<R2: Abelian, F: FnMut(&K,&R1)->R2+'static>(&self, name: &str, mut thresh: F) -> Collection<G, K, R2> {
-        self.reduce_abelian::<_,DefaultKeyTrace<_,_,_>>(name, move |k,s,t| t.push(((), thresh(k, &s[0].1))))
-            .as_collection(|k,_| k.clone())
+    fn threshold_core<R2, F, Tr>(&self, name: &str, mut thresh: F) -> Arranged<G, TraceAgent<Tr>>
+    where
+        R2: Abelian,
+        F: FnMut(&K, &R1) -> R2 + 'static,
+        Tr: Trace + TraceReader<Key = K, Val = (), Time = G::Timestamp, R = R2> + 'static,
+        Tr::Batch: Batch<K, (), G::Timestamp, R2>,
+        Tr::Cursor: Cursor<K, (), G::Timestamp, R2>,
+    {
+        self.reduce_abelian::<_, Tr>(name, move |k, s, t| {
+            t.push(((), thresh(k, &s[0].1)));
+        })
     }
 }
 
@@ -210,16 +277,52 @@ pub trait Count<G: Scope, K: Data, R: Semigroup> where G::Timestamp: Lattice+Ord
     ///     });
     /// }
     /// ```
-    fn count(&self) -> Collection<G, (K, R), isize>;
+    fn count(&self) -> Collection<G, (K, R), isize> {
+        self.count_core::<_, DefaultValTrace<_, _, _, _>>()
+            .as_collection(|key, count| (key.clone(), count.clone()))
+    }
+
+    /// Counts the number of occurrences of each element, returning an [arrangement](Arranged)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// extern crate timely;
+    /// extern crate differential_dataflow;
+    ///
+    /// use differential_dataflow::input::Input;
+    /// use differential_dataflow::operators::Count;
+    ///
+    /// fn main() {
+    ///     ::timely::example(|scope| {
+    ///         // report the number of occurrences of each key
+    ///         scope.new_collection_from(1 .. 10).1
+    ///              .map(|x| x / 3)
+    ///              .count();
+    ///     });
+    /// }
+    /// ```
+    fn count_core<R2, Tr>(&self) -> Arranged<G, TraceAgent<Tr>>
+    where
+        R2: Abelian + From<i8>,
+        Tr: Trace + TraceReader<Key = K, Val = R, Time = G::Timestamp, R = R2> + 'static,
+        Tr::Batch: Batch<K, R, G::Timestamp, R2>,
+        Tr::Cursor: Cursor<K, R, G::Timestamp, R2>;
 }
 
 impl<G: Scope, K: ExchangeData+Hashable, R: ExchangeData+Semigroup> Count<G, K, R> for Collection<G, K, R>
 where
     G::Timestamp: Lattice+Ord,
 {
-    fn count(&self) -> Collection<G, (K, R), isize> {
+    fn count_core<R2, Tr>(&self) -> Arranged<G, TraceAgent<Tr>>
+    where
+        R2: Abelian + From<i8>,
+        Tr: Trace + TraceReader<Key = K, Val = R, Time = G::Timestamp, R = R2> + 'static,
+        Tr::Batch: Batch<K, R, G::Timestamp, R2>,
+        Tr::Cursor: Cursor<K, R, G::Timestamp, R2>,
+    {
         self.arrange_by_self_named("Arrange: Count")
-            .count()
+            .count_core()
     }
 }
 
@@ -230,9 +333,14 @@ where
     T1::Batch: BatchReader<K, (), G::Timestamp, R>,
     T1::Cursor: Cursor<K, (), G::Timestamp, R>,
 {
-    fn count(&self) -> Collection<G, (K, R), isize> {
-        self.reduce_abelian::<_,DefaultValTrace<_,_,_,_>>("Count", |_k,s,t| t.push((s[0].1.clone(), 1)))
-            .as_collection(|k,c| (k.clone(), c.clone()))
+    fn count_core<R2, Tr>(&self) -> Arranged<G, TraceAgent<Tr>>
+    where
+        R2: Abelian + From<i8>,
+        Tr: Trace + TraceReader<Key = K, Val = R, Time = G::Timestamp, R = R2> + 'static,
+        Tr::Batch: Batch<K, R, G::Timestamp, R2>,
+        Tr::Cursor: Cursor<K, R, G::Timestamp, R2>,
+    {
+        self.reduce_abelian::<_, Tr>("Count", |_k, s, t| t.push((s[0].1.clone(), R2::from(1))))
     }
 }
 
