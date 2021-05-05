@@ -59,6 +59,34 @@ where
             .as_collection(|data, &()| data.clone())
     }
 
+    /// A `consolidate` that returns the intermediate [arrangement](Arranged)
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use differential_dataflow::{
+    ///     input::Input,
+    ///     operators::{Consolidate, JoinCore},
+    /// };
+    ///
+    /// timely::example(|scope| {
+    ///     let (_, collection) = scope.new_collection_from(0..10u32);
+    ///
+    ///     let keys = collection
+    ///         .flat_map(|x| (0..x))
+    ///         .concat(&collection.negate())
+    ///         .consolidate_arranged();
+    ///
+    ///     collection
+    ///         .map(|x| (x, x * 2))
+    ///         .join_core(&keys, |&key, &(), &value| (key, value))
+    ///         .inspect(|x| println!("{:?}", x));
+    /// });
+    /// ```
+    fn consolidate_arranged(&self) -> Arranged<S, TraceAgent<OrdKeySpine<D, S::Timestamp, R>>> {
+        self.consolidate_core::<OrdKeySpine<_, _, _>>("Consolidate")
+    }
+
     /// Aggregates the weights of equal records into at most one record,
     /// returning the intermediate [arrangement](Arranged)
     fn consolidate_core<Tr>(&self, name: &str) -> Arranged<S, TraceAgent<Tr>>
@@ -123,7 +151,7 @@ impl<G: Scope, D, R> ConsolidateStream<D> for Collection<G, D, R>
 where
     D: ExchangeData + Hashable,
     R: ExchangeData + Semigroup,
-    G::Timestamp: ::lattice::Lattice + Ord,
+    G::Timestamp: Lattice + Ord,
 {
     fn consolidate_stream(&self) -> Self {
         self.inner
