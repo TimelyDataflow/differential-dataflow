@@ -151,8 +151,8 @@ pub trait Threshold<G: Scope, K: Data, R1: Semigroup> where G::Timestamp: Lattic
         R2: Abelian,
         F: FnMut(&K, &R1) -> R2 + 'static,
         Tr: Trace + TraceReader<Key = K, Val = (), Time = G::Timestamp, R = R2> + 'static,
-        Tr::Batch: Batch<K, (), G::Timestamp, R2>,
-        Tr::Cursor: Cursor<K, (), G::Timestamp, R2>;
+        Tr::Batch: Batch<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
+        Tr::Cursor: Cursor<Tr::Key, Tr::Val, Tr::Time, Tr::R>;
 
     /// Reduces the collection to one occurrence of each distinct element.
     ///
@@ -209,8 +209,8 @@ pub trait Threshold<G: Scope, K: Data, R1: Semigroup> where G::Timestamp: Lattic
     where
         R2: Abelian + From<i8>,
         Tr: Trace + TraceReader<Key = K, Val = (), Time = G::Timestamp, R = R2> + 'static,
-        Tr::Batch: Batch<K, (), G::Timestamp, R2>,
-        Tr::Cursor: Cursor<K, (), G::Timestamp, R2>,
+        Tr::Batch: Batch<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
+        Tr::Cursor: Cursor<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
     {
         self.threshold_core(name, |_, _| R2::from(1i8))
     }
@@ -226,8 +226,8 @@ where
         R2: Abelian,
         F: FnMut(&K, &R1) -> R2 + 'static,
         Tr: Trace + TraceReader<Key = K, Val = (), Time = G::Timestamp, R = R2> + 'static,
-        Tr::Batch: Batch<K, (), G::Timestamp, R2>,
-        Tr::Cursor: Cursor<K, (), G::Timestamp, R2>,
+        Tr::Batch: Batch<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
+        Tr::Cursor: Cursor<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
     {
         self.arrange_by_self_named(&format!("Arrange: {}", name))
             .threshold_core(name, thresh)
@@ -246,8 +246,8 @@ where
         R2: Abelian,
         F: FnMut(&K, &R1) -> R2 + 'static,
         Tr: Trace + TraceReader<Key = K, Val = (), Time = G::Timestamp, R = R2> + 'static,
-        Tr::Batch: Batch<K, (), G::Timestamp, R2>,
-        Tr::Cursor: Cursor<K, (), G::Timestamp, R2>,
+        Tr::Batch: Batch<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
+        Tr::Cursor: Cursor<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
     {
         self.reduce_abelian::<_, Tr>(name, move |k, s, t| {
             t.push(((), thresh(k, &s[0].1)));
@@ -292,13 +292,14 @@ pub trait Count<G: Scope, K: Data, R: Semigroup> where G::Timestamp: Lattice+Ord
     ///
     /// use differential_dataflow::input::Input;
     /// use differential_dataflow::operators::Count;
+    /// use differential_dataflow::operators::arrange::OrdValSpine;
     ///
     /// fn main() {
     ///     ::timely::example(|scope| {
     ///         // report the number of occurrences of each key
     ///         scope.new_collection_from(1 .. 10).1
     ///              .map(|x| x / 3)
-    ///              .count();
+    ///              .count_core::<isize, OrdValSpine<_, _, _, _>();
     ///     });
     /// }
     /// ```
@@ -306,8 +307,8 @@ pub trait Count<G: Scope, K: Data, R: Semigroup> where G::Timestamp: Lattice+Ord
     where
         R2: Abelian + From<i8>,
         Tr: Trace + TraceReader<Key = K, Val = R, Time = G::Timestamp, R = R2> + 'static,
-        Tr::Batch: Batch<K, R, G::Timestamp, R2>,
-        Tr::Cursor: Cursor<K, R, G::Timestamp, R2>;
+        Tr::Batch: Batch<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
+        Tr::Cursor: Cursor<Tr::Key, Tr::Val, Tr::Time, Tr::R>;
 }
 
 impl<G: Scope, K: ExchangeData+Hashable, R: ExchangeData+Semigroup> Count<G, K, R> for Collection<G, K, R>
@@ -318,8 +319,8 @@ where
     where
         R2: Abelian + From<i8>,
         Tr: Trace + TraceReader<Key = K, Val = R, Time = G::Timestamp, R = R2> + 'static,
-        Tr::Batch: Batch<K, R, G::Timestamp, R2>,
-        Tr::Cursor: Cursor<K, R, G::Timestamp, R2>,
+        Tr::Batch: Batch<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
+        Tr::Cursor: Cursor<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
     {
         self.arrange_by_self_named("Arrange: Count")
             .count_core()
@@ -337,8 +338,8 @@ where
     where
         R2: Abelian + From<i8>,
         Tr: Trace + TraceReader<Key = K, Val = R, Time = G::Timestamp, R = R2> + 'static,
-        Tr::Batch: Batch<K, R, G::Timestamp, R2>,
-        Tr::Cursor: Cursor<K, R, G::Timestamp, R2>,
+        Tr::Batch: Batch<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
+        Tr::Cursor: Cursor<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
     {
         self.reduce_abelian::<_, Tr>("Count", |_k, s, t| t.push((s[0].1.clone(), R2::from(1))))
     }
