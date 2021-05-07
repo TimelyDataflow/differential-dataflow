@@ -292,14 +292,14 @@ pub trait Count<G: Scope, K: Data, R: Semigroup> where G::Timestamp: Lattice+Ord
     ///
     /// use differential_dataflow::input::Input;
     /// use differential_dataflow::operators::Count;
-    /// use differential_dataflow::operators::arrange::OrdValSpine;
+    /// use differential_dataflow::trace::implementations::ord::OrdValSpine;
     ///
     /// fn main() {
     ///     ::timely::example(|scope| {
     ///         // report the number of occurrences of each key
-    ///         scope.new_collection_from(1 .. 10).1
+    ///         scope.new_collection_from(1..10).1
     ///              .map(|x| x / 3)
-    ///              .count_core::<isize, OrdValSpine<_, _, _, _>();
+    ///              .count_core::<isize, OrdValSpine<_, _, _, _>>();
     ///     });
     /// }
     /// ```
