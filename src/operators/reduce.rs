@@ -586,8 +586,8 @@ where
                             //       this as long as it requires that there is only one capability for each message.
                             let mut buffers = Vec::<(G::Timestamp, Vec<(T2::Val, G::Timestamp, T2::R)>)>::new();
                             let mut builders = Vec::new();
-                            for i in 0 .. capabilities.len() {
-                                buffers.push((capabilities[i].time().clone(), Vec::new()));
+                            for capability in capabilities.iter() {
+                                buffers.push((capability.time().clone(), Vec::new()));
                                 builders.push(<T2::Batch as Batch<K,T2::Val,G::Timestamp,T2::R>>::Builder::new());
                             }
 
@@ -611,7 +611,7 @@ where
 
                                 // Determine the next key we will work on; could be synthetic, could be from a batch.
                                 let key1 = exposed.get(exposed_position).map(|x| x.0.clone());
-                                let key2 = batch_cursor.get_key(&batch_storage).map(|k| k.clone());
+                                let key2 = batch_cursor.get_key(&batch_storage).cloned();
                                 let key = match (key1, key2) {
                                     (Some(key1), Some(key2)) => ::std::cmp::min(key1, key2),
                                     (Some(key1), None)       => key1,
@@ -741,7 +741,7 @@ where
                     }
 
                     // Exert trace maintenance if we have been so requested.
-                    if let Some(mut fuel) = effort.clone() {
+                    if let Some(mut fuel) = effort {
                         output_writer.exert(&mut fuel);
                     }
                 }
@@ -749,7 +749,7 @@ where
         )
         };
 
-        Arranged { stream: stream, trace: result_trace.unwrap() }
+        Arranged { stream, trace: result_trace.unwrap() }
     }
 }
 
@@ -792,6 +792,7 @@ where
 /// Implementation based on replaying historical and new updates together.
 mod history_replay {
 
+    use std::convert::identity;
     use ::difference::Semigroup;
     use lattice::Lattice;
     use trace::Cursor;
@@ -940,12 +941,19 @@ mod history_replay {
             // `input` or `output`. Finally, we may have synthetic times produced as the join of times
             // we consider in the course of evaluation. As long as any of these times exist, we need to
             // keep examining times.
-            while let Some(next_time) = [   batch_replay.time(),
-                                            times_slice.first(),
-                                            input_replay.time(),
-                                            output_replay.time(),
-                                            self.synth_times.last(),
-                                        ].iter().cloned().filter_map(|t| t).min().map(|t| t.clone()) {
+            while let Some(next_time) = [
+                batch_replay.time(),
+                times_slice.first(),
+                input_replay.time(),
+                output_replay.time(),
+                self.synth_times.last(),
+            ]
+            .iter()
+            .cloned()
+            .filter_map(identity)
+            .min()
+            .cloned()
+            {
 
                 // Advance input and output history replayers. This marks applicable updates as active.
                 input_replay.step_while_time_is(&next_time);
@@ -1003,7 +1011,10 @@ mod history_replay {
 
                         // Assemble the input collection at `next_time`. (`self.input_buffer` cleared just after use).
                         debug_assert!(self.input_buffer.is_empty());
-                        meet.as_ref().map(|meet| input_replay.advance_buffer_by(&meet));
+                        if let Some(meet) = meet.as_ref() {
+                            input_replay.advance_buffer_by(meet);
+                        }
+
                         for &((value, ref time), ref diff) in input_replay.buffer().iter() {
                             if time.less_equal(&next_time) {
                                 self.input_buffer.push((value, diff.clone()));
@@ -1022,7 +1033,10 @@ mod history_replay {
                         }
                         crate::consolidation::consolidate(&mut self.input_buffer);
 
-                        meet.as_ref().map(|meet| output_replay.advance_buffer_by(&meet));
+                        if let Some(meet) = meet.as_ref() {
+                            output_replay.advance_buffer_by(meet);
+                        }
+
                         for &((ref value, ref time), ref diff) in output_replay.buffer().iter() {
                             if time.less_equal(&next_time) {
                                 self.output_buffer.push(((*value).clone(), diff.clone()));
@@ -1042,7 +1056,7 @@ mod history_replay {
                         crate::consolidation::consolidate(&mut self.output_buffer);
 
                         // Apply user logic if non-empty input and see what happens!
-                        if self.input_buffer.len() > 0 || self.output_buffer.len() > 0 {
+                        if !self.input_buffer.is_empty() || !self.output_buffer.is_empty() {
                             logic(key, &self.input_buffer[..], &mut self.output_buffer, &mut self.update_buffer);
                             self.input_buffer.clear();
                             self.output_buffer.clear();
@@ -1075,7 +1089,7 @@ mod history_replay {
                         // The two locations are important, in that we will compact `output_produced` as we move
                         // through times, but we cannot compact the output buffers because we need their actual
                         // times.
-                        if self.update_buffer.len() > 0 {
+                        if !self.update_buffer.is_empty() {
 
                             output_counter += 1;
 
@@ -1142,17 +1156,14 @@ mod history_replay {
                         self.synth_times.dedup();
                     }
                 }
-                else {
-
-                    if interesting {
-                        // We cannot process `next_time` now, and must delay it.
-                        //
-                        // I think we are probably only here because of an uninteresting time declared interesting,
-                        // as initial interesting times are filtered to be in interval, and synthetic times are also
-                        // filtered before introducing them to `self.synth_times`.
-                        new_interesting.push(next_time.clone());
-                        debug_assert!(outputs.iter().any(|&(ref t,_)| t.less_equal(&next_time)))
-                    }
+                else if interesting {
+                    // We cannot process `next_time` now, and must delay it.
+                    //
+                    // I think we are probably only here because of an uninteresting time declared interesting,
+                    // as initial interesting times are filtered to be in interval, and synthetic times are also
+                    // filtered before introducing them to `self.synth_times`.
+                    new_interesting.push(next_time.clone());
+                    debug_assert!(outputs.iter().any(|&(ref t,_)| t.less_equal(&next_time)));
                 }
 
                 // Update `meet` to track the meet of each source of times.
