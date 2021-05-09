@@ -79,7 +79,7 @@ where
     ///
     ///     collection
     ///         .map(|x| (x, x * 2))
-    ///         .join_core(&keys, |&key, &value, &()| (key, value))
+    ///         .join_core(&keys, |&key, &value, &()| Some((key, value)))
     ///         .inspect(|x| println!("{:?}", x));
     /// });
     /// ```
