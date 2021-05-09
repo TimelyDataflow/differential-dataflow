@@ -59,9 +59,6 @@ where
     state
         .map(|(node, _state)| (node, None))
         .iterate(|new_state| {
-
-            new_state.map(|x| x.1.is_some()).consolidate().inspect(move |x| println!("{:?}\t{:?}", timer.elapsed(), x));
-
             // immutable content: edges and initial state.
             let edges = edges.enter(&new_state.scope());
             let old_state = state.enter(&new_state.scope());
