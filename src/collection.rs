@@ -270,6 +270,46 @@ impl<G: Scope, D: Data, R: Semigroup> Collection<G, D, R> where G::Timestamp: Da
             .as_collection()
     }
 
+    /// Joins each record against a collection defined by the function `logic`.
+    ///
+    /// This method performs what is essentially a join with the collection of records `(x, logic(x))`.
+    /// Rather than materialize this second relation, `logic` is applied to each record and the appropriate
+    /// modifications made to the results, namely joining timestamps and multiplying differences.
+    ///
+    /// #Examples
+    ///
+    /// ```
+    /// extern crate timely;
+    /// extern crate differential_dataflow;
+    ///
+    /// use differential_dataflow::input::Input;
+    ///
+    /// fn main() {
+    ///     ::timely::example(|scope| {
+    ///         // creates `x` copies of `2*x` from time `3*x` until `4*x`,
+    ///         // for x from 0 through 9.
+    ///         scope.new_collection_from(0 .. 10isize).1
+    ///              .join_function(|x|
+    ///                  //   data      time      diff
+    ///                  vec![(2*x, (3*x) as u64,  x),
+    ///                       (2*x, (4*x) as u64, -x)]
+    ///               );
+    ///     });
+    /// }
+    /// ```
+    pub fn join_function<D2, R2, I, L>(&self, mut logic: L) -> Collection<G, D2, <R2 as Multiply<R>>::Output>
+    where G::Timestamp: Lattice,
+          D2: Data,
+          R2: Semigroup+Multiply<R>,
+          <R2 as Multiply<R>>::Output: Data+Semigroup,
+          I: IntoIterator<Item=(D2,G::Timestamp,R2)>,
+          L: FnMut(D)->I+'static,
+    {
+        self.inner
+            .flat_map(move |(x, t, d)| logic(x).into_iter().map(move |(x,t2,d2)| (x, t.join(&t2), d2.multiply(&d))))
+            .as_collection()
+    }
+
     /// Brings a Collection into a nested scope.
     ///
     /// # Examples
