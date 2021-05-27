@@ -53,20 +53,20 @@ use differential_dataflow::consolidation::{consolidate, consolidate_updates};
 /// ((key, val1, time1), initial_time, diff1)
 /// ```
 ///
-/// where `initial_time` is less or equal to `time`, and produces as output
+/// where `initial_time` is less or equal to `time1`, and produces as output
 ///
 /// ```ignore
-/// ((key, (val1, val2), lub(time1, time2)), initial_time, diff1 * diff2)
+/// ((output_func(key, val1, val2), lub(time1, time2)), initial_time, diff1 * diff2)
 /// ```
 ///
-/// for each `((key, val2), time2, diff2)` present in `arrangement, where
+/// for each `((key, val2), time2, diff2)` present in `arrangement`, where
 /// `time2` is less than `initial_time` *UNDER THE TOTAL ORDER ON TIMES*.
 /// This last constraint is important to ensure that we correctly produce
 /// all pairs of output updates across multiple `half_join` operators.
 ///
 /// Notice that the time is hoisted up into data. The expectation is that
-/// once out of the dataflow, the updates will be `delay`d to the times
-/// specified in the payloads.
+/// once out of the "delta flow region", the updates will be `delay`d to the
+/// times specified in the payloads.
 pub fn half_join<G, V, Tr, FF, CF, DOut, S>(
     stream: &Collection<G, (Tr::Key, V, G::Timestamp), Tr::R>,
     mut arrangement: Arranged<G, Tr>,
