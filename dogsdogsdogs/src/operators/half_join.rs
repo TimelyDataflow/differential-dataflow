@@ -69,7 +69,7 @@ use differential_dataflow::consolidation::{consolidate, consolidate_updates};
 /// times specified in the payloads.
 pub fn half_join<G, V, Tr, FF, CF, DOut, S>(
     stream: &Collection<G, (Tr::Key, V, G::Timestamp), Tr::R>,
-    mut arrangement: Arranged<G, Tr>,
+    arrangement: Arranged<G, Tr>,
     frontier_func: FF,
     comparison: CF,
     mut output_func: S,
@@ -89,6 +89,56 @@ where
     DOut: Clone+'static,
     Tr::R: std::ops::Mul<Tr::R, Output=Tr::R>,
     S: FnMut(&Tr::Key, &V, &Tr::Val)->DOut+'static,
+{
+    let output_func = move |k: &Tr::Key, v1: &V, v2: &Tr::Val, initial: &G::Timestamp, time: &G::Timestamp, diff: &Tr::R| {
+        let dout = (output_func(k, v1, v2), time.clone());
+        Some((dout, initial.clone(), diff.clone())).into_iter()
+    };
+    half_join_internal_unsafe(stream, arrangement, frontier_func, comparison, output_func)
+}
+
+/// An unsafe variant of `half_join` where the `output_func` closure takes
+/// additional arguments for `time` and `diff` as input and returns an iterator
+/// over `(data, time, diff)` triplets. This allows for more flexibility, but
+/// is more error-prone.
+///
+/// This operator responds to inputs of the form
+///
+/// ```ignore
+/// ((key, val1, time1), initial_time, diff1)
+/// ```
+///
+/// where `initial_time` is less or equal to `time1`, and produces as output
+///
+/// ```ignore
+/// output_func(key, val1, val2, initial_time, lub(time1, time2), diff1 * diff2)
+/// ```
+///
+/// for each `((key, val2), time2, diff2)` present in `arrangement`, where
+/// `time2` is less than `initial_time` *UNDER THE TOTAL ORDER ON TIMES*.
+pub fn half_join_internal_unsafe<G, V, Tr, FF, CF, DOut, I, S>(
+    stream: &Collection<G, (Tr::Key, V, G::Timestamp), Tr::R>,
+    mut arrangement: Arranged<G, Tr>,
+    frontier_func: FF,
+    comparison: CF,
+    mut output_func: S,
+) -> Collection<G, DOut, Tr::R>
+where
+    G: Scope,
+    G::Timestamp: Lattice,
+    V: ExchangeData,
+    Tr: TraceReader<Time=G::Timestamp>+Clone+'static,
+    Tr::Key: Ord+Hashable+ExchangeData,
+    Tr::Val: Clone,
+    Tr::Batch: BatchReader<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
+    Tr::Cursor: Cursor<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
+    Tr::R: Monoid+ExchangeData,
+    FF: Fn(&G::Timestamp) -> G::Timestamp + 'static,
+    CF: Fn(&G::Timestamp, &G::Timestamp) -> bool + 'static,
+    DOut: Clone+'static,
+    Tr::R: std::ops::Mul<Tr::R, Output=Tr::R>,
+    I: IntoIterator<Item=(DOut, G::Timestamp, Tr::R)>,
+    S: FnMut(&Tr::Key, &V, &Tr::Val, &G::Timestamp, &G::Timestamp, &Tr::R)-> I + 'static,
 {
     // No need to block physical merging for this operator.
     arrangement.trace.set_physical_compaction(Antichain::new().borrow());
@@ -145,8 +195,10 @@ where
                                     });
                                     consolidate(&mut output_buffer);
                                     for (time, count) in output_buffer.drain(..) {
-                                        let dout = output_func(key, val1, val2);
-                                        session.give(((dout, time), initial.clone(), count * diff.clone()));
+                                        let diff = count * diff.clone();
+                                        for dout in output_func(key, val1, val2, initial, &time, &diff) {
+                                            session.give(dout);
+                                        }
                                     }
                                     cursor.step_val(&storage);
                                 }
