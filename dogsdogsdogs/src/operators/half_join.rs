@@ -90,9 +90,10 @@ where
     Tr::R: std::ops::Mul<Tr::R, Output=Tr::R>,
     S: FnMut(&Tr::Key, &V, &Tr::Val)->DOut+'static,
 {
-    let output_func = move |k: &Tr::Key, v1: &V, v2: &Tr::Val, initial: &G::Timestamp, time: &G::Timestamp, diff: &Tr::R| {
+    let output_func = move |k: &Tr::Key, v1: &V, v2: &Tr::Val, initial: &G::Timestamp, time: &G::Timestamp, diff1: &Tr::R, diff2: &Tr::R| {
+        let diff = diff1.clone() * diff2.clone();
         let dout = (output_func(k, v1, v2), time.clone());
-        Some((dout, initial.clone(), diff.clone())).into_iter()
+        Some((dout, initial.clone(), diff)).into_iter()
     };
     half_join_internal_unsafe(stream, arrangement, frontier_func, comparison, output_func)
 }
@@ -111,7 +112,7 @@ where
 /// where `initial_time` is less or equal to `time1`, and produces as output
 ///
 /// ```ignore
-/// output_func(key, val1, val2, initial_time, lub(time1, time2), diff1 * diff2)
+/// output_func(key, val1, val2, initial_time, lub(time1, time2), diff1, diff2)
 /// ```
 ///
 /// for each `((key, val2), time2, diff2)` present in `arrangement`, where
@@ -136,9 +137,8 @@ where
     FF: Fn(&G::Timestamp) -> G::Timestamp + 'static,
     CF: Fn(&G::Timestamp, &G::Timestamp) -> bool + 'static,
     DOut: Clone+'static,
-    Tr::R: std::ops::Mul<Tr::R, Output=Tr::R>,
     I: IntoIterator<Item=(DOut, G::Timestamp, Tr::R)>,
-    S: FnMut(&Tr::Key, &V, &Tr::Val, &G::Timestamp, &G::Timestamp, &Tr::R)-> I + 'static,
+    S: FnMut(&Tr::Key, &V, &Tr::Val, &G::Timestamp, &G::Timestamp, &Tr::R, &Tr::R)-> I + 'static,
 {
     // No need to block physical merging for this operator.
     arrangement.trace.set_physical_compaction(Antichain::new().borrow());
@@ -182,7 +182,7 @@ where
 
                     let (mut cursor, storage) = trace.cursor();
 
-                    for &mut ((ref key, ref val1, ref time), ref initial, ref mut diff) in proposals.iter_mut() {
+                    for &mut ((ref key, ref val1, ref time), ref initial, ref mut diff1) in proposals.iter_mut() {
                         // Use TOTAL ORDER to allow the release of `time`.
                         if !input2.frontier.frontier().iter().any(|t| comparison(t, initial)) {
                             cursor.seek_key(&storage, &key);
@@ -194,9 +194,8 @@ where
                                         }
                                     });
                                     consolidate(&mut output_buffer);
-                                    for (time, count) in output_buffer.drain(..) {
-                                        let diff = count * diff.clone();
-                                        for dout in output_func(key, val1, val2, initial, &time, &diff) {
+                                    for (time, diff2) in output_buffer.drain(..) {
+                                        for dout in output_func(key, val1, val2, initial, &time, &diff1, &diff2) {
                                             session.give(dout);
                                         }
                                     }
@@ -204,7 +203,7 @@ where
                                 }
                                 cursor.rewind_vals(&storage);
                             }
-                            *diff = Tr::R::zero();
+                            *diff1 = Tr::R::zero();
                         }
                     }
 
