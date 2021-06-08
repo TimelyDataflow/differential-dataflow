@@ -117,13 +117,13 @@ where
 ///
 /// for each `((key, val2), time2, diff2)` present in `arrangement`, where
 /// `time2` is less than `initial_time` *UNDER THE TOTAL ORDER ON TIMES*.
-pub fn half_join_internal_unsafe<G, V, Tr, FF, CF, DOut, I, S>(
+pub fn half_join_internal_unsafe<G, V, Tr, FF, CF, DOut, ROut, I, S>(
     stream: &Collection<G, (Tr::Key, V, G::Timestamp), Tr::R>,
     mut arrangement: Arranged<G, Tr>,
     frontier_func: FF,
     comparison: CF,
     mut output_func: S,
-) -> Collection<G, DOut, Tr::R>
+) -> Collection<G, DOut, ROut>
 where
     G: Scope,
     G::Timestamp: Lattice,
@@ -137,7 +137,8 @@ where
     FF: Fn(&G::Timestamp) -> G::Timestamp + 'static,
     CF: Fn(&G::Timestamp, &G::Timestamp) -> bool + 'static,
     DOut: Clone+'static,
-    I: IntoIterator<Item=(DOut, G::Timestamp, Tr::R)>,
+    ROut: Monoid,
+    I: IntoIterator<Item=(DOut, G::Timestamp, ROut)>,
     S: FnMut(&Tr::Key, &V, &Tr::Val, &G::Timestamp, &G::Timestamp, &Tr::R, &Tr::R)-> I + 'static,
 {
     // No need to block physical merging for this operator.
