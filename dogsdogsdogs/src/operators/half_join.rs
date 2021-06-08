@@ -93,7 +93,7 @@ where
     let output_func = move |k: &Tr::Key, v1: &V, v2: &Tr::Val, initial: &G::Timestamp, time: &G::Timestamp, diff1: &Tr::R, diff2: &Tr::R| {
         let diff = diff1.clone() * diff2.clone();
         let dout = (output_func(k, v1, v2), time.clone());
-        Some((dout, initial.clone(), diff)).into_iter()
+        Some((dout, initial.clone(), diff))
     };
     half_join_internal_unsafe(stream, arrangement, frontier_func, comparison, output_func)
 }
