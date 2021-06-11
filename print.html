@@ -1,0 +1,1317 @@
+<!DOCTYPE HTML>
+<html lang="en" class="sidebar-visible no-js light">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title></title>
+                <meta name="robots" content="noindex" />
+                
+
+        <!-- Custom HTML head -->
+        
+
+        <meta content="text/html; charset=utf-8" http-equiv="Content-Type">
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff" />
+
+                <link rel="icon" href="favicon.svg">
+                        <link rel="shortcut icon" href="favicon.png">
+                <link rel="stylesheet" href="css/variables.css">
+        <link rel="stylesheet" href="css/general.css">
+        <link rel="stylesheet" href="css/chrome.css">
+                <link rel="stylesheet" href="css/print.css" media="print">
+        
+        <!-- Fonts -->
+        <link rel="stylesheet" href="FontAwesome/css/font-awesome.css">
+                <link rel="stylesheet" href="fonts/fonts.css">
+        
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" href="highlight.css">
+        <link rel="stylesheet" href="tomorrow-night.css">
+        <link rel="stylesheet" href="ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+        
+            </head>
+    <body>
+        <!-- Provide site root to javascript -->
+        <script type="text/javascript">
+            var path_to_root = "";
+            var default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "navy" : "light";
+        </script>
+
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script type="text/javascript">
+            try {
+                var theme = localStorage.getItem('mdbook-theme');
+                var sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script type="text/javascript">
+            var theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            var html = document.querySelector('html');
+            html.classList.remove('no-js')
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add('js');
+        </script>
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script type="text/javascript">
+            var html = document.querySelector('html');
+            var sidebar = 'hidden';
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            }
+            html.classList.remove('sidebar-visible');
+            html.classList.add("sidebar-" + sidebar);
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <div class="sidebar-scrollbox">
+                <ol class="chapter"><li class="chapter-item expanded affix "><a href="introduction.html">Differential Dataflow</a></li><li class="chapter-item expanded "><a href="chapter_0/chapter_0.html"><strong aria-hidden="true">1.</strong> Motivation</a></li><li><ol class="section"><li class="chapter-item expanded "><a href="chapter_0/chapter_0_0.html"><strong aria-hidden="true">1.1.</strong> Getting started</a></li><li class="chapter-item expanded "><a href="chapter_0/chapter_0_1.html"><strong aria-hidden="true">1.2.</strong> Step 1: Write a program</a></li><li class="chapter-item expanded "><a href="chapter_0/chapter_0_2.html"><strong aria-hidden="true">1.3.</strong> Step 2: Change its input</a></li></ol></li><li class="chapter-item expanded "><a href="chapter_a/chapter_a.html"><strong aria-hidden="true">2.</strong> Increase all the things</a></li><li><ol class="section"><li class="chapter-item expanded "><a href="chapter_a/chapter_a_1.html"><strong aria-hidden="true">2.1.</strong> Increase the scale</a></li><li class="chapter-item expanded "><a href="chapter_a/chapter_a_2.html"><strong aria-hidden="true">2.2.</strong> Increase the parallelism</a></li><li class="chapter-item expanded "><a href="chapter_a/chapter_a_3.html"><strong aria-hidden="true">2.3.</strong> Increase the interactivity</a></li></ol></li><li class="chapter-item expanded "><a href="chapter_2/chapter_2.html"><strong aria-hidden="true">3.</strong> Differential Operators</a></li><li><ol class="section"><li class="chapter-item expanded "><a href="chapter_2/chapter_2_1.html"><strong aria-hidden="true">3.1.</strong> Map</a></li><li class="chapter-item expanded "><a href="chapter_2/chapter_2_2.html"><strong aria-hidden="true">3.2.</strong> Filter</a></li><li class="chapter-item expanded "><a href="chapter_2/chapter_2_3.html"><strong aria-hidden="true">3.3.</strong> Concat</a></li><li class="chapter-item expanded "><a href="chapter_2/chapter_2_4.html"><strong aria-hidden="true">3.4.</strong> Consolidate</a></li><li class="chapter-item expanded "><a href="chapter_2/chapter_2_5.html"><strong aria-hidden="true">3.5.</strong> Join</a></li><li class="chapter-item expanded "><a href="chapter_2/chapter_2_6.html"><strong aria-hidden="true">3.6.</strong> Reduce</a></li><li class="chapter-item expanded "><a href="chapter_2/chapter_2_7.html"><strong aria-hidden="true">3.7.</strong> Iterate</a></li><li class="chapter-item expanded "><a href="chapter_2/chapter_2_8.html"><strong aria-hidden="true">3.8.</strong> Arrange</a></li></ol></li><li class="chapter-item expanded "><a href="chapter_3/chapter_3.html"><strong aria-hidden="true">4.</strong> Differential Interactions</a></li><li><ol class="section"><li class="chapter-item expanded "><a href="chapter_3/chapter_3_1.html"><strong aria-hidden="true">4.1.</strong> Creating inputs</a></li><li class="chapter-item expanded "><a href="chapter_3/chapter_3_3.html"><strong aria-hidden="true">4.2.</strong> Making changes</a></li><li class="chapter-item expanded "><a href="chapter_3/chapter_3_4.html"><strong aria-hidden="true">4.3.</strong> Advancing time</a></li><li class="chapter-item expanded "><a href="chapter_3/chapter_3_2.html"><strong aria-hidden="true">4.4.</strong> Observing probes</a></li><li class="chapter-item expanded "><a href="chapter_3/chapter_3_5.html"><strong aria-hidden="true">4.5.</strong> Performing work</a></li></ol></li><li class="chapter-item expanded "><a href="chapter_4/chapter_4.html"><strong aria-hidden="true">5.</strong> Example Applications</a></li><li><ol class="section"><li class="chapter-item expanded "><a href="chapter_4/chapter_4_1.html"><strong aria-hidden="true">5.1.</strong> Graph Computation</a></li><li class="chapter-item expanded "><a href="chapter_4/chapter_4_2.html"><strong aria-hidden="true">5.2.</strong> Interactive Queries</a></li><li class="chapter-item expanded "><a href="chapter_4/chapter_4_3.html"><strong aria-hidden="true">5.3.</strong> Real-time Streaming Input</a></li></ol></li><li class="chapter-item expanded "><a href="chapter_5/chapter_5.html"><strong aria-hidden="true">6.</strong> Arrangements</a></li><li><ol class="section"><li class="chapter-item expanded "><a href="chapter_5/chapter_5_1.html"><strong aria-hidden="true">6.1.</strong> An arrangement example</a></li><li class="chapter-item expanded "><a href="chapter_5/chapter_5_2.html"><strong aria-hidden="true">6.2.</strong> Different arrangements</a></li><li class="chapter-item expanded "><a href="chapter_5/chapter_5_3.html"><strong aria-hidden="true">6.3.</strong> Sharing across dataflows</a></li><li class="chapter-item expanded "><a href="chapter_5/chapter_5_4.html"><strong aria-hidden="true">6.4.</strong> Trace wrappers</a></li></ol></li><li class="chapter-item expanded "><a href="chapter_6/chapter_6.html"><strong aria-hidden="true">7.</strong> Windows Enough and Time</a></li></ol>            </div>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle"></div>
+        </nav>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                
+                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky bordered">
+                    <div class="left-buttons">
+                        <button id="sidebar-toggle" class="icon-button" type="button" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </button>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light (default)</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                                                <button id="search-toggle" class="icon-button" type="button" title="Search. (Shortkey: s)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="S" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                                            </div>
+
+                    <h1 class="menu-title"></h1>
+
+                    <div class="right-buttons">
+                                                <a href="print.html" title="Print this book" aria-label="Print this book">
+                            <i id="print-button" class="fa fa-print"></i>
+                        </a>
+                                                                        
+                    </div>
+                </div>
+
+                                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+                
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script type="text/javascript">
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="differential-dataflow"><a class="header" href="#differential-dataflow">Differential Dataflow</a></h1>
+<p>In this book we will work through the motivation and technical details behind <a href="https://github.com/frankmcsherry/differential-dataflow">differential dataflow</a>, a computational framework build on top of <a href="https://github.com/frankmcsherry/timely-dataflow">timely dataflow</a> intended for efficiently performing computations on large amounts of data and <em>maintaining</em> the computations as the data change.</p>
+<p>Differential dataflow programs look like many standard &quot;big data&quot; computations, borrowing idioms from frameworks like MapReduce and SQL. However, once you write and run your program, you can <em>change</em> the data inputs to the computation, and differential dataflow will promptly show you the corresponding changes in its output. Promptly meaning in as little as milliseconds.</p>
+<p>This relatively simple set-up, write programs and then change inputs, leads to a surprising breadth of exciting and new classes of scalable computation. We will explore it in this document!</p>
+<hr />
+<p>Differential dataflow arose from <a href="https://www.microsoft.com/en-us/research/wp-content/uploads/2013/11/naiad_sosp2013.pdf">work at Microsoft Research</a>, where we aimed to build a high-level framework that could both compute and incrementally maintain non-trivial algorithms.</p>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="motivation"><a class="header" href="#motivation">Motivation</a></h1>
+<p>Differential dataflow programs are structured as two easy steps:</p>
+<pre><code>    1. Write a program.
+    2. Change its input.
+</code></pre>
+<p>We will work through an example program, and then interact with it by changing its inputs. Our goal is foremost to show you what a program looks like, and to give you a sense for what interactions look like.</p>
+<p>Once we've done this, in the next chapter we will jazz things up a bit with an increased scale of data, computation, and interaction!</p>
+<div style="break-before: page; page-break-before: always;"></div><h2 id="getting-started"><a class="header" href="#getting-started">Getting started</a></h2>
+<p>The first thing you will need to do, if you want to follow along with the examples, is to acquire a copy of <a href="https://www.rust-lang.org/">Rust</a>. This is the programming language that differential dataflow uses, and it is in charge of building our projects.</p>
+<p>With Rust in hand, crack open a shell and make a new project using Rust build manager <code>cargo</code>.</p>
+<pre><code>    Echidnatron% cargo new my_project
+</code></pre>
+<p>This should create a new folder called <code>my_project</code>, and you can wander in there and type</p>
+<pre><code>    Echidnatron% cargo run
+</code></pre>
+<p>This will do something reassuring but pointless, like print <code>Hello, world!</code>, because we haven't gotten differential dataflow involved yet. I mean, it's Rust and you could learn that, but you probably want to read a different web page in that case.</p>
+<p>Instead, edit your <code>Cargo.toml</code> file, which tells Rust about your dependencies, to look like this:</p>
+<pre><code>    Echidnatron% cat Cargo.toml
+    [package]
+    name = &quot;my_project&quot;
+    version = &quot;0.1.0&quot;
+    authors = [&quot;Your Name &lt;your_name@you.ch&gt;&quot;]
+
+    [dependencies]
+    timely = &quot;0.11.1&quot;
+    differential-dataflow = &quot;0.11.0&quot;
+    Echidnatron%
+</code></pre>
+<p>You should only need to add those last two lines there, which bring in dependencies on both <a href="https://github.com/TimelyDataflow/timely-dataflow">timely dataflow</a> and <a href="https://github.com/TimelyDataflow/differential-dataflow">differential dataflow</a>. We will be using both of those.</p>
+<p>If you would like to point at the most current code release, hosted on github, you can replace the dependencies with:</p>
+<pre><code>    [dependencies]
+    timely = { git = &quot;https://github.com/TimelyDataflow/timely-dataflow&quot; }
+    differential-dataflow = { git = &quot;https://github.com/TimelyDataflow/differential-dataflow&quot; }
+</code></pre>
+<p>You should now be ready to go. Code examples should mostly work, and you should complain (or <a href="https://github.com/TimelyDataflow/differential-dataflow/issues">file an issue</a>) if they do not!</p>
+<div style="break-before: page; page-break-before: always;"></div><h2 id="step-1-write-a-program"><a class="header" href="#step-1-write-a-program">Step 1: Write a program.</a></h2>
+<p>You write differential dataflow programs against apparently static input collections, with operations that look a bit like database (SQL) or big data (MapReduce) idioms. This is actually a bit of a trick, because you will have the ability to change the input data, but we'll pretend we don't know that yet.</p>
+<p>Let's write a program with one input: a collection <code>manages</code> of pairs <code>(manager, person)</code> describing people and their direct reports. Our program will determine for each person their manager's manager (where the boss manages the boss's own self). If you are familiar with SQL, this is an &quot;equijoin&quot;, and we will write exactly that in differential dataflow.</p>
+<p>If you are following along at home, put this in your <code>src/main.rs</code> file.</p>
+<pre><pre class="playground"><code class="language-rust no_run">    extern crate timely;
+    extern crate differential_dataflow;
+
+    use differential_dataflow::input::InputSession;
+    use differential_dataflow::operators::Join;
+
+    fn main() {
+
+        // define a new timely dataflow computation.
+        timely::execute_from_args(std::env::args(), move |worker| {
+
+            // create an input collection of data.
+            let mut input = InputSession::new();
+
+            // define a new computation.
+            worker.dataflow(|scope| {
+
+                // create a new collection from our input.
+                let manages = input.to_collection(scope);
+
+                // if (m2, m1) and (m1, p), then output (m1, (m2, p))
+                manages
+                    .map(|(m2, m1)| (m1, m2))
+                    .join(&amp;manages)
+                    .inspect(|x| println!(&quot;{:?}&quot;, x));
+            });
+
+            // Read a size for our organization from the arguments.
+            let size = std::env::args().nth(1).unwrap().parse().unwrap();
+
+            // Load input (a binary tree).
+            input.advance_to(0);
+            for person in 0 .. size {
+                input.insert((person/2, person));
+            }
+
+        }).expect(&quot;Computation terminated abnormally&quot;);
+    }
+</code></pre></pre>
+<p>This program has a bit of boilerplate, but at its heart it defines a new input <code>manages</code> and then joins it with itself, once the fields have been re-ordered. The intent is as stated in the comment:</p>
+<pre><pre class="playground"><code class="language-rust no_run">
+<span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>    // if (m2, m1) and (m1, p), then output (m1, (m2, p))
+<span class="boring">}
+</span></code></pre></pre>
+<p>We want to report each pair <code>(m2, p)</code>, and we happen to also produce as evidence the <code>m1</code> connecting them.</p>
+<p>When we execute this program we get to see the skip-level reports for the small binary tree we loaded as input:</p>
+<pre><code>    Echidnatron% cargo run -- 10
+         Running `target/debug/my_project`
+        ((0, (0, 0)), 0, 1)
+        ((0, (0, 1)), 0, 1)
+        ((1, (0, 2)), 0, 1)
+        ((1, (0, 3)), 0, 1)
+        ((2, (1, 4)), 0, 1)
+        ((2, (1, 5)), 0, 1)
+        ((3, (1, 6)), 0, 1)
+        ((3, (1, 7)), 0, 1)
+        ((4, (2, 8)), 0, 1)
+        ((4, (2, 9)), 0, 1)
+    Echidnatron%
+</code></pre>
+<p>This is a bit crazy, but what we are seeing is many triples of the form</p>
+<pre><code>    (data, time, diff)
+</code></pre>
+<p>describing how the data have <em>changed</em>. That's right; our input is actually a <em>change</em> from the initially empty input. The output is showing us that at time <code>(Root, 0)</code> several tuples have had their frequency incremented by one. That is a fancy way of saying they are the output.</p>
+<p>This may make more sense in just a moment, when we want to <em>change</em> the input.</p>
+<div style="break-before: page; page-break-before: always;"></div><h2 id="step-2-change-its-input"><a class="header" href="#step-2-change-its-input">Step 2: Change its input.</a></h2>
+<p>We've written a program, one that produces skip-level reports from some <code>manages</code> relation. Let's see how we can <em>change</em> its input, and what the corresponding output changes will be.</p>
+<p>Our organization has gone from one where each manager has at most two reports, to one where each manager has three reports. Of course, this doesn't happen overnight; each day one of the employees will switch from their old manager to their new manager. Of course, the boss gets to stay the boss, because that is what boss means.</p>
+<p>The only change we'll make is to add the following just after we load up our initial org chart:</p>
+<pre><pre class="playground"><code class="language-rust no_run">
+<span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>    for person in 1 .. size {
+        input.advance_to(person);
+        input.remove((person/2, person));
+        input.insert((person/3, person));
+    }
+<span class="boring">}
+</span></code></pre></pre>
+<p>This moves us through new times, indicated by the line</p>
+<pre><pre class="playground"><code class="language-rust no_run">
+<span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>        input.advance_to(person);
+<span class="boring">}
+</span></code></pre></pre>
+<p>which advances the state of the <code>input</code> collection up to a timestamp <code>person</code>, which just happens to be integers that are conveniently just larger than the time <code>0</code> we used to load the data.</p>
+<p>Once we've advanced the time, we make some changes.</p>
+<pre><pre class="playground"><code class="language-rust no_run">
+<span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>        input.remove((person/2, person));
+        input.insert((person/3, person));
+<span class="boring">}
+</span></code></pre></pre>
+<p>This removes the prior management relation, and introduces a new one where the person reports to their newer, more over-worked manager.</p>
+<p>We do this for each of the non-boss employees and get to see a bunch of outputs.</p>
+<pre><code>    Echidnatron% cargo run -- 10
+         Running `target/debug/my_project`
+        ((0, (0, 0)), 0, 1)
+        ((0, (0, 1)), 0, 1)
+        ((0, (0, 2)), 2, 1)
+        ((1, (0, 2)), 0, 1)
+        ((1, (0, 2)), 2, -1)
+        ((1, (0, 3)), 0, 1)
+        ((1, (0, 4)), 4, 1)
+        ((1, (0, 5)), 5, 1)
+        ((2, (0, 4)), 2, 1)
+        ((2, (0, 4)), 4, -1)
+        ((2, (0, 5)), 2, 1)
+        ((2, (0, 5)), 5, -1)
+        ((2, (0, 6)), 6, 1)
+        ((2, (0, 7)), 7, 1)
+        ((2, (0, 8)), 8, 1)
+        ((2, (1, 4)), 0, 1)
+        ((2, (1, 4)), 2, -1)
+        ((2, (1, 5)), 0, 1)
+        ((2, (1, 5)), 2, -1)
+        ((3, (1, 6)), 0, 1)
+        ((3, (1, 6)), 6, -1)
+        ((3, (1, 7)), 0, 1)
+        ((3, (1, 7)), 7, -1)
+        ((3, (1, 9)), 9, 1)
+        ((4, (1, 8)), 4, 1)
+        ((4, (1, 8)), 8, -1)
+        ((4, (1, 9)), 4, 1)
+        ((4, (1, 9)), 9, -1)
+        ((4, (2, 8)), 0, 1)
+        ((4, (2, 8)), 4, -1)
+        ((4, (2, 9)), 0, 1)
+        ((4, (2, 9)), 4, -1)
+    Echidnatron%
+</code></pre>
+<p>Gaaaaaaah! What in the !#$!?</p>
+<p>It turns out our input changes result in output changes. Let's try and break this down and make some sense. If we group the columns by time, the second element of the tuples, we see a bit more structure.</p>
+<ol>
+<li>
+<p>The entries with time <code>0</code> are exactly the same as for our prior computation, where we just loaded the data.</p>
+</li>
+<li>
+<p>There aren't any entries at time <code>1</code> (go check). That is because the input didn't change in our first step, because 1/2 == 1/3 == 0. Since the input didn't change, the output doesn't change.</p>
+</li>
+<li>
+<p>The other times are more complicated.</p>
+</li>
+</ol>
+<p>Let's look at the entries for time <code>4</code>.</p>
+<pre><code>    ((1, (0, 4)), 4, 1)
+    ((2, (0, 4)), 4, -1)
+    ((4, (1, 8)), 4, 1)
+    ((4, (1, 9)), 4, 1)
+    ((4, (2, 8)), 4, -1)
+    ((4, (2, 9)), 4, -1)
+</code></pre>
+<p>There is a bit going on here. Four's manager changed from two to one, and while their skip-level manager remained zero the explanation changed. The first two lines record this change. The next four lines record the change in the skip-level manager of four's reports, eight and nine.</p>
+<p>At the end, time <code>9</code>, things are a bit simpler because we have reached the employees with no reports, and so the only changes are their skip-level manager, without any implications for other people.</p>
+<pre><code>    ((3, (1, 9)), 9, 1)
+    ((4, (1, 9)), 9, -1)
+</code></pre>
+<p>Oof. Well, we probably <em>could</em> have figured these things out by hand, right?</p>
+<p>Let's check out some ways this gets more interesting.</p>
+<div style="break-before: page; page-break-before: always;"></div><h2 id="increase-all-the-things"><a class="header" href="#increase-all-the-things">Increase all the things</a></h2>
+<p>Differential dataflow is meant to scale, and in many different directions. You can increase the amount of data it operates on, the number of threads and computers you use, and the rate at which you interact with it.</p>
+<p>Let's explore these three scaling dimensions, starting from our example program of the previous chapter!</p>
+<div style="break-before: page; page-break-before: always;"></div><h2 id="increase-the-scale"><a class="header" href="#increase-the-scale">Increase the scale.</a></h2>
+<p>Ten people was a pretty small organization. Let's do ten million instead.</p>
+<p>We are going to have to turn off the output printing here (comment out the <code>inspect</code>, but save the semicolon). We'll also need to add the <code>--release</code> flag to our command line, to avoid waiting forever.</p>
+<p>We'll break down our computation two ways, first just loading up the initial computation, and second doing that plus all of the changes to the reporting structure. We haven't learned how to interactively load all of the input and await results yet (in just a moment), so we will only see elapsed times measuring the throughput, not the latency.</p>
+<p>First, we produce the skip-level management (with the &quot;change its input&quot; code commented out).</p>
+<pre><code class="language-ignore">        Echidnatron% time cargo run --release -- 10000000
+            Finished release [optimized] target(s) in 0.24s
+             Running `target/release/my_project 10000000`
+        cargo run --release my_project 10000000 -w1  2.74s user 1.00s system 98% cpu 3.786 total
+        Echidnatron%
+</code></pre>
+<p>Four seconds. We have no clue if this is a good or bad time.</p>
+<p>Second, we produce the skip-level management and then modify it 10 million times (as in &quot;change its input&quot;).</p>
+<pre><code class="language-ignore">        Echidnatron% time cargo run --release -- 10000000
+            Finished release [optimized] target(s) in 0.24s
+             Running `target/release/my_project 10000000`
+        cargo run --release my_project 10000000  10.64s user 2.22s system 99% cpu 12.939 total
+        Echidnatron%
+</code></pre>
+<p>About thirteen seconds now.</p>
+<p>That's less than a microsecond per modification (subtracting the loading time). Importantly, these are throughput measurements rather than latency numbers; we aren't actually doing the 10 million updates one after the other. But, if you compare this to a sequence of 10 million updates to a database, we would be pretty pleased with a microsecond per operation.</p>
+<div style="break-before: page; page-break-before: always;"></div><h2 id="increase-the-parallelism"><a class="header" href="#increase-the-parallelism">Increase the parallelism.</a></h2>
+<p>Differential dataflow works great using multiple threads and computers. It even produces the same output and everything.</p>
+<p>For this to work out, we'll want to ask each worker to load up a fraction of the input. If we just run the same code with multiple workers, then each of the workers will run</p>
+<pre><code class="language-rust ignore">    for person in 0 .. size {
+        input.insert((person/2, person));
+    }
+</code></pre>
+<p>and each will insert the entire input collection. We don't want that!</p>
+<p>Instead, each timely dataflow worker has methods <code>index()</code> and <code>peers()</code>, which indicate the workers number and out of how many total workers. We can change the code so that each worker only loads their fraction of the input, like so:</p>
+<pre><code class="language-rust ignore">    let mut person = worker.index();
+    while person &lt; size {
+        input.insert((person/2, person));
+        person += worker.peers();
+    }
+</code></pre>
+<p>We can also make the same changes to the code that supplies the change, where each worker is responsible for those people whose number equals <code>worker.index()</code> modulo <code>worker.peers()</code>.</p>
+<pre><code class="language-rust ignore">    let mut person = worker.index();
+    while person &lt; size {
+        input.remove((person/2, person));
+        input.insert((person/3, person));
+        input.advance_to(person);
+        person += worker.peers();
+    }
+</code></pre>
+<p>I'm on a laptop with two cores. Let's load the data again, without modifying it, but let's use two worker threads (with the <code>-w2</code> argument)</p>
+<pre><code class="language-ignore">        Echidnatron% time cargo run --release -- 10000000 -w2
+            Finished release [optimized] target(s) in 0.24s
+             Running `target/release/my_project 10000000 -w2`
+        cargo run --release -- 10000000 -w2  3.34s user 1.27s system 191% cpu 2.402 total
+        Echidnatron%
+</code></pre>
+<p>Now let's try loading and doing ten million modifications, but with two worker threads.</p>
+<pre><code class="language-ignore">        Echidnatron% time cargo run --release -- 10000000 -w2
+            Finished release [optimized] target(s) in 0.24s
+             Running `target/release/my_project 10000000 -w2`
+        cargo run --release -- 10000000 -w2  13.06s user 3.14s system 196% cpu 8.261 total
+        Echidnatron%
+</code></pre>
+<p>Each of these improve on the single-threaded execution (they do more total work, because). Perhaps amazingly, they even improve the case where we need to do ten million <em>sequential</em> modifications. We get exactly the same answer, too.</p>
+<div style="break-before: page; page-break-before: always;"></div><h2 id="increase-the-interaction"><a class="header" href="#increase-the-interaction">Increase the interaction.</a></h2>
+<p>Instead of loading all of our changes and only waiting for the result, we can load each change and await its results before supplying the next change. This requires a bit of timely dataflow magic, where we add a probe to the end of our dataflow:</p>
+<pre><code class="language-rust ignore">    // create a manager
+    let probe = worker.dataflow(|scope| {
+
+        // create a new collection from an input session.
+        let manages = input.to_collection(scope);
+
+        // if (m2, m1) and (m1, p), then output (m1, (m2, p))
+        manages
+            .map(|(m2, m1)| (m1, m2))
+            .join(&amp;manages)
+            // .inspect(|x| println!(&quot;{:?}&quot;, x))
+            .probe()
+    });
+</code></pre>
+<p>We can then use this probe to limit the introduction of new data, by waiting for it to catch up with our input before we insert new data. For example, after we insert our initial data, we should wait until everyone has caught up.</p>
+<pre><code class="language-rust ignore">    let mut person = worker.index();
+    while person &lt; size {
+        input.insert((person/2, person));
+        person += worker.peers();
+    }
+
+    // wait for data loading.
+    input.advance_to(1);
+    input.flush();
+    while probe.less_than(&amp;input.time()) { worker.step(); }
+    println!(&quot;{:?}\tdata loaded&quot;, worker.timer().elapsed());
+</code></pre>
+<p>These four new lines are each important, especially the one that prints things out. The other three do a bit of magic that get timely dataflow to work for us until we are certain that inputs have been completely processed.</p>
+<p>We can make the same changes for the interactive loading, but we'll synchronize the workers for each person they load.</p>
+<pre><code class="language-rust ignore">    // make changes, but await completion.
+    let mut person = 1 + worker.index();
+    while person &lt; size {
+        input.remove((person/2, person));
+        input.insert((person/3, person));
+        input.advance_to(person);
+        input.flush();
+        while probe.less_than(&amp;input.time()) { worker.step(); }
+        println!(&quot;{:?}\tstep {} complete&quot;, worker.timer().elapsed(), person);
+        person += worker.peers();
+    }
+</code></pre>
+<p>This starts to print out a mess of data, indicating not only how long it takes to start up the computation, but also how long each individual round of updates takes.</p>
+<pre><code class="language-ignore">        Echidnatron% cargo run --release -- 10000000
+            Finished release [optimized] target(s) in 0.24s
+             Running `target/release/my_project 10000000`
+        4.092895186s    data loaded
+        4.092975626s    step 1 complete
+        4.093021676s    step 2 complete
+        4.093041130s    step 3 complete
+        4.093110803s    step 4 complete
+        4.093144075s    step 5 complete
+        4.093187645s    step 6 complete
+        4.093208245s    step 7 complete
+        4.093236460s    step 8 complete
+        4.093281793s    step 9 complete
+</code></pre>
+<p>which continues for quite a while.</p>
+<pre><code class="language-ignore">        21.689493445s   step 397525 complete
+        21.689522815s   step 397526 complete
+        21.689553410s   step 397527 complete
+        21.689593500s   step 397528 complete
+        21.689643055s   step 397529 complete
+</code></pre>
+<p>You can see that this is pretty prompt; the latencies are in the tens of microseconds.</p>
+<p>You can also see that the whole computation is clearly going to take a bit longer. This is because we've forced some work to finish before we start the next work, which we haven't done before. We will explore later on how to trade off latency and throughput when we come to &quot;open-loop&quot; interaction.</p>
+<div style="break-before: page; page-break-before: always;"></div><h2 id="differential-dataflow-operators"><a class="header" href="#differential-dataflow-operators">Differential Dataflow operators</a></h2>
+<p>Differential dataflow programs are fundamentally build out of operators applied to collections. These operators result in collections, to which we apply more and more operators. Ideally, the operators we assemble compute something exciting and meaningful.</p>
+<p>This chapter surveys the most common differential dataflow operators, and shows how to use each of them.</p>
+<div style="break-before: page; page-break-before: always;"></div><h2 id="the-map-operator"><a class="header" href="#the-map-operator">The Map Operator</a></h2>
+<p>The <code>map</code> operator applies a supplied function to each element of a collection, the results of which are accumulated into a new collection. The map operator preserves the counts of elements, and any elements that are made equal by the map operator will have their counts accumulate.</p>
+<p>As an example, our example program used <code>map</code> to reverse the pairs of identifiers in the <code>manages</code> collection, to place the second element first.</p>
+<pre><pre class="playground"><code class="language-rust no_run">
+<span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>    manages
+        .map(|(m2, m1)| (m1, m2))
+        .join(&amp;manages)
+        .inspect(|x| println!(&quot;{:?}&quot;, x));
+<span class="boring">}
+</span></code></pre></pre>
+<p>If instead we had just written</p>
+<pre><pre class="playground"><code class="language-rust no_run">
+<span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>    manages
+        .map(|(m2, m1)| m2);
+<span class="boring">}
+</span></code></pre></pre>
+<p>we would have a collection containing each manager with a multiplicity equal to the number of individuals they manage.</p>
+<div style="break-before: page; page-break-before: always;"></div><h2 id="the-filter-operator"><a class="header" href="#the-filter-operator">The Filter Operator</a></h2>
+<p>The <code>filter</code> operator applies a supplied predicate to each element of a collection, and retains only those for which the predicate returns <code>true</code>.</p>
+<p>As an example, we might select out those management relation where the manager has greater employee id than the managee, by writing</p>
+<pre><pre class="playground"><code class="language-rust no_run">
+<span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>    manages
+        .filter(|&amp;(m2, m1)| m2 &gt; m1);
+<span class="boring">}
+</span></code></pre></pre>
+<p>Rust makes it very clear when a method is provided with data, or only the ability to look at the data. The filter operator is only allowed to look at the data, which is where the <code>&amp;</code> glyph comes from. This allows us to be more efficient in execution, but it is a subtle concept that further Rust reading may illuminate.</p>
+<div style="break-before: page; page-break-before: always;"></div><h2 id="the-concat-operator"><a class="header" href="#the-concat-operator">The Concat Operator</a></h2>
+<p>The <code>concat</code> operator takes two collections whose element have the same type, and produces the collection in which the counts of each element are added together.</p>
+<p>For example, we might form the symmetric &quot;management relation&quot; by concatenating the <code>manages</code> collection with the same collection with its fields flipped:</p>
+<pre><pre class="playground"><code class="language-rust no_run">
+<span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>    manages
+        .map(|(m2, m1)| (m1, m2))
+        .concat(&amp;manages);
+<span class="boring">}
+</span></code></pre></pre>
+<p>This collection likely has at most one copy of each record, unless perhaps any manager manages itself. In fact, zero manages itself, and the element <code>(0, 0)</code> would have count two.</p>
+<p>Importantly, <code>concat</code> doesn't do the hard work of ensuring that there is only one physical of each element. If we inspect the output of the <code>concat</code> above, we might see</p>
+<pre><code>    ((0, 0), 0, 1)
+    ((0, 0), 0, 1)
+</code></pre>
+<p>Although these are two updates to the same element at the same time, <code>concat</code> is a bit lazy (read: efficient) and doesn't do the hard work until we ask it. For that, we'll need the <code>consolidate</code> operator.</p>
+<div style="break-before: page; page-break-before: always;"></div><h2 id="the-consolidate-operator"><a class="header" href="#the-consolidate-operator">The Consolidate Operator</a></h2>
+<p>The <code>consolidate</code> operator takes an input collection, and does nothing other than possibly changing its physical representation. It leaves the same sets of elements at the same times with the same logical counts.</p>
+<p>What <code>consolidate</code> does do is ensure that each element at each time has at most one physical tuple. Generally, we might have multiple updates to the same element at the same time, expressed as independent updates. The <code>consolidate</code> operator adds all of these updates together before moving the update along.</p>
+<p>As an example, if we were to inspect</p>
+<pre><pre class="playground"><code class="language-rust no_run">
+<span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>    manages
+        .map(|(m2, m1)| (m1, m2))
+        .concat(&amp;manages)
+        .inspect(|x| println!(&quot;{:?}&quot;, x));
+<span class="boring">}
+</span></code></pre></pre>
+<p>we might see two copies of the same element:</p>
+<pre><code>    ((0, 0), 0, 1)
+    ((0, 0), 0, 1)
+</code></pre>
+<p>However, by introducing <code>consolidate</code></p>
+<pre><pre class="playground"><code class="language-rust no_run">
+<span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>    manages
+        .map(|(m2, m1)| (m1, m2))
+        .concat(&amp;manages)
+        .consolidate()
+        .inspect(|x| println!(&quot;{:?}&quot;, x));
+<span class="boring">}
+</span></code></pre></pre>
+<p>we are guaranteed to see at most one <code>(0,0)</code> update at each time:</p>
+<pre><code>    ((0, 0), 0, 2)
+</code></pre>
+<p>The <code>consolidate</code> operator is mostly useful before <code>inspect</code>ing data, but it can also be important for efficiency; knowing when to spend the additional computation to consolidate the representation of your data is an advanced topic!</p>
+<div style="break-before: page; page-break-before: always;"></div><h2 id="the-join-operator"><a class="header" href="#the-join-operator">The Join Operator</a></h2>
+<p>The <code>join</code> operator takes two input collections, each of which must have records with a <code>(key, value)</code> structure, and must have the same type of <code>key</code>. For each pair of elements with matching key, one from each input, the join operator produces the output <code>(key, (value1, value2))</code>.</p>
+<p>Our example from earlier uses a join to match up pairs <code>(m2, m1)</code> and <code>(m1, p)</code> when the <code>m1</code> is in common. To do this, we first have to switch the records in the first collection around, so that they are keyed by <code>m1</code> instead of <code>m2</code>.</p>
+<pre><pre class="playground"><code class="language-rust no_run">
+<span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>    manages
+        .map(|(m2, m1)| (m1, m2))
+        .join(&amp;manages)
+        .inspect(|x| println!(&quot;{:?}&quot;, x));
+<span class="boring">}
+</span></code></pre></pre>
+<p>The join operator multiplies frequencies, so if a record <code>(key, val1)</code> has multiplicity five, and a matching record <code>(key, val2)</code> has multiplicity three, the output result will be <code>(key, (val1, val2))</code> with multiplicity fifteen.</p>
+<div style="break-before: page; page-break-before: always;"></div><h2 id="the-reduce-operator"><a class="header" href="#the-reduce-operator">The Reduce Operator</a></h2>
+<p>The <code>reduce</code> operator takes an input collection whose records have a <code>(key, value)</code> structure, and it applies a user-supplied reduction closure to each group of values with the same key.</p>
+<p>For example, to produce for each manager their managee with the lowest identifier, we might write</p>
+<pre><pre class="playground"><code class="language-rust no_run">
+<span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>    manages
+        .reduce(|_key, input, output| {
+            let mut min_index = 0;
+
+            // Each element of input is a `(&amp;Value, Count)`
+            for index in 1 .. input.len() {
+                if input[min_index].0 &gt; input[index].0 {
+                    min_index = index;
+                }
+            }
+
+            // Must produce outputs as `(Value, Count)`.
+            output.push((*input[min_index].0, 1));
+        });
+<span class="boring">}
+</span></code></pre></pre>
+<p>The reduce operator has some tricky Rust details about how it is expressed. The type of closure you must provide is technically</p>
+<pre><pre class="playground"><code class="language-rust no_run">
+<span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>        Fn(&amp;Key, &amp;[(&amp;Val, Cnt)], &amp;mut Vec&lt;(Val2, Cnt2)&gt;)
+<span class="boring">}
+</span></code></pre></pre>
+<p>which means a function of three arguments:</p>
+<pre><code>1. A reference to the common key (`_key` above).
+2. A slice (list) of pairs of value references and counts.
+3. A mutable vector into which one can put pairs of values and counts.
+</code></pre>
+<p>The method is structured this way so that you can efficiently observe and manipulate records with large multiplicities without actually walking through that number of records. For example, we can write a <code>count</code> operator much more efficiently with the count looking at us than if we had to traverse as many copies of each record as we were counting up.</p>
+<p>Speaking of which ...</p>
+<h3 id="count"><a class="header" href="#count">Count</a></h3>
+<p>The convenience method <code>count</code> wraps the <code>reduce</code> operator, and performs the common operation much more easily. The count operator takes arbitrary input collections, and produces a collection as output whose records are pairs of input records and their accumulated count.</p>
+<h3 id="distinct"><a class="header" href="#distinct">Distinct</a></h3>
+<p>The <code>distinct</code> operator is another convenience operator, and it takes any input collection to one in which each input record occurs at most once. The distinct operator is a great way to recover set semantics despite differential dataflow's native multiset semantics.</p>
+<h3 id="threshold"><a class="header" href="#threshold">Threshold</a></h3>
+<p>More general than <code>distinct</code>, the <code>threshold</code> operator takes any function from one count to another count and yields the collection with counts correspondingly updated. This is used to implement the distinct operator, but also operators like &quot;records with count at least three&quot;.</p>
+<div style="break-before: page; page-break-before: always;"></div><h2 id="the-iterate-operator"><a class="header" href="#the-iterate-operator">The Iterate Operator</a></h2>
+<p>The <code>iterate</code> operator takes a starting input collection and a closure to repeatedly apply to this input collection. The output of the iterate operator is the collection that results from an unbounded number of applications of this closure to the input. Ideally this process converges, as otherwise the computation will run forever!</p>
+<p>As an example, we can take our <code>manages</code> relation and determine for all employees all managers above them in the organizational chat. To do this, we start from the <code>manages</code> relation and write a closure that extends any transitive management pairs by &quot;one hop&quot; along the management relation, using a join operation.</p>
+<pre><pre class="playground"><code class="language-rust no_run">
+<span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>    manages   // transitive contains (manager, person) for many hops.
+        .iterate(|transitive| {
+            transitive
+                .map(|(mk, m1)| (m1, mk))
+                .join(&amp;transitive)
+                .map(|(m1, (mk, p))| (mk, p))
+                .concat(&amp;transitive)
+                .distinct()
+        });
+<span class="boring">}
+</span></code></pre></pre>
+<p>Although the first three lines of the closure may look like our skip-level management example, we have three more steps that are very important.</p>
+<ol>
+<li>
+<p>We apply a <code>map</code> to remove <code>m1</code> from the tuple. This was the middle manager, but to have the same type as the input collection we need to produce only pairs.</p>
+</li>
+<li>
+<p>We concatenate in <code>transitive</code>, which ensures that we don't &quot;lose&quot; any shorter management relations. Otherwise the loop body would insist that we take two steps along <code>transitive</code>.</p>
+</li>
+<li>
+<p>We apply <code>distinct()</code> at the end. This is important to ensure convergence. Otherwise, the multiplicities of facts would increase indefinitely. The distinct operator makes sure that we wind down as we stop discovering new transitive management relations.</p>
+</li>
+</ol>
+<h3 id="enter"><a class="header" href="#enter">Enter</a></h3>
+<p>The <code>enter</code> operator is a helpful method that brings collections outside a loop into the loop, unchanging as the iterations proceed.</p>
+<p>In the example above, we could rewrite</p>
+<pre><pre class="playground"><code class="language-rust no_run">
+<span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>    manages   // transitive contains (manager, person) for many hops.
+        .iterate(|transitive| {
+
+            let manages = manages.enter(transitive.scope());
+
+            transitive
+                .map(|(mk, m1)| (m1, mk))
+                .join(&amp;manages)
+                .map(|(m1, (mk, p))| (mk, p))
+                .concat(&amp;manages)
+                .distinct()
+        });
+<span class="boring">}
+</span></code></pre></pre>
+<p>This modified version extends <code>transitive</code> by one step along <code>manages</code>, rather than by a step along <code>transitive</code>. It also concatenates in <code>manages</code> rather than <code>transitive</code>. This modified version can perform better, as while it takes shorter steps, they are also more measured.</p>
+<h3 id="leave"><a class="header" href="#leave">Leave</a></h3>
+<p>The <code>leave</code> operator allows you to extract a collection from an iterative context. It isn't exactly clear how you do this yet, but it will be in just a moment. When you call leave on a collection, it returns a collection in the enclosing scope (outside the iteration) equal to the final value of the collection.</p>
+<h3 id="variables"><a class="header" href="#variables">Variables</a></h3>
+<p>You can manually construct iterative contexts, if you like, using differential dataflow's <code>Variable</code> type. This is a collection that can be used before its contents are defined, establishing a recursive definition. Its contents will then develop iteratively, much as they do for the iterate operator.</p>
+<p>Manual construction can be important when you have mutual recursion, perhaps among multiple collections (rather than the one collection iterate supports), or if you want to return something other than the result of the closure (perhaps intermediate collections).</p>
+<p>As an example, the implementation of the <code>iterate</code> operator looks something like this:</p>
+<pre><pre class="playground"><code class="language-rust no_run">
+<span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>    collection.scope().scoped(|subgraph| {
+        let variable = Variable::from(collection.enter(subgraph));
+        let result = logic(&amp;variable);
+        variable.set(&amp;result);
+        result.leave()
+    })
+<span class="boring">}
+</span></code></pre></pre>
+<div style="break-before: page; page-break-before: always;"></div><h2 id="the-arrange-operator"><a class="header" href="#the-arrange-operator">The Arrange Operator</a></h2>
+<p>The <code>arrange</code> operator is a massively important operator that we will discuss in more detail in the chapter on Arrangements. Arrange controls and coordinates how data are stored, indexed, and maintained, and forms the basis of efficient data sharing.</p>
+<p>Operators like <code>consolidate</code>, <code>join</code>, and <code>reduce</code> all use <code>arrange</code> internally, and there can be substantial benefit to exposing this use. We will discuss this further.</p>
+<div style="break-before: page; page-break-before: always;"></div><h2 id="differential-interactions"><a class="header" href="#differential-interactions">Differential Interactions</a></h2>
+<p>Once a computation is written, we have only to interact with it. At its heart, this reduces to changing the inputs to the computation and observing changes in the outputs. This can be very easy to do, but there is also intentionally great latitude to allow you to allow the system to perform more efficiently.</p>
+<p>Our goal is to go in-order through each of the elements of the code from our interactive example.</p>
+<pre><pre class="playground"><code class="language-rust no_run">
+<span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>    // make changes, but await completion.
+    let mut person = index;
+    while person &lt; people {
+        input.remove((person/2, person));
+        input.insert((person/3, person));
+        input.advance_to(person);
+        input.flush();
+        while probe.less_than(&amp;input.time()) {
+            worker.step();
+        }
+        person += peers;
+    }
+<span class="boring">}
+</span></code></pre></pre>
+<p>Each of these parts, more or less, do something interesting and important. There is also some flexibility in how they are used, which we will also try to highlight.</p>
+<div style="break-before: page; page-break-before: always;"></div><h2 id="creating-inputs"><a class="header" href="#creating-inputs">Creating Inputs</a></h2>
+<p>We've seen already one example of creating a differential dataflow input in our management example.</p>
+<pre><pre class="playground"><code class="language-rust no_run">
+<span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>    // create an input collection of data.
+    let mut input = InputSession::new();
+
+    // define a new computation.
+    worker.dataflow(|scope| {
+
+        // create a new collection from our input.
+        let manages = input.to_collection(scope);
+
+        // ...
+<span class="boring">}
+</span></code></pre></pre>
+<p>Most commonly, a differential dataflow input is managed by an <code>InputSession</code> instance. We've created one above and then turned it in to a differential dataflow collection. Changes that we make to the input session will make their way into the differential dataflow computation; the input session acts as a bridge from our imperative code to the differential dataflow.</p>
+<h3 id="new-collections"><a class="header" href="#new-collections">New Collections</a></h3>
+<p>You can also create input sessions from the <code>new_collection</code> and <code>new_collection_from</code> methods defined on timely dataflow scopes, by way of differential dataflow's <code>Input</code> trait. These methods allow you to define a collection in-line, and optionally supply initial data for the collection.</p>
+<p>For example, above we could have written the above as:</p>
+<pre><pre class="playground"><code class="language-rust no_run">
+<span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>    // define a new computation.
+    let mut input = worker.dataflow(|scope| {
+
+        // create a new collection from our input.
+        let (input, manages) = scope.new_collection();
+
+        // ...
+
+        input
+    });
+<span class="boring">}
+</span></code></pre></pre>
+<p>Notice that we need to return the input from the closure, and bind it as the result of our call to <code>dataflow()</code>.</p>
+<h3 id="as-collections"><a class="header" href="#as-collections">As Collections</a></h3>
+<p>Any timely dataflow stream of the correct record type, specifically <code>(data, time, diff)</code>, can be re-interpreted as a differential dataflow collection using the <code>AsCollection</code> trait, which provides a method <code>as_collection()</code>.</p>
+<p>This operator is helpful in the implementation of differential dataflow operators, when you need to dive in to timely dataflow specializations, and when you need to interoperate with timely dataflow computations. Perhaps you bring your data in from Kafka using timely dataflow; you must change it from a timely dataflow stream to a differential dataflow collection.</p>
+<div style="break-before: page; page-break-before: always;"></div><h2 id="making-changes"><a class="header" href="#making-changes">Making Changes</a></h2>
+<p>An <code>InputSession</code> instance supports several methods allowing us to change the underlying collection.</p>
+<p>The simplest of these methods are <code>insert(item)</code> and <code>remove(item)</code>, which respectively increment and decrement the count of the supplied item, at the current time of the input session.</p>
+<p>The <code>update(item, diff)</code> method allows you to specify an arbitrary change to an item, positive or negative and of arbitrary magnitude. This method can be useful when your input data come as differences, or if you need to deal with large magnitude changes.</p>
+<p>The <code>update_at(item, time, diff)</code> method allows you to specify an arbitrary change to an item, at an arbitrary time in the present or future of the current time of the input session. This method can be useful if your data may arrive out of order with respect to time, and you would nonetheless like to introduce the data to the computation. You are not likely to see the effects of these changes until the input passes their associated times, but you may nonetheless want to introduce the data rather than buffer it yourself.</p>
+<h3 id="timely-streams"><a class="header" href="#timely-streams">Timely streams</a></h3>
+<p>As indicated in the &quot;Creating Inputs&quot; section, any timely dataflow stream can be recast as a differential dataflow collection, and so any other source of changes that can be turned into a timely dataflow stream can also be used as input changes for a differential dataflow computation. Doing this requires some care, which is what the <code>InputSession</code> type tries to provide for you.</p>
+<div style="break-before: page; page-break-before: always;"></div><h2 id="advancing-time"><a class="header" href="#advancing-time">Advancing Time</a></h2>
+<p>Differential dataflow will perform relatively little work until it believes it has enough information to produce the correct answer. This involves you supplying input changes, but just as importantly it involves you promising to <em>stop</em> changing the collection.</p>
+<p>The <code>InputSession</code> type provides a method <code>advance_to(time)</code>, which moves the internal time of the session forward to <code>time</code>, and prevents you from supplying input changes at times that are not greater or equal to <code>time</code>. This is a very strong statement made to the differential dataflow infrastructure that you have stopped changing this input at all times not greater or equal to this input time, and the system can now start to make progress determining the corresponding output changes.</p>
+<p>Crucially, the calls to <code>advance_to</code> will be buffered until you call <code>input.flush()</code>, which exposes this information to the underlying timely dataflow system. This allows you to call <code>advance_to</code> as frequently as once per record, without overwhelming the underlying system.</p>
+<p><strong>IMPORTANT</strong>: Before expecting differential and timely dataflow to actually make forward progress, make sure you have advanced and flushed your inputs.</p>
+<p>This is a classic source of error, still made by yours truly, that cause a computation to appear to have hung. In fact, the computation is almost always correct, and simply cannot make progress if you have held back the information that an input has stopped changing at some input times.</p>
+<h3 id="temporal-concurrency"><a class="header" href="#temporal-concurrency">Temporal Concurrency</a></h3>
+<p>You do not need to call <code>flush()</code> each time you call <code>advance_to(time)</code>.</p>
+<p>Calls to <code>advance_to</code> change the logical time at which a change occurs, but you are welcome to buffer up many of these changes and the call flush only once, allowing differential dataflow to process the sequence of changes concurrently. This can greatly improve the throughput, often at a nominal affect on latency.</p>
+<p>We will see this more clearly when we investigate the example application of real-time streaming input.</p>
+<div style="break-before: page; page-break-before: always;"></div><h2 id="observing-probes"><a class="header" href="#observing-probes">Observing Probes</a></h2>
+<p>Probes are an important concept in timely dataflow, and they play the same role in differential dataflow.</p>
+<p>Dataflow computations differ from imperative computations in that you do not <em>force</em> computation to happen, you must wait until it has happened. The <code>probe()</code> operator on collections returns a probe that can tell you at which times a collection may still experience changes.</p>
+<p>For example, recall our example of interacting with our management computation, where we wrote</p>
+<pre><pre class="playground"><code class="language-rust no_run">
+<span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>    // create a manager
+    let probe = worker.dataflow(|scope| {
+
+        // create a new collection from an input session.
+        let manages = input.to_collection(scope);
+
+        // if (m2, m1) and (m1, p), then output (m1, (m2, p))
+        manages
+            .map(|(m2, m1)| (m1, m2))
+            .join(&amp;manages)
+            .probe()
+    });
+<span class="boring">}
+</span></code></pre></pre>
+<p>The returned probe allows us to ask whether the computation has stabilized to the point that there will be no more changes at certain query timestamps. We used the probe later on, when we wrote</p>
+<pre><pre class="playground"><code class="language-rust no_run">
+<span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>    while probe.less_than(&amp;input.time()) { worker.step(); }
+<span class="boring">}
+</span></code></pre></pre>
+<p>This causes the dataflow worker to continue to run until such a point as there can be no more changes strictly less than the current input time (what we are about to introduce). At this point all changes introduced at strictly prior times must be fully resolved, as the probe tells us that no further changes at their time can appear in the output.</p>
+<div style="break-before: page; page-break-before: always;"></div><h2 id="performing-work"><a class="header" href="#performing-work">Performing Work</a></h2>
+<p>All of the differential dataflow computation happens in what seems like a fairly small an unobtrusive operation:</p>
+<pre><pre class="playground"><code class="language-rust no_run">
+<span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>    worker.step();
+<span class="boring">}
+</span></code></pre></pre>
+<p>This call schedules each differential dataflow operator, and performs some amount of work they have outstanding. Repeated calls to this method will advance all of the work in the system, and should eventually bring output probes in-line with the times of the inputs on which they depend.</p>
+<p>At the end of your differential dataflow computation, when we exit the closure supplied to timely dataflow, the system will call <code>worker.step()</code> until the computation completes. For this reason, it is safe to let workers who otherwise have nothing further to contribute to simply exit, as they will continue to participate until all other workers have completed as well.</p>
+<p>For example, our first example computations didn't call <code>worker.step()</code> explicitly, but just exited once it supplied the input changes. Exiting causes all of the work to happen (and complete, as the inputs are automatically closed as they are dropped).</p>
+<p>Explicit calls to <code>worker.step()</code> are important when we are maintaining interactive access to probes, and do not want to simply complete the computation.</p>
+<div style="break-before: page; page-break-before: always;"></div><h2 id="example-applications"><a class="header" href="#example-applications">Example Applications</a></h2>
+<p>In this chapter we use the tools we have begun to develop, writing computations and changing their inputs, to effect somewhat more interesting computational patterns. Our goal is to build up to an interactive graph computation that supports both interactive queries and real-time updates to the graph structure.</p>
+<p>These aren't the limits of differential dataflow, and we expect that you can also come up with new idioms for using the tools differential dataflow provides!</p>
+<div style="break-before: page; page-break-before: always;"></div><h2 id="graph-computation"><a class="header" href="#graph-computation">Graph Computation</a></h2>
+<p>Graph computation covers a lot of ground, and we will pick just one example here: graph connectivity.</p>
+<p>Imagine you have a collection containing pairs <code>(source, target)</code> of graph edges, and you would like to determine which nodes can reach which other nodes along graph edges (using either direction).</p>
+<p>One algorithm for this graph connectivity is &quot;label propagation&quot;, in which each graph node maintains a label (initially its own name) and all nodes repeatedly exchange labels and maintain the smallest label they have yet seen. This process converges to a limit where each node has the smallest label in its connected component.</p>
+<p>Let's write this computation starting from a collection <code>edges</code>, using differential dataflow.</p>
+<pre><pre class="playground"><code class="language-rust no_run">
+<span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>    // create initial labels from sources.
+    let labels = edges.map(|(src,dst)| (src,src))
+                      .distinct();
+
+    labels
+        .iterate(|inner| {
+            let labels = labels.enter(inner.scope());
+            let edges = edges.enter(inner.scope());
+            inner.join(&amp;edges)
+                 .map(|(_src,(lbl,dst))| (dst,lbl))
+                 .concat(&amp;labels)
+                 .reduce(|_dst, lbls, out| {
+                     let min_lbl =
+                     lbls.iter()
+                         .map(|x| *x.0)
+                         .min()
+                         .unwrap();
+                     out.push((min_lbl, 1));
+                 })
+        });
+<span class="boring">}
+</span></code></pre></pre>
+<p>This computation first determines some initial labels, taking as the set of nodes those identifiers from which edges emerge. We are assuming that the input graph is symmetric, so every node should be the source of some edge.</p>
+<p>The computation then iteratively develops the label collection, by joining whatever labels we have at any point with the set of edges, effectively &quot;proposing&quot; each node's label to each of the node's neighbors. All nodes fold in these proposals with their initial labels, and each retains one copy of the smallest label they are provided as input.</p>
+<p>The resulting collection contains pairs <code>(node, label)</code> from which we can determine if two nodes are in the same connected component: do they have the same label? Let's see how to use this interactively next!</p>
+<div style="break-before: page; page-break-before: always;"></div><h2 id="interactive-queries"><a class="header" href="#interactive-queries">Interactive Queries</a></h2>
+<p>We have just described an algorithm for determining a collection containing <code>(node, label)</code> pairs describing the connected component structure of an undirected graph. But, this collection is a bit unwieldy. Do we print it to the screen? Flip through the pages of results to find a specific pair of query nodes?</p>
+<p>Instead, let's describe an extended computation that lets us query the results, interactively!</p>
+<p>Imagine <code>labels</code> contains the results of the iterative computation from before. Let's create a new input, <code>queries</code>, which will simply contain node identifiers.</p>
+<pre><pre class="playground"><code class="language-rust no_run">
+<span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>    labels.semijoin(queries)
+          .inspect(|x| println!(&quot;{:?}&quot;, x));
+<span class="boring">}
+</span></code></pre></pre>
+<p>This is a fairly brief looking computation; what does it do?</p>
+<p>As we update the <code>queries</code> relation, we change which elements of <code>labels</code> are passed through to the inspect. As we add new elements, the corresponding label from <code>labels</code> is fished out and presented for inspection. In effect, our computation is now an interactive service that returns the connected component id of nodes we ask for, in our sub-millisecond interactive timescales.</p>
+<p>Even more importantly, our computation <em>maintains</em> the results of these queries as <code>labels</code> changes, perhaps due to changes in its input <code>edges</code> collection. When we add an element to <code>queries</code> we are installing a standing query that will monitor the label of the query, and report all changes to it, until such a point as we uninstall the query by removing it from <code>queries</code>.</p>
+<p>Contrast this with an approach where the connectivity results are stashed in a key-value store, one that you probe for node labels. While you may read back two labels that are the same, were they actually the same at the same moment? If the labels are not the same, does that mean they were not the same or are they perhaps changing in tandem as the graph changes?</p>
+<p>Differential dataflow prevents these ambiguities through its commitment to producing the correct answer, and clearly explaining a consistent history of changes through logical timestamps.</p>
+<div style="break-before: page; page-break-before: always;"></div><h2 id="real-time-streaming-input"><a class="header" href="#real-time-streaming-input">Real-time streaming input</a></h2>
+<p>Our examples so far have involved careful manipulation of the input, making changes and advancing time. What happens when we want to connect all of this to an external source that can change at arbitrary rates, and which might not wait for us to complete some work before issuing new changes?</p>
+<p>Imagine an external data source that we can poll for changes, and when polled responds with all outstanding changes and the logical times at which each occurred. There is a fairly natural pattern we can write that exposes these changes to differential dataflow and asks it to resolve all changes concurrently, while retaining the logical times of each of the input changes.</p>
+<pre><pre class="playground"><code class="language-rust no_run">
+<span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>    while !source.done() {
+        // fetch a bounded amount of input changes.
+        for (data, time, diff) in source.fetch() {
+            input.update_at(data, time, diff);
+        }
+        // advance time to the source guarantee.
+        let time = source.low_watermark();
+        input.advance_to(time);
+        input.flush();
+        worker.step();
+    }
+<span class="boring">}
+</span></code></pre></pre>
+<p>This pattern repeatedly extracts changes from some source of change, perhaps a streaming source like Kafka, or perhaps a socket connection that you have set up to play back a timely stream. It introduces all of the changes, and then advances the input's time to match whatever the source guarantees it will no longer change.</p>
+<p>Importantly, we don't know ahead of time what these data will be, nor even which times will we <code>advance_to</code>. These are results of the volume of streamed input changes and the amount of time spent in <code>worker.step()</code>.</p>
+<p>Under heavy input load differential dataflow may take more time to do its work, and we would expect larger batches of input to result. All components of differential dataflow have been designed so that the throughput <em>improves</em> as batch size increases, which means that the system should adapt its batch size to match the offered load. As load increases both batch size and latency will increase; as the load reduces the batch size and latency will decrease again.</p>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="arrangements"><a class="header" href="#arrangements">Arrangements</a></h1>
+<p>Differential dataflow acts on <em>collections</em> of data, each of which we think of as a growing set of update triples <code>(data, time, diff)</code>. Arrangements are a new way to represent a set of updates, which can be substantially more efficient than our approaches so far (and all other stream processors to date).</p>
+<p>Thus far, we have implemented differential collections as streams of update triples, which we connect as inputs to our various differential operators. At any moment an operator might receive a few more update triples and need to react to them. Or an operator might receive the signal that some timestamp <code>time</code> is now complete and we should expect no more updates bearing that timestamp.</p>
+<p>Streams of updates are a fine representation of collections, but they leave a great amount of performance on the table. In fact, many operators do <em>exactly the same thing</em> with their input update streams: they build and maintain an index of the updates so that they can randomly access them in the future. With that in mind, why not build and maintain that index once, sharing the required resources across the operators that use the indexed data instead of asking each to perform redundant work?</p>
+<p>Arrangements are an indexed representation of streamed data. An arrangement indexes batches of update tuples and streams these indexed batches in place of individual update tuples. At the same time, it maintains the sequence of these indexed batches in a compact representation, merging batches as appropriate so that all users have access to an efficient index of all updates so far.</p>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="an-arrangement-example"><a class="header" href="#an-arrangement-example">An arrangement example</a></h1>
+<p>Imagine you have collection that describes a relation among people, perhaps &quot;x knows y&quot;, and you would like to query the &quot;friends of friends&quot; relation: for a given person x, who are the people known by friends of x?</p>
+<p>Let's first build this naively, starting from two inputs: <code>knows</code> containing the pairs of the relation and <code>query</code> containing pairs <code>(source, query_id)</code> that allow us to interactively interrogate the data.</p>
+<pre><pre class="playground"><code class="language-rust">extern crate timely;
+extern crate differential_dataflow;
+
+use differential_dataflow::operators::Join;
+
+fn main() {
+
+    // define a new timely dataflow computation.
+    timely::execute_from_args(::std::env::args(), move |worker| {
+
+        let mut knows = differential_dataflow::input::InputSession::new();
+        let mut query = differential_dataflow::input::InputSession::new();
+
+        worker.dataflow(|scope| {
+
+            let knows = knows.to_collection(scope);
+            let query = query.to_collection(scope);
+
+            // Hop from x to y, then from y to z.
+            query.join_map(&amp;knows, |x,q,y| (*y,*q))
+                 .join_map(&amp;knows, |y,q,z| (*q,*z))
+                 .inspect(|result| println!(&quot;result {:?}&quot;, result));
+
+        });
+
+<span class="boring">      // to help with type inference ...
+</span><span class="boring">      knows.update_at((0,0), 0usize, 1isize);
+</span><span class="boring">      query.update_at((0,0), 0usize, 1isize);
+</span>    });
+}
+</code></pre></pre>
+<p>As it happens, differential dataflow's join operations all do the same things with their input collections: they will convert the stream of updates into an indexed representation (which they then use to respond to change in the other inputs). This makes <code>join</code> an excellent candidate to use arrangements as inputs.</p>
+<p>To arrange a collection, we just call one of several <code>arrange</code> methods. In this case, we will arrange &quot;by key&quot;, because we want to take our <code>(x, y)</code> pairs and arrange them by x. Once we have done this, there are just a few additional cosmetic changes to make to our program to use this arranged data in each join:</p>
+<pre><pre class="playground"><code class="language-rust">extern crate timely;
+extern crate differential_dataflow;
+
+use differential_dataflow::operators::JoinCore;
+use differential_dataflow::operators::arrange::ArrangeByKey;
+
+fn main() {
+
+    // define a new timely dataflow computation.
+    timely::execute_from_args(::std::env::args(), move |worker| {
+
+        let mut knows = differential_dataflow::input::InputSession::new();
+        let mut query = differential_dataflow::input::InputSession::new();
+
+        worker.dataflow(|scope| {
+
+            let knows = knows.to_collection(scope);
+            let query = query.to_collection(scope);
+
+            // Arrange the data first! (by key).
+            let knows = knows.arrange_by_key();
+
+            // Same logic as before, with a new method name.
+            query.join_core(&amp;knows, |x,q,y| Some((*y,*q)))
+                 .join_core(&amp;knows, |y,q,z| Some((*q,*z)))
+                 .inspect(|result| println!(&quot;result {:?}&quot;, result));
+
+        });
+
+<span class="boring">      // to help with type inference ...
+</span><span class="boring">      knows.update_at((0,0), 0usize, 1isize);
+</span><span class="boring">      query.update_at((0,0), 0usize, 1isize);
+</span>    });
+}
+</code></pre></pre>
+<p>Our computation now contains only one copy of the potentially large and fast-changing <code>knows</code> collection. This not only saves on memory for collection, but it also saves on the computation and communication required to maintain the indexed representation as the collection changes.</p>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="using-arrangements"><a class="header" href="#using-arrangements">Using arrangements</a></h1>
+<p>The same collection can be arranged multiple different ways. Although the contents of the collection are the same, the different arrangements are useful in different contexts.</p>
+<h2 id="arrangement-by-key"><a class="header" href="#arrangement-by-key">Arrangement by key</a></h2>
+<p>We saw before an example where we used one type of arrangement, <code>arrange_by_key()</code>, to re-use the same arrangement for multiple <code>join</code> operators. The &quot;by key&quot; arrangement is great for operators that require <code>(key, val)</code> input data grouped by <code>key</code>, and join is one operator that does require that.</p>
+<pre><pre class="playground"><code class="language-rust">extern crate timely;
+extern crate differential_dataflow;
+
+use differential_dataflow::operators::JoinCore;
+use differential_dataflow::operators::arrange::ArrangeByKey;
+
+fn main() {
+
+    // define a new timely dataflow computation.
+    timely::execute_from_args(::std::env::args(), move |worker| {
+
+        let mut knows = differential_dataflow::input::InputSession::new();
+        let mut query = differential_dataflow::input::InputSession::new();
+
+        worker.dataflow(|scope| {
+
+            let knows = knows.to_collection(scope);
+            let query = query.to_collection(scope);
+
+            // Arrange the data first! (by key).
+            let knows = knows.arrange_by_key();
+
+            // Same logic as before, with a new method name.
+            query.join_core(&amp;knows, |x,q,y| Some((*y,(*x,*q))))
+                 .join_core(&amp;knows, |y,(x,q),z| Some((*q,(*x,*y,*z))))
+                 .inspect(|result| println!(&quot;result {:?}&quot;, result));
+
+        });
+
+<span class="boring">      // to help with type inference ...
+</span><span class="boring">      knows.update_at((0,0), 0usize, 1isize);
+</span><span class="boring">      query.update_at((0,0), 0usize, 1isize);
+</span>    });
+}
+</code></pre></pre>
+<h2 id="arrangement-by-self"><a class="header" href="#arrangement-by-self">Arrangement by self</a></h2>
+<p>Another form of arrangement is &quot;by self&quot;, where the elements of the collection themselves are taken as keys with no associated values. Arrangement by self is important for certain operators like <code>distinct</code>, <code>count</code>, and <code>semijoin</code>, each of which just need access to indexed records but without associated values.</p>
+<p>We can show off arrangement by self in our &quot;friends of friends&quot; example by adding some requirements to our <code>(x, y, z)</code> output triples. Let's imagine that in addition, we want each of the other four &quot;knows&quot; relationships, in addition to the two we start with (&quot;x knows y&quot; and &quot;y knows z&quot;).</p>
+<pre><pre class="playground"><code class="language-rust">extern crate timely;
+extern crate differential_dataflow;
+
+use differential_dataflow::operators::JoinCore;
+use differential_dataflow::operators::arrange::ArrangeByKey;
+use differential_dataflow::operators::arrange::ArrangeBySelf;
+
+fn main() {
+
+    // define a new timely dataflow computation.
+    timely::execute_from_args(::std::env::args(), move |worker| {
+
+        let mut knows = differential_dataflow::input::InputSession::new();
+        let mut query = differential_dataflow::input::InputSession::new();
+
+        worker.dataflow(|scope| {
+
+            let knows = knows.to_collection(scope);
+            let query = query.to_collection(scope);
+
+            // Arrange the data first! (by key and self).
+            let knows_by_key = knows.arrange_by_key();
+            let knows_by_self = knows.arrange_by_self();
+
+            // The same outputs as in the previous example.
+            let candidates =
+            query.join_core(&amp;knows_by_key, |x,q,y| Some((*y,(*x,*q))))
+                 .join_core(&amp;knows_by_key, |y,(x,q),z| Some((*q,(*x,*y,*z))));
+
+            // Repeatedly put pairs of nodes as keys, and semijoin with knows.
+            candidates
+                .map(|(q,(x,y,z))| ((x,z),(q,y)))
+                .join_core(&amp;knows_by_self, |&amp;(x,z),&amp;(q,y),&amp;()| Some(((y,z),(q,x))))
+                .join_core(&amp;knows_by_self, |&amp;(y,z),&amp;(q,x),&amp;()| Some(((z,x),(q,y))))
+                .join_core(&amp;knows_by_self, |&amp;(z,x),&amp;(q,y),&amp;()| Some(((y,x),(q,z))))
+                .join_core(&amp;knows_by_self, |&amp;(y,x),&amp;(q,z),&amp;()| Some((q,(x,y,z))))
+                .inspect(|result| println!(&quot;result {:?}&quot;, result));
+
+        });
+
+<span class="boring">      // to help with type inference ...
+</span><span class="boring">      knows.update_at((0,0), 0usize, 1isize);
+</span><span class="boring">      query.update_at((0,0), 0usize, 1isize);
+</span>    });
+}
+</code></pre></pre>
+<p>We now have two arranged forms of the <code>knows</code> collection, which is more than before, but we have now used the collection six times in our computation. We now have a factor three reduction in required resources from the corresponding naive implementation!</p>
+<h2 id="returning-to-collections"><a class="header" href="#returning-to-collections">Returning to collections</a></h2>
+<p>You may need to return from an arrangement to a collection (a stream of updates). An arrangement's <code>as_collection()</code> method allows this.</p>
+<pre><pre class="playground"><code class="language-rust">extern crate timely;
+extern crate differential_dataflow;
+
+use differential_dataflow::operators::JoinCore;
+use differential_dataflow::operators::arrange::ArrangeByKey;
+
+fn main() {
+
+    // define a new timely dataflow computation.
+    timely::execute_from_args(::std::env::args(), move |worker| {
+
+        let mut knows = differential_dataflow::input::InputSession::new();
+        let mut query = differential_dataflow::input::InputSession::new();
+
+        worker.dataflow(|scope| {
+
+            let knows = knows.to_collection(scope);
+            let query = query.to_collection(scope);
+
+            // Arrange the data first! (by key).
+            let knows = knows.arrange_by_key();
+
+            // Return to collection representation.
+            let knows = knows.as_collection(|k,v| (*k,*v));
+
+            // Same logic as before, with a new method name.
+            query.join_map(&amp;knows, |x,q,y| (*y,(*x,*q))))
+                 .join_map(&amp;knows, |y,(x,q),z| (*q,(*x,*y,*z)))
+                 .inspect(|result| println!(&quot;result {:?}&quot;, result));
+
+        });
+
+<span class="boring">      // to help with type inference ...
+</span><span class="boring">      knows.update_at((0,0), 0usize, 1isize);
+</span><span class="boring">      query.update_at((0,0), 0usize, 1isize);
+</span>    });
+}
+</code></pre></pre>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="sharing-across-dataflows"><a class="header" href="#sharing-across-dataflows">Sharing across dataflows</a></h1>
+<p>Arrangements have the additional appealing property that they can be shared not only within a dataflow, but <em>across</em> dataflows.</p>
+<p>Imagine we want to build and maintain a relatively large and continually changing collection. But we want to do this in a way that allows an arbitrary number of subsequent queries to access the collection at almost no additional cost.</p>
+<p>The following example demonstrates going from an interactive input session (<code>input</code>) to an arrangement (<code>trace</code>) returned from the dataflow and available for use by others.</p>
+<pre><pre class="playground"><code class="language-rust">extern crate timely;
+extern crate differential_dataflow;
+
+use differential_dataflow::operators::JoinCore;
+use differential_dataflow::operators::arrange::ArrangeByKey;
+
+fn main() {
+
+    // define a new timely dataflow computation.
+    timely::execute_from_args(::std::env::args(), move |worker| {
+
+        let mut knows = differential_dataflow::input::InputSession::new();
+
+        // Input and arrange a dynamic collection.
+        let mut trace = worker.dataflow(|scope| {
+
+            let knows = knows.to_collection(scope);
+            let knows = knows.arrange_by_key();
+
+            // Return the `.trace` field of the arrangement`.
+            knows.trace
+
+        });
+
+<span class="boring">      // to help with type inference ...
+</span><span class="boring">      knows.update_at((0,0), 0usize, 1isize);
+</span><span class="boring">      query.update_at((0,0), 0usize, 1isize);
+</span>    });
+}
+</code></pre></pre>
+<p>This example arranges the <code>knows</code> collection as before, but rather than use the arrangement it returns the <code>.trace</code> field of the arrangement. We can use this field to re-introduce the arrangement into other dataflows.</p>
+<p>For example, let's imagine we want to construct many new dataflows each of which create a query set, which they then use to read out part of the <code>knows</code> collection.</p>
+<pre><code class="language-rust ignore">    for round in 1 .. 1_000 {
+
+        worker.dataflow(|scope| {
+
+            // Round-specific query set.
+            let query =
+            (round .. round + 3)
+                .to_stream(scope)
+                .map(move |x| (x, round, 1))
+                .as_collection();
+
+            // Import arrangement, extract keys from `query`.
+            trace
+                .import(scope)
+                .semijoin(&amp;query)
+                .consolidate()
+                .inspect(move |x| println!(&quot;{:?}\t{:?}&quot;, timer.elapsed(), x))
+                .probe_with(&amp;mut probe);
+
+        });
+
+        // Change the collection a bit.
+        input.remove((round, round));
+        input.advance_to(round + 1);
+        input.flush();
+
+        // Run until all computations are current.
+        while probe.less_than(input.time()) {
+            worker.step();
+        }
+
+    }
+</code></pre>
+<p>The crucial line above is the line</p>
+<pre><code class="language-rust ignore">            trace
+                .import(scope)
+</code></pre>
+<p>which takes the <code>trace</code> and brings it in to the dataflow as an arrangement. It is now ready to be used in operations like <code>semijoin</code> that can exploit pre-arranged data.</p>
+<p>Where in other stream processing systems such a computation might maintain one thousand independent indices each containing independent (but identical) copies of <code>knows</code>, here we are able to support all of these uses with a single arrangement.</p>
+<h2 id="great-responsibility"><a class="header" href="#great-responsibility">Great responsibility</a></h2>
+<p>When we extract a trace from an arrangement, we acquire the ability to replay the arrangement in any new scope. With that great power comes great responsibility. As long as we simply hold the trace, we prevent the system from compacting and efficiently managing its representation.</p>
+<p>A <code>TraceHandle</code> (the type of <code>trace</code>) has two important methods. Their names are not great, and subject to change in the future. Their idioms may also change as more information flows in about users and use cases.</p>
+<ol>
+<li>
+<p><code>set_logical_compaction(frontier)</code>. This method informs <code>trace</code> that it will no longer be called upon to handle queries for times not in advance of <code>frontier</code>, a set of timestamps. This gives the arrangement permission to coalesce otherwise indistinguishable timestamps, which it will start to do once all handles have advanced.</p>
+</li>
+<li>
+<p><code>set_physical_compaction(frontier)</code>. This method unblocks the merging of physical batches. It is very rare that a user wants to do anything with this other than call <code>trace.set_physical_compaction(&amp;[])</code>, which unblocks all merging. Certain operators, namely <code>join</code>, do need to carefully manipulate this method.</p>
+</li>
+</ol>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="trace-wrappers"><a class="header" href="#trace-wrappers">Trace wrappers</a></h1>
+<p>There are many cases where we make small manipulations of a collection, and we might hope to retain the arrangement structure rather than re-build and maintain new arrangements. In some cases this is possible, using what we call <em>trace wrappers</em>.</p>
+<p>The set of trace wrappers grows as more idioms are discovered and implemented, but the intent is that we can often avoid reforming new collections, and instead just push logic into a layer around the arrangement.</p>
+<h2 id="filter"><a class="header" href="#filter">Filter</a></h2>
+<p>Like a collection, an arrangement supports the <code>filter(predicate)</code> operator that reduces the data down to those elements satisfying <code>predicate</code>. Unlike a collection, which produces a new collection when filtered, a filtered arrangement is just a wrapper around the existing arrangement.</p>
+<p>The following example uses two different collections in its two joins, but one is a filtered version of the other and can re-use the same arrangement.</p>
+<pre><pre class="playground"><code class="language-rust">extern crate timely;
+extern crate differential_dataflow;
+
+use differential_dataflow::operators::JoinCore;
+use differential_dataflow::operators::arrange::ArrangeByKey;
+
+fn main() {
+
+    // define a new timely dataflow computation.
+    timely::execute_from_args(::std::env::args(), move |worker| {
+
+        let mut knows = differential_dataflow::input::InputSession::new();
+        let mut query = differential_dataflow::input::InputSession::new();
+
+        worker.dataflow(|scope| {
+
+            let knows = knows.to_collection(scope);
+            let query = query.to_collection(scope);
+
+            // Arrange the data first! (by key).
+            let knows1 = knows.arrange_by_key();
+
+            // Filter to equal pairs (for some reason).
+            let knows2 = knows1.filter(|k,v| k == v);
+
+            // Same logic as before, with a new method name.
+            query.join_core(&amp;knows1, |x,q,y| Some((*y,(*x,*q))))
+                 .join_core(&amp;knows2, |y,(x,q),z| Some((*q,(*x,*y,*z))))
+                 .inspect(|result| println!(&quot;result {:?}&quot;, result));
+
+        });
+
+<span class="boring">      // to help with type inference ...
+</span><span class="boring">      knows.update_at((0,0), 0usize, 1isize);
+</span><span class="boring">      query.update_at((0,0), 0usize, 1isize);
+</span>    });
+}
+</code></pre></pre>
+<p>Filtered arrangements are not always a win. If the input arrangement is large and the filtered arrangement is small, it may make more sense to build and maintain a second arrangement than to continually search through the large arrangement for records satisfying the predicate. If you would like to form a second arrangement, you can use <code>as_collection()</code> to return to a collection, filter the result, and then arrange it again.</p>
+<h2 id="entering-scopes"><a class="header" href="#entering-scopes">Entering scopes</a></h2>
+<p>Differential dataflow programs often contain nested scopes, used for loops and iteration. Collections in a nested scope have different timestamps than collections outside the scope, which means we can not immediately re-use arrangements from outside the scope inside the scope.</p>
+<p>Like collections, arrangements support an <code>enter(scope)</code> method for entering a scope, which will wrap the arrangement so that access to timestamps automatically enriches it as if the collection had entered the scope.</p>
+<p>The following example demonstrates arranging the <code>knows</code> relation outside an iterative scope, and then bringing it in to the scope (along with the collection <code>query</code>). Unlike <code>query</code>, which is a collection, <code>knows</code> is an arrangement and will simply be wrapped with timestamp-extending logic.</p>
+<pre><pre class="playground"><code class="language-rust">extern crate timely;
+extern crate differential_dataflow;
+
+use differential_dataflow::operators::Join;
+use differential_dataflow::operators::Threshold;
+use differential_dataflow::operators::Iterate;
+use differential_dataflow::operators::arrange::ArrangeByKey;
+
+fn main() {
+
+    // define a new timely dataflow computation.
+    timely::execute_from_args(::std::env::args(), move |worker| {
+
+        let mut knows = differential_dataflow::input::InputSession::new();
+        let mut query = differential_dataflow::input::InputSession::new();
+
+        worker.dataflow(|scope| {
+
+            let knows = knows.to_collection(scope);
+            let query = query.to_collection(scope);
+
+            // Arrange the data first! (by key).
+            let knows = knows.arrange_by_key();
+
+            // Reachability queries.
+            query.iterate(|reach| {
+
+                let knows = knows.enter(&amp;reach.scope());
+                let query = query.enter(&amp;reach.scope());
+
+                knows.join_map(reach, |x,y,q| (*y,*q))
+                     .concat(&amp;query)
+                     .distinct()
+            });
+
+        });
+
+<span class="boring">      // to help with type inference ...
+</span><span class="boring">      knows.update_at((0,0), 0usize, 1isize);
+</span><span class="boring">      query.update_at((0,0), 0usize, 1isize);
+</span>    });
+}
+</code></pre></pre>
+<h2 id="other-wrappers"><a class="header" href="#other-wrappers">Other wrappers</a></h2>
+<p>Other wrappers exist, but are still in development and testing. Generally, if the same physical layout of the index would support a collection transformation, a wrapper may be appropriate. If you think you have such an operation, the <code>src/trace/wrappers/</code> directory is where the current examples reside.</p>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="windows-enough-and-time"><a class="header" href="#windows-enough-and-time">Windows Enough and Time</a></h1>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                        
+                        
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                
+                            </nav>
+
+        </div>
+
+        
+        
+        
+                <script type="text/javascript">
+            window.playground_copyable = true;
+        </script>
+        
+        
+                <script src="elasticlunr.min.js" type="text/javascript" charset="utf-8"></script>
+        <script src="mark.min.js" type="text/javascript" charset="utf-8"></script>
+        <script src="searcher.js" type="text/javascript" charset="utf-8"></script>
+        
+        <script src="clipboard.min.js" type="text/javascript" charset="utf-8"></script>
+        <script src="highlight.js" type="text/javascript" charset="utf-8"></script>
+        <script src="book.js" type="text/javascript" charset="utf-8"></script>
+
+        <!-- Custom JS scripts -->
+        
+                        <script type="text/javascript">
+        window.addEventListener('load', function() {
+            window.setTimeout(window.print, 100);
+        });
+        </script>
+                
+    </body>
+</html>
