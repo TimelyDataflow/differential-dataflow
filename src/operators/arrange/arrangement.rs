@@ -569,7 +569,7 @@ where
                 *reader = Some(reader_local);
 
                 // Initialize to the minimal input frontier.
-                let mut input_frontier = vec![<G::Timestamp as Timestamp>::minimum()];
+                let mut prev_frontier = Antichain::from_elem(<G::Timestamp as Timestamp>::minimum());
 
                 move |input, output| {
 
@@ -589,14 +589,12 @@ where
                     // and sending smaller bites than we might have otherwise done.
 
                     // Assert that the frontier never regresses.
-                    assert!(input.frontier().frontier().iter().all(|t1| input_frontier.iter().any(|t2: &G::Timestamp| t2.less_equal(t1))));
+                    assert!(PartialOrder::less_equal(&prev_frontier.borrow(), &input.frontier().frontier()));
 
-                    // Test to see if strict progress has occurred (any of the old frontier less equal
-                    // to the new frontier).
-                    let progress = input_frontier.iter().any(|t2| !input.frontier().less_equal(t2));
-
-                    if progress {
-
+                    // Test to see if strict progress has occurred, which happens whenever the new
+                    // frontier isn't equal to the previous. It is only in this case that we have any
+                    // data processing to do.
+                    if prev_frontier.borrow() != input.frontier().frontier() {
                         // There are two cases to handle with some care:
                         //
                         // 1. If any held capabilities are not in advance of the new input frontier,
@@ -663,8 +661,8 @@ where
                             writer.seal(input.frontier().frontier().to_owned());
                         }
 
-                        input_frontier.clear();
-                        input_frontier.extend(input.frontier().frontier().iter().cloned());
+                        prev_frontier.clear();
+                        prev_frontier.extend(input.frontier().frontier().iter().cloned());
                     }
 
                     if let Some(mut fuel) = effort.clone() {
