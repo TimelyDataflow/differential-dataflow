@@ -185,7 +185,7 @@ where
             *reader = Some(reader_local.clone());
 
             // Tracks the input frontier, used to populate the lower bound of new batches.
-            let mut input_frontier = Antichain::from_elem(<G::Timestamp as Timestamp>::minimum());
+            let mut prev_frontier = Antichain::from_elem(<G::Timestamp as Timestamp>::minimum());
 
             // For stashing input upserts, ordered increasing by time (`BinaryHeap` is a max-heap).
             let mut priority_queue = BinaryHeap::<std::cmp::Reverse<(G::Timestamp, Tr::Key, Option<Tr::Val>)>>::new();
@@ -202,11 +202,13 @@ where
                     }
                 });
 
-                // Test to see if strict progress has occurred, which happens whenever any element of
-                // the old frontier is not greater or equal to the new frontier. It is only in this
-                // case that we have any data processing to do.
-                let progress = input_frontier.elements().iter().any(|t2| !input.frontier().less_equal(t2));
-                if progress {
+                // Assert that the frontier never regresses.
+                assert!(PartialOrder::less_equal(&prev_frontier.borrow(), &input.frontier().frontier()));
+
+                // Test to see if strict progress has occurred, which happens whenever the new
+                // frontier isn't equal to the previous. It is only in this case that we have any
+                // data processing to do.
+                if prev_frontier.borrow() != input.frontier().frontier() {
 
                     // If there is at least one capability not in advance of the input frontier ...
                     if capabilities.elements().iter().any(|c| !input.frontier().less_equal(c.time())) {
@@ -293,8 +295,8 @@ where
                                         builder.push(update);
                                     }
                                 }
-                                let batch = builder.done(input_frontier.clone(), upper.clone(), Antichain::from_elem(G::Timestamp::minimum()));
-                                input_frontier.clone_from(&upper);
+                                let batch = builder.done(prev_frontier.clone(), upper.clone(), Antichain::from_elem(G::Timestamp::minimum()));
+                                prev_frontier.clone_from(&upper);
 
                                 // Communicate `batch` to the arrangement and the stream.
                                 writer.insert(batch.clone(), Some(capability.time().clone()));
@@ -325,12 +327,12 @@ where
                     }
 
                     // Update our view of the input frontier.
-                    input_frontier.clear();
-                    input_frontier.extend(input.frontier().frontier().iter().cloned());
+                    prev_frontier.clear();
+                    prev_frontier.extend(input.frontier().frontier().iter().cloned());
 
                     // Downgrade capabilities for `reader_local`.
-                    reader_local.set_logical_compaction(input_frontier.borrow());
-                    reader_local.set_physical_compaction(input_frontier.borrow());
+                    reader_local.set_logical_compaction(prev_frontier.borrow());
+                    reader_local.set_physical_compaction(prev_frontier.borrow());
                 }
 
                 if let Some(mut fuel) = effort.clone() {
