@@ -21,11 +21,12 @@ fn get_trace() -> Spine<u64, u64, usize, i64, Rc<OrdValBatch<u64, u64, usize, i6
     {
         let mut batcher = <<IntegerTrace as TraceReader>::Batch as Batch<u64, u64, usize, i64>>::Batcher::new();
 
-        batcher.push_batch(&mut vec![
+        use timely::communication::message::RefOrMut;
+        batcher.push_batch(RefOrMut::Mut(&mut vec![
             ((1, 2), 0, 1),
             ((2, 3), 1, 1),
             ((2, 3), 2, -1),
-        ]);
+        ]));
 
         let batch_ts = &[1, 2, 3];
         let batches = batch_ts.iter().map(move |i| batcher.seal(Antichain::from_elem(*i)));

@@ -13,6 +13,7 @@ pub mod implementations;
 pub mod layers;
 pub mod wrappers;
 
+use timely::communication::message::RefOrMut;
 use timely::progress::{Antichain, frontier::AntichainRef};
 use timely::progress::Timestamp;
 
@@ -281,7 +282,7 @@ pub trait Batcher<K, V, T, R, Output: Batch<K, V, T, R>> {
     /// Allocates a new empty batcher.
     fn new() -> Self;
     /// Adds an unordered batch of elements to the batcher.
-    fn push_batch(&mut self, batch: &mut Vec<((K, V), T, R)>);
+    fn push_batch(&mut self, batch: RefOrMut<Vec<((K, V), T, R)>>);
     /// Returns all updates not greater or equal to an element of `upper`.
     fn seal(&mut self, upper: Antichain<T>) -> Output;
     /// Returns the lower envelope of contained update times.
@@ -399,7 +400,7 @@ pub mod rc_blanket_impls {
     /// Functionality for collecting and batching updates.
     impl<K,V,T,R,B:Batch<K,V,T,R>> Batcher<K, V, T, R, Rc<B>> for RcBatcher<K,V,T,R,B> {
         fn new() -> Self { RcBatcher { batcher: <B::Batcher as Batcher<K,V,T,R,B>>::new() } }
-        fn push_batch(&mut self, batch: &mut Vec<((K, V), T, R)>) { self.batcher.push_batch(batch) }
+        fn push_batch(&mut self, batch: timely::communication::message::RefOrMut<Vec<((K, V), T, R)>>) { self.batcher.push_batch(batch) }
         fn seal(&mut self, upper: Antichain<T>) -> Rc<B> { Rc::new(self.batcher.seal(upper)) }
         fn frontier(&mut self) -> timely::progress::frontier::AntichainRef<T> { self.batcher.frontier() }
     }
@@ -506,7 +507,7 @@ pub mod abomonated_blanket_impls {
     /// Functionality for collecting and batching updates.
     impl<K,V,T,R,B:Batch<K,V,T,R>+Abomonation> Batcher<K, V, T, R, Abomonated<B,Vec<u8>>> for AbomonatedBatcher<K,V,T,R,B> {
         fn new() -> Self { AbomonatedBatcher { batcher: <B::Batcher as Batcher<K,V,T,R,B>>::new() } }
-        fn push_batch(&mut self, batch: &mut Vec<((K, V), T, R)>) { self.batcher.push_batch(batch) }
+        fn push_batch(&mut self, batch: timely::communication::message::RefOrMut<Vec<((K, V), T, R)>>) { self.batcher.push_batch(batch) }
         fn seal(&mut self, upper: Antichain<T>) -> Abomonated<B, Vec<u8>> {
             let batch = self.batcher.seal(upper);
             let mut bytes = Vec::with_capacity(measure(&batch));

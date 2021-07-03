@@ -552,9 +552,6 @@ where
                 // Capabilities for the lower envelope of updates in `batcher`.
                 let mut capabilities = Antichain::<Capability<G::Timestamp>>::new();
 
-                let mut buffer = Vec::new();
-
-
                 let (activator, effort) =
                 if let Some(effort) = self.inner.scope().config().get::<isize>("differential/idle_merge_effort").cloned() {
                     (Some(self.scope().activator_for(&info.address[..])), Some(effort))
@@ -579,8 +576,7 @@ where
 
                     input.for_each(|cap, data| {
                         capabilities.insert(cap.retain());
-                        data.swap(&mut buffer);
-                        batcher.push_batch(&mut buffer);
+                        batcher.push_batch(data);
                     });
 
                     // The frontier may have advanced by multiple elements, which is an issue because

@@ -33,6 +33,7 @@ abomonation_derive = "0.5"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false }
 #timely = { path = "../timely-dataflow/timely/", default-features = false }
 fnv="1.0.2"
+columnation = { git = "http://github.com/frankmcsherry/columnation" }
 
 [features]
 default = ["timely/getopts"]

@@ -1,5 +1,6 @@
 //! A general purpose `Batcher` implementation based on radix sort.
 
+use timely::communication::message::RefOrMut;
 use timely::progress::frontier::Antichain;
 
 use ::difference::Semigroup;
@@ -33,8 +34,20 @@ where
     }
 
     #[inline(never)]
-    fn push_batch(&mut self, batch: &mut Vec<((K,V),T,R)>) {
-        self.sorter.push(batch);
+    fn push_batch(&mut self, batch: RefOrMut<Vec<((K,V),T,R)>>) {
+        // `batch` is either a shared reference or an owned allocations.
+        match batch {
+            RefOrMut::Ref(reference) => {
+                // This is a moment at which we could capture the allocations backing
+                // `batch` into a different form of region, rather than just  cloning.
+                let mut owned: Vec<((K,V),T,R)> = self.sorter.empty();
+                owned.clone_from(reference);
+                self.sorter.push(&mut owned);
+            },
+            RefOrMut::Mut(reference) => {
+                self.sorter.push(reference);
+            }
+        }
     }
 
     // Sealing a batch means finding those updates with times not greater or equal to any time
@@ -58,7 +71,6 @@ where
         for mut buffer in merged.drain(..) {
             for ((key, val), time, diff) in buffer.drain(..) {
                 if upper.less_equal(&time) {
-                    // keep_count += 1;
                     self.frontier.insert(time.clone());
                     if keep.len() == keep.capacity() {
                         if keep.len() > 0 {
@@ -69,7 +81,6 @@ where
                     keep.push(((key, val), time, diff));
                 }
                 else {
-                    // seal_count += 1;
                     builder.push((key, val, time, diff));
                 }
             }
