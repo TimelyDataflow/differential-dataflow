@@ -53,23 +53,23 @@ use differential_dataflow::consolidation::{consolidate, consolidate_updates};
 /// ((key, val1, time1), initial_time, diff1)
 /// ```
 ///
-/// where `initial_time` is less or equal to `time`, and produces as output
+/// where `initial_time` is less or equal to `time1`, and produces as output
 ///
 /// ```ignore
-/// ((key, (val1, val2), lub(time1, time2)), initial_time, diff1 * diff2)
+/// ((output_func(key, val1, val2), lub(time1, time2)), initial_time, diff1 * diff2)
 /// ```
 ///
-/// for each `((key, val2), time2, diff2)` present in `arrangement, where
+/// for each `((key, val2), time2, diff2)` present in `arrangement`, where
 /// `time2` is less than `initial_time` *UNDER THE TOTAL ORDER ON TIMES*.
 /// This last constraint is important to ensure that we correctly produce
 /// all pairs of output updates across multiple `half_join` operators.
 ///
 /// Notice that the time is hoisted up into data. The expectation is that
-/// once out of the dataflow, the updates will be `delay`d to the times
-/// specified in the payloads.
+/// once out of the "delta flow region", the updates will be `delay`d to the
+/// times specified in the payloads.
 pub fn half_join<G, V, Tr, FF, CF, DOut, S>(
     stream: &Collection<G, (Tr::Key, V, G::Timestamp), Tr::R>,
-    mut arrangement: Arranged<G, Tr>,
+    arrangement: Arranged<G, Tr>,
     frontier_func: FF,
     comparison: CF,
     mut output_func: S,
@@ -89,6 +89,57 @@ where
     DOut: Clone+'static,
     Tr::R: std::ops::Mul<Tr::R, Output=Tr::R>,
     S: FnMut(&Tr::Key, &V, &Tr::Val)->DOut+'static,
+{
+    let output_func = move |k: &Tr::Key, v1: &V, v2: &Tr::Val, initial: &G::Timestamp, time: &G::Timestamp, diff1: &Tr::R, diff2: &Tr::R| {
+        let diff = diff1.clone() * diff2.clone();
+        let dout = (output_func(k, v1, v2), time.clone());
+        Some((dout, initial.clone(), diff))
+    };
+    half_join_internal_unsafe(stream, arrangement, frontier_func, comparison, output_func)
+}
+
+/// An unsafe variant of `half_join` where the `output_func` closure takes
+/// additional arguments for `time` and `diff` as input and returns an iterator
+/// over `(data, time, diff)` triplets. This allows for more flexibility, but
+/// is more error-prone.
+///
+/// This operator responds to inputs of the form
+///
+/// ```ignore
+/// ((key, val1, time1), initial_time, diff1)
+/// ```
+///
+/// where `initial_time` is less or equal to `time1`, and produces as output
+///
+/// ```ignore
+/// output_func(key, val1, val2, initial_time, lub(time1, time2), diff1, diff2)
+/// ```
+///
+/// for each `((key, val2), time2, diff2)` present in `arrangement`, where
+/// `time2` is less than `initial_time` *UNDER THE TOTAL ORDER ON TIMES*.
+pub fn half_join_internal_unsafe<G, V, Tr, FF, CF, DOut, ROut, I, S>(
+    stream: &Collection<G, (Tr::Key, V, G::Timestamp), Tr::R>,
+    mut arrangement: Arranged<G, Tr>,
+    frontier_func: FF,
+    comparison: CF,
+    mut output_func: S,
+) -> Collection<G, DOut, ROut>
+where
+    G: Scope,
+    G::Timestamp: Lattice,
+    V: ExchangeData,
+    Tr: TraceReader<Time=G::Timestamp>+Clone+'static,
+    Tr::Key: Ord+Hashable+ExchangeData,
+    Tr::Val: Clone,
+    Tr::Batch: BatchReader<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
+    Tr::Cursor: Cursor<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
+    Tr::R: Monoid+ExchangeData,
+    FF: Fn(&G::Timestamp) -> G::Timestamp + 'static,
+    CF: Fn(&G::Timestamp, &G::Timestamp) -> bool + 'static,
+    DOut: Clone+'static,
+    ROut: Monoid,
+    I: IntoIterator<Item=(DOut, G::Timestamp, ROut)>,
+    S: FnMut(&Tr::Key, &V, &Tr::Val, &G::Timestamp, &G::Timestamp, &Tr::R, &Tr::R)-> I + 'static,
 {
     // No need to block physical merging for this operator.
     arrangement.trace.set_physical_compaction(Antichain::new().borrow());
@@ -132,7 +183,7 @@ where
 
                     let (mut cursor, storage) = trace.cursor();
 
-                    for &mut ((ref key, ref val1, ref time), ref initial, ref mut diff) in proposals.iter_mut() {
+                    for &mut ((ref key, ref val1, ref time), ref initial, ref mut diff1) in proposals.iter_mut() {
                         // Use TOTAL ORDER to allow the release of `time`.
                         if !input2.frontier.frontier().iter().any(|t| comparison(t, initial)) {
                             cursor.seek_key(&storage, &key);
@@ -144,15 +195,16 @@ where
                                         }
                                     });
                                     consolidate(&mut output_buffer);
-                                    for (time, count) in output_buffer.drain(..) {
-                                        let dout = output_func(key, val1, val2);
-                                        session.give(((dout, time), initial.clone(), count * diff.clone()));
+                                    for (time, diff2) in output_buffer.drain(..) {
+                                        for dout in output_func(key, val1, val2, initial, &time, &diff1, &diff2) {
+                                            session.give(dout);
+                                        }
                                     }
                                     cursor.step_val(&storage);
                                 }
                                 cursor.rewind_vals(&storage);
                             }
-                            *diff = Tr::R::zero();
+                            *diff1 = Tr::R::zero();
                         }
                     }
 

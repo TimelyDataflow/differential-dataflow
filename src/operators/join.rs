@@ -118,6 +118,7 @@ pub trait Join<G: Scope, K: Data, V: Data, R: Semigroup> {
     /// ```
     fn semijoin<R2>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), <R as Multiply<R2>>::Output>
     where K: ExchangeData, R2: ExchangeData+Semigroup, R: Multiply<R2>, <R as Multiply<R2>>::Output: Semigroup;
+
     /// Subtracts the semijoin with `other` from `self`.
     ///
     /// In the case that `other` has multiplicities zero or one this results
@@ -217,10 +218,12 @@ where
 /// directly in the event that one has a handle to an `Arranged<G,T>`, perhaps because
 /// the arrangement is available for re-use, or from the output of a `group` operator.
 pub trait JoinCore<G: Scope, K: 'static, V: 'static, R: Semigroup> where G::Timestamp: Lattice+Ord {
+
     /// Joins two arranged collections with the same key type.
     ///
     /// Each matching pair of records `(key, val1)` and `(key, val2)` are subjected to the `result` function,
-    /// which produces something implementing `IntoIterator`, where the output collection will have
+    /// which produces something implementing `IntoIterator`, where the output collection will have an entry for
+    /// every value returned by the iterator.
     ///
     /// This trait is implemented for arrangements (`Arranged<G, T>`) rather than collections. The `Join` trait
     /// contains the implementations for collections.
@@ -265,6 +268,58 @@ pub trait JoinCore<G: Scope, K: 'static, V: 'static, R: Semigroup> where G::Time
         I::Item: Data,
         L: FnMut(&K,&V,&Tr2::Val)->I+'static,
         ;
+
+    /// An unsafe variant of `join_core` where the `result` closure takes additional arguments for `time` and
+    /// `diff` as input and returns an iterator over `(data, time, diff)` triplets. This allows for more
+    /// flexibility, but is more error-prone.
+    ///
+    /// Each matching pair of records `(key, val1)` and `(key, val2)` are subjected to the `result` function,
+    /// which produces something implementing `IntoIterator`, where the output collection will have an entry
+    /// for every value returned by the iterator.
+    ///
+    /// This trait is implemented for arrangements (`Arranged<G, T>`) rather than collections. The `Join` trait
+    /// contains the implementations for collections.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// extern crate timely;
+    /// extern crate differential_dataflow;
+    ///
+    /// use differential_dataflow::input::Input;
+    /// use differential_dataflow::operators::arrange::ArrangeByKey;
+    /// use differential_dataflow::operators::join::JoinCore;
+    /// use differential_dataflow::trace::Trace;
+    /// use differential_dataflow::trace::implementations::ord::OrdValSpine;
+    ///
+    /// fn main() {
+    ///     ::timely::example(|scope| {
+    ///
+    ///         let x = scope.new_collection_from(vec![(0u32, 1), (1, 3)]).1
+    ///                      .arrange_by_key();
+    ///         let y = scope.new_collection_from(vec![(0, 'a'), (1, 'b')]).1
+    ///                      .arrange_by_key();
+    ///
+    ///         let z = scope.new_collection_from(vec![(1, 'a'), (3, 'b'), (3, 'b'), (3, 'b')]).1;
+    ///
+    ///         // Returned values have weight `a`
+    ///         x.join_core_internal_unsafe(&y, |_key, &a, &b, &t, &r1, &r2| Some(((a, b), t.clone(), a)))
+    ///          .assert_eq(&z);
+    ///     });
+    /// }
+    /// ```
+    fn join_core_internal_unsafe<Tr2,I,L,D,ROut> (&self, stream2: &Arranged<G,Tr2>, result: L) -> Collection<G,D,ROut>
+    where
+        Tr2: TraceReader<Key=K, Time=G::Timestamp>+Clone+'static,
+        Tr2::Batch: BatchReader<K, Tr2::Val, G::Timestamp, Tr2::R>+'static,
+        Tr2::Cursor: Cursor<K, Tr2::Val, G::Timestamp, Tr2::R>+'static,
+        Tr2::Val: Ord+Clone+Debug+'static,
+        Tr2::R: Semigroup,
+        D: Data,
+        ROut: Semigroup,
+        I: IntoIterator<Item=(D, G::Timestamp, ROut)>,
+        L: FnMut(&K,&V,&Tr2::Val,&G::Timestamp,&R,&Tr2::R)->I+'static,
+        ;
 }
 
 
@@ -292,6 +347,23 @@ where
         self.arrange_by_key()
             .join_core(stream2, result)
     }
+
+    fn join_core_internal_unsafe<Tr2,I,L,D,ROut> (&self, stream2: &Arranged<G,Tr2>, result: L) -> Collection<G,D,ROut>
+    where
+        Tr2: TraceReader<Key=K, Time=G::Timestamp>+Clone+'static,
+        Tr2::Batch: BatchReader<K, Tr2::Val, G::Timestamp, Tr2::R>+'static,
+        Tr2::Cursor: Cursor<K, Tr2::Val, G::Timestamp, Tr2::R>+'static,
+        Tr2::Val: Ord+Clone+Debug+'static,
+        Tr2::R: Semigroup,
+        R: Semigroup,
+        D: Data,
+        ROut: Semigroup,
+        I: IntoIterator<Item=(D, G::Timestamp, ROut)>,
+        L: FnMut(&K,&V,&Tr2::Val,&G::Timestamp,&R,&Tr2::R)->I+'static,
+    {
+        self.arrange_by_key().join_core_internal_unsafe(stream2, result)
+    }
+
 }
 
 impl<G, T1> JoinCore<G, T1::Key, T1::Val, T1::R> for Arranged<G,T1>
@@ -316,8 +388,28 @@ impl<G, T1> JoinCore<G, T1::Key, T1::Val, T1::R> for Arranged<G,T1>
         <T1::R as Multiply<Tr2::R>>::Output: Semigroup,
         I: IntoIterator,
         I::Item: Data,
-        L: FnMut(&T1::Key,&T1::Val,&Tr2::Val)->I+'static {
+        L: FnMut(&T1::Key,&T1::Val,&Tr2::Val)->I+'static
+    {
+        let result = move |k: &T1::Key, v1: &T1::Val, v2: &Tr2::Val, t: &G::Timestamp, r1: &T1::R, r2: &Tr2::R| {
+            let t = t.clone();
+            let r = (r1.clone()).multiply(r2);
+            result(k, v1, v2).into_iter().map(move |d| (d, t.clone(), r.clone()))
+        };
+        self.join_core_internal_unsafe(other, result)
+    }
 
+    fn join_core_internal_unsafe<Tr2,I,L,D,ROut> (&self, other: &Arranged<G,Tr2>, mut result: L) -> Collection<G,D,ROut>
+    where
+        Tr2: TraceReader<Key=T1::Key, Time=G::Timestamp>+Clone+'static,
+        Tr2::Batch: BatchReader<T1::Key, Tr2::Val, G::Timestamp, Tr2::R>+'static,
+        Tr2::Cursor: Cursor<T1::Key, Tr2::Val, G::Timestamp, Tr2::R>+'static,
+        Tr2::Val: Ord+Clone+Debug+'static,
+        Tr2::R: Semigroup,
+        D: Data,
+        ROut: Semigroup,
+        I: IntoIterator<Item=(D, G::Timestamp, ROut)>,
+        L: FnMut(&T1::Key,&T1::Val,&Tr2::Val,&G::Timestamp,&T1::R,&Tr2::R)->I+'static,
+    {
         // Rename traces for symmetry from here on out.
         let mut trace1 = self.trace.clone();
         let mut trace2 = other.trace.clone();
@@ -488,8 +580,7 @@ impl<G, T1> JoinCore<G, T1::Key, T1::Val, T1::R> for Arranged<G,T1>
                 while !todo1.is_empty() && fuel > 0 {
                     todo1.front_mut().unwrap().work(
                         output,
-                        |k,v2,v1| result(k,v1,v2),
-                        |r2,r1| (r1.clone()).multiply(r2),
+                        |k,v2,v1,t,r2,r1| result(k,v1,v2,t,r1,r2),
                         &mut fuel
                     );
                     if !todo1.front().unwrap().work_remains() { todo1.pop_front(); }
@@ -500,8 +591,7 @@ impl<G, T1> JoinCore<G, T1::Key, T1::Val, T1::R> for Arranged<G,T1>
                 while !todo2.is_empty() && fuel > 0 {
                     todo2.front_mut().unwrap().work(
                         output,
-                        |k,v1,v2| result(k,v1,v2),
-                        |r1,r2| (r1.clone()).multiply(r2),
+                        |k,v1,v2,t,r1,r2| result(k,v1,v2,t,r1,r2),
                         &mut fuel
                     );
                     if !todo2.front().unwrap().work_remains() { todo2.pop_front(); }
@@ -594,7 +684,7 @@ where
     R3: Semigroup,
     C1: Cursor<K, V1, T, R1>,
     C2: Cursor<K, V2, T, R2>,
-    D: Ord+Clone+Data,
+    D: Clone+Data,
 {
     fn new(trace: C1, trace_storage: C1::Storage, batch: C2, batch_storage: C2::Storage, capability: Capability<T>) -> Self {
         Deferred {
@@ -613,10 +703,10 @@ where
         !self.done
     }
 
-    /// Process keys until at least `limit` output tuples produced, or the work is exhausted.
+    /// Process keys until at least `fuel` output tuples produced, or the work is exhausted.
     #[inline(never)]
-    fn work<L, M, I>(&mut self, output: &mut OutputHandle<T, (D, T, R3), Tee<T, (D, T, R3)>>, mut logic: L, mut mult: M, fuel: &mut usize)
-    where I: IntoIterator<Item=D>, L: FnMut(&K, &V1, &V2)->I, M: FnMut(&R1,&R2)->R3 {
+    fn work<L, I>(&mut self, output: &mut OutputHandle<T, (D, T, R3), Tee<T, (D, T, R3)>>, mut logic: L, fuel: &mut usize)
+    where I: IntoIterator<Item=(D, T, R3)>, L: FnMut(&K, &V1, &V2, &T, &R1, &R2)->I {
 
         let meet = self.capability.time();
 
@@ -645,11 +735,12 @@ where
                     assert_eq!(temp.len(), 0);
 
                     // populate `temp` with the results in the best way we know how.
-                    thinker.think(|v1,v2,t,r1,r2|
-                        for result in logic(batch.key(batch_storage), v1, v2) {
-                            temp.push(((result, t.clone()), mult(r1, r2)));
+                    thinker.think(|v1,v2,t,r1,r2| {
+                        let key = batch.key(batch_storage);
+                        for (d, t, r) in logic(key, v1, v2, &t, r1, r2) {
+                            temp.push(((d, t), r));
                         }
-                    );
+                    });
 
                     // TODO: This consolidation is optional, and it may not be very
                     //       helpful. We might try harder to understand whether we
