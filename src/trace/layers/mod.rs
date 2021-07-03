@@ -106,7 +106,7 @@ pub trait Cursor<Storage> {
     fn reposition(&mut self, storage: &Storage, lower: usize, upper: usize);
 }
 
-/// Reports the number of elements satisfing the predicate.
+/// Reports the number of elements satisfying the predicate.
 ///
 /// This methods *relies strongly* on the assumption that the predicate
 /// stays false once it becomes false, a joint property of the predicate
@@ -116,7 +116,7 @@ pub fn advance<T, F: Fn(&T)->bool>(slice: &[T], function: F) -> usize {
 
     let small_limit = 8;
 
-    // Exponential seach if the answer isn't within `small_limit`.
+    // Exponential search if the answer isn't within `small_limit`.
     if slice.len() > small_limit && function(&slice[small_limit]) {
 
         // start with no advance
@@ -127,16 +127,16 @@ pub fn advance<T, F: Fn(&T)->bool>(slice: &[T], function: F) -> usize {
             let mut step = 1;
             while index + step < slice.len() && function(&slice[index + step]) {
                 index += step;
-                step = step << 1;
+                step <<= 1;
             }
 
             // advance in exponentially shrinking steps.
-            step = step >> 1;
+            step >>= 1;
             while step > 0 {
                 if index + step < slice.len() && function(&slice[index + step]) {
                     index += step;
                 }
-                step = step >> 1;
+                step >>= 1;
             }
 
             index += 1;
@@ -145,7 +145,7 @@ pub fn advance<T, F: Fn(&T)->bool>(slice: &[T], function: F) -> usize {
         index
     }
     else {
-        let limit = std::cmp::min(slice.len(), small_limit);
-        slice[..limit].iter().filter(|x| function(*x)).count()
+        let limit = slice.len().min(small_limit);
+        slice[..limit].iter().filter(|&x| function(x)).count()
     }
 }

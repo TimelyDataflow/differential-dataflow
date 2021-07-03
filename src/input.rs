@@ -247,7 +247,7 @@ impl<T: Timestamp+Clone, D: Data, R: Semigroup> InputSession<T, D, R> {
     /// Adds to the weight of an element in the collection.
     pub fn update(&mut self, element: D, change: R) {
         if self.buffer.len() == self.buffer.capacity() {
-            if self.buffer.len() > 0 {
+            if !self.buffer.is_empty() {
                 self.handle.send_batch(&mut self.buffer);
             }
             // TODO : This is a fairly arbitrary choice; should probably use `Context::default_size()` or such.
@@ -260,7 +260,7 @@ impl<T: Timestamp+Clone, D: Data, R: Semigroup> InputSession<T, D, R> {
     pub fn update_at(&mut self, element: D, time: T, change: R) {
         assert!(self.time.less_equal(&time));
         if self.buffer.len() == self.buffer.capacity() {
-            if self.buffer.len() > 0 {
+            if !self.buffer.is_empty() {
                 self.handle.send_batch(&mut self.buffer);
             }
             // TODO : This is a fairly arbitrary choice; should probably use `Context::default_size()` or such.
@@ -299,6 +299,17 @@ impl<T: Timestamp+Clone, D: Data, R: Semigroup> InputSession<T, D, R> {
 
     /// Closes the input, flushing and sealing the wrapped timely input.
     pub fn close(self) { }
+}
+
+impl<T, D, R> Default for InputSession<T, D, R>
+where
+    T: Timestamp + Clone,
+    D: Data,
+    R: Semigroup,
+{
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl<T: Timestamp+Clone, D: Data, R: Semigroup> Drop for InputSession<T, D, R> {

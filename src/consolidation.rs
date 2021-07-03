@@ -55,8 +55,8 @@ pub fn consolidate_slice<T: Ord, R: Semigroup>(slice: &mut [(T, R)]) -> usize {
             assert!(offset < index);
 
             // LOOP INVARIANT: offset < index
-            let ptr1 = slice.as_mut_ptr().offset(offset as isize);
-            let ptr2 = slice.as_mut_ptr().offset(index as isize);
+            let ptr1 = slice.as_mut_ptr().add(offset);
+            let ptr2 = slice.as_mut_ptr().add(index);
 
             if (*ptr1).0 == (*ptr2).0 {
                 (*ptr1).1.plus_equals(&(*ptr2).1);
@@ -65,7 +65,7 @@ pub fn consolidate_slice<T: Ord, R: Semigroup>(slice: &mut [(T, R)]) -> usize {
                 if !(*ptr1).1.is_zero() {
                     offset += 1;
                 }
-                let ptr1 = slice.as_mut_ptr().offset(offset as isize);
+                let ptr1 = slice.as_mut_ptr().add(offset);
                 std::mem::swap(&mut *ptr1, &mut *ptr2);
             }
         }
@@ -118,8 +118,9 @@ pub fn consolidate_updates_slice<D: Ord, T: Ord, R: Semigroup>(slice: &mut [(D, 
         unsafe {
 
             // LOOP INVARIANT: offset < index
-            let ptr1 = slice.as_mut_ptr().offset(offset as isize);
-            let ptr2 = slice.as_mut_ptr().offset(index as isize);
+            debug_assert!(offset < index);
+            let ptr1 = slice.as_mut_ptr().add(offset);
+            let ptr2 = slice.as_mut_ptr().add(index);
 
             if (*ptr1).0 == (*ptr2).0 && (*ptr1).1 == (*ptr2).1 {
                 (*ptr1).2.plus_equals(&(*ptr2).2);
@@ -128,7 +129,7 @@ pub fn consolidate_updates_slice<D: Ord, T: Ord, R: Semigroup>(slice: &mut [(D, 
                 if !(*ptr1).2.is_zero() {
                     offset += 1;
                 }
-                let ptr1 = slice.as_mut_ptr().offset(offset as isize);
+                let ptr1 = slice.as_mut_ptr().add(offset);
                 std::mem::swap(&mut *ptr1, &mut *ptr2);
             }
 
