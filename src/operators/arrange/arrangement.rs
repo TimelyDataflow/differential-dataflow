@@ -482,7 +482,7 @@ where
         Tr::Batch: Batch<K, V, G::Timestamp, R>,
         Tr::Cursor: Cursor<K, V, G::Timestamp, R>,
     {
-        let exchange = Exchange::new(move |update: &((K,V),G::Timestamp,R)| (update.0).0.hashed().into());
+        let exchange = Exchange::new(arrange_exchange_fn);
         self.arrange_core(exchange, name)
     }
 
@@ -498,6 +498,17 @@ where
         Tr::Batch: Batch<K, V, G::Timestamp, R>,
         Tr::Cursor: Cursor<K, V, G::Timestamp, R>,
     ;
+}
+
+/// The default exchange function to distribute data for arrangements.
+pub fn arrange_exchange_fn<T, K, V, R>(update: &((K,V),T,R)) -> u64
+where
+    T: Lattice,
+    K: Hashable,
+    V: ExchangeData,
+    R: ExchangeData,
+{
+    update.0.0.hashed().into()
 }
 
 impl<G, K, V, R> Arrange<G, K, V, R> for Collection<G, (K, V), R>
@@ -708,6 +719,11 @@ where G::Timestamp: Lattice+Ord {
 
     /// As `arrange_by_key` but with the ability to name the arrangement.
     fn arrange_by_key_named(&self, name: &str) -> Arranged<G, TraceAgent<DefaultValTrace<K, V, G::Timestamp, R>>>;
+
+    /// As `arrange_by_key` but with the ability to provide a custom parallelization contract.
+    fn arrange_by_key_core<P>(&self, pact: P, name: &str) -> Arranged<G, TraceAgent<DefaultValTrace<K, V, G::Timestamp, R>>>
+    where
+        P: ParallelizationContract<G::Timestamp, ((K,V),G::Timestamp,R)>;
 }
 
 impl<G: Scope, K: ExchangeData+Hashable, V: ExchangeData, R: ExchangeData+Semigroup> ArrangeByKey<G, K, V, R> for Collection<G, (K,V), R>
@@ -720,6 +736,12 @@ where
 
     fn arrange_by_key_named(&self, name: &str) -> Arranged<G, TraceAgent<DefaultValTrace<K, V, G::Timestamp, R>>> {
         self.arrange_named(name)
+    }
+
+    fn arrange_by_key_core<P>(&self, pact: P, name: &str) -> Arranged<G, TraceAgent<DefaultValTrace<K, V, G::Timestamp, R>>>
+        where
+            P: ParallelizationContract<G::Timestamp, ((K,V),G::Timestamp,R)> {
+        self.arrange_core(pact, name)
     }
 }
 
@@ -741,6 +763,11 @@ where
 
     /// As `arrange_by_self` but with the ability to name the arrangement.
     fn arrange_by_self_named(&self, name: &str) -> Arranged<G, TraceAgent<DefaultKeyTrace<K, G::Timestamp, R>>>;
+
+    /// As `arrange_by_self` but with the ability to provide a custom parallelization contract.
+    fn arrange_by_self_core<P>(&self, pact: P, name: &str) -> Arranged<G, TraceAgent<DefaultKeyTrace<K, G::Timestamp, R>>>
+        where
+            P: ParallelizationContract<G::Timestamp, ((K,()),G::Timestamp,R)>;
 }
 
 
@@ -755,5 +782,12 @@ where
     fn arrange_by_self_named(&self, name: &str) -> Arranged<G, TraceAgent<DefaultKeyTrace<K, G::Timestamp, R>>> {
         self.map(|k| (k, ()))
             .arrange_named(name)
+    }
+
+    fn arrange_by_self_core<P>(&self, pact: P, name: &str) -> Arranged<G, TraceAgent<DefaultKeyTrace<K, G::Timestamp, R>>>
+        where
+            P: ParallelizationContract<G::Timestamp, ((K,()),G::Timestamp,R)> {
+        self.map(|k| (k, ()))
+            .arrange_core(pact, name)
     }
 }
