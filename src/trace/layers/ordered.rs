@@ -262,8 +262,11 @@ where
         }
     }
     fn seek(&mut self, storage: &OrderedLayer<K, L, O>, key: &Self::Key) {
-        self.pos += advance(&storage.keys[self.pos .. self.bounds.1], |k| k.lt(key));
-        if self.valid(storage) {
+        let step = advance(&storage.keys[self.pos .. self.bounds.1], |k| k.lt(key));
+        self.pos += step;
+        // Only reposition the child cursor if this cursor strictly advanced.
+        // If this cursor did not advance, we do not want to reset the child cursor.
+        if self.valid(storage) && step > 0 {
             self.child.reposition(&storage.vals, storage.offs[self.pos].try_into().unwrap(), storage.offs[self.pos + 1].try_into().unwrap());
         }
     }
