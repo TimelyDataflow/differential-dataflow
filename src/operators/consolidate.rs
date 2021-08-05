@@ -11,7 +11,7 @@ use timely::dataflow::channels::pact::{ParallelizationContract};
 
 use ::{Collection, ExchangeData, Hashable};
 use ::difference::Semigroup;
-use operators::arrange::arrangement::Arrange;
+use operators::arrange::arrangement::{Arrange, arrange_pact};
 
 /// An extension method for consolidating weighted streams.
 pub trait Consolidate<G: Scope, D: ExchangeData+Hashable, R: ExchangeData+Semigroup> : Sized {
@@ -61,10 +61,7 @@ where
     G::Timestamp: ::lattice::Lattice+Ord,
 {
     fn consolidate_named(&self, name: &str) -> Self {
-        use trace::implementations::ord::OrdKeySpine as DefaultKeyTrace;
-        self.map(|k| (k, ()))
-            .arrange_named::<DefaultKeyTrace<_,_,_>>(name)
-            .as_collection(|d: &D, _| d.clone())
+        self.consolidate_core(arrange_pact(), name)
     }
 
     fn consolidate_core<P>(&self, pact: P, name: &str) -> Self

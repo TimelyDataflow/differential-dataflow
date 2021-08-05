@@ -465,7 +465,7 @@ where
         Tr::Batch: Batch<K, V, G::Timestamp, R>,
         Tr::Cursor: Cursor<K, V, G::Timestamp, R>,
     {
-        self.arrange_named("Arrange")
+        self.arrange_core(arrange_pact(), "Arrange")
     }
 
     /// Arranges a stream of `(Key, Val)` updates by `Key`. Accepts an empty instance of the trace type.
@@ -482,8 +482,7 @@ where
         Tr::Batch: Batch<K, V, G::Timestamp, R>,
         Tr::Cursor: Cursor<K, V, G::Timestamp, R>,
     {
-        let exchange = Exchange::new(arrange_exchange_fn);
-        self.arrange_core(exchange, name)
+        self.arrange_core(arrange_pact(), name)
     }
 
     /// Arranges a stream of `(Key, Val)` updates by `Key`. Accepts an empty instance of the trace type.
@@ -509,6 +508,17 @@ where
     R: ExchangeData,
 {
     update.0.0.hashed().into()
+}
+
+/// The default exchange parallelization contract for arrangements.
+pub fn arrange_pact<T, K, V, R>() -> Exchange<((K,V),T,R), impl Fn(&((K, V), T, R)) -> u64>
+    where
+        T: Lattice+'static,
+        K: Hashable+'static,
+        V: ExchangeData,
+        R: ExchangeData,
+{
+    Exchange::new(arrange_exchange_fn)
 }
 
 impl<G, K, V, R> Arrange<G, K, V, R> for Collection<G, (K, V), R>
