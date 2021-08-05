@@ -95,3 +95,13 @@ impl<Time> Description<Time> {
     /// Times from whose future the interval may be observed.
     pub fn since(&self) -> &Antichain<Time> { &self.since }
 }
+
+impl<Time: PartialEq> PartialEq for Description<Time> {
+    fn eq(&self, other: &Self) -> bool {
+        self.lower.eq(other.lower())
+            && self.upper.eq(other.upper())
+            && self.since.eq(other.since())
+    }
+}
+
+impl<Time: Eq> Eq for Description<Time> {}
