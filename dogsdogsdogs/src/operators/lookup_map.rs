@@ -11,6 +11,8 @@ use differential_dataflow::difference::{Semigroup, Monoid};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::trace::{Cursor, TraceReader, BatchReader};
+use std::rc::Rc;
+use std::cell::RefCell;
 
 /// Proposes extensions to a stream of prefixes.
 ///
@@ -19,9 +21,64 @@ use differential_dataflow::trace::{Cursor, TraceReader, BatchReader};
 /// and values associated with the key in `arrangement`.
 pub fn lookup_map<G, D, R, Tr, F, DOut, ROut, S>(
     prefixes: &Collection<G, D, R>,
+    arrangement: Arranged<G, Tr>,
+    key_selector: F,
+    mut output_func: S,
+    supplied_key0: Tr::Key,
+    supplied_key1: Tr::Key,
+    supplied_key2: Tr::Key,
+) -> Collection<G, DOut, ROut>
+    where
+        G: Scope,
+        G::Timestamp: Lattice,
+        Tr: TraceReader<Time=G::Timestamp>+Clone+'static,
+        Tr::Key: Ord+Hashable,
+        Tr::Val: Clone,
+        Tr::Batch: BatchReader<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
+        Tr::Cursor: Cursor<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
+        Tr::R: Monoid+ExchangeData,
+        F: FnMut(&D, &mut Tr::Key)+Clone+'static,
+        D: ExchangeData,
+        R: ExchangeData+Monoid,
+        DOut: Clone+'static,
+        ROut: Monoid,
+        S: FnMut(&D, &R, &Tr::Val, &Tr::R)->(DOut, ROut)+'static,
+{
+    let count = Rc::new(RefCell::new(Tr::R::zero()));
+    let count1 = Rc::clone(&count);
+    let map_time_func = move |time :&_, t: &G::Timestamp, d :&_| {
+        if t.less_equal(time) { count.borrow_mut().plus_equals(d); }
+    };
+    let output_func = move |prefix: &_, diff :&_, value :&_, time: &G::Timestamp| {
+        let mut count = count1.borrow_mut();
+        if !count.is_zero() {
+            let (dout, rout) = output_func(prefix, diff, value, &count);
+            *count = Tr::R::zero();
+            if !rout.is_zero() {
+                Some((dout, time.clone(), rout))
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    };
+    lookup_map_internal_unsafe(prefixes, arrangement, key_selector, output_func, map_time_func, supplied_key0, supplied_key1, supplied_key2)
+}
+
+/// An unsafe variant of [lookup_map] where the `output_func` closure produces an iterator of
+/// arbitrary updates. The extra `map_time_func` is responsible to fold data's `(time, diff)` pairs
+/// for consumption by the `output_func`.
+///
+/// This method takes a stream of prefixes and for each determines a
+/// key with `key_selector` and then proposes all pair af the prefix
+/// and values associated with the key in `arrangement`.
+pub fn lookup_map_internal_unsafe<G, D, R, Tr, F, CF, DOut, ROut, I, S>(
+    prefixes: &Collection<G, D, R>,
     mut arrangement: Arranged<G, Tr>,
     key_selector: F,
     mut output_func: S,
+    mut map_time_func: CF,
     supplied_key0: Tr::Key,
     supplied_key1: Tr::Key,
     supplied_key2: Tr::Key,
@@ -40,7 +97,9 @@ where
     R: ExchangeData+Monoid,
     DOut: Clone+'static,
     ROut: Monoid,
-    S: FnMut(&D, &R, &Tr::Val, &Tr::R)->(DOut, ROut)+'static,
+    I: IntoIterator<Item=(DOut, G::Timestamp, ROut)>,
+    S: FnMut(&D, &R, &Tr::Val, &G::Timestamp)->I+'static,
+    CF: FnMut(&G::Timestamp, &G::Timestamp, &Tr::R) + 'static,
 {
     // No need to block physical merging for this operator.
     arrangement.trace.set_physical_compaction(Antichain::new().borrow());
@@ -101,16 +160,8 @@ where
                             cursor.seek_key(&storage, &key1);
                             if cursor.get_key(&storage) == Some(&key1) {
                                 while let Some(value) = cursor.get_val(&storage) {
-                                    let mut count = Tr::R::zero();
-                                    cursor.map_times(&storage, |t, d| {
-                                        if t.less_equal(time) { count.plus_equals(d); }
-                                    });
-                                    if !count.is_zero() {
-                                        let (dout, rout) = output_func(prefix, diff, value, &count);
-                                        if !rout.is_zero() {
-                                            session.give((dout, time.clone(), rout));
-                                        }
-                                    }
+                                    cursor.map_times(&storage, |t, d| map_time_func(time, t, d));
+                                    session.give_iterator(output_func(prefix, diff, value, time).into_iter());
                                     cursor.step_val(&storage);
                                 }
                                 cursor.rewind_vals(&storage);

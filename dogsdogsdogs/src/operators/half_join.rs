@@ -196,9 +196,7 @@ where
                                     });
                                     consolidate(&mut output_buffer);
                                     for (time, diff2) in output_buffer.drain(..) {
-                                        for dout in output_func(key, val1, val2, initial, &time, &diff1, &diff2) {
-                                            session.give(dout);
-                                        }
+                                        session.give_iterator(output_func(key, val1, val2, initial, &time, &diff1, &diff2).into_iter())
                                     }
                                     cursor.step_val(&storage);
                                 }
