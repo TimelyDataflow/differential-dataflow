@@ -178,12 +178,25 @@ pub struct MergeSorter<D: Ord, T: Ord, R: Semigroup> {
 
 impl<D: Ord, T: Ord, R: Semigroup> MergeSorter<D, T, R> {
 
+    const BUFFER_SIZE_BYTES: usize = 1 << 13;
+
+    fn buffer_size() -> usize {
+        let size = ::std::mem::size_of::<(D, T, R)>();
+        if size == 0 {
+            Self::BUFFER_SIZE_BYTES
+        } else if size <= Self::BUFFER_SIZE_BYTES {
+            Self::BUFFER_SIZE_BYTES / size
+        } else {
+            1
+        }
+    }
+
     #[inline]
     pub fn new() -> Self { MergeSorter { queue: Vec::new(), stash: Vec::new() } }
 
     #[inline]
     pub fn empty(&mut self) -> Vec<(D, T, R)> {
-        self.stash.pop().unwrap_or_else(|| Vec::with_capacity(1024))
+        self.stash.pop().unwrap_or_else(|| Vec::with_capacity(Self::buffer_size()))
     }
 
     #[inline(never)]
@@ -251,7 +264,7 @@ impl<D: Ord, T: Ord, R: Semigroup> MergeSorter<D, T, R> {
 
         // TODO: `list1` and `list2` get dropped; would be better to reuse?
         let mut output = Vec::with_capacity(list1.len() + list2.len());
-        let mut result = self.stash.pop().unwrap_or_else(|| Vec::with_capacity(1024));
+        let mut result = self.empty();
 
         let mut list1 = VecQueue::from(list1);
         let mut list2 = VecQueue::from(list2);
@@ -285,17 +298,17 @@ impl<D: Ord, T: Ord, R: Semigroup> MergeSorter<D, T, R> {
 
             if result.capacity() == result.len() {
                 output.push(result);
-                result = self.stash.pop().unwrap_or_else(|| Vec::with_capacity(1024));
+                result = self.empty();
             }
 
             if head1.is_empty() {
                 let done1 = head1.done();
-                if done1.capacity() == 1024 { self.stash.push(done1); }
+                if done1.capacity() == Self::buffer_size() { self.stash.push(done1); }
                 head1 = if !list1.is_empty() { VecQueue::from(list1.pop()) } else { VecQueue::new() };
             }
             if head2.is_empty() {
                 let done2 = head2.done();
-                if done2.capacity() == 1024 { self.stash.push(done2); }
+                if done2.capacity() == Self::buffer_size() { self.stash.push(done2); }
                 head2 = if !list2.is_empty() { VecQueue::from(list2.pop()) } else { VecQueue::new() };
             }
         }
@@ -304,7 +317,7 @@ impl<D: Ord, T: Ord, R: Semigroup> MergeSorter<D, T, R> {
         else if result.capacity() > 0 { self.stash.push(result); }
 
         if !head1.is_empty() {
-            let mut result = self.stash.pop().unwrap_or_else(|| Vec::with_capacity(1024));
+            let mut result = self.empty();
             for _ in 0 .. head1.len() { result.push(head1.pop()); }
             output.push(result);
         }
@@ -313,7 +326,7 @@ impl<D: Ord, T: Ord, R: Semigroup> MergeSorter<D, T, R> {
         }
 
         if !head2.is_empty() {
-            let mut result = self.stash.pop().unwrap_or_else(|| Vec::with_capacity(1024));
+            let mut result = self.empty();
             for _ in 0 .. head2.len() { result.push(head2.pop()); }
             output.push(result);
         }
