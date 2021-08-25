@@ -55,6 +55,7 @@ where
     type Cursor = Tr::Cursor;
 
     fn set_logical_compaction(&mut self, frontier: AntichainRef<Tr::Time>) {
+        debug_assert!(timely::PartialOrder::less_equal(&self.logical_compaction.borrow(), &frontier));
         self.trace.borrow_mut().adjust_logical_compaction(self.logical_compaction.borrow(), frontier);
         self.logical_compaction.clear();
         self.logical_compaction.extend(frontier.iter().cloned());
