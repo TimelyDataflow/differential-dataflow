@@ -55,19 +55,21 @@ where
     type Cursor = Tr::Cursor;
 
     fn set_logical_compaction(&mut self, frontier: AntichainRef<Tr::Time>) {
-        debug_assert!(timely::PartialOrder::less_equal(&self.logical_compaction.borrow(), &frontier));
-        self.trace.borrow_mut().adjust_logical_compaction(self.logical_compaction.borrow(), frontier);
-        self.logical_compaction.clear();
-        self.logical_compaction.extend(frontier.iter().cloned());
+        // This method does not enforce that `frontier` is greater or equal to `self.logical_compaction`.
+        // Instead, it determines the joint consequences of both guarantees and moves forward with that.
+        let new_frontier = crate::lattice::antichain_join(&self.logical_compaction.borrow()[..], &frontier[..]);
+        self.trace.borrow_mut().adjust_logical_compaction(self.logical_compaction.borrow(), new_frontier.borrow());
+        self.logical_compaction = new_frontier;
     }
     fn get_logical_compaction(&mut self) -> AntichainRef<Tr::Time> {
         self.logical_compaction.borrow()
     }
     fn set_physical_compaction(&mut self, frontier: AntichainRef<Tr::Time>) {
-        debug_assert!(timely::PartialOrder::less_equal(&self.physical_compaction.borrow(), &frontier));
-        self.trace.borrow_mut().adjust_physical_compaction(self.physical_compaction.borrow(), frontier);
-        self.physical_compaction.clear();
-        self.physical_compaction.extend(frontier.iter().cloned());
+        // This method does not enforce that `frontier` is greater or equal to `self.physical_compaction`.
+        // Instead, it determines the joint consequences of both guarantees and moves forward with that.
+        let new_frontier = crate::lattice::antichain_join(&self.physical_compaction.borrow()[..], &frontier[..]);
+        self.trace.borrow_mut().adjust_physical_compaction(self.physical_compaction.borrow(), new_frontier.borrow());
+        self.physical_compaction = new_frontier;
     }
     fn get_physical_compaction(&mut self) -> AntichainRef<Tr::Time> {
         self.physical_compaction.borrow()
