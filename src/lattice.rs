@@ -222,12 +222,45 @@ implement_lattice!((), ());
 /// ```
 pub fn antichain_join<T: Lattice>(one: &[T], other: &[T]) -> Antichain<T> {
     let mut upper = Antichain::new();
+    antichain_join_into(one, other, &mut upper);
+    upper
+}
+
+/// Returns the "smallest" minimal antichain "greater or equal" to both inputs.
+///
+/// This method is primarily meant for cases where one cannot use the methods
+/// of `Antichain`'s `PartialOrder` implementation, such as when one has only
+/// references rather than owned antichains.
+///
+/// This function is similar to [antichain_join] but reuses an existing allocation.
+/// The provided antichain is cleared before inserting elements.
+///
+/// # Examples
+///
+/// ```
+/// # extern crate timely;
+/// # extern crate differential_dataflow;
+/// # use timely::PartialOrder;
+/// # use timely::order::Product;
+/// # use timely::progress::Antichain;
+/// # use differential_dataflow::lattice::Lattice;
+/// # use differential_dataflow::lattice::antichain_join_into;
+/// # fn main() {
+///
+/// let mut join = Antichain::new();
+/// let f1 = &[Product::new(3, 7), Product::new(5, 6)];
+/// let f2 = &[Product::new(4, 6)];
+/// antichain_join_into(f1, f2, &mut join);
+/// assert_eq!(&*join.elements(), &[Product::new(4, 7), Product::new(5, 6)]);
+/// # }
+/// ```
+pub fn antichain_join_into<T: Lattice>(one: &[T], other: &[T], upper: &mut Antichain<T>) {
+    upper.clear();
     for time1 in one {
         for time2 in other {
             upper.insert(time1.join(time2));
         }
     }
-    upper
 }
 
 /// Returns the "greatest" minimal antichain "less or equal" to both inputs.
