@@ -36,6 +36,7 @@ where
     queues: Weak<RefCell<Vec<TraceAgentQueueWriter<Tr>>>>,
     logical_compaction: Antichain<Tr::Time>,
     physical_compaction: Antichain<Tr::Time>,
+    temp_antichain: Antichain<Tr::Time>,
 
     operator: ::timely::dataflow::operators::generic::OperatorInfo,
     logging: Option<::logging::Logger>,
@@ -57,9 +58,10 @@ where
     fn set_logical_compaction(&mut self, frontier: AntichainRef<Tr::Time>) {
         // This method does not enforce that `frontier` is greater or equal to `self.logical_compaction`.
         // Instead, it determines the joint consequences of both guarantees and moves forward with that.
-        let new_frontier = crate::lattice::antichain_join(&self.logical_compaction.borrow()[..], &frontier[..]);
-        self.trace.borrow_mut().adjust_logical_compaction(self.logical_compaction.borrow(), new_frontier.borrow());
-        self.logical_compaction = new_frontier;
+        crate::lattice::antichain_join_into(&self.logical_compaction.borrow()[..], &frontier[..], &mut self.temp_antichain);
+        self.trace.borrow_mut().adjust_logical_compaction(self.logical_compaction.borrow(), self.temp_antichain.borrow());
+        ::std::mem::swap(&mut self.logical_compaction, &mut self.temp_antichain);
+        self.temp_antichain.clear();
     }
     fn get_logical_compaction(&mut self) -> AntichainRef<Tr::Time> {
         self.logical_compaction.borrow()
@@ -67,9 +69,10 @@ where
     fn set_physical_compaction(&mut self, frontier: AntichainRef<Tr::Time>) {
         // This method does not enforce that `frontier` is greater or equal to `self.physical_compaction`.
         // Instead, it determines the joint consequences of both guarantees and moves forward with that.
-        let new_frontier = crate::lattice::antichain_join(&self.physical_compaction.borrow()[..], &frontier[..]);
-        self.trace.borrow_mut().adjust_physical_compaction(self.physical_compaction.borrow(), new_frontier.borrow());
-        self.physical_compaction = new_frontier;
+        crate::lattice::antichain_join_into(&self.physical_compaction.borrow()[..], &frontier[..], &mut self.temp_antichain);
+        self.trace.borrow_mut().adjust_physical_compaction(self.physical_compaction.borrow(), self.temp_antichain.borrow());
+        ::std::mem::swap(&mut self.physical_compaction, &mut self.temp_antichain);
+        self.temp_antichain.clear();
     }
     fn get_physical_compaction(&mut self) -> AntichainRef<Tr::Time> {
         self.physical_compaction.borrow()
@@ -105,6 +108,7 @@ where
             queues: Rc::downgrade(&queues),
             logical_compaction: trace.borrow().logical_compaction.frontier().to_owned(),
             physical_compaction: trace.borrow().physical_compaction.frontier().to_owned(),
+            temp_antichain: Antichain::new(),
             operator,
             logging,
         };
@@ -544,6 +548,7 @@ where
             physical_compaction: self.physical_compaction.clone(),
             operator: self.operator.clone(),
             logging: self.logging.clone(),
+            temp_antichain: Antichain::new(),
         }
     }
 }

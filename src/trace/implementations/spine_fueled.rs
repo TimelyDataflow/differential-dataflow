@@ -212,14 +212,15 @@ where
         Some((CursorList::new(cursors, &storage), storage))
     }
     fn set_logical_compaction(&mut self, frontier: AntichainRef<T>) {
-        // TODO: Re-use allocation
-        self.logical_frontier = frontier.to_owned();
+        self.logical_frontier.clear();
+        self.logical_frontier.extend(frontier.iter().cloned());
     }
     fn get_logical_compaction(&mut self) -> AntichainRef<T> { self.logical_frontier.borrow() }
     fn set_physical_compaction(&mut self, frontier: AntichainRef<T>) {
         // We should never request to rewind the frontier.
         debug_assert!(PartialOrder::less_equal(&self.physical_frontier.borrow(), &frontier), "FAIL\tthrough frontier !<= new frontier {:?} {:?}\n", self.physical_frontier, frontier);
-        self.physical_frontier = frontier.to_owned();
+        self.physical_frontier.clear();
+        self.physical_frontier.extend(frontier.iter().cloned());
         self.consider_merges();
     }
     fn get_physical_compaction(&mut self) -> AntichainRef<T> { self.physical_frontier.borrow() }
