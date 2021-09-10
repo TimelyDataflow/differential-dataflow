@@ -212,8 +212,8 @@ where
         Some((CursorList::new(cursors, &storage), storage))
     }
     fn set_logical_compaction(&mut self, frontier: AntichainRef<T>) {
-        // TODO: Re-use allocation
-        self.logical_frontier = frontier.to_owned();
+        self.logical_frontier.clear();
+        self.logical_frontier.extend(frontier.iter().cloned());
     }
     fn get_logical_compaction(&mut self) -> AntichainRef<T> { self.logical_frontier.borrow() }
     fn set_physical_compaction(&mut self, frontier: AntichainRef<T>) {
