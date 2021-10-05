@@ -120,7 +120,8 @@ where
 ///
 /// The `yield_function` allows the caller to indicate when the operator should
 /// yield control, as a function of the elapsed time and the number of matched
-/// records.
+/// records. Note this is not the number of *output* records, owing mainly to
+/// the number of matched records being easiest to record with low overhead.
 pub fn half_join_internal_unsafe<G, V, Tr, FF, CF, DOut, ROut, Y, I, S>(
     stream: &Collection<G, (Tr::Key, V, G::Timestamp), Tr::R>,
     mut arrangement: Arranged<G, Tr>,
@@ -166,7 +167,6 @@ where
         use timely::scheduling::Activator;
         let activations = stream.scope().activations();
         let activator = Activator::new(&info.address[..], activations);
-
 
         move |input1, input2, output| {
 
