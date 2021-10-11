@@ -32,7 +32,7 @@ fn main() {
             eprintln!("enabled DIFFERENTIAL logging to {}", addr);
 
             if let Ok(stream) = ::std::net::TcpStream::connect(&addr) {
-                let writer = ::timely::dataflow::operators::capture::EventWriter::new(stream);
+                let writer = ::timely::dataflow::operators::capture::EventWriterCore::new(stream);
                 let mut logger = ::timely::logging::BatchLogger::new(writer);
                 worker.log_register().insert::<DifferentialEvent,_>("differential/arrange", move |time, data|
                     logger.publish_batch(time, data)

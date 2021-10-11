@@ -7,7 +7,9 @@ license = "MIT"
 [dependencies]
 abomonation = "0.7"
 abomonation_derive = "0.5"
-timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false }
+# timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false }
+timely = { git = "https://github.com/antiguru/timely-dataflow", branch = "container_stream_rework", default-features = false }
+#timely = { path = "../../timely-dataflow/timely" }
 differential-dataflow = { path = "../", default-features = false }
 serde = "1"
 serde_derive = "1"

@@ -9,7 +9,7 @@ where
     A: timely::communication::Allocate,
     W: std::io::Write+'static,
 {
-    let writer = ::timely::dataflow::operators::capture::EventWriter::new(writer);
+    let writer = ::timely::dataflow::operators::capture::EventWriterCore::new(writer);
     let mut logger = ::timely::logging::BatchLogger::new(writer);
     worker
         .log_register()
