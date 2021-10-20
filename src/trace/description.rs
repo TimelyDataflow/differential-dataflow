@@ -56,6 +56,7 @@
 //! times at which data may possibly be sent.
 
 use timely::{PartialOrder, progress::Antichain};
+use serde::{Serialize, Deserialize};
 
 /// Describes an interval of partially ordered times.
 ///
@@ -64,7 +65,7 @@ use timely::{PartialOrder, progress::Antichain};
 /// frontier indicates a moment at which the times were observed. If `since` is strictly in
 /// advance of `lower`, the contained times may be "advanced" to times which appear equivalent to
 /// any time after `since`.
-#[derive(Clone, Debug, Abomonation)]
+#[derive(Clone, Debug, Abomonation, Serialize, Deserialize)]
 pub struct Description<Time> {
     /// lower frontier of contained updates.
     lower: Antichain<Time>,
