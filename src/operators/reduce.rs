@@ -683,6 +683,7 @@ where
 /// Implementation based on replaying historical and new updates together.
 mod history_replay {
 
+    use std::mem::ManuallyDrop;
     use ::difference::Semigroup;
     use lattice::Lattice;
     use trace::Cursor;
@@ -690,6 +691,13 @@ mod history_replay {
     use timely::progress::Antichain;
 
     use super::{PerKeyCompute, sort_dedup};
+
+    /// Clears and type erases a vector
+    fn vec_to_parts<T>(v: Vec<T>) -> (*mut (), usize) {
+        let mut v = ManuallyDrop::new(v);
+        v.clear();
+        (v.as_mut_ptr() as *mut (), v.capacity())
+    }
 
     /// The `HistoryReplayer` is a compute strategy based on moving through existing inputs, interesting times, etc in
     /// time order, maintaining consolidated representations of updates with respect to future interesting times.
@@ -705,7 +713,11 @@ mod history_replay {
         input_history: ValueHistory<'a, V1, T, R1>,
         output_history: ValueHistory<'a, V2, T, R2>,
         input_buffer: Vec<(&'a V1, R1)>,
-        output_buffer_capacity: usize,
+        // A type erased pointer and capacity for the temporary output buffer passed to `logic`.
+        // During `compute` the vector contains references to self which will get invalid as soon
+        // as compute returns. For this reason the temporary vector is always cleared before
+        // decomposing it back into its type erased parts
+        output_buffer_parts: (*mut (), usize),
         update_buffer: Vec<(V2, R2)>,
         output_produced: Vec<((V2, T), R2)>,
         synth_times: Vec<T>,
@@ -728,7 +740,7 @@ mod history_replay {
                 input_history: ValueHistory::new(),
                 output_history: ValueHistory::new(),
                 input_buffer: Vec::new(),
-                output_buffer_capacity: 0,
+                output_buffer_parts: vec_to_parts(Vec::<(&V2, R2)>::new()),
                 update_buffer: Vec::new(),
                 output_produced: Vec::new(),
                 synth_times: Vec::new(),
@@ -913,7 +925,16 @@ mod history_replay {
                         }
                         crate::consolidation::consolidate(&mut self.input_buffer);
 
-                        let mut output_buffer = Vec::with_capacity(self.output_buffer_capacity);
+                        let (ptr, cap) = self.output_buffer_parts;
+                        // SAFETY:
+                        //   * `ptr` is valid because is has been previously allocated by a Vec
+                        //      constructor parameterized with the same type argument
+                        //   * `len` and `cap` are valid because the vector is converted to parts
+                        //      only through `vec_to_parts` which clears the vector and gets its
+                        //      capacity
+                        let mut output_buffer = unsafe {
+                            Vec::from_raw_parts(ptr as *mut (&V2, R2), 0, cap)
+                        };
                         meet.as_ref().map(|meet| output_replay.advance_buffer_by(&meet));
                         for &((value, ref time), ref diff) in output_replay.buffer().iter() {
                             if time.less_equal(&next_time) {
@@ -937,8 +958,8 @@ mod history_replay {
                         if self.input_buffer.len() > 0 || output_buffer.len() > 0 {
                             logic(key, &self.input_buffer[..], &mut output_buffer, &mut self.update_buffer);
                             self.input_buffer.clear();
-                            self.output_buffer_capacity = output_buffer.capacity();
                         }
+                        self.output_buffer_parts = vec_to_parts(output_buffer);
 
                         // output_replay.advance_buffer_by(&meet);
                         // for &((ref value, ref time), diff) in output_replay.buffer().iter() {
@@ -1074,6 +1095,28 @@ mod history_replay {
             sort_dedup(new_interesting);
 
             (compute_counter, output_counter)
+        }
+    }
+
+    impl<'a, V1, V2, T, R1, R2> Drop for HistoryReplayer<'a, V1, V2, T, R1, R2>
+    where
+        V1: Ord+Clone+'a,
+        V2: Ord+Clone+'a,
+        T: Lattice+Ord+Clone,
+        R1: Semigroup,
+        R2: Semigroup,
+    {
+        fn drop(&mut self) {
+            let (ptr, cap) = self.output_buffer_parts;
+            // SAFETY:
+            //   * `ptr` is valid because is has been previously allocated by a Vec
+            //      constructor parameterized with the same type argument
+            //   * `len` and `cap` are valid because the vector is converted to parts
+            //      only through `vec_to_parts` which clears the vector and gets its
+            //      capacity
+            unsafe {
+                Vec::from_raw_parts(ptr as *mut (&V2, R2), 0, cap);
+            }
         }
     }
 
