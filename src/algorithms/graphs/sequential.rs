@@ -53,7 +53,7 @@ where
     F: Fn(&N, &[(&V, isize)])->V+'static
 {
 
-    let timer = ::std::time::Instant::now();
+    let _timer = ::std::time::Instant::now();
 
     // start iteration with None messages for all.
     state

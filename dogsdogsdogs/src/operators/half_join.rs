@@ -95,7 +95,7 @@ where
         let dout = (output_func(k, v1, v2), time.clone());
         Some((dout, initial.clone(), diff))
     };
-    half_join_internal_unsafe(stream, arrangement, frontier_func, comparison, |timer, count| false, output_func)
+    half_join_internal_unsafe(stream, arrangement, frontier_func, comparison, |_timer, _count| false, output_func)
 }
 
 /// An unsafe variant of `half_join` where the `output_func` closure takes
