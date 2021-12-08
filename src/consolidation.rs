@@ -10,7 +10,31 @@
 //! you need specific behavior, it may be best to defensively copy, paste, and maintain the
 //! specific behavior you require.
 
+use timely::container::columnation::{Columnation, TimelyStack};
+use Data;
 use crate::difference::Semigroup;
+
+/// Consolidate the contents of `self`.
+///
+/// Consolidation takes a container of `(data, diff)`-pairs and accumulates a single `diff`
+/// per unique `data` element. Elements where the `diff` accumulates to zero are dropped.
+/// Implementations are may reorder the contents of `self`.
+pub trait Consolidation {
+    /// Consolidate `self`.
+    fn consolidate(&mut self);
+}
+
+impl<T: Ord, R: Semigroup> Consolidation for Vec<(T, R)> {
+    fn consolidate(&mut self) {
+        consolidate(self);
+    }
+}
+
+impl<D: Ord, T: Ord, R: Semigroup> Consolidation for Vec<(D, T, R)> {
+    fn consolidate(&mut self) {
+        consolidate_updates(self);
+    }
+}
 
 /// Sorts and consolidates `vec`.
 ///
@@ -145,6 +169,45 @@ pub fn consolidate_updates_slice<D: Ord, T: Ord, R: Semigroup>(slice: &mut [(D, 
     offset
 }
 
+impl<A: Columnation + Data, B: Columnation + Data, C: Columnation + Semigroup> Consolidation for TimelyStack<(A, B, C)> {
+    fn consolidate(&mut self) {
+        if self.is_empty() {
+            return;
+        }
+
+        {
+            // unsafe reasoning: `sort_unstable_by` does not expose mutable access to elements
+            let slice = unsafe { self.local() };
+            slice.sort_unstable_by(|x, y| (&x.0, &x.1).cmp(&(&y.0, &y.1)));
+        }
+
+        // Replace `self` with a new allocation.
+        // TODO: recycle the old `self`
+        let input = &std::mem::replace(self, TimelyStack::with_capacity(self.len()))[..];
+
+        let mut diff: Option<C> = None;
+        for i in 0..(input.len()) {
+            // accumulate diff
+            if let Some(diff) = diff.as_mut() {
+                // we already have a diff, simply plus_equal it
+                diff.plus_equals(&input[i].2)
+            } else {
+                // last element was undefined or different, initialize new diff
+                diff = Some(input[i].2.clone())
+            }
+
+            // is the current element == next element (except diff)?
+            if i == input.len() - 1 || (input[i].0 != input[i+1].0 || input[i].1 != input[i+1].1) {
+                // element[i] != element[i+1]
+                // emit element[i] if accumulated diff != 0
+                if !diff.as_ref().map(Semigroup::is_zero).unwrap_or(true) {
+                    self.copy_destructured(&input[i].0, &input[i].1, &diff.take().unwrap());
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -208,6 +271,33 @@ mod tests {
 
         for (mut input, output) in test_cases {
             consolidate_updates(&mut input);
+            assert_eq!(input, output);
+        }
+    }
+
+    #[test]
+    fn test_consolidate_updates_column_stack() {
+        let test_cases: Vec<(TimelyStack<_>, TimelyStack<_>)> = vec![
+            (
+                vec![("a".to_owned(), 1, -1), ("b".to_owned(), 1, -2), ("a".to_owned(), 1, 1)].iter().collect(),
+                vec![("b".to_owned(), 1, -2)].iter().collect(),
+            ),
+            (
+                vec![("a".to_owned(), 1, -1), ("b".to_owned(), 1, 0), ("a".to_owned(), 1, 1)].iter().collect(),
+                vec![].iter().collect(),
+            ),
+            (
+                vec![("a".to_owned(), 1, 0)].iter().collect(),
+                vec![].iter().collect(),
+            ),
+            (
+                vec![("a".to_owned(), 1, 0), ("b".to_owned(), 1, 0)].iter().collect(),
+                vec![].iter().collect(),
+            ),
+        ];
+
+        for (mut input, output) in test_cases {
+            input.consolidate();
             assert_eq!(input, output);
         }
     }

@@ -14,6 +14,7 @@ pub mod layers;
 pub mod wrappers;
 
 use timely::communication::message::RefOrMut;
+use timely::Container;
 use timely::progress::{Antichain, frontier::AntichainRef};
 use timely::progress::Timestamp;
 
@@ -289,10 +290,12 @@ pub trait Batch : BatchReader where Self: ::std::marker::Sized {
 
 /// Functionality for collecting and batching updates.
 pub trait Batcher<Output: Batch> {
+    /// Input to the batcher
+    type Input: Container<Item=((Output::Key, Output::Val), Output::Time, Output::R)>;
     /// Allocates a new empty batcher.
     fn new() -> Self;
     /// Adds an unordered batch of elements to the batcher.
-    fn push_batch(&mut self, batch: RefOrMut<Vec<((Output::Key, Output::Val), Output::Time, Output::R)>>);
+    fn push_batch(&mut self, batch: RefOrMut<Self::Input>);
     /// Returns all updates not greater or equal to an element of `upper`.
     fn seal(&mut self, upper: Antichain<Output::Time>) -> Output;
     /// Returns the lower envelope of contained update times.
@@ -417,8 +420,9 @@ pub mod rc_blanket_impls {
 
     /// Functionality for collecting and batching updates.
     impl<B:Batch> Batcher<Rc<B>> for RcBatcher<B> {
+        type Input = <<B as Batch>::Batcher as Batcher<B>>::Input;
         fn new() -> Self { RcBatcher { batcher: <B::Batcher as Batcher<B>>::new() } }
-        fn push_batch(&mut self, batch: RefOrMut<Vec<((B::Key, B::Val), B::Time, B::R)>>) { self.batcher.push_batch(batch) }
+        fn push_batch(&mut self, batch: RefOrMut<Self::Input>) { self.batcher.push_batch(batch) }
         fn seal(&mut self, upper: Antichain<B::Time>) -> Rc<B> { Rc::new(self.batcher.seal(upper)) }
         fn frontier(&mut self) -> timely::progress::frontier::AntichainRef<B::Time> { self.batcher.frontier() }
     }
@@ -533,8 +537,9 @@ pub mod abomonated_blanket_impls {
 
     /// Functionality for collecting and batching updates.
     impl<B:Batch+Abomonation> Batcher<Abomonated<B,Vec<u8>>> for AbomonatedBatcher<B> {
+        type Input = <<B as Batch>::Batcher as Batcher<B>>::Input;
         fn new() -> Self { AbomonatedBatcher { batcher: <B::Batcher as Batcher<B>>::new() } }
-        fn push_batch(&mut self, batch: RefOrMut<Vec<((B::Key, B::Val), B::Time, B::R)>>) { self.batcher.push_batch(batch) }
+        fn push_batch(&mut self, batch: RefOrMut<Self::Input>) { self.batcher.push_batch(batch) }
         fn seal(&mut self, upper: Antichain<B::Time>) -> Abomonated<B, Vec<u8>> {
             let batch = self.batcher.seal(upper);
             let mut bytes = Vec::with_capacity(measure(&batch));

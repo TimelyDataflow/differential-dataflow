@@ -14,14 +14,15 @@ use timely::Data;
 use timely::progress::Timestamp;
 use timely::order::Product;
 use timely::dataflow::scopes::{Child, child::Iterative};
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::{Scope, StreamCore};
 use timely::dataflow::operators::*;
 
 use ::difference::{Semigroup, Abelian, Multiply};
 use lattice::Lattice;
 use hashable::Hashable;
+use TimelyContainer;
 
-/// A mutable collection of values of type `D`
+/// A mutable collection of values of type `D` within a container `C`
 ///
 /// The `Collection` type is the core abstraction in differential dataflow programs. As you write your
 /// differential dataflow computation, you write as if the collection is a static dataset to which you
@@ -30,31 +31,140 @@ use hashable::Hashable;
 /// propagate changes through your functional computation and report the corresponding changes to the
 /// output collections.
 ///
-/// Each collection has three generic parameters. The parameter `G` is for the scope in which the
+/// Each collection has four generic parameters. The parameter `G` is for the scope in which the
 /// collection exists; as you write more complicated programs you may wish to introduce nested scopes
 /// (e.g. for iteration) and this parameter tracks the scope (for timely dataflow's benefit). The `D`
 /// parameter is the type of data in your collection, for example `String`, or `(u32, Vec<Option<()>>)`.
 /// The `R` parameter represents the types of changes that the data undergo, and is most commonly (and
-/// defaults to) `isize`, representing changes to the occurrence count of each record.
+/// defaults to) `isize`, representing changes to the occurrence count of each record. The `C`
+/// parameter specifies the container type of the collection.
+///
+/// Note that the default container type is `Vec<_>`.
 #[derive(Clone)]
-pub struct Collection<G: Scope, D, R: Semigroup = isize> {
+pub struct Collection<G, D, R = isize, C = Vec<(D, <G as ScopeParent>::Timestamp, R)>>
+    where
+        G: Scope,
+        R: Semigroup,
+        C: TimelyContainer<Item=(D, G::Timestamp, R)>,
+{
     /// The underlying timely dataflow stream.
     ///
     /// This field is exposed to support direct timely dataflow manipulation when required, but it is
     /// not intended to be the idiomatic way to work with the collection.
-    pub inner: Stream<G, (D, G::Timestamp, R)>
+    pub inner: StreamCore<G, C>
 }
 
-impl<G: Scope, D: Data, R: Semigroup> Collection<G, D, R> where G::Timestamp: Data {
+impl<G: Scope, C, D, R: Semigroup> Collection<G, D, R, C>
+    where
+        C: TimelyContainer<Item=(D, G::Timestamp, R)>,
+{
     /// Creates a new Collection from a timely dataflow stream.
     ///
     /// This method seems to be rarely used, with the `as_collection` method on streams being a more
     /// idiomatic approach to convert timely streams to collections. Also, the `input::Input` trait
     /// provides a `new_collection` method which will create a new collection for you without exposing
     /// the underlying timely stream at all.
-    pub fn new(stream: Stream<G, (D, G::Timestamp, R)>) -> Collection<G, D, R> {
-        Collection { inner: stream }
+    pub fn new(stream: StreamCore<G, C>) -> Collection<G, D, R, C> {
+        Self { inner: stream }
     }
+
+    /// Creates a new collection accumulating the contents of the two collections.
+    ///
+    /// Despite the name, differential dataflow collections are unordered. This method is so named because the
+    /// implementation is the concatenation of the stream of updates, but it corresponds to the addition of the
+    /// two collections.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// extern crate timely;
+    /// extern crate differential_dataflow;
+    ///
+    /// use differential_dataflow::input::Input;
+    ///
+    /// fn main() {
+    ///     ::timely::example(|scope| {
+    ///
+    ///         let data = scope.new_collection_from(1 .. 10).1;
+    ///
+    ///         let odds = data.filter(|x| x % 2 == 1);
+    ///         let evens = data.filter(|x| x % 2 == 0);
+    ///
+    ///         odds.concat(&evens)
+    ///             .assert_eq(&data);
+    ///     });
+    /// }
+    /// ```
+    pub fn concat(&self, other: &Collection<G, D, R, C>) -> Collection<G, D, R, C> {
+        self.inner
+            .concat(&other.inner)
+            .as_collection()
+    }
+
+    /// Creates a new collection accumulating the contents of the two collections.
+    ///
+    /// Despite the name, differential dataflow collections are unordered. This method is so named because the
+    /// implementation is the concatenation of the stream of updates, but it corresponds to the addition of the
+    /// two collections.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// extern crate timely;
+    /// extern crate differential_dataflow;
+    ///
+    /// use differential_dataflow::input::Input;
+    ///
+    /// fn main() {
+    ///     ::timely::example(|scope| {
+    ///
+    ///         let data = scope.new_collection_from(1 .. 10).1;
+    ///
+    ///         let odds = data.filter(|x| x % 2 == 1);
+    ///         let evens = data.filter(|x| x % 2 == 0);
+    ///
+    ///         odds.concatenate(Some(evens))
+    ///             .assert_eq(&data);
+    ///     });
+    /// }
+    /// ```
+    pub fn concatenate<I>(&self, sources: I) -> Collection<G, D, R, C>
+        where
+            I: IntoIterator<Item=Collection<G, D, R, C>>
+    {
+        self.inner
+            .concatenate(sources.into_iter().map(|x| x.inner))
+            .as_collection()
+    }
+
+    /// Attaches a timely dataflow probe to the output of a Collection.
+    ///
+    /// This probe is used to determine when the state of the Collection has stabilized and can
+    /// be read out.
+    pub fn probe(&self) -> probe::Handle<G::Timestamp> {
+        self.inner
+            .probe()
+    }
+
+    /// Attaches a timely dataflow probe to the output of a Collection.
+    ///
+    /// This probe is used to determine when the state of the Collection has stabilized and all updates observed.
+    /// In addition, a probe is also often use to limit the number of rounds of input in flight at any moment; a
+    /// computation can wait until the probe has caught up to the input before introducing more rounds of data, to
+    /// avoid swamping the system.
+    pub fn probe_with(&self, handle: &mut probe::Handle<G::Timestamp>) -> Collection<G, D, R, C> {
+        self.inner
+            .probe_with(handle)
+            .as_collection()
+    }
+
+    /// The scope containing the underlying timely dataflow stream.
+    pub fn scope(&self) -> G {
+        self.inner.scope()
+    }
+}
+
+impl<G: Scope, D: Data, R: Semigroup> Collection<G, D, R> where G::Timestamp: Data {
     /// Creates a new collection by applying the supplied function to each input element.
     ///
     /// # Examples
@@ -164,73 +274,6 @@ impl<G: Scope, D: Data, R: Semigroup> Collection<G, D, R> where G::Timestamp: Da
     where L: FnMut(&D) -> bool + 'static {
         self.inner
             .filter(move |&(ref data, _, _)| logic(data))
-            .as_collection()
-    }
-    /// Creates a new collection accumulating the contents of the two collections.
-    ///
-    /// Despite the name, differential dataflow collections are unordered. This method is so named because the
-    /// implementation is the concatenation of the stream of updates, but it corresponds to the addition of the
-    /// two collections.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// extern crate timely;
-    /// extern crate differential_dataflow;
-    ///
-    /// use differential_dataflow::input::Input;
-    ///
-    /// fn main() {
-    ///     ::timely::example(|scope| {
-    ///
-    ///         let data = scope.new_collection_from(1 .. 10).1;
-    ///
-    ///         let odds = data.filter(|x| x % 2 == 1);
-    ///         let evens = data.filter(|x| x % 2 == 0);
-    ///
-    ///         odds.concat(&evens)
-    ///             .assert_eq(&data);
-    ///     });
-    /// }
-    /// ```
-    pub fn concat(&self, other: &Collection<G, D, R>) -> Collection<G, D, R> {
-        self.inner
-            .concat(&other.inner)
-            .as_collection()
-    }
-    /// Creates a new collection accumulating the contents of the two collections.
-    ///
-    /// Despite the name, differential dataflow collections are unordered. This method is so named because the
-    /// implementation is the concatenation of the stream of updates, but it corresponds to the addition of the
-    /// two collections.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// extern crate timely;
-    /// extern crate differential_dataflow;
-    ///
-    /// use differential_dataflow::input::Input;
-    ///
-    /// fn main() {
-    ///     ::timely::example(|scope| {
-    ///
-    ///         let data = scope.new_collection_from(1 .. 10).1;
-    ///
-    ///         let odds = data.filter(|x| x % 2 == 1);
-    ///         let evens = data.filter(|x| x % 2 == 0);
-    ///
-    ///         odds.concatenate(Some(evens))
-    ///             .assert_eq(&data);
-    ///     });
-    /// }
-    /// ```
-    pub fn concatenate<I>(&self, sources: I) -> Collection<G, D, R>
-    where
-        I: IntoIterator<Item=Collection<G, D, R>>
-    {
-        self.inner
-            .concatenate(sources.into_iter().map(|x| x.inner))
             .as_collection()
     }
     /// Replaces each record with another, with a new difference type.
@@ -482,25 +525,6 @@ impl<G: Scope, D: Data, R: Semigroup> Collection<G, D, R> where G::Timestamp: Da
             .inspect_batch(func)
             .as_collection()
     }
-    /// Attaches a timely dataflow probe to the output of a Collection.
-    ///
-    /// This probe is used to determine when the state of the Collection has stabilized and can
-    /// be read out.
-    pub fn probe(&self) -> probe::Handle<G::Timestamp> {
-        self.inner
-            .probe()
-    }
-    /// Attaches a timely dataflow probe to the output of a Collection.
-    ///
-    /// This probe is used to determine when the state of the Collection has stabilized and all updates observed.
-    /// In addition, a probe is also often use to limit the number of rounds of input in flight at any moment; a
-    /// computation can wait until the probe has caught up to the input before introducing more rounds of data, to
-    /// avoid swamping the system.
-    pub fn probe_with(&self, handle: &mut probe::Handle<G::Timestamp>) -> Collection<G, D, R> {
-        self.inner
-            .probe_with(handle)
-            .as_collection()
-    }
 
     /// Assert if the collection is ever non-empty.
     ///
@@ -533,11 +557,6 @@ impl<G: Scope, D: Data, R: Semigroup> Collection<G, D, R> where G::Timestamp: Da
     {
         self.consolidate()
             .inspect(|x| panic!("Assertion failed: non-empty collection: {:?}", x));
-    }
-
-    /// The scope containing the underlying timely dataflow stream.
-    pub fn scope(&self) -> G {
-        self.inner.scope()
     }
 }
 
@@ -673,13 +692,21 @@ impl<G: Scope, D: Data, R: Abelian> Collection<G, D, R> where G::Timestamp: Data
 }
 
 /// Conversion to a differential dataflow Collection.
-pub trait AsCollection<G: Scope, D: Data, R: Semigroup> {
+pub trait AsCollection<G, D, R, C = Vec<(D, <G as ScopeParent>::Timestamp, R)>>
+    where
+        G: Scope,
+        R: Semigroup,
+        C: TimelyContainer<Item=(D, G::Timestamp, R)>,
+{
     /// Converts the type to a differential dataflow collection.
-    fn as_collection(&self) -> Collection<G, D, R>;
+    fn as_collection(&self) -> Collection<G, D, R, C>;
 }
 
-impl<G: Scope, D: Data, R: Semigroup> AsCollection<G, D, R> for Stream<G, (D, G::Timestamp, R)> {
-    fn as_collection(&self) -> Collection<G, D, R> {
+impl<G: Scope, D, R: Semigroup, C> AsCollection<G, D, R, C> for StreamCore<G, C>
+    where
+        C: TimelyContainer<Item=(D, G::Timestamp, R)>
+{
+    fn as_collection(&self) -> Collection<G, D, R, C> {
         Collection::new(self.clone())
     }
 }
@@ -710,12 +737,13 @@ impl<G: Scope, D: Data, R: Semigroup> AsCollection<G, D, R> for Stream<G, (D, G:
 ///     });
 /// }
 /// ```
-pub fn concatenate<G, D, R, I>(scope: &mut G, iterator: I) -> Collection<G, D, R>
+pub fn concatenate<G, D, R, I, C>(scope: &mut G, iterator: I) -> Collection<G, D, R, C>
 where
     G: Scope,
     D: Data,
     R: Semigroup,
-    I: IntoIterator<Item=Collection<G, D, R>>,
+    I: IntoIterator<Item=Collection<G, D, R, C>>,
+    C: TimelyContainer<Item=(D, G::Timestamp, R)>,
 {
     scope
         .concatenate(iterator.into_iter().map(|x| x.inner))

@@ -4,8 +4,7 @@
 //! in the next layer. Similarly, ranges of elements in the layer itself may correspond
 //! to single elements in the layer above.
 
-use timely::container::columnation::TimelyStack;
-use timely::container::columnation::Columnation;
+use timely::container::columnation::{Columnation, TimelyStack};
 
 pub mod ordered;
 pub mod ordered_leaf;
@@ -175,8 +174,23 @@ impl<T: Columnation> BatchContainer for TimelyStack<T> {
     }
 }
 
+/// A generic interface to merge containers
+pub trait MergeContainer: Sized {
+    /// The implementation to merge containers of type `Self`.
+   type MergeBatcher: ContainerMergeBatcher<Self> + Default;
+}
 
-/// Reports the number of elements satisfing the predicate.
+/// A batcher for merging containers
+pub trait ContainerMergeBatcher<C> {
+    /// Obtain an empty batch
+    fn empty(&mut self) -> C;
+    /// Push a batch of data into this batcher
+    fn push(&mut self, batch: &mut C);
+    /// Drain the merged batches into `target`.
+    fn finish_into(&mut self, target: &mut Vec<C>);
+}
+
+/// Reports the number of elements satisfying the predicate.
 ///
 /// This methods *relies strongly* on the assumption that the predicate
 /// stays false once it becomes false, a joint property of the predicate

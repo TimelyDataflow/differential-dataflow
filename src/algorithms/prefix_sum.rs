@@ -2,12 +2,12 @@
 
 use timely::dataflow::Scope;
 
-use ::{Collection, ExchangeData};
+use ::{Collection, Data, ExchangeData};
 use ::lattice::Lattice;
 use ::operators::*;
 
 /// Extension trait for the prefix_sum method.
-pub trait PrefixSum<G: Scope, K, D> {
+pub trait PrefixSum<G: Scope, K: Data, D> {
     /// Computes the prefix sum for each element in the collection.
     ///
     /// The prefix sum is data-parallel, in the sense that the sums are computed independently for

@@ -14,7 +14,7 @@ use timely::progress::Timestamp;
 use timely::dataflow::operators::Partition;
 use timely::dataflow::operators::Concatenate;
 
-use differential_dataflow::{ExchangeData, Collection, AsCollection};
+use differential_dataflow::{Data, ExchangeData, Collection, AsCollection};
 use differential_dataflow::operators::Threshold;
 use differential_dataflow::difference::{Monoid, Multiply};
 use differential_dataflow::lattice::Lattice;
@@ -33,9 +33,9 @@ pub mod operators;
 **/
 pub trait PrefixExtender<G: Scope, R: Monoid+Multiply<Output = R>> {
     /// The required type of prefix to extend.
-    type Prefix;
+    type Prefix: Data;
     /// The type to be produced as extension.
-    type Extension;
+    type Extension: Data;
     /// Annotates prefixes with the number of extensions the relation would propose.
     fn count(&mut self, prefixes: &Collection<G, (Self::Prefix, usize, usize), R>, index: usize) -> Collection<G, (Self::Prefix, usize, usize), R>;
     /// Extends each prefix with corresponding extensions.
@@ -92,11 +92,11 @@ where
     }
 }
 
-pub trait ValidateExtensionMethod<G: Scope, R: Monoid+Multiply<Output = R>, P, E> {
+pub trait ValidateExtensionMethod<G: Scope, R: Monoid+Multiply<Output = R>, P: Data, E: Data> {
     fn validate_using<PE: PrefixExtender<G, R, Prefix=P, Extension=E>>(&self, extender: &mut PE) -> Collection<G, (P, E), R>;
 }
 
-impl<G: Scope, R: Monoid+Multiply<Output = R>, P, E> ValidateExtensionMethod<G, R, P, E> for Collection<G, (P, E), R> {
+impl<G: Scope, R: Monoid+Multiply<Output = R>, P: Data, E: Data> ValidateExtensionMethod<G, R, P, E> for Collection<G, (P, E), R> {
     fn validate_using<PE: PrefixExtender<G, R, Prefix=P, Extension=E>>(&self, extender: &mut PE) -> Collection<G, (P, E), R> {
         extender.validate(self)
     }

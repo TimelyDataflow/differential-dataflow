@@ -8,8 +8,9 @@
 
 use timely::dataflow::Scope;
 
-use ::{Collection, ExchangeData, Hashable};
+use ::{Collection, ExchangeData, Hashable, TimelyContainer};
 use ::difference::Semigroup;
+use consolidation::Consolidation;
 
 use Data;
 use lattice::Lattice;
@@ -57,13 +58,22 @@ where
     where
         Tr: crate::trace::Trace+crate::trace::TraceReader<Key=D,Val=(),Time=G::Timestamp,R=R>+'static,
         Tr::Batch: crate::trace::Batch,
+        <Tr::Batch as crate::trace::Batch>::Batcher: crate::trace::Batcher<Tr::Batch, Input=Vec<((D, ()), G::Timestamp, R)>>,
     {
         use operators::arrange::arrangement::Arrange;
         self.map(|k| (k, ()))
             .arrange_named::<Tr>(name)
             .as_collection(|d: &D, _| d.clone())
     }
+}
 
+impl<G: Scope, D, R, C> Collection<G, D, R, C>
+    where
+        C: Consolidation+TimelyContainer<Item=(D, G::Timestamp, R)>,
+        D: ExchangeData+Hashable,
+        R: ExchangeData+Semigroup,
+        G::Timestamp: ::lattice::Lattice+Ord,
+{
     /// Aggregates the weights of equal records.
     ///
     /// Unlike `consolidate`, this method does not exchange data and does not
@@ -101,12 +111,12 @@ where
         self.inner
             .unary(Pipeline, "ConsolidateStream", |_cap, _info| {
 
-                let mut vector = Vec::new();
+                let mut vector = C::default();
                 move |input, output| {
                     input.for_each(|time, data| {
                         data.swap(&mut vector);
-                        crate::consolidation::consolidate_updates(&mut vector);
-                        output.session(&time).give_vec(&mut vector);
+                        vector.consolidate();
+                        output.session(&time).give_container(&mut vector);
                     })
                 }
             })

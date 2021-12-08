@@ -102,6 +102,8 @@ extern crate abomonation;
 extern crate serde_derive;
 extern crate serde;
 
+pub use timely::Container as TimelyContainer;
+
 pub mod hashable;
 pub mod operators;
 pub mod algorithms;

@@ -42,6 +42,8 @@ pub mod spine_fueled;
 
 mod merge_batcher;
 
+mod merge_batcher_columnation;
+
 pub use self::merge_batcher::MergeBatcher as Batcher;
 
 pub mod ord;

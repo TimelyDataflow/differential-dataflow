@@ -14,9 +14,8 @@ use std::marker::PhantomData;
 use std::fmt::Debug;
 use std::ops::Deref;
 
-use timely::container::columnation::TimelyStack;
-use timely::container::columnation::Columnation;
-use timely::progress::{Antichain, frontier::AntichainRef};
+use timely::container::columnation::{Columnation, TimelyStack};
+use timely::progress::{Antichain, frontier::AntichainRef, Timestamp};
 
 use ::difference::Semigroup;
 use lattice::Lattice;
@@ -31,28 +30,29 @@ use trace::description::Description;
 
 use trace::layers::MergeBuilder;
 
-// use super::spine::Spine;
 use super::spine_fueled::Spine;
 use super::merge_batcher::MergeBatcher;
 
 use abomonation::abomonated::Abomonated;
+use Data;
+use trace::implementations::merge_batcher_columnation::TimelyStackMergeBatcher;
 
 /// A trace implementation using a spine of ordered lists.
-pub type OrdValSpine<K, V, T, R, O=usize> = Spine<Rc<OrdValBatch<K, V, T, R, O>>>;
+pub type OrdValSpine<K, V, T, R, O=usize> = Spine<Rc<OrdValBatch<K, V, T, R, O, Vec<((K, V), T, R)>, Vec<K>, Vec<V>>>>;
 
 /// A trace implementation using a spine of abomonated ordered lists.
-pub type OrdValSpineAbom<K, V, T, R, O=usize> = Spine<Rc<Abomonated<OrdValBatch<K, V, T, R, O>, Vec<u8>>>>;
+pub type OrdValSpineAbom<K, V, T, R, O=usize> = Spine<Rc<Abomonated<OrdValBatch<K, V, T, R, O, Vec<((K, V), T, R)>, Vec<K>, Vec<V>>, Vec<u8>>>>;
 
 /// A trace implementation for empty values using a spine of ordered lists.
-pub type OrdKeySpine<K, T, R, O=usize> = Spine<Rc<OrdKeyBatch<K, T, R, O>>>;
+pub type OrdKeySpine<K, T, R, O=usize> = Spine<Rc<OrdKeyBatch<K, T, R, O, Vec<((K, ()), T, R)>, Vec<K>>>>;
 
 /// A trace implementation for empty values using a spine of abomonated ordered lists.
-pub type OrdKeySpineAbom<K, T, R, O=usize> = Spine<Rc<Abomonated<OrdKeyBatch<K, T, R, O>, Vec<u8>>>>;
+pub type OrdKeySpineAbom<K, T, R, O=usize> = Spine<Rc<Abomonated<OrdKeyBatch<K, T, R, O, Vec<((K, ()), T, R)>, Vec<K>>, Vec<u8>>>>;
 
 /// A trace implementation backed by columnar storage.
-pub type ColValSpine<K, V, T, R, O=usize> = Spine<Rc<OrdValBatch<K, V, T, R, O, TimelyStack<K>, TimelyStack<V>>>>;
+pub type ColValSpine<K, V, T, R, O=usize> = Spine<Rc<OrdValBatch<K, V, T, R, O, Vec<((K, V), T, R)>, TimelyStack<K>, TimelyStack<V>>>>;
 /// A trace implementation backed by columnar storage.
-pub type ColKeySpine<K, T, R, O=usize> = Spine<Rc<OrdKeyBatch<K,  T, R, O, TimelyStack<K>>>>;
+pub type ColKeySpine<K, T, R, O=usize> = Spine<Rc<OrdKeyBatch<K,  T, R, O, Vec<((K, ()), T, R)>, TimelyStack<K>>>>;
 
 
 /// A container that can retain/discard from some offset onward.
@@ -87,12 +87,12 @@ impl<T: Columnation> RetainFrom<T> for TimelyStack<T> {
 
 /// An immutable collection of update tuples, from a contiguous interval of logical times.
 #[derive(Debug, Abomonation)]
-pub struct OrdValBatch<K, V, T, R, O=usize, CK=Vec<K>, CV=Vec<V>>
+pub struct OrdValBatch<K, V, T, R, O, C, CK, CV>
 where
     K: Ord+Clone,
     V: Ord+Clone,
-    T: Clone+Lattice,
-    R: Clone,
+    T: Data+Lattice,
+    R: Data,
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug,
     CK: BatchContainer<Item=K>+Deref<Target=[K]>+RetainFrom<K>,
     CV: BatchContainer<Item=V>+Deref<Target=[V]>+RetainFrom<V>,
@@ -101,13 +101,15 @@ where
     pub layer: OrderedLayer<K, OrderedLayer<V, OrderedLeaf<T, R>, O, CV>, O, CK>,
     /// Description of the update times this layer represents.
     pub desc: Description<T>,
+    /// Phantom data
+    pub phantom: std::marker::PhantomData<C>,
 }
 
-impl<K, V, T, R, O, CK, CV> BatchReader for OrdValBatch<K, V, T, R, O, CK, CV>
+impl<K, V, T, R, O, C, CK, CV> BatchReader for OrdValBatch<K, V, T, R, O, C, CK, CV>
 where
-    K: Ord+Clone+'static,
-    V: Ord+Clone+'static,
-    T: Lattice+Ord+Clone+'static,
+    K: Data,
+    V: Data,
+    T: Data+Lattice,
     R: Semigroup,
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug,
     CK: BatchContainer<Item=K>+Deref<Target=[K]>+RetainFrom<K>,
@@ -118,17 +120,17 @@ where
     type Time = T;
     type R = R;
 
-    type Cursor = OrdValCursor<K, V, T, R, O, CK, CV>;
+    type Cursor = OrdValCursor<K, V, T, R, O, C, CK, CV>;
     fn cursor(&self) -> Self::Cursor { OrdValCursor { cursor: self.layer.cursor(), phantom: std::marker::PhantomData } }
     fn len(&self) -> usize { <OrderedLayer<K, OrderedLayer<V, OrderedLeaf<T, R>, O, CV>, O, CK> as Trie>::tuples(&self.layer) }
     fn description(&self) -> &Description<T> { &self.desc }
 }
 
-impl<K, V, T, R, O, CK, CV> Batch for OrdValBatch<K, V, T, R, O, CK, CV>
+impl<K, V, T, R, O, CK, CV> Batch for OrdValBatch<K, V, T, R, O, Vec<((K, V), T, R)>, CK, CV>
 where
-    K: Ord+Clone+'static,
-    V: Ord+Clone+'static,
-    T: Lattice+timely::progress::Timestamp+Ord+Clone+::std::fmt::Debug+'static,
+    K: Data,
+    V: Data,
+    T: Lattice+Timestamp+Ord+Clone+Debug+'static,
     R: Semigroup,
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug,
     CK: BatchContainer<Item=K>+Deref<Target=[K]>+RetainFrom<K>,
@@ -143,11 +145,30 @@ where
     }
 }
 
-impl<K, V, T, R, O, CK, CV> OrdValBatch<K, V, T, R, O, CK, CV>
+impl<K, V, T, R, O, CK, CV> Batch for OrdValBatch<K, V, T, R, O, TimelyStack<((K, V), T, R)>, CK, CV>
 where
-    K: Ord+Clone+'static,
-    V: Ord+Clone+'static,
-    T: Lattice+Ord+Clone+::std::fmt::Debug+'static,
+    K: Data+Columnation,
+    V: Data+Columnation,
+    T: Lattice+Timestamp+Columnation,
+    R: Semigroup+Columnation,
+    O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug,
+    CK: BatchContainer<Item=K>+Deref<Target=[K]>+RetainFrom<K>,
+    CV: BatchContainer<Item=V>+Deref<Target=[V]>+RetainFrom<V>,
+{
+    type Batcher = TimelyStackMergeBatcher<Self>;
+    type Builder = OrdValBuilder<K, V, T, R, O, CK, CV>;
+    type Merger = OrdValMerger<K, V, T, R, O, CK, CV>;
+
+    fn begin_merge(&self, other: &Self, compaction_frontier: Option<AntichainRef<T>>) -> Self::Merger {
+        OrdValMerger::new(self, other, compaction_frontier)
+    }
+}
+
+impl<K, V, T, R, O, C, CK, CV> OrdValBatch<K, V, T, R, O, C, CK, CV>
+where
+    K: Data,
+    V: Data,
+    T: Data+Lattice,
     R: Semigroup,
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug,
     CK: BatchContainer<Item=K>+Deref<Target=[K]>+RetainFrom<K>,
@@ -264,17 +285,18 @@ where
     should_compact: bool,
 }
 
-impl<K, V, T, R, O, CK, CV> Merger<OrdValBatch<K, V, T, R, O, CK, CV>> for OrdValMerger<K, V, T, R, O, CK, CV>
+impl<K, V, T, R, O, C, CK, CV> Merger<OrdValBatch<K, V, T, R, O, C, CK, CV>> for OrdValMerger<K, V, T, R, O, CK, CV>
 where
-    K: Ord+Clone+'static,
-    V: Ord+Clone+'static,
+    K: Data,
+    V: Data,
     T: Lattice+timely::progress::Timestamp+Ord+Clone+::std::fmt::Debug+'static,
     R: Semigroup,
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug,
     CK: BatchContainer<Item=K>+Deref<Target=[K]>+RetainFrom<K>,
     CV: BatchContainer<Item=V>+Deref<Target=[V]>+RetainFrom<V>,
+    OrdValBatch<K, V, T, R, O, C, CK, CV>: Batch<Key=K, Val=V, Time=T, R=R>,
 {
-    fn new(batch1: &OrdValBatch<K, V, T, R, O, CK, CV>, batch2: &OrdValBatch<K, V, T, R, O, CK, CV>, compaction_frontier: Option<AntichainRef<T>>) -> Self {
+    fn new(batch1: &OrdValBatch<K, V, T, R, O, C, CK, CV>, batch2: &OrdValBatch<K, V, T, R, O, C, CK, CV>, compaction_frontier: Option<AntichainRef<T>>) -> Self {
 
         assert!(batch1.upper() == batch2.lower());
 
@@ -291,11 +313,11 @@ where
             lower2: 0,
             upper2: batch2.layer.keys(),
             result: <<OrderedLayer<K, OrderedLayer<V, OrderedLeaf<T, R>, O, CV>, O, CK> as Trie>::MergeBuilder as MergeBuilder>::with_capacity(&batch1.layer, &batch2.layer),
-            description: description,
+            description,
             should_compact: compaction_frontier.is_some(),
         }
     }
-    fn done(self) -> OrdValBatch<K, V, T, R, O, CK, CV> {
+    fn done(self) -> OrdValBatch<K, V, T, R, O, C, CK, CV> {
 
         assert!(self.lower1 == self.upper1);
         assert!(self.lower2 == self.upper2);
@@ -303,9 +325,10 @@ where
         OrdValBatch {
             layer: self.result.done(),
             desc: self.description,
+            phantom: std::marker::PhantomData,
         }
     }
-    fn work(&mut self, source1: &OrdValBatch<K,V,T,R,O,CK,CV>, source2: &OrdValBatch<K,V,T,R,O,CK,CV>, fuel: &mut isize) {
+    fn work(&mut self, source1: &OrdValBatch<K,V,T,R,O,C,CK,CV>, source2: &OrdValBatch<K,V,T,R,O,C,CK,CV>, fuel: &mut isize) {
 
         let starting_updates = self.result.vals.vals.vals.len();
         let mut effort = 0isize;
@@ -344,7 +367,7 @@ where
 
         // if we are supplied a frontier, we should compact.
         if self.should_compact {
-            OrdValBatch::<K, V, T, R, O, CK, CV>::advance_builder_from(&mut self.result, self.description.since().borrow(), initial_key_pos);
+            OrdValBatch::<K, V, T, R, O, C, CK, CV>::advance_builder_from(&mut self.result, self.description.since().borrow(), initial_key_pos);
         }
 
         *fuel -= effort;
@@ -357,24 +380,24 @@ where
 
 /// A cursor for navigating a single layer.
 #[derive(Debug)]
-pub struct OrdValCursor<K, V, T, R, O=usize, CK=Vec<K>, CV=Vec<V>>
+pub struct OrdValCursor<K, V, T, R, O=usize, C=Vec<((K, V), T, R)>, CK=Vec<K>, CV=Vec<V>>
 where
     V: Ord+Clone,
-    T: Lattice+Ord+Clone,
+    T: Data+Lattice,
     R: Semigroup,
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug,
     CK: BatchContainer<Item=K>+Deref<Target=[K]>+RetainFrom<K>,
     CV: BatchContainer<Item=V>+Deref<Target=[V]>+RetainFrom<V>,
 {
-    phantom: std::marker::PhantomData<(K, CK, CV)>,
+    phantom: std::marker::PhantomData<(K, C, CK, CV)>,
     cursor: OrderedCursor<OrderedLayer<V, OrderedLeaf<T, R>, O, CV>>,
 }
 
-impl<K, V, T, R, O, CK, CV> Cursor for OrdValCursor<K, V, T, R, O, CK, CV>
+impl<K, V, T, R, O, C, CK, CV> Cursor for OrdValCursor<K, V, T, R, O, C, CK, CV>
 where
-    K: Ord+Clone,
-    V: Ord+Clone,
-    T: Lattice+Ord+Clone,
+    K: Data,
+    V: Data,
+    T: Data+Lattice,
     R: Semigroup,
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug,
     CK: BatchContainer<Item=K>+Deref<Target=[K]>+RetainFrom<K>,
@@ -385,7 +408,7 @@ where
     type Time = T;
     type R = R;
 
-    type Storage = OrdValBatch<K, V, T, R, O, CK, CV>;
+    type Storage = OrdValBatch<K, V, T, R, O, C, CK, CV>;
 
     fn key<'a>(&self, storage: &'a Self::Storage) -> &'a K { &self.cursor.key(&storage.layer) }
     fn val<'a>(&self, storage: &'a Self::Storage) -> &'a V { &self.cursor.child.key(&storage.layer.vals) }
@@ -410,10 +433,10 @@ where
 /// A builder for creating layers from unsorted update tuples.
 pub struct OrdValBuilder<K, V, T, R, O=usize, CK=Vec<K>, CV=Vec<V>>
 where
-    K: Ord+Clone,
-    V: Ord+Clone,
-    T: Ord+Clone+Lattice,
-    R: Clone+Semigroup,
+    K: Data,
+    V: Data,
+    T: Data+Lattice,
+    R: Data+Semigroup,
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug,
     CK: BatchContainer<Item=K>+Deref<Target=[K]>+RetainFrom<K>,
     CV: BatchContainer<Item=V>+Deref<Target=[V]>+RetainFrom<V>,
@@ -421,15 +444,16 @@ where
     builder: OrderedBuilder<K, OrderedBuilder<V, OrderedLeafBuilder<T, R>, O, CV>, O, CK>,
 }
 
-impl<K, V, T, R, O, CK, CV> Builder<OrdValBatch<K, V, T, R, O, CK, CV>> for OrdValBuilder<K, V, T, R, O, CK, CV>
+impl<K, V, T, R, O, C, CK, CV> Builder<OrdValBatch<K, V, T, R, O, C, CK, CV>> for OrdValBuilder<K, V, T, R, O, CK, CV>
 where
-    K: Ord+Clone+'static,
-    V: Ord+Clone+'static,
-    T: Lattice+timely::progress::Timestamp+Ord+Clone+::std::fmt::Debug+'static,
+    K: Data,
+    V: Data,
+    T: Data+Lattice+timely::progress::Timestamp,
     R: Semigroup,
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug,
     CK: BatchContainer<Item=K>+Deref<Target=[K]>+RetainFrom<K>,
     CV: BatchContainer<Item=V>+Deref<Target=[V]>+RetainFrom<V>,
+    OrdValBatch<K, V, T, R, O, C, CK, CV>: Batch<Key=K, Val=V, Time=T, R=R>,
 {
 
     fn new() -> Self {
@@ -449,10 +473,11 @@ where
     }
 
     #[inline(never)]
-    fn done(self, lower: Antichain<T>, upper: Antichain<T>, since: Antichain<T>) -> OrdValBatch<K, V, T, R, O, CK, CV> {
+    fn done(self, lower: Antichain<T>, upper: Antichain<T>, since: Antichain<T>) -> OrdValBatch<K, V, T, R, O, C, CK, CV> {
         OrdValBatch {
             layer: self.builder.done(),
-            desc: Description::new(lower, upper, since)
+            desc: Description::new(lower, upper, since),
+            phantom: std::marker::PhantomData,
         }
     }
 }
@@ -462,11 +487,11 @@ where
 
 /// An immutable collection of update tuples, from a contiguous interval of logical times.
 #[derive(Debug, Abomonation)]
-pub struct OrdKeyBatch<K, T, R, O=usize, CK=Vec<K>>
+pub struct OrdKeyBatch<K, T, R, O, C, CK>
 where
-    K: Ord+Clone,
-    T: Clone+Lattice,
-    R: Clone,
+    K: Data,
+    T: Data+Lattice,
+    R: Data,
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug,
     CK: BatchContainer<Item=K>+Deref<Target=[K]>+RetainFrom<K>,
 {
@@ -474,22 +499,25 @@ where
     pub layer: OrderedLayer<K, OrderedLeaf<T, R>, O, CK>,
     /// Description of the update times this layer represents.
     pub desc: Description<T>,
+    /// Phantom data
+    pub phantom: std::marker::PhantomData<C>,
 }
 
-impl<K, T, R, O, CK> BatchReader for OrdKeyBatch<K, T, R, O, CK>
+impl<K, T, R, O, C, CK> BatchReader for OrdKeyBatch<K, T, R, O, C, CK>
 where
-    K: Ord+Clone+'static,
-    T: Lattice+Ord+Clone+'static,
+    K: Data,
+    T: Data+Lattice,
     R: Clone+Semigroup,
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug,
     CK: BatchContainer<Item=K>+Deref<Target=[K]>+RetainFrom<K>,
+    OrdKeyCursor<K, T, R, O, C, CK>: Cursor<Key=K, Val=(), Time=T, R=R, Storage=Self>,
 {
     type Key = K;
     type Val = ();
     type Time = T;
     type R = R;
 
-    type Cursor = OrdKeyCursor<K, T, R, O, CK>;
+    type Cursor = OrdKeyCursor<K, T, R, O, C, CK>;
     fn cursor(&self) -> Self::Cursor {
         OrdKeyCursor {
             valid: true,
@@ -501,9 +529,9 @@ where
     fn description(&self) -> &Description<T> { &self.desc }
 }
 
-impl<K, T, R, O, CK> Batch for OrdKeyBatch<K, T, R, O, CK>
+impl<K, T, R, O, CK> Batch for OrdKeyBatch<K, T, R, O, Vec<((K, ()), T, R)>, CK>
 where
-    K: Ord+Clone+'static,
+    K: Data,
     T: Lattice+timely::progress::Timestamp+Ord+Clone+'static,
     R: Semigroup,
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug,
@@ -511,17 +539,34 @@ where
 {
     type Batcher = MergeBatcher<Self>;
     type Builder = OrdKeyBuilder<K, T, R, O, CK>;
-    type Merger = OrdKeyMerger<K, T, R, O, CK>;
+    type Merger = OrdKeyMerger<K, T, R, O, Vec<((K, ()), T, R)>, CK>;
 
     fn begin_merge(&self, other: &Self, compaction_frontier: Option<AntichainRef<T>>) -> Self::Merger {
         OrdKeyMerger::new(self, other, compaction_frontier)
     }
 }
 
-impl<K, T, R, O, CK> OrdKeyBatch<K, T, R, O, CK>
+impl<K, T, R, O, CK> Batch for OrdKeyBatch<K, T, R, O, TimelyStack<((K, ()), T, R)>, CK>
 where
-    K: Ord+Clone+'static,
-    T: Lattice+Ord+Clone+'static,
+    K: Data+Columnation,
+    T: Lattice+timely::progress::Timestamp+Data+Columnation,
+    R: Semigroup+Columnation,
+    O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug,
+    CK: BatchContainer<Item=K>+Deref<Target=[K]>+RetainFrom<K>,
+{
+    type Batcher = TimelyStackMergeBatcher<Self>;
+    type Builder = OrdKeyBuilder<K, T, R, O, CK>;
+    type Merger = OrdKeyMerger<K, T, R, O, TimelyStack<((K, ()), T, R)>, CK>;
+
+    fn begin_merge(&self, other: &Self, compaction_frontier: Option<AntichainRef<T>>) -> Self::Merger {
+        OrdKeyMerger::new(self, other, compaction_frontier)
+    }
+}
+
+impl<K, T, R, O, C, CK> OrdKeyBatch<K, T, R, O, C, CK>
+where
+    K: Data,
+    T: Data+Lattice,
     R: Semigroup,
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug,
     CK: BatchContainer<Item=K>+Deref<Target=[K]>+RetainFrom<K>,
@@ -589,7 +634,7 @@ where
 }
 
 /// State for an in-progress merge.
-pub struct OrdKeyMerger<K, T, R, O=usize,CK=Vec<K>>
+pub struct OrdKeyMerger<K, T, R, O, C, CK>
 where
     K: Ord+Clone+'static,
     T: Lattice+Ord+Clone+'static,
@@ -607,17 +652,19 @@ where
     result: <OrderedLayer<K, OrderedLeaf<T, R>, O, CK> as Trie>::MergeBuilder,
     description: Description<T>,
     should_compact: bool,
+    phantom: std::marker::PhantomData<C>,
 }
 
-impl<K, T, R, O, CK> Merger<OrdKeyBatch<K, T, R, O, CK>> for OrdKeyMerger<K, T, R, O, CK>
+impl<K, T, R, O, C, CK> Merger<OrdKeyBatch<K, T, R, O, C, CK>> for OrdKeyMerger<K, T, R, O, C, CK>
 where
-    K: Ord+Clone+'static,
+    K: Data,
     T: Lattice+timely::progress::Timestamp+Ord+Clone+'static,
     R: Semigroup,
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug,
     CK: BatchContainer<Item=K>+Deref<Target=[K]>+RetainFrom<K>,
+    OrdKeyBatch<K, T, R, O, C, CK>: Batch<Key=K, Val=(), Time=T, R=R>,
 {
-    fn new(batch1: &OrdKeyBatch<K, T, R, O, CK>, batch2: &OrdKeyBatch<K, T, R, O, CK>, compaction_frontier: Option<AntichainRef<T>>) -> Self {
+    fn new(batch1: &OrdKeyBatch<K, T, R, O, C, CK>, batch2: &OrdKeyBatch<K, T, R, O, C, CK>, compaction_frontier: Option<AntichainRef<T>>) -> Self {
 
         assert!(batch1.upper() == batch2.lower());
 
@@ -636,9 +683,10 @@ where
             result: <<OrderedLayer<K, OrderedLeaf<T, R>, O, CK> as Trie>::MergeBuilder as MergeBuilder>::with_capacity(&batch1.layer, &batch2.layer),
             description: description,
             should_compact: compaction_frontier.is_some(),
+            phantom: std::marker::PhantomData,
         }
     }
-    fn done(self) -> OrdKeyBatch<K, T, R, O, CK> {
+    fn done(self) -> OrdKeyBatch<K, T, R, O, C, CK> {
 
         assert!(self.lower1 == self.upper1);
         assert!(self.lower2 == self.upper2);
@@ -646,9 +694,10 @@ where
         OrdKeyBatch {
             layer: self.result.done(),
             desc: self.description,
+            phantom: std::marker::PhantomData,
         }
     }
-    fn work(&mut self, source1: &OrdKeyBatch<K,T,R,O,CK>, source2: &OrdKeyBatch<K,T,R,O,CK>, fuel: &mut isize) {
+    fn work(&mut self, source1: &OrdKeyBatch<K,T,R,O,C,CK>, source2: &OrdKeyBatch<K,T,R,O,C,CK>, fuel: &mut isize) {
 
         let starting_updates = self.result.vals.vals.len();
         let mut effort = 0isize;
@@ -693,7 +742,7 @@ where
 
         // if we are supplied a frontier, we should compact.
         if self.should_compact {
-            OrdKeyBatch::<K,T,R,O,CK>::advance_builder_from(&mut self.result, self.description.since().borrow(), initial_key_pos);
+            OrdKeyBatch::<K,T,R,O,C,CK>::advance_builder_from(&mut self.result, self.description.since().borrow(), initial_key_pos);
         }
 
         *fuel -= effort;
@@ -707,16 +756,16 @@ where
 
 /// A cursor for navigating a single layer.
 #[derive(Debug)]
-pub struct OrdKeyCursor<K, T: Lattice+Ord+Clone, R: Semigroup, O=usize, CK=Vec<K>> {
+pub struct OrdKeyCursor<K, T: Data+Lattice, R: Semigroup, O, C, CK> {
     valid: bool,
     cursor: OrderedCursor<OrderedLeaf<T, R>>,
-    phantom: PhantomData<(K, O, CK)>,
+    phantom: PhantomData<(K, O, C, CK)>,
 }
 
-impl<K, T, R, O, CK> Cursor for OrdKeyCursor<K, T, R, O, CK>
+impl<K, T, R, O, C, CK> Cursor for OrdKeyCursor<K, T, R, O, C, CK>
 where
-    K: Ord+Clone,
-    T: Lattice+Ord+Clone,
+    K: Data,
+    T: Data+Lattice,
     R: Semigroup,
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug,
     CK: BatchContainer<Item=K>+Deref<Target=[K]>+RetainFrom<K>,
@@ -726,7 +775,7 @@ where
     type Time = T;
     type R = R;
 
-    type Storage = OrdKeyBatch<K, T, R, O, CK>;
+    type Storage = OrdKeyBatch<K, T, R, O, C, CK>;
 
     fn key<'a>(&self, storage: &'a Self::Storage) -> &'a K { &self.cursor.key(&storage.layer) }
     fn val<'a>(&self, _storage: &'a Self::Storage) -> &'a () { &() }
@@ -749,10 +798,10 @@ where
 
 
 /// A builder for creating layers from unsorted update tuples.
-pub struct OrdKeyBuilder<K, T, R, O=usize,CK=Vec<K>>
+pub struct OrdKeyBuilder<K, T, R, O, CK>
 where
-    K: Ord+Clone,
-    T: Ord+Clone+Lattice,
+    K: Data,
+    T: Data+Lattice,
     R: Clone+Semigroup,
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug,
     CK: BatchContainer<Item=K>+Deref<Target=[K]>+RetainFrom<K>,
@@ -760,13 +809,14 @@ where
     builder: OrderedBuilder<K, OrderedLeafBuilder<T, R>, O, CK>,
 }
 
-impl<K, T, R, O, CK> Builder<OrdKeyBatch<K, T, R, O, CK>> for OrdKeyBuilder<K, T, R, O, CK>
+impl<K, T, R, O, C, CK> Builder<OrdKeyBatch<K, T, R, O, C, CK>> for OrdKeyBuilder<K, T, R, O, CK>
 where
-    K: Ord+Clone+'static,
-    T: Lattice+timely::progress::Timestamp+Ord+Clone+'static,
+    K: Data,
+    T: Data+Lattice+timely::progress::Timestamp,
     R: Semigroup,
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug,
     CK: BatchContainer<Item=K>+Deref<Target=[K]>+RetainFrom<K>,
+    OrdKeyBatch<K, T, R, O, C, CK>: Batch<Key=K, Val=(), Time=T, R=R>,
 {
 
     fn new() -> Self {
@@ -787,10 +837,11 @@ where
     }
 
     #[inline(never)]
-    fn done(self, lower: Antichain<T>, upper: Antichain<T>, since: Antichain<T>) -> OrdKeyBatch<K, T, R, O, CK> {
+    fn done(self, lower: Antichain<T>, upper: Antichain<T>, since: Antichain<T>) -> OrdKeyBatch<K, T, R, O, C, CK> {
         OrdKeyBatch {
             layer: self.builder.done(),
-            desc: Description::new(lower, upper, since)
+            desc: Description::new(lower, upper, since),
+            phantom: std::marker::PhantomData,
         }
     }
 }

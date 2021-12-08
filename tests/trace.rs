@@ -1,21 +1,16 @@
 extern crate timely;
 extern crate differential_dataflow;
 
-use std::rc::Rc;
-
 use timely::dataflow::operators::generic::OperatorInfo;
 use timely::progress::{Antichain, frontier::AntichainRef};
 
-use differential_dataflow::trace::implementations::ord::OrdValBatch;
+use differential_dataflow::trace::implementations::ord::OrdValSpine;
 use differential_dataflow::trace::{Trace, TraceReader, Batch, Batcher};
 use differential_dataflow::trace::cursor::Cursor;
-use differential_dataflow::trace::implementations::spine_fueled::Spine;
-
-pub type OrdValSpine<K, V, T, R> = Spine<Rc<OrdValBatch<K, V, T, R>>>;
 
 type IntegerTrace = OrdValSpine<u64, u64, usize, i64>;
 
-fn get_trace() -> Spine<Rc<OrdValBatch<u64, u64, usize, i64>>> {
+fn get_trace() -> IntegerTrace {
     let op_info = OperatorInfo::new(0, 0, &[]);
     let mut trace = IntegerTrace::new(op_info, None, None);
     {
