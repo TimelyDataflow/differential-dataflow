@@ -37,11 +37,11 @@ pub trait PrefixExtender<G: Scope, R: Monoid+Multiply<Output = R>> {
     /// The type to be produced as extension.
     type Extension;
     /// Annotates prefixes with the number of extensions the relation would propose.
-    fn count(&mut self, &Collection<G, (Self::Prefix, usize, usize), R>, usize) -> Collection<G, (Self::Prefix, usize, usize), R>;
+    fn count(&mut self, prefixes: &Collection<G, (Self::Prefix, usize, usize), R>, index: usize) -> Collection<G, (Self::Prefix, usize, usize), R>;
     /// Extends each prefix with corresponding extensions.
-    fn propose(&mut self, &Collection<G, Self::Prefix, R>) -> Collection<G, (Self::Prefix, Self::Extension), R>;
+    fn propose(&mut self, prefixes: &Collection<G, Self::Prefix, R>) -> Collection<G, (Self::Prefix, Self::Extension), R>;
     /// Restricts proposed extensions by those the extender would have proposed.
-    fn validate(&mut self, &Collection<G, (Self::Prefix, Self::Extension), R>) -> Collection<G, (Self::Prefix, Self::Extension), R>;
+    fn validate(&mut self, extensions: &Collection<G, (Self::Prefix, Self::Extension), R>) -> Collection<G, (Self::Prefix, Self::Extension), R>;
 }
 
 pub trait ProposeExtensionMethod<G: Scope, P: ExchangeData+Ord, R: Monoid+Multiply<Output = R>> {
