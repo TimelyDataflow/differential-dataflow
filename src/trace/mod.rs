@@ -94,7 +94,7 @@ pub trait TraceReader {
     fn set_logical_compaction(&mut self, frontier: AntichainRef<Self::Time>);
 
     /// Deprecated form of `set_logical_compaction`.
-    #[deprecated(since = "0.11", note = "please use `set_logical_compaction`")]
+    #[deprecated(since = "0.11.0", note = "please use `set_logical_compaction`")]
     fn advance_by(&mut self, frontier: AntichainRef<Self::Time>) {
         self.set_logical_compaction(frontier);
     }
@@ -108,7 +108,7 @@ pub trait TraceReader {
     fn get_logical_compaction(&mut self) -> AntichainRef<Self::Time>;
 
     /// Deprecated form of `get_logical_compaction`.
-    #[deprecated(since = "0.11", note = "please use `get_logical_compaction`")]
+    #[deprecated(since = "0.11.0", note = "please use `get_logical_compaction`")]
     fn advance_frontier(&mut self) -> AntichainRef<Self::Time> {
         self.get_logical_compaction()
     }
@@ -130,7 +130,7 @@ pub trait TraceReader {
     fn set_physical_compaction(&mut self, frontier: AntichainRef<Self::Time>);
 
     /// Deprecated form of `set_physical_compaction`.
-    #[deprecated(since = "0.11", note = "please use `set_physical_compaction`")]
+    #[deprecated(since = "0.11.0", note = "please use `set_physical_compaction`")]
     fn distinguish_since(&mut self, frontier: AntichainRef<Self::Time>) {
         self.set_physical_compaction(frontier);
     }
@@ -144,7 +144,7 @@ pub trait TraceReader {
     fn get_physical_compaction(&mut self) -> AntichainRef<Self::Time>;
 
     /// Deprecated form of `get_physical_compaction`.
-    #[deprecated(since = "0.11", note = "please use `get_physical_compaction`")]
+    #[deprecated(since = "0.11.0", note = "please use `get_physical_compaction`")]
     fn distinguish_frontier(&mut self) -> AntichainRef<Self::Time> {
         self.get_physical_compaction()
     }

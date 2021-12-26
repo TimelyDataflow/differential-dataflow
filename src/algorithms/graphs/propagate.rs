@@ -53,8 +53,7 @@ use operators::arrange::arrangement::Arranged;
 /// Propagates labels forward, retaining the minimum label.
 ///
 /// This variant takes a pre-arranged edge collection, to facilitate re-use, and allows
-/// a method `logic` to specify the rounds in which we introduce various labels. The output
-/// of `logic should be a number in the interval [0,64],
+/// a method `logic` to specify the rounds in which we introduce various labels.
 pub fn propagate_core<G, N, L, Tr, F, R>(edges: &Arranged<G,Tr>, nodes: &Collection<G,(N,L),R>, logic: F) -> Collection<G,(N,L),R>
 where
     G: Scope,
@@ -100,7 +99,7 @@ where
         let labels =
         proposals
             .concat(&nodes)
-            .reduce_abelian::<_,DefaultValTrace<_,_,_,_>>("Propagate", |_, s, t| t.push((s[0].0.clone(), R::from(1 as i8))));
+            .reduce_abelian::<_,DefaultValTrace<_,_,_,_>>("Propagate", |_, s, t| t.push((s[0].0.clone(), R::from(1))));
 
         let propagate: Collection<_, (N, L), R> =
         labels
