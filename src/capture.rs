@@ -26,7 +26,7 @@ pub enum Message<D, T, R> {
 
 /// An irrevocable statement about the number of updates at times within an interval.
 ///
-/// This statement covers all times beyond `lower` and not beyond `upper`.
+/// This statement covers all times in advance of `lower` and not in advance of `upper`.
 /// Each element of `counts` is an irrevocable statement about the exact number of
 /// distinct updates that occur at that time.
 /// Times not present in `counts` have a count of zero.
@@ -36,7 +36,7 @@ pub struct Progress<T> {
     pub lower: Vec<T>,
     /// The upper bound of times contained in this statement.
     pub upper: Vec<T>,
-    /// All non-zero counts for times beyond `lower` and not beyond `upper`.
+    /// All non-zero counts for times in advance of `lower` and not in advance of `upper`.
     pub counts: Vec<(T, usize)>,
 }
 
@@ -117,25 +117,25 @@ pub mod iterator {
     {
         /// Source of potentially duplicated, out of order cdc_v2 messages.
         iterator: I,
-        /// Updates that have been received, but are still beyond `reported_frontier`.
+        /// Updates that have been received, but are still in advance of `reported_frontier`.
         ///
         /// These updates are retained both so that they can eventually be transmitted,
         /// but also so that they can deduplicate updates that may still be received.
         updates: std::collections::HashSet<(D, T, R)>,
         /// Frontier through which the iterator has reported updates.
         ///
-        /// All updates not beyond this frontier have been reported.
-        /// Any information related to times not beyond this frontier can be discarded.
+        /// All updates not in advance of this frontier have been reported.
+        /// Any information related to times not in advance of this frontier can be discarded.
         ///
         /// This frontier tracks the meet of `progress_frontier` and `messages_frontier`,
         /// our two bounds on potential uncertainty in progress and update messages.
         reported_frontier: Antichain<T>,
         /// Frontier of accepted progress statements.
         ///
-        /// All progress message counts for times not beyond this frontier have been
+        /// All progress message counts for times not in advance of this frontier have been
         /// incorporated in to `messages_frontier`. This frontier also guides which
         /// received progress statements can be incorporated: those whose for which
-        /// this frontier is beyond their lower bound.
+        /// this frontier is in advance of their lower bound.
         progress_frontier: Antichain<T>,
         /// Counts of outstanding messages at times.
         ///
@@ -144,7 +144,7 @@ pub mod iterator {
         messages_frontier: MutableAntichain<T>,
         /// Progress statements that are not yet actionable due to out-of-Iterness.
         ///
-        /// A progress statement becomes actionable once the progress frontier is beyond
+        /// A progress statement becomes actionable once the progress frontier is in advance of
         /// its lower frontier. This ensures that the [0, lower) interval is already
         /// incorporated, and that we will not leave a gap by incorporating the counts
         /// and reflecting the progress statement's upper frontier.
@@ -490,7 +490,7 @@ pub mod source {
                 }
 
                 // Extract and act on actionable progress messages.
-                // A progress message is actionable if `self.progress_frontier` is beyond the message's lower bound.
+                // A progress message is actionable if `self.progress_frontier` is in advance of the message's lower bound.
                 while let Some(position) = progress_queue.iter().position(|p| {
                     <_ as PartialOrder>::less_equal(
                         &AntichainRef::new(&p.lower),

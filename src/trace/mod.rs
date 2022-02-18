@@ -71,7 +71,7 @@ pub trait TraceReader {
     /// equal to an element of `upper`.
     ///
     /// This method is expected to work if called with an `upper` that (i) was an observed bound in batches from
-    /// the trace, and (ii) the trace has not been advanced beyond `upper`. Practically, the implementation should
+    /// the trace, and (ii) the trace has not been advanced in advance of `upper`. Practically, the implementation should
     /// be expected to look for a "clean cut" using `upper`, and if it finds such a cut can return a cursor. This
     /// should allow `upper` such as `&[]` as used by `self.cursor()`, though it is difficult to imagine other uses.
     fn cursor_through(&mut self, upper: AntichainRef<Self::Time>) -> Option<(Self::Cursor, <Self::Cursor as Cursor<Self::Key, Self::Val, Self::Time, Self::R>>::Storage)>;
@@ -79,17 +79,17 @@ pub trait TraceReader {
     /// Advances the frontier that constrains logical compaction.
     ///
     /// Logical compaction is the ability of the trace to change the times of the updates it contains.
-    /// Update times may be changed as long as their comparison to all query times beyond the logical compaction
-    /// frontier remains unchanged. Practically, this means that groups of timestamps not beyond the frontier can
+    /// Update times may be changed as long as their comparison to all query times in advance of the logical compaction
+    /// frontier remains unchanged. Practically, this means that groups of timestamps not in advance of the frontier can
     /// be coalesced into fewer representative times.
     ///
     /// Logical compaction is important, as it allows the trace to forget historical distinctions between update
     /// times, and maintain a compact memory footprint over an unbounded update history.
     ///
     /// By advancing the logical compaction frontier, the caller unblocks merging of otherwise equivalent udates,
-    /// but loses the ability to observe historical detail that is not beyond `frontier`.
+    /// but loses the ability to observe historical detail that is not in advance of `frontier`.
     ///
-    /// It is an error to call this method with a frontier not equal to or beyond the most recent arguments to
+    /// It is an error to call this method with a frontier not equal to or in advance of the most recent arguments to
     /// this method, or the initial value of `get_logical_compaction()` if this method has not yet been called.
     fn set_logical_compaction(&mut self, frontier: AntichainRef<Self::Time>);
 
@@ -101,10 +101,10 @@ pub trait TraceReader {
 
     /// Reports the logical compaction frontier.
     ///
-    /// All update times beyond this frontier will be presented with their original times, and all update times
-    /// not beyond this frontier will present as a time that compares identically with all query times beyond
-    /// this frontier. Practically, update times not beyond this frontier should not be taken to be accurate as
-    /// presented, and should be used carefully, only in accumulation to times that are beyond the frontier.
+    /// All update times in advance of this frontier will be presented with their original times, and all update times
+    /// not in advance of this frontier will present as a time that compares identically with all query times in advance of
+    /// this frontier. Practically, update times not in advance of this frontier should not be taken to be accurate as
+    /// presented, and should be used carefully, only in accumulation to times that are in advance of the frontier.
     fn get_logical_compaction(&mut self) -> AntichainRef<Self::Time>;
 
     /// Deprecated form of `get_logical_compaction`.
@@ -123,9 +123,9 @@ pub trait TraceReader {
     /// what allows the trace to provide efficient random access by keys and values.
     ///
     /// By advancing the physical compaction frontier, the caller unblocks the merging of batches of updates,
-    /// but loses the ability to create a cursor through any frontier not beyond `frontier`.
+    /// but loses the ability to create a cursor through any frontier not in advance of `frontier`.
     ///
-    /// It is an error to call this method with a frontier not equal to or beyond the most recent arguments to
+    /// It is an error to call this method with a frontier not equal to or in advance of the most recent arguments to
     /// this method, or the initial value of `get_physical_compaction()` if this method has not yet been called.
     fn set_physical_compaction(&mut self, frontier: AntichainRef<Self::Time>);
 
@@ -137,8 +137,8 @@ pub trait TraceReader {
 
     /// Reports the physical compaction frontier.
     ///
-    /// All batches containing updates beyond this frontier will not be merged with ohter batches. This allows
-    /// the caller to create a cursor through any frontier beyond the physical compaction frontier, with the
+    /// All batches containing updates in advance of this frontier will not be merged with ohter batches. This allows
+    /// the caller to create a cursor through any frontier in advance of the physical compaction frontier, with the
     /// `cursor_through()` method. This functionality is primarily of interest to the `join` operator, and any
     /// other operators who need to take notice of the physical structure of update batches.
     fn get_physical_compaction(&mut self) -> AntichainRef<Self::Time>;

@@ -96,7 +96,7 @@ fn main() {
                             }
                         },
                         ("query", 2) => {
-                            // Check that the query times are not beyond the current capabilities.
+                            // Check that the query times are not in advance of the current capabilities.
                             let query_time = Pair::new(arguments[0], arguments[1]);
                             if capability.time().less_equal(&query_time) {
                                 println!("Query time ({:?}) is still open (input from {:?}).", query_time, capability.time());
