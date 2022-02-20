@@ -48,14 +48,23 @@ pub trait CountTotal<G: Scope, K: ExchangeData, R: Semigroup> where G::Timestamp
     ///     });
     /// }
     /// ```
-    fn count_total(&self) -> Collection<G, (K, R), isize>;
+    fn count_total(&self) -> Collection<G, (K, R), isize> {
+        self.count_total_core()
+    }
+
+    /// Count for general integer differences.
+    ///
+    /// This method allows `count_total` to produce collections whose difference
+    /// type is something other than an `isize` integer, for example perhaps an
+    /// `i32`.
+    fn count_total_core<R2: Semigroup + From<i8>>(&self) -> Collection<G, (K, R), R2>;
 }
 
 impl<G: Scope, K: ExchangeData+Hashable, R: ExchangeData+Semigroup> CountTotal<G, K, R> for Collection<G, K, R>
 where G::Timestamp: TotalOrder+Lattice+Ord {
-    fn count_total(&self) -> Collection<G, (K, R), isize> {
+    fn count_total_core<R2: Semigroup + From<i8>>(&self) -> Collection<G, (K, R), R2> {
         self.arrange_by_self_named("Arrange: CountTotal")
-            .count_total()
+            .count_total_core()
     }
 }
 
@@ -68,7 +77,7 @@ where
     T1::Batch: BatchReader<T1::Key, (), G::Timestamp, T1::R>,
     T1::Cursor: Cursor<T1::Key, (), G::Timestamp, T1::R>,
 {
-    fn count_total(&self) -> Collection<G, (T1::Key, T1::R), isize> {
+    fn count_total_core<R2: Semigroup + From<i8>>(&self) -> Collection<G, (T1::Key, T1::R), R2> {
 
         let mut trace = self.trace.clone();
         let mut buffer = Vec::new();
@@ -105,14 +114,14 @@ where
 
                                 if let Some(count) = count.as_ref() {
                                     if !count.is_zero() {
-                                        session.give(((key.clone(), count.clone()), time.clone(), -1));
+                                        session.give(((key.clone(), count.clone()), time.clone(), R2::from(-1i8)));
                                     }
                                 }
                                 count.as_mut().map(|c| c.plus_equals(diff));
                                 if count.is_none() { count = Some(diff.clone()); }
                                 if let Some(count) = count.as_ref() {
                                     if !count.is_zero() {
-                                        session.give(((key.clone(), count.clone()), time.clone(), 1));
+                                        session.give(((key.clone(), count.clone()), time.clone(), R2::from(1i8)));
                                     }
                                 }
                             });
