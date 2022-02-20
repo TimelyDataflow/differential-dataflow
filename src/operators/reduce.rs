@@ -210,16 +210,25 @@ pub trait Count<G: Scope, K: Data, R: Semigroup> where G::Timestamp: Lattice+Ord
     ///     });
     /// }
     /// ```
-    fn count(&self) -> Collection<G, (K, R), isize>;
+    fn count(&self) -> Collection<G, (K, R), isize> {
+        self.count_core()
+    }
+
+    /// Count for general integer differences.
+    ///
+    /// This method allows `count` to produce collections whose difference
+    /// type is something other than an `isize` integer, for example perhaps an
+    /// `i32`.
+    fn count_core<R2: Abelian + From<i8>>(&self) -> Collection<G, (K, R), R2>;
 }
 
 impl<G: Scope, K: ExchangeData+Hashable, R: ExchangeData+Semigroup> Count<G, K, R> for Collection<G, K, R>
 where
     G::Timestamp: Lattice+Ord,
 {
-    fn count(&self) -> Collection<G, (K, R), isize> {
+    fn count_core<R2: Abelian + From<i8>>(&self) -> Collection<G, (K, R), R2> {
         self.arrange_by_self_named("Arrange: Count")
-            .count()
+            .count_core()
     }
 }
 
@@ -230,8 +239,8 @@ where
     T1::Batch: BatchReader<K, (), G::Timestamp, R>,
     T1::Cursor: Cursor<K, (), G::Timestamp, R>,
 {
-    fn count(&self) -> Collection<G, (K, R), isize> {
-        self.reduce_abelian::<_,DefaultValTrace<_,_,_,_>>("Count", |_k,s,t| t.push((s[0].1.clone(), 1)))
+    fn count_core<R2: Abelian + From<i8>>(&self) -> Collection<G, (K, R), R2> {
+        self.reduce_abelian::<_,DefaultValTrace<_,_,_,_>>("Count", |_k,s,t| t.push((s[0].1.clone(), R2::from(1i8))))
             .as_collection(|k,c| (k.clone(), c.clone()))
     }
 }
