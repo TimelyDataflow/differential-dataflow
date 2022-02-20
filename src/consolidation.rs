@@ -66,7 +66,7 @@ pub fn consolidate_slice<T: Ord, R: Semigroup>(slice: &mut [(T, R)]) -> usize {
                     offset += 1;
                 }
                 let ptr1 = slice.as_mut_ptr().offset(offset as isize);
-                std::mem::swap(&mut *ptr1, &mut *ptr2);
+                std::ptr::swap(ptr1, ptr2);
             }
         }
     }
@@ -129,7 +129,7 @@ pub fn consolidate_updates_slice<D: Ord, T: Ord, R: Semigroup>(slice: &mut [(D, 
                     offset += 1;
                 }
                 let ptr1 = slice.as_mut_ptr().offset(offset as isize);
-                std::mem::swap(&mut *ptr1, &mut *ptr2);
+                std::ptr::swap(ptr1, ptr2);
             }
 
         }
@@ -164,6 +164,10 @@ mod tests {
                 vec![("a", 0), ("b", 0)],
                 vec![],
             ),
+            (
+                vec![("a", 1), ("b", 1)],
+                vec![("a", 1), ("b", 1)],
+            ),
         ];
 
         for (mut input, output) in test_cases {
@@ -191,6 +195,10 @@ mod tests {
             (
                 vec![("a", 1, 0), ("b", 1, 0)],
                 vec![],
+            ),
+            (
+                vec![("a", 1, 1), ("b", 2, 1)],
+                vec![("a", 1, 1), ("b", 2, 1)],
             ),
         ];
 
