@@ -171,6 +171,57 @@ impl<T1: Lattice, T2: Lattice> Lattice for Product<T1, T2> {
     }
 }
 
+/// A type that has a unique maximum element.
+pub trait Maximum {
+    /// The unique maximal element of the set.
+    fn maximum() -> Self;
+}
+
+/// Implements `Maximum` for elements with a `MAX` associated constant.
+macro_rules! implement_maximum {
+    ($($index_type:ty,)*) => (
+        $(
+            impl Maximum for $index_type {
+                fn maximum() -> Self { Self::MAX }
+            }
+        )*
+    )
+}
+
+implement_maximum!(usize, u128, u64, u32, u16, u8, isize, i128, i64, i32, i16, i8, Duration,);
+impl Maximum for () { fn maximum() -> () { () }}
+
+use timely::progress::Timestamp;
+
+// Tuples have the annoyance that they are only a lattice for `T2` with maximal elements,
+// as the `meet` operator on `(x, _)` and `(y, _)` would be `(x meet y, maximum())`.
+impl<T1: Lattice+Clone, T2: Lattice+Clone+Maximum+Timestamp> Lattice for (T1, T2) {
+    #[inline]
+    fn join(&self, other: &(T1, T2)) -> (T1, T2) {
+        if self.0.eq(&other.0) {
+            (self.0.clone(), self.1.join(&other.1))
+        } else if self.0.less_than(&other.0) {
+            other.clone()
+        } else if other.0.less_than(&self.0) {
+            self.clone()
+        } else {
+            (self.0.join(&other.0), T2::minimum())
+        }
+    }
+    #[inline]
+    fn meet(&self, other: &(T1, T2)) -> (T1, T2) {
+        if self.0.eq(&other.0) {
+            (self.0.clone(), self.1.meet(&other.1))
+        } else if self.0.less_than(&other.0) {
+            self.clone()
+        } else if other.0.less_than(&self.0) {
+            other.clone()
+        } else {
+            (self.0.meet(&other.0), T2::maximum())
+        }
+    }
+}
+
 macro_rules! implement_lattice {
     ($index_type:ty, $minimum:expr) => (
         impl Lattice for $index_type {
