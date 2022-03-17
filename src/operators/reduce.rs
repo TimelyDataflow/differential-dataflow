@@ -90,7 +90,6 @@ impl<G: Scope, K: Data, V: Data, T1, R: Semigroup> Reduce<G, K, V, R> for Arrang
 where
     G::Timestamp: Lattice+Ord,
     T1: TraceReader<Key=K, Val=V, Time=G::Timestamp, R=R>+Clone+'static,
-    T1::Batch: BatchReader<K, V, G::Timestamp, R>,
     T1::Cursor: Cursor<K, V, G::Timestamp, R>,
 {
     fn reduce_named<L, V2: Data, R2: Abelian>(&self, name: &str, logic: L) -> Collection<G, (K, V2), R2>
@@ -179,7 +178,6 @@ impl<G: Scope, K: Data, T1, R1: Semigroup> Threshold<G, K, R1> for Arranged<G, T
 where
     G::Timestamp: Lattice+Ord,
     T1: TraceReader<Key=K, Val=(), Time=G::Timestamp, R=R1>+Clone+'static,
-    T1::Batch: BatchReader<K, (), G::Timestamp, R1>,
     T1::Cursor: Cursor<K, (), G::Timestamp, R1>,
 {
     fn threshold_named<R2: Abelian, F: FnMut(&K,&R1)->R2+'static>(&self, name: &str, mut thresh: F) -> Collection<G, K, R2> {
@@ -236,7 +234,6 @@ impl<G: Scope, K: Data, T1, R: Semigroup> Count<G, K, R> for Arranged<G, T1>
 where
     G::Timestamp: Lattice+Ord,
     T1: TraceReader<Key=K, Val=(), Time=G::Timestamp, R=R>+Clone+'static,
-    T1::Batch: BatchReader<K, (), G::Timestamp, R>,
     T1::Cursor: Cursor<K, (), G::Timestamp, R>,
 {
     fn count_core<R2: Abelian + From<i8>>(&self) -> Collection<G, (K, R), R2> {
@@ -282,7 +279,7 @@ pub trait ReduceCore<G: Scope, K: Data, V: Data, R: Semigroup> where G::Timestam
             T2: Trace+TraceReader<Key=K, Time=G::Timestamp>+'static,
             T2::Val: Data,
             T2::R: Abelian,
-            T2::Batch: Batch<K, T2::Val, G::Timestamp, T2::R>,
+            T2::Batch: Batch,
             T2::Cursor: Cursor<K, T2::Val, G::Timestamp, T2::R>,
             L: FnMut(&K, &[(&V, R)], &mut Vec<(T2::Val, T2::R)>)+'static,
         {
@@ -305,7 +302,7 @@ pub trait ReduceCore<G: Scope, K: Data, V: Data, R: Semigroup> where G::Timestam
             T2: Trace+TraceReader<Key=K, Time=G::Timestamp>+'static,
             T2::Val: Data,
             T2::R: Semigroup,
-            T2::Batch: Batch<K, T2::Val, G::Timestamp, T2::R>,
+            T2::Batch: Batch,
             T2::Cursor: Cursor<K, T2::Val, G::Timestamp, T2::R>,
             L: FnMut(&K, &[(&V, R)], &mut Vec<(T2::Val,T2::R)>, &mut Vec<(T2::Val,T2::R)>)+'static
             ;
@@ -324,7 +321,7 @@ where
             T2::Val: Data,
             T2::R: Semigroup,
             T2: Trace+TraceReader<Key=K, Time=G::Timestamp>+'static,
-            T2::Batch: Batch<K, T2::Val, G::Timestamp, T2::R>,
+            T2::Batch: Batch,
             T2::Cursor: Cursor<K, T2::Val, G::Timestamp, T2::R>,
             L: FnMut(&K, &[(&V, R)], &mut Vec<(T2::Val,T2::R)>, &mut Vec<(T2::Val, T2::R)>)+'static
     {
@@ -337,7 +334,6 @@ impl<G: Scope, K: Data, V: Data, T1, R: Semigroup> ReduceCore<G, K, V, R> for Ar
 where
     G::Timestamp: Lattice+Ord,
     T1: TraceReader<Key=K, Val=V, Time=G::Timestamp, R=R>+Clone+'static,
-    T1::Batch: BatchReader<K, V, G::Timestamp, R>,
     T1::Cursor: Cursor<K, V, G::Timestamp, R>,
 {
     fn reduce_core<L, T2>(&self, name: &str, mut logic: L) -> Arranged<G, TraceAgent<T2>>
@@ -345,7 +341,7 @@ where
             T2: Trace+TraceReader<Key=K, Time=G::Timestamp>+'static,
             T2::Val: Data,
             T2::R: Semigroup,
-            T2::Batch: Batch<K, T2::Val, G::Timestamp, T2::R>,
+            T2::Batch: Batch,
             T2::Cursor: Cursor<K, T2::Val, G::Timestamp, T2::R>,
             L: FnMut(&K, &[(&V, R)], &mut Vec<(T2::Val,T2::R)>, &mut Vec<(T2::Val, T2::R)>)+'static {
 
@@ -488,7 +484,7 @@ where
                             let mut builders = Vec::new();
                             for i in 0 .. capabilities.len() {
                                 buffers.push((capabilities[i].time().clone(), Vec::new()));
-                                builders.push(<T2::Batch as Batch<K,T2::Val,G::Timestamp,T2::R>>::Builder::new());
+                                builders.push(<T2::Batch as Batch>::Builder::new());
                             }
 
                             // cursors for navigating input and output traces.

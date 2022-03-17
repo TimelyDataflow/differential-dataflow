@@ -190,7 +190,6 @@ where
     Tr::Key: Data+Hashable,
     Tr::Val: Data,
     Tr::R: Semigroup,
-    Tr::Batch: BatchReader<Tr::Key,Tr::Val,G::Timestamp,Tr::R>+'static,
     Tr::Cursor: Cursor<Tr::Key,Tr::Val,G::Timestamp,Tr::R>+'static,
 {
     fn join_map<V2: ExchangeData, R2: ExchangeData+Semigroup, D: Data, L>(&self, other: &Collection<G, (Tr::Key, V2), R2>, mut logic: L) -> Collection<G, D, <Tr::R as Multiply<R2>>::Output>
@@ -258,7 +257,6 @@ pub trait JoinCore<G: Scope, K: 'static, V: 'static, R: Semigroup> where G::Time
     fn join_core<Tr2,I,L> (&self, stream2: &Arranged<G,Tr2>, result: L) -> Collection<G,I::Item,<R as Multiply<Tr2::R>>::Output>
     where
         Tr2: TraceReader<Key=K, Time=G::Timestamp>+Clone+'static,
-        Tr2::Batch: BatchReader<K, Tr2::Val, G::Timestamp, Tr2::R>+'static,
         Tr2::Cursor: Cursor<K, Tr2::Val, G::Timestamp, Tr2::R>+'static,
         Tr2::Val: Ord+Clone+Debug+'static,
         Tr2::R: Semigroup,
@@ -311,7 +309,6 @@ pub trait JoinCore<G: Scope, K: 'static, V: 'static, R: Semigroup> where G::Time
     fn join_core_internal_unsafe<Tr2,I,L,D,ROut> (&self, stream2: &Arranged<G,Tr2>, result: L) -> Collection<G,D,ROut>
     where
         Tr2: TraceReader<Key=K, Time=G::Timestamp>+Clone+'static,
-        Tr2::Batch: BatchReader<K, Tr2::Val, G::Timestamp, Tr2::R>+'static,
         Tr2::Cursor: Cursor<K, Tr2::Val, G::Timestamp, Tr2::R>+'static,
         Tr2::Val: Ord+Clone+Debug+'static,
         Tr2::R: Semigroup,
@@ -334,7 +331,6 @@ where
     fn join_core<Tr2,I,L> (&self, stream2: &Arranged<G,Tr2>, result: L) -> Collection<G,I::Item,<R as Multiply<Tr2::R>>::Output>
     where
         Tr2: TraceReader<Key=K, Time=G::Timestamp>+Clone+'static,
-        Tr2::Batch: BatchReader<K, Tr2::Val, G::Timestamp, Tr2::R>+'static,
         Tr2::Cursor: Cursor<K, Tr2::Val, G::Timestamp, Tr2::R>+'static,
         Tr2::Val: Ord+Clone+Debug+'static,
         Tr2::R: Semigroup,
@@ -351,7 +347,6 @@ where
     fn join_core_internal_unsafe<Tr2,I,L,D,ROut> (&self, stream2: &Arranged<G,Tr2>, result: L) -> Collection<G,D,ROut>
     where
         Tr2: TraceReader<Key=K, Time=G::Timestamp>+Clone+'static,
-        Tr2::Batch: BatchReader<K, Tr2::Val, G::Timestamp, Tr2::R>+'static,
         Tr2::Cursor: Cursor<K, Tr2::Val, G::Timestamp, Tr2::R>+'static,
         Tr2::Val: Ord+Clone+Debug+'static,
         Tr2::R: Semigroup,
@@ -374,14 +369,12 @@ impl<G, T1> JoinCore<G, T1::Key, T1::Val, T1::R> for Arranged<G,T1>
         T1::Key: Ord+Debug+'static,
         T1::Val: Ord+Clone+Debug+'static,
         T1::R: Semigroup,
-        T1::Batch: BatchReader<T1::Key,T1::Val,G::Timestamp,T1::R>+'static,
         T1::Cursor: Cursor<T1::Key,T1::Val,G::Timestamp,T1::R>+'static,
 {
     fn join_core<Tr2,I,L>(&self, other: &Arranged<G,Tr2>, mut result: L) -> Collection<G,I::Item,<T1::R as Multiply<Tr2::R>>::Output>
     where
         Tr2::Val: Ord+Clone+Debug+'static,
         Tr2: TraceReader<Key=T1::Key,Time=G::Timestamp>+Clone+'static,
-        Tr2::Batch: BatchReader<T1::Key, Tr2::Val, G::Timestamp, Tr2::R>+'static,
         Tr2::Cursor: Cursor<T1::Key, Tr2::Val, G::Timestamp, Tr2::R>+'static,
         Tr2::R: Semigroup,
         T1::R: Multiply<Tr2::R>,
@@ -401,7 +394,6 @@ impl<G, T1> JoinCore<G, T1::Key, T1::Val, T1::R> for Arranged<G,T1>
     fn join_core_internal_unsafe<Tr2,I,L,D,ROut> (&self, other: &Arranged<G,Tr2>, mut result: L) -> Collection<G,D,ROut>
     where
         Tr2: TraceReader<Key=T1::Key, Time=G::Timestamp>+Clone+'static,
-        Tr2::Batch: BatchReader<T1::Key, Tr2::Val, G::Timestamp, Tr2::R>+'static,
         Tr2::Cursor: Cursor<T1::Key, Tr2::Val, G::Timestamp, Tr2::R>+'static,
         Tr2::Val: Ord+Clone+Debug+'static,
         Tr2::R: Semigroup,

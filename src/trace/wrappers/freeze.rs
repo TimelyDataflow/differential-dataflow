@@ -41,7 +41,6 @@ where
     T::Key: 'static,
     T::Val: 'static,
     T::R: 'static,
-    T::Batch: BatchReader<T::Key, T::Val, G::Timestamp, T::R>,
     T::Cursor: Cursor<T::Key, T::Val, G::Timestamp, T::R>,
     F: Fn(&G::Timestamp)->Option<G::Timestamp>+'static,
 {
@@ -93,7 +92,7 @@ where
     type Time = Tr::Time;
     type R = Tr::R;
 
-    type Batch = BatchFreeze<Tr::Key, Tr::Val, Tr::Time, Tr::R, Tr::Batch, F>;
+    type Batch = BatchFreeze<Tr::Batch, F>;
     type Cursor = CursorFreeze<Tr::Key, Tr::Val, Tr::Time, Tr::R, Tr::Cursor, F>;
 
     fn map_batches<F2: FnMut(&Self::Batch)>(&self, mut f: F2) {
@@ -137,47 +136,39 @@ where
 
 
 /// Wrapper to provide batch to nested scope.
-pub struct BatchFreeze<K, V, T, R, B, F> {
-    phantom: ::std::marker::PhantomData<(K, V, R, T)>,
+pub struct BatchFreeze<B, F> {
     batch: B,
     func: Rc<F>,
 }
 
-impl<K, V, T: Clone, R, B: Clone, F> Clone for BatchFreeze<K, V, T, R, B, F> {
+impl<B: Clone, F> Clone for BatchFreeze<B, F> {
     fn clone(&self) -> Self {
         BatchFreeze {
-            phantom: ::std::marker::PhantomData,
             batch: self.batch.clone(),
             func: self.func.clone(),
         }
     }
 }
 
-impl<K, V, T, R, B, F> BatchReader<K, V, T, R> for BatchFreeze<K, V, T, R, B, F>
-where
-    B: BatchReader<K, V, T, R>,
-    T: Clone,
-    F: Fn(&T)->Option<T>,
-{
-    type Cursor = BatchCursorFreeze<K, V, T, R, B, F>;
+impl<B: BatchReader, F: Fn(&B::Time) -> Option<B::Time>> BatchReader for BatchFreeze<B, F> {
+    type Key = B::Key;
+    type Val = B::Val;
+    type Time = B::Time;
+    type R = B::R;
+
+    type Cursor = BatchCursorFreeze<Self::Key, Self::Val, Self::Time, Self::R, B, F>;
 
     fn cursor(&self) -> Self::Cursor {
         BatchCursorFreeze::new(self.batch.cursor(), self.func.clone())
     }
     fn len(&self) -> usize { self.batch.len() }
-    fn description(&self) -> &Description<T> { self.batch.description() }
+    fn description(&self) -> &Description<Self::Time> { self.batch.description() }
 }
 
-impl<K, V, T, R, B, F> BatchFreeze<K, V, T, R, B, F>
-where
-    B: BatchReader<K, V, T, R>,
-    T: Clone,
-    F: Fn(&T)->Option<T>
-{
+impl<B: BatchReader, F: Fn(&B::Time) -> Option<B::Time>> BatchFreeze<B, F> {
     /// Makes a new batch wrapper
     pub fn make_from(batch: B, func: Rc<F>) -> Self {
         BatchFreeze {
-            phantom: ::std::marker::PhantomData,
             batch: batch,
             func: func,
         }
@@ -236,13 +227,13 @@ where
 
 
 /// Wrapper to provide cursor to nested scope.
-pub struct BatchCursorFreeze<K, V, T, R, B: BatchReader<K, V, T, R>, F> {
+pub struct BatchCursorFreeze<K, V, T, R, B: BatchReader<Key=K, Val=V, Time=T, R=R>, F> {
     phantom: ::std::marker::PhantomData<(K, V, R, T)>,
     cursor: B::Cursor,
     func: Rc<F>,
 }
 
-impl<K, V, T, R, B: BatchReader<K, V, T, R>, F> BatchCursorFreeze<K, V, T, R, B, F> {
+impl<K, V, T, R, B: BatchReader<Key=K, Val=V, Time=T, R=R>, F> BatchCursorFreeze<K, V, T, R, B, F> {
     fn new(cursor: B::Cursor, func: Rc<F>) -> Self {
         BatchCursorFreeze {
             phantom: ::std::marker::PhantomData,
@@ -252,12 +243,12 @@ impl<K, V, T, R, B: BatchReader<K, V, T, R>, F> BatchCursorFreeze<K, V, T, R, B,
     }
 }
 
-impl<K, V, T, R, B: BatchReader<K, V, T, R>, F> Cursor<K, V, T, R> for BatchCursorFreeze<K, V, T, R, B, F>
+impl<K, V, T, R, B: BatchReader<Key=K, Val=V, Time=T, R=R>, F> Cursor<K, V, T, R> for BatchCursorFreeze<K, V, T, R, B, F>
 where
     F: Fn(&T)->Option<T>,
 {
 
-    type Storage = BatchFreeze<K, V, T, R, B, F>;
+    type Storage = BatchFreeze<B, F>;
 
     #[inline] fn key_valid(&self, storage: &Self::Storage) -> bool { self.cursor.key_valid(&storage.batch) }
     #[inline] fn val_valid(&self, storage: &Self::Storage) -> bool { self.cursor.val_valid(&storage.batch) }

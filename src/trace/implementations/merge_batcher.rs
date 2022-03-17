@@ -8,7 +8,7 @@ use lattice::Lattice;
 use trace::{Batch, Batcher, Builder};
 
 /// Creates batches from unordered tuples.
-pub struct MergeBatcher<K: Ord, V: Ord, T: Ord, R: Semigroup, B: Batch<K, V, T, R>> {
+pub struct MergeBatcher<K: Ord, V: Ord, T: Ord, R: Semigroup, B: Batch<Key=K, Val=V, Time=T, R=R>> {
     sorter: MergeSorter<(K, V), T, R>,
     lower: Antichain<T>,
     frontier: Antichain<T>,
@@ -21,7 +21,7 @@ where
     V: Ord+Clone,
     T: Lattice+timely::progress::Timestamp+Ord+Clone,
     R: Semigroup,
-    B: Batch<K, V, T, R>,
+    B: Batch<Key=K, Val=V, Time=T, R=R>,
 {
     fn new() -> Self {
         MergeBatcher {

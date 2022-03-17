@@ -41,7 +41,6 @@ pub use self::description::Description;
 /// to update the contents of the trace. These methods are used to examine the contents, and to update the reader's
 /// capabilities (which may release restrictions on the mutations to the underlying trace and cause work to happen).
 pub trait TraceReader {
-
     /// Key by which updates are indexed.
     type Key;
     /// Values associated with keys.
@@ -52,7 +51,7 @@ pub trait TraceReader {
     type R;
 
     /// The type of an immutable collection of updates.
-    type Batch: BatchReader<Self::Key, Self::Val, Self::Time, Self::R>+Clone+'static;
+    type Batch: BatchReader<Key=Self::Key, Val=Self::Val, Time=Self::Time, R=Self::R>+Clone+'static;
 
     /// The type used to enumerate the collections contents.
     type Cursor: Cursor<Self::Key, Self::Val, Self::Time, Self::R>;
@@ -196,9 +195,7 @@ pub trait TraceReader {
 ///
 /// The trace must be constructable from, and navigable by the `Key`, `Val`, `Time` types, but does not need
 /// to return them.
-pub trait Trace : TraceReader
-where <Self as TraceReader>::Batch: Batch<Self::Key, Self::Val, Self::Time, Self::R> {
-
+pub trait Trace: TraceReader {
     /// Allocates a new empty trace.
     fn new(
         info: ::timely::dataflow::operators::generic::OperatorInfo,
@@ -232,12 +229,21 @@ where <Self as TraceReader>::Batch: Batch<Self::Key, Self::Val, Self::Time, Self
 /// but do not expose ways to construct the batches. This trait is appropriate for views of the batch, and is
 /// especially useful for views derived from other sources in ways that prevent the construction of batches
 /// from the type of data in the view (for example, filtered views, or views with extended time coordinates).
-pub trait BatchReader<K, V, T, R>
+pub trait BatchReader
 where
     Self: ::std::marker::Sized,
 {
+    /// Key by which updates are indexed.
+    type Key;
+    /// Values associated with keys.
+    type Val;
+    /// Timestamps associated with updates
+    type Time;
+    /// Associated update.
+    type R;
+
     /// The type used to enumerate the batch's contents.
-    type Cursor: Cursor<K, V, T, R, Storage=Self>;
+    type Cursor: Cursor<Self::Key, Self::Val, Self::Time, Self::R, Storage=Self>;
     /// Acquires a cursor to the batch's contents.
     fn cursor(&self) -> Self::Cursor;
     /// The number of updates in the batch.
@@ -245,39 +251,39 @@ where
     /// True if the batch is empty.
     fn is_empty(&self) -> bool { self.len() == 0 }
     /// Describes the times of the updates in the batch.
-    fn description(&self) -> &Description<T>;
+    fn description(&self) -> &Description<Self::Time>;
 
     /// All times in the batch are greater or equal to an element of `lower`.
-    fn lower(&self) -> &Antichain<T> { self.description().lower() }
+    fn lower(&self) -> &Antichain<Self::Time> { self.description().lower() }
     /// All times in the batch are not greater or equal to any element of `upper`.
-    fn upper(&self) -> &Antichain<T> { self.description().upper() }
+    fn upper(&self) -> &Antichain<Self::Time> { self.description().upper() }
 }
 
 /// An immutable collection of updates.
-pub trait Batch<K, V, T, R> : BatchReader<K, V, T, R> where Self: ::std::marker::Sized {
+pub trait Batch: BatchReader where Self: ::std::marker::Sized {
     /// A type used to assemble batches from disordered updates.
-    type Batcher: Batcher<K, V, T, R, Self>;
+    type Batcher: Batcher<Self::Key, Self::Val, Self::Time, Self::R, Self>;
     /// A type used to assemble batches from ordered update sequences.
-    type Builder: Builder<K, V, T, R, Self>;
+    type Builder: Builder<Self::Key, Self::Val, Self::Time, Self::R, Self>;
     /// A type used to progressively merge batches.
-    type Merger: Merger<K, V, T, R, Self>;
+    type Merger: Merger<Self::Key, Self::Val, Self::Time, Self::R, Self>;
 
     /// Initiates the merging of consecutive batches.
     ///
     /// The result of this method can be exercised to eventually produce the same result
     /// that a call to `self.merge(other)` would produce, but it can be done in a measured
     /// fashion. This can help to avoid latency spikes where a large merge needs to happen.
-    fn begin_merge(&self, other: &Self, compaction_frontier: Option<AntichainRef<T>>) -> Self::Merger {
+    fn begin_merge(&self, other: &Self, compaction_frontier: Option<AntichainRef<Self::Time>>) -> Self::Merger {
         Self::Merger::new(self, other, compaction_frontier)
     }
     /// Creates an empty batch with the stated bounds.
-    fn empty(lower: Antichain<T>, upper: Antichain<T>, since: Antichain<T>) -> Self {
+    fn empty(lower: Antichain<Self::Time>, upper: Antichain<Self::Time>, since: Antichain<Self::Time>) -> Self {
         <Self::Builder>::new().done(lower, upper, since)
     }
 }
 
 /// Functionality for collecting and batching updates.
-pub trait Batcher<K, V, T, R, Output: Batch<K, V, T, R>> {
+pub trait Batcher<K, V, T, R, Output: Batch<Key=K, Val=V, Time=T, R=R>> {
     /// Allocates a new empty batcher.
     fn new() -> Self;
     /// Adds an unordered batch of elements to the batcher.
@@ -289,7 +295,7 @@ pub trait Batcher<K, V, T, R, Output: Batch<K, V, T, R>> {
 }
 
 /// Functionality for building batches from ordered update sequences.
-pub trait Builder<K, V, T, R, Output: Batch<K, V, T, R>> {
+pub trait Builder<K, V, T, R, Output: Batch<Key=K, Val=V, Time=T, R=R>> {
     /// Allocates an empty builder.
     fn new() -> Self;
     /// Allocates an empty builder with some capacity.
@@ -305,7 +311,7 @@ pub trait Builder<K, V, T, R, Output: Batch<K, V, T, R>> {
 }
 
 /// Represents a merge in progress.
-pub trait Merger<K, V, T, R, Output: Batch<K, V, T, R>> {
+pub trait Merger<K, V, T, R, Output: Batch<Key=K, Val=V, Time=T, R=R>> {
     /// Creates a new merger to merge the supplied batches, optionally compacting
     /// up to the supplied frontier.
     fn new(source1: &Output, source2: &Output, compaction_frontier: Option<AntichainRef<T>>) -> Self;
@@ -331,10 +337,14 @@ pub mod rc_blanket_impls {
     use timely::progress::{Antichain, frontier::AntichainRef};
     use super::{Batch, BatchReader, Batcher, Builder, Merger, Cursor, Description};
 
-    impl<K, V, T, R, B: BatchReader<K,V,T,R>> BatchReader<K,V,T,R> for Rc<B> {
+    impl<B: BatchReader> BatchReader for Rc<B> {
+        type Key = B::Key;
+        type Val = B::Val;
+        type Time = B::Time;
+        type R = B::R;
 
         /// The type used to enumerate the batch's contents.
-        type Cursor = RcBatchCursor<K, V, T, R, B>;
+        type Cursor = RcBatchCursor<Self::Key, Self::Val, Self::Time, Self::R, B>;
         /// Acquires a cursor to the batch's contents.
         fn cursor(&self) -> Self::Cursor {
             RcBatchCursor::new((&**self).cursor())
@@ -343,16 +353,16 @@ pub mod rc_blanket_impls {
         /// The number of updates in the batch.
         fn len(&self) -> usize { (&**self).len() }
         /// Describes the times of the updates in the batch.
-        fn description(&self) -> &Description<T> { (&**self).description() }
+        fn description(&self) -> &Description<Self::Time> { (&**self).description() }
     }
 
     /// Wrapper to provide cursor to nested scope.
-    pub struct RcBatchCursor<K, V, T, R, B: BatchReader<K, V, T, R>> {
+    pub struct RcBatchCursor<K, V, T, R, B: BatchReader<Key=K, Val=V, Time=T, R=R>> {
         phantom: ::std::marker::PhantomData<(K, V, T, R)>,
         cursor: B::Cursor,
     }
 
-    impl<K, V, T, R, B: BatchReader<K, V, T, R>> RcBatchCursor<K, V, T, R, B> {
+    impl<K, V, T, R, B: BatchReader<Key=K, Val=V, Time=T, R=R>> RcBatchCursor<K, V, T, R, B> {
         fn new(cursor: B::Cursor) -> Self {
             RcBatchCursor {
                 cursor,
@@ -361,7 +371,7 @@ pub mod rc_blanket_impls {
         }
     }
 
-    impl<K, V, T, R, B: BatchReader<K, V, T, R>> Cursor<K, V, T, R> for RcBatchCursor<K, V, T, R, B> {
+    impl<K, V, T, R, B: BatchReader<Key=K, Val=V, Time=T, R=R>> Cursor<K, V, T, R> for RcBatchCursor<K, V, T, R, B> {
 
         type Storage = Rc<B>;
 
@@ -387,17 +397,17 @@ pub mod rc_blanket_impls {
     }
 
     /// An immutable collection of updates.
-    impl<K,V,T,R,B: Batch<K,V,T,R>> Batch<K, V, T, R> for Rc<B> {
-        type Batcher = RcBatcher<K, V, T, R, B>;
-        type Builder = RcBuilder<K, V, T, R, B>;
-        type Merger = RcMerger<K, V, T, R, B>;
+    impl<B: Batch> Batch for Rc<B> {
+        type Batcher = RcBatcher<B::Key, B::Val, B::Time, B::R, B>;
+        type Builder = RcBuilder<B::Key, B::Val, B::Time, B::R, B>;
+        type Merger = RcMerger<B::Key, B::Val, B::Time, B::R, B>;
     }
 
     /// Wrapper type for batching reference counted batches.
-    pub struct RcBatcher<K,V,T,R,B:Batch<K,V,T,R>> { batcher: B::Batcher }
+    pub struct RcBatcher<K,V,T,R,B:Batch<Key=K,Val=V,Time=T,R=R>> { batcher: B::Batcher }
 
     /// Functionality for collecting and batching updates.
-    impl<K,V,T,R,B:Batch<K,V,T,R>> Batcher<K, V, T, R, Rc<B>> for RcBatcher<K,V,T,R,B> {
+    impl<K,V,T,R,B:Batch<Key=K,Val=V,Time=T,R=R>> Batcher<K, V, T, R, Rc<B>> for RcBatcher<K,V,T,R,B> {
         fn new() -> Self { RcBatcher { batcher: <B::Batcher as Batcher<K,V,T,R,B>>::new() } }
         fn push_batch(&mut self, batch: &mut Vec<((K, V), T, R)>) { self.batcher.push_batch(batch) }
         fn seal(&mut self, upper: Antichain<T>) -> Rc<B> { Rc::new(self.batcher.seal(upper)) }
@@ -405,10 +415,10 @@ pub mod rc_blanket_impls {
     }
 
     /// Wrapper type for building reference counted batches.
-    pub struct RcBuilder<K,V,T,R,B:Batch<K,V,T,R>> { builder: B::Builder }
+    pub struct RcBuilder<K,V,T,R,B:Batch<Key=K,Val=V,Time=T,R=R>> { builder: B::Builder }
 
     /// Functionality for building batches from ordered update sequences.
-    impl<K,V,T,R,B:Batch<K,V,T,R>> Builder<K, V, T, R, Rc<B>> for RcBuilder<K,V,T,R,B> {
+    impl<K,V,T,R,B:Batch<Key=K,Val=V,Time=T,R=R>> Builder<K, V, T, R, Rc<B>> for RcBuilder<K,V,T,R,B> {
         fn new() -> Self { RcBuilder { builder: <B::Builder as Builder<K,V,T,R,B>>::new() } }
         fn with_capacity(cap: usize) -> Self { RcBuilder { builder: <B::Builder as Builder<K,V,T,R,B>>::with_capacity(cap) } }
         fn push(&mut self, element: (K, V, T, R)) { self.builder.push(element) }
@@ -416,10 +426,10 @@ pub mod rc_blanket_impls {
     }
 
     /// Wrapper type for merging reference counted batches.
-    pub struct RcMerger<K,V,T,R,B:Batch<K,V,T,R>> { merger: B::Merger }
+    pub struct RcMerger<K,V,T,R,B:Batch<Key=K,Val=V,Time=T,R=R>> { merger: B::Merger }
 
     /// Represents a merge in progress.
-    impl<K,V,T,R,B:Batch<K,V,T,R>> Merger<K, V, T, R, Rc<B>> for RcMerger<K,V,T,R,B> {
+    impl<K,V,T,R,B:Batch<Key=K,Val=V,Time=T,R=R>> Merger<K, V, T, R, Rc<B>> for RcMerger<K,V,T,R,B> {
         fn new(source1: &Rc<B>, source2: &Rc<B>, compaction_frontier: Option<AntichainRef<T>>) -> Self { RcMerger { merger: B::begin_merge(source1, source2, compaction_frontier) } }
         fn work(&mut self, source1: &Rc<B>, source2: &Rc<B>, fuel: &mut isize) { self.merger.work(source1, source2, fuel) }
         fn done(self) -> Rc<B> { Rc::new(self.merger.done()) }
@@ -438,10 +448,14 @@ pub mod abomonated_blanket_impls {
 
     use super::{Batch, BatchReader, Batcher, Builder, Merger, Cursor, Description};
 
-    impl<K, V, T, R, B: BatchReader<K,V,T,R>+Abomonation> BatchReader<K,V,T,R> for Abomonated<B, Vec<u8>> {
+    impl<B: BatchReader+Abomonation> BatchReader for Abomonated<B, Vec<u8>> {
+        type Key = B::Key;
+        type Val = B::Val;
+        type Time = B::Time;
+        type R = B::R;
 
         /// The type used to enumerate the batch's contents.
-        type Cursor = AbomonatedBatchCursor<K, V, T, R, B>;
+        type Cursor = AbomonatedBatchCursor<Self::Key, Self::Val, Self::Time, Self::R, B>;
         /// Acquires a cursor to the batch's contents.
         fn cursor(&self) -> Self::Cursor {
             AbomonatedBatchCursor::new((&**self).cursor())
@@ -450,16 +464,16 @@ pub mod abomonated_blanket_impls {
         /// The number of updates in the batch.
         fn len(&self) -> usize { (&**self).len() }
         /// Describes the times of the updates in the batch.
-        fn description(&self) -> &Description<T> { (&**self).description() }
+        fn description(&self) -> &Description<Self::Time> { (&**self).description() }
     }
 
     /// Wrapper to provide cursor to nested scope.
-    pub struct AbomonatedBatchCursor<K, V, T, R, B: BatchReader<K, V, T, R>> {
+    pub struct AbomonatedBatchCursor<K, V, T, R, B: BatchReader<Key=K, Val=V, Time=T, R=R>> {
         phantom: ::std::marker::PhantomData<(K, V, T, R)>,
         cursor: B::Cursor,
     }
 
-    impl<K, V, T, R, B: BatchReader<K, V, T, R>> AbomonatedBatchCursor<K, V, T, R, B> {
+    impl<K, V, T, R, B: BatchReader<Key=K, Val=V, Time=T, R=R>> AbomonatedBatchCursor<K, V, T, R, B> {
         fn new(cursor: B::Cursor) -> Self {
             AbomonatedBatchCursor {
                 cursor,
@@ -468,7 +482,7 @@ pub mod abomonated_blanket_impls {
         }
     }
 
-    impl<K, V, T, R, B: BatchReader<K, V, T, R>+Abomonation> Cursor<K, V, T, R> for AbomonatedBatchCursor<K, V, T, R, B> {
+    impl<K, V, T, R, B: BatchReader<Key=K, Val=V, Time=T, R=R>+Abomonation> Cursor<K, V, T, R> for AbomonatedBatchCursor<K, V, T, R, B> {
 
         type Storage = Abomonated<B, Vec<u8>>;
 
@@ -494,17 +508,17 @@ pub mod abomonated_blanket_impls {
     }
 
     /// An immutable collection of updates.
-    impl<K,V,T,R,B: Batch<K,V,T,R>+Abomonation> Batch<K, V, T, R> for Abomonated<B, Vec<u8>> {
-        type Batcher = AbomonatedBatcher<K, V, T, R, B>;
-        type Builder = AbomonatedBuilder<K, V, T, R, B>;
-        type Merger = AbomonatedMerger<K, V, T, R, B>;
+    impl<B: Batch + Abomonation> Batch for Abomonated<B, Vec<u8>> {
+        type Batcher = AbomonatedBatcher<Self::Key, Self::Val, Self::Time, Self::R, B>;
+        type Builder = AbomonatedBuilder<Self::Key, Self::Val, Self::Time, Self::R, B>;
+        type Merger = AbomonatedMerger<Self::Key, Self::Val, Self::Time, Self::R, B>;
     }
 
     /// Wrapper type for batching reference counted batches.
-    pub struct AbomonatedBatcher<K,V,T,R,B:Batch<K,V,T,R>> { batcher: B::Batcher }
+    pub struct AbomonatedBatcher<K,V,T,R,B:Batch<Key=K,Val=V,Time=T,R=R>> { batcher: B::Batcher }
 
     /// Functionality for collecting and batching updates.
-    impl<K,V,T,R,B:Batch<K,V,T,R>+Abomonation> Batcher<K, V, T, R, Abomonated<B,Vec<u8>>> for AbomonatedBatcher<K,V,T,R,B> {
+    impl<K,V,T,R,B:Batch<Key=K,Val=V,Time=T,R=R>+Abomonation> Batcher<K, V, T, R, Abomonated<B,Vec<u8>>> for AbomonatedBatcher<K,V,T,R,B> {
         fn new() -> Self { AbomonatedBatcher { batcher: <B::Batcher as Batcher<K,V,T,R,B>>::new() } }
         fn push_batch(&mut self, batch: &mut Vec<((K, V), T, R)>) { self.batcher.push_batch(batch) }
         fn seal(&mut self, upper: Antichain<T>) -> Abomonated<B, Vec<u8>> {
@@ -517,10 +531,10 @@ pub mod abomonated_blanket_impls {
     }
 
     /// Wrapper type for building reference counted batches.
-    pub struct AbomonatedBuilder<K,V,T,R,B:Batch<K,V,T,R>> { builder: B::Builder }
+    pub struct AbomonatedBuilder<K,V,T,R,B:Batch<Key=K,Val=V,Time=T,R=R>> { builder: B::Builder }
 
     /// Functionality for building batches from ordered update sequences.
-    impl<K,V,T,R,B:Batch<K,V,T,R>+Abomonation> Builder<K, V, T, R, Abomonated<B,Vec<u8>>> for AbomonatedBuilder<K,V,T,R,B> {
+    impl<K,V,T,R,B:Batch<Key=K,Val=V,Time=T,R=R>+Abomonation> Builder<K, V, T, R, Abomonated<B,Vec<u8>>> for AbomonatedBuilder<K,V,T,R,B> {
         fn new() -> Self { AbomonatedBuilder { builder: <B::Builder as Builder<K,V,T,R,B>>::new() } }
         fn with_capacity(cap: usize) -> Self { AbomonatedBuilder { builder: <B::Builder as Builder<K,V,T,R,B>>::with_capacity(cap) } }
         fn push(&mut self, element: (K, V, T, R)) { self.builder.push(element) }
@@ -533,10 +547,10 @@ pub mod abomonated_blanket_impls {
     }
 
     /// Wrapper type for merging reference counted batches.
-    pub struct AbomonatedMerger<K,V,T,R,B:Batch<K,V,T,R>> { merger: B::Merger }
+    pub struct AbomonatedMerger<K,V,T,R,B:Batch<Key=K,Val=V,Time=T,R=R>> { merger: B::Merger }
 
     /// Represents a merge in progress.
-    impl<K,V,T,R,B:Batch<K,V,T,R>+Abomonation> Merger<K, V, T, R, Abomonated<B,Vec<u8>>> for AbomonatedMerger<K,V,T,R,B> {
+    impl<K,V,T,R,B:Batch<Key=K,Val=V,Time=T,R=R>+Abomonation> Merger<K, V, T, R, Abomonated<B,Vec<u8>>> for AbomonatedMerger<K,V,T,R,B> {
         fn new(source1: &Abomonated<B,Vec<u8>>, source2: &Abomonated<B,Vec<u8>>, compaction_frontier: Option<AntichainRef<T>>) -> Self {
             AbomonatedMerger { merger: B::begin_merge(source1, source2, compaction_frontier) }
         }

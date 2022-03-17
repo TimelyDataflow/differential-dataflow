@@ -47,7 +47,7 @@ where
     type Time = Tr::Time;
     type R = Tr::R;
 
-    type Batch = BatchFrontier<Tr::Key, Tr::Val, Tr::Time, Tr::R, Tr::Batch>;
+    type Batch = BatchFrontier<Tr::Batch>;
     type Cursor = CursorFrontier<Tr::Key, Tr::Val, Tr::Time, Tr::R, Tr::Cursor>;
 
     fn map_batches<F: FnMut(&Self::Batch)>(&self, mut f: F) {
@@ -83,45 +83,37 @@ where
 
 
 /// Wrapper to provide batch to nested scope.
-pub struct BatchFrontier<K, V, T, R, B> {
-    phantom: ::std::marker::PhantomData<(K, V, T, R)>,
+#[derive(Clone)]
+pub struct BatchFrontier<B: BatchReader> {
     batch: B,
-    frontier: Antichain<T>,
+    frontier: Antichain<B::Time>,
 }
 
-impl<K, V, T: Clone, R, B: Clone> Clone for BatchFrontier<K, V, T, R, B> {
-    fn clone(&self) -> Self {
-        BatchFrontier {
-            phantom: ::std::marker::PhantomData,
-            batch: self.batch.clone(),
-            frontier: self.frontier.to_owned(),
-        }
-    }
-}
-
-impl<K, V, T, R, B> BatchReader<K, V, T, R> for BatchFrontier<K, V, T, R, B>
+impl<B: BatchReader> BatchReader for BatchFrontier<B>
 where
-    B: BatchReader<K, V, T, R>,
-    T: Timestamp+Lattice,
+    B::Time: Timestamp + Lattice
 {
-    type Cursor = BatchCursorFrontier<K, V, T, R, B>;
+    type Key = B::Key;
+    type Val = B::Val;
+    type Time = B::Time;
+    type R = B::R;
+
+    type Cursor = BatchCursorFrontier<Self::Key, Self::Val, Self::Time, Self::R, B>;
 
     fn cursor(&self) -> Self::Cursor {
         BatchCursorFrontier::new(self.batch.cursor(), self.frontier.borrow())
     }
     fn len(&self) -> usize { self.batch.len() }
-    fn description(&self) -> &Description<T> { &self.batch.description() }
+    fn description(&self) -> &Description<Self::Time> { &self.batch.description() }
 }
 
-impl<K, V, T, R, B> BatchFrontier<K, V, T, R, B>
+impl<B: BatchReader> BatchFrontier<B>
 where
-    B: BatchReader<K, V, T, R>,
-    T: Timestamp+Lattice,
+    B::Time: Timestamp+Lattice
 {
     /// Makes a new batch wrapper
-    pub fn make_from(batch: B, frontier: AntichainRef<T>) -> Self {
+    pub fn make_from(batch: B, frontier: AntichainRef<B::Time>) -> Self {
         BatchFrontier {
-            phantom: ::std::marker::PhantomData,
             batch,
             frontier: frontier.to_owned(),
         }
@@ -182,13 +174,13 @@ where
 
 
 /// Wrapper to provide cursor to nested scope.
-pub struct BatchCursorFrontier<K, V, T, R, B: BatchReader<K, V, T, R>> {
+pub struct BatchCursorFrontier<K, V, T, R, B: BatchReader<Key=K, Val=V, Time=T, R=R>> {
     phantom: ::std::marker::PhantomData<(K, V, R)>,
     cursor: B::Cursor,
     frontier: Antichain<T>,
 }
 
-impl<K, V, T: Clone, R, B: BatchReader<K, V, T, R>> BatchCursorFrontier<K, V, T, R, B> {
+impl<K, V, T: Clone, R, B: BatchReader<Key=K, Val=V, Time=T, R=R>> BatchCursorFrontier<K, V, T, R, B> {
     fn new(cursor: B::Cursor, frontier: AntichainRef<T>) -> Self {
         BatchCursorFrontier {
             phantom: ::std::marker::PhantomData,
@@ -198,11 +190,11 @@ impl<K, V, T: Clone, R, B: BatchReader<K, V, T, R>> BatchCursorFrontier<K, V, T,
     }
 }
 
-impl<K, V, T, R, B: BatchReader<K, V, T, R>> Cursor<K, V, T, R> for BatchCursorFrontier<K, V, T, R, B>
+impl<K, V, T, R, B: BatchReader<Key=K, Val=V, Time=T, R=R>> Cursor<K, V, T, R> for BatchCursorFrontier<K, V, T, R, B>
 where
     T: Timestamp+Lattice,
 {
-    type Storage = BatchFrontier<K, V, T, R, B>;
+    type Storage = BatchFrontier<B>;
 
     #[inline] fn key_valid(&self, storage: &Self::Storage) -> bool { self.cursor.key_valid(&storage.batch) }
     #[inline] fn val_valid(&self, storage: &Self::Storage) -> bool { self.cursor.val_valid(&storage.batch) }

@@ -74,7 +74,6 @@ where
     T1: TraceReader<Val=(), Time=G::Timestamp>+Clone+'static,
     T1::Key: ExchangeData,
     T1::R: ExchangeData+Semigroup,
-    T1::Batch: BatchReader<T1::Key, (), G::Timestamp, T1::R>,
     T1::Cursor: Cursor<T1::Key, (), G::Timestamp, T1::R>,
 {
     fn count_total_core<R2: Semigroup + From<i8>>(&self) -> Collection<G, (T1::Key, T1::R), R2> {
