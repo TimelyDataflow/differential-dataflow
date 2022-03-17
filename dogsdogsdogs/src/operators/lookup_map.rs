@@ -10,7 +10,7 @@ use differential_dataflow::{ExchangeData, Collection, AsCollection, Hashable};
 use differential_dataflow::difference::{Semigroup, Monoid};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arranged;
-use differential_dataflow::trace::{Cursor, TraceReader, BatchReader};
+use differential_dataflow::trace::{Cursor, TraceReader};
 
 /// Proposes extensions to a stream of prefixes.
 ///
@@ -32,7 +32,6 @@ where
     Tr: TraceReader<Time=G::Timestamp>+Clone+'static,
     Tr::Key: Ord+Hashable,
     Tr::Val: Clone,
-    Tr::Batch: BatchReader<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
     Tr::Cursor: Cursor<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
     Tr::R: Monoid+ExchangeData,
     F: FnMut(&D, &mut Tr::Key)+Clone+'static,

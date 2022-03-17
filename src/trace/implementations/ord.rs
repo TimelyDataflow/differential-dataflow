@@ -62,7 +62,7 @@ where
     pub desc: Description<T>,
 }
 
-impl<K, V, T, R, O> BatchReader<K, V, T, R> for OrdValBatch<K, V, T, R, O>
+impl<K, V, T, R, O> BatchReader for OrdValBatch<K, V, T, R, O>
 where
     K: Ord+Clone+'static,
     V: Ord+Clone+'static,
@@ -70,13 +70,18 @@ where
     R: Semigroup,
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug
 {
+    type Key = K;
+    type Val = V;
+    type Time = T;
+    type R = R;
+
     type Cursor = OrdValCursor<V, T, R, O>;
     fn cursor(&self) -> Self::Cursor { OrdValCursor { cursor: self.layer.cursor() } }
     fn len(&self) -> usize { <OrderedLayer<K, OrderedLayer<V, OrderedLeaf<T, R>, O>, O> as Trie>::tuples(&self.layer) }
     fn description(&self) -> &Description<T> { &self.desc }
 }
 
-impl<K, V, T, R, O> Batch<K, V, T, R> for OrdValBatch<K, V, T, R, O>
+impl<K, V, T, R, O> Batch for OrdValBatch<K, V, T, R, O>
 where
     K: Ord+Clone+'static,
     V: Ord+Clone+'static,
@@ -409,13 +414,18 @@ where
     pub desc: Description<T>,
 }
 
-impl<K, T, R, O> BatchReader<K, (), T, R> for OrdKeyBatch<K, T, R, O>
+impl<K, T, R, O> BatchReader for OrdKeyBatch<K, T, R, O>
 where
     K: Ord+Clone+'static,
     T: Lattice+Ord+Clone+'static,
     R: Semigroup,
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug
 {
+    type Key = K;
+    type Val = ();
+    type Time = T;
+    type R = R;
+
     type Cursor = OrdKeyCursor<T, R, O>;
     fn cursor(&self) -> Self::Cursor {
         OrdKeyCursor {
@@ -426,10 +436,10 @@ where
         }
     }
     fn len(&self) -> usize { <OrderedLayer<K, OrderedLeaf<T, R>, O> as Trie>::tuples(&self.layer) }
-    fn description(&self) -> &Description<T> { &self.desc }
+    fn description(&self) -> &Description<Self::Time> { &self.desc }
 }
 
-impl<K, T, R, O> Batch<K, (), T, R> for OrdKeyBatch<K, T, R, O>
+impl<K, T, R, O> Batch for OrdKeyBatch<K, T, R, O>
 where
     K: Ord+Clone+'static,
     T: Lattice+timely::progress::Timestamp+Ord+Clone+'static,

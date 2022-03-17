@@ -87,7 +87,7 @@ use ::timely::order::PartialOrder;
 /// A spine maintains a small number of immutable collections of update tuples, merging the collections when
 /// two have similar sizes. In this way, it allows the addition of more tuples, which may then be merged with
 /// other immutable collections.
-pub struct Spine<K, V, T: Lattice+Ord, R: Semigroup, B: Batch<K, V, T, R>> {
+pub struct Spine<K, V, T: Lattice+Ord, R: Semigroup, B: Batch<Key=K, Val=V, Time=T, R=R>> {
     operator: OperatorInfo,
     logger: Option<Logger>,
     phantom: ::std::marker::PhantomData<(K, V, R)>,
@@ -106,7 +106,7 @@ where
     V: Ord+Clone,           // Clone is required by `batch::advance_*` (in-place could remove).
     T: Lattice+timely::progress::Timestamp+Ord+Clone+Debug,
     R: Semigroup,
-    B: Batch<K, V, T, R>+Clone+'static,
+    B: Batch<Key=K, Val=V, Time=T, R=R>+Clone+'static,
 {
     type Key = K;
     type Val = V;
@@ -114,7 +114,7 @@ where
     type R = R;
 
     type Batch = B;
-    type Cursor = CursorList<K, V, T, R, <B as BatchReader<K, V, T, R>>::Cursor>;
+    type Cursor = CursorList<K, V, T, R, <B as BatchReader>::Cursor>;
 
     fn cursor_through(&mut self, upper: AntichainRef<T>) -> Option<(Self::Cursor, <Self::Cursor as Cursor<K, V, T, R>>::Storage)> {
 
@@ -248,7 +248,7 @@ where
     V: Ord+Clone,
     T: Lattice+timely::progress::Timestamp+Ord+Clone+Debug,
     R: Semigroup,
-    B: Batch<K, V, T, R>+Clone+'static,
+    B: Batch<Key=K, Val=V, Time=T, R=R>+Clone+'static,
 {
     fn new(
         info: ::timely::dataflow::operators::generic::OperatorInfo,
@@ -322,7 +322,7 @@ impl<K, V, T, R, B> Drop for Spine<K, V, T, R, B>
 where
     T: Lattice+Ord,
     R: Semigroup,
-    B: Batch<K, V, T, R>,
+    B: Batch<Key=K, Val=V, Time=T, R=R>,
 {
     fn drop(&mut self) {
         self.drop_batches();
@@ -334,7 +334,7 @@ impl<K, V, T, R, B> Spine<K, V, T, R, B>
 where
     T: Lattice+Ord,
     R: Semigroup,
-    B: Batch<K, V, T, R>,
+    B: Batch<Key=K, Val=V, Time=T, R=R>,
 {
     /// Drops and logs batches. Used in `set_logical_compaction` and drop.
     fn drop_batches(&mut self) {
@@ -382,7 +382,7 @@ where
     V: Ord+Clone,
     T: Lattice+timely::progress::Timestamp+Ord+Clone+Debug,
     R: Semigroup,
-    B: Batch<K, V, T, R>,
+    B: Batch<Key=K, Val=V, Time=T, R=R>,
 {
     /// True iff there is at most one non-empty batch in `self.merging`.
     ///
@@ -766,7 +766,7 @@ where
 ///
 /// A layer can be empty, contain a single batch, or contain a pair of batches
 /// that are in the process of merging into a batch for the next layer.
-enum MergeState<K, V, T, R, B: Batch<K, V, T, R>> {
+enum MergeState<K, V, T, R, B: Batch<Key=K, Val=V, Time=T, R=R>> {
     /// An empty layer, containing no updates.
     Vacant,
     /// A layer containing a single batch.
@@ -778,7 +778,7 @@ enum MergeState<K, V, T, R, B: Batch<K, V, T, R>> {
     Double(MergeVariant<K, V, T, R, B>),
 }
 
-impl<K, V, T: Eq, R, B: Batch<K, V, T, R>> MergeState<K, V, T, R, B> {
+impl<K, V, T: Eq, R, B: Batch<Key=K, Val=V, Time=T, R=R>> MergeState<K, V, T, R, B> {
 
     /// The number of actual updates contained in the level.
     fn len(&self) -> usize {
@@ -864,7 +864,7 @@ impl<K, V, T: Eq, R, B: Batch<K, V, T, R>> MergeState<K, V, T, R, B> {
         match (batch1, batch2) {
             (Some(batch1), Some(batch2)) => {
                 assert!(batch1.upper() == batch2.lower());
-                let begin_merge = <B as Batch<K, V, T, R>>::begin_merge(&batch1, &batch2, compaction_frontier);
+                let begin_merge = <B as Batch>::begin_merge(&batch1, &batch2, compaction_frontier);
                 MergeVariant::InProgress(batch1, batch2, begin_merge)
             }
             (None, Some(x)) => MergeVariant::Complete(Some((x, None))),
@@ -876,14 +876,14 @@ impl<K, V, T: Eq, R, B: Batch<K, V, T, R>> MergeState<K, V, T, R, B> {
     }
 }
 
-enum MergeVariant<K, V, T, R, B: Batch<K, V, T, R>> {
+enum MergeVariant<K, V, T, R, B: Batch<Key=K, Val=V, Time=T, R=R>> {
     /// Describes an actual in-progress merge between two non-trivial batches.
-    InProgress(B, B, <B as Batch<K,V,T,R>>::Merger),
+    InProgress(B, B, <B as Batch>::Merger),
     /// A merge that requires no further work. May or may not represent a non-trivial batch.
     Complete(Option<(B, Option<(B, B)>)>),
 }
 
-impl<K, V, T, R, B: Batch<K, V, T, R>> MergeVariant<K, V, T, R, B> {
+impl<K, V, T, R, B: Batch<Key=K, Val=V, Time=T, R=R>> MergeVariant<K, V, T, R, B> {
 
     /// Completes and extracts the batch, unless structurally empty.
     ///

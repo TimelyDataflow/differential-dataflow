@@ -40,7 +40,7 @@ where
     type Time = Tr::Time;
     type R = Tr::R;
 
-    type Batch = BatchFilter<Tr::Key, Tr::Val, Tr::Time, Tr::R, Tr::Batch, F>;
+    type Batch = BatchFilter<Tr::Batch, F>;
     type Cursor = CursorFilter<Tr::Key, Tr::Val, Tr::Time, Tr::R, Tr::Cursor, F>;
 
     fn map_batches<F2: FnMut(&Self::Batch)>(&self, mut f: F2) {
@@ -76,46 +76,36 @@ where
 
 
 /// Wrapper to provide batch to nested scope.
-pub struct BatchFilter<K, V, T, R, B, F> {
-    phantom: ::std::marker::PhantomData<(K, V, T, R)>,
+#[derive(Clone)]
+pub struct BatchFilter<B, F> {
     batch: B,
     logic: F,
 }
 
-impl<K, V, T, R, B: Clone, F: Clone> Clone for BatchFilter<K, V, T, R, B, F> {
-    fn clone(&self) -> Self {
-        BatchFilter {
-            phantom: ::std::marker::PhantomData,
-            batch: self.batch.clone(),
-            logic: self.logic.clone(),
-        }
-    }
-}
-
-impl<K, V, T, R, B, F> BatchReader<K, V, T, R> for BatchFilter<K, V, T, R, B, F>
+impl<B, F> BatchReader for BatchFilter<B, F>
 where
-    B: BatchReader<K, V, T, R>,
-    T: Timestamp,
-    F: FnMut(&K, &V)->bool+Clone+'static
+    B: BatchReader,
+    B::Time: Timestamp,
+    F: FnMut(&B::Key, &B::Val)->bool+Clone+'static
 {
-    type Cursor = BatchCursorFilter<K, V, T, R, B, F>;
+    type Key = B::Key;
+    type Val = B::Val;
+    type Time = B::Time;
+    type R = B::R;
+
+    type Cursor = BatchCursorFilter<B::Key, B::Val, B::Time, B::R, B, F>;
 
     fn cursor(&self) -> Self::Cursor {
         BatchCursorFilter::new(self.batch.cursor(), self.logic.clone())
     }
     fn len(&self) -> usize { self.batch.len() }
-    fn description(&self) -> &Description<T> { &self.batch.description() }
+    fn description(&self) -> &Description<Self::Time> { &self.batch.description() }
 }
 
-impl<K, V, T, R, B, F> BatchFilter<K, V, T, R, B, F>
-where
-    B: BatchReader<K, V, T, R>,
-    T: Timestamp,
-{
+impl<B: BatchReader, F> BatchFilter<B, F> {
     /// Makes a new batch wrapper
     pub fn make_from(batch: B, logic: F) -> Self {
         BatchFilter {
-            phantom: ::std::marker::PhantomData,
             batch,
             logic,
         }
@@ -175,13 +165,13 @@ where
 
 
 /// Wrapper to provide cursor to nested scope.
-pub struct BatchCursorFilter<K, V, T, R, B: BatchReader<K, V, T, R>, F> {
+pub struct BatchCursorFilter<K, V, T, R, B: BatchReader<Key=K, Val=V, Time=T, R=R>, F> {
     phantom: ::std::marker::PhantomData<(K, V, R)>,
     cursor: B::Cursor,
     logic: F,
 }
 
-impl<K, V, T, R, B: BatchReader<K, V, T, R>, F> BatchCursorFilter<K, V, T, R, B, F> {
+impl<K, V, T, R, B: BatchReader<Key=K, Val=V, Time=T, R=R>, F> BatchCursorFilter<K, V, T, R, B, F> {
     fn new(cursor: B::Cursor, logic: F) -> Self {
         BatchCursorFilter {
             phantom: ::std::marker::PhantomData,
@@ -191,12 +181,12 @@ impl<K, V, T, R, B: BatchReader<K, V, T, R>, F> BatchCursorFilter<K, V, T, R, B,
     }
 }
 
-impl<K, V, T, R, B: BatchReader<K, V, T, R>, F> Cursor<K, V, T, R> for BatchCursorFilter<K, V, T, R, B, F>
+impl<K, V, T, R, B: BatchReader<Key=K, Val=V, Time=T, R=R>, F> Cursor<K, V, T, R> for BatchCursorFilter<K, V, T, R, B, F>
 where
     T: Timestamp,
     F: FnMut(&K, &V)->bool+'static,
 {
-    type Storage = BatchFilter<K, V, T, R, B, F>;
+    type Storage = BatchFilter<B, F>;
 
     #[inline] fn key_valid(&self, storage: &Self::Storage) -> bool { self.cursor.key_valid(&storage.batch) }
     #[inline] fn val_valid(&self, storage: &Self::Storage) -> bool { self.cursor.val_valid(&storage.batch) }

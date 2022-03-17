@@ -47,7 +47,7 @@ where
     type Time = TInner;
     type R = Tr::R;
 
-    type Batch = BatchEnter<Tr::Key, Tr::Val, Tr::Time, Tr::R, Tr::Batch, TInner>;
+    type Batch = BatchEnter<Tr::Batch, TInner>;
     type Cursor = CursorEnter<Tr::Key, Tr::Val, Tr::Time, Tr::R, Tr::Cursor, TInner>;
 
     fn map_batches<F: FnMut(&Self::Batch)>(&self, mut f: F) {
@@ -113,42 +113,37 @@ where
 
 
 /// Wrapper to provide batch to nested scope.
-pub struct BatchEnter<K, V, T, R, B, TInner> {
-    phantom: ::std::marker::PhantomData<(K, V, T, R)>,
+#[derive(Clone)]
+pub struct BatchEnter<B, TInner> {
     batch: B,
     description: Description<TInner>,
 }
 
-impl<K, V, T, R, B: Clone, TInner: Clone> Clone for BatchEnter<K, V, T, R, B, TInner> {
-    fn clone(&self) -> Self {
-        BatchEnter {
-            phantom: ::std::marker::PhantomData,
-            batch: self.batch.clone(),
-            description: self.description.clone(),
-        }
-    }
-}
-
-impl<K, V, T, R, B, TInner> BatchReader<K, V, TInner, R> for BatchEnter<K, V, T, R, B, TInner>
+impl<B, TInner> BatchReader for BatchEnter<B, TInner>
 where
-    B: BatchReader<K, V, T, R>,
-    T: Timestamp,
-    TInner: Refines<T>+Lattice,
+    B: BatchReader,
+    B::Time: Timestamp,
+    TInner: Refines<B::Time>+Lattice,
 {
-    type Cursor = BatchCursorEnter<K, V, T, R, B, TInner>;
+    type Key = B::Key;
+    type Val = B::Val;
+    type Time = TInner;
+    type R = B::R;
+
+    type Cursor = BatchCursorEnter<B::Key, B::Val, B::Time, B::R, B, TInner>;
 
     fn cursor(&self) -> Self::Cursor {
         BatchCursorEnter::new(self.batch.cursor())
     }
     fn len(&self) -> usize { self.batch.len() }
-    fn description(&self) -> &Description<TInner> { &self.description }
+    fn description(&self) -> &Description<Self::Time> { &self.description }
 }
 
-impl<K, V, T, R, B, TInner> BatchEnter<K, V, T, R, B, TInner>
+impl<B, TInner> BatchEnter<B, TInner>
 where
-    B: BatchReader<K, V, T, R>,
-    T: Timestamp,
-    TInner: Refines<T>+Lattice,
+    B: BatchReader,
+    B::Time: Timestamp,
+    TInner: Refines<B::Time>+Lattice,
 {
     /// Makes a new batch wrapper
     pub fn make_from(batch: B) -> Self {
@@ -157,7 +152,6 @@ where
         let since: Vec<_> = batch.description().since().elements().iter().map(|x| TInner::to_inner(x.clone())).collect();
 
         BatchEnter {
-            phantom: ::std::marker::PhantomData,
             batch: batch,
             description: Description::new(Antichain::from(lower), Antichain::from(upper), Antichain::from(since))
         }
@@ -213,12 +207,12 @@ where
 
 
 /// Wrapper to provide cursor to nested scope.
-pub struct BatchCursorEnter<K, V, T, R, B: BatchReader<K, V, T, R>, TInner> {
+pub struct BatchCursorEnter<K, V, T, R, B: BatchReader<Key=K, Val=V, Time=T, R=R>, TInner> {
     phantom: ::std::marker::PhantomData<(K, V, R, TInner)>,
     cursor: B::Cursor,
 }
 
-impl<K, V, T, R, B: BatchReader<K, V, T, R>, TInner> BatchCursorEnter<K, V, T, R, B, TInner> {
+impl<K, V, T, R, B: BatchReader<Key=K, Val=V, Time=T, R=R>, TInner> BatchCursorEnter<K, V, T, R, B, TInner> {
     fn new(cursor: B::Cursor) -> Self {
         BatchCursorEnter {
             phantom: ::std::marker::PhantomData,
@@ -227,12 +221,12 @@ impl<K, V, T, R, B: BatchReader<K, V, T, R>, TInner> BatchCursorEnter<K, V, T, R
     }
 }
 
-impl<K, V, T, R, TInner, B: BatchReader<K, V, T, R>> Cursor<K, V, TInner, R> for BatchCursorEnter<K, V, T, R, B, TInner>
+impl<K, V, T, R, TInner, B: BatchReader<Key=K, Val=V, Time=T, R=R>> Cursor<K, V, TInner, R> for BatchCursorEnter<K, V, T, R, B, TInner>
 where
     T: Timestamp,
     TInner: Refines<T>+Lattice,
 {
-    type Storage = BatchEnter<K, V, T, R, B, TInner>;
+    type Storage = BatchEnter<B, TInner>;
 
     #[inline] fn key_valid(&self, storage: &Self::Storage) -> bool { self.cursor.key_valid(&storage.batch) }
     #[inline] fn val_valid(&self, storage: &Self::Storage) -> bool { self.cursor.val_valid(&storage.batch) }
