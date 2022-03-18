@@ -65,7 +65,6 @@ impl<G: Scope, Tr> Clone for Arranged<G, Tr>
 where
     G::Timestamp: Lattice+Ord,
     Tr: TraceReader<Time=G::Timestamp> + Clone,
-    Tr::Cursor: Cursor<Tr::Key, Tr::Val, G::Timestamp, Tr::R>,
 {
     fn clone(&self) -> Self {
         Arranged {
@@ -82,7 +81,6 @@ impl<G: Scope, Tr> Arranged<G, Tr>
 where
     G::Timestamp: Lattice+Ord,
     Tr: TraceReader<Time=G::Timestamp> + Clone,
-    Tr::Cursor: Cursor<Tr::Key, Tr::Val, G::Timestamp, Tr::R>,
 {
     /// Brings an arranged collection into a nested scope.
     ///
@@ -423,7 +421,6 @@ impl<'a, G: Scope, Tr> Arranged<Child<'a, G, G::Timestamp>, Tr>
 where
     G::Timestamp: Lattice+Ord,
     Tr: TraceReader<Time=G::Timestamp> + Clone,
-    Tr::Cursor: Cursor<Tr::Key, Tr::Val, G::Timestamp, Tr::R>,
 {
     /// Brings an arranged collection out of a nested region.
     ///
@@ -460,7 +457,6 @@ where
         R: ExchangeData,
         Tr: Trace+TraceReader<Key=K,Val=V,Time=G::Timestamp,R=R>+'static,
         Tr::Batch: Batch,
-        Tr::Cursor: Cursor<K, V, G::Timestamp, R>,
     {
         self.arrange_named("Arrange")
     }
@@ -477,7 +473,6 @@ where
         R: ExchangeData,
         Tr: Trace+TraceReader<Key=K,Val=V,Time=G::Timestamp,R=R>+'static,
         Tr::Batch: Batch,
-        Tr::Cursor: Cursor<K, V, G::Timestamp, R>,
     {
         let exchange = Exchange::new(move |update: &((K,V),G::Timestamp,R)| (update.0).0.hashed().into());
         self.arrange_core(exchange, name)
@@ -493,7 +488,6 @@ where
         P: ParallelizationContract<G::Timestamp, ((K,V),G::Timestamp,R)>,
         Tr: Trace+TraceReader<Key=K,Val=V,Time=G::Timestamp,R=R>+'static,
         Tr::Batch: Batch,
-        Tr::Cursor: Cursor<K, V, G::Timestamp, R>,
     ;
 }
 
@@ -510,7 +504,6 @@ where
         P: ParallelizationContract<G::Timestamp, ((K,V),G::Timestamp,R)>,
         Tr: Trace+TraceReader<Key=K,Val=V,Time=G::Timestamp,R=R>+'static,
         Tr::Batch: Batch,
-        Tr::Cursor: Cursor<K, V, G::Timestamp, R>,
     {
         // The `Arrange` operator is tasked with reacting to an advancing input
         // frontier by producing the sequence of batches whose lower and upper
@@ -682,7 +675,6 @@ where
         P: ParallelizationContract<G::Timestamp, ((K,()),G::Timestamp,R)>,
         Tr: Trace+TraceReader<Key=K, Val=(), Time=G::Timestamp, R=R>+'static,
         Tr::Batch: Batch,
-        Tr::Cursor: Cursor<K, (), G::Timestamp, R>,
     {
         self.map(|k| (k, ()))
             .arrange_core(pact, name)

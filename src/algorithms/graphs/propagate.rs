@@ -65,7 +65,6 @@ where
     R: From<i8>,
     L: ExchangeData,
     Tr: TraceReader<Key=N, Val=N, Time=G::Timestamp, R=R>+Clone+'static,
-    Tr::Cursor: crate::trace::Cursor<N, N, G::Timestamp, Tr::R>+'static,
     F: Fn(&L)->u64+Clone+'static,
 {
     // Morally the code performs the following iterative computation. However, in the interest of a simplified

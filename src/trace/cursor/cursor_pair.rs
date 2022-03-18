@@ -15,13 +15,17 @@ pub struct CursorPair<C1, C2> {
     val_order: Ordering,    // Invalid vals are `Greater` than all other vals. `Equal` implies both valid.
 }
 
-impl<K, V, T, R, C1, C2> Cursor<K, V, T, R> for CursorPair<C1, C2>
+impl<K, V, T, R, C1, C2> Cursor for CursorPair<C1, C2>
 where
     K: Ord,
     V: Ord,
-    C1: Cursor<K, V, T, R>,
-    C2: Cursor<K, V, T, R>,
+    C1: Cursor<Key=K, Val=V, Time=T, R=R>,
+    C2: Cursor<Key=K, Val=V, Time=T, R=R>,
 {
+    type Key = K;
+    type Val = V;
+    type Time = T;
+    type R = R;
     type Storage = (C1::Storage, C2::Storage);
 
     // validation methods

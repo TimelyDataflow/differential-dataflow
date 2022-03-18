@@ -108,7 +108,6 @@ where
     T1: TraceReader<Val=(), Time=G::Timestamp>+Clone+'static,
     T1::Key: ExchangeData,
     T1::R: ExchangeData+Semigroup,
-    T1::Cursor: Cursor<T1::Key, (), G::Timestamp, T1::R>,
 {
     fn threshold_semigroup<R2, F>(&self, mut thresh: F) -> Collection<G, T1::Key, R2>
     where

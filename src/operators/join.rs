@@ -190,7 +190,6 @@ where
     Tr::Key: Data+Hashable,
     Tr::Val: Data,
     Tr::R: Semigroup,
-    Tr::Cursor: Cursor<Tr::Key,Tr::Val,G::Timestamp,Tr::R>+'static,
 {
     fn join_map<V2: ExchangeData, R2: ExchangeData+Semigroup, D: Data, L>(&self, other: &Collection<G, (Tr::Key, V2), R2>, mut logic: L) -> Collection<G, D, <Tr::R as Multiply<R2>>::Output>
     where Tr::Key: ExchangeData, Tr::R: Multiply<R2>, <Tr::R as Multiply<R2>>::Output: Semigroup, L: FnMut(&Tr::Key, &Tr::Val, &V2)->D+'static {
@@ -257,7 +256,6 @@ pub trait JoinCore<G: Scope, K: 'static, V: 'static, R: Semigroup> where G::Time
     fn join_core<Tr2,I,L> (&self, stream2: &Arranged<G,Tr2>, result: L) -> Collection<G,I::Item,<R as Multiply<Tr2::R>>::Output>
     where
         Tr2: TraceReader<Key=K, Time=G::Timestamp>+Clone+'static,
-        Tr2::Cursor: Cursor<K, Tr2::Val, G::Timestamp, Tr2::R>+'static,
         Tr2::Val: Ord+Clone+Debug+'static,
         Tr2::R: Semigroup,
         R: Multiply<Tr2::R>,
@@ -309,7 +307,6 @@ pub trait JoinCore<G: Scope, K: 'static, V: 'static, R: Semigroup> where G::Time
     fn join_core_internal_unsafe<Tr2,I,L,D,ROut> (&self, stream2: &Arranged<G,Tr2>, result: L) -> Collection<G,D,ROut>
     where
         Tr2: TraceReader<Key=K, Time=G::Timestamp>+Clone+'static,
-        Tr2::Cursor: Cursor<K, Tr2::Val, G::Timestamp, Tr2::R>+'static,
         Tr2::Val: Ord+Clone+Debug+'static,
         Tr2::R: Semigroup,
         D: Data,
@@ -331,7 +328,6 @@ where
     fn join_core<Tr2,I,L> (&self, stream2: &Arranged<G,Tr2>, result: L) -> Collection<G,I::Item,<R as Multiply<Tr2::R>>::Output>
     where
         Tr2: TraceReader<Key=K, Time=G::Timestamp>+Clone+'static,
-        Tr2::Cursor: Cursor<K, Tr2::Val, G::Timestamp, Tr2::R>+'static,
         Tr2::Val: Ord+Clone+Debug+'static,
         Tr2::R: Semigroup,
         R: Multiply<Tr2::R>,
@@ -347,7 +343,6 @@ where
     fn join_core_internal_unsafe<Tr2,I,L,D,ROut> (&self, stream2: &Arranged<G,Tr2>, result: L) -> Collection<G,D,ROut>
     where
         Tr2: TraceReader<Key=K, Time=G::Timestamp>+Clone+'static,
-        Tr2::Cursor: Cursor<K, Tr2::Val, G::Timestamp, Tr2::R>+'static,
         Tr2::Val: Ord+Clone+Debug+'static,
         Tr2::R: Semigroup,
         R: Semigroup,
@@ -369,13 +364,11 @@ impl<G, T1> JoinCore<G, T1::Key, T1::Val, T1::R> for Arranged<G,T1>
         T1::Key: Ord+Debug+'static,
         T1::Val: Ord+Clone+Debug+'static,
         T1::R: Semigroup,
-        T1::Cursor: Cursor<T1::Key,T1::Val,G::Timestamp,T1::R>+'static,
 {
     fn join_core<Tr2,I,L>(&self, other: &Arranged<G,Tr2>, mut result: L) -> Collection<G,I::Item,<T1::R as Multiply<Tr2::R>>::Output>
     where
         Tr2::Val: Ord+Clone+Debug+'static,
         Tr2: TraceReader<Key=T1::Key,Time=G::Timestamp>+Clone+'static,
-        Tr2::Cursor: Cursor<T1::Key, Tr2::Val, G::Timestamp, Tr2::R>+'static,
         Tr2::R: Semigroup,
         T1::R: Multiply<Tr2::R>,
         <T1::R as Multiply<Tr2::R>>::Output: Semigroup,
@@ -394,7 +387,6 @@ impl<G, T1> JoinCore<G, T1::Key, T1::Val, T1::R> for Arranged<G,T1>
     fn join_core_internal_unsafe<Tr2,I,L,D,ROut> (&self, other: &Arranged<G,Tr2>, mut result: L) -> Collection<G,D,ROut>
     where
         Tr2: TraceReader<Key=T1::Key, Time=G::Timestamp>+Clone+'static,
-        Tr2::Cursor: Cursor<T1::Key, Tr2::Val, G::Timestamp, Tr2::R>+'static,
         Tr2::Val: Ord+Clone+Debug+'static,
         Tr2::R: Semigroup,
         D: Data,
@@ -651,8 +643,8 @@ where
     R1: Semigroup,
     R2: Semigroup,
     R3: Semigroup,
-    C1: Cursor<K, V1, T, R1>,
-    C2: Cursor<K, V2, T, R2>,
+    C1: Cursor<Key=K, Val=V1, Time=T, R=R1>,
+    C2: Cursor<Key=K, Val=V2, Time=T, R=R2>,
     D: Ord+Clone+Data,
 {
     phant: ::std::marker::PhantomData<(K, V1, V2, R1, R2)>,
@@ -674,8 +666,8 @@ where
     R1: Semigroup,
     R2: Semigroup,
     R3: Semigroup,
-    C1: Cursor<K, V1, T, R1>,
-    C2: Cursor<K, V2, T, R2>,
+    C1: Cursor<Key=K, Val=V1, Time=T, R=R1>,
+    C2: Cursor<Key=K, Val=V2, Time=T, R=R2>,
     D: Clone+Data,
 {
     fn new(trace: C1, trace_storage: C1::Storage, batch: C2, batch_storage: C2::Storage, capability: Capability<T>) -> Self {

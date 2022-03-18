@@ -114,9 +114,9 @@ where
     type R = R;
 
     type Batch = B;
-    type Cursor = CursorList<K, V, T, R, <B as BatchReader>::Cursor>;
+    type Cursor = CursorList<<B as BatchReader>::Cursor>;
 
-    fn cursor_through(&mut self, upper: AntichainRef<T>) -> Option<(Self::Cursor, <Self::Cursor as Cursor<K, V, T, R>>::Storage)> {
+    fn cursor_through(&mut self, upper: AntichainRef<T>) -> Option<(Self::Cursor, <Self::Cursor as Cursor>::Storage)> {
 
         // If `upper` is the minimum frontier, we can return an empty cursor.
         // This can happen with operators that are written to expect the ability to acquire cursors
