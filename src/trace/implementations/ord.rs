@@ -419,7 +419,6 @@ where
     type Cursor = OrdKeyCursor<T, R, O>;
     fn cursor(&self) -> Self::Cursor {
         OrdKeyCursor {
-            empty: (),
             valid: true,
             cursor: self.layer.cursor(),
             phantom: PhantomData
@@ -629,12 +628,12 @@ where
     }
 }
 
+static EMPTY: () = ();
 
 /// A cursor for navigating a single layer.
 #[derive(Debug)]
 pub struct OrdKeyCursor<T: Lattice+Ord+Clone, R: Semigroup, O=usize> {
     valid: bool,
-    empty: (),
     cursor: OrderedCursor<OrderedLeaf<T, R>>,
     phantom: PhantomData<O>
 }
@@ -650,7 +649,7 @@ where
     type Storage = OrdKeyBatch<K, T, R, O>;
 
     fn key<'a>(&self, storage: &'a Self::Storage) -> &'a K { &self.cursor.key(&storage.layer) }
-    fn val<'a>(&self, _storage: &'a Self::Storage) -> &'a () { unsafe { ::std::mem::transmute(&self.empty) } }
+    fn val<'a>(&self, _storage: &'a Self::Storage) -> &'a () { &EMPTY }
     fn map_times<L: FnMut(&T, &R)>(&mut self, storage: &Self::Storage, mut logic: L) {
         self.cursor.child.rewind(&storage.layer.vals);
         while self.cursor.child.valid(&storage.layer.vals) {
