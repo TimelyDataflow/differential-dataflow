@@ -146,7 +146,6 @@ where
     Tr::Val: ExchangeData,
     Tr: Trace+TraceReader<Time=G::Timestamp,R=isize>+'static,
     Tr::Batch: Batch<Tr::Key, Tr::Val, G::Timestamp, isize>,
-    Tr::Cursor: Cursor<Tr::Key, Tr::Val, G::Timestamp, isize>,
 {
     let mut reader: Option<TraceAgent<Tr>> = None;
 
