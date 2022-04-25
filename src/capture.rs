@@ -265,9 +265,24 @@ pub mod source {
     use std::cell::RefCell;
     use std::hash::Hash;
     use std::rc::Rc;
+    use std::marker::{Send, Sync};
+    use std::sync::Arc;
     use timely::dataflow::{Scope, Stream, operators::{Capability, CapabilitySet}};
     use timely::progress::Timestamp;
-    use timely::scheduling::SyncActivator;
+    use timely::scheduling::{SyncActivator, activate::{ActivateOnDrop, SyncActivateOnDrop}};
+
+    // TODO(guswynn): implement this generally in timely
+    struct DropActivator {
+        activator: Arc<SyncActivator>,
+    }
+
+    impl Drop for DropActivator {
+        fn drop(&mut self) {
+            // Best effort: failure to activate
+            // is ignored
+            let _ = self.activator.activate();
+        }
+    }
 
     /// Constructs a stream of updates from a source of messages.
     ///
@@ -277,7 +292,7 @@ pub mod source {
     pub fn build<G, B, I, D, T, R>(
         scope: G,
         source_builder: B,
-    ) -> (Box<dyn std::any::Any>, Stream<G, (D, T, R)>)
+    ) -> (Box<dyn std::any::Any + Send + Sync>, Stream<G, (D, T, R)>)
     where
         G: Scope<Timestamp = T>,
         B: FnOnce(SyncActivator) -> I,
@@ -324,8 +339,7 @@ pub mod source {
         // Some message distribution logic depends on the number of workers.
         let workers = scope.peers();
 
-        // Vector of strong references to capabilities, which can be dropped to terminate the sources.
-        let mut tokens = Vec::new();
+        let mut token = None;
         // Frontier owned by the FEEDBACK operator and consulted by the MESSAGES operators.
         let mut antichain = MutableAntichain::new();
         antichain.update_iter(Some((T::minimum(), workers as i64)));
@@ -338,26 +352,34 @@ pub mod source {
         let activator = scope.sync_activator_for(&address);
         let activator2 = scope.activator_for(&address);
         let activations = scope.activations();
+        let drop_activator = Arc::new(SyncActivateOnDrop::new((), scope.sync_activator_for(&address)));
         let mut source = source_builder(activator);
         let (mut updates_out, updates) = messages_op.new_output();
         let (mut progress_out, progress) = messages_op.new_output();
-        let tokens_mut = &mut tokens;
+        let token_mut = &mut token;
         messages_op.build(move |capabilities| {
+
+            // Vector of strong references to capabilities, which can be dropped to terminate the sources.
+            let drop_activator_weak = Arc::downgrade(&drop_activator);
+
+            *token_mut = Some(drop_activator);
+
             // Read messages from some source; shuffle them to UPDATES and PROGRESS; share capability with FEEDBACK.
             // First, wrap capabilities in a rc refcell so that they can be downgraded to weak references.
-            use timely::scheduling::activate::ActivateOnDrop;
             let capability_sets = (CapabilitySet::from_elem(capabilities[0].clone()), CapabilitySet::from_elem(capabilities[1].clone()));
             let capability_sets = ActivateOnDrop::new(capability_sets, Rc::new(address), activations);
-            let strong_capabilities = Rc::new(RefCell::new(capability_sets));
-            let local_capabilities = Rc::downgrade(&strong_capabilities);
-            tokens_mut.push(strong_capabilities);
+            let mut local_capabilities = Some(capability_sets);
             // Capture the shared frontier to read out frontier updates to apply.
             let local_frontier = shared_frontier.clone();
             //
             move |_frontiers| {
+                if drop_activator_weak.upgrade().is_none() {
+                    local_capabilities = None;
+                }
+
                 // First check to ensure that we haven't been terminated by someone dropping our tokens.
-                if let Some(capabilities) = local_capabilities.upgrade() {
-                    let (updates_caps, progress_caps) = &mut **capabilities.borrow_mut();
+                if let Some(capabilities) = &mut local_capabilities {
+                    let (updates_caps, progress_caps) = &mut **capabilities;
                     // Consult our shared frontier, and ensure capabilities are downgraded to it.
                     let shared_frontier = local_frontier.borrow();
                     updates_caps.downgrade(&shared_frontier.frontier());
@@ -558,7 +580,7 @@ pub mod source {
             }
         });
 
-        (Box::new(tokens), changes)
+        (Box::new(token.unwrap()), changes)
     }
 }
 
