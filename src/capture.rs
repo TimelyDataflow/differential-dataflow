@@ -269,7 +269,7 @@ pub mod source {
     use std::sync::Arc;
     use timely::dataflow::{Scope, Stream, operators::{Capability, CapabilitySet}};
     use timely::progress::Timestamp;
-    use timely::scheduling::{SyncActivator, activate::{ActivateOnDrop, SyncActivateOnDrop}};
+    use timely::scheduling::{SyncActivator, activate::SyncActivateOnDrop};
 
     // TODO(guswynn): implement this generally in timely
     struct DropActivator {
@@ -351,21 +351,20 @@ pub mod source {
         let address = messages_op.operator_info().address;
         let activator = scope.sync_activator_for(&address);
         let activator2 = scope.activator_for(&address);
-        let activations = scope.activations();
         let drop_activator = Arc::new(SyncActivateOnDrop::new((), scope.sync_activator_for(&address)));
         let mut source = source_builder(activator);
         let (mut updates_out, updates) = messages_op.new_output();
         let (mut progress_out, progress) = messages_op.new_output();
-        let token_mut = &mut token;
-        messages_op.build(move |capabilities| {
+        messages_op.build(|capabilities| {
 
             // A Weak that communicates whether the returned token has been dropped.
             let drop_activator_weak = Arc::downgrade(&drop_activator);
 
-            *token_mut = Some(drop_activator);
+            token = Some(drop_activator);
 
             // Read messages from some source; shuffle them to UPDATES and PROGRESS; share capability with FEEDBACK.
-            let mut capability_sets = (CapabilitySet::from_elem(capabilities[0].clone()), CapabilitySet::from_elem(capabilities[1].clone()));
+            let mut updates_caps = CapabilitySet::from_elem(capabilities[0].clone());
+            let mut progress_caps = CapabilitySet::from_elem(capabilities[1].clone());
             // Capture the shared frontier to read out frontier updates to apply.
             let local_frontier = shared_frontier.clone();
             //
@@ -373,13 +372,12 @@ pub mod source {
                 // First check to ensure that we haven't been terminated by someone dropping our tokens.
                 if drop_activator_weak.upgrade().is_none() {
                     // Give up our capabilities
-                    capability_sets.0.downgrade(&[]);
-                    capability_sets.1.downgrade(&[]);
+                    updates_caps.downgrade(&[]);
+                    progress_caps.downgrade(&[]);
                     // never continue, even if we are (erroneously) activated again.
                     return;
                 }
 
-                let (updates_caps, progress_caps) = &mut capability_sets;
                 // Consult our shared frontier, and ensure capabilities are downgraded to it.
                 let shared_frontier = local_frontier.borrow();
                 updates_caps.downgrade(&shared_frontier.frontier());
