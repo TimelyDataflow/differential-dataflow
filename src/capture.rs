@@ -269,7 +269,7 @@ pub mod source {
     use std::sync::Arc;
     use timely::dataflow::{Scope, Stream, operators::{Capability, CapabilitySet}};
     use timely::progress::Timestamp;
-    use timely::scheduling::{SyncActivator, activate::SyncActivateOnDrop};
+    use timely::scheduling::SyncActivator;
 
     // TODO(guswynn): implement this generally in timely
     struct DropActivator {
@@ -351,14 +351,14 @@ pub mod source {
         let address = messages_op.operator_info().address;
         let activator = scope.sync_activator_for(&address);
         let activator2 = scope.activator_for(&address);
-        let drop_activator = Arc::new(SyncActivateOnDrop::new((), scope.sync_activator_for(&address)));
+        let drop_activator = DropActivator { activator: Arc::new(scope.sync_activator_for(&address)) };
         let mut source = source_builder(activator);
         let (mut updates_out, updates) = messages_op.new_output();
         let (mut progress_out, progress) = messages_op.new_output();
         messages_op.build(|capabilities| {
 
             // A Weak that communicates whether the returned token has been dropped.
-            let drop_activator_weak = Arc::downgrade(&drop_activator);
+            let drop_activator_weak = Arc::downgrade(&drop_activator.activator);
 
             token = Some(drop_activator);
 
