@@ -41,8 +41,6 @@ where
     T::Key: 'static,
     T::Val: 'static,
     T::R: 'static,
-    T::Batch: BatchReader<T::Key, T::Val, G::Timestamp, T::R>,
-    T::Cursor: Cursor<T::Key, T::Val, G::Timestamp, T::R>,
     F: Fn(&G::Timestamp)->Option<G::Timestamp>+'static,
 {
     let func1 = Rc::new(func);
