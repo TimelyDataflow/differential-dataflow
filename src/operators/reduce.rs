@@ -276,7 +276,7 @@ pub trait ReduceCore<G: Scope, K: Data, V: Data, R: Semigroup> where G::Timestam
             T2: Trace+TraceReader<Key=K, Time=G::Timestamp>+'static,
             T2::Val: Data,
             T2::R: Abelian,
-            T2::Batch: Batch<K, T2::Val, G::Timestamp, T2::R>,
+            T2::Batch: Batch,
             L: FnMut(&K, &[(&V, R)], &mut Vec<(T2::Val, T2::R)>)+'static,
         {
             self.reduce_core::<_,T2>(name, move |key, input, output, change| {
@@ -298,7 +298,7 @@ pub trait ReduceCore<G: Scope, K: Data, V: Data, R: Semigroup> where G::Timestam
             T2: Trace+TraceReader<Key=K, Time=G::Timestamp>+'static,
             T2::Val: Data,
             T2::R: Semigroup,
-            T2::Batch: Batch<K, T2::Val, G::Timestamp, T2::R>,
+            T2::Batch: Batch,
             L: FnMut(&K, &[(&V, R)], &mut Vec<(T2::Val,T2::R)>, &mut Vec<(T2::Val,T2::R)>)+'static
             ;
 }
@@ -316,7 +316,7 @@ where
             T2::Val: Data,
             T2::R: Semigroup,
             T2: Trace+TraceReader<Key=K, Time=G::Timestamp>+'static,
-            T2::Batch: Batch<K, T2::Val, G::Timestamp, T2::R>,
+            T2::Batch: Batch,
             L: FnMut(&K, &[(&V, R)], &mut Vec<(T2::Val,T2::R)>, &mut Vec<(T2::Val, T2::R)>)+'static
     {
         self.arrange_by_key_named(&format!("Arrange: {}", name))
@@ -334,7 +334,7 @@ where
             T2: Trace+TraceReader<Key=K, Time=G::Timestamp>+'static,
             T2::Val: Data,
             T2::R: Semigroup,
-            T2::Batch: Batch<K, T2::Val, G::Timestamp, T2::R>,
+            T2::Batch: Batch,
             L: FnMut(&K, &[(&V, R)], &mut Vec<(T2::Val,T2::R)>, &mut Vec<(T2::Val, T2::R)>)+'static {
 
         let mut result_trace = None;
@@ -476,7 +476,7 @@ where
                             let mut builders = Vec::new();
                             for i in 0 .. capabilities.len() {
                                 buffers.push((capabilities[i].time().clone(), Vec::new()));
-                                builders.push(<T2::Batch as Batch<K,T2::Val,G::Timestamp,T2::R>>::Builder::new());
+                                builders.push(<T2::Batch as Batch>::Builder::new());
                             }
 
                             // cursors for navigating input and output traces.

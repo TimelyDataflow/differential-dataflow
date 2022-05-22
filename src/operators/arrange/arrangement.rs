@@ -456,7 +456,7 @@ where
         V: ExchangeData,
         R: ExchangeData,
         Tr: Trace+TraceReader<Key=K,Val=V,Time=G::Timestamp,R=R>+'static,
-        Tr::Batch: Batch<K, V, G::Timestamp, R>,
+        Tr::Batch: Batch,
     {
         self.arrange_named("Arrange")
     }
@@ -472,7 +472,7 @@ where
         V: ExchangeData,
         R: ExchangeData,
         Tr: Trace+TraceReader<Key=K,Val=V,Time=G::Timestamp,R=R>+'static,
-        Tr::Batch: Batch<K, V, G::Timestamp, R>,
+        Tr::Batch: Batch,
     {
         let exchange = Exchange::new(move |update: &((K,V),G::Timestamp,R)| (update.0).0.hashed().into());
         self.arrange_core(exchange, name)
@@ -487,7 +487,7 @@ where
     where
         P: ParallelizationContract<G::Timestamp, ((K,V),G::Timestamp,R)>,
         Tr: Trace+TraceReader<Key=K,Val=V,Time=G::Timestamp,R=R>+'static,
-        Tr::Batch: Batch<K, V, G::Timestamp, R>,
+        Tr::Batch: Batch,
     ;
 }
 
@@ -503,7 +503,7 @@ where
     where
         P: ParallelizationContract<G::Timestamp, ((K,V),G::Timestamp,R)>,
         Tr: Trace+TraceReader<Key=K,Val=V,Time=G::Timestamp,R=R>+'static,
-        Tr::Batch: Batch<K, V, G::Timestamp, R>,
+        Tr::Batch: Batch,
     {
         // The `Arrange` operator is tasked with reacting to an advancing input
         // frontier by producing the sequence of batches whose lower and upper
@@ -537,7 +537,7 @@ where
                 };
 
                 // Where we will deposit received updates, and from which we extract batches.
-                let mut batcher = <Tr::Batch as Batch<K,V,G::Timestamp,R>>::Batcher::new();
+                let mut batcher = <Tr::Batch as Batch>::Batcher::new();
 
                 // Capabilities for the lower envelope of updates in `batcher`.
                 let mut capabilities = Antichain::<Capability<G::Timestamp>>::new();
@@ -674,7 +674,7 @@ where
     where
         P: ParallelizationContract<G::Timestamp, ((K,()),G::Timestamp,R)>,
         Tr: Trace+TraceReader<Key=K, Val=(), Time=G::Timestamp, R=R>+'static,
-        Tr::Batch: Batch<K, (), G::Timestamp, R>,
+        Tr::Batch: Batch,
     {
         self.map(|k| (k, ()))
             .arrange_core(pact, name)

@@ -87,41 +87,40 @@ use ::timely::order::PartialOrder;
 /// A spine maintains a small number of immutable collections of update tuples, merging the collections when
 /// two have similar sizes. In this way, it allows the addition of more tuples, which may then be merged with
 /// other immutable collections.
-pub struct Spine<K, V, T: Lattice+Ord, R: Semigroup, B: Batch<K, V, T, R>> {
+pub struct Spine<B: Batch> where B::Time: Lattice+Ord, B::R: Semigroup {
     operator: OperatorInfo,
     logger: Option<Logger>,
-    phantom: ::std::marker::PhantomData<(K, V, R)>,
-    logical_frontier: Antichain<T>,                   // Times after which the trace must accumulate correctly.
-    physical_frontier: Antichain<T>,                   // Times after which the trace must be able to subset its inputs.
-    merging: Vec<MergeState<K,V,T,R,B>>,// Several possibly shared collections of updates.
-    pending: Vec<B>,                       // Batches at times in advance of `frontier`.
-    upper: Antichain<T>,
+    logical_frontier: Antichain<B::Time>,   // Times after which the trace must accumulate correctly.
+    physical_frontier: Antichain<B::Time>,  // Times after which the trace must be able to subset its inputs.
+    merging: Vec<MergeState<B>>,            // Several possibly shared collections of updates.
+    pending: Vec<B>,                        // Batches at times in advance of `frontier`.
+    upper: Antichain<B::Time>,
     effort: usize,
     activator: Option<timely::scheduling::activate::Activator>,
 }
 
-impl<K, V, T, R, B> TraceReader for Spine<K, V, T, R, B>
+impl<B> TraceReader for Spine<B>
 where
-    K: Ord+Clone,           // Clone is required by `batch::advance_*` (in-place could remove).
-    V: Ord+Clone,           // Clone is required by `batch::advance_*` (in-place could remove).
-    T: Lattice+timely::progress::Timestamp+Ord+Clone+Debug,
-    R: Semigroup,
-    B: Batch<K, V, T, R>+Clone+'static,
+    B: Batch+Clone+'static,
+    B::Key: Ord+Clone,           // Clone is required by `batch::advance_*` (in-place could remove).
+    B::Val: Ord+Clone,           // Clone is required by `batch::advance_*` (in-place could remove).
+    B::Time: Lattice+timely::progress::Timestamp+Ord+Clone+Debug,
+    B::R: Semigroup,
 {
-    type Key = K;
-    type Val = V;
-    type Time = T;
-    type R = R;
+    type Key = B::Key;
+    type Val = B::Val;
+    type Time = B::Time;
+    type R = B::R;
 
     type Batch = B;
-    type Cursor = CursorList<K, V, T, R, <B as BatchReader<K, V, T, R>>::Cursor>;
+    type Cursor = CursorList<Self::Key, Self::Val, Self::Time, Self::R, <B as BatchReader>::Cursor>;
 
-    fn cursor_through(&mut self, upper: AntichainRef<T>) -> Option<(Self::Cursor, <Self::Cursor as Cursor<K, V, T, R>>::Storage)> {
+    fn cursor_through(&mut self, upper: AntichainRef<Self::Time>) -> Option<(Self::Cursor, <Self::Cursor as Cursor<Self::Key, Self::Val, Self::Time, Self::R>>::Storage)> {
 
         // If `upper` is the minimum frontier, we can return an empty cursor.
         // This can happen with operators that are written to expect the ability to acquire cursors
         // for their prior frontiers, and which start at `[T::minimum()]`, such as `Reduce`, sadly.
-        if upper.less_equal(&T::minimum()) {
+        if upper.less_equal(&<Self::Time as timely::progress::Timestamp>::minimum()) {
             let cursors = Vec::new();
             let storage = Vec::new();
             return Some((CursorList::new(cursors, &storage), storage));
@@ -211,19 +210,19 @@ where
 
         Some((CursorList::new(cursors, &storage), storage))
     }
-    fn set_logical_compaction(&mut self, frontier: AntichainRef<T>) {
+    fn set_logical_compaction(&mut self, frontier: AntichainRef<B::Time>) {
         self.logical_frontier.clear();
         self.logical_frontier.extend(frontier.iter().cloned());
     }
-    fn get_logical_compaction(&mut self) -> AntichainRef<T> { self.logical_frontier.borrow() }
-    fn set_physical_compaction(&mut self, frontier: AntichainRef<T>) {
+    fn get_logical_compaction(&mut self) -> AntichainRef<B::Time> { self.logical_frontier.borrow() }
+    fn set_physical_compaction(&mut self, frontier: AntichainRef<B::Time>) {
         // We should never request to rewind the frontier.
         debug_assert!(PartialOrder::less_equal(&self.physical_frontier.borrow(), &frontier), "FAIL\tthrough frontier !<= new frontier {:?} {:?}\n", self.physical_frontier, frontier);
         self.physical_frontier.clear();
         self.physical_frontier.extend(frontier.iter().cloned());
         self.consider_merges();
     }
-    fn get_physical_compaction(&mut self) -> AntichainRef<T> { self.physical_frontier.borrow() }
+    fn get_physical_compaction(&mut self) -> AntichainRef<B::Time> { self.physical_frontier.borrow() }
 
     fn map_batches<F: FnMut(&Self::Batch)>(&self, mut f: F) {
         for batch in self.merging.iter().rev() {
@@ -242,13 +241,13 @@ where
 
 // A trace implementation for any key type that can be borrowed from or converted into `Key`.
 // TODO: Almost all this implementation seems to be generic with respect to the trace and batch types.
-impl<K, V, T, R, B> Trace for Spine<K, V, T, R, B>
+impl<B> Trace for Spine<B>
 where
-    K: Ord+Clone,
-    V: Ord+Clone,
-    T: Lattice+timely::progress::Timestamp+Ord+Clone+Debug,
-    R: Semigroup,
-    B: Batch<K, V, T, R>+Clone+'static,
+    B: Batch+Clone+'static,
+    B::Key: Ord+Clone,
+    B::Val: Ord+Clone,
+    B::Time: Lattice+timely::progress::Timestamp+Ord+Clone+Debug,
+    B::R: Semigroup,
 {
     fn new(
         info: ::timely::dataflow::operators::generic::OperatorInfo,
@@ -311,18 +310,18 @@ where
         if !self.upper.borrow().is_empty() {
             use trace::Builder;
             let builder = B::Builder::new();
-            let batch = builder.done(self.upper.clone(), Antichain::new(), Antichain::from_elem(T::minimum()));
+            let batch = builder.done(self.upper.clone(), Antichain::new(), Antichain::from_elem(<Self::Time as timely::progress::Timestamp>::minimum()));
             self.insert(batch);
         }
     }
 }
 
 // Drop implementation allows us to log batch drops, to zero out maintained totals.
-impl<K, V, T, R, B> Drop for Spine<K, V, T, R, B>
+impl<B> Drop for Spine<B>
 where
-    T: Lattice+Ord,
-    R: Semigroup,
-    B: Batch<K, V, T, R>,
+    B: Batch,
+    B::Time: Lattice+Ord,
+    B::R: Semigroup,
 {
     fn drop(&mut self) {
         self.drop_batches();
@@ -330,11 +329,11 @@ where
 }
 
 
-impl<K, V, T, R, B> Spine<K, V, T, R, B>
+impl<B> Spine<B>
 where
-    T: Lattice+Ord,
-    R: Semigroup,
-    B: Batch<K, V, T, R>,
+    B: Batch,
+    B::Time: Lattice+Ord,
+    B::R: Semigroup,
 {
     /// Drops and logs batches. Used in `set_logical_compaction` and drop.
     fn drop_batches(&mut self) {
@@ -376,13 +375,13 @@ where
     }
 }
 
-impl<K, V, T, R, B> Spine<K, V, T, R, B>
+impl<B> Spine<B>
 where
-    K: Ord+Clone,
-    V: Ord+Clone,
-    T: Lattice+timely::progress::Timestamp+Ord+Clone+Debug,
-    R: Semigroup,
-    B: Batch<K, V, T, R>,
+    B: Batch,
+    B::Key: Ord+Clone,
+    B::Val: Ord+Clone,
+    B::Time: Lattice+timely::progress::Timestamp+Ord+Clone+Debug,
+    B::R: Semigroup,
 {
     /// True iff there is at most one non-empty batch in `self.merging`.
     ///
@@ -432,12 +431,11 @@ where
         Spine {
             operator,
             logger,
-            phantom: ::std::marker::PhantomData,
-            logical_frontier: Antichain::from_elem(<T as timely::progress::Timestamp>::minimum()),
-            physical_frontier: Antichain::from_elem(<T as timely::progress::Timestamp>::minimum()),
+            logical_frontier: Antichain::from_elem(<B::Time as timely::progress::Timestamp>::minimum()),
+            physical_frontier: Antichain::from_elem(<B::Time as timely::progress::Timestamp>::minimum()),
             merging: Vec::new(),
             pending: Vec::new(),
-            upper: Antichain::from_elem(<T as timely::progress::Timestamp>::minimum()),
+            upper: Antichain::from_elem(<B::Time as timely::progress::Timestamp>::minimum()),
             effort,
             activator,
         }
@@ -766,7 +764,7 @@ where
 ///
 /// A layer can be empty, contain a single batch, or contain a pair of batches
 /// that are in the process of merging into a batch for the next layer.
-enum MergeState<K, V, T, R, B: Batch<K, V, T, R>> {
+enum MergeState<B: Batch> {
     /// An empty layer, containing no updates.
     Vacant,
     /// A layer containing a single batch.
@@ -775,10 +773,10 @@ enum MergeState<K, V, T, R, B: Batch<K, V, T, R>> {
     /// to ensure the progress of maintenance work.
     Single(Option<B>),
     /// A layer containing two batches, in the process of merging.
-    Double(MergeVariant<K, V, T, R, B>),
+    Double(MergeVariant<B>),
 }
 
-impl<K, V, T: Eq, R, B: Batch<K, V, T, R>> MergeState<K, V, T, R, B> {
+impl<B: Batch> MergeState<B> where B::Time: Eq {
 
     /// The number of actual updates contained in the level.
     fn len(&self) -> usize {
@@ -859,12 +857,12 @@ impl<K, V, T: Eq, R, B: Batch<K, V, T, R>> MergeState<K, V, T, R, B> {
     /// empty batch whose upper and lower froniers are equal. This
     /// option exists purely for bookkeeping purposes, and no computation
     /// is performed to merge the two batches.
-    fn begin_merge(batch1: Option<B>, batch2: Option<B>, compaction_frontier: Option<AntichainRef<T>>) -> MergeState<K, V, T, R, B> {
+    fn begin_merge(batch1: Option<B>, batch2: Option<B>, compaction_frontier: Option<AntichainRef<B::Time>>) -> MergeState<B> {
         let variant =
         match (batch1, batch2) {
             (Some(batch1), Some(batch2)) => {
                 assert!(batch1.upper() == batch2.lower());
-                let begin_merge = <B as Batch<K, V, T, R>>::begin_merge(&batch1, &batch2, compaction_frontier);
+                let begin_merge = <B as Batch>::begin_merge(&batch1, &batch2, compaction_frontier);
                 MergeVariant::InProgress(batch1, batch2, begin_merge)
             }
             (None, Some(x)) => MergeVariant::Complete(Some((x, None))),
@@ -876,14 +874,14 @@ impl<K, V, T: Eq, R, B: Batch<K, V, T, R>> MergeState<K, V, T, R, B> {
     }
 }
 
-enum MergeVariant<K, V, T, R, B: Batch<K, V, T, R>> {
+enum MergeVariant<B: Batch> {
     /// Describes an actual in-progress merge between two non-trivial batches.
-    InProgress(B, B, <B as Batch<K,V,T,R>>::Merger),
+    InProgress(B, B, <B as Batch>::Merger),
     /// A merge that requires no further work. May or may not represent a non-trivial batch.
     Complete(Option<(B, Option<(B, B)>)>),
 }
 
-impl<K, V, T, R, B: Batch<K, V, T, R>> MergeVariant<K, V, T, R, B> {
+impl<B: Batch> MergeVariant<B> {
 
     /// Completes and extracts the batch, unless structurally empty.
     ///

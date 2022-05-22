@@ -8,32 +8,32 @@ use lattice::Lattice;
 use trace::{Batch, Batcher, Builder};
 
 /// Creates batches from unordered tuples.
-pub struct MergeBatcher<K: Ord, V: Ord, T: Ord, R: Semigroup, B: Batch<K, V, T, R>> {
-    sorter: MergeSorter<(K, V), T, R>,
-    lower: Antichain<T>,
-    frontier: Antichain<T>,
+pub struct MergeBatcher<B: Batch> where B::Key: Ord, B::Val: Ord, B::Time: Ord, B::R: Semigroup {
+    sorter: MergeSorter<(B::Key, B::Val), B::Time, B::R>,
+    lower: Antichain<B::Time>,
+    frontier: Antichain<B::Time>,
     phantom: ::std::marker::PhantomData<B>,
 }
 
-impl<K, V, T, R, B> Batcher<K, V, T, R, B> for MergeBatcher<K, V, T, R, B>
+impl<B> Batcher<B> for MergeBatcher<B>
 where
-    K: Ord+Clone,
-    V: Ord+Clone,
-    T: Lattice+timely::progress::Timestamp+Ord+Clone,
-    R: Semigroup,
-    B: Batch<K, V, T, R>,
+    B: Batch,
+    B::Key: Ord+Clone,
+    B::Val: Ord+Clone,
+    B::Time: Lattice+timely::progress::Timestamp+Ord+Clone,
+    B::R: Semigroup,
 {
     fn new() -> Self {
         MergeBatcher {
             sorter: MergeSorter::new(),
             frontier: Antichain::new(),
-            lower: Antichain::from_elem(T::minimum()),
+            lower: Antichain::from_elem(<B::Time as timely::progress::Timestamp>::minimum()),
             phantom: ::std::marker::PhantomData,
         }
     }
 
     #[inline(never)]
-    fn push_batch(&mut self, batch: &mut Vec<((K,V),T,R)>) {
+    fn push_batch(&mut self, batch: &mut Vec<((B::Key,B::Val),B::Time,B::R)>) {
         self.sorter.push(batch);
     }
 
@@ -42,7 +42,7 @@ where
     // which we call `lower`, by assumption that after sealing a batcher we receive no more
     // updates with times not greater or equal to `upper`.
     #[inline(never)]
-    fn seal(&mut self, upper: Antichain<T>) -> B {
+    fn seal(&mut self, upper: Antichain<B::Time>) -> B {
 
         let mut builder = B::Builder::new();
 
@@ -92,18 +92,18 @@ where
         let mut buffer = Vec::new();
         self.sorter.push(&mut buffer);
         // We recycle buffers with allocations (capacity, and not zero-sized).
-        while buffer.capacity() > 0 && std::mem::size_of::<((K,V),T,R)>() > 0 {
+        while buffer.capacity() > 0 && std::mem::size_of::<((B::Key,B::Val),B::Time,B::R)>() > 0 {
             buffer = Vec::new();
             self.sorter.push(&mut buffer);
         }
 
-        let seal = builder.done(self.lower.clone(), upper.clone(), Antichain::from_elem(T::minimum()));
+        let seal = builder.done(self.lower.clone(), upper.clone(), Antichain::from_elem(<B::Time as timely::progress::Timestamp>::minimum()));
         self.lower = upper;
         seal
     }
 
     // the frontier of elements remaining after the most recent call to `self.seal`.
-    fn frontier(&mut self) -> timely::progress::frontier::AntichainRef<T> {
+    fn frontier(&mut self) -> timely::progress::frontier::AntichainRef<B::Time> {
         self.frontier.borrow()
     }
 }

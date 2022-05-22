@@ -145,7 +145,7 @@ where
     Tr::Key: ExchangeData+Hashable+std::hash::Hash,
     Tr::Val: ExchangeData,
     Tr: Trace+TraceReader<Time=G::Timestamp,R=isize>+'static,
-    Tr::Batch: Batch<Tr::Key, Tr::Val, G::Timestamp, isize>,
+    Tr::Batch: Batch,
 {
     let mut reader: Option<TraceAgent<Tr>> = None;
 
@@ -251,7 +251,7 @@ where
                                 // Prepare a cursor to the existing arrangement, and a batch builder for
                                 // new stuff that we add.
                                 let (mut trace_cursor, trace_storage) = reader_local.cursor();
-                                let mut builder = <Tr::Batch as Batch<Tr::Key,Tr::Val,G::Timestamp,Tr::R>>::Builder::new();
+                                let mut builder = <Tr::Batch as Batch>::Builder::new();
                                 for (key, mut list) in to_process.drain(..) {
 
                                     // The prior value associated with the key.
