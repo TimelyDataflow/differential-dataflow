@@ -41,7 +41,7 @@ where
     type R = Tr::R;
 
     type Batch = BatchFilter<Tr::Batch, F>;
-    type Cursor = CursorFilter<Tr::Key, Tr::Val, Tr::Time, Tr::R, Tr::Cursor, F>;
+    type Cursor = CursorFilter<Tr::Cursor, F>;
 
     fn map_batches<F2: FnMut(&Self::Batch)>(&self, mut f: F2) {
         let logic = self.logic.clone();
@@ -55,7 +55,7 @@ where
     fn set_physical_compaction(&mut self, frontier: AntichainRef<Tr::Time>) { self.trace.set_physical_compaction(frontier) }
     fn get_physical_compaction(&mut self) -> AntichainRef<Tr::Time> { self.trace.get_physical_compaction() }
 
-    fn cursor_through(&mut self, upper: AntichainRef<Tr::Time>) -> Option<(Self::Cursor, <Self::Cursor as Cursor<Tr::Key, Tr::Val, Tr::Time, Tr::R>>::Storage)> {
+    fn cursor_through(&mut self, upper: AntichainRef<Tr::Time>) -> Option<(Self::Cursor, <Self::Cursor as Cursor>::Storage)> {
         self.trace.cursor_through(upper).map(|(x,y)| (CursorFilter::new(x, self.logic.clone()), y))
     }
 }
@@ -125,38 +125,41 @@ where
 }
 
 /// Wrapper to provide cursor to nested scope.
-pub struct CursorFilter<K, V, T, R, C: Cursor<K, V, T, R>, F> {
-    phantom: ::std::marker::PhantomData<(K, V, T, R)>,
+pub struct CursorFilter<C: Cursor, F> {
     cursor: C,
     logic: F,
 }
 
-impl<K, V, T, R, C: Cursor<K, V, T, R>, F> CursorFilter<K, V, T, R, C, F> {
+impl<C: Cursor, F> CursorFilter<C, F> {
     fn new(cursor: C, logic: F) -> Self {
         CursorFilter {
-            phantom: ::std::marker::PhantomData,
             cursor,
             logic,
         }
     }
 }
 
-impl<K, V, T, R, C, F> Cursor<K, V, T, R> for CursorFilter<K, V, T, R, C, F>
+impl<C, F> Cursor for CursorFilter<C, F>
 where
-    C: Cursor<K, V, T, R>,
-    T: Timestamp,
-    F: FnMut(&K, &V)->bool+'static
+    C: Cursor,
+    C::Time: Timestamp,
+    F: FnMut(&C::Key, &C::Val)->bool+'static
 {
+    type Key = C::Key;
+    type Val = C::Val;
+    type Time = C::Time;
+    type R = C::R;
+
     type Storage = C::Storage;
 
     #[inline] fn key_valid(&self, storage: &Self::Storage) -> bool { self.cursor.key_valid(storage) }
     #[inline] fn val_valid(&self, storage: &Self::Storage) -> bool { self.cursor.val_valid(storage) }
 
-    #[inline] fn key<'a>(&self, storage: &'a Self::Storage) -> &'a K { self.cursor.key(storage) }
-    #[inline] fn val<'a>(&self, storage: &'a Self::Storage) -> &'a V { self.cursor.val(storage) }
+    #[inline] fn key<'a>(&self, storage: &'a Self::Storage) -> &'a Self::Key { self.cursor.key(storage) }
+    #[inline] fn val<'a>(&self, storage: &'a Self::Storage) -> &'a Self::Val { self.cursor.val(storage) }
 
     #[inline]
-    fn map_times<L: FnMut(&T,&R)>(&mut self, storage: &Self::Storage, logic: L) {
+    fn map_times<L: FnMut(&Self::Time,&Self::R)>(&mut self, storage: &Self::Storage, logic: L) {
         let key = self.key(storage);
         let val = self.val(storage);
         if (self.logic)(key, val) {
@@ -165,10 +168,10 @@ where
     }
 
     #[inline] fn step_key(&mut self, storage: &Self::Storage) { self.cursor.step_key(storage) }
-    #[inline] fn seek_key(&mut self, storage: &Self::Storage, key: &K) { self.cursor.seek_key(storage, key) }
+    #[inline] fn seek_key(&mut self, storage: &Self::Storage, key: &Self::Key) { self.cursor.seek_key(storage, key) }
 
     #[inline] fn step_val(&mut self, storage: &Self::Storage) { self.cursor.step_val(storage) }
-    #[inline] fn seek_val(&mut self, storage: &Self::Storage, val: &V) { self.cursor.seek_val(storage, val) }
+    #[inline] fn seek_val(&mut self, storage: &Self::Storage, val: &Self::Val) { self.cursor.seek_val(storage, val) }
 
     #[inline] fn rewind_keys(&mut self, storage: &Self::Storage) { self.cursor.rewind_keys(storage) }
     #[inline] fn rewind_vals(&mut self, storage: &Self::Storage) { self.cursor.rewind_vals(storage) }
@@ -191,21 +194,26 @@ impl<B: BatchReader, F> BatchCursorFilter<B, F> {
     }
 }
 
-impl<B: BatchReader, F> Cursor<B::Key, B::Val, B::Time, B::R> for BatchCursorFilter<B, F>
+impl<B: BatchReader, F> Cursor for BatchCursorFilter<B, F>
 where
     B::Time: Timestamp,
     F: FnMut(&B::Key, &B::Val)->bool+'static,
 {
+    type Key = B::Key;
+    type Val = B::Val;
+    type Time = B::Time;
+    type R = B::R;
+
     type Storage = BatchFilter<B, F>;
 
     #[inline] fn key_valid(&self, storage: &Self::Storage) -> bool { self.cursor.key_valid(&storage.batch) }
     #[inline] fn val_valid(&self, storage: &Self::Storage) -> bool { self.cursor.val_valid(&storage.batch) }
 
-    #[inline] fn key<'a>(&self, storage: &'a Self::Storage) -> &'a B::Key { self.cursor.key(&storage.batch) }
-    #[inline] fn val<'a>(&self, storage: &'a Self::Storage) -> &'a B::Val { self.cursor.val(&storage.batch) }
+    #[inline] fn key<'a>(&self, storage: &'a Self::Storage) -> &'a Self::Key { self.cursor.key(&storage.batch) }
+    #[inline] fn val<'a>(&self, storage: &'a Self::Storage) -> &'a Self::Val { self.cursor.val(&storage.batch) }
 
     #[inline]
-    fn map_times<L: FnMut(&B::Time,&B::R)>(&mut self, storage: &Self::Storage, logic: L) {
+    fn map_times<L: FnMut(&Self::Time,&Self::R)>(&mut self, storage: &Self::Storage, logic: L) {
         let key = self.key(storage);
         let val = self.val(storage);
         if (self.logic)(key, val) {
@@ -214,10 +222,10 @@ where
     }
 
     #[inline] fn step_key(&mut self, storage: &Self::Storage) { self.cursor.step_key(&storage.batch) }
-    #[inline] fn seek_key(&mut self, storage: &Self::Storage, key: &B::Key) { self.cursor.seek_key(&storage.batch, key) }
+    #[inline] fn seek_key(&mut self, storage: &Self::Storage, key: &Self::Key) { self.cursor.seek_key(&storage.batch, key) }
 
     #[inline] fn step_val(&mut self, storage: &Self::Storage) { self.cursor.step_val(&storage.batch) }
-    #[inline] fn seek_val(&mut self, storage: &Self::Storage, val: &B::Val) { self.cursor.seek_val(&storage.batch, val) }
+    #[inline] fn seek_val(&mut self, storage: &Self::Storage, val: &Self::Val) { self.cursor.seek_val(&storage.batch, val) }
 
     #[inline] fn rewind_keys(&mut self, storage: &Self::Storage) { self.cursor.rewind_keys(&storage.batch) }
     #[inline] fn rewind_vals(&mut self, storage: &Self::Storage) { self.cursor.rewind_vals(&storage.batch) }

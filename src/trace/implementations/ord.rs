@@ -75,8 +75,8 @@ where
     type Time = T;
     type R = R;
 
-    type Cursor = OrdValCursor<V, T, R, O>;
-    fn cursor(&self) -> Self::Cursor { OrdValCursor { cursor: self.layer.cursor() } }
+    type Cursor = OrdValCursor<K, V, T, R, O>;
+    fn cursor(&self) -> Self::Cursor { OrdValCursor { cursor: self.layer.cursor(), phantom: std::marker::PhantomData } }
     fn len(&self) -> usize { <OrderedLayer<K, OrderedLayer<V, OrderedLeaf<T, R>, O>, O> as Trie>::tuples(&self.layer) }
     fn description(&self) -> &Description<T> { &self.desc }
 }
@@ -311,17 +311,18 @@ where
 
 /// A cursor for navigating a single layer.
 #[derive(Debug)]
-pub struct OrdValCursor<V, T, R, O=usize>
+pub struct OrdValCursor<K, V, T, R, O=usize>
 where
     V: Ord+Clone,
     T: Lattice+Ord+Clone,
     R: Semigroup,
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug
 {
+    phantom: std::marker::PhantomData<K>,
     cursor: OrderedCursor<OrderedLayer<V, OrderedLeaf<T, R>, O>>,
 }
 
-impl<K, V, T, R, O> Cursor<K, V, T, R> for OrdValCursor<V, T, R, O>
+impl<K, V, T, R, O> Cursor for OrdValCursor<K, V, T, R, O>
 where
     K: Ord+Clone,
     V: Ord+Clone,
@@ -329,6 +330,11 @@ where
     R: Semigroup,
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug
 {
+    type Key = K;
+    type Val = V;
+    type Time = T;
+    type R = R;
+
     type Storage = OrdValBatch<K, V, T, R, O>;
 
     fn key<'a>(&self, storage: &'a Self::Storage) -> &'a K { &self.cursor.key(&storage.layer) }
@@ -426,7 +432,7 @@ where
     type Time = T;
     type R = R;
 
-    type Cursor = OrdKeyCursor<T, R, O>;
+    type Cursor = OrdKeyCursor<K, T, R, O>;
     fn cursor(&self) -> Self::Cursor {
         OrdKeyCursor {
             empty: (),
@@ -642,20 +648,24 @@ where
 
 /// A cursor for navigating a single layer.
 #[derive(Debug)]
-pub struct OrdKeyCursor<T: Lattice+Ord+Clone, R: Semigroup, O=usize> {
+pub struct OrdKeyCursor<K, T: Lattice+Ord+Clone, R: Semigroup, O=usize> {
     valid: bool,
     empty: (),
     cursor: OrderedCursor<OrderedLeaf<T, R>>,
-    phantom: PhantomData<O>
+    phantom: PhantomData<(K, O)>
 }
 
-impl<K, T, R, O> Cursor<K, (), T, R> for OrdKeyCursor<T, R, O>
+impl<K, T, R, O> Cursor for OrdKeyCursor<K, T, R, O>
 where
     K: Ord+Clone,
     T: Lattice+Ord+Clone,
     R: Semigroup,
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug
 {
+    type Key = K;
+    type Val = ();
+    type Time = T;
+    type R = R;
 
     type Storage = OrdKeyBatch<K, T, R, O>;
 
