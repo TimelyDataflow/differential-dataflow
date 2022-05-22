@@ -401,7 +401,7 @@ where
 
                 // Determine new frontier on queries that may be issued.
                 // TODO: This code looks very suspect; explain better or fix.
-                let frontier = std::array::IntoIter::new([
+                let frontier = IntoIterator::into_iter([
                     capability.as_ref().map(|c| c.time().clone()),
                     input1.frontier().frontier().get(0).cloned(),
                 ]).filter_map(|t| t).min();
