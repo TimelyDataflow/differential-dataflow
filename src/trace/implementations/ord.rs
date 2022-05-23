@@ -35,16 +35,16 @@ use super::merge_batcher::MergeBatcher;
 use abomonation::abomonated::Abomonated;
 
 /// A trace implementation using a spine of ordered lists.
-pub type OrdValSpine<K, V, T, R, O=usize> = Spine<K, V, T, R, Rc<OrdValBatch<K, V, T, R, O>>>;
+pub type OrdValSpine<K, V, T, R, O=usize> = Spine<Rc<OrdValBatch<K, V, T, R, O>>>;
 
 /// A trace implementation using a spine of abomonated ordered lists.
-pub type OrdValSpineAbom<K, V, T, R, O=usize> = Spine<K, V, T, R, Rc<Abomonated<OrdValBatch<K, V, T, R, O>, Vec<u8>>>>;
+pub type OrdValSpineAbom<K, V, T, R, O=usize> = Spine<Rc<Abomonated<OrdValBatch<K, V, T, R, O>, Vec<u8>>>>;
 
 /// A trace implementation for empty values using a spine of ordered lists.
-pub type OrdKeySpine<K, T, R, O=usize> = Spine<K, (), T, R, Rc<OrdKeyBatch<K, T, R, O>>>;
+pub type OrdKeySpine<K, T, R, O=usize> = Spine<Rc<OrdKeyBatch<K, T, R, O>>>;
 
 /// A trace implementation for empty values using a spine of abomonated ordered lists.
-pub type OrdKeySpineAbom<K, T, R, O=usize> = Spine<K, (), T, R, Rc<Abomonated<OrdKeyBatch<K, T, R, O>, Vec<u8>>>>;
+pub type OrdKeySpineAbom<K, T, R, O=usize> = Spine<Rc<Abomonated<OrdKeyBatch<K, T, R, O>, Vec<u8>>>>;
 
 
 /// An immutable collection of update tuples, from a contiguous interval of logical times.
@@ -76,12 +76,7 @@ where
     type R = R;
 
     type Cursor = OrdValCursor<K, V, T, R, O>;
-    fn cursor(&self) -> Self::Cursor {
-        OrdValCursor {
-            cursor: self.layer.cursor(),
-            phantom: PhantomData,
-        }
-    }
+    fn cursor(&self) -> Self::Cursor { OrdValCursor { cursor: self.layer.cursor(), phantom: std::marker::PhantomData } }
     fn len(&self) -> usize { <OrderedLayer<K, OrderedLayer<V, OrderedLeaf<T, R>, O>, O> as Trie>::tuples(&self.layer) }
     fn description(&self) -> &Description<T> { &self.desc }
 }
@@ -94,7 +89,7 @@ where
     R: Semigroup,
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug
 {
-    type Batcher = MergeBatcher<K, V, T, R, Self>;
+    type Batcher = MergeBatcher<Self>;
     type Builder = OrdValBuilder<K, V, T, R, O>;
     type Merger = OrdValMerger<K, V, T, R, O>;
 
@@ -225,7 +220,7 @@ where
     should_compact: bool,
 }
 
-impl<K, V, T, R, O> Merger<K, V, T, R, OrdValBatch<K, V, T, R, O>> for OrdValMerger<K, V, T, R, O>
+impl<K, V, T, R, O> Merger<OrdValBatch<K, V, T, R, O>> for OrdValMerger<K, V, T, R, O>
 where
     K: Ord+Clone+'static,
     V: Ord+Clone+'static,
@@ -323,8 +318,8 @@ where
     R: Semigroup,
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug
 {
+    phantom: std::marker::PhantomData<K>,
     cursor: OrderedCursor<OrderedLayer<V, OrderedLeaf<T, R>, O>>,
-    phantom: PhantomData<K>,
 }
 
 impl<K, V, T, R, O> Cursor for OrdValCursor<K, V, T, R, O>
@@ -373,7 +368,7 @@ where
     builder: OrderedBuilder<K, OrderedBuilder<V, OrderedLeafBuilder<T, R>, O>, O>,
 }
 
-impl<K, V, T, R, O> Builder<K, V, T, R, OrdValBatch<K, V, T, R, O>> for OrdValBuilder<K, V, T, R, O>
+impl<K, V, T, R, O> Builder<OrdValBatch<K, V, T, R, O>> for OrdValBuilder<K, V, T, R, O>
 where
     K: Ord+Clone+'static,
     V: Ord+Clone+'static,
@@ -445,7 +440,7 @@ where
         }
     }
     fn len(&self) -> usize { <OrderedLayer<K, OrderedLeaf<T, R>, O> as Trie>::tuples(&self.layer) }
-    fn description(&self) -> &Description<Self::Time> { &self.desc }
+    fn description(&self) -> &Description<T> { &self.desc }
 }
 
 impl<K, T, R, O> Batch for OrdKeyBatch<K, T, R, O>
@@ -455,7 +450,7 @@ where
     R: Semigroup,
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug
 {
-    type Batcher = MergeBatcher<K, (), T, R, Self>;
+    type Batcher = MergeBatcher<Self>;
     type Builder = OrdKeyBuilder<K, T, R, O>;
     type Merger = OrdKeyMerger<K, T, R, O>;
 
@@ -554,7 +549,7 @@ where
     should_compact: bool,
 }
 
-impl<K, T, R, O> Merger<K, (), T, R, OrdKeyBatch<K, T, R, O>> for OrdKeyMerger<K, T, R, O>
+impl<K, T, R, O> Merger<OrdKeyBatch<K, T, R, O>> for OrdKeyMerger<K, T, R, O>
 where
     K: Ord+Clone+'static,
     T: Lattice+timely::progress::Timestamp+Ord+Clone+'static,
@@ -703,7 +698,7 @@ where
     builder: OrderedBuilder<K, OrderedLeafBuilder<T, R>, O>,
 }
 
-impl<K, T, R, O> Builder<K, (), T, R, OrdKeyBatch<K, T, R, O>> for OrdKeyBuilder<K, T, R, O>
+impl<K, T, R, O> Builder<OrdKeyBatch<K, T, R, O>> for OrdKeyBuilder<K, T, R, O>
 where
     K: Ord+Clone+'static,
     T: Lattice+timely::progress::Timestamp+Ord+Clone+'static,

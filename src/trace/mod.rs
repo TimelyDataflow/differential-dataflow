@@ -260,13 +260,13 @@ where
 }
 
 /// An immutable collection of updates.
-pub trait Batch: BatchReader where Self: ::std::marker::Sized {
+pub trait Batch : BatchReader where Self: ::std::marker::Sized {
     /// A type used to assemble batches from disordered updates.
-    type Batcher: Batcher<Self::Key, Self::Val, Self::Time, Self::R, Self>;
+    type Batcher: Batcher<Self>;
     /// A type used to assemble batches from ordered update sequences.
-    type Builder: Builder<Self::Key, Self::Val, Self::Time, Self::R, Self>;
+    type Builder: Builder<Self>;
     /// A type used to progressively merge batches.
-    type Merger: Merger<Self::Key, Self::Val, Self::Time, Self::R, Self>;
+    type Merger: Merger<Self>;
 
     /// Initiates the merging of consecutive batches.
     ///
@@ -283,38 +283,38 @@ pub trait Batch: BatchReader where Self: ::std::marker::Sized {
 }
 
 /// Functionality for collecting and batching updates.
-pub trait Batcher<K, V, T, R, Output: Batch<Key=K, Val=V, Time=T, R=R>> {
+pub trait Batcher<Output: Batch> {
     /// Allocates a new empty batcher.
     fn new() -> Self;
     /// Adds an unordered batch of elements to the batcher.
-    fn push_batch(&mut self, batch: &mut Vec<((K, V), T, R)>);
+    fn push_batch(&mut self, batch: &mut Vec<((Output::Key, Output::Val), Output::Time, Output::R)>);
     /// Returns all updates not greater or equal to an element of `upper`.
-    fn seal(&mut self, upper: Antichain<T>) -> Output;
+    fn seal(&mut self, upper: Antichain<Output::Time>) -> Output;
     /// Returns the lower envelope of contained update times.
-    fn frontier(&mut self) -> timely::progress::frontier::AntichainRef<T>;
+    fn frontier(&mut self) -> timely::progress::frontier::AntichainRef<Output::Time>;
 }
 
 /// Functionality for building batches from ordered update sequences.
-pub trait Builder<K, V, T, R, Output: Batch<Key=K, Val=V, Time=T, R=R>> {
+pub trait Builder<Output: Batch> {
     /// Allocates an empty builder.
     fn new() -> Self;
     /// Allocates an empty builder with some capacity.
     fn with_capacity(cap: usize) -> Self;
     /// Adds an element to the batch.
-    fn push(&mut self, element: (K, V, T, R));
+    fn push(&mut self, element: (Output::Key, Output::Val, Output::Time, Output::R));
     /// Adds an ordered sequence of elements to the batch.
-    fn extend<I: Iterator<Item=(K,V,T,R)>>(&mut self, iter: I) {
+    fn extend<I: Iterator<Item=(Output::Key,Output::Val,Output::Time,Output::R)>>(&mut self, iter: I) {
         for item in iter { self.push(item); }
     }
     /// Completes building and returns the batch.
-    fn done(self, lower: Antichain<T>, upper: Antichain<T>, since: Antichain<T>) -> Output;
+    fn done(self, lower: Antichain<Output::Time>, upper: Antichain<Output::Time>, since: Antichain<Output::Time>) -> Output;
 }
 
 /// Represents a merge in progress.
-pub trait Merger<K, V, T, R, Output: Batch<Key=K, Val=V, Time=T, R=R>> {
+pub trait Merger<Output: Batch> {
     /// Creates a new merger to merge the supplied batches, optionally compacting
     /// up to the supplied frontier.
-    fn new(source1: &Output, source2: &Output, compaction_frontier: Option<AntichainRef<T>>) -> Self;
+    fn new(source1: &Output, source2: &Output, compaction_frontier: Option<AntichainRef<Output::Time>>) -> Self;
     /// Perform some amount of work, decrementing `fuel`.
     ///
     /// If `fuel` is non-zero after the call, the merging is complete and
@@ -399,39 +399,39 @@ pub mod rc_blanket_impls {
 
     /// An immutable collection of updates.
     impl<B: Batch> Batch for Rc<B> {
-        type Batcher = RcBatcher<B::Key, B::Val, B::Time, B::R, B>;
-        type Builder = RcBuilder<B::Key, B::Val, B::Time, B::R, B>;
-        type Merger = RcMerger<B::Key, B::Val, B::Time, B::R, B>;
+        type Batcher = RcBatcher<B>;
+        type Builder = RcBuilder<B>;
+        type Merger = RcMerger<B>;
     }
 
     /// Wrapper type for batching reference counted batches.
-    pub struct RcBatcher<K,V,T,R,B:Batch<Key=K,Val=V,Time=T,R=R>> { batcher: B::Batcher }
+    pub struct RcBatcher<B:Batch> { batcher: B::Batcher }
 
     /// Functionality for collecting and batching updates.
-    impl<K,V,T,R,B:Batch<Key=K,Val=V,Time=T,R=R>> Batcher<K, V, T, R, Rc<B>> for RcBatcher<K,V,T,R,B> {
-        fn new() -> Self { RcBatcher { batcher: <B::Batcher as Batcher<K,V,T,R,B>>::new() } }
-        fn push_batch(&mut self, batch: &mut Vec<((K, V), T, R)>) { self.batcher.push_batch(batch) }
-        fn seal(&mut self, upper: Antichain<T>) -> Rc<B> { Rc::new(self.batcher.seal(upper)) }
-        fn frontier(&mut self) -> timely::progress::frontier::AntichainRef<T> { self.batcher.frontier() }
+    impl<B:Batch> Batcher<Rc<B>> for RcBatcher<B> {
+        fn new() -> Self { RcBatcher { batcher: <B::Batcher as Batcher<B>>::new() } }
+        fn push_batch(&mut self, batch: &mut Vec<((B::Key, B::Val), B::Time, B::R)>) { self.batcher.push_batch(batch) }
+        fn seal(&mut self, upper: Antichain<B::Time>) -> Rc<B> { Rc::new(self.batcher.seal(upper)) }
+        fn frontier(&mut self) -> timely::progress::frontier::AntichainRef<B::Time> { self.batcher.frontier() }
     }
 
     /// Wrapper type for building reference counted batches.
-    pub struct RcBuilder<K,V,T,R,B:Batch<Key=K,Val=V,Time=T,R=R>> { builder: B::Builder }
+    pub struct RcBuilder<B:Batch> { builder: B::Builder }
 
     /// Functionality for building batches from ordered update sequences.
-    impl<K,V,T,R,B:Batch<Key=K,Val=V,Time=T,R=R>> Builder<K, V, T, R, Rc<B>> for RcBuilder<K,V,T,R,B> {
-        fn new() -> Self { RcBuilder { builder: <B::Builder as Builder<K,V,T,R,B>>::new() } }
-        fn with_capacity(cap: usize) -> Self { RcBuilder { builder: <B::Builder as Builder<K,V,T,R,B>>::with_capacity(cap) } }
-        fn push(&mut self, element: (K, V, T, R)) { self.builder.push(element) }
-        fn done(self, lower: Antichain<T>, upper: Antichain<T>, since: Antichain<T>) -> Rc<B> { Rc::new(self.builder.done(lower, upper, since)) }
+    impl<B:Batch> Builder<Rc<B>> for RcBuilder<B> {
+        fn new() -> Self { RcBuilder { builder: <B::Builder as Builder<B>>::new() } }
+        fn with_capacity(cap: usize) -> Self { RcBuilder { builder: <B::Builder as Builder<B>>::with_capacity(cap) } }
+        fn push(&mut self, element: (B::Key, B::Val, B::Time, B::R)) { self.builder.push(element) }
+        fn done(self, lower: Antichain<B::Time>, upper: Antichain<B::Time>, since: Antichain<B::Time>) -> Rc<B> { Rc::new(self.builder.done(lower, upper, since)) }
     }
 
     /// Wrapper type for merging reference counted batches.
-    pub struct RcMerger<K,V,T,R,B:Batch<Key=K,Val=V,Time=T,R=R>> { merger: B::Merger }
+    pub struct RcMerger<B:Batch> { merger: B::Merger }
 
     /// Represents a merge in progress.
-    impl<K,V,T,R,B:Batch<Key=K,Val=V,Time=T,R=R>> Merger<K, V, T, R, Rc<B>> for RcMerger<K,V,T,R,B> {
-        fn new(source1: &Rc<B>, source2: &Rc<B>, compaction_frontier: Option<AntichainRef<T>>) -> Self { RcMerger { merger: B::begin_merge(source1, source2, compaction_frontier) } }
+    impl<B:Batch> Merger<Rc<B>> for RcMerger<B> {
+        fn new(source1: &Rc<B>, source2: &Rc<B>, compaction_frontier: Option<AntichainRef<B::Time>>) -> Self { RcMerger { merger: B::begin_merge(source1, source2, compaction_frontier) } }
         fn work(&mut self, source1: &Rc<B>, source2: &Rc<B>, fuel: &mut isize) { self.merger.work(source1, source2, fuel) }
         fn done(self) -> Rc<B> { Rc::new(self.merger.done()) }
     }
@@ -510,37 +510,37 @@ pub mod abomonated_blanket_impls {
     }
 
     /// An immutable collection of updates.
-    impl<B: Batch + Abomonation> Batch for Abomonated<B, Vec<u8>> {
-        type Batcher = AbomonatedBatcher<Self::Key, Self::Val, Self::Time, Self::R, B>;
-        type Builder = AbomonatedBuilder<Self::Key, Self::Val, Self::Time, Self::R, B>;
-        type Merger = AbomonatedMerger<Self::Key, Self::Val, Self::Time, Self::R, B>;
+    impl<B: Batch+Abomonation> Batch for Abomonated<B, Vec<u8>> {
+        type Batcher = AbomonatedBatcher<B>;
+        type Builder = AbomonatedBuilder<B>;
+        type Merger = AbomonatedMerger<B>;
     }
 
     /// Wrapper type for batching reference counted batches.
-    pub struct AbomonatedBatcher<K,V,T,R,B:Batch<Key=K,Val=V,Time=T,R=R>> { batcher: B::Batcher }
+    pub struct AbomonatedBatcher<B:Batch> { batcher: B::Batcher }
 
     /// Functionality for collecting and batching updates.
-    impl<K,V,T,R,B:Batch<Key=K,Val=V,Time=T,R=R>+Abomonation> Batcher<K, V, T, R, Abomonated<B,Vec<u8>>> for AbomonatedBatcher<K,V,T,R,B> {
-        fn new() -> Self { AbomonatedBatcher { batcher: <B::Batcher as Batcher<K,V,T,R,B>>::new() } }
-        fn push_batch(&mut self, batch: &mut Vec<((K, V), T, R)>) { self.batcher.push_batch(batch) }
-        fn seal(&mut self, upper: Antichain<T>) -> Abomonated<B, Vec<u8>> {
+    impl<B:Batch+Abomonation> Batcher<Abomonated<B,Vec<u8>>> for AbomonatedBatcher<B> {
+        fn new() -> Self { AbomonatedBatcher { batcher: <B::Batcher as Batcher<B>>::new() } }
+        fn push_batch(&mut self, batch: &mut Vec<((B::Key, B::Val), B::Time, B::R)>) { self.batcher.push_batch(batch) }
+        fn seal(&mut self, upper: Antichain<B::Time>) -> Abomonated<B, Vec<u8>> {
             let batch = self.batcher.seal(upper);
             let mut bytes = Vec::with_capacity(measure(&batch));
             unsafe { abomonation::encode(&batch, &mut bytes).unwrap() };
             unsafe { Abomonated::<B,_>::new(bytes).unwrap() }
         }
-        fn frontier(&mut self) -> timely::progress::frontier::AntichainRef<T> { self.batcher.frontier() }
+        fn frontier(&mut self) -> timely::progress::frontier::AntichainRef<B::Time> { self.batcher.frontier() }
     }
 
     /// Wrapper type for building reference counted batches.
-    pub struct AbomonatedBuilder<K,V,T,R,B:Batch<Key=K,Val=V,Time=T,R=R>> { builder: B::Builder }
+    pub struct AbomonatedBuilder<B:Batch> { builder: B::Builder }
 
     /// Functionality for building batches from ordered update sequences.
-    impl<K,V,T,R,B:Batch<Key=K,Val=V,Time=T,R=R>+Abomonation> Builder<K, V, T, R, Abomonated<B,Vec<u8>>> for AbomonatedBuilder<K,V,T,R,B> {
-        fn new() -> Self { AbomonatedBuilder { builder: <B::Builder as Builder<K,V,T,R,B>>::new() } }
-        fn with_capacity(cap: usize) -> Self { AbomonatedBuilder { builder: <B::Builder as Builder<K,V,T,R,B>>::with_capacity(cap) } }
-        fn push(&mut self, element: (K, V, T, R)) { self.builder.push(element) }
-        fn done(self, lower: Antichain<T>, upper: Antichain<T>, since: Antichain<T>) -> Abomonated<B, Vec<u8>> {
+    impl<B:Batch+Abomonation> Builder<Abomonated<B,Vec<u8>>> for AbomonatedBuilder<B> {
+        fn new() -> Self { AbomonatedBuilder { builder: <B::Builder as Builder<B>>::new() } }
+        fn with_capacity(cap: usize) -> Self { AbomonatedBuilder { builder: <B::Builder as Builder<B>>::with_capacity(cap) } }
+        fn push(&mut self, element: (B::Key, B::Val, B::Time, B::R)) { self.builder.push(element) }
+        fn done(self, lower: Antichain<B::Time>, upper: Antichain<B::Time>, since: Antichain<B::Time>) -> Abomonated<B, Vec<u8>> {
             let batch = self.builder.done(lower, upper, since);
             let mut bytes = Vec::with_capacity(measure(&batch));
             unsafe { abomonation::encode(&batch, &mut bytes).unwrap() };
@@ -549,11 +549,11 @@ pub mod abomonated_blanket_impls {
     }
 
     /// Wrapper type for merging reference counted batches.
-    pub struct AbomonatedMerger<K,V,T,R,B:Batch<Key=K,Val=V,Time=T,R=R>> { merger: B::Merger }
+    pub struct AbomonatedMerger<B:Batch> { merger: B::Merger }
 
     /// Represents a merge in progress.
-    impl<K,V,T,R,B:Batch<Key=K,Val=V,Time=T,R=R>+Abomonation> Merger<K, V, T, R, Abomonated<B,Vec<u8>>> for AbomonatedMerger<K,V,T,R,B> {
-        fn new(source1: &Abomonated<B,Vec<u8>>, source2: &Abomonated<B,Vec<u8>>, compaction_frontier: Option<AntichainRef<T>>) -> Self {
+    impl<B:Batch+Abomonation> Merger<Abomonated<B,Vec<u8>>> for AbomonatedMerger<B> {
+        fn new(source1: &Abomonated<B,Vec<u8>>, source2: &Abomonated<B,Vec<u8>>, compaction_frontier: Option<AntichainRef<B::Time>>) -> Self {
             AbomonatedMerger { merger: B::begin_merge(source1, source2, compaction_frontier) }
         }
         fn work(&mut self, source1: &Abomonated<B,Vec<u8>>, source2: &Abomonated<B,Vec<u8>>, fuel: &mut isize) {
