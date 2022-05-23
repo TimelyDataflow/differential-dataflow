@@ -635,39 +635,39 @@ impl<G, T1> JoinCore<G, T1::Key, T1::Val, T1::R> for Arranged<G,T1>
 /// The structure wraps cursors which allow us to play out join computation at whatever rate we like.
 /// This allows us to avoid producing and buffering massive amounts of data, without giving the timely
 /// dataflow system a chance to run operators that can consume and aggregate the data.
-struct Deferred<K, V1, V2, T, R1, R2, R3, C1, C2, D>
+struct Deferred<K, T, R, C1, C2, D>
 where
-    V1: Ord+Clone,
-    V2: Ord+Clone,
     T: Timestamp+Lattice+Ord+Debug,
-    R1: Semigroup,
-    R2: Semigroup,
-    R3: Semigroup,
-    C1: Cursor<Key=K, Val=V1, Time=T, R=R1>,
-    C2: Cursor<Key=K, Val=V2, Time=T, R=R2>,
+    R: Semigroup,
+    C1: Cursor<Key=K, Time=T>,
+    C2: Cursor<Key=K, Time=T>,
+    C1::Val: Ord+Clone,
+    C2::Val: Ord+Clone,
+    C1::R: Semigroup,
+    C2::R: Semigroup,
     D: Ord+Clone+Data,
 {
-    phant: ::std::marker::PhantomData<(K, V1, V2, R1, R2)>,
+    phant: ::std::marker::PhantomData<K>,
     trace: C1,
     trace_storage: C1::Storage,
     batch: C2,
     batch_storage: C2::Storage,
     capability: Capability<T>,
     done: bool,
-    temp: Vec<((D, T), R3)>,
+    temp: Vec<((D, T), R)>,
 }
 
-impl<K, V1, V2, T, R1, R2, R3, C1, C2, D> Deferred<K, V1, V2, T, R1, R2, R3, C1, C2, D>
+impl<K, T, R, C1, C2, D> Deferred<K, T, R, C1, C2, D>
 where
     K: Ord+Debug+Eq,
-    V1: Ord+Clone+Debug,
-    V2: Ord+Clone+Debug,
+    C1: Cursor<Key=K, Time=T>,
+    C2: Cursor<Key=K, Time=T>,
+    C1::Val: Ord+Clone+Debug,
+    C2::Val: Ord+Clone+Debug,
+    C1::R: Semigroup,
+    C2::R: Semigroup,
     T: Timestamp+Lattice+Ord+Debug,
-    R1: Semigroup,
-    R2: Semigroup,
-    R3: Semigroup,
-    C1: Cursor<Key=K, Val=V1, Time=T, R=R1>,
-    C2: Cursor<Key=K, Val=V2, Time=T, R=R2>,
+    R: Semigroup,
     D: Clone+Data,
 {
     fn new(trace: C1, trace_storage: C1::Storage, batch: C2, batch_storage: C2::Storage, capability: Capability<T>) -> Self {
@@ -689,8 +689,8 @@ where
 
     /// Process keys until at least `fuel` output tuples produced, or the work is exhausted.
     #[inline(never)]
-    fn work<L, I>(&mut self, output: &mut OutputHandle<T, (D, T, R3), Tee<T, (D, T, R3)>>, mut logic: L, fuel: &mut usize)
-    where I: IntoIterator<Item=(D, T, R3)>, L: FnMut(&K, &V1, &V2, &T, &R1, &R2)->I {
+    fn work<L, I>(&mut self, output: &mut OutputHandle<T, (D, T, R), Tee<T, (D, T, R)>>, mut logic: L, fuel: &mut usize)
+    where I: IntoIterator<Item=(D, T, R)>, L: FnMut(&K, &C1::Val, &C2::Val, &T, &C1::R, &C2::R)->I {
 
         let meet = self.capability.time();
 
