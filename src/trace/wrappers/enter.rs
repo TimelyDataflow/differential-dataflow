@@ -136,7 +136,7 @@ where
         BatchCursorEnter::new(self.batch.cursor())
     }
     fn len(&self) -> usize { self.batch.len() }
-    fn description(&self) -> &Description<Self::Time> { &self.description }
+    fn description(&self) -> &Description<TInner> { &self.description }
 }
 
 impl<B, TInner> BatchEnter<B, TInner>
@@ -152,7 +152,7 @@ where
         let since: Vec<_> = batch.description().since().elements().iter().map(|x| TInner::to_inner(x.clone())).collect();
 
         BatchEnter {
-            batch,
+            batch: batch,
             description: Description::new(Antichain::from(lower), Antichain::from(upper), Antichain::from(since))
         }
     }
@@ -168,13 +168,14 @@ impl<C: Cursor, TInner> CursorEnter<C, TInner> {
     fn new(cursor: C) -> Self {
         CursorEnter {
             phantom: ::std::marker::PhantomData,
-            cursor,
+            cursor: cursor,
         }
     }
 }
 
-impl<C: Cursor, TInner> Cursor for CursorEnter<C, TInner>
+impl<C, TInner> Cursor for CursorEnter<C, TInner>
 where
+    C: Cursor,
     C::Time: Timestamp,
     TInner: Refines<C::Time>+Lattice,
 {
@@ -182,6 +183,7 @@ where
     type Val = C::Val;
     type Time = TInner;
     type R = C::R;
+
     type Storage = C::Storage;
 
     #[inline] fn key_valid(&self, storage: &Self::Storage) -> bool { self.cursor.key_valid(storage) }
@@ -207,6 +209,8 @@ where
     #[inline] fn rewind_vals(&mut self, storage: &Self::Storage) { self.cursor.rewind_vals(storage) }
 }
 
+
+
 /// Wrapper to provide cursor to nested scope.
 pub struct BatchCursorEnter<B: BatchReader, TInner> {
     phantom: ::std::marker::PhantomData<TInner>,
@@ -222,7 +226,7 @@ impl<B: BatchReader, TInner> BatchCursorEnter<B, TInner> {
     }
 }
 
-impl<B: BatchReader, TInner> Cursor for BatchCursorEnter<B, TInner>
+impl<TInner, B: BatchReader> Cursor for BatchCursorEnter<B, TInner>
 where
     B::Time: Timestamp,
     TInner: Refines<B::Time>+Lattice,
@@ -231,6 +235,7 @@ where
     type Val = B::Val;
     type Time = TInner;
     type R = B::R;
+
     type Storage = BatchEnter<B, TInner>;
 
     #[inline] fn key_valid(&self, storage: &Self::Storage) -> bool { self.cursor.key_valid(&storage.batch) }

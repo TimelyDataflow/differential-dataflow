@@ -127,8 +127,8 @@ where
     /// Makes a new trace wrapper
     pub fn make_from(trace: Tr, func: Rc<F>) -> Self {
         TraceFreeze {
-            trace,
-            func,
+            trace: trace,
+            func: func,
         }
     }
 }
@@ -149,7 +149,12 @@ impl<B: Clone, F> Clone for BatchFreeze<B, F> {
     }
 }
 
-impl<B: BatchReader, F: Fn(&B::Time) -> Option<B::Time>> BatchReader for BatchFreeze<B, F> {
+impl<B, F> BatchReader for BatchFreeze<B, F>
+where
+    B: BatchReader,
+    B::Time: Clone,
+    F: Fn(&B::Time)->Option<B::Time>,
+{
     type Key = B::Key;
     type Val = B::Val;
     type Time = B::Time;
@@ -161,21 +166,26 @@ impl<B: BatchReader, F: Fn(&B::Time) -> Option<B::Time>> BatchReader for BatchFr
         BatchCursorFreeze::new(self.batch.cursor(), self.func.clone())
     }
     fn len(&self) -> usize { self.batch.len() }
-    fn description(&self) -> &Description<Self::Time> { self.batch.description() }
+    fn description(&self) -> &Description<B::Time> { self.batch.description() }
 }
 
-impl<B: BatchReader, F: Fn(&B::Time) -> Option<B::Time>> BatchFreeze<B, F> {
+impl<B, F> BatchFreeze<B, F>
+where
+    B: BatchReader,
+    B::Time: Clone,
+    F: Fn(&B::Time)->Option<B::Time>
+{
     /// Makes a new batch wrapper
     pub fn make_from(batch: B, func: Rc<F>) -> Self {
         BatchFreeze {
-            batch,
-            func,
+            batch: batch,
+            func: func,
         }
     }
 }
 
 /// Wrapper to provide cursor to nested scope.
-pub struct CursorFreeze<C, F> {
+pub struct CursorFreeze<C: Cursor, F> {
     cursor: C,
     func: Rc<F>,
 }
@@ -183,20 +193,22 @@ pub struct CursorFreeze<C, F> {
 impl<C: Cursor, F> CursorFreeze<C, F> {
     fn new(cursor: C, func: Rc<F>) -> Self {
         CursorFreeze {
-            cursor,
-            func,
+            cursor: cursor,
+            func: func,
         }
     }
 }
 
-impl<C: Cursor, F> Cursor for CursorFreeze<C, F>
+impl<C, F> Cursor for CursorFreeze<C, F>
 where
+    C: Cursor,
     F: Fn(&C::Time)->Option<C::Time>,
 {
     type Key = C::Key;
     type Val = C::Val;
     type Time = C::Time;
     type R = C::R;
+
     type Storage = C::Storage;
 
     #[inline] fn key_valid(&self, storage: &Self::Storage) -> bool { self.cursor.key_valid(storage) }
@@ -248,6 +260,7 @@ where
     type Val = B::Val;
     type Time = B::Time;
     type R = B::R;
+
     type Storage = BatchFreeze<B, F>;
 
     #[inline] fn key_valid(&self, storage: &Self::Storage) -> bool { self.cursor.key_valid(&storage.batch) }

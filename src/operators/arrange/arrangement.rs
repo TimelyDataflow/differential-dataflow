@@ -404,7 +404,7 @@ where
                 let frontier = IntoIterator::into_iter([
                     capability.as_ref().map(|c| c.time().clone()),
                     input1.frontier().frontier().get(0).cloned(),
-                ]).flatten().min();
+                ]).filter_map(|t| t).min();
 
                 if let Some(frontier) = frontier {
                     trace.as_mut().map(|t| t.set_logical_compaction(AntichainRef::new(&[frontier])));

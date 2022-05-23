@@ -670,9 +670,9 @@ where
         new_interesting: &mut Vec<T>) -> (usize, usize)
     where
         K: Eq+Clone,
-        C1: Cursor<Key=K, Val=V1, Time=T, R=R1>,
-        C2: Cursor<Key=K, Val=V2, Time=T, R=R2>,
-        C3: Cursor<Key=K, Val=V1, Time=T, R=R1>,
+        C1: Cursor<Key = K, Val = V1, Time = T, R = R1>,
+        C2: Cursor<Key = K, Val = V2, Time = T, R = R2>,
+        C3: Cursor<Key = K, Val = V1, Time = T, R = R1>,
         L: FnMut(&K, &[(&V1, R1)], &mut Vec<(V2, R2)>, &mut Vec<(V2, R2)>);
 }
 
@@ -748,9 +748,9 @@ mod history_replay {
             new_interesting: &mut Vec<T>) -> (usize, usize)
         where
             K: Eq+Clone,
-            C1: Cursor<Key=K, Val=V1, Time=T, R=R1>,
-            C2: Cursor<Key=K, Val=V2, Time=T, R=R2>,
-            C3: Cursor<Key=K, Val=V1, Time=T, R=R1>,
+            C1: Cursor<Key = K, Val = V1, Time = T, R = R1>,
+            C2: Cursor<Key = K, Val = V2, Time = T, R = R2>,
+            C3: Cursor<Key = K, Val = V1, Time = T, R = R1>,
             L: FnMut(&K, &[(&V1, R1)], &mut Vec<(V2, R2)>, &mut Vec<(V2, R2)>)
         {
 

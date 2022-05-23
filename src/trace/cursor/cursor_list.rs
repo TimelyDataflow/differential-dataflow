@@ -13,10 +13,7 @@ pub struct CursorList<C: Cursor> {
     min_val: Vec<usize>,
 }
 
-impl<C: Cursor> CursorList<C>
-where C::Key: Ord,
-      C::Val: Ord
-{
+impl<C: Cursor> CursorList<C> where C::Key: Ord, C::Val: Ord {
     /// Creates a new cursor list from pre-existing cursors.
     pub fn new(cursors: Vec<C>, storage: &[C::Storage]) -> Self {
 
@@ -44,7 +41,7 @@ where C::Key: Ord,
         self.min_key.clear();
 
         // Determine the index of the cursor with minimum key.
-        let mut min_key_opt: Option<&C::Key> = None;
+        let mut min_key_opt = None;
         for (index, cursor) in self.cursors.iter().enumerate() {
             let key = cursor.get_key(&storage[index]);
             if key.is_some() {
@@ -72,7 +69,7 @@ where C::Key: Ord,
         self.min_val.clear();
 
         // Determine the index of the cursor with minimum value.
-        let mut min_val: Option<&C::Val> = None;
+        let mut min_val = None;
         for &index in self.min_key.iter() {
             let val = self.cursors[index].get_val(&storage[index]);
             if val.is_some() {
@@ -91,12 +88,13 @@ where C::Key: Ord,
 impl<C: Cursor> Cursor for CursorList<C>
 where
     C::Key: Ord,
-    C::Val: Ord
+    C::Val: Ord,
 {
     type Key = C::Key;
     type Val = C::Val;
     type Time = C::Time;
     type R = C::R;
+
     type Storage = Vec<C::Storage>;
 
     // validation methods

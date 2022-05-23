@@ -334,6 +334,7 @@ where
     type Val = V;
     type Time = T;
     type R = R;
+
     type Storage = OrdValBatch<K, V, T, R, O>;
 
     fn key<'a>(&self, storage: &'a Self::Storage) -> &'a K { &self.cursor.key(&storage.layer) }
@@ -643,6 +644,7 @@ where
     }
 }
 
+
 /// A cursor for navigating a single layer.
 #[derive(Debug)]
 pub struct OrdKeyCursor<K, T: Lattice+Ord+Clone, R: Semigroup, O=usize> {
@@ -658,12 +660,10 @@ where
     R: Semigroup,
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug
 {
-
     type Key = K;
     type Val = ();
     type Time = T;
     type R = R;
-
 
     type Storage = OrdKeyBatch<K, T, R, O>;
 

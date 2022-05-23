@@ -99,10 +99,14 @@ where
         BatchCursorFilter::new(self.batch.cursor(), self.logic.clone())
     }
     fn len(&self) -> usize { self.batch.len() }
-    fn description(&self) -> &Description<Self::Time> { &self.batch.description() }
+    fn description(&self) -> &Description<B::Time> { &self.batch.description() }
 }
 
-impl<B: BatchReader, F> BatchFilter<B, F> {
+impl<B, F> BatchFilter<B, F>
+where
+    B: BatchReader,
+    B::Time: Timestamp,
+{
     /// Makes a new batch wrapper
     pub fn make_from(batch: B, logic: F) -> Self {
         BatchFilter {
@@ -130,12 +134,14 @@ impl<C: Cursor, F> CursorFilter<C, F> {
 impl<C, F> Cursor for CursorFilter<C, F>
 where
     C: Cursor,
+    C::Time: Timestamp,
     F: FnMut(&C::Key, &C::Val)->bool+'static
 {
     type Key = C::Key;
     type Val = C::Val;
     type Time = C::Time;
     type R = C::R;
+
     type Storage = C::Storage;
 
     #[inline] fn key_valid(&self, storage: &Self::Storage) -> bool { self.cursor.key_valid(storage) }
@@ -163,6 +169,8 @@ where
     #[inline] fn rewind_vals(&mut self, storage: &Self::Storage) { self.cursor.rewind_vals(storage) }
 }
 
+
+
 /// Wrapper to provide cursor to nested scope.
 pub struct BatchCursorFilter<B: BatchReader, F> {
     cursor: B::Cursor,
@@ -187,6 +195,7 @@ where
     type Val = B::Val;
     type Time = B::Time;
     type R = B::R;
+
     type Storage = BatchFilter<B, F>;
 
     #[inline] fn key_valid(&self, storage: &Self::Storage) -> bool { self.cursor.key_valid(&storage.batch) }

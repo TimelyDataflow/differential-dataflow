@@ -91,7 +91,8 @@ pub struct BatchFrontier<B: BatchReader> {
 
 impl<B: BatchReader> BatchReader for BatchFrontier<B>
 where
-    B::Time: Timestamp + Lattice
+    B: BatchReader,
+    B::Time: Timestamp+Lattice,
 {
     type Key = B::Key;
     type Val = B::Val;
@@ -104,12 +105,13 @@ where
         BatchCursorFrontier::new(self.batch.cursor(), self.frontier.borrow())
     }
     fn len(&self) -> usize { self.batch.len() }
-    fn description(&self) -> &Description<Self::Time> { &self.batch.description() }
+    fn description(&self) -> &Description<B::Time> { &self.batch.description() }
 }
 
-impl<B: BatchReader> BatchFrontier<B>
+impl<B> BatchFrontier<B>
 where
-    B::Time: Timestamp+Lattice
+    B: BatchReader,
+    B::Time: Timestamp+Lattice,
 {
     /// Makes a new batch wrapper
     pub fn make_from(batch: B, frontier: AntichainRef<B::Time>) -> Self {
@@ -126,9 +128,7 @@ pub struct CursorFrontier<C: Cursor> {
     frontier: Antichain<C::Time>,
 }
 
-impl<C: Cursor> CursorFrontier<C>
-where C::Time: Clone,
-{
+impl<C: Cursor> CursorFrontier<C> where C::Time: Clone {
     fn new(cursor: C, frontier: AntichainRef<C::Time>) -> Self {
         CursorFrontier {
             cursor,
@@ -137,14 +137,16 @@ where C::Time: Clone,
     }
 }
 
-impl<C: Cursor> Cursor for CursorFrontier<C>
+impl<C> Cursor for CursorFrontier<C>
 where
+    C: Cursor,
     C::Time: Timestamp+Lattice,
 {
     type Key = C::Key;
     type Val = C::Val;
     type Time = C::Time;
     type R = C::R;
+
     type Storage = C::Storage;
 
     #[inline] fn key_valid(&self, storage: &Self::Storage) -> bool { self.cursor.key_valid(storage) }
@@ -156,7 +158,7 @@ where
     #[inline]
     fn map_times<L: FnMut(&Self::Time,&Self::R)>(&mut self, storage: &Self::Storage, mut logic: L) {
         let frontier = self.frontier.borrow();
-        let mut temp = <Self::Time as timely::progress::Timestamp>::minimum();
+        let mut temp: C::Time = <C::Time as timely::progress::Timestamp>::minimum();
         self.cursor.map_times(storage, |time, diff| {
             temp.clone_from(time);
             temp.advance_by(frontier);
@@ -174,15 +176,15 @@ where
     #[inline] fn rewind_vals(&mut self, storage: &Self::Storage) { self.cursor.rewind_vals(storage) }
 }
 
+
+
 /// Wrapper to provide cursor to nested scope.
 pub struct BatchCursorFrontier<B: BatchReader> {
     cursor: B::Cursor,
     frontier: Antichain<B::Time>,
 }
 
-impl<B: BatchReader> BatchCursorFrontier<B>
-where B::Time: Clone,
-{
+impl<B: BatchReader> BatchCursorFrontier<B> where B::Time: Clone {
     fn new(cursor: B::Cursor, frontier: AntichainRef<B::Time>) -> Self {
         BatchCursorFrontier {
             cursor,
@@ -199,6 +201,7 @@ where
     type Val = B::Val;
     type Time = B::Time;
     type R = B::R;
+
     type Storage = BatchFrontier<B>;
 
     #[inline] fn key_valid(&self, storage: &Self::Storage) -> bool { self.cursor.key_valid(&storage.batch) }
@@ -210,7 +213,7 @@ where
     #[inline]
     fn map_times<L: FnMut(&Self::Time,&Self::R)>(&mut self, storage: &Self::Storage, mut logic: L) {
         let frontier = self.frontier.borrow();
-        let mut temp = <Self::Time as timely::progress::Timestamp>::minimum();
+        let mut temp: B::Time = <B::Time as timely::progress::Timestamp>::minimum();
         self.cursor.map_times(&storage.batch, |time, diff| {
             temp.clone_from(time);
             temp.advance_by(frontier);

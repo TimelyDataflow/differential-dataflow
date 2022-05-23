@@ -41,6 +41,7 @@ pub use self::description::Description;
 /// to update the contents of the trace. These methods are used to examine the contents, and to update the reader's
 /// capabilities (which may release restrictions on the mutations to the underlying trace and cause work to happen).
 pub trait TraceReader {
+
     /// Key by which updates are indexed.
     type Key;
     /// Values associated with keys.
@@ -51,10 +52,10 @@ pub trait TraceReader {
     type R;
 
     /// The type of an immutable collection of updates.
-    type Batch: BatchReader<Key=Self::Key, Val=Self::Val, Time=Self::Time, R=Self::R>+Clone+'static;
+    type Batch: BatchReader<Key = Self::Key, Val = Self::Val, Time = Self::Time, R = Self::R>+Clone+'static;
 
     /// The type used to enumerate the collections contents.
-    type Cursor: Cursor<Key=Self::Key, Val=Self::Val, Time=Self::Time, R=Self::R>;
+    type Cursor: Cursor<Key = Self::Key, Val = Self::Val, Time = Self::Time, R = Self::R>;
 
     /// Provides a cursor over updates contained in the trace.
     fn cursor(&mut self) -> (Self::Cursor, <Self::Cursor as Cursor>::Storage) {
@@ -195,7 +196,9 @@ pub trait TraceReader {
 ///
 /// The trace must be constructable from, and navigable by the `Key`, `Val`, `Time` types, but does not need
 /// to return them.
-pub trait Trace: TraceReader {
+pub trait Trace : TraceReader
+where <Self as TraceReader>::Batch: Batch {
+
     /// Allocates a new empty trace.
     fn new(
         info: ::timely::dataflow::operators::generic::OperatorInfo,
@@ -243,7 +246,7 @@ where
     type R;
 
     /// The type used to enumerate the batch's contents.
-    type Cursor: Cursor<Key=Self::Key, Val=Self::Val, Time=Self::Time, R=Self::R, Storage=Self>;
+    type Cursor: Cursor<Key = Self::Key, Val = Self::Val, Time = Self::Time, R = Self::R, Storage=Self>;
     /// Acquires a cursor to the batch's contents.
     fn cursor(&self) -> Self::Cursor;
     /// The number of updates in the batch.
@@ -370,10 +373,12 @@ pub mod rc_blanket_impls {
     }
 
     impl<B: BatchReader> Cursor for RcBatchCursor<B> {
+
         type Key = B::Key;
         type Val = B::Val;
         type Time = B::Time;
         type R = B::R;
+
         type Storage = Rc<B>;
 
         #[inline] fn key_valid(&self, storage: &Self::Storage) -> bool { self.cursor.key_valid(storage) }
@@ -450,6 +455,7 @@ pub mod abomonated_blanket_impls {
     use super::{Batch, BatchReader, Batcher, Builder, Merger, Cursor, Description};
 
     impl<B: BatchReader+Abomonation> BatchReader for Abomonated<B, Vec<u8>> {
+
         type Key = B::Key;
         type Val = B::Val;
         type Time = B::Time;
@@ -482,10 +488,12 @@ pub mod abomonated_blanket_impls {
     }
 
     impl<B: BatchReader+Abomonation> Cursor for AbomonatedBatchCursor<B> {
+
         type Key = B::Key;
         type Val = B::Val;
         type Time = B::Time;
         type R = B::R;
+
         type Storage = Abomonated<B, Vec<u8>>;
 
         #[inline] fn key_valid(&self, storage: &Self::Storage) -> bool { self.cursor.key_valid(storage) }

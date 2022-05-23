@@ -62,8 +62,8 @@ where
     type Time = TInner;
     type R = Tr::R;
 
-    type Batch = BatchEnter<Tr::Batch, TInner, F>;
-    type Cursor = CursorEnter<Tr::Cursor, TInner, F>;
+    type Batch = BatchEnter<Tr::Batch, TInner,F>;
+    type Cursor = CursorEnter<Tr::Cursor, TInner,F>;
 
     fn map_batches<F2: FnMut(&Self::Batch)>(&self, mut f: F2) {
         let logic = self.logic.clone();
@@ -120,7 +120,7 @@ where
     /// Makes a new trace wrapper
     pub fn make_from(trace: Tr, logic: F, prior: G) -> Self {
         TraceEnter {
-            trace,
+            trace: trace,
             stash1: Antichain::new(),
             stash2: Antichain::new(),
             logic,
@@ -207,6 +207,7 @@ where
     type Val = C::Val;
     type Time = TInner;
     type R = C::R;
+
     type Storage = C::Storage;
 
     #[inline] fn key_valid(&self, storage: &Self::Storage) -> bool { self.cursor.key_valid(storage) }
@@ -235,6 +236,8 @@ where
     #[inline] fn rewind_vals(&mut self, storage: &Self::Storage) { self.cursor.rewind_vals(storage) }
 }
 
+
+
 /// Wrapper to provide cursor to nested scope.
 pub struct BatchCursorEnter<B: BatchReader, TInner, F> {
     phantom: ::std::marker::PhantomData<TInner>,
@@ -252,7 +255,7 @@ impl<B: BatchReader, TInner, F> BatchCursorEnter<B, TInner, F> {
     }
 }
 
-impl<B: BatchReader, TInner, F> Cursor for BatchCursorEnter<B, TInner, F>
+impl<TInner, B: BatchReader, F> Cursor for BatchCursorEnter<B, TInner, F>
 where
     B::Time: Timestamp,
     TInner: Refines<B::Time>+Lattice,
@@ -262,6 +265,7 @@ where
     type Val = B::Val;
     type Time = TInner;
     type R = B::R;
+
     type Storage = BatchEnter<B, TInner, F>;
 
     #[inline] fn key_valid(&self, storage: &Self::Storage) -> bool { self.cursor.key_valid(&storage.batch) }

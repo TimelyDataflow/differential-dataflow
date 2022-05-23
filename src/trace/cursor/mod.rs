@@ -13,6 +13,7 @@ pub use self::cursor_list::CursorList;
 
 /// A cursor for navigating ordered `(key, val, time, diff)` updates.
 pub trait Cursor {
+
     /// Key by which updates are indexed.
     type Key;
     /// Values associated with keys.
@@ -21,6 +22,7 @@ pub trait Cursor {
     type Time;
     /// Associated update.
     type R;
+
     /// Type the cursor addresses data in.
     type Storage;
 

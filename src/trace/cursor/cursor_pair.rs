@@ -19,13 +19,14 @@ impl<K, V, T, R, C1, C2> Cursor for CursorPair<C1, C2>
 where
     K: Ord,
     V: Ord,
-    C1: Cursor<Key=K, Val=V, Time=T, R=R>,
-    C2: Cursor<Key=K, Val=V, Time=T, R=R>,
+    C1: Cursor<Key = K, Val = V, Time = T, R = R>,
+    C2: Cursor<Key = K, Val = V, Time = T, R = R>,
 {
     type Key = K;
     type Val = V;
     type Time = T;
     type R = R;
+
     type Storage = (C1::Storage, C2::Storage);
 
     // validation methods
