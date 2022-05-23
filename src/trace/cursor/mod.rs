@@ -65,17 +65,15 @@ pub trait Cursor {
     fn rewind_keys(&mut self, storage: &Self::Storage);
     /// Rewinds the cursor to the first value for current key.
     fn rewind_vals(&mut self, storage: &Self::Storage);
-}
 
-/// Debugging and testing utilities for Cursor.
-pub trait CursorDebug: Cursor
-where Self::Key: Clone,
-      Self::Val: Clone,
-      Self::Time: Clone,
-      Self::R: Clone
-{
     /// Rewinds the cursor and outputs its contents to a Vec
-    fn to_vec(&mut self, storage: &Self::Storage) -> Vec<((Self::Key, Self::Val), Vec<(Self::Time, Self::R)>)> {
+    fn to_vec(&mut self, storage: &Self::Storage) -> Vec<((Self::Key, Self::Val), Vec<(Self::Time, Self::R)>)>
+    where
+        Self::Key: Clone,
+        Self::Val: Clone,
+        Self::Time: Clone,
+        Self::R: Clone,
+    {
         let mut out = Vec::new();
         self.rewind_keys(storage);
         self.rewind_vals(storage);
@@ -93,10 +91,3 @@ where Self::Key: Clone,
         out
     }
 }
-
-impl<C: Cursor> CursorDebug for C
-where C::Key: Clone,
-      C::Val: Clone,
-      C::Time: Clone,
-      C::R: Clone
-{ }
