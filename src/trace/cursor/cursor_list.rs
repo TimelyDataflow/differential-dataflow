@@ -7,19 +7,17 @@ use super::Cursor;
 /// The `CursorList` tracks the indices of cursors with the minimum key, and the the indices of cursors with
 /// the minimum key and minimum value. It performs no clever management of these sets otherwise.
 #[derive(Debug)]
-pub struct CursorList<K, V, T, R, C: Cursor<K, V, T, R>> {
-    _phantom: ::std::marker::PhantomData<(K, V, T, R)>,
+pub struct CursorList<C: Cursor> {
     cursors: Vec<C>,
     min_key: Vec<usize>,
     min_val: Vec<usize>,
 }
 
-impl<K, V, T, R, C: Cursor<K, V, T, R>> CursorList<K, V, T, R, C> where K: Ord, V: Ord {
+impl<C: Cursor> CursorList<C> where C::Key: Ord, C::Val: Ord {
     /// Creates a new cursor list from pre-existing cursors.
     pub fn new(cursors: Vec<C>, storage: &[C::Storage]) -> Self {
 
         let mut result = CursorList {
-            _phantom: ::std::marker::PhantomData,
             cursors,
             min_key: Vec::new(),
             min_val: Vec::new(),
@@ -43,7 +41,7 @@ impl<K, V, T, R, C: Cursor<K, V, T, R>> CursorList<K, V, T, R, C> where K: Ord, 
         self.min_key.clear();
 
         // Determine the index of the cursor with minimum key.
-        let mut min_key_opt: Option<&K> = None;
+        let mut min_key_opt = None;
         for (index, cursor) in self.cursors.iter().enumerate() {
             let key = cursor.get_key(&storage[index]);
             if key.is_some() {
@@ -71,7 +69,7 @@ impl<K, V, T, R, C: Cursor<K, V, T, R>> CursorList<K, V, T, R, C> where K: Ord, 
         self.min_val.clear();
 
         // Determine the index of the cursor with minimum value.
-        let mut min_val: Option<&V> = None;
+        let mut min_val = None;
         for &index in self.min_key.iter() {
             let val = self.cursors[index].get_val(&storage[index]);
             if val.is_some() {
@@ -87,10 +85,15 @@ impl<K, V, T, R, C: Cursor<K, V, T, R>> CursorList<K, V, T, R, C> where K: Ord, 
     }
 }
 
-impl<K, V, T, R, C: Cursor<K, V, T, R>> Cursor<K, V, T, R> for CursorList<K, V, T, R, C>
+impl<C: Cursor> Cursor for CursorList<C>
 where
-    K: Ord,
-    V: Ord {
+    C::Key: Ord,
+    C::Val: Ord,
+{
+    type Key = C::Key;
+    type Val = C::Val;
+    type Time = C::Time;
+    type R = C::R;
 
     type Storage = Vec<C::Storage>;
 
@@ -102,20 +105,20 @@ where
 
     // accessors
     #[inline]
-    fn key<'a>(&self, storage: &'a Self::Storage) -> &'a K {
+    fn key<'a>(&self, storage: &'a Self::Storage) -> &'a Self::Key {
         debug_assert!(self.key_valid(storage));
         debug_assert!(self.cursors[self.min_key[0]].key_valid(&storage[self.min_key[0]]));
         self.cursors[self.min_key[0]].key(&storage[self.min_key[0]])
     }
     #[inline]
-    fn val<'a>(&self, storage: &'a Self::Storage) -> &'a V {
+    fn val<'a>(&self, storage: &'a Self::Storage) -> &'a Self::Val {
         debug_assert!(self.key_valid(storage));
         debug_assert!(self.val_valid(storage));
         debug_assert!(self.cursors[self.min_val[0]].val_valid(&storage[self.min_val[0]]));
         self.cursors[self.min_val[0]].val(&storage[self.min_val[0]])
     }
     #[inline]
-    fn map_times<L: FnMut(&T, &R)>(&mut self, storage: &Self::Storage, mut logic: L) {
+    fn map_times<L: FnMut(&Self::Time, &Self::R)>(&mut self, storage: &Self::Storage, mut logic: L) {
         for &index in self.min_val.iter() {
             self.cursors[index].map_times(&storage[index], |t,d| logic(t,d));
         }
@@ -130,7 +133,7 @@ where
         self.minimize_keys(storage);
     }
     #[inline]
-    fn seek_key(&mut self, storage: &Self::Storage, key: &K) {
+    fn seek_key(&mut self, storage: &Self::Storage, key: &Self::Key) {
         for index in 0 .. self.cursors.len() {
             self.cursors[index].seek_key(&storage[index], key);
         }
@@ -146,7 +149,7 @@ where
         self.minimize_vals(storage);
     }
     #[inline]
-    fn seek_val(&mut self, storage: &Self::Storage, val: &V) {
+    fn seek_val(&mut self, storage: &Self::Storage, val: &Self::Val) {
         for &index in self.min_key.iter() {
             self.cursors[index].seek_val(&storage[index], val);
         }

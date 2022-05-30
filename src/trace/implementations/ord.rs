@@ -35,16 +35,16 @@ use super::merge_batcher::MergeBatcher;
 use abomonation::abomonated::Abomonated;
 
 /// A trace implementation using a spine of ordered lists.
-pub type OrdValSpine<K, V, T, R, O=usize> = Spine<K, V, T, R, Rc<OrdValBatch<K, V, T, R, O>>>;
+pub type OrdValSpine<K, V, T, R, O=usize> = Spine<Rc<OrdValBatch<K, V, T, R, O>>>;
 
 /// A trace implementation using a spine of abomonated ordered lists.
-pub type OrdValSpineAbom<K, V, T, R, O=usize> = Spine<K, V, T, R, Rc<Abomonated<OrdValBatch<K, V, T, R, O>, Vec<u8>>>>;
+pub type OrdValSpineAbom<K, V, T, R, O=usize> = Spine<Rc<Abomonated<OrdValBatch<K, V, T, R, O>, Vec<u8>>>>;
 
 /// A trace implementation for empty values using a spine of ordered lists.
-pub type OrdKeySpine<K, T, R, O=usize> = Spine<K, (), T, R, Rc<OrdKeyBatch<K, T, R, O>>>;
+pub type OrdKeySpine<K, T, R, O=usize> = Spine<Rc<OrdKeyBatch<K, T, R, O>>>;
 
 /// A trace implementation for empty values using a spine of abomonated ordered lists.
-pub type OrdKeySpineAbom<K, T, R, O=usize> = Spine<K, (), T, R, Rc<Abomonated<OrdKeyBatch<K, T, R, O>, Vec<u8>>>>;
+pub type OrdKeySpineAbom<K, T, R, O=usize> = Spine<Rc<Abomonated<OrdKeyBatch<K, T, R, O>, Vec<u8>>>>;
 
 
 /// An immutable collection of update tuples, from a contiguous interval of logical times.
@@ -62,7 +62,7 @@ where
     pub desc: Description<T>,
 }
 
-impl<K, V, T, R, O> BatchReader<K, V, T, R> for OrdValBatch<K, V, T, R, O>
+impl<K, V, T, R, O> BatchReader for OrdValBatch<K, V, T, R, O>
 where
     K: Ord+Clone+'static,
     V: Ord+Clone+'static,
@@ -70,13 +70,18 @@ where
     R: Semigroup,
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug
 {
-    type Cursor = OrdValCursor<V, T, R, O>;
-    fn cursor(&self) -> Self::Cursor { OrdValCursor { cursor: self.layer.cursor() } }
+    type Key = K;
+    type Val = V;
+    type Time = T;
+    type R = R;
+
+    type Cursor = OrdValCursor<K, V, T, R, O>;
+    fn cursor(&self) -> Self::Cursor { OrdValCursor { cursor: self.layer.cursor(), phantom: std::marker::PhantomData } }
     fn len(&self) -> usize { <OrderedLayer<K, OrderedLayer<V, OrderedLeaf<T, R>, O>, O> as Trie>::tuples(&self.layer) }
     fn description(&self) -> &Description<T> { &self.desc }
 }
 
-impl<K, V, T, R, O> Batch<K, V, T, R> for OrdValBatch<K, V, T, R, O>
+impl<K, V, T, R, O> Batch for OrdValBatch<K, V, T, R, O>
 where
     K: Ord+Clone+'static,
     V: Ord+Clone+'static,
@@ -84,7 +89,7 @@ where
     R: Semigroup,
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug
 {
-    type Batcher = MergeBatcher<K, V, T, R, Self>;
+    type Batcher = MergeBatcher<Self>;
     type Builder = OrdValBuilder<K, V, T, R, O>;
     type Merger = OrdValMerger<K, V, T, R, O>;
 
@@ -215,7 +220,7 @@ where
     should_compact: bool,
 }
 
-impl<K, V, T, R, O> Merger<K, V, T, R, OrdValBatch<K, V, T, R, O>> for OrdValMerger<K, V, T, R, O>
+impl<K, V, T, R, O> Merger<OrdValBatch<K, V, T, R, O>> for OrdValMerger<K, V, T, R, O>
 where
     K: Ord+Clone+'static,
     V: Ord+Clone+'static,
@@ -306,17 +311,18 @@ where
 
 /// A cursor for navigating a single layer.
 #[derive(Debug)]
-pub struct OrdValCursor<V, T, R, O=usize>
+pub struct OrdValCursor<K, V, T, R, O=usize>
 where
     V: Ord+Clone,
     T: Lattice+Ord+Clone,
     R: Semigroup,
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug
 {
+    phantom: std::marker::PhantomData<K>,
     cursor: OrderedCursor<OrderedLayer<V, OrderedLeaf<T, R>, O>>,
 }
 
-impl<K, V, T, R, O> Cursor<K, V, T, R> for OrdValCursor<V, T, R, O>
+impl<K, V, T, R, O> Cursor for OrdValCursor<K, V, T, R, O>
 where
     K: Ord+Clone,
     V: Ord+Clone,
@@ -324,6 +330,11 @@ where
     R: Semigroup,
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug
 {
+    type Key = K;
+    type Val = V;
+    type Time = T;
+    type R = R;
+
     type Storage = OrdValBatch<K, V, T, R, O>;
 
     fn key<'a>(&self, storage: &'a Self::Storage) -> &'a K { &self.cursor.key(&storage.layer) }
@@ -358,7 +369,7 @@ where
     builder: OrderedBuilder<K, OrderedBuilder<V, OrderedLeafBuilder<T, R>, O>, O>,
 }
 
-impl<K, V, T, R, O> Builder<K, V, T, R, OrdValBatch<K, V, T, R, O>> for OrdValBuilder<K, V, T, R, O>
+impl<K, V, T, R, O> Builder<OrdValBatch<K, V, T, R, O>> for OrdValBuilder<K, V, T, R, O>
 where
     K: Ord+Clone+'static,
     V: Ord+Clone+'static,
@@ -409,17 +420,21 @@ where
     pub desc: Description<T>,
 }
 
-impl<K, T, R, O> BatchReader<K, (), T, R> for OrdKeyBatch<K, T, R, O>
+impl<K, T, R, O> BatchReader for OrdKeyBatch<K, T, R, O>
 where
     K: Ord+Clone+'static,
     T: Lattice+Ord+Clone+'static,
     R: Semigroup,
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug
 {
-    type Cursor = OrdKeyCursor<T, R, O>;
+    type Key = K;
+    type Val = ();
+    type Time = T;
+    type R = R;
+
+    type Cursor = OrdKeyCursor<K, T, R, O>;
     fn cursor(&self) -> Self::Cursor {
         OrdKeyCursor {
-            empty: (),
             valid: true,
             cursor: self.layer.cursor(),
             phantom: PhantomData
@@ -429,14 +444,14 @@ where
     fn description(&self) -> &Description<T> { &self.desc }
 }
 
-impl<K, T, R, O> Batch<K, (), T, R> for OrdKeyBatch<K, T, R, O>
+impl<K, T, R, O> Batch for OrdKeyBatch<K, T, R, O>
 where
     K: Ord+Clone+'static,
     T: Lattice+timely::progress::Timestamp+Ord+Clone+'static,
     R: Semigroup,
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug
 {
-    type Batcher = MergeBatcher<K, (), T, R, Self>;
+    type Batcher = MergeBatcher<Self>;
     type Builder = OrdKeyBuilder<K, T, R, O>;
     type Merger = OrdKeyMerger<K, T, R, O>;
 
@@ -535,7 +550,7 @@ where
     should_compact: bool,
 }
 
-impl<K, T, R, O> Merger<K, (), T, R, OrdKeyBatch<K, T, R, O>> for OrdKeyMerger<K, T, R, O>
+impl<K, T, R, O> Merger<OrdKeyBatch<K, T, R, O>> for OrdKeyMerger<K, T, R, O>
 where
     K: Ord+Clone+'static,
     T: Lattice+timely::progress::Timestamp+Ord+Clone+'static,
@@ -632,25 +647,28 @@ where
 
 /// A cursor for navigating a single layer.
 #[derive(Debug)]
-pub struct OrdKeyCursor<T: Lattice+Ord+Clone, R: Semigroup, O=usize> {
+pub struct OrdKeyCursor<K, T: Lattice+Ord+Clone, R: Semigroup, O=usize> {
     valid: bool,
-    empty: (),
     cursor: OrderedCursor<OrderedLeaf<T, R>>,
-    phantom: PhantomData<O>
+    phantom: PhantomData<(K, O)>
 }
 
-impl<K, T, R, O> Cursor<K, (), T, R> for OrdKeyCursor<T, R, O>
+impl<K, T, R, O> Cursor for OrdKeyCursor<K, T, R, O>
 where
     K: Ord+Clone,
     T: Lattice+Ord+Clone,
     R: Semigroup,
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug
 {
+    type Key = K;
+    type Val = ();
+    type Time = T;
+    type R = R;
 
     type Storage = OrdKeyBatch<K, T, R, O>;
 
     fn key<'a>(&self, storage: &'a Self::Storage) -> &'a K { &self.cursor.key(&storage.layer) }
-    fn val<'a>(&self, _storage: &'a Self::Storage) -> &'a () { unsafe { ::std::mem::transmute(&self.empty) } }
+    fn val<'a>(&self, _storage: &'a Self::Storage) -> &'a () { &() }
     fn map_times<L: FnMut(&T, &R)>(&mut self, storage: &Self::Storage, mut logic: L) {
         self.cursor.child.rewind(&storage.layer.vals);
         while self.cursor.child.valid(&storage.layer.vals) {
@@ -680,7 +698,7 @@ where
     builder: OrderedBuilder<K, OrderedLeafBuilder<T, R>, O>,
 }
 
-impl<K, T, R, O> Builder<K, (), T, R, OrdKeyBatch<K, T, R, O>> for OrdKeyBuilder<K, T, R, O>
+impl<K, T, R, O> Builder<OrdKeyBatch<K, T, R, O>> for OrdKeyBuilder<K, T, R, O>
 where
     K: Ord+Clone+'static,
     T: Lattice+timely::progress::Timestamp+Ord+Clone+'static,

@@ -77,7 +77,7 @@ where
     fn get_physical_compaction(&mut self) -> AntichainRef<Tr::Time> {
         self.physical_compaction.borrow()
     }
-    fn cursor_through(&mut self, frontier: AntichainRef<Tr::Time>) -> Option<(Tr::Cursor, <Tr::Cursor as Cursor<Tr::Key, Tr::Val, Tr::Time, Tr::R>>::Storage)> {
+    fn cursor_through(&mut self, frontier: AntichainRef<Tr::Time>) -> Option<(Tr::Cursor, <Tr::Cursor as Cursor>::Storage)> {
         self.trace.borrow_mut().trace.cursor_through(frontier)
     }
     fn map_batches<F: FnMut(&Self::Batch)>(&self, f: F) { self.trace.borrow().trace.map_batches(f) }
@@ -92,7 +92,7 @@ where
     pub fn new(trace: Tr, operator: ::timely::dataflow::operators::generic::OperatorInfo, logging: Option<::logging::Logger>) -> (Self, TraceWriter<Tr>)
     where
         Tr: Trace,
-        Tr::Batch: Batch<Tr::Key,Tr::Val,Tr::Time,Tr::R>,
+        Tr::Batch: Batch,
     {
         let trace = Rc::new(RefCell::new(TraceBox::new(trace)));
         let queues = Rc::new(RefCell::new(Vec::new()));

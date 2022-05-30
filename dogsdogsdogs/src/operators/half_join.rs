@@ -42,7 +42,7 @@ use differential_dataflow::{ExchangeData, Collection, AsCollection, Hashable};
 use differential_dataflow::difference::{Monoid, Semigroup};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arranged;
-use differential_dataflow::trace::{Cursor, TraceReader, BatchReader};
+use differential_dataflow::trace::{Cursor, TraceReader};
 use differential_dataflow::consolidation::{consolidate, consolidate_updates};
 
 /// A binary equijoin that responds to updates on only its first input.
@@ -81,8 +81,6 @@ where
     Tr: TraceReader<Time=G::Timestamp>+Clone+'static,
     Tr::Key: Ord+Hashable+ExchangeData,
     Tr::Val: Clone,
-    Tr::Batch: BatchReader<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
-    Tr::Cursor: Cursor<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
     Tr::R: Monoid+ExchangeData,
     FF: Fn(&G::Timestamp) -> G::Timestamp + 'static,
     CF: Fn(&G::Timestamp, &G::Timestamp) -> bool + 'static,
@@ -137,8 +135,6 @@ where
     Tr: TraceReader<Time=G::Timestamp>+Clone+'static,
     Tr::Key: Ord+Hashable+ExchangeData,
     Tr::Val: Clone,
-    Tr::Batch: BatchReader<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
-    Tr::Cursor: Cursor<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
     Tr::R: Monoid+ExchangeData,
     FF: Fn(&G::Timestamp) -> G::Timestamp + 'static,
     CF: Fn(&G::Timestamp, &G::Timestamp) -> bool + 'static,

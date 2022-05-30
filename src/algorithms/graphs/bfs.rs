@@ -30,8 +30,6 @@ where
     G::Timestamp: Lattice+Ord,
     N: ExchangeData+Hash,
     Tr: TraceReader<Key=N, Val=N, Time=G::Timestamp, R=isize>+Clone+'static,
-    Tr::Batch: crate::trace::BatchReader<N, N, G::Timestamp, Tr::R>+'static,
-    Tr::Cursor: crate::trace::Cursor<N, N, G::Timestamp, Tr::R>+'static,
 {
     // initialize roots as reaching themselves at distance 0
     let nodes = roots.map(|x| (x, 0));
