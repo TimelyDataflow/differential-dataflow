@@ -72,13 +72,17 @@ macro_rules! builtin_implementation {
             #[inline] fn zero() -> Self { 0 }
         }
 
-        impl Abelian for $t {
-            #[inline] fn negate(self) -> Self { -self }
-        }
-
         impl Multiply<Self> for $t {
             type Output = Self;
             fn multiply(self, rhs: &Self) -> Self { self * rhs}
+        }
+    };
+}
+
+macro_rules! builtin_abelian_implementation {
+    ($t:ty) => {
+        impl Abelian for $t {
+            #[inline] fn negate(self) -> Self { -self }
         }
     };
 }
@@ -89,6 +93,19 @@ builtin_implementation!(i32);
 builtin_implementation!(i64);
 builtin_implementation!(i128);
 builtin_implementation!(isize);
+builtin_implementation!(u8);
+builtin_implementation!(u16);
+builtin_implementation!(u32);
+builtin_implementation!(u64);
+builtin_implementation!(u128);
+builtin_implementation!(usize);
+
+builtin_abelian_implementation!(i8);
+builtin_abelian_implementation!(i16);
+builtin_abelian_implementation!(i32);
+builtin_abelian_implementation!(i64);
+builtin_abelian_implementation!(i128);
+builtin_abelian_implementation!(isize);
 
 /// Implementations for wrapping signed integers, which have a different zero.
 macro_rules! wrapping_implementation {
