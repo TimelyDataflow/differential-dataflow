@@ -2,14 +2,14 @@
 
 use ::difference::Semigroup;
 
-use super::{Trie, Cursor, Builder, MergeBuilder, TupleBuilder, Container, advance};
+use super::{Trie, Cursor, Builder, MergeBuilder, TupleBuilder, BatchContainer, advance};
 use std::ops::Deref;
 
 /// A layer of unordered values.
 #[derive(Debug, Eq, PartialEq, Clone, Abomonation)]
 pub struct OrderedLeaf<K, R, C=Vec<(K,R)>>
 where
-    C: Container<Item=(K,R)>+Deref<Target=[(K,R)]>,
+    C: BatchContainer<Item=(K, R)>+Deref<Target=[(K, R)]>,
 {
     /// Unordered values.
     pub vals: C,
@@ -17,7 +17,7 @@ where
 
 impl<K: Ord+Clone, R: Semigroup+Clone, C> Trie for OrderedLeaf<K, R, C>
 where
-    C: Container<Item=(K,R)>+Deref<Target=[(K,R)]>,
+    C: BatchContainer<Item=(K, R)>+Deref<Target=[(K, R)]>,
 {
     type Item = (K, R);
     type Cursor = OrderedLeafCursor;
@@ -36,7 +36,7 @@ where
 /// A builder for unordered values.
 pub struct OrderedLeafBuilder<K, R, C=Vec<(K,R)>>
 where
-    C: Container<Item=(K,R)>+Deref<Target=[(K,R)]>,
+    C: BatchContainer<Item=(K, R)>+Deref<Target=[(K, R)]>,
 {
     /// Unordered values.
     pub vals: C,
@@ -44,7 +44,7 @@ where
 
 impl<K: Ord+Clone, R: Semigroup+Clone, C> Builder for OrderedLeafBuilder<K, R, C>
 where
-    C: Container<Item=(K,R)>+Deref<Target=[(K,R)]>,
+    C: BatchContainer<Item=(K, R)>+Deref<Target=[(K, R)]>,
 {
     type Trie = OrderedLeaf<K, R, C>;
     fn boundary(&mut self) -> usize { self.vals.len() }
@@ -53,7 +53,7 @@ where
 
 impl<K: Ord+Clone, R: Semigroup+Clone, C> MergeBuilder for OrderedLeafBuilder<K, R, C>
 where
-    C: Container<Item=(K,R)>+Deref<Target=[(K,R)]>,
+    C: BatchContainer<Item=(K, R)>+Deref<Target=[(K, R)]>,
 {
     fn with_capacity(other1: &Self::Trie, other2: &Self::Trie) -> Self {
         OrderedLeafBuilder {
@@ -112,10 +112,10 @@ where
 
 impl<K: Ord+Clone, R: Semigroup+Clone, C> TupleBuilder for OrderedLeafBuilder<K, R, C>
 where
-    C: Container<Item=(K,R)>+Deref<Target=[(K,R)]>,
+    C: BatchContainer<Item=(K, R)>+Deref<Target=[(K, R)]>,
 {
     type Item = (K, R);
-    fn new() -> Self { OrderedLeafBuilder { vals: C::new() } }
+    fn new() -> Self { OrderedLeafBuilder { vals: C::default() } }
     fn with_capacity(cap: usize) -> Self { OrderedLeafBuilder { vals: C::with_capacity(cap) } }
     #[inline] fn push_tuple(&mut self, tuple: (K, R)) { self.vals.push(tuple) }
 }
@@ -131,7 +131,7 @@ pub struct OrderedLeafCursor {
 
 impl<K: Clone, R: Clone, C> Cursor<OrderedLeaf<K, R, C>> for OrderedLeafCursor
 where
-    C: Container<Item=(K,R)>+Deref<Target=[(K,R)]>,
+    C: BatchContainer<Item=(K, R)>+Deref<Target=[(K, R)]>,
 {
     type Key = (K, R);
     fn key<'a>(&self, storage: &'a OrderedLeaf<K, R, C>) -> &'a Self::Key { &storage.vals[self.pos] }

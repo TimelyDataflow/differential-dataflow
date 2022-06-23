@@ -1,6 +1,6 @@
 //! Implementation using ordered keys and exponential search.
 
-use super::{Trie, Cursor, Builder, MergeBuilder, TupleBuilder, Container, advance};
+use super::{Trie, Cursor, Builder, MergeBuilder, TupleBuilder, BatchContainer, advance};
 use std::convert::{TryFrom, TryInto};
 use std::fmt::Debug;
 use std::ops::{Sub,Add,Deref};
@@ -23,7 +23,7 @@ where
 pub struct OrderedLayer<K, L, O=usize, C=Vec<K>>
 where
     K: Ord,
-    C: Container<Item=K>+Deref<Target=[K]>,
+    C: BatchContainer<Item=K>+Deref<Target=[K]>,
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug
 {
     /// The keys of the layer.
@@ -40,7 +40,7 @@ where
 impl<K, L, O, C> Trie for OrderedLayer<K, L, O, C>
 where
     K: Ord+Clone,
-    C: Container<Item=K>+Deref<Target=[K]>,
+    C: BatchContainer<Item=K>+Deref<Target=[K]>,
     L: Trie,
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug
 {
@@ -77,7 +77,7 @@ where
 pub struct OrderedBuilder<K, L, O=usize, C=Vec<K>>
 where
     K: Ord+Clone,
-    C: Container<Item=K>+Deref<Target=[K]>,
+    C: BatchContainer<Item=K>+Deref<Target=[K]>,
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug
 {
     /// Keys
@@ -91,7 +91,7 @@ where
 impl<K, L, O, C> Builder for OrderedBuilder<K, L, O, C>
 where
     K: Ord+Clone,
-    C: Container<Item=K>+Deref<Target=[K]>,
+    C: BatchContainer<Item=K>+Deref<Target=[K]>,
     L: Builder,
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug
 {
@@ -115,7 +115,7 @@ where
 impl<K, L, O, C> MergeBuilder for OrderedBuilder<K, L, O, C>
 where
     K: Ord+Clone,
-    C: Container<Item=K>+Deref<Target=[K]>,
+    C: BatchContainer<Item=K>+Deref<Target=[K]>,
     L: MergeBuilder,
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug
 {
@@ -162,7 +162,7 @@ where
 impl<K, L, O, C> OrderedBuilder<K, L, O, C>
 where
     K: Ord+Clone,
-    C: Container<Item=K>+Deref<Target=[K]>,
+    C: BatchContainer<Item=K>+Deref<Target=[K]>,
     L: MergeBuilder,
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug
 {
@@ -210,12 +210,12 @@ where
 impl<K, L, O, C> TupleBuilder for OrderedBuilder<K, L, O, C>
 where
     K: Ord+Clone,
-    C: Container<Item=K>+Deref<Target=[K]>,
+    C: BatchContainer<Item=K>+Deref<Target=[K]>,
     L: TupleBuilder,
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug
 {
     type Item = (K, L::Item);
-    fn new() -> Self { OrderedBuilder { keys: C::new(), offs: vec![O::try_from(0).unwrap()], vals: L::new() } }
+    fn new() -> Self { OrderedBuilder { keys: C::default(), offs: vec![O::try_from(0).unwrap()], vals: L::new() } }
     fn with_capacity(cap: usize) -> Self {
         let mut offs = Vec::with_capacity(cap + 1);
         offs.push(O::try_from(0).unwrap());
@@ -252,7 +252,7 @@ pub struct OrderedCursor<L: Trie> {
 impl<K, L, O, C> Cursor<OrderedLayer<K, L, O, C>> for OrderedCursor<L>
 where
     K: Ord+Clone,
-    C: Container<Item=K>+Deref<Target=[K]>,
+    C: BatchContainer<Item=K>+Deref<Target=[K]>,
     L: Trie,
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug
 {

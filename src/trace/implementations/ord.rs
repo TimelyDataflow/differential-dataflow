@@ -14,14 +14,14 @@ use std::marker::PhantomData;
 use std::fmt::Debug;
 use std::ops::Deref;
 
+use timely::container::columnation::TimelyStack;
+use timely::container::columnation::Columnation;
 use timely::progress::{Antichain, frontier::AntichainRef};
-
-use columnation::{Columnation, ColumnStack};
 
 use ::difference::Semigroup;
 use lattice::Lattice;
 
-use trace::layers::{Trie, TupleBuilder, Container};
+use trace::layers::{Trie, TupleBuilder, BatchContainer};
 use trace::layers::Builder as TrieBuilder;
 use trace::layers::Cursor as TrieCursor;
 use trace::layers::ordered::{OrdOffset, OrderedLayer, OrderedBuilder, OrderedCursor};
@@ -50,9 +50,9 @@ pub type OrdKeySpine<K, T, R, O=usize> = Spine<Rc<OrdKeyBatch<K, T, R, O>>>;
 pub type OrdKeySpineAbom<K, T, R, O=usize> = Spine<Rc<Abomonated<OrdKeyBatch<K, T, R, O>, Vec<u8>>>>;
 
 /// A trace implementation backed by columnar storage.
-pub type ColValSpine<K, V, T, R, O=usize> = Spine<Rc<OrdValBatch<K, V, T, R, O, ColumnStack<K>, ColumnStack<V>>>>;
+pub type ColValSpine<K, V, T, R, O=usize> = Spine<Rc<OrdValBatch<K, V, T, R, O, TimelyStack<K>, TimelyStack<V>>>>;
 /// A trace implementation backed by columnar storage.
-pub type ColKeySpine<K, T, R, O=usize> = Spine<Rc<OrdKeyBatch<K,  T, R, O, ColumnStack<K>>>>;
+pub type ColKeySpine<K, T, R, O=usize> = Spine<Rc<OrdKeyBatch<K,  T, R, O, TimelyStack<K>>>>;
 
 
 /// A container that can retain/discard from some offset onward.
@@ -75,7 +75,7 @@ impl<T> RetainFrom<T> for Vec<T> {
     }
 }
 
-impl<T: Columnation> RetainFrom<T> for ColumnStack<T> {
+impl<T: Columnation> RetainFrom<T> for TimelyStack<T> {
     fn retain_from<P: FnMut(usize, &T)->bool>(&mut self, index: usize, mut predicate: P) {
         let mut position = index;
         self.retain_from(index, |item| {
@@ -95,8 +95,8 @@ where
     T: Clone+Lattice,
     R: Clone,
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug,
-    CK: Container<Item=K>+Deref<Target=[K]>+RetainFrom<K>,
-    CV: Container<Item=V>+Deref<Target=[V]>+RetainFrom<V>,
+    CK: BatchContainer<Item=K>+Deref<Target=[K]>+RetainFrom<K>,
+    CV: BatchContainer<Item=V>+Deref<Target=[V]>+RetainFrom<V>,
 {
     /// Where all the dataz is.
     pub layer: OrderedLayer<K, OrderedLayer<V, OrderedLeaf<T, R>, O, CV>, O, CK>,
@@ -111,8 +111,8 @@ where
     T: Lattice+Ord+Clone+'static,
     R: Semigroup,
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug,
-    CK: Container<Item=K>+Deref<Target=[K]>+RetainFrom<K>,
-    CV: Container<Item=V>+Deref<Target=[V]>+RetainFrom<V>,
+    CK: BatchContainer<Item=K>+Deref<Target=[K]>+RetainFrom<K>,
+    CV: BatchContainer<Item=V>+Deref<Target=[V]>+RetainFrom<V>,
 {
     type Key = K;
     type Val = V;
@@ -132,8 +132,8 @@ where
     T: Lattice+timely::progress::Timestamp+Ord+Clone+::std::fmt::Debug+'static,
     R: Semigroup,
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug,
-    CK: Container<Item=K>+Deref<Target=[K]>+RetainFrom<K>,
-    CV: Container<Item=V>+Deref<Target=[V]>+RetainFrom<V>,
+    CK: BatchContainer<Item=K>+Deref<Target=[K]>+RetainFrom<K>,
+    CV: BatchContainer<Item=V>+Deref<Target=[V]>+RetainFrom<V>,
 {
     type Batcher = MergeBatcher<Self>;
     type Builder = OrdValBuilder<K, V, T, R, O, CK, CV>;
@@ -151,8 +151,8 @@ where
     T: Lattice+Ord+Clone+::std::fmt::Debug+'static,
     R: Semigroup,
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug,
-    CK: Container<Item=K>+Deref<Target=[K]>+RetainFrom<K>,
-    CV: Container<Item=V>+Deref<Target=[V]>+RetainFrom<V>,
+    CK: BatchContainer<Item=K>+Deref<Target=[K]>+RetainFrom<K>,
+    CV: BatchContainer<Item=V>+Deref<Target=[V]>+RetainFrom<V>,
 {
     fn advance_builder_from(layer: &mut OrderedBuilder<K, OrderedBuilder<V, OrderedLeafBuilder<T, R>, O, CV>, O, CK>, frontier: AntichainRef<T>, key_pos: usize) {
 
@@ -250,8 +250,8 @@ where
     T: Lattice+Ord+Clone+::std::fmt::Debug+'static,
     R: Semigroup,
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug,
-    CK: Container<Item=K>+Deref<Target=[K]>+RetainFrom<K>,
-    CV: Container<Item=V>+Deref<Target=[V]>+RetainFrom<V>,
+    CK: BatchContainer<Item=K>+Deref<Target=[K]>+RetainFrom<K>,
+    CV: BatchContainer<Item=V>+Deref<Target=[V]>+RetainFrom<V>,
 {
     // first batch, and position therein.
     lower1: usize,
@@ -272,8 +272,8 @@ where
     T: Lattice+timely::progress::Timestamp+Ord+Clone+::std::fmt::Debug+'static,
     R: Semigroup,
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug,
-    CK: Container<Item=K>+Deref<Target=[K]>+RetainFrom<K>,
-    CV: Container<Item=V>+Deref<Target=[V]>+RetainFrom<V>,
+    CK: BatchContainer<Item=K>+Deref<Target=[K]>+RetainFrom<K>,
+    CV: BatchContainer<Item=V>+Deref<Target=[V]>+RetainFrom<V>,
 {
     fn new(batch1: &OrdValBatch<K, V, T, R, O, CK, CV>, batch2: &OrdValBatch<K, V, T, R, O, CK, CV>, compaction_frontier: Option<AntichainRef<T>>) -> Self {
 
@@ -364,8 +364,8 @@ where
     T: Lattice+Ord+Clone,
     R: Semigroup,
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug,
-    CK: Container<Item=K>+Deref<Target=[K]>+RetainFrom<K>,
-    CV: Container<Item=V>+Deref<Target=[V]>+RetainFrom<V>,
+    CK: BatchContainer<Item=K>+Deref<Target=[K]>+RetainFrom<K>,
+    CV: BatchContainer<Item=V>+Deref<Target=[V]>+RetainFrom<V>,
 {
     phantom: std::marker::PhantomData<(K, CK, CV)>,
     cursor: OrderedCursor<OrderedLayer<V, OrderedLeaf<T, R>, O, CV>>,
@@ -378,8 +378,8 @@ where
     T: Lattice+Ord+Clone,
     R: Semigroup,
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug,
-    CK: Container<Item=K>+Deref<Target=[K]>+RetainFrom<K>,
-    CV: Container<Item=V>+Deref<Target=[V]>+RetainFrom<V>,
+    CK: BatchContainer<Item=K>+Deref<Target=[K]>+RetainFrom<K>,
+    CV: BatchContainer<Item=V>+Deref<Target=[V]>+RetainFrom<V>,
 {
     type Key = K;
     type Val = V;
@@ -416,8 +416,8 @@ where
     T: Ord+Clone+Lattice,
     R: Clone+Semigroup,
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug,
-    CK: Container<Item=K>+Deref<Target=[K]>+RetainFrom<K>,
-    CV: Container<Item=V>+Deref<Target=[V]>+RetainFrom<V>,
+    CK: BatchContainer<Item=K>+Deref<Target=[K]>+RetainFrom<K>,
+    CV: BatchContainer<Item=V>+Deref<Target=[V]>+RetainFrom<V>,
 {
     builder: OrderedBuilder<K, OrderedBuilder<V, OrderedLeafBuilder<T, R>, O, CV>, O, CK>,
 }
@@ -429,8 +429,8 @@ where
     T: Lattice+timely::progress::Timestamp+Ord+Clone+::std::fmt::Debug+'static,
     R: Semigroup,
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug,
-    CK: Container<Item=K>+Deref<Target=[K]>+RetainFrom<K>,
-    CV: Container<Item=V>+Deref<Target=[V]>+RetainFrom<V>,
+    CK: BatchContainer<Item=K>+Deref<Target=[K]>+RetainFrom<K>,
+    CV: BatchContainer<Item=V>+Deref<Target=[V]>+RetainFrom<V>,
 {
 
     fn new() -> Self {
@@ -469,7 +469,7 @@ where
     T: Clone+Lattice,
     R: Clone,
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug,
-    CK: Container<Item=K>+Deref<Target=[K]>+RetainFrom<K>,
+    CK: BatchContainer<Item=K>+Deref<Target=[K]>+RetainFrom<K>,
 {
     /// Where all the dataz is.
     pub layer: OrderedLayer<K, OrderedLeaf<T, R>, O, CK>,
@@ -483,7 +483,7 @@ where
     T: Lattice+Ord+Clone+'static,
     R: Clone+Semigroup,
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug,
-    CK: Container<Item=K>+Deref<Target=[K]>+RetainFrom<K>,
+    CK: BatchContainer<Item=K>+Deref<Target=[K]>+RetainFrom<K>,
 {
     type Key = K;
     type Val = ();
@@ -508,7 +508,7 @@ where
     T: Lattice+timely::progress::Timestamp+Ord+Clone+'static,
     R: Semigroup,
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug,
-    CK: Container<Item=K>+Deref<Target=[K]>+RetainFrom<K>,
+    CK: BatchContainer<Item=K>+Deref<Target=[K]>+RetainFrom<K>,
 {
     type Batcher = MergeBatcher<Self>;
     type Builder = OrdKeyBuilder<K, T, R, O, CK>;
@@ -525,7 +525,7 @@ where
     T: Lattice+Ord+Clone+'static,
     R: Semigroup,
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug,
-    CK: Container<Item=K>+Deref<Target=[K]>+RetainFrom<K>,
+    CK: BatchContainer<Item=K>+Deref<Target=[K]>+RetainFrom<K>,
 {
     fn advance_builder_from(layer: &mut OrderedBuilder<K, OrderedLeafBuilder<T, R>, O, CK>, frontier: AntichainRef<T>, key_pos: usize) {
 
@@ -596,7 +596,7 @@ where
     T: Lattice+Ord+Clone+'static,
     R: Semigroup,
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug,
-    CK: Container<Item=K>+Deref<Target=[K]>+RetainFrom<K>,
+    CK: BatchContainer<Item=K>+Deref<Target=[K]>+RetainFrom<K>,
 {
     // first batch, and position therein.
     lower1: usize,
@@ -616,7 +616,7 @@ where
     T: Lattice+timely::progress::Timestamp+Ord+Clone+'static,
     R: Semigroup,
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug,
-    CK: Container<Item=K>+Deref<Target=[K]>+RetainFrom<K>,
+    CK: BatchContainer<Item=K>+Deref<Target=[K]>+RetainFrom<K>,
 {
     fn new(batch1: &OrdKeyBatch<K, T, R, O, CK>, batch2: &OrdKeyBatch<K, T, R, O, CK>, compaction_frontier: Option<AntichainRef<T>>) -> Self {
 
@@ -720,7 +720,7 @@ where
     T: Lattice+Ord+Clone,
     R: Semigroup,
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug,
-    CK: Container<Item=K>+Deref<Target=[K]>+RetainFrom<K>,
+    CK: BatchContainer<Item=K>+Deref<Target=[K]>+RetainFrom<K>,
 {
     type Key = K;
     type Val = ();
@@ -756,7 +756,7 @@ where
     T: Ord+Clone+Lattice,
     R: Clone+Semigroup,
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug,
-    CK: Container<Item=K>+Deref<Target=[K]>+RetainFrom<K>,
+    CK: BatchContainer<Item=K>+Deref<Target=[K]>+RetainFrom<K>,
 {
     builder: OrderedBuilder<K, OrderedLeafBuilder<T, R>, O, CK>,
 }
@@ -767,7 +767,7 @@ where
     T: Lattice+timely::progress::Timestamp+Ord+Clone+'static,
     R: Semigroup,
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug,
-    CK: Container<Item=K>+Deref<Target=[K]>+RetainFrom<K>,
+    CK: BatchContainer<Item=K>+Deref<Target=[K]>+RetainFrom<K>,
 {
 
     fn new() -> Self {

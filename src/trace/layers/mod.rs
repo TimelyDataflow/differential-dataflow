@@ -4,6 +4,9 @@
 //! in the next layer. Similarly, ranges of elements in the layer itself may correspond
 //! to single elements in the layer above.
 
+use timely::container::columnation::TimelyStack;
+use timely::container::columnation::Columnation;
+
 pub mod ordered;
 pub mod ordered_leaf;
 // pub mod hashed;
@@ -107,7 +110,7 @@ pub trait Cursor<Storage> {
 }
 
 /// A general-purpose container resembling `Vec<T>`.
-pub trait Container {
+pub trait BatchContainer: Default {
     /// The type of contained item.
     type Item;
     /// Inserts an owned item.
@@ -116,8 +119,6 @@ pub trait Container {
     fn copy(&mut self, item: &Self::Item);
     /// Extends from a slice of items.
     fn copy_slice(&mut self, slice: &[Self::Item]);
-    /// Creates a new container.
-    fn new() -> Self;
     /// Creates a new container with sufficient capacity.
     fn with_capacity(size: usize) -> Self;
     /// Reserves additional capacity.
@@ -126,7 +127,7 @@ pub trait Container {
     fn merge_capacity(cont1: &Self, cont2: &Self) -> Self;
 }
 
-impl<T: Clone> Container for Vec<T> {
+impl<T: Clone> BatchContainer for Vec<T> {
     type Item = T;
     fn push(&mut self, item: T) {
         self.push(item);
@@ -136,9 +137,6 @@ impl<T: Clone> Container for Vec<T> {
     }
     fn copy_slice(&mut self, slice: &[T]) {
         self.extend_from_slice(slice);
-    }
-    fn new() -> Self {
-        Vec::new()
     }
     fn with_capacity(size: usize) -> Self {
         Vec::with_capacity(size)
@@ -151,8 +149,7 @@ impl<T: Clone> Container for Vec<T> {
     }
 }
 
-use columnation::{Columnation, ColumnStack};
-impl<T: Columnation> Container for ColumnStack<T> {
+impl<T: Columnation> BatchContainer for TimelyStack<T> {
     type Item = T;
     fn push(&mut self, item: T) {
         self.copy(&item);
@@ -164,9 +161,6 @@ impl<T: Columnation> Container for ColumnStack<T> {
         for item in slice.iter() {
             self.copy(item);
         }
-    }
-    fn new() -> Self {
-        Self::default()
     }
     fn with_capacity(_size: usize) -> Self {
         Self::default()
