@@ -50,13 +50,13 @@ pub fn consolidate_slice<T: Ord, R: Semigroup>(slice: &mut [(T, R)]) -> usize {
         //
         // LLVM appears to struggle to optimize out Rust's split_at_mut, which would prove disjointness
         // using run-time tests.
+        
+        assert!(offset < index);
+        
+        // LOOP INVARIANT: offset < index
+        let ptr1 = unsafe {slice.as_mut_ptr().offset(offset as isize)};
+        let ptr2 = unsafe {slice.as_mut_ptr().offset(index as isize)};
         unsafe {
-
-            assert!(offset < index);
-
-            // LOOP INVARIANT: offset < index
-            let ptr1 = slice.as_mut_ptr().offset(offset as isize);
-            let ptr2 = slice.as_mut_ptr().offset(index as isize);
 
             if (*ptr1).0 == (*ptr2).0 {
                 (*ptr1).1.plus_equals(&(*ptr2).1);
