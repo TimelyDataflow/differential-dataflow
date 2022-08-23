@@ -423,19 +423,26 @@ where
         Tr: TraceReader,
     {
         // This frontier describes our only guarantee on the compaction frontier.
-        let frontier = self.get_logical_compaction().to_owned();
-        self.import_frontier_core(scope, name, frontier)
+        let since = self.get_logical_compaction().to_owned();
+        self.import_frontier_core(scope, name, since, Antichain::new())
     }
 
-    /// Import a trace advanced to a specific frontier.
-    pub fn import_frontier_core<G>(&mut self, scope: &G, name: &str, frontier: Antichain<Tr::Time>) -> (Arranged<G, TraceFrontier<TraceAgent<Tr>>>, ShutdownButton<CapabilitySet<Tr::Time>>)
+    /// Import a trace restricted to a specific time interval `[since, until)`.
+    ///
+    /// All updates present in the input trace will be first advanced to `since`, and then either emitted,
+    /// or if greater or equal to `until`, suppressed. Once all times are certain to be greater or equal
+    /// to `until` the operator capability will be dropped.
+    ///
+    /// Invoking this method with an `until` of `Antichain::new()` will perform no filtering, as the empty
+    /// frontier indicates the end of times.
+    pub fn import_frontier_core<G>(&mut self, scope: &G, name: &str, since: Antichain<Tr::Time>, until: Antichain<Tr::Time>) -> (Arranged<G, TraceFrontier<TraceAgent<Tr>>>, ShutdownButton<CapabilitySet<Tr::Time>>)
     where
         G: Scope<Timestamp=Tr::Time>,
         Tr::Time: Timestamp+ Lattice+Ord+Clone+'static,
         Tr: TraceReader,
     {
         let trace = self.clone();
-        let trace = TraceFrontier::make_from(trace, frontier.borrow());
+        let trace = TraceFrontier::make_from(trace, since.borrow(), until.borrow());
 
         let mut shutdown_button = None;
 
@@ -458,18 +465,27 @@ where
 
                     let mut capabilities = capabilities.borrow_mut();
                     if let Some(ref mut capabilities) = *capabilities {
-
                         let mut borrow = queue.1.borrow_mut();
                         for instruction in borrow.drain(..) {
-                            match instruction {
-                                TraceReplayInstruction::Frontier(frontier) => {
-                                    capabilities.downgrade(&frontier.borrow()[..]);
-                                },
-                                TraceReplayInstruction::Batch(batch, hint) => {
-                                    if let Some(time) = hint {
-                                        if !batch.is_empty() {
-                                            let delayed = capabilities.delayed(&time);
-                                            output.session(&delayed).give(BatchFrontier::make_from(batch, frontier.borrow()));
+                            // If we have dropped the capabilities due to `until`, attempt no further work.
+                            // Without the capabilities, we should soon be shut down (once this loop ends).
+                            if !capabilities.is_empty() {
+                                match instruction {
+                                    TraceReplayInstruction::Frontier(frontier) => {
+                                        if timely::PartialOrder::less_equal(&until, &frontier) {
+                                            // It might be nice to actively *drop* `capabilities`, but it seems
+                                            // complicated logically (i.e. we'd have to break out of the loop).
+                                            capabilities.downgrade(&[]);
+                                        } else {
+                                            capabilities.downgrade(&frontier.borrow()[..]);
+                                        }
+                                    },
+                                    TraceReplayInstruction::Batch(batch, hint) => {
+                                        if let Some(time) = hint {
+                                            if !batch.is_empty() {
+                                                let delayed = capabilities.delayed(&time);
+                                                output.session(&delayed).give(BatchFrontier::make_from(batch, since.borrow(), until.borrow()));
+                                            }
                                         }
                                     }
                                 }

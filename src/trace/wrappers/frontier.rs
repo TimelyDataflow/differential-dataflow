@@ -1,8 +1,10 @@
 //! Wrapper for frontiered trace.
 //!
-//! Wraps a trace with a frontier so that all exposed timestamps are first advanced by the frontier.
-//! This ensures that even for traces that have been advanced, all views provided through cursors
-//! present deterministic times, independent of the compaction strategy.
+//! Wraps a trace with `since` and `upper` frontiers so that all exposed timestamps are first advanced
+//! by the `since` frontier and restricted by the `upper` frontier. This presents a deterministic trace
+//! on the interval `[since, upper)`, presenting only accumulations up to `since` (rather than partially
+//! accumulated updates) and no updates at times greater or equal to `upper` (even as parts of batches
+//! that span that time).
 
 use timely::progress::Timestamp;
 use timely::progress::{Antichain, frontier::AntichainRef};
@@ -17,7 +19,10 @@ where
     Tr: TraceReader,
 {
     trace: Tr,
-    frontier: Antichain<Tr::Time>,
+    /// Frontier to which all update times will be advanced.
+    since: Antichain<Tr::Time>,
+    /// Frontier after which all update times will be suppressed.
+    until: Antichain<Tr::Time>,
 }
 
 impl<Tr> Clone for TraceFrontier<Tr>
@@ -28,7 +33,8 @@ where
     fn clone(&self) -> Self {
         TraceFrontier {
             trace: self.trace.clone(),
-            frontier: self.frontier.clone(),
+            since: self.since.clone(),
+            until: self.until.clone(),
         }
     }
 }
@@ -51,8 +57,9 @@ where
     type Cursor = CursorFrontier<Tr::Cursor>;
 
     fn map_batches<F: FnMut(&Self::Batch)>(&self, mut f: F) {
-        let frontier = self.frontier.borrow();
-        self.trace.map_batches(|batch| f(&Self::Batch::make_from(batch.clone(), frontier)))
+        let since = self.since.borrow();
+        let until = self.until.borrow();
+        self.trace.map_batches(|batch| f(&Self::Batch::make_from(batch.clone(), since, until)))
     }
 
     fn set_logical_compaction(&mut self, frontier: AntichainRef<Tr::Time>) { self.trace.set_logical_compaction(frontier) }
@@ -62,8 +69,9 @@ where
     fn get_physical_compaction(&mut self) -> AntichainRef<Tr::Time> { self.trace.get_physical_compaction() }
 
     fn cursor_through(&mut self, upper: AntichainRef<Tr::Time>) -> Option<(Self::Cursor, <Self::Cursor as Cursor>::Storage)> {
-        let frontier = self.frontier.borrow();
-        self.trace.cursor_through(upper).map(|(x,y)| (CursorFrontier::new(x, frontier), y))
+        let since = self.since.borrow();
+        let until = self.until.borrow();
+        self.trace.cursor_through(upper).map(|(x,y)| (CursorFrontier::new(x, since, until), y))
     }
 }
 
@@ -73,10 +81,11 @@ where
     Tr::Time: Timestamp,
 {
     /// Makes a new trace wrapper
-    pub fn make_from(trace: Tr, frontier: AntichainRef<Tr::Time>) -> Self {
+    pub fn make_from(trace: Tr, since: AntichainRef<Tr::Time>, until: AntichainRef<Tr::Time>) -> Self {
         TraceFrontier {
             trace,
-            frontier: frontier.to_owned(),
+            since: since.to_owned(),
+            until: until.to_owned(),
         }
     }
 }
@@ -86,10 +95,11 @@ where
 #[derive(Clone)]
 pub struct BatchFrontier<B: BatchReader> {
     batch: B,
-    frontier: Antichain<B::Time>,
+    since: Antichain<B::Time>,
+    until: Antichain<B::Time>,
 }
 
-impl<B: BatchReader> BatchReader for BatchFrontier<B>
+impl<B> BatchReader for BatchFrontier<B>
 where
     B: BatchReader,
     B::Time: Timestamp+Lattice,
@@ -102,7 +112,7 @@ where
     type Cursor = BatchCursorFrontier<B>;
 
     fn cursor(&self) -> Self::Cursor {
-        BatchCursorFrontier::new(self.batch.cursor(), self.frontier.borrow())
+        BatchCursorFrontier::new(self.batch.cursor(), self.since.borrow(), self.until.borrow())
     }
     fn len(&self) -> usize { self.batch.len() }
     fn description(&self) -> &Description<B::Time> { &self.batch.description() }
@@ -114,10 +124,11 @@ where
     B::Time: Timestamp+Lattice,
 {
     /// Makes a new batch wrapper
-    pub fn make_from(batch: B, frontier: AntichainRef<B::Time>) -> Self {
+    pub fn make_from(batch: B, since: AntichainRef<B::Time>, until: AntichainRef<B::Time>) -> Self {
         BatchFrontier {
             batch,
-            frontier: frontier.to_owned(),
+            since: since.to_owned(),
+            until: until.to_owned(),
         }
     }
 }
@@ -125,14 +136,16 @@ where
 /// Wrapper to provide cursor to nested scope.
 pub struct CursorFrontier<C: Cursor> {
     cursor: C,
-    frontier: Antichain<C::Time>,
+    since: Antichain<C::Time>,
+    until: Antichain<C::Time>
 }
 
 impl<C: Cursor> CursorFrontier<C> where C::Time: Clone {
-    fn new(cursor: C, frontier: AntichainRef<C::Time>) -> Self {
+    fn new(cursor: C, since: AntichainRef<C::Time>, until: AntichainRef<C::Time>) -> Self {
         CursorFrontier {
             cursor,
-            frontier: frontier.to_owned(),
+            since: since.to_owned(),
+            until: until.to_owned(),
         }
     }
 }
@@ -157,12 +170,15 @@ where
 
     #[inline]
     fn map_times<L: FnMut(&Self::Time,&Self::R)>(&mut self, storage: &Self::Storage, mut logic: L) {
-        let frontier = self.frontier.borrow();
+        let since = self.since.borrow();
+        let until = self.until.borrow();
         let mut temp: C::Time = <C::Time as timely::progress::Timestamp>::minimum();
         self.cursor.map_times(storage, |time, diff| {
             temp.clone_from(time);
-            temp.advance_by(frontier);
-            logic(&temp, diff);
+            temp.advance_by(since);
+            if !until.less_equal(&temp) {
+                logic(&temp, diff);
+            }
         })
     }
 
@@ -181,14 +197,16 @@ where
 /// Wrapper to provide cursor to nested scope.
 pub struct BatchCursorFrontier<B: BatchReader> {
     cursor: B::Cursor,
-    frontier: Antichain<B::Time>,
+    since: Antichain<B::Time>,
+    until: Antichain<B::Time>,
 }
 
 impl<B: BatchReader> BatchCursorFrontier<B> where B::Time: Clone {
-    fn new(cursor: B::Cursor, frontier: AntichainRef<B::Time>) -> Self {
+    fn new(cursor: B::Cursor, since: AntichainRef<B::Time>, until: AntichainRef<B::Time>) -> Self {
         BatchCursorFrontier {
             cursor,
-            frontier: frontier.to_owned(),
+            since: since.to_owned(),
+            until: until.to_owned(),
         }
     }
 }
@@ -212,12 +230,15 @@ where
 
     #[inline]
     fn map_times<L: FnMut(&Self::Time,&Self::R)>(&mut self, storage: &Self::Storage, mut logic: L) {
-        let frontier = self.frontier.borrow();
+        let since = self.since.borrow();
+        let until = self.until.borrow();
         let mut temp: B::Time = <B::Time as timely::progress::Timestamp>::minimum();
         self.cursor.map_times(&storage.batch, |time, diff| {
             temp.clone_from(time);
-            temp.advance_by(frontier);
-            logic(&temp, diff);
+            temp.advance_by(since);
+            if !until.less_equal(&temp) {
+                logic(&temp, diff);
+            }
         })
     }
 
