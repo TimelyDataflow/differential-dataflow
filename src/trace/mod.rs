@@ -442,6 +442,168 @@ pub mod rc_blanket_impls {
     }
 }
 
+/// Blanket implementations for atomic reference counted batches.
+pub mod abomonated_arc_blanket_impls {
+    use std::io::Write;
+    use std::mem;
+    use std::ops::Deref;
+    use std::sync::Arc;
+
+    use abomonation::Abomonation;
+
+    /// Wrapper over Arc that can be safely Abomonated.
+    pub enum AbomArc<T> {
+        /// An Arc that has been constructed normally
+        Owned(Arc<T>),
+        /// The result of decoding an abomonated AbomArc
+        Abomonated(Box<T>),
+    }
+
+    impl<T> AbomArc<T> {
+        fn new(inner: T) -> Self {
+            Self::Owned(Arc::new(inner))
+        }
+    }
+
+    impl<T: Clone> Clone for AbomArc<T> {
+        fn clone(&self) -> Self {
+            match self {
+                Self::Owned(arc) => Self::Owned(Arc::clone(arc)),
+                Self::Abomonated(val) => Self::Owned(Arc::new(T::clone(&*val))),
+            }
+        }
+    }
+
+    impl<T> Deref for AbomArc<T> {
+        type Target = T;
+        fn deref(&self) -> &Self::Target {
+            match self {
+                Self::Owned(arc) => &**arc,
+                Self::Abomonated(val) => &*val,
+            }
+        }
+    }
+
+    impl<T: Abomonation> Abomonation for AbomArc<T> {
+        unsafe fn entomb<W: Write>(&self, bytes: &mut W) -> std::io::Result<()> {
+            bytes.write_all(std::slice::from_raw_parts(mem::transmute(&**self), mem::size_of::<T>()))?;
+            (**self).entomb(bytes)
+        }
+        unsafe fn exhume<'a,'b>(&'a mut self, bytes: &'b mut [u8]) -> Option<&'b mut [u8]> {
+            let binary_len = mem::size_of::<T>();
+            if binary_len > bytes.len() {
+                None
+            } else {
+                let (mine, rest) = bytes.split_at_mut(binary_len);
+                let mut value = Box::from_raw(mine.as_mut_ptr() as *mut T);
+                let rest = (*value).exhume(rest)?;
+                std::ptr::write(self, Self::Abomonated(value));
+                Some(rest)
+            }
+        }
+        fn extent(&self) -> usize {
+            mem::size_of::<T>() + (&**self).extent()
+        }
+    }
+
+    use timely::progress::{Antichain, frontier::AntichainRef};
+    use super::{Batch, BatchReader, Batcher, Builder, Merger, Cursor, Description};
+
+    impl<K, V, T, R, B: BatchReader<K,V,T,R>> BatchReader<K,V,T,R> for AbomArc<B> {
+
+        /// The type used to enumerate the batch's contents.
+        type Cursor = ArcBatchCursor<K, V, T, R, B>;
+        /// Acquires a cursor to the batch's contents.
+        fn cursor(&self) -> Self::Cursor {
+            ArcBatchCursor::new((&**self).cursor())
+        }
+
+        /// The number of updates in the batch.
+        fn len(&self) -> usize { (&**self).len() }
+        /// Describes the times of the updates in the batch.
+        fn description(&self) -> &Description<T> { (&**self).description() }
+    }
+
+    /// Wrapper to provide cursor to nested scope.
+    pub struct ArcBatchCursor<K, V, T, R, B: BatchReader<K, V, T, R>> {
+        phantom: ::std::marker::PhantomData<(K, V, T, R)>,
+        cursor: B::Cursor,
+    }
+
+    impl<K, V, T, R, B: BatchReader<K, V, T, R>> ArcBatchCursor<K, V, T, R, B> {
+        fn new(cursor: B::Cursor) -> Self {
+            ArcBatchCursor {
+                cursor,
+                phantom: ::std::marker::PhantomData,
+            }
+        }
+    }
+
+    impl<K, V, T, R, B: BatchReader<K, V, T, R>> Cursor<K, V, T, R> for ArcBatchCursor<K, V, T, R, B> {
+
+        type Storage = AbomArc<B>;
+
+        #[inline] fn key_valid(&self, storage: &Self::Storage) -> bool { self.cursor.key_valid(storage) }
+        #[inline] fn val_valid(&self, storage: &Self::Storage) -> bool { self.cursor.val_valid(storage) }
+
+        #[inline] fn key<'a>(&self, storage: &'a Self::Storage) -> &'a K { self.cursor.key(storage) }
+        #[inline] fn val<'a>(&self, storage: &'a Self::Storage) -> &'a V { self.cursor.val(storage) }
+
+        #[inline]
+        fn map_times<L: FnMut(&T, &R)>(&mut self, storage: &Self::Storage, logic: L) {
+            self.cursor.map_times(storage, logic)
+        }
+
+        #[inline] fn step_key(&mut self, storage: &Self::Storage) { self.cursor.step_key(storage) }
+        #[inline] fn seek_key(&mut self, storage: &Self::Storage, key: &K) { self.cursor.seek_key(storage, key) }
+
+        #[inline] fn step_val(&mut self, storage: &Self::Storage) { self.cursor.step_val(storage) }
+        #[inline] fn seek_val(&mut self, storage: &Self::Storage, val: &V) { self.cursor.seek_val(storage, val) }
+
+        #[inline] fn rewind_keys(&mut self, storage: &Self::Storage) { self.cursor.rewind_keys(storage) }
+        #[inline] fn rewind_vals(&mut self, storage: &Self::Storage) { self.cursor.rewind_vals(storage) }
+    }
+
+    /// An immutable collection of updates.
+    impl<K,V,T,R,B: Batch<K,V,T,R>> Batch<K, V, T, R> for AbomArc<B> {
+        type Batcher = ArcBatcher<K, V, T, R, B>;
+        type Builder = ArcBuilder<K, V, T, R, B>;
+        type Merger = ArcMerger<K, V, T, R, B>;
+    }
+
+    /// Wrapper type for batching reference counted batches.
+    pub struct ArcBatcher<K,V,T,R,B:Batch<K,V,T,R>> { batcher: B::Batcher }
+
+    /// Functionality for collecting and batching updates.
+    impl<K,V,T,R,B:Batch<K,V,T,R>> Batcher<K, V, T, R, AbomArc<B>> for ArcBatcher<K,V,T,R,B> {
+        fn new() -> Self { ArcBatcher { batcher: <B::Batcher as Batcher<K,V,T,R,B>>::new() } }
+        fn push_batch(&mut self, batch: &mut Vec<((K, V), T, R)>) { self.batcher.push_batch(batch) }
+        fn seal(&mut self, upper: Antichain<T>) -> AbomArc<B> { AbomArc::new(self.batcher.seal(upper)) }
+        fn frontier(&mut self) -> timely::progress::frontier::AntichainRef<T> { self.batcher.frontier() }
+    }
+
+    /// Wrapper type for building reference counted batches.
+    pub struct ArcBuilder<K,V,T,R,B:Batch<K,V,T,R>> { builder: B::Builder }
+
+    /// Functionality for building batches from ordered update sequences.
+    impl<K,V,T,R,B:Batch<K,V,T,R>> Builder<K, V, T, R, AbomArc<B>> for ArcBuilder<K,V,T,R,B> {
+        fn new() -> Self { ArcBuilder { builder: <B::Builder as Builder<K,V,T,R,B>>::new() } }
+        fn with_capacity(cap: usize) -> Self { ArcBuilder { builder: <B::Builder as Builder<K,V,T,R,B>>::with_capacity(cap) } }
+        fn push(&mut self, element: (K, V, T, R)) { self.builder.push(element) }
+        fn done(self, lower: Antichain<T>, upper: Antichain<T>, since: Antichain<T>) -> AbomArc<B> { AbomArc::new(self.builder.done(lower, upper, since)) }
+    }
+
+    /// Wrapper type for merging reference counted batches.
+    pub struct ArcMerger<K,V,T,R,B:Batch<K,V,T,R>> { merger: B::Merger }
+
+    /// Represents a merge in progress.
+    impl<K,V,T,R,B:Batch<K,V,T,R>> Merger<K, V, T, R, AbomArc<B>> for ArcMerger<K,V,T,R,B> {
+        fn new(source1: &AbomArc<B>, source2: &AbomArc<B>, compaction_frontier: Option<AntichainRef<T>>) -> Self { ArcMerger { merger: B::begin_merge(source1, source2, compaction_frontier) } }
+        fn work(&mut self, source1: &AbomArc<B>, source2: &AbomArc<B>, fuel: &mut isize) { self.merger.work(source1, source2, fuel) }
+        fn done(self) -> AbomArc<B> { AbomArc::new(self.merger.done()) }
+    }
+}
+
 
 /// Blanket implementations for reference counted batches.
 pub mod abomonated_blanket_impls {

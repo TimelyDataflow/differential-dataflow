@@ -23,6 +23,7 @@ use trace::layers::Builder as TrieBuilder;
 use trace::layers::Cursor as TrieCursor;
 use trace::layers::ordered::{OrdOffset, OrderedLayer, OrderedBuilder, OrderedCursor};
 use trace::layers::ordered_leaf::{OrderedLeaf, OrderedLeafBuilder};
+use trace::abomonated_arc_blanket_impls::AbomArc;
 use trace::{Batch, BatchReader, Builder, Merger, Cursor};
 use trace::description::Description;
 
@@ -46,6 +47,8 @@ pub type OrdKeySpine<K, T, R, O=usize> = Spine<Rc<OrdKeyBatch<K, T, R, O>>>;
 /// A trace implementation for empty values using a spine of abomonated ordered lists.
 pub type OrdKeySpineAbom<K, T, R, O=usize> = Spine<Rc<Abomonated<OrdKeyBatch<K, T, R, O>, Vec<u8>>>>;
 
+/// A trace implementation for empty values using a spine of atomic reference counted abomonated ordered lists.
+pub type OrdKeySpineAbomArc<K, T, R, O = usize> = Spine<K, (), T, R, AbomArc<OrdKeyBatch<K, T, R, O>>>;
 
 /// An immutable collection of update tuples, from a contiguous interval of logical times.
 #[derive(Debug, Abomonation)]
@@ -407,7 +410,7 @@ where
 
 
 /// An immutable collection of update tuples, from a contiguous interval of logical times.
-#[derive(Debug, Abomonation)]
+#[derive(Debug, Clone, Abomonation)]
 pub struct OrdKeyBatch<K, T, R, O=usize>
 where
     K: Ord,
