@@ -158,17 +158,20 @@ impl<T: Columnation> BatchContainer for TimelyStack<T> {
         self.copy(item);
     }
     fn copy_slice(&mut self, slice: &[T]) {
+        self.reserve_items(slice.iter());
         for item in slice.iter() {
             self.copy(item);
         }
     }
-    fn with_capacity(_size: usize) -> Self {
-        Self::default()
+    fn with_capacity(size: usize) -> Self {
+        Self::with_capacity(size)
     }
     fn reserve(&mut self, _additional: usize) {
     }
-    fn merge_capacity(_cont1: &Self, _cont2: &Self) -> Self {
-        Self::default()
+    fn merge_capacity(cont1: &Self, cont2: &Self) -> Self {
+        let mut new = Self::default();
+        new.reserve_regions(std::iter::once(cont1).chain(std::iter::once(cont2)));
+        new
     }
 }
 
