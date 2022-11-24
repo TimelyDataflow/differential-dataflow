@@ -6,7 +6,7 @@ Dataflow computations differ from imperative computations in that you do not *fo
 
 For example, recall our example of interacting with our management computation, where we wrote
 
-```rust,no_run
+```rust,ignore
     // create a manager
     let probe = worker.dataflow(|scope| {
 
@@ -23,7 +23,7 @@ For example, recall our example of interacting with our management computation, 
 
 The returned probe allows us to ask whether the computation has stabilized to the point that there will be no more changes at certain query timestamps. We used the probe later on, when we wrote
 
-```rust,no_run
+```rust,ignore
     while probe.less_than(&input.time()) { worker.step(); }
 ```
 

@@ -30,15 +30,14 @@ fn main() {
             let knows = knows.arrange_by_key();
 
             // Same logic as before, with a new method name.
-            query.join_core(&knows, |x,q,y| Some((*y,(*x,*q))))
-                 .join_core(&knows, |y,(x,q),z| Some((*q,(*x,*y,*z))))
-                 .inspect(|result| println!("result {:?}", result));
-
+            query.join_core(&knows, |x, q, y| Some((*y, (*x, *q))))
+                .join_core(&knows, |y, (x, q), z| Some((*q, (*x, *y, *z))))
+                .inspect(|result| println!("result {:?}", result));
         });
 
-#       // to help with type inference ...
-#       knows.update_at((0,0), 0usize, 1isize);
-#       query.update_at((0,0), 0usize, 1isize);
+        # // to help with type inference ...
+        # knows.update_at((0, 0), 0usize, 1isize);
+        # query.update_at((0, 0), 0usize, 1isize);
     });
 }
 ```
@@ -108,7 +107,7 @@ You may need to return from an arrangement to a collection (a stream of updates)
 extern crate timely;
 extern crate differential_dataflow;
 
-use differential_dataflow::operators::JoinCore;
+use differential_dataflow::operators::{Join, JoinCore};
 use differential_dataflow::operators::arrange::ArrangeByKey;
 
 fn main() {
@@ -131,15 +130,15 @@ fn main() {
             let knows = knows.as_collection(|k,v| (*k,*v));
 
             // Same logic as before, with a new method name.
-            query.join_map(&knows, |x,q,y| (*y,(*x,*q))))
+            query.join_map(&knows, |x,q,y| (*y,(*x,*q)))
                  .join_map(&knows, |y,(x,q),z| (*q,(*x,*y,*z)))
                  .inspect(|result| println!("result {:?}", result));
 
         });
 
-#       // to help with type inference ...
-#       knows.update_at((0,0), 0usize, 1isize);
-#       query.update_at((0,0), 0usize, 1isize);
+        # // to help with type inference ...
+        # knows.update_at((0,0), 0usize, 1isize);
+        # query.update_at((0,0), 0usize, 1isize);
     });
 }
 ```

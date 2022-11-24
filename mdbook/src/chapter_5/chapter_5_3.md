@@ -31,9 +31,8 @@ fn main() {
 
         });
 
-#       // to help with type inference ...
-#       knows.update_at((0,0), 0usize, 1isize);
-#       query.update_at((0,0), 0usize, 1isize);
+        # // to help with type inference ...
+        # knows.update_at((0,0), 0usize, 1isize);
     });
 }
 ```

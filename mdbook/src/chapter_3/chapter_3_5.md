@@ -2,7 +2,7 @@
 
 All of the differential dataflow computation happens in what seems like a fairly small an unobtrusive operation:
 
-```rust,no_run
+```rust,ignore
     worker.step();
 ```
 
