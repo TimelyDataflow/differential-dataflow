@@ -71,6 +71,8 @@
 //! of the new and old counts of the old and new degrees of the affected node).
 
 #![forbid(missing_docs)]
+#![allow(array_into_iter)]
+
 
 use std::fmt::Debug;
 

@@ -4,6 +4,9 @@
 //! in the next layer. Similarly, ranges of elements in the layer itself may correspond
 //! to single elements in the layer above.
 
+use timely::container::columnation::TimelyStack;
+use timely::container::columnation::Columnation;
+
 pub mod ordered;
 pub mod ordered_leaf;
 // pub mod hashed;
@@ -105,6 +108,73 @@ pub trait Cursor<Storage> {
     /// Repositions the cursor to a different range of values.
     fn reposition(&mut self, storage: &Storage, lower: usize, upper: usize);
 }
+
+/// A general-purpose container resembling `Vec<T>`.
+pub trait BatchContainer: Default {
+    /// The type of contained item.
+    type Item;
+    /// Inserts an owned item.
+    fn push(&mut self, item: Self::Item);
+    /// Inserts a borrowed item.
+    fn copy(&mut self, item: &Self::Item);
+    /// Extends from a slice of items.
+    fn copy_slice(&mut self, slice: &[Self::Item]);
+    /// Creates a new container with sufficient capacity.
+    fn with_capacity(size: usize) -> Self;
+    /// Reserves additional capacity.
+    fn reserve(&mut self, additional: usize);
+    /// Creates a new container with sufficient capacity.
+    fn merge_capacity(cont1: &Self, cont2: &Self) -> Self;
+}
+
+impl<T: Clone> BatchContainer for Vec<T> {
+    type Item = T;
+    fn push(&mut self, item: T) {
+        self.push(item);
+    }
+    fn copy(&mut self, item: &T) {
+        self.push(item.clone());
+    }
+    fn copy_slice(&mut self, slice: &[T]) {
+        self.extend_from_slice(slice);
+    }
+    fn with_capacity(size: usize) -> Self {
+        Vec::with_capacity(size)
+    }
+    fn reserve(&mut self, additional: usize) {
+        self.reserve(additional);
+    }
+    fn merge_capacity(cont1: &Self, cont2: &Self) -> Self {
+        Vec::with_capacity(cont1.len() + cont2.len())
+    }
+}
+
+impl<T: Columnation> BatchContainer for TimelyStack<T> {
+    type Item = T;
+    fn push(&mut self, item: T) {
+        self.copy(&item);
+    }
+    fn copy(&mut self, item: &T) {
+        self.copy(item);
+    }
+    fn copy_slice(&mut self, slice: &[T]) {
+        self.reserve_items(slice.iter());
+        for item in slice.iter() {
+            self.copy(item);
+        }
+    }
+    fn with_capacity(size: usize) -> Self {
+        Self::with_capacity(size)
+    }
+    fn reserve(&mut self, _additional: usize) {
+    }
+    fn merge_capacity(cont1: &Self, cont2: &Self) -> Self {
+        let mut new = Self::default();
+        new.reserve_regions(std::iter::once(cont1).chain(std::iter::once(cont2)));
+        new
+    }
+}
+
 
 /// Reports the number of elements satisfing the predicate.
 ///
