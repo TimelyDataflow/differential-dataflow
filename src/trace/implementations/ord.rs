@@ -66,7 +66,6 @@ impl<T> RetainFrom<T> for Vec<T> {
         let mut write_position = index;
         for position in index .. self.len() {
             if predicate(position, &self[position]) {
-                // TODO: compact the inner region and update pointers.
                 self.swap(position, write_position);
                 write_position += 1;
             }
@@ -212,7 +211,7 @@ where
                 keys_pos += 1;
             }
             let lower = vals_off[index].try_into().unwrap();
-            let upper =    vals_off[index+1].try_into().unwrap();
+            let upper = vals_off[index+1].try_into().unwrap();
             if lower < upper {
                 vals_off[write_position+1] = vals_off[index+1];
                 write_position += 1;
@@ -228,8 +227,8 @@ where
         let offs = &mut layer.offs;
         let mut write_position = key_start;
         layer.keys.retain_from(key_start, |index, _item| {
-            let lower =    offs[index].try_into().unwrap();
-            let upper =    offs[index+1].try_into().unwrap();
+            let lower = offs[index].try_into().unwrap();
+            let upper = offs[index+1].try_into().unwrap();
             if lower < upper {
                 offs[write_position+1] = offs[index+1];
                 write_position += 1;
@@ -575,8 +574,8 @@ where
         let offs = &mut layer.offs;
         let mut write_position = key_start;
         layer.keys.retain_from(key_start, |index, _item| {
-            let lower =    offs[index].try_into().unwrap();
-            let upper =    offs[index+1].try_into().unwrap();
+            let lower = offs[index].try_into().unwrap();
+            let upper = offs[index+1].try_into().unwrap();
             if lower < upper {
                 offs[write_position+1] = offs[index+1];
                 write_position += 1;
