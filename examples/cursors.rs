@@ -39,10 +39,10 @@ use std::collections::BTreeMap;
 
 use timely::dataflow::operators::probe::Handle;
 use timely::progress::frontier::AntichainRef;
+use timely::dataflow::operators::Probe;
 
 use differential_dataflow::input::Input;
 use differential_dataflow::operators::arrange::ArrangeByKey;
-use differential_dataflow::operators::*;
 use differential_dataflow::trace::cursor::Cursor;
 use differential_dataflow::trace::TraceReader;
 
@@ -65,8 +65,7 @@ fn main() {
             /* Be sure to attach probe to arrangements we want to enumerate;
              * so we know when all updates for a given epoch have been added to the arrangement. */
             graph_arr
-                .as_collection(|_, v| *v)
-                .consolidate()
+                .stream
                 //.inspect(move |x| println!("{:?}", x))
                 .probe_with(&mut probe);
 
