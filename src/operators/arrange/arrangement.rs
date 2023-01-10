@@ -495,10 +495,31 @@ impl<G, K, V, R> Arrange<G, K, V, R> for Collection<G, (K, V), R>
 where
     G: Scope,
     G::Timestamp: Lattice+Ord,
-    K: ExchangeData+Hashable,
-    V: ExchangeData,
-    R: Semigroup+ExchangeData,
+    K: Data,
+    V: Data,
+    R: Semigroup,
 {
+    fn arrange<Tr>(&self) -> Arranged<G, TraceAgent<Tr>>
+    where
+        K: ExchangeData + Hashable,
+        V: ExchangeData,
+        R: ExchangeData,
+        Tr: Trace + TraceReader<Key=K, Val=V, Time=G::Timestamp, R=R> + 'static, Tr::Batch: Batch
+    {
+        self.arrange_named("Arrange")
+    }
+
+    fn arrange_named<Tr>(&self, name: &str) -> Arranged<G, TraceAgent<Tr>>
+    where
+        K: ExchangeData + Hashable,
+        V: ExchangeData,
+        R: ExchangeData,
+        Tr: Trace + TraceReader<Key=K, Val=V, Time=G::Timestamp, R=R> + 'static, Tr::Batch: Batch
+    {
+        let exchange = Exchange::new(move |update: &((K,V),G::Timestamp,R)| (update.0).0.hashed().into());
+        self.arrange_core(exchange, name)
+    }
+
     fn arrange_core<P, Tr>(&self, pact: P, name: &str) -> Arranged<G, TraceAgent<Tr>>
     where
         P: ParallelizationContract<G::Timestamp, ((K,V),G::Timestamp,R)>,
