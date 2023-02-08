@@ -147,9 +147,9 @@ where
 {
     /// Makes a new batch wrapper
     pub fn make_from(batch: B) -> Self {
-        let lower: Vec<_> = batch.description().lower().elements().iter().map(|x| TInner::to_inner(x.clone())).collect();
-        let upper: Vec<_> = batch.description().upper().elements().iter().map(|x| TInner::to_inner(x.clone())).collect();
-        let since: Vec<_> = batch.description().since().elements().iter().map(|x| TInner::to_inner(x.clone())).collect();
+        let lower: Vec<_> = batch.description().lower().iter().map(|x| TInner::to_inner(x.clone())).collect();
+        let upper: Vec<_> = batch.description().upper().iter().map(|x| TInner::to_inner(x.clone())).collect();
+        let since: Vec<_> = batch.description().since().iter().map(|x| TInner::to_inner(x.clone())).collect();
 
         BatchEnter {
             batch: batch,
