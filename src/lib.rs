@@ -109,6 +109,7 @@ pub mod lattice;
 pub mod trace;
 pub mod input;
 pub mod difference;
+pub mod dynamic;
 pub mod collection;
 pub mod logging;
 pub mod consolidation;
