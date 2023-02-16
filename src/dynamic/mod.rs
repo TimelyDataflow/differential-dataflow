@@ -13,7 +13,7 @@
 
 pub mod pointstamp;
 
-use timely::dataflow::{Scope, scopes::Child};
+use timely::dataflow::Scope;
 use timely::order::Product;
 use timely::progress::Timestamp;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
@@ -26,12 +26,13 @@ use collection::AsCollection;
 use dynamic::pointstamp::PointStamp;
 use dynamic::pointstamp::PointStampSummary;
 
-impl<G, D, R, T> Collection<Child<'_, G, Product<G::Timestamp, PointStamp<T>>>, D, R> 
+impl<G, D, R, T, TOuter> Collection<G, D, R>
 where
-    G: Scope,
+    G: Scope<Timestamp = Product<TOuter, PointStamp<T>>>,
     D: Data,
     R: Semigroup,
     T: Timestamp+Default,
+    TOuter: Timestamp,
 {
     /// Enters a dynamically created scope which has `level` timestamp coordinates.
     pub fn enter_dynamic(&self, _level: usize) -> Self {
