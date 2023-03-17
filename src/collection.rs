@@ -42,7 +42,7 @@ pub struct Collection<G: Scope, D, R: Semigroup = isize> {
     ///
     /// This field is exposed to support direct timely dataflow manipulation when required, but it is
     /// not intended to be the idiomatic way to work with the collection.
-    pub inner: Stream<G, (D, G::Timestamp, R)>
+    pub inner: Stream<G, Vec<(D, G::Timestamp, R)>>
 }
 
 impl<G: Scope, D: Data, R: Semigroup> Collection<G, D, R> where G::Timestamp: Data {
@@ -52,7 +52,7 @@ impl<G: Scope, D: Data, R: Semigroup> Collection<G, D, R> where G::Timestamp: Da
     /// idiomatic approach to convert timely streams to collections. Also, the `input::Input` trait
     /// provides a `new_collection` method which will create a new collection for you without exposing
     /// the underlying timely stream at all.
-    pub fn new(stream: Stream<G, (D, G::Timestamp, R)>) -> Collection<G, D, R> {
+    pub fn new(stream: Stream<G, Vec<(D, G::Timestamp, R)>>) -> Collection<G, D, R> {
         Collection { inner: stream }
     }
     /// Creates a new collection by applying the supplied function to each input element.
@@ -678,7 +678,7 @@ pub trait AsCollection<G: Scope, D: Data, R: Semigroup> {
     fn as_collection(&self) -> Collection<G, D, R>;
 }
 
-impl<G: Scope, D: Data, R: Semigroup> AsCollection<G, D, R> for Stream<G, (D, G::Timestamp, R)> {
+impl<G: Scope, D: Data, R: Semigroup> AsCollection<G, D, R> for Stream<G, Vec<(D, G::Timestamp, R)>> {
     fn as_collection(&self) -> Collection<G, D, R> {
         Collection::new(self.clone())
     }

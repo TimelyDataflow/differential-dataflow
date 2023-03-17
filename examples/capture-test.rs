@@ -153,7 +153,7 @@ pub mod kafka {
     use differential_dataflow::lattice::Lattice;
 
     /// Creates a Kafka source from supplied configuration information.
-    pub fn create_source<G, D, T, R>(scope: G, addr: &str, topic: &str, group: &str) -> (Box<dyn std::any::Any + Send + Sync>, Stream<G, (D, T, R)>)
+    pub fn create_source<G, D, T, R>(scope: G, addr: &str, topic: &str, group: &str) -> (Box<dyn std::any::Any + Send + Sync>, Stream<G, Vec<(D, T, R)>>)
     where
         G: Scope<Timestamp = T>,
         D: ExchangeData + Hash + for<'a> serde::Deserialize<'a>,
@@ -166,7 +166,7 @@ pub mod kafka {
         })
     }
 
-    pub fn create_sink<G, D, T, R>(stream: &Stream<G, (D, T, R)>, addr: &str, topic: &str) -> Box<dyn std::any::Any>
+    pub fn create_sink<G, D, T, R>(stream: &Stream<G, Vec<(D, T, R)>>, addr: &str, topic: &str) -> Box<dyn std::any::Any>
     where
         G: Scope<Timestamp = T>,
         D: ExchangeData + Hash + Serialize + for<'a> Deserialize<'a>,

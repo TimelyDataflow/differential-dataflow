@@ -54,7 +54,7 @@ where
     /// This stream contains the same batches of updates the trace itself accepts, so there should
     /// be no additional overhead to receiving these records. The batches can be navigated just as
     /// the batches in the trace, by key and by value.
-    pub stream: Stream<G, Tr::Batch>,
+    pub stream: Stream<G, Vec<Tr::Batch>>,
     /// A shared trace, updated by the `Arrange` operator and readable by others.
     pub trace: Tr,
     // TODO : We might have an `Option<Collection<G, (K, V)>>` here, which `as_collection` sets and
@@ -225,7 +225,7 @@ where
     ///
     /// This method exists for streams of batches without the corresponding arrangement.
     /// If you have the arrangement, its `flat_map_ref` method is equivalent to this.
-    pub fn flat_map_batches<I, L>(stream: &Stream<G, Tr::Batch>, mut logic: L) -> Collection<G, I::Item, Tr::R>
+    pub fn flat_map_batches<I, L>(stream: &Stream<G, Vec<Tr::Batch>>, mut logic: L) -> Collection<G, I::Item, Tr::R>
     where
         Tr::R: Semigroup,
         I: IntoIterator,
@@ -259,7 +259,7 @@ where
     ///
     /// This method consumes a stream of (key, time) queries and reports the corresponding stream of
     /// (key, value, time, diff) accumulations in the `self` trace.
-    pub fn lookup(&self, queries: &Stream<G, (Tr::Key, G::Timestamp)>) -> Stream<G, (Tr::Key, Tr::Val, G::Timestamp, Tr::R)>
+    pub fn lookup(&self, queries: &Stream<G, Vec<(Tr::Key, G::Timestamp)>>) -> Stream<G, Vec<(Tr::Key, Tr::Val, G::Timestamp, Tr::R)>>
     where
         G::Timestamp: Data+Lattice+Ord+TotalOrder,
         Tr::Key: ExchangeData+Hashable,
@@ -485,7 +485,7 @@ where
     /// is the correct way to determine that times in the shared trace are committed.
     fn arrange_core<P, Tr>(&self, pact: P, name: &str) -> Arranged<G, TraceAgent<Tr>>
     where
-        P: ParallelizationContract<G::Timestamp, ((K,V),G::Timestamp,R)>,
+        P: ParallelizationContract<G::Timestamp, Vec<((K,V),G::Timestamp,R)>>,
         Tr: Trace+TraceReader<Key=K,Val=V,Time=G::Timestamp,R=R>+'static,
         Tr::Batch: Batch,
     ;
@@ -522,7 +522,7 @@ where
 
     fn arrange_core<P, Tr>(&self, pact: P, name: &str) -> Arranged<G, TraceAgent<Tr>>
     where
-        P: ParallelizationContract<G::Timestamp, ((K,V),G::Timestamp,R)>,
+        P: ParallelizationContract<G::Timestamp, Vec<((K,V),G::Timestamp,R)>>,
         Tr: Trace+TraceReader<Key=K,Val=V,Time=G::Timestamp,R=R>+'static,
         Tr::Batch: Batch,
     {
@@ -689,7 +689,7 @@ where
 {
     fn arrange_core<P, Tr>(&self, pact: P, name: &str) -> Arranged<G, TraceAgent<Tr>>
     where
-        P: ParallelizationContract<G::Timestamp, ((K,()),G::Timestamp,R)>,
+        P: ParallelizationContract<G::Timestamp, Vec<((K,()),G::Timestamp,R)>>,
         Tr: Trace+TraceReader<Key=K, Val=(), Time=G::Timestamp, R=R>+'static,
         Tr::Batch: Batch,
     {

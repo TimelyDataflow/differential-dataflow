@@ -189,7 +189,7 @@ impl<G: TimelyInput> Input for G where <G as ScopeParent>::Timestamp: Lattice {
 pub struct InputSession<T: Timestamp+Clone, D: Data, R: Semigroup> {
     time: T,
     buffer: Vec<(D, T, R)>,
-    handle: Handle<T,(D,T,R)>,
+    handle: Handle<T,Vec<(D,T,R)>>,
 }
 
 impl<T: Timestamp+Clone, D: Data> InputSession<T, D, isize> {
@@ -236,7 +236,7 @@ impl<T: Timestamp+Clone, D: Data, R: Semigroup> InputSession<T, D, R> {
     }
 
     /// Creates a new session from a reference to an input handle.
-    pub fn from(handle: Handle<T,(D,T,R)>) -> Self {
+    pub fn from(handle: Handle<T,Vec<(D,T,R)>>) -> Self {
         InputSession {
             time: handle.time().clone(),
             buffer: Vec::new(),

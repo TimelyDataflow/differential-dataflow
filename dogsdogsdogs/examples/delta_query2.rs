@@ -24,8 +24,8 @@ fn main() {
 
                 use timely::dataflow::operators::unordered_input::UnorderedHandle;
 
-                let ((input1, capability1), data1): ((UnorderedHandle<Product<usize, usize>, ((usize, usize), Product<usize, usize>, isize)>, _), _) = inner.new_unordered_input();
-                let ((input2, capability2), data2): ((UnorderedHandle<Product<usize, usize>, ((usize, usize), Product<usize, usize>, isize)>, _), _) = inner.new_unordered_input();
+                let ((input1, capability1), data1): ((UnorderedHandle<Product<usize, usize>, Vec<((usize, usize), Product<usize, usize>, isize)>>, _), _) = inner.new_unordered_input();
+                let ((input2, capability2), data2): ((UnorderedHandle<Product<usize, usize>, Vec<((usize, usize), Product<usize, usize>, isize)>>, _), _) = inner.new_unordered_input();
 
                 let edges1 = data1.as_collection();
                 let edges2 = data2.as_collection();

@@ -292,7 +292,7 @@ pub mod source {
     pub fn build<G, B, I, D, T, R>(
         scope: G,
         source_builder: B,
-    ) -> (Box<dyn std::any::Any + Send + Sync>, Stream<G, (D, T, R)>)
+    ) -> (Box<dyn std::any::Any + Send + Sync>, Stream<G, Vec<(D, T, R)>>)
     where
         G: Scope<Timestamp = T>,
         B: FnOnce(SyncActivator) -> I,
@@ -606,7 +606,7 @@ pub mod sink {
     /// performed before calling the method, the recorded output may not be correctly
     /// reconstructed by readers.
     pub fn build<G, BS, D, T, R>(
-        stream: &Stream<G, (D, T, R)>,
+        stream: &Stream<G, Vec<(D, T, R)>>,
         sink_hash: u64,
         updates_sink: Weak<RefCell<BS>>,
         progress_sink: Weak<RefCell<BS>>,

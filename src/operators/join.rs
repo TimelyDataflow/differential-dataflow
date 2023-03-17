@@ -689,7 +689,7 @@ where
 
     /// Process keys until at least `fuel` output tuples produced, or the work is exhausted.
     #[inline(never)]
-    fn work<L, I>(&mut self, output: &mut OutputHandle<T, (D, T, R), Tee<T, (D, T, R)>>, mut logic: L, fuel: &mut usize)
+    fn work<L, I>(&mut self, output: &mut OutputHandle<T, Vec<(D, T, R)>, Tee<T, Vec<(D, T, R)>>>, mut logic: L, fuel: &mut usize)
     where I: IntoIterator<Item=(D, T, R)>, L: FnMut(&K, &C1::Val, &C2::Val, &T, &C1::R, &C2::R)->I {
 
         let meet = self.capability.time();

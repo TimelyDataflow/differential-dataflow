@@ -136,7 +136,7 @@ use super::TraceAgent;
 /// understand what a "sequence" of upserts would mean for partially ordered
 /// timestamps.
 pub fn arrange_from_upsert<G, Tr>(
-    stream: &Stream<G, (Tr::Key, Option<Tr::Val>, G::Timestamp)>,
+    stream: &Stream<G, Vec<(Tr::Key, Option<Tr::Val>, G::Timestamp)>>,
     name: &str,
 ) -> Arranged<G, TraceAgent<Tr>>
 where
