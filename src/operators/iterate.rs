@@ -52,7 +52,7 @@ pub trait Iterate<G: Scope, D: Data, R: Semigroup> {
     /// Importantly, this method does not automatically consolidate results.
     /// It may be important to conclude with `consolidate()` to ensure that
     /// logically empty collections that contain cancelling records do not
-    /// result in non-termination. Operators like `group`, `distinct`, and
+    /// result in non-termination. Operators like `reduce`, `distinct`, and
     /// `count` also perform consolidation, and are safe to conclude with.
     ///
     /// # Examples
