@@ -720,6 +720,7 @@ where
 
                     // populate `temp` with the results in the best way we know how.
                     thinker.think(|v1,v2,t,r1,r2| {
+                        effort += 1;
                         let key = batch.key(batch_storage);
                         for (d, t, r) in logic(key, v1, v2, &t, r1, r2) {
                             temp.push(((d, t), r));
@@ -733,7 +734,6 @@ where
                     //       consolidation, and then deposit results in `session`.
                     crate::consolidation::consolidate(temp);
 
-                    effort += temp.len();
                     for ((d, t), r) in temp.drain(..) {
                         session.give((d, t, r));
                     }
