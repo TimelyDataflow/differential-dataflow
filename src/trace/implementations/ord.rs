@@ -87,7 +87,7 @@ impl<T: Columnation> RetainFrom<T> for TimelyStack<T> {
 
 /// An immutable collection of update tuples, from a contiguous interval of logical times.
 #[derive(Debug, Abomonation)]
-pub struct OrdValBatch<K, V, T, R, O=usize, CK=Vec<K>, CV=Vec<V>>
+pub struct OrdValBatch<K, V, T, R, O=usize, CK=Vec<K>, CV=Vec<V>, CC=Vec<(T, R)>>
 where
     K: Ord+Clone,
     V: Ord+Clone,
@@ -96,14 +96,15 @@ where
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug,
     CK: BatchContainer<Item=K>+Deref<Target=[K]>+RetainFrom<K>,
     CV: BatchContainer<Item=V>+Deref<Target=[V]>+RetainFrom<V>,
+    CC: BatchContainer<Item=(T, R)>+Deref<Target=[(T, R)]>,
 {
     /// Where all the dataz is.
-    pub layer: OrderedLayer<K, OrderedLayer<V, OrderedLeaf<T, R>, O, CV>, O, CK>,
+    pub layer: OrderedLayer<K, OrderedLayer<V, OrderedLeaf<T, R, CC>, O, CV>, O, CK>,
     /// Description of the update times this layer represents.
     pub desc: Description<T>,
 }
 
-impl<K, V, T, R, O, CK, CV> BatchReader for OrdValBatch<K, V, T, R, O, CK, CV>
+impl<K, V, T, R, O, CK, CV, CC> BatchReader for OrdValBatch<K, V, T, R, O, CK, CV, CC>
 where
     K: Ord+Clone+'static,
     V: Ord+Clone+'static,
@@ -112,19 +113,20 @@ where
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug,
     CK: BatchContainer<Item=K>+Deref<Target=[K]>+RetainFrom<K>,
     CV: BatchContainer<Item=V>+Deref<Target=[V]>+RetainFrom<V>,
+    CC: BatchContainer<Item=(T, R)>+Deref<Target=[(T, R)]>,
 {
     type Key = K;
     type Val = V;
     type Time = T;
     type R = R;
 
-    type Cursor = OrdValCursor<K, V, T, R, O, CK, CV>;
+    type Cursor = OrdValCursor<K, V, T, R, O, CK, CV, CC>;
     fn cursor(&self) -> Self::Cursor { OrdValCursor { cursor: self.layer.cursor(), phantom: std::marker::PhantomData } }
-    fn len(&self) -> usize { <OrderedLayer<K, OrderedLayer<V, OrderedLeaf<T, R>, O, CV>, O, CK> as Trie>::tuples(&self.layer) }
+    fn len(&self) -> usize { <OrderedLayer<K, OrderedLayer<V, OrderedLeaf<T, R, CC>, O, CV>, O, CK> as Trie>::tuples(&self.layer) }
     fn description(&self) -> &Description<T> { &self.desc }
 }
 
-impl<K, V, T, R, O, CK, CV> Batch for OrdValBatch<K, V, T, R, O, CK, CV>
+impl<K, V, T, R, O, CK, CV, CC> Batch for OrdValBatch<K, V, T, R, O, CK, CV, CC>
 where
     K: Ord+Clone+'static,
     V: Ord+Clone+'static,
@@ -133,17 +135,18 @@ where
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug,
     CK: BatchContainer<Item=K>+Deref<Target=[K]>+RetainFrom<K>,
     CV: BatchContainer<Item=V>+Deref<Target=[V]>+RetainFrom<V>,
+    CC: BatchContainer<Item=(T, R)>+Deref<Target=[(T, R)]>,
 {
     type Batcher = MergeBatcher<Self>;
-    type Builder = OrdValBuilder<K, V, T, R, O, CK, CV>;
-    type Merger = OrdValMerger<K, V, T, R, O, CK, CV>;
+    type Builder = OrdValBuilder<K, V, T, R, O, CK, CV, CC>;
+    type Merger = OrdValMerger<K, V, T, R, O, CK, CV, CC>;
 
     fn begin_merge(&self, other: &Self, compaction_frontier: Option<AntichainRef<T>>) -> Self::Merger {
         OrdValMerger::new(self, other, compaction_frontier)
     }
 }
 
-impl<K, V, T, R, O, CK, CV> OrdValBatch<K, V, T, R, O, CK, CV>
+impl<K, V, T, R, O, CK, CV, CC> OrdValBatch<K, V, T, R, O, CK, CV, CC>
 where
     K: Ord+Clone+'static,
     V: Ord+Clone+'static,
@@ -152,8 +155,9 @@ where
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug,
     CK: BatchContainer<Item=K>+Deref<Target=[K]>+RetainFrom<K>,
     CV: BatchContainer<Item=V>+Deref<Target=[V]>+RetainFrom<V>,
+    CC: BatchContainer<Item=(T, R)>+Deref<Target=[(T, R)]>,
 {
-    fn advance_builder_from(layer: &mut OrderedBuilder<K, OrderedBuilder<V, OrderedLeafBuilder<T, R>, O, CV>, O, CK>, frontier: AntichainRef<T>, key_pos: usize) {
+    fn advance_builder_from(layer: &mut OrderedBuilder<K, OrderedBuilder<V, OrderedLeafBuilder<T, R, CC>, O, CV>, O, CK>, frontier: AntichainRef<T>, key_pos: usize) {
 
         let key_start = key_pos;
         let val_start: usize = layer.offs[key_pos].try_into().unwrap();
@@ -242,7 +246,7 @@ where
 }
 
 /// State for an in-progress merge.
-pub struct OrdValMerger<K, V, T, R, O=usize, CK=Vec<K>, CV=Vec<V>>
+pub struct OrdValMerger<K, V, T, R, O=usize, CK=Vec<K>, CV=Vec<V>, CC=Vec<(T, R)>>
 where
     K: Ord+Clone+'static,
     V: Ord+Clone+'static,
@@ -251,6 +255,7 @@ where
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug,
     CK: BatchContainer<Item=K>+Deref<Target=[K]>+RetainFrom<K>,
     CV: BatchContainer<Item=V>+Deref<Target=[V]>+RetainFrom<V>,
+    CC: BatchContainer<Item=(T, R)>+Deref<Target=[(T, R)]>,
 {
     // first batch, and position therein.
     lower1: usize,
@@ -259,12 +264,12 @@ where
     lower2: usize,
     upper2: usize,
     // result that we are currently assembling.
-    result: <OrderedLayer<K, OrderedLayer<V, OrderedLeaf<T, R>, O, CV>, O, CK> as Trie>::MergeBuilder,
+    result: <OrderedLayer<K, OrderedLayer<V, OrderedLeaf<T, R, CC>, O, CV>, O, CK> as Trie>::MergeBuilder,
     description: Description<T>,
     should_compact: bool,
 }
 
-impl<K, V, T, R, O, CK, CV> Merger<OrdValBatch<K, V, T, R, O, CK, CV>> for OrdValMerger<K, V, T, R, O, CK, CV>
+impl<K, V, T, R, O, CK, CV, CC> Merger<OrdValBatch<K, V, T, R, O, CK, CV, CC>> for OrdValMerger<K, V, T, R, O, CK, CV, CC>
 where
     K: Ord+Clone+'static,
     V: Ord+Clone+'static,
@@ -273,8 +278,9 @@ where
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug,
     CK: BatchContainer<Item=K>+Deref<Target=[K]>+RetainFrom<K>,
     CV: BatchContainer<Item=V>+Deref<Target=[V]>+RetainFrom<V>,
+    CC: BatchContainer<Item=(T, R)>+Deref<Target=[(T, R)]>,
 {
-    fn new(batch1: &OrdValBatch<K, V, T, R, O, CK, CV>, batch2: &OrdValBatch<K, V, T, R, O, CK, CV>, compaction_frontier: Option<AntichainRef<T>>) -> Self {
+    fn new(batch1: &OrdValBatch<K, V, T, R, O, CK, CV, CC>, batch2: &OrdValBatch<K, V, T, R, O, CK, CV, CC>, compaction_frontier: Option<AntichainRef<T>>) -> Self {
 
         assert!(batch1.upper() == batch2.lower());
 
@@ -290,12 +296,12 @@ where
             upper1: batch1.layer.keys(),
             lower2: 0,
             upper2: batch2.layer.keys(),
-            result: <<OrderedLayer<K, OrderedLayer<V, OrderedLeaf<T, R>, O, CV>, O, CK> as Trie>::MergeBuilder as MergeBuilder>::with_capacity(&batch1.layer, &batch2.layer),
+            result: <<OrderedLayer<K, OrderedLayer<V, OrderedLeaf<T, R, CC>, O, CV>, O, CK> as Trie>::MergeBuilder as MergeBuilder>::with_capacity(&batch1.layer, &batch2.layer),
             description: description,
             should_compact: compaction_frontier.is_some(),
         }
     }
-    fn done(self) -> OrdValBatch<K, V, T, R, O, CK, CV> {
+    fn done(self) -> OrdValBatch<K, V, T, R, O, CK, CV, CC> {
 
         assert!(self.lower1 == self.upper1);
         assert!(self.lower2 == self.upper2);
@@ -305,7 +311,7 @@ where
             desc: self.description,
         }
     }
-    fn work(&mut self, source1: &OrdValBatch<K,V,T,R,O,CK,CV>, source2: &OrdValBatch<K,V,T,R,O,CK,CV>, fuel: &mut isize) {
+    fn work(&mut self, source1: &OrdValBatch<K,V,T,R,O,CK,CV,CC>, source2: &OrdValBatch<K,V,T,R,O,CK,CV,CC>, fuel: &mut isize) {
 
         let starting_updates = self.result.vals.vals.vals.len();
         let mut effort = 0isize;
@@ -344,7 +350,7 @@ where
 
         // if we are supplied a frontier, we should compact.
         if self.should_compact {
-            OrdValBatch::<K, V, T, R, O, CK, CV>::advance_builder_from(&mut self.result, self.description.since().borrow(), initial_key_pos);
+            OrdValBatch::<K, V, T, R, O, CK, CV, CC>::advance_builder_from(&mut self.result, self.description.since().borrow(), initial_key_pos);
         }
 
         *fuel -= effort;
@@ -357,7 +363,7 @@ where
 
 /// A cursor for navigating a single layer.
 #[derive(Debug)]
-pub struct OrdValCursor<K, V, T, R, O=usize, CK=Vec<K>, CV=Vec<V>>
+pub struct OrdValCursor<K, V, T, R, O=usize, CK=Vec<K>, CV=Vec<V>, CC=Vec<(T, R)>>
 where
     V: Ord+Clone,
     T: Lattice+Ord+Clone,
@@ -365,12 +371,13 @@ where
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug,
     CK: BatchContainer<Item=K>+Deref<Target=[K]>+RetainFrom<K>,
     CV: BatchContainer<Item=V>+Deref<Target=[V]>+RetainFrom<V>,
+    CC: BatchContainer<Item=(T, R)>+Deref<Target=[(T, R)]>,
 {
     phantom: std::marker::PhantomData<(K, CK, CV)>,
-    cursor: OrderedCursor<OrderedLayer<V, OrderedLeaf<T, R>, O, CV>>,
+    cursor: OrderedCursor<OrderedLayer<V, OrderedLeaf<T, R, CC>, O, CV>>,
 }
 
-impl<K, V, T, R, O, CK, CV> Cursor for OrdValCursor<K, V, T, R, O, CK, CV>
+impl<K, V, T, R, O, CK, CV, CC> Cursor for OrdValCursor<K, V, T, R, O, CK, CV, CC>
 where
     K: Ord+Clone,
     V: Ord+Clone,
@@ -379,13 +386,14 @@ where
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug,
     CK: BatchContainer<Item=K>+Deref<Target=[K]>+RetainFrom<K>,
     CV: BatchContainer<Item=V>+Deref<Target=[V]>+RetainFrom<V>,
+    CC: BatchContainer<Item=(T, R)>+Deref<Target=[(T, R)]>,
 {
     type Key = K;
     type Val = V;
     type Time = T;
     type R = R;
 
-    type Storage = OrdValBatch<K, V, T, R, O, CK, CV>;
+    type Storage = OrdValBatch<K, V, T, R, O, CK, CV, CC>;
 
     fn key<'a>(&self, storage: &'a Self::Storage) -> &'a K { &self.cursor.key(&storage.layer) }
     fn val<'a>(&self, storage: &'a Self::Storage) -> &'a V { &self.cursor.child.key(&storage.layer.vals) }
@@ -408,7 +416,7 @@ where
 
 
 /// A builder for creating layers from unsorted update tuples.
-pub struct OrdValBuilder<K, V, T, R, O=usize, CK=Vec<K>, CV=Vec<V>>
+pub struct OrdValBuilder<K, V, T, R, O=usize, CK=Vec<K>, CV=Vec<V>, CC=Vec<(T, R)>>
 where
     K: Ord+Clone,
     V: Ord+Clone,
@@ -417,11 +425,12 @@ where
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug,
     CK: BatchContainer<Item=K>+Deref<Target=[K]>+RetainFrom<K>,
     CV: BatchContainer<Item=V>+Deref<Target=[V]>+RetainFrom<V>,
+    CC: BatchContainer<Item=(T, R)>+Deref<Target=[(T, R)]>,
 {
-    builder: OrderedBuilder<K, OrderedBuilder<V, OrderedLeafBuilder<T, R>, O, CV>, O, CK>,
+    builder: OrderedBuilder<K, OrderedBuilder<V, OrderedLeafBuilder<T, R, CC>, O, CV>, O, CK>,
 }
 
-impl<K, V, T, R, O, CK, CV> Builder<OrdValBatch<K, V, T, R, O, CK, CV>> for OrdValBuilder<K, V, T, R, O, CK, CV>
+impl<K, V, T, R, O, CK, CV, CC> Builder<OrdValBatch<K, V, T, R, O, CK, CV, CC>> for OrdValBuilder<K, V, T, R, O, CK, CV, CC>
 where
     K: Ord+Clone+'static,
     V: Ord+Clone+'static,
@@ -430,16 +439,17 @@ where
     O: OrdOffset, <O as TryFrom<usize>>::Error: Debug, <O as TryInto<usize>>::Error: Debug,
     CK: BatchContainer<Item=K>+Deref<Target=[K]>+RetainFrom<K>,
     CV: BatchContainer<Item=V>+Deref<Target=[V]>+RetainFrom<V>,
+    CC: BatchContainer<Item=(T, R)>+Deref<Target=[(T, R)]>,
 {
 
     fn new() -> Self {
         OrdValBuilder {
-            builder: OrderedBuilder::<K, OrderedBuilder<V, OrderedLeafBuilder<T, R>, O, CV>, O, CK>::new()
+            builder: OrderedBuilder::<K, OrderedBuilder<V, OrderedLeafBuilder<T, R, CC>, O, CV>, O, CK>::new()
         }
     }
     fn with_capacity(cap: usize) -> Self {
         OrdValBuilder {
-            builder: <OrderedBuilder<K, OrderedBuilder<V, OrderedLeafBuilder<T, R>, O, CV>, O, CK> as TupleBuilder>::with_capacity(cap)
+            builder: <OrderedBuilder<K, OrderedBuilder<V, OrderedLeafBuilder<T, R, CC>, O, CV>, O, CK> as TupleBuilder>::with_capacity(cap)
         }
     }
 
@@ -449,7 +459,7 @@ where
     }
 
     #[inline(never)]
-    fn done(self, lower: Antichain<T>, upper: Antichain<T>, since: Antichain<T>) -> OrdValBatch<K, V, T, R, O, CK, CV> {
+    fn done(self, lower: Antichain<T>, upper: Antichain<T>, since: Antichain<T>) -> OrdValBatch<K, V, T, R, O, CK, CV, CC> {
         OrdValBatch {
             layer: self.builder.done(),
             desc: Description::new(lower, upper, since)

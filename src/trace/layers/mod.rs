@@ -125,6 +125,8 @@ pub trait BatchContainer: Default {
     fn reserve(&mut self, additional: usize);
     /// Creates a new container with sufficient capacity.
     fn merge_capacity(cont1: &Self, cont2: &Self) -> Self;
+    /// Truncate keeping the first `n` elements.
+    fn truncate(&mut self, len: usize);
 }
 
 impl<T: Clone> BatchContainer for Vec<T> {
@@ -146,6 +148,9 @@ impl<T: Clone> BatchContainer for Vec<T> {
     }
     fn merge_capacity(cont1: &Self, cont2: &Self) -> Self {
         Vec::with_capacity(cont1.len() + cont2.len())
+    }
+    fn truncate(&mut self, len: usize) {
+        Vec::truncate(self, len);
     }
 }
 
@@ -172,6 +177,13 @@ impl<T: Columnation> BatchContainer for TimelyStack<T> {
         let mut new = Self::default();
         new.reserve_regions(std::iter::once(cont1).chain(std::iter::once(cont2)));
         new
+    }
+    fn truncate(&mut self, len: usize) {
+        let mut truncated = Self::default();
+        let items = &self[..len];
+        truncated.reserve_items(items.iter());
+        truncated.copy_slice(items);
+        *self = truncated;
     }
 }
 
