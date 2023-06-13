@@ -40,21 +40,27 @@ pub fn consolidate_slice<T: Ord, R: Semigroup>(slice: &mut [(T, R)]) -> usize {
 
     // Counts the number of distinct known-non-zero accumulations. Indexes the write location.
     let mut offset = 0;
-    for index in 1 .. slice.len() {
 
-        // The following unsafe block elides various bounds checks, using the reasoning that `offset`
+    // We can first move quickly through any prefix of distinct, non-zero elements
+    while offset + 1 < slice.len() && !(slice[offset].0 == slice[offset+1].0) && !slice[offset].1.is_zero() {
+        offset += 1;
+    }
+    if offset + 1 < slice.len() {
+        let (prev, then) = slice.split_at_mut(offset+1);
+        prev[offset].1.plus_equals(&then[0].1);
+    }
+
+    // We now proceed with a known-empty location at `offset+1`, into which we can always swap `index`.
+    for index in (offset + 2) .. slice.len() {
+
+        // The following unsafe block elides various bounds checks, using the reasoning that `offset+1`
         // is always strictly less than `index` at the beginning of each iteration. This is initially
         // true, and in each iteration `offset` can increase by at most one (whereas `index` always
         // increases by one). As `index` is always in bounds, and `offset` starts at zero, it too is
         // always in bounds.
-        //
-        // LLVM appears to struggle to optimize out Rust's split_at_mut, which would prove disjointness
-        // using run-time tests.
         unsafe {
 
-            assert!(offset < index);
-
-            // LOOP INVARIANT: offset < index
+            // LOOP INVARIANT: offset + 1 < index
             let ptr1 = slice.as_mut_ptr().offset(offset as isize);
             let ptr2 = slice.as_mut_ptr().offset(index as isize);
 
@@ -105,19 +111,27 @@ pub fn consolidate_updates_slice<D: Ord, T: Ord, R: Semigroup>(slice: &mut [(D, 
 
     // Counts the number of distinct known-non-zero accumulations. Indexes the write location.
     let mut offset = 0;
-    for index in 1 .. slice.len() {
 
-        // The following unsafe block elides various bounds checks, using the reasoning that `offset`
+    // We can first move quickly through any prefix of distinct, non-zero elements
+    while offset + 1 < slice.len() && !(slice[offset].0 == slice[offset+1].0 && slice[offset].1 == slice[offset+1].1)  && !slice[offset].2.is_zero() {
+        offset += 1;
+    }
+    if offset + 1 < slice.len() {
+        let (prev, then) = slice.split_at_mut(offset+1);
+        prev[offset].2.plus_equals(&then[0].2);
+    }
+
+    // We now proceed with a known-empty location at `offset+1`, into which we can always swap `index`.
+    for index in (offset + 2) .. slice.len() {
+
+        // The following unsafe block elides various bounds checks, using the reasoning that `offset+1`
         // is always strictly less than `index` at the beginning of each iteration. This is initially
         // true, and in each iteration `offset` can increase by at most one (whereas `index` always
         // increases by one). As `index` is always in bounds, and `offset` starts at zero, it too is
         // always in bounds.
-        //
-        // LLVM appears to struggle to optimize out Rust's split_at_mut, which would prove disjointness
-        // using run-time tests.
         unsafe {
 
-            // LOOP INVARIANT: offset < index
+            // LOOP INVARIANT: offset + 1 < index
             let ptr1 = slice.as_mut_ptr().offset(offset as isize);
             let ptr2 = slice.as_mut_ptr().offset(index as isize);
 
