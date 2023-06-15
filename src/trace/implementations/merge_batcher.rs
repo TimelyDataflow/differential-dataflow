@@ -125,9 +125,9 @@ where
 #[inline]
 unsafe fn push_unchecked<T>(vec: &mut Vec<T>, element: T) {
     debug_assert!(vec.len() < vec.capacity());
-    let len = vec.len();
-    ::std::ptr::write(vec.get_unchecked_mut(len), element);
-    vec.set_len(len + 1);
+    let idx = vec.len();
+    vec.set_len(idx + 1);
+    ::std::ptr::write(vec.get_unchecked_mut(idx), element);
 }
 
 pub struct MergeSorter<D: Ord, T: Ord, R: Semigroup> {
