@@ -214,6 +214,12 @@ where
     fn set_logical_compaction(&mut self, frontier: AntichainRef<B::Time>) {
         self.logical_frontier.clear();
         self.logical_frontier.extend(frontier.iter().cloned());
+
+        // If the logical frontier is empty, we are not obliged to be able to represent any time,
+        // since no time is in advance of `[]`. In the case, we can drop all contents.
+        if self.logical_frontier.is_empty() {
+            self.drop_batches();
+        }
     }
     #[inline]
     fn get_logical_compaction(&mut self) -> AntichainRef<B::Time> { self.logical_frontier.borrow() }
@@ -293,6 +299,11 @@ where
     // merging the batch. This means it is a good time to perform amortized work proportional
     // to the size of batch.
     fn insert(&mut self, batch: Self::Batch) {
+        // If the logical frontier is empty, we are not obliged to be able to represent any time,
+        // since no time is in advance of `[]`. In the case, we can drop the batch.
+        if self.logical_frontier.is_empty() {
+            return
+        }
 
         // Log the introduction of a batch.
         self.logger.as_ref().map(|l| l.log(::logging::BatchEvent {
