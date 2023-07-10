@@ -38,7 +38,6 @@ However, by introducing `consolidate`
 # use timely::dataflow::Scope;
 # use differential_dataflow::Collection;
 # use differential_dataflow::lattice::Lattice;
-# use differential_dataflow::operators::Consolidate;
 # fn example<G: Scope>(manages: &Collection<G, (u64, u64)>)
 # where G::Timestamp: Lattice
 # {
@@ -56,4 +55,4 @@ we are guaranteed to see at most one `(0,0)` update at each time:
 ((0, 0), 0, 2)
 ```
 
-The `consolidate` operator is mostly useful before `inspect`ing data, but it can also be important for efficiency; knowing when to spend the additional computation to consolidate the representation of your data is an advanced topic!
+The `consolidate` function is mostly useful before `inspect`ing data, but it can also be important for efficiency; knowing when to spend the additional computation to consolidate the representation of your data is an advanced topic!
