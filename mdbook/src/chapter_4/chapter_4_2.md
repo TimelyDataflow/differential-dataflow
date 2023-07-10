@@ -6,7 +6,7 @@ Instead, let's describe an extended computation that lets us query the results, 
 
 Imagine `labels` contains the results of the iterative computation from before. Let's create a new input, `queries`, which will simply contain node identifiers.
 
-```rust,no_run
+```rust,ignore
     labels.semijoin(queries)
           .inspect(|x| println!("{:?}", x));
 ```

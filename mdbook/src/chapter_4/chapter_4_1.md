@@ -8,7 +8,7 @@ One algorithm for this graph connectivity is "label propagation", in which each 
 
 Let's write this computation starting from a collection `edges`, using differential dataflow.
 
-```rust,no_run
+```rust,ignore
     // create initial labels from sources.
     let labels = edges.map(|(src,dst)| (src,src))
                       .distinct();

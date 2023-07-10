@@ -2,7 +2,7 @@
 
 We've seen already one example of creating a differential dataflow input in our management example.
 
-```rust,no_run
+```rust,ignore
     // create an input collection of data.
     let mut input = InputSession::new();
 
@@ -23,7 +23,7 @@ You can also create input sessions from the `new_collection` and `new_collection
 
 For example, above we could have written the above as:
 
-```rust,no_run
+```rust,ignore
     // define a new computation.
     let mut input = worker.dataflow(|scope| {
 

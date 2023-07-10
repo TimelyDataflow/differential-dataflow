@@ -8,7 +8,7 @@ For now, let's think of an input collection as a multiset (or a "bag"): a collec
 
 Let's take our skeleton from the previous subsection and add an input collection.
 
-```rust,no_run
+```rust
     extern crate timely;
     extern crate differential_dataflow;
 
@@ -22,7 +22,7 @@ Let's take our skeleton from the previous subsection and add an input collection
             // create a counting differential dataflow.
             let mut input = worker.dataflow::<usize,_,_>(|scope| {
                 // create inputs, build dataflow, return stuff.
-                let (input, words) = scope.new_collection();
+                let (input, words) = scope.new_collection::<String, isize>();
                 words.inspect(|x| println!("seen: {:?}", x));
                 input
             });
@@ -37,13 +37,15 @@ Here we've created a new input collection in `scope`, which returns a pair `(inp
 
 This isn't a wildly interesting program yet, because we haven't actually changed `input`. Let's do that now, where the code currently says
 
+```
         // drive the input around here.
+```
 
 Differential dataflow inputs are similar to timely dataflow inputs, if you are familiar with those, but with a few important tweaks. Each input has a "time" it is currently set to. You can `insert(item)` and `remove(item)` to your hearts content, and these changes will take effect at the time currently associated with the input.
 
 For example, we could write:
 
-```rust,no_run
+```rust,ignore
         // drive the input around here.
         input.insert("hello".to_string());
         input.insert("world".to_string());

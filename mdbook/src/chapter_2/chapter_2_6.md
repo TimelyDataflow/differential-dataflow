@@ -4,7 +4,16 @@ The `reduce` operator takes an input collection whose records have a `(key, valu
 
 For example, to produce for each manager their managee with the lowest identifier, we might write
 
-```rust,no_run
+```rust
+# extern crate timely;
+# extern crate differential_dataflow;
+# use timely::dataflow::Scope;
+# use differential_dataflow::Collection;
+# use differential_dataflow::lattice::Lattice;
+# use differential_dataflow::operators::Reduce;
+# fn example<G: Scope>(manages: &Collection<G, (u64, u64), i64>)
+# where G::Timestamp: Lattice
+# {
     manages
         .reduce(|_key, input, output| {
             let mut min_index = 0;
@@ -19,19 +28,20 @@ For example, to produce for each manager their managee with the lowest identifie
             // Must produce outputs as `(Value, Count)`.
             output.push((*input[min_index].0, 1));
         });
+# }
 ```
 
 The reduce operator has some tricky Rust details about how it is expressed. The type of closure you must provide is technically
 
-```rust,no_run
-        Fn(&Key, &[(&Val, Cnt)], &mut Vec<(Val2, Cnt2)>)
+```ignore
+    Fn(&Key, &[(&Val, Cnt)], &mut Vec<(Val2, Cnt2)>)
 ```
 
 which means a function of three arguments:
 
-    1. A reference to the common key (`_key` above).
-    2. A slice (list) of pairs of value references and counts.
-    3. A mutable vector into which one can put pairs of values and counts.
+1. A reference to the common key (`_key` above).
+2. A slice (list) of pairs of value references and counts.
+3. A mutable vector into which one can put pairs of values and counts.
 
 The method is structured this way so that you can efficiently observe and manipulate records with large multiplicities without actually walking through that number of records. For example, we can write a `count` operator much more efficiently with the count looking at us than if we had to traverse as many copies of each record as we were counting up.
 

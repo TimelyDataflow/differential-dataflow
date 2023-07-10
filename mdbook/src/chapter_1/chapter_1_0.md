@@ -2,7 +2,7 @@
 
 Differential dataflow computations are really just [timely dataflow](https://github.com/frankmcsherry/timely-dataflow) computations where we supply a sweet set of operators and idioms for you. As such, when you build a new differential dataflow computation it will need to have a timely dataflow skeleton built first. For example:
 
-```rust,ignore
+```rust
 extern crate timely;
 extern crate differential_dataflow;
 

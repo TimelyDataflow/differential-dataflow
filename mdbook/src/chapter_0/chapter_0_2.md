@@ -6,7 +6,7 @@ Our organization has gone from one where each manager has at most two reports, t
 
 The only change we'll make is to add the following just after we load up our initial org chart:
 
-```rust,no_run
+```rust,ignore
     for person in 1 .. size {
         input.advance_to(person);
         input.remove((person/2, person));
@@ -16,7 +16,7 @@ The only change we'll make is to add the following just after we load up our ini
 
 This moves us through new times, indicated by the line
 
-```rust,no_run
+```rust,ignore
         input.advance_to(person);
 ```
 
@@ -24,7 +24,7 @@ which advances the state of the `input` collection up to a timestamp `person`, w
 
 Once we've advanced the time, we make some changes.
 
-```rust,no_run
+```rust,ignore
         input.remove((person/2, person));
         input.insert((person/3, person));
 ```
@@ -33,6 +33,7 @@ This removes the prior management relation, and introduces a new one where the p
 
 We do this for each of the non-boss employees and get to see a bunch of outputs.
 
+```ignore
         Echidnatron% cargo run -- 10
              Running `target/debug/my_project`
             ((0, (0, 0)), 0, 1)
@@ -68,6 +69,7 @@ We do this for each of the non-boss employees and get to see a bunch of outputs.
             ((4, (2, 9)), 0, 1)
             ((4, (2, 9)), 4, -1)
         Echidnatron%
+```
 
 Gaaaaaaah! What in the !#$!?
 
@@ -81,19 +83,23 @@ It turns out our input changes result in output changes. Let's try and break thi
 
 Let's look at the entries for time `4`.
 
+```ignore
         ((1, (0, 4)), 4, 1)
         ((2, (0, 4)), 4, -1)
         ((4, (1, 8)), 4, 1)
         ((4, (1, 9)), 4, 1)
         ((4, (2, 8)), 4, -1)
         ((4, (2, 9)), 4, -1)
+```
 
 There is a bit going on here. Four's manager changed from two to one, and while their skip-level manager remained zero the explanation changed. The first two lines record this change. The next four lines record the change in the skip-level manager of four's reports, eight and nine.
 
 At the end, time `9`, things are a bit simpler because we have reached the employees with no reports, and so the only changes are their skip-level manager, without any implications for other people.
 
+```ignore
         ((3, (1, 9)), 9, 1)
         ((4, (1, 9)), 9, -1)
+```
 
 Oof. Well, we probably *could* have figured these things out by hand, right?
 

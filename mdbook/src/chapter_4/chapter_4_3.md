@@ -4,7 +4,7 @@ Our examples so far have involved careful manipulation of the input, making chan
 
 Imagine an external data source that we can poll for changes, and when polled responds with all outstanding changes and the logical times at which each occurred. There is a fairly natural pattern we can write that exposes these changes to differential dataflow and asks it to resolve all changes concurrently, while retaining the logical times of each of the input changes.
 
-```rust,no_run
+```rust,ignore
     while !source.done() {
         // fetch a bounded amount of input changes.
         for (data, time, diff) in source.fetch() {

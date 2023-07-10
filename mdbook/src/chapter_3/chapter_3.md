@@ -4,7 +4,7 @@ Once a computation is written, we have only to interact with it. At its heart, t
 
 Our goal is to go in-order through each of the elements of the code from our interactive example.
 
-```rust,no_run
+```rust,ignore
     // make changes, but await completion.
     let mut person = index;
     while person < people {

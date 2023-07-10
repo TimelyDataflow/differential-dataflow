@@ -4,7 +4,16 @@ The `iterate` operator takes a starting input collection and a closure to repeat
 
 As an example, we can take our `manages` relation and determine for all employees all managers above them in the organizational chat. To do this, we start from the `manages` relation and write a closure that extends any transitive management pairs by "one hop" along the management relation, using a join operation.
 
-```rust,no_run
+```rust
+# extern crate timely;
+# extern crate differential_dataflow;
+# use timely::dataflow::Scope;
+# use differential_dataflow::Collection;
+# use differential_dataflow::operators::{Join, Iterate, Threshold};
+# use differential_dataflow::lattice::Lattice;
+# fn example<G: Scope>(manages: &Collection<G, (u64, u64)>)
+# where G::Timestamp: Lattice
+# {
     manages   // transitive contains (manager, person) for many hops.
         .iterate(|transitive| {
             transitive
@@ -14,6 +23,7 @@ As an example, we can take our `manages` relation and determine for all employee
                 .concat(&transitive)
                 .distinct()
         });
+# }
 ```
 
 Although the first three lines of the closure may look like our skip-level management example, we have three more steps that are very important.
@@ -30,11 +40,21 @@ The `enter` operator is a helpful method that brings collections outside a loop 
 
 In the example above, we could rewrite
 
-```rust,no_run
+```rust
+# extern crate timely;
+# extern crate differential_dataflow;
+# use timely::dataflow::Scope;
+# use differential_dataflow::Collection;
+# use differential_dataflow::operators::{Join, Threshold};
+# use differential_dataflow::operators::{Iterate, iterate::Variable};
+# use differential_dataflow::lattice::Lattice;
+# fn example<G: Scope>(manages: &Collection<G, (u64, u64)>)
+# where G::Timestamp: Lattice
+# {
     manages   // transitive contains (manager, person) for many hops.
         .iterate(|transitive| {
 
-            let manages = manages.enter(transitive.scope());
+            let manages = manages.enter(&transitive.scope());
 
             transitive
                 .map(|(mk, m1)| (m1, mk))
@@ -43,6 +63,7 @@ In the example above, we could rewrite
                 .concat(&manages)
                 .distinct()
         });
+# }
 ```
 
 This modified version extends `transitive` by one step along `manages`, rather than by a step along `transitive`. It also concatenates in `manages` rather than `transitive`. This modified version can perform better, as while it takes shorter steps, they are also more measured.
@@ -59,11 +80,28 @@ Manual construction can be important when you have mutual recursion, perhaps amo
 
 As an example, the implementation of the `iterate` operator looks something like this:
 
-```rust,no_run
-    collection.scope().scoped(|subgraph| {
-        let variable = Variable::from(collection.enter(subgraph));
+```rust
+# extern crate timely;
+# extern crate differential_dataflow;
+# use timely::dataflow::Scope;
+# use timely::dataflow::scopes::Child;
+# use timely::progress::Antichain;
+# use differential_dataflow::Collection;
+# use differential_dataflow::operators::{Iterate, iterate::Variable};
+# use differential_dataflow::lattice::Lattice;
+# fn logic<'a, G: Scope>(variable: &Variable<Child<'a, G, G::Timestamp>, (u64, u64), isize>) -> Collection<Child<'a, G, G::Timestamp>, (u64, u64)>
+# where G::Timestamp: Lattice
+# {
+#     (*variable).clone()
+# }
+# fn example<'a, G: Scope<Timestamp=u64>>(collection: &Collection<G, (u64, u64)>) //, logic: impl Fn(&Variable<Child<'a, G, G::Timestamp>, (u64, u64), isize>) -> Collection<Child<'a, G, G::Timestamp>, (u64, u64)>)
+#    where G::Timestamp: Lattice
+# {
+    collection.scope().scoped("inner", |subgraph| {
+        let variable = Variable::new_from(collection.enter(subgraph), 1);
         let result = logic(&variable);
         variable.set(&result);
         result.leave()
-    })
+    });
+# }
 ```

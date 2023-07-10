@@ -6,30 +6,53 @@ What `consolidate` does do is ensure that each element at each time has at most 
 
 As an example, if we were to inspect
 
-```rust,no_run
+```rust
+# extern crate timely;
+# extern crate differential_dataflow;
+# use timely::dataflow::Scope;
+# use differential_dataflow::Collection;
+# use differential_dataflow::lattice::Lattice;
+# use differential_dataflow::operators::Reduce;
+# fn example<G: Scope>(manages: &Collection<G, (u64, u64)>)
+# where G::Timestamp: Lattice
+# {
     manages
         .map(|(m2, m1)| (m1, m2))
         .concat(&manages)
         .inspect(|x| println!("{:?}", x));
+# }
 ```
 
 we might see two copies of the same element:
 
-        ((0, 0), 0, 1)
-        ((0, 0), 0, 1)
+```ignore
+((0, 0), 0, 1)
+((0, 0), 0, 1)
+```
 
 However, by introducing `consolidate`
 
-```rust,no_run
+```rust
+# extern crate timely;
+# extern crate differential_dataflow;
+# use timely::dataflow::Scope;
+# use differential_dataflow::Collection;
+# use differential_dataflow::lattice::Lattice;
+# fn example<G: Scope>(manages: &Collection<G, (u64, u64)>)
+# where G::Timestamp: Lattice
+# {
     manages
         .map(|(m2, m1)| (m1, m2))
         .concat(&manages)
         .consolidate()
         .inspect(|x| println!("{:?}", x));
+# }
 ```
 
 we are guaranteed to see at most one `(0,0)` update at each time:
 
-        ((0, 0), 0, 2)
+```ignore
+((0, 0), 0, 2)
+```
 
-The `consolidate` operator is mostly useful before `inspect`ing data, but it can also be important for efficiency; knowing when to spend the additional computation to consolidate the representation of your data is an advanced topic!
+The `consolidate` function is mostly useful before `inspect`ing data, but it can also be important for efficiency; knowing when to spend the additional computation to consolidate the representation of your data is an advanced topic!
