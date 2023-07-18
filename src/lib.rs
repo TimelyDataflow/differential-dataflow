@@ -93,7 +93,7 @@ pub trait ExchangeData : timely::ExchangeData + Ord + Debug { }
 impl<T: timely::ExchangeData + Ord + Debug> ExchangeData for T { }
 
 extern crate fnv;
-extern crate timely;
+pub extern crate timely;
 
 #[macro_use]
 extern crate abomonation_derive;
