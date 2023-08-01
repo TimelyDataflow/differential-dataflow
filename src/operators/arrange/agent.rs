@@ -160,6 +160,16 @@ where
     pub fn operator(&self) -> &OperatorInfo {
         &self.operator
     }
+
+    /// Obtain a reference to the inner [`TraceBox`]. It is the caller's obligation to maintain
+    /// the trace box and this trace agent's invariants. Specifically, it is undefined behavior
+    /// to mutate the trace box. Keeping strong references can prevent resource reclamation.
+    ///
+    /// This method is subject to changes and removal and should not be considered part of a stable
+    /// interface.
+    pub fn trace_box_unstable(&self) -> Rc<RefCell<TraceBox<Tr>>> {
+        Rc::clone(&self.trace)
+    }
 }
 
 impl<Tr> TraceAgent<Tr>
