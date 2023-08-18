@@ -125,6 +125,8 @@ pub trait BatchContainer: Default {
     fn reserve(&mut self, additional: usize);
     /// Creates a new container with sufficient capacity.
     fn merge_capacity(cont1: &Self, cont2: &Self) -> Self;
+    /// Shrink the container if needed
+    fn maybe_shrink(&mut self);
 }
 
 impl<T: Clone> BatchContainer for Vec<T> {
@@ -146,6 +148,11 @@ impl<T: Clone> BatchContainer for Vec<T> {
     }
     fn merge_capacity(cont1: &Self, cont2: &Self) -> Self {
         Vec::with_capacity(cont1.len() + cont2.len())
+    }
+    fn maybe_shrink(&mut self) {
+        if self.len() < self.capacity() / 4 {
+            self.shrink_to_fit();
+        }
     }
 }
 
@@ -172,6 +179,9 @@ impl<T: Columnation> BatchContainer for TimelyStack<T> {
         let mut new = Self::default();
         new.reserve_regions(std::iter::once(cont1).chain(std::iter::once(cont2)));
         new
+    }
+    fn maybe_shrink(&mut self) {
+        // Cannot shrink TimelyStack yet.
     }
 }
 

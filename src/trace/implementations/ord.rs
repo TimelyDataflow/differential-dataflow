@@ -196,6 +196,7 @@ where
             }
         }
         layer.vals.vals.vals.truncate(write_position);
+        layer.vals.vals.vals.maybe_shrink();
         layer.vals.offs[layer.vals.keys.len()] = O::try_from(write_position).unwrap();
 
         // 3. Remove values with empty histories. In addition, we need to update offsets
@@ -221,6 +222,7 @@ where
         });
         debug_assert_eq!(write_position, layer.vals.keys.len());
         layer.vals.offs.truncate(write_position + 1);
+        layer.vals.offs.maybe_shrink();
         layer.offs[layer.keys.len()] = O::try_from(write_position).unwrap();
 
         // 4. Remove empty keys.
@@ -238,6 +240,9 @@ where
         });
         debug_assert_eq!(write_position, layer.keys.len());
         layer.offs.truncate(layer.keys.len()+1);
+        layer.offs.maybe_shrink();
+        layer.vals.keys.maybe_shrink();
+        layer.keys.maybe_shrink();
     }
 }
 
@@ -568,6 +573,7 @@ where
             }
         }
         layer.vals.vals.truncate(write_position);
+        layer.vals.vals.maybe_shrink();
         layer.offs[layer.keys.len()] = O::try_from(write_position).unwrap();
 
         // 4. Remove empty keys.
@@ -585,6 +591,8 @@ where
         });
         debug_assert_eq!(write_position, layer.keys.len());
         layer.offs.truncate(layer.keys.len()+1);
+        layer.offs.maybe_shrink();
+        layer.keys.maybe_shrink();
     }
 }
 
