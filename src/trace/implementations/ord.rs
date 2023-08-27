@@ -8,12 +8,12 @@
 //! Although `OrdVal` is more general than `OrdKey`, the latter has a simpler representation
 //! and should consume fewer resources (computation and memory) when it applies.
 
-use std::rc::Rc;
 use std::convert::{TryFrom, TryInto};
 use std::marker::PhantomData;
 use std::fmt::Debug;
 use std::ops::Deref;
 
+use timely::PartialOrder;
 use timely::container::columnation::TimelyStack;
 use timely::container::columnation::Columnation;
 use timely::progress::{Antichain, frontier::AntichainRef};
@@ -34,25 +34,25 @@ use trace::layers::MergeBuilder;
 // use super::spine::Spine;
 use super::spine_fueled::Spine;
 use super::merge_batcher::MergeBatcher;
-
-use abomonation::abomonated::Abomonated;
+use super::rc::RcBatch;
+use super::abomonated::AbomonatedBatch;
 
 /// A trace implementation using a spine of ordered lists.
-pub type OrdValSpine<K, V, T, R, O=usize> = Spine<Rc<OrdValBatch<K, V, T, R, O>>>;
+pub type OrdValSpine<K, V, T, R, O=usize> = Spine<RcBatch<OrdValBatch<K, V, T, R, O>>>;
 
 /// A trace implementation using a spine of abomonated ordered lists.
-pub type OrdValSpineAbom<K, V, T, R, O=usize> = Spine<Rc<Abomonated<OrdValBatch<K, V, T, R, O>, Vec<u8>>>>;
+pub type OrdValSpineAbom<K, V, T, R, O=usize> = Spine<RcBatch<AbomonatedBatch<OrdValBatch<K, V, T, R, O>>>>;
 
 /// A trace implementation for empty values using a spine of ordered lists.
-pub type OrdKeySpine<K, T, R, O=usize> = Spine<Rc<OrdKeyBatch<K, T, R, O>>>;
+pub type OrdKeySpine<K, T, R, O=usize> = Spine<RcBatch<OrdKeyBatch<K, T, R, O>>>;
 
 /// A trace implementation for empty values using a spine of abomonated ordered lists.
-pub type OrdKeySpineAbom<K, T, R, O=usize> = Spine<Rc<Abomonated<OrdKeyBatch<K, T, R, O>, Vec<u8>>>>;
+pub type OrdKeySpineAbom<K, T, R, O=usize> = Spine<RcBatch<AbomonatedBatch<OrdKeyBatch<K, T, R, O>>>>;
 
 /// A trace implementation backed by columnar storage.
-pub type ColValSpine<K, V, T, R, O=usize> = Spine<Rc<OrdValBatch<K, V, T, R, O, TimelyStack<K>, TimelyStack<V>>>>;
+pub type ColValSpine<K, V, T, R, O=usize> = Spine<RcBatch<OrdValBatch<K, V, T, R, O, TimelyStack<K>, TimelyStack<V>>>>;
 /// A trace implementation backed by columnar storage.
-pub type ColKeySpine<K, T, R, O=usize> = Spine<Rc<OrdKeyBatch<K,  T, R, O, TimelyStack<K>>>>;
+pub type ColKeySpine<K, T, R, O=usize> = Spine<RcBatch<OrdKeyBatch<K,  T, R, O, TimelyStack<K>>>>;
 
 
 /// A container that can retain/discard from some offset onward.
@@ -100,7 +100,7 @@ where
     /// Where all the dataz is.
     pub layer: OrderedLayer<K, OrderedLayer<V, OrderedLeaf<T, R>, O, CV>, O, CK>,
     /// Description of the update times this layer represents.
-    pub desc: Description<T>,
+    desc: Description<T>,
 }
 
 impl<K, V, T, R, O, CK, CV> BatchReader for OrdValBatch<K, V, T, R, O, CK, CV>
@@ -140,6 +140,21 @@ where
 
     fn begin_merge(&self, other: &Self, compaction_frontier: Option<AntichainRef<T>>) -> Self::Merger {
         OrdValMerger::new(self, other, compaction_frontier)
+    }
+
+    fn merge_empty(mut self, other: &Self) -> Self {
+        assert!(other.is_empty());
+
+        let (lower, upper) = if self.lower() == other.upper() {
+            (other.lower().clone(), self.upper().clone())
+        } else if self.upper() == other.lower() {
+            (self.lower().clone(), other.upper().clone())
+        } else {
+            panic!("trying to merge non-consecutive batches");
+        };
+
+        self.desc = Description::new(lower, upper, self.desc.since().clone());
+        self
     }
 }
 
@@ -275,8 +290,9 @@ where
     CV: BatchContainer<Item=V>+Deref<Target=[V]>+RetainFrom<V>,
 {
     fn new(batch1: &OrdValBatch<K, V, T, R, O, CK, CV>, batch2: &OrdValBatch<K, V, T, R, O, CK, CV>, compaction_frontier: Option<AntichainRef<T>>) -> Self {
-
-        assert!(batch1.upper() == batch2.lower());
+        // We cannot assert equality here, as that would break bounds-extending
+        // batch wrappers, like `RcBatch`.
+        assert!(PartialOrder::less_equal(batch1.upper(), batch2.lower()));
 
         let mut since = batch1.description().since().join(batch2.description().since());
         if let Some(compaction_frontier) = compaction_frontier {
@@ -473,7 +489,7 @@ where
     /// Where all the dataz is.
     pub layer: OrderedLayer<K, OrderedLeaf<T, R>, O, CK>,
     /// Description of the update times this layer represents.
-    pub desc: Description<T>,
+    desc: Description<T>,
 }
 
 impl<K, T, R, O, CK> BatchReader for OrdKeyBatch<K, T, R, O, CK>
@@ -515,6 +531,21 @@ where
 
     fn begin_merge(&self, other: &Self, compaction_frontier: Option<AntichainRef<T>>) -> Self::Merger {
         OrdKeyMerger::new(self, other, compaction_frontier)
+    }
+
+    fn merge_empty(mut self, other: &Self) -> Self {
+        assert!(other.is_empty());
+
+        let (lower, upper) = if self.lower() == other.upper() {
+            (other.lower().clone(), self.upper().clone())
+        } else if self.upper() == other.lower() {
+            (self.lower().clone(), other.upper().clone())
+        } else {
+            panic!("trying to merge non-consecutive batches");
+        };
+
+        self.desc = Description::new(lower, upper, self.desc.since().clone());
+        self
     }
 }
 
@@ -618,8 +649,9 @@ where
     CK: BatchContainer<Item=K>+Deref<Target=[K]>+RetainFrom<K>,
 {
     fn new(batch1: &OrdKeyBatch<K, T, R, O, CK>, batch2: &OrdKeyBatch<K, T, R, O, CK>, compaction_frontier: Option<AntichainRef<T>>) -> Self {
-
-        assert!(batch1.upper() == batch2.lower());
+        // We cannot assert equality here, as that would break bounds-extending
+        // batch wrappers, like `RcBatch`.
+        assert!(PartialOrder::less_equal(batch1.upper(), batch2.lower()));
 
         let mut since = batch1.description().since().join(batch2.description().since());
         if let Some(compaction_frontier) = compaction_frontier {

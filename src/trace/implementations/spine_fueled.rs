@@ -867,8 +867,16 @@ impl<B: Batch> MergeState<B> where B::Time: Eq {
         match (batch1, batch2) {
             (Some(batch1), Some(batch2)) => {
                 assert!(batch1.upper() == batch2.lower());
-                let begin_merge = <B as Batch>::begin_merge(&batch1, &batch2, compaction_frontier);
-                MergeVariant::InProgress(batch1, batch2, begin_merge)
+                if batch1.is_empty() {
+                    let batch = batch2.merge_empty(&batch1);
+                    MergeVariant::Complete(Some((batch, None)))
+                } else if batch2.is_empty() {
+                    let batch = batch1.merge_empty(&batch2);
+                    MergeVariant::Complete(Some((batch, None)))
+                } else {
+                    let merger = batch1.begin_merge(&batch2, compaction_frontier);
+                    MergeVariant::InProgress(batch1, batch2, merger)
+                }
             }
             (None, Some(x)) => MergeVariant::Complete(Some((x, None))),
             (Some(x), None) => MergeVariant::Complete(Some((x, None))),
