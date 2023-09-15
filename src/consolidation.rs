@@ -183,14 +183,20 @@ impl<A: Columnation + Data, B: Columnation + Data, C: Columnation + Semigroup> C
 
         // Replace `self` with a new allocation.
         // TODO: recycle the old `self`
-        let input = &std::mem::replace(self, TimelyStack::with_capacity(self.len()))[..];
+        let input = std::mem::replace(self, TimelyStack::with_capacity(self.len()));
 
         let mut diff: Option<C> = None;
+        let mut must_clear = false;
         for i in 0..(input.len()) {
             // accumulate diff
             if let Some(diff) = diff.as_mut() {
-                // we already have a diff, simply plus_equal it
-                diff.plus_equals(&input[i].2)
+                if must_clear {
+                    diff.clone_from(&input[i].2);
+                    must_clear = false;
+                } else {
+                    // we already have a diff, simply plus_equal it
+                    diff.plus_equals(&input[i].2)
+                }
             } else {
                 // last element was undefined or different, initialize new diff
                 diff = Some(input[i].2.clone())
@@ -201,7 +207,8 @@ impl<A: Columnation + Data, B: Columnation + Data, C: Columnation + Semigroup> C
                 // element[i] != element[i+1]
                 // emit element[i] if accumulated diff != 0
                 if !diff.as_ref().map(Semigroup::is_zero).unwrap_or(true) {
-                    self.copy_destructured(&input[i].0, &input[i].1, &diff.take().unwrap());
+                    self.copy_destructured(&input[i].0, &input[i].1, diff.as_ref().unwrap());
+                    must_clear = true;
                 }
             }
         }
