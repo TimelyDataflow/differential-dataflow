@@ -388,17 +388,24 @@ where
     B::Time: Lattice+timely::progress::Timestamp+Ord+Clone+Debug,
     B::R: Semigroup,
 {
-    /// True iff there is at most one non-empty batch in `self.merging`.
+    /// True when no two non-empty batches are within a factor of `proportionality` in length.
     ///
     /// When true, there is no maintenance work to perform in the trace, other than compaction.
     /// We do not yet have logic in place to determine if compaction would improve a trace, so
     /// for now we are ignoring that.
+    ///
+    /// The `proportionality` is meant to ensure merge work happens when a non-trivial reduction
+    /// may happen, but to avoid such an opinion when there is no possibility of such reduction.
     fn reduced(&self) -> bool {
+        let proportionality = 16;
         let mut non_empty = 0;
         for index in 0 .. self.merging.len() {
             if self.merging[index].is_double() { return false; }
-            if self.merging[index].len() > 0 { non_empty += 1; }
-            if non_empty > 1 { return false; }
+            if self.merging[index].len() > 0 { 
+                if non_empty > 0 { return false; }
+                non_empty = proportionality; 
+            }
+            non_empty = non_empty / 2;
         }
         true
     }
