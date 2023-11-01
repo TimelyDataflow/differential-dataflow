@@ -9,6 +9,7 @@
 //! implementations, and to support efficient incremental updates to the collections.
 
 use std::hash::Hash;
+use std::marker::PhantomData;
 
 use timely::Data;
 use timely::progress::Timestamp;
@@ -45,13 +46,14 @@ pub struct Collection<G, D, R = isize, C = Vec<(D, <G as ScopeParent>::Timestamp
     where
         G: Scope,
         R: Semigroup,
-        C: TimelyContainer<Item=(D, G::Timestamp, R)>,
 {
     /// The underlying timely dataflow stream.
     ///
     /// This field is exposed to support direct timely dataflow manipulation when required, but it is
     /// not intended to be the idiomatic way to work with the collection.
-    pub inner: StreamCore<G, C>
+    pub inner: StreamCore<G, C>,
+    /// Phantom data to consume type parameters.
+    pub _phantom: PhantomData<(*const D, *const R)>,
 }
 
 impl<G: Scope, C, D, R: Semigroup> Collection<G, D, R, C>
@@ -65,7 +67,7 @@ impl<G: Scope, C, D, R: Semigroup> Collection<G, D, R, C>
     /// provides a `new_collection` method which will create a new collection for you without exposing
     /// the underlying timely stream at all.
     pub fn new(stream: StreamCore<G, C>) -> Collection<G, D, R, C> {
-        Self { inner: stream }
+        Self { inner: stream, _phantom: PhantomData }
     }
 
     /// Creates a new collection accumulating the contents of the two collections.
