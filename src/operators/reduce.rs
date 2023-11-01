@@ -498,8 +498,8 @@ where
                             while batch_cursor.key_valid(batch_storage) || exposed_position < exposed.len() {
 
                                 // Determine the next key we will work on; could be synthetic, could be from a batch.
-                                let key1 = exposed.get(exposed_position).map(|x| x.0.clone());
-                                let key2 = batch_cursor.get_key(&batch_storage).map(|k| k.clone());
+                                let key1 = exposed.get(exposed_position).map(|x| &x.0);
+                                let key2 = batch_cursor.get_key(&batch_storage);
                                 let key = match (key1, key2) {
                                     (Some(key1), Some(key2)) => ::std::cmp::min(key1, key2),
                                     (Some(key1), None)       => key1,
@@ -514,7 +514,7 @@ where
                                 interesting_times.clear();
 
                                 // Populate `interesting_times` with synthetic interesting times (below `upper_limit`) for this key.
-                                while exposed.get(exposed_position).map(|x| &x.0) == Some(&key) {
+                                while exposed.get(exposed_position).map(|x| &x.0) == Some(key) {
                                     interesting_times.push(exposed[exposed_position].1.clone());
                                     exposed_position += 1;
                                 }
@@ -524,7 +524,7 @@ where
 
                                 // do the per-key computation.
                                 let _counters = thinker.compute(
-                                    &key,
+                                    key,
                                     (&mut source_cursor, source_storage),
                                     (&mut output_cursor, output_storage),
                                     (&mut batch_cursor, batch_storage),
@@ -535,7 +535,7 @@ where
                                     &mut new_interesting_times,
                                 );
 
-                                if batch_cursor.get_key(batch_storage) == Some(&key) {
+                                if batch_cursor.get_key(batch_storage) == Some(key) {
                                     batch_cursor.step_key(batch_storage);
                                 }
 
