@@ -351,17 +351,21 @@ where
                     register.get::<::logging::DifferentialEvent>("differential/arrange")
                 };
 
-                // Determine if we should regularly exert the trace maintenance machinery,
-                // and with what amount of effort each time.
-                let (activator, effort) =
+                let activator = Some(self.stream.scope().activator_for(&operator_info.address[..]));
+                let mut empty = T2::new(operator_info.clone(), logger.clone(), activator);
+                // If idle merge effort exists, configure aggressive idle merging logic.
                 if let Some(effort) = self.stream.scope().config().get::<isize>("differential/idle_merge_effort").cloned() {
-                    (Some(self.stream.scope().activator_for(&operator_info.address[..])), Some(effort))
+                    empty.set_exert_logic(Some(Box::new(move |batches| {
+                        let mut non_empty = 0;
+                        for (_index, count, length) in batches {
+                            if count > 1 { return Some(effort as usize); }
+                            if length > 0 { non_empty += 1; }
+                            if non_empty > 1 { return Some(effort as usize); }
+                        }
+                        None
+                    })));
                 }
-                else {
-                    (None, None)
-                };
 
-                let empty = T2::new(operator_info.clone(), logger.clone(), activator);
                 let mut source_trace = self.trace.clone();
 
                 let (mut output_reader, mut output_writer) = TraceAgent::new(empty, operator_info, logger);
@@ -629,9 +633,7 @@ where
                     }
 
                     // Exert trace maintenance if we have been so requested.
-                    if let Some(mut fuel) = effort.clone() {
-                        output_writer.exert(&mut fuel);
-                    }
+                    output_writer.exert();
                 }
             }
         )

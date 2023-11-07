@@ -52,9 +52,9 @@ where
     }
 
     /// Exerts merge effort, even without additional updates.
-    pub fn exert(&mut self, fuel: &mut isize) {
+    pub fn exert(&mut self) {
         if let Some(trace) = self.trace.upgrade() {
-            trace.borrow_mut().trace.exert(fuel);
+            trace.borrow_mut().trace.exert();
         }
     }
 

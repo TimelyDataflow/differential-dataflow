@@ -563,15 +563,22 @@ where
                 // Capabilities for the lower envelope of updates in `batcher`.
                 let mut capabilities = Antichain::<Capability<G::Timestamp>>::new();
 
-                let (activator, effort) =
-                if let Some(effort) = self.inner.scope().config().get::<isize>("differential/idle_merge_effort").cloned() {
-                    (Some(self.scope().activator_for(&info.address[..])), Some(effort))
-                }
-                else {
-                    (None, None)
-                };
+                let activator = Some(self.scope().activator_for(&info.address[..]));
+                let mut empty_trace = Tr::new(info.clone(), logger.clone(), activator);
 
-                let empty_trace = Tr::new(info.clone(), logger.clone(), activator);
+                // If idle merge effort exists, configure aggressive idle merging logic.
+                if let Some(effort) = self.inner.scope().config().get::<isize>("differential/idle_merge_effort").cloned() {
+                    empty_trace.set_exert_logic(Some(Box::new(move |batches| {
+                        let mut non_empty = 0;
+                        for (_index, count, length) in batches {
+                            if count > 1 { return Some(effort as usize); }
+                            if length > 0 { non_empty += 1; }
+                            if non_empty > 1 { return Some(effort as usize); }
+                        }
+                        None
+                    })));
+                }
+
                 let (reader_local, mut writer) = TraceAgent::new(empty_trace, info, logger);
 
                 *reader = Some(reader_local);
@@ -672,9 +679,7 @@ where
                         prev_frontier.extend(input.frontier().frontier().iter().cloned());
                     }
 
-                    if let Some(mut fuel) = effort.clone() {
-                        writer.exert(&mut fuel);
-                    }
+                    writer.exert();
                 }
             })
         };

@@ -208,8 +208,15 @@ where <Self as TraceReader>::Batch: Batch {
         activator: Option<timely::scheduling::activate::Activator>,
     ) -> Self;
 
-    ///    Exert merge effort, even without updates.
-    fn exert(&mut self, effort: &mut isize);
+    /// Exert merge effort, even without updates.
+    fn exert(&mut self);
+
+    /// Sets the logic for exertion in the absence of updates.
+    ///
+    /// The function receives an iterator over batch levels, from large to small, as triples `(level, count, length)`,
+    /// indicating the level, the number of batches, and their total length in updates. It should return a number of 
+    /// updates to perform, or `None` if no work is required.
+    fn set_exert_logic(&mut self, logic: Option<Box<dyn for<'a> Fn(Box<dyn Iterator<Item=(usize, usize, usize)>+'a>)->Option<usize>>>);
 
     /// Introduces a batch of updates to the trace.
     ///
