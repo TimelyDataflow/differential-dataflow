@@ -74,7 +74,7 @@ use std::fmt::Debug;
 use ::logging::Logger;
 use ::difference::Semigroup;
 use lattice::Lattice;
-use trace::{Batch, BatchReader, Trace, TraceReader};
+use trace::{Batch, BatchReader, Trace, TraceReader, ExertionLogic};
 use trace::cursor::{Cursor, CursorList};
 use trace::Merger;
 
@@ -98,7 +98,7 @@ pub struct Spine<B: Batch> where B::Time: Lattice+Ord, B::R: Semigroup {
     effort: usize,
     activator: Option<timely::scheduling::activate::Activator>,
     /// Logic to indicate whether and how many records we should introduce in the absence of actual updates.
-    exert_logic: Option<Box<dyn for<'a> Fn(Box<dyn Iterator<Item=(usize, usize, usize)>+'a>)->Option<usize>>>,
+    exert_logic: ExertionLogic,
 }
 
 impl<B> TraceReader for Spine<B>
@@ -290,7 +290,7 @@ where
         }
     }
 
-    fn set_exert_logic(&mut self, logic: Option<Box<dyn for<'a> Fn(Box<dyn Iterator<Item=(usize, usize, usize)>+'a>)->Option<usize>>>) {
+    fn set_exert_logic(&mut self, logic: ExertionLogic) {
         self.exert_logic = logic;
     }
 
@@ -398,7 +398,7 @@ where
     /// This method prepares an iterator over batches, including the level, count, and length of each layer.
     /// It supplies this to `self.exert_logic`, who produces the response of the amount of exertion to apply.
     fn exert_effort(&self) -> Option<usize> {
-        self.exert_logic.as_ref().and_then(|l| (**l)(
+        (self.exert_logic)(
             Box::new(self.merging.iter().enumerate().rev().map(|(index, batch)| {
                 match batch {
                     MergeState::Vacant => (index, 0, 0),
@@ -406,7 +406,7 @@ where
                     MergeState::Double(_) => (index, 2, batch.len()),
                 }
             }))
-        ))
+        )
     }
 
     /// Describes the merge progress of layers in the trace.
@@ -449,7 +449,7 @@ where
             upper: Antichain::from_elem(<B::Time as timely::progress::Timestamp>::minimum()),
             effort,
             activator,
-            exert_logic: None,
+            exert_logic: std::sync::Arc::new(|_batches| None),
         }
     }
 

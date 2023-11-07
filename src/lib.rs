@@ -140,5 +140,17 @@ impl Config {
 pub fn configure(config: &mut timely::WorkerConfig, options: &Config) {
     if let Some(effort) = options.idle_merge_effort {
         config.set("differential/idle_merge_effort".to_string(), effort);
+        config.set::<trace::ExertionLogic>(
+            "differential/default_exert_logic".to_string(),
+            std::sync::Arc::new(move |batches| {
+                let mut non_empty = 0;
+                for (_index, count, length) in batches {
+                    if count > 1 { return Some(effort as usize); }
+                    if length > 0 { non_empty += 1; }
+                    if non_empty > 1 { return Some(effort as usize); }
+                }
+                None
+            }),
+        );
     }
 }

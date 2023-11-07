@@ -19,7 +19,7 @@ use timely::dataflow::operators::Capability;
 
 use operators::arrange::{Arranged, ArrangeByKey, ArrangeBySelf, TraceAgent};
 use lattice::Lattice;
-use trace::{Batch, BatchReader, Cursor, Trace, Builder};
+use trace::{Batch, BatchReader, Cursor, Trace, Builder, ExertionLogic};
 use trace::cursor::CursorList;
 use trace::implementations::ord::OrdValSpine as DefaultValTrace;
 use trace::implementations::ord::OrdKeySpine as DefaultKeyTrace;
@@ -353,18 +353,11 @@ where
 
                 let activator = Some(self.stream.scope().activator_for(&operator_info.address[..]));
                 let mut empty = T2::new(operator_info.clone(), logger.clone(), activator);
-                // If idle merge effort exists, configure aggressive idle merging logic.
-                if let Some(effort) = self.stream.scope().config().get::<isize>("differential/idle_merge_effort").cloned() {
-                    empty.set_exert_logic(Some(Box::new(move |batches| {
-                        let mut non_empty = 0;
-                        for (_index, count, length) in batches {
-                            if count > 1 { return Some(effort as usize); }
-                            if length > 0 { non_empty += 1; }
-                            if non_empty > 1 { return Some(effort as usize); }
-                        }
-                        None
-                    })));
+                // If there is default exert logic set, install it.
+                if let Some(exert_logic) = self.stream.scope().config().get::<ExertionLogic>("differential/default_exert_logic").cloned() {
+                    empty.set_exert_logic(exert_logic);
                 }
+
 
                 let mut source_trace = self.trace.clone();
 
