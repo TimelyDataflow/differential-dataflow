@@ -489,8 +489,8 @@ where
             }
         }
 
-        // Having performed all of our work, if more than one batch remains reschedule ourself.
-        if !self.exert_effort().is_some() {
+        // Having performed all of our work, if we should perform more work reschedule ourselves.
+        if self.exert_effort().is_some() {
             if let Some(activator) = &self.activator {
                 activator.activate();
             }
