@@ -74,7 +74,7 @@ use std::fmt::Debug;
 use ::logging::Logger;
 use ::difference::Semigroup;
 use lattice::Lattice;
-use trace::{Batch, BatchReader, Trace, TraceReader};
+use trace::{Batch, BatchReader, Trace, TraceReader, ExertionLogic};
 use trace::cursor::{Cursor, CursorList};
 use trace::Merger;
 
@@ -97,6 +97,8 @@ pub struct Spine<B: Batch> where B::Time: Lattice+Ord, B::R: Semigroup {
     upper: Antichain<B::Time>,
     effort: usize,
     activator: Option<timely::scheduling::activate::Activator>,
+    /// Logic to indicate whether and how many records we should introduce in the absence of actual updates.
+    exert_logic: ExertionLogic,
 }
 
 impl<B> TraceReader for Spine<B>
@@ -264,22 +266,21 @@ where
 
     /// Apply some amount of effort to trace maintenance.
     ///
-    /// The units of effort are updates, and the method should be
-    /// thought of as analogous to inserting as many empty updates,
-    /// where the trace is permitted to perform proportionate work.
-    fn exert(&mut self, effort: &mut isize) {
+    /// Whether and how much effort to apply is determined by `self.exert_logic`, a closure the user can set.
+    fn exert(&mut self) {
         // If there is work to be done, ...
         self.tidy_layers();
-        if !self.reduced() {
+        // Determine whether we should apply effort independent of updates.
+        if let Some(effort) = self.exert_effort() {
 
             // If any merges exist, we can directly call `apply_fuel`.
             if self.merging.iter().any(|b| b.is_double()) {
-                self.apply_fuel(effort);
+                self.apply_fuel(&mut (effort as isize));
             }
             // Otherwise, we'll need to introduce fake updates to move merges along.
             else {
                 // Introduce an empty batch with roughly *effort number of virtual updates.
-                let level = (*effort as usize).next_power_of_two().trailing_zeros() as usize;
+                let level = effort.next_power_of_two().trailing_zeros() as usize;
                 self.introduce_batch(None, level);
             }
             // We were not in reduced form, so let's check again in the future.
@@ -287,6 +288,10 @@ where
                 activator.activate();
             }
         }
+    }
+
+    fn set_exert_logic(&mut self, logic: ExertionLogic) {
+        self.exert_logic = logic;
     }
 
     // Ideally, this method acts as insertion of `batch`, even if we are not yet able to begin
@@ -388,19 +393,20 @@ where
     B::Time: Lattice+timely::progress::Timestamp+Ord+Clone+Debug,
     B::R: Semigroup,
 {
-    /// True iff there is at most one non-empty batch in `self.merging`.
+    /// Determine the amount of effort we should exert in the absence of updates.
     ///
-    /// When true, there is no maintenance work to perform in the trace, other than compaction.
-    /// We do not yet have logic in place to determine if compaction would improve a trace, so
-    /// for now we are ignoring that.
-    fn reduced(&self) -> bool {
-        let mut non_empty = 0;
-        for index in 0 .. self.merging.len() {
-            if self.merging[index].is_double() { return false; }
-            if self.merging[index].len() > 0 { non_empty += 1; }
-            if non_empty > 1 { return false; }
-        }
-        true
+    /// This method prepares an iterator over batches, including the level, count, and length of each layer.
+    /// It supplies this to `self.exert_logic`, who produces the response of the amount of exertion to apply.
+    fn exert_effort(&self) -> Option<usize> {
+        (self.exert_logic)(
+            Box::new(self.merging.iter().enumerate().rev().map(|(index, batch)| {
+                match batch {
+                    MergeState::Vacant => (index, 0, 0),
+                    MergeState::Single(_) => (index, 1, batch.len()),
+                    MergeState::Double(_) => (index, 2, batch.len()),
+                }
+            }))
+        )
     }
 
     /// Describes the merge progress of layers in the trace.
@@ -443,6 +449,7 @@ where
             upper: Antichain::from_elem(<B::Time as timely::progress::Timestamp>::minimum()),
             effort,
             activator,
+            exert_logic: std::sync::Arc::new(|_batches| None),
         }
     }
 
@@ -482,8 +489,8 @@ where
             }
         }
 
-        // Having performed all of our work, if more than one batch remains reschedule ourself.
-        if !self.reduced() {
+        // Having performed all of our work, if we should perform more work reschedule ourselves.
+        if self.exert_effort().is_some() {
             if let Some(activator) = &self.activator {
                 activator.activate();
             }

@@ -29,11 +29,11 @@ use timely::dataflow::operators::Capability;
 use ::{Data, ExchangeData, Collection, AsCollection, Hashable};
 use ::difference::Semigroup;
 use lattice::Lattice;
-use trace::{Trace, TraceReader, Batch, BatchReader, Batcher, Cursor};
+use trace::{self, Trace, TraceReader, Batch, BatchReader, Batcher, Cursor};
 use trace::implementations::ord::OrdValSpine as DefaultValTrace;
 use trace::implementations::ord::OrdKeySpine as DefaultKeyTrace;
 
-use trace::wrappers::enter::{TraceEnter, BatchEnter};
+use trace::wrappers::enter::{TraceEnter, BatchEnter,};
 use trace::wrappers::enter_at::TraceEnter as TraceEnterAt;
 use trace::wrappers::enter_at::BatchEnter as BatchEnterAt;
 use trace::wrappers::filter::{TraceFilter, BatchFilter};
@@ -563,15 +563,13 @@ where
                 // Capabilities for the lower envelope of updates in `batcher`.
                 let mut capabilities = Antichain::<Capability<G::Timestamp>>::new();
 
-                let (activator, effort) =
-                if let Some(effort) = self.inner.scope().config().get::<isize>("differential/idle_merge_effort").cloned() {
-                    (Some(self.scope().activator_for(&info.address[..])), Some(effort))
+                let activator = Some(self.scope().activator_for(&info.address[..]));
+                let mut empty_trace = Tr::new(info.clone(), logger.clone(), activator);
+                // If there is default exertion logic set, install it.
+                if let Some(exert_logic) = self.inner.scope().config().get::<trace::ExertionLogic>("differential/default_exert_logic").cloned() {
+                    empty_trace.set_exert_logic(exert_logic);
                 }
-                else {
-                    (None, None)
-                };
 
-                let empty_trace = Tr::new(info.clone(), logger.clone(), activator);
                 let (reader_local, mut writer) = TraceAgent::new(empty_trace, info, logger);
 
                 *reader = Some(reader_local);
@@ -672,9 +670,7 @@ where
                         prev_frontier.extend(input.frontier().frontier().iter().cloned());
                     }
 
-                    if let Some(mut fuel) = effort.clone() {
-                        writer.exert(&mut fuel);
-                    }
+                    writer.exert();
                 }
             })
         };

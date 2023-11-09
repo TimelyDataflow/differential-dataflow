@@ -19,7 +19,7 @@ use timely::dataflow::operators::Capability;
 
 use operators::arrange::{Arranged, ArrangeByKey, ArrangeBySelf, TraceAgent};
 use lattice::Lattice;
-use trace::{Batch, BatchReader, Cursor, Trace, Builder};
+use trace::{Batch, BatchReader, Cursor, Trace, Builder, ExertionLogic};
 use trace::cursor::CursorList;
 use trace::implementations::ord::OrdValSpine as DefaultValTrace;
 use trace::implementations::ord::OrdKeySpine as DefaultKeyTrace;
@@ -351,17 +351,14 @@ where
                     register.get::<::logging::DifferentialEvent>("differential/arrange")
                 };
 
-                // Determine if we should regularly exert the trace maintenance machinery,
-                // and with what amount of effort each time.
-                let (activator, effort) =
-                if let Some(effort) = self.stream.scope().config().get::<isize>("differential/idle_merge_effort").cloned() {
-                    (Some(self.stream.scope().activator_for(&operator_info.address[..])), Some(effort))
+                let activator = Some(self.stream.scope().activator_for(&operator_info.address[..]));
+                let mut empty = T2::new(operator_info.clone(), logger.clone(), activator);
+                // If there is default exert logic set, install it.
+                if let Some(exert_logic) = self.stream.scope().config().get::<ExertionLogic>("differential/default_exert_logic").cloned() {
+                    empty.set_exert_logic(exert_logic);
                 }
-                else {
-                    (None, None)
-                };
 
-                let empty = T2::new(operator_info.clone(), logger.clone(), activator);
+
                 let mut source_trace = self.trace.clone();
 
                 let (mut output_reader, mut output_writer) = TraceAgent::new(empty, operator_info, logger);
@@ -629,9 +626,7 @@ where
                     }
 
                     // Exert trace maintenance if we have been so requested.
-                    if let Some(mut fuel) = effort.clone() {
-                        output_writer.exert(&mut fuel);
-                    }
+                    output_writer.exert();
                 }
             }
         )

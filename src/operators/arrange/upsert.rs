@@ -117,7 +117,7 @@ use timely::dataflow::operators::Capability;
 
 use ::{ExchangeData, Hashable};
 use lattice::Lattice;
-use trace::{Trace, TraceReader, Batch, Cursor};
+use trace::{self, Trace, TraceReader, Batch, Cursor};
 
 use trace::Builder;
 
@@ -165,20 +165,17 @@ where
                 register.get::<::logging::DifferentialEvent>("differential/arrange")
             };
 
-            // Establish compaction effort to apply even without updates.
-            let (activator, effort) =
-            if let Some(effort) = stream.scope().config().get::<isize>("differential/idle_merge_effort").cloned() {
-                (Some(stream.scope().activator_for(&info.address[..])), Some(effort))
-            }
-            else {
-                (None, None)
-            };
-
             // Tracks the lower envelope of times in `priority_queue`.
             let mut capabilities = Antichain::<Capability<G::Timestamp>>::new();
             let mut buffer = Vec::new();
             // Form the trace we will both use internally and publish.
-            let empty_trace = Tr::new(info.clone(), logger.clone(), activator);
+            let activator = Some(stream.scope().activator_for(&info.address[..]));
+            let mut empty_trace = Tr::new(info.clone(), logger.clone(), activator);
+
+            if let Some(exert_logic) = stream.scope().config().get::<trace::ExertionLogic>("differential/default_exert_logic").cloned() {
+                empty_trace.set_exert_logic(exert_logic);
+            }
+
             let (mut reader_local, mut writer) = TraceAgent::new(empty_trace, info, logger);
             // Capture the reader outside the builder scope.
             *reader = Some(reader_local.clone());
@@ -334,9 +331,7 @@ where
                     reader_local.set_physical_compaction(prev_frontier.borrow());
                 }
 
-                if let Some(mut fuel) = effort.clone() {
-                    writer.exert(&mut fuel);
-                }
+                writer.exert();
             }
         })
     };

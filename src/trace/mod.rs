@@ -21,6 +21,9 @@ use timely::progress::Timestamp;
 pub use self::cursor::Cursor;
 pub use self::description::Description;
 
+/// A type used to express how much effort a trace should exert even in the absence of updates.
+pub type ExertionLogic = std::sync::Arc<dyn for<'a> Fn(Box<dyn Iterator<Item=(usize, usize, usize)>+'a>)->Option<usize>+Send+Sync>;
+
 //     The traces and batch and cursors want the flexibility to appear as if they manage certain types of keys and
 //     values and such, while perhaps using other representations, I'm thinking mostly of wrappers around the keys
 //     and vals that change the `Ord` implementation, or stash hash codes, or the like.
@@ -208,8 +211,15 @@ where <Self as TraceReader>::Batch: Batch {
         activator: Option<timely::scheduling::activate::Activator>,
     ) -> Self;
 
-    ///    Exert merge effort, even without updates.
-    fn exert(&mut self, effort: &mut isize);
+    /// Exert merge effort, even without updates.
+    fn exert(&mut self);
+
+    /// Sets the logic for exertion in the absence of updates.
+    ///
+    /// The function receives an iterator over batch levels, from large to small, as triples `(level, count, length)`,
+    /// indicating the level, the number of batches, and their total length in updates. It should return a number of 
+    /// updates to perform, or `None` if no work is required.
+    fn set_exert_logic(&mut self, logic: ExertionLogic);
 
     /// Introduces a batch of updates to the trace.
     ///
