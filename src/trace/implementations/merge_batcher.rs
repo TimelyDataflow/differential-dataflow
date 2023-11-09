@@ -121,15 +121,6 @@ where
     }
 }
 
-
-#[inline]
-unsafe fn push_unchecked<T>(vec: &mut Vec<T>, element: T) {
-    debug_assert!(vec.len() < vec.capacity());
-    let idx = vec.len();
-    vec.set_len(idx + 1);
-    ::std::ptr::write(vec.get_unchecked_mut(idx), element);
-}
-
 pub struct MergeSorter<D: Ord, T: Ord, R: Semigroup> {
     queue: Vec<Vec<Vec<(D, T, R)>>>,    // each power-of-two length list of allocations.
     stash: Vec<Vec<(D, T, R)>>,
@@ -242,14 +233,14 @@ impl<D: Ord, T: Ord, R: Semigroup> MergeSorter<D, T, R> {
                     (&x.0, &x.1).cmp(&(&y.0, &y.1))
                 };
                 match cmp {
-                    Ordering::Less    => { unsafe { push_unchecked(&mut result, head1.pop_front().unwrap()); } }
-                    Ordering::Greater => { unsafe { push_unchecked(&mut result, head2.pop_front().unwrap()); } }
+                    Ordering::Less    => result.push(head1.pop_front().unwrap()),
+                    Ordering::Greater => result.push(head2.pop_front().unwrap()),
                     Ordering::Equal   => {
                         let (data1, time1, mut diff1) = head1.pop_front().unwrap();
                         let (_data2, _time2, diff2) = head2.pop_front().unwrap();
                         diff1.plus_equals(&diff2);
                         if !diff1.is_zero() {
-                            unsafe { push_unchecked(&mut result, (data1, time1, diff1)); }
+                            result.push((data1, time1, diff1));
                         }
                     }
                 }
