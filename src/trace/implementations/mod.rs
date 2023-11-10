@@ -40,7 +40,8 @@
 
 pub mod spine_fueled;
 
-mod merge_batcher;
+pub(crate) mod merge_batcher;
+pub(crate) mod merge_batcher_col;
 
 pub use self::merge_batcher::MergeBatcher as Batcher;
 
