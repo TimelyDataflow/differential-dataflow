@@ -85,7 +85,7 @@ pub trait Layout {
 }
 
 /// A layout that uses vectors
-pub struct Vector<U: Update, O: OrdOffset> {
+pub struct Vector<U: Update, O: OrdOffset = usize> {
     phantom: std::marker::PhantomData<(U, O)>,
 }
 
@@ -99,7 +99,7 @@ impl<U: Update+Clone, O: OrdOffset> Layout for Vector<U, O> {
 }
 
 /// A layout based on timely stacks
-pub struct TStack<U: Update, O: OrdOffset> {
+pub struct TStack<U: Update, O: OrdOffset = usize> {
     phantom: std::marker::PhantomData<(U, O)>,
 }
 
