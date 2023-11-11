@@ -432,12 +432,12 @@ impl<L: Layout> Builder<OrdValBatch<L>> for OrdValBuilder<L> {
 
     fn new() -> Self {
         OrdValBuilder {
-            builder: OrderedBuilder::<<L::Target as Update>::Key, VTDBuilder<L>, L::KeyOffset, L::KeyContainer>::new()
+            builder: <KVTDBuilder<L>>::new()
         }
     }
     fn with_capacity(cap: usize) -> Self {
         OrdValBuilder {
-            builder: <OrderedBuilder::<<L::Target as Update>::Key, VTDBuilder<L>, L::KeyOffset, L::KeyContainer> as TupleBuilder>::with_capacity(cap)
+            builder: <KVTDBuilder<L> as TupleBuilder>::with_capacity(cap)
         }
     }
 
