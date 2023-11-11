@@ -39,7 +39,7 @@ where
 
 impl<K, L, O, C> Trie for OrderedLayer<K, L, O, C>
 where
-    K: Ord+Clone,
+    K: Ord,
     C: BatchContainer<Item=K>+Deref<Target=[K]>,
     L: Trie,
     O: OrdOffset
@@ -76,7 +76,7 @@ where
 /// Assembles a layer of this
 pub struct OrderedBuilder<K, L, O=usize, C=Vec<K>>
 where
-    K: Ord+Clone,
+    K: Ord,
     C: BatchContainer<Item=K>+Deref<Target=[K]>,
     O: OrdOffset
 {
@@ -90,7 +90,7 @@ where
 
 impl<K, L, O, C> Builder for OrderedBuilder<K, L, O, C>
 where
-    K: Ord+Clone,
+    K: Ord,
     C: BatchContainer<Item=K>+Deref<Target=[K]>,
     L: Builder,
     O: OrdOffset
@@ -114,7 +114,7 @@ where
 
 impl<K, L, O, C> MergeBuilder for OrderedBuilder<K, L, O, C>
 where
-    K: Ord+Clone,
+    K: Ord,
     C: BatchContainer<Item=K>+Deref<Target=[K]>,
     L: MergeBuilder,
     O: OrdOffset
@@ -161,7 +161,7 @@ where
 
 impl<K, L, O, C> OrderedBuilder<K, L, O, C>
 where
-    K: Ord+Clone,
+    K: Ord,
     C: BatchContainer<Item=K>+Deref<Target=[K]>,
     L: MergeBuilder,
     O: OrdOffset
@@ -209,7 +209,7 @@ where
 
 impl<K, L, O, C> TupleBuilder for OrderedBuilder<K, L, O, C>
 where
-    K: Ord+Clone,
+    K: Ord,
     C: BatchContainer<Item=K>+Deref<Target=[K]>,
     L: TupleBuilder,
     O: OrdOffset
@@ -251,7 +251,7 @@ pub struct OrderedCursor<L: Trie> {
 
 impl<K, L, O, C> Cursor<OrderedLayer<K, L, O, C>> for OrderedCursor<L>
 where
-    K: Ord+Clone,
+    K: Ord,
     C: BatchContainer<Item=K>+Deref<Target=[K]>,
     L: Trie,
     O: OrdOffset
