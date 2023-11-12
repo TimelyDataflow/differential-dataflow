@@ -70,8 +70,6 @@ pub trait Layout {
     type KeyOffset: OrdOffset;
     /// Offsets to use from vals into updates.
     type ValOffset: OrdOffset;
-    /// Container for updates themselves.
-    type UpdateContainer: BatchContainer<Item=Self::Target>+Deref<Target=[Self::Target]>+RetainFrom<Self::Target>;
     /// Container for update keys.
     type KeyContainer:
         BatchContainer<Item=<Self::Target as Update>::Key>
@@ -93,7 +91,6 @@ impl<U: Update+Clone, O: OrdOffset> Layout for Vector<U, O> {
     type Target = U;
     type KeyOffset = O;
     type ValOffset = O;
-    type UpdateContainer = Vec<U>;
     type KeyContainer = Vec<U::Key>;
     type ValContainer = Vec<U::Val>;
 }
@@ -111,7 +108,6 @@ where
     type Target = U;
     type KeyOffset = O;
     type ValOffset = O;
-    type UpdateContainer = Vec<U>;
     type KeyContainer = TimelyStack<U::Key>;
     type ValContainer = TimelyStack<U::Val>;
 }
