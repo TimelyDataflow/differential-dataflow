@@ -118,13 +118,64 @@ pub trait BatchContainer: Default {
     /// Inserts a borrowed item.
     fn copy(&mut self, item: &Self::Item);
     /// Extends from a slice of items.
-    fn copy_slice(&mut self, slice: &[Self::Item]);
+    fn copy_range(&mut self, other: &Self, start: usize, end: usize);
     /// Creates a new container with sufficient capacity.
     fn with_capacity(size: usize) -> Self;
     /// Reserves additional capacity.
     fn reserve(&mut self, additional: usize);
     /// Creates a new container with sufficient capacity.
     fn merge_capacity(cont1: &Self, cont2: &Self) -> Self;
+
+    /// Roughly the `std::ops::Index` trait.
+    fn index(&self, index: usize) -> &Self::Item;
+    /// Number of elements contained.
+    fn len(&self) -> usize;
+
+
+    /// Reports the number of elements satisfing the predicate.
+    ///
+    /// This methods *relies strongly* on the assumption that the predicate
+    /// stays false once it becomes false, a joint property of the predicate
+    /// and the slice. This allows `advance` to use exponential search to
+    /// count the number of elements in time logarithmic in the result.
+    fn advance<F: Fn(&Self::Item)->bool>(&self, start: usize, end: usize, function: F) -> usize {
+
+        let small_limit = start + 8;
+
+        // Exponential seach if the answer isn't within `small_limit`.
+        if end > small_limit && function(self.index(small_limit)) {
+
+            // start with no advance
+            let mut index = small_limit + 1;
+            if index < end && function(self.index(index)) {
+
+                // advance in exponentially growing steps.
+                let mut step = 1;
+                while index + step < end && function(self.index(index + step)) {
+                    index += step;
+                    step = step << 1;
+                }
+
+                // advance in exponentially shrinking steps.
+                step = step >> 1;
+                while step > 0 {
+                    if index + step < end && function(self.index(index + step)) {
+                        index += step;
+                    }
+                    step = step >> 1;
+                }
+
+                index += 1;
+            }
+
+            index
+        }
+        else {
+            let limit = std::cmp::min(end, small_limit);
+            (start..limit).filter(|x| function(self.index(*x))).count()
+        }
+    }
+
 }
 
 impl<T: Clone> BatchContainer for Vec<T> {
@@ -135,8 +186,8 @@ impl<T: Clone> BatchContainer for Vec<T> {
     fn copy(&mut self, item: &T) {
         self.push(item.clone());
     }
-    fn copy_slice(&mut self, slice: &[T]) {
-        self.extend_from_slice(slice);
+    fn copy_range(&mut self, other: &Self, start: usize, end: usize) {
+        self.extend_from_slice(&other[start .. end]);
     }
     fn with_capacity(size: usize) -> Self {
         Vec::with_capacity(size)
@@ -146,6 +197,12 @@ impl<T: Clone> BatchContainer for Vec<T> {
     }
     fn merge_capacity(cont1: &Self, cont2: &Self) -> Self {
         Vec::with_capacity(cont1.len() + cont2.len())
+    }
+    fn index(&self, index: usize) -> &Self::Item {
+        &self[index]
+    }
+    fn len(&self) -> usize {
+        self.len()
     }
 }
 
@@ -157,7 +214,8 @@ impl<T: Columnation> BatchContainer for TimelyStack<T> {
     fn copy(&mut self, item: &T) {
         self.copy(item);
     }
-    fn copy_slice(&mut self, slice: &[T]) {
+    fn copy_range(&mut self, other: &Self, start: usize, end: usize) {
+        let slice = &other[start .. end];
         self.reserve_items(slice.iter());
         for item in slice.iter() {
             self.copy(item);
@@ -173,49 +231,10 @@ impl<T: Columnation> BatchContainer for TimelyStack<T> {
         new.reserve_regions(std::iter::once(cont1).chain(std::iter::once(cont2)));
         new
     }
-}
-
-
-/// Reports the number of elements satisfing the predicate.
-///
-/// This methods *relies strongly* on the assumption that the predicate
-/// stays false once it becomes false, a joint property of the predicate
-/// and the slice. This allows `advance` to use exponential search to
-/// count the number of elements in time logarithmic in the result.
-pub fn advance<T, F: Fn(&T)->bool>(slice: &[T], function: F) -> usize {
-
-    let small_limit = 8;
-
-    // Exponential seach if the answer isn't within `small_limit`.
-    if slice.len() > small_limit && function(&slice[small_limit]) {
-
-        // start with no advance
-        let mut index = small_limit + 1;
-        if index < slice.len() && function(&slice[index]) {
-
-            // advance in exponentially growing steps.
-            let mut step = 1;
-            while index + step < slice.len() && function(&slice[index + step]) {
-                index += step;
-                step = step << 1;
-            }
-
-            // advance in exponentially shrinking steps.
-            step = step >> 1;
-            while step > 0 {
-                if index + step < slice.len() && function(&slice[index + step]) {
-                    index += step;
-                }
-                step = step >> 1;
-            }
-
-            index += 1;
-        }
-
-        index
+    fn index(&self, index: usize) -> &Self::Item {
+        &self[index]
     }
-    else {
-        let limit = std::cmp::min(slice.len(), small_limit);
-        slice[..limit].iter().filter(|x| function(*x)).count()
+    fn len(&self) -> usize {
+        self[..].len()
     }
 }

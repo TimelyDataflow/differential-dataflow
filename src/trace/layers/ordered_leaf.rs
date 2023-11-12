@@ -2,7 +2,7 @@
 
 use ::difference::Semigroup;
 
-use super::{Trie, Cursor, Builder, MergeBuilder, TupleBuilder, BatchContainer, advance};
+use super::{Trie, Cursor, Builder, MergeBuilder, TupleBuilder, BatchContainer};
 use std::ops::Deref;
 
 /// A layer of unordered values.
@@ -62,7 +62,7 @@ where
     }
     #[inline]
     fn copy_range(&mut self, other: &Self::Trie, lower: usize, upper: usize) {
-        self.vals.copy_slice(&other.vals[lower .. upper]);
+        self.vals.copy_range(&other.vals, lower, upper);
     }
     fn push_merge(&mut self, other1: (&Self::Trie, usize, usize), other2: (&Self::Trie, usize, usize)) -> usize {
 
@@ -77,7 +77,7 @@ where
             match trie1.vals[lower1].0.cmp(&trie2.vals[lower2].0) {
                 ::std::cmp::Ordering::Less => {
                     // determine how far we can advance lower1 until we reach/pass lower2
-                    let step = 1 + advance(&trie1.vals[(1+lower1)..upper1], |x| x.0 < trie2.vals[lower2].0);
+                    let step = 1 + trie1.vals.advance(1+lower1, upper1, |x| x.0 < trie2.vals[lower2].0);
                     let step = std::cmp::min(step, 1000);
                     <OrderedLeafBuilder<K, R, C> as MergeBuilder>::copy_range(self, trie1, lower1, lower1 + step);
                     lower1 += step;
@@ -95,7 +95,7 @@ where
                 }
                 ::std::cmp::Ordering::Greater => {
                     // determine how far we can advance lower2 until we reach/pass lower1
-                    let step = 1 + advance(&trie2.vals[(1+lower2)..upper2], |x| x.0 < trie1.vals[lower1].0);
+                    let step = 1 + trie2.vals.advance(1+lower2, upper2, |x| x.0 < trie1.vals[lower1].0);
                     let step = std::cmp::min(step, 1000);
                     <OrderedLeafBuilder<K, R, C> as MergeBuilder>::copy_range(self, trie2, lower2, lower2 + step);
                     lower2 += step;

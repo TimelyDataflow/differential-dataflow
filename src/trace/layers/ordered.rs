@@ -1,9 +1,9 @@
 //! Implementation using ordered keys and exponential search.
 
-use super::{Trie, Cursor, Builder, MergeBuilder, TupleBuilder, BatchContainer, advance};
+use super::{Trie, Cursor, Builder, MergeBuilder, TupleBuilder, BatchContainer};
 use std::convert::{TryFrom, TryInto};
 use std::fmt::Debug;
-use std::ops::{Sub,Add,Deref};
+use std::ops::{Sub,Add};
 
 /// Trait for types used as offsets into an ordered layer.
 /// This is usually `usize`, but `u32` can also be used in applications
@@ -23,7 +23,7 @@ where
 pub struct OrderedLayer<K, L, O=usize, C=Vec<K>>
 where
     K: Ord,
-    C: BatchContainer<Item=K>+Deref<Target=[K]>,
+    C: BatchContainer<Item=K>,
     O: OrdOffset
 {
     /// The keys of the layer.
@@ -40,7 +40,7 @@ where
 impl<K, L, O, C> Trie for OrderedLayer<K, L, O, C>
 where
     K: Ord,
-    C: BatchContainer<Item=K>+Deref<Target=[K]>,
+    C: BatchContainer<Item=K>,
     L: Trie,
     O: OrdOffset
 {
@@ -77,7 +77,7 @@ where
 pub struct OrderedBuilder<K, L, O=usize, C=Vec<K>>
 where
     K: Ord,
-    C: BatchContainer<Item=K>+Deref<Target=[K]>,
+    C: BatchContainer<Item=K>,
     O: OrdOffset
 {
     /// Keys
@@ -91,7 +91,7 @@ where
 impl<K, L, O, C> Builder for OrderedBuilder<K, L, O, C>
 where
     K: Ord,
-    C: BatchContainer<Item=K>+Deref<Target=[K]>,
+    C: BatchContainer<Item=K>,
     L: Builder,
     O: OrdOffset
 {
@@ -115,7 +115,7 @@ where
 impl<K, L, O, C> MergeBuilder for OrderedBuilder<K, L, O, C>
 where
     K: Ord,
-    C: BatchContainer<Item=K>+Deref<Target=[K]>,
+    C: BatchContainer<Item=K>,
     L: MergeBuilder,
     O: OrdOffset
 {
@@ -134,7 +134,7 @@ where
         let other_basis = other.offs[lower];
         let self_basis = self.offs.last().map(|&x| x).unwrap_or(O::try_from(0).ok().unwrap());
 
-        self.keys.copy_slice(&other.keys[lower .. upper]);
+        self.keys.copy_range(&other.keys, lower, upper);
         for index in lower .. upper {
             self.offs.push((other.offs[index + 1] + self_basis) - other_basis);
         }
@@ -162,7 +162,7 @@ where
 impl<K, L, O, C> OrderedBuilder<K, L, O, C>
 where
     K: Ord,
-    C: BatchContainer<Item=K>+Deref<Target=[K]>,
+    C: BatchContainer<Item=K>,
     L: MergeBuilder,
     O: OrdOffset
 {
@@ -173,10 +173,10 @@ where
         let (trie1, lower1, upper1) = other1;
         let (trie2, lower2, upper2) = other2;
 
-        match trie1.keys[*lower1].cmp(&trie2.keys[*lower2]) {
+        match trie1.keys.index(*lower1).cmp(&trie2.keys.index(*lower2)) {
             ::std::cmp::Ordering::Less => {
                 // determine how far we can advance lower1 until we reach/pass lower2
-                let step = 1 + advance(&trie1.keys[(1 + *lower1)..upper1], |x| x < &trie2.keys[*lower2]);
+                let step = 1 + trie1.keys.advance(1 + *lower1, upper1, |x| x < &trie2.keys.index(*lower2));
                 let step = std::cmp::min(step, 1_000);
                 self.copy_range(trie1, *lower1, *lower1 + step);
                 *lower1 += step;
@@ -189,7 +189,7 @@ where
                     (&trie2.vals, trie2.offs[*lower2].try_into().ok().unwrap(), trie2.offs[*lower2 + 1].try_into().ok().unwrap())
                 );
                 if upper > lower {
-                    self.keys.copy(&trie1.keys[*lower1]);
+                    self.keys.copy(&trie1.keys.index(*lower1));
                     self.offs.push(O::try_from(upper).ok().unwrap());
                 }
 
@@ -198,7 +198,7 @@ where
             },
             ::std::cmp::Ordering::Greater => {
                 // determine how far we can advance lower2 until we reach/pass lower1
-                let step = 1 + advance(&trie2.keys[(1 + *lower2)..upper2], |x| x < &trie1.keys[*lower1]);
+                let step = 1 + trie2.keys.advance(1 + *lower2, upper2, |x| x < &trie1.keys.index(*lower1));
                 let step = std::cmp::min(step, 1_000);
                 self.copy_range(trie2, *lower2, *lower2 + step);
                 *lower2 += step;
@@ -210,7 +210,7 @@ where
 impl<K, L, O, C> TupleBuilder for OrderedBuilder<K, L, O, C>
 where
     K: Ord,
-    C: BatchContainer<Item=K>+Deref<Target=[K]>,
+    C: BatchContainer<Item=K>,
     L: TupleBuilder,
     O: OrdOffset
 {
@@ -229,7 +229,7 @@ where
     fn push_tuple(&mut self, (key, val): (K, L::Item)) {
 
         // if first element, prior element finish, or different element, need to push and maybe punctuate.
-        if self.keys.len() == 0 || self.offs[self.keys.len()].try_into().ok().unwrap() != 0 || self.keys[self.keys.len()-1] != key {
+        if self.keys.len() == 0 || self.offs[self.keys.len()].try_into().ok().unwrap() != 0 || self.keys.index(self.keys.len()-1) != &key {
             if self.keys.len() > 0 && self.offs[self.keys.len()].try_into().ok().unwrap() == 0 {
                 self.offs[self.keys.len()] = O::try_from(self.vals.boundary()).ok().unwrap();
             }
@@ -252,12 +252,12 @@ pub struct OrderedCursor<L: Trie> {
 impl<K, L, O, C> Cursor<OrderedLayer<K, L, O, C>> for OrderedCursor<L>
 where
     K: Ord,
-    C: BatchContainer<Item=K>+Deref<Target=[K]>,
+    C: BatchContainer<Item=K>,
     L: Trie,
     O: OrdOffset
 {
     type Key = K;
-    fn key<'a>(&self, storage: &'a OrderedLayer<K, L, O, C>) -> &'a Self::Key { &storage.keys[self.pos] }
+    fn key<'a>(&self, storage: &'a OrderedLayer<K, L, O, C>) -> &'a Self::Key { &storage.keys.index(self.pos) }
     fn step(&mut self, storage: &OrderedLayer<K, L, O, C>) {
         self.pos += 1;
         if self.valid(storage) {
@@ -268,7 +268,7 @@ where
         }
     }
     fn seek(&mut self, storage: &OrderedLayer<K, L, O, C>, key: &Self::Key) {
-        self.pos += advance(&storage.keys[self.pos .. self.bounds.1], |k| k.lt(key));
+        self.pos += storage.keys.advance(self.pos, self.bounds.1, |k| k.lt(key));
         if self.valid(storage) {
             self.child.reposition(&storage.vals, storage.offs[self.pos].try_into().ok().unwrap(), storage.offs[self.pos + 1].try_into().ok().unwrap());
         }
