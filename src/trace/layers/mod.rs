@@ -119,7 +119,7 @@ pub trait BatchContainer: Default {
     fn copy(&mut self, item: &Self::Item);
     /// Extends from a slice of items.
     fn copy_slice(&mut self, slice: &[Self::Item]);
-    /// Extends from a slice of items.
+    /// Extends from a range of items in another`Self`.
     fn copy_range(&mut self, other: &Self, start: usize, end: usize);
     /// Creates a new container with sufficient capacity.
     fn with_capacity(size: usize) -> Self;
@@ -128,7 +128,7 @@ pub trait BatchContainer: Default {
     /// Creates a new container with sufficient capacity.
     fn merge_capacity(cont1: &Self, cont2: &Self) -> Self;
 
-    /// Reference to element at this position.
+    /// Reference to the element at this position.
     fn index(&self, index: usize) -> &Self::Item;
     /// Number of contained elements
     fn len(&self) -> usize;
@@ -137,7 +137,7 @@ pub trait BatchContainer: Default {
     ///
     /// This methods *relies strongly* on the assumption that the predicate
     /// stays false once it becomes false, a joint property of the predicate
-    /// and the slice. This allows `advance` to use exponential search to
+    /// and the layout of `Self. This allows `advance` to use exponential search to
     /// count the number of elements in time logarithmic in the result.
     fn advance<F: Fn(&Self::Item)->bool>(&self, start: usize, end: usize, function: F) -> usize {
 
@@ -201,8 +201,12 @@ impl<T: Clone> BatchContainer for Vec<T> {
     fn merge_capacity(cont1: &Self, cont2: &Self) -> Self {
         Vec::with_capacity(cont1.len() + cont2.len())
     }
-    fn index(&self, index: usize) -> &Self::Item { &self[index] }
-    fn len(&self) -> usize { self[..].len() }
+    fn index(&self, index: usize) -> &Self::Item {
+        &self[index]
+    }
+    fn len(&self) -> usize {
+        self[..].len()
+    }
 }
 
 impl<T: Columnation> BatchContainer for TimelyStack<T> {
@@ -236,7 +240,10 @@ impl<T: Columnation> BatchContainer for TimelyStack<T> {
         new.reserve_regions(std::iter::once(cont1).chain(std::iter::once(cont2)));
         new
     }
-
-    fn index(&self, index: usize) -> &Self::Item { &self[index] }
-    fn len(&self) -> usize { self[..].len() }
+    fn index(&self, index: usize) -> &Self::Item {
+        &self[index]
+    }
+    fn len(&self) -> usize {
+        self[..].len()
+    }
 }
