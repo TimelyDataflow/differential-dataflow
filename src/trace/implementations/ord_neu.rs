@@ -61,6 +61,9 @@ pub trait Layout {
     /// Container for update vals.
     type ValContainer:
         BatchContainer<Item=<Self::Target as Update>::Val>;
+    /// Container for update vals.
+    type UpdContainer:
+        BatchContainer<Item=(<Self::Target as Update>::Time, <Self::Target as Update>::Diff)>;
 }
 
 /// A layout that uses vectors
@@ -74,6 +77,7 @@ impl<U: Update+Clone, O: OrdOffset> Layout for Vector<U, O> {
     type ValOffset = O;
     type KeyContainer = Vec<U::Key>;
     type ValContainer = Vec<U::Val>;
+    type UpdContainer = Vec<(U::Time, U::Diff)>;
 }
 
 /// A layout based on timely stacks
@@ -85,12 +89,15 @@ impl<U: Update+Clone, O: OrdOffset> Layout for TStack<U, O>
 where
     U::Key: Columnation,
     U::Val: Columnation,
+    U::Time: Columnation,
+    U::Diff: Columnation,
 {
     type Target = U;
     type KeyOffset = O;
     type ValOffset = O;
     type KeyContainer = TimelyStack<U::Key>;
     type ValContainer = TimelyStack<U::Val>;
+    type UpdContainer = TimelyStack<(U::Time, U::Diff)>;
 }
 
 
@@ -143,7 +150,7 @@ mod val_batch {
         /// The length of this list is one longer than `vals`, so that we can avoid bounds logic.
         pub vals_offs: Vec<L::ValOffset>,
         /// Concatenated ordered lists of updates, bracketed by offsets in `vals_offs`.
-        pub updates: Vec<(<L::Target as Update>::Time, <L::Target as Update>::Diff)>,
+        pub updates: L::UpdContainer,
     }
 
     impl<L: Layout> OrdValStorage<L> {
@@ -235,7 +242,7 @@ mod val_batch {
                 keys_offs: Vec::with_capacity(batch1.keys_offs.len() + batch2.keys_offs.len()),
                 vals: L::ValContainer::merge_capacity(&batch1.vals, &batch2.vals),
                 vals_offs: Vec::with_capacity(batch1.vals_offs.len() + batch2.vals_offs.len()),
-                updates: Vec::with_capacity(batch1.updates.len() + batch2.updates.len()),
+                updates: L::UpdContainer::merge_capacity(&batch1.updates, &batch2.updates),
             };
 
             storage.keys_offs.push(0.try_into().ok().unwrap());
@@ -420,7 +427,7 @@ mod val_batch {
             let (lower, upper) = source.updates_for_value(index);
             for i in lower .. upper {
                 // NB: Here is where we would need to look back if `lower == upper`.
-                let (time, diff) = &source.updates[i];
+                let (time, diff) = &source.updates.index(i);
                 use lattice::Lattice;
                 let mut new_time = time.clone();
                 new_time.advance_by(self.description.since().borrow());
@@ -433,7 +440,9 @@ mod val_batch {
             use consolidation;
             consolidation::consolidate(&mut self.update_stash);
             if !self.update_stash.is_empty() {
-                self.result.updates.extend(self.update_stash.drain(..));
+                for item in self.update_stash.drain(..) {
+                    self.result.updates.push(item);
+                }
                 Some(self.result.updates.len().try_into().ok().unwrap())
             } else {
                 None
@@ -464,7 +473,8 @@ mod val_batch {
         fn map_times<L2: FnMut(&Self::Time, &Self::R)>(&mut self, storage: &Self::Storage, mut logic: L2) {
             let (lower, upper) = storage.storage.updates_for_value(self.val_cursor);
             for index in lower .. upper {
-                logic(&storage.storage.updates[index].0, &storage.storage.updates[index].1);
+                let (time, diff) = &storage.storage.updates.index(index);
+                logic(time, diff);
             }
         }
         fn key_valid(&self, storage: &Self::Storage) -> bool { self.key_cursor < storage.storage.keys.len() }
@@ -512,7 +522,7 @@ mod val_batch {
                     keys_offs: Vec::with_capacity(cap),
                     vals: L::ValContainer::with_capacity(cap),
                     vals_offs: Vec::with_capacity(cap),
-                    updates: Vec::with_capacity(cap),
+                    updates: L::UpdContainer::with_capacity(cap),
                 } 
             }
         }
