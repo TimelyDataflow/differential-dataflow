@@ -21,8 +21,8 @@ use operators::arrange::{Arranged, ArrangeByKey, ArrangeBySelf, TraceAgent};
 use lattice::Lattice;
 use trace::{Batch, BatchReader, Cursor, Trace, Builder, ExertionLogic};
 use trace::cursor::CursorList;
-use trace::implementations::ord::OrdValSpine as DefaultValTrace;
-use trace::implementations::ord::OrdKeySpine as DefaultKeyTrace;
+use trace::implementations::OrdValSpine as DefaultValTrace;
+use trace::implementations::OrdKeySpine as DefaultKeyTrace;
 
 use trace::TraceReader;
 
@@ -255,7 +255,7 @@ pub trait ReduceCore<G: Scope, K: Data, V: Data, R: Semigroup> where G::Timestam
     /// use differential_dataflow::input::Input;
     /// use differential_dataflow::operators::reduce::ReduceCore;
     /// use differential_dataflow::trace::Trace;
-    /// use differential_dataflow::trace::implementations::ord::OrdValSpine;
+    /// use differential_dataflow::trace::implementations::OrdValSpine;
     ///
     /// fn main() {
     ///     ::timely::example(|scope| {

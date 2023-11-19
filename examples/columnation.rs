@@ -30,7 +30,7 @@ fn main() {
         let (mut data_input, mut keys_input) = worker.dataflow(|scope| {
 
             use differential_dataflow::operators::{arrange::Arrange, JoinCore};
-            use differential_dataflow::trace::implementations::ord::{OrdKeySpine, ColKeySpine};
+            use differential_dataflow::trace::implementations::{OrdKeySpine, ColKeySpine};
 
             let (data_input, data) = scope.new_collection::<String, isize>();
             let (keys_input, keys) = scope.new_collection::<String, isize>();

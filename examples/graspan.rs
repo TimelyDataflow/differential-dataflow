@@ -71,7 +71,7 @@ pub struct Query {
     pub productions: Vec<Production>,
 }
 
-use differential_dataflow::trace::implementations::ord::{OrdValSpine, OrdKeySpine};
+use differential_dataflow::trace::implementations::{OrdValSpine, OrdKeySpine};
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 
 type TraceKeyHandle<K,T,R> = TraceAgent<OrdKeySpine<K, T, R>>;

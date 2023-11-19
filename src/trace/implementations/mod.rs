@@ -45,4 +45,8 @@ pub(crate) mod merge_batcher_col;
 
 pub use self::merge_batcher::MergeBatcher as Batcher;
 
-pub mod ord;
+mod ord;
+pub mod ord_neu;
+
+pub use self::ord::{OrdKeySpine, ColKeySpine};
+pub use self::ord_neu::{OrdValSpine, ColValSpine};

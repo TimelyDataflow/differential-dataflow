@@ -48,7 +48,7 @@ where
     /// }
     /// ```
     pub fn consolidate(&self) -> Self {
-        use trace::implementations::ord::OrdKeySpine as DefaultKeyTrace;
+        use trace::implementations::OrdKeySpine as DefaultKeyTrace;
         self.consolidate_named::<DefaultKeyTrace<_,_,_>>("Consolidate")
     }
 

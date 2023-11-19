@@ -60,7 +60,7 @@
 //!         worker.dataflow(|scope| {
 //!
 //!             use timely::dataflow::operators::Input;
-//!             use differential_dataflow::trace::implementations::ord::OrdValSpine;
+//!             use differential_dataflow::trace::implementations::OrdValSpine;
 //!             use differential_dataflow::operators::arrange::upsert;
 //!
 //!             let stream = scope.input_from(&mut input);

@@ -86,7 +86,7 @@ where
 
         use crate::operators::reduce::ReduceCore;
         use crate::operators::iterate::SemigroupVariable;
-        use crate::trace::implementations::ord::OrdValSpine as DefaultValTrace;
+        use crate::trace::implementations::OrdValSpine as DefaultValTrace;
 
         use timely::order::Product;
 

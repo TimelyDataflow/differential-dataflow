@@ -140,7 +140,7 @@ where G::Timestamp: Lattice+Ord {
 
         use differential_dataflow::operators::iterate::SemigroupVariable;
         use differential_dataflow::operators::reduce::ReduceCore;
-        use differential_dataflow::trace::implementations::ord::OrdKeySpine as DefaultKeyTrace;
+        use differential_dataflow::trace::implementations::OrdKeySpine as DefaultKeyTrace;
 
 
         use timely::order::Product;
