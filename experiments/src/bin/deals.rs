@@ -11,14 +11,14 @@ use differential_dataflow::input::Input;
 use differential_dataflow::Collection;
 use differential_dataflow::operators::*;
 
-use differential_dataflow::trace::implementations::ord::{OrdValSpine, OrdKeySpine};
+use differential_dataflow::trace::implementations::{ValSpine, KeySpine};
 use differential_dataflow::operators::arrange::TraceAgent;
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::operators::arrange::Arrange;
 use differential_dataflow::operators::iterate::SemigroupVariable;
 use differential_dataflow::difference::Present;
 
-type EdgeArranged<G, K, V, R> = Arranged<G, TraceAgent<OrdValSpine<K, V, <G as ScopeParent>::Timestamp, R, Offs>>>;
+type EdgeArranged<G, K, V, R> = Arranged<G, TraceAgent<ValSpine<K, V, <G as ScopeParent>::Timestamp, R, Offs>>>;
 
 type Node = u32;
 type Edge = (Node, Node);
@@ -47,7 +47,7 @@ fn main() {
             let (input, graph) = scope.new_collection();
 
             // each edge should exist in both directions.
-            let graph = graph.arrange::<OrdValSpine<_,_,_,_,Offs>>();
+            let graph = graph.arrange::<ValSpine<_,_,_,_,Offs>>();
 
             match program.as_str() {
                 "tc"    => tc(&graph).filter(move |_| inspect).map(|_| ()).consolidate().inspect(|x| println!("tc count: {:?}", x)).probe(),
@@ -100,10 +100,10 @@ fn tc<G: Scope<Timestamp=()>>(edges: &EdgeArranged<G, Node, Node, Present>) -> C
             let result =
             inner
                 .map(|(x,y)| (y,x))
-                .arrange::<OrdValSpine<_,_,_,_,Offs>>()
+                .arrange::<ValSpine<_,_,_,_,Offs>>()
                 .join_core(&edges, |_y,&x,&z| Some((x, z)))
                 .concat(&edges.as_collection(|&k,&v| (k,v)))
-                .arrange::<OrdKeySpine<_,_,_,Offs>>()
+                .arrange::<KeySpine<_,_,_,Offs>>()
                 .threshold_semigroup(|_,_,x| if x.is_none() { Some(Present) } else { None })
                 ;
 
@@ -127,12 +127,12 @@ fn sg<G: Scope<Timestamp=()>>(edges: &EdgeArranged<G, Node, Node, Present>) -> C
 
             let result =
             inner
-                .arrange::<OrdValSpine<_,_,_,_,Offs>>()
+                .arrange::<ValSpine<_,_,_,_,Offs>>()
                 .join_core(&edges, |_,&x,&z| Some((x, z)))
-                .arrange::<OrdValSpine<_,_,_,_,Offs>>()
+                .arrange::<ValSpine<_,_,_,_,Offs>>()
                 .join_core(&edges, |_,&x,&z| Some((x, z)))
                 .concat(&peers)
-                .arrange::<OrdKeySpine<_,_,_,Offs>>()
+                .arrange::<KeySpine<_,_,_,Offs>>()
                 .threshold_semigroup(|_,_,x| if x.is_none() { Some(Present) } else { None })
                 ;
 

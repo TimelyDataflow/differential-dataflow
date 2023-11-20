@@ -14,8 +14,6 @@ use differential_dataflow::operators::arrange::ArrangeBySelf;
 use differential_dataflow::operators::count::CountTotal;
 use differential_dataflow::operators::threshold::ThresholdTotal;
 
-// use differential_dataflow::trace::implementations::ord::OrdKeySpine;
-
 #[derive(Debug)]
 enum Comp {
     Nothing,
@@ -65,8 +63,6 @@ fn main() {
                 Comp::Count => data.arrange_by_self().count_total().probe(),
                 Comp::Distinct => data.arrange_by_self().distinct_total().probe(),
             };
-
-            // OrdKeySpine::<usize, Product<RootTimestamp,u64>,isize>::with_effort(work)
 
             (handle, probe)
         });

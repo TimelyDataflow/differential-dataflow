@@ -12,7 +12,7 @@ use timely::logging::TimelyEvent;
 // use timely::dataflow::operators::capture::event::EventIterator;
 
 use differential_dataflow::ExchangeData;
-use differential_dataflow::trace::implementations::ord::{OrdKeySpine, OrdValSpine};
+use differential_dataflow::trace::implementations::{KeySpine, ValSpine};
 use differential_dataflow::operators::arrange::TraceAgent;
 use differential_dataflow::input::InputSession;
 
@@ -21,9 +21,9 @@ use differential_dataflow::logging::DifferentialEvent;
 use crate::{Time, Diff, Plan, Datum};
 
 /// A trace handle for key-only data.
-pub type TraceKeyHandle<K, T, R> = TraceAgent<OrdKeySpine<K, T, R>>;
+pub type TraceKeyHandle<K, T, R> = TraceAgent<KeySpine<K, T, R>>;
 /// A trace handle for key-value data.
-pub type TraceValHandle<K, V, T, R> = TraceAgent<OrdValSpine<K, V, T, R>>;
+pub type TraceValHandle<K, V, T, R> = TraceAgent<ValSpine<K, V, T, R>>;
 /// A key-only trace handle binding `Time` and `Diff` using `Vec<V>` as data.
 pub type KeysOnlyHandle<V> = TraceKeyHandle<Vec<V>, Time, Diff>;
 /// A key-value trace handle binding `Time` and `Diff` using `Vec<V>` as data.

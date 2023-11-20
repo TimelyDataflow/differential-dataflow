@@ -10,108 +10,17 @@
 
 use std::rc::Rc;
 
-use timely::container::columnation::TimelyStack;
-use timely::container::columnation::Columnation;
-
-use ::difference::Semigroup;
-use lattice::Lattice;
-
-use trace::layers::BatchContainer;
-use trace::layers::ordered::OrdOffset;
 use trace::implementations::spine_fueled::Spine;
 
+use super::{Update, Layout, Vector, TStack};
+
 use self::val_batch::{OrdValBatch};
-
-/// A type that names constituent update types.
-pub trait Update {
-    /// Key by which data are grouped.
-    type Key: Ord+Clone;
-    /// Values associated with the key.
-    type Val: Ord+Clone;
-    /// Time at which updates occur.
-    type Time: Ord+Lattice+timely::progress::Timestamp+Clone;
-    /// Way in which updates occur.
-    type Diff: Semigroup+Clone;
-}
-
-impl<K,V,T,R> Update for ((K, V), T, R)
-where
-    K: Ord+Clone,
-    V: Ord+Clone,
-    T: Ord+Lattice+timely::progress::Timestamp+Clone,
-    R: Semigroup+Clone,
-{
-    type Key = K;
-    type Val = V;
-    type Time = T;
-    type Diff = R;
-}
-
-/// A type with opinions on how updates should be laid out.
-pub trait Layout {
-    /// The represented update.
-    type Target: Update;
-    /// Offsets to use from keys into vals.
-    type KeyOffset: OrdOffset;
-    /// Offsets to use from vals into updates.
-    type ValOffset: OrdOffset;
-    /// Container for update keys.
-    type KeyContainer:
-        BatchContainer<Item=<Self::Target as Update>::Key>;
-    /// Container for update vals.
-    type ValContainer:
-        BatchContainer<Item=<Self::Target as Update>::Val>;
-    /// Container for update vals.
-    type UpdContainer:
-        BatchContainer<Item=(<Self::Target as Update>::Time, <Self::Target as Update>::Diff)>;
-}
-
-/// A layout that uses vectors
-pub struct Vector<U: Update, O: OrdOffset = usize> {
-    phantom: std::marker::PhantomData<(U, O)>,
-}
-
-impl<U: Update+Clone, O: OrdOffset> Layout for Vector<U, O> {
-    type Target = U;
-    type KeyOffset = O;
-    type ValOffset = O;
-    type KeyContainer = Vec<U::Key>;
-    type ValContainer = Vec<U::Val>;
-    type UpdContainer = Vec<(U::Time, U::Diff)>;
-}
-
-/// A layout based on timely stacks
-pub struct TStack<U: Update, O: OrdOffset = usize> {
-    phantom: std::marker::PhantomData<(U, O)>,
-}
-
-impl<U: Update+Clone, O: OrdOffset> Layout for TStack<U, O>
-where
-    U::Key: Columnation,
-    U::Val: Columnation,
-    U::Time: Columnation,
-    U::Diff: Columnation,
-{
-    type Target = U;
-    type KeyOffset = O;
-    type ValOffset = O;
-    type KeyContainer = TimelyStack<U::Key>;
-    type ValContainer = TimelyStack<U::Val>;
-    type UpdContainer = TimelyStack<(U::Time, U::Diff)>;
-}
 
 
 /// A trace implementation using a spine of ordered lists.
 pub type OrdValSpine<K, V, T, R, O=usize> = Spine<Rc<OrdValBatch<Vector<((K,V),T,R), O>>>>;
-
-// /// A trace implementation using a spine of abomonated ordered lists.
-// pub type OrdValSpineAbom<K, V, T, R, O=usize> = Spine<Rc<Abomonated<OrdValBatch<Vector<((K,V),T,R), O>>, Vec<u8>>>>;
-
 // /// A trace implementation for empty values using a spine of ordered lists.
 // pub type OrdKeySpine<K, T, R, O=usize> = Spine<Rc<OrdKeyBatch<Vector<((K,()),T,R), O>>>>;
-
-// /// A trace implementation for empty values using a spine of abomonated ordered lists.
-// pub type OrdKeySpineAbom<K, T, R, O=usize> = Spine<Rc<Abomonated<OrdKeyBatch<Vector<((K,()),T,R), O>>, Vec<u8>>>>;
 
 /// A trace implementation backed by columnar storage.
 pub type ColValSpine<K, V, T, R, O=usize> = Spine<Rc<OrdValBatch<TStack<((K,V),T,R), O>>>>;

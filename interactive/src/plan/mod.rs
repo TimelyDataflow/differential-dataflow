@@ -158,7 +158,7 @@ impl<V: ExchangeData+Hash+Datum> Render for Plan<V> {
 
                     use differential_dataflow::operators::reduce::ReduceCore;
                     use differential_dataflow::operators::arrange::ArrangeBySelf;
-                    use differential_dataflow::trace::implementations::ord::OrdKeySpine;
+                    use differential_dataflow::trace::implementations::KeySpine;
 
                     let input =
                     if let Some(mut trace) = arrangements.get_unkeyed(&self) {
@@ -170,7 +170,7 @@ impl<V: ExchangeData+Hash+Datum> Render for Plan<V> {
                         input_arrangement
                     };
 
-                    let output = input.reduce_abelian::<_,OrdKeySpine<_,_,_>>("Distinct", move |_,_,t| t.push(((), 1)));
+                    let output = input.reduce_abelian::<_,KeySpine<_,_,_>>("Distinct", move |_,_,t| t.push(((), 1)));
 
                     arrangements.set_unkeyed(&self, &output.trace);
                     output.as_collection(|k,&()| k.clone())

@@ -103,9 +103,9 @@ impl<G: Scope, R: Monoid+Multiply<Output = R>, P, E> ValidateExtensionMethod<G, 
 }
 
 // These are all defined here so that users can be assured a common layout.
-use differential_dataflow::trace::implementations::ord::{OrdKeySpine, OrdValSpine};
-type TraceValHandle<K,V,T,R> = TraceAgent<OrdValSpine<K,V,T,R>>;
-type TraceKeyHandle<K,T,R> = TraceAgent<OrdKeySpine<K,T,R>>;
+use differential_dataflow::trace::implementations::{KeySpine, ValSpine};
+type TraceValHandle<K,V,T,R> = TraceAgent<ValSpine<K,V,T,R>>;
+type TraceKeyHandle<K,T,R> = TraceAgent<KeySpine<K,T,R>>;
 
 pub struct CollectionIndex<K, V, T, R>
 where
