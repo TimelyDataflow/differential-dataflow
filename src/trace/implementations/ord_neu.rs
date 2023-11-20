@@ -485,7 +485,6 @@ mod val_batch {
                     self.result.updates.push(time_diff);
                 }
                 self.result.updates.push((time, diff));
-                self.singleton = None;
             }
         }
     }
