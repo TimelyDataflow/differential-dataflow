@@ -73,8 +73,7 @@ impl<B: Batch> Batcher<B> for ColumnatedMergeBatcher<B>
 
         self.frontier.clear();
 
-        for mut buffer in merged.drain(..) {
-            let mut last: Option<&((_, _), _, _)> = None;
+        for buffer in merged.drain(..) {
             for datum @ ((key, val), time, diff) in &buffer[..] {
                 if upper.less_equal(time) {
                     self.frontier.insert(time.clone());
@@ -87,13 +86,8 @@ impl<B: Batch> Batcher<B> for ColumnatedMergeBatcher<B>
                 else {
                     builder.push((key.clone(), val.clone(), time.clone(), diff.clone()));
                 }
-                if let Some(last) = last {
-                    assert!(last <= datum);
-                }
-                last = Some(datum);
             }
             // Recycling buffer.
-            buffer.clear();
             self.sorter.recycle(buffer);
         }
 
@@ -124,9 +118,15 @@ struct TimelyStackQueue<T: Columnation> {
     head: usize,
 }
 
-impl<T: Columnation + 'static> TimelyStackQueue<T> {
+impl<T: Columnation> Default for TimelyStackQueue<T> {
+    fn default() -> Self {
+        Self::empty()
+    }
+}
 
-    fn new() -> Self { TimelyStackQueue::from(Default::default()) }
+impl<T: Columnation> TimelyStackQueue<T> {
+
+    fn empty() -> Self { TimelyStackQueue::from(Default::default()) }
 
     fn pop(&mut self) -> &T {
         self.head += 1;
@@ -149,13 +149,11 @@ impl<T: Columnation + 'static> TimelyStackQueue<T> {
         self.list
     }
 
-    fn len(&self) -> usize { self.list.len() - self.head }
-
-    fn is_empty(&self) -> bool { self.head == self.list.len() }
+    fn is_empty(&self) -> bool { self.head == self.list[..].len() }
 
     /// Return an iterator over the remaining elements.
     fn iter(&self) -> impl Iterator<Item=&T> + Clone + ExactSizeIterator {
-        self.list.iter().skip(self.head)
+        self.list[self.head..].iter()
     }
 }
 
@@ -181,6 +179,11 @@ impl<D: Ord+Clone+Columnation+'static, T: Ord+Clone+Columnation+'static, R: Semi
         }
     }
 
+    /// Buffer size for pending updates, currently 2 * [`Self::buffer_size`].
+    const fn pending_buffer_size() -> usize {
+        Self::buffer_size() * 2
+    }
+
     fn new() -> Self {
         Self {
             queue: Vec::new(),
@@ -199,16 +202,17 @@ impl<D: Ord+Clone+Columnation+'static, T: Ord+Clone+Columnation+'static, R: Semi
     }
 
     /// Insert an empty buffer into the stash. Panics if the buffer is not empty.
-    fn recycle(&mut self, buffer: TimelyStack<(D, T, R)>) {
-        assert!(buffer.is_empty());
+    fn recycle(&mut self, mut buffer: TimelyStack<(D, T, R)>) {
         if buffer.capacity() == Self::buffer_size() {
+            buffer.clear();
             self.stash.push(buffer);
         }
     }
 
     fn push(&mut self, batch: &mut Vec<(D, T, R)>) {
-        if self.pending.capacity() == 0 {
-            self.pending.reserve(Self::buffer_size());
+        // Ensure `self.pending` has a capacity of `Self::pending_buffer_size`.
+        if self.pending.capacity() < Self::pending_buffer_size() {
+            self.pending.reserve(Self::pending_buffer_size() - self.pending.capacity());
         }
 
         while !batch.is_empty() {
@@ -216,6 +220,7 @@ impl<D: Ord+Clone+Columnation+'static, T: Ord+Clone+Columnation+'static, R: Semi
             if self.pending.len() == self.pending.capacity() {
                 crate::consolidation::consolidate_updates(&mut self.pending);
                 if self.pending.len() > self.pending.capacity() / 2 {
+                    // Flush if `self.pending` is more than half full after consolidation.
                     self.flush_pending();
                 }
             }
@@ -223,15 +228,14 @@ impl<D: Ord+Clone+Columnation+'static, T: Ord+Clone+Columnation+'static, R: Semi
     }
 
     /// Move all elements in `pending` into `queue`. The data in `pending` must be compacted and
-    /// sorted.
+    /// sorted. After this function returns, `self.pending` is empty.
     fn flush_pending(&mut self) {
         if !self.pending.is_empty() {
             let mut stack = self.empty();
             stack.reserve_items(self.pending.iter());
-            for tuple in self.pending.iter() {
-                stack.copy(tuple);
+            for tuple in self.pending.drain(..) {
+                stack.copy(&tuple);
             }
-            self.pending.clear();
             self.queue.push(vec![stack]);
             while self.queue.len() > 1 && (self.queue[self.queue.len()-1].len() >= self.queue[self.queue.len()-2].len() / 2) {
                 let list1 = self.queue.pop().unwrap();
@@ -278,11 +282,11 @@ impl<D: Ord+Clone+Columnation+'static, T: Ord+Clone+Columnation+'static, R: Semi
         let mut output = Vec::with_capacity(list1.len() + list2.len());
         let mut result = self.empty();
 
-        let mut list1 = list1.into_iter().peekable();
-        let mut list2 = list2.into_iter().peekable();
+        let mut list1 = list1.into_iter();
+        let mut list2 = list2.into_iter();
 
-        let mut head1 = if list1.peek().is_some() { TimelyStackQueue::from(list1.next().unwrap()) } else { TimelyStackQueue::new() };
-        let mut head2 = if list2.peek().is_some() { TimelyStackQueue::from(list2.next().unwrap()) } else { TimelyStackQueue::new() };
+        let mut head1 = list1.next().map(TimelyStackQueue::from).unwrap_or_default();
+        let mut head2 = list2.next().map(TimelyStackQueue::from).unwrap_or_default();
 
         // while we have valid data in each input, merge.
         while !head1.is_empty() && !head2.is_empty() {
@@ -315,14 +319,12 @@ impl<D: Ord+Clone+Columnation+'static, T: Ord+Clone+Columnation+'static, R: Semi
             }
 
             if head1.is_empty() {
-                let done1 = head1.done();
-                self.recycle(done1);
-                head1 = if list1.peek().is_some() { TimelyStackQueue::from(list1.next().unwrap()) } else { TimelyStackQueue::new() };
+                self.recycle(head1.done());
+                head1 = list1.next().map(TimelyStackQueue::from).unwrap_or_default();
             }
             if head2.is_empty() {
-                let done2 = head2.done();
-                self.recycle(done2);
-                head2 = if list2.peek().is_some() { TimelyStackQueue::from(list2.next().unwrap()) } else { TimelyStackQueue::new() };
+                self.recycle(head2.done());
+                head2 = list2.next().map(TimelyStackQueue::from).unwrap_or_default();
             }
         }
 
@@ -335,7 +337,7 @@ impl<D: Ord+Clone+Columnation+'static, T: Ord+Clone+Columnation+'static, R: Semi
         if !head1.is_empty() {
             let mut result = self.empty();
             result.reserve_items(head1.iter());
-            for _ in 0 .. head1.len() { result.copy(head1.pop()); }
+            for item in head1.iter() { result.copy(item); }
             output.push(result);
         }
         output.extend(list1);
@@ -343,7 +345,7 @@ impl<D: Ord+Clone+Columnation+'static, T: Ord+Clone+Columnation+'static, R: Semi
         if !head2.is_empty() {
             let mut result = self.empty();
             result.reserve_items(head2.iter());
-            for _ in 0 .. head2.len() { result.copy(head2.pop()); }
+            for item in head2.iter() { result.copy(item); }
             output.push(result);
         }
         output.extend(list2);

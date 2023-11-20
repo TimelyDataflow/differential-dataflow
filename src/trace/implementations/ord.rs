@@ -160,6 +160,9 @@ impl<T: Columnation> RetainFrom<T> for TimelyStack<T> {
 }
 
 /// An immutable collection of update tuples, from a contiguous interval of logical times.
+///
+/// The `L` parameter captures the updates should be laid out, and `C` determines which
+/// merge batcher to select.
 #[derive(Abomonation)]
 pub struct OrdValBatch<L: Layout, C> {
     /// Where all the dataz is.
