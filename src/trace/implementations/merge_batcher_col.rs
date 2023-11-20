@@ -120,13 +120,11 @@ struct TimelyStackQueue<T: Columnation> {
 
 impl<T: Columnation> Default for TimelyStackQueue<T> {
     fn default() -> Self {
-        Self::empty()
+        Self::from(Default::default())
     }
 }
 
 impl<T: Columnation> TimelyStackQueue<T> {
-
-    fn empty() -> Self { TimelyStackQueue::from(Default::default()) }
 
     fn pop(&mut self) -> &T {
         self.head += 1;
@@ -145,7 +143,6 @@ impl<T: Columnation> TimelyStackQueue<T> {
     }
 
     fn done(mut self) -> TimelyStack<T> {
-        self.list.clear();
         self.list
     }
 
@@ -285,8 +282,8 @@ impl<D: Ord+Clone+Columnation+'static, T: Ord+Clone+Columnation+'static, R: Semi
         let mut list1 = list1.into_iter();
         let mut list2 = list2.into_iter();
 
-        let mut head1 = list1.next().map(TimelyStackQueue::from).unwrap_or_default();
-        let mut head2 = list2.next().map(TimelyStackQueue::from).unwrap_or_default();
+        let mut head1 = TimelyStackQueue::from(list1.next().unwrap_or_default());
+        let mut head2 = TimelyStackQueue::from(list2.next().unwrap_or_default());
 
         // while we have valid data in each input, merge.
         while !head1.is_empty() && !head2.is_empty() {
@@ -320,11 +317,11 @@ impl<D: Ord+Clone+Columnation+'static, T: Ord+Clone+Columnation+'static, R: Semi
 
             if head1.is_empty() {
                 self.recycle(head1.done());
-                head1 = list1.next().map(TimelyStackQueue::from).unwrap_or_default();
+                head1 = TimelyStackQueue::from(list1.next().unwrap_or_default());
             }
             if head2.is_empty() {
                 self.recycle(head2.done());
-                head2 = list2.next().map(TimelyStackQueue::from).unwrap_or_default();
+                head2 = TimelyStackQueue::from(list2.next().unwrap_or_default());
             }
         }
 
