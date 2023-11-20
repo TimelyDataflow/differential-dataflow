@@ -547,6 +547,7 @@ mod val_batch {
                 } else {
                     // New value; complete representation of prior value.
                     self.result.vals_offs.push(self.result.updates.len().try_into().ok().unwrap());
+                    // Remove any pending singleton, and if it was set increment our count.
                     if self.singleton.take().is_some() { self.singletons += 1; }
                     self.push_update(time.clone(), diff.clone());
                     self.result.vals.copy(val);
@@ -554,6 +555,7 @@ mod val_batch {
             } else {
                 // New key; complete representation of prior key.
                 self.result.vals_offs.push(self.result.updates.len().try_into().ok().unwrap());
+                // Remove any pending singleton, and if it was set increment our count.
                 if self.singleton.take().is_some() { self.singletons += 1; }
                 self.result.keys_offs.push(self.result.vals.len().try_into().ok().unwrap());
                 self.push_update(time.clone(), diff.clone());
@@ -565,8 +567,10 @@ mod val_batch {
         #[inline(never)]
         fn done(mut self, lower: Antichain<<L::Target as Update>::Time>, upper: Antichain<<L::Target as Update>::Time>, since: Antichain<<L::Target as Update>::Time>) -> OrdValBatch<L> {
             // Record the final offsets
-            self.result.keys_offs.push(self.result.vals.len().try_into().ok().unwrap());
             self.result.vals_offs.push(self.result.updates.len().try_into().ok().unwrap());
+            // Remove any pending singleton, and if it was set increment our count.
+            if self.singleton.take().is_some() { self.singletons += 1; }
+            self.result.keys_offs.push(self.result.vals.len().try_into().ok().unwrap());
             OrdValBatch {
                 updates: self.result.updates.len() + self.singletons,
                 storage: self.result,
