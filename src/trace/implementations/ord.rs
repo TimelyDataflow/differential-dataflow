@@ -363,6 +363,10 @@ where
         self.builder.push_tuple((key, (val, (time, diff))));
     }
 
+    fn copy(&mut self, (key, val, time, diff): (&<OrdValBatch<L, C> as BatchReader>::Key, &<OrdValBatch<L, C> as BatchReader>::Val, &<OrdValBatch<L, C> as BatchReader>::Time, &<OrdValBatch<L, C> as BatchReader>::R)) {
+        self.builder.push_tuple((key.clone(), (val.clone(), (time.clone(), diff.clone()))));
+    }
+
     #[inline(never)]
     fn done(self, lower: Antichain<<OrdValBatch<L, C> as BatchReader>::Time>, upper: Antichain<<OrdValBatch<L, C> as BatchReader>::Time>, since: Antichain<<OrdValBatch<L, C> as BatchReader>::Time>) -> OrdValBatch<L, C> {
         OrdValBatch {
@@ -656,6 +660,11 @@ where
     #[inline]
     fn push(&mut self, (key, _, time, diff): (<L::Target as Update>::Key, (), <L::Target as Update>::Time, <L::Target as Update>::Diff)) {
         self.builder.push_tuple((key, (time, diff)));
+    }
+
+    #[inline]
+    fn copy(&mut self, (key, _, time, diff): (&<L::Target as Update>::Key, &(), &<L::Target as Update>::Time, &<L::Target as Update>::Diff)) {
+        self.builder.push_tuple((key.clone(), (time.clone(), diff.clone())));
     }
 
     #[inline(never)]
