@@ -86,7 +86,7 @@ where
 
         use crate::operators::reduce::ReduceCore;
         use crate::operators::iterate::SemigroupVariable;
-        use crate::trace::implementations::ord::OrdValSpine as DefaultValTrace;
+        use crate::trace::implementations::ValSpine;
 
         use timely::order::Product;
 
@@ -98,7 +98,7 @@ where
         let labels =
         proposals
             .concat(&nodes)
-            .reduce_abelian::<_,DefaultValTrace<_,_,_,_>>("Propagate", |_, s, t| t.push((s[0].0.clone(), R::from(1 as i8))));
+            .reduce_abelian::<_,ValSpine<_,_,_,_>>("Propagate", |_, s, t| t.push((s[0].0.clone(), R::from(1 as i8))));
 
         let propagate: Collection<_, (N, L), R> =
         labels

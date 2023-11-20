@@ -208,7 +208,6 @@ where
     /// use differential_dataflow::operators::arrange::ArrangeBySelf;
     /// use differential_dataflow::operators::reduce::Reduce;
     /// use differential_dataflow::trace::Trace;
-    /// use differential_dataflow::trace::implementations::ord::OrdValSpine;
     ///
     /// fn main() {
     ///     ::timely::execute(Config::thread(), |worker| {
@@ -267,7 +266,6 @@ where
     /// use differential_dataflow::operators::arrange::ArrangeBySelf;
     /// use differential_dataflow::operators::reduce::Reduce;
     /// use differential_dataflow::trace::Trace;
-    /// use differential_dataflow::trace::implementations::ord::OrdValSpine;
     ///
     /// fn main() {
     ///     ::timely::execute(Config::thread(), |worker| {
@@ -380,7 +378,6 @@ where
     /// use differential_dataflow::operators::reduce::Reduce;
     /// use differential_dataflow::trace::Trace;
     /// use differential_dataflow::trace::TraceReader;
-    /// use differential_dataflow::trace::implementations::ord::OrdValSpine;
     /// use differential_dataflow::input::Input;
     ///
     /// fn main() {

@@ -60,11 +60,11 @@
 //!         worker.dataflow(|scope| {
 //!
 //!             use timely::dataflow::operators::Input;
-//!             use differential_dataflow::trace::implementations::ord::OrdValSpine;
+//!             use differential_dataflow::trace::implementations::ValSpine;
 //!             use differential_dataflow::operators::arrange::upsert;
 //!
 //!             let stream = scope.input_from(&mut input);
-//!             let arranged = upsert::arrange_from_upsert::<_, OrdValSpine<Key, Val, _, _>>(&stream, &"test");
+//!             let arranged = upsert::arrange_from_upsert::<_, ValSpine<Key, Val, _, _>>(&stream, &"test");
 //!
 //!             arranged
 //!                 .as_collection(|k,v| (k.clone(), v.clone()))

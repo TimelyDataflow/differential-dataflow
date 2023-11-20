@@ -142,7 +142,7 @@ impl<T: Columnation> TimelyStackQueue<T> {
         }
     }
 
-    fn done(mut self) -> TimelyStack<T> {
+    fn done(self) -> TimelyStack<T> {
         self.list
     }
 

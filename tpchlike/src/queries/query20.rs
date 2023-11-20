@@ -4,7 +4,7 @@ use timely::dataflow::operators::probe::Handle as ProbeHandle;
 
 use differential_dataflow::operators::*;
 use differential_dataflow::operators::reduce::ReduceCore;
-use differential_dataflow::trace::implementations::ord::OrdValSpine as DefaultValTrace;
+use differential_dataflow::trace::implementations::ValSpine;
 use differential_dataflow::lattice::Lattice;
 
 use {Arrangements, Experiment, Collections};
@@ -77,7 +77,7 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
         )
         .semijoin(&partkeys)
         .explode(|l| Some(((((l.0 as u64) << 32) + (l.1).0 as u64, ()), (l.1).1 as isize)))
-        .reduce_abelian::<_,DefaultValTrace<_,_,_,_>>("Reduce", |_k,s,t| t.push((s[0].1, 1)));
+        .reduce_abelian::<_,ValSpine<_,_,_,_>>("Reduce", |_k,s,t| t.push((s[0].1, 1)));
 
     let suppliers =
     collections

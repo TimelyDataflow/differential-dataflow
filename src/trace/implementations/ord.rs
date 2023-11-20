@@ -17,13 +17,12 @@ use timely::container::columnation::TimelyStack;
 use timely::container::columnation::Columnation;
 use timely::progress::{Antichain, frontier::AntichainRef};
 
-use ::difference::Semigroup;
 use lattice::Lattice;
 
 use trace::layers::{Trie, TupleBuilder, BatchContainer};
 use trace::layers::Builder as TrieBuilder;
 use trace::layers::Cursor as TrieCursor;
-use trace::layers::ordered::{OrdOffset, OrderedLayer, OrderedBuilder, OrderedCursor};
+use trace::layers::ordered::{OrderedLayer, OrderedBuilder, OrderedCursor};
 use trace::layers::ordered_leaf::{OrderedLeaf, OrderedLeafBuilder};
 use trace::{Batch, BatchReader, Builder, Merger, Cursor};
 use trace::description::Description;
@@ -36,80 +35,9 @@ use super::merge_batcher::MergeBatcher;
 
 use abomonation::abomonated::Abomonated;
 use trace::implementations::merge_batcher_col::ColumnatedMergeBatcher;
+use trace::implementations::RetainFrom;
 
-/// A type that names constituent update types.
-pub trait Update {
-    /// Key by which data are grouped.
-    type Key: Ord+Clone;
-    /// Values associated with the key.
-    type Val: Ord+Clone;
-    /// Time at which updates occur.
-    type Time: Lattice+timely::progress::Timestamp;
-    /// Way in which updates occur.
-    type Diff: Semigroup+Clone;
-}
-
-impl<K,V,T,R> Update for ((K, V), T, R)
-where
-    K: Ord+Clone,
-    V: Ord+Clone,
-    T: Ord+Lattice+timely::progress::Timestamp+Clone,
-    R: Semigroup+Clone,
-{
-    type Key = K;
-    type Val = V;
-    type Time = T;
-    type Diff = R;
-}
-
-/// A type with opinions on how updates should be laid out.
-pub trait Layout {
-    /// The represented update.
-    type Target: Update;
-    /// Offsets to use from keys into vals.
-    type KeyOffset: OrdOffset;
-    /// Offsets to use from vals into updates.
-    type ValOffset: OrdOffset;
-    /// Container for update keys.
-    type KeyContainer:
-        BatchContainer<Item=<Self::Target as Update>::Key>
-       +RetainFrom<<Self::Target as Update>::Key>;
-    /// Container for update vals.
-    type ValContainer:
-        BatchContainer<Item=<Self::Target as Update>::Val>
-       +RetainFrom<<Self::Target as Update>::Val>;
-}
-
-/// A layout that uses vectors
-pub struct Vector<U: Update, O: OrdOffset = usize> {
-    phantom: std::marker::PhantomData<(U, O)>,
-}
-
-impl<U: Update+Clone, O: OrdOffset> Layout for Vector<U, O> {
-    type Target = U;
-    type KeyOffset = O;
-    type ValOffset = O;
-    type KeyContainer = Vec<U::Key>;
-    type ValContainer = Vec<U::Val>;
-}
-
-/// A layout based on timely stacks
-pub struct TStack<U: Update, O: OrdOffset = usize> {
-    phantom: std::marker::PhantomData<(U, O)>,
-}
-
-impl<U: Update+Clone, O: OrdOffset> Layout for TStack<U, O>
-where
-    U::Key: Columnation,
-    U::Val: Columnation,
-{
-    type Target = U;
-    type KeyOffset = O;
-    type ValOffset = O;
-    type KeyContainer = TimelyStack<U::Key>;
-    type ValContainer = TimelyStack<U::Val>;
-}
-
+use super::{Update, Layout, Vector, TStack};
 
 /// A trace implementation using a spine of ordered lists.
 pub type OrdValSpine<K, V, T, R, O=usize> = Spine<Rc<OrdValBatch<Vector<((K,V),T,R), O>, Vec<((K,V),T,R)>>>>;
@@ -127,37 +55,6 @@ pub type OrdKeySpineAbom<K, T, R, O=usize> = Spine<Rc<Abomonated<OrdKeyBatch<Vec
 pub type ColValSpine<K, V, T, R, O=usize> = Spine<Rc<OrdValBatch<TStack<((K,V),T,R), O>, TimelyStack<((K,V),T,R)>>>>;
 /// A trace implementation backed by columnar storage.
 pub type ColKeySpine<K, T, R, O=usize> = Spine<Rc<OrdKeyBatch<TStack<((K,()),T,R), O>, TimelyStack<((K,()),T,R)>>>>;
-
-
-/// A container that can retain/discard from some offset onward.
-pub trait RetainFrom<T> {
-    /// Retains elements from an index onwards that satisfy a predicate.
-    fn retain_from<P: FnMut(usize, &T)->bool>(&mut self, index: usize, predicate: P);
-}
-
-impl<T> RetainFrom<T> for Vec<T> {
-    fn retain_from<P: FnMut(usize, &T)->bool>(&mut self, index: usize, mut predicate: P) {
-        let mut write_position = index;
-        for position in index .. self.len() {
-            if predicate(position, &self[position]) {
-                self.swap(position, write_position);
-                write_position += 1;
-            }
-        }
-        self.truncate(write_position);
-    }
-}
-
-impl<T: Columnation> RetainFrom<T> for TimelyStack<T> {
-    fn retain_from<P: FnMut(usize, &T)->bool>(&mut self, index: usize, mut predicate: P) {
-        let mut position = index;
-        self.retain_from(index, |item| {
-            let result = predicate(position, item);
-            position += 1;
-            result
-        })
-    }
-}
 
 /// An immutable collection of update tuples, from a contiguous interval of logical times.
 ///

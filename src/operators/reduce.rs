@@ -21,8 +21,7 @@ use operators::arrange::{Arranged, ArrangeByKey, ArrangeBySelf, TraceAgent};
 use lattice::Lattice;
 use trace::{Batch, BatchReader, Cursor, Trace, Builder, ExertionLogic};
 use trace::cursor::CursorList;
-use trace::implementations::ord::OrdValSpine as DefaultValTrace;
-use trace::implementations::ord::OrdKeySpine as DefaultKeyTrace;
+use trace::implementations::{KeySpine, ValSpine};
 
 use trace::TraceReader;
 
@@ -93,7 +92,7 @@ where
 {
     fn reduce_named<L, V2: Data, R2: Abelian>(&self, name: &str, logic: L) -> Collection<G, (K, V2), R2>
         where L: FnMut(&K, &[(&V, R)], &mut Vec<(V2, R2)>)+'static {
-        self.reduce_abelian::<_,DefaultValTrace<_,_,_,_>>(name, logic)
+        self.reduce_abelian::<_,ValSpine<_,_,_,_>>(name, logic)
             .as_collection(|k,v| (k.clone(), v.clone()))
     }
 }
@@ -179,7 +178,7 @@ where
     T1: TraceReader<Key=K, Val=(), Time=G::Timestamp, R=R1>+Clone+'static,
 {
     fn threshold_named<R2: Abelian, F: FnMut(&K,&R1)->R2+'static>(&self, name: &str, mut thresh: F) -> Collection<G, K, R2> {
-        self.reduce_abelian::<_,DefaultKeyTrace<_,_,_>>(name, move |k,s,t| t.push(((), thresh(k, &s[0].1))))
+        self.reduce_abelian::<_,KeySpine<_,_,_>>(name, move |k,s,t| t.push(((), thresh(k, &s[0].1))))
             .as_collection(|k,_| k.clone())
     }
 }
@@ -234,7 +233,7 @@ where
     T1: TraceReader<Key=K, Val=(), Time=G::Timestamp, R=R>+Clone+'static,
 {
     fn count_core<R2: Abelian + From<i8>>(&self) -> Collection<G, (K, R), R2> {
-        self.reduce_abelian::<_,DefaultValTrace<_,_,_,_>>("Count", |_k,s,t| t.push((s[0].1.clone(), R2::from(1i8))))
+        self.reduce_abelian::<_,ValSpine<_,_,_,_>>("Count", |_k,s,t| t.push((s[0].1.clone(), R2::from(1i8))))
             .as_collection(|k,c| (k.clone(), c.clone()))
     }
 }
@@ -255,7 +254,7 @@ pub trait ReduceCore<G: Scope, K: Data, V: Data, R: Semigroup> where G::Timestam
     /// use differential_dataflow::input::Input;
     /// use differential_dataflow::operators::reduce::ReduceCore;
     /// use differential_dataflow::trace::Trace;
-    /// use differential_dataflow::trace::implementations::ord::OrdValSpine;
+    /// use differential_dataflow::trace::implementations::ValSpine;
     ///
     /// fn main() {
     ///     ::timely::example(|scope| {
@@ -263,7 +262,7 @@ pub trait ReduceCore<G: Scope, K: Data, V: Data, R: Semigroup> where G::Timestam
     ///         let trace =
     ///         scope.new_collection_from(1 .. 10u32).1
     ///              .map(|x| (x, x))
-    ///              .reduce_abelian::<_,OrdValSpine<_,_,_,_>>(
+    ///              .reduce_abelian::<_,ValSpine<_,_,_,_>>(
     ///                 "Example",
     ///                  move |_key, src, dst| dst.push((*src[0].0, 1))
     ///              )

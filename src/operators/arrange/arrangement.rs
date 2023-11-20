@@ -30,8 +30,7 @@ use ::{Data, ExchangeData, Collection, AsCollection, Hashable};
 use ::difference::Semigroup;
 use lattice::Lattice;
 use trace::{self, Trace, TraceReader, Batch, BatchReader, Batcher, Cursor};
-use trace::implementations::ord::OrdValSpine as DefaultValTrace;
-use trace::implementations::ord::OrdKeySpine as DefaultKeyTrace;
+use trace::implementations::{KeySpine, ValSpine};
 
 use trace::wrappers::enter::{TraceEnter, BatchEnter,};
 use trace::wrappers::enter_at::TraceEnter as TraceEnterAt;
@@ -706,21 +705,21 @@ where G::Timestamp: Lattice+Ord {
     /// This operator arranges a stream of values into a shared trace, whose contents it maintains.
     /// This trace is current for all times completed by the output stream, which can be used to
     /// safely identify the stable times and values in the trace.
-    fn arrange_by_key(&self) -> Arranged<G, TraceAgent<DefaultValTrace<K, V, G::Timestamp, R>>>;
+    fn arrange_by_key(&self) -> Arranged<G, TraceAgent<ValSpine<K, V, G::Timestamp, R>>>;
 
     /// As `arrange_by_key` but with the ability to name the arrangement.
-    fn arrange_by_key_named(&self, name: &str) -> Arranged<G, TraceAgent<DefaultValTrace<K, V, G::Timestamp, R>>>;
+    fn arrange_by_key_named(&self, name: &str) -> Arranged<G, TraceAgent<ValSpine<K, V, G::Timestamp, R>>>;
 }
 
 impl<G: Scope, K: ExchangeData+Hashable, V: ExchangeData, R: ExchangeData+Semigroup> ArrangeByKey<G, K, V, R> for Collection<G, (K,V), R>
 where
     G::Timestamp: Lattice+Ord
 {
-    fn arrange_by_key(&self) -> Arranged<G, TraceAgent<DefaultValTrace<K, V, G::Timestamp, R>>> {
+    fn arrange_by_key(&self) -> Arranged<G, TraceAgent<ValSpine<K, V, G::Timestamp, R>>> {
         self.arrange_by_key_named("ArrangeByKey")
     }
 
-    fn arrange_by_key_named(&self, name: &str) -> Arranged<G, TraceAgent<DefaultValTrace<K, V, G::Timestamp, R>>> {
+    fn arrange_by_key_named(&self, name: &str) -> Arranged<G, TraceAgent<ValSpine<K, V, G::Timestamp, R>>> {
         self.arrange_named(name)
     }
 }
@@ -739,10 +738,10 @@ where
     /// This operator arranges a collection of records into a shared trace, whose contents it maintains.
     /// This trace is current for all times complete in the output stream, which can be used to safely
     /// identify the stable times and values in the trace.
-    fn arrange_by_self(&self) -> Arranged<G, TraceAgent<DefaultKeyTrace<K, G::Timestamp, R>>>;
+    fn arrange_by_self(&self) -> Arranged<G, TraceAgent<KeySpine<K, G::Timestamp, R>>>;
 
     /// As `arrange_by_self` but with the ability to name the arrangement.
-    fn arrange_by_self_named(&self, name: &str) -> Arranged<G, TraceAgent<DefaultKeyTrace<K, G::Timestamp, R>>>;
+    fn arrange_by_self_named(&self, name: &str) -> Arranged<G, TraceAgent<KeySpine<K, G::Timestamp, R>>>;
 }
 
 
@@ -750,11 +749,11 @@ impl<G: Scope, K: ExchangeData+Hashable, R: ExchangeData+Semigroup> ArrangeBySel
 where
     G::Timestamp: Lattice+Ord
 {
-    fn arrange_by_self(&self) -> Arranged<G, TraceAgent<DefaultKeyTrace<K, G::Timestamp, R>>> {
+    fn arrange_by_self(&self) -> Arranged<G, TraceAgent<KeySpine<K, G::Timestamp, R>>> {
         self.arrange_by_self_named("ArrangeBySelf")
     }
 
-    fn arrange_by_self_named(&self, name: &str) -> Arranged<G, TraceAgent<DefaultKeyTrace<K, G::Timestamp, R>>> {
+    fn arrange_by_self_named(&self, name: &str) -> Arranged<G, TraceAgent<KeySpine<K, G::Timestamp, R>>> {
         self.map(|k| (k, ()))
             .arrange_named(name)
     }

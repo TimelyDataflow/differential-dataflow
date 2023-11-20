@@ -132,6 +132,15 @@ pub trait BatchContainer: Default {
     fn index(&self, index: usize) -> &Self::Item;
     /// Number of contained elements
     fn len(&self) -> usize;
+    /// Returns the last item if the container is non-empty.
+    fn last(&self) -> Option<&Self::Item> {
+        if self.len() > 0 {
+            Some(self.index(self.len()-1))
+        }
+        else {
+            None
+        }
+    }
     
     /// Reports the number of elements satisfing the predicate.
     ///

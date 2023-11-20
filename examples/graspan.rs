@@ -71,11 +71,11 @@ pub struct Query {
     pub productions: Vec<Production>,
 }
 
-use differential_dataflow::trace::implementations::ord::{OrdValSpine, OrdKeySpine};
+use differential_dataflow::trace::implementations::{ValSpine, KeySpine};
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 
-type TraceKeyHandle<K,T,R> = TraceAgent<OrdKeySpine<K, T, R>>;
-type TraceValHandle<K,V,T,R> = TraceAgent<OrdValSpine<K, V, T, R>>;
+type TraceKeyHandle<K,T,R> = TraceAgent<KeySpine<K, T, R>>;
+type TraceValHandle<K,V,T,R> = TraceAgent<ValSpine<K, V, T, R>>;
 type Arrange<G,K,V,R> = Arranged<G, TraceValHandle<K, V, <G as ScopeParent>::Timestamp, R>>;
 
 /// An evolving set of edges.
