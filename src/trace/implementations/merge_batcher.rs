@@ -121,7 +121,7 @@ where
     }
 }
 
-pub struct MergeSorter<D: Ord, T: Ord, R: Semigroup> {
+struct MergeSorter<D: Ord, T: Ord, R: Semigroup> {
     queue: Vec<Vec<Vec<(D, T, R)>>>,    // each power-of-two length list of allocations.
     stash: Vec<Vec<(D, T, R)>>,
 }
@@ -282,39 +282,4 @@ impl<D: Ord, T: Ord, R: Semigroup> MergeSorter<D, T, R> {
 
         output
     }
-}
-
-/// Reports the number of elements satisfing the predicate.
-///
-/// This methods *relies strongly* on the assumption that the predicate
-/// stays false once it becomes false, a joint property of the predicate
-/// and the slice. This allows `advance` to use exponential search to
-/// count the number of elements in time logarithmic in the result.
-#[inline]
-pub fn _advance<T, F: Fn(&T)->bool>(slice: &[T], function: F) -> usize {
-
-    // start with no advance
-    let mut index = 0;
-    if index < slice.len() && function(&slice[index]) {
-
-        // advance in exponentially growing steps.
-        let mut step = 1;
-        while index + step < slice.len() && function(&slice[index + step]) {
-            index += step;
-            step = step << 1;
-        }
-
-        // advance in exponentially shrinking steps.
-        step = step >> 1;
-        while step > 0 {
-            if index + step < slice.len() && function(&slice[index + step]) {
-                index += step;
-            }
-            step = step >> 1;
-        }
-
-        index += 1;
-    }
-
-    index
 }
