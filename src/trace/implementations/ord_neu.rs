@@ -109,7 +109,7 @@ mod val_batch {
         type Builder = OrdValBuilder<L>;
         type Merger = OrdValMerger<L>;
 
-        fn begin_merge(&self, other: &Self, compaction_frontier: Option<AntichainRef<<L::Target as Update>::Time>>) -> Self::Merger {
+        fn begin_merge(&self, other: &Self, compaction_frontier: AntichainRef<<L::Target as Update>::Time>) -> Self::Merger {
             OrdValMerger::new(self, other, compaction_frontier)
         }
     }
@@ -133,14 +133,13 @@ mod val_batch {
     }
 
     impl<L: Layout> Merger<OrdValBatch<L>> for OrdValMerger<L> {
-        fn new(batch1: &OrdValBatch<L>, batch2: &OrdValBatch<L>, compaction_frontier: Option<AntichainRef<<L::Target as Update>::Time>>) -> Self {
+        fn new(batch1: &OrdValBatch<L>, batch2: &OrdValBatch<L>, compaction_frontier: AntichainRef<<L::Target as Update>::Time>) -> Self {
 
             assert!(batch1.upper() == batch2.lower());
             use lattice::Lattice;
             let mut since = batch1.description().since().join(batch2.description().since());
-            if let Some(compaction_frontier) = compaction_frontier {
-                since = since.join(&compaction_frontier.to_owned());
-            }
+            since = since.join(&compaction_frontier.to_owned());
+
             let description = Description::new(batch1.lower().clone(), batch2.upper().clone(), since);
 
             let batch1 = &batch1.storage;

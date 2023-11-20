@@ -675,7 +675,7 @@ where
                         complete: None,
                     }
                 ));
-                let compaction_frontier = Some(self.logical_frontier.borrow());
+                let compaction_frontier = self.logical_frontier.borrow();
                 self.merging[index] = MergeState::begin_merge(old, batch, compaction_frontier);
             }
             MergeState::Double(_) => {
@@ -869,7 +869,7 @@ impl<B: Batch> MergeState<B> where B::Time: Eq {
     /// empty batch whose upper and lower froniers are equal. This
     /// option exists purely for bookkeeping purposes, and no computation
     /// is performed to merge the two batches.
-    fn begin_merge(batch1: Option<B>, batch2: Option<B>, compaction_frontier: Option<AntichainRef<B::Time>>) -> MergeState<B> {
+    fn begin_merge(batch1: Option<B>, batch2: Option<B>, compaction_frontier: AntichainRef<B::Time>) -> MergeState<B> {
         let variant =
         match (batch1, batch2) {
             (Some(batch1), Some(batch2)) => {

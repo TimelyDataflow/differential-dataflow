@@ -288,7 +288,7 @@ pub trait Batch : BatchReader where Self: ::std::marker::Sized {
     /// The result of this method can be exercised to eventually produce the same result
     /// that a call to `self.merge(other)` would produce, but it can be done in a measured
     /// fashion. This can help to avoid latency spikes where a large merge needs to happen.
-    fn begin_merge(&self, other: &Self, compaction_frontier: Option<AntichainRef<Self::Time>>) -> Self::Merger {
+    fn begin_merge(&self, other: &Self, compaction_frontier: AntichainRef<Self::Time>) -> Self::Merger {
         Self::Merger::new(self, other, compaction_frontier)
     }
     /// Creates an empty batch with the stated bounds.
@@ -329,7 +329,7 @@ pub trait Builder<Output: Batch> {
 pub trait Merger<Output: Batch> {
     /// Creates a new merger to merge the supplied batches, optionally compacting
     /// up to the supplied frontier.
-    fn new(source1: &Output, source2: &Output, compaction_frontier: Option<AntichainRef<Output::Time>>) -> Self;
+    fn new(source1: &Output, source2: &Output, compaction_frontier: AntichainRef<Output::Time>) -> Self;
     /// Perform some amount of work, decrementing `fuel`.
     ///
     /// If `fuel` is non-zero after the call, the merging is complete and
@@ -449,7 +449,7 @@ pub mod rc_blanket_impls {
 
     /// Represents a merge in progress.
     impl<B:Batch> Merger<Rc<B>> for RcMerger<B> {
-        fn new(source1: &Rc<B>, source2: &Rc<B>, compaction_frontier: Option<AntichainRef<B::Time>>) -> Self { RcMerger { merger: B::begin_merge(source1, source2, compaction_frontier) } }
+        fn new(source1: &Rc<B>, source2: &Rc<B>, compaction_frontier: AntichainRef<B::Time>) -> Self { RcMerger { merger: B::begin_merge(source1, source2, compaction_frontier) } }
         fn work(&mut self, source1: &Rc<B>, source2: &Rc<B>, fuel: &mut isize) { self.merger.work(source1, source2, fuel) }
         fn done(self) -> Rc<B> { Rc::new(self.merger.done()) }
     }
@@ -575,7 +575,7 @@ pub mod abomonated_blanket_impls {
 
     /// Represents a merge in progress.
     impl<B:Batch+Abomonation> Merger<Abomonated<B,Vec<u8>>> for AbomonatedMerger<B> {
-        fn new(source1: &Abomonated<B,Vec<u8>>, source2: &Abomonated<B,Vec<u8>>, compaction_frontier: Option<AntichainRef<B::Time>>) -> Self {
+        fn new(source1: &Abomonated<B,Vec<u8>>, source2: &Abomonated<B,Vec<u8>>, compaction_frontier: AntichainRef<B::Time>) -> Self {
             AbomonatedMerger { merger: B::begin_merge(source1, source2, compaction_frontier) }
         }
         fn work(&mut self, source1: &Abomonated<B,Vec<u8>>, source2: &Abomonated<B,Vec<u8>>, fuel: &mut isize) {
