@@ -473,9 +473,9 @@ mod val_batch {
         fn copy(&mut self, (key, val, time, diff): (&<L::Target as Update>::Key, &<L::Target as Update>::Val, &<L::Target as Update>::Time, &<L::Target as Update>::Diff)) {
 
             // Perhaps this is a continuation of an already received key.
-            if self.result.keys.last() == Some(&key) {
+            if self.result.keys.last() == Some(key) {
                 // Perhaps this is a continuation of an already received value.
-                if self.result.vals.last() == Some(&val) {
+                if self.result.vals.last() == Some(val) {
                     // TODO: here we could look for repetition, and not push the update in that case.
                     // More logic (and state) would be required to correctly wrangle this.
                     self.result.updates.push((time.clone(), diff.clone()));
