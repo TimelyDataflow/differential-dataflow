@@ -109,7 +109,7 @@ mod val_batch {
         type Builder = OrdValBuilder<L>;
         type Merger = OrdValMerger<L>;
 
-        fn begin_merge(&self, other: &Self, compaction_frontier: Option<AntichainRef<<L::Target as Update>::Time>>) -> Self::Merger {
+        fn begin_merge(&self, other: &Self, compaction_frontier: AntichainRef<<L::Target as Update>::Time>) -> Self::Merger {
             OrdValMerger::new(self, other, compaction_frontier)
         }
     }
@@ -133,14 +133,13 @@ mod val_batch {
     }
 
     impl<L: Layout> Merger<OrdValBatch<L>> for OrdValMerger<L> {
-        fn new(batch1: &OrdValBatch<L>, batch2: &OrdValBatch<L>, compaction_frontier: Option<AntichainRef<<L::Target as Update>::Time>>) -> Self {
+        fn new(batch1: &OrdValBatch<L>, batch2: &OrdValBatch<L>, compaction_frontier: AntichainRef<<L::Target as Update>::Time>) -> Self {
 
             assert!(batch1.upper() == batch2.lower());
             use lattice::Lattice;
             let mut since = batch1.description().since().join(batch2.description().since());
-            if let Some(compaction_frontier) = compaction_frontier {
-                since = since.join(&compaction_frontier.to_owned());
-            }
+            since = since.join(&compaction_frontier.to_owned());
+
             let description = Description::new(batch1.lower().clone(), batch2.upper().clone(), since);
 
             let batch1 = &batch1.storage;
@@ -467,6 +466,32 @@ mod val_batch {
                 self.result.updates.push((time, diff));
                 self.result.vals.push(val);
                 self.result.keys.push(key);
+            }
+        }
+
+        #[inline]
+        fn copy(&mut self, (key, val, time, diff): (&<L::Target as Update>::Key, &<L::Target as Update>::Val, &<L::Target as Update>::Time, &<L::Target as Update>::Diff)) {
+
+            // Perhaps this is a continuation of an already received key.
+            if self.result.keys.last() == Some(key) {
+                // Perhaps this is a continuation of an already received value.
+                if self.result.vals.last() == Some(val) {
+                    // TODO: here we could look for repetition, and not push the update in that case.
+                    // More logic (and state) would be required to correctly wrangle this.
+                    self.result.updates.push((time.clone(), diff.clone()));
+                } else {
+                    // New value; complete representation of prior value.
+                    self.result.vals_offs.push(self.result.updates.len().try_into().ok().unwrap());
+                    self.result.updates.push((time.clone(), diff.clone()));
+                    self.result.vals.copy(val);
+                }
+            } else {
+                // New key; complete representation of prior key.
+                self.result.vals_offs.push(self.result.updates.len().try_into().ok().unwrap());
+                self.result.keys_offs.push(self.result.vals.len().try_into().ok().unwrap());
+                self.result.updates.push((time.clone(), diff.clone()));
+                self.result.vals.copy(val);
+                self.result.keys.copy(key);
             }
         }
 

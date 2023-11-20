@@ -98,7 +98,7 @@ impl<L: Layout> Batch for OrdValBatch<L, Vec<L::Target>>
     type Builder = OrdValBuilder<L>;
     type Merger = OrdValMerger<L>;
 
-    fn begin_merge(&self, other: &Self, compaction_frontier: Option<AntichainRef<<L::Target as Update>::Time>>) -> Self::Merger {
+    fn begin_merge(&self, other: &Self, compaction_frontier: AntichainRef<<L::Target as Update>::Time>) -> Self::Merger {
         OrdValMerger::new(self, other, compaction_frontier)
     }
 }
@@ -115,7 +115,7 @@ where
     type Builder = OrdValBuilder<L>;
     type Merger = OrdValMerger<L>;
 
-    fn begin_merge(&self, other: &Self, compaction_frontier: Option<AntichainRef<<L::Target as Update>::Time>>) -> Self::Merger {
+    fn begin_merge(&self, other: &Self, compaction_frontier: AntichainRef<<L::Target as Update>::Time>) -> Self::Merger {
         OrdValMerger::new(self, other, compaction_frontier)
     }
 }
@@ -220,21 +220,18 @@ pub struct OrdValMerger<L: Layout> {
     // result that we are currently assembling.
     result: <KVTDLayer<L> as Trie>::MergeBuilder,
     description: Description<<L::Target as Update>::Time>,
-    should_compact: bool,
 }
 
 impl<L: Layout, C> Merger<OrdValBatch<L, C>> for OrdValMerger<L>
 where
     OrdValBatch<L, C>: Batch<Time=<L::Target as Update>::Time>
 {
-    fn new(batch1: &OrdValBatch<L, C>, batch2: &OrdValBatch<L, C>, compaction_frontier: Option<AntichainRef<<OrdValBatch<L, C> as BatchReader>::Time>>) -> Self {
+    fn new(batch1: &OrdValBatch<L, C>, batch2: &OrdValBatch<L, C>, compaction_frontier: AntichainRef<<OrdValBatch<L, C> as BatchReader>::Time>) -> Self {
 
         assert!(batch1.upper() == batch2.lower());
 
         let mut since = batch1.description().since().join(batch2.description().since());
-        if let Some(compaction_frontier) = compaction_frontier {
-            since = since.join(&compaction_frontier.to_owned());
-        }
+        since = since.join(&compaction_frontier.to_owned());
 
         let description = Description::new(batch1.lower().clone(), batch2.upper().clone(), since);
 
@@ -245,7 +242,6 @@ where
             upper2: batch2.layer.keys(),
             result: <<KVTDLayer<L> as Trie>::MergeBuilder as MergeBuilder>::with_capacity(&batch1.layer, &batch2.layer),
             description: description,
-            should_compact: compaction_frontier.is_some(),
         }
     }
     fn done(self) -> OrdValBatch<L, C> {
@@ -297,9 +293,7 @@ where
         effort = (self.result.vals.vals.vals.len() - starting_updates) as isize;
 
         // if we are supplied a frontier, we should compact.
-        if self.should_compact {
-            OrdValBatch::<L, C>::advance_builder_from(&mut self.result, self.description.since().borrow(), initial_key_pos);
-        }
+        OrdValBatch::<L, C>::advance_builder_from(&mut self.result, self.description.since().borrow(), initial_key_pos);
 
         *fuel -= effort;
 
@@ -369,6 +363,10 @@ where
         self.builder.push_tuple((key, (val, (time, diff))));
     }
 
+    fn copy(&mut self, (key, val, time, diff): (&<OrdValBatch<L, C> as BatchReader>::Key, &<OrdValBatch<L, C> as BatchReader>::Val, &<OrdValBatch<L, C> as BatchReader>::Time, &<OrdValBatch<L, C> as BatchReader>::R)) {
+        self.builder.push_tuple((key.clone(), (val.clone(), (time.clone(), diff.clone()))));
+    }
+
     #[inline(never)]
     fn done(self, lower: Antichain<<OrdValBatch<L, C> as BatchReader>::Time>, upper: Antichain<<OrdValBatch<L, C> as BatchReader>::Time>, since: Antichain<<OrdValBatch<L, C> as BatchReader>::Time>) -> OrdValBatch<L, C> {
         OrdValBatch {
@@ -416,7 +414,7 @@ impl<L: Layout> Batch for OrdKeyBatch<L, Vec<L::Target>> {
     type Builder = OrdKeyBuilder<L>;
     type Merger = OrdKeyMerger<L>;
 
-    fn begin_merge(&self, other: &Self, compaction_frontier: Option<AntichainRef<<L::Target as Update>::Time>>) -> Self::Merger {
+    fn begin_merge(&self, other: &Self, compaction_frontier: AntichainRef<<L::Target as Update>::Time>) -> Self::Merger {
         OrdKeyMerger::new(self, other, compaction_frontier)
     }
 }
@@ -432,7 +430,7 @@ where
     type Builder = OrdKeyBuilder<L>;
     type Merger = OrdKeyMerger<L>;
 
-    fn begin_merge(&self, other: &Self, compaction_frontier: Option<AntichainRef<<L::Target as Update>::Time>>) -> Self::Merger {
+    fn begin_merge(&self, other: &Self, compaction_frontier: AntichainRef<<L::Target as Update>::Time>) -> Self::Merger {
         OrdKeyMerger::new(self, other, compaction_frontier)
     }
 }
@@ -511,21 +509,18 @@ pub struct OrdKeyMerger<L: Layout> {
     // result that we are currently assembling.
     result: <KTDLayer<L> as Trie>::MergeBuilder,
     description: Description<<L::Target as Update>::Time>,
-    should_compact: bool,
 }
 
 impl<L: Layout, C> Merger<OrdKeyBatch<L, C>> for OrdKeyMerger<L>
 where
     OrdKeyBatch<L, C>: Batch<Time=<L::Target as Update>::Time>
 {
-    fn new(batch1: &OrdKeyBatch<L, C>, batch2: &OrdKeyBatch<L, C>, compaction_frontier: Option<AntichainRef<<L::Target as Update>::Time>>) -> Self {
+    fn new(batch1: &OrdKeyBatch<L, C>, batch2: &OrdKeyBatch<L, C>, compaction_frontier: AntichainRef<<L::Target as Update>::Time>) -> Self {
 
         assert!(batch1.upper() == batch2.lower());
 
         let mut since = batch1.description().since().join(batch2.description().since());
-        if let Some(compaction_frontier) = compaction_frontier {
-            since = since.join(&compaction_frontier.to_owned());
-        }
+        since = since.join(&compaction_frontier.to_owned());
 
         let description = Description::new(batch1.lower().clone(), batch2.upper().clone(), since);
 
@@ -536,7 +531,6 @@ where
             upper2: batch2.layer.keys(),
             result: <<KTDLayer<L> as Trie>::MergeBuilder as MergeBuilder>::with_capacity(&batch1.layer, &batch2.layer),
             description: description,
-            should_compact: compaction_frontier.is_some(),
         }
     }
     fn done(self) -> OrdKeyBatch<L, C> {
@@ -594,9 +588,7 @@ where
         effort = (self.result.vals.vals.len() - starting_updates) as isize;
 
         // if we are supplied a frontier, we should compact.
-        if self.should_compact {
-            OrdKeyBatch::<L, C>::advance_builder_from(&mut self.result, self.description.since().borrow(), initial_key_pos);
-        }
+        OrdKeyBatch::<L, C>::advance_builder_from(&mut self.result, self.description.since().borrow(), initial_key_pos);
 
         *fuel -= effort;
 
@@ -668,6 +660,11 @@ where
     #[inline]
     fn push(&mut self, (key, _, time, diff): (<L::Target as Update>::Key, (), <L::Target as Update>::Time, <L::Target as Update>::Diff)) {
         self.builder.push_tuple((key, (time, diff)));
+    }
+
+    #[inline]
+    fn copy(&mut self, (key, _, time, diff): (&<L::Target as Update>::Key, &(), &<L::Target as Update>::Time, &<L::Target as Update>::Diff)) {
+        self.builder.push_tuple((key.clone(), (time.clone(), diff.clone())));
     }
 
     #[inline(never)]

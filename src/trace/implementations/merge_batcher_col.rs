@@ -84,7 +84,7 @@ impl<B: Batch> Batcher<B> for ColumnatedMergeBatcher<B>
                     keep.copy(datum);
                 }
                 else {
-                    builder.push((key.clone(), val.clone(), time.clone(), diff.clone()));
+                    builder.copy((key, val, time, diff));
                 }
             }
             // Recycling buffer.

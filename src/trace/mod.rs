@@ -288,7 +288,7 @@ pub trait Batch : BatchReader where Self: ::std::marker::Sized {
     /// The result of this method can be exercised to eventually produce the same result
     /// that a call to `self.merge(other)` would produce, but it can be done in a measured
     /// fashion. This can help to avoid latency spikes where a large merge needs to happen.
-    fn begin_merge(&self, other: &Self, compaction_frontier: Option<AntichainRef<Self::Time>>) -> Self::Merger {
+    fn begin_merge(&self, other: &Self, compaction_frontier: AntichainRef<Self::Time>) -> Self::Merger {
         Self::Merger::new(self, other, compaction_frontier)
     }
     /// Creates an empty batch with the stated bounds.
@@ -316,7 +316,14 @@ pub trait Builder<Output: Batch> {
     /// Allocates an empty builder with some capacity.
     fn with_capacity(cap: usize) -> Self;
     /// Adds an element to the batch.
-    fn push(&mut self, element: (Output::Key, Output::Val, Output::Time, Output::R));
+    ///
+    /// The default implementation uses `self.copy` with references to the owned arguments.
+    /// One should override it if the builder can take advantage of owned arguments.
+    fn push(&mut self, element: (Output::Key, Output::Val, Output::Time, Output::R)) {
+        self.copy((&element.0, &element.1, &element.2, &element.3));
+    }
+    /// Adds an element to the batch.
+    fn copy(&mut self, element: (&Output::Key, &Output::Val, &Output::Time, &Output::R));
     /// Adds an ordered sequence of elements to the batch.
     fn extend<I: Iterator<Item=(Output::Key,Output::Val,Output::Time,Output::R)>>(&mut self, iter: I) {
         for item in iter { self.push(item); }
@@ -329,7 +336,7 @@ pub trait Builder<Output: Batch> {
 pub trait Merger<Output: Batch> {
     /// Creates a new merger to merge the supplied batches, optionally compacting
     /// up to the supplied frontier.
-    fn new(source1: &Output, source2: &Output, compaction_frontier: Option<AntichainRef<Output::Time>>) -> Self;
+    fn new(source1: &Output, source2: &Output, compaction_frontier: AntichainRef<Output::Time>) -> Self;
     /// Perform some amount of work, decrementing `fuel`.
     ///
     /// If `fuel` is non-zero after the call, the merging is complete and
@@ -441,6 +448,7 @@ pub mod rc_blanket_impls {
         fn new() -> Self { RcBuilder { builder: <B::Builder as Builder<B>>::new() } }
         fn with_capacity(cap: usize) -> Self { RcBuilder { builder: <B::Builder as Builder<B>>::with_capacity(cap) } }
         fn push(&mut self, element: (B::Key, B::Val, B::Time, B::R)) { self.builder.push(element) }
+        fn copy(&mut self, element: (&B::Key, &B::Val, &B::Time, &B::R)) { self.builder.copy(element) }
         fn done(self, lower: Antichain<B::Time>, upper: Antichain<B::Time>, since: Antichain<B::Time>) -> Rc<B> { Rc::new(self.builder.done(lower, upper, since)) }
     }
 
@@ -449,7 +457,7 @@ pub mod rc_blanket_impls {
 
     /// Represents a merge in progress.
     impl<B:Batch> Merger<Rc<B>> for RcMerger<B> {
-        fn new(source1: &Rc<B>, source2: &Rc<B>, compaction_frontier: Option<AntichainRef<B::Time>>) -> Self { RcMerger { merger: B::begin_merge(source1, source2, compaction_frontier) } }
+        fn new(source1: &Rc<B>, source2: &Rc<B>, compaction_frontier: AntichainRef<B::Time>) -> Self { RcMerger { merger: B::begin_merge(source1, source2, compaction_frontier) } }
         fn work(&mut self, source1: &Rc<B>, source2: &Rc<B>, fuel: &mut isize) { self.merger.work(source1, source2, fuel) }
         fn done(self) -> Rc<B> { Rc::new(self.merger.done()) }
     }
@@ -562,6 +570,7 @@ pub mod abomonated_blanket_impls {
         fn new() -> Self { AbomonatedBuilder { builder: <B::Builder as Builder<B>>::new() } }
         fn with_capacity(cap: usize) -> Self { AbomonatedBuilder { builder: <B::Builder as Builder<B>>::with_capacity(cap) } }
         fn push(&mut self, element: (B::Key, B::Val, B::Time, B::R)) { self.builder.push(element) }
+        fn copy(&mut self, element: (&B::Key, &B::Val, &B::Time, &B::R)) { self.builder.copy(element) }
         fn done(self, lower: Antichain<B::Time>, upper: Antichain<B::Time>, since: Antichain<B::Time>) -> Abomonated<B, Vec<u8>> {
             let batch = self.builder.done(lower, upper, since);
             let mut bytes = Vec::with_capacity(measure(&batch));
@@ -575,7 +584,7 @@ pub mod abomonated_blanket_impls {
 
     /// Represents a merge in progress.
     impl<B:Batch+Abomonation> Merger<Abomonated<B,Vec<u8>>> for AbomonatedMerger<B> {
-        fn new(source1: &Abomonated<B,Vec<u8>>, source2: &Abomonated<B,Vec<u8>>, compaction_frontier: Option<AntichainRef<B::Time>>) -> Self {
+        fn new(source1: &Abomonated<B,Vec<u8>>, source2: &Abomonated<B,Vec<u8>>, compaction_frontier: AntichainRef<B::Time>) -> Self {
             AbomonatedMerger { merger: B::begin_merge(source1, source2, compaction_frontier) }
         }
         fn work(&mut self, source1: &Abomonated<B,Vec<u8>>, source2: &Abomonated<B,Vec<u8>>, fuel: &mut isize) {
