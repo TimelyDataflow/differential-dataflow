@@ -393,6 +393,9 @@ mod val_batch {
             if self.key_valid(storage) {
                 self.rewind_vals(storage);
             }
+            else {
+                self.key_cursor = storage.storage.keys.len();
+            }
         }
         fn seek_key(&mut self, storage: &Self::Storage, key: &Self::Key) { 
             self.key_cursor += storage.storage.keys.advance(self.key_cursor, storage.storage.keys.len(), |x| x.lt(key));
@@ -400,7 +403,12 @@ mod val_batch {
                 self.rewind_vals(storage);
             }
         }
-        fn step_val(&mut self, _storage: &Self::Storage) { self.val_cursor += 1; }
+        fn step_val(&mut self, storage: &Self::Storage) {
+            self.val_cursor += 1; 
+            if !self.val_valid(storage) {
+                self.val_cursor = storage.storage.values_for_key(self.key_cursor).1;
+            }
+        }
         fn seek_val(&mut self, storage: &Self::Storage, val: &Self::Val) { 
             self.val_cursor += storage.storage.vals.advance(self.val_cursor, storage.storage.values_for_key(self.key_cursor).1, |x| x.lt(val));
         }
