@@ -102,3 +102,29 @@ fn join_scaling(scale: u64) {
     let extracted = data.extract();
     assert_eq!(extracted.len(), 0);
 }
+
+/// Ensure that a join completes even with the most aggressive yield configuration.
+#[test]
+fn join_core_yielding_aggressive() {
+    let time = Default::default();
+    let data = timely::example(move |scope| {
+        let arr1 = [((0, 0), time, 1), ((1, 2), time, 1)]
+            .to_stream(scope)
+            .as_collection()
+            .arrange_by_key();
+        let arr2 = [((0, 'a'), time, 1), ((1, 'B'), time, 1)]
+            .to_stream(scope)
+            .as_collection()
+            .arrange_by_key();
+
+        arr1.join_core_yielding(
+            &arr2,
+            |k, a, b| Some((*k, *a, *b)),
+            |_timer, _count| true,
+        ).inner.capture()
+    });
+
+    let extracted = data.extract();
+    assert_eq!(extracted.len(), 1);
+    assert_eq!(extracted[0].1, vec![((0, 0, 'a'), time, 1), ((1, 2, 'B'), time, 1)]);
+}
