@@ -15,13 +15,13 @@ pub use self::cursor_list::CursorList;
 pub trait Cursor<Storage: ?Sized> {
 
     /// Key by which updates are indexed.
-    type Key;
+    type Key: ?Sized;
     /// Values associated with keys.
-    type Val;
+    type Val: ?Sized;
     /// Timestamps associated with updates
-    type Time;
+    type Time: ?Sized;
     /// Associated update.
-    type R;
+    type R: ?Sized;
 
     /// Indicates if the current key is valid.
     ///

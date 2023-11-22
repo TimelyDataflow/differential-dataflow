@@ -203,6 +203,7 @@ impl<C, F> CursorFreeze<C, F> {
 impl<S, C, F> Cursor<S> for CursorFreeze<C, F>
 where
     C: Cursor<S>,
+    C::Time: Sized,
     F: Fn(&C::Time)->Option<C::Time>,
 {
     type Key = C::Key;
