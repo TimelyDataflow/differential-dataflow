@@ -309,31 +309,31 @@ pub struct OrdValCursor<L: Layout, C> {
     cursor: OrderedCursor<VTDLayer<L>>,
 }
 
-impl<L: Layout, C> Cursor for OrdValCursor<L, C> {
+impl<L: Layout, C> Cursor<OrdValBatch<L, C>> for OrdValCursor<L, C> {
     type Key = <L::Target as Update>::Key;
     type Val = <L::Target as Update>::Val;
     type Time = <L::Target as Update>::Time;
     type R = <L::Target as Update>::Diff;
 
-    type Storage = OrdValBatch<L, C>;
+    // type Storage = OrdValBatch<L, C>;
 
-    fn key<'a>(&self, storage: &'a Self::Storage) -> &'a Self::Key { &self.cursor.key(&storage.layer) }
-    fn val<'a>(&self, storage: &'a Self::Storage) -> &'a Self::Val { &self.cursor.child.key(&storage.layer.vals) }
-    fn map_times<L2: FnMut(&Self::Time, &Self::R)>(&mut self, storage: &Self::Storage, mut logic: L2) {
+    fn key<'a>(&self, storage: &'a OrdValBatch<L, C>) -> &'a Self::Key { &self.cursor.key(&storage.layer) }
+    fn val<'a>(&self, storage: &'a OrdValBatch<L, C>) -> &'a Self::Val { &self.cursor.child.key(&storage.layer.vals) }
+    fn map_times<L2: FnMut(&Self::Time, &Self::R)>(&mut self, storage: &OrdValBatch<L, C>, mut logic: L2) {
         self.cursor.child.child.rewind(&storage.layer.vals.vals);
         while self.cursor.child.child.valid(&storage.layer.vals.vals) {
             logic(&self.cursor.child.child.key(&storage.layer.vals.vals).0, &self.cursor.child.child.key(&storage.layer.vals.vals).1);
             self.cursor.child.child.step(&storage.layer.vals.vals);
         }
     }
-    fn key_valid(&self, storage: &Self::Storage) -> bool { self.cursor.valid(&storage.layer) }
-    fn val_valid(&self, storage: &Self::Storage) -> bool { self.cursor.child.valid(&storage.layer.vals) }
-    fn step_key(&mut self, storage: &Self::Storage){ self.cursor.step(&storage.layer); }
-    fn seek_key(&mut self, storage: &Self::Storage, key: &Self::Key) { self.cursor.seek(&storage.layer, key); }
-    fn step_val(&mut self, storage: &Self::Storage) { self.cursor.child.step(&storage.layer.vals); }
-    fn seek_val(&mut self, storage: &Self::Storage, val: &Self::Val) { self.cursor.child.seek(&storage.layer.vals, val); }
-    fn rewind_keys(&mut self, storage: &Self::Storage) { self.cursor.rewind(&storage.layer); }
-    fn rewind_vals(&mut self, storage: &Self::Storage) { self.cursor.child.rewind(&storage.layer.vals); }
+    fn key_valid(&self, storage: &OrdValBatch<L, C>) -> bool { self.cursor.valid(&storage.layer) }
+    fn val_valid(&self, storage: &OrdValBatch<L, C>) -> bool { self.cursor.child.valid(&storage.layer.vals) }
+    fn step_key(&mut self, storage: &OrdValBatch<L, C>){ self.cursor.step(&storage.layer); }
+    fn seek_key(&mut self, storage: &OrdValBatch<L, C>, key: &Self::Key) { self.cursor.seek(&storage.layer, key); }
+    fn step_val(&mut self, storage: &OrdValBatch<L, C>) { self.cursor.child.step(&storage.layer.vals); }
+    fn seek_val(&mut self, storage: &OrdValBatch<L, C>, val: &Self::Val) { self.cursor.child.seek(&storage.layer.vals, val); }
+    fn rewind_keys(&mut self, storage: &OrdValBatch<L, C>) { self.cursor.rewind(&storage.layer); }
+    fn rewind_vals(&mut self, storage: &OrdValBatch<L, C>) { self.cursor.child.rewind(&storage.layer.vals); }
 }
 
 /// A builder for creating layers from unsorted update tuples.
@@ -607,31 +607,29 @@ pub struct OrdKeyCursor<L: Layout, C> {
     phantom: PhantomData<(L, C)>,
 }
 
-impl<L: Layout, C> Cursor for OrdKeyCursor<L, C> {
+impl<L: Layout, C> Cursor<OrdKeyBatch<L, C>> for OrdKeyCursor<L, C> {
     type Key = <L::Target as Update>::Key;
     type Val = ();
     type Time = <L::Target as Update>::Time;
     type R = <L::Target as Update>::Diff;
 
-    type Storage = OrdKeyBatch<L, C>;
-
-    fn key<'a>(&self, storage: &'a Self::Storage) -> &'a Self::Key { &self.cursor.key(&storage.layer) }
-    fn val<'a>(&self, _storage: &'a Self::Storage) -> &'a () { &() }
-    fn map_times<L2: FnMut(&Self::Time, &Self::R)>(&mut self, storage: &Self::Storage, mut logic: L2) {
+    fn key<'a>(&self, storage: &'a OrdKeyBatch<L, C>) -> &'a Self::Key { &self.cursor.key(&storage.layer) }
+    fn val<'a>(&self, _storage: &'a OrdKeyBatch<L, C>) -> &'a () { &() }
+    fn map_times<L2: FnMut(&Self::Time, &Self::R)>(&mut self, storage: &OrdKeyBatch<L, C>, mut logic: L2) {
         self.cursor.child.rewind(&storage.layer.vals);
         while self.cursor.child.valid(&storage.layer.vals) {
             logic(&self.cursor.child.key(&storage.layer.vals).0, &self.cursor.child.key(&storage.layer.vals).1);
             self.cursor.child.step(&storage.layer.vals);
         }
     }
-    fn key_valid(&self, storage: &Self::Storage) -> bool { self.cursor.valid(&storage.layer) }
-    fn val_valid(&self, _storage: &Self::Storage) -> bool { self.valid }
-    fn step_key(&mut self, storage: &Self::Storage){ self.cursor.step(&storage.layer); self.valid = true; }
-    fn seek_key(&mut self, storage: &Self::Storage, key: &Self::Key) { self.cursor.seek(&storage.layer, key); self.valid = true; }
-    fn step_val(&mut self, _storage: &Self::Storage) { self.valid = false; }
-    fn seek_val(&mut self, _storage: &Self::Storage, _val: &()) { }
-    fn rewind_keys(&mut self, storage: &Self::Storage) { self.cursor.rewind(&storage.layer); self.valid = true; }
-    fn rewind_vals(&mut self, _storage: &Self::Storage) { self.valid = true; }
+    fn key_valid(&self, storage: &OrdKeyBatch<L, C>) -> bool { self.cursor.valid(&storage.layer) }
+    fn val_valid(&self, _storage: &OrdKeyBatch<L, C>) -> bool { self.valid }
+    fn step_key(&mut self, storage: &OrdKeyBatch<L, C>){ self.cursor.step(&storage.layer); self.valid = true; }
+    fn seek_key(&mut self, storage: &OrdKeyBatch<L, C>, key: &Self::Key) { self.cursor.seek(&storage.layer, key); self.valid = true; }
+    fn step_val(&mut self, _storage: &OrdKeyBatch<L, C>) { self.valid = false; }
+    fn seek_val(&mut self, _storage: &OrdKeyBatch<L, C>, _val: &()) { }
+    fn rewind_keys(&mut self, storage: &OrdKeyBatch<L, C>) { self.cursor.rewind(&storage.layer); self.valid = true; }
+    fn rewind_vals(&mut self, _storage: &OrdKeyBatch<L, C>) { self.valid = true; }
 }
 
 

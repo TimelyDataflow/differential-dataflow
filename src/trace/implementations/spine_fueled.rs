@@ -75,7 +75,7 @@ use ::logging::Logger;
 use ::difference::Semigroup;
 use lattice::Lattice;
 use trace::{Batch, BatchReader, Trace, TraceReader, ExertionLogic};
-use trace::cursor::{Cursor, CursorList};
+use trace::cursor::CursorList;
 use trace::Merger;
 
 use ::timely::dataflow::operators::generic::OperatorInfo;
@@ -115,9 +115,10 @@ where
     type R = B::R;
 
     type Batch = B;
+    type Storage = Vec<B>;
     type Cursor = CursorList<<B as BatchReader>::Cursor>;
 
-    fn cursor_through(&mut self, upper: AntichainRef<Self::Time>) -> Option<(Self::Cursor, <Self::Cursor as Cursor>::Storage)> {
+    fn cursor_through(&mut self, upper: AntichainRef<Self::Time>) -> Option<(Self::Cursor, Self::Storage)> {
 
         // If `upper` is the minimum frontier, we can return an empty cursor.
         // This can happen with operators that are written to expect the ability to acquire cursors

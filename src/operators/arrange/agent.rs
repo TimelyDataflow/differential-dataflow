@@ -11,7 +11,7 @@ use timely::progress::{Antichain, frontier::AntichainRef};
 use timely::dataflow::operators::CapabilitySet;
 
 use lattice::Lattice;
-use trace::{Trace, TraceReader, Batch, BatchReader, Cursor};
+use trace::{Trace, TraceReader, Batch, BatchReader};
 
 use trace::wrappers::rc::TraceBox;
 
@@ -53,6 +53,7 @@ where
     type R = Tr::R;
 
     type Batch = Tr::Batch;
+    type Storage = Tr::Storage;
     type Cursor = Tr::Cursor;
 
     fn set_logical_compaction(&mut self, frontier: AntichainRef<Tr::Time>) {
@@ -77,7 +78,7 @@ where
     fn get_physical_compaction(&mut self) -> AntichainRef<Tr::Time> {
         self.physical_compaction.borrow()
     }
-    fn cursor_through(&mut self, frontier: AntichainRef<Tr::Time>) -> Option<(Tr::Cursor, <Tr::Cursor as Cursor>::Storage)> {
+    fn cursor_through(&mut self, frontier: AntichainRef<Tr::Time>) -> Option<(Self::Cursor, Self::Storage)> {
         self.trace.borrow_mut().trace.cursor_through(frontier)
     }
     fn map_batches<F: FnMut(&Self::Batch)>(&self, f: F) { self.trace.borrow().trace.map_batches(f) }

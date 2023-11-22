@@ -396,26 +396,24 @@ mod val_batch {
         phantom: std::marker::PhantomData<L>,
     }
 
-    impl<L: Layout> Cursor for OrdValCursor<L> {
+    impl<L: Layout> Cursor<OrdValBatch<L>> for OrdValCursor<L> {
         type Key = <L::Target as Update>::Key;
         type Val = <L::Target as Update>::Val;
         type Time = <L::Target as Update>::Time;
         type R = <L::Target as Update>::Diff;
 
-        type Storage = OrdValBatch<L>;
-
-        fn key<'a>(&self, storage: &'a Self::Storage) -> &'a Self::Key { &storage.storage.keys.index(self.key_cursor.try_into().ok().unwrap()) }
-        fn val<'a>(&self, storage: &'a Self::Storage) -> &'a Self::Val { &storage.storage.vals.index(self.val_cursor.try_into().ok().unwrap()) }
-        fn map_times<L2: FnMut(&Self::Time, &Self::R)>(&mut self, storage: &Self::Storage, mut logic: L2) {
+        fn key<'a>(&self, storage: &'a OrdValBatch<L>) -> &'a Self::Key { &storage.storage.keys.index(self.key_cursor.try_into().ok().unwrap()) }
+        fn val<'a>(&self, storage: &'a OrdValBatch<L>) -> &'a Self::Val { &storage.storage.vals.index(self.val_cursor.try_into().ok().unwrap()) }
+        fn map_times<L2: FnMut(&Self::Time, &Self::R)>(&mut self, storage: &OrdValBatch<L>, mut logic: L2) {
             let (lower, upper) = storage.storage.updates_for_value(self.val_cursor);
             for index in lower .. upper {
                 let (time, diff) = &storage.storage.updates.index(index);
                 logic(time, diff);
             }
         }
-        fn key_valid(&self, storage: &Self::Storage) -> bool { self.key_cursor < storage.storage.keys.len() }
-        fn val_valid(&self, storage: &Self::Storage) -> bool { self.val_cursor < storage.storage.values_for_key(self.key_cursor).1 }
-        fn step_key(&mut self, storage: &Self::Storage){ 
+        fn key_valid(&self, storage: &OrdValBatch<L>) -> bool { self.key_cursor < storage.storage.keys.len() }
+        fn val_valid(&self, storage: &OrdValBatch<L>) -> bool { self.val_cursor < storage.storage.values_for_key(self.key_cursor).1 }
+        fn step_key(&mut self, storage: &OrdValBatch<L>){ 
             self.key_cursor += 1;
             if self.key_valid(storage) {
                 self.rewind_vals(storage);
@@ -424,28 +422,28 @@ mod val_batch {
                 self.key_cursor = storage.storage.keys.len();
             }
         }
-        fn seek_key(&mut self, storage: &Self::Storage, key: &Self::Key) { 
+        fn seek_key(&mut self, storage: &OrdValBatch<L>, key: &Self::Key) { 
             self.key_cursor += storage.storage.keys.advance(self.key_cursor, storage.storage.keys.len(), |x| x.lt(key));
             if self.key_valid(storage) {
                 self.rewind_vals(storage);
             }
         }
-        fn step_val(&mut self, storage: &Self::Storage) {
+        fn step_val(&mut self, storage: &OrdValBatch<L>) {
             self.val_cursor += 1; 
             if !self.val_valid(storage) {
                 self.val_cursor = storage.storage.values_for_key(self.key_cursor).1;
             }
         }
-        fn seek_val(&mut self, storage: &Self::Storage, val: &Self::Val) { 
+        fn seek_val(&mut self, storage: &OrdValBatch<L>, val: &Self::Val) { 
             self.val_cursor += storage.storage.vals.advance(self.val_cursor, storage.storage.values_for_key(self.key_cursor).1, |x| x.lt(val));
         }
-        fn rewind_keys(&mut self, storage: &Self::Storage) { 
+        fn rewind_keys(&mut self, storage: &OrdValBatch<L>) { 
             self.key_cursor = 0;
             if self.key_valid(storage) {
                 self.rewind_vals(storage)
             }
         }
-        fn rewind_vals(&mut self, storage: &Self::Storage) { 
+        fn rewind_vals(&mut self, storage: &OrdValBatch<L>) { 
             self.val_cursor = storage.storage.values_for_key(self.key_cursor).0;
         }
     }

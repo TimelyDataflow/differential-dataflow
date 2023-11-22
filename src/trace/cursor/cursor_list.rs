@@ -7,15 +7,15 @@ use super::Cursor;
 /// The `CursorList` tracks the indices of cursors with the minimum key, and the the indices of cursors with
 /// the minimum key and minimum value. It performs no clever management of these sets otherwise.
 #[derive(Debug)]
-pub struct CursorList<C: Cursor> {
+pub struct CursorList<C> {
     cursors: Vec<C>,
     min_key: Vec<usize>,
     min_val: Vec<usize>,
 }
 
-impl<C: Cursor> CursorList<C> where C::Key: Ord, C::Val: Ord {
+impl<C> CursorList<C> {
     /// Creates a new cursor list from pre-existing cursors.
-    pub fn new(cursors: Vec<C>, storage: &[C::Storage]) -> Self {
+    pub fn new<S>(cursors: Vec<C>, storage: &[S]) -> Self where C: Cursor<S>, C::Key: Ord, C::Val: Ord {
 
         let mut result = CursorList {
             cursors,
@@ -36,7 +36,7 @@ impl<C: Cursor> CursorList<C> where C::Key: Ord, C::Val: Ord {
     //
     // Once finished, it invokes `minimize_vals()` to ensure the value cursor is
     // in a consistent state as well.
-    fn minimize_keys(&mut self, storage: &[C::Storage]) {
+    fn minimize_keys<S>(&mut self, storage: &[S]) where C: Cursor<S>, C::Key: Ord, C::Val: Ord {
 
         self.min_key.clear();
 
@@ -64,7 +64,7 @@ impl<C: Cursor> CursorList<C> where C::Key: Ord, C::Val: Ord {
     // indices of cursors whose value equals the minimum valid value seen so far. As it
     // goes, if it observes an improved value it clears the current list, updates the minimum
     // value, and continues.
-    fn minimize_vals(&mut self, storage: &[C::Storage]) {
+    fn minimize_vals<S>(&mut self, storage: &[S]) where C: Cursor<S>, C::Key: Ord, C::Val: Ord {
 
         self.min_val.clear();
 
@@ -85,7 +85,7 @@ impl<C: Cursor> CursorList<C> where C::Key: Ord, C::Val: Ord {
     }
 }
 
-impl<C: Cursor> Cursor for CursorList<C>
+impl<S, C: Cursor<S>> Cursor<Vec<S>> for CursorList<C>
 where
     C::Key: Ord,
     C::Val: Ord,
@@ -95,30 +95,28 @@ where
     type Time = C::Time;
     type R = C::R;
 
-    type Storage = Vec<C::Storage>;
-
     // validation methods
     #[inline]
-    fn key_valid(&self, _storage: &Self::Storage) -> bool { !self.min_key.is_empty() }
+    fn key_valid(&self, _storage: &Vec<S>) -> bool { !self.min_key.is_empty() }
     #[inline]
-    fn val_valid(&self, _storage: &Self::Storage) -> bool { !self.min_val.is_empty() }
+    fn val_valid(&self, _storage: &Vec<S>) -> bool { !self.min_val.is_empty() }
 
     // accessors
     #[inline]
-    fn key<'a>(&self, storage: &'a Self::Storage) -> &'a Self::Key {
+    fn key<'a>(&self, storage: &'a Vec<S>) -> &'a Self::Key {
         debug_assert!(self.key_valid(storage));
         debug_assert!(self.cursors[self.min_key[0]].key_valid(&storage[self.min_key[0]]));
         self.cursors[self.min_key[0]].key(&storage[self.min_key[0]])
     }
     #[inline]
-    fn val<'a>(&self, storage: &'a Self::Storage) -> &'a Self::Val {
+    fn val<'a>(&self, storage: &'a Vec<S>) -> &'a Self::Val {
         debug_assert!(self.key_valid(storage));
         debug_assert!(self.val_valid(storage));
         debug_assert!(self.cursors[self.min_val[0]].val_valid(&storage[self.min_val[0]]));
         self.cursors[self.min_val[0]].val(&storage[self.min_val[0]])
     }
     #[inline]
-    fn map_times<L: FnMut(&Self::Time, &Self::R)>(&mut self, storage: &Self::Storage, mut logic: L) {
+    fn map_times<L: FnMut(&Self::Time, &Self::R)>(&mut self, storage: &Vec<S>, mut logic: L) {
         for &index in self.min_val.iter() {
             self.cursors[index].map_times(&storage[index], |t,d| logic(t,d));
         }
@@ -126,14 +124,14 @@ where
 
     // key methods
     #[inline]
-    fn step_key(&mut self, storage: &Self::Storage) {
+    fn step_key(&mut self, storage: &Vec<S>) {
         for &index in self.min_key.iter() {
             self.cursors[index].step_key(&storage[index]);
         }
         self.minimize_keys(storage);
     }
     #[inline]
-    fn seek_key(&mut self, storage: &Self::Storage, key: &Self::Key) {
+    fn seek_key(&mut self, storage: &Vec<S>, key: &Self::Key) {
         for index in 0 .. self.cursors.len() {
             self.cursors[index].seek_key(&storage[index], key);
         }
@@ -142,14 +140,14 @@ where
 
     // value methods
     #[inline]
-    fn step_val(&mut self, storage: &Self::Storage) {
+    fn step_val(&mut self, storage: &Vec<S>) {
         for &index in self.min_val.iter() {
             self.cursors[index].step_val(&storage[index]);
         }
         self.minimize_vals(storage);
     }
     #[inline]
-    fn seek_val(&mut self, storage: &Self::Storage, val: &Self::Val) {
+    fn seek_val(&mut self, storage: &Vec<S>, val: &Self::Val) {
         for &index in self.min_key.iter() {
             self.cursors[index].seek_val(&storage[index], val);
         }
@@ -158,14 +156,14 @@ where
 
     // rewinding methods
     #[inline]
-    fn rewind_keys(&mut self, storage: &Self::Storage) {
+    fn rewind_keys(&mut self, storage: &Vec<S>) {
         for index in 0 .. self.cursors.len() {
             self.cursors[index].rewind_keys(&storage[index]);
         }
         self.minimize_keys(storage);
     }
     #[inline]
-    fn rewind_vals(&mut self, storage: &Self::Storage) {
+    fn rewind_vals(&mut self, storage: &Vec<S>) {
         for &index in self.min_key.iter() {
             self.cursors[index].rewind_vals(&storage[index]);
         }
