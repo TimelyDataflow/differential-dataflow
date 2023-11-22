@@ -301,15 +301,19 @@ pub trait Batch : BatchReader where Self: ::std::marker::Sized {
 }
 
 /// Functionality for collecting and batching updates.
-pub trait Batcher<Output: Batch> {
+pub trait Batcher<Output> {
+    /// Type of update pushed into the batcher.
+    type Item;
+    /// Times at which batches are formed.
+    type Time: Timestamp;
     /// Allocates a new empty batcher.
     fn new() -> Self;
     /// Adds an unordered batch of elements to the batcher.
-    fn push_batch(&mut self, batch: RefOrMut<Vec<((Output::Key, Output::Val), Output::Time, Output::R)>>);
+    fn push_batch(&mut self, batch: RefOrMut<Vec<Self::Item>>);
     /// Returns all updates not greater or equal to an element of `upper`.
-    fn seal(&mut self, upper: Antichain<Output::Time>) -> Output;
+    fn seal(&mut self, upper: Antichain<Self::Time>) -> Output;
     /// Returns the lower envelope of contained update times.
-    fn frontier(&mut self) -> timely::progress::frontier::AntichainRef<Output::Time>;
+    fn frontier(&mut self) -> timely::progress::frontier::AntichainRef<Self::Time>;
 }
 
 /// Functionality for building batches from ordered update sequences.
@@ -435,10 +439,12 @@ pub mod rc_blanket_impls {
 
     /// Functionality for collecting and batching updates.
     impl<B:Batch> Batcher<Rc<B>> for RcBatcher<B> {
+        type Item = <<B as Batch>::Batcher as Batcher<B>>::Item;
+        type Time = <<B as Batch>::Batcher as Batcher<B>>::Time;
         fn new() -> Self { RcBatcher { batcher: <B::Batcher as Batcher<B>>::new() } }
-        fn push_batch(&mut self, batch: RefOrMut<Vec<((B::Key, B::Val), B::Time, B::R)>>) { self.batcher.push_batch(batch) }
-        fn seal(&mut self, upper: Antichain<B::Time>) -> Rc<B> { Rc::new(self.batcher.seal(upper)) }
-        fn frontier(&mut self) -> timely::progress::frontier::AntichainRef<B::Time> { self.batcher.frontier() }
+        fn push_batch(&mut self, batch: RefOrMut<Vec<Self::Item>>) { self.batcher.push_batch(batch) }
+        fn seal(&mut self, upper: Antichain<Self::Time>) -> Rc<B> { Rc::new(self.batcher.seal(upper)) }
+        fn frontier(&mut self) -> timely::progress::frontier::AntichainRef<Self::Time> { self.batcher.frontier() }
     }
 
     /// Wrapper type for building reference counted batches.
@@ -550,15 +556,17 @@ pub mod abomonated_blanket_impls {
 
     /// Functionality for collecting and batching updates.
     impl<B:Batch+Abomonation> Batcher<Abomonated<B,Vec<u8>>> for AbomonatedBatcher<B> {
+        type Item = <<B as Batch>::Batcher as Batcher<B>>::Item;
+        type Time = <<B as Batch>::Batcher as Batcher<B>>::Time;
         fn new() -> Self { AbomonatedBatcher { batcher: <B::Batcher as Batcher<B>>::new() } }
-        fn push_batch(&mut self, batch: RefOrMut<Vec<((B::Key, B::Val), B::Time, B::R)>>) { self.batcher.push_batch(batch) }
-        fn seal(&mut self, upper: Antichain<B::Time>) -> Abomonated<B, Vec<u8>> {
+        fn push_batch(&mut self, batch: RefOrMut<Vec<Self::Item>>) { self.batcher.push_batch(batch) }
+        fn seal(&mut self, upper: Antichain<Self::Time>) -> Abomonated<B, Vec<u8>> {
             let batch = self.batcher.seal(upper);
             let mut bytes = Vec::with_capacity(measure(&batch));
             unsafe { abomonation::encode(&batch, &mut bytes).unwrap() };
             unsafe { Abomonated::<B,_>::new(bytes).unwrap() }
         }
-        fn frontier(&mut self) -> timely::progress::frontier::AntichainRef<B::Time> { self.batcher.frontier() }
+        fn frontier(&mut self) -> timely::progress::frontier::AntichainRef<Self::Time> { self.batcher.frontier() }
     }
 
     /// Wrapper type for building reference counted batches.

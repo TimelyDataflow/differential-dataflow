@@ -456,6 +456,8 @@ where
         R: ExchangeData,
         Tr: Trace+TraceReader<Key=K,Val=V,Time=G::Timestamp,R=R>+'static,
         Tr::Batch: Batch,
+        <Tr::Batch as Batch>::Batcher: Batcher<Tr::Batch, Item = ((K,V),G::Timestamp,R)>,
+        <Tr::Batch as Batch>::Batcher: Batcher<Tr::Batch, Time = G::Timestamp>,
     {
         self.arrange_named("Arrange")
     }
@@ -472,6 +474,8 @@ where
         R: ExchangeData,
         Tr: Trace+TraceReader<Key=K,Val=V,Time=G::Timestamp,R=R>+'static,
         Tr::Batch: Batch,
+        <Tr::Batch as Batch>::Batcher: Batcher<Tr::Batch, Item = ((K,V),G::Timestamp,R)>,
+        <Tr::Batch as Batch>::Batcher: Batcher<Tr::Batch, Time = G::Timestamp>,
     {
         let exchange = Exchange::new(move |update: &((K,V),G::Timestamp,R)| (update.0).0.hashed().into());
         self.arrange_core(exchange, name)
@@ -487,6 +491,8 @@ where
         P: ParallelizationContract<G::Timestamp, ((K,V),G::Timestamp,R)>,
         Tr: Trace+TraceReader<Key=K,Val=V,Time=G::Timestamp,R=R>+'static,
         Tr::Batch: Batch,
+        <Tr::Batch as Batch>::Batcher: Batcher<Tr::Batch, Item = ((K,V),G::Timestamp,R)>,
+        <Tr::Batch as Batch>::Batcher: Batcher<Tr::Batch, Time = G::Timestamp>,
     ;
 }
 
@@ -503,7 +509,9 @@ where
         K: ExchangeData + Hashable,
         V: ExchangeData,
         R: ExchangeData,
-        Tr: Trace + TraceReader<Key=K, Val=V, Time=G::Timestamp, R=R> + 'static, Tr::Batch: Batch
+        Tr: Trace + TraceReader<Key=K, Val=V, Time=G::Timestamp, R=R> + 'static, Tr::Batch: Batch,
+        <Tr::Batch as Batch>::Batcher: Batcher<Tr::Batch, Item = ((K,V),G::Timestamp,R)>,
+        <Tr::Batch as Batch>::Batcher: Batcher<Tr::Batch, Time = G::Timestamp>,
     {
         self.arrange_named("Arrange")
     }
@@ -513,7 +521,9 @@ where
         K: ExchangeData + Hashable,
         V: ExchangeData,
         R: ExchangeData,
-        Tr: Trace + TraceReader<Key=K, Val=V, Time=G::Timestamp, R=R> + 'static, Tr::Batch: Batch
+        Tr: Trace + TraceReader<Key=K, Val=V, Time=G::Timestamp, R=R> + 'static, Tr::Batch: Batch,
+        <Tr::Batch as Batch>::Batcher: Batcher<Tr::Batch, Item = ((K,V),G::Timestamp,R)>,
+        <Tr::Batch as Batch>::Batcher: Batcher<Tr::Batch, Time = G::Timestamp>,
     {
         let exchange = Exchange::new(move |update: &((K,V),G::Timestamp,R)| (update.0).0.hashed().into());
         self.arrange_core(exchange, name)
@@ -524,6 +534,8 @@ where
         P: ParallelizationContract<G::Timestamp, ((K,V),G::Timestamp,R)>,
         Tr: Trace+TraceReader<Key=K,Val=V,Time=G::Timestamp,R=R>+'static,
         Tr::Batch: Batch,
+        <Tr::Batch as Batch>::Batcher: Batcher<Tr::Batch, Item = ((K,V),G::Timestamp,R)>,
+        <Tr::Batch as Batch>::Batcher: Batcher<Tr::Batch, Time = G::Timestamp>,
     {
         // The `Arrange` operator is tasked with reacting to an advancing input
         // frontier by producing the sequence of batches whose lower and upper
@@ -687,6 +699,8 @@ where
         P: ParallelizationContract<G::Timestamp, ((K,()),G::Timestamp,R)>,
         Tr: Trace+TraceReader<Key=K, Val=(), Time=G::Timestamp, R=R>+'static,
         Tr::Batch: Batch,
+        <Tr::Batch as Batch>::Batcher: Batcher<Tr::Batch, Item = ((K,()),G::Timestamp,R)>,
+        <Tr::Batch as Batch>::Batcher: Batcher<Tr::Batch, Time = G::Timestamp>,
     {
         self.map(|k| (k, ()))
             .arrange_core(pact, name)

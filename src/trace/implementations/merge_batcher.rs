@@ -26,6 +26,9 @@ where
     B::Time: Lattice+timely::progress::Timestamp+Ord+Clone,
     B::R: Semigroup,
 {
+    type Item = ((B::Key,B::Val),B::Time,B::R);
+    type Time = B::Time;
+
     fn new() -> Self {
         MergeBatcher {
             sorter: MergeSorter::new(),
@@ -36,7 +39,7 @@ where
     }
 
     #[inline(never)]
-    fn push_batch(&mut self, batch: RefOrMut<Vec<((B::Key,B::Val),B::Time,B::R)>>) {
+    fn push_batch(&mut self, batch: RefOrMut<Vec<Self::Item>>) {
         // `batch` is either a shared reference or an owned allocations.
         match batch {
             RefOrMut::Ref(reference) => {

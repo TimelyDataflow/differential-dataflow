@@ -32,6 +32,9 @@ impl<B: Batch> Batcher<B> for ColumnatedMergeBatcher<B>
         B::Time: Lattice+timely::progress::Timestamp+Ord+Clone+Columnation+'static,
         B::R: Semigroup+Columnation+'static,
 {
+    type Item = ((B::Key,B::Val),B::Time,B::R);
+    type Time = B::Time;
+
     fn new() -> Self {
         ColumnatedMergeBatcher {
             sorter: MergeSorterColumnation::new(),
@@ -42,7 +45,7 @@ impl<B: Batch> Batcher<B> for ColumnatedMergeBatcher<B>
     }
 
     #[inline]
-    fn push_batch(&mut self, batch: RefOrMut<Vec<((B::Key, B::Val), B::Time, B::R)>>) {
+    fn push_batch(&mut self, batch: RefOrMut<Vec<Self::Item>>) {
         // `batch` is either a shared reference or an owned allocations.
         match batch {
             RefOrMut::Ref(reference) => {
