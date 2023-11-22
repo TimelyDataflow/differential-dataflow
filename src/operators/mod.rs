@@ -38,8 +38,8 @@ impl<'a, V:'a, T, R> EditList<'a, V, T, R> where T: Ord+Clone, R: Semigroup {
         }
     }
     /// Loads the contents of a cursor.
-    fn load<C, L>(&mut self, cursor: &mut C, storage: &'a C::Storage, logic: L)
-    where V: Clone, C: Cursor<Val=V, Time=T, R=R>, C::Key: Eq, L: Fn(&T)->T {
+    fn load<S, C, L>(&mut self, cursor: &mut C, storage: &'a S, logic: L)
+    where V: Clone, C: Cursor<S, Val=V, Time=T, R=R>, C::Key: Eq, L: Fn(&T)->T {
         self.clear();
         while cursor.val_valid(storage) {
             cursor.map_times(storage, |time1, diff1| self.push(logic(time1), diff1.clone()));
@@ -101,22 +101,22 @@ impl<'storage, V: Ord+Clone+'storage, T: Lattice+Ord+Clone, R: Semigroup> ValueH
         self.history.clear();
         self.buffer.clear();
     }
-    fn load<C, L>(&mut self, cursor: &mut C, storage: &'storage C::Storage, logic: L)
-    where C: Cursor<Val=V, Time=T, R=R>, C::Key: Eq, L: Fn(&T)->T {
+    fn load<S, C, L>(&mut self, cursor: &mut C, storage: &'storage S, logic: L)
+    where C: Cursor<S, Val=V, Time=T, R=R>, C::Key: Eq, L: Fn(&T)->T {
         self.edits.load(cursor, storage, logic);
     }
 
     /// Loads and replays a specified key.
     ///
     /// If the key is absent, the replayed history will be empty.
-    fn replay_key<'history, C, L>(
+    fn replay_key<'history, S, C, L>(
         &'history mut self,
         cursor: &mut C,
-        storage: &'storage C::Storage,
+        storage: &'storage S,
         key: &C::Key,
         logic: L
     ) -> HistoryReplay<'storage, 'history, V, T, R>
-    where C: Cursor<Val=V, Time=T, R=R>, C::Key: Eq, L: Fn(&T)->T
+    where C: Cursor<S, Val=V, Time=T, R=R>, C::Key: Eq, L: Fn(&T)->T
     {
         self.clear();
         cursor.seek_key(storage, key);

@@ -74,8 +74,8 @@ use std::fmt::Debug;
 use ::logging::Logger;
 use ::difference::Semigroup;
 use lattice::Lattice;
-use trace::{Batch, BatchReader, Trace, TraceReader, ExertionLogic};
-use trace::cursor::{Cursor, CursorList};
+use trace::{Batch, Batcher, Builder, BatchReader, Trace, TraceReader, ExertionLogic};
+use trace::cursor::CursorList;
 use trace::Merger;
 
 use ::timely::dataflow::operators::generic::OperatorInfo;
@@ -87,7 +87,14 @@ use ::timely::order::PartialOrder;
 /// A spine maintains a small number of immutable collections of update tuples, merging the collections when
 /// two have similar sizes. In this way, it allows the addition of more tuples, which may then be merged with
 /// other immutable collections.
-pub struct Spine<B: Batch> where B::Time: Lattice+Ord, B::R: Semigroup {
+pub struct Spine<B: Batch, BA, BU>
+where
+    B::Time: Lattice+Ord,
+    B::R: Semigroup,
+    // Intended constraints:
+    // BA: Batcher<Time = B::Time>,
+    // BU: Builder<Item=BA::Item, Time=BA::Time, Output = B>,
+{
     operator: OperatorInfo,
     logger: Option<Logger>,
     logical_frontier: Antichain<B::Time>,   // Times after which the trace must accumulate correctly.
@@ -99,9 +106,10 @@ pub struct Spine<B: Batch> where B::Time: Lattice+Ord, B::R: Semigroup {
     activator: Option<timely::scheduling::activate::Activator>,
     /// Logic to indicate whether and how many records we should introduce in the absence of actual updates.
     exert_logic: ExertionLogic,
+    phantom: std::marker::PhantomData<(BA, BU)>,
 }
 
-impl<B> TraceReader for Spine<B>
+impl<B, BA, BU> TraceReader for Spine<B, BA, BU>
 where
     B: Batch+Clone+'static,
     B::Key: Ord+Clone,           // Clone is required by `batch::advance_*` (in-place could remove).
@@ -115,9 +123,10 @@ where
     type R = B::R;
 
     type Batch = B;
+    type Storage = Vec<B>;
     type Cursor = CursorList<<B as BatchReader>::Cursor>;
 
-    fn cursor_through(&mut self, upper: AntichainRef<Self::Time>) -> Option<(Self::Cursor, <Self::Cursor as Cursor>::Storage)> {
+    fn cursor_through(&mut self, upper: AntichainRef<Self::Time>) -> Option<(Self::Cursor, Self::Storage)> {
 
         // If `upper` is the minimum frontier, we can return an empty cursor.
         // This can happen with operators that are written to expect the ability to acquire cursors
@@ -248,14 +257,21 @@ where
 
 // A trace implementation for any key type that can be borrowed from or converted into `Key`.
 // TODO: Almost all this implementation seems to be generic with respect to the trace and batch types.
-impl<B> Trace for Spine<B>
+impl<B, BA, BU> Trace for Spine<B, BA, BU>
 where
     B: Batch+Clone+'static,
     B::Key: Ord+Clone,
     B::Val: Ord+Clone,
     B::Time: Lattice+timely::progress::Timestamp+Ord+Clone+Debug,
     B::R: Semigroup,
+    BA: Batcher<Time = B::Time>,
+    BU: Builder<Item=BA::Item, Time=BA::Time, Output = B>,
 {
+    /// A type used to assemble batches from disordered updates.
+    type Batcher = BA;
+    /// A type used to assemble batches from ordered update sequences.
+    type Builder = BU;
+
     fn new(
         info: ::timely::dataflow::operators::generic::OperatorInfo,
         logging: Option<::logging::Logger>,
@@ -318,8 +334,7 @@ where
     /// Completes the trace with a final empty batch.
     fn close(&mut self) {
         if !self.upper.borrow().is_empty() {
-            use trace::Builder;
-            let builder = B::Builder::new();
+            let builder = Self::Builder::new();
             let batch = builder.done(self.upper.clone(), Antichain::new(), Antichain::from_elem(<Self::Time as timely::progress::Timestamp>::minimum()));
             self.insert(batch);
         }
@@ -327,7 +342,7 @@ where
 }
 
 // Drop implementation allows us to log batch drops, to zero out maintained totals.
-impl<B> Drop for Spine<B>
+impl<B, BA, BU> Drop for Spine<B, BA, BU>
 where
     B: Batch,
     B::Time: Lattice+Ord,
@@ -339,7 +354,7 @@ where
 }
 
 
-impl<B> Spine<B>
+impl<B, BA, BU> Spine<B, BA, BU>
 where
     B: Batch,
     B::Time: Lattice+Ord,
@@ -385,7 +400,7 @@ where
     }
 }
 
-impl<B> Spine<B>
+impl<B, BA, BU> Spine<B, BA, BU>
 where
     B: Batch,
     B::Key: Ord+Clone,
@@ -450,6 +465,7 @@ where
             effort,
             activator,
             exert_logic: std::sync::Arc::new(|_batches| None),
+            phantom: std::marker::PhantomData,
         }
     }
 

@@ -276,6 +276,7 @@ pub trait ReduceCore<G: Scope, K: Data, V: Data, R: Semigroup> where G::Timestam
             T2::Val: Data,
             T2::R: Abelian,
             T2::Batch: Batch,
+            T2::Builder: Builder<Output=T2::Batch, Item = ((T2::Key, T2::Val), T2::Time, T2::R)>,
             L: FnMut(&K, &[(&V, R)], &mut Vec<(T2::Val, T2::R)>)+'static,
         {
             self.reduce_core::<_,T2>(name, move |key, input, output, change| {
@@ -298,6 +299,7 @@ pub trait ReduceCore<G: Scope, K: Data, V: Data, R: Semigroup> where G::Timestam
             T2::Val: Data,
             T2::R: Semigroup,
             T2::Batch: Batch,
+            T2::Builder: Builder<Output=T2::Batch, Item = ((T2::Key, T2::Val), T2::Time, T2::R)>,
             L: FnMut(&K, &[(&V, R)], &mut Vec<(T2::Val,T2::R)>, &mut Vec<(T2::Val,T2::R)>)+'static
             ;
 }
@@ -316,6 +318,7 @@ where
             T2::R: Semigroup,
             T2: Trace+TraceReader<Key=K, Time=G::Timestamp>+'static,
             T2::Batch: Batch,
+            T2::Builder: Builder<Output=T2::Batch, Item = ((T2::Key, T2::Val), T2::Time, T2::R)>,
             L: FnMut(&K, &[(&V, R)], &mut Vec<(T2::Val,T2::R)>, &mut Vec<(T2::Val, T2::R)>)+'static
     {
         self.arrange_by_key_named(&format!("Arrange: {}", name))
@@ -334,6 +337,7 @@ where
             T2::Val: Data,
             T2::R: Semigroup,
             T2::Batch: Batch,
+            T2::Builder: Builder<Output=T2::Batch, Item = ((T2::Key, T2::Val), T2::Time, T2::R)>,
             L: FnMut(&K, &[(&V, R)], &mut Vec<(T2::Val,T2::R)>, &mut Vec<(T2::Val, T2::R)>)+'static {
 
         let mut result_trace = None;
@@ -472,7 +476,7 @@ where
                             let mut builders = Vec::new();
                             for i in 0 .. capabilities.len() {
                                 buffers.push((capabilities[i].time().clone(), Vec::new()));
-                                builders.push(<T2::Batch as Batch>::Builder::new());
+                                builders.push(T2::Builder::new());
                             }
 
                             // cursors for navigating input and output traces.
@@ -548,7 +552,7 @@ where
                                 for index in 0 .. buffers.len() {
                                     buffers[index].1.sort_by(|x,y| x.0.cmp(&y.0));
                                     for (val, time, diff) in buffers[index].1.drain(..) {
-                                        builders[index].push((key.clone(), val, time, diff));
+                                        builders[index].push(((key.clone(), val), time, diff));
                                     }
                                 }
                             }
@@ -651,12 +655,12 @@ where
     R2: Semigroup,
 {
     fn new() -> Self;
-    fn compute<K, C1, C2, C3, L>(
+    fn compute<K, S1, S2, S3, C1, C2, C3, L>(
         &mut self,
         key: &K,
-        source_cursor: (&mut C1, &'a C1::Storage),
-        output_cursor: (&mut C2, &'a C2::Storage),
-        batch_cursor: (&mut C3, &'a C3::Storage),
+        source_cursor: (&mut C1, &'a S1),
+        output_cursor: (&mut C2, &'a S2),
+        batch_cursor: (&mut C3, &'a S3),
         times: &mut Vec<T>,
         logic: &mut L,
         upper_limit: &Antichain<T>,
@@ -664,9 +668,9 @@ where
         new_interesting: &mut Vec<T>) -> (usize, usize)
     where
         K: Eq+Clone,
-        C1: Cursor<Key = K, Val = V1, Time = T, R = R1>,
-        C2: Cursor<Key = K, Val = V2, Time = T, R = R2>,
-        C3: Cursor<Key = K, Val = V1, Time = T, R = R1>,
+        C1: Cursor<S1, Key = K, Val = V1, Time = T, R = R1>,
+        C2: Cursor<S2, Key = K, Val = V2, Time = T, R = R2>,
+        C3: Cursor<S3, Key = K, Val = V1, Time = T, R = R1>,
         L: FnMut(&K, &[(&V1, R1)], &mut Vec<(V2, R2)>, &mut Vec<(V2, R2)>);
 }
 
@@ -729,12 +733,12 @@ mod history_replay {
             }
         }
         #[inline(never)]
-        fn compute<K, C1, C2, C3, L>(
+        fn compute<K, S1, S2, S3, C1, C2, C3, L>(
             &mut self,
             key: &K,
-            (source_cursor, source_storage): (&mut C1, &'a C1::Storage),
-            (output_cursor, output_storage): (&mut C2, &'a C2::Storage),
-            (batch_cursor, batch_storage): (&mut C3, &'a C3::Storage),
+            (source_cursor, source_storage): (&mut C1, &'a S1),
+            (output_cursor, output_storage): (&mut C2, &'a S2),
+            (batch_cursor, batch_storage): (&mut C3, &'a S3),
             times: &mut Vec<T>,
             logic: &mut L,
             upper_limit: &Antichain<T>,
@@ -742,9 +746,9 @@ mod history_replay {
             new_interesting: &mut Vec<T>) -> (usize, usize)
         where
             K: Eq+Clone,
-            C1: Cursor<Key = K, Val = V1, Time = T, R = R1>,
-            C2: Cursor<Key = K, Val = V2, Time = T, R = R2>,
-            C3: Cursor<Key = K, Val = V1, Time = T, R = R1>,
+            C1: Cursor<S1, Key = K, Val = V1, Time = T, R = R1>,
+            C2: Cursor<S2, Key = K, Val = V2, Time = T, R = R2>,
+            C3: Cursor<S3, Key = K, Val = V1, Time = T, R = R1>,
             L: FnMut(&K, &[(&V1, R1)], &mut Vec<(V2, R2)>, &mut Vec<(V2, R2)>)
         {
 

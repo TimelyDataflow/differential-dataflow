@@ -13,6 +13,7 @@ use ::difference::Semigroup;
 
 use Data;
 use lattice::Lattice;
+use trace::{Batcher, Builder};
 
 /// Methods which require data be arrangeable.
 impl<G, D, R> Collection<G, D, R>
@@ -57,6 +58,8 @@ where
     where
         Tr: crate::trace::Trace+crate::trace::TraceReader<Key=D,Val=(),Time=G::Timestamp,R=R>+'static,
         Tr::Batch: crate::trace::Batch,
+        Tr::Batcher: Batcher<Item = ((D,()),G::Timestamp,R), Time = G::Timestamp>,
+        Tr::Builder: Builder<Item = ((D,()),G::Timestamp,R), Time = G::Timestamp>,
     {
         use operators::arrange::arrangement::Arrange;
         self.map(|k| (k, ()))

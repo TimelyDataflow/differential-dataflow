@@ -18,7 +18,6 @@ use timely::progress::{Antichain, frontier::{AntichainRef, MutableAntichain}};
 
 use lattice::Lattice;
 use trace::TraceReader;
-use trace::cursor::Cursor;
 
 /// A wrapper around a trace which tracks the frontiers of all referees.
 ///
@@ -103,6 +102,7 @@ where
     type R = Tr::R;
 
     type Batch = Tr::Batch;
+    type Storage = Tr::Storage;
     type Cursor = Tr::Cursor;
 
     /// Sets frontier to now be elements in `frontier`.
@@ -122,7 +122,7 @@ where
     }
     fn get_physical_compaction(&mut self) -> AntichainRef<Tr::Time> { self.physical_compaction.borrow() }
     /// Creates a new cursor over the wrapped trace.
-    fn cursor_through(&mut self, frontier: AntichainRef<Tr::Time>) -> Option<(Tr::Cursor, <Tr::Cursor as Cursor>::Storage)> {
+    fn cursor_through(&mut self, frontier: AntichainRef<Tr::Time>) -> Option<(Tr::Cursor, Tr::Storage)> {
         ::std::cell::RefCell::borrow_mut(&self.wrapper).trace.cursor_through(frontier)
     }
 

@@ -8,41 +8,44 @@ use timely::progress::frontier::Antichain;
 
 use ::difference::Semigroup;
 
-use lattice::Lattice;
-use trace::{Batch, Batcher, Builder};
+use trace::{Batcher, Builder};
+use trace::implementations::Update;
 
 /// Creates batches from unordered tuples.
-pub struct ColumnatedMergeBatcher<B: Batch>
-    where
-        B::Key: Ord+Clone+Columnation,
-        B::Val: Ord+Clone+Columnation,
-        B::Time: Lattice+timely::progress::Timestamp+Ord+Clone+Columnation,
-        B::R: Semigroup+Columnation,
+pub struct ColumnatedMergeBatcher<U: Update>
+where
+    U::Key: Columnation,
+    U::Val: Columnation,
+    U::Time: Columnation,
+    U::Diff: Columnation,
 {
-    sorter: MergeSorterColumnation<(B::Key, B::Val), B::Time, B::R>,
-    lower: Antichain<B::Time>,
-    frontier: Antichain<B::Time>,
-    phantom: PhantomData<B>,
+    sorter: MergeSorterColumnation<(U::Key, U::Val), U::Time, U::Diff>,
+    lower: Antichain<U::Time>,
+    frontier: Antichain<U::Time>,
+    phantom: PhantomData<U>,
 }
 
-impl<B: Batch> Batcher<B> for ColumnatedMergeBatcher<B>
-    where
-        B::Key: Ord+Clone+Columnation+'static,
-        B::Val: Ord+Clone+Columnation+'static,
-        B::Time: Lattice+timely::progress::Timestamp+Ord+Clone+Columnation+'static,
-        B::R: Semigroup+Columnation+'static,
+impl<U: Update> Batcher for ColumnatedMergeBatcher<U>
+where
+    U::Key: Columnation + 'static,
+    U::Val: Columnation + 'static,
+    U::Time: Columnation + 'static,
+    U::Diff: Columnation + 'static,
 {
+    type Item = ((U::Key,U::Val),U::Time,U::Diff);
+    type Time = U::Time;
+
     fn new() -> Self {
         ColumnatedMergeBatcher {
             sorter: MergeSorterColumnation::new(),
             frontier: Antichain::new(),
-            lower: Antichain::from_elem(<B::Time as timely::progress::Timestamp>::minimum()),
+            lower: Antichain::from_elem(<U::Time as timely::progress::Timestamp>::minimum()),
             phantom: PhantomData,
         }
     }
 
     #[inline]
-    fn push_batch(&mut self, batch: RefOrMut<Vec<((B::Key, B::Val), B::Time, B::R)>>) {
+    fn push_batch(&mut self, batch: RefOrMut<Vec<Self::Item>>) {
         // `batch` is either a shared reference or an owned allocations.
         match batch {
             RefOrMut::Ref(reference) => {
@@ -61,9 +64,9 @@ impl<B: Batch> Batcher<B> for ColumnatedMergeBatcher<B>
     // which we call `lower`, by assumption that after sealing a batcher we receive no more
     // updates with times not greater or equal to `upper`.
     #[inline]
-    fn seal(&mut self, upper: Antichain<B::Time>) -> B {
+    fn seal<B: Builder<Item=Self::Item, Time=Self::Time>>(&mut self, upper: Antichain<U::Time>) -> B::Output {
 
-        let mut builder = B::Builder::new();
+        let mut builder = B::new();
 
         let mut merged = Default::default();
         self.sorter.finish_into(&mut merged);
@@ -74,7 +77,7 @@ impl<B: Batch> Batcher<B> for ColumnatedMergeBatcher<B>
         self.frontier.clear();
 
         for buffer in merged.drain(..) {
-            for datum @ ((key, val), time, diff) in &buffer[..] {
+            for datum @ ((_key, _val), time, _diff) in &buffer[..] {
                 if upper.less_equal(time) {
                     self.frontier.insert(time.clone());
                     if !keep.is_empty() && keep.len() == keep.capacity() {
@@ -84,7 +87,7 @@ impl<B: Batch> Batcher<B> for ColumnatedMergeBatcher<B>
                     keep.copy(datum);
                 }
                 else {
-                    builder.copy((key, val, time, diff));
+                    builder.copy(datum);
                 }
             }
             // Recycling buffer.
@@ -102,13 +105,13 @@ impl<B: Batch> Batcher<B> for ColumnatedMergeBatcher<B>
         // Drain buffers (fast reclamation).
         self.sorter.clear_stash();
 
-        let seal = builder.done(self.lower.clone(), upper.clone(), Antichain::from_elem(<B::Time as timely::progress::Timestamp>::minimum()));
+        let seal = builder.done(self.lower.clone(), upper.clone(), Antichain::from_elem(<U::Time as timely::progress::Timestamp>::minimum()));
         self.lower = upper;
         seal
     }
 
     // the frontier of elements remaining after the most recent call to `self.seal`.
-    fn frontier(&mut self) -> timely::progress::frontier::AntichainRef<B::Time> {
+    fn frontier(&mut self) -> timely::progress::frontier::AntichainRef<U::Time> {
         self.frontier.borrow()
     }
 }

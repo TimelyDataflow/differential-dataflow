@@ -146,6 +146,7 @@ where
     Tr::Val: ExchangeData,
     Tr: Trace+TraceReader<Time=G::Timestamp,R=isize>+'static,
     Tr::Batch: Batch,
+    Tr::Builder: Builder<Item = ((Tr::Key, Tr::Val), Tr::Time, Tr::R)>,
 {
     let mut reader: Option<TraceAgent<Tr>> = None;
 
@@ -248,7 +249,7 @@ where
                                 // Prepare a cursor to the existing arrangement, and a batch builder for
                                 // new stuff that we add.
                                 let (mut trace_cursor, trace_storage) = reader_local.cursor();
-                                let mut builder = <Tr::Batch as Batch>::Builder::new();
+                                let mut builder = Tr::Builder::new();
                                 for (key, mut list) in to_process.drain(..) {
 
                                     // The prior value associated with the key.
@@ -277,10 +278,10 @@ where
                                     for (time, std::cmp::Reverse(next)) in list {
                                         if prev_value != next {
                                             if let Some(prev) = prev_value {
-                                                updates.push((key.clone(), prev, time.clone(), -1));
+                                                updates.push(((key.clone(), prev), time.clone(), -1));
                                             }
                                             if let Some(next) = next.as_ref() {
-                                                updates.push((key.clone(), next.clone(), time.clone(), 1));
+                                                updates.push(((key.clone(), next.clone()), time.clone(), 1));
                                             }
                                             prev_value = next;
                                         }

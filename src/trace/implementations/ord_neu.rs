@@ -9,22 +9,31 @@
 //! and should consume fewer resources (computation and memory) when it applies.
 
 use std::rc::Rc;
-use timely::container::columnation::TimelyStack;
 
 use trace::implementations::spine_fueled::Spine;
+use trace::implementations::merge_batcher::MergeBatcher;
+use trace::implementations::merge_batcher_col::ColumnatedMergeBatcher;
+use trace::rc_blanket_impls::RcBuilder;
 
 use super::{Update, Layout, Vector, TStack};
 
-use self::val_batch::{OrdValBatch};
-
+use self::val_batch::{OrdValBatch, OrdValBuilder};
 
 /// A trace implementation using a spine of ordered lists.
-pub type OrdValSpine<K, V, T, R, O=usize> = Spine<Rc<OrdValBatch<Vector<((K,V),T,R), O>, Vec<((K,V),T,R)>>>>;
+pub type OrdValSpine<K, V, T, R, O=usize> = Spine<
+    Rc<OrdValBatch<Vector<((K,V),T,R), O>>>,
+    MergeBatcher<((K,V),T,R)>,
+    RcBuilder<OrdValBuilder<Vector<((K,V),T,R), O>>>,
+>;
 // /// A trace implementation for empty values using a spine of ordered lists.
 // pub type OrdKeySpine<K, T, R, O=usize> = Spine<Rc<OrdKeyBatch<Vector<((K,()),T,R), O>>>>;
 
 /// A trace implementation backed by columnar storage.
-pub type ColValSpine<K, V, T, R, O=usize> = Spine<Rc<OrdValBatch<TStack<((K,V),T,R), O>, TimelyStack<((K,V),T,R)>>>>;
+pub type ColValSpine<K, V, T, R, O=usize> = Spine<
+    Rc<OrdValBatch<TStack<((K,V),T,R), O>>>,
+    ColumnatedMergeBatcher<((K,V),T,R)>,
+    RcBuilder<OrdValBuilder<TStack<((K,V),T,R), O>>>,
+>;
 // /// A trace implementation backed by columnar storage.
 // pub type ColKeySpine<K, T, R, O=usize> = Spine<Rc<OrdKeyBatch<TStack<((K,()),T,R), O>>>>;
 
@@ -32,15 +41,12 @@ mod val_batch {
 
     use std::convert::TryInto;
     use std::marker::PhantomData;
-    use timely::container::columnation::{Columnation, TimelyStack};
     use timely::progress::{Antichain, frontier::AntichainRef};
 
     use trace::{Batch, BatchReader, Builder, Cursor, Description, Merger};
-    use trace::implementations::merge_batcher_col::ColumnatedMergeBatcher;
     use trace::layers::BatchContainer;
     
     use super::{Layout, Update};
-    use super::super::merge_batcher::MergeBatcher;
 
     /// An immutable collection of update tuples, from a contiguous interval of logical times.
     #[derive(Abomonation, Debug)]
@@ -90,7 +96,7 @@ mod val_batch {
     /// The `L` parameter captures how the updates should be laid out, and `C` determines which
     /// merge batcher to select.
     #[derive(Abomonation)]
-    pub struct OrdValBatch<L: Layout, C> {
+    pub struct OrdValBatch<L: Layout> {
         /// The updates themselves.
         pub storage: OrdValStorage<L>,
         /// Description of the update times this layer represents.
@@ -101,22 +107,20 @@ mod val_batch {
         /// we may have many more updates than `storage.updates.len()`. It should equal that 
         /// length, plus the number of singleton optimizations employed.
         pub updates: usize,
-        /// Phantom marker for Rust happiness.
-        pub phantom: PhantomData<C>,
     }
 
-    impl<L: Layout, C> BatchReader for OrdValBatch<L, C> {
+    impl<L: Layout> BatchReader for OrdValBatch<L> {
         type Key = <L::Target as Update>::Key;
         type Val = <L::Target as Update>::Val;
         type Time = <L::Target as Update>::Time;
         type R = <L::Target as Update>::Diff;
 
-        type Cursor = OrdValCursor<L, C>;
+        type Cursor = OrdValCursor<L>;
         fn cursor(&self) -> Self::Cursor { 
             OrdValCursor {
                 key_cursor: 0,
                 val_cursor: 0,
-                phantom: PhantomData,
+                phantom: std::marker::PhantomData,
             }
         }
         fn len(&self) -> usize { 
@@ -127,26 +131,7 @@ mod val_batch {
         fn description(&self) -> &Description<<L::Target as Update>::Time> { &self.description }
     }
 
-    impl<L: Layout> Batch for OrdValBatch<L, Vec<L::Target>> {
-        type Batcher = MergeBatcher<Self>;
-        type Builder = OrdValBuilder<L>;
-        type Merger = OrdValMerger<L>;
-
-        fn begin_merge(&self, other: &Self, compaction_frontier: AntichainRef<<L::Target as Update>::Time>) -> Self::Merger {
-            OrdValMerger::new(self, other, compaction_frontier)
-        }
-    }
-
-    impl<L: Layout> Batch for OrdValBatch<L, TimelyStack<L::Target>>
-    where
-        <L as Layout>::Target: Columnation,
-        Self::Key: Columnation + 'static,
-        Self::Val: Columnation + 'static,
-        Self::Time: Columnation + 'static,
-        Self::R: Columnation + 'static,
-    {
-        type Batcher = ColumnatedMergeBatcher<Self>;
-        type Builder = OrdValBuilder<L>;
+    impl<L: Layout> Batch for OrdValBatch<L> {
         type Merger = OrdValMerger<L>;
 
         fn begin_merge(&self, other: &Self, compaction_frontier: AntichainRef<<L::Target as Update>::Time>) -> Self::Merger {
@@ -174,11 +159,11 @@ mod val_batch {
         singletons: usize,
     }
 
-    impl<L: Layout, C> Merger<OrdValBatch<L, C>> for OrdValMerger<L>
+    impl<L: Layout> Merger<OrdValBatch<L>> for OrdValMerger<L>
     where
-        OrdValBatch<L, C>: Batch<Time=<L::Target as Update>::Time>
+        OrdValBatch<L>: Batch<Time=<L::Target as Update>::Time>
     {
-        fn new(batch1: &OrdValBatch<L, C>, batch2: &OrdValBatch<L, C>, compaction_frontier: AntichainRef<<L::Target as Update>::Time>) -> Self {
+        fn new(batch1: &OrdValBatch<L>, batch2: &OrdValBatch<L>, compaction_frontier: AntichainRef<<L::Target as Update>::Time>) -> Self {
 
             assert!(batch1.upper() == batch2.lower());
             use lattice::Lattice;
@@ -210,15 +195,14 @@ mod val_batch {
                 singletons: 0,
             }
         }
-        fn done(self) -> OrdValBatch<L, C> {
+        fn done(self) -> OrdValBatch<L> {
             OrdValBatch {
                 updates: self.result.updates.len() + self.singletons,
                 storage: self.result,
                 description: self.description,
-                phantom: PhantomData
             }
         }
-        fn work(&mut self, source1: &OrdValBatch<L, C>, source2: &OrdValBatch<L, C>, fuel: &mut isize) {
+        fn work(&mut self, source1: &OrdValBatch<L>, source2: &OrdValBatch<L>, fuel: &mut isize) {
 
             // An (incomplete) indication of the amount of work we've done so far.
             let starting_updates = self.result.updates.len();
@@ -417,35 +401,33 @@ mod val_batch {
     }
 
     /// A cursor for navigating a single layer.
-    pub struct OrdValCursor<L: Layout, C> {
+    pub struct OrdValCursor<L: Layout> {
         /// Absolute position of the current key.
         key_cursor: usize,
         /// Absolute position of the current value.
         val_cursor: usize,
         /// Phantom marker for Rust happiness.
-        phantom: PhantomData<(L, C)>,
+        phantom: PhantomData<L>,
     }
 
-    impl<L: Layout, C> Cursor for OrdValCursor<L, C> {
+    impl<L: Layout> Cursor<OrdValBatch<L>> for OrdValCursor<L> {
         type Key = <L::Target as Update>::Key;
         type Val = <L::Target as Update>::Val;
         type Time = <L::Target as Update>::Time;
         type R = <L::Target as Update>::Diff;
 
-        type Storage = OrdValBatch<L, C>;
-
-        fn key<'a>(&self, storage: &'a Self::Storage) -> &'a Self::Key { storage.storage.keys.index(self.key_cursor) }
-        fn val<'a>(&self, storage: &'a Self::Storage) -> &'a Self::Val { storage.storage.vals.index(self.val_cursor) }
-        fn map_times<L2: FnMut(&Self::Time, &Self::R)>(&mut self, storage: &Self::Storage, mut logic: L2) {
+        fn key<'a>(&self, storage: &'a OrdValBatch<L>) -> &'a Self::Key { storage.storage.keys.index(self.key_cursor) }
+        fn val<'a>(&self, storage: &'a OrdValBatch<L>) -> &'a Self::Val { storage.storage.vals.index(self.val_cursor) }
+        fn map_times<L2: FnMut(&Self::Time, &Self::R)>(&mut self, storage: &OrdValBatch<L>, mut logic: L2) {
             let (lower, upper) = storage.storage.updates_for_value(self.val_cursor);
             for index in lower .. upper {
                 let (time, diff) = &storage.storage.updates.index(index);
                 logic(time, diff);
             }
         }
-        fn key_valid(&self, storage: &Self::Storage) -> bool { self.key_cursor < storage.storage.keys.len() }
-        fn val_valid(&self, storage: &Self::Storage) -> bool { self.val_cursor < storage.storage.values_for_key(self.key_cursor).1 }
-        fn step_key(&mut self, storage: &Self::Storage){ 
+        fn key_valid(&self, storage: &OrdValBatch<L>) -> bool { self.key_cursor < storage.storage.keys.len() }
+        fn val_valid(&self, storage: &OrdValBatch<L>) -> bool { self.val_cursor < storage.storage.values_for_key(self.key_cursor).1 }
+        fn step_key(&mut self, storage: &OrdValBatch<L>){
             self.key_cursor += 1;
             if self.key_valid(storage) {
                 self.rewind_vals(storage);
@@ -454,28 +436,28 @@ mod val_batch {
                 self.key_cursor = storage.storage.keys.len();
             }
         }
-        fn seek_key(&mut self, storage: &Self::Storage, key: &Self::Key) { 
+        fn seek_key(&mut self, storage: &OrdValBatch<L>, key: &Self::Key) {
             self.key_cursor += storage.storage.keys.advance(self.key_cursor, storage.storage.keys.len(), |x| x.lt(key));
             if self.key_valid(storage) {
                 self.rewind_vals(storage);
             }
         }
-        fn step_val(&mut self, storage: &Self::Storage) {
+        fn step_val(&mut self, storage: &OrdValBatch<L>) {
             self.val_cursor += 1; 
             if !self.val_valid(storage) {
                 self.val_cursor = storage.storage.values_for_key(self.key_cursor).1;
             }
         }
-        fn seek_val(&mut self, storage: &Self::Storage, val: &Self::Val) { 
+        fn seek_val(&mut self, storage: &OrdValBatch<L>, val: &Self::Val) {
             self.val_cursor += storage.storage.vals.advance(self.val_cursor, storage.storage.values_for_key(self.key_cursor).1, |x| x.lt(val));
         }
-        fn rewind_keys(&mut self, storage: &Self::Storage) { 
+        fn rewind_keys(&mut self, storage: &OrdValBatch<L>) {
             self.key_cursor = 0;
             if self.key_valid(storage) {
                 self.rewind_vals(storage)
             }
         }
-        fn rewind_vals(&mut self, storage: &Self::Storage) { 
+        fn rewind_vals(&mut self, storage: &OrdValBatch<L>) {
             self.val_cursor = storage.storage.values_for_key(self.key_cursor).0;
         }
     }
@@ -519,10 +501,13 @@ mod val_batch {
         }
     }
 
-    impl<L: Layout, C> Builder<OrdValBatch<L, C>> for OrdValBuilder<L>
+    impl<L: Layout> Builder for OrdValBuilder<L>
     where
-        OrdValBatch<L, C>: Batch<Key=<L::Target as Update>::Key, Val=<L::Target as Update>::Val, Time=<L::Target as Update>::Time, R=<L::Target as Update>::Diff>
+        OrdValBatch<L>: Batch<Key=<L::Target as Update>::Key, Val=<L::Target as Update>::Val, Time=<L::Target as Update>::Time, R=<L::Target as Update>::Diff>
     {
+        type Item = ((<L::Target as Update>::Key, <L::Target as Update>::Val), <L::Target as Update>::Time, <L::Target as Update>::Diff);
+        type Time = <L::Target as Update>::Time;
+        type Output = OrdValBatch<L>;
 
         fn new() -> Self { Self::with_capacity(0) }
         fn with_capacity(cap: usize) -> Self {
@@ -541,7 +526,7 @@ mod val_batch {
         }
 
         #[inline]
-        fn push(&mut self, (key, val, time, diff): (<L::Target as Update>::Key, <L::Target as Update>::Val, <L::Target as Update>::Time, <L::Target as Update>::Diff)) {
+        fn push(&mut self, ((key, val), time, diff): Self::Item) {
 
             // Perhaps this is a continuation of an already received key.
             if self.result.keys.last() == Some(&key) {
@@ -567,7 +552,7 @@ mod val_batch {
         }
 
         #[inline]
-        fn copy(&mut self, (key, val, time, diff): (&<L::Target as Update>::Key, &<L::Target as Update>::Val, &<L::Target as Update>::Time, &<L::Target as Update>::Diff)) {
+        fn copy(&mut self, ((key, val), time, diff): &Self::Item) {
 
             // Perhaps this is a continuation of an already received key.
             if self.result.keys.last() == Some(key) {
@@ -597,7 +582,7 @@ mod val_batch {
         }
 
         #[inline(never)]
-        fn done(mut self, lower: Antichain<<L::Target as Update>::Time>, upper: Antichain<<L::Target as Update>::Time>, since: Antichain<<L::Target as Update>::Time>) -> OrdValBatch<L, C> {
+        fn done(mut self, lower: Antichain<Self::Time>, upper: Antichain<Self::Time>, since: Antichain<Self::Time>) -> OrdValBatch<L> {
             // Record the final offsets
             self.result.vals_offs.push(self.result.updates.len().try_into().ok().unwrap());
             // Remove any pending singleton, and if it was set increment our count.
@@ -607,7 +592,6 @@ mod val_batch {
                 updates: self.result.updates.len() + self.singletons,
                 storage: self.result,
                 description: Description::new(lower, upper, since),
-                phantom: PhantomData,
             }
         }
     }

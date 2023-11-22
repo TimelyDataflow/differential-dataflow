@@ -96,7 +96,7 @@ where
     pub fn seal(&mut self, upper: Antichain<Tr::Time>) {
         if self.upper != upper {
             use trace::Builder;
-            let builder = <Tr::Batch as Batch>::Builder::new();
+            let builder = Tr::Builder::new();
             let batch = builder.done(self.upper.clone(), upper, Antichain::from_elem(Tr::Time::minimum()));
             self.insert(batch, None);
         }

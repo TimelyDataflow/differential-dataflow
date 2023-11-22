@@ -633,12 +633,12 @@ impl<G, T1> JoinCore<G, T1::Key, T1::Val, T1::R> for Arranged<G,T1>
 /// The structure wraps cursors which allow us to play out join computation at whatever rate we like.
 /// This allows us to avoid producing and buffering massive amounts of data, without giving the timely
 /// dataflow system a chance to run operators that can consume and aggregate the data.
-struct Deferred<K, T, R, C1, C2, D>
+struct Deferred<K, T, R, S1, S2, C1, C2, D>
 where
     T: Timestamp+Lattice+Ord+Debug,
     R: Semigroup,
-    C1: Cursor<Key=K, Time=T>,
-    C2: Cursor<Key=K, Time=T>,
+    C1: Cursor<S1, Key=K, Time=T>,
+    C2: Cursor<S2, Key=K, Time=T>,
     C1::Val: Ord+Clone,
     C2::Val: Ord+Clone,
     C1::R: Semigroup,
@@ -647,19 +647,19 @@ where
 {
     phant: ::std::marker::PhantomData<K>,
     trace: C1,
-    trace_storage: C1::Storage,
+    trace_storage: S1,
     batch: C2,
-    batch_storage: C2::Storage,
+    batch_storage: S2,
     capability: Capability<T>,
     done: bool,
     temp: Vec<((D, T), R)>,
 }
 
-impl<K, T, R, C1, C2, D> Deferred<K, T, R, C1, C2, D>
+impl<K, T, R, S1, S2, C1, C2, D> Deferred<K, T, R, S1, S2, C1, C2, D>
 where
     K: Ord+Debug+Eq,
-    C1: Cursor<Key=K, Time=T>,
-    C2: Cursor<Key=K, Time=T>,
+    C1: Cursor<S1, Key=K, Time=T>,
+    C2: Cursor<S2, Key=K, Time=T>,
     C1::Val: Ord+Clone+Debug,
     C2::Val: Ord+Clone+Debug,
     C1::R: Semigroup,
@@ -668,7 +668,7 @@ where
     R: Semigroup,
     D: Clone+Data,
 {
-    fn new(trace: C1, trace_storage: C1::Storage, batch: C2, batch_storage: C2::Storage, capability: Capability<T>) -> Self {
+    fn new(trace: C1, trace_storage: S1, batch: C2, batch_storage: S2, capability: Capability<T>) -> Self {
         Deferred {
             phant: ::std::marker::PhantomData,
             trace,
