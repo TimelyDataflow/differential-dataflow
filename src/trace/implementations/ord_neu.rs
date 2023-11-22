@@ -128,8 +128,8 @@ mod val_batch {
     }
 
     impl<L: Layout> Batch for OrdValBatch<L, Vec<L::Target>> {
-        type Batcher = MergeBatcher<Self>;
-        type Builder = OrdValBuilder<L>;
+        type Batcher = MergeBatcher<L::Target>;
+        type Builder = OrdValBuilder<L, Vec<L::Target>>;
         type Merger = OrdValMerger<L>;
 
         fn begin_merge(&self, other: &Self, compaction_frontier: AntichainRef<<L::Target as Update>::Time>) -> Self::Merger {
@@ -145,8 +145,8 @@ mod val_batch {
         Self::Time: Columnation + 'static,
         Self::R: Columnation + 'static,
     {
-        type Batcher = ColumnatedMergeBatcher<Self>;
-        type Builder = OrdValBuilder<L>;
+        type Batcher = ColumnatedMergeBatcher<L::Target>;
+        type Builder = OrdValBuilder<L, TimelyStack<L::Target>>;
         type Merger = OrdValMerger<L>;
 
         fn begin_merge(&self, other: &Self, compaction_frontier: AntichainRef<<L::Target as Update>::Time>) -> Self::Merger {
@@ -479,7 +479,7 @@ mod val_batch {
     }
 
     /// A builder for creating layers from unsorted update tuples.
-    pub struct OrdValBuilder<L: Layout> {
+    pub struct OrdValBuilder<L: Layout, C> {
         result: OrdValStorage<L>,
         singleton: Option<(<L::Target as Update>::Time, <L::Target as Update>::Diff)>,
         /// Counts the number of singleton optimizations we performed.
@@ -487,9 +487,11 @@ mod val_batch {
         /// This number allows us to correctly gauge the total number of updates reflected in a batch,
         /// even though `updates.len()` may be much shorter than this amount.
         singletons: usize,
+        /// Phantom marker for Rust happiness.
+        pub phantom: PhantomData<C>,
     }
 
-    impl<L: Layout> OrdValBuilder<L> {
+    impl<L: Layout, C> OrdValBuilder<L, C> {
         /// Pushes a single update, which may set `self.singleton` rather than push.
         ///
         /// This operation is meant to be equivalent to `self.results.updates.push((time, diff))`.
@@ -517,13 +519,13 @@ mod val_batch {
         }
     }
 
-    impl<L: Layout, C> Builder<OrdValBatch<L, C>> for OrdValBuilder<L>
+    impl<L: Layout, C> Builder for OrdValBuilder<L, C>
     where
         OrdValBatch<L, C>: Batch<Key=<L::Target as Update>::Key, Val=<L::Target as Update>::Val, Time=<L::Target as Update>::Time, R=<L::Target as Update>::Diff>
     {
-
         type Item = ((<L::Target as Update>::Key, <L::Target as Update>::Val), <L::Target as Update>::Time, <L::Target as Update>::Diff);
         type Time = <L::Target as Update>::Time;
+        type Output = OrdValBatch<L, C>;
 
         fn new() -> Self { Self::with_capacity(0) }
         fn with_capacity(cap: usize) -> Self {
@@ -538,6 +540,7 @@ mod val_batch {
                 },
                 singleton: None,
                 singletons: 0,
+                phantom: std::marker::PhantomData,
             }
         }
 

@@ -276,7 +276,7 @@ pub trait ReduceCore<G: Scope, K: Data, V: Data, R: Semigroup> where G::Timestam
             T2::Val: Data,
             T2::R: Abelian,
             T2::Batch: Batch,
-            <T2::Batch as Batch>::Builder: Builder<T2::Batch, Item = ((T2::Key, T2::Val), T2::Time, T2::R)>,
+            <T2::Batch as Batch>::Builder: Builder<Output=T2::Batch, Item = ((T2::Key, T2::Val), T2::Time, T2::R)>,
             L: FnMut(&K, &[(&V, R)], &mut Vec<(T2::Val, T2::R)>)+'static,
         {
             self.reduce_core::<_,T2>(name, move |key, input, output, change| {
@@ -299,7 +299,7 @@ pub trait ReduceCore<G: Scope, K: Data, V: Data, R: Semigroup> where G::Timestam
             T2::Val: Data,
             T2::R: Semigroup,
             T2::Batch: Batch,
-            <T2::Batch as Batch>::Builder: Builder<T2::Batch, Item = ((T2::Key, T2::Val), T2::Time, T2::R)>,
+            <T2::Batch as Batch>::Builder: Builder<Output=T2::Batch, Item = ((T2::Key, T2::Val), T2::Time, T2::R)>,
             L: FnMut(&K, &[(&V, R)], &mut Vec<(T2::Val,T2::R)>, &mut Vec<(T2::Val,T2::R)>)+'static
             ;
 }
@@ -318,7 +318,7 @@ where
             T2::R: Semigroup,
             T2: Trace+TraceReader<Key=K, Time=G::Timestamp>+'static,
             T2::Batch: Batch,
-            <T2::Batch as Batch>::Builder: Builder<T2::Batch, Item = ((T2::Key, T2::Val), T2::Time, T2::R)>,
+            <T2::Batch as Batch>::Builder: Builder<Output=T2::Batch, Item = ((T2::Key, T2::Val), T2::Time, T2::R)>,
             L: FnMut(&K, &[(&V, R)], &mut Vec<(T2::Val,T2::R)>, &mut Vec<(T2::Val, T2::R)>)+'static
     {
         self.arrange_by_key_named(&format!("Arrange: {}", name))
@@ -337,7 +337,7 @@ where
             T2::Val: Data,
             T2::R: Semigroup,
             T2::Batch: Batch,
-            <T2::Batch as Batch>::Builder: Builder<T2::Batch, Item = ((T2::Key, T2::Val), T2::Time, T2::R)>,
+            <T2::Batch as Batch>::Builder: Builder<Output=T2::Batch, Item = ((T2::Key, T2::Val), T2::Time, T2::R)>,
             L: FnMut(&K, &[(&V, R)], &mut Vec<(T2::Val,T2::R)>, &mut Vec<(T2::Val, T2::R)>)+'static {
 
         let mut result_trace = None;

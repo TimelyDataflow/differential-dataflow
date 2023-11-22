@@ -146,7 +146,7 @@ where
     Tr::Val: ExchangeData,
     Tr: Trace+TraceReader<Time=G::Timestamp,R=isize>+'static,
     Tr::Batch: Batch,
-    <Tr::Batch as Batch>::Builder: Builder<Tr::Batch, Item = ((Tr::Key, Tr::Val), Tr::Time, Tr::R)>,
+    <Tr::Batch as Batch>::Builder: Builder<Item = ((Tr::Key, Tr::Val), Tr::Time, Tr::R)>,
 {
     let mut reader: Option<TraceAgent<Tr>> = None;
 

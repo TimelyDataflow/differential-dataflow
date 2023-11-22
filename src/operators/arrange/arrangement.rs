@@ -29,7 +29,7 @@ use timely::dataflow::operators::Capability;
 use ::{Data, ExchangeData, Collection, AsCollection, Hashable};
 use ::difference::Semigroup;
 use lattice::Lattice;
-use trace::{self, Trace, TraceReader, Batch, BatchReader, Batcher, Cursor};
+use trace::{self, Trace, TraceReader, Batch, BatchReader, Batcher, Builder, Cursor};
 use trace::implementations::{KeySpine, ValSpine};
 
 use trace::wrappers::enter::{TraceEnter, BatchEnter,};
@@ -456,8 +456,8 @@ where
         R: ExchangeData,
         Tr: Trace+TraceReader<Time=G::Timestamp>+'static,
         Tr::Batch: Batch,
-        <Tr::Batch as Batch>::Batcher: Batcher<Tr::Batch, Item = ((K,V),G::Timestamp,R)>,
-        <Tr::Batch as Batch>::Batcher: Batcher<Tr::Batch, Time = G::Timestamp>,
+        <Tr::Batch as Batch>::Batcher: Batcher<Item = ((K,V),G::Timestamp,R), Time = G::Timestamp>,
+        <Tr::Batch as Batch>::Builder: Builder<Item = ((K,V),G::Timestamp,R), Time = G::Timestamp, Output = Tr::Batch>,
     {
         self.arrange_named("Arrange")
     }
@@ -474,8 +474,8 @@ where
         R: ExchangeData,
         Tr: Trace+TraceReader<Time=G::Timestamp>+'static,
         Tr::Batch: Batch,
-        <Tr::Batch as Batch>::Batcher: Batcher<Tr::Batch, Item = ((K,V),G::Timestamp,R)>,
-        <Tr::Batch as Batch>::Batcher: Batcher<Tr::Batch, Time = G::Timestamp>,
+        <Tr::Batch as Batch>::Batcher: Batcher<Item = ((K,V),G::Timestamp,R), Time = G::Timestamp>,
+        <Tr::Batch as Batch>::Builder: Builder<Item = ((K,V),G::Timestamp,R), Time = G::Timestamp, Output = Tr::Batch>,
     {
         let exchange = Exchange::new(move |update: &((K,V),G::Timestamp,R)| (update.0).0.hashed().into());
         self.arrange_core(exchange, name)
@@ -491,8 +491,8 @@ where
         P: ParallelizationContract<G::Timestamp, ((K,V),G::Timestamp,R)>,
         Tr: Trace+TraceReader<Time=G::Timestamp>+'static,
         Tr::Batch: Batch,
-        <Tr::Batch as Batch>::Batcher: Batcher<Tr::Batch, Item = ((K,V),G::Timestamp,R)>,
-        <Tr::Batch as Batch>::Batcher: Batcher<Tr::Batch, Time = G::Timestamp>,
+        <Tr::Batch as Batch>::Batcher: Batcher<Item = ((K,V),G::Timestamp,R), Time = G::Timestamp>,
+        <Tr::Batch as Batch>::Builder: Builder<Item = ((K,V),G::Timestamp,R), Time = G::Timestamp, Output = Tr::Batch>,
     ;
 }
 
@@ -510,8 +510,8 @@ where
         V: ExchangeData,
         R: ExchangeData,
         Tr: Trace + TraceReader<Time=G::Timestamp> + 'static, Tr::Batch: Batch,
-        <Tr::Batch as Batch>::Batcher: Batcher<Tr::Batch, Item = ((K,V),G::Timestamp,R)>,
-        <Tr::Batch as Batch>::Batcher: Batcher<Tr::Batch, Time = G::Timestamp>,
+        <Tr::Batch as Batch>::Batcher: Batcher<Item = ((K,V),G::Timestamp,R), Time = G::Timestamp>,
+        <Tr::Batch as Batch>::Builder: Builder<Item = ((K,V),G::Timestamp,R), Time = G::Timestamp, Output = Tr::Batch>,
     {
         self.arrange_named("Arrange")
     }
@@ -522,8 +522,8 @@ where
         V: ExchangeData,
         R: ExchangeData,
         Tr: Trace + TraceReader<Time=G::Timestamp> + 'static, Tr::Batch: Batch,
-        <Tr::Batch as Batch>::Batcher: Batcher<Tr::Batch, Item = ((K,V),G::Timestamp,R)>,
-        <Tr::Batch as Batch>::Batcher: Batcher<Tr::Batch, Time = G::Timestamp>,
+        <Tr::Batch as Batch>::Batcher: Batcher<Item = ((K,V),G::Timestamp,R), Time = G::Timestamp>,
+        <Tr::Batch as Batch>::Builder: Builder<Item = ((K,V),G::Timestamp,R), Time = G::Timestamp, Output = Tr::Batch>,
     {
         let exchange = Exchange::new(move |update: &((K,V),G::Timestamp,R)| (update.0).0.hashed().into());
         self.arrange_core(exchange, name)
@@ -534,8 +534,8 @@ where
         P: ParallelizationContract<G::Timestamp, ((K,V),G::Timestamp,R)>,
         Tr: Trace+TraceReader<Time=G::Timestamp>+'static,
         Tr::Batch: Batch,
-        <Tr::Batch as Batch>::Batcher: Batcher<Tr::Batch, Item = ((K,V),G::Timestamp,R)>,
-        <Tr::Batch as Batch>::Batcher: Batcher<Tr::Batch, Time = G::Timestamp>,
+        <Tr::Batch as Batch>::Batcher: Batcher<Item = ((K,V),G::Timestamp,R), Time = G::Timestamp>,
+        <Tr::Batch as Batch>::Builder: Builder<Item = ((K,V),G::Timestamp,R), Time = G::Timestamp, Output = Tr::Batch>,
     {
         // The `Arrange` operator is tasked with reacting to an advancing input
         // frontier by producing the sequence of batches whose lower and upper
@@ -645,7 +645,7 @@ where
                                     }
 
                                     // Extract updates not in advance of `upper`.
-                                    let batch = batcher.seal(upper.clone());
+                                    let batch = batcher.seal::<<Tr::Batch as Batch>::Builder>(upper.clone());
 
                                     writer.insert(batch.clone(), Some(capability.time().clone()));
 
@@ -673,7 +673,7 @@ where
                         }
                         else {
                             // Announce progress updates, even without data.
-                            let _batch = batcher.seal(input.frontier().frontier().to_owned());
+                            let _batch = batcher.seal::<<Tr::Batch as Batch>::Builder>(input.frontier().frontier().to_owned());
                             writer.seal(input.frontier().frontier().to_owned());
                         }
 
@@ -699,8 +699,8 @@ where
         P: ParallelizationContract<G::Timestamp, ((K,()),G::Timestamp,R)>,
         Tr: Trace+TraceReader<Time=G::Timestamp>+'static,
         Tr::Batch: Batch,
-        <Tr::Batch as Batch>::Batcher: Batcher<Tr::Batch, Item = ((K,()),G::Timestamp,R)>,
-        <Tr::Batch as Batch>::Batcher: Batcher<Tr::Batch, Time = G::Timestamp>,
+        <Tr::Batch as Batch>::Batcher: Batcher<Item = ((K,()),G::Timestamp,R), Time = G::Timestamp>,
+        <Tr::Batch as Batch>::Builder: Builder<Item = ((K,()),G::Timestamp,R), Time = G::Timestamp, Output = Tr::Batch>,
     {
         self.map(|k| (k, ()))
             .arrange_core(pact, name)

@@ -94,8 +94,8 @@ impl<L: Layout, C> BatchReader for OrdValBatch<L, C> {
 
 impl<L: Layout> Batch for OrdValBatch<L, Vec<L::Target>>
 {
-    type Batcher = MergeBatcher<Self>;
-    type Builder = OrdValBuilder<L>;
+    type Batcher = MergeBatcher<L::Target>;
+    type Builder = OrdValBuilder<L, Vec<L::Target>>;
     type Merger = OrdValMerger<L>;
 
     fn begin_merge(&self, other: &Self, compaction_frontier: AntichainRef<<L::Target as Update>::Time>) -> Self::Merger {
@@ -111,8 +111,8 @@ where
     Self::Time: Columnation + 'static,
     Self::R: Columnation + 'static,
 {
-    type Batcher = ColumnatedMergeBatcher<Self>;
-    type Builder = OrdValBuilder<L>;
+    type Batcher = ColumnatedMergeBatcher<L::Target>;
+    type Builder = OrdValBuilder<L, TimelyStack<L::Target>>;
     type Merger = OrdValMerger<L>;
 
     fn begin_merge(&self, other: &Self, compaction_frontier: AntichainRef<<L::Target as Update>::Time>) -> Self::Merger {
@@ -337,26 +337,30 @@ impl<L: Layout, C> Cursor<OrdValBatch<L, C>> for OrdValCursor<L, C> {
 }
 
 /// A builder for creating layers from unsorted update tuples.
-pub struct OrdValBuilder<L: Layout> {
+pub struct OrdValBuilder<L: Layout, C> {
     builder: KVTDBuilder<L>,
+    phantom: PhantomData<C>,
 }
 
 
-impl<L: Layout, C> Builder<OrdValBatch<L, C>> for OrdValBuilder<L>
+impl<L: Layout, C> Builder for OrdValBuilder<L, C>
 where
     OrdValBatch<L, C>: Batch<Key=<L::Target as Update>::Key, Val=<L::Target as Update>::Val, Time=<L::Target as Update>::Time, R=<L::Target as Update>::Diff>
 {
     type Item = ((<L::Target as Update>::Key, <L::Target as Update>::Val), <L::Target as Update>::Time, <L::Target as Update>::Diff);
     type Time = <L::Target as Update>::Time;
+    type Output = OrdValBatch<L, C>;
 
     fn new() -> Self {
         OrdValBuilder {
-            builder: <KVTDBuilder<L>>::new()
+            builder: <KVTDBuilder<L>>::new(),
+            phantom: std::marker::PhantomData,
         }
     }
     fn with_capacity(cap: usize) -> Self {
         OrdValBuilder {
-            builder: <KVTDBuilder<L> as TupleBuilder>::with_capacity(cap)
+            builder: <KVTDBuilder<L> as TupleBuilder>::with_capacity(cap),
+            phantom: std::marker::PhantomData,
         }
     }
 
@@ -411,9 +415,9 @@ impl<L: Layout, C> BatchReader for OrdKeyBatch<L, C> {
     fn description(&self) -> &Description<<L::Target as Update>::Time> { &self.desc }
 }
 
-impl<L: Layout> Batch for OrdKeyBatch<L, Vec<L::Target>> {
-    type Batcher = MergeBatcher<Self>;
-    type Builder = OrdKeyBuilder<L>;
+impl<L: Layout> Batch for OrdKeyBatch<L, Vec<L::Target>> where L::Target: Update<Val = ()> {
+    type Batcher = MergeBatcher<L::Target>;
+    type Builder = OrdKeyBuilder<L, Vec<L::Target>>;
     type Merger = OrdKeyMerger<L>;
 
     fn begin_merge(&self, other: &Self, compaction_frontier: AntichainRef<<L::Target as Update>::Time>) -> Self::Merger {
@@ -423,13 +427,13 @@ impl<L: Layout> Batch for OrdKeyBatch<L, Vec<L::Target>> {
 
 impl<L: Layout> Batch for OrdKeyBatch<L, TimelyStack<L::Target>>
 where
-    <L as Layout>::Target: Columnation + 'static,
+    <L as Layout>::Target: Update<Val = ()> + Columnation + 'static,
     Self::Key: Columnation + 'static,
     Self::Time: Columnation + 'static,
     Self::R: Columnation + 'static,
 {
-    type Batcher = ColumnatedMergeBatcher<Self>;
-    type Builder = OrdKeyBuilder<L>;
+    type Batcher = ColumnatedMergeBatcher<L::Target>;
+    type Builder = OrdKeyBuilder<L, TimelyStack<L::Target>>;
     type Merger = OrdKeyMerger<L>;
 
     fn begin_merge(&self, other: &Self, compaction_frontier: AntichainRef<<L::Target as Update>::Time>) -> Self::Merger {
@@ -636,26 +640,30 @@ impl<L: Layout, C> Cursor<OrdKeyBatch<L, C>> for OrdKeyCursor<L, C> {
 
 
 /// A builder for creating layers from unsorted update tuples.
-pub struct OrdKeyBuilder<L: Layout> {
+pub struct OrdKeyBuilder<L: Layout, C> {
     builder: KTDBuilder<L>,
+    phantom: std::marker::PhantomData<C>
 }
 
-impl<L: Layout, C> Builder<OrdKeyBatch<L, C>> for OrdKeyBuilder<L>
+impl<L: Layout, C> Builder for OrdKeyBuilder<L, C>
 where
     OrdKeyBatch<L, C>: Batch<Key=<L::Target as Update>::Key, Val=(), Time=<L::Target as Update>::Time, R=<L::Target as Update>::Diff>
 {
     type Item = ((<L::Target as Update>::Key, ()), <L::Target as Update>::Time, <L::Target as Update>::Diff);
     type Time = <L::Target as Update>::Time;
+    type Output = OrdKeyBatch<L, C>;
 
     fn new() -> Self {
         OrdKeyBuilder {
-            builder: <KTDBuilder<L>>::new()
+            builder: <KTDBuilder<L>>::new(),
+            phantom: std::marker::PhantomData,
         }
     }
 
     fn with_capacity(cap: usize) -> Self {
         OrdKeyBuilder {
-            builder: <KTDBuilder<L> as TupleBuilder>::with_capacity(cap)
+            builder: <KTDBuilder<L> as TupleBuilder>::with_capacity(cap),
+            phantom: std::marker::PhantomData,
         }
     }
 

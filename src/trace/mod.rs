@@ -280,9 +280,9 @@ where
 /// An immutable collection of updates.
 pub trait Batch : BatchReader where Self: ::std::marker::Sized {
     /// A type used to assemble batches from disordered updates.
-    type Batcher: Batcher<Self, Time = Self::Time>;
+    type Batcher: Batcher<Time = Self::Time>;
     /// A type used to assemble batches from ordered update sequences.
-    type Builder: Builder<Self, Time = Self::Time>;
+    type Builder: Builder<Item=<Self::Batcher as Batcher>::Item, Time=Self::Time, Output = Self>;
     /// A type used to progressively merge batches.
     type Merger: Merger<Self>;
 
@@ -301,7 +301,7 @@ pub trait Batch : BatchReader where Self: ::std::marker::Sized {
 }
 
 /// Functionality for collecting and batching updates.
-pub trait Batcher<Output> {
+pub trait Batcher {
     /// Type of update pushed into the batcher.
     type Item;
     /// Times at which batches are formed.
@@ -311,17 +311,19 @@ pub trait Batcher<Output> {
     /// Adds an unordered batch of elements to the batcher.
     fn push_batch(&mut self, batch: RefOrMut<Vec<Self::Item>>);
     /// Returns all updates not greater or equal to an element of `upper`.
-    fn seal(&mut self, upper: Antichain<Self::Time>) -> Output;
+    fn seal<B: Builder<Item=Self::Item, Time=Self::Time>>(&mut self, upper: Antichain<Self::Time>) -> B::Output;
     /// Returns the lower envelope of contained update times.
     fn frontier(&mut self) -> timely::progress::frontier::AntichainRef<Self::Time>;
 }
 
 /// Functionality for building batches from ordered update sequences.
-pub trait Builder<Output> {
-    /// Type of update pushed into the builder.
+pub trait Builder {
+    /// Input item type.
     type Item;
-    /// Times at which batches are formed.
+    /// Timestamp type.
     type Time: Timestamp;
+    /// Output batch type.
+    type Output;
     
     /// Allocates an empty builder.
     fn new() -> Self;
@@ -341,7 +343,7 @@ pub trait Builder<Output> {
         for item in iter { self.push(item); }
     }
     /// Completes building and returns the batch.
-    fn done(self, lower: Antichain<Self::Time>, upper: Antichain<Self::Time>, since: Antichain<Self::Time>) -> Output;
+    fn done(self, lower: Antichain<Self::Time>, upper: Antichain<Self::Time>, since: Antichain<Self::Time>) -> Self::Output;
 }
 
 /// Represents a merge in progress.
@@ -367,10 +369,9 @@ pub trait Merger<Output: Batch> {
 pub mod rc_blanket_impls {
 
     use std::rc::Rc;
-    use timely::communication::message::RefOrMut;
 
     use timely::progress::{Antichain, frontier::AntichainRef};
-    use super::{Batch, BatchReader, Batcher, Builder, Merger, Cursor, Description};
+    use super::{Batch, BatchReader, Builder, Merger, Cursor, Description};
 
     impl<B: BatchReader> BatchReader for Rc<B> {
         type Key = B::Key;
@@ -434,36 +435,24 @@ pub mod rc_blanket_impls {
 
     /// An immutable collection of updates.
     impl<B: Batch> Batch for Rc<B> {
-        type Batcher = RcBatcher<B>;
-        type Builder = RcBuilder<B>;
+        type Batcher = B::Batcher;
+        type Builder = RcBuilder<B::Builder>;
         type Merger = RcMerger<B>;
     }
 
-    /// Wrapper type for batching reference counted batches.
-    pub struct RcBatcher<B:Batch> { batcher: B::Batcher }
-
-    /// Functionality for collecting and batching updates.
-    impl<B:Batch> Batcher<Rc<B>> for RcBatcher<B> {
-        type Item = <<B as Batch>::Batcher as Batcher<B>>::Item;
-        type Time = <<B as Batch>::Batcher as Batcher<B>>::Time;
-        fn new() -> Self { RcBatcher { batcher: <B::Batcher as Batcher<B>>::new() } }
-        fn push_batch(&mut self, batch: RefOrMut<Vec<Self::Item>>) { self.batcher.push_batch(batch) }
-        fn seal(&mut self, upper: Antichain<Self::Time>) -> Rc<B> { Rc::new(self.batcher.seal(upper)) }
-        fn frontier(&mut self) -> timely::progress::frontier::AntichainRef<Self::Time> { self.batcher.frontier() }
-    }
-
     /// Wrapper type for building reference counted batches.
-    pub struct RcBuilder<B:Batch> { builder: B::Builder }
+    pub struct RcBuilder<B: Builder> { builder: B }
 
     /// Functionality for building batches from ordered update sequences.
-    impl<B:Batch> Builder<Rc<B>> for RcBuilder<B> {
-        type Item = <<B as Batch>::Builder as Builder<B>>::Item;
-        type Time = <<B as Batch>::Builder as Builder<B>>::Time;
-        fn new() -> Self { RcBuilder { builder: <B::Builder as Builder<B>>::new() } }
-        fn with_capacity(cap: usize) -> Self { RcBuilder { builder: <B::Builder as Builder<B>>::with_capacity(cap) } }
+    impl<B: Builder> Builder for RcBuilder<B> {
+        type Item = B::Item;
+        type Time = B::Time;
+        type Output = Rc<B::Output>;
+        fn new() -> Self { RcBuilder { builder: B::new() } }
+        fn with_capacity(cap: usize) -> Self { RcBuilder { builder: B::with_capacity(cap) } }
         fn push(&mut self, element: Self::Item) { self.builder.push(element) }
         fn copy(&mut self, element: &Self::Item) { self.builder.copy(element) }
-        fn done(self, lower: Antichain<Self::Time>, upper: Antichain<Self::Time>, since: Antichain<Self::Time>) -> Rc<B> { Rc::new(self.builder.done(lower, upper, since)) }
+        fn done(self, lower: Antichain<Self::Time>, upper: Antichain<Self::Time>, since: Antichain<Self::Time>) -> Rc<B::Output> { Rc::new(self.builder.done(lower, upper, since)) }
     }
 
     /// Wrapper type for merging reference counted batches.
@@ -485,10 +474,9 @@ pub mod abomonated_blanket_impls {
 
     use abomonation::{Abomonation, measure};
     use abomonation::abomonated::Abomonated;
-    use timely::communication::message::RefOrMut;
     use timely::progress::{Antichain, frontier::AntichainRef};
 
-    use super::{Batch, BatchReader, Batcher, Builder, Merger, Cursor, Description};
+    use super::{Batch, BatchReader, Builder, Merger, Cursor, Description};
 
     impl<B: BatchReader+Abomonation> BatchReader for Abomonated<B, Vec<u8>> {
 
@@ -553,45 +541,31 @@ pub mod abomonated_blanket_impls {
 
     /// An immutable collection of updates.
     impl<B: Batch+Abomonation> Batch for Abomonated<B, Vec<u8>> {
-        type Batcher = AbomonatedBatcher<B>;
-        type Builder = AbomonatedBuilder<B>;
+        type Batcher = B::Batcher;
+        type Builder = AbomonatedBuilder<B::Builder>;
         type Merger = AbomonatedMerger<B>;
     }
 
-    /// Wrapper type for batching reference counted batches.
-    pub struct AbomonatedBatcher<B:Batch> { batcher: B::Batcher }
-
-    /// Functionality for collecting and batching updates.
-    impl<B:Batch+Abomonation> Batcher<Abomonated<B,Vec<u8>>> for AbomonatedBatcher<B> {
-        type Item = <<B as Batch>::Batcher as Batcher<B>>::Item;
-        type Time = <<B as Batch>::Batcher as Batcher<B>>::Time;
-        fn new() -> Self { AbomonatedBatcher { batcher: <B::Batcher as Batcher<B>>::new() } }
-        fn push_batch(&mut self, batch: RefOrMut<Vec<Self::Item>>) { self.batcher.push_batch(batch) }
-        fn seal(&mut self, upper: Antichain<Self::Time>) -> Abomonated<B, Vec<u8>> {
-            let batch = self.batcher.seal(upper);
-            let mut bytes = Vec::with_capacity(measure(&batch));
-            unsafe { abomonation::encode(&batch, &mut bytes).unwrap() };
-            unsafe { Abomonated::<B,_>::new(bytes).unwrap() }
-        }
-        fn frontier(&mut self) -> timely::progress::frontier::AntichainRef<Self::Time> { self.batcher.frontier() }
-    }
-
     /// Wrapper type for building reference counted batches.
-    pub struct AbomonatedBuilder<B:Batch> { builder: B::Builder }
+    pub struct AbomonatedBuilder<B: Builder> { builder: B }
 
     /// Functionality for building batches from ordered update sequences.
-    impl<B:Batch+Abomonation> Builder<Abomonated<B,Vec<u8>>> for AbomonatedBuilder<B> {
-        type Item = <<B as Batch>::Builder as Builder<B>>::Item;
-        type Time = <<B as Batch>::Builder as Builder<B>>::Time;
-        fn new() -> Self { AbomonatedBuilder { builder: <B::Builder as Builder<B>>::new() } }
-        fn with_capacity(cap: usize) -> Self { AbomonatedBuilder { builder: <B::Builder as Builder<B>>::with_capacity(cap) } }
+    impl<B: Builder> Builder for AbomonatedBuilder<B>
+    where
+        B::Output: Abomonation,
+    {
+        type Item = B::Item;
+        type Time = B::Time;
+        type Output = Abomonated<B::Output, Vec<u8>>;
+        fn new() -> Self { AbomonatedBuilder { builder: B::new() } }
+        fn with_capacity(cap: usize) -> Self { AbomonatedBuilder { builder: B::with_capacity(cap) } }
         fn push(&mut self, element: Self::Item) { self.builder.push(element) }
         fn copy(&mut self, element: &Self::Item) { self.builder.copy(element) }
-        fn done(self, lower: Antichain<Self::Time>, upper: Antichain<Self::Time>, since: Antichain<Self::Time>) -> Abomonated<B, Vec<u8>> {
+        fn done(self, lower: Antichain<Self::Time>, upper: Antichain<Self::Time>, since: Antichain<Self::Time>) -> Self::Output {
             let batch = self.builder.done(lower, upper, since);
             let mut bytes = Vec::with_capacity(measure(&batch));
             unsafe { abomonation::encode(&batch, &mut bytes).unwrap() };
-            unsafe { Abomonated::<B,_>::new(bytes).unwrap() }
+            unsafe { Abomonated::<B::Output,_>::new(bytes).unwrap() }
         }
     }
 

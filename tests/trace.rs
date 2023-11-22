@@ -9,12 +9,14 @@ use differential_dataflow::trace::{Trace, TraceReader, Batch, Batcher};
 use differential_dataflow::trace::cursor::Cursor;
 
 type IntegerTrace = ValSpine<u64, u64, usize, i64>;
+type IntegerBatch = <IntegerTrace as TraceReader>::Batch;
+type IntegerBuilder = <IntegerBatch as Batch>::Builder;
 
 fn get_trace() -> ValSpine<u64, u64, usize, i64> {
     let op_info = OperatorInfo::new(0, 0, &[]);
     let mut trace = IntegerTrace::new(op_info, None, None);
     {
-        let mut batcher = <<IntegerTrace as TraceReader>::Batch as Batch>::Batcher::new();
+        let mut batcher = <IntegerBatch as Batch>::Batcher::new();
 
         use timely::communication::message::RefOrMut;
         batcher.push_batch(RefOrMut::Mut(&mut vec![
@@ -24,7 +26,7 @@ fn get_trace() -> ValSpine<u64, u64, usize, i64> {
         ]));
 
         let batch_ts = &[1, 2, 3];
-        let batches = batch_ts.iter().map(move |i| batcher.seal(Antichain::from_elem(*i)));
+        let batches = batch_ts.iter().map(move |i| batcher.seal::<IntegerBuilder>(Antichain::from_elem(*i)));
         for b in batches {
             trace.insert(b);
         }
