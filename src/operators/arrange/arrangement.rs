@@ -454,7 +454,7 @@ where
         K: ExchangeData+Hashable,
         V: ExchangeData,
         R: ExchangeData,
-        Tr: Trace+TraceReader<Key=K,Val=V,Time=G::Timestamp,R=R>+'static,
+        Tr: Trace+TraceReader<Time=G::Timestamp>+'static,
         Tr::Batch: Batch,
         <Tr::Batch as Batch>::Batcher: Batcher<Tr::Batch, Item = ((K,V),G::Timestamp,R)>,
         <Tr::Batch as Batch>::Batcher: Batcher<Tr::Batch, Time = G::Timestamp>,
@@ -472,7 +472,7 @@ where
         K: ExchangeData+Hashable,
         V: ExchangeData,
         R: ExchangeData,
-        Tr: Trace+TraceReader<Key=K,Val=V,Time=G::Timestamp,R=R>+'static,
+        Tr: Trace+TraceReader<Time=G::Timestamp>+'static,
         Tr::Batch: Batch,
         <Tr::Batch as Batch>::Batcher: Batcher<Tr::Batch, Item = ((K,V),G::Timestamp,R)>,
         <Tr::Batch as Batch>::Batcher: Batcher<Tr::Batch, Time = G::Timestamp>,
@@ -489,7 +489,7 @@ where
     fn arrange_core<P, Tr>(&self, pact: P, name: &str) -> Arranged<G, TraceAgent<Tr>>
     where
         P: ParallelizationContract<G::Timestamp, ((K,V),G::Timestamp,R)>,
-        Tr: Trace+TraceReader<Key=K,Val=V,Time=G::Timestamp,R=R>+'static,
+        Tr: Trace+TraceReader<Time=G::Timestamp>+'static,
         Tr::Batch: Batch,
         <Tr::Batch as Batch>::Batcher: Batcher<Tr::Batch, Item = ((K,V),G::Timestamp,R)>,
         <Tr::Batch as Batch>::Batcher: Batcher<Tr::Batch, Time = G::Timestamp>,
@@ -509,7 +509,7 @@ where
         K: ExchangeData + Hashable,
         V: ExchangeData,
         R: ExchangeData,
-        Tr: Trace + TraceReader<Key=K, Val=V, Time=G::Timestamp, R=R> + 'static, Tr::Batch: Batch,
+        Tr: Trace + TraceReader<Time=G::Timestamp> + 'static, Tr::Batch: Batch,
         <Tr::Batch as Batch>::Batcher: Batcher<Tr::Batch, Item = ((K,V),G::Timestamp,R)>,
         <Tr::Batch as Batch>::Batcher: Batcher<Tr::Batch, Time = G::Timestamp>,
     {
@@ -521,7 +521,7 @@ where
         K: ExchangeData + Hashable,
         V: ExchangeData,
         R: ExchangeData,
-        Tr: Trace + TraceReader<Key=K, Val=V, Time=G::Timestamp, R=R> + 'static, Tr::Batch: Batch,
+        Tr: Trace + TraceReader<Time=G::Timestamp> + 'static, Tr::Batch: Batch,
         <Tr::Batch as Batch>::Batcher: Batcher<Tr::Batch, Item = ((K,V),G::Timestamp,R)>,
         <Tr::Batch as Batch>::Batcher: Batcher<Tr::Batch, Time = G::Timestamp>,
     {
@@ -532,7 +532,7 @@ where
     fn arrange_core<P, Tr>(&self, pact: P, name: &str) -> Arranged<G, TraceAgent<Tr>>
     where
         P: ParallelizationContract<G::Timestamp, ((K,V),G::Timestamp,R)>,
-        Tr: Trace+TraceReader<Key=K,Val=V,Time=G::Timestamp,R=R>+'static,
+        Tr: Trace+TraceReader<Time=G::Timestamp>+'static,
         Tr::Batch: Batch,
         <Tr::Batch as Batch>::Batcher: Batcher<Tr::Batch, Item = ((K,V),G::Timestamp,R)>,
         <Tr::Batch as Batch>::Batcher: Batcher<Tr::Batch, Time = G::Timestamp>,
@@ -697,7 +697,7 @@ where
     fn arrange_core<P, Tr>(&self, pact: P, name: &str) -> Arranged<G, TraceAgent<Tr>>
     where
         P: ParallelizationContract<G::Timestamp, ((K,()),G::Timestamp,R)>,
-        Tr: Trace+TraceReader<Key=K, Val=(), Time=G::Timestamp, R=R>+'static,
+        Tr: Trace+TraceReader<Time=G::Timestamp>+'static,
         Tr::Batch: Batch,
         <Tr::Batch as Batch>::Batcher: Batcher<Tr::Batch, Item = ((K,()),G::Timestamp,R)>,
         <Tr::Batch as Batch>::Batcher: Batcher<Tr::Batch, Time = G::Timestamp>,
