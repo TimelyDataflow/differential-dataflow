@@ -346,6 +346,8 @@ impl<L: Layout, C> Builder<OrdValBatch<L, C>> for OrdValBuilder<L>
 where
     OrdValBatch<L, C>: Batch<Key=<L::Target as Update>::Key, Val=<L::Target as Update>::Val, Time=<L::Target as Update>::Time, R=<L::Target as Update>::Diff>
 {
+    type Item = ((<L::Target as Update>::Key, <L::Target as Update>::Val), <L::Target as Update>::Time, <L::Target as Update>::Diff);
+    type Time = <L::Target as Update>::Time;
 
     fn new() -> Self {
         OrdValBuilder {
@@ -359,16 +361,16 @@ where
     }
 
     #[inline]
-    fn push(&mut self, (key, val, time, diff): (<OrdValBatch<L, C> as BatchReader>::Key, <OrdValBatch<L, C> as BatchReader>::Val, <OrdValBatch<L, C> as BatchReader>::Time, <OrdValBatch<L, C> as BatchReader>::R)) {
+    fn push(&mut self, ((key, val), time, diff): Self::Item) {
         self.builder.push_tuple((key, (val, (time, diff))));
     }
 
-    fn copy(&mut self, (key, val, time, diff): (&<OrdValBatch<L, C> as BatchReader>::Key, &<OrdValBatch<L, C> as BatchReader>::Val, &<OrdValBatch<L, C> as BatchReader>::Time, &<OrdValBatch<L, C> as BatchReader>::R)) {
+    fn copy(&mut self, ((key, val), time, diff): &Self::Item) {
         self.builder.push_tuple((key.clone(), (val.clone(), (time.clone(), diff.clone()))));
     }
 
     #[inline(never)]
-    fn done(self, lower: Antichain<<OrdValBatch<L, C> as BatchReader>::Time>, upper: Antichain<<OrdValBatch<L, C> as BatchReader>::Time>, since: Antichain<<OrdValBatch<L, C> as BatchReader>::Time>) -> OrdValBatch<L, C> {
+    fn done(self, lower: Antichain<Self::Time>, upper: Antichain<Self::Time>, since: Antichain<Self::Time>) -> OrdValBatch<L, C> {
         OrdValBatch {
             layer: self.builder.done(),
             desc: Description::new(lower, upper, since),
@@ -642,6 +644,8 @@ impl<L: Layout, C> Builder<OrdKeyBatch<L, C>> for OrdKeyBuilder<L>
 where
     OrdKeyBatch<L, C>: Batch<Key=<L::Target as Update>::Key, Val=(), Time=<L::Target as Update>::Time, R=<L::Target as Update>::Diff>
 {
+    type Item = ((<L::Target as Update>::Key, ()), <L::Target as Update>::Time, <L::Target as Update>::Diff);
+    type Time = <L::Target as Update>::Time;
 
     fn new() -> Self {
         OrdKeyBuilder {
@@ -656,17 +660,17 @@ where
     }
 
     #[inline]
-    fn push(&mut self, (key, _, time, diff): (<L::Target as Update>::Key, (), <L::Target as Update>::Time, <L::Target as Update>::Diff)) {
+    fn push(&mut self, ((key, _), time, diff): Self::Item) {
         self.builder.push_tuple((key, (time, diff)));
     }
 
     #[inline]
-    fn copy(&mut self, (key, _, time, diff): (&<L::Target as Update>::Key, &(), &<L::Target as Update>::Time, &<L::Target as Update>::Diff)) {
+    fn copy(&mut self, ((key, _), time, diff): &Self::Item) {
         self.builder.push_tuple((key.clone(), (time.clone(), diff.clone())));
     }
 
     #[inline(never)]
-    fn done(self, lower: Antichain<<L::Target as Update>::Time>, upper: Antichain<<L::Target as Update>::Time>, since: Antichain<<L::Target as Update>::Time>) -> OrdKeyBatch<L, C> {
+    fn done(self, lower: Antichain<Self::Time>, upper: Antichain<Self::Time>, since: Antichain<Self::Time>) -> OrdKeyBatch<L, C> {
         OrdKeyBatch {
             layer: self.builder.done(),
             desc: Description::new(lower, upper, since),

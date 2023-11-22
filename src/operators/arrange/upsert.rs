@@ -146,6 +146,7 @@ where
     Tr::Val: ExchangeData,
     Tr: Trace+TraceReader<Time=G::Timestamp,R=isize>+'static,
     Tr::Batch: Batch,
+    <Tr::Batch as Batch>::Builder: Builder<Tr::Batch, Item = ((Tr::Key, Tr::Val), Tr::Time, Tr::R)>,
 {
     let mut reader: Option<TraceAgent<Tr>> = None;
 
@@ -277,10 +278,10 @@ where
                                     for (time, std::cmp::Reverse(next)) in list {
                                         if prev_value != next {
                                             if let Some(prev) = prev_value {
-                                                updates.push((key.clone(), prev, time.clone(), -1));
+                                                updates.push(((key.clone(), prev), time.clone(), -1));
                                             }
                                             if let Some(next) = next.as_ref() {
-                                                updates.push((key.clone(), next.clone(), time.clone(), 1));
+                                                updates.push(((key.clone(), next.clone()), time.clone(), 1));
                                             }
                                             prev_value = next;
                                         }

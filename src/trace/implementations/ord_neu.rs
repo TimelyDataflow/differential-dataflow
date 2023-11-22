@@ -489,6 +489,9 @@ mod val_batch {
 
     impl<L: Layout> Builder<OrdValBatch<L>> for OrdValBuilder<L> {
 
+        type Item = ((<L::Target as Update>::Key, <L::Target as Update>::Val), <L::Target as Update>::Time, <L::Target as Update>::Diff);
+        type Time = <L::Target as Update>::Time;
+
         fn new() -> Self { Self::with_capacity(0) }
         fn with_capacity(cap: usize) -> Self {
             // We don't introduce zero offsets as they will be introduced by the first `push` call.
@@ -506,7 +509,7 @@ mod val_batch {
         }
 
         #[inline]
-        fn push(&mut self, (key, val, time, diff): (<L::Target as Update>::Key, <L::Target as Update>::Val, <L::Target as Update>::Time, <L::Target as Update>::Diff)) {
+        fn push(&mut self, ((key, val), time, diff): Self::Item) {
 
             // Perhaps this is a continuation of an already received key.
             if self.result.keys.last() == Some(&key) {
@@ -532,7 +535,7 @@ mod val_batch {
         }
 
         #[inline]
-        fn copy(&mut self, (key, val, time, diff): (&<L::Target as Update>::Key, &<L::Target as Update>::Val, &<L::Target as Update>::Time, &<L::Target as Update>::Diff)) {
+        fn copy(&mut self, ((key, val), time, diff): &Self::Item) {
 
             // Perhaps this is a continuation of an already received key.
             if self.result.keys.last() == Some(key) {
@@ -562,7 +565,7 @@ mod val_batch {
         }
 
         #[inline(never)]
-        fn done(mut self, lower: Antichain<<L::Target as Update>::Time>, upper: Antichain<<L::Target as Update>::Time>, since: Antichain<<L::Target as Update>::Time>) -> OrdValBatch<L> {
+        fn done(mut self, lower: Antichain<Self::Time>, upper: Antichain<Self::Time>, since: Antichain<Self::Time>) -> OrdValBatch<L> {
             // Record the final offsets
             self.result.vals_offs.push(self.result.updates.len().try_into().ok().unwrap());
             // Remove any pending singleton, and if it was set increment our count.

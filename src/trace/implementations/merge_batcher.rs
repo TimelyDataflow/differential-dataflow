@@ -25,6 +25,7 @@ where
     B::Val: Ord+Clone,
     B::Time: Lattice+timely::progress::Timestamp+Ord+Clone,
     B::R: Semigroup,
+    B::Builder: Builder<B, Item = ((B::Key, B::Val), B::Time, B::R)>,
 {
     type Item = ((B::Key,B::Val),B::Time,B::R);
     type Time = B::Time;
@@ -86,7 +87,7 @@ where
                     keep.push(((key, val), time, diff));
                 }
                 else {
-                    builder.push((key, val, time, diff));
+                    builder.push(((key, val), time, diff));
                 }
             }
             // Recycling buffer.

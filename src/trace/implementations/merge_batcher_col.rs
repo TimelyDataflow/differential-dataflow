@@ -31,6 +31,7 @@ impl<B: Batch> Batcher<B> for ColumnatedMergeBatcher<B>
         B::Val: Ord+Clone+Columnation+'static,
         B::Time: Lattice+timely::progress::Timestamp+Ord+Clone+Columnation+'static,
         B::R: Semigroup+Columnation+'static,
+        B::Builder: Builder<B, Item = ((B::Key, B::Val), B::Time, B::R)>,
 {
     type Item = ((B::Key,B::Val),B::Time,B::R);
     type Time = B::Time;
@@ -77,7 +78,7 @@ impl<B: Batch> Batcher<B> for ColumnatedMergeBatcher<B>
         self.frontier.clear();
 
         for buffer in merged.drain(..) {
-            for datum @ ((key, val), time, diff) in &buffer[..] {
+            for datum @ ((_key, _val), time, _diff) in &buffer[..] {
                 if upper.less_equal(time) {
                     self.frontier.insert(time.clone());
                     if !keep.is_empty() && keep.len() == keep.capacity() {
@@ -87,7 +88,7 @@ impl<B: Batch> Batcher<B> for ColumnatedMergeBatcher<B>
                     keep.copy(datum);
                 }
                 else {
-                    builder.copy((key, val, time, diff));
+                    builder.copy(datum);
                 }
             }
             // Recycling buffer.
