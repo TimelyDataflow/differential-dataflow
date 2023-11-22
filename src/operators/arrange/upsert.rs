@@ -146,7 +146,7 @@ where
     Tr::Val: ExchangeData,
     Tr: Trace+TraceReader<Time=G::Timestamp,R=isize>+'static,
     Tr::Batch: Batch,
-    <Tr::Batch as Batch>::Builder: Builder<Item = ((Tr::Key, Tr::Val), Tr::Time, Tr::R)>,
+    Tr::Builder: Builder<Item = ((Tr::Key, Tr::Val), Tr::Time, Tr::R)>,
 {
     let mut reader: Option<TraceAgent<Tr>> = None;
 
@@ -249,7 +249,7 @@ where
                                 // Prepare a cursor to the existing arrangement, and a batch builder for
                                 // new stuff that we add.
                                 let (mut trace_cursor, trace_storage) = reader_local.cursor();
-                                let mut builder = <Tr::Batch as Batch>::Builder::new();
+                                let mut builder = Tr::Builder::new();
                                 for (key, mut list) in to_process.drain(..) {
 
                                     // The prior value associated with the key.

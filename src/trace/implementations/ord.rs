@@ -10,11 +10,8 @@
 
 use std::rc::Rc;
 use std::convert::{TryFrom, TryInto};
-use std::marker::PhantomData;
 use std::fmt::Debug;
 
-use timely::container::columnation::TimelyStack;
-use timely::container::columnation::Columnation;
 use timely::progress::{Antichain, frontier::AntichainRef};
 
 use lattice::Lattice;
@@ -39,35 +36,60 @@ use trace::implementations::RetainFrom;
 
 use super::{Update, Layout, Vector, TStack};
 
+use trace::rc_blanket_impls::RcBuilder;
+use trace::abomonated_blanket_impls::AbomonatedBuilder;
+
 /// A trace implementation using a spine of ordered lists.
-pub type OrdValSpine<K, V, T, R, O=usize> = Spine<Rc<OrdValBatch<Vector<((K,V),T,R), O>, Vec<((K,V),T,R)>>>>;
+pub type OrdValSpine<K, V, T, R, O=usize> = Spine<
+    Rc<OrdValBatch<Vector<((K,V),T,R), O>>>,
+    MergeBatcher<((K,V),T,R)>,
+    RcBuilder<OrdValBuilder<Vector<((K,V),T,R), O>>>,
+>;
 
 /// A trace implementation using a spine of abomonated ordered lists.
-pub type OrdValSpineAbom<K, V, T, R, O=usize> = Spine<Rc<Abomonated<OrdValBatch<Vector<((K,V),T,R), O>, Vec<((K,V),T,R)>>, Vec<u8>>>>;
+pub type OrdValSpineAbom<K, V, T, R, O=usize> = Spine<
+    Rc<Abomonated<OrdValBatch<Vector<((K,V),T,R), O>>, Vec<u8>>>,
+    MergeBatcher<((K,V),T,R)>,
+    AbomonatedBuilder<OrdValBuilder<Vector<((K,V),T,R), O>>>,
+>;
 
 /// A trace implementation for empty values using a spine of ordered lists.
-pub type OrdKeySpine<K, T, R, O=usize> = Spine<Rc<OrdKeyBatch<Vector<((K,()),T,R), O>, Vec<((K,()),T,R)>>>>;
+pub type OrdKeySpine<K, T, R, O=usize> = Spine<
+    Rc<OrdKeyBatch<Vector<((K,()),T,R), O>>>,
+    MergeBatcher<((K,()),T,R)>,
+    RcBuilder<OrdKeyBuilder<Vector<((K,()),T,R), O>>>,
+>;
 
 /// A trace implementation for empty values using a spine of abomonated ordered lists.
-pub type OrdKeySpineAbom<K, T, R, O=usize> = Spine<Rc<Abomonated<OrdKeyBatch<Vector<((K,()),T,R), O>, Vec<((K,()),T,R)>>, Vec<u8>>>>;
+pub type OrdKeySpineAbom<K, T, R, O=usize> = Spine<
+    Rc<Abomonated<OrdKeyBatch<Vector<((K,()),T,R), O>>, Vec<u8>>>,
+    MergeBatcher<((K,()),T,R)>,
+    AbomonatedBuilder<OrdKeyBuilder<Vector<((K,()),T,R), O>>>,
+>;
 
 /// A trace implementation backed by columnar storage.
-pub type ColValSpine<K, V, T, R, O=usize> = Spine<Rc<OrdValBatch<TStack<((K,V),T,R), O>, TimelyStack<((K,V),T,R)>>>>;
+pub type ColValSpine<K, V, T, R, O=usize> = Spine<
+    Rc<OrdValBatch<TStack<((K,V),T,R), O>>>,
+    ColumnatedMergeBatcher<((K,V),T,R)>,
+    RcBuilder<OrdValBuilder<TStack<((K,V),T,R), O>>>,
+>;
 /// A trace implementation backed by columnar storage.
-pub type ColKeySpine<K, T, R, O=usize> = Spine<Rc<OrdKeyBatch<TStack<((K,()),T,R), O>, TimelyStack<((K,()),T,R)>>>>;
+pub type ColKeySpine<K, T, R, O=usize> = Spine<
+    Rc<OrdKeyBatch<TStack<((K,()),T,R), O>>>,
+    ColumnatedMergeBatcher<((K,()),T,R)>,
+    RcBuilder<OrdKeyBuilder<TStack<((K,()),T,R), O>>>,
+>;
 
 /// An immutable collection of update tuples, from a contiguous interval of logical times.
 ///
 /// The `L` parameter captures the updates should be laid out, and `C` determines which
 /// merge batcher to select.
 #[derive(Abomonation)]
-pub struct OrdValBatch<L: Layout, C> {
+pub struct OrdValBatch<L: Layout> {
     /// Where all the dataz is.
     pub layer: KVTDLayer<L>,
     /// Description of the update times this layer represents.
     pub desc: Description<<L::Target as Update>::Time>,
-    /// Phantom data
-    pub phantom: PhantomData<C>,
 }
 
 // Type aliases to make certain types readable.
@@ -80,22 +102,20 @@ type VTDBuilder<L> = OrderedBuilder<<<L as Layout>::Target as Update>::Val, TDBu
 type KTDBuilder<L> = OrderedBuilder<<<L as Layout>::Target as Update>::Key, TDBuilder<L>, <L as Layout>::KeyOffset, <L as Layout>::KeyContainer>;
 type KVTDBuilder<L> = OrderedBuilder<<<L as Layout>::Target as Update>::Key, VTDBuilder<L>, <L as Layout>::KeyOffset, <L as Layout>::KeyContainer>;
 
-impl<L: Layout, C> BatchReader for OrdValBatch<L, C> {
+impl<L: Layout> BatchReader for OrdValBatch<L> {
     type Key = <L::Target as Update>::Key;
     type Val = <L::Target as Update>::Val;
     type Time = <L::Target as Update>::Time;
     type R = <L::Target as Update>::Diff;
 
-    type Cursor = OrdValCursor<L, C>;
+    type Cursor = OrdValCursor<L>;
     fn cursor(&self) -> Self::Cursor { OrdValCursor { cursor: self.layer.cursor(), phantom: std::marker::PhantomData } }
     fn len(&self) -> usize { <KVTDLayer<L> as Trie>::tuples(&self.layer) }
     fn description(&self) -> &Description<<L::Target as Update>::Time> { &self.desc }
 }
 
-impl<L: Layout> Batch for OrdValBatch<L, Vec<L::Target>>
+impl<L: Layout> Batch for OrdValBatch<L>
 {
-    type Batcher = MergeBatcher<L::Target>;
-    type Builder = OrdValBuilder<L, Vec<L::Target>>;
     type Merger = OrdValMerger<L>;
 
     fn begin_merge(&self, other: &Self, compaction_frontier: AntichainRef<<L::Target as Update>::Time>) -> Self::Merger {
@@ -103,24 +123,8 @@ impl<L: Layout> Batch for OrdValBatch<L, Vec<L::Target>>
     }
 }
 
-impl<L: Layout> Batch for OrdValBatch<L, TimelyStack<L::Target>>
-where
-    <L as Layout>::Target: Columnation,
-    Self::Key: Columnation + 'static,
-    Self::Val: Columnation + 'static,
-    Self::Time: Columnation + 'static,
-    Self::R: Columnation + 'static,
-{
-    type Batcher = ColumnatedMergeBatcher<L::Target>;
-    type Builder = OrdValBuilder<L, TimelyStack<L::Target>>;
-    type Merger = OrdValMerger<L>;
 
-    fn begin_merge(&self, other: &Self, compaction_frontier: AntichainRef<<L::Target as Update>::Time>) -> Self::Merger {
-        OrdValMerger::new(self, other, compaction_frontier)
-    }
-}
-
-impl<L: Layout, C> OrdValBatch<L, C> {
+impl<L: Layout> OrdValBatch<L> {
     fn advance_builder_from(layer: &mut KVTDBuilder<L>, frontier: AntichainRef<<L::Target as Update>::Time>, key_pos: usize) {
 
         let key_start = key_pos;
@@ -222,11 +226,11 @@ pub struct OrdValMerger<L: Layout> {
     description: Description<<L::Target as Update>::Time>,
 }
 
-impl<L: Layout, C> Merger<OrdValBatch<L, C>> for OrdValMerger<L>
+impl<L: Layout> Merger<OrdValBatch<L>> for OrdValMerger<L>
 where
-    OrdValBatch<L, C>: Batch<Time=<L::Target as Update>::Time>
+    OrdValBatch<L>: Batch<Time=<L::Target as Update>::Time>
 {
-    fn new(batch1: &OrdValBatch<L, C>, batch2: &OrdValBatch<L, C>, compaction_frontier: AntichainRef<<OrdValBatch<L, C> as BatchReader>::Time>) -> Self {
+    fn new(batch1: &OrdValBatch<L>, batch2: &OrdValBatch<L>, compaction_frontier: AntichainRef<<OrdValBatch<L> as BatchReader>::Time>) -> Self {
 
         assert!(batch1.upper() == batch2.lower());
 
@@ -244,7 +248,7 @@ where
             description: description,
         }
     }
-    fn done(self) -> OrdValBatch<L, C> {
+    fn done(self) -> OrdValBatch<L> {
 
         assert!(self.lower1 == self.upper1);
         assert!(self.lower2 == self.upper2);
@@ -252,10 +256,9 @@ where
         OrdValBatch {
             layer: self.result.done(),
             desc: self.description,
-            phantom: PhantomData,
         }
     }
-    fn work(&mut self, source1: &OrdValBatch<L, C>, source2: &OrdValBatch<L, C>, fuel: &mut isize) {
+    fn work(&mut self, source1: &OrdValBatch<L>, source2: &OrdValBatch<L>, fuel: &mut isize) {
 
         let starting_updates = self.result.vals.vals.vals.len();
         let mut effort = 0isize;
@@ -293,7 +296,7 @@ where
         effort = (self.result.vals.vals.vals.len() - starting_updates) as isize;
 
         // if we are supplied a frontier, we should compact.
-        OrdValBatch::<L, C>::advance_builder_from(&mut self.result, self.description.since().borrow(), initial_key_pos);
+        OrdValBatch::<L>::advance_builder_from(&mut self.result, self.description.since().borrow(), initial_key_pos);
 
         *fuel -= effort;
 
@@ -304,63 +307,60 @@ where
 }
 
 /// A cursor for navigating a single layer.
-pub struct OrdValCursor<L: Layout, C> {
-    phantom: std::marker::PhantomData<(L, C)>,
+pub struct OrdValCursor<L: Layout> {
+    phantom: std::marker::PhantomData<L>,
     cursor: OrderedCursor<VTDLayer<L>>,
 }
 
-impl<L: Layout, C> Cursor<OrdValBatch<L, C>> for OrdValCursor<L, C> {
+impl<L: Layout> Cursor<OrdValBatch<L>> for OrdValCursor<L> {
     type Key = <L::Target as Update>::Key;
     type Val = <L::Target as Update>::Val;
     type Time = <L::Target as Update>::Time;
     type R = <L::Target as Update>::Diff;
 
-    // type Storage = OrdValBatch<L, C>;
+    // type Storage = OrdValBatch<L>;
 
-    fn key<'a>(&self, storage: &'a OrdValBatch<L, C>) -> &'a Self::Key { &self.cursor.key(&storage.layer) }
-    fn val<'a>(&self, storage: &'a OrdValBatch<L, C>) -> &'a Self::Val { &self.cursor.child.key(&storage.layer.vals) }
-    fn map_times<L2: FnMut(&Self::Time, &Self::R)>(&mut self, storage: &OrdValBatch<L, C>, mut logic: L2) {
+    fn key<'a>(&self, storage: &'a OrdValBatch<L>) -> &'a Self::Key { &self.cursor.key(&storage.layer) }
+    fn val<'a>(&self, storage: &'a OrdValBatch<L>) -> &'a Self::Val { &self.cursor.child.key(&storage.layer.vals) }
+    fn map_times<L2: FnMut(&Self::Time, &Self::R)>(&mut self, storage: &OrdValBatch<L>, mut logic: L2) {
         self.cursor.child.child.rewind(&storage.layer.vals.vals);
         while self.cursor.child.child.valid(&storage.layer.vals.vals) {
             logic(&self.cursor.child.child.key(&storage.layer.vals.vals).0, &self.cursor.child.child.key(&storage.layer.vals.vals).1);
             self.cursor.child.child.step(&storage.layer.vals.vals);
         }
     }
-    fn key_valid(&self, storage: &OrdValBatch<L, C>) -> bool { self.cursor.valid(&storage.layer) }
-    fn val_valid(&self, storage: &OrdValBatch<L, C>) -> bool { self.cursor.child.valid(&storage.layer.vals) }
-    fn step_key(&mut self, storage: &OrdValBatch<L, C>){ self.cursor.step(&storage.layer); }
-    fn seek_key(&mut self, storage: &OrdValBatch<L, C>, key: &Self::Key) { self.cursor.seek(&storage.layer, key); }
-    fn step_val(&mut self, storage: &OrdValBatch<L, C>) { self.cursor.child.step(&storage.layer.vals); }
-    fn seek_val(&mut self, storage: &OrdValBatch<L, C>, val: &Self::Val) { self.cursor.child.seek(&storage.layer.vals, val); }
-    fn rewind_keys(&mut self, storage: &OrdValBatch<L, C>) { self.cursor.rewind(&storage.layer); }
-    fn rewind_vals(&mut self, storage: &OrdValBatch<L, C>) { self.cursor.child.rewind(&storage.layer.vals); }
+    fn key_valid(&self, storage: &OrdValBatch<L>) -> bool { self.cursor.valid(&storage.layer) }
+    fn val_valid(&self, storage: &OrdValBatch<L>) -> bool { self.cursor.child.valid(&storage.layer.vals) }
+    fn step_key(&mut self, storage: &OrdValBatch<L>){ self.cursor.step(&storage.layer); }
+    fn seek_key(&mut self, storage: &OrdValBatch<L>, key: &Self::Key) { self.cursor.seek(&storage.layer, key); }
+    fn step_val(&mut self, storage: &OrdValBatch<L>) { self.cursor.child.step(&storage.layer.vals); }
+    fn seek_val(&mut self, storage: &OrdValBatch<L>, val: &Self::Val) { self.cursor.child.seek(&storage.layer.vals, val); }
+    fn rewind_keys(&mut self, storage: &OrdValBatch<L>) { self.cursor.rewind(&storage.layer); }
+    fn rewind_vals(&mut self, storage: &OrdValBatch<L>) { self.cursor.child.rewind(&storage.layer.vals); }
 }
 
 /// A builder for creating layers from unsorted update tuples.
-pub struct OrdValBuilder<L: Layout, C> {
+pub struct OrdValBuilder<L: Layout> {
     builder: KVTDBuilder<L>,
-    phantom: PhantomData<C>,
 }
 
 
-impl<L: Layout, C> Builder for OrdValBuilder<L, C>
+impl<L: Layout> Builder for OrdValBuilder<L>
 where
-    OrdValBatch<L, C>: Batch<Key=<L::Target as Update>::Key, Val=<L::Target as Update>::Val, Time=<L::Target as Update>::Time, R=<L::Target as Update>::Diff>
+    OrdValBatch<L>: Batch<Key=<L::Target as Update>::Key, Val=<L::Target as Update>::Val, Time=<L::Target as Update>::Time, R=<L::Target as Update>::Diff>
 {
     type Item = ((<L::Target as Update>::Key, <L::Target as Update>::Val), <L::Target as Update>::Time, <L::Target as Update>::Diff);
     type Time = <L::Target as Update>::Time;
-    type Output = OrdValBatch<L, C>;
+    type Output = OrdValBatch<L>;
 
     fn new() -> Self {
         OrdValBuilder {
             builder: <KVTDBuilder<L>>::new(),
-            phantom: std::marker::PhantomData,
         }
     }
     fn with_capacity(cap: usize) -> Self {
         OrdValBuilder {
             builder: <KVTDBuilder<L> as TupleBuilder>::with_capacity(cap),
-            phantom: std::marker::PhantomData,
         }
     }
 
@@ -374,11 +374,10 @@ where
     }
 
     #[inline(never)]
-    fn done(self, lower: Antichain<Self::Time>, upper: Antichain<Self::Time>, since: Antichain<Self::Time>) -> OrdValBatch<L, C> {
+    fn done(self, lower: Antichain<Self::Time>, upper: Antichain<Self::Time>, since: Antichain<Self::Time>) -> OrdValBatch<L> {
         OrdValBatch {
             layer: self.builder.done(),
             desc: Description::new(lower, upper, since),
-            phantom: PhantomData,
         }
     }
 }
@@ -388,36 +387,31 @@ where
 
 /// An immutable collection of update tuples, from a contiguous interval of logical times.
 #[derive(Abomonation)]
-pub struct OrdKeyBatch<L: Layout, C> {
+pub struct OrdKeyBatch<L: Layout> {
     /// Where all the dataz is.
     pub layer: KTDLayer<L>,
     /// Description of the update times this layer represents.
     pub desc: Description<<L::Target as Update>::Time>,
-    /// Phantom data
-    pub phantom: PhantomData<C>,
 }
 
-impl<L: Layout, C> BatchReader for OrdKeyBatch<L, C> {
+impl<L: Layout> BatchReader for OrdKeyBatch<L> {
     type Key = <L::Target as Update>::Key;
     type Val = ();
     type Time = <L::Target as Update>::Time;
     type R = <L::Target as Update>::Diff;
 
-    type Cursor = OrdKeyCursor<L, C>;
+    type Cursor = OrdKeyCursor<L>;
     fn cursor(&self) -> Self::Cursor {
         OrdKeyCursor {
             valid: true,
             cursor: self.layer.cursor(),
-            phantom: PhantomData
         }
     }
     fn len(&self) -> usize { <KTDLayer<L> as Trie>::tuples(&self.layer) }
     fn description(&self) -> &Description<<L::Target as Update>::Time> { &self.desc }
 }
 
-impl<L: Layout> Batch for OrdKeyBatch<L, Vec<L::Target>> where L::Target: Update<Val = ()> {
-    type Batcher = MergeBatcher<L::Target>;
-    type Builder = OrdKeyBuilder<L, Vec<L::Target>>;
+impl<L: Layout> Batch for OrdKeyBatch<L> where L::Target: Update<Val = ()> {
     type Merger = OrdKeyMerger<L>;
 
     fn begin_merge(&self, other: &Self, compaction_frontier: AntichainRef<<L::Target as Update>::Time>) -> Self::Merger {
@@ -425,23 +419,7 @@ impl<L: Layout> Batch for OrdKeyBatch<L, Vec<L::Target>> where L::Target: Update
     }
 }
 
-impl<L: Layout> Batch for OrdKeyBatch<L, TimelyStack<L::Target>>
-where
-    <L as Layout>::Target: Update<Val = ()> + Columnation + 'static,
-    Self::Key: Columnation + 'static,
-    Self::Time: Columnation + 'static,
-    Self::R: Columnation + 'static,
-{
-    type Batcher = ColumnatedMergeBatcher<L::Target>;
-    type Builder = OrdKeyBuilder<L, TimelyStack<L::Target>>;
-    type Merger = OrdKeyMerger<L>;
-
-    fn begin_merge(&self, other: &Self, compaction_frontier: AntichainRef<<L::Target as Update>::Time>) -> Self::Merger {
-        OrdKeyMerger::new(self, other, compaction_frontier)
-    }
-}
-
-impl<L: Layout, C> OrdKeyBatch<L, C> {
+impl<L: Layout> OrdKeyBatch<L> {
     fn advance_builder_from(layer: &mut KTDBuilder<L>, frontier: AntichainRef<<L::Target as Update>::Time>, key_pos: usize) {
 
         let key_start = key_pos;
@@ -517,11 +495,11 @@ pub struct OrdKeyMerger<L: Layout> {
     description: Description<<L::Target as Update>::Time>,
 }
 
-impl<L: Layout, C> Merger<OrdKeyBatch<L, C>> for OrdKeyMerger<L>
+impl<L: Layout> Merger<OrdKeyBatch<L>> for OrdKeyMerger<L>
 where
-    OrdKeyBatch<L, C>: Batch<Time=<L::Target as Update>::Time>
+    OrdKeyBatch<L>: Batch<Time=<L::Target as Update>::Time>
 {
-    fn new(batch1: &OrdKeyBatch<L, C>, batch2: &OrdKeyBatch<L, C>, compaction_frontier: AntichainRef<<L::Target as Update>::Time>) -> Self {
+    fn new(batch1: &OrdKeyBatch<L>, batch2: &OrdKeyBatch<L>, compaction_frontier: AntichainRef<<L::Target as Update>::Time>) -> Self {
 
         assert!(batch1.upper() == batch2.lower());
 
@@ -539,7 +517,7 @@ where
             description: description,
         }
     }
-    fn done(self) -> OrdKeyBatch<L, C> {
+    fn done(self) -> OrdKeyBatch<L> {
 
         assert!(self.lower1 == self.upper1);
         assert!(self.lower2 == self.upper2);
@@ -547,10 +525,9 @@ where
         OrdKeyBatch {
             layer: self.result.done(),
             desc: self.description,
-            phantom: PhantomData,
         }
     }
-    fn work(&mut self, source1: &OrdKeyBatch<L, C>, source2: &OrdKeyBatch<L, C>, fuel: &mut isize) {
+    fn work(&mut self, source1: &OrdKeyBatch<L>, source2: &OrdKeyBatch<L>, fuel: &mut isize) {
 
         let starting_updates = self.result.vals.vals.len();
         let mut effort = 0isize;
@@ -594,7 +571,7 @@ where
         effort = (self.result.vals.vals.len() - starting_updates) as isize;
 
         // if we are supplied a frontier, we should compact.
-        OrdKeyBatch::<L, C>::advance_builder_from(&mut self.result, self.description.since().borrow(), initial_key_pos);
+        OrdKeyBatch::<L>::advance_builder_from(&mut self.result, self.description.since().borrow(), initial_key_pos);
 
         *fuel -= effort;
 
@@ -607,63 +584,59 @@ where
 
 /// A cursor for navigating a single layer.
 #[derive(Debug)]
-pub struct OrdKeyCursor<L: Layout, C> {
+pub struct OrdKeyCursor<L: Layout> {
     valid: bool,
     cursor: OrderedCursor<OrderedLeaf<<L::Target as Update>::Time, <L::Target as Update>::Diff>>,
-    phantom: PhantomData<(L, C)>,
 }
 
-impl<L: Layout, C> Cursor<OrdKeyBatch<L, C>> for OrdKeyCursor<L, C> {
+impl<L: Layout> Cursor<OrdKeyBatch<L>> for OrdKeyCursor<L> {
     type Key = <L::Target as Update>::Key;
     type Val = ();
     type Time = <L::Target as Update>::Time;
     type R = <L::Target as Update>::Diff;
 
-    fn key<'a>(&self, storage: &'a OrdKeyBatch<L, C>) -> &'a Self::Key { &self.cursor.key(&storage.layer) }
-    fn val<'a>(&self, _storage: &'a OrdKeyBatch<L, C>) -> &'a () { &() }
-    fn map_times<L2: FnMut(&Self::Time, &Self::R)>(&mut self, storage: &OrdKeyBatch<L, C>, mut logic: L2) {
+    fn key<'a>(&self, storage: &'a OrdKeyBatch<L>) -> &'a Self::Key { &self.cursor.key(&storage.layer) }
+    fn val<'a>(&self, _storage: &'a OrdKeyBatch<L>) -> &'a () { &() }
+    fn map_times<L2: FnMut(&Self::Time, &Self::R)>(&mut self, storage: &OrdKeyBatch<L>, mut logic: L2) {
         self.cursor.child.rewind(&storage.layer.vals);
         while self.cursor.child.valid(&storage.layer.vals) {
             logic(&self.cursor.child.key(&storage.layer.vals).0, &self.cursor.child.key(&storage.layer.vals).1);
             self.cursor.child.step(&storage.layer.vals);
         }
     }
-    fn key_valid(&self, storage: &OrdKeyBatch<L, C>) -> bool { self.cursor.valid(&storage.layer) }
-    fn val_valid(&self, _storage: &OrdKeyBatch<L, C>) -> bool { self.valid }
-    fn step_key(&mut self, storage: &OrdKeyBatch<L, C>){ self.cursor.step(&storage.layer); self.valid = true; }
-    fn seek_key(&mut self, storage: &OrdKeyBatch<L, C>, key: &Self::Key) { self.cursor.seek(&storage.layer, key); self.valid = true; }
-    fn step_val(&mut self, _storage: &OrdKeyBatch<L, C>) { self.valid = false; }
-    fn seek_val(&mut self, _storage: &OrdKeyBatch<L, C>, _val: &()) { }
-    fn rewind_keys(&mut self, storage: &OrdKeyBatch<L, C>) { self.cursor.rewind(&storage.layer); self.valid = true; }
-    fn rewind_vals(&mut self, _storage: &OrdKeyBatch<L, C>) { self.valid = true; }
+    fn key_valid(&self, storage: &OrdKeyBatch<L>) -> bool { self.cursor.valid(&storage.layer) }
+    fn val_valid(&self, _storage: &OrdKeyBatch<L>) -> bool { self.valid }
+    fn step_key(&mut self, storage: &OrdKeyBatch<L>){ self.cursor.step(&storage.layer); self.valid = true; }
+    fn seek_key(&mut self, storage: &OrdKeyBatch<L>, key: &Self::Key) { self.cursor.seek(&storage.layer, key); self.valid = true; }
+    fn step_val(&mut self, _storage: &OrdKeyBatch<L>) { self.valid = false; }
+    fn seek_val(&mut self, _storage: &OrdKeyBatch<L>, _val: &()) { }
+    fn rewind_keys(&mut self, storage: &OrdKeyBatch<L>) { self.cursor.rewind(&storage.layer); self.valid = true; }
+    fn rewind_vals(&mut self, _storage: &OrdKeyBatch<L>) { self.valid = true; }
 }
 
 
 /// A builder for creating layers from unsorted update tuples.
-pub struct OrdKeyBuilder<L: Layout, C> {
+pub struct OrdKeyBuilder<L: Layout> {
     builder: KTDBuilder<L>,
-    phantom: std::marker::PhantomData<C>
 }
 
-impl<L: Layout, C> Builder for OrdKeyBuilder<L, C>
+impl<L: Layout> Builder for OrdKeyBuilder<L>
 where
-    OrdKeyBatch<L, C>: Batch<Key=<L::Target as Update>::Key, Val=(), Time=<L::Target as Update>::Time, R=<L::Target as Update>::Diff>
+    OrdKeyBatch<L>: Batch<Key=<L::Target as Update>::Key, Val=(), Time=<L::Target as Update>::Time, R=<L::Target as Update>::Diff>
 {
     type Item = ((<L::Target as Update>::Key, ()), <L::Target as Update>::Time, <L::Target as Update>::Diff);
     type Time = <L::Target as Update>::Time;
-    type Output = OrdKeyBatch<L, C>;
+    type Output = OrdKeyBatch<L>;
 
     fn new() -> Self {
         OrdKeyBuilder {
             builder: <KTDBuilder<L>>::new(),
-            phantom: std::marker::PhantomData,
         }
     }
 
     fn with_capacity(cap: usize) -> Self {
         OrdKeyBuilder {
             builder: <KTDBuilder<L> as TupleBuilder>::with_capacity(cap),
-            phantom: std::marker::PhantomData,
         }
     }
 
@@ -678,11 +651,10 @@ where
     }
 
     #[inline(never)]
-    fn done(self, lower: Antichain<Self::Time>, upper: Antichain<Self::Time>, since: Antichain<Self::Time>) -> OrdKeyBatch<L, C> {
+    fn done(self, lower: Antichain<Self::Time>, upper: Antichain<Self::Time>, since: Antichain<Self::Time>) -> OrdKeyBatch<L> {
         OrdKeyBatch {
             layer: self.builder.done(),
             desc: Description::new(lower, upper, since),
-            phantom: PhantomData,
         }
     }
 }

@@ -207,6 +207,11 @@ pub trait TraceReader {
 pub trait Trace : TraceReader
 where <Self as TraceReader>::Batch: Batch {
 
+    /// A type used to assemble batches from disordered updates.
+    type Batcher: Batcher<Time = Self::Time>;
+    /// A type used to assemble batches from ordered update sequences.
+    type Builder: Builder<Item=<Self::Batcher as Batcher>::Item, Time=Self::Time, Output = Self::Batch>;
+
     /// Allocates a new empty trace.
     fn new(
         info: ::timely::dataflow::operators::generic::OperatorInfo,
@@ -279,10 +284,6 @@ where
 
 /// An immutable collection of updates.
 pub trait Batch : BatchReader where Self: ::std::marker::Sized {
-    /// A type used to assemble batches from disordered updates.
-    type Batcher: Batcher<Time = Self::Time>;
-    /// A type used to assemble batches from ordered update sequences.
-    type Builder: Builder<Item=<Self::Batcher as Batcher>::Item, Time=Self::Time, Output = Self>;
     /// A type used to progressively merge batches.
     type Merger: Merger<Self>;
 
@@ -293,10 +294,6 @@ pub trait Batch : BatchReader where Self: ::std::marker::Sized {
     /// fashion. This can help to avoid latency spikes where a large merge needs to happen.
     fn begin_merge(&self, other: &Self, compaction_frontier: AntichainRef<Self::Time>) -> Self::Merger {
         Self::Merger::new(self, other, compaction_frontier)
-    }
-    /// Creates an empty batch with the stated bounds.
-    fn empty(lower: Antichain<Self::Time>, upper: Antichain<Self::Time>, since: Antichain<Self::Time>) -> Self {
-        <Self::Builder>::new().done(lower, upper, since)
     }
 }
 
@@ -435,8 +432,6 @@ pub mod rc_blanket_impls {
 
     /// An immutable collection of updates.
     impl<B: Batch> Batch for Rc<B> {
-        type Batcher = B::Batcher;
-        type Builder = RcBuilder<B::Builder>;
         type Merger = RcMerger<B>;
     }
 
@@ -541,8 +536,6 @@ pub mod abomonated_blanket_impls {
 
     /// An immutable collection of updates.
     impl<B: Batch+Abomonation> Batch for Abomonated<B, Vec<u8>> {
-        type Batcher = B::Batcher;
-        type Builder = AbomonatedBuilder<B::Builder>;
         type Merger = AbomonatedMerger<B>;
     }
 
