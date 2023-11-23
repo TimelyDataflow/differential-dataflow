@@ -1,9 +1,12 @@
 //! Implementation using ordered keys and exponential search.
 
-use ::difference::Semigroup;
-
-use super::{Trie, Cursor, Builder, MergeBuilder, TupleBuilder, BatchContainer};
 use std::ops::Deref;
+
+use ::difference::Semigroup;
+use trace::implementations::BatchContainer;
+
+use super::{Trie, Cursor, Builder, MergeBuilder, TupleBuilder};
+
 
 /// A layer of unordered values.
 #[derive(Debug, Eq, PartialEq, Clone, Abomonation)]

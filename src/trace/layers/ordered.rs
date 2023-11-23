@@ -1,9 +1,12 @@
 //! Implementation using ordered keys and exponential search.
 
-use super::{Trie, Cursor, Builder, MergeBuilder, TupleBuilder, BatchContainer};
 use std::convert::{TryFrom, TryInto};
 use std::fmt::Debug;
 use std::ops::{Sub,Add};
+
+use trace::implementations::BatchContainer;
+
+use super::{Trie, Cursor, Builder, MergeBuilder, TupleBuilder};
 
 /// Trait for types used as offsets into an ordered layer.
 /// This is usually `usize`, but `u32` can also be used in applications
@@ -39,7 +42,7 @@ where
 
 impl<K, L, O, C> Trie for OrderedLayer<K, L, O, C>
 where
-    K: Ord,
+    K: Ord+Clone,
     C: BatchContainer<Item=K>,
     L: Trie,
     O: OrdOffset
@@ -90,7 +93,7 @@ where
 
 impl<K, L, O, C> Builder for OrderedBuilder<K, L, O, C>
 where
-    K: Ord,
+    K: Ord+Clone,
     C: BatchContainer<Item=K>,
     L: Builder,
     O: OrdOffset
@@ -114,7 +117,7 @@ where
 
 impl<K, L, O, C> MergeBuilder for OrderedBuilder<K, L, O, C>
 where
-    K: Ord,
+    K: Ord+Clone,
     C: BatchContainer<Item=K>,
     L: MergeBuilder,
     O: OrdOffset
@@ -161,7 +164,7 @@ where
 
 impl<K, L, O, C> OrderedBuilder<K, L, O, C>
 where
-    K: Ord,
+    K: Ord+Clone,
     C: BatchContainer<Item=K>,
     L: MergeBuilder,
     O: OrdOffset
@@ -209,7 +212,7 @@ where
 
 impl<K, L, O, C> TupleBuilder for OrderedBuilder<K, L, O, C>
 where
-    K: Ord,
+    K: Ord+Clone,
     C: BatchContainer<Item=K>,
     L: TupleBuilder,
     O: OrdOffset

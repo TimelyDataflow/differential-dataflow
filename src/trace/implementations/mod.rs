@@ -55,7 +55,6 @@ pub use self::ord::OrdKeySpine as KeySpine;
 use timely::container::columnation::{Columnation, TimelyStack};
 use lattice::Lattice;
 use difference::Semigroup;
-use trace::layers::BatchContainer;
 use trace::layers::ordered::OrdOffset;
 
 /// A type that names constituent update types.
@@ -165,5 +164,242 @@ impl<T: Columnation> RetainFrom<T> for TimelyStack<T> {
             position += 1;
             result
         })
+    }
+}
+
+pub use self::containers::{BatchContainer, SliceContainer};
+
+/// Containers for data that resemble `Vec<T>`, with leaner implementations.
+pub mod containers {
+
+    use timely::container::columnation::{Columnation, TimelyStack};
+
+    use std::borrow::{Borrow, ToOwned};
+
+    /// A general-purpose container resembling `Vec<T>`.
+    pub trait BatchContainer: Default {
+        /// The type of contained item.
+        ///
+        /// The container only supplies references to the item, so it needn't be sized.
+        type Item: ?Sized;
+        /// Inserts an owned item.
+        fn push(&mut self, item: <Self::Item as ToOwned>::Owned) where Self::Item: ToOwned;
+        /// Inserts a borrowed item.
+        fn copy(&mut self, item: &Self::Item);
+        /// Extends from a slice of items.
+        fn copy_slice(&mut self, slice: &[<Self::Item as ToOwned>::Owned]) where Self::Item: ToOwned;
+        /// Extends from a range of items in another`Self`.
+        fn copy_range(&mut self, other: &Self, start: usize, end: usize);
+        /// Creates a new container with sufficient capacity.
+        fn with_capacity(size: usize) -> Self;
+        /// Reserves additional capacity.
+        fn reserve(&mut self, additional: usize);
+        /// Creates a new container with sufficient capacity.
+        fn merge_capacity(cont1: &Self, cont2: &Self) -> Self;
+
+        /// Reference to the element at this position.
+        fn index(&self, index: usize) -> &Self::Item;
+        /// Number of contained elements
+        fn len(&self) -> usize;
+        /// Returns the last item if the container is non-empty.
+        fn last(&self) -> Option<&Self::Item> {
+            if self.len() > 0 {
+                Some(self.index(self.len()-1))
+            }
+            else {
+                None
+            }
+        }
+
+        /// Reports the number of elements satisfing the predicate.
+        ///
+        /// This methods *relies strongly* on the assumption that the predicate
+        /// stays false once it becomes false, a joint property of the predicate
+        /// and the layout of `Self. This allows `advance` to use exponential search to
+        /// count the number of elements in time logarithmic in the result.
+        fn advance<F: Fn(&Self::Item)->bool>(&self, start: usize, end: usize, function: F) -> usize {
+
+            let small_limit = 8;
+
+            // Exponential seach if the answer isn't within `small_limit`.
+            if end > start + small_limit && function(self.index(start + small_limit)) {
+
+                // start with no advance
+                let mut index = small_limit + 1;
+                if start + index < end && function(self.index(start + index)) {
+
+                    // advance in exponentially growing steps.
+                    let mut step = 1;
+                    while start + index + step < end && function(self.index(start + index + step)) {
+                        index += step;
+                        step = step << 1;
+                    }
+
+                    // advance in exponentially shrinking steps.
+                    step = step >> 1;
+                    while step > 0 {
+                        if start + index + step < end && function(self.index(start + index + step)) {
+                            index += step;
+                        }
+                        step = step >> 1;
+                    }
+
+                    index += 1;
+                }
+
+                index
+            }
+            else {
+                let limit = std::cmp::min(end, start + small_limit);
+                (start .. limit).filter(|x| function(self.index(*x))).count()
+            }
+        }
+    }
+
+    // All `T: Clone` also implement `ToOwned<Owned = T>`, but without the constraint Rust
+    // struggles to understand why the owned type must be `T` (i.e. the one blanket impl).
+    impl<T: Clone + ToOwned<Owned = T>> BatchContainer for Vec<T> {
+        type Item = T;
+        fn push(&mut self, item: T) {
+            self.push(item);
+        }
+        fn copy(&mut self, item: &T) {
+            self.push(item.clone());
+        }
+        fn copy_slice(&mut self, slice: &[T]) where T: Sized {
+            self.extend_from_slice(slice);
+        }
+        fn copy_range(&mut self, other: &Self, start: usize, end: usize) {
+            self.extend_from_slice(&other[start .. end]);
+        }
+        fn with_capacity(size: usize) -> Self {
+            Vec::with_capacity(size)
+        }
+        fn reserve(&mut self, additional: usize) {
+            self.reserve(additional);
+        }
+        fn merge_capacity(cont1: &Self, cont2: &Self) -> Self {
+            Vec::with_capacity(cont1.len() + cont2.len())
+        }
+        fn index(&self, index: usize) -> &Self::Item {
+            &self[index]
+        }
+        fn len(&self) -> usize {
+            self[..].len()
+        }
+    }
+
+    // The `ToOwned` requirement exists to satisfy `self.reserve_items`, who must for now
+    // be presented with the actual contained type, rather than a type that borrows into it.
+    impl<T: Columnation + ToOwned<Owned = T>> BatchContainer for TimelyStack<T> {
+        type Item = T;
+        fn push(&mut self, item: <Self::Item as ToOwned>::Owned) where Self::Item: ToOwned {
+            self.copy(item.borrow());
+        }
+        fn copy(&mut self, item: &T) {
+            self.copy(item);
+        }
+        fn copy_slice(&mut self, slice: &[<Self::Item as ToOwned>::Owned]) where Self::Item: ToOwned {
+            self.reserve_items(slice.iter());
+            for item in slice.iter() {
+                self.copy(item);
+            }
+        }
+        fn copy_range(&mut self, other: &Self, start: usize, end: usize) {
+            let slice = &other[start .. end];
+            self.reserve_items(slice.iter());
+            for item in slice.iter() {
+                self.copy(item);
+            }
+        }
+        fn with_capacity(size: usize) -> Self {
+            Self::with_capacity(size)
+        }
+        fn reserve(&mut self, _additional: usize) {
+        }
+        fn merge_capacity(cont1: &Self, cont2: &Self) -> Self {
+            let mut new = Self::default();
+            new.reserve_regions(std::iter::once(cont1).chain(std::iter::once(cont2)));
+            new
+        }
+        fn index(&self, index: usize) -> &Self::Item {
+            &self[index]
+        }
+        fn len(&self) -> usize {
+            self[..].len()
+        }
+    }
+
+    /// A container that accepts slices `[B::Item]`.
+    pub struct SliceContainer<B> {
+        /// Offsets that bound each contained slice.
+        ///
+        /// The length will be one greater than the number of contained slices,
+        /// starting with zero and ending with `self.inner.len()`.
+        pub offsets: Vec<usize>,
+        /// An inner container for sequences of `B` that dereferences to a slice.
+        pub inner: Vec<B>,
+    }
+
+    impl<B: Default> BatchContainer for SliceContainer<B>
+    where
+        B: Clone + Sized,
+        [B]: ToOwned<Owned = Vec<B>>,
+    {
+        type Item = [B];
+        fn push(&mut self, item: Vec<B>) where Self::Item: ToOwned {
+            for x in item.into_iter() {
+                self.inner.push(x);
+            }
+            self.offsets.push(self.inner.len());
+        }
+        fn copy(&mut self, item: &Self::Item) {
+            for x in item.iter() {
+                self.inner.copy(x);
+            }
+            self.offsets.push(self.inner.len());
+        }
+        fn copy_slice(&mut self, slice: &[Vec<B>]) where Self::Item: ToOwned {
+            for item in slice {
+                self.copy(item);
+            }
+        }
+        fn copy_range(&mut self, other: &Self, start: usize, end: usize) {
+            for index in start .. end {
+                self.copy(other.index(index));
+            }
+        }
+        fn with_capacity(size: usize) -> Self {
+            Self {
+                offsets: Vec::with_capacity(size),
+                inner: Vec::with_capacity(size),
+            }
+        }
+        fn reserve(&mut self, _additional: usize) {
+        }
+        fn merge_capacity(cont1: &Self, cont2: &Self) -> Self {
+            Self {
+                offsets: Vec::with_capacity(cont1.offsets.len() + cont2.offsets.len()),
+                inner: Vec::with_capacity(cont1.inner.len() + cont2.inner.len()),
+            }
+        }
+        fn index(&self, index: usize) -> &Self::Item {
+            let lower = self.offsets[index];
+            let upper = self.offsets[index+1];
+            &self.inner[lower .. upper]
+        }
+        fn len(&self) -> usize {
+            self.offsets.len() - 1
+        }
+    }
+
+    /// Default implementation introduces a first offset.
+    impl<B: Default> Default for SliceContainer<B> {
+        fn default() -> Self {
+            Self {
+                offsets: vec![0],
+                inner: Default::default(),
+            }
+        }
     }
 }

@@ -16,7 +16,7 @@ use timely::progress::{Antichain, frontier::AntichainRef};
 
 use lattice::Lattice;
 
-use trace::layers::{Trie, TupleBuilder, BatchContainer};
+use trace::layers::{Trie, TupleBuilder};
 use trace::layers::Builder as TrieBuilder;
 use trace::layers::Cursor as TrieCursor;
 use trace::layers::ordered::{OrderedLayer, OrderedBuilder, OrderedCursor};
@@ -32,7 +32,7 @@ use super::merge_batcher::MergeBatcher;
 
 use abomonation::abomonated::Abomonated;
 use trace::implementations::merge_batcher_col::ColumnatedMergeBatcher;
-use trace::implementations::RetainFrom;
+use trace::implementations::{BatchContainer, RetainFrom};
 
 use super::{Update, Layout, Vector, TStack};
 
