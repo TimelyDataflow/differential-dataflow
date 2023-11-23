@@ -203,7 +203,7 @@ impl<D: Ord+Clone+Columnation+'static, T: Ord+Clone+Columnation+'static, R: Semi
 
     /// Insert an empty buffer into the stash. Panics if the buffer is not empty.
     fn recycle(&mut self, mut buffer: TimelyStack<(D, T, R)>) {
-        if buffer.capacity() == Self::buffer_size() {
+        if buffer.capacity() == Self::buffer_size() && self.stash.len() <= 2 {
             buffer.clear();
             self.stash.push(buffer);
         }
