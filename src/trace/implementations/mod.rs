@@ -52,10 +52,12 @@ pub mod ord_neu;
 pub use self::ord::OrdValSpine as ValSpine;
 pub use self::ord::OrdKeySpine as KeySpine;
 
+use std::ops::{Add, Sub};
+use std::convert::{TryInto, TryFrom};
+
 use timely::container::columnation::{Columnation, TimelyStack};
 use lattice::Lattice;
 use difference::Semigroup;
-use trace::layers::ordered::OrdOffset;
 
 /// A type that names constituent update types.
 pub trait Update {
@@ -166,6 +168,17 @@ impl<T: Columnation> RetainFrom<T> for TimelyStack<T> {
         })
     }
 }
+
+/// Trait for types used as offsets into an ordered layer.
+/// This is usually `usize`, but `u32` can also be used in applications
+/// where huge batches do not occur to reduce metadata size.
+pub trait OrdOffset: Copy + PartialEq + Add<Output=Self> + Sub<Output=Self> + TryFrom<usize> + TryInto<usize>
+{}
+
+impl<O> OrdOffset for O
+where
+    O: Copy + PartialEq + Add<Output=Self> + Sub<Output=Self> + TryFrom<usize> + TryInto<usize>,
+{}
 
 pub use self::containers::{BatchContainer, SliceContainer};
 

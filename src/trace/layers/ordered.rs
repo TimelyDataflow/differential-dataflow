@@ -1,23 +1,10 @@
 //! Implementation using ordered keys and exponential search.
 
-use std::convert::{TryFrom, TryInto};
 use std::fmt::Debug;
-use std::ops::{Sub,Add};
 
-use trace::implementations::BatchContainer;
+use trace::implementations::{BatchContainer, OrdOffset};
 
 use super::{Trie, Cursor, Builder, MergeBuilder, TupleBuilder};
-
-/// Trait for types used as offsets into an ordered layer.
-/// This is usually `usize`, but `u32` can also be used in applications
-/// where huge batches do not occur to reduce metadata size.
-pub trait OrdOffset: Copy + PartialEq + Add<Output=Self> + Sub<Output=Self> + TryFrom<usize> + TryInto<usize>
-{}
-
-impl<O> OrdOffset for O
-where
-    O: Copy + PartialEq + Add<Output=Self> + Sub<Output=Self> + TryFrom<usize> + TryInto<usize>,
-{}
 
 /// A level of the trie, with keys and offsets into a lower layer.
 ///
