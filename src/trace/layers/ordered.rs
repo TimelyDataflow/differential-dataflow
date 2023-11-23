@@ -1,20 +1,10 @@
 //! Implementation using ordered keys and exponential search.
 
-use super::{Trie, Cursor, Builder, MergeBuilder, TupleBuilder, BatchContainer};
-use std::convert::{TryFrom, TryInto};
 use std::fmt::Debug;
-use std::ops::{Sub,Add};
 
-/// Trait for types used as offsets into an ordered layer.
-/// This is usually `usize`, but `u32` can also be used in applications
-/// where huge batches do not occur to reduce metadata size.
-pub trait OrdOffset: Copy + PartialEq + Add<Output=Self> + Sub<Output=Self> + TryFrom<usize> + TryInto<usize>
-{}
+use trace::implementations::{BatchContainer, OrdOffset};
 
-impl<O> OrdOffset for O
-where
-    O: Copy + PartialEq + Add<Output=Self> + Sub<Output=Self> + TryFrom<usize> + TryInto<usize>,
-{}
+use super::{Trie, Cursor, Builder, MergeBuilder, TupleBuilder};
 
 /// A level of the trie, with keys and offsets into a lower layer.
 ///
@@ -39,7 +29,7 @@ where
 
 impl<K, L, O, C> Trie for OrderedLayer<K, L, O, C>
 where
-    K: Ord,
+    K: Ord+Clone,
     C: BatchContainer<Item=K>,
     L: Trie,
     O: OrdOffset
@@ -90,7 +80,7 @@ where
 
 impl<K, L, O, C> Builder for OrderedBuilder<K, L, O, C>
 where
-    K: Ord,
+    K: Ord+Clone,
     C: BatchContainer<Item=K>,
     L: Builder,
     O: OrdOffset
@@ -114,7 +104,7 @@ where
 
 impl<K, L, O, C> MergeBuilder for OrderedBuilder<K, L, O, C>
 where
-    K: Ord,
+    K: Ord+Clone,
     C: BatchContainer<Item=K>,
     L: MergeBuilder,
     O: OrdOffset
@@ -161,7 +151,7 @@ where
 
 impl<K, L, O, C> OrderedBuilder<K, L, O, C>
 where
-    K: Ord,
+    K: Ord+Clone,
     C: BatchContainer<Item=K>,
     L: MergeBuilder,
     O: OrdOffset
@@ -209,7 +199,7 @@ where
 
 impl<K, L, O, C> TupleBuilder for OrderedBuilder<K, L, O, C>
 where
-    K: Ord,
+    K: Ord+Clone,
     C: BatchContainer<Item=K>,
     L: TupleBuilder,
     O: OrdOffset

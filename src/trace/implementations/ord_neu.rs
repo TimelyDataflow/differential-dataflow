@@ -44,7 +44,7 @@ mod val_batch {
     use timely::progress::{Antichain, frontier::AntichainRef};
 
     use trace::{Batch, BatchReader, Builder, Cursor, Description, Merger};
-    use trace::layers::BatchContainer;
+    use trace::implementations::BatchContainer;
     
     use super::{Layout, Update};
 
