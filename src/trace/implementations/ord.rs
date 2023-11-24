@@ -353,14 +353,9 @@ where
     type Time = <L::Target as Update>::Time;
     type Output = OrdValBatch<L>;
 
-    fn new() -> Self {
+    fn with_capacity(_keys: usize, _vals: usize, upds: usize) -> Self {
         OrdValBuilder {
-            builder: <KVTDBuilder<L>>::new(),
-        }
-    }
-    fn with_capacity(cap: usize) -> Self {
-        OrdValBuilder {
-            builder: <KVTDBuilder<L> as TupleBuilder>::with_capacity(cap),
+            builder: <KVTDBuilder<L> as TupleBuilder>::with_capacity(upds),
         }
     }
 
@@ -628,15 +623,9 @@ where
     type Time = <L::Target as Update>::Time;
     type Output = OrdKeyBatch<L>;
 
-    fn new() -> Self {
+    fn with_capacity(_keys: usize, _vals: usize, upds: usize) -> Self {
         OrdKeyBuilder {
-            builder: <KTDBuilder<L>>::new(),
-        }
-    }
-
-    fn with_capacity(cap: usize) -> Self {
-        OrdKeyBuilder {
-            builder: <KTDBuilder<L> as TupleBuilder>::with_capacity(cap),
+            builder: <KTDBuilder<L> as TupleBuilder>::with_capacity(upds),
         }
     }
 

@@ -509,16 +509,15 @@ mod val_batch {
         type Time = <L::Target as Update>::Time;
         type Output = OrdValBatch<L>;
 
-        fn new() -> Self { Self::with_capacity(0) }
-        fn with_capacity(cap: usize) -> Self {
+        fn with_capacity(keys: usize, vals: usize, upds: usize) -> Self {
             // We don't introduce zero offsets as they will be introduced by the first `push` call.
             Self { 
                 result: OrdValStorage {
-                    keys: L::KeyContainer::with_capacity(cap),
-                    keys_offs: Vec::with_capacity(cap),
-                    vals: L::ValContainer::with_capacity(cap),
-                    vals_offs: Vec::with_capacity(cap),
-                    updates: L::UpdContainer::with_capacity(cap),
+                    keys: L::KeyContainer::with_capacity(keys),
+                    keys_offs: Vec::with_capacity(keys + 1),
+                    vals: L::ValContainer::with_capacity(vals),
+                    vals_offs: Vec::with_capacity(vals + 1),
+                    updates: L::UpdContainer::with_capacity(upds),
                 },
                 singleton: None,
                 singletons: 0,

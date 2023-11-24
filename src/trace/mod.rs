@@ -314,7 +314,7 @@ pub trait Batcher {
 }
 
 /// Functionality for building batches from ordered update sequences.
-pub trait Builder {
+pub trait Builder: Sized {
     /// Input item type.
     type Item;
     /// Timestamp type.
@@ -323,9 +323,14 @@ pub trait Builder {
     type Output;
     
     /// Allocates an empty builder.
-    fn new() -> Self;
-    /// Allocates an empty builder with some capacity.
-    fn with_capacity(cap: usize) -> Self;
+    ///
+    /// Ideally we deprecate this and insist all non-trivial building happens via `with_capacity()`.
+    // #[deprecated]
+    fn new() -> Self { Self::with_capacity(0, 0, 0) }
+    /// Allocates an empty builder with capacity for the specified keys, values, and updates.
+    ///
+    /// They represent respectively the number of distinct `key`, `(key, val)`, and total updates.
+    fn with_capacity(keys: usize, vals: usize, upds: usize) -> Self;
     /// Adds an element to the batch.
     ///
     /// The default implementation uses `self.copy` with references to the owned arguments.
@@ -443,8 +448,7 @@ pub mod rc_blanket_impls {
         type Item = B::Item;
         type Time = B::Time;
         type Output = Rc<B::Output>;
-        fn new() -> Self { RcBuilder { builder: B::new() } }
-        fn with_capacity(cap: usize) -> Self { RcBuilder { builder: B::with_capacity(cap) } }
+        fn with_capacity(keys: usize, vals: usize, upds: usize) -> Self { RcBuilder { builder: B::with_capacity(keys, vals, upds) } }
         fn push(&mut self, element: Self::Item) { self.builder.push(element) }
         fn copy(&mut self, element: &Self::Item) { self.builder.copy(element) }
         fn done(self, lower: Antichain<Self::Time>, upper: Antichain<Self::Time>, since: Antichain<Self::Time>) -> Rc<B::Output> { Rc::new(self.builder.done(lower, upper, since)) }
@@ -550,8 +554,7 @@ pub mod abomonated_blanket_impls {
         type Item = B::Item;
         type Time = B::Time;
         type Output = Abomonated<B::Output, Vec<u8>>;
-        fn new() -> Self { AbomonatedBuilder { builder: B::new() } }
-        fn with_capacity(cap: usize) -> Self { AbomonatedBuilder { builder: B::with_capacity(cap) } }
+        fn with_capacity(keys: usize, vals: usize, upds: usize) -> Self { AbomonatedBuilder { builder: B::with_capacity(keys, vals, upds) } }
         fn push(&mut self, element: Self::Item) { self.builder.push(element) }
         fn copy(&mut self, element: &Self::Item) { self.builder.copy(element) }
         fn done(self, lower: Antichain<Self::Time>, upper: Antichain<Self::Time>, since: Antichain<Self::Time>) -> Self::Output {
