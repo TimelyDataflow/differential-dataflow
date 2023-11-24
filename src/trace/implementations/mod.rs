@@ -47,6 +47,7 @@ pub use self::merge_batcher::MergeBatcher as Batcher;
 
 pub mod ord;
 pub mod ord_neu;
+pub mod rhh;
 
 // Opinionated takes on default spines.
 pub use self::ord::OrdValSpine as ValSpine;
