@@ -239,7 +239,7 @@ where
 }
 
 /// Extension trait for the `reduce_core` differential dataflow method.
-pub trait ReduceCore<G: Scope, K: Data, V: Data, R: Semigroup> where G::Timestamp: Lattice+Ord {
+pub trait ReduceCore<G: Scope, K: ToOwned + ?Sized, V: Data, R: Semigroup> where G::Timestamp: Lattice+Ord {
     /// Applies `reduce` to arranged data, and returns an arrangement of output data.
     ///
     /// This method is used by the more ergonomic `reduce`, `distinct`, and `count` methods, although
@@ -276,7 +276,7 @@ pub trait ReduceCore<G: Scope, K: Data, V: Data, R: Semigroup> where G::Timestam
             T2::Val: Data,
             T2::R: Abelian,
             T2::Batch: Batch,
-            T2::Builder: Builder<Output=T2::Batch, Item = ((T2::Key, T2::Val), T2::Time, T2::R)>,
+            T2::Builder: Builder<Output=T2::Batch, Item = ((K::Owned, T2::Val), G::Timestamp, T2::R)>,
             L: FnMut(&K, &[(&V, R)], &mut Vec<(T2::Val, T2::R)>)+'static,
         {
             self.reduce_core::<_,T2>(name, move |key, input, output, change| {
@@ -299,7 +299,7 @@ pub trait ReduceCore<G: Scope, K: Data, V: Data, R: Semigroup> where G::Timestam
             T2::Val: Data,
             T2::R: Semigroup,
             T2::Batch: Batch,
-            T2::Builder: Builder<Output=T2::Batch, Item = ((T2::Key, T2::Val), T2::Time, T2::R)>,
+            T2::Builder: Builder<Output=T2::Batch, Item = ((K::Owned, T2::Val), G::Timestamp, T2::R)>,
             L: FnMut(&K, &[(&V, R)], &mut Vec<(T2::Val,T2::R)>, &mut Vec<(T2::Val,T2::R)>)+'static
             ;
 }
@@ -309,6 +309,7 @@ where
     G: Scope,
     G::Timestamp: Lattice+Ord,
     K: ExchangeData+Hashable,
+    K: ToOwned<Owned = K>,
     V: ExchangeData,
     R: ExchangeData+Semigroup,
 {
@@ -318,7 +319,7 @@ where
             T2::R: Semigroup,
             T2: Trace+TraceReader<Key=K, Time=G::Timestamp>+'static,
             T2::Batch: Batch,
-            T2::Builder: Builder<Output=T2::Batch, Item = ((T2::Key, T2::Val), T2::Time, T2::R)>,
+            T2::Builder: Builder<Output=T2::Batch, Item = ((K, T2::Val), G::Timestamp, T2::R)>,
             L: FnMut(&K, &[(&V, R)], &mut Vec<(T2::Val,T2::R)>, &mut Vec<(T2::Val, T2::R)>)+'static
     {
         self.arrange_by_key_named(&format!("Arrange: {}", name))
@@ -326,8 +327,10 @@ where
     }
 }
 
-impl<G: Scope, K: Data, V: Data, T1, R: Semigroup> ReduceCore<G, K, V, R> for Arranged<G, T1>
+impl<G: Scope, K, V: Data, T1, R: Semigroup> ReduceCore<G, K, V, R> for Arranged<G, T1>
 where
+    K: ToOwned + Ord + ?Sized,
+    K::Owned: Data,
     G::Timestamp: Lattice+Ord,
     T1: TraceReader<Key=K, Val=V, Time=G::Timestamp, R=R>+Clone+'static,
 {
@@ -337,7 +340,7 @@ where
             T2::Val: Data,
             T2::R: Semigroup,
             T2::Batch: Batch,
-            T2::Builder: Builder<Output=T2::Batch, Item = ((T2::Key, T2::Val), T2::Time, T2::R)>,
+            T2::Builder: Builder<Output=T2::Batch, Item = ((K::Owned, T2::Val), T2::Time, T2::R)>,
             L: FnMut(&K, &[(&V, R)], &mut Vec<(T2::Val,T2::R)>, &mut Vec<(T2::Val, T2::R)>)+'static {
 
         let mut result_trace = None;
@@ -375,7 +378,7 @@ where
 
                 // Our implementation maintains a list of outstanding `(key, time)` synthetic interesting times,
                 // as well as capabilities for these times (or their lower envelope, at least).
-                let mut interesting = Vec::<(K, G::Timestamp)>::new();
+                let mut interesting = Vec::<(K::Owned, G::Timestamp)>::new();
                 let mut capabilities = Vec::<Capability<G::Timestamp>>::new();
 
                 // buffers and logic for computing per-key interesting times "efficiently".
@@ -497,12 +500,14 @@ where
                             let mut exposed_position = 0;
                             while batch_cursor.key_valid(batch_storage) || exposed_position < exposed.len() {
 
+                                use std::borrow::Borrow;
+
                                 // Determine the next key we will work on; could be synthetic, could be from a batch.
                                 let key1 = exposed.get(exposed_position).map(|x| &x.0);
                                 let key2 = batch_cursor.get_key(&batch_storage);
                                 let key = match (key1, key2) {
-                                    (Some(key1), Some(key2)) => ::std::cmp::min(key1, key2),
-                                    (Some(key1), None)       => key1,
+                                    (Some(key1), Some(key2)) => ::std::cmp::min(key1.borrow(), key2),
+                                    (Some(key1), None)       => key1.borrow(),
                                     (None, Some(key2))       => key2,
                                     (None, None)             => unreachable!(),
                                 };
@@ -514,7 +519,7 @@ where
                                 interesting_times.clear();
 
                                 // Populate `interesting_times` with synthetic interesting times (below `upper_limit`) for this key.
-                                while exposed.get(exposed_position).map(|x| &x.0) == Some(key) {
+                                while exposed.get(exposed_position).map(|x| x.0.borrow()) == Some(key) {
                                     interesting_times.push(exposed[exposed_position].1.clone());
                                     exposed_position += 1;
                                 }
@@ -542,7 +547,7 @@ where
                                 // Record future warnings about interesting times (and assert they should be "future").
                                 for time in new_interesting_times.drain(..) {
                                     debug_assert!(upper_limit.less_equal(&time));
-                                    interesting.push((key.clone(), time));
+                                    interesting.push((key.to_owned(), time));
                                 }
 
                                 // Sort each buffer by value and move into the corresponding builder.
@@ -552,7 +557,7 @@ where
                                 for index in 0 .. buffers.len() {
                                     buffers[index].1.sort_by(|x,y| x.0.cmp(&y.0));
                                     for (val, time, diff) in buffers[index].1.drain(..) {
-                                        builders[index].push(((key.clone(), val), time, diff));
+                                        builders[index].push(((key.to_owned(), val), time, diff));
                                     }
                                 }
                             }
@@ -667,7 +672,7 @@ where
         outputs: &mut [(T, Vec<(V2, T, R2)>)],
         new_interesting: &mut Vec<T>) -> (usize, usize)
     where
-        K: Eq+Clone,
+        K: Eq + ?Sized,
         C1: Cursor<S1, Key = K, Val = V1, Time = T, R = R1>,
         C2: Cursor<S2, Key = K, Val = V2, Time = T, R = R2>,
         C3: Cursor<S3, Key = K, Val = V1, Time = T, R = R1>,
@@ -745,7 +750,7 @@ mod history_replay {
             outputs: &mut [(T, Vec<(V2, T, R2)>)],
             new_interesting: &mut Vec<T>) -> (usize, usize)
         where
-            K: Eq+Clone,
+            K: Eq + ?Sized,
             C1: Cursor<S1, Key = K, Val = V1, Time = T, R = R1>,
             C2: Cursor<S2, Key = K, Val = V2, Time = T, R = R2>,
             C3: Cursor<S3, Key = K, Val = V1, Time = T, R = R1>,

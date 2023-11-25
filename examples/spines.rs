@@ -56,8 +56,16 @@ fn main() {
                 "slc" => {
 
                     use differential_dataflow::trace::implementations::ord_neu::SlcValSpine;
-                    let data = data.map(|x| (x.into_bytes(), ())).arrange::<SlcValSpine<u8,(),_,_>>();
-                    let keys = keys.map(|x| (x.into_bytes(), ())).arrange::<SlcValSpine<u8,(),_,_>>();
+                    use differential_dataflow::operators::reduce::ReduceCore;
+
+                    let data =
+                    data.map(|x| (x.into_bytes(), ()))
+                        .arrange::<SlcValSpine<_,_,_,_>>()
+                        .reduce_abelian::<_, SlcValSpine<_,_,_,_>>("distinct", |_,_,output| output.push(((), 1)));
+                    let keys =
+                    keys.map(|x| (x.into_bytes(), ()))
+                        .arrange::<SlcValSpine<_,_,_,_>>()
+                        .reduce_abelian::<_, SlcValSpine<_,_,_,_>>("distinct", |_,_,output| output.push(((), 1)));
 
                     keys.join_core(&data, |_k, &(), &()| Option::<()>::None)
                         .probe_with(&mut probe);
