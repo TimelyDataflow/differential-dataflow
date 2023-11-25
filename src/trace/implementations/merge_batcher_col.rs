@@ -105,7 +105,11 @@ where
             for datum @ ((_key, _val), time, _diff) in &buffer[..] {
                 if upper.less_equal(time) {
                     self.frontier.insert(time.clone());
-                    if !keep.is_empty() && keep.len() == keep.capacity() {
+                    if keep.is_empty() {
+                        if keep.capacity() != MergeSorterColumnation::<(U::Key, U::Val), U::Time, U::Diff>::buffer_size() {
+                            keep = self.sorter.empty();
+                        }
+                    } else if keep.len() == keep.capacity() {
                         kept.push(keep);
                         keep = self.sorter.empty();
                     }
@@ -228,7 +232,7 @@ impl<D: Ord+Clone+Columnation+'static, T: Ord+Clone+Columnation+'static, R: Semi
 
     /// Insert an empty buffer into the stash. Panics if the buffer is not empty.
     fn recycle(&mut self, mut buffer: TimelyStack<(D, T, R)>) {
-        if buffer.capacity() == Self::buffer_size() && self.stash.len() <= 2 {
+        if buffer.capacity() == Self::buffer_size() && self.stash.len() < 2 {
             buffer.clear();
             self.stash.push(buffer);
         }
