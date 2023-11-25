@@ -441,7 +441,8 @@ where
 pub trait Arrange<G: Scope, K, V, R: Semigroup>
 where
     G::Timestamp: Lattice,
-    K: Data,
+    K: ToOwned + ?Sized,
+    K::Owned: Data,
     V: Data,
 {
     /// Arranges a stream of `(Key, Val)` updates by `Key`. Accepts an empty instance of the trace type.
@@ -451,13 +452,13 @@ where
     /// is the correct way to determine that times in the shared trace are committed.
     fn arrange<Tr>(&self) -> Arranged<G, TraceAgent<Tr>>
     where
-        K: ExchangeData+Hashable,
+        K::Owned: ExchangeData+Hashable,
         V: ExchangeData,
         R: ExchangeData,
-        Tr: Trace+TraceReader<Time=G::Timestamp>+'static,
+        Tr: Trace<Key=K>+TraceReader<Time=G::Timestamp>+'static,
         Tr::Batch: Batch,
-        Tr::Batcher: Batcher<Item = ((K,V),G::Timestamp,R), Time = G::Timestamp>,
-        Tr::Builder: Builder<Item = ((K,V),G::Timestamp,R), Time = G::Timestamp, Output = Tr::Batch>,
+        Tr::Batcher: Batcher<Item = ((K::Owned,V),G::Timestamp,R), Time = G::Timestamp>,
+        Tr::Builder: Builder<Item = ((K::Owned,V),G::Timestamp,R), Time = G::Timestamp, Output = Tr::Batch>,
     {
         self.arrange_named("Arrange")
     }
@@ -469,15 +470,15 @@ where
     /// is the correct way to determine that times in the shared trace are committed.
     fn arrange_named<Tr>(&self, name: &str) -> Arranged<G, TraceAgent<Tr>>
     where
-        K: ExchangeData+Hashable,
+        K::Owned: ExchangeData+Hashable,
         V: ExchangeData,
         R: ExchangeData,
-        Tr: Trace+TraceReader<Time=G::Timestamp>+'static,
+        Tr: Trace<Key=K>+TraceReader<Time=G::Timestamp>+'static,
         Tr::Batch: Batch,
-        Tr::Batcher: Batcher<Item = ((K,V),G::Timestamp,R), Time = G::Timestamp>,
-        Tr::Builder: Builder<Item = ((K,V),G::Timestamp,R), Time = G::Timestamp, Output = Tr::Batch>,
+        Tr::Batcher: Batcher<Item = ((K::Owned,V),G::Timestamp,R), Time = G::Timestamp>,
+        Tr::Builder: Builder<Item = ((K::Owned,V),G::Timestamp,R), Time = G::Timestamp, Output = Tr::Batch>,
     {
-        let exchange = Exchange::new(move |update: &((K,V),G::Timestamp,R)| (update.0).0.hashed().into());
+        let exchange = Exchange::new(move |update: &((K::Owned,V),G::Timestamp,R)| (update.0).0.hashed().into());
         self.arrange_core(exchange, name)
     }
 
@@ -488,54 +489,30 @@ where
     /// is the correct way to determine that times in the shared trace are committed.
     fn arrange_core<P, Tr>(&self, pact: P, name: &str) -> Arranged<G, TraceAgent<Tr>>
     where
-        P: ParallelizationContract<G::Timestamp, ((K,V),G::Timestamp,R)>,
-        Tr: Trace+TraceReader<Time=G::Timestamp>+'static,
+        P: ParallelizationContract<G::Timestamp, ((K::Owned,V),G::Timestamp,R)>,
+        Tr: Trace<Key=K>+TraceReader<Time=G::Timestamp>+'static,
         Tr::Batch: Batch,
-        Tr::Batcher: Batcher<Item = ((K,V),G::Timestamp,R), Time = G::Timestamp>,
-        Tr::Builder: Builder<Item = ((K,V),G::Timestamp,R), Time = G::Timestamp, Output = Tr::Batch>,
+        Tr::Batcher: Batcher<Item = ((K::Owned,V),G::Timestamp,R), Time = G::Timestamp>,
+        Tr::Builder: Builder<Item = ((K::Owned,V),G::Timestamp,R), Time = G::Timestamp, Output = Tr::Batch>,
     ;
 }
 
-impl<G, K, V, R> Arrange<G, K, V, R> for Collection<G, (K, V), R>
+impl<G, K, V, R> Arrange<G, K, V, R> for Collection<G, (K::Owned, V), R>
 where
     G: Scope,
     G::Timestamp: Lattice+Ord,
-    K: Data,
+    K: ToOwned + ?Sized,
+    K::Owned: Data,
     V: Data,
     R: Semigroup,
 {
-    fn arrange<Tr>(&self) -> Arranged<G, TraceAgent<Tr>>
-    where
-        K: ExchangeData + Hashable,
-        V: ExchangeData,
-        R: ExchangeData,
-        Tr: Trace + TraceReader<Time=G::Timestamp> + 'static, Tr::Batch: Batch,
-        Tr::Batcher: Batcher<Item = ((K,V),G::Timestamp,R), Time = G::Timestamp>,
-        Tr::Builder: Builder<Item = ((K,V),G::Timestamp,R), Time = G::Timestamp, Output = Tr::Batch>,
-    {
-        self.arrange_named("Arrange")
-    }
-
-    fn arrange_named<Tr>(&self, name: &str) -> Arranged<G, TraceAgent<Tr>>
-    where
-        K: ExchangeData + Hashable,
-        V: ExchangeData,
-        R: ExchangeData,
-        Tr: Trace + TraceReader<Time=G::Timestamp> + 'static, Tr::Batch: Batch,
-        Tr::Batcher: Batcher<Item = ((K,V),G::Timestamp,R), Time = G::Timestamp>,
-        Tr::Builder: Builder<Item = ((K,V),G::Timestamp,R), Time = G::Timestamp, Output = Tr::Batch>,
-    {
-        let exchange = Exchange::new(move |update: &((K,V),G::Timestamp,R)| (update.0).0.hashed().into());
-        self.arrange_core(exchange, name)
-    }
-
     fn arrange_core<P, Tr>(&self, pact: P, name: &str) -> Arranged<G, TraceAgent<Tr>>
     where
-        P: ParallelizationContract<G::Timestamp, ((K,V),G::Timestamp,R)>,
-        Tr: Trace+TraceReader<Time=G::Timestamp>+'static,
+        P: ParallelizationContract<G::Timestamp, ((K::Owned,V),G::Timestamp,R)>,
+        Tr: Trace<Key=K>+TraceReader<Time=G::Timestamp>+'static,
         Tr::Batch: Batch,
-        Tr::Batcher: Batcher<Item = ((K,V),G::Timestamp,R), Time = G::Timestamp>,
-        Tr::Builder: Builder<Item = ((K,V),G::Timestamp,R), Time = G::Timestamp, Output = Tr::Batch>,
+        Tr::Batcher: Batcher<Item = ((K::Owned,V),G::Timestamp,R), Time = G::Timestamp>,
+        Tr::Builder: Builder<Item = ((K::Owned,V),G::Timestamp,R), Time = G::Timestamp, Output = Tr::Batch>,
     {
         // The `Arrange` operator is tasked with reacting to an advancing input
         // frontier by producing the sequence of batches whose lower and upper
@@ -687,23 +664,6 @@ where
         };
 
         Arranged { stream: stream, trace: reader.unwrap() }
-    }
-}
-
-impl<G: Scope, K: ExchangeData+Hashable, R: ExchangeData+Semigroup> Arrange<G, K, (), R> for Collection<G, K, R>
-where
-    G::Timestamp: Lattice+Ord,
-{
-    fn arrange_core<P, Tr>(&self, pact: P, name: &str) -> Arranged<G, TraceAgent<Tr>>
-    where
-        P: ParallelizationContract<G::Timestamp, ((K,()),G::Timestamp,R)>,
-        Tr: Trace+TraceReader<Time=G::Timestamp>+'static,
-        Tr::Batch: Batch,
-        Tr::Batcher: Batcher<Item = ((K,()),G::Timestamp,R), Time = G::Timestamp>,
-        Tr::Builder: Builder<Item = ((K,()),G::Timestamp,R), Time = G::Timestamp, Output = Tr::Batch>,
-    {
-        self.map(|k| (k, ()))
-            .arrange_core(pact, name)
     }
 }
 

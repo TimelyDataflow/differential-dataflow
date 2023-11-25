@@ -15,7 +15,7 @@ use trace::implementations::merge_batcher::MergeBatcher;
 use trace::implementations::merge_batcher_col::ColumnatedMergeBatcher;
 use trace::rc_blanket_impls::RcBuilder;
 
-use super::{Update, Layout, Vector, TStack};
+use super::{Update, Layout, Vector, TStack, Slice};
 
 use self::val_batch::{OrdValBatch, OrdValBuilder};
 
@@ -34,11 +34,21 @@ pub type ColValSpine<K, V, T, R, O=usize> = Spine<
     ColumnatedMergeBatcher<((K,V),T,R)>,
     RcBuilder<OrdValBuilder<TStack<((K,V),T,R), O>>>,
 >;
+
+
+/// A trace implementation backed by columnar storage.
+pub type SlcValSpine<K, V, T, R, O=usize> = Spine<
+    Rc<OrdValBatch<Slice<Box<((K,V),T,R)>, O>>>,
+    ColumnatedMergeBatcher<Box<((K,V),T,R)>>,
+    RcBuilder<OrdValBuilder<Slice<Box<((K,V),T,R)>, O>>>,
+>;
+
 // /// A trace implementation backed by columnar storage.
 // pub type ColKeySpine<K, T, R, O=usize> = Spine<Rc<OrdKeyBatch<TStack<((K,()),T,R), O>>>>;
 
 mod val_batch {
 
+    use std::borrow::Borrow;
     use std::convert::TryInto;
     use std::marker::PhantomData;
     use timely::progress::{Antichain, frontier::AntichainRef};
@@ -503,9 +513,10 @@ mod val_batch {
 
     impl<L: Layout> Builder for OrdValBuilder<L>
     where
-        OrdValBatch<L>: Batch<Key=<L::Target as Update>::Key, Val=<L::Target as Update>::Val, Time=<L::Target as Update>::Time, R=<L::Target as Update>::Diff>
+        OrdValBatch<L>: Batch<Key=<L::Target as Update>::Key, Val=<L::Target as Update>::Val, Time=<L::Target as Update>::Time, R=<L::Target as Update>::Diff>,
+        <L::Target as Update>::KeyOwned: Borrow<<L::Target as Update>::Key>,
     {
-        type Item = ((<L::Target as Update>::Key, <L::Target as Update>::Val), <L::Target as Update>::Time, <L::Target as Update>::Diff);
+        type Item = ((<L::Target as Update>::KeyOwned, <L::Target as Update>::Val), <L::Target as Update>::Time, <L::Target as Update>::Diff);
         type Time = <L::Target as Update>::Time;
         type Output = OrdValBatch<L>;
 
@@ -528,7 +539,7 @@ mod val_batch {
         fn push(&mut self, ((key, val), time, diff): Self::Item) {
 
             // Perhaps this is a continuation of an already received key.
-            if self.result.keys.last() == Some(&key) {
+            if self.result.keys.last() == Some(key.borrow()) {
                 // Perhaps this is a continuation of an already received value.
                 if self.result.vals.last() == Some(&val) {
                     self.push_update(time, diff);
@@ -554,7 +565,7 @@ mod val_batch {
         fn copy(&mut self, ((key, val), time, diff): &Self::Item) {
 
             // Perhaps this is a continuation of an already received key.
-            if self.result.keys.last() == Some(key) {
+            if self.result.keys.last() == Some(key.borrow()) {
                 // Perhaps this is a continuation of an already received value.
                 if self.result.vals.last() == Some(val) {
                     // TODO: here we could look for repetition, and not push the update in that case.
@@ -576,7 +587,7 @@ mod val_batch {
                 self.result.keys_offs.push(self.result.vals.len().try_into().ok().unwrap());
                 self.push_update(time.clone(), diff.clone());
                 self.result.vals.copy(val);
-                self.result.keys.copy(key);
+                self.result.keys.copy(key.borrow());
             }
         }
 

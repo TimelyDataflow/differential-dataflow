@@ -215,7 +215,7 @@ where
 /// This method is used by the various `join` implementations, but it can also be used
 /// directly in the event that one has a handle to an `Arranged<G,T>`, perhaps because
 /// the arrangement is available for re-use, or from the output of a `reduce` operator.
-pub trait JoinCore<G: Scope, K: 'static, V: 'static, R: Semigroup> where G::Timestamp: Lattice+Ord {
+pub trait JoinCore<G: Scope, K: 'static + ?Sized, V: 'static, R: Semigroup> where G::Timestamp: Lattice+Ord {
 
     /// Joins two arranged collections with the same key type.
     ///
@@ -635,6 +635,7 @@ impl<G, T1> JoinCore<G, T1::Key, T1::Val, T1::R> for Arranged<G,T1>
 /// dataflow system a chance to run operators that can consume and aggregate the data.
 struct Deferred<K, T, R, S1, S2, C1, C2, D>
 where
+    K: ?Sized,
     T: Timestamp+Lattice+Ord+Debug,
     R: Semigroup,
     C1: Cursor<S1, Key=K, Time=T>,
@@ -657,7 +658,7 @@ where
 
 impl<K, T, R, S1, S2, C1, C2, D> Deferred<K, T, R, S1, S2, C1, C2, D>
 where
-    K: Ord+Debug+Eq,
+    K: Ord+Debug+Eq + ?Sized,
     C1: Cursor<S1, Key=K, Time=T>,
     C2: Cursor<S2, Key=K, Time=T>,
     C1::Val: Ord+Clone+Debug,

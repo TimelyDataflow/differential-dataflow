@@ -10,7 +10,7 @@
 pub mod cursor;
 pub mod description;
 pub mod implementations;
-pub mod layers;
+// pub mod layers;
 pub mod wrappers;
 
 use timely::communication::message::RefOrMut;
@@ -47,7 +47,7 @@ pub type ExertionLogic = std::sync::Arc<dyn for<'a> Fn(Box<dyn Iterator<Item=(us
 pub trait TraceReader {
 
     /// Key by which updates are indexed.
-    type Key;
+    type Key: ?Sized;
     /// Values associated with keys.
     type Val;
     /// Timestamps associated with updates
@@ -257,7 +257,7 @@ where
     Self: ::std::marker::Sized,
 {
     /// Key by which updates are indexed.
-    type Key;
+    type Key: ?Sized;
     /// Values associated with keys.
     type Val;
     /// Timestamps associated with updates

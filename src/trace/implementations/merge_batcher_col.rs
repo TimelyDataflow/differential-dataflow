@@ -14,12 +14,12 @@ use trace::implementations::Update;
 /// Creates batches from unordered tuples.
 pub struct ColumnatedMergeBatcher<U: Update>
 where
-    U::Key: Columnation,
+    U::KeyOwned: Columnation,
     U::Val: Columnation,
     U::Time: Columnation,
     U::Diff: Columnation,
 {
-    sorter: MergeSorterColumnation<(U::Key, U::Val), U::Time, U::Diff>,
+    sorter: MergeSorterColumnation<(U::KeyOwned, U::Val), U::Time, U::Diff>,
     lower: Antichain<U::Time>,
     frontier: Antichain<U::Time>,
     phantom: PhantomData<U>,
@@ -27,12 +27,12 @@ where
 
 impl<U: Update> Batcher for ColumnatedMergeBatcher<U>
 where
-    U::Key: Columnation + 'static,
+    U::KeyOwned: Columnation + 'static,
     U::Val: Columnation + 'static,
     U::Time: Columnation + 'static,
     U::Diff: Columnation + 'static,
 {
-    type Item = ((U::Key,U::Val),U::Time,U::Diff);
+    type Item = ((U::KeyOwned,U::Val),U::Time,U::Diff);
     type Time = U::Time;
 
     fn new() -> Self {
