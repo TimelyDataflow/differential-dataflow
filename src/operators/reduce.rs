@@ -332,7 +332,6 @@ where
     K: ToOwned + Ord + ?Sized,
     K::Owned: Data,
     V: ToOwned + Ord + ?Sized,
-    V::Owned: Data,
     G::Timestamp: Lattice+Ord,
     T1: TraceReader<Key=K, Val=V, Time=G::Timestamp, R=R>+Clone+'static,
 {

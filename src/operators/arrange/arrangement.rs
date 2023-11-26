@@ -666,6 +666,23 @@ where
     }
 }
 
+impl<G: Scope, K: ExchangeData+Hashable, R: ExchangeData+Semigroup> Arrange<G, K, (), R> for Collection<G, K, R>
+where
+    G::Timestamp: Lattice+Ord,
+{
+    fn arrange_core<P, Tr>(&self, pact: P, name: &str) -> Arranged<G, TraceAgent<Tr>>
+    where
+        P: ParallelizationContract<G::Timestamp, ((K,()),G::Timestamp,R)>,
+        Tr: Trace<Time=G::Timestamp>+'static,
+        Tr::Batch: Batch,
+        Tr::Batcher: Batcher<Item = ((K,()),G::Timestamp,R), Time = G::Timestamp>,
+        Tr::Builder: Builder<Item = ((K,()),G::Timestamp,R), Time = G::Timestamp, Output = Tr::Batch>,
+    {
+        self.map(|k| (k, ()))
+            .arrange_core(pact, name)
+    }
+}
+
 /// Arranges something as `(Key,Val)` pairs according to a type `T` of trace.
 ///
 /// This arrangement requires `Key: Hashable`, and uses the `hashed()` method to place keys in a hashed

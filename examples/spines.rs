@@ -30,26 +30,24 @@ fn main() {
             let (keys_input, keys) = scope.new_collection::<String, isize>();
 
             match mode.as_str() {
-                // "new" => {
-                //     use differential_dataflow::trace::implementations::ord::ColKeySpine;
-                //     let data = data.arrange::<ColKeySpine<_,_,_>>();
-                //     let keys = keys.arrange::<ColKeySpine<_,_,_>>();
-                //     keys.join_core(&data, |_k, &(), &()| Option::<()>::None)
-                //         .probe_with(&mut probe);
-                // },
-                // "old" => {
-                //     use differential_dataflow::trace::implementations::ord::OrdKeySpine;
-                //     let data = data.arrange::<OrdKeySpine<_,_,_>>();
-                //     let keys = keys.arrange::<OrdKeySpine<_,_,_>>();
-                //     keys.join_core(&data, |_k, &(), &()| Option::<()>::None)
-                //         .probe_with(&mut probe);
-                // },
+                "new" => {
+                    use differential_dataflow::trace::implementations::ord::ColKeySpine;
+                    let data = data.arrange::<ColKeySpine<_,_,_>>();
+                    let keys = keys.arrange::<ColKeySpine<_,_,_>>();
+                    keys.join_core(&data, |_k, &(), &()| Option::<()>::None)
+                        .probe_with(&mut probe);
+                },
+                "old" => {
+                    use differential_dataflow::trace::implementations::ord::OrdKeySpine;
+                    let data = data.arrange::<OrdKeySpine<_,_,_>>();
+                    let keys = keys.arrange::<OrdKeySpine<_,_,_>>();
+                    keys.join_core(&data, |_k, &(), &()| Option::<()>::None)
+                        .probe_with(&mut probe);
+                },
                 "rhh" => {
-
                     use differential_dataflow::trace::implementations::rhh::{HashWrapper, VecSpine};
-                    let data = data.map(|x| (HashWrapper { inner: x }, ())).arrange::<VecSpine<HashWrapper<String>,(),_,_>>();
-                    let keys = keys.map(|x| (HashWrapper { inner: x }, ())).arrange::<VecSpine<HashWrapper<String>,(),_,_>>();
-
+                    let data = data.map(|x| HashWrapper { inner: x }).arrange::<VecSpine<_,(),_,_>>();
+                    let keys = keys.map(|x| HashWrapper { inner: x }).arrange::<VecSpine<_,(),_,_>>();
                     keys.join_core(&data, |_k, &(), &()| Option::<()>::None)
                         .probe_with(&mut probe);
                 },
