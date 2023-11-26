@@ -49,7 +49,7 @@ pub trait TraceReader {
     /// Key by which updates are indexed.
     type Key: ?Sized;
     /// Values associated with keys.
-    type Val;
+    type Val: ?Sized;
     /// Timestamps associated with updates
     type Time;
     /// Associated update.
@@ -259,7 +259,7 @@ where
     /// Key by which updates are indexed.
     type Key: ?Sized;
     /// Values associated with keys.
-    type Val;
+    type Val: ?Sized;
     /// Timestamps associated with updates
     type Time: Timestamp;
     /// Associated update.

@@ -68,9 +68,11 @@ pub trait Update {
     /// We will be able to read out references to this type, and must supply `Key::Owned` as input.
     type Key: Ord + ToOwned<Owned = Self::KeyOwned> + ?Sized;
     /// Key by which data are grouped.
-    type KeyOwned: Ord+Clone + Borrow<Self::KeyOwned>;
+    type KeyOwned: Ord+Clone + Borrow<Self::Key>;
     /// Values associated with the key.
-    type Val: Ord+Clone;
+    type Val: Ord + ToOwned<Owned = Self::ValOwned> + ?Sized;
+    /// Values associated with the key, in owned form
+    type ValOwned: Ord+Clone + Borrow<Self::Val>;
     /// Time at which updates occur.
     type Time: Ord+Lattice+timely::progress::Timestamp+Clone;
     /// Way in which updates occur.
@@ -87,29 +89,15 @@ where
     type Key = K;
     type KeyOwned = K;
     type Val = V;
+    type ValOwned = V;
     type Time = T;
     type Diff = R;
 }
-
-impl<K,V,T,R> Update for Box<((K, V), T, R)>
-where
-    K: Ord+Clone,
-    V: Ord+Clone,
-    T: Ord+Lattice+timely::progress::Timestamp+Clone,
-    R: Semigroup+Clone,
-{
-    type Key = [K];
-    type KeyOwned = Vec<K>;
-    type Val = V;
-    type Time = T;
-    type Diff = R;
-}
-
 
 /// A type with opinions on how updates should be laid out.
 pub trait Layout {
     /// The represented update.
-    type Target: Update;
+    type Target: Update + ?Sized;
     /// Offsets to use from keys into vals.
     type KeyOffset: OrdOffset;
     /// Offsets to use from vals into updates.
@@ -135,6 +123,7 @@ pub struct Vector<U: Update, O: OrdOffset = usize> {
 impl<U: Update, O: OrdOffset> Layout for Vector<U, O>
 where
     U::Key: ToOwned<Owned = U::Key> + Sized + Clone,
+    U::Val: ToOwned<Owned = U::Val> + Sized + Clone,
 {
     type Target = U;
     type KeyOffset = O;
@@ -152,7 +141,7 @@ pub struct TStack<U: Update, O: OrdOffset = usize> {
 impl<U: Update+Clone, O: OrdOffset> Layout for TStack<U, O>
 where
     U::Key: Columnation + ToOwned<Owned = U::Key>,
-    U::Val: Columnation,
+    U::Val: Columnation + ToOwned<Owned = U::Val>,
     U::Time: Columnation,
     U::Diff: Columnation,
 {
@@ -164,23 +153,60 @@ where
     type UpdContainer = TimelyStack<(U::Time, U::Diff)>;
 }
 
-/// A layout based on slice containers for `U::Key`.
-pub struct Slice<U: Update + ?Sized, O: OrdOffset = usize> {
-    phantom: std::marker::PhantomData<(Box<U>, O)>,
+/// A type with a preferred container.
+///
+/// Examples include types that implement `Clone` who prefer 
+pub trait PreferredContainer : ToOwned {
+    /// The preferred container for the type.
+    type Container: BatchContainer<Item=Self> + RetainFrom<Self>;
 }
 
-impl<K, V, T, D, O: OrdOffset> Layout for Slice<Box<((K,V),T,D)>, O> 
+impl<T: Clone> PreferredContainer for T {
+    type Container = Vec<T>;
+}
+
+impl<T: Clone> PreferredContainer for [T] {
+    type Container = SliceContainer<T>;
+}
+
+/// An update and layout description based on preferred containers.
+pub struct Preferred<K: ?Sized, V: ?Sized, T, D, O: OrdOffset = usize> {
+    phantom: std::marker::PhantomData<(Box<K>, Box<V>, T, D, O)>,
+}
+
+impl<K,V,T,R,O> Update for Preferred<K, V, T, R, O>
 where
-    K: Ord+Clone,
-    V: Ord+Clone,
+    K: Ord+ToOwned + ?Sized,
+    K::Owned: Ord+Clone,
+    V: Ord+ToOwned + ?Sized,
+    V::Owned: Ord+Clone,
+    T: Ord+Lattice+timely::progress::Timestamp+Clone,
+    R: Semigroup+Clone,
+    O: OrdOffset,
+{
+    type Key = K;
+    type KeyOwned = K::Owned;
+    type Val = V;
+    type ValOwned = V::Owned;
+    type Time = T;
+    type Diff = R;
+}
+
+impl<K, V, T, D, O> Layout for Preferred<K, V, T, D, O>
+where
+    K: Ord+ToOwned+PreferredContainer + ?Sized,
+    K::Owned: Ord+Clone,
+    V: Ord+ToOwned+PreferredContainer + ?Sized,
+    V::Owned: Ord+Clone,
     T: Ord+Lattice+timely::progress::Timestamp+Clone,
     D: Semigroup+Clone,
+    O: OrdOffset,
 {
-    type Target = Box<((K,V),T,D)>;
+    type Target = Preferred<K, V, T, D, O>;
     type KeyOffset = O;
     type ValOffset = O;
-    type KeyContainer = SliceContainer<K>;
-    type ValContainer = Vec<V>;
+    type KeyContainer = K::Container;
+    type ValContainer = V::Container;
     type UpdContainer = Vec<(T, D)>;
 }
 

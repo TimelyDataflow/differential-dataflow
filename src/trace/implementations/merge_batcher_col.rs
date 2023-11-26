@@ -15,11 +15,11 @@ use trace::implementations::Update;
 pub struct ColumnatedMergeBatcher<U: Update>
 where
     U::KeyOwned: Columnation,
-    U::Val: Columnation,
+    U::ValOwned: Columnation,
     U::Time: Columnation,
     U::Diff: Columnation,
 {
-    sorter: MergeSorterColumnation<(U::KeyOwned, U::Val), U::Time, U::Diff>,
+    sorter: MergeSorterColumnation<(U::KeyOwned, U::ValOwned), U::Time, U::Diff>,
     lower: Antichain<U::Time>,
     frontier: Antichain<U::Time>,
     phantom: PhantomData<U>,
@@ -28,11 +28,11 @@ where
 impl<U: Update> Batcher for ColumnatedMergeBatcher<U>
 where
     U::KeyOwned: Columnation + 'static,
-    U::Val: Columnation + 'static,
+    U::ValOwned: Columnation + 'static,
     U::Time: Columnation + 'static,
     U::Diff: Columnation + 'static,
 {
-    type Item = ((U::KeyOwned,U::Val),U::Time,U::Diff);
+    type Item = ((U::KeyOwned,U::ValOwned),U::Time,U::Diff);
     type Time = U::Time;
 
     fn new() -> Self {

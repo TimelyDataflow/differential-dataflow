@@ -239,7 +239,7 @@ where
 }
 
 /// Extension trait for the `reduce_core` differential dataflow method.
-pub trait ReduceCore<G: Scope, K: ToOwned + ?Sized, V: Data, R: Semigroup> where G::Timestamp: Lattice+Ord {
+pub trait ReduceCore<G: Scope, K: ToOwned + ?Sized, V: ToOwned + ?Sized, R: Semigroup> where G::Timestamp: Lattice+Ord {
     /// Applies `reduce` to arranged data, and returns an arrangement of output data.
     ///
     /// This method is used by the more ergonomic `reduce`, `distinct`, and `count` methods, although
@@ -327,21 +327,24 @@ where
     }
 }
 
-impl<G: Scope, K, V: Data, T1, R: Semigroup> ReduceCore<G, K, V, R> for Arranged<G, T1>
+impl<G: Scope, K, V, T1, R: Semigroup> ReduceCore<G, K, V, R> for Arranged<G, T1>
 where
     K: ToOwned + Ord + ?Sized,
     K::Owned: Data,
+    V: ToOwned + Ord + ?Sized,
+    V::Owned: Data,
     G::Timestamp: Lattice+Ord,
     T1: TraceReader<Key=K, Val=V, Time=G::Timestamp, R=R>+Clone+'static,
 {
     fn reduce_core<L, T2>(&self, name: &str, mut logic: L) -> Arranged<G, TraceAgent<T2>>
         where
             T2: Trace+TraceReader<Key=K, Time=G::Timestamp>+'static,
-            T2::Val: Data,
+            T2::Val: Ord + ToOwned,
+            <T2::Val as ToOwned>::Owned: Data,
             T2::R: Semigroup,
             T2::Batch: Batch,
-            T2::Builder: Builder<Output=T2::Batch, Item = ((K::Owned, T2::Val), T2::Time, T2::R)>,
-            L: FnMut(&K, &[(&V, R)], &mut Vec<(T2::Val,T2::R)>, &mut Vec<(T2::Val, T2::R)>)+'static {
+            T2::Builder: Builder<Output=T2::Batch, Item = ((K::Owned, <T2::Val as ToOwned>::Owned), T2::Time, T2::R)>,
+            L: FnMut(&K, &[(&V, R)], &mut Vec<(<T2::Val as ToOwned>::Owned,T2::R)>, &mut Vec<(<T2::Val as ToOwned>::Owned, T2::R)>)+'static {
 
         let mut result_trace = None;
 
@@ -475,7 +478,7 @@ where
                             //
                             // TODO: It would be better if all updates went into one batch, but timely dataflow prevents
                             //       this as long as it requires that there is only one capability for each message.
-                            let mut buffers = Vec::<(G::Timestamp, Vec<(T2::Val, G::Timestamp, T2::R)>)>::new();
+                            let mut buffers = Vec::<(G::Timestamp, Vec<(<T2::Val as ToOwned>::Owned, G::Timestamp, T2::R)>)>::new();
                             let mut builders = Vec::new();
                             for i in 0 .. capabilities.len() {
                                 buffers.push((capabilities[i].time().clone(), Vec::new()));
@@ -653,8 +656,9 @@ fn sort_dedup<T: Ord>(list: &mut Vec<T>) {
 
 trait PerKeyCompute<'a, V1, V2, T, R1, R2>
 where
-    V1: Ord+Clone+'a,
-    V2: Ord+Clone+'a,
+    V1: Ord + ?Sized,
+    V2: Ord + ToOwned+'a + ?Sized,
+    V2::Owned: Ord + Clone + 'a,
     T: Lattice+Ord+Clone,
     R1: Semigroup,
     R2: Semigroup,
@@ -669,14 +673,14 @@ where
         times: &mut Vec<T>,
         logic: &mut L,
         upper_limit: &Antichain<T>,
-        outputs: &mut [(T, Vec<(V2, T, R2)>)],
+        outputs: &mut [(T, Vec<(V2::Owned, T, R2)>)],
         new_interesting: &mut Vec<T>) -> (usize, usize)
     where
         K: Eq + ?Sized,
         C1: Cursor<S1, Key = K, Val = V1, Time = T, R = R1>,
         C2: Cursor<S2, Key = K, Val = V2, Time = T, R = R2>,
         C3: Cursor<S3, Key = K, Val = V1, Time = T, R = R1>,
-        L: FnMut(&K, &[(&V1, R1)], &mut Vec<(V2, R2)>, &mut Vec<(V2, R2)>);
+        L: FnMut(&K, &[(&V1, R1)], &mut Vec<(V2::Owned, R2)>, &mut Vec<(V2::Owned, R2)>);
 }
 
 
@@ -695,8 +699,9 @@ mod history_replay {
     /// time order, maintaining consolidated representations of updates with respect to future interesting times.
     pub struct HistoryReplayer<'a, V1, V2, T, R1, R2>
     where
-        V1: Ord+Clone+'a,
-        V2: Ord+Clone+'a,
+        V1: Ord+'a + ?Sized,
+        V2: Ord+'a + ToOwned + ?Sized,
+        V2::Owned: Ord + 'a,
         T: Lattice+Ord+Clone,
         R1: Semigroup,
         R2: Semigroup,
@@ -705,9 +710,9 @@ mod history_replay {
         input_history: ValueHistory<'a, V1, T, R1>,
         output_history: ValueHistory<'a, V2, T, R2>,
         input_buffer: Vec<(&'a V1, R1)>,
-        output_buffer: Vec<(V2, R2)>,
-        update_buffer: Vec<(V2, R2)>,
-        output_produced: Vec<((V2, T), R2)>,
+        output_buffer: Vec<(V2::Owned, R2)>,
+        update_buffer: Vec<(V2::Owned, R2)>,
+        output_produced: Vec<((V2::Owned, T), R2)>,
         synth_times: Vec<T>,
         meets: Vec<T>,
         times_current: Vec<T>,
@@ -716,8 +721,9 @@ mod history_replay {
 
     impl<'a, V1, V2, T, R1, R2> PerKeyCompute<'a, V1, V2, T, R1, R2> for HistoryReplayer<'a, V1, V2, T, R1, R2>
     where
-        V1: Ord+Clone,
-        V2: Ord+Clone,
+        V1: Ord + ?Sized,
+        V2: Ord + ToOwned + ?Sized,
+        V2::Owned: Ord + Clone + 'a,
         T: Lattice+Ord+Clone,
         R1: Semigroup,
         R2: Semigroup,
@@ -747,14 +753,14 @@ mod history_replay {
             times: &mut Vec<T>,
             logic: &mut L,
             upper_limit: &Antichain<T>,
-            outputs: &mut [(T, Vec<(V2, T, R2)>)],
+            outputs: &mut [(T, Vec<(V2::Owned, T, R2)>)],
             new_interesting: &mut Vec<T>) -> (usize, usize)
         where
             K: Eq + ?Sized,
             C1: Cursor<S1, Key = K, Val = V1, Time = T, R = R1>,
             C2: Cursor<S2, Key = K, Val = V2, Time = T, R = R2>,
             C3: Cursor<S3, Key = K, Val = V1, Time = T, R = R1>,
-            L: FnMut(&K, &[(&V1, R1)], &mut Vec<(V2, R2)>, &mut Vec<(V2, R2)>)
+            L: FnMut(&K, &[(&V1, R1)], &mut Vec<(V2::Owned, R2)>, &mut Vec<(V2::Owned, R2)>)
         {
 
             // The work we need to perform is at times defined principally by the contents of `batch_cursor`
@@ -916,7 +922,7 @@ mod history_replay {
                         meet.as_ref().map(|meet| output_replay.advance_buffer_by(&meet));
                         for &((ref value, ref time), ref diff) in output_replay.buffer().iter() {
                             if time.less_equal(&next_time) {
-                                self.output_buffer.push(((*value).clone(), diff.clone()));
+                                self.output_buffer.push(((*value).to_owned(), diff.clone()));
                             }
                             else {
                                 self.temporary.push(next_time.join(time));
@@ -924,7 +930,7 @@ mod history_replay {
                         }
                         for &((ref value, ref time), ref diff) in self.output_produced.iter() {
                             if time.less_equal(&next_time) {
-                                self.output_buffer.push(((*value).clone(), diff.clone()));
+                                self.output_buffer.push(((*value).to_owned(), diff.clone()));
                             }
                             else {
                                 self.temporary.push(next_time.join(&time));

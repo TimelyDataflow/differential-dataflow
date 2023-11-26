@@ -722,7 +722,7 @@ mod val_batch {
         <L::Target as Update>::KeyOwned: Borrow<<L::Target as Update>::Key>,
         RhhValBatch<L>: Batch<Key=<L::Target as Update>::Key, Val=<L::Target as Update>::Val, Time=<L::Target as Update>::Time, R=<L::Target as Update>::Diff>
     {
-        type Item = ((<L::Target as Update>::KeyOwned, <L::Target as Update>::Val), <L::Target as Update>::Time, <L::Target as Update>::Diff);
+        type Item = ((<L::Target as Update>::KeyOwned, <L::Target as Update>::ValOwned), <L::Target as Update>::Time, <L::Target as Update>::Diff);
         type Time = <L::Target as Update>::Time;
         type Output = RhhValBatch<L>;
 
@@ -759,7 +759,7 @@ mod val_batch {
             // Perhaps this is a continuation of an already received key.
             if self.result.keys.last() == Some(key.borrow()) {
                 // Perhaps this is a continuation of an already received value.
-                if self.result.vals.last() == Some(&val) {
+                if self.result.vals.last() == Some(val.borrow()) {
                     self.push_update(time, diff);
                 } else {
                     // New value; complete representation of prior value.
@@ -786,7 +786,7 @@ mod val_batch {
             // Perhaps this is a continuation of an already received key.
             if self.result.keys.last() == Some(key.borrow()) {
                 // Perhaps this is a continuation of an already received value.
-                if self.result.vals.last() == Some(val) {
+                if self.result.vals.last() == Some(val.borrow()) {
                     // TODO: here we could look for repetition, and not push the update in that case.
                     // More logic (and state) would be required to correctly wrangle this.
                     self.push_update(time.clone(), diff.clone());
@@ -796,7 +796,7 @@ mod val_batch {
                     // Remove any pending singleton, and if it was set increment our count.
                     if self.singleton.take().is_some() { self.singletons += 1; }
                     self.push_update(time.clone(), diff.clone());
-                    self.result.vals.copy(val);
+                    self.result.vals.copy(val.borrow());
                 }
             } else {
                 // New key; complete representation of prior key.
@@ -805,7 +805,7 @@ mod val_batch {
                 if self.singleton.take().is_some() { self.singletons += 1; }
                 self.result.keys_offs.push(self.result.vals.len().try_into().ok().unwrap());
                 self.push_update(time.clone(), diff.clone());
-                self.result.vals.copy(val);
+                self.result.vals.copy(val.borrow());
                 // Insert the key, but with no specified offset.
                 self.result.insert_key(key.borrow(), None);
             }

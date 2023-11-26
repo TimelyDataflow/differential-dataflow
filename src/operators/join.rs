@@ -215,7 +215,7 @@ where
 /// This method is used by the various `join` implementations, but it can also be used
 /// directly in the event that one has a handle to an `Arranged<G,T>`, perhaps because
 /// the arrangement is available for re-use, or from the output of a `reduce` operator.
-pub trait JoinCore<G: Scope, K: 'static + ?Sized, V: 'static, R: Semigroup> where G::Timestamp: Lattice+Ord {
+pub trait JoinCore<G: Scope, K: 'static + ?Sized, V: 'static + ?Sized, R: Semigroup> where G::Timestamp: Lattice+Ord {
 
     /// Joins two arranged collections with the same key type.
     ///
@@ -255,7 +255,7 @@ pub trait JoinCore<G: Scope, K: 'static + ?Sized, V: 'static, R: Semigroup> wher
     fn join_core<Tr2,I,L> (&self, stream2: &Arranged<G,Tr2>, result: L) -> Collection<G,I::Item,<R as Multiply<Tr2::R>>::Output>
     where
         Tr2: TraceReader<Key=K, Time=G::Timestamp>+Clone+'static,
-        Tr2::Val: Ord+Clone+Debug+'static,
+        Tr2::Val: Ord+Debug+'static,
         Tr2::R: Semigroup,
         R: Multiply<Tr2::R>,
         <R as Multiply<Tr2::R>>::Output: Semigroup,
@@ -305,7 +305,7 @@ pub trait JoinCore<G: Scope, K: 'static + ?Sized, V: 'static, R: Semigroup> wher
     fn join_core_internal_unsafe<Tr2,I,L,D,ROut> (&self, stream2: &Arranged<G,Tr2>, result: L) -> Collection<G,D,ROut>
     where
         Tr2: TraceReader<Key=K, Time=G::Timestamp>+Clone+'static,
-        Tr2::Val: Ord+Clone+Debug+'static,
+        Tr2::Val: Ord+Debug+'static,
         Tr2::R: Semigroup,
         D: Data,
         ROut: Semigroup,
@@ -326,7 +326,7 @@ where
     fn join_core<Tr2,I,L> (&self, stream2: &Arranged<G,Tr2>, result: L) -> Collection<G,I::Item,<R as Multiply<Tr2::R>>::Output>
     where
         Tr2: TraceReader<Key=K, Time=G::Timestamp>+Clone+'static,
-        Tr2::Val: Ord+Clone+Debug+'static,
+        Tr2::Val: Ord+Debug+'static,
         Tr2::R: Semigroup,
         R: Multiply<Tr2::R>,
         <R as Multiply<Tr2::R>>::Output: Semigroup,
@@ -341,7 +341,7 @@ where
     fn join_core_internal_unsafe<Tr2,I,L,D,ROut> (&self, stream2: &Arranged<G,Tr2>, result: L) -> Collection<G,D,ROut>
     where
         Tr2: TraceReader<Key=K, Time=G::Timestamp>+Clone+'static,
-        Tr2::Val: Ord+Clone+Debug+'static,
+        Tr2::Val: Ord+Debug+'static,
         Tr2::R: Semigroup,
         R: Semigroup,
         D: Data,
@@ -360,12 +360,12 @@ impl<G, T1> JoinCore<G, T1::Key, T1::Val, T1::R> for Arranged<G,T1>
         G::Timestamp: Lattice+Ord+Debug,
         T1: TraceReader<Time=G::Timestamp>+Clone+'static,
         T1::Key: Ord+Debug+'static,
-        T1::Val: Ord+Clone+Debug+'static,
+        T1::Val: Ord+Debug+'static,
         T1::R: Semigroup,
 {
     fn join_core<Tr2,I,L>(&self, other: &Arranged<G,Tr2>, mut result: L) -> Collection<G,I::Item,<T1::R as Multiply<Tr2::R>>::Output>
     where
-        Tr2::Val: Ord+Clone+Debug+'static,
+        Tr2::Val: Ord+Debug+'static,
         Tr2: TraceReader<Key=T1::Key,Time=G::Timestamp>+Clone+'static,
         Tr2::R: Semigroup,
         T1::R: Multiply<Tr2::R>,
@@ -385,7 +385,7 @@ impl<G, T1> JoinCore<G, T1::Key, T1::Val, T1::R> for Arranged<G,T1>
     fn join_core_internal_unsafe<Tr2,I,L,D,ROut> (&self, other: &Arranged<G,Tr2>, mut result: L) -> Collection<G,D,ROut>
     where
         Tr2: TraceReader<Key=T1::Key, Time=G::Timestamp>+Clone+'static,
-        Tr2::Val: Ord+Clone+Debug+'static,
+        Tr2::Val: Ord+Debug+'static,
         Tr2::R: Semigroup,
         D: Data,
         ROut: Semigroup,
@@ -640,8 +640,8 @@ where
     R: Semigroup,
     C1: Cursor<S1, Key=K, Time=T>,
     C2: Cursor<S2, Key=K, Time=T>,
-    C1::Val: Ord+Clone,
-    C2::Val: Ord+Clone,
+    C1::Val: Ord,
+    C2::Val: Ord,
     C1::R: Semigroup,
     C2::R: Semigroup,
     D: Ord+Clone+Data,
@@ -661,8 +661,8 @@ where
     K: Ord+Debug+Eq + ?Sized,
     C1: Cursor<S1, Key=K, Time=T>,
     C2: Cursor<S2, Key=K, Time=T>,
-    C1::Val: Ord+Clone+Debug,
-    C2::Val: Ord+Clone+Debug,
+    C1::Val: Ord+Debug,
+    C2::Val: Ord+Debug,
     C1::R: Semigroup,
     C2::R: Semigroup,
     T: Timestamp+Lattice+Ord+Debug,
@@ -753,12 +753,12 @@ where
     }
 }
 
-struct JoinThinker<'a, V1: Ord+Clone+'a, V2: Ord+Clone+'a, T: Lattice+Ord+Clone, R1: Semigroup, R2: Semigroup> {
+struct JoinThinker<'a, V1: Ord+'a + ?Sized, V2: Ord+'a + ?Sized, T: Lattice+Ord+Clone, R1: Semigroup, R2: Semigroup> {
     pub history1: ValueHistory<'a, V1, T, R1>,
     pub history2: ValueHistory<'a, V2, T, R2>,
 }
 
-impl<'a, V1: Ord+Clone, V2: Ord+Clone, T: Lattice+Ord+Clone, R1: Semigroup, R2: Semigroup> JoinThinker<'a, V1, V2, T, R1, R2>
+impl<'a, V1: Ord + ?Sized, V2: Ord + ?Sized, T: Lattice+Ord+Clone, R1: Semigroup, R2: Semigroup> JoinThinker<'a, V1, V2, T, R1, R2>
 where V1: Debug, V2: Debug, T: Debug
 {
     fn new() -> Self {

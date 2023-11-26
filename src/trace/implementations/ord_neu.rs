@@ -15,7 +15,7 @@ use trace::implementations::merge_batcher::MergeBatcher;
 use trace::implementations::merge_batcher_col::ColumnatedMergeBatcher;
 use trace::rc_blanket_impls::RcBuilder;
 
-use super::{Update, Layout, Vector, TStack, Slice};
+use super::{Update, Layout, Vector, TStack, Preferred};
 
 use self::val_batch::{OrdValBatch, OrdValBuilder};
 
@@ -35,13 +35,13 @@ pub type ColValSpine<K, V, T, R, O=usize> = Spine<
     RcBuilder<OrdValBuilder<TStack<((K,V),T,R), O>>>,
 >;
 
-
 /// A trace implementation backed by columnar storage.
-pub type SlcValSpine<K, V, T, R, O=usize> = Spine<
-    Rc<OrdValBatch<Slice<Box<((K,V),T,R)>, O>>>,
-    ColumnatedMergeBatcher<Box<((K,V),T,R)>>,
-    RcBuilder<OrdValBuilder<Slice<Box<((K,V),T,R)>, O>>>,
+pub type PreferredSpine<K, V, T, R, O=usize> = Spine<
+    Rc<OrdValBatch<Preferred<K,V,T,R,O>>>,
+    ColumnatedMergeBatcher<Preferred<K,V,T,R,O>>,
+    RcBuilder<OrdValBuilder<Preferred<K,V,T,R,O>>>,
 >;
+
 
 // /// A trace implementation backed by columnar storage.
 // pub type ColKeySpine<K, T, R, O=usize> = Spine<Rc<OrdKeyBatch<TStack<((K,()),T,R), O>>>>;
@@ -516,7 +516,7 @@ mod val_batch {
         OrdValBatch<L>: Batch<Key=<L::Target as Update>::Key, Val=<L::Target as Update>::Val, Time=<L::Target as Update>::Time, R=<L::Target as Update>::Diff>,
         <L::Target as Update>::KeyOwned: Borrow<<L::Target as Update>::Key>,
     {
-        type Item = ((<L::Target as Update>::KeyOwned, <L::Target as Update>::Val), <L::Target as Update>::Time, <L::Target as Update>::Diff);
+        type Item = ((<L::Target as Update>::KeyOwned, <L::Target as Update>::ValOwned), <L::Target as Update>::Time, <L::Target as Update>::Diff);
         type Time = <L::Target as Update>::Time;
         type Output = OrdValBatch<L>;
 
@@ -541,7 +541,7 @@ mod val_batch {
             // Perhaps this is a continuation of an already received key.
             if self.result.keys.last() == Some(key.borrow()) {
                 // Perhaps this is a continuation of an already received value.
-                if self.result.vals.last() == Some(&val) {
+                if self.result.vals.last() == Some(val.borrow()) {
                     self.push_update(time, diff);
                 } else {
                     // New value; complete representation of prior value.
@@ -567,7 +567,7 @@ mod val_batch {
             // Perhaps this is a continuation of an already received key.
             if self.result.keys.last() == Some(key.borrow()) {
                 // Perhaps this is a continuation of an already received value.
-                if self.result.vals.last() == Some(val) {
+                if self.result.vals.last() == Some(val.borrow()) {
                     // TODO: here we could look for repetition, and not push the update in that case.
                     // More logic (and state) would be required to correctly wrangle this.
                     self.push_update(time.clone(), diff.clone());
@@ -577,7 +577,7 @@ mod val_batch {
                     // Remove any pending singleton, and if it was set increment our count.
                     if self.singleton.take().is_some() { self.singletons += 1; }
                     self.push_update(time.clone(), diff.clone());
-                    self.result.vals.copy(val);
+                    self.result.vals.copy(val.borrow());
                 }
             } else {
                 // New key; complete representation of prior key.
@@ -586,7 +586,7 @@ mod val_batch {
                 if self.singleton.take().is_some() { self.singletons += 1; }
                 self.result.keys_offs.push(self.result.vals.len().try_into().ok().unwrap());
                 self.push_update(time.clone(), diff.clone());
-                self.result.vals.copy(val);
+                self.result.vals.copy(val.borrow());
                 self.result.keys.copy(key.borrow());
             }
         }
