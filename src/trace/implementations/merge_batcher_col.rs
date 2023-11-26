@@ -106,7 +106,7 @@ where
                 if upper.less_equal(time) {
                     self.frontier.insert(time.clone());
                     if keep.is_empty() {
-                        if keep.capacity() != MergeSorterColumnation::<(U::Key, U::Val), U::Time, U::Diff>::buffer_size() {
+                        if keep.capacity() != MergeSorterColumnation::<(U::KeyOwned, U::ValOwned), U::Time, U::Diff>::buffer_size() {
                             keep = self.sorter.empty();
                         }
                     } else if keep.len() == keep.capacity() {
