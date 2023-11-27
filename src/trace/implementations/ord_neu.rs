@@ -22,7 +22,7 @@ use self::val_batch::{OrdValBatch, OrdValBuilder};
 /// A trace implementation using a spine of ordered lists.
 pub type OrdValSpine<K, V, T, R, O=usize> = Spine<
     Rc<OrdValBatch<Vector<((K,V),T,R), O>>>,
-    MergeBatcher<((K,V),T,R)>,
+    MergeBatcher<K,V,T,R>,
     RcBuilder<OrdValBuilder<Vector<((K,V),T,R), O>>>,
 >;
 // /// A trace implementation for empty values using a spine of ordered lists.
@@ -31,14 +31,14 @@ pub type OrdValSpine<K, V, T, R, O=usize> = Spine<
 /// A trace implementation backed by columnar storage.
 pub type ColValSpine<K, V, T, R, O=usize> = Spine<
     Rc<OrdValBatch<TStack<((K,V),T,R), O>>>,
-    ColumnatedMergeBatcher<((K,V),T,R)>,
+    ColumnatedMergeBatcher<K,V,T,R>,
     RcBuilder<OrdValBuilder<TStack<((K,V),T,R), O>>>,
 >;
 
 /// A trace implementation backed by columnar storage.
 pub type PreferredSpine<K, V, T, R, O=usize> = Spine<
     Rc<OrdValBatch<Preferred<K,V,T,R,O>>>,
-    ColumnatedMergeBatcher<Preferred<K,V,T,R,O>>,
+    ColumnatedMergeBatcher<<K as ToOwned>::Owned,<V as ToOwned>::Owned,T,R>,
     RcBuilder<OrdValBuilder<Preferred<K,V,T,R,O>>>,
 >;
 

@@ -42,41 +42,41 @@ use trace::abomonated_blanket_impls::AbomonatedBuilder;
 /// A trace implementation using a spine of ordered lists.
 pub type OrdValSpine<K, V, T, R, O=usize> = Spine<
     Rc<OrdValBatch<Vector<((K,V),T,R), O>>>,
-    MergeBatcher<((K,V),T,R)>,
+    MergeBatcher<K,V,T,R>,
     RcBuilder<OrdValBuilder<Vector<((K,V),T,R), O>>>,
 >;
 
 /// A trace implementation using a spine of abomonated ordered lists.
 pub type OrdValSpineAbom<K, V, T, R, O=usize> = Spine<
     Rc<Abomonated<OrdValBatch<Vector<((K,V),T,R), O>>, Vec<u8>>>,
-    MergeBatcher<((K,V),T,R)>,
+    MergeBatcher<K,V,T,R>,
     AbomonatedBuilder<OrdValBuilder<Vector<((K,V),T,R), O>>>,
 >;
 
 /// A trace implementation for empty values using a spine of ordered lists.
 pub type OrdKeySpine<K, T, R, O=usize> = Spine<
     Rc<OrdKeyBatch<Vector<((K,()),T,R), O>>>,
-    MergeBatcher<((K,()),T,R)>,
+    MergeBatcher<K,(),T,R>,
     RcBuilder<OrdKeyBuilder<Vector<((K,()),T,R), O>>>,
 >;
 
 /// A trace implementation for empty values using a spine of abomonated ordered lists.
 pub type OrdKeySpineAbom<K, T, R, O=usize> = Spine<
     Rc<Abomonated<OrdKeyBatch<Vector<((K,()),T,R), O>>, Vec<u8>>>,
-    MergeBatcher<((K,()),T,R)>,
+    MergeBatcher<K,(),T,R>,
     AbomonatedBuilder<OrdKeyBuilder<Vector<((K,()),T,R), O>>>,
 >;
 
 /// A trace implementation backed by columnar storage.
 pub type ColValSpine<K, V, T, R, O=usize> = Spine<
     Rc<OrdValBatch<TStack<((K,V),T,R), O>>>,
-    ColumnatedMergeBatcher<((K,V),T,R)>,
+    ColumnatedMergeBatcher<K,V,T,R>,
     RcBuilder<OrdValBuilder<TStack<((K,V),T,R), O>>>,
 >;
 /// A trace implementation backed by columnar storage.
 pub type ColKeySpine<K, T, R, O=usize> = Spine<
     Rc<OrdKeyBatch<TStack<((K,()),T,R), O>>>,
-    ColumnatedMergeBatcher<((K,()),T,R)>,
+    ColumnatedMergeBatcher<K,(),T,R>,
     RcBuilder<OrdKeyBuilder<TStack<((K,()),T,R), O>>>,
 >;
 
