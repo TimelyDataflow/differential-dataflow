@@ -30,7 +30,7 @@ where
     G: Scope,
     G::Timestamp: Lattice,
     Tr: TraceReader<Time=G::Timestamp>+Clone+'static,
-    Tr::Key: Ord+Hashable,
+    Tr::Key: Ord+Hashable+Sized,
     Tr::Val: Clone,
     Tr::R: Monoid+ExchangeData,
     F: FnMut(&D, &mut Tr::Key)+Clone+'static,
