@@ -47,9 +47,9 @@ pub type ExertionLogic = std::sync::Arc<dyn for<'a> Fn(Box<dyn Iterator<Item=(us
 pub trait TraceReader {
 
     /// Key by which updates are indexed.
-    type Key;
+    type Key: ?Sized;
     /// Values associated with keys.
-    type Val;
+    type Val: ?Sized;
     /// Timestamps associated with updates
     type Time;
     /// Associated update.
@@ -257,9 +257,9 @@ where
     Self: ::std::marker::Sized,
 {
     /// Key by which updates are indexed.
-    type Key;
+    type Key: ?Sized;
     /// Values associated with keys.
-    type Val;
+    type Val: ?Sized;
     /// Timestamps associated with updates
     type Time: Timestamp;
     /// Associated update.

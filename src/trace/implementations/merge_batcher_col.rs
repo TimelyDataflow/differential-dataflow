@@ -14,12 +14,12 @@ use trace::implementations::Update;
 /// Creates batches from unordered tuples.
 pub struct ColumnatedMergeBatcher<U: Update>
 where
-    U::Key: Columnation,
-    U::Val: Columnation,
+    U::KeyOwned: Columnation,
+    U::ValOwned: Columnation,
     U::Time: Columnation,
     U::Diff: Columnation,
 {
-    sorter: MergeSorterColumnation<(U::Key, U::Val), U::Time, U::Diff>,
+    sorter: MergeSorterColumnation<(U::KeyOwned, U::ValOwned), U::Time, U::Diff>,
     lower: Antichain<U::Time>,
     frontier: Antichain<U::Time>,
     phantom: PhantomData<U>,
@@ -27,12 +27,12 @@ where
 
 impl<U: Update> Batcher for ColumnatedMergeBatcher<U>
 where
-    U::Key: Columnation + 'static,
-    U::Val: Columnation + 'static,
+    U::KeyOwned: Columnation + 'static,
+    U::ValOwned: Columnation + 'static,
     U::Time: Columnation + 'static,
     U::Diff: Columnation + 'static,
 {
-    type Item = ((U::Key,U::Val),U::Time,U::Diff);
+    type Item = ((U::KeyOwned,U::ValOwned),U::Time,U::Diff);
     type Time = U::Time;
 
     fn new() -> Self {
@@ -106,7 +106,7 @@ where
                 if upper.less_equal(time) {
                     self.frontier.insert(time.clone());
                     if keep.is_empty() {
-                        if keep.capacity() != MergeSorterColumnation::<(U::Key, U::Val), U::Time, U::Diff>::buffer_size() {
+                        if keep.capacity() != MergeSorterColumnation::<(U::KeyOwned, U::ValOwned), U::Time, U::Diff>::buffer_size() {
                             keep = self.sorter.empty();
                         }
                     } else if keep.len() == keep.capacity() {

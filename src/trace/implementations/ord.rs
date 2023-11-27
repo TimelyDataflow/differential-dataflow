@@ -85,7 +85,11 @@ pub type ColKeySpine<K, T, R, O=usize> = Spine<
 /// The `L` parameter captures the updates should be laid out, and `C` determines which
 /// merge batcher to select.
 #[derive(Abomonation)]
-pub struct OrdValBatch<L: Layout> {
+pub struct OrdValBatch<L: Layout>
+where
+    <L::Target as Update>::Key: Sized,
+    <L::Target as Update>::Val: Sized,
+{
     /// Where all the dataz is.
     pub layer: KVTDLayer<L>,
     /// Description of the update times this layer represents.
@@ -102,7 +106,11 @@ type VTDBuilder<L> = OrderedBuilder<<<L as Layout>::Target as Update>::Val, TDBu
 type KTDBuilder<L> = OrderedBuilder<<<L as Layout>::Target as Update>::Key, TDBuilder<L>, <L as Layout>::KeyOffset, <L as Layout>::KeyContainer>;
 type KVTDBuilder<L> = OrderedBuilder<<<L as Layout>::Target as Update>::Key, VTDBuilder<L>, <L as Layout>::KeyOffset, <L as Layout>::KeyContainer>;
 
-impl<L: Layout> BatchReader for OrdValBatch<L> {
+impl<L: Layout> BatchReader for OrdValBatch<L>
+where
+    <L::Target as Update>::Key: Sized + Clone,
+    <L::Target as Update>::Val: Sized + Clone,
+{
     type Key = <L::Target as Update>::Key;
     type Val = <L::Target as Update>::Val;
     type Time = <L::Target as Update>::Time;
@@ -115,6 +123,9 @@ impl<L: Layout> BatchReader for OrdValBatch<L> {
 }
 
 impl<L: Layout> Batch for OrdValBatch<L>
+where
+    <L::Target as Update>::Key: Sized + Clone,
+    <L::Target as Update>::Val: Sized + Clone,
 {
     type Merger = OrdValMerger<L>;
 
@@ -124,7 +135,11 @@ impl<L: Layout> Batch for OrdValBatch<L>
 }
 
 
-impl<L: Layout> OrdValBatch<L> {
+impl<L: Layout> OrdValBatch<L>
+where
+    <L::Target as Update>::Key: Sized,
+    <L::Target as Update>::Val: Sized,
+{
     fn advance_builder_from(layer: &mut KVTDBuilder<L>, frontier: AntichainRef<<L::Target as Update>::Time>, key_pos: usize) {
 
         let key_start = key_pos;
@@ -214,7 +229,11 @@ impl<L: Layout> OrdValBatch<L> {
 }
 
 /// State for an in-progress merge.
-pub struct OrdValMerger<L: Layout> {
+pub struct OrdValMerger<L: Layout>
+where
+    <L::Target as Update>::Key: Sized + Clone,
+    <L::Target as Update>::Val: Sized + Clone,
+{
     // first batch, and position therein.
     lower1: usize,
     upper1: usize,
@@ -228,6 +247,8 @@ pub struct OrdValMerger<L: Layout> {
 
 impl<L: Layout> Merger<OrdValBatch<L>> for OrdValMerger<L>
 where
+    <L::Target as Update>::Key: Sized + Clone,
+    <L::Target as Update>::Val: Sized + Clone,
     OrdValBatch<L>: Batch<Time=<L::Target as Update>::Time>
 {
     fn new(batch1: &OrdValBatch<L>, batch2: &OrdValBatch<L>, compaction_frontier: AntichainRef<<OrdValBatch<L> as BatchReader>::Time>) -> Self {
@@ -307,12 +328,20 @@ where
 }
 
 /// A cursor for navigating a single layer.
-pub struct OrdValCursor<L: Layout> {
+pub struct OrdValCursor<L: Layout>
+where
+    <L::Target as Update>::Key: Sized + Clone,
+    <L::Target as Update>::Val: Sized + Clone,
+{
     phantom: std::marker::PhantomData<L>,
     cursor: OrderedCursor<VTDLayer<L>>,
 }
 
-impl<L: Layout> Cursor<OrdValBatch<L>> for OrdValCursor<L> {
+impl<L: Layout> Cursor<OrdValBatch<L>> for OrdValCursor<L>
+where
+    <L::Target as Update>::Key: Sized + Clone,
+    <L::Target as Update>::Val: Sized + Clone,
+{
     type Key = <L::Target as Update>::Key;
     type Val = <L::Target as Update>::Val;
     type Time = <L::Target as Update>::Time;
@@ -340,13 +369,19 @@ impl<L: Layout> Cursor<OrdValBatch<L>> for OrdValCursor<L> {
 }
 
 /// A builder for creating layers from unsorted update tuples.
-pub struct OrdValBuilder<L: Layout> {
+pub struct OrdValBuilder<L: Layout>
+where
+    <L::Target as Update>::Key: Sized,
+    <L::Target as Update>::Val: Sized,
+{
     builder: KVTDBuilder<L>,
 }
 
 
 impl<L: Layout> Builder for OrdValBuilder<L>
 where
+    <L::Target as Update>::Key: Sized + Clone,
+    <L::Target as Update>::Val: Sized + Clone,
     OrdValBatch<L>: Batch<Key=<L::Target as Update>::Key, Val=<L::Target as Update>::Val, Time=<L::Target as Update>::Time, R=<L::Target as Update>::Diff>
 {
     type Item = ((<L::Target as Update>::Key, <L::Target as Update>::Val), <L::Target as Update>::Time, <L::Target as Update>::Diff);
@@ -382,14 +417,20 @@ where
 
 /// An immutable collection of update tuples, from a contiguous interval of logical times.
 #[derive(Abomonation)]
-pub struct OrdKeyBatch<L: Layout> {
+pub struct OrdKeyBatch<L: Layout>
+where
+    <L::Target as Update>::Key: Sized,
+{
     /// Where all the dataz is.
     pub layer: KTDLayer<L>,
     /// Description of the update times this layer represents.
     pub desc: Description<<L::Target as Update>::Time>,
 }
 
-impl<L: Layout> BatchReader for OrdKeyBatch<L> {
+impl<L: Layout> BatchReader for OrdKeyBatch<L>
+where
+    <L::Target as Update>::Key: Sized + Clone,
+{
     type Key = <L::Target as Update>::Key;
     type Val = ();
     type Time = <L::Target as Update>::Time;
@@ -406,7 +447,11 @@ impl<L: Layout> BatchReader for OrdKeyBatch<L> {
     fn description(&self) -> &Description<<L::Target as Update>::Time> { &self.desc }
 }
 
-impl<L: Layout> Batch for OrdKeyBatch<L> where L::Target: Update<Val = ()> {
+impl<L: Layout> Batch for OrdKeyBatch<L>
+where
+    <L::Target as Update>::Key: Sized + Clone,
+    L::Target: Update<Val = ()>,
+{
     type Merger = OrdKeyMerger<L>;
 
     fn begin_merge(&self, other: &Self, compaction_frontier: AntichainRef<<L::Target as Update>::Time>) -> Self::Merger {
@@ -414,7 +459,10 @@ impl<L: Layout> Batch for OrdKeyBatch<L> where L::Target: Update<Val = ()> {
     }
 }
 
-impl<L: Layout> OrdKeyBatch<L> {
+impl<L: Layout> OrdKeyBatch<L>
+where
+    <L::Target as Update>::Key: Sized + Clone,
+{
     fn advance_builder_from(layer: &mut KTDBuilder<L>, frontier: AntichainRef<<L::Target as Update>::Time>, key_pos: usize) {
 
         let key_start = key_pos;
@@ -478,7 +526,10 @@ impl<L: Layout> OrdKeyBatch<L> {
 }
 
 /// State for an in-progress merge.
-pub struct OrdKeyMerger<L: Layout> {
+pub struct OrdKeyMerger<L: Layout>
+where
+    <L::Target as Update>::Key: Sized + Clone,
+{
     // first batch, and position therein.
     lower1: usize,
     upper1: usize,
@@ -492,7 +543,8 @@ pub struct OrdKeyMerger<L: Layout> {
 
 impl<L: Layout> Merger<OrdKeyBatch<L>> for OrdKeyMerger<L>
 where
-    OrdKeyBatch<L>: Batch<Time=<L::Target as Update>::Time>
+    <L::Target as Update>::Key: Sized + Clone,
+    OrdKeyBatch<L>: Batch<Time=<L::Target as Update>::Time>,
 {
     fn new(batch1: &OrdKeyBatch<L>, batch2: &OrdKeyBatch<L>, compaction_frontier: AntichainRef<<L::Target as Update>::Time>) -> Self {
 
@@ -584,7 +636,10 @@ pub struct OrdKeyCursor<L: Layout> {
     cursor: OrderedCursor<OrderedLeaf<<L::Target as Update>::Time, <L::Target as Update>::Diff>>,
 }
 
-impl<L: Layout> Cursor<OrdKeyBatch<L>> for OrdKeyCursor<L> {
+impl<L: Layout> Cursor<OrdKeyBatch<L>> for OrdKeyCursor<L>
+where
+    <L::Target as Update>::Key: Sized,
+{
     type Key = <L::Target as Update>::Key;
     type Val = ();
     type Time = <L::Target as Update>::Time;
@@ -611,12 +666,16 @@ impl<L: Layout> Cursor<OrdKeyBatch<L>> for OrdKeyCursor<L> {
 
 
 /// A builder for creating layers from unsorted update tuples.
-pub struct OrdKeyBuilder<L: Layout> {
+pub struct OrdKeyBuilder<L: Layout>
+where
+    <L::Target as Update>::Key: Sized + Clone,
+{
     builder: KTDBuilder<L>,
 }
 
 impl<L: Layout> Builder for OrdKeyBuilder<L>
 where
+    <L::Target as Update>::Key: Sized + Clone,
     OrdKeyBatch<L>: Batch<Key=<L::Target as Update>::Key, Val=(), Time=<L::Target as Update>::Time, R=<L::Target as Update>::Diff>
 {
     type Item = ((<L::Target as Update>::Key, ()), <L::Target as Update>::Time, <L::Target as Update>::Diff);

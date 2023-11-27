@@ -12,14 +12,14 @@ use trace::implementations::Update;
 
 /// Creates batches from unordered tuples.
 pub struct MergeBatcher<U: Update> {
-    sorter: MergeSorter<(U::Key, U::Val), U::Time, U::Diff>,
+    sorter: MergeSorter<(U::KeyOwned, U::ValOwned), U::Time, U::Diff>,
     lower: Antichain<U::Time>,
     frontier: Antichain<U::Time>,
     phantom: ::std::marker::PhantomData<U>,
 }
 
 impl<U: Update> Batcher for MergeBatcher<U> {
-    type Item = ((U::Key,U::Val),U::Time,U::Diff);
+    type Item = ((U::KeyOwned,U::ValOwned),U::Time,U::Diff);
     type Time = U::Time;
 
     fn new() -> Self {
@@ -126,7 +126,7 @@ impl<U: Update> Batcher for MergeBatcher<U> {
         let mut buffer = Vec::new();
         self.sorter.push(&mut buffer);
         // We recycle buffers with allocations (capacity, and not zero-sized).
-        while buffer.capacity() > 0 && std::mem::size_of::<((U::Key,U::Val),U::Time,U::Diff)>() > 0 {
+        while buffer.capacity() > 0 && std::mem::size_of::<((U::KeyOwned,U::ValOwned),U::Time,U::Diff)>() > 0 {
             buffer = Vec::new();
             self.sorter.push(&mut buffer);
         }

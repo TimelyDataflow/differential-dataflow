@@ -71,6 +71,7 @@ impl<T: std::hash::Hash + Hashable> Hashable for HashWrapper<T> {
 
 mod val_batch {
 
+    use std::borrow::Borrow;
     use std::convert::TryInto;
     use std::marker::PhantomData;
     use timely::progress::{Antichain, frontier::AntichainRef};
@@ -97,7 +98,8 @@ mod val_batch {
     #[derive(Abomonation, Debug)]
     pub struct RhhValStorage<L: Layout> 
     where 
-        <L::Target as Update>::Key: Default + HashOrdered
+        <L::Target as Update>::Key: HashOrdered,
+        <L::Target as Update>::KeyOwned: Default + HashOrdered,
     {
 
         /// The requested capacity for `keys`. We use this when determining where a key with a certain hash
@@ -131,7 +133,8 @@ mod val_batch {
 
     impl<L: Layout> RhhValStorage<L> 
     where 
-        <L::Target as Update>::Key: Default + HashOrdered
+        <L::Target as Update>::Key: HashOrdered,
+        <L::Target as Update>::KeyOwned: Default + HashOrdered,
     {
         /// Lower and upper bounds in `self.vals` corresponding to the key at `index`.
         fn values_for_key(&self, index: usize) -> (usize, usize) {
@@ -226,7 +229,8 @@ mod val_batch {
     #[derive(Abomonation)]
     pub struct RhhValBatch<L: Layout> 
     where 
-        <L::Target as Update>::Key: Default + HashOrdered
+        <L::Target as Update>::Key: HashOrdered,
+        <L::Target as Update>::KeyOwned: Default + HashOrdered,
     {
         /// The updates themselves.
         pub storage: RhhValStorage<L>,
@@ -242,7 +246,8 @@ mod val_batch {
 
     impl<L: Layout> BatchReader for RhhValBatch<L> 
     where 
-        <L::Target as Update>::Key: Default + HashOrdered
+        <L::Target as Update>::Key: HashOrdered,
+        <L::Target as Update>::KeyOwned: Default + HashOrdered,
     {
         type Key = <L::Target as Update>::Key;
         type Val = <L::Target as Update>::Val;
@@ -269,7 +274,8 @@ mod val_batch {
 
     impl<L: Layout> Batch for RhhValBatch<L> 
     where 
-        <L::Target as Update>::Key: Default + HashOrdered
+        <L::Target as Update>::Key: HashOrdered,
+        <L::Target as Update>::KeyOwned: Default + HashOrdered,
     {
         type Merger = RhhValMerger<L>;
 
@@ -281,7 +287,8 @@ mod val_batch {
     /// State for an in-progress merge.
     pub struct RhhValMerger<L: Layout> 
     where 
-        <L::Target as Update>::Key: Default + HashOrdered
+        <L::Target as Update>::Key: HashOrdered,
+        <L::Target as Update>::KeyOwned: Default + HashOrdered,
     {
         /// Key position to merge next in the first batch.
         key_cursor1: usize,
@@ -303,8 +310,9 @@ mod val_batch {
 
     impl<L: Layout> Merger<RhhValBatch<L>> for RhhValMerger<L>
     where
-        <L::Target as Update>::Key: Default + HashOrdered,
-        RhhValBatch<L>: Batch<Time=<L::Target as Update>::Time>
+        <L::Target as Update>::Key: HashOrdered,
+        <L::Target as Update>::KeyOwned: Default + HashOrdered,
+        RhhValBatch<L>: Batch<Time=<L::Target as Update>::Time>,
     {
         fn new(batch1: &RhhValBatch<L>, batch2: &RhhValBatch<L>, compaction_frontier: AntichainRef<<L::Target as Update>::Time>) -> Self {
 
@@ -393,7 +401,8 @@ mod val_batch {
     // Helper methods in support of merging batches.
     impl<L: Layout> RhhValMerger<L> 
     where 
-        <L::Target as Update>::Key: Default + HashOrdered
+        <L::Target as Update>::Key: HashOrdered,
+        <L::Target as Update>::KeyOwned: Default + HashOrdered,
     {
 
         /// Copy the next key in `source`.
@@ -571,7 +580,8 @@ mod val_batch {
     /// the cursor, rather than internal state.
     pub struct RhhValCursor<L: Layout> 
     where 
-        <L::Target as Update>::Key: Default + HashOrdered
+        <L::Target as Update>::Key: HashOrdered,
+        <L::Target as Update>::KeyOwned: Default + HashOrdered,
     {
         /// Absolute position of the current key.
         key_cursor: usize,
@@ -583,7 +593,8 @@ mod val_batch {
 
     impl<L: Layout> Cursor<RhhValBatch<L>> for RhhValCursor<L> 
     where 
-        <L::Target as Update>::Key: Default + HashOrdered
+        <L::Target as Update>::Key: HashOrdered,
+        <L::Target as Update>::KeyOwned: Default + HashOrdered,
     {
         type Key = <L::Target as Update>::Key;
         type Val = <L::Target as Update>::Val;
@@ -660,7 +671,8 @@ mod val_batch {
     /// A builder for creating layers from unsorted update tuples.
     pub struct RhhValBuilder<L: Layout> 
     where 
-        <L::Target as Update>::Key: Default + HashOrdered
+        <L::Target as Update>::Key: HashOrdered,
+        <L::Target as Update>::KeyOwned: Default + HashOrdered,
     {
         result: RhhValStorage<L>,
         singleton: Option<(<L::Target as Update>::Time, <L::Target as Update>::Diff)>,
@@ -673,7 +685,8 @@ mod val_batch {
 
     impl<L: Layout> RhhValBuilder<L> 
     where 
-        <L::Target as Update>::Key: Default + HashOrdered
+        <L::Target as Update>::Key: HashOrdered,
+        <L::Target as Update>::KeyOwned: Default + HashOrdered,
     {
         /// Pushes a single update, which may set `self.singleton` rather than push.
         ///
@@ -704,10 +717,12 @@ mod val_batch {
 
     impl<L: Layout> Builder for RhhValBuilder<L>
     where
-        <L::Target as Update>::Key: Default + HashOrdered,
+        <L::Target as Update>::Key: HashOrdered,
+        <L::Target as Update>::KeyOwned: Default + HashOrdered,
+        <L::Target as Update>::KeyOwned: Borrow<<L::Target as Update>::Key>,
         RhhValBatch<L>: Batch<Key=<L::Target as Update>::Key, Val=<L::Target as Update>::Val, Time=<L::Target as Update>::Time, R=<L::Target as Update>::Diff>
     {
-        type Item = ((<L::Target as Update>::Key, <L::Target as Update>::Val), <L::Target as Update>::Time, <L::Target as Update>::Diff);
+        type Item = ((<L::Target as Update>::KeyOwned, <L::Target as Update>::ValOwned), <L::Target as Update>::Time, <L::Target as Update>::Diff);
         type Time = <L::Target as Update>::Time;
         type Output = RhhValBatch<L>;
 
@@ -742,9 +757,9 @@ mod val_batch {
         fn push(&mut self, ((key, val), time, diff): Self::Item) {
 
             // Perhaps this is a continuation of an already received key.
-            if self.result.keys.last() == Some(&key) {
+            if self.result.keys.last() == Some(key.borrow()) {
                 // Perhaps this is a continuation of an already received value.
-                if self.result.vals.last() == Some(&val) {
+                if self.result.vals.last() == Some(val.borrow()) {
                     self.push_update(time, diff);
                 } else {
                     // New value; complete representation of prior value.
@@ -761,7 +776,7 @@ mod val_batch {
                 self.push_update(time, diff);
                 self.result.vals.push(val);
                 // Insert the key, but with no specified offset.
-                self.result.insert_key(&key, None);
+                self.result.insert_key(key.borrow(), None);
             }
         }
 
@@ -769,9 +784,9 @@ mod val_batch {
         fn copy(&mut self, ((key, val), time, diff): &Self::Item) {
 
             // Perhaps this is a continuation of an already received key.
-            if self.result.keys.last() == Some(key) {
+            if self.result.keys.last() == Some(key.borrow()) {
                 // Perhaps this is a continuation of an already received value.
-                if self.result.vals.last() == Some(val) {
+                if self.result.vals.last() == Some(val.borrow()) {
                     // TODO: here we could look for repetition, and not push the update in that case.
                     // More logic (and state) would be required to correctly wrangle this.
                     self.push_update(time.clone(), diff.clone());
@@ -781,7 +796,7 @@ mod val_batch {
                     // Remove any pending singleton, and if it was set increment our count.
                     if self.singleton.take().is_some() { self.singletons += 1; }
                     self.push_update(time.clone(), diff.clone());
-                    self.result.vals.copy(val);
+                    self.result.vals.copy(val.borrow());
                 }
             } else {
                 // New key; complete representation of prior key.
@@ -790,9 +805,9 @@ mod val_batch {
                 if self.singleton.take().is_some() { self.singletons += 1; }
                 self.result.keys_offs.push(self.result.vals.len().try_into().ok().unwrap());
                 self.push_update(time.clone(), diff.clone());
-                self.result.vals.copy(val);
+                self.result.vals.copy(val.borrow());
                 // Insert the key, but with no specified offset.
-                self.result.insert_key(key, None);
+                self.result.insert_key(key.borrow(), None);
             }
         }
 

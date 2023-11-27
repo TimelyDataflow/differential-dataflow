@@ -23,12 +23,12 @@ use lattice::Lattice;
 use trace::Cursor;
 
 /// An accumulation of (value, time, diff) updates.
-struct EditList<'a, V: 'a, T, R> {
+struct EditList<'a, V: 'a + ?Sized, T, R> {
     values: Vec<(&'a V, usize)>,
     edits: Vec<(T, R)>,
 }
 
-impl<'a, V:'a, T, R> EditList<'a, V, T, R> where T: Ord+Clone, R: Semigroup {
+impl<'a, V:'a + ?Sized, T, R> EditList<'a, V, T, R> where T: Ord+Clone, R: Semigroup {
     /// Creates an empty list of edits.
     #[inline]
     fn new() -> Self {
@@ -39,7 +39,7 @@ impl<'a, V:'a, T, R> EditList<'a, V, T, R> where T: Ord+Clone, R: Semigroup {
     }
     /// Loads the contents of a cursor.
     fn load<S, C, L>(&mut self, cursor: &mut C, storage: &'a S, logic: L)
-    where V: Clone, C: Cursor<S, Val=V, Time=T, R=R>, C::Key: Eq, L: Fn(&T)->T {
+    where C: Cursor<S, Val=V, Time=T, R=R>, C::Key: Eq, L: Fn(&T)->T {
         self.clear();
         while cursor.val_valid(storage) {
             cursor.map_times(storage, |time1, diff1| self.push(logic(time1), diff1.clone()));
@@ -80,7 +80,7 @@ impl<'a, V:'a, T, R> EditList<'a, V, T, R> where T: Ord+Clone, R: Semigroup {
     }
 }
 
-struct ValueHistory<'storage, V: 'storage, T, R> {
+struct ValueHistory<'storage, V: 'storage + ?Sized, T, R> {
 
     edits: EditList<'storage, V, T, R>,
     history: Vec<(T, T, usize, usize)>,        // (time, meet, value_index, edit_offset)
@@ -88,7 +88,7 @@ struct ValueHistory<'storage, V: 'storage, T, R> {
     buffer: Vec<((&'storage V, T), R)>,               // where we accumulate / collapse updates.
 }
 
-impl<'storage, V: Ord+Clone+'storage, T: Lattice+Ord+Clone, R: Semigroup> ValueHistory<'storage, V, T, R> {
+impl<'storage, V: Ord+'storage + ?Sized, T: Lattice+Ord+Clone, R: Semigroup> ValueHistory<'storage, V, T, R> {
     fn new() -> Self {
         ValueHistory {
             edits: EditList::new(),
@@ -154,7 +154,7 @@ impl<'storage, V: Ord+Clone+'storage, T: Lattice+Ord+Clone, R: Semigroup> ValueH
 struct HistoryReplay<'storage, 'history, V, T, R>
 where
     'storage: 'history,
-    V: Ord+'storage,
+    V: Ord+'storage + ?Sized,
     T: Lattice+Ord+Clone+'history,
     R: Semigroup+'history,
 {
@@ -164,7 +164,7 @@ where
 impl<'storage, 'history, V, T, R> HistoryReplay<'storage, 'history, V, T, R>
 where
     'storage: 'history,
-    V: Ord+'storage,
+    V: Ord+'storage + ?Sized,
     T: Lattice+Ord+Clone+'history,
     R: Semigroup+'history,
 {

@@ -55,6 +55,7 @@ pub use self::ord::OrdKeySpine as KeySpine;
 
 use std::ops::{Add, Sub};
 use std::convert::{TryInto, TryFrom};
+use std::borrow::{Borrow, ToOwned};
 
 use timely::container::columnation::{Columnation, TimelyStack};
 use lattice::Lattice;
@@ -62,10 +63,14 @@ use difference::Semigroup;
 
 /// A type that names constituent update types.
 pub trait Update {
+    /// We will be able to read out references to this type, and must supply `Key::Owned` as input.
+    type Key: Ord + ToOwned<Owned = Self::KeyOwned> + ?Sized;
     /// Key by which data are grouped.
-    type Key: Ord+Clone;
+    type KeyOwned: Ord+Clone + Borrow<Self::Key>;
     /// Values associated with the key.
-    type Val: Ord+Clone;
+    type Val: Ord + ToOwned<Owned = Self::ValOwned> + ?Sized;
+    /// Values associated with the key, in owned form
+    type ValOwned: Ord+Clone + Borrow<Self::Val>;
     /// Time at which updates occur.
     type Time: Ord+Lattice+timely::progress::Timestamp+Clone;
     /// Way in which updates occur.
@@ -80,7 +85,9 @@ where
     R: Semigroup+Clone,
 {
     type Key = K;
+    type KeyOwned = K;
     type Val = V;
+    type ValOwned = V;
     type Time = T;
     type Diff = R;
 }
@@ -88,7 +95,7 @@ where
 /// A type with opinions on how updates should be laid out.
 pub trait Layout {
     /// The represented update.
-    type Target: Update;
+    type Target: Update + ?Sized;
     /// Offsets to use from keys into vals.
     type KeyOffset: OrdOffset;
     /// Offsets to use from vals into updates.
@@ -111,7 +118,11 @@ pub struct Vector<U: Update, O: OrdOffset = usize> {
     phantom: std::marker::PhantomData<(U, O)>,
 }
 
-impl<U: Update+Clone, O: OrdOffset> Layout for Vector<U, O> {
+impl<U: Update, O: OrdOffset> Layout for Vector<U, O>
+where
+    U::Key: ToOwned<Owned = U::Key> + Sized + Clone,
+    U::Val: ToOwned<Owned = U::Val> + Sized + Clone,
+{
     type Target = U;
     type KeyOffset = O;
     type ValOffset = O;
@@ -127,8 +138,8 @@ pub struct TStack<U: Update, O: OrdOffset = usize> {
 
 impl<U: Update+Clone, O: OrdOffset> Layout for TStack<U, O>
 where
-    U::Key: Columnation,
-    U::Val: Columnation,
+    U::Key: Columnation + ToOwned<Owned = U::Key>,
+    U::Val: Columnation + ToOwned<Owned = U::Val>,
     U::Time: Columnation,
     U::Diff: Columnation,
 {
@@ -140,8 +151,66 @@ where
     type UpdContainer = TimelyStack<(U::Time, U::Diff)>;
 }
 
+/// A type with a preferred container.
+///
+/// Examples include types that implement `Clone` who prefer 
+pub trait PreferredContainer : ToOwned {
+    /// The preferred container for the type.
+    type Container: BatchContainer<Item=Self> + RetainFrom<Self>;
+}
+
+impl<T: Clone> PreferredContainer for T {
+    type Container = Vec<T>;
+}
+
+impl<T: Clone> PreferredContainer for [T] {
+    type Container = SliceContainer<T>;
+}
+
+/// An update and layout description based on preferred containers.
+pub struct Preferred<K: ?Sized, V: ?Sized, T, D, O: OrdOffset = usize> {
+    phantom: std::marker::PhantomData<(Box<K>, Box<V>, T, D, O)>,
+}
+
+impl<K,V,T,R,O> Update for Preferred<K, V, T, R, O>
+where
+    K: Ord+ToOwned + ?Sized,
+    K::Owned: Ord+Clone,
+    V: Ord+ToOwned + ?Sized,
+    V::Owned: Ord+Clone,
+    T: Ord+Lattice+timely::progress::Timestamp+Clone,
+    R: Semigroup+Clone,
+    O: OrdOffset,
+{
+    type Key = K;
+    type KeyOwned = K::Owned;
+    type Val = V;
+    type ValOwned = V::Owned;
+    type Time = T;
+    type Diff = R;
+}
+
+impl<K, V, T, D, O> Layout for Preferred<K, V, T, D, O>
+where
+    K: Ord+ToOwned+PreferredContainer + ?Sized,
+    K::Owned: Ord+Clone,
+    V: Ord+ToOwned+PreferredContainer + ?Sized,
+    V::Owned: Ord+Clone,
+    T: Ord+Lattice+timely::progress::Timestamp+Clone,
+    D: Semigroup+Clone,
+    O: OrdOffset,
+{
+    type Target = Preferred<K, V, T, D, O>;
+    type KeyOffset = O;
+    type ValOffset = O;
+    type KeyContainer = K::Container;
+    type ValContainer = V::Container;
+    type UpdContainer = Vec<(T, D)>;
+}
+
+
 /// A container that can retain/discard from some offset onward.
-pub trait RetainFrom<T> {
+pub trait RetainFrom<T: ?Sized> {
     /// Retains elements from an index onwards that satisfy a predicate.
     fn retain_from<P: FnMut(usize, &T)->bool>(&mut self, index: usize, predicate: P);
 }
@@ -350,12 +419,12 @@ pub mod containers {
         ///
         /// The length will be one greater than the number of contained slices,
         /// starting with zero and ending with `self.inner.len()`.
-        pub offsets: Vec<usize>,
+        offsets: Vec<usize>,
         /// An inner container for sequences of `B` that dereferences to a slice.
-        pub inner: Vec<B>,
+        inner: Vec<B>,
     }
 
-    impl<B: Default> BatchContainer for SliceContainer<B>
+    impl<B> BatchContainer for SliceContainer<B>
     where
         B: Clone + Sized,
         [B]: ToOwned<Owned = Vec<B>>,
@@ -384,16 +453,20 @@ pub mod containers {
             }
         }
         fn with_capacity(size: usize) -> Self {
+            let mut offsets = Vec::with_capacity(size + 1);
+            offsets.push(0);
             Self {
-                offsets: Vec::with_capacity(size),
+                offsets,
                 inner: Vec::with_capacity(size),
             }
         }
         fn reserve(&mut self, _additional: usize) {
         }
         fn merge_capacity(cont1: &Self, cont2: &Self) -> Self {
+            let mut offsets = Vec::with_capacity(cont1.inner.len() + cont2.inner.len() + 1);
+            offsets.push(0);
             Self {
-                offsets: Vec::with_capacity(cont1.offsets.len() + cont2.offsets.len()),
+                offsets,
                 inner: Vec::with_capacity(cont1.inner.len() + cont2.inner.len()),
             }
         }
@@ -408,12 +481,21 @@ pub mod containers {
     }
 
     /// Default implementation introduces a first offset.
-    impl<B: Default> Default for SliceContainer<B> {
+    impl<B> Default for SliceContainer<B> {
         fn default() -> Self {
             Self {
                 offsets: vec![0],
                 inner: Default::default(),
             }
+        }
+    }
+
+    use trace::implementations::RetainFrom;
+    /// A container that can retain/discard from some offset onward.
+    impl<B> RetainFrom<[B]> for SliceContainer<B> {
+        /// Retains elements from an index onwards that satisfy a predicate.
+        fn retain_from<P: FnMut(usize, &[B])->bool>(&mut self, _index: usize, _predicate: P) {
+            unimplemented!()
         }
     }
 }
