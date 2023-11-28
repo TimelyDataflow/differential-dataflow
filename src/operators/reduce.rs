@@ -513,7 +513,7 @@ where
                         let (mut batch_cursor, batch_storage) = (CursorList::new(batch_cursors, &batch_storage), batch_storage);
                         let batch_storage = &batch_storage;
 
-                        let mut thinker = history_replay::HistoryReplayer::<T1::Val, T2::Val, G::Timestamp, T1::R, T2::R>::new();
+                        let mut thinker = history_replay::HistoryReplayer::new();
 
                         // We now march through the keys we must work on, drawing from `batch_cursors` and `exposed`.
                         //
@@ -674,33 +674,37 @@ fn sort_dedup<T: Ord>(list: &mut Vec<T>) {
     list.dedup();
 }
 
-trait PerKeyCompute<'a, V1, V2, T, R1, R2>
+trait PerKeyCompute<'a, C1, C2, C3>
 where
-    V1: Ord + ?Sized,
-    V2: Ord + ToOwned+'a + ?Sized,
-    V2::Owned: Ord + Clone + 'a,
-    T: Lattice+Ord+Clone,
-    R1: Semigroup,
-    R2: Semigroup,
+    C1: Cursor,
+    C2: Cursor<Key = C1::Key, Time = C1::Time>,
+    C3: Cursor<Key = C1::Key, Val = C1::Val, Time = C1::Time, R = C1::R>,
+    C1::Val: Ord,
+    C2::Val: Ord + ToOwned+'a,
+    <C2::Val as ToOwned>::Owned: Ord + Clone + 'a,
+    C1::Time: Lattice+Ord+Clone,
+    C1::R: Semigroup,
+    C2::R: Semigroup,
 {
     fn new() -> Self;
-    fn compute<K, C1, C2, C3, L>(
+    fn compute<L>(
         &mut self,
-        key: &K,
+        key: &C1::Key,
         source_cursor: (&mut C1, &'a C1::Storage),
         output_cursor: (&mut C2, &'a C2::Storage),
         batch_cursor: (&mut C3, &'a C3::Storage),
-        times: &mut Vec<T>,
+        times: &mut Vec<C1::Time>,
         logic: &mut L,
-        upper_limit: &Antichain<T>,
-        outputs: &mut [(T, Vec<(V2::Owned, T, R2)>)],
-        new_interesting: &mut Vec<T>) -> (usize, usize)
+        upper_limit: &Antichain<C1::Time>,
+        outputs: &mut [(C2::Time, Vec<(<C2::Val as ToOwned>::Owned, C2::Time, C2::R)>)],
+        new_interesting: &mut Vec<C1::Time>) -> (usize, usize)
     where
-        K: Eq + ?Sized,
-        C1: Cursor<Key = K, Val = V1, Time = T, R = R1>,
-        C2: Cursor<Key = K, Val = V2, Time = T, R = R2>,
-        C3: Cursor<Key = K, Val = V1, Time = T, R = R1>,
-        L: FnMut(&K, &[(&V1, R1)], &mut Vec<(V2::Owned, R2)>, &mut Vec<(V2::Owned, R2)>);
+        C1::Key: Eq,
+        L: FnMut(
+            &C1::Key, &[(&C1::Val, C1::R)],
+            &mut Vec<(<C2::Val as ToOwned>::Owned, C2::R)>,
+            &mut Vec<(<C2::Val as ToOwned>::Owned, C2::R)>,
+        );
 }
 
 
@@ -713,46 +717,54 @@ mod history_replay {
     use operators::ValueHistory;
     use timely::progress::Antichain;
 
+    use timely::PartialOrder;
+
     use super::{PerKeyCompute, sort_dedup};
 
     /// The `HistoryReplayer` is a compute strategy based on moving through existing inputs, interesting times, etc in
     /// time order, maintaining consolidated representations of updates with respect to future interesting times.
-    pub struct HistoryReplayer<'a, V1, V2, T, R1, R2>
+    pub struct HistoryReplayer<'a, C1, C2, C3>//V1, V2, T, R1, R2>
     where
-        V1: Ord+'a + ?Sized,
-        V2: Ord+'a + ToOwned + ?Sized,
-        V2::Owned: Ord + 'a,
-        T: Lattice+Ord+Clone,
-        R1: Semigroup,
-        R2: Semigroup,
+        C1: Cursor,
+        C2: Cursor<Key = C1::Key, Time = C1::Time>,
+        C3: Cursor<Key = C1::Key, Val = C1::Val, Time = C1::Time, R = C1::R>,
+        C1::Val: Ord,
+        C2::Val: Ord + ToOwned+'a,
+        <C2::Val as ToOwned>::Owned: Ord + Clone + 'a,
+        C1::Time: Lattice+Ord+Clone,
+        C1::R: Semigroup,
+        C2::R: Semigroup,
     {
-        batch_history: ValueHistory<'a, V1, T, R1>,
-        input_history: ValueHistory<'a, V1, T, R1>,
-        output_history: ValueHistory<'a, V2, T, R2>,
-        input_buffer: Vec<(&'a V1, R1)>,
-        output_buffer: Vec<(V2::Owned, R2)>,
-        update_buffer: Vec<(V2::Owned, R2)>,
-        output_produced: Vec<((V2::Owned, T), R2)>,
-        synth_times: Vec<T>,
-        meets: Vec<T>,
-        times_current: Vec<T>,
-        temporary: Vec<T>,
+        input_history: ValueHistory<'a, C1::Val, C1::Time, C1::R>,
+        output_history: ValueHistory<'a, C2::Val, C2::Time, C2::R>,
+        batch_history: ValueHistory<'a, C3::Val, C3::Time, C3::R>,
+        input_buffer: Vec<(&'a C1::Val, C1::R)>,
+        output_buffer: Vec<(<C2::Val as ToOwned>::Owned, C2::R)>,
+        update_buffer: Vec<(<C2::Val as ToOwned>::Owned, C2::R)>,
+        output_produced: Vec<((<C2::Val as ToOwned>::Owned, C2::Time), C2::R)>,
+        synth_times: Vec<C1::Time>,
+        meets: Vec<C1::Time>,
+        times_current: Vec<C1::Time>,
+        temporary: Vec<C1::Time>,
     }
 
-    impl<'a, V1, V2, T, R1, R2> PerKeyCompute<'a, V1, V2, T, R1, R2> for HistoryReplayer<'a, V1, V2, T, R1, R2>
+    impl<'a, C1, C2, C3> PerKeyCompute<'a, C1, C2, C3> for HistoryReplayer<'a, C1, C2, C3>
     where
-        V1: Ord + ?Sized,
-        V2: Ord + ToOwned + ?Sized,
-        V2::Owned: Ord + Clone + 'a,
-        T: Lattice+Ord+Clone,
-        R1: Semigroup,
-        R2: Semigroup,
+        C1: Cursor,
+        C2: Cursor<Key = C1::Key, Time = C1::Time>,
+        C3: Cursor<Key = C1::Key, Val = C1::Val, Time = C1::Time, R = C1::R>,
+        C1::Val: Ord,
+        C2::Val: Ord + ToOwned+'a,
+        <C2::Val as ToOwned>::Owned: Ord + Clone + 'a,
+        C1::Time: Lattice+Ord+Clone,
+        C1::R: Semigroup,
+        C2::R: Semigroup,
     {
         fn new() -> Self {
             HistoryReplayer {
-                batch_history: ValueHistory::new(),
                 input_history: ValueHistory::new(),
                 output_history: ValueHistory::new(),
+                batch_history: ValueHistory::new(),
                 input_buffer: Vec::new(),
                 output_buffer: Vec::new(),
                 update_buffer: Vec::new(),
@@ -764,23 +776,24 @@ mod history_replay {
             }
         }
         #[inline(never)]
-        fn compute<K, C1, C2, C3, L>(
+        fn compute<L>(
             &mut self,
-            key: &K,
+            key: &C1::Key,
             (source_cursor, source_storage): (&mut C1, &'a C1::Storage),
             (output_cursor, output_storage): (&mut C2, &'a C2::Storage),
             (batch_cursor, batch_storage): (&mut C3, &'a C3::Storage),
-            times: &mut Vec<T>,
+            times: &mut Vec<C1::Time>,
             logic: &mut L,
-            upper_limit: &Antichain<T>,
-            outputs: &mut [(T, Vec<(V2::Owned, T, R2)>)],
-            new_interesting: &mut Vec<T>) -> (usize, usize)
+            upper_limit: &Antichain<C1::Time>,
+            outputs: &mut [(C2::Time, Vec<(<C2::Val as ToOwned>::Owned, C2::Time, C2::R)>)],
+            new_interesting: &mut Vec<C1::Time>) -> (usize, usize)
         where
-            K: Eq + ?Sized,
-            C1: Cursor<Key = K, Val = V1, Time = T, R = R1>,
-            C2: Cursor<Key = K, Val = V2, Time = T, R = R2>,
-            C3: Cursor<Key = K, Val = V1, Time = T, R = R1>,
-            L: FnMut(&K, &[(&V1, R1)], &mut Vec<(V2::Owned, R2)>, &mut Vec<(V2::Owned, R2)>)
+            C1::Key: Eq,
+            L: FnMut(
+                &C1::Key, &[(&C1::Val, C1::R)],
+                &mut Vec<(<C2::Val as ToOwned>::Owned, C2::R)>,
+                &mut Vec<(<C2::Val as ToOwned>::Owned, C2::R)>,
+            )
         {
 
             // The work we need to perform is at times defined principally by the contents of `batch_cursor`
