@@ -3,31 +3,34 @@
 use std::collections::VecDeque;
 
 use timely::communication::message::RefOrMut;
-use timely::progress::frontier::Antichain;
+use timely::progress::{frontier::Antichain, Timestamp};
 
 use ::difference::Semigroup;
 
 use trace::{Batcher, Builder};
-use trace::implementations::Update;
 
 /// Creates batches from unordered tuples.
-pub struct MergeBatcher<U: Update> {
-    sorter: MergeSorter<(U::KeyOwned, U::ValOwned), U::Time, U::Diff>,
-    lower: Antichain<U::Time>,
-    frontier: Antichain<U::Time>,
-    phantom: ::std::marker::PhantomData<U>,
+pub struct MergeBatcher<K, V, T, D> {
+    sorter: MergeSorter<(K, V), T, D>,
+    lower: Antichain<T>,
+    frontier: Antichain<T>,
 }
 
-impl<U: Update> Batcher for MergeBatcher<U> {
-    type Item = ((U::KeyOwned,U::ValOwned),U::Time,U::Diff);
-    type Time = U::Time;
+impl<K, V, T, D> Batcher for MergeBatcher<K, V, T, D>
+where
+    K: Ord + Clone,
+    V: Ord + Clone,
+    T: Timestamp,
+    D: Semigroup,
+{
+    type Item = ((K,V),T,D);
+    type Time = T;
 
     fn new() -> Self {
         MergeBatcher {
             sorter: MergeSorter::new(),
             frontier: Antichain::new(),
-            lower: Antichain::from_elem(<U::Time as timely::progress::Timestamp>::minimum()),
-            phantom: ::std::marker::PhantomData,
+            lower: Antichain::from_elem(<T as timely::progress::Timestamp>::minimum()),
         }
     }
 
@@ -53,7 +56,7 @@ impl<U: Update> Batcher for MergeBatcher<U> {
     // which we call `lower`, by assumption that after sealing a batcher we receive no more
     // updates with times not greater or equal to `upper`.
     #[inline(never)]
-    fn seal<B: Builder<Item=Self::Item, Time=Self::Time>>(&mut self, upper: Antichain<U::Time>) -> B::Output {
+    fn seal<B: Builder<Item=Self::Item, Time=Self::Time>>(&mut self, upper: Antichain<T>) -> B::Output {
 
         let mut merged = Vec::new();
         self.sorter.finish_into(&mut merged);
@@ -126,23 +129,23 @@ impl<U: Update> Batcher for MergeBatcher<U> {
         let mut buffer = Vec::new();
         self.sorter.push(&mut buffer);
         // We recycle buffers with allocations (capacity, and not zero-sized).
-        while buffer.capacity() > 0 && std::mem::size_of::<((U::KeyOwned,U::ValOwned),U::Time,U::Diff)>() > 0 {
+        while buffer.capacity() > 0 && std::mem::size_of::<((K,V),T,D)>() > 0 {
             buffer = Vec::new();
             self.sorter.push(&mut buffer);
         }
 
-        let seal = builder.done(self.lower.clone(), upper.clone(), Antichain::from_elem(<U::Time as timely::progress::Timestamp>::minimum()));
+        let seal = builder.done(self.lower.clone(), upper.clone(), Antichain::from_elem(<T as timely::progress::Timestamp>::minimum()));
         self.lower = upper;
         seal
     }
 
     // the frontier of elements remaining after the most recent call to `self.seal`.
-    fn frontier(&mut self) -> timely::progress::frontier::AntichainRef<U::Time> {
+    fn frontier(&mut self) -> timely::progress::frontier::AntichainRef<T> {
         self.frontier.borrow()
     }
 }
 
-struct MergeSorter<D: Ord, T: Ord, R: Semigroup> {
+struct MergeSorter<D, T, R> {
     queue: Vec<Vec<Vec<(D, T, R)>>>,    // each power-of-two length list of allocations.
     stash: Vec<Vec<(D, T, R)>>,
 }

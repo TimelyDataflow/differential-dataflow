@@ -1,46 +1,42 @@
 //! A general purpose `Batcher` implementation based on radix sort for TimelyStack.
 
-use std::marker::PhantomData;
 use timely::Container;
 use timely::communication::message::RefOrMut;
 use timely::container::columnation::{Columnation, TimelyStack};
-use timely::progress::frontier::Antichain;
+use timely::progress::{frontier::Antichain, Timestamp};
 
 use ::difference::Semigroup;
 
 use trace::{Batcher, Builder};
-use trace::implementations::Update;
 
 /// Creates batches from unordered tuples.
-pub struct ColumnatedMergeBatcher<U: Update>
+pub struct ColumnatedMergeBatcher<K, V, T, D>
 where
-    U::KeyOwned: Columnation,
-    U::ValOwned: Columnation,
-    U::Time: Columnation,
-    U::Diff: Columnation,
+    K: Columnation,
+    V: Columnation,
+    T: Columnation,
+    D: Columnation,
 {
-    sorter: MergeSorterColumnation<(U::KeyOwned, U::ValOwned), U::Time, U::Diff>,
-    lower: Antichain<U::Time>,
-    frontier: Antichain<U::Time>,
-    phantom: PhantomData<U>,
+    sorter: MergeSorterColumnation<(K, V), T, D>,
+    lower: Antichain<T>,
+    frontier: Antichain<T>,
 }
 
-impl<U: Update> Batcher for ColumnatedMergeBatcher<U>
+impl<K, V, T, D> Batcher for ColumnatedMergeBatcher<K, V, T, D>
 where
-    U::KeyOwned: Columnation + 'static,
-    U::ValOwned: Columnation + 'static,
-    U::Time: Columnation + 'static,
-    U::Diff: Columnation + 'static,
+    K: Columnation + Ord + Clone + 'static,
+    V: Columnation + Ord + Clone + 'static,
+    T: Columnation + Timestamp + 'static,
+    D: Columnation + Semigroup + 'static,
 {
-    type Item = ((U::KeyOwned,U::ValOwned),U::Time,U::Diff);
-    type Time = U::Time;
+    type Item = ((K,V),T,D);
+    type Time = T;
 
     fn new() -> Self {
         ColumnatedMergeBatcher {
             sorter: MergeSorterColumnation::new(),
             frontier: Antichain::new(),
-            lower: Antichain::from_elem(<U::Time as timely::progress::Timestamp>::minimum()),
-            phantom: PhantomData,
+            lower: Antichain::from_elem(<T as Timestamp>::minimum()),
         }
     }
 
@@ -64,7 +60,7 @@ where
     // which we call `lower`, by assumption that after sealing a batcher we receive no more
     // updates with times not greater or equal to `upper`.
     #[inline]
-    fn seal<B: Builder<Item=Self::Item, Time=Self::Time>>(&mut self, upper: Antichain<U::Time>) -> B::Output {
+    fn seal<B: Builder<Item=Self::Item, Time=Self::Time>>(&mut self, upper: Antichain<T>) -> B::Output {
 
         let mut merged = Default::default();
         self.sorter.finish_into(&mut merged);
@@ -106,7 +102,7 @@ where
                 if upper.less_equal(time) {
                     self.frontier.insert(time.clone());
                     if keep.is_empty() {
-                        if keep.capacity() != MergeSorterColumnation::<(U::KeyOwned, U::ValOwned), U::Time, U::Diff>::buffer_size() {
+                        if keep.capacity() != MergeSorterColumnation::<(K, V), T, D>::buffer_size() {
                             keep = self.sorter.empty();
                         }
                     } else if keep.len() == keep.capacity() {
@@ -134,13 +130,13 @@ where
         // Drain buffers (fast reclamation).
         self.sorter.clear_stash();
 
-        let seal = builder.done(self.lower.clone(), upper.clone(), Antichain::from_elem(<U::Time as timely::progress::Timestamp>::minimum()));
+        let seal = builder.done(self.lower.clone(), upper.clone(), Antichain::from_elem(<T as timely::progress::Timestamp>::minimum()));
         self.lower = upper;
         seal
     }
 
     // the frontier of elements remaining after the most recent call to `self.seal`.
-    fn frontier(&mut self) -> timely::progress::frontier::AntichainRef<U::Time> {
+    fn frontier(&mut self) -> timely::progress::frontier::AntichainRef<T> {
         self.frontier.borrow()
     }
 }
@@ -186,13 +182,13 @@ impl<T: Columnation> TimelyStackQueue<T> {
     }
 }
 
-struct MergeSorterColumnation<D: Ord+Columnation, T: Ord+Columnation, R: Semigroup+Columnation> {
+struct MergeSorterColumnation<D: Columnation, T: Columnation, R: Columnation> {
     queue: Vec<Vec<TimelyStack<(D, T, R)>>>,    // each power-of-two length list of allocations.
     stash: Vec<TimelyStack<(D, T, R)>>,
     pending: Vec<(D, T, R)>,
 }
 
-impl<D: Ord+Clone+Columnation+'static, T: Ord+Clone+Columnation+'static, R: Semigroup+Columnation+'static> MergeSorterColumnation<D, T, R> {
+impl<D: Ord+Columnation+'static, T: Ord+Columnation+'static, R: Semigroup+Columnation+'static> MergeSorterColumnation<D, T, R> {
 
     const BUFFER_SIZE_BYTES: usize = 64 << 10;
 

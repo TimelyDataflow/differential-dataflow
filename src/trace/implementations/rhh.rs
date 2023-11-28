@@ -20,7 +20,7 @@ use self::val_batch::{RhhValBatch, RhhValBuilder};
 /// A trace implementation using a spine of ordered lists.
 pub type VecSpine<K, V, T, R, O=usize> = Spine<
     Rc<RhhValBatch<Vector<((K,V),T,R), O>>>,
-    MergeBatcher<((K,V),T,R)>,
+    MergeBatcher<K,V,T,R>,
     RcBuilder<RhhValBuilder<Vector<((K,V),T,R), O>>>,
 >;
 // /// A trace implementation for empty values using a spine of ordered lists.
@@ -29,7 +29,7 @@ pub type VecSpine<K, V, T, R, O=usize> = Spine<
 /// A trace implementation backed by columnar storage.
 pub type ColSpine<K, V, T, R, O=usize> = Spine<
     Rc<RhhValBatch<TStack<((K,V),T,R), O>>>,
-    ColumnatedMergeBatcher<((K,V),T,R)>,
+    ColumnatedMergeBatcher<K,V,T,R>,
     RcBuilder<RhhValBuilder<TStack<((K,V),T,R), O>>>,
 >;
 // /// A trace implementation backed by columnar storage.
