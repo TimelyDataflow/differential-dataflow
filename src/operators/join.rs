@@ -777,12 +777,30 @@ where
     }
 }
 
-struct JoinThinker<'a, V1: Ord+'a + ?Sized, V2: Ord+'a + ?Sized, T: Lattice+Ord+Clone, R1: Semigroup, R2: Semigroup> {
-    pub history1: ValueHistory<'a, V1, T, R1>,
-    pub history2: ValueHistory<'a, V2, T, R2>,
+struct JoinThinker<'a, C1, C2>
+where
+    C1: Cursor,
+    C2: Cursor<Time = C1::Time>,
+    C1::Val: Ord,
+    C2::Val: Ord,
+    C1::Time: Lattice+Ord+Clone,
+    C1::R: Semigroup,
+    C2::R: Semigroup,
+{
+    pub history1: ValueHistory<'a, C1>,
+    pub history2: ValueHistory<'a, C2>,
 }
 
-impl<'a, V1: Ord + ?Sized, V2: Ord + ?Sized, T: Lattice+Ord+Clone, R1: Semigroup, R2: Semigroup> JoinThinker<'a, V1, V2, T, R1, R2> {
+impl<'a, C1, C2> JoinThinker<'a, C1, C2>
+where
+    C1: Cursor,
+    C2: Cursor<Time = C1::Time>,
+    C1::Val: Ord,
+    C2::Val: Ord,
+    C1::Time: Lattice+Ord+Clone,
+    C1::R: Semigroup,
+    C2::R: Semigroup,
+{
     fn new() -> Self {
         JoinThinker {
             history1: ValueHistory::new(),
@@ -790,13 +808,13 @@ impl<'a, V1: Ord + ?Sized, V2: Ord + ?Sized, T: Lattice+Ord+Clone, R1: Semigroup
         }
     }
 
-    fn think<F: FnMut(&V1,&V2,T,&R1,&R2)>(&mut self, mut results: F) {
+    fn think<F: FnMut(&C1::Val,&C2::Val,C1::Time,&C1::R,&C2::R)>(&mut self, mut results: F) {
 
         // for reasonably sized edits, do the dead-simple thing.
         if self.history1.edits.len() < 10 || self.history2.edits.len() < 10 {
             self.history1.edits.map(|v1, t1, d1| {
                 self.history2.edits.map(|v2, t2, d2| {
-                    results(v1, v2, t1.join(t2), &d1, &d2);
+                    results(v1, v2, t1.join(t2), d1, d2);
                 })
             })
         }
@@ -816,7 +834,7 @@ impl<'a, V1: Ord + ?Sized, V2: Ord + ?Sized, T: Lattice+Ord+Clone, R1: Semigroup
                 if replay1.time().unwrap().cmp(&replay2.time().unwrap()) == ::std::cmp::Ordering::Less {
                     replay2.advance_buffer_by(replay1.meet().unwrap());
                     for &((ref val2, ref time2), ref diff2) in replay2.buffer().iter() {
-                        let (val1, time1, ref diff1) = replay1.edit().unwrap();
+                        let (val1, time1, diff1) = replay1.edit().unwrap();
                         results(val1, val2, time1.join(time2), diff1, diff2);
                     }
                     replay1.step();
@@ -824,7 +842,7 @@ impl<'a, V1: Ord + ?Sized, V2: Ord + ?Sized, T: Lattice+Ord+Clone, R1: Semigroup
                 else {
                     replay1.advance_buffer_by(replay2.meet().unwrap());
                     for &((ref val1, ref time1), ref diff1) in replay1.buffer().iter() {
-                        let (val2, time2, ref diff2) = replay2.edit().unwrap();
+                        let (val2, time2, diff2) = replay2.edit().unwrap();
                         results(val1, val2, time1.join(time2), diff1, diff2);
                     }
                     replay2.step();
@@ -834,7 +852,7 @@ impl<'a, V1: Ord + ?Sized, V2: Ord + ?Sized, T: Lattice+Ord+Clone, R1: Semigroup
             while !replay1.is_done() {
                 replay2.advance_buffer_by(replay1.meet().unwrap());
                 for &((ref val2, ref time2), ref diff2) in replay2.buffer().iter() {
-                    let (val1, time1, ref diff1) = replay1.edit().unwrap();
+                    let (val1, time1, diff1) = replay1.edit().unwrap();
                     results(val1, val2, time1.join(time2), diff1, diff2);
                 }
                 replay1.step();
@@ -842,7 +860,7 @@ impl<'a, V1: Ord + ?Sized, V2: Ord + ?Sized, T: Lattice+Ord+Clone, R1: Semigroup
             while !replay2.is_done() {
                 replay1.advance_buffer_by(replay2.meet().unwrap());
                 for &((ref val1, ref time1), ref diff1) in replay1.buffer().iter() {
-                    let (val2, time2, ref diff2) = replay2.edit().unwrap();
+                    let (val2, time2, diff2) = replay2.edit().unwrap();
                     results(val1, val2, time1.join(time2), diff1, diff2);
                 }
                 replay2.step();
