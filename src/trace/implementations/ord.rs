@@ -9,7 +9,6 @@
 //! and should consume fewer resources (computation and memory) when it applies.
 
 use std::rc::Rc;
-use std::convert::{TryFrom, TryInto};
 use std::fmt::Debug;
 
 use timely::progress::{Antichain, frontier::AntichainRef};
@@ -40,44 +39,44 @@ use trace::rc_blanket_impls::RcBuilder;
 use trace::abomonated_blanket_impls::AbomonatedBuilder;
 
 /// A trace implementation using a spine of ordered lists.
-pub type OrdValSpine<K, V, T, R, O=usize> = Spine<
-    Rc<OrdValBatch<Vector<((K,V),T,R), O>>>,
+pub type OrdValSpine<K, V, T, R> = Spine<
+    Rc<OrdValBatch<Vector<((K,V),T,R)>>>,
     MergeBatcher<K,V,T,R>,
-    RcBuilder<OrdValBuilder<Vector<((K,V),T,R), O>>>,
+    RcBuilder<OrdValBuilder<Vector<((K,V),T,R)>>>,
 >;
 
 /// A trace implementation using a spine of abomonated ordered lists.
-pub type OrdValSpineAbom<K, V, T, R, O=usize> = Spine<
-    Rc<Abomonated<OrdValBatch<Vector<((K,V),T,R), O>>, Vec<u8>>>,
+pub type OrdValSpineAbom<K, V, T, R> = Spine<
+    Rc<Abomonated<OrdValBatch<Vector<((K,V),T,R)>>, Vec<u8>>>,
     MergeBatcher<K,V,T,R>,
-    AbomonatedBuilder<OrdValBuilder<Vector<((K,V),T,R), O>>>,
+    AbomonatedBuilder<OrdValBuilder<Vector<((K,V),T,R)>>>,
 >;
 
 /// A trace implementation for empty values using a spine of ordered lists.
-pub type OrdKeySpine<K, T, R, O=usize> = Spine<
-    Rc<OrdKeyBatch<Vector<((K,()),T,R), O>>>,
+pub type OrdKeySpine<K, T, R> = Spine<
+    Rc<OrdKeyBatch<Vector<((K,()),T,R)>>>,
     MergeBatcher<K,(),T,R>,
-    RcBuilder<OrdKeyBuilder<Vector<((K,()),T,R), O>>>,
+    RcBuilder<OrdKeyBuilder<Vector<((K,()),T,R)>>>,
 >;
 
 /// A trace implementation for empty values using a spine of abomonated ordered lists.
-pub type OrdKeySpineAbom<K, T, R, O=usize> = Spine<
-    Rc<Abomonated<OrdKeyBatch<Vector<((K,()),T,R), O>>, Vec<u8>>>,
+pub type OrdKeySpineAbom<K, T, R> = Spine<
+    Rc<Abomonated<OrdKeyBatch<Vector<((K,()),T,R)>>, Vec<u8>>>,
     MergeBatcher<K,(),T,R>,
-    AbomonatedBuilder<OrdKeyBuilder<Vector<((K,()),T,R), O>>>,
+    AbomonatedBuilder<OrdKeyBuilder<Vector<((K,()),T,R)>>>,
 >;
 
 /// A trace implementation backed by columnar storage.
-pub type ColValSpine<K, V, T, R, O=usize> = Spine<
-    Rc<OrdValBatch<TStack<((K,V),T,R), O>>>,
+pub type ColValSpine<K, V, T, R> = Spine<
+    Rc<OrdValBatch<TStack<((K,V),T,R)>>>,
     ColumnatedMergeBatcher<K,V,T,R>,
-    RcBuilder<OrdValBuilder<TStack<((K,V),T,R), O>>>,
+    RcBuilder<OrdValBuilder<TStack<((K,V),T,R)>>>,
 >;
 /// A trace implementation backed by columnar storage.
-pub type ColKeySpine<K, T, R, O=usize> = Spine<
-    Rc<OrdKeyBatch<TStack<((K,()),T,R), O>>>,
+pub type ColKeySpine<K, T, R> = Spine<
+    Rc<OrdKeyBatch<TStack<((K,()),T,R)>>>,
     ColumnatedMergeBatcher<K,(),T,R>,
-    RcBuilder<OrdKeyBuilder<TStack<((K,()),T,R), O>>>,
+    RcBuilder<OrdKeyBuilder<TStack<((K,()),T,R)>>>,
 >;
 
 /// An immutable collection of update tuples, from a contiguous interval of logical times.
@@ -98,13 +97,13 @@ where
 
 // Type aliases to make certain types readable.
 type TDLayer<L> = OrderedLeaf<<<L as Layout>::Target as Update>::Time, <<L as Layout>::Target as Update>::Diff>;
-type VTDLayer<L> = OrderedLayer<<<L as Layout>::Target as Update>::Val, TDLayer<L>, <L as Layout>::ValOffset, <L as Layout>::ValContainer>;
-type KTDLayer<L> = OrderedLayer<<<L as Layout>::Target as Update>::Key, TDLayer<L>, <L as Layout>::KeyOffset, <L as Layout>::KeyContainer>;
-type KVTDLayer<L> = OrderedLayer<<<L as Layout>::Target as Update>::Key, VTDLayer<L>, <L as Layout>::KeyOffset, <L as Layout>::KeyContainer>;
+type VTDLayer<L> = OrderedLayer<<<L as Layout>::Target as Update>::Val, TDLayer<L>, <L as Layout>::ValContainer>;
+type KTDLayer<L> = OrderedLayer<<<L as Layout>::Target as Update>::Key, TDLayer<L>, <L as Layout>::KeyContainer>;
+type KVTDLayer<L> = OrderedLayer<<<L as Layout>::Target as Update>::Key, VTDLayer<L>, <L as Layout>::KeyContainer>;
 type TDBuilder<L> = OrderedLeafBuilder<<<L as Layout>::Target as Update>::Time, <<L as Layout>::Target as Update>::Diff>;
-type VTDBuilder<L> = OrderedBuilder<<<L as Layout>::Target as Update>::Val, TDBuilder<L>, <L as Layout>::ValOffset, <L as Layout>::ValContainer>;
-type KTDBuilder<L> = OrderedBuilder<<<L as Layout>::Target as Update>::Key, TDBuilder<L>, <L as Layout>::KeyOffset, <L as Layout>::KeyContainer>;
-type KVTDBuilder<L> = OrderedBuilder<<<L as Layout>::Target as Update>::Key, VTDBuilder<L>, <L as Layout>::KeyOffset, <L as Layout>::KeyContainer>;
+type VTDBuilder<L> = OrderedBuilder<<<L as Layout>::Target as Update>::Val, TDBuilder<L>, <L as Layout>::ValContainer>;
+type KTDBuilder<L> = OrderedBuilder<<<L as Layout>::Target as Update>::Key, TDBuilder<L>, <L as Layout>::KeyContainer>;
+type KVTDBuilder<L> = OrderedBuilder<<<L as Layout>::Target as Update>::Key, VTDBuilder<L>, <L as Layout>::KeyContainer>;
 
 impl<L: Layout> BatchReader for OrdValBatch<L>
 where
@@ -143,8 +142,8 @@ where
     fn advance_builder_from(layer: &mut KVTDBuilder<L>, frontier: AntichainRef<<L::Target as Update>::Time>, key_pos: usize) {
 
         let key_start = key_pos;
-        let val_start: usize = layer.offs[key_pos].try_into().ok().unwrap();
-        let time_start: usize = layer.vals.offs[val_start].try_into().ok().unwrap();
+        let val_start: usize = layer.offs.index(key_pos);
+        let time_start: usize = layer.vals.offs.index(val_start);
 
         // We have unique ownership of the batch, and can advance times in place.
         // We must still sort, collapse, and remove empty updates.
@@ -167,10 +166,10 @@ where
             //     we will change batch.layer.vals.offs[i] in this iteration, from `write_position`'s
             //     initial value.
 
-            let lower: usize = layer.vals.offs[i].try_into().ok().unwrap();
-            let upper: usize = layer.vals.offs[i+1].try_into().ok().unwrap();
+            let lower: usize = layer.vals.offs.index(i);
+            let upper: usize = layer.vals.offs.index(i+1);
 
-            layer.vals.offs[i] = L::ValOffset::try_from(write_position).ok().unwrap();
+            layer.vals.offs.set(i, write_position);
 
             let updates = &mut layer.vals.vals.vals[..];
 
@@ -183,7 +182,7 @@ where
             }
         }
         layer.vals.vals.vals.truncate(write_position);
-        layer.vals.offs[layer.vals.keys.len()] = L::ValOffset::try_from(write_position).ok().unwrap();
+        layer.vals.offs.set(layer.vals.keys.len(), write_position);
 
         // 3. Remove values with empty histories. In addition, we need to update offsets
         //    in `layer.offs` to correctly reference the potentially moved values.
@@ -193,14 +192,14 @@ where
         let keys_off = &mut layer.offs;
         layer.vals.keys.retain_from(val_start, |index, _item| {
             // As we pass each key offset, record its new position.
-            if index == keys_off[keys_pos].try_into().ok().unwrap() {
-                keys_off[keys_pos] = L::KeyOffset::try_from(write_position).ok().unwrap();
+            if index == keys_off.index(keys_pos) {
+                keys_off.set(keys_pos, write_position);
                 keys_pos += 1;
             }
-            let lower = vals_off[index].try_into().ok().unwrap();
-            let upper = vals_off[index+1].try_into().ok().unwrap();
+            let lower = vals_off.index(index);
+            let upper = vals_off.index(index+1);
             if lower < upper {
-                vals_off[write_position+1] = vals_off[index+1];
+                vals_off.set(write_position+1, vals_off.index(index+1));
                 write_position += 1;
                 true
             }
@@ -208,16 +207,16 @@ where
         });
         debug_assert_eq!(write_position, layer.vals.keys.len());
         layer.vals.offs.truncate(write_position + 1);
-        layer.offs[layer.keys.len()] = L::KeyOffset::try_from(write_position).ok().unwrap();
+        layer.offs.set(layer.keys.len(), write_position);
 
         // 4. Remove empty keys.
         let offs = &mut layer.offs;
         let mut write_position = key_start;
         layer.keys.retain_from(key_start, |index, _item| {
-            let lower = offs[index].try_into().ok().unwrap();
-            let upper = offs[index+1].try_into().ok().unwrap();
+            let lower = offs.index(index);
+            let upper = offs.index(index+1);
             if lower < upper {
-                offs[write_position+1] = offs[index+1];
+                offs.set(write_position+1, offs.index(index+1));
                 write_position += 1;
                 true
             }
@@ -466,7 +465,7 @@ where
     fn advance_builder_from(layer: &mut KTDBuilder<L>, frontier: AntichainRef<<L::Target as Update>::Time>, key_pos: usize) {
 
         let key_start = key_pos;
-        let time_start: usize = layer.offs[key_pos].try_into().ok().unwrap();
+        let time_start: usize = layer.offs.index(key_pos);
 
         // We will zip through the time leaves, calling advance on each,
         //    then zip through the value layer, sorting and collapsing each,
@@ -489,10 +488,10 @@ where
             //     we will change batch.layer.vals.offs[i] in this iteration, from `write_position`'s
             //     initial value.
 
-            let lower: usize = layer.offs[i].try_into().ok().unwrap();
-            let upper: usize = layer.offs[i+1].try_into().ok().unwrap();
+            let lower: usize = layer.offs.index(i);
+            let upper: usize = layer.offs.index(i+1);
 
-            layer.offs[i] = L::KeyOffset::try_from(write_position).ok().unwrap();
+            layer.offs.set(i, write_position);
 
             let updates = &mut layer.vals.vals[..];
 
@@ -505,16 +504,16 @@ where
             }
         }
         layer.vals.vals.truncate(write_position);
-        layer.offs[layer.keys.len()] = L::KeyOffset::try_from(write_position).ok().unwrap();
+        layer.offs.set(layer.keys.len(), write_position);
 
         // 4. Remove empty keys.
         let offs = &mut layer.offs;
         let mut write_position = key_start;
         layer.keys.retain_from(key_start, |index, _item| {
-            let lower = offs[index].try_into().ok().unwrap();
-            let upper = offs[index+1].try_into().ok().unwrap();
+            let lower = offs.index(index);
+            let upper = offs.index(index+1);
             if lower < upper {
-                offs[write_position+1] = offs[index+1];
+                offs.set(write_position+1, offs.index(index+1));
                 write_position += 1;
                 true
             }

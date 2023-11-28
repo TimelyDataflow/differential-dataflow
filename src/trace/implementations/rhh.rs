@@ -18,22 +18,22 @@ use super::{Update, Layout, Vector, TStack};
 use self::val_batch::{RhhValBatch, RhhValBuilder};
 
 /// A trace implementation using a spine of ordered lists.
-pub type VecSpine<K, V, T, R, O=usize> = Spine<
-    Rc<RhhValBatch<Vector<((K,V),T,R), O>>>,
+pub type VecSpine<K, V, T, R> = Spine<
+    Rc<RhhValBatch<Vector<((K,V),T,R)>>>,
     MergeBatcher<K,V,T,R>,
-    RcBuilder<RhhValBuilder<Vector<((K,V),T,R), O>>>,
+    RcBuilder<RhhValBuilder<Vector<((K,V),T,R)>>>,
 >;
 // /// A trace implementation for empty values using a spine of ordered lists.
-// pub type OrdKeySpine<K, T, R, O=usize> = Spine<Rc<OrdKeyBatch<Vector<((K,()),T,R), O>>>>;
+// pub type OrdKeySpine<K, T, R> = Spine<Rc<OrdKeyBatch<Vector<((K,()),T,R)>>>>;
 
 /// A trace implementation backed by columnar storage.
-pub type ColSpine<K, V, T, R, O=usize> = Spine<
-    Rc<RhhValBatch<TStack<((K,V),T,R), O>>>,
+pub type ColSpine<K, V, T, R> = Spine<
+    Rc<RhhValBatch<TStack<((K,V),T,R)>>>,
     ColumnatedMergeBatcher<K,V,T,R>,
-    RcBuilder<RhhValBuilder<TStack<((K,V),T,R), O>>>,
+    RcBuilder<RhhValBuilder<TStack<((K,V),T,R)>>>,
 >;
 // /// A trace implementation backed by columnar storage.
-// pub type ColKeySpine<K, T, R, O=usize> = Spine<Rc<OrdKeyBatch<TStack<((K,()),T,R), O>>>>;
+// pub type ColKeySpine<K, T, R> = Spine<Rc<OrdKeyBatch<TStack<((K,()),T,R)>>>>;
 
 /// A carrier trait indicating that the type's `Ord` and `PartialOrd` implementations are by `Hashable::hashed()`.
 pub trait HashOrdered: Hashable { }
@@ -77,7 +77,7 @@ mod val_batch {
     use timely::progress::{Antichain, frontier::AntichainRef};
 
     use trace::{Batch, BatchReader, Builder, Cursor, Description, Merger};
-    use trace::implementations::BatchContainer;
+    use trace::implementations::{BatchContainer, OffsetList};
     
     use super::{Layout, Update, HashOrdered};
 
@@ -115,7 +115,7 @@ mod val_batch {
         /// Offsets used to provide indexes from keys to values.
         ///
         /// The length of this list is one longer than `keys`, so that we can avoid bounds logic.
-        pub keys_offs: Vec<L::KeyOffset>,
+        pub keys_offs: OffsetList,
         /// Concatenated ordered lists of values, bracketed by offsets in `keys_offs`.
         pub vals: L::ValContainer,
         /// Offsets used to provide indexes from values to updates.
@@ -126,7 +126,7 @@ mod val_batch {
         /// single common update values (e.g. in a snapshot, the minimal time and a diff of one).
         ///
         /// The length of this list is one longer than `vals`, so that we can avoid bounds logic.
-        pub vals_offs: Vec<L::ValOffset>,
+        pub vals_offs: OffsetList,
         /// Concatenated ordered lists of updates, bracketed by offsets in `vals_offs`.
         pub updates: L::UpdContainer,
     }
@@ -138,16 +138,16 @@ mod val_batch {
     {
         /// Lower and upper bounds in `self.vals` corresponding to the key at `index`.
         fn values_for_key(&self, index: usize) -> (usize, usize) {
-            let lower = self.keys_offs[index].try_into().ok().unwrap();
-            let upper = self.keys_offs[index+1].try_into().ok().unwrap();
+            let lower = self.keys_offs.index(index);
+            let upper = self.keys_offs.index(index+1);
             // Looking up values for an invalid key indicates something is wrong.
             assert!(lower < upper, "{:?} v {:?} at {:?}", lower, upper, index);
             (lower, upper)
         }
         /// Lower and upper bounds in `self.updates` corresponding to the value at `index`.
         fn updates_for_value(&self, index: usize) -> (usize, usize) {
-            let mut lower = self.vals_offs[index].try_into().ok().unwrap();
-            let upper = self.vals_offs[index+1].try_into().ok().unwrap();
+            let mut lower = self.vals_offs.index(index);
+            let upper = self.vals_offs.index(index+1);
             // We use equal lower and upper to encode "singleton update; just before here".
             // It should only apply when there is a prior element, so `lower` should be greater than zero.
             if lower == upper {
@@ -166,13 +166,13 @@ mod val_batch {
         /// If `offset` is specified, we will insert it at the appropriate location. If it is not specified,
         /// we leave `keys_offs` ready to receive it as the next `push`. This is so that builders that may
         /// not know the final offset at the moment of key insertion can prepare for receiving the offset.
-        fn insert_key(&mut self, key: &<L::Target as Update>::Key, offset: Option<L::KeyOffset>) {
+        fn insert_key(&mut self, key: &<L::Target as Update>::Key, offset: Option<usize>) {
             let desired = self.desired_location(key);
             // Were we to push the key now, it would be at `self.keys.len()`, so while that is wrong, 
             // push additional blank entries in.
             while self.keys.len() < desired {
                 // We insert a default (dummy) key and repeat the offset to indicate this.
-                let current_offset = self.keys_offs[self.keys.len()];
+                let current_offset = self.keys_offs.index(self.keys.len());
                 self.keys.push(Default::default());
                 self.keys_offs.push(current_offset);
             }
@@ -201,7 +201,7 @@ mod val_batch {
 
         /// Indicates that a key is valid, rather than dead space, by looking for a valid offset range.
         fn live_key(&self, index: usize) -> bool {
-            self.keys_offs[index] != self.keys_offs[index+1]
+            self.keys_offs.index(index) != self.keys_offs.index(index+1)
         }
 
         /// Advances `index` until it references a live key, or is `keys.len()`.
@@ -333,9 +333,9 @@ mod val_batch {
 
             let mut storage = RhhValStorage {
                 keys: L::KeyContainer::merge_capacity(&batch1.keys, &batch2.keys),
-                keys_offs: Vec::with_capacity(batch1.keys_offs.len() + batch2.keys_offs.len()),
+                keys_offs: OffsetList::with_capacity(batch1.keys_offs.len() + batch2.keys_offs.len()),
                 vals: L::ValContainer::merge_capacity(&batch1.vals, &batch2.vals),
-                vals_offs: Vec::with_capacity(batch1.vals_offs.len() + batch2.vals_offs.len()),
+                vals_offs: OffsetList::with_capacity(batch1.vals_offs.len() + batch2.vals_offs.len()),
                 updates: L::UpdContainer::merge_capacity(&batch1.updates, &batch2.updates),
                 key_count: 0,
                 key_capacity: rhh_cap,
@@ -467,7 +467,7 @@ mod val_batch {
             &mut self, 
             (source1, mut lower1, upper1): (&RhhValStorage<L>, usize, usize), 
             (source2, mut lower2, upper2): (&RhhValStorage<L>, usize, usize),
-        ) -> Option<L::KeyOffset> {
+        ) -> Option<usize> {
             // Capture the initial number of values to determine if the merge was ultimately non-empty.
             let init_vals = self.result.vals.len();
             while lower1 < upper1 && lower2 < upper2 {
@@ -546,7 +546,7 @@ mod val_batch {
         }
 
         /// Consolidates `self.updates_stash` and produces the offset to record, if any.
-        fn consolidate_updates(&mut self) -> Option<L::ValOffset> {
+        fn consolidate_updates(&mut self) -> Option<usize> {
             use consolidation;
             consolidation::consolidate(&mut self.update_stash);
             if !self.update_stash.is_empty() {
@@ -742,9 +742,9 @@ mod val_batch {
             Self { 
                 result: RhhValStorage {
                     keys: L::KeyContainer::with_capacity(keys),
-                    keys_offs: Vec::with_capacity(keys + 1),
+                    keys_offs: OffsetList::with_capacity(keys + 1),
                     vals: L::ValContainer::with_capacity(vals),
-                    vals_offs: Vec::with_capacity(vals + 1),
+                    vals_offs: OffsetList::with_capacity(vals + 1),
                     updates: L::UpdContainer::with_capacity(upds),
                     key_count: 0,
                     key_capacity: rhh_capacity,
