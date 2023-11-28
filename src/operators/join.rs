@@ -660,12 +660,12 @@ where
 /// The structure wraps cursors which allow us to play out join computation at whatever rate we like.
 /// This allows us to avoid producing and buffering massive amounts of data, without giving the timely
 /// dataflow system a chance to run operators that can consume and aggregate the data.
-struct Deferred<T, R, S1, S2, C1, C2, D>
+struct Deferred<T, R, C1, C2, D>
 where
     T: Timestamp+Lattice+Ord,
     R: Semigroup,
-    C1: Cursor<S1, Time=T>,
-    C2: Cursor<S2, Key=C1::Key, Time=T>,
+    C1: Cursor<Time=T>,
+    C2: Cursor<Key=C1::Key, Time=T>,
     C1::Val: Ord,
     C2::Val: Ord,
     C1::R: Semigroup,
@@ -673,19 +673,19 @@ where
     D: Ord+Clone+Data,
 {
     trace: C1,
-    trace_storage: S1,
+    trace_storage: C1::Storage,
     batch: C2,
-    batch_storage: S2,
+    batch_storage: C2::Storage,
     capability: Capability<T>,
     done: bool,
     temp: Vec<((D, T), R)>,
 }
 
-impl<T, R, S1, S2, C1, C2, D> Deferred<T, R, S1, S2, C1, C2, D>
+impl<T, R, C1, C2, D> Deferred<T, R, C1, C2, D>
 where
     C1::Key: Ord+Eq,
-    C1: Cursor<S1, Time=T>,
-    C2: Cursor<S2, Key=C1::Key, Time=T>,
+    C1: Cursor<Time=T>,
+    C2: Cursor<Key=C1::Key, Time=T>,
     C1::Val: Ord,
     C2::Val: Ord,
     C1::R: Semigroup,
@@ -694,7 +694,7 @@ where
     R: Semigroup,
     D: Clone+Data,
 {
-    fn new(trace: C1, trace_storage: S1, batch: C2, batch_storage: S2, capability: Capability<T>) -> Self {
+    fn new(trace: C1, trace_storage: C1::Storage, batch: C2, batch_storage: C2::Storage, capability: Capability<T>) -> Self {
         Deferred {
             trace,
             trace_storage,

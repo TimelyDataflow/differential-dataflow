@@ -591,7 +591,7 @@ mod val_batch {
         phantom: PhantomData<L>,
     }
 
-    impl<L: Layout> Cursor<RhhValBatch<L>> for RhhValCursor<L> 
+    impl<L: Layout> Cursor for RhhValCursor<L> 
     where 
         <L::Target as Update>::Key: HashOrdered,
         <L::Target as Update>::KeyOwned: Default + HashOrdered,
@@ -600,6 +600,8 @@ mod val_batch {
         type Val = <L::Target as Update>::Val;
         type Time = <L::Target as Update>::Time;
         type R = <L::Target as Update>::Diff;
+
+        type Storage = RhhValBatch<L>;
 
         fn key<'a>(&self, storage: &'a RhhValBatch<L>) -> &'a Self::Key { 
             storage.storage.keys.index(self.key_cursor) 

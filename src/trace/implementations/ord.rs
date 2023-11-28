@@ -337,7 +337,7 @@ where
     cursor: OrderedCursor<VTDLayer<L>>,
 }
 
-impl<L: Layout> Cursor<OrdValBatch<L>> for OrdValCursor<L>
+impl<L: Layout> Cursor for OrdValCursor<L>
 where
     <L::Target as Update>::Key: Sized + Clone,
     <L::Target as Update>::Val: Sized + Clone,
@@ -347,7 +347,7 @@ where
     type Time = <L::Target as Update>::Time;
     type R = <L::Target as Update>::Diff;
 
-    // type Storage = OrdValBatch<L>;
+    type Storage = OrdValBatch<L>;
 
     fn key<'a>(&self, storage: &'a OrdValBatch<L>) -> &'a Self::Key { &self.cursor.key(&storage.layer) }
     fn val<'a>(&self, storage: &'a OrdValBatch<L>) -> &'a Self::Val { &self.cursor.child.key(&storage.layer.vals) }
@@ -636,7 +636,7 @@ pub struct OrdKeyCursor<L: Layout> {
     cursor: OrderedCursor<OrderedLeaf<<L::Target as Update>::Time, <L::Target as Update>::Diff>>,
 }
 
-impl<L: Layout> Cursor<OrdKeyBatch<L>> for OrdKeyCursor<L>
+impl<L: Layout> Cursor for OrdKeyCursor<L>
 where
     <L::Target as Update>::Key: Sized,
 {
@@ -644,6 +644,8 @@ where
     type Val = ();
     type Time = <L::Target as Update>::Time;
     type R = <L::Target as Update>::Diff;
+
+    type Storage = OrdKeyBatch<L>;
 
     fn key<'a>(&self, storage: &'a OrdKeyBatch<L>) -> &'a Self::Key { &self.cursor.key(&storage.layer) }
     fn val<'a>(&self, _storage: &'a OrdKeyBatch<L>) -> &'a () { &() }

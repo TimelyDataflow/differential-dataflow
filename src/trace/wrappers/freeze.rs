@@ -200,9 +200,9 @@ impl<C, F> CursorFreeze<C, F> {
     }
 }
 
-impl<S, C, F> Cursor<S> for CursorFreeze<C, F>
+impl<C, F> Cursor for CursorFreeze<C, F>
 where
-    C: Cursor<S>,
+    C: Cursor,
     C::Time: Sized,
     F: Fn(&C::Time)->Option<C::Time>,
 {
@@ -211,13 +211,15 @@ where
     type Time = C::Time;
     type R = C::R;
 
-    #[inline] fn key_valid(&self, storage: &S) -> bool { self.cursor.key_valid(storage) }
-    #[inline] fn val_valid(&self, storage: &S) -> bool { self.cursor.val_valid(storage) }
+    type Storage = C::Storage;
 
-    #[inline] fn key<'a>(&self, storage: &'a S) -> &'a Self::Key { self.cursor.key(storage) }
-    #[inline] fn val<'a>(&self, storage: &'a S) -> &'a Self::Val { self.cursor.val(storage) }
+    #[inline] fn key_valid(&self, storage: &Self::Storage) -> bool { self.cursor.key_valid(storage) }
+    #[inline] fn val_valid(&self, storage: &Self::Storage) -> bool { self.cursor.val_valid(storage) }
 
-    #[inline] fn map_times<L: FnMut(&Self::Time, &Self::R)>(&mut self, storage: &S, mut logic: L) {
+    #[inline] fn key<'a>(&self, storage: &'a Self::Storage) -> &'a Self::Key { self.cursor.key(storage) }
+    #[inline] fn val<'a>(&self, storage: &'a Self::Storage) -> &'a Self::Val { self.cursor.val(storage) }
+
+    #[inline] fn map_times<L: FnMut(&Self::Time, &Self::R)>(&mut self, storage: &Self::Storage, mut logic: L) {
         let func = &self.func;
         self.cursor.map_times(storage, |time, diff| {
             if let Some(time) = func(time) {
@@ -226,14 +228,14 @@ where
         })
     }
 
-    #[inline] fn step_key(&mut self, storage: &S) { self.cursor.step_key(storage) }
-    #[inline] fn seek_key(&mut self, storage: &S, key: &Self::Key) { self.cursor.seek_key(storage, key) }
+    #[inline] fn step_key(&mut self, storage: &Self::Storage) { self.cursor.step_key(storage) }
+    #[inline] fn seek_key(&mut self, storage: &Self::Storage, key: &Self::Key) { self.cursor.seek_key(storage, key) }
 
-    #[inline] fn step_val(&mut self, storage: &S) { self.cursor.step_val(storage) }
-    #[inline] fn seek_val(&mut self, storage: &S, val: &Self::Val) { self.cursor.seek_val(storage, val) }
+    #[inline] fn step_val(&mut self, storage: &Self::Storage) { self.cursor.step_val(storage) }
+    #[inline] fn seek_val(&mut self, storage: &Self::Storage, val: &Self::Val) { self.cursor.seek_val(storage, val) }
 
-    #[inline] fn rewind_keys(&mut self, storage: &S) { self.cursor.rewind_keys(storage) }
-    #[inline] fn rewind_vals(&mut self, storage: &S) { self.cursor.rewind_vals(storage) }
+    #[inline] fn rewind_keys(&mut self, storage: &Self::Storage) { self.cursor.rewind_keys(storage) }
+    #[inline] fn rewind_vals(&mut self, storage: &Self::Storage) { self.cursor.rewind_vals(storage) }
 }
 
 
@@ -252,7 +254,7 @@ impl<B: BatchReader, F> BatchCursorFreeze<B, F> {
     }
 }
 
-impl<B: BatchReader, F> Cursor<BatchFreeze<B, F>> for BatchCursorFreeze<B, F>
+impl<B: BatchReader, F> Cursor for BatchCursorFreeze<B, F>
 where
     F: Fn(&B::Time)->Option<B::Time>,
 {
@@ -260,6 +262,8 @@ where
     type Val = B::Val;
     type Time = B::Time;
     type R = B::R;
+
+    type Storage = BatchFreeze<B, F>;
 
     #[inline] fn key_valid(&self, storage: &BatchFreeze<B, F>) -> bool { self.cursor.key_valid(&storage.batch) }
     #[inline] fn val_valid(&self, storage: &BatchFreeze<B, F>) -> bool { self.cursor.val_valid(&storage.batch) }

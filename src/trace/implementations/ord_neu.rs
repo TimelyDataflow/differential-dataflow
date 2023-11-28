@@ -420,11 +420,13 @@ mod val_batch {
         phantom: PhantomData<L>,
     }
 
-    impl<L: Layout> Cursor<OrdValBatch<L>> for OrdValCursor<L> {
+    impl<L: Layout> Cursor for OrdValCursor<L> {
         type Key = <L::Target as Update>::Key;
         type Val = <L::Target as Update>::Val;
         type Time = <L::Target as Update>::Time;
         type R = <L::Target as Update>::Diff;
+
+        type Storage = OrdValBatch<L>;
 
         fn key<'a>(&self, storage: &'a OrdValBatch<L>) -> &'a Self::Key { storage.storage.keys.index(self.key_cursor) }
         fn val<'a>(&self, storage: &'a OrdValBatch<L>) -> &'a Self::Val { storage.storage.vals.index(self.val_cursor) }

@@ -39,7 +39,7 @@ impl<'a, V:'a + ?Sized, T, R> EditList<'a, V, T, R> where T: Ord+Clone, R: Semig
     }
     /// Loads the contents of a cursor.
     fn load<S, C, L>(&mut self, cursor: &mut C, storage: &'a S, logic: L)
-    where C: Cursor<S, Val=V, Time=T, R=R>, C::Key: Eq, L: Fn(&T)->T {
+    where C: Cursor<Storage=S, Val=V, Time=T, R=R>, C::Key: Eq, L: Fn(&T)->T {
         self.clear();
         while cursor.val_valid(storage) {
             cursor.map_times(storage, |time1, diff1| self.push(logic(time1), diff1.clone()));
@@ -102,7 +102,7 @@ impl<'storage, V: Ord+'storage + ?Sized, T: Lattice+Ord+Clone, R: Semigroup> Val
         self.buffer.clear();
     }
     fn load<S, C, L>(&mut self, cursor: &mut C, storage: &'storage S, logic: L)
-    where C: Cursor<S, Val=V, Time=T, R=R>, C::Key: Eq, L: Fn(&T)->T {
+    where C: Cursor<Storage=S, Val=V, Time=T, R=R>, C::Key: Eq, L: Fn(&T)->T {
         self.edits.load(cursor, storage, logic);
     }
 
@@ -116,7 +116,7 @@ impl<'storage, V: Ord+'storage + ?Sized, T: Lattice+Ord+Clone, R: Semigroup> Val
         key: &C::Key,
         logic: L
     ) -> HistoryReplay<'storage, 'history, V, T, R>
-    where C: Cursor<S, Val=V, Time=T, R=R>, C::Key: Eq, L: Fn(&T)->T
+    where C: Cursor<Storage=S, Val=V, Time=T, R=R>, C::Key: Eq, L: Fn(&T)->T
     {
         self.clear();
         cursor.seek_key(storage, key);

@@ -62,7 +62,7 @@ pub trait TraceReader {
     type Storage;
 
     /// The type used to enumerate the collections contents.
-    type Cursor: Cursor<Self::Storage, Key = Self::Key, Val = Self::Val, Time = Self::Time, R = Self::R>;
+    type Cursor: Cursor<Storage=Self::Storage, Key = Self::Key, Val = Self::Val, Time = Self::Time, R = Self::R>;
 
     /// Provides a cursor over updates contained in the trace.
     fn cursor(&mut self) -> (Self::Cursor, Self::Storage) {
@@ -266,7 +266,7 @@ where
     type R;
 
     /// The type used to enumerate the batch's contents.
-    type Cursor: Cursor<Self, Key = Self::Key, Val = Self::Val, Time = Self::Time, R = Self::R>;
+    type Cursor: Cursor<Storage=Self, Key = Self::Key, Val = Self::Val, Time = Self::Time, R = Self::R>;
     /// Acquires a cursor to the batch's contents.
     fn cursor(&self) -> Self::Cursor;
     /// The number of updates in the batch.
@@ -407,12 +407,14 @@ pub mod rc_blanket_impls {
         }
     }
 
-    impl<B: BatchReader> Cursor<Rc<B>> for RcBatchCursor<B> {
+    impl<B: BatchReader> Cursor for RcBatchCursor<B> {
 
         type Key = B::Key;
         type Val = B::Val;
         type Time = B::Time;
         type R = B::R;
+
+        type Storage = Rc<B>;
 
         #[inline] fn key_valid(&self, storage: &Rc<B>) -> bool { self.cursor.key_valid(storage) }
         #[inline] fn val_valid(&self, storage: &Rc<B>) -> bool { self.cursor.val_valid(storage) }
@@ -510,12 +512,14 @@ pub mod abomonated_blanket_impls {
         }
     }
 
-    impl<B: BatchReader+Abomonation> Cursor<Abomonated<B, Vec<u8>>> for AbomonatedBatchCursor<B> {
+    impl<B: BatchReader+Abomonation> Cursor for AbomonatedBatchCursor<B> {
 
         type Key = B::Key;
         type Val = B::Val;
         type Time = B::Time;
         type R = B::R;
+
+        type Storage = Abomonated<B, Vec<u8>>;
 
         #[inline] fn key_valid(&self, storage: &Abomonated<B, Vec<u8>>) -> bool { self.cursor.key_valid(storage) }
         #[inline] fn val_valid(&self, storage: &Abomonated<B, Vec<u8>>) -> bool { self.cursor.val_valid(storage) }
