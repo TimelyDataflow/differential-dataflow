@@ -3,10 +3,12 @@
 use timely::Container;
 use timely::communication::message::RefOrMut;
 use timely::container::columnation::{Columnation, TimelyStack};
+use timely::logging::WorkerIdentifier;
+use timely::logging_core::Logger;
 use timely::progress::{frontier::Antichain, Timestamp};
 
 use crate::difference::Semigroup;
-
+use crate::logging::{BatcherEvent, DifferentialEvent};
 use crate::trace::{Batcher, Builder};
 
 /// Creates batches from unordered tuples.
@@ -32,9 +34,9 @@ where
     type Item = ((K,V),T,D);
     type Time = T;
 
-    fn new() -> Self {
+    fn new(logger: Option<Logger<DifferentialEvent, WorkerIdentifier>>, operator_id: usize) -> Self {
         ColumnatedMergeBatcher {
-            sorter: MergeSorterColumnation::new(),
+            sorter: MergeSorterColumnation::new(logger, operator_id),
             frontier: Antichain::new(),
             lower: Antichain::from_elem(<T as Timestamp>::minimum()),
         }
@@ -186,6 +188,8 @@ struct MergeSorterColumnation<D: Columnation, T: Columnation, R: Columnation> {
     queue: Vec<Vec<TimelyStack<(D, T, R)>>>,    // each power-of-two length list of allocations.
     stash: Vec<TimelyStack<(D, T, R)>>,
     pending: Vec<(D, T, R)>,
+    logger: Option<Logger<DifferentialEvent, WorkerIdentifier>>,
+    operator_id: usize,
 }
 
 impl<D: Ord+Columnation+'static, T: Ord+Columnation+'static, R: Semigroup+Columnation+'static> MergeSorterColumnation<D, T, R> {
@@ -209,11 +213,36 @@ impl<D: Ord+Columnation+'static, T: Ord+Columnation+'static, R: Semigroup+Column
         Self::buffer_size() * 2
     }
 
-    fn new() -> Self {
+    fn new(logger: Option<Logger<DifferentialEvent, WorkerIdentifier>>, operator_id: usize) -> Self {
         Self {
+            logger,
+            operator_id,
             queue: Vec::new(),
             stash: Vec::new(),
-            pending: Vec::new()
+            pending: Vec::new(),
+        }
+    }
+
+    /// Account size changes. Only performs work if a logger exists.
+    ///
+    /// Calculate the size based on the [`TimelyStack`]s passed along, with each attribute
+    /// multiplied by `diff`. Usually, one wants to pass 1 or -1 as the diff.
+    fn account<'a, I: IntoIterator<Item=&'a TimelyStack<(D, T, R)>>>(&self, items: I, diff: isize) {
+        if let Some(logger) = &self.logger {
+            let (mut siz, mut capacity, mut allocations) = (0isize, 0isize, 0isize);
+            for stack in items {
+                stack.heap_size(|s, c| {
+                    siz = siz.saturating_add_unsigned(s);
+                    capacity = capacity.saturating_add_unsigned(c);
+                    allocations += isize::from(c > 0);
+                });
+            }
+            logger.log(BatcherEvent {
+                operator: self.operator_id,
+                size_diff: siz * diff,
+                capacity_diff: capacity * diff,
+                allocations_diff: allocations * diff,
+            })
         }
     }
 
@@ -261,11 +290,13 @@ impl<D: Ord+Columnation+'static, T: Ord+Columnation+'static, R: Semigroup+Column
             for tuple in self.pending.drain(..) {
                 stack.copy(&tuple);
             }
+            self.account([&stack], 1);
             self.queue.push(vec![stack]);
             while self.queue.len() > 1 && (self.queue[self.queue.len()-1].len() >= self.queue[self.queue.len()-2].len() / 2) {
                 let list1 = self.queue.pop().unwrap();
                 let list2 = self.queue.pop().unwrap();
                 let merged = self.merge_by(list1, list2);
+                self.account(&merged, 1);
                 self.queue.push(merged);
             }
         }
@@ -278,6 +309,7 @@ impl<D: Ord+Columnation+'static, T: Ord+Columnation+'static, R: Semigroup+Column
             let list1 = self.queue.pop().unwrap();
             let list2 = self.queue.pop().unwrap();
             let merged = self.merge_by(list1, list2);
+            self.account(&merged, 1);
             self.queue.push(merged);
         }
         self.queue.push(list);
@@ -300,6 +332,7 @@ impl<D: Ord+Columnation+'static, T: Ord+Columnation+'static, R: Semigroup+Column
 
     // merges two sorted input lists into one sorted output list.
     fn merge_by(&mut self, list1: Vec<TimelyStack<(D, T, R)>>, list2: Vec<TimelyStack<(D, T, R)>>) -> Vec<TimelyStack<(D, T, R)>> {
+        self.account(list1.iter().chain(list2.iter()), -1);
 
         use std::cmp::Ordering;
 

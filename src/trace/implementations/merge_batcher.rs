@@ -3,10 +3,12 @@
 use std::collections::VecDeque;
 
 use timely::communication::message::RefOrMut;
+use timely::logging::WorkerIdentifier;
+use timely::logging_core::Logger;
 use timely::progress::{frontier::Antichain, Timestamp};
 
 use crate::difference::Semigroup;
-
+use crate::logging::DifferentialEvent;
 use crate::trace::{Batcher, Builder};
 
 /// Creates batches from unordered tuples.
@@ -26,7 +28,7 @@ where
     type Item = ((K,V),T,D);
     type Time = T;
 
-    fn new() -> Self {
+    fn new(_logger: Option<Logger<DifferentialEvent, WorkerIdentifier>>, _operator_id: usize) -> Self {
         MergeBatcher {
             sorter: MergeSorter::new(),
             frontier: Antichain::new(),

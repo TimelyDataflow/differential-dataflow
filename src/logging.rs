@@ -31,6 +31,8 @@ pub enum DifferentialEvent {
     MergeShortfall(MergeShortfall),
     /// Trace sharing event.
     TraceShare(TraceShare),
+    /// Batcher size event
+    Batcher(BatcherEvent),
 }
 
 /// Either the start or end of a merge event.
@@ -44,6 +46,21 @@ pub struct BatchEvent {
 
 impl From<BatchEvent> for DifferentialEvent { fn from(e: BatchEvent) -> Self { DifferentialEvent::Batch(e) } }
 
+
+/// Either the start or end of a merge event.
+#[derive(Debug, Clone, Abomonation, Ord, PartialOrd, Eq, PartialEq)]
+pub struct BatcherEvent {
+    /// Operator identifier.
+    pub operator: usize,
+    /// Change in used size.
+    pub size_diff: isize,
+    /// Change in capacity.
+    pub capacity_diff: isize,
+    /// Change in number of allocations.
+    pub allocations_diff: isize,
+}
+
+impl From<BatcherEvent> for DifferentialEvent { fn from(e: BatcherEvent) -> Self { DifferentialEvent::Batcher(e) } }
 
 /// Either the start or end of a merge event.
 #[derive(Debug, Clone, Abomonation, Ord, PartialOrd, Eq, PartialEq)]

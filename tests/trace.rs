@@ -12,7 +12,7 @@ fn get_trace() -> ValSpine<u64, u64, usize, i64> {
     let op_info = OperatorInfo::new(0, 0, &[]);
     let mut trace = IntegerTrace::new(op_info, None, None);
     {
-        let mut batcher = <IntegerTrace as Trace>::Batcher::new();
+        let mut batcher = <IntegerTrace as Trace>::Batcher::new(None, 0);
 
         use timely::communication::message::RefOrMut;
         batcher.push_batch(RefOrMut::Mut(&mut vec![
