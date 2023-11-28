@@ -2,7 +2,7 @@
 
 use std::fmt::Debug;
 
-use trace::implementations::{BatchContainer, OrdOffset};
+use trace::implementations::{BatchContainer, OffsetList};
 
 use super::{Trie, Cursor, Builder, MergeBuilder, TupleBuilder};
 
@@ -10,11 +10,10 @@ use super::{Trie, Cursor, Builder, MergeBuilder, TupleBuilder};
 ///
 /// In this representation, the values for `keys[i]` are found at `vals[offs[i] .. offs[i+1]]`.
 #[derive(Debug, Eq, PartialEq, Clone, Abomonation)]
-pub struct OrderedLayer<K, L, O=usize, C=Vec<K>>
+pub struct OrderedLayer<K, L, C=Vec<K>>
 where
     K: Ord,
     C: BatchContainer<Item=K>,
-    O: OrdOffset
 {
     /// The keys of the layer.
     pub keys: C,
@@ -22,22 +21,21 @@ where
     ///
     /// The bounds for `keys[i]` are `(offs[i], offs[i+1]`). The offset array is guaranteed to be one
     /// element longer than the keys array, ensuring that these accesses do not panic.
-    pub offs: Vec<O>,
+    pub offs: OffsetList,
     /// The ranges of values associated with the keys.
     pub vals: L,
 }
 
-impl<K, L, O, C> Trie for OrderedLayer<K, L, O, C>
+impl<K, L, C> Trie for OrderedLayer<K, L, C>
 where
     K: Ord+Clone,
     C: BatchContainer<Item=K>,
     L: Trie,
-    O: OrdOffset
 {
     type Item = (K, L::Item);
     type Cursor = OrderedCursor<L>;
-    type MergeBuilder = OrderedBuilder<K, L::MergeBuilder, O, C>;
-    type TupleBuilder = OrderedBuilder<K, L::TupleBuilder, O, C>;
+    type MergeBuilder = OrderedBuilder<K, L::MergeBuilder, C>;
+    type TupleBuilder = OrderedBuilder<K, L::TupleBuilder, C>;
 
     fn keys(&self) -> usize { self.keys.len() }
     fn tuples(&self) -> usize { self.vals.tuples() }
@@ -45,11 +43,11 @@ where
 
         if lower < upper {
 
-            let child_lower = self.offs[lower];
-            let child_upper = self.offs[lower + 1];
+            let child_lower = self.offs.index(lower);
+            let child_upper = self.offs.index(lower + 1);
             OrderedCursor {
                 bounds: (lower, upper),
-                child: self.vals.cursor_from(child_lower.try_into().ok().unwrap(), child_upper.try_into().ok().unwrap()),
+                child: self.vals.cursor_from(child_lower, child_upper),
                 pos: lower,
             }
         }
@@ -64,35 +62,33 @@ where
 }
 
 /// Assembles a layer of this
-pub struct OrderedBuilder<K, L, O=usize, C=Vec<K>>
+pub struct OrderedBuilder<K, L, C=Vec<K>>
 where
     K: Ord,
     C: BatchContainer<Item=K>,
-    O: OrdOffset
 {
     /// Keys
     pub keys: C,
     /// Offsets
-    pub offs: Vec<O>,
+    pub offs: OffsetList,
     /// The next layer down
     pub vals: L,
 }
 
-impl<K, L, O, C> Builder for OrderedBuilder<K, L, O, C>
+impl<K, L, C> Builder for OrderedBuilder<K, L, C>
 where
     K: Ord+Clone,
     C: BatchContainer<Item=K>,
     L: Builder,
-    O: OrdOffset
 {
-    type Trie = OrderedLayer<K, L::Trie, O, C>;
+    type Trie = OrderedLayer<K, L::Trie, C>;
     fn boundary(&mut self) -> usize {
-        self.offs[self.keys.len()] = O::try_from(self.vals.boundary()).ok().unwrap();
+        self.offs.set(self.keys.len(), self.vals.boundary());
         self.keys.len()
     }
     fn done(mut self) -> Self::Trie {
-        if self.keys.len() > 0 && self.offs[self.keys.len()].try_into().ok().unwrap() == 0 {
-            self.offs[self.keys.len()] = O::try_from(self.vals.boundary()).ok().unwrap();
+        if self.keys.len() > 0 && self.offs.index(self.keys.len()) == 0 {
+            self.offs.set(self.keys.len(), self.vals.boundary());
         }
         OrderedLayer {
             keys: self.keys,
@@ -102,16 +98,15 @@ where
     }
 }
 
-impl<K, L, O, C> MergeBuilder for OrderedBuilder<K, L, O, C>
+impl<K, L, C> MergeBuilder for OrderedBuilder<K, L, C>
 where
     K: Ord+Clone,
     C: BatchContainer<Item=K>,
     L: MergeBuilder,
-    O: OrdOffset
 {
     fn with_capacity(other1: &Self::Trie, other2: &Self::Trie) -> Self {
-        let mut offs = Vec::with_capacity(other1.keys() + other2.keys() + 1);
-        offs.push(O::try_from(0 as usize).ok().unwrap());
+        let mut offs = OffsetList::with_capacity(other1.keys() + other2.keys() + 1);
+        offs.push(0);
         OrderedBuilder {
             keys: C::merge_capacity(&other1.keys, &other2.keys),
             offs: offs,
@@ -121,14 +116,14 @@ where
     #[inline]
     fn copy_range(&mut self, other: &Self::Trie, lower: usize, upper: usize) {
         debug_assert!(lower < upper);
-        let other_basis = other.offs[lower];
-        let self_basis = self.offs.last().map(|&x| x).unwrap_or(O::try_from(0).ok().unwrap());
+        let other_basis = other.offs.index(lower);
+        let self_basis = self.offs.last().unwrap_or(0);
 
         self.keys.copy_range(&other.keys, lower, upper);
         for index in lower .. upper {
-            self.offs.push((other.offs[index + 1] + self_basis) - other_basis);
+            self.offs.push((other.offs.index(index + 1) + self_basis) - other_basis);
         }
-        self.vals.copy_range(&other.vals, other_basis.try_into().ok().unwrap(), other.offs[upper].try_into().ok().unwrap());
+        self.vals.copy_range(&other.vals, other_basis, other.offs.index(upper));
     }
 
     fn push_merge(&mut self, other1: (&Self::Trie, usize, usize), other2: (&Self::Trie, usize, usize)) -> usize {
@@ -149,12 +144,11 @@ where
     }
 }
 
-impl<K, L, O, C> OrderedBuilder<K, L, O, C>
+impl<K, L, C> OrderedBuilder<K, L, C>
 where
     K: Ord+Clone,
     C: BatchContainer<Item=K>,
     L: MergeBuilder,
-    O: OrdOffset
 {
     /// Performs one step of merging.
     #[inline]
@@ -175,12 +169,12 @@ where
                 let lower = self.vals.boundary();
                 // record vals_length so we can tell if anything was pushed.
                 let upper = self.vals.push_merge(
-                    (&trie1.vals, trie1.offs[*lower1].try_into().ok().unwrap(), trie1.offs[*lower1 + 1].try_into().ok().unwrap()),
-                    (&trie2.vals, trie2.offs[*lower2].try_into().ok().unwrap(), trie2.offs[*lower2 + 1].try_into().ok().unwrap())
+                    (&trie1.vals, trie1.offs.index(*lower1), trie1.offs.index(*lower1 + 1)),
+                    (&trie2.vals, trie2.offs.index(*lower2), trie2.offs.index(*lower2 + 1))
                 );
                 if upper > lower {
                     self.keys.copy(&trie1.keys.index(*lower1));
-                    self.offs.push(O::try_from(upper).ok().unwrap());
+                    self.offs.push(upper);
                 }
 
                 *lower1 += 1;
@@ -197,18 +191,17 @@ where
     }
 }
 
-impl<K, L, O, C> TupleBuilder for OrderedBuilder<K, L, O, C>
+impl<K, L, C> TupleBuilder for OrderedBuilder<K, L, C>
 where
     K: Ord+Clone,
     C: BatchContainer<Item=K>,
     L: TupleBuilder,
-    O: OrdOffset
 {
     type Item = (K, L::Item);
-    fn new() -> Self { OrderedBuilder { keys: C::default(), offs: vec![O::try_from(0).ok().unwrap()], vals: L::new() } }
+    fn new() -> Self { Self::with_capacity(0) }
     fn with_capacity(cap: usize) -> Self {
-        let mut offs = Vec::with_capacity(cap + 1);
-        offs.push(O::try_from(0).ok().unwrap());
+        let mut offs = OffsetList::with_capacity(cap + 1);
+        offs.push(0);
         OrderedBuilder{
             keys: C::with_capacity(cap),
             offs: offs,
@@ -219,12 +212,12 @@ where
     fn push_tuple(&mut self, (key, val): (K, L::Item)) {
 
         // if first element, prior element finish, or different element, need to push and maybe punctuate.
-        if self.keys.len() == 0 || self.offs[self.keys.len()].try_into().ok().unwrap() != 0 || self.keys.index(self.keys.len()-1) != &key {
-            if self.keys.len() > 0 && self.offs[self.keys.len()].try_into().ok().unwrap() == 0 {
-                self.offs[self.keys.len()] = O::try_from(self.vals.boundary()).ok().unwrap();
+        if self.keys.len() == 0 || self.offs.index(self.keys.len()) != 0 || self.keys.index(self.keys.len()-1) != &key {
+            if self.keys.len() > 0 && self.offs.index(self.keys.len()) == 0 {
+                self.offs.set(self.keys.len(), self.vals.boundary());
             }
             self.keys.push(key);
-            self.offs.push(O::try_from(0).ok().unwrap());        // <-- indicates "unfinished".
+            self.offs.push(0);        // <-- indicates "unfinished".
         }
         self.vals.push_tuple(val);
     }
@@ -239,43 +232,42 @@ pub struct OrderedCursor<L: Trie> {
     pub child: L::Cursor,
 }
 
-impl<K, L, O, C> Cursor<OrderedLayer<K, L, O, C>> for OrderedCursor<L>
+impl<K, L, C> Cursor<OrderedLayer<K, L, C>> for OrderedCursor<L>
 where
     K: Ord,
     C: BatchContainer<Item=K>,
     L: Trie,
-    O: OrdOffset
 {
     type Key = K;
-    fn key<'a>(&self, storage: &'a OrderedLayer<K, L, O, C>) -> &'a Self::Key { &storage.keys.index(self.pos) }
-    fn step(&mut self, storage: &OrderedLayer<K, L, O, C>) {
+    fn key<'a>(&self, storage: &'a OrderedLayer<K, L, C>) -> &'a Self::Key { &storage.keys.index(self.pos) }
+    fn step(&mut self, storage: &OrderedLayer<K, L, C>) {
         self.pos += 1;
         if self.valid(storage) {
-            self.child.reposition(&storage.vals, storage.offs[self.pos].try_into().ok().unwrap(), storage.offs[self.pos + 1].try_into().ok().unwrap());
+            self.child.reposition(&storage.vals, storage.offs.index(self.pos), storage.offs.index(self.pos + 1));
         }
         else {
             self.pos = self.bounds.1;
         }
     }
-    fn seek(&mut self, storage: &OrderedLayer<K, L, O, C>, key: &Self::Key) {
+    fn seek(&mut self, storage: &OrderedLayer<K, L, C>, key: &Self::Key) {
         self.pos += storage.keys.advance(self.pos, self.bounds.1, |k| k.lt(key));
         if self.valid(storage) {
-            self.child.reposition(&storage.vals, storage.offs[self.pos].try_into().ok().unwrap(), storage.offs[self.pos + 1].try_into().ok().unwrap());
+            self.child.reposition(&storage.vals, storage.offs.index(self.pos), storage.offs.index(self.pos + 1));
         }
     }
     // fn size(&self) -> usize { self.bounds.1 - self.bounds.0 }
-    fn valid(&self, _storage: &OrderedLayer<K, L, O, C>) -> bool { self.pos < self.bounds.1 }
-    fn rewind(&mut self, storage: &OrderedLayer<K, L, O, C>) {
+    fn valid(&self, _storage: &OrderedLayer<K, L, C>) -> bool { self.pos < self.bounds.1 }
+    fn rewind(&mut self, storage: &OrderedLayer<K, L, C>) {
         self.pos = self.bounds.0;
         if self.valid(storage) {
-            self.child.reposition(&storage.vals, storage.offs[self.pos].try_into().ok().unwrap(), storage.offs[self.pos + 1].try_into().ok().unwrap());
+            self.child.reposition(&storage.vals, storage.offs.index(self.pos), storage.offs.index(self.pos + 1));
         }
     }
-    fn reposition(&mut self, storage: &OrderedLayer<K, L, O, C>, lower: usize, upper: usize) {
+    fn reposition(&mut self, storage: &OrderedLayer<K, L, C>, lower: usize, upper: usize) {
         self.pos = lower;
         self.bounds = (lower, upper);
         if self.valid(storage) {
-            self.child.reposition(&storage.vals, storage.offs[self.pos].try_into().ok().unwrap(), storage.offs[self.pos + 1].try_into().ok().unwrap());
+            self.child.reposition(&storage.vals, storage.offs.index(self.pos), storage.offs.index(self.pos + 1));
         }
     }
 }
