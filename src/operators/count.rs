@@ -82,9 +82,7 @@ where
                         let (mut trace_cursor, trace_storage) = trace.cursor_through(batch.lower().borrow()).unwrap();
                         upper_limit.clone_from(batch.upper());
 
-                        while batch_cursor.key_valid(&batch) {
-
-                            let key = batch_cursor.key(&batch);
+                        while let Some(key) = batch_cursor.get_key(&batch) {
                             let mut count: Option<T1::Diff> = None;
 
                             trace_cursor.seek_key(&trace_storage, key);

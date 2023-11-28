@@ -135,8 +135,7 @@ where
 
                         upper_limit.clone_from(batch.upper());
 
-                        while batch_cursor.key_valid(&batch) {
-                            let key = batch_cursor.key(&batch);
+                        while let Some(key) = batch_cursor.get_key(&batch) {
                             let mut count: Option<T1::Diff> = None;
 
                             // Compute the multiplicity of this key before the current batch.
