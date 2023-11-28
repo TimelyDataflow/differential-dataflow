@@ -68,12 +68,12 @@ use differential_dataflow::consolidation::{consolidate, consolidate_updates};
 /// once out of the "delta flow region", the updates will be `delay`d to the
 /// times specified in the payloads.
 pub fn half_join<G, V, Tr, FF, CF, DOut, S>(
-    stream: &Collection<G, (Tr::Key, V, G::Timestamp), Tr::R>,
+    stream: &Collection<G, (Tr::Key, V, G::Timestamp), Tr::Diff>,
     arrangement: Arranged<G, Tr>,
     frontier_func: FF,
     comparison: CF,
     mut output_func: S,
-) -> Collection<G, (DOut, G::Timestamp), Tr::R>
+) -> Collection<G, (DOut, G::Timestamp), Tr::Diff>
 where
     G: Scope,
     G::Timestamp: Lattice,
@@ -81,14 +81,14 @@ where
     Tr: TraceReader<Time=G::Timestamp>+Clone+'static,
     Tr::Key: Ord+Hashable+ExchangeData,
     Tr::Val: Clone,
-    Tr::R: Monoid+ExchangeData,
+    Tr::Diff: Monoid+ExchangeData,
     FF: Fn(&G::Timestamp) -> G::Timestamp + 'static,
     CF: Fn(&G::Timestamp, &G::Timestamp) -> bool + 'static,
     DOut: Clone+'static,
-    Tr::R: std::ops::Mul<Tr::R, Output=Tr::R>,
+    Tr::Diff: std::ops::Mul<Tr::Diff, Output=Tr::Diff>,
     S: FnMut(&Tr::Key, &V, &Tr::Val)->DOut+'static,
 {
-    let output_func = move |k: &Tr::Key, v1: &V, v2: &Tr::Val, initial: &G::Timestamp, time: &G::Timestamp, diff1: &Tr::R, diff2: &Tr::R| {
+    let output_func = move |k: &Tr::Key, v1: &V, v2: &Tr::Val, initial: &G::Timestamp, time: &G::Timestamp, diff1: &Tr::Diff, diff2: &Tr::Diff| {
         let diff = diff1.clone() * diff2.clone();
         let dout = (output_func(k, v1, v2), time.clone());
         Some((dout, initial.clone(), diff))
@@ -121,7 +121,7 @@ where
 /// records. Note this is not the number of *output* records, owing mainly to
 /// the number of matched records being easiest to record with low overhead.
 pub fn half_join_internal_unsafe<G, V, Tr, FF, CF, DOut, ROut, Y, I, S>(
-    stream: &Collection<G, (Tr::Key, V, G::Timestamp), Tr::R>,
+    stream: &Collection<G, (Tr::Key, V, G::Timestamp), Tr::Diff>,
     mut arrangement: Arranged<G, Tr>,
     frontier_func: FF,
     comparison: CF,
@@ -135,14 +135,14 @@ where
     Tr: TraceReader<Time=G::Timestamp>+Clone+'static,
     Tr::Key: Ord+Hashable+ExchangeData,
     Tr::Val: Clone,
-    Tr::R: Monoid+ExchangeData,
+    Tr::Diff: Monoid+ExchangeData,
     FF: Fn(&G::Timestamp) -> G::Timestamp + 'static,
     CF: Fn(&G::Timestamp, &G::Timestamp) -> bool + 'static,
     DOut: Clone+'static,
     ROut: Monoid,
     Y: Fn(std::time::Instant, usize) -> bool + 'static,
     I: IntoIterator<Item=(DOut, G::Timestamp, ROut)>,
-    S: FnMut(&Tr::Key, &V, &Tr::Val, &G::Timestamp, &G::Timestamp, &Tr::R, &Tr::R)-> I + 'static,
+    S: FnMut(&Tr::Key, &V, &Tr::Val, &G::Timestamp, &G::Timestamp, &Tr::Diff, &Tr::Diff)-> I + 'static,
 {
     // No need to block physical merging for this operator.
     arrangement.trace.set_physical_compaction(Antichain::new().borrow());
@@ -152,7 +152,7 @@ where
     let mut stash = HashMap::new();
     let mut buffer = Vec::new();
 
-    let exchange = Exchange::new(move |update: &((Tr::Key, V, G::Timestamp),G::Timestamp,Tr::R)| (update.0).0.hashed().into());
+    let exchange = Exchange::new(move |update: &((Tr::Key, V, G::Timestamp),G::Timestamp,Tr::Diff)| (update.0).0.hashed().into());
 
     // Stash for (time, diff) accumulation.
     let mut output_buffer = Vec::new();
@@ -229,7 +229,7 @@ where
                                     }
                                     cursor.rewind_vals(&storage);
                                 }
-                                *diff1 = Tr::R::zero();
+                                *diff1 = Tr::Diff::zero();
                             }
                         }
 

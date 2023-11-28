@@ -15,17 +15,17 @@ use differential_dataflow::trace::TraceReader;
 /// `arrangement` undergoes. More complicated patterns are also appropriate, as in the case
 /// of delta queries.
 pub fn propose<G, Tr, F, P>(
-    prefixes: &Collection<G, P, Tr::R>,
+    prefixes: &Collection<G, P, Tr::Diff>,
     arrangement: Arranged<G, Tr>,
     key_selector: F,
-) -> Collection<G, (P, Tr::Val), Tr::R>
+) -> Collection<G, (P, Tr::Val), Tr::Diff>
 where
     G: Scope,
     G::Timestamp: Lattice,
     Tr: TraceReader<Time=G::Timestamp>+Clone+'static,
     Tr::Key: Ord+Hashable+Default,
     Tr::Val: Clone,
-    Tr::R: Monoid+Multiply<Output = Tr::R>+ExchangeData,
+    Tr::Diff: Monoid+Multiply<Output = Tr::Diff>+ExchangeData,
     F: Fn(&P)->Tr::Key+Clone+'static,
     P: ExchangeData,
 {
@@ -46,17 +46,17 @@ where
 /// prefixes by the number of matches in `arrangement`. This can be useful to
 /// avoid the need to prepare an arrangement of distinct extensions.
 pub fn propose_distinct<G, Tr, F, P>(
-    prefixes: &Collection<G, P, Tr::R>,
+    prefixes: &Collection<G, P, Tr::Diff>,
     arrangement: Arranged<G, Tr>,
     key_selector: F,
-) -> Collection<G, (P, Tr::Val), Tr::R>
+) -> Collection<G, (P, Tr::Val), Tr::Diff>
 where
     G: Scope,
     G::Timestamp: Lattice,
     Tr: TraceReader<Time=G::Timestamp>+Clone+'static,
     Tr::Key: Ord+Hashable+Default,
     Tr::Val: Clone,
-    Tr::R: Monoid+Multiply<Output = Tr::R>+ExchangeData,
+    Tr::Diff: Monoid+Multiply<Output = Tr::Diff>+ExchangeData,
     F: Fn(&P)->Tr::Key+Clone+'static,
     P: ExchangeData,
 {

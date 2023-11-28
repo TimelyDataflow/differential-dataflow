@@ -15,27 +15,29 @@ pub struct CursorPair<C1, C2> {
     val_order: Ordering,    // Invalid vals are `Greater` than all other vals. `Equal` implies both valid.
 }
 
-impl<K, V, T, R, C1, C2, S1, S2> Cursor<(S1, S2)> for CursorPair<C1, C2>
+impl<K, V, T, R, C1, C2> Cursor for CursorPair<C1, C2>
 where
     K: Ord,
     V: Ord,
-    C1: Cursor<S1, Key = K, Val = V, Time = T, R = R>,
-    C2: Cursor<S2, Key = K, Val = V, Time = T, R = R>,
+    C1: Cursor<Key = K, Val = V, Time = T, Diff = R>,
+    C2: Cursor<Key = K, Val = V, Time = T, Diff = R>,
 {
     type Key = K;
     type Val = V;
     type Time = T;
-    type R = R;
+    type Diff = R;
+
+    type Storage = (C1::Storage, C2::Storage);
 
     // validation methods
-    fn key_valid(&self, storage: &(S1, S2)) -> bool {
+    fn key_valid(&self, storage: &(C1::Storage, C2::Storage)) -> bool {
         match self.key_order {
             Ordering::Less => self.cursor1.key_valid(&storage.0),
             Ordering::Equal => true,
             Ordering::Greater => self.cursor2.key_valid(&storage.1),
         }
     }
-    fn val_valid(&self, storage: &(S1, S2)) -> bool {
+    fn val_valid(&self, storage: &(C1::Storage, C2::Storage)) -> bool {
         match (self.key_order, self.val_order) {
             (Ordering::Less, _) => self.cursor1.val_valid(&storage.0),
             (Ordering::Greater, _) => self.cursor2.val_valid(&storage.1),
@@ -46,13 +48,13 @@ where
     }
 
     // accessors
-    fn key<'a>(&self, storage: &'a (S1, S2)) -> &'a K {
+    fn key<'a>(&self, storage: &'a (C1::Storage, C2::Storage)) -> &'a K {
         match self.key_order {
             Ordering::Less => self.cursor1.key(&storage.0),
             _ => self.cursor2.key(&storage.1),
         }
     }
-    fn val<'a>(&self, storage: &'a (S1, S2)) -> &'a V {
+    fn val<'a>(&self, storage: &'a (C1::Storage, C2::Storage)) -> &'a V {
         if self.key_order == Ordering::Less || (self.key_order == Ordering::Equal && self.val_order != Ordering::Greater) {
             self.cursor1.val(&storage.0)
         }
@@ -60,7 +62,7 @@ where
             self.cursor2.val(&storage.1)
         }
     }
-    fn map_times<L: FnMut(&T, &R)>(&mut self, storage: &(S1, S2), mut logic: L) {
+    fn map_times<L: FnMut(&T, &R)>(&mut self, storage: &(C1::Storage, C2::Storage), mut logic: L) {
         if self.key_order == Ordering::Less || (self.key_order == Ordering::Equal && self.val_order != Ordering::Greater) {
             self.cursor1.map_times(&storage.0, |t,d| logic(t,d));
         }
@@ -70,7 +72,7 @@ where
     }
 
     // key methods
-    fn step_key(&mut self, storage: &(S1, S2)) {
+    fn step_key(&mut self, storage: &(C1::Storage, C2::Storage)) {
 
         if self.key_order != Ordering::Greater { self.cursor1.step_key(&storage.0); }
         if self.key_order != Ordering::Less { self.cursor2.step_key(&storage.1); }
@@ -81,7 +83,7 @@ where
             (true, true) => self.cursor1.key(&storage.0).cmp(self.cursor2.key(&storage.1)),
         };
     }
-    fn seek_key(&mut self, storage: &(S1, S2), key: &K) {
+    fn seek_key(&mut self, storage: &(C1::Storage, C2::Storage), key: &K) {
 
         self.cursor1.seek_key(&storage.0, key);
         self.cursor2.seek_key(&storage.1, key);
@@ -94,7 +96,7 @@ where
     }
 
     // value methods
-    fn step_val(&mut self, storage: &(S1, S2)) {
+    fn step_val(&mut self, storage: &(C1::Storage, C2::Storage)) {
         match self.key_order {
             Ordering::Less => self.cursor1.step_val(&storage.0),
             Ordering::Equal => {
@@ -109,7 +111,7 @@ where
             Ordering::Greater => self.cursor2.step_val(&storage.1),
         }
     }
-    fn seek_val(&mut self, storage: &(S1, S2), val: &V) {
+    fn seek_val(&mut self, storage: &(C1::Storage, C2::Storage), val: &V) {
         match self.key_order {
             Ordering::Less => self.cursor1.seek_val(&storage.0, val),
             Ordering::Equal => {
@@ -126,11 +128,11 @@ where
     }
 
     // rewinding methods
-    fn rewind_keys(&mut self, storage: &(S1, S2)) {
+    fn rewind_keys(&mut self, storage: &(C1::Storage, C2::Storage)) {
         self.cursor1.rewind_keys(&storage.0);
         self.cursor2.rewind_keys(&storage.1);
     }
-    fn rewind_vals(&mut self, storage: &(S1, S2)) {
+    fn rewind_vals(&mut self, storage: &(C1::Storage, C2::Storage)) {
         if self.key_order != Ordering::Greater { self.cursor1.rewind_vals(&storage.0); }
         if self.key_order != Ordering::Less { self.cursor2.rewind_vals(&storage.1); }
     }

@@ -138,7 +138,7 @@ where
     Tr::Key: Debug + Clone,
     Tr::Val: Debug + Clone,
     Tr::Time: Debug + Clone,
-    Tr::R: Debug + Clone,
+    Tr::Diff: Debug + Clone,
 {
     let (mut cursor, storage) = trace.cursor();
     for ((k, v), diffs) in cursor.to_vec(&storage).iter() {

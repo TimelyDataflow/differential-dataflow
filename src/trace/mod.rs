@@ -53,16 +53,16 @@ pub trait TraceReader {
     /// Timestamps associated with updates
     type Time;
     /// Associated update.
-    type R;
+    type Diff;
 
     /// The type of an immutable collection of updates.
-    type Batch: BatchReader<Key = Self::Key, Val = Self::Val, Time = Self::Time, R = Self::R>+Clone+'static;
+    type Batch: BatchReader<Key = Self::Key, Val = Self::Val, Time = Self::Time, Diff = Self::Diff>+Clone+'static;
 
     /// Storage type for `Self::Cursor`. Likely related to `Self::Batch`.
     type Storage;
 
     /// The type used to enumerate the collections contents.
-    type Cursor: Cursor<Self::Storage, Key = Self::Key, Val = Self::Val, Time = Self::Time, R = Self::R>;
+    type Cursor: Cursor<Storage=Self::Storage, Key = Self::Key, Val = Self::Val, Time = Self::Time, Diff = Self::Diff>;
 
     /// Provides a cursor over updates contained in the trace.
     fn cursor(&mut self) -> (Self::Cursor, Self::Storage) {
@@ -263,10 +263,10 @@ where
     /// Timestamps associated with updates
     type Time: Timestamp;
     /// Associated update.
-    type R;
+    type Diff;
 
     /// The type used to enumerate the batch's contents.
-    type Cursor: Cursor<Self, Key = Self::Key, Val = Self::Val, Time = Self::Time, R = Self::R>;
+    type Cursor: Cursor<Storage=Self, Key = Self::Key, Val = Self::Val, Time = Self::Time, Diff = Self::Diff>;
     /// Acquires a cursor to the batch's contents.
     fn cursor(&self) -> Self::Cursor;
     /// The number of updates in the batch.
@@ -379,7 +379,7 @@ pub mod rc_blanket_impls {
         type Key = B::Key;
         type Val = B::Val;
         type Time = B::Time;
-        type R = B::R;
+        type Diff = B::Diff;
 
         /// The type used to enumerate the batch's contents.
         type Cursor = RcBatchCursor<B>;
@@ -407,12 +407,14 @@ pub mod rc_blanket_impls {
         }
     }
 
-    impl<B: BatchReader> Cursor<Rc<B>> for RcBatchCursor<B> {
+    impl<B: BatchReader> Cursor for RcBatchCursor<B> {
 
         type Key = B::Key;
         type Val = B::Val;
         type Time = B::Time;
-        type R = B::R;
+        type Diff = B::Diff;
+
+        type Storage = Rc<B>;
 
         #[inline] fn key_valid(&self, storage: &Rc<B>) -> bool { self.cursor.key_valid(storage) }
         #[inline] fn val_valid(&self, storage: &Rc<B>) -> bool { self.cursor.val_valid(storage) }
@@ -421,7 +423,7 @@ pub mod rc_blanket_impls {
         #[inline] fn val<'a>(&self, storage: &'a Rc<B>) -> &'a Self::Val { self.cursor.val(storage) }
 
         #[inline]
-        fn map_times<L: FnMut(&Self::Time, &Self::R)>(&mut self, storage: &Rc<B>, logic: L) {
+        fn map_times<L: FnMut(&Self::Time, &Self::Diff)>(&mut self, storage: &Rc<B>, logic: L) {
             self.cursor.map_times(storage, logic)
         }
 
@@ -482,7 +484,7 @@ pub mod abomonated_blanket_impls {
         type Key = B::Key;
         type Val = B::Val;
         type Time = B::Time;
-        type R = B::R;
+        type Diff = B::Diff;
 
         /// The type used to enumerate the batch's contents.
         type Cursor = AbomonatedBatchCursor<B>;
@@ -510,12 +512,14 @@ pub mod abomonated_blanket_impls {
         }
     }
 
-    impl<B: BatchReader+Abomonation> Cursor<Abomonated<B, Vec<u8>>> for AbomonatedBatchCursor<B> {
+    impl<B: BatchReader+Abomonation> Cursor for AbomonatedBatchCursor<B> {
 
         type Key = B::Key;
         type Val = B::Val;
         type Time = B::Time;
-        type R = B::R;
+        type Diff = B::Diff;
+
+        type Storage = Abomonated<B, Vec<u8>>;
 
         #[inline] fn key_valid(&self, storage: &Abomonated<B, Vec<u8>>) -> bool { self.cursor.key_valid(storage) }
         #[inline] fn val_valid(&self, storage: &Abomonated<B, Vec<u8>>) -> bool { self.cursor.val_valid(storage) }
@@ -524,7 +528,7 @@ pub mod abomonated_blanket_impls {
         #[inline] fn val<'a>(&self, storage: &'a Abomonated<B, Vec<u8>>) -> &'a Self::Val { self.cursor.val(storage) }
 
         #[inline]
-        fn map_times<L: FnMut(&Self::Time, &Self::R)>(&mut self, storage: &Abomonated<B, Vec<u8>>, logic: L) {
+        fn map_times<L: FnMut(&Self::Time, &Self::Diff)>(&mut self, storage: &Abomonated<B, Vec<u8>>, logic: L) {
             self.cursor.map_times(storage, logic)
         }
 

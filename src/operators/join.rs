@@ -181,29 +181,29 @@ where
     }
 }
 
-impl<G, Tr> Join<G, Tr::Key, Tr::Val, Tr::R> for Arranged<G, Tr>
+impl<G, Tr> Join<G, Tr::Key, Tr::Val, Tr::Diff> for Arranged<G, Tr>
 where
     G: Scope,
     G::Timestamp: Lattice+Ord,
     Tr: TraceReader<Time=G::Timestamp>+Clone+'static,
     Tr::Key: Data+Hashable,
     Tr::Val: Data,
-    Tr::R: Semigroup,
+    Tr::Diff: Semigroup,
 {
-    fn join_map<V2: ExchangeData, R2: ExchangeData+Semigroup, D: Data, L>(&self, other: &Collection<G, (Tr::Key, V2), R2>, mut logic: L) -> Collection<G, D, <Tr::R as Multiply<R2>>::Output>
-    where Tr::Key: ExchangeData, Tr::R: Multiply<R2>, <Tr::R as Multiply<R2>>::Output: Semigroup, L: FnMut(&Tr::Key, &Tr::Val, &V2)->D+'static {
+    fn join_map<V2: ExchangeData, R2: ExchangeData+Semigroup, D: Data, L>(&self, other: &Collection<G, (Tr::Key, V2), R2>, mut logic: L) -> Collection<G, D, <Tr::Diff as Multiply<R2>>::Output>
+    where Tr::Key: ExchangeData, Tr::Diff: Multiply<R2>, <Tr::Diff as Multiply<R2>>::Output: Semigroup, L: FnMut(&Tr::Key, &Tr::Val, &V2)->D+'static {
         let arranged2 = other.arrange_by_key();
         self.join_core(&arranged2, move |k,v1,v2| Some(logic(k,v1,v2)))
     }
 
-    fn semijoin<R2: ExchangeData+Semigroup>(&self, other: &Collection<G, Tr::Key, R2>) -> Collection<G, (Tr::Key, Tr::Val), <Tr::R as Multiply<R2>>::Output>
-    where Tr::Key: ExchangeData, Tr::R: Multiply<R2>, <Tr::R as Multiply<R2>>::Output: Semigroup {
+    fn semijoin<R2: ExchangeData+Semigroup>(&self, other: &Collection<G, Tr::Key, R2>) -> Collection<G, (Tr::Key, Tr::Val), <Tr::Diff as Multiply<R2>>::Output>
+    where Tr::Key: ExchangeData, Tr::Diff: Multiply<R2>, <Tr::Diff as Multiply<R2>>::Output: Semigroup {
         let arranged2 = other.arrange_by_self();
         self.join_core(&arranged2, |k,v,_| Some((k.clone(), v.clone())))
     }
 
-    fn antijoin<R2: ExchangeData+Semigroup>(&self, other: &Collection<G, Tr::Key, R2>) -> Collection<G, (Tr::Key, Tr::Val), Tr::R>
-    where Tr::Key: ExchangeData, Tr::R: Multiply<R2, Output=Tr::R>, Tr::R: Abelian {
+    fn antijoin<R2: ExchangeData+Semigroup>(&self, other: &Collection<G, Tr::Key, R2>) -> Collection<G, (Tr::Key, Tr::Val), Tr::Diff>
+    where Tr::Key: ExchangeData, Tr::Diff: Multiply<R2, Output=Tr::Diff>, Tr::Diff: Abelian {
         self.as_collection(|k,v| (k.clone(), v.clone()))
             .concat(&self.semijoin(other).negate())
     }
@@ -251,13 +251,13 @@ pub trait JoinCore<G: Scope, K: 'static + ?Sized, V: 'static + ?Sized, R: Semigr
     ///     });
     /// }
     /// ```
-    fn join_core<Tr2,I,L> (&self, stream2: &Arranged<G,Tr2>, result: L) -> Collection<G,I::Item,<R as Multiply<Tr2::R>>::Output>
+    fn join_core<Tr2,I,L> (&self, stream2: &Arranged<G,Tr2>, result: L) -> Collection<G,I::Item,<R as Multiply<Tr2::Diff>>::Output>
     where
         Tr2: TraceReader<Key=K, Time=G::Timestamp>+Clone+'static,
         Tr2::Val: Ord+'static,
-        Tr2::R: Semigroup,
-        R: Multiply<Tr2::R>,
-        <R as Multiply<Tr2::R>>::Output: Semigroup,
+        Tr2::Diff: Semigroup,
+        R: Multiply<Tr2::Diff>,
+        <R as Multiply<Tr2::Diff>>::Output: Semigroup,
         I: IntoIterator,
         I::Item: Data,
         L: FnMut(&K,&V,&Tr2::Val)->I+'static,
@@ -305,11 +305,11 @@ pub trait JoinCore<G: Scope, K: 'static + ?Sized, V: 'static + ?Sized, R: Semigr
     where
         Tr2: TraceReader<Key=K, Time=G::Timestamp>+Clone+'static,
         Tr2::Val: Ord+'static,
-        Tr2::R: Semigroup,
+        Tr2::Diff: Semigroup,
         D: Data,
         ROut: Semigroup,
         I: IntoIterator<Item=(D, G::Timestamp, ROut)>,
-        L: FnMut(&K,&V,&Tr2::Val,&G::Timestamp,&R,&Tr2::R)->I+'static,
+        L: FnMut(&K,&V,&Tr2::Val,&G::Timestamp,&R,&Tr2::Diff)->I+'static,
         ;
 }
 
@@ -322,13 +322,13 @@ where
     R: ExchangeData+Semigroup,
     G::Timestamp: Lattice+Ord,
 {
-    fn join_core<Tr2,I,L> (&self, stream2: &Arranged<G,Tr2>, result: L) -> Collection<G,I::Item,<R as Multiply<Tr2::R>>::Output>
+    fn join_core<Tr2,I,L> (&self, stream2: &Arranged<G,Tr2>, result: L) -> Collection<G,I::Item,<R as Multiply<Tr2::Diff>>::Output>
     where
         Tr2: TraceReader<Key=K, Time=G::Timestamp>+Clone+'static,
         Tr2::Val: Ord+'static,
-        Tr2::R: Semigroup,
-        R: Multiply<Tr2::R>,
-        <R as Multiply<Tr2::R>>::Output: Semigroup,
+        Tr2::Diff: Semigroup,
+        R: Multiply<Tr2::Diff>,
+        <R as Multiply<Tr2::Diff>>::Output: Semigroup,
         I: IntoIterator,
         I::Item: Data,
         L: FnMut(&K,&V,&Tr2::Val)->I+'static,
@@ -341,39 +341,39 @@ where
     where
         Tr2: TraceReader<Key=K, Time=G::Timestamp>+Clone+'static,
         Tr2::Val: Ord+'static,
-        Tr2::R: Semigroup,
+        Tr2::Diff: Semigroup,
         R: Semigroup,
         D: Data,
         ROut: Semigroup,
         I: IntoIterator<Item=(D, G::Timestamp, ROut)>,
-        L: FnMut(&K,&V,&Tr2::Val,&G::Timestamp,&R,&Tr2::R)->I+'static,
+        L: FnMut(&K,&V,&Tr2::Val,&G::Timestamp,&R,&Tr2::Diff)->I+'static,
     {
         self.arrange_by_key().join_core_internal_unsafe(stream2, result)
     }
 
 }
 
-impl<G, T1> JoinCore<G, T1::Key, T1::Val, T1::R> for Arranged<G,T1>
+impl<G, T1> JoinCore<G, T1::Key, T1::Val, T1::Diff> for Arranged<G,T1>
     where
         G: Scope,
         G::Timestamp: Lattice+Ord,
         T1: TraceReader<Time=G::Timestamp>+Clone+'static,
         T1::Key: Ord+'static,
         T1::Val: Ord+'static,
-        T1::R: Semigroup,
+        T1::Diff: Semigroup,
 {
-    fn join_core<Tr2,I,L>(&self, other: &Arranged<G,Tr2>, mut result: L) -> Collection<G,I::Item,<T1::R as Multiply<Tr2::R>>::Output>
+    fn join_core<Tr2,I,L>(&self, other: &Arranged<G,Tr2>, mut result: L) -> Collection<G,I::Item,<T1::Diff as Multiply<Tr2::Diff>>::Output>
     where
         Tr2::Val: Ord+'static,
         Tr2: TraceReader<Key=T1::Key,Time=G::Timestamp>+Clone+'static,
-        Tr2::R: Semigroup,
-        T1::R: Multiply<Tr2::R>,
-        <T1::R as Multiply<Tr2::R>>::Output: Semigroup,
+        Tr2::Diff: Semigroup,
+        T1::Diff: Multiply<Tr2::Diff>,
+        <T1::Diff as Multiply<Tr2::Diff>>::Output: Semigroup,
         I: IntoIterator,
         I::Item: Data,
         L: FnMut(&T1::Key,&T1::Val,&Tr2::Val)->I+'static
     {
-        let result = move |k: &T1::Key, v1: &T1::Val, v2: &Tr2::Val, t: &G::Timestamp, r1: &T1::R, r2: &Tr2::R| {
+        let result = move |k: &T1::Key, v1: &T1::Val, v2: &Tr2::Val, t: &G::Timestamp, r1: &T1::Diff, r2: &Tr2::Diff| {
             let t = t.clone();
             let r = (r1.clone()).multiply(r2);
             result(k, v1, v2).into_iter().map(move |d| (d, t.clone(), r.clone()))
@@ -385,11 +385,11 @@ impl<G, T1> JoinCore<G, T1::Key, T1::Val, T1::R> for Arranged<G,T1>
     where
         Tr2: TraceReader<Key=T1::Key, Time=G::Timestamp>+Clone+'static,
         Tr2::Val: Ord+'static,
-        Tr2::R: Semigroup,
+        Tr2::Diff: Semigroup,
         D: Data,
         ROut: Semigroup,
         I: IntoIterator<Item=(D, G::Timestamp, ROut)>,
-        L: FnMut(&T1::Key,&T1::Val,&Tr2::Val,&G::Timestamp,&T1::R,&Tr2::R)->I+'static,
+        L: FnMut(&T1::Key,&T1::Val,&Tr2::Val,&G::Timestamp,&T1::Diff,&Tr2::Diff)->I+'static,
     {
         join_traces(self, other, result)
     }
@@ -410,14 +410,14 @@ where
     T1: TraceReader<Time=G::Timestamp>+Clone+'static,
     T1::Key: Ord,
     T1::Val: Ord,
-    T1::R: Semigroup,
+    T1::Diff: Semigroup,
     T2: TraceReader<Key=T1::Key, Time=G::Timestamp>+Clone+'static,
     T2::Val: Ord,
-    T2::R: Semigroup,
+    T2::Diff: Semigroup,
     D: Data,
     R: Semigroup,
     I: IntoIterator<Item=(D, G::Timestamp, R)>,
-    L: FnMut(&T1::Key,&T1::Val,&T2::Val,&G::Timestamp,&T1::R,&T2::R)->I+'static,
+    L: FnMut(&T1::Key,&T1::Val,&T2::Val,&G::Timestamp,&T1::Diff,&T2::Diff)->I+'static,
 {
     // Rename traces for symmetry from here on out.
     let mut trace1 = arranged1.trace.clone();
@@ -660,41 +660,41 @@ where
 /// The structure wraps cursors which allow us to play out join computation at whatever rate we like.
 /// This allows us to avoid producing and buffering massive amounts of data, without giving the timely
 /// dataflow system a chance to run operators that can consume and aggregate the data.
-struct Deferred<T, R, S1, S2, C1, C2, D>
+struct Deferred<T, R, C1, C2, D>
 where
     T: Timestamp+Lattice+Ord,
     R: Semigroup,
-    C1: Cursor<S1, Time=T>,
-    C2: Cursor<S2, Key=C1::Key, Time=T>,
+    C1: Cursor<Time=T>,
+    C2: Cursor<Key=C1::Key, Time=T>,
     C1::Val: Ord,
     C2::Val: Ord,
-    C1::R: Semigroup,
-    C2::R: Semigroup,
+    C1::Diff: Semigroup,
+    C2::Diff: Semigroup,
     D: Ord+Clone+Data,
 {
     trace: C1,
-    trace_storage: S1,
+    trace_storage: C1::Storage,
     batch: C2,
-    batch_storage: S2,
+    batch_storage: C2::Storage,
     capability: Capability<T>,
     done: bool,
     temp: Vec<((D, T), R)>,
 }
 
-impl<T, R, S1, S2, C1, C2, D> Deferred<T, R, S1, S2, C1, C2, D>
+impl<T, R, C1, C2, D> Deferred<T, R, C1, C2, D>
 where
     C1::Key: Ord+Eq,
-    C1: Cursor<S1, Time=T>,
-    C2: Cursor<S2, Key=C1::Key, Time=T>,
+    C1: Cursor<Time=T>,
+    C2: Cursor<Key=C1::Key, Time=T>,
     C1::Val: Ord,
     C2::Val: Ord,
-    C1::R: Semigroup,
-    C2::R: Semigroup,
+    C1::Diff: Semigroup,
+    C2::Diff: Semigroup,
     T: Timestamp+Lattice+Ord,
     R: Semigroup,
     D: Clone+Data,
 {
-    fn new(trace: C1, trace_storage: S1, batch: C2, batch_storage: S2, capability: Capability<T>) -> Self {
+    fn new(trace: C1, trace_storage: C1::Storage, batch: C2, batch_storage: C2::Storage, capability: Capability<T>) -> Self {
         Deferred {
             trace,
             trace_storage,
@@ -713,7 +713,7 @@ where
     /// Process keys until at least `fuel` output tuples produced, or the work is exhausted.
     #[inline(never)]
     fn work<L, I>(&mut self, output: &mut OutputHandle<T, (D, T, R), Tee<T, (D, T, R)>>, mut logic: L, fuel: &mut usize)
-    where I: IntoIterator<Item=(D, T, R)>, L: FnMut(&C1::Key, &C1::Val, &C2::Val, &T, &C1::R, &C2::R)->I {
+    where I: IntoIterator<Item=(D, T, R)>, L: FnMut(&C1::Key, &C1::Val, &C2::Val, &T, &C1::Diff, &C2::Diff)->I {
 
         let meet = self.capability.time();
 
@@ -777,12 +777,30 @@ where
     }
 }
 
-struct JoinThinker<'a, V1: Ord+'a + ?Sized, V2: Ord+'a + ?Sized, T: Lattice+Ord+Clone, R1: Semigroup, R2: Semigroup> {
-    pub history1: ValueHistory<'a, V1, T, R1>,
-    pub history2: ValueHistory<'a, V2, T, R2>,
+struct JoinThinker<'a, C1, C2>
+where
+    C1: Cursor,
+    C2: Cursor<Time = C1::Time>,
+    C1::Val: Ord,
+    C2::Val: Ord,
+    C1::Time: Lattice+Ord+Clone,
+    C1::Diff: Semigroup,
+    C2::Diff: Semigroup,
+{
+    pub history1: ValueHistory<'a, C1>,
+    pub history2: ValueHistory<'a, C2>,
 }
 
-impl<'a, V1: Ord + ?Sized, V2: Ord + ?Sized, T: Lattice+Ord+Clone, R1: Semigroup, R2: Semigroup> JoinThinker<'a, V1, V2, T, R1, R2> {
+impl<'a, C1, C2> JoinThinker<'a, C1, C2>
+where
+    C1: Cursor,
+    C2: Cursor<Time = C1::Time>,
+    C1::Val: Ord,
+    C2::Val: Ord,
+    C1::Time: Lattice+Ord+Clone,
+    C1::Diff: Semigroup,
+    C2::Diff: Semigroup,
+{
     fn new() -> Self {
         JoinThinker {
             history1: ValueHistory::new(),
@@ -790,13 +808,13 @@ impl<'a, V1: Ord + ?Sized, V2: Ord + ?Sized, T: Lattice+Ord+Clone, R1: Semigroup
         }
     }
 
-    fn think<F: FnMut(&V1,&V2,T,&R1,&R2)>(&mut self, mut results: F) {
+    fn think<F: FnMut(&C1::Val,&C2::Val,C1::Time,&C1::Diff,&C2::Diff)>(&mut self, mut results: F) {
 
         // for reasonably sized edits, do the dead-simple thing.
         if self.history1.edits.len() < 10 || self.history2.edits.len() < 10 {
             self.history1.edits.map(|v1, t1, d1| {
                 self.history2.edits.map(|v2, t2, d2| {
-                    results(v1, v2, t1.join(t2), &d1, &d2);
+                    results(v1, v2, t1.join(t2), d1, d2);
                 })
             })
         }
@@ -816,7 +834,7 @@ impl<'a, V1: Ord + ?Sized, V2: Ord + ?Sized, T: Lattice+Ord+Clone, R1: Semigroup
                 if replay1.time().unwrap().cmp(&replay2.time().unwrap()) == ::std::cmp::Ordering::Less {
                     replay2.advance_buffer_by(replay1.meet().unwrap());
                     for &((ref val2, ref time2), ref diff2) in replay2.buffer().iter() {
-                        let (val1, time1, ref diff1) = replay1.edit().unwrap();
+                        let (val1, time1, diff1) = replay1.edit().unwrap();
                         results(val1, val2, time1.join(time2), diff1, diff2);
                     }
                     replay1.step();
@@ -824,7 +842,7 @@ impl<'a, V1: Ord + ?Sized, V2: Ord + ?Sized, T: Lattice+Ord+Clone, R1: Semigroup
                 else {
                     replay1.advance_buffer_by(replay2.meet().unwrap());
                     for &((ref val1, ref time1), ref diff1) in replay1.buffer().iter() {
-                        let (val2, time2, ref diff2) = replay2.edit().unwrap();
+                        let (val2, time2, diff2) = replay2.edit().unwrap();
                         results(val1, val2, time1.join(time2), diff1, diff2);
                     }
                     replay2.step();
@@ -834,7 +852,7 @@ impl<'a, V1: Ord + ?Sized, V2: Ord + ?Sized, T: Lattice+Ord+Clone, R1: Semigroup
             while !replay1.is_done() {
                 replay2.advance_buffer_by(replay1.meet().unwrap());
                 for &((ref val2, ref time2), ref diff2) in replay2.buffer().iter() {
-                    let (val1, time1, ref diff1) = replay1.edit().unwrap();
+                    let (val1, time1, diff1) = replay1.edit().unwrap();
                     results(val1, val2, time1.join(time2), diff1, diff2);
                 }
                 replay1.step();
@@ -842,7 +860,7 @@ impl<'a, V1: Ord + ?Sized, V2: Ord + ?Sized, T: Lattice+Ord+Clone, R1: Semigroup
             while !replay2.is_done() {
                 replay1.advance_buffer_by(replay2.meet().unwrap());
                 for &((ref val1, ref time1), ref diff1) in replay1.buffer().iter() {
-                    let (val2, time2, ref diff2) = replay2.edit().unwrap();
+                    let (val2, time2, diff2) = replay2.edit().unwrap();
                     results(val1, val2, time1.join(time2), diff1, diff2);
                 }
                 replay2.step();

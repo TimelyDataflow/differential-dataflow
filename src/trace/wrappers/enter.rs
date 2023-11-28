@@ -39,13 +39,13 @@ where
     Tr::Key: 'static,
     Tr::Val: 'static,
     Tr::Time: Timestamp,
-    Tr::R: 'static,
+    Tr::Diff: 'static,
     TInner: Refines<Tr::Time>+Lattice,
 {
     type Key = Tr::Key;
     type Val = Tr::Val;
     type Time = TInner;
-    type R = Tr::R;
+    type Diff = Tr::Diff;
 
     type Batch = BatchEnter<Tr::Batch, TInner>;
     type Storage = Tr::Storage;
@@ -129,7 +129,7 @@ where
     type Key = B::Key;
     type Val = B::Val;
     type Time = TInner;
-    type R = B::R;
+    type Diff = B::Diff;
 
     type Cursor = BatchCursorEnter<B, TInner>;
 
@@ -174,38 +174,40 @@ impl<C, TInner> CursorEnter<C, TInner> {
     }
 }
 
-impl<S, C, TInner> Cursor<S> for CursorEnter<C, TInner>
+impl<C, TInner> Cursor for CursorEnter<C, TInner>
 where
-    C: Cursor<S>,
+    C: Cursor,
     C::Time: Timestamp,
     TInner: Refines<C::Time>+Lattice,
 {
     type Key = C::Key;
     type Val = C::Val;
     type Time = TInner;
-    type R = C::R;
+    type Diff = C::Diff;
 
-    #[inline] fn key_valid(&self, storage: &S) -> bool { self.cursor.key_valid(storage) }
-    #[inline] fn val_valid(&self, storage: &S) -> bool { self.cursor.val_valid(storage) }
+    type Storage = C::Storage;
 
-    #[inline] fn key<'a>(&self, storage: &'a S) -> &'a Self::Key { self.cursor.key(storage) }
-    #[inline] fn val<'a>(&self, storage: &'a S) -> &'a Self::Val { self.cursor.val(storage) }
+    #[inline] fn key_valid(&self, storage: &Self::Storage) -> bool { self.cursor.key_valid(storage) }
+    #[inline] fn val_valid(&self, storage: &Self::Storage) -> bool { self.cursor.val_valid(storage) }
+
+    #[inline] fn key<'a>(&self, storage: &'a Self::Storage) -> &'a Self::Key { self.cursor.key(storage) }
+    #[inline] fn val<'a>(&self, storage: &'a Self::Storage) -> &'a Self::Val { self.cursor.val(storage) }
 
     #[inline]
-    fn map_times<L: FnMut(&TInner, &Self::R)>(&mut self, storage: &S, mut logic: L) {
+    fn map_times<L: FnMut(&TInner, &Self::Diff)>(&mut self, storage: &Self::Storage, mut logic: L) {
         self.cursor.map_times(storage, |time, diff| {
             logic(&TInner::to_inner(time.clone()), diff)
         })
     }
 
-    #[inline] fn step_key(&mut self, storage: &S) { self.cursor.step_key(storage) }
-    #[inline] fn seek_key(&mut self, storage: &S, key: &Self::Key) { self.cursor.seek_key(storage, key) }
+    #[inline] fn step_key(&mut self, storage: &Self::Storage) { self.cursor.step_key(storage) }
+    #[inline] fn seek_key(&mut self, storage: &Self::Storage, key: &Self::Key) { self.cursor.seek_key(storage, key) }
 
-    #[inline] fn step_val(&mut self, storage: &S) { self.cursor.step_val(storage) }
-    #[inline] fn seek_val(&mut self, storage: &S, val: &Self::Val) { self.cursor.seek_val(storage, val) }
+    #[inline] fn step_val(&mut self, storage: &Self::Storage) { self.cursor.step_val(storage) }
+    #[inline] fn seek_val(&mut self, storage: &Self::Storage, val: &Self::Val) { self.cursor.seek_val(storage, val) }
 
-    #[inline] fn rewind_keys(&mut self, storage: &S) { self.cursor.rewind_keys(storage) }
-    #[inline] fn rewind_vals(&mut self, storage: &S) { self.cursor.rewind_vals(storage) }
+    #[inline] fn rewind_keys(&mut self, storage: &Self::Storage) { self.cursor.rewind_keys(storage) }
+    #[inline] fn rewind_vals(&mut self, storage: &Self::Storage) { self.cursor.rewind_vals(storage) }
 }
 
 
@@ -225,7 +227,7 @@ impl<B: BatchReader, TInner> BatchCursorEnter<B, TInner> {
     }
 }
 
-impl<TInner, B: BatchReader> Cursor<BatchEnter<B, TInner>> for BatchCursorEnter<B, TInner>
+impl<TInner, B: BatchReader> Cursor for BatchCursorEnter<B, TInner>
 where
     B::Time: Timestamp,
     TInner: Refines<B::Time>+Lattice,
@@ -233,7 +235,9 @@ where
     type Key = B::Key;
     type Val = B::Val;
     type Time = TInner;
-    type R = B::R;
+    type Diff = B::Diff;
+
+    type Storage = BatchEnter<B, TInner>;
 
     #[inline] fn key_valid(&self, storage: &BatchEnter<B, TInner>) -> bool { self.cursor.key_valid(&storage.batch) }
     #[inline] fn val_valid(&self, storage: &BatchEnter<B, TInner>) -> bool { self.cursor.val_valid(&storage.batch) }
@@ -242,7 +246,7 @@ where
     #[inline] fn val<'a>(&self, storage: &'a BatchEnter<B, TInner>) -> &'a Self::Val { self.cursor.val(&storage.batch) }
 
     #[inline]
-    fn map_times<L: FnMut(&TInner, &Self::R)>(&mut self, storage: &BatchEnter<B, TInner>, mut logic: L) {
+    fn map_times<L: FnMut(&TInner, &Self::Diff)>(&mut self, storage: &BatchEnter<B, TInner>, mut logic: L) {
         self.cursor.map_times(&storage.batch, |time, diff| {
             logic(&TInner::to_inner(time.clone()), diff)
         })

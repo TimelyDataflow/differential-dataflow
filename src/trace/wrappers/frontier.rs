@@ -46,12 +46,12 @@ where
     Tr::Key: 'static,
     Tr::Val: 'static,
     Tr::Time: Timestamp+Lattice,
-    Tr::R: 'static,
+    Tr::Diff: 'static,
 {
     type Key = Tr::Key;
     type Val = Tr::Val;
     type Time = Tr::Time;
-    type R = Tr::R;
+    type Diff = Tr::Diff;
 
     type Batch = BatchFrontier<Tr::Batch>;
     type Storage = Tr::Storage;
@@ -108,7 +108,7 @@ where
     type Key = B::Key;
     type Val = B::Val;
     type Time = B::Time;
-    type R = B::R;
+    type Diff = B::Diff;
 
     type Cursor = BatchCursorFrontier<B>;
 
@@ -151,24 +151,26 @@ impl<C, T> CursorFrontier<C, T> where T: Clone {
     }
 }
 
-impl<S, C, T> Cursor<S> for CursorFrontier<C, T>
+impl<C, T> Cursor for CursorFrontier<C, T>
 where
-    C: Cursor<S, Time=T>,
+    C: Cursor<Time=T>,
     T: Timestamp+Lattice,
 {
     type Key = C::Key;
     type Val = C::Val;
     type Time = C::Time;
-    type R = C::R;
+    type Diff = C::Diff;
 
-    #[inline] fn key_valid(&self, storage: &S) -> bool { self.cursor.key_valid(storage) }
-    #[inline] fn val_valid(&self, storage: &S) -> bool { self.cursor.val_valid(storage) }
+    type Storage = C::Storage;
 
-    #[inline] fn key<'a>(&self, storage: &'a S) -> &'a Self::Key { self.cursor.key(storage) }
-    #[inline] fn val<'a>(&self, storage: &'a S) -> &'a Self::Val { self.cursor.val(storage) }
+    #[inline] fn key_valid(&self, storage: &Self::Storage) -> bool { self.cursor.key_valid(storage) }
+    #[inline] fn val_valid(&self, storage: &Self::Storage) -> bool { self.cursor.val_valid(storage) }
+
+    #[inline] fn key<'a>(&self, storage: &'a Self::Storage) -> &'a Self::Key { self.cursor.key(storage) }
+    #[inline] fn val<'a>(&self, storage: &'a Self::Storage) -> &'a Self::Val { self.cursor.val(storage) }
 
     #[inline]
-    fn map_times<L: FnMut(&Self::Time,&Self::R)>(&mut self, storage: &S, mut logic: L) {
+    fn map_times<L: FnMut(&Self::Time,&Self::Diff)>(&mut self, storage: &Self::Storage, mut logic: L) {
         let since = self.since.borrow();
         let until = self.until.borrow();
         let mut temp: C::Time = <C::Time as timely::progress::Timestamp>::minimum();
@@ -181,14 +183,14 @@ where
         })
     }
 
-    #[inline] fn step_key(&mut self, storage: &S) { self.cursor.step_key(storage) }
-    #[inline] fn seek_key(&mut self, storage: &S, key: &Self::Key) { self.cursor.seek_key(storage, key) }
+    #[inline] fn step_key(&mut self, storage: &Self::Storage) { self.cursor.step_key(storage) }
+    #[inline] fn seek_key(&mut self, storage: &Self::Storage, key: &Self::Key) { self.cursor.seek_key(storage, key) }
 
-    #[inline] fn step_val(&mut self, storage: &S) { self.cursor.step_val(storage) }
-    #[inline] fn seek_val(&mut self, storage: &S, val: &Self::Val) { self.cursor.seek_val(storage, val) }
+    #[inline] fn step_val(&mut self, storage: &Self::Storage) { self.cursor.step_val(storage) }
+    #[inline] fn seek_val(&mut self, storage: &Self::Storage, val: &Self::Val) { self.cursor.seek_val(storage, val) }
 
-    #[inline] fn rewind_keys(&mut self, storage: &S) { self.cursor.rewind_keys(storage) }
-    #[inline] fn rewind_vals(&mut self, storage: &S) { self.cursor.rewind_vals(storage) }
+    #[inline] fn rewind_keys(&mut self, storage: &Self::Storage) { self.cursor.rewind_keys(storage) }
+    #[inline] fn rewind_vals(&mut self, storage: &Self::Storage) { self.cursor.rewind_vals(storage) }
 }
 
 
@@ -210,14 +212,16 @@ impl<B: BatchReader> BatchCursorFrontier<B> where B::Time: Clone {
     }
 }
 
-impl<B: BatchReader> Cursor<BatchFrontier<B>> for BatchCursorFrontier<B>
+impl<B: BatchReader> Cursor for BatchCursorFrontier<B>
 where
     B::Time: Timestamp+Lattice,
 {
     type Key = B::Key;
     type Val = B::Val;
     type Time = B::Time;
-    type R = B::R;
+    type Diff = B::Diff;
+
+    type Storage = BatchFrontier<B>;
 
     #[inline] fn key_valid(&self, storage: &BatchFrontier<B>) -> bool { self.cursor.key_valid(&storage.batch) }
     #[inline] fn val_valid(&self, storage: &BatchFrontier<B>) -> bool { self.cursor.val_valid(&storage.batch) }
@@ -226,7 +230,7 @@ where
     #[inline] fn val<'a>(&self, storage: &'a BatchFrontier<B>) -> &'a Self::Val { self.cursor.val(&storage.batch) }
 
     #[inline]
-    fn map_times<L: FnMut(&Self::Time,&Self::R)>(&mut self, storage: &BatchFrontier<B>, mut logic: L) {
+    fn map_times<L: FnMut(&Self::Time,&Self::Diff)>(&mut self, storage: &BatchFrontier<B>, mut logic: L) {
         let since = self.since.borrow();
         let until = self.until.borrow();
         let mut temp: B::Time = <B::Time as timely::progress::Timestamp>::minimum();

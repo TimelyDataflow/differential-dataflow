@@ -144,9 +144,9 @@ where
     G::Timestamp: Lattice+Ord+TotalOrder+ExchangeData,
     Tr::Key: ExchangeData+Hashable+std::hash::Hash,
     Tr::Val: ExchangeData,
-    Tr: Trace+TraceReader<Time=G::Timestamp,R=isize>+'static,
+    Tr: Trace+TraceReader<Time=G::Timestamp,Diff=isize>+'static,
     Tr::Batch: Batch,
-    Tr::Builder: Builder<Item = ((Tr::Key, Tr::Val), Tr::Time, Tr::R)>,
+    Tr::Builder: Builder<Item = ((Tr::Key, Tr::Val), Tr::Time, Tr::Diff)>,
 {
     let mut reader: Option<TraceAgent<Tr>> = None;
 
