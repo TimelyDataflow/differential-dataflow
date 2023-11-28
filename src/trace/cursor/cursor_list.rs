@@ -97,7 +97,7 @@ where
     type Key = C::Key;
     type Val = C::Val;
     type Time = C::Time;
-    type R = C::R;
+    type Diff = C::Diff;
 
     type Storage = Vec<C::Storage>;
 
@@ -122,7 +122,7 @@ where
         self.cursors[self.min_val[0]].val(&storage[self.min_val[0]])
     }
     #[inline]
-    fn map_times<L: FnMut(&Self::Time, &Self::R)>(&mut self, storage: &Vec<C::Storage>, mut logic: L) {
+    fn map_times<L: FnMut(&Self::Time, &Self::Diff)>(&mut self, storage: &Vec<C::Storage>, mut logic: L) {
         for &index in self.min_val.iter() {
             self.cursors[index].map_times(&storage[index], |t,d| logic(t,d));
         }

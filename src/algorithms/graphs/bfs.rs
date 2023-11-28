@@ -29,7 +29,7 @@ where
     G: Scope,
     G::Timestamp: Lattice+Ord,
     N: ExchangeData+Hash,
-    Tr: TraceReader<Key=N, Val=N, Time=G::Timestamp, R=isize>+Clone+'static,
+    Tr: TraceReader<Key=N, Val=N, Time=G::Timestamp, Diff=isize>+Clone+'static,
 {
     // initialize roots as reaching themselves at distance 0
     let nodes = roots.map(|x| (x, 0));

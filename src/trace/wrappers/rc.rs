@@ -99,7 +99,7 @@ where
     type Key = Tr::Key;
     type Val = Tr::Val;
     type Time = Tr::Time;
-    type R = Tr::R;
+    type Diff = Tr::Diff;
 
     type Batch = Tr::Batch;
     type Storage = Tr::Storage;

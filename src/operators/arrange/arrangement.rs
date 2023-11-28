@@ -91,7 +91,7 @@ where
         where
             Tr::Key: 'static,
             Tr::Val: 'static,
-            Tr::R: 'static,
+            Tr::Diff: 'static,
             G::Timestamp: Clone+'static,
             TInner: Refines<G::Timestamp>+Lattice+Timestamp+Clone+'static,
     {
@@ -110,7 +110,7 @@ where
         where
             Tr::Key: 'static,
             Tr::Val: 'static,
-            Tr::R: 'static,
+            Tr::Diff: 'static,
             G::Timestamp: Clone+'static,
     {
         Arranged {
@@ -129,7 +129,7 @@ where
         where
             Tr::Key: 'static,
             Tr::Val: 'static,
-            Tr::R: 'static,
+            Tr::Diff: 'static,
             G::Timestamp: Clone+'static,
             TInner: Refines<G::Timestamp>+Lattice+Timestamp+Clone+'static,
             F: FnMut(&Tr::Key, &Tr::Val, &G::Timestamp)->TInner+Clone+'static,
@@ -179,7 +179,7 @@ where
         where
             Tr::Key: 'static,
             Tr::Val: 'static,
-            Tr::R: 'static,
+            Tr::Diff: 'static,
             G::Timestamp: Clone+'static,
             F: FnMut(&Tr::Key, &Tr::Val)->bool+Clone+'static,
     {
@@ -195,9 +195,9 @@ where
     /// The underlying `Stream<G, BatchWrapper<T::Batch>>` is a much more efficient way to access the data,
     /// and this method should only be used when the data need to be transformed or exchanged, rather than
     /// supplied as arguments to an operator using the same key-value structure.
-    pub fn as_collection<D: Data, L>(&self, mut logic: L) -> Collection<G, D, Tr::R>
+    pub fn as_collection<D: Data, L>(&self, mut logic: L) -> Collection<G, D, Tr::Diff>
         where
-            Tr::R: Semigroup,
+            Tr::Diff: Semigroup,
             L: FnMut(&Tr::Key, &Tr::Val) -> D+'static,
     {
         self.flat_map_ref(move |key, val| Some(logic(key,val)))
@@ -207,9 +207,9 @@ where
     ///
     /// The supplied logic may produce an iterator over output values, allowing either
     /// filtering or flat mapping as part of the extraction.
-    pub fn flat_map_ref<I, L>(&self, logic: L) -> Collection<G, I::Item, Tr::R>
+    pub fn flat_map_ref<I, L>(&self, logic: L) -> Collection<G, I::Item, Tr::Diff>
         where
-            Tr::R: Semigroup,
+            Tr::Diff: Semigroup,
             I: IntoIterator,
             I::Item: Data,
             L: FnMut(&Tr::Key, &Tr::Val) -> I+'static,
@@ -224,9 +224,9 @@ where
     ///
     /// This method exists for streams of batches without the corresponding arrangement.
     /// If you have the arrangement, its `flat_map_ref` method is equivalent to this.
-    pub fn flat_map_batches<I, L>(stream: &Stream<G, Tr::Batch>, mut logic: L) -> Collection<G, I::Item, Tr::R>
+    pub fn flat_map_batches<I, L>(stream: &Stream<G, Tr::Batch>, mut logic: L) -> Collection<G, I::Item, Tr::Diff>
     where
-        Tr::R: Semigroup,
+        Tr::Diff: Semigroup,
         I: IntoIterator,
         I::Item: Data,
         L: FnMut(&Tr::Key, &Tr::Val) -> I+'static,
@@ -258,12 +258,12 @@ where
     ///
     /// This method consumes a stream of (key, time) queries and reports the corresponding stream of
     /// (key, value, time, diff) accumulations in the `self` trace.
-    pub fn lookup(&self, queries: &Stream<G, (Tr::Key, G::Timestamp)>) -> Stream<G, (Tr::Key, Tr::Val, G::Timestamp, Tr::R)>
+    pub fn lookup(&self, queries: &Stream<G, (Tr::Key, G::Timestamp)>) -> Stream<G, (Tr::Key, Tr::Val, G::Timestamp, Tr::Diff)>
     where
         G::Timestamp: Data+Lattice+Ord+TotalOrder,
         Tr::Key: ExchangeData+Hashable,
         Tr::Val: ExchangeData,
-        Tr::R: ExchangeData+Semigroup,
+        Tr::Diff: ExchangeData+Semigroup,
         Tr: 'static,
     {
         // while the arrangement is already correctly distributed, the query stream may not be.
@@ -280,8 +280,8 @@ where
             let mut active = Vec::new();
             let mut retain = Vec::new();
 
-            let mut working: Vec<(G::Timestamp, Tr::Val, Tr::R)> = Vec::new();
-            let mut working2: Vec<(Tr::Val, Tr::R)> = Vec::new();
+            let mut working: Vec<(G::Timestamp, Tr::Val, Tr::Diff)> = Vec::new();
+            let mut working2: Vec<(Tr::Val, Tr::Diff)> = Vec::new();
 
             move |input1, input2, output| {
 

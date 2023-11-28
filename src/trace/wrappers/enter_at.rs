@@ -52,7 +52,7 @@ where
     Tr::Val: 'static,
     Tr::Time: Timestamp,
     TInner: Refines<Tr::Time>+Lattice,
-    Tr::R: 'static,
+    Tr::Diff: 'static,
     F: 'static,
     F: FnMut(&Tr::Key, &Tr::Val, &Tr::Time)->TInner+Clone,
     G: FnMut(&TInner)->Tr::Time+Clone+'static,
@@ -60,7 +60,7 @@ where
     type Key = Tr::Key;
     type Val = Tr::Val;
     type Time = TInner;
-    type R = Tr::R;
+    type Diff = Tr::Diff;
 
     type Batch = BatchEnter<Tr::Batch, TInner,F>;
     type Storage = Tr::Storage;
@@ -149,7 +149,7 @@ where
     type Key = B::Key;
     type Val = B::Val;
     type Time = TInner;
-    type R = B::R;
+    type Diff = B::Diff;
 
     type Cursor = BatchCursorEnter<B, TInner, F>;
 
@@ -207,7 +207,7 @@ where
     type Key = C::Key;
     type Val = C::Val;
     type Time = TInner;
-    type R = C::R;
+    type Diff = C::Diff;
 
     type Storage = C::Storage;
 
@@ -218,7 +218,7 @@ where
     #[inline] fn val<'a>(&self, storage: &'a Self::Storage) -> &'a Self::Val { self.cursor.val(storage) }
 
     #[inline]
-    fn map_times<L: FnMut(&TInner, &Self::R)>(&mut self, storage: &Self::Storage, mut logic: L) {
+    fn map_times<L: FnMut(&TInner, &Self::Diff)>(&mut self, storage: &Self::Storage, mut logic: L) {
         let key = self.key(storage);
         let val = self.val(storage);
         let logic2 = &mut self.logic;
@@ -265,7 +265,7 @@ where
     type Key = B::Key;
     type Val = B::Val;
     type Time = TInner;
-    type R = B::R;
+    type Diff = B::Diff;
 
     type Storage = BatchEnter<B, TInner, F>;
 
@@ -276,7 +276,7 @@ where
     #[inline] fn val<'a>(&self, storage: &'a BatchEnter<B, TInner, F>) -> &'a Self::Val { self.cursor.val(&storage.batch) }
 
     #[inline]
-    fn map_times<L: FnMut(&TInner, &Self::R)>(&mut self, storage: &BatchEnter<B, TInner, F>, mut logic: L) {
+    fn map_times<L: FnMut(&TInner, &Self::Diff)>(&mut self, storage: &BatchEnter<B, TInner, F>, mut logic: L) {
         let key = self.key(storage);
         let val = self.val(storage);
         let logic2 = &mut self.logic;

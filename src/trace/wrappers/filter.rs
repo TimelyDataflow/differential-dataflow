@@ -32,13 +32,13 @@ where
     Tr::Key: 'static,
     Tr::Val: 'static,
     Tr::Time: Timestamp,
-    Tr::R: 'static,
+    Tr::Diff: 'static,
     F: FnMut(&Tr::Key, &Tr::Val)->bool+Clone+'static,
 {
     type Key = Tr::Key;
     type Val = Tr::Val;
     type Time = Tr::Time;
-    type R = Tr::R;
+    type Diff = Tr::Diff;
 
     type Batch = BatchFilter<Tr::Batch, F>;
     type Storage = Tr::Storage;
@@ -92,7 +92,7 @@ where
     type Key = B::Key;
     type Val = B::Val;
     type Time = B::Time;
-    type R = B::R;
+    type Diff = B::Diff;
 
     type Cursor = BatchCursorFilter<B, F>;
 
@@ -141,7 +141,7 @@ where
     type Key = C::Key;
     type Val = C::Val;
     type Time = C::Time;
-    type R = C::R;
+    type Diff = C::Diff;
 
     type Storage = C::Storage;
 
@@ -152,7 +152,7 @@ where
     #[inline] fn val<'a>(&self, storage: &'a Self::Storage) -> &'a Self::Val { self.cursor.val(storage) }
 
     #[inline]
-    fn map_times<L: FnMut(&Self::Time,&Self::R)>(&mut self, storage: &Self::Storage, logic: L) {
+    fn map_times<L: FnMut(&Self::Time,&Self::Diff)>(&mut self, storage: &Self::Storage, logic: L) {
         let key = self.key(storage);
         let val = self.val(storage);
         if (self.logic)(key, val) {
@@ -195,7 +195,7 @@ where
     type Key = B::Key;
     type Val = B::Val;
     type Time = B::Time;
-    type R = B::R;
+    type Diff = B::Diff;
 
     type Storage = BatchFilter<B, F>;
 
@@ -206,7 +206,7 @@ where
     #[inline] fn val<'a>(&self, storage: &'a BatchFilter<B, F>) -> &'a Self::Val { self.cursor.val(&storage.batch) }
 
     #[inline]
-    fn map_times<L: FnMut(&Self::Time,&Self::R)>(&mut self, storage: &BatchFilter<B, F>, logic: L) {
+    fn map_times<L: FnMut(&Self::Time,&Self::Diff)>(&mut self, storage: &BatchFilter<B, F>, logic: L) {
         let key = self.key(storage);
         let val = self.val(storage);
         if (self.logic)(key, val) {

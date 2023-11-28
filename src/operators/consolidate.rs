@@ -56,7 +56,7 @@ where
     /// As `consolidate` but with the ability to name the operator and specify the trace type.
     pub fn consolidate_named<Tr>(&self, name: &str) -> Self
     where
-        Tr: crate::trace::Trace+crate::trace::TraceReader<Key=D,Val=(),Time=G::Timestamp,R=R>+'static,
+        Tr: crate::trace::Trace+crate::trace::TraceReader<Key=D,Val=(),Time=G::Timestamp,Diff=R>+'static,
         Tr::Batch: crate::trace::Batch,
         Tr::Batcher: Batcher<Item = ((D,()),G::Timestamp,R), Time = G::Timestamp>,
         Tr::Builder: Builder<Item = ((D,()),G::Timestamp,R), Time = G::Timestamp>,

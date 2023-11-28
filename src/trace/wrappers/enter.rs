@@ -39,13 +39,13 @@ where
     Tr::Key: 'static,
     Tr::Val: 'static,
     Tr::Time: Timestamp,
-    Tr::R: 'static,
+    Tr::Diff: 'static,
     TInner: Refines<Tr::Time>+Lattice,
 {
     type Key = Tr::Key;
     type Val = Tr::Val;
     type Time = TInner;
-    type R = Tr::R;
+    type Diff = Tr::Diff;
 
     type Batch = BatchEnter<Tr::Batch, TInner>;
     type Storage = Tr::Storage;
@@ -129,7 +129,7 @@ where
     type Key = B::Key;
     type Val = B::Val;
     type Time = TInner;
-    type R = B::R;
+    type Diff = B::Diff;
 
     type Cursor = BatchCursorEnter<B, TInner>;
 
@@ -183,7 +183,7 @@ where
     type Key = C::Key;
     type Val = C::Val;
     type Time = TInner;
-    type R = C::R;
+    type Diff = C::Diff;
 
     type Storage = C::Storage;
 
@@ -194,7 +194,7 @@ where
     #[inline] fn val<'a>(&self, storage: &'a Self::Storage) -> &'a Self::Val { self.cursor.val(storage) }
 
     #[inline]
-    fn map_times<L: FnMut(&TInner, &Self::R)>(&mut self, storage: &Self::Storage, mut logic: L) {
+    fn map_times<L: FnMut(&TInner, &Self::Diff)>(&mut self, storage: &Self::Storage, mut logic: L) {
         self.cursor.map_times(storage, |time, diff| {
             logic(&TInner::to_inner(time.clone()), diff)
         })
@@ -235,7 +235,7 @@ where
     type Key = B::Key;
     type Val = B::Val;
     type Time = TInner;
-    type R = B::R;
+    type Diff = B::Diff;
 
     type Storage = BatchEnter<B, TInner>;
 
@@ -246,7 +246,7 @@ where
     #[inline] fn val<'a>(&self, storage: &'a BatchEnter<B, TInner>) -> &'a Self::Val { self.cursor.val(&storage.batch) }
 
     #[inline]
-    fn map_times<L: FnMut(&TInner, &Self::R)>(&mut self, storage: &BatchEnter<B, TInner>, mut logic: L) {
+    fn map_times<L: FnMut(&TInner, &Self::Diff)>(&mut self, storage: &BatchEnter<B, TInner>, mut logic: L) {
         self.cursor.map_times(&storage.batch, |time, diff| {
             logic(&TInner::to_inner(time.clone()), diff)
         })

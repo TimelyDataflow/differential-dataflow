@@ -23,12 +23,12 @@ use lattice::Lattice;
 use trace::Cursor;
 
 /// An accumulation of (value, time, diff) updates.
-struct EditList<'a, C: Cursor> where C::Time: Sized, C::R: Sized {
+struct EditList<'a, C: Cursor> where C::Time: Sized, C::Diff: Sized {
     values: Vec<(&'a C::Val, usize)>,
-    edits: Vec<(C::Time, C::R)>,
+    edits: Vec<(C::Time, C::Diff)>,
 }
 
-impl<'a, C: Cursor> EditList<'a, C> where C::Time: Ord+Clone, C::R: Semigroup {
+impl<'a, C: Cursor> EditList<'a, C> where C::Time: Ord+Clone, C::Diff: Semigroup {
     /// Creates an empty list of edits.
     #[inline]
     fn new() -> Self {
@@ -58,7 +58,7 @@ impl<'a, C: Cursor> EditList<'a, C> where C::Time: Ord+Clone, C::R: Semigroup {
     fn len(&self) -> usize { self.edits.len() }
     /// Inserts a new edit for an as-yet undetermined value.
     #[inline]
-    fn push(&mut self, time: C::Time, diff: C::R) {
+    fn push(&mut self, time: C::Time, diff: C::Diff) {
         // TODO: Could attempt "insertion-sort" like behavior here, where we collapse if possible.
         self.edits.push((time, diff));
     }
@@ -71,7 +71,7 @@ impl<'a, C: Cursor> EditList<'a, C> where C::Time: Ord+Clone, C::R: Semigroup {
             self.values.push((value, self.edits.len()));
         }
     }
-    fn map<F: FnMut(&C::Val, &C::Time, &C::R)>(&self, mut logic: F) {
+    fn map<F: FnMut(&C::Val, &C::Time, &C::Diff)>(&self, mut logic: F) {
         for index in 0 .. self.values.len() {
             let lower = if index == 0 { 0 } else { self.values[index-1].1 };
             let upper = self.values[index].1;
@@ -82,18 +82,18 @@ impl<'a, C: Cursor> EditList<'a, C> where C::Time: Ord+Clone, C::R: Semigroup {
     }
 }
 
-struct ValueHistory<'storage, C: Cursor> where C::Time: Sized, C::R: Sized {
+struct ValueHistory<'storage, C: Cursor> where C::Time: Sized, C::Diff: Sized {
 
     edits: EditList<'storage, C>,
     history: Vec<(C::Time, C::Time, usize, usize)>,     // (time, meet, value_index, edit_offset)
-    buffer: Vec<((&'storage C::Val, C::Time), C::R)>,   // where we accumulate / collapse updates.
+    buffer: Vec<((&'storage C::Val, C::Time), C::Diff)>,   // where we accumulate / collapse updates.
 }
 
 impl<'storage, C: Cursor> ValueHistory<'storage, C>
 where
     C::Val: Ord+'storage,
     C::Time: Lattice+Ord+Clone,
-    C::R: Semigroup,
+    C::Diff: Semigroup,
 {
     fn new() -> Self {
         ValueHistory {
@@ -167,7 +167,7 @@ where
     C: Cursor,
     C::Val: Ord+'storage,
     C::Time: Lattice+Ord+Clone+'history,
-    C::R: Semigroup+'history,
+    C::Diff: Semigroup+'history,
 {
     replay: &'history mut ValueHistory<'storage, C>
 }
@@ -178,15 +178,15 @@ where
     C: Cursor,
     C::Val: Ord+'storage,
     C::Time: Lattice+Ord+Clone+'history,
-    C::R: Semigroup+'history,
+    C::Diff: Semigroup+'history,
 {
     fn time(&self) -> Option<&C::Time> { self.replay.history.last().map(|x| &x.0) }
     fn meet(&self) -> Option<&C::Time> { self.replay.history.last().map(|x| &x.1) }
-    fn edit(&self) -> Option<(&C::Val, &C::Time, &C::R)> {
+    fn edit(&self) -> Option<(&C::Val, &C::Time, &C::Diff)> {
         self.replay.history.last().map(|&(ref t, _, v, e)| (self.replay.edits.values[v].0, t, &self.replay.edits.edits[e].1))
     }
 
-    fn buffer(&self) -> &[((&'storage C::Val, C::Time), C::R)] {
+    fn buffer(&self) -> &[((&'storage C::Val, C::Time), C::Diff)] {
         &self.replay.buffer[..]
     }
 

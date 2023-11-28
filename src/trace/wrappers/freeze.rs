@@ -40,7 +40,7 @@ where
     T: TraceReader<Time=G::Timestamp>+Clone,
     T::Key: 'static,
     T::Val: 'static,
-    T::R: 'static,
+    T::Diff: 'static,
     F: Fn(&G::Timestamp)->Option<G::Timestamp>+'static,
 {
     let func1 = Rc::new(func);
@@ -83,13 +83,13 @@ where
     Tr::Key: 'static,
     Tr::Val: 'static,
     Tr::Time: Lattice+Clone+'static,
-    Tr::R: 'static,
+    Tr::Diff: 'static,
     F: Fn(&Tr::Time)->Option<Tr::Time>+'static,
 {
     type Key = Tr::Key;
     type Val = Tr::Val;
     type Time = Tr::Time;
-    type R = Tr::R;
+    type Diff = Tr::Diff;
 
     type Batch = BatchFreeze<Tr::Batch, F>;
     type Storage = Tr::Storage;
@@ -122,7 +122,7 @@ where
     Tr::Key: 'static,
     Tr::Val: 'static,
     Tr::Time: Lattice+Clone+'static,
-    Tr::R: 'static,
+    Tr::Diff: 'static,
     F: Fn(&Tr::Time)->Option<Tr::Time>,
 {
     /// Makes a new trace wrapper
@@ -159,7 +159,7 @@ where
     type Key = B::Key;
     type Val = B::Val;
     type Time = B::Time;
-    type R = B::R;
+    type Diff = B::Diff;
 
     type Cursor = BatchCursorFreeze<B, F>;
 
@@ -209,7 +209,7 @@ where
     type Key = C::Key;
     type Val = C::Val;
     type Time = C::Time;
-    type R = C::R;
+    type Diff = C::Diff;
 
     type Storage = C::Storage;
 
@@ -219,7 +219,7 @@ where
     #[inline] fn key<'a>(&self, storage: &'a Self::Storage) -> &'a Self::Key { self.cursor.key(storage) }
     #[inline] fn val<'a>(&self, storage: &'a Self::Storage) -> &'a Self::Val { self.cursor.val(storage) }
 
-    #[inline] fn map_times<L: FnMut(&Self::Time, &Self::R)>(&mut self, storage: &Self::Storage, mut logic: L) {
+    #[inline] fn map_times<L: FnMut(&Self::Time, &Self::Diff)>(&mut self, storage: &Self::Storage, mut logic: L) {
         let func = &self.func;
         self.cursor.map_times(storage, |time, diff| {
             if let Some(time) = func(time) {
@@ -261,7 +261,7 @@ where
     type Key = B::Key;
     type Val = B::Val;
     type Time = B::Time;
-    type R = B::R;
+    type Diff = B::Diff;
 
     type Storage = BatchFreeze<B, F>;
 
@@ -271,7 +271,7 @@ where
     #[inline] fn key<'a>(&self, storage: &'a BatchFreeze<B, F>) -> &'a Self::Key { self.cursor.key(&storage.batch) }
     #[inline] fn val<'a>(&self, storage: &'a BatchFreeze<B, F>) -> &'a Self::Val { self.cursor.val(&storage.batch) }
 
-    #[inline] fn map_times<L: FnMut(&Self::Time, &Self::R)>(&mut self, storage: &BatchFreeze<B, F>, mut logic: L) {
+    #[inline] fn map_times<L: FnMut(&Self::Time, &Self::Diff)>(&mut self, storage: &BatchFreeze<B, F>, mut logic: L) {
         let func = &self.func;
         self.cursor.map_times(&storage.batch, |time, diff| {
             if let Some(time) = func(time) {

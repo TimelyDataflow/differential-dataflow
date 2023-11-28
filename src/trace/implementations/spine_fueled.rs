@@ -90,7 +90,7 @@ use ::timely::order::PartialOrder;
 pub struct Spine<B: Batch, BA, BU>
 where
     B::Time: Lattice+Ord,
-    B::R: Semigroup,
+    B::Diff: Semigroup,
     // Intended constraints:
     // BA: Batcher<Time = B::Time>,
     // BU: Builder<Item=BA::Item, Time=BA::Time, Output = B>,
@@ -115,12 +115,12 @@ where
     B::Key: Ord,           // Clone is required by `batch::advance_*` (in-place could remove).
     B::Val: Ord,           // Clone is required by `batch::advance_*` (in-place could remove).
     B::Time: Lattice+timely::progress::Timestamp+Ord+Clone+Debug,
-    B::R: Semigroup,
+    B::Diff: Semigroup,
 {
     type Key = B::Key;
     type Val = B::Val;
     type Time = B::Time;
-    type R = B::R;
+    type Diff = B::Diff;
 
     type Batch = B;
     type Storage = Vec<B>;
@@ -263,7 +263,7 @@ where
     B::Key: Ord,
     B::Val: Ord,
     B::Time: Lattice+timely::progress::Timestamp+Ord+Clone+Debug,
-    B::R: Semigroup,
+    B::Diff: Semigroup,
     BA: Batcher<Time = B::Time>,
     BU: Builder<Item=BA::Item, Time=BA::Time, Output = B>,
 {
@@ -346,7 +346,7 @@ impl<B, BA, BU> Drop for Spine<B, BA, BU>
 where
     B: Batch,
     B::Time: Lattice+Ord,
-    B::R: Semigroup,
+    B::Diff: Semigroup,
 {
     fn drop(&mut self) {
         self.drop_batches();
@@ -358,7 +358,7 @@ impl<B, BA, BU> Spine<B, BA, BU>
 where
     B: Batch,
     B::Time: Lattice+Ord,
-    B::R: Semigroup,
+    B::Diff: Semigroup,
 {
     /// Drops and logs batches. Used in `set_logical_compaction` and drop.
     fn drop_batches(&mut self) {
@@ -406,7 +406,7 @@ where
     B::Key: Ord,
     B::Val: Ord,
     B::Time: Lattice+timely::progress::Timestamp+Ord+Clone+Debug,
-    B::R: Semigroup,
+    B::Diff: Semigroup,
 {
     /// Determine the amount of effort we should exert in the absence of updates.
     ///

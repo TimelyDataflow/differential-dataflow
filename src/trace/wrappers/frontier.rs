@@ -46,12 +46,12 @@ where
     Tr::Key: 'static,
     Tr::Val: 'static,
     Tr::Time: Timestamp+Lattice,
-    Tr::R: 'static,
+    Tr::Diff: 'static,
 {
     type Key = Tr::Key;
     type Val = Tr::Val;
     type Time = Tr::Time;
-    type R = Tr::R;
+    type Diff = Tr::Diff;
 
     type Batch = BatchFrontier<Tr::Batch>;
     type Storage = Tr::Storage;
@@ -108,7 +108,7 @@ where
     type Key = B::Key;
     type Val = B::Val;
     type Time = B::Time;
-    type R = B::R;
+    type Diff = B::Diff;
 
     type Cursor = BatchCursorFrontier<B>;
 
@@ -159,7 +159,7 @@ where
     type Key = C::Key;
     type Val = C::Val;
     type Time = C::Time;
-    type R = C::R;
+    type Diff = C::Diff;
 
     type Storage = C::Storage;
 
@@ -170,7 +170,7 @@ where
     #[inline] fn val<'a>(&self, storage: &'a Self::Storage) -> &'a Self::Val { self.cursor.val(storage) }
 
     #[inline]
-    fn map_times<L: FnMut(&Self::Time,&Self::R)>(&mut self, storage: &Self::Storage, mut logic: L) {
+    fn map_times<L: FnMut(&Self::Time,&Self::Diff)>(&mut self, storage: &Self::Storage, mut logic: L) {
         let since = self.since.borrow();
         let until = self.until.borrow();
         let mut temp: C::Time = <C::Time as timely::progress::Timestamp>::minimum();
@@ -219,7 +219,7 @@ where
     type Key = B::Key;
     type Val = B::Val;
     type Time = B::Time;
-    type R = B::R;
+    type Diff = B::Diff;
 
     type Storage = BatchFrontier<B>;
 
@@ -230,7 +230,7 @@ where
     #[inline] fn val<'a>(&self, storage: &'a BatchFrontier<B>) -> &'a Self::Val { self.cursor.val(&storage.batch) }
 
     #[inline]
-    fn map_times<L: FnMut(&Self::Time,&Self::R)>(&mut self, storage: &BatchFrontier<B>, mut logic: L) {
+    fn map_times<L: FnMut(&Self::Time,&Self::Diff)>(&mut self, storage: &BatchFrontier<B>, mut logic: L) {
         let since = self.since.borrow();
         let until = self.until.borrow();
         let mut temp: B::Time = <B::Time as timely::progress::Timestamp>::minimum();

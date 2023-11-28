@@ -21,7 +21,7 @@ pub trait Cursor {
     /// Timestamps associated with updates
     type Time: ?Sized;
     /// Associated update.
-    type R: ?Sized;
+    type Diff: ?Sized;
 
     /// Storage required by the cursor.
     type Storage;
@@ -51,7 +51,7 @@ pub trait Cursor {
 
     /// Applies `logic` to each pair of time and difference. Intended for mutation of the
     /// closure's scope.
-    fn map_times<L: FnMut(&Self::Time, &Self::R)>(&mut self, storage: &Self::Storage, logic: L);
+    fn map_times<L: FnMut(&Self::Time, &Self::Diff)>(&mut self, storage: &Self::Storage, logic: L);
 
     /// Advances the cursor to the next key.
     fn step_key(&mut self, storage: &Self::Storage);
@@ -69,12 +69,12 @@ pub trait Cursor {
     fn rewind_vals(&mut self, storage: &Self::Storage);
 
     /// Rewinds the cursor and outputs its contents to a Vec
-    fn to_vec(&mut self, storage: &Self::Storage) -> Vec<((Self::Key, Self::Val), Vec<(Self::Time, Self::R)>)>
+    fn to_vec(&mut self, storage: &Self::Storage) -> Vec<((Self::Key, Self::Val), Vec<(Self::Time, Self::Diff)>)>
     where
         Self::Key: Clone,
         Self::Val: Clone,
         Self::Time: Clone,
-        Self::R: Clone,
+        Self::Diff: Clone,
     {
         let mut out = Vec::new();
         self.rewind_keys(storage);

@@ -252,7 +252,7 @@ mod val_batch {
         type Key = <L::Target as Update>::Key;
         type Val = <L::Target as Update>::Val;
         type Time = <L::Target as Update>::Time;
-        type R = <L::Target as Update>::Diff;
+        type Diff = <L::Target as Update>::Diff;
 
         type Cursor = RhhValCursor<L>;
         fn cursor(&self) -> Self::Cursor { 
@@ -599,7 +599,7 @@ mod val_batch {
         type Key = <L::Target as Update>::Key;
         type Val = <L::Target as Update>::Val;
         type Time = <L::Target as Update>::Time;
-        type R = <L::Target as Update>::Diff;
+        type Diff = <L::Target as Update>::Diff;
 
         type Storage = RhhValBatch<L>;
 
@@ -607,7 +607,7 @@ mod val_batch {
             storage.storage.keys.index(self.key_cursor) 
         }
         fn val<'a>(&self, storage: &'a RhhValBatch<L>) -> &'a Self::Val { storage.storage.vals.index(self.val_cursor) }
-        fn map_times<L2: FnMut(&Self::Time, &Self::R)>(&mut self, storage: &RhhValBatch<L>, mut logic: L2) {
+        fn map_times<L2: FnMut(&Self::Time, &Self::Diff)>(&mut self, storage: &RhhValBatch<L>, mut logic: L2) {
             let (lower, upper) = storage.storage.updates_for_value(self.val_cursor);
             for index in lower .. upper {
                 let (time, diff) = &storage.storage.updates.index(index);
@@ -722,7 +722,7 @@ mod val_batch {
         <L::Target as Update>::Key: HashOrdered,
         <L::Target as Update>::KeyOwned: Default + HashOrdered,
         <L::Target as Update>::KeyOwned: Borrow<<L::Target as Update>::Key>,
-        RhhValBatch<L>: Batch<Key=<L::Target as Update>::Key, Val=<L::Target as Update>::Val, Time=<L::Target as Update>::Time, R=<L::Target as Update>::Diff>
+        RhhValBatch<L>: Batch<Key=<L::Target as Update>::Key, Val=<L::Target as Update>::Val, Time=<L::Target as Update>::Time, Diff=<L::Target as Update>::Diff>
     {
         type Item = ((<L::Target as Update>::KeyOwned, <L::Target as Update>::ValOwned), <L::Target as Update>::Time, <L::Target as Update>::Diff);
         type Time = <L::Target as Update>::Time;
