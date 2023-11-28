@@ -85,10 +85,10 @@ where
     FF: Fn(&G::Timestamp) -> G::Timestamp + 'static,
     CF: Fn(&G::Timestamp, &G::Timestamp) -> bool + 'static,
     DOut: Clone+'static,
-    Tr::Diff: std::ops::Mul<Tr::R, Output=Tr::Diff>,
+    Tr::Diff: std::ops::Mul<Tr::Diff, Output=Tr::Diff>,
     S: FnMut(&Tr::Key, &V, &Tr::Val)->DOut+'static,
 {
-    let output_func = move |k: &Tr::Key, v1: &V, v2: &Tr::Val, initial: &G::Timestamp, time: &G::Timestamp, diff1: &Tr::R, diff2: &Tr::R| {
+    let output_func = move |k: &Tr::Key, v1: &V, v2: &Tr::Val, initial: &G::Timestamp, time: &G::Timestamp, diff1: &Tr::Diff, diff2: &Tr::Diff| {
         let diff = diff1.clone() * diff2.clone();
         let dout = (output_func(k, v1, v2), time.clone());
         Some((dout, initial.clone(), diff))
@@ -142,7 +142,7 @@ where
     ROut: Monoid,
     Y: Fn(std::time::Instant, usize) -> bool + 'static,
     I: IntoIterator<Item=(DOut, G::Timestamp, ROut)>,
-    S: FnMut(&Tr::Key, &V, &Tr::Val, &G::Timestamp, &G::Timestamp, &Tr::R, &Tr::Diff)-> I + 'static,
+    S: FnMut(&Tr::Key, &V, &Tr::Val, &G::Timestamp, &G::Timestamp, &Tr::Diff, &Tr::Diff)-> I + 'static,
 {
     // No need to block physical merging for this operator.
     arrangement.trace.set_physical_compaction(Antichain::new().borrow());

@@ -21,7 +21,7 @@ pub fn count<G, Tr, R, F, P>(
 where
     G: Scope,
     G::Timestamp: Lattice,
-    Tr: TraceReader<Val=(), Time=G::Timestamp, R=isize>+Clone+'static,
+    Tr: TraceReader<Val=(), Time=G::Timestamp, Diff=isize>+Clone+'static,
     Tr::Key: Ord+Hashable+Default,
     R: Monoid+Multiply<Output = R>+ExchangeData,
     F: Fn(&P)->Tr::Key+Clone+'static,
