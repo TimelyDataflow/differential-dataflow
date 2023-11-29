@@ -17,8 +17,8 @@ use timely::logging::WorkerIdentifier;
 use timely::logging_core::Logger;
 use timely::progress::{Antichain, frontier::AntichainRef};
 use timely::progress::Timestamp;
-use logging::DifferentialEvent;
 
+use crate::logging::DifferentialEvent;
 use crate::trace::cursor::MyTrait;
 
 // use ::difference::Semigroup;

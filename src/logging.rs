@@ -52,6 +52,8 @@ impl From<BatchEvent> for DifferentialEvent { fn from(e: BatchEvent) -> Self { D
 pub struct BatcherEvent {
     /// Operator identifier.
     pub operator: usize,
+    /// Change in records.
+    pub records_diff: isize,
     /// Change in used size.
     pub size_diff: isize,
     /// Change in capacity.

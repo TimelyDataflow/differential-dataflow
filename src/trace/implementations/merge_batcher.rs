@@ -8,7 +8,7 @@ use timely::logging_core::Logger;
 use timely::progress::{frontier::Antichain, Timestamp};
 
 use crate::difference::Semigroup;
-use crate::logging::DifferentialEvent;
+use crate::logging::{BatcherEvent, DifferentialEvent};
 use crate::trace::{Batcher, Builder};
 
 /// Creates batches from unordered tuples.
@@ -28,11 +28,11 @@ where
     type Item = ((K,V),T,D);
     type Time = T;
 
-    fn new(_logger: Option<Logger<DifferentialEvent, WorkerIdentifier>>, _operator_id: usize) -> Self {
+    fn new(logger: Option<Logger<DifferentialEvent, WorkerIdentifier>>, operator_id: usize) -> Self {
         MergeBatcher {
-            sorter: MergeSorter::new(),
+            sorter: MergeSorter::new(logger, operator_id),
             frontier: Antichain::new(),
-            lower: Antichain::from_elem(<T as timely::progress::Timestamp>::minimum()),
+            lower: Antichain::from_elem(T::minimum()),
         }
     }
 
@@ -134,20 +134,23 @@ where
             self.sorter.push(&mut buffer);
         }
 
-        let seal = builder.done(self.lower.clone(), upper.clone(), Antichain::from_elem(<T as timely::progress::Timestamp>::minimum()));
+        let seal = builder.done(self.lower.clone(), upper.clone(), Antichain::from_elem(T::minimum()));
         self.lower = upper;
         seal
     }
 
-    // the frontier of elements remaining after the most recent call to `self.seal`.
+    /// The frontier of elements remaining after the most recent call to `self.seal`.
     fn frontier(&mut self) -> timely::progress::frontier::AntichainRef<T> {
         self.frontier.borrow()
     }
 }
 
 struct MergeSorter<D, T, R> {
-    queue: Vec<Vec<Vec<(D, T, R)>>>,    // each power-of-two length list of allocations.
+    /// each power-of-two length list of allocations. Do not push/pop directly but use the corresponding functions.
+    queue: Vec<Vec<Vec<(D, T, R)>>>,
     stash: Vec<Vec<(D, T, R)>>,
+    logger: Option<Logger<DifferentialEvent, WorkerIdentifier>>,
+    operator_id: usize,
 }
 
 impl<D: Ord, T: Ord, R: Semigroup> MergeSorter<D, T, R> {
@@ -166,19 +169,18 @@ impl<D: Ord, T: Ord, R: Semigroup> MergeSorter<D, T, R> {
     }
 
     #[inline]
-    pub fn new() -> Self { MergeSorter { queue: Vec::new(), stash: Vec::new() } }
+    fn new(logger: Option<Logger<DifferentialEvent, WorkerIdentifier>>, operator_id: usize) -> Self {
+        Self {
+            logger,
+            operator_id,
+            queue: Vec::new(),
+            stash: Vec::new(),
+        }
+    }
 
     #[inline]
     pub fn empty(&mut self) -> Vec<(D, T, R)> {
         self.stash.pop().unwrap_or_else(|| Vec::with_capacity(Self::buffer_size()))
-    }
-
-    #[inline(never)]
-    pub fn _sort(&mut self, list: &mut Vec<Vec<(D, T, R)>>) {
-        for mut batch in list.drain(..) {
-            self.push(&mut batch);
-        }
-        self.finish_into(list);
     }
 
     #[inline]
@@ -194,12 +196,13 @@ impl<D: Ord, T: Ord, R: Semigroup> MergeSorter<D, T, R> {
 
         if !batch.is_empty() {
             crate::consolidation::consolidate_updates(&mut batch);
-            self.queue.push(vec![batch]);
+            self.account([batch.len()], 1);
+            self.queue_push(vec![batch]);
             while self.queue.len() > 1 && (self.queue[self.queue.len()-1].len() >= self.queue[self.queue.len()-2].len() / 2) {
-                let list1 = self.queue.pop().unwrap();
-                let list2 = self.queue.pop().unwrap();
+                let list1 = self.queue_pop().unwrap();
+                let list2 = self.queue_pop().unwrap();
                 let merged = self.merge_by(list1, list2);
-                self.queue.push(merged);
+                self.queue_push(merged);
             }
         }
     }
@@ -208,24 +211,24 @@ impl<D: Ord, T: Ord, R: Semigroup> MergeSorter<D, T, R> {
     // to break it down to be so.
     pub fn push_list(&mut self, list: Vec<Vec<(D, T, R)>>) {
         while self.queue.len() > 1 && self.queue[self.queue.len()-1].len() < list.len() {
-            let list1 = self.queue.pop().unwrap();
-            let list2 = self.queue.pop().unwrap();
+            let list1 = self.queue_pop().unwrap();
+            let list2 = self.queue_pop().unwrap();
             let merged = self.merge_by(list1, list2);
-            self.queue.push(merged);
+            self.queue_push(merged);
         }
-        self.queue.push(list);
+        self.queue_push(list);
     }
 
     #[inline(never)]
     pub fn finish_into(&mut self, target: &mut Vec<Vec<(D, T, R)>>) {
         while self.queue.len() > 1 {
-            let list1 = self.queue.pop().unwrap();
-            let list2 = self.queue.pop().unwrap();
+            let list1 = self.queue_pop().unwrap();
+            let list2 = self.queue_pop().unwrap();
             let merged = self.merge_by(list1, list2);
-            self.queue.push(merged);
+            self.queue_push(merged);
         }
 
-        if let Some(mut last) = self.queue.pop() {
+        if let Some(mut last) = self.queue_pop() {
             ::std::mem::swap(&mut last, target);
         }
     }
@@ -233,6 +236,7 @@ impl<D: Ord, T: Ord, R: Semigroup> MergeSorter<D, T, R> {
     // merges two sorted input lists into one sorted output list.
     #[inline(never)]
     fn merge_by(&mut self, list1: Vec<Vec<(D, T, R)>>, list2: Vec<Vec<(D, T, R)>>) -> Vec<Vec<(D, T, R)>> {
+        self.account(list1.iter().chain(list2.iter()).map(Vec::len), -1);
 
         use std::cmp::Ordering;
 
@@ -305,5 +309,48 @@ impl<D: Ord, T: Ord, R: Semigroup> MergeSorter<D, T, R> {
         output.extend(list2);
 
         output
+    }
+}
+
+impl<D, T, R> MergeSorter<D, T, R> {
+    /// Pop a batch from `self.queue` and account size changes.
+    #[inline]
+    fn queue_pop(&mut self) -> Option<Vec<Vec<(D, T, R)>>> {
+        let batch = self.queue.pop();
+        self.account(batch.iter().flatten().map(Vec::len), -1);
+        batch
+    }
+
+    /// Push a batch to `self.queue` and account size changes.
+    #[inline]
+    fn queue_push(&mut self, batch: Vec<Vec<(D, T, R)>>) {
+        self.account(batch.iter().map(Vec::len), 1);
+        self.queue.push(batch);
+    }
+
+    /// Account size changes. Only performs work if a logger exists.
+    ///
+    /// Calculate the size based on the [`TimelyStack`]s passed along, with each attribute
+    /// multiplied by `diff`. Usually, one wants to pass 1 or -1 as the diff.
+    fn account<I: IntoIterator<Item=usize>>(&self, items: I, diff: isize) {
+        if let Some(logger) = &self.logger {
+            let mut records= 0isize;
+            for len in items {
+                records = records.saturating_add_unsigned(len);
+            }
+            logger.log(BatcherEvent {
+                operator: self.operator_id,
+                records_diff: records * diff,
+                size_diff: 0,
+                capacity_diff: 0,
+                allocations_diff: 0,
+            })
+        }
+    }
+}
+
+impl<D, T, R> Drop for MergeSorter<D, T, R> {
+    fn drop(&mut self) {
+        while self.queue_pop().is_some() { }
     }
 }
