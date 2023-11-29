@@ -597,7 +597,8 @@ mod val_batch {
         <L::Target as Update>::KeyOwned: Default + HashOrdered,
     {
         type Key = <L::Target as Update>::Key;
-        type Val = <L::Target as Update>::Val;
+        type Val<'a> = &'a <L::Target as Update>::Val;
+        type ValOwned = <L::Target as Update>::ValOwned;
         type Time = <L::Target as Update>::Time;
         type Diff = <L::Target as Update>::Diff;
 
@@ -606,7 +607,7 @@ mod val_batch {
         fn key<'a>(&self, storage: &'a RhhValBatch<L>) -> &'a Self::Key { 
             storage.storage.keys.index(self.key_cursor) 
         }
-        fn val<'a>(&self, storage: &'a RhhValBatch<L>) -> &'a Self::Val { storage.storage.vals.index(self.val_cursor) }
+        fn val<'a>(&self, storage: &'a RhhValBatch<L>) -> Self::Val<'a> { storage.storage.vals.index(self.val_cursor) }
         fn map_times<L2: FnMut(&Self::Time, &Self::Diff)>(&mut self, storage: &RhhValBatch<L>, mut logic: L2) {
             let (lower, upper) = storage.storage.updates_for_value(self.val_cursor);
             for index in lower .. upper {
@@ -654,7 +655,7 @@ mod val_batch {
                 self.val_cursor = storage.storage.values_for_key(self.key_cursor).1;
             }
         }
-        fn seek_val(&mut self, storage: &RhhValBatch<L>, val: &Self::Val) {
+        fn seek_val<'a>(&mut self, storage: &RhhValBatch<L>, val: Self::Val<'a>) {
             self.val_cursor += storage.storage.vals.advance(self.val_cursor, storage.storage.values_for_key(self.key_cursor).1, |x| x.lt(val));
         }
         fn rewind_keys(&mut self, storage: &RhhValBatch<L>) {

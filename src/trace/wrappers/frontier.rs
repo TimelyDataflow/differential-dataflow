@@ -110,7 +110,7 @@ where
     type Time = B::Time;
     type Diff = B::Diff;
 
-    type Cursor = BatchCursorFrontier<B>;
+    type Cursor = BatchCursorFrontier<B::Cursor>;
 
     fn cursor(&self) -> Self::Cursor {
         BatchCursorFrontier::new(self.batch.cursor(), self.since.borrow(), self.until.borrow())
@@ -157,7 +157,8 @@ where
     T: Timestamp+Lattice,
 {
     type Key = C::Key;
-    type Val = C::Val;
+    type Val<'a> = C::Val<'a>;
+    type ValOwned = C::ValOwned;
     type Time = C::Time;
     type Diff = C::Diff;
 
@@ -167,7 +168,7 @@ where
     #[inline] fn val_valid(&self, storage: &Self::Storage) -> bool { self.cursor.val_valid(storage) }
 
     #[inline] fn key<'a>(&self, storage: &'a Self::Storage) -> &'a Self::Key { self.cursor.key(storage) }
-    #[inline] fn val<'a>(&self, storage: &'a Self::Storage) -> &'a Self::Val { self.cursor.val(storage) }
+    #[inline] fn val<'a>(&self, storage: &'a Self::Storage) -> Self::Val<'a> { self.cursor.val(storage) }
 
     #[inline]
     fn map_times<L: FnMut(&Self::Time,&Self::Diff)>(&mut self, storage: &Self::Storage, mut logic: L) {
@@ -187,7 +188,7 @@ where
     #[inline] fn seek_key(&mut self, storage: &Self::Storage, key: &Self::Key) { self.cursor.seek_key(storage, key) }
 
     #[inline] fn step_val(&mut self, storage: &Self::Storage) { self.cursor.step_val(storage) }
-    #[inline] fn seek_val(&mut self, storage: &Self::Storage, val: &Self::Val) { self.cursor.seek_val(storage, val) }
+    #[inline] fn seek_val<'a>(&mut self, storage: &Self::Storage, val: Self::Val<'a>) { self.cursor.seek_val(storage, val) }
 
     #[inline] fn rewind_keys(&mut self, storage: &Self::Storage) { self.cursor.rewind_keys(storage) }
     #[inline] fn rewind_vals(&mut self, storage: &Self::Storage) { self.cursor.rewind_vals(storage) }
@@ -196,14 +197,14 @@ where
 
 
 /// Wrapper to provide cursor to nested scope.
-pub struct BatchCursorFrontier<B: BatchReader> {
-    cursor: B::Cursor,
-    since: Antichain<B::Time>,
-    until: Antichain<B::Time>,
+pub struct BatchCursorFrontier<C: Cursor> {
+    cursor: C,
+    since: Antichain<C::Time>,
+    until: Antichain<C::Time>,
 }
 
-impl<B: BatchReader> BatchCursorFrontier<B> where B::Time: Clone {
-    fn new(cursor: B::Cursor, since: AntichainRef<B::Time>, until: AntichainRef<B::Time>) -> Self {
+impl<C: Cursor> BatchCursorFrontier<C> where C::Time: Clone {
+    fn new(cursor: C, since: AntichainRef<C::Time>, until: AntichainRef<C::Time>) -> Self {
         BatchCursorFrontier {
             cursor,
             since: since.to_owned(),
@@ -212,28 +213,30 @@ impl<B: BatchReader> BatchCursorFrontier<B> where B::Time: Clone {
     }
 }
 
-impl<B: BatchReader> Cursor for BatchCursorFrontier<B>
+impl<C: Cursor> Cursor for BatchCursorFrontier<C>
 where
-    B::Time: Timestamp+Lattice,
+    C::Time: Timestamp+Lattice,
+    C::Storage: BatchReader,
 {
-    type Key = B::Key;
-    type Val = B::Val;
-    type Time = B::Time;
-    type Diff = B::Diff;
+    type Key = C::Key;
+    type Val<'a> = C::Val<'a>;
+    type ValOwned = C::ValOwned;
+    type Time = C::Time;
+    type Diff = C::Diff;
 
-    type Storage = BatchFrontier<B>;
+    type Storage = BatchFrontier<C::Storage>;
 
-    #[inline] fn key_valid(&self, storage: &BatchFrontier<B>) -> bool { self.cursor.key_valid(&storage.batch) }
-    #[inline] fn val_valid(&self, storage: &BatchFrontier<B>) -> bool { self.cursor.val_valid(&storage.batch) }
+    #[inline] fn key_valid(&self, storage: &Self::Storage) -> bool { self.cursor.key_valid(&storage.batch) }
+    #[inline] fn val_valid(&self, storage: &Self::Storage) -> bool { self.cursor.val_valid(&storage.batch) }
 
-    #[inline] fn key<'a>(&self, storage: &'a BatchFrontier<B>) -> &'a Self::Key { self.cursor.key(&storage.batch) }
-    #[inline] fn val<'a>(&self, storage: &'a BatchFrontier<B>) -> &'a Self::Val { self.cursor.val(&storage.batch) }
+    #[inline] fn key<'a>(&self, storage: &'a Self::Storage) -> &'a Self::Key { self.cursor.key(&storage.batch) }
+    #[inline] fn val<'a>(&self, storage: &'a Self::Storage) -> Self::Val<'a> { self.cursor.val(&storage.batch) }
 
     #[inline]
-    fn map_times<L: FnMut(&Self::Time,&Self::Diff)>(&mut self, storage: &BatchFrontier<B>, mut logic: L) {
+    fn map_times<L: FnMut(&Self::Time,&Self::Diff)>(&mut self, storage: &Self::Storage, mut logic: L) {
         let since = self.since.borrow();
         let until = self.until.borrow();
-        let mut temp: B::Time = <B::Time as timely::progress::Timestamp>::minimum();
+        let mut temp: C::Time = <C::Time as timely::progress::Timestamp>::minimum();
         self.cursor.map_times(&storage.batch, |time, diff| {
             temp.clone_from(time);
             temp.advance_by(since);
@@ -243,12 +246,12 @@ where
         })
     }
 
-    #[inline] fn step_key(&mut self, storage: &BatchFrontier<B>) { self.cursor.step_key(&storage.batch) }
-    #[inline] fn seek_key(&mut self, storage: &BatchFrontier<B>, key: &Self::Key) { self.cursor.seek_key(&storage.batch, key) }
+    #[inline] fn step_key(&mut self, storage: &Self::Storage) { self.cursor.step_key(&storage.batch) }
+    #[inline] fn seek_key(&mut self, storage: &Self::Storage, key: &Self::Key) { self.cursor.seek_key(&storage.batch, key) }
 
-    #[inline] fn step_val(&mut self, storage: &BatchFrontier<B>) { self.cursor.step_val(&storage.batch) }
-    #[inline] fn seek_val(&mut self, storage: &BatchFrontier<B>, val: &Self::Val) { self.cursor.seek_val(&storage.batch, val) }
+    #[inline] fn step_val(&mut self, storage: &Self::Storage) { self.cursor.step_val(&storage.batch) }
+    #[inline] fn seek_val<'a>(&mut self, storage: &Self::Storage, val: Self::Val<'a>) { self.cursor.seek_val(&storage.batch, val) }
 
-    #[inline] fn rewind_keys(&mut self, storage: &BatchFrontier<B>) { self.cursor.rewind_keys(&storage.batch) }
-    #[inline] fn rewind_vals(&mut self, storage: &BatchFrontier<B>) { self.cursor.rewind_vals(&storage.batch) }
+    #[inline] fn rewind_keys(&mut self, storage: &Self::Storage) { self.cursor.rewind_keys(&storage.batch) }
+    #[inline] fn rewind_vals(&mut self, storage: &Self::Storage) { self.cursor.rewind_vals(&storage.batch) }
 }

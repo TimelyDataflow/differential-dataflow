@@ -274,10 +274,12 @@ pub trait ReduceCore<G: Scope, K: ToOwned + ?Sized, V: ToOwned + ?Sized, R: Semi
         where
             T2: Trace+TraceReader<Key=K, Time=G::Timestamp>+'static,
             T2::Val: Data,
+            T2::Val: Ord + ToOwned<Owned = <T2::Cursor as Cursor>::ValOwned>,
+            <T2::Val as ToOwned>::Owned: Data,
             T2::Diff: Abelian,
             T2::Batch: Batch,
-            T2::Builder: Builder<Output=T2::Batch, Item = ((K::Owned, T2::Val), G::Timestamp, T2::Diff)>,
-            L: FnMut(&K, &[(&V, R)], &mut Vec<(T2::Val, T2::Diff)>)+'static,
+            T2::Builder: Builder<Output=T2::Batch, Item = ((K::Owned, <T2::Val as ToOwned>::Owned), T2::Time, T2::Diff)>,
+            L: FnMut(&K, &[(&V, R)], &mut Vec<(<T2::Cursor as Cursor>::ValOwned, T2::Diff)>)+'static,
         {
             self.reduce_core::<_,T2>(name, move |key, input, output, change| {
                 if !input.is_empty() {
@@ -297,10 +299,12 @@ pub trait ReduceCore<G: Scope, K: ToOwned + ?Sized, V: ToOwned + ?Sized, R: Semi
         where
             T2: Trace+TraceReader<Key=K, Time=G::Timestamp>+'static,
             T2::Val: Data,
+            T2::Val: Ord + ToOwned<Owned = <T2::Cursor as Cursor>::ValOwned>,
+            <T2::Val as ToOwned>::Owned: Data,
             T2::Diff: Semigroup,
             T2::Batch: Batch,
-            T2::Builder: Builder<Output=T2::Batch, Item = ((K::Owned, T2::Val), G::Timestamp, T2::Diff)>,
-            L: FnMut(&K, &[(&V, R)], &mut Vec<(T2::Val,T2::Diff)>, &mut Vec<(T2::Val,T2::Diff)>)+'static
+            T2::Builder: Builder<Output=T2::Batch, Item = ((K::Owned, <T2::Val as ToOwned>::Owned), T2::Time, T2::Diff)>,
+            L: FnMut(&K, &[(&V, R)], &mut Vec<(<T2::Cursor as Cursor>::ValOwned,T2::Diff)>, &mut Vec<(<T2::Cursor as Cursor>::ValOwned, T2::Diff)>)+'static,
             ;
 }
 
@@ -316,11 +320,13 @@ where
     fn reduce_core<L, T2>(&self, name: &str, logic: L) -> Arranged<G, TraceAgent<T2>>
         where
             T2::Val: Data,
+            T2::Val: Ord + ToOwned<Owned = <T2::Cursor as Cursor>::ValOwned>,
+            <T2::Val as ToOwned>::Owned: Data,
             T2::Diff: Semigroup,
             T2: Trace+TraceReader<Key=K, Time=G::Timestamp>+'static,
             T2::Batch: Batch,
-            T2::Builder: Builder<Output=T2::Batch, Item = ((K, T2::Val), G::Timestamp, T2::Diff)>,
-            L: FnMut(&K, &[(&V, R)], &mut Vec<(T2::Val,T2::Diff)>, &mut Vec<(T2::Val, T2::Diff)>)+'static
+            T2::Builder: Builder<Output=T2::Batch, Item = ((K::Owned, <T2::Val as ToOwned>::Owned), T2::Time, T2::Diff)>,
+            L: FnMut(&K, &[(&V, R)], &mut Vec<(<T2::Cursor as Cursor>::ValOwned,T2::Diff)>, &mut Vec<(<T2::Cursor as Cursor>::ValOwned, T2::Diff)>)+'static,
     {
         self.arrange_by_key_named(&format!("Arrange: {}", name))
             .reduce_core(name, logic)
@@ -338,12 +344,12 @@ where
     fn reduce_core<L, T2>(&self, name: &str, logic: L) -> Arranged<G, TraceAgent<T2>>
         where
             T2: Trace+TraceReader<Key=K, Time=G::Timestamp>+'static,
-            T2::Val: Ord + ToOwned,
+            T2::Val: Ord + ToOwned<Owned = <T2::Cursor as Cursor>::ValOwned>,
             <T2::Val as ToOwned>::Owned: Data,
             T2::Diff: Semigroup,
             T2::Batch: Batch,
             T2::Builder: Builder<Output=T2::Batch, Item = ((K::Owned, <T2::Val as ToOwned>::Owned), T2::Time, T2::Diff)>,
-            L: FnMut(&K, &[(&V, R)], &mut Vec<(<T2::Val as ToOwned>::Owned,T2::Diff)>, &mut Vec<(<T2::Val as ToOwned>::Owned, T2::Diff)>)+'static,
+            L: FnMut(&K, &[(&V, R)], &mut Vec<(<T2::Cursor as Cursor>::ValOwned,T2::Diff)>, &mut Vec<(<T2::Cursor as Cursor>::ValOwned, T2::Diff)>)+'static,
         {
             reduce_trace(self, name, logic)
         }
@@ -359,12 +365,12 @@ where
     T1::Val: Ord,
     T1::Diff: Semigroup,
     T2: Trace+TraceReader<Key=T1::Key, Time=G::Timestamp> + 'static,
-    T2::Val: Ord + ToOwned,
+    T2::Val: Ord + ToOwned<Owned = <T2::Cursor as Cursor>::ValOwned>,
     <T2::Val as ToOwned>::Owned: Data,
     T2::Diff: Semigroup,
     T2::Batch: Batch,
     T2::Builder: Builder<Output=T2::Batch, Item = ((<T1::Key as ToOwned>::Owned, <T2::Val as ToOwned>::Owned), T2::Time, T2::Diff)>,
-    L: FnMut(&T1::Key, &[(&T1::Val, T1::Diff)], &mut Vec<(<T2::Val as ToOwned>::Owned,T2::Diff)>, &mut Vec<(<T2::Val as ToOwned>::Owned, T2::Diff)>)+'static,
+    L: FnMut(&T1::Key, &[(&T1::Val, T1::Diff)], &mut Vec<(<T2::Cursor as Cursor>::ValOwned,T2::Diff)>, &mut Vec<(<T2::Cursor as Cursor>::ValOwned, T2::Diff)>)+'static,
 {
     let mut result_trace = None;
 
@@ -498,7 +504,7 @@ where
                         //
                         // TODO: It would be better if all updates went into one batch, but timely dataflow prevents
                         //       this as long as it requires that there is only one capability for each message.
-                        let mut buffers = Vec::<(G::Timestamp, Vec<(<T2::Val as ToOwned>::Owned, G::Timestamp, T2::Diff)>)>::new();
+                        let mut buffers = Vec::<(G::Timestamp, Vec<(<T2::Cursor as Cursor>::ValOwned, G::Timestamp, T2::Diff)>)>::new();
                         let mut builders = Vec::new();
                         for i in 0 .. capabilities.len() {
                             buffers.push((capabilities[i].time().clone(), Vec::new()));
@@ -678,10 +684,8 @@ trait PerKeyCompute<'a, C1, C2, C3>
 where
     C1: Cursor,
     C2: Cursor<Key = C1::Key, Time = C1::Time>,
-    C3: Cursor<Key = C1::Key, Val = C1::Val, Time = C1::Time, Diff = C1::Diff>,
-    C1::Val: Ord,
-    C2::Val: Ord + ToOwned,
-    <C2::Val as ToOwned>::Owned: Ord + Clone,
+    C3: Cursor<Key = C1::Key, Val<'a> = C1::Val<'a>, Time = C1::Time, Diff = C1::Diff>,
+    C2::ValOwned: Ord + Clone,
     C1::Time: Lattice+Ord+Clone,
     C1::Diff: Semigroup,
     C2::Diff: Semigroup,
@@ -696,14 +700,14 @@ where
         times: &mut Vec<C1::Time>,
         logic: &mut L,
         upper_limit: &Antichain<C1::Time>,
-        outputs: &mut [(C2::Time, Vec<(<C2::Val as ToOwned>::Owned, C2::Time, C2::Diff)>)],
+        outputs: &mut [(C2::Time, Vec<(C2::ValOwned, C2::Time, C2::Diff)>)],
         new_interesting: &mut Vec<C1::Time>) -> (usize, usize)
     where
         C1::Key: Eq,
         L: FnMut(
-            &C1::Key, &[(&C1::Val, C1::Diff)],
-            &mut Vec<(<C2::Val as ToOwned>::Owned, C2::Diff)>,
-            &mut Vec<(<C2::Val as ToOwned>::Owned, C2::Diff)>,
+            &C1::Key, &[(C1::Val<'a>, C1::Diff)],
+            &mut Vec<(C2::ValOwned, C2::Diff)>,
+            &mut Vec<(C2::ValOwned, C2::Diff)>,
         );
 }
 
@@ -727,10 +731,8 @@ mod history_replay {
     where
         C1: Cursor,
         C2: Cursor<Key = C1::Key, Time = C1::Time>,
-        C3: Cursor<Key = C1::Key, Val = C1::Val, Time = C1::Time, Diff = C1::Diff>,
-        C1::Val: Ord,
-        C2::Val: Ord + ToOwned,
-        <C2::Val as ToOwned>::Owned: Ord + Clone,
+        C3: Cursor<Key = C1::Key, Val<'a> = C1::Val<'a>, Time = C1::Time, Diff = C1::Diff>,
+        C2::ValOwned: Ord + Clone,
         C1::Time: Lattice+Ord+Clone,
         C1::Diff: Semigroup,
         C2::Diff: Semigroup,
@@ -738,10 +740,10 @@ mod history_replay {
         input_history: ValueHistory<'a, C1>,
         output_history: ValueHistory<'a, C2>,
         batch_history: ValueHistory<'a, C3>,
-        input_buffer: Vec<(&'a C1::Val, C1::Diff)>,
-        output_buffer: Vec<(<C2::Val as ToOwned>::Owned, C2::Diff)>,
-        update_buffer: Vec<(<C2::Val as ToOwned>::Owned, C2::Diff)>,
-        output_produced: Vec<((<C2::Val as ToOwned>::Owned, C2::Time), C2::Diff)>,
+        input_buffer: Vec<(C1::Val<'a>, C1::Diff)>,
+        output_buffer: Vec<(C2::ValOwned, C2::Diff)>,
+        update_buffer: Vec<(C2::ValOwned, C2::Diff)>,
+        output_produced: Vec<((C2::ValOwned, C2::Time), C2::Diff)>,
         synth_times: Vec<C1::Time>,
         meets: Vec<C1::Time>,
         times_current: Vec<C1::Time>,
@@ -752,10 +754,8 @@ mod history_replay {
     where
         C1: Cursor,
         C2: Cursor<Key = C1::Key, Time = C1::Time>,
-        C3: Cursor<Key = C1::Key, Val = C1::Val, Time = C1::Time, Diff = C1::Diff>,
-        C1::Val: Ord,
-        C2::Val: Ord + ToOwned,
-        <C2::Val as ToOwned>::Owned: Ord + Clone,
+        C3: Cursor<Key = C1::Key, Val<'a> = C1::Val<'a>, Time = C1::Time, Diff = C1::Diff>,
+        C2::ValOwned: Ord + Clone,
         C1::Time: Lattice+Ord+Clone,
         C1::Diff: Semigroup,
         C2::Diff: Semigroup,
@@ -785,14 +785,14 @@ mod history_replay {
             times: &mut Vec<C1::Time>,
             logic: &mut L,
             upper_limit: &Antichain<C1::Time>,
-            outputs: &mut [(C2::Time, Vec<(<C2::Val as ToOwned>::Owned, C2::Time, C2::Diff)>)],
+            outputs: &mut [(C2::Time, Vec<(C2::ValOwned, C2::Time, C2::Diff)>)],
             new_interesting: &mut Vec<C1::Time>) -> (usize, usize)
         where
             C1::Key: Eq,
             L: FnMut(
-                &C1::Key, &[(&C1::Val, C1::Diff)],
-                &mut Vec<(<C2::Val as ToOwned>::Owned, C2::Diff)>,
-                &mut Vec<(<C2::Val as ToOwned>::Owned, C2::Diff)>,
+                &C1::Key, &[(C1::Val<'a>, C1::Diff)],
+                &mut Vec<(C2::ValOwned, C2::Diff)>,
+                &mut Vec<(C2::ValOwned, C2::Diff)>,
             )
         {
 
@@ -953,9 +953,10 @@ mod history_replay {
                         crate::consolidation::consolidate(&mut self.input_buffer);
 
                         meet.as_ref().map(|meet| output_replay.advance_buffer_by(&meet));
-                        for &((ref value, ref time), ref diff) in output_replay.buffer().iter() {
+                        for &((value, ref time), ref diff) in output_replay.buffer().iter() {
                             if time.less_equal(&next_time) {
-                                self.output_buffer.push(((*value).to_owned(), diff.clone()));
+                                use trace::cursor::MyTrait;
+                                self.output_buffer.push((<_ as MyTrait>::to_owned(value), diff.clone()));
                             }
                             else {
                                 self.temporary.push(next_time.join(time));

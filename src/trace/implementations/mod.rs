@@ -66,7 +66,7 @@ pub trait Update {
     /// Key by which data are grouped.
     type KeyOwned: Ord+Clone + Borrow<Self::Key>;
     /// Values associated with the key.
-    type Val: Ord + ToOwned<Owned = Self::ValOwned> + ?Sized;
+    type Val: Ord + ToOwned<Owned = Self::ValOwned> + ?Sized + 'static;
     /// Values associated with the key, in owned form
     type ValOwned: Ord+Clone + Borrow<Self::Val>;
     /// Time at which updates occur.
@@ -78,7 +78,7 @@ pub trait Update {
 impl<K,V,T,R> Update for ((K, V), T, R)
 where
     K: Ord+Clone,
-    V: Ord+Clone,
+    V: Ord+Clone+'static,
     T: Ord+Lattice+timely::progress::Timestamp+Clone,
     R: Semigroup+Clone,
 {
@@ -166,7 +166,7 @@ impl<K,V,T,R> Update for Preferred<K, V, T, R>
 where
     K: Ord+ToOwned + ?Sized,
     K::Owned: Ord+Clone,
-    V: Ord+ToOwned + ?Sized,
+    V: Ord+ToOwned + ?Sized + 'static,
     V::Owned: Ord+Clone,
     T: Ord+Lattice+timely::progress::Timestamp+Clone,
     R: Semigroup+Clone,
@@ -183,7 +183,7 @@ impl<K, V, T, D> Layout for Preferred<K, V, T, D>
 where
     K: Ord+ToOwned+PreferredContainer + ?Sized,
     K::Owned: Ord+Clone,
-    V: Ord+ToOwned+PreferredContainer + ?Sized,
+    V: Ord+ToOwned+PreferredContainer + ?Sized + 'static,
     V::Owned: Ord+Clone,
     T: Ord+Lattice+timely::progress::Timestamp+Clone,
     D: Semigroup+Clone,

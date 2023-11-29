@@ -342,14 +342,15 @@ where
     <L::Target as Update>::Val: Sized + Clone,
 {
     type Key = <L::Target as Update>::Key;
-    type Val = <L::Target as Update>::Val;
+    type Val<'a> = &'a <L::Target as Update>::Val;
+    type ValOwned = <L::Target as Update>::ValOwned;
     type Time = <L::Target as Update>::Time;
     type Diff = <L::Target as Update>::Diff;
 
     type Storage = OrdValBatch<L>;
 
     fn key<'a>(&self, storage: &'a OrdValBatch<L>) -> &'a Self::Key { &self.cursor.key(&storage.layer) }
-    fn val<'a>(&self, storage: &'a OrdValBatch<L>) -> &'a Self::Val { &self.cursor.child.key(&storage.layer.vals) }
+    fn val<'a>(&self, storage: &'a OrdValBatch<L>) -> Self::Val<'a> { &self.cursor.child.key(&storage.layer.vals) }
     fn map_times<L2: FnMut(&Self::Time, &Self::Diff)>(&mut self, storage: &OrdValBatch<L>, mut logic: L2) {
         self.cursor.child.child.rewind(&storage.layer.vals.vals);
         while self.cursor.child.child.valid(&storage.layer.vals.vals) {
@@ -362,7 +363,7 @@ where
     fn step_key(&mut self, storage: &OrdValBatch<L>){ self.cursor.step(&storage.layer); }
     fn seek_key(&mut self, storage: &OrdValBatch<L>, key: &Self::Key) { self.cursor.seek(&storage.layer, key); }
     fn step_val(&mut self, storage: &OrdValBatch<L>) { self.cursor.child.step(&storage.layer.vals); }
-    fn seek_val(&mut self, storage: &OrdValBatch<L>, val: &Self::Val) { self.cursor.child.seek(&storage.layer.vals, val); }
+    fn seek_val<'a>(&mut self, storage: &OrdValBatch<L>, val: Self::Val<'a>) { self.cursor.child.seek(&storage.layer.vals, val); }
     fn rewind_keys(&mut self, storage: &OrdValBatch<L>) { self.cursor.rewind(&storage.layer); }
     fn rewind_vals(&mut self, storage: &OrdValBatch<L>) { self.cursor.child.rewind(&storage.layer.vals); }
 }
@@ -640,7 +641,8 @@ where
     <L::Target as Update>::Key: Sized,
 {
     type Key = <L::Target as Update>::Key;
-    type Val = ();
+    type Val<'a> = &'a ();
+    type ValOwned = ();
     type Time = <L::Target as Update>::Time;
     type Diff = <L::Target as Update>::Diff;
 

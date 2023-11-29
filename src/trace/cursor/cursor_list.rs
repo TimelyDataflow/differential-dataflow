@@ -17,7 +17,6 @@ impl<C> CursorList<C>
 where
     C: Cursor, 
     C::Key: Ord, 
-    C::Val: Ord,
 {
     /// Creates a new cursor list from pre-existing cursors.
     pub fn new(cursors: Vec<C>, storage: &[C::Storage]) -> Self  {
@@ -92,10 +91,10 @@ where
 impl<C: Cursor> Cursor for CursorList<C>
 where
     C::Key: Ord,
-    C::Val: Ord,
 {
     type Key = C::Key;
-    type Val = C::Val;
+    type Val<'a> = C::Val<'a>;
+    type ValOwned = C::ValOwned;
     type Time = C::Time;
     type Diff = C::Diff;
 
@@ -115,7 +114,7 @@ where
         self.cursors[self.min_key[0]].key(&storage[self.min_key[0]])
     }
     #[inline]
-    fn val<'a>(&self, storage: &'a Vec<C::Storage>) -> &'a Self::Val {
+    fn val<'a>(&self, storage: &'a Vec<C::Storage>) -> Self::Val<'a> {
         debug_assert!(self.key_valid(storage));
         debug_assert!(self.val_valid(storage));
         debug_assert!(self.cursors[self.min_val[0]].val_valid(&storage[self.min_val[0]]));
@@ -153,7 +152,7 @@ where
         self.minimize_vals(storage);
     }
     #[inline]
-    fn seek_val(&mut self, storage: &Vec<C::Storage>, val: &Self::Val) {
+    fn seek_val<'a>(&mut self, storage: &Vec<C::Storage>, val: Self::Val<'a>) {
         for &index in self.min_key.iter() {
             self.cursors[index].seek_val(&storage[index], val);
         }

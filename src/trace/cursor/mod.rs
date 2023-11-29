@@ -6,10 +6,31 @@
 //! supports efficient seeking (via the `seek_key` and `seek_val` methods).
 
 // pub mod cursor_list;
-pub mod cursor_pair;
+// pub mod cursor_pair;
 pub mod cursor_list;
 
 pub use self::cursor_list::CursorList;
+
+use std::borrow::Borrow;
+/// A type that may be converted into and compared with another type.
+///
+/// The type must also be comparable with itself, and follow the same 
+/// order as if converting instances to `T` and comparing the results.
+pub trait MyTrait : Ord {
+    /// Owned type into which this type can be converted.
+    type Owned;
+    /// Conversion from an instance of this type to the owned type.
+    fn to_owned(self) -> Self::Owned;
+    /// Indicates that `self <= other`; used for sorting.
+    fn less_equal(&self, other: &Self::Owned) -> bool;
+}
+
+impl<'a, T: Ord+ToOwned+?Sized> MyTrait for &'a T {
+    type Owned = T::Owned;
+    fn to_owned(self) -> Self::Owned { self.to_owned() }
+    fn less_equal(&self, other: &Self::Owned) -> bool { self.le(&other.borrow()) }
+}
+
 
 /// A cursor for navigating ordered `(key, val, time, diff)` updates.
 pub trait Cursor {
@@ -17,9 +38,11 @@ pub trait Cursor {
     /// Key by which updates are indexed.
     type Key: ?Sized;
     /// Values associated with keys.
-    type Val: ?Sized;
+    type Val<'a>: Copy + Clone + MyTrait<Owned = Self::ValOwned>;
+    /// Owned version of the above.
+    type ValOwned: Ord + Clone;
     /// Timestamps associated with updates
-    type Time: ?Sized;
+    type Time;
     /// Associated update.
     type Diff: ?Sized;
 
@@ -38,14 +61,14 @@ pub trait Cursor {
     /// A reference to the current key. Asserts if invalid.
     fn key<'a>(&self, storage: &'a Self::Storage) -> &'a Self::Key;
     /// A reference to the current value. Asserts if invalid.
-    fn val<'a>(&self, storage: &'a Self::Storage) -> &'a Self::Val;
+    fn val<'a>(&self, storage: &'a Self::Storage) -> Self::Val<'a>;
 
     /// Returns a reference to the current key, if valid.
     fn get_key<'a>(&self, storage: &'a Self::Storage) -> Option<&'a Self::Key> {
         if self.key_valid(storage) { Some(self.key(storage)) } else { None }
     }
     /// Returns a reference to the current value, if valid.
-    fn get_val<'a>(&self, storage: &'a Self::Storage) -> Option<&'a Self::Val> {
+    fn get_val<'a>(&self, storage: &'a Self::Storage) -> Option<Self::Val<'a>> {
         if self.val_valid(storage) { Some(self.val(storage)) } else { None }
     }
 
@@ -61,7 +84,7 @@ pub trait Cursor {
     /// Advances the cursor to the next value.
     fn step_val(&mut self, storage: &Self::Storage);
     /// Advances the cursor to the specified value.
-    fn seek_val(&mut self, storage: &Self::Storage, val: &Self::Val);
+    fn seek_val<'a>(&mut self, storage: &Self::Storage, val: Self::Val<'a>);
 
     /// Rewinds the cursor to the first key.
     fn rewind_keys(&mut self, storage: &Self::Storage);
@@ -69,10 +92,9 @@ pub trait Cursor {
     fn rewind_vals(&mut self, storage: &Self::Storage);
 
     /// Rewinds the cursor and outputs its contents to a Vec
-    fn to_vec(&mut self, storage: &Self::Storage) -> Vec<((Self::Key, Self::Val), Vec<(Self::Time, Self::Diff)>)>
+    fn to_vec(&mut self, storage: &Self::Storage) -> Vec<((Self::Key, Self::ValOwned), Vec<(Self::Time, Self::Diff)>)>
     where
         Self::Key: Clone,
-        Self::Val: Clone,
         Self::Time: Clone,
         Self::Diff: Clone,
     {
@@ -85,7 +107,7 @@ pub trait Cursor {
                 self.map_times(storage, |ts, r| {
                     kv_out.push((ts.clone(), r.clone()));
                 });
-                out.push(((self.key(storage).clone(), self.val(storage).clone()), kv_out));
+                out.push(((self.key(storage).clone(), self.val(storage).to_owned()), kv_out));
                 self.step_val(storage);
             }
             self.step_key(storage);

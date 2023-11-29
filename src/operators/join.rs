@@ -666,8 +666,6 @@ where
     R: Semigroup,
     C1: Cursor<Time=T>,
     C2: Cursor<Key=C1::Key, Time=T>,
-    C1::Val: Ord,
-    C2::Val: Ord,
     C1::Diff: Semigroup,
     C2::Diff: Semigroup,
     D: Ord+Clone+Data,
@@ -686,8 +684,6 @@ where
     C1::Key: Ord+Eq,
     C1: Cursor<Time=T>,
     C2: Cursor<Key=C1::Key, Time=T>,
-    C1::Val: Ord,
-    C2::Val: Ord,
     C1::Diff: Semigroup,
     C2::Diff: Semigroup,
     T: Timestamp+Lattice+Ord,
@@ -713,7 +709,10 @@ where
     /// Process keys until at least `fuel` output tuples produced, or the work is exhausted.
     #[inline(never)]
     fn work<L, I>(&mut self, output: &mut OutputHandle<T, (D, T, R), Tee<T, (D, T, R)>>, mut logic: L, fuel: &mut usize)
-    where I: IntoIterator<Item=(D, T, R)>, L: FnMut(&C1::Key, &C1::Val, &C2::Val, &T, &C1::Diff, &C2::Diff)->I {
+    where 
+        I: IntoIterator<Item=(D, T, R)>,
+        L: for<'a> FnMut(&C1::Key, C1::Val<'a>, C2::Val<'a>, &T, &C1::Diff, &C2::Diff)->I,
+    {
 
         let meet = self.capability.time();
 
@@ -781,8 +780,6 @@ struct JoinThinker<'a, C1, C2>
 where
     C1: Cursor,
     C2: Cursor<Time = C1::Time>,
-    C1::Val: Ord,
-    C2::Val: Ord,
     C1::Time: Lattice+Ord+Clone,
     C1::Diff: Semigroup,
     C2::Diff: Semigroup,
@@ -795,8 +792,6 @@ impl<'a, C1, C2> JoinThinker<'a, C1, C2>
 where
     C1: Cursor,
     C2: Cursor<Time = C1::Time>,
-    C1::Val: Ord,
-    C2::Val: Ord,
     C1::Time: Lattice+Ord+Clone,
     C1::Diff: Semigroup,
     C2::Diff: Semigroup,
@@ -808,7 +803,7 @@ where
         }
     }
 
-    fn think<F: FnMut(&C1::Val,&C2::Val,C1::Time,&C1::Diff,&C2::Diff)>(&mut self, mut results: F) {
+    fn think<'b, F: FnMut(C1::Val<'a>,C2::Val<'a>,C1::Time,&C1::Diff,&C2::Diff)>(&'b mut self, mut results: F) {
 
         // for reasonably sized edits, do the dead-simple thing.
         if self.history1.edits.len() < 10 || self.history2.edits.len() < 10 {
@@ -833,7 +828,7 @@ where
 
                 if replay1.time().unwrap().cmp(&replay2.time().unwrap()) == ::std::cmp::Ordering::Less {
                     replay2.advance_buffer_by(replay1.meet().unwrap());
-                    for &((ref val2, ref time2), ref diff2) in replay2.buffer().iter() {
+                    for &((val2, ref time2), ref diff2) in replay2.buffer().iter() {
                         let (val1, time1, diff1) = replay1.edit().unwrap();
                         results(val1, val2, time1.join(time2), diff1, diff2);
                     }
@@ -841,7 +836,7 @@ where
                 }
                 else {
                     replay1.advance_buffer_by(replay2.meet().unwrap());
-                    for &((ref val1, ref time1), ref diff1) in replay1.buffer().iter() {
+                    for &((val1, ref time1), ref diff1) in replay1.buffer().iter() {
                         let (val2, time2, diff2) = replay2.edit().unwrap();
                         results(val1, val2, time1.join(time2), diff1, diff2);
                     }
@@ -851,7 +846,7 @@ where
 
             while !replay1.is_done() {
                 replay2.advance_buffer_by(replay1.meet().unwrap());
-                for &((ref val2, ref time2), ref diff2) in replay2.buffer().iter() {
+                for &((val2, ref time2), ref diff2) in replay2.buffer().iter() {
                     let (val1, time1, diff1) = replay1.edit().unwrap();
                     results(val1, val2, time1.join(time2), diff1, diff2);
                 }
@@ -859,7 +854,7 @@ where
             }
             while !replay2.is_done() {
                 replay1.advance_buffer_by(replay2.meet().unwrap());
-                for &((ref val1, ref time1), ref diff1) in replay1.buffer().iter() {
+                for &((val1, ref time1), ref diff1) in replay1.buffer().iter() {
                     let (val2, time2, diff2) = replay2.edit().unwrap();
                     results(val1, val2, time1.join(time2), diff1, diff2);
                 }
