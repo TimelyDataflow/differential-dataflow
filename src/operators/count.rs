@@ -55,14 +55,14 @@ where G::Timestamp: TotalOrder+Lattice+Ord {
     }
 }
 
-impl<G: Scope, T1> CountTotal<G, T1::Key, T1::Diff> for Arranged<G, T1>
+impl<G: Scope, K, T1> CountTotal<G, K, T1::Diff> for Arranged<G, T1>
 where
     G::Timestamp: TotalOrder+Lattice+Ord,
-    T1: TraceReader<Val=(), Time=G::Timestamp>+Clone+'static,
-    T1::Key: ExchangeData,
+    T1: for<'a> TraceReader<Key<'a>=&'a K, Val<'a>=&'a (), Time=G::Timestamp>+Clone+'static,
+    K: ExchangeData,
     T1::Diff: ExchangeData+Semigroup,
 {
-    fn count_total_core<R2: Semigroup + From<i8>>(&self) -> Collection<G, (T1::Key, T1::Diff), R2> {
+    fn count_total_core<R2: Semigroup + From<i8>>(&self) -> Collection<G, (K, T1::Diff), R2> {
 
         let mut trace = self.trace.clone();
         let mut buffer = Vec::new();

@@ -97,11 +97,11 @@ where
 
 // Type aliases to make certain types readable.
 type TDLayer<L> = OrderedLeaf<<<L as Layout>::Target as Update>::Time, <<L as Layout>::Target as Update>::Diff>;
-type VTDLayer<L> = OrderedLayer<<<L as Layout>::Target as Update>::Val, TDLayer<L>, <L as Layout>::ValContainer>;
+type VTDLayer<L> = OrderedLayer<<<L as Layout>::Target as Update>::ValOwned, TDLayer<L>, <L as Layout>::ValContainer>;
 type KTDLayer<L> = OrderedLayer<<<L as Layout>::Target as Update>::Key, TDLayer<L>, <L as Layout>::KeyContainer>;
 type KVTDLayer<L> = OrderedLayer<<<L as Layout>::Target as Update>::Key, VTDLayer<L>, <L as Layout>::KeyContainer>;
 type TDBuilder<L> = OrderedLeafBuilder<<<L as Layout>::Target as Update>::Time, <<L as Layout>::Target as Update>::Diff>;
-type VTDBuilder<L> = OrderedBuilder<<<L as Layout>::Target as Update>::Val, TDBuilder<L>, <L as Layout>::ValContainer>;
+type VTDBuilder<L> = OrderedBuilder<<<L as Layout>::Target as Update>::ValOwned, TDBuilder<L>, <L as Layout>::ValContainer>;
 type KTDBuilder<L> = OrderedBuilder<<<L as Layout>::Target as Update>::Key, TDBuilder<L>, <L as Layout>::KeyContainer>;
 type KVTDBuilder<L> = OrderedBuilder<<<L as Layout>::Target as Update>::Key, VTDBuilder<L>, <L as Layout>::KeyContainer>;
 
@@ -111,7 +111,7 @@ where
     <L::Target as Update>::Val: Sized + Clone,
 {
     type Key = <L::Target as Update>::Key;
-    type Val = <L::Target as Update>::Val;
+    type Val<'a> = <L::Target as Update>::Val<'a>;
     type Time = <L::Target as Update>::Time;
     type Diff = <L::Target as Update>::Diff;
 
@@ -342,7 +342,7 @@ where
     <L::Target as Update>::Val: Sized + Clone,
 {
     type Key = <L::Target as Update>::Key;
-    type Val<'a> = &'a <L::Target as Update>::Val;
+    type Val<'a> = <L::Target as Update>::Val<'a>;
     type ValOwned = <L::Target as Update>::ValOwned;
     type Time = <L::Target as Update>::Time;
     type Diff = <L::Target as Update>::Diff;
@@ -382,9 +382,9 @@ impl<L: Layout> Builder for OrdValBuilder<L>
 where
     <L::Target as Update>::Key: Sized + Clone,
     <L::Target as Update>::Val: Sized + Clone,
-    OrdValBatch<L>: Batch<Key=<L::Target as Update>::Key, Val=<L::Target as Update>::Val, Time=<L::Target as Update>::Time, Diff=<L::Target as Update>::Diff>
+    // OrdValBatch<L>: Batch<Key=<L::Target as Update>::Key, Val=<L::Target as Update>::Val, Time=<L::Target as Update>::Time, Diff=<L::Target as Update>::Diff>,
 {
-    type Item = ((<L::Target as Update>::Key, <L::Target as Update>::Val), <L::Target as Update>::Time, <L::Target as Update>::Diff);
+    type Item = ((<L::Target as Update>::Key, <L::Target as Update>::ValOwned), <L::Target as Update>::Time, <L::Target as Update>::Diff);
     type Time = <L::Target as Update>::Time;
     type Output = OrdValBatch<L>;
 
@@ -450,7 +450,7 @@ where
 impl<L: Layout> Batch for OrdKeyBatch<L>
 where
     <L::Target as Update>::Key: Sized + Clone,
-    L::Target: Update<Val = ()>,
+    L::Target: Update<ValOwned = ()>,
 {
     type Merger = OrdKeyMerger<L>;
 
@@ -679,7 +679,7 @@ where
 impl<L: Layout> Builder for OrdKeyBuilder<L>
 where
     <L::Target as Update>::Key: Sized + Clone,
-    OrdKeyBatch<L>: Batch<Key=<L::Target as Update>::Key, Val=(), Time=<L::Target as Update>::Time, Diff=<L::Target as Update>::Diff>
+    // OrdKeyBatch<L>: Batch<Key=<L::Target as Update>::Key, Val=(), Time=<L::Target as Update>::Time, Diff=<L::Target as Update>::Diff>,
 {
     type Item = ((<L::Target as Update>::Key, ()), <L::Target as Update>::Time, <L::Target as Update>::Diff);
     type Time = <L::Target as Update>::Time;

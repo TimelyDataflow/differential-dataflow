@@ -29,14 +29,14 @@ impl<Tr, F> TraceReader for TraceFilter<Tr, F>
 where
     Tr: TraceReader,
     Tr::Batch: Clone,
-    Tr::Key: 'static,
-    Tr::Val: 'static,
     Tr::Time: Timestamp,
     Tr::Diff: 'static,
-    F: FnMut(&Tr::Key, &Tr::Val)->bool+Clone+'static,
+    F: for<'a> FnMut(Tr::Key<'a>, Tr::Val<'a>)->bool+Clone+'static,
 {
-    type Key = Tr::Key;
-    type Val = Tr::Val;
+    type Key<'a> = Tr::Key<'a>;
+    type KeyOwned = Tr::KeyOwned;
+    type Val<'a> = Tr::Val<'a>;
+    type ValOwned = Tr::ValOwned;
     type Time = Tr::Time;
     type Diff = Tr::Diff;
 
@@ -87,10 +87,12 @@ impl<B, F> BatchReader for BatchFilter<B, F>
 where
     B: BatchReader,
     B::Time: Timestamp,
-    F: FnMut(&B::Key, &B::Val)->bool+Clone+'static
+    F: for<'a> FnMut(B::Key<'a>, B::Val<'a>)->bool+Clone+'static
 {
-    type Key = B::Key;
-    type Val = B::Val;
+    type Key<'a> = B::Key<'a>;
+    type KeyOwned = B::KeyOwned;
+    type Val<'a> = B::Val<'a>;
+    type ValOwned = B::ValOwned;
     type Time = B::Time;
     type Diff = B::Diff;
 
@@ -136,9 +138,10 @@ impl<C, F> Cursor for CursorFilter<C, F>
 where
     C: Cursor,
     C::Time: Timestamp,
-    F: for<'a> FnMut(&C::Key, C::Val<'a>)->bool+'static
+    F: for<'a> FnMut(C::Key<'a>, C::Val<'a>)->bool+'static
 {
-    type Key = C::Key;
+    type Key<'a> = C::Key<'a>;
+    type KeyOwned = C::KeyOwned;
     type Val<'a> = C::Val<'a>;
     type ValOwned = C::ValOwned;
     type Time = C::Time;
@@ -149,7 +152,7 @@ where
     #[inline] fn key_valid(&self, storage: &Self::Storage) -> bool { self.cursor.key_valid(storage) }
     #[inline] fn val_valid(&self, storage: &Self::Storage) -> bool { self.cursor.val_valid(storage) }
 
-    #[inline] fn key<'a>(&self, storage: &'a Self::Storage) -> &'a Self::Key { self.cursor.key(storage) }
+    #[inline] fn key<'a>(&self, storage: &'a Self::Storage) -> Self::Key<'a> { self.cursor.key(storage) }
     #[inline] fn val<'a>(&self, storage: &'a Self::Storage) -> Self::Val<'a> { self.cursor.val(storage) }
 
     #[inline]
@@ -162,7 +165,7 @@ where
     }
 
     #[inline] fn step_key(&mut self, storage: &Self::Storage) { self.cursor.step_key(storage) }
-    #[inline] fn seek_key(&mut self, storage: &Self::Storage, key: &Self::Key) { self.cursor.seek_key(storage, key) }
+    #[inline] fn seek_key<'a>(&mut self, storage: &Self::Storage, key: Self::Key<'a>) { self.cursor.seek_key(storage, key) }
 
     #[inline] fn step_val(&mut self, storage: &Self::Storage) { self.cursor.step_val(storage) }
     #[inline] fn seek_val<'a>(&mut self, storage: &Self::Storage, val: Self::Val<'a>) { self.cursor.seek_val(storage, val) }
@@ -191,9 +194,10 @@ impl<C, F> BatchCursorFilter<C, F> {
 impl<C: Cursor, F> Cursor for BatchCursorFilter<C, F>
 where
     C::Time: Timestamp,
-    F: for <'a> FnMut(&C::Key, C::Val<'a>)->bool+'static,
+    F: for <'a> FnMut(C::Key<'a>, C::Val<'a>)->bool+'static,
 {
-    type Key = C::Key;
+    type Key<'a> = C::Key<'a>;
+    type KeyOwned = C::KeyOwned;
     type Val<'a> = C::Val<'a>;
     type ValOwned = C::ValOwned;
     type Time = C::Time;
@@ -204,7 +208,7 @@ where
     #[inline] fn key_valid(&self, storage: &Self::Storage) -> bool { self.cursor.key_valid(&storage.batch) }
     #[inline] fn val_valid(&self, storage: &Self::Storage) -> bool { self.cursor.val_valid(&storage.batch) }
 
-    #[inline] fn key<'a>(&self, storage: &'a Self::Storage) -> &'a Self::Key { self.cursor.key(&storage.batch) }
+    #[inline] fn key<'a>(&self, storage: &'a Self::Storage) -> Self::Key<'a> { self.cursor.key(&storage.batch) }
     #[inline] fn val<'a>(&self, storage: &'a Self::Storage) -> Self::Val<'a> { self.cursor.val(&storage.batch) }
 
     #[inline]
@@ -217,7 +221,7 @@ where
     }
 
     #[inline] fn step_key(&mut self, storage: &Self::Storage) { self.cursor.step_key(&storage.batch) }
-    #[inline] fn seek_key(&mut self, storage: &Self::Storage, key: &Self::Key) { self.cursor.seek_key(&storage.batch, key) }
+    #[inline] fn seek_key<'a>(&mut self, storage: &Self::Storage, key: Self::Key<'a>) { self.cursor.seek_key(&storage.batch, key) }
 
     #[inline] fn step_val(&mut self, storage: &Self::Storage) { self.cursor.step_val(&storage.batch) }
     #[inline] fn seek_val<'a>(&mut self, storage: &Self::Storage, val: Self::Val<'a>) { self.cursor.seek_val(&storage.batch, val) }

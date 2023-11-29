@@ -121,11 +121,10 @@ where
         &'history mut self,
         cursor: &mut C,
         storage: &'storage C::Storage,
-        key: &C::Key,
+        key: C::Key<'storage>,
         logic: L
     ) -> HistoryReplay<'storage, 'history, C>
     where
-        C::Key: Eq,
         L: Fn(&C::Time)->C::Time,
     {
         self.clear();

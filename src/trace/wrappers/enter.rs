@@ -36,14 +36,14 @@ impl<Tr, TInner> TraceReader for TraceEnter<Tr, TInner>
 where
     Tr: TraceReader,
     Tr::Batch: Clone,
-    Tr::Key: 'static,
-    Tr::Val: 'static,
     Tr::Time: Timestamp,
     Tr::Diff: 'static,
     TInner: Refines<Tr::Time>+Lattice,
 {
-    type Key = Tr::Key;
-    type Val = Tr::Val;
+    type Key<'a> = Tr::Key<'a>;
+    type KeyOwned = Tr::KeyOwned;
+    type Val<'a> = Tr::Val<'a>;
+    type ValOwned = Tr::ValOwned;
     type Time = TInner;
     type Diff = Tr::Diff;
 
@@ -126,8 +126,10 @@ where
     B::Time: Timestamp,
     TInner: Refines<B::Time>+Lattice,
 {
-    type Key = B::Key;
-    type Val = B::Val;
+    type Key<'a> = B::Key<'a>;
+    type KeyOwned = B::KeyOwned;
+    type Val<'a> = B::Val<'a>;
+    type ValOwned = B::ValOwned;
     type Time = TInner;
     type Diff = B::Diff;
 
@@ -180,7 +182,8 @@ where
     C::Time: Timestamp,
     TInner: Refines<C::Time>+Lattice,
 {
-    type Key = C::Key;
+    type Key<'a> = C::Key<'a>;
+    type KeyOwned = C::KeyOwned;
     type Val<'a> = C::Val<'a>;
     type ValOwned = C::ValOwned;
     type Time = TInner;
@@ -191,7 +194,7 @@ where
     #[inline] fn key_valid(&self, storage: &Self::Storage) -> bool { self.cursor.key_valid(storage) }
     #[inline] fn val_valid(&self, storage: &Self::Storage) -> bool { self.cursor.val_valid(storage) }
 
-    #[inline] fn key<'a>(&self, storage: &'a Self::Storage) -> &'a Self::Key { self.cursor.key(storage) }
+    #[inline] fn key<'a>(&self, storage: &'a Self::Storage) -> Self::Key<'a> { self.cursor.key(storage) }
     #[inline] fn val<'a>(&self, storage: &'a Self::Storage) -> Self::Val<'a> { self.cursor.val(storage) }
 
     #[inline]
@@ -202,7 +205,7 @@ where
     }
 
     #[inline] fn step_key(&mut self, storage: &Self::Storage) { self.cursor.step_key(storage) }
-    #[inline] fn seek_key(&mut self, storage: &Self::Storage, key: &Self::Key) { self.cursor.seek_key(storage, key) }
+    #[inline] fn seek_key<'a>(&mut self, storage: &Self::Storage, key: Self::Key<'a>) { self.cursor.seek_key(storage, key) }
 
     #[inline] fn step_val(&mut self, storage: &Self::Storage) { self.cursor.step_val(storage) }
     #[inline] fn seek_val<'a>(&mut self, storage: &Self::Storage, val: Self::Val<'a>) { self.cursor.seek_val(storage, val) }
@@ -233,7 +236,8 @@ where
     B::Time: Timestamp,
     TInner: Refines<B::Time>+Lattice,
 {
-    type Key = C::Key;
+    type Key<'a> = C::Key<'a>;
+    type KeyOwned = C::KeyOwned;
     type Val<'a> = C::Val<'a>;
     type ValOwned = C::ValOwned;
     type Time = TInner;
@@ -244,7 +248,7 @@ where
     #[inline] fn key_valid(&self, storage: &BatchEnter<B, TInner>) -> bool { self.cursor.key_valid(&storage.batch) }
     #[inline] fn val_valid(&self, storage: &BatchEnter<B, TInner>) -> bool { self.cursor.val_valid(&storage.batch) }
 
-    #[inline] fn key<'a>(&self, storage: &'a BatchEnter<B, TInner>) -> &'a Self::Key { self.cursor.key(&storage.batch) }
+    #[inline] fn key<'a>(&self, storage: &'a BatchEnter<B, TInner>) -> Self::Key<'a> { self.cursor.key(&storage.batch) }
     #[inline] fn val<'a>(&self, storage: &'a BatchEnter<B, TInner>) -> Self::Val<'a> { self.cursor.val(&storage.batch) }
 
     #[inline]
@@ -255,7 +259,7 @@ where
     }
 
     #[inline] fn step_key(&mut self, storage: &BatchEnter<B, TInner>) { self.cursor.step_key(&storage.batch) }
-    #[inline] fn seek_key(&mut self, storage: &BatchEnter<B, TInner>, key: &Self::Key) { self.cursor.seek_key(&storage.batch, key) }
+    #[inline] fn seek_key<'a>(&mut self, storage: &BatchEnter<B, TInner>, key: Self::Key<'a>) { self.cursor.seek_key(&storage.batch, key) }
 
     #[inline] fn step_val(&mut self, storage: &BatchEnter<B, TInner>) { self.cursor.step_val(&storage.batch) }
     #[inline] fn seek_val<'a>(&mut self, storage: &BatchEnter<B, TInner>, val: Self::Val<'a>) { self.cursor.seek_val(&storage.batch, val) }

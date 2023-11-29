@@ -13,11 +13,7 @@ pub struct CursorList<C> {
     min_val: Vec<usize>,
 }
 
-impl<C> CursorList<C>
-where
-    C: Cursor, 
-    C::Key: Ord, 
-{
+impl<C: Cursor> CursorList<C> {
     /// Creates a new cursor list from pre-existing cursors.
     pub fn new(cursors: Vec<C>, storage: &[C::Storage]) -> Self  {
         let mut result = CursorList {
@@ -88,11 +84,9 @@ where
     }
 }
 
-impl<C: Cursor> Cursor for CursorList<C>
-where
-    C::Key: Ord,
-{
-    type Key = C::Key;
+impl<C: Cursor> Cursor for CursorList<C> {
+    type Key<'a> = C::Key<'a>;
+    type KeyOwned = C::KeyOwned;
     type Val<'a> = C::Val<'a>;
     type ValOwned = C::ValOwned;
     type Time = C::Time;
@@ -108,7 +102,7 @@ where
 
     // accessors
     #[inline]
-    fn key<'a>(&self, storage: &'a Vec<C::Storage>) -> &'a Self::Key {
+    fn key<'a>(&self, storage: &'a Vec<C::Storage>) -> Self::Key<'a> {
         debug_assert!(self.key_valid(storage));
         debug_assert!(self.cursors[self.min_key[0]].key_valid(&storage[self.min_key[0]]));
         self.cursors[self.min_key[0]].key(&storage[self.min_key[0]])
@@ -136,7 +130,7 @@ where
         self.minimize_keys(storage);
     }
     #[inline]
-    fn seek_key(&mut self, storage: &Vec<C::Storage>, key: &Self::Key) {
+    fn seek_key<'a>(&mut self, storage: &Vec<C::Storage>, key: Self::Key<'a>) {
         for index in 0 .. self.cursors.len() {
             self.cursors[index].seek_key(&storage[index], key);
         }

@@ -45,7 +45,7 @@ where
     G: Scope,
     G::Timestamp: Lattice+Ord,
     N: ExchangeData+Hash,
-    Tr: TraceReader<Key=N, Val=N, Time=G::Timestamp, Diff=isize>+Clone+'static,
+    Tr: for<'a> TraceReader<Key<'a>=&'a N, Val<'a>=&'a N, Time=G::Timestamp, Diff=isize>+Clone+'static,
 {
     forward
         .stream
