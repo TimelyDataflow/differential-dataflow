@@ -10,7 +10,7 @@
 pub mod cursor;
 pub mod description;
 pub mod implementations;
-pub mod layers;
+// pub mod layers;
 pub mod wrappers;
 
 use timely::communication::message::RefOrMut;

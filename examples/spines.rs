@@ -31,14 +31,14 @@ fn main() {
 
             match mode.as_str() {
                 "new" => {
-                    use differential_dataflow::trace::implementations::ord::ColKeySpine;
+                    use differential_dataflow::trace::implementations::ord_neu::ColKeySpine;
                     let data = data.arrange::<ColKeySpine<_,_,_>>();
                     let keys = keys.arrange::<ColKeySpine<_,_,_>>();
                     keys.join_core(&data, |_k, &(), &()| Option::<()>::None)
                         .probe_with(&mut probe);
                 },
                 "old" => {
-                    use differential_dataflow::trace::implementations::ord::OrdKeySpine;
+                    use differential_dataflow::trace::implementations::ord_neu::OrdKeySpine;
                     let data = data.arrange::<OrdKeySpine<_,_,_>>();
                     let keys = keys.arrange::<OrdKeySpine<_,_,_>>();
                     keys.join_core(&data, |_k, &(), &()| Option::<()>::None)
