@@ -231,9 +231,9 @@ use std::convert::TryInto;
 #[derive(Eq, PartialEq, Ord, PartialOrd, Clone, Debug, Abomonation)]
 pub struct OffsetList {
     /// Offsets that fit within a `u32`.
-    smol: Vec<u32>,
+    pub smol: Vec<u32>,
     /// Offsets that either do not fit in a `u32`, or are inserted after some offset that did not fit.
-    chonk: Vec<u64>,
+    pub chonk: Vec<u64>,
 }
 
 impl OffsetList {
