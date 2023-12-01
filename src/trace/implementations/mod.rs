@@ -45,13 +45,13 @@ pub(crate) mod merge_batcher_col;
 
 pub use self::merge_batcher::MergeBatcher as Batcher;
 
-pub mod ord;
+// pub mod ord;
 pub mod ord_neu;
 pub mod rhh;
 
 // Opinionated takes on default spines.
-pub use self::ord::OrdValSpine as ValSpine;
-pub use self::ord::OrdKeySpine as KeySpine;
+pub use self::ord_neu::OrdValSpine as ValSpine;
+pub use self::ord_neu::OrdKeySpine as KeySpine;
 
 use std::borrow::{Borrow, ToOwned};
 
