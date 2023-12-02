@@ -21,7 +21,7 @@ pub fn validate<G, K, V, Tr, F, P>(
 where
     G: Scope,
     G::Timestamp: Lattice,
-    Tr: TraceReader<Key=(K,V), Val=(), Time=G::Timestamp>+Clone+'static,
+    Tr: TraceReader<KeyOwned=(K,V), ValOwned=(), Time=G::Timestamp>+Clone+'static,
     K: Ord+Hash+Clone+Default,
     V: ExchangeData+Hash+Default,
     Tr::Diff: Monoid+Multiply<Output = Tr::Diff>+ExchangeData,
@@ -32,7 +32,7 @@ where
         extensions,
         arrangement,
         move |(pre,val),key| { *key = (key_selector(pre), val.clone()); },
-        |(pre,val),r,&(),_| ((pre.clone(), val.clone()), r.clone()),
+        |(pre,val),r,_,_| ((pre.clone(), val.clone()), r.clone()),
         Default::default(),
         Default::default(),
         Default::default(),

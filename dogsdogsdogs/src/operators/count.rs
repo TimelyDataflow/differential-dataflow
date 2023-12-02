@@ -21,17 +21,17 @@ pub fn count<G, Tr, R, F, P>(
 where
     G: Scope,
     G::Timestamp: Lattice,
-    Tr: TraceReader<Val=(), Time=G::Timestamp, Diff=isize>+Clone+'static,
-    Tr::Key: Ord+Hashable+Default,
+    Tr: TraceReader<ValOwned=(), Time=G::Timestamp, Diff=isize>+Clone+'static,
+    Tr::KeyOwned: Hashable + Default,
     R: Monoid+Multiply<Output = R>+ExchangeData,
-    F: Fn(&P)->Tr::Key+Clone+'static,
+    F: Fn(&P)->Tr::KeyOwned+Clone+'static,
     P: ExchangeData,
 {
     crate::operators::lookup_map(
         prefixes,
         arrangement,
-        move |p: &(P,usize,usize), k: &mut Tr::Key| { *k = key_selector(&p.0); },
-        move |(p,c,i), r, &(), s| {
+        move |p: &(P,usize,usize), k: &mut Tr::KeyOwned| { *k = key_selector(&p.0); },
+        move |(p,c,i), r, _, s| {
             let s = *s as usize;
             if *c < s { ((p.clone(), *c, *i), r.clone()) }
             else      { ((p.clone(), s, index), r.clone()) }
