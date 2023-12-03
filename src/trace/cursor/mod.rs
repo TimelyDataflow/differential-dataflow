@@ -102,16 +102,16 @@ pub trait Cursor {
     /// Advances the cursor to the next key.
     fn step_key(&mut self, storage: &Self::Storage);
     /// Advances the cursor to the specified key.
-    fn seek_key<'a>(&mut self, storage: &Self::Storage, key: Self::Key<'a>);
+    fn seek_key(&mut self, storage: &Self::Storage, key: Self::Key<'_>);
     /// Convenience method to get access by reference to an owned key.
-    fn seek_key_owned<'a>(&mut self, storage: &Self::Storage, key: &'a Self::KeyOwned) {
-        self.seek_key(storage, <Self::Key<'a> as MyTrait<'a>>::borrow_as(key));
+    fn seek_key_owned(&mut self, storage: &Self::Storage, key: &Self::KeyOwned) {
+        self.seek_key(storage, MyTrait::borrow_as(key));
     }
 
     /// Advances the cursor to the next value.
     fn step_val(&mut self, storage: &Self::Storage);
     /// Advances the cursor to the specified value.
-    fn seek_val<'a>(&mut self, storage: &Self::Storage, val: Self::Val<'a>);
+    fn seek_val(&mut self, storage: &Self::Storage, val: Self::Val<'_>);
 
     /// Rewinds the cursor to the first key.
     fn rewind_keys(&mut self, storage: &Self::Storage);

@@ -470,7 +470,7 @@ mod val_batch {
                 self.key_cursor = storage.storage.keys.len();
             }
         }
-        fn seek_key<'a>(&mut self, storage: &OrdValBatch<L>, key: Self::Key<'a>) {
+        fn seek_key(&mut self, storage: &OrdValBatch<L>, key: Self::Key<'_>) {
             self.key_cursor += storage.storage.keys.advance(self.key_cursor, storage.storage.keys.len(), |x| x.lt(&key));
             if self.key_valid(storage) {
                 self.rewind_vals(storage);
@@ -482,7 +482,7 @@ mod val_batch {
                 self.val_cursor = storage.storage.values_for_key(self.key_cursor).1;
             }
         }
-        fn seek_val<'a>(&mut self, storage: &OrdValBatch<L>, val: Self::Val<'a>) {
+        fn seek_val(&mut self, storage: &OrdValBatch<L>, val: Self::Val<'_>) {
             self.val_cursor += storage.storage.vals.advance(self.val_cursor, storage.storage.values_for_key(self.key_cursor).1, |x| x.lt(&val));
         }
         fn rewind_keys(&mut self, storage: &OrdValBatch<L>) {
@@ -940,7 +940,7 @@ mod key_batch {
                 self.key_cursor = storage.storage.keys.len();
             }
         }
-        fn seek_key<'a>(&mut self, storage: &Self::Storage, key: Self::Key<'a>) {
+        fn seek_key(&mut self, storage: &Self::Storage, key: Self::Key<'_>) {
             self.key_cursor += storage.storage.keys.advance(self.key_cursor, storage.storage.keys.len(), |x| x.lt(&key));
             if self.key_valid(storage) {
                 self.rewind_vals(storage);
@@ -949,7 +949,7 @@ mod key_batch {
         fn step_val(&mut self, _storage: &Self::Storage) {
             self.val_stepped = true;
         }
-        fn seek_val<'a>(&mut self, _storage: &Self::Storage, _val: Self::Val<'a>) { }
+        fn seek_val(&mut self, _storage: &Self::Storage, _val: Self::Val<'_>) { }
         fn rewind_keys(&mut self, storage: &Self::Storage) {
             self.key_cursor = 0;
             if self.key_valid(storage) {

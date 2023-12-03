@@ -128,7 +128,7 @@ where
             Tr::Diff: 'static,
             G::Timestamp: Clone+'static,
             TInner: Refines<G::Timestamp>+Lattice+Timestamp+Clone+'static,
-            F: for <'b> FnMut(Tr::Key<'b>, Tr::Val<'b>, &G::Timestamp)->TInner+Clone+'static,
+            F: FnMut(Tr::Key<'_>, Tr::Val<'_>, &G::Timestamp)->TInner+Clone+'static,
             P: FnMut(&TInner)->Tr::Time+Clone+'static,
         {
         let logic1 = logic.clone();
@@ -175,7 +175,7 @@ where
         where
             Tr::Diff: 'static,
             G::Timestamp: Clone+'static,
-            F: for<'a> FnMut(Tr::Key<'a>, Tr::Val<'a>)->bool+Clone+'static,
+            F: FnMut(Tr::Key<'_>, Tr::Val<'_>)->bool+Clone+'static,
     {
         let logic1 = logic.clone();
         let logic2 = logic.clone();
@@ -192,7 +192,7 @@ where
     pub fn as_collection<D: Data, L>(&self, mut logic: L) -> Collection<G, D, Tr::Diff>
         where
             Tr::Diff: Semigroup,
-            L: for<'a> FnMut(Tr::Key<'a>, Tr::Val<'a>) -> D+'static,
+            L: FnMut(Tr::Key<'_>, Tr::Val<'_>) -> D+'static,
     {
         self.flat_map_ref(move |key, val| Some(logic(key,val)))
     }
@@ -206,7 +206,7 @@ where
             Tr::Diff: Semigroup,
             I: IntoIterator,
             I::Item: Data,
-            L: for<'a> FnMut(Tr::Key<'a>, Tr::Val<'a>) -> I+'static,
+            L: FnMut(Tr::Key<'_>, Tr::Val<'_>) -> I+'static,
     {
         Self::flat_map_batches(&self.stream, logic)
     }
@@ -223,7 +223,7 @@ where
         Tr::Diff: Semigroup,
         I: IntoIterator,
         I::Item: Data,
-        L: for<'a> FnMut(Tr::Key<'a>, Tr::Val<'a>) -> I+'static,
+        L: FnMut(Tr::Key<'_>, Tr::Val<'_>) -> I+'static,
     {
         stream.unary(Pipeline, "AsCollection", move |_,_| move |input, output| {
             input.for_each(|time, data| {

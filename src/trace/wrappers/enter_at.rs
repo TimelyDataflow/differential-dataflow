@@ -52,7 +52,7 @@ where
     TInner: Refines<Tr::Time>+Lattice,
     Tr::Diff: 'static,
     F: 'static,
-    F: for<'a> FnMut(Tr::Key<'a>, Tr::Val<'a>, &Tr::Time)->TInner+Clone,
+    F: FnMut(Tr::Key<'_>, Tr::Val<'_>, &Tr::Time)->TInner+Clone,
     G: FnMut(&TInner)->Tr::Time+Clone+'static,
 {
     type Key<'a> = Tr::Key<'a>;
@@ -144,7 +144,7 @@ where
     B: BatchReader,
     B::Time: Timestamp,
     TInner: Refines<B::Time>+Lattice,
-    F: for <'a> FnMut(B::Key<'a>, <B::Cursor as Cursor>::Val<'a>, &B::Time)->TInner+Clone,
+    F: FnMut(B::Key<'_>, <B::Cursor as Cursor>::Val<'_>, &B::Time)->TInner+Clone,
 {
     type Key<'a> = B::Key<'a>;
     type KeyOwned = B::KeyOwned;
@@ -204,7 +204,7 @@ where
     C: Cursor,
     C::Time: Timestamp,
     TInner: Refines<C::Time>+Lattice,
-    F: for<'a> FnMut(C::Key<'a>, C::Val<'a>, &C::Time)->TInner,
+    F: FnMut(C::Key<'_>, C::Val<'_>, &C::Time)->TInner,
 {
     type Key<'a> = C::Key<'a>;
     type KeyOwned = C::KeyOwned;
@@ -232,10 +232,10 @@ where
     }
 
     #[inline] fn step_key(&mut self, storage: &Self::Storage) { self.cursor.step_key(storage) }
-    #[inline] fn seek_key<'a>(&mut self, storage: &Self::Storage, key: Self::Key<'a>) { self.cursor.seek_key(storage, key) }
+    #[inline] fn seek_key(&mut self, storage: &Self::Storage, key: Self::Key<'_>) { self.cursor.seek_key(storage, key) }
 
     #[inline] fn step_val(&mut self, storage: &Self::Storage) { self.cursor.step_val(storage) }
-    #[inline] fn seek_val<'a>(&mut self, storage: &Self::Storage, val: Self::Val<'a>) { self.cursor.seek_val(storage, val) }
+    #[inline] fn seek_val(&mut self, storage: &Self::Storage, val: Self::Val<'_>) { self.cursor.seek_val(storage, val) }
 
     #[inline] fn rewind_keys(&mut self, storage: &Self::Storage) { self.cursor.rewind_keys(storage) }
     #[inline] fn rewind_vals(&mut self, storage: &Self::Storage) { self.cursor.rewind_vals(storage) }
@@ -260,12 +260,11 @@ impl<C, TInner, F> BatchCursorEnter<C, TInner, F> {
     }
 }
 
-// impl<TInner, C: Cursor<Storage=B, Time=B::Time, Key=B::Key>, B: BatchReader<Cursor=C>, F> Cursor for BatchCursorEnter<B, TInner, F>
 impl<TInner, C: Cursor, F> Cursor for BatchCursorEnter<C, TInner, F>
 where
     C::Time: Timestamp,
     TInner: Refines<C::Time>+Lattice,
-    F: for<'a> FnMut(C::Key<'a>, C::Val<'a>, &C::Time)->TInner,
+    F: FnMut(C::Key<'_>, C::Val<'_>, &C::Time)->TInner,
 {
     type Key<'a> = C::Key<'a>;
     type KeyOwned = C::KeyOwned;
@@ -293,10 +292,10 @@ where
     }
 
     #[inline] fn step_key(&mut self, storage: &Self::Storage) { self.cursor.step_key(&storage.batch) }
-    #[inline] fn seek_key<'a>(&mut self, storage: &Self::Storage, key: Self::Key<'a>) { self.cursor.seek_key(&storage.batch, key) }
+    #[inline] fn seek_key(&mut self, storage: &Self::Storage, key: Self::Key<'_>) { self.cursor.seek_key(&storage.batch, key) }
 
     #[inline] fn step_val(&mut self, storage: &Self::Storage) { self.cursor.step_val(&storage.batch) }
-    #[inline] fn seek_val<'a>(&mut self, storage: &Self::Storage, val: Self::Val<'a>) { self.cursor.seek_val(&storage.batch, val) }
+    #[inline] fn seek_val(&mut self, storage: &Self::Storage, val: Self::Val<'_>) { self.cursor.seek_val(&storage.batch, val) }
 
     #[inline] fn rewind_keys(&mut self, storage: &Self::Storage) { self.cursor.rewind_keys(&storage.batch) }
     #[inline] fn rewind_vals(&mut self, storage: &Self::Storage) { self.cursor.rewind_vals(&storage.batch) }

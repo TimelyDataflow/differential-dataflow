@@ -31,7 +31,7 @@ where
     Tr::Batch: Clone,
     Tr::Time: Timestamp,
     Tr::Diff: 'static,
-    F: for<'a> FnMut(Tr::Key<'a>, Tr::Val<'a>)->bool+Clone+'static,
+    F: FnMut(Tr::Key<'_>, Tr::Val<'_>)->bool+Clone+'static,
 {
     type Key<'a> = Tr::Key<'a>;
     type KeyOwned = Tr::KeyOwned;
@@ -87,7 +87,7 @@ impl<B, F> BatchReader for BatchFilter<B, F>
 where
     B: BatchReader,
     B::Time: Timestamp,
-    F: for<'a> FnMut(B::Key<'a>, B::Val<'a>)->bool+Clone+'static
+    F: FnMut(B::Key<'_>, B::Val<'_>)->bool+Clone+'static
 {
     type Key<'a> = B::Key<'a>;
     type KeyOwned = B::KeyOwned;
@@ -138,7 +138,7 @@ impl<C, F> Cursor for CursorFilter<C, F>
 where
     C: Cursor,
     C::Time: Timestamp,
-    F: for<'a> FnMut(C::Key<'a>, C::Val<'a>)->bool+'static
+    F: FnMut(C::Key<'_>, C::Val<'_>)->bool+'static
 {
     type Key<'a> = C::Key<'a>;
     type KeyOwned = C::KeyOwned;
@@ -165,10 +165,10 @@ where
     }
 
     #[inline] fn step_key(&mut self, storage: &Self::Storage) { self.cursor.step_key(storage) }
-    #[inline] fn seek_key<'a>(&mut self, storage: &Self::Storage, key: Self::Key<'a>) { self.cursor.seek_key(storage, key) }
+    #[inline] fn seek_key(&mut self, storage: &Self::Storage, key: Self::Key<'_>) { self.cursor.seek_key(storage, key) }
 
     #[inline] fn step_val(&mut self, storage: &Self::Storage) { self.cursor.step_val(storage) }
-    #[inline] fn seek_val<'a>(&mut self, storage: &Self::Storage, val: Self::Val<'a>) { self.cursor.seek_val(storage, val) }
+    #[inline] fn seek_val(&mut self, storage: &Self::Storage, val: Self::Val<'_>) { self.cursor.seek_val(storage, val) }
 
     #[inline] fn rewind_keys(&mut self, storage: &Self::Storage) { self.cursor.rewind_keys(storage) }
     #[inline] fn rewind_vals(&mut self, storage: &Self::Storage) { self.cursor.rewind_vals(storage) }
@@ -194,7 +194,7 @@ impl<C, F> BatchCursorFilter<C, F> {
 impl<C: Cursor, F> Cursor for BatchCursorFilter<C, F>
 where
     C::Time: Timestamp,
-    F: for <'a> FnMut(C::Key<'a>, C::Val<'a>)->bool+'static,
+    F: FnMut(C::Key<'_>, C::Val<'_>)->bool+'static,
 {
     type Key<'a> = C::Key<'a>;
     type KeyOwned = C::KeyOwned;
@@ -221,10 +221,10 @@ where
     }
 
     #[inline] fn step_key(&mut self, storage: &Self::Storage) { self.cursor.step_key(&storage.batch) }
-    #[inline] fn seek_key<'a>(&mut self, storage: &Self::Storage, key: Self::Key<'a>) { self.cursor.seek_key(&storage.batch, key) }
+    #[inline] fn seek_key(&mut self, storage: &Self::Storage, key: Self::Key<'_>) { self.cursor.seek_key(&storage.batch, key) }
 
     #[inline] fn step_val(&mut self, storage: &Self::Storage) { self.cursor.step_val(&storage.batch) }
-    #[inline] fn seek_val<'a>(&mut self, storage: &Self::Storage, val: Self::Val<'a>) { self.cursor.seek_val(&storage.batch, val) }
+    #[inline] fn seek_val(&mut self, storage: &Self::Storage, val: Self::Val<'_>) { self.cursor.seek_val(&storage.batch, val) }
 
     #[inline] fn rewind_keys(&mut self, storage: &Self::Storage) { self.cursor.rewind_keys(&storage.batch) }
     #[inline] fn rewind_vals(&mut self, storage: &Self::Storage) { self.cursor.rewind_vals(&storage.batch) }

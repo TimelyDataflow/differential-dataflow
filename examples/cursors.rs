@@ -139,7 +139,6 @@ where
     Tr::ValOwned: Debug + Clone,
     Tr::Time: Debug + Clone,
     Tr::Diff: Debug + Clone,
-    <Tr::Cursor as Cursor>::ValOwned: Debug,
 {
     let (mut cursor, storage) = trace.cursor();
     for ((k, v), diffs) in cursor.to_vec(&storage).iter() {

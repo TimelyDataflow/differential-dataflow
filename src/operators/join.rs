@@ -357,8 +357,8 @@ impl<G, K, V, T1> JoinCore<G, K, V, T1::Diff> for Arranged<G,T1>
         G: Scope,
         G::Timestamp: Lattice+Ord,
         T1: for<'a> TraceReader<Key<'a> = &'a K, Val<'a> = &'a V, Time=G::Timestamp>+Clone+'static,
-        K: Ord+'static + ?Sized,
-        V: Ord+'static + ?Sized,
+        K: Ord+'static,
+        V: Ord+'static,
         T1::Diff: Semigroup,
 {
     fn join_core<Tr2,I,L>(&self, other: &Arranged<G,Tr2>, mut result: L) -> Collection<G,I::Item,<T1::Diff as Multiply<Tr2::Diff>>::Output>
@@ -796,7 +796,7 @@ where
         }
     }
 
-    fn think<'b, F: FnMut(C1::Val<'a>,C2::Val<'a>,C1::Time,&C1::Diff,&C2::Diff)>(&'b mut self, mut results: F) {
+    fn think<F: FnMut(C1::Val<'a>,C2::Val<'a>,C1::Time,&C1::Diff,&C2::Diff)>(&mut self, mut results: F) {
 
         // for reasonably sized edits, do the dead-simple thing.
         if self.history1.edits.len() < 10 || self.history2.edits.len() < 10 {

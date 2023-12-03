@@ -363,7 +363,7 @@ where
     fn step_key(&mut self, storage: &OrdValBatch<L>){ self.cursor.step(&storage.layer); }
     fn seek_key(&mut self, storage: &OrdValBatch<L>, key: &Self::Key) { self.cursor.seek(&storage.layer, key); }
     fn step_val(&mut self, storage: &OrdValBatch<L>) { self.cursor.child.step(&storage.layer.vals); }
-    fn seek_val<'a>(&mut self, storage: &OrdValBatch<L>, val: Self::Val<'a>) { self.cursor.child.seek(&storage.layer.vals, val); }
+    fn seek_val(&mut self, storage: &OrdValBatch<L>, val: Self::Val<'a>) { self.cursor.child.seek(&storage.layer.vals, val); }
     fn rewind_keys(&mut self, storage: &OrdValBatch<L>) { self.cursor.rewind(&storage.layer); }
     fn rewind_vals(&mut self, storage: &OrdValBatch<L>) { self.cursor.child.rewind(&storage.layer.vals); }
 }

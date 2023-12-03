@@ -31,8 +31,6 @@ where
     G::Timestamp: Lattice,
     Tr: TraceReader<Time=G::Timestamp>+Clone+'static,
     Tr::KeyOwned: Hashable,
-    // Tr::Key: Ord+Hashable+Sized,
-    // Tr::Val: Clone,
     Tr::Diff: Monoid+ExchangeData,
     F: FnMut(&D, &mut Tr::KeyOwned)+Clone+'static,
     D: ExchangeData,

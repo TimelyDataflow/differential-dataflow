@@ -91,7 +91,6 @@ struct ValueHistory<'storage, C: Cursor> where C::Time: Sized, C::Diff: Sized {
 
 impl<'storage, C: Cursor> ValueHistory<'storage, C>
 where
-    // C::Val: Ord+'storage,
     C::Time: Lattice+Ord+Clone,
     C::Diff: Semigroup,
 {
@@ -136,7 +135,7 @@ where
     }
 
     /// Organizes history based on current contents of edits.
-    fn replay<'history>(&'history mut self) -> HistoryReplay<'storage, 'history, C> where 'storage: 'history {
+    fn replay<'history>(&'history mut self) -> HistoryReplay<'storage, 'history, C> {
 
         self.buffer.clear();
         self.history.clear();
@@ -164,7 +163,6 @@ struct HistoryReplay<'storage, 'history, C>
 where
     'storage: 'history,
     C: Cursor,
-    // C::Val: Ord+'storage,
     C::Time: Lattice+Ord+Clone+'history,
     C::Diff: Semigroup+'history,
 {
@@ -175,13 +173,12 @@ impl<'storage, 'history, C> HistoryReplay<'storage, 'history, C>
 where
     'storage: 'history,
     C: Cursor,
-    // C::Val: Ord+'storage,
     C::Time: Lattice+Ord+Clone+'history,
     C::Diff: Semigroup+'history,
 {
     fn time(&self) -> Option<&C::Time> { self.replay.history.last().map(|x| &x.0) }
     fn meet(&self) -> Option<&C::Time> { self.replay.history.last().map(|x| &x.1) }
-    fn edit<'s>(&'s self) -> Option<(C::Val<'storage>, &'s C::Time, &'s C::Diff)> {
+    fn edit(&self) -> Option<(C::Val<'storage>, &C::Time, &C::Diff)> {
         self.replay.history.last().map(|&(ref t, _, v, e)| (self.replay.edits.values[v].0, t, &self.replay.edits.edits[e].1))
     }
 
