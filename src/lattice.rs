@@ -268,7 +268,7 @@ implement_lattice!((), ());
 /// let f1 = &[Product::new(3, 7), Product::new(5, 6)];
 /// let f2 = &[Product::new(4, 6)];
 /// let join = antichain_join(f1, f2);
-/// assert_eq!(&*join.elements(), &[Product::new(4, 7), Product::new(5, 6)]);
+/// assert_eq!(&*join, &[Product::new(4, 7), Product::new(5, 6)]);
 /// # }
 /// ```
 pub fn antichain_join<T: Lattice>(one: &[T], other: &[T]) -> Antichain<T> {
@@ -302,7 +302,7 @@ pub fn antichain_join<T: Lattice>(one: &[T], other: &[T]) -> Antichain<T> {
 /// let f1 = &[Product::new(3, 7), Product::new(5, 6)];
 /// let f2 = &[Product::new(4, 6)];
 /// antichain_join_into(f1, f2, &mut join);
-/// assert_eq!(&*join.elements(), &[Product::new(4, 7), Product::new(5, 6)]);
+/// assert_eq!(&*join, &[Product::new(4, 7), Product::new(5, 6)]);
 /// # }
 /// ```
 pub fn antichain_join_into<T: Lattice>(one: &[T], other: &[T], upper: &mut Antichain<T>) {
@@ -334,7 +334,7 @@ pub fn antichain_join_into<T: Lattice>(one: &[T], other: &[T], upper: &mut Antic
 /// let f1 = &[Product::new(3, 7), Product::new(5, 6)];
 /// let f2 = &[Product::new(4, 6)];
 /// let meet = antichain_meet(f1, f2);
-/// assert_eq!(&*meet.elements(), &[Product::new(3, 7), Product::new(4, 6)]);
+/// assert_eq!(&*meet, &[Product::new(3, 7), Product::new(4, 6)]);
 /// # }
 /// ```
 pub fn antichain_meet<T: Lattice+Clone>(one: &[T], other: &[T]) -> Antichain<T> {
@@ -351,8 +351,8 @@ pub fn antichain_meet<T: Lattice+Clone>(one: &[T], other: &[T]) -> Antichain<T> 
 impl<T: Lattice+Clone> Lattice for Antichain<T> {
     fn join(&self, other: &Self) -> Self {
         let mut upper = Antichain::new();
-        for time1 in self.elements().iter() {
-            for time2 in other.elements().iter() {
+        for time1 in self.iter() {
+            for time2 in other.iter() {
                 upper.insert(time1.join(time2));
             }
         }
@@ -360,10 +360,10 @@ impl<T: Lattice+Clone> Lattice for Antichain<T> {
     }
     fn meet(&self, other: &Self) -> Self {
         let mut upper = Antichain::new();
-        for time1 in self.elements().iter() {
+        for time1 in self.iter() {
             upper.insert(time1.clone());
         }
-        for time2 in other.elements().iter() {
+        for time2 in other.iter() {
             upper.insert(time2.clone());
         }
         upper

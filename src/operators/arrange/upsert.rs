@@ -208,12 +208,12 @@ where
                 if prev_frontier.borrow() != input.frontier().frontier() {
 
                     // If there is at least one capability not in advance of the input frontier ...
-                    if capabilities.elements().iter().any(|c| !input.frontier().less_equal(c.time())) {
+                    if capabilities.iter().any(|c| !input.frontier().less_equal(c.time())) {
 
                         let mut upper = Antichain::new();   // re-used allocation for sealing batches.
 
                         // For each capability not in advance of the input frontier ...
-                        for (index, capability) in capabilities.elements().iter().enumerate() {
+                        for (index, capability) in capabilities.iter().enumerate() {
 
                             if !input.frontier().less_equal(capability.time()) {
 
@@ -224,7 +224,7 @@ where
                                 for time in input.frontier().frontier().iter() {
                                     upper.insert(time.clone());
                                 }
-                                for other_capability in &capabilities.elements()[(index + 1) .. ] {
+                                for other_capability in &capabilities[(index + 1) .. ] {
                                     upper.insert(other_capability.time().clone());
                                 }
 
@@ -297,7 +297,7 @@ where
 
                                 // Communicate `batch` to the arrangement and the stream.
                                 writer.insert(batch.clone(), Some(capability.time().clone()));
-                                output.session(&capabilities.elements()[index]).give(batch);
+                                output.session(&capabilities[index]).give(batch);
                             }
                         }
 
@@ -308,7 +308,7 @@ where
 
                         let mut new_capabilities = Antichain::new();
                         if let Some(std::cmp::Reverse((time, _, _))) = priority_queue.peek() {
-                            if let Some(capability) = capabilities.elements().iter().find(|c| c.time().less_equal(time)) {
+                            if let Some(capability) = capabilities.iter().find(|c| c.time().less_equal(time)) {
                                 new_capabilities.insert(capability.delayed(time));
                             }
                             else {

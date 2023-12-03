@@ -542,8 +542,8 @@ pub mod source {
                     let capability =
                         capability.expect("Changes occurred, without surfacing a capability");
                     let mut changes = ChangeBatch::new();
-                    changes.extend(lower_bound.elements().iter().map(|t| (t.clone(), 1)));
-                    changes.extend(reported_frontier.elements().iter().map(|t| (t.clone(), -1)));
+                    changes.extend(lower_bound.iter().map(|t| (t.clone(), 1)));
+                    changes.extend(reported_frontier.iter().map(|t| (t.clone(), -1)));
                     let mut frontier_session = frontier.session(&capability);
                     for peer in 0..workers {
                         frontier_session.give((peer, changes.clone()));
@@ -724,7 +724,7 @@ pub mod sink {
 
                             // Announce the lower bound, upper bound, and timestamp counts.
                             let progress = Progress {
-                                lower: frontier.elements().to_vec(),
+                                lower: frontier.to_vec(),
                                 upper: new_frontier.to_vec(),
                                 counts: announce,
                             };

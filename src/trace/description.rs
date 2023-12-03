@@ -78,7 +78,7 @@ pub struct Description<Time> {
 impl<Time: PartialOrder+Clone> Description<Time> {
     /// Returns a new description from its component parts.
     pub fn new(lower: Antichain<Time>, upper: Antichain<Time>, since: Antichain<Time>) -> Self {
-        assert!(lower.elements().len() > 0);    // this should always be true.
+        assert!(lower.len() > 0);    // this should always be true.
         // assert!(upper.len() > 0);            // this may not always be true.
         Description {
             lower,
