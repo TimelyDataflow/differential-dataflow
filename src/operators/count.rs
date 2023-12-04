@@ -55,14 +55,14 @@ where G::Timestamp: TotalOrder+Lattice+Ord {
     }
 }
 
-impl<G: Scope, T1> CountTotal<G, T1::Key, T1::Diff> for Arranged<G, T1>
+impl<G: Scope, T1> CountTotal<G, T1::KeyOwned, T1::Diff> for Arranged<G, T1>
 where
     G::Timestamp: TotalOrder+Lattice+Ord,
-    T1: TraceReader<Val=(), Time=G::Timestamp>+Clone+'static,
-    T1::Key: ExchangeData,
+    T1: for<'a> TraceReader<Val<'a>=&'a (), Time=G::Timestamp>+Clone+'static,
+    T1::KeyOwned: ExchangeData,
     T1::Diff: ExchangeData+Semigroup,
 {
-    fn count_total_core<R2: Semigroup + From<i8>>(&self) -> Collection<G, (T1::Key, T1::Diff), R2> {
+    fn count_total_core<R2: Semigroup + From<i8>>(&self) -> Collection<G, (T1::KeyOwned, T1::Diff), R2> {
 
         let mut trace = self.trace.clone();
         let mut buffer = Vec::new();
@@ -74,6 +74,7 @@ where
 
             move |input, output| {
 
+                use trace::cursor::MyTrait;
                 input.for_each(|capability, batches| {
                     batches.swap(&mut buffer);
                     let mut session = output.session(&capability);
@@ -97,14 +98,14 @@ where
 
                                 if let Some(count) = count.as_ref() {
                                     if !count.is_zero() {
-                                        session.give(((key.clone(), count.clone()), time.clone(), R2::from(-1i8)));
+                                        session.give(((key.into_owned(), count.clone()), time.clone(), R2::from(-1i8)));
                                     }
                                 }
                                 count.as_mut().map(|c| c.plus_equals(diff));
                                 if count.is_none() { count = Some(diff.clone()); }
                                 if let Some(count) = count.as_ref() {
                                     if !count.is_zero() {
-                                        session.give(((key.clone(), count.clone()), time.clone(), R2::from(1i8)));
+                                        session.give(((key.into_owned(), count.clone()), time.clone(), R2::from(1i8)));
                                     }
                                 }
                             });

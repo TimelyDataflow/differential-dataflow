@@ -112,13 +112,13 @@ where
 impl<B, BA, BU> TraceReader for Spine<B, BA, BU>
 where
     B: Batch+Clone+'static,
-    B::Key: Ord,           // Clone is required by `batch::advance_*` (in-place could remove).
-    B::Val: Ord,           // Clone is required by `batch::advance_*` (in-place could remove).
     B::Time: Lattice+timely::progress::Timestamp+Ord+Clone+Debug,
     B::Diff: Semigroup,
 {
-    type Key = B::Key;
-    type Val = B::Val;
+    type Key<'a> = B::Key<'a>;
+    type KeyOwned = B::KeyOwned;
+    type Val<'a> = B::Val<'a>;
+    type ValOwned = B::ValOwned;
     type Time = B::Time;
     type Diff = B::Diff;
 
@@ -260,8 +260,6 @@ where
 impl<B, BA, BU> Trace for Spine<B, BA, BU>
 where
     B: Batch+Clone+'static,
-    B::Key: Ord,
-    B::Val: Ord,
     B::Time: Lattice+timely::progress::Timestamp+Ord+Clone+Debug,
     B::Diff: Semigroup,
     BA: Batcher<Time = B::Time>,
@@ -403,8 +401,6 @@ where
 impl<B, BA, BU> Spine<B, BA, BU>
 where
     B: Batch,
-    B::Key: Ord,
-    B::Val: Ord,
     B::Time: Lattice+timely::progress::Timestamp+Ord+Clone+Debug,
     B::Diff: Semigroup,
 {

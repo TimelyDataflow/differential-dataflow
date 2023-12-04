@@ -37,6 +37,8 @@ use trace::wrappers::enter_at::TraceEnter as TraceEnterAt;
 use trace::wrappers::enter_at::BatchEnter as BatchEnterAt;
 use trace::wrappers::filter::{TraceFilter, BatchFilter};
 
+use trace::cursor::MyTrait;
+
 use super::TraceAgent;
 
 /// An arranged collection of `(K,V)` values.
@@ -89,8 +91,6 @@ where
     pub fn enter<'a, TInner>(&self, child: &Child<'a, G, TInner>)
         -> Arranged<Child<'a, G, TInner>, TraceEnter<Tr, TInner>>
         where
-            Tr::Key: 'static,
-            Tr::Val: 'static,
             Tr::Diff: 'static,
             G::Timestamp: Clone+'static,
             TInner: Refines<G::Timestamp>+Lattice+Timestamp+Clone+'static,
@@ -108,8 +108,6 @@ where
     pub fn enter_region<'a>(&self, child: &Child<'a, G, G::Timestamp>)
         -> Arranged<Child<'a, G, G::Timestamp>, Tr>
         where
-            Tr::Key: 'static,
-            Tr::Val: 'static,
             Tr::Diff: 'static,
             G::Timestamp: Clone+'static,
     {
@@ -127,12 +125,10 @@ where
     pub fn enter_at<'a, TInner, F, P>(&self, child: &Child<'a, G, TInner>, logic: F, prior: P)
         -> Arranged<Child<'a, G, TInner>, TraceEnterAt<Tr, TInner, F, P>>
         where
-            Tr::Key: 'static,
-            Tr::Val: 'static,
             Tr::Diff: 'static,
             G::Timestamp: Clone+'static,
             TInner: Refines<G::Timestamp>+Lattice+Timestamp+Clone+'static,
-            F: FnMut(&Tr::Key, &Tr::Val, &G::Timestamp)->TInner+Clone+'static,
+            F: FnMut(Tr::Key<'_>, Tr::Val<'_>, &G::Timestamp)->TInner+Clone+'static,
             P: FnMut(&TInner)->Tr::Time+Clone+'static,
         {
         let logic1 = logic.clone();
@@ -177,11 +173,9 @@ where
     pub fn filter<F>(&self, logic: F)
         -> Arranged<G, TraceFilter<Tr, F>>
         where
-            Tr::Key: 'static,
-            Tr::Val: 'static,
             Tr::Diff: 'static,
             G::Timestamp: Clone+'static,
-            F: FnMut(&Tr::Key, &Tr::Val)->bool+Clone+'static,
+            F: FnMut(Tr::Key<'_>, Tr::Val<'_>)->bool+Clone+'static,
     {
         let logic1 = logic.clone();
         let logic2 = logic.clone();
@@ -198,7 +192,7 @@ where
     pub fn as_collection<D: Data, L>(&self, mut logic: L) -> Collection<G, D, Tr::Diff>
         where
             Tr::Diff: Semigroup,
-            L: FnMut(&Tr::Key, &Tr::Val) -> D+'static,
+            L: FnMut(Tr::Key<'_>, Tr::Val<'_>) -> D+'static,
     {
         self.flat_map_ref(move |key, val| Some(logic(key,val)))
     }
@@ -212,7 +206,7 @@ where
             Tr::Diff: Semigroup,
             I: IntoIterator,
             I::Item: Data,
-            L: FnMut(&Tr::Key, &Tr::Val) -> I+'static,
+            L: FnMut(Tr::Key<'_>, Tr::Val<'_>) -> I+'static,
     {
         Self::flat_map_batches(&self.stream, logic)
     }
@@ -229,7 +223,7 @@ where
         Tr::Diff: Semigroup,
         I: IntoIterator,
         I::Item: Data,
-        L: FnMut(&Tr::Key, &Tr::Val) -> I+'static,
+        L: FnMut(Tr::Key<'_>, Tr::Val<'_>) -> I+'static,
     {
         stream.unary(Pipeline, "AsCollection", move |_,_| move |input, output| {
             input.for_each(|time, data| {
@@ -258,16 +252,16 @@ where
     ///
     /// This method consumes a stream of (key, time) queries and reports the corresponding stream of
     /// (key, value, time, diff) accumulations in the `self` trace.
-    pub fn lookup(&self, queries: &Stream<G, (Tr::Key, G::Timestamp)>) -> Stream<G, (Tr::Key, Tr::Val, G::Timestamp, Tr::Diff)>
+    pub fn lookup(&self, queries: &Stream<G, (Tr::KeyOwned, G::Timestamp)>) -> Stream<G, (Tr::KeyOwned, Tr::ValOwned, G::Timestamp, Tr::Diff)>
     where
         G::Timestamp: Data+Lattice+Ord+TotalOrder,
-        Tr::Key: ExchangeData+Hashable,
-        Tr::Val: ExchangeData,
+        Tr::KeyOwned: ExchangeData+Hashable,
+        Tr::ValOwned: ExchangeData,
         Tr::Diff: ExchangeData+Semigroup,
         Tr: 'static,
     {
         // while the arrangement is already correctly distributed, the query stream may not be.
-        let exchange = Exchange::new(move |update: &(Tr::Key,G::Timestamp)| update.0.hashed().into());
+        let exchange = Exchange::new(move |update: &(Tr::KeyOwned,G::Timestamp)| update.0.hashed().into());
         queries.binary_frontier(&self.stream, exchange, Pipeline, "TraceQuery", move |_capability, _info| {
 
             let mut trace = Some(self.trace.clone());
@@ -280,8 +274,8 @@ where
             let mut active = Vec::new();
             let mut retain = Vec::new();
 
-            let mut working: Vec<(G::Timestamp, Tr::Val, Tr::Diff)> = Vec::new();
-            let mut working2: Vec<(Tr::Val, Tr::Diff)> = Vec::new();
+            let mut working: Vec<(G::Timestamp, Tr::ValOwned, Tr::Diff)> = Vec::new();
+            let mut working2: Vec<(Tr::ValOwned, Tr::Diff)> = Vec::new();
 
             move |input1, input2, output| {
 
@@ -346,13 +340,13 @@ where
                                 same_key += 1;
                             }
 
-                            cursor.seek_key(&storage, key);
-                            if cursor.get_key(&storage) == Some(key) {
+                            cursor.seek_key_owned(&storage, key);
+                            if cursor.get_key(&storage).map(|k| k.equals(key)).unwrap_or(false) {
 
                                 let mut active = &active[active_finger .. same_key];
 
                                 while let Some(val) = cursor.get_val(&storage) {
-                                    cursor.map_times(&storage, |t,d| working.push((t.clone(), val.clone(), d.clone())));
+                                    cursor.map_times(&storage, |t,d| working.push((t.clone(), val.into_owned(), d.clone())));
                                     cursor.step_val(&storage);
                                 }
 

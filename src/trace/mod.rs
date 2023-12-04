@@ -17,6 +17,8 @@ use timely::communication::message::RefOrMut;
 use timely::progress::{Antichain, frontier::AntichainRef};
 use timely::progress::Timestamp;
 
+use trace::cursor::MyTrait;
+
 // use ::difference::Semigroup;
 pub use self::cursor::Cursor;
 pub use self::description::Description;
@@ -47,22 +49,26 @@ pub type ExertionLogic = std::sync::Arc<dyn for<'a> Fn(Box<dyn Iterator<Item=(us
 pub trait TraceReader {
 
     /// Key by which updates are indexed.
-    type Key: ?Sized;
+    type Key<'a>: Copy + Clone + MyTrait<'a, Owned = Self::KeyOwned>;
+    /// Owned version of the above.
+    type KeyOwned: Ord + Clone;
     /// Values associated with keys.
-    type Val: ?Sized;
+    type Val<'a>: Copy + Clone + MyTrait<'a, Owned = Self::ValOwned>;
+    /// Owned version of the above.
+    type ValOwned: Ord + Clone;
     /// Timestamps associated with updates
     type Time;
     /// Associated update.
     type Diff;
 
     /// The type of an immutable collection of updates.
-    type Batch: BatchReader<Key = Self::Key, Val = Self::Val, Time = Self::Time, Diff = Self::Diff>+Clone+'static;
+    type Batch: for<'a> BatchReader<Key<'a> = Self::Key<'a>, KeyOwned = Self::KeyOwned, Val<'a> = Self::Val<'a>, ValOwned = Self::ValOwned, Time = Self::Time, Diff = Self::Diff>+Clone+'static;
 
     /// Storage type for `Self::Cursor`. Likely related to `Self::Batch`.
     type Storage;
 
     /// The type used to enumerate the collections contents.
-    type Cursor: Cursor<Storage=Self::Storage, Key = Self::Key, Val = Self::Val, Time = Self::Time, Diff = Self::Diff>;
+    type Cursor: for<'a> Cursor<Storage=Self::Storage, Key<'a> = Self::Key<'a>, KeyOwned = Self::KeyOwned, Val<'a> = Self::Val<'a>, ValOwned = Self::ValOwned, Time = Self::Time, Diff = Self::Diff>;
 
     /// Provides a cursor over updates contained in the trace.
     fn cursor(&mut self) -> (Self::Cursor, Self::Storage) {
@@ -257,16 +263,20 @@ where
     Self: ::std::marker::Sized,
 {
     /// Key by which updates are indexed.
-    type Key: ?Sized;
+    type Key<'a>: Copy + Clone + MyTrait<'a, Owned = Self::KeyOwned>;
+    /// Owned version of the above.
+    type KeyOwned: Ord + Clone;
     /// Values associated with keys.
-    type Val: ?Sized;
+    type Val<'a>: Copy + Clone + MyTrait<'a, Owned = Self::ValOwned>;
+    /// Owned version of the above.
+    type ValOwned: Ord + Clone;
     /// Timestamps associated with updates
     type Time: Timestamp;
     /// Associated update.
     type Diff;
 
     /// The type used to enumerate the batch's contents.
-    type Cursor: Cursor<Storage=Self, Key = Self::Key, Val = Self::Val, Time = Self::Time, Diff = Self::Diff>;
+    type Cursor: for<'a> Cursor<Storage=Self, Key<'a> = Self::Key<'a>, KeyOwned = Self::KeyOwned, Val<'a> = Self::Val<'a>, ValOwned = Self::ValOwned, Time = Self::Time, Diff = Self::Diff>;
     /// Acquires a cursor to the batch's contents.
     fn cursor(&self) -> Self::Cursor;
     /// The number of updates in the batch.
@@ -376,13 +386,15 @@ pub mod rc_blanket_impls {
     use super::{Batch, BatchReader, Builder, Merger, Cursor, Description};
 
     impl<B: BatchReader> BatchReader for Rc<B> {
-        type Key = B::Key;
-        type Val = B::Val;
+        type Key<'a> = B::Key<'a>;
+        type KeyOwned = B::KeyOwned;
+        type Val<'a> = B::Val<'a>;
+        type ValOwned = B::ValOwned;
         type Time = B::Time;
         type Diff = B::Diff;
 
         /// The type used to enumerate the batch's contents.
-        type Cursor = RcBatchCursor<B>;
+        type Cursor = RcBatchCursor<B::Cursor>;
         /// Acquires a cursor to the batch's contents.
         fn cursor(&self) -> Self::Cursor {
             RcBatchCursor::new((&**self).cursor())
@@ -395,46 +407,48 @@ pub mod rc_blanket_impls {
     }
 
     /// Wrapper to provide cursor to nested scope.
-    pub struct RcBatchCursor<B: BatchReader> {
-        cursor: B::Cursor,
+    pub struct RcBatchCursor<C> {
+        cursor: C,
     }
 
-    impl<B: BatchReader> RcBatchCursor<B> {
-        fn new(cursor: B::Cursor) -> Self {
+    impl<C> RcBatchCursor<C> {
+        fn new(cursor: C) -> Self {
             RcBatchCursor {
                 cursor,
             }
         }
     }
 
-    impl<B: BatchReader> Cursor for RcBatchCursor<B> {
+    impl<C: Cursor> Cursor for RcBatchCursor<C> {
 
-        type Key = B::Key;
-        type Val = B::Val;
-        type Time = B::Time;
-        type Diff = B::Diff;
+        type Key<'a> = C::Key<'a>;
+        type KeyOwned = C::KeyOwned;
+        type Val<'a> = C::Val<'a>;
+        type ValOwned = C::ValOwned;
+        type Time = C::Time;
+        type Diff = C::Diff;
 
-        type Storage = Rc<B>;
+        type Storage = Rc<C::Storage>;
 
-        #[inline] fn key_valid(&self, storage: &Rc<B>) -> bool { self.cursor.key_valid(storage) }
-        #[inline] fn val_valid(&self, storage: &Rc<B>) -> bool { self.cursor.val_valid(storage) }
+        #[inline] fn key_valid(&self, storage: &Self::Storage) -> bool { self.cursor.key_valid(storage) }
+        #[inline] fn val_valid(&self, storage: &Self::Storage) -> bool { self.cursor.val_valid(storage) }
 
-        #[inline] fn key<'a>(&self, storage: &'a Rc<B>) -> &'a Self::Key { self.cursor.key(storage) }
-        #[inline] fn val<'a>(&self, storage: &'a Rc<B>) -> &'a Self::Val { self.cursor.val(storage) }
+        #[inline] fn key<'a>(&self, storage: &'a Self::Storage) -> Self::Key<'a> { self.cursor.key(storage) }
+        #[inline] fn val<'a>(&self, storage: &'a Self::Storage) -> Self::Val<'a> { self.cursor.val(storage) }
 
         #[inline]
-        fn map_times<L: FnMut(&Self::Time, &Self::Diff)>(&mut self, storage: &Rc<B>, logic: L) {
+        fn map_times<L: FnMut(&Self::Time, &Self::Diff)>(&mut self, storage: &Self::Storage, logic: L) {
             self.cursor.map_times(storage, logic)
         }
 
-        #[inline] fn step_key(&mut self, storage: &Rc<B>) { self.cursor.step_key(storage) }
-        #[inline] fn seek_key(&mut self, storage: &Rc<B>, key: &Self::Key) { self.cursor.seek_key(storage, key) }
+        #[inline] fn step_key(&mut self, storage: &Self::Storage) { self.cursor.step_key(storage) }
+        #[inline] fn seek_key(&mut self, storage: &Self::Storage, key: Self::Key<'_>) { self.cursor.seek_key(storage, key) }
 
-        #[inline] fn step_val(&mut self, storage: &Rc<B>) { self.cursor.step_val(storage) }
-        #[inline] fn seek_val(&mut self, storage: &Rc<B>, val: &Self::Val) { self.cursor.seek_val(storage, val) }
+        #[inline] fn step_val(&mut self, storage: &Self::Storage) { self.cursor.step_val(storage) }
+        #[inline] fn seek_val(&mut self, storage: &Self::Storage, val: Self::Val<'_>) { self.cursor.seek_val(storage, val) }
 
-        #[inline] fn rewind_keys(&mut self, storage: &Rc<B>) { self.cursor.rewind_keys(storage) }
-        #[inline] fn rewind_vals(&mut self, storage: &Rc<B>) { self.cursor.rewind_vals(storage) }
+        #[inline] fn rewind_keys(&mut self, storage: &Self::Storage) { self.cursor.rewind_keys(storage) }
+        #[inline] fn rewind_vals(&mut self, storage: &Self::Storage) { self.cursor.rewind_vals(storage) }
     }
 
     /// An immutable collection of updates.
@@ -481,13 +495,15 @@ pub mod abomonated_blanket_impls {
 
     impl<B: BatchReader+Abomonation> BatchReader for Abomonated<B, Vec<u8>> {
 
-        type Key = B::Key;
-        type Val = B::Val;
+        type Key<'a> = B::Key<'a>;
+        type KeyOwned = B::KeyOwned;
+        type Val<'a> = B::Val<'a>;
+        type ValOwned = B::ValOwned;
         type Time = B::Time;
         type Diff = B::Diff;
 
         /// The type used to enumerate the batch's contents.
-        type Cursor = AbomonatedBatchCursor<B>;
+        type Cursor = AbomonatedBatchCursor<B::Cursor>;
         /// Acquires a cursor to the batch's contents.
         fn cursor(&self) -> Self::Cursor {
             AbomonatedBatchCursor::new((&**self).cursor())
@@ -500,46 +516,48 @@ pub mod abomonated_blanket_impls {
     }
 
     /// Wrapper to provide cursor to nested scope.
-    pub struct AbomonatedBatchCursor<B: BatchReader> {
-        cursor: B::Cursor,
+    pub struct AbomonatedBatchCursor<C> {
+        cursor: C,
     }
 
-    impl<B: BatchReader> AbomonatedBatchCursor<B> {
-        fn new(cursor: B::Cursor) -> Self {
+    impl<C> AbomonatedBatchCursor<C> {
+        fn new(cursor: C) -> Self {
             AbomonatedBatchCursor {
                 cursor,
             }
         }
     }
 
-    impl<B: BatchReader+Abomonation> Cursor for AbomonatedBatchCursor<B> {
+    impl<C: Cursor> Cursor for AbomonatedBatchCursor<C> where C::Storage: Abomonation {
 
-        type Key = B::Key;
-        type Val = B::Val;
-        type Time = B::Time;
-        type Diff = B::Diff;
+        type Key<'a> = C::Key<'a>;
+        type KeyOwned = C::KeyOwned;
+        type Val<'a> = C::Val<'a>;
+        type ValOwned = C::ValOwned;
+        type Time = C::Time;
+        type Diff = C::Diff;
 
-        type Storage = Abomonated<B, Vec<u8>>;
+        type Storage = Abomonated<C::Storage, Vec<u8>>;
 
-        #[inline] fn key_valid(&self, storage: &Abomonated<B, Vec<u8>>) -> bool { self.cursor.key_valid(storage) }
-        #[inline] fn val_valid(&self, storage: &Abomonated<B, Vec<u8>>) -> bool { self.cursor.val_valid(storage) }
+        #[inline] fn key_valid(&self, storage: &Self::Storage) -> bool { self.cursor.key_valid(storage) }
+        #[inline] fn val_valid(&self, storage: &Self::Storage) -> bool { self.cursor.val_valid(storage) }
 
-        #[inline] fn key<'a>(&self, storage: &'a Abomonated<B, Vec<u8>>) -> &'a Self::Key { self.cursor.key(storage) }
-        #[inline] fn val<'a>(&self, storage: &'a Abomonated<B, Vec<u8>>) -> &'a Self::Val { self.cursor.val(storage) }
+        #[inline] fn key<'a>(&self, storage: &'a Self::Storage) -> Self::Key<'a> { self.cursor.key(storage) }
+        #[inline] fn val<'a>(&self, storage: &'a Self::Storage) -> Self::Val<'a> { self.cursor.val(storage) }
 
         #[inline]
-        fn map_times<L: FnMut(&Self::Time, &Self::Diff)>(&mut self, storage: &Abomonated<B, Vec<u8>>, logic: L) {
+        fn map_times<L: FnMut(&Self::Time, &Self::Diff)>(&mut self, storage: &Self::Storage, logic: L) {
             self.cursor.map_times(storage, logic)
         }
 
-        #[inline] fn step_key(&mut self, storage: &Abomonated<B, Vec<u8>>) { self.cursor.step_key(storage) }
-        #[inline] fn seek_key(&mut self, storage: &Abomonated<B, Vec<u8>>, key: &Self::Key) { self.cursor.seek_key(storage, key) }
+        #[inline] fn step_key(&mut self, storage: &Self::Storage) { self.cursor.step_key(storage) }
+        #[inline] fn seek_key(&mut self, storage: &Self::Storage, key: Self::Key<'_>) { self.cursor.seek_key(storage, key) }
 
-        #[inline] fn step_val(&mut self, storage: &Abomonated<B, Vec<u8>>) { self.cursor.step_val(storage) }
-        #[inline] fn seek_val(&mut self, storage: &Abomonated<B, Vec<u8>>, val: &Self::Val) { self.cursor.seek_val(storage, val) }
+        #[inline] fn step_val(&mut self, storage: &Self::Storage) { self.cursor.step_val(storage) }
+        #[inline] fn seek_val(&mut self, storage: &Self::Storage, val: Self::Val<'_>) { self.cursor.seek_val(storage, val) }
 
-        #[inline] fn rewind_keys(&mut self, storage: &Abomonated<B, Vec<u8>>) { self.cursor.rewind_keys(storage) }
-        #[inline] fn rewind_vals(&mut self, storage: &Abomonated<B, Vec<u8>>) { self.cursor.rewind_vals(storage) }
+        #[inline] fn rewind_keys(&mut self, storage: &Self::Storage) { self.cursor.rewind_keys(storage) }
+        #[inline] fn rewind_vals(&mut self, storage: &Self::Storage) { self.cursor.rewind_vals(storage) }
     }
 
     /// An immutable collection of updates.

@@ -135,8 +135,8 @@ fn main() {
 fn dump_cursor<Tr>(round: u32, index: usize, trace: &mut Tr)
 where
     Tr: TraceReader,
-    Tr::Key: Debug + Clone,
-    Tr::Val: Debug + Clone,
+    Tr::KeyOwned: Debug + Clone,
+    Tr::ValOwned: Debug + Clone,
     Tr::Time: Debug + Clone,
     Tr::Diff: Debug + Clone,
 {

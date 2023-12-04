@@ -65,14 +65,14 @@ pub type PreferredSpine<K, V, T, R> = Spine<
 
 mod val_batch {
 
-    use std::borrow::Borrow;
     use std::convert::TryInto;
     use std::marker::PhantomData;
     use timely::progress::{Antichain, frontier::AntichainRef};
 
     use trace::{Batch, BatchReader, Builder, Cursor, Description, Merger};
     use trace::implementations::{BatchContainer, OffsetList};
-    
+    use trace::cursor::MyTrait;
+
     use super::{Layout, Update};
 
     /// An immutable collection of update tuples, from a contiguous interval of logical times.
@@ -137,8 +137,10 @@ mod val_batch {
     }
 
     impl<L: Layout> BatchReader for OrdValBatch<L> {
-        type Key = <L::Target as Update>::Key;
-        type Val = <L::Target as Update>::Val;
+        type Key<'a> = <L::KeyContainer as BatchContainer>::ReadItem<'a>;
+        type KeyOwned = <L::Target as Update>::Key;
+        type Val<'a> = <L::ValContainer as BatchContainer>::ReadItem<'a>;
+        type ValOwned = <L::Target as Update>::Val;
         type Time = <L::Target as Update>::Time;
         type Diff = <L::Target as Update>::Diff;
 
@@ -293,8 +295,8 @@ mod val_batch {
         /// if the updates cancel either directly or after compaction.
         fn merge_key(&mut self, source1: &OrdValStorage<L>, source2: &OrdValStorage<L>) {
             use ::std::cmp::Ordering;
-            match source1.keys.index(self.key_cursor1).cmp(source2.keys.index(self.key_cursor2)) {
-                Ordering::Less => {
+            match source1.keys.index(self.key_cursor1).cmp(&source2.keys.index(self.key_cursor2)) {
+                Ordering::Less => { 
                     self.copy_key(source1, self.key_cursor1);
                     self.key_cursor1 += 1;
                 },
@@ -332,7 +334,7 @@ mod val_batch {
                 // if they are non-empty post-consolidation, we write the value.
                 // We could multi-way merge and it wouldn't be very complicated.
                 use ::std::cmp::Ordering;
-                match source1.vals.index(lower1).cmp(source2.vals.index(lower2)) {
+                match source1.vals.index(lower1).cmp(&source2.vals.index(lower2)) {
                     Ordering::Less => { 
                         // Extend stash by updates, with logical compaction applied.
                         self.stash_updates_for_val(source1, lower1);
@@ -394,7 +396,7 @@ mod val_batch {
             let (lower, upper) = source.updates_for_value(index);
             for i in lower .. upper {
                 // NB: Here is where we would need to look back if `lower == upper`.
-                let (time, diff) = &source.updates.index(i);
+                let (time, diff) = &source.updates.index(i).into_owned();
                 use lattice::Lattice;
                 let mut new_time = time.clone();
                 new_time.advance_by(self.description.since().borrow());
@@ -409,8 +411,8 @@ mod val_batch {
             if !self.update_stash.is_empty() {
                 // If there is a single element, equal to a just-prior recorded update,
                 // we push nothing and report an unincremented offset to encode this case.
-                if self.update_stash.len() == 1 && self.update_stash.last() == self.result.updates.last() {
-                    // Just clear out update_stash, as we won't drain it here.
+                if self.update_stash.len() == 1 && self.result.updates.last().map(|ud| self.update_stash.last().unwrap().equals(ud)).unwrap_or(false) {
+                        // Just clear out update_stash, as we won't drain it here.
                     self.update_stash.clear();
                     self.singletons += 1;
                 }
@@ -438,15 +440,18 @@ mod val_batch {
     }
 
     impl<L: Layout> Cursor for OrdValCursor<L> {
-        type Key = <L::Target as Update>::Key;
-        type Val = <L::Target as Update>::Val;
+
+        type Key<'a> = <L::KeyContainer as BatchContainer>::ReadItem<'a>;
+        type KeyOwned = <L::Target as Update>::Key;
+        type Val<'a> = <L::ValContainer as BatchContainer>::ReadItem<'a>;
+        type ValOwned = <L::Target as Update>::Val;
         type Time = <L::Target as Update>::Time;
         type Diff = <L::Target as Update>::Diff;
 
         type Storage = OrdValBatch<L>;
 
-        fn key<'a>(&self, storage: &'a OrdValBatch<L>) -> &'a Self::Key { storage.storage.keys.index(self.key_cursor) }
-        fn val<'a>(&self, storage: &'a OrdValBatch<L>) -> &'a Self::Val { storage.storage.vals.index(self.val_cursor) }
+        fn key<'a>(&self, storage: &'a OrdValBatch<L>) -> Self::Key<'a> { storage.storage.keys.index(self.key_cursor) }
+        fn val<'a>(&self, storage: &'a OrdValBatch<L>) -> Self::Val<'a> { storage.storage.vals.index(self.val_cursor) }
         fn map_times<L2: FnMut(&Self::Time, &Self::Diff)>(&mut self, storage: &OrdValBatch<L>, mut logic: L2) {
             let (lower, upper) = storage.storage.updates_for_value(self.val_cursor);
             for index in lower .. upper {
@@ -465,8 +470,8 @@ mod val_batch {
                 self.key_cursor = storage.storage.keys.len();
             }
         }
-        fn seek_key(&mut self, storage: &OrdValBatch<L>, key: &Self::Key) {
-            self.key_cursor += storage.storage.keys.advance(self.key_cursor, storage.storage.keys.len(), |x| x.lt(key));
+        fn seek_key(&mut self, storage: &OrdValBatch<L>, key: Self::Key<'_>) {
+            self.key_cursor += storage.storage.keys.advance(self.key_cursor, storage.storage.keys.len(), |x| x.lt(&key));
             if self.key_valid(storage) {
                 self.rewind_vals(storage);
             }
@@ -477,8 +482,8 @@ mod val_batch {
                 self.val_cursor = storage.storage.values_for_key(self.key_cursor).1;
             }
         }
-        fn seek_val(&mut self, storage: &OrdValBatch<L>, val: &Self::Val) {
-            self.val_cursor += storage.storage.vals.advance(self.val_cursor, storage.storage.values_for_key(self.key_cursor).1, |x| x.lt(val));
+        fn seek_val(&mut self, storage: &OrdValBatch<L>, val: Self::Val<'_>) {
+            self.val_cursor += storage.storage.vals.advance(self.val_cursor, storage.storage.values_for_key(self.key_cursor).1, |x| x.lt(&val));
         }
         fn rewind_keys(&mut self, storage: &OrdValBatch<L>) {
             self.key_cursor = 0;
@@ -530,12 +535,9 @@ mod val_batch {
         }
     }
 
-    impl<L: Layout> Builder for OrdValBuilder<L>
-    where
-        OrdValBatch<L>: Batch<Key=<L::Target as Update>::Key, Val=<L::Target as Update>::Val, Time=<L::Target as Update>::Time, Diff=<L::Target as Update>::Diff>,
-        <L::Target as Update>::KeyOwned: Borrow<<L::Target as Update>::Key>,
-    {
-        type Item = ((<L::Target as Update>::KeyOwned, <L::Target as Update>::ValOwned), <L::Target as Update>::Time, <L::Target as Update>::Diff);
+    impl<L: Layout> Builder for OrdValBuilder<L> {
+
+        type Item = ((<L::Target as Update>::Key, <L::Target as Update>::Val), <L::Target as Update>::Time, <L::Target as Update>::Diff);
         type Time = <L::Target as Update>::Time;
         type Output = OrdValBatch<L>;
 
@@ -558,9 +560,9 @@ mod val_batch {
         fn push(&mut self, ((key, val), time, diff): Self::Item) {
 
             // Perhaps this is a continuation of an already received key.
-            if self.result.keys.last() == Some(key.borrow()) {
+            if self.result.keys.last().map(|k| k.equals(&key)).unwrap_or(false) {
                 // Perhaps this is a continuation of an already received value.
-                if self.result.vals.last() == Some(val.borrow()) {
+                if self.result.vals.last().map(|v| v.equals(&val)).unwrap_or(false) {
                     self.push_update(time, diff);
                 } else {
                     // New value; complete representation of prior value.
@@ -584,9 +586,9 @@ mod val_batch {
         fn copy(&mut self, ((key, val), time, diff): &Self::Item) {
 
             // Perhaps this is a continuation of an already received key.
-            if self.result.keys.last() == Some(key.borrow()) {
+            if self.result.keys.last().map(|k| k.equals(key)).unwrap_or(false) {
                 // Perhaps this is a continuation of an already received value.
-                if self.result.vals.last() == Some(val.borrow()) {
+                if self.result.vals.last().map(|v| v.equals(val)).unwrap_or(false) {
                     // TODO: here we could look for repetition, and not push the update in that case.
                     // More logic (and state) would be required to correctly wrangle this.
                     self.push_update(time.clone(), diff.clone());
@@ -596,7 +598,7 @@ mod val_batch {
                     // Remove any pending singleton, and if it was set increment our count.
                     if self.singleton.take().is_some() { self.singletons += 1; }
                     self.push_update(time.clone(), diff.clone());
-                    self.result.vals.copy(val.borrow());
+                    self.result.vals.copy_push(val);
                 }
             } else {
                 // New key; complete representation of prior key.
@@ -605,8 +607,8 @@ mod val_batch {
                 if self.singleton.take().is_some() { self.singletons += 1; }
                 self.result.keys_offs.push(self.result.vals.len().try_into().ok().unwrap());
                 self.push_update(time.clone(), diff.clone());
-                self.result.vals.copy(val.borrow());
-                self.result.keys.copy(key.borrow());
+                self.result.vals.copy_push(val);
+                self.result.keys.copy_push(key);
             }
         }
 
@@ -629,13 +631,13 @@ mod val_batch {
 
 mod key_batch {
 
-    use std::borrow::Borrow;
     use std::convert::TryInto;
     use std::marker::PhantomData;
     use timely::progress::{Antichain, frontier::AntichainRef};
 
     use trace::{Batch, BatchReader, Builder, Cursor, Description, Merger};
     use trace::implementations::{BatchContainer, OffsetList};
+    use trace::cursor::MyTrait;
 
     use super::{Layout, Update};
 
@@ -691,8 +693,11 @@ mod key_batch {
     }
 
     impl<L: Layout> BatchReader for OrdKeyBatch<L> {
-        type Key = <L::Target as Update>::Key;
-        type Val = ();
+        
+        type Key<'a> = <L::KeyContainer as BatchContainer>::ReadItem<'a>;
+        type KeyOwned = <L::Target as Update>::Key;
+        type Val<'a> = &'a ();
+        type ValOwned = ();
         type Time = <L::Target as Update>::Time;
         type Diff = <L::Target as Update>::Diff;
 
@@ -832,7 +837,7 @@ mod key_batch {
         /// if the updates cancel either directly or after compaction.
         fn merge_key(&mut self, source1: &OrdKeyStorage<L>, source2: &OrdKeyStorage<L>) {
             use ::std::cmp::Ordering;
-            match source1.keys.index(self.key_cursor1).cmp(source2.keys.index(self.key_cursor2)) {
+            match source1.keys.index(self.key_cursor1).cmp(&source2.keys.index(self.key_cursor2)) {
                 Ordering::Less => { 
                     self.copy_key(source1, self.key_cursor1);
                     self.key_cursor1 += 1;
@@ -905,14 +910,17 @@ mod key_batch {
     }
 
     impl<L: Layout> Cursor for OrdKeyCursor<L> {
-        type Key = <L::Target as Update>::Key;
-        type Val = ();
+
+        type Key<'a> = <L::KeyContainer as BatchContainer>::ReadItem<'a>;
+        type KeyOwned = <L::Target as Update>::Key;
+        type Val<'a> = &'a ();
+        type ValOwned = ();
         type Time = <L::Target as Update>::Time;
         type Diff = <L::Target as Update>::Diff;
 
         type Storage = OrdKeyBatch<L>;
 
-        fn key<'a>(&self, storage: &'a Self::Storage) -> &'a Self::Key { storage.storage.keys.index(self.key_cursor) }
+        fn key<'a>(&self, storage: &'a Self::Storage) -> Self::Key<'a> { storage.storage.keys.index(self.key_cursor) }
         fn val<'a>(&self, _storage: &'a Self::Storage) -> &'a () { &() }
         fn map_times<L2: FnMut(&Self::Time, &Self::Diff)>(&mut self, storage: &Self::Storage, mut logic: L2) {
             let (lower, upper) = storage.storage.updates_for_key(self.key_cursor);
@@ -932,8 +940,8 @@ mod key_batch {
                 self.key_cursor = storage.storage.keys.len();
             }
         }
-        fn seek_key(&mut self, storage: &Self::Storage, key: &Self::Key) {
-            self.key_cursor += storage.storage.keys.advance(self.key_cursor, storage.storage.keys.len(), |x| x.lt(key));
+        fn seek_key(&mut self, storage: &Self::Storage, key: Self::Key<'_>) {
+            self.key_cursor += storage.storage.keys.advance(self.key_cursor, storage.storage.keys.len(), |x| x.lt(&key));
             if self.key_valid(storage) {
                 self.rewind_vals(storage);
             }
@@ -941,7 +949,7 @@ mod key_batch {
         fn step_val(&mut self, _storage: &Self::Storage) {
             self.val_stepped = true;
         }
-        fn seek_val(&mut self, _storage: &Self::Storage, _val: &Self::Val) { }
+        fn seek_val(&mut self, _storage: &Self::Storage, _val: Self::Val<'_>) { }
         fn rewind_keys(&mut self, storage: &Self::Storage) {
             self.key_cursor = 0;
             if self.key_valid(storage) {
@@ -992,12 +1000,9 @@ mod key_batch {
         }
     }
 
-    impl<L: Layout> Builder for OrdKeyBuilder<L>
-    where
-        OrdKeyBatch<L>: Batch<Key=<L::Target as Update>::Key, Val=(), Time=<L::Target as Update>::Time, Diff=<L::Target as Update>::Diff>,
-        <L::Target as Update>::KeyOwned: Borrow<<L::Target as Update>::Key>,
-    {
-        type Item = ((<L::Target as Update>::KeyOwned, ()), <L::Target as Update>::Time, <L::Target as Update>::Diff);
+    impl<L: Layout> Builder for OrdKeyBuilder<L> {
+
+        type Item = ((<L::Target as Update>::Key, ()), <L::Target as Update>::Time, <L::Target as Update>::Diff);
         type Time = <L::Target as Update>::Time;
         type Output = OrdKeyBatch<L>;
 
@@ -1018,7 +1023,7 @@ mod key_batch {
         fn push(&mut self, ((key, ()), time, diff): Self::Item) {
 
             // Perhaps this is a continuation of an already received key.
-            if self.result.keys.last() == Some(key.borrow()) {
+            if self.result.keys.last().map(|k| k.equals(&key)).unwrap_or(false) {
                 self.push_update(time, diff);
             } else {
                 // New key; complete representation of prior key.
@@ -1034,7 +1039,7 @@ mod key_batch {
         fn copy(&mut self, ((key, ()), time, diff): &Self::Item) {
 
             // Perhaps this is a continuation of an already received key.
-            if self.result.keys.last() == Some(key.borrow()) {
+            if self.result.keys.last().map(|k| k.equals(&key)).unwrap_or(false) {
                 self.push_update(time.clone(), diff.clone());
             } else {
                 // New key; complete representation of prior key.
@@ -1042,7 +1047,7 @@ mod key_batch {
                 // Remove any pending singleton, and if it was set increment our count.
                 if self.singleton.take().is_some() { self.singletons += 1; }
                 self.push_update(time.clone(), diff.clone());
-                self.result.keys.copy(key.borrow());
+                self.result.keys.copy_push(key);
             }
         }
 

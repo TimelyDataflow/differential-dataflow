@@ -102,17 +102,17 @@ where G::Timestamp: TotalOrder+Lattice+Ord {
     }
 }
 
-impl<G: Scope, T1> ThresholdTotal<G, T1::Key, T1::Diff> for Arranged<G, T1>
+impl<G: Scope, K, T1> ThresholdTotal<G, K, T1::Diff> for Arranged<G, T1>
 where
     G::Timestamp: TotalOrder+Lattice+Ord,
-    T1: TraceReader<Val=(), Time=G::Timestamp>+Clone+'static,
-    T1::Key: ExchangeData,
+    T1: for<'a> TraceReader<Key<'a>=&'a K, Val<'a>=&'a (), Time=G::Timestamp>+Clone+'static,
+    K: ExchangeData,
     T1::Diff: ExchangeData+Semigroup,
 {
-    fn threshold_semigroup<R2, F>(&self, mut thresh: F) -> Collection<G, T1::Key, R2>
+    fn threshold_semigroup<R2, F>(&self, mut thresh: F) -> Collection<G, K, R2>
     where
         R2: Semigroup,
-        F: FnMut(&T1::Key,&T1::Diff,Option<&T1::Diff>)->Option<R2>+'static,
+        F: for<'a> FnMut(T1::Key<'a>,&T1::Diff,Option<&T1::Diff>)->Option<R2>+'static,
     {
 
         let mut trace = self.trace.clone();

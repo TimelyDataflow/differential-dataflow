@@ -31,10 +31,8 @@
 //! of logical compaction, which should not be done in a way that prevents
 //! the correct determination of the total order comparison.
 
-use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::ops::Mul;
-
 
 use timely::dataflow::Scope;
 use timely::dataflow::channels::pact::{Pipeline, Exchange};
@@ -70,8 +68,8 @@ use differential_dataflow::consolidation::{consolidate, consolidate_updates};
 /// Notice that the time is hoisted up into data. The expectation is that
 /// once out of the "delta flow region", the updates will be `delay`d to the
 /// times specified in the payloads.
-pub fn half_join<G, K, V, R, Tr, FF, CF, DOut, S>(
-    stream: &Collection<G, (K, V, G::Timestamp), R>,
+pub fn half_join<G, V, R, Tr, FF, CF, DOut, S>(
+    stream: &Collection<G, (Tr::KeyOwned, V, G::Timestamp), R>,
     arrangement: Arranged<G, Tr>,
     frontier_func: FF,
     comparison: CF,
@@ -80,20 +78,19 @@ pub fn half_join<G, K, V, R, Tr, FF, CF, DOut, S>(
 where
     G: Scope,
     G::Timestamp: Lattice,
-    K: Ord + Hashable + ExchangeData + Borrow<Tr::Key>,
+    Tr::KeyOwned: Ord + Hashable + ExchangeData,
     V: ExchangeData,
     R: ExchangeData + Monoid,
     Tr: TraceReader<Time=G::Timestamp>+Clone+'static,
-    Tr::Key: Eq,
     Tr::Diff: Semigroup,
     R: Mul<Tr::Diff>,
     <R as Mul<Tr::Diff>>::Output: Semigroup,
     FF: Fn(&G::Timestamp) -> G::Timestamp + 'static,
     CF: Fn(&G::Timestamp, &G::Timestamp) -> bool + 'static,
     DOut: Clone+'static,
-    S: FnMut(&K, &V, &Tr::Val)->DOut+'static,
+    S: FnMut(&Tr::KeyOwned, &V, Tr::Val<'_>)->DOut+'static,
 {
-    let output_func = move |k: &K, v1: &V, v2: &Tr::Val, initial: &G::Timestamp, time: &G::Timestamp, diff1: &R, diff2: &Tr::Diff| {
+    let output_func = move |k: &Tr::KeyOwned, v1: &V, v2: Tr::Val<'_>, initial: &G::Timestamp, time: &G::Timestamp, diff1: &R, diff2: &Tr::Diff| {
         let diff = diff1.clone() * diff2.clone();
         let dout = (output_func(k, v1, v2), time.clone());
         Some((dout, initial.clone(), diff))
@@ -125,8 +122,8 @@ where
 /// yield control, as a function of the elapsed time and the number of matched
 /// records. Note this is not the number of *output* records, owing mainly to
 /// the number of matched records being easiest to record with low overhead.
-pub fn half_join_internal_unsafe<G, K, V, R, Tr, FF, CF, DOut, ROut, Y, I, S>(
-    stream: &Collection<G, (K, V, G::Timestamp), R>,
+pub fn half_join_internal_unsafe<G, V, R, Tr, FF, CF, DOut, ROut, Y, I, S>(
+    stream: &Collection<G, (Tr::KeyOwned, V, G::Timestamp), R>,
     mut arrangement: Arranged<G, Tr>,
     frontier_func: FF,
     comparison: CF,
@@ -136,11 +133,10 @@ pub fn half_join_internal_unsafe<G, K, V, R, Tr, FF, CF, DOut, ROut, Y, I, S>(
 where
     G: Scope,
     G::Timestamp: Lattice,
-    K: Ord + Hashable + ExchangeData + std::borrow::Borrow<Tr::Key>,
+    Tr::KeyOwned: Ord + Hashable + ExchangeData,
     V: ExchangeData,
     R: ExchangeData + Monoid,
     Tr: TraceReader<Time=G::Timestamp>+Clone+'static,
-    Tr::Key: Eq,
     Tr::Diff: Semigroup,
     FF: Fn(&G::Timestamp) -> G::Timestamp + 'static,
     CF: Fn(&G::Timestamp, &G::Timestamp) -> bool + 'static,
@@ -148,7 +144,7 @@ where
     ROut: Semigroup,
     Y: Fn(std::time::Instant, usize) -> bool + 'static,
     I: IntoIterator<Item=(DOut, G::Timestamp, ROut)>,
-    S: FnMut(&K, &V, &Tr::Val, &G::Timestamp, &G::Timestamp, &R, &Tr::Diff)-> I + 'static,
+    S: FnMut(&Tr::KeyOwned, &V, Tr::Val<'_>, &G::Timestamp, &G::Timestamp, &R, &Tr::Diff)-> I + 'static,
 {
     // No need to block physical merging for this operator.
     arrangement.trace.set_physical_compaction(Antichain::new().borrow());
@@ -158,7 +154,7 @@ where
     let mut stash = HashMap::new();
     let mut buffer = Vec::new();
 
-    let exchange = Exchange::new(move |update: &((K, V, G::Timestamp),G::Timestamp,R)| (update.0).0.hashed().into());
+    let exchange = Exchange::new(move |update: &((Tr::KeyOwned, V, G::Timestamp),G::Timestamp,R)| (update.0).0.hashed().into());
 
     // Stash for (time, diff) accumulation.
     let mut output_buffer = Vec::new();
@@ -216,8 +212,9 @@ where
                             // Use TOTAL ORDER to allow the release of `time`.
                             yielded = yielded || yield_function(timer, work);
                             if !yielded && !input2.frontier.frontier().iter().any(|t| comparison(t, initial)) {
-                                cursor.seek_key(&storage, key.borrow());
-                                if cursor.get_key(&storage) == Some(key.borrow()) {
+                                use differential_dataflow::trace::cursor::MyTrait;
+                                cursor.seek_key(&storage, MyTrait::borrow_as(key));
+                                if cursor.get_key(&storage) == Some(MyTrait::borrow_as(key)) {
                                     while let Some(val2) = cursor.get_val(&storage) {
                                         cursor.map_times(&storage, |t, d| {
                                             if comparison(t, initial) {

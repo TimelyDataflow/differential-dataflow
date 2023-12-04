@@ -13,12 +13,7 @@ pub struct CursorList<C> {
     min_val: Vec<usize>,
 }
 
-impl<C> CursorList<C>
-where
-    C: Cursor, 
-    C::Key: Ord, 
-    C::Val: Ord,
-{
+impl<C: Cursor> CursorList<C> {
     /// Creates a new cursor list from pre-existing cursors.
     pub fn new(cursors: Vec<C>, storage: &[C::Storage]) -> Self  {
         let mut result = CursorList {
@@ -89,13 +84,11 @@ where
     }
 }
 
-impl<C: Cursor> Cursor for CursorList<C>
-where
-    C::Key: Ord,
-    C::Val: Ord,
-{
-    type Key = C::Key;
-    type Val = C::Val;
+impl<C: Cursor> Cursor for CursorList<C> {
+    type Key<'a> = C::Key<'a>;
+    type KeyOwned = C::KeyOwned;
+    type Val<'a> = C::Val<'a>;
+    type ValOwned = C::ValOwned;
     type Time = C::Time;
     type Diff = C::Diff;
 
@@ -109,13 +102,13 @@ where
 
     // accessors
     #[inline]
-    fn key<'a>(&self, storage: &'a Vec<C::Storage>) -> &'a Self::Key {
+    fn key<'a>(&self, storage: &'a Vec<C::Storage>) -> Self::Key<'a> {
         debug_assert!(self.key_valid(storage));
         debug_assert!(self.cursors[self.min_key[0]].key_valid(&storage[self.min_key[0]]));
         self.cursors[self.min_key[0]].key(&storage[self.min_key[0]])
     }
     #[inline]
-    fn val<'a>(&self, storage: &'a Vec<C::Storage>) -> &'a Self::Val {
+    fn val<'a>(&self, storage: &'a Vec<C::Storage>) -> Self::Val<'a> {
         debug_assert!(self.key_valid(storage));
         debug_assert!(self.val_valid(storage));
         debug_assert!(self.cursors[self.min_val[0]].val_valid(&storage[self.min_val[0]]));
@@ -137,7 +130,7 @@ where
         self.minimize_keys(storage);
     }
     #[inline]
-    fn seek_key(&mut self, storage: &Vec<C::Storage>, key: &Self::Key) {
+    fn seek_key(&mut self, storage: &Vec<C::Storage>, key: Self::Key<'_>) {
         for index in 0 .. self.cursors.len() {
             self.cursors[index].seek_key(&storage[index], key);
         }
@@ -153,7 +146,7 @@ where
         self.minimize_vals(storage);
     }
     #[inline]
-    fn seek_val(&mut self, storage: &Vec<C::Storage>, val: &Self::Val) {
+    fn seek_val(&mut self, storage: &Vec<C::Storage>, val: Self::Val<'_>) {
         for &index in self.min_key.iter() {
             self.cursors[index].seek_val(&storage[index], val);
         }

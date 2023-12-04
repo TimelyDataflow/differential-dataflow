@@ -53,7 +53,7 @@ pub mod rhh;
 pub use self::ord_neu::OrdValSpine as ValSpine;
 pub use self::ord_neu::OrdKeySpine as KeySpine;
 
-use std::borrow::{Borrow, ToOwned};
+use std::borrow::{ToOwned};
 
 use timely::container::columnation::{Columnation, TimelyStack};
 use lattice::Lattice;
@@ -61,14 +61,10 @@ use difference::Semigroup;
 
 /// A type that names constituent update types.
 pub trait Update {
-    /// We will be able to read out references to this type, and must supply `Key::Owned` as input.
-    type Key: Ord + ToOwned<Owned = Self::KeyOwned> + ?Sized;
     /// Key by which data are grouped.
-    type KeyOwned: Ord+Clone + Borrow<Self::Key>;
+    type Key: Ord + Clone + 'static;
     /// Values associated with the key.
-    type Val: Ord + ToOwned<Owned = Self::ValOwned> + ?Sized;
-    /// Values associated with the key, in owned form
-    type ValOwned: Ord+Clone + Borrow<Self::Val>;
+    type Val: Ord + Clone + 'static;
     /// Time at which updates occur.
     type Time: Ord+Lattice+timely::progress::Timestamp+Clone;
     /// Way in which updates occur.
@@ -77,15 +73,13 @@ pub trait Update {
 
 impl<K,V,T,R> Update for ((K, V), T, R)
 where
-    K: Ord+Clone,
-    V: Ord+Clone,
+    K: Ord+Clone+'static,
+    V: Ord+Clone+'static,
     T: Ord+Lattice+timely::progress::Timestamp+Clone,
     R: Semigroup+Clone,
 {
     type Key = K;
-    type KeyOwned = K;
     type Val = V;
-    type ValOwned = V;
     type Time = T;
     type Diff = R;
 }
@@ -96,15 +90,13 @@ pub trait Layout {
     type Target: Update + ?Sized;
     /// Container for update keys.
     type KeyContainer:
-        RetainFrom<<Self::Target as Update>::Key>+
-        BatchContainer<Item=<Self::Target as Update>::Key>;
+        BatchContainer<PushItem=<Self::Target as Update>::Key>;
     /// Container for update vals.
     type ValContainer:
-        RetainFrom<<Self::Target as Update>::Val>+
-        BatchContainer<Item=<Self::Target as Update>::Val>;
+        BatchContainer<PushItem=<Self::Target as Update>::Val>;
     /// Container for update vals.
     type UpdContainer:
-        BatchContainer<Item=(<Self::Target as Update>::Time, <Self::Target as Update>::Diff)>;
+        for<'a> BatchContainer<PushItem=(<Self::Target as Update>::Time, <Self::Target as Update>::Diff), ReadItem<'a> = &'a (<Self::Target as Update>::Time, <Self::Target as Update>::Diff)>;
 }
 
 /// A layout that uses vectors
@@ -114,8 +106,11 @@ pub struct Vector<U: Update> {
 
 impl<U: Update> Layout for Vector<U>
 where
-    U::Key: ToOwned<Owned = U::Key> + Sized + Clone,
-    U::Val: ToOwned<Owned = U::Val> + Sized + Clone,
+    U::Key: 'static,
+    U::Val: 'static,
+// where
+//     U::Key: ToOwned<Owned = U::Key> + Sized + Clone + 'static,
+//     U::Val: ToOwned<Owned = U::Val> + Sized + Clone + 'static,
 {
     type Target = U;
     type KeyContainer = Vec<U::Key>;
@@ -128,10 +123,10 @@ pub struct TStack<U: Update> {
     phantom: std::marker::PhantomData<U>,
 }
 
-impl<U: Update+Clone> Layout for TStack<U>
+impl<U: Update> Layout for TStack<U>
 where
-    U::Key: Columnation + ToOwned<Owned = U::Key>,
-    U::Val: Columnation + ToOwned<Owned = U::Val>,
+    U::Key: Columnation + 'static,
+    U::Val: Columnation + 'static,
     U::Time: Columnation,
     U::Diff: Columnation,
 {
@@ -146,15 +141,15 @@ where
 /// Examples include types that implement `Clone` who prefer 
 pub trait PreferredContainer : ToOwned {
     /// The preferred container for the type.
-    type Container: BatchContainer<Item=Self> + RetainFrom<Self>;
+    type Container: BatchContainer<PushItem=Self::Owned>;
 }
 
-impl<T: Clone> PreferredContainer for T {
+impl<T: Ord + Clone + 'static> PreferredContainer for T {
     type Container = Vec<T>;
 }
 
-impl<T: Clone> PreferredContainer for [T] {
-    type Container = SliceContainer<T>;
+impl<T: Ord + Clone + 'static> PreferredContainer for [T] {
+    type Container = SliceContainer2<T>;
 }
 
 /// An update and layout description based on preferred containers.
@@ -164,17 +159,15 @@ pub struct Preferred<K: ?Sized, V: ?Sized, T, D> {
 
 impl<K,V,T,R> Update for Preferred<K, V, T, R>
 where
-    K: Ord+ToOwned + ?Sized,
-    K::Owned: Ord+Clone,
-    V: Ord+ToOwned + ?Sized,
+    K: ToOwned + ?Sized,
+    K::Owned: Ord+Clone+'static,
+    V: ToOwned + ?Sized + 'static,
     V::Owned: Ord+Clone,
     T: Ord+Lattice+timely::progress::Timestamp+Clone,
     R: Semigroup+Clone,
 {
-    type Key = K;
-    type KeyOwned = K::Owned;
-    type Val = V;
-    type ValOwned = V::Owned;
+    type Key = K::Owned;
+    type Val = V::Owned;
     type Time = T;
     type Diff = R;
 }
@@ -182,8 +175,9 @@ where
 impl<K, V, T, D> Layout for Preferred<K, V, T, D>
 where
     K: Ord+ToOwned+PreferredContainer + ?Sized,
-    K::Owned: Ord+Clone,
-    V: Ord+ToOwned+PreferredContainer + ?Sized,
+    K::Owned: Ord+Clone+'static,
+    // for<'a> K::Container: BatchContainer<ReadItem<'a> = &'a K>,
+    V: Ord+ToOwned+PreferredContainer + ?Sized + 'static,
     V::Owned: Ord+Clone,
     T: Ord+Lattice+timely::progress::Timestamp+Clone,
     D: Semigroup+Clone,
@@ -195,35 +189,35 @@ where
 }
 
 
-/// A container that can retain/discard from some offset onward.
-pub trait RetainFrom<T: ?Sized> {
-    /// Retains elements from an index onwards that satisfy a predicate.
-    fn retain_from<P: FnMut(usize, &T)->bool>(&mut self, index: usize, predicate: P);
-}
+// /// A container that can retain/discard from some offset onward.
+// pub trait RetainFrom<T: ?Sized> {
+//     /// Retains elements from an index onwards that satisfy a predicate.
+//     fn retain_from<P: FnMut(usize, &T)->bool>(&mut self, index: usize, predicate: P);
+// }
 
-impl<T> RetainFrom<T> for Vec<T> {
-    fn retain_from<P: FnMut(usize, &T)->bool>(&mut self, index: usize, mut predicate: P) {
-        let mut write_position = index;
-        for position in index .. self.len() {
-            if predicate(position, &self[position]) {
-                self.swap(position, write_position);
-                write_position += 1;
-            }
-        }
-        self.truncate(write_position);
-    }
-}
+// impl<T> RetainFrom<T> for Vec<T> {
+//     fn retain_from<P: FnMut(usize, &T)->bool>(&mut self, index: usize, mut predicate: P) {
+//         let mut write_position = index;
+//         for position in index .. self.len() {
+//             if predicate(position, &self[position]) {
+//                 self.swap(position, write_position);
+//                 write_position += 1;
+//             }
+//         }
+//         self.truncate(write_position);
+//     }
+// }
 
-impl<T: Columnation> RetainFrom<T> for TimelyStack<T> {
-    fn retain_from<P: FnMut(usize, &T)->bool>(&mut self, index: usize, mut predicate: P) {
-        let mut position = index;
-        self.retain_from(index, |item| {
-            let result = predicate(position, item);
-            position += 1;
-            result
-        })
-    }
-}
+// impl<T: Columnation> RetainFrom<T> for TimelyStack<T> {
+//     fn retain_from<P: FnMut(usize, &T)->bool>(&mut self, index: usize, mut predicate: P) {
+//         let mut position = index;
+//         self.retain_from(index, |item| {
+//             let result = predicate(position, item);
+//             position += 1;
+//             result
+//         })
+//     }
+// }
 
 use std::convert::TryInto;
 
@@ -310,7 +304,7 @@ impl OffsetList {
     }
 }
 
-pub use self::containers::{BatchContainer, SliceContainer};
+pub use self::containers::{BatchContainer, SliceContainer, SliceContainer2};
 
 /// Containers for data that resemble `Vec<T>`, with leaner implementations.
 pub mod containers {
@@ -318,19 +312,24 @@ pub mod containers {
     use timely::container::columnation::{Columnation, TimelyStack};
 
     use std::borrow::{Borrow, ToOwned};
+    use trace::MyTrait;
 
     /// A general-purpose container resembling `Vec<T>`.
-    pub trait BatchContainer: Default {
+    pub trait BatchContainer: Default + 'static {
         /// The type of contained item.
         ///
         /// The container only supplies references to the item, so it needn't be sized.
-        type Item: ?Sized;
+        type PushItem;
+        /// The type that can be read back out of the container.
+        type ReadItem<'a>: Copy + MyTrait<'a, Owned = Self::PushItem> + for<'b> PartialOrd<Self::ReadItem<'b>>;
         /// Inserts an owned item.
-        fn push(&mut self, item: <Self::Item as ToOwned>::Owned) where Self::Item: ToOwned;
+        fn push(&mut self, item: Self::PushItem);
+        /// Inserts an owned item.
+        fn copy_push(&mut self, item: &Self::PushItem);
         /// Inserts a borrowed item.
-        fn copy(&mut self, item: &Self::Item);
+        fn copy<'a>(&mut self, item: Self::ReadItem<'a>);
         /// Extends from a slice of items.
-        fn copy_slice(&mut self, slice: &[<Self::Item as ToOwned>::Owned]) where Self::Item: ToOwned;
+        fn copy_slice(&mut self, slice: &[Self::PushItem]);
         /// Extends from a range of items in another`Self`.
         fn copy_range(&mut self, other: &Self, start: usize, end: usize);
         /// Creates a new container with sufficient capacity.
@@ -341,11 +340,11 @@ pub mod containers {
         fn merge_capacity(cont1: &Self, cont2: &Self) -> Self;
 
         /// Reference to the element at this position.
-        fn index(&self, index: usize) -> &Self::Item;
+        fn index<'a>(&'a self, index: usize) -> Self::ReadItem<'a>;
         /// Number of contained elements
         fn len(&self) -> usize;
         /// Returns the last item if the container is non-empty.
-        fn last(&self) -> Option<&Self::Item> {
+        fn last<'a>(&'a self) -> Option<Self::ReadItem<'a>> {
             if self.len() > 0 {
                 Some(self.index(self.len()-1))
             }
@@ -360,7 +359,7 @@ pub mod containers {
         /// stays false once it becomes false, a joint property of the predicate
         /// and the layout of `Self. This allows `advance` to use exponential search to
         /// count the number of elements in time logarithmic in the result.
-        fn advance<F: Fn(&Self::Item)->bool>(&self, start: usize, end: usize, function: F) -> usize {
+        fn advance<F: for<'a> Fn(Self::ReadItem<'a>)->bool>(&self, start: usize, end: usize, function: F) -> usize {
 
             let small_limit = 8;
 
@@ -401,15 +400,20 @@ pub mod containers {
 
     // All `T: Clone` also implement `ToOwned<Owned = T>`, but without the constraint Rust
     // struggles to understand why the owned type must be `T` (i.e. the one blanket impl).
-    impl<T: Clone + ToOwned<Owned = T>> BatchContainer for Vec<T> {
-        type Item = T;
+    impl<T: Ord + Clone + 'static> BatchContainer for Vec<T> {
+        type PushItem = T;
+        type ReadItem<'a> = &'a Self::PushItem;
+
         fn push(&mut self, item: T) {
             self.push(item);
+        }
+        fn copy_push(&mut self, item: &T) {
+            self.copy(item);
         }
         fn copy(&mut self, item: &T) {
             self.push(item.clone());
         }
-        fn copy_slice(&mut self, slice: &[T]) where T: Sized {
+        fn copy_slice(&mut self, slice: &[T]) {
             self.extend_from_slice(slice);
         }
         fn copy_range(&mut self, other: &Self, start: usize, end: usize) {
@@ -424,7 +428,7 @@ pub mod containers {
         fn merge_capacity(cont1: &Self, cont2: &Self) -> Self {
             Vec::with_capacity(cont1.len() + cont2.len())
         }
-        fn index(&self, index: usize) -> &Self::Item {
+        fn index<'a>(&'a self, index: usize) -> Self::ReadItem<'a> {
             &self[index]
         }
         fn len(&self) -> usize {
@@ -434,15 +438,20 @@ pub mod containers {
 
     // The `ToOwned` requirement exists to satisfy `self.reserve_items`, who must for now
     // be presented with the actual contained type, rather than a type that borrows into it.
-    impl<T: Columnation + ToOwned<Owned = T>> BatchContainer for TimelyStack<T> {
-        type Item = T;
-        fn push(&mut self, item: <Self::Item as ToOwned>::Owned) where Self::Item: ToOwned {
+    impl<T: Ord + Columnation + ToOwned<Owned = T> + 'static> BatchContainer for TimelyStack<T> {
+        type PushItem = T;
+        type ReadItem<'a> = &'a Self::PushItem;
+
+        fn push(&mut self, item: Self::PushItem) {
             self.copy(item.borrow());
+        }
+        fn copy_push(&mut self, item: &Self::PushItem) {
+            self.copy(item);
         }
         fn copy(&mut self, item: &T) {
             self.copy(item);
         }
-        fn copy_slice(&mut self, slice: &[<Self::Item as ToOwned>::Owned]) where Self::Item: ToOwned {
+        fn copy_slice(&mut self, slice: &[Self::PushItem]) {
             self.reserve_items(slice.iter());
             for item in slice.iter() {
                 self.copy(item);
@@ -465,7 +474,7 @@ pub mod containers {
             new.reserve_regions(std::iter::once(cont1).chain(std::iter::once(cont2)));
             new
         }
-        fn index(&self, index: usize) -> &Self::Item {
+        fn index<'a>(&'a self, index: usize) -> Self::ReadItem<'a> {
             &self[index]
         }
         fn len(&self) -> usize {
@@ -486,23 +495,26 @@ pub mod containers {
 
     impl<B> BatchContainer for SliceContainer<B>
     where
-        B: Clone + Sized,
-        [B]: ToOwned<Owned = Vec<B>>,
+        B: Ord + Clone + Sized + 'static,
     {
-        type Item = [B];
-        fn push(&mut self, item: Vec<B>) where Self::Item: ToOwned {
+        type PushItem = Vec<B>;
+        type ReadItem<'a> = &'a [B];
+        fn push(&mut self, item: Vec<B>) {
             for x in item.into_iter() {
                 self.inner.push(x);
             }
             self.offsets.push(self.inner.len());
         }
-        fn copy(&mut self, item: &Self::Item) {
+        fn copy_push(&mut self, item: &Vec<B>) {
+            self.copy(&item[..]);
+        }
+        fn copy<'a>(&mut self, item: Self::ReadItem<'a>) {
             for x in item.iter() {
                 self.inner.copy(x);
             }
             self.offsets.push(self.inner.len());
         }
-        fn copy_slice(&mut self, slice: &[Vec<B>]) where Self::Item: ToOwned {
+        fn copy_slice(&mut self, slice: &[Vec<B>]) {
             for item in slice {
                 self.copy(item);
             }
@@ -530,7 +542,7 @@ pub mod containers {
                 inner: Vec::with_capacity(cont1.inner.len() + cont2.inner.len()),
             }
         }
-        fn index(&self, index: usize) -> &Self::Item {
+        fn index<'a>(&'a self, index: usize) -> Self::ReadItem<'a> {
             let lower = self.offsets[index];
             let upper = self.offsets[index+1];
             &self.inner[lower .. upper]
@@ -550,12 +562,154 @@ pub mod containers {
         }
     }
 
-    use trace::implementations::RetainFrom;
-    /// A container that can retain/discard from some offset onward.
-    impl<B> RetainFrom<[B]> for SliceContainer<B> {
-        /// Retains elements from an index onwards that satisfy a predicate.
-        fn retain_from<P: FnMut(usize, &[B])->bool>(&mut self, _index: usize, _predicate: P) {
-            unimplemented!()
+    /// A container that accepts slices `[B::Item]`.
+    pub struct SliceContainer2<B> {
+        text: String,
+        /// Offsets that bound each contained slice.
+        ///
+        /// The length will be one greater than the number of contained slices,
+        /// starting with zero and ending with `self.inner.len()`.
+        offsets: Vec<usize>,
+        /// An inner container for sequences of `B` that dereferences to a slice.
+        inner: Vec<B>,
+    }
+
+    /// Welcome to GATs!
+    pub struct Greetings<'a, B> {
+        /// Text that decorates the data.
+        pub text: Option<&'a str>,
+        /// The data itself.
+        pub slice: &'a [B],
+    }
+
+    impl<'a, B> Copy for Greetings<'a, B> { }
+    impl<'a, B> Clone for Greetings<'a, B> { 
+        fn clone(&self) -> Self {
+            Self {
+                text: self.text.clone(),
+                slice: self.slice,
+            }
         }
     }
+
+    use std::cmp::Ordering;
+    impl<'a, 'b, B: Ord> PartialEq<Greetings<'a, B>> for Greetings<'b, B> {
+        fn eq(&self, other: &Greetings<'a, B>) -> bool {
+            self.slice.eq(&other.slice[..])
+        }
+    }
+    impl<'a, B: Ord> Eq for Greetings<'a, B> { }
+    impl<'a, 'b, B: Ord> PartialOrd<Greetings<'a, B>> for Greetings<'b, B> {
+        fn partial_cmp(&self, other: &Greetings<'a, B>) -> Option<Ordering> {
+            self.slice.partial_cmp(&other.slice[..])
+        }
+    }
+    impl<'a, B: Ord> Ord for Greetings<'a, B> {
+        fn cmp(&self, other: &Self) -> Ordering {
+            self.partial_cmp(other).unwrap()
+        }
+    }
+
+    impl<'a, B: Ord + Clone> MyTrait<'a> for Greetings<'a, B> {
+        type Owned = Vec<B>;
+        fn into_owned(self) -> Self::Owned { self.slice.to_vec() }
+        fn clone_onto(&self, other: &mut Self::Owned) { 
+            self.slice.clone_into(other);
+        }
+        fn compare(&self, other: &Self::Owned) -> std::cmp::Ordering { 
+            self.slice.cmp(&other[..])
+        }
+        fn borrow_as(other: &'a Self::Owned) -> Self {
+            Self {
+                text: None,
+                slice: &other[..],
+            }
+        }
+    }
+    
+    
+
+    impl<B> BatchContainer for SliceContainer2<B>
+    where
+        B: Ord + Clone + Sized + 'static,
+    {
+        type PushItem = Vec<B>;
+        type ReadItem<'a> = Greetings<'a, B>;
+        fn push(&mut self, item: Vec<B>) {
+            for x in item.into_iter() {
+                self.inner.push(x);
+            }
+            self.offsets.push(self.inner.len());
+        }
+        fn copy_push(&mut self, item: &Vec<B>) {
+            self.copy(<_ as MyTrait>::borrow_as(item));
+        }
+        fn copy<'a>(&mut self, item: Self::ReadItem<'a>) {
+            for x in item.slice.iter() {
+                self.inner.copy(x);
+            }
+            self.offsets.push(self.inner.len());
+        }
+        fn copy_slice(&mut self, slice: &[Vec<B>]) {
+            for item in slice {
+                self.copy_push(item);
+            }
+        }
+        fn copy_range(&mut self, other: &Self, start: usize, end: usize) {
+            for index in start .. end {
+                self.copy(other.index(index));
+            }
+        }
+        fn with_capacity(size: usize) -> Self {
+            let mut offsets = Vec::with_capacity(size + 1);
+            offsets.push(0);
+            Self {
+                text: format!("Hello!"),
+                offsets,
+                inner: Vec::with_capacity(size),
+            }
+        }
+        fn reserve(&mut self, _additional: usize) {
+        }
+        fn merge_capacity(cont1: &Self, cont2: &Self) -> Self {
+            let mut offsets = Vec::with_capacity(cont1.inner.len() + cont2.inner.len() + 1);
+            offsets.push(0);
+            Self {
+                text: format!("Hello!"),
+                offsets,
+                inner: Vec::with_capacity(cont1.inner.len() + cont2.inner.len()),
+            }
+        }
+        fn index<'a>(&'a self, index: usize) -> Self::ReadItem<'a> {
+            let lower = self.offsets[index];
+            let upper = self.offsets[index+1];
+            Greetings {
+                text: Some(&self.text),
+                slice: &self.inner[lower .. upper],
+            }
+        }
+        fn len(&self) -> usize {
+            self.offsets.len() - 1
+        }
+    }
+
+    /// Default implementation introduces a first offset.
+    impl<B> Default for SliceContainer2<B> {
+        fn default() -> Self {
+            Self {
+                text: format!("Hello!"),
+                offsets: vec![0],
+                inner: Default::default(),
+            }
+        }
+    }
+
+    // use trace::implementations::RetainFrom;
+    // /// A container that can retain/discard from some offset onward.
+    // impl<B> RetainFrom<[B]> for SliceContainer<B> {
+    //     /// Retains elements from an index onwards that satisfy a predicate.
+    //     fn retain_from<P: FnMut(usize, &[B])->bool>(&mut self, _index: usize, _predicate: P) {
+    //         unimplemented!()
+    //     }
+    // }
 }

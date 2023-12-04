@@ -5,7 +5,6 @@ use std::hash::Hash;
 use timely::dataflow::*;
 
 use ::{Collection, ExchangeData};
-use ::operators::*;
 use ::lattice::Lattice;
 use ::difference::{Abelian, Multiply};
 use ::operators::arrange::arrangement::ArrangeByKey;
@@ -64,7 +63,7 @@ where
     R: Multiply<R, Output=R>,
     R: From<i8>,
     L: ExchangeData,
-    Tr: TraceReader<Key=N, Val=N, Time=G::Timestamp, Diff=R>+Clone+'static,
+    Tr: for<'a> TraceReader<Key<'a>=&'a N, Val<'a>=&'a N, Time=G::Timestamp, Diff=R>+Clone+'static,
     F: Fn(&L)->u64+Clone+'static,
 {
     // Morally the code performs the following iterative computation. However, in the interest of a simplified
@@ -90,6 +89,8 @@ where
 
         use timely::order::Product;
 
+        use operators::join::JoinCore;
+        
         let edges = edges.enter(scope);
         let nodes = nodes.enter_at(scope, move |r| 256 * (64 - (logic(&r.1)).leading_zeros() as usize));
 

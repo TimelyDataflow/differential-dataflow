@@ -22,23 +22,22 @@ pub fn lookup_map<G, D, R, Tr, F, DOut, ROut, S>(
     mut arrangement: Arranged<G, Tr>,
     key_selector: F,
     mut output_func: S,
-    supplied_key0: Tr::Key,
-    supplied_key1: Tr::Key,
-    supplied_key2: Tr::Key,
+    supplied_key0: Tr::KeyOwned,
+    supplied_key1: Tr::KeyOwned,
+    supplied_key2: Tr::KeyOwned,
 ) -> Collection<G, DOut, ROut>
 where
     G: Scope,
     G::Timestamp: Lattice,
     Tr: TraceReader<Time=G::Timestamp>+Clone+'static,
-    Tr::Key: Ord+Hashable+Sized,
-    Tr::Val: Clone,
+    Tr::KeyOwned: Hashable,
     Tr::Diff: Monoid+ExchangeData,
-    F: FnMut(&D, &mut Tr::Key)+Clone+'static,
+    F: FnMut(&D, &mut Tr::KeyOwned)+Clone+'static,
     D: ExchangeData,
     R: ExchangeData+Monoid,
     DOut: Clone+'static,
     ROut: Monoid,
-    S: FnMut(&D, &R, &Tr::Val, &Tr::Diff)->(DOut, ROut)+'static,
+    S: FnMut(&D, &R, Tr::Val<'_>, &Tr::Diff)->(DOut, ROut)+'static,
 {
     // No need to block physical merging for this operator.
     arrangement.trace.set_physical_compaction(Antichain::new().borrow());
@@ -51,14 +50,14 @@ where
 
     let mut buffer = Vec::new();
 
-    let mut key: Tr::Key = supplied_key0;
+    let mut key: Tr::KeyOwned = supplied_key0;
     let exchange = Exchange::new(move |update: &(D,G::Timestamp,R)| {
         logic1(&update.0, &mut key);
         key.hashed().into()
     });
 
-    let mut key1: Tr::Key = supplied_key1;
-    let mut key2: Tr::Key = supplied_key2;
+    let mut key1: Tr::KeyOwned = supplied_key1;
+    let mut key2: Tr::KeyOwned = supplied_key2;
 
     prefixes.inner.binary_frontier(&propose_stream, exchange, Pipeline, "LookupMap", move |_,_| move |input1, input2, output| {
 
@@ -96,8 +95,9 @@ where
                     for &mut (ref prefix, ref time, ref mut diff) in prefixes.iter_mut() {
                         if !input2.frontier.less_equal(time) {
                             logic2(prefix, &mut key1);
-                            cursor.seek_key(&storage, &key1);
-                            if cursor.get_key(&storage) == Some(&key1) {
+                            use differential_dataflow::trace::cursor::MyTrait;
+                            cursor.seek_key(&storage, MyTrait::borrow_as(&key1));
+                            if cursor.get_key(&storage) == Some(MyTrait::borrow_as(&key1)) {
                                 while let Some(value) = cursor.get_val(&storage) {
                                     let mut count = Tr::Diff::zero();
                                     cursor.map_times(&storage, |t, d| {

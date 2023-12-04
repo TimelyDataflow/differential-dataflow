@@ -136,17 +136,17 @@ use super::TraceAgent;
 /// understand what a "sequence" of upserts would mean for partially ordered
 /// timestamps.
 pub fn arrange_from_upsert<G, Tr>(
-    stream: &Stream<G, (Tr::Key, Option<Tr::Val>, G::Timestamp)>,
+    stream: &Stream<G, (Tr::KeyOwned, Option<Tr::ValOwned>, G::Timestamp)>,
     name: &str,
 ) -> Arranged<G, TraceAgent<Tr>>
 where
     G: Scope,
     G::Timestamp: Lattice+Ord+TotalOrder+ExchangeData,
-    Tr::Key: ExchangeData+Hashable+std::hash::Hash,
-    Tr::Val: ExchangeData,
+    Tr::KeyOwned: ExchangeData+Hashable+std::hash::Hash,
+    Tr::ValOwned: ExchangeData,
     Tr: Trace+TraceReader<Time=G::Timestamp,Diff=isize>+'static,
     Tr::Batch: Batch,
-    Tr::Builder: Builder<Item = ((Tr::Key, Tr::Val), Tr::Time, Tr::Diff)>,
+    Tr::Builder: Builder<Item = ((Tr::KeyOwned, Tr::ValOwned), Tr::Time, Tr::Diff)>,
 {
     let mut reader: Option<TraceAgent<Tr>> = None;
 
@@ -155,7 +155,7 @@ where
 
         let reader = &mut reader;
 
-        let exchange = Exchange::new(move |update: &(Tr::Key,Option<Tr::Val>,G::Timestamp)| (update.0).hashed().into());
+        let exchange = Exchange::new(move |update: &(Tr::KeyOwned,Option<Tr::ValOwned>,G::Timestamp)| (update.0).hashed().into());
 
         stream.unary_frontier(exchange, name, move |_capability, info| {
 
@@ -185,7 +185,7 @@ where
             let mut prev_frontier = Antichain::from_elem(<G::Timestamp as Timestamp>::minimum());
 
             // For stashing input upserts, ordered increasing by time (`BinaryHeap` is a max-heap).
-            let mut priority_queue = BinaryHeap::<std::cmp::Reverse<(G::Timestamp, Tr::Key, Option<Tr::Val>)>>::new();
+            let mut priority_queue = BinaryHeap::<std::cmp::Reverse<(G::Timestamp, Tr::KeyOwned, Option<Tr::ValOwned>)>>::new();
             let mut updates = Vec::new();
 
             move |input, output| {
@@ -252,12 +252,14 @@ where
                                 let mut builder = Tr::Builder::new();
                                 for (key, mut list) in to_process.drain(..) {
 
+                                    use trace::cursor::MyTrait;
+
                                     // The prior value associated with the key.
-                                    let mut prev_value: Option<Tr::Val> = None;
+                                    let mut prev_value: Option<Tr::ValOwned> = None;
 
                                     // Attempt to find the key in the trace.
-                                    trace_cursor.seek_key(&trace_storage, &key);
-                                    if trace_cursor.get_key(&trace_storage) == Some(&key) {
+                                    trace_cursor.seek_key_owned(&trace_storage, &key);
+                                    if trace_cursor.get_key(&trace_storage).map(|k| k.equals(&key)).unwrap_or(false) {
                                         // Determine the prior value associated with the key.
                                         while let Some(val) = trace_cursor.get_val(&trace_storage) {
                                             let mut count = 0;
@@ -265,7 +267,7 @@ where
                                             assert!(count == 0 || count == 1);
                                             if count == 1 {
                                                 assert!(prev_value.is_none());
-                                                prev_value = Some(val.clone());
+                                                prev_value = Some(val.into_owned());
                                             }
                                             trace_cursor.step_val(&trace_storage);
                                         }

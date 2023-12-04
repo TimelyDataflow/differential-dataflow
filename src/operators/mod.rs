@@ -24,7 +24,7 @@ use trace::Cursor;
 
 /// An accumulation of (value, time, diff) updates.
 struct EditList<'a, C: Cursor> where C::Time: Sized, C::Diff: Sized {
-    values: Vec<(&'a C::Val, usize)>,
+    values: Vec<(C::Val<'a>, usize)>,
     edits: Vec<(C::Time, C::Diff)>,
 }
 
@@ -64,19 +64,19 @@ impl<'a, C: Cursor> EditList<'a, C> where C::Time: Ord+Clone, C::Diff: Semigroup
     }
     /// Associates all edits pushed since the previous `seal_value` call with `value`.
     #[inline]
-    fn seal(&mut self, value: &'a C::Val) {
+    fn seal(&mut self, value: C::Val<'a>) {
         let prev = self.values.last().map(|x| x.1).unwrap_or(0);
         crate::consolidation::consolidate_from(&mut self.edits, prev);
         if self.edits.len() > prev {
             self.values.push((value, self.edits.len()));
         }
     }
-    fn map<F: FnMut(&C::Val, &C::Time, &C::Diff)>(&self, mut logic: F) {
+    fn map<F: FnMut(C::Val<'a>, &C::Time, &C::Diff)>(&self, mut logic: F) {
         for index in 0 .. self.values.len() {
             let lower = if index == 0 { 0 } else { self.values[index-1].1 };
             let upper = self.values[index].1;
             for edit in lower .. upper {
-                logic(&self.values[index].0, &self.edits[edit].0, &self.edits[edit].1);
+                logic(self.values[index].0, &self.edits[edit].0, &self.edits[edit].1);
             }
         }
     }
@@ -86,12 +86,11 @@ struct ValueHistory<'storage, C: Cursor> where C::Time: Sized, C::Diff: Sized {
 
     edits: EditList<'storage, C>,
     history: Vec<(C::Time, C::Time, usize, usize)>,     // (time, meet, value_index, edit_offset)
-    buffer: Vec<((&'storage C::Val, C::Time), C::Diff)>,   // where we accumulate / collapse updates.
+    buffer: Vec<((C::Val<'storage>, C::Time), C::Diff)>,   // where we accumulate / collapse updates.
 }
 
 impl<'storage, C: Cursor> ValueHistory<'storage, C>
 where
-    C::Val: Ord+'storage,
     C::Time: Lattice+Ord+Clone,
     C::Diff: Semigroup,
 {
@@ -121,11 +120,10 @@ where
         &'history mut self,
         cursor: &mut C,
         storage: &'storage C::Storage,
-        key: &C::Key,
+        key: C::Key<'storage>,
         logic: L
     ) -> HistoryReplay<'storage, 'history, C>
     where
-        C::Key: Eq,
         L: Fn(&C::Time)->C::Time,
     {
         self.clear();
@@ -165,7 +163,6 @@ struct HistoryReplay<'storage, 'history, C>
 where
     'storage: 'history,
     C: Cursor,
-    C::Val: Ord+'storage,
     C::Time: Lattice+Ord+Clone+'history,
     C::Diff: Semigroup+'history,
 {
@@ -176,17 +173,16 @@ impl<'storage, 'history, C> HistoryReplay<'storage, 'history, C>
 where
     'storage: 'history,
     C: Cursor,
-    C::Val: Ord+'storage,
     C::Time: Lattice+Ord+Clone+'history,
     C::Diff: Semigroup+'history,
 {
     fn time(&self) -> Option<&C::Time> { self.replay.history.last().map(|x| &x.0) }
     fn meet(&self) -> Option<&C::Time> { self.replay.history.last().map(|x| &x.1) }
-    fn edit(&self) -> Option<(&C::Val, &C::Time, &C::Diff)> {
+    fn edit(&self) -> Option<(C::Val<'storage>, &C::Time, &C::Diff)> {
         self.replay.history.last().map(|&(ref t, _, v, e)| (self.replay.edits.values[v].0, t, &self.replay.edits.edits[e].1))
     }
 
-    fn buffer(&self) -> &[((&'storage C::Val, C::Time), C::Diff)] {
+    fn buffer(&self) -> &[((C::Val<'storage>, C::Time), C::Diff)] {
         &self.replay.buffer[..]
     }
 

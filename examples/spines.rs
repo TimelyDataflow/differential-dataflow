@@ -24,7 +24,7 @@ fn main() {
         let mut probe = Handle::new();
         let (mut data_input, mut keys_input) = worker.dataflow(|scope| {
 
-            use differential_dataflow::operators::{arrange::Arrange, JoinCore};
+            use differential_dataflow::operators::{arrange::Arrange, JoinCore, join::join_traces};
 
             let (data_input, data) = scope.new_collection::<String, isize>();
             let (keys_input, keys) = scope.new_collection::<String, isize>();
@@ -44,13 +44,13 @@ fn main() {
                     keys.join_core(&data, |_k, &(), &()| Option::<()>::None)
                         .probe_with(&mut probe);
                 },
-                "rhh" => {
-                    use differential_dataflow::trace::implementations::rhh::{HashWrapper, VecSpine};
-                    let data = data.map(|x| HashWrapper { inner: x }).arrange::<VecSpine<_,(),_,_>>();
-                    let keys = keys.map(|x| HashWrapper { inner: x }).arrange::<VecSpine<_,(),_,_>>();
-                    keys.join_core(&data, |_k, &(), &()| Option::<()>::None)
-                        .probe_with(&mut probe);
-                },
+                // "rhh" => {
+                //     use differential_dataflow::trace::implementations::rhh::{HashWrapper, VecSpine};
+                //     let data = data.map(|x| HashWrapper { inner: x }).arrange::<VecSpine<_,(),_,_>>();
+                //     let keys = keys.map(|x| HashWrapper { inner: x }).arrange::<VecSpine<_,(),_,_>>();
+                //     keys.join_core(&data, |_k, &(), &()| Option::<()>::None)
+                //         .probe_with(&mut probe);
+                // },
                 "slc" => {
 
                     use differential_dataflow::trace::implementations::ord_neu::PreferredSpine;
@@ -58,14 +58,17 @@ fn main() {
 
                     let data =
                     data.map(|x| (x.clone().into_bytes(), x.into_bytes()))
-                        .arrange::<PreferredSpine<[u8],[u8],_,_>>()
-                        .reduce_abelian::<_, PreferredSpine<_,_,_,_>>("distinct", |_,_,output| output.push(((), 1)));
+                        .arrange::<PreferredSpine<[u8],[u8],_,_>>();
+                        // .reduce_abelian::<_, PreferredSpine<[u8],(),_,_>>("distinct", |_,_,output| output.push(((), 1)));
                     let keys =
                     keys.map(|x| (x.clone().into_bytes(), 7))
-                        .arrange::<PreferredSpine<[u8],u8,_,_>>()
-                        .reduce_abelian::<_, PreferredSpine<_,_,_,_>>("distinct", |_,_,output| output.push(((), 1)));
+                        .arrange::<PreferredSpine<[u8],u8,_,_>>();
+                        // .reduce_abelian::<_, PreferredSpine<[u8],(),_,_>>("distinct", |_,_,output| output.push(((), 1)));
 
-                    keys.join_core(&data, |_k,&(),&()| Option::<()>::None)
+                    join_traces(&keys, &data, |k,v1,v2,t,r1,r2| {
+                        println!("{:?}", k.text);
+                        Option::<((),isize,isize)>::None
+                    })
                         .probe_with(&mut probe);
                 },
                 _ => {
