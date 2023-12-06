@@ -54,16 +54,15 @@ fn main() {
                 "slc" => {
 
                     use differential_dataflow::trace::implementations::ord_neu::PreferredSpine;
-                    use differential_dataflow::operators::reduce::ReduceCore;
 
                     let data =
                     data.map(|x| (x.clone().into_bytes(), x.into_bytes()))
-                        .arrange::<PreferredSpine<[u8],[u8],_,_>>();
-                        // .reduce_abelian::<_, PreferredSpine<[u8],(),_,_>>("distinct", |_,_,output| output.push(((), 1)));
+                        .arrange::<PreferredSpine<[u8],[u8],_,_>>()
+                        .reduce_abelian::<_, PreferredSpine<[u8],(),_,_>>("distinct", |_,_,output| output.push(((), 1)));
                     let keys =
                     keys.map(|x| (x.clone().into_bytes(), 7))
-                        .arrange::<PreferredSpine<[u8],u8,_,_>>();
-                        // .reduce_abelian::<_, PreferredSpine<[u8],(),_,_>>("distinct", |_,_,output| output.push(((), 1)));
+                        .arrange::<PreferredSpine<[u8],u8,_,_>>()
+                        .reduce_abelian::<_, PreferredSpine<[u8],(),_,_>>("distinct", |_,_,output| output.push(((), 1)));
 
                     keys.join_core(&data, |k,_v1,_v2| {
                         println!("{:?}", k.text);

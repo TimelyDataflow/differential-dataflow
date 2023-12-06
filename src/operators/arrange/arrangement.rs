@@ -452,6 +452,49 @@ where
     }
 }
 
+// Direct reduce implementations.
+use difference::Abelian;
+impl<G: Scope, T1> Arranged<G, T1>
+where
+    G::Timestamp: Lattice+Ord,
+    T1: TraceReader<Time=G::Timestamp>+Clone+'static,
+    T1::Diff: Semigroup,
+{
+    /// A direct implementation of `ReduceCore::reduce_abelian`.
+    pub fn reduce_abelian<L, T2>(&self, name: &str, mut logic: L) -> Arranged<G, TraceAgent<T2>>
+    where
+        T2: for<'a> Trace<Key<'a>= T1::Key<'a>, Time=G::Timestamp>+'static,
+        T2::ValOwned: Data,
+        T2::Diff: Abelian,
+        T2::Batch: Batch,
+        T2::Builder: Builder<Output=T2::Batch, Item = ((T1::KeyOwned, T2::ValOwned), T2::Time, T2::Diff)>,
+        L: FnMut(T1::Key<'_>, &[(T1::Val<'_>, T1::Diff)], &mut Vec<(<T2::Cursor as Cursor>::ValOwned, T2::Diff)>)+'static,
+    {
+        self.reduce_core::<_,T2>(name, move |key, input, output, change| {
+            if !input.is_empty() {
+                logic(key, input, change);
+            }
+            change.extend(output.drain(..).map(|(x,d)| (x, d.negate())));
+            crate::consolidation::consolidate(change);
+        })
+    }
+
+    /// A direct implementation of `ReduceCore::reduce_core`.
+    pub fn reduce_core<L, T2>(&self, name: &str, logic: L) -> Arranged<G, TraceAgent<T2>>
+    where
+        T2: for<'a> Trace<Key<'a>=T1::Key<'a>, Time=G::Timestamp>+'static,
+        T2::ValOwned: Data,
+        T2::Diff: Semigroup,
+        T2::Batch: Batch,
+        T2::Builder: Builder<Output=T2::Batch, Item = ((T1::KeyOwned, T2::ValOwned), T2::Time, T2::Diff)>,
+        L: FnMut(T1::Key<'_>, &[(T1::Val<'_>, T1::Diff)], &mut Vec<(<T2::Cursor as Cursor>::ValOwned,T2::Diff)>, &mut Vec<(<T2::Cursor as Cursor>::ValOwned, T2::Diff)>)+'static,
+    {
+        use operators::reduce::reduce_trace;
+        reduce_trace(self, name, logic)
+    }
+}
+
+
 impl<'a, G: Scope, Tr> Arranged<Child<'a, G, G::Timestamp>, Tr>
 where
     G::Timestamp: Lattice+Ord,
