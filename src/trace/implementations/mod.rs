@@ -45,7 +45,6 @@ pub(crate) mod merge_batcher_col;
 
 pub use self::merge_batcher::MergeBatcher as Batcher;
 
-// pub mod ord;
 pub mod ord_neu;
 pub mod rhh;
 pub mod huffman_container;
