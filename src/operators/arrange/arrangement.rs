@@ -410,6 +410,91 @@ where
     }
 }
 
+
+use difference::Multiply;
+// Direct join implementations.
+impl<G: Scope, Tr> Arranged<G, Tr>
+where
+    G::Timestamp: Lattice+Ord,
+    Tr: TraceReader<Time=G::Timestamp> + Clone + 'static,
+    Tr::Diff: Semigroup,
+{
+    /// A direct implementation of the `JoinCore::join_core` method.
+    pub fn join_core<Tr2,I,L>(&self, other: &Arranged<G,Tr2>, mut result: L) -> Collection<G,I::Item,<Tr::Diff as Multiply<Tr2::Diff>>::Output>
+    where
+        Tr2: for<'a> TraceReader<Key<'a>=Tr::Key<'a>,Time=G::Timestamp>+Clone+'static,
+        Tr2::Diff: Semigroup,
+        Tr::Diff: Multiply<Tr2::Diff>,
+        <Tr::Diff as Multiply<Tr2::Diff>>::Output: Semigroup,
+        I: IntoIterator,
+        I::Item: Data,
+        L: FnMut(Tr::Key<'_>,Tr::Val<'_>,Tr2::Val<'_>)->I+'static
+    {
+        let result = move |k: Tr::Key<'_>, v1: Tr::Val<'_>, v2: Tr2::Val<'_>, t: &G::Timestamp, r1: &Tr::Diff, r2: &Tr2::Diff| {
+            let t = t.clone();
+            let r = (r1.clone()).multiply(r2);
+            result(k, v1, v2).into_iter().map(move |d| (d, t.clone(), r.clone()))
+        };
+        self.join_core_internal_unsafe(other, result)
+    }
+    /// A direct implementation of the `JoinCore::join_core_internal_unsafe` method.
+    pub fn join_core_internal_unsafe<Tr2,I,L,D,ROut> (&self, other: &Arranged<G,Tr2>, result: L) -> Collection<G,D,ROut>
+    where
+        Tr2: for<'a> TraceReader<Key<'a>=Tr::Key<'a>, Time=G::Timestamp>+Clone+'static,
+        Tr2::Diff: Semigroup,
+        D: Data,
+        ROut: Semigroup,
+        I: IntoIterator<Item=(D, G::Timestamp, ROut)>,
+        L: FnMut(Tr::Key<'_>, Tr::Val<'_>,Tr2::Val<'_>,&G::Timestamp,&Tr::Diff,&Tr2::Diff)->I+'static,
+    {
+        use operators::join::join_traces;
+        join_traces(self, other, result)
+    }
+}
+
+// Direct reduce implementations.
+use difference::Abelian;
+impl<G: Scope, T1> Arranged<G, T1>
+where
+    G::Timestamp: Lattice+Ord,
+    T1: TraceReader<Time=G::Timestamp>+Clone+'static,
+    T1::Diff: Semigroup,
+{
+    /// A direct implementation of `ReduceCore::reduce_abelian`.
+    pub fn reduce_abelian<L, T2>(&self, name: &str, mut logic: L) -> Arranged<G, TraceAgent<T2>>
+    where
+        T2: for<'a> Trace<Key<'a>= T1::Key<'a>, Time=G::Timestamp>+'static,
+        T2::ValOwned: Data,
+        T2::Diff: Abelian,
+        T2::Batch: Batch,
+        T2::Builder: Builder<Output=T2::Batch, Item = ((T1::KeyOwned, T2::ValOwned), T2::Time, T2::Diff)>,
+        L: FnMut(T1::Key<'_>, &[(T1::Val<'_>, T1::Diff)], &mut Vec<(<T2::Cursor as Cursor>::ValOwned, T2::Diff)>)+'static,
+    {
+        self.reduce_core::<_,T2>(name, move |key, input, output, change| {
+            if !input.is_empty() {
+                logic(key, input, change);
+            }
+            change.extend(output.drain(..).map(|(x,d)| (x, d.negate())));
+            crate::consolidation::consolidate(change);
+        })
+    }
+
+    /// A direct implementation of `ReduceCore::reduce_core`.
+    pub fn reduce_core<L, T2>(&self, name: &str, logic: L) -> Arranged<G, TraceAgent<T2>>
+    where
+        T2: for<'a> Trace<Key<'a>=T1::Key<'a>, Time=G::Timestamp>+'static,
+        T2::ValOwned: Data,
+        T2::Diff: Semigroup,
+        T2::Batch: Batch,
+        T2::Builder: Builder<Output=T2::Batch, Item = ((T1::KeyOwned, T2::ValOwned), T2::Time, T2::Diff)>,
+        L: FnMut(T1::Key<'_>, &[(T1::Val<'_>, T1::Diff)], &mut Vec<(<T2::Cursor as Cursor>::ValOwned,T2::Diff)>, &mut Vec<(<T2::Cursor as Cursor>::ValOwned, T2::Diff)>)+'static,
+    {
+        use operators::reduce::reduce_trace;
+        reduce_trace(self, name, logic)
+    }
+}
+
+
 impl<'a, G: Scope, Tr> Arranged<Child<'a, G, G::Timestamp>, Tr>
 where
     G::Timestamp: Lattice+Ord,

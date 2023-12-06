@@ -89,8 +89,6 @@ where
 
         use timely::order::Product;
 
-        use operators::join::JoinCore;
-        
         let edges = edges.enter(scope);
         let nodes = nodes.enter_at(scope, move |r| 256 * (64 - (logic(&r.1)).leading_zeros() as usize));
 

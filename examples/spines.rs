@@ -24,7 +24,7 @@ fn main() {
         let mut probe = Handle::new();
         let (mut data_input, mut keys_input) = worker.dataflow(|scope| {
 
-            use differential_dataflow::operators::{arrange::Arrange, JoinCore, join::join_traces};
+            use differential_dataflow::operators::{arrange::Arrange};
 
             let (data_input, data) = scope.new_collection::<String, isize>();
             let (keys_input, keys) = scope.new_collection::<String, isize>();
@@ -54,18 +54,17 @@ fn main() {
                 "slc" => {
 
                     use differential_dataflow::trace::implementations::ord_neu::PreferredSpine;
-                    use differential_dataflow::operators::reduce::ReduceCore;
 
                     let data =
                     data.map(|x| (x.clone().into_bytes(), x.into_bytes()))
-                        .arrange::<PreferredSpine<[u8],[u8],_,_>>();
-                        // .reduce_abelian::<_, PreferredSpine<[u8],(),_,_>>("distinct", |_,_,output| output.push(((), 1)));
+                        .arrange::<PreferredSpine<[u8],[u8],_,_>>()
+                        .reduce_abelian::<_, PreferredSpine<[u8],(),_,_>>("distinct", |_,_,output| output.push(((), 1)));
                     let keys =
                     keys.map(|x| (x.clone().into_bytes(), 7))
-                        .arrange::<PreferredSpine<[u8],u8,_,_>>();
-                        // .reduce_abelian::<_, PreferredSpine<[u8],(),_,_>>("distinct", |_,_,output| output.push(((), 1)));
+                        .arrange::<PreferredSpine<[u8],u8,_,_>>()
+                        .reduce_abelian::<_, PreferredSpine<[u8],(),_,_>>("distinct", |_,_,output| output.push(((), 1)));
 
-                    join_traces(&keys, &data, |k,v1,v2,t,r1,r2| {
+                    keys.join_core(&data, |k,_v1,_v2| {
                         println!("{:?}", k.text);
                         Option::<((),isize,isize)>::None
                     })

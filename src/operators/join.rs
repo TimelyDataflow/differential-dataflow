@@ -349,47 +349,6 @@ where
     {
         self.arrange_by_key().join_core_internal_unsafe(stream2, result)
     }
-
-}
-
-impl<G, K, V, T1> JoinCore<G, K, V, T1::Diff> for Arranged<G,T1>
-    where
-        G: Scope,
-        G::Timestamp: Lattice+Ord,
-        T1: for<'a> TraceReader<Key<'a> = &'a K, Val<'a> = &'a V, Time=G::Timestamp>+Clone+'static,
-        K: Ord+'static,
-        V: Ord+'static,
-        T1::Diff: Semigroup,
-{
-    fn join_core<Tr2,I,L>(&self, other: &Arranged<G,Tr2>, mut result: L) -> Collection<G,I::Item,<T1::Diff as Multiply<Tr2::Diff>>::Output>
-    where
-        Tr2: for<'a> TraceReader<Key<'a>=T1::Key<'a>,Time=G::Timestamp>+Clone+'static,
-        Tr2::Diff: Semigroup,
-        T1::Diff: Multiply<Tr2::Diff>,
-        <T1::Diff as Multiply<Tr2::Diff>>::Output: Semigroup,
-        I: IntoIterator,
-        I::Item: Data,
-        L: FnMut(T1::Key<'_>,T1::Val<'_>,Tr2::Val<'_>)->I+'static
-    {
-        let result = move |k: T1::Key<'_>, v1: T1::Val<'_>, v2: Tr2::Val<'_>, t: &G::Timestamp, r1: &T1::Diff, r2: &Tr2::Diff| {
-            let t = t.clone();
-            let r = (r1.clone()).multiply(r2);
-            result(k, v1, v2).into_iter().map(move |d| (d, t.clone(), r.clone()))
-        };
-        self.join_core_internal_unsafe(other, result)
-    }
-
-    fn join_core_internal_unsafe<Tr2,I,L,D,ROut> (&self, other: &Arranged<G,Tr2>, result: L) -> Collection<G,D,ROut>
-    where
-        Tr2: for<'a> TraceReader<Key<'a>=T1::Key<'a>, Time=G::Timestamp>+Clone+'static,
-        Tr2::Diff: Semigroup,
-        D: Data,
-        ROut: Semigroup,
-        I: IntoIterator<Item=(D, G::Timestamp, ROut)>,
-        L: FnMut(&K, &V,Tr2::Val<'_>,&G::Timestamp,&T1::Diff,&Tr2::Diff)->I+'static,
-    {
-        join_traces(self, other, result)
-    }
 }
 
 /// An equijoin of two traces, sharing a common key type.

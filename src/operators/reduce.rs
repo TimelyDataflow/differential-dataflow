@@ -26,7 +26,7 @@ use trace::implementations::{KeySpine, ValSpine};
 use trace::TraceReader;
 
 /// Extension trait for the `reduce` differential dataflow method.
-pub trait Reduce<G: Scope, K: Data, V: Data, R: Semigroup> : ReduceCore<G, K, V, R> where G::Timestamp: Lattice+Ord {
+pub trait Reduce<G: Scope, K: Data, V: Data, R: Semigroup> where G::Timestamp: Lattice+Ord {
     /// Applies a reduction function on records grouped by key.
     ///
     /// Input data must be structured as `(key, val)` pairs.
@@ -327,28 +327,10 @@ where
     }
 }
 
-impl<G: Scope, K, V, T1, R: Semigroup> ReduceCore<G, K, V, R> for Arranged<G, T1>
-where
-    K: ToOwned + Ord + ?Sized,
-    K::Owned: Data,
-    V: ToOwned + Ord + ?Sized,
-    G::Timestamp: Lattice+Ord,
-    T1: for<'a> TraceReader<Key<'a>=&'a K, KeyOwned = <K as ToOwned>::Owned, Val<'a>=&'a V, Time=G::Timestamp, Diff=R>+Clone+'static,
-{
-    fn reduce_core<L, T2>(&self, name: &str, logic: L) -> Arranged<G, TraceAgent<T2>>
-        where
-            T2: for<'a> Trace<Key<'a>=&'a K, Time=G::Timestamp>+'static,
-            T2::ValOwned: Data,
-            T2::Diff: Semigroup,
-            T2::Batch: Batch,
-            T2::Builder: Builder<Output=T2::Batch, Item = ((K::Owned, T2::ValOwned), T2::Time, T2::Diff)>,
-            L: FnMut(&K, &[(&V, R)], &mut Vec<(<T2::Cursor as Cursor>::ValOwned,T2::Diff)>, &mut Vec<(<T2::Cursor as Cursor>::ValOwned, T2::Diff)>)+'static,
-        {
-            reduce_trace(self, name, logic)
-        }
-}
-
-fn reduce_trace<G, T1, T2, L>(trace: &Arranged<G, T1>, name: &str, mut logic: L) -> Arranged<G, TraceAgent<T2>>
+/// A key-wise reduction of values in an input trace.
+///
+/// This method exists to provide reduce functionality without opinions about qualifying trace types.
+pub fn reduce_trace<G, T1, T2, L>(trace: &Arranged<G, T1>, name: &str, mut logic: L) -> Arranged<G, TraceAgent<T2>>
 where
     G: Scope,
     G::Timestamp: Lattice+Ord,
@@ -359,7 +341,7 @@ where
     T2::Diff: Semigroup,
     T2::Batch: Batch,
     T2::Builder: Builder<Output=T2::Batch, Item = ((T1::KeyOwned, T2::ValOwned), T2::Time, T2::Diff)>,
-    L: for<'a> FnMut(T1::Key<'a>, &[(T1::Val<'a>, T1::Diff)], &mut Vec<(T2::ValOwned,T2::Diff)>, &mut Vec<(T2::ValOwned, T2::Diff)>)+'static,
+    L: FnMut(T1::Key<'_>, &[(T1::Val<'_>, T1::Diff)], &mut Vec<(T2::ValOwned,T2::Diff)>, &mut Vec<(T2::ValOwned, T2::Diff)>)+'static,
 {
     let mut result_trace = None;
 
