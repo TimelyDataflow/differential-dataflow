@@ -24,7 +24,7 @@ fn main() {
         let mut probe = Handle::new();
         let (mut data_input, mut keys_input) = worker.dataflow(|scope| {
 
-            use differential_dataflow::operators::{arrange::Arrange, JoinCore, join::join_traces};
+            use differential_dataflow::operators::{arrange::Arrange};
 
             let (data_input, data) = scope.new_collection::<String, isize>();
             let (keys_input, keys) = scope.new_collection::<String, isize>();
@@ -65,7 +65,7 @@ fn main() {
                         .arrange::<PreferredSpine<[u8],u8,_,_>>();
                         // .reduce_abelian::<_, PreferredSpine<[u8],(),_,_>>("distinct", |_,_,output| output.push(((), 1)));
 
-                    join_traces(&keys, &data, |k,v1,v2,t,r1,r2| {
+                    keys.join_core(&data, |k,_v1,_v2| {
                         println!("{:?}", k.text);
                         Option::<((),isize,isize)>::None
                     })
