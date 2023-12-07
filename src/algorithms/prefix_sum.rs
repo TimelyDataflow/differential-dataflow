@@ -2,9 +2,9 @@
 
 use timely::dataflow::Scope;
 
-use ::{Collection, ExchangeData};
-use ::lattice::Lattice;
-use ::operators::*;
+use crate::{Collection, ExchangeData};
+use crate::lattice::Lattice;
+use crate::operators::*;
 
 /// Extension trait for the prefix_sum method.
 pub trait PrefixSum<G: Scope, K, D> {

@@ -1,6 +1,3 @@
-extern crate timely;
-extern crate differential_dataflow;
-
 use timely::dataflow::operators::probe::Handle;
 use timely::dataflow::operators::Map;
 

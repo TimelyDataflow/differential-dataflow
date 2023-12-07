@@ -1,10 +1,5 @@
 #![allow(non_snake_case)]
 
-extern crate indexmap;
-extern crate timely;
-extern crate differential_dataflow;
-
-
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::cell::RefCell;
@@ -17,7 +12,7 @@ use differential_dataflow::ExchangeData as Data;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::input::Input;
 use differential_dataflow::operators::iterate::Variable;
-use differential_dataflow::operators::{Threshold, Join, JoinCore, Consolidate};
+use differential_dataflow::operators::{Threshold, Join, JoinCore};
 use differential_dataflow::operators::arrange::ArrangeByKey;
 
 // Type aliases for differential execution.

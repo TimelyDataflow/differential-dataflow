@@ -1,7 +1,3 @@
-extern crate libloading;
-extern crate timely;
-extern crate differential_dataflow;
-
 use std::any::Any;
 use std::rc::Rc;
 use std::collections::HashMap;
@@ -16,14 +12,12 @@ use timely::dataflow::operators::probe::Handle as ProbeHandle;
 
 // stuff for talking about shared trace types ...
 use differential_dataflow::operators::arrange::TraceAgent;
-use differential_dataflow::trace::implementations::spine_fueled::Spine;
-use differential_dataflow::trace::implementations::ord::OrdValBatch;
+use differential_dataflow::trace::implementations::ValSpine;
 
 // These are all defined here so that users can be assured a common layout.
 pub type RootTime = usize;
-type TraceBatch = OrdValBatch<usize, usize, RootTime, isize>;
-type TraceSpine = Spine<usize, usize, RootTime, isize, Rc<TraceBatch>>;
-pub type TraceHandle = TraceAgent<usize, usize, RootTime, isize, TraceSpine>;
+type TraceSpine = ValSpine<usize, usize, RootTime, isize>;
+pub type TraceHandle = TraceAgent<TraceSpine>;
 
 /// Arguments provided to each shared library to help build their dataflows and register their results.
 pub type Environment<'a, 'b> = (
@@ -74,7 +68,7 @@ impl<T> ::std::ops::DerefMut for LibraryWrapper<T> {
 
 /// A wrapper around a `HashMap<String, Box<Any>>` that handles downcasting.
 pub struct TraceHandler {
-    handles: HashMap<String, Box<Any>>,
+    handles: HashMap<String, Box<dyn Any>>,
 }
 
 impl TraceHandler {
@@ -86,17 +80,17 @@ impl TraceHandler {
         boxed.downcast_mut::<T>().ok_or(format!("failed to downcast: {}", name))
     }
     /// Enumerates the keys maintained in storage (for the `list` operation).
-    pub fn keys(&self) -> ::std::collections::hash_map::Keys<String, Box<Any>> {
+    pub fn keys(&self) -> ::std::collections::hash_map::Keys<String, Box<dyn Any>> {
         self.handles.keys()
     }
     /// Assign a thing to key `name`, boxed as `Box<Any>`.
     pub fn set<T: Any>(&mut self, name: String, thing: T) {
-        let boxed: Box<Any> = Box::new(thing);
+        let boxed: Box<dyn Any> = Box::new(thing);
         assert!(boxed.downcast_ref::<T>().is_some());
         self.handles.insert(name, boxed);
     }
     /// Removes the resource associated with `name`.
-    pub fn remove(&mut self, name: &str) -> Option<Box<Any>> {
+    pub fn remove(&mut self, name: &str) -> Option<Box<dyn Any>> {
         self.handles.remove(name)
     }
 }

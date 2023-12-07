@@ -5,9 +5,9 @@ use timely::progress::timestamp::Refines;
 use timely::progress::Timestamp;
 use timely::progress::{Antichain, frontier::AntichainRef};
 
-use lattice::Lattice;
-use trace::{TraceReader, BatchReader, Description};
-use trace::cursor::Cursor;
+use crate::lattice::Lattice;
+use crate::trace::{TraceReader, BatchReader, Description};
+use crate::trace::cursor::Cursor;
 
 /// Wrapper to provide trace to nested scope.
 pub struct TraceEnter<Tr, TInner>

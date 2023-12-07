@@ -6,7 +6,7 @@
 //! dataflow collections would then track for each record the total of counts and heights, which allows
 //! us to track something like the average.
 
-use ::Data;
+use crate::Data;
 
 #[deprecated]
 pub use self::Abelian as Diff;
@@ -140,6 +140,8 @@ wrapping_implementation!(std::num::Wrapping<isize>);
 
 pub use self::present::Present;
 mod present {
+    use abomonation_derive::Abomonation;
+    use serde::{Deserialize, Serialize};
 
     /// A zero-sized difference that indicates the presence of a record.
     ///

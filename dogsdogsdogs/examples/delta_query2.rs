@@ -1,9 +1,3 @@
-extern crate timely;
-extern crate graph_map;
-extern crate differential_dataflow;
-
-extern crate dogsdogsdogs;
-
 use timely::dataflow::Scope;
 use timely::order::Product;
 use timely::dataflow::operators::probe::Handle;

@@ -1,10 +1,3 @@
-extern crate timely;
-extern crate differential_dataflow;
-extern crate graph_map;
-extern crate core_affinity;
-
-use std::rc::Rc;
-
 use timely::dataflow::*;
 
 use timely::order::Product;
@@ -16,7 +9,6 @@ use differential_dataflow::operators::*;
 use differential_dataflow::operators::arrange::ArrangeByKey;
 use differential_dataflow::operators::arrange::ArrangeBySelf;
 use differential_dataflow::operators::iterate::SemigroupVariable;
-use differential_dataflow::trace::implementations::spine_fueled::Spine;
 use differential_dataflow::AsCollection;
 
 use graph_map::GraphMMap;
@@ -28,8 +20,8 @@ type Diff = i32;
 // use differential_dataflow::trace::implementations::graph::GraphBatch;
 // type GraphTrace = Spine<Node, Node, (), isize, Rc<GraphBatch<Node>>>;
 
-use differential_dataflow::trace::implementations::ord::OrdValBatch;
-type GraphTrace = Spine<Node, Node, (), Diff, Rc<OrdValBatch<Node, Node, (), Diff>>>;
+use differential_dataflow::trace::implementations::ValSpine;
+type GraphTrace = ValSpine<Node, Node, (), Diff>;
 
 fn main() {
 

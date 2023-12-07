@@ -17,9 +17,9 @@ use timely::dataflow::scopes::{Child, child::Iterative};
 use timely::dataflow::{Scope, Stream};
 use timely::dataflow::operators::*;
 
-use ::difference::{Semigroup, Abelian, Multiply};
-use lattice::Lattice;
-use hashable::Hashable;
+use crate::difference::{Semigroup, Abelian, Multiply};
+use crate::lattice::Lattice;
+use crate::hashable::Hashable;
 
 /// A mutable collection of values of type `D`
 ///
@@ -60,9 +60,6 @@ impl<G: Scope, D: Data, R: Semigroup> Collection<G, D, R> where G::Timestamp: Da
     /// # Examples
     ///
     /// ```
-    /// extern crate timely;
-    /// extern crate differential_dataflow;
-    ///
     /// use differential_dataflow::input::Input;
     ///
     /// fn main() {
@@ -91,9 +88,6 @@ impl<G: Scope, D: Data, R: Semigroup> Collection<G, D, R> where G::Timestamp: Da
     /// # Examples
     ///
     /// ```
-    /// extern crate timely;
-    /// extern crate differential_dataflow;
-    ///
     /// use differential_dataflow::input::Input;
     ///
     /// fn main() {
@@ -120,9 +114,6 @@ impl<G: Scope, D: Data, R: Semigroup> Collection<G, D, R> where G::Timestamp: Da
     /// # Examples
     ///
     /// ```
-    /// extern crate timely;
-    /// extern crate differential_dataflow;
-    ///
     /// use differential_dataflow::input::Input;
     ///
     /// fn main() {
@@ -146,9 +137,6 @@ impl<G: Scope, D: Data, R: Semigroup> Collection<G, D, R> where G::Timestamp: Da
     /// # Examples
     ///
     /// ```
-    /// extern crate timely;
-    /// extern crate differential_dataflow;
-    ///
     /// use differential_dataflow::input::Input;
     ///
     /// fn main() {
@@ -175,9 +163,6 @@ impl<G: Scope, D: Data, R: Semigroup> Collection<G, D, R> where G::Timestamp: Da
     /// # Examples
     ///
     /// ```
-    /// extern crate timely;
-    /// extern crate differential_dataflow;
-    ///
     /// use differential_dataflow::input::Input;
     ///
     /// fn main() {
@@ -207,9 +192,6 @@ impl<G: Scope, D: Data, R: Semigroup> Collection<G, D, R> where G::Timestamp: Da
     /// # Examples
     ///
     /// ```
-    /// extern crate timely;
-    /// extern crate differential_dataflow;
-    ///
     /// use differential_dataflow::input::Input;
     ///
     /// fn main() {
@@ -241,9 +223,6 @@ impl<G: Scope, D: Data, R: Semigroup> Collection<G, D, R> where G::Timestamp: Da
     /// # Examples
     ///
     /// ```
-    /// extern crate timely;
-    /// extern crate differential_dataflow;
-    ///
     /// use differential_dataflow::input::Input;
     ///
     /// fn main() {
@@ -279,9 +258,6 @@ impl<G: Scope, D: Data, R: Semigroup> Collection<G, D, R> where G::Timestamp: Da
     /// #Examples
     ///
     /// ```
-    /// extern crate timely;
-    /// extern crate differential_dataflow;
-    ///
     /// use differential_dataflow::input::Input;
     ///
     /// fn main() {
@@ -315,9 +291,6 @@ impl<G: Scope, D: Data, R: Semigroup> Collection<G, D, R> where G::Timestamp: Da
     /// # Examples
     ///
     /// ```
-    /// extern crate timely;
-    /// extern crate differential_dataflow;
-    ///
     /// use timely::dataflow::Scope;
     /// use differential_dataflow::input::Input;
     ///
@@ -352,9 +325,6 @@ impl<G: Scope, D: Data, R: Semigroup> Collection<G, D, R> where G::Timestamp: Da
     /// # Examples
     ///
     /// ```
-    /// extern crate timely;
-    /// extern crate differential_dataflow;
-    ///
     /// use timely::dataflow::Scope;
     /// use differential_dataflow::input::Input;
     ///
@@ -433,9 +403,6 @@ impl<G: Scope, D: Data, R: Semigroup> Collection<G, D, R> where G::Timestamp: Da
     /// # Examples
     ///
     /// ```
-    /// extern crate timely;
-    /// extern crate differential_dataflow;
-    ///
     /// use differential_dataflow::input::Input;
     ///
     /// fn main() {
@@ -462,9 +429,6 @@ impl<G: Scope, D: Data, R: Semigroup> Collection<G, D, R> where G::Timestamp: Da
     /// # Examples
     ///
     /// ```
-    /// extern crate timely;
-    /// extern crate differential_dataflow;
-    ///
     /// use differential_dataflow::input::Input;
     ///
     /// fn main() {
@@ -512,9 +476,6 @@ impl<G: Scope, D: Data, R: Semigroup> Collection<G, D, R> where G::Timestamp: Da
     /// # Examples
     ///
     /// ```
-    /// extern crate timely;
-    /// extern crate differential_dataflow;
-    ///
     /// use differential_dataflow::input::Input;
     ///
     /// fn main() {
@@ -527,8 +488,8 @@ impl<G: Scope, D: Data, R: Semigroup> Collection<G, D, R> where G::Timestamp: Da
     /// }
     /// ```
     pub fn assert_empty(&self)
-    where D: ::ExchangeData+Hashable,
-          R: ::ExchangeData+Hashable,
+    where D: crate::ExchangeData+Hashable,
+          R: crate::ExchangeData+Hashable,
           G::Timestamp: Lattice+Ord,
     {
         self.consolidate()
@@ -554,9 +515,6 @@ where
     /// # Examples
     ///
     /// ```
-    /// extern crate timely;
-    /// extern crate differential_dataflow;
-    ///
     /// use timely::dataflow::Scope;
     /// use differential_dataflow::input::Input;
     ///
@@ -607,9 +565,6 @@ impl<G: Scope, D: Data, R: Abelian> Collection<G, D, R> where G::Timestamp: Data
     /// # Examples
     ///
     /// ```
-    /// extern crate timely;
-    /// extern crate differential_dataflow;
-    ///
     /// use differential_dataflow::input::Input;
     ///
     /// fn main() {
@@ -643,9 +598,6 @@ impl<G: Scope, D: Data, R: Abelian> Collection<G, D, R> where G::Timestamp: Data
     /// # Examples
     ///
     /// ```
-    /// extern crate timely;
-    /// extern crate differential_dataflow;
-    ///
     /// use differential_dataflow::input::Input;
     ///
     /// fn main() {
@@ -662,8 +614,8 @@ impl<G: Scope, D: Data, R: Abelian> Collection<G, D, R> where G::Timestamp: Data
     /// }
     /// ```
     pub fn assert_eq(&self, other: &Self)
-    where D: ::ExchangeData+Hashable,
-          R: ::ExchangeData+Hashable,
+    where D: crate::ExchangeData+Hashable,
+          R: crate::ExchangeData+Hashable,
           G::Timestamp: Lattice+Ord
     {
         self.negate()
@@ -692,9 +644,6 @@ impl<G: Scope, D: Data, R: Semigroup> AsCollection<G, D, R> for Stream<G, (D, G:
 /// # Examples
 ///
 /// ```
-/// extern crate timely;
-/// extern crate differential_dataflow;
-///
 /// use differential_dataflow::input::Input;
 ///
 /// fn main() {

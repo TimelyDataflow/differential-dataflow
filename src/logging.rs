@@ -1,5 +1,7 @@
 //! Loggers and logging events for differential dataflow.
 
+use abomonation_derive::Abomonation;
+
 /// Logger for differential dataflow events.
 pub type Logger = ::timely::logging::Logger<DifferentialEvent>;
 

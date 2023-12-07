@@ -10,6 +10,8 @@
 //! this file.
 
 use std::time::Duration;
+use abomonation_derive::Abomonation;
+use serde::{Deserialize, Serialize};
 
 /// A message in the CDC V2 protocol.
 #[derive(Ord, PartialOrd, Eq, PartialEq, Debug, Clone, Serialize, Deserialize, Abomonation)]

@@ -92,16 +92,6 @@ impl<T: timely::Data + Ord + Debug> Data for T { }
 pub trait ExchangeData : timely::ExchangeData + Ord + Debug { }
 impl<T: timely::ExchangeData + Ord + Debug> ExchangeData for T { }
 
-extern crate fnv;
-extern crate timely;
-
-#[macro_use]
-extern crate abomonation_derive;
-extern crate abomonation;
-#[macro_use]
-extern crate serde_derive;
-extern crate serde;
-
 pub mod hashable;
 pub mod operators;
 pub mod algorithms;

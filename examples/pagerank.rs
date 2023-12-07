@@ -1,7 +1,3 @@
-extern crate timely;
-extern crate graph_map;
-extern crate differential_dataflow;
-
 use timely::order::Product;
 use timely::dataflow::{*, operators::Filter};
 

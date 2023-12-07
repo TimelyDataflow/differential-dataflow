@@ -11,9 +11,9 @@ use timely::dataflow::operators::Input as TimelyInput;
 use timely::dataflow::operators::input::Handle;
 use timely::dataflow::scopes::ScopeParent;
 
-use ::Data;
-use ::difference::Semigroup;
-use collection::{Collection, AsCollection};
+use crate::Data;
+use crate::difference::Semigroup;
+use crate::collection::{Collection, AsCollection};
 
 /// Create a new collection and input handle to control the collection.
 pub trait Input : TimelyInput {
@@ -22,9 +22,6 @@ pub trait Input : TimelyInput {
     /// # Examples
     ///
     /// ```
-    /// extern crate timely;
-    /// extern crate differential_dataflow;
-    ///
     /// use timely::Config;
     /// use differential_dataflow::input::Input;
     ///
@@ -53,9 +50,6 @@ pub trait Input : TimelyInput {
     /// # Examples
     ///
     /// ```
-    /// extern crate timely;
-    /// extern crate differential_dataflow;
-    ///
     /// use timely::Config;
     /// use differential_dataflow::input::Input;
     ///
@@ -84,9 +78,6 @@ pub trait Input : TimelyInput {
     /// # Examples
     ///
     /// ```
-    /// extern crate timely;
-    /// extern crate differential_dataflow;
-    ///
     /// use timely::Config;
     /// use differential_dataflow::input::Input;
     ///
@@ -112,7 +103,7 @@ pub trait Input : TimelyInput {
     where I: IntoIterator<Item=(D,<Self as ScopeParent>::Timestamp,R)>+'static, D: Data, R: Semigroup+Data;
 }
 
-use lattice::Lattice;
+use crate::lattice::Lattice;
 impl<G: TimelyInput> Input for G where <G as ScopeParent>::Timestamp: Lattice {
     fn new_collection<D, R>(&mut self) -> (InputSession<<G as ScopeParent>::Timestamp, D, R>, Collection<G, D, R>)
     where D: Data, R: Semigroup{
@@ -147,9 +138,6 @@ impl<G: TimelyInput> Input for G where <G as ScopeParent>::Timestamp: Lattice {
 /// # Examples
 ///
 /// ```
-/// extern crate timely;
-/// extern crate differential_dataflow;
-///
 /// use timely::Config;
 /// use differential_dataflow::input::Input;
 ///

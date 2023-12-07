@@ -45,7 +45,7 @@ use std::collections::VecDeque;
 
 use timely::scheduling::Activator;
 use timely::progress::Antichain;
-use trace::TraceReader;
+use crate::trace::TraceReader;
 
 /// Operating instructions on how to replay a trace.
 pub enum TraceReplayInstruction<Tr>

@@ -1,8 +1,3 @@
-extern crate rand;
-extern crate timely;
-extern crate differential_dataflow;
-extern crate core_affinity;
-
 use rand::{Rng, SeedableRng, StdRng};
 
 use timely::dataflow::operators::{Exchange, Probe};

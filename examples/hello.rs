@@ -1,7 +1,3 @@
-extern crate rand;
-extern crate timely;
-extern crate differential_dataflow;
-
 use rand::{Rng, SeedableRng, StdRng};
 
 use differential_dataflow::input::Input;

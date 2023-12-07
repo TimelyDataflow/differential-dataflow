@@ -1,5 +1,3 @@
-extern crate interactive;
-
 use interactive::{Command, Plan};
 use interactive::concrete::Session;
 

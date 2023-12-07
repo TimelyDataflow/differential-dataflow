@@ -1,7 +1,3 @@
-extern crate timely;
-extern crate differential_dataflow;
-extern crate dd_server;
-
 use std::rc::Rc;
 use std::cell::RefCell;
 

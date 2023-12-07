@@ -1,7 +1,3 @@
-extern crate timely;
-extern crate itertools;
-extern crate differential_dataflow;
-
 use timely::dataflow::operators::*;
 use timely::dataflow::operators::capture::Extract;
 use timely::progress::frontier::AntichainRef;

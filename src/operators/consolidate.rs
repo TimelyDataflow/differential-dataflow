@@ -8,12 +8,12 @@
 
 use timely::dataflow::Scope;
 
-use ::{Collection, ExchangeData, Hashable};
-use ::difference::Semigroup;
+use crate::{Collection, ExchangeData, Hashable};
+use crate::difference::Semigroup;
 
-use Data;
-use lattice::Lattice;
-use trace::{Batcher, Builder};
+use crate::Data;
+use crate::lattice::Lattice;
+use crate::trace::{Batcher, Builder};
 
 /// Methods which require data be arrangeable.
 impl<G, D, R> Collection<G, D, R>
@@ -31,9 +31,6 @@ where
     /// # Examples
     ///
     /// ```
-    /// extern crate timely;
-    /// extern crate differential_dataflow;
-    ///
     /// use differential_dataflow::input::Input;
     ///
     /// fn main() {
@@ -49,7 +46,7 @@ where
     /// }
     /// ```
     pub fn consolidate(&self) -> Self {
-        use trace::implementations::KeySpine;
+        use crate::trace::implementations::KeySpine;
         self.consolidate_named::<KeySpine<_,_,_>>("Consolidate")
     }
 
@@ -61,7 +58,7 @@ where
         Tr::Batcher: Batcher<Item = ((D,()),G::Timestamp,R), Time = G::Timestamp>,
         Tr::Builder: Builder<Item = ((D,()),G::Timestamp,R), Time = G::Timestamp>,
     {
-        use operators::arrange::arrangement::Arrange;
+        use crate::operators::arrange::arrangement::Arrange;
         self.map(|k| (k, ()))
             .arrange_named::<Tr>(name)
             .as_collection(|d: &D, _| d.clone())
@@ -78,9 +75,6 @@ where
     /// # Examples
     ///
     /// ```
-    /// extern crate timely;
-    /// extern crate differential_dataflow;
-    ///
     /// use differential_dataflow::input::Input;
     ///
     /// fn main() {
@@ -99,7 +93,7 @@ where
 
         use timely::dataflow::channels::pact::Pipeline;
         use timely::dataflow::operators::Operator;
-        use collection::AsCollection;
+        use crate::collection::AsCollection;
 
         self.inner
             .unary(Pipeline, "ConsolidateStream", |_cap, _info| {

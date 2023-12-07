@@ -1,11 +1,8 @@
-extern crate differential_dataflow;
-extern crate dd_server;
-
 use std::rc::Rc;
 use std::cell::RefCell;
 
 use differential_dataflow::input::Input;
-use differential_dataflow::operators::{Iterate, JoinCore, Threshold};
+use differential_dataflow::operators::{Iterate, Threshold};
 use differential_dataflow::operators::arrange::ArrangeBySelf;
 
 use dd_server::{Environment, TraceHandle};

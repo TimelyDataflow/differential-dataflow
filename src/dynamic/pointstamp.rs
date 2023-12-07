@@ -11,6 +11,7 @@
 //! (as iteration within a scope requires leaving contained scopes), and then to any number of appended
 //! default coordinates (which is effectively just *setting* the coordinate).
 
+use abomonation_derive::Abomonation;
 use serde::{Deserialize, Serialize};
 
 /// A sequence of timestamps, partially ordered by the product order.
@@ -172,7 +173,7 @@ impl<T: Timestamp> Timestamp for PointStamp<T> {
 
 // Implement differential dataflow's `Lattice` trait.
 // This extends the `PartialOrder` implementation with additional structure.
-use lattice::Lattice;
+use crate::lattice::Lattice;
 impl<T: Lattice + Timestamp + Clone> Lattice for PointStamp<T> {
     fn join(&self, other: &Self) -> Self {
         let min_len = ::std::cmp::min(self.vector.len(), other.vector.len());

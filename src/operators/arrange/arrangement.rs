@@ -26,11 +26,11 @@ use timely::progress::Timestamp;
 use timely::progress::{Antichain, frontier::AntichainRef};
 use timely::dataflow::operators::Capability;
 
-use ::{Data, ExchangeData, Collection, AsCollection, Hashable};
-use ::difference::Semigroup;
-use lattice::Lattice;
-use trace::{self, Trace, TraceReader, Batch, BatchReader, Batcher, Builder, Cursor};
-use trace::implementations::{KeySpine, ValSpine};
+use crate::{Data, ExchangeData, Collection, AsCollection, Hashable};
+use crate::difference::Semigroup;
+use crate::lattice::Lattice;
+use crate::trace::{self, Trace, TraceReader, Batch, BatchReader, Batcher, Builder, Cursor};
+use crate::trace::implementations::{KeySpine, ValSpine};
 
 use trace::wrappers::enter::{TraceEnter, BatchEnter,};
 use trace::wrappers::enter_at::TraceEnter as TraceEnterAt;
@@ -149,9 +149,6 @@ where
     /// # Examples
     ///
     /// ```
-    /// extern crate timely;
-    /// extern crate differential_dataflow;
-    ///
     /// use differential_dataflow::input::Input;
     /// use differential_dataflow::operators::arrange::ArrangeByKey;
     ///
@@ -411,7 +408,7 @@ where
 }
 
 
-use difference::Multiply;
+use crate::difference::Multiply;
 // Direct join implementations.
 impl<G: Scope, Tr> Arranged<G, Tr>
 where
@@ -447,13 +444,13 @@ where
         I: IntoIterator<Item=(D, G::Timestamp, ROut)>,
         L: FnMut(Tr::Key<'_>, Tr::Val<'_>,Tr2::Val<'_>,&G::Timestamp,&Tr::Diff,&Tr2::Diff)->I+'static,
     {
-        use operators::join::join_traces;
+        use crate::operators::join::join_traces;
         join_traces(self, other, result)
     }
 }
 
 // Direct reduce implementations.
-use difference::Abelian;
+use crate::difference::Abelian;
 impl<G: Scope, T1> Arranged<G, T1>
 where
     G::Timestamp: Lattice+Ord,
@@ -489,7 +486,7 @@ where
         T2::Builder: Builder<Output=T2::Batch, Item = ((T1::KeyOwned, T2::ValOwned), T2::Time, T2::Diff)>,
         L: FnMut(T1::Key<'_>, &[(T1::Val<'_>, T1::Diff)], &mut Vec<(<T2::Cursor as Cursor>::ValOwned,T2::Diff)>, &mut Vec<(<T2::Cursor as Cursor>::ValOwned, T2::Diff)>)+'static,
     {
-        use operators::reduce::reduce_trace;
+        use crate::operators::reduce::reduce_trace;
         reduce_trace(self, name, logic)
     }
 }
@@ -620,7 +617,7 @@ where
                 let logger = {
                     let scope = self.scope();
                     let register = scope.log_register();
-                    register.get::<::logging::DifferentialEvent>("differential/arrange")
+                    register.get::<crate::logging::DifferentialEvent>("differential/arrange")
                 };
 
                 // Where we will deposit received updates, and from which we extract batches.

@@ -25,15 +25,15 @@
 //! indices rather than whole-collection indices.
 
 use std::hash::Hash;
+use serde::{Deserialize, Serialize};
 
 use timely::dataflow::Scope;
 
-use differential_dataflow::operators::Consolidate;
 use differential_dataflow::operators::arrange::{ArrangeBySelf, ArrangeByKey};
 
 use differential_dataflow::{Collection, ExchangeData};
-use plan::{Plan, Render};
-use {TraceManager, Time, Diff, Datum};
+use crate::plan::{Plan, Render};
+use crate::{TraceManager, Time, Diff, Datum};
 
 /// A multiway join of muliple relations.
 ///
@@ -249,11 +249,11 @@ impl<V: ExchangeData+Hash+Datum> Render for MultiwayJoin<V> {
                     // tuple in the cursor.
                     changes =
                     if join_idx < index {
-                        let arrangement = trace.import(scope).enter_at(inner, |_,_,t| AltNeu::alt(t.clone()), unimplemented!());
+                        let arrangement = trace.import(scope).enter_at(inner, |_,_,t| AltNeu::alt(t.clone()), |_| unimplemented!());
                         dogsdogsdogs::operators::propose(&changes, arrangement, key_selector)
                     }
                     else {
-                        let arrangement = trace.import(scope).enter_at(inner, |_,_,t| AltNeu::neu(t.clone()), unimplemented!());
+                        let arrangement = trace.import(scope).enter_at(inner, |_,_,t| AltNeu::neu(t.clone()), |_| unimplemented!());
                         dogsdogsdogs::operators::propose(&changes, arrangement, key_selector)
                     }
                     .map(|(mut prefix, extensions)| { prefix.extend(extensions.into_iter()); prefix })

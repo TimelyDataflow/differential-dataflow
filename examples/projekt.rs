@@ -1,7 +1,3 @@
-extern crate rand;
-extern crate timely;
-extern crate differential_dataflow;
-
 use timely::dataflow::operators::probe::Handle;
 
 use differential_dataflow::input::InputSession;

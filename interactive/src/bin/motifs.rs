@@ -1,5 +1,3 @@
-extern crate interactive;
-
 use std::time::Duration;
 use interactive::{Command, Plan};
 use interactive::concrete::{Session, Value};

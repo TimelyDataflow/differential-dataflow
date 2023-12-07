@@ -1,7 +1,3 @@
-extern crate timely;
-extern crate graph_map;
-extern crate differential_dataflow;
-
 use std::hash::Hash;
 use timely::dataflow::*;
 use timely::dataflow::operators::*;

@@ -10,10 +10,9 @@ use timely::progress::Timestamp;
 use timely::progress::{Antichain, frontier::AntichainRef};
 use timely::dataflow::operators::CapabilitySet;
 
-use lattice::Lattice;
-use trace::{Trace, TraceReader, Batch, BatchReader};
-
-use trace::wrappers::rc::TraceBox;
+use crate::lattice::Lattice;
+use crate::trace::{Trace, TraceReader, Batch, BatchReader};
+use crate::trace::wrappers::rc::TraceBox;
 
 use timely::scheduling::Activator;
 
@@ -39,7 +38,7 @@ where
     temp_antichain: Antichain<Tr::Time>,
 
     operator: OperatorInfo,
-    logging: Option<::logging::Logger>,
+    logging: Option<crate::logging::Logger>,
 }
 
 impl<Tr> TraceReader for TraceAgent<Tr>
@@ -92,7 +91,7 @@ where
     Tr::Time: Timestamp+Lattice,
 {
     /// Creates a new agent from a trace reader.
-    pub fn new(trace: Tr, operator: OperatorInfo, logging: Option<::logging::Logger>) -> (Self, TraceWriter<Tr>)
+    pub fn new(trace: Tr, operator: OperatorInfo, logging: Option<crate::logging::Logger>) -> (Self, TraceWriter<Tr>)
     where
         Tr: Trace,
         Tr::Batch: Batch,
@@ -102,7 +101,7 @@ where
 
         if let Some(logging) = &logging {
             logging.log(
-                ::logging::TraceShare { operator: operator.global_id, diff: 1 }
+                crate::logging::TraceShare { operator: operator.global_id, diff: 1 }
             );
         }
 
@@ -203,9 +202,6 @@ where
     /// # Examples
     ///
     /// ```
-    /// extern crate timely;
-    /// extern crate differential_dataflow;
-    ///
     /// use timely::Config;
     /// use differential_dataflow::input::Input;
     /// use differential_dataflow::operators::arrange::ArrangeBySelf;
@@ -259,9 +255,6 @@ where
     /// # Examples
     ///
     /// ```
-    /// extern crate timely;
-    /// extern crate differential_dataflow;
-    ///
     /// use timely::Config;
     /// use timely::dataflow::ProbeHandle;
     /// use timely::dataflow::operators::Probe;
@@ -368,9 +361,6 @@ where
     /// # Examples
     ///
     /// ```
-    /// extern crate timely;
-    /// extern crate differential_dataflow;
-    ///
     /// use timely::Config;
     /// use timely::progress::frontier::AntichainRef;
     /// use timely::dataflow::ProbeHandle;
@@ -563,7 +553,7 @@ where
 
         if let Some(logging) = &self.logging {
             logging.log(
-                ::logging::TraceShare { operator: self.operator.global_id, diff: 1 }
+                crate::logging::TraceShare { operator: self.operator.global_id, diff: 1 }
             );
         }
 
@@ -593,7 +583,7 @@ where
 
         if let Some(logging) = &self.logging {
             logging.log(
-                ::logging::TraceShare { operator: self.operator.global_id, diff: -1 }
+                crate::logging::TraceShare { operator: self.operator.global_id, diff: -1 }
             );
         }
 

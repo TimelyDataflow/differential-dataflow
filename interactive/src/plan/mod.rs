@@ -1,11 +1,12 @@
 //! Types and traits for implementing query plans.
 
 use std::hash::Hash;
+use serde::{Deserialize, Serialize};
 
 use timely::dataflow::Scope;
 use differential_dataflow::{Collection, ExchangeData};
 
-use {TraceManager, Time, Diff};
+use crate::{TraceManager, Time, Diff};
 
 // pub mod count;
 pub mod filter;
@@ -156,7 +157,6 @@ impl<V: ExchangeData+Hash+Datum> Render for Plan<V> {
                 Plan::Map(expressions) => expressions.render(scope, collections, arrangements),
                 Plan::Distinct(distinct) => {
 
-                    use differential_dataflow::operators::reduce::ReduceCore;
                     use differential_dataflow::operators::arrange::ArrangeBySelf;
                     use differential_dataflow::trace::implementations::KeySpine;
 
@@ -196,7 +196,6 @@ impl<V: ExchangeData+Hash+Datum> Render for Plan<V> {
                         trace.import(scope).as_collection(|k,&()| k.clone())
                     }
                     else {
-                        use differential_dataflow::operators::Consolidate;
                         consolidate.render(scope, collections, arrangements).consolidate()
                     }
                 },

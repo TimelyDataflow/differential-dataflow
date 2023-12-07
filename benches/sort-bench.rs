@@ -2,10 +2,6 @@
 // #![feature(test)]
 // #![feature(collections)]
 //
-// extern crate differential_dataflow;
-// extern crate rand;
-// extern crate test;
-//
 // use rand::{Rng, SeedableRng, StdRng, Rand};
 // use test::Bencher;
 //

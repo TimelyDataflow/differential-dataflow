@@ -40,8 +40,8 @@
 
 pub mod spine_fueled;
 
-mod merge_batcher;
-pub(crate) mod merge_batcher_col;
+pub mod merge_batcher;
+pub mod merge_batcher_col;
 
 pub use self::merge_batcher::MergeBatcher as Batcher;
 
@@ -56,8 +56,8 @@ pub use self::ord_neu::OrdKeySpine as KeySpine;
 use std::borrow::{ToOwned};
 
 use timely::container::columnation::{Columnation, TimelyStack};
-use lattice::Lattice;
-use difference::Semigroup;
+use crate::lattice::Lattice;
+use crate::difference::Semigroup;
 
 /// A type that names constituent update types.
 pub trait Update {
@@ -220,6 +220,7 @@ where
 // }
 
 use std::convert::TryInto;
+use abomonation_derive::Abomonation;
 
 /// A list of unsigned integers that uses `u32` elements as long as they are small enough, and switches to `u64` once they are not.
 #[derive(Eq, PartialEq, Ord, PartialOrd, Clone, Debug, Abomonation)]
@@ -312,7 +313,7 @@ pub mod containers {
     use timely::container::columnation::{Columnation, TimelyStack};
 
     use std::borrow::{Borrow, ToOwned};
-    use trace::MyTrait;
+    use crate::trace::MyTrait;
 
     /// A general-purpose container resembling `Vec<T>`.
     pub trait BatchContainer: Default + 'static {

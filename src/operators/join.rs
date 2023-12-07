@@ -13,15 +13,15 @@ use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Capability;
 use timely::dataflow::channels::pushers::tee::Tee;
 
-use hashable::Hashable;
-use ::{Data, ExchangeData, Collection, AsCollection};
-use ::difference::{Semigroup, Abelian, Multiply};
-use lattice::Lattice;
-use operators::arrange::{Arranged, ArrangeByKey, ArrangeBySelf};
-use trace::{BatchReader, Cursor};
-use operators::ValueHistory;
+use crate::hashable::Hashable;
+use crate::{Data, ExchangeData, Collection, AsCollection};
+use crate::difference::{Semigroup, Abelian, Multiply};
+use crate::lattice::Lattice;
+use crate::operators::arrange::{Arranged, ArrangeByKey, ArrangeBySelf};
+use crate::trace::{BatchReader, Cursor};
+use crate::operators::ValueHistory;
 
-use trace::TraceReader;
+use crate::trace::TraceReader;
 
 /// Join implementations for `(key,val)` data.
 pub trait Join<G: Scope, K: Data, V: Data, R: Semigroup> {
@@ -33,9 +33,6 @@ pub trait Join<G: Scope, K: Data, V: Data, R: Semigroup> {
     /// # Examples
     ///
     /// ```
-    /// extern crate timely;
-    /// extern crate differential_dataflow;
-    ///
     /// use differential_dataflow::input::Input;
     /// use differential_dataflow::operators::Join;
     ///
@@ -67,9 +64,6 @@ pub trait Join<G: Scope, K: Data, V: Data, R: Semigroup> {
     /// # Examples
     ///
     /// ```
-    /// extern crate timely;
-    /// extern crate differential_dataflow;
-    ///
     /// use differential_dataflow::input::Input;
     /// use differential_dataflow::operators::Join;
     ///
@@ -97,9 +91,6 @@ pub trait Join<G: Scope, K: Data, V: Data, R: Semigroup> {
     /// # Examples
     ///
     /// ```
-    /// extern crate timely;
-    /// extern crate differential_dataflow;
-    ///
     /// use differential_dataflow::input::Input;
     /// use differential_dataflow::operators::Join;
     ///
@@ -131,9 +122,6 @@ pub trait Join<G: Scope, K: Data, V: Data, R: Semigroup> {
     /// # Examples
     ///
     /// ```
-    /// extern crate timely;
-    /// extern crate differential_dataflow;
-    ///
     /// use differential_dataflow::input::Input;
     /// use differential_dataflow::operators::Join;
     ///
@@ -232,9 +220,6 @@ pub trait JoinCore<G: Scope, K: 'static + ?Sized, V: 'static + ?Sized, R: Semigr
     /// # Examples
     ///
     /// ```
-    /// extern crate timely;
-    /// extern crate differential_dataflow;
-    ///
     /// use differential_dataflow::input::Input;
     /// use differential_dataflow::operators::arrange::ArrangeByKey;
     /// use differential_dataflow::operators::join::JoinCore;
@@ -280,9 +265,6 @@ pub trait JoinCore<G: Scope, K: 'static + ?Sized, V: 'static + ?Sized, R: Semigr
     /// # Examples
     ///
     /// ```
-    /// extern crate timely;
-    /// extern crate differential_dataflow;
-    ///
     /// use differential_dataflow::input::Input;
     /// use differential_dataflow::operators::arrange::ArrangeByKey;
     /// use differential_dataflow::operators::join::JoinCore;

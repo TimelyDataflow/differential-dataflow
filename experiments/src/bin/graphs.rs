@@ -1,9 +1,3 @@
-extern crate rand;
-extern crate timely;
-extern crate differential_dataflow;
-
-use std::rc::Rc;
-
 use rand::{Rng, SeedableRng, StdRng};
 
 use timely::dataflow::*;
@@ -11,19 +5,15 @@ use timely::dataflow::*;
 use differential_dataflow::input::Input;
 use differential_dataflow::Collection;
 use differential_dataflow::operators::*;
-use differential_dataflow::trace::Trace;
 use differential_dataflow::operators::arrange::ArrangeByKey;
 use differential_dataflow::operators::arrange::ArrangeBySelf;
 
-use differential_dataflow::trace::implementations::spine_fueled::Spine;
-
 type Node = usize;
 
-use differential_dataflow::trace::implementations::ord::OrdValBatch;
-// use differential_dataflow::trace::implementations::ord::OrdValSpine;
+use differential_dataflow::trace::implementations::ValSpine;
 
 // type GraphTrace<N> = Spine<usize, N, (), isize, Rc<GraphBatch<N>>>;
-type GraphTrace = Spine<Node, Node, (), isize, Rc<OrdValBatch<Node, Node, (), isize>>>;
+type GraphTrace = ValSpine<Node, Node, (), isize>;
 
 fn main() {
 

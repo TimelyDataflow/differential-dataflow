@@ -1,7 +1,3 @@
-extern crate libloading;
-extern crate timely;
-extern crate dd_server;
-
 use std::io::BufRead;
 use std::io::Write;
 
@@ -68,7 +64,7 @@ fn main() {
                                 let library_path = &command[0];
                                 let symbol_name = &command[1];
 
-                                if let Ok(lib) = Library::new(library_path) {
+                                if let Ok(lib) = unsafe { Library::new(library_path) } {
                                     worker.dataflow_core("dataflow", None, lib, |lib, child| {
                                         let result = unsafe {
                                             lib.get::<Symbol<unsafe fn(Environment)->Result<(),String>>>(symbol_name.as_bytes())

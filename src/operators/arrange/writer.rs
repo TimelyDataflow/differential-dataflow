@@ -6,11 +6,12 @@
 use std::rc::{Rc, Weak};
 use std::cell::RefCell;
 
-use lattice::Lattice;
-use trace::{Trace, Batch, BatchReader};
 use timely::progress::{Antichain, Timestamp};
 
-use trace::wrappers::rc::TraceBox;
+use crate::lattice::Lattice;
+use crate::trace::{Trace, Batch, BatchReader};
+use crate::trace::wrappers::rc::TraceBox;
+
 
 use super::TraceAgentQueueWriter;
 use super::TraceReplayInstruction;
@@ -95,7 +96,7 @@ where
     /// Inserts an empty batch up to `upper`.
     pub fn seal(&mut self, upper: Antichain<Tr::Time>) {
         if self.upper != upper {
-            use trace::Builder;
+            use crate::trace::Builder;
             let builder = Tr::Builder::new();
             let batch = builder.done(self.upper.clone(), upper, Antichain::from_elem(Tr::Time::minimum()));
             self.insert(batch, None);

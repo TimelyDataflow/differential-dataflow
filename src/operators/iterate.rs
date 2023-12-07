@@ -41,9 +41,9 @@ use timely::dataflow::scopes::child::Iterative;
 use timely::dataflow::operators::{Feedback, ConnectLoop, Map};
 use timely::dataflow::operators::feedback::Handle;
 
-use ::{Data, Collection};
-use ::difference::{Semigroup, Abelian};
-use lattice::Lattice;
+use crate::{Data, Collection};
+use crate::difference::{Semigroup, Abelian};
+use crate::lattice::Lattice;
 
 /// An extension trait for the `iterate` method.
 pub trait Iterate<G: Scope, D: Data, R: Semigroup> {
@@ -58,9 +58,6 @@ pub trait Iterate<G: Scope, D: Data, R: Semigroup> {
     /// # Examples
     ///
     /// ```
-    /// extern crate timely;
-    /// extern crate differential_dataflow;
-    ///
     /// use differential_dataflow::input::Input;
     /// use differential_dataflow::operators::Iterate;
     ///
@@ -136,9 +133,6 @@ impl<G: Scope, D: Ord+Data+Debug, R: Semigroup> Iterate<G, D, R> for G {
 /// The following example is equivalent to the example for the `Iterate` trait.
 ///
 /// ```
-/// extern crate timely;
-/// extern crate differential_dataflow;
-///
 /// use timely::order::Product;
 /// use timely::dataflow::Scope;
 ///

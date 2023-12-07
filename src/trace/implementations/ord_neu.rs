@@ -10,10 +10,10 @@
 
 use std::rc::Rc;
 
-use trace::implementations::spine_fueled::Spine;
-use trace::implementations::merge_batcher::MergeBatcher;
-use trace::implementations::merge_batcher_col::ColumnatedMergeBatcher;
-use trace::rc_blanket_impls::RcBuilder;
+use crate::trace::implementations::spine_fueled::Spine;
+use crate::trace::implementations::merge_batcher::MergeBatcher;
+use crate::trace::implementations::merge_batcher_col::ColumnatedMergeBatcher;
+use crate::trace::rc_blanket_impls::RcBuilder;
 
 use super::{Update, Layout, Vector, TStack, Preferred};
 
@@ -67,11 +67,12 @@ mod val_batch {
 
     use std::convert::TryInto;
     use std::marker::PhantomData;
+    use abomonation_derive::Abomonation;
     use timely::progress::{Antichain, frontier::AntichainRef};
 
-    use trace::{Batch, BatchReader, Builder, Cursor, Description, Merger};
-    use trace::implementations::{BatchContainer, OffsetList};
-    use trace::cursor::MyTrait;
+    use crate::trace::{Batch, BatchReader, Builder, Cursor, Description, Merger};
+    use crate::trace::implementations::{BatchContainer, OffsetList};
+    use crate::trace::cursor::MyTrait;
 
     use super::{Layout, Update};
 
@@ -195,7 +196,7 @@ mod val_batch {
         fn new(batch1: &OrdValBatch<L>, batch2: &OrdValBatch<L>, compaction_frontier: AntichainRef<<L::Target as Update>::Time>) -> Self {
 
             assert!(batch1.upper() == batch2.lower());
-            use lattice::Lattice;
+            use crate::lattice::Lattice;
             let mut since = batch1.description().since().join(batch2.description().since());
             since = since.join(&compaction_frontier.to_owned());
 
@@ -397,7 +398,7 @@ mod val_batch {
             for i in lower .. upper {
                 // NB: Here is where we would need to look back if `lower == upper`.
                 let (time, diff) = &source.updates.index(i).into_owned();
-                use lattice::Lattice;
+                use crate::lattice::Lattice;
                 let mut new_time = time.clone();
                 new_time.advance_by(self.description.since().borrow());
                 self.update_stash.push((new_time, diff.clone()));
@@ -406,7 +407,7 @@ mod val_batch {
 
         /// Consolidates `self.updates_stash` and produces the offset to record, if any.
         fn consolidate_updates(&mut self) -> Option<usize> {
-            use consolidation;
+            use crate::consolidation;
             consolidation::consolidate(&mut self.update_stash);
             if !self.update_stash.is_empty() {
                 // If there is a single element, equal to a just-prior recorded update,
@@ -633,11 +634,12 @@ mod key_batch {
 
     use std::convert::TryInto;
     use std::marker::PhantomData;
+    use abomonation_derive::Abomonation;
     use timely::progress::{Antichain, frontier::AntichainRef};
 
-    use trace::{Batch, BatchReader, Builder, Cursor, Description, Merger};
-    use trace::implementations::{BatchContainer, OffsetList};
-    use trace::cursor::MyTrait;
+    use crate::trace::{Batch, BatchReader, Builder, Cursor, Description, Merger};
+    use crate::trace::implementations::{BatchContainer, OffsetList};
+    use crate::trace::cursor::MyTrait;
 
     use super::{Layout, Update};
 
@@ -752,7 +754,7 @@ mod key_batch {
         fn new(batch1: &OrdKeyBatch<L>, batch2: &OrdKeyBatch<L>, compaction_frontier: AntichainRef<<L::Target as Update>::Time>) -> Self {
 
             assert!(batch1.upper() == batch2.lower());
-            use lattice::Lattice;
+            use crate::lattice::Lattice;
             let mut since = batch1.description().since().join(batch2.description().since());
             since = since.join(&compaction_frontier.to_owned());
 
@@ -867,7 +869,7 @@ mod key_batch {
             for i in lower .. upper {
                 // NB: Here is where we would need to look back if `lower == upper`.
                 let (time, diff) = &source.updates.index(i);
-                use lattice::Lattice;
+                use crate::lattice::Lattice;
                 let mut new_time = time.clone();
                 new_time.advance_by(self.description.since().borrow());
                 self.update_stash.push((new_time, diff.clone()));
@@ -876,7 +878,7 @@ mod key_batch {
 
         /// Consolidates `self.updates_stash` and produces the offset to record, if any.
         fn consolidate_updates(&mut self) -> Option<usize> {
-            use consolidation;
+            use crate::consolidation;
             consolidation::consolidate(&mut self.update_stash);
             if !self.update_stash.is_empty() {
                 // If there is a single element, equal to a just-prior recorded update,

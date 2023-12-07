@@ -1,8 +1,3 @@
-extern crate rand;
-extern crate timely;
-extern crate graph_map;
-extern crate differential_dataflow;
-
 use std::time::Instant;
 
 use differential_dataflow::input::Input;

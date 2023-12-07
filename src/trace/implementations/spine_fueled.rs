@@ -71,12 +71,12 @@
 
 use std::fmt::Debug;
 
-use ::logging::Logger;
-use ::difference::Semigroup;
-use lattice::Lattice;
-use trace::{Batch, Batcher, Builder, BatchReader, Trace, TraceReader, ExertionLogic};
-use trace::cursor::CursorList;
-use trace::Merger;
+use crate::logging::Logger;
+use crate::difference::Semigroup;
+use crate::lattice::Lattice;
+use crate::trace::{Batch, Batcher, Builder, BatchReader, Trace, TraceReader, ExertionLogic};
+use crate::trace::cursor::CursorList;
+use crate::trace::Merger;
 
 use ::timely::dataflow::operators::generic::OperatorInfo;
 use ::timely::progress::{Antichain, frontier::AntichainRef};
@@ -272,7 +272,7 @@ where
 
     fn new(
         info: ::timely::dataflow::operators::generic::OperatorInfo,
-        logging: Option<::logging::Logger>,
+        logging: Option<crate::logging::Logger>,
         activator: Option<timely::scheduling::activate::Activator>,
     ) -> Self {
         Self::with_effort(1, info, logging, activator)
@@ -314,7 +314,7 @@ where
     fn insert(&mut self, batch: Self::Batch) {
 
         // Log the introduction of a batch.
-        self.logger.as_ref().map(|l| l.log(::logging::BatchEvent {
+        self.logger.as_ref().map(|l| l.log(crate::logging::BatchEvent {
             operator: self.operator.global_id,
             length: batch.len()
         }));
@@ -364,23 +364,23 @@ where
             for batch in self.merging.drain(..) {
                 match batch {
                     MergeState::Single(Some(batch)) => {
-                        logger.log(::logging::DropEvent {
+                        logger.log(crate::logging::DropEvent {
                             operator: self.operator.global_id,
                             length: batch.len(),
                         });
                     },
                     MergeState::Double(MergeVariant::InProgress(batch1, batch2, _)) => {
-                        logger.log(::logging::DropEvent {
+                        logger.log(crate::logging::DropEvent {
                             operator: self.operator.global_id,
                             length: batch1.len(),
                         });
-                        logger.log(::logging::DropEvent {
+                        logger.log(crate::logging::DropEvent {
                             operator: self.operator.global_id,
                             length: batch2.len(),
                         });
                     },
                     MergeState::Double(MergeVariant::Complete(Some((batch, _)))) => {
-                        logger.log(::logging::DropEvent {
+                        logger.log(crate::logging::DropEvent {
                             operator: self.operator.global_id,
                             length: batch.len(),
                         });
@@ -389,7 +389,7 @@ where
                 }
             }
             for batch in self.pending.drain(..) {
-                logger.log(::logging::DropEvent {
+                logger.log(crate::logging::DropEvent {
                     operator: self.operator.global_id,
                     length: batch.len(),
                 });
@@ -443,7 +443,7 @@ where
     pub fn with_effort(
         mut effort: usize,
         operator: OperatorInfo,
-        logger: Option<::logging::Logger>,
+        logger: Option<crate::logging::Logger>,
         activator: Option<timely::scheduling::activate::Activator>,
     ) -> Self {
 
@@ -679,7 +679,7 @@ where
             MergeState::Single(old) => {
                 // Log the initiation of a merge.
                 self.logger.as_ref().map(|l| l.log(
-                    ::logging::MergeEvent {
+                    crate::logging::MergeEvent {
                         operator: self.operator.global_id,
                         scale: index,
                         length1: old.as_ref().map(|b| b.len()).unwrap_or(0),
@@ -702,7 +702,7 @@ where
             if let Some((input1, input2)) = inputs {
                 // Log the completion of a merge from existing parts.
                 self.logger.as_ref().map(|l| l.log(
-                    ::logging::MergeEvent {
+                    crate::logging::MergeEvent {
                         operator: self.operator.global_id,
                         scale: index,
                         length1: input1.len(),

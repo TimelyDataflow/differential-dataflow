@@ -4,10 +4,10 @@ use std::hash::Hash;
 
 use timely::dataflow::*;
 
-use ::{Collection, ExchangeData};
-use ::lattice::Lattice;
-use ::operators::*;
-use hashable::Hashable;
+use crate::{Collection, ExchangeData};
+use crate::lattice::Lattice;
+use crate::operators::*;
+use crate::hashable::Hashable;
 
 fn _color<G, N>(edges: &Collection<G, (N,N)>) -> Collection<G,(N,Option<u32>)>
 where

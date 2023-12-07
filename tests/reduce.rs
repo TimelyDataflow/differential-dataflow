@@ -1,6 +1,3 @@
-extern crate timely;
-extern crate differential_dataflow;
-
 use timely::dataflow::operators::{ToStream, Capture, Map};
 use timely::dataflow::operators::capture::Extract;
 use differential_dataflow::AsCollection;

@@ -1,7 +1,3 @@
-extern crate timely;
-extern crate differential_dataflow;
-extern crate rand;
-
 use differential_dataflow::input::InputSession;
 use differential_dataflow::operators::{Join,CountTotal,Count};
 use differential_dataflow::operators::arrange::ArrangeByKey;

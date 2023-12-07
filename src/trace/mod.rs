@@ -16,7 +16,7 @@ use timely::communication::message::RefOrMut;
 use timely::progress::{Antichain, frontier::AntichainRef};
 use timely::progress::Timestamp;
 
-use trace::cursor::MyTrait;
+use crate::trace::cursor::MyTrait;
 
 // use ::difference::Semigroup;
 pub use self::cursor::Cursor;
@@ -220,7 +220,7 @@ where <Self as TraceReader>::Batch: Batch {
     /// Allocates a new empty trace.
     fn new(
         info: ::timely::dataflow::operators::generic::OperatorInfo,
-        logging: Option<::logging::Logger>,
+        logging: Option<crate::logging::Logger>,
         activator: Option<timely::scheduling::activate::Activator>,
     ) -> Self;
 
@@ -483,9 +483,6 @@ pub mod rc_blanket_impls {
 
 /// Blanket implementations for reference counted batches.
 pub mod abomonated_blanket_impls {
-
-    extern crate abomonation;
-
     use abomonation::{Abomonation, measure};
     use abomonation::abomonated::Abomonated;
     use timely::progress::{Antichain, frontier::AntichainRef};

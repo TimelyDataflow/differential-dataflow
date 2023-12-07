@@ -15,8 +15,6 @@ pub trait Lattice : PartialOrder {
     /// # Examples
     ///
     /// ```
-    /// # extern crate timely;
-    /// # extern crate differential_dataflow;
     /// # use timely::PartialOrder;
     /// # use timely::order::Product;
     /// # use differential_dataflow::lattice::Lattice;
@@ -36,8 +34,6 @@ pub trait Lattice : PartialOrder {
     /// # Examples
     ///
     /// ```
-    /// # extern crate timely;
-    /// # extern crate differential_dataflow;
     /// # use timely::PartialOrder;
     /// # use timely::order::Product;
     /// # use differential_dataflow::lattice::Lattice;
@@ -59,8 +55,6 @@ pub trait Lattice : PartialOrder {
     /// # Examples
     ///
     /// ```
-    /// # extern crate timely;
-    /// # extern crate differential_dataflow;
     /// # use timely::PartialOrder;
     /// # use timely::order::Product;
     /// # use differential_dataflow::lattice::Lattice;
@@ -80,8 +74,6 @@ pub trait Lattice : PartialOrder {
     /// # Examples
     ///
     /// ```
-    /// # extern crate timely;
-    /// # extern crate differential_dataflow;
     /// # use timely::PartialOrder;
     /// # use timely::order::Product;
     /// # use differential_dataflow::lattice::Lattice;
@@ -111,8 +103,6 @@ pub trait Lattice : PartialOrder {
     /// # Examples
     ///
     /// ```
-    /// # extern crate timely;
-    /// # extern crate differential_dataflow;
     /// # use timely::PartialOrder;
     /// # use timely::order::Product;
     /// # use differential_dataflow::lattice::Lattice;
@@ -257,8 +247,6 @@ implement_lattice!((), ());
 /// # Examples
 ///
 /// ```
-/// # extern crate timely;
-/// # extern crate differential_dataflow;
 /// # use timely::PartialOrder;
 /// # use timely::order::Product;
 /// # use differential_dataflow::lattice::Lattice;
@@ -289,8 +277,6 @@ pub fn antichain_join<T: Lattice>(one: &[T], other: &[T]) -> Antichain<T> {
 /// # Examples
 ///
 /// ```
-/// # extern crate timely;
-/// # extern crate differential_dataflow;
 /// # use timely::PartialOrder;
 /// # use timely::order::Product;
 /// # use timely::progress::Antichain;
@@ -323,8 +309,6 @@ pub fn antichain_join_into<T: Lattice>(one: &[T], other: &[T], upper: &mut Antic
 /// # Examples
 ///
 /// ```
-/// # extern crate timely;
-/// # extern crate differential_dataflow;
 /// # use timely::PartialOrder;
 /// # use timely::order::Product;
 /// # use differential_dataflow::lattice::Lattice;
