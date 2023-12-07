@@ -1,5 +1,3 @@
-extern crate graph_map;
-
 use graph_map::GraphMMap;
 
 fn main() {

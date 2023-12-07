@@ -1,6 +1,3 @@
-extern crate timely;
-extern crate differential_dataflow;
-
 use timely::dataflow::operators::generic::OperatorInfo;
 use timely::progress::{Antichain, frontier::AntichainRef};
 

@@ -2,11 +2,11 @@
 name = "interactive"
 version = "0.1.0"
 authors = ["Frank McSherry <fmcsherry@me.com>"]
+edition = "2021"
 
 [dependencies]
 bincode = "1"
-serde = "1"
-serde_derive = "1"
+serde = { version = "1", features = ["derive"]}
 differential-dataflow = { path = "../" }
 dogsdogsdogs = { path = "../dogsdogsdogs" }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", features = ["bincode"] }

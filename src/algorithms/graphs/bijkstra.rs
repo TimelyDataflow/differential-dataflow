@@ -5,10 +5,10 @@ use std::hash::Hash;
 use timely::order::Product;
 use timely::dataflow::*;
 
-use ::{Collection, ExchangeData};
-use ::operators::*;
-use ::lattice::Lattice;
-use ::operators::iterate::Variable;
+use crate::{Collection, ExchangeData};
+use crate::operators::*;
+use crate::lattice::Lattice;
+use crate::operators::iterate::Variable;
 
 /// Returns the subset of `goals` that can reach each other in `edges`, with distance.
 ///
@@ -26,7 +26,7 @@ where
     G::Timestamp: Lattice+Ord,
     N: ExchangeData+Hash,
 {
-    use operators::arrange::arrangement::ArrangeByKey;
+    use crate::operators::arrange::arrangement::ArrangeByKey;
     let forward = edges.arrange_by_key();
     let reverse = edges.map(|(x,y)| (y,x)).arrange_by_key();
     bidijkstra_arranged(&forward, &reverse, goals)

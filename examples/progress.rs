@@ -1,8 +1,5 @@
 //! A demonstration of timely dataflow progress tracking, using differential dataflow operators.
 
-extern crate timely;
-extern crate differential_dataflow;
-
 use timely::PartialOrder;
 use timely::dataflow::*;
 use timely::dataflow::operators::probe::Handle;

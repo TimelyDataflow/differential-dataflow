@@ -23,10 +23,10 @@ use timely::dataflow::Scope;
 use timely::dataflow::operators::Map;
 use timely::progress::frontier::AntichainRef;
 
-use operators::arrange::Arranged;
-use lattice::Lattice;
-use trace::{TraceReader, BatchReader, Description};
-use trace::cursor::Cursor;
+use crate::operators::arrange::Arranged;
+use crate::lattice::Lattice;
+use crate::trace::{TraceReader, BatchReader, Description};
+use crate::trace::cursor::Cursor;
 
 /// Freezes updates to an arrangement using a supplied function.
 ///

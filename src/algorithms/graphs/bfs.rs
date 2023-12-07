@@ -4,9 +4,9 @@ use std::hash::Hash;
 
 use timely::dataflow::*;
 
-use ::{Collection, ExchangeData};
-use ::operators::*;
-use ::lattice::Lattice;
+use crate::{Collection, ExchangeData};
+use crate::operators::*;
+use crate::lattice::Lattice;
 
 /// Returns pairs (node, dist) indicating distance of each node from a root.
 pub fn bfs<G, N>(edges: &Collection<G, (N,N)>, roots: &Collection<G, N>) -> Collection<G, (N,u32)>
@@ -15,7 +15,7 @@ where
     G::Timestamp: Lattice+Ord,
     N: ExchangeData+Hash,
 {
-    use operators::arrange::arrangement::ArrangeByKey;
+    use crate::operators::arrange::arrangement::ArrangeByKey;
     let edges = edges.arrange_by_key();
     bfs_arranged(&edges, roots)
 }

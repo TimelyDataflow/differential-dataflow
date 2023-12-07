@@ -1,16 +1,6 @@
-extern crate rand;
-extern crate timely;
-extern crate differential_dataflow;
-
-#[macro_use]
-extern crate abomonation_derive;
-extern crate abomonation;
-#[macro_use]
-extern crate serde_derive;
-extern crate serde;
-
-
+use abomonation_derive::Abomonation;
 use rand::{Rng, SeedableRng, StdRng};
+use serde::{Deserialize, Serialize};
 
 use timely::dataflow::*;
 use timely::dataflow::operators::probe::Handle;

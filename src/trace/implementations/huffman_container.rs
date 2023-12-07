@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use trace::implementations::{BatchContainer, OffsetList};
+use crate::trace::implementations::{BatchContainer, OffsetList};
 
 use self::wrapper::Wrapped;
 use self::encoded::Encoded;
@@ -52,7 +52,7 @@ where
         }
     }
     fn copy_push(&mut self, item: &Vec<B>) {
-        use trace::MyTrait;
+        use crate::trace::MyTrait;
         self.copy(<_ as MyTrait>::borrow_as(item));
     }
     fn copy<'a>(&mut self, item: Self::ReadItem<'a>) {
@@ -159,7 +159,7 @@ impl<B: Ord+Clone> Default for HuffmanContainer<B> {
 
 mod wrapper {
 
-    use trace::MyTrait;
+    use crate::trace::MyTrait;
     use super::Encoded;
 
     pub struct Wrapped<'a, B: Ord> {

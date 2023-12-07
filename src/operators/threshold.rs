@@ -8,13 +8,13 @@ use timely::dataflow::*;
 use timely::dataflow::operators::Operator;
 use timely::dataflow::channels::pact::Pipeline;
 
-use lattice::Lattice;
-use ::{ExchangeData, Collection};
-use ::difference::{Semigroup, Abelian};
-use hashable::Hashable;
-use collection::AsCollection;
-use operators::arrange::{Arranged, ArrangeBySelf};
-use trace::{BatchReader, Cursor, TraceReader};
+use crate::lattice::Lattice;
+use crate::{ExchangeData, Collection};
+use crate::difference::{Semigroup, Abelian};
+use crate::hashable::Hashable;
+use crate::collection::AsCollection;
+use crate::operators::arrange::{Arranged, ArrangeBySelf};
+use crate::trace::{BatchReader, Cursor, TraceReader};
 
 /// Extension trait for the `distinct` differential dataflow method.
 pub trait ThresholdTotal<G: Scope, K: ExchangeData, R: ExchangeData+Semigroup> where G::Timestamp: TotalOrder+Lattice+Ord {
@@ -29,9 +29,6 @@ pub trait ThresholdTotal<G: Scope, K: ExchangeData, R: ExchangeData+Semigroup> w
     /// # Examples
     ///
     /// ```
-    /// extern crate timely;
-    /// extern crate differential_dataflow;
-    ///
     /// use differential_dataflow::input::Input;
     /// use differential_dataflow::operators::ThresholdTotal;
     ///
@@ -60,9 +57,6 @@ pub trait ThresholdTotal<G: Scope, K: ExchangeData, R: ExchangeData+Semigroup> w
     /// # Examples
     ///
     /// ```
-    /// extern crate timely;
-    /// extern crate differential_dataflow;
-    ///
     /// use differential_dataflow::input::Input;
     /// use differential_dataflow::operators::ThresholdTotal;
     ///

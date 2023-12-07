@@ -1,12 +1,9 @@
-extern crate rand;
-extern crate timely;
-extern crate differential_dataflow;
-
 use std::time::Instant;
 
 use rand::{Rng, SeedableRng, StdRng};
 
 use timely::dataflow::*;
+use timely::WorkerConfig;
 
 use differential_dataflow::input::Input;
 use differential_dataflow::Collection;
@@ -33,7 +30,7 @@ fn main() {
 
     use timely::communication::allocator::zero_copy::allocator_process::ProcessBuilder;
     let allocators = ProcessBuilder::new_vector(workers);
-    timely::execute::execute_from(allocators, Box::new(()), move |worker| {
+    timely::execute::execute_from(allocators, Box::new(()), WorkerConfig::default(), move |worker| {
 
     // timely::execute_from_args(std::env::args().skip(1), move |worker| {
 

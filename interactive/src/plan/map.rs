@@ -1,12 +1,13 @@
 //! Projection expression plan.
 
 use std::hash::Hash;
+use serde::{Deserialize, Serialize};
 
 use timely::dataflow::Scope;
 
 use differential_dataflow::{Collection, ExchangeData};
-use plan::{Plan, Render};
-use {TraceManager, Time, Diff, Datum};
+use crate::plan::{Plan, Render};
+use crate::{TraceManager, Time, Diff, Datum};
 
 /// A plan which retains values at specified locations.
 ///

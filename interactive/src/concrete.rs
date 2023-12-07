@@ -1,6 +1,7 @@
 //! An example value type.
 
 use std::time::Duration;
+use serde::{Deserialize, Serialize};
 use super::{Datum, VectorFrom, Command};
 
 /// A session.

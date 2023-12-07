@@ -55,6 +55,7 @@
 //! will often be a logic bug, as `since` does not advance without a corresponding advance in
 //! times at which data may possibly be sent.
 
+use abomonation_derive::Abomonation;
 use timely::{PartialOrder, progress::Antichain};
 use serde::{Serialize, Deserialize};
 

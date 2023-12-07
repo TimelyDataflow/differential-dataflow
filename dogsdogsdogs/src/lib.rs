@@ -1,12 +1,3 @@
-#[macro_use]
-extern crate abomonation_derive;
-extern crate abomonation;
-extern crate timely;
-extern crate differential_dataflow;
-#[macro_use]
-extern crate serde_derive;
-extern crate serde;
-
 use std::hash::Hash;
 
 use timely::dataflow::Scope;

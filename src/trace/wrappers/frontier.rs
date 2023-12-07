@@ -9,8 +9,8 @@
 use timely::progress::Timestamp;
 use timely::progress::{Antichain, frontier::AntichainRef};
 
-use trace::{TraceReader, BatchReader, Description};
-use trace::cursor::Cursor;
+use crate::trace::{TraceReader, BatchReader, Description};
+use crate::trace::cursor::Cursor;
 use crate::lattice::Lattice;
 
 /// Wrapper to provide trace to nested scope.

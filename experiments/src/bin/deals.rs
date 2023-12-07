@@ -1,8 +1,3 @@
-extern crate rand;
-extern crate timely;
-extern crate differential_dataflow;
-extern crate core_affinity;
-
 use std::time::Instant;
 
 use timely::dataflow::*;
@@ -18,12 +13,11 @@ use differential_dataflow::operators::arrange::Arrange;
 use differential_dataflow::operators::iterate::SemigroupVariable;
 use differential_dataflow::difference::Present;
 
-type EdgeArranged<G, K, V, R> = Arranged<G, TraceAgent<ValSpine<K, V, <G as ScopeParent>::Timestamp, R, Offs>>>;
+type EdgeArranged<G, K, V, R> = Arranged<G, TraceAgent<ValSpine<K, V, <G as ScopeParent>::Timestamp, R>>>;
 
 type Node = u32;
 type Edge = (Node, Node);
 type Iter = u32;
-type Offs = u32;
 
 fn main() {
 
@@ -47,7 +41,7 @@ fn main() {
             let (input, graph) = scope.new_collection();
 
             // each edge should exist in both directions.
-            let graph = graph.arrange::<ValSpine<_,_,_,_,Offs>>();
+            let graph = graph.arrange::<ValSpine<_,_,_,_>>();
 
             match program.as_str() {
                 "tc"    => tc(&graph).filter(move |_| inspect).map(|_| ()).consolidate().inspect(|x| println!("tc count: {:?}", x)).probe(),
@@ -100,10 +94,10 @@ fn tc<G: Scope<Timestamp=()>>(edges: &EdgeArranged<G, Node, Node, Present>) -> C
             let result =
             inner
                 .map(|(x,y)| (y,x))
-                .arrange::<ValSpine<_,_,_,_,Offs>>()
+                .arrange::<ValSpine<_,_,_,_>>()
                 .join_core(&edges, |_y,&x,&z| Some((x, z)))
                 .concat(&edges.as_collection(|&k,&v| (k,v)))
-                .arrange::<KeySpine<_,_,_,Offs>>()
+                .arrange::<KeySpine<_,_,_>>()
                 .threshold_semigroup(|_,_,x| if x.is_none() { Some(Present) } else { None })
                 ;
 
@@ -127,12 +121,12 @@ fn sg<G: Scope<Timestamp=()>>(edges: &EdgeArranged<G, Node, Node, Present>) -> C
 
             let result =
             inner
-                .arrange::<ValSpine<_,_,_,_,Offs>>()
+                .arrange::<ValSpine<_,_,_,_>>()
                 .join_core(&edges, |_,&x,&z| Some((x, z)))
-                .arrange::<ValSpine<_,_,_,_,Offs>>()
+                .arrange::<ValSpine<_,_,_,_>>()
                 .join_core(&edges, |_,&x,&z| Some((x, z)))
                 .concat(&peers)
-                .arrange::<KeySpine<_,_,_,Offs>>()
+                .arrange::<KeySpine<_,_,_>>()
                 .threshold_semigroup(|_,_,x| if x.is_none() { Some(Present) } else { None })
                 ;
 

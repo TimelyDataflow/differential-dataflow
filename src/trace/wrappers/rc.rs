@@ -16,8 +16,8 @@ use std::cell::RefCell;
 
 use timely::progress::{Antichain, frontier::{AntichainRef, MutableAntichain}};
 
-use lattice::Lattice;
-use trace::TraceReader;
+use crate::lattice::Lattice;
+use crate::trace::TraceReader;
 
 /// A wrapper around a trace which tracks the frontiers of all referees.
 ///

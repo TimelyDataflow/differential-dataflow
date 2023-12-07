@@ -1,7 +1,3 @@
-extern crate timely;
-extern crate differential_dataflow;
-extern crate interactive;
-
 use std::sync::{Arc, Mutex};
 use std::sync::mpsc::Sender;
 use std::thread::Thread;
@@ -26,7 +22,7 @@ fn main() {
 
             use std::net::TcpListener;
             let listener = TcpListener::bind("127.0.0.1:8000".to_string()).expect("failed to bind listener");
-            for mut stream in listener.incoming() {
+            for stream in listener.incoming() {
                 let mut stream = stream.expect("listener error");
                 let send = send.clone();
                 let thread = thread.clone();

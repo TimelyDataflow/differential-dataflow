@@ -5,9 +5,9 @@ use timely::communication::message::RefOrMut;
 use timely::container::columnation::{Columnation, TimelyStack};
 use timely::progress::{frontier::Antichain, Timestamp};
 
-use ::difference::Semigroup;
+use crate::difference::Semigroup;
 
-use trace::{Batcher, Builder};
+use crate::trace::{Batcher, Builder};
 
 /// Creates batches from unordered tuples.
 pub struct ColumnatedMergeBatcher<K, V, T, D>

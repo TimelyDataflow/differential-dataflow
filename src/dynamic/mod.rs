@@ -20,11 +20,11 @@ use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::progress::Antichain;
 
-use difference::Semigroup;
-use {Collection, Data};
-use collection::AsCollection;
-use dynamic::pointstamp::PointStamp;
-use dynamic::pointstamp::PointStampSummary;
+use crate::difference::Semigroup;
+use crate::{Collection, Data};
+use crate::collection::AsCollection;
+use crate::dynamic::pointstamp::PointStamp;
+use crate::dynamic::pointstamp::PointStampSummary;
 
 impl<G, D, R, T, TOuter> Collection<G, D, R>
 where

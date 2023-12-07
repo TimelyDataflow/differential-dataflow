@@ -5,10 +5,10 @@ use std::hash::Hash;
 
 use timely::dataflow::*;
 
-use ::{Collection, ExchangeData};
-use ::operators::*;
-use ::lattice::Lattice;
-use ::difference::{Abelian, Multiply};
+use crate::{Collection, ExchangeData};
+use crate::operators::*;
+use crate::lattice::Lattice;
+use crate::difference::{Abelian, Multiply};
 
 use super::propagate::propagate;
 

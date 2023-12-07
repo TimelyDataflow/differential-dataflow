@@ -1,10 +1,3 @@
-extern crate rand;
-
-extern crate timely;
-extern crate differential_dataflow;
-extern crate dd_server;
-extern crate hdrhist;
-
 use std::rc::Rc;
 use std::cell::RefCell;
 
@@ -13,6 +6,7 @@ use rand::{Rng, SeedableRng, StdRng};
 use timely::scheduling::Scheduler;
 use timely::dataflow::operators::Probe;
 use timely::dataflow::operators::generic::operator::source;
+use timely::progress::Antichain;
 
 use differential_dataflow::AsCollection;
 use differential_dataflow::operators::arrange::ArrangeByKey;
@@ -134,7 +128,7 @@ pub fn build((dataflow, handles, probe, timer, args): Environment) -> Result<(),
                 if let Some(trace_handle) = trace_handle_weak.upgrade() {
                     let mut borrow = trace_handle.borrow_mut();
                     if let Some(ref mut trace_handle) = borrow.as_mut() {
-                        trace_handle.set_logical_compaction(&[elapsed_ns]);
+                        trace_handle.set_logical_compaction(Antichain::from_elem(elapsed_ns).borrow());
                     }
                 }
 
@@ -191,7 +185,7 @@ pub fn build((dataflow, handles, probe, timer, args): Environment) -> Result<(),
         .trace;
 
     // release all blocks on merging.
-    trace.set_physical_compaction(&[]);
+    trace.set_physical_compaction(Antichain::new().borrow());
     *trace_handle.borrow_mut() = Some(trace);
 
     handles.set::<Rc<RefCell<Option<TraceHandle>>>>(name.to_owned(), trace_handle);

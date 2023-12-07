@@ -3,8 +3,8 @@
 use timely::progress::Timestamp;
 use timely::progress::frontier::AntichainRef;
 
-use trace::{TraceReader, BatchReader, Description};
-use trace::cursor::Cursor;
+use crate::trace::{TraceReader, BatchReader, Description};
+use crate::trace::cursor::Cursor;
 
 /// Wrapper to provide trace to nested scope.
 pub struct TraceFilter<Tr, F> {

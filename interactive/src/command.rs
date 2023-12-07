@@ -2,6 +2,7 @@
 
 use std::hash::Hash;
 use std::io::Write;
+use serde::{Deserialize, Serialize};
 
 use timely::communication::Allocate;
 use timely::worker::Worker;
@@ -70,7 +71,7 @@ where
 
                     use timely::dataflow::operators::Probe;
                     use differential_dataflow::operators::arrange::ArrangeBySelf;
-                    use plan::Render;
+                    use crate::plan::Render;
 
                     let mut collections = std::collections::HashMap::new();
                     // let mut arrangements = std::collections::HashMap::new();

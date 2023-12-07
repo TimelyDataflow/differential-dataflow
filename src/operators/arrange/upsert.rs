@@ -34,9 +34,6 @@
 //! # Example
 //!
 //! ```rust
-//! extern crate timely;
-//! extern crate differential_dataflow;
-//!
 //! fn main() {
 //!
 //!     // define a new timely dataflow computation.
@@ -115,13 +112,11 @@ use timely::progress::Timestamp;
 use timely::progress::Antichain;
 use timely::dataflow::operators::Capability;
 
-use ::{ExchangeData, Hashable};
-use lattice::Lattice;
-use trace::{self, Trace, TraceReader, Batch, Cursor};
-
-use trace::Builder;
-
-use operators::arrange::arrangement::Arranged;
+use crate::lattice::Lattice;
+use crate::operators::arrange::arrangement::Arranged;
+use crate::trace::Builder;
+use crate::trace::{self, Trace, TraceReader, Batch, Cursor};
+use crate::{ExchangeData, Hashable};
 
 use super::TraceAgent;
 
@@ -163,7 +158,7 @@ where
             let logger = {
                 let scope = stream.scope();
                 let register = scope.log_register();
-                register.get::<::logging::DifferentialEvent>("differential/arrange")
+                register.get::<crate::logging::DifferentialEvent>("differential/arrange")
             };
 
             // Tracks the lower envelope of times in `priority_queue`.

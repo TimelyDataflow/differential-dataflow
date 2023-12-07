@@ -1,7 +1,3 @@
-extern crate timely;
-extern crate graph_map;
-extern crate differential_dataflow;
-
 use std::io::{BufRead, BufReader};
 use std::fs::File;
 
@@ -10,7 +6,7 @@ use timely::order::Product;
 
 use differential_dataflow::difference::Present;
 use differential_dataflow::input::Input;
-use differential_dataflow::trace::implementations::ord::OrdValSpine;
+use differential_dataflow::trace::implementations::ValSpine;
 use differential_dataflow::operators::*;
 use differential_dataflow::operators::arrange::Arrange;
 use differential_dataflow::operators::iterate::SemigroupVariable;
@@ -18,7 +14,6 @@ use differential_dataflow::operators::iterate::SemigroupVariable;
 type Node = u32;
 type Time = ();
 type Iter = u32;
-type Offs = u32;
 
 fn main() {
 
@@ -36,7 +31,7 @@ fn main() {
             let (n_handle, nodes) = scope.new_collection();
             let (e_handle, edges) = scope.new_collection();
 
-            let edges = edges.arrange::<OrdValSpine<_,_,_,_,Offs>>();
+            let edges = edges.arrange::<ValSpine<_,_,_,_>>();
 
             // a N c  <-  a N b && b E c
             // N(a,c) <-  N(a,b), E(b, c)
@@ -51,7 +46,7 @@ fn main() {
                 let next =
                 labels.join_core(&edges, |_b, a, c| Some((*c, *a)))
                       .concat(&nodes)
-                      .arrange::<OrdValSpine<_,_,_,_,Offs>>()
+                      .arrange::<ValSpine<_,_,_,_>>()
                     //   .distinct_total_core::<Diff>();
                       .threshold_semigroup(|_,_,x| if x.is_none() { Some(Present) } else { None });
 

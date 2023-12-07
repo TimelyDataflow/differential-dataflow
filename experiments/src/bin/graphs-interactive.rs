@@ -1,8 +1,3 @@
-extern crate rand;
-extern crate timely;
-extern crate differential_dataflow;
-extern crate core_affinity;
-
 use rand::{Rng, SeedableRng, StdRng};
 
 use timely::dataflow::*;
@@ -18,7 +13,6 @@ use differential_dataflow::operators::arrange::ArrangeByKey;
 use differential_dataflow::operators::arrange::ArrangeBySelf;
 
 type Node = usize;
-type Iter = usize;
 
 fn main() {
 
@@ -240,7 +234,7 @@ fn _bidijkstra<G: Scope>(
     goals: &Collection<G, (Node, Node)>) -> Collection<G, ((Node, Node), u32)>
 where G::Timestamp: Lattice+Ord {
 
-    goals.scope().iterative::<Iter,_,_>(|inner| {
+    goals.scope().iterative::<usize,_,_>(|inner| {
 
         // Our plan is to start evolving distances from both sources and destinations.
         // The evolution from a source or destination should continue as long as there

@@ -1,14 +1,13 @@
 //! Equijoin expression plan.
 
 use std::hash::Hash;
+use serde::{Deserialize, Serialize};
 
 use timely::dataflow::Scope;
 
-use differential_dataflow::operators::JoinCore;
-
 use differential_dataflow::{Collection, ExchangeData};
-use plan::{Plan, Render};
-use {TraceManager, Time, Diff, Datum};
+use crate::plan::{Plan, Render};
+use crate::{TraceManager, Time, Diff, Datum};
 
 /// A plan stage joining two source relations on the specified
 /// symbols. Throws if any of the join symbols isn't bound by both

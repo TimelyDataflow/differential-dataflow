@@ -5,9 +5,9 @@
 //! to the key and the list of values.
 //! The function is expected to populate a list of output values.
 
-use hashable::Hashable;
-use ::{Data, ExchangeData, Collection};
-use ::difference::{Semigroup, Abelian};
+use crate::hashable::Hashable;
+use crate::{Data, ExchangeData, Collection};
+use crate::difference::{Semigroup, Abelian};
 
 use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
@@ -17,13 +17,13 @@ use timely::dataflow::operators::Operator;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Capability;
 
-use operators::arrange::{Arranged, ArrangeByKey, ArrangeBySelf, TraceAgent};
-use lattice::Lattice;
-use trace::{Batch, BatchReader, Cursor, Trace, Builder, ExertionLogic};
-use trace::cursor::CursorList;
-use trace::implementations::{KeySpine, ValSpine};
+use crate::operators::arrange::{Arranged, ArrangeByKey, ArrangeBySelf, TraceAgent};
+use crate::lattice::Lattice;
+use crate::trace::{Batch, BatchReader, Cursor, Trace, Builder, ExertionLogic};
+use crate::trace::cursor::CursorList;
+use crate::trace::implementations::{KeySpine, ValSpine};
 
-use trace::TraceReader;
+use crate::trace::TraceReader;
 
 /// Extension trait for the `reduce` differential dataflow method.
 pub trait Reduce<G: Scope, K: Data, V: Data, R: Semigroup> where G::Timestamp: Lattice+Ord {
@@ -43,9 +43,6 @@ pub trait Reduce<G: Scope, K: Data, V: Data, R: Semigroup> where G::Timestamp: L
     /// # Examples
     ///
     /// ```
-    /// extern crate timely;
-    /// extern crate differential_dataflow;
-    ///
     /// use differential_dataflow::input::Input;
     /// use differential_dataflow::operators::Reduce;
     ///
@@ -108,9 +105,6 @@ pub trait Threshold<G: Scope, K: Data, R1: Semigroup> where G::Timestamp: Lattic
     /// # Examples
     ///
     /// ```
-    /// extern crate timely;
-    /// extern crate differential_dataflow;
-    ///
     /// use differential_dataflow::input::Input;
     /// use differential_dataflow::operators::Threshold;
     ///
@@ -135,9 +129,6 @@ pub trait Threshold<G: Scope, K: Data, R1: Semigroup> where G::Timestamp: Lattic
     /// # Examples
     ///
     /// ```
-    /// extern crate timely;
-    /// extern crate differential_dataflow;
-    ///
     /// use differential_dataflow::input::Input;
     /// use differential_dataflow::operators::Threshold;
     ///
@@ -190,9 +181,6 @@ pub trait Count<G: Scope, K: Data, R: Semigroup> where G::Timestamp: Lattice+Ord
     /// # Examples
     ///
     /// ```
-    /// extern crate timely;
-    /// extern crate differential_dataflow;
-    ///
     /// use differential_dataflow::input::Input;
     /// use differential_dataflow::operators::Count;
     ///
@@ -248,9 +236,6 @@ pub trait ReduceCore<G: Scope, K: ToOwned + ?Sized, V: ToOwned + ?Sized, R: Semi
     /// # Examples
     ///
     /// ```
-    /// extern crate timely;
-    /// extern crate differential_dataflow;
-    ///
     /// use differential_dataflow::input::Input;
     /// use differential_dataflow::operators::reduce::ReduceCore;
     /// use differential_dataflow::trace::Trace;
@@ -354,7 +339,7 @@ where
             let logger = {
                 let scope = trace.stream.scope();
                 let register = scope.log_register();
-                register.get::<::logging::DifferentialEvent>("differential/arrange")
+                register.get::<crate::logging::DifferentialEvent>("differential/arrange")
             };
 
             let activator = Some(trace.stream.scope().activator_for(&operator_info.address[..]));
@@ -501,7 +486,7 @@ where
                         while batch_cursor.key_valid(batch_storage) || exposed_position < exposed.len() {
 
                             use std::borrow::Borrow;
-                            use trace::cursor::MyTrait;
+                            use crate::trace::cursor::MyTrait;
                             
                             // Determine the next key we will work on; could be synthetic, could be from a batch.
                             let key1 = exposed.get(exposed_position).map(|x| <_ as MyTrait>::borrow_as(&x.0));
@@ -687,10 +672,10 @@ where
 /// Implementation based on replaying historical and new updates together.
 mod history_replay {
 
-    use ::difference::Semigroup;
-    use lattice::Lattice;
-    use trace::Cursor;
-    use operators::ValueHistory;
+    use crate::difference::Semigroup;
+    use crate::lattice::Lattice;
+    use crate::trace::Cursor;
+    use crate::operators::ValueHistory;
     use timely::progress::Antichain;
 
     use timely::PartialOrder;
@@ -927,7 +912,7 @@ mod history_replay {
                         meet.as_ref().map(|meet| output_replay.advance_buffer_by(&meet));
                         for &((value, ref time), ref diff) in output_replay.buffer().iter() {
                             if time.less_equal(&next_time) {
-                                use trace::cursor::MyTrait;
+                                use crate::trace::cursor::MyTrait;
                                 self.output_buffer.push((<_ as MyTrait>::into_owned(value), diff.clone()));
                             }
                             else {

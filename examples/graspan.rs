@@ -1,7 +1,3 @@
-extern crate indexmap;
-extern crate timely;
-extern crate differential_dataflow;
-
 use std::io::{BufRead, BufReader};
 use std::fs::File;
 
