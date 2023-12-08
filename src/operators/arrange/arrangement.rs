@@ -152,20 +152,18 @@ where
     /// use differential_dataflow::input::Input;
     /// use differential_dataflow::operators::arrange::ArrangeByKey;
     ///
-    /// fn main() {
-    ///     ::timely::example(|scope| {
+    /// ::timely::example(|scope| {
     ///
-    ///         let arranged =
-    ///         scope.new_collection_from(0 .. 10).1
-    ///              .map(|x| (x, x+1))
-    ///              .arrange_by_key();
+    ///     let arranged =
+    ///     scope.new_collection_from(0 .. 10).1
+    ///          .map(|x| (x, x+1))
+    ///          .arrange_by_key();
     ///
-    ///         arranged
-    ///             .filter(|k,v| k == v)
-    ///             .as_collection(|k,v| (*k,*v))
-    ///             .assert_empty();
-    ///     });
-    /// }
+    ///     arranged
+    ///         .filter(|k,v| k == v)
+    ///         .as_collection(|k,v| (*k,*v))
+    ///         .assert_empty();
+    /// });
     /// ```
     pub fn filter<F>(&self, logic: F)
         -> Arranged<G, TraceFilter<Tr, F>>
@@ -352,7 +350,7 @@ where
                                     if !active.is_empty() && active[0].1.less_than(&time) {
                                         crate::consolidation::consolidate(&mut working2);
                                         while !active.is_empty() && active[0].1.less_than(&time) {
-                                            for &(ref val, ref count) in working2.iter() {
+                                            for (val, count) in working2.iter() {
                                                 session.give((key.clone(), val.clone(), active[0].1.clone(), count.clone()));
                                             }
                                             active = &active[1..];
@@ -363,7 +361,7 @@ where
                                 if !active.is_empty() {
                                     crate::consolidation::consolidate(&mut working2);
                                     while !active.is_empty() {
-                                        for &(ref val, ref count) in working2.iter() {
+                                        for (val, count) in working2.iter() {
                                             session.give((key.clone(), val.clone(), active[0].1.clone(), count.clone()));
                                         }
                                         active = &active[1..];
@@ -394,7 +392,7 @@ where
                 let frontier = IntoIterator::into_iter([
                     capability.as_ref().map(|c| c.time().clone()),
                     input1.frontier().frontier().get(0).cloned(),
-                ]).filter_map(|t| t).min();
+                ]).flatten().min();
 
                 if let Some(frontier) = frontier {
                     trace.as_mut().map(|t| t.set_logical_compaction(AntichainRef::new(&[frontier])));
@@ -738,7 +736,7 @@ where
             })
         };
 
-        Arranged { stream: stream, trace: reader.unwrap() }
+        Arranged { stream, trace: reader.unwrap() }
     }
 }
 

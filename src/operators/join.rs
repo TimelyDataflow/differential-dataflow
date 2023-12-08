@@ -36,17 +36,15 @@ pub trait Join<G: Scope, K: Data, V: Data, R: Semigroup> {
     /// use differential_dataflow::input::Input;
     /// use differential_dataflow::operators::Join;
     ///
-    /// fn main() {
-    ///     ::timely::example(|scope| {
+    /// ::timely::example(|scope| {
     ///
-    ///         let x = scope.new_collection_from(vec![(0, 1), (1, 3)]).1;
-    ///         let y = scope.new_collection_from(vec![(0, 'a'), (1, 'b')]).1;
-    ///         let z = scope.new_collection_from(vec![(0, (1, 'a')), (1, (3, 'b'))]).1;
+    ///     let x = scope.new_collection_from(vec![(0, 1), (1, 3)]).1;
+    ///     let y = scope.new_collection_from(vec![(0, 'a'), (1, 'b')]).1;
+    ///     let z = scope.new_collection_from(vec![(0, (1, 'a')), (1, (3, 'b'))]).1;
     ///
-    ///         x.join(&y)
-    ///          .assert_eq(&z);
-    ///     });
-    /// }
+    ///     x.join(&y)
+    ///      .assert_eq(&z);
+    /// });
     /// ```
     fn join<V2, R2>(&self, other: &Collection<G, (K,V2), R2>) -> Collection<G, (K,(V,V2)), <R as Multiply<R2>>::Output>
     where
@@ -67,17 +65,15 @@ pub trait Join<G: Scope, K: Data, V: Data, R: Semigroup> {
     /// use differential_dataflow::input::Input;
     /// use differential_dataflow::operators::Join;
     ///
-    /// fn main() {
-    ///     ::timely::example(|scope| {
+    /// ::timely::example(|scope| {
     ///
-    ///         let x = scope.new_collection_from(vec![(0, 1), (1, 3)]).1;
-    ///         let y = scope.new_collection_from(vec![(0, 'a'), (1, 'b')]).1;
-    ///         let z = scope.new_collection_from(vec![(1, 'a'), (3, 'b')]).1;
+    ///     let x = scope.new_collection_from(vec![(0, 1), (1, 3)]).1;
+    ///     let y = scope.new_collection_from(vec![(0, 'a'), (1, 'b')]).1;
+    ///     let z = scope.new_collection_from(vec![(1, 'a'), (3, 'b')]).1;
     ///
-    ///         x.join_map(&y, |_key, &a, &b| (a,b))
-    ///          .assert_eq(&z);
-    ///     });
-    /// }
+    ///     x.join_map(&y, |_key, &a, &b| (a,b))
+    ///      .assert_eq(&z);
+    /// });
     /// ```
     fn join_map<V2, R2, D, L>(&self, other: &Collection<G, (K,V2), R2>, logic: L) -> Collection<G, D, <R as Multiply<R2>>::Output>
     where K: ExchangeData, V2: ExchangeData, R2: ExchangeData+Semigroup, R: Multiply<R2>, <R as Multiply<R2>>::Output: Semigroup, D: Data, L: FnMut(&K, &V, &V2)->D+'static;
@@ -94,17 +90,15 @@ pub trait Join<G: Scope, K: Data, V: Data, R: Semigroup> {
     /// use differential_dataflow::input::Input;
     /// use differential_dataflow::operators::Join;
     ///
-    /// fn main() {
-    ///     ::timely::example(|scope| {
+    /// ::timely::example(|scope| {
     ///
-    ///         let x = scope.new_collection_from(vec![(0, 1), (1, 3)]).1;
-    ///         let y = scope.new_collection_from(vec![0, 2]).1;
-    ///         let z = scope.new_collection_from(vec![(0, 1)]).1;
+    ///     let x = scope.new_collection_from(vec![(0, 1), (1, 3)]).1;
+    ///     let y = scope.new_collection_from(vec![0, 2]).1;
+    ///     let z = scope.new_collection_from(vec![(0, 1)]).1;
     ///
-    ///         x.semijoin(&y)
-    ///          .assert_eq(&z);
-    ///     });
-    /// }
+    ///     x.semijoin(&y)
+    ///      .assert_eq(&z);
+    /// });
     /// ```
     fn semijoin<R2>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), <R as Multiply<R2>>::Output>
     where K: ExchangeData, R2: ExchangeData+Semigroup, R: Multiply<R2>, <R as Multiply<R2>>::Output: Semigroup;
@@ -125,17 +119,15 @@ pub trait Join<G: Scope, K: Data, V: Data, R: Semigroup> {
     /// use differential_dataflow::input::Input;
     /// use differential_dataflow::operators::Join;
     ///
-    /// fn main() {
-    ///     ::timely::example(|scope| {
+    /// ::timely::example(|scope| {
     ///
-    ///         let x = scope.new_collection_from(vec![(0, 1), (1, 3)]).1;
-    ///         let y = scope.new_collection_from(vec![0, 2]).1;
-    ///         let z = scope.new_collection_from(vec![(1, 3)]).1;
+    ///     let x = scope.new_collection_from(vec![(0, 1), (1, 3)]).1;
+    ///     let y = scope.new_collection_from(vec![0, 2]).1;
+    ///     let z = scope.new_collection_from(vec![(1, 3)]).1;
     ///
-    ///         x.antijoin(&y)
-    ///          .assert_eq(&z);
-    ///     });
-    /// }
+    ///     x.antijoin(&y)
+    ///      .assert_eq(&z);
+    /// });
     /// ```
     fn antijoin<R2>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), R>
     where K: ExchangeData, R2: ExchangeData+Semigroup, R: Multiply<R2, Output = R>, R: Abelian;
@@ -225,20 +217,18 @@ pub trait JoinCore<G: Scope, K: 'static + ?Sized, V: 'static + ?Sized, R: Semigr
     /// use differential_dataflow::operators::join::JoinCore;
     /// use differential_dataflow::trace::Trace;
     ///
-    /// fn main() {
-    ///     ::timely::example(|scope| {
+    /// ::timely::example(|scope| {
     ///
-    ///         let x = scope.new_collection_from(vec![(0u32, 1), (1, 3)]).1
-    ///                      .arrange_by_key();
-    ///         let y = scope.new_collection_from(vec![(0, 'a'), (1, 'b')]).1
-    ///                      .arrange_by_key();
+    ///     let x = scope.new_collection_from(vec![(0u32, 1), (1, 3)]).1
+    ///                  .arrange_by_key();
+    ///     let y = scope.new_collection_from(vec![(0, 'a'), (1, 'b')]).1
+    ///                  .arrange_by_key();
     ///
-    ///         let z = scope.new_collection_from(vec![(1, 'a'), (3, 'b')]).1;
+    ///     let z = scope.new_collection_from(vec![(1, 'a'), (3, 'b')]).1;
     ///
-    ///         x.join_core(&y, |_key, &a, &b| Some((a, b)))
-    ///          .assert_eq(&z);
-    ///     });
-    /// }
+    ///     x.join_core(&y, |_key, &a, &b| Some((a, b)))
+    ///      .assert_eq(&z);
+    /// });
     /// ```
     fn join_core<Tr2,I,L> (&self, stream2: &Arranged<G,Tr2>, result: L) -> Collection<G,I::Item,<R as Multiply<Tr2::Diff>>::Output>
     where
@@ -270,21 +260,19 @@ pub trait JoinCore<G: Scope, K: 'static + ?Sized, V: 'static + ?Sized, R: Semigr
     /// use differential_dataflow::operators::join::JoinCore;
     /// use differential_dataflow::trace::Trace;
     ///
-    /// fn main() {
-    ///     ::timely::example(|scope| {
+    /// ::timely::example(|scope| {
     ///
-    ///         let x = scope.new_collection_from(vec![(0u32, 1), (1, 3)]).1
-    ///                      .arrange_by_key();
-    ///         let y = scope.new_collection_from(vec![(0, 'a'), (1, 'b')]).1
-    ///                      .arrange_by_key();
+    ///     let x = scope.new_collection_from(vec![(0u32, 1), (1, 3)]).1
+    ///                  .arrange_by_key();
+    ///     let y = scope.new_collection_from(vec![(0, 'a'), (1, 'b')]).1
+    ///                  .arrange_by_key();
     ///
-    ///         let z = scope.new_collection_from(vec![(1, 'a'), (3, 'b'), (3, 'b'), (3, 'b')]).1;
+    ///     let z = scope.new_collection_from(vec![(1, 'a'), (3, 'b'), (3, 'b'), (3, 'b')]).1;
     ///
-    ///         // Returned values have weight `a`
-    ///         x.join_core_internal_unsafe(&y, |_key, &a, &b, &t, &r1, &r2| Some(((a, b), t.clone(), a)))
-    ///          .assert_eq(&z);
-    ///     });
-    /// }
+    ///     // Returned values have weight `a`
+    ///     x.join_core_internal_unsafe(&y, |_key, &a, &b, &t, &r1, &r2| Some(((a, b), t.clone(), a)))
+    ///      .assert_eq(&z);
+    /// });
     /// ```
     fn join_core_internal_unsafe<Tr2,I,L,D,ROut> (&self, stream2: &Arranged<G,Tr2>, result: L) -> Collection<G,D,ROut>
     where
@@ -453,7 +441,7 @@ where
                     data.swap(&mut input1_buffer);
                     for batch1 in input1_buffer.drain(..) {
                         // Ignore any pre-loaded data.
-                        if PartialOrder::less_equal(&acknowledged1, &batch1.lower()) {
+                        if PartialOrder::less_equal(&acknowledged1, batch1.lower()) {
                             if !batch1.is_empty() {
                                 // It is safe to ask for `ack2` as we validated that it was at least `get_physical_compaction()`
                                 // at start-up, and have held back physical compaction ever since.
@@ -481,7 +469,7 @@ where
                     data.swap(&mut input2_buffer);
                     for batch2 in input2_buffer.drain(..) {
                         // Ignore any pre-loaded data.
-                        if PartialOrder::less_equal(&acknowledged2, &batch2.lower()) {
+                        if PartialOrder::less_equal(&acknowledged2, batch2.lower()) {
                             if !batch2.is_empty() {
                                 // It is safe to ask for `ack1` as we validated that it was at least `get_physical_compaction()`
                                 // at start-up, and have held back physical compaction ever since.
@@ -669,7 +657,7 @@ where
                 Ordering::Greater => batch.seek_key(batch_storage, trace.key(trace_storage)),
                 Ordering::Equal => {
 
-                    thinker.history1.edits.load(trace, trace_storage, |time| time.join(&meet));
+                    thinker.history1.edits.load(trace, trace_storage, |time| time.join(meet));
                     thinker.history2.edits.load(batch, batch_storage, |time| time.clone());
 
                     assert_eq!(temp.len(), 0);
@@ -760,7 +748,7 @@ where
 
             while !replay1.is_done() && !replay2.is_done() {
 
-                if replay1.time().unwrap().cmp(&replay2.time().unwrap()) == ::std::cmp::Ordering::Less {
+                if replay1.time().unwrap().cmp(replay2.time().unwrap()) == ::std::cmp::Ordering::Less {
                     replay2.advance_buffer_by(replay1.meet().unwrap());
                     for &((val2, ref time2), ref diff2) in replay2.buffer().iter() {
                         let (val1, time1, diff1) = replay1.edit().unwrap();

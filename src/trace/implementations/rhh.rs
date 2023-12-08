@@ -199,7 +199,7 @@ mod val_batch {
         }
 
         /// Returns true if one should advance one's index in the search for `key`.
-        fn advance_key<'a>(&self, index: usize, key: <L::KeyContainer as BatchContainer>::ReadItem<'a>) -> bool {
+        fn advance_key(&self, index: usize, key: <L::KeyContainer as BatchContainer>::ReadItem<'_>) -> bool {
             // Ideally this short-circuits, as `self.keys[index]` is bogus data.
             !self.live_key(index) || self.keys.index(index).lt(&key)
         }
@@ -267,7 +267,7 @@ mod val_batch {
                 val_cursor: 0,
                 phantom: std::marker::PhantomData,
             };
-            cursor.step_key(&self);
+            cursor.step_key(self);
             cursor
         }
         fn len(&self) -> usize { 
@@ -348,8 +348,8 @@ mod val_batch {
                 divisor: RhhValStorage::<L>::divisor_for_capacity(rhh_cap),
             };
 
-            storage.keys_offs.push(0.try_into().ok().unwrap());
-            storage.vals_offs.push(0.try_into().ok().unwrap());
+            storage.keys_offs.push(0);
+            storage.vals_offs.push(0);
 
             RhhValMerger {
                 key_cursor1: 0,
@@ -433,7 +433,7 @@ mod val_batch {
             // If we have pushed any values, copy the key as well.
             if self.result.vals.len() > init_vals {
                 source.keys.index(cursor).clone_onto(&mut self.key_owned);
-                self.result.insert_key(&self.key_owned, Some(self.result.vals.len().try_into().ok().unwrap()));
+                self.result.insert_key(&self.key_owned, Some(self.result.vals.len()));
             }           
         }
         /// Merge the next key in each of `source1` and `source2` into `self`, updating the appropriate cursors.
@@ -533,7 +533,7 @@ mod val_batch {
 
             // Values being pushed indicate non-emptiness.
             if self.result.vals.len() > init_vals {
-                Some(self.result.vals.len().try_into().ok().unwrap())
+                Some(self.result.vals.len())
             } else {
                 None
             }
@@ -570,7 +570,7 @@ mod val_batch {
                         self.result.updates.push(item);
                     }
                 }
-                Some(self.result.updates.len().try_into().ok().unwrap())
+                Some(self.result.updates.len())
             } else {
                 None
             }
@@ -769,16 +769,16 @@ mod val_batch {
                     self.push_update(time, diff);
                 } else {
                     // New value; complete representation of prior value.
-                    self.result.vals_offs.push(self.result.updates.len().try_into().ok().unwrap());
+                    self.result.vals_offs.push(self.result.updates.len());
                     if self.singleton.take().is_some() { self.singletons += 1; }
                     self.push_update(time, diff);
                     self.result.vals.push(val);
                 }
             } else {
                 // New key; complete representation of prior key.
-                self.result.vals_offs.push(self.result.updates.len().try_into().ok().unwrap());
+                self.result.vals_offs.push(self.result.updates.len());
                 if self.singleton.take().is_some() { self.singletons += 1; }
-                self.result.keys_offs.push(self.result.vals.len().try_into().ok().unwrap());
+                self.result.keys_offs.push(self.result.vals.len());
                 self.push_update(time, diff);
                 self.result.vals.push(val);
                 // Insert the key, but with no specified offset.
@@ -798,7 +798,7 @@ mod val_batch {
                     self.push_update(time.clone(), diff.clone());
                 } else {
                     // New value; complete representation of prior value.
-                    self.result.vals_offs.push(self.result.updates.len().try_into().ok().unwrap());
+                    self.result.vals_offs.push(self.result.updates.len());
                     // Remove any pending singleton, and if it was set increment our count.
                     if self.singleton.take().is_some() { self.singletons += 1; }
                     self.push_update(time.clone(), diff.clone());
@@ -806,10 +806,10 @@ mod val_batch {
                 }
             } else {
                 // New key; complete representation of prior key.
-                self.result.vals_offs.push(self.result.updates.len().try_into().ok().unwrap());
+                self.result.vals_offs.push(self.result.updates.len());
                 // Remove any pending singleton, and if it was set increment our count.
                 if self.singleton.take().is_some() { self.singletons += 1; }
-                self.result.keys_offs.push(self.result.vals.len().try_into().ok().unwrap());
+                self.result.keys_offs.push(self.result.vals.len());
                 self.push_update(time.clone(), diff.clone());
                 self.result.vals.copy_push(val);
                 // Insert the key, but with no specified offset.
@@ -820,10 +820,10 @@ mod val_batch {
         #[inline(never)]
         fn done(mut self, lower: Antichain<Self::Time>, upper: Antichain<Self::Time>, since: Antichain<Self::Time>) -> RhhValBatch<L> {
             // Record the final offsets
-            self.result.vals_offs.push(self.result.updates.len().try_into().ok().unwrap());
+            self.result.vals_offs.push(self.result.updates.len());
             // Remove any pending singleton, and if it was set increment our count.
             if self.singleton.take().is_some() { self.singletons += 1; }
-            self.result.keys_offs.push(self.result.vals.len().try_into().ok().unwrap());
+            self.result.keys_offs.push(self.result.vals.len());
             RhhValBatch {
                 updates: self.result.updates.len() + self.singletons,
                 storage: self.result,

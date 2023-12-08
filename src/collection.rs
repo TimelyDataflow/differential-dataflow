@@ -62,14 +62,12 @@ impl<G: Scope, D: Data, R: Semigroup> Collection<G, D, R> where G::Timestamp: Da
     /// ```
     /// use differential_dataflow::input::Input;
     ///
-    /// fn main() {
-    ///     ::timely::example(|scope| {
-    ///         scope.new_collection_from(1 .. 10).1
-    ///              .map(|x| x * 2)
-    ///              .filter(|x| x % 2 == 1)
-    ///              .assert_empty();
-    ///     });
-    /// }
+    /// ::timely::example(|scope| {
+    ///     scope.new_collection_from(1 .. 10).1
+    ///          .map(|x| x * 2)
+    ///          .filter(|x| x % 2 == 1)
+    ///          .assert_empty();
+    /// });
     /// ```
     pub fn map<D2, L>(&self, mut logic: L) -> Collection<G, D2, R>
     where D2: Data,
@@ -90,14 +88,12 @@ impl<G: Scope, D: Data, R: Semigroup> Collection<G, D, R> where G::Timestamp: Da
     /// ```
     /// use differential_dataflow::input::Input;
     ///
-    /// fn main() {
-    ///     ::timely::example(|scope| {
-    ///         scope.new_collection_from(1 .. 10).1
-    ///              .map_in_place(|x| *x *= 2)
-    ///              .filter(|x| x % 2 == 1)
-    ///              .assert_empty();
-    ///     });
-    /// }
+    /// ::timely::example(|scope| {
+    ///     scope.new_collection_from(1 .. 10).1
+    ///          .map_in_place(|x| *x *= 2)
+    ///          .filter(|x| x % 2 == 1)
+    ///          .assert_empty();
+    /// });
     /// ```
     pub fn map_in_place<L>(&self, mut logic: L) -> Collection<G, D, R>
     where L: FnMut(&mut D) + 'static {
@@ -116,12 +112,10 @@ impl<G: Scope, D: Data, R: Semigroup> Collection<G, D, R> where G::Timestamp: Da
     /// ```
     /// use differential_dataflow::input::Input;
     ///
-    /// fn main() {
-    ///     ::timely::example(|scope| {
-    ///         scope.new_collection_from(1 .. 10).1
-    ///              .flat_map(|x| 0 .. x);
-    ///     });
-    /// }
+    /// ::timely::example(|scope| {
+    ///     scope.new_collection_from(1 .. 10).1
+    ///          .flat_map(|x| 0 .. x);
+    /// });
     /// ```
     pub fn flat_map<I, L>(&self, mut logic: L) -> Collection<G, I::Item, R>
         where G::Timestamp: Clone,
@@ -139,19 +133,17 @@ impl<G: Scope, D: Data, R: Semigroup> Collection<G, D, R> where G::Timestamp: Da
     /// ```
     /// use differential_dataflow::input::Input;
     ///
-    /// fn main() {
-    ///     ::timely::example(|scope| {
-    ///         scope.new_collection_from(1 .. 10).1
-    ///              .map(|x| x * 2)
-    ///              .filter(|x| x % 2 == 1)
-    ///              .assert_empty();
-    ///     });
-    /// }
+    /// ::timely::example(|scope| {
+    ///     scope.new_collection_from(1 .. 10).1
+    ///          .map(|x| x * 2)
+    ///          .filter(|x| x % 2 == 1)
+    ///          .assert_empty();
+    /// });
     /// ```
     pub fn filter<L>(&self, mut logic: L) -> Collection<G, D, R>
     where L: FnMut(&D) -> bool + 'static {
         self.inner
-            .filter(move |&(ref data, _, _)| logic(data))
+            .filter(move |(data, _, _)| logic(data))
             .as_collection()
     }
     /// Creates a new collection accumulating the contents of the two collections.
@@ -165,18 +157,16 @@ impl<G: Scope, D: Data, R: Semigroup> Collection<G, D, R> where G::Timestamp: Da
     /// ```
     /// use differential_dataflow::input::Input;
     ///
-    /// fn main() {
-    ///     ::timely::example(|scope| {
+    /// ::timely::example(|scope| {
     ///
-    ///         let data = scope.new_collection_from(1 .. 10).1;
+    ///     let data = scope.new_collection_from(1 .. 10).1;
     ///
-    ///         let odds = data.filter(|x| x % 2 == 1);
-    ///         let evens = data.filter(|x| x % 2 == 0);
+    ///     let odds = data.filter(|x| x % 2 == 1);
+    ///     let evens = data.filter(|x| x % 2 == 0);
     ///
-    ///         odds.concat(&evens)
-    ///             .assert_eq(&data);
-    ///     });
-    /// }
+    ///     odds.concat(&evens)
+    ///         .assert_eq(&data);
+    /// });
     /// ```
     pub fn concat(&self, other: &Collection<G, D, R>) -> Collection<G, D, R> {
         self.inner
@@ -194,18 +184,16 @@ impl<G: Scope, D: Data, R: Semigroup> Collection<G, D, R> where G::Timestamp: Da
     /// ```
     /// use differential_dataflow::input::Input;
     ///
-    /// fn main() {
-    ///     ::timely::example(|scope| {
+    /// ::timely::example(|scope| {
     ///
-    ///         let data = scope.new_collection_from(1 .. 10).1;
+    ///     let data = scope.new_collection_from(1 .. 10).1;
     ///
-    ///         let odds = data.filter(|x| x % 2 == 1);
-    ///         let evens = data.filter(|x| x % 2 == 0);
+    ///     let odds = data.filter(|x| x % 2 == 1);
+    ///     let evens = data.filter(|x| x % 2 == 0);
     ///
-    ///         odds.concatenate(Some(evens))
-    ///             .assert_eq(&data);
-    ///     });
-    /// }
+    ///     odds.concatenate(Some(evens))
+    ///         .assert_eq(&data);
+    /// });
     /// ```
     pub fn concatenate<I>(&self, sources: I) -> Collection<G, D, R>
     where
@@ -225,17 +213,15 @@ impl<G: Scope, D: Data, R: Semigroup> Collection<G, D, R> where G::Timestamp: Da
     /// ```
     /// use differential_dataflow::input::Input;
     ///
-    /// fn main() {
-    ///     ::timely::example(|scope| {
+    /// ::timely::example(|scope| {
     ///
-    ///         let nums = scope.new_collection_from(0 .. 10).1;
-    ///         let x1 = nums.flat_map(|x| 0 .. x);
-    ///         let x2 = nums.map(|x| (x, 9 - x))
-    ///                      .explode(|(x,y)| Some((x,y)));
+    ///     let nums = scope.new_collection_from(0 .. 10).1;
+    ///     let x1 = nums.flat_map(|x| 0 .. x);
+    ///     let x2 = nums.map(|x| (x, 9 - x))
+    ///                  .explode(|(x,y)| Some((x,y)));
     ///
-    ///         x1.assert_eq(&x2);
-    ///     });
-    /// }
+    ///     x1.assert_eq(&x2);
+    /// });
     /// ```
     pub fn explode<D2, R2, I, L>(&self, mut logic: L) -> Collection<G, D2, <R2 as Multiply<R>>::Output>
     where D2: Data,
@@ -260,18 +246,16 @@ impl<G: Scope, D: Data, R: Semigroup> Collection<G, D, R> where G::Timestamp: Da
     /// ```
     /// use differential_dataflow::input::Input;
     ///
-    /// fn main() {
-    ///     ::timely::example(|scope| {
-    ///         // creates `x` copies of `2*x` from time `3*x` until `4*x`,
-    ///         // for x from 0 through 9.
-    ///         scope.new_collection_from(0 .. 10isize).1
-    ///              .join_function(|x|
-    ///                  //   data      time      diff
-    ///                  vec![(2*x, (3*x) as u64,  x),
-    ///                       (2*x, (4*x) as u64, -x)]
-    ///               );
-    ///     });
-    /// }
+    /// ::timely::example(|scope| {
+    ///     // creates `x` copies of `2*x` from time `3*x` until `4*x`,
+    ///     // for x from 0 through 9.
+    ///     scope.new_collection_from(0 .. 10isize).1
+    ///          .join_function(|x|
+    ///              //   data      time      diff
+    ///              vec![(2*x, (3*x) as u64,  x),
+    ///                   (2*x, (4*x) as u64, -x)]
+    ///           );
+    /// });
     /// ```
     pub fn join_function<D2, R2, I, L>(&self, mut logic: L) -> Collection<G, D2, <R2 as Multiply<R>>::Output>
     where G::Timestamp: Lattice,
@@ -294,19 +278,17 @@ impl<G: Scope, D: Data, R: Semigroup> Collection<G, D, R> where G::Timestamp: Da
     /// use timely::dataflow::Scope;
     /// use differential_dataflow::input::Input;
     ///
-    /// fn main() {
-    ///     ::timely::example(|scope| {
+    /// ::timely::example(|scope| {
     ///
-    ///         let data = scope.new_collection_from(1 .. 10).1;
+    ///     let data = scope.new_collection_from(1 .. 10).1;
     ///
-    ///         let result = scope.region(|child| {
-    ///             data.enter(child)
-    ///                 .leave()
-    ///         });
-    ///
-    ///         data.assert_eq(&result);
+    ///     let result = scope.region(|child| {
+    ///         data.enter(child)
+    ///             .leave()
     ///     });
-    /// }
+    ///
+    ///     data.assert_eq(&result);
+    /// });
     /// ```
     pub fn enter<'a, T>(&self, child: &Child<'a, G, T>) -> Collection<Child<'a, G, T>, D, R>
     where
@@ -328,19 +310,17 @@ impl<G: Scope, D: Data, R: Semigroup> Collection<G, D, R> where G::Timestamp: Da
     /// use timely::dataflow::Scope;
     /// use differential_dataflow::input::Input;
     ///
-    /// fn main() {
-    ///     ::timely::example(|scope| {
+    /// ::timely::example(|scope| {
     ///
-    ///         let data = scope.new_collection_from(1 .. 10).1;
+    ///     let data = scope.new_collection_from(1 .. 10).1;
     ///
-    ///         let result = scope.iterative::<u64,_,_>(|child| {
-    ///             data.enter_at(child, |x| *x)
-    ///                 .leave()
-    ///         });
-    ///
-    ///         data.assert_eq(&result);
+    ///     let result = scope.iterative::<u64,_,_>(|child| {
+    ///         data.enter_at(child, |x| *x)
+    ///             .leave()
     ///     });
-    /// }
+    ///
+    ///     data.assert_eq(&result);
+    /// });
     /// ```
     pub fn enter_at<'a, T, F>(&self, child: &Iterative<'a, G, T>, initial: F) -> Collection<Iterative<'a, G, T>, D, R>
     where
@@ -405,14 +385,12 @@ impl<G: Scope, D: Data, R: Semigroup> Collection<G, D, R> where G::Timestamp: Da
     /// ```
     /// use differential_dataflow::input::Input;
     ///
-    /// fn main() {
-    ///     ::timely::example(|scope| {
-    ///         scope.new_collection_from(1 .. 10).1
-    ///              .map_in_place(|x| *x *= 2)
-    ///              .filter(|x| x % 2 == 1)
-    ///              .inspect(|x| println!("error: {:?}", x));
-    ///     });
-    /// }
+    /// ::timely::example(|scope| {
+    ///     scope.new_collection_from(1 .. 10).1
+    ///          .map_in_place(|x| *x *= 2)
+    ///          .filter(|x| x % 2 == 1)
+    ///          .inspect(|x| println!("error: {:?}", x));
+    /// });
     /// ```
     pub fn inspect<F>(&self, func: F) -> Collection<G, D, R>
     where F: FnMut(&(D, G::Timestamp, R))+'static {
@@ -431,14 +409,12 @@ impl<G: Scope, D: Data, R: Semigroup> Collection<G, D, R> where G::Timestamp: Da
     /// ```
     /// use differential_dataflow::input::Input;
     ///
-    /// fn main() {
-    ///     ::timely::example(|scope| {
-    ///         scope.new_collection_from(1 .. 10).1
-    ///              .map_in_place(|x| *x *= 2)
-    ///              .filter(|x| x % 2 == 1)
-    ///              .inspect_batch(|t,xs| println!("errors @ {:?}: {:?}", t, xs));
-    ///     });
-    /// }
+    /// ::timely::example(|scope| {
+    ///     scope.new_collection_from(1 .. 10).1
+    ///          .map_in_place(|x| *x *= 2)
+    ///          .filter(|x| x % 2 == 1)
+    ///          .inspect_batch(|t,xs| println!("errors @ {:?}: {:?}", t, xs));
+    /// });
     /// ```
     pub fn inspect_batch<F>(&self, func: F) -> Collection<G, D, R>
     where F: FnMut(&G::Timestamp, &[(D, G::Timestamp, R)])+'static {
@@ -478,14 +454,12 @@ impl<G: Scope, D: Data, R: Semigroup> Collection<G, D, R> where G::Timestamp: Da
     /// ```
     /// use differential_dataflow::input::Input;
     ///
-    /// fn main() {
-    ///     ::timely::example(|scope| {
-    ///         scope.new_collection_from(1 .. 10).1
-    ///              .map(|x| x * 2)
-    ///              .filter(|x| x % 2 == 1)
-    ///              .assert_empty();
-    ///     });
-    /// }
+    /// ::timely::example(|scope| {
+    ///     scope.new_collection_from(1 .. 10).1
+    ///          .map(|x| x * 2)
+    ///          .filter(|x| x % 2 == 1)
+    ///          .assert_empty();
+    /// });
     /// ```
     pub fn assert_empty(&self)
     where D: crate::ExchangeData+Hashable,
@@ -518,19 +492,17 @@ where
     /// use timely::dataflow::Scope;
     /// use differential_dataflow::input::Input;
     ///
-    /// fn main() {
-    ///     ::timely::example(|scope| {
+    /// ::timely::example(|scope| {
     ///
-    ///         let data = scope.new_collection_from(1 .. 10).1;
+    ///    let data = scope.new_collection_from(1 .. 10).1;
     ///
-    ///         let result = scope.region(|child| {
-    ///             data.enter(child)
-    ///                 .leave()
-    ///         });
-    ///
-    ///         data.assert_eq(&result);
+    ///    let result = scope.region(|child| {
+    ///         data.enter(child)
+    ///             .leave()
     ///     });
-    /// }
+    ///
+    ///     data.assert_eq(&result);
+    /// });
     /// ```
     pub fn leave(&self) -> Collection<G, D, R> {
         self.inner
@@ -567,19 +539,17 @@ impl<G: Scope, D: Data, R: Abelian> Collection<G, D, R> where G::Timestamp: Data
     /// ```
     /// use differential_dataflow::input::Input;
     ///
-    /// fn main() {
-    ///     ::timely::example(|scope| {
+    /// ::timely::example(|scope| {
     ///
-    ///         let data = scope.new_collection_from(1 .. 10).1;
+    ///     let data = scope.new_collection_from(1 .. 10).1;
     ///
-    ///         let odds = data.filter(|x| x % 2 == 1);
-    ///         let evens = data.filter(|x| x % 2 == 0);
+    ///     let odds = data.filter(|x| x % 2 == 1);
+    ///     let evens = data.filter(|x| x % 2 == 0);
     ///
-    ///         odds.negate()
-    ///             .concat(&data)
-    ///             .assert_eq(&evens);
-    ///     });
-    /// }
+    ///     odds.negate()
+    ///         .concat(&data)
+    ///         .assert_eq(&evens);
+    /// });
     /// ```
     pub fn negate(&self) -> Collection<G, D, R> {
         self.inner
@@ -600,18 +570,16 @@ impl<G: Scope, D: Data, R: Abelian> Collection<G, D, R> where G::Timestamp: Data
     /// ```
     /// use differential_dataflow::input::Input;
     ///
-    /// fn main() {
-    ///     ::timely::example(|scope| {
+    /// ::timely::example(|scope| {
     ///
-    ///         let data = scope.new_collection_from(1 .. 10).1;
+    ///     let data = scope.new_collection_from(1 .. 10).1;
     ///
-    ///         let odds = data.filter(|x| x % 2 == 1);
-    ///         let evens = data.filter(|x| x % 2 == 0);
+    ///     let odds = data.filter(|x| x % 2 == 1);
+    ///     let evens = data.filter(|x| x % 2 == 0);
     ///
-    ///         odds.concat(&evens)
-    ///             .assert_eq(&data);
-    ///     });
-    /// }
+    ///     odds.concat(&evens)
+    ///         .assert_eq(&data);
+    /// });
     /// ```
     pub fn assert_eq(&self, other: &Self)
     where D: crate::ExchangeData+Hashable,
@@ -646,18 +614,16 @@ impl<G: Scope, D: Data, R: Semigroup> AsCollection<G, D, R> for Stream<G, (D, G:
 /// ```
 /// use differential_dataflow::input::Input;
 ///
-/// fn main() {
-///     ::timely::example(|scope| {
+/// ::timely::example(|scope| {
 ///
-///         let data = scope.new_collection_from(1 .. 10).1;
+///     let data = scope.new_collection_from(1 .. 10).1;
 ///
-///         let odds = data.filter(|x| x % 2 == 1);
-///         let evens = data.filter(|x| x % 2 == 0);
+///     let odds = data.filter(|x| x % 2 == 1);
+///     let evens = data.filter(|x| x % 2 == 0);
 ///
-///         differential_dataflow::collection::concatenate(scope, vec![odds, evens])
-///             .assert_eq(&data);
-///     });
-/// }
+///     differential_dataflow::collection::concatenate(scope, vec![odds, evens])
+///         .assert_eq(&data);
+/// });
 /// ```
 pub fn concatenate<G, D, R, I>(scope: &mut G, iterator: I) -> Collection<G, D, R>
 where

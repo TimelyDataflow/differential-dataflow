@@ -76,7 +76,7 @@ where
         let reached =
         forward
             .join_map(&reverse, |_, (src,d1), (dst,d2)| ((src.clone(), dst.clone()), *d1 + *d2))
-            .reduce(|_key, s, t| t.push((s[0].0.clone(), 1)))
+            .reduce(|_key, s, t| t.push((*s[0].0, 1)))
             .semijoin(&goals);
 
         let active =
@@ -96,7 +96,7 @@ where
             .join_core(&forward_edges, |_med, (src, dist), next| Some((next.clone(), (src.clone(), *dist+1))))
             .concat(&forward)
             .map(|(next, (src, dist))| ((next, src), dist))
-            .reduce(|_key, s, t| t.push((s[0].0.clone(), 1)))
+            .reduce(|_key, s, t| t.push((*s[0].0, 1)))
             .map(|((next, src), dist)| (next, (src, dist)));
 
         forward_next.map(|_| ()).consolidate().inspect(|x| println!("forward_next: {:?}", x));
@@ -113,7 +113,7 @@ where
             .join_core(&reverse_edges, |_med, (rev, dist), next| Some((next.clone(), (rev.clone(), *dist+1))))
             .concat(&reverse)
             .map(|(next, (rev, dist))| ((next, rev), dist))
-            .reduce(|_key, s, t| t.push((s[0].0.clone(), 1)))
+            .reduce(|_key, s, t| t.push((*s[0].0, 1)))
             .map(|((next,rev), dist)| (next, (rev, dist)));
 
         reverse_next.map(|_| ()).consolidate().inspect(|x| println!("reverse_next: {:?}", x));

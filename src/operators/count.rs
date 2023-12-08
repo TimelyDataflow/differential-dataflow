@@ -23,14 +23,12 @@ pub trait CountTotal<G: Scope, K: ExchangeData, R: Semigroup> where G::Timestamp
     /// use differential_dataflow::input::Input;
     /// use differential_dataflow::operators::CountTotal;
     ///
-    /// fn main() {
-    ///     ::timely::example(|scope| {
-    ///         // report the number of occurrences of each key
-    ///         scope.new_collection_from(1 .. 10).1
-    ///              .map(|x| x / 3)
-    ///              .count_total();
-    ///     });
-    /// }
+    /// ::timely::example(|scope| {
+    ///     // report the number of occurrences of each key
+    ///     scope.new_collection_from(1 .. 10).1
+    ///          .map(|x| x / 3)
+    ///          .count_total();
+    /// });
     /// ```
     fn count_total(&self) -> Collection<G, (K, R), isize> {
         self.count_total_core()

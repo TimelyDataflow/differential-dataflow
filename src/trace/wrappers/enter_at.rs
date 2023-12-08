@@ -121,7 +121,7 @@ where
     /// Makes a new trace wrapper
     pub fn make_from(trace: Tr, logic: F, prior: G) -> Self {
         TraceEnter {
-            trace: trace,
+            trace,
             stash1: Antichain::new(),
             stash2: Antichain::new(),
             logic,

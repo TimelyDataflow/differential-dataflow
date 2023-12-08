@@ -98,11 +98,9 @@ where
             for ((key, val), time, diff) in buffer.drain(..) {
                 if upper.less_equal(&time) {
                     self.frontier.insert(time.clone());
-                    if keep.len() == keep.capacity() {
-                        if keep.len() > 0 {
-                            kept.push(keep);
-                            keep = self.sorter.empty();
-                        }
+                    if keep.len() == keep.capacity() && !keep.is_empty() {
+                        kept.push(keep);
+                        keep = self.sorter.empty();
                     }
                     keep.push(((key, val), time, diff));
                 }
@@ -115,10 +113,10 @@ where
         }
 
         // Finish the kept data.
-        if keep.len() > 0 {
+        if !keep.is_empty() {
             kept.push(keep);
         }
-        if kept.len() > 0 {
+        if !kept.is_empty() {
             self.sorter.push_list(kept);
         }
 
@@ -189,10 +187,10 @@ impl<D: Ord, T: Ord, R: Semigroup> MergeSorter<D, T, R> {
             ::std::mem::replace(batch, self.stash.pop().unwrap())
         }
         else {
-            ::std::mem::replace(batch, Vec::new())
+            ::std::mem::take(batch)
         };
 
-        if batch.len() > 0 {
+        if !batch.is_empty() {
             crate::consolidation::consolidate_updates(&mut batch);
             self.queue.push(vec![batch]);
             while self.queue.len() > 1 && (self.queue[self.queue.len()-1].len() >= self.queue[self.queue.len()-2].len() / 2) {
@@ -249,7 +247,7 @@ impl<D: Ord, T: Ord, R: Semigroup> MergeSorter<D, T, R> {
         // while we have valid data in each input, merge.
         while !head1.is_empty() && !head2.is_empty() {
 
-            while (result.capacity() - result.len()) > 0 && head1.len() > 0 && head2.len() > 0 {
+            while (result.capacity() - result.len()) > 0 && !head1.is_empty() && !head2.is_empty() {
 
                 let cmp = {
                     let x = head1.front().unwrap();
@@ -287,7 +285,7 @@ impl<D: Ord, T: Ord, R: Semigroup> MergeSorter<D, T, R> {
             }
         }
 
-        if result.len() > 0 { output.push(result); }
+        if !result.is_empty() { output.push(result); }
         else if result.capacity() > 0 { self.stash.push(result); }
 
         if !head1.is_empty() {

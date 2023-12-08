@@ -32,14 +32,12 @@ pub trait ThresholdTotal<G: Scope, K: ExchangeData, R: ExchangeData+Semigroup> w
     /// use differential_dataflow::input::Input;
     /// use differential_dataflow::operators::ThresholdTotal;
     ///
-    /// fn main() {
-    ///     ::timely::example(|scope| {
-    ///         // report the number of occurrences of each key
-    ///         scope.new_collection_from(1 .. 10).1
-    ///              .map(|x| x / 3)
-    ///              .threshold_total(|_,c| c % 2);
-    ///     });
-    /// }
+    /// ::timely::example(|scope| {
+    ///     // report the number of occurrences of each key
+    ///     scope.new_collection_from(1 .. 10).1
+    ///          .map(|x| x / 3)
+    ///          .threshold_total(|_,c| c % 2);
+    /// });
     /// ```
     fn threshold_total<R2: Abelian, F: FnMut(&K,&R)->R2+'static>(&self, mut thresh: F) -> Collection<G, K, R2> {
         self.threshold_semigroup(move |key, new, old| {
@@ -60,14 +58,12 @@ pub trait ThresholdTotal<G: Scope, K: ExchangeData, R: ExchangeData+Semigroup> w
     /// use differential_dataflow::input::Input;
     /// use differential_dataflow::operators::ThresholdTotal;
     ///
-    /// fn main() {
-    ///     ::timely::example(|scope| {
-    ///         // report the number of occurrences of each key
-    ///         scope.new_collection_from(1 .. 10).1
-    ///              .map(|x| x / 3)
-    ///              .distinct_total();
-    ///     });
-    /// }
+    /// ::timely::example(|scope| {
+    ///     // report the number of occurrences of each key
+    ///     scope.new_collection_from(1 .. 10).1
+    ///          .map(|x| x / 3)
+    ///          .distinct_total();
+    /// });
     /// ```
     fn distinct_total(&self) -> Collection<G, K, isize> {
         self.distinct_total_core()

@@ -131,8 +131,8 @@ impl<C: Cursor> Cursor for CursorList<C> {
     }
     #[inline]
     fn seek_key(&mut self, storage: &Vec<C::Storage>, key: Self::Key<'_>) {
-        for index in 0 .. self.cursors.len() {
-            self.cursors[index].seek_key(&storage[index], key);
+        for (cursor, storage) in self.cursors.iter_mut().zip(storage) {
+            cursor.seek_key(storage, key);
         }
         self.minimize_keys(storage);
     }
@@ -147,8 +147,8 @@ impl<C: Cursor> Cursor for CursorList<C> {
     }
     #[inline]
     fn seek_val(&mut self, storage: &Vec<C::Storage>, val: Self::Val<'_>) {
-        for &index in self.min_key.iter() {
-            self.cursors[index].seek_val(&storage[index], val);
+        for (cursor, storage) in self.cursors.iter_mut().zip(storage) {
+            cursor.seek_val(storage, val);
         }
         self.minimize_vals(storage);
     }
@@ -156,8 +156,8 @@ impl<C: Cursor> Cursor for CursorList<C> {
     // rewinding methods
     #[inline]
     fn rewind_keys(&mut self, storage: &Vec<C::Storage>) {
-        for index in 0 .. self.cursors.len() {
-            self.cursors[index].rewind_keys(&storage[index]);
+        for (cursor, storage) in self.cursors.iter_mut().zip(storage) {
+            cursor.rewind_keys(storage);
         }
         self.minimize_keys(storage);
     }

@@ -48,7 +48,7 @@ where
     ) -> Self
     {
         let mut temp = Antichain::new();
-        temp.extend(upper.into_iter());
+        temp.extend(upper);
         Self { upper: temp, trace, queues }
     }
 

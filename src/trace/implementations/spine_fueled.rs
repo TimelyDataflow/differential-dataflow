@@ -474,7 +474,7 @@ where
 
         // TODO: Consider merging pending batches before introducing them.
         // TODO: We could use a `VecDeque` here to draw from the front and append to the back.
-        while self.pending.len() > 0 && PartialOrder::less_equal(self.pending[0].upper(), &self.physical_frontier)
+        while !self.pending.is_empty() && PartialOrder::less_equal(self.pending[0].upper(), &self.physical_frontier)
             //   self.physical_frontier.iter().all(|t1| self.pending[0].upper().iter().any(|t2| t2.less_equal(t1)))
         {
             // Batch can be taken in optimized insertion.

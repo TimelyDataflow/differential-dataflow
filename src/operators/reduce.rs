@@ -46,16 +46,14 @@ pub trait Reduce<G: Scope, K: Data, V: Data, R: Semigroup> where G::Timestamp: L
     /// use differential_dataflow::input::Input;
     /// use differential_dataflow::operators::Reduce;
     ///
-    /// fn main() {
-    ///     ::timely::example(|scope| {
-    ///         // report the smallest value for each group
-    ///         scope.new_collection_from(1 .. 10).1
-    ///              .map(|x| (x / 3, x))
-    ///              .reduce(|_key, input, output| {
-    ///                  output.push((*input[0].0, 1))
-    ///              });
-    ///     });
-    /// }
+    /// ::timely::example(|scope| {
+    ///     // report the smallest value for each group
+    ///     scope.new_collection_from(1 .. 10).1
+    ///          .map(|x| (x / 3, x))
+    ///          .reduce(|_key, input, output| {
+    ///              output.push((*input[0].0, 1))
+    ///          });
+    /// });
     /// ```
     fn reduce<L, V2: Data, R2: Abelian>(&self, logic: L) -> Collection<G, (K, V2), R2>
     where L: FnMut(&K, &[(&V, R)], &mut Vec<(V2, R2)>)+'static {
@@ -108,14 +106,12 @@ pub trait Threshold<G: Scope, K: Data, R1: Semigroup> where G::Timestamp: Lattic
     /// use differential_dataflow::input::Input;
     /// use differential_dataflow::operators::Threshold;
     ///
-    /// fn main() {
-    ///     ::timely::example(|scope| {
-    ///         // report at most one of each key.
-    ///         scope.new_collection_from(1 .. 10).1
-    ///              .map(|x| x / 3)
-    ///              .threshold(|_,c| c % 2);
-    ///     });
-    /// }
+    /// ::timely::example(|scope| {
+    ///     // report at most one of each key.
+    ///     scope.new_collection_from(1 .. 10).1
+    ///          .map(|x| x / 3)
+    ///          .threshold(|_,c| c % 2);
+    /// });
     /// ```
     fn threshold<R2: Abelian, F: FnMut(&K, &R1)->R2+'static>(&self, thresh: F) -> Collection<G, K, R2> {
         self.threshold_named("Threshold", thresh)
@@ -132,14 +128,12 @@ pub trait Threshold<G: Scope, K: Data, R1: Semigroup> where G::Timestamp: Lattic
     /// use differential_dataflow::input::Input;
     /// use differential_dataflow::operators::Threshold;
     ///
-    /// fn main() {
-    ///     ::timely::example(|scope| {
-    ///         // report at most one of each key.
-    ///         scope.new_collection_from(1 .. 10).1
-    ///              .map(|x| x / 3)
-    ///              .distinct();
-    ///     });
-    /// }
+    /// ::timely::example(|scope| {
+    ///     // report at most one of each key.
+    ///     scope.new_collection_from(1 .. 10).1
+    ///          .map(|x| x / 3)
+    ///          .distinct();
+    /// });
     /// ```
     fn distinct(&self) -> Collection<G, K, isize> {
         self.distinct_core()
@@ -184,14 +178,12 @@ pub trait Count<G: Scope, K: Data, R: Semigroup> where G::Timestamp: Lattice+Ord
     /// use differential_dataflow::input::Input;
     /// use differential_dataflow::operators::Count;
     ///
-    /// fn main() {
-    ///     ::timely::example(|scope| {
-    ///         // report the number of occurrences of each key
-    ///         scope.new_collection_from(1 .. 10).1
-    ///              .map(|x| x / 3)
-    ///              .count();
-    ///     });
-    /// }
+    /// ::timely::example(|scope| {
+    ///     // report the number of occurrences of each key
+    ///     scope.new_collection_from(1 .. 10).1
+    ///          .map(|x| x / 3)
+    ///          .count();
+    /// });
     /// ```
     fn count(&self) -> Collection<G, (K, R), isize> {
         self.count_core()
@@ -241,19 +233,17 @@ pub trait ReduceCore<G: Scope, K: ToOwned + ?Sized, V: ToOwned + ?Sized, R: Semi
     /// use differential_dataflow::trace::Trace;
     /// use differential_dataflow::trace::implementations::ValSpine;
     ///
-    /// fn main() {
-    ///     ::timely::example(|scope| {
+    /// ::timely::example(|scope| {
     ///
-    ///         let trace =
-    ///         scope.new_collection_from(1 .. 10u32).1
-    ///              .map(|x| (x, x))
-    ///              .reduce_abelian::<_,ValSpine<_,_,_,_>>(
-    ///                 "Example",
-    ///                  move |_key, src, dst| dst.push((*src[0].0, 1))
-    ///              )
-    ///              .trace;
-    ///     });
-    /// }
+    ///     let trace =
+    ///     scope.new_collection_from(1 .. 10u32).1
+    ///          .map(|x| (x, x))
+    ///          .reduce_abelian::<_,ValSpine<_,_,_,_>>(
+    ///             "Example",
+    ///              move |_key, src, dst| dst.push((*src[0].0, 1))
+    ///          )
+    ///          .trace;
+    /// });
     /// ```
     fn reduce_abelian<L, T2>(&self, name: &str, mut logic: L) -> Arranged<G, TraceAgent<T2>>
         where
@@ -421,8 +411,8 @@ where
                     }
 
                     // Ensure that `capabilities` covers the capability of the batch.
-                    capabilities.retain(|cap| !capability.time().less_than(&cap.time()));
-                    if !capabilities.iter().any(|cap| cap.time().less_equal(&capability.time())) {
+                    capabilities.retain(|cap| !capability.time().less_than(cap.time()));
+                    if !capabilities.iter().any(|cap| cap.time().less_equal(capability.time())) {
                         capabilities.push(capability.retain());
                     }
                 });
@@ -446,7 +436,7 @@ where
                         sort_dedup(&mut interesting);
                         // `exposed` contains interesting (key, time)s now below `upper_limit`
                         let exposed = {
-                            let (exposed, new_interesting) = interesting.drain(..).partition(|&(_, ref time)| !upper_limit.less_equal(time));
+                            let (exposed, new_interesting) = interesting.drain(..).partition(|(_, time)| !upper_limit.less_equal(time));
                             interesting = new_interesting;
                             exposed
                         };
@@ -462,8 +452,8 @@ where
                         //       this as long as it requires that there is only one capability for each message.
                         let mut buffers = Vec::<(G::Timestamp, Vec<(<T2::Cursor as Cursor>::ValOwned, G::Timestamp, T2::Diff)>)>::new();
                         let mut builders = Vec::new();
-                        for i in 0 .. capabilities.len() {
-                            buffers.push((capabilities[i].time().clone(), Vec::new()));
+                        for cap in capabilities.iter() {
+                            buffers.push((cap.time().clone(), Vec::new()));
                             builders.push(T2::Builder::new());
                         }
 
@@ -490,7 +480,7 @@ where
                             
                             // Determine the next key we will work on; could be synthetic, could be from a batch.
                             let key1 = exposed.get(exposed_position).map(|x| <_ as MyTrait>::borrow_as(&x.0));
-                            let key2 = batch_cursor.get_key(&batch_storage);
+                            let key2 = batch_cursor.get_key(batch_storage);
                             let key = match (key1, key2) {
                                 (Some(key1), Some(key2)) => ::std::cmp::min(key1, key2),
                                 (Some(key1), None)       => key1,
@@ -584,7 +574,7 @@ where
 
                         // Determine the frontier of our interesting times.
                         let mut frontier = Antichain::<G::Timestamp>::new();
-                        for &(_, ref time) in &interesting {
+                        for (_, time) in &interesting {
                             frontier.insert(time.clone());
                         }
 
@@ -626,7 +616,7 @@ where
     )
     };
 
-    Arranged { stream: stream, trace: result_trace.unwrap() }
+    Arranged { stream, trace: result_trace.unwrap() }
 }
 
 
@@ -798,13 +788,13 @@ mod history_replay {
 
             // Load the input and output histories.
             let mut input_replay = if let Some(meet) = meet.as_ref() {
-                self.input_history.replay_key(source_cursor, source_storage, key, |time| time.join(&meet))
+                self.input_history.replay_key(source_cursor, source_storage, key, |time| time.join(meet))
             }
             else {
                 self.input_history.replay_key(source_cursor, source_storage, key, |time| time.clone())
             };
             let mut output_replay = if let Some(meet) = meet.as_ref() {
-                self.output_history.replay_key(output_cursor, output_storage, key, |time| time.join(&meet))
+                self.output_history.replay_key(output_cursor, output_storage, key, |time| time.join(meet))
             }
             else {
                 self.output_history.replay_key(output_cursor, output_storage, key, |time| time.clone())
@@ -832,7 +822,7 @@ mod history_replay {
                                             input_replay.time(),
                                             output_replay.time(),
                                             self.synth_times.last(),
-                                        ].iter().cloned().filter_map(|t| t).min().map(|t| t.clone()) {
+                                        ].iter().cloned().flatten().min().cloned() {
 
                 // Advance input and output history replayers. This marks applicable updates as active.
                 input_replay.step_while_time_is(&next_time);
@@ -847,7 +837,7 @@ mod history_replay {
                 let mut interesting = batch_replay.step_while_time_is(&next_time);
                 if interesting {
                     if let Some(meet) = meet.as_ref() {
-                        batch_replay.advance_buffer_by(&meet);
+                        batch_replay.advance_buffer_by(meet);
                     }
                 }
 
@@ -890,7 +880,7 @@ mod history_replay {
 
                         // Assemble the input collection at `next_time`. (`self.input_buffer` cleared just after use).
                         debug_assert!(self.input_buffer.is_empty());
-                        meet.as_ref().map(|meet| input_replay.advance_buffer_by(&meet));
+                        meet.as_ref().map(|meet| input_replay.advance_buffer_by(meet));
                         for &((value, ref time), ref diff) in input_replay.buffer().iter() {
                             if time.less_equal(&next_time) {
                                 self.input_buffer.push((value, diff.clone()));
@@ -909,7 +899,7 @@ mod history_replay {
                         }
                         crate::consolidation::consolidate(&mut self.input_buffer);
 
-                        meet.as_ref().map(|meet| output_replay.advance_buffer_by(&meet));
+                        meet.as_ref().map(|meet| output_replay.advance_buffer_by(meet));
                         for &((value, ref time), ref diff) in output_replay.buffer().iter() {
                             if time.less_equal(&next_time) {
                                 use crate::trace::cursor::MyTrait;
@@ -924,13 +914,13 @@ mod history_replay {
                                 self.output_buffer.push(((*value).to_owned(), diff.clone()));
                             }
                             else {
-                                self.temporary.push(next_time.join(&time));
+                                self.temporary.push(next_time.join(time));
                             }
                         }
                         crate::consolidation::consolidate(&mut self.output_buffer);
 
                         // Apply user logic if non-empty input and see what happens!
-                        if self.input_buffer.len() > 0 || self.output_buffer.len() > 0 {
+                        if !self.input_buffer.is_empty() || !self.output_buffer.is_empty() {
                             logic(key, &self.input_buffer[..], &mut self.output_buffer, &mut self.update_buffer);
                             self.input_buffer.clear();
                             self.output_buffer.clear();
@@ -963,14 +953,14 @@ mod history_replay {
                         // The two locations are important, in that we will compact `output_produced` as we move
                         // through times, but we cannot compact the output buffers because we need their actual
                         // times.
-                        if self.update_buffer.len() > 0 {
+                        if !self.update_buffer.is_empty() {
 
                             output_counter += 1;
 
                             // We *should* be able to find a capability for `next_time`. Any thing else would
                             // indicate a logical error somewhere along the way; either we release a capability
                             // we should have kept, or we have computed the output incorrectly (or both!)
-                            let idx = outputs.iter().rev().position(|&(ref time, _)| time.less_equal(&next_time));
+                            let idx = outputs.iter().rev().position(|(time, _)| time.less_equal(&next_time));
                             let idx = outputs.len() - idx.expect("failed to find index") - 1;
                             for (val, diff) in self.update_buffer.drain(..) {
                                 self.output_produced.push(((val.clone(), next_time.clone()), diff.clone()));
@@ -983,7 +973,7 @@ mod history_replay {
                             //       large collection can now be collapsed).
                             if let Some(meet) = meet.as_ref() {
                                 for entry in &mut self.output_produced {
-                                    (entry.0).1 = (entry.0).1.join(&meet);
+                                    (entry.0).1 = (entry.0).1.join(meet);
                                 }
                             }
                             crate::consolidation::consolidate(&mut self.output_produced);
@@ -1018,7 +1008,7 @@ mod history_replay {
                     for time in self.temporary.drain(..) {
                         // We can either service `join` now, or must delay for the future.
                         if upper_limit.less_equal(&time) {
-                            debug_assert!(outputs.iter().any(|&(ref t,_)| t.less_equal(&time)));
+                            debug_assert!(outputs.iter().any(|(t,_)| t.less_equal(&time)));
                             new_interesting.push(time);
                         }
                         else {
@@ -1030,18 +1020,16 @@ mod history_replay {
                         self.synth_times.dedup();
                     }
                 }
-                else {
-
-                    if interesting {
-                        // We cannot process `next_time` now, and must delay it.
-                        //
-                        // I think we are probably only here because of an uninteresting time declared interesting,
-                        // as initial interesting times are filtered to be in interval, and synthetic times are also
-                        // filtered before introducing them to `self.synth_times`.
-                        new_interesting.push(next_time.clone());
-                        debug_assert!(outputs.iter().any(|&(ref t,_)| t.less_equal(&next_time)))
-                    }
+                else if interesting {
+                    // We cannot process `next_time` now, and must delay it.
+                    //
+                    // I think we are probably only here because of an uninteresting time declared interesting,
+                    // as initial interesting times are filtered to be in interval, and synthetic times are also
+                    // filtered before introducing them to `self.synth_times`.
+                    new_interesting.push(next_time.clone());
+                    debug_assert!(outputs.iter().any(|(t,_)| t.less_equal(&next_time)))
                 }
+            
 
                 // Update `meet` to track the meet of each source of times.
                 meet = None;//T::maximum();
@@ -1059,7 +1047,7 @@ mod history_replay {
                 // Update `times_current` by the frontier.
                 if let Some(meet) = meet.as_ref() {
                     for time in self.times_current.iter_mut() {
-                        *time = time.join(&meet);
+                        *time = time.join(meet);
                     }
                 }
 

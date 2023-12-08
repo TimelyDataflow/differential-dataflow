@@ -65,7 +65,6 @@ pub type PreferredSpine<K, V, T, R> = Spine<
 
 mod val_batch {
 
-    use std::convert::TryInto;
     use std::marker::PhantomData;
     use abomonation_derive::Abomonation;
     use timely::progress::{Antichain, frontier::AntichainRef};
@@ -213,8 +212,8 @@ mod val_batch {
                 updates: L::UpdContainer::merge_capacity(&batch1.updates, &batch2.updates),
             };
 
-            storage.keys_offs.push(0.try_into().ok().unwrap());
-            storage.vals_offs.push(0.try_into().ok().unwrap());
+            storage.keys_offs.push(0);
+            storage.vals_offs.push(0);
 
             OrdValMerger {
                 key_cursor1: 0,
@@ -287,7 +286,7 @@ mod val_batch {
             // If we have pushed any values, copy the key as well.
             if self.result.vals.len() > init_vals {
                 self.result.keys.copy(source.keys.index(cursor));
-                self.result.keys_offs.push(self.result.vals.len().try_into().ok().unwrap());
+                self.result.keys_offs.push(self.result.vals.len());
             }           
         }
         /// Merge the next key in each of `source1` and `source2` into `self`, updating the appropriate cursors.
@@ -386,7 +385,7 @@ mod val_batch {
 
             // Values being pushed indicate non-emptiness.
             if self.result.vals.len() > init_vals {
-                Some(self.result.vals.len().try_into().ok().unwrap())
+                Some(self.result.vals.len())
             } else {
                 None
             }
@@ -423,7 +422,7 @@ mod val_batch {
                         self.result.updates.push(item);
                     }
                 }
-                Some(self.result.updates.len().try_into().ok().unwrap())
+                Some(self.result.updates.len())
             } else {
                 None
             }
@@ -567,16 +566,16 @@ mod val_batch {
                     self.push_update(time, diff);
                 } else {
                     // New value; complete representation of prior value.
-                    self.result.vals_offs.push(self.result.updates.len().try_into().ok().unwrap());
+                    self.result.vals_offs.push(self.result.updates.len());
                     if self.singleton.take().is_some() { self.singletons += 1; }
                     self.push_update(time, diff);
                     self.result.vals.push(val);
                 }
             } else {
                 // New key; complete representation of prior key.
-                self.result.vals_offs.push(self.result.updates.len().try_into().ok().unwrap());
+                self.result.vals_offs.push(self.result.updates.len());
                 if self.singleton.take().is_some() { self.singletons += 1; }
-                self.result.keys_offs.push(self.result.vals.len().try_into().ok().unwrap());
+                self.result.keys_offs.push(self.result.vals.len());
                 self.push_update(time, diff);
                 self.result.vals.push(val);
                 self.result.keys.push(key);
@@ -595,7 +594,7 @@ mod val_batch {
                     self.push_update(time.clone(), diff.clone());
                 } else {
                     // New value; complete representation of prior value.
-                    self.result.vals_offs.push(self.result.updates.len().try_into().ok().unwrap());
+                    self.result.vals_offs.push(self.result.updates.len());
                     // Remove any pending singleton, and if it was set increment our count.
                     if self.singleton.take().is_some() { self.singletons += 1; }
                     self.push_update(time.clone(), diff.clone());
@@ -603,10 +602,10 @@ mod val_batch {
                 }
             } else {
                 // New key; complete representation of prior key.
-                self.result.vals_offs.push(self.result.updates.len().try_into().ok().unwrap());
+                self.result.vals_offs.push(self.result.updates.len());
                 // Remove any pending singleton, and if it was set increment our count.
                 if self.singleton.take().is_some() { self.singletons += 1; }
-                self.result.keys_offs.push(self.result.vals.len().try_into().ok().unwrap());
+                self.result.keys_offs.push(self.result.vals.len());
                 self.push_update(time.clone(), diff.clone());
                 self.result.vals.copy_push(val);
                 self.result.keys.copy_push(key);
@@ -616,10 +615,10 @@ mod val_batch {
         #[inline(never)]
         fn done(mut self, lower: Antichain<Self::Time>, upper: Antichain<Self::Time>, since: Antichain<Self::Time>) -> OrdValBatch<L> {
             // Record the final offsets
-            self.result.vals_offs.push(self.result.updates.len().try_into().ok().unwrap());
+            self.result.vals_offs.push(self.result.updates.len());
             // Remove any pending singleton, and if it was set increment our count.
             if self.singleton.take().is_some() { self.singletons += 1; }
-            self.result.keys_offs.push(self.result.vals.len().try_into().ok().unwrap());
+            self.result.keys_offs.push(self.result.vals.len());
             OrdValBatch {
                 updates: self.result.updates.len() + self.singletons,
                 storage: self.result,
@@ -632,7 +631,6 @@ mod val_batch {
 
 mod key_batch {
 
-    use std::convert::TryInto;
     use std::marker::PhantomData;
     use abomonation_derive::Abomonation;
     use timely::progress::{Antichain, frontier::AntichainRef};
@@ -769,7 +767,7 @@ mod key_batch {
                 updates: L::UpdContainer::merge_capacity(&batch1.updates, &batch2.updates),
             };
 
-            storage.keys_offs.push(0.try_into().ok().unwrap());
+            storage.keys_offs.push(0);
 
             OrdKeyMerger {
                 key_cursor1: 0,
@@ -894,7 +892,7 @@ mod key_batch {
                         self.result.updates.push(item);
                     }
                 }
-                Some(self.result.updates.len().try_into().ok().unwrap())
+                Some(self.result.updates.len())
             } else {
                 None
             }
@@ -1029,7 +1027,7 @@ mod key_batch {
                 self.push_update(time, diff);
             } else {
                 // New key; complete representation of prior key.
-                self.result.keys_offs.push(self.result.updates.len().try_into().ok().unwrap());
+                self.result.keys_offs.push(self.result.updates.len());
                 // Remove any pending singleton, and if it was set increment our count.
                 if self.singleton.take().is_some() { self.singletons += 1; }
                 self.push_update(time, diff);
@@ -1041,11 +1039,11 @@ mod key_batch {
         fn copy(&mut self, ((key, ()), time, diff): &Self::Item) {
 
             // Perhaps this is a continuation of an already received key.
-            if self.result.keys.last().map(|k| k.equals(&key)).unwrap_or(false) {
+            if self.result.keys.last().map(|k| k.equals(key)).unwrap_or(false) {
                 self.push_update(time.clone(), diff.clone());
             } else {
                 // New key; complete representation of prior key.
-                self.result.keys_offs.push(self.result.updates.len().try_into().ok().unwrap());
+                self.result.keys_offs.push(self.result.updates.len());
                 // Remove any pending singleton, and if it was set increment our count.
                 if self.singleton.take().is_some() { self.singletons += 1; }
                 self.push_update(time.clone(), diff.clone());
@@ -1056,7 +1054,7 @@ mod key_batch {
         #[inline(never)]
         fn done(mut self, lower: Antichain<Self::Time>, upper: Antichain<Self::Time>, since: Antichain<Self::Time>) -> OrdKeyBatch<L> {
             // Record the final offsets
-            self.result.keys_offs.push(self.result.updates.len().try_into().ok().unwrap());
+            self.result.keys_offs.push(self.result.updates.len());
             // Remove any pending singleton, and if it was set increment our count.
             if self.singleton.take().is_some() { self.singletons += 1; }
             OrdKeyBatch {

@@ -102,7 +102,7 @@ where
         BatchCursorFilter::new(self.batch.cursor(), self.logic.clone())
     }
     fn len(&self) -> usize { self.batch.len() }
-    fn description(&self) -> &Description<B::Time> { &self.batch.description() }
+    fn description(&self) -> &Description<B::Time> { self.batch.description() }
 }
 
 impl<B, F> BatchFilter<B, F>

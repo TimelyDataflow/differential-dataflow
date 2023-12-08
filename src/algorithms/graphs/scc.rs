@@ -26,7 +26,7 @@ where
         // keep edges from active edge destinations.
         let active =
         edges.map(|(_src,dst)| dst)
-             .threshold(|_,c| if c.is_zero() { R::from(0 as i8) } else { R::from(1 as i8) });
+             .threshold(|_,c| if c.is_zero() { R::from(0_i8) } else { R::from(1_i8) });
 
         graph.enter(&edges.scope())
              .semijoin(&active)
@@ -65,7 +65,7 @@ where
 
     // NOTE: With a node -> int function, can be improved by:
     // let labels = propagate_at(&cycle, &nodes, |x| *x as u64);
-    let labels = propagate(&cycle, &nodes);
+    let labels = propagate(cycle, &nodes);
 
     edges.join_map(&labels, |e1,e2,l1| (e2.clone(),(e1.clone(),l1.clone())))
          .join_map(&labels, |e2,(e1,l1),l2| ((e1.clone(),e2.clone()),(l1.clone(),l2.clone())))

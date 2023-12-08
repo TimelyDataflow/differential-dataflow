@@ -61,16 +61,14 @@ pub trait Iterate<G: Scope, D: Data, R: Semigroup> {
     /// use differential_dataflow::input::Input;
     /// use differential_dataflow::operators::Iterate;
     ///
-    /// fn main() {
-    ///     ::timely::example(|scope| {
+    /// ::timely::example(|scope| {
     ///
-    ///         scope.new_collection_from(1 .. 10u32).1
-    ///              .iterate(|values| {
-    ///                  values.map(|x| if x % 2 == 0 { x/2 } else { x })
-    ///                        .consolidate()
-    ///              });
-    ///     });
-    /// }
+    ///     scope.new_collection_from(1 .. 10u32).1
+    ///          .iterate(|values| {
+    ///              values.map(|x| if x % 2 == 0 { x/2 } else { x })
+    ///                    .consolidate()
+    ///          });
+    /// });
     /// ```
     fn iterate<F>(&self, logic: F) -> Collection<G, D, R>
         where
@@ -139,21 +137,19 @@ impl<G: Scope, D: Ord+Data+Debug, R: Semigroup> Iterate<G, D, R> for G {
 /// use differential_dataflow::input::Input;
 /// use differential_dataflow::operators::iterate::Variable;
 ///
-/// fn main() {
-///     ::timely::example(|scope| {
+/// ::timely::example(|scope| {
 ///
-///         let numbers = scope.new_collection_from(1 .. 10u32).1;
+///     let numbers = scope.new_collection_from(1 .. 10u32).1;
 ///
-///         scope.iterative::<u64,_,_>(|nested| {
-///             let summary = Product::new(Default::default(), 1);
-///             let variable = Variable::new_from(numbers.enter(nested), summary);
-///             let result = variable.map(|x| if x % 2 == 0 { x/2 } else { x })
-///                                  .consolidate();
-///             variable.set(&result)
-///                     .leave()
-///         });
-///     })
-/// }
+///     scope.iterative::<u64,_,_>(|nested| {
+///         let summary = Product::new(Default::default(), 1);
+///         let variable = Variable::new_from(numbers.enter(nested), summary);
+///         let result = variable.map(|x| if x % 2 == 0 { x/2 } else { x })
+///                              .consolidate();
+///         variable.set(&result)
+///                 .leave()
+///     });
+/// })
 /// ```
 pub struct Variable<G: Scope, D: Data, R: Abelian>
 where G::Timestamp: Lattice {

@@ -35,10 +35,8 @@ where
         let combine1 = ::std::rc::Rc::new(combine);
         let combine2 = combine1.clone();
 
-        let ranges = aggregate(self.clone(), move |k,x,y| (*combine1)(k,x,y));
-        let values = broadcast(ranges, locations, zero, move |k,x,y| (*combine2)(k,x,y));
-
-        values
+        let ranges = aggregate(self.clone(), move |k,x,y| (*combine1)(k,x,y));        
+        broadcast(ranges, locations, zero, move |k,x,y| (*combine2)(k,x,y))
     }
 }
 

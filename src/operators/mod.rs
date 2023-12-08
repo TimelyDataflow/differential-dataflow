@@ -204,5 +204,5 @@ where
         }
         crate::consolidation::consolidate(&mut self.replay.buffer);
     }
-    fn is_done(&self) -> bool { self.replay.history.len() == 0 }
+    fn is_done(&self) -> bool { self.replay.history.is_empty() }
 }
