@@ -3,19 +3,21 @@
 use timely::Container;
 use timely::communication::message::RefOrMut;
 use timely::container::columnation::{Columnation, TimelyStack};
+use timely::logging::WorkerIdentifier;
+use timely::logging_core::Logger;
 use timely::progress::{frontier::Antichain, Timestamp};
 
 use crate::difference::Semigroup;
-
+use crate::logging::{BatcherEvent, DifferentialEvent};
 use crate::trace::{Batcher, Builder};
 
 /// Creates batches from unordered tuples.
 pub struct ColumnatedMergeBatcher<K, V, T, D>
 where
-    K: Columnation,
-    V: Columnation,
-    T: Columnation,
-    D: Columnation,
+    K: Columnation + 'static,
+    V: Columnation + 'static,
+    T: Columnation + 'static,
+    D: Columnation + 'static,
 {
     sorter: MergeSorterColumnation<(K, V), T, D>,
     lower: Antichain<T>,
@@ -32,9 +34,9 @@ where
     type Item = ((K,V),T,D);
     type Time = T;
 
-    fn new() -> Self {
+    fn new(logger: Option<Logger<DifferentialEvent, WorkerIdentifier>>, operator_id: usize) -> Self {
         ColumnatedMergeBatcher {
-            sorter: MergeSorterColumnation::new(),
+            sorter: MergeSorterColumnation::new(logger, operator_id),
             frontier: Antichain::new(),
             lower: Antichain::from_elem(<T as Timestamp>::minimum()),
         }
@@ -130,12 +132,12 @@ where
         // Drain buffers (fast reclamation).
         self.sorter.clear_stash();
 
-        let seal = builder.done(self.lower.clone(), upper.clone(), Antichain::from_elem(<T as timely::progress::Timestamp>::minimum()));
+        let seal = builder.done(self.lower.clone(), upper.clone(), Antichain::from_elem(T::minimum()));
         self.lower = upper;
         seal
     }
 
-    // the frontier of elements remaining after the most recent call to `self.seal`.
+    /// The frontier of elements remaining after the most recent call to `self.seal`.
     fn frontier(&mut self) -> timely::progress::frontier::AntichainRef<T> {
         self.frontier.borrow()
     }
@@ -182,10 +184,13 @@ impl<T: Columnation> TimelyStackQueue<T> {
     }
 }
 
-struct MergeSorterColumnation<D: Columnation, T: Columnation, R: Columnation> {
-    queue: Vec<Vec<TimelyStack<(D, T, R)>>>,    // each power-of-two length list of allocations.
+struct MergeSorterColumnation<D: Columnation + 'static, T: Columnation + 'static, R: Columnation + 'static> {
+    /// each power-of-two length list of allocations. Do not push/pop directly but use the corresponding functions.
+    queue: Vec<Vec<TimelyStack<(D, T, R)>>>,
     stash: Vec<TimelyStack<(D, T, R)>>,
     pending: Vec<(D, T, R)>,
+    logger: Option<Logger<DifferentialEvent, WorkerIdentifier>>,
+    operator_id: usize,
 }
 
 impl<D: Ord+Columnation+'static, T: Ord+Columnation+'static, R: Semigroup+Columnation+'static> MergeSorterColumnation<D, T, R> {
@@ -209,11 +214,13 @@ impl<D: Ord+Columnation+'static, T: Ord+Columnation+'static, R: Semigroup+Column
         Self::buffer_size() * 2
     }
 
-    fn new() -> Self {
+    fn new(logger: Option<Logger<DifferentialEvent, WorkerIdentifier>>, operator_id: usize) -> Self {
         Self {
+            logger,
+            operator_id,
             queue: Vec::new(),
             stash: Vec::new(),
-            pending: Vec::new()
+            pending: Vec::new(),
         }
     }
 
@@ -261,12 +268,12 @@ impl<D: Ord+Columnation+'static, T: Ord+Columnation+'static, R: Semigroup+Column
             for tuple in self.pending.drain(..) {
                 stack.copy(&tuple);
             }
-            self.queue.push(vec![stack]);
+            self.queue_push(vec![stack]);
             while self.queue.len() > 1 && (self.queue[self.queue.len()-1].len() >= self.queue[self.queue.len()-2].len() / 2) {
-                let list1 = self.queue.pop().unwrap();
-                let list2 = self.queue.pop().unwrap();
+                let list1 = self.queue_pop().unwrap();
+                let list2 = self.queue_pop().unwrap();
                 let merged = self.merge_by(list1, list2);
-                self.queue.push(merged);
+                self.queue_push(merged);
             }
         }
     }
@@ -275,32 +282,31 @@ impl<D: Ord+Columnation+'static, T: Ord+Columnation+'static, R: Semigroup+Column
     // to break it down to be so.
     fn push_list(&mut self, list: Vec<TimelyStack<(D, T, R)>>) {
         while self.queue.len() > 1 && self.queue[self.queue.len()-1].len() < list.len() {
-            let list1 = self.queue.pop().unwrap();
-            let list2 = self.queue.pop().unwrap();
+            let list1 = self.queue_pop().unwrap();
+            let list2 = self.queue_pop().unwrap();
             let merged = self.merge_by(list1, list2);
-            self.queue.push(merged);
+            self.queue_push(merged);
         }
-        self.queue.push(list);
+        self.queue_push(list);
     }
 
     fn finish_into(&mut self, target: &mut Vec<TimelyStack<(D, T, R)>>) {
         crate::consolidation::consolidate_updates(&mut self.pending);
         self.flush_pending();
         while self.queue.len() > 1 {
-            let list1 = self.queue.pop().unwrap();
-            let list2 = self.queue.pop().unwrap();
+            let list1 = self.queue_pop().unwrap();
+            let list2 = self.queue_pop().unwrap();
             let merged = self.merge_by(list1, list2);
-            self.queue.push(merged);
+            self.queue_push(merged);
         }
 
-        if let Some(mut last) = self.queue.pop() {
+        if let Some(mut last) = self.queue_pop() {
             std::mem::swap(&mut last, target);
         }
     }
 
     // merges two sorted input lists into one sorted output list.
     fn merge_by(&mut self, list1: Vec<TimelyStack<(D, T, R)>>, list2: Vec<TimelyStack<(D, T, R)>>) -> Vec<TimelyStack<(D, T, R)>> {
-
         use std::cmp::Ordering;
 
         // TODO: `list1` and `list2` get dropped; would be better to reuse?
@@ -376,5 +382,54 @@ impl<D: Ord+Columnation+'static, T: Ord+Columnation+'static, R: Semigroup+Column
         output.extend(list2);
 
         output
+    }
+}
+
+impl<D: Columnation + 'static, T: Columnation + 'static, R: Columnation + 'static> MergeSorterColumnation<D, T, R> {
+    /// Pop a batch from `self.queue` and account size changes.
+    #[inline]
+    fn queue_pop(&mut self) -> Option<Vec<TimelyStack<(D, T, R)>>> {
+        let batch = self.queue.pop();
+        self.account(batch.iter().flatten(), -1);
+        batch
+    }
+
+    /// Push a batch to `self.queue` and account size changes.
+    #[inline]
+    fn queue_push(&mut self, batch: Vec<TimelyStack<(D, T, R)>>) {
+        self.account(&batch, 1);
+        self.queue.push(batch);
+    }
+
+    /// Account size changes. Only performs work if a logger exists.
+    ///
+    /// Calculate the size based on the [`TimelyStack`]s passed along, with each attribute
+    /// multiplied by `diff`. Usually, one wants to pass 1 or -1 as the diff.
+    fn account<'a, I: IntoIterator<Item=&'a TimelyStack<(D, T, R)>>>(&self, items: I, diff: isize) {
+        if let Some(logger) = &self.logger {
+            let (mut records, mut siz, mut capacity, mut allocations) = (0isize, 0isize, 0isize, 0isize);
+            for stack in items {
+                records = records.saturating_add_unsigned(stack.len());
+                stack.heap_size(|s, c| {
+                    siz = siz.saturating_add_unsigned(s);
+                    capacity = capacity.saturating_add_unsigned(c);
+                    allocations += isize::from(c > 0);
+                });
+            }
+            logger.log(BatcherEvent {
+                operator: self.operator_id,
+                records_diff: records * diff,
+                size_diff: siz * diff,
+                capacity_diff: capacity * diff,
+                allocations_diff: allocations * diff,
+            })
+        }
+    }
+
+}
+
+impl<D: Columnation + 'static, T: Columnation + 'static, R: Columnation + 'static> Drop for MergeSorterColumnation<D, T, R> {
+    fn drop(&mut self) {
+        while self.queue_pop().is_some() { }
     }
 }

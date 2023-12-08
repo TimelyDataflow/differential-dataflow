@@ -619,7 +619,7 @@ where
                 };
 
                 // Where we will deposit received updates, and from which we extract batches.
-                let mut batcher = Tr::Batcher::new();
+                let mut batcher = Tr::Batcher::new(logger.clone(), info.global_id);
 
                 // Capabilities for the lower envelope of updates in `batcher`.
                 let mut capabilities = Antichain::<Capability<G::Timestamp>>::new();

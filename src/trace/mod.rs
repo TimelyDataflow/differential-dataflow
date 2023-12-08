@@ -13,9 +13,12 @@ pub mod implementations;
 pub mod wrappers;
 
 use timely::communication::message::RefOrMut;
+use timely::logging::WorkerIdentifier;
+use timely::logging_core::Logger;
 use timely::progress::{Antichain, frontier::AntichainRef};
 use timely::progress::Timestamp;
 
+use crate::logging::DifferentialEvent;
 use crate::trace::cursor::MyTrait;
 
 // use ::difference::Semigroup;
@@ -313,7 +316,7 @@ pub trait Batcher {
     /// Times at which batches are formed.
     type Time: Timestamp;
     /// Allocates a new empty batcher.
-    fn new() -> Self;
+    fn new(logger: Option<Logger<DifferentialEvent, WorkerIdentifier>>, operator_id: usize) -> Self;
     /// Adds an unordered batch of elements to the batcher.
     fn push_batch(&mut self, batch: RefOrMut<Vec<Self::Item>>);
     /// Returns all updates not greater or equal to an element of `upper`.
