@@ -42,6 +42,6 @@ where
 
         inner.join_core(&edges, |_k,l,d| Some((d.clone(), l+1)))
              .concat(&nodes)
-             .reduce(|_, s, t| t.push((s[0].0.clone(), 1)))
+             .reduce(|_, s, t| t.push((*s[0].0, 1)))
      })
 }

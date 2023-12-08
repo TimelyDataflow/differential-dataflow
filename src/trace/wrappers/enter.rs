@@ -105,7 +105,7 @@ where
     /// Makes a new trace wrapper
     pub fn make_from(trace: Tr) -> Self {
         TraceEnter {
-            trace: trace,
+            trace,
             stash1: Antichain::new(),
             stash2: Antichain::new(),
         }
@@ -155,7 +155,7 @@ where
         let since: Vec<_> = batch.description().since().elements().iter().map(|x| TInner::to_inner(x.clone())).collect();
 
         BatchEnter {
-            batch: batch,
+            batch,
             description: Description::new(Antichain::from(lower), Antichain::from(upper), Antichain::from(since))
         }
     }
@@ -171,7 +171,7 @@ impl<C, TInner> CursorEnter<C, TInner> {
     fn new(cursor: C) -> Self {
         CursorEnter {
             phantom: ::std::marker::PhantomData,
-            cursor: cursor,
+            cursor,
         }
     }
 }
@@ -226,7 +226,7 @@ impl<C, TInner> BatchCursorEnter<C, TInner> {
     fn new(cursor: C) -> Self {
         BatchCursorEnter {
             phantom: ::std::marker::PhantomData,
-            cursor: cursor,
+            cursor,
         }
     }
 }

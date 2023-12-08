@@ -46,7 +46,7 @@ where
                 self.offsets.push(bytes.len());
             },
             Err(raw) => { 
-                raw.extend(item.into_iter()); 
+                raw.extend(item); 
                 self.offsets.push(raw.len());
             }
         }
@@ -55,7 +55,7 @@ where
         use crate::trace::MyTrait;
         self.copy(<_ as MyTrait>::borrow_as(item));
     }
-    fn copy<'a>(&mut self, item: Self::ReadItem<'a>) {
+    fn copy(&mut self, item: Self::ReadItem<'_>) {
         match item.decode() {
             Ok(decoded) => {
                 for x in decoded { *self.stats.entry(x.clone()).or_insert(0) += 1; }
@@ -132,7 +132,7 @@ where
             stats: Default::default(),
         }
     }
-    fn index<'a>(&'a self, index: usize) -> Self::ReadItem<'a> {
+    fn index(&self, index: usize) -> Self::ReadItem<'_> {
         let lower = self.offsets.index(index);
         let upper = self.offsets.index(index+1);
         match &self.inner {
@@ -182,11 +182,7 @@ mod wrapper {
 
     impl<'a, B: Ord> Copy for Wrapped<'a, B> { }
     impl<'a, B: Ord> Clone for Wrapped<'a, B> {
-        fn clone(&self) -> Self {
-            Self {
-                inner: self.inner.clone(),
-            }
-        }
+        fn clone(&self) -> Self { *self }
     }
 
     use std::cmp::Ordering;
@@ -268,12 +264,7 @@ mod encoded {
 
     impl<'a, B: Ord> Copy for Encoded<'a, B> { }
     impl<'a, B: Ord> Clone for Encoded<'a, B> {
-        fn clone(&self) -> Self {
-            Self {
-                huffman: self.huffman,
-                bytes: self.bytes,
-            }
-        }
+        fn clone(&self) -> Self { *self }
     }
 }
 
@@ -308,7 +299,7 @@ mod huffman {
         }
 
         /// Decodes the provided bytes as a sequence of symbols.
-        pub fn decode<'a, I>(&'a self, bytes: I) -> Decoder<'a, T, I::IntoIter> 
+        pub fn decode<I>(&self, bytes: I) -> Decoder<'_, T, I::IntoIter> 
         where
             I: IntoIterator<Item=u8>
         {
@@ -345,8 +336,8 @@ mod huffman {
                 match node {
                     Node::Leaf(sym) => { levels.push((level, sym)); },
                     Node::Fork(l,r) => { 
-                        todo.push((&tree[*l as usize], level + 1));
-                        todo.push((&tree[*r as usize], level + 1));
+                        todo.push((&tree[*l], level + 1));
+                        todo.push((&tree[*r], level + 1));
                     },
                 }
             }
@@ -357,7 +348,7 @@ mod huffman {
             let mut decode = Decode::map();
             for (level, sym) in levels {
                 if prev_level != level {
-                    code = code << (level - prev_level);
+                    code <<= level - prev_level;
                     prev_level = level;
                 }
                 encode.insert(sym.clone(), (level, code));
@@ -404,20 +395,15 @@ mod huffman {
     }
 
     /// Decoder 
-    #[derive(Eq, PartialEq, Ord, PartialOrd, Debug)]
+    #[derive(Eq, PartialEq, Ord, PartialOrd, Debug, Default)]
     pub enum Decode<T> {
         /// An as-yet unfilled slot.
+        #[default]
         Void,
         /// The symbol, and the number of bits consumed.
         Symbol(T, usize),
         /// An additional map to push subsequent bytes at.
         Further(Box<[Decode<T>; 256]>),
-    }
-
-    impl<T> Default for Decode<T> {
-        fn default() -> Self {
-            Decode::Void
-        }
     }
 
     impl<T> Decode<T> {

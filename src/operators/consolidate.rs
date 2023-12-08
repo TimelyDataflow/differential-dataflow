@@ -33,17 +33,15 @@ where
     /// ```
     /// use differential_dataflow::input::Input;
     ///
-    /// fn main() {
-    ///     ::timely::example(|scope| {
+    /// ::timely::example(|scope| {
     ///
-    ///         let x = scope.new_collection_from(1 .. 10u32).1;
+    ///     let x = scope.new_collection_from(1 .. 10u32).1;
     ///
-    ///         x.negate()
-    ///          .concat(&x)
-    ///          .consolidate() // <-- ensures cancellation occurs
-    ///          .assert_empty();
-    ///     });
-    /// }
+    ///     x.negate()
+    ///      .concat(&x)
+    ///      .consolidate() // <-- ensures cancellation occurs
+    ///      .assert_empty();
+    /// });
     /// ```
     pub fn consolidate(&self) -> Self {
         use crate::trace::implementations::KeySpine;
@@ -77,17 +75,15 @@ where
     /// ```
     /// use differential_dataflow::input::Input;
     ///
-    /// fn main() {
-    ///     ::timely::example(|scope| {
+    /// ::timely::example(|scope| {
     ///
-    ///         let x = scope.new_collection_from(1 .. 10u32).1;
+    ///     let x = scope.new_collection_from(1 .. 10u32).1;
     ///
-    ///         // nothing to assert, as no particular guarantees.
-    ///         x.negate()
-    ///          .concat(&x)
-    ///          .consolidate_stream();
-    ///     });
-    /// }
+    ///     // nothing to assert, as no particular guarantees.
+    ///     x.negate()
+    ///      .concat(&x)
+    ///      .consolidate_stream();
+    /// });
     /// ```
     pub fn consolidate_stream(&self) -> Self {
 

@@ -208,29 +208,27 @@ where
     /// use differential_dataflow::operators::reduce::Reduce;
     /// use differential_dataflow::trace::Trace;
     ///
-    /// fn main() {
-    ///     ::timely::execute(Config::thread(), |worker| {
+    /// ::timely::execute(Config::thread(), |worker| {
     ///
-    ///         // create a first dataflow
-    ///         let mut trace = worker.dataflow::<u32,_,_>(|scope| {
-    ///             // create input handle and collection.
-    ///             scope.new_collection_from(0 .. 10).1
-    ///                  .arrange_by_self()
-    ///                  .trace
-    ///         });
+    ///     // create a first dataflow
+    ///     let mut trace = worker.dataflow::<u32,_,_>(|scope| {
+    ///         // create input handle and collection.
+    ///         scope.new_collection_from(0 .. 10).1
+    ///              .arrange_by_self()
+    ///              .trace
+    ///     });
     ///
-    ///         // do some work.
-    ///         worker.step();
-    ///         worker.step();
+    ///     // do some work.
+    ///     worker.step();
+    ///     worker.step();
     ///
-    ///         // create a second dataflow
-    ///         worker.dataflow(move |scope| {
-    ///             trace.import(scope)
-    ///                  .reduce(move |_key, src, dst| dst.push((*src[0].0, 1)));
-    ///         });
+    ///     // create a second dataflow
+    ///     worker.dataflow(move |scope| {
+    ///         trace.import(scope)
+    ///              .reduce(move |_key, src, dst| dst.push((*src[0].0, 1)));
+    ///     });
     ///
-    ///     }).unwrap();
-    /// }
+    /// }).unwrap();
     /// ```
     pub fn import<G>(&mut self, scope: &G) -> Arranged<G, TraceAgent<Tr>>
     where
@@ -263,43 +261,41 @@ where
     /// use differential_dataflow::operators::reduce::Reduce;
     /// use differential_dataflow::trace::Trace;
     ///
-    /// fn main() {
-    ///     ::timely::execute(Config::thread(), |worker| {
+    /// ::timely::execute(Config::thread(), |worker| {
     ///
-    ///         let mut input = InputSession::<_,(),isize>::new();
-    ///         let mut probe = ProbeHandle::new();
+    ///     let mut input = InputSession::<_,(),isize>::new();
+    ///     let mut probe = ProbeHandle::new();
     ///
-    ///         // create a first dataflow
-    ///         let mut trace = worker.dataflow::<u32,_,_>(|scope| {
-    ///             // create input handle and collection.
-    ///             input.to_collection(scope)
-    ///                  .arrange_by_self()
-    ///                  .trace
-    ///         });
+    ///     // create a first dataflow
+    ///     let mut trace = worker.dataflow::<u32,_,_>(|scope| {
+    ///         // create input handle and collection.
+    ///         input.to_collection(scope)
+    ///              .arrange_by_self()
+    ///              .trace
+    ///     });
     ///
-    ///         // do some work.
-    ///         worker.step();
-    ///         worker.step();
+    ///     // do some work.
+    ///     worker.step();
+    ///     worker.step();
     ///
-    ///         // create a second dataflow
-    ///         let mut shutdown = worker.dataflow(|scope| {
-    ///             let (arrange, button) = trace.import_core(scope, "Import");
-    ///             arrange.stream.probe_with(&mut probe);
-    ///             button
-    ///         });
+    ///     // create a second dataflow
+    ///     let mut shutdown = worker.dataflow(|scope| {
+    ///         let (arrange, button) = trace.import_core(scope, "Import");
+    ///         arrange.stream.probe_with(&mut probe);
+    ///         button
+    ///     });
     ///
-    ///         worker.step();
-    ///         worker.step();
-    ///         assert!(!probe.done());
+    ///     worker.step();
+    ///     worker.step();
+    ///     assert!(!probe.done());
     ///
-    ///         shutdown.press();
+    ///     shutdown.press();
     ///
-    ///         worker.step();
-    ///         worker.step();
-    ///         assert!(probe.done());
+    ///     worker.step();
+    ///     worker.step();
+    ///     assert!(probe.done());
     ///
-    ///     }).unwrap();
-    /// }
+    /// }).unwrap();
     /// ```
     pub fn import_core<G>(&mut self, scope: &G, name: &str) -> (Arranged<G, TraceAgent<Tr>>, ShutdownButton<CapabilitySet<Tr::Time>>)
     where
@@ -373,53 +369,51 @@ where
     /// use differential_dataflow::trace::TraceReader;
     /// use differential_dataflow::input::Input;
     ///
-    /// fn main() {
-    ///     ::timely::execute(Config::thread(), |worker| {
+    /// ::timely::execute(Config::thread(), |worker| {
     ///
-    ///         let mut probe = ProbeHandle::new();
+    ///     let mut probe = ProbeHandle::new();
     ///
-    ///         // create a first dataflow
-    ///         let (mut handle, mut trace) = worker.dataflow::<u32,_,_>(|scope| {
-    ///             // create input handle and collection.
-    ///             let (handle, stream) = scope.new_collection();
-    ///             let trace = stream.arrange_by_self().trace;
-    ///             (handle, trace)
-    ///         });
+    ///     // create a first dataflow
+    ///     let (mut handle, mut trace) = worker.dataflow::<u32,_,_>(|scope| {
+    ///         // create input handle and collection.
+    ///         let (handle, stream) = scope.new_collection();
+    ///         let trace = stream.arrange_by_self().trace;
+    ///         (handle, trace)
+    ///     });
     ///
-    ///         handle.insert(0); handle.advance_to(1); handle.flush(); worker.step();
-    ///         handle.remove(0); handle.advance_to(2); handle.flush(); worker.step();
-    ///         handle.insert(1); handle.advance_to(3); handle.flush(); worker.step();
-    ///         handle.remove(1); handle.advance_to(4); handle.flush(); worker.step();
-    ///         handle.insert(0); handle.advance_to(5); handle.flush(); worker.step();
+    ///     handle.insert(0); handle.advance_to(1); handle.flush(); worker.step();
+    ///     handle.remove(0); handle.advance_to(2); handle.flush(); worker.step();
+    ///     handle.insert(1); handle.advance_to(3); handle.flush(); worker.step();
+    ///     handle.remove(1); handle.advance_to(4); handle.flush(); worker.step();
+    ///     handle.insert(0); handle.advance_to(5); handle.flush(); worker.step();
     ///
-    ///         trace.set_logical_compaction(AntichainRef::new(&[5]));
+    ///     trace.set_logical_compaction(AntichainRef::new(&[5]));
     ///
-    ///         // create a second dataflow
-    ///         let mut shutdown = worker.dataflow(|scope| {
-    ///             let (arrange, button) = trace.import_frontier(scope, "Import");
-    ///             arrange
-    ///                 .as_collection(|k,v| (*k,*v))
-    ///                 .inner
-    ///                 .inspect(|(d,t,r)| {
-    ///                     assert!(t >= &5);
-    ///                 })
-    ///                 .probe_with(&mut probe);
+    ///     // create a second dataflow
+    ///     let mut shutdown = worker.dataflow(|scope| {
+    ///         let (arrange, button) = trace.import_frontier(scope, "Import");
+    ///         arrange
+    ///             .as_collection(|k,v| (*k,*v))
+    ///             .inner
+    ///             .inspect(|(d,t,r)| {
+    ///                 assert!(t >= &5);
+    ///             })
+    ///             .probe_with(&mut probe);
     ///
-    ///             button
-    ///         });
+    ///         button
+    ///     });
     ///
-    ///         worker.step();
-    ///         worker.step();
-    ///         assert!(!probe.done());
+    ///     worker.step();
+    ///     worker.step();
+    ///     assert!(!probe.done());
     ///
-    ///         shutdown.press();
+    ///     shutdown.press();
     ///
-    ///         worker.step();
-    ///         worker.step();
-    ///         assert!(probe.done());
+    ///     worker.step();
+    ///     worker.step();
+    ///     assert!(probe.done());
     ///
-    ///     }).unwrap();
-    /// }
+    /// }).unwrap();
     /// ```
     pub fn import_frontier<G>(&mut self, scope: &G, name: &str) -> (Arranged<G, TraceFrontier<TraceAgent<Tr>>>, ShutdownButton<CapabilitySet<Tr::Time>>)
     where

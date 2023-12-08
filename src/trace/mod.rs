@@ -396,13 +396,13 @@ pub mod rc_blanket_impls {
         type Cursor = RcBatchCursor<B::Cursor>;
         /// Acquires a cursor to the batch's contents.
         fn cursor(&self) -> Self::Cursor {
-            RcBatchCursor::new((&**self).cursor())
+            RcBatchCursor::new((**self).cursor())
         }
 
         /// The number of updates in the batch.
-        fn len(&self) -> usize { (&**self).len() }
+        fn len(&self) -> usize { (**self).len() }
         /// Describes the times of the updates in the batch.
-        fn description(&self) -> &Description<Self::Time> { (&**self).description() }
+        fn description(&self) -> &Description<Self::Time> { (**self).description() }
     }
 
     /// Wrapper to provide cursor to nested scope.
@@ -502,13 +502,13 @@ pub mod abomonated_blanket_impls {
         type Cursor = AbomonatedBatchCursor<B::Cursor>;
         /// Acquires a cursor to the batch's contents.
         fn cursor(&self) -> Self::Cursor {
-            AbomonatedBatchCursor::new((&**self).cursor())
+            AbomonatedBatchCursor::new((**self).cursor())
         }
 
         /// The number of updates in the batch.
-        fn len(&self) -> usize { (&**self).len() }
+        fn len(&self) -> usize { (**self).len() }
         /// Describes the times of the updates in the batch.
-        fn description(&self) -> &Description<Self::Time> { (&**self).description() }
+        fn description(&self) -> &Description<Self::Time> { (**self).description() }
     }
 
     /// Wrapper to provide cursor to nested scope.

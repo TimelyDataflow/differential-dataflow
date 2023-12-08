@@ -34,72 +34,68 @@
 //! # Example
 //!
 //! ```rust
-//! fn main() {
+//! // define a new timely dataflow computation.
+//! timely::execute_from_args(std::env::args().skip(1), move |worker| {
 //!
-//!     // define a new timely dataflow computation.
-//!     timely::execute_from_args(std::env::args().skip(1), move |worker| {
+//!     type Key = String;
+//!     type Val = String;
 //!
-//!         type Key = String;
-//!         type Val = String;
+//!     let mut input = timely::dataflow::InputHandle::new();
+//!     let mut probe = timely::dataflow::ProbeHandle::new();
 //!
-//!         let mut input = timely::dataflow::InputHandle::new();
-//!         let mut probe = timely::dataflow::ProbeHandle::new();
+//!     // Create a dataflow demonstrating upserts.
+//!     //
+//!     // Upserts are a sequence of records (key, option<val>) where the intended
+//!     // value associated with a key is the most recent value, and if that is a
+//!     // `none` then the key is removed (until a new value shows up).
+//!     //
+//!     // The challenge with upserts is that the value to *retract* isn't supplied
+//!     // as part of the input stream. We have to determine what it should be!
 //!
-//!         // Create a dataflow demonstrating upserts.
-//!         //
-//!         // Upserts are a sequence of records (key, option<val>) where the intended
-//!         // value associated with a key is the most recent value, and if that is a
-//!         // `none` then the key is removed (until a new value shows up).
-//!         //
-//!         // The challenge with upserts is that the value to *retract* isn't supplied
-//!         // as part of the input stream. We have to determine what it should be!
+//!     worker.dataflow(|scope| {
 //!
-//!         worker.dataflow(|scope| {
+//!         use timely::dataflow::operators::Input;
+//!         use differential_dataflow::trace::implementations::ValSpine;
+//!         use differential_dataflow::operators::arrange::upsert;
 //!
-//!             use timely::dataflow::operators::Input;
-//!             use differential_dataflow::trace::implementations::ValSpine;
-//!             use differential_dataflow::operators::arrange::upsert;
+//!         let stream = scope.input_from(&mut input);
+//!         let arranged = upsert::arrange_from_upsert::<_, ValSpine<Key, Val, _, _>>(&stream, &"test");
 //!
-//!             let stream = scope.input_from(&mut input);
-//!             let arranged = upsert::arrange_from_upsert::<_, ValSpine<Key, Val, _, _>>(&stream, &"test");
+//!         arranged
+//!             .as_collection(|k,v| (k.clone(), v.clone()))
+//!             .inspect(|x| println!("Observed: {:?}", x))
+//!             .probe_with(&mut probe);
+//!     });
 //!
-//!             arranged
-//!                 .as_collection(|k,v| (k.clone(), v.clone()))
-//!                 .inspect(|x| println!("Observed: {:?}", x))
-//!                 .probe_with(&mut probe);
-//!         });
+//!     // Introduce the key, with a specific value.
+//!     input.send(("frank".to_string(), Some("mcsherry".to_string()), 3));
+//!     input.advance_to(4);
+//!     while probe.less_than(input.time()) { worker.step(); }
 //!
-//!         // Introduce the key, with a specific value.
-//!         input.send(("frank".to_string(), Some("mcsherry".to_string()), 3));
-//!         input.advance_to(4);
-//!         while probe.less_than(input.time()) { worker.step(); }
+//!     // Change the value to a different value.
+//!     input.send(("frank".to_string(), Some("zappa".to_string()), 4));
+//!     input.advance_to(5);
+//!     while probe.less_than(input.time()) { worker.step(); }
 //!
-//!         // Change the value to a different value.
-//!         input.send(("frank".to_string(), Some("zappa".to_string()), 4));
-//!         input.advance_to(5);
-//!         while probe.less_than(input.time()) { worker.step(); }
+//!     // Remove the key and its value.
+//!     input.send(("frank".to_string(), None, 5));
+//!     input.advance_to(9);
+//!     while probe.less_than(input.time()) { worker.step(); }
 //!
-//!         // Remove the key and its value.
-//!         input.send(("frank".to_string(), None, 5));
-//!         input.advance_to(9);
-//!         while probe.less_than(input.time()) { worker.step(); }
+//!     // Introduce a new totally different value
+//!     input.send(("frank".to_string(), Some("oz".to_string()), 9));
+//!     input.advance_to(10);
+//!     while probe.less_than(input.time()) { worker.step(); }
 //!
-//!         // Introduce a new totally different value
-//!         input.send(("frank".to_string(), Some("oz".to_string()), 9));
-//!         input.advance_to(10);
-//!         while probe.less_than(input.time()) { worker.step(); }
+//!     // Repeat the value, which should produce no output.
+//!     input.send(("frank".to_string(), Some("oz".to_string()), 11));
+//!     input.advance_to(12);
+//!     while probe.less_than(input.time()) { worker.step(); }
+//!     // Remove the key and value.
+//!     input.send(("frank".to_string(), None, 15));
+//!     input.close();
 //!
-//!         // Repeat the value, which should produce no output.
-//!         input.send(("frank".to_string(), Some("oz".to_string()), 11));
-//!         input.advance_to(12);
-//!         while probe.less_than(input.time()) { worker.step(); }
-
-//!         // Remove the key and value.
-//!         input.send(("frank".to_string(), None, 15));
-//!         input.close();
-//!
-//!     }).unwrap();
-//! }
+//! }).unwrap();
 //! ```
 
 use std::collections::{BinaryHeap, HashMap};
@@ -334,6 +330,6 @@ where
         })
     };
 
-    Arranged { stream: stream, trace: reader.unwrap() }
+    Arranged { stream, trace: reader.unwrap() }
 
 }

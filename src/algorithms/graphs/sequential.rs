@@ -20,14 +20,13 @@ where
                      .distinct();
 
     // repeatedly apply color-picking logic.
-    sequence(&start, &edges, |_node, vals| {
+    sequence(&start, edges, |_node, vals| {
 
         // look for the first absent positive integer.
         // start at 1 in case we ever use NonZero<u32>.
 
         (1u32 ..)
-            .filter(|&i| vals.get(i as usize - 1).map(|x| *x.0) != Some(i))
-            .next()
+            .find(|&i| vals.get(i as usize - 1).map(|x| *x.0) != Some(i))
             .unwrap()
     })
 }

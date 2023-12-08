@@ -17,18 +17,16 @@ pub trait Identifiers<G: Scope, D: ExchangeData, R: ExchangeData+Abelian> {
     /// use differential_dataflow::algorithms::identifiers::Identifiers;
     /// use differential_dataflow::operators::Threshold;
     ///
-    /// fn main() {
-    ///     ::timely::example(|scope| {
+    /// ::timely::example(|scope| {
     ///
-    ///         let identifiers =
-    ///         scope.new_collection_from(1 .. 10).1
-    ///              .identifiers()
-    ///              // assert no conflicts
-    ///              .map(|(data, id)| id)
-    ///              .threshold(|_id,cnt| if cnt > &1 { *cnt } else { 0 })
-    ///              .assert_empty();
-    ///     });
-    /// }
+    ///     let identifiers =
+    ///     scope.new_collection_from(1 .. 10).1
+    ///          .identifiers()
+    ///          // assert no conflicts
+    ///          .map(|(data, id)| id)
+    ///          .threshold(|_id,cnt| if cnt > &1 { *cnt } else { 0 })
+    ///          .assert_empty();
+    /// });
     /// ```
     fn identifiers(&self) -> Collection<G, (D, u64), R>;
 }
@@ -63,7 +61,7 @@ where
             .as_collection()
             .iterate(|diff|
                 init.enter(&diff.scope())
-                    .concat(&diff)
+                    .concat(diff)
                     .map(|pair| (pair.hashed(), pair))
                     .reduce(|_hash, input, output| {
                         // keep round-positive records as changes.

@@ -56,7 +56,7 @@ where
         TraceBox {
             logical_compaction,
             physical_compaction,
-            trace: trace,
+            trace,
         }
     }
     /// Replaces elements of `lower` with those of `upper`.
