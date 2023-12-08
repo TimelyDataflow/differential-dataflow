@@ -76,13 +76,11 @@ pub fn half_join<G, V, R, Tr, FF, CF, DOut, S>(
     mut output_func: S,
 ) -> Collection<G, (DOut, G::Timestamp), <R as Mul<Tr::Diff>>::Output>
 where
-    G: Scope,
-    G::Timestamp: Lattice,
-    Tr::KeyOwned: Ord + Hashable + ExchangeData,
+    G: Scope<Timestamp = Tr::Time>,
+    Tr::KeyOwned: Hashable + ExchangeData,
     V: ExchangeData,
     R: ExchangeData + Monoid,
-    Tr: TraceReader<Time=G::Timestamp>+Clone+'static,
-    Tr::Diff: Semigroup,
+    Tr: TraceReader+Clone+'static,
     R: Mul<Tr::Diff>,
     <R as Mul<Tr::Diff>>::Output: Semigroup,
     FF: Fn(&G::Timestamp) -> G::Timestamp + 'static,
@@ -131,13 +129,11 @@ pub fn half_join_internal_unsafe<G, V, R, Tr, FF, CF, DOut, ROut, Y, I, S>(
     mut output_func: S,
 ) -> Collection<G, DOut, ROut>
 where
-    G: Scope,
-    G::Timestamp: Lattice,
-    Tr::KeyOwned: Ord + Hashable + ExchangeData,
+    G: Scope<Timestamp = Tr::Time>,
+    Tr::KeyOwned: Hashable + ExchangeData,
     V: ExchangeData,
     R: ExchangeData + Monoid,
-    Tr: TraceReader<Time=G::Timestamp>+Clone+'static,
-    Tr::Diff: Semigroup,
+    Tr: TraceReader+Clone+'static,
     FF: Fn(&G::Timestamp) -> G::Timestamp + 'static,
     CF: Fn(&G::Timestamp, &G::Timestamp) -> bool + 'static,
     DOut: Clone+'static,

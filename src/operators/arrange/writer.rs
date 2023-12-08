@@ -8,7 +8,6 @@ use std::cell::RefCell;
 
 use timely::progress::{Antichain, Timestamp};
 
-use crate::lattice::Lattice;
 use crate::trace::{Trace, Batch, BatchReader};
 use crate::trace::wrappers::rc::TraceBox;
 
@@ -23,7 +22,6 @@ use super::TraceReplayInstruction;
 pub struct TraceWriter<Tr>
 where
     Tr: Trace,
-    Tr::Time: Lattice+Timestamp+Ord+Clone+std::fmt::Debug+'static,
     Tr::Batch: Batch,
 {
     /// Current upper limit.
@@ -37,7 +35,6 @@ where
 impl<Tr> TraceWriter<Tr>
 where
     Tr: Trace,
-    Tr::Time: Lattice+Timestamp+Ord+Clone+std::fmt::Debug+'static,
     Tr::Batch: Batch,
 {
     /// Creates a new `TraceWriter`.
@@ -107,7 +104,6 @@ where
 impl<Tr> Drop for TraceWriter<Tr>
 where
     Tr: Trace,
-    Tr::Time: Lattice+Timestamp+Ord+Clone+std::fmt::Debug+'static,
     Tr::Batch: Batch,
 {
     fn drop(&mut self) {

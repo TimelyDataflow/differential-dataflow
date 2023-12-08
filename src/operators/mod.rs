@@ -18,17 +18,16 @@ pub mod join;
 pub mod count;
 pub mod threshold;
 
-use crate::difference::Semigroup;
 use crate::lattice::Lattice;
 use crate::trace::Cursor;
 
 /// An accumulation of (value, time, diff) updates.
-struct EditList<'a, C: Cursor> where C::Time: Sized, C::Diff: Sized {
+struct EditList<'a, C: Cursor> {
     values: Vec<(C::Val<'a>, usize)>,
     edits: Vec<(C::Time, C::Diff)>,
 }
 
-impl<'a, C: Cursor> EditList<'a, C> where C::Time: Ord+Clone, C::Diff: Semigroup {
+impl<'a, C: Cursor> EditList<'a, C> {
     /// Creates an empty list of edits.
     #[inline]
     fn new() -> Self {
@@ -82,18 +81,13 @@ impl<'a, C: Cursor> EditList<'a, C> where C::Time: Ord+Clone, C::Diff: Semigroup
     }
 }
 
-struct ValueHistory<'storage, C: Cursor> where C::Time: Sized, C::Diff: Sized {
-
+struct ValueHistory<'storage, C: Cursor> {
     edits: EditList<'storage, C>,
     history: Vec<(C::Time, C::Time, usize, usize)>,     // (time, meet, value_index, edit_offset)
     buffer: Vec<((C::Val<'storage>, C::Time), C::Diff)>,   // where we accumulate / collapse updates.
 }
 
-impl<'storage, C: Cursor> ValueHistory<'storage, C>
-where
-    C::Time: Lattice+Ord+Clone,
-    C::Diff: Semigroup,
-{
+impl<'storage, C: Cursor> ValueHistory<'storage, C> {
     fn new() -> Self {
         ValueHistory {
             edits: EditList::new(),
@@ -159,23 +153,11 @@ where
     }
 }
 
-struct HistoryReplay<'storage, 'history, C>
-where
-    'storage: 'history,
-    C: Cursor,
-    C::Time: Lattice+Ord+Clone+'history,
-    C::Diff: Semigroup+'history,
-{
+struct HistoryReplay<'storage, 'history, C: Cursor> {
     replay: &'history mut ValueHistory<'storage, C>
 }
 
-impl<'storage, 'history, C> HistoryReplay<'storage, 'history, C>
-where
-    'storage: 'history,
-    C: Cursor,
-    C::Time: Lattice+Ord+Clone+'history,
-    C::Diff: Semigroup+'history,
-{
+impl<'storage, 'history, C: Cursor> HistoryReplay<'storage, 'history, C> {
     fn time(&self) -> Option<&C::Time> { self.replay.history.last().map(|x| &x.0) }
     fn meet(&self) -> Option<&C::Time> { self.replay.history.last().map(|x| &x.1) }
     fn edit(&self) -> Option<(C::Val<'storage>, &C::Time, &C::Diff)> {

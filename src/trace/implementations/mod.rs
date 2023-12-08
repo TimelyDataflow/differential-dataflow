@@ -108,9 +108,6 @@ impl<U: Update> Layout for Vector<U>
 where
     U::Key: 'static,
     U::Val: 'static,
-// where
-//     U::Key: ToOwned<Owned = U::Key> + Sized + Clone + 'static,
-//     U::Val: ToOwned<Owned = U::Val> + Sized + Clone + 'static,
 {
     type Target = U;
     type KeyContainer = Vec<U::Key>;

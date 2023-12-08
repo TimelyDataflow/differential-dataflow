@@ -50,12 +50,13 @@ where G::Timestamp: TotalOrder+Lattice+Ord {
     }
 }
 
-impl<G: Scope, T1> CountTotal<G, T1::KeyOwned, T1::Diff> for Arranged<G, T1>
+impl<G, T1> CountTotal<G, T1::KeyOwned, T1::Diff> for Arranged<G, T1>
 where
-    G::Timestamp: TotalOrder+Lattice+Ord,
-    T1: for<'a> TraceReader<Val<'a>=&'a (), Time=G::Timestamp>+Clone+'static,
+    G: Scope<Timestamp=T1::Time>,
+    T1: for<'a> TraceReader<Val<'a>=&'a ()>+Clone+'static,
     T1::KeyOwned: ExchangeData,
-    T1::Diff: ExchangeData+Semigroup,
+    T1::Time: TotalOrder,
+    T1::Diff: ExchangeData,
 {
     fn count_total_core<R2: Semigroup + From<i8>>(&self) -> Collection<G, (T1::KeyOwned, T1::Diff), R2> {
 

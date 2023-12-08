@@ -108,7 +108,6 @@ use timely::progress::Timestamp;
 use timely::progress::Antichain;
 use timely::dataflow::operators::Capability;
 
-use crate::lattice::Lattice;
 use crate::operators::arrange::arrangement::Arranged;
 use crate::trace::Builder;
 use crate::trace::{self, Trace, TraceReader, Batch, Cursor};
@@ -131,11 +130,11 @@ pub fn arrange_from_upsert<G, Tr>(
     name: &str,
 ) -> Arranged<G, TraceAgent<Tr>>
 where
-    G: Scope,
-    G::Timestamp: Lattice+Ord+TotalOrder+ExchangeData,
+    G: Scope<Timestamp=Tr::Time>,
+    Tr: Trace+TraceReader<Diff=isize>+'static,
     Tr::KeyOwned: ExchangeData+Hashable+std::hash::Hash,
     Tr::ValOwned: ExchangeData,
-    Tr: Trace+TraceReader<Time=G::Timestamp,Diff=isize>+'static,
+    Tr::Time: TotalOrder+ExchangeData,
     Tr::Batch: Batch,
     Tr::Builder: Builder<Item = ((Tr::KeyOwned, Tr::ValOwned), Tr::Time, Tr::Diff)>,
 {

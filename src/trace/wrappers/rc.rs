@@ -16,7 +16,6 @@ use std::cell::RefCell;
 
 use timely::progress::{Antichain, frontier::{AntichainRef, MutableAntichain}};
 
-use crate::lattice::Lattice;
 use crate::trace::TraceReader;
 
 /// A wrapper around a trace which tracks the frontiers of all referees.
@@ -24,11 +23,7 @@ use crate::trace::TraceReader;
 /// This is an internal type, unlikely to be useful to higher-level programs, but exposed just in case.
 /// This type is equivalent to a `RefCell`, in that it wraps the mutable state that multiple referrers
 /// may influence.
-pub struct TraceBox<Tr>
-where
-    Tr::Time: Lattice+Ord+Clone+'static,
-    Tr: TraceReader
-{
+pub struct TraceBox<Tr: TraceReader> {
     /// accumulated holds on times for advancement.
     pub logical_compaction: MutableAntichain<Tr::Time>,
     /// accumulated holds on times for distinction.
@@ -37,11 +32,7 @@ where
     pub trace: Tr,
 }
 
-impl<Tr> TraceBox<Tr>
-where
-    Tr::Time: Lattice+Ord+Clone+'static,
-    Tr: TraceReader,
-{
+impl<Tr: TraceReader> TraceBox<Tr> {
     /// Moves an existing trace into a shareable trace wrapper.
     ///
     /// The trace may already exist and have non-initial advance and distinguish frontiers. The boxing
@@ -80,22 +71,14 @@ where
 /// As long as the handle exists, the wrapped trace should continue to exist and will not advance its
 /// timestamps past the frontier maintained by the handle. The intent is that such a handle appears as
 /// if it is a privately maintained trace, despite being backed by shared resources.
-pub struct TraceRc<Tr>
-where
-    Tr::Time: Lattice+Ord+Clone+'static,
-    Tr: TraceReader,
-{
+pub struct TraceRc<Tr: TraceReader> {
     logical_compaction: Antichain<Tr::Time>,
     physical_compaction: Antichain<Tr::Time>,
     /// Wrapped trace. Please be gentle when using.
     pub wrapper: Rc<RefCell<TraceBox<Tr>>>,
 }
 
-impl<Tr> TraceReader for TraceRc<Tr>
-where
-    Tr::Time: Lattice+Ord+Clone+'static,
-    Tr: TraceReader,
-{
+impl<Tr: TraceReader> TraceReader for TraceRc<Tr> {
     type Key<'a> = Tr::Key<'a>;
     type KeyOwned = Tr::KeyOwned;
     type Val<'a> = Tr::Val<'a>;
@@ -133,11 +116,7 @@ where
     }
 }
 
-impl<Tr> TraceRc<Tr>
-where
-    Tr::Time: Lattice+Ord+Clone+'static,
-    Tr: TraceReader,
-{
+impl<Tr: TraceReader> TraceRc<Tr> {
     /// Allocates a new handle from an existing wrapped wrapper.
     pub fn make_from(trace: Tr) -> (Self, Rc<RefCell<TraceBox<Tr>>>) {
 
@@ -153,11 +132,7 @@ where
     }
 }
 
-impl<Tr> Clone for TraceRc<Tr>
-where
-    Tr::Time: Lattice+Ord+Clone,
-    Tr: TraceReader,
-{
+impl<Tr: TraceReader> Clone for TraceRc<Tr> {
     fn clone(&self) -> Self {
         // increase ref counts for this frontier
         self.wrapper.borrow_mut().adjust_logical_compaction(Antichain::new().borrow(), self.logical_compaction.borrow());
@@ -170,11 +145,7 @@ where
     }
 }
 
-impl<Tr> Drop for TraceRc<Tr>
-where
-    Tr::Time: Lattice+Ord+Clone+'static,
-    Tr: TraceReader,
-{
+impl<Tr: TraceReader> Drop for TraceRc<Tr> {
     fn drop(&mut self) {
         self.wrapper.borrow_mut().adjust_logical_compaction(self.logical_compaction.borrow(), Antichain::new().borrow());
         self.wrapper.borrow_mut().adjust_physical_compaction(self.physical_compaction.borrow(), Antichain::new().borrow());

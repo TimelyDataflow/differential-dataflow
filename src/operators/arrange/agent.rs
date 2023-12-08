@@ -10,7 +10,6 @@ use timely::progress::Timestamp;
 use timely::progress::{Antichain, frontier::AntichainRef};
 use timely::dataflow::operators::CapabilitySet;
 
-use crate::lattice::Lattice;
 use crate::trace::{Trace, TraceReader, Batch, BatchReader};
 use crate::trace::wrappers::rc::TraceBox;
 
@@ -29,7 +28,6 @@ use crate::trace::wrappers::frontier::{TraceFrontier, BatchFrontier};
 pub struct TraceAgent<Tr>
 where
     Tr: TraceReader,
-    Tr::Time: Lattice+Ord+Clone+'static,
 {
     trace: Rc<RefCell<TraceBox<Tr>>>,
     queues: Weak<RefCell<Vec<TraceAgentQueueWriter<Tr>>>>,
@@ -44,7 +42,6 @@ where
 impl<Tr> TraceReader for TraceAgent<Tr>
 where
     Tr: TraceReader,
-    Tr::Time: Lattice+Ord+Clone+'static,
 {
     type Key<'a> = Tr::Key<'a>;
     type KeyOwned = Tr::KeyOwned;
@@ -85,11 +82,7 @@ where
     fn map_batches<F: FnMut(&Self::Batch)>(&self, f: F) { self.trace.borrow().trace.map_batches(f) }
 }
 
-impl<Tr> TraceAgent<Tr>
-where
-    Tr: TraceReader,
-    Tr::Time: Timestamp+Lattice,
-{
+impl<Tr: TraceReader> TraceAgent<Tr> {
     /// Creates a new agent from a trace reader.
     pub fn new(trace: Tr, operator: OperatorInfo, logging: Option<crate::logging::Logger>) -> (Self, TraceWriter<Tr>)
     where
@@ -177,7 +170,6 @@ where
 impl<Tr> TraceAgent<Tr>
 where
     Tr: TraceReader+'static,
-    Tr::Time: Lattice+Ord+Clone+'static,
 {
     /// Copies an existing collection into the supplied scope.
     ///
@@ -233,7 +225,6 @@ where
     pub fn import<G>(&mut self, scope: &G) -> Arranged<G, TraceAgent<Tr>>
     where
         G: Scope<Timestamp=Tr::Time>,
-        Tr::Time: Timestamp,
     {
         self.import_named(scope, "ArrangedSource")
     }
@@ -242,7 +233,6 @@ where
     pub fn import_named<G>(&mut self, scope: &G, name: &str) -> Arranged<G, TraceAgent<Tr>>
     where
         G: Scope<Timestamp=Tr::Time>,
-        Tr::Time: Timestamp,
     {
         // Drop ShutdownButton and return only the arrangement.
         self.import_core(scope, name).0
@@ -300,7 +290,6 @@ where
     pub fn import_core<G>(&mut self, scope: &G, name: &str) -> (Arranged<G, TraceAgent<Tr>>, ShutdownButton<CapabilitySet<Tr::Time>>)
     where
         G: Scope<Timestamp=Tr::Time>,
-        Tr::Time: Timestamp,
     {
         let trace = self.clone();
 
@@ -418,7 +407,6 @@ where
     pub fn import_frontier<G>(&mut self, scope: &G, name: &str) -> (Arranged<G, TraceFrontier<TraceAgent<Tr>>>, ShutdownButton<CapabilitySet<Tr::Time>>)
     where
         G: Scope<Timestamp=Tr::Time>,
-        Tr::Time: Timestamp+ Lattice+Ord+Clone+'static,
         Tr: TraceReader,
     {
         // This frontier describes our only guarantee on the compaction frontier.
@@ -437,7 +425,6 @@ where
     pub fn import_frontier_core<G>(&mut self, scope: &G, name: &str, since: Antichain<Tr::Time>, until: Antichain<Tr::Time>) -> (Arranged<G, TraceFrontier<TraceAgent<Tr>>>, ShutdownButton<CapabilitySet<Tr::Time>>)
     where
         G: Scope<Timestamp=Tr::Time>,
-        Tr::Time: Timestamp+ Lattice+Ord+Clone+'static,
         Tr: TraceReader,
     {
         let trace = self.clone();
@@ -541,7 +528,6 @@ impl<T> Drop for ShutdownDeadmans<T> {
 impl<Tr> Clone for TraceAgent<Tr>
 where
     Tr: TraceReader,
-    Tr::Time: Lattice+Ord+Clone+'static,
 {
     fn clone(&self) -> Self {
 
@@ -571,7 +557,6 @@ where
 impl<Tr> Drop for TraceAgent<Tr>
 where
     Tr: TraceReader,
-    Tr::Time: Lattice+Ord+Clone+'static,
 {
     fn drop(&mut self) {
 

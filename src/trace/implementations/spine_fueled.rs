@@ -69,11 +69,7 @@
 //! have paid back any "debt" to higher layers by continuing to provide fuel as updates arrive.
 
 
-use std::fmt::Debug;
-
 use crate::logging::Logger;
-use crate::difference::Semigroup;
-use crate::lattice::Lattice;
 use crate::trace::{Batch, Batcher, Builder, BatchReader, Trace, TraceReader, ExertionLogic};
 use crate::trace::cursor::CursorList;
 use crate::trace::Merger;
@@ -89,8 +85,6 @@ use ::timely::order::PartialOrder;
 /// other immutable collections.
 pub struct Spine<B: Batch, BA, BU>
 where
-    B::Time: Lattice+Ord,
-    B::Diff: Semigroup,
     // Intended constraints:
     // BA: Batcher<Time = B::Time>,
     // BU: Builder<Item=BA::Item, Time=BA::Time, Output = B>,
@@ -112,8 +106,6 @@ where
 impl<B, BA, BU> TraceReader for Spine<B, BA, BU>
 where
     B: Batch+Clone+'static,
-    B::Time: Lattice+timely::progress::Timestamp+Ord+Clone+Debug,
-    B::Diff: Semigroup,
 {
     type Key<'a> = B::Key<'a>;
     type KeyOwned = B::KeyOwned;
@@ -260,8 +252,6 @@ where
 impl<B, BA, BU> Trace for Spine<B, BA, BU>
 where
     B: Batch+Clone+'static,
-    B::Time: Lattice+timely::progress::Timestamp+Ord+Clone+Debug,
-    B::Diff: Semigroup,
     BA: Batcher<Time = B::Time>,
     BU: Builder<Item=BA::Item, Time=BA::Time, Output = B>,
 {
@@ -340,24 +330,14 @@ where
 }
 
 // Drop implementation allows us to log batch drops, to zero out maintained totals.
-impl<B, BA, BU> Drop for Spine<B, BA, BU>
-where
-    B: Batch,
-    B::Time: Lattice+Ord,
-    B::Diff: Semigroup,
-{
+impl<B: Batch, BA, BU> Drop for Spine<B, BA, BU> {
     fn drop(&mut self) {
         self.drop_batches();
     }
 }
 
 
-impl<B, BA, BU> Spine<B, BA, BU>
-where
-    B: Batch,
-    B::Time: Lattice+Ord,
-    B::Diff: Semigroup,
-{
+impl<B: Batch, BA, BU> Spine<B, BA, BU> {
     /// Drops and logs batches. Used in `set_logical_compaction` and drop.
     fn drop_batches(&mut self) {
         if let Some(logger) = &self.logger {
@@ -398,12 +378,7 @@ where
     }
 }
 
-impl<B, BA, BU> Spine<B, BA, BU>
-where
-    B: Batch,
-    B::Time: Lattice+timely::progress::Timestamp+Ord+Clone+Debug,
-    B::Diff: Semigroup,
-{
+impl<B: Batch, BA, BU> Spine<B, BA, BU> {
     /// Determine the amount of effort we should exert in the absence of updates.
     ///
     /// This method prepares an iterator over batches, including the level, count, and length of each layer.

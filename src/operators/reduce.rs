@@ -80,10 +80,10 @@ impl<G, K, V, R> Reduce<G, K, V, R> for Collection<G, (K, V), R>
     }
 }
 
-impl<G: Scope, K: Data, V: Data, T1, R: Semigroup> Reduce<G, K, V, R> for Arranged<G, T1>
+impl<G, K: Data, V: Data, T1, R: Semigroup> Reduce<G, K, V, R> for Arranged<G, T1>
 where
-    G::Timestamp: Lattice+Ord,
-    T1: for<'a> TraceReader<Key<'a>=&'a K, KeyOwned=K, Val<'a>=&'a V, Time=G::Timestamp, Diff=R>+Clone+'static,
+    G: Scope<Timestamp=T1::Time>,
+    T1: for<'a> TraceReader<Key<'a>=&'a K, KeyOwned=K, Val<'a>=&'a V, Diff=R>+Clone+'static,
 {
     fn reduce_named<L, V2: Data, R2: Abelian>(&self, name: &str, logic: L) -> Collection<G, (K, V2), R2>
         where L: FnMut(&K, &[(&V, R)], &mut Vec<(V2, R2)>)+'static {
@@ -157,10 +157,10 @@ where G::Timestamp: Lattice+Ord {
     }
 }
 
-impl<G: Scope, K: Data, T1, R1: Semigroup> Threshold<G, K, R1> for Arranged<G, T1>
+impl<G, K: Data, T1, R1: Semigroup> Threshold<G, K, R1> for Arranged<G, T1>
 where
-    G::Timestamp: Lattice+Ord,
-    T1: for<'a> TraceReader<Key<'a>=&'a K, KeyOwned=K, Val<'a>=&'a (), Time=G::Timestamp, Diff=R1>+Clone+'static,
+    G: Scope<Timestamp=T1::Time>,
+    T1: for<'a> TraceReader<Key<'a>=&'a K, KeyOwned=K, Val<'a>=&'a (), Diff=R1>+Clone+'static,
 {
     fn threshold_named<R2: Abelian, F: FnMut(&K,&R1)->R2+'static>(&self, name: &str, mut thresh: F) -> Collection<G, K, R2> {
         self.reduce_abelian::<_,KeySpine<_,_,_>>(name, move |k,s,t| t.push(((), thresh(k, &s[0].1))))
@@ -207,10 +207,10 @@ where
     }
 }
 
-impl<G: Scope, K: Data, T1, R: Semigroup> Count<G, K, R> for Arranged<G, T1>
+impl<G, K: Data, T1, R: Semigroup> Count<G, K, R> for Arranged<G, T1>
 where
-    G::Timestamp: Lattice+Ord,
-    T1: for<'a> TraceReader<Key<'a>=&'a K, KeyOwned=K, Val<'a>=&'a (), Time=G::Timestamp, Diff=R>+Clone+'static,
+    G: Scope<Timestamp=T1::Time>,
+    T1: for<'a> TraceReader<Key<'a>=&'a K, KeyOwned=K, Val<'a>=&'a (), Diff=R>+Clone+'static,
 {
     fn count_core<R2: Abelian + From<i8>>(&self) -> Collection<G, (K, R), R2> {
         self.reduce_abelian::<_,ValSpine<_,_,_,_>>("Count", |_k,s,t| t.push((s[0].1.clone(), R2::from(1i8))))
@@ -272,7 +272,6 @@ pub trait ReduceCore<G: Scope, K: ToOwned + ?Sized, V: ToOwned + ?Sized, R: Semi
         where
             T2: for<'a> Trace<Key<'a>=&'a K, Time=G::Timestamp>+'static,
             T2::ValOwned: Data,
-            T2::Diff: Semigroup,
             T2::Batch: Batch,
             T2::Builder: Builder<Output=T2::Batch, Item = ((K::Owned, T2::ValOwned), T2::Time, T2::Diff)>,
             L: FnMut(&K, &[(&V, R)], &mut Vec<(<T2::Cursor as Cursor>::ValOwned,T2::Diff)>, &mut Vec<(<T2::Cursor as Cursor>::ValOwned, T2::Diff)>)+'static,
@@ -291,7 +290,6 @@ where
     fn reduce_core<L, T2>(&self, name: &str, logic: L) -> Arranged<G, TraceAgent<T2>>
         where
             T2::ValOwned: Data,
-            T2::Diff: Semigroup,
             T2: for<'a> Trace<Key<'a>=&'a K, Time=G::Timestamp>+'static,
             T2::Batch: Batch,
             T2::Builder: Builder<Output=T2::Batch, Item = ((K::Owned, T2::ValOwned), T2::Time, T2::Diff)>,
@@ -307,13 +305,10 @@ where
 /// This method exists to provide reduce functionality without opinions about qualifying trace types.
 pub fn reduce_trace<G, T1, T2, L>(trace: &Arranged<G, T1>, name: &str, mut logic: L) -> Arranged<G, TraceAgent<T2>>
 where
-    G: Scope,
-    G::Timestamp: Lattice+Ord,
-    T1: TraceReader<Time=G::Timestamp> + Clone + 'static,
-    T1::Diff: Semigroup,
-    T2: for<'a> Trace<Key<'a>=T1::Key<'a>, Time=G::Timestamp> + 'static,
+    G: Scope<Timestamp=T1::Time>,
+    T1: TraceReader + Clone + 'static,
+    T2: for<'a> Trace<Key<'a>=T1::Key<'a>, Time=T1::Time> + 'static,
     T2::ValOwned: Data,
-    T2::Diff: Semigroup,
     T2::Batch: Batch,
     T2::Builder: Builder<Output=T2::Batch, Item = ((T1::KeyOwned, T2::ValOwned), T2::Time, T2::Diff)>,
     L: FnMut(T1::Key<'_>, &[(T1::Val<'_>, T1::Diff)], &mut Vec<(T2::ValOwned,T2::Diff)>, &mut Vec<(T2::ValOwned, T2::Diff)>)+'static,
@@ -632,10 +627,6 @@ where
     C1: Cursor,
     C2: Cursor<Key<'a> = C1::Key<'a>, Time = C1::Time>,
     C3: Cursor<Key<'a> = C1::Key<'a>, Val<'a> = C1::Val<'a>, Time = C1::Time, Diff = C1::Diff>,
-    C2::ValOwned: Ord + Clone,
-    C1::Time: Lattice+Ord+Clone,
-    C1::Diff: Semigroup,
-    C2::Diff: Semigroup,
 {
     fn new() -> Self;
     fn compute<L>(
@@ -662,7 +653,6 @@ where
 /// Implementation based on replaying historical and new updates together.
 mod history_replay {
 
-    use crate::difference::Semigroup;
     use crate::lattice::Lattice;
     use crate::trace::Cursor;
     use crate::operators::ValueHistory;
@@ -674,15 +664,11 @@ mod history_replay {
 
     /// The `HistoryReplayer` is a compute strategy based on moving through existing inputs, interesting times, etc in
     /// time order, maintaining consolidated representations of updates with respect to future interesting times.
-    pub struct HistoryReplayer<'a, C1, C2, C3>//V1, V2, T, R1, R2>
+    pub struct HistoryReplayer<'a, C1, C2, C3>
     where
         C1: Cursor,
         C2: Cursor<Key<'a> = C1::Key<'a>, Time = C1::Time>,
         C3: Cursor<Key<'a> = C1::Key<'a>, Val<'a> = C1::Val<'a>, Time = C1::Time, Diff = C1::Diff>,
-        C2::ValOwned: Ord + Clone,
-        C1::Time: Lattice+Ord+Clone,
-        C1::Diff: Semigroup,
-        C2::Diff: Semigroup,
     {
         input_history: ValueHistory<'a, C1>,
         output_history: ValueHistory<'a, C2>,
@@ -702,10 +688,6 @@ mod history_replay {
         C1: Cursor,
         C2: Cursor<Key<'a> = C1::Key<'a>, Time = C1::Time>,
         C3: Cursor<Key<'a> = C1::Key<'a>, Val<'a> = C1::Val<'a>, Time = C1::Time, Diff = C1::Diff>,
-        C2::ValOwned: Ord + Clone,
-        C1::Time: Lattice+Ord+Clone,
-        C1::Diff: Semigroup,
-        C2::Diff: Semigroup,
     {
         fn new() -> Self {
             HistoryReplayer {
