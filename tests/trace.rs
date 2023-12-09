@@ -2,7 +2,7 @@ use timely::dataflow::operators::generic::OperatorInfo;
 use timely::progress::{Antichain, frontier::AntichainRef};
 
 use differential_dataflow::trace::implementations::ValSpine;
-use differential_dataflow::trace::{Trace, TraceReader, Batcher};
+use differential_dataflow::trace::{Builder, Trace, TraceReader, Batcher};
 use differential_dataflow::trace::cursor::Cursor;
 
 type IntegerTrace = ValSpine<u64, u64, usize, i64>;
@@ -22,7 +22,7 @@ fn get_trace() -> ValSpine<u64, u64, usize, i64> {
         ]));
 
         let batch_ts = &[1, 2, 3];
-        let batches = batch_ts.iter().map(move |i| batcher.seal::<IntegerBuilder>(Antichain::from_elem(*i)));
+        let batches = batch_ts.iter().map(move |i| batcher.seal::<IntegerBuilder, _>(Antichain::from_elem(*i).borrow(), IntegerBuilder::with_capacity));
         for b in batches {
             trace.insert(b);
         }

@@ -320,7 +320,7 @@ pub trait Batcher {
     /// Adds an unordered batch of elements to the batcher.
     fn push_batch(&mut self, batch: RefOrMut<Vec<Self::Item>>);
     /// Returns all updates not greater or equal to an element of `upper`.
-    fn seal<B: Builder<Item=Self::Item, Time=Self::Time>>(&mut self, upper: Antichain<Self::Time>) -> B::Output;
+    fn seal<B: Builder<Item=Self::Item, Time=Self::Time>, C: FnOnce(usize, usize, usize) -> B>(&mut self, upper: AntichainRef<Self::Time>, constructor: C) -> B::Output;
     /// Returns the lower envelope of contained update times.
     fn frontier(&mut self) -> timely::progress::frontier::AntichainRef<Self::Time>;
 }

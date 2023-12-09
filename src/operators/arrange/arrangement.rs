@@ -695,7 +695,7 @@ where
                                     }
 
                                     // Extract updates not in advance of `upper`.
-                                    let batch = batcher.seal::<Tr::Builder>(upper.clone());
+                                    let batch = batcher.seal::<Tr::Builder, _>(upper.borrow(), Tr::Builder::with_capacity);
 
                                     writer.insert(batch.clone(), Some(capability.time().clone()));
 
@@ -723,7 +723,7 @@ where
                         }
                         else {
                             // Announce progress updates, even without data.
-                            let _batch = batcher.seal::<Tr::Builder>(input.frontier().frontier().to_owned());
+                            let _batch = batcher.seal::<Tr::Builder, _>(input.frontier().frontier(), Tr::Builder::with_capacity);
                             writer.seal(input.frontier().frontier().to_owned());
                         }
 

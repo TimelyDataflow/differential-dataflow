@@ -6,6 +6,7 @@ use timely::communication::message::RefOrMut;
 use timely::logging::WorkerIdentifier;
 use timely::logging_core::Logger;
 use timely::progress::{frontier::Antichain, Timestamp};
+use timely::progress::frontier::AntichainRef;
 
 use crate::difference::Semigroup;
 use crate::logging::{BatcherEvent, DifferentialEvent};
@@ -58,7 +59,7 @@ where
     // which we call `lower`, by assumption that after sealing a batcher we receive no more
     // updates with times not greater or equal to `upper`.
     #[inline(never)]
-    fn seal<B: Builder<Item=Self::Item, Time=Self::Time>>(&mut self, upper: Antichain<T>) -> B::Output {
+    fn seal<B: Builder<Item=Self::Item, Time=Self::Time>, C: FnOnce(usize, usize, usize) -> B>(&mut self, upper: AntichainRef<T>, constructor: C) -> B::Output {
 
         let mut merged = Vec::new();
         self.sorter.finish_into(&mut merged);
@@ -87,7 +88,7 @@ where
                     }
                 }
             }
-            B::with_capacity(keys, vals, upds)
+            constructor(keys, vals, upds)
         };
 
         let mut kept = Vec::new();
@@ -134,8 +135,8 @@ where
             self.sorter.push(&mut buffer);
         }
 
-        let seal = builder.done(self.lower.clone(), upper.clone(), Antichain::from_elem(T::minimum()));
-        self.lower = upper;
+        let seal = builder.done(self.lower.clone(), upper.to_owned(), Antichain::from_elem(T::minimum()));
+        self.lower = upper.to_owned();
         seal
     }
 
