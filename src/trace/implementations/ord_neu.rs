@@ -17,8 +17,8 @@ use crate::trace::rc_blanket_impls::RcBuilder;
 
 use super::{Update, Layout, Vector, TStack, Preferred};
 
-use self::val_batch::{OrdValBatch, OrdValBuilder};
-use self::key_batch::{OrdKeyBatch, OrdKeyBuilder};
+pub use self::val_batch::{OrdValBatch, OrdValBuilder};
+pub use self::key_batch::{OrdKeyBatch, OrdKeyBuilder};
 
 /// A trace implementation using a spine of ordered lists.
 pub type OrdValSpine<K, V, T, R> = Spine<

@@ -108,9 +108,6 @@ impl<U: Update> Layout for Vector<U>
 where
     U::Key: 'static,
     U::Val: 'static,
-// where
-//     U::Key: ToOwned<Owned = U::Key> + Sized + Clone + 'static,
-//     U::Val: ToOwned<Owned = U::Val> + Sized + Clone + 'static,
 {
     type Target = U;
     type KeyContainer = Vec<U::Key>;
@@ -187,37 +184,6 @@ where
     type ValContainer = V::Container;
     type UpdContainer = Vec<(T, D)>;
 }
-
-
-// /// A container that can retain/discard from some offset onward.
-// pub trait RetainFrom<T: ?Sized> {
-//     /// Retains elements from an index onwards that satisfy a predicate.
-//     fn retain_from<P: FnMut(usize, &T)->bool>(&mut self, index: usize, predicate: P);
-// }
-
-// impl<T> RetainFrom<T> for Vec<T> {
-//     fn retain_from<P: FnMut(usize, &T)->bool>(&mut self, index: usize, mut predicate: P) {
-//         let mut write_position = index;
-//         for position in index .. self.len() {
-//             if predicate(position, &self[position]) {
-//                 self.swap(position, write_position);
-//                 write_position += 1;
-//             }
-//         }
-//         self.truncate(write_position);
-//     }
-// }
-
-// impl<T: Columnation> RetainFrom<T> for TimelyStack<T> {
-//     fn retain_from<P: FnMut(usize, &T)->bool>(&mut self, index: usize, mut predicate: P) {
-//         let mut position = index;
-//         self.retain_from(index, |item| {
-//             let result = predicate(position, item);
-//             position += 1;
-//             result
-//         })
-//     }
-// }
 
 use std::convert::TryInto;
 use abomonation_derive::Abomonation;
