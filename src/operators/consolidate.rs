@@ -240,11 +240,13 @@ impl<'a, K: Data, V: Data, T: Timestamp, R: Data> Builder for ConsolidateBuilder
     type Output = ();
 
     fn new() -> Self {
-        unimplemented!()
+        // We never construct self using `new`.
+        unreachable!()
     }
 
     fn with_capacity(_keys: usize, _vals: usize, _upds: usize) -> Self {
-        unimplemented!()
+        // We never construct self using `with_capacity`.
+        unreachable!()
     }
 
     fn push(&mut self, element: Self::Item) {
