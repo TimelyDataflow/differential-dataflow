@@ -198,6 +198,13 @@ pub struct OffsetList {
 }
 
 impl OffsetList {
+    /// Allocate a new list with a specified capacity.
+    pub fn with_capacity(cap: usize) -> Self {
+        Self {
+            smol: Vec::with_capacity(cap),
+            chonk: Vec::new(),
+        }
+    }
     /// Inserts the offset, as a `u32` if that is still on the table.
     pub fn push(&mut self, offset: usize) {
         if self.chonk.is_empty() {
@@ -221,53 +228,9 @@ impl OffsetList {
             self.chonk[index - self.smol.len()].try_into().unwrap()
         }
     }
-    /// Set the offset at location index.
-    ///
-    /// Complicated if `offset` does not fit into `self.smol`.
-    pub fn set(&mut self, index: usize, offset: usize) {
-        if index < self.smol.len() {
-            if let Ok(off) = offset.try_into() {
-                self.smol[index] = off;
-            }
-            else {
-                // Move all `smol` elements from `index` onward to the front of `chonk`.
-                self.chonk.splice(0..0, self.smol.drain(index ..).map(|x| x.try_into().unwrap()));
-                self.chonk[index - self.smol.len()] = offset.try_into().unwrap();
-            }
-        }
-        else {
-            self.chonk[index - self.smol.len()] = offset.try_into().unwrap();
-        }
-    }
-    /// The last element in the list of offsets, if non-empty.
-    pub fn last(&self) -> Option<usize> {
-        if self.chonk.is_empty() {
-            self.smol.last().map(|x| (*x).try_into().unwrap())
-        }
-        else {
-            self.chonk.last().map(|x| (*x).try_into().unwrap())
-        }
-    }
-    /// THe number of offsets in the list.
+    /// The number of offsets in the list.
     pub fn len(&self) -> usize {
         self.smol.len() + self.chonk.len()
-    }
-    /// Allocate a new list with a specified capacity.
-    pub fn with_capacity(cap: usize) -> Self {
-        Self {
-            smol: Vec::with_capacity(cap),
-            chonk: Vec::new(),
-        }
-    }
-    /// Trim all elements at index `length` and greater.
-    pub fn truncate(&mut self, length: usize) {
-        if length > self.smol.len() {
-            self.chonk.truncate(length - self.smol.len());
-        }
-        else {
-            assert!(self.chonk.is_empty());
-            self.smol.truncate(length);
-        }
     }
 }
 
