@@ -82,6 +82,10 @@ where
                                 vals += 1;
                             }
                             upds += 1;
+                        } else {
+                            keys += 1;
+                            vals += 1;
+                            upds += 1;
                         }
                         prev_keyval = Some((key, val));
                     }
