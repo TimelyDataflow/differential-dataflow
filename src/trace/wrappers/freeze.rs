@@ -24,7 +24,6 @@ use timely::dataflow::operators::Map;
 use timely::progress::frontier::AntichainRef;
 
 use crate::operators::arrange::Arranged;
-use crate::lattice::Lattice;
 use crate::trace::{TraceReader, BatchReader, Description};
 use crate::trace::cursor::Cursor;
 
@@ -35,10 +34,8 @@ use crate::trace::cursor::Cursor;
 /// module-level documentation.
 pub fn freeze<G, T, F>(arranged: &Arranged<G, T>, func: F) -> Arranged<G, TraceFreeze<T, F>>
 where
-    G: Scope,
-    G::Timestamp: Lattice+Ord,
-    T: TraceReader<Time=G::Timestamp>+Clone,
-    T::Diff: 'static,
+    G: Scope<Timestamp=T::Time>,
+    T: TraceReader+Clone,
     F: Fn(&G::Timestamp)->Option<G::Timestamp>+'static,
 {
     let func1 = Rc::new(func);
@@ -53,7 +50,6 @@ where
 pub struct TraceFreeze<Tr, F>
 where
     Tr: TraceReader,
-    Tr::Time: Lattice+Clone+'static,
     F: Fn(&Tr::Time)->Option<Tr::Time>,
 {
     trace: Tr,
@@ -63,7 +59,6 @@ where
 impl<Tr,F> Clone for TraceFreeze<Tr, F>
 where
     Tr: TraceReader+Clone,
-    Tr::Time: Lattice+Clone+'static,
     F: Fn(&Tr::Time)->Option<Tr::Time>,
 {
     fn clone(&self) -> Self {
@@ -78,8 +73,6 @@ impl<Tr, F> TraceReader for TraceFreeze<Tr, F>
 where
     Tr: TraceReader,
     Tr::Batch: Clone,
-    Tr::Time: Lattice+Clone+'static,
-    Tr::Diff: 'static,
     F: Fn(&Tr::Time)->Option<Tr::Time>+'static,
 {
     type Key<'a> = Tr::Key<'a>;
@@ -117,8 +110,6 @@ impl<Tr, F> TraceFreeze<Tr, F>
 where
     Tr: TraceReader,
     Tr::Batch: Clone,
-    Tr::Time: Lattice+Clone+'static,
-    Tr::Diff: 'static,
     F: Fn(&Tr::Time)->Option<Tr::Time>,
 {
     /// Makes a new trace wrapper
@@ -146,7 +137,6 @@ impl<B: Clone, F> Clone for BatchFreeze<B, F> {
 impl<B, F> BatchReader for BatchFreeze<B, F>
 where
     B: BatchReader,
-    B::Time: Clone,
     F: Fn(&B::Time)->Option<B::Time>,
 {
     type Key<'a> = B::Key<'a>;
@@ -168,7 +158,6 @@ where
 impl<B, F> BatchFreeze<B, F>
 where
     B: BatchReader,
-    B::Time: Clone,
     F: Fn(&B::Time)->Option<B::Time>
 {
     /// Makes a new batch wrapper
@@ -192,7 +181,6 @@ impl<C, F> CursorFreeze<C, F> {
 impl<C, F> Cursor for CursorFreeze<C, F>
 where
     C: Cursor,
-    C::Time: Sized,
     F: Fn(&C::Time)->Option<C::Time>,
 {
     type Key<'a> = C::Key<'a>;

@@ -6,7 +6,6 @@
 //! accumulated updates) and no updates at times greater or equal to `upper` (even as parts of batches
 //! that span that time).
 
-use timely::progress::Timestamp;
 use timely::progress::{Antichain, frontier::AntichainRef};
 
 use crate::trace::{TraceReader, BatchReader, Description};
@@ -14,10 +13,7 @@ use crate::trace::cursor::Cursor;
 use crate::lattice::Lattice;
 
 /// Wrapper to provide trace to nested scope.
-pub struct TraceFrontier<Tr>
-where
-    Tr: TraceReader,
-{
+pub struct TraceFrontier<Tr: TraceReader> {
     trace: Tr,
     /// Frontier to which all update times will be advanced.
     since: Antichain<Tr::Time>,
@@ -25,11 +21,7 @@ where
     until: Antichain<Tr::Time>,
 }
 
-impl<Tr> Clone for TraceFrontier<Tr>
-where
-    Tr: TraceReader+Clone,
-    Tr::Time: Clone,
-{
+impl<Tr: TraceReader + Clone> Clone for TraceFrontier<Tr> {
     fn clone(&self) -> Self {
         TraceFrontier {
             trace: self.trace.clone(),
@@ -39,13 +31,7 @@ where
     }
 }
 
-impl<Tr> TraceReader for TraceFrontier<Tr>
-where
-    Tr: TraceReader,
-    Tr::Batch: Clone,
-    Tr::Time: Timestamp+Lattice,
-    Tr::Diff: 'static,
-{
+impl<Tr: TraceReader> TraceReader for TraceFrontier<Tr> {
     type Key<'a> = Tr::Key<'a>;
     type KeyOwned = Tr::KeyOwned;
     type Val<'a> = Tr::Val<'a>;
@@ -76,11 +62,7 @@ where
     }
 }
 
-impl<Tr> TraceFrontier<Tr>
-where
-    Tr: TraceReader,
-    Tr::Time: Timestamp,
-{
+impl<Tr: TraceReader> TraceFrontier<Tr> {
     /// Makes a new trace wrapper
     pub fn make_from(trace: Tr, since: AntichainRef<Tr::Time>, until: AntichainRef<Tr::Time>) -> Self {
         TraceFrontier {
@@ -100,11 +82,7 @@ pub struct BatchFrontier<B: BatchReader> {
     until: Antichain<B::Time>,
 }
 
-impl<B> BatchReader for BatchFrontier<B>
-where
-    B: BatchReader,
-    B::Time: Timestamp+Lattice,
-{
+impl<B: BatchReader> BatchReader for BatchFrontier<B> {
     type Key<'a> = B::Key<'a>;
     type KeyOwned = B::KeyOwned;
     type Val<'a> = B::Val<'a>;
@@ -121,11 +99,7 @@ where
     fn description(&self) -> &Description<B::Time> { self.batch.description() }
 }
 
-impl<B> BatchFrontier<B>
-where
-    B: BatchReader,
-    B::Time: Timestamp+Lattice,
-{
+impl<B: BatchReader> BatchFrontier<B> {
     /// Makes a new batch wrapper
     pub fn make_from(batch: B, since: AntichainRef<B::Time>, until: AntichainRef<B::Time>) -> Self {
         BatchFrontier {
@@ -153,11 +127,7 @@ impl<C, T> CursorFrontier<C, T> where T: Clone {
     }
 }
 
-impl<C, T> Cursor for CursorFrontier<C, T>
-where
-    C: Cursor<Time=T>,
-    T: Timestamp+Lattice,
-{
+impl<C: Cursor> Cursor for CursorFrontier<C, C::Time> {
     type Key<'a> = C::Key<'a>;
     type KeyOwned = C::KeyOwned;
     type Val<'a> = C::Val<'a>;
@@ -206,7 +176,7 @@ pub struct BatchCursorFrontier<C: Cursor> {
     until: Antichain<C::Time>,
 }
 
-impl<C: Cursor> BatchCursorFrontier<C> where C::Time: Clone {
+impl<C: Cursor> BatchCursorFrontier<C> {
     fn new(cursor: C, since: AntichainRef<C::Time>, until: AntichainRef<C::Time>) -> Self {
         BatchCursorFrontier {
             cursor,
@@ -218,7 +188,6 @@ impl<C: Cursor> BatchCursorFrontier<C> where C::Time: Clone {
 
 impl<C: Cursor> Cursor for BatchCursorFrontier<C>
 where
-    C::Time: Timestamp+Lattice,
     C::Storage: BatchReader,
 {
     type Key<'a> = C::Key<'a>;

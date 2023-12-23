@@ -132,10 +132,10 @@ fn main() {
 fn dump_cursor<Tr>(round: u32, index: usize, trace: &mut Tr)
 where
     Tr: TraceReader,
-    Tr::KeyOwned: Debug + Clone,
-    Tr::ValOwned: Debug + Clone,
-    Tr::Time: Debug + Clone,
-    Tr::Diff: Debug + Clone,
+    Tr::KeyOwned: Debug,
+    Tr::ValOwned: Debug,
+    Tr::Time: Debug,
+    Tr::Diff: Debug,
 {
     let (mut cursor, storage) = trace.cursor();
     for ((k, v), diffs) in cursor.to_vec(&storage).iter() {

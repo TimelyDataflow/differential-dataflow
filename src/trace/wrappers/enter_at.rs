@@ -1,7 +1,6 @@
 //! Wrappers to provide trace access to nested scopes.
 
 use timely::progress::timestamp::Refines;
-use timely::progress::Timestamp;
 use timely::progress::{Antichain, frontier::AntichainRef};
 
 use crate::lattice::Lattice;
@@ -16,10 +15,7 @@ use crate::trace::cursor::Cursor;
 /// and which will be applied to compaction frontiers as they are communicated
 /// back to the wrapped traces. A better explanation is pending, and until that
 /// happens use this construct at your own peril!
-pub struct TraceEnter<Tr, TInner, F, G>
-where
-    Tr: TraceReader,
-{
+pub struct TraceEnter<Tr: TraceReader, TInner, F, G> {
     trace: Tr,
     stash1: Antichain<Tr::Time>,
     stash2: Antichain<TInner>,
@@ -48,9 +44,7 @@ impl<Tr, TInner, F, G> TraceReader for TraceEnter<Tr, TInner, F, G>
 where
     Tr: TraceReader,
     Tr::Batch: Clone,
-    Tr::Time: Timestamp,
     TInner: Refines<Tr::Time>+Lattice,
-    Tr::Diff: 'static,
     F: 'static,
     F: FnMut(Tr::Key<'_>, Tr::Val<'_>, &Tr::Time)->TInner+Clone,
     G: FnMut(&TInner)->Tr::Time+Clone+'static,
@@ -115,7 +109,6 @@ where
 impl<Tr, TInner, F, G> TraceEnter<Tr, TInner, F, G>
 where
     Tr: TraceReader,
-    Tr::Time: Timestamp,
     TInner: Refines<Tr::Time>+Lattice,
 {
     /// Makes a new trace wrapper
@@ -142,7 +135,6 @@ pub struct BatchEnter<B, TInner, F> {
 impl<B, TInner, F> BatchReader for BatchEnter<B, TInner, F>
 where
     B: BatchReader,
-    B::Time: Timestamp,
     TInner: Refines<B::Time>+Lattice,
     F: FnMut(B::Key<'_>, <B::Cursor as Cursor>::Val<'_>, &B::Time)->TInner+Clone,
 {
@@ -165,7 +157,6 @@ where
 impl<B, TInner, F> BatchEnter<B, TInner, F>
 where
     B: BatchReader,
-    B::Time: Timestamp,
     TInner: Refines<B::Time>+Lattice,
 {
     /// Makes a new batch wrapper
@@ -202,7 +193,6 @@ impl<C, TInner, F> CursorEnter<C, TInner, F> {
 impl<C, TInner, F> Cursor for CursorEnter<C, TInner, F>
 where
     C: Cursor,
-    C::Time: Timestamp,
     TInner: Refines<C::Time>+Lattice,
     F: FnMut(C::Key<'_>, C::Val<'_>, &C::Time)->TInner,
 {
@@ -262,7 +252,6 @@ impl<C, TInner, F> BatchCursorEnter<C, TInner, F> {
 
 impl<TInner, C: Cursor, F> Cursor for BatchCursorEnter<C, TInner, F>
 where
-    C::Time: Timestamp,
     TInner: Refines<C::Time>+Lattice,
     F: FnMut(C::Key<'_>, C::Val<'_>, &C::Time)->TInner,
 {

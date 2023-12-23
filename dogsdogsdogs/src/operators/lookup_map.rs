@@ -27,9 +27,8 @@ pub fn lookup_map<G, D, R, Tr, F, DOut, ROut, S>(
     supplied_key2: Tr::KeyOwned,
 ) -> Collection<G, DOut, ROut>
 where
-    G: Scope,
-    G::Timestamp: Lattice,
-    Tr: TraceReader<Time=G::Timestamp>+Clone+'static,
+    G: Scope<Timestamp=Tr::Time>,
+    Tr: TraceReader+Clone+'static,
     Tr::KeyOwned: Hashable,
     Tr::Diff: Monoid+ExchangeData,
     F: FnMut(&D, &mut Tr::KeyOwned)+Clone+'static,

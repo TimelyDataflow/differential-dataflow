@@ -163,12 +163,10 @@ where
 
 impl<G, K, V, Tr> Join<G, K, V, Tr::Diff> for Arranged<G, Tr>
 where
-    G: Scope,
-    G::Timestamp: Lattice+Ord,
-    Tr: for<'a> TraceReader<Time=G::Timestamp, Key<'a> = &'a K, Val<'a> = &'a V>+Clone+'static,
+    G: Scope<Timestamp=Tr::Time>,
+    Tr: for<'a> TraceReader<Key<'a> = &'a K, Val<'a> = &'a V>+Clone+'static,
     K: ExchangeData+Hashable,
     V: Data + 'static,
-    Tr::Diff: Semigroup,
 {
     fn join_map<V2: ExchangeData, R2: ExchangeData+Semigroup, D: Data, L>(&self, other: &Collection<G, (K, V2), R2>, mut logic: L) -> Collection<G, D, <Tr::Diff as Multiply<R2>>::Output>
     where 
@@ -233,7 +231,6 @@ pub trait JoinCore<G: Scope, K: 'static + ?Sized, V: 'static + ?Sized, R: Semigr
     fn join_core<Tr2,I,L> (&self, stream2: &Arranged<G,Tr2>, result: L) -> Collection<G,I::Item,<R as Multiply<Tr2::Diff>>::Output>
     where
         Tr2: for<'a> TraceReader<Key<'a>=&'a K, Time=G::Timestamp>+Clone+'static,
-        Tr2::Diff: Semigroup,
         R: Multiply<Tr2::Diff>,
         <R as Multiply<Tr2::Diff>>::Output: Semigroup,
         I: IntoIterator,
@@ -277,7 +274,6 @@ pub trait JoinCore<G: Scope, K: 'static + ?Sized, V: 'static + ?Sized, R: Semigr
     fn join_core_internal_unsafe<Tr2,I,L,D,ROut> (&self, stream2: &Arranged<G,Tr2>, result: L) -> Collection<G,D,ROut>
     where
         Tr2: for<'a> TraceReader<Key<'a>=&'a K, Time=G::Timestamp>+Clone+'static,
-        Tr2::Diff: Semigroup,
         D: Data,
         ROut: Semigroup,
         I: IntoIterator<Item=(D, G::Timestamp, ROut)>,
@@ -297,7 +293,6 @@ where
     fn join_core<Tr2,I,L> (&self, stream2: &Arranged<G,Tr2>, result: L) -> Collection<G,I::Item,<R as Multiply<Tr2::Diff>>::Output>
     where
         Tr2: for<'a> TraceReader<Key<'a>=&'a K, Time=G::Timestamp>+Clone+'static,
-        Tr2::Diff: Semigroup,
         R: Multiply<Tr2::Diff>,
         <R as Multiply<Tr2::Diff>>::Output: Semigroup,
         I: IntoIterator,
@@ -311,7 +306,6 @@ where
     fn join_core_internal_unsafe<Tr2,I,L,D,ROut> (&self, stream2: &Arranged<G,Tr2>, result: L) -> Collection<G,D,ROut>
     where
         Tr2: for<'a> TraceReader<Key<'a>=&'a K, Time=G::Timestamp>+Clone+'static,
-        Tr2::Diff: Semigroup,
         I: IntoIterator<Item=(D, G::Timestamp, ROut)>,
         L: FnMut(&K,&V,Tr2::Val<'_>,&G::Timestamp,&R,&Tr2::Diff)->I+'static,
         D: Data,
@@ -331,12 +325,9 @@ where
 /// The "correctness" of this method depends heavily on the behavior of the supplied `result` function.
 pub fn join_traces<G, T1, T2, I,L,D,R>(arranged1: &Arranged<G,T1>, arranged2: &Arranged<G,T2>, mut result: L) -> Collection<G, D, R>
 where
-    G: Scope,
-    G::Timestamp: Lattice+Ord,
-    T1: TraceReader<Time=G::Timestamp>+Clone+'static,
-    T1::Diff: Semigroup,
-    T2: for<'a> TraceReader<Key<'a>=T1::Key<'a>, Time=G::Timestamp>+Clone+'static,
-    T2::Diff: Semigroup,
+    G: Scope<Timestamp=T1::Time>,
+    T1: TraceReader+Clone+'static,
+    T2: for<'a> TraceReader<Key<'a>=T1::Key<'a>, Time=T1::Time>+Clone+'static,
     D: Data,
     R: Semigroup,
     I: IntoIterator<Item=(D, G::Timestamp, R)>,
@@ -589,8 +580,6 @@ where
     R: Semigroup,
     C1: Cursor<Time=T>,
     C2: for<'a> Cursor<Key<'a>=C1::Key<'a>, Time=T>,
-    C1::Diff: Semigroup,
-    C2::Diff: Semigroup,
     D: Ord+Clone+Data,
 {
     trace: C1,
@@ -606,8 +595,6 @@ impl<T, R, C1, C2, D> Deferred<T, R, C1, C2, D>
 where
     C1: Cursor<Time=T>,
     C2: for<'a> Cursor<Key<'a>=C1::Key<'a>, Time=T>,
-    C1::Diff: Semigroup,
-    C2::Diff: Semigroup,
     T: Timestamp+Lattice+Ord,
     R: Semigroup,
     D: Clone+Data,
@@ -702,9 +689,6 @@ struct JoinThinker<'a, C1, C2>
 where
     C1: Cursor,
     C2: Cursor<Time = C1::Time>,
-    C1::Time: Lattice+Ord+Clone,
-    C1::Diff: Semigroup,
-    C2::Diff: Semigroup,
 {
     pub history1: ValueHistory<'a, C1>,
     pub history2: ValueHistory<'a, C2>,
@@ -714,9 +698,6 @@ impl<'a, C1, C2> JoinThinker<'a, C1, C2>
 where
     C1: Cursor,
     C2: Cursor<Time = C1::Time>,
-    C1::Time: Lattice+Ord+Clone,
-    C1::Diff: Semigroup,
-    C2::Diff: Semigroup,
 {
     fn new() -> Self {
         JoinThinker {

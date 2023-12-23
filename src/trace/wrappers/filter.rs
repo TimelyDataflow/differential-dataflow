@@ -1,6 +1,5 @@
 //! Wrapper for filtered trace.
 
-use timely::progress::Timestamp;
 use timely::progress::frontier::AntichainRef;
 
 use crate::trace::{TraceReader, BatchReader, Description};
@@ -29,8 +28,6 @@ impl<Tr, F> TraceReader for TraceFilter<Tr, F>
 where
     Tr: TraceReader,
     Tr::Batch: Clone,
-    Tr::Time: Timestamp,
-    Tr::Diff: 'static,
     F: FnMut(Tr::Key<'_>, Tr::Val<'_>)->bool+Clone+'static,
 {
     type Key<'a> = Tr::Key<'a>;
@@ -64,7 +61,6 @@ where
 impl<Tr, F> TraceFilter<Tr, F>
 where
     Tr: TraceReader,
-    Tr::Time: Timestamp,
 {
     /// Makes a new trace wrapper
     pub fn make_from(trace: Tr, logic: F) -> Self {
@@ -86,7 +82,6 @@ pub struct BatchFilter<B, F> {
 impl<B, F> BatchReader for BatchFilter<B, F>
 where
     B: BatchReader,
-    B::Time: Timestamp,
     F: FnMut(B::Key<'_>, B::Val<'_>)->bool+Clone+'static
 {
     type Key<'a> = B::Key<'a>;
@@ -108,7 +103,6 @@ where
 impl<B, F> BatchFilter<B, F>
 where
     B: BatchReader,
-    B::Time: Timestamp,
 {
     /// Makes a new batch wrapper
     pub fn make_from(batch: B, logic: F) -> Self {
@@ -137,7 +131,6 @@ impl<C, F> CursorFilter<C, F> {
 impl<C, F> Cursor for CursorFilter<C, F>
 where
     C: Cursor,
-    C::Time: Timestamp,
     F: FnMut(C::Key<'_>, C::Val<'_>)->bool+'static
 {
     type Key<'a> = C::Key<'a>;
@@ -193,7 +186,6 @@ impl<C, F> BatchCursorFilter<C, F> {
 
 impl<C: Cursor, F> Cursor for BatchCursorFilter<C, F>
 where
-    C::Time: Timestamp,
     F: FnMut(C::Key<'_>, C::Val<'_>)->bool+'static,
 {
     type Key<'a> = C::Key<'a>;

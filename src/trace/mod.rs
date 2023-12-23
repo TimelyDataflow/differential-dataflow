@@ -20,7 +20,8 @@ use timely::progress::Timestamp;
 
 use crate::logging::DifferentialEvent;
 use crate::trace::cursor::MyTrait;
-
+use crate::difference::Semigroup;
+use crate::lattice::Lattice;
 // use ::difference::Semigroup;
 pub use self::cursor::Cursor;
 pub use self::description::Description;
@@ -59,9 +60,9 @@ pub trait TraceReader {
     /// Owned version of the above.
     type ValOwned: Ord + Clone;
     /// Timestamps associated with updates
-    type Time;
+    type Time: Timestamp + Lattice + Ord + Clone;
     /// Associated update.
-    type Diff;
+    type Diff: Semigroup;
 
     /// The type of an immutable collection of updates.
     type Batch: for<'a> BatchReader<Key<'a> = Self::Key<'a>, KeyOwned = Self::KeyOwned, Val<'a> = Self::Val<'a>, ValOwned = Self::ValOwned, Time = Self::Time, Diff = Self::Diff>+Clone+'static;
@@ -175,10 +176,7 @@ pub trait TraceReader {
     ///
     ///
     #[inline]
-    fn read_upper(&mut self, target: &mut Antichain<Self::Time>)
-    where
-        Self::Time: Timestamp,
-    {
+    fn read_upper(&mut self, target: &mut Antichain<Self::Time>) {
         target.clear();
         target.insert(<Self::Time as timely::progress::Timestamp>::minimum());
         self.map_batches(|batch| {
@@ -192,10 +190,7 @@ pub trait TraceReader {
     /// contents of `upper` will advance `upper` to `batch.upper`.
     /// Taken across all batches, this should advance `upper` across
     /// empty batch regions.
-    fn advance_upper(&mut self, upper: &mut Antichain<Self::Time>)
-    where
-        Self::Time: Timestamp,
-    {
+    fn advance_upper(&mut self, upper: &mut Antichain<Self::Time>) {
         self.map_batches(|batch| {
             if batch.is_empty() && batch.lower() == upper {
                 upper.clone_from(batch.upper());
@@ -273,9 +268,9 @@ where
     /// Owned version of the above.
     type ValOwned: Ord + Clone;
     /// Timestamps associated with updates
-    type Time: Timestamp;
+    type Time: Timestamp + Lattice + Ord + Clone;
     /// Associated update.
-    type Diff;
+    type Diff: Semigroup;
 
     /// The type used to enumerate the batch's contents.
     type Cursor: for<'a> Cursor<Storage=Self, Key<'a> = Self::Key<'a>, KeyOwned = Self::KeyOwned, Val<'a> = Self::Val<'a>, ValOwned = Self::ValOwned, Time = Self::Time, Diff = Self::Diff>;

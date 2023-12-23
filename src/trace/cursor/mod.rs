@@ -5,6 +5,10 @@
 //! both because it allows navigation on multiple levels (key and val), but also because it
 //! supports efficient seeking (via the `seek_key` and `seek_val` methods).
 
+use timely::progress::Timestamp;
+use crate::difference::Semigroup;
+use crate::lattice::Lattice;
+
 pub mod cursor_list;
 
 pub use self::cursor_list::CursorList;
@@ -63,9 +67,9 @@ pub trait Cursor {
     /// Owned version of the above.
     type ValOwned: Ord + Clone;
     /// Timestamps associated with updates
-    type Time;
+    type Time: Timestamp + Lattice + Ord + Clone;
     /// Associated update.
-    type Diff: ?Sized;
+    type Diff: Semigroup + ?Sized;
 
     /// Storage required by the cursor.
     type Storage;
@@ -117,11 +121,7 @@ pub trait Cursor {
     fn rewind_vals(&mut self, storage: &Self::Storage);
 
     /// Rewinds the cursor and outputs its contents to a Vec
-    fn to_vec(&mut self, storage: &Self::Storage) -> Vec<((Self::KeyOwned, Self::ValOwned), Vec<(Self::Time, Self::Diff)>)>
-    where
-        Self::Time: Clone,
-        Self::Diff: Clone,
-    {
+    fn to_vec(&mut self, storage: &Self::Storage) -> Vec<((Self::KeyOwned, Self::ValOwned), Vec<(Self::Time, Self::Diff)>)> {
         let mut out = Vec::new();
         self.rewind_keys(storage);
         self.rewind_vals(storage);

@@ -2,7 +2,6 @@
 
 // use timely::progress::nested::product::Product;
 use timely::progress::timestamp::Refines;
-use timely::progress::Timestamp;
 use timely::progress::{Antichain, frontier::AntichainRef};
 
 use crate::lattice::Lattice;
@@ -10,19 +9,13 @@ use crate::trace::{TraceReader, BatchReader, Description};
 use crate::trace::cursor::Cursor;
 
 /// Wrapper to provide trace to nested scope.
-pub struct TraceEnter<Tr, TInner>
-where
-    Tr: TraceReader,
-{
+pub struct TraceEnter<Tr: TraceReader, TInner> {
     trace: Tr,
     stash1: Antichain<Tr::Time>,
     stash2: Antichain<TInner>,
 }
 
-impl<Tr,TInner> Clone for TraceEnter<Tr, TInner>
-where
-    Tr: TraceReader+Clone,
-{
+impl<Tr: TraceReader + Clone, TInner> Clone for TraceEnter<Tr, TInner> {
     fn clone(&self) -> Self {
         TraceEnter {
             trace: self.trace.clone(),
@@ -36,8 +29,6 @@ impl<Tr, TInner> TraceReader for TraceEnter<Tr, TInner>
 where
     Tr: TraceReader,
     Tr::Batch: Clone,
-    Tr::Time: Timestamp,
-    Tr::Diff: 'static,
     TInner: Refines<Tr::Time>+Lattice,
 {
     type Key<'a> = Tr::Key<'a>;
@@ -99,7 +90,6 @@ where
 impl<Tr, TInner> TraceEnter<Tr, TInner>
 where
     Tr: TraceReader,
-    Tr::Time: Timestamp,
     TInner: Refines<Tr::Time>+Lattice,
 {
     /// Makes a new trace wrapper
@@ -123,7 +113,6 @@ pub struct BatchEnter<B, TInner> {
 impl<B, TInner> BatchReader for BatchEnter<B, TInner>
 where
     B: BatchReader,
-    B::Time: Timestamp,
     TInner: Refines<B::Time>+Lattice,
 {
     type Key<'a> = B::Key<'a>;
@@ -145,7 +134,6 @@ where
 impl<B, TInner> BatchEnter<B, TInner>
 where
     B: BatchReader,
-    B::Time: Timestamp,
     TInner: Refines<B::Time>+Lattice,
 {
     /// Makes a new batch wrapper
@@ -179,7 +167,6 @@ impl<C, TInner> CursorEnter<C, TInner> {
 impl<C, TInner> Cursor for CursorEnter<C, TInner>
 where
     C: Cursor,
-    C::Time: Timestamp,
     TInner: Refines<C::Time>+Lattice,
 {
     type Key<'a> = C::Key<'a>;
@@ -233,7 +220,6 @@ impl<C, TInner> BatchCursorEnter<C, TInner> {
 
 impl<TInner, C: Cursor> Cursor for BatchCursorEnter<C, TInner>
 where
-    C::Time: Timestamp,
     TInner: Refines<C::Time>+Lattice,
 {
     type Key<'a> = C::Key<'a>;
