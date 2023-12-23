@@ -84,7 +84,7 @@ mod val_batch {
     use crate::hashable::Hashable;
 
     use crate::trace::{Batch, BatchReader, Builder, Cursor, Description, Merger};
-    use crate::trace::implementations::{BatchContainer, OffsetList};
+    use crate::trace::implementations::BatchContainer;
     use crate::trace::cursor::MyTrait;
 
     use super::{Layout, Update, HashOrdered};
@@ -122,7 +122,7 @@ mod val_batch {
         /// Offsets used to provide indexes from keys to values.
         ///
         /// The length of this list is one longer than `keys`, so that we can avoid bounds logic.
-        pub keys_offs: OffsetList,
+        pub keys_offs: L::OffsetContainer,
         /// Concatenated ordered lists of values, bracketed by offsets in `keys_offs`.
         pub vals: L::ValContainer,
         /// Offsets used to provide indexes from values to updates.
@@ -133,7 +133,7 @@ mod val_batch {
         /// single common update values (e.g. in a snapshot, the minimal time and a diff of one).
         ///
         /// The length of this list is one longer than `vals`, so that we can avoid bounds logic.
-        pub vals_offs: OffsetList,
+        pub vals_offs: L::OffsetContainer,
         /// Concatenated ordered lists of updates, bracketed by offsets in `vals_offs`.
         pub updates: L::UpdContainer,
     }
@@ -144,16 +144,16 @@ mod val_batch {
     {
         /// Lower and upper bounds in `self.vals` corresponding to the key at `index`.
         fn values_for_key(&self, index: usize) -> (usize, usize) {
-            let lower = self.keys_offs.index(index);
-            let upper = self.keys_offs.index(index+1);
+            let lower = self.keys_offs.index(index).into_owned();
+            let upper = self.keys_offs.index(index+1).into_owned();
             // Looking up values for an invalid key indicates something is wrong.
             assert!(lower < upper, "{:?} v {:?} at {:?}", lower, upper, index);
             (lower, upper)
         }
         /// Lower and upper bounds in `self.updates` corresponding to the value at `index`.
         fn updates_for_value(&self, index: usize) -> (usize, usize) {
-            let mut lower = self.vals_offs.index(index);
-            let upper = self.vals_offs.index(index+1);
+            let mut lower = self.vals_offs.index(index).into_owned();
+            let upper = self.vals_offs.index(index+1).into_owned();
             // We use equal lower and upper to encode "singleton update; just before here".
             // It should only apply when there is a prior element, so `lower` should be greater than zero.
             if lower == upper {
@@ -178,7 +178,7 @@ mod val_batch {
             // push additional blank entries in.
             while self.keys.len() < desired {
                 // We insert a default (dummy) key and repeat the offset to indicate this.
-                let current_offset = self.keys_offs.index(self.keys.len());
+                let current_offset = self.keys_offs.index(self.keys.len()).into_owned();
                 self.keys.push(Default::default());
                 self.keys_offs.push(current_offset);
             }
@@ -339,17 +339,20 @@ mod val_batch {
 
             let mut storage = RhhValStorage {
                 keys: L::KeyContainer::merge_capacity(&batch1.keys, &batch2.keys),
-                keys_offs: OffsetList::with_capacity(batch1.keys_offs.len() + batch2.keys_offs.len()),
+                keys_offs: L::OffsetContainer::with_capacity(batch1.keys_offs.len() + batch2.keys_offs.len()),
                 vals: L::ValContainer::merge_capacity(&batch1.vals, &batch2.vals),
-                vals_offs: OffsetList::with_capacity(batch1.vals_offs.len() + batch2.vals_offs.len()),
+                vals_offs: L::OffsetContainer::with_capacity(batch1.vals_offs.len() + batch2.vals_offs.len()),
                 updates: L::UpdContainer::merge_capacity(&batch1.updates, &batch2.updates),
                 key_count: 0,
                 key_capacity: rhh_cap,
                 divisor: RhhValStorage::<L>::divisor_for_capacity(rhh_cap),
             };
 
-            storage.keys_offs.push(0);
-            storage.vals_offs.push(0);
+            // Mark explicit types because type inference fails to resolve it.
+            let keys_offs: &mut L::OffsetContainer = &mut storage.keys_offs;
+            keys_offs.push(0);
+            let vals_offs: &mut L::OffsetContainer = &mut storage.vals_offs;
+            vals_offs.push(0);
 
             RhhValMerger {
                 key_cursor1: 0,
@@ -746,9 +749,9 @@ mod val_batch {
             Self { 
                 result: RhhValStorage {
                     keys: L::KeyContainer::with_capacity(keys),
-                    keys_offs: OffsetList::with_capacity(keys + 1),
+                    keys_offs: L::OffsetContainer::with_capacity(keys + 1),
                     vals: L::ValContainer::with_capacity(vals),
-                    vals_offs: OffsetList::with_capacity(vals + 1),
+                    vals_offs: L::OffsetContainer::with_capacity(vals + 1),
                     updates: L::UpdContainer::with_capacity(upds),
                     key_count: 0,
                     key_capacity: rhh_capacity,

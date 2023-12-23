@@ -70,7 +70,7 @@ mod val_batch {
     use timely::progress::{Antichain, frontier::AntichainRef};
 
     use crate::trace::{Batch, BatchReader, Builder, Cursor, Description, Merger};
-    use crate::trace::implementations::{BatchContainer, OffsetList};
+    use crate::trace::implementations::BatchContainer;
     use crate::trace::cursor::MyTrait;
 
     use super::{Layout, Update};
@@ -83,7 +83,7 @@ mod val_batch {
         /// Offsets used to provide indexes from keys to values.
         ///
         /// The length of this list is one longer than `keys`, so that we can avoid bounds logic.
-        pub keys_offs: OffsetList,
+        pub keys_offs: L::OffsetContainer,
         /// Concatenated ordered lists of values, bracketed by offsets in `keys_offs`.
         pub vals: L::ValContainer,
         /// Offsets used to provide indexes from values to updates.
@@ -94,7 +94,7 @@ mod val_batch {
         /// single common update values (e.g. in a snapshot, the minimal time and a diff of one).
         ///
         /// The length of this list is one longer than `vals`, so that we can avoid bounds logic.
-        pub vals_offs: OffsetList,
+        pub vals_offs: L::OffsetContainer,
         /// Concatenated ordered lists of updates, bracketed by offsets in `vals_offs`.
         pub updates: L::UpdContainer,
     }
@@ -102,12 +102,12 @@ mod val_batch {
     impl<L: Layout> OrdValStorage<L> {
         /// Lower and upper bounds in `self.vals` corresponding to the key at `index`.
         fn values_for_key(&self, index: usize) -> (usize, usize) {
-            (self.keys_offs.index(index), self.keys_offs.index(index+1))
+            (self.keys_offs.index(index).into_owned(), self.keys_offs.index(index+1).into_owned())
         }
         /// Lower and upper bounds in `self.updates` corresponding to the value at `index`.
         fn updates_for_value(&self, index: usize) -> (usize, usize) {
-            let mut lower = self.vals_offs.index(index);
-            let upper = self.vals_offs.index(index+1);
+            let mut lower = self.vals_offs.index(index).into_owned();
+            let upper = self.vals_offs.index(index+1).into_owned();
             // We use equal lower and upper to encode "singleton update; just before here".
             // It should only apply when there is a prior element, so `lower` should be greater than zero.
             if lower == upper {
@@ -206,14 +206,17 @@ mod val_batch {
 
             let mut storage = OrdValStorage {
                 keys: L::KeyContainer::merge_capacity(&batch1.keys, &batch2.keys),
-                keys_offs: OffsetList::with_capacity(batch1.keys_offs.len() + batch2.keys_offs.len()),
+                keys_offs: L::OffsetContainer::with_capacity(batch1.keys_offs.len() + batch2.keys_offs.len()),
                 vals: L::ValContainer::merge_capacity(&batch1.vals, &batch2.vals),
-                vals_offs: OffsetList::with_capacity(batch1.vals_offs.len() + batch2.vals_offs.len()),
+                vals_offs: L::OffsetContainer::with_capacity(batch1.vals_offs.len() + batch2.vals_offs.len()),
                 updates: L::UpdContainer::merge_capacity(&batch1.updates, &batch2.updates),
             };
 
-            storage.keys_offs.push(0);
-            storage.vals_offs.push(0);
+            // Mark explicit types because type inference fails to resolve it.
+            let keys_offs: &mut L::OffsetContainer = &mut storage.keys_offs;
+            keys_offs.push(0);
+            let vals_offs: &mut L::OffsetContainer = &mut storage.vals_offs;
+            vals_offs.push(0);
 
             OrdValMerger {
                 key_cursor1: 0,
@@ -546,9 +549,9 @@ mod val_batch {
             Self { 
                 result: OrdValStorage {
                     keys: L::KeyContainer::with_capacity(keys),
-                    keys_offs: OffsetList::with_capacity(keys + 1),
+                    keys_offs: L::OffsetContainer::with_capacity(keys + 1),
                     vals: L::ValContainer::with_capacity(vals),
-                    vals_offs: OffsetList::with_capacity(vals + 1),
+                    vals_offs: L::OffsetContainer::with_capacity(vals + 1),
                     updates: L::UpdContainer::with_capacity(upds),
                 },
                 singleton: None,
@@ -636,7 +639,7 @@ mod key_batch {
     use timely::progress::{Antichain, frontier::AntichainRef};
 
     use crate::trace::{Batch, BatchReader, Builder, Cursor, Description, Merger};
-    use crate::trace::implementations::{BatchContainer, OffsetList};
+    use crate::trace::implementations::BatchContainer;
     use crate::trace::cursor::MyTrait;
 
     use super::{Layout, Update};
@@ -654,7 +657,7 @@ mod key_batch {
         /// single common update values (e.g. in a snapshot, the minimal time and a diff of one).
         ///
         /// The length of this list is one longer than `keys`, so that we can avoid bounds logic.
-        pub keys_offs: OffsetList,
+        pub keys_offs: L::OffsetContainer,
         /// Concatenated ordered lists of updates, bracketed by offsets in `vals_offs`.
         pub updates: L::UpdContainer,
     }
@@ -662,8 +665,8 @@ mod key_batch {
     impl<L: Layout> OrdKeyStorage<L> {
         /// Lower and upper bounds in `self.vals` corresponding to the key at `index`.
         fn updates_for_key(&self, index: usize) -> (usize, usize) {
-            let mut lower = self.keys_offs.index(index);
-            let upper = self.keys_offs.index(index+1);
+            let mut lower = self.keys_offs.index(index).into_owned();
+            let upper = self.keys_offs.index(index+1).into_owned();
             // We use equal lower and upper to encode "singleton update; just before here".
             // It should only apply when there is a prior element, so `lower` should be greater than zero.
             if lower == upper {
@@ -763,11 +766,12 @@ mod key_batch {
 
             let mut storage = OrdKeyStorage {
                 keys: L::KeyContainer::merge_capacity(&batch1.keys, &batch2.keys),
-                keys_offs: OffsetList::with_capacity(batch1.keys_offs.len() + batch2.keys_offs.len()),
+                keys_offs: L::OffsetContainer::with_capacity(batch1.keys_offs.len() + batch2.keys_offs.len()),
                 updates: L::UpdContainer::merge_capacity(&batch1.updates, &batch2.updates),
             };
 
-            storage.keys_offs.push(0);
+            let keys_offs: &mut L::OffsetContainer = &mut storage.keys_offs;
+            keys_offs.push(0);
 
             OrdKeyMerger {
                 key_cursor1: 0,
@@ -1011,7 +1015,7 @@ mod key_batch {
             Self { 
                 result: OrdKeyStorage {
                     keys: L::KeyContainer::with_capacity(keys),
-                    keys_offs: OffsetList::with_capacity(keys + 1),
+                    keys_offs: L::OffsetContainer::with_capacity(keys + 1),
                     updates: L::UpdContainer::with_capacity(upds),
                 },
                 singleton: None,

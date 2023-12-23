@@ -54,6 +54,7 @@ pub use self::ord_neu::OrdValSpine as ValSpine;
 pub use self::ord_neu::OrdKeySpine as KeySpine;
 
 use std::borrow::{ToOwned};
+use std::cmp::Ordering;
 
 use timely::container::columnation::{Columnation, TimelyStack};
 use crate::lattice::Lattice;
@@ -97,6 +98,8 @@ pub trait Layout {
     /// Container for update vals.
     type UpdContainer:
         for<'a> BatchContainer<PushItem=(<Self::Target as Update>::Time, <Self::Target as Update>::Diff), ReadItem<'a> = &'a (<Self::Target as Update>::Time, <Self::Target as Update>::Diff)>;
+    /// Container for offsets.
+    type OffsetContainer: BatchContainer<PushItem=usize>;
 }
 
 /// A layout that uses vectors
@@ -113,6 +116,7 @@ where
     type KeyContainer = Vec<U::Key>;
     type ValContainer = Vec<U::Val>;
     type UpdContainer = Vec<(U::Time, U::Diff)>;
+    type OffsetContainer = OffsetList;
 }
 
 /// A layout based on timely stacks
@@ -131,6 +135,7 @@ where
     type KeyContainer = TimelyStack<U::Key>;
     type ValContainer = TimelyStack<U::Val>;
     type UpdContainer = TimelyStack<(U::Time, U::Diff)>;
+    type OffsetContainer = OffsetList;
 }
 
 /// A type with a preferred container.
@@ -183,10 +188,13 @@ where
     type KeyContainer = K::Container;
     type ValContainer = V::Container;
     type UpdContainer = Vec<(T, D)>;
+    type OffsetContainer = OffsetList;
 }
 
 use std::convert::TryInto;
+use std::ops::Deref;
 use abomonation_derive::Abomonation;
+use crate::trace::cursor::MyTrait;
 
 /// A list of unsigned integers that uses `u32` elements as long as they are small enough, and switches to `u64` once they are not.
 #[derive(Eq, PartialEq, Ord, PartialOrd, Clone, Debug, Abomonation)]
@@ -234,6 +242,87 @@ impl OffsetList {
     }
 }
 
+/// Helper struct to provide `MyTrait` for `Copy` types.
+#[derive(Eq, PartialEq, Ord, PartialOrd, Clone, Copy)]
+pub struct Wrapper<T: Copy>(T);
+
+impl<T: Copy> Deref for Wrapper<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<'a, T: Copy + Ord> MyTrait<'a> for Wrapper<T> {
+    type Owned = T;
+
+    fn into_owned(self) -> Self::Owned {
+        self.0
+    }
+
+    fn clone_onto(&self, other: &mut Self::Owned) {
+        *other = self.0;
+    }
+
+    fn compare(&self, other: &Self::Owned) -> Ordering {
+        self.0.cmp(other)
+    }
+
+    fn borrow_as(other: &'a Self::Owned) -> Self {
+        Self(*other)
+    }
+}
+
+impl BatchContainer for OffsetList {
+    type PushItem = usize;
+    type ReadItem<'a> = Wrapper<usize>;
+
+    fn push(&mut self, item: Self::PushItem) {
+        self.push(item);
+    }
+
+    fn copy_push(&mut self, item: &Self::PushItem) {
+        self.push(*item);
+    }
+
+    fn copy(&mut self, item: Self::ReadItem<'_>) {
+        self.push(item.0);
+    }
+
+    fn copy_slice(&mut self, slice: &[Self::PushItem]) {
+        for index in slice {
+            self.push(*index);
+        }
+    }
+
+    fn copy_range(&mut self, other: &Self, start: usize, end: usize) {
+        for offset in start..end {
+            self.push(other.index(offset));
+        }
+    }
+
+    fn with_capacity(size: usize) -> Self {
+        Self::with_capacity(size)
+    }
+
+    fn reserve(&mut self, _additional: usize) {
+        // Nop
+    }
+
+    fn merge_capacity(cont1: &Self, cont2: &Self) -> Self {
+        Self::with_capacity(cont1.len() + cont2.len())
+    }
+
+    fn index(&self, index: usize) -> Self::ReadItem<'_> {
+        Wrapper(self.index(index))
+    }
+
+    fn len(&self) -> usize {
+        self.len()
+    }
+}
+
 pub use self::containers::{BatchContainer, SliceContainer, SliceContainer2};
 
 /// Containers for data that resemble `Vec<T>`, with leaner implementations.
@@ -245,7 +334,7 @@ pub mod containers {
     use crate::trace::MyTrait;
 
     /// A general-purpose container resembling `Vec<T>`.
-    pub trait BatchContainer: Default + 'static {
+    pub trait BatchContainer: 'static {
         /// The type of contained item.
         ///
         /// The container only supplies references to the item, so it needn't be sized.
