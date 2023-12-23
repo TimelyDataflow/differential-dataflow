@@ -103,8 +103,6 @@ where
             stats: Default::default(),
         }
     }
-    fn reserve(&mut self, _additional: usize) {
-    }
     fn merge_capacity(cont1: &Self, cont2: &Self) -> Self {
 
         if cont1.len() > 0 { cont1.print(); }

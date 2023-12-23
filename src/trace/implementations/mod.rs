@@ -306,10 +306,6 @@ impl BatchContainer for OffsetList {
         Self::with_capacity(size)
     }
 
-    fn reserve(&mut self, _additional: usize) {
-        // Nop
-    }
-
     fn merge_capacity(cont1: &Self, cont2: &Self) -> Self {
         Self::with_capacity(cont1.len() + cont2.len())
     }
@@ -353,8 +349,6 @@ pub mod containers {
         fn copy_range(&mut self, other: &Self, start: usize, end: usize);
         /// Creates a new container with sufficient capacity.
         fn with_capacity(size: usize) -> Self;
-        /// Reserves additional capacity.
-        fn reserve(&mut self, additional: usize);
         /// Creates a new container with sufficient capacity.
         fn merge_capacity(cont1: &Self, cont2: &Self) -> Self;
 
@@ -441,9 +435,6 @@ pub mod containers {
         fn with_capacity(size: usize) -> Self {
             Vec::with_capacity(size)
         }
-        fn reserve(&mut self, additional: usize) {
-            self.reserve(additional);
-        }
         fn merge_capacity(cont1: &Self, cont2: &Self) -> Self {
             Vec::with_capacity(cont1.len() + cont2.len())
         }
@@ -485,8 +476,6 @@ pub mod containers {
         }
         fn with_capacity(size: usize) -> Self {
             Self::with_capacity(size)
-        }
-        fn reserve(&mut self, _additional: usize) {
         }
         fn merge_capacity(cont1: &Self, cont2: &Self) -> Self {
             let mut new = Self::default();
@@ -550,8 +539,6 @@ pub mod containers {
                 offsets,
                 inner: Vec::with_capacity(size),
             }
-        }
-        fn reserve(&mut self, _additional: usize) {
         }
         fn merge_capacity(cont1: &Self, cont2: &Self) -> Self {
             let mut offsets = Vec::with_capacity(cont1.inner.len() + cont2.inner.len() + 1);
@@ -682,8 +669,6 @@ pub mod containers {
                 offsets,
                 inner: Vec::with_capacity(size),
             }
-        }
-        fn reserve(&mut self, _additional: usize) {
         }
         fn merge_capacity(cont1: &Self, cont2: &Self) -> Self {
             let mut offsets = Vec::with_capacity(cont1.inner.len() + cont2.inner.len() + 1);
