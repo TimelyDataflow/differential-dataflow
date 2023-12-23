@@ -84,11 +84,6 @@ where
             }
         }
     }
-    fn copy_slice(&mut self, slice: &[Vec<B>]) {
-        for item in slice {
-            self.copy_push(item);
-        }
-    }
     fn copy_range(&mut self, other: &Self, start: usize, end: usize) {
         for index in start .. end {
             self.copy(other.index(index));

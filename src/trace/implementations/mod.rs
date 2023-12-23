@@ -290,12 +290,6 @@ impl BatchContainer for OffsetList {
         self.push(item.0);
     }
 
-    fn copy_slice(&mut self, slice: &[Self::PushItem]) {
-        for index in slice {
-            self.push(*index);
-        }
-    }
-
     fn copy_range(&mut self, other: &Self, start: usize, end: usize) {
         for offset in start..end {
             self.push(other.index(offset));
@@ -343,8 +337,6 @@ pub mod containers {
         fn copy_push(&mut self, item: &Self::PushItem);
         /// Inserts a borrowed item.
         fn copy(&mut self, item: Self::ReadItem<'_>);
-        /// Extends from a slice of items.
-        fn copy_slice(&mut self, slice: &[Self::PushItem]);
         /// Extends from a range of items in another`Self`.
         fn copy_range(&mut self, other: &Self, start: usize, end: usize);
         /// Creates a new container with sufficient capacity.
@@ -426,9 +418,6 @@ pub mod containers {
         fn copy(&mut self, item: &T) {
             self.push(item.clone());
         }
-        fn copy_slice(&mut self, slice: &[T]) {
-            self.extend_from_slice(slice);
-        }
         fn copy_range(&mut self, other: &Self, start: usize, end: usize) {
             self.extend_from_slice(&other[start .. end]);
         }
@@ -460,12 +449,6 @@ pub mod containers {
         }
         fn copy(&mut self, item: &T) {
             self.copy(item);
-        }
-        fn copy_slice(&mut self, slice: &[Self::PushItem]) {
-            self.reserve_items(slice.iter());
-            for item in slice.iter() {
-                self.copy(item);
-            }
         }
         fn copy_range(&mut self, other: &Self, start: usize, end: usize) {
             let slice = &other[start .. end];
@@ -521,11 +504,6 @@ pub mod containers {
                 self.inner.copy(x);
             }
             self.offsets.push(self.inner.len());
-        }
-        fn copy_slice(&mut self, slice: &[Vec<B>]) {
-            for item in slice {
-                self.copy(item);
-            }
         }
         fn copy_range(&mut self, other: &Self, start: usize, end: usize) {
             for index in start .. end {
@@ -627,8 +605,6 @@ pub mod containers {
             }
         }
     }
-    
-    
 
     impl<B> BatchContainer for SliceContainer2<B>
     where
@@ -650,11 +626,6 @@ pub mod containers {
                 self.inner.copy(x);
             }
             self.offsets.push(self.inner.len());
-        }
-        fn copy_slice(&mut self, slice: &[Vec<B>]) {
-            for item in slice {
-                self.copy_push(item);
-            }
         }
         fn copy_range(&mut self, other: &Self, start: usize, end: usize) {
             for index in start .. end {
