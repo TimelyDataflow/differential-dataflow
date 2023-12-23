@@ -144,16 +144,16 @@ mod val_batch {
     {
         /// Lower and upper bounds in `self.vals` corresponding to the key at `index`.
         fn values_for_key(&self, index: usize) -> (usize, usize) {
-            let lower = *self.keys_offs.index(index);
-            let upper = *self.keys_offs.index(index+1);
+            let lower = self.keys_offs.index(index).into_owned();
+            let upper = self.keys_offs.index(index+1).into_owned();
             // Looking up values for an invalid key indicates something is wrong.
             assert!(lower < upper, "{:?} v {:?} at {:?}", lower, upper, index);
             (lower, upper)
         }
         /// Lower and upper bounds in `self.updates` corresponding to the value at `index`.
         fn updates_for_value(&self, index: usize) -> (usize, usize) {
-            let mut lower = *self.vals_offs.index(index);
-            let upper = *self.vals_offs.index(index+1);
+            let mut lower = self.vals_offs.index(index).into_owned();
+            let upper = self.vals_offs.index(index+1).into_owned();
             // We use equal lower and upper to encode "singleton update; just before here".
             // It should only apply when there is a prior element, so `lower` should be greater than zero.
             if lower == upper {
@@ -178,7 +178,7 @@ mod val_batch {
             // push additional blank entries in.
             while self.keys.len() < desired {
                 // We insert a default (dummy) key and repeat the offset to indicate this.
-                let current_offset = *self.keys_offs.index(self.keys.len());
+                let current_offset = self.keys_offs.index(self.keys.len()).into_owned();
                 self.keys.push(Default::default());
                 self.keys_offs.push(current_offset);
             }

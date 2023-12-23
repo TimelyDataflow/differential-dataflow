@@ -99,7 +99,7 @@ pub trait Layout {
     type UpdContainer:
         for<'a> BatchContainer<PushItem=(<Self::Target as Update>::Time, <Self::Target as Update>::Diff), ReadItem<'a> = &'a (<Self::Target as Update>::Time, <Self::Target as Update>::Diff)>;
     /// Container for offsets.
-    type OffsetContainer: for<'a> BatchContainer<PushItem=usize, ReadItem<'a>=Wrapper<usize>>;
+    type OffsetContainer: BatchContainer<PushItem=usize>;
 }
 
 /// A layout that uses vectors
