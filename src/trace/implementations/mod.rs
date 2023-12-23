@@ -290,12 +290,6 @@ impl BatchContainer for OffsetList {
         self.push(item.0);
     }
 
-    fn copy_slice(&mut self, slice: &[Self::PushItem]) {
-        for index in slice {
-            self.push(*index);
-        }
-    }
-
     fn copy_range(&mut self, other: &Self, start: usize, end: usize) {
         for offset in start..end {
             self.push(other.index(offset));
@@ -304,10 +298,6 @@ impl BatchContainer for OffsetList {
 
     fn with_capacity(size: usize) -> Self {
         Self::with_capacity(size)
-    }
-
-    fn reserve(&mut self, _additional: usize) {
-        // Nop
     }
 
     fn merge_capacity(cont1: &Self, cont2: &Self) -> Self {
@@ -347,14 +337,10 @@ pub mod containers {
         fn copy_push(&mut self, item: &Self::PushItem);
         /// Inserts a borrowed item.
         fn copy(&mut self, item: Self::ReadItem<'_>);
-        /// Extends from a slice of items.
-        fn copy_slice(&mut self, slice: &[Self::PushItem]);
         /// Extends from a range of items in another`Self`.
         fn copy_range(&mut self, other: &Self, start: usize, end: usize);
         /// Creates a new container with sufficient capacity.
         fn with_capacity(size: usize) -> Self;
-        /// Reserves additional capacity.
-        fn reserve(&mut self, additional: usize);
         /// Creates a new container with sufficient capacity.
         fn merge_capacity(cont1: &Self, cont2: &Self) -> Self;
 
@@ -432,17 +418,11 @@ pub mod containers {
         fn copy(&mut self, item: &T) {
             self.push(item.clone());
         }
-        fn copy_slice(&mut self, slice: &[T]) {
-            self.extend_from_slice(slice);
-        }
         fn copy_range(&mut self, other: &Self, start: usize, end: usize) {
             self.extend_from_slice(&other[start .. end]);
         }
         fn with_capacity(size: usize) -> Self {
             Vec::with_capacity(size)
-        }
-        fn reserve(&mut self, additional: usize) {
-            self.reserve(additional);
         }
         fn merge_capacity(cont1: &Self, cont2: &Self) -> Self {
             Vec::with_capacity(cont1.len() + cont2.len())
@@ -470,12 +450,6 @@ pub mod containers {
         fn copy(&mut self, item: &T) {
             self.copy(item);
         }
-        fn copy_slice(&mut self, slice: &[Self::PushItem]) {
-            self.reserve_items(slice.iter());
-            for item in slice.iter() {
-                self.copy(item);
-            }
-        }
         fn copy_range(&mut self, other: &Self, start: usize, end: usize) {
             let slice = &other[start .. end];
             self.reserve_items(slice.iter());
@@ -485,8 +459,6 @@ pub mod containers {
         }
         fn with_capacity(size: usize) -> Self {
             Self::with_capacity(size)
-        }
-        fn reserve(&mut self, _additional: usize) {
         }
         fn merge_capacity(cont1: &Self, cont2: &Self) -> Self {
             let mut new = Self::default();
@@ -533,11 +505,6 @@ pub mod containers {
             }
             self.offsets.push(self.inner.len());
         }
-        fn copy_slice(&mut self, slice: &[Vec<B>]) {
-            for item in slice {
-                self.copy(item);
-            }
-        }
         fn copy_range(&mut self, other: &Self, start: usize, end: usize) {
             for index in start .. end {
                 self.copy(other.index(index));
@@ -550,8 +517,6 @@ pub mod containers {
                 offsets,
                 inner: Vec::with_capacity(size),
             }
-        }
-        fn reserve(&mut self, _additional: usize) {
         }
         fn merge_capacity(cont1: &Self, cont2: &Self) -> Self {
             let mut offsets = Vec::with_capacity(cont1.inner.len() + cont2.inner.len() + 1);
@@ -640,8 +605,6 @@ pub mod containers {
             }
         }
     }
-    
-    
 
     impl<B> BatchContainer for SliceContainer2<B>
     where
@@ -664,11 +627,6 @@ pub mod containers {
             }
             self.offsets.push(self.inner.len());
         }
-        fn copy_slice(&mut self, slice: &[Vec<B>]) {
-            for item in slice {
-                self.copy_push(item);
-            }
-        }
         fn copy_range(&mut self, other: &Self, start: usize, end: usize) {
             for index in start .. end {
                 self.copy(other.index(index));
@@ -682,8 +640,6 @@ pub mod containers {
                 offsets,
                 inner: Vec::with_capacity(size),
             }
-        }
-        fn reserve(&mut self, _additional: usize) {
         }
         fn merge_capacity(cont1: &Self, cont2: &Self) -> Self {
             let mut offsets = Vec::with_capacity(cont1.inner.len() + cont2.inner.len() + 1);
