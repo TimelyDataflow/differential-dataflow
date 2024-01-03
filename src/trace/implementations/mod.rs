@@ -49,6 +49,7 @@ pub mod ord_neu;
 pub mod rhh;
 pub mod huffman_container;
 pub mod option_container;
+pub mod slice_container;
 
 // Opinionated takes on default spines.
 pub use self::ord_neu::OrdValSpine as ValSpine;
@@ -494,7 +495,7 @@ pub mod containers {
 
     impl<B> BatchContainer for SliceContainer<B>
     where
-        B: Ord + Clone + Sized + 'static,
+        B: Ord + Clone + 'static,
     {
         type PushItem = Vec<B>;
         type ReadItem<'a> = &'a [B];
