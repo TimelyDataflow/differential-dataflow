@@ -48,6 +48,7 @@ pub use self::merge_batcher::MergeBatcher as Batcher;
 pub mod ord_neu;
 pub mod rhh;
 pub mod huffman_container;
+pub mod option_container;
 
 // Opinionated takes on default spines.
 pub use self::ord_neu::OrdValSpine as ValSpine;
@@ -320,7 +321,7 @@ pub mod containers {
 
     use timely::container::columnation::{Columnation, TimelyStack};
 
-    use std::borrow::{Borrow, ToOwned};
+    use std::borrow::ToOwned;
     use crate::trace::MyTrait;
 
     /// A general-purpose container resembling `Vec<T>`.
@@ -332,13 +333,21 @@ pub mod containers {
         /// The type that can be read back out of the container.
         type ReadItem<'a>: Copy + MyTrait<'a, Owned = Self::PushItem> + for<'b> PartialOrd<Self::ReadItem<'b>>;
         /// Inserts an owned item.
-        fn push(&mut self, item: Self::PushItem);
+        fn push(&mut self, item: Self::PushItem) {
+            self.copy_push(&item);
+        }
         /// Inserts an owned item.
-        fn copy_push(&mut self, item: &Self::PushItem);
+        fn copy_push(&mut self, item: &Self::PushItem) {
+            self.copy(MyTrait::borrow_as(item));
+        }
         /// Inserts a borrowed item.
         fn copy(&mut self, item: Self::ReadItem<'_>);
         /// Extends from a range of items in another`Self`.
-        fn copy_range(&mut self, other: &Self, start: usize, end: usize);
+        fn copy_range(&mut self, other: &Self, start: usize, end: usize) {
+            for index in start .. end {
+                self.copy(other.index(index));
+            }
+        }
         /// Creates a new container with sufficient capacity.
         fn with_capacity(size: usize) -> Self;
         /// Creates a new container with sufficient capacity.
@@ -357,6 +366,8 @@ pub mod containers {
                 None
             }
         }
+        /// Indicates if the length is zero.
+        fn is_empty(&self) -> bool { self.len() == 0 }
 
         /// Reports the number of elements satisfing the predicate.
         ///
@@ -441,9 +452,6 @@ pub mod containers {
         type PushItem = T;
         type ReadItem<'a> = &'a Self::PushItem;
 
-        fn push(&mut self, item: Self::PushItem) {
-            self.copy(item.borrow());
-        }
         fn copy_push(&mut self, item: &Self::PushItem) {
             self.copy(item);
         }
