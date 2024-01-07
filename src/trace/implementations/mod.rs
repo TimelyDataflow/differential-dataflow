@@ -114,9 +114,9 @@ where
     U::Val: 'static,
 {
     type Target = U;
-    type KeyContainer = Vec<U::Key>;
-    type ValContainer = Vec<U::Val>;
-    type UpdContainer = Vec<(U::Time, U::Diff)>;
+    type KeyContainer = CapacityCheckingContainer<Vec<U::Key>>;
+    type ValContainer = CapacityCheckingContainer<Vec<U::Val>>;
+    type UpdContainer = CapacityCheckingContainer<Vec<(U::Time, U::Diff)>>;
     type OffsetContainer = OffsetList;
 }
 
@@ -133,9 +133,9 @@ where
     U::Diff: Columnation,
 {
     type Target = U;
-    type KeyContainer = TimelyStack<U::Key>;
-    type ValContainer = TimelyStack<U::Val>;
-    type UpdContainer = TimelyStack<(U::Time, U::Diff)>;
+    type KeyContainer = CapacityCheckingContainer<TimelyStack<U::Key>>;
+    type ValContainer = CapacityCheckingContainer<TimelyStack<U::Val>>;
+    type UpdContainer = CapacityCheckingContainer<TimelyStack<(U::Time, U::Diff)>>;
     type OffsetContainer = OffsetList;
 }
 
@@ -196,6 +196,7 @@ use std::convert::TryInto;
 use std::ops::Deref;
 use abomonation_derive::Abomonation;
 use crate::trace::cursor::MyTrait;
+use crate::trace::implementations::containers::CapacityCheckingContainer;
 
 /// A list of unsigned integers that uses `u32` elements as long as they are small enough, and switches to `u64` once they are not.
 #[derive(Eq, PartialEq, Ord, PartialOrd, Clone, Debug, Abomonation)]
@@ -478,6 +479,69 @@ pub mod containers {
         }
         fn len(&self) -> usize {
             self[..].len()
+        }
+    }
+
+    /// TODO
+    pub struct CapacityCheckingContainer<C: BatchContainer> {
+        initial_capacity: usize,
+        length: usize,
+        inner: C,
+    }
+
+    impl<C: BatchContainer> CapacityCheckingContainer<C> {
+        fn record_len(&mut self, additional: usize) {
+            self.length += additional;
+            if self.initial_capacity > 0 {
+                assert!(self.length <= self.initial_capacity, "length > initial capacity: length {}, cap {}", self.length, self.initial_capacity);
+            }
+        }
+    }
+
+    impl<C: BatchContainer> BatchContainer for CapacityCheckingContainer<C> {
+        type PushItem = C::PushItem;
+        type ReadItem<'a> = C::ReadItem<'a>;
+
+        fn copy(&mut self, item: Self::ReadItem<'_>) {
+            self.record_len(1);
+            self.inner.copy(item)
+        }
+
+        fn with_capacity(size: usize) -> Self {
+            Self {
+                initial_capacity: size,
+                length: 0,
+                inner: C::with_capacity(size),
+            }
+        }
+
+        fn merge_capacity(cont1: &Self, cont2: &Self) -> Self {
+            Self {
+                initial_capacity: cont1.initial_capacity + cont2.initial_capacity,
+                length: 0,
+                inner: C::merge_capacity(&cont1.inner, &cont2.inner),
+            }
+        }
+
+        fn index(&self, index: usize) -> Self::ReadItem<'_> {
+            self.inner.index(index)
+        }
+
+        fn len(&self) -> usize {
+            assert_eq!(self.inner.len(), self.length);
+            self.inner.len()
+        }
+        fn push(&mut self, item: Self::PushItem) {
+            self.record_len(1);
+            self.inner.push(item);
+        }
+        fn copy_push(&mut self, item: &Self::PushItem) {
+            self.record_len(1);
+            self.inner.copy_push(item)
+        }
+        fn copy_range(&mut self, other: &Self, start: usize, end: usize) {
+            self.record_len(end - start);
+            self.inner.copy_range(&other.inner, start, end)
         }
     }
 
