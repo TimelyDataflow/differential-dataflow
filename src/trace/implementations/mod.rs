@@ -200,6 +200,8 @@ use crate::trace::cursor::MyTrait;
 /// A list of unsigned integers that uses `u32` elements as long as they are small enough, and switches to `u64` once they are not.
 #[derive(Eq, PartialEq, Ord, PartialOrd, Clone, Debug, Abomonation)]
 pub struct OffsetList {
+    /// Length of a prefix of zero elements.
+    pub zero_prefix: usize,
     /// Offsets that fit within a `u32`.
     pub smol: Vec<u32>,
     /// Offsets that either do not fit in a `u32`, or are inserted after some offset that did not fit.
@@ -210,13 +212,17 @@ impl OffsetList {
     /// Allocate a new list with a specified capacity.
     pub fn with_capacity(cap: usize) -> Self {
         Self {
+            zero_prefix: 0,
             smol: Vec::with_capacity(cap),
             chonk: Vec::new(),
         }
     }
     /// Inserts the offset, as a `u32` if that is still on the table.
     pub fn push(&mut self, offset: usize) {
-        if self.chonk.is_empty() {
+        if self.smol.is_empty() && self.chonk.is_empty() && offset == 0 {
+            self.zero_prefix += 1;
+        }
+        else if self.chonk.is_empty() {
             if let Ok(smol) = offset.try_into() {
                 self.smol.push(smol);
             } 
@@ -230,16 +236,19 @@ impl OffsetList {
     }
     /// Like `std::ops::Index`, which we cannot implement as it must return a `&usize`.
     pub fn index(&self, index: usize) -> usize {
-        if index < self.smol.len() {
-            self.smol[index].try_into().unwrap()
+        if index < self.zero_prefix {
+            0
+        }
+        else if index - self.zero_prefix < self.smol.len() {
+            self.smol[index - self.zero_prefix].try_into().unwrap()
         }
         else {
-            self.chonk[index - self.smol.len()].try_into().unwrap()
+            self.chonk[index - self.zero_prefix - self.smol.len()].try_into().unwrap()
         }
     }
     /// The number of offsets in the list.
     pub fn len(&self) -> usize {
-        self.smol.len() + self.chonk.len()
+        self.zero_prefix + self.smol.len() + self.chonk.len()
     }
 }
 
