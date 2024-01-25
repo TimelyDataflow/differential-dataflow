@@ -4,7 +4,6 @@ use timely::dataflow::Scope;
 
 use differential_dataflow::{ExchangeData, Collection};
 use differential_dataflow::difference::{Monoid, Multiply};
-use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::trace::TraceReader;
 
