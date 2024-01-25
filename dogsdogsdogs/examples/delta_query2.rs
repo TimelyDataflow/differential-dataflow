@@ -36,13 +36,15 @@ fn main() {
                 use dogsdogsdogs::operators::half_join;
 
                 // pick a frontier that will not mislead TOTAL ORDER comparisons.
-                let closure = |time: &Product<usize, usize>| Product::new(time.outer.saturating_sub(1), time.inner.saturating_sub(1));
+                let closure = |time: &Product<usize, usize>, antichain: &mut timely::progress::Antichain<Product<usize, usize>>| { 
+                    antichain.insert(Product::new(time.outer.saturating_sub(1), time.inner.saturating_sub(1))); 
+                };
 
                 let path1 =
                 half_join(
                     &changes1,
                     forward2,
-                    closure.clone(),
+                    closure,
                     |t1,t2| t1.lt(t2),  // This one ignores concurrent updates.
                     |key, val1, val2| (key.clone(), (val1.clone(), val2.clone())),
                 );
@@ -51,7 +53,7 @@ fn main() {
                 half_join(
                     &changes2,
                     forward1,
-                    closure.clone(),
+                    closure,
                     |t1,t2| t1.le(t2),  // This one can "see" concurrent updates.
                     |key, val1, val2| (key.clone(), (val2.clone(), val1.clone())),
                 );

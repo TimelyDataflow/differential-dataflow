@@ -83,7 +83,7 @@ where
     Tr: TraceReader+Clone+'static,
     R: Mul<Tr::Diff>,
     <R as Mul<Tr::Diff>>::Output: Semigroup,
-    FF: Fn(&G::Timestamp) -> G::Timestamp + 'static,
+    FF: Fn(&G::Timestamp, &mut Antichain<G::Timestamp>) + 'static,
     CF: Fn(&G::Timestamp, &G::Timestamp) -> bool + 'static,
     DOut: Clone+'static,
     S: FnMut(&Tr::KeyOwned, &V, Tr::Val<'_>)->DOut+'static,
@@ -134,7 +134,7 @@ where
     V: ExchangeData,
     R: ExchangeData + Monoid,
     Tr: TraceReader+Clone+'static,
-    FF: Fn(&G::Timestamp) -> G::Timestamp + 'static,
+    FF: Fn(&G::Timestamp, &mut Antichain<G::Timestamp>) + 'static,
     CF: Fn(&G::Timestamp, &G::Timestamp) -> bool + 'static,
     DOut: Clone+'static,
     ROut: Semigroup,
@@ -281,10 +281,10 @@ where
             // The logical merging frontier depends on both input1 and stash.
             let mut frontier = timely::progress::frontier::Antichain::new();
             for time in input1.frontier().frontier().iter() {
-                frontier.insert(frontier_func(time));
+                frontier_func(time, &mut frontier);
             }
-            for key in stash.keys() {
-                frontier.insert(frontier_func(key.time()));
+            for time in stash.keys() {
+                frontier_func(time, &mut frontier);
             }
             arrangement_trace.as_mut().map(|trace| trace.set_logical_compaction(frontier.borrow()));
 
