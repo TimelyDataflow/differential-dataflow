@@ -8,7 +8,6 @@ use timely::progress::Antichain;
 
 use differential_dataflow::{ExchangeData, Collection, AsCollection, Hashable};
 use differential_dataflow::difference::{Semigroup, Monoid};
-use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::trace::{Cursor, TraceReader};
 
