@@ -23,23 +23,26 @@ use serde::{Deserialize, Serialize};
 )]
 pub struct PointStamp<T> {
     /// A sequence of timestamps corresponding to timestamps in a sequence of nested scopes.
-    pub vector: Vec<T>,
+    vector: Vec<T>,
 }
 
 impl<T: Timestamp> PointStamp<T> {
     /// Create a new sequence.
     ///
     /// This method will modify `vector` to ensure it does not end with `T::minimum()`.
-    pub fn new(vector: Vec<T>) -> Self {
-        let mut result = PointStamp { vector };
-        result.enforce();
-        result
-    }
-    /// Enforces that `self` not end with `T::minimum()` by popping elements until it is true.
-    pub fn enforce(&mut self) {
-        while self.vector.last() == Some(&T::minimum()) {
-            self.vector.pop();
+    pub fn new(mut vector: Vec<T>) -> Self {
+        while vector.last() == Some(&T::minimum()) {
+            vector.pop();
         }
+        PointStamp { vector }
+    }
+    /// Returns the wrapped vector.
+    ///
+    /// This method is the support way to mutate the contents of `self`, by extracting 
+    /// the vector and then re-introducting it with `PointStamp::new` to re-establish 
+    /// the invariant that the vector not end with `T::minimum`.
+    pub fn into_vec(self) -> Vec<T> {
+        self.vector
     }
 }
 
