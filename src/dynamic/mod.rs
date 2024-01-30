@@ -51,10 +51,14 @@ where
             input.for_each(|cap, data| {
                 data.swap(&mut vector);
                 let mut new_time = cap.time().clone();
-                new_time.inner.vector.truncate(level - 1);
+                let mut vec = std::mem::take(&mut new_time.inner).into_vec();
+                vec.truncate(level - 1);
+                new_time.inner = PointStamp::new(vec);
                 let new_cap = cap.delayed(&new_time);
                 for (_data, time, _diff) in vector.iter_mut() {
-                    time.inner.vector.truncate(level - 1);
+                    let mut vec = std::mem::take(&mut time.inner).into_vec();
+                    vec.truncate(level - 1);
+                    time.inner = PointStamp::new(vec);
                 }
                 output.session(&new_cap).give_vec(&mut vector);
             });
