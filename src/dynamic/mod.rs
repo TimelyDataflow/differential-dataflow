@@ -52,9 +52,11 @@ where
                 data.swap(&mut vector);
                 let mut new_time = cap.time().clone();
                 new_time.inner.vector.truncate(level - 1);
+                new_time.inner.enforce();
                 let new_cap = cap.delayed(&new_time);
                 for (_data, time, _diff) in vector.iter_mut() {
                     time.inner.vector.truncate(level - 1);
+                    time.inner.enforce();
                 }
                 output.session(&new_cap).give_vec(&mut vector);
             });
