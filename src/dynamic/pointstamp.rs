@@ -46,6 +46,13 @@ impl<T: Timestamp> PointStamp<T> {
     }
 }
 
+impl<T> std::ops::Deref for PointStamp<T> {
+    type Target = [T];
+    fn deref(&self) -> &Self::Target {
+        &self.vector
+    }
+}
+
 // Implement timely dataflow's `PartialOrder` trait.
 use timely::order::PartialOrder;
 impl<T: PartialOrder + Timestamp> PartialOrder for PointStamp<T> {
