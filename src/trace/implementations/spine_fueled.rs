@@ -98,8 +98,10 @@ where
     upper: Antichain<B::Time>,
     effort: usize,
     activator: Option<timely::scheduling::activate::Activator>,
+    /// Parameters to `exert_logic`, containing tuples of `(index, count, length)`.
+    exert_logic_param: Vec<(usize, usize, usize)>,
     /// Logic to indicate whether and how many records we should introduce in the absence of actual updates.
-    exert_logic: ExertionLogic,
+    exert_logic: Option<ExertionLogic>,
     phantom: std::marker::PhantomData<(BA, BU)>,
 }
 
@@ -295,7 +297,7 @@ where
     }
 
     fn set_exert_logic(&mut self, logic: ExertionLogic) {
-        self.exert_logic = logic;
+        self.exert_logic = Some(logic);
     }
 
     // Ideally, this method acts as insertion of `batch`, even if we are not yet able to begin
@@ -383,16 +385,19 @@ impl<B: Batch, BA, BU> Spine<B, BA, BU> {
     ///
     /// This method prepares an iterator over batches, including the level, count, and length of each layer.
     /// It supplies this to `self.exert_logic`, who produces the response of the amount of exertion to apply.
-    fn exert_effort(&self) -> Option<usize> {
-        (self.exert_logic)(
-            Box::new(self.merging.iter().enumerate().rev().map(|(index, batch)| {
+    fn exert_effort(&mut self) -> Option<usize> {
+        self.exert_logic.as_ref().and_then(|exert_logic| {
+            self.exert_logic_param.clear();
+            self.exert_logic_param.extend(self.merging.iter().enumerate().rev().map(|(index, batch)| {
                 match batch {
                     MergeState::Vacant => (index, 0, 0),
                     MergeState::Single(_) => (index, 1, batch.len()),
                     MergeState::Double(_) => (index, 2, batch.len()),
                 }
-            }))
-        )
+            }));
+
+            (exert_logic)(&self.exert_logic_param[..])
+        })
     }
 
     /// Describes the merge progress of layers in the trace.
@@ -435,7 +440,8 @@ impl<B: Batch, BA, BU> Spine<B, BA, BU> {
             upper: Antichain::from_elem(<B::Time as timely::progress::Timestamp>::minimum()),
             effort,
             activator,
-            exert_logic: std::sync::Arc::new(|_batches| None),
+            exert_logic_param: Vec::default(),
+            exert_logic: None,
             phantom: std::marker::PhantomData,
         }
     }
