@@ -135,8 +135,8 @@ pub fn configure(config: &mut timely::WorkerConfig, options: &Config) {
             std::sync::Arc::new(move |batches| {
                 let mut non_empty = 0;
                 for (_index, count, length) in batches {
-                    if count > 1 { return Some(effort as usize); }
-                    if length > 0 { non_empty += 1; }
+                    if *count > 1 { return Some(effort as usize); }
+                    if *length > 0 { non_empty += 1; }
                     if non_empty > 1 { return Some(effort as usize); }
                 }
                 None

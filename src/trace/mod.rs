@@ -27,7 +27,7 @@ pub use self::cursor::Cursor;
 pub use self::description::Description;
 
 /// A type used to express how much effort a trace should exert even in the absence of updates.
-pub type ExertionLogic = std::sync::Arc<dyn for<'a> Fn(Box<dyn Iterator<Item=(usize, usize, usize)>+'a>)->Option<usize>+Send+Sync>;
+pub type ExertionLogic = std::sync::Arc<dyn for<'a> Fn(&'a [(usize, usize, usize)])->Option<usize>+Send+Sync>;
 
 //     The traces and batch and cursors want the flexibility to appear as if they manage certain types of keys and
 //     values and such, while perhaps using other representations, I'm thinking mostly of wrappers around the keys
