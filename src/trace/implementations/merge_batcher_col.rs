@@ -1,23 +1,23 @@
 //! A general purpose `Batcher` implementation based on radix sort for TimelyStack.
 
-use timely::Container;
+use crate::difference::Semigroup;
+use crate::logging::{BatcherEvent, DifferentialEvent};
+use crate::trace::{Batcher, Builder};
 use timely::communication::message::RefOrMut;
 use timely::container::columnation::{Columnation, TimelyStack};
 use timely::logging::WorkerIdentifier;
 use timely::logging_core::Logger;
+use timely::progress::frontier::AntichainRef;
 use timely::progress::{frontier::Antichain, Timestamp};
-
-use crate::difference::Semigroup;
-use crate::logging::{BatcherEvent, DifferentialEvent};
-use crate::trace::{Batcher, Builder};
+use timely::{Container, PartialOrder};
 
 /// Creates batches from unordered tuples.
 pub struct ColumnatedMergeBatcher<K, V, T, D>
-where
-    K: Columnation + 'static,
-    V: Columnation + 'static,
-    T: Columnation + 'static,
-    D: Columnation + 'static,
+    where
+        K: Columnation + 'static,
+        V: Columnation + 'static,
+        T: Columnation + 'static,
+        D: Columnation + 'static,
 {
     sorter: MergeSorterColumnation<(K, V), T, D>,
     lower: Antichain<T>,
@@ -25,16 +25,19 @@ where
 }
 
 impl<K, V, T, D> Batcher for ColumnatedMergeBatcher<K, V, T, D>
-where
-    K: Columnation + Ord + Clone + 'static,
-    V: Columnation + Ord + Clone + 'static,
-    T: Columnation + Timestamp + 'static,
-    D: Columnation + Semigroup + 'static,
+    where
+        K: Columnation + Ord + Clone + 'static,
+        V: Columnation + Ord + Clone + 'static,
+        T: Columnation + Timestamp + 'static,
+        D: Columnation + Semigroup + 'static,
 {
-    type Item = ((K,V),T,D);
+    type Item = ((K, V), T, D);
     type Time = T;
 
-    fn new(logger: Option<Logger<DifferentialEvent, WorkerIdentifier>>, operator_id: usize) -> Self {
+    fn new(
+        logger: Option<Logger<DifferentialEvent, WorkerIdentifier>>,
+        operator_id: usize,
+    ) -> Self {
         ColumnatedMergeBatcher {
             sorter: MergeSorterColumnation::new(logger, operator_id),
             frontier: Antichain::new(),
@@ -50,7 +53,7 @@ where
                 // This is a moment at which we could capture the allocations backing
                 // `batch` into a different form of region, rather than just  cloning.
                 self.sorter.push(&mut reference.clone());
-            },
+            }
             RefOrMut::Mut(reference) => {
                 self.sorter.push(reference);
             }
@@ -62,10 +65,12 @@ where
     // which we call `lower`, by assumption that after sealing a batcher we receive no more
     // updates with times not greater or equal to `upper`.
     #[inline]
-    fn seal<B: Builder<Item=Self::Item, Time=Self::Time>>(&mut self, upper: Antichain<T>) -> B::Output {
-
-        let mut merged = Default::default();
-        self.sorter.finish_into(&mut merged);
+    fn seal<B: Builder<Item = Self::Item, Time = Self::Time>>(
+        &mut self,
+        upper: Antichain<T>,
+    ) -> B::Output {
+        self.frontier.clear();
+        let merged = self.sorter.extract_into(upper.borrow(), &mut self.frontier);
 
         // Determine the number of distinct keys, values, and updates,
         // and form a builder pre-sized for these numbers.
@@ -74,69 +79,40 @@ where
             let mut vals = 0;
             let mut upds = 0;
             let mut prev_keyval = None;
-            for buffer in merged.iter() {
-                for ((key, val), time, _) in buffer.iter() {
-                    if !upper.less_equal(time) {
-                        if let Some((p_key, p_val)) = prev_keyval {
-                            if p_key != key {
-                                keys += 1;
-                                vals += 1;
-                            }
-                            else if p_val != val {
-                                vals += 1;
-                            }
-                            upds += 1;
-                        } else {
-                            keys += 1;
-                            vals += 1;
-                            upds += 1;
-                        }
-                        prev_keyval = Some((key, val));
+            for ((key, val), _time, _) in merged.iter().map(|t| t.iter()).flatten() {
+                if let Some((p_key, p_val)) = prev_keyval {
+                    if p_key != key {
+                        keys += 1;
+                        vals += 1;
+                    } else if p_val != val {
+                        vals += 1;
                     }
+                } else {
+                    keys += 1;
+                    vals += 1;
                 }
+                upds += 1;
+                prev_keyval = Some((key, val));
             }
             B::with_capacity(keys, vals, upds)
         };
 
-        let mut kept = Vec::new();
-        let mut keep = TimelyStack::default();
-
-        self.frontier.clear();
-
-        for buffer in merged.drain(..) {
-            for datum @ ((_key, _val), time, _diff) in &buffer[..] {
-                if upper.less_equal(time) {
-                    self.frontier.insert(time.clone());
-                    if keep.is_empty() {
-                        if keep.capacity() != MergeSorterColumnation::<(K, V), T, D>::buffer_size() {
-                            keep = self.sorter.empty();
-                        }
-                    } else if keep.len() == keep.capacity() {
-                        kept.push(keep);
-                        keep = self.sorter.empty();
-                    }
-                    keep.copy(datum);
-                }
-                else {
-                    builder.copy(datum);
-                }
+        for buffer in merged.into_iter() {
+            for datum in &buffer[..] {
+                builder.copy(datum);
             }
             // Recycling buffer.
             self.sorter.recycle(buffer);
         }
 
-        // Finish the kept data.
-        if !keep.is_empty() {
-            kept.push(keep);
-        }
-        if !kept.is_empty() {
-            self.sorter.push_list(kept);
-        }
-
         // Drain buffers (fast reclamation).
         self.sorter.clear_stash();
 
-        let seal = builder.done(self.lower.clone(), upper.clone(), Antichain::from_elem(T::minimum()));
+        let seal = builder.done(
+            self.lower.clone(),
+            upper.clone(),
+            Antichain::from_elem(T::minimum()),
+        );
         self.lower = upper;
         seal
     }
@@ -159,7 +135,6 @@ impl<T: Columnation> Default for TimelyStackQueue<T> {
 }
 
 impl<T: Columnation> TimelyStackQueue<T> {
-
     fn pop(&mut self) -> &T {
         self.head += 1;
         &self.list[self.head - 1]
@@ -170,25 +145,28 @@ impl<T: Columnation> TimelyStackQueue<T> {
     }
 
     fn from(list: TimelyStack<T>) -> Self {
-        TimelyStackQueue {
-            list,
-            head: 0,
-        }
+        TimelyStackQueue { list, head: 0 }
     }
 
     fn done(self) -> TimelyStack<T> {
         self.list
     }
 
-    fn is_empty(&self) -> bool { self.head == self.list[..].len() }
+    fn is_empty(&self) -> bool {
+        self.head == self.list[..].len()
+    }
 
     /// Return an iterator over the remaining elements.
-    fn iter(&self) -> impl Iterator<Item=&T> + Clone + ExactSizeIterator {
+    fn iter(&self) -> impl Iterator<Item = &T> + Clone + ExactSizeIterator {
         self.list[self.head..].iter()
     }
 }
 
-struct MergeSorterColumnation<D: Columnation + 'static, T: Columnation + 'static, R: Columnation + 'static> {
+struct MergeSorterColumnation<
+    D: Columnation + 'static,
+    T: Columnation + 'static,
+    R: Columnation + 'static,
+> {
     /// each power-of-two length list of allocations. Do not push/pop directly but use the corresponding functions.
     queue: Vec<Vec<TimelyStack<(D, T, R)>>>,
     stash: Vec<TimelyStack<(D, T, R)>>,
@@ -197,8 +175,12 @@ struct MergeSorterColumnation<D: Columnation + 'static, T: Columnation + 'static
     operator_id: usize,
 }
 
-impl<D: Ord+Columnation+'static, T: Ord+Columnation+'static, R: Semigroup+Columnation+'static> MergeSorterColumnation<D, T, R> {
-
+impl<
+    D: Ord + Columnation + 'static,
+    T: Clone + PartialOrder + Ord + Columnation + 'static,
+    R: Semigroup + Columnation + 'static,
+> MergeSorterColumnation<D, T, R>
+{
     const BUFFER_SIZE_BYTES: usize = 64 << 10;
 
     /// Buffer size (number of elements) to use for new/empty buffers.
@@ -218,7 +200,10 @@ impl<D: Ord+Columnation+'static, T: Ord+Columnation+'static, R: Semigroup+Column
         Self::buffer_size() * 2
     }
 
-    fn new(logger: Option<Logger<DifferentialEvent, WorkerIdentifier>>, operator_id: usize) -> Self {
+    fn new(
+        logger: Option<Logger<DifferentialEvent, WorkerIdentifier>>,
+        operator_id: usize,
+    ) -> Self {
         Self {
             logger,
             operator_id,
@@ -229,7 +214,9 @@ impl<D: Ord+Columnation+'static, T: Ord+Columnation+'static, R: Semigroup+Column
     }
 
     fn empty(&mut self) -> TimelyStack<(D, T, R)> {
-        self.stash.pop().unwrap_or_else(|| TimelyStack::with_capacity(Self::buffer_size()))
+        self.stash
+            .pop()
+            .unwrap_or_else(|| TimelyStack::with_capacity(Self::buffer_size()))
     }
 
     /// Remove all elements from the stash.
@@ -248,11 +235,16 @@ impl<D: Ord+Columnation+'static, T: Ord+Columnation+'static, R: Semigroup+Column
     fn push(&mut self, batch: &mut Vec<(D, T, R)>) {
         // Ensure `self.pending` has a capacity of `Self::pending_buffer_size`.
         if self.pending.capacity() < Self::pending_buffer_size() {
-            self.pending.reserve(Self::pending_buffer_size() - self.pending.capacity());
+            self.pending
+                .reserve(Self::pending_buffer_size() - self.pending.capacity());
         }
 
         while !batch.is_empty() {
-            self.pending.extend(batch.drain(..std::cmp::min(batch.len(), self.pending.capacity() - self.pending.len())));
+            self.pending.extend(
+                batch.drain(
+                    ..std::cmp::min(batch.len(), self.pending.capacity() - self.pending.len()),
+                ),
+            );
             if self.pending.len() == self.pending.capacity() {
                 crate::consolidation::consolidate_updates(&mut self.pending);
                 if self.pending.len() > self.pending.capacity() / 2 {
@@ -272,45 +264,164 @@ impl<D: Ord+Columnation+'static, T: Ord+Columnation+'static, R: Semigroup+Column
             for tuple in self.pending.drain(..) {
                 stack.copy(&tuple);
             }
-            self.queue_push(vec![stack]);
-            while self.queue.len() > 1 && (self.queue[self.queue.len()-1].len() >= self.queue[self.queue.len()-2].len() / 2) {
-                let list1 = self.queue_pop().unwrap();
-                let list2 = self.queue_pop().unwrap();
-                let merged = self.merge_by(list1, list2);
-                self.queue_push(merged);
+            let batch = vec![stack];
+            self.account(&batch, 1);
+            self.queue.push(batch);
+            self.maintain();
+        }
+    }
+
+    /// Maintain the internal chain structure. Ensures that:
+    /// * All chains are sorted by size.
+    /// * Within each chain, adjacent blocks are reduced, i.e., their combined length is larger than
+    ///   the block size.
+    /// * All chains are of geometrically increasing length.
+    fn maintain(&mut self) {
+        self.account(self.queue.iter().flatten(), -1);
+
+        // Step 1: Canonicalize each chain by adjacent blocks that combined fit into a single block.
+        for chain in &mut self.queue {
+            let mut target: Vec<TimelyStack<_>> = Vec::with_capacity(chain.len());
+            for block in chain.drain(..) {
+                if target.last().map_or(false, |last| {
+                    last.len() + block.len() <= Self::buffer_size()
+                }) {
+                    // merge `target.last()` with `block`
+                    let last = target.last_mut().unwrap();
+                    for item in block.iter() {
+                        last.copy(item);
+                    }
+                } else {
+                    target.push(block);
+                }
+            }
+            *chain = target;
+        }
+
+        // Step 2: Sort queue by chain length.
+        self.queue.sort_by_key(|chain| chain.len());
+
+        // Step 3: Merge chains that are within a power of two.
+        let mut index = 0;
+        while index + 1 < self.queue.len() {
+            if self.queue[index].len() > self.queue[index + 1].len() / 2 {
+                // Chains at `index` and `index+1` are within a factor of two, merge them.
+                let list1 = self.queue.remove(index);
+                let list2 = std::mem::take(&mut self.queue[index]);
+                self.queue[index] = self.merge_by(list1, list2);
+                // Ensure chains are sorted by length.
+                self.queue.sort_by_key(|chain| chain.len());
+            } else {
+                index += 1;
             }
         }
+
+        self.account(self.queue.iter().flatten(), 1);
     }
 
-    // This is awkward, because it isn't a power-of-two length any more, and we don't want
-    // to break it down to be so.
-    fn push_list(&mut self, list: Vec<TimelyStack<(D, T, R)>>) {
-        while self.queue.len() > 1 && self.queue[self.queue.len()-1].len() < list.len() {
-            let list1 = self.queue_pop().unwrap();
-            let list2 = self.queue_pop().unwrap();
-            let merged = self.merge_by(list1, list2);
-            self.queue_push(merged);
-        }
-        self.queue_push(list);
-    }
-
-    fn finish_into(&mut self, target: &mut Vec<TimelyStack<(D, T, R)>>) {
+    /// Extract all data that is not in advance of `upper`. Record the lower bound of the remaining
+    /// data's time in `frontier`.
+    fn extract_into(
+        &mut self,
+        upper: AntichainRef<T>,
+        frontier: &mut Antichain<T>,
+    ) -> Vec<TimelyStack<(D, T, R)>> {
+        // Flush pending data
         crate::consolidation::consolidate_updates(&mut self.pending);
         self.flush_pending();
-        while self.queue.len() > 1 {
-            let list1 = self.queue_pop().unwrap();
-            let list2 = self.queue_pop().unwrap();
-            let merged = self.merge_by(list1, list2);
-            self.queue_push(merged);
+
+        let mut keep = self.empty();
+        let mut ship = self.empty();
+        let mut ship_list = Vec::default();
+
+        self.account(self.queue.iter().flatten(), -1);
+
+        // Walk all chains, separate ready data from data to keep.
+        for mut chain in std::mem::take(&mut self.queue).drain(..) {
+            let mut block_list = Vec::default();
+            let mut keep_list = Vec::default();
+            for block in chain.drain(..) {
+                // Is all data ready to be shipped?
+                let all = block.iter().all(|(_, t, _)| !upper.less_equal(t));
+                // Is any data ready to be shipped?
+                let any = block.iter().any(|(_, t, _)| !upper.less_equal(t));
+
+                if all {
+                    // All data is ready, push what we accumulated, stash whole block.
+                    if !ship.is_empty() {
+                        block_list.push(std::mem::replace(&mut ship, self.empty()));
+                    }
+                    block_list.push(block);
+                } else if any {
+                    // Iterate block, sorting items into ship and keep
+                    for datum in block.iter() {
+                        if upper.less_equal(&datum.1) {
+                            frontier.insert_ref(&datum.1);
+                            keep.copy(datum);
+                            if keep.capacity() == keep.len() {
+                                // remember keep
+                                keep_list.push(std::mem::replace(&mut keep, self.empty()));
+                            }
+                        } else {
+                            ship.copy(datum);
+                            if ship.capacity() == ship.len() {
+                                // Ship is full, push in on the block list, get an empty one.
+                                block_list.push(std::mem::replace(&mut ship, self.empty()));
+                            }
+                        }
+                    }
+                    // Recycle leftovers
+                    self.recycle(block);
+                } else {
+                    // Keep the entire block.
+
+                    for (_, t, _) in block.iter() {
+                        frontier.insert_ref(t);
+                    }
+                    if !keep.is_empty() {
+                        keep_list.push(std::mem::replace(&mut keep, self.empty()));
+                    }
+                    keep_list.push(block);
+                }
+            }
+
+            // Capture any residue left after iterating blocks.
+            if !ship.is_empty() {
+                block_list.push(std::mem::replace(&mut ship, self.empty()));
+            }
+            if !keep.is_empty() {
+                keep_list.push(std::mem::replace(&mut keep, self.empty()));
+            }
+
+            // Collect finished chains
+            if !block_list.is_empty() {
+                ship_list.push(block_list);
+            }
+            if !keep_list.is_empty() {
+                self.queue.push(keep_list);
+            }
         }
 
-        if let Some(mut last) = self.queue_pop() {
-            std::mem::swap(&mut last, target);
+        self.account(self.queue.iter().flatten(), 1);
+
+        self.maintain();
+
+        while ship_list.len() > 1 {
+            let list1 = ship_list.pop().unwrap();
+            let list2 = ship_list.pop().unwrap();
+            ship_list.push(self.merge_by(list1, list2));
         }
+
+        // Pop the last element, or return an empty chain.
+        ship_list.pop().unwrap_or_default()
     }
 
     // merges two sorted input lists into one sorted output list.
-    fn merge_by(&mut self, list1: Vec<TimelyStack<(D, T, R)>>, list2: Vec<TimelyStack<(D, T, R)>>) -> Vec<TimelyStack<(D, T, R)>> {
+    fn merge_by(
+        &mut self,
+        list1: Vec<TimelyStack<(D, T, R)>>,
+        list2: Vec<TimelyStack<(D, T, R)>>,
+    ) -> Vec<TimelyStack<(D, T, R)>> {
         use std::cmp::Ordering;
 
         // TODO: `list1` and `list2` get dropped; would be better to reuse?
@@ -325,18 +436,20 @@ impl<D: Ord+Columnation+'static, T: Ord+Columnation+'static, R: Semigroup+Column
 
         // while we have valid data in each input, merge.
         while !head1.is_empty() && !head2.is_empty() {
-
             while (result.capacity() - result.len()) > 0 && !head1.is_empty() && !head2.is_empty() {
-
                 let cmp = {
                     let x = head1.peek();
                     let y = head2.peek();
                     (&x.0, &x.1).cmp(&(&y.0, &y.1))
                 };
                 match cmp {
-                    Ordering::Less    => { result.copy(head1.pop()); }
-                    Ordering::Greater => { result.copy(head2.pop()); }
-                    Ordering::Equal   => {
+                    Ordering::Less => {
+                        result.copy(head1.pop());
+                    }
+                    Ordering::Greater => {
+                        result.copy(head2.pop());
+                    }
+                    Ordering::Equal => {
                         let (data1, time1, diff1) = head1.pop();
                         let (_data2, _time2, diff2) = head2.pop();
                         let mut diff1 = diff1.clone();
@@ -372,7 +485,9 @@ impl<D: Ord+Columnation+'static, T: Ord+Columnation+'static, R: Semigroup+Column
         if !head1.is_empty() {
             let mut result = self.empty();
             result.reserve_items(head1.iter());
-            for item in head1.iter() { result.copy(item); }
+            for item in head1.iter() {
+                result.copy(item);
+            }
             output.push(result);
         }
         output.extend(list1);
@@ -380,7 +495,9 @@ impl<D: Ord+Columnation+'static, T: Ord+Columnation+'static, R: Semigroup+Column
         if !head2.is_empty() {
             let mut result = self.empty();
             result.reserve_items(head2.iter());
-            for item in head2.iter() { result.copy(item); }
+            for item in head2.iter() {
+                result.copy(item);
+            }
             output.push(result);
         }
         output.extend(list2);
@@ -389,29 +506,21 @@ impl<D: Ord+Columnation+'static, T: Ord+Columnation+'static, R: Semigroup+Column
     }
 }
 
-impl<D: Columnation + 'static, T: Columnation + 'static, R: Columnation + 'static> MergeSorterColumnation<D, T, R> {
-    /// Pop a batch from `self.queue` and account size changes.
-    #[inline]
-    fn queue_pop(&mut self) -> Option<Vec<TimelyStack<(D, T, R)>>> {
-        let batch = self.queue.pop();
-        self.account(batch.iter().flatten(), -1);
-        batch
-    }
-
-    /// Push a batch to `self.queue` and account size changes.
-    #[inline]
-    fn queue_push(&mut self, batch: Vec<TimelyStack<(D, T, R)>>) {
-        self.account(&batch, 1);
-        self.queue.push(batch);
-    }
-
+impl<D: Columnation + 'static, T: Columnation + 'static, R: Columnation + 'static>
+MergeSorterColumnation<D, T, R>
+{
     /// Account size changes. Only performs work if a logger exists.
     ///
     /// Calculate the size based on the [`TimelyStack`]s passed along, with each attribute
     /// multiplied by `diff`. Usually, one wants to pass 1 or -1 as the diff.
-    fn account<'a, I: IntoIterator<Item=&'a TimelyStack<(D, T, R)>>>(&self, items: I, diff: isize) {
+    fn account<'a, I: IntoIterator<Item = &'a TimelyStack<(D, T, R)>>>(
+        &self,
+        items: I,
+        diff: isize,
+    ) {
         if let Some(logger) = &self.logger {
-            let (mut records, mut siz, mut capacity, mut allocations) = (0isize, 0isize, 0isize, 0isize);
+            let (mut records, mut siz, mut capacity, mut allocations) =
+                (0isize, 0isize, 0isize, 0isize);
             for stack in items {
                 records = records.saturating_add_unsigned(stack.len());
                 stack.heap_size(|s, c| {
@@ -429,11 +538,12 @@ impl<D: Columnation + 'static, T: Columnation + 'static, R: Columnation + 'stati
             })
         }
     }
-
 }
 
-impl<D: Columnation + 'static, T: Columnation + 'static, R: Columnation + 'static> Drop for MergeSorterColumnation<D, T, R> {
+impl<D: Columnation + 'static, T: Columnation + 'static, R: Columnation + 'static> Drop
+for MergeSorterColumnation<D, T, R>
+{
     fn drop(&mut self) {
-        while self.queue_pop().is_some() { }
+        self.account(self.queue.iter().flatten(), -1);
     }
 }

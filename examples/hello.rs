@@ -51,7 +51,7 @@ fn main() {
 
         // Load up graph data. Round-robin among workers.
         for _ in 0 .. (edges / peers) + if index < (edges % peers) { 1 } else { 0 } {
-            input.update((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), 1)
+            input.update_at((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), 1_000_000, 1)
         }
 
         input.advance_to(1);
