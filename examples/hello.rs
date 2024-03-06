@@ -1,3 +1,4 @@
+use std::time::Instant;
 use rand::{Rng, SeedableRng, StdRng};
 
 use differential_dataflow::input::Input;
@@ -52,6 +53,7 @@ fn main() {
         // Load up graph data. Round-robin among workers.
         for _ in 0 .. (edges / peers) + if index < (edges % peers) { 1 } else { 0 } {
             input.update_at((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), 1_000_000, 1)
+            // input.update((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), 1)
         }
 
         input.advance_to(1);
@@ -67,7 +69,8 @@ fn main() {
             if index == 0 {
 
                 let mut next = batch;
-                for round in 1 .. {
+                let start_time = Instant::now();
+                for round in 1 .. 1_000_100 {
 
                     input.advance_to(round);
                     input.update((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), 1);
@@ -83,6 +86,7 @@ fn main() {
                         next += batch;
                     }
                 }
+                println!("rounds finished after {:?}", start_time.elapsed());
             }
         }
     }).unwrap();
