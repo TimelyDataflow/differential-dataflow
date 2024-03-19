@@ -201,15 +201,15 @@ mod val_batch {
 
             let description = Description::new(batch1.lower().clone(), batch2.upper().clone(), since);
 
-            let batch1 = &batch1.storage;
-            let batch2 = &batch2.storage;
+            let storage1 = &batch1.storage;
+            let storage2 = &batch2.storage;
 
             let mut storage = OrdValStorage {
-                keys: L::KeyContainer::merge_capacity(&batch1.keys, &batch2.keys),
-                keys_offs: L::OffsetContainer::with_capacity(batch1.keys_offs.len() + batch2.keys_offs.len()),
-                vals: L::ValContainer::merge_capacity(&batch1.vals, &batch2.vals),
-                vals_offs: L::OffsetContainer::with_capacity(batch1.vals_offs.len() + batch2.vals_offs.len()),
-                updates: L::UpdContainer::merge_capacity(&batch1.updates, &batch2.updates),
+                keys: L::KeyContainer::merge_capacity(&storage1.keys, &storage2.keys),
+                keys_offs: L::OffsetContainer::with_capacity(storage1.keys_offs.len() + storage2.keys_offs.len()),
+                vals: L::ValContainer::merge_capacity(&storage1.vals, &storage2.vals),
+                vals_offs: L::OffsetContainer::with_capacity(storage1.vals_offs.len() + storage2.vals_offs.len()),
+                updates: L::UpdContainer::with_capacity(batch1.updates + batch2.updates),
             };
 
             // Mark explicit types because type inference fails to resolve it.
@@ -761,13 +761,13 @@ mod key_batch {
 
             let description = Description::new(batch1.lower().clone(), batch2.upper().clone(), since);
 
-            let batch1 = &batch1.storage;
-            let batch2 = &batch2.storage;
+            let storage1 = &batch1.storage;
+            let storage2 = &batch2.storage;
 
             let mut storage = OrdKeyStorage {
-                keys: L::KeyContainer::merge_capacity(&batch1.keys, &batch2.keys),
-                keys_offs: L::OffsetContainer::with_capacity(batch1.keys_offs.len() + batch2.keys_offs.len()),
-                updates: L::UpdContainer::merge_capacity(&batch1.updates, &batch2.updates),
+                keys: L::KeyContainer::merge_capacity(&storage1.keys, &storage2.keys),
+                keys_offs: L::OffsetContainer::with_capacity(storage1.keys_offs.len() + storage2.keys_offs.len()),
+                updates: L::UpdContainer::with_capacity(batch1.updates + batch2.updates),
             };
 
             let keys_offs: &mut L::OffsetContainer = &mut storage.keys_offs;
