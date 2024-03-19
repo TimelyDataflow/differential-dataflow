@@ -416,10 +416,10 @@ impl<G: Scope, D: Data, R: Semigroup> Collection<G, D, R> where G::Timestamp: Da
     ///          .inspect_batch(|t,xs| println!("errors @ {:?}: {:?}", t, xs));
     /// });
     /// ```
-    pub fn inspect_batch<F>(&self, func: F) -> Collection<G, D, R>
+    pub fn inspect_batch<F>(&self, mut func: F) -> Collection<G, D, R>
     where F: FnMut(&G::Timestamp, &[(D, G::Timestamp, R)])+'static {
         self.inner
-            .inspect_batch(func)
+            .inspect_batch(move |time, data| func(time, data))
             .as_collection()
     }
     /// Attaches a timely dataflow probe to the output of a Collection.
