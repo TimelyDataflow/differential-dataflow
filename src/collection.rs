@@ -42,6 +42,10 @@ pub struct Collection<G: Scope, D, R: Semigroup = isize> {
     ///
     /// This field is exposed to support direct timely dataflow manipulation when required, but it is
     /// not intended to be the idiomatic way to work with the collection.
+    ///
+    /// The timestamp in the data is required to always be at least the timestamp _of_ the data, in
+    /// the timely-dataflow sense. If this invariant is not upheld, differential operators may behave
+    /// unexpectedly.
     pub inner: Stream<G, (D, G::Timestamp, R)>
 }
 
@@ -52,6 +56,9 @@ impl<G: Scope, D: Data, R: Semigroup> Collection<G, D, R> where G::Timestamp: Da
     /// idiomatic approach to convert timely streams to collections. Also, the `input::Input` trait
     /// provides a `new_collection` method which will create a new collection for you without exposing
     /// the underlying timely stream at all.
+    ///
+    /// This stream should satisfy the timestamp invariant as documented on [Collection]; this
+    /// method does not check it.
     pub fn new(stream: Stream<G, (D, G::Timestamp, R)>) -> Collection<G, D, R> {
         Collection { inner: stream }
     }
@@ -356,8 +363,9 @@ impl<G: Scope, D: Data, R: Semigroup> Collection<G, D, R> where G::Timestamp: Da
     ///
     /// It is assumed that `func` only advances timestamps; this is not verified, and things may go horribly
     /// wrong if that assumption is incorrect. It is also critical that `func` be monotonic: if two times are
-    /// ordered, they should have the same order once `func` is applied to them (this is because we advance the
-    /// timely capability with the same logic, and it must remain `less_equal` to all of the data timestamps).
+    /// ordered, they should have the same order or compare equal once `func` is applied to them (this
+    /// is because we advance the timely capability with the same logic, and it must remain `less_equal`
+    /// to all of the data timestamps).
     pub fn delay<F>(&self, func: F) -> Collection<G, D, R>
     where F: FnMut(&G::Timestamp) -> G::Timestamp + Clone + 'static {
 
@@ -369,6 +377,7 @@ impl<G: Scope, D: Data, R: Semigroup> Collection<G, D, R> where G::Timestamp: Da
             .map_in_place(move |x| x.1 = func2(&x.1))
             .as_collection()
     }
+
     /// Applies a supplied function to each update.
     ///
     /// This method is most commonly used to report information back to the user, often for debugging purposes.
@@ -599,6 +608,10 @@ pub trait AsCollection<G: Scope, D: Data, R: Semigroup> {
 }
 
 impl<G: Scope, D: Data, R: Semigroup> AsCollection<G, D, R> for Stream<G, (D, G::Timestamp, R)> {
+    /// Converts the type to a differential dataflow collection.
+    ///
+    /// By calling this method, you guarantee that the timestamp invariant (as documented on
+    /// [Collection]) is upheld. This method will not check it.
     fn as_collection(&self) -> Collection<G, D, R> {
         Collection::new(self.clone())
     }
