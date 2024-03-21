@@ -541,7 +541,7 @@ where
     /// be consistently by key (though this is the most common).
     fn arrange_core<P, Tr>(&self, pact: P, name: &str) -> Arranged<G, TraceAgent<Tr>>
     where
-        P: ParallelizationContract<G::Timestamp, ((K,V),G::Timestamp,R)>,
+        P: ParallelizationContract<G::Timestamp, Vec<((K,V),G::Timestamp,R)>>,
         K: Clone,
         V: Clone,
         R: Clone,
@@ -562,7 +562,7 @@ where
 {
     fn arrange_core<P, Tr>(&self, pact: P, name: &str) -> Arranged<G, TraceAgent<Tr>>
     where
-        P: ParallelizationContract<G::Timestamp, ((K,V),G::Timestamp,R)>,
+        P: ParallelizationContract<G::Timestamp, Vec<((K,V),G::Timestamp,R)>>,
         Tr: Trace<Time=G::Timestamp>+'static,
         Tr::Batch: Batch,
         Tr::Batcher: Batcher<Item = ((K,V),G::Timestamp,R), Time = G::Timestamp>,
@@ -727,7 +727,7 @@ where
 {
     fn arrange_core<P, Tr>(&self, pact: P, name: &str) -> Arranged<G, TraceAgent<Tr>>
     where
-        P: ParallelizationContract<G::Timestamp, ((K,()),G::Timestamp,R)>,
+        P: ParallelizationContract<G::Timestamp, Vec<((K,()),G::Timestamp,R)>>,
         Tr: Trace<Time=G::Timestamp>+'static,
         Tr::Batch: Batch,
         Tr::Batcher: Batcher<Item = ((K,()),G::Timestamp,R), Time = G::Timestamp>,

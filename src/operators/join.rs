@@ -617,7 +617,7 @@ where
 
     /// Process keys until at least `fuel` output tuples produced, or the work is exhausted.
     #[inline(never)]
-    fn work<L, I>(&mut self, output: &mut OutputHandle<T, (D, T, R), Tee<T, (D, T, R)>>, mut logic: L, fuel: &mut usize)
+    fn work<L, I>(&mut self, output: &mut OutputHandle<T, (D, T, R), Tee<T, Vec<(D, T, R)>>>, mut logic: L, fuel: &mut usize)
     where 
         I: IntoIterator<Item=(D, T, R)>,
         L: for<'a> FnMut(C1::Key<'a>, C1::Val<'a>, C2::Val<'a>, &T, &C1::Diff, &C2::Diff)->I,
