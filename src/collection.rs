@@ -322,20 +322,16 @@ impl<G: Scope, D: Data, R: Semigroup> Collection<G, D, R> where G::Timestamp: Da
     ///     data.assert_eq(&result);
     /// });
     /// ```
-    pub fn enter_at<'a, T, F>(&self, child: &Iterative<'a, G, T>, initial: F) -> Collection<Iterative<'a, G, T>, D, R>
+    pub fn enter_at<'a, T, F>(&self, child: &Iterative<'a, G, T>, mut initial: F) -> Collection<Iterative<'a, G, T>, D, R>
     where
         T: Timestamp+Hash,
         F: FnMut(&D) -> T + Clone + 'static,
         G::Timestamp: Hash,
     {
-
-        let mut initial1 = initial.clone();
-        let mut initial2 = initial.clone();
-
         self.inner
-            .enter_at(child, move |x| initial1(&x.0))
+            .enter(child)
             .map(move |(data, time, diff)| {
-                let new_time = Product::new(time, initial2(&data));
+                let new_time = Product::new(time, initial(&data));
                 (data, new_time, diff)
             })
             .as_collection()
