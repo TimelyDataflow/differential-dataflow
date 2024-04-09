@@ -30,7 +30,7 @@ where
     V: ExchangeData+Hash+LoggingValue+Datum,
     A: Allocate,
     I : IntoIterator,
-    <I as IntoIterator>::Item: EventIterator<Duration, (Duration, usize, TimelyEvent)>+'static
+    <I as IntoIterator>::Item: EventIterator<Duration, Vec<(Duration, usize, TimelyEvent)>>+'static
 {
     let (operates, channels, schedule, messages, shutdown, park, text) =
     worker.dataflow(move |scope| {
@@ -217,7 +217,7 @@ where
     V: ExchangeData+Hash+LoggingValue+Datum,
     A: Allocate,
     I : IntoIterator,
-    <I as IntoIterator>::Item: EventIterator<Duration, (Duration, usize, DifferentialEvent)>+'static
+    <I as IntoIterator>::Item: EventIterator<Duration, Vec<(Duration, usize, DifferentialEvent)>>+'static
 {
     let (merge,batch) =
     worker.dataflow(move |scope| {

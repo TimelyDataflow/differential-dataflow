@@ -53,7 +53,7 @@ where
     where
         Tr: crate::trace::Trace<KeyOwned = D,ValOwned = (),Time=G::Timestamp,Diff=R>+'static,
         Tr::Batch: crate::trace::Batch,
-        Tr::Batcher: Batcher<Item = ((D,()),G::Timestamp,R), Time = G::Timestamp>,
+        Tr::Batcher: Batcher<Input=Vec<((D,()),G::Timestamp,R)>, Item = ((D,()),G::Timestamp,R), Time = G::Timestamp>,
         Tr::Builder: Builder<Item = ((D,()),G::Timestamp,R), Time = G::Timestamp>,
     {
         use crate::operators::arrange::arrangement::Arrange;

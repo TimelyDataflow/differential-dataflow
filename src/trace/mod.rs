@@ -307,13 +307,15 @@ pub trait Batch : BatchReader where Self: ::std::marker::Sized {
 /// Functionality for collecting and batching updates.
 pub trait Batcher {
     /// Type of update pushed into the batcher.
+    type Input;
+    /// Type of update pushed into the builder.
     type Item;
     /// Times at which batches are formed.
     type Time: Timestamp;
     /// Allocates a new empty batcher.
     fn new(logger: Option<Logger<DifferentialEvent, WorkerIdentifier>>, operator_id: usize) -> Self;
     /// Adds an unordered batch of elements to the batcher.
-    fn push_batch(&mut self, batch: RefOrMut<Vec<Self::Item>>);
+    fn push_batch(&mut self, batch: RefOrMut<Self::Input>);
     /// Returns all updates not greater or equal to an element of `upper`.
     fn seal<B: Builder<Item=Self::Item, Time=Self::Time>>(&mut self, upper: Antichain<Self::Time>) -> B::Output;
     /// Returns the lower envelope of contained update times.
