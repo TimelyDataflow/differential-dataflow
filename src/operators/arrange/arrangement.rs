@@ -561,12 +561,12 @@ where
     R: Semigroup,
 {
     fn arrange_core<P, Tr>(&self, pact: P, name: &str) -> Arranged<G, TraceAgent<Tr>>
-        where
-            P: ParallelizationContract<G::Timestamp, Vec<((K,V),G::Timestamp,R)>>,
-            Tr: Trace<Time=G::Timestamp>+'static,
-            Tr::Batch: Batch,
-            Tr::Batcher: Batcher<Input=Vec<((K,V),G::Timestamp,R)>, Item = ((K,V),G::Timestamp,R), Time = G::Timestamp>,
-            Tr::Builder: Builder<Item = ((K,V),G::Timestamp,R), Time = G::Timestamp, Output = Tr::Batch>,
+    where
+        P: ParallelizationContract<G::Timestamp, Vec<((K,V),G::Timestamp,R)>>,
+        Tr: Trace<Time=G::Timestamp>+'static,
+        Tr::Batch: Batch,
+        Tr::Batcher: Batcher<Input=Vec<((K,V),G::Timestamp,R)>, Item = ((K,V),G::Timestamp,R), Time = G::Timestamp>,
+        Tr::Builder: Builder<Item = ((K,V),G::Timestamp,R), Time = G::Timestamp, Output = Tr::Batch>,
     {
         arrange_core(&self.inner, pact, name)
     }
