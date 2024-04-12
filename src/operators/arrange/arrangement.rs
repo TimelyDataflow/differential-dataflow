@@ -511,8 +511,7 @@ where
         V: ExchangeData,
         R: ExchangeData,
         Tr::Batch: Batch,
-        Tr::Batcher: Batcher<Input=Vec<((K,V),G::Timestamp,R)>, Item = ((K,V),G::Timestamp,R), Time = G::Timestamp>,
-        Tr::Builder: Builder<Item = ((K,V),G::Timestamp,R), Time = G::Timestamp, Output = Tr::Batch>,
+        Tr::Batcher: Batcher<Input=Vec<((K,V),G::Timestamp,R)>>,
     {
         self.arrange_named("Arrange")
     }
@@ -527,8 +526,7 @@ where
         V: ExchangeData,
         R: ExchangeData,
         Tr::Batch: Batch,
-        Tr::Batcher: Batcher<Input=Vec<((K,V),G::Timestamp,R)>, Item = ((K,V),G::Timestamp,R), Time = G::Timestamp>,
-        Tr::Builder: Builder<Item = ((K,V),G::Timestamp,R), Time = G::Timestamp, Output = Tr::Batch>,
+        Tr::Batcher: Batcher<Input=Vec<((K,V),G::Timestamp,R)>>,
     {
         let exchange = Exchange::new(move |update: &((K,V),G::Timestamp,R)| (update.0).0.hashed().into());
         self.arrange_core(exchange, name)
@@ -547,8 +545,7 @@ where
         R: Clone,
         Tr: Trace<Time=G::Timestamp>+'static,
         Tr::Batch: Batch,
-        Tr::Batcher: Batcher<Input=Vec<((K,V),G::Timestamp,R)>, Time = G::Timestamp>,
-        Tr::Builder: Builder<Time = G::Timestamp, Output = Tr::Batch>,
+        Tr::Batcher: Batcher<Input=Vec<((K,V),G::Timestamp,R)>>,
     ;
 }
 
@@ -565,8 +562,7 @@ where
         P: ParallelizationContract<G::Timestamp, Vec<((K,V),G::Timestamp,R)>>,
         Tr: Trace<Time=G::Timestamp>+'static,
         Tr::Batch: Batch,
-        Tr::Batcher: Batcher<Input=Vec<((K,V),G::Timestamp,R)>, Time = G::Timestamp>,
-        Tr::Builder: Builder<Time = G::Timestamp, Output = Tr::Batch>,
+        Tr::Batcher: Batcher<Input=Vec<((K,V),G::Timestamp,R)>>,
     {
         arrange_core(&self.inner, pact, name)
     }
@@ -584,9 +580,7 @@ where
     P: ParallelizationContract<G::Timestamp, <Tr::Batcher as Batcher>::Input>,
     Tr: Trace<Time=G::Timestamp>+'static,
     Tr::Batch: Batch,
-    Tr::Batcher: Batcher<Time = G::Timestamp>,
     <Tr::Batcher as Batcher>::Input: timely::Container,
-    Tr::Builder: Builder<Time = G::Timestamp, Output = Tr::Batch>,
 {
     // The `Arrange` operator is tasked with reacting to an advancing input
     // frontier by producing the sequence of batches whose lower and upper
@@ -746,8 +740,7 @@ where
         P: ParallelizationContract<G::Timestamp, Vec<((K,()),G::Timestamp,R)>>,
         Tr: Trace<Time=G::Timestamp>+'static,
         Tr::Batch: Batch,
-        Tr::Batcher: Batcher<Input=Vec<((K,()),G::Timestamp,R)>, Time = G::Timestamp>,
-        Tr::Builder: Builder<Time = G::Timestamp, Output = Tr::Batch>,
+        Tr::Batcher: Batcher<Input=Vec<((K,()),G::Timestamp,R)>>,
     {
         self.map(|k| (k, ()))
             .arrange_core(pact, name)
