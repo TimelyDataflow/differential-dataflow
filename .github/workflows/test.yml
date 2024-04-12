@@ -16,7 +16,7 @@ jobs:
         toolchain:
           - stable
           - 1.72
-    name: cargo test on ${{ matrix.os }}
+    name: cargo test on ${{ matrix.os }}, rust ${{ matrix.toolchain }}
     runs-on: ${{ matrix.os }}-latest
     steps:
       - uses: actions/checkout@v4
@@ -24,7 +24,7 @@ jobs:
         with:
           toolchain: ${{ matrix.toolchain }}
       - name: Cargo test
-        run: cargo test
+        run: cargo test --workspace --all-targets
 
   # Check formatting with rustfmt
   mdbook:

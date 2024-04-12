@@ -1,4 +1,4 @@
-#![allow(non_snake_case)]
+#![allow(non_snake_case, dead_code)]
 
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -145,7 +145,7 @@ fn load<'a>(filename: &str, interner: Rc<RefCell<StringInterner>>) -> impl Itera
         })
 }
 
-fn load1<'a>(index: usize, prefix: &str, filename: &str, interner: Rc<RefCell<StringInterner>>) -> impl Iterator<Item=((Symbol), Time, Diff)>+'a {
+fn load1<'a>(index: usize, prefix: &str, filename: &str, interner: Rc<RefCell<StringInterner>>) -> impl Iterator<Item=(Symbol, Time, Diff)>+'a {
     read_file(&format!("{}{}", prefix, filename))
         .filter(move |_| index == 0)
         .map(move |line| {
@@ -791,7 +791,7 @@ fn main() {
                 let SupertypeOf = SupertypeOf.enter(scope);
 
                 // Required by all
-                let mut Reachable = Relation::<_,(Method)>::new(scope);
+                let mut Reachable = Relation::<_,Method>::new(scope);
 
                 // NOTE: Common subexpression.
                 let Reachable_Invocation =
@@ -805,7 +805,7 @@ fn main() {
                 // let Reachable = ReachableFinal.clone();
 
                 // Class initialization
-                let mut InitializedClass = Relation::<_,(Type)>::new(scope);
+                let mut InitializedClass = Relation::<_,Type>::new(scope);
 
                 // ClassInitializer(?type, ?method) :- basic.MethodImplemented("<clinit>", "void()", ?type, ?method).
                 let temp1 = interner.borrow_mut().intern("<clinit>");

@@ -31,6 +31,7 @@ where
     T: Columnation + Timestamp + 'static,
     D: Columnation + Semigroup + 'static,
 {
+    type Input = Vec<Self::Item>;
     type Item = ((K,V),T,D);
     type Time = T;
 

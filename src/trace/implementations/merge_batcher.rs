@@ -25,6 +25,7 @@ where
     T: Timestamp,
     D: Semigroup,
 {
+    type Input = Vec<Self::Item>;
     type Item = ((K,V),T,D);
     type Time = T;
 

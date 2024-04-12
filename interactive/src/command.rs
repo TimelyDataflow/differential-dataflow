@@ -151,7 +151,7 @@ where
                                 println!("\tTimely logging connection {} of {}", index, number);
                                 let socket = listener.incoming().next().unwrap().unwrap();
                                 socket.set_nonblocking(true).expect("failed to set nonblocking");
-                                streams.push(EventReader::<Duration, (Duration, usize, TimelyEvent),_>::new(socket));
+                                streams.push(EventReader::<Duration, Vec<(Duration, usize, TimelyEvent)>,_>::new(socket));
                             }
 
                             println!("\tAll logging connections established");
@@ -174,7 +174,7 @@ where
                             for _ in 0 .. number {
                                 let socket = listener.incoming().next().unwrap().unwrap();
                                 socket.set_nonblocking(true).expect("failed to set nonblocking");
-                                streams.push(EventReader::<Duration, (Duration, usize, DifferentialEvent),_>::new(socket));
+                                streams.push(EventReader::<Duration, Vec<(Duration, usize, DifferentialEvent)>,_>::new(socket));
                             }
                         }
                         crate::logging::publish_differential_logging(manager, worker, granularity, &name_as, streams);
