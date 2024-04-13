@@ -251,7 +251,7 @@ pub trait ReduceCore<G: Scope, K: ToOwned + ?Sized, V: ToOwned + ?Sized, R: Semi
             T2::ValOwned: Data,
             T2::Diff: Abelian,
             T2::Batch: Batch,
-            T2::Builder: Builder<Output=T2::Batch, Item = ((K::Owned, T2::ValOwned), T2::Time, T2::Diff)>,
+            T2::Builder: Builder<Input = ((K::Owned, T2::ValOwned), T2::Time, T2::Diff)>,
             L: FnMut(&K, &[(&V, R)], &mut Vec<(<T2::Cursor as Cursor>::ValOwned, T2::Diff)>)+'static,
         {
             self.reduce_core::<_,T2>(name, move |key, input, output, change| {
@@ -273,7 +273,7 @@ pub trait ReduceCore<G: Scope, K: ToOwned + ?Sized, V: ToOwned + ?Sized, R: Semi
             T2: for<'a> Trace<Key<'a>=&'a K, Time=G::Timestamp>+'static,
             T2::ValOwned: Data,
             T2::Batch: Batch,
-            T2::Builder: Builder<Output=T2::Batch, Item = ((K::Owned, T2::ValOwned), T2::Time, T2::Diff)>,
+            T2::Builder: Builder<Input = ((K::Owned, T2::ValOwned), T2::Time, T2::Diff)>,
             L: FnMut(&K, &[(&V, R)], &mut Vec<(<T2::Cursor as Cursor>::ValOwned,T2::Diff)>, &mut Vec<(<T2::Cursor as Cursor>::ValOwned, T2::Diff)>)+'static,
             ;
 }
@@ -292,7 +292,7 @@ where
             T2::ValOwned: Data,
             T2: for<'a> Trace<Key<'a>=&'a K, Time=G::Timestamp>+'static,
             T2::Batch: Batch,
-            T2::Builder: Builder<Output=T2::Batch, Item = ((K::Owned, T2::ValOwned), T2::Time, T2::Diff)>,
+            T2::Builder: Builder<Input = ((K::Owned, T2::ValOwned), T2::Time, T2::Diff)>,
             L: FnMut(&K, &[(&V, R)], &mut Vec<(<T2::Cursor as Cursor>::ValOwned,T2::Diff)>, &mut Vec<(<T2::Cursor as Cursor>::ValOwned, T2::Diff)>)+'static,
     {
         self.arrange_by_key_named(&format!("Arrange: {}", name))
@@ -310,7 +310,7 @@ where
     T2: for<'a> Trace<Key<'a>=T1::Key<'a>, Time=T1::Time> + 'static,
     T2::ValOwned: Data,
     T2::Batch: Batch,
-    T2::Builder: Builder<Output=T2::Batch, Item = ((T1::KeyOwned, T2::ValOwned), T2::Time, T2::Diff)>,
+    T2::Builder: Builder<Input = ((T1::KeyOwned, T2::ValOwned), T2::Time, T2::Diff)>,
     L: FnMut(T1::Key<'_>, &[(T1::Val<'_>, T1::Diff)], &mut Vec<(T2::ValOwned,T2::Diff)>, &mut Vec<(T2::ValOwned, T2::Diff)>)+'static,
 {
     let mut result_trace = None;

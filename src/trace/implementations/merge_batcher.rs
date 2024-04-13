@@ -25,8 +25,8 @@ where
     T: Timestamp,
     D: Semigroup,
 {
-    type Input = Vec<Self::Item>;
-    type Item = ((K,V),T,D);
+    type Input = Vec<((K,V),T,D)>;
+    type Output = ((K,V),T,D);
     type Time = T;
 
     fn new(logger: Option<Logger<DifferentialEvent, WorkerIdentifier>>, operator_id: usize) -> Self {
@@ -38,7 +38,7 @@ where
     }
 
     #[inline(never)]
-    fn push_batch(&mut self, batch: RefOrMut<Vec<Self::Item>>) {
+    fn push_batch(&mut self, batch: RefOrMut<Self::Input>) {
         // `batch` is either a shared reference or an owned allocations.
         match batch {
             RefOrMut::Ref(reference) => {
@@ -59,7 +59,7 @@ where
     // which we call `lower`, by assumption that after sealing a batcher we receive no more
     // updates with times not greater or equal to `upper`.
     #[inline(never)]
-    fn seal<B: Builder<Item=Self::Item, Time=Self::Time>>(&mut self, upper: Antichain<T>) -> B::Output {
+    fn seal<B: Builder<Input=Self::Output, Time=Self::Time>>(&mut self, upper: Antichain<T>) -> B::Output {
 
         let mut merged = Vec::new();
         self.sorter.finish_into(&mut merged);

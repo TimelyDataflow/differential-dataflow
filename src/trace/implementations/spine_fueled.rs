@@ -255,7 +255,7 @@ impl<B, BA, BU> Trace for Spine<B, BA, BU>
 where
     B: Batch+Clone+'static,
     BA: Batcher<Time = B::Time>,
-    BU: Builder<Item=BA::Item, Time=BA::Time, Output = B>,
+    BU: Builder<Input=BA::Output, Time=BA::Time, Output = B>,
 {
     /// A type used to assemble batches from disordered updates.
     type Batcher = BA;
