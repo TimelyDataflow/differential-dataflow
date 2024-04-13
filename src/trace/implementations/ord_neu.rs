@@ -540,7 +540,7 @@ mod val_batch {
 
     impl<L: Layout> Builder for OrdValBuilder<L> {
 
-        type Item = ((<L::Target as Update>::Key, <L::Target as Update>::Val), <L::Target as Update>::Time, <L::Target as Update>::Diff);
+        type Input = ((<L::Target as Update>::Key, <L::Target as Update>::Val), <L::Target as Update>::Time, <L::Target as Update>::Diff);
         type Time = <L::Target as Update>::Time;
         type Output = OrdValBatch<L>;
 
@@ -560,7 +560,7 @@ mod val_batch {
         }
 
         #[inline]
-        fn push(&mut self, ((key, val), time, diff): Self::Item) {
+        fn push(&mut self, ((key, val), time, diff): Self::Input) {
 
             // Perhaps this is a continuation of an already received key.
             if self.result.keys.last().map(|k| k.equals(&key)).unwrap_or(false) {
@@ -586,7 +586,7 @@ mod val_batch {
         }
 
         #[inline]
-        fn copy(&mut self, ((key, val), time, diff): &Self::Item) {
+        fn copy(&mut self, ((key, val), time, diff): &Self::Input) {
 
             // Perhaps this is a continuation of an already received key.
             if self.result.keys.last().map(|k| k.equals(key)).unwrap_or(false) {
@@ -1006,7 +1006,7 @@ mod key_batch {
 
     impl<L: Layout> Builder for OrdKeyBuilder<L> {
 
-        type Item = ((<L::Target as Update>::Key, ()), <L::Target as Update>::Time, <L::Target as Update>::Diff);
+        type Input = ((<L::Target as Update>::Key, ()), <L::Target as Update>::Time, <L::Target as Update>::Diff);
         type Time = <L::Target as Update>::Time;
         type Output = OrdKeyBatch<L>;
 
@@ -1024,7 +1024,7 @@ mod key_batch {
         }
 
         #[inline]
-        fn push(&mut self, ((key, ()), time, diff): Self::Item) {
+        fn push(&mut self, ((key, ()), time, diff): Self::Input) {
 
             // Perhaps this is a continuation of an already received key.
             if self.result.keys.last().map(|k| k.equals(&key)).unwrap_or(false) {
@@ -1040,7 +1040,7 @@ mod key_batch {
         }
 
         #[inline]
-        fn copy(&mut self, ((key, ()), time, diff): &Self::Item) {
+        fn copy(&mut self, ((key, ()), time, diff): &Self::Input) {
 
             // Perhaps this is a continuation of an already received key.
             if self.result.keys.last().map(|k| k.equals(key)).unwrap_or(false) {

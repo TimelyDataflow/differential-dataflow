@@ -13,7 +13,7 @@ use crate::difference::Semigroup;
 
 use crate::Data;
 use crate::lattice::Lattice;
-use crate::trace::{Batcher, Builder};
+use crate::trace::Batcher;
 
 /// Methods which require data be arrangeable.
 impl<G, D, R> Collection<G, D, R>
@@ -53,8 +53,7 @@ where
     where
         Tr: crate::trace::Trace<KeyOwned = D,ValOwned = (),Time=G::Timestamp,Diff=R>+'static,
         Tr::Batch: crate::trace::Batch,
-        Tr::Batcher: Batcher<Input=Vec<((D,()),G::Timestamp,R)>, Item = ((D,()),G::Timestamp,R), Time = G::Timestamp>,
-        Tr::Builder: Builder<Item = ((D,()),G::Timestamp,R), Time = G::Timestamp>,
+        Tr::Batcher: Batcher<Input=Vec<((D,()),G::Timestamp,R)>>,
     {
         use crate::operators::arrange::arrangement::Arrange;
         use crate::trace::cursor::MyTrait;
