@@ -240,7 +240,7 @@ pub trait ReduceCore<G: Scope, K: ToOwned + ?Sized, V: Data, R: Semigroup> where
     ///          .map(|x| (x, x))
     ///          .reduce_abelian::<_,_,ValSpine<_,_,_,_>>(
     ///             "Example",
-    ///              Clone::clone, 
+    ///              Clone::clone,
     ///              move |_key, src, dst| dst.push((*src[0].0, 1))
     ///          )
     ///          .trace;
@@ -252,7 +252,7 @@ pub trait ReduceCore<G: Scope, K: ToOwned + ?Sized, V: Data, R: Semigroup> where
             F: Fn(T2::Val<'_>) -> V + 'static,
             T2::Diff: Abelian,
             T2::Batch: Batch,
-            T2::Builder: Builder<Input = ((K::Owned, V), T2::Time, T2::Diff)>,
+            T2::Builder: Builder<Input = Vec<((K::Owned, V), T2::Time, T2::Diff)>>,
             L: FnMut(&K, &[(&V, R)], &mut Vec<(V, T2::Diff)>)+'static,
         {
             self.reduce_core::<_,_,T2>(name, from, move |key, input, output, change| {
@@ -274,7 +274,7 @@ pub trait ReduceCore<G: Scope, K: ToOwned + ?Sized, V: Data, R: Semigroup> where
             T2: for<'a> Trace<Key<'a>=&'a K, Time=G::Timestamp>+'static,
             F: Fn(T2::Val<'_>) -> V + 'static,
             T2::Batch: Batch,
-            T2::Builder: Builder<Input = ((K::Owned, V), T2::Time, T2::Diff)>,
+            T2::Builder: Builder<Input = Vec<((K::Owned, V), T2::Time, T2::Diff)>>,
             L: FnMut(&K, &[(&V, R)], &mut Vec<(V,T2::Diff)>, &mut Vec<(V, T2::Diff)>)+'static,
             ;
 }
@@ -293,7 +293,7 @@ where
             F: Fn(T2::Val<'_>) -> V + 'static,
             T2: for<'a> Trace<Key<'a>=&'a K, Time=G::Timestamp>+'static,
             T2::Batch: Batch,
-            T2::Builder: Builder<Input = ((K, V), T2::Time, T2::Diff)>,
+            T2::Builder: Builder<Input = Vec<((K, V), T2::Time, T2::Diff)>>,
             L: FnMut(&K, &[(&V, R)], &mut Vec<(V,T2::Diff)>, &mut Vec<(V, T2::Diff)>)+'static,
     {
         self.arrange_by_key_named(&format!("Arrange: {}", name))
@@ -312,7 +312,7 @@ where
     V: Data,
     F: Fn(T2::Val<'_>) -> V + 'static,
     T2::Batch: Batch,
-    T2::Builder: Builder<Input = ((T1::KeyOwned, V), T2::Time, T2::Diff)>,
+    T2::Builder: Builder<Input = Vec<((T1::KeyOwned, V), T2::Time, T2::Diff)>>,
     L: FnMut(T1::Key<'_>, &[(T1::Val<'_>, T1::Diff)], &mut Vec<(V,T2::Diff)>, &mut Vec<(V, T2::Diff)>)+'static,
 {
     let mut result_trace = None;
@@ -529,9 +529,20 @@ where
                             //       (ii) that the buffers are time-ordered, and (iii) that the builders accept
                             //       arbitrarily ordered times.
                             for index in 0 .. buffers.len() {
+                                // TODO: This doesn't reuse allocations for `update`.
+                                let mut update = Vec::with_capacity(1024);
                                 buffers[index].1.sort_by(|x,y| x.0.cmp(&y.0));
                                 for (val, time, diff) in buffers[index].1.drain(..) {
-                                    builders[index].push(((key.into_owned(), val), time, diff));
+                                    update.push(((key.into_owned(), val), time, diff));
+                                    if update.len() == update.capacity() {
+                                        let mut chain = vec![update];
+                                        builders[index].push_batches(&mut chain);
+                                        update = chain.pop().unwrap_or_else(|| Vec::with_capacity(1024));
+                                        update.clear();
+                                    }
+                                }
+                                if !update.is_empty() {
+                                    builders[index].push_batches(&mut vec![update]);
                                 }
                             }
                         }

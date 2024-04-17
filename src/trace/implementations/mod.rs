@@ -42,9 +42,6 @@ pub mod spine_fueled;
 
 pub mod merge_batcher;
 pub mod merge_batcher_col;
-
-pub use self::merge_batcher::MergeBatcher as Batcher;
-
 pub mod ord_neu;
 pub mod rhh;
 pub mod huffman_container;
