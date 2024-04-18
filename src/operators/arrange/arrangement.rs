@@ -557,7 +557,7 @@ where
 /// This operator arranges a stream of values into a shared trace, whose contents it maintains.
 /// It uses the supplied parallelization contract to distribute the data, which does not need to
 /// be consistently by key (though this is the most common).
-fn arrange_core<G, P, Tr>(stream: &StreamCore<G, <Tr::Batcher as Batcher>::Input>, pact: P, name: &str) -> Arranged<G, TraceAgent<Tr>>
+pub fn arrange_core<G, P, Tr>(stream: &StreamCore<G, <Tr::Batcher as Batcher>::Input>, pact: P, name: &str) -> Arranged<G, TraceAgent<Tr>>
 where
     G: Scope,
     G::Timestamp: Lattice,
