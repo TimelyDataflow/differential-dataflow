@@ -19,7 +19,7 @@ pub fn validate<G, K, V, Tr, F, P>(
 ) -> Collection<G, (P, V), Tr::Diff>
 where
     G: Scope<Timestamp=Tr::Time>,
-    Tr: TraceReader<KeyOwned=(K,V), ValOwned=()>+Clone+'static,
+    Tr: TraceReader<KeyOwned=(K,V)>+Clone+'static,
     K: Ord+Hash+Clone+Default,
     V: ExchangeData+Hash+Default,
     Tr::Diff: Monoid+Multiply<Output = Tr::Diff>+ExchangeData,

@@ -78,7 +78,6 @@ where
     type Key<'a> = Tr::Key<'a>;
     type KeyOwned = Tr::KeyOwned;
     type Val<'a> = Tr::Val<'a>;
-    type ValOwned = Tr::ValOwned;
     type Time = Tr::Time;
     type Diff = Tr::Diff;
 
@@ -142,7 +141,6 @@ where
     type Key<'a> = B::Key<'a>;
     type KeyOwned = B::KeyOwned;
     type Val<'a> = B::Val<'a>;
-    type ValOwned = B::ValOwned;
     type Time = B::Time;
     type Diff = B::Diff;
 
@@ -186,7 +184,6 @@ where
     type Key<'a> = C::Key<'a>;
     type KeyOwned = C::KeyOwned;
     type Val<'a> = C::Val<'a>;
-    type ValOwned = C::ValOwned;
     type Time = C::Time;
     type Diff = C::Diff;
 
@@ -238,7 +235,6 @@ where
     type Key<'a> = C::Key<'a>;
     type KeyOwned = C::KeyOwned;
     type Val<'a> = C::Val<'a>;
-    type ValOwned = C::ValOwned;
     type Time = C::Time;
     type Diff = C::Diff;
 

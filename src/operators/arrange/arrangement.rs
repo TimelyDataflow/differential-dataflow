@@ -23,7 +23,7 @@ use timely::dataflow::{Scope, Stream, StreamCore};
 use timely::dataflow::operators::generic::Operator;
 use timely::dataflow::channels::pact::{ParallelizationContract, Pipeline, Exchange};
 use timely::progress::Timestamp;
-use timely::progress::{Antichain, frontier::AntichainRef};
+use timely::progress::Antichain;
 use timely::dataflow::operators::Capability;
 
 use crate::{Data, ExchangeData, Collection, AsCollection, Hashable};
@@ -36,8 +36,6 @@ use trace::wrappers::enter::{TraceEnter, BatchEnter,};
 use trace::wrappers::enter_at::TraceEnter as TraceEnterAt;
 use trace::wrappers::enter_at::BatchEnter as BatchEnterAt;
 use trace::wrappers::filter::{TraceFilter, BatchFilter};
-
-use trace::cursor::MyTrait;
 
 use super::TraceAgent;
 
@@ -229,166 +227,6 @@ where
         })
         .as_collection()
     }
-
-    /// Report values associated with keys at certain times.
-    ///
-    /// This method consumes a stream of (key, time) queries and reports the corresponding stream of
-    /// (key, value, time, diff) accumulations in the `self` trace.
-    pub fn lookup(&self, queries: &Stream<G, (Tr::KeyOwned, G::Timestamp)>) -> Stream<G, (Tr::KeyOwned, Tr::ValOwned, G::Timestamp, Tr::Diff)>
-    where
-        Tr::KeyOwned: ExchangeData+Hashable,
-        Tr::ValOwned: ExchangeData,
-        Tr::Diff: ExchangeData,
-        Tr: 'static,
-    {
-        // while the arrangement is already correctly distributed, the query stream may not be.
-        let exchange = Exchange::new(move |update: &(Tr::KeyOwned,G::Timestamp)| update.0.hashed().into());
-        queries.binary_frontier(&self.stream, exchange, Pipeline, "TraceQuery", move |_capability, _info| {
-
-            let mut trace = Some(self.trace.clone());
-            // release `set_physical_compaction` capability.
-            trace.as_mut().unwrap().set_physical_compaction(Antichain::new().borrow());
-
-            let mut stash = Vec::new();
-            let mut capability: Option<Capability<G::Timestamp>> = None;
-
-            let mut active = Vec::new();
-            let mut retain = Vec::new();
-
-            let mut working: Vec<(G::Timestamp, Tr::ValOwned, Tr::Diff)> = Vec::new();
-            let mut working2: Vec<(Tr::ValOwned, Tr::Diff)> = Vec::new();
-
-            move |input1, input2, output| {
-
-                input1.for_each(|time, data| {
-                    // if the minimum capability "improves" retain it.
-                    if capability.is_none() || time.time().less_than(capability.as_ref().unwrap().time()) {
-                        capability = Some(time.retain());
-                    }
-                    stash.extend(data.iter().cloned());
-                });
-
-                // drain input2; we will consult `trace` directly.
-                input2.for_each(|_time, _data| { });
-
-                assert_eq!(capability.is_none(), stash.is_empty());
-
-                let mut drained = false;
-                if let Some(capability) = capability.as_mut() {
-                    if !input2.frontier().less_equal(capability.time()) {
-                        for datum in stash.drain(..) {
-                            if !input2.frontier().less_equal(&datum.1) {
-                                active.push(datum);
-                            }
-                            else {
-                                retain.push(datum);
-                            }
-                        }
-                        drained = !active.is_empty();
-
-                        ::std::mem::swap(&mut stash, &mut retain);    // retain now the stashed queries.
-
-                        // sort temp1 by key and then by time.
-                        active.sort_unstable_by(|x,y| x.0.cmp(&y.0));
-
-                        let (mut cursor, storage) = trace.as_mut().unwrap().cursor();
-                        let mut session = output.session(&capability);
-
-                        // // V0: Potentially quadratic under load.
-                        // for (key, time) in active.drain(..) {
-                        //     cursor.seek_key(&storage, &key);
-                        //     if cursor.get_key(&storage) == Some(&key) {
-                        //         while let Some(val) = cursor.get_val(&storage) {
-                        //             let mut count = R::zero();
-                        //             cursor.map_times(&storage, |t, d| if t.less_equal(&time) {
-                        //                 count = count + d;
-                        //             });
-                        //             if !count.is_zero() {
-                        //                 session.give((key.clone(), val.clone(), time.clone(), count));
-                        //             }
-                        //             cursor.step_val(&storage);
-                        //         }
-                        //     }
-                        // }
-
-                        // V1: Stable under load
-                        let mut active_finger = 0;
-                        while active_finger < active.len() {
-
-                            let key = &active[active_finger].0;
-                            let mut same_key = active_finger;
-                            while active.get(same_key).map(|x| &x.0) == Some(key) {
-                                same_key += 1;
-                            }
-
-                            cursor.seek_key_owned(&storage, key);
-                            if cursor.get_key(&storage).map(|k| k.equals(key)).unwrap_or(false) {
-
-                                let mut active = &active[active_finger .. same_key];
-
-                                while let Some(val) = cursor.get_val(&storage) {
-                                    cursor.map_times(&storage, |t,d| working.push((t.clone(), val.into_owned(), d.clone())));
-                                    cursor.step_val(&storage);
-                                }
-
-                                working.sort_by(|x,y| x.0.cmp(&y.0));
-                                for (time, val, diff) in working.drain(..) {
-                                    if !active.is_empty() && active[0].1.less_than(&time) {
-                                        crate::consolidation::consolidate(&mut working2);
-                                        while !active.is_empty() && active[0].1.less_than(&time) {
-                                            for (val, count) in working2.iter() {
-                                                session.give((key.clone(), val.clone(), active[0].1.clone(), count.clone()));
-                                            }
-                                            active = &active[1..];
-                                        }
-                                    }
-                                    working2.push((val, diff));
-                                }
-                                if !active.is_empty() {
-                                    crate::consolidation::consolidate(&mut working2);
-                                    while !active.is_empty() {
-                                        for (val, count) in working2.iter() {
-                                            session.give((key.clone(), val.clone(), active[0].1.clone(), count.clone()));
-                                        }
-                                        active = &active[1..];
-                                    }
-                                }
-                            }
-                            active_finger = same_key;
-                        }
-                        active.clear();
-                    }
-                }
-
-                if drained {
-                    if stash.is_empty() { capability = None; }
-                    if let Some(capability) = capability.as_mut() {
-                        let mut min_time = stash[0].1.clone();
-                        for datum in stash[1..].iter() {
-                            if datum.1.less_than(&min_time) {
-                                min_time = datum.1.clone();
-                            }
-                        }
-                        capability.downgrade(&min_time);
-                    }
-                }
-
-                // Determine new frontier on queries that may be issued.
-                // TODO: This code looks very suspect; explain better or fix.
-                let frontier = IntoIterator::into_iter([
-                    capability.as_ref().map(|c| c.time().clone()),
-                    input1.frontier().frontier().get(0).cloned(),
-                ]).flatten().min();
-
-                if let Some(frontier) = frontier {
-                    trace.as_mut().map(|t| t.set_logical_compaction(AntichainRef::new(&[frontier])));
-                }
-                else {
-                    trace = None;
-                }
-            }
-        })
-    }
 }
 
 
@@ -438,16 +276,17 @@ where
     T1: TraceReader + Clone + 'static,
 {
     /// A direct implementation of `ReduceCore::reduce_abelian`.
-    pub fn reduce_abelian<L, T2>(&self, name: &str, mut logic: L) -> Arranged<G, TraceAgent<T2>>
+    pub fn reduce_abelian<L, V, F, T2>(&self, name: &str, from: F, mut logic: L) -> Arranged<G, TraceAgent<T2>>
     where
         T2: for<'a> Trace<Key<'a>= T1::Key<'a>, Time=T1::Time>+'static,
-        T2::ValOwned: Data,
+        V: Data,
+        F: Fn(T2::Val<'_>) -> V + 'static,
         T2::Diff: Abelian,
         T2::Batch: Batch,
-        T2::Builder: Builder<Input = ((T1::KeyOwned, T2::ValOwned), T2::Time, T2::Diff)>,
-        L: FnMut(T1::Key<'_>, &[(T1::Val<'_>, T1::Diff)], &mut Vec<(<T2::Cursor as Cursor>::ValOwned, T2::Diff)>)+'static,
+        T2::Builder: Builder<Input = ((T1::KeyOwned, V), T2::Time, T2::Diff)>,
+        L: FnMut(T1::Key<'_>, &[(T1::Val<'_>, T1::Diff)], &mut Vec<(V, T2::Diff)>)+'static,
     {
-        self.reduce_core::<_,T2>(name, move |key, input, output, change| {
+        self.reduce_core::<_,V,F,T2>(name, from, move |key, input, output, change| {
             if !input.is_empty() {
                 logic(key, input, change);
             }
@@ -457,16 +296,17 @@ where
     }
 
     /// A direct implementation of `ReduceCore::reduce_core`.
-    pub fn reduce_core<L, T2>(&self, name: &str, logic: L) -> Arranged<G, TraceAgent<T2>>
+    pub fn reduce_core<L, V, F, T2>(&self, name: &str, from: F, logic: L) -> Arranged<G, TraceAgent<T2>>
     where
         T2: for<'a> Trace<Key<'a>=T1::Key<'a>, Time=T1::Time>+'static,
-        T2::ValOwned: Data,
+        V: Data,
+        F: Fn(T2::Val<'_>) -> V + 'static,
         T2::Batch: Batch,
-        T2::Builder: Builder<Input = ((T1::KeyOwned, T2::ValOwned), T2::Time, T2::Diff)>,
-        L: FnMut(T1::Key<'_>, &[(T1::Val<'_>, T1::Diff)], &mut Vec<(<T2::Cursor as Cursor>::ValOwned,T2::Diff)>, &mut Vec<(<T2::Cursor as Cursor>::ValOwned, T2::Diff)>)+'static,
+        T2::Builder: Builder<Input = ((T1::KeyOwned,V), T2::Time, T2::Diff)>,
+        L: FnMut(T1::Key<'_>, &[(T1::Val<'_>, T1::Diff)], &mut Vec<(V, T2::Diff)>, &mut Vec<(V, T2::Diff)>)+'static,
     {
         use crate::operators::reduce::reduce_trace;
-        reduce_trace(self, name, logic)
+        reduce_trace::<_,_,_,V,_,_>(self, name, from, logic)
     }
 }
 
