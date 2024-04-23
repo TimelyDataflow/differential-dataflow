@@ -5,10 +5,11 @@
 //! + (b * c), and if this is not equal to the former term, little is known about the actual output.
 use std::cmp::Ordering;
 
+use timely::container::{PushContainer, PushInto};
 use timely::order::PartialOrder;
 use timely::progress::Timestamp;
-use timely::dataflow::Scope;
-use timely::dataflow::operators::generic::{Operator, OutputHandle};
+use timely::dataflow::{Scope, StreamCore};
+use timely::dataflow::operators::generic::{Operator, OutputHandleCore};
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Capability;
 use timely::dataflow::channels::pushers::tee::Tee;
@@ -322,8 +323,34 @@ where
 /// even potentially unrelated to the input collection data. Importantly, the key and value types could be generic
 /// associated types (GATs) of the traces, and we would seemingly struggle to frame these types as trait arguments.
 ///
+/// This implementation forces its output to use a [`Collection`]-compatible container.
+///
 /// The "correctness" of this method depends heavily on the behavior of the supplied `result` function.
-pub fn join_traces<G, T1, T2, I,L,D,R>(arranged1: &Arranged<G,T1>, arranged2: &Arranged<G,T2>, mut result: L) -> Collection<G, D, R>
+pub fn join_traces<G, T1, T2, I,L,D,R>(arranged1: &Arranged<G,T1>, arranged2: &Arranged<G,T2>, result: L) -> Collection<G, D, R>
+    where
+        G: Scope<Timestamp=T1::Time>,
+        T1: TraceReader+Clone+'static,
+        T2: for<'a> TraceReader<Key<'a>=T1::Key<'a>, Time=T1::Time>+Clone+'static,
+        D: Data,
+        R: Semigroup,
+        I: IntoIterator<Item=(D, G::Timestamp, R)>,
+        L: FnMut(T1::Key<'_>,T1::Val<'_>,T2::Val<'_>,&G::Timestamp,&T1::Diff,&T2::Diff)->I+'static,
+{
+   join_traces_core(arranged1, arranged2, result).as_collection()
+}
+
+/// An equijoin of two traces, sharing a common key type.
+///
+/// This method exists to provide join functionality without opinions on the specific input types, keys and values,
+/// that should be presented. The two traces here can have arbitrary key and value types, which can be unsized and
+/// even potentially unrelated to the input collection data. Importantly, the key and value types could be generic
+/// associated types (GATs) of the traces, and we would seemingly struggle to frame these types as trait arguments.
+///
+/// The implementation produces a caller-specified container, with the requirement that the container
+/// can absorb `(D, G::Timestamp, R)` triples.
+///
+/// The "correctness" of this method depends heavily on the behavior of the supplied `result` function.
+pub fn join_traces_core<G, T1, T2, I,L,D,R,C>(arranged1: &Arranged<G,T1>, arranged2: &Arranged<G,T2>, mut result: L) -> StreamCore<G, C>
 where
     G: Scope<Timestamp=T1::Time>,
     T1: TraceReader+Clone+'static,
@@ -332,6 +359,8 @@ where
     R: Semigroup,
     I: IntoIterator<Item=(D, G::Timestamp, R)>,
     L: FnMut(T1::Key<'_>,T1::Val<'_>,T2::Val<'_>,&G::Timestamp,&T1::Diff,&T2::Diff)->I+'static,
+    C: PushContainer,
+    (D, G::Timestamp, R): PushInto<C>,
 {
     // Rename traces for symmetry from here on out.
     let mut trace1 = arranged1.trace.clone();
@@ -565,7 +594,6 @@ where
             }
         }
     })
-    .as_collection()
 }
 
 
@@ -617,10 +645,12 @@ where
 
     /// Process keys until at least `fuel` output tuples produced, or the work is exhausted.
     #[inline(never)]
-    fn work<L, I>(&mut self, output: &mut OutputHandle<T, (D, T, R), Tee<T, Vec<(D, T, R)>>>, mut logic: L, fuel: &mut usize)
-    where 
+    fn work<L, I, C>(&mut self, output: &mut OutputHandleCore<T, C, Tee<T, C>>, mut logic: L, fuel: &mut usize)
+    where
         I: IntoIterator<Item=(D, T, R)>,
         L: for<'a> FnMut(C1::Key<'a>, C1::Val<'a>, C2::Val<'a>, &T, &C1::Diff, &C2::Diff)->I,
+        C: PushContainer,
+        (D, T, R): PushInto<C>,
     {
 
         let meet = self.capability.time();
