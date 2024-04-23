@@ -427,6 +427,7 @@ where
     {
         use crate::operators::join::join_traces;
         join_traces(self, other, result)
+            .as_collection()
     }
 }
 
