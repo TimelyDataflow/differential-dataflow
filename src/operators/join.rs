@@ -15,7 +15,7 @@ use timely::dataflow::operators::Capability;
 use timely::dataflow::channels::pushers::tee::Tee;
 
 use crate::hashable::Hashable;
-use crate::{Data, ExchangeData, Collection, AsCollection};
+use crate::{Data, ExchangeData, Collection};
 use crate::difference::{Semigroup, Abelian, Multiply};
 use crate::lattice::Lattice;
 use crate::operators::arrange::{Arranged, ArrangeByKey, ArrangeBySelf};
@@ -323,34 +323,14 @@ where
 /// even potentially unrelated to the input collection data. Importantly, the key and value types could be generic
 /// associated types (GATs) of the traces, and we would seemingly struggle to frame these types as trait arguments.
 ///
-/// This implementation forces its output to use a [`Collection`]-compatible container.
-///
-/// The "correctness" of this method depends heavily on the behavior of the supplied `result` function.
-pub fn join_traces<G, T1, T2, I,L,D,R>(arranged1: &Arranged<G,T1>, arranged2: &Arranged<G,T2>, result: L) -> Collection<G, D, R>
-    where
-        G: Scope<Timestamp=T1::Time>,
-        T1: TraceReader+Clone+'static,
-        T2: for<'a> TraceReader<Key<'a>=T1::Key<'a>, Time=T1::Time>+Clone+'static,
-        D: Data,
-        R: Semigroup,
-        I: IntoIterator<Item=(D, G::Timestamp, R)>,
-        L: FnMut(T1::Key<'_>,T1::Val<'_>,T2::Val<'_>,&G::Timestamp,&T1::Diff,&T2::Diff)->I+'static,
-{
-   join_traces_core(arranged1, arranged2, result).as_collection()
-}
-
-/// An equijoin of two traces, sharing a common key type.
-///
-/// This method exists to provide join functionality without opinions on the specific input types, keys and values,
-/// that should be presented. The two traces here can have arbitrary key and value types, which can be unsized and
-/// even potentially unrelated to the input collection data. Importantly, the key and value types could be generic
-/// associated types (GATs) of the traces, and we would seemingly struggle to frame these types as trait arguments.
-///
 /// The implementation produces a caller-specified container, with the requirement that the container
-/// can absorb `(D, G::Timestamp, R)` triples.
+/// can absorb `(D, G::Timestamp, R)` triples. Implementations can use [`AsCollection`] to wrap the
+/// output stream in a collection.
 ///
 /// The "correctness" of this method depends heavily on the behavior of the supplied `result` function.
-pub fn join_traces_core<G, T1, T2, I,L,D,R,C>(arranged1: &Arranged<G,T1>, arranged2: &Arranged<G,T2>, mut result: L) -> StreamCore<G, C>
+///
+/// [`AsCollection`]: crate::collection::AsCollection
+pub fn join_traces<G, T1, T2, I,L,D,R,C>(arranged1: &Arranged<G,T1>, arranged2: &Arranged<G,T2>, mut result: L) -> StreamCore<G, C>
 where
     G: Scope<Timestamp=T1::Time>,
     T1: TraceReader+Clone+'static,
