@@ -163,7 +163,7 @@ where
     T1: for<'a> TraceReader<Key<'a>=&'a K, KeyOwned=K, Val<'a>=&'a (), Diff=R1>+Clone+'static,
 {
     fn threshold_named<R2: Abelian, F: FnMut(&K,&R1)->R2+'static>(&self, name: &str, mut thresh: F) -> Collection<G, K, R2> {
-        self.reduce_abelian::<_,(),_,KeySpine<_,_,_>>(name, |_| (), move |k,s,t| t.push(((), thresh(k, &s[0].1))))
+        self.reduce_abelian::<_,(),_,KeySpine<_,_,_>>(name, |&()| (), move |k,s,t| t.push(((), thresh(k, &s[0].1))))
             .as_collection(|k,_| k.clone())
     }
 }
@@ -219,7 +219,7 @@ where
 }
 
 /// Extension trait for the `reduce_core` differential dataflow method.
-pub trait ReduceCore<G: Scope, K: ToOwned + ?Sized, V, R: Semigroup> where G::Timestamp: Lattice+Ord {
+pub trait ReduceCore<G: Scope, K: ToOwned + ?Sized, V: Data, R: Semigroup> where G::Timestamp: Lattice+Ord {
     /// Applies `reduce` to arranged data, and returns an arrangement of output data.
     ///
     /// This method is used by the more ergonomic `reduce`, `distinct`, and `count` methods, although
@@ -240,7 +240,7 @@ pub trait ReduceCore<G: Scope, K: ToOwned + ?Sized, V, R: Semigroup> where G::Ti
     ///          .map(|x| (x, x))
     ///          .reduce_abelian::<_,_,ValSpine<_,_,_,_>>(
     ///             "Example",
-    ///              |v| v.clone(), 
+    ///              Clone::clone, 
     ///              move |_key, src, dst| dst.push((*src[0].0, 1))
     ///          )
     ///          .trace;
@@ -249,7 +249,6 @@ pub trait ReduceCore<G: Scope, K: ToOwned + ?Sized, V, R: Semigroup> where G::Ti
     fn reduce_abelian<L, F, T2>(&self, name: &str, from: F, mut logic: L) -> Arranged<G, TraceAgent<T2>>
         where
             T2: for<'a> Trace<Key<'a>= &'a K, Time=G::Timestamp>+'static,
-            V: Data,
             F: Fn(T2::Val<'_>) -> V + 'static,
             T2::Diff: Abelian,
             T2::Batch: Batch,
@@ -273,7 +272,6 @@ pub trait ReduceCore<G: Scope, K: ToOwned + ?Sized, V, R: Semigroup> where G::Ti
     fn reduce_core<L, F, T2>(&self, name: &str, from: F, logic: L) -> Arranged<G, TraceAgent<T2>>
         where
             T2: for<'a> Trace<Key<'a>=&'a K, Time=G::Timestamp>+'static,
-            V: Data,
             F: Fn(T2::Val<'_>) -> V + 'static,
             T2::Batch: Batch,
             T2::Builder: Builder<Input = ((K::Owned, V), T2::Time, T2::Diff)>,
@@ -509,7 +507,7 @@ where
                                 (&mut output_cursor, output_storage),
                                 (&mut batch_cursor, batch_storage),
                                 &mut interesting_times,
-                                &|v| from(v),
+                                &from,
                                 &mut logic,
                                 &upper_limit,
                                 &mut buffers[..],
