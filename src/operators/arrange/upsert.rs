@@ -59,7 +59,7 @@
 //!         use differential_dataflow::operators::arrange::upsert;
 //!
 //!         let stream = scope.input_from(&mut input);
-//!         let arranged = upsert::arrange_from_upsert::<_, ValSpine<Key, Val, _, _>>(&stream, &"test");
+//!         let arranged = upsert::arrange_from_upsert::<_, _, _, ValSpine<Key, Val, _, _>>(&stream, &"test", |v| v.clone());
 //!
 //!         arranged
 //!             .as_collection(|k,v| (k.clone(), v.clone()))
@@ -125,18 +125,20 @@ use super::TraceAgent;
 /// This method is only implemented for totally ordered times, as we do not yet
 /// understand what a "sequence" of upserts would mean for partially ordered
 /// timestamps.
-pub fn arrange_from_upsert<G, Tr>(
-    stream: &Stream<G, (Tr::KeyOwned, Option<Tr::ValOwned>, G::Timestamp)>,
+pub fn arrange_from_upsert<G, V, F, Tr>(
+    stream: &Stream<G, (Tr::KeyOwned, Option<V>, G::Timestamp)>,
     name: &str,
+    from: F,
 ) -> Arranged<G, TraceAgent<Tr>>
 where
     G: Scope<Timestamp=Tr::Time>,
     Tr: Trace+TraceReader<Diff=isize>+'static,
     Tr::KeyOwned: ExchangeData+Hashable+std::hash::Hash,
-    Tr::ValOwned: ExchangeData,
+    V: ExchangeData,
+    F: Fn(Tr::Val<'_>) -> V + 'static,
     Tr::Time: TotalOrder+ExchangeData,
     Tr::Batch: Batch,
-    Tr::Builder: Builder<Input = ((Tr::KeyOwned, Tr::ValOwned), Tr::Time, Tr::Diff)>,
+    Tr::Builder: Builder<Input = ((Tr::KeyOwned, V), Tr::Time, Tr::Diff)>,
 {
     let mut reader: Option<TraceAgent<Tr>> = None;
 
@@ -145,7 +147,7 @@ where
 
         let reader = &mut reader;
 
-        let exchange = Exchange::new(move |update: &(Tr::KeyOwned,Option<Tr::ValOwned>,G::Timestamp)| (update.0).hashed().into());
+        let exchange = Exchange::new(move |update: &(Tr::KeyOwned,Option<V>,G::Timestamp)| (update.0).hashed().into());
 
         stream.unary_frontier(exchange, name, move |_capability, info| {
 
@@ -175,7 +177,7 @@ where
             let mut prev_frontier = Antichain::from_elem(<G::Timestamp as Timestamp>::minimum());
 
             // For stashing input upserts, ordered increasing by time (`BinaryHeap` is a max-heap).
-            let mut priority_queue = BinaryHeap::<std::cmp::Reverse<(G::Timestamp, Tr::KeyOwned, Option<Tr::ValOwned>)>>::new();
+            let mut priority_queue = BinaryHeap::<std::cmp::Reverse<(G::Timestamp, Tr::KeyOwned, Option<V>)>>::new();
             let mut updates = Vec::new();
 
             move |input, output| {
@@ -245,7 +247,7 @@ where
                                     use trace::cursor::MyTrait;
 
                                     // The prior value associated with the key.
-                                    let mut prev_value: Option<Tr::ValOwned> = None;
+                                    let mut prev_value: Option<V> = None;
 
                                     // Attempt to find the key in the trace.
                                     trace_cursor.seek_key_owned(&trace_storage, &key);
@@ -257,7 +259,7 @@ where
                                             assert!(count == 0 || count == 1);
                                             if count == 1 {
                                                 assert!(prev_value.is_none());
-                                                prev_value = Some(val.into_owned());
+                                                prev_value = Some(from(val));
                                             }
                                             trace_cursor.step_val(&trace_storage);
                                         }

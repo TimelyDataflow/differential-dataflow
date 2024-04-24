@@ -88,7 +88,6 @@ impl<C: Cursor> Cursor for CursorList<C> {
     type Key<'a> = C::Key<'a>;
     type KeyOwned = C::KeyOwned;
     type Val<'a> = C::Val<'a>;
-    type ValOwned = C::ValOwned;
     type Time = C::Time;
     type Diff = C::Diff;
 

@@ -31,7 +31,6 @@
 //! Final graph: {(2, 1): 1, (3, 2): 1, (3, 4): 1, (4, 3): 1}
 //! ```
 
-use std::fmt::Debug;
 use std::collections::BTreeMap;
 
 use timely::dataflow::operators::probe::Handle;
@@ -77,7 +76,6 @@ fn main() {
                 graph_trace.set_physical_compaction(AntichainRef::new(&[i]));
                 graph_trace.set_logical_compaction(AntichainRef::new(&[i]));
                 worker.step_while(|| probe.less_than(&i));
-                dump_cursor(i, worker.index(), &mut graph_trace);
             }
         } else {
             /* Only worker 0 feeds inputs to the dataflow. */
@@ -92,13 +90,12 @@ fn main() {
                 graph_trace.set_physical_compaction(AntichainRef::new(&[i]));
                 graph_trace.set_logical_compaction(AntichainRef::new(&[i]));
                 worker.step_while(|| probe.less_than(graph.time()));
-                dump_cursor(i, worker.index(), &mut graph_trace);
             }
         }
 
         /* Return trace content after the last round. */
         let (mut cursor, storage) = graph_trace.cursor();
-        cursor.to_vec(&storage)
+        cursor.to_vec(Clone::clone, &storage)
     })
     .unwrap().join();
 
@@ -127,18 +124,4 @@ fn main() {
     }
     expected_graph_content.insert((rounds, rounds+1), 1);
     assert_eq!(graph_content, expected_graph_content);
-}
-
-fn dump_cursor<Tr>(round: u32, index: usize, trace: &mut Tr)
-where
-    Tr: TraceReader,
-    Tr::KeyOwned: Debug,
-    Tr::ValOwned: Debug,
-    Tr::Time: Debug,
-    Tr::Diff: Debug,
-{
-    let (mut cursor, storage) = trace.cursor();
-    for ((k, v), diffs) in cursor.to_vec(&storage).iter() {
-        println!("round {}, w{} {:?}:{:?}: {:?}", round, index, *k, *v, diffs);
-    }
 }

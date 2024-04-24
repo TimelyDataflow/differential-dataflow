@@ -112,7 +112,6 @@ where
     type Key<'a> = B::Key<'a>;
     type KeyOwned = B::KeyOwned;
     type Val<'a> = B::Val<'a>;
-    type ValOwned = B::ValOwned;
     type Time = B::Time;
     type Diff = B::Diff;
 

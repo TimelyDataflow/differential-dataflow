@@ -19,7 +19,7 @@ pub fn count<G, Tr, R, F, P>(
 ) -> Collection<G, (P, usize, usize), R>
 where
     G: Scope<Timestamp=Tr::Time>,
-    Tr: TraceReader<ValOwned=(), Diff=isize>+Clone+'static,
+    Tr: TraceReader<Diff=isize>+Clone+'static,
     Tr::KeyOwned: Hashable + Default,
     R: Monoid+Multiply<Output = R>+ExchangeData,
     F: Fn(&P)->Tr::KeyOwned+Clone+'static,

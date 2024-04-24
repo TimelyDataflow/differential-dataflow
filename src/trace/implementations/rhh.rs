@@ -256,7 +256,6 @@ mod val_batch {
         type Key<'a> = <L::KeyContainer as BatchContainer>::ReadItem<'a>;
         type KeyOwned = <L::Target as Update>::Key;
         type Val<'a> = <L::ValContainer as BatchContainer>::ReadItem<'a>;
-        type ValOwned = <L::Target as Update>::Val;
         type Time = <L::Target as Update>::Time;
         type Diff = <L::Target as Update>::Diff;
 
@@ -608,7 +607,6 @@ mod val_batch {
         type Key<'a> = <L::KeyContainer as BatchContainer>::ReadItem<'a>;
         type KeyOwned = <L::Target as Update>::Key;
         type Val<'a> = <L::ValContainer as BatchContainer>::ReadItem<'a>;
-        type ValOwned = <L::Target as Update>::Val;
         type Time = <L::Target as Update>::Time;
         type Diff = <L::Target as Update>::Diff;
 

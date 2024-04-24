@@ -21,7 +21,7 @@ members = [
     # "advent_of_code_2017",
     "dogsdogsdogs",
     "experiments",
-    "interactive",
+    #"interactive",
     "server",
     "server/dataflows/degr_dist",
     "server/dataflows/neighborhood",

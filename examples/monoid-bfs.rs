@@ -145,7 +145,7 @@ where G::Timestamp: Lattice+Ord {
             .join_map(&edges, |_k,&(),d| *d)
             .concat(&roots)
             .map(|x| (x,()))
-            .reduce_core::<_,KeySpine<_,_,_>>("Reduce", |_key, input, output, updates| {
+            .reduce_core::<_,_,KeySpine<_,_,_>>("Reduce", Clone::clone, |_key, input, output, updates| {
                 if output.is_empty() || input[0].1 < output[0].1 {
                     updates.push(((), input[0].1));
                 }
