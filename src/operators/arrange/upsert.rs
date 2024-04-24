@@ -138,7 +138,7 @@ where
     F: Fn(Tr::Val<'_>) -> V + 'static,
     Tr::Time: TotalOrder+ExchangeData,
     Tr::Batch: Batch,
-    Tr::Builder: Builder<Input = Vec<((Tr::KeyOwned, V), Tr::Time, Tr::Diff)>>,
+    Tr::Builder: Builder<Input = ((Tr::KeyOwned, V), Tr::Time, Tr::Diff)>,
 {
     let mut reader: Option<TraceAgent<Tr>> = None;
 
@@ -241,6 +241,7 @@ where
                                 // Prepare a cursor to the existing arrangement, and a batch builder for
                                 // new stuff that we add.
                                 let (mut trace_cursor, trace_storage) = reader_local.cursor();
+                                let mut builder = Tr::Builder::new();
                                 for (key, mut list) in to_process.drain(..) {
 
                                     use trace::cursor::MyTrait;
@@ -281,10 +282,11 @@ where
                                     }
                                     // Must insert updates in (key, val, time) order.
                                     updates.sort();
+                                    for update in updates.drain(..) {
+                                        builder.push(update);
+                                    }
                                 }
-                                let mut batches = vec![std::mem::take(&mut updates)];
-                                let batch = Tr::Builder::from_batches(&mut batches, prev_frontier.borrow(), upper.borrow(), Antichain::from_elem(G::Timestamp::minimum()).borrow());
-                                updates = batches.into_iter().next().unwrap_or_default();
+                                let batch = builder.done(prev_frontier.clone(), upper.clone(), Antichain::from_elem(G::Timestamp::minimum()));
                                 prev_frontier.clone_from(&upper);
 
                                 // Communicate `batch` to the arrangement and the stream.

@@ -320,15 +320,12 @@ pub trait Batcher {
 
 /// Functionality for building batches from ordered update sequences.
 pub trait Builder: Sized {
-    /// Input type.
+    /// Input item type.
     type Input;
     /// Timestamp type.
     type Time: Timestamp;
     /// Output batch type.
     type Output;
-
-    /// Build from batches
-    fn from_batches(batches: &mut Vec<Self::Input>, lower: AntichainRef<Self::Time>, upper: AntichainRef<Self::Time>, since: AntichainRef<Self::Time>) -> Self::Output;
 
     /// Allocates an empty builder.
     ///
@@ -338,14 +335,17 @@ pub trait Builder: Sized {
     /// Allocates an empty builder with capacity for the specified keys, values, and updates.
     ///
     /// They represent respectively the number of distinct `key`, `(key, val)`, and total updates.
-    // #[deprecated]
     fn with_capacity(keys: usize, vals: usize, upds: usize) -> Self;
-    /// Adds elements in sorted order to the batch.
-    /// TODO: Refine the `batches` parameter to allow allocation reuse.
-    // #[deprecated]
-    fn push_batches(&mut self, batches: &mut Vec<Self::Input>);
+    /// Adds an element to the batch.
+    ///
+    /// The default implementation uses `self.copy` with references to the owned arguments.
+    /// One should override it if the builder can take advantage of owned arguments.
+    fn push(&mut self, element: Self::Input) {
+        self.copy(&element);
+    }
+    /// Adds an element to the batch.
+    fn copy(&mut self, element: &Self::Input);
     /// Completes building and returns the batch.
-    // #[deprecated]
     fn done(self, lower: Antichain<Self::Time>, upper: Antichain<Self::Time>, since: Antichain<Self::Time>) -> Self::Output;
 }
 
@@ -453,11 +453,9 @@ pub mod rc_blanket_impls {
         type Input = B::Input;
         type Time = B::Time;
         type Output = Rc<B::Output>;
-        fn from_batches(batches: &mut Vec<Self::Input>, lower: AntichainRef<Self::Time>, upper: AntichainRef<Self::Time>, since: AntichainRef<Self::Time>) -> Self::Output {
-            Rc::new(B::from_batches(batches, lower, upper, since))
-        }
         fn with_capacity(keys: usize, vals: usize, upds: usize) -> Self { RcBuilder { builder: B::with_capacity(keys, vals, upds) } }
-        fn push_batches(&mut self, batches: &mut Vec<Self::Input>) { self.builder.push_batches(batches) }
+        fn push(&mut self, element: Self::Input) { self.builder.push(element) }
+        fn copy(&mut self, element: &Self::Input) { self.builder.copy(element) }
         fn done(self, lower: Antichain<Self::Time>, upper: Antichain<Self::Time>, since: Antichain<Self::Time>) -> Rc<B::Output> { Rc::new(self.builder.done(lower, upper, since)) }
     }
 
@@ -562,14 +560,9 @@ pub mod abomonated_blanket_impls {
         type Input = B::Input;
         type Time = B::Time;
         type Output = Abomonated<B::Output, Vec<u8>>;
-        fn from_batches(batches: &mut Vec<Self::Input>, lower: AntichainRef<Self::Time>, upper: AntichainRef<Self::Time>, since: AntichainRef<Self::Time>) -> Self::Output {
-            let batch = B::from_batches(batches, lower, upper, since);
-            let mut bytes = Vec::with_capacity(measure(&batch));
-            unsafe { abomonation::encode(&batch, &mut bytes).unwrap() };
-            unsafe { Abomonated::<B::Output,_>::new(bytes).unwrap() }
-        }
         fn with_capacity(keys: usize, vals: usize, upds: usize) -> Self { AbomonatedBuilder { builder: B::with_capacity(keys, vals, upds) } }
-        fn push_batches(&mut self, batches: &mut Vec<Self::Input>) { self.builder.push_batches(batches) }
+        fn push(&mut self, element: Self::Input) { self.builder.push(element) }
+        fn copy(&mut self, element: &Self::Input) { self.builder.copy(element) }
         fn done(self, lower: Antichain<Self::Time>, upper: Antichain<Self::Time>, since: Antichain<Self::Time>) -> Self::Output {
             let batch = self.builder.done(lower, upper, since);
             let mut bytes = Vec::with_capacity(measure(&batch));

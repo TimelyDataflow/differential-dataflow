@@ -10,6 +10,7 @@ use timely::logging_core::Logger;
 use timely::progress::{frontier::Antichain, Timestamp};
 use timely::progress::frontier::AntichainRef;
 
+use crate::Data;
 use crate::consolidation::consolidate_updates;
 use crate::difference::Semigroup;
 use crate::logging::{BatcherEvent, DifferentialEvent};
@@ -42,7 +43,7 @@ where
     T: Timestamp,
 {
     type Input = M::Input;
-    type Output = M::Batch;
+    type Output = M::Output;
     type Time = T;
 
     fn new(logger: Option<Logger<DifferentialEvent, WorkerIdentifier>>, operator_id: usize) -> Self {
@@ -95,7 +96,7 @@ where
 
         self.stash.clear();
 
-        let seal = B::from_batches(&mut readied, self.lower.borrow(), upper.borrow(), Antichain::from_elem(T::minimum()).borrow());
+        let seal = M::seal::<B>(&mut readied, self.lower.borrow(), upper.borrow(), Antichain::from_elem(T::minimum()).borrow());
         self.lower = upper;
         seal
     }
@@ -185,6 +186,8 @@ pub trait Merger: Default {
     type Input;
     /// The internal representation of batches of data.
     type Batch: Container;
+    /// The output type
+    type Output;
     /// The type of time in frontiers to extract updates.
     type Time;
     /// Accept a fresh batch of input data.
@@ -195,6 +198,9 @@ pub trait Merger: Default {
     fn merge(&mut self, list1: Vec<Self::Batch>, list2: Vec<Self::Batch>, output: &mut Vec<Self::Batch>, stash: &mut Vec<Self::Batch>);
     /// Extract ready updates based on the `upper` frontier.
     fn extract(&mut self, merged: Vec<Self::Batch>, upper: AntichainRef<Self::Time>, frontier: &mut Antichain<Self::Time>, readied: &mut Vec<Self::Batch>, keep: &mut Vec<Self::Batch>, stash: &mut Vec<Self::Batch>);
+
+    /// Build from a chain
+    fn seal<B: Builder<Input=Self::Output, Time=Self::Time>>(chain: &mut Vec<Self::Batch>, lower: AntichainRef<Self::Time>, upper: AntichainRef<Self::Time>, since: AntichainRef<Self::Time>) -> B::Output;
 
     /// Account size and allocation changes. Returns a tuple of (records, size, capacity, allocations).
     fn account(batch: &Self::Batch) -> (usize, usize, usize, usize);
@@ -241,12 +247,13 @@ impl<T> VecMerger<T> {
     }
 }
 
-impl<D: Ord+Clone+'static, T: Ord + PartialOrder + Clone+'static,R: Semigroup+'static> Merger for VecMerger<(D,T,R)> {
+impl<K: Data, V: Data, T: Ord + PartialOrder + Clone+'static,R: Semigroup+'static> Merger for VecMerger<((K,V),T,R)> {
     type Time = T;
-    type Input = Vec<(D,T,R)>;
-    type Batch = Vec<(D,T,R)>;
+    type Input = Vec<((K,V),T,R)>;
+    type Batch = Vec<((K,V),T,R)>;
+    type Output = ((K,V), T, R);
 
-    fn accept(&mut self, batch: RefOrMut<Vec<(D,T,R)>>, stash: &mut Vec<Self::Batch>) -> Vec<Vec<(D, T, R)>> {
+    fn accept(&mut self, batch: RefOrMut<Self::Batch>, stash: &mut Vec<Self::Batch>) -> Vec<Self::Batch> {
         // `batch` is either a shared reference or an owned allocations.
         let mut owned = match batch {
             RefOrMut::Ref(vec) => {
@@ -271,11 +278,11 @@ impl<D: Ord+Clone+'static, T: Ord + PartialOrder + Clone+'static,R: Semigroup+'s
         }
     }
 
-    fn finish(&mut self, _stash: &mut Vec<Vec<(D, T, R)>>) -> Vec<Vec<(D, T, R)>> {
+    fn finish(&mut self, _stash: &mut Vec<Self::Batch>) -> Vec<Self::Batch> {
         vec![]
     }
 
-    fn merge(&mut self, list1: Vec<Vec<(D, T, R)>>, list2: Vec<Vec<(D, T, R)>>, output: &mut Vec<Vec<(D, T, R)>>, stash: &mut Vec<Vec<(D, T, R)>>) {
+    fn merge(&mut self, list1: Vec<Self::Batch>, list2: Vec<Self::Batch>, output: &mut Vec<Self::Batch>, stash: &mut Vec<Self::Batch>) {
         let mut list1 = list1.into_iter();
         let mut list2 = list2.into_iter();
         let mut head1 = VecDeque::from(list1.next().unwrap_or_default());
@@ -343,7 +350,7 @@ impl<D: Ord+Clone+'static, T: Ord + PartialOrder + Clone+'static,R: Semigroup+'s
         output.extend(list2);
     }
 
-    fn extract(&mut self, merged: Vec<Vec<(D, T, R)>>, upper: AntichainRef<Self::Time>, frontier: &mut Antichain<Self::Time>, readied: &mut Vec<Vec<(D, T, R)>>, kept: &mut Vec<Vec<(D, T, R)>>, stash: &mut Vec<Vec<(D, T, R)>>) {
+    fn extract(&mut self, merged: Vec<Self::Batch>, upper: AntichainRef<Self::Time>, frontier: &mut Antichain<Self::Time>, readied: &mut Vec<Self::Batch>, kept: &mut Vec<Self::Batch>, stash: &mut Vec<Self::Batch>) {
         let mut keep = self.empty(stash);
         let mut ready = self.empty(stash);
 
@@ -375,6 +382,43 @@ impl<D: Ord+Clone+'static, T: Ord + PartialOrder + Clone+'static,R: Semigroup+'s
         if !ready.is_empty() {
             readied.push(ready);
         }
+    }
+
+    fn seal<B: Builder<Input=Self::Output, Time=Self::Time>>(chain: &mut Vec<Self::Batch>, lower: AntichainRef<Self::Time>, upper: AntichainRef<Self::Time>, since: AntichainRef<Self::Time>) -> B::Output {
+        let mut builder = {
+            let mut keys = 0;
+            let mut vals = 0;
+            let mut upds = 0;
+            let mut prev_keyval = None;
+            for buffer in chain.iter() {
+                for ((key, val), time, _) in buffer.iter() {
+                    if !upper.less_equal(time) {
+                        if let Some((p_key, p_val)) = prev_keyval {
+                            if p_key != key {
+                                keys += 1;
+                                vals += 1;
+                            }
+                            else if p_val != val {
+                                vals += 1;
+                            }
+                            upds += 1;
+                        } else {
+                            keys += 1;
+                            vals += 1;
+                            upds += 1;
+                        }
+                        prev_keyval = Some((key, val));
+                    }
+                }
+            }
+            B::with_capacity(keys, vals, upds)
+        };
+
+        for datum in chain.drain(..).flatten() {
+            builder.push(datum);
+        }
+
+        builder.done(lower.to_owned(), upper.to_owned(), since.to_owned())
     }
 
     fn account(batch: &Self::Batch) -> (usize, usize, usize, usize) {

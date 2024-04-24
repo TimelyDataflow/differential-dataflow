@@ -6,11 +6,14 @@
 //! for example wrapped types that implement `Ord` that way.
 
 use std::rc::Rc;
+use std::cmp::Ordering;
+
+use abomonation_derive::Abomonation;
 
 use crate::Hashable;
-use crate::trace::implementations::spine_fueled::Spine;
 use crate::trace::implementations::merge_batcher::{MergeBatcher, VecMerger};
-use crate::trace::implementations::merge_batcher_col::ColumnatedMergeBatcher;
+use crate::trace::implementations::merge_batcher_col::ColumnationMerger;
+use crate::trace::implementations::spine_fueled::Spine;
 use crate::trace::rc_blanket_impls::RcBuilder;
 
 use super::{Update, Layout, Vector, TStack};
@@ -29,7 +32,7 @@ pub type VecSpine<K, V, T, R> = Spine<
 /// A trace implementation backed by columnar storage.
 pub type ColSpine<K, V, T, R> = Spine<
     Rc<RhhValBatch<TStack<((K,V),T,R)>>>,
-    ColumnatedMergeBatcher<K,V,T,R>,
+    MergeBatcher<ColumnationMerger<((K,V),T,R)>, T>,
     RcBuilder<RhhValBuilder<TStack<((K,V),T,R)>>>,
 >;
 // /// A trace implementation backed by columnar storage.
@@ -46,9 +49,6 @@ pub struct HashWrapper<T: std::hash::Hash + Hashable> {
     /// The inner value, freely modifiable.
     pub inner: T
 }
-
-use std::cmp::Ordering;
-use abomonation_derive::Abomonation;
 
 impl<T: PartialOrd + std::hash::Hash + Hashable> PartialOrd for HashWrapper<T>
 where <T as Hashable>::Output: PartialOrd {
@@ -729,40 +729,9 @@ mod val_batch {
         <L::Target as Update>::Key: Default + HashOrdered,
         // RhhValBatch<L>: Batch<Key=<L::Target as Update>::Key, Val=<L::Target as Update>::Val, Time=<L::Target as Update>::Time, Diff=<L::Target as Update>::Diff>,
     {
-        type Input = Vec<((<L::Target as Update>::Key, <L::Target as Update>::Val), <L::Target as Update>::Time, <L::Target as Update>::Diff)>;
+        type Input = ((<L::Target as Update>::Key, <L::Target as Update>::Val), <L::Target as Update>::Time, <L::Target as Update>::Diff);
         type Time = <L::Target as Update>::Time;
         type Output = RhhValBatch<L>;
-
-        fn from_batches(batches: &mut Vec<Self::Input>, lower: AntichainRef<Self::Time>, upper: AntichainRef<Self::Time>, since: AntichainRef<Self::Time>) -> Self::Output {
-            let mut keys = 0;
-            let mut vals = 0;
-            let mut upds = 0;
-            let mut prev_keyval = None;
-            for buffer in batches.iter() {
-                for ((key, val), time, _) in buffer.iter() {
-                    if !upper.less_equal(time) {
-                        if let Some((p_key, p_val)) = prev_keyval {
-                            if p_key != key {
-                                keys += 1;
-                                vals += 1;
-                            }
-                            else if p_val != val {
-                                vals += 1;
-                            }
-                            upds += 1;
-                        } else {
-                            keys += 1;
-                            vals += 1;
-                            upds += 1;
-                        }
-                        prev_keyval = Some((key, val));
-                    }
-                }
-            }
-            let mut new = Self::with_capacity(keys, vals, upds);
-            new.push_batches(batches);
-            new.done(lower.to_owned(), upper.to_owned(), since.to_owned())
-        }
 
         fn with_capacity(keys: usize, vals: usize, upds: usize) -> Self {
 
@@ -791,30 +760,61 @@ mod val_batch {
             }
         }
 
-        fn push_batches(&mut self, batches: &mut Vec<Self::Input>) {
-            for ((key, val), time, diff) in batches.iter_mut().map(|batch| batch.drain(..)).flatten() {
-                // Perhaps this is a continuation of an already received key.
-                if self.result.keys.last().map(|k| k.equals(&key)).unwrap_or(false) {
-                    // Perhaps this is a continuation of an already received value.
-                    if self.result.vals.last().map(|v| v.equals(&val)).unwrap_or(false) {
-                        self.push_update(time, diff);
-                    } else {
-                        // New value; complete representation of prior value.
-                        self.result.vals_offs.push(self.result.updates.len());
-                        if self.singleton.take().is_some() { self.singletons += 1; }
-                        self.push_update(time, diff);
-                        self.result.vals.push(val);
-                    }
+        #[inline]
+        fn push(&mut self, ((key, val), time, diff): Self::Input) {
+
+            // Perhaps this is a continuation of an already received key.
+            if self.result.keys.last().map(|k| k.equals(&key)).unwrap_or(false) {
+                // Perhaps this is a continuation of an already received value.
+                if self.result.vals.last().map(|v| v.equals(&val)).unwrap_or(false) {
+                    self.push_update(time, diff);
                 } else {
-                    // New key; complete representation of prior key.
+                    // New value; complete representation of prior value.
                     self.result.vals_offs.push(self.result.updates.len());
                     if self.singleton.take().is_some() { self.singletons += 1; }
-                    self.result.keys_offs.push(self.result.vals.len());
                     self.push_update(time, diff);
                     self.result.vals.push(val);
-                    // Insert the key, but with no specified offset.
-                    self.result.insert_key(key.borrow(), None);
                 }
+            } else {
+                // New key; complete representation of prior key.
+                self.result.vals_offs.push(self.result.updates.len());
+                if self.singleton.take().is_some() { self.singletons += 1; }
+                self.result.keys_offs.push(self.result.vals.len());
+                self.push_update(time, diff);
+                self.result.vals.push(val);
+                // Insert the key, but with no specified offset.
+                self.result.insert_key(key.borrow(), None);
+            }
+        }
+
+        #[inline]
+        fn copy(&mut self, ((key, val), time, diff): &Self::Input) {
+
+            // Perhaps this is a continuation of an already received key.
+            if self.result.keys.last().map(|k| k.equals(key)).unwrap_or(false) {
+                // Perhaps this is a continuation of an already received value.
+                if self.result.vals.last().map(|v| v.equals(val)).unwrap_or(false) {
+                    // TODO: here we could look for repetition, and not push the update in that case.
+                    // More logic (and state) would be required to correctly wrangle this.
+                    self.push_update(time.clone(), diff.clone());
+                } else {
+                    // New value; complete representation of prior value.
+                    self.result.vals_offs.push(self.result.updates.len());
+                    // Remove any pending singleton, and if it was set increment our count.
+                    if self.singleton.take().is_some() { self.singletons += 1; }
+                    self.push_update(time.clone(), diff.clone());
+                    self.result.vals.copy_push(val);
+                }
+            } else {
+                // New key; complete representation of prior key.
+                self.result.vals_offs.push(self.result.updates.len());
+                // Remove any pending singleton, and if it was set increment our count.
+                if self.singleton.take().is_some() { self.singletons += 1; }
+                self.result.keys_offs.push(self.result.vals.len());
+                self.push_update(time.clone(), diff.clone());
+                self.result.vals.copy_push(val);
+                // Insert the key, but with no specified offset.
+                self.result.insert_key(key, None);
             }
         }
 
