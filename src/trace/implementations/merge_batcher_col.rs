@@ -23,7 +23,7 @@ impl<T> Default for ColumnationMerger<T> {
 }
 
 impl<T: Columnation> ColumnationMerger<T> {
-    const BUFFER_SIZE_BYTES: usize = 1 << 13;
+    const BUFFER_SIZE_BYTES: usize = 64 << 10;
     fn chunk_capacity(&self) -> usize {
         let size = ::std::mem::size_of::<T>();
         if size == 0 {
@@ -35,9 +35,9 @@ impl<T: Columnation> ColumnationMerger<T> {
         }
     }
 
-    /// Buffer size for pending updates, currently 4 * [`Self::chunk_capacity`].
+    /// Buffer size for pending updates, currently 2 * [`Self::chunk_capacity`].
     fn pending_capacity(&self) -> usize {
-        self.chunk_capacity() * 4
+        self.chunk_capacity() * 2
     }
 
     /// Helper to get pre-sized vector from the stash.
@@ -85,7 +85,7 @@ where
         let form_chain = |this: &mut Self, final_chain: &mut Vec<Self::Chunk>, stash: &mut _| {
             if this.pending.len() == this.pending.capacity() {
                 consolidate_updates(&mut this.pending);
-                if this.pending.len() > this.pending.capacity() / 2 {
+                if this.pending.len() >= this.chunk_capacity() {
                     let mut chain = Vec::default();
                     while this.pending.len() > this.chunk_capacity() {
                         let mut chunk = this.empty(stash);

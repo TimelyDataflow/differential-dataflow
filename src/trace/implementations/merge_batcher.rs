@@ -239,7 +239,7 @@ impl<T> Default for VecMerger<T> {
 }
 
 impl<T> VecMerger<T> {
-    const BUFFER_SIZE_BYTES: usize = 1 << 13;
+    const BUFFER_SIZE_BYTES: usize = 8 << 10;
     fn chunk_capacity(&self) -> usize {
         let size = ::std::mem::size_of::<T>();
         if size == 0 {
@@ -300,7 +300,7 @@ where
         let form_chain = |this: &mut Self, final_chain: &mut Vec<Self::Chunk>, stash: &mut _| {
             if this.pending.len() == this.pending.capacity() {
                 consolidate_updates(&mut this.pending);
-                if this.pending.len() > this.pending.capacity() / 2 {
+                if this.pending.len() >= this.chunk_capacity() {
                     let mut chain = Vec::default();
                     while this.pending.len() > this.chunk_capacity() {
                         let mut chunk = this.empty(stash);
