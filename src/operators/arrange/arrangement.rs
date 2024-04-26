@@ -464,7 +464,7 @@ where
 
             input.for_each(|cap, data| {
                 capabilities.insert(cap.retain());
-                batcher.push_batch(data);
+                batcher.push_container(data);
             });
 
             // The frontier may have advanced by multiple elements, which is an issue because

@@ -1,7 +1,6 @@
 //! A general purpose `Batcher` implementation based on radix sort.
 
 use std::collections::VecDeque;
-use std::marker::PhantomData;
 
 use timely::communication::message::RefOrMut;
 use timely::{Container, PartialOrder};
@@ -21,10 +20,12 @@ pub struct MergeBatcher<M, T>
 where
     M: Merger,
 {
-    /// each power-of-two length list of allocations. Do not push/pop directly but use the corresponding functions.
-    queue: Vec<Vec<M::Batch>>,
-    /// Stash of empty batches
-    stash: Vec<M::Batch>,
+    /// each power-of-two length list of allocations.
+    /// Do not push/pop directly but use the corresponding functions
+    /// ([`Self::chain_push`]/[`Self::chain_pop`]).
+    chains: Vec<Vec<M::Chunk>>,
+    /// Stash of empty chunks
+    stash: Vec<M::Chunk>,
     /// Thing to accept data, merge chains, and talk to the builder.
     merger: M,
     /// Logger for size accounting.
@@ -51,16 +52,18 @@ where
             logger,
             operator_id,
             merger: M::default(),
-            queue: Vec::new(),
+            chains: Vec::new(),
             stash: Vec::new(),
             frontier: Antichain::new(),
             lower: Antichain::from_elem(T::minimum()),
         }
     }
 
-    fn push_batch(&mut self, batch: RefOrMut<M::Input>) {
-        let batch = self.merger.accept(batch, &mut self.stash);
-        self.insert_chain(batch);
+    /// Push a container of data into this merge batcher. Updates the internal chain structure if
+    /// needed.
+    fn push_container(&mut self, container: RefOrMut<M::Input>) {
+        let chain = self.merger.accept(container, &mut self.stash);
+        self.insert_chain(chain);
     }
 
     // Sealing a batch means finding those updates with times not greater or equal to any time
@@ -69,19 +72,19 @@ where
     // updates with times not greater or equal to `upper`.
     fn seal<B: Builder<Input=Self::Output, Time=Self::Time>>(&mut self, upper: Antichain<T>) -> B::Output {
         // Finish
-        let batch = self.merger.finish(&mut self.stash);
-        if !batch.is_empty() {
-            self.queue_push(batch);
+        let chain = self.merger.finish(&mut self.stash);
+        if !chain.is_empty() {
+            self.chain_push(chain);
         }
 
         // Merge all remaining chains into a single chain.
-        while self.queue.len() > 1 {
-            let list1 = self.queue_pop().unwrap();
-            let list2 = self.queue_pop().unwrap();
+        while self.chains.len() > 1 {
+            let list1 = self.chain_pop().unwrap();
+            let list2 = self.chain_pop().unwrap();
             let merged = self.merge_by(list1, list2);
-            self.queue_push(merged);
+            self.chain_push(merged);
         }
-        let merged = self.queue_pop().unwrap_or_default();
+        let merged = self.chain_pop().unwrap_or_default();
 
         // Extract readied data.
         let mut kept = Vec::new();
@@ -91,7 +94,7 @@ where
         self.merger.extract(merged, upper.borrow(), &mut self.frontier, &mut readied, &mut kept, &mut self.stash);
 
         if !kept.is_empty() {
-            self.queue_push(kept);
+            self.chain_push(kept);
         }
 
         self.stash.clear();
@@ -111,22 +114,22 @@ impl<M, T> MergeBatcher<M, T>
 where
     M: Merger
 {
-    fn insert_chain(&mut self, chain: Vec<<M as Merger>::Batch>) {
+    /// Insert a chain and maintain chain properties: Chains are geometrically sized and ordered
+    /// by decreasing length.
+    fn insert_chain(&mut self, chain: Vec<M::Chunk>) {
         if !chain.is_empty() {
-            self.queue_push(chain);
-            while self.queue.len() > 1 && (self.queue[self.queue.len() - 1].len() >= self.queue[self.queue.len() - 2].len() / 2) {
-                let list1 = self.queue_pop().unwrap();
-                let list2 = self.queue_pop().unwrap();
+            self.chain_push(chain);
+            while self.chains.len() > 1 && (self.chains[self.chains.len() - 1].len() >= self.chains[self.chains.len() - 2].len() / 2) {
+                let list1 = self.chain_pop().unwrap();
+                let list2 = self.chain_pop().unwrap();
                 let merged = self.merge_by(list1, list2);
-                self.queue_push(merged);
+                self.chain_push(merged);
             }
         }
     }
 
     // merges two sorted input lists into one sorted output list.
-    fn merge_by(&mut self, list1: Vec<M::Batch>, list2: Vec<M::Batch>) -> Vec<M::Batch> {
-        self.account(list1.iter().chain(list2.iter()).map(M::account), -1);
-
+    fn merge_by(&mut self, list1: Vec<M::Chunk>, list2: Vec<M::Chunk>) -> Vec<M::Chunk> {
         // TODO: `list1` and `list2` get dropped; would be better to reuse?
         let mut output = Vec::with_capacity(list1.len() + list2.len());
         self.merger.merge(list1, list2, &mut output, &mut self.stash);
@@ -134,24 +137,24 @@ where
         output
     }
 
-    /// Pop a batch from `self.queue` and account size changes.
+    /// Pop a chain and account size changes.
     #[inline]
-    fn queue_pop(&mut self) -> Option<Vec<M::Batch>> {
-        let batch = self.queue.pop();
-        self.account(batch.iter().flatten().map(M::account), -1);
-        batch
+    fn chain_pop(&mut self) -> Option<Vec<M::Chunk>> {
+        let chain = self.chains.pop();
+        self.account(chain.iter().flatten().map(M::account), -1);
+        chain
     }
 
-    /// Push a batch to `self.queue` and account size changes.
+    /// Push a chain and account size changes.
     #[inline]
-    fn queue_push(&mut self, batch: Vec<M::Batch>) {
-        self.account(batch.iter().map(M::account), 1);
-        self.queue.push(batch);
+    fn chain_push(&mut self, chain: Vec<M::Chunk>) {
+        self.account(chain.iter().map(M::account), 1);
+        self.chains.push(chain);
     }
 
     /// Account size changes. Only performs work if a logger exists.
     ///
-    /// Calculate the size based on the [`TimelyStack`]s passed along, with each attribute
+    /// Calculate the size based on the iterator passed along, with each attribute
     /// multiplied by `diff`. Usually, one wants to pass 1 or -1 as the diff.
     #[inline]
     fn account<I: IntoIterator<Item=(usize, usize, usize, usize)>>(&self, items: I, diff: isize) {
@@ -176,7 +179,8 @@ where
 
 impl<M: Merger, T> Drop for MergeBatcher<M, T> {
     fn drop(&mut self) {
-        while self.queue_pop().is_some() { }
+        // Cleanup chain to retract accounting information.
+        while self.chain_pop().is_some() { }
     }
 }
 
@@ -185,41 +189,46 @@ pub trait Merger: Default {
     /// The type of update containers received from inputs.
     type Input;
     /// The internal representation of batches of data.
-    type Batch: Container;
+    type Chunk: Container;
     /// The output type
+    /// TODO: This should be replaced by `Chunk` or another container once the builder understands
+    /// building from a complete chain.
     type Output;
     /// The type of time in frontiers to extract updates.
     type Time;
     /// Accept a fresh batch of input data.
-    fn accept(&mut self, batch: RefOrMut<Self::Input>, stash: &mut Vec<Self::Batch>) -> Vec<Self::Batch>;
+    fn accept(&mut self, container: RefOrMut<Self::Input>, stash: &mut Vec<Self::Chunk>) -> Vec<Self::Chunk>;
     /// Finish processing any stashed data.
-    fn finish(&mut self, stash: &mut Vec<Self::Batch>) -> Vec<Self::Batch>;
+    fn finish(&mut self, stash: &mut Vec<Self::Chunk>) -> Vec<Self::Chunk>;
     /// Merge chains into an output chain.
-    fn merge(&mut self, list1: Vec<Self::Batch>, list2: Vec<Self::Batch>, output: &mut Vec<Self::Batch>, stash: &mut Vec<Self::Batch>);
+    fn merge(&mut self, list1: Vec<Self::Chunk>, list2: Vec<Self::Chunk>, output: &mut Vec<Self::Chunk>, stash: &mut Vec<Self::Chunk>);
     /// Extract ready updates based on the `upper` frontier.
-    fn extract(&mut self, merged: Vec<Self::Batch>, upper: AntichainRef<Self::Time>, frontier: &mut Antichain<Self::Time>, readied: &mut Vec<Self::Batch>, keep: &mut Vec<Self::Batch>, stash: &mut Vec<Self::Batch>);
+    fn extract(&mut self, merged: Vec<Self::Chunk>, upper: AntichainRef<Self::Time>, frontier: &mut Antichain<Self::Time>, readied: &mut Vec<Self::Chunk>, kept: &mut Vec<Self::Chunk>, stash: &mut Vec<Self::Chunk>);
 
     /// Build from a chain
-    fn seal<B: Builder<Input=Self::Output, Time=Self::Time>>(chain: &mut Vec<Self::Batch>, lower: AntichainRef<Self::Time>, upper: AntichainRef<Self::Time>, since: AntichainRef<Self::Time>) -> B::Output;
+    /// TODO: We can move this entirely to `MergeBatcher` once builders can accepts chains.
+    fn seal<B: Builder<Input=Self::Output, Time=Self::Time>>(chain: &mut Vec<Self::Chunk>, lower: AntichainRef<Self::Time>, upper: AntichainRef<Self::Time>, since: AntichainRef<Self::Time>) -> B::Output;
 
     /// Account size and allocation changes. Returns a tuple of (records, size, capacity, allocations).
-    fn account(batch: &Self::Batch) -> (usize, usize, usize, usize);
+    fn account(batch: &Self::Chunk) -> (usize, usize, usize, usize);
 }
 
 /// A merger that knows how to accept and maintain chains of vectors.
 pub struct VecMerger<T> {
-    _marker: PhantomData<T>,
+    pending: Vec<T>,
 }
 
 impl<T> Default for VecMerger<T> {
     fn default() -> Self {
-        Self {_marker: PhantomData}
+        Self {
+            pending: Vec::default(),
+        }
     }
 }
 
 impl<T> VecMerger<T> {
     const BUFFER_SIZE_BYTES: usize = 1 << 13;
-    fn preferred_buffer_size(&self) -> usize {
+    fn chunk_capacity(&self) -> usize {
         let size = ::std::mem::size_of::<T>();
         if size == 0 {
             Self::BUFFER_SIZE_BYTES
@@ -230,17 +239,21 @@ impl<T> VecMerger<T> {
         }
     }
 
+    fn pending_capacity(&self) -> usize {
+        self.chunk_capacity() * 2
+    }
+
     /// Helper to get pre-sized vector from the stash.
     #[inline]
     fn empty(&self, stash: &mut Vec<Vec<T>>) -> Vec<T> {
-        stash.pop().unwrap_or_else(|| Vec::with_capacity(self.preferred_buffer_size()))
+        stash.pop().unwrap_or_else(|| Vec::with_capacity(self.chunk_capacity()))
     }
 
     /// Helper to return a batch to the stash.
     #[inline]
     fn recycle(&self, mut batch: Vec<T>, stash: &mut Vec<Vec<T>>) {
         // TODO: Should we limit the size of `stash`?
-        if batch.capacity() == self.preferred_buffer_size() /*&& stash.len() < 2*/ {
+        if batch.capacity() == self.chunk_capacity() /*&& stash.len() < 2*/ {
             batch.clear();
             stash.push(batch);
         }
@@ -250,39 +263,78 @@ impl<T> VecMerger<T> {
 impl<K: Data, V: Data, T: Ord + PartialOrder + Clone+'static,R: Semigroup+'static> Merger for VecMerger<((K,V),T,R)> {
     type Time = T;
     type Input = Vec<((K,V),T,R)>;
-    type Batch = Vec<((K,V),T,R)>;
+    type Chunk = Vec<((K, V), T, R)>;
     type Output = ((K,V), T, R);
 
-    fn accept(&mut self, batch: RefOrMut<Self::Batch>, stash: &mut Vec<Self::Batch>) -> Vec<Self::Batch> {
-        // `batch` is either a shared reference or an owned allocations.
-        let mut owned = match batch {
-            RefOrMut::Ref(vec) => {
-                let mut owned = self.empty(stash);
-                owned.clone_from(vec);
-                owned
-            }
-            RefOrMut::Mut(vec) => std::mem::take(vec)
-        };
-        consolidate_updates(&mut owned);
-        if owned.capacity() == self.preferred_buffer_size() {
-            vec![owned]
-        } else {
-            let mut chain = Vec::with_capacity((owned.len() + self.preferred_buffer_size() - 1) / self.preferred_buffer_size());
-            let mut iter = owned.drain(..).peekable();
-            while iter.peek().is_some() {
-                let mut batch = self.empty(stash);
-                batch.extend((&mut iter).take(self.preferred_buffer_size()));
-                chain.push(batch);
-            }
-            chain
+    fn accept(&mut self, batch: RefOrMut<Self::Chunk>, stash: &mut Vec<Self::Chunk>) -> Vec<Self::Chunk> {
+        // Ensure `self.pending` has the desired capacity. We should never have a larger capacity
+        // because we don't write more than capacity elements into the buffer.
+        if self.pending.capacity() < self.pending_capacity() {
+            self.pending.reserve(self.pending_capacity() - self.pending.len());
         }
+
+        // Form a chain from what's in pending.
+        // This closure does the following:
+        // * If pending is full, consolidate.
+        // * If after consolidation it's more than half full, peel off a chain of full blocks,
+        //   leaving behind any partial block in pending.
+        // * Merge the new chain with `final_chain` and return it in-place.
+        let form_chain = |this: &mut Self, final_chain: &mut Vec<Self::Chunk>, stash: &mut _| {
+            if this.pending.len() == this.pending.capacity() {
+                consolidate_updates(&mut this.pending);
+                if this.pending.len() > this.pending.capacity() / 2 {
+                    let mut chain = Vec::default();
+                    while this.pending.len() > this.chunk_capacity() {
+                        let mut chunk = this.empty(stash);
+                        chunk.extend(this.pending.drain(..chunk.capacity()));
+                        chain.push(chunk);
+                    }
+                    if final_chain.is_empty() {
+                        *final_chain = chain;
+                    } else if !chain.is_empty() {
+                        let mut output = Vec::default();
+                        this.merge(std::mem::take(final_chain), chain, &mut output, stash);
+                        *final_chain = output;
+                    }
+                }
+            }
+        };
+
+        let mut final_chain = Vec::default();
+        // `batch` is either a shared reference or an owned allocations.
+        match batch {
+            RefOrMut::Ref(vec) => {
+                let mut slice = &vec[..];
+                while !slice.is_empty() {
+                    let (head, tail) = slice.split_at(std::cmp::min(self.pending.capacity() - self.pending.len(), slice.len()));
+                    slice = tail;
+                    self.pending.extend_from_slice(head);
+                    form_chain(self, &mut final_chain, stash);
+                }
+            }
+            RefOrMut::Mut(vec) => {
+                while !vec.is_empty() {
+                    self.pending.extend(vec.drain(..std::cmp::min(self.pending.capacity() - self.pending.len(), vec.len())));
+                    form_chain(self, &mut final_chain, stash);
+                }
+            }
+        }
+        final_chain
     }
 
-    fn finish(&mut self, _stash: &mut Vec<Self::Batch>) -> Vec<Self::Batch> {
-        vec![]
+    fn finish(&mut self, stash: &mut Vec<Self::Chunk>) -> Vec<Self::Chunk> {
+        // Extract all data from `pending`.
+        consolidate_updates(&mut self.pending);
+        let mut chain = Vec::default();
+        while !self.pending.is_empty() {
+            let mut chunk = self.empty(stash);
+            chunk.extend(self.pending.drain(..std::cmp::min(chunk.capacity(), self.pending.len())));
+            chain.push(chunk);
+        }
+        chain
     }
 
-    fn merge(&mut self, list1: Vec<Self::Batch>, list2: Vec<Self::Batch>, output: &mut Vec<Self::Batch>, stash: &mut Vec<Self::Batch>) {
+    fn merge(&mut self, list1: Vec<Self::Chunk>, list2: Vec<Self::Chunk>, output: &mut Vec<Self::Chunk>, stash: &mut Vec<Self::Chunk>) {
         let mut list1 = list1.into_iter();
         let mut list2 = list2.into_iter();
         let mut head1 = VecDeque::from(list1.next().unwrap_or_default());
@@ -350,14 +402,14 @@ impl<K: Data, V: Data, T: Ord + PartialOrder + Clone+'static,R: Semigroup+'stati
         output.extend(list2);
     }
 
-    fn extract(&mut self, merged: Vec<Self::Batch>, upper: AntichainRef<Self::Time>, frontier: &mut Antichain<Self::Time>, readied: &mut Vec<Self::Batch>, kept: &mut Vec<Self::Batch>, stash: &mut Vec<Self::Batch>) {
+    fn extract(&mut self, merged: Vec<Self::Chunk>, upper: AntichainRef<Self::Time>, frontier: &mut Antichain<Self::Time>, readied: &mut Vec<Self::Chunk>, kept: &mut Vec<Self::Chunk>, stash: &mut Vec<Self::Chunk>) {
         let mut keep = self.empty(stash);
         let mut ready = self.empty(stash);
 
         for mut buffer in merged {
             for (data, time, diff) in buffer.drain(..) {
                 if upper.less_equal(&time) {
-                    frontier.insert(time.clone());
+                    frontier.insert_ref(&time);
                     if keep.len() == keep.capacity() && !keep.is_empty() {
                         kept.push(keep);
                         keep = self.empty(stash);
@@ -384,35 +436,33 @@ impl<K: Data, V: Data, T: Ord + PartialOrder + Clone+'static,R: Semigroup+'stati
         }
     }
 
-    fn seal<B: Builder<Input=Self::Output, Time=Self::Time>>(chain: &mut Vec<Self::Batch>, lower: AntichainRef<Self::Time>, upper: AntichainRef<Self::Time>, since: AntichainRef<Self::Time>) -> B::Output {
-        let mut builder = {
-            let mut keys = 0;
-            let mut vals = 0;
-            let mut upds = 0;
-            let mut prev_keyval = None;
-            for buffer in chain.iter() {
-                for ((key, val), time, _) in buffer.iter() {
-                    if !upper.less_equal(time) {
-                        if let Some((p_key, p_val)) = prev_keyval {
-                            if p_key != key {
-                                keys += 1;
-                                vals += 1;
-                            }
-                            else if p_val != val {
-                                vals += 1;
-                            }
-                            upds += 1;
-                        } else {
+    fn seal<B: Builder<Input=Self::Output, Time=Self::Time>>(chain: &mut Vec<Self::Chunk>, lower: AntichainRef<Self::Time>, upper: AntichainRef<Self::Time>, since: AntichainRef<Self::Time>) -> B::Output {
+        let mut keys = 0;
+        let mut vals = 0;
+        let mut upds = 0;
+        let mut prev_keyval = None;
+        for buffer in chain.iter() {
+            for ((key, val), time, _) in buffer.iter() {
+                if !upper.less_equal(time) {
+                    if let Some((p_key, p_val)) = prev_keyval {
+                        if p_key != key {
                             keys += 1;
                             vals += 1;
-                            upds += 1;
                         }
-                        prev_keyval = Some((key, val));
+                        else if p_val != val {
+                            vals += 1;
+                        }
+                        upds += 1;
+                    } else {
+                        keys += 1;
+                        vals += 1;
+                        upds += 1;
                     }
+                    prev_keyval = Some((key, val));
                 }
             }
-            B::with_capacity(keys, vals, upds)
-        };
+        }
+        let mut builder = B::with_capacity(keys, vals, upds);
 
         for datum in chain.drain(..).flatten() {
             builder.push(datum);
@@ -421,7 +471,7 @@ impl<K: Data, V: Data, T: Ord + PartialOrder + Clone+'static,R: Semigroup+'stati
         builder.done(lower.to_owned(), upper.to_owned(), since.to_owned())
     }
 
-    fn account(batch: &Self::Batch) -> (usize, usize, usize, usize) {
+    fn account(batch: &Self::Chunk) -> (usize, usize, usize, usize) {
         (batch.len(), 0, 0, 0)
     }
 }
