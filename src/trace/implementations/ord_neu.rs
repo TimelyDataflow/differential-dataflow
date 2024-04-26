@@ -11,8 +11,8 @@
 use std::rc::Rc;
 
 use crate::trace::implementations::spine_fueled::Spine;
-use crate::trace::implementations::merge_batcher::MergeBatcher;
-use crate::trace::implementations::merge_batcher_col::ColumnatedMergeBatcher;
+use crate::trace::implementations::merge_batcher::{MergeBatcher, VecMerger};
+use crate::trace::implementations::merge_batcher_col::ColumnationMerger;
 use crate::trace::rc_blanket_impls::RcBuilder;
 
 use super::{Update, Layout, Vector, TStack, Preferred};
@@ -23,7 +23,7 @@ pub use self::key_batch::{OrdKeyBatch, OrdKeyBuilder};
 /// A trace implementation using a spine of ordered lists.
 pub type OrdValSpine<K, V, T, R> = Spine<
     Rc<OrdValBatch<Vector<((K,V),T,R)>>>,
-    MergeBatcher<K,V,T,R>,
+    MergeBatcher<VecMerger<((K, V), T, R)>, T>,
     RcBuilder<OrdValBuilder<Vector<((K,V),T,R)>>>,
 >;
 // /// A trace implementation for empty values using a spine of ordered lists.
@@ -32,14 +32,14 @@ pub type OrdValSpine<K, V, T, R> = Spine<
 /// A trace implementation backed by columnar storage.
 pub type ColValSpine<K, V, T, R> = Spine<
     Rc<OrdValBatch<TStack<((K,V),T,R)>>>,
-    ColumnatedMergeBatcher<K,V,T,R>,
+    MergeBatcher<ColumnationMerger<((K,V),T,R)>, T>,
     RcBuilder<OrdValBuilder<TStack<((K,V),T,R)>>>,
 >;
 
 /// A trace implementation using a spine of ordered lists.
 pub type OrdKeySpine<K, T, R> = Spine<
     Rc<OrdKeyBatch<Vector<((K,()),T,R)>>>,
-    MergeBatcher<K,(),T,R>,
+    MergeBatcher<VecMerger<((K, ()), T, R)>, T>,
     RcBuilder<OrdKeyBuilder<Vector<((K,()),T,R)>>>,
 >;
 // /// A trace implementation for empty values using a spine of ordered lists.
@@ -48,14 +48,14 @@ pub type OrdKeySpine<K, T, R> = Spine<
 /// A trace implementation backed by columnar storage.
 pub type ColKeySpine<K, T, R> = Spine<
     Rc<OrdKeyBatch<TStack<((K,()),T,R)>>>,
-    ColumnatedMergeBatcher<K,(),T,R>,
+    MergeBatcher<ColumnationMerger<((K,()),T,R)>, T>,
     RcBuilder<OrdKeyBuilder<TStack<((K,()),T,R)>>>,
 >;
 
 /// A trace implementation backed by columnar storage.
 pub type PreferredSpine<K, V, T, R> = Spine<
     Rc<OrdValBatch<Preferred<K,V,T,R>>>,
-    ColumnatedMergeBatcher<<K as ToOwned>::Owned,<V as ToOwned>::Owned,T,R>,
+    MergeBatcher<ColumnationMerger<((<K as ToOwned>::Owned,<V as ToOwned>::Owned),T,R)>,T>,
     RcBuilder<OrdValBuilder<Preferred<K,V,T,R>>>,
 >;
 

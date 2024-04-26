@@ -1,150 +1,312 @@
 //! A general purpose `Batcher` implementation based on radix sort for TimelyStack.
 
-use timely::Container;
+use crate::consolidation::consolidate_updates;
+use std::cmp::Ordering;
 use timely::communication::message::RefOrMut;
 use timely::container::columnation::{Columnation, TimelyStack};
-use timely::logging::WorkerIdentifier;
-use timely::logging_core::Logger;
-use timely::progress::{frontier::Antichain, Timestamp};
+use timely::progress::frontier::{Antichain, AntichainRef};
+use timely::{Container, Data, PartialOrder};
 
 use crate::difference::Semigroup;
-use crate::logging::{BatcherEvent, DifferentialEvent};
-use crate::trace::{Batcher, Builder};
+use crate::trace::implementations::merge_batcher::Merger;
+use crate::trace::Builder;
 
-/// Creates batches from unordered tuples.
-pub struct ColumnatedMergeBatcher<K, V, T, D>
-where
-    K: Columnation + 'static,
-    V: Columnation + 'static,
-    T: Columnation + 'static,
-    D: Columnation + 'static,
-{
-    sorter: MergeSorterColumnation<(K, V), T, D>,
-    lower: Antichain<T>,
-    frontier: Antichain<T>,
+/// A merger for timely stacks
+pub struct ColumnationMerger<T> {
+    pending: Vec<T>,
 }
 
-impl<K, V, T, D> Batcher for ColumnatedMergeBatcher<K, V, T, D>
+impl<T> Default for ColumnationMerger<T> {
+    fn default() -> Self {
+        Self { pending: Vec::default() }
+    }
+}
+
+impl<T: Columnation> ColumnationMerger<T> {
+    const BUFFER_SIZE_BYTES: usize = 64 << 10;
+    fn chunk_capacity(&self) -> usize {
+        let size = ::std::mem::size_of::<T>();
+        if size == 0 {
+            Self::BUFFER_SIZE_BYTES
+        } else if size <= Self::BUFFER_SIZE_BYTES {
+            Self::BUFFER_SIZE_BYTES / size
+        } else {
+            1
+        }
+    }
+
+    /// Buffer size for pending updates, currently 2 * [`Self::chunk_capacity`].
+    fn pending_capacity(&self) -> usize {
+        self.chunk_capacity() * 2
+    }
+
+    /// Helper to get pre-sized vector from the stash.
+    #[inline]
+    fn empty(&self, stash: &mut Vec<TimelyStack<T>>) -> TimelyStack<T> {
+        stash.pop().unwrap_or_else(|| TimelyStack::with_capacity(self.chunk_capacity()))
+    }
+
+    /// Helper to return a chunk to the stash.
+    #[inline]
+    fn recycle(&self, mut chunk: TimelyStack<T>, stash: &mut Vec<TimelyStack<T>>) {
+        // TODO: Should we limit the size of `stash`?
+        if chunk.capacity() == self.chunk_capacity() {
+            chunk.clear();
+            stash.push(chunk);
+        }
+    }
+}
+
+impl<K, V, T, R> Merger for ColumnationMerger<((K, V), T, R)>
 where
-    K: Columnation + Ord + Clone + 'static,
-    V: Columnation + Ord + Clone + 'static,
-    T: Columnation + Timestamp + 'static,
-    D: Columnation + Semigroup + 'static,
+    K: Columnation + Ord + Data,
+    V: Columnation + Ord + Data,
+    T: Columnation + Ord + PartialOrder + Data,
+    R: Columnation + Semigroup + 'static,
 {
-    type Input = Vec<((K,V),T,D)>;
-    type Output = ((K,V),T,D);
     type Time = T;
+    type Input = Vec<((K, V), T, R)>;
+    type Chunk = TimelyStack<((K, V), T, R)>;
+    type Output = ((K, V), T, R);
 
-    fn new(logger: Option<Logger<DifferentialEvent, WorkerIdentifier>>, operator_id: usize) -> Self {
-        ColumnatedMergeBatcher {
-            sorter: MergeSorterColumnation::new(logger, operator_id),
-            frontier: Antichain::new(),
-            lower: Antichain::from_elem(<T as Timestamp>::minimum()),
+    fn accept(&mut self, container: RefOrMut<Self::Input>, stash: &mut Vec<Self::Chunk>) -> Vec<Self::Chunk> {
+        // Ensure `self.pending` has the desired capacity. We should never have a larger capacity
+        // because we don't write more than capacity elements into the buffer.
+        if self.pending.capacity() < self.pending_capacity() {
+            self.pending.reserve(self.pending_capacity() - self.pending.len());
         }
-    }
 
-    #[inline]
-    fn push_batch(&mut self, batch: RefOrMut<Self::Input>) {
-        // `batch` is either a shared reference or an owned allocations.
-        match batch {
-            RefOrMut::Ref(reference) => {
-                // This is a moment at which we could capture the allocations backing
-                // `batch` into a different form of region, rather than just  cloning.
-                self.sorter.push(&mut reference.clone());
-            },
-            RefOrMut::Mut(reference) => {
-                self.sorter.push(reference);
-            }
-        }
-    }
-
-    // Sealing a batch means finding those updates with times not greater or equal to any time
-    // in `upper`. All updates must have time greater or equal to the previously used `upper`,
-    // which we call `lower`, by assumption that after sealing a batcher we receive no more
-    // updates with times not greater or equal to `upper`.
-    #[inline]
-    fn seal<B: Builder<Input=Self::Output, Time=Self::Time>>(&mut self, upper: Antichain<T>) -> B::Output {
-
-        let mut merged = Default::default();
-        self.sorter.finish_into(&mut merged);
-
-        // Determine the number of distinct keys, values, and updates,
-        // and form a builder pre-sized for these numbers.
-        let mut builder = {
-            let mut keys = 0;
-            let mut vals = 0;
-            let mut upds = 0;
-            let mut prev_keyval = None;
-            for buffer in merged.iter() {
-                for ((key, val), time, _) in buffer.iter() {
-                    if !upper.less_equal(time) {
-                        if let Some((p_key, p_val)) = prev_keyval {
-                            if p_key != key {
-                                keys += 1;
-                                vals += 1;
-                            }
-                            else if p_val != val {
-                                vals += 1;
-                            }
-                            upds += 1;
-                        } else {
-                            keys += 1;
-                            vals += 1;
-                            upds += 1;
+        // Form a chain from what's in pending.
+        // This closure does the following:
+        // * If pending is full, consolidate.
+        // * If after consolidation it's more than half full, peel off a chain of full blocks,
+        //   leaving behind any partial block in pending.
+        // * Merge the new chain with `final_chain` and return it in-place.
+        let form_chain = |this: &mut Self, final_chain: &mut Vec<Self::Chunk>, stash: &mut _| {
+            if this.pending.len() == this.pending.capacity() {
+                consolidate_updates(&mut this.pending);
+                if this.pending.len() >= this.chunk_capacity() {
+                    let mut chain = Vec::default();
+                    while this.pending.len() > this.chunk_capacity() {
+                        let mut chunk = this.empty(stash);
+                        for datum in this.pending.drain(..chunk.capacity()) {
+                            chunk.copy(&datum);
                         }
-                        prev_keyval = Some((key, val));
+                        chain.push(chunk);
+                    }
+                    if final_chain.is_empty() {
+                        *final_chain = chain;
+                    } else if !chain.is_empty() {
+                        let mut output = Vec::default();
+                        this.merge(std::mem::take(final_chain), chain, &mut output, stash);
+                        *final_chain = output;
                     }
                 }
             }
-            B::with_capacity(keys, vals, upds)
         };
 
-        let mut kept = Vec::new();
-        let mut keep = TimelyStack::default();
-
-        self.frontier.clear();
-
-        for buffer in merged.drain(..) {
-            for datum @ ((_key, _val), time, _diff) in &buffer[..] {
-                if upper.less_equal(time) {
-                    self.frontier.insert(time.clone());
-                    if keep.is_empty() {
-                        if keep.capacity() != MergeSorterColumnation::<(K, V), T, D>::buffer_size() {
-                            keep = self.sorter.empty();
-                        }
-                    } else if keep.len() == keep.capacity() {
-                        kept.push(keep);
-                        keep = self.sorter.empty();
-                    }
-                    keep.copy(datum);
+        let mut final_chain = Vec::default();
+        // `container` is either a shared reference or an owned allocations.
+        match container {
+            RefOrMut::Ref(vec) => {
+                let mut slice = &vec[..];
+                while !slice.is_empty() {
+                    let (head, tail) = slice.split_at(std::cmp::min(self.pending.capacity() - self.pending.len(), slice.len()));
+                    slice = tail;
+                    self.pending.extend_from_slice(head);
+                    form_chain(self, &mut final_chain, stash);
                 }
-                else {
-                    builder.copy(datum);
+            }
+            RefOrMut::Mut(vec) => {
+                while !vec.is_empty() {
+                    self.pending.extend(vec.drain(..std::cmp::min(self.pending.capacity() - self.pending.len(), vec.len())));
+                    form_chain(self, &mut final_chain, stash);
+                }
+            }
+        }
+        final_chain
+    }
+
+    fn finish(&mut self, stash: &mut Vec<Self::Chunk>) -> Vec<Self::Chunk> {
+        // Extract all data from `pending`.
+        consolidate_updates(&mut self.pending);
+        let mut chain = Vec::default();
+        while !self.pending.is_empty() {
+            let mut chunk = self.empty(stash);
+            for datum in self.pending.drain(..std::cmp::min(chunk.capacity(), self.pending.len())) {
+                chunk.copy(&datum);
+            }
+            chain.push(chunk);
+        }
+        chain
+    }
+
+    fn merge(&mut self, list1: Vec<Self::Chunk>, list2: Vec<Self::Chunk>, output: &mut Vec<Self::Chunk>, stash: &mut Vec<Self::Chunk>) {
+        let mut list1 = list1.into_iter();
+        let mut list2 = list2.into_iter();
+
+        let mut head1 = TimelyStackQueue::from(list1.next().unwrap_or_default());
+        let mut head2 = TimelyStackQueue::from(list2.next().unwrap_or_default());
+
+        let mut result = self.empty(stash);
+
+        // while we have valid data in each input, merge.
+        while !head1.is_empty() && !head2.is_empty() {
+            while (result.capacity() - result.len()) > 0 && !head1.is_empty() && !head2.is_empty() {
+                let cmp = {
+                    let x = head1.peek();
+                    let y = head2.peek();
+                    (&x.0, &x.1).cmp(&(&y.0, &y.1))
+                };
+                match cmp {
+                    Ordering::Less => {
+                        result.copy(head1.pop());
+                    }
+                    Ordering::Greater => {
+                        result.copy(head2.pop());
+                    }
+                    Ordering::Equal => {
+                        let (data1, time1, diff1) = head1.pop();
+                        let (_data2, _time2, diff2) = head2.pop();
+                        let mut diff1 = diff1.clone();
+                        diff1.plus_equals(diff2);
+                        if !diff1.is_zero() {
+                            result.copy_destructured(data1, time1, &diff1);
+                        }
+                    }
+                }
+            }
+
+            if result.capacity() == result.len() {
+                output.push(result);
+                result = self.empty(stash);
+            }
+
+            if head1.is_empty() {
+                self.recycle(head1.done(), stash);
+                head1 = TimelyStackQueue::from(list1.next().unwrap_or_default());
+            }
+            if head2.is_empty() {
+                self.recycle(head2.done(), stash);
+                head2 = TimelyStackQueue::from(list2.next().unwrap_or_default());
+            }
+        }
+
+        if result.len() > 0 {
+            output.push(result);
+        } else {
+            self.recycle(result, stash);
+        }
+
+        if !head1.is_empty() {
+            let mut result = self.empty(stash);
+            result.reserve_items(head1.iter());
+            for item in head1.iter() {
+                result.copy(item);
+            }
+            output.push(result);
+        }
+        output.extend(list1);
+
+        if !head2.is_empty() {
+            let mut result = self.empty(stash);
+            result.reserve_items(head2.iter());
+            for item in head2.iter() {
+                result.copy(item);
+            }
+            output.push(result);
+        }
+        output.extend(list2);
+    }
+
+    fn extract(
+        &mut self,
+        merged: Vec<Self::Chunk>,
+        upper: AntichainRef<Self::Time>,
+        frontier: &mut Antichain<Self::Time>,
+        readied: &mut Vec<Self::Chunk>,
+        kept: &mut Vec<Self::Chunk>,
+        stash: &mut Vec<Self::Chunk>,
+    ) {
+        let mut keep = self.empty(stash);
+        let mut ready = self.empty(stash);
+
+        for buffer in merged {
+            for d @ (_data, time, _diff) in buffer.iter() {
+                if upper.less_equal(time) {
+                    frontier.insert_ref(time);
+                    if keep.len() == keep.capacity() && !keep.is_empty() {
+                        kept.push(keep);
+                        keep = self.empty(stash);
+                    }
+                    keep.copy(d);
+                } else {
+                    if ready.len() == ready.capacity() && !ready.is_empty() {
+                        readied.push(ready);
+                        ready = self.empty(stash);
+                    }
+                    ready.copy(d);
                 }
             }
             // Recycling buffer.
-            self.sorter.recycle(buffer);
+            self.recycle(buffer, stash);
         }
-
         // Finish the kept data.
         if !keep.is_empty() {
             kept.push(keep);
         }
-        if !kept.is_empty() {
-            self.sorter.push_list(kept);
+        if !ready.is_empty() {
+            readied.push(ready);
         }
-
-        // Drain buffers (fast reclamation).
-        self.sorter.clear_stash();
-
-        let seal = builder.done(self.lower.clone(), upper.clone(), Antichain::from_elem(T::minimum()));
-        self.lower = upper;
-        seal
     }
 
-    /// The frontier of elements remaining after the most recent call to `self.seal`.
-    fn frontier(&mut self) -> timely::progress::frontier::AntichainRef<T> {
-        self.frontier.borrow()
+    fn seal<B: Builder<Input = Self::Output, Time = Self::Time>>(
+        chain: &mut Vec<Self::Chunk>,
+        lower: AntichainRef<Self::Time>,
+        upper: AntichainRef<Self::Time>,
+        since: AntichainRef<Self::Time>,
+    ) -> B::Output {
+        let mut keys = 0;
+        let mut vals = 0;
+        let mut upds = 0;
+        let mut prev_keyval = None;
+        for buffer in chain.iter() {
+            for ((key, val), time, _) in buffer.iter() {
+                if !upper.less_equal(time) {
+                    if let Some((p_key, p_val)) = prev_keyval {
+                        if p_key != key {
+                            keys += 1;
+                            vals += 1;
+                        } else if p_val != val {
+                            vals += 1;
+                        }
+                    } else {
+                        keys += 1;
+                        vals += 1;
+                    }
+                    upds += 1;
+                    prev_keyval = Some((key, val));
+                }
+            }
+        }
+        let mut builder = B::with_capacity(keys, vals, upds);
+
+        for datum in chain.iter().flat_map(|ts| ts.iter()) {
+            builder.copy(datum);
+        }
+
+        builder.done(lower.to_owned(), upper.to_owned(), since.to_owned())
+    }
+
+    fn account(chunk: &Self::Chunk) -> (usize, usize, usize, usize) {
+        let (mut size, mut capacity, mut allocations) = (0, 0, 0);
+        let cb = |siz, cap| {
+            size += siz;
+            capacity += cap;
+            allocations += 1;
+        };
+        chunk.heap_size(cb);
+        (chunk.len(), size, capacity, allocations)
     }
 }
 
@@ -160,7 +322,6 @@ impl<T: Columnation> Default for TimelyStackQueue<T> {
 }
 
 impl<T: Columnation> TimelyStackQueue<T> {
-
     fn pop(&mut self) -> &T {
         self.head += 1;
         &self.list[self.head - 1]
@@ -171,270 +332,19 @@ impl<T: Columnation> TimelyStackQueue<T> {
     }
 
     fn from(list: TimelyStack<T>) -> Self {
-        TimelyStackQueue {
-            list,
-            head: 0,
-        }
+        TimelyStackQueue { list, head: 0 }
     }
 
     fn done(self) -> TimelyStack<T> {
         self.list
     }
 
-    fn is_empty(&self) -> bool { self.head == self.list[..].len() }
+    fn is_empty(&self) -> bool {
+        self.head == self.list[..].len()
+    }
 
     /// Return an iterator over the remaining elements.
-    fn iter(&self) -> impl Iterator<Item=&T> + Clone + ExactSizeIterator {
+    fn iter(&self) -> impl Iterator<Item = &T> + Clone {
         self.list[self.head..].iter()
-    }
-}
-
-struct MergeSorterColumnation<D: Columnation + 'static, T: Columnation + 'static, R: Columnation + 'static> {
-    /// each power-of-two length list of allocations. Do not push/pop directly but use the corresponding functions.
-    queue: Vec<Vec<TimelyStack<(D, T, R)>>>,
-    stash: Vec<TimelyStack<(D, T, R)>>,
-    pending: Vec<(D, T, R)>,
-    logger: Option<Logger<DifferentialEvent, WorkerIdentifier>>,
-    operator_id: usize,
-}
-
-impl<D: Ord+Columnation+'static, T: Ord+Columnation+'static, R: Semigroup+Columnation+'static> MergeSorterColumnation<D, T, R> {
-
-    const BUFFER_SIZE_BYTES: usize = 64 << 10;
-
-    /// Buffer size (number of elements) to use for new/empty buffers.
-    const fn buffer_size() -> usize {
-        let size = std::mem::size_of::<(D, T, R)>();
-        if size == 0 {
-            Self::BUFFER_SIZE_BYTES
-        } else if size <= Self::BUFFER_SIZE_BYTES {
-            Self::BUFFER_SIZE_BYTES / size
-        } else {
-            1
-        }
-    }
-
-    /// Buffer size for pending updates, currently 2 * [`Self::buffer_size`].
-    const fn pending_buffer_size() -> usize {
-        Self::buffer_size() * 2
-    }
-
-    fn new(logger: Option<Logger<DifferentialEvent, WorkerIdentifier>>, operator_id: usize) -> Self {
-        Self {
-            logger,
-            operator_id,
-            queue: Vec::new(),
-            stash: Vec::new(),
-            pending: Vec::new(),
-        }
-    }
-
-    fn empty(&mut self) -> TimelyStack<(D, T, R)> {
-        self.stash.pop().unwrap_or_else(|| TimelyStack::with_capacity(Self::buffer_size()))
-    }
-
-    /// Remove all elements from the stash.
-    fn clear_stash(&mut self) {
-        self.stash.clear();
-    }
-
-    /// Insert an empty buffer into the stash. Panics if the buffer is not empty.
-    fn recycle(&mut self, mut buffer: TimelyStack<(D, T, R)>) {
-        if buffer.capacity() == Self::buffer_size() && self.stash.len() < 2 {
-            buffer.clear();
-            self.stash.push(buffer);
-        }
-    }
-
-    fn push(&mut self, batch: &mut Vec<(D, T, R)>) {
-        // Ensure `self.pending` has a capacity of `Self::pending_buffer_size`.
-        if self.pending.capacity() < Self::pending_buffer_size() {
-            self.pending.reserve(Self::pending_buffer_size() - self.pending.capacity());
-        }
-
-        while !batch.is_empty() {
-            self.pending.extend(batch.drain(..std::cmp::min(batch.len(), self.pending.capacity() - self.pending.len())));
-            if self.pending.len() == self.pending.capacity() {
-                crate::consolidation::consolidate_updates(&mut self.pending);
-                if self.pending.len() > self.pending.capacity() / 2 {
-                    // Flush if `self.pending` is more than half full after consolidation.
-                    self.flush_pending();
-                }
-            }
-        }
-    }
-
-    /// Move all elements in `pending` into `queue`. The data in `pending` must be compacted and
-    /// sorted. After this function returns, `self.pending` is empty.
-    fn flush_pending(&mut self) {
-        if !self.pending.is_empty() {
-            let mut stack = self.empty();
-            stack.reserve_items(self.pending.iter());
-            for tuple in self.pending.drain(..) {
-                stack.copy(&tuple);
-            }
-            self.queue_push(vec![stack]);
-            while self.queue.len() > 1 && (self.queue[self.queue.len()-1].len() >= self.queue[self.queue.len()-2].len() / 2) {
-                let list1 = self.queue_pop().unwrap();
-                let list2 = self.queue_pop().unwrap();
-                let merged = self.merge_by(list1, list2);
-                self.queue_push(merged);
-            }
-        }
-    }
-
-    // This is awkward, because it isn't a power-of-two length any more, and we don't want
-    // to break it down to be so.
-    fn push_list(&mut self, list: Vec<TimelyStack<(D, T, R)>>) {
-        while self.queue.len() > 1 && self.queue[self.queue.len()-1].len() < list.len() {
-            let list1 = self.queue_pop().unwrap();
-            let list2 = self.queue_pop().unwrap();
-            let merged = self.merge_by(list1, list2);
-            self.queue_push(merged);
-        }
-        self.queue_push(list);
-    }
-
-    fn finish_into(&mut self, target: &mut Vec<TimelyStack<(D, T, R)>>) {
-        crate::consolidation::consolidate_updates(&mut self.pending);
-        self.flush_pending();
-        while self.queue.len() > 1 {
-            let list1 = self.queue_pop().unwrap();
-            let list2 = self.queue_pop().unwrap();
-            let merged = self.merge_by(list1, list2);
-            self.queue_push(merged);
-        }
-
-        if let Some(mut last) = self.queue_pop() {
-            std::mem::swap(&mut last, target);
-        }
-    }
-
-    // merges two sorted input lists into one sorted output list.
-    fn merge_by(&mut self, list1: Vec<TimelyStack<(D, T, R)>>, list2: Vec<TimelyStack<(D, T, R)>>) -> Vec<TimelyStack<(D, T, R)>> {
-        use std::cmp::Ordering;
-
-        // TODO: `list1` and `list2` get dropped; would be better to reuse?
-        let mut output = Vec::with_capacity(list1.len() + list2.len());
-        let mut result = self.empty();
-
-        let mut list1 = list1.into_iter();
-        let mut list2 = list2.into_iter();
-
-        let mut head1 = TimelyStackQueue::from(list1.next().unwrap_or_default());
-        let mut head2 = TimelyStackQueue::from(list2.next().unwrap_or_default());
-
-        // while we have valid data in each input, merge.
-        while !head1.is_empty() && !head2.is_empty() {
-
-            while (result.capacity() - result.len()) > 0 && !head1.is_empty() && !head2.is_empty() {
-
-                let cmp = {
-                    let x = head1.peek();
-                    let y = head2.peek();
-                    (&x.0, &x.1).cmp(&(&y.0, &y.1))
-                };
-                match cmp {
-                    Ordering::Less    => { result.copy(head1.pop()); }
-                    Ordering::Greater => { result.copy(head2.pop()); }
-                    Ordering::Equal   => {
-                        let (data1, time1, diff1) = head1.pop();
-                        let (_data2, _time2, diff2) = head2.pop();
-                        let mut diff1 = diff1.clone();
-                        diff1.plus_equals(diff2);
-                        if !diff1.is_zero() {
-                            result.copy_destructured(data1, time1, &diff1);
-                        }
-                    }
-                }
-            }
-
-            if result.capacity() == result.len() {
-                output.push(result);
-                result = self.empty();
-            }
-
-            if head1.is_empty() {
-                self.recycle(head1.done());
-                head1 = TimelyStackQueue::from(list1.next().unwrap_or_default());
-            }
-            if head2.is_empty() {
-                self.recycle(head2.done());
-                head2 = TimelyStackQueue::from(list2.next().unwrap_or_default());
-            }
-        }
-
-        if result.len() > 0 {
-            output.push(result);
-        } else {
-            self.recycle(result);
-        }
-
-        if !head1.is_empty() {
-            let mut result = self.empty();
-            result.reserve_items(head1.iter());
-            for item in head1.iter() { result.copy(item); }
-            output.push(result);
-        }
-        output.extend(list1);
-
-        if !head2.is_empty() {
-            let mut result = self.empty();
-            result.reserve_items(head2.iter());
-            for item in head2.iter() { result.copy(item); }
-            output.push(result);
-        }
-        output.extend(list2);
-
-        output
-    }
-}
-
-impl<D: Columnation + 'static, T: Columnation + 'static, R: Columnation + 'static> MergeSorterColumnation<D, T, R> {
-    /// Pop a batch from `self.queue` and account size changes.
-    #[inline]
-    fn queue_pop(&mut self) -> Option<Vec<TimelyStack<(D, T, R)>>> {
-        let batch = self.queue.pop();
-        self.account(batch.iter().flatten(), -1);
-        batch
-    }
-
-    /// Push a batch to `self.queue` and account size changes.
-    #[inline]
-    fn queue_push(&mut self, batch: Vec<TimelyStack<(D, T, R)>>) {
-        self.account(&batch, 1);
-        self.queue.push(batch);
-    }
-
-    /// Account size changes. Only performs work if a logger exists.
-    ///
-    /// Calculate the size based on the [`TimelyStack`]s passed along, with each attribute
-    /// multiplied by `diff`. Usually, one wants to pass 1 or -1 as the diff.
-    fn account<'a, I: IntoIterator<Item=&'a TimelyStack<(D, T, R)>>>(&self, items: I, diff: isize) {
-        if let Some(logger) = &self.logger {
-            let (mut records, mut siz, mut capacity, mut allocations) = (0isize, 0isize, 0isize, 0isize);
-            for stack in items {
-                records = records.saturating_add_unsigned(stack.len());
-                stack.heap_size(|s, c| {
-                    siz = siz.saturating_add_unsigned(s);
-                    capacity = capacity.saturating_add_unsigned(c);
-                    allocations += isize::from(c > 0);
-                });
-            }
-            logger.log(BatcherEvent {
-                operator: self.operator_id,
-                records_diff: records * diff,
-                size_diff: siz * diff,
-                capacity_diff: capacity * diff,
-                allocations_diff: allocations * diff,
-            })
-        }
-    }
-
-}
-
-impl<D: Columnation + 'static, T: Columnation + 'static, R: Columnation + 'static> Drop for MergeSorterColumnation<D, T, R> {
-    fn drop(&mut self) {
-        while self.queue_pop().is_some() { }
     }
 }

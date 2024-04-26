@@ -240,7 +240,7 @@ pub trait ReduceCore<G: Scope, K: ToOwned + ?Sized, V: Data, R: Semigroup> where
     ///          .map(|x| (x, x))
     ///          .reduce_abelian::<_,_,ValSpine<_,_,_,_>>(
     ///             "Example",
-    ///              Clone::clone, 
+    ///              Clone::clone,
     ///              move |_key, src, dst| dst.push((*src[0].0, 1))
     ///          )
     ///          .trace;

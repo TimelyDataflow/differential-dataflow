@@ -310,8 +310,8 @@ pub trait Batcher {
     type Time: Timestamp;
     /// Allocates a new empty batcher.
     fn new(logger: Option<Logger<DifferentialEvent, WorkerIdentifier>>, operator_id: usize) -> Self;
-    /// Adds an unordered batch of elements to the batcher.
-    fn push_batch(&mut self, batch: RefOrMut<Self::Input>);
+    /// Adds an unordered container of elements to the batcher.
+    fn push_container(&mut self, batch: RefOrMut<Self::Input>);
     /// Returns all updates not greater or equal to an element of `upper`.
     fn seal<B: Builder<Input=Self::Output, Time=Self::Time>>(&mut self, upper: Antichain<Self::Time>) -> B::Output;
     /// Returns the lower envelope of contained update times.
@@ -326,7 +326,7 @@ pub trait Builder: Sized {
     type Time: Timestamp;
     /// Output batch type.
     type Output;
-    
+
     /// Allocates an empty builder.
     ///
     /// Ideally we deprecate this and insist all non-trivial building happens via `with_capacity()`.

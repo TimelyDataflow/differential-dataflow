@@ -6,11 +6,14 @@
 //! for example wrapped types that implement `Ord` that way.
 
 use std::rc::Rc;
+use std::cmp::Ordering;
+
+use abomonation_derive::Abomonation;
 
 use crate::Hashable;
+use crate::trace::implementations::merge_batcher::{MergeBatcher, VecMerger};
+use crate::trace::implementations::merge_batcher_col::ColumnationMerger;
 use crate::trace::implementations::spine_fueled::Spine;
-use crate::trace::implementations::merge_batcher::MergeBatcher;
-use crate::trace::implementations::merge_batcher_col::ColumnatedMergeBatcher;
 use crate::trace::rc_blanket_impls::RcBuilder;
 
 use super::{Update, Layout, Vector, TStack};
@@ -20,7 +23,7 @@ use self::val_batch::{RhhValBatch, RhhValBuilder};
 /// A trace implementation using a spine of ordered lists.
 pub type VecSpine<K, V, T, R> = Spine<
     Rc<RhhValBatch<Vector<((K,V),T,R)>>>,
-    MergeBatcher<K,V,T,R>,
+    MergeBatcher<VecMerger<((K, V), T, R)>, T>,
     RcBuilder<RhhValBuilder<Vector<((K,V),T,R)>>>,
 >;
 // /// A trace implementation for empty values using a spine of ordered lists.
@@ -29,7 +32,7 @@ pub type VecSpine<K, V, T, R> = Spine<
 /// A trace implementation backed by columnar storage.
 pub type ColSpine<K, V, T, R> = Spine<
     Rc<RhhValBatch<TStack<((K,V),T,R)>>>,
-    ColumnatedMergeBatcher<K,V,T,R>,
+    MergeBatcher<ColumnationMerger<((K,V),T,R)>, T>,
     RcBuilder<RhhValBuilder<TStack<((K,V),T,R)>>>,
 >;
 // /// A trace implementation backed by columnar storage.
@@ -46,9 +49,6 @@ pub struct HashWrapper<T: std::hash::Hash + Hashable> {
     /// The inner value, freely modifiable.
     pub inner: T
 }
-
-use std::cmp::Ordering;
-use abomonation_derive::Abomonation;
 
 impl<T: PartialOrd + std::hash::Hash + Hashable> PartialOrd for HashWrapper<T>
 where <T as Hashable>::Output: PartialOrd {
