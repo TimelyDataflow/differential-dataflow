@@ -10,6 +10,7 @@
 //! you need specific behavior, it may be best to defensively copy, paste, and maintain the
 //! specific behavior you require.
 
+use timely::container::{ContainerBuilder, PushInto};
 use crate::difference::Semigroup;
 
 /// Sorts and consolidates `vec`.
@@ -143,6 +144,53 @@ pub fn consolidate_updates_slice<D: Ord, T: Ord, R: Semigroup>(slice: &mut [(D, 
     }
 
     offset
+}
+
+/// A container builder that consolidates data in-places into fixed-sized containers.
+#[derive(Default)]
+pub struct ConsolidatingContainerBuilder<T>{
+    current: T,
+    pending: Vec<T>,
+}
+
+impl<D,T,R> ContainerBuilder for ConsolidatingContainerBuilder<Vec<(D, T, R)>>
+where
+    D: Ord + Clone + 'static,
+    T: Ord + Clone + 'static,
+    R: Semigroup + Clone + 'static
+{
+    type Container = Vec<(D,T,R)>;
+
+    fn push<P: PushInto<Self::Container>>(&mut self, item: P) {
+        let preferred_capacity = timely::container::buffer::default_capacity::<T>();
+        if self.current.capacity() < preferred_capacity * 2 {
+            self.current.reserve(preferred_capacity * 2 - self.current.capacity());
+        }
+        item.push_into(&mut self.current);
+        if self.current.len() == self.current.capacity() {
+            consolidate_updates(&mut self.current);
+            while self.current.len() >= preferred_capacity {
+                let mut container = Vec::with_capacity(preferred_capacity);
+                container.extend(self.current.drain(..std::cmp::min(preferred_capacity, self.current.len())));
+                self.pending.push(container);
+            }
+        }
+    }
+
+    fn extract(&mut self) -> impl Iterator<Item=Self::Container> {
+        self.pending.drain(..)
+    }
+
+    fn finish(&mut self) -> impl Iterator<Item=Self::Container> {
+        let preferred_capacity = timely::container::buffer::default_capacity::<T>();
+        consolidate_updates(&mut self.current);
+        while self.current.len() > 0 {
+            let mut container = Vec::with_capacity(preferred_capacity);
+            container.extend(self.current.drain(..std::cmp::min(preferred_capacity, self.current.len())));
+            self.pending.push(container);
+        }
+        self.pending.drain(..)
+    }
 }
 
 #[cfg(test)]

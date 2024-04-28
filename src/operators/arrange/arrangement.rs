@@ -75,6 +75,8 @@ where
 
 use ::timely::dataflow::scopes::Child;
 use ::timely::progress::timestamp::Refines;
+use timely::container::ContainerBuilder;
+use crate::consolidation::ConsolidatingContainerBuilder;
 
 impl<G, Tr> Arranged<G, Tr>
 where
@@ -264,7 +266,7 @@ where
         L: FnMut(T1::Key<'_>, T1::Val<'_>,T2::Val<'_>,&G::Timestamp,&T1::Diff,&T2::Diff)->I+'static,
     {
         use crate::operators::join::join_traces;
-        join_traces(self, other, move |k, v1, v2, t, d1, d2, c: &mut Vec<(D,G::Timestamp,ROut)>| {
+        join_traces(self, other, move |k, v1, v2, t, d1, d2, c: &mut ConsolidatingContainerBuilder<Vec<(D,G::Timestamp,ROut)>>| {
             for datum in result(k, v1, v2, t, d1, d2) {
                 c.push(datum);
             }

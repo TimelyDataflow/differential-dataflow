@@ -5,7 +5,8 @@
 //! + (b * c), and if this is not equal to the former term, little is known about the actual output.
 use std::cmp::Ordering;
 
-use timely::container::PushContainer;
+use timely::Container;
+use timely::container::ContainerBuilder;
 use timely::order::PartialOrder;
 use timely::progress::Timestamp;
 use timely::dataflow::{Scope, StreamCore};
@@ -330,13 +331,13 @@ where
 /// The "correctness" of this method depends heavily on the behavior of the supplied `result` function.
 ///
 /// [`AsCollection`]: crate::collection::AsCollection
-pub fn join_traces<G, T1, T2,L,C>(arranged1: &Arranged<G,T1>, arranged2: &Arranged<G,T2>, mut result: L) -> StreamCore<G, C>
+pub fn join_traces<G, T1, T2,L, CB>(arranged1: &Arranged<G,T1>, arranged2: &Arranged<G,T2>, mut result: L) -> StreamCore<G, CB::Container>
 where
     G: Scope<Timestamp=T1::Time>,
     T1: TraceReader+Clone+'static,
     T2: for<'a> TraceReader<Key<'a>=T1::Key<'a>, Time=T1::Time>+Clone+'static,
-    L: FnMut(T1::Key<'_>,T1::Val<'_>,T2::Val<'_>,&G::Timestamp,&T1::Diff,&T2::Diff,&mut C)+'static,
-    C: PushContainer,
+    L: FnMut(T1::Key<'_>,T1::Val<'_>,T2::Val<'_>,&G::Timestamp,&T1::Diff,&T2::Diff,&mut CB)+'static,
+    CB: ContainerBuilder + 'static,
 {
     // Rename traces for symmetry from here on out.
     let mut trace1 = arranged1.trace.clone();
@@ -578,7 +579,7 @@ where
 /// The structure wraps cursors which allow us to play out join computation at whatever rate we like.
 /// This allows us to avoid producing and buffering massive amounts of data, without giving the timely
 /// dataflow system a chance to run operators that can consume and aggregate the data.
-struct Deferred<T, C1, C2, C>
+struct Deferred<T, C1, C2, CB>
 where
     T: Timestamp+Lattice+Ord,
     C1: Cursor<Time=T>,
@@ -590,15 +591,15 @@ where
     batch_storage: C2::Storage,
     capability: Capability<T>,
     done: bool,
-    temp: C,
+    temp: CB,
 }
 
-impl<T, C1, C2, C> Deferred<T, C1, C2, C>
+impl<T, C1, C2, CB> Deferred<T, C1, C2, CB>
 where
     C1: Cursor<Time=T>,
     C2: for<'a> Cursor<Key<'a>=C1::Key<'a>, Time=T>,
     T: Timestamp+Lattice+Ord,
-    C: PushContainer,
+    CB: ContainerBuilder,
 {
     fn new(trace: C1, trace_storage: C1::Storage, batch: C2, batch_storage: C2::Storage, capability: Capability<T>) -> Self {
         Deferred {
@@ -608,7 +609,7 @@ where
             batch_storage,
             capability,
             done: false,
-            temp: C::default(),
+            temp: CB::default(),
         }
     }
 
@@ -618,15 +619,15 @@ where
 
     /// Process keys until at least `fuel` output tuples produced, or the work is exhausted.
     #[inline(never)]
-    fn work<L>(&mut self, output: &mut OutputHandleCore<T, C, Tee<T, C>>, mut logic: L, fuel: &mut usize)
+    fn work<L>(&mut self, output: &mut OutputHandleCore<T, CB, Tee<T, CB::Container>>, mut logic: L, fuel: &mut usize)
     where
-        L: for<'a> FnMut(C1::Key<'a>, C1::Val<'a>, C2::Val<'a>, &T, &C1::Diff, &C2::Diff, &mut C),
+        L: for<'a> FnMut(C1::Key<'a>, C1::Val<'a>, C2::Val<'a>, &T, &C1::Diff, &C2::Diff, &mut CB),
     {
 
         let meet = self.capability.time();
 
         let mut effort = 0;
-        let mut session = output.session(&self.capability);
+        let mut session = output.session_with_builder(&self.capability);
 
         let trace_storage = &self.trace_storage;
         let batch_storage = &self.batch_storage;
@@ -647,8 +648,6 @@ where
                     thinker.history1.edits.load(trace, trace_storage, |time| time.join(meet));
                     thinker.history2.edits.load(batch, batch_storage, |time| time.clone());
 
-                    assert_eq!(temp.len(), 0);
-
                     // populate `temp` with the results in the best way we know how.
                     thinker.think(|v1,v2,t,r1,r2| {
                         let key = batch.key(batch_storage);
@@ -661,10 +660,11 @@ where
                     // TODO: Perhaps `thinker` should have the buffer, do smarter
                     //       consolidation, and then deposit results in `session`.
                     // TODO: This needs to be replaced by something equivalent!
-                    // crate::consolidation::consolidate(temp);
 
-                    effort += temp.len();
-                    session.give_container(temp);
+                    for mut container in temp.extract() {
+                        effort += container.len();
+                        session.give_container(&mut container);
+                    }
 
                     batch.step_key(batch_storage);
                     trace.step_key(trace_storage);
@@ -673,6 +673,10 @@ where
                     thinker.history2.clear();
                 }
             }
+        }
+        for mut container in temp.finish() {
+            effort += container.len();
+            session.give_container(&mut container);
         }
 
         self.done = !batch.key_valid(batch_storage) || !trace.key_valid(trace_storage);
