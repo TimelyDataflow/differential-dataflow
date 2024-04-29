@@ -177,11 +177,13 @@ where
         }
     }
 
-    fn extract(&mut self) -> impl Iterator<Item=Self::Container> {
+    type ExtractIter<'a> = std::vec::Drain<'a, Vec<(D,T,R)>>;
+    fn extract(&mut self) -> Self::ExtractIter<'_> {
         self.pending.drain(..)
     }
 
-    fn finish(&mut self) -> impl Iterator<Item=Self::Container> {
+    type FinishIter<'a> = std::vec::Drain<'a, Vec<(D,T,R)>>;
+    fn finish(&mut self) -> Self::FinishIter<'_> {
         let preferred_capacity = timely::container::buffer::default_capacity::<T>();
         consolidate_updates(&mut self.current);
         while self.current.len() > 0 {
