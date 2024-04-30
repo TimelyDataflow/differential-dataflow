@@ -49,8 +49,7 @@ timely = {workspace = true}
 
 [workspace.dependencies]
 #timely = { version = "0.12", default-features = false }
-#timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false }
-timely = { git = "https://github.com/antiguru/timely-dataflow", branch = "container_builder", default-features = false }
+timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false }
 #timely = { path = "../timely-dataflow/timely/", default-features = false }
 
 [features]

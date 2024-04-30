@@ -361,14 +361,13 @@ impl<CB: ContainerBuilder> ContainerBuilder for EffortBuilder<CB> {
 /// even potentially unrelated to the input collection data. Importantly, the key and value types could be generic
 /// associated types (GATs) of the traces, and we would seemingly struggle to frame these types as trait arguments.
 ///
-/// The implementation produces a caller-specified container, with the requirement that the container
-/// can absorb `(D, G::Timestamp, R)` triples. Implementations can use [`AsCollection`] to wrap the
+/// The implementation produces a caller-specified container. Implementations can use [`AsCollection`] to wrap the
 /// output stream in a collection.
 ///
 /// The "correctness" of this method depends heavily on the behavior of the supplied `result` function.
 ///
 /// [`AsCollection`]: crate::collection::AsCollection
-pub fn join_traces<G, T1, T2,L, CB>(arranged1: &Arranged<G,T1>, arranged2: &Arranged<G,T2>, mut result: L) -> StreamCore<G, CB::Container>
+pub fn join_traces<G, T1, T2, L, CB>(arranged1: &Arranged<G,T1>, arranged2: &Arranged<G,T2>, mut result: L) -> StreamCore<G, CB::Container>
 where
     G: Scope<Timestamp=T1::Time>,
     T1: TraceReader+Clone+'static,
