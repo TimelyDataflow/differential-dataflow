@@ -686,12 +686,8 @@ where
                         logic(key, v1, v2, &t, r1, r2, &mut session);
                     });
 
-                    // TODO: This consolidation is optional, and it may not be very
-                    //       helpful. We might try harder to understand whether we
-                    //       should do this work here, or downstream at consumers.
-                    // TODO: Perhaps `thinker` should have the buffer, do smarter
-                    //       consolidation, and then deposit results in `session`.
-
+                    // TODO: Effort isn't perfectly tracked as we might still have some data in the
+                    // session at the moment it's dropped.
                     effort += session.builder().0.take();
                     batch.step_key(batch_storage);
                     trace.step_key(trace_storage);
@@ -701,7 +697,6 @@ where
                 }
             }
         }
-        effort += session.builder().0.take();
         self.done = !batch.key_valid(batch_storage) || !trace.key_valid(trace_storage);
 
         if effort > *fuel { *fuel = 0; }
