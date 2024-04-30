@@ -10,7 +10,7 @@ path="../"
 [dependencies]
 rand="0.3.13"
 libloading="*"
-timely = { git = "https://github.com/TimelyDataflow/timely-dataflow" }
+timely = { workspace = true }
 
 #[workspace]
 #members = [

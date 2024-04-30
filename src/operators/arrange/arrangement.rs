@@ -255,7 +255,7 @@ where
         self.join_core_internal_unsafe(other, result)
     }
     /// A direct implementation of the `JoinCore::join_core_internal_unsafe` method.
-    pub fn join_core_internal_unsafe<T2,I,L,D,ROut> (&self, other: &Arranged<G,T2>, result: L) -> Collection<G,D,ROut>
+    pub fn join_core_internal_unsafe<T2,I,L,D,ROut> (&self, other: &Arranged<G,T2>, mut result: L) -> Collection<G,D,ROut>
     where
         T2: for<'a> TraceReader<Key<'a>=T1::Key<'a>, Time=T1::Time>+Clone+'static,
         D: Data,
@@ -264,7 +264,15 @@ where
         L: FnMut(T1::Key<'_>, T1::Val<'_>,T2::Val<'_>,&G::Timestamp,&T1::Diff,&T2::Diff)->I+'static,
     {
         use crate::operators::join::join_traces;
-        join_traces(self, other, result)
+        join_traces::<_, _, _, _, crate::consolidation::ConsolidatingContainerBuilder<_>>(
+            self,
+            other,
+            move |k, v1, v2, t, d1, d2, c| {
+                for datum in result(k, v1, v2, t, d1, d2) {
+                    c.give(datum);
+                }
+            }
+        )
             .as_collection()
     }
 }
