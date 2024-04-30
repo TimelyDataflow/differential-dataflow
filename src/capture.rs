@@ -399,7 +399,7 @@ pub mod source {
                     for message in source.by_ref() {
                         match message {
                             Message::Updates(mut updates) => {
-                                updates_session.give_vec(&mut updates);
+                                updates_session.give_container(&mut updates);
                             }
                             Message::Progress(progress) => {
                                 // We must send a copy of each progress message to all workers,

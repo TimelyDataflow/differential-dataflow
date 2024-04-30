@@ -60,7 +60,7 @@ where
                     vec.truncate(level - 1);
                     time.inner = PointStamp::new(vec);
                 }
-                output.session(&new_cap).give_vec(&mut vector);
+                output.session(&new_cap).give_container(&mut vector);
             });
         });
 

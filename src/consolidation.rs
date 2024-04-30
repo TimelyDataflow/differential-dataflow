@@ -11,7 +11,8 @@
 //! specific behavior you require.
 
 use std::collections::VecDeque;
-use timely::container::{ContainerBuilder, PushInto};
+use timely::container::{ContainerBuilder, PushContainer, PushInto};
+use crate::Data;
 use crate::difference::Semigroup;
 
 /// Sorts and consolidates `vec`.
@@ -150,40 +151,46 @@ pub fn consolidate_updates_slice<D: Ord, T: Ord, R: Semigroup>(slice: &mut [(D, 
 /// A container builder that consolidates data in-places into fixed-sized containers. Does not
 /// maintain FIFO ordering.
 #[derive(Default)]
-pub struct ConsolidatingContainerBuilder<T>{
-    current: T,
-    empty: Vec<T>,
-    pending: VecDeque<T>,
+pub struct ConsolidatingContainerBuilder<C>{
+    current: C,
+    empty: Vec<C>,
+    outbound: VecDeque<C>,
 }
 
 impl<D,T,R> ConsolidatingContainerBuilder<Vec<(D, T, R)>>
-    where
-        D: Ord + Clone + 'static,
-        T: Ord + Clone + 'static,
-        R: Semigroup + Clone + 'static
+where
+    D: Data,
+    T: Data,
+    R: Semigroup,
 {
     /// Flush `self.current` up to the biggest `multiple` of elements. Pass 1 to flush all elements.
+    // TODO: Can we replace `multiple` by a bool?
     fn consolidate_and_flush_through(&mut self, multiple: usize) {
-        let preferred_capacity = timely::container::buffer::default_capacity::<T>();
+        let preferred_capacity = <Vec<(D,T,R)>>::preferred_capacity();
         consolidate_updates(&mut self.current);
         let mut drain = self.current.drain(..(self.current.len()/multiple)*multiple).peekable();
         while drain.peek().is_some() {
             let mut container = self.empty.pop().unwrap_or_else(|| Vec::with_capacity(preferred_capacity));
             container.extend((&mut drain).take(preferred_capacity));
-            self.pending.push_back(container);
+            self.outbound.push_back(container);
         }
     }
 }
+
 impl<D,T,R> ContainerBuilder for ConsolidatingContainerBuilder<Vec<(D, T, R)>>
 where
-    D: Ord + Clone + 'static,
-    T: Ord + Clone + 'static,
-    R: Semigroup + Clone + 'static
+    D: Data,
+    T: Data,
+    R: Semigroup,
 {
     type Container = Vec<(D,T,R)>;
 
+    /// Push an element.
+    ///
+    /// Precondition: `current` is not allocated or has space for at least one element.
+    #[inline]
     fn push<P: PushInto<Self::Container>>(&mut self, item: P) {
-        let preferred_capacity = timely::container::buffer::default_capacity::<T>();
+        let preferred_capacity = <Vec<(D,T,R)>>::preferred_capacity();
         if self.current.capacity() < preferred_capacity * 2 {
             self.current.reserve(preferred_capacity * 2 - self.current.capacity());
         }
@@ -195,29 +202,13 @@ where
     }
 
     fn push_container(&mut self, container: &mut Self::Container) {
-        let preferred_capacity = timely::container::buffer::default_capacity::<T>();
-        // No need to flush because we don't need to maintain FIFO ordering.
-
-        // Simply append container to current if current sufficient capacity.
-        if self.current.capacity() - self.current.len() >= container.len() {
-            self.current.append(container);
-            if self.current.len() == self.current.capacity() {
-                // Flush complete containers.
-                self.consolidate_and_flush_through(preferred_capacity);
-            }
-        } else if container.len() < self.current.capacity() / 2 {
-            // We know that flush will clear at least `preferred_capacity`, which corresponds to
-            // `current.capacity()/2` if `current` is allocated.
-            self.consolidate_and_flush_through(preferred_capacity);
-            debug_assert!(self.current.capacity() - self.current.len() >= container.len());
-            self.current.append(container);
-        } else {
-            self.pending.push_back(std::mem::replace(container, self.empty.pop().unwrap_or_default()));
+        for item in container.drain(..) {
+            self.push(item);
         }
     }
 
     fn extract(&mut self) -> Option<&mut Vec<(D,T,R)>> {
-        if let Some(container) = self.pending.pop_front() {
+        if let Some(container) = self.outbound.pop_front() {
             self.empty.push(container);
             self.empty.last_mut()
         } else {

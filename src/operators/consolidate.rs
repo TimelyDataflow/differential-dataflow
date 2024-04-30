@@ -99,7 +99,7 @@ where
                     input.for_each(|time, data| {
                         data.swap(&mut vector);
                         crate::consolidation::consolidate_updates(&mut vector);
-                        output.session(&time).give_vec(&mut vector);
+                        output.session(&time).give_container(&mut vector);
                     })
                 }
             })
