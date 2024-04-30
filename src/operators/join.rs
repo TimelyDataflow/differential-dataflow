@@ -4,14 +4,16 @@
 //! the multiplication distributes over addition. That is, we will repeatedly evaluate (a + b) * c as (a * c)
 //! + (b * c), and if this is not equal to the former term, little is known about the actual output.
 use std::cmp::Ordering;
-
 use timely::Container;
-use timely::container::ContainerBuilder;
+
+use timely::container::{ContainerBuilder, PushContainer, PushInto};
 use timely::order::PartialOrder;
 use timely::progress::Timestamp;
 use timely::dataflow::{Scope, StreamCore};
 use timely::dataflow::operators::generic::{Operator, OutputHandleCore};
 use timely::dataflow::channels::pact::Pipeline;
+use timely::dataflow::channels::pushers::buffer::Session;
+use timely::dataflow::channels::pushers::Counter;
 use timely::dataflow::operators::Capability;
 use timely::dataflow::channels::pushers::tee::Tee;
 
@@ -317,6 +319,41 @@ where
     }
 }
 
+/// The session passed to join closures.
+pub type JoinSession<'a, T, CB, C> = Session<'a, T, EffortBuilder<CB>, Counter<T, C, Tee<T, C>>>;
+
+/// A container builder that tracks the length of outputs to estimate the effort of join closures.
+#[derive(Default, Debug)]
+pub struct EffortBuilder<CB>(pub std::cell::Cell<usize>, pub CB);
+
+impl<CB: ContainerBuilder> ContainerBuilder for EffortBuilder<CB> {
+    type Container = CB::Container;
+
+    #[inline]
+    fn push<T: PushInto<Self::Container>>(&mut self, item: T) where Self::Container: PushContainer {
+        self.1.push(item)
+    }
+
+    #[inline]
+    fn push_container(&mut self, container: &mut Self::Container) {
+        self.1.push_container(container)
+    }
+
+    #[inline]
+    fn extract(&mut self) -> Option<&mut Self::Container> {
+        let extracted = self.1.extract();
+        self.0.replace(self.0.take() + extracted.as_ref().map_or(0, |e| e.len()));
+        extracted
+    }
+
+    #[inline]
+    fn finish(&mut self) -> Option<&mut Self::Container> {
+        let finished = self.1.finish();
+        self.0.replace(self.0.take() + finished.as_ref().map_or(0, |e| e.len()));
+        finished
+    }
+}
+
 /// An equijoin of two traces, sharing a common key type.
 ///
 /// This method exists to provide join functionality without opinions on the specific input types, keys and values,
@@ -336,7 +373,7 @@ where
     G: Scope<Timestamp=T1::Time>,
     T1: TraceReader+Clone+'static,
     T2: for<'a> TraceReader<Key<'a>=T1::Key<'a>, Time=T1::Time>+Clone+'static,
-    L: FnMut(T1::Key<'_>,T1::Val<'_>,T2::Val<'_>,&G::Timestamp,&T1::Diff,&T2::Diff,&mut CB)+'static,
+    L: FnMut(T1::Key<'_>,T1::Val<'_>,T2::Val<'_>,&G::Timestamp,&T1::Diff,&T2::Diff,&mut JoinSession<T1::Time, CB, CB::Container>)+'static,
     CB: ContainerBuilder + 'static,
 {
     // Rename traces for symmetry from here on out.
@@ -579,7 +616,7 @@ where
 /// The structure wraps cursors which allow us to play out join computation at whatever rate we like.
 /// This allows us to avoid producing and buffering massive amounts of data, without giving the timely
 /// dataflow system a chance to run operators that can consume and aggregate the data.
-struct Deferred<T, C1, C2, CB>
+struct Deferred<T, C1, C2>
 where
     T: Timestamp+Lattice+Ord,
     C1: Cursor<Time=T>,
@@ -591,15 +628,13 @@ where
     batch_storage: C2::Storage,
     capability: Capability<T>,
     done: bool,
-    temp: CB,
 }
 
-impl<T, C1, C2, CB> Deferred<T, C1, C2, CB>
+impl<T, C1, C2> Deferred<T, C1, C2>
 where
     C1: Cursor<Time=T>,
     C2: for<'a> Cursor<Key<'a>=C1::Key<'a>, Time=T>,
     T: Timestamp+Lattice+Ord,
-    CB: ContainerBuilder,
 {
     fn new(trace: C1, trace_storage: C1::Storage, batch: C2, batch_storage: C2::Storage, capability: Capability<T>) -> Self {
         Deferred {
@@ -609,7 +644,6 @@ where
             batch_storage,
             capability,
             done: false,
-            temp: CB::default(),
         }
     }
 
@@ -619,9 +653,9 @@ where
 
     /// Process keys until at least `fuel` output tuples produced, or the work is exhausted.
     #[inline(never)]
-    fn work<L>(&mut self, output: &mut OutputHandleCore<T, CB, Tee<T, CB::Container>>, mut logic: L, fuel: &mut usize)
+    fn work<L, CB: ContainerBuilder>(&mut self, output: &mut OutputHandleCore<T, EffortBuilder<CB>, Tee<T, CB::Container>>, mut logic: L, fuel: &mut usize)
     where
-        L: for<'a> FnMut(C1::Key<'a>, C1::Val<'a>, C2::Val<'a>, &T, &C1::Diff, &C2::Diff, &mut CB),
+        L: for<'a> FnMut(C1::Key<'a>, C1::Val<'a>, C2::Val<'a>, &T, &C1::Diff, &C2::Diff, &mut JoinSession<T, CB, CB::Container>),
     {
 
         let meet = self.capability.time();
@@ -635,7 +669,6 @@ where
         let trace = &mut self.trace;
         let batch = &mut self.batch;
 
-        let temp = &mut self.temp;
         let mut thinker = JoinThinker::new();
 
         while batch.key_valid(batch_storage) && trace.key_valid(trace_storage) && effort < *fuel {
@@ -651,7 +684,7 @@ where
                     // populate `temp` with the results in the best way we know how.
                     thinker.think(|v1,v2,t,r1,r2| {
                         let key = batch.key(batch_storage);
-                        logic(key, v1, v2, &t, r1, r2, temp);
+                        logic(key, v1, v2, &t, r1, r2, &mut session);
                     });
 
                     // TODO: This consolidation is optional, and it may not be very
@@ -659,13 +692,8 @@ where
                     //       should do this work here, or downstream at consumers.
                     // TODO: Perhaps `thinker` should have the buffer, do smarter
                     //       consolidation, and then deposit results in `session`.
-                    // TODO: This needs to be replaced by something equivalent!
 
-                    for mut container in temp.extract() {
-                        effort += container.len();
-                        session.give_container(&mut container);
-                    }
-
+                    effort += session.builder().0.take();
                     batch.step_key(batch_storage);
                     trace.step_key(trace_storage);
 
@@ -674,11 +702,7 @@ where
                 }
             }
         }
-        for mut container in temp.finish() {
-            effort += container.len();
-            session.give_container(&mut container);
-        }
-
+        effort += session.builder().0.take();
         self.done = !batch.key_valid(batch_storage) || !trace.key_valid(trace_storage);
 
         if effort > *fuel { *fuel = 0; }

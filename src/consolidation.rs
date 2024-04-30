@@ -10,6 +10,7 @@
 //! you need specific behavior, it may be best to defensively copy, paste, and maintain the
 //! specific behavior you require.
 
+use std::collections::VecDeque;
 use timely::container::{ContainerBuilder, PushInto};
 use crate::difference::Semigroup;
 
@@ -146,13 +147,33 @@ pub fn consolidate_updates_slice<D: Ord, T: Ord, R: Semigroup>(slice: &mut [(D, 
     offset
 }
 
-/// A container builder that consolidates data in-places into fixed-sized containers.
+/// A container builder that consolidates data in-places into fixed-sized containers. Does not
+/// maintain FIFO ordering.
 #[derive(Default)]
 pub struct ConsolidatingContainerBuilder<T>{
     current: T,
-    pending: Vec<T>,
+    empty: Vec<T>,
+    pending: VecDeque<T>,
 }
 
+impl<D,T,R> ConsolidatingContainerBuilder<Vec<(D, T, R)>>
+    where
+        D: Ord + Clone + 'static,
+        T: Ord + Clone + 'static,
+        R: Semigroup + Clone + 'static
+{
+    /// Flush `self.current` up to the biggest `multiple` of elements. Pass 1 to flush all elements.
+    fn consolidate_and_flush_through(&mut self, multiple: usize) {
+        let preferred_capacity = timely::container::buffer::default_capacity::<T>();
+        consolidate_updates(&mut self.current);
+        let mut drain = self.current.drain(..(self.current.len()/multiple)*multiple).peekable();
+        while drain.peek().is_some() {
+            let mut container = self.empty.pop().unwrap_or_else(|| Vec::with_capacity(preferred_capacity));
+            container.extend((&mut drain).take(preferred_capacity));
+            self.pending.push_back(container);
+        }
+    }
+}
 impl<D,T,R> ContainerBuilder for ConsolidatingContainerBuilder<Vec<(D, T, R)>>
 where
     D: Ord + Clone + 'static,
@@ -168,30 +189,49 @@ where
         }
         item.push_into(&mut self.current);
         if self.current.len() == self.current.capacity() {
-            consolidate_updates(&mut self.current);
-            while self.current.len() >= preferred_capacity {
-                let mut container = Vec::with_capacity(preferred_capacity);
-                container.extend(self.current.drain(..std::cmp::min(preferred_capacity, self.current.len())));
-                self.pending.push(container);
-            }
+            // Flush complete containers.
+            self.consolidate_and_flush_through(preferred_capacity);
         }
     }
 
-    type ExtractIter<'a> = std::vec::Drain<'a, Vec<(D,T,R)>>;
-    fn extract(&mut self) -> Self::ExtractIter<'_> {
-        self.pending.drain(..)
-    }
-
-    type FinishIter<'a> = std::vec::Drain<'a, Vec<(D,T,R)>>;
-    fn finish(&mut self) -> Self::FinishIter<'_> {
+    fn push_container(&mut self, container: &mut Self::Container) {
         let preferred_capacity = timely::container::buffer::default_capacity::<T>();
-        consolidate_updates(&mut self.current);
-        while self.current.len() > 0 {
-            let mut container = Vec::with_capacity(preferred_capacity);
-            container.extend(self.current.drain(..std::cmp::min(preferred_capacity, self.current.len())));
-            self.pending.push(container);
+        // No need to flush because we don't need to maintain FIFO ordering.
+
+        // Simply append container to current if current sufficient capacity.
+        if self.current.capacity() - self.current.len() >= container.len() {
+            self.current.append(container);
+            if self.current.len() == self.current.capacity() {
+                // Flush complete containers.
+                self.consolidate_and_flush_through(preferred_capacity);
+            }
+        } else if container.len() < self.current.capacity() / 2 {
+            // We know that flush will clear at least `preferred_capacity`, which corresponds to
+            // `current.capacity()/2` if `current` is allocated.
+            self.consolidate_and_flush_through(preferred_capacity);
+            debug_assert!(self.current.capacity() - self.current.len() >= container.len());
+            self.current.append(container);
+        } else {
+            self.pending.push_back(std::mem::replace(container, self.empty.pop().unwrap_or_default()));
         }
-        self.pending.drain(..)
+    }
+
+    fn extract(&mut self) -> Option<&mut Vec<(D,T,R)>> {
+        if let Some(container) = self.pending.pop_front() {
+            self.empty.push(container);
+            self.empty.last_mut()
+        } else {
+            None
+        }
+    }
+
+    fn finish(&mut self) -> Option<&mut Vec<(D,T,R)>> {
+        // Flush all
+        self.consolidate_and_flush_through(1);
+        // Remove all but two elements from the stash of empty to avoid memory leaks. We retain
+        // two to match `current` capacity.
+        self.empty.truncate(2);
+        self.extract()
     }
 }
 
@@ -260,5 +300,47 @@ mod tests {
             consolidate_updates(&mut input);
             assert_eq!(input, output);
         }
+    }
+
+    #[test]
+    fn test_consolidating_container_builder() {
+        let mut ccb = <ConsolidatingContainerBuilder<Vec<(usize, usize, usize)>>>::default();
+        for _ in 0..1024 {
+            ccb.push((0, 0, 0));
+        }
+        assert_eq!(ccb.extract(), None);
+        assert_eq!(ccb.finish(), None);
+
+        for i in 0..1024 {
+            ccb.push((i, 0, 1));
+        }
+
+        let mut collected = Vec::default();
+        while let Some(container) = ccb.finish() {
+            collected.append(container);
+        }
+        // The output happens to be sorted, but it's not guaranteed.
+        collected.sort();
+        for i in 0..1024 {
+            assert_eq!((i, 0, 1), collected[i]);
+        }
+
+        ccb = Default::default();
+        ccb.push_container(&mut Vec::default());
+        assert_eq!(ccb.extract(), None);
+        assert_eq!(ccb.finish(), None);
+
+        ccb.push_container(&mut Vec::from_iter((0..1024).map(|i| (i, 0, 1))));
+        ccb.push_container(&mut Vec::from_iter((0..1024).map(|i| (i, 0, 1))));
+        collected.clear();
+        while let Some(container) = ccb.finish() {
+            collected.append(container);
+        }
+        // The output happens to be sorted, but it's not guaranteed.
+        consolidate_updates(&mut collected);
+        for i in 0..1024 {
+            assert_eq!((i, 0, 2), collected[i]);
+        }
+
     }
 }
