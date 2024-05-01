@@ -9,7 +9,7 @@ use timely::progress::frontier::AntichainRef;
 use timely::progress::{frontier::Antichain, Timestamp};
 use timely::{Container, PartialOrder};
 
-use crate::consolidation::consolidate_updates;
+use crate::consolidation::{consolidate_updates, ConsolidateContainer, ContainerConsolidator, ContainerSorter, InPlaceSorter};
 use crate::difference::Semigroup;
 use crate::logging::{BatcherEvent, DifferentialEvent};
 use crate::trace::{Batcher, Builder};
@@ -189,6 +189,10 @@ impl<M: Merger, T> Drop for MergeBatcher<M, T> {
 pub trait Merger: Default {
     /// The type of update containers received from inputs.
     type Input;
+    /// TODO
+    type Sorter: ContainerSorter<Self::Input>;
+    /// TODO
+    type Consolidator: ConsolidateContainer<Self::Input>;
     /// The internal representation of chunks of data.
     type Chunk: Container;
     /// The output type
@@ -283,6 +287,8 @@ where
     type Input = Vec<((K, V), T, R)>;
     type Chunk = Vec<((K, V), T, R)>;
     type Output = Vec<((K, V), T, R)>;
+    type Sorter = InPlaceSorter;
+    type Consolidator = ContainerConsolidator;
 
     fn accept(&mut self, container: RefOrMut<Self::Input>, stash: &mut Vec<Self::Chunk>) -> Vec<Self::Chunk> {
         // Ensure `self.pending` has the desired capacity. We should never have a larger capacity

@@ -1,6 +1,6 @@
 //! A general purpose `Batcher` implementation based on radix sort for TimelyStack.
 
-use crate::consolidation::consolidate_updates;
+use crate::consolidation::{consolidate_updates, ContainerConsolidator, InPlaceSorter};
 use std::cmp::Ordering;
 use timely::communication::message::RefOrMut;
 use timely::container::columnation::{Columnation, TimelyStack};
@@ -68,6 +68,8 @@ where
     type Input = Vec<((K, V), T, R)>;
     type Chunk = TimelyStack<((K, V), T, R)>;
     type Output = TimelyStack<((K, V), T, R)>;
+    type Sorter = InPlaceSorter;
+    type Consolidator = ContainerConsolidator;
 
     fn accept(&mut self, container: RefOrMut<Self::Input>, stash: &mut Vec<Self::Chunk>) -> Vec<Self::Chunk> {
         // Ensure `self.pending` has the desired capacity. We should never have a larger capacity
