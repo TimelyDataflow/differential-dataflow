@@ -291,8 +291,10 @@ where
         }
         let mut builder = B::with_capacity(keys, vals, upds);
 
-        for datum in chain.iter().flat_map(|ts| ts.iter()) {
-            builder.copy(datum);
+        for chunk in chain.drain(..) {
+            for datum in chunk.iter() {
+                builder.copy(datum);
+            }
         }
 
         builder.done(lower.to_owned(), upper.to_owned(), since.to_owned())
