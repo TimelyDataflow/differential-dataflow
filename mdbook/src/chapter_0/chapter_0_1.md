@@ -34,8 +34,8 @@ fn main() {
                 .inspect(|x| println!("{:?}", x));
         });
 
-        // Set an arbitrary size for our organization.
-        let size = 100;
+        // Set a size for our organization from the input.
+        let size = std::env::args().nth(1).and_then(|s| s.parse::<u32>().ok()).unwrap_or(10);
 
         // Load input (a binary tree).
         input.advance_to(0);
