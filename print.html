@@ -197,8 +197,8 @@ version = &quot;0.1.0&quot;
 authors = [&quot;Your Name &lt;your_name@you.ch&gt;&quot;]
 
 [dependencies]
-timely = &quot;0.11.1&quot;
-differential-dataflow = &quot;0.11.0&quot;
+timely = &quot;0.12.0&quot;
+differential-dataflow = &quot;0.12.0&quot;
 </code></pre>
 <p>You should only need to add those last two lines there, which bring in dependencies on both <a href="https://github.com/TimelyDataflow/timely-dataflow">timely dataflow</a> and <a href="https://github.com/TimelyDataflow/differential-dataflow">differential dataflow</a>. We will be using both of those.</p>
 <p>If you would like to point at the most current code release, hosted on github, you can replace the dependencies with:</p>
@@ -238,8 +238,8 @@ fn main() {
                 .inspect(|x| println!(&quot;{:?}&quot;, x));
         });
 
-        // Set an arbitrary size for our organization.
-        let size = 100;
+        // Set a size for our organization from the input.
+        let size = std::env::args().nth(1).and_then(|s| s.parse::&lt;u32&gt;().ok()).unwrap_or(10);
 
         // Load input (a binary tree).
         input.advance_to(0);
