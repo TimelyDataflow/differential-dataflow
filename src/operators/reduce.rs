@@ -5,6 +5,7 @@
 //! to the key and the list of values.
 //! The function is expected to populate a list of output values.
 
+use timely::container::{PushContainer, PushInto};
 use crate::hashable::Hashable;
 use crate::{Data, ExchangeData, Collection};
 use crate::difference::{Semigroup, Abelian};
@@ -252,7 +253,7 @@ pub trait ReduceCore<G: Scope, K: ToOwned + ?Sized, V: Data, R: Semigroup> where
             F: Fn(T2::Val<'_>) -> V + 'static,
             T2::Diff: Abelian,
             T2::Batch: Batch,
-            T2::Builder: Builder<Input = ((K::Owned, V), T2::Time, T2::Diff)>,
+            T2::Builder: Builder<Input = Vec<((K::Owned, V), T2::Time, T2::Diff)>>,
             L: FnMut(&K, &[(&V, R)], &mut Vec<(V, T2::Diff)>)+'static,
         {
             self.reduce_core::<_,_,T2>(name, from, move |key, input, output, change| {
@@ -274,7 +275,7 @@ pub trait ReduceCore<G: Scope, K: ToOwned + ?Sized, V: Data, R: Semigroup> where
             T2: for<'a> Trace<Key<'a>=&'a K, Time=G::Timestamp>+'static,
             F: Fn(T2::Val<'_>) -> V + 'static,
             T2::Batch: Batch,
-            T2::Builder: Builder<Input = ((K::Owned, V), T2::Time, T2::Diff)>,
+            T2::Builder: Builder<Input = Vec<((K::Owned, V), T2::Time, T2::Diff)>>,
             L: FnMut(&K, &[(&V, R)], &mut Vec<(V,T2::Diff)>, &mut Vec<(V, T2::Diff)>)+'static,
             ;
 }
@@ -293,7 +294,7 @@ where
             F: Fn(T2::Val<'_>) -> V + 'static,
             T2: for<'a> Trace<Key<'a>=&'a K, Time=G::Timestamp>+'static,
             T2::Batch: Batch,
-            T2::Builder: Builder<Input = ((K, V), T2::Time, T2::Diff)>,
+            T2::Builder: Builder<Input = Vec<((K, V), T2::Time, T2::Diff)>>,
             L: FnMut(&K, &[(&V, R)], &mut Vec<(V,T2::Diff)>, &mut Vec<(V, T2::Diff)>)+'static,
     {
         self.arrange_by_key_named(&format!("Arrange: {}", name))
@@ -312,7 +313,8 @@ where
     V: Data,
     F: Fn(T2::Val<'_>) -> V + 'static,
     T2::Batch: Batch,
-    T2::Builder: Builder<Input = ((T1::KeyOwned, V), T2::Time, T2::Diff)>,
+    <T2::Builder as Builder>::Input: PushContainer,
+    ((T1::KeyOwned, V), T2::Time, T2::Diff): PushInto<<T2::Builder as Builder>::Input>,
     L: FnMut(T1::Key<'_>, &[(T1::Val<'_>, T1::Diff)], &mut Vec<(V,T2::Diff)>, &mut Vec<(V, T2::Diff)>)+'static,
 {
     let mut result_trace = None;
@@ -448,10 +450,10 @@ where
                         // TODO: It would be better if all updates went into one batch, but timely dataflow prevents
                         //       this as long as it requires that there is only one capability for each message.
                         let mut buffers = Vec::<(G::Timestamp, Vec<(V, G::Timestamp, T2::Diff)>)>::new();
-                        let mut builders = Vec::new();
+                        let mut chains = Vec::new();
                         for cap in capabilities.iter() {
                             buffers.push((cap.time().clone(), Vec::new()));
-                            builders.push(T2::Builder::new());
+                            chains.push(Default::default());
                         }
 
                         // cursors for navigating input and output traces.
@@ -531,7 +533,8 @@ where
                             for index in 0 .. buffers.len() {
                                 buffers[index].1.sort_by(|x,y| x.0.cmp(&y.0));
                                 for (val, time, diff) in buffers[index].1.drain(..) {
-                                    builders[index].push(((key.into_owned(), val), time, diff));
+                                    // TODO(antiguru): This is dumb. Need to stage data and then reveal it.
+                                    ((key.into_owned(), val), time, diff).push_into(&mut chains[index]);
                                 }
                             }
                         }
@@ -543,8 +546,10 @@ where
                         output_lower.extend(lower_limit.borrow().iter().cloned());
 
                         // build and ship each batch (because only one capability per message).
-                        for (index, builder) in builders.drain(..).enumerate() {
-
+                        for (index, mut chain) in chains.drain(..).enumerate() {
+                            let mut builder = T2::Builder::new();
+                            // TODO(antiguru): Form actual chains.
+                            builder.push(&mut chain);
                             // Form the upper limit of the next batch, which includes all times greater
                             // than the input batch, or the capabilities from i + 1 onward.
                             output_upper.clear();
@@ -648,7 +653,7 @@ where
     where
         F: Fn(C2::Val<'_>) -> V,
         L: FnMut(
-            C1::Key<'a>, 
+            C1::Key<'a>,
             &[(C1::Val<'a>, C1::Diff)],
             &mut Vec<(V, C2::Diff)>,
             &mut Vec<(V, C2::Diff)>,
@@ -728,7 +733,7 @@ mod history_replay {
         where
             F: Fn(C2::Val<'_>) -> V,
             L: FnMut(
-                C1::Key<'a>, 
+                C1::Key<'a>,
                 &[(C1::Val<'a>, C1::Diff)],
                 &mut Vec<(V, C2::Diff)>,
                 &mut Vec<(V, C2::Diff)>,
@@ -1020,7 +1025,7 @@ mod history_replay {
                     new_interesting.push(next_time.clone());
                     debug_assert!(outputs.iter().any(|(t,_)| t.less_equal(&next_time)))
                 }
-            
+
 
                 // Update `meet` to track the meet of each source of times.
                 meet = None;//T::maximum();

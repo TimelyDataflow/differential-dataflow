@@ -340,11 +340,7 @@ pub trait Builder: Sized {
     ///
     /// The default implementation uses `self.copy` with references to the owned arguments.
     /// One should override it if the builder can take advantage of owned arguments.
-    fn push(&mut self, element: Self::Input) {
-        self.copy(&element);
-    }
-    /// Adds an element to the batch.
-    fn copy(&mut self, element: &Self::Input);
+    fn push(&mut self, chunk: &mut Self::Input);
     /// Completes building and returns the batch.
     fn done(self, lower: Antichain<Self::Time>, upper: Antichain<Self::Time>, since: Antichain<Self::Time>) -> Self::Output;
 }
@@ -454,8 +450,7 @@ pub mod rc_blanket_impls {
         type Time = B::Time;
         type Output = Rc<B::Output>;
         fn with_capacity(keys: usize, vals: usize, upds: usize) -> Self { RcBuilder { builder: B::with_capacity(keys, vals, upds) } }
-        fn push(&mut self, element: Self::Input) { self.builder.push(element) }
-        fn copy(&mut self, element: &Self::Input) { self.builder.copy(element) }
+        fn push(&mut self, input: &mut Self::Input) { self.builder.push(input) }
         fn done(self, lower: Antichain<Self::Time>, upper: Antichain<Self::Time>, since: Antichain<Self::Time>) -> Rc<B::Output> { Rc::new(self.builder.done(lower, upper, since)) }
     }
 
@@ -561,8 +556,7 @@ pub mod abomonated_blanket_impls {
         type Time = B::Time;
         type Output = Abomonated<B::Output, Vec<u8>>;
         fn with_capacity(keys: usize, vals: usize, upds: usize) -> Self { AbomonatedBuilder { builder: B::with_capacity(keys, vals, upds) } }
-        fn push(&mut self, element: Self::Input) { self.builder.push(element) }
-        fn copy(&mut self, element: &Self::Input) { self.builder.copy(element) }
+        fn push(&mut self, input: &mut Self::Input) { self.builder.push(input) }
         fn done(self, lower: Antichain<Self::Time>, upper: Antichain<Self::Time>, since: Antichain<Self::Time>) -> Self::Output {
             let batch = self.builder.done(lower, upper, since);
             let mut bytes = Vec::with_capacity(measure(&batch));

@@ -9,6 +9,7 @@ use std::rc::Rc;
 use std::cmp::Ordering;
 
 use abomonation_derive::Abomonation;
+use timely::container::columnation::TimelyStack;
 
 use crate::Hashable;
 use crate::trace::implementations::merge_batcher::{MergeBatcher, VecMerger};
@@ -24,7 +25,7 @@ use self::val_batch::{RhhValBatch, RhhValBuilder};
 pub type VecSpine<K, V, T, R> = Spine<
     Rc<RhhValBatch<Vector<((K,V),T,R)>>>,
     MergeBatcher<VecMerger<((K, V), T, R)>, T>,
-    RcBuilder<RhhValBuilder<Vector<((K,V),T,R)>>>,
+    RcBuilder<RhhValBuilder<Vector<((K,V),T,R)>, Vec<((K,V),T,R)>>>,
 >;
 // /// A trace implementation for empty values using a spine of ordered lists.
 // pub type OrdKeySpine<K, T, R> = Spine<Rc<OrdKeyBatch<Vector<((K,()),T,R)>>>>;
@@ -33,7 +34,7 @@ pub type VecSpine<K, V, T, R> = Spine<
 pub type ColSpine<K, V, T, R> = Spine<
     Rc<RhhValBatch<TStack<((K,V),T,R)>>>,
     MergeBatcher<ColumnationMerger<((K,V),T,R)>, T>,
-    RcBuilder<RhhValBuilder<TStack<((K,V),T,R)>>>,
+    RcBuilder<RhhValBuilder<TStack<((K,V),T,R)>, TimelyStack<((K,V),T,R)>>>,
 >;
 // /// A trace implementation backed by columnar storage.
 // pub type ColKeySpine<K, T, R> = Spine<Rc<OrdKeyBatch<TStack<((K,()),T,R)>>>>;
@@ -86,12 +87,14 @@ mod val_batch {
     use std::convert::TryInto;
     use std::marker::PhantomData;
     use abomonation_derive::Abomonation;
+    use timely::Container;
+    use timely::container::PushInto;
     use timely::progress::{Antichain, frontier::AntichainRef};
 
     use crate::hashable::Hashable;
 
     use crate::trace::{Batch, BatchReader, Builder, Cursor, Description, Merger};
-    use crate::trace::implementations::BatchContainer;
+    use crate::trace::implementations::{BatchContainer, BuilderInput};
     use crate::trace::cursor::MyTrait;
 
     use super::{Layout, Update, HashOrdered};
@@ -695,7 +698,7 @@ mod val_batch {
     }
 
     /// A builder for creating layers from unsorted update tuples.
-    pub struct RhhValBuilder<L: Layout> 
+    pub struct RhhValBuilder<L: Layout, CI>
     where 
         <L::Target as Update>::Key: Default + HashOrdered,
     {
@@ -706,9 +709,10 @@ mod val_batch {
         /// This number allows us to correctly gauge the total number of updates reflected in a batch,
         /// even though `updates.len()` may be much shorter than this amount.
         singletons: usize,
+        _marker: PhantomData<CI>,
     }
 
-    impl<L: Layout> RhhValBuilder<L> 
+    impl<L: Layout, CI> RhhValBuilder<L, CI>
     where 
         <L::Target as Update>::Key: Default + HashOrdered,
     {
@@ -739,12 +743,14 @@ mod val_batch {
         }
     }
 
-    impl<L: Layout> Builder for RhhValBuilder<L>
+    impl<L: Layout, CI> Builder for RhhValBuilder<L, CI>
     where
         <L::Target as Update>::Key: Default + HashOrdered,
         // RhhValBatch<L>: Batch<Key=<L::Target as Update>::Key, Val=<L::Target as Update>::Val, Time=<L::Target as Update>::Time, Diff=<L::Target as Update>::Diff>,
+        CI: Container + for<'a> BuilderInput<L, Item<'a> = <CI as Container>::Item<'a>, Key<'a> = <L::Target as Update>::Key, Time=<L::Target as Update>::Time, Diff=<L::Target as Update>::Diff>,
+        for<'a> CI::Val<'a>: PushInto<L::ValContainer>,
     {
-        type Input = ((<L::Target as Update>::Key, <L::Target as Update>::Val), <L::Target as Update>::Time, <L::Target as Update>::Diff);
+        type Input = CI;
         type Time = <L::Target as Update>::Time;
         type Output = RhhValBatch<L>;
 
@@ -772,64 +778,36 @@ mod val_batch {
                 },
                 singleton: None,
                 singletons: 0,
+                _marker: PhantomData,
             }
         }
 
         #[inline]
-        fn push(&mut self, ((key, val), time, diff): Self::Input) {
-
-            // Perhaps this is a continuation of an already received key.
-            if self.result.keys.last().map(|k| k.equals(&key)).unwrap_or(false) {
-                // Perhaps this is a continuation of an already received value.
-                if self.result.vals.last().map(|v| v.equals(&val)).unwrap_or(false) {
-                    self.push_update(time, diff);
+        fn push(&mut self, chunk: &mut Self::Input) {
+            for item in chunk.drain() {
+                let (key, val, time, diff) = CI::into_parts(item);
+                // Perhaps this is a continuation of an already received key.
+                if self.result.keys.last().map(|k| CI::key_eq(&key, k)).unwrap_or(false) {
+                    // Perhaps this is a continuation of an already received value.
+                    if self.result.vals.last().map(|v| CI::val_eq(&val, v)).unwrap_or(false) {
+                        self.push_update(time, diff);
+                    } else {
+                        // New value; complete representation of prior value.
+                        self.result.vals_offs.push(self.result.updates.len());
+                        if self.singleton.take().is_some() { self.singletons += 1; }
+                        self.push_update(time, diff);
+                        val.push_into(&mut self.result.vals);
+                    }
                 } else {
-                    // New value; complete representation of prior value.
+                    // New key; complete representation of prior key.
                     self.result.vals_offs.push(self.result.updates.len());
                     if self.singleton.take().is_some() { self.singletons += 1; }
+                    self.result.keys_offs.push(self.result.vals.len());
                     self.push_update(time, diff);
-                    self.result.vals.push(val);
+                    val.push_into(&mut self.result.vals);
+                    // Insert the key, but with no specified offset.
+                    self.result.insert_key(key.borrow(), None);
                 }
-            } else {
-                // New key; complete representation of prior key.
-                self.result.vals_offs.push(self.result.updates.len());
-                if self.singleton.take().is_some() { self.singletons += 1; }
-                self.result.keys_offs.push(self.result.vals.len());
-                self.push_update(time, diff);
-                self.result.vals.push(val);
-                // Insert the key, but with no specified offset.
-                self.result.insert_key(key.borrow(), None);
-            }
-        }
-
-        #[inline]
-        fn copy(&mut self, ((key, val), time, diff): &Self::Input) {
-
-            // Perhaps this is a continuation of an already received key.
-            if self.result.keys.last().map(|k| k.equals(key)).unwrap_or(false) {
-                // Perhaps this is a continuation of an already received value.
-                if self.result.vals.last().map(|v| v.equals(val)).unwrap_or(false) {
-                    // TODO: here we could look for repetition, and not push the update in that case.
-                    // More logic (and state) would be required to correctly wrangle this.
-                    self.push_update(time.clone(), diff.clone());
-                } else {
-                    // New value; complete representation of prior value.
-                    self.result.vals_offs.push(self.result.updates.len());
-                    // Remove any pending singleton, and if it was set increment our count.
-                    if self.singleton.take().is_some() { self.singletons += 1; }
-                    self.push_update(time.clone(), diff.clone());
-                    self.result.vals.copy_push(val);
-                }
-            } else {
-                // New key; complete representation of prior key.
-                self.result.vals_offs.push(self.result.updates.len());
-                // Remove any pending singleton, and if it was set increment our count.
-                if self.singleton.take().is_some() { self.singletons += 1; }
-                self.result.keys_offs.push(self.result.vals.len());
-                self.push_update(time.clone(), diff.clone());
-                self.result.vals.copy_push(val);
-                // Insert the key, but with no specified offset.
-                self.result.insert_key(key, None);
             }
         }
 
