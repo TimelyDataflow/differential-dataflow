@@ -58,18 +58,22 @@ pub trait TraceReader {
     /// Values associated with keys.
     type Val<'a>: Copy + Clone + MyTrait<'a>;
     /// Timestamps associated with updates
+    type Time<'a>: Copy + Clone + MyTrait<'a, Owned = Self::TimeOwned>;
+    /// Owned version of the above.
     type TimeOwned: Timestamp + Lattice + Ord + Clone;
     /// Associated update.
+    type Diff<'a>: Copy + Clone + MyTrait<'a, Owned = Self::DiffOwned>;
+    /// Owned version of the above.
     type DiffOwned: Semigroup;
 
     /// The type of an immutable collection of updates.
-    type Batch: for<'a> BatchReader<Key<'a> = Self::Key<'a>, KeyOwned = Self::KeyOwned, Val<'a> = Self::Val<'a>, Time = Self::TimeOwned, Diff = Self::DiffOwned>+Clone+'static;
+    type Batch: for<'a> BatchReader<Key<'a> = Self::Key<'a>, KeyOwned = Self::KeyOwned, Val<'a> = Self::Val<'a>, TimeOwned= Self::TimeOwned, DiffOwned= Self::DiffOwned>+Clone+'static;
 
     /// Storage type for `Self::Cursor`. Likely related to `Self::Batch`.
     type Storage;
 
     /// The type used to enumerate the collections contents.
-    type Cursor: for<'a> Cursor<Storage=Self::Storage, Key<'a> = Self::Key<'a>, KeyOwned = Self::KeyOwned, Val<'a> = Self::Val<'a>, Time = Self::TimeOwned, Diff = Self::DiffOwned>;
+    type Cursor: for<'a> Cursor<Storage=Self::Storage, Key<'a> = Self::Key<'a>, KeyOwned = Self::KeyOwned, Val<'a> = Self::Val<'a>, TimeOwned= Self::TimeOwned, DiffOwned= Self::DiffOwned>;
 
     /// Provides a cursor over updates contained in the trace.
     fn cursor(&mut self) -> (Self::Cursor, Self::Storage) {
@@ -264,12 +268,16 @@ where
     /// Values associated with keys.
     type Val<'a>: Copy + Clone + MyTrait<'a>;
     /// Timestamps associated with updates
-    type Time: Timestamp + Lattice + Ord + Clone;
+    type Time<'a>: Copy + Clone + MyTrait<'a, Owned = Self::TimeOwned>;
+    /// Owned version of the above.
+    type TimeOwned: Timestamp + Lattice + Ord + Clone;
     /// Associated update.
-    type Diff: Semigroup;
+    type Diff<'a>: Copy + Clone + MyTrait<'a, Owned = Self::DiffOwned>;
+    /// Owned version of the above.
+    type DiffOwned: Semigroup;
 
     /// The type used to enumerate the batch's contents.
-    type Cursor: for<'a> Cursor<Storage=Self, Key<'a> = Self::Key<'a>, KeyOwned = Self::KeyOwned, Val<'a> = Self::Val<'a>, Time = Self::Time, Diff = Self::Diff>;
+    type Cursor: for<'a> Cursor<Storage=Self, Key<'a> = Self::Key<'a>, KeyOwned = Self::KeyOwned, Val<'a> = Self::Val<'a>, TimeOwned= Self::TimeOwned, DiffOwned= Self::DiffOwned>;
     /// Acquires a cursor to the batch's contents.
     fn cursor(&self) -> Self::Cursor;
     /// The number of updates in the batch.
@@ -277,12 +285,12 @@ where
     /// True if the batch is empty.
     fn is_empty(&self) -> bool { self.len() == 0 }
     /// Describes the times of the updates in the batch.
-    fn description(&self) -> &Description<Self::Time>;
+    fn description(&self) -> &Description<Self::TimeOwned>;
 
     /// All times in the batch are greater or equal to an element of `lower`.
-    fn lower(&self) -> &Antichain<Self::Time> { self.description().lower() }
+    fn lower(&self) -> &Antichain<Self::TimeOwned> { self.description().lower() }
     /// All times in the batch are not greater or equal to any element of `upper`.
-    fn upper(&self) -> &Antichain<Self::Time> { self.description().upper() }
+    fn upper(&self) -> &Antichain<Self::TimeOwned> { self.description().upper() }
 }
 
 /// An immutable collection of updates.
@@ -295,7 +303,7 @@ pub trait Batch : BatchReader where Self: ::std::marker::Sized {
     /// The result of this method can be exercised to eventually produce the same result
     /// that a call to `self.merge(other)` would produce, but it can be done in a measured
     /// fashion. This can help to avoid latency spikes where a large merge needs to happen.
-    fn begin_merge(&self, other: &Self, compaction_frontier: AntichainRef<Self::Time>) -> Self::Merger {
+    fn begin_merge(&self, other: &Self, compaction_frontier: AntichainRef<Self::TimeOwned>) -> Self::Merger {
         Self::Merger::new(self, other, compaction_frontier)
     }
 }
@@ -353,7 +361,7 @@ pub trait Builder: Sized {
 pub trait Merger<Output: Batch> {
     /// Creates a new merger to merge the supplied batches, optionally compacting
     /// up to the supplied frontier.
-    fn new(source1: &Output, source2: &Output, compaction_frontier: AntichainRef<Output::Time>) -> Self;
+    fn new(source1: &Output, source2: &Output, compaction_frontier: AntichainRef<Output::TimeOwned>) -> Self;
     /// Perform some amount of work, decrementing `fuel`.
     ///
     /// If `fuel` is non-zero after the call, the merging is complete and
@@ -380,8 +388,10 @@ pub mod rc_blanket_impls {
         type Key<'a> = B::Key<'a>;
         type KeyOwned = B::KeyOwned;
         type Val<'a> = B::Val<'a>;
-        type Time = B::Time;
-        type Diff = B::Diff;
+        type Time<'a> = B::Time<'a>;
+        type TimeOwned = B::TimeOwned;
+        type Diff<'a> = B::Diff<'a>;
+        type DiffOwned = B::DiffOwned;
 
         /// The type used to enumerate the batch's contents.
         type Cursor = RcBatchCursor<B::Cursor>;
@@ -393,7 +403,7 @@ pub mod rc_blanket_impls {
         /// The number of updates in the batch.
         fn len(&self) -> usize { (**self).len() }
         /// Describes the times of the updates in the batch.
-        fn description(&self) -> &Description<Self::Time> { (**self).description() }
+        fn description(&self) -> &Description<Self::TimeOwned> { (**self).description() }
     }
 
     /// Wrapper to provide cursor to nested scope.
@@ -414,8 +424,9 @@ pub mod rc_blanket_impls {
         type Key<'a> = C::Key<'a>;
         type KeyOwned = C::KeyOwned;
         type Val<'a> = C::Val<'a>;
-        type Time = C::Time;
-        type Diff = C::Diff;
+        type TimeOwned = C::TimeOwned;
+        type Diff<'a> = C::Diff<'a>;
+        type DiffOwned = C::DiffOwned;
 
         type Storage = Rc<C::Storage>;
 
@@ -426,7 +437,7 @@ pub mod rc_blanket_impls {
         #[inline] fn val<'a>(&self, storage: &'a Self::Storage) -> Self::Val<'a> { self.cursor.val(storage) }
 
         #[inline]
-        fn map_times<L: FnMut(&Self::Time, &Self::Diff)>(&mut self, storage: &Self::Storage, logic: L) {
+        fn map_times<L: FnMut(&Self::TimeOwned, Self::Diff<'_>)>(&mut self, storage: &Self::Storage, logic: L) {
             self.cursor.map_times(storage, logic)
         }
 
@@ -464,7 +475,7 @@ pub mod rc_blanket_impls {
 
     /// Represents a merge in progress.
     impl<B:Batch> Merger<Rc<B>> for RcMerger<B> {
-        fn new(source1: &Rc<B>, source2: &Rc<B>, compaction_frontier: AntichainRef<B::Time>) -> Self { RcMerger { merger: B::begin_merge(source1, source2, compaction_frontier) } }
+        fn new(source1: &Rc<B>, source2: &Rc<B>, compaction_frontier: AntichainRef<B::TimeOwned>) -> Self { RcMerger { merger: B::begin_merge(source1, source2, compaction_frontier) } }
         fn work(&mut self, source1: &Rc<B>, source2: &Rc<B>, fuel: &mut isize) { self.merger.work(source1, source2, fuel) }
         fn done(self) -> Rc<B> { Rc::new(self.merger.done()) }
     }
@@ -484,8 +495,10 @@ pub mod abomonated_blanket_impls {
         type Key<'a> = B::Key<'a>;
         type KeyOwned = B::KeyOwned;
         type Val<'a> = B::Val<'a>;
-        type Time = B::Time;
-        type Diff = B::Diff;
+        type Time<'a> = B::Time<'a>;
+        type TimeOwned = B::TimeOwned;
+        type Diff<'a> = B::Diff<'a>;
+        type DiffOwned = B::DiffOwned;
 
         /// The type used to enumerate the batch's contents.
         type Cursor = AbomonatedBatchCursor<B::Cursor>;
@@ -497,7 +510,7 @@ pub mod abomonated_blanket_impls {
         /// The number of updates in the batch.
         fn len(&self) -> usize { (**self).len() }
         /// Describes the times of the updates in the batch.
-        fn description(&self) -> &Description<Self::Time> { (**self).description() }
+        fn description(&self) -> &Description<Self::TimeOwned> { (**self).description() }
     }
 
     /// Wrapper to provide cursor to nested scope.
@@ -518,8 +531,9 @@ pub mod abomonated_blanket_impls {
         type Key<'a> = C::Key<'a>;
         type KeyOwned = C::KeyOwned;
         type Val<'a> = C::Val<'a>;
-        type Time = C::Time;
-        type Diff = C::Diff;
+        type TimeOwned = C::TimeOwned;
+        type Diff<'a> = C::Diff<'a>;
+        type DiffOwned = C::DiffOwned;
 
         type Storage = Abomonated<C::Storage, Vec<u8>>;
 
@@ -530,7 +544,7 @@ pub mod abomonated_blanket_impls {
         #[inline] fn val<'a>(&self, storage: &'a Self::Storage) -> Self::Val<'a> { self.cursor.val(storage) }
 
         #[inline]
-        fn map_times<L: FnMut(&Self::Time, &Self::Diff)>(&mut self, storage: &Self::Storage, logic: L) {
+        fn map_times<L: FnMut(&Self::TimeOwned, Self::Diff<'_>)>(&mut self, storage: &Self::Storage, logic: L) {
             self.cursor.map_times(storage, logic)
         }
 
@@ -576,7 +590,7 @@ pub mod abomonated_blanket_impls {
 
     /// Represents a merge in progress.
     impl<B:Batch+Abomonation> Merger<Abomonated<B,Vec<u8>>> for AbomonatedMerger<B> {
-        fn new(source1: &Abomonated<B,Vec<u8>>, source2: &Abomonated<B,Vec<u8>>, compaction_frontier: AntichainRef<B::Time>) -> Self {
+        fn new(source1: &Abomonated<B,Vec<u8>>, source2: &Abomonated<B,Vec<u8>>, compaction_frontier: AntichainRef<B::TimeOwned>) -> Self {
             AbomonatedMerger { merger: B::begin_merge(source1, source2, compaction_frontier) }
         }
         fn work(&mut self, source1: &Abomonated<B,Vec<u8>>, source2: &Abomonated<B,Vec<u8>>, fuel: &mut isize) {

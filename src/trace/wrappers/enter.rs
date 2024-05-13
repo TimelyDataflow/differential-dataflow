@@ -34,7 +34,9 @@ where
     type Key<'a> = Tr::Key<'a>;
     type KeyOwned = Tr::KeyOwned;
     type Val<'a> = Tr::Val<'a>;
+    type Time<'a> = TInner;
     type TimeOwned = TInner;
+    type Diff<'a> = Tr::Diff<'a>;
     type DiffOwned = Tr::DiffOwned;
 
     type Batch = BatchEnter<Tr::Batch, TInner>;
@@ -112,13 +114,15 @@ pub struct BatchEnter<B, TInner> {
 impl<B, TInner> BatchReader for BatchEnter<B, TInner>
 where
     B: BatchReader,
-    TInner: Refines<B::Time>+Lattice,
+    TInner: Refines<B::TimeOwned>+Lattice,
 {
     type Key<'a> = B::Key<'a>;
     type KeyOwned = B::KeyOwned;
     type Val<'a> = B::Val<'a>;
-    type Time = TInner;
-    type Diff = B::Diff;
+    type Time<'a> = TInner;
+    type TimeOwned = TInner;
+    type Diff<'a> = B::Diff<'a>;
+    type DiffOwned = B::DiffOwned;
 
     type Cursor = BatchCursorEnter<B::Cursor, TInner>;
 
@@ -132,7 +136,7 @@ where
 impl<B, TInner> BatchEnter<B, TInner>
 where
     B: BatchReader,
-    TInner: Refines<B::Time>+Lattice,
+    TInner: Refines<B::TimeOwned>+Lattice,
 {
     /// Makes a new batch wrapper
     pub fn make_from(batch: B) -> Self {
@@ -165,13 +169,14 @@ impl<C, TInner> CursorEnter<C, TInner> {
 impl<C, TInner> Cursor for CursorEnter<C, TInner>
 where
     C: Cursor,
-    TInner: Refines<C::Time>+Lattice,
+    TInner: Refines<C::TimeOwned>+Lattice,
 {
     type Key<'a> = C::Key<'a>;
     type KeyOwned = C::KeyOwned;
     type Val<'a> = C::Val<'a>;
-    type Time = TInner;
-    type Diff = C::Diff;
+    type TimeOwned = TInner;
+    type Diff<'a> = C::Diff<'a>;
+    type DiffOwned = C::DiffOwned;
 
     type Storage = C::Storage;
 
@@ -182,7 +187,7 @@ where
     #[inline] fn val<'a>(&self, storage: &'a Self::Storage) -> Self::Val<'a> { self.cursor.val(storage) }
 
     #[inline]
-    fn map_times<L: FnMut(&TInner, &Self::Diff)>(&mut self, storage: &Self::Storage, mut logic: L) {
+    fn map_times<L: FnMut(&TInner, Self::Diff<'_>)>(&mut self, storage: &Self::Storage, mut logic: L) {
         self.cursor.map_times(storage, |time, diff| {
             logic(&TInner::to_inner(time.clone()), diff)
         })
@@ -217,13 +222,14 @@ impl<C, TInner> BatchCursorEnter<C, TInner> {
 
 impl<TInner, C: Cursor> Cursor for BatchCursorEnter<C, TInner>
 where
-    TInner: Refines<C::Time>+Lattice,
+    TInner: Refines<C::TimeOwned>+Lattice,
 {
     type Key<'a> = C::Key<'a>;
     type KeyOwned = C::KeyOwned;
     type Val<'a> = C::Val<'a>;
-    type Time = TInner;
-    type Diff = C::Diff;
+    type TimeOwned = TInner;
+    type Diff<'a> = C::Diff<'a>;
+    type DiffOwned = C::DiffOwned;
 
     type Storage = BatchEnter<C::Storage, TInner>;
 
@@ -234,7 +240,7 @@ where
     #[inline] fn val<'a>(&self, storage: &'a Self::Storage) -> Self::Val<'a> { self.cursor.val(&storage.batch) }
 
     #[inline]
-    fn map_times<L: FnMut(&TInner, &Self::Diff)>(&mut self, storage: &Self::Storage, mut logic: L) {
+    fn map_times<L: FnMut(&TInner, Self::Diff<'_>)>(&mut self, storage: &Self::Storage, mut logic: L) {
         self.cursor.map_times(&storage.batch, |time, diff| {
             logic(&TInner::to_inner(time.clone()), diff)
         })

@@ -88,8 +88,9 @@ impl<C: Cursor> Cursor for CursorList<C> {
     type Key<'a> = C::Key<'a>;
     type KeyOwned = C::KeyOwned;
     type Val<'a> = C::Val<'a>;
-    type Time = C::Time;
-    type Diff = C::Diff;
+    type TimeOwned = C::TimeOwned;
+    type Diff<'a> = C::Diff<'a>;
+    type DiffOwned = C::DiffOwned;
 
     type Storage = Vec<C::Storage>;
 
@@ -114,7 +115,7 @@ impl<C: Cursor> Cursor for CursorList<C> {
         self.cursors[self.min_val[0]].val(&storage[self.min_val[0]])
     }
     #[inline]
-    fn map_times<L: FnMut(&Self::Time, &Self::Diff)>(&mut self, storage: &Vec<C::Storage>, mut logic: L) {
+    fn map_times<L: FnMut(&Self::TimeOwned, Self::Diff<'_>)>(&mut self, storage: &Vec<C::Storage>, mut logic: L) {
         for &index in self.min_val.iter() {
             self.cursors[index].map_times(&storage[index], |t,d| logic(t,d));
         }

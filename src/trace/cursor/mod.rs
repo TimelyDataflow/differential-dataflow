@@ -65,9 +65,10 @@ pub trait Cursor {
     /// Values associated with keys.
     type Val<'a>: Copy + Clone + MyTrait<'a> + for<'b> PartialOrd<Self::Val<'b>>;
     /// Timestamps associated with updates
-    type Time: Timestamp + Lattice + Ord + Clone;
+    type TimeOwned: Timestamp + Lattice + Ord + Clone;
     /// Associated update.
-    type Diff: Semigroup + ?Sized;
+    type Diff<'a>: Copy + Clone + MyTrait<'a, Owned = Self::DiffOwned>;
+    type DiffOwned: Semigroup + ?Sized;
 
     /// Storage required by the cursor.
     type Storage;
@@ -97,7 +98,7 @@ pub trait Cursor {
 
     /// Applies `logic` to each pair of time and difference. Intended for mutation of the
     /// closure's scope.
-    fn map_times<L: FnMut(&Self::Time, &Self::Diff)>(&mut self, storage: &Self::Storage, logic: L);
+    fn map_times<L: FnMut(&Self::TimeOwned, Self::Diff<'_>)>(&mut self, storage: &Self::Storage, logic: L);
 
     /// Advances the cursor to the next key.
     fn step_key(&mut self, storage: &Self::Storage);
@@ -119,7 +120,7 @@ pub trait Cursor {
     fn rewind_vals(&mut self, storage: &Self::Storage);
 
     /// Rewinds the cursor and outputs its contents to a Vec
-    fn to_vec<V, F>(&mut self, from: F, storage: &Self::Storage) -> Vec<((Self::KeyOwned, V), Vec<(Self::Time, Self::Diff)>)>
+    fn to_vec<V, F>(&mut self, from: F, storage: &Self::Storage) -> Vec<((Self::KeyOwned, V), Vec<(Self::TimeOwned, Self::DiffOwned)>)>
     where 
         F: Fn(Self::Val<'_>) -> V,
     {
@@ -130,7 +131,7 @@ pub trait Cursor {
             while self.val_valid(storage) {
                 let mut kv_out = Vec::new();
                 self.map_times(storage, |ts, r| {
-                    kv_out.push((ts.clone(), r.clone()));
+                    kv_out.push((ts.clone(), r.into_owned()));
                 });
                 out.push(((self.key(storage).into_owned(), from(self.val(storage))), kv_out));
                 self.step_val(storage);

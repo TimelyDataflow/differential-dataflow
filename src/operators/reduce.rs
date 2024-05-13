@@ -628,8 +628,8 @@ fn sort_dedup<T: Ord>(list: &mut Vec<T>) {
 trait PerKeyCompute<'a, C1, C2, C3, V>
 where
     C1: Cursor,
-    C2: Cursor<Key<'a> = C1::Key<'a>, Time = C1::Time>,
-    C3: Cursor<Key<'a> = C1::Key<'a>, Val<'a> = C1::Val<'a>, Time = C1::Time, Diff = C1::Diff>,
+    C2: Cursor<Key<'a> = C1::Key<'a>, TimeOwned= C1::TimeOwned>,
+    C3: Cursor<Key<'a> = C1::Key<'a>, Val<'a> = C1::Val<'a>, TimeOwned= C1::TimeOwned, DiffOwned= C1::DiffOwned>,
     V: Clone + Ord,
 {
     fn new() -> Self;
@@ -639,19 +639,19 @@ where
         source_cursor: (&mut C1, &'a C1::Storage),
         output_cursor: (&mut C2, &'a C2::Storage),
         batch_cursor: (&mut C3, &'a C3::Storage),
-        times: &mut Vec<C1::Time>,
+        times: &mut Vec<C1::TimeOwned>,
         from: &F,
         logic: &mut L,
-        upper_limit: &Antichain<C1::Time>,
-        outputs: &mut [(C2::Time, Vec<(V, C2::Time, C2::Diff)>)],
-        new_interesting: &mut Vec<C1::Time>) -> (usize, usize)
+        upper_limit: &Antichain<C1::TimeOwned>,
+        outputs: &mut [(C2::TimeOwned, Vec<(V, C2::TimeOwned, C2::DiffOwned)>)],
+        new_interesting: &mut Vec<C1::TimeOwned>) -> (usize, usize)
     where
         F: Fn(C2::Val<'_>) -> V,
         L: FnMut(
             C1::Key<'a>, 
-            &[(C1::Val<'a>, C1::Diff)],
-            &mut Vec<(V, C2::Diff)>,
-            &mut Vec<(V, C2::Diff)>,
+            &[(C1::Val<'a>, C1::DiffOwned)],
+            &mut Vec<(V, C2::DiffOwned)>,
+            &mut Vec<(V, C2::DiffOwned)>,
         );
 }
 
@@ -673,28 +673,28 @@ mod history_replay {
     pub struct HistoryReplayer<'a, C1, C2, C3, V>
     where
         C1: Cursor,
-        C2: Cursor<Key<'a> = C1::Key<'a>, Time = C1::Time>,
-        C3: Cursor<Key<'a> = C1::Key<'a>, Val<'a> = C1::Val<'a>, Time = C1::Time, Diff = C1::Diff>,
+        C2: Cursor<Key<'a> = C1::Key<'a>, TimeOwned= C1::TimeOwned>,
+        C3: Cursor<Key<'a> = C1::Key<'a>, Val<'a> = C1::Val<'a>, TimeOwned= C1::TimeOwned, DiffOwned= C1::DiffOwned>,
         V: Clone + Ord,
     {
         input_history: ValueHistory<'a, C1>,
         output_history: ValueHistory<'a, C2>,
         batch_history: ValueHistory<'a, C3>,
-        input_buffer: Vec<(C1::Val<'a>, C1::Diff)>,
-        output_buffer: Vec<(V, C2::Diff)>,
-        update_buffer: Vec<(V, C2::Diff)>,
-        output_produced: Vec<((V, C2::Time), C2::Diff)>,
-        synth_times: Vec<C1::Time>,
-        meets: Vec<C1::Time>,
-        times_current: Vec<C1::Time>,
-        temporary: Vec<C1::Time>,
+        input_buffer: Vec<(C1::Val<'a>, C1::DiffOwned)>,
+        output_buffer: Vec<(V, C2::DiffOwned)>,
+        update_buffer: Vec<(V, C2::DiffOwned)>,
+        output_produced: Vec<((V, C2::TimeOwned), C2::DiffOwned)>,
+        synth_times: Vec<C1::TimeOwned>,
+        meets: Vec<C1::TimeOwned>,
+        times_current: Vec<C1::TimeOwned>,
+        temporary: Vec<C1::TimeOwned>,
     }
 
     impl<'a, C1, C2, C3, V> PerKeyCompute<'a, C1, C2, C3, V> for HistoryReplayer<'a, C1, C2, C3, V>
     where
         C1: Cursor,
-        C2: Cursor<Key<'a> = C1::Key<'a>, Time = C1::Time>,
-        C3: Cursor<Key<'a> = C1::Key<'a>, Val<'a> = C1::Val<'a>, Time = C1::Time, Diff = C1::Diff>,
+        C2: Cursor<Key<'a> = C1::Key<'a>, TimeOwned= C1::TimeOwned>,
+        C3: Cursor<Key<'a> = C1::Key<'a>, Val<'a> = C1::Val<'a>, TimeOwned= C1::TimeOwned, DiffOwned= C1::DiffOwned>,
         V: Clone + Ord,
     {
         fn new() -> Self {
@@ -719,19 +719,19 @@ mod history_replay {
             (source_cursor, source_storage): (&mut C1, &'a C1::Storage),
             (output_cursor, output_storage): (&mut C2, &'a C2::Storage),
             (batch_cursor, batch_storage): (&mut C3, &'a C3::Storage),
-            times: &mut Vec<C1::Time>,
+            times: &mut Vec<C1::TimeOwned>,
             from: &F,
             logic: &mut L,
-            upper_limit: &Antichain<C1::Time>,
-            outputs: &mut [(C2::Time, Vec<(V, C2::Time, C2::Diff)>)],
-            new_interesting: &mut Vec<C1::Time>) -> (usize, usize)
+            upper_limit: &Antichain<C1::TimeOwned>,
+            outputs: &mut [(C2::TimeOwned, Vec<(V, C2::TimeOwned, C2::DiffOwned)>)],
+            new_interesting: &mut Vec<C1::TimeOwned>) -> (usize, usize)
         where
             F: Fn(C2::Val<'_>) -> V,
             L: FnMut(
                 C1::Key<'a>, 
-                &[(C1::Val<'a>, C1::Diff)],
-                &mut Vec<(V, C2::Diff)>,
-                &mut Vec<(V, C2::Diff)>,
+                &[(C1::Val<'a>, C1::DiffOwned)],
+                &mut Vec<(V, C2::DiffOwned)>,
+                &mut Vec<(V, C2::DiffOwned)>,
             )
         {
 

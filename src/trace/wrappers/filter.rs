@@ -33,7 +33,9 @@ where
     type Key<'a> = Tr::Key<'a>;
     type KeyOwned = Tr::KeyOwned;
     type Val<'a> = Tr::Val<'a>;
+    type Time<'a> = Tr::Time<'a>;
     type TimeOwned = Tr::TimeOwned;
+    type Diff<'a> = Tr::Diff<'a>;
     type DiffOwned = Tr::DiffOwned;
 
     type Batch = BatchFilter<Tr::Batch, F>;
@@ -86,8 +88,10 @@ where
     type Key<'a> = B::Key<'a>;
     type KeyOwned = B::KeyOwned;
     type Val<'a> = B::Val<'a>;
-    type Time = B::Time;
-    type Diff = B::Diff;
+    type Time<'a> = B::Time<'a>;
+    type TimeOwned = B::TimeOwned;
+    type Diff<'a> = B::Diff<'a>;
+    type DiffOwned = B::DiffOwned;
 
     type Cursor = BatchCursorFilter<B::Cursor, F>;
 
@@ -95,7 +99,7 @@ where
         BatchCursorFilter::new(self.batch.cursor(), self.logic.clone())
     }
     fn len(&self) -> usize { self.batch.len() }
-    fn description(&self) -> &Description<B::Time> { self.batch.description() }
+    fn description(&self) -> &Description<B::TimeOwned> { self.batch.description() }
 }
 
 impl<B, F> BatchFilter<B, F>
@@ -134,8 +138,9 @@ where
     type Key<'a> = C::Key<'a>;
     type KeyOwned = C::KeyOwned;
     type Val<'a> = C::Val<'a>;
-    type Time = C::Time;
-    type Diff = C::Diff;
+    type TimeOwned = C::TimeOwned;
+    type Diff<'a> = C::Diff<'a>;
+    type DiffOwned = C::DiffOwned;
 
     type Storage = C::Storage;
 
@@ -146,7 +151,7 @@ where
     #[inline] fn val<'a>(&self, storage: &'a Self::Storage) -> Self::Val<'a> { self.cursor.val(storage) }
 
     #[inline]
-    fn map_times<L: FnMut(&Self::Time,&Self::Diff)>(&mut self, storage: &Self::Storage, logic: L) {
+    fn map_times<L: FnMut(&Self::TimeOwned,Self::Diff<'_>)>(&mut self, storage: &Self::Storage, logic: L) {
         let key = self.key(storage);
         let val = self.val(storage);
         if (self.logic)(key, val) {
@@ -188,8 +193,9 @@ where
     type Key<'a> = C::Key<'a>;
     type KeyOwned = C::KeyOwned;
     type Val<'a> = C::Val<'a>;
-    type Time = C::Time;
-    type Diff = C::Diff;
+    type TimeOwned = C::TimeOwned;
+    type Diff<'a> = C::Diff<'a>;
+    type DiffOwned = C::DiffOwned;
 
     type Storage = BatchFilter<C::Storage, F>;
 
@@ -200,7 +206,7 @@ where
     #[inline] fn val<'a>(&self, storage: &'a Self::Storage) -> Self::Val<'a> { self.cursor.val(&storage.batch) }
 
     #[inline]
-    fn map_times<L: FnMut(&Self::Time,&Self::Diff)>(&mut self, storage: &Self::Storage, logic: L) {
+    fn map_times<L: FnMut(&Self::TimeOwned,Self::Diff<'_>)>(&mut self, storage: &Self::Storage, logic: L) {
         let key = self.key(storage);
         let val = self.val(storage);
         if (self.logic)(key, val) {

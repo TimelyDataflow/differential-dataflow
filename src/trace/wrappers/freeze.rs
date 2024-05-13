@@ -78,7 +78,9 @@ where
     type Key<'a> = Tr::Key<'a>;
     type KeyOwned = Tr::KeyOwned;
     type Val<'a> = Tr::Val<'a>;
+    type Time<'a> = Tr::Time<'a>;
     type TimeOwned = Tr::TimeOwned;
+    type Diff<'a> = Tr::Diff<'a>;
     type DiffOwned = Tr::DiffOwned;
 
     type Batch = BatchFreeze<Tr::Batch, F>;
@@ -136,13 +138,15 @@ impl<B: Clone, F> Clone for BatchFreeze<B, F> {
 impl<B, F> BatchReader for BatchFreeze<B, F>
 where
     B: BatchReader,
-    F: Fn(&B::Time)->Option<B::Time>,
+    F: Fn(&B::TimeOwned)->Option<B::TimeOwned>,
 {
     type Key<'a> = B::Key<'a>;
     type KeyOwned = B::KeyOwned;
     type Val<'a> = B::Val<'a>;
-    type Time = B::Time;
-    type Diff = B::Diff;
+    type Time<'a> = B::Time<'a>;
+    type TimeOwned = B::TimeOwned;
+    type Diff<'a> = B::Diff<'a>;
+    type DiffOwned = B::DiffOwned;
 
     type Cursor = BatchCursorFreeze<B::Cursor, F>;
 
@@ -150,13 +154,13 @@ where
         BatchCursorFreeze::new(self.batch.cursor(), self.func.clone())
     }
     fn len(&self) -> usize { self.batch.len() }
-    fn description(&self) -> &Description<B::Time> { self.batch.description() }
+    fn description(&self) -> &Description<B::TimeOwned> { self.batch.description() }
 }
 
 impl<B, F> BatchFreeze<B, F>
 where
     B: BatchReader,
-    F: Fn(&B::Time)->Option<B::Time>
+    F: Fn(&B::TimeOwned)->Option<B::TimeOwned>
 {
     /// Makes a new batch wrapper
     pub fn make_from(batch: B, func: Rc<F>) -> Self {
@@ -179,13 +183,14 @@ impl<C, F> CursorFreeze<C, F> {
 impl<C, F> Cursor for CursorFreeze<C, F>
 where
     C: Cursor,
-    F: Fn(&C::Time)->Option<C::Time>,
+    F: Fn(&C::TimeOwned)->Option<C::TimeOwned>,
 {
     type Key<'a> = C::Key<'a>;
     type KeyOwned = C::KeyOwned;
     type Val<'a> = C::Val<'a>;
-    type Time = C::Time;
-    type Diff = C::Diff;
+    type TimeOwned = C::TimeOwned;
+    type Diff<'a> = C::Diff<'a>;
+    type DiffOwned = C::DiffOwned;
 
     type Storage = C::Storage;
 
@@ -195,7 +200,7 @@ where
     #[inline] fn key<'a>(&self, storage: &'a Self::Storage) -> Self::Key<'a> { self.cursor.key(storage) }
     #[inline] fn val<'a>(&self, storage: &'a Self::Storage) -> Self::Val<'a> { self.cursor.val(storage) }
 
-    #[inline] fn map_times<L: FnMut(&Self::Time, &Self::Diff)>(&mut self, storage: &Self::Storage, mut logic: L) {
+    #[inline] fn map_times<L: FnMut(&Self::TimeOwned, Self::Diff<'_>)>(&mut self, storage: &Self::Storage, mut logic: L) {
         let func = &self.func;
         self.cursor.map_times(storage, |time, diff| {
             if let Some(time) = func(time) {
@@ -230,13 +235,14 @@ impl<C, F> BatchCursorFreeze<C, F> {
 // impl<C: Cursor<Storage=B, Time=B::Time>, B: BatchReader<Cursor=C>, F> Cursor for BatchCursorFreeze<B, F>
 impl<C: Cursor, F> Cursor for BatchCursorFreeze<C, F>
 where
-    F: Fn(&C::Time)->Option<C::Time>,
+    F: Fn(&C::TimeOwned)->Option<C::TimeOwned>,
 {
     type Key<'a> = C::Key<'a>;
     type KeyOwned = C::KeyOwned;
     type Val<'a> = C::Val<'a>;
-    type Time = C::Time;
-    type Diff = C::Diff;
+    type TimeOwned = C::TimeOwned;
+    type Diff<'a> = C::Diff<'a>;
+    type DiffOwned = C::DiffOwned;
 
     type Storage = BatchFreeze<C::Storage, F>;
 
@@ -246,7 +252,7 @@ where
     #[inline] fn key<'a>(&self, storage: &'a Self::Storage) -> Self::Key<'a> { self.cursor.key(&storage.batch) }
     #[inline] fn val<'a>(&self, storage: &'a Self::Storage) -> Self::Val<'a> { self.cursor.val(&storage.batch) }
 
-    #[inline] fn map_times<L: FnMut(&Self::Time, &Self::Diff)>(&mut self, storage: &Self::Storage, mut logic: L) {
+    #[inline] fn map_times<L: FnMut(&Self::TimeOwned, Self::Diff<'_>)>(&mut self, storage: &Self::Storage, mut logic: L) {
         let func = &self.func;
         self.cursor.map_times(&storage.batch, |time, diff| {
             if let Some(time) = func(time) {

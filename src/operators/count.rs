@@ -85,20 +85,24 @@ where
                             trace_cursor.seek_key(&trace_storage, key);
                             if trace_cursor.get_key(&trace_storage) == Some(key) {
                                 trace_cursor.map_times(&trace_storage, |_, diff| {
-                                    count.as_mut().map(|c| c.plus_equals(diff));
-                                    if count.is_none() { count = Some(diff.clone()); }
+                                    // TODO(antiguru): Re-use `diff` allocation.
+                                    let diff = diff.into_owned();
+                                    count.as_mut().map(|c| c.plus_equals(&diff));
+                                    if count.is_none() { count = Some(diff); }
                                 });
                             }
 
                             batch_cursor.map_times(&batch, |time, diff| {
+                                // TODO(antiguru): Re-use `diff` allocation.
+                                let diff = diff.into_owned();
 
                                 if let Some(count) = count.as_ref() {
                                     if !count.is_zero() {
                                         session.give(((key.into_owned(), count.clone()), time.clone(), R2::from(-1i8)));
                                     }
                                 }
-                                count.as_mut().map(|c| c.plus_equals(diff));
-                                if count.is_none() { count = Some(diff.clone()); }
+                                count.as_mut().map(|c| c.plus_equals(&diff));
+                                if count.is_none() { count = Some(diff); }
                                 if let Some(count) = count.as_ref() {
                                     if !count.is_zero() {
                                         session.give(((key.into_owned(), count.clone()), time.clone(), R2::from(1i8)));

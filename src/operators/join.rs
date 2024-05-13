@@ -618,8 +618,8 @@ where
 struct Deferred<T, C1, C2>
 where
     T: Timestamp+Lattice+Ord,
-    C1: Cursor<Time=T>,
-    C2: for<'a> Cursor<Key<'a>=C1::Key<'a>, Time=T>,
+    C1: Cursor<TimeOwned=T>,
+    C2: for<'a> Cursor<Key<'a>=C1::Key<'a>, TimeOwned=T>,
 {
     trace: C1,
     trace_storage: C1::Storage,
@@ -631,8 +631,8 @@ where
 
 impl<T, C1, C2> Deferred<T, C1, C2>
 where
-    C1: Cursor<Time=T>,
-    C2: for<'a> Cursor<Key<'a>=C1::Key<'a>, Time=T>,
+    C1: Cursor<TimeOwned=T>,
+    C2: for<'a> Cursor<Key<'a>=C1::Key<'a>, TimeOwned=T>,
     T: Timestamp+Lattice+Ord,
 {
     fn new(trace: C1, trace_storage: C1::Storage, batch: C2, batch_storage: C2::Storage, capability: Capability<T>) -> Self {
@@ -654,7 +654,7 @@ where
     #[inline(never)]
     fn work<L, CB: ContainerBuilder>(&mut self, output: &mut OutputHandleCore<T, EffortBuilder<CB>, Tee<T, CB::Container>>, mut logic: L, fuel: &mut usize)
     where
-        L: for<'a> FnMut(C1::Key<'a>, C1::Val<'a>, C2::Val<'a>, &T, &C1::Diff, &C2::Diff, &mut JoinSession<T, CB, CB::Container>),
+        L: for<'a> FnMut(C1::Key<'a>, C1::Val<'a>, C2::Val<'a>, &T, &C1::DiffOwned, &C2::DiffOwned, &mut JoinSession<T, CB, CB::Container>),
     {
 
         let meet = self.capability.time();
@@ -707,7 +707,7 @@ where
 struct JoinThinker<'a, C1, C2>
 where
     C1: Cursor,
-    C2: Cursor<Time = C1::Time>,
+    C2: Cursor<TimeOwned= C1::TimeOwned>,
 {
     pub history1: ValueHistory<'a, C1>,
     pub history2: ValueHistory<'a, C2>,
@@ -716,7 +716,7 @@ where
 impl<'a, C1, C2> JoinThinker<'a, C1, C2>
 where
     C1: Cursor,
-    C2: Cursor<Time = C1::Time>,
+    C2: Cursor<TimeOwned= C1::TimeOwned>,
 {
     fn new() -> Self {
         JoinThinker {
@@ -725,7 +725,7 @@ where
         }
     }
 
-    fn think<F: FnMut(C1::Val<'a>,C2::Val<'a>,C1::Time,&C1::Diff,&C2::Diff)>(&mut self, mut results: F) {
+    fn think<F: FnMut(C1::Val<'a>,C2::Val<'a>,C1::TimeOwned,&C1::DiffOwned,&C2::DiffOwned)>(&mut self, mut results: F) {
 
         // for reasonably sized edits, do the dead-simple thing.
         if self.history1.edits.len() < 10 || self.history2.edits.len() < 10 {

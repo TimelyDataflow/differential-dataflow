@@ -35,7 +35,9 @@ impl<Tr: TraceReader> TraceReader for TraceFrontier<Tr> {
     type Key<'a> = Tr::Key<'a>;
     type KeyOwned = Tr::KeyOwned;
     type Val<'a> = Tr::Val<'a>;
+    type Time<'a> = Tr::Time<'a>;
     type TimeOwned = Tr::TimeOwned;
+    type Diff<'a> = Tr::Diff<'a>;
     type DiffOwned = Tr::DiffOwned;
 
     type Batch = BatchFrontier<Tr::Batch>;
@@ -77,16 +79,18 @@ impl<Tr: TraceReader> TraceFrontier<Tr> {
 #[derive(Clone)]
 pub struct BatchFrontier<B: BatchReader> {
     batch: B,
-    since: Antichain<B::Time>,
-    until: Antichain<B::Time>,
+    since: Antichain<B::TimeOwned>,
+    until: Antichain<B::TimeOwned>,
 }
 
 impl<B: BatchReader> BatchReader for BatchFrontier<B> {
     type Key<'a> = B::Key<'a>;
     type KeyOwned = B::KeyOwned;
     type Val<'a> = B::Val<'a>;
-    type Time = B::Time;
-    type Diff = B::Diff;
+    type Time<'a> = B::Time<'a>;
+    type TimeOwned = B::TimeOwned;
+    type Diff<'a> = B::Diff<'a>;
+    type DiffOwned = B::DiffOwned;
 
     type Cursor = BatchCursorFrontier<B::Cursor>;
 
@@ -94,12 +98,12 @@ impl<B: BatchReader> BatchReader for BatchFrontier<B> {
         BatchCursorFrontier::new(self.batch.cursor(), self.since.borrow(), self.until.borrow())
     }
     fn len(&self) -> usize { self.batch.len() }
-    fn description(&self) -> &Description<B::Time> { self.batch.description() }
+    fn description(&self) -> &Description<B::TimeOwned> { self.batch.description() }
 }
 
 impl<B: BatchReader> BatchFrontier<B> {
     /// Makes a new batch wrapper
-    pub fn make_from(batch: B, since: AntichainRef<B::Time>, until: AntichainRef<B::Time>) -> Self {
+    pub fn make_from(batch: B, since: AntichainRef<B::TimeOwned>, until: AntichainRef<B::TimeOwned>) -> Self {
         BatchFrontier {
             batch,
             since: since.to_owned(),
@@ -125,12 +129,13 @@ impl<C, T> CursorFrontier<C, T> where T: Clone {
     }
 }
 
-impl<C: Cursor> Cursor for CursorFrontier<C, C::Time> {
+impl<C: Cursor> Cursor for CursorFrontier<C, C::TimeOwned> {
     type Key<'a> = C::Key<'a>;
     type KeyOwned = C::KeyOwned;
     type Val<'a> = C::Val<'a>;
-    type Time = C::Time;
-    type Diff = C::Diff;
+    type TimeOwned = C::TimeOwned;
+    type Diff<'a> = C::Diff<'a>;
+    type DiffOwned = C::DiffOwned;
 
     type Storage = C::Storage;
 
@@ -141,10 +146,10 @@ impl<C: Cursor> Cursor for CursorFrontier<C, C::Time> {
     #[inline] fn val<'a>(&self, storage: &'a Self::Storage) -> Self::Val<'a> { self.cursor.val(storage) }
 
     #[inline]
-    fn map_times<L: FnMut(&Self::Time,&Self::Diff)>(&mut self, storage: &Self::Storage, mut logic: L) {
+    fn map_times<L: FnMut(&Self::TimeOwned,Self::Diff<'_>)>(&mut self, storage: &Self::Storage, mut logic: L) {
         let since = self.since.borrow();
         let until = self.until.borrow();
-        let mut temp: C::Time = <C::Time as timely::progress::Timestamp>::minimum();
+        let mut temp: C::TimeOwned = <C::TimeOwned as timely::progress::Timestamp>::minimum();
         self.cursor.map_times(storage, |time, diff| {
             temp.clone_from(time);
             temp.advance_by(since);
@@ -169,12 +174,12 @@ impl<C: Cursor> Cursor for CursorFrontier<C, C::Time> {
 /// Wrapper to provide cursor to nested scope.
 pub struct BatchCursorFrontier<C: Cursor> {
     cursor: C,
-    since: Antichain<C::Time>,
-    until: Antichain<C::Time>,
+    since: Antichain<C::TimeOwned>,
+    until: Antichain<C::TimeOwned>,
 }
 
 impl<C: Cursor> BatchCursorFrontier<C> {
-    fn new(cursor: C, since: AntichainRef<C::Time>, until: AntichainRef<C::Time>) -> Self {
+    fn new(cursor: C, since: AntichainRef<C::TimeOwned>, until: AntichainRef<C::TimeOwned>) -> Self {
         BatchCursorFrontier {
             cursor,
             since: since.to_owned(),
@@ -190,8 +195,9 @@ where
     type Key<'a> = C::Key<'a>;
     type KeyOwned = C::KeyOwned;
     type Val<'a> = C::Val<'a>;
-    type Time = C::Time;
-    type Diff = C::Diff;
+    type TimeOwned = C::TimeOwned;
+    type Diff<'a> = C::Diff<'a>;
+    type DiffOwned = C::DiffOwned;
 
     type Storage = BatchFrontier<C::Storage>;
 
@@ -202,10 +208,10 @@ where
     #[inline] fn val<'a>(&self, storage: &'a Self::Storage) -> Self::Val<'a> { self.cursor.val(&storage.batch) }
 
     #[inline]
-    fn map_times<L: FnMut(&Self::Time,&Self::Diff)>(&mut self, storage: &Self::Storage, mut logic: L) {
+    fn map_times<L: FnMut(&Self::TimeOwned,Self::Diff<'_>)>(&mut self, storage: &Self::Storage, mut logic: L) {
         let since = self.since.borrow();
         let until = self.until.borrow();
-        let mut temp: C::Time = <C::Time as timely::progress::Timestamp>::minimum();
+        let mut temp: C::TimeOwned = <C::TimeOwned as timely::progress::Timestamp>::minimum();
         self.cursor.map_times(&storage.batch, |time, diff| {
             temp.clone_from(time);
             temp.advance_by(since);

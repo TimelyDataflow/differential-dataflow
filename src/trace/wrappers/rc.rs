@@ -82,7 +82,9 @@ impl<Tr: TraceReader> TraceReader for TraceRc<Tr> {
     type Key<'a> = Tr::Key<'a>;
     type KeyOwned = Tr::KeyOwned;
     type Val<'a> = Tr::Val<'a>;
+    type Time<'a> = Tr::Time<'a>;
     type TimeOwned = Tr::TimeOwned;
+    type Diff<'a> = Tr::Diff<'a>;
     type DiffOwned = Tr::DiffOwned;
 
     type Batch = Tr::Batch;

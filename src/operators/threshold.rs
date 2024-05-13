@@ -15,6 +15,7 @@ use crate::hashable::Hashable;
 use crate::collection::AsCollection;
 use crate::operators::arrange::{Arranged, ArrangeBySelf};
 use crate::trace::{BatchReader, Cursor, TraceReader};
+use crate::trace::cursor::MyTrait;
 
 /// Extension trait for the `distinct` differential dataflow method.
 pub trait ThresholdTotal<G: Scope, K: ExchangeData, R: ExchangeData+Semigroup> where G::Timestamp: TotalOrder+Lattice+Ord {
@@ -133,31 +134,35 @@ where
                             trace_cursor.seek_key(&trace_storage, key);
                             if trace_cursor.get_key(&trace_storage) == Some(key) {
                                 trace_cursor.map_times(&trace_storage, |_, diff| {
-                                    count.as_mut().map(|c| c.plus_equals(diff));
-                                    if count.is_none() { count = Some(diff.clone()); }
+                                    // TODO(antiguru): Re-use `diff` allocation.
+                                    let diff = diff.into_owned();
+                                    count.as_mut().map(|c| c.plus_equals(&diff));
+                                    if count.is_none() { count = Some(diff); }
                                 });
                             }
 
                             // Apply `thresh` both before and after `diff` is applied to `count`.
                             // If the result is non-zero, send it along.
                             batch_cursor.map_times(&batch, |time, diff| {
+                                // TODO(antiguru): Re-use `diff` allocation.
+                                let diff = diff.into_owned();
 
                                 let difference =
                                 match &count {
                                     Some(old) => {
                                         let mut temp = old.clone();
-                                        temp.plus_equals(diff);
+                                        temp.plus_equals(&diff);
                                         thresh(key, &temp, Some(old))
                                     },
-                                    None => { thresh(key, diff, None) },
+                                    None => { thresh(key, &diff, None) },
                                 };
 
                                 // Either add or assign `diff` to `count`.
                                 if let Some(count) = &mut count {
-                                    count.plus_equals(diff);
+                                    count.plus_equals(&diff);
                                 }
                                 else {
-                                    count = Some(diff.clone());
+                                    count = Some(diff);
                                 }
 
                                 if let Some(difference) = difference {

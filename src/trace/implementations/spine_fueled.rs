@@ -91,11 +91,11 @@ where
 {
     operator: OperatorInfo,
     logger: Option<Logger>,
-    logical_frontier: Antichain<B::Time>,   // Times after which the trace must accumulate correctly.
-    physical_frontier: Antichain<B::Time>,  // Times after which the trace must be able to subset its inputs.
+    logical_frontier: Antichain<B::TimeOwned>,   // Times after which the trace must accumulate correctly.
+    physical_frontier: Antichain<B::TimeOwned>,  // Times after which the trace must be able to subset its inputs.
     merging: Vec<MergeState<B>>,            // Several possibly shared collections of updates.
     pending: Vec<B>,                        // Batches at times in advance of `frontier`.
-    upper: Antichain<B::Time>,
+    upper: Antichain<B::TimeOwned>,
     effort: usize,
     activator: Option<timely::scheduling::activate::Activator>,
     /// Parameters to `exert_logic`, containing tuples of `(index, count, length)`.
@@ -112,8 +112,10 @@ where
     type Key<'a> = B::Key<'a>;
     type KeyOwned = B::KeyOwned;
     type Val<'a> = B::Val<'a>;
-    type TimeOwned = B::Time;
-    type DiffOwned = B::Diff;
+    type Time<'a> = B::Time<'a>;
+    type TimeOwned = B::TimeOwned;
+    type Diff<'a> = B::Diff<'a>;
+    type DiffOwned = B::DiffOwned;
 
     type Batch = B;
     type Storage = Vec<B>;
@@ -215,14 +217,14 @@ where
         Some((CursorList::new(cursors, &storage), storage))
     }
     #[inline]
-    fn set_logical_compaction(&mut self, frontier: AntichainRef<B::Time>) {
+    fn set_logical_compaction(&mut self, frontier: AntichainRef<B::TimeOwned>) {
         self.logical_frontier.clear();
         self.logical_frontier.extend(frontier.iter().cloned());
     }
     #[inline]
-    fn get_logical_compaction(&mut self) -> AntichainRef<B::Time> { self.logical_frontier.borrow() }
+    fn get_logical_compaction(&mut self) -> AntichainRef<B::TimeOwned> { self.logical_frontier.borrow() }
     #[inline]
-    fn set_physical_compaction(&mut self, frontier: AntichainRef<B::Time>) {
+    fn set_physical_compaction(&mut self, frontier: AntichainRef<B::TimeOwned>) {
         // We should never request to rewind the frontier.
         debug_assert!(PartialOrder::less_equal(&self.physical_frontier.borrow(), &frontier), "FAIL\tthrough frontier !<= new frontier {:?} {:?}\n", self.physical_frontier, frontier);
         self.physical_frontier.clear();
@@ -230,7 +232,7 @@ where
         self.consider_merges();
     }
     #[inline]
-    fn get_physical_compaction(&mut self) -> AntichainRef<B::Time> { self.physical_frontier.borrow() }
+    fn get_physical_compaction(&mut self) -> AntichainRef<B::TimeOwned> { self.physical_frontier.borrow() }
 
     #[inline]
     fn map_batches<F: FnMut(&Self::Batch)>(&self, mut f: F) {
@@ -253,7 +255,7 @@ where
 impl<B, BA, BU> Trace for Spine<B, BA, BU>
 where
     B: Batch+Clone+'static,
-    BA: Batcher<Time = B::Time>,
+    BA: Batcher<Time = B::TimeOwned>,
     BU: Builder<Input=BA::Output, Time=BA::Time, Output = B>,
 {
     /// A type used to assemble batches from disordered updates.
@@ -432,11 +434,11 @@ impl<B: Batch, BA, BU> Spine<B, BA, BU> {
         Spine {
             operator,
             logger,
-            logical_frontier: Antichain::from_elem(<B::Time as timely::progress::Timestamp>::minimum()),
-            physical_frontier: Antichain::from_elem(<B::Time as timely::progress::Timestamp>::minimum()),
+            logical_frontier: Antichain::from_elem(<B::TimeOwned as timely::progress::Timestamp>::minimum()),
+            physical_frontier: Antichain::from_elem(<B::TimeOwned as timely::progress::Timestamp>::minimum()),
             merging: Vec::new(),
             pending: Vec::new(),
-            upper: Antichain::from_elem(<B::Time as timely::progress::Timestamp>::minimum()),
+            upper: Antichain::from_elem(<B::TimeOwned as timely::progress::Timestamp>::minimum()),
             effort,
             activator,
             exert_logic_param: Vec::default(),
@@ -780,7 +782,7 @@ enum MergeState<B: Batch> {
     Double(MergeVariant<B>),
 }
 
-impl<B: Batch> MergeState<B> where B::Time: Eq {
+impl<B: Batch> MergeState<B> where B::TimeOwned: Eq {
 
     /// The number of actual updates contained in the level.
     fn len(&self) -> usize {
@@ -861,7 +863,7 @@ impl<B: Batch> MergeState<B> where B::Time: Eq {
     /// empty batch whose upper and lower froniers are equal. This
     /// option exists purely for bookkeeping purposes, and no computation
     /// is performed to merge the two batches.
-    fn begin_merge(batch1: Option<B>, batch2: Option<B>, compaction_frontier: AntichainRef<B::Time>) -> MergeState<B> {
+    fn begin_merge(batch1: Option<B>, batch2: Option<B>, compaction_frontier: AntichainRef<B::TimeOwned>) -> MergeState<B> {
         let variant =
         match (batch1, batch2) {
             (Some(batch1), Some(batch2)) => {

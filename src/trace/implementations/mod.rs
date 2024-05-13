@@ -93,9 +93,12 @@ pub trait Layout {
     /// Container for update vals.
     type ValContainer:
         BatchContainer<PushItem=<Self::Target as Update>::Val>;
-    /// Container for update vals.
-    type UpdContainer:
-        for<'a> BatchContainer<PushItem=(<Self::Target as Update>::Time, <Self::Target as Update>::Diff), ReadItem<'a> = &'a (<Self::Target as Update>::Time, <Self::Target as Update>::Diff)>;
+    /// Container for time vals.
+    type TimeContainer:
+        for<'a> BatchContainer<PushItem=<Self::Target as Update>::Time>;
+    /// Container for diff vals.
+    type DiffContainer:
+        for<'a> BatchContainer<PushItem=<Self::Target as Update>::Diff>;
     /// Container for offsets.
     type OffsetContainer: BatchContainer<PushItem=usize>;
 }
@@ -113,7 +116,8 @@ where
     type Target = U;
     type KeyContainer = Vec<U::Key>;
     type ValContainer = Vec<U::Val>;
-    type UpdContainer = Vec<(U::Time, U::Diff)>;
+    type TimeContainer = Vec<U::Time>;
+    type DiffContainer = Vec<U::Diff>;
     type OffsetContainer = OffsetList;
 }
 
@@ -132,7 +136,8 @@ where
     type Target = U;
     type KeyContainer = TimelyStack<U::Key>;
     type ValContainer = TimelyStack<U::Val>;
-    type UpdContainer = TimelyStack<(U::Time, U::Diff)>;
+    type TimeContainer = TimelyStack<U::Time>;
+    type DiffContainer = TimelyStack<U::Diff>;
     type OffsetContainer = OffsetList;
 }
 
@@ -185,7 +190,8 @@ where
     type Target = Preferred<K, V, T, D>;
     type KeyContainer = K::Container;
     type ValContainer = V::Container;
-    type UpdContainer = Vec<(T, D)>;
+    type TimeContainer = Vec<T>;
+    type DiffContainer = Vec<D>;
     type OffsetContainer = OffsetList;
 }
 
