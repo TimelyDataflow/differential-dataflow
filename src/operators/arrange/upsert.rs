@@ -203,6 +203,7 @@ where
                     if capabilities.elements().iter().any(|c| !input.frontier().less_equal(c.time())) {
 
                         let mut upper = Antichain::new();   // re-used allocation for sealing batches.
+                        let mut owned_diff = None;
 
                         // For each capability not in advance of the input frontier ...
                         for (index, capability) in capabilities.elements().iter().enumerate() {
@@ -255,8 +256,15 @@ where
                                         // Determine the prior value associated with the key.
                                         while let Some(val) = trace_cursor.get_val(&trace_storage) {
                                             let mut count = 0;
-                                            // TODO(antiguru): Re-use `diff` allocation.
-                                            trace_cursor.map_times(&trace_storage, |_time, diff| count += diff.into_owned());
+                                            trace_cursor.map_times(&trace_storage, |_time, diff| {
+                                                let diff = if let Some(owned_diff) = &mut owned_diff {
+                                                    diff.clone_onto(owned_diff);
+                                                    &*owned_diff
+                                                } else {
+                                                    owned_diff.insert(diff.into_owned())
+                                                };
+                                                count += diff.into_owned()
+                                            });
                                             assert!(count == 0 || count == 1);
                                             if count == 1 {
                                                 assert!(prev_value.is_none());

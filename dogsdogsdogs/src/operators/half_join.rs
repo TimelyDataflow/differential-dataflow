@@ -214,7 +214,7 @@ where
                                     while let Some(val2) = cursor.get_val(&storage) {
                                         cursor.map_times(&storage, |t, d| {
                                             if comparison(t, initial) {
-                                                output_buffer.push((t.join(time), d.clone()))
+                                                output_buffer.push((t.join(time), d.into_owned()))
                                             }
                                         });
                                         consolidate(&mut output_buffer);

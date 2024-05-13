@@ -462,12 +462,12 @@ mod val_batch {
         fn val<'a>(&self, storage: &'a OrdValBatch<L>) -> Self::Val<'a> { storage.storage.vals.index(self.val_cursor) }
         fn map_times<L2: FnMut(&Self::Time, Self::Diff<'_>)>(&mut self, storage: &OrdValBatch<L>, mut logic: L2) {
             let (lower, upper) = storage.storage.updates_for_value(self.val_cursor);
+            let mut owned_time = timely::progress::Timestamp::minimum();
             for index in lower .. upper {
                 let time = storage.storage.times.index(index);
                 let diff = storage.storage.diffs.index(index);
-                // TODO(antiguru): We should avoid this clone.
-                let time = time.into_owned();
-                logic(&time, diff);
+                time.clone_onto(&mut owned_time);
+                logic(&owned_time, diff);
             }
         }
         fn key_valid(&self, storage: &OrdValBatch<L>) -> bool { self.key_cursor < storage.storage.keys.len() }
@@ -945,12 +945,12 @@ mod key_batch {
         fn val<'a>(&self, _storage: &'a Self::Storage) -> &'a () { &() }
         fn map_times<L2: FnMut(&Self::Time, Self::Diff<'_>)>(&mut self, storage: &Self::Storage, mut logic: L2) {
             let (lower, upper) = storage.storage.updates_for_key(self.key_cursor);
+            let mut owned_time = timely::progress::Timestamp::minimum();
             for index in lower .. upper {
                 let time = storage.storage.times.index(index);
                 let diff = storage.storage.diffs.index(index);
-                // TODO(antiguru): We should avoid this clone.
-                let time = time.into_owned();
-                logic(&time, diff);
+                time.clone_onto(&mut owned_time);
+                logic(&owned_time, diff);
             }
         }
         fn key_valid(&self, storage: &Self::Storage) -> bool { self.key_cursor < storage.storage.keys.len() }

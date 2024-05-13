@@ -72,6 +72,7 @@ where
         input2.for_each(|_, _| { });
 
         if let Some(ref mut trace) = propose_trace {
+            let mut owned_diff = None;
 
             for (capability, prefixes) in stash.iter_mut() {
 
@@ -99,6 +100,12 @@ where
                                 while let Some(value) = cursor.get_val(&storage) {
                                     let mut count = Tr::DiffOwned::zero();
                                     cursor.map_times(&storage, |t, d| {
+                                        let d = if let Some(owned_diff) = &mut owned_diff {
+                                            d.clone_onto(owned_diff);
+                                            &*owned_diff
+                                        } else {
+                                            owned_diff.insert(d.into_owned())
+                                        };
                                         if t.less_equal(time) { count.plus_equals(d); }
                                     });
                                     if !count.is_zero() {

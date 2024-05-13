@@ -625,12 +625,12 @@ mod val_batch {
         fn val<'a>(&self, storage: &'a RhhValBatch<L>) -> Self::Val<'a> { storage.storage.vals.index(self.val_cursor) }
         fn map_times<L2: FnMut(&Self::Time, Self::Diff<'_>)>(&mut self, storage: &RhhValBatch<L>, mut logic: L2) {
             let (lower, upper) = storage.storage.updates_for_value(self.val_cursor);
+            let mut owned_time = timely::progress::Timestamp::minimum();
             for index in lower .. upper {
                 let time = storage.storage.times.index(index);
                 let diff = storage.storage.diffs.index(index);
-                // TODO(antiguru): We should avoid this clone.
-                let time = time.into_owned();
-                logic(&time, diff);
+                time.clone_onto(&mut owned_time);
+                logic(&owned_time, diff);
             }
         }
         fn key_valid(&self, storage: &RhhValBatch<L>) -> bool { self.key_cursor < storage.storage.keys.len() }
