@@ -52,8 +52,6 @@ where
     F: Fn(&N, &[(&V, isize)])->V+'static
 {
 
-    let _timer = ::std::time::Instant::now();
-
     // start iteration with None messages for all.
     state
         .map(|(node, _state)| (node, None))
