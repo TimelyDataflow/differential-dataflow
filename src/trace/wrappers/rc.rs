@@ -25,9 +25,9 @@ use crate::trace::TraceReader;
 /// may influence.
 pub struct TraceBox<Tr: TraceReader> {
     /// accumulated holds on times for advancement.
-    pub logical_compaction: MutableAntichain<Tr::TimeOwned>,
+    pub logical_compaction: MutableAntichain<Tr::Time>,
     /// accumulated holds on times for distinction.
-    pub physical_compaction: MutableAntichain<Tr::TimeOwned>,
+    pub physical_compaction: MutableAntichain<Tr::Time>,
     /// The wrapped trace.
     pub trace: Tr,
 }
@@ -52,14 +52,14 @@ impl<Tr: TraceReader> TraceBox<Tr> {
     }
     /// Replaces elements of `lower` with those of `upper`.
     #[inline]
-    pub fn adjust_logical_compaction(&mut self, lower: AntichainRef<Tr::TimeOwned>, upper: AntichainRef<Tr::TimeOwned>) {
+    pub fn adjust_logical_compaction(&mut self, lower: AntichainRef<Tr::Time>, upper: AntichainRef<Tr::Time>) {
         self.logical_compaction.update_iter(upper.iter().cloned().map(|t| (t,1)));
         self.logical_compaction.update_iter(lower.iter().cloned().map(|t| (t,-1)));
         self.trace.set_logical_compaction(self.logical_compaction.frontier());
     }
     /// Replaces elements of `lower` with those of `upper`.
     #[inline]
-    pub fn adjust_physical_compaction(&mut self, lower: AntichainRef<Tr::TimeOwned>, upper: AntichainRef<Tr::TimeOwned>) {
+    pub fn adjust_physical_compaction(&mut self, lower: AntichainRef<Tr::Time>, upper: AntichainRef<Tr::Time>) {
         self.physical_compaction.update_iter(upper.iter().cloned().map(|t| (t,1)));
         self.physical_compaction.update_iter(lower.iter().cloned().map(|t| (t,-1)));
         self.trace.set_physical_compaction(self.physical_compaction.frontier());
@@ -72,8 +72,8 @@ impl<Tr: TraceReader> TraceBox<Tr> {
 /// timestamps past the frontier maintained by the handle. The intent is that such a handle appears as
 /// if it is a privately maintained trace, despite being backed by shared resources.
 pub struct TraceRc<Tr: TraceReader> {
-    logical_compaction: Antichain<Tr::TimeOwned>,
-    physical_compaction: Antichain<Tr::TimeOwned>,
+    logical_compaction: Antichain<Tr::Time>,
+    physical_compaction: Antichain<Tr::Time>,
     /// Wrapped trace. Please be gentle when using.
     pub wrapper: Rc<RefCell<TraceBox<Tr>>>,
 }
@@ -82,8 +82,7 @@ impl<Tr: TraceReader> TraceReader for TraceRc<Tr> {
     type Key<'a> = Tr::Key<'a>;
     type KeyOwned = Tr::KeyOwned;
     type Val<'a> = Tr::Val<'a>;
-    type Time<'a> = Tr::Time<'a>;
-    type TimeOwned = Tr::TimeOwned;
+    type Time = Tr::Time;
     type Diff<'a> = Tr::Diff<'a>;
     type DiffOwned = Tr::DiffOwned;
 
@@ -96,19 +95,19 @@ impl<Tr: TraceReader> TraceReader for TraceRc<Tr> {
     /// This change may not have immediately observable effects. It informs the shared trace that this
     /// handle no longer requires access to times other than those in the future of `frontier`, but if
     /// there are other handles to the same trace, it may not yet be able to compact.
-    fn set_logical_compaction(&mut self, frontier: AntichainRef<Tr::TimeOwned>) {
+    fn set_logical_compaction(&mut self, frontier: AntichainRef<Tr::Time>) {
         self.wrapper.borrow_mut().adjust_logical_compaction(self.logical_compaction.borrow(), frontier);
         self.logical_compaction = frontier.to_owned();
     }
-    fn get_logical_compaction(&mut self) -> AntichainRef<Tr::TimeOwned> { self.logical_compaction.borrow() }
+    fn get_logical_compaction(&mut self) -> AntichainRef<Tr::Time> { self.logical_compaction.borrow() }
     /// Allows the trace to compact batches of times before `frontier`.
-    fn set_physical_compaction(&mut self, frontier: AntichainRef<Tr::TimeOwned>) {
+    fn set_physical_compaction(&mut self, frontier: AntichainRef<Tr::Time>) {
         self.wrapper.borrow_mut().adjust_physical_compaction(self.physical_compaction.borrow(), frontier);
         self.physical_compaction = frontier.to_owned();
     }
-    fn get_physical_compaction(&mut self) -> AntichainRef<Tr::TimeOwned> { self.physical_compaction.borrow() }
+    fn get_physical_compaction(&mut self) -> AntichainRef<Tr::Time> { self.physical_compaction.borrow() }
     /// Creates a new cursor over the wrapped trace.
-    fn cursor_through(&mut self, frontier: AntichainRef<Tr::TimeOwned>) -> Option<(Tr::Cursor, Tr::Storage)> {
+    fn cursor_through(&mut self, frontier: AntichainRef<Tr::Time>) -> Option<(Tr::Cursor, Tr::Storage)> {
         ::std::cell::RefCell::borrow_mut(&self.wrapper).trace.cursor_through(frontier)
     }
 

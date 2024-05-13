@@ -62,7 +62,7 @@ where
 
 impl<G, Tr> Clone for Arranged<G, Tr>
 where
-    G: Scope<Timestamp=Tr::TimeOwned>,
+    G: Scope<Timestamp=Tr::Time>,
     Tr: TraceReader + Clone,
 {
     fn clone(&self) -> Self {
@@ -78,7 +78,7 @@ use ::timely::progress::timestamp::Refines;
 
 impl<G, Tr> Arranged<G, Tr>
 where
-    G: Scope<Timestamp=Tr::TimeOwned>,
+    G: Scope<Timestamp=Tr::Time>,
     Tr: TraceReader + Clone,
 {
     /// Brings an arranged collection into a nested scope.
@@ -119,7 +119,7 @@ where
         where
             TInner: Refines<G::Timestamp>+Lattice+Timestamp+Clone+'static,
             F: FnMut(Tr::Key<'_>, Tr::Val<'_>, &G::Timestamp)->TInner+Clone+'static,
-            P: FnMut(&TInner)->Tr::TimeOwned +Clone+'static,
+            P: FnMut(&TInner)->Tr::Time +Clone+'static,
         {
         let logic1 = logic.clone();
         let logic2 = logic.clone();
@@ -234,13 +234,13 @@ use crate::difference::Multiply;
 // Direct join implementations.
 impl<G, T1> Arranged<G, T1>
 where
-    G: Scope<Timestamp=T1::TimeOwned>,
+    G: Scope<Timestamp=T1::Time>,
     T1: TraceReader + Clone + 'static,
 {
     /// A direct implementation of the `JoinCore::join_core` method.
     pub fn join_core<T2,I,L>(&self, other: &Arranged<G,T2>, mut result: L) -> Collection<G,I::Item,<T1::DiffOwned as Multiply<T2::DiffOwned>>::Output>
     where
-        T2: for<'a> TraceReader<Key<'a>=T1::Key<'a>, TimeOwned=T1::TimeOwned>+Clone+'static,
+        T2: for<'a> TraceReader<Key<'a>=T1::Key<'a>, Time=T1::Time>+Clone+'static,
         T1::DiffOwned: Multiply<T2::DiffOwned>,
         <T1::DiffOwned as Multiply<T2::DiffOwned>>::Output: Semigroup,
         I: IntoIterator,
@@ -257,7 +257,7 @@ where
     /// A direct implementation of the `JoinCore::join_core_internal_unsafe` method.
     pub fn join_core_internal_unsafe<T2,I,L,D,ROut> (&self, other: &Arranged<G,T2>, mut result: L) -> Collection<G,D,ROut>
     where
-        T2: for<'a> TraceReader<Key<'a>=T1::Key<'a>, TimeOwned=T1::TimeOwned>+Clone+'static,
+        T2: for<'a> TraceReader<Key<'a>=T1::Key<'a>, Time=T1::Time>+Clone+'static,
         D: Data,
         ROut: Semigroup,
         I: IntoIterator<Item=(D, G::Timestamp, ROut)>,
@@ -283,18 +283,18 @@ use crate::trace::cursor::MyTrait;
 
 impl<G, T1> Arranged<G, T1>
 where
-    G: Scope<Timestamp = T1::TimeOwned>,
+    G: Scope<Timestamp = T1::Time>,
     T1: TraceReader + Clone + 'static,
 {
     /// A direct implementation of `ReduceCore::reduce_abelian`.
     pub fn reduce_abelian<L, V, F, T2>(&self, name: &str, from: F, mut logic: L) -> Arranged<G, TraceAgent<T2>>
     where
-        T2: for<'a> Trace<Key<'a>= T1::Key<'a>, TimeOwned=T1::TimeOwned>+'static,
+        T2: for<'a> Trace<Key<'a>= T1::Key<'a>, Time=T1::Time>+'static,
         V: Data,
         F: Fn(T2::Val<'_>) -> V + 'static,
         T2::DiffOwned: Abelian,
         T2::Batch: Batch,
-        T2::Builder: Builder<Input = ((T1::KeyOwned, V), T2::TimeOwned, T2::DiffOwned)>,
+        T2::Builder: Builder<Input = ((T1::KeyOwned, V), T2::Time, T2::DiffOwned)>,
         L: FnMut(T1::Key<'_>, &[(T1::Val<'_>, T1::DiffOwned)], &mut Vec<(V, T2::DiffOwned)>)+'static,
     {
         self.reduce_core::<_,V,F,T2>(name, from, move |key, input, output, change| {
@@ -309,11 +309,11 @@ where
     /// A direct implementation of `ReduceCore::reduce_core`.
     pub fn reduce_core<L, V, F, T2>(&self, name: &str, from: F, logic: L) -> Arranged<G, TraceAgent<T2>>
     where
-        T2: for<'a> Trace<Key<'a>=T1::Key<'a>, TimeOwned=T1::TimeOwned>+'static,
+        T2: for<'a> Trace<Key<'a>=T1::Key<'a>, Time=T1::Time>+'static,
         V: Data,
         F: Fn(T2::Val<'_>) -> V + 'static,
         T2::Batch: Batch,
-        T2::Builder: Builder<Input = ((T1::KeyOwned,V), T2::TimeOwned, T2::DiffOwned)>,
+        T2::Builder: Builder<Input = ((T1::KeyOwned,V), T2::Time, T2::DiffOwned)>,
         L: FnMut(T1::Key<'_>, &[(T1::Val<'_>, T1::DiffOwned)], &mut Vec<(V, T2::DiffOwned)>, &mut Vec<(V, T2::DiffOwned)>)+'static,
     {
         use crate::operators::reduce::reduce_trace;
@@ -324,7 +324,7 @@ where
 
 impl<'a, G, Tr> Arranged<Child<'a, G, G::Timestamp>, Tr>
 where
-    G: Scope<Timestamp=Tr::TimeOwned>,
+    G: Scope<Timestamp=Tr::Time>,
     Tr: TraceReader + Clone,
 {
     /// Brings an arranged collection out of a nested region.
@@ -349,7 +349,7 @@ where
     /// Arranges updates into a shared trace.
     fn arrange<Tr>(&self) -> Arranged<G, TraceAgent<Tr>>
     where
-        Tr: Trace<TimeOwned=G::Timestamp> + 'static,
+        Tr: Trace<Time=G::Timestamp> + 'static,
         Tr::Batch: Batch,
         Tr::Batcher: Batcher<Input=C>,
     {
@@ -359,7 +359,7 @@ where
     /// Arranges updates into a shared trace, with a supplied name.
     fn arrange_named<Tr>(&self, name: &str) -> Arranged<G, TraceAgent<Tr>>
     where
-        Tr: Trace<TimeOwned=G::Timestamp> + 'static,
+        Tr: Trace<Time=G::Timestamp> + 'static,
         Tr::Batch: Batch,
         Tr::Batcher: Batcher<Input=C>,
     ;
@@ -368,7 +368,7 @@ where
     fn arrange_core<P, Tr>(&self, pact: P, name: &str) -> Arranged<G, TraceAgent<Tr>>
     where
         P: ParallelizationContract<G::Timestamp, C>,
-        Tr: Trace<TimeOwned=G::Timestamp>+'static,
+        Tr: Trace<Time=G::Timestamp>+'static,
         Tr::Batch: Batch,
         Tr::Batcher: Batcher<Input=C>,
     ;
@@ -384,7 +384,7 @@ where
 {
     fn arrange_named<Tr>(&self, name: &str) -> Arranged<G, TraceAgent<Tr>>
     where
-        Tr: Trace<TimeOwned=G::Timestamp> + 'static,
+        Tr: Trace<Time=G::Timestamp> + 'static,
         Tr::Batch: Batch,
         Tr::Batcher: Batcher<Input=Vec<((K, V), G::Timestamp, R)>>,
     {
@@ -395,7 +395,7 @@ where
     fn arrange_core<P, Tr>(&self, pact: P, name: &str) -> Arranged<G, TraceAgent<Tr>>
     where
         P: ParallelizationContract<G::Timestamp, Vec<((K,V),G::Timestamp,R)>>,
-        Tr: Trace<TimeOwned=G::Timestamp>+'static,
+        Tr: Trace<Time=G::Timestamp>+'static,
         Tr::Batch: Batch,
         Tr::Batcher: Batcher<Input=Vec<((K,V),G::Timestamp,R)>>,
     {
@@ -413,7 +413,7 @@ where
     G: Scope,
     G::Timestamp: Lattice,
     P: ParallelizationContract<G::Timestamp, <Tr::Batcher as Batcher>::Input>,
-    Tr: Trace<TimeOwned=G::Timestamp>+'static,
+    Tr: Trace<Time=G::Timestamp>+'static,
     Tr::Batch: Batch,
     <Tr::Batcher as Batcher>::Input: timely::Container,
 {
@@ -572,7 +572,7 @@ where
 {
     fn arrange_named<Tr>(&self, name: &str) -> Arranged<G, TraceAgent<Tr>>
     where
-        Tr: Trace<TimeOwned=G::Timestamp> + 'static,
+        Tr: Trace<Time=G::Timestamp> + 'static,
         Tr::Batch: Batch,
         Tr::Batcher: Batcher<Input=Vec<((K, ()), G::Timestamp, R)>>,
     {
@@ -583,7 +583,7 @@ where
     fn arrange_core<P, Tr>(&self, pact: P, name: &str) -> Arranged<G, TraceAgent<Tr>>
     where
         P: ParallelizationContract<G::Timestamp, Vec<((K,()),G::Timestamp,R)>>,
-        Tr: Trace<TimeOwned=G::Timestamp>+'static,
+        Tr: Trace<Time=G::Timestamp>+'static,
         Tr::Batch: Batch,
         Tr::Batcher: Batcher<Input=Vec<((K,()),G::Timestamp,R)>>,
     {

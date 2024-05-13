@@ -53,9 +53,9 @@ where
     Tr: TraceReader,
 {
     /// Describes a frontier advance.
-    Frontier(Antichain<Tr::TimeOwned>),
+    Frontier(Antichain<Tr::Time>),
     /// Describes a batch of data and a capability hint.
-    Batch(Tr::Batch, Option<Tr::TimeOwned>),
+    Batch(Tr::Batch, Option<Tr::Time>),
 }
 
 // Short names for strongly and weakly owned activators and shared queues.

@@ -56,7 +56,7 @@ use crate::operators::arrange::arrangement::Arranged;
 /// of `logic should be a number in the interval [0,64],
 pub fn propagate_core<G, N, L, Tr, F, R>(edges: &Arranged<G,Tr>, nodes: &Collection<G,(N,L),R>, logic: F) -> Collection<G,(N,L),R>
 where
-    G: Scope<Timestamp=Tr::TimeOwned>,
+    G: Scope<Timestamp=Tr::Time>,
     N: ExchangeData+Hash,
     R: ExchangeData+Abelian,
     R: Multiply<R, Output=R>,

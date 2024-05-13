@@ -26,7 +26,7 @@ use crate::operators::arrange::Arranged;
 /// Returns pairs (node, dist) indicating distance of each node from a root.
 pub fn bfs_arranged<G, N, Tr>(edges: &Arranged<G, Tr>, roots: &Collection<G, N>) -> Collection<G, (N, u32)>
 where
-    G: Scope<Timestamp=Tr::TimeOwned>,
+    G: Scope<Timestamp=Tr::Time>,
     N: ExchangeData+Hash,
     Tr: for<'a> TraceReader<Key<'a>=&'a N, Val<'a>=&'a N, DiffOwned=isize>+Clone+'static,
 {

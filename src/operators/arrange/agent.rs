@@ -31,9 +31,9 @@ where
 {
     trace: Rc<RefCell<TraceBox<Tr>>>,
     queues: Weak<RefCell<Vec<TraceAgentQueueWriter<Tr>>>>,
-    logical_compaction: Antichain<Tr::TimeOwned>,
-    physical_compaction: Antichain<Tr::TimeOwned>,
-    temp_antichain: Antichain<Tr::TimeOwned>,
+    logical_compaction: Antichain<Tr::Time>,
+    physical_compaction: Antichain<Tr::Time>,
+    temp_antichain: Antichain<Tr::Time>,
 
     operator: OperatorInfo,
     logging: Option<crate::logging::Logger>,
@@ -46,8 +46,7 @@ where
     type Key<'a> = Tr::Key<'a>;
     type KeyOwned = Tr::KeyOwned;
     type Val<'a> = Tr::Val<'a>;
-    type Time<'a> = Tr::Time<'a>;
-    type TimeOwned = Tr::TimeOwned;
+    type Time = Tr::Time;
     type Diff<'a> = Tr::Diff<'a>;
     type DiffOwned = Tr::DiffOwned;
 
@@ -55,7 +54,7 @@ where
     type Storage = Tr::Storage;
     type Cursor = Tr::Cursor;
 
-    fn set_logical_compaction(&mut self, frontier: AntichainRef<Tr::TimeOwned>) {
+    fn set_logical_compaction(&mut self, frontier: AntichainRef<Tr::Time>) {
         // This method does not enforce that `frontier` is greater or equal to `self.logical_compaction`.
         // Instead, it determines the joint consequences of both guarantees and moves forward with that.
         crate::lattice::antichain_join_into(&self.logical_compaction.borrow()[..], &frontier[..], &mut self.temp_antichain);
@@ -63,10 +62,10 @@ where
         ::std::mem::swap(&mut self.logical_compaction, &mut self.temp_antichain);
         self.temp_antichain.clear();
     }
-    fn get_logical_compaction(&mut self) -> AntichainRef<Tr::TimeOwned> {
+    fn get_logical_compaction(&mut self) -> AntichainRef<Tr::Time> {
         self.logical_compaction.borrow()
     }
-    fn set_physical_compaction(&mut self, frontier: AntichainRef<Tr::TimeOwned>) {
+    fn set_physical_compaction(&mut self, frontier: AntichainRef<Tr::Time>) {
         // This method does not enforce that `frontier` is greater or equal to `self.physical_compaction`.
         // Instead, it determines the joint consequences of both guarantees and moves forward with that.
         crate::lattice::antichain_join_into(&self.physical_compaction.borrow()[..], &frontier[..], &mut self.temp_antichain);
@@ -74,10 +73,10 @@ where
         ::std::mem::swap(&mut self.physical_compaction, &mut self.temp_antichain);
         self.temp_antichain.clear();
     }
-    fn get_physical_compaction(&mut self) -> AntichainRef<Tr::TimeOwned> {
+    fn get_physical_compaction(&mut self) -> AntichainRef<Tr::Time> {
         self.physical_compaction.borrow()
     }
-    fn cursor_through(&mut self, frontier: AntichainRef<Tr::TimeOwned>) -> Option<(Self::Cursor, Self::Storage)> {
+    fn cursor_through(&mut self, frontier: AntichainRef<Tr::Time>) -> Option<(Self::Cursor, Self::Storage)> {
         self.trace.borrow_mut().trace.cursor_through(frontier)
     }
     fn map_batches<F: FnMut(&Self::Batch)>(&self, f: F) { self.trace.borrow().trace.map_batches(f) }
@@ -110,7 +109,7 @@ impl<Tr: TraceReader> TraceAgent<Tr> {
         };
 
         let writer = TraceWriter::new(
-            vec![<Tr::TimeOwned as Timestamp>::minimum()],
+            vec![<Tr::Time as Timestamp>::minimum()],
             Rc::downgrade(&trace),
             queues,
         );
@@ -134,7 +133,7 @@ impl<Tr: TraceReader> TraceAgent<Tr> {
             .borrow_mut()
             .trace
             .map_batches(|batch| {
-                new_queue.push_back(TraceReplayInstruction::Batch(batch.clone(), Some(<Tr::TimeOwned as Timestamp>::minimum())));
+                new_queue.push_back(TraceReplayInstruction::Batch(batch.clone(), Some(<Tr::Time as Timestamp>::minimum())));
                 upper = Some(batch.upper().clone());
             });
 
@@ -225,7 +224,7 @@ where
     /// ```
     pub fn import<G>(&mut self, scope: &G) -> Arranged<G, TraceAgent<Tr>>
     where
-        G: Scope<Timestamp=Tr::TimeOwned>,
+        G: Scope<Timestamp=Tr::Time>,
     {
         self.import_named(scope, "ArrangedSource")
     }
@@ -233,7 +232,7 @@ where
     /// Same as `import`, but allows to name the source.
     pub fn import_named<G>(&mut self, scope: &G, name: &str) -> Arranged<G, TraceAgent<Tr>>
     where
-        G: Scope<Timestamp=Tr::TimeOwned>,
+        G: Scope<Timestamp=Tr::Time>,
     {
         // Drop ShutdownButton and return only the arrangement.
         self.import_core(scope, name).0
@@ -288,9 +287,9 @@ where
     ///
     /// }).unwrap();
     /// ```
-    pub fn import_core<G>(&mut self, scope: &G, name: &str) -> (Arranged<G, TraceAgent<Tr>>, ShutdownButton<CapabilitySet<Tr::TimeOwned>>)
+    pub fn import_core<G>(&mut self, scope: &G, name: &str) -> (Arranged<G, TraceAgent<Tr>>, ShutdownButton<CapabilitySet<Tr::Time>>)
     where
-        G: Scope<Timestamp=Tr::TimeOwned>,
+        G: Scope<Timestamp=Tr::Time>,
     {
         let trace = self.clone();
 
@@ -405,9 +404,9 @@ where
     ///
     /// }).unwrap();
     /// ```
-    pub fn import_frontier<G>(&mut self, scope: &G, name: &str) -> (Arranged<G, TraceFrontier<TraceAgent<Tr>>>, ShutdownButton<CapabilitySet<Tr::TimeOwned>>)
+    pub fn import_frontier<G>(&mut self, scope: &G, name: &str) -> (Arranged<G, TraceFrontier<TraceAgent<Tr>>>, ShutdownButton<CapabilitySet<Tr::Time>>)
     where
-        G: Scope<Timestamp=Tr::TimeOwned>,
+        G: Scope<Timestamp=Tr::Time>,
         Tr: TraceReader,
     {
         // This frontier describes our only guarantee on the compaction frontier.
@@ -423,9 +422,9 @@ where
     ///
     /// Invoking this method with an `until` of `Antichain::new()` will perform no filtering, as the empty
     /// frontier indicates the end of times.
-    pub fn import_frontier_core<G>(&mut self, scope: &G, name: &str, since: Antichain<Tr::TimeOwned>, until: Antichain<Tr::TimeOwned>) -> (Arranged<G, TraceFrontier<TraceAgent<Tr>>>, ShutdownButton<CapabilitySet<Tr::TimeOwned>>)
+    pub fn import_frontier_core<G>(&mut self, scope: &G, name: &str, since: Antichain<Tr::Time>, until: Antichain<Tr::Time>) -> (Arranged<G, TraceFrontier<TraceAgent<Tr>>>, ShutdownButton<CapabilitySet<Tr::Time>>)
     where
-        G: Scope<Timestamp=Tr::TimeOwned>,
+        G: Scope<Timestamp=Tr::Time>,
         Tr: TraceReader,
     {
         let trace = self.clone();

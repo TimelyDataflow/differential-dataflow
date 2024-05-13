@@ -95,10 +95,10 @@ where G::Timestamp: TotalOrder+Lattice+Ord {
 
 impl<G, K, T1> ThresholdTotal<G, K, T1::DiffOwned> for Arranged<G, T1>
 where
-    G: Scope<Timestamp=T1::TimeOwned>,
+    G: Scope<Timestamp=T1::Time>,
     T1: for<'a> TraceReader<Key<'a>=&'a K, Val<'a>=&'a ()>+Clone+'static,
     K: ExchangeData,
-    T1::TimeOwned: TotalOrder,
+    T1::Time: TotalOrder,
     T1::DiffOwned: ExchangeData,
 {
     fn threshold_semigroup<R2, F>(&self, mut thresh: F) -> Collection<G, K, R2>

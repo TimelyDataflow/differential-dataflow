@@ -33,8 +33,7 @@ where
     type Key<'a> = Tr::Key<'a>;
     type KeyOwned = Tr::KeyOwned;
     type Val<'a> = Tr::Val<'a>;
-    type Time<'a> = Tr::Time<'a>;
-    type TimeOwned = Tr::TimeOwned;
+    type Time = Tr::Time;
     type Diff<'a> = Tr::Diff<'a>;
     type DiffOwned = Tr::DiffOwned;
 
@@ -48,13 +47,13 @@ where
             .map_batches(|batch| f(&Self::Batch::make_from(batch.clone(), logic.clone())))
     }
 
-    fn set_logical_compaction(&mut self, frontier: AntichainRef<Tr::TimeOwned>) { self.trace.set_logical_compaction(frontier) }
-    fn get_logical_compaction(&mut self) -> AntichainRef<Tr::TimeOwned> { self.trace.get_logical_compaction() }
+    fn set_logical_compaction(&mut self, frontier: AntichainRef<Tr::Time>) { self.trace.set_logical_compaction(frontier) }
+    fn get_logical_compaction(&mut self) -> AntichainRef<Tr::Time> { self.trace.get_logical_compaction() }
 
-    fn set_physical_compaction(&mut self, frontier: AntichainRef<Tr::TimeOwned>) { self.trace.set_physical_compaction(frontier) }
-    fn get_physical_compaction(&mut self) -> AntichainRef<Tr::TimeOwned> { self.trace.get_physical_compaction() }
+    fn set_physical_compaction(&mut self, frontier: AntichainRef<Tr::Time>) { self.trace.set_physical_compaction(frontier) }
+    fn get_physical_compaction(&mut self) -> AntichainRef<Tr::Time> { self.trace.get_physical_compaction() }
 
-    fn cursor_through(&mut self, upper: AntichainRef<Tr::TimeOwned>) -> Option<(Self::Cursor, Self::Storage)> {
+    fn cursor_through(&mut self, upper: AntichainRef<Tr::Time>) -> Option<(Self::Cursor, Self::Storage)> {
         self.trace.cursor_through(upper).map(|(x,y)| (CursorFilter::new(x, self.logic.clone()), y))
     }
 }
@@ -88,8 +87,7 @@ where
     type Key<'a> = B::Key<'a>;
     type KeyOwned = B::KeyOwned;
     type Val<'a> = B::Val<'a>;
-    type Time<'a> = B::Time<'a>;
-    type TimeOwned = B::TimeOwned;
+    type Time = B::Time;
     type Diff<'a> = B::Diff<'a>;
     type DiffOwned = B::DiffOwned;
 
@@ -99,7 +97,7 @@ where
         BatchCursorFilter::new(self.batch.cursor(), self.logic.clone())
     }
     fn len(&self) -> usize { self.batch.len() }
-    fn description(&self) -> &Description<B::TimeOwned> { self.batch.description() }
+    fn description(&self) -> &Description<B::Time> { self.batch.description() }
 }
 
 impl<B, F> BatchFilter<B, F>
@@ -138,7 +136,7 @@ where
     type Key<'a> = C::Key<'a>;
     type KeyOwned = C::KeyOwned;
     type Val<'a> = C::Val<'a>;
-    type TimeOwned = C::TimeOwned;
+    type Time = C::Time;
     type Diff<'a> = C::Diff<'a>;
     type DiffOwned = C::DiffOwned;
 
@@ -151,7 +149,7 @@ where
     #[inline] fn val<'a>(&self, storage: &'a Self::Storage) -> Self::Val<'a> { self.cursor.val(storage) }
 
     #[inline]
-    fn map_times<L: FnMut(&Self::TimeOwned,Self::Diff<'_>)>(&mut self, storage: &Self::Storage, logic: L) {
+    fn map_times<L: FnMut(&Self::Time,Self::Diff<'_>)>(&mut self, storage: &Self::Storage, logic: L) {
         let key = self.key(storage);
         let val = self.val(storage);
         if (self.logic)(key, val) {
@@ -193,7 +191,7 @@ where
     type Key<'a> = C::Key<'a>;
     type KeyOwned = C::KeyOwned;
     type Val<'a> = C::Val<'a>;
-    type TimeOwned = C::TimeOwned;
+    type Time = C::Time;
     type Diff<'a> = C::Diff<'a>;
     type DiffOwned = C::DiffOwned;
 
@@ -206,7 +204,7 @@ where
     #[inline] fn val<'a>(&self, storage: &'a Self::Storage) -> Self::Val<'a> { self.cursor.val(&storage.batch) }
 
     #[inline]
-    fn map_times<L: FnMut(&Self::TimeOwned,Self::Diff<'_>)>(&mut self, storage: &Self::Storage, logic: L) {
+    fn map_times<L: FnMut(&Self::Time,Self::Diff<'_>)>(&mut self, storage: &Self::Storage, logic: L) {
         let key = self.key(storage);
         let val = self.val(storage);
         if (self.logic)(key, val) {

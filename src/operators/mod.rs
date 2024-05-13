@@ -25,7 +25,7 @@ use crate::trace::cursor::MyTrait;
 /// An accumulation of (value, time, diff) updates.
 struct EditList<'a, C: Cursor> {
     values: Vec<(C::Val<'a>, usize)>,
-    edits: Vec<(C::TimeOwned, C::DiffOwned)>,
+    edits: Vec<(C::Time, C::DiffOwned)>,
 }
 
 impl<'a, C: Cursor> EditList<'a, C> {
@@ -40,7 +40,7 @@ impl<'a, C: Cursor> EditList<'a, C> {
     /// Loads the contents of a cursor.
     fn load<L>(&mut self, cursor: &mut C, storage: &'a C::Storage, logic: L)
     where
-        L: Fn(&C::TimeOwned)->C::TimeOwned,
+        L: Fn(&C::Time)->C::Time,
     {
         self.clear();
         while cursor.val_valid(storage) {
@@ -58,7 +58,7 @@ impl<'a, C: Cursor> EditList<'a, C> {
     fn len(&self) -> usize { self.edits.len() }
     /// Inserts a new edit for an as-yet undetermined value.
     #[inline]
-    fn push(&mut self, time: C::TimeOwned, diff: C::DiffOwned) {
+    fn push(&mut self, time: C::Time, diff: C::DiffOwned) {
         // TODO: Could attempt "insertion-sort" like behavior here, where we collapse if possible.
         self.edits.push((time, diff));
     }
@@ -71,7 +71,7 @@ impl<'a, C: Cursor> EditList<'a, C> {
             self.values.push((value, self.edits.len()));
         }
     }
-    fn map<F: FnMut(C::Val<'a>, &C::TimeOwned, &C::DiffOwned)>(&self, mut logic: F) {
+    fn map<F: FnMut(C::Val<'a>, &C::Time, &C::DiffOwned)>(&self, mut logic: F) {
         for index in 0 .. self.values.len() {
             let lower = if index == 0 { 0 } else { self.values[index-1].1 };
             let upper = self.values[index].1;
@@ -84,8 +84,8 @@ impl<'a, C: Cursor> EditList<'a, C> {
 
 struct ValueHistory<'storage, C: Cursor> {
     edits: EditList<'storage, C>,
-    history: Vec<(C::TimeOwned, C::TimeOwned, usize, usize)>,     // (time, meet, value_index, edit_offset)
-    buffer: Vec<((C::Val<'storage>, C::TimeOwned), C::DiffOwned)>,   // where we accumulate / collapse updates.
+    history: Vec<(C::Time, C::Time, usize, usize)>,     // (time, meet, value_index, edit_offset)
+    buffer: Vec<((C::Val<'storage>, C::Time), C::DiffOwned)>,   // where we accumulate / collapse updates.
 }
 
 impl<'storage, C: Cursor> ValueHistory<'storage, C> {
@@ -103,7 +103,7 @@ impl<'storage, C: Cursor> ValueHistory<'storage, C> {
     }
     fn load<L>(&mut self, cursor: &mut C, storage: &'storage C::Storage, logic: L)
     where
-        L: Fn(&C::TimeOwned)->C::TimeOwned,
+        L: Fn(&C::Time)->C::Time,
     {
         self.edits.load(cursor, storage, logic);
     }
@@ -119,7 +119,7 @@ impl<'storage, C: Cursor> ValueHistory<'storage, C> {
         logic: L
     ) -> HistoryReplay<'storage, 'history, C>
     where
-        L: Fn(&C::TimeOwned)->C::TimeOwned,
+        L: Fn(&C::Time)->C::Time,
     {
         self.clear();
         cursor.seek_key(storage, key);
@@ -159,13 +159,13 @@ struct HistoryReplay<'storage, 'history, C: Cursor> {
 }
 
 impl<'storage, 'history, C: Cursor> HistoryReplay<'storage, 'history, C> {
-    fn time(&self) -> Option<&C::TimeOwned> { self.replay.history.last().map(|x| &x.0) }
-    fn meet(&self) -> Option<&C::TimeOwned> { self.replay.history.last().map(|x| &x.1) }
-    fn edit(&self) -> Option<(C::Val<'storage>, &C::TimeOwned, &C::DiffOwned)> {
+    fn time(&self) -> Option<&C::Time> { self.replay.history.last().map(|x| &x.0) }
+    fn meet(&self) -> Option<&C::Time> { self.replay.history.last().map(|x| &x.1) }
+    fn edit(&self) -> Option<(C::Val<'storage>, &C::Time, &C::DiffOwned)> {
         self.replay.history.last().map(|&(ref t, _, v, e)| (self.replay.edits.values[v].0, t, &self.replay.edits.edits[e].1))
     }
 
-    fn buffer(&self) -> &[((C::Val<'storage>, C::TimeOwned), C::DiffOwned)] {
+    fn buffer(&self) -> &[((C::Val<'storage>, C::Time), C::DiffOwned)] {
         &self.replay.buffer[..]
     }
 
@@ -173,7 +173,7 @@ impl<'storage, 'history, C: Cursor> HistoryReplay<'storage, 'history, C> {
         let (time, _, value_index, edit_offset) = self.replay.history.pop().unwrap();
         self.replay.buffer.push(((self.replay.edits.values[value_index].0, time), self.replay.edits.edits[edit_offset].1.clone()));
     }
-    fn step_while_time_is(&mut self, time: &C::TimeOwned) -> bool {
+    fn step_while_time_is(&mut self, time: &C::Time) -> bool {
         let mut found = false;
         while self.time() == Some(time) {
             found = true;
@@ -181,7 +181,7 @@ impl<'storage, 'history, C: Cursor> HistoryReplay<'storage, 'history, C> {
         }
         found
     }
-    fn advance_buffer_by(&mut self, meet: &C::TimeOwned) {
+    fn advance_buffer_by(&mut self, meet: &C::Time) {
         for element in self.replay.buffer.iter_mut() {
             (element.0).1 = (element.0).1.join(meet);
         }

@@ -76,7 +76,7 @@ pub fn half_join<G, V, R, Tr, FF, CF, DOut, S>(
     mut output_func: S,
 ) -> Collection<G, (DOut, G::Timestamp), <R as Mul<Tr::DiffOwned>>::Output>
 where
-    G: Scope<Timestamp = Tr::TimeOwned>,
+    G: Scope<Timestamp = Tr::Time>,
     Tr::KeyOwned: Hashable + ExchangeData,
     V: ExchangeData,
     R: ExchangeData + Monoid,
@@ -129,7 +129,7 @@ pub fn half_join_internal_unsafe<G, V, R, Tr, FF, CF, DOut, ROut, Y, I, S>(
     mut output_func: S,
 ) -> Collection<G, DOut, ROut>
 where
-    G: Scope<Timestamp = Tr::TimeOwned>,
+    G: Scope<Timestamp = Tr::Time>,
     Tr::KeyOwned: Hashable + ExchangeData,
     V: ExchangeData,
     R: ExchangeData + Monoid,

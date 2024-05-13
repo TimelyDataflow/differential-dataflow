@@ -18,7 +18,7 @@ pub fn validate<G, K, V, Tr, F, P>(
     key_selector: F,
 ) -> Collection<G, (P, V), Tr::DiffOwned>
 where
-    G: Scope<Timestamp=Tr::TimeOwned>,
+    G: Scope<Timestamp=Tr::Time>,
     Tr: TraceReader<KeyOwned=(K,V)>+Clone+'static,
     K: Ord+Hash+Clone+Default,
     V: ExchangeData+Hash+Default,

@@ -258,8 +258,7 @@ mod val_batch {
         type Key<'a> = <L::KeyContainer as BatchContainer>::ReadItem<'a>;
         type KeyOwned = <L::Target as Update>::Key;
         type Val<'a> = <L::ValContainer as BatchContainer>::ReadItem<'a>;
-        type Time<'a> = <L::TimeContainer as BatchContainer>::ReadItem<'a>;
-        type TimeOwned = <L::Target as Update>::Time;
+        type Time = <L::Target as Update>::Time;
         type Diff<'a> = <L::DiffContainer as BatchContainer>::ReadItem<'a>;
         type DiffOwned = <L::Target as Update>::Diff;
 
@@ -321,7 +320,7 @@ mod val_batch {
     impl<L: Layout> Merger<RhhValBatch<L>> for RhhValMerger<L>
     where
         <L::Target as Update>::Key: Default + HashOrdered,
-        RhhValBatch<L>: Batch<TimeOwned=<L::Target as Update>::Time>,
+        RhhValBatch<L>: Batch<Time=<L::Target as Update>::Time>,
     {
         fn new(batch1: &RhhValBatch<L>, batch2: &RhhValBatch<L>, compaction_frontier: AntichainRef<<L::Target as Update>::Time>) -> Self {
 
@@ -614,7 +613,7 @@ mod val_batch {
         type Key<'a> = <L::KeyContainer as BatchContainer>::ReadItem<'a>;
         type KeyOwned = <L::Target as Update>::Key;
         type Val<'a> = <L::ValContainer as BatchContainer>::ReadItem<'a>;
-        type TimeOwned = <L::Target as Update>::Time;
+        type Time = <L::Target as Update>::Time;
         type Diff<'a> = <L::DiffContainer as BatchContainer>::ReadItem<'a>;
         type DiffOwned = <L::Target as Update>::Diff;
 
@@ -624,7 +623,7 @@ mod val_batch {
             storage.storage.keys.index(self.key_cursor) 
         }
         fn val<'a>(&self, storage: &'a RhhValBatch<L>) -> Self::Val<'a> { storage.storage.vals.index(self.val_cursor) }
-        fn map_times<L2: FnMut(&Self::TimeOwned, Self::Diff<'_>)>(&mut self, storage: &RhhValBatch<L>, mut logic: L2) {
+        fn map_times<L2: FnMut(&Self::Time, Self::Diff<'_>)>(&mut self, storage: &RhhValBatch<L>, mut logic: L2) {
             let (lower, upper) = storage.storage.updates_for_value(self.val_cursor);
             for index in lower .. upper {
                 let time = storage.storage.times.index(index);

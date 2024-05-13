@@ -131,14 +131,14 @@ pub fn arrange_from_upsert<G, V, F, Tr>(
     from: F,
 ) -> Arranged<G, TraceAgent<Tr>>
 where
-    G: Scope<Timestamp=Tr::TimeOwned>,
+    G: Scope<Timestamp=Tr::Time>,
     Tr: Trace+TraceReader<DiffOwned=isize>+'static,
     Tr::KeyOwned: ExchangeData+Hashable+std::hash::Hash,
     V: ExchangeData,
     F: Fn(Tr::Val<'_>) -> V + 'static,
-    Tr::TimeOwned: TotalOrder+ExchangeData,
+    Tr::Time: TotalOrder+ExchangeData,
     Tr::Batch: Batch,
-    Tr::Builder: Builder<Input = ((Tr::KeyOwned, V), Tr::TimeOwned, Tr::DiffOwned)>,
+    Tr::Builder: Builder<Input = ((Tr::KeyOwned, V), Tr::Time, Tr::DiffOwned)>,
 {
     let mut reader: Option<TraceAgent<Tr>> = None;
 

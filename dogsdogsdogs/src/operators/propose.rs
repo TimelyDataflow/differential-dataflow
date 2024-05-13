@@ -20,7 +20,7 @@ pub fn propose<G, Tr, F, P, V, VF>(
     val_from: VF,
 ) -> Collection<G, (P, V), Tr::DiffOwned>
 where
-    G: Scope<Timestamp=Tr::TimeOwned>,
+    G: Scope<Timestamp=Tr::Time>,
     Tr: TraceReader+Clone+'static,
     Tr::KeyOwned: Hashable + Default,
     Tr::DiffOwned: Monoid+Multiply<Output = Tr::DiffOwned>+ExchangeData,
@@ -52,7 +52,7 @@ pub fn propose_distinct<G, Tr, F, P, V, VF>(
     val_from: VF,
 ) -> Collection<G, (P, V), Tr::DiffOwned>
 where
-    G: Scope<Timestamp=Tr::TimeOwned>,
+    G: Scope<Timestamp=Tr::Time>,
     Tr: TraceReader+Clone+'static,
     Tr::KeyOwned: Hashable + Default,
     Tr::DiffOwned: Monoid+Multiply<Output = Tr::DiffOwned>+ExchangeData,

@@ -17,7 +17,7 @@ use crate::trace::cursor::Cursor;
 /// happens use this construct at your own peril!
 pub struct TraceEnter<Tr: TraceReader, TInner, F, G> {
     trace: Tr,
-    stash1: Antichain<Tr::TimeOwned>,
+    stash1: Antichain<Tr::Time>,
     stash2: Antichain<TInner>,
     logic: F,
     prior: G,
@@ -44,16 +44,15 @@ impl<Tr, TInner, F, G> TraceReader for TraceEnter<Tr, TInner, F, G>
 where
     Tr: TraceReader,
     Tr::Batch: Clone,
-    TInner: Refines<Tr::TimeOwned>+Lattice,
+    TInner: Refines<Tr::Time>+Lattice,
     F: 'static,
-    F: FnMut(Tr::Key<'_>, Tr::Val<'_>, &Tr::TimeOwned)->TInner+Clone,
-    G: FnMut(&TInner)->Tr::TimeOwned +Clone+'static,
+    F: FnMut(Tr::Key<'_>, Tr::Val<'_>, &Tr::Time)->TInner+Clone,
+    G: FnMut(&TInner)->Tr::Time +Clone+'static,
 {
     type Key<'a> = Tr::Key<'a>;
     type KeyOwned = Tr::KeyOwned;
     type Val<'a> = Tr::Val<'a>;
-    type Time<'a> = TInner;
-    type TimeOwned = TInner;
+    type Time = TInner;
     type Diff<'a> = Tr::Diff<'a>;
     type DiffOwned = Tr::DiffOwned;
 
@@ -110,7 +109,7 @@ where
 impl<Tr, TInner, F, G> TraceEnter<Tr, TInner, F, G>
 where
     Tr: TraceReader,
-    TInner: Refines<Tr::TimeOwned>+Lattice,
+    TInner: Refines<Tr::Time>+Lattice,
 {
     /// Makes a new trace wrapper
     pub fn make_from(trace: Tr, logic: F, prior: G) -> Self {
@@ -136,14 +135,13 @@ pub struct BatchEnter<B, TInner, F> {
 impl<B, TInner, F> BatchReader for BatchEnter<B, TInner, F>
 where
     B: BatchReader,
-    TInner: Refines<B::TimeOwned>+Lattice,
-    F: FnMut(B::Key<'_>, <B::Cursor as Cursor>::Val<'_>, &B::TimeOwned)->TInner+Clone,
+    TInner: Refines<B::Time>+Lattice,
+    F: FnMut(B::Key<'_>, <B::Cursor as Cursor>::Val<'_>, &B::Time)->TInner+Clone,
 {
     type Key<'a> = B::Key<'a>;
     type KeyOwned = B::KeyOwned;
     type Val<'a> = B::Val<'a>;
-    type Time<'a> = TInner;
-    type TimeOwned = TInner;
+    type Time = TInner;
     type Diff<'a> = B::Diff<'a>;
     type DiffOwned = B::DiffOwned;
 
@@ -159,7 +157,7 @@ where
 impl<B, TInner, F> BatchEnter<B, TInner, F>
 where
     B: BatchReader,
-    TInner: Refines<B::TimeOwned>+Lattice,
+    TInner: Refines<B::Time>+Lattice,
 {
     /// Makes a new batch wrapper
     pub fn make_from(batch: B, logic: F) -> Self {
@@ -195,13 +193,13 @@ impl<C, TInner, F> CursorEnter<C, TInner, F> {
 impl<C, TInner, F> Cursor for CursorEnter<C, TInner, F>
 where
     C: Cursor,
-    TInner: Refines<C::TimeOwned>+Lattice,
-    F: FnMut(C::Key<'_>, C::Val<'_>, &C::TimeOwned)->TInner,
+    TInner: Refines<C::Time>+Lattice,
+    F: FnMut(C::Key<'_>, C::Val<'_>, &C::Time)->TInner,
 {
     type Key<'a> = C::Key<'a>;
     type KeyOwned = C::KeyOwned;
     type Val<'a> = C::Val<'a>;
-    type TimeOwned = TInner;
+    type Time = TInner;
     type Diff<'a> = C::Diff<'a>;
     type DiffOwned = C::DiffOwned;
 
@@ -254,13 +252,13 @@ impl<C, TInner, F> BatchCursorEnter<C, TInner, F> {
 
 impl<TInner, C: Cursor, F> Cursor for BatchCursorEnter<C, TInner, F>
 where
-    TInner: Refines<C::TimeOwned>+Lattice,
-    F: FnMut(C::Key<'_>, C::Val<'_>, &C::TimeOwned)->TInner,
+    TInner: Refines<C::Time>+Lattice,
+    F: FnMut(C::Key<'_>, C::Val<'_>, &C::Time)->TInner,
 {
     type Key<'a> = C::Key<'a>;
     type KeyOwned = C::KeyOwned;
     type Val<'a> = C::Val<'a>;
-    type TimeOwned = TInner;
+    type Time = TInner;
     type Diff<'a> = C::Diff<'a>;
     type DiffOwned = C::DiffOwned;
 

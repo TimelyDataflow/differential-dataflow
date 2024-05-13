@@ -11,7 +11,7 @@ use crate::trace::cursor::Cursor;
 /// Wrapper to provide trace to nested scope.
 pub struct TraceEnter<Tr: TraceReader, TInner> {
     trace: Tr,
-    stash1: Antichain<Tr::TimeOwned>,
+    stash1: Antichain<Tr::Time>,
     stash2: Antichain<TInner>,
 }
 
@@ -29,13 +29,12 @@ impl<Tr, TInner> TraceReader for TraceEnter<Tr, TInner>
 where
     Tr: TraceReader,
     Tr::Batch: Clone,
-    TInner: Refines<Tr::TimeOwned>+Lattice,
+    TInner: Refines<Tr::Time>+Lattice,
 {
     type Key<'a> = Tr::Key<'a>;
     type KeyOwned = Tr::KeyOwned;
     type Val<'a> = Tr::Val<'a>;
-    type Time<'a> = TInner;
-    type TimeOwned = TInner;
+    type Time = TInner;
     type Diff<'a> = Tr::Diff<'a>;
     type DiffOwned = Tr::DiffOwned;
 
@@ -91,7 +90,7 @@ where
 impl<Tr, TInner> TraceEnter<Tr, TInner>
 where
     Tr: TraceReader,
-    TInner: Refines<Tr::TimeOwned>+Lattice,
+    TInner: Refines<Tr::Time>+Lattice,
 {
     /// Makes a new trace wrapper
     pub fn make_from(trace: Tr) -> Self {
@@ -114,13 +113,12 @@ pub struct BatchEnter<B, TInner> {
 impl<B, TInner> BatchReader for BatchEnter<B, TInner>
 where
     B: BatchReader,
-    TInner: Refines<B::TimeOwned>+Lattice,
+    TInner: Refines<B::Time>+Lattice,
 {
     type Key<'a> = B::Key<'a>;
     type KeyOwned = B::KeyOwned;
     type Val<'a> = B::Val<'a>;
-    type Time<'a> = TInner;
-    type TimeOwned = TInner;
+    type Time = TInner;
     type Diff<'a> = B::Diff<'a>;
     type DiffOwned = B::DiffOwned;
 
@@ -136,7 +134,7 @@ where
 impl<B, TInner> BatchEnter<B, TInner>
 where
     B: BatchReader,
-    TInner: Refines<B::TimeOwned>+Lattice,
+    TInner: Refines<B::Time>+Lattice,
 {
     /// Makes a new batch wrapper
     pub fn make_from(batch: B) -> Self {
@@ -169,12 +167,12 @@ impl<C, TInner> CursorEnter<C, TInner> {
 impl<C, TInner> Cursor for CursorEnter<C, TInner>
 where
     C: Cursor,
-    TInner: Refines<C::TimeOwned>+Lattice,
+    TInner: Refines<C::Time>+Lattice,
 {
     type Key<'a> = C::Key<'a>;
     type KeyOwned = C::KeyOwned;
     type Val<'a> = C::Val<'a>;
-    type TimeOwned = TInner;
+    type Time = TInner;
     type Diff<'a> = C::Diff<'a>;
     type DiffOwned = C::DiffOwned;
 
@@ -222,12 +220,12 @@ impl<C, TInner> BatchCursorEnter<C, TInner> {
 
 impl<TInner, C: Cursor> Cursor for BatchCursorEnter<C, TInner>
 where
-    TInner: Refines<C::TimeOwned>+Lattice,
+    TInner: Refines<C::Time>+Lattice,
 {
     type Key<'a> = C::Key<'a>;
     type KeyOwned = C::KeyOwned;
     type Val<'a> = C::Val<'a>;
-    type TimeOwned = TInner;
+    type Time = TInner;
     type Diff<'a> = C::Diff<'a>;
     type DiffOwned = C::DiffOwned;
 
