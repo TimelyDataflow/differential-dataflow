@@ -42,47 +42,6 @@ pub struct Progress<T> {
     pub counts: Vec<(T, usize)>,
 }
 
-/// An iterator that yields with a `None` every so often.
-pub struct YieldingIter<I> {
-    /// When set, a time after which we should return `None`.
-    start: Option<std::time::Instant>,
-    after: std::time::Duration,
-    iter: I,
-}
-
-impl<I> YieldingIter<I> {
-    /// Construct a yielding iterator from an inter-yield duration.
-    pub fn new_from(iter: I, yield_after: std::time::Duration) -> Self {
-        Self {
-            start: None,
-            after: yield_after,
-            iter,
-        }
-    }
-}
-
-impl<I: Iterator> Iterator for YieldingIter<I> {
-    type Item = I::Item;
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.start.is_none() {
-            self.start = Some(std::time::Instant::now());
-        }
-        let start = self.start.as_ref().unwrap();
-        if start.elapsed() > self.after {
-            self.start = None;
-            None
-        } else {
-            match self.iter.next() {
-                Some(x) => Some(x),
-                None => {
-                    self.start = None;
-                    None
-                }
-            }
-        }
-    }
-}
-
 /// A simple sink for byte slices.
 pub trait Writer<T> {
     /// Returns an amount of time to wait before retrying, or `None` for success.
@@ -785,6 +744,8 @@ pub mod sink {
 //     {
 //         super::source::build(scope, |activator| {
 //             let source = KafkaSource::new(addr, topic, group, activator);
+//             // An iterator combinator that yields every "duration" even if more items exist.
+//             // The implementation of such an iterator exists in the git history, or can be rewritten easily.
 //             super::YieldingIter::new_from(Iter::<D,T,R>::new_from(source), std::time::Duration::from_millis(10))
 //         })
 //     }
