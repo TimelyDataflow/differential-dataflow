@@ -532,8 +532,8 @@ mod val_batch {
         /// to recover the singleton to push it into `updates` to join the second update.
         fn push_update(&mut self, time: <L::Target as Update>::Time, diff: <L::Target as Update>::Diff) {
             // If a just-pushed update exactly equals `(time, diff)` we can avoid pushing it.
-            let time_diff = self.result.times.last().zip(self.result.diffs.last());
-            if time_diff.map(|(t, d)| t.equals(&time) && d.equals(&diff)) == Some(true) {
+            let last_time_diff = self.result.times.last().zip(self.result.diffs.last());
+            if last_time_diff.map(|(t, d)| t.equals(&time) && d.equals(&diff)) == Some(true) {
                 assert!(self.singleton.is_none());
                 self.singleton = Some((time, diff));
             }
@@ -1010,8 +1010,8 @@ mod key_batch {
         /// to recover the singleton to push it into `updates` to join the second update.
         fn push_update(&mut self, time: <L::Target as Update>::Time, diff: <L::Target as Update>::Diff) {
             // If a just-pushed update exactly equals `(time, diff)` we can avoid pushing it.
-            let time_diff = self.result.times.last().zip(self.result.diffs.last());
-            if time_diff.map(|(t, d)| t.equals(&time) && d.equals(&diff)) == Some(true) {
+            let last_time_diff = self.result.times.last().zip(self.result.diffs.last());
+            if last_time_diff.map(|(t, d)| t.equals(&time) && d.equals(&diff)) == Some(true) {
                 assert!(self.singleton.is_none());
                 self.singleton = Some((time, diff));
             }

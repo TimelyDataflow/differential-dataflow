@@ -66,7 +66,7 @@ pub trait Cursor {
     type Val<'a>: Copy + Clone + MyTrait<'a> + for<'b> PartialOrd<Self::Val<'b>>;
     /// Timestamps associated with updates
     type Time: Timestamp + Lattice + Ord + Clone;
-    /// Associated update.
+    /// Associated difference.
     type Diff<'a>: Copy + Clone + MyTrait<'a, Owned = Self::DiffOwned>;
     /// Owned version of the above.
     type DiffOwned: Semigroup + ?Sized;

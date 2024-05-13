@@ -30,6 +30,7 @@ use crate::{Data, ExchangeData, Collection, AsCollection, Hashable};
 use crate::difference::Semigroup;
 use crate::lattice::Lattice;
 use crate::trace::{self, Trace, TraceReader, Batch, BatchReader, Batcher, Builder, Cursor};
+use crate::trace::cursor::MyTrait;
 use crate::trace::implementations::{KeySpine, ValSpine};
 
 use trace::wrappers::enter::{TraceEnter, BatchEnter,};
@@ -119,7 +120,7 @@ where
         where
             TInner: Refines<G::Timestamp>+Lattice+Timestamp+Clone+'static,
             F: FnMut(Tr::Key<'_>, Tr::Val<'_>, &G::Timestamp)->TInner+Clone+'static,
-            P: FnMut(&TInner)->Tr::Time +Clone+'static,
+            P: FnMut(&TInner)->Tr::Time+Clone+'static,
         {
         let logic1 = logic.clone();
         let logic2 = logic.clone();
@@ -279,8 +280,6 @@ where
 
 // Direct reduce implementations.
 use crate::difference::Abelian;
-use crate::trace::cursor::MyTrait;
-
 impl<G, T1> Arranged<G, T1>
 where
     G: Scope<Timestamp = T1::Time>,

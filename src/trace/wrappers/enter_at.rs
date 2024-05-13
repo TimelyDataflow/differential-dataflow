@@ -47,7 +47,7 @@ where
     TInner: Refines<Tr::Time>+Lattice,
     F: 'static,
     F: FnMut(Tr::Key<'_>, Tr::Val<'_>, &Tr::Time)->TInner+Clone,
-    G: FnMut(&TInner)->Tr::Time +Clone+'static,
+    G: FnMut(&TInner)->Tr::Time+Clone+'static,
 {
     type Key<'a> = Tr::Key<'a>;
     type KeyOwned = Tr::KeyOwned;

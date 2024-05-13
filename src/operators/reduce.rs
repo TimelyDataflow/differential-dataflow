@@ -629,7 +629,7 @@ trait PerKeyCompute<'a, C1, C2, C3, V>
 where
     C1: Cursor,
     C2: Cursor<Key<'a> = C1::Key<'a>, Time= C1::Time>,
-    C3: Cursor<Key<'a> = C1::Key<'a>, Val<'a> = C1::Val<'a>, Time= C1::Time, DiffOwned= C1::DiffOwned>,
+    C3: Cursor<Key<'a> = C1::Key<'a>, Val<'a> = C1::Val<'a>, Time= C1::Time, DiffOwned = C1::DiffOwned>,
     V: Clone + Ord,
 {
     fn new() -> Self;
@@ -674,7 +674,7 @@ mod history_replay {
     where
         C1: Cursor,
         C2: Cursor<Key<'a> = C1::Key<'a>, Time= C1::Time>,
-        C3: Cursor<Key<'a> = C1::Key<'a>, Val<'a> = C1::Val<'a>, Time= C1::Time, DiffOwned= C1::DiffOwned>,
+        C3: Cursor<Key<'a> = C1::Key<'a>, Val<'a> = C1::Val<'a>, Time= C1::Time, DiffOwned = C1::DiffOwned>,
         V: Clone + Ord,
     {
         input_history: ValueHistory<'a, C1>,
@@ -694,7 +694,7 @@ mod history_replay {
     where
         C1: Cursor,
         C2: Cursor<Key<'a> = C1::Key<'a>, Time= C1::Time>,
-        C3: Cursor<Key<'a> = C1::Key<'a>, Val<'a> = C1::Val<'a>, Time= C1::Time, DiffOwned= C1::DiffOwned>,
+        C3: Cursor<Key<'a> = C1::Key<'a>, Val<'a> = C1::Val<'a>, Time= C1::Time, DiffOwned = C1::DiffOwned>,
         V: Clone + Ord,
     {
         fn new() -> Self {

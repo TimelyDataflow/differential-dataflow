@@ -707,7 +707,7 @@ where
 struct JoinThinker<'a, C1, C2>
 where
     C1: Cursor,
-    C2: Cursor<Time= C1::Time>,
+    C2: Cursor<Time = C1::Time>,
 {
     pub history1: ValueHistory<'a, C1>,
     pub history2: ValueHistory<'a, C2>,
@@ -716,7 +716,7 @@ where
 impl<'a, C1, C2> JoinThinker<'a, C1, C2>
 where
     C1: Cursor,
-    C2: Cursor<Time= C1::Time>,
+    C2: Cursor<Time = C1::Time>,
 {
     fn new() -> Self {
         JoinThinker {
