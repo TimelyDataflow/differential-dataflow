@@ -11,7 +11,7 @@ use crate::trace::cursor::Cursor;
 /// Wrapper to provide trace to nested scope.
 pub struct TraceEnter<Tr: TraceReader, TInner> {
     trace: Tr,
-    stash1: Antichain<Tr::Time>,
+    stash1: Antichain<Tr::TimeOwned>,
     stash2: Antichain<TInner>,
 }
 
@@ -29,13 +29,13 @@ impl<Tr, TInner> TraceReader for TraceEnter<Tr, TInner>
 where
     Tr: TraceReader,
     Tr::Batch: Clone,
-    TInner: Refines<Tr::Time>+Lattice,
+    TInner: Refines<Tr::TimeOwned>+Lattice,
 {
     type Key<'a> = Tr::Key<'a>;
     type KeyOwned = Tr::KeyOwned;
     type Val<'a> = Tr::Val<'a>;
-    type Time = TInner;
-    type Diff = Tr::Diff;
+    type TimeOwned = TInner;
+    type DiffOwned = Tr::DiffOwned;
 
     type Batch = BatchEnter<Tr::Batch, TInner>;
     type Storage = Tr::Storage;
@@ -89,7 +89,7 @@ where
 impl<Tr, TInner> TraceEnter<Tr, TInner>
 where
     Tr: TraceReader,
-    TInner: Refines<Tr::Time>+Lattice,
+    TInner: Refines<Tr::TimeOwned>+Lattice,
 {
     /// Makes a new trace wrapper
     pub fn make_from(trace: Tr) -> Self {

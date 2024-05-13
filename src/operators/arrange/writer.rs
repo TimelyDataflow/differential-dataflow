@@ -25,7 +25,7 @@ where
     Tr::Batch: Batch,
 {
     /// Current upper limit.
-    upper: Antichain<Tr::Time>,
+    upper: Antichain<Tr::TimeOwned>,
     /// Shared trace, possibly absent (due to weakness).
     trace: Weak<RefCell<TraceBox<Tr>>>,
     /// A sequence of private queues into which batches are written.
@@ -39,7 +39,7 @@ where
 {
     /// Creates a new `TraceWriter`.
     pub fn new(
-        upper: Vec<Tr::Time>,
+        upper: Vec<Tr::TimeOwned>,
         trace: Weak<RefCell<TraceBox<Tr>>>,
         queues: Rc<RefCell<Vec<TraceAgentQueueWriter<Tr>>>>
     ) -> Self
@@ -61,7 +61,7 @@ where
     /// The `hint` argument is either `None` in the case of an empty batch,
     /// or is `Some(time)` for a time less or equal to all updates in the
     /// batch and which is suitable for use as a capability.
-    pub fn insert(&mut self, batch: Tr::Batch, hint: Option<Tr::Time>) {
+    pub fn insert(&mut self, batch: Tr::Batch, hint: Option<Tr::TimeOwned>) {
 
         // Something is wrong if not a sequence.
         if !(&self.upper == batch.lower()) {
@@ -91,11 +91,11 @@ where
     }
 
     /// Inserts an empty batch up to `upper`.
-    pub fn seal(&mut self, upper: Antichain<Tr::Time>) {
+    pub fn seal(&mut self, upper: Antichain<Tr::TimeOwned>) {
         if self.upper != upper {
             use crate::trace::Builder;
             let builder = Tr::Builder::new();
-            let batch = builder.done(self.upper.clone(), upper, Antichain::from_elem(Tr::Time::minimum()));
+            let batch = builder.done(self.upper.clone(), upper, Antichain::from_elem(Tr::TimeOwned::minimum()));
             self.insert(batch, None);
         }
     }

@@ -42,9 +42,9 @@ pub fn bidijkstra_arranged<G, N, Tr>(
     goals: &Collection<G, (N,N)>
 ) -> Collection<G, ((N,N), u32)>
 where
-    G: Scope<Timestamp=Tr::Time>,
+    G: Scope<Timestamp=Tr::TimeOwned>,
     N: ExchangeData+Hash,
-    Tr: for<'a> TraceReader<Key<'a>=&'a N, Val<'a>=&'a N, Diff=isize>+Clone+'static,
+    Tr: for<'a> TraceReader<Key<'a>=&'a N, Val<'a>=&'a N, DiffOwned=isize>+Clone+'static,
 {
     forward
         .stream

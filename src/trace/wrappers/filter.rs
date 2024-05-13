@@ -33,8 +33,8 @@ where
     type Key<'a> = Tr::Key<'a>;
     type KeyOwned = Tr::KeyOwned;
     type Val<'a> = Tr::Val<'a>;
-    type Time = Tr::Time;
-    type Diff = Tr::Diff;
+    type TimeOwned = Tr::TimeOwned;
+    type DiffOwned = Tr::DiffOwned;
 
     type Batch = BatchFilter<Tr::Batch, F>;
     type Storage = Tr::Storage;
@@ -46,13 +46,13 @@ where
             .map_batches(|batch| f(&Self::Batch::make_from(batch.clone(), logic.clone())))
     }
 
-    fn set_logical_compaction(&mut self, frontier: AntichainRef<Tr::Time>) { self.trace.set_logical_compaction(frontier) }
-    fn get_logical_compaction(&mut self) -> AntichainRef<Tr::Time> { self.trace.get_logical_compaction() }
+    fn set_logical_compaction(&mut self, frontier: AntichainRef<Tr::TimeOwned>) { self.trace.set_logical_compaction(frontier) }
+    fn get_logical_compaction(&mut self) -> AntichainRef<Tr::TimeOwned> { self.trace.get_logical_compaction() }
 
-    fn set_physical_compaction(&mut self, frontier: AntichainRef<Tr::Time>) { self.trace.set_physical_compaction(frontier) }
-    fn get_physical_compaction(&mut self) -> AntichainRef<Tr::Time> { self.trace.get_physical_compaction() }
+    fn set_physical_compaction(&mut self, frontier: AntichainRef<Tr::TimeOwned>) { self.trace.set_physical_compaction(frontier) }
+    fn get_physical_compaction(&mut self) -> AntichainRef<Tr::TimeOwned> { self.trace.get_physical_compaction() }
 
-    fn cursor_through(&mut self, upper: AntichainRef<Tr::Time>) -> Option<(Self::Cursor, Self::Storage)> {
+    fn cursor_through(&mut self, upper: AntichainRef<Tr::TimeOwned>) -> Option<(Self::Cursor, Self::Storage)> {
         self.trace.cursor_through(upper).map(|(x,y)| (CursorFilter::new(x, self.logic.clone()), y))
     }
 }

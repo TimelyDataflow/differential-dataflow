@@ -82,8 +82,8 @@ impl<G, K, V, R> Reduce<G, K, V, R> for Collection<G, (K, V), R>
 
 impl<G, K: Data, V: Data, T1, R: Semigroup> Reduce<G, K, V, R> for Arranged<G, T1>
 where
-    G: Scope<Timestamp=T1::Time>,
-    T1: for<'a> TraceReader<Key<'a>=&'a K, KeyOwned=K, Val<'a>=&'a V, Diff=R>+Clone+'static,
+    G: Scope<Timestamp=T1::TimeOwned>,
+    T1: for<'a> TraceReader<Key<'a>=&'a K, KeyOwned=K, Val<'a>=&'a V, DiffOwned=R>+Clone+'static,
 {
     fn reduce_named<L, V2: Data, R2: Abelian>(&self, name: &str, logic: L) -> Collection<G, (K, V2), R2>
         where L: FnMut(&K, &[(&V, R)], &mut Vec<(V2, R2)>)+'static {
@@ -159,8 +159,8 @@ where G::Timestamp: Lattice+Ord {
 
 impl<G, K: Data, T1, R1: Semigroup> Threshold<G, K, R1> for Arranged<G, T1>
 where
-    G: Scope<Timestamp=T1::Time>,
-    T1: for<'a> TraceReader<Key<'a>=&'a K, KeyOwned=K, Val<'a>=&'a (), Diff=R1>+Clone+'static,
+    G: Scope<Timestamp=T1::TimeOwned>,
+    T1: for<'a> TraceReader<Key<'a>=&'a K, KeyOwned=K, Val<'a>=&'a (), DiffOwned=R1>+Clone+'static,
 {
     fn threshold_named<R2: Abelian, F: FnMut(&K,&R1)->R2+'static>(&self, name: &str, mut thresh: F) -> Collection<G, K, R2> {
         self.reduce_abelian::<_,(),_,KeySpine<_,_,_>>(name, |&()| (), move |k,s,t| t.push(((), thresh(k, &s[0].1))))
@@ -209,8 +209,8 @@ where
 
 impl<G, K: Data, T1, R: Semigroup> Count<G, K, R> for Arranged<G, T1>
 where
-    G: Scope<Timestamp=T1::Time>,
-    T1: for<'a> TraceReader<Key<'a>=&'a K, KeyOwned=K, Val<'a>=&'a (), Diff=R>+Clone+'static,
+    G: Scope<Timestamp=T1::TimeOwned>,
+    T1: for<'a> TraceReader<Key<'a>=&'a K, KeyOwned=K, Val<'a>=&'a (), DiffOwned=R>+Clone+'static,
 {
     fn count_core<R2: Abelian + From<i8>>(&self) -> Collection<G, (K, R), R2> {
         self.reduce_abelian::<_,R,_,ValSpine<_,_,_,_>>("Count", |r| r.clone(), |_k,s,t| t.push((s[0].1.clone(), R2::from(1i8))))
@@ -248,12 +248,12 @@ pub trait ReduceCore<G: Scope, K: ToOwned + ?Sized, V: Data, R: Semigroup> where
     /// ```
     fn reduce_abelian<L, F, T2>(&self, name: &str, from: F, mut logic: L) -> Arranged<G, TraceAgent<T2>>
         where
-            T2: for<'a> Trace<Key<'a>= &'a K, Time=G::Timestamp>+'static,
+            T2: for<'a> Trace<Key<'a>= &'a K, TimeOwned=G::Timestamp>+'static,
             F: Fn(T2::Val<'_>) -> V + 'static,
-            T2::Diff: Abelian,
+            T2::DiffOwned: Abelian,
             T2::Batch: Batch,
-            T2::Builder: Builder<Input = ((K::Owned, V), T2::Time, T2::Diff)>,
-            L: FnMut(&K, &[(&V, R)], &mut Vec<(V, T2::Diff)>)+'static,
+            T2::Builder: Builder<Input = ((K::Owned, V), T2::TimeOwned, T2::DiffOwned)>,
+            L: FnMut(&K, &[(&V, R)], &mut Vec<(V, T2::DiffOwned)>)+'static,
         {
             self.reduce_core::<_,_,T2>(name, from, move |key, input, output, change| {
                 if !input.is_empty() {
@@ -271,11 +271,11 @@ pub trait ReduceCore<G: Scope, K: ToOwned + ?Sized, V: Data, R: Semigroup> where
     /// At least one of the two collections will be non-empty.
     fn reduce_core<L, F, T2>(&self, name: &str, from: F, logic: L) -> Arranged<G, TraceAgent<T2>>
         where
-            T2: for<'a> Trace<Key<'a>=&'a K, Time=G::Timestamp>+'static,
+            T2: for<'a> Trace<Key<'a>=&'a K, TimeOwned=G::Timestamp>+'static,
             F: Fn(T2::Val<'_>) -> V + 'static,
             T2::Batch: Batch,
-            T2::Builder: Builder<Input = ((K::Owned, V), T2::Time, T2::Diff)>,
-            L: FnMut(&K, &[(&V, R)], &mut Vec<(V,T2::Diff)>, &mut Vec<(V, T2::Diff)>)+'static,
+            T2::Builder: Builder<Input = ((K::Owned, V), T2::TimeOwned, T2::DiffOwned)>,
+            L: FnMut(&K, &[(&V, R)], &mut Vec<(V,T2::DiffOwned)>, &mut Vec<(V, T2::DiffOwned)>)+'static,
             ;
 }
 
@@ -291,10 +291,10 @@ where
         where
             V: Data,
             F: Fn(T2::Val<'_>) -> V + 'static,
-            T2: for<'a> Trace<Key<'a>=&'a K, Time=G::Timestamp>+'static,
+            T2: for<'a> Trace<Key<'a>=&'a K, TimeOwned=G::Timestamp>+'static,
             T2::Batch: Batch,
-            T2::Builder: Builder<Input = ((K, V), T2::Time, T2::Diff)>,
-            L: FnMut(&K, &[(&V, R)], &mut Vec<(V,T2::Diff)>, &mut Vec<(V, T2::Diff)>)+'static,
+            T2::Builder: Builder<Input = ((K, V), T2::TimeOwned, T2::DiffOwned)>,
+            L: FnMut(&K, &[(&V, R)], &mut Vec<(V,T2::DiffOwned)>, &mut Vec<(V, T2::DiffOwned)>)+'static,
     {
         self.arrange_by_key_named(&format!("Arrange: {}", name))
             .reduce_core(name, from, logic)
@@ -306,14 +306,14 @@ where
 /// This method exists to provide reduce functionality without opinions about qualifying trace types.
 pub fn reduce_trace<G, T1, T2, V, F, L>(trace: &Arranged<G, T1>, name: &str, from: F, mut logic: L) -> Arranged<G, TraceAgent<T2>>
 where
-    G: Scope<Timestamp=T1::Time>,
+    G: Scope<Timestamp=T1::TimeOwned>,
     T1: TraceReader + Clone + 'static,
-    T2: for<'a> Trace<Key<'a>=T1::Key<'a>, Time=T1::Time> + 'static,
+    T2: for<'a> Trace<Key<'a>=T1::Key<'a>, TimeOwned=T1::TimeOwned> + 'static,
     V: Data,
     F: Fn(T2::Val<'_>) -> V + 'static,
     T2::Batch: Batch,
-    T2::Builder: Builder<Input = ((T1::KeyOwned, V), T2::Time, T2::Diff)>,
-    L: FnMut(T1::Key<'_>, &[(T1::Val<'_>, T1::Diff)], &mut Vec<(V,T2::Diff)>, &mut Vec<(V, T2::Diff)>)+'static,
+    T2::Builder: Builder<Input = ((T1::KeyOwned, V), T2::TimeOwned, T2::DiffOwned)>,
+    L: FnMut(T1::Key<'_>, &[(T1::Val<'_>, T1::DiffOwned)], &mut Vec<(V, T2::DiffOwned)>, &mut Vec<(V, T2::DiffOwned)>)+'static,
 {
     let mut result_trace = None;
 
@@ -447,7 +447,7 @@ where
                         //
                         // TODO: It would be better if all updates went into one batch, but timely dataflow prevents
                         //       this as long as it requires that there is only one capability for each message.
-                        let mut buffers = Vec::<(G::Timestamp, Vec<(V, G::Timestamp, T2::Diff)>)>::new();
+                        let mut buffers = Vec::<(G::Timestamp, Vec<(V, G::Timestamp, T2::DiffOwned)>)>::new();
                         let mut builders = Vec::new();
                         for cap in capabilities.iter() {
                             buffers.push((cap.time().clone(), Vec::new()));

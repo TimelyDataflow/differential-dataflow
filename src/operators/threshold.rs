@@ -92,18 +92,18 @@ where G::Timestamp: TotalOrder+Lattice+Ord {
     }
 }
 
-impl<G, K, T1> ThresholdTotal<G, K, T1::Diff> for Arranged<G, T1>
+impl<G, K, T1> ThresholdTotal<G, K, T1::DiffOwned> for Arranged<G, T1>
 where
-    G: Scope<Timestamp=T1::Time>,
+    G: Scope<Timestamp=T1::TimeOwned>,
     T1: for<'a> TraceReader<Key<'a>=&'a K, Val<'a>=&'a ()>+Clone+'static,
     K: ExchangeData,
-    T1::Time: TotalOrder,
-    T1::Diff: ExchangeData,
+    T1::TimeOwned: TotalOrder,
+    T1::DiffOwned: ExchangeData,
 {
     fn threshold_semigroup<R2, F>(&self, mut thresh: F) -> Collection<G, K, R2>
     where
         R2: Semigroup,
-        F: for<'a> FnMut(T1::Key<'a>,&T1::Diff,Option<&T1::Diff>)->Option<R2>+'static,
+        F: for<'a> FnMut(T1::Key<'a>,&T1::DiffOwned,Option<&T1::DiffOwned>)->Option<R2>+'static,
     {
 
         let mut trace = self.trace.clone();
@@ -127,7 +127,7 @@ where
                         upper_limit.clone_from(batch.upper());
 
                         while let Some(key) = batch_cursor.get_key(&batch) {
-                            let mut count: Option<T1::Diff> = None;
+                            let mut count: Option<T1::DiffOwned> = None;
 
                             // Compute the multiplicity of this key before the current batch.
                             trace_cursor.seek_key(&trace_storage, key);

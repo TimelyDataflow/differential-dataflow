@@ -14,16 +14,16 @@ use differential_dataflow::trace::TraceReader;
 /// `arrangement` undergoes. More complicated patterns are also appropriate, as in the case
 /// of delta queries.
 pub fn propose<G, Tr, F, P, V, VF>(
-    prefixes: &Collection<G, P, Tr::Diff>,
+    prefixes: &Collection<G, P, Tr::DiffOwned>,
     arrangement: Arranged<G, Tr>,
     key_selector: F,
     val_from: VF,
-) -> Collection<G, (P, V), Tr::Diff>
+) -> Collection<G, (P, V), Tr::DiffOwned>
 where
-    G: Scope<Timestamp=Tr::Time>,
+    G: Scope<Timestamp=Tr::TimeOwned>,
     Tr: TraceReader+Clone+'static,
     Tr::KeyOwned: Hashable + Default,
-    Tr::Diff: Monoid+Multiply<Output = Tr::Diff>+ExchangeData,
+    Tr::DiffOwned: Monoid+Multiply<Output = Tr::DiffOwned>+ExchangeData,
     F: Fn(&P)->Tr::KeyOwned+Clone+'static,
     P: ExchangeData,
     V: Clone + 'static,
@@ -46,16 +46,16 @@ where
 /// prefixes by the number of matches in `arrangement`. This can be useful to
 /// avoid the need to prepare an arrangement of distinct extensions.
 pub fn propose_distinct<G, Tr, F, P, V, VF>(
-    prefixes: &Collection<G, P, Tr::Diff>,
+    prefixes: &Collection<G, P, Tr::DiffOwned>,
     arrangement: Arranged<G, Tr>,
     key_selector: F,
     val_from: VF,
-) -> Collection<G, (P, V), Tr::Diff>
+) -> Collection<G, (P, V), Tr::DiffOwned>
 where
-    G: Scope<Timestamp=Tr::Time>,
+    G: Scope<Timestamp=Tr::TimeOwned>,
     Tr: TraceReader+Clone+'static,
     Tr::KeyOwned: Hashable + Default,
-    Tr::Diff: Monoid+Multiply<Output = Tr::Diff>+ExchangeData,
+    Tr::DiffOwned: Monoid+Multiply<Output = Tr::DiffOwned>+ExchangeData,
     F: Fn(&P)->Tr::KeyOwned+Clone+'static,
     P: ExchangeData,
     V: Clone + 'static,

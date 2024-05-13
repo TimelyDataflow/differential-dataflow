@@ -74,21 +74,21 @@ pub fn half_join<G, V, R, Tr, FF, CF, DOut, S>(
     frontier_func: FF,
     comparison: CF,
     mut output_func: S,
-) -> Collection<G, (DOut, G::Timestamp), <R as Mul<Tr::Diff>>::Output>
+) -> Collection<G, (DOut, G::Timestamp), <R as Mul<Tr::DiffOwned>>::Output>
 where
-    G: Scope<Timestamp = Tr::Time>,
+    G: Scope<Timestamp = Tr::TimeOwned>,
     Tr::KeyOwned: Hashable + ExchangeData,
     V: ExchangeData,
     R: ExchangeData + Monoid,
     Tr: TraceReader+Clone+'static,
-    R: Mul<Tr::Diff>,
-    <R as Mul<Tr::Diff>>::Output: Semigroup,
+    R: Mul<Tr::DiffOwned>,
+    <R as Mul<Tr::DiffOwned>>::Output: Semigroup,
     FF: Fn(&G::Timestamp, &mut Antichain<G::Timestamp>) + 'static,
     CF: Fn(&G::Timestamp, &G::Timestamp) -> bool + 'static,
     DOut: Clone+'static,
     S: FnMut(&Tr::KeyOwned, &V, Tr::Val<'_>)->DOut+'static,
 {
-    let output_func = move |k: &Tr::KeyOwned, v1: &V, v2: Tr::Val<'_>, initial: &G::Timestamp, time: &G::Timestamp, diff1: &R, diff2: &Tr::Diff| {
+    let output_func = move |k: &Tr::KeyOwned, v1: &V, v2: Tr::Val<'_>, initial: &G::Timestamp, time: &G::Timestamp, diff1: &R, diff2: &Tr::DiffOwned| {
         let diff = diff1.clone() * diff2.clone();
         let dout = (output_func(k, v1, v2), time.clone());
         Some((dout, initial.clone(), diff))
@@ -129,7 +129,7 @@ pub fn half_join_internal_unsafe<G, V, R, Tr, FF, CF, DOut, ROut, Y, I, S>(
     mut output_func: S,
 ) -> Collection<G, DOut, ROut>
 where
-    G: Scope<Timestamp = Tr::Time>,
+    G: Scope<Timestamp = Tr::TimeOwned>,
     Tr::KeyOwned: Hashable + ExchangeData,
     V: ExchangeData,
     R: ExchangeData + Monoid,
@@ -140,7 +140,7 @@ where
     ROut: Semigroup,
     Y: Fn(std::time::Instant, usize) -> bool + 'static,
     I: IntoIterator<Item=(DOut, G::Timestamp, ROut)>,
-    S: FnMut(&Tr::KeyOwned, &V, Tr::Val<'_>, &G::Timestamp, &G::Timestamp, &R, &Tr::Diff)-> I + 'static,
+    S: FnMut(&Tr::KeyOwned, &V, Tr::Val<'_>, &G::Timestamp, &G::Timestamp, &R, &Tr::DiffOwned)-> I + 'static,
 {
     // No need to block physical merging for this operator.
     arrangement.trace.set_physical_compaction(Antichain::new().borrow());

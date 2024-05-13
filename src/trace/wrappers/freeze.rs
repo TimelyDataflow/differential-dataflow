@@ -34,7 +34,7 @@ use crate::trace::cursor::Cursor;
 /// module-level documentation.
 pub fn freeze<G, T, F>(arranged: &Arranged<G, T>, func: F) -> Arranged<G, TraceFreeze<T, F>>
 where
-    G: Scope<Timestamp=T::Time>,
+    G: Scope<Timestamp=T::TimeOwned>,
     T: TraceReader+Clone,
     F: Fn(&G::Timestamp)->Option<G::Timestamp>+'static,
 {
@@ -50,7 +50,7 @@ where
 pub struct TraceFreeze<Tr, F>
 where
     Tr: TraceReader,
-    F: Fn(&Tr::Time)->Option<Tr::Time>,
+    F: Fn(&Tr::TimeOwned)->Option<Tr::TimeOwned>,
 {
     trace: Tr,
     func: Rc<F>,
@@ -59,7 +59,7 @@ where
 impl<Tr,F> Clone for TraceFreeze<Tr, F>
 where
     Tr: TraceReader+Clone,
-    F: Fn(&Tr::Time)->Option<Tr::Time>,
+    F: Fn(&Tr::TimeOwned)->Option<Tr::TimeOwned>,
 {
     fn clone(&self) -> Self {
         TraceFreeze {
@@ -73,13 +73,13 @@ impl<Tr, F> TraceReader for TraceFreeze<Tr, F>
 where
     Tr: TraceReader,
     Tr::Batch: Clone,
-    F: Fn(&Tr::Time)->Option<Tr::Time>+'static,
+    F: Fn(&Tr::TimeOwned)->Option<Tr::TimeOwned>+'static,
 {
     type Key<'a> = Tr::Key<'a>;
     type KeyOwned = Tr::KeyOwned;
     type Val<'a> = Tr::Val<'a>;
-    type Time = Tr::Time;
-    type Diff = Tr::Diff;
+    type TimeOwned = Tr::TimeOwned;
+    type DiffOwned = Tr::DiffOwned;
 
     type Batch = BatchFreeze<Tr::Batch, F>;
     type Storage = Tr::Storage;
@@ -92,13 +92,13 @@ where
         })
     }
 
-    fn set_logical_compaction(&mut self, frontier: AntichainRef<Tr::Time>) { self.trace.set_logical_compaction(frontier) }
-    fn get_logical_compaction(&mut self) -> AntichainRef<Tr::Time> { self.trace.get_logical_compaction() }
+    fn set_logical_compaction(&mut self, frontier: AntichainRef<Tr::TimeOwned>) { self.trace.set_logical_compaction(frontier) }
+    fn get_logical_compaction(&mut self) -> AntichainRef<Tr::TimeOwned> { self.trace.get_logical_compaction() }
 
-    fn set_physical_compaction(&mut self, frontier: AntichainRef<Tr::Time>) { self.trace.set_physical_compaction(frontier) }
-    fn get_physical_compaction(&mut self) -> AntichainRef<Tr::Time> { self.trace.get_physical_compaction() }
+    fn set_physical_compaction(&mut self, frontier: AntichainRef<Tr::TimeOwned>) { self.trace.set_physical_compaction(frontier) }
+    fn get_physical_compaction(&mut self) -> AntichainRef<Tr::TimeOwned> { self.trace.get_physical_compaction() }
 
-    fn cursor_through(&mut self, upper: AntichainRef<Tr::Time>) -> Option<(Self::Cursor, Self::Storage)> {
+    fn cursor_through(&mut self, upper: AntichainRef<Tr::TimeOwned>) -> Option<(Self::Cursor, Self::Storage)> {
         let func = &self.func;
         self.trace.cursor_through(upper)
             .map(|(cursor, storage)| (CursorFreeze::new(cursor, func.clone()), storage))
@@ -109,7 +109,7 @@ impl<Tr, F> TraceFreeze<Tr, F>
 where
     Tr: TraceReader,
     Tr::Batch: Clone,
-    F: Fn(&Tr::Time)->Option<Tr::Time>,
+    F: Fn(&Tr::TimeOwned)->Option<Tr::TimeOwned>,
 {
     /// Makes a new trace wrapper
     pub fn make_from(trace: Tr, func: Rc<F>) -> Self {

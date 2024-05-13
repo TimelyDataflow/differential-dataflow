@@ -58,18 +58,18 @@ pub trait TraceReader {
     /// Values associated with keys.
     type Val<'a>: Copy + Clone + MyTrait<'a>;
     /// Timestamps associated with updates
-    type Time: Timestamp + Lattice + Ord + Clone;
+    type TimeOwned: Timestamp + Lattice + Ord + Clone;
     /// Associated update.
-    type Diff: Semigroup;
+    type DiffOwned: Semigroup;
 
     /// The type of an immutable collection of updates.
-    type Batch: for<'a> BatchReader<Key<'a> = Self::Key<'a>, KeyOwned = Self::KeyOwned, Val<'a> = Self::Val<'a>, Time = Self::Time, Diff = Self::Diff>+Clone+'static;
+    type Batch: for<'a> BatchReader<Key<'a> = Self::Key<'a>, KeyOwned = Self::KeyOwned, Val<'a> = Self::Val<'a>, Time = Self::TimeOwned, Diff = Self::DiffOwned>+Clone+'static;
 
     /// Storage type for `Self::Cursor`. Likely related to `Self::Batch`.
     type Storage;
 
     /// The type used to enumerate the collections contents.
-    type Cursor: for<'a> Cursor<Storage=Self::Storage, Key<'a> = Self::Key<'a>, KeyOwned = Self::KeyOwned, Val<'a> = Self::Val<'a>, Time = Self::Time, Diff = Self::Diff>;
+    type Cursor: for<'a> Cursor<Storage=Self::Storage, Key<'a> = Self::Key<'a>, KeyOwned = Self::KeyOwned, Val<'a> = Self::Val<'a>, Time = Self::TimeOwned, Diff = Self::DiffOwned>;
 
     /// Provides a cursor over updates contained in the trace.
     fn cursor(&mut self) -> (Self::Cursor, Self::Storage) {
@@ -88,7 +88,7 @@ pub trait TraceReader {
     /// the trace, and (ii) the trace has not been advanced beyond `upper`. Practically, the implementation should
     /// be expected to look for a "clean cut" using `upper`, and if it finds such a cut can return a cursor. This
     /// should allow `upper` such as `&[]` as used by `self.cursor()`, though it is difficult to imagine other uses.
-    fn cursor_through(&mut self, upper: AntichainRef<Self::Time>) -> Option<(Self::Cursor, Self::Storage)>;
+    fn cursor_through(&mut self, upper: AntichainRef<Self::TimeOwned>) -> Option<(Self::Cursor, Self::Storage)>;
 
     /// Advances the frontier that constrains logical compaction.
     ///
@@ -105,11 +105,11 @@ pub trait TraceReader {
     ///
     /// It is an error to call this method with a frontier not equal to or beyond the most recent arguments to
     /// this method, or the initial value of `get_logical_compaction()` if this method has not yet been called.
-    fn set_logical_compaction(&mut self, frontier: AntichainRef<Self::Time>);
+    fn set_logical_compaction(&mut self, frontier: AntichainRef<Self::TimeOwned>);
 
     /// Deprecated form of `set_logical_compaction`.
     #[deprecated(since = "0.11", note = "please use `set_logical_compaction`")]
-    fn advance_by(&mut self, frontier: AntichainRef<Self::Time>) {
+    fn advance_by(&mut self, frontier: AntichainRef<Self::TimeOwned>) {
         self.set_logical_compaction(frontier);
     }
 
@@ -119,11 +119,11 @@ pub trait TraceReader {
     /// not beyond this frontier will present as a time that compares identically with all query times beyond
     /// this frontier. Practically, update times not beyond this frontier should not be taken to be accurate as
     /// presented, and should be used carefully, only in accumulation to times that are beyond the frontier.
-    fn get_logical_compaction(&mut self) -> AntichainRef<Self::Time>;
+    fn get_logical_compaction(&mut self) -> AntichainRef<Self::TimeOwned>;
 
     /// Deprecated form of `get_logical_compaction`.
     #[deprecated(since = "0.11", note = "please use `get_logical_compaction`")]
-    fn advance_frontier(&mut self) -> AntichainRef<Self::Time> {
+    fn advance_frontier(&mut self) -> AntichainRef<Self::TimeOwned> {
         self.get_logical_compaction()
     }
 
@@ -141,11 +141,11 @@ pub trait TraceReader {
     ///
     /// It is an error to call this method with a frontier not equal to or beyond the most recent arguments to
     /// this method, or the initial value of `get_physical_compaction()` if this method has not yet been called.
-    fn set_physical_compaction(&mut self, frontier: AntichainRef<Self::Time>);
+    fn set_physical_compaction(&mut self, frontier: AntichainRef<Self::TimeOwned>);
 
     /// Deprecated form of `set_physical_compaction`.
     #[deprecated(since = "0.11", note = "please use `set_physical_compaction`")]
-    fn distinguish_since(&mut self, frontier: AntichainRef<Self::Time>) {
+    fn distinguish_since(&mut self, frontier: AntichainRef<Self::TimeOwned>) {
         self.set_physical_compaction(frontier);
     }
 
@@ -155,11 +155,11 @@ pub trait TraceReader {
     /// the caller to create a cursor through any frontier beyond the physical compaction frontier, with the
     /// `cursor_through()` method. This functionality is primarily of interest to the `join` operator, and any
     /// other operators who need to take notice of the physical structure of update batches.
-    fn get_physical_compaction(&mut self) -> AntichainRef<Self::Time>;
+    fn get_physical_compaction(&mut self) -> AntichainRef<Self::TimeOwned>;
 
     /// Deprecated form of `get_physical_compaction`.
     #[deprecated(since = "0.11", note = "please use `get_physical_compaction`")]
-    fn distinguish_frontier(&mut self) -> AntichainRef<Self::Time> {
+    fn distinguish_frontier(&mut self) -> AntichainRef<Self::TimeOwned> {
         self.get_physical_compaction()
     }
 
@@ -174,9 +174,9 @@ pub trait TraceReader {
     ///
     ///
     #[inline]
-    fn read_upper(&mut self, target: &mut Antichain<Self::Time>) {
+    fn read_upper(&mut self, target: &mut Antichain<Self::TimeOwned>) {
         target.clear();
-        target.insert(<Self::Time as timely::progress::Timestamp>::minimum());
+        target.insert(<Self::TimeOwned as timely::progress::Timestamp>::minimum());
         self.map_batches(|batch| {
             target.clone_from(batch.upper());
         });
@@ -188,7 +188,7 @@ pub trait TraceReader {
     /// contents of `upper` will advance `upper` to `batch.upper`.
     /// Taken across all batches, this should advance `upper` across
     /// empty batch regions.
-    fn advance_upper(&mut self, upper: &mut Antichain<Self::Time>) {
+    fn advance_upper(&mut self, upper: &mut Antichain<Self::TimeOwned>) {
         self.map_batches(|batch| {
             if batch.is_empty() && batch.lower() == upper {
                 upper.clone_from(batch.upper());
@@ -209,9 +209,9 @@ pub trait Trace : TraceReader
 where <Self as TraceReader>::Batch: Batch {
 
     /// A type used to assemble batches from disordered updates.
-    type Batcher: Batcher<Time = Self::Time>;
+    type Batcher: Batcher<Time = Self::TimeOwned>;
     /// A type used to assemble batches from ordered update sequences.
-    type Builder: Builder<Input=<Self::Batcher as Batcher>::Output, Time=Self::Time, Output = Self::Batch>;
+    type Builder: Builder<Input=<Self::Batcher as Batcher>::Output, Time=Self::TimeOwned, Output = Self::Batch>;
 
     /// Allocates a new empty trace.
     fn new(

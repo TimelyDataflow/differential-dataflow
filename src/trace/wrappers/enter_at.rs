@@ -17,7 +17,7 @@ use crate::trace::cursor::Cursor;
 /// happens use this construct at your own peril!
 pub struct TraceEnter<Tr: TraceReader, TInner, F, G> {
     trace: Tr,
-    stash1: Antichain<Tr::Time>,
+    stash1: Antichain<Tr::TimeOwned>,
     stash2: Antichain<TInner>,
     logic: F,
     prior: G,
@@ -44,16 +44,16 @@ impl<Tr, TInner, F, G> TraceReader for TraceEnter<Tr, TInner, F, G>
 where
     Tr: TraceReader,
     Tr::Batch: Clone,
-    TInner: Refines<Tr::Time>+Lattice,
+    TInner: Refines<Tr::TimeOwned>+Lattice,
     F: 'static,
-    F: FnMut(Tr::Key<'_>, Tr::Val<'_>, &Tr::Time)->TInner+Clone,
-    G: FnMut(&TInner)->Tr::Time+Clone+'static,
+    F: FnMut(Tr::Key<'_>, Tr::Val<'_>, &Tr::TimeOwned)->TInner+Clone,
+    G: FnMut(&TInner)->Tr::TimeOwned +Clone+'static,
 {
     type Key<'a> = Tr::Key<'a>;
     type KeyOwned = Tr::KeyOwned;
     type Val<'a> = Tr::Val<'a>;
-    type Time = TInner;
-    type Diff = Tr::Diff;
+    type TimeOwned = TInner;
+    type DiffOwned = Tr::DiffOwned;
 
     type Batch = BatchEnter<Tr::Batch, TInner,F>;
     type Storage = Tr::Storage;
@@ -108,7 +108,7 @@ where
 impl<Tr, TInner, F, G> TraceEnter<Tr, TInner, F, G>
 where
     Tr: TraceReader,
-    TInner: Refines<Tr::Time>+Lattice,
+    TInner: Refines<Tr::TimeOwned>+Lattice,
 {
     /// Makes a new trace wrapper
     pub fn make_from(trace: Tr, logic: F, prior: G) -> Self {

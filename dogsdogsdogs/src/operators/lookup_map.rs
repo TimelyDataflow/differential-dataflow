@@ -26,16 +26,16 @@ pub fn lookup_map<G, D, R, Tr, F, DOut, ROut, S>(
     supplied_key2: Tr::KeyOwned,
 ) -> Collection<G, DOut, ROut>
 where
-    G: Scope<Timestamp=Tr::Time>,
+    G: Scope<Timestamp=Tr::TimeOwned>,
     Tr: TraceReader+Clone+'static,
     Tr::KeyOwned: Hashable,
-    Tr::Diff: Monoid+ExchangeData,
+    Tr::DiffOwned: Monoid+ExchangeData,
     F: FnMut(&D, &mut Tr::KeyOwned)+Clone+'static,
     D: ExchangeData,
     R: ExchangeData+Monoid,
     DOut: Clone+'static,
     ROut: Monoid,
-    S: FnMut(&D, &R, Tr::Val<'_>, &Tr::Diff)->(DOut, ROut)+'static,
+    S: FnMut(&D, &R, Tr::Val<'_>, &Tr::DiffOwned)->(DOut, ROut)+'static,
 {
     // No need to block physical merging for this operator.
     arrangement.trace.set_physical_compaction(Antichain::new().borrow());
@@ -97,7 +97,7 @@ where
                             cursor.seek_key(&storage, MyTrait::borrow_as(&key1));
                             if cursor.get_key(&storage) == Some(MyTrait::borrow_as(&key1)) {
                                 while let Some(value) = cursor.get_val(&storage) {
-                                    let mut count = Tr::Diff::zero();
+                                    let mut count = Tr::DiffOwned::zero();
                                     cursor.map_times(&storage, |t, d| {
                                         if t.less_equal(time) { count.plus_equals(d); }
                                     });

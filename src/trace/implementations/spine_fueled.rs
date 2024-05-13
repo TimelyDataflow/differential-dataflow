@@ -112,19 +112,19 @@ where
     type Key<'a> = B::Key<'a>;
     type KeyOwned = B::KeyOwned;
     type Val<'a> = B::Val<'a>;
-    type Time = B::Time;
-    type Diff = B::Diff;
+    type TimeOwned = B::Time;
+    type DiffOwned = B::Diff;
 
     type Batch = B;
     type Storage = Vec<B>;
     type Cursor = CursorList<<B as BatchReader>::Cursor>;
 
-    fn cursor_through(&mut self, upper: AntichainRef<Self::Time>) -> Option<(Self::Cursor, Self::Storage)> {
+    fn cursor_through(&mut self, upper: AntichainRef<Self::TimeOwned>) -> Option<(Self::Cursor, Self::Storage)> {
 
         // If `upper` is the minimum frontier, we can return an empty cursor.
         // This can happen with operators that are written to expect the ability to acquire cursors
         // for their prior frontiers, and which start at `[T::minimum()]`, such as `Reduce`, sadly.
-        if upper.less_equal(&<Self::Time as timely::progress::Timestamp>::minimum()) {
+        if upper.less_equal(&<Self::TimeOwned as timely::progress::Timestamp>::minimum()) {
             let cursors = Vec::new();
             let storage = Vec::new();
             return Some((CursorList::new(cursors, &storage), storage));
@@ -324,7 +324,7 @@ where
     fn close(&mut self) {
         if !self.upper.borrow().is_empty() {
             let builder = Self::Builder::new();
-            let batch = builder.done(self.upper.clone(), Antichain::new(), Antichain::from_elem(<Self::Time as timely::progress::Timestamp>::minimum()));
+            let batch = builder.done(self.upper.clone(), Antichain::new(), Antichain::from_elem(<Self::TimeOwned as timely::progress::Timestamp>::minimum()));
             self.insert(batch);
         }
     }

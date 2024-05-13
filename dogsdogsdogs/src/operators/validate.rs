@@ -13,16 +13,16 @@ use differential_dataflow::trace::TraceReader;
 /// key with `key_selector` and then proposes all pair af the prefix
 /// and values associated with the key in `arrangement`.
 pub fn validate<G, K, V, Tr, F, P>(
-    extensions: &Collection<G, (P, V), Tr::Diff>,
+    extensions: &Collection<G, (P, V), Tr::DiffOwned>,
     arrangement: Arranged<G, Tr>,
     key_selector: F,
-) -> Collection<G, (P, V), Tr::Diff>
+) -> Collection<G, (P, V), Tr::DiffOwned>
 where
-    G: Scope<Timestamp=Tr::Time>,
+    G: Scope<Timestamp=Tr::TimeOwned>,
     Tr: TraceReader<KeyOwned=(K,V)>+Clone+'static,
     K: Ord+Hash+Clone+Default,
     V: ExchangeData+Hash+Default,
-    Tr::Diff: Monoid+Multiply<Output = Tr::Diff>+ExchangeData,
+    Tr::DiffOwned: Monoid+Multiply<Output = Tr::DiffOwned>+ExchangeData,
     F: Fn(&P)->K+Clone+'static,
     P: ExchangeData,
 {
