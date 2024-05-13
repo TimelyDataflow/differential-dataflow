@@ -132,6 +132,7 @@ pub fn arrange_from_upsert<G, V, F, Tr>(
 ) -> Arranged<G, TraceAgent<Tr>>
 where
     G: Scope<Timestamp=Tr::Time>,
+    // If we ever change `isize` to something else, update the `Diff->DiffOwned` logic!
     Tr: Trace+TraceReader<DiffOwned=isize>+'static,
     Tr::KeyOwned: ExchangeData+Hashable+std::hash::Hash,
     V: ExchangeData,
@@ -203,7 +204,6 @@ where
                     if capabilities.elements().iter().any(|c| !input.frontier().less_equal(c.time())) {
 
                         let mut upper = Antichain::new();   // re-used allocation for sealing batches.
-                        let mut owned_diff = None;
 
                         // For each capability not in advance of the input frontier ...
                         for (index, capability) in capabilities.elements().iter().enumerate() {
@@ -257,12 +257,7 @@ where
                                         while let Some(val) = trace_cursor.get_val(&trace_storage) {
                                             let mut count = 0;
                                             trace_cursor.map_times(&trace_storage, |_time, diff| {
-                                                let diff = if let Some(owned_diff) = &mut owned_diff {
-                                                    diff.clone_onto(owned_diff);
-                                                    &*owned_diff
-                                                } else {
-                                                    owned_diff.insert(diff.into_owned())
-                                                };
+                                                // Note that `DiffOwned = isize`, so this clone should be cheap.
                                                 count += diff.into_owned()
                                             });
                                             assert!(count == 0 || count == 1);

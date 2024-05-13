@@ -460,7 +460,7 @@ mod val_batch {
 
         fn key<'a>(&self, storage: &'a OrdValBatch<L>) -> Self::Key<'a> { storage.storage.keys.index(self.key_cursor) }
         fn val<'a>(&self, storage: &'a OrdValBatch<L>) -> Self::Val<'a> { storage.storage.vals.index(self.val_cursor) }
-        fn map_times<'a, L2: FnMut(&Self::Time, Self::Diff<'a>)>(&mut self, storage: &'a Self::Storage, mut logic: L2) {
+        fn map_times<'a, L2: FnMut(&Self::Time, Self::Diff<'a>)>(&mut self, storage: &'a OrdValBatch<L>, mut logic: L2) {
             let (lower, upper) = storage.storage.updates_for_value(self.val_cursor);
             let mut owned_time = timely::progress::Timestamp::minimum();
             for index in lower .. upper {
