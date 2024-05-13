@@ -113,7 +113,9 @@ mod val_batch {
         /// would most like to end up. The `BatchContainer` trait does not provide a `capacity()` method,
         /// otherwise we would just use that.
         pub key_capacity: usize,
-        pub divisor: usize,
+        /// A number large enough that when it divides any `u64` the result is at most `self.key_capacity`.
+        /// When that capacity is zero or one, this is set to zero instead.
+        pub divisor: u64,
         /// The number of present keys, distinct from `keys.len()` which contains 
         pub key_count: usize,
 
@@ -194,8 +196,10 @@ mod val_batch {
 
         /// Indicates both the desired location and the hash signature of the key.
         fn desired_location<K: Hashable>(&self, key: &K) -> usize {
-            let hash: usize = key.hashed().into().try_into().unwrap();
-            hash / self.divisor
+            if self.divisor == 0 { 0 }
+            else {
+                (key.hashed().into() / self.divisor).try_into().expect("divisor not large enough to force u64 into uisze")
+            }
         }
 
         /// Returns true if one should advance one's index in the search for `key`.
@@ -216,11 +220,15 @@ mod val_batch {
             }
         }
 
-        // I hope this works out; meant to be 2^64 / self.key_capacity, so that dividing
-        // `signature` by this gives something in `[0, self.key_capacity)`. We could also
-        // do powers of two and just make this really easy.
-        fn divisor_for_capacity(capacity: usize) -> usize {
-            if capacity == 0 { 0 } 
+        /// A value large enough that any `u64` divided by it is less than `capacity`.
+        ///
+        /// This is `2^64 / capacity`, except in the cases where `capacity` is zero or one.
+        /// In those cases, we'll return `0` to communicate the exception, for which we should
+        /// just return `0` when announcing a target location (and a zero capacity that we insert
+        /// into becomes a bug).
+        fn divisor_for_capacity(capacity: usize) -> u64 {
+            let capacity: u64 = capacity.try_into().expect("usize exceeds u64");
+            if capacity == 0 || capacity == 1 { 0 }
             else {
                 ((1 << 63) / capacity) << 1
             }
