@@ -144,7 +144,7 @@ impl<C: Cursor> Cursor for CursorFrontier<C, C::Time> {
     #[inline] fn val<'a>(&self, storage: &'a Self::Storage) -> Self::Val<'a> { self.cursor.val(storage) }
 
     #[inline]
-    fn map_times<L: FnMut(&Self::Time,Self::Diff<'_>)>(&mut self, storage: &Self::Storage, mut logic: L) {
+    fn map_times<'a, L: FnMut(&Self::Time, Self::Diff<'a>)>(&mut self, storage: &'a Self::Storage, mut logic: L) {
         let since = self.since.borrow();
         let until = self.until.borrow();
         let mut temp: C::Time = <C::Time as timely::progress::Timestamp>::minimum();
@@ -206,7 +206,7 @@ where
     #[inline] fn val<'a>(&self, storage: &'a Self::Storage) -> Self::Val<'a> { self.cursor.val(&storage.batch) }
 
     #[inline]
-    fn map_times<L: FnMut(&Self::Time,Self::Diff<'_>)>(&mut self, storage: &Self::Storage, mut logic: L) {
+    fn map_times<'a, L: FnMut(&Self::Time, Self::Diff<'a>)>(&mut self, storage: &'a Self::Storage, mut logic: L) {
         let since = self.since.borrow();
         let until = self.until.borrow();
         let mut temp: C::Time = <C::Time as timely::progress::Timestamp>::minimum();

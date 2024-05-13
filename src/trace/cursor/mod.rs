@@ -99,7 +99,7 @@ pub trait Cursor {
 
     /// Applies `logic` to each pair of time and difference. Intended for mutation of the
     /// closure's scope.
-    fn map_times<L: FnMut(&Self::Time, Self::Diff<'_>)>(&mut self, storage: &Self::Storage, logic: L);
+    fn map_times<'a, L: FnMut(&Self::Time, Self::Diff<'a>)>(&mut self, storage: &'a Self::Storage, logic: L);
 
     /// Advances the cursor to the next key.
     fn step_key(&mut self, storage: &Self::Storage);

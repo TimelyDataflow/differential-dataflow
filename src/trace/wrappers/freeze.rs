@@ -198,7 +198,7 @@ where
     #[inline] fn key<'a>(&self, storage: &'a Self::Storage) -> Self::Key<'a> { self.cursor.key(storage) }
     #[inline] fn val<'a>(&self, storage: &'a Self::Storage) -> Self::Val<'a> { self.cursor.val(storage) }
 
-    #[inline] fn map_times<L: FnMut(&Self::Time, Self::Diff<'_>)>(&mut self, storage: &Self::Storage, mut logic: L) {
+    fn map_times<'a, L: FnMut(&Self::Time, Self::Diff<'a>)>(&mut self, storage: &'a Self::Storage, mut logic: L) {
         let func = &self.func;
         self.cursor.map_times(storage, |time, diff| {
             if let Some(time) = func(time) {
@@ -250,7 +250,7 @@ where
     #[inline] fn key<'a>(&self, storage: &'a Self::Storage) -> Self::Key<'a> { self.cursor.key(&storage.batch) }
     #[inline] fn val<'a>(&self, storage: &'a Self::Storage) -> Self::Val<'a> { self.cursor.val(&storage.batch) }
 
-    #[inline] fn map_times<L: FnMut(&Self::Time, Self::Diff<'_>)>(&mut self, storage: &Self::Storage, mut logic: L) {
+    fn map_times<'a, L: FnMut(&Self::Time, Self::Diff<'a>)>(&mut self, storage: &'a Self::Storage, mut logic: L) {
         let func = &self.func;
         self.cursor.map_times(&storage.batch, |time, diff| {
             if let Some(time) = func(time) {

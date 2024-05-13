@@ -432,7 +432,7 @@ pub mod rc_blanket_impls {
         #[inline] fn val<'a>(&self, storage: &'a Self::Storage) -> Self::Val<'a> { self.cursor.val(storage) }
 
         #[inline]
-        fn map_times<L: FnMut(&Self::Time, Self::Diff<'_>)>(&mut self, storage: &Self::Storage, logic: L) {
+        fn map_times<'a, L: FnMut(&Self::Time, Self::Diff<'a>)>(&mut self, storage: &'a Self::Storage, logic: L) {
             self.cursor.map_times(storage, logic)
         }
 
@@ -538,7 +538,7 @@ pub mod abomonated_blanket_impls {
         #[inline] fn val<'a>(&self, storage: &'a Self::Storage) -> Self::Val<'a> { self.cursor.val(storage) }
 
         #[inline]
-        fn map_times<L: FnMut(&Self::Time, Self::Diff<'_>)>(&mut self, storage: &Self::Storage, logic: L) {
+        fn map_times<'a, L: FnMut(&Self::Time, Self::Diff<'a>)>(&mut self, storage: &'a Self::Storage, logic: L) {
             self.cursor.map_times(storage, logic)
         }
 

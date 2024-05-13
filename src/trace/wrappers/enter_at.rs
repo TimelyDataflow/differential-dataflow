@@ -212,7 +212,7 @@ where
     #[inline] fn val<'a>(&self, storage: &'a Self::Storage) -> Self::Val<'a> { self.cursor.val(storage) }
 
     #[inline]
-    fn map_times<L: FnMut(&TInner, Self::Diff<'_>)>(&mut self, storage: &Self::Storage, mut logic: L) {
+    fn map_times<'a, L: FnMut(&Self::Time, Self::Diff<'a>)>(&mut self, storage: &'a Self::Storage, mut logic: L) {
         let key = self.key(storage);
         let val = self.val(storage);
         let logic2 = &mut self.logic;
@@ -271,7 +271,7 @@ where
     #[inline] fn val<'a>(&self, storage: &'a Self::Storage) -> Self::Val<'a> { self.cursor.val(&storage.batch) }
 
     #[inline]
-    fn map_times<L: FnMut(&TInner, Self::Diff<'_>)>(&mut self, storage: &Self::Storage, mut logic: L) {
+    fn map_times<'a, L: FnMut(&Self::Time, Self::Diff<'a>)>(&mut self, storage: &'a Self::Storage, mut logic: L) {
         let key = self.key(storage);
         let val = self.val(storage);
         let logic2 = &mut self.logic;
