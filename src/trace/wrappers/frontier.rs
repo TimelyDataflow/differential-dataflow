@@ -109,18 +109,20 @@ impl<B: BatchReader> BatchFrontier<B> {
 }
 
 /// Wrapper to provide cursor to nested scope.
-pub struct CursorFrontier<C, T> {
+pub struct CursorFrontier<C: Cursor, T> {
     cursor: C,
     since: Antichain<T>,
-    until: Antichain<T>
+    until: Antichain<T>,
+    buffer: Vec<(C::Time, C::Diff)>,
 }
 
-impl<C, T> CursorFrontier<C, T> where T: Clone {
+impl<C: Cursor, T> CursorFrontier<C, T> where T: Clone {
     fn new(cursor: C, since: AntichainRef<T>, until: AntichainRef<T>) -> Self {
         CursorFrontier {
             cursor,
             since: since.to_owned(),
             until: until.to_owned(),
+            buffer: Vec::new(),
         }
     }
 }
@@ -149,9 +151,13 @@ impl<C: Cursor> Cursor for CursorFrontier<C, C::Time> {
             temp.clone_from(time);
             temp.advance_by(since);
             if !until.less_equal(&temp) {
-                logic(&temp, diff);
+                self.buffer.push((temp.clone(), diff.clone()));
             }
-        })
+        });
+        crate::consolidation::consolidate(&mut self.buffer);
+        for (time, diff) in self.buffer.drain(..) {
+            logic(&time, &diff);
+        }
     }
 
     #[inline] fn step_key(&mut self, storage: &Self::Storage) { self.cursor.step_key(storage) }
