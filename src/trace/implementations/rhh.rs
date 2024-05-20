@@ -87,7 +87,6 @@ mod val_batch {
     use std::convert::TryInto;
     use std::marker::PhantomData;
     use abomonation_derive::Abomonation;
-    use timely::Container;
     use timely::container::PushInto;
     use timely::progress::{Antichain, frontier::AntichainRef};
 
@@ -747,7 +746,7 @@ mod val_batch {
     where
         <L::Target as Update>::Key: Default + HashOrdered,
         // RhhValBatch<L>: Batch<Key=<L::Target as Update>::Key, Val=<L::Target as Update>::Val, Time=<L::Target as Update>::Time, Diff=<L::Target as Update>::Diff>,
-        CI: Container + for<'a> BuilderInput<L, Item<'a> = <CI as Container>::Item<'a>, Key<'a> = <L::Target as Update>::Key, Time=<L::Target as Update>::Time, Diff=<L::Target as Update>::Diff>,
+        CI: for<'a> BuilderInput<L, Key<'a> = <L::Target as Update>::Key, Time=<L::Target as Update>::Time, Diff=<L::Target as Update>::Diff>,
         for<'a> CI::Val<'a>: PushInto<L::ValContainer>,
     {
         type Input = CI;

@@ -54,6 +54,7 @@ pub use self::ord_neu::OrdKeySpine as KeySpine;
 use std::borrow::{ToOwned};
 use std::cmp::Ordering;
 
+use timely::Container;
 use timely::container::columnation::{Columnation, TimelyStack};
 use timely::container::PushInto;
 use timely::progress::Timestamp;
@@ -163,8 +164,8 @@ impl<K,V,T,R> Update for Preferred<K, V, T, R>
 where
     K: ToOwned + ?Sized,
     K::Owned: Ord+Clone+'static,
-    V: ToOwned + ?Sized + 'static,
-    V::Owned: Ord+Clone,
+    V: ToOwned + ?Sized,
+    V::Owned: Ord+Clone+'static,
     T: Ord+Lattice+timely::progress::Timestamp+Clone,
     R: Semigroup+Clone,
 {
@@ -179,8 +180,8 @@ where
     K: Ord+ToOwned+PreferredContainer + ?Sized,
     K::Owned: Ord+Clone+'static,
     // for<'a> K::Container: BatchContainer<ReadItem<'a> = &'a K>,
-    V: Ord+ToOwned+PreferredContainer + ?Sized + 'static,
-    V::Owned: Ord+Clone,
+    V: Ord+ToOwned+PreferredContainer + ?Sized,
+    V::Owned: Ord+Clone+'static,
     T: Ord+Lattice+timely::progress::Timestamp+Clone,
     D: Semigroup+Clone,
 {
@@ -364,9 +365,7 @@ impl BatchContainer for OffsetList {
 }
 
 /// Behavior to split an update into principal components.
-pub trait BuilderInput<L: Layout> {
-    /// The item to break apart.
-    type Item<'a>;
+pub trait BuilderInput<L: Layout>: Container {
     /// Key portion
     type Key<'a>: Ord;
     /// Value portion
@@ -393,7 +392,6 @@ where
     T: Timestamp + Lattice + Clone + 'static,
     R: Semigroup + Clone + 'static,
 {
-    type Item<'a> = ((K, V), T, R);
     type Key<'a> = K;
     type Val<'a> = V;
     type Time = T;
@@ -419,7 +417,6 @@ where
     T: Timestamp + Lattice + Columnation + Clone + 'static,
     R: Semigroup + Columnation + Clone + 'static,
 {
-    type Item<'a> = &'a ((K, V), T, R);
     type Key<'a> = &'a K;
     type Val<'a> = &'a V;
     type Time = T;
@@ -442,12 +439,11 @@ impl<K,V,T,R> BuilderInput<Preferred<K, V, T, R>> for TimelyStack<((<K as ToOwne
 where
     K: Ord+ToOwned+PreferredContainer + ?Sized,
     K::Owned: Columnation + Ord+Clone+'static,
-    V: Ord+ToOwned+PreferredContainer + ?Sized + 'static,
-    V::Owned: Columnation + Ord+Clone,
-    T: Columnation + Ord+Lattice+timely::progress::Timestamp+Clone,
+    V: Ord+ToOwned+PreferredContainer + ?Sized,
+    V::Owned: Columnation + Ord+Clone+'static,
+    T: Columnation + Ord+Lattice+Timestamp+Clone,
     R: Columnation + Semigroup+Clone,
 {
-    type Item<'a> = &'a ((<K as ToOwned>::Owned, <V as ToOwned>::Owned), T, R);
     type Key<'a> = &'a K::Owned;
     type Val<'a> = &'a V::Owned;
     type Time = T;

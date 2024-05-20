@@ -69,7 +69,6 @@ mod val_batch {
 
     use std::marker::PhantomData;
     use abomonation_derive::Abomonation;
-    use timely::Container;
     use timely::container::PushInto;
     use timely::progress::{Antichain, frontier::AntichainRef};
 
@@ -544,7 +543,7 @@ mod val_batch {
     impl<L, CI> Builder for OrdValBuilder<L, CI>
     where
         L: Layout,
-        CI: Container + for<'a> BuilderInput<L, Item<'a> = <CI as Container>::Item<'a>, Time=<L::Target as Update>::Time, Diff=<L::Target as Update>::Diff>,
+        CI: for<'a> BuilderInput<L, Time=<L::Target as Update>::Time, Diff=<L::Target as Update>::Diff>,
         for<'a> CI::Key<'a>: PushInto<L::KeyContainer>,
         for<'a> CI::Val<'a>: PushInto<L::ValContainer>,
     {
@@ -618,7 +617,6 @@ mod key_batch {
 
     use std::marker::PhantomData;
     use abomonation_derive::Abomonation;
-    use timely::Container;
     use timely::container::PushInto;
     use timely::progress::{Antichain, frontier::AntichainRef};
 
@@ -990,7 +988,7 @@ mod key_batch {
     impl<L: Layout, CI> Builder for OrdKeyBuilder<L, CI>
     where
         L: Layout,
-        CI: Container + for<'a> BuilderInput<L, Item<'a> = <CI as Container>::Item<'a>, Time=<L::Target as Update>::Time, Diff=<L::Target as Update>::Diff>,
+        CI: for<'a> BuilderInput<L, Time=<L::Target as Update>::Time, Diff=<L::Target as Update>::Diff>,
         for<'a> CI::Key<'a>: PushInto<L::KeyContainer>,
     {
 

@@ -75,7 +75,8 @@ where
 
 use ::timely::dataflow::scopes::Child;
 use ::timely::progress::timestamp::Refines;
-use timely::container::{PushContainer, PushInto};
+use timely::Container;
+use timely::container::PushInto;
 
 impl<G, Tr> Arranged<G, Tr>
 where
@@ -293,7 +294,7 @@ where
         F: Fn(T2::Val<'_>) -> V + 'static,
         T2::Diff: Abelian,
         T2::Batch: Batch,
-        <T2::Builder as Builder>::Input: PushContainer,
+        <T2::Builder as Builder>::Input: Container,
         ((T1::KeyOwned, V), T2::Time, T2::Diff): PushInto<<T2::Builder as Builder>::Input>,
         L: FnMut(T1::Key<'_>, &[(T1::Val<'_>, T1::Diff)], &mut Vec<(V, T2::Diff)>)+'static,
     {
@@ -313,7 +314,7 @@ where
         V: Data,
         F: Fn(T2::Val<'_>) -> V + 'static,
         T2::Batch: Batch,
-        <T2::Builder as Builder>::Input: PushContainer,
+        <T2::Builder as Builder>::Input: Container,
         ((T1::KeyOwned, V), T2::Time, T2::Diff): PushInto<<T2::Builder as Builder>::Input>,
         L: FnMut(T1::Key<'_>, &[(T1::Val<'_>, T1::Diff)], &mut Vec<(V, T2::Diff)>, &mut Vec<(V, T2::Diff)>)+'static,
     {

@@ -5,7 +5,8 @@
 //! to the key and the list of values.
 //! The function is expected to populate a list of output values.
 
-use timely::container::{PushContainer, PushInto};
+use timely::Container;
+use timely::container::PushInto;
 use crate::hashable::Hashable;
 use crate::{Data, ExchangeData, Collection};
 use crate::difference::{Semigroup, Abelian};
@@ -313,7 +314,7 @@ where
     V: Data,
     F: Fn(T2::Val<'_>) -> V + 'static,
     T2::Batch: Batch,
-    <T2::Builder as Builder>::Input: PushContainer,
+    <T2::Builder as Builder>::Input: Container,
     ((T1::KeyOwned, V), T2::Time, T2::Diff): PushInto<<T2::Builder as Builder>::Input>,
     L: FnMut(T1::Key<'_>, &[(T1::Val<'_>, T1::Diff)], &mut Vec<(V,T2::Diff)>, &mut Vec<(V, T2::Diff)>)+'static,
 {
@@ -450,11 +451,13 @@ where
                         // TODO: It would be better if all updates went into one batch, but timely dataflow prevents
                         //       this as long as it requires that there is only one capability for each message.
                         let mut buffers = Vec::<(G::Timestamp, Vec<(V, G::Timestamp, T2::Diff)>)>::new();
-                        let mut chains = Vec::new();
+                        let mut builders = Vec::new();
                         for cap in capabilities.iter() {
                             buffers.push((cap.time().clone(), Vec::new()));
-                            chains.push(Default::default());
+                            builders.push(T2::Builder::new());
                         }
+
+                        let mut buffer = Default::default();
 
                         // cursors for navigating input and output traces.
                         let (mut source_cursor, source_storage): (T1::Cursor, _) = source_trace.cursor_through(lower_limit.borrow()).expect("failed to acquire source cursor");
@@ -533,8 +536,9 @@ where
                             for index in 0 .. buffers.len() {
                                 buffers[index].1.sort_by(|x,y| x.0.cmp(&y.0));
                                 for (val, time, diff) in buffers[index].1.drain(..) {
-                                    // TODO(antiguru): This is dumb. Need to stage data and then reveal it.
-                                    ((key.into_owned(), val), time, diff).push_into(&mut chains[index]);
+                                    ((key.into_owned(), val), time, diff).push_into(&mut buffer);
+                                    builders[index].push(&mut buffer);
+                                    buffer.clear();
                                 }
                             }
                         }
@@ -546,10 +550,8 @@ where
                         output_lower.extend(lower_limit.borrow().iter().cloned());
 
                         // build and ship each batch (because only one capability per message).
-                        for (index, mut chain) in chains.drain(..).enumerate() {
-                            let mut builder = T2::Builder::new();
-                            // TODO(antiguru): Form actual chains.
-                            builder.push(&mut chain);
+                        for (index, builder) in builders.drain(..).enumerate() {
+
                             // Form the upper limit of the next batch, which includes all times greater
                             // than the input batch, or the capabilities from i + 1 onward.
                             output_upper.clear();

@@ -336,10 +336,9 @@ pub trait Builder: Sized {
     ///
     /// They represent respectively the number of distinct `key`, `(key, val)`, and total updates.
     fn with_capacity(keys: usize, vals: usize, upds: usize) -> Self;
-    /// Adds an element to the batch.
+    /// Adds a chunk of elements to the batch.
     ///
-    /// The default implementation uses `self.copy` with references to the owned arguments.
-    /// One should override it if the builder can take advantage of owned arguments.
+    /// Adds all elements from `chunk` to the builder and leaves `chunk` in an undefined state.
     fn push(&mut self, chunk: &mut Self::Input);
     /// Completes building and returns the batch.
     fn done(self, lower: Antichain<Self::Time>, upper: Antichain<Self::Time>, since: Antichain<Self::Time>) -> Self::Output;
