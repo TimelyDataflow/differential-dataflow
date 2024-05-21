@@ -41,13 +41,13 @@ fn main() {
                     keys.join_core(&data, |_k, &(), &()| Option::<()>::None)
                         .probe_with(&mut probe);
                 },
-                // "rhh" => {
-                //     use differential_dataflow::trace::implementations::rhh::{HashWrapper, VecSpine};
-                //     let data = data.map(|x| HashWrapper { inner: x }).arrange::<VecSpine<_,(),_,_>>();
-                //     let keys = keys.map(|x| HashWrapper { inner: x }).arrange::<VecSpine<_,(),_,_>>();
-                //     keys.join_core(&data, |_k, &(), &()| Option::<()>::None)
-                //         .probe_with(&mut probe);
-                // },
+                "rhh" => {
+                    use differential_dataflow::trace::implementations::rhh::{HashWrapper, VecSpine};
+                    let data = data.map(|x| HashWrapper { inner: x }).arrange::<VecSpine<_,(),_,_>>();
+                    let keys = keys.map(|x| HashWrapper { inner: x }).arrange::<VecSpine<_,(),_,_>>();
+                    keys.join_core(&data, |_k, &(), &()| Option::<()>::None)
+                        .probe_with(&mut probe);
+                },
                 "slc" => {
 
                     use differential_dataflow::trace::implementations::ord_neu::PreferredSpine;
@@ -61,10 +61,7 @@ fn main() {
                         .arrange::<PreferredSpine<[u8],u8,_,_>>()
                         .reduce_abelian::<_, _, _, PreferredSpine<[u8],(),_,_>>("distinct", |_| (), |_,_,output| output.push(((), 1)));
 
-                    keys.join_core(&data, |k,_v1,_v2| {
-                        println!("{:?}", k.text);
-                        Option::<((),isize,isize)>::None
-                    })
+                    keys.join_core(&data, |_k, &(), &()| Option::<()>::None)
                         .probe_with(&mut probe);
                 },
                 _ => {
