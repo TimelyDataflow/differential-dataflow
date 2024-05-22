@@ -42,9 +42,11 @@ pub mod spine_fueled;
 
 pub mod merge_batcher;
 pub mod merge_batcher_col;
+pub mod merge_batcher_flat;
 pub mod ord_neu;
 pub mod rhh;
 pub mod huffman_container;
+mod chunker;
 
 // Opinionated takes on default spines.
 pub use self::ord_neu::OrdValSpine as ValSpine;
@@ -392,28 +394,28 @@ where
 
 mod flatcontainer {
     use timely::container::columnation::{Columnation, TimelyStack};
-    use timely::container::flatcontainer::{Containerized, FlatStack, Push, Region};
+    use timely::container::flatcontainer::{Containerized, FlatStack, IntoOwned, Push, Region};
     use timely::progress::Timestamp;
     use crate::difference::Semigroup;
     use crate::lattice::Lattice;
     use crate::trace::implementations::{BuilderInput, FlatLayout, Layout, OffsetList, Update};
 
     impl<U: Update> Layout for FlatLayout<U>
-        where
-            U::Key: Containerized,
-            for<'a> <U::Key as Containerized>::Region: Push<U::Key> + Push<<<U::Key as Containerized>::Region as Region>::ReadItem<'a>>,
-            for<'a> <<U::Key as Containerized>::Region as Region>::ReadItem<'a>: Copy + Ord,
-            U::Val: Containerized,
-            for<'a> <U::Val as Containerized>::Region: Push<U::Val> + Push<<<U::Val as Containerized>::Region as Region>::ReadItem<'a>>,
-            for<'a> <<U::Val as Containerized>::Region as Region>::ReadItem<'a>: Copy + Ord,
-            U::Time: Containerized,
-            <U::Time as Containerized>::Region: Region<Owned=U::Time>,
-            for<'a> <U::Time as Containerized>::Region: Push<U::Time> + Push<<<U::Time as Containerized>::Region as Region>::ReadItem<'a>>,
-            for<'a> <<U::Time as Containerized>::Region as Region>::ReadItem<'a>: Copy + Ord,
-            U::Diff: Containerized,
-            <U::Diff as Containerized>::Region: Region<Owned=U::Diff>,
-            for<'a> <U::Diff as Containerized>::Region: Push<U::Diff> + Push<<<U::Diff as Containerized>::Region as Region>::ReadItem<'a>>,
-            for<'a> <<U::Diff as Containerized>::Region as Region>::ReadItem<'a>: Copy + Ord,
+    where
+        U::Key: Containerized,
+        for<'a> <U::Key as Containerized>::Region: Push<U::Key> + Push<<<U::Key as Containerized>::Region as Region>::ReadItem<'a>>,
+        for<'a> <<U::Key as Containerized>::Region as Region>::ReadItem<'a>: Copy + Ord,
+        U::Val: Containerized,
+        for<'a> <U::Val as Containerized>::Region: Push<U::Val> + Push<<<U::Val as Containerized>::Region as Region>::ReadItem<'a>>,
+        for<'a> <<U::Val as Containerized>::Region as Region>::ReadItem<'a>: Copy + Ord,
+        U::Time: Containerized,
+        <U::Time as Containerized>::Region: Region<Owned=U::Time>,
+        for<'a> <U::Time as Containerized>::Region: Push<U::Time> + Push<<<U::Time as Containerized>::Region as Region>::ReadItem<'a>>,
+        for<'a> <<U::Time as Containerized>::Region as Region>::ReadItem<'a>: Copy + Ord,
+        U::Diff: Containerized,
+        <U::Diff as Containerized>::Region: Region<Owned=U::Diff>,
+        for<'a> <U::Diff as Containerized>::Region: Push<U::Diff> + Push<<<U::Diff as Containerized>::Region as Region>::ReadItem<'a>>,
+        for<'a> <<U::Diff as Containerized>::Region as Region>::ReadItem<'a>: Copy + Ord,
     {
         type Target = U;
         type KeyContainer = FlatStack<<U::Key as Containerized>::Region>;
@@ -457,6 +459,41 @@ mod flatcontainer {
 
         fn val_eq(this: &&V, other: <<V as Containerized>::Region as Region>::ReadItem<'_>) -> bool {
             **this == <V as Containerized>::Region::reborrow(other)
+        }
+    }
+
+    impl<K,V,T,R> BuilderInput<FlatLayout<((K, V), T, R)>> for FlatStack<<((K, V), T, R) as Containerized>::Region>
+    where
+        K: Ord + Containerized + Clone + 'static,
+        for<'a> K::Region: Push<K> + Push<<K::Region as Region>::ReadItem<'a>> + Clone,
+        for<'a> <K::Region as Region>::ReadItem<'a>: Copy + Ord,
+        for<'a> K: PartialEq<<K::Region as Region>::ReadItem<'a>>,
+        V: Ord + Containerized + Clone + 'static,
+        for<'a> V::Region: Push<V> + Push<<V::Region as Region>::ReadItem<'a>> + Clone,
+        for<'a> <V::Region as Region>::ReadItem<'a>: Copy + Ord,
+        for<'a> V: PartialEq<<V::Region as Region>::ReadItem<'a>>,
+        T: Timestamp + Lattice + Containerized + Clone + 'static,
+        for<'a> T::Region: Region<Owned=T> + Push<T> + Push<<T::Region as Region>::ReadItem<'a>> + Clone,
+        for<'a> <T::Region as Region>::ReadItem<'a>: Copy + Ord + IntoOwned<'a, Owned=T> + PartialEq<<T::Region as Region>::ReadItem<'a>>,
+        R: Ord + Clone + Semigroup + Containerized + 'static,
+        for<'a> R::Region: Region<Owned=R> + Push<R> + Push<<R::Region as Region>::ReadItem<'a>> + Clone,
+        for<'a> <R::Region as Region>::ReadItem<'a>: Copy + Ord + IntoOwned<'a, Owned=R> + PartialEq<<R::Region as Region>::ReadItem<'a>>,
+    {
+        type Key<'a> = <K::Region as Region>::ReadItem<'a>;
+        type Val<'a> = <V::Region as Region>::ReadItem<'a>;
+        type Time = T;
+        type Diff = R;
+
+        fn into_parts<'a>(((key, val), time, diff): Self::Item<'a>) -> (Self::Key<'a>, Self::Val<'a>, Self::Time, Self::Diff) {
+            (key, val, time.into_owned(), diff.into_owned())
+        }
+
+        fn key_eq(this: &Self::Key<'_>, other: <<K as Containerized>::Region as Region>::ReadItem<'_>) -> bool {
+            <K as Containerized>::Region::reborrow(*this) == <K as Containerized>::Region::reborrow(other)
+        }
+
+        fn val_eq(this: &Self::Val<'_>, other: <<V as Containerized>::Region as Region>::ReadItem<'_>) -> bool {
+            <V as Containerized>::Region::reborrow(*this) == <V as Containerized>::Region::reborrow(other)
         }
     }
 }

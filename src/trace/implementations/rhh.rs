@@ -12,6 +12,7 @@ use abomonation_derive::Abomonation;
 use timely::container::columnation::TimelyStack;
 
 use crate::Hashable;
+use crate::trace::implementations::chunker::{ColumnationChunker, VecChunker};
 use crate::trace::implementations::merge_batcher::{MergeBatcher, VecMerger};
 use crate::trace::implementations::merge_batcher_col::ColumnationMerger;
 use crate::trace::implementations::spine_fueled::Spine;
@@ -24,7 +25,7 @@ use self::val_batch::{RhhValBatch, RhhValBuilder};
 /// A trace implementation using a spine of ordered lists.
 pub type VecSpine<K, V, T, R> = Spine<
     Rc<RhhValBatch<Vector<((K,V),T,R)>>>,
-    MergeBatcher<VecMerger<((K, V), T, R)>, T>,
+    MergeBatcher<VecChunker<((K,V),T,R)>, VecMerger<((K, V), T, R)>, T>,
     RcBuilder<RhhValBuilder<Vector<((K,V),T,R)>, Vec<((K,V),T,R)>>>,
 >;
 // /// A trace implementation for empty values using a spine of ordered lists.
@@ -33,7 +34,7 @@ pub type VecSpine<K, V, T, R> = Spine<
 /// A trace implementation backed by columnar storage.
 pub type ColSpine<K, V, T, R> = Spine<
     Rc<RhhValBatch<TStack<((K,V),T,R)>>>,
-    MergeBatcher<ColumnationMerger<((K,V),T,R)>, T>,
+    MergeBatcher<ColumnationChunker<((K,V),T,R)>, ColumnationMerger<((K,V),T,R)>, T>,
     RcBuilder<RhhValBuilder<TStack<((K,V),T,R)>, TimelyStack<((K,V),T,R)>>>,
 >;
 // /// A trace implementation backed by columnar storage.
