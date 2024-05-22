@@ -85,22 +85,20 @@ where
     type Diff = R;
 }
 
-use crate::trace::implementations::containers::Push;
-
 /// A type with opinions on how updates should be laid out.
 pub trait Layout {
     /// The represented update.
     type Target: Update + ?Sized;
     /// Container for update keys.
-    type KeyContainer: BatchContainer<OwnedItem = <Self::Target as Update>::Key> + Push<<Self::Target as Update>::Key>;
+    type KeyContainer: BatchContainer<OwnedItem = <Self::Target as Update>::Key> + PushInto<<Self::Target as Update>::Key>;
     /// Container for update vals.
-    type ValContainer: BatchContainer<OwnedItem = <Self::Target as Update>::Val> + Push<<Self::Target as Update>::Val>;
+    type ValContainer: BatchContainer<OwnedItem = <Self::Target as Update>::Val> + PushInto<<Self::Target as Update>::Val>;
     /// Container for update vals.
     type UpdContainer:
-        Push<(<Self::Target as Update>::Time, <Self::Target as Update>::Diff)> +
+        PushInto<(<Self::Target as Update>::Time, <Self::Target as Update>::Diff)> +
         for<'a> BatchContainer<ReadItem<'a> = &'a (<Self::Target as Update>::Time, <Self::Target as Update>::Diff), OwnedItem = (<Self::Target as Update>::Time, <Self::Target as Update>::Diff)>;
     /// Container for offsets.
-    type OffsetContainer: BatchContainer<OwnedItem = usize> + Push<usize>;
+    type OffsetContainer: BatchContainer<OwnedItem = usize> + PushInto<usize>;
 }
 
 /// A layout that uses vectors
@@ -144,7 +142,7 @@ where
 /// Examples include types that implement `Clone` who prefer
 pub trait PreferredContainer : ToOwned {
     /// The preferred container for the type.
-    type Container: BatchContainer<OwnedItem = Self::Owned> + Push<Self::Owned>;
+    type Container: BatchContainer<OwnedItem = Self::Owned> + PushInto<Self::Owned>;
 }
 
 impl<T: Ord + Clone + 'static> PreferredContainer for T {
@@ -287,12 +285,6 @@ impl<'a> Iterator for OffsetListIter<'a> {
     }
 }
 
-impl PushInto<OffsetList> for usize {
-    fn push_into(self, target: &mut OffsetList) {
-        target.push(self);
-    }
-}
-
 /// Helper struct to provide `IntoOwned` for `Copy` types.
 #[derive(Eq, PartialEq, Ord, PartialOrd, Clone, Copy)]
 pub struct Wrapper<T: Copy>(T);
@@ -321,8 +313,8 @@ impl<'a, T: Copy + Ord> IntoOwned<'a> for Wrapper<T> {
     }
 }
 
-impl Push<usize> for OffsetList {
-    fn push(&mut self, item: usize) {
+impl PushInto<usize> for OffsetList {
+    fn push_into(&mut self, item: usize) {
         self.push(item);
     }
 }
@@ -467,18 +459,6 @@ pub mod containers {
     use std::borrow::ToOwned;
     use crate::trace::IntoOwned;
 
-    /// Supports the ability to receive an item of type `T`.
-    pub trait Push<T> {
-        /// Pushes the item into `self`.
-        fn push(&mut self, item: T);
-    }
-
-    impl<T: Columnation> Push<T> for TimelyStack<T> {
-        fn push(&mut self, item: T) {
-            self.copy(&item);
-        }
-    }
-
     /// A general-purpose container resembling `Vec<T>`.
     pub trait BatchContainer: 'static {
         /// An type that all `Self::ReadItem<'_>` can be converted into.
@@ -486,6 +466,10 @@ pub mod containers {
         /// The type that can be read back out of the container.
         type ReadItem<'a>: Copy + IntoOwned<'a, Owned = Self::OwnedItem> + Ord + for<'b> PartialOrd<Self::ReadItem<'b>>;
 
+        /// Push an item into this container
+        fn push<D>(&mut self, item: D) where Self: PushInto<D> {
+            self.push_into(item);
+        }
         /// Inserts a borrowed item.
         fn copy(&mut self, item: Self::ReadItem<'_>);
         /// Extends from a range of items in another`Self`.
@@ -560,12 +544,6 @@ pub mod containers {
         }
     }
 
-    impl<T> Push<T> for Vec<T> {
-        fn push(&mut self, item: T) {
-            self.push(item);
-        }
-    }
-
     // All `T: Clone` also implement `ToOwned<Owned = T>`, but without the constraint Rust
     // struggles to understand why the owned type must be `T` (i.e. the one blanket impl).
     impl<T: Ord + Clone + 'static> BatchContainer for Vec<T> {
@@ -635,20 +613,20 @@ pub mod containers {
         inner: Vec<B>,
     }
 
-    impl<B: Ord + Clone + 'static> PushInto<SliceContainer<B>> for &[B] {
-        fn push_into(self, target: &mut SliceContainer<B>) {
-            target.copy(self)
+    impl<B: Ord + Clone + 'static> PushInto<&[B]> for SliceContainer<B> {
+        fn push_into(&mut self, item: &[B]) {
+            self.copy(item);
         }
     }
 
-    impl<B: Ord + Clone + 'static> PushInto<SliceContainer<B>> for &Vec<B> {
-        fn push_into(self, target: &mut SliceContainer<B>) {
-            target.copy(self)
+    impl<B: Ord + Clone + 'static> PushInto<&Vec<B>> for SliceContainer<B> {
+        fn push_into(&mut self, item: &Vec<B>) {
+            self.copy(item);
         }
     }
 
-    impl<B> Push<Vec<B>> for SliceContainer<B> {
-        fn push(&mut self, item: Vec<B>) {
+    impl<B> PushInto<Vec<B>> for SliceContainer<B> {
+        fn push_into(&mut self, item: Vec<B>) {
             for x in item.into_iter() {
                 self.inner.push(x);
             }

@@ -90,9 +90,6 @@ mod val_batch {
     use timely::progress::{Antichain, frontier::AntichainRef};
 
     use crate::hashable::Hashable;
-
-    use crate::trace::implementations::containers::Push;
-
     use crate::trace::{Batch, BatchReader, Builder, Cursor, Description, Merger};
     use crate::trace::implementations::{BatchContainer, BuilderInput};
     use crate::trace::cursor::IntoOwned;
@@ -743,7 +740,7 @@ mod val_batch {
         <L::Target as Update>::Key: Default + HashOrdered,
         // RhhValBatch<L>: Batch<Key=<L::Target as Update>::Key, Val=<L::Target as Update>::Val, Time=<L::Target as Update>::Time, Diff=<L::Target as Update>::Diff>,
         CI: for<'a> BuilderInput<L, Key<'a> = <L::Target as Update>::Key, Time=<L::Target as Update>::Time, Diff=<L::Target as Update>::Diff>,
-        for<'a> CI::Val<'a>: PushInto<L::ValContainer>,
+        for<'a> L::ValContainer: PushInto<CI::Val<'a>>,
     {
         type Input = CI;
         type Time = <L::Target as Update>::Time;
@@ -791,7 +788,7 @@ mod val_batch {
                         self.result.vals_offs.push(self.result.updates.len());
                         if self.singleton.take().is_some() { self.singletons += 1; }
                         self.push_update(time, diff);
-                        val.push_into(&mut self.result.vals);
+                        self.result.vals.push(val);
                     }
                 } else {
                     // New key; complete representation of prior key.
@@ -799,7 +796,7 @@ mod val_batch {
                     if self.singleton.take().is_some() { self.singletons += 1; }
                     self.result.keys_offs.push(self.result.vals.len());
                     self.push_update(time, diff);
-                    val.push_into(&mut self.result.vals);
+                    self.result.vals.push(val);
                     // Insert the key, but with no specified offset.
                     self.result.insert_key(key, None);
                 }

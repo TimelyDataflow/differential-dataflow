@@ -11,7 +11,7 @@
 //! specific behavior you require.
 
 use std::collections::VecDeque;
-use timely::container::{ContainerBuilder, PushContainer, PushInto};
+use timely::container::{ContainerBuilder, PushInto, SizableContainer};
 use crate::Data;
 use crate::difference::Semigroup;
 
@@ -173,12 +173,12 @@ where
     ///
     /// Precondition: `current` is not allocated or has space for at least one element.
     #[inline]
-    fn push<P: PushInto<Self::Container>>(&mut self, item: P) {
+    fn push<P>(&mut self, item: P) where Self::Container: PushInto<P> {
         let preferred_capacity = <Vec<(D,T,R)>>::preferred_capacity();
         if self.current.capacity() < preferred_capacity * 2 {
             self.current.reserve(preferred_capacity * 2 - self.current.capacity());
         }
-        item.push_into(&mut self.current);
+        self.current.push_into(item);
         if self.current.len() == self.current.capacity() {
             // Flush complete containers.
             self.consolidate_and_flush_through(preferred_capacity);
