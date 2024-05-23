@@ -9,6 +9,7 @@
 //! and should consume fewer resources (computation and memory) when it applies.
 
 use std::rc::Rc;
+use timely::container::columnation::{TimelyStack};
 
 use crate::trace::implementations::spine_fueled::Spine;
 use crate::trace::implementations::merge_batcher::{MergeBatcher, VecMerger};
@@ -24,7 +25,7 @@ pub use self::key_batch::{OrdKeyBatch, OrdKeyBuilder};
 pub type OrdValSpine<K, V, T, R> = Spine<
     Rc<OrdValBatch<Vector<((K,V),T,R)>>>,
     MergeBatcher<VecMerger<((K, V), T, R)>, T>,
-    RcBuilder<OrdValBuilder<Vector<((K,V),T,R)>>>,
+    RcBuilder<OrdValBuilder<Vector<((K,V),T,R)>, Vec<((K,V),T,R)>>>,
 >;
 // /// A trace implementation for empty values using a spine of ordered lists.
 // pub type OrdKeySpine<K, T, R> = Spine<Rc<OrdKeyBatch<Vector<((K,()),T,R)>>>>;
@@ -33,14 +34,14 @@ pub type OrdValSpine<K, V, T, R> = Spine<
 pub type ColValSpine<K, V, T, R> = Spine<
     Rc<OrdValBatch<TStack<((K,V),T,R)>>>,
     MergeBatcher<ColumnationMerger<((K,V),T,R)>, T>,
-    RcBuilder<OrdValBuilder<TStack<((K,V),T,R)>>>,
+    RcBuilder<OrdValBuilder<TStack<((K,V),T,R)>, TimelyStack<((K,V),T,R)>>>,
 >;
 
 /// A trace implementation using a spine of ordered lists.
 pub type OrdKeySpine<K, T, R> = Spine<
     Rc<OrdKeyBatch<Vector<((K,()),T,R)>>>,
     MergeBatcher<VecMerger<((K, ()), T, R)>, T>,
-    RcBuilder<OrdKeyBuilder<Vector<((K,()),T,R)>>>,
+    RcBuilder<OrdKeyBuilder<Vector<((K,()),T,R)>, Vec<((K,()),T,R)>>>,
 >;
 // /// A trace implementation for empty values using a spine of ordered lists.
 // pub type OrdKeySpine<K, T, R> = Spine<Rc<OrdKeyBatch<Vector<((K,()),T,R)>>>>;
@@ -49,28 +50,30 @@ pub type OrdKeySpine<K, T, R> = Spine<
 pub type ColKeySpine<K, T, R> = Spine<
     Rc<OrdKeyBatch<TStack<((K,()),T,R)>>>,
     MergeBatcher<ColumnationMerger<((K,()),T,R)>, T>,
-    RcBuilder<OrdKeyBuilder<TStack<((K,()),T,R)>>>,
+    RcBuilder<OrdKeyBuilder<TStack<((K,()),T,R)>, TimelyStack<((K,()),T,R)>>>,
 >;
 
 /// A trace implementation backed by columnar storage.
 pub type PreferredSpine<K, V, T, R> = Spine<
     Rc<OrdValBatch<Preferred<K,V,T,R>>>,
     MergeBatcher<ColumnationMerger<((<K as ToOwned>::Owned,<V as ToOwned>::Owned),T,R)>,T>,
-    RcBuilder<OrdValBuilder<Preferred<K,V,T,R>>>,
+    RcBuilder<OrdValBuilder<Preferred<K,V,T,R>, TimelyStack<((<K as ToOwned>::Owned,<V as ToOwned>::Owned),T,R)>>>,
 >;
 
 
 // /// A trace implementation backed by columnar storage.
 // pub type ColKeySpine<K, T, R> = Spine<Rc<OrdKeyBatch<TStack<((K,()),T,R)>>>>;
 
+
 mod val_batch {
 
     use std::marker::PhantomData;
     use abomonation_derive::Abomonation;
+    use timely::container::PushInto;
     use timely::progress::{Antichain, frontier::AntichainRef};
 
     use crate::trace::{Batch, BatchReader, Builder, Cursor, Description, Merger};
-    use crate::trace::implementations::BatchContainer;
+    use crate::trace::implementations::{BatchContainer, BuilderInput};
     use crate::trace::cursor::MyTrait;
 
     use super::{Layout, Update};
@@ -148,7 +151,7 @@ mod val_batch {
             OrdValCursor {
                 key_cursor: 0,
                 val_cursor: 0,
-                phantom: std::marker::PhantomData,
+                phantom: PhantomData,
             }
         }
         fn len(&self) -> usize { 
@@ -189,7 +192,7 @@ mod val_batch {
 
     impl<L: Layout> Merger<OrdValBatch<L>> for OrdValMerger<L>
     where
-        OrdValBatch<L>: Batch<Time=<L::Target as Update>::Time>
+        OrdValBatch<L>: Batch<Time=<L::Target as Update>::Time>,
     {
         fn new(batch1: &OrdValBatch<L>, batch2: &OrdValBatch<L>, compaction_frontier: AntichainRef<<L::Target as Update>::Time>) -> Self {
 
@@ -498,7 +501,7 @@ mod val_batch {
     }
 
     /// A builder for creating layers from unsorted update tuples.
-    pub struct OrdValBuilder<L: Layout> {
+    pub struct OrdValBuilder<L: Layout, CI> {
         result: OrdValStorage<L>,
         singleton: Option<(<L::Target as Update>::Time, <L::Target as Update>::Diff)>,
         /// Counts the number of singleton optimizations we performed.
@@ -506,9 +509,10 @@ mod val_batch {
         /// This number allows us to correctly gauge the total number of updates reflected in a batch,
         /// even though `updates.len()` may be much shorter than this amount.
         singletons: usize,
+        _marker: PhantomData<CI>,
     }
 
-    impl<L: Layout> OrdValBuilder<L> {
+    impl<L: Layout, CI> OrdValBuilder<L, CI> {
         /// Pushes a single update, which may set `self.singleton` rather than push.
         ///
         /// This operation is meant to be equivalent to `self.results.updates.push((time, diff))`.
@@ -536,9 +540,15 @@ mod val_batch {
         }
     }
 
-    impl<L: Layout> Builder for OrdValBuilder<L> {
+    impl<L, CI> Builder for OrdValBuilder<L, CI>
+    where
+        L: Layout,
+        CI: for<'a> BuilderInput<L, Time=<L::Target as Update>::Time, Diff=<L::Target as Update>::Diff>,
+        for<'a> CI::Key<'a>: PushInto<L::KeyContainer>,
+        for<'a> CI::Val<'a>: PushInto<L::ValContainer>,
+    {
 
-        type Input = ((<L::Target as Update>::Key, <L::Target as Update>::Val), <L::Target as Update>::Time, <L::Target as Update>::Diff);
+        type Input = CI;
         type Time = <L::Target as Update>::Time;
         type Output = OrdValBatch<L>;
 
@@ -554,62 +564,35 @@ mod val_batch {
                 },
                 singleton: None,
                 singletons: 0,
+                _marker: PhantomData,
             }
         }
 
         #[inline]
-        fn push(&mut self, ((key, val), time, diff): Self::Input) {
-
-            // Perhaps this is a continuation of an already received key.
-            if self.result.keys.last().map(|k| k.equals(&key)).unwrap_or(false) {
-                // Perhaps this is a continuation of an already received value.
-                if self.result.vals.last().map(|v| v.equals(&val)).unwrap_or(false) {
-                    self.push_update(time, diff);
+        fn push(&mut self, chunk: &mut Self::Input) {
+            for item in chunk.drain() {
+                let (key, val, time, diff) = CI::into_parts(item);
+                // Perhaps this is a continuation of an already received key.
+                if self.result.keys.last().map(|k| CI::key_eq(&key, k)).unwrap_or(false) {
+                    // Perhaps this is a continuation of an already received value.
+                    if self.result.vals.last().map(|v| CI::val_eq(&val, v)).unwrap_or(false) {
+                        self.push_update(time, diff);
+                    } else {
+                        // New value; complete representation of prior value.
+                        self.result.vals_offs.push(self.result.updates.len());
+                        if self.singleton.take().is_some() { self.singletons += 1; }
+                        self.push_update(time, diff);
+                        val.push_into(&mut self.result.vals);
+                    }
                 } else {
-                    // New value; complete representation of prior value.
+                    // New key; complete representation of prior key.
                     self.result.vals_offs.push(self.result.updates.len());
                     if self.singleton.take().is_some() { self.singletons += 1; }
+                    self.result.keys_offs.push(self.result.vals.len());
                     self.push_update(time, diff);
-                    self.result.vals.push(val);
+                    val.push_into(&mut self.result.vals);
+                    key.push_into(&mut self.result.keys);
                 }
-            } else {
-                // New key; complete representation of prior key.
-                self.result.vals_offs.push(self.result.updates.len());
-                if self.singleton.take().is_some() { self.singletons += 1; }
-                self.result.keys_offs.push(self.result.vals.len());
-                self.push_update(time, diff);
-                self.result.vals.push(val);
-                self.result.keys.push(key);
-            }
-        }
-
-        #[inline]
-        fn copy(&mut self, ((key, val), time, diff): &Self::Input) {
-
-            // Perhaps this is a continuation of an already received key.
-            if self.result.keys.last().map(|k| k.equals(key)).unwrap_or(false) {
-                // Perhaps this is a continuation of an already received value.
-                if self.result.vals.last().map(|v| v.equals(val)).unwrap_or(false) {
-                    // TODO: here we could look for repetition, and not push the update in that case.
-                    // More logic (and state) would be required to correctly wrangle this.
-                    self.push_update(time.clone(), diff.clone());
-                } else {
-                    // New value; complete representation of prior value.
-                    self.result.vals_offs.push(self.result.updates.len());
-                    // Remove any pending singleton, and if it was set increment our count.
-                    if self.singleton.take().is_some() { self.singletons += 1; }
-                    self.push_update(time.clone(), diff.clone());
-                    self.result.vals.copy_push(val);
-                }
-            } else {
-                // New key; complete representation of prior key.
-                self.result.vals_offs.push(self.result.updates.len());
-                // Remove any pending singleton, and if it was set increment our count.
-                if self.singleton.take().is_some() { self.singletons += 1; }
-                self.result.keys_offs.push(self.result.vals.len());
-                self.push_update(time.clone(), diff.clone());
-                self.result.vals.copy_push(val);
-                self.result.keys.copy_push(key);
             }
         }
 
@@ -634,10 +617,11 @@ mod key_batch {
 
     use std::marker::PhantomData;
     use abomonation_derive::Abomonation;
+    use timely::container::PushInto;
     use timely::progress::{Antichain, frontier::AntichainRef};
 
     use crate::trace::{Batch, BatchReader, Builder, Cursor, Description, Merger};
-    use crate::trace::implementations::BatchContainer;
+    use crate::trace::implementations::{BatchContainer, BuilderInput};
     use crate::trace::cursor::MyTrait;
 
     use super::{Layout, Update};
@@ -962,7 +946,7 @@ mod key_batch {
     }
 
     /// A builder for creating layers from unsorted update tuples.
-    pub struct OrdKeyBuilder<L: Layout> {
+    pub struct OrdKeyBuilder<L: Layout, CI> {
         result: OrdKeyStorage<L>,
         singleton: Option<(<L::Target as Update>::Time, <L::Target as Update>::Diff)>,
         /// Counts the number of singleton optimizations we performed.
@@ -970,9 +954,10 @@ mod key_batch {
         /// This number allows us to correctly gauge the total number of updates reflected in a batch,
         /// even though `updates.len()` may be much shorter than this amount.
         singletons: usize,
+        _marker: PhantomData<CI>,
     }
 
-    impl<L: Layout> OrdKeyBuilder<L> {
+    impl<L: Layout, CI> OrdKeyBuilder<L, CI> {
         /// Pushes a single update, which may set `self.singleton` rather than push.
         ///
         /// This operation is meant to be equivalent to `self.results.updates.push((time, diff))`.
@@ -1000,9 +985,14 @@ mod key_batch {
         }
     }
 
-    impl<L: Layout> Builder for OrdKeyBuilder<L> {
+    impl<L: Layout, CI> Builder for OrdKeyBuilder<L, CI>
+    where
+        L: Layout,
+        CI: for<'a> BuilderInput<L, Time=<L::Target as Update>::Time, Diff=<L::Target as Update>::Diff>,
+        for<'a> CI::Key<'a>: PushInto<L::KeyContainer>,
+    {
 
-        type Input = ((<L::Target as Update>::Key, ()), <L::Target as Update>::Time, <L::Target as Update>::Diff);
+        type Input = CI;
         type Time = <L::Target as Update>::Time;
         type Output = OrdKeyBatch<L>;
 
@@ -1016,38 +1006,25 @@ mod key_batch {
                 },
                 singleton: None,
                 singletons: 0,
+                _marker: PhantomData,
             }
         }
 
         #[inline]
-        fn push(&mut self, ((key, ()), time, diff): Self::Input) {
-
-            // Perhaps this is a continuation of an already received key.
-            if self.result.keys.last().map(|k| k.equals(&key)).unwrap_or(false) {
-                self.push_update(time, diff);
-            } else {
-                // New key; complete representation of prior key.
-                self.result.keys_offs.push(self.result.updates.len());
-                // Remove any pending singleton, and if it was set increment our count.
-                if self.singleton.take().is_some() { self.singletons += 1; }
-                self.push_update(time, diff);
-                self.result.keys.push(key);
-            }
-        }
-
-        #[inline]
-        fn copy(&mut self, ((key, ()), time, diff): &Self::Input) {
-
-            // Perhaps this is a continuation of an already received key.
-            if self.result.keys.last().map(|k| k.equals(key)).unwrap_or(false) {
-                self.push_update(time.clone(), diff.clone());
-            } else {
-                // New key; complete representation of prior key.
-                self.result.keys_offs.push(self.result.updates.len());
-                // Remove any pending singleton, and if it was set increment our count.
-                if self.singleton.take().is_some() { self.singletons += 1; }
-                self.push_update(time.clone(), diff.clone());
-                self.result.keys.copy_push(key);
+        fn push(&mut self, chunk: &mut Self::Input) {
+            for item in chunk.drain() {
+                let (key, _val, time, diff) = CI::into_parts(item);
+                // Perhaps this is a continuation of an already received key.
+                if self.result.keys.last().map(|k| CI::key_eq(&key, k)).unwrap_or(false) {
+                    self.push_update(time, diff);
+                } else {
+                    // New key; complete representation of prior key.
+                    self.result.keys_offs.push(self.result.updates.len());
+                    // Remove any pending singleton, and if it was set increment our count.
+                    if self.singleton.take().is_some() { self.singletons += 1; }
+                    self.push_update(time, diff);
+                    key.push_into(&mut self.result.keys);
+                }
             }
         }
 

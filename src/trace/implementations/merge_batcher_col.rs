@@ -67,7 +67,7 @@ where
     type Time = T;
     type Input = Vec<((K, V), T, R)>;
     type Chunk = TimelyStack<((K, V), T, R)>;
-    type Output = ((K, V), T, R);
+    type Output = TimelyStack<((K, V), T, R)>;
 
     fn accept(&mut self, container: RefOrMut<Self::Input>, stash: &mut Vec<Self::Chunk>) -> Vec<Self::Chunk> {
         // Ensure `self.pending` has the desired capacity. We should never have a larger capacity
@@ -290,11 +290,8 @@ where
             }
         }
         let mut builder = B::with_capacity(keys, vals, upds);
-
-        for chunk in chain.drain(..) {
-            for datum in chunk.iter() {
-                builder.copy(datum);
-            }
+        for mut chunk in chain.drain(..) {
+            builder.push(&mut chunk);
         }
 
         builder.done(lower.to_owned(), upper.to_owned(), since.to_owned())

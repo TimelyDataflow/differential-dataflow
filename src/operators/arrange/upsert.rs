@@ -138,7 +138,7 @@ where
     F: Fn(Tr::Val<'_>) -> V + 'static,
     Tr::Time: TotalOrder+ExchangeData,
     Tr::Batch: Batch,
-    Tr::Builder: Builder<Input = ((Tr::KeyOwned, V), Tr::Time, Tr::Diff)>,
+    Tr::Builder: Builder<Input = Vec<((Tr::KeyOwned, V), Tr::Time, Tr::Diff)>>,
 {
     let mut reader: Option<TraceAgent<Tr>> = None;
 
@@ -282,9 +282,7 @@ where
                                     }
                                     // Must insert updates in (key, val, time) order.
                                     updates.sort();
-                                    for update in updates.drain(..) {
-                                        builder.push(update);
-                                    }
+                                    builder.push(&mut updates);
                                 }
                                 let batch = builder.done(prev_frontier.clone(), upper.clone(), Antichain::from_elem(G::Timestamp::minimum()));
                                 prev_frontier.clone_from(&upper);
