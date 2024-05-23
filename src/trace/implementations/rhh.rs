@@ -68,7 +68,14 @@ where <T as Hashable>::Output: PartialOrd {
 
 impl<T: std::hash::Hash + Hashable> HashOrdered for HashWrapper<T> { }
 
-impl<T: std::hash::Hash + Hashable> Hashable for HashWrapper<T> { 
+impl<T: std::hash::Hash + Hashable> Hashable for HashWrapper<T> {
+    type Output = T::Output;
+    fn hashed(&self) -> Self::Output { self.inner.hashed() }
+}
+
+impl<T: std::hash::Hash + Hashable> HashOrdered for &HashWrapper<T> { }
+
+impl<T: std::hash::Hash + Hashable> Hashable for &HashWrapper<T> {
     type Output = T::Output;
     fn hashed(&self) -> Self::Output { self.inner.hashed() }
 }

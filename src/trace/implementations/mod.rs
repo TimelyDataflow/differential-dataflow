@@ -149,7 +149,7 @@ impl<T: Ord + Clone + 'static> PreferredContainer for T {
 }
 
 impl<T: Ord + Clone + 'static> PreferredContainer for [T] {
-    type Container = SliceContainer2<T>;
+    type Container = SliceContainer<T>;
 }
 
 /// An update and layout description based on preferred containers.
@@ -320,7 +320,7 @@ impl BatchContainer for OffsetList {
     }
 }
 
-pub use self::containers::{BatchContainer, SliceContainer, SliceContainer2};
+pub use self::containers::{BatchContainer, SliceContainer};
 
 /// Containers for data that resemble `Vec<T>`, with leaner implementations.
 pub mod containers {
@@ -554,134 +554,6 @@ pub mod containers {
     impl<B> Default for SliceContainer<B> {
         fn default() -> Self {
             Self {
-                offsets: vec![0],
-                inner: Default::default(),
-            }
-        }
-    }
-
-    /// A container that accepts slices `[B::Item]`.
-    pub struct SliceContainer2<B> {
-        text: String,
-        /// Offsets that bound each contained slice.
-        ///
-        /// The length will be one greater than the number of contained slices,
-        /// starting with zero and ending with `self.inner.len()`.
-        offsets: Vec<usize>,
-        /// An inner container for sequences of `B` that dereferences to a slice.
-        inner: Vec<B>,
-    }
-
-    /// Welcome to GATs!
-    pub struct Greetings<'a, B> {
-        /// Text that decorates the data.
-        pub text: Option<&'a str>,
-        /// The data itself.
-        pub slice: &'a [B],
-    }
-
-    impl<'a, B> Copy for Greetings<'a, B> { }
-    impl<'a, B> Clone for Greetings<'a, B> { 
-        fn clone(&self) -> Self { *self }
-    }
-
-    use std::cmp::Ordering;
-    impl<'a, 'b, B: Ord> PartialEq<Greetings<'a, B>> for Greetings<'b, B> {
-        fn eq(&self, other: &Greetings<'a, B>) -> bool {
-            self.slice.eq(other.slice)
-        }
-    }
-    impl<'a, B: Ord> Eq for Greetings<'a, B> { }
-    impl<'a, 'b, B: Ord> PartialOrd<Greetings<'a, B>> for Greetings<'b, B> {
-        fn partial_cmp(&self, other: &Greetings<'a, B>) -> Option<Ordering> {
-            self.slice.partial_cmp(other.slice)
-        }
-    }
-    impl<'a, B: Ord> Ord for Greetings<'a, B> {
-        fn cmp(&self, other: &Self) -> Ordering {
-            self.partial_cmp(other).unwrap()
-        }
-    }
-
-    impl<'a, B: Ord + Clone> MyTrait<'a> for Greetings<'a, B> {
-        type Owned = Vec<B>;
-        fn into_owned(self) -> Self::Owned { self.slice.to_vec() }
-        fn clone_onto(&self, other: &mut Self::Owned) { 
-            self.slice.clone_into(other);
-        }
-        fn compare(&self, other: &Self::Owned) -> std::cmp::Ordering { 
-            self.slice.cmp(&other[..])
-        }
-        fn borrow_as(other: &'a Self::Owned) -> Self {
-            Self {
-                text: None,
-                slice: &other[..],
-            }
-        }
-    }
-
-    impl<B> BatchContainer for SliceContainer2<B>
-    where
-        B: Ord + Clone + Sized + 'static,
-    {
-        type PushItem = Vec<B>;
-        type ReadItem<'a> = Greetings<'a, B>;
-        fn push(&mut self, item: Vec<B>) {
-            for x in item.into_iter() {
-                self.inner.push(x);
-            }
-            self.offsets.push(self.inner.len());
-        }
-        fn copy_push(&mut self, item: &Vec<B>) {
-            self.copy(<_ as MyTrait>::borrow_as(item));
-        }
-        fn copy(&mut self, item: Self::ReadItem<'_>) {
-            for x in item.slice.iter() {
-                self.inner.copy(x);
-            }
-            self.offsets.push(self.inner.len());
-        }
-        fn copy_range(&mut self, other: &Self, start: usize, end: usize) {
-            for index in start .. end {
-                self.copy(other.index(index));
-            }
-        }
-        fn with_capacity(size: usize) -> Self {
-            let mut offsets = Vec::with_capacity(size + 1);
-            offsets.push(0);
-            Self {
-                text: format!("Hello!"),
-                offsets,
-                inner: Vec::with_capacity(size),
-            }
-        }
-        fn merge_capacity(cont1: &Self, cont2: &Self) -> Self {
-            let mut offsets = Vec::with_capacity(cont1.inner.len() + cont2.inner.len() + 1);
-            offsets.push(0);
-            Self {
-                text: format!("Hello!"),
-                offsets,
-                inner: Vec::with_capacity(cont1.inner.len() + cont2.inner.len()),
-            }
-        }
-        fn index(&self, index: usize) -> Self::ReadItem<'_> {
-            let lower = self.offsets[index];
-            let upper = self.offsets[index+1];
-            Greetings {
-                text: Some(&self.text),
-                slice: &self.inner[lower .. upper],
-            }
-        }
-        fn len(&self) -> usize {
-            self.offsets.len() - 1
-        }
-    }
-
-    /// Default implementation introduces a first offset.
-    impl<B> Default for SliceContainer2<B> {
-        fn default() -> Self {
-            Self {
-                text: format!("Hello!"),
                 offsets: vec![0],
                 inner: Default::default(),
             }
