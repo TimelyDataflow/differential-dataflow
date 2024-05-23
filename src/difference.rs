@@ -22,9 +22,9 @@ pub use self::Abelian as Diff;
 /// There is a light presumption of commutativity here, in that while we will largely perform addition
 /// in order of timestamps, for many types of timestamps there is no total order and consequently no
 /// obvious order to respect. Non-commutative semigroups should be used with care.
-pub trait Semigroup : ::std::marker::Sized + Data + Clone {
+pub trait Semigroup<Rhs: ?Sized = Self> : Data + Clone {
     /// The method of `std::ops::AddAssign`, for types that do not implement `AddAssign`.
-    fn plus_equals(&mut self, rhs: &Self);
+    fn plus_equals(&mut self, rhs: &Rhs);
     /// Returns true if the element is the additive identity.
     ///
     /// This is primarily used by differential dataflow to know when it is safe to delete an update.
@@ -233,19 +233,40 @@ mod vector {
 
     impl<R: Semigroup> Semigroup for Vec<R> {
         fn plus_equals(&mut self, rhs: &Self) {
-            // Ensure sufficient length to receive addition.
+            self.plus_equals(&rhs[..])
+        }
+        fn is_zero(&self) -> bool {
+            self.iter().all(|x| x.is_zero())
+        }
+    }
+
+    impl<R: Semigroup> Semigroup<[R]> for Vec<R> {
+        fn plus_equals(&mut self, rhs: &[R]) {
+            // Apply all updates to existing elements
+            for (index, update) in rhs.iter().enumerate().take(self.len()) {
+                self[index].plus_equals(update);
+            }
+
+            // Clone leftover elements from `rhs`
             while self.len() < rhs.len() {
                 let element = &rhs[self.len()];
                 self.push(element.clone());
             }
-
-            // As other is not longer, apply updates without tests.
-            for (index, update) in rhs.iter().enumerate() {
-                self[index].plus_equals(update);
-            }
         }
         fn is_zero(&self) -> bool {
             self.iter().all(|x| x.is_zero())
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use crate::difference::Semigroup;
+
+        #[test]
+        fn test_semigroup_vec() {
+            let mut a = vec![1,2,3];
+            a.plus_equals([1,1,1,1].as_slice());
+            assert_eq!(vec![2,3,4,1], a);
         }
     }
 
