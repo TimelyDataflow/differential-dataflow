@@ -101,9 +101,9 @@ where
         }
     }
 }
-impl<'a, C: BatchContainer> Eq for OptionWrapper<'a, C> where 
-C::OwnedItem: Default + Ord
-{ }
+
+impl<'a, C: BatchContainer> Eq for OptionWrapper<'a, C> where C::OwnedItem: Default + Ord { }
+
 impl<'a, 'b, C: BatchContainer> PartialOrd<OptionWrapper<'a, C>> for OptionWrapper<'b, C> where 
 C::OwnedItem: Default + Ord,
 {
@@ -143,9 +143,9 @@ where
             *other = Default::default();
         }
     }
-    fn borrow_as(other: &'a Self::Owned) -> Self {
+    fn borrow_as(owned: &'a Self::Owned) -> Self {
         Self {
-            inner: Some(<_>::borrow_as(other))
+            inner: Some(IntoOwned::borrow_as(owned))
         }
     }
 } 

@@ -33,7 +33,7 @@ where
 }
 
 use crate::trace::implementations::containers::Push;
-impl<B: Ord + Clone + Sized + 'static> Push<Vec<B>> for HuffmanContainer<B> {
+impl<B: Ord + Clone + 'static> Push<Vec<B>> for HuffmanContainer<B> {
     fn push(&mut self, item: Vec<B>) {
         for x in item.iter() { *self.stats.entry(x.clone()).or_insert(0) += 1; }
         match &mut self.inner {
@@ -49,10 +49,7 @@ impl<B: Ord + Clone + Sized + 'static> Push<Vec<B>> for HuffmanContainer<B> {
     }
 }
 
-impl<B> BatchContainer for HuffmanContainer<B>
-where
-    B: Ord + Clone + Sized + 'static,
-{
+impl<B: Ord + Clone + 'static> BatchContainer for HuffmanContainer<B> {
     type OwnedItem = Vec<B>;
     type ReadItem<'a> = Wrapped<'a, B>;
 
@@ -221,8 +218,8 @@ mod wrapper {
                 Err(bytes) => other.extend_from_slice(bytes),
             }
         }
-        fn borrow_as(other: &'a Self::Owned) -> Self {
-            Self { inner: Err(&other[..]) }
+        fn borrow_as(owned: &'a Self::Owned) -> Self {
+            Self { inner: Err(&owned[..]) }
         }
     }
 }

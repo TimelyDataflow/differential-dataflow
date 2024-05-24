@@ -316,8 +316,8 @@ impl<'a, T: Copy + Ord> IntoOwned<'a> for Wrapper<T> {
         *other = self.0;
     }
 
-    fn borrow_as(other: &'a Self::Owned) -> Self {
-        Self(*other)
+    fn borrow_as(owned: &'a Self::Owned) -> Self {
+        Self(*owned)
     }
 }
 
