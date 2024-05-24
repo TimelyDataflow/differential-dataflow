@@ -83,7 +83,6 @@ impl<T: std::hash::Hash + Hashable> Hashable for &HashWrapper<T> {
 
 mod val_batch {
 
-    use std::borrow::Borrow;
     use std::convert::TryInto;
     use std::marker::PhantomData;
     use abomonation_derive::Abomonation;
@@ -92,9 +91,11 @@ mod val_batch {
 
     use crate::hashable::Hashable;
 
+    use crate::trace::implementations::containers::Push;
+
     use crate::trace::{Batch, BatchReader, Builder, Cursor, Description, Merger};
     use crate::trace::implementations::{BatchContainer, BuilderInput};
-    use crate::trace::cursor::MyTrait;
+    use crate::trace::cursor::IntoOwned;
 
     use super::{Layout, Update, HashOrdered};
 
@@ -183,8 +184,8 @@ mod val_batch {
         /// If `offset` is specified, we will insert it at the appropriate location. If it is not specified,
         /// we leave `keys_offs` ready to receive it as the next `push`. This is so that builders that may
         /// not know the final offset at the moment of key insertion can prepare for receiving the offset.
-        fn insert_key(&mut self, key: &<L::Target as Update>::Key, offset: Option<usize>) {
-            let desired = self.desired_location(key);
+        fn insert_key(&mut self, key: <L::Target as Update>::Key, offset: Option<usize>) {
+            let desired = self.desired_location(&key);
             // Were we to push the key now, it would be at `self.keys.len()`, so while that is wrong, 
             // push additional blank entries in.
             while self.keys.len() < desired {
@@ -196,7 +197,7 @@ mod val_batch {
 
             // Now we insert the key. Even if it is no longer the desired location because of contention.
             // If an offset has been supplied we insert it, and otherwise leave it for future determination.
-            self.keys.copy_push(key);
+            self.keys.push(key);
             if let Some(offset) = offset {
                 self.keys_offs.push(offset);
             }
@@ -320,8 +321,6 @@ mod val_batch {
         /// description
         description: Description<<L::Target as Update>::Time>,
 
-        /// Owned key for copying into.
-        key_owned: <<L::Target as Update>::Key as ToOwned>::Owned,
         /// Local stash of updates, to use for consolidation.
         ///
         /// We could emulate a `ChangeBatch` here, with related compaction smarts.
@@ -375,7 +374,6 @@ mod val_batch {
                 key_cursor2: 0,
                 result: storage,
                 description,
-                key_owned: Default::default(),
                 update_stash: Vec::new(),
                 singletons: 0,
             }
@@ -451,8 +449,7 @@ mod val_batch {
 
             // If we have pushed any values, copy the key as well.
             if self.result.vals.len() > init_vals {
-                source.keys.index(cursor).clone_onto(&mut self.key_owned);
-                self.result.insert_key(&self.key_owned, Some(self.result.vals.len()));
+                self.result.insert_key(source.keys.index(cursor).into_owned(), Some(self.result.vals.len()));
             }           
         }
         /// Merge the next key in each of `source1` and `source2` into `self`, updating the appropriate cursors.
@@ -472,8 +469,7 @@ mod val_batch {
                     let (lower1, upper1) = source1.values_for_key(self.key_cursor1);
                     let (lower2, upper2) = source2.values_for_key(self.key_cursor2);
                     if let Some(off) = self.merge_vals((source1, lower1, upper1), (source2, lower2, upper2)) {
-                        source1.keys.index(self.key_cursor1).clone_onto(&mut self.key_owned);
-                        self.result.insert_key(&self.key_owned, Some(off));
+                        self.result.insert_key(source1.keys.index(self.key_cursor1).into_owned(), Some(off));
                     }
                     // Increment cursors in either case; the keys are merged.
                     self.key_cursor1 += 1;
@@ -578,7 +574,7 @@ mod val_batch {
             if !self.update_stash.is_empty() {
                 // If there is a single element, equal to a just-prior recorded update,
                 // we push nothing and report an unincremented offset to encode this case.
-                if self.update_stash.len() == 1 && self.result.updates.last().map(|l| l.equals(self.update_stash.last().unwrap())).unwrap_or(false) {
+                if self.update_stash.len() == 1 && self.result.updates.last().map(|l| l.eq(IntoOwned::borrow_as(self.update_stash.last().unwrap()))).unwrap_or(false) {
                     // Just clear out update_stash, as we won't drain it here.
                     self.update_stash.clear();
                     self.singletons += 1;
@@ -805,7 +801,7 @@ mod val_batch {
                     self.push_update(time, diff);
                     val.push_into(&mut self.result.vals);
                     // Insert the key, but with no specified offset.
-                    self.result.insert_key(key.borrow(), None);
+                    self.result.insert_key(key, None);
                 }
             }
         }

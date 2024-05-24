@@ -57,7 +57,7 @@ where
         Tr::Batcher: Batcher<Input=Vec<((D,()),G::Timestamp,R)>>,
     {
         use crate::operators::arrange::arrangement::Arrange;
-        use crate::trace::cursor::MyTrait;
+        use crate::trace::cursor::IntoOwned;
         self.map(|k| (k, ()))
             .arrange_named::<Tr>(name)
             .as_collection(|d, _| d.into_owned())

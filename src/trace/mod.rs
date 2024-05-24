@@ -19,7 +19,7 @@ use timely::progress::{Antichain, frontier::AntichainRef};
 use timely::progress::Timestamp;
 
 use crate::logging::DifferentialEvent;
-use crate::trace::cursor::MyTrait;
+use crate::trace::cursor::IntoOwned;
 use crate::difference::Semigroup;
 use crate::lattice::Lattice;
 // use ::difference::Semigroup;
@@ -52,11 +52,11 @@ pub type ExertionLogic = std::sync::Arc<dyn for<'a> Fn(&'a [(usize, usize, usize
 pub trait TraceReader {
 
     /// Key by which updates are indexed.
-    type Key<'a>: Copy + Clone + MyTrait<'a, Owned = Self::KeyOwned>;
+    type Key<'a>: Copy + Clone + Ord + IntoOwned<'a, Owned = Self::KeyOwned>;
     /// Owned version of the above.
     type KeyOwned: Ord + Clone;
     /// Values associated with keys.
-    type Val<'a>: Copy + Clone + MyTrait<'a>;
+    type Val<'a>: Copy + Clone + IntoOwned<'a>;
     /// Timestamps associated with updates
     type Time: Timestamp + Lattice + Ord + Clone;
     /// Associated update.
@@ -258,11 +258,11 @@ where
     Self: ::std::marker::Sized,
 {
     /// Key by which updates are indexed.
-    type Key<'a>: Copy + Clone + MyTrait<'a, Owned = Self::KeyOwned>;
+    type Key<'a>: Copy + Clone + Ord + IntoOwned<'a, Owned = Self::KeyOwned>;
     /// Owned version of the above.
     type KeyOwned: Ord + Clone;
     /// Values associated with keys.
-    type Val<'a>: Copy + Clone + MyTrait<'a>;
+    type Val<'a>: Copy + Clone + IntoOwned<'a>;
     /// Timestamps associated with updates
     type Time: Timestamp + Lattice + Ord + Clone;
     /// Associated update.

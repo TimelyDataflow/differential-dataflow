@@ -93,9 +93,9 @@ where
                     for &mut (ref prefix, ref time, ref mut diff) in prefixes.iter_mut() {
                         if !input2.frontier.less_equal(time) {
                             logic2(prefix, &mut key1);
-                            use differential_dataflow::trace::cursor::MyTrait;
-                            cursor.seek_key(&storage, MyTrait::borrow_as(&key1));
-                            if cursor.get_key(&storage) == Some(MyTrait::borrow_as(&key1)) {
+                            use differential_dataflow::trace::cursor::IntoOwned;
+                            cursor.seek_key(&storage, IntoOwned::borrow_as(&key1));
+                            if cursor.get_key(&storage) == Some(IntoOwned::borrow_as(&key1)) {
                                 while let Some(value) = cursor.get_val(&storage) {
                                     let mut count = Tr::Diff::zero();
                                     cursor.map_times(&storage, |t, d| {

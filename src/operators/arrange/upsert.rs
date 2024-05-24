@@ -244,14 +244,14 @@ where
                                 let mut builder = Tr::Builder::new();
                                 for (key, mut list) in to_process.drain(..) {
 
-                                    use trace::cursor::MyTrait;
+                                    use trace::cursor::IntoOwned;
 
                                     // The prior value associated with the key.
                                     let mut prev_value: Option<V> = None;
 
                                     // Attempt to find the key in the trace.
-                                    trace_cursor.seek_key_owned(&trace_storage, &key);
-                                    if trace_cursor.get_key(&trace_storage).map(|k| k.equals(&key)).unwrap_or(false) {
+                                    trace_cursor.seek_key(&trace_storage, IntoOwned::borrow_as(&key));
+                                    if trace_cursor.get_key(&trace_storage).map(|k| k.eq(&IntoOwned::borrow_as(&key))).unwrap_or(false) {
                                         // Determine the prior value associated with the key.
                                         while let Some(val) = trace_cursor.get_val(&trace_storage) {
                                             let mut count = 0;
