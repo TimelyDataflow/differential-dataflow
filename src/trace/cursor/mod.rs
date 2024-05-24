@@ -14,56 +14,40 @@ pub mod cursor_list;
 pub use self::cursor_list::CursorList;
 
 use std::borrow::Borrow;
-use std::cmp::Ordering;
 
-/// A type that may be converted into and compared with another type.
+/// A reference type corresponding to an owned type, supporting conversion in each direction.
 ///
-/// The type must also be comparable with itself, and follow the same 
-/// order as if converting instances to `T` and comparing the results.
-pub trait MyTrait<'a> : Ord {
+/// This trait can be implemented by a GAT, and enables owned types to be borrowed as a GAT.
+/// This trait is analogous to `ToOwned`, but not as prescriptive. Specifically, it avoids the
+/// requirement that the other trait implement `Borrow`, for which a borrow must result in a
+/// `&'self Borrowed`, which cannot move the lifetime into a GAT borrowed type.
+pub trait IntoOwned<'a> {
     /// Owned type into which this type can be converted.
     type Owned;
     /// Conversion from an instance of this type to the owned type.
     fn into_owned(self) -> Self::Owned;
-    ///
+    /// Clones `self` onto an existing instance of the owned type.
     fn clone_onto(&self, other: &mut Self::Owned); 
-    /// Indicates that `self <= other`; used for sorting.
-    fn compare(&self, other: &Self::Owned) -> Ordering;
-    /// `self <= other`
-    fn less_equals(&self, other: &Self::Owned) -> bool {
-        self.compare(other) != Ordering::Greater
-    }
-    /// `self == other`
-    fn equals(&self, other: &Self::Owned) -> bool {
-        self.compare(other) == Ordering::Equal
-    }
-    /// `self < other`
-    fn less_than(&self, other: &Self::Owned) -> bool {
-        self.compare(other) == Ordering::Less
-    }
-    /// Borrows an owned instance as onesself.
-    fn borrow_as(other: &'a Self::Owned) -> Self; 
+    /// Borrows an owned instance as oneself.
+    fn borrow_as(owned: &'a Self::Owned) -> Self;
 }
 
-impl<'a, T: Ord+ToOwned+?Sized> MyTrait<'a> for &'a T {
+impl<'a, T: ToOwned+?Sized> IntoOwned<'a> for &'a T {
     type Owned = T::Owned;
     fn into_owned(self) -> Self::Owned { self.to_owned() }
     fn clone_onto(&self, other: &mut Self::Owned) { <T as ToOwned>::clone_into(self, other) }
-    fn compare(&self, other: &Self::Owned) -> Ordering { self.cmp(&other.borrow()) }
-    fn borrow_as(other: &'a Self::Owned) -> Self {
-        other.borrow()
-    }
+    fn borrow_as(owned: &'a Self::Owned) -> Self { owned.borrow() }
 }
 
 /// A cursor for navigating ordered `(key, val, time, diff)` updates.
 pub trait Cursor {
 
     /// Key by which updates are indexed.
-    type Key<'a>: Copy + Clone + MyTrait<'a, Owned = Self::KeyOwned>;
+    type Key<'a>: Copy + Clone + Ord + IntoOwned<'a, Owned = Self::KeyOwned>;
     /// Owned version of the above.
     type KeyOwned: Ord + Clone;
     /// Values associated with keys.
-    type Val<'a>: Copy + Clone + MyTrait<'a> + for<'b> PartialOrd<Self::Val<'b>>;
+    type Val<'a>: Copy + Clone + Ord + IntoOwned<'a> + for<'b> PartialOrd<Self::Val<'b>>;
     /// Timestamps associated with updates
     type Time: Timestamp + Lattice + Ord + Clone;
     /// Associated update.
@@ -103,10 +87,6 @@ pub trait Cursor {
     fn step_key(&mut self, storage: &Self::Storage);
     /// Advances the cursor to the specified key.
     fn seek_key(&mut self, storage: &Self::Storage, key: Self::Key<'_>);
-    /// Convenience method to get access by reference to an owned key.
-    fn seek_key_owned(&mut self, storage: &Self::Storage, key: &Self::KeyOwned) {
-        self.seek_key(storage, MyTrait::borrow_as(key));
-    }
 
     /// Advances the cursor to the next value.
     fn step_val(&mut self, storage: &Self::Storage);

@@ -70,7 +70,7 @@ where
 
             move |input, output| {
 
-                use crate::trace::cursor::MyTrait;
+                use crate::trace::cursor::IntoOwned;
                 input.for_each(|capability, batches| {
                     batches.swap(&mut buffer);
                     let mut session = output.session(&capability);

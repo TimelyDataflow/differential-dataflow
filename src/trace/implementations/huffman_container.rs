@@ -32,12 +32,8 @@ where
     }
 }
 
-impl<B> BatchContainer for HuffmanContainer<B>
-where
-    B: Ord + Clone + Sized + 'static,
-{
-    type PushItem = Vec<B>;
-    type ReadItem<'a> = Wrapped<'a, B>;
+use crate::trace::implementations::containers::Push;
+impl<B: Ord + Clone + 'static> Push<Vec<B>> for HuffmanContainer<B> {
     fn push(&mut self, item: Vec<B>) {
         for x in item.iter() { *self.stats.entry(x.clone()).or_insert(0) += 1; }
         match &mut self.inner {
@@ -51,10 +47,12 @@ where
             }
         }
     }
-    fn copy_push(&mut self, item: &Vec<B>) {
-        use crate::trace::MyTrait;
-        self.copy(<_ as MyTrait>::borrow_as(item));
-    }
+}
+
+impl<B: Ord + Clone + 'static> BatchContainer for HuffmanContainer<B> {
+    type OwnedItem = Vec<B>;
+    type ReadItem<'a> = Wrapped<'a, B>;
+
     fn copy(&mut self, item: Self::ReadItem<'_>) {
         match item.decode() {
             Ok(decoded) => {
@@ -152,7 +150,7 @@ impl<B: Ord+Clone> Default for HuffmanContainer<B> {
 
 mod wrapper {
 
-    use crate::trace::MyTrait;
+    use crate::trace::IntoOwned;
     use super::Encoded;
 
     pub struct Wrapped<'a, B: Ord> {
@@ -205,7 +203,7 @@ mod wrapper {
             self.partial_cmp(other).unwrap()
         }
     }
-    impl<'a, B: Ord+Clone> MyTrait<'a> for Wrapped<'a, B> {
+    impl<'a, B: Ord+Clone> IntoOwned<'a> for Wrapped<'a, B> {
         type Owned = Vec<B>;
         fn into_owned(self) -> Self::Owned {
             match self.decode() {
@@ -220,14 +218,8 @@ mod wrapper {
                 Err(bytes) => other.extend_from_slice(bytes),
             }
         }
-        fn compare(&self, other: &Self::Owned) -> std::cmp::Ordering {
-            match self.decode() {
-                Ok(decode) => decode.partial_cmp(other.iter()).unwrap(),
-                Err(bytes) => bytes.cmp(&other[..]),
-            }
-        }
-        fn borrow_as(other: &'a Self::Owned) -> Self {
-            Self { inner: Err(&other[..]) }
+        fn borrow_as(owned: &'a Self::Owned) -> Self {
+            Self { inner: Err(&owned[..]) }
         }
     }
 }

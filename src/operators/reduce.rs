@@ -478,10 +478,10 @@ where
                         while batch_cursor.key_valid(batch_storage) || exposed_position < exposed.len() {
 
                             use std::borrow::Borrow;
-                            use crate::trace::cursor::MyTrait;
+                            use crate::trace::cursor::IntoOwned;
 
                             // Determine the next key we will work on; could be synthetic, could be from a batch.
-                            let key1 = exposed.get(exposed_position).map(|x| <_ as MyTrait>::borrow_as(&x.0));
+                            let key1 = exposed.get(exposed_position).map(|x| <_ as IntoOwned>::borrow_as(&x.0));
                             let key2 = batch_cursor.get_key(batch_storage);
                             let key = match (key1, key2) {
                                 (Some(key1), Some(key2)) => ::std::cmp::min(key1, key2),
@@ -497,7 +497,7 @@ where
                             interesting_times.clear();
 
                             // Populate `interesting_times` with synthetic interesting times (below `upper_limit`) for this key.
-                            while exposed.get(exposed_position).map(|x| x.0.borrow()).map(|k| key.equals(k)).unwrap_or(false) {
+                            while exposed.get(exposed_position).map(|x| x.0.borrow()).map(|k| key.eq(&<T1::Key<'_> as IntoOwned>::borrow_as(&k))).unwrap_or(false) {
                                 interesting_times.push(exposed[exposed_position].1.clone());
                                 exposed_position += 1;
                             }

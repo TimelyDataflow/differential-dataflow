@@ -208,9 +208,9 @@ where
                             // Use TOTAL ORDER to allow the release of `time`.
                             yielded = yielded || yield_function(timer, work);
                             if !yielded && !input2.frontier.frontier().iter().any(|t| comparison(t, initial)) {
-                                use differential_dataflow::trace::cursor::MyTrait;
-                                cursor.seek_key(&storage, MyTrait::borrow_as(key));
-                                if cursor.get_key(&storage) == Some(MyTrait::borrow_as(key)) {
+                                use differential_dataflow::trace::cursor::IntoOwned;
+                                cursor.seek_key(&storage, IntoOwned::borrow_as(key));
+                                if cursor.get_key(&storage) == Some(IntoOwned::borrow_as(key)) {
                                     while let Some(val2) = cursor.get_val(&storage) {
                                         cursor.map_times(&storage, |t, d| {
                                             if comparison(t, initial) {
