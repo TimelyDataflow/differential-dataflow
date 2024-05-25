@@ -52,9 +52,9 @@ pub type ExertionLogic = std::sync::Arc<dyn for<'a> Fn(&'a [(usize, usize, usize
 pub trait TraceReader {
 
     /// Key by which updates are indexed.
-    type Key<'a>: Copy + Clone + Ord + IntoOwned<'a>;
+    type Key<'a>: Copy + Clone + Ord;
     /// Values associated with keys.
-    type Val<'a>: Copy + Clone + IntoOwned<'a>;
+    type Val<'a>: Copy + Clone;
     /// Timestamps associated with updates
     type Time: Timestamp + Lattice + Ord + Clone;
     /// Associated update.
@@ -256,9 +256,9 @@ where
     Self: ::std::marker::Sized,
 {
     /// Key by which updates are indexed.
-    type Key<'a>: Copy + Clone + Ord + IntoOwned<'a>;
+    type Key<'a>: Copy + Clone + Ord;
     /// Values associated with keys.
-    type Val<'a>: Copy + Clone + IntoOwned<'a>;
+    type Val<'a>: Copy + Clone;
     /// Timestamps associated with updates
     type Time: Timestamp + Lattice + Ord + Clone;
     /// Associated update.

@@ -43,9 +43,9 @@ impl<'a, T: ToOwned+?Sized> IntoOwned<'a> for &'a T {
 pub trait Cursor {
 
     /// Key by which updates are indexed.
-    type Key<'a>: Copy + Clone + Ord + IntoOwned<'a>;
+    type Key<'a>: Copy + Clone + Ord;
     /// Values associated with keys.
-    type Val<'a>: Copy + Clone + Ord + IntoOwned<'a> + for<'b> PartialOrd<Self::Val<'b>>;
+    type Val<'a>: Copy + Clone + Ord + for<'b> PartialOrd<Self::Val<'b>>;
     /// Timestamps associated with updates
     type Time: Timestamp + Lattice + Ord + Clone;
     /// Associated update.
