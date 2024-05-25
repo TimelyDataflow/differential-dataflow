@@ -76,7 +76,6 @@ where
     F: Fn(&Tr::Time)->Option<Tr::Time>+'static,
 {
     type Key<'a> = Tr::Key<'a>;
-    type KeyOwned = Tr::KeyOwned;
     type Val<'a> = Tr::Val<'a>;
     type Time = Tr::Time;
     type Diff = Tr::Diff;
@@ -139,7 +138,6 @@ where
     F: Fn(&B::Time)->Option<B::Time>,
 {
     type Key<'a> = B::Key<'a>;
-    type KeyOwned = B::KeyOwned;
     type Val<'a> = B::Val<'a>;
     type Time = B::Time;
     type Diff = B::Diff;
@@ -182,7 +180,6 @@ where
     F: Fn(&C::Time)->Option<C::Time>,
 {
     type Key<'a> = C::Key<'a>;
-    type KeyOwned = C::KeyOwned;
     type Val<'a> = C::Val<'a>;
     type Time = C::Time;
     type Diff = C::Diff;
@@ -233,7 +230,6 @@ where
     F: Fn(&C::Time)->Option<C::Time>,
 {
     type Key<'a> = C::Key<'a>;
-    type KeyOwned = C::KeyOwned;
     type Val<'a> = C::Val<'a>;
     type Time = C::Time;
     type Diff = C::Diff;

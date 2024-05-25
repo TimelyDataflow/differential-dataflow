@@ -31,7 +31,6 @@ where
     F: FnMut(Tr::Key<'_>, Tr::Val<'_>)->bool+Clone+'static,
 {
     type Key<'a> = Tr::Key<'a>;
-    type KeyOwned = Tr::KeyOwned;
     type Val<'a> = Tr::Val<'a>;
     type Time = Tr::Time;
     type Diff = Tr::Diff;
@@ -84,7 +83,6 @@ where
     F: FnMut(B::Key<'_>, B::Val<'_>)->bool+Clone+'static
 {
     type Key<'a> = B::Key<'a>;
-    type KeyOwned = B::KeyOwned;
     type Val<'a> = B::Val<'a>;
     type Time = B::Time;
     type Diff = B::Diff;
@@ -132,7 +130,6 @@ where
     F: FnMut(C::Key<'_>, C::Val<'_>)->bool+'static
 {
     type Key<'a> = C::Key<'a>;
-    type KeyOwned = C::KeyOwned;
     type Val<'a> = C::Val<'a>;
     type Time = C::Time;
     type Diff = C::Diff;
@@ -186,7 +183,6 @@ where
     F: FnMut(C::Key<'_>, C::Val<'_>)->bool+'static,
 {
     type Key<'a> = C::Key<'a>;
-    type KeyOwned = C::KeyOwned;
     type Val<'a> = C::Val<'a>;
     type Time = C::Time;
     type Diff = C::Diff;

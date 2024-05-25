@@ -32,7 +32,6 @@ where
     TInner: Refines<Tr::Time>+Lattice,
 {
     type Key<'a> = Tr::Key<'a>;
-    type KeyOwned = Tr::KeyOwned;
     type Val<'a> = Tr::Val<'a>;
     type Time = TInner;
     type Diff = Tr::Diff;
@@ -115,7 +114,6 @@ where
     TInner: Refines<B::Time>+Lattice,
 {
     type Key<'a> = B::Key<'a>;
-    type KeyOwned = B::KeyOwned;
     type Val<'a> = B::Val<'a>;
     type Time = TInner;
     type Diff = B::Diff;
@@ -168,7 +166,6 @@ where
     TInner: Refines<C::Time>+Lattice,
 {
     type Key<'a> = C::Key<'a>;
-    type KeyOwned = C::KeyOwned;
     type Val<'a> = C::Val<'a>;
     type Time = TInner;
     type Diff = C::Diff;
@@ -220,7 +217,6 @@ where
     TInner: Refines<C::Time>+Lattice,
 {
     type Key<'a> = C::Key<'a>;
-    type KeyOwned = C::KeyOwned;
     type Val<'a> = C::Val<'a>;
     type Time = TInner;
     type Diff = C::Diff;
