@@ -59,7 +59,7 @@
 //!         use differential_dataflow::operators::arrange::upsert;
 //!
 //!         let stream = scope.input_from(&mut input);
-//!         let arranged = upsert::arrange_from_upsert::<_, _, _, _, ValSpine<Key, Val, _, _>>(&stream, &"test", |v| v.clone());
+//!         let arranged = upsert::arrange_from_upsert::<_, _, _, ValSpine<Key, Val, _, _>>(&stream, &"test");
 //!
 //!         arranged
 //!             .as_collection(|k,v| (k.clone(), v.clone()))
@@ -126,10 +126,9 @@ use super::TraceAgent;
 /// This method is only implemented for totally ordered times, as we do not yet
 /// understand what a "sequence" of upserts would mean for partially ordered
 /// timestamps.
-pub fn arrange_from_upsert<G, K, V, F, Tr>(
+pub fn arrange_from_upsert<G, K, V, Tr>(
     stream: &Stream<G, (K, Option<V>, G::Timestamp)>,
     name: &str,
-    from: F,
 ) -> Arranged<G, TraceAgent<Tr>>
 where
     G: Scope<Timestamp=Tr::Time>,
@@ -137,7 +136,7 @@ where
     for<'a> Tr::Key<'a> : IntoOwned<'a, Owned = K>,
     K: ExchangeData+Hashable+std::hash::Hash,
     V: ExchangeData,
-    F: Fn(Tr::Val<'_>) -> V + 'static,
+    for<'a> Tr::Val<'a> : IntoOwned<'a, Owned = V>,
     Tr::Time: TotalOrder+ExchangeData,
     Tr::Batch: Batch,
     Tr::Builder: Builder<Input = Vec<((K, V), Tr::Time, Tr::Diff)>>,
@@ -261,7 +260,7 @@ where
                                             assert!(count == 0 || count == 1);
                                             if count == 1 {
                                                 assert!(prev_value.is_none());
-                                                prev_value = Some(from(val));
+                                                prev_value = Some(val.into_owned());
                                             }
                                             trace_cursor.step_val(&trace_storage);
                                         }

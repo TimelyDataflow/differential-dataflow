@@ -79,17 +79,17 @@ fn main() {
 
                 // Prior technology
                 //   dQ/dE1 := dE1(a,b), E2(b,c), E3(a,c)
-                let changes1 = propose(&changes, forward_key_neu.clone(), key2.clone(), Clone::clone);
+                let changes1 = propose(&changes, forward_key_neu.clone(), key2.clone());
                 let changes1 = validate(&changes1, forward_self_neu.clone(), key1.clone());
                 let changes1 = changes1.map(|((a,b),c)| (a,b,c));
 
                 //   dQ/dE2 := dE2(b,c), E1(a,b), E3(a,c)
-                let changes2 = propose(&changes, reverse_key_alt.clone(), key1.clone(), Clone::clone);
+                let changes2 = propose(&changes, reverse_key_alt.clone(), key1.clone());
                 let changes2 = validate(&changes2, reverse_self_neu.clone(), key2.clone());
                 let changes2 = changes2.map(|((b,c),a)| (a,b,c));
 
                 //   dQ/dE3 := dE3(a,c), E1(a,b), E2(b,c)
-                let changes3 = propose(&changes, forward_key_alt.clone(), key1.clone(), Clone::clone);
+                let changes3 = propose(&changes, forward_key_alt.clone(), key1.clone());
                 let changes3 = validate(&changes3, reverse_self_alt.clone(), key2.clone());
                 let changes3 = changes3.map(|((a,c),b)| (a,b,c));
 
