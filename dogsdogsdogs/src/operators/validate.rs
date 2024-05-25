@@ -6,6 +6,7 @@ use differential_dataflow::{ExchangeData, Collection};
 use differential_dataflow::difference::{Monoid, Multiply};
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::trace::TraceReader;
+use differential_dataflow::trace::cursor::IntoOwned;
 
 /// Proposes extensions to a stream of prefixes.
 ///
@@ -19,8 +20,9 @@ pub fn validate<G, K, V, Tr, F, P>(
 ) -> Collection<G, (P, V), Tr::Diff>
 where
     G: Scope<Timestamp=Tr::Time>,
-    Tr: TraceReader<KeyOwned=(K,V)>+Clone+'static,
-    K: Ord+Hash+Clone+Default,
+    Tr: TraceReader+Clone+'static,
+    for<'a> Tr::Key<'a> : IntoOwned<'a, Owned = (K, V)>,
+    K: Ord+Hash+Clone+Default + 'static,
     V: ExchangeData+Hash+Default,
     Tr::Diff: Monoid+Multiply<Output = Tr::Diff>+ExchangeData,
     F: Fn(&P)->K+Clone+'static,

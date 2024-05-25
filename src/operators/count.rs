@@ -5,6 +5,8 @@ use timely::dataflow::*;
 use timely::dataflow::operators::Operator;
 use timely::dataflow::channels::pact::Pipeline;
 
+use crate::trace::cursor::IntoOwned;
+
 use crate::lattice::Lattice;
 use crate::{ExchangeData, Collection};
 use crate::difference::Semigroup;
@@ -50,15 +52,16 @@ where G::Timestamp: TotalOrder+Lattice+Ord {
     }
 }
 
-impl<G, T1> CountTotal<G, T1::KeyOwned, T1::Diff> for Arranged<G, T1>
+impl<G, K, T1> CountTotal<G, K, T1::Diff> for Arranged<G, T1>
 where
     G: Scope<Timestamp=T1::Time>,
     T1: for<'a> TraceReader<Val<'a>=&'a ()>+Clone+'static,
-    T1::KeyOwned: ExchangeData,
+    for<'a> T1::Key<'a>: IntoOwned<'a, Owned = K>,
+    K: ExchangeData,
     T1::Time: TotalOrder,
     T1::Diff: ExchangeData,
 {
-    fn count_total_core<R2: Semigroup + From<i8>>(&self) -> Collection<G, (T1::KeyOwned, T1::Diff), R2> {
+    fn count_total_core<R2: Semigroup + From<i8>>(&self) -> Collection<G, (K, T1::Diff), R2> {
 
         let mut trace = self.trace.clone();
         let mut buffer = Vec::new();

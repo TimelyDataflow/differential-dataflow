@@ -4,6 +4,7 @@ use differential_dataflow::{ExchangeData, Collection, Hashable};
 use differential_dataflow::difference::{Monoid, Multiply};
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::trace::TraceReader;
+use differential_dataflow::trace::cursor::IntoOwned;
 
 /// Proposes extensions to a prefix stream.
 ///
@@ -13,7 +14,7 @@ use differential_dataflow::trace::TraceReader;
 /// create a join if the `prefixes` collection is also arranged and responds to changes that
 /// `arrangement` undergoes. More complicated patterns are also appropriate, as in the case
 /// of delta queries.
-pub fn propose<G, Tr, F, P, V, VF>(
+pub fn propose<G, Tr, K, F, P, V, VF>(
     prefixes: &Collection<G, P, Tr::Diff>,
     arrangement: Arranged<G, Tr>,
     key_selector: F,
@@ -22,9 +23,10 @@ pub fn propose<G, Tr, F, P, V, VF>(
 where
     G: Scope<Timestamp=Tr::Time>,
     Tr: TraceReader+Clone+'static,
-    Tr::KeyOwned: Hashable + Default,
+    for<'a> Tr::Key<'a> : IntoOwned<'a, Owned = K>,
+    K: Hashable + Default + Ord + 'static,
     Tr::Diff: Monoid+Multiply<Output = Tr::Diff>+ExchangeData,
-    F: Fn(&P)->Tr::KeyOwned+Clone+'static,
+    F: Fn(&P)->K+Clone+'static,
     P: ExchangeData,
     V: Clone + 'static,
     VF: Fn(Tr::Val<'_>) -> V + 'static,
@@ -32,7 +34,7 @@ where
     crate::operators::lookup_map(
         prefixes,
         arrangement,
-        move |p: &P, k: &mut Tr::KeyOwned | { *k = key_selector(p); },
+        move |p: &P, k: &mut K | { *k = key_selector(p); },
         move |prefix, diff, value, sum| ((prefix.clone(), val_from(value)), diff.clone().multiply(sum)),
         Default::default(),
         Default::default(),
@@ -45,7 +47,7 @@ where
 /// Unlike `propose`, this method does not scale the multiplicity of matched
 /// prefixes by the number of matches in `arrangement`. This can be useful to
 /// avoid the need to prepare an arrangement of distinct extensions.
-pub fn propose_distinct<G, Tr, F, P, V, VF>(
+pub fn propose_distinct<G, Tr, K, F, P, V, VF>(
     prefixes: &Collection<G, P, Tr::Diff>,
     arrangement: Arranged<G, Tr>,
     key_selector: F,
@@ -54,9 +56,10 @@ pub fn propose_distinct<G, Tr, F, P, V, VF>(
 where
     G: Scope<Timestamp=Tr::Time>,
     Tr: TraceReader+Clone+'static,
-    Tr::KeyOwned: Hashable + Default,
+    for<'a> Tr::Key<'a> : IntoOwned<'a, Owned = K>,
+    K: Hashable + Default + Ord + 'static,
     Tr::Diff: Monoid+Multiply<Output = Tr::Diff>+ExchangeData,
-    F: Fn(&P)->Tr::KeyOwned+Clone+'static,
+    F: Fn(&P)->K+Clone+'static,
     P: ExchangeData,
     V: Clone + 'static,
     VF: Fn(Tr::Val<'_>) -> V + 'static,
@@ -64,7 +67,7 @@ where
     crate::operators::lookup_map(
         prefixes,
         arrangement,
-        move |p: &P, k: &mut Tr::KeyOwned| { *k = key_selector(p); },
+        move |p: &P, k: &mut K| { *k = key_selector(p); },
         move |prefix, diff, value, _sum| ((prefix.clone(), val_from(value)), diff.clone()),
         Default::default(),
         Default::default(),

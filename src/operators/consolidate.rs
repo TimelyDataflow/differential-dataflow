@@ -8,6 +8,8 @@
 
 use timely::dataflow::Scope;
 
+use crate::trace::cursor::IntoOwned;
+
 use crate::{Collection, ExchangeData, Hashable};
 use crate::consolidation::ConsolidatingContainerBuilder;
 use crate::difference::Semigroup;
@@ -52,7 +54,8 @@ where
     /// As `consolidate` but with the ability to name the operator and specify the trace type.
     pub fn consolidate_named<Tr>(&self, name: &str) -> Self
     where
-        Tr: crate::trace::Trace<KeyOwned = D,Time=G::Timestamp,Diff=R>+'static,
+        Tr: crate::trace::Trace<Time=G::Timestamp,Diff=R>+'static,
+        for<'a> Tr::Key<'a>: IntoOwned<'a, Owned = D>,
         Tr::Batch: crate::trace::Batch,
         Tr::Batcher: Batcher<Input=Vec<((D,()),G::Timestamp,R)>>,
     {

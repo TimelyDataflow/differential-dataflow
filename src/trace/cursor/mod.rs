@@ -99,8 +99,9 @@ pub trait Cursor {
     fn rewind_vals(&mut self, storage: &Self::Storage);
 
     /// Rewinds the cursor and outputs its contents to a Vec
-    fn to_vec<V, F>(&mut self, from: F, storage: &Self::Storage) -> Vec<((Self::KeyOwned, V), Vec<(Self::Time, Self::Diff)>)>
+    fn to_vec<K, V, F>(&mut self, from: F, storage: &Self::Storage) -> Vec<((K, V), Vec<(Self::Time, Self::Diff)>)>
     where 
+        for<'a> Self::Key<'a> : IntoOwned<'a, Owned = K>,
         F: Fn(Self::Val<'_>) -> V,
     {
         let mut out = Vec::new();

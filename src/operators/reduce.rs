@@ -19,6 +19,8 @@ use timely::dataflow::operators::Operator;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Capability;
 
+use crate::trace::cursor::IntoOwned;
+
 use crate::operators::arrange::{Arranged, ArrangeByKey, ArrangeBySelf, TraceAgent};
 use crate::lattice::Lattice;
 use crate::trace::{Batch, BatchReader, Cursor, Trace, Builder, ExertionLogic};
@@ -85,11 +87,12 @@ impl<G, K, V, R> Reduce<G, K, V, R> for Collection<G, (K, V), R>
 impl<G, K: Data, V: Data, T1, R: Semigroup> Reduce<G, K, V, R> for Arranged<G, T1>
 where
     G: Scope<Timestamp=T1::Time>,
-    T1: for<'a> TraceReader<Key<'a>=&'a K, KeyOwned=K, Val<'a>=&'a V, Diff=R>+Clone+'static,
+    T1: for<'a> TraceReader<Key<'a>=&'a K, Val<'a>=&'a V, Diff=R>+Clone+'static,
+    for<'a> T1::Key<'a>: IntoOwned<'a, Owned = K>,
 {
     fn reduce_named<L, V2: Data, R2: Abelian>(&self, name: &str, logic: L) -> Collection<G, (K, V2), R2>
         where L: FnMut(&K, &[(&V, R)], &mut Vec<(V2, R2)>)+'static {
-        self.reduce_abelian::<_,V2,_,ValSpine<_,_,_,_>>(name, |val| val.clone(), logic)
+        self.reduce_abelian::<_,K,V2,_,ValSpine<_,_,_,_>>(name, |val| val.clone(), logic)
             .as_collection(|k,v| (k.clone(), v.clone()))
     }
 }
@@ -162,10 +165,11 @@ where G::Timestamp: Lattice+Ord {
 impl<G, K: Data, T1, R1: Semigroup> Threshold<G, K, R1> for Arranged<G, T1>
 where
     G: Scope<Timestamp=T1::Time>,
-    T1: for<'a> TraceReader<Key<'a>=&'a K, KeyOwned=K, Val<'a>=&'a (), Diff=R1>+Clone+'static,
+    T1: for<'a> TraceReader<Key<'a>=&'a K, Val<'a>=&'a (), Diff=R1>+Clone+'static,
+    for<'a> T1::Key<'a>: IntoOwned<'a, Owned = K>,
 {
     fn threshold_named<R2: Abelian, F: FnMut(&K,&R1)->R2+'static>(&self, name: &str, mut thresh: F) -> Collection<G, K, R2> {
-        self.reduce_abelian::<_,(),_,KeySpine<_,_,_>>(name, |&()| (), move |k,s,t| t.push(((), thresh(k, &s[0].1))))
+        self.reduce_abelian::<_,K,(),_,KeySpine<_,_,_>>(name, |&()| (), move |k,s,t| t.push(((), thresh(k, &s[0].1))))
             .as_collection(|k,_| k.clone())
     }
 }
@@ -212,10 +216,11 @@ where
 impl<G, K: Data, T1, R: Semigroup> Count<G, K, R> for Arranged<G, T1>
 where
     G: Scope<Timestamp=T1::Time>,
-    T1: for<'a> TraceReader<Key<'a>=&'a K, KeyOwned=K, Val<'a>=&'a (), Diff=R>+Clone+'static,
+    T1: for<'a> TraceReader<Key<'a>=&'a K, Val<'a>=&'a (), Diff=R>+Clone+'static,
+    for<'a> T1::Key<'a>: IntoOwned<'a, Owned = K>,
 {
     fn count_core<R2: Abelian + From<i8>>(&self) -> Collection<G, (K, R), R2> {
-        self.reduce_abelian::<_,R,_,ValSpine<_,_,_,_>>("Count", |r| r.clone(), |_k,s,t| t.push((s[0].1.clone(), R2::from(1i8))))
+        self.reduce_abelian::<_,K,R,_,ValSpine<_,_,_,_>>("Count", |r| r.clone(), |_k,s,t| t.push((s[0].1.clone(), R2::from(1i8))))
             .as_collection(|k,c| (k.clone(), c.clone()))
     }
 }
@@ -306,15 +311,17 @@ where
 /// A key-wise reduction of values in an input trace.
 ///
 /// This method exists to provide reduce functionality without opinions about qualifying trace types.
-pub fn reduce_trace<G, T1, T2, V, F, L>(trace: &Arranged<G, T1>, name: &str, from: F, mut logic: L) -> Arranged<G, TraceAgent<T2>>
+pub fn reduce_trace<G, T1, T2, K, V, F, L>(trace: &Arranged<G, T1>, name: &str, from: F, mut logic: L) -> Arranged<G, TraceAgent<T2>>
 where
     G: Scope<Timestamp=T1::Time>,
     T1: TraceReader + Clone + 'static,
+    for<'a> T1::Key<'a> : IntoOwned<'a, Owned = K>,
     T2: for<'a> Trace<Key<'a>=T1::Key<'a>, Time=T1::Time> + 'static,
+    K: Ord + 'static,
     V: Data,
     F: Fn(T2::Val<'_>) -> V + 'static,
     T2::Batch: Batch,
-    <T2::Builder as Builder>::Input: Container + PushInto<((T1::KeyOwned, V), T2::Time, T2::Diff)>,
+    <T2::Builder as Builder>::Input: Container + PushInto<((K, V), T2::Time, T2::Diff)>,
     L: FnMut(T1::Key<'_>, &[(T1::Val<'_>, T1::Diff)], &mut Vec<(V,T2::Diff)>, &mut Vec<(V, T2::Diff)>)+'static,
 {
     let mut result_trace = None;
@@ -352,7 +359,7 @@ where
 
             // Our implementation maintains a list of outstanding `(key, time)` synthetic interesting times,
             // as well as capabilities for these times (or their lower envelope, at least).
-            let mut interesting = Vec::<(T1::KeyOwned, G::Timestamp)>::new();
+            let mut interesting = Vec::<(K, G::Timestamp)>::new();
             let mut capabilities = Vec::<Capability<G::Timestamp>>::new();
 
             // buffers and logic for computing per-key interesting times "efficiently".

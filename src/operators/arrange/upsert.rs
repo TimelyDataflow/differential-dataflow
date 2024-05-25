@@ -59,7 +59,7 @@
 //!         use differential_dataflow::operators::arrange::upsert;
 //!
 //!         let stream = scope.input_from(&mut input);
-//!         let arranged = upsert::arrange_from_upsert::<_, _, _, ValSpine<Key, Val, _, _>>(&stream, &"test", |v| v.clone());
+//!         let arranged = upsert::arrange_from_upsert::<_, _, _, _, ValSpine<Key, Val, _, _>>(&stream, &"test", |v| v.clone());
 //!
 //!         arranged
 //!             .as_collection(|k,v| (k.clone(), v.clone()))
@@ -111,6 +111,7 @@ use timely::dataflow::operators::Capability;
 use crate::operators::arrange::arrangement::Arranged;
 use crate::trace::Builder;
 use crate::trace::{self, Trace, TraceReader, Batch, Cursor};
+use crate::trace::cursor::IntoOwned;
 use crate::{ExchangeData, Hashable};
 
 use super::TraceAgent;
@@ -125,20 +126,21 @@ use super::TraceAgent;
 /// This method is only implemented for totally ordered times, as we do not yet
 /// understand what a "sequence" of upserts would mean for partially ordered
 /// timestamps.
-pub fn arrange_from_upsert<G, V, F, Tr>(
-    stream: &Stream<G, (Tr::KeyOwned, Option<V>, G::Timestamp)>,
+pub fn arrange_from_upsert<G, K, V, F, Tr>(
+    stream: &Stream<G, (K, Option<V>, G::Timestamp)>,
     name: &str,
     from: F,
 ) -> Arranged<G, TraceAgent<Tr>>
 where
     G: Scope<Timestamp=Tr::Time>,
     Tr: Trace+TraceReader<Diff=isize>+'static,
-    Tr::KeyOwned: ExchangeData+Hashable+std::hash::Hash,
+    for<'a> Tr::Key<'a> : IntoOwned<'a, Owned = K>,
+    K: ExchangeData+Hashable+std::hash::Hash,
     V: ExchangeData,
     F: Fn(Tr::Val<'_>) -> V + 'static,
     Tr::Time: TotalOrder+ExchangeData,
     Tr::Batch: Batch,
-    Tr::Builder: Builder<Input = Vec<((Tr::KeyOwned, V), Tr::Time, Tr::Diff)>>,
+    Tr::Builder: Builder<Input = Vec<((K, V), Tr::Time, Tr::Diff)>>,
 {
     let mut reader: Option<TraceAgent<Tr>> = None;
 
@@ -147,7 +149,7 @@ where
 
         let reader = &mut reader;
 
-        let exchange = Exchange::new(move |update: &(Tr::KeyOwned,Option<V>,G::Timestamp)| (update.0).hashed().into());
+        let exchange = Exchange::new(move |update: &(K,Option<V>,G::Timestamp)| (update.0).hashed().into());
 
         stream.unary_frontier(exchange, name, move |_capability, info| {
 
@@ -177,7 +179,7 @@ where
             let mut prev_frontier = Antichain::from_elem(<G::Timestamp as Timestamp>::minimum());
 
             // For stashing input upserts, ordered increasing by time (`BinaryHeap` is a max-heap).
-            let mut priority_queue = BinaryHeap::<std::cmp::Reverse<(G::Timestamp, Tr::KeyOwned, Option<V>)>>::new();
+            let mut priority_queue = BinaryHeap::<std::cmp::Reverse<(G::Timestamp, K, Option<V>)>>::new();
             let mut updates = Vec::new();
 
             move |input, output| {
