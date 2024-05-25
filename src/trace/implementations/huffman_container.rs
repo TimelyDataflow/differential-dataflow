@@ -49,11 +49,9 @@ impl<B: Ord + Clone + 'static> PushInto<Vec<B>> for HuffmanContainer<B> {
     }
 }
 
-impl<B: Ord + Clone + 'static> BatchContainer for HuffmanContainer<B> {
-    type OwnedItem = Vec<B>;
-    type ReadItem<'a> = Wrapped<'a, B>;
 
-    fn copy(&mut self, item: Self::ReadItem<'_>) {
+impl<'a, B: Ord + Clone + 'static> PushInto<Wrapped<'a, B>> for HuffmanContainer<B> {
+    fn push_into(&mut self, item: Wrapped<'a, B>) {
         match item.decode() {
             Ok(decoded) => {
                 for x in decoded { *self.stats.entry(x.clone()).or_insert(0) += 1; }
@@ -82,11 +80,13 @@ impl<B: Ord + Clone + 'static> BatchContainer for HuffmanContainer<B> {
             }
         }
     }
-    fn copy_range(&mut self, other: &Self, start: usize, end: usize) {
-        for index in start .. end {
-            self.copy(other.index(index));
-        }
-    }
+}
+
+
+impl<B: Ord + Clone + 'static> BatchContainer for HuffmanContainer<B> {
+    type OwnedItem = Vec<B>;
+    type ReadItem<'a> = Wrapped<'a, B>;
+
     fn with_capacity(size: usize) -> Self {
         let mut offsets = OffsetList::with_capacity(size + 1);
         offsets.push(0);

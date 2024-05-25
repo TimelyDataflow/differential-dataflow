@@ -283,14 +283,14 @@ mod val_batch {
                 self.stash_updates_for_val(source, lower);
                 if let Some(off) = self.consolidate_updates() {
                     self.result.vals_offs.push(off);
-                    self.result.vals.copy(source.vals.index(lower));
+                    self.result.vals.push(source.vals.index(lower));
                 }
                 lower += 1;
             }            
 
             // If we have pushed any values, copy the key as well.
             if self.result.vals.len() > init_vals {
-                self.result.keys.copy(source.keys.index(cursor));
+                self.result.keys.push(source.keys.index(cursor));
                 self.result.keys_offs.push(self.result.vals.len());
             }           
         }
@@ -310,7 +310,7 @@ mod val_batch {
                     let (lower1, upper1) = source1.values_for_key(self.key_cursor1);
                     let (lower2, upper2) = source2.values_for_key(self.key_cursor2);
                     if let Some(off) = self.merge_vals((source1, lower1, upper1), (source2, lower2, upper2)) {
-                        self.result.keys.copy(source1.keys.index(self.key_cursor1));
+                        self.result.keys.push(source1.keys.index(self.key_cursor1));
                         self.result.keys_offs.push(off);
                     }
                     // Increment cursors in either case; the keys are merged.
@@ -345,7 +345,7 @@ mod val_batch {
                         self.stash_updates_for_val(source1, lower1);
                         if let Some(off) = self.consolidate_updates() {
                             self.result.vals_offs.push(off);
-                            self.result.vals.copy(source1.vals.index(lower1));
+                            self.result.vals.push(source1.vals.index(lower1));
                         }
                         lower1 += 1;
                     },
@@ -354,7 +354,7 @@ mod val_batch {
                         self.stash_updates_for_val(source2, lower2);
                         if let Some(off) = self.consolidate_updates() {
                             self.result.vals_offs.push(off);
-                            self.result.vals.copy(source1.vals.index(lower1));
+                            self.result.vals.push(source1.vals.index(lower1));
                         }
                         lower1 += 1;
                         lower2 += 1;
@@ -364,7 +364,7 @@ mod val_batch {
                         self.stash_updates_for_val(source2, lower2);
                         if let Some(off) = self.consolidate_updates() {
                             self.result.vals_offs.push(off);
-                            self.result.vals.copy(source2.vals.index(lower2));
+                            self.result.vals.push(source2.vals.index(lower2));
                         }
                         lower2 += 1;
                     },
@@ -375,7 +375,7 @@ mod val_batch {
                 self.stash_updates_for_val(source1, lower1);
                 if let Some(off) = self.consolidate_updates() {
                     self.result.vals_offs.push(off);
-                    self.result.vals.copy(source1.vals.index(lower1));
+                    self.result.vals.push(source1.vals.index(lower1));
                 }
                 lower1 += 1;
             }
@@ -383,7 +383,7 @@ mod val_batch {
                 self.stash_updates_for_val(source2, lower2);
                 if let Some(off) = self.consolidate_updates() {
                     self.result.vals_offs.push(off);
-                    self.result.vals.copy(source2.vals.index(lower2));
+                    self.result.vals.push(source2.vals.index(lower2));
                 }
                 lower2 += 1;
             }
@@ -813,7 +813,7 @@ mod key_batch {
             self.stash_updates_for_key(source, cursor);
             if let Some(off) = self.consolidate_updates() {
                 self.result.keys_offs.push(off);
-                self.result.keys.copy(source.keys.index(cursor));
+                self.result.keys.push(source.keys.index(cursor));
             }
         }
         /// Merge the next key in each of `source1` and `source2` into `self`, updating the appropriate cursors.
@@ -833,7 +833,7 @@ mod key_batch {
                     self.stash_updates_for_key(source2, self.key_cursor2);
                     if let Some(off) = self.consolidate_updates() {
                         self.result.keys_offs.push(off);
-                        self.result.keys.copy(source1.keys.index(self.key_cursor1));
+                        self.result.keys.push(source1.keys.index(self.key_cursor1));
                     }
                     // Increment cursors in either case; the keys are merged.
                     self.key_cursor1 += 1;

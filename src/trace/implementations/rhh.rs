@@ -188,7 +188,7 @@ mod val_batch {
             while self.keys.len() < desired {
                 // We insert a default (dummy) key and repeat the offset to indicate this.
                 let current_offset = self.keys_offs.index(self.keys.len()).into_owned();
-                self.keys.push(Default::default());
+                self.keys.push(<<L::Target as Update>::Key>::default());
                 self.keys_offs.push(current_offset);
             }
 
@@ -439,7 +439,7 @@ mod val_batch {
                 self.stash_updates_for_val(source, lower);
                 if let Some(off) = self.consolidate_updates() {
                     self.result.vals_offs.push(off);
-                    self.result.vals.copy(source.vals.index(lower));
+                    self.result.vals.push(source.vals.index(lower));
                 }
                 lower += 1;
             }            
@@ -500,7 +500,7 @@ mod val_batch {
                         self.stash_updates_for_val(source1, lower1);
                         if let Some(off) = self.consolidate_updates() {
                             self.result.vals_offs.push(off);
-                            self.result.vals.copy(source1.vals.index(lower1));
+                            self.result.vals.push(source1.vals.index(lower1));
                         }
                         lower1 += 1;
                     },
@@ -509,7 +509,7 @@ mod val_batch {
                         self.stash_updates_for_val(source2, lower2);
                         if let Some(off) = self.consolidate_updates() {
                             self.result.vals_offs.push(off);
-                            self.result.vals.copy(source1.vals.index(lower1));
+                            self.result.vals.push(source1.vals.index(lower1));
                         }
                         lower1 += 1;
                         lower2 += 1;
@@ -519,7 +519,7 @@ mod val_batch {
                         self.stash_updates_for_val(source2, lower2);
                         if let Some(off) = self.consolidate_updates() {
                             self.result.vals_offs.push(off);
-                            self.result.vals.copy(source2.vals.index(lower2));
+                            self.result.vals.push(source2.vals.index(lower2));
                         }
                         lower2 += 1;
                     },
@@ -530,7 +530,7 @@ mod val_batch {
                 self.stash_updates_for_val(source1, lower1);
                 if let Some(off) = self.consolidate_updates() {
                     self.result.vals_offs.push(off);
-                    self.result.vals.copy(source1.vals.index(lower1));
+                    self.result.vals.push(source1.vals.index(lower1));
                 }
                 lower1 += 1;
             }
@@ -538,7 +538,7 @@ mod val_batch {
                 self.stash_updates_for_val(source2, lower2);
                 if let Some(off) = self.consolidate_updates() {
                     self.result.vals_offs.push(off);
-                    self.result.vals.copy(source2.vals.index(lower2));
+                    self.result.vals.push(source2.vals.index(lower2));
                 }
                 lower2 += 1;
             }

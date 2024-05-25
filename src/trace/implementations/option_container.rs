@@ -15,42 +15,35 @@ pub struct OptionContainer<C> {
 }
 
 use timely::container::PushInto;
-impl<C: BatchContainer> PushInto<C::OwnedItem> for OptionContainer<C>
-where 
-    C: BatchContainer + PushInto<C::OwnedItem>,
+
+impl<'a, C> PushInto<OptionWrapper<'a, C>> for OptionContainer<C>
+where
+    C: BatchContainer,
     C::OwnedItem: Default + Ord,
 {
-    fn push_into(&mut self, item: C::OwnedItem) {
-        if item == Default::default() && self.container.is_empty() {
+    fn push_into(&mut self, item: OptionWrapper<'a, C>) {
+        if item.eq(&IntoOwned::borrow_as(&Default::default())) && self.container.is_empty() {
             self.defaults += 1;
         }
         else {
-            self.container.push(item)
+            if let Some(item) = item.inner {
+                self.container.push(item);
+            }
+            else {
+                self.container.push(IntoOwned::borrow_as(&Default::default()));
+            }
         }
     }
 }
 
 impl<C> BatchContainer for OptionContainer<C>
 where
-    C: BatchContainer ,
+    C: BatchContainer,
     C::OwnedItem: Default + Ord,
 {
     type OwnedItem = C::OwnedItem;
     type ReadItem<'a> = OptionWrapper<'a, C>;
 
-    fn copy<'a>(&mut self, item: Self::ReadItem<'a>) {
-        if item.eq(&IntoOwned::borrow_as(&Default::default())) && self.container.is_empty() {
-            self.defaults += 1;
-        }
-        else {
-            if let Some(item) = item.inner {
-                self.container.copy(item);
-            }
-            else {
-                self.container.copy(IntoOwned::borrow_as(&Default::default()));
-            }
-        }
-    }
     fn with_capacity(size: usize) -> Self {
         Self {
             defaults: 0,
