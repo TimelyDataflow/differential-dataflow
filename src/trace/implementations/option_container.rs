@@ -14,13 +14,13 @@ pub struct OptionContainer<C> {
     container: C,
 }
 
-use crate::trace::implementations::containers::Push;
-impl<C: BatchContainer> Push<C::OwnedItem> for OptionContainer<C> 
+use timely::container::PushInto;
+impl<C: BatchContainer> PushInto<C::OwnedItem> for OptionContainer<C>
 where 
-    C: BatchContainer + Push<C::OwnedItem>,
+    C: BatchContainer + PushInto<C::OwnedItem>,
     C::OwnedItem: Default + Ord,
 {
-    fn push(&mut self, item: C::OwnedItem) {
+    fn push_into(&mut self, item: C::OwnedItem) {
         if item == Default::default() && self.container.is_empty() {
             self.defaults += 1;
         }
@@ -88,7 +88,8 @@ impl<'a, C: BatchContainer> Clone for OptionWrapper<'a, C> {
 
 
 use std::cmp::Ordering;
-impl<'a, 'b, C: BatchContainer> PartialEq<OptionWrapper<'a, C>> for OptionWrapper<'b, C> 
+
+impl<'a, 'b, C: BatchContainer> PartialEq<OptionWrapper<'a, C>> for OptionWrapper<'b, C>
 where 
     C::OwnedItem: Default + Ord,
 {

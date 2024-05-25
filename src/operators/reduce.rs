@@ -314,8 +314,7 @@ where
     V: Data,
     F: Fn(T2::Val<'_>) -> V + 'static,
     T2::Batch: Batch,
-    <T2::Builder as Builder>::Input: Container,
-    ((T1::KeyOwned, V), T2::Time, T2::Diff): PushInto<<T2::Builder as Builder>::Input>,
+    <T2::Builder as Builder>::Input: Container + PushInto<((T1::KeyOwned, V), T2::Time, T2::Diff)>,
     L: FnMut(T1::Key<'_>, &[(T1::Val<'_>, T1::Diff)], &mut Vec<(V,T2::Diff)>, &mut Vec<(V, T2::Diff)>)+'static,
 {
     let mut result_trace = None;
@@ -457,7 +456,7 @@ where
                             builders.push(T2::Builder::new());
                         }
 
-                        let mut buffer = Default::default();
+                        let mut buffer = <<T2 as Trace>::Batcher as crate::trace::Batcher>::Output::default();
 
                         // cursors for navigating input and output traces.
                         let (mut source_cursor, source_storage): (T1::Cursor, _) = source_trace.cursor_through(lower_limit.borrow()).expect("failed to acquire source cursor");
@@ -536,7 +535,7 @@ where
                             for index in 0 .. buffers.len() {
                                 buffers[index].1.sort_by(|x,y| x.0.cmp(&y.0));
                                 for (val, time, diff) in buffers[index].1.drain(..) {
-                                    ((key.into_owned(), val), time, diff).push_into(&mut buffer);
+                                    buffer.push_into(((key.into_owned(), val), time, diff));
                                     builders[index].push(&mut buffer);
                                     buffer.clear();
                                 }

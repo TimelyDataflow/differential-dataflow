@@ -26,6 +26,38 @@ pub struct PointStamp<T> {
     vector: Vec<T>,
 }
 
+impl<T: Timestamp> PartialEq<[T]> for PointStamp<T> {
+    fn eq(&self, other: &[T]) -> bool {
+        self.vector.iter()
+            .zip(other.iter().chain(std::iter::repeat(&T::minimum())))
+            .all(|(t1, t2)| t1.eq(t2))
+    }
+}
+
+impl<T: Timestamp> PartialEq<PointStamp<T>> for [T] {
+    fn eq(&self, other: &PointStamp<T>) -> bool {
+        self.iter()
+            .zip(other.vector.iter().chain(std::iter::repeat(&T::minimum())))
+            .all(|(t1, t2)| t1.eq(t2))
+    }
+}
+
+impl<T: Timestamp> PartialOrder<[T]> for PointStamp<T> {
+    fn less_equal(&self, other: &[T]) -> bool {
+        self.vector.iter()
+            .zip(other.iter().chain(std::iter::repeat(&T::minimum())))
+            .all(|(t1, t2)| t1.less_equal(t2))
+    }
+}
+
+impl<T: Timestamp> PartialOrder<PointStamp<T>> for [T] {
+    fn less_equal(&self, other: &PointStamp<T>) -> bool {
+        self.iter()
+            .zip(other.vector.iter().chain(std::iter::repeat(&T::minimum())))
+            .all(|(t1, t2)| t1.less_equal(t2))
+    }
+}
+
 impl<T: Timestamp> PointStamp<T> {
     /// Create a new sequence.
     ///

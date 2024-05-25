@@ -294,8 +294,7 @@ where
         F: Fn(T2::Val<'_>) -> V + 'static,
         T2::Diff: Abelian,
         T2::Batch: Batch,
-        <T2::Builder as Builder>::Input: Container,
-        ((T1::KeyOwned, V), T2::Time, T2::Diff): PushInto<<T2::Builder as Builder>::Input>,
+        <T2::Builder as Builder>::Input: Container + PushInto<((T1::KeyOwned, V), T2::Time, T2::Diff)>,
         L: FnMut(T1::Key<'_>, &[(T1::Val<'_>, T1::Diff)], &mut Vec<(V, T2::Diff)>)+'static,
     {
         self.reduce_core::<_,V,F,T2>(name, from, move |key, input, output, change| {
@@ -314,8 +313,7 @@ where
         V: Data,
         F: Fn(T2::Val<'_>) -> V + 'static,
         T2::Batch: Batch,
-        <T2::Builder as Builder>::Input: Container,
-        ((T1::KeyOwned, V), T2::Time, T2::Diff): PushInto<<T2::Builder as Builder>::Input>,
+        <T2::Builder as Builder>::Input: Container + PushInto<((T1::KeyOwned, V), T2::Time, T2::Diff)>,
         L: FnMut(T1::Key<'_>, &[(T1::Val<'_>, T1::Diff)], &mut Vec<(V, T2::Diff)>, &mut Vec<(V, T2::Diff)>)+'static,
     {
         use crate::operators::reduce::reduce_trace;

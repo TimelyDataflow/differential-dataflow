@@ -72,8 +72,6 @@ mod val_batch {
     use timely::container::PushInto;
     use timely::progress::{Antichain, frontier::AntichainRef};
 
-    use crate::trace::implementations::containers::Push;
-
     use crate::trace::{Batch, BatchReader, Builder, Cursor, Description, Merger};
     use crate::trace::implementations::{BatchContainer, BuilderInput};
     use crate::trace::cursor::IntoOwned;
@@ -546,8 +544,8 @@ mod val_batch {
     where
         L: Layout,
         CI: for<'a> BuilderInput<L, Time=<L::Target as Update>::Time, Diff=<L::Target as Update>::Diff>,
-        for<'a> CI::Key<'a>: PushInto<L::KeyContainer>,
-        for<'a> CI::Val<'a>: PushInto<L::ValContainer>,
+        for<'a> L::KeyContainer: PushInto<CI::Key<'a>>,
+        for<'a> L::ValContainer: PushInto<CI::Val<'a>>,
     {
 
         type Input = CI;
@@ -584,7 +582,7 @@ mod val_batch {
                         self.result.vals_offs.push(self.result.updates.len());
                         if self.singleton.take().is_some() { self.singletons += 1; }
                         self.push_update(time, diff);
-                        val.push_into(&mut self.result.vals);
+                        self.result.vals.push(val);
                     }
                 } else {
                     // New key; complete representation of prior key.
@@ -592,8 +590,8 @@ mod val_batch {
                     if self.singleton.take().is_some() { self.singletons += 1; }
                     self.result.keys_offs.push(self.result.vals.len());
                     self.push_update(time, diff);
-                    val.push_into(&mut self.result.vals);
-                    key.push_into(&mut self.result.keys);
+                    self.result.vals.push(val);
+                    self.result.keys.push(key);
                 }
             }
         }
@@ -622,7 +620,6 @@ mod key_batch {
     use timely::container::PushInto;
     use timely::progress::{Antichain, frontier::AntichainRef};
 
-    use crate::trace::implementations::containers::Push;
     use crate::trace::{Batch, BatchReader, Builder, Cursor, Description, Merger};
     use crate::trace::implementations::{BatchContainer, BuilderInput};
     use crate::trace::cursor::IntoOwned;
@@ -992,7 +989,7 @@ mod key_batch {
     where
         L: Layout,
         CI: for<'a> BuilderInput<L, Time=<L::Target as Update>::Time, Diff=<L::Target as Update>::Diff>,
-        for<'a> CI::Key<'a>: PushInto<L::KeyContainer>,
+        for<'a> L::KeyContainer: PushInto<CI::Key<'a>>,
     {
 
         type Input = CI;
@@ -1026,7 +1023,7 @@ mod key_batch {
                     // Remove any pending singleton, and if it was set increment our count.
                     if self.singleton.take().is_some() { self.singletons += 1; }
                     self.push_update(time, diff);
-                    key.push_into(&mut self.result.keys);
+                    self.result.keys.push(key);
                 }
             }
         }
