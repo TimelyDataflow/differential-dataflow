@@ -571,7 +571,7 @@ mod val_batch {
             if !self.update_stash.is_empty() {
                 // If there is a single element, equal to a just-prior recorded update,
                 // we push nothing and report an unincremented offset to encode this case.
-                if self.update_stash.len() == 1 && self.result.updates.last().map(|l| l.eq(IntoOwned::borrow_as(self.update_stash.last().unwrap()))).unwrap_or(false) {
+                if self.update_stash.len() == 1 && self.result.updates.last().map(|l| l.eq(self.update_stash.last().unwrap())).unwrap_or(false) {
                     // Just clear out update_stash, as we won't drain it here.
                     self.update_stash.clear();
                     self.singletons += 1;
