@@ -150,6 +150,7 @@ mod val_batch {
     impl<L: Layout> RhhValStorage<L> 
     where 
         <L::Target as Update>::Key: Default + HashOrdered,
+        for<'a> <L::KeyContainer as BatchContainer>::ReadItem<'a>: HashOrdered,
     {
         /// Lower and upper bounds in `self.vals` corresponding to the key at `index`.
         fn values_for_key(&self, index: usize) -> (usize, usize) {
@@ -181,7 +182,7 @@ mod val_batch {
         /// If `offset` is specified, we will insert it at the appropriate location. If it is not specified,
         /// we leave `keys_offs` ready to receive it as the next `push`. This is so that builders that may
         /// not know the final offset at the moment of key insertion can prepare for receiving the offset.
-        fn insert_key(&mut self, key: <L::Target as Update>::Key, offset: Option<usize>) {
+        fn insert_key(&mut self, key: <L::KeyContainer as BatchContainer>::ReadItem<'_>, offset: Option<usize>) {
             let desired = self.desired_location(&key);
             // Were we to push the key now, it would be at `self.keys.len()`, so while that is wrong, 
             // push additional blank entries in.
@@ -189,14 +190,14 @@ mod val_batch {
                 // We insert a default (dummy) key and repeat the offset to indicate this.
                 let current_offset = self.keys_offs.index(self.keys.len()).into_owned();
                 self.keys.push(Default::default());
-                self.keys_offs.push(current_offset);
+                self.keys_offs.copy(current_offset);
             }
 
             // Now we insert the key. Even if it is no longer the desired location because of contention.
             // If an offset has been supplied we insert it, and otherwise leave it for future determination.
-            self.keys.push(key);
+            self.keys.copy(key);
             if let Some(offset) = offset {
-                self.keys_offs.push(offset);
+                self.keys_offs.copy(offset);
             }
             self.key_count += 1;
         }
@@ -330,6 +331,7 @@ mod val_batch {
     where
         <L::Target as Update>::Key: Default + HashOrdered,
         RhhValBatch<L>: Batch<Time=<L::Target as Update>::Time>,
+        for<'a> <L::KeyContainer as BatchContainer>::ReadItem<'a>: HashOrdered,
     {
         fn new(batch1: &RhhValBatch<L>, batch2: &RhhValBatch<L>, compaction_frontier: AntichainRef<<L::Target as Update>::Time>) -> Self {
 
@@ -361,9 +363,9 @@ mod val_batch {
 
             // Mark explicit types because type inference fails to resolve it.
             let keys_offs: &mut L::OffsetContainer = &mut storage.keys_offs;
-            keys_offs.push(0);
+            keys_offs.copy(0);
             let vals_offs: &mut L::OffsetContainer = &mut storage.vals_offs;
-            vals_offs.push(0);
+            vals_offs.copy(0);
 
             RhhValMerger {
                 key_cursor1: 0,
@@ -422,6 +424,7 @@ mod val_batch {
     impl<L: Layout> RhhValMerger<L> 
     where 
         <L::Target as Update>::Key: Default + HashOrdered,
+        for<'a> <L::KeyContainer as BatchContainer>::ReadItem<'a>: HashOrdered,
     {
         /// Copy the next key in `source`.
         ///
@@ -437,7 +440,7 @@ mod val_batch {
             while lower < upper {
                 self.stash_updates_for_val(source, lower);
                 if let Some(off) = self.consolidate_updates() {
-                    self.result.vals_offs.push(off);
+                    self.result.vals_offs.copy(off);
                     self.result.vals.copy(source.vals.index(lower));
                 }
                 lower += 1;
@@ -445,7 +448,7 @@ mod val_batch {
 
             // If we have pushed any values, copy the key as well.
             if self.result.vals.len() > init_vals {
-                self.result.insert_key(source.keys.index(cursor).into_owned(), Some(self.result.vals.len()));
+                self.result.insert_key(source.keys.index(cursor), Some(self.result.vals.len()));
             }           
         }
         /// Merge the next key in each of `source1` and `source2` into `self`, updating the appropriate cursors.
@@ -465,7 +468,7 @@ mod val_batch {
                     let (lower1, upper1) = source1.values_for_key(self.key_cursor1);
                     let (lower2, upper2) = source2.values_for_key(self.key_cursor2);
                     if let Some(off) = self.merge_vals((source1, lower1, upper1), (source2, lower2, upper2)) {
-                        self.result.insert_key(source1.keys.index(self.key_cursor1).into_owned(), Some(off));
+                        self.result.insert_key(source1.keys.index(self.key_cursor1), Some(off));
                     }
                     // Increment cursors in either case; the keys are merged.
                     self.key_cursor1 += 1;
@@ -498,7 +501,7 @@ mod val_batch {
                         // Extend stash by updates, with logical compaction applied.
                         self.stash_updates_for_val(source1, lower1);
                         if let Some(off) = self.consolidate_updates() {
-                            self.result.vals_offs.push(off);
+                            self.result.vals_offs.copy(off);
                             self.result.vals.copy(source1.vals.index(lower1));
                         }
                         lower1 += 1;
@@ -507,7 +510,7 @@ mod val_batch {
                         self.stash_updates_for_val(source1, lower1);
                         self.stash_updates_for_val(source2, lower2);
                         if let Some(off) = self.consolidate_updates() {
-                            self.result.vals_offs.push(off);
+                            self.result.vals_offs.copy(off);
                             self.result.vals.copy(source1.vals.index(lower1));
                         }
                         lower1 += 1;
@@ -517,7 +520,7 @@ mod val_batch {
                         // Extend stash by updates, with logical compaction applied.
                         self.stash_updates_for_val(source2, lower2);
                         if let Some(off) = self.consolidate_updates() {
-                            self.result.vals_offs.push(off);
+                            self.result.vals_offs.copy(off);
                             self.result.vals.copy(source2.vals.index(lower2));
                         }
                         lower2 += 1;
@@ -528,7 +531,7 @@ mod val_batch {
             while lower1 < upper1 {
                 self.stash_updates_for_val(source1, lower1);
                 if let Some(off) = self.consolidate_updates() {
-                    self.result.vals_offs.push(off);
+                    self.result.vals_offs.copy(off);
                     self.result.vals.copy(source1.vals.index(lower1));
                 }
                 lower1 += 1;
@@ -536,7 +539,7 @@ mod val_batch {
             while lower2 < upper2 {
                 self.stash_updates_for_val(source2, lower2);
                 if let Some(off) = self.consolidate_updates() {
-                    self.result.vals_offs.push(off);
+                    self.result.vals_offs.copy(off);
                     self.result.vals.copy(source2.vals.index(lower2));
                 }
                 lower2 += 1;
@@ -736,9 +739,9 @@ mod val_batch {
     impl<L: Layout, CI> Builder for RhhValBuilder<L, CI>
     where
         <L::Target as Update>::Key: Default + HashOrdered,
-        // RhhValBatch<L>: Batch<Key=<L::Target as Update>::Key, Val=<L::Target as Update>::Val, Time=<L::Target as Update>::Time, Diff=<L::Target as Update>::Diff>,
         CI: for<'a> BuilderInput<L, Key<'a> = <L::Target as Update>::Key, Time=<L::Target as Update>::Time, Diff=<L::Target as Update>::Diff>,
         for<'a> L::ValContainer: PushInto<CI::Val<'a>>,
+        for<'a> <L::KeyContainer as BatchContainer>::ReadItem<'a>: HashOrdered + IntoOwned<'a, Owned = <L::Target as Update>::Key>,
     {
         type Input = CI;
         type Time = <L::Target as Update>::Time;
@@ -783,20 +786,20 @@ mod val_batch {
                         self.push_update(time, diff);
                     } else {
                         // New value; complete representation of prior value.
-                        self.result.vals_offs.push(self.result.updates.len());
+                        self.result.vals_offs.copy(self.result.updates.len());
                         if self.singleton.take().is_some() { self.singletons += 1; }
                         self.push_update(time, diff);
                         self.result.vals.push(val);
                     }
                 } else {
                     // New key; complete representation of prior key.
-                    self.result.vals_offs.push(self.result.updates.len());
+                    self.result.vals_offs.copy(self.result.updates.len());
                     if self.singleton.take().is_some() { self.singletons += 1; }
-                    self.result.keys_offs.push(self.result.vals.len());
+                    self.result.keys_offs.copy(self.result.vals.len());
                     self.push_update(time, diff);
                     self.result.vals.push(val);
                     // Insert the key, but with no specified offset.
-                    self.result.insert_key(key, None);
+                    self.result.insert_key(IntoOwned::borrow_as(&key), None);
                 }
             }
         }
@@ -804,10 +807,10 @@ mod val_batch {
         #[inline(never)]
         fn done(mut self, lower: Antichain<Self::Time>, upper: Antichain<Self::Time>, since: Antichain<Self::Time>) -> RhhValBatch<L> {
             // Record the final offsets
-            self.result.vals_offs.push(self.result.updates.len());
+            self.result.vals_offs.copy(self.result.updates.len());
             // Remove any pending singleton, and if it was set increment our count.
             if self.singleton.take().is_some() { self.singletons += 1; }
-            self.result.keys_offs.push(self.result.vals.len());
+            self.result.keys_offs.copy(self.result.vals.len());
             RhhValBatch {
                 updates: self.result.updates.len() + self.singletons,
                 storage: self.result,

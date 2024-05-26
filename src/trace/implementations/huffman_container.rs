@@ -50,7 +50,6 @@ impl<B: Ord + Clone + 'static> PushInto<Vec<B>> for HuffmanContainer<B> {
 }
 
 impl<B: Ord + Clone + 'static> BatchContainer for HuffmanContainer<B> {
-    type OwnedItem = Vec<B>;
     type ReadItem<'a> = Wrapped<'a, B>;
 
     fn copy(&mut self, item: Self::ReadItem<'_>) {
