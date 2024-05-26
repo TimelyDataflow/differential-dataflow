@@ -19,6 +19,8 @@ use timely::dataflow::operators::Operator;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Capability;
 
+use crate::trace::cursor::IntoOwned;
+
 use crate::operators::arrange::{Arranged, ArrangeByKey, ArrangeBySelf, TraceAgent};
 use crate::lattice::Lattice;
 use crate::trace::{Batch, BatchReader, Cursor, Trace, Builder, ExertionLogic};
@@ -85,11 +87,13 @@ impl<G, K, V, R> Reduce<G, K, V, R> for Collection<G, (K, V), R>
 impl<G, K: Data, V: Data, T1, R: Semigroup> Reduce<G, K, V, R> for Arranged<G, T1>
 where
     G: Scope<Timestamp=T1::Time>,
-    T1: for<'a> TraceReader<Key<'a>=&'a K, KeyOwned=K, Val<'a>=&'a V, Diff=R>+Clone+'static,
+    T1: for<'a> TraceReader<Key<'a>=&'a K, Val<'a>=&'a V, Diff=R>+Clone+'static,
+    for<'a> T1::Key<'a> : IntoOwned<'a, Owned = K>,
+    for<'a> T1::Val<'a> : IntoOwned<'a, Owned = V>,
 {
     fn reduce_named<L, V2: Data, R2: Abelian>(&self, name: &str, logic: L) -> Collection<G, (K, V2), R2>
         where L: FnMut(&K, &[(&V, R)], &mut Vec<(V2, R2)>)+'static {
-        self.reduce_abelian::<_,V2,_,ValSpine<_,_,_,_>>(name, |val| val.clone(), logic)
+        self.reduce_abelian::<_,K,V2,ValSpine<_,_,_,_>>(name, logic)
             .as_collection(|k,v| (k.clone(), v.clone()))
     }
 }
@@ -162,10 +166,11 @@ where G::Timestamp: Lattice+Ord {
 impl<G, K: Data, T1, R1: Semigroup> Threshold<G, K, R1> for Arranged<G, T1>
 where
     G: Scope<Timestamp=T1::Time>,
-    T1: for<'a> TraceReader<Key<'a>=&'a K, KeyOwned=K, Val<'a>=&'a (), Diff=R1>+Clone+'static,
+    T1: for<'a> TraceReader<Key<'a>=&'a K, Val<'a>=&'a (), Diff=R1>+Clone+'static,
+    for<'a> T1::Key<'a>: IntoOwned<'a, Owned = K>,
 {
     fn threshold_named<R2: Abelian, F: FnMut(&K,&R1)->R2+'static>(&self, name: &str, mut thresh: F) -> Collection<G, K, R2> {
-        self.reduce_abelian::<_,(),_,KeySpine<_,_,_>>(name, |&()| (), move |k,s,t| t.push(((), thresh(k, &s[0].1))))
+        self.reduce_abelian::<_,K,(),KeySpine<_,_,_>>(name, move |k,s,t| t.push(((), thresh(k, &s[0].1))))
             .as_collection(|k,_| k.clone())
     }
 }
@@ -212,10 +217,11 @@ where
 impl<G, K: Data, T1, R: Semigroup> Count<G, K, R> for Arranged<G, T1>
 where
     G: Scope<Timestamp=T1::Time>,
-    T1: for<'a> TraceReader<Key<'a>=&'a K, KeyOwned=K, Val<'a>=&'a (), Diff=R>+Clone+'static,
+    T1: for<'a> TraceReader<Key<'a>=&'a K, Val<'a>=&'a (), Diff=R>+Clone+'static,
+    for<'a> T1::Key<'a>: IntoOwned<'a, Owned = K>,
 {
     fn count_core<R2: Abelian + From<i8>>(&self) -> Collection<G, (K, R), R2> {
-        self.reduce_abelian::<_,R,_,ValSpine<_,_,_,_>>("Count", |r| r.clone(), |_k,s,t| t.push((s[0].1.clone(), R2::from(1i8))))
+        self.reduce_abelian::<_,K,R,ValSpine<_,R,_,_>>("Count", |_k,s,t| t.push((s[0].1.clone(), R2::from(1i8))))
             .as_collection(|k,c| (k.clone(), c.clone()))
     }
 }
@@ -240,24 +246,23 @@ pub trait ReduceCore<G: Scope, K: ToOwned + ?Sized, V: Data, R: Semigroup> where
     ///     let trace =
     ///     scope.new_collection_from(1 .. 10u32).1
     ///          .map(|x| (x, x))
-    ///          .reduce_abelian::<_,_,ValSpine<_,_,_,_>>(
+    ///          .reduce_abelian::<_,ValSpine<_,_,_,_>>(
     ///             "Example",
-    ///              Clone::clone,
     ///              move |_key, src, dst| dst.push((*src[0].0, 1))
     ///          )
     ///          .trace;
     /// });
     /// ```
-    fn reduce_abelian<L, F, T2>(&self, name: &str, from: F, mut logic: L) -> Arranged<G, TraceAgent<T2>>
+    fn reduce_abelian<L, T2>(&self, name: &str, mut logic: L) -> Arranged<G, TraceAgent<T2>>
         where
             T2: for<'a> Trace<Key<'a>= &'a K, Time=G::Timestamp>+'static,
-            F: Fn(T2::Val<'_>) -> V + 'static,
+            for<'a> T2::Val<'a> : IntoOwned<'a, Owned = V>,
             T2::Diff: Abelian,
             T2::Batch: Batch,
             T2::Builder: Builder<Input = Vec<((K::Owned, V), T2::Time, T2::Diff)>>,
             L: FnMut(&K, &[(&V, R)], &mut Vec<(V, T2::Diff)>)+'static,
         {
-            self.reduce_core::<_,_,T2>(name, from, move |key, input, output, change| {
+            self.reduce_core::<_,T2>(name, move |key, input, output, change| {
                 if !input.is_empty() {
                     logic(key, input, change);
                 }
@@ -271,10 +276,10 @@ pub trait ReduceCore<G: Scope, K: ToOwned + ?Sized, V: Data, R: Semigroup> where
     /// Unlike `reduce_arranged`, this method may be called with an empty `input`,
     /// and it may not be safe to index into the first element.
     /// At least one of the two collections will be non-empty.
-    fn reduce_core<L, F, T2>(&self, name: &str, from: F, logic: L) -> Arranged<G, TraceAgent<T2>>
+    fn reduce_core<L, T2>(&self, name: &str, logic: L) -> Arranged<G, TraceAgent<T2>>
         where
             T2: for<'a> Trace<Key<'a>=&'a K, Time=G::Timestamp>+'static,
-            F: Fn(T2::Val<'_>) -> V + 'static,
+            for<'a> T2::Val<'a> : IntoOwned<'a, Owned = V>,
             T2::Batch: Batch,
             T2::Builder: Builder<Input = Vec<((K::Owned, V), T2::Time, T2::Diff)>>,
             L: FnMut(&K, &[(&V, R)], &mut Vec<(V,T2::Diff)>, &mut Vec<(V, T2::Diff)>)+'static,
@@ -289,32 +294,34 @@ where
     V: ExchangeData,
     R: ExchangeData+Semigroup,
 {
-    fn reduce_core<L, F, T2>(&self, name: &str, from: F, logic: L) -> Arranged<G, TraceAgent<T2>>
+    fn reduce_core<L, T2>(&self, name: &str, logic: L) -> Arranged<G, TraceAgent<T2>>
         where
             V: Data,
-            F: Fn(T2::Val<'_>) -> V + 'static,
             T2: for<'a> Trace<Key<'a>=&'a K, Time=G::Timestamp>+'static,
+            for<'a> T2::Val<'a> : IntoOwned<'a, Owned = V>,
             T2::Batch: Batch,
             T2::Builder: Builder<Input = Vec<((K, V), T2::Time, T2::Diff)>>,
             L: FnMut(&K, &[(&V, R)], &mut Vec<(V,T2::Diff)>, &mut Vec<(V, T2::Diff)>)+'static,
     {
         self.arrange_by_key_named(&format!("Arrange: {}", name))
-            .reduce_core(name, from, logic)
+            .reduce_core(name, logic)
     }
 }
 
 /// A key-wise reduction of values in an input trace.
 ///
 /// This method exists to provide reduce functionality without opinions about qualifying trace types.
-pub fn reduce_trace<G, T1, T2, V, F, L>(trace: &Arranged<G, T1>, name: &str, from: F, mut logic: L) -> Arranged<G, TraceAgent<T2>>
+pub fn reduce_trace<G, T1, T2, K, V, L>(trace: &Arranged<G, T1>, name: &str, mut logic: L) -> Arranged<G, TraceAgent<T2>>
 where
     G: Scope<Timestamp=T1::Time>,
     T1: TraceReader + Clone + 'static,
+    for<'a> T1::Key<'a> : IntoOwned<'a, Owned = K>,
     T2: for<'a> Trace<Key<'a>=T1::Key<'a>, Time=T1::Time> + 'static,
+    K: Ord + 'static,
     V: Data,
-    F: Fn(T2::Val<'_>) -> V + 'static,
+    for<'a> T2::Val<'a> : IntoOwned<'a, Owned = V>,
     T2::Batch: Batch,
-    <T2::Builder as Builder>::Input: Container + PushInto<((T1::KeyOwned, V), T2::Time, T2::Diff)>,
+    <T2::Builder as Builder>::Input: Container + PushInto<((K, V), T2::Time, T2::Diff)>,
     L: FnMut(T1::Key<'_>, &[(T1::Val<'_>, T1::Diff)], &mut Vec<(V,T2::Diff)>, &mut Vec<(V, T2::Diff)>)+'static,
 {
     let mut result_trace = None;
@@ -352,7 +359,7 @@ where
 
             // Our implementation maintains a list of outstanding `(key, time)` synthetic interesting times,
             // as well as capabilities for these times (or their lower envelope, at least).
-            let mut interesting = Vec::<(T1::KeyOwned, G::Timestamp)>::new();
+            let mut interesting = Vec::<(K, G::Timestamp)>::new();
             let mut capabilities = Vec::<Capability<G::Timestamp>>::new();
 
             // buffers and logic for computing per-key interesting times "efficiently".
@@ -511,7 +518,6 @@ where
                                 (&mut output_cursor, output_storage),
                                 (&mut batch_cursor, batch_storage),
                                 &mut interesting_times,
-                                &from,
                                 &mut logic,
                                 &upper_limit,
                                 &mut buffers[..],
@@ -637,22 +643,21 @@ where
     C2: Cursor<Key<'a> = C1::Key<'a>, Time = C1::Time>,
     C3: Cursor<Key<'a> = C1::Key<'a>, Val<'a> = C1::Val<'a>, Time = C1::Time, Diff = C1::Diff>,
     V: Clone + Ord,
+    for<'b> C2::Val<'b> : IntoOwned<'b, Owned = V>,
 {
     fn new() -> Self;
-    fn compute<F, L>(
+    fn compute<L>(
         &mut self,
         key: C1::Key<'a>,
         source_cursor: (&mut C1, &'a C1::Storage),
         output_cursor: (&mut C2, &'a C2::Storage),
         batch_cursor: (&mut C3, &'a C3::Storage),
         times: &mut Vec<C1::Time>,
-        from: &F,
         logic: &mut L,
         upper_limit: &Antichain<C1::Time>,
         outputs: &mut [(C2::Time, Vec<(V, C2::Time, C2::Diff)>)],
         new_interesting: &mut Vec<C1::Time>) -> (usize, usize)
     where
-        F: Fn(C2::Val<'_>) -> V,
         L: FnMut(
             C1::Key<'a>,
             &[(C1::Val<'a>, C1::Diff)],
@@ -667,6 +672,7 @@ mod history_replay {
 
     use crate::lattice::Lattice;
     use crate::trace::Cursor;
+    use crate::trace::cursor::IntoOwned;
     use crate::operators::ValueHistory;
     use timely::progress::Antichain;
 
@@ -702,6 +708,7 @@ mod history_replay {
         C2: Cursor<Key<'a> = C1::Key<'a>, Time = C1::Time>,
         C3: Cursor<Key<'a> = C1::Key<'a>, Val<'a> = C1::Val<'a>, Time = C1::Time, Diff = C1::Diff>,
         V: Clone + Ord,
+        for<'b> C2::Val<'b> : IntoOwned<'b, Owned = V>,
     {
         fn new() -> Self {
             HistoryReplayer {
@@ -719,20 +726,18 @@ mod history_replay {
             }
         }
         #[inline(never)]
-        fn compute<F, L>(
+        fn compute<L>(
             &mut self,
             key: C1::Key<'a>,
             (source_cursor, source_storage): (&mut C1, &'a C1::Storage),
             (output_cursor, output_storage): (&mut C2, &'a C2::Storage),
             (batch_cursor, batch_storage): (&mut C3, &'a C3::Storage),
             times: &mut Vec<C1::Time>,
-            from: &F,
             logic: &mut L,
             upper_limit: &Antichain<C1::Time>,
             outputs: &mut [(C2::Time, Vec<(V, C2::Time, C2::Diff)>)],
             new_interesting: &mut Vec<C1::Time>) -> (usize, usize)
         where
-            F: Fn(C2::Val<'_>) -> V,
             L: FnMut(
                 C1::Key<'a>,
                 &[(C1::Val<'a>, C1::Diff)],
@@ -900,7 +905,7 @@ mod history_replay {
                         meet.as_ref().map(|meet| output_replay.advance_buffer_by(meet));
                         for &((value, ref time), ref diff) in output_replay.buffer().iter() {
                             if time.less_equal(&next_time) {
-                                self.output_buffer.push((from(value), diff.clone()));
+                                self.output_buffer.push((value.into_owned(), diff.clone()));
                             }
                             else {
                                 self.temporary.push(next_time.join(time));

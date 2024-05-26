@@ -35,11 +35,11 @@ fn test_trace() {
     let mut trace = get_trace();
 
     let (mut cursor1, storage1) = trace.cursor_through(AntichainRef::new(&[1])).unwrap();
-    let vec_1 = cursor1.to_vec(|v| v.clone(), &storage1);
+    let vec_1 = cursor1.to_vec(&storage1);
     assert_eq!(vec_1, vec![((1, 2), vec![(0, 1)])]);
 
     let (mut cursor2, storage2) = trace.cursor_through(AntichainRef::new(&[2])).unwrap();
-    let vec_2 = cursor2.to_vec(|v| v.clone(), &storage2);
+    let vec_2 = cursor2.to_vec(&storage2);
     println!("--> {:?}", vec_2);
     assert_eq!(vec_2, vec![
                ((1, 2), vec![(0, 1)]),
@@ -47,13 +47,13 @@ fn test_trace() {
     ]);
 
     let (mut cursor3, storage3) = trace.cursor_through(AntichainRef::new(&[3])).unwrap();
-    let vec_3 = cursor3.to_vec(|v| v.clone(), &storage3);
+    let vec_3 = cursor3.to_vec(&storage3);
     assert_eq!(vec_3, vec![
                ((1, 2), vec![(0, 1)]),
                ((2, 3), vec![(1, 1), (2, -1)]),
     ]);
 
     let (mut cursor4, storage4) = trace.cursor();
-    let vec_4 = cursor4.to_vec(|v| v.clone(), &storage4);
+    let vec_4 = cursor4.to_vec(&storage4);
     assert_eq!(vec_4, vec_3);
 }

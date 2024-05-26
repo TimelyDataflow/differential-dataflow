@@ -33,7 +33,6 @@ impl<Tr: TraceReader + Clone> Clone for TraceFrontier<Tr> {
 
 impl<Tr: TraceReader> TraceReader for TraceFrontier<Tr> {
     type Key<'a> = Tr::Key<'a>;
-    type KeyOwned = Tr::KeyOwned;
     type Val<'a> = Tr::Val<'a>;
     type Time = Tr::Time;
     type Diff = Tr::Diff;
@@ -83,7 +82,6 @@ pub struct BatchFrontier<B: BatchReader> {
 
 impl<B: BatchReader> BatchReader for BatchFrontier<B> {
     type Key<'a> = B::Key<'a>;
-    type KeyOwned = B::KeyOwned;
     type Val<'a> = B::Val<'a>;
     type Time = B::Time;
     type Diff = B::Diff;
@@ -127,7 +125,6 @@ impl<C, T> CursorFrontier<C, T> where T: Clone {
 
 impl<C: Cursor> Cursor for CursorFrontier<C, C::Time> {
     type Key<'a> = C::Key<'a>;
-    type KeyOwned = C::KeyOwned;
     type Val<'a> = C::Val<'a>;
     type Time = C::Time;
     type Diff = C::Diff;
@@ -188,7 +185,6 @@ where
     C::Storage: BatchReader,
 {
     type Key<'a> = C::Key<'a>;
-    type KeyOwned = C::KeyOwned;
     type Val<'a> = C::Val<'a>;
     type Time = C::Time;
     type Diff = C::Diff;

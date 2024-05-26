@@ -4,6 +4,7 @@ use differential_dataflow::{ExchangeData, Collection, Hashable};
 use differential_dataflow::difference::{Monoid, Multiply};
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::trace::TraceReader;
+use differential_dataflow::trace::cursor::IntoOwned;
 
 /// Reports a number of extensions to a stream of prefixes.
 ///
@@ -11,7 +12,7 @@ use differential_dataflow::trace::TraceReader;
 /// For each triple, it extracts a key using `key_selector`, and finds the
 /// associated count in `arrangement`. If the found count is less than `count`,
 /// the `count` and `index` fields are overwritten with their new values.
-pub fn count<G, Tr, R, F, P>(
+pub fn count<G, Tr, K, R, F, P>(
     prefixes: &Collection<G, (P, usize, usize), R>,
     arrangement: Arranged<G, Tr>,
     key_selector: F,
@@ -20,15 +21,16 @@ pub fn count<G, Tr, R, F, P>(
 where
     G: Scope<Timestamp=Tr::Time>,
     Tr: TraceReader<Diff=isize>+Clone+'static,
-    Tr::KeyOwned: Hashable + Default,
+    for<'a> Tr::Key<'a>: IntoOwned<'a, Owned = K>,
+    K: Hashable + Ord + Default + 'static,
     R: Monoid+Multiply<Output = R>+ExchangeData,
-    F: Fn(&P)->Tr::KeyOwned+Clone+'static,
+    F: Fn(&P)->K+Clone+'static,
     P: ExchangeData,
 {
     crate::operators::lookup_map(
         prefixes,
         arrangement,
-        move |p: &(P,usize,usize), k: &mut Tr::KeyOwned| { *k = key_selector(&p.0); },
+        move |p: &(P,usize,usize), k: &mut K| { *k = key_selector(&p.0); },
         move |(p,c,i), r, _, s| {
             let s = *s as usize;
             if *c < s { ((p.clone(), *c, *i), r.clone()) }

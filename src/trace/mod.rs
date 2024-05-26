@@ -52,24 +52,22 @@ pub type ExertionLogic = std::sync::Arc<dyn for<'a> Fn(&'a [(usize, usize, usize
 pub trait TraceReader {
 
     /// Key by which updates are indexed.
-    type Key<'a>: Copy + Clone + Ord + IntoOwned<'a, Owned = Self::KeyOwned>;
-    /// Owned version of the above.
-    type KeyOwned: Ord + Clone;
+    type Key<'a>: Copy + Clone + Ord;
     /// Values associated with keys.
-    type Val<'a>: Copy + Clone + IntoOwned<'a>;
+    type Val<'a>: Copy + Clone;
     /// Timestamps associated with updates
     type Time: Timestamp + Lattice + Ord + Clone;
     /// Associated update.
     type Diff: Semigroup;
 
     /// The type of an immutable collection of updates.
-    type Batch: for<'a> BatchReader<Key<'a> = Self::Key<'a>, KeyOwned = Self::KeyOwned, Val<'a> = Self::Val<'a>, Time = Self::Time, Diff = Self::Diff>+Clone+'static;
+    type Batch: for<'a> BatchReader<Key<'a> = Self::Key<'a>, Val<'a> = Self::Val<'a>, Time = Self::Time, Diff = Self::Diff>+Clone+'static;
 
     /// Storage type for `Self::Cursor`. Likely related to `Self::Batch`.
     type Storage;
 
     /// The type used to enumerate the collections contents.
-    type Cursor: for<'a> Cursor<Storage=Self::Storage, Key<'a> = Self::Key<'a>, KeyOwned = Self::KeyOwned, Val<'a> = Self::Val<'a>, Time = Self::Time, Diff = Self::Diff>;
+    type Cursor: for<'a> Cursor<Storage=Self::Storage, Key<'a> = Self::Key<'a>, Val<'a> = Self::Val<'a>, Time = Self::Time, Diff = Self::Diff>;
 
     /// Provides a cursor over updates contained in the trace.
     fn cursor(&mut self) -> (Self::Cursor, Self::Storage) {
@@ -258,18 +256,16 @@ where
     Self: ::std::marker::Sized,
 {
     /// Key by which updates are indexed.
-    type Key<'a>: Copy + Clone + Ord + IntoOwned<'a, Owned = Self::KeyOwned>;
-    /// Owned version of the above.
-    type KeyOwned: Ord + Clone;
+    type Key<'a>: Copy + Clone + Ord;
     /// Values associated with keys.
-    type Val<'a>: Copy + Clone + IntoOwned<'a>;
+    type Val<'a>: Copy + Clone;
     /// Timestamps associated with updates
     type Time: Timestamp + Lattice + Ord + Clone;
     /// Associated update.
     type Diff: Semigroup;
 
     /// The type used to enumerate the batch's contents.
-    type Cursor: for<'a> Cursor<Storage=Self, Key<'a> = Self::Key<'a>, KeyOwned = Self::KeyOwned, Val<'a> = Self::Val<'a>, Time = Self::Time, Diff = Self::Diff>;
+    type Cursor: for<'a> Cursor<Storage=Self, Key<'a> = Self::Key<'a>, Val<'a> = Self::Val<'a>, Time = Self::Time, Diff = Self::Diff>;
     /// Acquires a cursor to the batch's contents.
     fn cursor(&self) -> Self::Cursor;
     /// The number of updates in the batch.
@@ -373,7 +369,6 @@ pub mod rc_blanket_impls {
 
     impl<B: BatchReader> BatchReader for Rc<B> {
         type Key<'a> = B::Key<'a>;
-        type KeyOwned = B::KeyOwned;
         type Val<'a> = B::Val<'a>;
         type Time = B::Time;
         type Diff = B::Diff;
@@ -407,7 +402,6 @@ pub mod rc_blanket_impls {
     impl<C: Cursor> Cursor for RcBatchCursor<C> {
 
         type Key<'a> = C::Key<'a>;
-        type KeyOwned = C::KeyOwned;
         type Val<'a> = C::Val<'a>;
         type Time = C::Time;
         type Diff = C::Diff;
@@ -476,7 +470,6 @@ pub mod abomonated_blanket_impls {
     impl<B: BatchReader+Abomonation> BatchReader for Abomonated<B, Vec<u8>> {
 
         type Key<'a> = B::Key<'a>;
-        type KeyOwned = B::KeyOwned;
         type Val<'a> = B::Val<'a>;
         type Time = B::Time;
         type Diff = B::Diff;
@@ -510,7 +503,6 @@ pub mod abomonated_blanket_impls {
     impl<C: Cursor> Cursor for AbomonatedBatchCursor<C> where C::Storage: Abomonation {
 
         type Key<'a> = C::Key<'a>;
-        type KeyOwned = C::KeyOwned;
         type Val<'a> = C::Val<'a>;
         type Time = C::Time;
         type Diff = C::Diff;

@@ -43,11 +43,9 @@ impl<'a, T: ToOwned+?Sized> IntoOwned<'a> for &'a T {
 pub trait Cursor {
 
     /// Key by which updates are indexed.
-    type Key<'a>: Copy + Clone + Ord + IntoOwned<'a, Owned = Self::KeyOwned>;
-    /// Owned version of the above.
-    type KeyOwned: Ord + Clone;
+    type Key<'a>: Copy + Clone + Ord;
     /// Values associated with keys.
-    type Val<'a>: Copy + Clone + Ord + IntoOwned<'a> + for<'b> PartialOrd<Self::Val<'b>>;
+    type Val<'a>: Copy + Clone + Ord + for<'b> PartialOrd<Self::Val<'b>>;
     /// Timestamps associated with updates
     type Time: Timestamp + Lattice + Ord + Clone;
     /// Associated update.
@@ -99,9 +97,10 @@ pub trait Cursor {
     fn rewind_vals(&mut self, storage: &Self::Storage);
 
     /// Rewinds the cursor and outputs its contents to a Vec
-    fn to_vec<V, F>(&mut self, from: F, storage: &Self::Storage) -> Vec<((Self::KeyOwned, V), Vec<(Self::Time, Self::Diff)>)>
+    fn to_vec<K, V>(&mut self, storage: &Self::Storage) -> Vec<((K, V), Vec<(Self::Time, Self::Diff)>)>
     where 
-        F: Fn(Self::Val<'_>) -> V,
+        for<'a> Self::Key<'a> : IntoOwned<'a, Owned = K>,
+        for<'a> Self::Val<'a> : IntoOwned<'a, Owned = V>,
     {
         let mut out = Vec::new();
         self.rewind_keys(storage);
@@ -112,7 +111,7 @@ pub trait Cursor {
                 self.map_times(storage, |ts, r| {
                     kv_out.push((ts.clone(), r.clone()));
                 });
-                out.push(((self.key(storage).into_owned(), from(self.val(storage))), kv_out));
+                out.push(((self.key(storage).into_owned(), self.val(storage).into_owned()), kv_out));
                 self.step_val(storage);
             }
             self.step_key(storage);

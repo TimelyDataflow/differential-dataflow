@@ -10,27 +10,29 @@ use differential_dataflow::{ExchangeData, Collection, AsCollection, Hashable};
 use differential_dataflow::difference::{Semigroup, Monoid};
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::trace::{Cursor, TraceReader};
+use differential_dataflow::trace::cursor::IntoOwned;
 
 /// Proposes extensions to a stream of prefixes.
 ///
 /// This method takes a stream of prefixes and for each determines a
 /// key with `key_selector` and then proposes all pair af the prefix
 /// and values associated with the key in `arrangement`.
-pub fn lookup_map<G, D, R, Tr, F, DOut, ROut, S>(
+pub fn lookup_map<G, D, K, R, Tr, F, DOut, ROut, S>(
     prefixes: &Collection<G, D, R>,
     mut arrangement: Arranged<G, Tr>,
     key_selector: F,
     mut output_func: S,
-    supplied_key0: Tr::KeyOwned,
-    supplied_key1: Tr::KeyOwned,
-    supplied_key2: Tr::KeyOwned,
+    supplied_key0: K,
+    supplied_key1: K,
+    supplied_key2: K,
 ) -> Collection<G, DOut, ROut>
 where
     G: Scope<Timestamp=Tr::Time>,
     Tr: TraceReader+Clone+'static,
-    Tr::KeyOwned: Hashable,
+    for<'a> Tr::Key<'a>: IntoOwned<'a, Owned = K>,
+    K: Hashable + Ord + 'static,
     Tr::Diff: Monoid+ExchangeData,
-    F: FnMut(&D, &mut Tr::KeyOwned)+Clone+'static,
+    F: FnMut(&D, &mut K)+Clone+'static,
     D: ExchangeData,
     R: ExchangeData+Monoid,
     DOut: Clone+'static,
@@ -48,14 +50,14 @@ where
 
     let mut buffer = Vec::new();
 
-    let mut key: Tr::KeyOwned = supplied_key0;
+    let mut key: K = supplied_key0;
     let exchange = Exchange::new(move |update: &(D,G::Timestamp,R)| {
         logic1(&update.0, &mut key);
         key.hashed().into()
     });
 
-    let mut key1: Tr::KeyOwned = supplied_key1;
-    let mut key2: Tr::KeyOwned = supplied_key2;
+    let mut key1: K = supplied_key1;
+    let mut key2: K = supplied_key2;
 
     prefixes.inner.binary_frontier(&propose_stream, exchange, Pipeline, "LookupMap", move |_,_| move |input1, input2, output| {
 
