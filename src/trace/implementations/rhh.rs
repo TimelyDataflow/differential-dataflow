@@ -150,6 +150,7 @@ mod val_batch {
     impl<L: Layout> RhhValStorage<L> 
     where 
         <L::Target as Update>::Key: Default + HashOrdered,
+        for<'a> <L::KeyContainer as BatchContainer>::ReadItem<'a>: HashOrdered,
     {
         /// Lower and upper bounds in `self.vals` corresponding to the key at `index`.
         fn values_for_key(&self, index: usize) -> (usize, usize) {
@@ -181,7 +182,7 @@ mod val_batch {
         /// If `offset` is specified, we will insert it at the appropriate location. If it is not specified,
         /// we leave `keys_offs` ready to receive it as the next `push`. This is so that builders that may
         /// not know the final offset at the moment of key insertion can prepare for receiving the offset.
-        fn insert_key(&mut self, key: <L::Target as Update>::Key, offset: Option<usize>) {
+        fn insert_key(&mut self, key: <L::KeyContainer as BatchContainer>::ReadItem<'_>, offset: Option<usize>) {
             let desired = self.desired_location(&key);
             // Were we to push the key now, it would be at `self.keys.len()`, so while that is wrong, 
             // push additional blank entries in.
@@ -194,7 +195,7 @@ mod val_batch {
 
             // Now we insert the key. Even if it is no longer the desired location because of contention.
             // If an offset has been supplied we insert it, and otherwise leave it for future determination.
-            self.keys.push(key);
+            self.keys.copy(key);
             if let Some(offset) = offset {
                 self.keys_offs.push(offset);
             }
@@ -330,6 +331,7 @@ mod val_batch {
     where
         <L::Target as Update>::Key: Default + HashOrdered,
         RhhValBatch<L>: Batch<Time=<L::Target as Update>::Time>,
+        for<'a> <L::KeyContainer as BatchContainer>::ReadItem<'a>: HashOrdered,
     {
         fn new(batch1: &RhhValBatch<L>, batch2: &RhhValBatch<L>, compaction_frontier: AntichainRef<<L::Target as Update>::Time>) -> Self {
 
@@ -422,6 +424,7 @@ mod val_batch {
     impl<L: Layout> RhhValMerger<L> 
     where 
         <L::Target as Update>::Key: Default + HashOrdered,
+        for<'a> <L::KeyContainer as BatchContainer>::ReadItem<'a>: HashOrdered,
     {
         /// Copy the next key in `source`.
         ///
@@ -445,7 +448,7 @@ mod val_batch {
 
             // If we have pushed any values, copy the key as well.
             if self.result.vals.len() > init_vals {
-                self.result.insert_key(source.keys.index(cursor).into_owned(), Some(self.result.vals.len()));
+                self.result.insert_key(source.keys.index(cursor), Some(self.result.vals.len()));
             }           
         }
         /// Merge the next key in each of `source1` and `source2` into `self`, updating the appropriate cursors.
@@ -465,7 +468,7 @@ mod val_batch {
                     let (lower1, upper1) = source1.values_for_key(self.key_cursor1);
                     let (lower2, upper2) = source2.values_for_key(self.key_cursor2);
                     if let Some(off) = self.merge_vals((source1, lower1, upper1), (source2, lower2, upper2)) {
-                        self.result.insert_key(source1.keys.index(self.key_cursor1).into_owned(), Some(off));
+                        self.result.insert_key(source1.keys.index(self.key_cursor1), Some(off));
                     }
                     // Increment cursors in either case; the keys are merged.
                     self.key_cursor1 += 1;
@@ -736,9 +739,9 @@ mod val_batch {
     impl<L: Layout, CI> Builder for RhhValBuilder<L, CI>
     where
         <L::Target as Update>::Key: Default + HashOrdered,
-        // RhhValBatch<L>: Batch<Key=<L::Target as Update>::Key, Val=<L::Target as Update>::Val, Time=<L::Target as Update>::Time, Diff=<L::Target as Update>::Diff>,
         CI: for<'a> BuilderInput<L, Key<'a> = <L::Target as Update>::Key, Time=<L::Target as Update>::Time, Diff=<L::Target as Update>::Diff>,
         for<'a> L::ValContainer: PushInto<CI::Val<'a>>,
+        for<'a> <L::KeyContainer as BatchContainer>::ReadItem<'a>: HashOrdered + IntoOwned<'a, Owned = <L::Target as Update>::Key>,
     {
         type Input = CI;
         type Time = <L::Target as Update>::Time;
@@ -796,7 +799,7 @@ mod val_batch {
                     self.push_update(time, diff);
                     self.result.vals.push(val);
                     // Insert the key, but with no specified offset.
-                    self.result.insert_key(key, None);
+                    self.result.insert_key(IntoOwned::borrow_as(&key), None);
                 }
             }
         }
