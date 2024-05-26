@@ -245,8 +245,6 @@ where
                                 let mut builder = Tr::Builder::new();
                                 for (key, mut list) in to_process.drain(..) {
 
-                                    use trace::cursor::IntoOwned;
-
                                     // The prior value associated with the key.
                                     let mut prev_value: Option<V> = None;
 
