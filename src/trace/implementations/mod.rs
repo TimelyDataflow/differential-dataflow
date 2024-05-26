@@ -89,15 +89,16 @@ pub trait Layout {
     /// The represented update.
     type Target: Update + ?Sized;
     /// Container for update keys.
+    // NB: The `PushInto` constraint is only required by `rhh.rs` to push default values.
     type KeyContainer: BatchContainer + PushInto<<Self::Target as Update>::Key>;
     /// Container for update vals.
-    type ValContainer: BatchContainer + PushInto<<Self::Target as Update>::Val>;
+    type ValContainer: BatchContainer;
     /// Container for update vals.
     type UpdContainer:
         PushInto<(<Self::Target as Update>::Time, <Self::Target as Update>::Diff)> +
         for<'a> BatchContainer<ReadItem<'a> = &'a (<Self::Target as Update>::Time, <Self::Target as Update>::Diff)>;
     /// Container for offsets.
-    type OffsetContainer: for<'a> BatchContainer<ReadItem<'a> = usize> + PushInto<usize>;
+    type OffsetContainer: for<'a> BatchContainer<ReadItem<'a> = usize>;
 }
 
 /// A layout that uses vectors
