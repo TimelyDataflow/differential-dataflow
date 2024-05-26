@@ -45,7 +45,6 @@ pub mod merge_batcher_col;
 pub mod ord_neu;
 pub mod rhh;
 pub mod huffman_container;
-pub mod option_container;
 
 // Opinionated takes on default spines.
 pub use self::ord_neu::OrdValSpine as ValSpine;
@@ -306,7 +305,6 @@ impl<'a> IntoOwned<'a> for usize {
 }
 
 impl BatchContainer for OffsetList {
-    type OwnedItem = usize;
     type ReadItem<'a> = usize;
 
     fn copy(&mut self, item: Self::ReadItem<'_>) {
@@ -445,14 +443,11 @@ pub mod containers {
     use timely::container::PushInto;
 
     use std::borrow::ToOwned;
-    use crate::trace::IntoOwned;
 
     /// A general-purpose container resembling `Vec<T>`.
     pub trait BatchContainer: 'static {
-        /// An type that all `Self::ReadItem<'_>` can be converted into.
-        type OwnedItem;
         /// The type that can be read back out of the container.
-        type ReadItem<'a>: Copy + IntoOwned<'a, Owned = Self::OwnedItem> + Ord + for<'b> PartialOrd<Self::ReadItem<'b>>;
+        type ReadItem<'a>: Copy + Ord + for<'b> PartialOrd<Self::ReadItem<'b>>;
 
         /// Push an item into this container
         fn push<D>(&mut self, item: D) where Self: PushInto<D> {
@@ -535,8 +530,7 @@ pub mod containers {
     // All `T: Clone` also implement `ToOwned<Owned = T>`, but without the constraint Rust
     // struggles to understand why the owned type must be `T` (i.e. the one blanket impl).
     impl<T: Ord + Clone + 'static> BatchContainer for Vec<T> {
-        type OwnedItem = T;
-        type ReadItem<'a> = &'a Self::OwnedItem;
+        type ReadItem<'a> = &'a T;
 
         fn copy(&mut self, item: &T) {
             self.push(item.clone());
@@ -561,8 +555,7 @@ pub mod containers {
     // The `ToOwned` requirement exists to satisfy `self.reserve_items`, who must for now
     // be presented with the actual contained type, rather than a type that borrows into it.
     impl<T: Ord + Columnation + ToOwned<Owned = T> + 'static> BatchContainer for TimelyStack<T> {
-        type OwnedItem = T;
-        type ReadItem<'a> = &'a Self::OwnedItem;
+        type ReadItem<'a> = &'a T;
 
         fn copy(&mut self, item: &T) {
             self.copy(item);
@@ -626,7 +619,6 @@ pub mod containers {
     where
         B: Ord + Clone + Sized + 'static,
     {
-        type OwnedItem = Vec<B>;
         type ReadItem<'a> = &'a [B];
 
         fn copy(&mut self, item: Self::ReadItem<'_>) {
