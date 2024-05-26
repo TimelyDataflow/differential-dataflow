@@ -52,6 +52,8 @@ impl<B: Ord + Clone + 'static> PushInto<Vec<B>> for HuffmanContainer<B> {
 impl<B: Ord + Clone + 'static> BatchContainer for HuffmanContainer<B> {
     type ReadItem<'a> = Wrapped<'a, B>;
 
+    fn reborrow<'b, 'a: 'b>(item: Self::ReadItem<'a>) -> Self::ReadItem<'b> { item }
+
     fn copy(&mut self, item: Self::ReadItem<'_>) {
         match item.decode() {
             Ok(decoded) => {

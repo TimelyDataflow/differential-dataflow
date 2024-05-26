@@ -318,6 +318,8 @@ impl BatchContainer for OffsetList {
         }
     }
 
+    fn reborrow<'b, 'a: 'b>(item: Self::ReadItem<'a>) -> Self::ReadItem<'b> { item }
+
     fn with_capacity(size: usize) -> Self {
         Self::with_capacity(size)
     }
@@ -427,11 +429,11 @@ where
     }
 
     fn key_eq(this: &&K::Owned, other: <<K as PreferredContainer>::Container as BatchContainer>::ReadItem<'_>) -> bool {
-        other.eq(&<<<K as PreferredContainer>::Container as BatchContainer>::ReadItem<'_> as IntoOwned>::borrow_as(this))
+        <<K as PreferredContainer>::Container as BatchContainer>::reborrow(other).eq(&<<K as PreferredContainer>::Container as BatchContainer>::reborrow(<<<K as PreferredContainer>::Container as BatchContainer>::ReadItem<'_> as IntoOwned>::borrow_as(this)))
     }
 
     fn val_eq(this: &&V::Owned, other: <<V as PreferredContainer>::Container as BatchContainer>::ReadItem<'_>) -> bool {
-        other.eq(&<<<V as PreferredContainer>::Container as BatchContainer>::ReadItem<'_> as IntoOwned>::borrow_as(this))
+        <<V as PreferredContainer>::Container as BatchContainer>::reborrow(other).eq(&<<V as PreferredContainer>::Container as BatchContainer>::reborrow(<<<V as PreferredContainer>::Container as BatchContainer>::ReadItem<'_> as IntoOwned>::borrow_as(this)))
     }
 }
 
@@ -443,12 +445,10 @@ pub mod containers {
     use timely::container::columnation::{Columnation, TimelyStack};
     use timely::container::PushInto;
 
-    use std::borrow::ToOwned;
-
     /// A general-purpose container resembling `Vec<T>`.
     pub trait BatchContainer: 'static {
         /// The type that can be read back out of the container.
-        type ReadItem<'a>: Copy + Ord + for<'b> PartialOrd<Self::ReadItem<'b>>;
+        type ReadItem<'a>: Copy + Ord;
 
         /// Push an item into this container
         fn push<D>(&mut self, item: D) where Self: PushInto<D> {
@@ -466,6 +466,9 @@ pub mod containers {
         fn with_capacity(size: usize) -> Self;
         /// Creates a new container with sufficient capacity.
         fn merge_capacity(cont1: &Self, cont2: &Self) -> Self;
+
+        /// Converts a read item into one with a narrower lifetime.
+        fn reborrow<'b, 'a: 'b>(item: Self::ReadItem<'a>) -> Self::ReadItem<'b>;
 
         /// Reference to the element at this position.
         fn index(&self, index: usize) -> Self::ReadItem<'_>;
@@ -533,6 +536,8 @@ pub mod containers {
     impl<T: Ord + Clone + 'static> BatchContainer for Vec<T> {
         type ReadItem<'a> = &'a T;
 
+        fn reborrow<'b, 'a: 'b>(item: Self::ReadItem<'a>) -> Self::ReadItem<'b> { item }
+
         fn copy(&mut self, item: &T) {
             self.push(item.clone());
         }
@@ -555,8 +560,10 @@ pub mod containers {
 
     // The `ToOwned` requirement exists to satisfy `self.reserve_items`, who must for now
     // be presented with the actual contained type, rather than a type that borrows into it.
-    impl<T: Ord + Columnation + ToOwned<Owned = T> + 'static> BatchContainer for TimelyStack<T> {
+    impl<T: Ord + Columnation + 'static> BatchContainer for TimelyStack<T> {
         type ReadItem<'a> = &'a T;
+
+        fn reborrow<'b, 'a: 'b>(item: Self::ReadItem<'a>) -> Self::ReadItem<'b> { item }
 
         fn copy(&mut self, item: &T) {
             self.copy(item);
@@ -621,6 +628,8 @@ pub mod containers {
         B: Ord + Clone + Sized + 'static,
     {
         type ReadItem<'a> = &'a [B];
+
+        fn reborrow<'b, 'a: 'b>(item: Self::ReadItem<'a>) -> Self::ReadItem<'b> { item }
 
         fn copy(&mut self, item: Self::ReadItem<'_>) {
             for x in item.iter() {
