@@ -244,7 +244,7 @@ where
     where
         T2: for<'a> TraceReader<Key<'a>=T1::Key<'a>,Time=T1::Time>+Clone+'static,
         T1::Diff: Multiply<T2::Diff>,
-        <T1::Diff as Multiply<T2::Diff>>::Output: Semigroup,
+        <T1::Diff as Multiply<T2::Diff>>::Output: Semigroup+'static,
         I: IntoIterator,
         I::Item: Data,
         L: FnMut(T1::Key<'_>,T1::Val<'_>,T2::Val<'_>)->I+'static
@@ -261,7 +261,7 @@ where
     where
         T2: for<'a> TraceReader<Key<'a>=T1::Key<'a>, Time=T1::Time>+Clone+'static,
         D: Data,
-        ROut: Semigroup,
+        ROut: Semigroup+'static,
         I: IntoIterator<Item=(D, G::Timestamp, ROut)>,
         L: FnMut(T1::Key<'_>, T1::Val<'_>,T2::Val<'_>,&G::Timestamp,&T1::Diff,&T2::Diff)->I+'static,
     {
@@ -603,7 +603,7 @@ where
 /// This arrangement requires `Key: Hashable`, and uses the `hashed()` method to place keys in a hashed
 /// map. This can result in many hash calls, and in some cases it may help to first transform `K` to the
 /// pair `(u64, K)` of hash value and key.
-pub trait ArrangeByKey<G: Scope, K: Data+Hashable, V: Data, R: Semigroup>
+pub trait ArrangeByKey<G: Scope, K: Data+Hashable, V: Data, R: Ord+Semigroup+'static>
 where G::Timestamp: Lattice+Ord {
     /// Arranges a collection of `(Key, Val)` records by `Key`.
     ///
@@ -634,7 +634,7 @@ where
 /// This arrangement requires `Key: Hashable`, and uses the `hashed()` method to place keys in a hashed
 /// map. This can result in many hash calls, and in some cases it may help to first transform `K` to the
 /// pair `(u64, K)` of hash value and key.
-pub trait ArrangeBySelf<G: Scope, K: Data+Hashable, R: Semigroup>
+pub trait ArrangeBySelf<G: Scope, K: Data+Hashable, R: Ord+Semigroup+'static>
 where
     G::Timestamp: Lattice+Ord
 {

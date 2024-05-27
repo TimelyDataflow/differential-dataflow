@@ -21,7 +21,7 @@ pub trait ThresholdTotal<G: Scope, K: ExchangeData, R: ExchangeData+Semigroup> w
     /// Reduces the collection to one occurrence of each distinct element.
     fn threshold_semigroup<R2, F>(&self, thresh: F) -> Collection<G, K, R2>
     where
-        R2: Semigroup,
+        R2: Semigroup+'static,
         F: FnMut(&K,&R,Option<&R>)->Option<R2>+'static,
         ;
     /// Reduces the collection to one occurrence of each distinct element.
@@ -39,7 +39,7 @@ pub trait ThresholdTotal<G: Scope, K: ExchangeData, R: ExchangeData+Semigroup> w
     ///          .threshold_total(|_,c| c % 2);
     /// });
     /// ```
-    fn threshold_total<R2: Abelian, F: FnMut(&K,&R)->R2+'static>(&self, mut thresh: F) -> Collection<G, K, R2> {
+    fn threshold_total<R2: Abelian+'static, F: FnMut(&K,&R)->R2+'static>(&self, mut thresh: F) -> Collection<G, K, R2> {
         self.threshold_semigroup(move |key, new, old| {
             let mut new = thresh(key, new);
             if let Some(old) = old { new.plus_equals(&thresh(key, old).negate()); }
@@ -74,7 +74,7 @@ pub trait ThresholdTotal<G: Scope, K: ExchangeData, R: ExchangeData+Semigroup> w
     /// This method allows `distinct` to produce collections whose difference
     /// type is something other than an `isize` integer, for example perhaps an
     /// `i32`.
-    fn distinct_total_core<R2: Abelian+From<i8>>(&self) -> Collection<G, K, R2> {
+    fn distinct_total_core<R2: Abelian+From<i8>+'static>(&self) -> Collection<G, K, R2> {
         self.threshold_total(|_,_| R2::from(1i8))
     }
 
@@ -84,7 +84,7 @@ impl<G: Scope, K: ExchangeData+Hashable, R: ExchangeData+Semigroup> ThresholdTot
 where G::Timestamp: TotalOrder+Lattice+Ord {
     fn threshold_semigroup<R2, F>(&self, thresh: F) -> Collection<G, K, R2>
     where
-        R2: Semigroup,
+        R2: Semigroup+'static,
         F: FnMut(&K,&R,Option<&R>)->Option<R2>+'static,
     {
         self.arrange_by_self_named("Arrange: ThresholdTotal")
@@ -102,7 +102,7 @@ where
 {
     fn threshold_semigroup<R2, F>(&self, mut thresh: F) -> Collection<G, K, R2>
     where
-        R2: Semigroup,
+        R2: Semigroup+'static,
         F: for<'a> FnMut(T1::Key<'a>,&T1::Diff,Option<&T1::Diff>)->Option<R2>+'static,
     {
 

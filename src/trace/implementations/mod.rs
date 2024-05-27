@@ -66,17 +66,17 @@ pub trait Update {
     /// Values associated with the key.
     type Val: Ord + Clone + 'static;
     /// Time at which updates occur.
-    type Time: Ord+Lattice+timely::progress::Timestamp+Clone;
+    type Time: Ord + Clone + Lattice + timely::progress::Timestamp;
     /// Way in which updates occur.
-    type Diff: Semigroup+Clone;
+    type Diff: Ord + Semigroup + 'static;
 }
 
 impl<K,V,T,R> Update for ((K, V), T, R)
 where
     K: Ord+Clone+'static,
     V: Ord+Clone+'static,
-    T: Ord+Lattice+timely::progress::Timestamp+Clone,
-    R: Semigroup+Clone,
+    T: Ord+Clone+Lattice+timely::progress::Timestamp,
+    R: Ord+Semigroup+'static,
 {
     type Key = K;
     type Val = V;
@@ -108,8 +108,7 @@ pub struct Vector<U: Update> {
 
 impl<U: Update> Layout for Vector<U>
 where
-    U::Key: 'static,
-    U::Val: 'static,
+    U::Diff: Ord,
 {
     type Target = U;
     type KeyContainer = Vec<U::Key>;
@@ -125,10 +124,10 @@ pub struct TStack<U: Update> {
 
 impl<U: Update> Layout for TStack<U>
 where
-    U::Key: Columnation + 'static,
-    U::Val: Columnation + 'static,
+    U::Key: Columnation,
+    U::Val: Columnation,
     U::Time: Columnation,
-    U::Diff: Columnation,
+    U::Diff: Columnation + Ord,
 {
     type Target = U;
     type KeyContainer = TimelyStack<U::Key>;
@@ -164,8 +163,8 @@ where
     K::Owned: Ord+Clone+'static,
     V: ToOwned + ?Sized,
     V::Owned: Ord+Clone+'static,
-    T: Ord+Lattice+timely::progress::Timestamp+Clone,
-    R: Semigroup+Clone,
+    T: Ord+Clone+Lattice+timely::progress::Timestamp,
+    R: Ord+Clone+Semigroup+'static,
 {
     type Key = K::Owned;
     type Val = V::Owned;
@@ -177,11 +176,10 @@ impl<K, V, T, D> Layout for Preferred<K, V, T, D>
 where
     K: Ord+ToOwned+PreferredContainer + ?Sized,
     K::Owned: Ord+Clone+'static,
-    // for<'a> K::Container: BatchContainer<ReadItem<'a> = &'a K>,
     V: Ord+ToOwned+PreferredContainer + ?Sized,
     V::Owned: Ord+Clone+'static,
-    T: Ord+Lattice+timely::progress::Timestamp+Clone,
-    D: Semigroup+Clone,
+    T: Ord+Clone+Lattice+timely::progress::Timestamp,
+    D: Ord+Clone+Semigroup+'static,
 {
     type Target = Preferred<K, V, T, D>;
     type KeyContainer = K::Container;
@@ -361,7 +359,7 @@ where
     K: Ord + Clone + 'static,
     V: Ord + Clone + 'static,
     T: Timestamp + Lattice + Clone + 'static,
-    R: Semigroup + Clone + 'static,
+    R: Ord + Semigroup + 'static,
 {
     type Key<'a> = K;
     type Val<'a> = V;
@@ -386,7 +384,7 @@ where
     K: Ord + Columnation + Clone + 'static,
     V: Ord + Columnation + Clone + 'static,
     T: Timestamp + Lattice + Columnation + Clone + 'static,
-    R: Semigroup + Columnation + Clone + 'static,
+    R: Ord + Clone + Semigroup + Columnation + 'static,
 {
     type Key<'a> = &'a K;
     type Val<'a> = &'a V;
@@ -414,8 +412,8 @@ where
     V: Ord+ToOwned+PreferredContainer + ?Sized,
     V::Owned: Columnation + Ord+Clone+'static,
     for<'a> <<V as PreferredContainer>::Container as BatchContainer>::ReadItem<'a> : IntoOwned<'a, Owned = V::Owned>,
-    T: Columnation + Ord+Lattice+Timestamp+Clone,
-    R: Columnation + Semigroup+Clone,
+    T: Columnation + Ord+Clone+Lattice+Timestamp,
+    R: Columnation + Ord+Clone+Semigroup+'static,
 {
     type Key<'a> = &'a K::Owned;
     type Val<'a> = &'a V::Owned;

@@ -145,7 +145,7 @@ impl<D,T,R> ConsolidatingContainerBuilder<Vec<(D, T, R)>>
 where
     D: Data,
     T: Data,
-    R: Semigroup,
+    R: Semigroup+'static,
 {
     /// Flush `self.current` up to the biggest `multiple` of elements. Pass 1 to flush all elements.
     // TODO: Can we replace `multiple` by a bool?
@@ -165,7 +165,7 @@ impl<D,T,R> ContainerBuilder for ConsolidatingContainerBuilder<Vec<(D, T, R)>>
 where
     D: Data,
     T: Data,
-    R: Semigroup,
+    R: Semigroup+'static,
 {
     type Container = Vec<(D,T,R)>;
 

@@ -30,7 +30,7 @@ impl<G, D, R, T, TOuter> Collection<G, D, R>
 where
     G: Scope<Timestamp = Product<TOuter, PointStamp<T>>>,
     D: Data,
-    R: Semigroup,
+    R: Semigroup+'static,
     T: Timestamp+Default,
     TOuter: Timestamp,
 {

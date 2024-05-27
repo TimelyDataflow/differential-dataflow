@@ -76,7 +76,7 @@ pub trait Iterate<G: Scope, D: Data, R: Semigroup> {
             for<'a> F: FnOnce(&Collection<Iterative<'a, G, u64>, D, R>)->Collection<Iterative<'a, G, u64>, D, R>;
 }
 
-impl<G: Scope, D: Ord+Data+Debug, R: Abelian> Iterate<G, D, R> for Collection<G, D, R> {
+impl<G: Scope, D: Ord+Data+Debug, R: Abelian+'static> Iterate<G, D, R> for Collection<G, D, R> {
     fn iterate<F>(&self, logic: F) -> Collection<G, D, R>
         where G::Timestamp: Lattice,
               for<'a> F: FnOnce(&Collection<Iterative<'a, G, u64>, D, R>)->Collection<Iterative<'a, G, u64>, D, R> {
@@ -96,7 +96,7 @@ impl<G: Scope, D: Ord+Data+Debug, R: Abelian> Iterate<G, D, R> for Collection<G,
     }
 }
 
-impl<G: Scope, D: Ord+Data+Debug, R: Semigroup> Iterate<G, D, R> for G {
+impl<G: Scope, D: Ord+Data+Debug, R: Semigroup+'static> Iterate<G, D, R> for G {
     fn iterate<F>(&self, logic: F) -> Collection<G, D, R>
         where G::Timestamp: Lattice,
               for<'a> F: FnOnce(&Collection<Iterative<'a, G, u64>, D, R>)->Collection<Iterative<'a, G, u64>, D, R> {
@@ -151,7 +151,7 @@ impl<G: Scope, D: Ord+Data+Debug, R: Semigroup> Iterate<G, D, R> for G {
 ///     });
 /// })
 /// ```
-pub struct Variable<G: Scope, D: Data, R: Abelian>
+pub struct Variable<G: Scope, D: Data, R: Abelian+'static>
 where G::Timestamp: Lattice {
     collection: Collection<G, D, R>,
     feedback: Handle<G, Vec<(D, G::Timestamp, R)>>,
@@ -222,7 +222,7 @@ impl<G: Scope, D: Data, R: Abelian> Deref for Variable<G, D, R> where G::Timesta
 /// that do not implement `Abelian` and only implement `Semigroup`. This means
 /// that it can be used in settings where the difference type does not support
 /// negation.
-pub struct SemigroupVariable<G: Scope, D: Data, R: Semigroup>
+pub struct SemigroupVariable<G: Scope, D: Data, R: Semigroup+'static>
 where G::Timestamp: Lattice {
     collection: Collection<G, D, R>,
     feedback: Handle<G, Vec<(D, G::Timestamp, R)>>,

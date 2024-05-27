@@ -36,7 +36,7 @@ where
     D: ExchangeData,
     R: ExchangeData+Monoid,
     DOut: Clone+'static,
-    ROut: Monoid,
+    ROut: Monoid + 'static,
     S: FnMut(&D, &R, Tr::Val<'_>, &Tr::Diff)->(DOut, ROut)+'static,
 {
     // No need to block physical merging for this operator.
