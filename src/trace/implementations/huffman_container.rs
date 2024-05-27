@@ -50,6 +50,7 @@ impl<B: Ord + Clone + 'static> PushInto<Vec<B>> for HuffmanContainer<B> {
 }
 
 impl<B: Ord + Clone + 'static> BatchContainer for HuffmanContainer<B> {
+    type Owned = Vec<B>;
     type ReadItem<'a> = Wrapped<'a, B>;
 
     fn reborrow<'b, 'a: 'b>(item: Self::ReadItem<'a>) -> Self::ReadItem<'b> { item }

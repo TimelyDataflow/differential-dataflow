@@ -170,7 +170,7 @@ where
     for<'a> T1::Key<'a>: IntoOwned<'a, Owned = K>,
 {
     fn threshold_named<R2: Ord+Abelian+'static, F: FnMut(&K,&R1)->R2+'static>(&self, name: &str, mut thresh: F) -> Collection<G, K, R2> {
-        self.reduce_abelian::<_,K,(),KeySpine<_,_,_>>(name, move |k,s,t| t.push(((), thresh(k, &s[0].1))))
+        self.reduce_abelian::<_,K,(),KeySpine<K,G::Timestamp,R2>>(name, move |k,s,t| t.push(((), thresh(k, &s[0].1))))
             .as_collection(|k,_| k.clone())
     }
 }
@@ -221,7 +221,7 @@ where
     for<'a> T1::Key<'a>: IntoOwned<'a, Owned = K>,
 {
     fn count_core<R2: Ord + Abelian + From<i8> + 'static>(&self) -> Collection<G, (K, R), R2> {
-        self.reduce_abelian::<_,K,R,ValSpine<_,R,_,_>>("Count", |_k,s,t| t.push((s[0].1.clone(), R2::from(1i8))))
+        self.reduce_abelian::<_,K,R,ValSpine<K,R,G::Timestamp,R2>>("Count", |_k,s,t| t.push((s[0].1.clone(), R2::from(1i8))))
             .as_collection(|k,c| (k.clone(), c.clone()))
     }
 }
