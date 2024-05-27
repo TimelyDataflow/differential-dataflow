@@ -213,7 +213,7 @@ mod val_batch {
         /// Returns true if one should advance one's index in the search for `key`.
         fn advance_key(&self, index: usize, key: <L::KeyContainer as BatchContainer>::ReadItem<'_>) -> bool {
             // Ideally this short-circuits, as `self.keys[index]` is bogus data.
-            !self.live_key(index) || self.keys.index(index).lt(&key)
+            !self.live_key(index) || self.keys.index(index).lt(&<L::KeyContainer as BatchContainer>::reborrow(key))
         }
 
         /// Indicates that a key is valid, rather than dead space, by looking for a valid offset range.
@@ -675,7 +675,7 @@ mod val_batch {
             }
         }
         fn seek_val(&mut self, storage: &RhhValBatch<L>, val: Self::Val<'_>) {
-            self.val_cursor += storage.storage.vals.advance(self.val_cursor, storage.storage.values_for_key(self.key_cursor).1, |x| x.lt(&val));
+            self.val_cursor += storage.storage.vals.advance(self.val_cursor, storage.storage.values_for_key(self.key_cursor).1, |x| <L::ValContainer as BatchContainer>::reborrow(x).lt(&<L::ValContainer as BatchContainer>::reborrow(val)));
         }
         fn rewind_keys(&mut self, storage: &RhhValBatch<L>) {
             self.key_cursor = 0;
