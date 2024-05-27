@@ -140,7 +140,7 @@ where
     FF: Fn(&G::Timestamp, &mut Antichain<G::Timestamp>) + 'static,
     CF: Fn(&G::Timestamp, &G::Timestamp) -> bool + 'static,
     DOut: Clone+'static,
-    ROut: Semigroup,
+    ROut: Semigroup + 'static,
     Y: Fn(std::time::Instant, usize) -> bool + 'static,
     I: IntoIterator<Item=(DOut, G::Timestamp, ROut)>,
     S: FnMut(&K, &V, Tr::Val<'_>, &G::Timestamp, &G::Timestamp, &R, &Tr::Diff)-> I + 'static,

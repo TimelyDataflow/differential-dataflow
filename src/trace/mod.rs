@@ -58,7 +58,7 @@ pub trait TraceReader {
     /// Timestamps associated with updates
     type Time: Timestamp + Lattice + Ord + Clone;
     /// Associated update.
-    type Diff: Semigroup;
+    type Diff: Semigroup + 'static;
 
     /// The type of an immutable collection of updates.
     type Batch: for<'a> BatchReader<Key<'a> = Self::Key<'a>, Val<'a> = Self::Val<'a>, Time = Self::Time, Diff = Self::Diff>+Clone+'static;

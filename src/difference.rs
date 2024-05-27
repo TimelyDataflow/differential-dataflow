@@ -6,8 +6,6 @@
 //! dataflow collections would then track for each record the total of counts and heights, which allows
 //! us to track something like the average.
 
-use crate::Data;
-
 #[deprecated]
 pub use self::Abelian as Diff;
 
@@ -22,7 +20,7 @@ pub use self::Abelian as Diff;
 /// There is a light presumption of commutativity here, in that while we will largely perform addition
 /// in order of timestamps, for many types of timestamps there is no total order and consequently no
 /// obvious order to respect. Non-commutative semigroups should be used with care.
-pub trait Semigroup<Rhs: ?Sized = Self> : Data + Clone {
+pub trait Semigroup<Rhs: ?Sized = Self> : Clone {
     /// The method of `std::ops::AddAssign`, for types that do not implement `AddAssign`.
     fn plus_equals(&mut self, rhs: &Rhs);
     /// Returns true if the element is the additive identity.

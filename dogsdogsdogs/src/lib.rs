@@ -44,7 +44,7 @@ impl<G, P, R> ProposeExtensionMethod<G, P, R> for Collection<G, P, R>
 where
     G: Scope,
     P: ExchangeData+Ord,
-    R: Monoid+Multiply<Output = R>,
+    R: Monoid+Multiply<Output = R>+'static,
 {
     fn propose_using<PE>(&self, extender: &mut PE) -> Collection<G, (P, PE::Extension), R>
     where

@@ -34,7 +34,7 @@ impl<G, D, R> Differentiate<G, D, R> for Collection<G, D, R>
 where
     G: Scope,
     D: Data,
-    R: Abelian,
+    R: Abelian + 'static,
 {
     // For each (data, Alt(time), diff) we add a (data, Neu(time), -diff).
     fn differentiate<'a>(&self, child: &Child<'a, G, AltNeu<G::Timestamp>>) -> Collection<Child<'a, G, AltNeu<G::Timestamp>>, D, R> {
@@ -53,7 +53,7 @@ impl<'a, G, D, R> Integrate<G, D, R> for Collection<Child<'a, G, AltNeu<G::Times
 where
     G: Scope,
     D: Data,
-    R: Abelian,
+    R: Abelian + 'static,
 {
     // We discard each `neu` variant and strip off the `alt` wrapper.
     fn integrate(&self) -> Collection<G, D, R> {

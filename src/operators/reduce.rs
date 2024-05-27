@@ -59,13 +59,13 @@ pub trait Reduce<G: Scope, K: Data, V: Data, R: Semigroup> where G::Timestamp: L
     ///          });
     /// });
     /// ```
-    fn reduce<L, V2: Data, R2: Abelian>(&self, logic: L) -> Collection<G, (K, V2), R2>
+    fn reduce<L, V2: Data, R2: Ord+Abelian+'static>(&self, logic: L) -> Collection<G, (K, V2), R2>
     where L: FnMut(&K, &[(&V, R)], &mut Vec<(V2, R2)>)+'static {
         self.reduce_named("Reduce", logic)
     }
 
     /// As `reduce` with the ability to name the operator.
-    fn reduce_named<L, V2: Data, R2: Abelian>(&self, name: &str, logic: L) -> Collection<G, (K, V2), R2>
+    fn reduce_named<L, V2: Data, R2: Ord+Abelian+'static>(&self, name: &str, logic: L) -> Collection<G, (K, V2), R2>
     where L: FnMut(&K, &[(&V, R)], &mut Vec<(V2, R2)>)+'static;
 }
 
@@ -77,21 +77,21 @@ impl<G, K, V, R> Reduce<G, K, V, R> for Collection<G, (K, V), R>
         V: ExchangeData,
         R: ExchangeData+Semigroup,
  {
-    fn reduce_named<L, V2: Data, R2: Abelian>(&self, name: &str, logic: L) -> Collection<G, (K, V2), R2>
+    fn reduce_named<L, V2: Data, R2: Ord+Abelian+'static>(&self, name: &str, logic: L) -> Collection<G, (K, V2), R2>
         where L: FnMut(&K, &[(&V, R)], &mut Vec<(V2, R2)>)+'static {
         self.arrange_by_key_named(&format!("Arrange: {}", name))
             .reduce_named(name, logic)
     }
 }
 
-impl<G, K: Data, V: Data, T1, R: Semigroup> Reduce<G, K, V, R> for Arranged<G, T1>
+impl<G, K: Data, V: Data, T1, R: Ord+Semigroup+'static> Reduce<G, K, V, R> for Arranged<G, T1>
 where
     G: Scope<Timestamp=T1::Time>,
     T1: for<'a> TraceReader<Key<'a>=&'a K, Val<'a>=&'a V, Diff=R>+Clone+'static,
     for<'a> T1::Key<'a> : IntoOwned<'a, Owned = K>,
     for<'a> T1::Val<'a> : IntoOwned<'a, Owned = V>,
 {
-    fn reduce_named<L, V2: Data, R2: Abelian>(&self, name: &str, logic: L) -> Collection<G, (K, V2), R2>
+    fn reduce_named<L, V2: Data, R2: Ord+Abelian+'static>(&self, name: &str, logic: L) -> Collection<G, (K, V2), R2>
         where L: FnMut(&K, &[(&V, R)], &mut Vec<(V2, R2)>)+'static {
         self.reduce_abelian::<_,K,V2,ValSpine<_,_,_,_>>(name, logic)
             .as_collection(|k,v| (k.clone(), v.clone()))
@@ -119,12 +119,12 @@ pub trait Threshold<G: Scope, K: Data, R1: Semigroup> where G::Timestamp: Lattic
     ///          .threshold(|_,c| c % 2);
     /// });
     /// ```
-    fn threshold<R2: Abelian, F: FnMut(&K, &R1)->R2+'static>(&self, thresh: F) -> Collection<G, K, R2> {
+    fn threshold<R2: Ord+Abelian+'static, F: FnMut(&K, &R1)->R2+'static>(&self, thresh: F) -> Collection<G, K, R2> {
         self.threshold_named("Threshold", thresh)
     }
 
     /// A `threshold` with the ability to name the operator.
-    fn threshold_named<R2: Abelian, F: FnMut(&K, &R1)->R2+'static>(&self, name: &str, thresh: F) -> Collection<G, K, R2>;
+    fn threshold_named<R2: Ord+Abelian+'static, F: FnMut(&K, &R1)->R2+'static>(&self, name: &str, thresh: F) -> Collection<G, K, R2>;
 
     /// Reduces the collection to one occurrence of each distinct element.
     ///
@@ -150,14 +150,14 @@ pub trait Threshold<G: Scope, K: Data, R1: Semigroup> where G::Timestamp: Lattic
     /// This method allows `distinct` to produce collections whose difference
     /// type is something other than an `isize` integer, for example perhaps an
     /// `i32`.
-    fn distinct_core<R2: Abelian+From<i8>>(&self) -> Collection<G, K, R2> {
+    fn distinct_core<R2: Ord+Abelian+'static+From<i8>>(&self) -> Collection<G, K, R2> {
         self.threshold_named("Distinct", |_,_| R2::from(1i8))
     }
 }
 
 impl<G: Scope, K: ExchangeData+Hashable, R1: ExchangeData+Semigroup> Threshold<G, K, R1> for Collection<G, K, R1>
 where G::Timestamp: Lattice+Ord {
-    fn threshold_named<R2: Abelian, F: FnMut(&K,&R1)->R2+'static>(&self, name: &str, thresh: F) -> Collection<G, K, R2> {
+    fn threshold_named<R2: Ord+Abelian+'static, F: FnMut(&K,&R1)->R2+'static>(&self, name: &str, thresh: F) -> Collection<G, K, R2> {
         self.arrange_by_self_named(&format!("Arrange: {}", name))
             .threshold_named(name, thresh)
     }
@@ -169,7 +169,7 @@ where
     T1: for<'a> TraceReader<Key<'a>=&'a K, Val<'a>=&'a (), Diff=R1>+Clone+'static,
     for<'a> T1::Key<'a>: IntoOwned<'a, Owned = K>,
 {
-    fn threshold_named<R2: Abelian, F: FnMut(&K,&R1)->R2+'static>(&self, name: &str, mut thresh: F) -> Collection<G, K, R2> {
+    fn threshold_named<R2: Ord+Abelian+'static, F: FnMut(&K,&R1)->R2+'static>(&self, name: &str, mut thresh: F) -> Collection<G, K, R2> {
         self.reduce_abelian::<_,K,(),KeySpine<_,_,_>>(name, move |k,s,t| t.push(((), thresh(k, &s[0].1))))
             .as_collection(|k,_| k.clone())
     }
@@ -201,26 +201,26 @@ pub trait Count<G: Scope, K: Data, R: Semigroup> where G::Timestamp: Lattice+Ord
     /// This method allows `count` to produce collections whose difference
     /// type is something other than an `isize` integer, for example perhaps an
     /// `i32`.
-    fn count_core<R2: Abelian + From<i8>>(&self) -> Collection<G, (K, R), R2>;
+    fn count_core<R2: Ord + Abelian + From<i8> + 'static>(&self) -> Collection<G, (K, R), R2>;
 }
 
 impl<G: Scope, K: ExchangeData+Hashable, R: ExchangeData+Semigroup> Count<G, K, R> for Collection<G, K, R>
 where
     G::Timestamp: Lattice+Ord,
 {
-    fn count_core<R2: Abelian + From<i8>>(&self) -> Collection<G, (K, R), R2> {
+    fn count_core<R2: Ord + Abelian + From<i8> + 'static>(&self) -> Collection<G, (K, R), R2> {
         self.arrange_by_self_named("Arrange: Count")
             .count_core()
     }
 }
 
-impl<G, K: Data, T1, R: Semigroup> Count<G, K, R> for Arranged<G, T1>
+impl<G, K: Data, T1, R: Data+Semigroup> Count<G, K, R> for Arranged<G, T1>
 where
     G: Scope<Timestamp=T1::Time>,
     T1: for<'a> TraceReader<Key<'a>=&'a K, Val<'a>=&'a (), Diff=R>+Clone+'static,
     for<'a> T1::Key<'a>: IntoOwned<'a, Owned = K>,
 {
-    fn count_core<R2: Abelian + From<i8>>(&self) -> Collection<G, (K, R), R2> {
+    fn count_core<R2: Ord + Abelian + From<i8> + 'static>(&self) -> Collection<G, (K, R), R2> {
         self.reduce_abelian::<_,K,R,ValSpine<_,R,_,_>>("Count", |_k,s,t| t.push((s[0].1.clone(), R2::from(1i8))))
             .as_collection(|k,c| (k.clone(), c.clone()))
     }

@@ -56,7 +56,7 @@ pub trait Join<G: Scope, K: Data, V: Data, R: Semigroup> {
         V2: ExchangeData,
         R2: ExchangeData+Semigroup,
         R: Multiply<R2>,
-        <R as Multiply<R2>>::Output: Semigroup
+        <R as Multiply<R2>>::Output: Semigroup+'static
     {
         self.join_map(other, |k,v,v2| (k.clone(),(v.clone(),v2.clone())))
     }
@@ -80,7 +80,7 @@ pub trait Join<G: Scope, K: Data, V: Data, R: Semigroup> {
     /// });
     /// ```
     fn join_map<V2, R2, D, L>(&self, other: &Collection<G, (K,V2), R2>, logic: L) -> Collection<G, D, <R as Multiply<R2>>::Output>
-    where K: ExchangeData, V2: ExchangeData, R2: ExchangeData+Semigroup, R: Multiply<R2>, <R as Multiply<R2>>::Output: Semigroup, D: Data, L: FnMut(&K, &V, &V2)->D+'static;
+    where K: ExchangeData, V2: ExchangeData, R2: ExchangeData+Semigroup, R: Multiply<R2>, <R as Multiply<R2>>::Output: Semigroup+'static, D: Data, L: FnMut(&K, &V, &V2)->D+'static;
 
     /// Matches pairs `(key, val)` and `key` based on `key`, producing the former with frequencies multiplied.
     ///
@@ -105,7 +105,7 @@ pub trait Join<G: Scope, K: Data, V: Data, R: Semigroup> {
     /// });
     /// ```
     fn semijoin<R2>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), <R as Multiply<R2>>::Output>
-    where K: ExchangeData, R2: ExchangeData+Semigroup, R: Multiply<R2>, <R as Multiply<R2>>::Output: Semigroup;
+    where K: ExchangeData, R2: ExchangeData+Semigroup, R: Multiply<R2>, <R as Multiply<R2>>::Output: Semigroup+'static;
 
     /// Subtracts the semijoin with `other` from `self`.
     ///
@@ -134,7 +134,7 @@ pub trait Join<G: Scope, K: Data, V: Data, R: Semigroup> {
     /// });
     /// ```
     fn antijoin<R2>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), R>
-    where K: ExchangeData, R2: ExchangeData+Semigroup, R: Multiply<R2, Output = R>, R: Abelian;
+    where K: ExchangeData, R2: ExchangeData+Semigroup, R: Multiply<R2, Output = R>, R: Abelian+'static;
 }
 
 impl<G, K, V, R> Join<G, K, V, R> for Collection<G, (K, V), R>
@@ -146,21 +146,21 @@ where
     G::Timestamp: Lattice+Ord,
 {
     fn join_map<V2: ExchangeData, R2: ExchangeData+Semigroup, D: Data, L>(&self, other: &Collection<G, (K, V2), R2>, mut logic: L) -> Collection<G, D, <R as Multiply<R2>>::Output>
-    where R: Multiply<R2>, <R as Multiply<R2>>::Output: Semigroup, L: FnMut(&K, &V, &V2)->D+'static {
+    where R: Multiply<R2>, <R as Multiply<R2>>::Output: Semigroup+'static, L: FnMut(&K, &V, &V2)->D+'static {
         let arranged1 = self.arrange_by_key();
         let arranged2 = other.arrange_by_key();
         arranged1.join_core(&arranged2, move |k,v1,v2| Some(logic(k,v1,v2)))
     }
 
     fn semijoin<R2: ExchangeData+Semigroup>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), <R as Multiply<R2>>::Output>
-    where R: Multiply<R2>, <R as Multiply<R2>>::Output: Semigroup {
+    where R: Multiply<R2>, <R as Multiply<R2>>::Output: Semigroup+'static {
         let arranged1 = self.arrange_by_key();
         let arranged2 = other.arrange_by_self();
         arranged1.join_core(&arranged2, |k,v,_| Some((k.clone(), v.clone())))
     }
 
     fn antijoin<R2: ExchangeData+Semigroup>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), R>
-    where R: Multiply<R2, Output=R>, R: Abelian {
+    where R: Multiply<R2, Output=R>, R: Abelian+'static {
         self.concat(&self.semijoin(other).negate())
     }
 }
@@ -175,7 +175,7 @@ where
     fn join_map<V2: ExchangeData, R2: ExchangeData+Semigroup, D: Data, L>(&self, other: &Collection<G, (K, V2), R2>, mut logic: L) -> Collection<G, D, <Tr::Diff as Multiply<R2>>::Output>
     where 
         Tr::Diff: Multiply<R2>,
-        <Tr::Diff as Multiply<R2>>::Output: Semigroup,
+        <Tr::Diff as Multiply<R2>>::Output: Semigroup+'static,
         L: for<'a> FnMut(Tr::Key<'a>, Tr::Val<'a>, &V2)->D+'static,
     {
         let arranged2 = other.arrange_by_key();
@@ -183,13 +183,13 @@ where
     }
 
     fn semijoin<R2: ExchangeData+Semigroup>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), <Tr::Diff as Multiply<R2>>::Output>
-    where Tr::Diff: Multiply<R2>, <Tr::Diff as Multiply<R2>>::Output: Semigroup {
+    where Tr::Diff: Multiply<R2>, <Tr::Diff as Multiply<R2>>::Output: Semigroup+'static {
         let arranged2 = other.arrange_by_self();
         self.join_core(&arranged2, |k,v,_| Some((k.clone(), v.clone())))
     }
 
     fn antijoin<R2: ExchangeData+Semigroup>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), Tr::Diff>
-    where Tr::Diff: Multiply<R2, Output=Tr::Diff>, Tr::Diff: Abelian {
+    where Tr::Diff: Multiply<R2, Output=Tr::Diff>, Tr::Diff: Abelian+'static {
         self.as_collection(|k,v| (k.clone(), v.clone()))
             .concat(&self.semijoin(other).negate())
     }
@@ -236,7 +236,7 @@ pub trait JoinCore<G: Scope, K: 'static + ?Sized, V: 'static + ?Sized, R: Semigr
     where
         Tr2: for<'a> TraceReader<Key<'a>=&'a K, Time=G::Timestamp>+Clone+'static,
         R: Multiply<Tr2::Diff>,
-        <R as Multiply<Tr2::Diff>>::Output: Semigroup,
+        <R as Multiply<Tr2::Diff>>::Output: Semigroup+'static,
         I: IntoIterator,
         I::Item: Data,
         L: FnMut(&K,&V,Tr2::Val<'_>)->I+'static,
@@ -279,7 +279,7 @@ pub trait JoinCore<G: Scope, K: 'static + ?Sized, V: 'static + ?Sized, R: Semigr
     where
         Tr2: for<'a> TraceReader<Key<'a>=&'a K, Time=G::Timestamp>+Clone+'static,
         D: Data,
-        ROut: Semigroup,
+        ROut: Semigroup+'static,
         I: IntoIterator<Item=(D, G::Timestamp, ROut)>,
         L: for<'a> FnMut(&K,&V,Tr2::Val<'_>,&G::Timestamp,&R,&Tr2::Diff)->I+'static,
         ;
@@ -298,7 +298,7 @@ where
     where
         Tr2: for<'a> TraceReader<Key<'a>=&'a K, Time=G::Timestamp>+Clone+'static,
         R: Multiply<Tr2::Diff>,
-        <R as Multiply<Tr2::Diff>>::Output: Semigroup,
+        <R as Multiply<Tr2::Diff>>::Output: Semigroup+'static,
         I: IntoIterator,
         I::Item: Data,
         L: FnMut(&K,&V,Tr2::Val<'_>)->I+'static,
@@ -313,7 +313,7 @@ where
         I: IntoIterator<Item=(D, G::Timestamp, ROut)>,
         L: FnMut(&K,&V,Tr2::Val<'_>,&G::Timestamp,&R,&Tr2::Diff)->I+'static,
         D: Data,
-        ROut: Semigroup,
+        ROut: Semigroup+'static,
     {
         self.arrange_by_key().join_core_internal_unsafe(stream2, result)
     }
