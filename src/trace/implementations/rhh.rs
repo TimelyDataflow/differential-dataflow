@@ -581,8 +581,8 @@ mod val_batch {
                 // we push nothing and report an unincremented offset to encode this case.
                 let time_diff = self.result.times.last().zip(self.result.diffs.last());
                 let last_eq = self.update_stash.last().zip(time_diff).map(|((t1, d1), (t2, d2))| {
-                    let t1 = <<<L as Layout>::TimeContainer as BatchContainer>::ReadItem<'_> as IntoOwned>::borrow_as(t1);
-                    let d1 = <<<L as Layout>::DiffContainer as BatchContainer>::ReadItem<'_> as IntoOwned>::borrow_as(d1);
+                    let t1 = <<L::TimeContainer as BatchContainer>::ReadItem<'_> as IntoOwned>::borrow_as(t1);
+                    let d1 = <<L::DiffContainer as BatchContainer>::ReadItem<'_> as IntoOwned>::borrow_as(d1);
                     t1.eq(&t2) && d1.eq(&d2)
                 });
                 if self.update_stash.len() == 1 && last_eq.unwrap_or(false) {
@@ -738,8 +738,8 @@ mod val_batch {
         /// to recover the singleton to push it into `updates` to join the second update.
         fn push_update(&mut self, time: <L::Target as Update>::Time, diff: <L::Target as Update>::Diff) {
             // If a just-pushed update exactly equals `(time, diff)` we can avoid pushing it.
-            let t1 = <<<L as Layout>::TimeContainer as BatchContainer>::ReadItem<'_> as IntoOwned>::borrow_as(&time);
-            let d1 = <<<L as Layout>::DiffContainer as BatchContainer>::ReadItem<'_> as IntoOwned>::borrow_as(&diff);
+            let t1 = <<L::TimeContainer as BatchContainer>::ReadItem<'_> as IntoOwned>::borrow_as(&time);
+            let d1 = <<L::DiffContainer as BatchContainer>::ReadItem<'_> as IntoOwned>::borrow_as(&diff);
             if self.result.times.last().map(|t| t == t1).unwrap_or(false) && self.result.diffs.last().map(|d| d == d1).unwrap_or(false) {
                 assert!(self.singleton.is_none());
                 self.singleton = Some((time, diff));
