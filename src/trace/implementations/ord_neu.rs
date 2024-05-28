@@ -146,6 +146,7 @@ mod val_batch {
         type Val<'a> = <L::ValContainer as BatchContainer>::ReadItem<'a>;
         type Time = <L::Target as Update>::Time;
         type Diff = <L::Target as Update>::Diff;
+        type DiffGat<'a> = <L::DiffContainer as BatchContainer>::ReadItem<'a>;
 
         type Cursor = OrdValCursor<L>;
         fn cursor(&self) -> Self::Cursor { 
@@ -462,17 +463,18 @@ mod val_batch {
         type Val<'a> = <L::ValContainer as BatchContainer>::ReadItem<'a>;
         type Time = <L::Target as Update>::Time;
         type Diff = <L::Target as Update>::Diff;
+        type DiffGat<'a> = <L::DiffContainer as BatchContainer>::ReadItem<'a>;
 
         type Storage = OrdValBatch<L>;
 
         fn key<'a>(&self, storage: &'a OrdValBatch<L>) -> Self::Key<'a> { storage.storage.keys.index(self.key_cursor) }
         fn val<'a>(&self, storage: &'a OrdValBatch<L>) -> Self::Val<'a> { storage.storage.vals.index(self.val_cursor) }
-        fn map_times<L2: FnMut(&Self::Time, &Self::Diff)>(&mut self, storage: &OrdValBatch<L>, mut logic: L2) {
+        fn map_times<L2: FnMut(&Self::Time, Self::DiffGat<'_>)>(&mut self, storage: &OrdValBatch<L>, mut logic: L2) {
             let (lower, upper) = storage.storage.updates_for_value(self.val_cursor);
             for index in lower .. upper {
                 let time = storage.storage.times.index(index).into_owned();
-                let diff = storage.storage.diffs.index(index).into_owned();
-                logic(&time, &diff);
+                let diff = storage.storage.diffs.index(index);
+                logic(&time, diff);
             }
         }
         fn key_valid(&self, storage: &OrdValBatch<L>) -> bool { self.key_cursor < storage.storage.keys.len() }
@@ -704,6 +706,7 @@ mod key_batch {
         type Val<'a> = &'a ();
         type Time = <L::Target as Update>::Time;
         type Diff = <L::Target as Update>::Diff;
+        type DiffGat<'a> = <L::DiffContainer as BatchContainer>::ReadItem<'a>;
 
         type Cursor = OrdKeyCursor<L>;
         fn cursor(&self) -> Self::Cursor {
@@ -930,17 +933,18 @@ mod key_batch {
         type Val<'a> = &'a ();
         type Time = <L::Target as Update>::Time;
         type Diff = <L::Target as Update>::Diff;
+        type DiffGat<'a> = <L::DiffContainer as BatchContainer>::ReadItem<'a>;
 
         type Storage = OrdKeyBatch<L>;
 
         fn key<'a>(&self, storage: &'a Self::Storage) -> Self::Key<'a> { storage.storage.keys.index(self.key_cursor) }
         fn val<'a>(&self, _storage: &'a Self::Storage) -> &'a () { &() }
-        fn map_times<L2: FnMut(&Self::Time, &Self::Diff)>(&mut self, storage: &Self::Storage, mut logic: L2) {
+        fn map_times<L2: FnMut(&Self::Time, Self::DiffGat<'_>)>(&mut self, storage: &Self::Storage, mut logic: L2) {
             let (lower, upper) = storage.storage.updates_for_key(self.key_cursor);
             for index in lower .. upper {
                 let time = storage.storage.times.index(index).into_owned();
-                let diff = storage.storage.diffs.index(index).into_owned();
-                logic(&time, &diff);
+                let diff = storage.storage.diffs.index(index);
+                logic(&time, diff);
             }
         }
         fn key_valid(&self, storage: &Self::Storage) -> bool { self.key_cursor < storage.storage.keys.len() }

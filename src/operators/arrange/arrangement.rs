@@ -217,7 +217,7 @@ where
                         while let Some(val) = cursor.get_val(batch) {
                             for datum in logic(key, val) {
                                 cursor.map_times(batch, |time, diff| {
-                                    session.give((datum.clone(), time.clone(), diff.clone()));
+                                    session.give((datum.clone(), time.clone(), diff.into_owned()));
                                 });
                             }
                             cursor.step_val(batch);

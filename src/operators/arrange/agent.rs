@@ -47,6 +47,7 @@ where
     type Val<'a> = Tr::Val<'a>;
     type Time = Tr::Time;
     type Diff = Tr::Diff;
+    type DiffGat<'a> = Tr::DiffGat<'a>;
 
     type Batch = Tr::Batch;
     type Storage = Tr::Storage;

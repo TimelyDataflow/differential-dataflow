@@ -35,6 +35,7 @@ where
     type Val<'a> = Tr::Val<'a>;
     type Time = TInner;
     type Diff = Tr::Diff;
+    type DiffGat<'a> = Tr::DiffGat<'a>;
 
     type Batch = BatchEnter<Tr::Batch, TInner>;
     type Storage = Tr::Storage;
@@ -117,6 +118,7 @@ where
     type Val<'a> = B::Val<'a>;
     type Time = TInner;
     type Diff = B::Diff;
+    type DiffGat<'a> = B::DiffGat<'a>;
 
     type Cursor = BatchCursorEnter<B::Cursor, TInner>;
 
@@ -169,6 +171,7 @@ where
     type Val<'a> = C::Val<'a>;
     type Time = TInner;
     type Diff = C::Diff;
+    type DiffGat<'a> = C::DiffGat<'a>;
 
     type Storage = C::Storage;
 
@@ -179,7 +182,7 @@ where
     #[inline] fn val<'a>(&self, storage: &'a Self::Storage) -> Self::Val<'a> { self.cursor.val(storage) }
 
     #[inline]
-    fn map_times<L: FnMut(&TInner, &Self::Diff)>(&mut self, storage: &Self::Storage, mut logic: L) {
+    fn map_times<L: FnMut(&TInner, Self::DiffGat<'_>)>(&mut self, storage: &Self::Storage, mut logic: L) {
         self.cursor.map_times(storage, |time, diff| {
             logic(&TInner::to_inner(time.clone()), diff)
         })
@@ -220,6 +223,7 @@ where
     type Val<'a> = C::Val<'a>;
     type Time = TInner;
     type Diff = C::Diff;
+    type DiffGat<'a> = C::DiffGat<'a>;
 
     type Storage = BatchEnter<C::Storage, TInner>;
 
@@ -230,7 +234,7 @@ where
     #[inline] fn val<'a>(&self, storage: &'a Self::Storage) -> Self::Val<'a> { self.cursor.val(&storage.batch) }
 
     #[inline]
-    fn map_times<L: FnMut(&TInner, &Self::Diff)>(&mut self, storage: &Self::Storage, mut logic: L) {
+    fn map_times<L: FnMut(&TInner, Self::DiffGat<'_>)>(&mut self, storage: &Self::Storage, mut logic: L) {
         self.cursor.map_times(&storage.batch, |time, diff| {
             logic(&TInner::to_inner(time.clone()), diff)
         })

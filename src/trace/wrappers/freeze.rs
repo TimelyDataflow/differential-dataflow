@@ -79,6 +79,7 @@ where
     type Val<'a> = Tr::Val<'a>;
     type Time = Tr::Time;
     type Diff = Tr::Diff;
+    type DiffGat<'a> = Tr::DiffGat<'a>;
 
     type Batch = BatchFreeze<Tr::Batch, F>;
     type Storage = Tr::Storage;
@@ -141,6 +142,7 @@ where
     type Val<'a> = B::Val<'a>;
     type Time = B::Time;
     type Diff = B::Diff;
+    type DiffGat<'a> = B::DiffGat<'a>;
 
     type Cursor = BatchCursorFreeze<B::Cursor, F>;
 
@@ -183,6 +185,7 @@ where
     type Val<'a> = C::Val<'a>;
     type Time = C::Time;
     type Diff = C::Diff;
+    type DiffGat<'a> = C::DiffGat<'a>;
 
     type Storage = C::Storage;
 
@@ -192,7 +195,7 @@ where
     #[inline] fn key<'a>(&self, storage: &'a Self::Storage) -> Self::Key<'a> { self.cursor.key(storage) }
     #[inline] fn val<'a>(&self, storage: &'a Self::Storage) -> Self::Val<'a> { self.cursor.val(storage) }
 
-    #[inline] fn map_times<L: FnMut(&Self::Time, &Self::Diff)>(&mut self, storage: &Self::Storage, mut logic: L) {
+    #[inline] fn map_times<L: FnMut(&Self::Time, Self::DiffGat<'_>)>(&mut self, storage: &Self::Storage, mut logic: L) {
         let func = &self.func;
         self.cursor.map_times(storage, |time, diff| {
             if let Some(time) = func(time) {
@@ -233,6 +236,7 @@ where
     type Val<'a> = C::Val<'a>;
     type Time = C::Time;
     type Diff = C::Diff;
+    type DiffGat<'a> = C::DiffGat<'a>;
 
     type Storage = BatchFreeze<C::Storage, F>;
 
@@ -242,7 +246,7 @@ where
     #[inline] fn key<'a>(&self, storage: &'a Self::Storage) -> Self::Key<'a> { self.cursor.key(&storage.batch) }
     #[inline] fn val<'a>(&self, storage: &'a Self::Storage) -> Self::Val<'a> { self.cursor.val(&storage.batch) }
 
-    #[inline] fn map_times<L: FnMut(&Self::Time, &Self::Diff)>(&mut self, storage: &Self::Storage, mut logic: L) {
+    #[inline] fn map_times<L: FnMut(&Self::Time, Self::DiffGat<'_>)>(&mut self, storage: &Self::Storage, mut logic: L) {
         let func = &self.func;
         self.cursor.map_times(&storage.batch, |time, diff| {
             if let Some(time) = func(time) {

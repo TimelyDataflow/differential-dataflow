@@ -36,6 +36,7 @@ impl<Tr: TraceReader> TraceReader for TraceFrontier<Tr> {
     type Val<'a> = Tr::Val<'a>;
     type Time = Tr::Time;
     type Diff = Tr::Diff;
+    type DiffGat<'a> = Tr::DiffGat<'a>;
 
     type Batch = BatchFrontier<Tr::Batch>;
     type Storage = Tr::Storage;
@@ -85,6 +86,7 @@ impl<B: BatchReader> BatchReader for BatchFrontier<B> {
     type Val<'a> = B::Val<'a>;
     type Time = B::Time;
     type Diff = B::Diff;
+    type DiffGat<'a> = B::DiffGat<'a>;
 
     type Cursor = BatchCursorFrontier<B::Cursor>;
 
@@ -128,6 +130,7 @@ impl<C: Cursor> Cursor for CursorFrontier<C, C::Time> {
     type Val<'a> = C::Val<'a>;
     type Time = C::Time;
     type Diff = C::Diff;
+    type DiffGat<'a> = C::DiffGat<'a>;
 
     type Storage = C::Storage;
 
@@ -138,7 +141,7 @@ impl<C: Cursor> Cursor for CursorFrontier<C, C::Time> {
     #[inline] fn val<'a>(&self, storage: &'a Self::Storage) -> Self::Val<'a> { self.cursor.val(storage) }
 
     #[inline]
-    fn map_times<L: FnMut(&Self::Time,&Self::Diff)>(&mut self, storage: &Self::Storage, mut logic: L) {
+    fn map_times<L: FnMut(&Self::Time,Self::DiffGat<'_>)>(&mut self, storage: &Self::Storage, mut logic: L) {
         let since = self.since.borrow();
         let until = self.until.borrow();
         let mut temp: C::Time = <C::Time as timely::progress::Timestamp>::minimum();
@@ -188,6 +191,7 @@ where
     type Val<'a> = C::Val<'a>;
     type Time = C::Time;
     type Diff = C::Diff;
+    type DiffGat<'a> = C::DiffGat<'a>;
 
     type Storage = BatchFrontier<C::Storage>;
 
@@ -198,7 +202,7 @@ where
     #[inline] fn val<'a>(&self, storage: &'a Self::Storage) -> Self::Val<'a> { self.cursor.val(&storage.batch) }
 
     #[inline]
-    fn map_times<L: FnMut(&Self::Time,&Self::Diff)>(&mut self, storage: &Self::Storage, mut logic: L) {
+    fn map_times<L: FnMut(&Self::Time,Self::DiffGat<'_>)>(&mut self, storage: &Self::Storage, mut logic: L) {
         let since = self.since.borrow();
         let until = self.until.borrow();
         let mut temp: C::Time = <C::Time as timely::progress::Timestamp>::minimum();
