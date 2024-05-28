@@ -679,7 +679,11 @@ where
 
                     use crate::trace::cursor::IntoOwned;
                     
-                    thinker.history1.edits.load(trace, trace_storage, |time| time.into_owned().join(meet));
+                    thinker.history1.edits.load(trace, trace_storage, |time| {
+                        let mut time = time.into_owned();
+                        time.join_assign(meet);
+                        time
+                    });
                     thinker.history2.edits.load(batch, batch_storage, |time| time.into_owned());
 
                     // populate `temp` with the results in the best way we know how.

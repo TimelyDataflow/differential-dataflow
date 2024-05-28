@@ -1,7 +1,7 @@
 use timely::dataflow::Scope;
 
 use differential_dataflow::{ExchangeData, Collection, Hashable};
-use differential_dataflow::difference::{Monoid, Multiply};
+use differential_dataflow::difference::{Semigroup, Monoid, Multiply};
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::trace::TraceReader;
 use differential_dataflow::trace::cursor::IntoOwned;
@@ -25,6 +25,7 @@ where
     for<'a> Tr::Key<'a> : IntoOwned<'a, Owned = K>,
     K: Hashable + Default + Ord + 'static,
     Tr::Diff: Monoid+Multiply<Output = Tr::Diff>+ExchangeData,
+    for<'a> Tr::Diff : Semigroup<Tr::DiffGat<'a>>,
     F: Fn(&P)->K+Clone+'static,
     P: ExchangeData,
     V: Clone + 'static,
@@ -55,6 +56,7 @@ where
     G: Scope<Timestamp=Tr::Time>,
     Tr: TraceReader+Clone+'static,
     for<'a> Tr::Key<'a> : IntoOwned<'a, Owned = K>,
+    for<'a> Tr::Diff : Semigroup<Tr::DiffGat<'a>>,
     K: Hashable + Default + Ord + 'static,
     Tr::Diff: Monoid+Multiply<Output = Tr::Diff>+ExchangeData,
     F: Fn(&P)->K+Clone+'static,

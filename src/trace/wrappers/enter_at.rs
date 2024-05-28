@@ -6,7 +6,6 @@ use timely::progress::{Antichain, frontier::AntichainRef};
 use crate::lattice::Lattice;
 use crate::trace::{TraceReader, BatchReader, Description};
 use crate::trace::cursor::Cursor;
-use crate::trace::cursor::IntoOwned;
 
 /// Wrapper to provide trace to nested scope.
 ///
@@ -47,7 +46,7 @@ where
     Tr::Batch: Clone,
     TInner: Refines<Tr::Time>+Lattice,
     F: 'static,
-    F: FnMut(Tr::Key<'_>, Tr::Val<'_>, &Tr::Time)->TInner+Clone,
+    F: FnMut(Tr::Key<'_>, Tr::Val<'_>, Tr::TimeGat<'_>)->TInner+Clone,
     G: FnMut(&TInner)->Tr::Time+Clone+'static,
 {
     type Key<'a> = Tr::Key<'a>;
@@ -137,7 +136,7 @@ impl<B, TInner, F> BatchReader for BatchEnter<B, TInner, F>
 where
     B: BatchReader,
     TInner: Refines<B::Time>+Lattice,
-    F: FnMut(B::Key<'_>, <B::Cursor as Cursor>::Val<'_>, &B::Time)->TInner+Clone,
+    F: FnMut(B::Key<'_>, <B::Cursor as Cursor>::Val<'_>, B::TimeGat<'_>)->TInner+Clone,
 {
     type Key<'a> = B::Key<'a>;
     type Val<'a> = B::Val<'a>;
@@ -195,7 +194,7 @@ impl<C, TInner, F> Cursor for CursorEnter<C, TInner, F>
 where
     C: Cursor,
     TInner: Refines<C::Time>+Lattice,
-    F: FnMut(C::Key<'_>, C::Val<'_>, &C::Time)->TInner,
+    F: FnMut(C::Key<'_>, C::Val<'_>, C::TimeGat<'_>)->TInner,
 {
     type Key<'a> = C::Key<'a>;
     type Val<'a> = C::Val<'a>;
@@ -218,7 +217,7 @@ where
         let val = self.val(storage);
         let logic2 = &mut self.logic;
         self.cursor.map_times(storage, |time, diff| {
-            logic(&logic2(key, val, &time.into_owned()), diff)
+            logic(&logic2(key, val, time), diff)
         })
     }
 
@@ -254,7 +253,7 @@ impl<C, TInner, F> BatchCursorEnter<C, TInner, F> {
 impl<TInner, C: Cursor, F> Cursor for BatchCursorEnter<C, TInner, F>
 where
     TInner: Refines<C::Time>+Lattice,
-    F: FnMut(C::Key<'_>, C::Val<'_>, &C::Time)->TInner,
+    F: FnMut(C::Key<'_>, C::Val<'_>, C::TimeGat<'_>)->TInner,
 {
     type Key<'a> = C::Key<'a>;
     type Val<'a> = C::Val<'a>;
@@ -277,7 +276,7 @@ where
         let val = self.val(storage);
         let logic2 = &mut self.logic;
         self.cursor.map_times(&storage.batch, |time, diff| {
-            logic(&logic2(key, val, &time.into_owned()), diff)
+            logic(&logic2(key, val, time), diff)
         })
     }
 

@@ -791,13 +791,21 @@ mod history_replay {
 
             // Load the input and output histories.
             let mut input_replay = if let Some(meet) = meet.as_ref() {
-                self.input_history.replay_key(source_cursor, source_storage, key, |time| time.into_owned().join(meet))
+                self.input_history.replay_key(source_cursor, source_storage, key, |time| {
+                    let mut time = time.into_owned();
+                    time.join_assign(meet);
+                    time
+                })
             }
             else {
                 self.input_history.replay_key(source_cursor, source_storage, key, |time| time.into_owned())
             };
             let mut output_replay = if let Some(meet) = meet.as_ref() {
-                self.output_history.replay_key(output_cursor, output_storage, key, |time| time.into_owned().join(meet))
+                self.output_history.replay_key(output_cursor, output_storage, key, |time| {
+                    let mut time = time.into_owned();
+                    time.join_assign(meet);
+                    time
+                })
             }
             else {
                 self.output_history.replay_key(output_cursor, output_storage, key, |time| time.into_owned())

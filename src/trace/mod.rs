@@ -65,13 +65,13 @@ pub trait TraceReader {
     type DiffGat<'a> : Copy + IntoOwned<'a, Owned = Self::Diff>;
 
     /// The type of an immutable collection of updates.
-    type Batch: for<'a> BatchReader<Key<'a> = Self::Key<'a>, Val<'a> = Self::Val<'a>, Time = Self::Time, Diff = Self::Diff>+Clone+'static;
+    type Batch: for<'a> BatchReader<Key<'a> = Self::Key<'a>, Val<'a> = Self::Val<'a>, Time = Self::Time, TimeGat<'a> = Self::TimeGat<'a>, Diff = Self::Diff, DiffGat<'a> = Self::DiffGat<'a>>+Clone+'static;
 
     /// Storage type for `Self::Cursor`. Likely related to `Self::Batch`.
     type Storage;
 
     /// The type used to enumerate the collections contents.
-    type Cursor: for<'a> Cursor<Storage=Self::Storage, Key<'a> = Self::Key<'a>, Val<'a> = Self::Val<'a>, Time = Self::Time, Diff = Self::Diff>;
+    type Cursor: for<'a> Cursor<Storage=Self::Storage, Key<'a> = Self::Key<'a>, Val<'a> = Self::Val<'a>, Time = Self::Time, TimeGat<'a> = Self::TimeGat<'a>, Diff = Self::Diff, DiffGat<'a> = Self::DiffGat<'a>>;
 
     /// Provides a cursor over updates contained in the trace.
     fn cursor(&mut self) -> (Self::Cursor, Self::Storage) {
@@ -273,7 +273,7 @@ where
     type DiffGat<'a> : Copy + IntoOwned<'a, Owned = Self::Diff>;
 
     /// The type used to enumerate the batch's contents.
-    type Cursor: for<'a> Cursor<Storage=Self, Key<'a> = Self::Key<'a>, Val<'a> = Self::Val<'a>, Time = Self::Time, Diff = Self::Diff>;
+    type Cursor: for<'a> Cursor<Storage=Self, Key<'a> = Self::Key<'a>, Val<'a> = Self::Val<'a>, Time = Self::Time, TimeGat<'a> = Self::TimeGat<'a>, Diff = Self::Diff, DiffGat<'a> = Self::DiffGat<'a>>;
     /// Acquires a cursor to the batch's contents.
     fn cursor(&self) -> Self::Cursor;
     /// The number of updates in the batch.

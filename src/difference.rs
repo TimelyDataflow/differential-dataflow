@@ -42,6 +42,13 @@ pub trait Semigroup<Rhs: ?Sized = Self> : Clone + IsZero {
     fn plus_equals(&mut self, rhs: &Rhs);
 }
 
+// Blanket implementation to support GATs of the form `&'a Diff`.
+impl<'a, S, T: Semigroup<S>> Semigroup<&'a S> for T {
+    fn plus_equals(&mut self, rhs: &&'a S) {
+        self.plus_equals(&**rhs);
+    }
+}
+
 /// A semigroup with an explicit zero element.
 pub trait Monoid : Semigroup {
     /// A zero element under the semigroup addition operator.

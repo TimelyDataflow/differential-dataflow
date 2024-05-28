@@ -120,7 +120,7 @@ where
         -> Arranged<Child<'a, G, TInner>, TraceEnterAt<Tr, TInner, F, P>>
         where
             TInner: Refines<G::Timestamp>+Lattice+Timestamp+Clone+'static,
-            F: FnMut(Tr::Key<'_>, Tr::Val<'_>, &Tr::Time)->TInner+Clone+'static,
+            F: FnMut(Tr::Key<'_>, Tr::Val<'_>, Tr::TimeGat<'_>)->TInner+Clone+'static,
             P: FnMut(&TInner)->Tr::Time+Clone+'static,
         {
         let logic1 = logic.clone();
