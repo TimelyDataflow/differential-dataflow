@@ -9,7 +9,7 @@ use crate::trace::cursor::IntoOwned;
 
 use crate::lattice::Lattice;
 use crate::{ExchangeData, Collection};
-use crate::difference::Semigroup;
+use crate::difference::{IsZero, Semigroup};
 use crate::hashable::Hashable;
 use crate::collection::AsCollection;
 use crate::operators::arrange::{Arranged, ArrangeBySelf};
