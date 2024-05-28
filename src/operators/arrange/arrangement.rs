@@ -305,7 +305,7 @@ where
             if !input.is_empty() {
                 logic(key, input, change);
             }
-            change.extend(output.drain(..).map(|(x,d)| (x, d.negate())));
+            change.extend(output.drain(..).map(|(x,mut d)| { d.negate(); (x, d) }));
             crate::consolidation::consolidate(change);
         })
     }

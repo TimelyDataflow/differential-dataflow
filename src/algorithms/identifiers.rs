@@ -67,12 +67,16 @@ where
                         // keep round-positive records as changes.
                         let ((round, record), count) = &input[0];
                         if *round > 0 {
-                            output.push(((0, record.clone()), count.clone().negate()));
+                            let mut neg_count = count.clone();
+                            neg_count.negate();
+                            output.push(((0, record.clone()), neg_count));
                             output.push(((*round, record.clone()), count.clone()));
                         }
                         // if any losers, increment their rounds.
                         for ((round, record), count) in input[1..].iter() {
-                            output.push(((0, record.clone()), count.clone().negate()));
+                            let mut neg_count = count.clone();
+                            neg_count.negate();
+                            output.push(((0, record.clone()), neg_count));
                             output.push(((*round+1, record.clone()), count.clone()));
                         }
                     })
