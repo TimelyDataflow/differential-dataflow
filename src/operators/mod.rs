@@ -40,7 +40,7 @@ impl<'a, C: Cursor> EditList<'a, C> {
     /// Loads the contents of a cursor.
     fn load<L>(&mut self, cursor: &mut C, storage: &'a C::Storage, logic: L)
     where
-        L: Fn(&C::Time)->C::Time,
+        L: Fn(C::TimeGat<'_>)->C::Time,
     {
         self.clear();
         while cursor.val_valid(storage) {
@@ -103,7 +103,7 @@ impl<'storage, C: Cursor> ValueHistory<'storage, C> {
     }
     fn load<L>(&mut self, cursor: &mut C, storage: &'storage C::Storage, logic: L)
     where
-        L: Fn(&C::Time)->C::Time,
+        L: Fn(C::TimeGat<'_>)->C::Time,
     {
         self.edits.load(cursor, storage, logic);
     }
@@ -119,7 +119,7 @@ impl<'storage, C: Cursor> ValueHistory<'storage, C> {
         logic: L
     ) -> HistoryReplay<'storage, 'history, C>
     where
-        L: Fn(&C::Time)->C::Time,
+        L: Fn(C::TimeGat<'_>)->C::Time,
     {
         self.clear();
         cursor.seek_key(storage, key);

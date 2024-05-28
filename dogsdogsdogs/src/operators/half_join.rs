@@ -216,8 +216,8 @@ where
                                 if cursor.get_key(&storage) == Some(IntoOwned::borrow_as(key)) {
                                     while let Some(val2) = cursor.get_val(&storage) {
                                         cursor.map_times(&storage, |t, d| {
-                                            if comparison(t, initial) {
-                                                output_buffer.push((t.join(time), d.into_owned()))
+                                            if comparison(&t.into_owned(), initial) {
+                                                output_buffer.push((t.into_owned().join(time), d.into_owned()))
                                             }
                                         });
                                         consolidate(&mut output_buffer);

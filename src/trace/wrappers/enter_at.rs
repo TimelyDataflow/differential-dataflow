@@ -6,6 +6,7 @@ use timely::progress::{Antichain, frontier::AntichainRef};
 use crate::lattice::Lattice;
 use crate::trace::{TraceReader, BatchReader, Description};
 use crate::trace::cursor::Cursor;
+use crate::trace::cursor::IntoOwned;
 
 /// Wrapper to provide trace to nested scope.
 ///
@@ -52,6 +53,7 @@ where
     type Key<'a> = Tr::Key<'a>;
     type Val<'a> = Tr::Val<'a>;
     type Time = TInner;
+    type TimeGat<'a> = &'a TInner;
     type Diff = Tr::Diff;
     type DiffGat<'a> = Tr::DiffGat<'a>;
 
@@ -140,6 +142,7 @@ where
     type Key<'a> = B::Key<'a>;
     type Val<'a> = B::Val<'a>;
     type Time = TInner;
+    type TimeGat<'a> = &'a TInner;
     type Diff = B::Diff;
     type DiffGat<'a> = B::DiffGat<'a>;
 
@@ -197,6 +200,7 @@ where
     type Key<'a> = C::Key<'a>;
     type Val<'a> = C::Val<'a>;
     type Time = TInner;
+    type TimeGat<'a> = &'a TInner;
     type Diff = C::Diff;
     type DiffGat<'a> = C::DiffGat<'a>;
 
@@ -214,7 +218,7 @@ where
         let val = self.val(storage);
         let logic2 = &mut self.logic;
         self.cursor.map_times(storage, |time, diff| {
-            logic(&logic2(key, val, time), diff)
+            logic(&logic2(key, val, &time.into_owned()), diff)
         })
     }
 
@@ -255,6 +259,7 @@ where
     type Key<'a> = C::Key<'a>;
     type Val<'a> = C::Val<'a>;
     type Time = TInner;
+    type TimeGat<'a> = &'a TInner;
     type Diff = C::Diff;
     type DiffGat<'a> = C::DiffGat<'a>;
 
@@ -272,7 +277,7 @@ where
         let val = self.val(storage);
         let logic2 = &mut self.logic;
         self.cursor.map_times(&storage.batch, |time, diff| {
-            logic(&logic2(key, val, time), diff)
+            logic(&logic2(key, val, &time.into_owned()), diff)
         })
     }
 

@@ -755,7 +755,7 @@ mod history_replay {
             // loaded times by performing the lattice `join` with this value.
 
             // Load the batch contents.
-            let mut batch_replay = self.batch_history.replay_key(batch_cursor, batch_storage, key, |time| time.clone());
+            let mut batch_replay = self.batch_history.replay_key(batch_cursor, batch_storage, key, |time| time.into_owned());
 
             // We determine the meet of times we must reconsider (those from `batch` and `times`). This meet
             // can be used to advance other historical times, which may consolidate their representation. As
@@ -791,16 +791,16 @@ mod history_replay {
 
             // Load the input and output histories.
             let mut input_replay = if let Some(meet) = meet.as_ref() {
-                self.input_history.replay_key(source_cursor, source_storage, key, |time| time.join(meet))
+                self.input_history.replay_key(source_cursor, source_storage, key, |time| time.into_owned().join(meet))
             }
             else {
-                self.input_history.replay_key(source_cursor, source_storage, key, |time| time.clone())
+                self.input_history.replay_key(source_cursor, source_storage, key, |time| time.into_owned())
             };
             let mut output_replay = if let Some(meet) = meet.as_ref() {
-                self.output_history.replay_key(output_cursor, output_storage, key, |time| time.join(meet))
+                self.output_history.replay_key(output_cursor, output_storage, key, |time| time.into_owned().join(meet))
             }
             else {
-                self.output_history.replay_key(output_cursor, output_storage, key, |time| time.clone())
+                self.output_history.replay_key(output_cursor, output_storage, key, |time| time.into_owned())
             };
 
             self.synth_times.clear();

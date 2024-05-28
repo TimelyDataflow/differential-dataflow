@@ -48,6 +48,8 @@ pub trait Cursor {
     type Val<'a>: Copy + Clone + Ord;
     /// Timestamps associated with updates
     type Time: Timestamp + Lattice + Ord + Clone;
+    /// Borrowed form of timestamp.
+    type TimeGat<'a>: Copy + IntoOwned<'a, Owned = Self::Time>;
     /// Owned form of update difference.
     type Diff: Semigroup + 'static;
     /// Borrowed form of update difference.
@@ -81,7 +83,7 @@ pub trait Cursor {
 
     /// Applies `logic` to each pair of time and difference. Intended for mutation of the
     /// closure's scope.
-    fn map_times<L: FnMut(&Self::Time, Self::DiffGat<'_>)>(&mut self, storage: &Self::Storage, logic: L);
+    fn map_times<L: FnMut(Self::TimeGat<'_>, Self::DiffGat<'_>)>(&mut self, storage: &Self::Storage, logic: L);
 
     /// Advances the cursor to the next key.
     fn step_key(&mut self, storage: &Self::Storage);
@@ -111,7 +113,7 @@ pub trait Cursor {
             while self.val_valid(storage) {
                 let mut kv_out = Vec::new();
                 self.map_times(storage, |ts, r| {
-                    kv_out.push((ts.clone(), r.into_owned()));
+                    kv_out.push((ts.into_owned(), r.into_owned()));
                 });
                 out.push(((self.key(storage).into_owned(), self.val(storage).into_owned()), kv_out));
                 self.step_val(storage);

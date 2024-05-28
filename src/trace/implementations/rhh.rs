@@ -274,6 +274,7 @@ mod val_batch {
         type Key<'a> = <L::KeyContainer as BatchContainer>::ReadItem<'a>;
         type Val<'a> = <L::ValContainer as BatchContainer>::ReadItem<'a>;
         type Time = <L::Target as Update>::Time;
+        type TimeGat<'a> = <L::TimeContainer as BatchContainer>::ReadItem<'a>;
         type Diff = <L::Target as Update>::Diff;
         type DiffGat<'a> = <L::DiffContainer as BatchContainer>::ReadItem<'a>;
 
@@ -631,6 +632,7 @@ mod val_batch {
         type Key<'a> = <L::KeyContainer as BatchContainer>::ReadItem<'a>;
         type Val<'a> = <L::ValContainer as BatchContainer>::ReadItem<'a>;
         type Time = <L::Target as Update>::Time;
+        type TimeGat<'a> = <L::TimeContainer as BatchContainer>::ReadItem<'a>;
         type Diff = <L::Target as Update>::Diff;
         type DiffGat<'a> = <L::DiffContainer as BatchContainer>::ReadItem<'a>;
 
@@ -640,12 +642,12 @@ mod val_batch {
             storage.storage.keys.index(self.key_cursor) 
         }
         fn val<'a>(&self, storage: &'a RhhValBatch<L>) -> Self::Val<'a> { storage.storage.vals.index(self.val_cursor) }
-        fn map_times<L2: FnMut(&Self::Time, Self::DiffGat<'_>)>(&mut self, storage: &RhhValBatch<L>, mut logic: L2) {
+        fn map_times<L2: FnMut(Self::TimeGat<'_>, Self::DiffGat<'_>)>(&mut self, storage: &RhhValBatch<L>, mut logic: L2) {
             let (lower, upper) = storage.storage.updates_for_value(self.val_cursor);
             for index in lower .. upper {
-                let time = storage.storage.times.index(index).into_owned();
+                let time = storage.storage.times.index(index);
                 let diff = storage.storage.diffs.index(index);
-                logic(&time, diff);
+                logic(time, diff);
             }
         }
         fn key_valid(&self, storage: &RhhValBatch<L>) -> bool { self.key_cursor < storage.storage.keys.len() }

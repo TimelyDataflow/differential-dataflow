@@ -120,7 +120,7 @@ where
         -> Arranged<Child<'a, G, TInner>, TraceEnterAt<Tr, TInner, F, P>>
         where
             TInner: Refines<G::Timestamp>+Lattice+Timestamp+Clone+'static,
-            F: FnMut(Tr::Key<'_>, Tr::Val<'_>, &G::Timestamp)->TInner+Clone+'static,
+            F: FnMut(Tr::Key<'_>, Tr::Val<'_>, &Tr::Time)->TInner+Clone+'static,
             P: FnMut(&TInner)->Tr::Time+Clone+'static,
         {
         let logic1 = logic.clone();
@@ -217,7 +217,7 @@ where
                         while let Some(val) = cursor.get_val(batch) {
                             for datum in logic(key, val) {
                                 cursor.map_times(batch, |time, diff| {
-                                    session.give((datum.clone(), time.clone(), diff.into_owned()));
+                                    session.give((datum.clone(), time.into_owned(), diff.into_owned()));
                                 });
                             }
                             cursor.step_val(batch);

@@ -163,7 +163,7 @@ where
 
                                 if let Some(difference) = difference {
                                     if !difference.is_zero() {
-                                        session.give((key.clone(), time.clone(), difference));
+                                        session.give((key.clone(), time.into_owned(), difference));
                                     }
                                 }
                             });

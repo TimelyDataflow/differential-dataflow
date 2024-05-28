@@ -97,14 +97,14 @@ where
 
                                 if let Some(count) = count.as_ref() {
                                     if !count.is_zero() {
-                                        session.give(((key.into_owned(), count.clone()), time.clone(), R2::from(-1i8)));
+                                        session.give(((key.into_owned(), count.clone()), time.into_owned(), R2::from(-1i8)));
                                     }
                                 }
                                 count.as_mut().map(|c| c.plus_equals(&diff.into_owned()));
                                 if count.is_none() { count = Some(diff.into_owned()); }
                                 if let Some(count) = count.as_ref() {
                                     if !count.is_zero() {
-                                        session.give(((key.into_owned(), count.clone()), time.clone(), R2::from(1i8)));
+                                        session.give(((key.into_owned(), count.clone()), time.into_owned(), R2::from(1i8)));
                                     }
                                 }
                             });
