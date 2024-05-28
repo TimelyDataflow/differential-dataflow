@@ -93,10 +93,10 @@ pub trait Layout {
     type KeyContainer: BatchContainer + PushInto<<Self::Target as Update>::Key>;
     /// Container for update vals.
     type ValContainer: BatchContainer;
-    /// Container for update vals.
-    type UpdContainer:
-        PushInto<(<Self::Target as Update>::Time, <Self::Target as Update>::Diff)> +
-        for<'a> BatchContainer<ReadItem<'a> = &'a (<Self::Target as Update>::Time, <Self::Target as Update>::Diff)>;
+    /// Container for times.
+    type TimeContainer: BatchContainer<Owned = <Self::Target as Update>::Time> + PushInto<<Self::Target as Update>::Time>;
+    /// Container for diffs.
+    type DiffContainer: BatchContainer<Owned = <Self::Target as Update>::Diff> + PushInto<<Self::Target as Update>::Diff>;
     /// Container for offsets.
     type OffsetContainer: for<'a> BatchContainer<ReadItem<'a> = usize>;
 }
@@ -113,7 +113,8 @@ where
     type Target = U;
     type KeyContainer = Vec<U::Key>;
     type ValContainer = Vec<U::Val>;
-    type UpdContainer = Vec<(U::Time, U::Diff)>;
+    type TimeContainer = Vec<U::Time>;
+    type DiffContainer = Vec<U::Diff>;
     type OffsetContainer = OffsetList;
 }
 
@@ -132,7 +133,8 @@ where
     type Target = U;
     type KeyContainer = TimelyStack<U::Key>;
     type ValContainer = TimelyStack<U::Val>;
-    type UpdContainer = TimelyStack<(U::Time, U::Diff)>;
+    type TimeContainer = TimelyStack<U::Time>;
+    type DiffContainer = TimelyStack<U::Diff>;
     type OffsetContainer = OffsetList;
 }
 
@@ -184,7 +186,8 @@ where
     type Target = Preferred<K, V, T, D>;
     type KeyContainer = K::Container;
     type ValContainer = V::Container;
-    type UpdContainer = Vec<(T, D)>;
+    type TimeContainer = Vec<T>;
+    type DiffContainer = Vec<D>;
     type OffsetContainer = OffsetList;
 }
 
@@ -294,8 +297,8 @@ impl<'a> IntoOwned<'a> for usize {
         self
     }
 
-    fn clone_onto(&self, other: &mut Self::Owned) {
-        *other = *self;
+    fn clone_onto(self, other: &mut Self::Owned) {
+        *other = self;
     }
 
     fn borrow_as(owned: &'a Self::Owned) -> Self {
@@ -304,6 +307,7 @@ impl<'a> IntoOwned<'a> for usize {
 }
 
 impl BatchContainer for OffsetList {
+    type Owned = usize;
     type ReadItem<'a> = usize;
 
     fn copy(&mut self, item: Self::ReadItem<'_>) {
@@ -442,11 +446,15 @@ pub mod containers {
 
     use timely::container::columnation::{Columnation, TimelyStack};
     use timely::container::PushInto;
+    use crate::trace::IntoOwned;
 
     /// A general-purpose container resembling `Vec<T>`.
     pub trait BatchContainer: 'static {
+        /// An owned instance of `Self::ReadItem<'_>`.
+        type Owned;
+
         /// The type that can be read back out of the container.
-        type ReadItem<'a>: Copy + Ord;
+        type ReadItem<'a>: Copy + Ord + IntoOwned<'a, Owned = Self::Owned>;
 
         /// Push an item into this container
         fn push<D>(&mut self, item: D) where Self: PushInto<D> {
@@ -532,6 +540,7 @@ pub mod containers {
     // All `T: Clone` also implement `ToOwned<Owned = T>`, but without the constraint Rust
     // struggles to understand why the owned type must be `T` (i.e. the one blanket impl).
     impl<T: Ord + Clone + 'static> BatchContainer for Vec<T> {
+        type Owned = T;
         type ReadItem<'a> = &'a T;
 
         fn reborrow<'b, 'a: 'b>(item: Self::ReadItem<'a>) -> Self::ReadItem<'b> { item }
@@ -558,7 +567,8 @@ pub mod containers {
 
     // The `ToOwned` requirement exists to satisfy `self.reserve_items`, who must for now
     // be presented with the actual contained type, rather than a type that borrows into it.
-    impl<T: Ord + Columnation + 'static> BatchContainer for TimelyStack<T> {
+    impl<T: Clone + Ord + Columnation + 'static> BatchContainer for TimelyStack<T> {
+        type Owned = T;
         type ReadItem<'a> = &'a T;
 
         fn reborrow<'b, 'a: 'b>(item: Self::ReadItem<'a>) -> Self::ReadItem<'b> { item }
@@ -625,6 +635,7 @@ pub mod containers {
     where
         B: Ord + Clone + Sized + 'static,
     {
+        type Owned = Vec<B>;
         type ReadItem<'a> = &'a [B];
 
         fn reborrow<'b, 'a: 'b>(item: Self::ReadItem<'a>) -> Self::ReadItem<'b> { item }

@@ -86,7 +86,7 @@ where
     R: Mul<Tr::Diff>,
     <R as Mul<Tr::Diff>>::Output: Semigroup,
     FF: Fn(&G::Timestamp, &mut Antichain<G::Timestamp>) + 'static,
-    CF: Fn(&G::Timestamp, &G::Timestamp) -> bool + 'static,
+    CF: Fn(Tr::TimeGat<'_>, &G::Timestamp) -> bool + 'static,
     DOut: Clone+'static,
     S: FnMut(&K, &V, Tr::Val<'_>)->DOut+'static,
 {
@@ -138,7 +138,7 @@ where
     Tr: TraceReader+Clone+'static,
     for<'a> Tr::Key<'a> : IntoOwned<'a, Owned = K>,
     FF: Fn(&G::Timestamp, &mut Antichain<G::Timestamp>) + 'static,
-    CF: Fn(&G::Timestamp, &G::Timestamp) -> bool + 'static,
+    CF: Fn(Tr::TimeGat<'_>, &Tr::Time) -> bool + 'static,
     DOut: Clone+'static,
     ROut: Semigroup + 'static,
     Y: Fn(std::time::Instant, usize) -> bool + 'static,
@@ -210,14 +210,16 @@ where
                         for &mut ((ref key, ref val1, ref time), ref initial, ref mut diff1) in proposals.iter_mut() {
                             // Use TOTAL ORDER to allow the release of `time`.
                             yielded = yielded || yield_function(timer, work);
-                            if !yielded && !input2.frontier.frontier().iter().any(|t| comparison(t, initial)) {
+                            if !yielded && !input2.frontier.frontier().iter().any(|t| comparison(<Tr::TimeGat<'_> as IntoOwned>::borrow_as(t), initial)) {
                                 use differential_dataflow::trace::cursor::IntoOwned;
                                 cursor.seek_key(&storage, IntoOwned::borrow_as(key));
                                 if cursor.get_key(&storage) == Some(IntoOwned::borrow_as(key)) {
                                     while let Some(val2) = cursor.get_val(&storage) {
                                         cursor.map_times(&storage, |t, d| {
                                             if comparison(t, initial) {
-                                                output_buffer.push((t.join(time), d.clone()))
+                                                let mut t = t.into_owned();
+                                                t.join_assign(time);
+                                                output_buffer.push((t, d.into_owned()))
                                             }
                                         });
                                         consolidate(&mut output_buffer);

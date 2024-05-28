@@ -57,17 +57,21 @@ pub trait TraceReader {
     type Val<'a>: Copy + Clone;
     /// Timestamps associated with updates
     type Time: Timestamp + Lattice + Ord + Clone;
-    /// Associated update.
+    /// Borrowed form of timestamp.
+    type TimeGat<'a>: Copy + IntoOwned<'a, Owned = Self::Time>;
+    /// Owned form of update difference.
     type Diff: Semigroup + 'static;
+    /// Borrowed form of update difference.
+    type DiffGat<'a> : Copy + IntoOwned<'a, Owned = Self::Diff>;
 
     /// The type of an immutable collection of updates.
-    type Batch: for<'a> BatchReader<Key<'a> = Self::Key<'a>, Val<'a> = Self::Val<'a>, Time = Self::Time, Diff = Self::Diff>+Clone+'static;
+    type Batch: for<'a> BatchReader<Key<'a> = Self::Key<'a>, Val<'a> = Self::Val<'a>, Time = Self::Time, TimeGat<'a> = Self::TimeGat<'a>, Diff = Self::Diff, DiffGat<'a> = Self::DiffGat<'a>>+Clone+'static;
 
     /// Storage type for `Self::Cursor`. Likely related to `Self::Batch`.
     type Storage;
 
     /// The type used to enumerate the collections contents.
-    type Cursor: for<'a> Cursor<Storage=Self::Storage, Key<'a> = Self::Key<'a>, Val<'a> = Self::Val<'a>, Time = Self::Time, Diff = Self::Diff>;
+    type Cursor: for<'a> Cursor<Storage=Self::Storage, Key<'a> = Self::Key<'a>, Val<'a> = Self::Val<'a>, Time = Self::Time, TimeGat<'a> = Self::TimeGat<'a>, Diff = Self::Diff, DiffGat<'a> = Self::DiffGat<'a>>;
 
     /// Provides a cursor over updates contained in the trace.
     fn cursor(&mut self) -> (Self::Cursor, Self::Storage) {
@@ -261,11 +265,15 @@ where
     type Val<'a>: Copy + Clone;
     /// Timestamps associated with updates
     type Time: Timestamp + Lattice + Ord + Clone;
-    /// Associated update.
-    type Diff: Semigroup;
+    /// Borrowed form of timestamp.
+    type TimeGat<'a>: Copy + IntoOwned<'a, Owned = Self::Time>;
+    /// Owned form of update difference.
+    type Diff: Semigroup + 'static;
+    /// Borrowed form of update difference.
+    type DiffGat<'a> : Copy + IntoOwned<'a, Owned = Self::Diff>;
 
     /// The type used to enumerate the batch's contents.
-    type Cursor: for<'a> Cursor<Storage=Self, Key<'a> = Self::Key<'a>, Val<'a> = Self::Val<'a>, Time = Self::Time, Diff = Self::Diff>;
+    type Cursor: for<'a> Cursor<Storage=Self, Key<'a> = Self::Key<'a>, Val<'a> = Self::Val<'a>, Time = Self::Time, TimeGat<'a> = Self::TimeGat<'a>, Diff = Self::Diff, DiffGat<'a> = Self::DiffGat<'a>>;
     /// Acquires a cursor to the batch's contents.
     fn cursor(&self) -> Self::Cursor;
     /// The number of updates in the batch.
@@ -371,7 +379,9 @@ pub mod rc_blanket_impls {
         type Key<'a> = B::Key<'a>;
         type Val<'a> = B::Val<'a>;
         type Time = B::Time;
+        type TimeGat<'a> = B::TimeGat<'a>;
         type Diff = B::Diff;
+        type DiffGat<'a> = B::DiffGat<'a>;
 
         /// The type used to enumerate the batch's contents.
         type Cursor = RcBatchCursor<B::Cursor>;
@@ -404,7 +414,9 @@ pub mod rc_blanket_impls {
         type Key<'a> = C::Key<'a>;
         type Val<'a> = C::Val<'a>;
         type Time = C::Time;
+        type TimeGat<'a> = C::TimeGat<'a>;
         type Diff = C::Diff;
+        type DiffGat<'a> = C::DiffGat<'a>;
 
         type Storage = Rc<C::Storage>;
 
@@ -415,7 +427,7 @@ pub mod rc_blanket_impls {
         #[inline] fn val<'a>(&self, storage: &'a Self::Storage) -> Self::Val<'a> { self.cursor.val(storage) }
 
         #[inline]
-        fn map_times<L: FnMut(&Self::Time, &Self::Diff)>(&mut self, storage: &Self::Storage, logic: L) {
+        fn map_times<L: FnMut(Self::TimeGat<'_>, Self::DiffGat<'_>)>(&mut self, storage: &Self::Storage, logic: L) {
             self.cursor.map_times(storage, logic)
         }
 
@@ -472,7 +484,9 @@ pub mod abomonated_blanket_impls {
         type Key<'a> = B::Key<'a>;
         type Val<'a> = B::Val<'a>;
         type Time = B::Time;
+        type TimeGat<'a> = B::TimeGat<'a>;
         type Diff = B::Diff;
+        type DiffGat<'a> = B::DiffGat<'a>;
 
         /// The type used to enumerate the batch's contents.
         type Cursor = AbomonatedBatchCursor<B::Cursor>;
@@ -505,7 +519,9 @@ pub mod abomonated_blanket_impls {
         type Key<'a> = C::Key<'a>;
         type Val<'a> = C::Val<'a>;
         type Time = C::Time;
+        type TimeGat<'a> = C::TimeGat<'a>;
         type Diff = C::Diff;
+        type DiffGat<'a> = C::DiffGat<'a>;
 
         type Storage = Abomonated<C::Storage, Vec<u8>>;
 
@@ -516,7 +532,7 @@ pub mod abomonated_blanket_impls {
         #[inline] fn val<'a>(&self, storage: &'a Self::Storage) -> Self::Val<'a> { self.cursor.val(storage) }
 
         #[inline]
-        fn map_times<L: FnMut(&Self::Time, &Self::Diff)>(&mut self, storage: &Self::Storage, logic: L) {
+        fn map_times<L: FnMut(Self::TimeGat<'_>, Self::DiffGat<'_>)>(&mut self, storage: &Self::Storage, logic: L) {
             self.cursor.map_times(storage, logic)
         }
 

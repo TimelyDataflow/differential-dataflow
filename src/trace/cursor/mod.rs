@@ -27,7 +27,7 @@ pub trait IntoOwned<'a> {
     /// Conversion from an instance of this type to the owned type.
     fn into_owned(self) -> Self::Owned;
     /// Clones `self` onto an existing instance of the owned type.
-    fn clone_onto(&self, other: &mut Self::Owned); 
+    fn clone_onto(self, other: &mut Self::Owned);
     /// Borrows an owned instance as oneself.
     fn borrow_as(owned: &'a Self::Owned) -> Self;
 }
@@ -35,7 +35,7 @@ pub trait IntoOwned<'a> {
 impl<'a, T: ToOwned+?Sized> IntoOwned<'a> for &'a T {
     type Owned = T::Owned;
     fn into_owned(self) -> Self::Owned { self.to_owned() }
-    fn clone_onto(&self, other: &mut Self::Owned) { <T as ToOwned>::clone_into(self, other) }
+    fn clone_onto(self, other: &mut Self::Owned) { <T as ToOwned>::clone_into(self, other) }
     fn borrow_as(owned: &'a Self::Owned) -> Self { owned.borrow() }
 }
 
@@ -48,8 +48,12 @@ pub trait Cursor {
     type Val<'a>: Copy + Clone + Ord;
     /// Timestamps associated with updates
     type Time: Timestamp + Lattice + Ord + Clone;
-    /// Associated update.
-    type Diff: Semigroup + ?Sized;
+    /// Borrowed form of timestamp.
+    type TimeGat<'a>: Copy + IntoOwned<'a, Owned = Self::Time>;
+    /// Owned form of update difference.
+    type Diff: Semigroup + 'static;
+    /// Borrowed form of update difference.
+    type DiffGat<'a> : Copy + IntoOwned<'a, Owned = Self::Diff>;
 
     /// Storage required by the cursor.
     type Storage;
@@ -79,7 +83,7 @@ pub trait Cursor {
 
     /// Applies `logic` to each pair of time and difference. Intended for mutation of the
     /// closure's scope.
-    fn map_times<L: FnMut(&Self::Time, &Self::Diff)>(&mut self, storage: &Self::Storage, logic: L);
+    fn map_times<L: FnMut(Self::TimeGat<'_>, Self::DiffGat<'_>)>(&mut self, storage: &Self::Storage, logic: L);
 
     /// Advances the cursor to the next key.
     fn step_key(&mut self, storage: &Self::Storage);
@@ -109,7 +113,7 @@ pub trait Cursor {
             while self.val_valid(storage) {
                 let mut kv_out = Vec::new();
                 self.map_times(storage, |ts, r| {
-                    kv_out.push((ts.clone(), r.clone()));
+                    kv_out.push((ts.into_owned(), r.into_owned()));
                 });
                 out.push(((self.key(storage).into_owned(), self.val(storage).into_owned()), kv_out));
                 self.step_val(storage);

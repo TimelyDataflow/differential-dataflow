@@ -46,13 +46,15 @@ where
     Tr::Batch: Clone,
     TInner: Refines<Tr::Time>+Lattice,
     F: 'static,
-    F: FnMut(Tr::Key<'_>, Tr::Val<'_>, &Tr::Time)->TInner+Clone,
+    F: FnMut(Tr::Key<'_>, Tr::Val<'_>, Tr::TimeGat<'_>)->TInner+Clone,
     G: FnMut(&TInner)->Tr::Time+Clone+'static,
 {
     type Key<'a> = Tr::Key<'a>;
     type Val<'a> = Tr::Val<'a>;
     type Time = TInner;
+    type TimeGat<'a> = &'a TInner;
     type Diff = Tr::Diff;
+    type DiffGat<'a> = Tr::DiffGat<'a>;
 
     type Batch = BatchEnter<Tr::Batch, TInner,F>;
     type Storage = Tr::Storage;
@@ -134,12 +136,14 @@ impl<B, TInner, F> BatchReader for BatchEnter<B, TInner, F>
 where
     B: BatchReader,
     TInner: Refines<B::Time>+Lattice,
-    F: FnMut(B::Key<'_>, <B::Cursor as Cursor>::Val<'_>, &B::Time)->TInner+Clone,
+    F: FnMut(B::Key<'_>, <B::Cursor as Cursor>::Val<'_>, B::TimeGat<'_>)->TInner+Clone,
 {
     type Key<'a> = B::Key<'a>;
     type Val<'a> = B::Val<'a>;
     type Time = TInner;
+    type TimeGat<'a> = &'a TInner;
     type Diff = B::Diff;
+    type DiffGat<'a> = B::DiffGat<'a>;
 
     type Cursor = BatchCursorEnter<B::Cursor, TInner, F>;
 
@@ -190,12 +194,14 @@ impl<C, TInner, F> Cursor for CursorEnter<C, TInner, F>
 where
     C: Cursor,
     TInner: Refines<C::Time>+Lattice,
-    F: FnMut(C::Key<'_>, C::Val<'_>, &C::Time)->TInner,
+    F: FnMut(C::Key<'_>, C::Val<'_>, C::TimeGat<'_>)->TInner,
 {
     type Key<'a> = C::Key<'a>;
     type Val<'a> = C::Val<'a>;
     type Time = TInner;
+    type TimeGat<'a> = &'a TInner;
     type Diff = C::Diff;
+    type DiffGat<'a> = C::DiffGat<'a>;
 
     type Storage = C::Storage;
 
@@ -206,7 +212,7 @@ where
     #[inline] fn val<'a>(&self, storage: &'a Self::Storage) -> Self::Val<'a> { self.cursor.val(storage) }
 
     #[inline]
-    fn map_times<L: FnMut(&TInner, &Self::Diff)>(&mut self, storage: &Self::Storage, mut logic: L) {
+    fn map_times<L: FnMut(&TInner, Self::DiffGat<'_>)>(&mut self, storage: &Self::Storage, mut logic: L) {
         let key = self.key(storage);
         let val = self.val(storage);
         let logic2 = &mut self.logic;
@@ -247,12 +253,14 @@ impl<C, TInner, F> BatchCursorEnter<C, TInner, F> {
 impl<TInner, C: Cursor, F> Cursor for BatchCursorEnter<C, TInner, F>
 where
     TInner: Refines<C::Time>+Lattice,
-    F: FnMut(C::Key<'_>, C::Val<'_>, &C::Time)->TInner,
+    F: FnMut(C::Key<'_>, C::Val<'_>, C::TimeGat<'_>)->TInner,
 {
     type Key<'a> = C::Key<'a>;
     type Val<'a> = C::Val<'a>;
     type Time = TInner;
+    type TimeGat<'a> = &'a TInner;
     type Diff = C::Diff;
+    type DiffGat<'a> = C::DiffGat<'a>;
 
     type Storage = BatchEnter<C::Storage, TInner, F>;
 
@@ -263,7 +271,7 @@ where
     #[inline] fn val<'a>(&self, storage: &'a Self::Storage) -> Self::Val<'a> { self.cursor.val(&storage.batch) }
 
     #[inline]
-    fn map_times<L: FnMut(&TInner, &Self::Diff)>(&mut self, storage: &Self::Storage, mut logic: L) {
+    fn map_times<L: FnMut(&TInner, Self::DiffGat<'_>)>(&mut self, storage: &Self::Storage, mut logic: L) {
         let key = self.key(storage);
         let val = self.val(storage);
         let logic2 = &mut self.logic;

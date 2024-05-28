@@ -170,7 +170,7 @@ where
     for<'a> T1::Key<'a>: IntoOwned<'a, Owned = K>,
 {
     fn threshold_named<R2: Ord+Abelian+'static, F: FnMut(&K,&R1)->R2+'static>(&self, name: &str, mut thresh: F) -> Collection<G, K, R2> {
-        self.reduce_abelian::<_,K,(),KeySpine<_,_,_>>(name, move |k,s,t| t.push(((), thresh(k, &s[0].1))))
+        self.reduce_abelian::<_,K,(),KeySpine<K,G::Timestamp,R2>>(name, move |k,s,t| t.push(((), thresh(k, &s[0].1))))
             .as_collection(|k,_| k.clone())
     }
 }
@@ -221,7 +221,7 @@ where
     for<'a> T1::Key<'a>: IntoOwned<'a, Owned = K>,
 {
     fn count_core<R2: Ord + Abelian + From<i8> + 'static>(&self) -> Collection<G, (K, R), R2> {
-        self.reduce_abelian::<_,K,R,ValSpine<_,R,_,_>>("Count", |_k,s,t| t.push((s[0].1.clone(), R2::from(1i8))))
+        self.reduce_abelian::<_,K,R,ValSpine<K,R,G::Timestamp,R2>>("Count", |_k,s,t| t.push((s[0].1.clone(), R2::from(1i8))))
             .as_collection(|k,c| (k.clone(), c.clone()))
     }
 }
@@ -755,7 +755,7 @@ mod history_replay {
             // loaded times by performing the lattice `join` with this value.
 
             // Load the batch contents.
-            let mut batch_replay = self.batch_history.replay_key(batch_cursor, batch_storage, key, |time| time.clone());
+            let mut batch_replay = self.batch_history.replay_key(batch_cursor, batch_storage, key, |time| time.into_owned());
 
             // We determine the meet of times we must reconsider (those from `batch` and `times`). This meet
             // can be used to advance other historical times, which may consolidate their representation. As
@@ -791,16 +791,24 @@ mod history_replay {
 
             // Load the input and output histories.
             let mut input_replay = if let Some(meet) = meet.as_ref() {
-                self.input_history.replay_key(source_cursor, source_storage, key, |time| time.join(meet))
+                self.input_history.replay_key(source_cursor, source_storage, key, |time| {
+                    let mut time = time.into_owned();
+                    time.join_assign(meet);
+                    time
+                })
             }
             else {
-                self.input_history.replay_key(source_cursor, source_storage, key, |time| time.clone())
+                self.input_history.replay_key(source_cursor, source_storage, key, |time| time.into_owned())
             };
             let mut output_replay = if let Some(meet) = meet.as_ref() {
-                self.output_history.replay_key(output_cursor, output_storage, key, |time| time.join(meet))
+                self.output_history.replay_key(output_cursor, output_storage, key, |time| {
+                    let mut time = time.into_owned();
+                    time.join_assign(meet);
+                    time
+                })
             }
             else {
-                self.output_history.replay_key(output_cursor, output_storage, key, |time| time.clone())
+                self.output_history.replay_key(output_cursor, output_storage, key, |time| time.into_owned())
             };
 
             self.synth_times.clear();

@@ -112,7 +112,9 @@ where
     type Key<'a> = B::Key<'a>;
     type Val<'a> = B::Val<'a>;
     type Time = B::Time;
+    type TimeGat<'a> = B::TimeGat<'a>;
     type Diff = B::Diff;
+    type DiffGat<'a> = B::DiffGat<'a>;
 
     type Batch = B;
     type Storage = Vec<B>;

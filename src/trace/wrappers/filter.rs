@@ -33,7 +33,9 @@ where
     type Key<'a> = Tr::Key<'a>;
     type Val<'a> = Tr::Val<'a>;
     type Time = Tr::Time;
+    type TimeGat<'a> = Tr::TimeGat<'a>;
     type Diff = Tr::Diff;
+    type DiffGat<'a> = Tr::DiffGat<'a>;
 
     type Batch = BatchFilter<Tr::Batch, F>;
     type Storage = Tr::Storage;
@@ -85,7 +87,9 @@ where
     type Key<'a> = B::Key<'a>;
     type Val<'a> = B::Val<'a>;
     type Time = B::Time;
+    type TimeGat<'a> = B::TimeGat<'a>;
     type Diff = B::Diff;
+    type DiffGat<'a> = B::DiffGat<'a>;
 
     type Cursor = BatchCursorFilter<B::Cursor, F>;
 
@@ -132,7 +136,9 @@ where
     type Key<'a> = C::Key<'a>;
     type Val<'a> = C::Val<'a>;
     type Time = C::Time;
+    type TimeGat<'a> = C::TimeGat<'a>;
     type Diff = C::Diff;
+    type DiffGat<'a> = C::DiffGat<'a>;
 
     type Storage = C::Storage;
 
@@ -143,7 +149,7 @@ where
     #[inline] fn val<'a>(&self, storage: &'a Self::Storage) -> Self::Val<'a> { self.cursor.val(storage) }
 
     #[inline]
-    fn map_times<L: FnMut(&Self::Time,&Self::Diff)>(&mut self, storage: &Self::Storage, logic: L) {
+    fn map_times<L: FnMut(Self::TimeGat<'_>, Self::DiffGat<'_>)>(&mut self, storage: &Self::Storage, logic: L) {
         let key = self.key(storage);
         let val = self.val(storage);
         if (self.logic)(key, val) {
@@ -185,7 +191,9 @@ where
     type Key<'a> = C::Key<'a>;
     type Val<'a> = C::Val<'a>;
     type Time = C::Time;
+    type TimeGat<'a> = C::TimeGat<'a>;
     type Diff = C::Diff;
+    type DiffGat<'a> = C::DiffGat<'a>;
 
     type Storage = BatchFilter<C::Storage, F>;
 
@@ -196,7 +204,7 @@ where
     #[inline] fn val<'a>(&self, storage: &'a Self::Storage) -> Self::Val<'a> { self.cursor.val(&storage.batch) }
 
     #[inline]
-    fn map_times<L: FnMut(&Self::Time,&Self::Diff)>(&mut self, storage: &Self::Storage, logic: L) {
+    fn map_times<L: FnMut(Self::TimeGat<'_>, Self::DiffGat<'_>)>(&mut self, storage: &Self::Storage, logic: L) {
         let key = self.key(storage);
         let val = self.val(storage);
         if (self.logic)(key, val) {

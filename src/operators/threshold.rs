@@ -15,6 +15,7 @@ use crate::hashable::Hashable;
 use crate::collection::AsCollection;
 use crate::operators::arrange::{Arranged, ArrangeBySelf};
 use crate::trace::{BatchReader, Cursor, TraceReader};
+use crate::trace::cursor::IntoOwned;
 
 /// Extension trait for the `distinct` differential dataflow method.
 pub trait ThresholdTotal<G: Scope, K: ExchangeData, R: ExchangeData+Semigroup> where G::Timestamp: TotalOrder+Lattice+Ord {
@@ -96,6 +97,7 @@ impl<G, K, T1> ThresholdTotal<G, K, T1::Diff> for Arranged<G, T1>
 where
     G: Scope<Timestamp=T1::Time>,
     T1: for<'a> TraceReader<Key<'a>=&'a K, Val<'a>=&'a ()>+Clone+'static,
+    for<'a> T1::Diff : Semigroup<T1::DiffGat<'a>>,
     K: ExchangeData,
     T1::Time: TotalOrder,
     T1::Diff: ExchangeData,
@@ -133,8 +135,8 @@ where
                             trace_cursor.seek_key(&trace_storage, key);
                             if trace_cursor.get_key(&trace_storage) == Some(key) {
                                 trace_cursor.map_times(&trace_storage, |_, diff| {
-                                    count.as_mut().map(|c| c.plus_equals(diff));
-                                    if count.is_none() { count = Some(diff.clone()); }
+                                    count.as_mut().map(|c| c.plus_equals(&diff));
+                                    if count.is_none() { count = Some(diff.into_owned()); }
                                 });
                             }
 
@@ -146,23 +148,23 @@ where
                                 match &count {
                                     Some(old) => {
                                         let mut temp = old.clone();
-                                        temp.plus_equals(diff);
+                                        temp.plus_equals(&diff);
                                         thresh(key, &temp, Some(old))
                                     },
-                                    None => { thresh(key, diff, None) },
+                                    None => { thresh(key, &diff.into_owned(), None) },
                                 };
 
                                 // Either add or assign `diff` to `count`.
                                 if let Some(count) = &mut count {
-                                    count.plus_equals(diff);
+                                    count.plus_equals(&diff);
                                 }
                                 else {
-                                    count = Some(diff.clone());
+                                    count = Some(diff.into_owned());
                                 }
 
                                 if let Some(difference) = difference {
                                     if !difference.is_zero() {
-                                        session.give((key.clone(), time.clone(), difference));
+                                        session.give((key.clone(), time.into_owned(), difference));
                                     }
                                 }
                             });

@@ -50,6 +50,7 @@ impl<B: Ord + Clone + 'static> PushInto<Vec<B>> for HuffmanContainer<B> {
 }
 
 impl<B: Ord + Clone + 'static> BatchContainer for HuffmanContainer<B> {
+    type Owned = Vec<B>;
     type ReadItem<'a> = Wrapped<'a, B>;
 
     fn reborrow<'b, 'a: 'b>(item: Self::ReadItem<'a>) -> Self::ReadItem<'b> { item }
@@ -212,7 +213,7 @@ mod wrapper {
                 Err(bytes) => bytes.to_vec(),
             }
         }
-        fn clone_onto(&self, other: &mut Self::Owned) {
+        fn clone_onto(self, other: &mut Self::Owned) {
             other.clear();
             match self.decode() {
                 Ok(decode) => other.extend(decode.cloned()),

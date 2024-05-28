@@ -20,6 +20,7 @@ pub mod threshold;
 
 use crate::lattice::Lattice;
 use crate::trace::Cursor;
+use crate::trace::cursor::IntoOwned;
 
 /// An accumulation of (value, time, diff) updates.
 struct EditList<'a, C: Cursor> {
@@ -39,11 +40,11 @@ impl<'a, C: Cursor> EditList<'a, C> {
     /// Loads the contents of a cursor.
     fn load<L>(&mut self, cursor: &mut C, storage: &'a C::Storage, logic: L)
     where
-        L: Fn(&C::Time)->C::Time,
+        L: Fn(C::TimeGat<'_>)->C::Time,
     {
         self.clear();
         while cursor.val_valid(storage) {
-            cursor.map_times(storage, |time1, diff1| self.push(logic(time1), diff1.clone()));
+            cursor.map_times(storage, |time1, diff1| self.push(logic(time1), diff1.into_owned()));
             self.seal(cursor.val(storage));
             cursor.step_val(storage);
         }
@@ -102,7 +103,7 @@ impl<'storage, C: Cursor> ValueHistory<'storage, C> {
     }
     fn load<L>(&mut self, cursor: &mut C, storage: &'storage C::Storage, logic: L)
     where
-        L: Fn(&C::Time)->C::Time,
+        L: Fn(C::TimeGat<'_>)->C::Time,
     {
         self.edits.load(cursor, storage, logic);
     }
@@ -118,7 +119,7 @@ impl<'storage, C: Cursor> ValueHistory<'storage, C> {
         logic: L
     ) -> HistoryReplay<'storage, 'history, C>
     where
-        L: Fn(&C::Time)->C::Time,
+        L: Fn(C::TimeGat<'_>)->C::Time,
     {
         self.clear();
         cursor.seek_key(storage, key);
