@@ -62,7 +62,7 @@ pub trait Monoid : Semigroup {
 /// not quite as many as you might imagine.
 pub trait Abelian : Monoid {
     /// The method of `std::ops::Neg`, for types that do not implement `Neg`.
-    fn negate(self) -> Self;
+    fn negate(&mut self);
 }
 
 /// A replacement for `std::ops::Mul` for types that do not implement it.
@@ -97,7 +97,7 @@ macro_rules! builtin_implementation {
 macro_rules! builtin_abelian_implementation {
     ($t:ty) => {
         impl Abelian for $t {
-            #[inline] fn negate(self) -> Self { -self }
+            #[inline] fn negate(&mut self) { *self = -*self; }
         }
     };
 }
@@ -137,7 +137,7 @@ macro_rules! wrapping_implementation {
         }
 
         impl Abelian for $t {
-            #[inline] fn negate(self) -> Self { -self }
+            #[inline] fn negate(&mut self) { *self = -*self; }
         }
 
         impl Multiply<Self> for $t {
@@ -225,9 +225,9 @@ mod tuples {
 
             impl<$($name: Abelian),*> Abelian for ($($name,)*) {
                 #[allow(non_snake_case)]
-                #[inline] fn negate(self) -> Self {
-                    let ($($name,)*) = self;
-                    ( $($name.negate(), )* )
+                #[inline] fn negate(&mut self) {
+                    let ($(ref mut $name,)*) = self;
+                    $($name.negate();)*
                 }
             }
 
@@ -301,11 +301,10 @@ mod vector {
     }
 
     impl<R: Abelian> Abelian for Vec<R> {
-        fn negate(mut self) -> Self {
+        fn negate(&mut self) {
             for update in self.iter_mut() {
-                *update = update.clone().negate();
+                update.negate();
             }
-            self
         }
     }
 

@@ -549,7 +549,7 @@ impl<G: Scope, D: Data, R: Abelian+'static> Collection<G, D, R> where G::Timesta
     /// ```
     pub fn negate(&self) -> Collection<G, D, R> {
         self.inner
-            .map_in_place(|x| x.2 = x.2.clone().negate())
+            .map_in_place(|x| x.2.negate())
             .as_collection()
     }
 

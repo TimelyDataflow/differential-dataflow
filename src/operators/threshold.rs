@@ -43,7 +43,11 @@ pub trait ThresholdTotal<G: Scope, K: ExchangeData, R: ExchangeData+Semigroup> w
     fn threshold_total<R2: Abelian+'static, F: FnMut(&K,&R)->R2+'static>(&self, mut thresh: F) -> Collection<G, K, R2> {
         self.threshold_semigroup(move |key, new, old| {
             let mut new = thresh(key, new);
-            if let Some(old) = old { new.plus_equals(&thresh(key, old).negate()); }
+            if let Some(old) = old { 
+                let mut add = thresh(key, old);
+                add.negate();
+                new.plus_equals(&add); 
+            }
             if !new.is_zero() { Some(new) } else { None }
         })
     }
