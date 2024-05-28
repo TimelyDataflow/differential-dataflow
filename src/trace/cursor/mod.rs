@@ -27,7 +27,7 @@ pub trait IntoOwned<'a> {
     /// Conversion from an instance of this type to the owned type.
     fn into_owned(self) -> Self::Owned;
     /// Clones `self` onto an existing instance of the owned type.
-    fn clone_onto(&self, other: &mut Self::Owned); 
+    fn clone_onto(self, other: &mut Self::Owned);
     /// Borrows an owned instance as oneself.
     fn borrow_as(owned: &'a Self::Owned) -> Self;
 }
@@ -35,7 +35,7 @@ pub trait IntoOwned<'a> {
 impl<'a, T: ToOwned+?Sized> IntoOwned<'a> for &'a T {
     type Owned = T::Owned;
     fn into_owned(self) -> Self::Owned { self.to_owned() }
-    fn clone_onto(&self, other: &mut Self::Owned) { <T as ToOwned>::clone_into(self, other) }
+    fn clone_onto(self, other: &mut Self::Owned) { <T as ToOwned>::clone_into(self, other) }
     fn borrow_as(owned: &'a Self::Owned) -> Self { owned.borrow() }
 }
 

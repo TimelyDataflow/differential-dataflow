@@ -213,7 +213,7 @@ mod wrapper {
                 Err(bytes) => bytes.to_vec(),
             }
         }
-        fn clone_onto(&self, other: &mut Self::Owned) {
+        fn clone_onto(self, other: &mut Self::Owned) {
             other.clear();
             match self.decode() {
                 Ok(decode) => other.extend(decode.cloned()),
