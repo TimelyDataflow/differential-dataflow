@@ -18,13 +18,15 @@ pub struct MinSum {
     value: u32,
 }
 
-use differential_dataflow::difference::{Semigroup, Multiply};
+use differential_dataflow::difference::{IsZero, Semigroup, Multiply};
 
+impl IsZero for MinSum {
+    fn is_zero(&self) -> bool { false }
+}
 impl Semigroup for MinSum {
     fn plus_equals(&mut self, rhs: &Self) {
         self.value = std::cmp::min(self.value, rhs.value);
     }
-    fn is_zero(&self) -> bool { false }
 }
 
 impl Multiply<Self> for MinSum {
