@@ -138,6 +138,11 @@ where
     type OffsetContainer = OffsetList;
 }
 
+/// A layout based on timely stacks
+pub struct FlatLayout<U: Update> {
+    phantom: std::marker::PhantomData<U>,
+}
+
 /// A type with a preferred container.
 ///
 /// Examples include types that implement `Clone` who prefer
@@ -291,21 +296,6 @@ impl PushInto<usize> for OffsetList {
     }
 }
 
-impl<'a> IntoOwned<'a> for usize {
-    type Owned = usize;
-    fn into_owned(self) -> Self::Owned {
-        self
-    }
-
-    fn clone_onto(self, other: &mut Self::Owned) {
-        *other = self;
-    }
-
-    fn borrow_as(owned: &'a Self::Owned) -> Self {
-        *owned
-    }
-}
-
 impl BatchContainer for OffsetList {
     type Owned = usize;
     type ReadItem<'a> = usize;
@@ -407,6 +397,77 @@ where
 
     fn val_eq(this: &&V, other: &V) -> bool {
         *this == other
+    }
+}
+
+mod flatcontainer {
+    use timely::container::columnation::{Columnation, TimelyStack};
+    use timely::container::flatcontainer::{Containerized, FlatStack, Push, Region};
+    use timely::progress::Timestamp;
+    use crate::difference::Semigroup;
+    use crate::lattice::Lattice;
+    use crate::trace::implementations::{BuilderInput, FlatLayout, Layout, OffsetList, Update};
+
+    impl<U: Update> Layout for FlatLayout<U>
+        where
+            U::Key: Containerized,
+            for<'a> <U::Key as Containerized>::Region: Push<U::Key> + Push<<<U::Key as Containerized>::Region as Region>::ReadItem<'a>>,
+            for<'a> <<U::Key as Containerized>::Region as Region>::ReadItem<'a>: Copy + Ord,
+            U::Val: Containerized,
+            for<'a> <U::Val as Containerized>::Region: Push<U::Val> + Push<<<U::Val as Containerized>::Region as Region>::ReadItem<'a>>,
+            for<'a> <<U::Val as Containerized>::Region as Region>::ReadItem<'a>: Copy + Ord,
+            U::Time: Containerized,
+            <U::Time as Containerized>::Region: Region<Owned=U::Time>,
+            for<'a> <U::Time as Containerized>::Region: Push<U::Time> + Push<<<U::Time as Containerized>::Region as Region>::ReadItem<'a>>,
+            for<'a> <<U::Time as Containerized>::Region as Region>::ReadItem<'a>: Copy + Ord,
+            U::Diff: Containerized,
+            <U::Diff as Containerized>::Region: Region<Owned=U::Diff>,
+            for<'a> <U::Diff as Containerized>::Region: Push<U::Diff> + Push<<<U::Diff as Containerized>::Region as Region>::ReadItem<'a>>,
+            for<'a> <<U::Diff as Containerized>::Region as Region>::ReadItem<'a>: Copy + Ord,
+    {
+        type Target = U;
+        type KeyContainer = FlatStack<<U::Key as Containerized>::Region>;
+        type ValContainer = FlatStack<<U::Val as Containerized>::Region>;
+        type TimeContainer = FlatStack<<U::Time as Containerized>::Region>;
+        type DiffContainer = FlatStack<<U::Diff as Containerized>::Region>;
+        type OffsetContainer = OffsetList;
+    }
+
+    impl<K,V,T,R> BuilderInput<FlatLayout<((K, V), T, R)>> for TimelyStack<((K, V), T, R)>
+    where
+        K: Ord + Columnation + Containerized + Clone + 'static,
+        for<'a> K::Region: Push<K> + Push<<K::Region as Region>::ReadItem<'a>>,
+        for<'a> <K::Region as Region>::ReadItem<'a>: Copy + Ord,
+        for<'a> K: PartialEq<<K::Region as Region>::ReadItem<'a>>,
+        V: Ord + Columnation + Containerized + Clone + 'static,
+        for<'a> V::Region: Push<V> + Push<<V::Region as Region>::ReadItem<'a>>,
+        for<'a> <V::Region as Region>::ReadItem<'a>: Copy + Ord,
+        for<'a> V: PartialEq<<V::Region as Region>::ReadItem<'a>>,
+        T: Timestamp + Lattice + Columnation + Containerized + Clone + 'static,
+        for<'a> T::Region: Region<Owned=T> + Push<T> + Push<<T::Region as Region>::ReadItem<'a>>,
+        for<'a> <T::Region as Region>::ReadItem<'a>: Copy + Ord,
+        for<'a> T: PartialEq<<T::Region as Region>::ReadItem<'a>>,
+        R: Ord + Clone + Semigroup + Columnation + Containerized + 'static,
+        for<'a> R::Region: Region<Owned=R> + Push<R> + Push<<R::Region as Region>::ReadItem<'a>>,
+        for<'a> <R::Region as Region>::ReadItem<'a>: Copy + Ord,
+        for<'a> R: PartialEq<<R::Region as Region>::ReadItem<'a>>,
+    {
+        type Key<'a> = &'a K;
+        type Val<'a> = &'a V;
+        type Time = T;
+        type Diff = R;
+
+        fn into_parts<'a>(((key, val), time, diff): Self::Item<'a>) -> (Self::Key<'a>, Self::Val<'a>, Self::Time, Self::Diff) {
+            (key, val, time.clone(), diff.clone())
+        }
+
+        fn key_eq(this: &&K, other: <<K as Containerized>::Region as Region>::ReadItem<'_>) -> bool {
+            **this == <K as Containerized>::Region::reborrow(other)
+        }
+
+        fn val_eq(this: &&V, other: <<V as Containerized>::Region as Region>::ReadItem<'_>) -> bool {
+            **this == <V as Containerized>::Region::reborrow(other)
+        }
     }
 }
 
@@ -596,6 +657,44 @@ pub mod containers {
         }
         fn len(&self) -> usize {
             self[..].len()
+        }
+    }
+
+    mod flatcontainer {
+        use timely::container::flatcontainer::{FlatStack, Push, Region};
+        use crate::trace::implementations::BatchContainer;
+
+        impl<R> BatchContainer for FlatStack<R>
+        where
+            for<'a> R: Region + Push<<R as Region>::ReadItem<'a>> + 'static,
+            for<'a> R::ReadItem<'a>: Copy + Ord,
+        {
+            type Owned = R::Owned;
+            type ReadItem<'a> = R::ReadItem<'a>;
+
+            fn copy(&mut self, item: Self::ReadItem<'_>) {
+                self.copy(item);
+            }
+
+            fn with_capacity(size: usize) -> Self {
+                Self::with_capacity(size)
+            }
+
+            fn merge_capacity(cont1: &Self, cont2: &Self) -> Self {
+                Self::merge_capacity([cont1, cont2].into_iter())
+            }
+
+            fn reborrow<'b, 'a: 'b>(item: Self::ReadItem<'a>) -> Self::ReadItem<'b> {
+                R::reborrow(item)
+            }
+
+            fn index(&self, index: usize) -> Self::ReadItem<'_> {
+                self.get(index)
+            }
+
+            fn len(&self) -> usize {
+                self.len()
+            }
         }
     }
 

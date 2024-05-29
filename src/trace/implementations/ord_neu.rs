@@ -16,7 +16,7 @@ use crate::trace::implementations::merge_batcher::{MergeBatcher, VecMerger};
 use crate::trace::implementations::merge_batcher_col::ColumnationMerger;
 use crate::trace::rc_blanket_impls::RcBuilder;
 
-use super::{Update, Layout, Vector, TStack, Preferred};
+use super::{Update, Layout, Vector, TStack, Preferred, FlatLayout};
 
 pub use self::val_batch::{OrdValBatch, OrdValBuilder};
 pub use self::key_batch::{OrdKeyBatch, OrdKeyBuilder};
@@ -37,6 +37,13 @@ pub type ColValSpine<K, V, T, R> = Spine<
     RcBuilder<OrdValBuilder<TStack<((K,V),T,R)>, TimelyStack<((K,V),T,R)>>>,
 >;
 
+/// A trace implementation backed by flatcontainer storage.
+pub type FlatValSpine<K, V, T, R> = Spine<
+    Rc<OrdValBatch<FlatLayout<((K,V),T,R)>>>,
+    MergeBatcher<ColumnationMerger<((K,V),T,R)>, T>,
+    RcBuilder<OrdValBuilder<FlatLayout<((K,V),T,R)>, TimelyStack<((K,V),T,R)>>>,
+>;
+
 /// A trace implementation using a spine of ordered lists.
 pub type OrdKeySpine<K, T, R> = Spine<
     Rc<OrdKeyBatch<Vector<((K,()),T,R)>>>,
@@ -51,6 +58,13 @@ pub type ColKeySpine<K, T, R> = Spine<
     Rc<OrdKeyBatch<TStack<((K,()),T,R)>>>,
     MergeBatcher<ColumnationMerger<((K,()),T,R)>, T>,
     RcBuilder<OrdKeyBuilder<TStack<((K,()),T,R)>, TimelyStack<((K,()),T,R)>>>,
+>;
+
+/// A trace implementation backed by flatcontainer storage.
+pub type FlatKeySpine<K, T, R> = Spine<
+    Rc<OrdValBatch<FlatLayout<((K,()),T,R)>>>,
+    MergeBatcher<ColumnationMerger<((K,()),T,R)>, T>,
+    RcBuilder<OrdValBuilder<FlatLayout<((K,()),T,R)>, TimelyStack<((K,()),T,R)>>>,
 >;
 
 /// A trace implementation backed by columnar storage.
