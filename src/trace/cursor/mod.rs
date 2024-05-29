@@ -13,31 +13,7 @@ pub mod cursor_list;
 
 pub use self::cursor_list::CursorList;
 
-use std::borrow::Borrow;
-
-/// A reference type corresponding to an owned type, supporting conversion in each direction.
-///
-/// This trait can be implemented by a GAT, and enables owned types to be borrowed as a GAT.
-/// This trait is analogous to `ToOwned`, but not as prescriptive. Specifically, it avoids the
-/// requirement that the other trait implement `Borrow`, for which a borrow must result in a
-/// `&'self Borrowed`, which cannot move the lifetime into a GAT borrowed type.
-pub trait IntoOwned<'a> {
-    /// Owned type into which this type can be converted.
-    type Owned;
-    /// Conversion from an instance of this type to the owned type.
-    fn into_owned(self) -> Self::Owned;
-    /// Clones `self` onto an existing instance of the owned type.
-    fn clone_onto(self, other: &mut Self::Owned);
-    /// Borrows an owned instance as oneself.
-    fn borrow_as(owned: &'a Self::Owned) -> Self;
-}
-
-impl<'a, T: ToOwned+?Sized> IntoOwned<'a> for &'a T {
-    type Owned = T::Owned;
-    fn into_owned(self) -> Self::Owned { self.to_owned() }
-    fn clone_onto(self, other: &mut Self::Owned) { <T as ToOwned>::clone_into(self, other) }
-    fn borrow_as(owned: &'a Self::Owned) -> Self { owned.borrow() }
-}
+pub use timely::container::flatcontainer::IntoOwned;
 
 /// A cursor for navigating ordered `(key, val, time, diff)` updates.
 pub trait Cursor {

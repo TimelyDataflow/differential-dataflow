@@ -64,6 +64,13 @@ fn main() {
                     keys.join_core(&data, |_k, &(), &()| Option::<()>::None)
                         .probe_with(&mut probe);
                 },
+                "flat" => {
+                    use differential_dataflow::trace::implementations::ord_neu::FlatKeySpine;
+                    let data = data.arrange::<FlatKeySpine<_,_,_>>();
+                    let keys = keys.arrange::<FlatKeySpine<_,_,_>>();
+                    keys.join_core(&data, |_k, (), ()| Option::<()>::None)
+                        .probe_with(&mut probe);
+                }
                 _ => {
                     println!("unreconized mode: {:?}", mode)
                 }
