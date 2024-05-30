@@ -166,14 +166,14 @@ impl<G: Scope, D: Data, R: Abelian> Variable<G, D, R> where G::Timestamp: Lattic
     /// be used whenever the variable has an empty input.
     pub fn new(scope: &mut G, step: <G::Timestamp as Timestamp>::Summary) -> Self {
         let (feedback, updates) = scope.feedback(step.clone());
-        let collection = Collection::new(updates);
+        let collection = Collection::<G,D,R>::new(updates);
         Variable { collection, feedback, source: None, step }
     }
 
     /// Creates a new `Variable` from a supplied `source` stream.
     pub fn new_from(source: Collection<G, D, R>, step: <G::Timestamp as Timestamp>::Summary) -> Self {
         let (feedback, updates) = source.inner.scope().feedback(step.clone());
-        let collection = Collection::new(updates).concat(&source);
+        let collection = Collection::<G,D,R>::new(updates).concat(&source);
         Variable { collection, feedback, source: Some(source), step }
     }
 
@@ -233,7 +233,7 @@ impl<G: Scope, D: Data, R: Semigroup> SemigroupVariable<G, D, R> where G::Timest
     /// Creates a new initially empty `SemigroupVariable`.
     pub fn new(scope: &mut G, step: <G::Timestamp as Timestamp>::Summary) -> Self {
         let (feedback, updates) = scope.feedback(step.clone());
-        let collection = Collection::new(updates);
+        let collection = Collection::<G,D,R>::new(updates);
         SemigroupVariable { collection, feedback, step }
     }
 
