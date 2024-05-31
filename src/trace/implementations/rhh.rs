@@ -191,7 +191,7 @@ mod val_batch {
             while self.keys.len() < desired {
                 // We insert a default (dummy) key and repeat the offset to indicate this.
                 let current_offset = self.keys_offs.index(self.keys.len());
-                self.keys.push(Default::default());
+                self.keys.push(<<L::Target as Update>::Key as Default>::default());
                 self.keys_offs.copy(current_offset);
             }
 

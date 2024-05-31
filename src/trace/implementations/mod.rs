@@ -510,7 +510,7 @@ pub mod containers {
     use crate::trace::IntoOwned;
 
     /// A general-purpose container resembling `Vec<T>`.
-    pub trait BatchContainer: 'static {
+    pub trait BatchContainer: for<'a> PushInto<Self::ReadItem<'a>> + 'static {
         /// An owned instance of `Self::ReadItem<'_>`.
         type Owned;
 

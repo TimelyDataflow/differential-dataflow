@@ -49,6 +49,38 @@ impl<B: Ord + Clone + 'static> PushInto<Vec<B>> for HuffmanContainer<B> {
     }
 }
 
+impl<'a, B: Ord + Clone + 'static> PushInto<Wrapped<'a, B>> for HuffmanContainer<B> {
+    fn push_into(&mut self, item: Wrapped<'a, B>) {
+        match item.decode() {
+            Ok(decoded) => {
+                for x in decoded { *self.stats.entry(x.clone()).or_insert(0) += 1; }
+
+            },
+            Err(symbols) => {
+                for x in symbols.iter() { *self.stats.entry(x.clone()).or_insert(0) += 1; }
+            }
+        }
+        match (item.decode(), &mut self.inner) {
+            (Ok(decoded), Ok((huffman, bytes))) => {
+                bytes.extend(huffman.encode(decoded));
+                self.offsets.push(bytes.len());
+            }
+            (Ok(decoded), Err(raw)) => {
+                raw.extend(decoded.cloned());
+                self.offsets.push(raw.len());
+            }
+            (Err(symbols), Ok((huffman, bytes))) => {
+                bytes.extend(huffman.encode(symbols.iter()));
+                self.offsets.push(bytes.len());
+            }
+            (Err(symbols), Err(raw)) => {
+                raw.extend(symbols.iter().cloned());
+                self.offsets.push(raw.len());
+            }
+        }
+    }
+}
+
 impl<B: Ord + Clone + 'static> BatchContainer for HuffmanContainer<B> {
     type Owned = Vec<B>;
     type ReadItem<'a> = Wrapped<'a, B>;
