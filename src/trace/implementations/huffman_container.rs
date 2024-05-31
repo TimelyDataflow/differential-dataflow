@@ -87,40 +87,6 @@ impl<B: Ord + Clone + 'static> BatchContainer for HuffmanContainer<B> {
 
     fn reborrow<'b, 'a: 'b>(item: Self::ReadItem<'a>) -> Self::ReadItem<'b> { item }
 
-    fn copy(&mut self, item: Self::ReadItem<'_>) {
-        match item.decode() {
-            Ok(decoded) => {
-                for x in decoded { *self.stats.entry(x.clone()).or_insert(0) += 1; }
-
-            },
-            Err(symbols) => {
-                for x in symbols.iter() { *self.stats.entry(x.clone()).or_insert(0) += 1; }
-            }
-        }
-        match (item.decode(), &mut self.inner) {
-            (Ok(decoded), Ok((huffman, bytes))) => {
-                bytes.extend(huffman.encode(decoded));
-                self.offsets.push(bytes.len());
-            }
-            (Ok(decoded), Err(raw)) => {
-                raw.extend(decoded.cloned());
-                self.offsets.push(raw.len());
-            }
-            (Err(symbols), Ok((huffman, bytes))) => { 
-                bytes.extend(huffman.encode(symbols.iter()));
-                self.offsets.push(bytes.len());
-            }
-            (Err(symbols), Err(raw)) => { 
-                raw.extend(symbols.iter().cloned());
-                self.offsets.push(raw.len());
-            }
-        }
-    }
-    fn copy_range(&mut self, other: &Self, start: usize, end: usize) {
-        for index in start .. end {
-            self.copy(other.index(index));
-        }
-    }
     fn with_capacity(size: usize) -> Self {
         let mut offsets = OffsetList::with_capacity(size + 1);
         offsets.push(0);

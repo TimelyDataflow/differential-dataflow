@@ -236,9 +236,9 @@ mod val_batch {
 
             // Mark explicit types because type inference fails to resolve it.
             let keys_offs: &mut L::OffsetContainer = &mut storage.keys_offs;
-            keys_offs.copy(0);
+            keys_offs.push(0);
             let vals_offs: &mut L::OffsetContainer = &mut storage.vals_offs;
-            vals_offs.copy(0);
+            vals_offs.push(0);
 
             OrdValMerger {
                 key_cursor1: 0,
@@ -302,16 +302,16 @@ mod val_batch {
             while lower < upper {
                 self.stash_updates_for_val(source, lower);
                 if let Some(off) = self.consolidate_updates() {
-                    self.result.vals_offs.copy(off);
-                    self.result.vals.copy(source.vals.index(lower));
+                    self.result.vals_offs.push(off);
+                    self.result.vals.push(source.vals.index(lower));
                 }
                 lower += 1;
             }            
 
             // If we have pushed any values, copy the key as well.
             if self.result.vals.len() > init_vals {
-                self.result.keys.copy(source.keys.index(cursor));
-                self.result.keys_offs.copy(self.result.vals.len());
+                self.result.keys.push(source.keys.index(cursor));
+                self.result.keys_offs.push(self.result.vals.len());
             }           
         }
         /// Merge the next key in each of `source1` and `source2` into `self`, updating the appropriate cursors.
@@ -330,8 +330,8 @@ mod val_batch {
                     let (lower1, upper1) = source1.values_for_key(self.key_cursor1);
                     let (lower2, upper2) = source2.values_for_key(self.key_cursor2);
                     if let Some(off) = self.merge_vals((source1, lower1, upper1), (source2, lower2, upper2)) {
-                        self.result.keys.copy(source1.keys.index(self.key_cursor1));
-                        self.result.keys_offs.copy(off);
+                        self.result.keys.push(source1.keys.index(self.key_cursor1));
+                        self.result.keys_offs.push(off);
                     }
                     // Increment cursors in either case; the keys are merged.
                     self.key_cursor1 += 1;
@@ -364,8 +364,8 @@ mod val_batch {
                         // Extend stash by updates, with logical compaction applied.
                         self.stash_updates_for_val(source1, lower1);
                         if let Some(off) = self.consolidate_updates() {
-                            self.result.vals_offs.copy(off);
-                            self.result.vals.copy(source1.vals.index(lower1));
+                            self.result.vals_offs.push(off);
+                            self.result.vals.push(source1.vals.index(lower1));
                         }
                         lower1 += 1;
                     },
@@ -373,8 +373,8 @@ mod val_batch {
                         self.stash_updates_for_val(source1, lower1);
                         self.stash_updates_for_val(source2, lower2);
                         if let Some(off) = self.consolidate_updates() {
-                            self.result.vals_offs.copy(off);
-                            self.result.vals.copy(source1.vals.index(lower1));
+                            self.result.vals_offs.push(off);
+                            self.result.vals.push(source1.vals.index(lower1));
                         }
                         lower1 += 1;
                         lower2 += 1;
@@ -383,8 +383,8 @@ mod val_batch {
                         // Extend stash by updates, with logical compaction applied.
                         self.stash_updates_for_val(source2, lower2);
                         if let Some(off) = self.consolidate_updates() {
-                            self.result.vals_offs.copy(off);
-                            self.result.vals.copy(source2.vals.index(lower2));
+                            self.result.vals_offs.push(off);
+                            self.result.vals.push(source2.vals.index(lower2));
                         }
                         lower2 += 1;
                     },
@@ -394,16 +394,16 @@ mod val_batch {
             while lower1 < upper1 {
                 self.stash_updates_for_val(source1, lower1);
                 if let Some(off) = self.consolidate_updates() {
-                    self.result.vals_offs.copy(off);
-                    self.result.vals.copy(source1.vals.index(lower1));
+                    self.result.vals_offs.push(off);
+                    self.result.vals.push(source1.vals.index(lower1));
                 }
                 lower1 += 1;
             }
             while lower2 < upper2 {
                 self.stash_updates_for_val(source2, lower2);
                 if let Some(off) = self.consolidate_updates() {
-                    self.result.vals_offs.copy(off);
-                    self.result.vals.copy(source2.vals.index(lower2));
+                    self.result.vals_offs.push(off);
+                    self.result.vals.push(source2.vals.index(lower2));
                 }
                 lower2 += 1;
             }
@@ -616,16 +616,16 @@ mod val_batch {
                         self.push_update(time, diff);
                     } else {
                         // New value; complete representation of prior value.
-                        self.result.vals_offs.copy(self.result.times.len());
+                        self.result.vals_offs.push(self.result.times.len());
                         if self.singleton.take().is_some() { self.singletons += 1; }
                         self.push_update(time, diff);
                         self.result.vals.push(val);
                     }
                 } else {
                     // New key; complete representation of prior key.
-                    self.result.vals_offs.copy(self.result.times.len());
+                    self.result.vals_offs.push(self.result.times.len());
                     if self.singleton.take().is_some() { self.singletons += 1; }
-                    self.result.keys_offs.copy(self.result.vals.len());
+                    self.result.keys_offs.push(self.result.vals.len());
                     self.push_update(time, diff);
                     self.result.vals.push(val);
                     self.result.keys.push(key);
@@ -636,10 +636,10 @@ mod val_batch {
         #[inline(never)]
         fn done(mut self, lower: Antichain<Self::Time>, upper: Antichain<Self::Time>, since: Antichain<Self::Time>) -> OrdValBatch<L> {
             // Record the final offsets
-            self.result.vals_offs.copy(self.result.times.len());
+            self.result.vals_offs.push(self.result.times.len());
             // Remove any pending singleton, and if it was set increment our count.
             if self.singleton.take().is_some() { self.singletons += 1; }
-            self.result.keys_offs.copy(self.result.vals.len());
+            self.result.keys_offs.push(self.result.vals.len());
             OrdValBatch {
                 updates: self.result.times.len() + self.singletons,
                 storage: self.result,
@@ -795,7 +795,7 @@ mod key_batch {
             };
 
             let keys_offs: &mut L::OffsetContainer = &mut storage.keys_offs;
-            keys_offs.copy(0);
+            keys_offs.push(0);
 
             OrdKeyMerger {
                 key_cursor1: 0,
@@ -855,8 +855,8 @@ mod key_batch {
         fn copy_key(&mut self, source: &OrdKeyStorage<L>, cursor: usize) {
             self.stash_updates_for_key(source, cursor);
             if let Some(off) = self.consolidate_updates() {
-                self.result.keys_offs.copy(off);
-                self.result.keys.copy(source.keys.index(cursor));
+                self.result.keys_offs.push(off);
+                self.result.keys.push(source.keys.index(cursor));
             }
         }
         /// Merge the next key in each of `source1` and `source2` into `self`, updating the appropriate cursors.
@@ -875,8 +875,8 @@ mod key_batch {
                     self.stash_updates_for_key(source1, self.key_cursor1);
                     self.stash_updates_for_key(source2, self.key_cursor2);
                     if let Some(off) = self.consolidate_updates() {
-                        self.result.keys_offs.copy(off);
-                        self.result.keys.copy(source1.keys.index(self.key_cursor1));
+                        self.result.keys_offs.push(off);
+                        self.result.keys.push(source1.keys.index(self.key_cursor1));
                     }
                     // Increment cursors in either case; the keys are merged.
                     self.key_cursor1 += 1;
@@ -1078,7 +1078,7 @@ mod key_batch {
                     self.push_update(time, diff);
                 } else {
                     // New key; complete representation of prior key.
-                    self.result.keys_offs.copy(self.result.times.len());
+                    self.result.keys_offs.push(self.result.times.len());
                     // Remove any pending singleton, and if it was set increment our count.
                     if self.singleton.take().is_some() { self.singletons += 1; }
                     self.push_update(time, diff);
@@ -1090,7 +1090,7 @@ mod key_batch {
         #[inline(never)]
         fn done(mut self, lower: Antichain<Self::Time>, upper: Antichain<Self::Time>, since: Antichain<Self::Time>) -> OrdKeyBatch<L> {
             // Record the final offsets
-            self.result.keys_offs.copy(self.result.times.len());
+            self.result.keys_offs.push(self.result.times.len());
             // Remove any pending singleton, and if it was set increment our count.
             if self.singleton.take().is_some() { self.singletons += 1; }
             OrdKeyBatch {
