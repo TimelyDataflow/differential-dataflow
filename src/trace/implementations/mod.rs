@@ -300,16 +300,6 @@ impl BatchContainer for OffsetList {
     type Owned = usize;
     type ReadItem<'a> = usize;
 
-    fn copy(&mut self, item: Self::ReadItem<'_>) {
-        self.push(item);
-    }
-
-    fn copy_range(&mut self, other: &Self, start: usize, end: usize) {
-        for offset in start..end {
-            self.push(other.index(offset));
-        }
-    }
-
     fn reborrow<'b, 'a: 'b>(item: Self::ReadItem<'a>) -> Self::ReadItem<'b> { item }
 
     fn with_capacity(size: usize) -> Self {
@@ -510,7 +500,7 @@ pub mod containers {
     use crate::trace::IntoOwned;
 
     /// A general-purpose container resembling `Vec<T>`.
-    pub trait BatchContainer: 'static {
+    pub trait BatchContainer: for<'a> PushInto<Self::ReadItem<'a>> + 'static {
         /// An owned instance of `Self::ReadItem<'_>`.
         type Owned;
 
@@ -520,14 +510,6 @@ pub mod containers {
         /// Push an item into this container
         fn push<D>(&mut self, item: D) where Self: PushInto<D> {
             self.push_into(item);
-        }
-        /// Inserts a borrowed item.
-        fn copy(&mut self, item: Self::ReadItem<'_>);
-        /// Extends from a range of items in another`Self`.
-        fn copy_range(&mut self, other: &Self, start: usize, end: usize) {
-            for index in start .. end {
-                self.copy(other.index(index));
-            }
         }
         /// Creates a new container with sufficient capacity.
         fn with_capacity(size: usize) -> Self;
@@ -606,12 +588,6 @@ pub mod containers {
 
         fn reborrow<'b, 'a: 'b>(item: Self::ReadItem<'a>) -> Self::ReadItem<'b> { item }
 
-        fn copy(&mut self, item: &T) {
-            self.push(item.clone());
-        }
-        fn copy_range(&mut self, other: &Self, start: usize, end: usize) {
-            self.extend_from_slice(&other[start .. end]);
-        }
         fn with_capacity(size: usize) -> Self {
             Vec::with_capacity(size)
         }
@@ -634,16 +610,6 @@ pub mod containers {
 
         fn reborrow<'b, 'a: 'b>(item: Self::ReadItem<'a>) -> Self::ReadItem<'b> { item }
 
-        fn copy(&mut self, item: &T) {
-            self.copy(item);
-        }
-        fn copy_range(&mut self, other: &Self, start: usize, end: usize) {
-            let slice = &other[start .. end];
-            self.reserve_items(slice.iter());
-            for item in slice.iter() {
-                self.copy(item);
-            }
-        }
         fn with_capacity(size: usize) -> Self {
             Self::with_capacity(size)
         }
@@ -671,10 +637,6 @@ pub mod containers {
         {
             type Owned = R::Owned;
             type ReadItem<'a> = R::ReadItem<'a>;
-
-            fn copy(&mut self, item: Self::ReadItem<'_>) {
-                self.copy(item);
-            }
 
             fn with_capacity(size: usize) -> Self {
                 Self::with_capacity(size)
@@ -711,13 +673,16 @@ pub mod containers {
 
     impl<B: Ord + Clone + 'static> PushInto<&[B]> for SliceContainer<B> {
         fn push_into(&mut self, item: &[B]) {
-            self.copy(item);
+            for x in item.iter() {
+                self.inner.push_into(x);
+            }
+            self.offsets.push(self.inner.len());
         }
     }
 
     impl<B: Ord + Clone + 'static> PushInto<&Vec<B>> for SliceContainer<B> {
         fn push_into(&mut self, item: &Vec<B>) {
-            self.copy(item);
+            self.push_into(&item[..]);
         }
     }
 
@@ -739,17 +704,6 @@ pub mod containers {
 
         fn reborrow<'b, 'a: 'b>(item: Self::ReadItem<'a>) -> Self::ReadItem<'b> { item }
 
-        fn copy(&mut self, item: Self::ReadItem<'_>) {
-            for x in item.iter() {
-                self.inner.copy(x);
-            }
-            self.offsets.push(self.inner.len());
-        }
-        fn copy_range(&mut self, other: &Self, start: usize, end: usize) {
-            for index in start .. end {
-                self.copy(other.index(index));
-            }
-        }
         fn with_capacity(size: usize) -> Self {
             let mut offsets = Vec::with_capacity(size + 1);
             offsets.push(0);
