@@ -39,7 +39,7 @@ use crate::hashable::Hashable;
 /// The `R` parameter represents the types of changes that the data undergo, and is most commonly (and
 /// defaults to) `isize`, representing changes to the occurrence count of each record.
 #[derive(Clone)]
-pub struct Collection<G: Scope, D, R: Semigroup = isize, C = Vec<(D, <G as ScopeParent>::Timestamp, R)>> {
+pub struct Collection<G: Scope, D, R = isize, C = Vec<(D, <G as ScopeParent>::Timestamp, R)>> {
     /// The underlying timely dataflow stream.
     ///
     /// This field is exposed to support direct timely dataflow manipulation when required, but it is
@@ -49,7 +49,7 @@ pub struct Collection<G: Scope, D, R: Semigroup = isize, C = Vec<(D, <G as Scope
     phantom: std::marker::PhantomData<(D, R)>,
 }
 
-impl<G: Scope, D: Data, R: Semigroup+'static, C> Collection<G, D, R, C> where G::Timestamp: Data {
+impl<G: Scope, D, R, C> Collection<G, D, R, C> {
     /// Creates a new Collection from a timely dataflow stream.
     ///
     /// This method seems to be rarely used, with the `as_collection` method on streams being a more
@@ -60,7 +60,7 @@ impl<G: Scope, D: Data, R: Semigroup+'static, C> Collection<G, D, R, C> where G:
         Collection { inner: stream, phantom: std::marker::PhantomData }
     }
 }
-impl<G: Scope, D: Data, R: Semigroup+'static, C: Container> Collection<G, D, R, C> where G::Timestamp: Data {
+impl<G: Scope, D, R, C: Container> Collection<G, D, R, C> {
     /// Creates a new collection accumulating the contents of the two collections.
     ///
     /// Despite the name, differential dataflow collections are unordered. This method is so named because the
@@ -174,7 +174,7 @@ impl<G: Scope, D: Data, R: Semigroup+'static, C: Container> Collection<G, D, R, 
     }
 }
 
-impl<G: Scope, D: Data, R: Semigroup+'static> Collection<G, D, R> where G::Timestamp: Data {
+impl<G: Scope, D: Clone+'static, R: Clone+'static> Collection<G, D, R> {
     /// Creates a new collection by applying the supplied function to each input element.
     ///
     /// # Examples
@@ -492,7 +492,7 @@ impl<G: Scope, D: Data, R: Semigroup+'static> Collection<G, D, R> where G::Times
     /// ```
     pub fn assert_empty(&self)
     where D: crate::ExchangeData+Hashable,
-          R: crate::ExchangeData+Hashable,
+          R: crate::ExchangeData+Hashable + Semigroup,
           G::Timestamp: Lattice+Ord,
     {
         self.consolidate()
@@ -504,7 +504,7 @@ use timely::dataflow::scopes::ScopeParent;
 use timely::progress::timestamp::Refines;
 
 /// Methods requiring a nested scope.
-impl<'a, G: Scope, T: Timestamp, D: Data, R: Semigroup+'static> Collection<Child<'a, G, T>, D, R>
+impl<'a, G: Scope, T: Timestamp, D: Clone+'static, R: Clone+'static> Collection<Child<'a, G, T>, D, R>
 where
     T: Refines<<G as ScopeParent>::Timestamp>,
 {
@@ -537,7 +537,7 @@ where
 }
 
 /// Methods requiring a region as the scope.
-impl<'a, G: Scope, D: Data, R: Semigroup+'static> Collection<Child<'a, G, G::Timestamp>, D, R>
+impl<'a, G: Scope, D: Clone+'static, R: Clone+'static> Collection<Child<'a, G, G::Timestamp>, D, R>
 {
     /// Returns the value of a Collection from a nested region to its containing scope.
     ///
@@ -551,7 +551,7 @@ impl<'a, G: Scope, D: Data, R: Semigroup+'static> Collection<Child<'a, G, G::Tim
 }
 
 /// Methods requiring an Abelian difference, to support negation.
-impl<G: Scope, D: Data, R: Abelian+'static> Collection<G, D, R> where G::Timestamp: Data {
+impl<G: Scope, D: Clone+'static, R: Abelian+'static> Collection<G, D, R> where G::Timestamp: Data {
     /// Creates a new collection whose counts are the negation of those in the input.
     ///
     /// This method is most commonly used with `concat` to get those element in one collection but not another.
@@ -617,12 +617,12 @@ impl<G: Scope, D: Data, R: Abelian+'static> Collection<G, D, R> where G::Timesta
 }
 
 /// Conversion to a differential dataflow Collection.
-pub trait AsCollection<G: Scope, D: Data, R: Semigroup, C> {
+pub trait AsCollection<G: Scope, D, R, C> {
     /// Converts the type to a differential dataflow collection.
     fn as_collection(&self) -> Collection<G, D, R, C>;
 }
 
-impl<G: Scope, D: Data, R: Semigroup+'static, C: Clone> AsCollection<G, D, R, C> for StreamCore<G, C> {
+impl<G: Scope, D, R, C: Clone> AsCollection<G, D, R, C> for StreamCore<G, C> {
     fn as_collection(&self) -> Collection<G, D, R, C> {
         Collection::<G,D,R,C>::new(self.clone())
     }
