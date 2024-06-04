@@ -46,7 +46,7 @@ pub mod merge_batcher_flat;
 pub mod ord_neu;
 pub mod rhh;
 pub mod huffman_container;
-mod chunker;
+pub mod chunker;
 
 // Opinionated takes on default spines.
 pub use self::ord_neu::OrdValSpine as ValSpine;
