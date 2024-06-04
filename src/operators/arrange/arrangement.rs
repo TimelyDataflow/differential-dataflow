@@ -369,15 +369,6 @@ where
         Tr::Batch: Batch,
         Tr::Batcher: Batcher<Input=C>,
     ;
-
-    /// Arranges updates into a shared trace, using a supplied parallelization contract, with a supplied name.
-    fn arrange_core<P, Tr>(&self, pact: P, name: &str) -> Arranged<G, TraceAgent<Tr>>
-    where
-        P: ParallelizationContract<G::Timestamp, C>,
-        Tr: Trace<Time=G::Timestamp>+'static,
-        Tr::Batch: Batch,
-        Tr::Batcher: Batcher<Input=C>,
-    ;
 }
 
 impl<G, K, V, R> Arrange<G, Vec<((K, V), G::Timestamp, R)>> for Collection<G, (K, V), R>
@@ -395,17 +386,7 @@ where
         Tr::Batcher: Batcher<Input=Vec<((K, V), G::Timestamp, R)>>,
     {
         let exchange = Exchange::new(move |update: &((K,V),G::Timestamp,R)| (update.0).0.hashed().into());
-        self.arrange_core(exchange, name)
-    }
-
-    fn arrange_core<P, Tr>(&self, pact: P, name: &str) -> Arranged<G, TraceAgent<Tr>>
-    where
-        P: ParallelizationContract<G::Timestamp, Vec<((K,V),G::Timestamp,R)>>,
-        Tr: Trace<Time=G::Timestamp>+'static,
-        Tr::Batch: Batch,
-        Tr::Batcher: Batcher<Input=Vec<((K,V),G::Timestamp,R)>>,
-    {
-        arrange_core(&self.inner, pact, name)
+        arrange_core(&self.inner, exchange, name)
     }
 }
 
@@ -583,18 +564,7 @@ where
         Tr::Batcher: Batcher<Input=Vec<((K, ()), G::Timestamp, R)>>,
     {
         let exchange = Exchange::new(move |update: &((K,()),G::Timestamp,R)| (update.0).0.hashed().into());
-        self.arrange_core(exchange, name)
-    }
-
-    fn arrange_core<P, Tr>(&self, pact: P, name: &str) -> Arranged<G, TraceAgent<Tr>>
-    where
-        P: ParallelizationContract<G::Timestamp, Vec<((K,()),G::Timestamp,R)>>,
-        Tr: Trace<Time=G::Timestamp>+'static,
-        Tr::Batch: Batch,
-        Tr::Batcher: Batcher<Input=Vec<((K,()),G::Timestamp,R)>>,
-    {
-        self.map(|k| (k, ()))
-            .arrange_core(pact, name)
+        arrange_core(&self.map(|k| (k, ())).inner, exchange, name)
     }
 }
 
