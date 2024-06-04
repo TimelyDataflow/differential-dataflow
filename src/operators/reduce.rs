@@ -585,7 +585,7 @@ where
                         // Determine the frontier of our interesting times.
                         let mut frontier = Antichain::<G::Timestamp>::new();
                         for (_, time) in &interesting {
-                            frontier.insert(time.clone());
+                            frontier.insert_ref(time);
                         }
 
                         // Update `capabilities` to reflect interesting pairs described by `frontier`.
