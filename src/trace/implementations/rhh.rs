@@ -760,7 +760,7 @@ mod val_batch {
     impl<L: Layout, CI> Builder for RhhValBuilder<L, CI>
     where
         <L::Target as Update>::Key: Default + HashOrdered,
-        CI: for<'a> BuilderInput<L, Key<'a> = <L::Target as Update>::Key, Time=<L::Target as Update>::Time, Diff=<L::Target as Update>::Diff>,
+        CI: for<'a> BuilderInput<L::KeyContainer, L::ValContainer, Key<'a> = <L::Target as Update>::Key, Time=<L::Target as Update>::Time, Diff=<L::Target as Update>::Diff>,
         for<'a> L::ValContainer: PushInto<CI::Val<'a>>,
         for<'a> <L::KeyContainer as BatchContainer>::ReadItem<'a>: HashOrdered + IntoOwned<'a, Owned = <L::Target as Update>::Key>,
     {

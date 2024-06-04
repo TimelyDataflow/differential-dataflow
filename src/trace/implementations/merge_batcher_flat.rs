@@ -12,21 +12,21 @@ use crate::trace::implementations::merge_batcher::Merger;
 use crate::trace::Builder;
 use crate::trace::cursor::IntoOwned;
 
-/// A merger for flat stacks
-pub struct FlatcontainerMerger<T, R> {
-    _marker: PhantomData<(T, R)>,
+/// A merger for flat stacks. `T` describes the
+pub struct FlatcontainerMerger<T, R, MC> {
+    _marker: PhantomData<(T, R, MC)>,
 }
 
-impl<T, R> Default for FlatcontainerMerger<T, R> {
+impl<T, R, MC> Default for FlatcontainerMerger<T, R, MC> {
     fn default() -> Self {
         Self { _marker: PhantomData, }
     }
 }
 
-impl<T, R: Region> FlatcontainerMerger<T, R> {
-    const BUFFER_SIZE_BYTES: usize = 64 << 10;
+impl<T, R, MC: Region> FlatcontainerMerger<T, R, MC> {
+    const BUFFER_SIZE_BYTES: usize = 8 << 10;
     fn chunk_capacity(&self) -> usize {
-        let size = ::std::mem::size_of::<T>();
+        let size = ::std::mem::size_of::<MC::Index>();
         if size == 0 {
             Self::BUFFER_SIZE_BYTES
         } else if size <= Self::BUFFER_SIZE_BYTES {
@@ -38,13 +38,13 @@ impl<T, R: Region> FlatcontainerMerger<T, R> {
 
     /// Helper to get pre-sized vector from the stash.
     #[inline]
-    fn empty(&self, stash: &mut Vec<FlatStack<R>>) -> FlatStack<R> {
+    fn empty(&self, stash: &mut Vec<FlatStack<MC>>) -> FlatStack<MC> {
         stash.pop().unwrap_or_else(|| FlatStack::with_capacity(self.chunk_capacity()))
     }
 
     /// Helper to return a chunk to the stash.
     #[inline]
-    fn recycle(&self, mut chunk: FlatStack<R>, stash: &mut Vec<FlatStack<R>>) {
+    fn recycle(&self, mut chunk: FlatStack<MC>, stash: &mut Vec<FlatStack<MC>>) {
         // TODO: Should we limit the size of `stash`?
         if chunk.capacity() == self.chunk_capacity() {
             chunk.clear();
@@ -88,13 +88,11 @@ where
     }
 }
 
-impl<K, V, T, R, FR> Merger for FlatcontainerMerger<((K, V), T, R), FR>
+impl<T, R, FR> Merger for FlatcontainerMerger<T, R, FR>
 where
-    K: Ord + Clone,
-    V: Ord + Clone,
     for<'a> T: Ord + PartialOrder + PartialOrder<FR::Time<'a>> + Data,
     for<'a> R: Default + Semigroup + Semigroup<FR::Diff<'a>> + Data,
-    for<'a> FR: MergerChunk + Push<((K, V), T, R)> + Clone + 'static
+    for<'a> FR: MergerChunk + Clone + 'static
         + ReserveItems<<FR as Region>::ReadItem<'a>>
         + Push<<FR as Region>::ReadItem<'a>>
         + Push<((FR::Key<'a>, FR::Val<'a>), FR::Time<'a>, &'a R)>

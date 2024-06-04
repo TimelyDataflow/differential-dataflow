@@ -245,31 +245,31 @@ where
 }
 
 /// Chunk a stream of vectors into chains of vectors.
-pub struct ContainerChunker<I, O, Sorter, Consolidator>
+pub struct ContainerChunker<Input, Output, Sorter, Consolidator>
 where
-    I: Container,
-    for<'a> O: SizableContainer + PushInto<I::ItemRef<'a>>,
-    Sorter: ContainerSorter<O>,
-    Consolidator: ConsolidateContainer<O> + ?Sized,
+    Input: Container,
+    for<'a> Output: SizableContainer + PushInto<Input::ItemRef<'a>>,
+    Sorter: ContainerSorter<Output>,
+    Consolidator: ConsolidateContainer<Output> + ?Sized,
 {
-    pending: O,
-    empty: O,
-    ready: Vec<O>,
+    pending: Output,
+    empty: Output,
+    ready: Vec<Output>,
     sorter: Sorter,
-    _marker: PhantomData<(I, Consolidator)>,
+    _marker: PhantomData<(Input, Consolidator)>,
 }
 
-impl<I, O, Sorter, Consolidator> Default for ContainerChunker<I, O, Sorter, Consolidator>
+impl<Input, Output, Sorter, Consolidator> Default for ContainerChunker<Input, Output, Sorter, Consolidator>
 where
-    I: Container,
-    for<'a> O: SizableContainer + PushInto<I::ItemRef<'a>>,
-    Sorter: ContainerSorter<O> + Default,
-    Consolidator: ConsolidateContainer<O> + ?Sized,
+    Input: Container,
+    for<'a> Output: SizableContainer + PushInto<Input::ItemRef<'a>>,
+    Sorter: ContainerSorter<Output> + Default,
+    Consolidator: ConsolidateContainer<Output> + ?Sized,
 {
     fn default() -> Self {
         Self {
-            pending: O::default(),
-            empty: O::default(),
+            pending: Output::default(),
+            empty: Output::default(),
             ready: Vec::default(),
             sorter: Sorter::default(),
             _marker: PhantomData,
@@ -277,19 +277,19 @@ where
     }
 }
 
-impl<I, O, Sorter, Consolidator> Chunker for ContainerChunker<I, O, Sorter, Consolidator>
+impl<Input, Output, Sorter, Consolidator> Chunker for ContainerChunker<Input, Output, Sorter, Consolidator>
 where
-    I: Container,
-    for<'a> O: SizableContainer + PushInto<I::ItemRef<'a>>,
-    Sorter: ContainerSorter<O>,
-    Consolidator: ConsolidateContainer<O>,
+    Input: Container,
+    for<'a> Output: SizableContainer + PushInto<Input::ItemRef<'a>>,
+    Sorter: ContainerSorter<Output>,
+    Consolidator: ConsolidateContainer<Output>,
 {
-    type Input = I;
-    type Output = O;
+    type Input = Input;
+    type Output = Output;
 
     fn push_container(&mut self, container: RefOrMut<Self::Input>) {
-        if self.pending.capacity() < O::preferred_capacity() {
-            self.pending.reserve(O::preferred_capacity() - self.pending.len());
+        if self.pending.capacity() < Output::preferred_capacity() {
+            self.pending.reserve(Output::preferred_capacity() - self.pending.len());
         }
         // TODO: This uses `IterRef`, which isn't optimal for containers that can move.
         for item in container.iter() {

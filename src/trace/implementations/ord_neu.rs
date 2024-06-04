@@ -42,16 +42,16 @@ pub type ColValSpine<K, V, T, R> = Spine<
 >;
 
 /// A trace implementation backed by flatcontainer storage.
-pub type FlatValSpine<K, V, T, R> = Spine<
+pub type FlatValSpine<K, V, T, R, C> = Spine<
     Rc<OrdValBatch<FlatLayout<((K,V),T,R)>>>,
     MergeBatcher<
         ContainerChunker<
-            Vec<((K,V),T,R)>,
+            C,
             FlatStack<<((K,V),T,R) as Containerized>::Region>,
             ExternalContainerSorter<FlatStack<<((K,V),T,R) as Containerized>::Region>>,
             ContainerConsolidator,
         >,
-        FlatcontainerMerger<((K,V),T,R), <((K,V),T,R) as Containerized>::Region>,
+        FlatcontainerMerger<T, R, <((K,V),T,R) as Containerized>::Region>,
         T,
     >,
     RcBuilder<OrdValBuilder<FlatLayout<((K,V),T,R)>, FlatStack<<((K,V),T,R) as Containerized>::Region>>>,
@@ -74,16 +74,16 @@ pub type ColKeySpine<K, T, R> = Spine<
 >;
 
 /// A trace implementation backed by flatcontainer storage.
-pub type FlatKeySpine<K, T, R> = Spine<
+pub type FlatKeySpine<K, T, R, C> = Spine<
     Rc<OrdKeyBatch<FlatLayout<((K,()),T,R)>>>,
     MergeBatcher<
         ContainerChunker<
-            Vec<((K,()),T,R)>,
+            C,
             FlatStack<<((K,()),T,R) as Containerized>::Region>,
             ExternalContainerSorter<FlatStack<<((K,()),T,R) as Containerized>::Region>>,
             ContainerConsolidator,
         >,
-        FlatcontainerMerger<((K,()),T,R), <((K,()),T,R) as Containerized>::Region>,
+        FlatcontainerMerger<T, R, <((K,()),T,R) as Containerized>::Region>,
         T,
     >,
     RcBuilder<OrdKeyBuilder<FlatLayout<((K,()),T,R)>, FlatStack<<((K,()),T,R) as Containerized>::Region>>>,
@@ -599,7 +599,7 @@ mod val_batch {
     impl<L, CI> Builder for OrdValBuilder<L, CI>
     where
         L: Layout,
-        CI: for<'a> BuilderInput<L, Time=<L::Target as Update>::Time, Diff=<L::Target as Update>::Diff>,
+        CI: for<'a> BuilderInput<L::KeyContainer, L::ValContainer, Time=<L::Target as Update>::Time, Diff=<L::Target as Update>::Diff>,
         for<'a> L::KeyContainer: PushInto<CI::Key<'a>>,
         for<'a> L::ValContainer: PushInto<CI::Val<'a>>,
         for<'a> <L::TimeContainer as BatchContainer>::ReadItem<'a> : IntoOwned<'a, Owned = <L::Target as Update>::Time>,
@@ -1066,7 +1066,7 @@ mod key_batch {
     impl<L: Layout, CI> Builder for OrdKeyBuilder<L, CI>
     where
         L: Layout,
-        CI: for<'a> BuilderInput<L, Time=<L::Target as Update>::Time, Diff=<L::Target as Update>::Diff>,
+        CI: for<'a> BuilderInput<L::KeyContainer, L::ValContainer, Time=<L::Target as Update>::Time, Diff=<L::Target as Update>::Diff>,
         for<'a> L::KeyContainer: PushInto<CI::Key<'a>>,
         for<'a> <L::TimeContainer as BatchContainer>::ReadItem<'a> : IntoOwned<'a, Owned = <L::Target as Update>::Time>,
         for<'a> <L::DiffContainer as BatchContainer>::ReadItem<'a> : IntoOwned<'a, Owned = <L::Target as Update>::Diff>,
