@@ -1,5 +1,6 @@
 //! Organize streams of data into sorted chunks.
 
+use std::collections::VecDeque;
 use std::marker::PhantomData;
 use timely::communication::message::RefOrMut;
 use timely::Container;
@@ -10,41 +11,53 @@ use crate::difference::Semigroup;
 
 /// Behavior to transform streams of data into sorted chunks of regular size.
 pub trait Chunker {
-    /// Input container type.
+    /// Input type.
     type Input;
-    /// Output container type.
+    /// Output type.
     type Output;
 
     /// Accept a container and absorb its contents. The caller must
     /// call [`extract`] or [`finish`] soon after pushing a container.
     fn push_container(&mut self, container: RefOrMut<Self::Input>);
 
-    /// Extract all read data, leaving unfinished data behind.
+    /// Extract ready data, leaving unfinished data behind.
+    ///
+    /// Should be called repeatedly until it returns `None`, which indicates that there is no
+    /// more ready data.
     fn extract(&mut self) -> Option<Self::Output>;
 
     /// Unconditionally extract all data, leaving no unfinished data behind.
+    ///
+    /// Should be called repeatedly until it returns `None`, which indicates that there is no
+    /// more data.
     fn finish(&mut self) -> Option<Self::Output>;
 }
 
 /// Chunk a stream of vectors into chains of vectors.
 pub struct VecChunker<T> {
     pending: Vec<T>,
-    ready: Vec<Vec<T>>,
+    ready: VecDeque<Vec<T>>,
 }
 
 impl<T> Default for VecChunker<T> {
     fn default() -> Self {
         Self {
             pending: Vec::default(),
-            ready: Vec::default(),
+            ready: VecDeque::default(),
         }
     }
 }
 
-impl<T> VecChunker<T> {
+impl<K, V, T, R> VecChunker<((K, V), T, R)>
+where
+    K: Ord,
+    V: Ord,
+    T: Ord,
+    R: Semigroup,
+{
     const BUFFER_SIZE_BYTES: usize = 8 << 10;
-    fn chunk_capacity(&self) -> usize {
-        let size = ::std::mem::size_of::<T>();
+    fn chunk_capacity() -> usize {
+        let size = ::std::mem::size_of::<((K, V), T, R)>();
         if size == 0 {
             Self::BUFFER_SIZE_BYTES
         } else if size <= Self::BUFFER_SIZE_BYTES {
@@ -54,8 +67,23 @@ impl<T> VecChunker<T> {
         }
     }
 
-    fn pending_capacity(&self) -> usize {
-        self.chunk_capacity() * 2
+    /// Form chunks out of pending data, if needed. This function is meant to be applied to
+    /// potentially full buffers, and ensures that if the buffer was full when called it is at most
+    /// half full when the function returns.
+    ///
+    /// `form_chunk` does the following:
+    /// * If pending is full, consolidate.
+    /// * If after consolidation it's more than half full, peel off chunks,
+    ///   leaving behind any partial chunk in pending.
+    fn form_chunk(&mut self) {
+        consolidate_updates(&mut self.pending);
+        if self.pending.len() >= Self::chunk_capacity() {
+            while self.pending.len() > Self::chunk_capacity() {
+                let mut chunk = Vec::with_capacity(Self::chunk_capacity());
+                chunk.extend(self.pending.drain(..chunk.capacity()));
+                self.ready.push_back(chunk);
+            }
+        }
     }
 }
 
@@ -72,27 +100,11 @@ where
     fn push_container(&mut self, container: RefOrMut<Self::Input>) {
         // Ensure `self.pending` has the desired capacity. We should never have a larger capacity
         // because we don't write more than capacity elements into the buffer.
-        if self.pending.capacity() < self.pending_capacity() {
-            self.pending.reserve(self.pending_capacity() - self.pending.len());
+        // Important: Consolidation requires `pending` to have twice the chunk capacity to
+        // amortize its cost. Otherwise, it risks to do quadratic work.
+        if self.pending.capacity() < Self::chunk_capacity() * 2 {
+            self.pending.reserve(Self::chunk_capacity() * 2 - self.pending.len());
         }
-
-        // Form chunks from what's in pending.
-        // This closure does the following:
-        // * If pending is full, consolidate.
-        // * If after consolidation it's more than half full, peel off chunks,
-        //   leaving behind any partial chunk in pending.
-        let form_chunk = |this: &mut Self| {
-            if this.pending.len() == this.pending.capacity() {
-                consolidate_updates(&mut this.pending);
-                if this.pending.len() >= this.chunk_capacity() {
-                    while this.pending.len() > this.chunk_capacity() {
-                        let mut chunk = Vec::with_capacity(this.chunk_capacity());
-                        chunk.extend(this.pending.drain(..chunk.capacity()));
-                        this.ready.push(chunk);
-                    }
-                }
-            }
-        };
 
         // `container` is either a shared reference or an owned allocations.
         match container {
@@ -102,58 +114,65 @@ where
                     let (head, tail) = slice.split_at(std::cmp::min(self.pending.capacity() - self.pending.len(), slice.len()));
                     slice = tail;
                     self.pending.extend_from_slice(head);
-                    form_chunk(self);
+                    if self.pending.len() == self.pending.capacity() {
+                        self.form_chunk();
+                    }
                 }
             }
             RefOrMut::Mut(vec) => {
                 let mut drain = vec.drain(..).peekable();
                 while drain.peek().is_some() {
                     self.pending.extend((&mut drain).take(self.pending.capacity() - self.pending.len()));
-                    form_chunk(self);
+                    if self.pending.len() == self.pending.capacity() {
+                        self.form_chunk();
+                    }
                 }
             }
         }
     }
 
     fn extract(&mut self) -> Option<Self::Output> {
-        self.ready.pop()
+        self.ready.pop_front()
     }
 
     fn finish(&mut self) -> Option<Self::Output> {
         if !self.pending.is_empty() {
             consolidate_updates(&mut self.pending);
             while !self.pending.is_empty() {
-                let mut chunk = Vec::with_capacity(self.chunk_capacity());
+                let mut chunk = Vec::with_capacity(Self::chunk_capacity());
                 chunk.extend(self.pending.drain(..std::cmp::min(self.pending.len(), chunk.capacity())));
-                self.ready.push(chunk);
+                self.ready.push_back(chunk);
             }
         }
-        self.ready.pop()
+        self.ready.pop_front()
     }
 }
 
 /// Chunk a stream of vectors into chains of vectors.
 pub struct ColumnationChunker<T: Columnation> {
     pending: Vec<T>,
-    ready: Vec<TimelyStack<T>>,
+    ready: VecDeque<TimelyStack<T>>,
 }
 
 impl<T: Columnation> Default for ColumnationChunker<T> {
     fn default() -> Self {
         Self {
             pending: Vec::default(),
-            ready: Vec::default(),
+            ready: VecDeque::default(),
         }
     }
 }
 
-impl<T> ColumnationChunker<T>
+impl<K,V,T,R> ColumnationChunker<((K, V), T, R)>
 where
-    T: Columnation,
+    K: Columnation + Ord,
+    V: Columnation + Ord,
+    T: Columnation + Ord,
+    R: Columnation + Semigroup,
 {
     const BUFFER_SIZE_BYTES: usize = 64 << 10;
-    fn chunk_capacity(&self) -> usize {
-        let size = ::std::mem::size_of::<T>();
+    fn chunk_capacity() -> usize {
+        let size = ::std::mem::size_of::<((K, V), T, R)>();
         if size == 0 {
             Self::BUFFER_SIZE_BYTES
         } else if size <= Self::BUFFER_SIZE_BYTES {
@@ -163,9 +182,25 @@ where
         }
     }
 
-    /// Buffer size for pending updates, currently 2 * [`Self::chunk_capacity`].
-    fn pending_capacity(&self) -> usize {
-        self.chunk_capacity() * 2
+    /// Form chunks out of pending data, if needed. This function is meant to be applied to
+    /// potentially full buffers, and ensures that if the buffer was full when called it is at most
+    /// half full when the function returns.
+    ///
+    /// `form_chunk` does the following:
+    /// * If pending is full, consolidate.
+    /// * If after consolidation it's more than half full, peel off chunks,
+    ///   leaving behind any partial chunk in pending.
+    fn form_chunk(&mut self) {
+        consolidate_updates(&mut self.pending);
+        if self.pending.len() >= Self::chunk_capacity() {
+            while self.pending.len() > Self::chunk_capacity() {
+                let mut chunk = TimelyStack::with_capacity(Self::chunk_capacity());
+                for item in self.pending.drain(..chunk.capacity()) {
+                    chunk.copy(&item);
+                }
+                self.ready.push_back(chunk);
+            }
+        }
     }
 }
 
@@ -182,29 +217,9 @@ where
     fn push_container(&mut self, container: RefOrMut<Self::Input>) {
         // Ensure `self.pending` has the desired capacity. We should never have a larger capacity
         // because we don't write more than capacity elements into the buffer.
-        if self.pending.capacity() < self.pending_capacity() {
-            self.pending.reserve(self.pending_capacity() - self.pending.len());
+        if self.pending.capacity() < Self::chunk_capacity() * 2 {
+            self.pending.reserve(Self::chunk_capacity() * 2 - self.pending.len());
         }
-
-        // Form chunks from what's in pending.
-        // This closure does the following:
-        // * If pending is full, consolidate.
-        // * If after consolidation it's more than half full, peel off chunks,
-        //   leaving behind any partial chunk in pending.
-        let form_chunk = |this: &mut Self| {
-            if this.pending.len() == this.pending.capacity() {
-                consolidate_updates(&mut this.pending);
-                if this.pending.len() >= this.chunk_capacity() {
-                    while this.pending.len() > this.chunk_capacity() {
-                        let mut chunk = TimelyStack::with_capacity(this.chunk_capacity());
-                        for item in this.pending.drain(..chunk.capacity()) {
-                            chunk.copy(&item);
-                        }
-                        this.ready.push(chunk);
-                    }
-                }
-            }
-        };
 
         // `container` is either a shared reference or an owned allocations.
         match container {
@@ -214,33 +229,37 @@ where
                     let (head, tail) = slice.split_at(std::cmp::min(self.pending.capacity() - self.pending.len(), slice.len()));
                     slice = tail;
                     self.pending.extend_from_slice(head);
-                    form_chunk(self);
+                    if self.pending.len() == self.pending.capacity() {
+                        self.form_chunk();
+                    }
                 }
             }
             RefOrMut::Mut(vec) => {
                 let mut drain = vec.drain(..).peekable();
                 while drain.peek().is_some() {
                     self.pending.extend((&mut drain).take(self.pending.capacity() - self.pending.len()));
-                    form_chunk(self);
+                    if self.pending.len() == self.pending.capacity() {
+                        self.form_chunk();
+                    }
                 }
             }
         }
     }
 
     fn extract(&mut self) -> Option<Self::Output> {
-        self.ready.pop()
+        self.ready.pop_front()
     }
 
     fn finish(&mut self) -> Option<Self::Output> {
         consolidate_updates(&mut self.pending);
         while !self.pending.is_empty() {
-            let mut chunk = TimelyStack::with_capacity(self.chunk_capacity());
+            let mut chunk = TimelyStack::with_capacity(Self::chunk_capacity());
             for item in self.pending.drain(..std::cmp::min(self.pending.len(), chunk.capacity())) {
                 chunk.copy(&item);
             }
-            self.ready.push(chunk);
+            self.ready.push_back(chunk);
         }
-        self.ready.pop()
+        self.ready.pop_front()
     }
 }
 

@@ -78,12 +78,12 @@ where
     for<'a> T::ReadItem<'a>: Ord,
     R: Region,
 {
-    type Key<'a> = K::ReadItem<'a> where TupleABCRegion<TupleABRegion<K, V>, T, R>: 'a;
-    type Val<'a> = V::ReadItem<'a> where TupleABCRegion<TupleABRegion<K, V>, T, R>: 'a;
-    type Time<'a> = T::ReadItem<'a> where TupleABCRegion<TupleABRegion<K, V>, T, R>: 'a;
-    type Diff<'a> = R::ReadItem<'a> where TupleABCRegion<TupleABRegion<K, V>, T, R>: 'a;
+    type Key<'a> = K::ReadItem<'a> where Self: 'a;
+    type Val<'a> = V::ReadItem<'a> where Self: 'a;
+    type Time<'a> = T::ReadItem<'a> where Self: 'a;
+    type Diff<'a> = R::ReadItem<'a> where Self: 'a;
 
-    fn into_parts<'a>(((key, val), time, diff): <TupleABCRegion<TupleABRegion<K, V>, T, R> as Region>::ReadItem<'a>) -> (Self::Key<'a>, Self::Val<'a>, Self::Time<'a>, Self::Diff<'a>) {
+    fn into_parts<'a>(((key, val), time, diff): Self::ReadItem<'a>) -> (Self::Key<'a>, Self::Val<'a>, Self::Time<'a>, Self::Diff<'a>) {
         (key, val, time, diff)
     }
 }
@@ -119,10 +119,8 @@ where
         while !head1.is_empty() && !head2.is_empty() {
             while (result.capacity() - result.len()) > 0 && !head1.is_empty() && !head2.is_empty() {
                 let cmp = {
-                    let x: FR::ReadItem<'_> = head1.peek();
-                    let (key1, val1, time1, _diff) = FR::into_parts(x);
-                    let y: FR::ReadItem<'_> = head2.peek();
-                    let (key2, val2, time2, _diff) = FR::into_parts(y);
+                    let (key1, val1, time1, _diff) = FR::into_parts(head1.peek());
+                    let (key2, val2, time2, _diff) = FR::into_parts(head2.peek());
                     ((key1, val1), time1).cmp(&((key2, val2), time2))
                 };
                 match cmp {
@@ -133,10 +131,8 @@ where
                         result.copy(head2.pop());
                     }
                     Ordering::Equal => {
-                        let element1 = head1.pop();
-                        let (key, val, time1, diff1) = FR::into_parts(element1);
-                        let element2 = head2.pop();
-                        let (_key, _val, _time2, diff2) = FR::into_parts(element2);
+                        let (key, val, time1, diff1) = FR::into_parts(head1.pop());
+                        let (_key, _val, _time2, diff2) = FR::into_parts(head2.pop());
                         diff1.clone_onto(&mut diff);
                         diff.plus_equals(&diff2);
                         if !diff.is_zero() {
@@ -201,9 +197,7 @@ where
         let mut ready = self.empty(stash);
 
         for buffer in merged {
-            for element in buffer.iter() {
-                let (key, val, time, diff) = FR::into_parts(element);
-                // let time_owned = time.flat_to_owned();
+            for (key, val, time, diff) in buffer.iter().map(FR::into_parts) {
                 if upper.less_equal(&time) {
                     frontier.insert_with(&time, |time| (*time).into_owned());
                     if keep.len() == keep.capacity() && !keep.is_empty() {
@@ -243,8 +237,7 @@ where
         {
             let mut prev_keyval = None;
             for buffer in chain.iter() {
-                for element in buffer.iter() {
-                    let (key, val, time, _) = FR::into_parts(element);
+                for (key, val, time, _diff) in buffer.iter().map(FR::into_parts) {
                     if !upper.less_equal(&time) {
                         if let Some((p_key, p_val)) = prev_keyval {
                             if p_key != key {
