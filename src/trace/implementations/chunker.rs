@@ -6,7 +6,7 @@ use timely::communication::message::RefOrMut;
 use timely::Container;
 use timely::container::columnation::{Columnation, TimelyStack};
 use timely::container::{PushInto, SizableContainer};
-use crate::consolidation::{consolidate_updates, ConsolidateContainer, ContainerSorter};
+use crate::consolidation::{consolidate_updates, ConsolidateContainer};
 use crate::difference::Semigroup;
 
 /// Behavior to transform streams of data into sorted chunks of regular size.
@@ -264,43 +264,40 @@ where
 }
 
 /// Chunk a stream of vectors into chains of vectors.
-pub struct ContainerChunker<Input, Output, Sorter, Consolidator>
+pub struct ContainerChunker<Input, Output, Consolidator>
 where
     Input: Container,
     for<'a> Output: SizableContainer + PushInto<Input::ItemRef<'a>>,
-    Sorter: ContainerSorter<Output>,
-    Consolidator: ConsolidateContainer<Output> + ?Sized,
+    Consolidator: ConsolidateContainer<Output>,
 {
     pending: Output,
     empty: Output,
     ready: Vec<Output>,
-    sorter: Sorter,
+    consolidator: Consolidator,
     _marker: PhantomData<(Input, Consolidator)>,
 }
 
-impl<Input, Output, Sorter, Consolidator> Default for ContainerChunker<Input, Output, Sorter, Consolidator>
+impl<Input, Output, Consolidator> Default for ContainerChunker<Input, Output, Consolidator>
 where
     Input: Container,
     for<'a> Output: SizableContainer + PushInto<Input::ItemRef<'a>>,
-    Sorter: ContainerSorter<Output> + Default,
-    Consolidator: ConsolidateContainer<Output> + ?Sized,
+    Consolidator: ConsolidateContainer<Output> + Default,
 {
     fn default() -> Self {
         Self {
             pending: Output::default(),
             empty: Output::default(),
             ready: Vec::default(),
-            sorter: Sorter::default(),
+            consolidator: Consolidator::default(),
             _marker: PhantomData,
         }
     }
 }
 
-impl<Input, Output, Sorter, Consolidator> Chunker for ContainerChunker<Input, Output, Sorter, Consolidator>
+impl<Input, Output, Consolidator> Chunker for ContainerChunker<Input, Output, Consolidator>
 where
     Input: Container,
     for<'a> Output: SizableContainer + PushInto<Input::ItemRef<'a>>,
-    Sorter: ContainerSorter<Output>,
     Consolidator: ConsolidateContainer<Output>,
 {
     type Input = Input;
@@ -314,8 +311,7 @@ where
         for item in container.iter() {
             self.pending.push(item);
             if self.pending.len() == self.pending.capacity() {
-                self.sorter.sort(&mut self.pending);
-                Consolidator::consolidate_container(&mut self.pending, &mut self.empty);
+                self.consolidator.consolidate(&mut self.pending, &mut self.empty);
                 std::mem::swap(&mut self.pending, &mut self.empty);
                 self.empty.clear();
                 if self.pending.len() > self.pending.capacity() / 2 {
@@ -331,8 +327,7 @@ where
 
     fn finish(&mut self) -> Option<Self::Output> {
         if !self.pending.is_empty() {
-            self.sorter.sort(&mut self.pending);
-            Consolidator::consolidate_container(&mut self.pending, &mut self.empty);
+            self.consolidator.consolidate(&mut self.pending, &mut self.empty);
             std::mem::swap(&mut self.pending, &mut self.empty);
             self.empty.clear();
             if !self.pending.is_empty() {

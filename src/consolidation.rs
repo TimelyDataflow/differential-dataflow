@@ -223,71 +223,6 @@ where
     }
 }
 
-/// Behavior to sort containers.
-pub trait ContainerSorter<C> {
-    /// Sort `container`, possibly replacing the contents by a different object.
-    fn sort(&mut self, target: &mut C);
-}
-
-/// A generic container sorter for containers where the item implements [`ConsolidateLayout`].
-#[derive(Default)]
-pub struct ExternalContainerSorter<C: Container> {
-    /// Storage to permute item.
-    permutation: Vec<C::Item<'static>>,
-    /// Empty container to write results at.
-    empty: C,
-}
-
-impl<C> ContainerSorter<C> for ExternalContainerSorter<C>
-where
-    for<'a> C: ConsolidateLayout + PushInto<C::Item<'a>>,
-{
-    fn sort(&mut self, container: &mut C) {
-        // SAFETY: `Permutation` is empty, types are equal but have a different lifetime
-        let mut permutation: Vec<C::Item<'_>> = unsafe { std::mem::transmute::<Vec<C::Item<'static>>, Vec<C::Item<'_>>>(std::mem::take(&mut self.permutation)) };
-
-        permutation.extend(container.drain());
-        // permutation.sort_by_key(|item| C::key(item));
-        permutation.sort_by(|a, b| C::cmp(a, b));
-
-        for item in permutation.drain(..) {
-            self.empty.push(item);
-        }
-
-        // SAFETY: `Permutation` is empty, types are equal but have a different lifetime
-        self.permutation = unsafe { std::mem::transmute::<Vec<C::Item<'_>>, Vec<C::Item<'static>>>(permutation) };
-        std::mem::swap(container, &mut self.empty);
-        self.empty.clear();
-    }
-}
-
-/// Sort containers in-place, with specific implementations.
-#[derive(Default, Debug)]
-pub struct InPlaceSorter();
-
-impl<T, R> ContainerSorter<Vec<(T, R)>> for InPlaceSorter
-where
-    T: Ord + Clone,
-    R: Clone,
-{
-    #[inline]
-    fn sort(&mut self, container: &mut Vec<(T, R)>) {
-        container.sort_by(|(a, _), (b, _)| a.cmp(b));
-    }
-}
-
-impl<D, T, R> ContainerSorter<Vec<(D, T, R)>> for InPlaceSorter
-where
-    D: Ord + Clone,
-    T: Ord + Clone,
-    R: Clone,
-{
-    #[inline]
-    fn sort(&mut self, target: &mut Vec<(D, T, R)>) {
-        target.sort_by(|(d1, t1, _), (d2, t2, _)| (d1, t1).cmp(&(d2, t2)));
-    }
-}
-
 /// Layout of data to be consolidated.
 // TODO: This could be split in two, to separate sorting and consolidation.
 pub trait ConsolidateLayout: Container {
@@ -308,28 +243,6 @@ pub trait ConsolidateLayout: Container {
 
     /// Compare two items by key to sort containers.
     fn cmp<'a>(item1: &Self::Item<'_>, item2: &Self::Item<'_>) -> Ordering;
-}
-
-impl<D, R> ConsolidateLayout for Vec<(D, R)>
-where
-    D: Ord + Clone + 'static,
-    for<'a> R: Semigroup + IntoOwned<'a, Owned = R> + Clone + 'static,
-{
-    type Key<'a> = D where Self: 'a;
-    type Diff<'a> = R where Self: 'a;
-    type DiffOwned = R;
-
-    fn into_parts(item: Self::Item<'_>) -> (Self::Key<'_>, Self::Diff<'_>) {
-        item
-    }
-
-    fn cmp<'a>(item1: &Self::Item<'_>, item2: &Self::Item<'_>) -> Ordering {
-        item1.0.cmp(&item2.0)
-    }
-
-    fn push_with_diff(&mut self, key: Self::Key<'_>, diff: Self::DiffOwned) {
-        self.push((key, diff));
-    }
 }
 
 impl<D, T, R> ConsolidateLayout for Vec<(D, T, R)>
@@ -386,7 +299,7 @@ where
 /// Behavior for copying consolidation.
 pub trait ConsolidateContainer<C> {
     /// Consolidate the contents of `container` and write the result to `target`.
-    fn consolidate_container(container: &mut C, target: &mut C);
+    fn consolidate(&mut self, container: &mut C, target: &mut C);
 }
 
 /// Container consolidator that requires the container's item to implement [`ConsolidateLayout`].
@@ -398,16 +311,23 @@ where
     C: ConsolidateLayout,
 {
     /// Consolidate the supplied container.
-    fn consolidate_container(container: &mut C, target: &mut C) {
+    fn consolidate(&mut self, container: &mut C, target: &mut C) {
+        // Sort input data
+        let mut permutation = Vec::new();
+        permutation.extend(container.drain());
+        permutation.sort_by(|a, b| C::cmp(a, b));
+
+        // Consolidate sorted data.
         let mut previous: Option<(C::Key<'_>, C::DiffOwned)> = None;
-        for item in container.drain() {
+        for item in permutation.drain(..) {
             let (key, diff) = C::into_parts(item);
             match &mut previous {
-                // Initial iteration.
+                // Initial iteration, remeber key and diff.
                 None => previous = Some((key, diff.into_owned())),
                 Some((prevkey, d)) => {
-                    // Second and following iteration.
+                    // Second and following iteration, compare and accumulate or emit.
                     if key == *prevkey {
+                        // Keys match, keep accumulating.
                         d.plus_equals(&diff);
                     } else {
                         // Keys don't match, write down result if non-zero.
@@ -416,13 +336,13 @@ where
                             let (prevkey, diff) = previous.take().unwrap();
                             target.push_with_diff(prevkey, diff);
                         }
-                        // Update `previous`
+                        // Remember current key and diff as `previous`
                         previous = Some((key, diff.into_owned()));
                     }
                 }
             }
         }
-        // Write any residual data.
+        // Write any residual data, if non-zero.
         if let Some((previtem, d)) = previous {
             if !d.is_zero() {
                 target.push_with_diff(previtem, d);
@@ -526,11 +446,11 @@ mod tests {
 
     #[test]
     fn test_consolidate_container() {
-        let mut data = vec![(1,1), (2, 1), (1, -1)];
+        let mut data = vec![(1, 1, 1), (2, 1, 1), (1, 1, -1)];
         let mut target = Vec::default();
         data.sort();
-        ContainerConsolidator::consolidate_container(&mut data, &mut target);
-        assert_eq!(target, [(2,1)]);
+        ContainerConsolidator::default().consolidate(&mut data, &mut target);
+        assert_eq!(target, [(2, 1, 1)]);
     }
 
     #[cfg(not(debug_assertions))]
@@ -549,18 +469,19 @@ mod tests {
         let mut data2 = Vec::with_capacity(LEN);
         let mut target = Vec::new();
         let mut duration = std::time::Duration::default();
+        let mut consolidator = ContainerConsolidator::default();
         for _ in 0..REPS {
             data.clear();
             data2.clear();
             target.clear();
-            data.extend((0..LEN).map(|i| (i/4, -2isize + ((i % 4) as isize))));
-            data2.extend((0..LEN).map(|i| (i/4, -2isize + ((i % 4) as isize))));
+            data.extend((0..LEN).map(|i| (i/4, 1, -2isize + ((i % 4) as isize))));
+            data2.extend((0..LEN).map(|i| (i/4, 1, -2isize + ((i % 4) as isize))));
             data.sort_by(|x,y| x.0.cmp(&y.0));
             let start = std::time::Instant::now();
-            ContainerConsolidator::consolidate_container(&mut data, &mut target);
+            consolidator.consolidate(&mut data, &mut target);
             duration += start.elapsed();
 
-            consolidate(&mut data2);
+            consolidate_updates(&mut data2);
             assert_eq!(target, data2);
         }
         println!("elapsed consolidator {duration:?}");
@@ -572,10 +493,10 @@ mod tests {
         let mut duration = std::time::Duration::default();
         for _ in 0..REPS {
             data.clear();
-            data.extend((0..LEN).map(|i| (i/4, -2isize + ((i % 4) as isize))));
+            data.extend((0..LEN).map(|i| (i/4, 1, -2isize + ((i % 4) as isize))));
             data.sort_by(|x,y| x.0.cmp(&y.0));
             let start = std::time::Instant::now();
-            consolidate(&mut data);
+            consolidate_updates(&mut data);
             duration += start.elapsed();
         }
         println!("elapsed vec {duration:?}");
