@@ -64,7 +64,7 @@ pub trait MergerChunk: Region {
     /// The diff of the update
     type Diff<'a> where Self: 'a;
 
-    /// Split a read item into its constituents.
+    /// Split a read item into its constituents. Must be cheap.
     fn into_parts<'a>(item: Self::ReadItem<'a>) -> (Self::Key<'a>, Self::Val<'a>, Self::Time<'a>, Self::Diff<'a>);
 }
 

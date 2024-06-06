@@ -315,6 +315,9 @@ where
                 std::mem::swap(&mut self.pending, &mut self.empty);
                 self.empty.clear();
                 if self.pending.len() > self.pending.capacity() / 2 {
+                    // Note that we're pushing non-full containers, which is a deviation from
+                    // other implementation. The reason for this is that we cannot extract
+                    // partial data from `self.pending`. We should revisit this in the future.
                     self.ready.push(std::mem::take(&mut self.pending));
                 }
             }
