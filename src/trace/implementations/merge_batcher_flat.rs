@@ -123,6 +123,9 @@ where
                     let (key2, val2, time2, _diff) = FR::into_parts(head2.peek());
                     ((key1, val1), time1).cmp(&((key2, val2), time2))
                 };
+                // TODO: The following less/greater branches could plausibly be a good moment for
+                // `copy_range`, on account of runs of records that might benefit more from a
+                // `memcpy`.
                 match cmp {
                     Ordering::Less => {
                         result.copy(head1.pop());
@@ -157,31 +160,33 @@ where
             }
         }
 
-        if result.len() > 0 {
-            output.push(result);
-        } else {
-            self.recycle(result, stash);
-        }
-
-        if !head1.is_empty() {
-            let mut result = self.empty(stash);
-            result.reserve_items(head1.iter());
-            for item in head1.iter() {
+        while !head1.is_empty() {
+            let advance = result.capacity() - result.len();
+            let iter = head1.iter().take(advance);
+            result.reserve_items(iter.clone());
+            for item in iter {
                 result.copy(item);
             }
             output.push(result);
+            head1.advance(advance);
+            result = self.empty(stash);
         }
         output.extend(list1);
+        self.recycle(head1.done(), stash);
 
-        if !head2.is_empty() {
-            let mut result = self.empty(stash);
-            result.reserve_items(head2.iter());
-            for item in head2.iter() {
+        while !head2.is_empty() {
+            let advance = result.capacity() - result.len();
+            let iter = head2.iter().take(advance);
+            result.reserve_items(iter.clone());
+            for item in iter {
                 result.copy(item);
             }
             output.push(result);
+            head2.advance(advance);
+            result = self.empty(stash);
         }
         output.extend(list2);
+        self.recycle(head2.done(), stash);
     }
 
     fn extract(
@@ -306,11 +311,15 @@ impl<R: Region> FlatStackQueue<R> {
     }
 
     fn is_empty(&self) -> bool {
-        self.head == self.list.len()
+        self.head >= self.list.len()
     }
 
     /// Return an iterator over the remaining elements.
     fn iter(&self) -> impl Iterator<Item = R::ReadItem<'_>> + Clone {
         self.list.iter().skip(self.head)
+    }
+
+    fn advance(&mut self, consumed: usize) {
+        self.head += consumed;
     }
 }

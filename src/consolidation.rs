@@ -223,8 +223,12 @@ where
     }
 }
 
-/// Layout of data to be consolidated.
-// TODO: This could be split in two, to separate sorting and consolidation.
+/// Layout of containers and their read items to be consolidated.
+///
+/// This trait specifies behavior to extract keys and diffs from container's read
+/// items. Consolidation accumulates the diffs per key.
+///
+/// The trait requires `Container` to have access to its `Item` GAT.
 pub trait ConsolidateLayout: Container {
     /// Key portion of data, essentially everything minus the diff
     type Key<'a>: Eq where Self: 'a;
@@ -235,14 +239,22 @@ pub trait ConsolidateLayout: Container {
     /// Owned diff type.
     type DiffOwned: for<'a> Semigroup<Self::Diff<'a>>;
 
-    /// Deconstruct an item into key and diff.
+    /// Deconstruct an item into key and diff. Must be cheap.
     fn into_parts(item: Self::Item<'_>) -> (Self::Key<'_>, Self::Diff<'_>);
 
     /// Push an element to a compatible container.
+    ///
+    /// This function is odd to have, so let's explain why it exists. Ideally, the container
+    /// would accept a `(key, diff)` pair and we wouldn't need this function. However, we
+    /// might never be in a position where this is true: Vectors can push any `T`, which would
+    /// collide with a specific implementation for pushing tuples of mixes GATs and owned types.
+    ///
+    /// For this reason, we expose a function here that takes a GAT key and an owned diff, and
+    /// leave it to the implementation to "patch" a suitable item that can be pushed into `self`.
     fn push_with_diff(&mut self, key: Self::Key<'_>, diff: Self::DiffOwned);
 
     /// Compare two items by key to sort containers.
-    fn cmp<'a>(item1: &Self::Item<'_>, item2: &Self::Item<'_>) -> Ordering;
+    fn cmp(item1: &Self::Item<'_>, item2: &Self::Item<'_>) -> Ordering;
 }
 
 impl<D, T, R> ConsolidateLayout for Vec<(D, T, R)>
@@ -319,10 +331,13 @@ where
 
         // Consolidate sorted data.
         let mut previous: Option<(C::Key<'_>, C::DiffOwned)> = None;
+        // TODO: We should ensure that `target` has sufficient capacity, but `Container` doesn't
+        // offer a suitable API.
         for item in permutation.drain(..) {
             let (key, diff) = C::into_parts(item);
             match &mut previous {
                 // Initial iteration, remeber key and diff.
+                // TODO: Opportunity for GatCow for diff.
                 None => previous = Some((key, diff.into_owned())),
                 Some((prevkey, d)) => {
                     // Second and following iteration, compare and accumulate or emit.

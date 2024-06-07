@@ -297,7 +297,7 @@ where
 impl<Input, Output, Consolidator> Chunker for ContainerChunker<Input, Output, Consolidator>
 where
     Input: Container,
-    for<'a> Output: SizableContainer + PushInto<Input::ItemRef<'a>>,
+    for<'a> Output: SizableContainer + PushInto<Input::Item<'a>> + PushInto<Input::ItemRef<'a>>,
     Consolidator: ConsolidateContainer<Output>,
 {
     type Input = Input;
@@ -307,18 +307,30 @@ where
         if self.pending.capacity() < Output::preferred_capacity() {
             self.pending.reserve(Output::preferred_capacity() - self.pending.len());
         }
-        // TODO: This uses `IterRef`, which isn't optimal for containers that can move.
-        for item in container.iter() {
-            self.pending.push(item);
-            if self.pending.len() == self.pending.capacity() {
-                self.consolidator.consolidate(&mut self.pending, &mut self.empty);
-                std::mem::swap(&mut self.pending, &mut self.empty);
-                self.empty.clear();
-                if self.pending.len() > self.pending.capacity() / 2 {
+        let form_batch = |this: &mut Self| {
+            if this.pending.len() == this.pending.capacity() {
+                this.consolidator.consolidate(&mut this.pending, &mut this.empty);
+                std::mem::swap(&mut this.pending, &mut this.empty);
+                this.empty.clear();
+                if this.pending.len() > this.pending.capacity() / 2 {
                     // Note that we're pushing non-full containers, which is a deviation from
                     // other implementation. The reason for this is that we cannot extract
-                    // partial data from `self.pending`. We should revisit this in the future.
-                    self.ready.push(std::mem::take(&mut self.pending));
+                    // partial data from `this.pending`. We should revisit this in the future.
+                    this.ready.push(std::mem::take(&mut this.pending));
+                }
+            }
+        };
+        match container {
+            RefOrMut::Ref(container) => {
+                for item in container.iter() {
+                    self.pending.push(item);
+                    form_batch(self);
+                }
+            }
+            RefOrMut::Mut(container) => {
+                for item in container.drain() {
+                    self.pending.push(item);
+                    form_batch(self);
                 }
             }
         }
