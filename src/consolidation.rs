@@ -149,14 +149,40 @@ where
 {
     /// Flush `self.current` up to the biggest `multiple` of elements. Pass 1 to flush all elements.
     // TODO: Can we replace `multiple` by a bool?
+    #[cold]
     fn consolidate_and_flush_through(&mut self, multiple: usize) {
         let preferred_capacity = <Vec<(D,T,R)>>::preferred_capacity();
         consolidate_updates(&mut self.current);
         let mut drain = self.current.drain(..(self.current.len()/multiple)*multiple).peekable();
         while drain.peek().is_some() {
             let mut container = self.empty.pop().unwrap_or_else(|| Vec::with_capacity(preferred_capacity));
+            container.clear();
             container.extend((&mut drain).take(preferred_capacity));
             self.outbound.push_back(container);
+        }
+    }
+}
+
+impl<D, T, R, P> PushInto<P> for ConsolidatingContainerBuilder<Vec<(D, T, R)>>
+where
+    D: Data,
+    T: Data,
+    R: Semigroup+'static,
+    Vec<(D, T, R)>: PushInto<P>,
+{
+    /// Push an element.
+    ///
+    /// Precondition: `current` is not allocated or has space for at least one element.
+    #[inline]
+    fn push_into(&mut self, item: P) {
+        let preferred_capacity = <Vec<(D,T,R)>>::preferred_capacity();
+        if self.current.capacity() < preferred_capacity * 2 {
+            self.current.reserve(preferred_capacity * 2 - self.current.capacity());
+        }
+        self.current.push_into(item);
+        if self.current.len() == self.current.capacity() {
+            // Flush complete containers.
+            self.consolidate_and_flush_through(preferred_capacity);
         }
     }
 }
@@ -169,28 +195,7 @@ where
 {
     type Container = Vec<(D,T,R)>;
 
-    /// Push an element.
-    ///
-    /// Precondition: `current` is not allocated or has space for at least one element.
     #[inline]
-    fn push<P>(&mut self, item: P) where Self::Container: PushInto<P> {
-        let preferred_capacity = <Vec<(D,T,R)>>::preferred_capacity();
-        if self.current.capacity() < preferred_capacity * 2 {
-            self.current.reserve(preferred_capacity * 2 - self.current.capacity());
-        }
-        self.current.push_into(item);
-        if self.current.len() == self.current.capacity() {
-            // Flush complete containers.
-            self.consolidate_and_flush_through(preferred_capacity);
-        }
-    }
-
-    fn push_container(&mut self, container: &mut Self::Container) {
-        for item in container.drain(..) {
-            self.push(item);
-        }
-    }
-
     fn extract(&mut self) -> Option<&mut Vec<(D,T,R)>> {
         if let Some(container) = self.outbound.pop_front() {
             self.empty.push(container);
@@ -200,12 +205,15 @@ where
         }
     }
 
+    #[inline]
     fn finish(&mut self) -> Option<&mut Vec<(D,T,R)>> {
-        // Flush all
-        self.consolidate_and_flush_through(1);
-        // Remove all but two elements from the stash of empty to avoid memory leaks. We retain
-        // two to match `current` capacity.
-        self.empty.truncate(2);
+        if !self.current.is_empty() {
+            // Flush all
+            self.consolidate_and_flush_through(1);
+            // Remove all but two elements from the stash of empty to avoid memory leaks. We retain
+            // two to match `current` capacity.
+            self.empty.truncate(2);
+        }
         self.extract()
     }
 }
@@ -281,13 +289,13 @@ mod tests {
     fn test_consolidating_container_builder() {
         let mut ccb = <ConsolidatingContainerBuilder<Vec<(usize, usize, usize)>>>::default();
         for _ in 0..1024 {
-            ccb.push((0, 0, 0));
+            ccb.push_into((0, 0, 0));
         }
         assert_eq!(ccb.extract(), None);
         assert_eq!(ccb.finish(), None);
 
         for i in 0..1024 {
-            ccb.push((i, 0, 1));
+            ccb.push_into((i, 0, 1));
         }
 
         let mut collected = Vec::default();
@@ -299,23 +307,5 @@ mod tests {
         for i in 0..1024 {
             assert_eq!((i, 0, 1), collected[i]);
         }
-
-        ccb = Default::default();
-        ccb.push_container(&mut Vec::default());
-        assert_eq!(ccb.extract(), None);
-        assert_eq!(ccb.finish(), None);
-
-        ccb.push_container(&mut Vec::from_iter((0..1024).map(|i| (i, 0, 1))));
-        ccb.push_container(&mut Vec::from_iter((0..1024).map(|i| (i, 0, 1))));
-        collected.clear();
-        while let Some(container) = ccb.finish() {
-            collected.append(container);
-        }
-        // The output happens to be sorted, but it's not guaranteed.
-        consolidate_updates(&mut collected);
-        for i in 0..1024 {
-            assert_eq!((i, 0, 2), collected[i]);
-        }
-        
     }
 }
