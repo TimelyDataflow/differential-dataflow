@@ -99,6 +99,7 @@ where
         + Push<((FR::Key<'a>, FR::Val<'a>), FR::Time<'a>, FR::Diff<'a>)>,
     for<'a> FR::Time<'a>: PartialOrder<T> + Copy + IntoOwned<'a, Owned=T>,
     for<'a> FR::Diff<'a>: IntoOwned<'a, Owned=R>,
+    for<'a> FR::ReadItem<'a>: std::fmt::Debug,
 {
     type Time = T;
     type Chunk = FlatStack<FR>;
@@ -169,6 +170,10 @@ where
             }
             output.push(result);
             head1.advance(advance);
+            result = self.empty(stash);
+        }
+        if !result.is_empty() {
+            output.push(result);
             result = self.empty(stash);
         }
         output.extend(list1);
@@ -245,6 +250,8 @@ where
                 for (key, val, time, _diff) in buffer.iter().map(FR::into_parts) {
                     if !upper.less_equal(&time) {
                         if let Some((p_key, p_val)) = prev_keyval {
+                            debug_assert!(p_key <= key);
+                            debug_assert!(p_key != key || p_val <= val);
                             if p_key != key {
                                 keys += 1;
                                 vals += 1;
