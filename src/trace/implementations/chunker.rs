@@ -5,38 +5,15 @@ use std::marker::PhantomData;
 use timely::communication::message::RefOrMut;
 use timely::Container;
 use timely::container::columnation::{Columnation, TimelyStack};
-use timely::container::{PushInto, SizableContainer};
+use timely::container::{ContainerBuilder, PushInto, SizableContainer};
 use crate::consolidation::{consolidate_updates, ConsolidateContainer};
 use crate::difference::Semigroup;
-
-/// Behavior to transform streams of data into sorted chunks of regular size.
-pub trait Chunker {
-    /// Input type.
-    type Input;
-    /// Output type.
-    type Output;
-
-    /// Accept a container and absorb its contents. The caller must
-    /// call [`extract`] or [`finish`] soon after pushing a container.
-    fn push_container(&mut self, container: RefOrMut<Self::Input>);
-
-    /// Extract ready data, leaving unfinished data behind.
-    ///
-    /// Should be called repeatedly until it returns `None`, which indicates that there is no
-    /// more ready data.
-    fn extract(&mut self) -> Option<Self::Output>;
-
-    /// Unconditionally extract all data, leaving no unfinished data behind.
-    ///
-    /// Should be called repeatedly until it returns `None`, which indicates that there is no
-    /// more data.
-    fn finish(&mut self) -> Option<Self::Output>;
-}
 
 /// Chunk a stream of vectors into chains of vectors.
 pub struct VecChunker<T> {
     pending: Vec<T>,
     ready: VecDeque<Vec<T>>,
+    empty: Option<Vec<T>>,
 }
 
 impl<T> Default for VecChunker<T> {
@@ -44,6 +21,7 @@ impl<T> Default for VecChunker<T> {
         Self {
             pending: Vec::default(),
             ready: VecDeque::default(),
+            empty: None,
         }
     }
 }
@@ -87,17 +65,14 @@ where
     }
 }
 
-impl<K, V, T, R> Chunker for VecChunker<((K, V), T, R)>
+impl<'a, K, V, T, R> PushInto<RefOrMut<'a, Vec<((K, V), T, R)>>> for VecChunker<((K, V), T, R)>
 where
     K: Ord + Clone,
     V: Ord + Clone,
     T: Ord + Clone,
     R: Semigroup + Clone,
 {
-    type Input = Vec<((K, V), T, R)>;
-    type Output = Self::Input;
-
-    fn push_container(&mut self, container: RefOrMut<Self::Input>) {
+    fn push_into(&mut self, container: RefOrMut<'a, Vec<((K, V), T, R)>>) {
         // Ensure `self.pending` has the desired capacity. We should never have a larger capacity
         // because we don't write more than capacity elements into the buffer.
         // Important: Consolidation requires `pending` to have twice the chunk capacity to
@@ -130,12 +105,27 @@ where
             }
         }
     }
+}
 
-    fn extract(&mut self) -> Option<Self::Output> {
-        self.ready.pop_front()
+impl<K, V, T, R> ContainerBuilder for VecChunker<((K, V), T, R)>
+where
+    K: Ord + Clone + 'static,
+    V: Ord + Clone + 'static,
+    T: Ord + Clone + 'static,
+    R: Semigroup + Clone + 'static,
+{
+    type Container = Vec<((K, V), T, R)>;
+
+    fn extract(&mut self) -> Option<&mut Self::Container> {
+        if let Some(ready) = self.ready.pop_front() {
+            self.empty = Some(ready);
+            self.empty.as_mut()
+        } else {
+            None
+        }
     }
 
-    fn finish(&mut self) -> Option<Self::Output> {
+    fn finish(&mut self) -> Option<&mut Self::Container> {
         if !self.pending.is_empty() {
             consolidate_updates(&mut self.pending);
             while !self.pending.is_empty() {
@@ -144,7 +134,8 @@ where
                 self.ready.push_back(chunk);
             }
         }
-        self.ready.pop_front()
+        self.empty = self.ready.pop_front();
+        self.empty.as_mut()
     }
 }
 
@@ -152,6 +143,7 @@ where
 pub struct ColumnationChunker<T: Columnation> {
     pending: Vec<T>,
     ready: VecDeque<TimelyStack<T>>,
+    empty: Option<TimelyStack<T>>,
 }
 
 impl<T: Columnation> Default for ColumnationChunker<T> {
@@ -159,6 +151,7 @@ impl<T: Columnation> Default for ColumnationChunker<T> {
         Self {
             pending: Vec::default(),
             ready: VecDeque::default(),
+            empty: None,
         }
     }
 }
@@ -204,17 +197,14 @@ where
     }
 }
 
-impl<K, V, T, R> Chunker for ColumnationChunker<((K, V), T, R)>
+impl<'a, K, V, T, R> PushInto<RefOrMut<'a, Vec<((K, V), T, R)>>> for ColumnationChunker<((K, V), T, R)>
 where
     K: Columnation + Ord + Clone,
     V: Columnation + Ord + Clone,
     T: Columnation + Ord + Clone,
     R: Columnation + Semigroup + Clone,
 {
-    type Input = Vec<((K, V), T, R)>;
-    type Output = TimelyStack<((K,V),T,R)>;
-
-    fn push_container(&mut self, container: RefOrMut<Self::Input>) {
+    fn push_into(&mut self, container: RefOrMut<'a, Vec<((K, V), T, R)>>) {
         // Ensure `self.pending` has the desired capacity. We should never have a larger capacity
         // because we don't write more than capacity elements into the buffer.
         if self.pending.capacity() < Self::chunk_capacity() * 2 {
@@ -245,12 +235,27 @@ where
             }
         }
     }
+}
 
-    fn extract(&mut self) -> Option<Self::Output> {
-        self.ready.pop_front()
+impl<K, V, T, R> ContainerBuilder for ColumnationChunker<((K, V), T, R)>
+where
+    K: Columnation + Ord + Clone + 'static,
+    V: Columnation + Ord + Clone + 'static,
+    T: Columnation + Ord + Clone + 'static,
+    R: Columnation + Semigroup + Clone + 'static,
+{
+    type Container = TimelyStack<((K,V),T,R)>;
+
+    fn extract(&mut self) -> Option<&mut Self::Container> {
+        if let Some(ready) = self.ready.pop_front() {
+            self.empty = Some(ready);
+            self.empty.as_mut()
+        } else {
+            None
+        }
     }
 
-    fn finish(&mut self) -> Option<Self::Output> {
+    fn finish(&mut self) -> Option<&mut Self::Container> {
         consolidate_updates(&mut self.pending);
         while !self.pending.is_empty() {
             let mut chunk = TimelyStack::with_capacity(Self::chunk_capacity());
@@ -259,51 +264,44 @@ where
             }
             self.ready.push_back(chunk);
         }
-        self.ready.pop_front()
+        self.empty = self.ready.pop_front();
+        self.empty.as_mut()
     }
 }
 
 /// Chunk a stream of vectors into chains of vectors.
-pub struct ContainerChunker<Input, Output, Consolidator>
-where
-    Input: Container,
-    for<'a> Output: SizableContainer + PushInto<Input::ItemRef<'a>>,
-    Consolidator: ConsolidateContainer<Output>,
-{
+pub struct ContainerChunker<Input, Output, Consolidator> {
     pending: Output,
     empty: Output,
-    ready: Vec<Output>,
+    ready: VecDeque<Output>,
     consolidator: Consolidator,
     _marker: PhantomData<(Input, Consolidator)>,
 }
 
 impl<Input, Output, Consolidator> Default for ContainerChunker<Input, Output, Consolidator>
 where
-    Input: Container,
-    for<'a> Output: SizableContainer + PushInto<Input::ItemRef<'a>>,
-    Consolidator: ConsolidateContainer<Output> + Default,
+    Input: Default,
+    Output: Default,
+    Consolidator: Default,
 {
     fn default() -> Self {
         Self {
             pending: Output::default(),
             empty: Output::default(),
-            ready: Vec::default(),
+            ready: VecDeque::default(),
             consolidator: Consolidator::default(),
             _marker: PhantomData,
         }
     }
 }
 
-impl<Input, Output, Consolidator> Chunker for ContainerChunker<Input, Output, Consolidator>
+impl<'a, Input, Output, Consolidator> PushInto<RefOrMut<'a, Input>> for ContainerChunker<Input, Output, Consolidator>
 where
     Input: Container,
-    for<'a> Output: SizableContainer + PushInto<Input::Item<'a>> + PushInto<Input::ItemRef<'a>>,
+    Output: SizableContainer + PushInto<Input::Item<'a>> + PushInto<Input::ItemRef<'a>>,
     Consolidator: ConsolidateContainer<Output>,
 {
-    type Input = Input;
-    type Output = Output;
-
-    fn push_container(&mut self, container: RefOrMut<Self::Input>) {
+    fn push_into(&mut self, container: RefOrMut<'a, Input>) {
         if self.pending.capacity() < Output::preferred_capacity() {
             self.pending.reserve(Output::preferred_capacity() - self.pending.len());
         }
@@ -316,7 +314,7 @@ where
                     // Note that we're pushing non-full containers, which is a deviation from
                     // other implementation. The reason for this is that we cannot extract
                     // partial data from `this.pending`. We should revisit this in the future.
-                    this.ready.push(std::mem::take(&mut this.pending));
+                    this.ready.push_back(std::mem::take(&mut this.pending));
                 }
             }
         };
@@ -335,20 +333,39 @@ where
             }
         }
     }
+}
 
-    fn extract(&mut self) -> Option<Self::Output> {
-        self.ready.pop()
+impl<Input, Output, Consolidator> ContainerBuilder for ContainerChunker<Input, Output, Consolidator>
+where
+    Input: Container,
+    for<'a> Output: SizableContainer + PushInto<Input::Item<'a>> + PushInto<Input::ItemRef<'a>>,
+    Consolidator: ConsolidateContainer<Output> + Default + 'static,
+{
+    type Container = Output;
+
+    fn extract(&mut self) -> Option<&mut Self::Container> {
+        if let Some(ready) = self.ready.pop_front() {
+            self.empty = ready;
+            Some(&mut self.empty)
+        } else {
+            None
+        }
     }
 
-    fn finish(&mut self) -> Option<Self::Output> {
+    fn finish(&mut self) -> Option<&mut Self::Container> {
         if !self.pending.is_empty() {
             self.consolidator.consolidate(&mut self.pending, &mut self.empty);
             std::mem::swap(&mut self.pending, &mut self.empty);
             self.empty.clear();
             if !self.pending.is_empty() {
-                self.ready.push(std::mem::take(&mut self.pending));
+                self.ready.push_back(std::mem::take(&mut self.pending));
             }
         }
-        self.ready.pop()
+        if let Some(ready) = self.ready.pop_front() {
+            self.empty = ready;
+            Some(&mut self.empty)
+        } else {
+            None
+        }
     }
 }

@@ -9,17 +9,17 @@ use timely::logging_core::Logger;
 use timely::progress::frontier::AntichainRef;
 use timely::progress::{frontier::Antichain, Timestamp};
 use timely::{Container, PartialOrder};
+use timely::container::{ContainerBuilder, PushInto};
 
 use crate::difference::Semigroup;
 use crate::logging::{BatcherEvent, DifferentialEvent};
 use crate::trace::{Batcher, Builder};
 use crate::Data;
-use crate::trace::implementations::chunker::Chunker;
 
 /// Creates batches from unordered tuples.
-pub struct MergeBatcher<C, M, T>
+pub struct MergeBatcher<Input, C, M, T>
 where
-    C: Chunker<Output=M::Chunk> + Default,
+    C: ContainerBuilder<Container=M::Chunk> + Default,
     M: Merger<Time = T>,
 {
     /// each power-of-two length list of allocations.
@@ -40,15 +40,16 @@ where
     lower: Antichain<T>,
     /// The lower-bound frontier of the data, after the last call to seal.
     frontier: Antichain<T>,
+    _marker: PhantomData<Input>,
 }
 
-impl<C, M, T> Batcher for MergeBatcher<C, M, T>
+impl<Input, C, M, T> Batcher for MergeBatcher<Input, C, M, T>
 where
-    C: Chunker<Output=M::Chunk> + Default,
+    C: ContainerBuilder<Container=M::Chunk> + Default + for<'a> PushInto<RefOrMut<'a, Input>>,
     M: Merger<Time = T>,
     T: Timestamp,
 {
-    type Input = C::Input;
+    type Input = Input;
     type Output = M::Output;
     type Time = T;
 
@@ -62,14 +63,16 @@ where
             stash: Vec::new(),
             frontier: Antichain::new(),
             lower: Antichain::from_elem(T::minimum()),
+            _marker: PhantomData,
         }
     }
 
     /// Push a container of data into this merge batcher. Updates the internal chain structure if
     /// needed.
-    fn push_container(&mut self, container: RefOrMut<C::Input>) {
-        self.chunker.push_container(container);
+    fn push_container(&mut self, container: RefOrMut<Input>) {
+        self.chunker.push_into(container);
         while let Some(chunk) = self.chunker.extract() {
+            let chunk = std::mem::take(chunk);
             self.insert_chain(vec![chunk]);
         }
     }
@@ -81,6 +84,7 @@ where
     fn seal<B: Builder<Input = Self::Output, Time = Self::Time>>(&mut self, upper: Antichain<T>) -> B::Output {
         // Finish
         while let Some(chunk) = self.chunker.finish() {
+            let chunk = std::mem::take(chunk);
             self.insert_chain(vec![chunk]);
         }
 
@@ -118,9 +122,9 @@ where
     }
 }
 
-impl<C, M, T> MergeBatcher<C, M, T>
+impl<Input, C, M, T> MergeBatcher<Input, C, M, T>
 where
-    C: Chunker<Output=M::Chunk> + Default,
+    C: ContainerBuilder<Container=M::Chunk> + Default,
     M: Merger<Time = T>,
 {
     /// Insert a chain and maintain chain properties: Chains are geometrically sized and ordered
@@ -186,9 +190,9 @@ where
     }
 }
 
-impl<C, M, T> Drop for MergeBatcher<C, M, T>
+impl<Input, C, M, T> Drop for MergeBatcher<Input, C, M, T>
 where
-    C: Chunker<Output=M::Chunk> + Default,
+    C: ContainerBuilder<Container=M::Chunk> + Default,
     M: Merger<Time = T>,
 {
     fn drop(&mut self) {
