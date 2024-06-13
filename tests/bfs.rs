@@ -1,27 +1,32 @@
+use std::fmt::Debug;
 use rand::{Rng, SeedableRng, StdRng};
 
 use std::sync::{Arc, Mutex};
 
-use timely::Config;
+use timely::{Config, PartialOrder};
+use timely::container::flatcontainer::{Containerized, MirrorRegion, Push, Region, ReserveItems};
 
 use timely::dataflow::*;
 use timely::dataflow::operators::Capture;
 use timely::dataflow::operators::capture::Extract;
+use timely::order::{FlatProductRegion, Product};
 
 use differential_dataflow::input::Input;
 use differential_dataflow::Collection;
 
 use differential_dataflow::operators::*;
 use differential_dataflow::lattice::Lattice;
+use differential_dataflow::operators::arrange::Arrange;
+use differential_dataflow::trace::implementations::ord_neu::{FlatKeySpine, FlatValSpine};
 
 type Node = usize;
 type Edge = (Node, Node);
 
-#[test] fn bfs_10_20_1000() { test_sizes(10, 20, 1000, Config::process(3)); }
-#[test] fn bfs_100_200_10() { test_sizes(100, 200, 10, Config::process(3)); }
-#[test] fn bfs_100_2000_1() { test_sizes(100, 2000, 1, Config::process(3)); }
+#[test] fn bfs_10_20_1000() { test_sizes(10, 20, 1000, 3); }
+#[test] fn bfs_100_200_10() { test_sizes(100, 200, 10, 3); }
+#[test] fn bfs_100_2000_1() { test_sizes(100, 2000, 1, 3); }
 
-fn test_sizes(nodes: usize, edges: usize, rounds: usize, config: Config) {
+fn test_sizes(nodes: usize, edges: usize, rounds: usize, threads: usize) {
 
     let root_list = vec![(1, 0, 1)];
     let mut edge_list = Vec::new();
@@ -39,30 +44,34 @@ fn test_sizes(nodes: usize, edges: usize, rounds: usize, config: Config) {
         edge_list.push(((rng2.gen_range(0, nodes), rng2.gen_range(0, nodes)), round,-1));
     }
 
-    let mut results1 = bfs_sequential(root_list.clone(), edge_list.clone());
-    let mut results2 = bfs_differential(root_list.clone(), edge_list.clone(), config);
+    let mut results = [
+        bfs_sequential(root_list.clone(), edge_list.clone()),
+        bfs_differential(root_list.clone(), edge_list.clone(), Config::process(threads)),
+        bfs_differential_flat(root_list.clone(), edge_list.clone(), Config::process(threads)),
+    ];
 
-    results1.sort();
-    results1.sort_by(|x,y| x.1.cmp(&y.1));
-    results2.sort();
-    results2.sort_by(|x,y| x.1.cmp(&y.1));
-
-    if results1 != results2 {
-        println!("RESULTS INEQUAL!!!");
-        for x in &results1 {
-            if !results2.contains(x) {
-                println!("  in seq, not diff: {:?}", x);
-            }
-        }
-        for x in &results2 {
-            if !results1.contains(x) {
-                println!("  in diff, not seq: {:?}", x);
-            }
-        }
-
+    for results in results.iter_mut() {
+        results.sort();
+        results.sort_by(|x,y| x.1.cmp(&y.1));
     }
 
-    assert_eq!(results1, results2);
+    let results1 = &results[0];
+    for other in results.iter().skip(1) {
+        if results1 != other {
+            println!("RESULTS INEQUAL!!!");
+            for x in results1 {
+                if !other.contains(x) {
+                    println!("  in seq, not diff: {:?}", x);
+                }
+            }
+            for x in other {
+                if !results1.contains(x) {
+                    println!("  in diff, not seq: {:?}", x);
+                }
+            }
+        }
+        assert_eq!(results1, other);
+    }
 }
 
 
@@ -215,4 +224,103 @@ where G::Timestamp: Lattice+Ord {
              .concat(&nodes)
              .reduce(|_, s, t| t.push((*s[0].0, 1)))
      })
+}
+
+fn bfs_differential_flat(
+    roots_list: Vec<(usize, usize, isize)>,
+    edges_list: Vec<((usize, usize), usize, isize)>,
+    config: Config,
+) -> Vec<((usize, usize), usize, isize)> {
+    let (send, recv) = std::sync::mpsc::channel();
+    let send = Arc::new(Mutex::new(send));
+
+    timely::execute(config, move |worker| {
+        let mut roots_list = roots_list.clone();
+        let mut edges_list = edges_list.clone();
+
+        // define BFS dataflow; return handles to roots and edges inputs
+        let (mut roots, mut edges) = worker.dataflow(|scope| {
+            let send = send.lock().unwrap().clone();
+
+            let (root_input, roots) = scope.new_collection();
+            let (edge_input, edges) = scope.new_collection();
+
+            let c = bfs_flat(&edges, &roots).map(|(_, dist)| (dist, ()));
+            let arranged = c.arrange::<FlatKeySpine<usize, _, isize, Vec<((usize, ()), _, _)>>>();
+            type T2 = FlatValSpine<usize, isize, usize, isize, Vec<((usize, isize), usize, isize)>>;
+            let reduced = arranged.reduce_abelian::<_, _, _, T2>("Count", |_k, s, t| {
+                t.push((s[0].1.clone(), isize::from(1i8)))
+            });
+            reduced
+                .as_collection(|k, c| (k, c as usize))
+                .inner
+                .capture_into(send);
+
+            (root_input, edge_input)
+        });
+
+        // sort by decreasing insertion time.
+        roots_list.sort_by(|x, y| y.1.cmp(&x.1));
+        edges_list.sort_by(|x, y| y.1.cmp(&x.1));
+
+        let mut round = 0;
+        while roots_list.len() > 0 || edges_list.len() > 0 {
+            while roots_list.last().map(|x| x.1) == Some(round) {
+                let (node, _time, diff) = roots_list.pop().unwrap();
+                roots.update(node, diff);
+            }
+            while edges_list.last().map(|x| x.1) == Some(round) {
+                let ((src, dst), _time, diff) = edges_list.pop().unwrap();
+                edges.update((src, dst), diff);
+            }
+
+            round += 1;
+            roots.advance_to(round);
+            edges.advance_to(round);
+        }
+    })
+        .unwrap();
+
+    recv.extract()
+        .into_iter()
+        .flat_map(|(_, list)| {
+            list.into_iter()
+                .map(|((dst, cnt), time, diff)| ((dst, cnt), time, diff))
+        })
+        .collect()
+}
+
+// returns pairs (n, s) indicating node n can be reached from a root in s steps.
+fn bfs_flat<G: Scope>(
+    edges: &Collection<G, Edge>,
+    roots: &Collection<G, Node>,
+) -> Collection<G, (Node, usize)>
+where
+    G::Timestamp: Lattice + Ord + Containerized,
+    for<'a> G::Timestamp: PartialOrder<<<G::Timestamp as Containerized>::Region as Region>::ReadItem<'a>>,
+    <G::Timestamp as Containerized>::Region: Region<Owned=G::Timestamp> + Push<G::Timestamp>,
+    for<'a> <Product<G::Timestamp, u64> as Containerized>::Region: Region<Owned=Product<G::Timestamp, u64>> + Push<<<Product<G::Timestamp, u64> as Containerized>::Region as Region>::ReadItem<'a>>,
+    <G::Timestamp as Containerized>::Region: Clone + Ord,
+    for<'a> FlatProductRegion<<G::Timestamp as Containerized>::Region, MirrorRegion<u64>>: Push<&'a Product<G::Timestamp, u64>>,
+    for<'a> <FlatProductRegion<<G::Timestamp as Containerized>::Region, MirrorRegion<u64>> as Region>::ReadItem<'a>: Copy + Ord + Debug,
+    Product<G::Timestamp, u64>: for<'a> PartialOrder<<<Product<G::Timestamp, u64> as Containerized>::Region as Region>::ReadItem<'a>>,
+    for<'a> <<Product<G::Timestamp, u64> as Containerized>::Region as Region>::ReadItem<'a>: PartialOrder<Product<G::Timestamp, u64>>,
+    for<'a> <Product<G::Timestamp, u64> as Containerized>::Region: ReserveItems<<<Product<G::Timestamp, u64> as Containerized>::Region as Region>::ReadItem<'a>>,
+{
+    // initialize roots as reaching themselves at distance 0
+    let nodes = roots.map(|x| (x, 0));
+
+    // repeatedly update minimal distances each node can be reached from each root
+    nodes.iterate(|inner| {
+        let edges = edges.enter(&inner.scope());
+        let nodes = nodes.enter(&inner.scope());
+
+        type Spine<K, V, T, R = isize> = FlatValSpine<K, V, T, R, Vec<((K, V), T, R)>>;
+        let arranged1 = inner.arrange::<Spine<Node, Node, Product<G::Timestamp, _>>>();
+        let arranged2 = edges.arrange::<Spine<Node, Node, Product<G::Timestamp, _>>>();
+        arranged1
+            .join_core(&arranged2, move |_k, l, d| Some((d, l + 1)))
+            .concat(&nodes)
+            .reduce(|_, s, t| t.push((*s[0].0, 1)))
+    })
 }
