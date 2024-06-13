@@ -6,7 +6,7 @@
 use std::cmp::Ordering;
 use timely::Container;
 
-use timely::container::{ContainerBuilder, SizableContainer, PushInto};
+use timely::container::{ContainerBuilder, PushInto};
 use timely::order::PartialOrder;
 use timely::progress::Timestamp;
 use timely::dataflow::{Scope, StreamCore};
@@ -330,16 +330,6 @@ impl<CB: ContainerBuilder> ContainerBuilder for EffortBuilder<CB> {
     type Container = CB::Container;
 
     #[inline]
-    fn push<T>(&mut self, item: T) where Self::Container: SizableContainer + PushInto<T> {
-        self.1.push(item)
-    }
-
-    #[inline]
-    fn push_container(&mut self, container: &mut Self::Container) {
-        self.1.push_container(container)
-    }
-
-    #[inline]
     fn extract(&mut self) -> Option<&mut Self::Container> {
         let extracted = self.1.extract();
         self.0.replace(self.0.take() + extracted.as_ref().map_or(0, |e| e.len()));
@@ -351,6 +341,13 @@ impl<CB: ContainerBuilder> ContainerBuilder for EffortBuilder<CB> {
         let finished = self.1.finish();
         self.0.replace(self.0.take() + finished.as_ref().map_or(0, |e| e.len()));
         finished
+    }
+}
+
+impl<CB: PushInto<D>, D> PushInto<D> for EffortBuilder<CB> {
+    #[inline]
+    fn push_into(&mut self, item: D) {
+        self.1.push_into(item);
     }
 }
 

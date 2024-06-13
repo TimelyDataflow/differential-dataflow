@@ -101,7 +101,7 @@ where
                 move |input, output| {
                     input.for_each(|time, data| {
                         data.swap(&mut vector);
-                        output.session_with_builder(&time).give_container(&mut vector);
+                        output.session_with_builder(&time).give_iterator(vector.drain(..));
                     })
                 }
             })
