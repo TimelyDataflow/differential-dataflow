@@ -308,60 +308,45 @@ where
     }
 }
 
-/// Behavior for copying consolidation.
-pub trait ConsolidateContainer<C> {
-    /// Consolidate the contents of `container` and write the result to `target`.
-    fn consolidate(&mut self, container: &mut C, target: &mut C);
-}
+/// Consolidate the supplied container.
+pub fn consolidate_container<C: ConsolidateLayout>(container: &mut C, target: &mut C) {
+    // Sort input data
+    let mut permutation = Vec::new();
+    permutation.extend(container.drain());
+    permutation.sort_by(|a, b| C::cmp(a, b));
 
-/// Container consolidator that requires the container's item to implement [`ConsolidateLayout`].
-#[derive(Default, Debug)]
-pub struct ContainerConsolidator;
-
-impl<C> ConsolidateContainer<C> for ContainerConsolidator
-where
-    C: ConsolidateLayout,
-{
-    /// Consolidate the supplied container.
-    fn consolidate(&mut self, container: &mut C, target: &mut C) {
-        // Sort input data
-        let mut permutation = Vec::new();
-        permutation.extend(container.drain());
-        permutation.sort_by(|a, b| C::cmp(a, b));
-
-        // Consolidate sorted data.
-        let mut previous: Option<(C::Key<'_>, C::DiffOwned)> = None;
-        // TODO: We should ensure that `target` has sufficient capacity, but `Container` doesn't
-        // offer a suitable API.
-        for item in permutation.drain(..) {
-            let (key, diff) = C::into_parts(item);
-            match &mut previous {
-                // Initial iteration, remeber key and diff.
-                // TODO: Opportunity for GatCow for diff.
-                None => previous = Some((key, diff.into_owned())),
-                Some((prevkey, d)) => {
-                    // Second and following iteration, compare and accumulate or emit.
-                    if key == *prevkey {
-                        // Keys match, keep accumulating.
-                        d.plus_equals(&diff);
-                    } else {
-                        // Keys don't match, write down result if non-zero.
-                        if !d.is_zero() {
-                            // Unwrap because we checked for `Some` above.
-                            let (prevkey, diff) = previous.take().unwrap();
-                            target.push_with_diff(prevkey, diff);
-                        }
-                        // Remember current key and diff as `previous`
-                        previous = Some((key, diff.into_owned()));
+    // Consolidate sorted data.
+    let mut previous: Option<(C::Key<'_>, C::DiffOwned)> = None;
+    // TODO: We should ensure that `target` has sufficient capacity, but `Container` doesn't
+    // offer a suitable API.
+    for item in permutation.drain(..) {
+        let (key, diff) = C::into_parts(item);
+        match &mut previous {
+            // Initial iteration, remeber key and diff.
+            // TODO: Opportunity for GatCow for diff.
+            None => previous = Some((key, diff.into_owned())),
+            Some((prevkey, d)) => {
+                // Second and following iteration, compare and accumulate or emit.
+                if key == *prevkey {
+                    // Keys match, keep accumulating.
+                    d.plus_equals(&diff);
+                } else {
+                    // Keys don't match, write down result if non-zero.
+                    if !d.is_zero() {
+                        // Unwrap because we checked for `Some` above.
+                        let (prevkey, diff) = previous.take().unwrap();
+                        target.push_with_diff(prevkey, diff);
                     }
+                    // Remember current key and diff as `previous`
+                    previous = Some((key, diff.into_owned()));
                 }
             }
         }
-        // Write any residual data, if non-zero.
-        if let Some((previtem, d)) = previous {
-            if !d.is_zero() {
-                target.push_with_diff(previtem, d);
-            }
+    }
+    // Write any residual data, if non-zero.
+    if let Some((previtem, d)) = previous {
+        if !d.is_zero() {
+            target.push_with_diff(previtem, d);
         }
     }
 }
@@ -464,7 +449,7 @@ mod tests {
         let mut data = vec![(1, 1, 1), (2, 1, 1), (1, 1, -1)];
         let mut target = Vec::default();
         data.sort();
-        ContainerConsolidator::default().consolidate(&mut data, &mut target);
+        consolidate_container(&mut data, &mut target);
         assert_eq!(target, [(2, 1, 1)]);
     }
 
@@ -484,7 +469,6 @@ mod tests {
         let mut data2 = Vec::with_capacity(LEN);
         let mut target = Vec::new();
         let mut duration = std::time::Duration::default();
-        let mut consolidator = ContainerConsolidator::default();
         for _ in 0..REPS {
             data.clear();
             data2.clear();
@@ -493,7 +477,7 @@ mod tests {
             data2.extend((0..LEN).map(|i| (i/4, 1, -2isize + ((i % 4) as isize))));
             data.sort_by(|x,y| x.0.cmp(&y.0));
             let start = std::time::Instant::now();
-            consolidator.consolidate(&mut data, &mut target);
+            consolidate_container(&mut data, &mut target);
             duration += start.elapsed();
 
             consolidate_updates(&mut data2);

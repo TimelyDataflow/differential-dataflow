@@ -11,7 +11,6 @@
 use std::rc::Rc;
 use timely::container::columnation::{TimelyStack};
 use timely::container::flatcontainer::{Containerized, FlatStack};
-use crate::consolidation::ContainerConsolidator;
 use crate::trace::implementations::chunker::{ColumnationChunker, ContainerChunker, VecChunker};
 
 use crate::trace::implementations::spine_fueled::Spine;
@@ -46,10 +45,7 @@ pub type FlatValSpine<K, V, T, R, C> = Spine<
     Rc<OrdValBatch<FlatLayout<((K,V),T,R)>>>,
     MergeBatcher<
         C,
-        ContainerChunker<
-            FlatStack<<((K,V),T,R) as Containerized>::Region>,
-            ContainerConsolidator,
-        >,
+        ContainerChunker<FlatStack<<((K,V),T,R) as Containerized>::Region>>,
         FlatcontainerMerger<T, R, <((K,V),T,R) as Containerized>::Region>,
         T,
     >,
@@ -77,10 +73,7 @@ pub type FlatKeySpine<K, T, R, C> = Spine<
     Rc<OrdKeyBatch<FlatLayout<((K,()),T,R)>>>,
     MergeBatcher<
         C,
-        ContainerChunker<
-            FlatStack<<((K,()),T,R) as Containerized>::Region>,
-            ContainerConsolidator,
-        >,
+        ContainerChunker<FlatStack<<((K,()),T,R) as Containerized>::Region>>,
         FlatcontainerMerger<T, R, <((K,()),T,R) as Containerized>::Region>,
         T,
     >,

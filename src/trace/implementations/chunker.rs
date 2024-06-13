@@ -5,7 +5,7 @@ use timely::communication::message::RefOrMut;
 use timely::Container;
 use timely::container::columnation::{Columnation, TimelyStack};
 use timely::container::{ContainerBuilder, PushInto, SizableContainer};
-use crate::consolidation::{consolidate_updates, ConsolidateContainer};
+use crate::consolidation::{consolidate_updates, consolidate_container, ConsolidateLayout};
 use crate::difference::Semigroup;
 
 /// Chunk a stream of vectors into chains of vectors.
@@ -268,34 +268,33 @@ where
     }
 }
 
-/// Chunk a stream of vectors into chains of vectors.
-pub struct ContainerChunker<Output, Consolidator> {
+/// Chunk a stream of containers into chains of vectors.
+pub struct ContainerChunker<Output> {
     pending: Output,
-    empty: Output,
     ready: VecDeque<Output>,
-    consolidator: Consolidator,
+    empty: Output,
 }
 
-impl<Output, Consolidator> Default for ContainerChunker<Output, Consolidator>
+impl<Output> Default for ContainerChunker<Output>
 where
     Output: Default,
-    Consolidator: Default,
 {
     fn default() -> Self {
         Self {
             pending: Output::default(),
-            empty: Output::default(),
             ready: VecDeque::default(),
-            consolidator: Consolidator::default(),
+            empty: Output::default(),
         }
     }
 }
 
-impl<'a, Input, Output, Consolidator> PushInto<RefOrMut<'a, Input>> for ContainerChunker<Output, Consolidator>
+impl<'a, Input, Output> PushInto<RefOrMut<'a, Input>> for ContainerChunker<Output>
 where
     Input: Container,
-    Output: SizableContainer + PushInto<Input::Item<'a>> + PushInto<Input::ItemRef<'a>>,
-    Consolidator: ConsolidateContainer<Output>,
+    Output: SizableContainer
+        + ConsolidateLayout
+        + PushInto<Input::Item<'a>>
+        + PushInto<Input::ItemRef<'a>>,
 {
     fn push_into(&mut self, container: RefOrMut<'a, Input>) {
         if self.pending.capacity() < Output::preferred_capacity() {
@@ -303,7 +302,7 @@ where
         }
         let form_batch = |this: &mut Self| {
             if this.pending.len() == this.pending.capacity() {
-                this.consolidator.consolidate(&mut this.pending, &mut this.empty);
+                consolidate_container(&mut this.pending, &mut this.empty);
                 std::mem::swap(&mut this.pending, &mut this.empty);
                 this.empty.clear();
                 if this.pending.len() > this.pending.capacity() / 2 {
@@ -331,10 +330,9 @@ where
     }
 }
 
-impl<Output, Consolidator> ContainerBuilder for ContainerChunker<Output, Consolidator>
+impl<Output> ContainerBuilder for ContainerChunker<Output>
 where
-    Output: SizableContainer,
-    Consolidator: ConsolidateContainer<Output> + Default + 'static,
+    Output: SizableContainer + ConsolidateLayout,
 {
     type Container = Output;
 
@@ -349,7 +347,7 @@ where
 
     fn finish(&mut self) -> Option<&mut Self::Container> {
         if !self.pending.is_empty() {
-            self.consolidator.consolidate(&mut self.pending, &mut self.empty);
+            consolidate_container(&mut self.pending, &mut self.empty);
             std::mem::swap(&mut self.pending, &mut self.empty);
             self.empty.clear();
             if !self.pending.is_empty() {
