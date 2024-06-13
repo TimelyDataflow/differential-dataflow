@@ -47,7 +47,6 @@ pub type FlatValSpine<K, V, T, R, C> = Spine<
     MergeBatcher<
         C,
         ContainerChunker<
-            C,
             FlatStack<<((K,V),T,R) as Containerized>::Region>,
             ContainerConsolidator,
         >,
@@ -79,7 +78,6 @@ pub type FlatKeySpine<K, T, R, C> = Spine<
     MergeBatcher<
         C,
         ContainerChunker<
-            C,
             FlatStack<<((K,()),T,R) as Containerized>::Region>,
             ContainerConsolidator,
         >,

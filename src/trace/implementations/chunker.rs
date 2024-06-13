@@ -1,7 +1,6 @@
 //! Organize streams of data into sorted chunks.
 
 use std::collections::VecDeque;
-use std::marker::PhantomData;
 use timely::communication::message::RefOrMut;
 use timely::Container;
 use timely::container::columnation::{Columnation, TimelyStack};
@@ -270,17 +269,15 @@ where
 }
 
 /// Chunk a stream of vectors into chains of vectors.
-pub struct ContainerChunker<Input, Output, Consolidator> {
+pub struct ContainerChunker<Output, Consolidator> {
     pending: Output,
     empty: Output,
     ready: VecDeque<Output>,
     consolidator: Consolidator,
-    _marker: PhantomData<(Input, Consolidator)>,
 }
 
-impl<Input, Output, Consolidator> Default for ContainerChunker<Input, Output, Consolidator>
+impl<Output, Consolidator> Default for ContainerChunker<Output, Consolidator>
 where
-    Input: Default,
     Output: Default,
     Consolidator: Default,
 {
@@ -290,12 +287,11 @@ where
             empty: Output::default(),
             ready: VecDeque::default(),
             consolidator: Consolidator::default(),
-            _marker: PhantomData,
         }
     }
 }
 
-impl<'a, Input, Output, Consolidator> PushInto<RefOrMut<'a, Input>> for ContainerChunker<Input, Output, Consolidator>
+impl<'a, Input, Output, Consolidator> PushInto<RefOrMut<'a, Input>> for ContainerChunker<Output, Consolidator>
 where
     Input: Container,
     Output: SizableContainer + PushInto<Input::Item<'a>> + PushInto<Input::ItemRef<'a>>,
@@ -335,10 +331,9 @@ where
     }
 }
 
-impl<Input, Output, Consolidator> ContainerBuilder for ContainerChunker<Input, Output, Consolidator>
+impl<Output, Consolidator> ContainerBuilder for ContainerChunker<Output, Consolidator>
 where
-    Input: Container,
-    for<'a> Output: SizableContainer + PushInto<Input::Item<'a>> + PushInto<Input::ItemRef<'a>>,
+    Output: SizableContainer,
     Consolidator: ConsolidateContainer<Output> + Default + 'static,
 {
     type Container = Output;
