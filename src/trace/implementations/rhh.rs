@@ -12,6 +12,7 @@ use abomonation_derive::Abomonation;
 use timely::container::columnation::TimelyStack;
 
 use crate::Hashable;
+use crate::trace::implementations::chunker::{ColumnationChunker, VecChunker};
 use crate::trace::implementations::merge_batcher::{MergeBatcher, VecMerger};
 use crate::trace::implementations::merge_batcher_col::ColumnationMerger;
 use crate::trace::implementations::spine_fueled::Spine;
@@ -24,7 +25,7 @@ use self::val_batch::{RhhValBatch, RhhValBuilder};
 /// A trace implementation using a spine of ordered lists.
 pub type VecSpine<K, V, T, R> = Spine<
     Rc<RhhValBatch<Vector<((K,V),T,R)>>>,
-    MergeBatcher<VecMerger<((K, V), T, R)>, T>,
+    MergeBatcher<Vec<((K,V),T,R)>, VecChunker<((K,V),T,R)>, VecMerger<((K, V), T, R)>, T>,
     RcBuilder<RhhValBuilder<Vector<((K,V),T,R)>, Vec<((K,V),T,R)>>>,
 >;
 // /// A trace implementation for empty values using a spine of ordered lists.
@@ -33,7 +34,7 @@ pub type VecSpine<K, V, T, R> = Spine<
 /// A trace implementation backed by columnar storage.
 pub type ColSpine<K, V, T, R> = Spine<
     Rc<RhhValBatch<TStack<((K,V),T,R)>>>,
-    MergeBatcher<ColumnationMerger<((K,V),T,R)>, T>,
+    MergeBatcher<Vec<((K,V),T,R)>, ColumnationChunker<((K,V),T,R)>, ColumnationMerger<((K,V),T,R)>, T>,
     RcBuilder<RhhValBuilder<TStack<((K,V),T,R)>, TimelyStack<((K,V),T,R)>>>,
 >;
 // /// A trace implementation backed by columnar storage.
@@ -759,7 +760,7 @@ mod val_batch {
     impl<L: Layout, CI> Builder for RhhValBuilder<L, CI>
     where
         <L::Target as Update>::Key: Default + HashOrdered,
-        CI: for<'a> BuilderInput<L, Key<'a> = <L::Target as Update>::Key, Time=<L::Target as Update>::Time, Diff=<L::Target as Update>::Diff>,
+        CI: for<'a> BuilderInput<L::KeyContainer, L::ValContainer, Key<'a> = <L::Target as Update>::Key, Time=<L::Target as Update>::Time, Diff=<L::Target as Update>::Diff>,
         for<'a> L::ValContainer: PushInto<CI::Val<'a>>,
         for<'a> <L::KeyContainer as BatchContainer>::ReadItem<'a>: HashOrdered + IntoOwned<'a, Owned = <L::Target as Update>::Key>,
     {

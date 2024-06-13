@@ -1,8 +1,7 @@
 //! A general purpose `Batcher` implementation based on radix sort for TimelyStack.
 
-use crate::consolidation::consolidate_updates;
 use std::cmp::Ordering;
-use timely::communication::message::RefOrMut;
+use std::marker::PhantomData;
 use timely::container::columnation::{Columnation, TimelyStack};
 use timely::progress::frontier::{Antichain, AntichainRef};
 use timely::{Container, Data, PartialOrder};
@@ -13,12 +12,14 @@ use crate::trace::Builder;
 
 /// A merger for timely stacks
 pub struct ColumnationMerger<T> {
-    pending: Vec<T>,
+    _marker: PhantomData<T>,
 }
 
 impl<T> Default for ColumnationMerger<T> {
     fn default() -> Self {
-        Self { pending: Vec::default() }
+        Self {
+            _marker: PhantomData,
+        }
     }
 }
 
@@ -33,11 +34,6 @@ impl<T: Columnation> ColumnationMerger<T> {
         } else {
             1
         }
-    }
-
-    /// Buffer size for pending updates, currently 2 * [`Self::chunk_capacity`].
-    fn pending_capacity(&self) -> usize {
-        self.chunk_capacity() * 2
     }
 
     /// Helper to get pre-sized vector from the stash.
@@ -65,81 +61,8 @@ where
     R: Columnation + Semigroup + 'static,
 {
     type Time = T;
-    type Input = Vec<((K, V), T, R)>;
     type Chunk = TimelyStack<((K, V), T, R)>;
     type Output = TimelyStack<((K, V), T, R)>;
-
-    fn accept(&mut self, container: RefOrMut<Self::Input>, stash: &mut Vec<Self::Chunk>) -> Vec<Self::Chunk> {
-        // Ensure `self.pending` has the desired capacity. We should never have a larger capacity
-        // because we don't write more than capacity elements into the buffer.
-        if self.pending.capacity() < self.pending_capacity() {
-            self.pending.reserve(self.pending_capacity() - self.pending.len());
-        }
-
-        // Form a chain from what's in pending.
-        // This closure does the following:
-        // * If pending is full, consolidate.
-        // * If after consolidation it's more than half full, peel off a chain of full blocks,
-        //   leaving behind any partial block in pending.
-        // * Merge the new chain with `final_chain` and return it in-place.
-        let form_chain = |this: &mut Self, final_chain: &mut Vec<Self::Chunk>, stash: &mut _| {
-            if this.pending.len() == this.pending.capacity() {
-                consolidate_updates(&mut this.pending);
-                if this.pending.len() >= this.chunk_capacity() {
-                    let mut chain = Vec::default();
-                    while this.pending.len() > this.chunk_capacity() {
-                        let mut chunk = this.empty(stash);
-                        for datum in this.pending.drain(..chunk.capacity()) {
-                            chunk.copy(&datum);
-                        }
-                        chain.push(chunk);
-                    }
-                    if final_chain.is_empty() {
-                        *final_chain = chain;
-                    } else if !chain.is_empty() {
-                        let mut output = Vec::default();
-                        this.merge(std::mem::take(final_chain), chain, &mut output, stash);
-                        *final_chain = output;
-                    }
-                }
-            }
-        };
-
-        let mut final_chain = Vec::default();
-        // `container` is either a shared reference or an owned allocations.
-        match container {
-            RefOrMut::Ref(vec) => {
-                let mut slice = &vec[..];
-                while !slice.is_empty() {
-                    let (head, tail) = slice.split_at(std::cmp::min(self.pending.capacity() - self.pending.len(), slice.len()));
-                    slice = tail;
-                    self.pending.extend_from_slice(head);
-                    form_chain(self, &mut final_chain, stash);
-                }
-            }
-            RefOrMut::Mut(vec) => {
-                while !vec.is_empty() {
-                    self.pending.extend(vec.drain(..std::cmp::min(self.pending.capacity() - self.pending.len(), vec.len())));
-                    form_chain(self, &mut final_chain, stash);
-                }
-            }
-        }
-        final_chain
-    }
-
-    fn finish(&mut self, stash: &mut Vec<Self::Chunk>) -> Vec<Self::Chunk> {
-        // Extract all data from `pending`.
-        consolidate_updates(&mut self.pending);
-        let mut chain = Vec::default();
-        while !self.pending.is_empty() {
-            let mut chunk = self.empty(stash);
-            for datum in self.pending.drain(..std::cmp::min(chunk.capacity(), self.pending.len())) {
-                chunk.copy(&datum);
-            }
-            chain.push(chunk);
-        }
-        chain
-    }
 
     fn merge(&mut self, list1: Vec<Self::Chunk>, list2: Vec<Self::Chunk>, output: &mut Vec<Self::Chunk>, stash: &mut Vec<Self::Chunk>) {
         let mut list1 = list1.into_iter();

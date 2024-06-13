@@ -1,6 +1,7 @@
 //! A general purpose `Batcher` implementation based on radix sort.
 
 use std::collections::VecDeque;
+use std::marker::PhantomData;
 
 use timely::communication::message::RefOrMut;
 use timely::logging::WorkerIdentifier;
@@ -8,17 +9,18 @@ use timely::logging_core::Logger;
 use timely::progress::frontier::AntichainRef;
 use timely::progress::{frontier::Antichain, Timestamp};
 use timely::{Container, PartialOrder};
+use timely::container::{ContainerBuilder, PushInto};
 
-use crate::consolidation::consolidate_updates;
 use crate::difference::Semigroup;
 use crate::logging::{BatcherEvent, DifferentialEvent};
 use crate::trace::{Batcher, Builder};
 use crate::Data;
 
 /// Creates batches from unordered tuples.
-pub struct MergeBatcher<M, T>
+pub struct MergeBatcher<Input, C, M, T>
 where
-    M: Merger,
+    C: ContainerBuilder<Container=M::Chunk> + Default,
+    M: Merger<Time = T>,
 {
     /// each power-of-two length list of allocations.
     /// Do not push/pop directly but use the corresponding functions
@@ -26,6 +28,8 @@ where
     chains: Vec<Vec<M::Chunk>>,
     /// Stash of empty chunks
     stash: Vec<M::Chunk>,
+    /// Chunker to transform input streams to chunks of data.
+    chunker: C,
     /// Thing to accept data, merge chains, and talk to the builder.
     merger: M,
     /// Logger for size accounting.
@@ -36,14 +40,16 @@ where
     lower: Antichain<T>,
     /// The lower-bound frontier of the data, after the last call to seal.
     frontier: Antichain<T>,
+    _marker: PhantomData<Input>,
 }
 
-impl<M, T> Batcher for MergeBatcher<M, T>
+impl<Input, C, M, T> Batcher for MergeBatcher<Input, C, M, T>
 where
+    C: ContainerBuilder<Container=M::Chunk> + Default + for<'a> PushInto<RefOrMut<'a, Input>>,
     M: Merger<Time = T>,
     T: Timestamp,
 {
-    type Input = M::Input;
+    type Input = Input;
     type Output = M::Output;
     type Time = T;
 
@@ -51,19 +57,24 @@ where
         Self {
             logger,
             operator_id,
+            chunker: C::default(),
             merger: M::default(),
             chains: Vec::new(),
             stash: Vec::new(),
             frontier: Antichain::new(),
             lower: Antichain::from_elem(T::minimum()),
+            _marker: PhantomData,
         }
     }
 
     /// Push a container of data into this merge batcher. Updates the internal chain structure if
     /// needed.
-    fn push_container(&mut self, container: RefOrMut<M::Input>) {
-        let chain = self.merger.accept(container, &mut self.stash);
-        self.insert_chain(chain);
+    fn push_container(&mut self, container: RefOrMut<Input>) {
+        self.chunker.push_into(container);
+        while let Some(chunk) = self.chunker.extract() {
+            let chunk = std::mem::take(chunk);
+            self.insert_chain(vec![chunk]);
+        }
     }
 
     // Sealing a batch means finding those updates with times not greater or equal to any time
@@ -72,9 +83,9 @@ where
     // updates with times not greater or equal to `upper`.
     fn seal<B: Builder<Input = Self::Output, Time = Self::Time>>(&mut self, upper: Antichain<T>) -> B::Output {
         // Finish
-        let chain = self.merger.finish(&mut self.stash);
-        if !chain.is_empty() {
-            self.chain_push(chain);
+        while let Some(chunk) = self.chunker.finish() {
+            let chunk = std::mem::take(chunk);
+            self.insert_chain(vec![chunk]);
         }
 
         // Merge all remaining chains into a single chain.
@@ -111,9 +122,10 @@ where
     }
 }
 
-impl<M, T> MergeBatcher<M, T>
+impl<Input, C, M, T> MergeBatcher<Input, C, M, T>
 where
-    M: Merger,
+    C: ContainerBuilder<Container=M::Chunk> + Default,
+    M: Merger<Time = T>,
 {
     /// Insert a chain and maintain chain properties: Chains are geometrically sized and ordered
     /// by decreasing length.
@@ -178,7 +190,11 @@ where
     }
 }
 
-impl<M: Merger, T> Drop for MergeBatcher<M, T> {
+impl<Input, C, M, T> Drop for MergeBatcher<Input, C, M, T>
+where
+    C: ContainerBuilder<Container=M::Chunk> + Default,
+    M: Merger<Time = T>,
+{
     fn drop(&mut self) {
         // Cleanup chain to retract accounting information.
         while self.chain_pop().is_some() {}
@@ -187,8 +203,6 @@ impl<M: Merger, T> Drop for MergeBatcher<M, T> {
 
 /// A trait to describe interesting moments in a merge batcher.
 pub trait Merger: Default {
-    /// The type of update containers received from inputs.
-    type Input;
     /// The internal representation of chunks of data.
     type Chunk: Container;
     /// The output type
@@ -197,10 +211,6 @@ pub trait Merger: Default {
     type Output;
     /// The type of time in frontiers to extract updates.
     type Time;
-    /// Accept a fresh container of input data.
-    fn accept(&mut self, container: RefOrMut<Self::Input>, stash: &mut Vec<Self::Chunk>) -> Vec<Self::Chunk>;
-    /// Finish processing any stashed data.
-    fn finish(&mut self, stash: &mut Vec<Self::Chunk>) -> Vec<Self::Chunk>;
     /// Merge chains into an output chain.
     fn merge(&mut self, list1: Vec<Self::Chunk>, list2: Vec<Self::Chunk>, output: &mut Vec<Self::Chunk>, stash: &mut Vec<Self::Chunk>);
     /// Extract ready updates based on the `upper` frontier.
@@ -229,12 +239,12 @@ pub trait Merger: Default {
 
 /// A merger that knows how to accept and maintain chains of vectors.
 pub struct VecMerger<T> {
-    pending: Vec<T>,
+    _marker: PhantomData<T>,
 }
 
 impl<T> Default for VecMerger<T> {
     fn default() -> Self {
-        Self { pending: Vec::default() }
+        Self { _marker: PhantomData }
     }
 }
 
@@ -249,10 +259,6 @@ impl<T> VecMerger<T> {
         } else {
             1
         }
-    }
-
-    fn pending_capacity(&self) -> usize {
-        self.chunk_capacity() * 2
     }
 
     /// Helper to get pre-sized vector from the stash.
@@ -280,77 +286,8 @@ where
     R: Semigroup + 'static,
 {
     type Time = T;
-    type Input = Vec<((K, V), T, R)>;
     type Chunk = Vec<((K, V), T, R)>;
     type Output = Vec<((K, V), T, R)>;
-
-    fn accept(&mut self, container: RefOrMut<Self::Input>, stash: &mut Vec<Self::Chunk>) -> Vec<Self::Chunk> {
-        // Ensure `self.pending` has the desired capacity. We should never have a larger capacity
-        // because we don't write more than capacity elements into the buffer.
-        if self.pending.capacity() < self.pending_capacity() {
-            self.pending.reserve(self.pending_capacity() - self.pending.len());
-        }
-
-        // Form a chain from what's in pending.
-        // This closure does the following:
-        // * If pending is full, consolidate.
-        // * If after consolidation it's more than half full, peel off a chain of full blocks,
-        //   leaving behind any partial block in pending.
-        // * Merge the new chain with `final_chain` and return it in-place.
-        let form_chain = |this: &mut Self, final_chain: &mut Vec<Self::Chunk>, stash: &mut _| {
-            if this.pending.len() == this.pending.capacity() {
-                consolidate_updates(&mut this.pending);
-                if this.pending.len() >= this.chunk_capacity() {
-                    let mut chain = Vec::default();
-                    while this.pending.len() > this.chunk_capacity() {
-                        let mut chunk = this.empty(stash);
-                        chunk.extend(this.pending.drain(..chunk.capacity()));
-                        chain.push(chunk);
-                    }
-                    if final_chain.is_empty() {
-                        *final_chain = chain;
-                    } else if !chain.is_empty() {
-                        let mut output = Vec::default();
-                        this.merge(std::mem::take(final_chain), chain, &mut output, stash);
-                        *final_chain = output;
-                    }
-                }
-            }
-        };
-
-        let mut final_chain = Vec::default();
-        // `container` is either a shared reference or an owned allocations.
-        match container {
-            RefOrMut::Ref(vec) => {
-                let mut slice = &vec[..];
-                while !slice.is_empty() {
-                    let (head, tail) = slice.split_at(std::cmp::min(self.pending.capacity() - self.pending.len(), slice.len()));
-                    slice = tail;
-                    self.pending.extend_from_slice(head);
-                    form_chain(self, &mut final_chain, stash);
-                }
-            }
-            RefOrMut::Mut(vec) => {
-                while !vec.is_empty() {
-                    self.pending.extend(vec.drain(..std::cmp::min(self.pending.capacity() - self.pending.len(), vec.len())));
-                    form_chain(self, &mut final_chain, stash);
-                }
-            }
-        }
-        final_chain
-    }
-
-    fn finish(&mut self, stash: &mut Vec<Self::Chunk>) -> Vec<Self::Chunk> {
-        // Extract all data from `pending`.
-        consolidate_updates(&mut self.pending);
-        let mut chain = Vec::default();
-        while !self.pending.is_empty() {
-            let mut chunk = self.empty(stash);
-            chunk.extend(self.pending.drain(..std::cmp::min(chunk.capacity(), self.pending.len())));
-            chain.push(chunk);
-        }
-        chain
-    }
 
     fn merge(&mut self, list1: Vec<Self::Chunk>, list2: Vec<Self::Chunk>, output: &mut Vec<Self::Chunk>, stash: &mut Vec<Self::Chunk>) {
         let mut list1 = list1.into_iter();

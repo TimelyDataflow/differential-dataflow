@@ -10,10 +10,13 @@
 
 use std::rc::Rc;
 use timely::container::columnation::{TimelyStack};
+use timely::container::flatcontainer::{Containerized, FlatStack};
+use crate::trace::implementations::chunker::{ColumnationChunker, ContainerChunker, VecChunker};
 
 use crate::trace::implementations::spine_fueled::Spine;
 use crate::trace::implementations::merge_batcher::{MergeBatcher, VecMerger};
 use crate::trace::implementations::merge_batcher_col::ColumnationMerger;
+use crate::trace::implementations::merge_batcher_flat::FlatcontainerMerger;
 use crate::trace::rc_blanket_impls::RcBuilder;
 
 use super::{Update, Layout, Vector, TStack, Preferred, FlatLayout};
@@ -24,7 +27,7 @@ pub use self::key_batch::{OrdKeyBatch, OrdKeyBuilder};
 /// A trace implementation using a spine of ordered lists.
 pub type OrdValSpine<K, V, T, R> = Spine<
     Rc<OrdValBatch<Vector<((K,V),T,R)>>>,
-    MergeBatcher<VecMerger<((K, V), T, R)>, T>,
+    MergeBatcher<Vec<((K,V),T,R)>, VecChunker<((K,V),T,R)>, VecMerger<((K, V), T, R)>, T>,
     RcBuilder<OrdValBuilder<Vector<((K,V),T,R)>, Vec<((K,V),T,R)>>>,
 >;
 // /// A trace implementation for empty values using a spine of ordered lists.
@@ -33,21 +36,26 @@ pub type OrdValSpine<K, V, T, R> = Spine<
 /// A trace implementation backed by columnar storage.
 pub type ColValSpine<K, V, T, R> = Spine<
     Rc<OrdValBatch<TStack<((K,V),T,R)>>>,
-    MergeBatcher<ColumnationMerger<((K,V),T,R)>, T>,
+    MergeBatcher<Vec<((K,V),T,R)>, ColumnationChunker<((K,V),T,R)>, ColumnationMerger<((K,V),T,R)>, T>,
     RcBuilder<OrdValBuilder<TStack<((K,V),T,R)>, TimelyStack<((K,V),T,R)>>>,
 >;
 
 /// A trace implementation backed by flatcontainer storage.
-pub type FlatValSpine<K, V, T, R> = Spine<
+pub type FlatValSpine<K, V, T, R, C> = Spine<
     Rc<OrdValBatch<FlatLayout<((K,V),T,R)>>>,
-    MergeBatcher<ColumnationMerger<((K,V),T,R)>, T>,
-    RcBuilder<OrdValBuilder<FlatLayout<((K,V),T,R)>, TimelyStack<((K,V),T,R)>>>,
+    MergeBatcher<
+        C,
+        ContainerChunker<FlatStack<<((K,V),T,R) as Containerized>::Region>>,
+        FlatcontainerMerger<T, R, <((K,V),T,R) as Containerized>::Region>,
+        T,
+    >,
+    RcBuilder<OrdValBuilder<FlatLayout<((K,V),T,R)>, FlatStack<<((K,V),T,R) as Containerized>::Region>>>,
 >;
 
 /// A trace implementation using a spine of ordered lists.
 pub type OrdKeySpine<K, T, R> = Spine<
     Rc<OrdKeyBatch<Vector<((K,()),T,R)>>>,
-    MergeBatcher<VecMerger<((K, ()), T, R)>, T>,
+    MergeBatcher<Vec<((K,()),T,R)>, VecChunker<((K,()),T,R)>, VecMerger<((K, ()), T, R)>, T>,
     RcBuilder<OrdKeyBuilder<Vector<((K,()),T,R)>, Vec<((K,()),T,R)>>>,
 >;
 // /// A trace implementation for empty values using a spine of ordered lists.
@@ -56,21 +64,26 @@ pub type OrdKeySpine<K, T, R> = Spine<
 /// A trace implementation backed by columnar storage.
 pub type ColKeySpine<K, T, R> = Spine<
     Rc<OrdKeyBatch<TStack<((K,()),T,R)>>>,
-    MergeBatcher<ColumnationMerger<((K,()),T,R)>, T>,
+    MergeBatcher<Vec<((K,()),T,R)>, ColumnationChunker<((K,()),T,R)>, ColumnationMerger<((K,()),T,R)>, T>,
     RcBuilder<OrdKeyBuilder<TStack<((K,()),T,R)>, TimelyStack<((K,()),T,R)>>>,
 >;
 
 /// A trace implementation backed by flatcontainer storage.
-pub type FlatKeySpine<K, T, R> = Spine<
-    Rc<OrdValBatch<FlatLayout<((K,()),T,R)>>>,
-    MergeBatcher<ColumnationMerger<((K,()),T,R)>, T>,
-    RcBuilder<OrdValBuilder<FlatLayout<((K,()),T,R)>, TimelyStack<((K,()),T,R)>>>,
+pub type FlatKeySpine<K, T, R, C> = Spine<
+    Rc<OrdKeyBatch<FlatLayout<((K,()),T,R)>>>,
+    MergeBatcher<
+        C,
+        ContainerChunker<FlatStack<<((K,()),T,R) as Containerized>::Region>>,
+        FlatcontainerMerger<T, R, <((K,()),T,R) as Containerized>::Region>,
+        T,
+    >,
+    RcBuilder<OrdKeyBuilder<FlatLayout<((K,()),T,R)>, FlatStack<<((K,()),T,R) as Containerized>::Region>>>,
 >;
 
 /// A trace implementation backed by columnar storage.
 pub type PreferredSpine<K, V, T, R> = Spine<
     Rc<OrdValBatch<Preferred<K,V,T,R>>>,
-    MergeBatcher<ColumnationMerger<((<K as ToOwned>::Owned,<V as ToOwned>::Owned),T,R)>,T>,
+    MergeBatcher<Vec<((<K as ToOwned>::Owned,<V as ToOwned>::Owned),T,R)>, ColumnationChunker<((<K as ToOwned>::Owned,<V as ToOwned>::Owned),T,R)>, ColumnationMerger<((<K as ToOwned>::Owned,<V as ToOwned>::Owned),T,R)>,T>,
     RcBuilder<OrdValBuilder<Preferred<K,V,T,R>, TimelyStack<((<K as ToOwned>::Owned,<V as ToOwned>::Owned),T,R)>>>,
 >;
 
@@ -577,7 +590,7 @@ mod val_batch {
     impl<L, CI> Builder for OrdValBuilder<L, CI>
     where
         L: Layout,
-        CI: for<'a> BuilderInput<L, Time=<L::Target as Update>::Time, Diff=<L::Target as Update>::Diff>,
+        CI: for<'a> BuilderInput<L::KeyContainer, L::ValContainer, Time=<L::Target as Update>::Time, Diff=<L::Target as Update>::Diff>,
         for<'a> L::KeyContainer: PushInto<CI::Key<'a>>,
         for<'a> L::ValContainer: PushInto<CI::Val<'a>>,
         for<'a> <L::TimeContainer as BatchContainer>::ReadItem<'a> : IntoOwned<'a, Owned = <L::Target as Update>::Time>,
@@ -1044,7 +1057,7 @@ mod key_batch {
     impl<L: Layout, CI> Builder for OrdKeyBuilder<L, CI>
     where
         L: Layout,
-        CI: for<'a> BuilderInput<L, Time=<L::Target as Update>::Time, Diff=<L::Target as Update>::Diff>,
+        CI: for<'a> BuilderInput<L::KeyContainer, L::ValContainer, Time=<L::Target as Update>::Time, Diff=<L::Target as Update>::Diff>,
         for<'a> L::KeyContainer: PushInto<CI::Key<'a>>,
         for<'a> <L::TimeContainer as BatchContainer>::ReadItem<'a> : IntoOwned<'a, Owned = <L::Target as Update>::Time>,
         for<'a> <L::DiffContainer as BatchContainer>::ReadItem<'a> : IntoOwned<'a, Owned = <L::Target as Update>::Diff>,

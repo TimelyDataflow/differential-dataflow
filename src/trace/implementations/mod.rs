@@ -42,9 +42,11 @@ pub mod spine_fueled;
 
 pub mod merge_batcher;
 pub mod merge_batcher_col;
+pub mod merge_batcher_flat;
 pub mod ord_neu;
 pub mod rhh;
 pub mod huffman_container;
+pub mod chunker;
 
 // Opinionated takes on default spines.
 pub use self::ord_neu::OrdValSpine as ValSpine;
@@ -198,7 +200,6 @@ where
 
 use std::convert::TryInto;
 use abomonation_derive::Abomonation;
-use crate::trace::cursor::IntoOwned;
 
 /// A list of unsigned integers that uses `u32` elements as long as they are small enough, and switches to `u64` once they are not.
 #[derive(Eq, PartialEq, Ord, PartialOrd, Clone, Abomonation)]
@@ -320,7 +321,7 @@ impl BatchContainer for OffsetList {
 }
 
 /// Behavior to split an update into principal components.
-pub trait BuilderInput<L: Layout>: Container {
+pub trait BuilderInput<K: BatchContainer, V: BatchContainer>: Container {
     /// Key portion
     type Key<'a>: Ord;
     /// Value portion
@@ -334,16 +335,20 @@ pub trait BuilderInput<L: Layout>: Container {
     fn into_parts<'a>(item: Self::Item<'a>) -> (Self::Key<'a>, Self::Val<'a>, Self::Time, Self::Diff);
 
     /// Test that the key equals a key in the layout's key container.
-    fn key_eq(this: &Self::Key<'_>, other: <L::KeyContainer as BatchContainer>::ReadItem<'_>) -> bool;
+    fn key_eq(this: &Self::Key<'_>, other: K::ReadItem<'_>) -> bool;
 
     /// Test that the value equals a key in the layout's value container.
-    fn val_eq(this: &Self::Val<'_>, other: <L::ValContainer as BatchContainer>::ReadItem<'_>) -> bool;
+    fn val_eq(this: &Self::Val<'_>, other: V::ReadItem<'_>) -> bool;
 }
 
-impl<K,V,T,R> BuilderInput<Vector<((K, V), T,R)>> for Vec<((K, V), T, R)>
+impl<K,KBC,V,VBC,T,R> BuilderInput<KBC, VBC> for Vec<((K, V), T, R)>
 where
     K: Ord + Clone + 'static,
+    KBC: BatchContainer,
+    for<'a> KBC::ReadItem<'a>: PartialEq<&'a K>,
     V: Ord + Clone + 'static,
+    VBC: BatchContainer,
+    for<'a> VBC::ReadItem<'a>: PartialEq<&'a V>,
     T: Timestamp + Lattice + Clone + 'static,
     R: Ord + Semigroup + 'static,
 {
@@ -356,121 +361,25 @@ where
         (key, val, time, diff)
     }
 
-    fn key_eq(this: &K, other: &K) -> bool {
-        this == other
+    fn key_eq(this: &K, other: KBC::ReadItem<'_>) -> bool {
+        KBC::reborrow(other) == this
     }
 
-    fn val_eq(this: &V, other: &V) -> bool {
-        this == other
+    fn val_eq(this: &V, other: VBC::ReadItem<'_>) -> bool {
+        VBC::reborrow(other) == this
     }
 }
 
-impl<K,V,T,R> BuilderInput<TStack<((K, V), T, R)>> for TimelyStack<((K, V), T, R)>
+impl<K,V,T,R> BuilderInput<K, V> for TimelyStack<((K::Owned, V::Owned), T, R)>
 where
-    K: Ord + Columnation + Clone + 'static,
-    V: Ord + Columnation + Clone + 'static,
+    K: BatchContainer,
+    for<'a> K::ReadItem<'a>: PartialEq<&'a K::Owned>,
+    K::Owned: Ord + Columnation + Clone + 'static,
+    V: BatchContainer,
+    for<'a> V::ReadItem<'a>: PartialEq<&'a V::Owned>,
+    V::Owned: Ord + Columnation + Clone + 'static,
     T: Timestamp + Lattice + Columnation + Clone + 'static,
     R: Ord + Clone + Semigroup + Columnation + 'static,
-{
-    type Key<'a> = &'a K;
-    type Val<'a> = &'a V;
-    type Time = T;
-    type Diff = R;
-
-    fn into_parts<'a>(((key, val), time, diff): Self::Item<'a>) -> (Self::Key<'a>, Self::Val<'a>, Self::Time, Self::Diff) {
-        (key, val, time.clone(), diff.clone())
-    }
-
-    fn key_eq(this: &&K, other: &K) -> bool {
-        *this == other
-    }
-
-    fn val_eq(this: &&V, other: &V) -> bool {
-        *this == other
-    }
-}
-
-mod flatcontainer {
-    use timely::container::columnation::{Columnation, TimelyStack};
-    use timely::container::flatcontainer::{Containerized, FlatStack, Push, Region};
-    use timely::progress::Timestamp;
-    use crate::difference::Semigroup;
-    use crate::lattice::Lattice;
-    use crate::trace::implementations::{BuilderInput, FlatLayout, Layout, OffsetList, Update};
-
-    impl<U: Update> Layout for FlatLayout<U>
-        where
-            U::Key: Containerized,
-            for<'a> <U::Key as Containerized>::Region: Push<U::Key> + Push<<<U::Key as Containerized>::Region as Region>::ReadItem<'a>>,
-            for<'a> <<U::Key as Containerized>::Region as Region>::ReadItem<'a>: Copy + Ord,
-            U::Val: Containerized,
-            for<'a> <U::Val as Containerized>::Region: Push<U::Val> + Push<<<U::Val as Containerized>::Region as Region>::ReadItem<'a>>,
-            for<'a> <<U::Val as Containerized>::Region as Region>::ReadItem<'a>: Copy + Ord,
-            U::Time: Containerized,
-            <U::Time as Containerized>::Region: Region<Owned=U::Time>,
-            for<'a> <U::Time as Containerized>::Region: Push<U::Time> + Push<<<U::Time as Containerized>::Region as Region>::ReadItem<'a>>,
-            for<'a> <<U::Time as Containerized>::Region as Region>::ReadItem<'a>: Copy + Ord,
-            U::Diff: Containerized,
-            <U::Diff as Containerized>::Region: Region<Owned=U::Diff>,
-            for<'a> <U::Diff as Containerized>::Region: Push<U::Diff> + Push<<<U::Diff as Containerized>::Region as Region>::ReadItem<'a>>,
-            for<'a> <<U::Diff as Containerized>::Region as Region>::ReadItem<'a>: Copy + Ord,
-    {
-        type Target = U;
-        type KeyContainer = FlatStack<<U::Key as Containerized>::Region>;
-        type ValContainer = FlatStack<<U::Val as Containerized>::Region>;
-        type TimeContainer = FlatStack<<U::Time as Containerized>::Region>;
-        type DiffContainer = FlatStack<<U::Diff as Containerized>::Region>;
-        type OffsetContainer = OffsetList;
-    }
-
-    impl<K,V,T,R> BuilderInput<FlatLayout<((K, V), T, R)>> for TimelyStack<((K, V), T, R)>
-    where
-        K: Ord + Columnation + Containerized + Clone + 'static,
-        for<'a> K::Region: Push<K> + Push<<K::Region as Region>::ReadItem<'a>>,
-        for<'a> <K::Region as Region>::ReadItem<'a>: Copy + Ord,
-        for<'a> K: PartialEq<<K::Region as Region>::ReadItem<'a>>,
-        V: Ord + Columnation + Containerized + Clone + 'static,
-        for<'a> V::Region: Push<V> + Push<<V::Region as Region>::ReadItem<'a>>,
-        for<'a> <V::Region as Region>::ReadItem<'a>: Copy + Ord,
-        for<'a> V: PartialEq<<V::Region as Region>::ReadItem<'a>>,
-        T: Timestamp + Lattice + Columnation + Containerized + Clone + 'static,
-        for<'a> T::Region: Region<Owned=T> + Push<T> + Push<<T::Region as Region>::ReadItem<'a>>,
-        for<'a> <T::Region as Region>::ReadItem<'a>: Copy + Ord,
-        for<'a> T: PartialEq<<T::Region as Region>::ReadItem<'a>>,
-        R: Ord + Clone + Semigroup + Columnation + Containerized + 'static,
-        for<'a> R::Region: Region<Owned=R> + Push<R> + Push<<R::Region as Region>::ReadItem<'a>>,
-        for<'a> <R::Region as Region>::ReadItem<'a>: Copy + Ord,
-        for<'a> R: PartialEq<<R::Region as Region>::ReadItem<'a>>,
-    {
-        type Key<'a> = &'a K;
-        type Val<'a> = &'a V;
-        type Time = T;
-        type Diff = R;
-
-        fn into_parts<'a>(((key, val), time, diff): Self::Item<'a>) -> (Self::Key<'a>, Self::Val<'a>, Self::Time, Self::Diff) {
-            (key, val, time.clone(), diff.clone())
-        }
-
-        fn key_eq(this: &&K, other: <<K as Containerized>::Region as Region>::ReadItem<'_>) -> bool {
-            **this == <K as Containerized>::Region::reborrow(other)
-        }
-
-        fn val_eq(this: &&V, other: <<V as Containerized>::Region as Region>::ReadItem<'_>) -> bool {
-            **this == <V as Containerized>::Region::reborrow(other)
-        }
-    }
-}
-
-impl<K,V,T,R> BuilderInput<Preferred<K, V, T, R>> for TimelyStack<((<K as ToOwned>::Owned, <V as ToOwned>::Owned), T, R)>
-where
-    K: Ord+ToOwned+PreferredContainer + ?Sized,
-    K::Owned: Columnation + Ord+Clone+'static,
-    for<'a> <<K as PreferredContainer>::Container as BatchContainer>::ReadItem<'a> : IntoOwned<'a, Owned = K::Owned>,
-    V: Ord+ToOwned+PreferredContainer + ?Sized,
-    V::Owned: Columnation + Ord+Clone+'static,
-    for<'a> <<V as PreferredContainer>::Container as BatchContainer>::ReadItem<'a> : IntoOwned<'a, Owned = V::Owned>,
-    T: Columnation + Ord+Clone+Lattice+Timestamp,
-    R: Columnation + Ord+Clone+Semigroup+'static,
 {
     type Key<'a> = &'a K::Owned;
     type Val<'a> = &'a V::Owned;
@@ -481,12 +390,76 @@ where
         (key, val, time.clone(), diff.clone())
     }
 
-    fn key_eq(this: &&K::Owned, other: <<K as PreferredContainer>::Container as BatchContainer>::ReadItem<'_>) -> bool {
-        <<K as PreferredContainer>::Container as BatchContainer>::reborrow(other).eq(&<<K as PreferredContainer>::Container as BatchContainer>::reborrow(<<<K as PreferredContainer>::Container as BatchContainer>::ReadItem<'_> as IntoOwned>::borrow_as(this)))
+    fn key_eq(this: &&K::Owned, other: K::ReadItem<'_>) -> bool {
+        K::reborrow(other) == *this
     }
 
-    fn val_eq(this: &&V::Owned, other: <<V as PreferredContainer>::Container as BatchContainer>::ReadItem<'_>) -> bool {
-        <<V as PreferredContainer>::Container as BatchContainer>::reborrow(other).eq(&<<V as PreferredContainer>::Container as BatchContainer>::reborrow(<<<V as PreferredContainer>::Container as BatchContainer>::ReadItem<'_> as IntoOwned>::borrow_as(this)))
+    fn val_eq(this: &&V::Owned, other: V::ReadItem<'_>) -> bool {
+        V::reborrow(other) == *this
+    }
+}
+
+mod flatcontainer {
+    use timely::container::flatcontainer::{Containerized, FlatStack, IntoOwned, Push, Region};
+    use timely::container::flatcontainer::impls::tuple::{TupleABCRegion, TupleABRegion};
+    use crate::trace::implementations::{BatchContainer, BuilderInput, FlatLayout, Layout, OffsetList, Update};
+
+    impl<U: Update> Layout for FlatLayout<U>
+    where
+        U::Key: Containerized,
+        for<'a> <U::Key as Containerized>::Region: Push<U::Key> + Push<<<U::Key as Containerized>::Region as Region>::ReadItem<'a>>,
+        for<'a> <<U::Key as Containerized>::Region as Region>::ReadItem<'a>: Copy + Ord,
+        U::Val: Containerized,
+        for<'a> <U::Val as Containerized>::Region: Push<U::Val> + Push<<<U::Val as Containerized>::Region as Region>::ReadItem<'a>>,
+        for<'a> <<U::Val as Containerized>::Region as Region>::ReadItem<'a>: Copy + Ord,
+        U::Time: Containerized,
+        <U::Time as Containerized>::Region: Region<Owned=U::Time>,
+        for<'a> <U::Time as Containerized>::Region: Push<U::Time> + Push<<<U::Time as Containerized>::Region as Region>::ReadItem<'a>>,
+        for<'a> <<U::Time as Containerized>::Region as Region>::ReadItem<'a>: Copy + Ord,
+        U::Diff: Containerized,
+        <U::Diff as Containerized>::Region: Region<Owned=U::Diff>,
+        for<'a> <U::Diff as Containerized>::Region: Push<U::Diff> + Push<<<U::Diff as Containerized>::Region as Region>::ReadItem<'a>>,
+        for<'a> <<U::Diff as Containerized>::Region as Region>::ReadItem<'a>: Copy + Ord,
+    {
+        type Target = U;
+        type KeyContainer = FlatStack<<U::Key as Containerized>::Region>;
+        type ValContainer = FlatStack<<U::Val as Containerized>::Region>;
+        type TimeContainer = FlatStack<<U::Time as Containerized>::Region>;
+        type DiffContainer = FlatStack<<U::Diff as Containerized>::Region>;
+        type OffsetContainer = OffsetList;
+    }
+
+    impl<K,KBC,V,VBC,T,R> BuilderInput<KBC, VBC> for FlatStack<TupleABCRegion<TupleABRegion<K,V>,T,R>>
+    where
+        K: Region + Clone + 'static,
+        for<'a> K::ReadItem<'a>: Copy + Ord,
+        KBC: BatchContainer,
+        for<'a> KBC::ReadItem<'a>: PartialEq<K::ReadItem<'a>>,
+        for<'a> V: Region + Clone + 'static,
+        for<'a> V::ReadItem<'a>: Copy + Ord,
+        VBC: BatchContainer,
+        for<'a> VBC::ReadItem<'a>: PartialEq<V::ReadItem<'a>>,
+        for<'a> T: Region + Clone + 'static,
+        for<'a> T::ReadItem<'a>: Copy + Ord,
+        for<'a> R: Region + Clone + 'static,
+        for<'a> R::ReadItem<'a>: Copy + Ord,
+    {
+        type Key<'a> = K::ReadItem<'a>;
+        type Val<'a> = V::ReadItem<'a>;
+        type Time = T::Owned;
+        type Diff = R::Owned;
+
+        fn into_parts<'a>(((key, val), time, diff): Self::Item<'a>) -> (Self::Key<'a>, Self::Val<'a>, Self::Time, Self::Diff) {
+            (key, val, time.into_owned(), diff.into_owned())
+        }
+
+        fn key_eq(this: &Self::Key<'_>, other: KBC::ReadItem<'_>) -> bool {
+            KBC::reborrow(other) == K::reborrow(*this)
+        }
+
+        fn val_eq(this: &Self::Val<'_>, other: VBC::ReadItem<'_>) -> bool {
+            VBC::reborrow(other) == V::reborrow(*this)
+        }
     }
 }
 
