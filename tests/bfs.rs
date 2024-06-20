@@ -17,7 +17,7 @@ use differential_dataflow::Collection;
 use differential_dataflow::operators::*;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arrange;
-use differential_dataflow::trace::implementations::ord_neu::{FlatKeySpine, FlatValSpine};
+use differential_dataflow::trace::implementations::ord_neu::{FlatKeySpineDefault, FlatValSpineDefault};
 
 type Node = usize;
 type Edge = (Node, Node);
@@ -246,8 +246,8 @@ fn bfs_differential_flat(
             let (edge_input, edges) = scope.new_collection();
 
             let c = bfs_flat(&edges, &roots).map(|(_, dist)| (dist, ()));
-            let arranged = c.arrange::<FlatKeySpine<usize, _, isize, Vec<((usize, ()), _, _)>>>();
-            type T2 = FlatValSpine<usize, isize, usize, isize, Vec<((usize, isize), usize, isize)>>;
+            let arranged = c.arrange::<FlatKeySpineDefault<usize, usize, isize, Vec<((usize, ()), _, _)>>>();
+            type T2 = FlatValSpineDefault<usize, isize, usize, isize, Vec<((usize, isize), usize, isize)>>;
             let reduced = arranged.reduce_abelian::<_, _, _, T2>("Count", |_k, s, t| {
                 t.push((s[0].1.clone(), isize::from(1i8)))
             });
@@ -315,7 +315,7 @@ where
         let edges = edges.enter(&inner.scope());
         let nodes = nodes.enter(&inner.scope());
 
-        type Spine<K, V, T, R = isize> = FlatValSpine<K, V, T, R, Vec<((K, V), T, R)>>;
+        type Spine<K, V, T, R = isize> = FlatValSpineDefault<K, V, T, R, Vec<((K, V), T, R)>>;
         let arranged1 = inner.arrange::<Spine<Node, Node, Product<G::Timestamp, _>>>();
         let arranged2 = edges.arrange::<Spine<Node, Node, Product<G::Timestamp, _>>>();
         arranged1

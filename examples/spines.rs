@@ -65,9 +65,9 @@ fn main() {
                         .probe_with(&mut probe);
                 },
                 "flat" => {
-                    use differential_dataflow::trace::implementations::ord_neu::FlatKeySpine;
-                    let data = data.arrange::<FlatKeySpine<String,_,isize,_>>();
-                    let keys = keys.arrange::<FlatKeySpine<String,_,isize,_>>();
+                    use differential_dataflow::trace::implementations::ord_neu::FlatKeySpineDefault;
+                    let data = data.arrange::<FlatKeySpineDefault<String,usize,isize, _>>();
+                    let keys = keys.arrange::<FlatKeySpineDefault<String,usize,isize,_>>();
                     keys.join_core(&data, |_k, (), ()| Option::<()>::None)
                         .probe_with(&mut probe);
                 }

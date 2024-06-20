@@ -140,9 +140,9 @@ where
     type OffsetContainer = OffsetList;
 }
 
-/// A layout based on timely stacks
-pub struct FlatLayout<U: Update> {
-    phantom: std::marker::PhantomData<U>,
+/// A layout based on flat containers.
+pub struct FlatLayout<K, V, T, R> {
+    phantom: std::marker::PhantomData<(K, V, T, R)>,
 }
 
 /// A type with a preferred container.
@@ -400,49 +400,68 @@ where
 }
 
 mod flatcontainer {
-    use timely::container::flatcontainer::{Containerized, FlatStack, IntoOwned, Push, Region};
+    use timely::container::flatcontainer::{FlatStack, IntoOwned, Push, Region};
     use timely::container::flatcontainer::impls::tuple::{TupleABCRegion, TupleABRegion};
+    use timely::progress::Timestamp;
+
+    use crate::difference::Semigroup;
+    use crate::lattice::Lattice;
     use crate::trace::implementations::{BatchContainer, BuilderInput, FlatLayout, Layout, OffsetList, Update};
 
-    impl<U: Update> Layout for FlatLayout<U>
+    impl<K, V, T, R> Update for FlatLayout<K, V, T, R>
     where
-        U::Key: Containerized,
-        for<'a> <U::Key as Containerized>::Region: Push<U::Key> + Push<<<U::Key as Containerized>::Region as Region>::ReadItem<'a>>,
-        for<'a> <<U::Key as Containerized>::Region as Region>::ReadItem<'a>: Copy + Ord,
-        U::Val: Containerized,
-        for<'a> <U::Val as Containerized>::Region: Push<U::Val> + Push<<<U::Val as Containerized>::Region as Region>::ReadItem<'a>>,
-        for<'a> <<U::Val as Containerized>::Region as Region>::ReadItem<'a>: Copy + Ord,
-        U::Time: Containerized,
-        <U::Time as Containerized>::Region: Region<Owned=U::Time>,
-        for<'a> <U::Time as Containerized>::Region: Push<U::Time> + Push<<<U::Time as Containerized>::Region as Region>::ReadItem<'a>>,
-        for<'a> <<U::Time as Containerized>::Region as Region>::ReadItem<'a>: Copy + Ord,
-        U::Diff: Containerized,
-        <U::Diff as Containerized>::Region: Region<Owned=U::Diff>,
-        for<'a> <U::Diff as Containerized>::Region: Push<U::Diff> + Push<<<U::Diff as Containerized>::Region as Region>::ReadItem<'a>>,
-        for<'a> <<U::Diff as Containerized>::Region as Region>::ReadItem<'a>: Copy + Ord,
+        K: Region,
+        V: Region,
+        T: Region,
+        R: Region,
+        K::Owned: Ord + Clone + 'static,
+        V::Owned: Ord + Clone + 'static,
+        T::Owned: Ord + Clone + Lattice + Timestamp + 'static,
+        R::Owned: Ord + Semigroup + 'static,
     {
-        type Target = U;
-        type KeyContainer = FlatStack<<U::Key as Containerized>::Region>;
-        type ValContainer = FlatStack<<U::Val as Containerized>::Region>;
-        type TimeContainer = FlatStack<<U::Time as Containerized>::Region>;
-        type DiffContainer = FlatStack<<U::Diff as Containerized>::Region>;
+        type Key = K::Owned;
+        type Val = V::Owned;
+        type Time = T::Owned;
+        type Diff = R::Owned;
+    }
+
+    impl<K, V, T, R> Layout for FlatLayout<K, V, T, R>
+    where
+        K: Region + Push<<K as Region>::Owned> + for<'a> Push<<K as Region>::ReadItem<'a>> + 'static,
+        V: Region + Push<<V as Region>::Owned> + for<'a> Push<<V as Region>::ReadItem<'a>> + 'static,
+        T: Region + Push<<T as Region>::Owned> + for<'a> Push<<T as Region>::ReadItem<'a>> + 'static,
+        R: Region + Push<<R as Region>::Owned> + for<'a> Push<<R as Region>::ReadItem<'a>> + 'static,
+        K::Owned: Ord + Clone + 'static,
+        V::Owned: Ord + Clone + 'static,
+        T::Owned: Ord + Clone + Lattice + Timestamp + 'static,
+        R::Owned: Ord + Semigroup + 'static,
+        for<'a> K::ReadItem<'a>: Copy + Ord,
+        for<'a> V::ReadItem<'a>: Copy + Ord,
+        for<'a> T::ReadItem<'a>: Copy + Ord,
+        for<'a> R::ReadItem<'a>: Copy + Ord,
+    {
+        type Target = Self;
+        type KeyContainer = FlatStack<K>;
+        type ValContainer = FlatStack<V>;
+        type TimeContainer = FlatStack<T>;
+        type DiffContainer = FlatStack<R>;
         type OffsetContainer = OffsetList;
     }
 
     impl<K,KBC,V,VBC,T,R> BuilderInput<KBC, VBC> for FlatStack<TupleABCRegion<TupleABRegion<K,V>,T,R>>
     where
         K: Region + Clone + 'static,
+        V: Region + Clone + 'static,
+        T: Region + Clone + 'static,
+        R: Region + Clone + 'static,
         for<'a> K::ReadItem<'a>: Copy + Ord,
-        KBC: BatchContainer,
-        for<'a> KBC::ReadItem<'a>: PartialEq<K::ReadItem<'a>>,
-        for<'a> V: Region + Clone + 'static,
         for<'a> V::ReadItem<'a>: Copy + Ord,
-        VBC: BatchContainer,
-        for<'a> VBC::ReadItem<'a>: PartialEq<V::ReadItem<'a>>,
-        for<'a> T: Region + Clone + 'static,
         for<'a> T::ReadItem<'a>: Copy + Ord,
-        for<'a> R: Region + Clone + 'static,
         for<'a> R::ReadItem<'a>: Copy + Ord,
+        KBC: BatchContainer,
+        VBC: BatchContainer,
+        for<'a> KBC::ReadItem<'a>: PartialEq<K::ReadItem<'a>>,
+        for<'a> VBC::ReadItem<'a>: PartialEq<V::ReadItem<'a>>,
     {
         type Key<'a> = K::ReadItem<'a>;
         type Val<'a> = V::ReadItem<'a>;
