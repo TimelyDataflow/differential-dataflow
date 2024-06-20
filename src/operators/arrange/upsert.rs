@@ -181,16 +181,23 @@ where
             let mut priority_queue = BinaryHeap::<std::cmp::Reverse<(G::Timestamp, K, Option<V>)>>::new();
             let mut updates = Vec::new();
 
+            let mut buffers = Vec::new();
+
             move |input, output| {
 
-                // Stash capabilities and associated data (ordered by time).
+                // Read input out without doing work, to avoid trapping overloaded workers.
                 input.for_each(|cap, data| {
                     capabilities.insert(cap.retain());
                     data.swap(&mut buffer);
-                    for (key, val, time) in buffer.drain(..) {
+                    buffers.push(std::mem::take(&mut buffer));
+                });
+
+                // Stash capabilities and associated data (ordered by time).
+                for buffer in buffers.drain(..) {
+                    for (key, val, time) in buffer {
                         priority_queue.push(std::cmp::Reverse((time, key, val)))
                     }
-                });
+                }
 
                 // Assert that the frontier never regresses.
                 assert!(PartialOrder::less_equal(&prev_frontier.borrow(), &input.frontier().frontier()));
