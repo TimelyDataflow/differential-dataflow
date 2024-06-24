@@ -7,23 +7,25 @@ use timely::{Container, Data, PartialOrder};
 use timely::container::flatcontainer::{Push, FlatStack, Region, ReserveItems};
 use timely::container::flatcontainer::impls::tuple::{TupleABCRegion, TupleABRegion};
 
-use crate::difference::Semigroup;
+use crate::difference::{IsZero, Semigroup};
 use crate::trace::implementations::merge_batcher::Merger;
 use crate::trace::Builder;
 use crate::trace::cursor::IntoOwned;
 
-/// A merger for flat stacks. `T` describes the
-pub struct FlatcontainerMerger<T, R, MC> {
-    _marker: PhantomData<(T, R, MC)>,
+/// A merger for flat stacks.
+///
+/// `MC` is a [`Region`] that implements [`MergerChunk`].
+pub struct FlatcontainerMerger<MC> {
+    _marker: PhantomData<MC>,
 }
 
-impl<T, R, MC> Default for FlatcontainerMerger<T, R, MC> {
+impl<MC> Default for FlatcontainerMerger<MC> {
     fn default() -> Self {
         Self { _marker: PhantomData, }
     }
 }
 
-impl<T, R, MC: Region> FlatcontainerMerger<T, R, MC> {
+impl<MC: Region> FlatcontainerMerger<MC> {
     const BUFFER_SIZE_BYTES: usize = 8 << 10;
     fn chunk_capacity(&self) -> usize {
         let size = ::std::mem::size_of::<MC::Index>();
@@ -61,8 +63,12 @@ pub trait MergerChunk: Region {
     type Val<'a>: Ord where Self: 'a;
     /// The time of the update
     type Time<'a>: Ord where Self: 'a;
+    /// The owned time type.
+    type TimeOwned;
     /// The diff of the update
     type Diff<'a> where Self: 'a;
+    /// The owned diff type.
+    type DiffOwned;
 
     /// Split a read item into its constituents. Must be cheap.
     fn into_parts<'a>(item: Self::ReadItem<'a>) -> (Self::Key<'a>, Self::Val<'a>, Self::Time<'a>, Self::Diff<'a>);
@@ -81,47 +87,48 @@ where
     type Key<'a> = K::ReadItem<'a> where Self: 'a;
     type Val<'a> = V::ReadItem<'a> where Self: 'a;
     type Time<'a> = T::ReadItem<'a> where Self: 'a;
+    type TimeOwned = T::Owned;
     type Diff<'a> = R::ReadItem<'a> where Self: 'a;
+    type DiffOwned = R::Owned;
 
     fn into_parts<'a>(((key, val), time, diff): Self::ReadItem<'a>) -> (Self::Key<'a>, Self::Val<'a>, Self::Time<'a>, Self::Diff<'a>) {
         (key, val, time, diff)
     }
 }
 
-impl<T, R, FR> Merger for FlatcontainerMerger<T, R, FR>
+impl<MC> Merger for FlatcontainerMerger<MC>
 where
-    for<'a> T: Ord + PartialOrder + PartialOrder<FR::Time<'a>> + Data,
-    for<'a> R: Default + Semigroup + Semigroup<FR::Diff<'a>> + Data,
-    for<'a> FR: MergerChunk + Clone + 'static
-        + ReserveItems<<FR as Region>::ReadItem<'a>>
-        + Push<<FR as Region>::ReadItem<'a>>
-        + Push<((FR::Key<'a>, FR::Val<'a>), FR::Time<'a>, &'a R)>
-        + Push<((FR::Key<'a>, FR::Val<'a>), FR::Time<'a>, FR::Diff<'a>)>,
-    for<'a> FR::Time<'a>: PartialOrder<T> + Copy + IntoOwned<'a, Owned=T>,
-    for<'a> FR::Diff<'a>: IntoOwned<'a, Owned=R>,
-    for<'a> FR::ReadItem<'a>: std::fmt::Debug,
+    for<'a> MC: MergerChunk + Clone + 'static
+        + ReserveItems<<MC as Region>::ReadItem<'a>>
+        + Push<<MC as Region>::ReadItem<'a>>
+        + Push<((MC::Key<'a>, MC::Val<'a>), MC::Time<'a>, &'a MC::DiffOwned)>
+        + Push<((MC::Key<'a>, MC::Val<'a>), MC::Time<'a>, MC::Diff<'a>)>,
+    for<'a> MC::Time<'a>: PartialOrder<MC::TimeOwned> + Copy + IntoOwned<'a, Owned=MC::TimeOwned>,
+    for<'a> MC::Diff<'a>: IntoOwned<'a, Owned = MC::DiffOwned>,
+    for<'a> MC::TimeOwned: Ord + PartialOrder + PartialOrder<MC::Time<'a>> + Data,
+    for<'a> MC::DiffOwned: Default + Semigroup + Semigroup<MC::Diff<'a>> + Data,
 {
-    type Time = T;
-    type Chunk = FlatStack<FR>;
-    type Output = FlatStack<FR>;
+    type Time = MC::TimeOwned;
+    type Chunk = FlatStack<MC>;
+    type Output = FlatStack<MC>;
 
     fn merge(&mut self, list1: Vec<Self::Chunk>, list2: Vec<Self::Chunk>, output: &mut Vec<Self::Chunk>, stash: &mut Vec<Self::Chunk>) {
         let mut list1 = list1.into_iter();
         let mut list2 = list2.into_iter();
 
-        let mut head1 = <FlatStackQueue<FR>>::from(list1.next().unwrap_or_default());
-        let mut head2 = <FlatStackQueue<FR>>::from(list2.next().unwrap_or_default());
+        let mut head1 = <FlatStackQueue<MC>>::from(list1.next().unwrap_or_default());
+        let mut head2 = <FlatStackQueue<MC>>::from(list2.next().unwrap_or_default());
 
         let mut result = self.empty(stash);
 
-        let mut diff = R::default();
+        let mut diff = MC::DiffOwned::default();
 
         // while we have valid data in each input, merge.
         while !head1.is_empty() && !head2.is_empty() {
             while (result.capacity() - result.len()) > 0 && !head1.is_empty() && !head2.is_empty() {
                 let cmp = {
-                    let (key1, val1, time1, _diff) = FR::into_parts(head1.peek());
-                    let (key2, val2, time2, _diff) = FR::into_parts(head2.peek());
+                    let (key1, val1, time1, _diff) = MC::into_parts(head1.peek());
+                    let (key2, val2, time2, _diff) = MC::into_parts(head2.peek());
                     ((key1, val1), time1).cmp(&((key2, val2), time2))
                 };
                 // TODO: The following less/greater branches could plausibly be a good moment for
@@ -135,8 +142,8 @@ where
                         result.copy(head2.pop());
                     }
                     Ordering::Equal => {
-                        let (key, val, time1, diff1) = FR::into_parts(head1.pop());
-                        let (_key, _val, _time2, diff2) = FR::into_parts(head2.pop());
+                        let (key, val, time1, diff1) = MC::into_parts(head1.pop());
+                        let (_key, _val, _time2, diff2) = MC::into_parts(head2.pop());
                         diff1.clone_onto(&mut diff);
                         diff.plus_equals(&diff2);
                         if !diff.is_zero() {
@@ -207,7 +214,7 @@ where
         let mut ready = self.empty(stash);
 
         for buffer in merged {
-            for (key, val, time, diff) in buffer.iter().map(FR::into_parts) {
+            for (key, val, time, diff) in buffer.iter().map(MC::into_parts) {
                 if upper.less_equal(&time) {
                     frontier.insert_with(&time, |time| (*time).into_owned());
                     if keep.len() == keep.capacity() && !keep.is_empty() {
@@ -247,7 +254,7 @@ where
         {
             let mut prev_keyval = None;
             for buffer in chain.iter() {
-                for (key, val, time, _diff) in buffer.iter().map(FR::into_parts) {
+                for (key, val, time, _diff) in buffer.iter().map(MC::into_parts) {
                     if !upper.less_equal(&time) {
                         if let Some((p_key, p_val)) = prev_keyval {
                             debug_assert!(p_key <= key);

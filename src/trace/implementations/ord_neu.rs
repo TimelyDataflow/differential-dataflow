@@ -11,12 +11,13 @@
 use std::rc::Rc;
 use timely::container::columnation::{TimelyStack};
 use timely::container::flatcontainer::{Containerized, FlatStack};
+use timely::container::flatcontainer::impls::tuple::{TupleABCRegion, TupleABRegion};
 use crate::trace::implementations::chunker::{ColumnationChunker, ContainerChunker, VecChunker};
 
 use crate::trace::implementations::spine_fueled::Spine;
 use crate::trace::implementations::merge_batcher::{MergeBatcher, VecMerger};
 use crate::trace::implementations::merge_batcher_col::ColumnationMerger;
-use crate::trace::implementations::merge_batcher_flat::FlatcontainerMerger;
+use crate::trace::implementations::merge_batcher_flat::{FlatcontainerMerger, MergerChunk};
 use crate::trace::rc_blanket_impls::RcBuilder;
 
 use super::{Update, Layout, Vector, TStack, Preferred, FlatLayout};
@@ -41,15 +42,17 @@ pub type ColValSpine<K, V, T, R> = Spine<
 >;
 
 /// A trace implementation backed by flatcontainer storage.
-pub type FlatValSpine<K, V, T, R, C> = Spine<
-    Rc<OrdValBatch<FlatLayout<((K,V),T,R)>>>,
-    MergeBatcher<
-        C,
-        ContainerChunker<FlatStack<<((K,V),T,R) as Containerized>::Region>>,
-        FlatcontainerMerger<T, R, <((K,V),T,R) as Containerized>::Region>,
-        T,
-    >,
-    RcBuilder<OrdValBuilder<FlatLayout<((K,V),T,R)>, FlatStack<<((K,V),T,R) as Containerized>::Region>>>,
+pub type FlatValSpine<L, R, C> = Spine<
+    Rc<OrdValBatch<L>>,
+    MergeBatcher<C, ContainerChunker<FlatStack<R>>, FlatcontainerMerger<R>, <R as MergerChunk>::TimeOwned>,
+    RcBuilder<OrdValBuilder<L, FlatStack<R>>>,
+>;
+
+/// A trace implementation backed by flatcontainer storage, using [`FlatLayout`] as the layout.
+pub type FlatValSpineDefault<K, V, T, R, C> = FlatValSpine<
+    FlatLayout<<K as Containerized>::Region, <V as Containerized>::Region, <T as Containerized>::Region, <R as Containerized>::Region>,
+    TupleABCRegion<TupleABRegion<<K as Containerized>::Region, <V as Containerized>::Region>, <T as Containerized>::Region, <R as Containerized>::Region>,
+    C,
 >;
 
 /// A trace implementation using a spine of ordered lists.
@@ -69,15 +72,17 @@ pub type ColKeySpine<K, T, R> = Spine<
 >;
 
 /// A trace implementation backed by flatcontainer storage.
-pub type FlatKeySpine<K, T, R, C> = Spine<
-    Rc<OrdKeyBatch<FlatLayout<((K,()),T,R)>>>,
-    MergeBatcher<
-        C,
-        ContainerChunker<FlatStack<<((K,()),T,R) as Containerized>::Region>>,
-        FlatcontainerMerger<T, R, <((K,()),T,R) as Containerized>::Region>,
-        T,
-    >,
-    RcBuilder<OrdKeyBuilder<FlatLayout<((K,()),T,R)>, FlatStack<<((K,()),T,R) as Containerized>::Region>>>,
+pub type FlatKeySpine<L, R, C> = Spine<
+    Rc<OrdKeyBatch<L>>,
+    MergeBatcher<C, ContainerChunker<FlatStack<R>>, FlatcontainerMerger<R>, <R as MergerChunk>::TimeOwned>,
+    RcBuilder<OrdKeyBuilder<L, FlatStack<R>>>,
+>;
+
+/// A trace implementation backed by flatcontainer storage, using [`FlatLayout`] as the layout.
+pub type FlatKeySpineDefault<K,T,R, C> = FlatKeySpine<
+    FlatLayout<<K as Containerized>::Region, <() as Containerized>::Region, <T as Containerized>::Region, <R as Containerized>::Region>,
+    TupleABCRegion<TupleABRegion<<K as Containerized>::Region, <() as Containerized>::Region>, <T as Containerized>::Region, <R as Containerized>::Region>,
+    C,
 >;
 
 /// A trace implementation backed by columnar storage.
