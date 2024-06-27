@@ -75,6 +75,18 @@ pub trait MergerChunk: Region {
 
     /// Compare two items, ignoring the diff.
     fn cmp_without_diff<'a, 'b>(item1: Self::ReadItem<'a>, item2: Self::ReadItem<'b>) -> Ordering;
+
+    /// Converts a key into one with a narrower lifetime.
+    #[must_use]
+    fn reborrow_key<'b, 'a: 'b>(item: Self::Key<'a>) -> Self::Key<'b>
+    where
+        Self: 'a;
+
+    /// Converts a value into one with a narrower lifetime.
+    #[must_use]
+    fn reborrow_val<'b, 'a: 'b>(item: Self::Val<'a>) -> Self::Val<'b>
+    where
+        Self: 'a;
 }
 
 impl<K,V,T,R> MergerChunk for TupleABCRegion<TupleABRegion<K, V>, T, R>
@@ -100,6 +112,20 @@ where
 
     fn cmp_without_diff<'a, 'b>(((key1, val1), time1, _diff1): Self::ReadItem<'a>, ((key2, val2), time2, _diff2): Self::ReadItem<'b>) -> Ordering {
         (K::reborrow(key1), V::reborrow(val1), T::reborrow(time1)).cmp(&(K::reborrow(key2), V::reborrow(val2), T::reborrow(time2)))
+    }
+
+    fn reborrow_key<'b, 'a: 'b>(item: Self::Key<'a>) -> Self::Key<'b>
+    where
+        Self: 'a
+    {
+        K::reborrow(item)
+    }
+
+    fn reborrow_val<'b, 'a: 'b>(item: Self::Val<'a>) -> Self::Val<'b>
+    where
+        Self: 'a
+    {
+        V::reborrow(item)
     }
 }
 
