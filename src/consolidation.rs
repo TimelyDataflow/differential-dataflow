@@ -15,10 +15,10 @@ use std::collections::VecDeque;
 use timely::Container;
 use timely::container::{ContainerBuilder, PushInto, SizableContainer};
 use timely::container::flatcontainer::{FlatStack, Push, Region};
-use timely::container::flatcontainer::impls::tuple::{TupleABCRegion, TupleABRegion};
 use crate::Data;
 use crate::difference::{IsZero, Semigroup};
 use crate::trace::cursor::IntoOwned;
+use crate::trace::implementations::merge_batcher_flat::MergerChunk;
 
 /// Sorts and consolidates `vec`.
 ///
@@ -280,27 +280,28 @@ where
     }
 }
 
-impl<K, V, T, R> ConsolidateLayout for FlatStack<TupleABCRegion<TupleABRegion<K, V>, T, R>>
+impl<MC> ConsolidateLayout for FlatStack<MC>
 where
-    for<'a> K: Region + Push<<K as Region>::ReadItem<'a>> + Clone + 'static,
-    for<'a> K::ReadItem<'a>: Ord + Copy,
-    for<'a> V: Region + Push<<V as Region>::ReadItem<'a>> + Clone + 'static,
-    for<'a> V::ReadItem<'a>: Ord + Copy,
-    for<'a> T: Region + Push<<T as Region>::ReadItem<'a>> + Clone + 'static,
-    for<'a> T::ReadItem<'a>: Ord + Copy,
-    R: Region + Push<<R as Region>::Owned> + Clone + 'static,
-    for<'a> R::Owned: Semigroup<R::ReadItem<'a>>,
+    MC: MergerChunk
+        + Region
+        + Clone
+        + for<'a> Push<((MC::Key<'a>, MC::Val<'a>), MC::Time<'a>, MC::DiffOwned)>
+        + 'static,
+    for<'a> MC::Diff<'a>: IntoOwned<'a, Owned = MC::DiffOwned>,
+    for<'a> MC::DiffOwned: Semigroup<MC::Diff<'a>>,
+    for<'a> MC::ReadItem<'a>: Copy,
 {
-    type Key<'a> = (K::ReadItem<'a>, V::ReadItem<'a>, T::ReadItem<'a>) where Self: 'a;
-    type Diff<'a> = R::ReadItem<'a> where Self: 'a;
-    type DiffOwned = R::Owned;
+    type Key<'a> = (MC::Key<'a>, MC::Val<'a>, MC::Time<'a>) where Self: 'a;
+    type Diff<'a> = MC::Diff<'a> where Self: 'a;
+    type DiffOwned = MC::DiffOwned;
 
-    fn into_parts(((key, val), time, diff): Self::Item<'_>) -> (Self::Key<'_>, Self::Diff<'_>) {
+    fn into_parts(item: Self::Item<'_>) -> (Self::Key<'_>, Self::Diff<'_>) {
+        let (key, val, time, diff) = MC::into_parts(item);
         ((key, val, time), diff)
     }
 
-    fn cmp<'a>(((key1, val1), time1, _diff1): &Self::Item<'_>, ((key2, val2), time2, _diff2): &Self::Item<'_>) -> Ordering {
-        (K::reborrow(*key1), V::reborrow(*val1), T::reborrow(*time1)).cmp(&(K::reborrow(*key2), V::reborrow(*val2), T::reborrow(*time2)))
+    fn cmp<'a>(item1: &Self::Item<'_>, item2: &Self::Item<'_>) -> Ordering {
+        MC::cmp_without_diff(*item1, *item2)
     }
 
     fn push_with_diff(&mut self, (key, value, time): Self::Key<'_>, diff: Self::DiffOwned) {
