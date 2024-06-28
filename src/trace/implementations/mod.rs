@@ -406,7 +406,7 @@ mod flatcontainer {
     use crate::difference::Semigroup;
     use crate::lattice::Lattice;
     use crate::trace::implementations::{BatchContainer, BuilderInput, FlatLayout, Layout, OffsetList, Update};
-    use crate::trace::implementations::merge_batcher_flat::MergerChunk;
+    use crate::trace::implementations::merge_batcher_flat::RegionUpdate;
 
     impl<K, V, T, R> Update for FlatLayout<K, V, T, R>
     where
@@ -450,11 +450,7 @@ mod flatcontainer {
 
     impl<KBC,VBC,MC> BuilderInput<KBC, VBC> for FlatStack<MC>
     where
-        MC: MergerChunk + Region + Clone + 'static,
-        for<'a> MC::Key<'a>: Copy,
-        for<'a> MC::Val<'a>: Copy,
-        for<'a> MC::Time<'a>: IntoOwned<'a, Owned = MC::TimeOwned>,
-        for<'a> MC::Diff<'a>: IntoOwned<'a, Owned = MC::DiffOwned>,
+        MC: RegionUpdate + Region + Clone + 'static,
         KBC: BatchContainer,
         VBC: BatchContainer,
         for<'a> KBC::ReadItem<'a>: PartialEq<MC::Key<'a>>,
