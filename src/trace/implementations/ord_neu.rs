@@ -10,7 +10,7 @@
 
 use std::rc::Rc;
 use timely::container::columnation::{TimelyStack};
-use timely::container::flatcontainer::{Containerized, FlatStack};
+use timely::container::flatcontainer::{FlatStack, RegionPreference};
 use timely::container::flatcontainer::impls::tuple::{TupleABCRegion, TupleABRegion};
 use crate::trace::implementations::chunker::{ColumnationChunker, ContainerChunker, VecChunker};
 
@@ -50,8 +50,8 @@ pub type FlatValSpine<L, R, C> = Spine<
 
 /// A trace implementation backed by flatcontainer storage, using [`FlatLayout`] as the layout.
 pub type FlatValSpineDefault<K, V, T, R, C> = FlatValSpine<
-    FlatLayout<<K as Containerized>::Region, <V as Containerized>::Region, <T as Containerized>::Region, <R as Containerized>::Region>,
-    TupleABCRegion<TupleABRegion<<K as Containerized>::Region, <V as Containerized>::Region>, <T as Containerized>::Region, <R as Containerized>::Region>,
+    FlatLayout<<K as RegionPreference>::Region, <V as RegionPreference>::Region, <T as RegionPreference>::Region, <R as RegionPreference>::Region>,
+    TupleABCRegion<TupleABRegion<<K as RegionPreference>::Region, <V as RegionPreference>::Region>, <T as RegionPreference>::Region, <R as RegionPreference>::Region>,
     C,
 >;
 
@@ -80,8 +80,8 @@ pub type FlatKeySpine<L, R, C> = Spine<
 
 /// A trace implementation backed by flatcontainer storage, using [`FlatLayout`] as the layout.
 pub type FlatKeySpineDefault<K,T,R, C> = FlatKeySpine<
-    FlatLayout<<K as Containerized>::Region, <() as Containerized>::Region, <T as Containerized>::Region, <R as Containerized>::Region>,
-    TupleABCRegion<TupleABRegion<<K as Containerized>::Region, <() as Containerized>::Region>, <T as Containerized>::Region, <R as Containerized>::Region>,
+    FlatLayout<<K as RegionPreference>::Region, <() as RegionPreference>::Region, <T as RegionPreference>::Region, <R as RegionPreference>::Region>,
+    TupleABCRegion<TupleABRegion<<K as RegionPreference>::Region, <() as RegionPreference>::Region>, <T as RegionPreference>::Region, <R as RegionPreference>::Region>,
     C,
 >;
 
