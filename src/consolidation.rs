@@ -18,7 +18,7 @@ use timely::container::flatcontainer::{FlatStack, Push, Region};
 use crate::Data;
 use crate::difference::{IsZero, Semigroup};
 use crate::trace::cursor::IntoOwned;
-use crate::trace::implementations::merge_batcher_flat::MergerChunk;
+use crate::trace::implementations::merge_batcher_flat::RegionUpdate;
 
 /// Sorts and consolidates `vec`.
 ///
@@ -282,12 +282,11 @@ where
 
 impl<MC> ConsolidateLayout for FlatStack<MC>
 where
-    MC: MergerChunk
+    MC: RegionUpdate
         + Region
         + Clone
         + for<'a> Push<((MC::Key<'a>, MC::Val<'a>), MC::Time<'a>, MC::DiffOwned)>
         + 'static,
-    for<'a> MC::Diff<'a>: IntoOwned<'a, Owned = MC::DiffOwned>,
     for<'a> MC::DiffOwned: Semigroup<MC::Diff<'a>>,
     for<'a> MC::ReadItem<'a>: Copy,
 {
@@ -301,7 +300,9 @@ where
     }
 
     fn cmp<'a>(item1: &Self::Item<'_>, item2: &Self::Item<'_>) -> Ordering {
-        MC::cmp_without_diff(*item1, *item2)
+        let (key1, val1, time1, _diff1) = MC::into_parts(*item1);
+        let (key2, val2, time2, _diff2) = MC::into_parts(*item2);
+        (MC::reborrow_key(key1), MC::reborrow_val(val1), MC::reborrow_time(time1)).cmp(&(MC::reborrow_key(key2), MC::reborrow_val(val2), MC::reborrow_time(time2)))
     }
 
     fn push_with_diff(&mut self, (key, value, time): Self::Key<'_>, diff: Self::DiffOwned) {

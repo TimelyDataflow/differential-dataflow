@@ -14,7 +14,7 @@ use crate::trace::cursor::IntoOwned;
 
 /// A merger for flat stacks.
 ///
-/// `MC` is a [`Region`] that implements [`MergerChunk`].
+/// `MC` is a [`Region`] that implements [`RegionUpdate`].
 pub struct FlatcontainerMerger<MC> {
     _marker: PhantomData<MC>,
 }
@@ -56,25 +56,22 @@ impl<MC: Region> FlatcontainerMerger<MC> {
 }
 
 /// Behavior to dissect items of chunks in the merge batcher
-pub trait MergerChunk: Region {
+pub trait RegionUpdate: Region {
     /// The key of the update
-    type Key<'a>: Ord where Self: 'a;
+    type Key<'a>: Copy + Ord where Self: 'a;
     /// The value of the update
-    type Val<'a>: Ord where Self: 'a;
+    type Val<'a>: Copy + Ord where Self: 'a;
     /// The time of the update
-    type Time<'a>: Ord where Self: 'a;
+    type Time<'a>: Copy + Ord + IntoOwned<'a, Owned = Self::TimeOwned> where Self: 'a;
     /// The owned time type.
     type TimeOwned;
     /// The diff of the update
-    type Diff<'a> where Self: 'a;
+    type Diff<'a>: Copy + IntoOwned<'a, Owned = Self::DiffOwned> where Self: 'a;
     /// The owned diff type.
     type DiffOwned;
 
     /// Split a read item into its constituents. Must be cheap.
     fn into_parts<'a>(item: Self::ReadItem<'a>) -> (Self::Key<'a>, Self::Val<'a>, Self::Time<'a>, Self::Diff<'a>);
-
-    /// Compare two items, ignoring the diff.
-    fn cmp_without_diff<'a, 'b>(item1: Self::ReadItem<'a>, item2: Self::ReadItem<'b>) -> Ordering;
 
     /// Converts a key into one with a narrower lifetime.
     #[must_use]
@@ -87,17 +84,30 @@ pub trait MergerChunk: Region {
     fn reborrow_val<'b, 'a: 'b>(item: Self::Val<'a>) -> Self::Val<'b>
     where
         Self: 'a;
+
+    /// Converts a time into one with a narrower lifetime.
+    #[must_use]
+    fn reborrow_time<'b, 'a: 'b>(item: Self::Time<'a>) -> Self::Time<'b>
+    where
+        Self: 'a;
+
+    /// Converts a diff into one with a narrower lifetime.
+    #[must_use]
+    fn reborrow_diff<'b, 'a: 'b>(item: Self::Diff<'a>) -> Self::Diff<'b>
+    where
+        Self: 'a;
 }
 
-impl<K,V,T,R> MergerChunk for TupleABCRegion<TupleABRegion<K, V>, T, R>
+impl<K,V,T,R> RegionUpdate for TupleABCRegion<TupleABRegion<K, V>, T, R>
 where
     K: Region,
-    for<'a> K::ReadItem<'a>: Ord,
+    for<'a> K::ReadItem<'a>: Copy + Ord,
     V: Region,
-    for<'a> V::ReadItem<'a>: Ord,
+    for<'a> V::ReadItem<'a>: Copy + Ord,
     T: Region,
-    for<'a> T::ReadItem<'a>: Ord,
+    for<'a> T::ReadItem<'a>: Copy + Ord,
     R: Region,
+    for<'a> R::ReadItem<'a>: Copy + Ord,
 {
     type Key<'a> = K::ReadItem<'a> where Self: 'a;
     type Val<'a> = V::ReadItem<'a> where Self: 'a;
@@ -108,10 +118,6 @@ where
 
     fn into_parts<'a>(((key, val), time, diff): Self::ReadItem<'a>) -> (Self::Key<'a>, Self::Val<'a>, Self::Time<'a>, Self::Diff<'a>) {
         (key, val, time, diff)
-    }
-
-    fn cmp_without_diff<'a, 'b>(((key1, val1), time1, _diff1): Self::ReadItem<'a>, ((key2, val2), time2, _diff2): Self::ReadItem<'b>) -> Ordering {
-        (K::reborrow(key1), V::reborrow(val1), T::reborrow(time1)).cmp(&(K::reborrow(key2), V::reborrow(val2), T::reborrow(time2)))
     }
 
     fn reborrow_key<'b, 'a: 'b>(item: Self::Key<'a>) -> Self::Key<'b>
@@ -127,11 +133,25 @@ where
     {
         V::reborrow(item)
     }
+
+    fn reborrow_time<'b, 'a: 'b>(item: Self::Time<'a>) -> Self::Time<'b>
+    where
+        Self: 'a
+    {
+        T::reborrow(item)
+    }
+
+    fn reborrow_diff<'b, 'a: 'b>(item: Self::Diff<'a>) -> Self::Diff<'b>
+    where
+        Self: 'a
+    {
+        R::reborrow(item)
+    }
 }
 
 impl<MC> Merger for FlatcontainerMerger<MC>
 where
-    for<'a> MC: MergerChunk + Clone + 'static
+    for<'a> MC: RegionUpdate + Clone + 'static
         + ReserveItems<<MC as Region>::ReadItem<'a>>
         + Push<<MC as Region>::ReadItem<'a>>
         + Push<((MC::Key<'a>, MC::Val<'a>), MC::Time<'a>, &'a MC::DiffOwned)>
