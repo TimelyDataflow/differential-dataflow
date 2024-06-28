@@ -4,7 +4,7 @@ use rand::{Rng, SeedableRng, StdRng};
 use std::sync::{Arc, Mutex};
 
 use timely::{Config, PartialOrder};
-use timely::container::flatcontainer::{Containerized, MirrorRegion, Push, Region, ReserveItems};
+use timely::container::flatcontainer::{MirrorRegion, Push, Region, RegionPreference, ReserveItems};
 
 use timely::dataflow::*;
 use timely::dataflow::operators::Capture;
@@ -296,16 +296,16 @@ fn bfs_flat<G: Scope>(
     roots: &Collection<G, Node>,
 ) -> Collection<G, (Node, usize)>
 where
-    G::Timestamp: Lattice + Ord + Containerized,
-    for<'a> G::Timestamp: PartialOrder<<<G::Timestamp as Containerized>::Region as Region>::ReadItem<'a>>,
-    <G::Timestamp as Containerized>::Region: Region<Owned=G::Timestamp> + Push<G::Timestamp>,
-    for<'a> <Product<G::Timestamp, u64> as Containerized>::Region: Region<Owned=Product<G::Timestamp, u64>> + Push<<<Product<G::Timestamp, u64> as Containerized>::Region as Region>::ReadItem<'a>>,
-    <G::Timestamp as Containerized>::Region: Clone + Ord,
-    for<'a> FlatProductRegion<<G::Timestamp as Containerized>::Region, MirrorRegion<u64>>: Push<&'a Product<G::Timestamp, u64>>,
-    for<'a> <FlatProductRegion<<G::Timestamp as Containerized>::Region, MirrorRegion<u64>> as Region>::ReadItem<'a>: Copy + Ord + Debug,
-    Product<G::Timestamp, u64>: for<'a> PartialOrder<<<Product<G::Timestamp, u64> as Containerized>::Region as Region>::ReadItem<'a>>,
-    for<'a> <<Product<G::Timestamp, u64> as Containerized>::Region as Region>::ReadItem<'a>: PartialOrder<Product<G::Timestamp, u64>>,
-    for<'a> <Product<G::Timestamp, u64> as Containerized>::Region: ReserveItems<<<Product<G::Timestamp, u64> as Containerized>::Region as Region>::ReadItem<'a>>,
+    G::Timestamp: Lattice + Ord + RegionPreference,
+    for<'a> G::Timestamp: PartialOrder<<<G::Timestamp as RegionPreference>::Region as Region>::ReadItem<'a>>,
+    <G::Timestamp as RegionPreference>::Region: Region<Owned=G::Timestamp> + Push<G::Timestamp>,
+    for<'a> <Product<G::Timestamp, u64> as RegionPreference>::Region: Region<Owned=Product<G::Timestamp, u64>> + Push<<<Product<G::Timestamp, u64> as RegionPreference>::Region as Region>::ReadItem<'a>>,
+    <G::Timestamp as RegionPreference>::Region: Clone + Ord,
+    for<'a> FlatProductRegion<<G::Timestamp as RegionPreference>::Region, MirrorRegion<u64>>: Push<&'a Product<G::Timestamp, u64>>,
+    for<'a> <FlatProductRegion<<G::Timestamp as RegionPreference>::Region, MirrorRegion<u64>> as Region>::ReadItem<'a>: Copy + Ord + Debug,
+    Product<G::Timestamp, u64>: for<'a> PartialOrder<<<Product<G::Timestamp, u64> as RegionPreference>::Region as Region>::ReadItem<'a>>,
+    for<'a> <<Product<G::Timestamp, u64> as RegionPreference>::Region as Region>::ReadItem<'a>: PartialOrder<Product<G::Timestamp, u64>>,
+    for<'a> <Product<G::Timestamp, u64> as RegionPreference>::Region: ReserveItems<<<Product<G::Timestamp, u64> as RegionPreference>::Region as Region>::ReadItem<'a>>,
 {
     // initialize roots as reaching themselves at distance 0
     let nodes = roots.map(|x| (x, 0));
