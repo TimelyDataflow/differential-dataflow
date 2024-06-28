@@ -18,7 +18,7 @@ use timely::container::flatcontainer::{FlatStack, Push, Region};
 use crate::Data;
 use crate::difference::{IsZero, Semigroup};
 use crate::trace::cursor::IntoOwned;
-use crate::trace::implementations::merge_batcher_flat::RegionUpdate;
+use crate::trace::implementations::Update;
 
 /// Sorts and consolidates `vec`.
 ///
@@ -282,17 +282,17 @@ where
 
 impl<MC> ConsolidateLayout for FlatStack<MC>
 where
-    MC: RegionUpdate
+    MC: for<'a> Update<ItemRef<'a>=<MC as Region>::ReadItem<'a>>
         + Region
         + Clone
-        + for<'a> Push<((MC::Key<'a>, MC::Val<'a>), MC::Time<'a>, MC::DiffOwned)>
+        + for<'a> Push<((MC::KeyGat<'a>, MC::ValGat<'a>), MC::TimeGat<'a>, MC::Diff)>
         + 'static,
-    for<'a> MC::DiffOwned: Semigroup<MC::Diff<'a>>,
+    for<'a> MC::Diff: Semigroup<MC::DiffGat<'a>>,
     for<'a> MC::ReadItem<'a>: Copy,
 {
-    type Key<'a> = (MC::Key<'a>, MC::Val<'a>, MC::Time<'a>) where Self: 'a;
-    type Diff<'a> = MC::Diff<'a> where Self: 'a;
-    type DiffOwned = MC::DiffOwned;
+    type Key<'a> = (MC::KeyGat<'a>, MC::ValGat<'a>, MC::TimeGat<'a>) where Self: 'a;
+    type Diff<'a> = MC::DiffGat<'a> where Self: 'a;
+    type DiffOwned = MC::Diff;
 
     fn into_parts(item: Self::Item<'_>) -> (Self::Key<'_>, Self::Diff<'_>) {
         let (key, val, time, diff) = MC::into_parts(item);

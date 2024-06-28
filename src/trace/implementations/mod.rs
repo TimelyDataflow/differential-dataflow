@@ -71,6 +71,36 @@ pub trait Update {
     type Time: Ord + Clone + Lattice + timely::progress::Timestamp;
     /// Way in which updates occur.
     type Diff: Ord + Semigroup + 'static;
+
+    /// A whole update as GAT.
+    type ItemRef<'a> where Self: 'a;
+    /// The key of the update
+    type KeyGat<'a>: Copy + Ord + IntoOwned<'a, Owned = Self::Key> where Self: 'a;
+    /// The value of the update
+    type ValGat<'a>: Copy + Ord + IntoOwned<'a, Owned = Self::Val> where Self: 'a;
+    /// The time of the update
+    type TimeGat<'a>: Copy + Ord + IntoOwned<'a, Owned = Self::Time> where Self: 'a;
+    /// The diff of the update
+    type DiffGat<'a>: Copy + IntoOwned<'a, Owned = Self::Diff> where Self: 'a;
+
+    /// Split a read item into its constituents. Must be cheap.
+    fn into_parts<'a>(item: Self::ItemRef<'a>) -> (Self::KeyGat<'a>, Self::ValGat<'a>, Self::TimeGat<'a>, Self::DiffGat<'a>);
+
+    /// Converts a key into one with a narrower lifetime.
+    #[must_use]
+    fn reborrow_key<'b, 'a: 'b>(item: Self::KeyGat<'a>) -> Self::KeyGat<'b> where Self: 'a;
+
+    /// Converts a value into one with a narrower lifetime.
+    #[must_use]
+    fn reborrow_val<'b, 'a: 'b>(item: Self::ValGat<'a>) -> Self::ValGat<'b> where Self: 'a;
+
+    /// Converts a time into one with a narrower lifetime.
+    #[must_use]
+    fn reborrow_time<'b, 'a: 'b>(item: Self::TimeGat<'a>) -> Self::TimeGat<'b> where Self: 'a;
+
+    /// Converts a diff into one with a narrower lifetime.
+    #[must_use]
+    fn reborrow_diff<'b, 'a: 'b>(item: Self::DiffGat<'a>) -> Self::DiffGat<'b> where Self: 'a;
 }
 
 impl<K,V,T,R> Update for ((K, V), T, R)
@@ -84,6 +114,23 @@ where
     type Val = V;
     type Time = T;
     type Diff = R;
+    type ItemRef<'a> = &'a ((K, V), T, R);
+    type KeyGat<'a> = &'a K where Self: 'a;
+    type ValGat<'a> = &'a V where Self: 'a;
+    type TimeGat<'a> = &'a T where Self: 'a;
+    type DiffGat<'a> = &'a R where Self: 'a;
+
+    fn into_parts<'a>(((key, val), time, diff): Self::ItemRef<'a>) -> (Self::KeyGat<'a>, Self::ValGat<'a>, Self::TimeGat<'a>, Self::DiffGat<'a>) {
+        (key, val, time, diff)
+    }
+
+    fn reborrow_key<'b, 'a: 'b>(item: Self::KeyGat<'a>) -> Self::KeyGat<'b> where Self: 'a { item }
+
+    fn reborrow_val<'b, 'a: 'b>(item: Self::ValGat<'a>) -> Self::ValGat<'b> where Self: 'a { item }
+
+    fn reborrow_time<'b, 'a: 'b>(item: Self::TimeGat<'a>) -> Self::TimeGat<'b> where Self: 'a { item }
+
+    fn reborrow_diff<'b, 'a: 'b>(item: Self::DiffGat<'a>) -> Self::DiffGat<'b> where Self: 'a { item }
 }
 
 /// A type with opinions on how updates should be laid out.
@@ -141,9 +188,7 @@ where
 }
 
 /// A layout based on flat containers.
-pub struct FlatLayout<K, V, T, R> {
-    phantom: std::marker::PhantomData<(K, V, T, R)>,
-}
+type FlatLayout<K, V, T, R> = TupleABCRegion<TupleABRegion<K, V>, T, R>;
 
 /// A type with a preferred container.
 ///
@@ -168,9 +213,9 @@ pub struct Preferred<K: ?Sized, V: ?Sized, T, D> {
 
 impl<K,V,T,R> Update for Preferred<K, V, T, R>
 where
-    K: ToOwned + ?Sized,
+    K: ToOwned + ?Sized + Ord,
     K::Owned: Ord+Clone+'static,
-    V: ToOwned + ?Sized,
+    V: ToOwned + ?Sized + Ord,
     V::Owned: Ord+Clone+'static,
     T: Ord+Clone+Lattice+timely::progress::Timestamp,
     R: Ord+Clone+Semigroup+'static,
@@ -179,6 +224,23 @@ where
     type Val = V::Owned;
     type Time = T;
     type Diff = R;
+    type ItemRef<'a> = () where Self: 'a;
+    type KeyGat<'a> = &'a K where Self: 'a;
+    type ValGat<'a> = &'a V where Self: 'a;
+    type TimeGat<'a> = &'a T where Self: 'a;
+    type DiffGat<'a> = &'a R where Self: 'a;
+
+    fn into_parts<'a>(_item: Self::ItemRef<'a>) -> (Self::KeyGat<'a>, Self::ValGat<'a>, Self::TimeGat<'a>, Self::DiffGat<'a>) {
+        todo!()
+    }
+
+    fn reborrow_key<'b, 'a: 'b>(item: Self::KeyGat<'a>) -> Self::KeyGat<'b> where Self: 'a { item }
+
+    fn reborrow_val<'b, 'a: 'b>(item: Self::ValGat<'a>) -> Self::ValGat<'b> where Self: 'a { item }
+
+    fn reborrow_time<'b, 'a: 'b>(item: Self::TimeGat<'a>) -> Self::TimeGat<'b> where Self: 'a { item }
+
+    fn reborrow_diff<'b, 'a: 'b>(item: Self::DiffGat<'a>) -> Self::DiffGat<'b> where Self: 'a { item }
 }
 
 impl<K, V, T, D> Layout for Preferred<K, V, T, D>
@@ -200,6 +262,8 @@ where
 
 use std::convert::TryInto;
 use abomonation_derive::Abomonation;
+use timely::container::flatcontainer::impls::tuple::{TupleABCRegion, TupleABRegion};
+use crate::trace::cursor::IntoOwned;
 
 /// A list of unsigned integers that uses `u32` elements as long as they are small enough, and switches to `u64` once they are not.
 #[derive(Eq, PartialEq, Ord, PartialOrd, Clone, Abomonation)]
@@ -406,24 +470,6 @@ mod flatcontainer {
     use crate::difference::Semigroup;
     use crate::lattice::Lattice;
     use crate::trace::implementations::{BatchContainer, BuilderInput, FlatLayout, Layout, OffsetList, Update};
-    use crate::trace::implementations::merge_batcher_flat::RegionUpdate;
-
-    impl<K, V, T, R> Update for FlatLayout<K, V, T, R>
-    where
-        K: Region,
-        V: Region,
-        T: Region,
-        R: Region,
-        K::Owned: Ord + Clone + 'static,
-        V::Owned: Ord + Clone + 'static,
-        T::Owned: Ord + Clone + Lattice + Timestamp + 'static,
-        R::Owned: Ord + Semigroup + 'static,
-    {
-        type Key = K::Owned;
-        type Val = V::Owned;
-        type Time = T::Owned;
-        type Diff = R::Owned;
-    }
 
     impl<K, V, T, R> Layout for FlatLayout<K, V, T, R>
     where
@@ -450,16 +496,16 @@ mod flatcontainer {
 
     impl<KBC,VBC,MC> BuilderInput<KBC, VBC> for FlatStack<MC>
     where
-        MC: RegionUpdate + Region + Clone + 'static,
+        MC: for<'a> Update<ItemRef<'a>=<MC as Region>::ReadItem<'a>> + Region + Clone + 'static,
         KBC: BatchContainer,
         VBC: BatchContainer,
-        for<'a> KBC::ReadItem<'a>: PartialEq<MC::Key<'a>>,
-        for<'a> VBC::ReadItem<'a>: PartialEq<MC::Val<'a>>,
+        for<'a> KBC::ReadItem<'a>: PartialEq<MC::KeyGat<'a>>,
+        for<'a> VBC::ReadItem<'a>: PartialEq<MC::ValGat<'a>>,
     {
-        type Key<'a> = MC::Key<'a>;
-        type Val<'a> = MC::Val<'a>;
-        type Time = MC::TimeOwned;
-        type Diff = MC::DiffOwned;
+        type Key<'a> = MC::KeyGat<'a>;
+        type Val<'a> = MC::ValGat<'a>;
+        type Time = MC::Time;
+        type Diff = MC::Diff;
 
         fn into_parts<'a>(item: Self::Item<'a>) -> (Self::Key<'a>, Self::Val<'a>, Self::Time, Self::Diff) {
             let (key, val, time, diff) = MC::into_parts(item);

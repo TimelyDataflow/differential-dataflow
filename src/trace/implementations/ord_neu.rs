@@ -17,7 +17,7 @@ use crate::trace::implementations::chunker::{ColumnationChunker, ContainerChunke
 use crate::trace::implementations::spine_fueled::Spine;
 use crate::trace::implementations::merge_batcher::{MergeBatcher, VecMerger};
 use crate::trace::implementations::merge_batcher_col::ColumnationMerger;
-use crate::trace::implementations::merge_batcher_flat::{FlatcontainerMerger, RegionUpdate};
+use crate::trace::implementations::merge_batcher_flat::FlatcontainerMerger;
 use crate::trace::rc_blanket_impls::RcBuilder;
 
 use super::{Update, Layout, Vector, TStack, Preferred, FlatLayout};
@@ -44,7 +44,7 @@ pub type ColValSpine<K, V, T, R> = Spine<
 /// A trace implementation backed by flatcontainer storage.
 pub type FlatValSpine<L, R, C> = Spine<
     Rc<OrdValBatch<L>>,
-    MergeBatcher<C, ContainerChunker<FlatStack<R>>, FlatcontainerMerger<R>, <R as RegionUpdate>::TimeOwned>,
+    MergeBatcher<C, ContainerChunker<FlatStack<R>>, FlatcontainerMerger<R>, <R as Update>::Time>,
     RcBuilder<OrdValBuilder<L, FlatStack<R>>>,
 >;
 
@@ -74,7 +74,7 @@ pub type ColKeySpine<K, T, R> = Spine<
 /// A trace implementation backed by flatcontainer storage.
 pub type FlatKeySpine<L, R, C> = Spine<
     Rc<OrdKeyBatch<L>>,
-    MergeBatcher<C, ContainerChunker<FlatStack<R>>, FlatcontainerMerger<R>, <R as RegionUpdate>::TimeOwned>,
+    MergeBatcher<C, ContainerChunker<FlatStack<R>>, FlatcontainerMerger<R>, <R as Update>::Time>,
     RcBuilder<OrdKeyBuilder<L, FlatStack<R>>>,
 >;
 

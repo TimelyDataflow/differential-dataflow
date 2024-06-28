@@ -6,11 +6,13 @@ use timely::progress::frontier::{Antichain, AntichainRef};
 use timely::{Container, Data, PartialOrder};
 use timely::container::flatcontainer::{Push, FlatStack, Region, ReserveItems};
 use timely::container::flatcontainer::impls::tuple::{TupleABCRegion, TupleABRegion};
-
+use timely::progress::Timestamp;
 use crate::difference::{IsZero, Semigroup};
+use crate::lattice::Lattice;
 use crate::trace::implementations::merge_batcher::Merger;
 use crate::trace::Builder;
 use crate::trace::cursor::IntoOwned;
+use crate::trace::implementations::Update;
 
 /// A merger for flat stacks.
 ///
@@ -55,113 +57,58 @@ impl<MC: Region> FlatcontainerMerger<MC> {
     }
 }
 
-/// Behavior to dissect items of chunks in the merge batcher
-pub trait RegionUpdate: Region {
-    /// The key of the update
-    type Key<'a>: Copy + Ord where Self: 'a;
-    /// The value of the update
-    type Val<'a>: Copy + Ord where Self: 'a;
-    /// The time of the update
-    type Time<'a>: Copy + Ord + IntoOwned<'a, Owned = Self::TimeOwned> where Self: 'a;
-    /// The owned time type.
-    type TimeOwned;
-    /// The diff of the update
-    type Diff<'a>: Copy + IntoOwned<'a, Owned = Self::DiffOwned> where Self: 'a;
-    /// The owned diff type.
-    type DiffOwned;
-
-    /// Split a read item into its constituents. Must be cheap.
-    fn into_parts<'a>(item: Self::ReadItem<'a>) -> (Self::Key<'a>, Self::Val<'a>, Self::Time<'a>, Self::Diff<'a>);
-
-    /// Converts a key into one with a narrower lifetime.
-    #[must_use]
-    fn reborrow_key<'b, 'a: 'b>(item: Self::Key<'a>) -> Self::Key<'b>
-    where
-        Self: 'a;
-
-    /// Converts a value into one with a narrower lifetime.
-    #[must_use]
-    fn reborrow_val<'b, 'a: 'b>(item: Self::Val<'a>) -> Self::Val<'b>
-    where
-        Self: 'a;
-
-    /// Converts a time into one with a narrower lifetime.
-    #[must_use]
-    fn reborrow_time<'b, 'a: 'b>(item: Self::Time<'a>) -> Self::Time<'b>
-    where
-        Self: 'a;
-
-    /// Converts a diff into one with a narrower lifetime.
-    #[must_use]
-    fn reborrow_diff<'b, 'a: 'b>(item: Self::Diff<'a>) -> Self::Diff<'b>
-    where
-        Self: 'a;
-}
-
-impl<K,V,T,R> RegionUpdate for TupleABCRegion<TupleABRegion<K, V>, T, R>
+impl<K,V,T,R> Update for TupleABCRegion<TupleABRegion<K, V>, T, R>
 where
     K: Region,
-    for<'a> K::ReadItem<'a>: Copy + Ord,
+    K::Owned: Clone + Ord + 'static,
     V: Region,
-    for<'a> V::ReadItem<'a>: Copy + Ord,
+    V::Owned: Clone + Ord + 'static,
     T: Region,
-    for<'a> T::ReadItem<'a>: Copy + Ord,
+    T::Owned: Clone + Ord + Timestamp + Lattice + 'static,
     R: Region,
+    R::Owned: Clone + Ord + Semigroup + 'static,
+    for<'a> K::ReadItem<'a>: Copy + Ord,
+    for<'a> V::ReadItem<'a>: Copy + Ord,
+    for<'a> T::ReadItem<'a>: Copy + Ord,
     for<'a> R::ReadItem<'a>: Copy + Ord,
 {
-    type Key<'a> = K::ReadItem<'a> where Self: 'a;
-    type Val<'a> = V::ReadItem<'a> where Self: 'a;
-    type Time<'a> = T::ReadItem<'a> where Self: 'a;
-    type TimeOwned = T::Owned;
-    type Diff<'a> = R::ReadItem<'a> where Self: 'a;
-    type DiffOwned = R::Owned;
+    type Key = K::Owned;
+    type Val = V::Owned;
+    type Time = T::Owned;
+    type Diff = R::Owned;
+    type ItemRef<'a> = ((K::ReadItem<'a>, V::ReadItem<'a>), T::ReadItem<'a>, R::ReadItem<'a>) where Self: 'a;
+    type KeyGat<'a> = K::ReadItem<'a> where Self: 'a;
+    type ValGat<'a> = V::ReadItem<'a> where Self: 'a;
+    type TimeGat<'a> = T::ReadItem<'a> where Self: 'a;
+    type DiffGat<'a> = R::ReadItem<'a> where Self: 'a;
 
-    fn into_parts<'a>(((key, val), time, diff): Self::ReadItem<'a>) -> (Self::Key<'a>, Self::Val<'a>, Self::Time<'a>, Self::Diff<'a>) {
+    fn into_parts<'a>(item: Self::ItemRef<'a>) -> (Self::KeyGat<'a>, Self::ValGat<'a>, Self::TimeGat<'a>, Self::DiffGat<'a>) {
+        let ((key, val), time, diff) = item;
         (key, val, time, diff)
     }
 
-    fn reborrow_key<'b, 'a: 'b>(item: Self::Key<'a>) -> Self::Key<'b>
-    where
-        Self: 'a
-    {
-        K::reborrow(item)
-    }
+    fn reborrow_key<'b, 'a: 'b>(item: Self::KeyGat<'a>) -> Self::KeyGat<'b> where Self: 'a { K::reborrow(item) }
 
-    fn reborrow_val<'b, 'a: 'b>(item: Self::Val<'a>) -> Self::Val<'b>
-    where
-        Self: 'a
-    {
-        V::reborrow(item)
-    }
+    fn reborrow_val<'b, 'a: 'b>(item: Self::ValGat<'a>) -> Self::ValGat<'b> where Self: 'a { V::reborrow(item) }
 
-    fn reborrow_time<'b, 'a: 'b>(item: Self::Time<'a>) -> Self::Time<'b>
-    where
-        Self: 'a
-    {
-        T::reborrow(item)
-    }
+    fn reborrow_time<'b, 'a: 'b>(item: Self::TimeGat<'a>) -> Self::TimeGat<'b> where Self: 'a { T::reborrow(item) }
 
-    fn reborrow_diff<'b, 'a: 'b>(item: Self::Diff<'a>) -> Self::Diff<'b>
-    where
-        Self: 'a
-    {
-        R::reborrow(item)
-    }
+    fn reborrow_diff<'b, 'a: 'b>(item: Self::DiffGat<'a>) -> Self::DiffGat<'b> where Self: 'a { R::reborrow(item) }
 }
 
 impl<MC> Merger for FlatcontainerMerger<MC>
 where
-    for<'a> MC: RegionUpdate + Clone + 'static
+    for<'a> MC: Update<ItemRef<'a>=<MC as Region>::ReadItem<'a>> + Clone + 'static
         + ReserveItems<<MC as Region>::ReadItem<'a>>
         + Push<<MC as Region>::ReadItem<'a>>
-        + Push<((MC::Key<'a>, MC::Val<'a>), MC::Time<'a>, &'a MC::DiffOwned)>
-        + Push<((MC::Key<'a>, MC::Val<'a>), MC::Time<'a>, MC::Diff<'a>)>,
-    for<'a> MC::Time<'a>: PartialOrder<MC::TimeOwned> + Copy + IntoOwned<'a, Owned=MC::TimeOwned>,
-    for<'a> MC::Diff<'a>: IntoOwned<'a, Owned = MC::DiffOwned>,
-    for<'a> MC::TimeOwned: Ord + PartialOrder + PartialOrder<MC::Time<'a>> + Data,
-    for<'a> MC::DiffOwned: Default + Semigroup + Semigroup<MC::Diff<'a>> + Data,
+        + Push<((MC::KeyGat<'a>, MC::ValGat<'a>), MC::TimeGat<'a>, &'a MC::Diff)>
+        + Push<((MC::KeyGat<'a>, MC::ValGat<'a>), MC::TimeGat<'a>, MC::DiffGat<'a>)>,
+    for<'a> MC::TimeGat<'a>: PartialOrder<MC::Time> + Copy + IntoOwned<'a, Owned=MC::Time>,
+    for<'a> MC::DiffGat<'a>: IntoOwned<'a, Owned = MC::Diff>,
+    for<'a> MC::Time: Ord + PartialOrder + PartialOrder<MC::TimeGat<'a>> + Data,
+    for<'a> MC::Diff: Default + Semigroup + Semigroup<MC::DiffGat<'a>> + Data,
 {
-    type Time = MC::TimeOwned;
+    type Time = MC::Time;
     type Chunk = FlatStack<MC>;
     type Output = FlatStack<MC>;
 
@@ -174,7 +121,7 @@ where
 
         let mut result = self.empty(stash);
 
-        let mut diff = MC::DiffOwned::default();
+        let mut diff = MC::Diff::default();
 
         // while we have valid data in each input, merge.
         while !head1.is_empty() && !head2.is_empty() {
