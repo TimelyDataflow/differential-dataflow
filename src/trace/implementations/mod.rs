@@ -401,12 +401,12 @@ where
 
 mod flatcontainer {
     use timely::container::flatcontainer::{FlatStack, IntoOwned, Push, Region};
-    use timely::container::flatcontainer::impls::tuple::{TupleABCRegion, TupleABRegion};
     use timely::progress::Timestamp;
 
     use crate::difference::Semigroup;
     use crate::lattice::Lattice;
     use crate::trace::implementations::{BatchContainer, BuilderInput, FlatLayout, Layout, OffsetList, Update};
+    use crate::trace::implementations::merge_batcher_flat::RegionUpdate;
 
     impl<K, V, T, R> Update for FlatLayout<K, V, T, R>
     where
@@ -448,36 +448,30 @@ mod flatcontainer {
         type OffsetContainer = OffsetList;
     }
 
-    impl<K,KBC,V,VBC,T,R> BuilderInput<KBC, VBC> for FlatStack<TupleABCRegion<TupleABRegion<K,V>,T,R>>
+    impl<KBC,VBC, R> BuilderInput<KBC, VBC> for FlatStack<R>
     where
-        K: Region + Clone + 'static,
-        V: Region + Clone + 'static,
-        T: Region + Clone + 'static,
-        R: Region + Clone + 'static,
-        for<'a> K::ReadItem<'a>: Copy + Ord,
-        for<'a> V::ReadItem<'a>: Copy + Ord,
-        for<'a> T::ReadItem<'a>: Copy + Ord,
-        for<'a> R::ReadItem<'a>: Copy + Ord,
+        R: RegionUpdate + Region + Clone + 'static,
         KBC: BatchContainer,
         VBC: BatchContainer,
-        for<'a> KBC::ReadItem<'a>: PartialEq<K::ReadItem<'a>>,
-        for<'a> VBC::ReadItem<'a>: PartialEq<V::ReadItem<'a>>,
+        for<'a> KBC::ReadItem<'a>: PartialEq<R::Key<'a>>,
+        for<'a> VBC::ReadItem<'a>: PartialEq<R::Val<'a>>,
     {
-        type Key<'a> = K::ReadItem<'a>;
-        type Val<'a> = V::ReadItem<'a>;
-        type Time = T::Owned;
-        type Diff = R::Owned;
+        type Key<'a> = R::Key<'a>;
+        type Val<'a> = R::Val<'a>;
+        type Time = R::TimeOwned;
+        type Diff = R::DiffOwned;
 
-        fn into_parts<'a>(((key, val), time, diff): Self::Item<'a>) -> (Self::Key<'a>, Self::Val<'a>, Self::Time, Self::Diff) {
+        fn into_parts<'a>(item: Self::Item<'a>) -> (Self::Key<'a>, Self::Val<'a>, Self::Time, Self::Diff) {
+            let (key, val, time, diff) = R::into_parts(item);
             (key, val, time.into_owned(), diff.into_owned())
         }
 
         fn key_eq(this: &Self::Key<'_>, other: KBC::ReadItem<'_>) -> bool {
-            KBC::reborrow(other) == K::reborrow(*this)
+            KBC::reborrow(other) == R::reborrow_key(*this)
         }
 
         fn val_eq(this: &Self::Val<'_>, other: VBC::ReadItem<'_>) -> bool {
-            VBC::reborrow(other) == V::reborrow(*this)
+            VBC::reborrow(other) == R::reborrow_val(*this)
         }
     }
 }
