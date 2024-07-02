@@ -280,29 +280,29 @@ where
     }
 }
 
-impl<MC> ConsolidateLayout for FlatStack<MC>
+impl<R> ConsolidateLayout for FlatStack<R>
 where
-    MC: RegionUpdate
+    R: RegionUpdate
         + Region
         + Clone
-        + for<'a> Push<((MC::Key<'a>, MC::Val<'a>), MC::Time<'a>, MC::DiffOwned)>
+        + for<'a> Push<((R::Key<'a>, R::Val<'a>), R::Time<'a>, R::DiffOwned)>
         + 'static,
-    for<'a> MC::DiffOwned: Semigroup<MC::Diff<'a>>,
-    for<'a> MC::ReadItem<'a>: Copy,
+    for<'a> R::DiffOwned: Semigroup<R::Diff<'a>>,
+    for<'a> R::ReadItem<'a>: Copy,
 {
-    type Key<'a> = (MC::Key<'a>, MC::Val<'a>, MC::Time<'a>) where Self: 'a;
-    type Diff<'a> = MC::Diff<'a> where Self: 'a;
-    type DiffOwned = MC::DiffOwned;
+    type Key<'a> = (R::Key<'a>, R::Val<'a>, R::Time<'a>) where Self: 'a;
+    type Diff<'a> = R::Diff<'a> where Self: 'a;
+    type DiffOwned = R::DiffOwned;
 
     fn into_parts(item: Self::Item<'_>) -> (Self::Key<'_>, Self::Diff<'_>) {
-        let (key, val, time, diff) = MC::into_parts(item);
+        let (key, val, time, diff) = R::into_parts(item);
         ((key, val, time), diff)
     }
 
     fn cmp<'a>(item1: &Self::Item<'_>, item2: &Self::Item<'_>) -> Ordering {
-        let (key1, val1, time1, _diff1) = MC::into_parts(*item1);
-        let (key2, val2, time2, _diff2) = MC::into_parts(*item2);
-        (MC::reborrow_key(key1), MC::reborrow_val(val1), MC::reborrow_time(time1)).cmp(&(MC::reborrow_key(key2), MC::reborrow_val(val2), MC::reborrow_time(time2)))
+        let (key1, val1, time1, _diff1) = R::into_parts(*item1);
+        let (key2, val2, time2, _diff2) = R::into_parts(*item2);
+        (R::reborrow_key(key1), R::reborrow_val(val1), R::reborrow_time(time1)).cmp(&(R::reborrow_key(key2), R::reborrow_val(val2), R::reborrow_time(time2)))
     }
 
     fn push_with_diff(&mut self, (key, value, time): Self::Key<'_>, diff: Self::DiffOwned) {

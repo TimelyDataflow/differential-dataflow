@@ -448,30 +448,30 @@ mod flatcontainer {
         type OffsetContainer = OffsetList;
     }
 
-    impl<KBC,VBC,MC> BuilderInput<KBC, VBC> for FlatStack<MC>
+    impl<KBC,VBC, R> BuilderInput<KBC, VBC> for FlatStack<R>
     where
-        MC: RegionUpdate + Region + Clone + 'static,
+        R: RegionUpdate + Region + Clone + 'static,
         KBC: BatchContainer,
         VBC: BatchContainer,
-        for<'a> KBC::ReadItem<'a>: PartialEq<MC::Key<'a>>,
-        for<'a> VBC::ReadItem<'a>: PartialEq<MC::Val<'a>>,
+        for<'a> KBC::ReadItem<'a>: PartialEq<R::Key<'a>>,
+        for<'a> VBC::ReadItem<'a>: PartialEq<R::Val<'a>>,
     {
-        type Key<'a> = MC::Key<'a>;
-        type Val<'a> = MC::Val<'a>;
-        type Time = MC::TimeOwned;
-        type Diff = MC::DiffOwned;
+        type Key<'a> = R::Key<'a>;
+        type Val<'a> = R::Val<'a>;
+        type Time = R::TimeOwned;
+        type Diff = R::DiffOwned;
 
         fn into_parts<'a>(item: Self::Item<'a>) -> (Self::Key<'a>, Self::Val<'a>, Self::Time, Self::Diff) {
-            let (key, val, time, diff) = MC::into_parts(item);
+            let (key, val, time, diff) = R::into_parts(item);
             (key, val, time.into_owned(), diff.into_owned())
         }
 
         fn key_eq(this: &Self::Key<'_>, other: KBC::ReadItem<'_>) -> bool {
-            KBC::reborrow(other) == MC::reborrow_key(*this)
+            KBC::reborrow(other) == R::reborrow_key(*this)
         }
 
         fn val_eq(this: &Self::Val<'_>, other: VBC::ReadItem<'_>) -> bool {
-            VBC::reborrow(other) == MC::reborrow_val(*this)
+            VBC::reborrow(other) == R::reborrow_val(*this)
         }
     }
 }
