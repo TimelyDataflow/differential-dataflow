@@ -401,6 +401,7 @@ where
 
 mod flatcontainer {
     use timely::container::flatcontainer::{FlatStack, IntoOwned, Push, Region};
+    use timely::container::flatcontainer::impls::index::IndexContainer;
     use timely::progress::Timestamp;
 
     use crate::difference::Semigroup;
@@ -448,13 +449,14 @@ mod flatcontainer {
         type OffsetContainer = OffsetList;
     }
 
-    impl<KBC,VBC, R> BuilderInput<KBC, VBC> for FlatStack<R>
+    impl<KBC,VBC, R, S> BuilderInput<KBC, VBC> for FlatStack<R, S>
     where
         R: RegionUpdate + Region + Clone + 'static,
         KBC: BatchContainer,
         VBC: BatchContainer,
         for<'a> KBC::ReadItem<'a>: PartialEq<R::Key<'a>>,
         for<'a> VBC::ReadItem<'a>: PartialEq<R::Val<'a>>,
+        S: IndexContainer<R::Index> + Clone + 'static,
     {
         type Key<'a> = R::Key<'a>;
         type Val<'a> = R::Val<'a>;
@@ -614,12 +616,14 @@ pub mod containers {
 
     mod flatcontainer {
         use timely::container::flatcontainer::{FlatStack, Push, Region};
+        use timely::container::flatcontainer::impls::index::IndexContainer;
         use crate::trace::implementations::BatchContainer;
 
-        impl<R> BatchContainer for FlatStack<R>
+        impl<R, S> BatchContainer for FlatStack<R, S>
         where
             for<'a> R: Region + Push<<R as Region>::ReadItem<'a>> + 'static,
             for<'a> R::ReadItem<'a>: Copy + Ord,
+            S: IndexContainer<R::Index> + Clone + 'static,
         {
             type Owned = R::Owned;
             type ReadItem<'a> = R::ReadItem<'a>;

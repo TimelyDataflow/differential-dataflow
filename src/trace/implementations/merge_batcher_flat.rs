@@ -5,6 +5,7 @@ use std::marker::PhantomData;
 use timely::progress::frontier::{Antichain, AntichainRef};
 use timely::{Container, Data, PartialOrder};
 use timely::container::flatcontainer::{Push, FlatStack, Region, ReserveItems};
+use timely::container::flatcontainer::impls::index::IndexContainer;
 use timely::container::flatcontainer::impls::tuple::{TupleABCRegion, TupleABRegion};
 
 use crate::difference::{IsZero, Semigroup};
@@ -15,17 +16,21 @@ use crate::trace::cursor::IntoOwned;
 /// A merger for flat stacks.
 ///
 /// `R` is a [`Region`] that implements [`RegionUpdate`].
-pub struct FlatcontainerMerger<R> {
-    _marker: PhantomData<R>,
+pub struct FlatcontainerMerger<R, S = Vec<<R as Region>::Index>> {
+    _marker: PhantomData<(R, S)>,
 }
 
-impl<R> Default for FlatcontainerMerger<R> {
+impl<R, S> Default for FlatcontainerMerger<R, S> {
     fn default() -> Self {
         Self { _marker: PhantomData, }
     }
 }
 
-impl<R: Region> FlatcontainerMerger<R> {
+impl<R, S> FlatcontainerMerger<R, S>
+where
+    R: Region,
+    S: IndexContainer<<R as Region>::Index> + Clone + 'static,
+{
     const BUFFER_SIZE_BYTES: usize = 8 << 10;
     fn chunk_capacity(&self) -> usize {
         let size = ::std::mem::size_of::<R::Index>();
@@ -40,18 +45,16 @@ impl<R: Region> FlatcontainerMerger<R> {
 
     /// Helper to get pre-sized vector from the stash.
     #[inline]
-    fn empty(&self, stash: &mut Vec<FlatStack<R>>) -> FlatStack<R> {
+    fn empty(&self, stash: &mut Vec<FlatStack<R, S>>) -> FlatStack<R, S> {
         stash.pop().unwrap_or_else(|| FlatStack::with_capacity(self.chunk_capacity()))
     }
 
     /// Helper to return a chunk to the stash.
     #[inline]
-    fn recycle(&self, mut chunk: FlatStack<R>, stash: &mut Vec<FlatStack<R>>) {
+    fn recycle(&self, mut chunk: FlatStack<R, S>, stash: &mut Vec<FlatStack<R, S>>) {
         // TODO: Should we limit the size of `stash`?
-        if chunk.capacity() == self.chunk_capacity() {
-            chunk.clear();
-            stash.push(chunk);
-        }
+        chunk.clear();
+        stash.push(chunk);
     }
 }
 
@@ -149,7 +152,7 @@ where
     }
 }
 
-impl<R> Merger for FlatcontainerMerger<R>
+impl<R, S> Merger for FlatcontainerMerger<R, S>
 where
     for<'a> R: Region
         + RegionUpdate
@@ -163,17 +166,18 @@ where
     for<'a> R::Diff<'a>: IntoOwned<'a, Owned = R::DiffOwned>,
     for<'a> R::TimeOwned: Ord + PartialOrder + PartialOrder<R::Time<'a>> + Data,
     for<'a> R::DiffOwned: Default + Semigroup + Semigroup<R::Diff<'a>> + Data,
+    S: IndexContainer<<R as Region>::Index> + Clone + 'static,
 {
     type Time = R::TimeOwned;
-    type Chunk = FlatStack<R>;
-    type Output = FlatStack<R>;
+    type Chunk = FlatStack<R, S>;
+    type Output = FlatStack<R, S>;
 
     fn merge(&mut self, list1: Vec<Self::Chunk>, list2: Vec<Self::Chunk>, output: &mut Vec<Self::Chunk>, stash: &mut Vec<Self::Chunk>) {
         let mut list1 = list1.into_iter();
         let mut list2 = list2.into_iter();
 
-        let mut head1 = <FlatStackQueue<R>>::from(list1.next().unwrap_or_default());
-        let mut head2 = <FlatStackQueue<R>>::from(list2.next().unwrap_or_default());
+        let mut head1 = <FlatStackQueue<R, S>>::from(list1.next().unwrap_or_default());
+        let mut head2 = <FlatStackQueue<R, S>>::from(list2.next().unwrap_or_default());
 
         let mut result = self.empty(stash);
 
@@ -181,7 +185,7 @@ where
 
         // while we have valid data in each input, merge.
         while !head1.is_empty() && !head2.is_empty() {
-            while (result.capacity() - result.len()) > 0 && !head1.is_empty() && !head2.is_empty() {
+            while (result.len() < self.chunk_capacity()) && !head1.is_empty() && !head2.is_empty() {
                 let cmp = {
                     let (key1, val1, time1, _diff) = R::into_parts(head1.peek());
                     let (key2, val2, time2, _diff) = R::into_parts(head2.peek());
@@ -209,7 +213,7 @@ where
                 }
             }
 
-            if result.capacity() == result.len() {
+            if result.len() == self.chunk_capacity() {
                 output.push(result);
                 result = self.empty(stash);
             }
@@ -225,7 +229,7 @@ where
         }
 
         while !head1.is_empty() {
-            let advance = result.capacity() - result.len();
+            let advance = self.chunk_capacity().saturating_sub(result.len());
             let iter = head1.iter().take(advance);
             result.reserve_items(iter.clone());
             for item in iter {
@@ -243,7 +247,7 @@ where
         self.recycle(head1.done(), stash);
 
         while !head2.is_empty() {
-            let advance = result.capacity() - result.len();
+            let advance = self.chunk_capacity().saturating_sub(result.len());
             let iter = head2.iter().take(advance);
             result.reserve_items(iter.clone());
             for item in iter {
@@ -273,13 +277,13 @@ where
             for (key, val, time, diff) in buffer.iter().map(R::into_parts) {
                 if upper.less_equal(&time) {
                     frontier.insert_with(&time, |time| (*time).into_owned());
-                    if keep.len() == keep.capacity() && !keep.is_empty() {
+                    if keep.len() == self.chunk_capacity() && !keep.is_empty() {
                         kept.push(keep);
                         keep = self.empty(stash);
                     }
                     keep.copy(((key, val), time, diff));
                 } else {
-                    if ready.len() == ready.capacity() && !ready.is_empty() {
+                    if ready.len() == self.chunk_capacity() && !ready.is_empty() {
                         readied.push(ready);
                         ready = self.empty(stash);
                     }
@@ -351,18 +355,27 @@ where
     }
 }
 
-struct FlatStackQueue<R: Region> {
-    list: FlatStack<R>,
+struct FlatStackQueue<R, S>
+{
+    list: FlatStack<R, S>,
     head: usize,
 }
 
-impl<R: Region> Default for FlatStackQueue<R> {
+impl<R, S> Default for FlatStackQueue<R, S>
+where
+    R: Region,
+    S: IndexContainer<<R as Region>::Index>,
+{
     fn default() -> Self {
-        Self::from(Default::default())
+        Self::from(FlatStack::default())
     }
 }
 
-impl<R: Region> FlatStackQueue<R> {
+impl<R, S> FlatStackQueue<R, S>
+where
+    R: Region,
+    S: IndexContainer<<R as Region>::Index>,
+{
     fn pop(&mut self) -> R::ReadItem<'_> {
         self.head += 1;
         self.list.get(self.head - 1)
@@ -372,11 +385,11 @@ impl<R: Region> FlatStackQueue<R> {
         self.list.get(self.head)
     }
 
-    fn from(list: FlatStack<R>) -> Self {
+    fn from(list: FlatStack<R, S>) -> Self {
         FlatStackQueue { list, head: 0 }
     }
 
-    fn done(self) -> FlatStack<R> {
+    fn done(self) -> FlatStack<R, S> {
         self.list
     }
 

@@ -14,11 +14,9 @@ use std::cmp::Ordering;
 use std::collections::VecDeque;
 use timely::Container;
 use timely::container::{ContainerBuilder, PushInto, SizableContainer};
-use timely::container::flatcontainer::{FlatStack, Push, Region};
 use crate::Data;
 use crate::difference::{IsZero, Semigroup};
 use crate::trace::cursor::IntoOwned;
-use crate::trace::implementations::merge_batcher_flat::RegionUpdate;
 
 /// Sorts and consolidates `vec`.
 ///
@@ -255,6 +253,12 @@ pub trait ConsolidateLayout: Container {
 
     /// Compare two items by key to sort containers.
     fn cmp(item1: &Self::Item<'_>, item2: &Self::Item<'_>) -> Ordering;
+
+    /// The preferred capacity
+    fn preferred_capacity() -> usize;
+
+    /// Ensure that the container has sufficient capacity to absorb `preferred_capacity` elements.
+    fn ensure_preferred_capacity(&mut self);
 }
 
 impl<D, T, R> ConsolidateLayout for Vec<(D, T, R)>
@@ -278,35 +282,66 @@ where
     fn push_with_diff(&mut self, (data, time): Self::Key<'_>, diff: Self::DiffOwned) {
         self.push((data, time, diff));
     }
+
+    fn preferred_capacity() -> usize {
+        <Self as SizableContainer>::preferred_capacity()
+    }
+
+    #[inline]
+    fn ensure_preferred_capacity(&mut self) {
+        if self.capacity() < <Self as ConsolidateLayout>::preferred_capacity() {
+            self.reserve(<Self as ConsolidateLayout>::preferred_capacity() - self.capacity());
+        }
+    }
 }
 
-impl<R> ConsolidateLayout for FlatStack<R>
-where
-    R: RegionUpdate
+mod flatcontainer {
+    use std::cmp::Ordering;
+
+    use timely::container::flatcontainer::{FlatStack, Push, Region};
+    use timely::container::flatcontainer::impls::index::IndexContainer;
+
+    use crate::consolidation::ConsolidateLayout;
+    use crate::difference::Semigroup;
+    use crate::trace::implementations::merge_batcher_flat::RegionUpdate;
+
+    impl<R, S> ConsolidateLayout for FlatStack<R, S>
+    where
+        R: RegionUpdate
         + Region
         + Clone
         + for<'a> Push<((R::Key<'a>, R::Val<'a>), R::Time<'a>, R::DiffOwned)>
         + 'static,
-    for<'a> R::DiffOwned: Semigroup<R::Diff<'a>>,
-    for<'a> R::ReadItem<'a>: Copy,
-{
-    type Key<'a> = (R::Key<'a>, R::Val<'a>, R::Time<'a>) where Self: 'a;
-    type Diff<'a> = R::Diff<'a> where Self: 'a;
-    type DiffOwned = R::DiffOwned;
+        for<'a> R::DiffOwned: Semigroup<R::Diff<'a>>,
+        for<'a> R::ReadItem<'a>: Copy,
+        S: IndexContainer<R::Index> + Clone + 'static,
+    {
+        type Key<'a> = (R::Key<'a>, R::Val<'a>, R::Time<'a>) where Self: 'a;
+        type Diff<'a> = R::Diff<'a> where Self: 'a;
+        type DiffOwned = R::DiffOwned;
 
-    fn into_parts(item: Self::Item<'_>) -> (Self::Key<'_>, Self::Diff<'_>) {
-        let (key, val, time, diff) = R::into_parts(item);
-        ((key, val, time), diff)
-    }
+        fn into_parts(item: Self::Item<'_>) -> (Self::Key<'_>, Self::Diff<'_>) {
+            let (key, val, time, diff) = R::into_parts(item);
+            ((key, val, time), diff)
+        }
 
-    fn cmp<'a>(item1: &Self::Item<'_>, item2: &Self::Item<'_>) -> Ordering {
-        let (key1, val1, time1, _diff1) = R::into_parts(*item1);
-        let (key2, val2, time2, _diff2) = R::into_parts(*item2);
-        (R::reborrow_key(key1), R::reborrow_val(val1), R::reborrow_time(time1)).cmp(&(R::reborrow_key(key2), R::reborrow_val(val2), R::reborrow_time(time2)))
-    }
+        fn cmp<'a>(item1: &Self::Item<'_>, item2: &Self::Item<'_>) -> Ordering {
+            let (key1, val1, time1, _diff1) = R::into_parts(*item1);
+            let (key2, val2, time2, _diff2) = R::into_parts(*item2);
+            (R::reborrow_key(key1), R::reborrow_val(val1), R::reborrow_time(time1)).cmp(&(R::reborrow_key(key2), R::reborrow_val(val2), R::reborrow_time(time2)))
+        }
 
-    fn push_with_diff(&mut self, (key, value, time): Self::Key<'_>, diff: Self::DiffOwned) {
-        self.copy(((key, value), time, diff));
+        fn push_with_diff(&mut self, (key, value, time): Self::Key<'_>, diff: Self::DiffOwned) {
+            self.copy(((key, value), time, diff));
+        }
+
+        fn preferred_capacity() -> usize {
+            1024
+        }
+
+        fn ensure_preferred_capacity(&mut self) {
+            // Nop
+        }
     }
 }
 

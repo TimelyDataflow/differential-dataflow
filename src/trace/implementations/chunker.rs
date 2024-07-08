@@ -4,7 +4,7 @@ use std::collections::VecDeque;
 use timely::communication::message::RefOrMut;
 use timely::Container;
 use timely::container::columnation::{Columnation, TimelyStack};
-use timely::container::{ContainerBuilder, PushInto, SizableContainer};
+use timely::container::{ContainerBuilder, PushInto};
 use crate::consolidation::{consolidate_updates, consolidate_container, ConsolidateLayout};
 use crate::difference::Semigroup;
 
@@ -291,21 +291,18 @@ where
 impl<'a, Input, Output> PushInto<RefOrMut<'a, Input>> for ContainerChunker<Output>
 where
     Input: Container,
-    Output: SizableContainer
-        + ConsolidateLayout
+    Output: ConsolidateLayout
         + PushInto<Input::Item<'a>>
         + PushInto<Input::ItemRef<'a>>,
 {
     fn push_into(&mut self, container: RefOrMut<'a, Input>) {
-        if self.pending.capacity() < Output::preferred_capacity() {
-            self.pending.reserve(Output::preferred_capacity() - self.pending.len());
-        }
+        self.pending.ensure_preferred_capacity();
         let form_batch = |this: &mut Self| {
-            if this.pending.len() == this.pending.capacity() {
+            if this.pending.len() >= Output::preferred_capacity() {
                 consolidate_container(&mut this.pending, &mut this.empty);
                 std::mem::swap(&mut this.pending, &mut this.empty);
                 this.empty.clear();
-                if this.pending.len() > this.pending.capacity() / 2 {
+                if this.pending.len() > Output::preferred_capacity() / 2 {
                     // Note that we're pushing non-full containers, which is a deviation from
                     // other implementation. The reason for this is that we cannot extract
                     // partial data from `this.pending`. We should revisit this in the future.
@@ -332,7 +329,7 @@ where
 
 impl<Output> ContainerBuilder for ContainerChunker<Output>
 where
-    Output: SizableContainer + ConsolidateLayout,
+    Output: ConsolidateLayout,
 {
     type Container = Output;
 

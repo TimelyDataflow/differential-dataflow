@@ -42,10 +42,10 @@ pub type ColValSpine<K, V, T, R> = Spine<
 >;
 
 /// A trace implementation backed by flatcontainer storage.
-pub type FlatValSpine<L, R, C> = Spine<
+pub type FlatValSpine<L, R, C, S = Vec<<R as timely::container::flatcontainer::Region>::Index>> = Spine<
     Rc<OrdValBatch<L>>,
-    MergeBatcher<C, ContainerChunker<FlatStack<R>>, FlatcontainerMerger<R>, <R as RegionUpdate>::TimeOwned>,
-    RcBuilder<OrdValBuilder<L, FlatStack<R>>>,
+    MergeBatcher<C, ContainerChunker<FlatStack<R, S>>, FlatcontainerMerger<R, S>, <R as RegionUpdate>::TimeOwned>,
+    RcBuilder<OrdValBuilder<L, FlatStack<R, S>>>,
 >;
 
 /// A trace implementation backed by flatcontainer storage, using [`FlatLayout`] as the layout.
