@@ -336,11 +336,19 @@ mod flatcontainer {
         }
 
         fn preferred_capacity() -> usize {
+            // We don't have a good way to present any pre-defined capacity here, since it's a
+            // concept foreign to flat containers. Each region might have a capacity, but overall
+            // the concept of capacity does not exist. For this reason, we just hardcode a number,
+            // which seems to work reasonably well.
+            //
+            // We should revisit this if/once we have an abstraction that can express a capacity
+            // for `FlatStack`, but we arent' there yet.
             1024
         }
 
         fn ensure_preferred_capacity(&mut self) {
-            // Nop
+            // Nop, same reasoning as for `preferred_capacity`. We don't know how to ensure capacity
+            // for a certain number of elements.
         }
     }
 }

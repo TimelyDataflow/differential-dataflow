@@ -53,6 +53,9 @@ where
     #[inline]
     fn recycle(&self, mut chunk: FlatStack<R, S>, stash: &mut Vec<FlatStack<R, S>>) {
         // TODO: Should we limit the size of `stash`?
+        // TODO: Ideally, we check that `chunk` has a shape (capacity) that fits, but flat
+        // containers don't have a concept of capacity on a `FlatStack`-level, only on individual
+        // regions.
         chunk.clear();
         stash.push(chunk);
     }
