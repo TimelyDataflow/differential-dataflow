@@ -4,7 +4,8 @@ use std::collections::VecDeque;
 use timely::communication::message::RefOrMut;
 use timely::Container;
 use timely::container::columnation::{Columnation, TimelyStack};
-use timely::container::{ContainerBuilder, PushInto};
+use timely::container::{CapacityContainer, ContainerBuilder, PushInto};
+
 use crate::consolidation::{consolidate_updates, consolidate_container, ConsolidateLayout};
 use crate::difference::Semigroup;
 
@@ -292,6 +293,7 @@ impl<'a, Input, Output> PushInto<RefOrMut<'a, Input>> for ContainerChunker<Outpu
 where
     Input: Container,
     Output: ConsolidateLayout
+        + CapacityContainer
         + PushInto<Input::Item<'a>>
         + PushInto<Input::ItemRef<'a>>,
 {
