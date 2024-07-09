@@ -300,12 +300,13 @@ where
     for<'a> G::Timestamp: PartialOrder<<<G::Timestamp as RegionPreference>::Region as Region>::ReadItem<'a>>,
     <G::Timestamp as RegionPreference>::Region: Region<Owned=G::Timestamp> + Push<G::Timestamp>,
     for<'a> <Product<G::Timestamp, u64> as RegionPreference>::Region: Region<Owned=Product<G::Timestamp, u64>> + Push<<<Product<G::Timestamp, u64> as RegionPreference>::Region as Region>::ReadItem<'a>>,
-    <G::Timestamp as RegionPreference>::Region: Clone + Ord,
+    <G::Timestamp as RegionPreference>::Region: Clone + Ord + for<'a> ReserveItems<&'a G::Timestamp>,
     for<'a> FlatProductRegion<<G::Timestamp as RegionPreference>::Region, MirrorRegion<u64>>: Push<&'a Product<G::Timestamp, u64>>,
     for<'a> <FlatProductRegion<<G::Timestamp as RegionPreference>::Region, MirrorRegion<u64>> as Region>::ReadItem<'a>: Copy + Ord + Debug,
     Product<G::Timestamp, u64>: for<'a> PartialOrder<<<Product<G::Timestamp, u64> as RegionPreference>::Region as Region>::ReadItem<'a>>,
     for<'a> <<Product<G::Timestamp, u64> as RegionPreference>::Region as Region>::ReadItem<'a>: PartialOrder<Product<G::Timestamp, u64>>,
     for<'a> <Product<G::Timestamp, u64> as RegionPreference>::Region: ReserveItems<<<Product<G::Timestamp, u64> as RegionPreference>::Region as Region>::ReadItem<'a>>,
+    for<'a> <Product<G::Timestamp, u64> as RegionPreference>::Region: ReserveItems<&'a <<Product<G::Timestamp, u64> as RegionPreference>::Region as Region>::ReadItem<'a>>,
 {
     // initialize roots as reaching themselves at distance 0
     let nodes = roots.map(|x| (x, 0));
