@@ -10,11 +10,10 @@
 //! this file.
 
 use std::time::Duration;
-use abomonation_derive::Abomonation;
 use serde::{Deserialize, Serialize};
 
 /// A message in the CDC V2 protocol.
-#[derive(Ord, PartialOrd, Eq, PartialEq, Debug, Clone, Serialize, Deserialize, Abomonation)]
+#[derive(Ord, PartialOrd, Eq, PartialEq, Debug, Clone, Serialize, Deserialize)]
 pub enum Message<D, T, R> {
     /// A batch of updates that are certain to occur.
     ///
@@ -32,7 +31,7 @@ pub enum Message<D, T, R> {
 /// Each element of `counts` is an irrevocable statement about the exact number of
 /// distinct updates that occur at that time.
 /// Times not present in `counts` have a count of zero.
-#[derive(Ord, PartialOrd, Eq, PartialEq, Debug, Clone, Serialize, Deserialize, Abomonation)]
+#[derive(Ord, PartialOrd, Eq, PartialEq, Debug, Clone, Serialize, Deserialize)]
 pub struct Progress<T> {
     /// The lower bound of times contained in this statement.
     pub lower: Vec<T>,
@@ -310,9 +309,9 @@ pub mod source {
         // Step 1: The MESSAGES operator.
         let mut messages_op = OperatorBuilder::new("CDCV2_Messages".to_string(), scope.clone());
         let address = messages_op.operator_info().address;
-        let activator = scope.sync_activator_for(&address);
-        let activator2 = scope.activator_for(&address);
-        let drop_activator = DropActivator { activator: Arc::new(scope.sync_activator_for(&address)) };
+        let activator = scope.sync_activator_for(address.to_vec());
+        let activator2 = scope.activator_for(Rc::clone(&address));
+        let drop_activator = DropActivator { activator: Arc::new(scope.sync_activator_for(address.to_vec())) };
         let mut source = source_builder(activator);
         let (mut updates_out, updates) = messages_op.new_output();
         let (mut progress_out, progress) = messages_op.new_output();
@@ -582,13 +581,13 @@ pub mod sink {
         // We can simply record all updates, under the presumption that the have been consolidated
         // and so any record we see is in fact guaranteed to happen.
         let mut builder = OperatorBuilder::new("UpdatesWriter".to_owned(), stream.scope());
-        let reactivator = stream.scope().activator_for(&builder.operator_info().address);
+        let reactivator = stream.scope().activator_for(builder.operator_info().address);
         let mut input = builder.new_input(stream, Pipeline);
         let (mut updates_out, updates) = builder.new_output();
 
         builder.build_reschedule(
             move |_capability| {
-                let mut timestamps = ChangeBatch::new();
+                let mut timestamps = <ChangeBatch<_>>::new();
                 let mut send_queue = std::collections::VecDeque::new();
                 move |_frontiers| {
                     let mut output = updates_out.activate();
@@ -636,7 +635,7 @@ pub mod sink {
 
         // We use a lower-level builder here to get access to the operator address, for rescheduling.
         let mut builder = OperatorBuilder::new("ProgressWriter".to_owned(), stream.scope());
-        let reactivator = stream.scope().activator_for(&builder.operator_info().address);
+        let reactivator = stream.scope().activator_for(builder.operator_info().address);
         let mut input = builder.new_input(&updates, Exchange::new(move |_| sink_hash));
         let should_write = stream.scope().index() == (sink_hash as usize) % stream.scope().peers();
 
@@ -644,7 +643,7 @@ pub mod sink {
         // Track the advancing frontier, to know when to produce utterances.
         let mut frontier = Antichain::from_elem(T::minimum());
         // Track accumulated counts for timestamps.
-        let mut timestamps = ChangeBatch::new();
+        let mut timestamps = <ChangeBatch<_>>::new();
         // Stash for serialized data yet to send.
         let mut send_queue = std::collections::VecDeque::new();
         let mut retain = Vec::new();

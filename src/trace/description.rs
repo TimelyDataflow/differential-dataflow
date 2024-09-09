@@ -55,7 +55,6 @@
 //! will often be a logic bug, as `since` does not advance without a corresponding advance in
 //! times at which data may possibly be sent.
 
-use abomonation_derive::Abomonation;
 use timely::{PartialOrder, progress::Antichain};
 use serde::{Serialize, Deserialize};
 
@@ -66,7 +65,7 @@ use serde::{Serialize, Deserialize};
 /// frontier indicates a moment at which the times were observed. If `since` is strictly in
 /// advance of `lower`, the contained times may be "advanced" to times which appear equivalent to
 /// any time after `since`.
-#[derive(Clone, Debug, Abomonation, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Description<Time> {
     /// lower frontier of contained updates.
     lower: Antichain<Time>,

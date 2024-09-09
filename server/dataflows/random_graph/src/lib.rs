@@ -66,7 +66,7 @@ pub fn build((dataflow, handles, probe, timer, args): Environment) -> Result<(),
     let mut trace =
         source(dataflow, "RandomGraph", |cap, info| {
 
-            let activator = dataflow.activator_for(&info.address[..]);
+            let activator = dataflow.activator_for(info.address);
             let mut hist = hdrhist::HDRHist::new();
 
             let probe2 = probe.clone();

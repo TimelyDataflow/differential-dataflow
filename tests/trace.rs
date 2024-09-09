@@ -9,7 +9,7 @@ type IntegerTrace = ValSpine<u64, u64, usize, i64>;
 type IntegerBuilder = <IntegerTrace as Trace>::Builder;
 
 fn get_trace() -> ValSpine<u64, u64, usize, i64> {
-    let op_info = OperatorInfo::new(0, 0, &[]);
+    let op_info = OperatorInfo::new(0, 0, [].into());
     let mut trace = IntegerTrace::new(op_info, None, None);
     {
         let mut batcher = <IntegerTrace as Trace>::Batcher::new(None, 0);

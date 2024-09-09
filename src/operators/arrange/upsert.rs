@@ -163,7 +163,7 @@ where
             let mut capabilities = Antichain::<Capability<G::Timestamp>>::new();
             let mut buffer = Vec::new();
             // Form the trace we will both use internally and publish.
-            let activator = Some(stream.scope().activator_for(&info.address[..]));
+            let activator = Some(stream.scope().activator_for(info.address.clone()));
             let mut empty_trace = Tr::new(info.clone(), logger.clone(), activator);
 
             if let Some(exert_logic) = stream.scope().config().get::<trace::ExertionLogic>("differential/default_exert_logic").cloned() {

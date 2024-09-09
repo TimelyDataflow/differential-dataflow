@@ -11,16 +11,13 @@
 //! (as iteration within a scope requires leaving contained scopes), and then to any number of appended
 //! default coordinates (which is effectively just *setting* the coordinate).
 
-use abomonation_derive::Abomonation;
 use serde::{Deserialize, Serialize};
 
 /// A sequence of timestamps, partially ordered by the product order.
 ///
 /// Sequences of different lengths are compared as if extended indefinitely by `T::minimum()`.
 /// Sequences are guaranteed to be "minimal", and may not end with `T::minimum()` entries.
-#[derive(
-    Hash, Default, Clone, Eq, PartialEq, Ord, PartialOrd, Debug, Serialize, Deserialize, Abomonation,
-)]
+#[derive(Hash, Default, Clone, Eq, PartialEq, Ord, PartialOrd, Debug, Serialize, Deserialize)]
 pub struct PointStamp<T> {
     /// A sequence of timestamps corresponding to timestamps in a sequence of nested scopes.
     vector: Vec<T>,
@@ -118,9 +115,7 @@ impl<T: Timestamp> Refines<()> for PointStamp<T> {
 use timely::progress::PathSummary;
 
 /// Describes an action on a `PointStamp`: truncation to `length` followed by `actions`.
-#[derive(
-    Hash, Default, Clone, Eq, PartialEq, Ord, PartialOrd, Debug, Serialize, Deserialize, Abomonation
-)]
+#[derive(Hash, Default, Clone, Eq, PartialEq, Ord, PartialOrd, Debug, Serialize, Deserialize)]
 pub struct PointStampSummary<TS> {
     /// Number of leading coordinates to retain.
     ///

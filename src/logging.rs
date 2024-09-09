@@ -1,6 +1,6 @@
 //! Loggers and logging events for differential dataflow.
 
-use abomonation_derive::Abomonation;
+use serde::{Deserialize, Serialize};
 
 /// Logger for differential dataflow events.
 pub type Logger = ::timely::logging::Logger<DifferentialEvent>;
@@ -19,7 +19,7 @@ where
 }
 
 /// Possible different differential events.
-#[derive(Debug, Clone, Abomonation, Ord, PartialOrd, Eq, PartialEq)]
+#[derive(Debug, Clone, Ord, PartialOrd, Eq, PartialEq, Serialize, Deserialize)]
 pub enum DifferentialEvent {
     /// Batch creation.
     Batch(BatchEvent),
@@ -36,7 +36,7 @@ pub enum DifferentialEvent {
 }
 
 /// Either the start or end of a merge event.
-#[derive(Debug, Clone, Abomonation, Ord, PartialOrd, Eq, PartialEq)]
+#[derive(Debug, Clone, Ord, PartialOrd, Eq, PartialEq, Serialize, Deserialize)]
 pub struct BatchEvent {
     /// Operator identifier.
     pub operator: usize,
@@ -48,7 +48,7 @@ impl From<BatchEvent> for DifferentialEvent { fn from(e: BatchEvent) -> Self { D
 
 
 /// Either the start or end of a merge event.
-#[derive(Debug, Clone, Abomonation, Ord, PartialOrd, Eq, PartialEq)]
+#[derive(Debug, Clone, Ord, PartialOrd, Eq, PartialEq, Serialize, Deserialize)]
 pub struct BatcherEvent {
     /// Operator identifier.
     pub operator: usize,
@@ -65,7 +65,7 @@ pub struct BatcherEvent {
 impl From<BatcherEvent> for DifferentialEvent { fn from(e: BatcherEvent) -> Self { DifferentialEvent::Batcher(e) } }
 
 /// Either the start or end of a merge event.
-#[derive(Debug, Clone, Abomonation, Ord, PartialOrd, Eq, PartialEq)]
+#[derive(Debug, Clone, Ord, PartialOrd, Eq, PartialEq, Serialize, Deserialize)]
 pub struct DropEvent {
     /// Operator identifier.
     pub operator: usize,
@@ -76,7 +76,7 @@ pub struct DropEvent {
 impl From<DropEvent> for DifferentialEvent { fn from(e: DropEvent) -> Self { DifferentialEvent::Drop(e) } }
 
 /// Either the start or end of a merge event.
-#[derive(Debug, Clone, Abomonation, Ord, PartialOrd, Eq, PartialEq)]
+#[derive(Debug, Clone, Ord, PartialOrd, Eq, PartialEq, Serialize, Deserialize)]
 pub struct MergeEvent {
     /// Operator identifier.
     pub operator: usize,
@@ -93,7 +93,7 @@ pub struct MergeEvent {
 impl From<MergeEvent> for DifferentialEvent { fn from(e: MergeEvent) -> Self { DifferentialEvent::Merge(e) } }
 
 /// A merge failed to complete in time.
-#[derive(Debug, Clone, Abomonation, Ord, PartialOrd, Eq, PartialEq)]
+#[derive(Debug, Clone, Ord, PartialOrd, Eq, PartialEq, Serialize, Deserialize)]
 pub struct MergeShortfall {
     /// Operator identifer.
     pub operator: usize,
@@ -106,7 +106,7 @@ pub struct MergeShortfall {
 impl From<MergeShortfall> for DifferentialEvent { fn from(e: MergeShortfall) -> Self { DifferentialEvent::MergeShortfall(e) } }
 
 /// Either the start or end of a merge event.
-#[derive(Debug, Clone, Abomonation, Ord, PartialOrd, Eq, PartialEq)]
+#[derive(Debug, Clone, Ord, PartialOrd, Eq, PartialEq, Serialize, Deserialize)]
 pub struct TraceShare {
     /// Operator identifier.
     pub operator: usize,

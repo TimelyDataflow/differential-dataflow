@@ -11,11 +11,10 @@
 //! element of the second lattice, if neither first element equals
 //! the join.
 
-use abomonation_derive::Abomonation;
 use serde_derive::{Deserialize, Serialize};
 
 /// A pair of timestamps, partially ordered by the product order.
-#[derive(Debug, Hash, Default, Clone, Eq, PartialEq, Ord, PartialOrd, Abomonation, Serialize, Deserialize)]
+#[derive(Debug, Hash, Default, Clone, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
 pub struct AltNeu<T> {
     pub time: T,
     pub neu: bool,  // alt < neu in timestamp comparisons.
