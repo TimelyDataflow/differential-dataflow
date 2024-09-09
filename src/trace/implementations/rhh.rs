@@ -150,7 +150,7 @@ mod val_batch {
         pub diffs: L::DiffContainer,
     }
 
-    impl<L: Layout> RhhValStorage<L> 
+    impl<L: Layout> RhhValStorage<L>
     where 
         <L::Target as Update>::Key: Default + HashOrdered,
         for<'a> <L::KeyContainer as BatchContainer>::ReadItem<'a>: HashOrdered,
@@ -250,6 +250,14 @@ mod val_batch {
     ///
     /// The `L` parameter captures how the updates should be laid out, and `C` determines which
     /// merge batcher to select.
+    #[derive(Serialize, Deserialize)]
+    #[serde(bound = "
+        L::KeyContainer: Serialize + for<'a> Deserialize<'a>,
+        L::ValContainer: Serialize + for<'a> Deserialize<'a>,
+        L::OffsetContainer: Serialize + for<'a> Deserialize<'a>,
+        L::TimeContainer: Serialize + for<'a> Deserialize<'a>,
+        L::DiffContainer: Serialize + for<'a> Deserialize<'a>,
+    ")]
     pub struct RhhValBatch<L: Layout>
     where 
         <L::Target as Update>::Key: Default + HashOrdered,
