@@ -8,7 +8,7 @@
 use std::rc::Rc;
 use std::cmp::Ordering;
 
-use abomonation_derive::Abomonation;
+use serde::{Deserialize, Serialize};
 use timely::container::columnation::TimelyStack;
 
 use crate::Hashable;
@@ -46,7 +46,7 @@ pub trait HashOrdered: Hashable { }
 impl<'a, T: std::hash::Hash + HashOrdered> HashOrdered for &'a T { }
 
 /// A hash-ordered wrapper that modifies `Ord` and `PartialOrd`.
-#[derive(Copy, Clone, Eq, PartialEq, Debug, Abomonation, Default)]
+#[derive(Copy, Clone, Eq, PartialEq, Debug, Default, Serialize, Deserialize)]
 pub struct HashWrapper<T: std::hash::Hash + Hashable> {
     /// The inner value, freely modifiable.
     pub inner: T
@@ -86,7 +86,7 @@ mod val_batch {
 
     use std::convert::TryInto;
     use std::marker::PhantomData;
-    use abomonation_derive::Abomonation;
+    use serde::{Deserialize, Serialize};
     use timely::container::PushInto;
     use timely::progress::{Antichain, frontier::AntichainRef};
 
@@ -111,7 +111,7 @@ mod val_batch {
     /// We will use the `Hashable` trait here, but any consistent hash function should work out ok. 
     /// We specifically want to use the highest bits of the result (we will) because the low bits have
     /// likely been spent shuffling the data between workers (by key), and are likely low entropy.
-    #[derive(Abomonation)]
+    #[derive(Debug, Serialize, Deserialize)]
     pub struct RhhValStorage<L: Layout> 
     where 
         <L::Target as Update>::Key: Default + HashOrdered,
@@ -150,7 +150,7 @@ mod val_batch {
         pub diffs: L::DiffContainer,
     }
 
-    impl<L: Layout> RhhValStorage<L> 
+    impl<L: Layout> RhhValStorage<L>
     where 
         <L::Target as Update>::Key: Default + HashOrdered,
         for<'a> <L::KeyContainer as BatchContainer>::ReadItem<'a>: HashOrdered,
@@ -250,8 +250,15 @@ mod val_batch {
     ///
     /// The `L` parameter captures how the updates should be laid out, and `C` determines which
     /// merge batcher to select.
-    #[derive(Abomonation)]
-    pub struct RhhValBatch<L: Layout> 
+    #[derive(Serialize, Deserialize)]
+    #[serde(bound = "
+        L::KeyContainer: Serialize + for<'a> Deserialize<'a>,
+        L::ValContainer: Serialize + for<'a> Deserialize<'a>,
+        L::OffsetContainer: Serialize + for<'a> Deserialize<'a>,
+        L::TimeContainer: Serialize + for<'a> Deserialize<'a>,
+        L::DiffContainer: Serialize + for<'a> Deserialize<'a>,
+    ")]
+    pub struct RhhValBatch<L: Layout>
     where 
         <L::Target as Update>::Key: Default + HashOrdered,
     {

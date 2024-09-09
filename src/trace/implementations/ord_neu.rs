@@ -100,7 +100,7 @@ pub type PreferredSpine<K, V, T, R> = Spine<
 mod val_batch {
 
     use std::marker::PhantomData;
-    use abomonation_derive::Abomonation;
+    use serde::{Deserialize, Serialize};
     use timely::container::PushInto;
     use timely::progress::{Antichain, frontier::AntichainRef};
 
@@ -111,7 +111,7 @@ mod val_batch {
     use super::{Layout, Update};
 
     /// An immutable collection of update tuples, from a contiguous interval of logical times.
-    #[derive(Abomonation, Debug)]
+    #[derive(Debug, Serialize, Deserialize)]
     pub struct OrdValStorage<L: Layout> {
         /// An ordered list of keys, corresponding to entries in `keys_offs`.
         pub keys: L::KeyContainer,
@@ -159,7 +159,14 @@ mod val_batch {
     ///
     /// The `L` parameter captures how the updates should be laid out, and `C` determines which
     /// merge batcher to select.
-    #[derive(Abomonation)]
+    #[derive(Serialize, Deserialize)]
+    #[serde(bound = "
+        L::KeyContainer: Serialize + for<'a> Deserialize<'a>,
+        L::ValContainer: Serialize + for<'a> Deserialize<'a>,
+        L::OffsetContainer: Serialize + for<'a> Deserialize<'a>,
+        L::TimeContainer: Serialize + for<'a> Deserialize<'a>,
+        L::DiffContainer: Serialize + for<'a> Deserialize<'a>,
+    ")]
     pub struct OrdValBatch<L: Layout> {
         /// The updates themselves.
         pub storage: OrdValStorage<L>,
@@ -671,7 +678,7 @@ mod val_batch {
 mod key_batch {
 
     use std::marker::PhantomData;
-    use abomonation_derive::Abomonation;
+    use serde::{Deserialize, Serialize};
     use timely::container::PushInto;
     use timely::progress::{Antichain, frontier::AntichainRef};
 
@@ -682,7 +689,7 @@ mod key_batch {
     use super::{Layout, Update};
 
     /// An immutable collection of update tuples, from a contiguous interval of logical times.
-    #[derive(Abomonation, Debug)]
+    #[derive(Debug, Serialize, Deserialize)]
     pub struct OrdKeyStorage<L: Layout> {
         /// An ordered list of keys, corresponding to entries in `keys_offs`.
         pub keys: L::KeyContainer,
@@ -720,7 +727,13 @@ mod key_batch {
     ///
     /// The `L` parameter captures how the updates should be laid out, and `C` determines which
     /// merge batcher to select.
-    #[derive(Abomonation)]
+    #[derive(Serialize, Deserialize)]
+    #[serde(bound = "
+        L::KeyContainer: Serialize + for<'a> Deserialize<'a>,
+        L::OffsetContainer: Serialize + for<'a> Deserialize<'a>,
+        L::TimeContainer: Serialize + for<'a> Deserialize<'a>,
+        L::DiffContainer: Serialize + for<'a> Deserialize<'a>,
+    ")]
     pub struct OrdKeyBatch<L: Layout> {
         /// The updates themselves.
         pub storage: OrdKeyStorage<L>,

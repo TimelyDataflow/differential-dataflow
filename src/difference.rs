@@ -157,7 +157,6 @@ wrapping_implementation!(std::num::Wrapping<isize>);
 
 pub use self::present::Present;
 mod present {
-    use abomonation_derive::Abomonation;
     use serde::{Deserialize, Serialize};
 
     /// A zero-sized difference that indicates the presence of a record.
@@ -168,7 +167,7 @@ mod present {
     /// The primary feature of this type is that it has zero size, which reduces the overhead
     /// of differential dataflow's representations for settings where collections either do
     /// not change, or for which records are only added (for example, derived facts in Datalog).
-    #[derive(Abomonation, Copy, Ord, PartialOrd, Eq, PartialEq, Debug, Clone, Serialize, Deserialize, Hash)]
+    #[derive(Copy, Ord, PartialOrd, Eq, PartialEq, Debug, Clone, Serialize, Deserialize, Hash)]
     pub struct Present;
 
     impl<T: Clone> super::Multiply<T> for Present {

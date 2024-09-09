@@ -1,4 +1,3 @@
-use abomonation_derive::Abomonation;
 use rand::{Rng, SeedableRng, StdRng};
 use serde::{Deserialize, Serialize};
 
@@ -13,7 +12,7 @@ use differential_dataflow::lattice::Lattice;
 type Node = u32;
 type Edge = (Node, Node);
 
-#[derive(Abomonation, Copy, Ord, PartialOrd, Eq, PartialEq, Debug, Clone, Serialize, Deserialize, Hash)]
+#[derive(Copy, Ord, PartialOrd, Eq, PartialEq, Debug, Clone, Serialize, Deserialize, Hash)]
 pub struct MinSum {
     value: u32,
 }

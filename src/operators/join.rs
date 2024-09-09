@@ -381,7 +381,7 @@ where
         // Acquire an activator to reschedule the operator when it has unfinished work.
         use timely::scheduling::Activator;
         let activations = arranged1.stream.scope().activations().clone();
-        let activator = Activator::new(&info.address[..], activations);
+        let activator = Activator::new(info.address, activations);
 
         // Our initial invariants are that for each trace, physical compaction is less or equal the trace's upper bound.
         // These invariants ensure that we can reference observed batch frontiers from `_start_upper` onward, as long as

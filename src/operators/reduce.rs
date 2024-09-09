@@ -338,7 +338,7 @@ where
                 register.get::<crate::logging::DifferentialEvent>("differential/arrange")
             };
 
-            let activator = Some(trace.stream.scope().activator_for(&operator_info.address[..]));
+            let activator = Some(trace.stream.scope().activator_for(operator_info.address.clone()));
             let mut empty = T2::new(operator_info.clone(), logger.clone(), activator);
             // If there is default exert logic set, install it.
             if let Some(exert_logic) = trace.stream.scope().config().get::<ExertionLogic>("differential/default_exert_logic").cloned() {

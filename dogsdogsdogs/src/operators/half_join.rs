@@ -161,9 +161,7 @@ where
     stream.inner.binary_frontier(&arrangement_stream, exchange, Pipeline, "HalfJoin", move |_,info| {
 
         // Acquire an activator to reschedule the operator when it has unfinished work.
-        use timely::scheduling::Activator;
-        let activations = stream.scope().activations();
-        let activator = Activator::new(&info.address[..], activations);
+        let activator = stream.scope().activator_for(info.address);
 
         move |input1, input2, output| {
 

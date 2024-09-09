@@ -53,6 +53,9 @@ pub use self::ord_neu::OrdValSpine as ValSpine;
 pub use self::ord_neu::OrdKeySpine as KeySpine;
 
 use std::borrow::{ToOwned};
+use std::convert::TryInto;
+
+use serde::{Deserialize, Serialize};
 
 use timely::Container;
 use timely::container::columnation::{Columnation, TimelyStack};
@@ -198,11 +201,8 @@ where
     type OffsetContainer = OffsetList;
 }
 
-use std::convert::TryInto;
-use abomonation_derive::Abomonation;
-
 /// A list of unsigned integers that uses `u32` elements as long as they are small enough, and switches to `u64` once they are not.
-#[derive(Eq, PartialEq, Ord, PartialOrd, Clone, Abomonation)]
+#[derive(Eq, PartialEq, Ord, PartialOrd, Clone, Serialize, Deserialize)]
 pub struct OffsetList {
     /// Length of a prefix of zero elements.
     pub zero_prefix: usize,

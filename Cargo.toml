@@ -42,8 +42,6 @@ graph_map = "0.1"
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
-abomonation = "0.7"
-abomonation_derive = "0.5"
 fnv="1.0.2"
 timely = {workspace = true}
 

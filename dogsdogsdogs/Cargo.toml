@@ -6,8 +6,6 @@ license = "MIT"
 edition = "2021"
 
 [dependencies]
-abomonation = "0.7"
-abomonation_derive = "0.5"
 timely = { workspace = true }
 differential-dataflow = { path = "../", default-features = false }
 serde = "1"

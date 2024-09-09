@@ -164,7 +164,7 @@ fn main() {
 mod pair {
 
     /// A pair of timestamps, partially ordered by the product order.
-    #[derive(Hash, Default, Clone, Eq, PartialEq, Ord, PartialOrd, Abomonation, Serialize, Deserialize)]
+    #[derive(Hash, Default, Clone, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
     pub struct Pair<S, T> {
         pub first: S,
         pub second: T,
@@ -231,7 +231,6 @@ mod pair {
     }
 
     use std::fmt::{Formatter, Error, Debug};
-    use abomonation_derive::Abomonation;
     use serde::{Deserialize, Serialize};
 
     /// Debug implementation to avoid seeing fully qualified path names.
@@ -249,11 +248,10 @@ mod pair {
 /// from the rest of the library other than the traits it needs to implement. With this
 /// type and its implementations, you can use it as a timestamp type.
 mod vector {
-    use abomonation_derive::Abomonation;
     use serde::{Deserialize, Serialize};
 
     /// A pair of timestamps, partially ordered by the product order.
-    #[derive(Hash, Default, Clone, Eq, PartialEq, Ord, PartialOrd, Abomonation, Debug, Serialize, Deserialize)]
+    #[derive(Hash, Default, Clone, Eq, PartialEq, Ord, PartialOrd, Debug, Serialize, Deserialize)]
     pub struct Vector<T> {
         pub vector: Vec<T>,
     }

@@ -302,10 +302,10 @@ where
 
                 let capabilities = Rc::new(RefCell::new(Some(CapabilitySet::new())));
 
-                let activator = scope.activator_for(&info.address[..]);
+                let activator = scope.activator_for(Rc::clone(&info.address));
                 let queue = self.new_listener(activator);
 
-                let activator = scope.activator_for(&info.address[..]);
+                let activator = scope.activator_for(info.address);
                 *shutdown_button_ref = Some(ShutdownButton::new(capabilities.clone(), activator));
 
                 capabilities.borrow_mut().as_mut().unwrap().insert(capability);
@@ -439,10 +439,10 @@ where
 
                 let capabilities = Rc::new(RefCell::new(Some(CapabilitySet::new())));
 
-                let activator = scope.activator_for(&info.address[..]);
+                let activator = scope.activator_for(Rc::clone(&info.address));
                 let queue = self.new_listener(activator);
 
-                let activator = scope.activator_for(&info.address[..]);
+                let activator = scope.activator_for(info.address);
                 *shutdown_button_ref = Some(ShutdownButton::new(capabilities.clone(), activator));
 
                 capabilities.borrow_mut().as_mut().unwrap().insert(capability);
