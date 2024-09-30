@@ -35,7 +35,7 @@
 //!
 //! Importantly, the `Trace` type has no connection to the timely dataflow runtime.
 //! This means a trace can be used in a variety of contexts where a `Stream` would not be
-//! appropriate, for example outside of the dataflow in which the arragement is performed.
+//! appropriate, for example outside of the dataflow in which the arrangement is performed.
 //! Traces may be directly inspected by any code with access to them, and they can even be
 //! used to introduce the batches to other dataflows with the `import` method.
 

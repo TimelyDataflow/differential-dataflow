@@ -72,7 +72,7 @@ fn main() {
                         .probe_with(&mut probe);
                 }
                 _ => {
-                    println!("unreconized mode: {:?}", mode)
+                    println!("unrecognized mode: {:?}", mode)
                 }
             }
 

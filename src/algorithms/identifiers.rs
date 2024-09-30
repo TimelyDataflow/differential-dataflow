@@ -52,7 +52,7 @@ where
         // additions and subtractions of losers, rather than reproducing
         // the winners. This is done under the premise that losers are
         // very rare, and maintaining winners in both the input and output
-        // of `reduce` is an unneccesary duplication.
+        // of `reduce` is an unnecessary duplication.
 
         use crate::collection::AsCollection;
 

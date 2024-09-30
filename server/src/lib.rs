@@ -32,7 +32,7 @@ pub type Environment<'a, 'b> = (
 ///
 /// This type is meant to be a smart pointer for a type `T` that needs to keep
 /// a `Library` alive, perhaps because its methods would call in to the library.
-/// The type should have a specified drop order (viz RFC 1857) which guarentees
+/// The type should have a specified drop order (viz RFC 1857) which guarantees
 /// that the shared library reference drops only after the element itself is
 /// dropped. It also implements `Deref` and `DerefMut` to provide the experience
 /// of a `T` itself.

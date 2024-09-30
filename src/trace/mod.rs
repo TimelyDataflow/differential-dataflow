@@ -102,7 +102,7 @@ pub trait TraceReader {
     /// Logical compaction is important, as it allows the trace to forget historical distinctions between update
     /// times, and maintain a compact memory footprint over an unbounded update history.
     ///
-    /// By advancing the logical compaction frontier, the caller unblocks merging of otherwise equivalent udates,
+    /// By advancing the logical compaction frontier, the caller unblocks merging of otherwise equivalent updates,
     /// but loses the ability to observe historical detail that is not beyond `frontier`.
     ///
     /// It is an error to call this method with a frontier not equal to or beyond the most recent arguments to
@@ -153,7 +153,7 @@ pub trait TraceReader {
 
     /// Reports the physical compaction frontier.
     ///
-    /// All batches containing updates beyond this frontier will not be merged with ohter batches. This allows
+    /// All batches containing updates beyond this frontier will not be merged with other batches. This allows
     /// the caller to create a cursor through any frontier beyond the physical compaction frontier, with the
     /// `cursor_through()` method. This functionality is primarily of interest to the `join` operator, and any
     /// other operators who need to take notice of the physical structure of update batches.

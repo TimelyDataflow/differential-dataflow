@@ -24,7 +24,7 @@
 //!
 //! Each of these representations is best suited for different data, but they can be combined to get the
 //! benefits of each, as appropriate. There are several `Cursor` combiners, `CursorList` and `CursorPair`,
-//! for homogenous and inhomogenous cursors, respectively.
+//! for homogeneous and inhomogeneous cursors, respectively.
 //!
 //! #Musings
 //!
@@ -527,7 +527,7 @@ pub mod containers {
         /// Indicates if the length is zero.
         fn is_empty(&self) -> bool { self.len() == 0 }
 
-        /// Reports the number of elements satisfing the predicate.
+        /// Reports the number of elements satisfying the predicate.
         ///
         /// This methods *relies strongly* on the assumption that the predicate
         /// stays false once it becomes false, a joint property of the predicate
@@ -537,7 +537,7 @@ pub mod containers {
 
             let small_limit = 8;
 
-            // Exponential seach if the answer isn't within `small_limit`.
+            // Exponential search if the answer isn't within `small_limit`.
             if end > start + small_limit && function(self.index(start + small_limit)) {
 
                 // start with no advance

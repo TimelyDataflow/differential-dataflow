@@ -1199,7 +1199,7 @@ fn main() {
 
             while probe.less_than(inputs.0[0].time()) { worker.step(); }
 
-            println!("{:?}\tcomputation initalized", timer.elapsed());
+            println!("{:?}\tcomputation initialized", timer.elapsed());
 
             if batch > 0 {
 
