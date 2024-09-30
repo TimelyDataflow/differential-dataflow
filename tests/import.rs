@@ -28,7 +28,7 @@ fn run_test<T>(test: T, expected: Vec<(usize, Vec<((u64, i64), i64)>)>) -> ()
     let out =
     results
         .into_iter()
-        .group_by(|&(_, t, _)| t)
+        .chunk_by(|&(_, t, _)| t)
         .into_iter()
         .map(|(t, vals)| {
             let mut vec = vals.map(|(v, _, w)| (v, w)).collect::<Vec<_>>();
