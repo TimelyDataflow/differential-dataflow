@@ -815,7 +815,7 @@ impl<B: Batch> MergeState<B> where B::Time: Eq {
     /// between Vacant entries and structurally empty batches, which should be done
     /// with the `is_complete()` method.
     ///
-    /// There is the addional option of input batches.
+    /// There is the additional option of input batches.
     fn complete(&mut self) -> Option<(B, Option<(B, B)>)>  {
         match std::mem::replace(self, MergeState::Vacant) {
             MergeState::Vacant => None,

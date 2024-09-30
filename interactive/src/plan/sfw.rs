@@ -35,7 +35,7 @@ use differential_dataflow::{Collection, ExchangeData};
 use crate::plan::{Plan, Render};
 use crate::{TraceManager, Time, Diff, Datum};
 
-/// A multiway join of muliple relations.
+/// A multiway join of multiple relations.
 ///
 /// By expressing multiple relations and required equivalances between their attributes,
 /// we can more efficiently design incremental update strategies without materializing

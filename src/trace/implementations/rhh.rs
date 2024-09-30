@@ -683,7 +683,7 @@ mod val_batch {
             // We may have already passed `key`, and confirmed its absence, but our goal is to
             // find the next key afterwards so that users can, for example, alternately iterate.
             while self.key_valid(storage) && storage.storage.advance_key(self.key_cursor, key) {
-                // TODO: Based on our encoding, we could skip logarithmically over empy regions by galloping
+                // TODO: Based on our encoding, we could skip logarithmically over empty regions by galloping
                 //       through `storage.keys_offs`, which stays put for dead space.
                 self.key_cursor += 1;
             }

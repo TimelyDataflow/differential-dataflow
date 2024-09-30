@@ -109,7 +109,7 @@ fn main() {
 
         });
 
-        // Introduce XY projektion.
+        // Introduce XY projection.
         xy_goal.insert((0, 0));
         xy_goal.insert((0, 1));
         xy_goal.insert((0, 3));
@@ -125,7 +125,7 @@ fn main() {
         xy_goal.insert((4, 1));
         xy_goal.insert((4, 2));
 
-        // Introduce XZ projektion.
+        // Introduce XZ projection.
         xz_goal.insert((0, 2));
         xz_goal.insert((0, 3));
         xz_goal.insert((0, 4));

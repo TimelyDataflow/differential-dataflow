@@ -322,7 +322,7 @@ pub fn consolidate_container<C: ConsolidateLayout>(container: &mut C, target: &m
     for item in permutation.drain(..) {
         let (key, diff) = C::into_parts(item);
         match &mut previous {
-            // Initial iteration, remeber key and diff.
+            // Initial iteration, remember key and diff.
             // TODO: Opportunity for GatCow for diff.
             None => previous = Some((key, diff.into_owned())),
             Some((prevkey, d)) => {

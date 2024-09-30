@@ -68,7 +68,7 @@ impl<T: Timestamp> PointStamp<T> {
     /// Returns the wrapped vector.
     ///
     /// This method is the support way to mutate the contents of `self`, by extracting 
-    /// the vector and then re-introducting it with `PointStamp::new` to re-establish 
+    /// the vector and then re-introducing it with `PointStamp::new` to re-establish
     /// the invariant that the vector not end with `T::minimum`.
     pub fn into_vec(self) -> Vec<T> {
         self.vector
@@ -196,7 +196,7 @@ impl<T: Timestamp> PathSummary<PointStamp<T>> for PointStampSummary<T::Summary> 
 impl<TS: PartialOrder> PartialOrder for PointStampSummary<TS> {
     fn less_equal(&self, other: &Self) -> bool {
         // If the `retain`s are not the same, there is some coordinate which
-        // could either be bigger or smaller as the timestamp or the replacemnt.
+        // could either be bigger or smaller as the timestamp or the replacement.
         // In principle, a `T::minimum()` extension could break this rule, and
         // we could tighten this logic if needed; I think it is fine not to though.
         self.retain == other.retain

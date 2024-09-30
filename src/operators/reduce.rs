@@ -400,7 +400,7 @@ where
                 let mut batch_cursors = Vec::new();
                 let mut batch_storage = Vec::new();
 
-                // Downgrate previous upper limit to be current lower limit.
+                // Downgrade previous upper limit to be current lower limit.
                 lower_limit.clear();
                 lower_limit.extend(upper_limit.borrow().iter().cloned());
 
@@ -603,7 +603,7 @@ where
                         }
                         capabilities = new_capabilities;
 
-                        // ensure that observed progres is reflected in the output.
+                        // ensure that observed progress is reflected in the output.
                         output_writer.seal(upper_limit.clone());
                     }
                     else {

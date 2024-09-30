@@ -26,7 +26,7 @@
 //! collections.
 //!
 //! There are some caveats about ties, and we should treat each `time` for
-//! each input as occuring at distinct times, one after the other (so that
+//! each input as occurring at distinct times, one after the other (so that
 //! ties are resolved by the index of the input). There is also the matter
 //! of logical compaction, which should not be done in a way that prevents
 //! the correct determination of the total order comparison.

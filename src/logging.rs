@@ -95,7 +95,7 @@ impl From<MergeEvent> for DifferentialEvent { fn from(e: MergeEvent) -> Self { D
 /// A merge failed to complete in time.
 #[derive(Debug, Clone, Ord, PartialOrd, Eq, PartialEq, Serialize, Deserialize)]
 pub struct MergeShortfall {
-    /// Operator identifer.
+    /// Operator identifier.
     pub operator: usize,
     /// Which order of magnitude.
     pub scale: usize,

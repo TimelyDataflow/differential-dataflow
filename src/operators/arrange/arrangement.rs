@@ -480,7 +480,7 @@ where
                 //
                 // 1. If any held capabilities are not in advance of the new input frontier,
                 //    we must carve out updates now in advance of the new input frontier and
-                //    transmit them as batches, which requires appropriate *single* capabilites;
+                //    transmit them as batches, which requires appropriate *single* capabilities;
                 //    Until timely dataflow supports multiple capabilities on messages, at least.
                 //
                 // 2. If there are no held capabilities in advance of the new input frontier,
