@@ -25,18 +25,10 @@ version = "0.1.0"
 authors = ["Your Name <your_name@you.ch>"]
 
 [dependencies]
-timely = "0.12.0"
-differential-dataflow = "0.12.0"
-```
-
-You should only need to add those last two lines there, which bring in dependencies on both [timely dataflow](https://github.com/TimelyDataflow/timely-dataflow) and [differential dataflow](https://github.com/TimelyDataflow/differential-dataflow). We will be using both of those.
-
-If you would like to point at the most current code release, hosted on github, you can replace the dependencies with:
-
-```toml
-[dependencies]
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow" }
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow" }
 ```
+
+You should only need to add those last two lines there, which bring in dependencies on both [timely dataflow](https://github.com/TimelyDataflow/timely-dataflow) and [differential dataflow](https://github.com/TimelyDataflow/differential-dataflow). We will be using both of those.
 
 You should now be ready to go. Code examples should mostly work, and you should complain (or [file an issue](https://github.com/TimelyDataflow/differential-dataflow/issues)) if they do not!
