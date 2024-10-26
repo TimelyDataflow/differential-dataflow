@@ -69,7 +69,8 @@ where
 
         self.stream.unary_frontier(Pipeline, "CountTotal", move |_,_| {
 
-            // tracks the upper limit of known-complete timestamps.
+            // tracks the lower and upper limits of known-complete timestamps.
+            let mut lower_limit = timely::progress::frontier::Antichain::from_elem(<G::Timestamp as timely::progress::Timestamp>::minimum());
             let mut upper_limit = timely::progress::frontier::Antichain::from_elem(<G::Timestamp as timely::progress::Timestamp>::minimum());
 
             move |input, output| {
@@ -80,7 +81,8 @@ where
                     let mut session = output.session(&capability);
                     for batch in buffer.drain(..) {
                         let mut batch_cursor = batch.cursor();
-                        let (mut trace_cursor, trace_storage) = trace.cursor_through(batch.lower().borrow()).unwrap();
+                        trace.advance_upper(&mut lower_limit);
+                        let (mut trace_cursor, trace_storage) = trace.cursor_through(lower_limit.borrow()).unwrap();
                         upper_limit.clone_from(batch.upper());
 
                         while let Some(key) = batch_cursor.get_key(&batch) {
@@ -122,5 +124,47 @@ where
             }
         })
         .as_collection()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use timely::dataflow::ProbeHandle;
+    use timely::dataflow::operators::Probe;
+    use timely::progress::frontier::AntichainRef;
+
+    use crate::input::Input;
+    use crate::operators::CountTotal;
+    use crate::operators::arrange::ArrangeBySelf;
+    use crate::trace::TraceReader;
+
+    #[test]
+    fn test_count_total() {
+        timely::execute_directly(move |worker| {
+            let mut probe = ProbeHandle::new();
+            let (mut input, mut trace) = worker.dataflow::<u32, _, _>(|scope| {
+                let (handle, input) = scope.new_collection();
+                let arrange = input.arrange_by_self();
+                arrange.stream.probe_with(&mut probe);
+                (handle, arrange.trace)
+            });
+
+            // ingest some batches
+            for _ in 0..10 {
+                input.insert(10);
+                input.advance_to(input.time() + 1);
+                input.flush();
+                worker.step_while(|| probe.less_than(input.time()));
+            }
+
+            // advance the trace
+            trace.set_physical_compaction(AntichainRef::new(&[2]));
+            trace.set_logical_compaction(AntichainRef::new(&[2]));
+
+            worker.dataflow::<u32, _, _>(|scope| {
+                let arrange = trace.import(scope);
+                arrange.count_total();
+            });
+        });
     }
 }
