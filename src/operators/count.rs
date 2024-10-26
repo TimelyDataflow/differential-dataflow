@@ -69,51 +69,72 @@ where
 
         self.stream.unary_frontier(Pipeline, "CountTotal", move |_,_| {
 
-            // tracks the upper limit of known-complete timestamps.
+            // tracks the lower and upper limit of received batches.
+            let mut lower_limit = timely::progress::frontier::Antichain::from_elem(<G::Timestamp as timely::progress::Timestamp>::minimum());
             let mut upper_limit = timely::progress::frontier::Antichain::from_elem(<G::Timestamp as timely::progress::Timestamp>::minimum());
 
             move |input, output| {
 
-                use crate::trace::cursor::IntoOwned;
+                let mut batch_cursors = Vec::new();
+                let mut batch_storage = Vec::new();
+
+                // Downgrade previous upper limit to be current lower limit.
+                lower_limit.clear();
+                lower_limit.extend(upper_limit.borrow().iter().cloned());
+
+                let mut cap = None;
                 input.for_each(|capability, batches| {
+                    if cap.is_none() {                          // NB: Assumes batches are in-order
+                        cap = Some(capability.retain());
+                    }
                     batches.swap(&mut buffer);
-                    let mut session = output.session(&capability);
                     for batch in buffer.drain(..) {
-                        let mut batch_cursor = batch.cursor();
-                        let (mut trace_cursor, trace_storage) = trace.cursor_through(batch.lower().borrow()).unwrap();
-                        upper_limit.clone_from(batch.upper());
-
-                        while let Some(key) = batch_cursor.get_key(&batch) {
-                            let mut count: Option<T1::Diff> = None;
-
-                            trace_cursor.seek_key(&trace_storage, key);
-                            if trace_cursor.get_key(&trace_storage) == Some(key) {
-                                trace_cursor.map_times(&trace_storage, |_, diff| {
-                                    count.as_mut().map(|c| c.plus_equals(&diff));
-                                    if count.is_none() { count = Some(diff.into_owned()); }
-                                });
-                            }
-
-                            batch_cursor.map_times(&batch, |time, diff| {
-
-                                if let Some(count) = count.as_ref() {
-                                    if !count.is_zero() {
-                                        session.give(((key.into_owned(), count.clone()), time.into_owned(), R2::from(-1i8)));
-                                    }
-                                }
-                                count.as_mut().map(|c| c.plus_equals(&diff));
-                                if count.is_none() { count = Some(diff.into_owned()); }
-                                if let Some(count) = count.as_ref() {
-                                    if !count.is_zero() {
-                                        session.give(((key.into_owned(), count.clone()), time.into_owned(), R2::from(1i8)));
-                                    }
-                                }
-                            });
-
-                            batch_cursor.step_key(&batch);
-                        }
+                        upper_limit.clone_from(batch.upper());  // NB: Assumes batches are in-order
+                        batch_cursors.push(batch.cursor());
+                        batch_storage.push(batch);
                     }
                 });
+
+                if let Some(capability) = cap {
+
+                    let mut session = output.session(&capability);
+
+                    use crate::trace::cursor::CursorList;
+                    let mut batch_cursor = CursorList::new(batch_cursors, &batch_storage);
+
+                    trace.advance_upper(&mut lower_limit);
+                    let (mut trace_cursor, trace_storage) = trace.cursor_through(lower_limit.borrow()).unwrap();
+
+                    while let Some(key) = batch_cursor.get_key(&batch_storage) {
+                        let mut count: Option<T1::Diff> = None;
+
+                        trace_cursor.seek_key(&trace_storage, key);
+                        if trace_cursor.get_key(&trace_storage) == Some(key) {
+                            trace_cursor.map_times(&trace_storage, |_, diff| {
+                                count.as_mut().map(|c| c.plus_equals(&diff));
+                                if count.is_none() { count = Some(diff.into_owned()); }
+                            });
+                        }
+
+                        batch_cursor.map_times(&batch_storage, |time, diff| {
+
+                            if let Some(count) = count.as_ref() {
+                                if !count.is_zero() {
+                                    session.give(((key.into_owned(), count.clone()), time.into_owned(), R2::from(-1i8)));
+                                }
+                            }
+                            count.as_mut().map(|c| c.plus_equals(&diff));
+                            if count.is_none() { count = Some(diff.into_owned()); }
+                            if let Some(count) = count.as_ref() {
+                                if !count.is_zero() {
+                                    session.give(((key.into_owned(), count.clone()), time.into_owned(), R2::from(1i8)));
+                                }
+                            }
+                        });
+
+                        batch_cursor.step_key(&batch_storage);
+                    }
+                }
 
                 // tidy up the shared input trace.
                 trace.advance_upper(&mut upper_limit);
