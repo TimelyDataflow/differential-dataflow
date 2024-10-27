@@ -101,8 +101,6 @@ where
 
                     use crate::trace::cursor::CursorList;
                     let mut batch_cursor = CursorList::new(batch_cursors, &batch_storage);
-
-                    trace.advance_upper(&mut lower_limit);
                     let (mut trace_cursor, trace_storage) = trace.cursor_through(lower_limit.borrow()).unwrap();
 
                     while let Some(key) = batch_cursor.get_key(&batch_storage) {
