@@ -33,7 +33,7 @@ fn main() {
                 let changes1 = edges1.inner.map(|((k,v),t,r)| ((k,v,t.clone()),t,r)).as_collection();
                 let changes2 = edges2.inner.map(|((k,v),t,r)| ((k,v,t.clone()),t,r)).as_collection();
 
-                use dogsdogsdogs::operators::half_join;
+                use differential_dogs3::operators::half_join;
 
                 // pick a frontier that will not mislead TOTAL ORDER comparisons.
                 let closure = |time: &Product<usize, usize>, antichain: &mut timely::progress::Antichain<Product<usize, usize>>| { 
