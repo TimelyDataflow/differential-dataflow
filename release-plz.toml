@@ -1,20 +1,19 @@
 [workspace]
 # disable the changelog for all packages
 changelog_update = false
+# disable releasing all packages
 release = false
 
 [[package]]
 name = "differential-dataflow"
+# enable releasing package
 release = true
 # enable the changelog for this package
 changelog_update = true
-# set the path of the changelog to the root of the repository
-changelog_path = "./CHANGELOG.md"
 
 [[package]]
 name = "differential-dogs3"
+# enable releasing package
 release = true
 # enable the changelog for this package
 changelog_update = true
-# set the path of the changelog to the root of the repository
-changelog_path = "./CHANGELOG.md"
