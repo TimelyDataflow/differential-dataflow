@@ -9,6 +9,6 @@ publish = false
 bincode = "1"
 serde = { version = "1", features = ["derive"]}
 differential-dataflow = { path = "../" }
-dogsdogsdogs = { path = "../dogsdogsdogs" }
-timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", features = ["bincode"] }
+differential-dogs3 = { path = "../dogsdogsdogs" }
+timely = { workspace = true }
 #timely = { path = "../../timely-dataflow/timely", features = ["bincode"] }
