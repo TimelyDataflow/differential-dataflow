@@ -230,7 +230,7 @@ impl<V: ExchangeData+Hash+Datum> Render for MultiwayJoin<V> {
             }
 
             // Build the dataflow.
-            use dogsdogsdogs::altneu::AltNeu;
+            use differential_dogs3::altneu::AltNeu;
 
             let scope_name = format!("DeltaRule: {}/{}", index, self.sources.len());
             let changes = scope.clone().scoped::<AltNeu<_>,_,_>(&scope_name, |inner| {
@@ -250,11 +250,11 @@ impl<V: ExchangeData+Hash+Datum> Render for MultiwayJoin<V> {
                     changes =
                     if join_idx < index {
                         let arrangement = trace.import(scope).enter_at(inner, |_,_,t| AltNeu::alt(t.clone()), |_| unimplemented!());
-                        dogsdogsdogs::operators::propose(&changes, arrangement, key_selector)
+                        differential_dogs3::operators::propose(&changes, arrangement, key_selector)
                     }
                     else {
                         let arrangement = trace.import(scope).enter_at(inner, |_,_,t| AltNeu::neu(t.clone()), |_| unimplemented!());
-                        dogsdogsdogs::operators::propose(&changes, arrangement, key_selector)
+                        differential_dogs3::operators::propose(&changes, arrangement, key_selector)
                     }
                     .map(|(mut prefix, extensions)| { prefix.extend(extensions.into_iter()); prefix })
                     ;

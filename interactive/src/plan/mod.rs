@@ -170,7 +170,7 @@ impl<V: ExchangeData+Hash+Datum> Render for Plan<V> {
                         input_arrangement
                     };
 
-                    let output = input.reduce_abelian::<_,KeySpine<_,_,_>>("Distinct", move |_,_,t| t.push(((), 1)));
+                    let output = input.reduce_abelian::<_,_,_,KeySpine<_,_,_>>("Distinct", move |_,_,t| t.push(((), 1)));
 
                     arrangements.set_unkeyed(&self, &output.trace);
                     output.as_collection(|k,&()| k.clone())
