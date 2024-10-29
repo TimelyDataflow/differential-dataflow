@@ -46,8 +46,7 @@ fnv="1.0.2"
 timely = {workspace = true}
 
 [workspace.dependencies]
-#timely = { version = "0.12", default-features = false }
-timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false }
+timely = { version = "0.13", default-features = false }
 #timely = { path = "../timely-dataflow/timely/", default-features = false }
 
 [features]

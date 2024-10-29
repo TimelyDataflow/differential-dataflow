@@ -2,6 +2,7 @@
 name = "advent_of_code_2017"
 version = "0.1.0"
 authors = ["Frank McSherry <fmcsherry@me.com>"]
+publish = false
 
 [dependencies]
 differential-dataflow = { path = "../" }
