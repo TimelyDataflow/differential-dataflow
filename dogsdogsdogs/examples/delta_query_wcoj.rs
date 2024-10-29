@@ -3,8 +3,8 @@ use timely::dataflow::operators::probe::Handle;
 use differential_dataflow::input::Input;
 use graph_map::GraphMMap;
 
-use dogsdogsdogs::{CollectionIndex, altneu::AltNeu};
-use dogsdogsdogs::{ProposeExtensionMethod};
+use differential_dogs3::{CollectionIndex, altneu::AltNeu};
+use differential_dogs3::{ProposeExtensionMethod};
 
 fn main() {
 

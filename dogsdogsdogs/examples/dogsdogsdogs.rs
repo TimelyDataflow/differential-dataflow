@@ -4,7 +4,7 @@ use differential_dataflow::{Collection, AsCollection};
 use differential_dataflow::input::Input;
 use graph_map::GraphMMap;
 
-use dogsdogsdogs::{CollectionIndex, PrefixExtender};
+use differential_dogs3::{CollectionIndex, PrefixExtender};
 
 fn main() {
 

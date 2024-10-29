@@ -11,7 +11,7 @@
 //! element of the second lattice, if neither first element equals
 //! the join.
 
-use serde_derive::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 
 /// A pair of timestamps, partially ordered by the product order.
 #[derive(Debug, Hash, Default, Clone, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]

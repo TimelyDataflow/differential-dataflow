@@ -4,8 +4,8 @@ use differential_dataflow::input::Input;
 use differential_dataflow::operators::JoinCore;
 use graph_map::GraphMMap;
 
-use dogsdogsdogs::altneu::AltNeu;
-use dogsdogsdogs::calculus::{Differentiate, Integrate};
+use differential_dogs3::altneu::AltNeu;
+use differential_dogs3::calculus::{Differentiate, Integrate};
 
 fn main() {
 
@@ -74,8 +74,8 @@ fn main() {
                 let key1 = |x: &(u32, u32)| x.0;
                 let key2 = |x: &(u32, u32)| x.1;
 
-                use dogsdogsdogs::operators::propose;
-                use dogsdogsdogs::operators::validate;
+                use differential_dogs3::operators::propose;
+                use differential_dogs3::operators::validate;
 
                 // Prior technology
                 //   dQ/dE1 := dE1(a,b), E2(b,c), E3(a,c)

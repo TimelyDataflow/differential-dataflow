@@ -1,5 +1,5 @@
 [package]
-name = "dogsdogsdogs"
+name = "differential-dogs3"
 version = "0.1.0"
 authors = ["Frank McSherry <fmcsherry@me.com>"]
 license = "MIT"
@@ -8,8 +8,7 @@ edition = "2021"
 [dependencies]
 timely = { workspace = true }
 differential-dataflow = { path = "../", default-features = false }
-serde = "1"
-serde_derive = "1"
+serde = { version = "1.0", features = ["derive"]}
 
 [dev-dependencies]
 graph_map = "0.1"

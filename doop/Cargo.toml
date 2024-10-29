@@ -3,6 +3,7 @@ name = "doop"
 version = "0.1.0"
 authors = ["Frank McSherry <fmcsherry@me.com>"]
 edition = "2021"
+publish = false
 
 [dependencies]
 indexmap = "2.1"

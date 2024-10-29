@@ -1,0 +1,19 @@
+[workspace]
+# disable the changelog for all packages
+changelog_update = false
+# disable releasing all packages
+release = false
+
+[[package]]
+name = "differential-dataflow"
+# enable releasing package
+release = true
+# enable the changelog for this package
+changelog_update = true
+
+[[package]]
+name = "differential-dogs3"
+# enable releasing package
+release = true
+# enable the changelog for this package
+changelog_update = true
