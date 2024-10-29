@@ -4,6 +4,7 @@ version = "0.1.0"
 authors = ["Frank McSherry <fmcsherry@me.com>"]
 license = "MIT"
 edition = "2021"
+description = "Advanced join patterns in differential dataflow"
 
 [dependencies]
 timely = { workspace = true }
