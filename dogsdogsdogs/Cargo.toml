@@ -7,7 +7,7 @@ edition = "2021"
 
 [dependencies]
 timely = { workspace = true }
-differential-dataflow = { path = "../", default-features = false }
+differential-dataflow = { path = "../", default-features = false, version = "0.13.0" }
 serde = { version = "1.0", features = ["derive"]}
 
 [dev-dependencies]
