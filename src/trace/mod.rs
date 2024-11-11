@@ -12,7 +12,6 @@ pub mod description;
 pub mod implementations;
 pub mod wrappers;
 
-use timely::communication::message::RefOrMut;
 use timely::logging::WorkerIdentifier;
 use timely::logging_core::Logger;
 use timely::progress::{Antichain, frontier::AntichainRef};
@@ -315,7 +314,7 @@ pub trait Batcher {
     /// Allocates a new empty batcher.
     fn new(logger: Option<Logger<DifferentialEvent, WorkerIdentifier>>, operator_id: usize) -> Self;
     /// Adds an unordered container of elements to the batcher.
-    fn push_container(&mut self, batch: RefOrMut<Self::Input>);
+    fn push_container(&mut self, batch: &mut Self::Input);
     /// Returns all updates not greater or equal to an element of `upper`.
     fn seal<B: Builder<Input=Self::Output, Time=Self::Time>>(&mut self, upper: Antichain<Self::Time>) -> B::Output;
     /// Returns the lower envelope of contained update times.

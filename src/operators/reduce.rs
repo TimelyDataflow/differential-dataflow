@@ -373,8 +373,6 @@ where
             let mut output_upper = Antichain::from_elem(<G::Timestamp as timely::progress::Timestamp>::minimum());
             let mut output_lower = Antichain::from_elem(<G::Timestamp as timely::progress::Timestamp>::minimum());
 
-            let mut input_buffer = Vec::new();
-
             let id = trace.stream.scope().index();
 
             move |input, output| {
@@ -409,8 +407,7 @@ where
                 // times in the batch.
                 input.for_each(|capability, batches| {
 
-                    batches.swap(&mut input_buffer);
-                    for batch in input_buffer.drain(..) {
+                    for batch in batches.drain(..) {
                         upper_limit.clone_from(batch.upper());
                         batch_cursors.push(batch.cursor());
                         batch_storage.push(batch);

@@ -600,7 +600,7 @@ pub mod sink {
                         }
 
                         // Now record the update to the writer.
-                        send_queue.push_back(Message::Updates(updates.replace(Vec::new())));
+                        send_queue.push_back(Message::Updates(std::mem::take(updates)));
 
                         // Transmit timestamp counts downstream.
                         output

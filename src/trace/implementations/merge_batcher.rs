@@ -3,7 +3,6 @@
 use std::collections::VecDeque;
 use std::marker::PhantomData;
 
-use timely::communication::message::RefOrMut;
 use timely::logging::WorkerIdentifier;
 use timely::logging_core::Logger;
 use timely::progress::frontier::AntichainRef;
@@ -45,7 +44,7 @@ where
 
 impl<Input, C, M, T> Batcher for MergeBatcher<Input, C, M, T>
 where
-    C: ContainerBuilder<Container=M::Chunk> + Default + for<'a> PushInto<RefOrMut<'a, Input>>,
+    C: ContainerBuilder<Container=M::Chunk> + Default + for<'a> PushInto<&'a mut Input>,
     M: Merger<Time = T>,
     T: Timestamp,
 {
@@ -69,7 +68,7 @@ where
 
     /// Push a container of data into this merge batcher. Updates the internal chain structure if
     /// needed.
-    fn push_container(&mut self, container: RefOrMut<Input>) {
+    fn push_container(&mut self, container: &mut Input) {
         self.chunker.push_into(container);
         while let Some(chunk) = self.chunker.extract() {
             let chunk = std::mem::take(chunk);
