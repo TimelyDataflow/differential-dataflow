@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dogs3-v0.1.0...differential-dogs3-v0.1.1) - 2024-11-11
+
+### Other
+
+- Changes to track timely's [#597](https://github.com/TimelyDataflow/differential-dataflow/pull/597) ([#538](https://github.com/TimelyDataflow/differential-dataflow/pull/538))
+
 ## [0.1.0](https://github.com/TimelyDataflow/differential-dataflow/releases/tag/differential-dogs3-v0.1.0) - 2024-10-29
 
 Changelog bankruptcy declared.
