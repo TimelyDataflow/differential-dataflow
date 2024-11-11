@@ -14,12 +14,11 @@ fn get_trace() -> ValSpine<u64, u64, usize, i64> {
     {
         let mut batcher = <IntegerTrace as Trace>::Batcher::new(None, 0);
 
-        use timely::communication::message::RefOrMut;
-        batcher.push_container(RefOrMut::Mut(&mut vec![
+        batcher.push_container(&mut vec![
             ((1, 2), 0, 1),
             ((2, 3), 1, 1),
             ((2, 3), 2, -1),
-        ]));
+        ]);
 
         let batch_ts = &[1, 2, 3];
         let batches = batch_ts.iter().map(move |i| batcher.seal::<IntegerBuilder>(Antichain::from_elem(*i)));

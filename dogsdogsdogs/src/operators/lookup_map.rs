@@ -49,8 +49,6 @@ where
     let mut logic1 = key_selector.clone();
     let mut logic2 = key_selector.clone();
 
-    let mut buffer = Vec::new();
-
     let mut key: K = supplied_key0;
     let exchange = Exchange::new(move |update: &(D,G::Timestamp,R)| {
         logic1(&update.0, &mut key);
@@ -64,10 +62,9 @@ where
 
         // drain the first input, stashing requests.
         input1.for_each(|capability, data| {
-            data.swap(&mut buffer);
             stash.entry(capability.retain())
                  .or_insert(Vec::new())
-                 .extend(buffer.drain(..))
+                 .extend(data.drain(..))
         });
 
         // Drain input batches; although we do not observe them, we want access to the input

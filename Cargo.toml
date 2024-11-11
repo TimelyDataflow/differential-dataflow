@@ -46,7 +46,7 @@ fnv="1.0.2"
 timely = {workspace = true}
 
 [workspace.dependencies]
-timely = { version = "0.13", default-features = false }
+timely = { version = "0.14", default-features = false }
 #timely = { path = "../timely-dataflow/timely/", default-features = false }
 
 [features]

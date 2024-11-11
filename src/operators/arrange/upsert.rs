@@ -161,7 +161,6 @@ where
 
             // Tracks the lower envelope of times in `priority_queue`.
             let mut capabilities = Antichain::<Capability<G::Timestamp>>::new();
-            let mut buffer = Vec::new();
             // Form the trace we will both use internally and publish.
             let activator = Some(stream.scope().activator_for(info.address.clone()));
             let mut empty_trace = Tr::new(info.clone(), logger.clone(), activator);
@@ -186,8 +185,7 @@ where
                 // Stash capabilities and associated data (ordered by time).
                 input.for_each(|cap, data| {
                     capabilities.insert(cap.retain());
-                    data.swap(&mut buffer);
-                    for (key, val, time) in buffer.drain(..) {
+                    for (key, val, time) in data.drain(..) {
                         priority_queue.push(std::cmp::Reverse((time, key, val)))
                     }
                 });

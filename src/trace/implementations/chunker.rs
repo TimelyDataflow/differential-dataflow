@@ -1,7 +1,6 @@
 //! Organize streams of data into sorted chunks.
 
 use std::collections::VecDeque;
-use timely::communication::message::RefOrMut;
 use timely::Container;
 use timely::container::columnation::{Columnation, TimelyStack};
 use timely::container::{ContainerBuilder, PushInto, SizableContainer};
@@ -64,14 +63,14 @@ where
     }
 }
 
-impl<'a, K, V, T, R> PushInto<RefOrMut<'a, Vec<((K, V), T, R)>>> for VecChunker<((K, V), T, R)>
+impl<'a, K, V, T, R> PushInto<&'a mut Vec<((K, V), T, R)>> for VecChunker<((K, V), T, R)>
 where
     K: Ord + Clone,
     V: Ord + Clone,
     T: Ord + Clone,
     R: Semigroup + Clone,
 {
-    fn push_into(&mut self, container: RefOrMut<'a, Vec<((K, V), T, R)>>) {
+    fn push_into(&mut self, container: &'a mut Vec<((K, V), T, R)>) {
         // Ensure `self.pending` has the desired capacity. We should never have a larger capacity
         // because we don't write more than capacity elements into the buffer.
         // Important: Consolidation requires `pending` to have twice the chunk capacity to
@@ -80,27 +79,11 @@ where
             self.pending.reserve(Self::chunk_capacity() * 2 - self.pending.len());
         }
 
-        // `container` is either a shared reference or an owned allocations.
-        match container {
-            RefOrMut::Ref(vec) => {
-                let mut slice = &vec[..];
-                while !slice.is_empty() {
-                    let (head, tail) = slice.split_at(std::cmp::min(self.pending.capacity() - self.pending.len(), slice.len()));
-                    slice = tail;
-                    self.pending.extend_from_slice(head);
-                    if self.pending.len() == self.pending.capacity() {
-                        self.form_chunk();
-                    }
-                }
-            }
-            RefOrMut::Mut(vec) => {
-                let mut drain = vec.drain(..).peekable();
-                while drain.peek().is_some() {
-                    self.pending.extend((&mut drain).take(self.pending.capacity() - self.pending.len()));
-                    if self.pending.len() == self.pending.capacity() {
-                        self.form_chunk();
-                    }
-                }
+        let mut drain = container.drain(..).peekable();
+        while drain.peek().is_some() {
+            self.pending.extend((&mut drain).take(self.pending.capacity() - self.pending.len()));
+            if self.pending.len() == self.pending.capacity() {
+                self.form_chunk();
             }
         }
     }
@@ -196,41 +179,25 @@ where
     }
 }
 
-impl<'a, K, V, T, R> PushInto<RefOrMut<'a, Vec<((K, V), T, R)>>> for ColumnationChunker<((K, V), T, R)>
+impl<'a, K, V, T, R> PushInto<&'a mut Vec<((K, V), T, R)>> for ColumnationChunker<((K, V), T, R)>
 where
     K: Columnation + Ord + Clone,
     V: Columnation + Ord + Clone,
     T: Columnation + Ord + Clone,
     R: Columnation + Semigroup + Clone,
 {
-    fn push_into(&mut self, container: RefOrMut<'a, Vec<((K, V), T, R)>>) {
+    fn push_into(&mut self, container: &'a mut Vec<((K, V), T, R)>) {
         // Ensure `self.pending` has the desired capacity. We should never have a larger capacity
         // because we don't write more than capacity elements into the buffer.
         if self.pending.capacity() < Self::chunk_capacity() * 2 {
             self.pending.reserve(Self::chunk_capacity() * 2 - self.pending.len());
         }
 
-        // `container` is either a shared reference or an owned allocations.
-        match container {
-            RefOrMut::Ref(vec) => {
-                let mut slice = &vec[..];
-                while !slice.is_empty() {
-                    let (head, tail) = slice.split_at(std::cmp::min(self.pending.capacity() - self.pending.len(), slice.len()));
-                    slice = tail;
-                    self.pending.extend_from_slice(head);
-                    if self.pending.len() == self.pending.capacity() {
-                        self.form_chunk();
-                    }
-                }
-            }
-            RefOrMut::Mut(vec) => {
-                let mut drain = vec.drain(..).peekable();
-                while drain.peek().is_some() {
-                    self.pending.extend((&mut drain).take(self.pending.capacity() - self.pending.len()));
-                    if self.pending.len() == self.pending.capacity() {
-                        self.form_chunk();
-                    }
-                }
+        let mut drain = container.drain(..).peekable();
+        while drain.peek().is_some() {
+            self.pending.extend((&mut drain).take(self.pending.capacity() - self.pending.len()));
+            if self.pending.len() == self.pending.capacity() {
+                self.form_chunk();
             }
         }
     }
@@ -288,7 +255,7 @@ where
     }
 }
 
-impl<'a, Input, Output> PushInto<RefOrMut<'a, Input>> for ContainerChunker<Output>
+impl<'a, Input, Output> PushInto<&'a mut Input> for ContainerChunker<Output>
 where
     Input: Container,
     Output: SizableContainer
@@ -296,7 +263,7 @@ where
         + PushInto<Input::Item<'a>>
         + PushInto<Input::ItemRef<'a>>,
 {
-    fn push_into(&mut self, container: RefOrMut<'a, Input>) {
+    fn push_into(&mut self, container: &'a mut Input) {
         if self.pending.capacity() < Output::preferred_capacity() {
             self.pending.reserve(Output::preferred_capacity() - self.pending.len());
         }
@@ -313,19 +280,9 @@ where
                 }
             }
         };
-        match container {
-            RefOrMut::Ref(container) => {
-                for item in container.iter() {
-                    self.pending.push(item);
-                    form_batch(self);
-                }
-            }
-            RefOrMut::Mut(container) => {
-                for item in container.drain() {
-                    self.pending.push(item);
-                    form_batch(self);
-                }
-            }
+        for item in container.drain() {
+            self.pending.push(item);
+            form_batch(self);
         }
     }
 }

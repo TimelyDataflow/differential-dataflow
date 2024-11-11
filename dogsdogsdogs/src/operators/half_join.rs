@@ -151,7 +151,6 @@ where
     let arrangement_stream = arrangement.stream;
 
     let mut stash = HashMap::new();
-    let mut buffer = Vec::new();
 
     let exchange = Exchange::new(move |update: &((K, V, G::Timestamp),G::Timestamp,R)| (update.0).0.hashed().into());
 
@@ -167,10 +166,9 @@ where
 
             // drain the first input, stashing requests.
             input1.for_each(|capability, data| {
-                data.swap(&mut buffer);
                 stash.entry(capability.retain())
                     .or_insert(Vec::new())
-                    .extend(buffer.drain(..))
+                    .extend(data.drain(..))
             });
 
             // Drain input batches; although we do not observe them, we want access to the input

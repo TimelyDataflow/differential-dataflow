@@ -112,7 +112,6 @@ where
     {
 
         let mut trace = self.trace.clone();
-        let mut buffer = Vec::new();
 
         self.stream.unary_frontier(Pipeline, "ThresholdTotal", move |_,_| {
 
@@ -134,8 +133,7 @@ where
                     if cap.is_none() {                          // NB: Assumes batches are in-order
                         cap = Some(capability.retain());
                     }
-                    batches.swap(&mut buffer);
-                    for batch in buffer.drain(..) {
+                    for batch in batches.drain(..) {
                         upper_limit.clone_from(batch.upper());  // NB: Assumes batches are in-order
                         batch_cursors.push(batch.cursor());
                         batch_storage.push(batch);

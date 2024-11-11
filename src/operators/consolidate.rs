@@ -97,11 +97,9 @@ where
         self.inner
             .unary::<ConsolidatingContainerBuilder<_>, _, _, _>(Pipeline, "ConsolidateStream", |_cap, _info| {
 
-                let mut vector = Vec::new();
                 move |input, output| {
                     input.for_each(|time, data| {
-                        data.swap(&mut vector);
-                        output.session_with_builder(&time).give_iterator(vector.drain(..));
+                        output.session_with_builder(&time).give_iterator(data.drain(..));
                     })
                 }
             })
