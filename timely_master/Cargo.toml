@@ -1,0 +1,15 @@
+[package]
+name = "differential-dataflow-timely-master"
+version = "0.0.0"
+authors = ["Moritz Hoffmann <antiguru@gmail.com>"]
+license = "MIT"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+differential-dataflow = { path = "../" }
+
+[patch.crates-io]
+timely = { git = "https://github.com/TimelyDataflow/timely-dataflow" }

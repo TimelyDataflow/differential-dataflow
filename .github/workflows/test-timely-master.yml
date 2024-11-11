@@ -1,0 +1,25 @@
+name: "Test build against Timely master"
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        os:
+          - ubuntu
+        toolchain:
+          - stable
+    name: cargo test on ${{ matrix.os }}, rust ${{ matrix.toolchain }}
+    runs-on: ${{ matrix.os }}-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: ${{ matrix.toolchain }}
+      - name: Cargo test against Timely master
+        run: cd timely_master && cargo test
