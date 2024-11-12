@@ -1,15 +1,10 @@
-[package]
-name = "differential-dataflow-timely-master"
-version = "0.0.0"
-authors = ["Moritz Hoffmann <antiguru@gmail.com>"]
-license = "MIT"
-edition = "2021"
-publish = false
-
+# This is not part of the regular workspace.
 [workspace]
+members = ["differential-dataflow", "differential-dogs3"]
+resolver = "2"
 
-[dependencies]
-differential-dataflow = { path = "../" }
+[workspace.dependencies]
+timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false }
 
 [patch.crates-io]
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow" }

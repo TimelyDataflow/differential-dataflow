@@ -1,13 +1,11 @@
 name: "Test build against Timely master"
 on:
-  push:
-    branches:
-      - master
-  pull_request:
   workflow_dispatch:
+  schedule:
+    - cron: '38 3 * * *'
 
 jobs:
-  test:
+  tests:
     strategy:
       matrix:
         os:
@@ -21,5 +19,32 @@ jobs:
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           toolchain: ${{ matrix.toolchain }}
+      - name: Cargo check against Timely master
+        working-directory: timely_master
+        run: cargo check --all-targets
       - name: Cargo test against Timely master
-        run: cd timely_master && cargo test
+        working-directory: timely_master
+        run: cargo test
+
+  notify:
+    name: Notify failed build
+    if: failure() && github.event.pull_request == null
+    needs: [tests]
+    permissions:
+      contents: read
+      issues: write
+    runs-on: ubuntu-latest
+    steps:
+      # We need to checkout the repository to access the issue template
+      - uses: actions/checkout@v4
+      - uses: JasonEtco/create-an-issue@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          WORKFLOW_NAME: ${{ github.workflow }}
+          REPO_SLUG: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          MENTION: '@frankmcsherry, @antiguru'
+        with:
+          filename: '.github/create-issue-on-failure.md'
+          update_existing: true
+          search_existing: open
