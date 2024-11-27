@@ -289,7 +289,7 @@ where
 
 impl<Output> ContainerBuilder for ContainerChunker<Output>
 where
-    Output: SizableContainer + ConsolidateLayout,
+    Output: SizableContainer + ConsolidateLayout + Clone + 'static,
 {
     type Container = Output;
 
