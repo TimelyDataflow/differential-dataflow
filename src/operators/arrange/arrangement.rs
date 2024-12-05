@@ -406,7 +406,7 @@ where
     G::Timestamp: Lattice,
     P: ParallelizationContract<G::Timestamp, Ba::Input>,
     Ba: Batcher<Time=G::Timestamp> + 'static,
-    Ba::Input: Container,
+    Ba::Input: Container + Clone + 'static,
     Bu: Builder<Time=G::Timestamp, Input=Ba::Output, Output = Tr::Batch>,
     Tr: Trace<Time=G::Timestamp>+'static,
     Tr::Batch: Batch,
