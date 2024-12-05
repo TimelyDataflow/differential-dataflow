@@ -460,7 +460,7 @@ where
                             builders.push(T2::Builder::new());
                         }
 
-                        let mut buffer = <<T2 as Trace>::Batcher as crate::trace::Batcher>::Output::default();
+                        let mut buffer = <T2::Builder as Builder>::Input::default();
 
                         // cursors for navigating input and output traces.
                         let (mut source_cursor, source_storage): (T1::Cursor, _) = source_trace.cursor_through(lower_limit.borrow()).expect("failed to acquire source cursor");

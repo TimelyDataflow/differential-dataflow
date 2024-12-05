@@ -209,10 +209,8 @@ pub trait TraceReader {
 pub trait Trace : TraceReader
 where <Self as TraceReader>::Batch: Batch {
 
-    /// A type used to assemble batches from disordered updates.
-    type Batcher: Batcher<Time = Self::Time>;
     /// A type used to assemble batches from ordered update sequences.
-    type Builder: Builder<Input=<Self::Batcher as Batcher>::Output, Time=Self::Time, Output = Self::Batch>;
+    type Builder: Builder<Time=Self::Time, Output = Self::Batch>;
 
     /// Allocates a new empty trace.
     fn new(

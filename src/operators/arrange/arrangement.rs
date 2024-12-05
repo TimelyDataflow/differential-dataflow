@@ -30,7 +30,7 @@ use crate::{Data, ExchangeData, Collection, AsCollection, Hashable};
 use crate::difference::Semigroup;
 use crate::lattice::Lattice;
 use crate::trace::{self, Trace, TraceReader, Batch, BatchReader, Batcher, Builder, Cursor};
-use crate::trace::implementations::{KeySpine, ValSpine};
+use crate::trace::implementations::{KeyBatcher, KeySpine, ValBatcher, ValSpine};
 
 use trace::wrappers::enter::{TraceEnter, BatchEnter,};
 use trace::wrappers::enter_at::TraceEnter as TraceEnterAt;
@@ -353,21 +353,23 @@ where
     G::Timestamp: Lattice,
 {
     /// Arranges updates into a shared trace.
-    fn arrange<Tr>(&self) -> Arranged<G, TraceAgent<Tr>>
+    fn arrange<Ba, Tr>(&self) -> Arranged<G, TraceAgent<Tr>>
     where
+        Ba: Batcher<Input=C, Time=G::Timestamp> + 'static,
         Tr: Trace<Time=G::Timestamp> + 'static,
         Tr::Batch: Batch,
-        Tr::Batcher: Batcher<Input=C>,
+        Tr::Builder: Builder<Input=Ba::Output>,
     {
-        self.arrange_named("Arrange")
+        self.arrange_named::<Ba, Tr>("Arrange")
     }
 
     /// Arranges updates into a shared trace, with a supplied name.
-    fn arrange_named<Tr>(&self, name: &str) -> Arranged<G, TraceAgent<Tr>>
+    fn arrange_named<Ba, Tr>(&self, name: &str) -> Arranged<G, TraceAgent<Tr>>
     where
+        Ba: Batcher<Input=C, Time=G::Timestamp> + 'static,
         Tr: Trace<Time=G::Timestamp> + 'static,
         Tr::Batch: Batch,
-        Tr::Batcher: Batcher<Input=C>,
+        Tr::Builder: Builder<Input=Ba::Output>,
     ;
 }
 
@@ -379,14 +381,15 @@ where
     V: ExchangeData,
     R: ExchangeData + Semigroup,
 {
-    fn arrange_named<Tr>(&self, name: &str) -> Arranged<G, TraceAgent<Tr>>
+    fn arrange_named<Ba, Tr>(&self, name: &str) -> Arranged<G, TraceAgent<Tr>>
     where
+        Ba: Batcher<Input=Vec<((K, V), G::Timestamp, R)>, Time=G::Timestamp> + 'static,
         Tr: Trace<Time=G::Timestamp> + 'static,
         Tr::Batch: Batch,
-        Tr::Batcher: Batcher<Input=Vec<((K, V), G::Timestamp, R)>>,
+        Tr::Builder: Builder<Input=Ba::Output>,
     {
         let exchange = Exchange::new(move |update: &((K,V),G::Timestamp,R)| (update.0).0.hashed().into());
-        arrange_core(&self.inner, exchange, name)
+        arrange_core::<_, _, Ba, _>(&self.inner, exchange, name)
     }
 }
 
@@ -395,14 +398,16 @@ where
 /// This operator arranges a stream of values into a shared trace, whose contents it maintains.
 /// It uses the supplied parallelization contract to distribute the data, which does not need to
 /// be consistently by key (though this is the most common).
-pub fn arrange_core<G, P, Tr>(stream: &StreamCore<G, <Tr::Batcher as Batcher>::Input>, pact: P, name: &str) -> Arranged<G, TraceAgent<Tr>>
+pub fn arrange_core<G, P, Ba, Tr>(stream: &StreamCore<G, Ba::Input>, pact: P, name: &str) -> Arranged<G, TraceAgent<Tr>>
 where
     G: Scope,
     G::Timestamp: Lattice,
-    P: ParallelizationContract<G::Timestamp, <Tr::Batcher as Batcher>::Input>,
+    P: ParallelizationContract<G::Timestamp, Ba::Input>,
+    Ba: Batcher<Time=G::Timestamp> + 'static,
+    Ba::Input: Container,
     Tr: Trace<Time=G::Timestamp>+'static,
     Tr::Batch: Batch,
-    <Tr::Batcher as Batcher>::Input: timely::Container,
+    Tr::Builder: Builder<Input=Ba::Output>,
 {
     // The `Arrange` operator is tasked with reacting to an advancing input
     // frontier by producing the sequence of batches whose lower and upper
@@ -434,7 +439,7 @@ where
         };
 
         // Where we will deposit received updates, and from which we extract batches.
-        let mut batcher = Tr::Batcher::new(logger.clone(), info.global_id);
+        let mut batcher = Ba::new(logger.clone(), info.global_id);
 
         // Capabilities for the lower envelope of updates in `batcher`.
         let mut capabilities = Antichain::<Capability<G::Timestamp>>::new();
@@ -557,14 +562,15 @@ impl<G: Scope, K: ExchangeData+Hashable, R: ExchangeData+Semigroup> Arrange<G, V
 where
     G::Timestamp: Lattice+Ord,
 {
-    fn arrange_named<Tr>(&self, name: &str) -> Arranged<G, TraceAgent<Tr>>
+    fn arrange_named<Ba, Tr>(&self, name: &str) -> Arranged<G, TraceAgent<Tr>>
     where
+        Ba: Batcher<Input=Vec<((K,()),G::Timestamp,R)>, Time=G::Timestamp> + 'static,
         Tr: Trace<Time=G::Timestamp> + 'static,
         Tr::Batch: Batch,
-        Tr::Batcher: Batcher<Input=Vec<((K, ()), G::Timestamp, R)>>,
+        Tr::Builder: Builder<Input=Ba::Output>,
     {
         let exchange = Exchange::new(move |update: &((K,()),G::Timestamp,R)| (update.0).0.hashed().into());
-        arrange_core(&self.map(|k| (k, ())).inner, exchange, name)
+        arrange_core::<_,_,Ba,_>(&self.map(|k| (k, ())).inner, exchange, name)
     }
 }
 
@@ -595,7 +601,7 @@ where
     }
 
     fn arrange_by_key_named(&self, name: &str) -> Arranged<G, TraceAgent<ValSpine<K, V, G::Timestamp, R>>> {
-        self.arrange_named(name)
+        self.arrange_named::<ValBatcher<_,_,_,_>, _>(name)
     }
 }
 
@@ -630,6 +636,6 @@ where
 
     fn arrange_by_self_named(&self, name: &str) -> Arranged<G, TraceAgent<KeySpine<K, G::Timestamp, R>>> {
         self.map(|k| (k, ()))
-            .arrange_named(name)
+            .arrange_named::<KeyBatcher<_,_,_>, _>(name)
     }
 }
