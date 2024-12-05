@@ -28,46 +28,46 @@ fn main() {
 
             match mode.as_str() {
                 "new" => {
-                    use differential_dataflow::trace::implementations::ord_neu::ColKeySpine;
-                    let data = data.arrange::<ColKeySpine<_,_,_>>();
-                    let keys = keys.arrange::<ColKeySpine<_,_,_>>();
+                    use differential_dataflow::trace::implementations::ord_neu::{ColKeyBatcher, ColKeySpine};
+                    let data = data.arrange::<ColKeyBatcher<_,_,_>, ColKeySpine<_,_,_>>();
+                    let keys = keys.arrange::<ColKeyBatcher<_,_,_>, ColKeySpine<_,_,_>>();
                     keys.join_core(&data, |_k, &(), &()| Option::<()>::None)
                         .probe_with(&mut probe);
                 },
                 "old" => {
-                    use differential_dataflow::trace::implementations::ord_neu::OrdKeySpine;
-                    let data = data.arrange::<OrdKeySpine<_,_,_>>();
-                    let keys = keys.arrange::<OrdKeySpine<_,_,_>>();
+                    use differential_dataflow::trace::implementations::ord_neu::{OrdKeyBatcher, OrdKeySpine};
+                    let data = data.arrange::<OrdKeyBatcher<_,_,_>, OrdKeySpine<_,_,_>>();
+                    let keys = keys.arrange::<OrdKeyBatcher<_,_,_>, OrdKeySpine<_,_,_>>();
                     keys.join_core(&data, |_k, &(), &()| Option::<()>::None)
                         .probe_with(&mut probe);
                 },
                 "rhh" => {
-                    use differential_dataflow::trace::implementations::rhh::{HashWrapper, VecSpine};
-                    let data = data.map(|x| HashWrapper { inner: x }).arrange::<VecSpine<_,(),_,_>>();
-                    let keys = keys.map(|x| HashWrapper { inner: x }).arrange::<VecSpine<_,(),_,_>>();
+                    use differential_dataflow::trace::implementations::rhh::{HashWrapper, VecBatcher, VecSpine};
+                    let data = data.map(|x| HashWrapper { inner: x }).arrange::<VecBatcher<_,(),_,_>, VecSpine<_,(),_,_>>();
+                    let keys = keys.map(|x| HashWrapper { inner: x }).arrange::<VecBatcher<_,(),_,_>, VecSpine<_,(),_,_>>();
                     keys.join_core(&data, |_k, &(), &()| Option::<()>::None)
                         .probe_with(&mut probe);
                 },
                 "slc" => {
 
-                    use differential_dataflow::trace::implementations::ord_neu::PreferredSpine;
+                    use differential_dataflow::trace::implementations::ord_neu::{PreferredBatcher, PreferredSpine};
 
                     let data =
                     data.map(|x| (x.clone().into_bytes(), x.into_bytes()))
-                        .arrange::<PreferredSpine<[u8],[u8],_,_>>()
+                        .arrange::<PreferredBatcher<[u8],[u8],_,_>, PreferredSpine<[u8],[u8],_,_>>()
                         .reduce_abelian::<_, _, _, PreferredSpine<[u8],(),_,_>>("distinct", |_,_,output| output.push(((), 1)));
                     let keys =
                     keys.map(|x| (x.clone().into_bytes(), 7))
-                        .arrange::<PreferredSpine<[u8],u8,_,_>>()
+                        .arrange::<PreferredBatcher<[u8],u8,_,_>, PreferredSpine<[u8],u8,_,_>>()
                         .reduce_abelian::<_, _, _, PreferredSpine<[u8],(),_,_>>("distinct", |_,_,output| output.push(((), 1)));
 
                     keys.join_core(&data, |_k, &(), &()| Option::<()>::None)
                         .probe_with(&mut probe);
                 },
                 "flat" => {
-                    use differential_dataflow::trace::implementations::ord_neu::FlatKeySpineDefault;
-                    let data = data.arrange::<FlatKeySpineDefault<String,usize,isize, _>>();
-                    let keys = keys.arrange::<FlatKeySpineDefault<String,usize,isize,_>>();
+                    use differential_dataflow::trace::implementations::ord_neu::{FlatKeyBatcherDefault, FlatKeySpineDefault};
+                    let data = data.arrange::<FlatKeyBatcherDefault<String,usize,isize,_>, FlatKeySpineDefault<String,usize,isize>>();
+                    let keys = keys.arrange::<FlatKeyBatcherDefault<String,usize,isize,_>, FlatKeySpineDefault<String,usize,isize>>();
                     keys.join_core(&data, |_k, (), ()| Option::<()>::None)
                         .probe_with(&mut probe);
                 }

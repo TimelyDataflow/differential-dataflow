@@ -25,18 +25,22 @@ use self::val_batch::{RhhValBatch, RhhValBuilder};
 /// A trace implementation using a spine of ordered lists.
 pub type VecSpine<K, V, T, R> = Spine<
     Rc<RhhValBatch<Vector<((K,V),T,R)>>>,
-    MergeBatcher<Vec<((K,V),T,R)>, VecChunker<((K,V),T,R)>, VecMerger<((K, V), T, R)>, T>,
     RcBuilder<RhhValBuilder<Vector<((K,V),T,R)>, Vec<((K,V),T,R)>>>,
 >;
+/// A batcher for ordered lists.
+pub type VecBatcher<K,V,T,R> = MergeBatcher<Vec<((K,V),T,R)>, VecChunker<((K,V),T,R)>, VecMerger<((K, V), T, R)>, T>;
+
 // /// A trace implementation for empty values using a spine of ordered lists.
 // pub type OrdKeySpine<K, T, R> = Spine<Rc<OrdKeyBatch<Vector<((K,()),T,R)>>>>;
 
 /// A trace implementation backed by columnar storage.
 pub type ColSpine<K, V, T, R> = Spine<
     Rc<RhhValBatch<TStack<((K,V),T,R)>>>,
-    MergeBatcher<Vec<((K,V),T,R)>, ColumnationChunker<((K,V),T,R)>, ColumnationMerger<((K,V),T,R)>, T>,
     RcBuilder<RhhValBuilder<TStack<((K,V),T,R)>, TimelyStack<((K,V),T,R)>>>,
 >;
+/// A batcher for columnar storage.
+pub type ColBatcher<K,V,T,R> = MergeBatcher<Vec<((K,V),T,R)>, ColumnationChunker<((K,V),T,R)>, ColumnationMerger<((K,V),T,R)>, T>;
+
 // /// A trace implementation backed by columnar storage.
 // pub type ColKeySpine<K, T, R> = Spine<Rc<OrdKeyBatch<TStack<((K,()),T,R)>>>>;
 
