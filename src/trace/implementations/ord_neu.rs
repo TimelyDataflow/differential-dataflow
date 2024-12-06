@@ -26,82 +26,79 @@ pub use self::val_batch::{OrdValBatch, OrdValBuilder};
 pub use self::key_batch::{OrdKeyBatch, OrdKeyBuilder};
 
 /// A trace implementation using a spine of ordered lists.
-pub type OrdValSpine<K, V, T, R> = Spine<
-    Rc<OrdValBatch<Vector<((K,V),T,R)>>>,
-    RcBuilder<OrdValBuilder<Vector<((K,V),T,R)>, Vec<((K,V),T,R)>>>,
->;
+pub type OrdValSpine<K, V, T, R> = Spine<Rc<OrdValBatch<Vector<((K,V),T,R)>>>>;
 /// A batcher using ordered lists.
 pub type OrdValBatcher<K, V, T, R> = MergeBatcher<Vec<((K,V),T,R)>, VecChunker<((K,V),T,R)>, VecMerger<((K, V), T, R)>, T>;
+/// A builder using ordered lists.
+pub type RcOrdValBuilder<K, V, T, R> = RcBuilder<OrdValBuilder<Vector<((K,V),T,R)>, Vec<((K,V),T,R)>>>;
 
 // /// A trace implementation for empty values using a spine of ordered lists.
 // pub type OrdKeySpine<K, T, R> = Spine<Rc<OrdKeyBatch<Vector<((K,()),T,R)>>>>;
 
 /// A trace implementation backed by columnar storage.
-pub type ColValSpine<K, V, T, R> = Spine<
-    Rc<OrdValBatch<TStack<((K,V),T,R)>>>,
-    RcBuilder<OrdValBuilder<TStack<((K,V),T,R)>, TimelyStack<((K,V),T,R)>>>,
->;
+pub type ColValSpine<K, V, T, R> = Spine<Rc<OrdValBatch<TStack<((K,V),T,R)>>>>;
 /// A batcher for columnar storage.
 pub type ColValBatcher<K, V, T, R> = MergeBatcher<Vec<((K,V),T,R)>, ColumnationChunker<((K,V),T,R)>, ColumnationMerger<((K,V),T,R)>, T>;
+/// A builder for columnar storage.
+pub type ColValBuilder<K, V, T, R> = RcBuilder<OrdValBuilder<TStack<((K,V),T,R)>, TimelyStack<((K,V),T,R)>>>;
 
 /// A trace implementation backed by flatcontainer storage.
-pub type FlatValSpine<L, R> = Spine<
-    Rc<OrdValBatch<L>>,
-    RcBuilder<OrdValBuilder<L, FlatStack<R>>>,
->;
+pub type FlatValSpine<L> = Spine<Rc<OrdValBatch<L>>>;
 /// A batcher for flatcontainer storage.
 pub type FlatValBatcher<R, C> = MergeBatcher<C, ContainerChunker<FlatStack<R>>, FlatcontainerMerger<R>, <R as MergerChunk>::TimeOwned>;
+/// A builder for flatcontainer storage.
+pub type FlatValBuilder<L, R> = RcBuilder<OrdValBuilder<L, FlatStack<R>>>;
+
 
 /// A trace implementation backed by flatcontainer storage, using [`FlatLayout`] as the layout.
 pub type FlatValSpineDefault<K, V, T, R> = FlatValSpine<
     FlatLayout<<K as RegionPreference>::Region, <V as RegionPreference>::Region, <T as RegionPreference>::Region, <R as RegionPreference>::Region>,
-    TupleABCRegion<TupleABRegion<<K as RegionPreference>::Region, <V as RegionPreference>::Region>, <T as RegionPreference>::Region, <R as RegionPreference>::Region>,
 >;
 /// A batcher for flatcontainer storage, using [`FlatLayout`] as the layout.
 pub type FlatValBatcherDefault<K, V, T, R, C> = FlatValBatcher<TupleABCRegion<TupleABRegion<<K as RegionPreference>::Region, <V as RegionPreference>::Region>, <T as RegionPreference>::Region, <R as RegionPreference>::Region>, C>;
+/// A builder for flatcontainer storage, using [`FlatLayout`] as the layout.
+pub type FlatValBuilderDefault<K, V, T, R> = FlatValBuilder<FlatLayout<<K as RegionPreference>::Region, <V as RegionPreference>::Region, <T as RegionPreference>::Region, <R as RegionPreference>::Region>, TupleABCRegion<TupleABRegion<<K as RegionPreference>::Region, <V as RegionPreference>::Region>, <T as RegionPreference>::Region, <R as RegionPreference>::Region>>;
+
 
 /// A trace implementation using a spine of ordered lists.
-pub type OrdKeySpine<K, T, R> = Spine<
-    Rc<OrdKeyBatch<Vector<((K,()),T,R)>>>,
-    RcBuilder<OrdKeyBuilder<Vector<((K,()),T,R)>, Vec<((K,()),T,R)>>>,
->;
+pub type OrdKeySpine<K, T, R> = Spine<Rc<OrdKeyBatch<Vector<((K,()),T,R)>>>>;
 /// A batcher for ordered lists.
 pub type OrdKeyBatcher<K, T, R> = MergeBatcher<Vec<((K,()),T,R)>, VecChunker<((K,()),T,R)>, VecMerger<((K, ()), T, R)>, T>;
+/// A builder for ordered lists.
+pub type RcOrdKeyBuilder<K, T, R> = RcBuilder<OrdKeyBuilder<Vector<((K,()),T,R)>, Vec<((K,()),T,R)>>>;
+
 // /// A trace implementation for empty values using a spine of ordered lists.
 // pub type OrdKeySpine<K, T, R> = Spine<Rc<OrdKeyBatch<Vector<((K,()),T,R)>>>>;
 
 /// A trace implementation backed by columnar storage.
-pub type ColKeySpine<K, T, R> = Spine<
-    Rc<OrdKeyBatch<TStack<((K,()),T,R)>>>,
-    RcBuilder<OrdKeyBuilder<TStack<((K,()),T,R)>, TimelyStack<((K,()),T,R)>>>,
->;
+pub type ColKeySpine<K, T, R> = Spine<Rc<OrdKeyBatch<TStack<((K,()),T,R)>>>>;
 /// A batcher for columnar storage
 pub type ColKeyBatcher<K, T, R> = MergeBatcher<Vec<((K,()),T,R)>, ColumnationChunker<((K,()),T,R)>, ColumnationMerger<((K,()),T,R)>, T>;
+/// A builder for columnar storage
+pub type ColKeyBuilder<K, T, R> = RcBuilder<OrdKeyBuilder<TStack<((K,()),T,R)>, TimelyStack<((K,()),T,R)>>>;
 
 /// A trace implementation backed by flatcontainer storage.
-pub type FlatKeySpine<L, R> = Spine<
-    Rc<OrdKeyBatch<L>>,
-    RcBuilder<OrdKeyBuilder<L, FlatStack<R>>>,
->;
+pub type FlatKeySpine<L> = Spine<Rc<OrdKeyBatch<L>>>;
 /// A batcher for flatcontainer storage.
 pub type FlatKeyBatcher<R, C> = MergeBatcher<C, ContainerChunker<FlatStack<R>>, FlatcontainerMerger<R>, <R as MergerChunk>::TimeOwned>;
+/// A builder for flatcontainer storage.
+pub type FlatKeyBuilder<L, R> = RcBuilder<OrdKeyBuilder<L, FlatStack<R>>>;
 
 /// A trace implementation backed by flatcontainer storage, using [`FlatLayout`] as the layout.
 pub type FlatKeySpineDefault<K,T,R> = FlatKeySpine<
     FlatLayout<<K as RegionPreference>::Region, <() as RegionPreference>::Region, <T as RegionPreference>::Region, <R as RegionPreference>::Region>,
-    TupleABCRegion<TupleABRegion<<K as RegionPreference>::Region, <() as RegionPreference>::Region>, <T as RegionPreference>::Region, <R as RegionPreference>::Region>,
 >;
 /// A batcher for flatcontainer storage, using [`FlatLayout`] as the layout.
 pub type FlatKeyBatcherDefault<K, T, R, C> = FlatValBatcher<TupleABCRegion<TupleABRegion<<K as RegionPreference>::Region, <() as RegionPreference>::Region>, <T as RegionPreference>::Region, <R as RegionPreference>::Region>, C>;
+/// A builder for flatcontainer storage, using [`FlatLayout`] as the layout.
+pub type FlatKeyBuilderDefault<K, T, R> = FlatKeyBuilder<FlatLayout<<K as RegionPreference>::Region, <() as RegionPreference>::Region, <T as RegionPreference>::Region, <R as RegionPreference>::Region>, TupleABCRegion<TupleABRegion<<K as RegionPreference>::Region, <() as RegionPreference>::Region>, <T as RegionPreference>::Region, <R as RegionPreference>::Region>>;
 
 /// A trace implementation backed by columnar storage.
-pub type PreferredSpine<K, V, T, R> = Spine<
-    Rc<OrdValBatch<Preferred<K,V,T,R>>>,
-    RcBuilder<OrdValBuilder<Preferred<K,V,T,R>, TimelyStack<((<K as ToOwned>::Owned,<V as ToOwned>::Owned),T,R)>>>,
->;
+pub type PreferredSpine<K, V, T, R> = Spine<Rc<OrdValBatch<Preferred<K,V,T,R>>>>;
 /// A batcher for columnar storage.
 pub type PreferredBatcher<K, V, T, R> = MergeBatcher<Vec<((<K as ToOwned>::Owned,<V as ToOwned>::Owned),T,R)>, ColumnationChunker<((<K as ToOwned>::Owned,<V as ToOwned>::Owned),T,R)>, ColumnationMerger<((<K as ToOwned>::Owned,<V as ToOwned>::Owned),T,R)>,T>;
-
+/// A builder for columnar storage.
+pub type PreferredBuilder<K, V, T, R> = RcBuilder<OrdValBuilder<Preferred<K,V,T,R>, TimelyStack<((<K as ToOwned>::Owned,<V as ToOwned>::Owned),T,R)>>>;
 
 // /// A trace implementation backed by columnar storage.
 // pub type ColKeySpine<K, T, R> = Spine<Rc<OrdKeyBatch<TStack<((K,()),T,R)>>>>;
@@ -219,6 +216,22 @@ mod val_batch {
 
         fn begin_merge(&self, other: &Self, compaction_frontier: AntichainRef<<L::Target as Update>::Time>) -> Self::Merger {
             OrdValMerger::new(self, other, compaction_frontier)
+        }
+
+        fn empty(lower: Antichain<Self::Time>, upper: Antichain<Self::Time>) -> Self {
+            use timely::progress::Timestamp;
+            Self {
+                storage: OrdValStorage {
+                    keys: L::KeyContainer::with_capacity(0),
+                    keys_offs: L::OffsetContainer::with_capacity(0),
+                    vals: L::ValContainer::with_capacity(0),
+                    vals_offs: L::OffsetContainer::with_capacity(0),
+                    times: L::TimeContainer::with_capacity(0),
+                    diffs: L::DiffContainer::with_capacity(0),
+                },
+                description: Description::new(lower, upper, Antichain::from_elem(Self::Time::minimum())),
+                updates: 0,
+            }
         }
     }
 
@@ -787,6 +800,20 @@ mod key_batch {
 
         fn begin_merge(&self, other: &Self, compaction_frontier: AntichainRef<<L::Target as Update>::Time>) -> Self::Merger {
             OrdKeyMerger::new(self, other, compaction_frontier)
+        }
+
+        fn empty(lower: Antichain<Self::Time>, upper: Antichain<Self::Time>) -> Self {
+            use timely::progress::Timestamp;
+            Self {
+                storage: OrdKeyStorage {
+                    keys: L::KeyContainer::with_capacity(0),
+                    keys_offs: L::OffsetContainer::with_capacity(0),
+                    times: L::TimeContainer::with_capacity(0),
+                    diffs: L::DiffContainer::with_capacity(0),
+                },
+                description: Description::new(lower, upper, Antichain::from_elem(Self::Time::minimum())),
+                updates: 0,
+            }
         }
     }
 

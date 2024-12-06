@@ -55,11 +55,11 @@
 //!     worker.dataflow(|scope| {
 //!
 //!         use timely::dataflow::operators::Input;
-//!         use differential_dataflow::trace::implementations::ValSpine;
+//!         use differential_dataflow::trace::implementations::{ValBuilder, ValSpine};
 //!         use differential_dataflow::operators::arrange::upsert;
 //!
 //!         let stream = scope.input_from(&mut input);
-//!         let arranged = upsert::arrange_from_upsert::<_, _, _, ValSpine<Key, Val, _, _>>(&stream, &"test");
+//!         let arranged = upsert::arrange_from_upsert::<_, _, _, ValBuilder<Key, Val, _, _>, ValSpine<Key, Val, _, _>>(&stream, &"test");
 //!
 //!         arranged
 //!             .as_collection(|k,v| (k.clone(), v.clone()))
@@ -126,7 +126,7 @@ use super::TraceAgent;
 /// This method is only implemented for totally ordered times, as we do not yet
 /// understand what a "sequence" of upserts would mean for partially ordered
 /// timestamps.
-pub fn arrange_from_upsert<G, K, V, Tr>(
+pub fn arrange_from_upsert<G, K, V, Bu, Tr>(
     stream: &Stream<G, (K, Option<V>, G::Timestamp)>,
     name: &str,
 ) -> Arranged<G, TraceAgent<Tr>>
@@ -139,7 +139,7 @@ where
     for<'a> Tr::Val<'a> : IntoOwned<'a, Owned = V>,
     Tr::Time: TotalOrder+ExchangeData,
     Tr::Batch: Batch,
-    Tr::Builder: Builder<Input = Vec<((K, V), Tr::Time, Tr::Diff)>>,
+    Bu: Builder<Time=G::Timestamp, Input = Vec<((K, V), Tr::Time, Tr::Diff)>, Output = Tr::Batch>,
 {
     let mut reader: Option<TraceAgent<Tr>> = None;
 
@@ -240,7 +240,7 @@ where
                                 // Prepare a cursor to the existing arrangement, and a batch builder for
                                 // new stuff that we add.
                                 let (mut trace_cursor, trace_storage) = reader_local.cursor();
-                                let mut builder = Tr::Builder::new();
+                                let mut builder = Bu::new();
                                 for (key, mut list) in to_process.drain(..) {
 
                                     // The prior value associated with the key.

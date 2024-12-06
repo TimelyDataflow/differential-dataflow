@@ -17,7 +17,7 @@ use differential_dataflow::Collection;
 use differential_dataflow::operators::*;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arrange;
-use differential_dataflow::trace::implementations::ord_neu::{FlatKeyBatcherDefault, FlatKeySpineDefault, FlatValBatcherDefault, FlatValSpineDefault};
+use differential_dataflow::trace::implementations::ord_neu::{FlatKeyBatcherDefault, FlatKeyBuilderDefault, FlatKeySpineDefault, FlatValBatcherDefault, FlatValBuilderDefault, FlatValSpineDefault};
 
 type Node = usize;
 type Edge = (Node, Node);
@@ -246,9 +246,10 @@ fn bfs_differential_flat(
             let (edge_input, edges) = scope.new_collection();
 
             let c = bfs_flat(&edges, &roots).map(|(_, dist)| (dist, ()));
-            let arranged = c.arrange::<FlatKeyBatcherDefault<usize,usize,isize,Vec<((usize,()),_,_)>>, FlatKeySpineDefault<usize, usize, isize>>();
+            let arranged = c.arrange::<FlatKeyBatcherDefault<usize,usize,isize,Vec<((usize,()),_,_)>>, FlatKeyBuilderDefault<usize,usize,isize>, FlatKeySpineDefault<usize, usize, isize>>();
+            type Bu = FlatValBuilderDefault<usize, isize, usize, isize>;
             type T2 = FlatValSpineDefault<usize, isize, usize, isize>;
-            let reduced = arranged.reduce_abelian::<_, _, _, T2>("Count", |_k, s, t| {
+            let reduced = arranged.reduce_abelian::<_, _, _, Bu, T2>("Count", |_k, s, t| {
                 t.push((s[0].1.clone(), isize::from(1i8)))
             });
             reduced
@@ -316,9 +317,10 @@ where
         let nodes = nodes.enter(&inner.scope());
 
         type Batcher<K, V, T, R = isize> = FlatValBatcherDefault<K, V, T, R, Vec<((K,V),T,R)>>;
+        type Builder<K, V, T, R = isize> = FlatValBuilderDefault<K, V, T, R>;
         type Spine<K, V, T, R = isize> = FlatValSpineDefault<K, V, T, R>;
-        let arranged1 = inner.arrange::<Batcher<Node, Node, Product<G::Timestamp, u64>>, Spine<Node, Node, Product<G::Timestamp, u64>>>();
-        let arranged2 = edges.arrange::<Batcher<Node, Node, Product<G::Timestamp, u64>>, Spine<Node, Node, Product<G::Timestamp, u64>>>();
+        let arranged1 = inner.arrange::<Batcher<Node, Node, Product<G::Timestamp, u64>>, Builder<Node, Node, Product<G::Timestamp, u64>>, Spine<Node, Node, Product<G::Timestamp, u64>>>();
+        let arranged2 = edges.arrange::<Batcher<Node, Node, Product<G::Timestamp, u64>>, Builder<Node, Node, Product<G::Timestamp, u64>>, Spine<Node, Node, Product<G::Timestamp, u64>>>();
         arranged1
             .join_core(&arranged2, move |_k, l, d| Some((d, l + 1)))
             .concat(&nodes)

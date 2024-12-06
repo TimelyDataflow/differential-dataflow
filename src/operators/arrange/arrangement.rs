@@ -30,7 +30,7 @@ use crate::{Data, ExchangeData, Collection, AsCollection, Hashable};
 use crate::difference::Semigroup;
 use crate::lattice::Lattice;
 use crate::trace::{self, Trace, TraceReader, Batch, BatchReader, Batcher, Builder, Cursor};
-use crate::trace::implementations::{KeyBatcher, KeySpine, ValBatcher, ValSpine};
+use crate::trace::implementations::{KeyBatcher, KeyBuilder, KeySpine, ValBatcher, ValBuilder, ValSpine};
 
 use trace::wrappers::enter::{TraceEnter, BatchEnter,};
 use trace::wrappers::enter_at::TraceEnter as TraceEnterAt;
@@ -289,7 +289,7 @@ where
     T1: TraceReader + Clone + 'static,
 {
     /// A direct implementation of `ReduceCore::reduce_abelian`.
-    pub fn reduce_abelian<L, K, V, T2>(&self, name: &str, mut logic: L) -> Arranged<G, TraceAgent<T2>>
+    pub fn reduce_abelian<L, K, V, Bu, T2>(&self, name: &str, mut logic: L) -> Arranged<G, TraceAgent<T2>>
     where
         for<'a> T1::Key<'a>: IntoOwned<'a, Owned = K>,
         T2: for<'a> Trace<Key<'a>= T1::Key<'a>, Time=T1::Time>+'static,
@@ -298,10 +298,11 @@ where
         for<'a> T2::Val<'a> : IntoOwned<'a, Owned = V>,
         T2::Diff: Abelian,
         T2::Batch: Batch,
-        <T2::Builder as Builder>::Input: Container + PushInto<((K, V), T2::Time, T2::Diff)>,
+        Bu: Builder<Time=G::Timestamp, Output = T2::Batch>,
+        Bu::Input: Container + PushInto<((K, V), T2::Time, T2::Diff)>,
         L: FnMut(T1::Key<'_>, &[(T1::Val<'_>, T1::Diff)], &mut Vec<(V, T2::Diff)>)+'static,
     {
-        self.reduce_core::<_,K,V,T2>(name, move |key, input, output, change| {
+        self.reduce_core::<_,K,V,Bu,T2>(name, move |key, input, output, change| {
             if !input.is_empty() {
                 logic(key, input, change);
             }
@@ -311,7 +312,7 @@ where
     }
 
     /// A direct implementation of `ReduceCore::reduce_core`.
-    pub fn reduce_core<L, K, V, T2>(&self, name: &str, logic: L) -> Arranged<G, TraceAgent<T2>>
+    pub fn reduce_core<L, K, V, Bu, T2>(&self, name: &str, logic: L) -> Arranged<G, TraceAgent<T2>>
     where
         for<'a> T1::Key<'a>: IntoOwned<'a, Owned = K>,
         T2: for<'a> Trace<Key<'a>=T1::Key<'a>, Time=T1::Time>+'static,
@@ -319,11 +320,12 @@ where
         V: Data,
         for<'a> T2::Val<'a> : IntoOwned<'a, Owned = V>,
         T2::Batch: Batch,
-        <T2::Builder as Builder>::Input: Container + PushInto<((K, V), T2::Time, T2::Diff)>,
+        Bu: Builder<Time=G::Timestamp, Output = T2::Batch>,
+        Bu::Input: Container + PushInto<((K, V), T2::Time, T2::Diff)>,
         L: FnMut(T1::Key<'_>, &[(T1::Val<'_>, T1::Diff)], &mut Vec<(V, T2::Diff)>, &mut Vec<(V, T2::Diff)>)+'static,
     {
         use crate::operators::reduce::reduce_trace;
-        reduce_trace::<_,_,_,_,V,_>(self, name, logic)
+        reduce_trace::<_,_,Bu,_,_,V,_>(self, name, logic)
     }
 }
 
@@ -353,23 +355,23 @@ where
     G::Timestamp: Lattice,
 {
     /// Arranges updates into a shared trace.
-    fn arrange<Ba, Tr>(&self) -> Arranged<G, TraceAgent<Tr>>
+    fn arrange<Ba, Bu, Tr>(&self) -> Arranged<G, TraceAgent<Tr>>
     where
         Ba: Batcher<Input=C, Time=G::Timestamp> + 'static,
+        Bu: Builder<Time=G::Timestamp, Input=Ba::Output, Output = Tr::Batch>,
         Tr: Trace<Time=G::Timestamp> + 'static,
         Tr::Batch: Batch,
-        Tr::Builder: Builder<Input=Ba::Output>,
     {
-        self.arrange_named::<Ba, Tr>("Arrange")
+        self.arrange_named::<Ba, Bu, Tr>("Arrange")
     }
 
     /// Arranges updates into a shared trace, with a supplied name.
-    fn arrange_named<Ba, Tr>(&self, name: &str) -> Arranged<G, TraceAgent<Tr>>
+    fn arrange_named<Ba, Bu, Tr>(&self, name: &str) -> Arranged<G, TraceAgent<Tr>>
     where
         Ba: Batcher<Input=C, Time=G::Timestamp> + 'static,
+        Bu: Builder<Time=G::Timestamp, Input=Ba::Output, Output = Tr::Batch>,
         Tr: Trace<Time=G::Timestamp> + 'static,
         Tr::Batch: Batch,
-        Tr::Builder: Builder<Input=Ba::Output>,
     ;
 }
 
@@ -381,15 +383,15 @@ where
     V: ExchangeData,
     R: ExchangeData + Semigroup,
 {
-    fn arrange_named<Ba, Tr>(&self, name: &str) -> Arranged<G, TraceAgent<Tr>>
+    fn arrange_named<Ba, Bu, Tr>(&self, name: &str) -> Arranged<G, TraceAgent<Tr>>
     where
         Ba: Batcher<Input=Vec<((K, V), G::Timestamp, R)>, Time=G::Timestamp> + 'static,
+        Bu: Builder<Time=G::Timestamp, Input=Ba::Output, Output = Tr::Batch>,
         Tr: Trace<Time=G::Timestamp> + 'static,
         Tr::Batch: Batch,
-        Tr::Builder: Builder<Input=Ba::Output>,
     {
         let exchange = Exchange::new(move |update: &((K,V),G::Timestamp,R)| (update.0).0.hashed().into());
-        arrange_core::<_, _, Ba, _>(&self.inner, exchange, name)
+        arrange_core::<_, _, Ba, Bu, _>(&self.inner, exchange, name)
     }
 }
 
@@ -398,16 +400,16 @@ where
 /// This operator arranges a stream of values into a shared trace, whose contents it maintains.
 /// It uses the supplied parallelization contract to distribute the data, which does not need to
 /// be consistently by key (though this is the most common).
-pub fn arrange_core<G, P, Ba, Tr>(stream: &StreamCore<G, Ba::Input>, pact: P, name: &str) -> Arranged<G, TraceAgent<Tr>>
+pub fn arrange_core<G, P, Ba, Bu, Tr>(stream: &StreamCore<G, Ba::Input>, pact: P, name: &str) -> Arranged<G, TraceAgent<Tr>>
 where
     G: Scope,
     G::Timestamp: Lattice,
     P: ParallelizationContract<G::Timestamp, Ba::Input>,
     Ba: Batcher<Time=G::Timestamp> + 'static,
     Ba::Input: Container,
+    Bu: Builder<Time=G::Timestamp, Input=Ba::Output, Output = Tr::Batch>,
     Tr: Trace<Time=G::Timestamp>+'static,
     Tr::Batch: Batch,
-    Tr::Builder: Builder<Input=Ba::Output>,
 {
     // The `Arrange` operator is tasked with reacting to an advancing input
     // frontier by producing the sequence of batches whose lower and upper
@@ -515,7 +517,7 @@ where
                             }
 
                             // Extract updates not in advance of `upper`.
-                            let batch = batcher.seal::<Tr::Builder>(upper.clone());
+                            let batch = batcher.seal::<Bu>(upper.clone());
 
                             writer.insert(batch.clone(), Some(capability.time().clone()));
 
@@ -543,7 +545,7 @@ where
                 }
                 else {
                     // Announce progress updates, even without data.
-                    let _batch = batcher.seal::<Tr::Builder>(input.frontier().frontier().to_owned());
+                    let _batch = batcher.seal::<Bu>(input.frontier().frontier().to_owned());
                     writer.seal(input.frontier().frontier().to_owned());
                 }
 
@@ -562,15 +564,15 @@ impl<G: Scope, K: ExchangeData+Hashable, R: ExchangeData+Semigroup> Arrange<G, V
 where
     G::Timestamp: Lattice+Ord,
 {
-    fn arrange_named<Ba, Tr>(&self, name: &str) -> Arranged<G, TraceAgent<Tr>>
+    fn arrange_named<Ba, Bu, Tr>(&self, name: &str) -> Arranged<G, TraceAgent<Tr>>
     where
         Ba: Batcher<Input=Vec<((K,()),G::Timestamp,R)>, Time=G::Timestamp> + 'static,
+        Bu: Builder<Time=G::Timestamp, Input=Ba::Output, Output = Tr::Batch>,
         Tr: Trace<Time=G::Timestamp> + 'static,
         Tr::Batch: Batch,
-        Tr::Builder: Builder<Input=Ba::Output>,
     {
         let exchange = Exchange::new(move |update: &((K,()),G::Timestamp,R)| (update.0).0.hashed().into());
-        arrange_core::<_,_,Ba,_>(&self.map(|k| (k, ())).inner, exchange, name)
+        arrange_core::<_,_,Ba,Bu,_>(&self.map(|k| (k, ())).inner, exchange, name)
     }
 }
 
@@ -601,7 +603,7 @@ where
     }
 
     fn arrange_by_key_named(&self, name: &str) -> Arranged<G, TraceAgent<ValSpine<K, V, G::Timestamp, R>>> {
-        self.arrange_named::<ValBatcher<_,_,_,_>, _>(name)
+        self.arrange_named::<ValBatcher<_,_,_,_>,ValBuilder<_,_,_,_>,_>(name)
     }
 }
 
@@ -636,6 +638,6 @@ where
 
     fn arrange_by_self_named(&self, name: &str) -> Arranged<G, TraceAgent<KeySpine<K, G::Timestamp, R>>> {
         self.map(|k| (k, ()))
-            .arrange_named::<KeyBatcher<_,_,_>, _>(name)
+            .arrange_named::<KeyBatcher<_,_,_>,KeyBuilder<_,_,_>,_>(name)
     }
 }

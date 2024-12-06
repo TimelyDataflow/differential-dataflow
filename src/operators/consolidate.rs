@@ -47,22 +47,22 @@ where
     /// });
     /// ```
     pub fn consolidate(&self) -> Self {
-        use crate::trace::implementations::{KeyBatcher, KeySpine};
-        self.consolidate_named::<KeyBatcher<_, _, _>, KeySpine<_,_,_>>("Consolidate")
+        use crate::trace::implementations::{KeyBatcher, KeyBuilder, KeySpine};
+        self.consolidate_named::<KeyBatcher<_, _, _>,KeyBuilder<_,_,_>, KeySpine<_,_,_>>("Consolidate")
     }
 
     /// As `consolidate` but with the ability to name the operator and specify the trace type.
-    pub fn consolidate_named<Ba, Tr>(&self, name: &str) -> Self
+    pub fn consolidate_named<Ba, Bu, Tr>(&self, name: &str) -> Self
     where
         Ba: Batcher<Input=Vec<((D,()),G::Timestamp,R)>, Time=G::Timestamp> + 'static,
         Tr: crate::trace::Trace<Time=G::Timestamp,Diff=R>+'static,
         for<'a> Tr::Key<'a>: IntoOwned<'a, Owned = D>,
         Tr::Batch: crate::trace::Batch,
-        Tr::Builder: Builder<Input=Ba::Output>,
+        Bu: Builder<Time=Tr::Time, Input=Ba::Output, Output=Tr::Batch>,
     {
         use crate::operators::arrange::arrangement::Arrange;
         self.map(|k| (k, ()))
-            .arrange_named::<Ba, Tr>(name)
+            .arrange_named::<Ba, Bu, Tr>(name)
             .as_collection(|d, _| d.into_owned())
     }
 
