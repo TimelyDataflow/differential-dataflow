@@ -264,15 +264,14 @@ impl<T> VecMerger<T> {
     }
 }
 
-impl<K, V, T, R> Merger for VecMerger<((K, V), T, R)>
+impl<D, T, R> Merger for VecMerger<(D, T, R)>
 where
-    K: Data,
-    V: Data,
+    D: Data,
     T: Ord + PartialOrder + Clone + 'static,
     R: Semigroup + 'static,
 {
     type Time = T;
-    type Chunk = Vec<((K, V), T, R)>;
+    type Chunk = Vec<(D, T, R)>;
 
     fn merge(&mut self, list1: Vec<Self::Chunk>, list2: Vec<Self::Chunk>, output: &mut Vec<Self::Chunk>, stash: &mut Vec<Self::Chunk>) {
         let mut list1 = list1.into_iter();

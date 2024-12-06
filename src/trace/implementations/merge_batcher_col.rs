@@ -52,15 +52,14 @@ impl<T: Columnation> ColumnationMerger<T> {
     }
 }
 
-impl<K, V, T, R> Merger for ColumnationMerger<((K, V), T, R)>
+impl<D, T, R> Merger for ColumnationMerger<(D, T, R)>
 where
-    K: Columnation + Ord + Data,
-    V: Columnation + Ord + Data,
+    D: Columnation + Ord + Data,
     T: Columnation + Ord + PartialOrder + Data,
     R: Columnation + Semigroup + 'static,
 {
     type Time = T;
-    type Chunk = TimelyStack<((K, V), T, R)>;
+    type Chunk = TimelyStack<(D, T, R)>;
 
     fn merge(&mut self, list1: Vec<Self::Chunk>, list2: Vec<Self::Chunk>, output: &mut Vec<Self::Chunk>, stash: &mut Vec<Self::Chunk>) {
         let mut list1 = list1.into_iter();
