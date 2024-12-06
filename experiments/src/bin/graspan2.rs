@@ -86,7 +86,7 @@ fn unoptimized() {
 
                     let value_flow_next =
                     value_flow_next
-                        .arrange::<ValBatcher<_,_,_,_>, KeyBuilder<_,_,_>, KeySpine<_,_,_>>()
+                        .arrange::<KeyBatcher<_,_,_>, KeyBuilder<_,_,_>, KeySpine<_,_,_>>()
                         // .distinct_total_core::<Diff>()
                         .threshold_semigroup(|_,_,x| if x.is_none() { Some(Present) } else { None })
                         ;

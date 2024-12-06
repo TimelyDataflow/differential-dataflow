@@ -49,8 +49,8 @@ where
     T: Timestamp,
 {
     type Input = Input;
-    type Output = M::Output;
     type Time = T;
+    type Output = M::Chunk;
 
     fn new(logger: Option<Logger<DifferentialEvent, WorkerIdentifier>>, operator_id: usize) -> Self {
         Self {
@@ -109,7 +109,7 @@ where
 
         self.stash.clear();
 
-        let seal = M::seal::<B>(&mut readied, self.lower.borrow(), upper.borrow(), Antichain::from_elem(T::minimum()).borrow());
+        let seal = B::seal(&mut readied, self.lower.borrow(), upper.borrow(), Antichain::from_elem(T::minimum()).borrow());
         self.lower = upper;
         seal
     }
@@ -204,10 +204,6 @@ where
 pub trait Merger: Default {
     /// The internal representation of chunks of data.
     type Chunk: Container;
-    /// The output type
-    /// TODO: This should be replaced by `Chunk` or another container once the builder understands
-    /// building from a complete chain.
-    type Output;
     /// The type of time in frontiers to extract updates.
     type Time;
     /// Merge chains into an output chain.
@@ -222,15 +218,6 @@ pub trait Merger: Default {
         kept: &mut Vec<Self::Chunk>,
         stash: &mut Vec<Self::Chunk>,
     );
-
-    /// Build from a chain
-    /// TODO: We can move this entirely to `MergeBatcher` once builders can accepts chains.
-    fn seal<B: Builder<Input = Self::Output, Time = Self::Time>>(
-        chain: &mut Vec<Self::Chunk>,
-        lower: AntichainRef<Self::Time>,
-        upper: AntichainRef<Self::Time>,
-        since: AntichainRef<Self::Time>,
-    ) -> B::Output;
 
     /// Account size and allocation changes. Returns a tuple of (records, size, capacity, allocations).
     fn account(chunk: &Self::Chunk) -> (usize, usize, usize, usize);
@@ -286,7 +273,6 @@ where
 {
     type Time = T;
     type Chunk = Vec<((K, V), T, R)>;
-    type Output = Vec<((K, V), T, R)>;
 
     fn merge(&mut self, list1: Vec<Self::Chunk>, list2: Vec<Self::Chunk>, output: &mut Vec<Self::Chunk>, stash: &mut Vec<Self::Chunk>) {
         let mut list1 = list1.into_iter();
@@ -401,45 +387,6 @@ where
             readied.push(ready);
         }
     }
-
-    fn seal<B: Builder<Input = Self::Output, Time = Self::Time>>(
-        chain: &mut Vec<Self::Chunk>,
-        lower: AntichainRef<Self::Time>,
-        upper: AntichainRef<Self::Time>,
-        since: AntichainRef<Self::Time>,
-    ) -> B::Output {
-        let mut keys = 0;
-        let mut vals = 0;
-        let mut upds = 0;
-        let mut prev_keyval = None;
-        for buffer in chain.iter() {
-            for ((key, val), time, _) in buffer.iter() {
-                if !upper.less_equal(time) {
-                    if let Some((p_key, p_val)) = prev_keyval {
-                        if p_key != key {
-                            keys += 1;
-                            vals += 1;
-                        } else if p_val != val {
-                            vals += 1;
-                        }
-                    } else {
-                        keys += 1;
-                        vals += 1;
-                    }
-                    upds += 1;
-                    prev_keyval = Some((key, val));
-                }
-            }
-        }
-        let mut builder = B::with_capacity(keys, vals, upds);
-
-        for mut chunk in chain.drain(..) {
-            builder.push(&mut chunk);
-        }
-
-        builder.done(lower.to_owned(), upper.to_owned(), since.to_owned())
-    }
-
     fn account(chunk: &Self::Chunk) -> (usize, usize, usize, usize) {
         (chunk.len(), 0, 0, 0)
     }

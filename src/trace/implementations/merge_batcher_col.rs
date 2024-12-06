@@ -8,7 +8,6 @@ use timely::{Container, Data, PartialOrder};
 
 use crate::difference::Semigroup;
 use crate::trace::implementations::merge_batcher::Merger;
-use crate::trace::Builder;
 
 /// A merger for timely stacks
 pub struct ColumnationMerger<T> {
@@ -62,7 +61,6 @@ where
 {
     type Time = T;
     type Chunk = TimelyStack<((K, V), T, R)>;
-    type Output = TimelyStack<((K, V), T, R)>;
 
     fn merge(&mut self, list1: Vec<Self::Chunk>, list2: Vec<Self::Chunk>, output: &mut Vec<Self::Chunk>, stash: &mut Vec<Self::Chunk>) {
         let mut list1 = list1.into_iter();
@@ -181,43 +179,6 @@ where
         if !ready.is_empty() {
             readied.push(ready);
         }
-    }
-
-    fn seal<B: Builder<Input = Self::Output, Time = Self::Time>>(
-        chain: &mut Vec<Self::Chunk>,
-        lower: AntichainRef<Self::Time>,
-        upper: AntichainRef<Self::Time>,
-        since: AntichainRef<Self::Time>,
-    ) -> B::Output {
-        let mut keys = 0;
-        let mut vals = 0;
-        let mut upds = 0;
-        let mut prev_keyval = None;
-        for buffer in chain.iter() {
-            for ((key, val), time, _) in buffer.iter() {
-                if !upper.less_equal(time) {
-                    if let Some((p_key, p_val)) = prev_keyval {
-                        if p_key != key {
-                            keys += 1;
-                            vals += 1;
-                        } else if p_val != val {
-                            vals += 1;
-                        }
-                    } else {
-                        keys += 1;
-                        vals += 1;
-                    }
-                    upds += 1;
-                    prev_keyval = Some((key, val));
-                }
-            }
-        }
-        let mut builder = B::with_capacity(keys, vals, upds);
-        for mut chunk in chain.drain(..) {
-            builder.push(&mut chunk);
-        }
-
-        builder.done(lower.to_owned(), upper.to_owned(), since.to_owned())
     }
 
     fn account(chunk: &Self::Chunk) -> (usize, usize, usize, usize) {
