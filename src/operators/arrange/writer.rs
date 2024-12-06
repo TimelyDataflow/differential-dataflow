@@ -6,7 +6,7 @@
 use std::rc::{Rc, Weak};
 use std::cell::RefCell;
 
-use timely::progress::{Antichain, Timestamp};
+use timely::progress::Antichain;
 
 use crate::trace::{Trace, Batch, BatchReader};
 use crate::trace::wrappers::rc::TraceBox;
@@ -93,10 +93,7 @@ where
     /// Inserts an empty batch up to `upper`.
     pub fn seal(&mut self, upper: Antichain<Tr::Time>) {
         if self.upper != upper {
-            use crate::trace::Builder;
-            let builder = Tr::Builder::new();
-            let batch = builder.done(self.upper.clone(), upper, Antichain::from_elem(Tr::Time::minimum()));
-            self.insert(batch, None);
+            self.insert(Tr::Batch::empty(self.upper.clone(), upper), None);
         }
     }
 }

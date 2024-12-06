@@ -209,9 +209,6 @@ pub trait TraceReader {
 pub trait Trace : TraceReader
 where <Self as TraceReader>::Batch: Batch {
 
-    /// A type used to assemble batches from ordered update sequences.
-    type Builder: Builder<Time=Self::Time, Output = Self::Batch>;
-
     /// Allocates a new empty trace.
     fn new(
         info: ::timely::dataflow::operators::generic::OperatorInfo,
@@ -299,6 +296,9 @@ pub trait Batch : BatchReader where Self: ::std::marker::Sized {
     fn begin_merge(&self, other: &Self, compaction_frontier: AntichainRef<Self::Time>) -> Self::Merger {
         Self::Merger::new(self, other, compaction_frontier)
     }
+
+    /// Produce an empty batch over the indicated interval.
+    fn empty(lower: Antichain<Self::Time>, upper: Antichain<Self::Time>) -> Self;
 }
 
 /// Functionality for collecting and batching updates.
@@ -441,6 +441,9 @@ pub mod rc_blanket_impls {
     /// An immutable collection of updates.
     impl<B: Batch> Batch for Rc<B> {
         type Merger = RcMerger<B>;
+        fn empty(lower: Antichain<Self::Time>, upper: Antichain<Self::Time>) -> Self {
+            Rc::new(B::empty(lower, upper))
+        }
     }
 
     /// Wrapper type for building reference counted batches.

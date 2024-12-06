@@ -1,12 +1,12 @@
 use timely::dataflow::operators::generic::OperatorInfo;
 use timely::progress::{Antichain, frontier::AntichainRef};
 
-use differential_dataflow::trace::implementations::{ValBatcher, ValSpine};
+use differential_dataflow::trace::implementations::{ValBatcher, ValBuilder, ValSpine};
 use differential_dataflow::trace::{Trace, TraceReader, Batcher};
 use differential_dataflow::trace::cursor::Cursor;
 
 type IntegerTrace = ValSpine<u64, u64, usize, i64>;
-type IntegerBuilder = <IntegerTrace as Trace>::Builder;
+type IntegerBuilder = ValBuilder<u64, u64, usize, i64>;
 
 fn get_trace() -> ValSpine<u64, u64, usize, i64> {
     let op_info = OperatorInfo::new(0, 0, [].into());

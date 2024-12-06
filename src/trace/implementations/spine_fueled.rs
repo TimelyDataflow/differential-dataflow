@@ -70,7 +70,7 @@
 
 
 use crate::logging::Logger;
-use crate::trace::{Batch, Builder, BatchReader, Trace, TraceReader, ExertionLogic};
+use crate::trace::{Batch, BatchReader, Trace, TraceReader, ExertionLogic};
 use crate::trace::cursor::CursorList;
 use crate::trace::Merger;
 
@@ -83,7 +83,7 @@ use ::timely::order::PartialOrder;
 /// A spine maintains a small number of immutable collections of update tuples, merging the collections when
 /// two have similar sizes. In this way, it allows the addition of more tuples, which may then be merged with
 /// other immutable collections.
-pub struct Spine<B: Batch, BU> {
+pub struct Spine<B: Batch> {
     operator: OperatorInfo,
     logger: Option<Logger>,
     logical_frontier: Antichain<B::Time>,   // Times after which the trace must accumulate correctly.
@@ -97,10 +97,9 @@ pub struct Spine<B: Batch, BU> {
     exert_logic_param: Vec<(usize, usize, usize)>,
     /// Logic to indicate whether and how many records we should introduce in the absence of actual updates.
     exert_logic: Option<ExertionLogic>,
-    phantom: std::marker::PhantomData<BU>,
 }
 
-impl<B, BU> TraceReader for Spine<B, BU>
+impl<B> TraceReader for Spine<B>
 where
     B: Batch+Clone+'static,
 {
@@ -246,14 +245,10 @@ where
 
 // A trace implementation for any key type that can be borrowed from or converted into `Key`.
 // TODO: Almost all this implementation seems to be generic with respect to the trace and batch types.
-impl<B, BU> Trace for Spine<B, BU>
+impl<B> Trace for Spine<B>
 where
     B: Batch+Clone+'static,
-    BU: Builder<Output=B, Time=B::Time>,
 {
-    /// A type used to assemble batches from ordered update sequences.
-    type Builder = BU;
-
     fn new(
         info: ::timely::dataflow::operators::generic::OperatorInfo,
         logging: Option<crate::logging::Logger>,
@@ -316,22 +311,20 @@ where
     /// Completes the trace with a final empty batch.
     fn close(&mut self) {
         if !self.upper.borrow().is_empty() {
-            let builder = Self::Builder::new();
-            let batch = builder.done(self.upper.clone(), Antichain::new(), Antichain::from_elem(<Self::Time as timely::progress::Timestamp>::minimum()));
-            self.insert(batch);
+            self.insert(B::empty(self.upper.clone(), Antichain::new()));
         }
     }
 }
 
 // Drop implementation allows us to log batch drops, to zero out maintained totals.
-impl<B: Batch, BU> Drop for Spine<B, BU> {
+impl<B: Batch> Drop for Spine<B> {
     fn drop(&mut self) {
         self.drop_batches();
     }
 }
 
 
-impl<B: Batch, BU> Spine<B, BU> {
+impl<B: Batch> Spine<B> {
     /// Drops and logs batches. Used in `set_logical_compaction` and drop.
     fn drop_batches(&mut self) {
         if let Some(logger) = &self.logger {
@@ -372,7 +365,7 @@ impl<B: Batch, BU> Spine<B, BU> {
     }
 }
 
-impl<B: Batch, BU> Spine<B, BU> {
+impl<B: Batch> Spine<B> {
     /// Determine the amount of effort we should exert in the absence of updates.
     ///
     /// This method prepares an iterator over batches, including the level, count, and length of each layer.
@@ -434,7 +427,6 @@ impl<B: Batch, BU> Spine<B, BU> {
             activator,
             exert_logic_param: Vec::default(),
             exert_logic: None,
-            phantom: std::marker::PhantomData,
         }
     }
 

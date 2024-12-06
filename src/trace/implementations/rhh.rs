@@ -23,23 +23,21 @@ use super::{Update, Layout, Vector, TStack};
 use self::val_batch::{RhhValBatch, RhhValBuilder};
 
 /// A trace implementation using a spine of ordered lists.
-pub type VecSpine<K, V, T, R> = Spine<
-    Rc<RhhValBatch<Vector<((K,V),T,R)>>>,
-    RcBuilder<RhhValBuilder<Vector<((K,V),T,R)>, Vec<((K,V),T,R)>>>,
->;
+pub type VecSpine<K, V, T, R> = Spine<Rc<RhhValBatch<Vector<((K,V),T,R)>>>>;
 /// A batcher for ordered lists.
 pub type VecBatcher<K,V,T,R> = MergeBatcher<Vec<((K,V),T,R)>, VecChunker<((K,V),T,R)>, VecMerger<((K, V), T, R)>, T>;
+/// A builder for ordered lists.
+pub type VecBuilder<K,V,T,R> = RcBuilder<RhhValBuilder<Vector<((K,V),T,R)>, Vec<((K,V),T,R)>>>;
 
 // /// A trace implementation for empty values using a spine of ordered lists.
 // pub type OrdKeySpine<K, T, R> = Spine<Rc<OrdKeyBatch<Vector<((K,()),T,R)>>>>;
 
 /// A trace implementation backed by columnar storage.
-pub type ColSpine<K, V, T, R> = Spine<
-    Rc<RhhValBatch<TStack<((K,V),T,R)>>>,
-    RcBuilder<RhhValBuilder<TStack<((K,V),T,R)>, TimelyStack<((K,V),T,R)>>>,
->;
+pub type ColSpine<K, V, T, R> = Spine<Rc<RhhValBatch<TStack<((K,V),T,R)>>>>;
 /// A batcher for columnar storage.
 pub type ColBatcher<K,V,T,R> = MergeBatcher<Vec<((K,V),T,R)>, ColumnationChunker<((K,V),T,R)>, ColumnationMerger<((K,V),T,R)>, T>;
+/// A builder for columnar storage.
+pub type ColBuilder<K,V,T,R> = RcBuilder<RhhValBuilder<TStack<((K,V),T,R)>, TimelyStack<((K,V),T,R)>>>;
 
 // /// A trace implementation backed by columnar storage.
 // pub type ColKeySpine<K, T, R> = Spine<Rc<OrdKeyBatch<TStack<((K,()),T,R)>>>>;
@@ -317,6 +315,25 @@ mod val_batch {
 
         fn begin_merge(&self, other: &Self, compaction_frontier: AntichainRef<<L::Target as Update>::Time>) -> Self::Merger {
             RhhValMerger::new(self, other, compaction_frontier)
+        }
+
+        fn empty(lower: Antichain<Self::Time>, upper: Antichain<Self::Time>) -> Self {
+            use timely::progress::Timestamp;
+            Self {
+                storage: RhhValStorage {
+                    keys: L::KeyContainer::with_capacity(0),
+                    keys_offs: L::OffsetContainer::with_capacity(0),
+                    vals: L::ValContainer::with_capacity(0),
+                    vals_offs: L::OffsetContainer::with_capacity(0),
+                    times: L::TimeContainer::with_capacity(0),
+                    diffs: L::DiffContainer::with_capacity(0),
+                    key_count: 0,
+                    key_capacity: 0,
+                    divisor: 0,
+                },
+                description: Description::new(lower, upper, Antichain::from_elem(Self::Time::minimum())),
+                updates: 0,
+            }
         }
     }
 

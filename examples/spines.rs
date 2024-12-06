@@ -28,46 +28,46 @@ fn main() {
 
             match mode.as_str() {
                 "new" => {
-                    use differential_dataflow::trace::implementations::ord_neu::{ColKeyBatcher, ColKeySpine};
-                    let data = data.arrange::<ColKeyBatcher<_,_,_>, ColKeySpine<_,_,_>>();
-                    let keys = keys.arrange::<ColKeyBatcher<_,_,_>, ColKeySpine<_,_,_>>();
+                    use differential_dataflow::trace::implementations::ord_neu::{ColKeyBatcher, ColKeyBuilder, ColKeySpine};
+                    let data = data.arrange::<ColKeyBatcher<_,_,_>, ColKeyBuilder<_,_,_>, ColKeySpine<_,_,_>>();
+                    let keys = keys.arrange::<ColKeyBatcher<_,_,_>, ColKeyBuilder<_,_,_>, ColKeySpine<_,_,_>>();
                     keys.join_core(&data, |_k, &(), &()| Option::<()>::None)
                         .probe_with(&mut probe);
                 },
                 "old" => {
-                    use differential_dataflow::trace::implementations::ord_neu::{OrdKeyBatcher, OrdKeySpine};
-                    let data = data.arrange::<OrdKeyBatcher<_,_,_>, OrdKeySpine<_,_,_>>();
-                    let keys = keys.arrange::<OrdKeyBatcher<_,_,_>, OrdKeySpine<_,_,_>>();
+                    use differential_dataflow::trace::implementations::ord_neu::{OrdKeyBatcher, RcOrdKeyBuilder, OrdKeySpine};
+                    let data = data.arrange::<OrdKeyBatcher<_,_,_>, RcOrdKeyBuilder<_,_,_>, OrdKeySpine<_,_,_>>();
+                    let keys = keys.arrange::<OrdKeyBatcher<_,_,_>, RcOrdKeyBuilder<_,_,_>, OrdKeySpine<_,_,_>>();
                     keys.join_core(&data, |_k, &(), &()| Option::<()>::None)
                         .probe_with(&mut probe);
                 },
                 "rhh" => {
-                    use differential_dataflow::trace::implementations::rhh::{HashWrapper, VecBatcher, VecSpine};
-                    let data = data.map(|x| HashWrapper { inner: x }).arrange::<VecBatcher<_,(),_,_>, VecSpine<_,(),_,_>>();
-                    let keys = keys.map(|x| HashWrapper { inner: x }).arrange::<VecBatcher<_,(),_,_>, VecSpine<_,(),_,_>>();
+                    use differential_dataflow::trace::implementations::rhh::{HashWrapper, VecBatcher, VecBuilder, VecSpine};
+                    let data = data.map(|x| HashWrapper { inner: x }).arrange::<VecBatcher<_,(),_,_>, VecBuilder<_,(),_,_>, VecSpine<_,(),_,_>>();
+                    let keys = keys.map(|x| HashWrapper { inner: x }).arrange::<VecBatcher<_,(),_,_>, VecBuilder<_,(),_,_>, VecSpine<_,(),_,_>>();
                     keys.join_core(&data, |_k, &(), &()| Option::<()>::None)
                         .probe_with(&mut probe);
                 },
                 "slc" => {
 
-                    use differential_dataflow::trace::implementations::ord_neu::{PreferredBatcher, PreferredSpine};
+                    use differential_dataflow::trace::implementations::ord_neu::{PreferredBatcher, PreferredBuilder, PreferredSpine};
 
                     let data =
                     data.map(|x| (x.clone().into_bytes(), x.into_bytes()))
-                        .arrange::<PreferredBatcher<[u8],[u8],_,_>, PreferredSpine<[u8],[u8],_,_>>()
-                        .reduce_abelian::<_, _, _, PreferredSpine<[u8],(),_,_>>("distinct", |_,_,output| output.push(((), 1)));
+                        .arrange::<PreferredBatcher<[u8],[u8],_,_>, PreferredBuilder<[u8],[u8],_,_>, PreferredSpine<[u8],[u8],_,_>>()
+                        .reduce_abelian::<_, _, _, PreferredBuilder<[u8],(),_,_>, PreferredSpine<[u8],(),_,_>>("distinct", |_,_,output| output.push(((), 1)));
                     let keys =
                     keys.map(|x| (x.clone().into_bytes(), 7))
-                        .arrange::<PreferredBatcher<[u8],u8,_,_>, PreferredSpine<[u8],u8,_,_>>()
-                        .reduce_abelian::<_, _, _, PreferredSpine<[u8],(),_,_>>("distinct", |_,_,output| output.push(((), 1)));
+                        .arrange::<PreferredBatcher<[u8],u8,_,_>, PreferredBuilder<[u8],u8,_,_>, PreferredSpine<[u8],u8,_,_>>()
+                        .reduce_abelian::<_, _, _, PreferredBuilder<[u8],(),_,_>,PreferredSpine<[u8],(),_,_>>("distinct", |_,_,output| output.push(((), 1)));
 
                     keys.join_core(&data, |_k, &(), &()| Option::<()>::None)
                         .probe_with(&mut probe);
                 },
                 "flat" => {
-                    use differential_dataflow::trace::implementations::ord_neu::{FlatKeyBatcherDefault, FlatKeySpineDefault};
-                    let data = data.arrange::<FlatKeyBatcherDefault<String,usize,isize,_>, FlatKeySpineDefault<String,usize,isize>>();
-                    let keys = keys.arrange::<FlatKeyBatcherDefault<String,usize,isize,_>, FlatKeySpineDefault<String,usize,isize>>();
+                    use differential_dataflow::trace::implementations::ord_neu::{FlatKeyBatcherDefault, FlatKeyBuilderDefault, FlatKeySpineDefault};
+                    let data = data.arrange::<FlatKeyBatcherDefault<String,usize,isize,_>, FlatKeyBuilderDefault<String,usize,isize>, FlatKeySpineDefault<String,usize,isize>>();
+                    let keys = keys.arrange::<FlatKeyBatcherDefault<String,usize,isize,_>, FlatKeyBuilderDefault<String,usize,isize>, FlatKeySpineDefault<String,usize,isize>>();
                     keys.join_core(&data, |_k, (), ()| Option::<()>::None)
                         .probe_with(&mut probe);
                 }
