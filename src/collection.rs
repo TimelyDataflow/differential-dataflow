@@ -60,7 +60,7 @@ impl<G: Scope, D, R, C> Collection<G, D, R, C> {
         Collection { inner: stream, phantom: std::marker::PhantomData }
     }
 }
-impl<G: Scope, D, R, C: Container> Collection<G, D, R, C> {
+impl<G: Scope, D, R, C: Container + Clone + 'static> Collection<G, D, R, C> {
     /// Creates a new collection accumulating the contents of the two collections.
     ///
     /// Despite the name, differential dataflow collections are unordered. This method is so named because the
@@ -654,7 +654,7 @@ where
     G: Scope,
     D: Data,
     R: Semigroup+'static,
-    C: Container,
+    C: Container + Clone + 'static,
     I: IntoIterator<Item=Collection<G, D, R, C>>,
 {
     scope

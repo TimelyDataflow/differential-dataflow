@@ -264,15 +264,15 @@ where
         + PushInto<Input::ItemRef<'a>>,
 {
     fn push_into(&mut self, container: &'a mut Input) {
-        if self.pending.capacity() < Output::preferred_capacity() {
-            self.pending.reserve(Output::preferred_capacity() - self.pending.len());
-        }
+        self.pending.ensure_capacity(&mut None);
+
         let form_batch = |this: &mut Self| {
-            if this.pending.len() == this.pending.capacity() {
+            if this.pending.at_capacity() {
+                let starting_len = this.pending.len();
                 consolidate_container(&mut this.pending, &mut this.empty);
                 std::mem::swap(&mut this.pending, &mut this.empty);
                 this.empty.clear();
-                if this.pending.len() > this.pending.capacity() / 2 {
+                if this.pending.len() > starting_len / 2 {
                     // Note that we're pushing non-full containers, which is a deviation from
                     // other implementation. The reason for this is that we cannot extract
                     // partial data from `this.pending`. We should revisit this in the future.
@@ -289,7 +289,7 @@ where
 
 impl<Output> ContainerBuilder for ContainerChunker<Output>
 where
-    Output: SizableContainer + ConsolidateLayout,
+    Output: SizableContainer + ConsolidateLayout + Clone + 'static,
 {
     type Container = Output;
 

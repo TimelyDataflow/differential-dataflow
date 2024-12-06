@@ -13,7 +13,7 @@
 use std::cmp::Ordering;
 use std::collections::VecDeque;
 use timely::Container;
-use timely::container::{ContainerBuilder, PushInto, SizableContainer};
+use timely::container::{ContainerBuilder, PushInto};
 use timely::container::flatcontainer::{FlatStack, Push, Region};
 use timely::container::flatcontainer::impls::tuple::{TupleABCRegion, TupleABRegion};
 use crate::Data;
@@ -156,7 +156,7 @@ where
     // TODO: Can we replace `multiple` by a bool?
     #[cold]
     fn consolidate_and_flush_through(&mut self, multiple: usize) {
-        let preferred_capacity = <Vec<(D,T,R)>>::preferred_capacity();
+        let preferred_capacity = timely::container::buffer::default_capacity::<(D, T, R)>();
         consolidate_updates(&mut self.current);
         let mut drain = self.current.drain(..(self.current.len()/multiple)*multiple).peekable();
         while drain.peek().is_some() {
@@ -180,7 +180,7 @@ where
     /// Precondition: `current` is not allocated or has space for at least one element.
     #[inline]
     fn push_into(&mut self, item: P) {
-        let preferred_capacity = <Vec<(D,T,R)>>::preferred_capacity();
+        let preferred_capacity = timely::container::buffer::default_capacity::<(D, T, R)>();
         if self.current.capacity() < preferred_capacity * 2 {
             self.current.reserve(preferred_capacity * 2 - self.current.capacity());
         }
