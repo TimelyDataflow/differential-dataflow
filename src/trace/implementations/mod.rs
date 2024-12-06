@@ -343,6 +343,9 @@ pub trait BuilderInput<K: BatchContainer, V: BatchContainer>: Container {
 
     /// Test that the value equals a key in the layout's value container.
     fn val_eq(this: &Self::Val<'_>, other: V::ReadItem<'_>) -> bool;
+
+    /// Count the number of distinct keys, (key, val) pairs, and total updates.
+    fn key_val_upd_counts(chain: &[Self]) -> (usize, usize, usize);
 }
 
 impl<K,KBC,V,VBC,T,R> BuilderInput<KBC, VBC> for Vec<((K, V), T, R)>
@@ -372,6 +375,31 @@ where
     fn val_eq(this: &V, other: VBC::ReadItem<'_>) -> bool {
         VBC::reborrow(other) == this
     }
+
+    fn key_val_upd_counts(chain: &[Self]) -> (usize, usize, usize) {
+        let mut keys = 0;
+        let mut vals = 0;
+        let mut upds = 0;
+        let mut prev_keyval = None;
+        for link in chain.iter() {
+            for ((key, val), _, _) in link.iter() {
+                if let Some((p_key, p_val)) = prev_keyval {
+                    if p_key != key {
+                        keys += 1;
+                        vals += 1;
+                    } else if p_val != val {
+                        vals += 1;
+                    }
+                } else {
+                    keys += 1;
+                    vals += 1;
+                }
+                upds += 1;
+                prev_keyval = Some((key, val));
+            }
+        }
+        (keys, vals, upds)
+    }
 }
 
 impl<K,V,T,R> BuilderInput<K, V> for TimelyStack<((K::Owned, V::Owned), T, R)>
@@ -400,6 +428,31 @@ where
 
     fn val_eq(this: &&V::Owned, other: V::ReadItem<'_>) -> bool {
         V::reborrow(other) == *this
+    }
+
+    fn key_val_upd_counts(chain: &[Self]) -> (usize, usize, usize) {
+        let mut keys = 0;
+        let mut vals = 0;
+        let mut upds = 0;
+        let mut prev_keyval = None;
+        for link in chain.iter() {
+            for ((key, val), _, _) in link.iter() {
+                if let Some((p_key, p_val)) = prev_keyval {
+                    if p_key != key {
+                        keys += 1;
+                        vals += 1;
+                    } else if p_val != val {
+                        vals += 1;
+                    }
+                } else {
+                    keys += 1;
+                    vals += 1;
+                }
+                upds += 1;
+                prev_keyval = Some((key, val));
+            }
+        }
+        (keys, vals, upds)
     }
 }
 
@@ -482,6 +535,31 @@ mod flatcontainer {
 
         fn val_eq(this: &Self::Val<'_>, other: VBC::ReadItem<'_>) -> bool {
             VBC::reborrow(other) == V::reborrow(*this)
+        }
+
+        fn key_val_upd_counts(chain: &[Self]) -> (usize, usize, usize) {
+            let mut keys = 0;
+            let mut vals = 0;
+            let mut upds = 0;
+            let mut prev_keyval = None;
+            for link in chain.iter() {
+                for ((key, val), _, _) in link.iter() {
+                    if let Some((p_key, p_val)) = prev_keyval {
+                        if p_key != key {
+                            keys += 1;
+                            vals += 1;
+                        } else if p_val != val {
+                            vals += 1;
+                        }
+                    } else {
+                        keys += 1;
+                        vals += 1;
+                    }
+                    upds += 1;
+                    prev_keyval = Some((key, val));
+                }
+            }
+            (keys, vals, upds)
         }
     }
 }

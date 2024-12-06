@@ -694,8 +694,22 @@ mod val_batch {
                 description: Description::new(lower, upper, since),
             }
         }
-    }
 
+        fn seal(
+            chain: &mut Vec<Self::Input>,
+            lower: AntichainRef<Self::Time>,
+            upper: AntichainRef<Self::Time>,
+            since: AntichainRef<Self::Time>,
+        ) -> Self::Output {
+            let (keys, vals, upds) = Self::Input::key_val_upd_counts(&chain[..]);
+            let mut builder = Self::with_capacity(keys, vals, upds);
+            for mut chunk in chain.drain(..) {
+                builder.push(&mut chunk);
+            }
+    
+            builder.done(lower.to_owned(), upper.to_owned(), since.to_owned())
+        }
+    }
 }
 
 mod key_batch {
@@ -1166,6 +1180,21 @@ mod key_batch {
                 storage: self.result,
                 description: Description::new(lower, upper, since),
             }
+        }
+
+        fn seal(
+            chain: &mut Vec<Self::Input>,
+            lower: AntichainRef<Self::Time>,
+            upper: AntichainRef<Self::Time>,
+            since: AntichainRef<Self::Time>,
+        ) -> Self::Output {
+            let (keys, vals, upds) = Self::Input::key_val_upd_counts(&chain[..]);
+            let mut builder = Self::with_capacity(keys, vals, upds);
+            for mut chunk in chain.drain(..) {
+                builder.push(&mut chunk);
+            }
+    
+            builder.done(lower.to_owned(), upper.to_owned(), since.to_owned())
         }
     }
 

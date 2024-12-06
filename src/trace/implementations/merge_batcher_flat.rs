@@ -3,13 +3,12 @@
 use std::cmp::Ordering;
 use std::marker::PhantomData;
 use timely::progress::frontier::{Antichain, AntichainRef};
-use timely::{Container, Data, PartialOrder};
+use timely::{Data, PartialOrder};
 use timely::container::flatcontainer::{Push, FlatStack, Region, ReserveItems};
 use timely::container::flatcontainer::impls::tuple::{TupleABCRegion, TupleABRegion};
 
 use crate::difference::{IsZero, Semigroup};
 use crate::trace::implementations::merge_batcher::Merger;
-use crate::trace::Builder;
 use crate::trace::cursor::IntoOwned;
 
 /// A merger for flat stacks.
@@ -110,7 +109,6 @@ where
 {
     type Time = MC::TimeOwned;
     type Chunk = FlatStack<MC>;
-    type Output = FlatStack<MC>;
 
     fn merge(&mut self, list1: Vec<Self::Chunk>, list2: Vec<Self::Chunk>, output: &mut Vec<Self::Chunk>, stash: &mut Vec<Self::Chunk>) {
         let mut list1 = list1.into_iter();
@@ -240,47 +238,6 @@ where
         if !ready.is_empty() {
             readied.push(ready);
         }
-    }
-
-    fn seal<B: Builder<Input = Self::Output, Time = Self::Time>>(
-        chain: &mut Vec<Self::Chunk>,
-        lower: AntichainRef<Self::Time>,
-        upper: AntichainRef<Self::Time>,
-        since: AntichainRef<Self::Time>,
-    ) -> B::Output {
-        let mut keys = 0;
-        let mut vals = 0;
-        let mut upds = 0;
-        {
-            let mut prev_keyval = None;
-            for buffer in chain.iter() {
-                for (key, val, time, _diff) in buffer.iter().map(MC::into_parts) {
-                    if !upper.less_equal(&time) {
-                        if let Some((p_key, p_val)) = prev_keyval {
-                            debug_assert!(p_key <= key);
-                            debug_assert!(p_key != key || p_val <= val);
-                            if p_key != key {
-                                keys += 1;
-                                vals += 1;
-                            } else if p_val != val {
-                                vals += 1;
-                            }
-                        } else {
-                            keys += 1;
-                            vals += 1;
-                        }
-                        upds += 1;
-                        prev_keyval = Some((key, val));
-                    }
-                }
-            }
-        }
-        let mut builder = B::with_capacity(keys, vals, upds);
-        for mut chunk in chain.drain(..) {
-            builder.push(&mut chunk);
-        }
-
-        builder.done(lower.to_owned(), upper.to_owned(), since.to_owned())
     }
 
     fn account(chunk: &Self::Chunk) -> (usize, usize, usize, usize) {
