@@ -109,7 +109,7 @@ use timely::progress::Antichain;
 use timely::dataflow::operators::Capability;
 
 use crate::operators::arrange::arrangement::Arranged;
-use crate::trace::Builder;
+use crate::trace::{Builder, Description};
 use crate::trace::{self, Trace, TraceReader, Batch, Cursor};
 use crate::trace::cursor::IntoOwned;
 use crate::{ExchangeData, Hashable};
@@ -281,7 +281,8 @@ where
                                     updates.sort();
                                     builder.push(&mut updates);
                                 }
-                                let batch = builder.done(prev_frontier.clone(), upper.clone(), Antichain::from_elem(G::Timestamp::minimum()));
+                                let description = Description::new(prev_frontier.clone(), upper.clone(), Antichain::from_elem(G::Timestamp::minimum()));
+                                let batch = builder.done(description);
                                 prev_frontier.clone_from(&upper);
 
                                 // Communicate `batch` to the arrangement and the stream.

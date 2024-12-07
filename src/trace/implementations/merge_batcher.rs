@@ -12,7 +12,7 @@ use timely::container::{ContainerBuilder, PushInto};
 
 use crate::difference::Semigroup;
 use crate::logging::{BatcherEvent, DifferentialEvent};
-use crate::trace::{Batcher, Builder};
+use crate::trace::{Batcher, Builder, Description};
 use crate::Data;
 
 /// Creates batches from unordered tuples.
@@ -109,7 +109,8 @@ where
 
         self.stash.clear();
 
-        let seal = B::seal(&mut readied, self.lower.borrow(), upper.borrow(), Antichain::from_elem(M::Time::minimum()).borrow());
+        let description = Description::new(self.lower.clone(), upper.clone(), Antichain::from_elem(M::Time::minimum()));
+        let seal = B::seal(&mut readied, description);
         self.lower = upper;
         seal
     }

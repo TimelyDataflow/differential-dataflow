@@ -342,18 +342,14 @@ pub trait Builder: Sized {
     /// Adds all elements from `chunk` to the builder and leaves `chunk` in an undefined state.
     fn push(&mut self, chunk: &mut Self::Input);
     /// Completes building and returns the batch.
-    fn done(self, lower: Antichain<Self::Time>, upper: Antichain<Self::Time>, since: Antichain<Self::Time>) -> Self::Output;
+    fn done(self, description: Description<Self::Time>) -> Self::Output;
 
     /// Builds a batch from a chain of updates corresponding to the indicated lower and upper bounds.
     ///
     /// This method relies on the chain only containing updates greater or equal to the lower frontier,
-    /// and not greater or equal to the upper frontier. Chains must also be sorted and consolidated.
-    fn seal(
-        chain: &mut Vec<Self::Input>,
-        lower: AntichainRef<Self::Time>,
-        upper: AntichainRef<Self::Time>,
-        since: AntichainRef<Self::Time>,
-    ) -> Self::Output;
+    /// and not greater or equal to the upper frontier, as encoded in the description. Chains must also
+    /// be sorted and consolidated.
+    fn seal(chain: &mut Vec<Self::Input>, description: Description<Self::Time>) -> Self::Output;
 }
 
 /// Represents a merge in progress.
@@ -467,14 +463,9 @@ pub mod rc_blanket_impls {
         type Output = Rc<B::Output>;
         fn with_capacity(keys: usize, vals: usize, upds: usize) -> Self { RcBuilder { builder: B::with_capacity(keys, vals, upds) } }
         fn push(&mut self, input: &mut Self::Input) { self.builder.push(input) }
-        fn done(self, lower: Antichain<Self::Time>, upper: Antichain<Self::Time>, since: Antichain<Self::Time>) -> Rc<B::Output> { Rc::new(self.builder.done(lower, upper, since)) }
-        fn seal(
-            chain: &mut Vec<Self::Input>,
-            lower: AntichainRef<Self::Time>,
-            upper: AntichainRef<Self::Time>,
-            since: AntichainRef<Self::Time>,
-        ) -> Self::Output {
-            Rc::new(B::seal(chain, lower, upper, since))
+        fn done(self, description: Description<Self::Time>) -> Rc<B::Output> { Rc::new(self.builder.done(description)) }
+        fn seal(chain: &mut Vec<Self::Input>, description: Description<Self::Time>) -> Self::Output {
+            Rc::new(B::seal(chain, description))
         }
     }
 
