@@ -16,10 +16,10 @@ use crate::trace::{Batcher, Builder};
 use crate::Data;
 
 /// Creates batches from unordered tuples.
-pub struct MergeBatcher<Input, C, M, T>
+pub struct MergeBatcher<Input, C, M>
 where
-    C: ContainerBuilder<Container=M::Chunk> + Default,
-    M: Merger<Time = T>,
+    C: ContainerBuilder<Container=M::Chunk>,
+    M: Merger,
 {
     /// each power-of-two length list of allocations.
     /// Do not push/pop directly but use the corresponding functions
@@ -36,20 +36,20 @@ where
     /// Timely operator ID.
     operator_id: usize,
     /// Current lower frontier, we sealed up to here.
-    lower: Antichain<T>,
+    lower: Antichain<M::Time>,
     /// The lower-bound frontier of the data, after the last call to seal.
-    frontier: Antichain<T>,
+    frontier: Antichain<M::Time>,
     _marker: PhantomData<Input>,
 }
 
-impl<Input, C, M, T> Batcher for MergeBatcher<Input, C, M, T>
+impl<Input, C, M> Batcher for MergeBatcher<Input, C, M>
 where
     C: ContainerBuilder<Container=M::Chunk> + Default + for<'a> PushInto<&'a mut Input>,
-    M: Merger<Time = T>,
-    T: Timestamp,
+    M: Merger,
+    M::Time: Timestamp,
 {
     type Input = Input;
-    type Time = T;
+    type Time = M::Time;
     type Output = M::Chunk;
 
     fn new(logger: Option<Logger<DifferentialEvent, WorkerIdentifier>>, operator_id: usize) -> Self {
@@ -61,7 +61,7 @@ where
             chains: Vec::new(),
             stash: Vec::new(),
             frontier: Antichain::new(),
-            lower: Antichain::from_elem(T::minimum()),
+            lower: Antichain::from_elem(M::Time::minimum()),
             _marker: PhantomData,
         }
     }
@@ -80,7 +80,7 @@ where
     // in `upper`. All updates must have time greater or equal to the previously used `upper`,
     // which we call `lower`, by assumption that after sealing a batcher we receive no more
     // updates with times not greater or equal to `upper`.
-    fn seal<B: Builder<Input = Self::Output, Time = Self::Time>>(&mut self, upper: Antichain<T>) -> B::Output {
+    fn seal<B: Builder<Input = Self::Output, Time = Self::Time>>(&mut self, upper: Antichain<M::Time>) -> B::Output {
         // Finish
         while let Some(chunk) = self.chunker.finish() {
             let chunk = std::mem::take(chunk);
@@ -109,22 +109,22 @@ where
 
         self.stash.clear();
 
-        let seal = B::seal(&mut readied, self.lower.borrow(), upper.borrow(), Antichain::from_elem(T::minimum()).borrow());
+        let seal = B::seal(&mut readied, self.lower.borrow(), upper.borrow(), Antichain::from_elem(M::Time::minimum()).borrow());
         self.lower = upper;
         seal
     }
 
     /// The frontier of elements remaining after the most recent call to `self.seal`.
     #[inline]
-    fn frontier(&mut self) -> AntichainRef<T> {
+    fn frontier(&mut self) -> AntichainRef<M::Time> {
         self.frontier.borrow()
     }
 }
 
-impl<Input, C, M, T> MergeBatcher<Input, C, M, T>
+impl<Input, C, M> MergeBatcher<Input, C, M>
 where
     C: ContainerBuilder<Container=M::Chunk> + Default,
-    M: Merger<Time = T>,
+    M: Merger,
 {
     /// Insert a chain and maintain chain properties: Chains are geometrically sized and ordered
     /// by decreasing length.
@@ -189,10 +189,10 @@ where
     }
 }
 
-impl<Input, C, M, T> Drop for MergeBatcher<Input, C, M, T>
+impl<Input, C, M> Drop for MergeBatcher<Input, C, M>
 where
     C: ContainerBuilder<Container=M::Chunk> + Default,
-    M: Merger<Time = T>,
+    M: Merger,
 {
     fn drop(&mut self) {
         // Cleanup chain to retract accounting information.
