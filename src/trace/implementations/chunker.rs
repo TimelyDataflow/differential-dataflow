@@ -260,29 +260,25 @@ where
     Input: Container,
     Output: SizableContainer
         + ConsolidateLayout
-        + PushInto<Input::Item<'a>>
-        + PushInto<Input::ItemRef<'a>>,
+        + PushInto<Input::Item<'a>>,
 {
     fn push_into(&mut self, container: &'a mut Input) {
         self.pending.ensure_capacity(&mut None);
 
-        let form_batch = |this: &mut Self| {
-            if this.pending.at_capacity() {
-                let starting_len = this.pending.len();
-                consolidate_container(&mut this.pending, &mut this.empty);
-                std::mem::swap(&mut this.pending, &mut this.empty);
-                this.empty.clear();
-                if this.pending.len() > starting_len / 2 {
+        for item in container.drain() {
+            self.pending.push(item);
+            if self.pending.at_capacity() {
+                let starting_len = self.pending.len();
+                consolidate_container(&mut self.pending, &mut self.empty);
+                std::mem::swap(&mut self.pending, &mut self.empty);
+                self.empty.clear();
+                if self.pending.len() > starting_len / 2 {
                     // Note that we're pushing non-full containers, which is a deviation from
                     // other implementation. The reason for this is that we cannot extract
                     // partial data from `this.pending`. We should revisit this in the future.
-                    this.ready.push_back(std::mem::take(&mut this.pending));
+                    self.ready.push_back(std::mem::take(&mut self.pending));
                 }
             }
-        };
-        for item in container.drain() {
-            self.pending.push(item);
-            form_batch(self);
         }
     }
 }

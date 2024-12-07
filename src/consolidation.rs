@@ -311,7 +311,7 @@ where
 /// Consolidate the supplied container.
 pub fn consolidate_container<C: ConsolidateLayout>(container: &mut C, target: &mut C) {
     // Sort input data
-    let mut permutation = Vec::new();
+    let mut permutation = Vec::with_capacity(container.len());
     permutation.extend(container.drain());
     permutation.sort_by(|a, b| C::cmp(a, b));
 
