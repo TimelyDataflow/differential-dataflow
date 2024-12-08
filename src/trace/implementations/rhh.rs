@@ -855,7 +855,7 @@ mod val_batch {
         }
 
         #[inline(never)]
-        fn done(mut self, lower: Antichain<Self::Time>, upper: Antichain<Self::Time>, since: Antichain<Self::Time>) -> RhhValBatch<L> {
+        fn done(mut self, description: Description<Self::Time>) -> RhhValBatch<L> {
             // Record the final offsets
             self.result.vals_offs.push(self.result.times.len());
             // Remove any pending singleton, and if it was set increment our count.
@@ -864,23 +864,18 @@ mod val_batch {
             RhhValBatch {
                 updates: self.result.times.len() + self.singletons,
                 storage: self.result,
-                description: Description::new(lower, upper, since),
+                description,
             }
         }
 
-        fn seal(
-            chain: &mut Vec<Self::Input>,
-            lower: AntichainRef<Self::Time>,
-            upper: AntichainRef<Self::Time>,
-            since: AntichainRef<Self::Time>,
-        ) -> Self::Output {
+        fn seal(chain: &mut Vec<Self::Input>, description: Description<Self::Time>) -> Self::Output {
             let (keys, vals, upds) = Self::Input::key_val_upd_counts(&chain[..]);
             let mut builder = Self::with_capacity(keys, vals, upds);
             for mut chunk in chain.drain(..) {
                 builder.push(&mut chunk);
             }
-    
-            builder.done(lower.to_owned(), upper.to_owned(), since.to_owned())
+
+            builder.done(description)
         }
     }
 

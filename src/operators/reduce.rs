@@ -23,7 +23,7 @@ use crate::trace::cursor::IntoOwned;
 
 use crate::operators::arrange::{Arranged, ArrangeByKey, ArrangeBySelf, TraceAgent};
 use crate::lattice::Lattice;
-use crate::trace::{Batch, BatchReader, Cursor, Trace, Builder, ExertionLogic};
+use crate::trace::{Batch, BatchReader, Cursor, Trace, Builder, ExertionLogic, Description};
 use crate::trace::cursor::CursorList;
 use crate::trace::implementations::{KeySpine, KeyBuilder, ValSpine, ValBuilder};
 
@@ -565,7 +565,8 @@ where
 
                             if output_upper.borrow() != output_lower.borrow() {
 
-                                let batch = builder.done(output_lower.clone(), output_upper.clone(), Antichain::from_elem(G::Timestamp::minimum()));
+                                let description = Description::new(output_lower.clone(), output_upper.clone(), Antichain::from_elem(G::Timestamp::minimum()));
+                                let batch = builder.done(description);
 
                                 // ship batch to the output, and commit to the output trace.
                                 output.session(&capabilities[index]).give(batch.clone());
