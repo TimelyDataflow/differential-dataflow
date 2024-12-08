@@ -15,13 +15,10 @@ use timely::container::flatcontainer::impls::tuple::{TupleABCRegion, TupleABRegi
 use crate::trace::implementations::chunker::{ColumnationChunker, ContainerChunker, VecChunker};
 use crate::trace::implementations::spine_fueled::Spine;
 use crate::trace::implementations::merge_batcher::{MergeBatcher};
-use crate::trace::implementations::merge_batcher::container::ContainerMerger;
 use crate::trace::implementations::merge_batcher_col::ColumnationMerger;
 use crate::trace::implementations::merge_batcher_flat::FlatcontainerMerger;
 use crate::trace::implementations::merge_batcher::VecMerger;
 use crate::trace::rc_blanket_impls::RcBuilder;
-
-use crate::trace::implementations::merge_batcher::container::columnation::TimelyStackQueue;
 
 use super::{Update, Layout, Vector, TStack, Preferred, FlatLayout};
 
