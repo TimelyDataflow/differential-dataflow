@@ -10,19 +10,16 @@
 //! Implementations of `MergeBatcher` can be instantiated through the choice of both
 //! the chunker and the merger, provided their respective output and input types align.
 
-use std::collections::VecDeque;
 use std::marker::PhantomData;
 
 use timely::logging_core::Logger;
 use timely::progress::frontier::AntichainRef;
 use timely::progress::{frontier::Antichain, Timestamp};
-use timely::{Container, PartialOrder};
+use timely::Container;
 use timely::container::{ContainerBuilder, PushInto};
 
-use crate::difference::Semigroup;
 use crate::logging::{BatcherEvent, DifferentialEvent};
 use crate::trace::{Batcher, Builder, Description};
-use crate::Data;
 
 /// Creates batches from containers of unordered tuples.
 ///
@@ -230,6 +227,8 @@ pub trait Merger: Default {
     /// Account size and allocation changes. Returns a tuple of (records, size, capacity, allocations).
     fn account(chunk: &Self::Chunk) -> (usize, usize, usize, usize);
 }
+
+pub use container::{VecMerger, ColMerger};
 
 pub mod container {
 
@@ -472,7 +471,7 @@ pub mod container {
         use super::{ContainerQueue, MergerChunk};
 
         /// A `Merger` implementation backed by vector containers.
-        pub type VecMerger<K, V, T, R> = super::ContainerMerger<Vec<((K, V), T, R)>, std::collections::VecDeque<((K, V), T, R)>>;
+        pub type VecMerger<D, T, R> = super::ContainerMerger<Vec<(D, T, R)>, std::collections::VecDeque<(D, T, R)>>;
 
         impl<D: Ord, T: Ord, R> ContainerQueue<Vec<(D, T, R)>> for VecDeque<(D, T, R)> {
             fn next_or_alloc(&mut self) -> Result<(D, T, R), Vec<(D, T, R)>> {
@@ -533,7 +532,7 @@ pub mod container {
         use super::{ContainerQueue, MergerChunk};
 
         /// A `Merger` implementation backed by `TimelyStack` containers (columnation).
-        pub type ColMerger<K, V, T, R> = super::ContainerMerger<TimelyStack<((K,V),T,R)>,TimelyStackQueue<((K,V), T, R)>>;
+        pub type ColMerger<D, T, R> = super::ContainerMerger<TimelyStack<(D,T,R)>,TimelyStackQueue<(D, T, R)>>;
 
         /// TODO
         pub struct TimelyStackQueue<T: Columnation> {
@@ -690,173 +689,5 @@ pub mod container {
                 (self.len(), size, capacity, allocations)
             }
         }
-    }
-}
-
-/// A merger that knows how to accept and maintain chains of vectors.
-pub struct VecMerger<T> {
-    _marker: PhantomData<T>,
-}
-
-impl<T> Default for VecMerger<T> {
-    fn default() -> Self {
-        Self { _marker: PhantomData }
-    }
-}
-
-impl<T> VecMerger<T> {
-    const BUFFER_SIZE_BYTES: usize = 8 << 10;
-    fn chunk_capacity(&self) -> usize {
-        let size = ::std::mem::size_of::<T>();
-        if size == 0 {
-            Self::BUFFER_SIZE_BYTES
-        } else if size <= Self::BUFFER_SIZE_BYTES {
-            Self::BUFFER_SIZE_BYTES / size
-        } else {
-            1
-        }
-    }
-
-    /// Helper to get pre-sized vector from the stash.
-    #[inline]
-    fn empty(&self, stash: &mut Vec<Vec<T>>) -> Vec<T> {
-        stash.pop().unwrap_or_else(|| Vec::with_capacity(self.chunk_capacity()))
-    }
-
-    /// Helper to return a chunk to the stash.
-    #[inline]
-    fn recycle(&self, mut chunk: Vec<T>, stash: &mut Vec<Vec<T>>) {
-        // TODO: Should we limit the size of `stash`?
-        if chunk.capacity() == self.chunk_capacity() {
-            chunk.clear();
-            stash.push(chunk);
-        }
-    }
-}
-
-impl<D, T, R> Merger for VecMerger<(D, T, R)>
-where
-    D: Data,
-    T: Ord + PartialOrder + Clone + 'static,
-    R: Semigroup + 'static,
-{
-    type Time = T;
-    type Chunk = Vec<(D, T, R)>;
-
-    fn merge(&mut self, list1: Vec<Self::Chunk>, list2: Vec<Self::Chunk>, output: &mut Vec<Self::Chunk>, stash: &mut Vec<Self::Chunk>) {
-        let mut list1 = list1.into_iter();
-        let mut list2 = list2.into_iter();
-        let mut head1 = VecDeque::from(list1.next().unwrap_or_default());
-        let mut head2 = VecDeque::from(list2.next().unwrap_or_default());
-
-        let mut result = self.empty(stash);
-
-        // while we have valid data in each input, merge.
-        while !head1.is_empty() && !head2.is_empty() {
-            while (result.capacity() - result.len()) > 0 && !head1.is_empty() && !head2.is_empty() {
-                let cmp = {
-                    let x = head1.front().unwrap();
-                    let y = head2.front().unwrap();
-                    (&x.0, &x.1).cmp(&(&y.0, &y.1))
-                };
-                use std::cmp::Ordering;
-                match cmp {
-                    Ordering::Less => result.push(head1.pop_front().unwrap()),
-                    Ordering::Greater => result.push(head2.pop_front().unwrap()),
-                    Ordering::Equal => {
-                        let (data1, time1, mut diff1) = head1.pop_front().unwrap();
-                        let (_data2, _time2, diff2) = head2.pop_front().unwrap();
-                        diff1.plus_equals(&diff2);
-                        if !diff1.is_zero() {
-                            result.push((data1, time1, diff1));
-                        }
-                    }
-                }
-            }
-
-            if result.capacity() == result.len() {
-                output.push(result);
-                result = self.empty(stash);
-            }
-
-            if head1.is_empty() {
-                let done1 = Vec::from(head1);
-                self.recycle(done1, stash);
-                head1 = VecDeque::from(list1.next().unwrap_or_default());
-            }
-            if head2.is_empty() {
-                let done2 = Vec::from(head2);
-                self.recycle(done2, stash);
-                head2 = VecDeque::from(list2.next().unwrap_or_default());
-            }
-        }
-
-        if !result.is_empty() {
-            output.push(result);
-        } else {
-            self.recycle(result, stash);
-        }
-
-        if !head1.is_empty() {
-            let mut result = self.empty(stash);
-            for item1 in head1 {
-                result.push(item1);
-            }
-            output.push(result);
-        }
-        output.extend(list1);
-
-        if !head2.is_empty() {
-            let mut result = self.empty(stash);
-            for item2 in head2 {
-                result.push(item2);
-            }
-            output.push(result);
-        }
-        output.extend(list2);
-    }
-
-    fn extract(
-        &mut self,
-        merged: Vec<Self::Chunk>,
-        upper: AntichainRef<Self::Time>,
-        frontier: &mut Antichain<Self::Time>,
-        readied: &mut Vec<Self::Chunk>,
-        kept: &mut Vec<Self::Chunk>,
-        stash: &mut Vec<Self::Chunk>,
-    ) {
-        let mut keep = self.empty(stash);
-        let mut ready = self.empty(stash);
-
-        for mut buffer in merged {
-            for (data, time, diff) in buffer.drain(..) {
-                if upper.less_equal(&time) {
-                    frontier.insert_ref(&time);
-                    if keep.len() == keep.capacity() && !keep.is_empty() {
-                        kept.push(keep);
-                        keep = self.empty(stash);
-                    }
-                    keep.push((data, time, diff));
-                } else {
-                    if ready.len() == ready.capacity() && !ready.is_empty() {
-                        readied.push(ready);
-                        ready = self.empty(stash);
-                    }
-                    ready.push((data, time, diff));
-                }
-            }
-            // Recycling buffer.
-            self.recycle(buffer, stash);
-        }
-        // Finish the kept data.
-        if !keep.is_empty() {
-            kept.push(keep);
-        }
-        if !ready.is_empty() {
-            readied.push(ready);
-        }
-    }
-    fn account(chunk: &Self::Chunk) -> (usize, usize, usize, usize) {
-        (chunk.len(), 0, 0, 0)
     }
 }
