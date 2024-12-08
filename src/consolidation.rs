@@ -263,38 +263,30 @@ pub trait ConsolidateLayout: Container {
         permutation.extend(self.drain());
         permutation.sort_by(|a, b| Self::cmp(a, b));
 
-        // Consolidate sorted data.
-        let mut previous: Option<(Self::Key<'_>, Self::DiffOwned)> = None;
-        // TODO: We should ensure that `target` has sufficient capacity, but `Container` doesn't
-        // offer a suitable API.
-        for item in permutation.drain(..) {
-            let (key, diff) = Self::into_parts(item);
-            match &mut previous {
-                // Initial iteration, remember key and diff.
-                // TODO: Opportunity for GatCow for diff.
-                None => previous = Some((key, diff.into_owned())),
-                Some((prevkey, d)) => {
-                    // Second and following iteration, compare and accumulate or emit.
-                    if key == *prevkey {
-                        // Keys match, keep accumulating.
-                        d.plus_equals(&diff);
-                    } else {
-                        // Keys don't match, write down result if non-zero.
-                        if !d.is_zero() {
-                            // Unwrap because we checked for `Some` above.
-                            let (prevkey, diff) = previous.take().unwrap();
-                            target.push_with_diff(prevkey, diff);
-                        }
-                        // Remember current key and diff as `previous`
-                        previous = Some((key, diff.into_owned()));
+        // Iterate over the data, accumulating diffs for like keys.
+        let mut iter = permutation.drain(..);
+        if let Some(item) = iter.next() {
+
+            let (k, d) = Self::into_parts(item);
+            let mut prev_key = k;
+            let mut prev_diff = d.into_owned();
+
+            for item in iter {
+                let (next_key, next_diff) = Self::into_parts(item);
+                if next_key == prev_key {
+                    prev_diff.plus_equals(&next_diff);
+                }
+                else {
+                    if !prev_diff.is_zero() {
+                        target.push_with_diff(prev_key, prev_diff);
                     }
+                    prev_key = next_key;
+                    prev_diff = next_diff.into_owned();
                 }
             }
-        }
-        // Write any residual data, if non-zero.
-        if let Some((previtem, d)) = previous {
-            if !d.is_zero() {
-                target.push_with_diff(previtem, d);
+
+            if !prev_diff.is_zero() {
+                target.push_with_diff(prev_key, prev_diff);
             }
         }
     }
