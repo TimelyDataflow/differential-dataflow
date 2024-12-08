@@ -4,7 +4,7 @@ use std::collections::VecDeque;
 use timely::Container;
 use timely::container::columnation::{Columnation, TimelyStack};
 use timely::container::{ContainerBuilder, PushInto, SizableContainer};
-use crate::consolidation::{consolidate_updates, consolidate_container, ConsolidateLayout};
+use crate::consolidation::{consolidate_updates, ConsolidateLayout};
 use crate::difference::Semigroup;
 
 /// Chunk a stream of vectors into chains of vectors.
@@ -269,7 +269,7 @@ where
             self.pending.push(item);
             if self.pending.at_capacity() {
                 let starting_len = self.pending.len();
-                consolidate_container(&mut self.pending, &mut self.empty);
+                self.pending.consolidate_into(&mut self.empty);
                 std::mem::swap(&mut self.pending, &mut self.empty);
                 self.empty.clear();
                 if self.pending.len() > starting_len / 2 {
@@ -300,7 +300,7 @@ where
 
     fn finish(&mut self) -> Option<&mut Self::Container> {
         if !self.pending.is_empty() {
-            consolidate_container(&mut self.pending, &mut self.empty);
+            self.pending.consolidate_into(&mut self.empty);
             std::mem::swap(&mut self.pending, &mut self.empty);
             self.empty.clear();
             if !self.pending.is_empty() {
