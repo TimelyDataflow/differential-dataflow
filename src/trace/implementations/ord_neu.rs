@@ -13,12 +13,15 @@ use timely::container::columnation::{TimelyStack};
 use timely::container::flatcontainer::{FlatStack, RegionPreference};
 use timely::container::flatcontainer::impls::tuple::{TupleABCRegion, TupleABRegion};
 use crate::trace::implementations::chunker::{ColumnationChunker, ContainerChunker, VecChunker};
-
 use crate::trace::implementations::spine_fueled::Spine;
-use crate::trace::implementations::merge_batcher::{MergeBatcher, VecMerger};
+use crate::trace::implementations::merge_batcher::{MergeBatcher};
+use crate::trace::implementations::merge_batcher::container::ContainerMerger;
 use crate::trace::implementations::merge_batcher_col::ColumnationMerger;
 use crate::trace::implementations::merge_batcher_flat::FlatcontainerMerger;
+use crate::trace::implementations::merge_batcher::VecMerger;
 use crate::trace::rc_blanket_impls::RcBuilder;
+
+use crate::trace::implementations::merge_batcher::container::columnation::TimelyStackQueue;
 
 use super::{Update, Layout, Vector, TStack, Preferred, FlatLayout};
 
@@ -29,6 +32,7 @@ pub use self::key_batch::{OrdKeyBatch, OrdKeyBuilder};
 pub type OrdValSpine<K, V, T, R> = Spine<Rc<OrdValBatch<Vector<((K,V),T,R)>>>>;
 /// A batcher using ordered lists.
 pub type OrdValBatcher<K, V, T, R> = MergeBatcher<Vec<((K,V),T,R)>, VecChunker<((K,V),T,R)>, VecMerger<((K, V), T, R)>>;
+// pub type OrdValBatcher<K, V, T, R> = MergeBatcher<Vec<((K,V),T,R)>, VecChunker<((K,V),T,R)>, ContainerMerger<Vec<((K, V), T, R)>, std::collections::VecDeque<((K, V), T, R)>>>;
 /// A builder using ordered lists.
 pub type RcOrdValBuilder<K, V, T, R> = RcBuilder<OrdValBuilder<Vector<((K,V),T,R)>, Vec<((K,V),T,R)>>>;
 
@@ -64,6 +68,7 @@ pub type FlatValBuilderDefault<K, V, T, R> = FlatValBuilder<FlatLayout<<K as Reg
 pub type OrdKeySpine<K, T, R> = Spine<Rc<OrdKeyBatch<Vector<((K,()),T,R)>>>>;
 /// A batcher for ordered lists.
 pub type OrdKeyBatcher<K, T, R> = MergeBatcher<Vec<((K,()),T,R)>, VecChunker<((K,()),T,R)>, VecMerger<((K, ()), T, R)>>;
+// pub type OrdKeyBatcher<K, T, R> = MergeBatcher<Vec<((K,()),T,R)>, VecChunker<((K,()),T,R)>, ContainerMerger<Vec<((K, ()), T, R)>, std::collections::VecDeque<((K, ()), T, R)>>>;
 /// A builder for ordered lists.
 pub type RcOrdKeyBuilder<K, T, R> = RcBuilder<OrdKeyBuilder<Vector<((K,()),T,R)>, Vec<((K,()),T,R)>>>;
 
@@ -74,6 +79,7 @@ pub type RcOrdKeyBuilder<K, T, R> = RcBuilder<OrdKeyBuilder<Vector<((K,()),T,R)>
 pub type ColKeySpine<K, T, R> = Spine<Rc<OrdKeyBatch<TStack<((K,()),T,R)>>>>;
 /// A batcher for columnar storage
 pub type ColKeyBatcher<K, T, R> = MergeBatcher<Vec<((K,()),T,R)>, ColumnationChunker<((K,()),T,R)>, ColumnationMerger<((K,()),T,R)>>;
+// pub type ColKeyBatcher<K, T, R> = MergeBatcher<Vec<((K,()),T,R)>, ColumnationChunker<((K,()),T,R)>, ContainerMerger<TimelyStack<((K,()),T,R)>,TimelyStackQueue<((K,()), T, R)>>>;
 /// A builder for columnar storage
 pub type ColKeyBuilder<K, T, R> = RcBuilder<OrdKeyBuilder<TStack<((K,()),T,R)>, TimelyStack<((K,()),T,R)>>>;
 
