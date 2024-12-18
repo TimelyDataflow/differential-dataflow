@@ -3,7 +3,6 @@
 use std::collections::VecDeque;
 use std::marker::PhantomData;
 
-use timely::logging::WorkerIdentifier;
 use timely::logging_core::Logger;
 use timely::progress::frontier::AntichainRef;
 use timely::progress::{frontier::Antichain, Timestamp};
@@ -32,7 +31,7 @@ where
     /// Thing to accept data, merge chains, and talk to the builder.
     merger: M,
     /// Logger for size accounting.
-    logger: Option<Logger<DifferentialEvent, WorkerIdentifier>>,
+    logger: Option<Logger<DifferentialEvent>>,
     /// Timely operator ID.
     operator_id: usize,
     /// Current lower frontier, we sealed up to here.
@@ -52,7 +51,7 @@ where
     type Time = M::Time;
     type Output = M::Chunk;
 
-    fn new(logger: Option<Logger<DifferentialEvent, WorkerIdentifier>>, operator_id: usize) -> Self {
+    fn new(logger: Option<Logger<DifferentialEvent>>, operator_id: usize) -> Self {
         Self {
             logger,
             operator_id,
