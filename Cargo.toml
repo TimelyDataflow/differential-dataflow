@@ -39,11 +39,13 @@ byteorder="1"
 itertools="^0.13"
 serde_json = "1.0"
 graph_map = "0.1"
+bytemuck = "1.18.0"
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
 fnv="1.0.2"
 timely = {workspace = true}
+columnar = "0.1"
 
 [workspace.dependencies]
 timely = { version = "0.15", default-features = false }
