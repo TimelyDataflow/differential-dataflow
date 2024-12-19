@@ -594,7 +594,13 @@ pub mod container {
                 }
             }
             fn account(&self) -> (usize, usize, usize, usize) {
-                let (size, capacity, allocations) = (0, 0, 0);
+                let (mut size, mut capacity, mut allocations) = (0, 0, 0);
+                let cb = |siz, cap| {
+                    size += siz;
+                    capacity += cap;
+                    allocations += 1;
+                };
+                self.heap_size(cb);
                 (self.len(), size, capacity, allocations)
             }
         }
