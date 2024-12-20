@@ -322,8 +322,9 @@ pub mod container {
         }
         /// Helper to return a chunk to the stash.
         #[inline]
-        fn recycle(&self, chunk: MC, stash: &mut Vec<MC>) {
+        fn recycle(&self, mut chunk: MC, stash: &mut Vec<MC>) {
             // TODO: Should we only retain correctly sized containers?
+            chunk.clear();
             stash.push(chunk);
         }
     }
