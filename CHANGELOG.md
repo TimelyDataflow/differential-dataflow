@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.3](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dataflow-v0.13.2...differential-dataflow-v0.13.3) - 2024-12-20
+
+### Other
+
+- Work towards `Batcher` unification ([#553](https://github.com/TimelyDataflow/differential-dataflow/pull/553))
+
 ## [0.13.2](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dataflow-v0.13.1...differential-dataflow-v0.13.2) - 2024-12-18
 
 ### Other
