@@ -41,7 +41,6 @@
 pub mod spine_fueled;
 
 pub mod merge_batcher;
-pub mod merge_batcher_col;
 pub mod merge_batcher_flat;
 pub mod ord_neu;
 pub mod rhh;
