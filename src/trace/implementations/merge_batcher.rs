@@ -237,7 +237,7 @@ pub mod container {
     //! The implementation requires implementations of two traits, `ContainerQueue` and `MergerChunk`.
     //! The `ContainerQueue` trait is meant to wrap a container and provide iterable access to it, as
     //! well as the ability to return the container when iteration is complete.
-    //! The `MergerChukn` trait is meant to be implemented by containers, and it explains how container
+    //! The `MergerChunk` trait is meant to be implemented by containers, and it explains how container
     //! items should be interpreted with respect to times, and with respect to differences.
     //! These two traits exist instead of a stack of constraints on the structure of the associated items
     //! of the containers, allowing them to perform their functions without destructuring their guts.
