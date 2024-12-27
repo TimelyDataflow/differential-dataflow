@@ -306,7 +306,7 @@ mod builder {
             let words = self.current.borrow().length_in_words();
             let round = (words + ((1 << 18) - 1)) & !((1 << 18) - 1);
             if round - words < round / 10 {
-                let mut alloc = Vec::with_capacity(8 * words);
+                let mut alloc = Vec::with_capacity(words);
                 columnar::bytes::serialization::encode(&mut alloc, self.current.borrow().as_bytes());
                 self.pending.push_back(Column::Align(alloc.into_boxed_slice()));
                 self.current.clear();
@@ -343,7 +343,7 @@ mod builder {
             if !self.current.is_empty() {
                 use columnar::Container;
                 let words = self.current.borrow().length_in_words();
-                let mut alloc = Vec::with_capacity(8 * words);
+                let mut alloc = Vec::with_capacity(words);
                 columnar::bytes::serialization::encode(&mut alloc, self.current.borrow().as_bytes());
                 self.pending.push_back(Column::Align(alloc.into_boxed_slice()));
                 self.current.clear();
