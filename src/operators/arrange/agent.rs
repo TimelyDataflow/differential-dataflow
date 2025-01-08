@@ -15,6 +15,7 @@ use crate::trace::wrappers::rc::TraceBox;
 
 use timely::scheduling::Activator;
 
+use crate::logging::DifferentialEvent;
 use super::{TraceWriter, TraceAgentQueueWriter, TraceAgentQueueReader, Arranged};
 use super::TraceReplayInstruction;
 
@@ -93,9 +94,9 @@ impl<Tr: TraceReader> TraceAgent<Tr> {
         let queues = Rc::new(RefCell::new(Vec::new()));
 
         if let Some(logging) = &logging {
-            logging.log(
-                crate::logging::TraceShare { operator: operator.global_id, diff: 1 }
-            );
+            logging.log(DifferentialEvent::from(crate::logging::TraceShare {
+                operator: operator.global_id, diff: 1
+            }));
         }
 
         let reader = TraceAgent {
@@ -532,9 +533,9 @@ where
     fn clone(&self) -> Self {
 
         if let Some(logging) = &self.logging {
-            logging.log(
-                crate::logging::TraceShare { operator: self.operator.global_id, diff: 1 }
-            );
+            logging.log(DifferentialEvent::from(crate::logging::TraceShare {
+                operator: self.operator.global_id, diff: 1
+            }));
         }
 
         // increase counts for wrapped `TraceBox`.
@@ -561,9 +562,9 @@ where
     fn drop(&mut self) {
 
         if let Some(logging) = &self.logging {
-            logging.log(
-                crate::logging::TraceShare { operator: self.operator.global_id, diff: -1 }
-            );
+            logging.log(DifferentialEvent::from(crate::logging::TraceShare {
+                operator: self.operator.global_id, diff: -1
+            }));
         }
 
         // decrement borrow counts to remove all holds

@@ -3,8 +3,11 @@
 use columnar::Columnar;
 use serde::{Deserialize, Serialize};
 
+/// Container builder for differential log events.
+pub type DifferentialEventBuilder = timely::container::CapacityContainerBuilder<Vec<(std::time::Duration, DifferentialEvent)>>;
+
 /// Logger for differential dataflow events.
-pub type Logger = ::timely::logging::Logger<DifferentialEvent>;
+pub type Logger = ::timely::logging_core::Logger<DifferentialEventBuilder>;
 
 /// Enables logging of differential dataflow events.
 pub fn enable<A, W>(worker: &mut timely::worker::Worker<A>, writer: W) -> Option<Box<dyn std::any::Any+'static>>
@@ -16,7 +19,7 @@ where
     let mut logger = ::timely::logging::BatchLogger::new(writer);
     worker
         .log_register()
-        .insert::<DifferentialEvent,_>("differential/arrange", move |time, data| logger.publish_batch(time, data))
+        .insert::<DifferentialEventBuilder,_>("differential/arrange", move |time, data| logger.publish_batch(time, data))
 }
 
 /// Possible different differential events.

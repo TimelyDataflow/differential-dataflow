@@ -12,13 +12,12 @@
 
 use std::marker::PhantomData;
 
-use timely::logging_core::Logger;
 use timely::progress::frontier::AntichainRef;
 use timely::progress::{frontier::Antichain, Timestamp};
 use timely::Container;
 use timely::container::{ContainerBuilder, PushInto};
 
-use crate::logging::{BatcherEvent, DifferentialEvent};
+use crate::logging::{BatcherEvent, DifferentialEvent, Logger};
 use crate::trace::{Batcher, Builder, Description};
 
 /// Creates batches from containers of unordered tuples.
@@ -41,7 +40,7 @@ pub struct MergeBatcher<Input, C, M: Merger> {
     /// The lower-bound frontier of the data, after the last call to seal.
     frontier: Antichain<M::Time>,
     /// Logger for size accounting.
-    logger: Option<Logger<DifferentialEvent>>,
+    logger: Option<Logger>,
     /// Timely operator ID.
     operator_id: usize,
     /// The `Input` type needs to be called out as the type of container accepted, but it is not otherwise present.
@@ -58,7 +57,7 @@ where
     type Time = M::Time;
     type Output = M::Chunk;
 
-    fn new(logger: Option<Logger<DifferentialEvent>>, operator_id: usize) -> Self {
+    fn new(logger: Option<Logger>, operator_id: usize) -> Self {
         Self {
             logger,
             operator_id,
@@ -184,13 +183,13 @@ where
                 capacity = capacity.saturating_add_unsigned(capacity_);
                 allocations = allocations.saturating_add_unsigned(allocations_);
             }
-            logger.log(BatcherEvent {
+            logger.log(DifferentialEvent::from(BatcherEvent {
                 operator: self.operator_id,
                 records_diff: records * diff,
                 size_diff: size * diff,
                 capacity_diff: capacity * diff,
                 allocations_diff: allocations * diff,
-            })
+            }));
         }
     }
 }
