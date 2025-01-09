@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.3](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dataflow-v0.13.2...differential-dataflow-v0.13.3) - 2025-01-09
+
+### Other
+
+- Incorporate breaking changes from Timely's logging update ([#558](https://github.com/TimelyDataflow/differential-dataflow/pull/558))
+- Derive columnar for log events ([#557](https://github.com/TimelyDataflow/differential-dataflow/pull/557))
+- Correct capacity logic
+- Demonstrate container input batching ([#556](https://github.com/TimelyDataflow/differential-dataflow/pull/556))
+- Work towards `Batcher` unification ([#553](https://github.com/TimelyDataflow/differential-dataflow/pull/553))
+
 ## [0.13.2](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dataflow-v0.13.1...differential-dataflow-v0.13.2) - 2024-12-18
 
 ### Other
