@@ -7,7 +7,7 @@ use std::hash::Hash;
 use timely::dataflow::ProbeHandle;
 use timely::communication::Allocate;
 use timely::worker::Worker;
-use timely::logging::TimelyEvent;
+use timely::logging::TimelyEventBuilder;
 
 // use timely::dataflow::operators::capture::event::EventIterator;
 
@@ -16,7 +16,7 @@ use differential_dataflow::trace::implementations::{KeySpine, ValSpine};
 use differential_dataflow::operators::arrange::TraceAgent;
 use differential_dataflow::input::InputSession;
 
-use differential_dataflow::logging::DifferentialEvent;
+use differential_dataflow::logging::DifferentialEventBuilder;
 
 use crate::{Time, Diff, Plan, Datum};
 
@@ -87,11 +87,11 @@ impl<V: ExchangeData+Datum> Manager<V>
         // Deregister loggers, so that the logging dataflows can shut down.
         worker
             .log_register()
-            .insert::<TimelyEvent,_>("timely", move |_time, _data| { });
+            .insert::<TimelyEventBuilder,_>("timely", move |_time, _data| { });
 
         worker
             .log_register()
-            .insert::<DifferentialEvent,_>("differential/arrange", move |_time, _data| { });
+            .insert::<DifferentialEventBuilder,_>("differential/arrange", move |_time, _data| { });
     }
 
     /// Inserts a new input session by name.
