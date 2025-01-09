@@ -7,7 +7,7 @@ use differential_dataflow::input::Input;
 use differential_dataflow::Collection;
 use differential_dataflow::operators::*;
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::logging::DifferentialEvent;
+use differential_dataflow::logging::DifferentialEventBuilder;
 
 type Node = u32;
 type Edge = (Node, Node);
@@ -30,7 +30,7 @@ fn main() {
             if let Ok(stream) = ::std::net::TcpStream::connect(&addr) {
                 let writer = ::timely::dataflow::operators::capture::EventWriter::new(stream);
                 let mut logger = ::timely::logging::BatchLogger::new(writer);
-                worker.log_register().insert::<DifferentialEvent,_>("differential/arrange", move |time, data|
+                worker.log_register().insert::<DifferentialEventBuilder,_>("differential/arrange", move |time, data|
                     logger.publish_batch(time, data)
                 );
             }
