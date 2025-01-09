@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 pub type DifferentialEventBuilder = timely::container::CapacityContainerBuilder<Vec<(std::time::Duration, DifferentialEvent)>>;
 
 /// Logger for differential dataflow events.
-pub type Logger = ::timely::logging_core::Logger<DifferentialEventBuilder>;
+pub type Logger = ::timely::logging_core::TypedLogger<DifferentialEventBuilder, DifferentialEvent>;
 
 /// Enables logging of differential dataflow events.
 pub fn enable<A, W>(worker: &mut timely::worker::Worker<A>, writer: W) -> Option<Box<dyn std::any::Any+'static>>

@@ -69,7 +69,7 @@
 //! have paid back any "debt" to higher layers by continuing to provide fuel as updates arrive.
 
 
-use crate::logging::{DifferentialEvent, Logger};
+use crate::logging::Logger;
 use crate::trace::{Batch, BatchReader, Trace, TraceReader, ExertionLogic};
 use crate::trace::cursor::CursorList;
 use crate::trace::Merger;
@@ -293,12 +293,10 @@ where
     fn insert(&mut self, batch: Self::Batch) {
 
         // Log the introduction of a batch.
-        if let Some(l) = self.logger.as_ref() {
-            l.log(DifferentialEvent::from(crate::logging::BatchEvent {
-                operator: self.operator.global_id,
-                length: batch.len()
-            }))
-        };
+        self.logger.as_ref().map(|l| l.log(crate::logging::BatchEvent {
+            operator: self.operator.global_id,
+            length: batch.len()
+        }));
 
         assert!(batch.lower() != batch.upper());
         assert_eq!(batch.lower(), &self.upper);
@@ -333,35 +331,35 @@ impl<B: Batch> Spine<B> {
             for batch in self.merging.drain(..) {
                 match batch {
                     MergeState::Single(Some(batch)) => {
-                        logger.log(DifferentialEvent::from(crate::logging::DropEvent {
+                        logger.log(crate::logging::DropEvent {
                             operator: self.operator.global_id,
                             length: batch.len(),
-                        }));
+                        });
                     },
                     MergeState::Double(MergeVariant::InProgress(batch1, batch2, _)) => {
-                        logger.log(DifferentialEvent::from(crate::logging::DropEvent {
+                        logger.log(crate::logging::DropEvent {
                             operator: self.operator.global_id,
                             length: batch1.len(),
-                        }));
-                        logger.log(DifferentialEvent::from(crate::logging::DropEvent {
+                        });
+                        logger.log(crate::logging::DropEvent {
                             operator: self.operator.global_id,
                             length: batch2.len(),
-                        }));
+                        });
                     },
                     MergeState::Double(MergeVariant::Complete(Some((batch, _)))) => {
-                        logger.log(DifferentialEvent::from(crate::logging::DropEvent {
+                        logger.log(crate::logging::DropEvent {
                             operator: self.operator.global_id,
                             length: batch.len(),
-                        }));
+                        });
                     }
                     _ => { },
                 }
             }
             for batch in self.pending.drain(..) {
-                logger.log(DifferentialEvent::from(crate::logging::DropEvent {
+                logger.log(crate::logging::DropEvent {
                     operator: self.operator.global_id,
                     length: batch.len(),
-                }));
+                });
             }
         }
     }
@@ -645,15 +643,15 @@ impl<B: Batch> Spine<B> {
             }
             MergeState::Single(old) => {
                 // Log the initiation of a merge.
-                if let Some(l) = self.logger.as_ref() {
-                    l.log(DifferentialEvent::from(crate::logging::MergeEvent {
+                self.logger.as_ref().map(|l| l.log(
+                    crate::logging::MergeEvent {
                         operator: self.operator.global_id,
                         scale: index,
                         length1: old.as_ref().map(|b| b.len()).unwrap_or(0),
                         length2: batch.as_ref().map(|b| b.len()).unwrap_or(0),
                         complete: None,
-                    }));
-                }
+                    }
+                ));
                 let compaction_frontier = self.logical_frontier.borrow();
                 self.merging[index] = MergeState::begin_merge(old, batch, compaction_frontier);
             }
@@ -668,15 +666,15 @@ impl<B: Batch> Spine<B> {
         if let Some((merged, inputs)) = self.merging[index].complete() {
             if let Some((input1, input2)) = inputs {
                 // Log the completion of a merge from existing parts.
-                if let Some(l) = self.logger.as_ref() {
-                    l.log(DifferentialEvent::from(crate::logging::MergeEvent {
+                self.logger.as_ref().map(|l| l.log(
+                    crate::logging::MergeEvent {
                         operator: self.operator.global_id,
                         scale: index,
                         length1: input1.len(),
                         length2: input2.len(),
                         complete: Some(merged.len()),
-                    }));
-                }
+                    }
+                ));
             }
             Some(merged)
         }

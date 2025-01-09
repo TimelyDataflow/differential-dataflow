@@ -156,7 +156,7 @@ where
             let logger = {
                 let scope = stream.scope();
                 let register = scope.log_register();
-                register.get::<crate::logging::DifferentialEventBuilder>("differential/arrange")
+                register.get::<crate::logging::DifferentialEventBuilder>("differential/arrange").map(Into::into)
             };
 
             // Tracks the lower envelope of times in `priority_queue`.

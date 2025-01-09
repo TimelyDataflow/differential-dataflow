@@ -17,7 +17,7 @@ use timely::progress::{frontier::Antichain, Timestamp};
 use timely::Container;
 use timely::container::{ContainerBuilder, PushInto};
 
-use crate::logging::{BatcherEvent, DifferentialEvent, Logger};
+use crate::logging::{BatcherEvent, Logger};
 use crate::trace::{Batcher, Builder, Description};
 
 /// Creates batches from containers of unordered tuples.
@@ -183,13 +183,13 @@ where
                 capacity = capacity.saturating_add_unsigned(capacity_);
                 allocations = allocations.saturating_add_unsigned(allocations_);
             }
-            logger.log(DifferentialEvent::from(BatcherEvent {
+            logger.log(BatcherEvent {
                 operator: self.operator_id,
                 records_diff: records * diff,
                 size_diff: size * diff,
                 capacity_diff: capacity * diff,
                 allocations_diff: allocations * diff,
-            }));
+            })
         }
     }
 }
