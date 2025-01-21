@@ -138,16 +138,15 @@ impl<T: Columnation> Default for ColumnationChunker<T> {
     }
 }
 
-impl<K,V,T,R> ColumnationChunker<((K, V), T, R)>
+impl<D,T,R> ColumnationChunker<(D, T, R)>
 where
-    K: Columnation + Ord,
-    V: Columnation + Ord,
+    D: Columnation + Ord,
     T: Columnation + Ord,
     R: Columnation + Semigroup,
 {
     const BUFFER_SIZE_BYTES: usize = 64 << 10;
     fn chunk_capacity() -> usize {
-        let size = ::std::mem::size_of::<((K, V), T, R)>();
+        let size = ::std::mem::size_of::<(D, T, R)>();
         if size == 0 {
             Self::BUFFER_SIZE_BYTES
         } else if size <= Self::BUFFER_SIZE_BYTES {
@@ -179,14 +178,13 @@ where
     }
 }
 
-impl<'a, K, V, T, R> PushInto<&'a mut Vec<((K, V), T, R)>> for ColumnationChunker<((K, V), T, R)>
+impl<'a, D, T, R> PushInto<&'a mut Vec<(D, T, R)>> for ColumnationChunker<(D, T, R)>
 where
-    K: Columnation + Ord + Clone,
-    V: Columnation + Ord + Clone,
+    D: Columnation + Ord + Clone,
     T: Columnation + Ord + Clone,
     R: Columnation + Semigroup + Clone,
 {
-    fn push_into(&mut self, container: &'a mut Vec<((K, V), T, R)>) {
+    fn push_into(&mut self, container: &'a mut Vec<(D, T, R)>) {
         // Ensure `self.pending` has the desired capacity. We should never have a larger capacity
         // because we don't write more than capacity elements into the buffer.
         if self.pending.capacity() < Self::chunk_capacity() * 2 {
@@ -203,14 +201,13 @@ where
     }
 }
 
-impl<K, V, T, R> ContainerBuilder for ColumnationChunker<((K, V), T, R)>
+impl<D, T, R> ContainerBuilder for ColumnationChunker<(D, T, R)>
 where
-    K: Columnation + Ord + Clone + 'static,
-    V: Columnation + Ord + Clone + 'static,
+    D: Columnation + Ord + Clone + 'static,
     T: Columnation + Ord + Clone + 'static,
     R: Columnation + Semigroup + Clone + 'static,
 {
-    type Container = TimelyStack<((K,V),T,R)>;
+    type Container = TimelyStack<(D,T,R)>;
 
     fn extract(&mut self) -> Option<&mut Self::Container> {
         if let Some(ready) = self.ready.pop_front() {
