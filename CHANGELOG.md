@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.4](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dataflow-v0.13.3...differential-dataflow-v0.13.4) - 2025-01-23
+
+### Other
+
+- Update to timely 0.17 ([#561](https://github.com/TimelyDataflow/differential-dataflow/pull/561))
+- Define columnation chunker for all (D,T,R) ([#559](https://github.com/TimelyDataflow/differential-dataflow/pull/559))
+
 ## [0.13.3](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dataflow-v0.13.2...differential-dataflow-v0.13.3) - 2025-01-09
 
 ### Other
