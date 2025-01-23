@@ -48,7 +48,7 @@ timely = {workspace = true}
 columnar = "0.2"
 
 [workspace.dependencies]
-timely = { version = "0.16", default-features = false }
+timely = { version = "0.17", default-features = false }
 #timely = { path = "../timely-dataflow/timely/", default-features = false }
 
 [features]
