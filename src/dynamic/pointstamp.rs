@@ -11,13 +11,15 @@
 //! (as iteration within a scope requires leaving contained scopes), and then to any number of appended
 //! default coordinates (which is effectively just *setting* the coordinate).
 
+use columnar::Columnar;
 use serde::{Deserialize, Serialize};
 
 /// A sequence of timestamps, partially ordered by the product order.
 ///
 /// Sequences of different lengths are compared as if extended indefinitely by `T::minimum()`.
 /// Sequences are guaranteed to be "minimal", and may not end with `T::minimum()` entries.
-#[derive(Hash, Default, Clone, Eq, PartialEq, Ord, PartialOrd, Debug, Serialize, Deserialize)]
+#[derive(Hash, Default, Clone, Eq, PartialEq, Ord, PartialOrd, Debug, Serialize, Deserialize, Columnar)]
+#[columnar(derive(Eq, PartialEq, Ord, PartialOrd))]
 pub struct PointStamp<T> {
     /// A sequence of timestamps corresponding to timestamps in a sequence of nested scopes.
     vector: Vec<T>,
