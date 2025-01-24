@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.5](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dataflow-v0.13.4...differential-dataflow-v0.13.5) - 2025-01-24
+
+### Other
+
+- Derive columnar for point stamp ([#562](https://github.com/TimelyDataflow/differential-dataflow/pull/562))
+
 ## [0.13.4](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dataflow-v0.13.3...differential-dataflow-v0.13.4) - 2025-01-23
 
 ### Other
