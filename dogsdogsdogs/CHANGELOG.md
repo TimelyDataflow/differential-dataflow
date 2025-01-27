@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.5](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dogs3-v0.1.4...differential-dogs3-v0.1.5) - 2025-01-24
+
+### Other
+
+- updated the following local packages: differential-dataflow
+
 ## [0.1.4](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dogs3-v0.1.3...differential-dogs3-v0.1.4) - 2025-01-23
 
 ### Other
