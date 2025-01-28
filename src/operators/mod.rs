@@ -4,13 +4,15 @@
 //! operators have specialized implementations to make them work efficiently, and are in addition
 //! to several operations defined directly on the `Collection` type (e.g. `map` and `filter`).
 
+pub use self::negate::Negate;
 pub use self::reduce::{Reduce, Threshold, Count};
-pub use self::iterate::Iterate;
+pub use self::iterate::{Iterate, ResultsIn};
 pub use self::join::{Join, JoinCore};
 pub use self::count::CountTotal;
 pub use self::threshold::ThresholdTotal;
 
 pub mod arrange;
+pub mod negate;
 pub mod reduce;
 pub mod consolidate;
 pub mod iterate;

@@ -33,6 +33,7 @@
 use std::fmt::Debug;
 use std::ops::Deref;
 
+use timely::Container;
 use timely::progress::{Timestamp, PathSummary};
 use timely::order::Product;
 
@@ -41,7 +42,7 @@ use timely::dataflow::scopes::child::Iterative;
 use timely::dataflow::operators::{Feedback, ConnectLoop, Map};
 use timely::dataflow::operators::feedback::Handle;
 
-use crate::{Data, Collection};
+use crate::{Data, Collection, AsCollection};
 use crate::difference::{Semigroup, Abelian};
 use crate::lattice::Lattice;
 
@@ -151,29 +152,39 @@ impl<G: Scope, D: Ord+Data+Debug, R: Semigroup+'static> Iterate<G, D, R> for G {
 ///     });
 /// })
 /// ```
-pub struct Variable<G: Scope, D: Data, R: Abelian+'static>
-where G::Timestamp: Lattice {
-    collection: Collection<G, D, R>,
-    feedback: Handle<G, Vec<(D, G::Timestamp, R)>>,
-    source: Option<Collection<G, D, R>>,
+pub struct Variable<G, D, R, C = Vec<(D, <G as ScopeParent>::Timestamp, R)>>
+where
+    G: Scope,
+    G::Timestamp: Lattice,
+    D: Data,
+    R: Abelian + 'static,
+    C: Container + Clone + 'static,
+{
+    collection: Collection<G, D, R, C>,
+    feedback: Handle<G, C>,
+    source: Option<Collection<G, D, R, C>>,
     step: <G::Timestamp as Timestamp>::Summary,
 }
 
-impl<G: Scope, D: Data, R: Abelian> Variable<G, D, R> where G::Timestamp: Lattice {
+impl<G: Scope, D: Data, R: Abelian, C: Container + Clone + 'static> Variable<G, D, R, C>
+where
+    G::Timestamp: Lattice,
+    StreamCore<G, C>: crate::operators::Negate<G, C> + ResultsIn<G, C>,
+{
     /// Creates a new initially empty `Variable`.
     ///
     /// This method produces a simpler dataflow graph than `new_from`, and should
     /// be used whenever the variable has an empty input.
     pub fn new(scope: &mut G, step: <G::Timestamp as Timestamp>::Summary) -> Self {
         let (feedback, updates) = scope.feedback(step.clone());
-        let collection = Collection::<G,D,R>::new(updates);
-        Variable { collection, feedback, source: None, step }
+        let collection = Collection::<G, D, R, C>::new(updates);
+        Self { collection, feedback, source: None, step }
     }
 
     /// Creates a new `Variable` from a supplied `source` stream.
-    pub fn new_from(source: Collection<G, D, R>, step: <G::Timestamp as Timestamp>::Summary) -> Self {
+    pub fn new_from(source: Collection<G, D, R, C>, step: <G::Timestamp as Timestamp>::Summary) -> Self {
         let (feedback, updates) = source.inner.scope().feedback(step.clone());
-        let collection = Collection::<G,D,R>::new(updates).concat(&source);
+        let collection = Collection::<G, D, R, C>::new(updates).concat(&source);
         Variable { collection, feedback, source: Some(source), step }
     }
 
@@ -181,7 +192,7 @@ impl<G: Scope, D: Data, R: Abelian> Variable<G, D, R> where G::Timestamp: Lattic
     ///
     /// This method binds the `Variable` to be equal to the supplied collection,
     /// which may be recursively defined in terms of the variable itself.
-    pub fn set(self, result: &Collection<G, D, R>) -> Collection<G, D, R> {
+    pub fn set(self, result: &Collection<G, D, R, C>) -> Collection<G, D, R, C> {
         let mut in_result = result.clone();
         if let Some(source) = &self.source {
             in_result = in_result.concat(&source.negate());
@@ -198,19 +209,19 @@ impl<G: Scope, D: Data, R: Abelian> Variable<G, D, R> where G::Timestamp: Lattic
     ///
     /// This behavior can also be achieved by using `new` to create an empty initial
     /// collection, and then using `self.set(self.concat(result))`.
-    pub fn set_concat(self, result: &Collection<G, D, R>) -> Collection<G, D, R> {
+    pub fn set_concat(self, result: &Collection<G, D, R, C>) -> Collection<G, D, R, C> {
         let step = self.step;
         result
             .inner
-            .flat_map(move |(x,t,d)| step.results_in(&t).map(|t| (x,t,d)))
+            .results_in(step)
             .connect_loop(self.feedback);
 
         self.collection
     }
 }
 
-impl<G: Scope, D: Data, R: Abelian> Deref for Variable<G, D, R> where G::Timestamp: Lattice {
-    type Target = Collection<G, D, R>;
+impl<G: Scope, D: Data, R: Abelian, C: Container + Clone + 'static> Deref for Variable<G, D, R, C> where G::Timestamp: Lattice {
+    type Target = Collection<G, D, R, C>;
     fn deref(&self) -> &Self::Target {
         &self.collection
     }
@@ -253,5 +264,49 @@ impl<G: Scope, D: Data, R: Semigroup> Deref for SemigroupVariable<G, D, R> where
     type Target = Collection<G, D, R>;
     fn deref(&self) -> &Self::Target {
         &self.collection
+    }
+}
+
+/// Extension trait for streams.
+pub trait ResultsIn<G: Scope, C> {
+    /// Advances a timestamp in the stream according to the timestamp actions on the path.
+    ///
+    /// The path may advance the timestamp sufficiently that it is no longer valid, for example if
+    /// incrementing fields would result in integer overflow. In this case, the record is dropped.
+    ///
+    /// # Examples
+    /// ```
+    /// use timely::dataflow::Scope;
+    /// use timely::dataflow::operators::{ToStream, Concat, Inspect, BranchWhen};
+    ///
+    /// use differential_dataflow::input::Input;
+    /// use differential_dataflow::operators::ResultsIn;
+    ///
+    /// timely::example(|scope| {
+    ///     let summary1 = 5;
+    ///
+    ///     let data = scope.new_collection_from(1 .. 10).1;
+    ///     /// Applies `results_in` on every timestamp in the collection.
+    ///     data.results_in(summary1);
+    /// });
+    /// ```
+    fn results_in(&self, step: <G::Timestamp as Timestamp>::Summary) -> Self;
+}
+
+impl<G, D, R, C> ResultsIn<G, C> for Collection<G, D, R, C>
+where
+    G: Scope,
+    C: Clone,
+    StreamCore<G, C>: ResultsIn<G, C>,
+{
+    fn results_in(&self, step: <G::Timestamp as Timestamp>::Summary) -> Self {
+        self.inner.results_in(step).as_collection()
+    }
+}
+
+impl<G: Scope, D: timely::Data, R: timely::Data> ResultsIn<G, Vec<(D, G::Timestamp, R)>> for Stream<G, (D, G::Timestamp, R)> {
+    fn results_in(&self, step: <G::Timestamp as Timestamp>::Summary) -> Self {
+        use timely::dataflow::operators::Map;
+        self.flat_map(move |(x,t,d)| step.results_in(&t).map(|t| (x,t,d)))
     }
 }

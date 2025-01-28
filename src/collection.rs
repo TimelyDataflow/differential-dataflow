@@ -172,6 +172,35 @@ impl<G: Scope, D, R, C: Container + Clone + 'static> Collection<G, D, R, C> {
     pub fn scope(&self) -> G {
         self.inner.scope()
     }
+
+    /// Creates a new collection whose counts are the negation of those in the input.
+    ///
+    /// This method is most commonly used with `concat` to get those element in one collection but not another.
+    /// However, differential dataflow computations are still defined for all values of the difference type `R`,
+    /// including negative counts.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use differential_dataflow::input::Input;
+    ///
+    /// ::timely::example(|scope| {
+    ///
+    ///     let data = scope.new_collection_from(1 .. 10).1;
+    ///
+    ///     let odds = data.filter(|x| x % 2 == 1);
+    ///     let evens = data.filter(|x| x % 2 == 0);
+    ///
+    ///     odds.negate()
+    ///         .concat(&data)
+    ///         .assert_eq(&evens);
+    /// });
+    /// ```
+    // TODO: Removing this function is possible, but breaks existing callers of `negate` who expect
+    //       an inherent method on `Collection`.
+    pub fn negate(&self) -> Collection<G, D, R, C> where StreamCore<G, C>: crate::operators::Negate<G, C> {
+        crate::operators::Negate::negate(&self.inner).as_collection()
+    }
 }
 
 impl<G: Scope, D: Clone+'static, R: Clone+'static> Collection<G, D, R> {
@@ -552,36 +581,6 @@ impl<'a, G: Scope, D: Clone+'static, R: Clone+'static> Collection<Child<'a, G, G
 
 /// Methods requiring an Abelian difference, to support negation.
 impl<G: Scope, D: Clone+'static, R: Abelian+'static> Collection<G, D, R> where G::Timestamp: Data {
-    /// Creates a new collection whose counts are the negation of those in the input.
-    ///
-    /// This method is most commonly used with `concat` to get those element in one collection but not another.
-    /// However, differential dataflow computations are still defined for all values of the difference type `R`,
-    /// including negative counts.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use differential_dataflow::input::Input;
-    ///
-    /// ::timely::example(|scope| {
-    ///
-    ///     let data = scope.new_collection_from(1 .. 10).1;
-    ///
-    ///     let odds = data.filter(|x| x % 2 == 1);
-    ///     let evens = data.filter(|x| x % 2 == 0);
-    ///
-    ///     odds.negate()
-    ///         .concat(&data)
-    ///         .assert_eq(&evens);
-    /// });
-    /// ```
-    pub fn negate(&self) -> Collection<G, D, R> {
-        self.inner
-            .map_in_place(|x| x.2.negate())
-            .as_collection()
-    }
-
-
     /// Assert if the collections are ever different.
     ///
     /// Because this is a dataflow fragment, the test is only applied as the computation is run. If the computation
