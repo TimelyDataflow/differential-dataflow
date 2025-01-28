@@ -39,7 +39,7 @@ use timely::order::Product;
 
 use timely::dataflow::*;
 use timely::dataflow::scopes::child::Iterative;
-use timely::dataflow::operators::{Feedback, ConnectLoop, Map};
+use timely::dataflow::operators::{Feedback, ConnectLoop};
 use timely::dataflow::operators::feedback::Handle;
 
 use crate::{Data, Collection, AsCollection};
@@ -233,35 +233,45 @@ impl<G: Scope, D: Data, R: Abelian, C: Container + Clone + 'static> Deref for Va
 /// that do not implement `Abelian` and only implement `Semigroup`. This means
 /// that it can be used in settings where the difference type does not support
 /// negation.
-pub struct SemigroupVariable<G: Scope, D: Data, R: Semigroup+'static>
-where G::Timestamp: Lattice {
-    collection: Collection<G, D, R>,
-    feedback: Handle<G, Vec<(D, G::Timestamp, R)>>,
+pub struct SemigroupVariable<G, D, R, C = Vec<(D, <G as ScopeParent>::Timestamp, R)>>
+where
+    G::Timestamp: Lattice,
+    G: Scope,
+    D: Data,
+    R: Semigroup + 'static,
+    C: Container + Clone + 'static,
+{
+    collection: Collection<G, D, R, C>,
+    feedback: Handle<G, C>,
     step: <G::Timestamp as Timestamp>::Summary,
 }
 
-impl<G: Scope, D: Data, R: Semigroup> SemigroupVariable<G, D, R> where G::Timestamp: Lattice {
+impl<G: Scope, D: Data, R: Semigroup, C: Container+Clone> SemigroupVariable<G, D, R, C>
+where
+    G::Timestamp: Lattice,
+    StreamCore<G, C>: ResultsIn<G, C>,
+{
     /// Creates a new initially empty `SemigroupVariable`.
     pub fn new(scope: &mut G, step: <G::Timestamp as Timestamp>::Summary) -> Self {
         let (feedback, updates) = scope.feedback(step.clone());
-        let collection = Collection::<G,D,R>::new(updates);
+        let collection = Collection::<G,D,R,C>::new(updates);
         SemigroupVariable { collection, feedback, step }
     }
 
     /// Adds a new source of data to `self`.
-    pub fn set(self, result: &Collection<G, D, R>) -> Collection<G, D, R> {
+    pub fn set(self, result: &Collection<G, D, R, C>) -> Collection<G, D, R, C> {
         let step = self.step;
         result
             .inner
-            .flat_map(move |(x,t,d)| step.results_in(&t).map(|t| (x,t,d)))
+            .results_in(step)
             .connect_loop(self.feedback);
 
         self.collection
     }
 }
 
-impl<G: Scope, D: Data, R: Semigroup> Deref for SemigroupVariable<G, D, R> where G::Timestamp: Lattice {
-    type Target = Collection<G, D, R>;
+impl<G: Scope, D: Data, R: Semigroup, C: Container+Clone+'static> Deref for SemigroupVariable<G, D, R, C> where G::Timestamp: Lattice {
+    type Target = Collection<G, D, R, C>;
     fn deref(&self) -> &Self::Target {
         &self.collection
     }
