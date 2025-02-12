@@ -1,6 +1,6 @@
 [package]
 name = "differential-dogs3"
-version = "0.1.5"
+version = "0.1.6"
 authors = ["Frank McSherry <fmcsherry@me.com>"]
 license = "MIT"
 edition = "2021"
@@ -8,7 +8,7 @@ description = "Advanced join patterns in differential dataflow"
 
 [dependencies]
 timely = { workspace = true }
-differential-dataflow = { path = "../", default-features = false, version = "0.13.5" }
+differential-dataflow = { path = "../", default-features = false, version = "0.13.6" }
 serde = { version = "1.0", features = ["derive"]}
 
 [dev-dependencies]
