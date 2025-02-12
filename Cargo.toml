@@ -45,10 +45,10 @@ bytemuck = "1.18.0"
 serde = { version = "1.0", features = ["derive"] }
 fnv="1.0.2"
 timely = {workspace = true}
-columnar = "0.2"
+columnar = "0.3"
 
 [workspace.dependencies]
-timely = { version = "0.17", default-features = false }
+timely = { version = "0.18", default-features = false }
 #timely = { path = "../timely-dataflow/timely/", default-features = false }
 
 [features]
