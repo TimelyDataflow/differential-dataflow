@@ -19,8 +19,13 @@ jobs:
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           toolchain: ${{ matrix.toolchain }}
+      - name: Cargo patch Timely master
+        run: |
+          cat >> Cargo.toml <<EOF
+          [patch.crates-io]
+          timely = { git = "https://github.com/TimelyDataflow/timely-dataflow" }
+          EOF
       - name: Cargo check against Timely master
-        working-directory: timely_master
         run: cargo check --all-targets
       - name: Cargo test against Timely master
         working-directory: timely_master
