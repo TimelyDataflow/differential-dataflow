@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.6](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dataflow-v0.13.5...differential-dataflow-v0.13.6) - 2025-02-12
+
+### Other
+
+- Update Timely, Columnar versions ([#569](https://github.com/TimelyDataflow/differential-dataflow/pull/569))
+- Variable supports container streams ([#564](https://github.com/TimelyDataflow/differential-dataflow/pull/564))
+- Fix Timely master check, pin dependency version in mdbook ([#568](https://github.com/TimelyDataflow/differential-dataflow/pull/568))
+- Provide prescriptive versions in example
+
 ## [0.13.5](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dataflow-v0.13.4...differential-dataflow-v0.13.5) - 2025-01-24
 
 ### Other
