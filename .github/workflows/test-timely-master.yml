@@ -25,10 +25,13 @@ jobs:
           [patch.crates-io]
           timely = { git = "https://github.com/TimelyDataflow/timely-dataflow" }
           EOF
+      - name: Cargo upgrade
+        run: |
+          cargo install cargo-edit
+          cargo upgrade -p timely --incompatible
       - name: Cargo check against Timely master
         run: cargo check --all-targets
       - name: Cargo test against Timely master
-        working-directory: timely_master
         run: cargo test
 
   notify:
