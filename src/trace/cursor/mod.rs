@@ -6,14 +6,15 @@
 //! supports efficient seeking (via the `seek_key` and `seek_val` methods).
 
 use timely::progress::Timestamp;
+
 use crate::difference::Semigroup;
+// `pub use` for legacy reasons.
+pub use crate::IntoOwned;
 use crate::lattice::Lattice;
 
 pub mod cursor_list;
 
 pub use self::cursor_list::CursorList;
-
-pub use timely::container::flatcontainer::IntoOwned;
 
 /// A cursor for navigating ordered `(key, val, time, diff)` updates.
 pub trait Cursor {

@@ -42,10 +42,12 @@ graph_map = "0.1"
 bytemuck = "1.18.0"
 
 [dependencies]
-serde = { version = "1.0", features = ["derive"] }
-fnv="1.0.2"
-timely = {workspace = true}
 columnar = "0.3"
+columnation = "0.1.0"
+fnv="1.0.2"
+paste = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+timely = {workspace = true}
 
 [workspace.dependencies]
 timely = { version = "0.18", default-features = false }

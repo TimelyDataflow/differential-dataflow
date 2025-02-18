@@ -668,7 +668,7 @@ where
                 Ordering::Greater => batch.seek_key(batch_storage, trace.key(trace_storage)),
                 Ordering::Equal => {
 
-                    use crate::trace::cursor::IntoOwned;
+                    use crate::IntoOwned;
                     
                     thinker.history1.edits.load(trace, trace_storage, |time| {
                         let mut time = time.into_owned();

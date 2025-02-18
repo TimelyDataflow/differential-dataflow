@@ -5,10 +5,8 @@ use timely::dataflow::*;
 use timely::dataflow::operators::Operator;
 use timely::dataflow::channels::pact::Pipeline;
 
-use crate::trace::cursor::IntoOwned;
-
 use crate::lattice::Lattice;
-use crate::{ExchangeData, Collection};
+use crate::{IntoOwned, ExchangeData, Collection};
 use crate::difference::{IsZero, Semigroup};
 use crate::hashable::Hashable;
 use crate::collection::AsCollection;

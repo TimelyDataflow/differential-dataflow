@@ -64,13 +64,6 @@ fn main() {
                     keys.join_core(&data, |_k, &(), &()| Option::<()>::None)
                         .probe_with(&mut probe);
                 },
-                "flat" => {
-                    use differential_dataflow::trace::implementations::ord_neu::{FlatKeyBatcherDefault, FlatKeyBuilderDefault, FlatKeySpineDefault};
-                    let data = data.arrange::<FlatKeyBatcherDefault<String,usize,isize,_>, FlatKeyBuilderDefault<String,usize,isize>, FlatKeySpineDefault<String,usize,isize>>();
-                    let keys = keys.arrange::<FlatKeyBatcherDefault<String,usize,isize,_>, FlatKeyBuilderDefault<String,usize,isize>, FlatKeySpineDefault<String,usize,isize>>();
-                    keys.join_core(&data, |_k, (), ()| Option::<()>::None)
-                        .probe_with(&mut probe);
-                }
                 _ => {
                     println!("unrecognized mode: {:?}", mode)
                 }

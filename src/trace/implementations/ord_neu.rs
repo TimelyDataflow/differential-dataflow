@@ -9,16 +9,14 @@
 //! and should consume fewer resources (computation and memory) when it applies.
 
 use std::rc::Rc;
-use timely::container::columnation::{TimelyStack};
-use timely::container::flatcontainer::{FlatStack, RegionPreference};
-use timely::container::flatcontainer::impls::tuple::{TupleABCRegion, TupleABRegion};
-use crate::trace::implementations::chunker::{ColumnationChunker, ContainerChunker, VecChunker};
+
+use crate::containers::TimelyStack;
+use crate::trace::implementations::chunker::{ColumnationChunker, VecChunker};
 use crate::trace::implementations::spine_fueled::Spine;
 use crate::trace::implementations::merge_batcher::{MergeBatcher, VecMerger, ColMerger};
-use crate::trace::implementations::merge_batcher_flat::FlatcontainerMerger;
 use crate::trace::rc_blanket_impls::RcBuilder;
 
-use super::{Update, Layout, Vector, TStack, Preferred, FlatLayout};
+use super::{Update, Layout, Vector, TStack, Preferred};
 
 pub use self::val_batch::{OrdValBatch, OrdValBuilder};
 pub use self::key_batch::{OrdKeyBatch, OrdKeyBuilder};
@@ -40,24 +38,6 @@ pub type ColValBatcher<K, V, T, R> = MergeBatcher<Vec<((K,V),T,R)>, ColumnationC
 /// A builder for columnar storage.
 pub type ColValBuilder<K, V, T, R> = RcBuilder<OrdValBuilder<TStack<((K,V),T,R)>, TimelyStack<((K,V),T,R)>>>;
 
-/// A trace implementation backed by flatcontainer storage.
-pub type FlatValSpine<L> = Spine<Rc<OrdValBatch<L>>>;
-/// A batcher for flatcontainer storage.
-pub type FlatValBatcher<R, C> = MergeBatcher<C, ContainerChunker<FlatStack<R>>, FlatcontainerMerger<R>>;
-/// A builder for flatcontainer storage.
-pub type FlatValBuilder<L, R> = RcBuilder<OrdValBuilder<L, FlatStack<R>>>;
-
-
-/// A trace implementation backed by flatcontainer storage, using [`FlatLayout`] as the layout.
-pub type FlatValSpineDefault<K, V, T, R> = FlatValSpine<
-    FlatLayout<<K as RegionPreference>::Region, <V as RegionPreference>::Region, <T as RegionPreference>::Region, <R as RegionPreference>::Region>,
->;
-/// A batcher for flatcontainer storage, using [`FlatLayout`] as the layout.
-pub type FlatValBatcherDefault<K, V, T, R, C> = FlatValBatcher<TupleABCRegion<TupleABRegion<<K as RegionPreference>::Region, <V as RegionPreference>::Region>, <T as RegionPreference>::Region, <R as RegionPreference>::Region>, C>;
-/// A builder for flatcontainer storage, using [`FlatLayout`] as the layout.
-pub type FlatValBuilderDefault<K, V, T, R> = FlatValBuilder<FlatLayout<<K as RegionPreference>::Region, <V as RegionPreference>::Region, <T as RegionPreference>::Region, <R as RegionPreference>::Region>, TupleABCRegion<TupleABRegion<<K as RegionPreference>::Region, <V as RegionPreference>::Region>, <T as RegionPreference>::Region, <R as RegionPreference>::Region>>;
-
-
 /// A trace implementation using a spine of ordered lists.
 pub type OrdKeySpine<K, T, R> = Spine<Rc<OrdKeyBatch<Vector<((K,()),T,R)>>>>;
 /// A batcher for ordered lists.
@@ -74,22 +54,6 @@ pub type ColKeySpine<K, T, R> = Spine<Rc<OrdKeyBatch<TStack<((K,()),T,R)>>>>;
 pub type ColKeyBatcher<K, T, R> = MergeBatcher<Vec<((K,()),T,R)>, ColumnationChunker<((K,()),T,R)>, ColMerger<(K,()),T,R>>;
 /// A builder for columnar storage
 pub type ColKeyBuilder<K, T, R> = RcBuilder<OrdKeyBuilder<TStack<((K,()),T,R)>, TimelyStack<((K,()),T,R)>>>;
-
-/// A trace implementation backed by flatcontainer storage.
-pub type FlatKeySpine<L> = Spine<Rc<OrdKeyBatch<L>>>;
-/// A batcher for flatcontainer storage.
-pub type FlatKeyBatcher<R, C> = MergeBatcher<C, ContainerChunker<FlatStack<R>>, FlatcontainerMerger<R>>;
-/// A builder for flatcontainer storage.
-pub type FlatKeyBuilder<L, R> = RcBuilder<OrdKeyBuilder<L, FlatStack<R>>>;
-
-/// A trace implementation backed by flatcontainer storage, using [`FlatLayout`] as the layout.
-pub type FlatKeySpineDefault<K,T,R> = FlatKeySpine<
-    FlatLayout<<K as RegionPreference>::Region, <() as RegionPreference>::Region, <T as RegionPreference>::Region, <R as RegionPreference>::Region>,
->;
-/// A batcher for flatcontainer storage, using [`FlatLayout`] as the layout.
-pub type FlatKeyBatcherDefault<K, T, R, C> = FlatValBatcher<TupleABCRegion<TupleABRegion<<K as RegionPreference>::Region, <() as RegionPreference>::Region>, <T as RegionPreference>::Region, <R as RegionPreference>::Region>, C>;
-/// A builder for flatcontainer storage, using [`FlatLayout`] as the layout.
-pub type FlatKeyBuilderDefault<K, T, R> = FlatKeyBuilder<FlatLayout<<K as RegionPreference>::Region, <() as RegionPreference>::Region, <T as RegionPreference>::Region, <R as RegionPreference>::Region>, TupleABCRegion<TupleABRegion<<K as RegionPreference>::Region, <() as RegionPreference>::Region>, <T as RegionPreference>::Region, <R as RegionPreference>::Region>>;
 
 /// A trace implementation backed by columnar storage.
 pub type PreferredSpine<K, V, T, R> = Spine<Rc<OrdValBatch<Preferred<K,V,T,R>>>>;
@@ -111,7 +75,7 @@ mod val_batch {
 
     use crate::trace::{Batch, BatchReader, Builder, Cursor, Description, Merger};
     use crate::trace::implementations::{BatchContainer, BuilderInput};
-    use crate::trace::cursor::IntoOwned;
+    use crate::IntoOwned;
 
     use super::{Layout, Update};
 
@@ -714,7 +678,7 @@ mod key_batch {
 
     use crate::trace::{Batch, BatchReader, Builder, Cursor, Description, Merger};
     use crate::trace::implementations::{BatchContainer, BuilderInput};
-    use crate::trace::cursor::IntoOwned;
+    use crate::IntoOwned;
 
     use super::{Layout, Update};
 

@@ -9,9 +9,9 @@ use std::rc::Rc;
 use std::cmp::Ordering;
 
 use serde::{Deserialize, Serialize};
-use timely::container::columnation::TimelyStack;
 
 use crate::Hashable;
+use crate::containers::TimelyStack;
 use crate::trace::implementations::chunker::{ColumnationChunker, VecChunker};
 use crate::trace::implementations::merge_batcher::{MergeBatcher, VecMerger, ColMerger};
 use crate::trace::implementations::spine_fueled::Spine;
@@ -94,7 +94,7 @@ mod val_batch {
     use crate::hashable::Hashable;
     use crate::trace::{Batch, BatchReader, Builder, Cursor, Description, Merger};
     use crate::trace::implementations::{BatchContainer, BuilderInput};
-    use crate::trace::cursor::IntoOwned;
+    use crate::IntoOwned;
 
     use super::{Layout, Update, HashOrdered};
 

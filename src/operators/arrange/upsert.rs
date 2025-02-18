@@ -111,8 +111,7 @@ use timely::dataflow::operators::Capability;
 use crate::operators::arrange::arrangement::Arranged;
 use crate::trace::{Builder, Description};
 use crate::trace::{self, Trace, TraceReader, Batch, Cursor};
-use crate::trace::cursor::IntoOwned;
-use crate::{ExchangeData, Hashable};
+use crate::{ExchangeData, Hashable, IntoOwned};
 
 use super::TraceAgent;
 

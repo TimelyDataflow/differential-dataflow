@@ -140,7 +140,7 @@ where
                     }
                 });
 
-                use crate::trace::cursor::IntoOwned;
+                use crate::IntoOwned;
                 if let Some(capability) = cap {
 
                     let mut session = output.session(&capability);

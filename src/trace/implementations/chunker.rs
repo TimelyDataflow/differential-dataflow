@@ -1,9 +1,12 @@
 //! Organize streams of data into sorted chunks.
 
 use std::collections::VecDeque;
+
+use columnation::Columnation;
 use timely::Container;
-use timely::container::columnation::{Columnation, TimelyStack};
 use timely::container::{ContainerBuilder, PushInto, SizableContainer};
+
+use crate::containers::TimelyStack;
 use crate::consolidation::{consolidate_updates, ConsolidateLayout};
 use crate::difference::Semigroup;
 
