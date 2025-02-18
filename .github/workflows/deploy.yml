@@ -15,7 +15,7 @@ jobs:
         run: |
           export DIFFERENTIAL_VERSION=$(cargo metadata --format-version 1 | jq -r '.packages[] | select(.name == "differential-dataflow") | .version')
           export TIMELY_VERSION=$(cargo metadata --format-version 1 | jq -r '.packages[] | select(.name == "timely") | .version')
-          sed -i "s/^differential-dataflow = .*/differential = \"=$DIFFERENTIAL_VERSION\"/" mdbook/src/chapter_0/chapter_0_0.md
+          sed -i "s/^differential-dataflow = .*/differential-dataflow = \"=$DIFFERENTIAL_VERSION\"/" mdbook/src/chapter_0/chapter_0_0.md
           sed -i "s/^timely = .*/timely = \"=$TIMELY_VERSION\"/" mdbook/src/chapter_0/chapter_0_0.md
       - run: cd mdbook && mdbook build
       - uses: JamesIves/github-pages-deploy-action@v4
