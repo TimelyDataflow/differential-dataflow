@@ -566,13 +566,13 @@ where
 }
 
 /// Methods requiring a region as the scope.
-impl<'a, G: Scope, D: Clone+'static, R: Clone+'static> Collection<Child<'a, G, G::Timestamp>, D, R>
+impl<G: Scope, D, R, C: Container+Data> Collection<Child<'_, G, G::Timestamp>, D, R, C>
 {
     /// Returns the value of a Collection from a nested region to its containing scope.
     ///
     /// This method is a specialization of `leave` to the case that of a nested region.
     /// It removes the need for an operator that adjusts the timestamp.
-    pub fn leave_region(&self) -> Collection<G, D, R> {
+    pub fn leave_region(&self) -> Collection<G, D, R, C> {
         self.inner
             .leave()
             .as_collection()
