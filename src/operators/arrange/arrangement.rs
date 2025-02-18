@@ -26,7 +26,7 @@ use timely::progress::Timestamp;
 use timely::progress::Antichain;
 use timely::dataflow::operators::Capability;
 
-use crate::{Data, ExchangeData, Collection, AsCollection, Hashable};
+use crate::{Data, ExchangeData, Collection, AsCollection, Hashable, IntoOwned};
 use crate::difference::Semigroup;
 use crate::lattice::Lattice;
 use crate::trace::{self, Trace, TraceReader, Batch, BatchReader, Batcher, Builder, Cursor};
@@ -278,8 +278,6 @@ where
             .as_collection()
     }
 }
-
-use crate::trace::cursor::IntoOwned;
 
 // Direct reduce implementations.
 use crate::difference::Abelian;

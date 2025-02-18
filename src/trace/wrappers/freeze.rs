@@ -26,7 +26,7 @@ use timely::progress::frontier::AntichainRef;
 use crate::operators::arrange::Arranged;
 use crate::trace::{TraceReader, BatchReader, Description};
 use crate::trace::cursor::Cursor;
-use crate::trace::cursor::IntoOwned;
+use crate::IntoOwned;
 
 /// Freezes updates to an arrangement using a supplied function.
 ///

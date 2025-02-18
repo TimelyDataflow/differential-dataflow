@@ -150,7 +150,7 @@ impl<B: Ord+Clone> Default for HuffmanContainer<B> {
 
 mod wrapper {
 
-    use crate::trace::IntoOwned;
+    use crate::IntoOwned;
     use super::Encoded;
 
     pub struct Wrapped<'a, B: Ord> {

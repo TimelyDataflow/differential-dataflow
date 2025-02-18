@@ -22,7 +22,7 @@ pub mod threshold;
 
 use crate::lattice::Lattice;
 use crate::trace::Cursor;
-use crate::trace::cursor::IntoOwned;
+use crate::IntoOwned;
 
 /// An accumulation of (value, time, diff) updates.
 struct EditList<'a, C: Cursor> {

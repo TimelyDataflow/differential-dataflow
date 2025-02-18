@@ -69,7 +69,7 @@ impl<T: Timestamp> PointStamp<T> {
     }
     /// Returns the wrapped vector.
     ///
-    /// This method is the support way to mutate the contents of `self`, by extracting 
+    /// This method is the support way to mutate the contents of `self`, by extracting
     /// the vector and then re-introducing it with `PointStamp::new` to re-establish
     /// the invariant that the vector not end with `T::minimum`.
     pub fn into_vec(self) -> Vec<T> {
@@ -253,50 +253,55 @@ impl<T: Lattice + Timestamp + Clone> Lattice for PointStamp<T> {
     }
 }
 
-use timely::container::columnation::{Columnation, Region};
-impl<T: Columnation> Columnation for PointStamp<T> {
-    type InnerRegion = PointStampStack<T::InnerRegion>;
-}
+mod columnation {
+    use columnation::{Columnation, Region};
 
-/// Stack for PointStamp. Part of Columnation implementation.
-pub struct PointStampStack<R: Region>(<Vec<R::Item> as Columnation>::InnerRegion)
-where
-    <R as Region>::Item: Columnation;
+    use crate::dynamic::pointstamp::PointStamp;
 
-impl<R: Region> Default for PointStampStack<R>
+    impl<T: Columnation> Columnation for PointStamp<T> {
+        type InnerRegion = PointStampStack<T::InnerRegion>;
+    }
+
+    /// Stack for PointStamp. Part of Columnation implementation.
+    pub struct PointStampStack<R: Region>(<Vec<R::Item> as Columnation>::InnerRegion)
+    where
+        <R as Region>::Item: Columnation;
+
+    impl<R: Region> Default for PointStampStack<R>
     where
         <R as Region>::Item: Columnation
-{
-    #[inline]
-    fn default() -> Self {
-        Self(Default::default())
+    {
+        #[inline]
+        fn default() -> Self {
+            Self(Default::default())
+        }
     }
-}
 
-impl<R: Region> Region for PointStampStack<R>
+    impl<R: Region> Region for PointStampStack<R>
     where
         <R as Region>::Item: Columnation
-{
-    type Item = PointStamp<R::Item>;
+    {
+        type Item = PointStamp<R::Item>;
 
-    #[inline]
-    unsafe fn copy(&mut self, item: &Self::Item) -> Self::Item {
-        Self::Item { vector: self.0.copy(&item.vector) }
-    }
+        #[inline]
+        unsafe fn copy(&mut self, item: &Self::Item) -> Self::Item {
+            Self::Item { vector: self.0.copy(&item.vector) }
+        }
 
-    fn clear(&mut self) {
-        self.0.clear();
-    }
+        fn clear(&mut self) {
+            self.0.clear();
+        }
 
-    fn reserve_items<'a, I>(&mut self, items: I) where Self: 'a, I: Iterator<Item=&'a Self::Item> + Clone {
-        self.0.reserve_items(items.map(|x| &x.vector));
-    }
+        fn reserve_items<'a, I>(&mut self, items: I) where Self: 'a, I: Iterator<Item=&'a Self::Item> + Clone {
+            self.0.reserve_items(items.map(|x| &x.vector));
+        }
 
-    fn reserve_regions<'a, I>(&mut self, regions: I) where Self: 'a, I: Iterator<Item=&'a Self> + Clone {
-        self.0.reserve_regions(regions.map(|r| &r.0));
-    }
+        fn reserve_regions<'a, I>(&mut self, regions: I) where Self: 'a, I: Iterator<Item=&'a Self> + Clone {
+            self.0.reserve_regions(regions.map(|r| &r.0));
+        }
 
-    fn heap_size(&self, callback: impl FnMut(usize, usize)) {
-        self.0.heap_size(callback);
+        fn heap_size(&self, callback: impl FnMut(usize, usize)) {
+            self.0.heap_size(callback);
+        }
     }
 }

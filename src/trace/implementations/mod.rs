@@ -41,7 +41,6 @@
 pub mod spine_fueled;
 
 pub mod merge_batcher;
-pub mod merge_batcher_flat;
 pub mod ord_neu;
 pub mod rhh;
 pub mod huffman_container;
@@ -58,12 +57,13 @@ pub use self::ord_neu::RcOrdKeyBuilder as KeyBuilder;
 use std::borrow::{ToOwned};
 use std::convert::TryInto;
 
+use columnation::Columnation;
 use serde::{Deserialize, Serialize};
-
 use timely::Container;
-use timely::container::columnation::{Columnation, TimelyStack};
 use timely::container::PushInto;
 use timely::progress::Timestamp;
+
+use crate::containers::TimelyStack;
 use crate::lattice::Lattice;
 use crate::difference::Semigroup;
 
@@ -144,11 +144,6 @@ where
     type TimeContainer = TimelyStack<U::Time>;
     type DiffContainer = TimelyStack<U::Diff>;
     type OffsetContainer = OffsetList;
-}
-
-/// A layout based on flat containers.
-pub struct FlatLayout<K, V, T, R> {
-    phantom: std::marker::PhantomData<(K, V, T, R)>,
 }
 
 /// A type with a preferred container.
@@ -455,122 +450,16 @@ where
     }
 }
 
-mod flatcontainer {
-    use timely::container::flatcontainer::{FlatStack, IntoOwned, Push, Region};
-    use timely::container::flatcontainer::impls::tuple::{TupleABCRegion, TupleABRegion};
-    use timely::progress::Timestamp;
-
-    use crate::difference::Semigroup;
-    use crate::lattice::Lattice;
-    use crate::trace::implementations::{BatchContainer, BuilderInput, FlatLayout, Layout, OffsetList, Update};
-
-    impl<K, V, T, R> Update for FlatLayout<K, V, T, R>
-    where
-        K: Region,
-        V: Region,
-        T: Region,
-        R: Region,
-        K::Owned: Ord + Clone + 'static,
-        V::Owned: Ord + Clone + 'static,
-        T::Owned: Ord + Clone + Lattice + Timestamp + 'static,
-        R::Owned: Ord + Semigroup + 'static,
-    {
-        type Key = K::Owned;
-        type Val = V::Owned;
-        type Time = T::Owned;
-        type Diff = R::Owned;
-    }
-
-    impl<K, V, T, R> Layout for FlatLayout<K, V, T, R>
-    where
-        K: Region + Push<<K as Region>::Owned> + for<'a> Push<<K as Region>::ReadItem<'a>> + 'static,
-        V: Region + Push<<V as Region>::Owned> + for<'a> Push<<V as Region>::ReadItem<'a>> + 'static,
-        T: Region + Push<<T as Region>::Owned> + for<'a> Push<<T as Region>::ReadItem<'a>> + 'static,
-        R: Region + Push<<R as Region>::Owned> + for<'a> Push<<R as Region>::ReadItem<'a>> + 'static,
-        K::Owned: Ord + Clone + 'static,
-        V::Owned: Ord + Clone + 'static,
-        T::Owned: Ord + Clone + Lattice + Timestamp + 'static,
-        R::Owned: Ord + Semigroup + 'static,
-        for<'a> K::ReadItem<'a>: Copy + Ord,
-        for<'a> V::ReadItem<'a>: Copy + Ord,
-        for<'a> T::ReadItem<'a>: Copy + Ord,
-        for<'a> R::ReadItem<'a>: Copy + Ord,
-    {
-        type Target = Self;
-        type KeyContainer = FlatStack<K>;
-        type ValContainer = FlatStack<V>;
-        type TimeContainer = FlatStack<T>;
-        type DiffContainer = FlatStack<R>;
-        type OffsetContainer = OffsetList;
-    }
-
-    impl<K,KBC,V,VBC,T,R> BuilderInput<KBC, VBC> for FlatStack<TupleABCRegion<TupleABRegion<K,V>,T,R>>
-    where
-        K: Region + Clone + 'static,
-        V: Region + Clone + 'static,
-        T: Region + Clone + 'static,
-        R: Region + Clone + 'static,
-        for<'a> K::ReadItem<'a>: Copy + Ord,
-        for<'a> V::ReadItem<'a>: Copy + Ord,
-        for<'a> T::ReadItem<'a>: Copy + Ord,
-        for<'a> R::ReadItem<'a>: Copy + Ord,
-        KBC: BatchContainer,
-        VBC: BatchContainer,
-        for<'a> KBC::ReadItem<'a>: PartialEq<K::ReadItem<'a>>,
-        for<'a> VBC::ReadItem<'a>: PartialEq<V::ReadItem<'a>>,
-    {
-        type Key<'a> = K::ReadItem<'a>;
-        type Val<'a> = V::ReadItem<'a>;
-        type Time = T::Owned;
-        type Diff = R::Owned;
-
-        fn into_parts<'a>(((key, val), time, diff): Self::Item<'a>) -> (Self::Key<'a>, Self::Val<'a>, Self::Time, Self::Diff) {
-            (key, val, time.into_owned(), diff.into_owned())
-        }
-
-        fn key_eq(this: &Self::Key<'_>, other: KBC::ReadItem<'_>) -> bool {
-            KBC::reborrow(other) == K::reborrow(*this)
-        }
-
-        fn val_eq(this: &Self::Val<'_>, other: VBC::ReadItem<'_>) -> bool {
-            VBC::reborrow(other) == V::reborrow(*this)
-        }
-
-        fn key_val_upd_counts(chain: &[Self]) -> (usize, usize, usize) {
-            let mut keys = 0;
-            let mut vals = 0;
-            let mut upds = 0;
-            let mut prev_keyval = None;
-            for link in chain.iter() {
-                for ((key, val), _, _) in link.iter() {
-                    if let Some((p_key, p_val)) = prev_keyval {
-                        if p_key != key {
-                            keys += 1;
-                            vals += 1;
-                        } else if p_val != val {
-                            vals += 1;
-                        }
-                    } else {
-                        keys += 1;
-                        vals += 1;
-                    }
-                    upds += 1;
-                    prev_keyval = Some((key, val));
-                }
-            }
-            (keys, vals, upds)
-        }
-    }
-}
-
 pub use self::containers::{BatchContainer, SliceContainer};
 
 /// Containers for data that resemble `Vec<T>`, with leaner implementations.
 pub mod containers {
 
-    use timely::container::columnation::{Columnation, TimelyStack};
+    use columnation::Columnation;
     use timely::container::PushInto;
-    use crate::trace::IntoOwned;
+
+    use crate::containers::TimelyStack;
+    use crate::IntoOwned;
 
     /// A general-purpose container resembling `Vec<T>`.
     pub trait BatchContainer: for<'a> PushInto<Self::ReadItem<'a>> + 'static {
@@ -696,40 +585,6 @@ pub mod containers {
         }
         fn len(&self) -> usize {
             self[..].len()
-        }
-    }
-
-    mod flatcontainer {
-        use timely::container::flatcontainer::{FlatStack, Push, Region};
-        use crate::trace::implementations::BatchContainer;
-
-        impl<R> BatchContainer for FlatStack<R>
-        where
-            for<'a> R: Region + Push<<R as Region>::ReadItem<'a>> + 'static,
-            for<'a> R::ReadItem<'a>: Copy + Ord,
-        {
-            type Owned = R::Owned;
-            type ReadItem<'a> = R::ReadItem<'a>;
-
-            fn with_capacity(size: usize) -> Self {
-                Self::with_capacity(size)
-            }
-
-            fn merge_capacity(cont1: &Self, cont2: &Self) -> Self {
-                Self::merge_capacity([cont1, cont2].into_iter())
-            }
-
-            fn reborrow<'b, 'a: 'b>(item: Self::ReadItem<'a>) -> Self::ReadItem<'b> {
-                R::reborrow(item)
-            }
-
-            fn index(&self, index: usize) -> Self::ReadItem<'_> {
-                self.get(index)
-            }
-
-            fn len(&self) -> usize {
-                self.len()
-            }
         }
     }
 

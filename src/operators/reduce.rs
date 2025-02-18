@@ -8,7 +8,7 @@
 use timely::Container;
 use timely::container::PushInto;
 use crate::hashable::Hashable;
-use crate::{Data, ExchangeData, Collection};
+use crate::{Data, ExchangeData, Collection, IntoOwned};
 use crate::difference::{Semigroup, Abelian};
 
 use timely::order::PartialOrder;
@@ -18,8 +18,6 @@ use timely::dataflow::*;
 use timely::dataflow::operators::Operator;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Capability;
-
-use crate::trace::cursor::IntoOwned;
 
 use crate::operators::arrange::{Arranged, ArrangeByKey, ArrangeBySelf, TraceAgent};
 use crate::lattice::Lattice;
@@ -482,7 +480,6 @@ where
                         while batch_cursor.key_valid(batch_storage) || exposed_position < exposed.len() {
 
                             use std::borrow::Borrow;
-                            use crate::trace::cursor::IntoOwned;
 
                             // Determine the next key we will work on; could be synthetic, could be from a batch.
                             let key1 = exposed.get(exposed_position).map(|x| <_ as IntoOwned>::borrow_as(&x.0));
@@ -669,13 +666,13 @@ where
 /// Implementation based on replaying historical and new updates together.
 mod history_replay {
 
+    use timely::progress::Antichain;
+    use timely::PartialOrder;
+
     use crate::lattice::Lattice;
     use crate::trace::Cursor;
-    use crate::trace::cursor::IntoOwned;
     use crate::operators::ValueHistory;
-    use timely::progress::Antichain;
-
-    use timely::PartialOrder;
+    use crate::IntoOwned;
 
     use super::{PerKeyCompute, sort_dedup};
 

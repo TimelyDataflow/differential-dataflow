@@ -149,7 +149,7 @@ impl<C: Cursor> Cursor for CursorFrontier<C, C::Time> {
         let until = self.until.borrow();
         let mut temp: C::Time = <C::Time as timely::progress::Timestamp>::minimum();
         self.cursor.map_times(storage, |time, diff| {
-            use crate::trace::cursor::IntoOwned;
+            use crate::IntoOwned;
             time.clone_onto(&mut temp);
             temp.advance_by(since);
             if !until.less_equal(&temp) {
@@ -212,7 +212,7 @@ where
         let until = self.until.borrow();
         let mut temp: C::Time = <C::Time as timely::progress::Timestamp>::minimum();
         self.cursor.map_times(&storage.batch, |time, diff| {
-            use crate::trace::cursor::IntoOwned;
+            use crate::IntoOwned;
             time.clone_onto(&mut temp);
             temp.advance_by(since);
             if !until.less_equal(&temp) {

@@ -294,7 +294,7 @@ pub mod container {
             (self.len(), size, capacity, allocations)
         }
     }
-    
+
     /// A merger for arbitrary containers.
     ///
     /// `MC` is a [`Container`] that implements [`MergerChunk`].
@@ -494,16 +494,16 @@ pub mod container {
                 <Self as From<_>>::from(list)
             }
         }
-    
+
         impl<D: Ord + 'static, T: Ord + timely::PartialOrder + Clone + 'static, R: Semigroup + 'static> MergerChunk for Vec<(D, T, R)> {
             type TimeOwned = T;
             type DiffOwned = ();
-            
+
             fn time_kept((_, time, _): &Self::Item<'_>, upper: &AntichainRef<Self::TimeOwned>, frontier: &mut Antichain<Self::TimeOwned>) -> bool {
                 if upper.less_equal(time) {
                     frontier.insert_with(&time, |time| time.clone());
                     true
-                } 
+                }
                 else { false }
             }
             fn push_and_add<'a>(&mut self, item1: Self::Item<'a>, item2: Self::Item<'a>, _stash: &mut Self::DiffOwned) {
@@ -526,9 +526,11 @@ pub mod container {
     pub mod columnation {
 
         use timely::progress::{Antichain, frontier::AntichainRef};
-        use timely::container::columnation::TimelyStack;
-        use timely::container::columnation::Columnation;
+        use columnation::Columnation;
+
+        use crate::containers::TimelyStack;
         use crate::difference::Semigroup;
+
         use super::{ContainerQueue, MergerChunk};
 
         /// A `Merger` implementation backed by `TimelyStack` containers (columnation).
@@ -567,21 +569,21 @@ pub mod container {
                 self.head += 1;
                 &self.list[self.head - 1]
             }
-        
+
             fn peek(&self) -> &T {
                 &self.list[self.head]
             }
         }
-        
+
         impl<D: Ord + Columnation + 'static, T: Ord + timely::PartialOrder + Clone + Columnation + 'static, R: Default + Semigroup + Columnation + 'static> MergerChunk for TimelyStack<(D, T, R)> {
             type TimeOwned = T;
             type DiffOwned = R;
-            
+
             fn time_kept((_, time, _): &Self::Item<'_>, upper: &AntichainRef<Self::TimeOwned>, frontier: &mut Antichain<Self::TimeOwned>) -> bool {
                 if upper.less_equal(time) {
                     frontier.insert_with(&time, |time| time.clone());
                     true
-                } 
+                }
                 else { false }
             }
             fn push_and_add<'a>(&mut self, item1: Self::Item<'a>, item2: Self::Item<'a>, stash: &mut Self::DiffOwned) {
@@ -592,97 +594,6 @@ pub mod container {
                 if !stash.is_zero() {
                     self.copy_destructured(data, time, stash);
                 }
-            }
-            fn account(&self) -> (usize, usize, usize, usize) {
-                let (mut size, mut capacity, mut allocations) = (0, 0, 0);
-                let cb = |siz, cap| {
-                    size += siz;
-                    capacity += cap;
-                    allocations += 1;
-                };
-                self.heap_size(cb);
-                (self.len(), size, capacity, allocations)
-            }
-        }
-    }
-
-    pub use flat_container::FlatMerger;
-    /// Implementations of `ContainerQueue` and `MergerChunk` for `FlatStack` containers (flat_container).
-    ///
-    /// This is currently non-functional, while we try and sort out some missing constraints that seem to
-    /// allow the direct implementation to work, but the corresponding implementation here to not compile.
-    pub mod flat_container {
-
-        use timely::progress::{Antichain, frontier::AntichainRef};
-        use timely::container::flatcontainer::{FlatStack, Region};
-        use timely::container::flatcontainer::impls::tuple::TupleABCRegion;
-        use timely::container::flatcontainer::Push;
-        use crate::difference::{IsZero, Semigroup};
-        use super::{ContainerQueue, MergerChunk};
-
-        /// A `Merger` implementation backed by `FlatStack` containers (flat_container).
-        pub type FlatMerger<K, V, T, R> = super::ContainerMerger<FlatStack<((K,V),T,R)>,FlatStackQueue<((K,V), T, R)>>;
-
-        /// A queue implementation over a flat stack.
-        pub struct FlatStackQueue<R: Region> {
-            list: FlatStack<R>,
-            head: usize,
-        }
-
-        impl<R: Region> ContainerQueue<FlatStack<R>> for FlatStackQueue<R> 
-        where
-            for<'a> R::ReadItem<'a>: Ord,
-        {
-            fn next_or_alloc(&mut self) -> Result<R::ReadItem<'_>, FlatStack<R>> {
-                if self.is_empty() {
-                    Err(std::mem::take(&mut self.list))
-                }
-                else {
-                    Ok(self.pop())
-                }
-            }
-            fn is_empty(&self) -> bool {
-                self.head >= self.list.len()
-            }
-            fn cmp_heads(&self, other: &Self) -> std::cmp::Ordering {
-                self.peek().cmp(&other.peek())
-            }
-            fn from(list: FlatStack<R>) -> Self {
-                FlatStackQueue { list, head: 0 }
-            }
-        }
-        
-        impl<R: Region> FlatStackQueue<R> {
-
-            fn pop(&mut self) -> R::ReadItem<'_> {
-                self.head += 1;
-                self.list.get(self.head - 1)
-            }
-
-            fn peek(&self) -> R::ReadItem<'_> {
-                self.list.get(self.head)
-            }
-        }
-
-        impl<D,T,R> MergerChunk for FlatStack<TupleABCRegion<D, T, R>>
-        where
-            D: Region,
-            for<'a> D::ReadItem<'a>: Ord,
-            T: Region,
-            for<'a> T::ReadItem<'a>: Ord,
-            R: Region,
-            R::Owned: Default + IsZero + for<'a> Semigroup<R::ReadItem<'a>>,
-            TupleABCRegion<D, T, R>: for<'a,'b> Push<(D::ReadItem<'a>, T::ReadItem<'a>, &'b R::Owned)>,
-        {
-            type TimeOwned = T::Owned;
-            type DiffOwned = R::Owned;
-
-            fn time_kept(_time: &Self::Item<'_>, _upper: &AntichainRef<Self::TimeOwned>, _frontier: &mut Antichain<Self::TimeOwned>) -> bool {
-                unimplemented!()
-            }
-            fn push_and_add<'a>(&mut self, _item1: <TupleABCRegion<D, T, R> as Region>::ReadItem<'a>, _item2: Self::Item<'a>, _stash: &mut Self::DiffOwned) {
-                // let (_, _, _) = _item1;
-                unimplemented!()
             }
             fn account(&self) -> (usize, usize, usize, usize) {
                 let (mut size, mut capacity, mut allocations) = (0, 0, 0);

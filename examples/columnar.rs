@@ -348,7 +348,7 @@ mod builder {
 
 use differential_dataflow::trace::implementations::merge_batcher::MergeBatcher;
 use differential_dataflow::trace::implementations::merge_batcher::ColMerger;
-use timely::container::columnation::TimelyStack;
+use differential_dataflow::containers::TimelyStack;
 
 /// A batcher for columnar storage.
 pub type Col2ValBatcher<K, V, T, R> = MergeBatcher<Column<((K,V),T,R)>, batcher::Chunker<TimelyStack<((K,V),T,R)>>, ColMerger<(K,V),T,R>>;

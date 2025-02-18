@@ -14,11 +14,8 @@ use std::cmp::Ordering;
 use std::collections::VecDeque;
 use timely::Container;
 use timely::container::{ContainerBuilder, PushInto};
-use timely::container::flatcontainer::{FlatStack, Push, Region};
-use timely::container::flatcontainer::impls::tuple::{TupleABCRegion, TupleABRegion};
-use crate::Data;
+use crate::{IntoOwned, Data};
 use crate::difference::{IsZero, Semigroup};
-use crate::trace::cursor::IntoOwned;
 
 /// Sorts and consolidates `vec`.
 ///
@@ -320,36 +317,6 @@ where
         std::mem::swap(self, target);
     }
 }
-
-impl<K, V, T, R> ConsolidateLayout for FlatStack<TupleABCRegion<TupleABRegion<K, V>, T, R>>
-where
-    for<'a> K: Region + Push<<K as Region>::ReadItem<'a>> + Clone + 'static,
-    for<'a> K::ReadItem<'a>: Ord + Copy,
-    for<'a> V: Region + Push<<V as Region>::ReadItem<'a>> + Clone + 'static,
-    for<'a> V::ReadItem<'a>: Ord + Copy,
-    for<'a> T: Region + Push<<T as Region>::ReadItem<'a>> + Clone + 'static,
-    for<'a> T::ReadItem<'a>: Ord + Copy,
-    R: Region + Push<<R as Region>::Owned> + Clone + 'static,
-    for<'a> R::Owned: Semigroup<R::ReadItem<'a>>,
-{
-    type Key<'a> = (K::ReadItem<'a>, V::ReadItem<'a>, T::ReadItem<'a>) where Self: 'a;
-    type Diff<'a> = R::ReadItem<'a> where Self: 'a;
-    type DiffOwned = R::Owned;
-
-    fn into_parts(((key, val), time, diff): Self::Item<'_>) -> (Self::Key<'_>, Self::Diff<'_>) {
-        ((key, val, time), diff)
-    }
-
-    fn cmp<'a>(((key1, val1), time1, _diff1): &Self::Item<'_>, ((key2, val2), time2, _diff2): &Self::Item<'_>) -> Ordering {
-        (K::reborrow(*key1), V::reborrow(*val1), T::reborrow(*time1)).cmp(&(K::reborrow(*key2), V::reborrow(*val2), T::reborrow(*time2)))
-    }
-
-    fn push_with_diff(&mut self, (key, value, time): Self::Key<'_>, diff: Self::DiffOwned) {
-        self.copy(((key, value), time, diff));
-    }
-}
-
-
 
 #[cfg(test)]
 mod tests {

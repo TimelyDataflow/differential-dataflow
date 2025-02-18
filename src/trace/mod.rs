@@ -16,10 +16,9 @@ use timely::progress::{Antichain, frontier::AntichainRef};
 use timely::progress::Timestamp;
 
 use crate::logging::Logger;
-use crate::trace::cursor::IntoOwned;
 use crate::difference::Semigroup;
+use crate::IntoOwned;
 use crate::lattice::Lattice;
-// use ::difference::Semigroup;
 pub use self::cursor::Cursor;
 pub use self::description::Description;
 

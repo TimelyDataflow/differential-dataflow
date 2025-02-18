@@ -8,9 +8,7 @@
 
 use timely::dataflow::Scope;
 
-use crate::trace::cursor::IntoOwned;
-
-use crate::{Collection, ExchangeData, Hashable};
+use crate::{IntoOwned, Collection, ExchangeData, Hashable};
 use crate::consolidation::ConsolidatingContainerBuilder;
 use crate::difference::Semigroup;
 
