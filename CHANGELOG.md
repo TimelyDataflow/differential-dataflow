@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.0](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dataflow-v0.13.6...differential-dataflow-v0.14.0) - 2025-02-19
+
+### Other
+
+- Probe-with does not require mutable reference ([#577](https://github.com/TimelyDataflow/differential-dataflow/pull/577))
+- Remove flatcontainer, absorb TimelyStack ([#570](https://github.com/TimelyDataflow/differential-dataflow/pull/570))
+- Container-aware Collection::leave_region ([#571](https://github.com/TimelyDataflow/differential-dataflow/pull/571))
+- Correct crate name in mdbook ([#573](https://github.com/TimelyDataflow/differential-dataflow/pull/573))
+
 ## [0.13.6](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dataflow-v0.13.5...differential-dataflow-v0.13.6) - 2025-02-12
 
 ### Other
