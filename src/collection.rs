@@ -165,7 +165,7 @@ impl<G: Scope, D, R, C: Container + Clone + 'static> Collection<G, D, R, C> {
     /// In addition, a probe is also often use to limit the number of rounds of input in flight at any moment; a
     /// computation can wait until the probe has caught up to the input before introducing more rounds of data, to
     /// avoid swamping the system.
-    pub fn probe_with(&self, handle: &mut probe::Handle<G::Timestamp>) -> Self {
+    pub fn probe_with(&self, handle: &probe::Handle<G::Timestamp>) -> Self {
         Self::new(self.inner.probe_with(handle))
     }
     /// The scope containing the underlying timely dataflow stream.
