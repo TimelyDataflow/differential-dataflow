@@ -8,7 +8,6 @@ publish = false
 [dependencies]
 core_affinity = "0.5.9"
 rand="0.3.13"
-#timely = "0.7"
 timely = { workspace = true }
 differential-dataflow = { path = "../differential-dataflow" }
 graph_map = { git = "https://github.com/frankmcsherry/graph-map" }
