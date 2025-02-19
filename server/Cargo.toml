@@ -5,12 +5,10 @@ authors = ["Frank McSherry <fmcsherry@me.com>"]
 edition = "2021"
 publish = false
 
-[dependencies.differential-dataflow]
-path="../"
-
 [dependencies]
 rand="0.3.13"
 libloading="*"
+differential-dataflow = { path = "../differential-dataflow" }
 timely = { workspace = true }
 
 #[workspace]

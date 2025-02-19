@@ -8,7 +8,6 @@ publish = false
 [dependencies]
 bincode = "1"
 serde = { version = "1", features = ["derive"]}
-differential-dataflow = { path = "../" }
+differential-dataflow = { path = "../differential-dataflow" }
 differential-dogs3 = { path = "../dogsdogsdogs" }
 timely = { workspace = true }
-#timely = { path = "../../timely-dataflow/timely", features = ["bincode"] }
