@@ -12,7 +12,7 @@ repository = "https://github.com/TimelyDataflow/differential-dataflow.git"
 
 [dependencies]
 timely = { workspace = true }
-differential-dataflow = { path = "../differential-dataflow", default-features = false, version = "0.13.6" }
+differential-dataflow = { workspace = true }
 serde = { version = "1.0", features = ["derive"]}
 
 [dev-dependencies]

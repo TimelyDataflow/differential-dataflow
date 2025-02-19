@@ -9,6 +9,6 @@ publish = false
 core_affinity = "0.5.9"
 rand="0.3.13"
 timely = { workspace = true }
-differential-dataflow = { path = "../differential-dataflow" }
+differential-dataflow = { workspace = true }
 graph_map = { git = "https://github.com/frankmcsherry/graph-map" }
 serde = { version = "1.0", features = ["derive"] }

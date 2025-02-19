@@ -5,5 +5,5 @@ authors = ["Frank McSherry <fmcsherry@me.com>"]
 publish = false
 
 [dependencies]
-differential-dataflow = { path = "../differential-dataflow" }
+differential-dataflow = { workspace = true }
 timely = { git = "https://github.com/frankmcsherry/timely-dataflow" }

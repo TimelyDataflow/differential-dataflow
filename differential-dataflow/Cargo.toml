@@ -12,7 +12,7 @@ homepage = "https://github.com/TimelyDataflow/differential-dataflow"
 repository = "https://github.com/TimelyDataflow/differential-dataflow.git"
 keywords = ["differential", "dataflow"]
 license = "MIT"
-readme = "README.md"
+readme = "../README.md"
 edition="2021"
 
 [dev-dependencies]
