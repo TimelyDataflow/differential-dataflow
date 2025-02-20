@@ -247,6 +247,14 @@ mod tuples {
     tuple_implementation!((A1 B1), (A2 B2));
     tuple_implementation!((A1 B1 C1), (A2 B2 C2));
     tuple_implementation!((A1 B1 C1 D1), (A2 B2 C2 D2));
+    tuple_implementation!((A1 B1 C1 D1 E1), (A2 B2 C2 D2 E2));
+    tuple_implementation!((A1 B1 C1 D1 E1 F1), (A2 B2 C2 D2 E2 F2));
+    tuple_implementation!((A1 B1 C1 D1 E1 F1 G1), (A2 B2 C2 D2 E2 F2 G2));
+    tuple_implementation!((A1 B1 C1 D1 E1 F1 G1 H1), (A2 B2 C2 D2 E2 F2 G2 H2));
+    tuple_implementation!((A1 B1 C1 D1 E1 F1 G1 H1 I1), (A2 B2 C2 D2 E2 F2 G2 H2 I2));
+    tuple_implementation!((A1 B1 C1 D1 E1 F1 G1 H1 I1 J1), (A2 B2 C2 D2 E2 F2 G2 H2 I2 J2));
+    tuple_implementation!((A1 B1 C1 D1 E1 F1 G1 H1 I1 J1 K1), (A2 B2 C2 D2 E2 F2 G2 H2 I2 J2 K2));
+    tuple_implementation!((A1 B1 C1 D1 E1 F1 G1 H1 I1 J1 K1 L1), (A2 B2 C2 D2 E2 F2 G2 H2 I2 J2 K2 L2));
 }
 
 // Vector implementations
