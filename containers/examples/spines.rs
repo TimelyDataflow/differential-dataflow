@@ -28,7 +28,7 @@ fn main() {
 
             match mode.as_str() {
                 "new" => {
-                    use differential_dataflow::trace::implementations::ord_neu::{ColKeyBatcher, ColKeyBuilder, ColKeySpine};
+                    use differential_containers::columnation::{ColKeyBatcher, ColKeyBuilder, ColKeySpine};
                     let data = data.arrange::<ColKeyBatcher<_,_,_>, ColKeyBuilder<_,_,_>, ColKeySpine<_,_,_>>();
                     let keys = keys.arrange::<ColKeyBatcher<_,_,_>, ColKeyBuilder<_,_,_>, ColKeySpine<_,_,_>>();
                     keys.join_core(&data, |_k, &(), &()| Option::<()>::None)
@@ -42,7 +42,7 @@ fn main() {
                         .probe_with(&mut probe);
                 },
                 "rhh" => {
-                    use differential_dataflow::trace::implementations::rhh::{HashWrapper, VecBatcher, VecBuilder, VecSpine};
+                    use differential_containers::rhh::{HashWrapper, VecBatcher, VecBuilder, VecSpine};
                     let data = data.map(|x| HashWrapper { inner: x }).arrange::<VecBatcher<_,(),_,_>, VecBuilder<_,(),_,_>, VecSpine<_,(),_,_>>();
                     let keys = keys.map(|x| HashWrapper { inner: x }).arrange::<VecBatcher<_,(),_,_>, VecBuilder<_,(),_,_>, VecSpine<_,(),_,_>>();
                     keys.join_core(&data, |_k, &(), &()| Option::<()>::None)
@@ -50,7 +50,7 @@ fn main() {
                 },
                 "slc" => {
 
-                    use differential_dataflow::trace::implementations::ord_neu::{PreferredBatcher, PreferredBuilder, PreferredSpine};
+                    use differential_containers::{PreferredBatcher, PreferredBuilder, PreferredSpine};
 
                     let data =
                     data.map(|x| (x.clone().into_bytes(), x.into_bytes()))
