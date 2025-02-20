@@ -1,17 +1,12 @@
 //! Wordcount based on `columnar`.
 
-use {
-    timely::container::{Container, CapacityContainerBuilder},
-    timely::dataflow::channels::pact::ExchangeCore,
-    timely::dataflow::InputHandleCore,
-    timely::dataflow::ProbeHandle,
-};
-
-
-use differential_dataflow::trace::implementations::ord_neu::ColKeyBuilder;
-use differential_dataflow::trace::implementations::ord_neu::ColKeySpine;
-
+use differential_containers::columnation::{ColKeyBuilder, ColKeySpine, ColMerger, TimelyStack};
 use differential_dataflow::operators::arrange::arrangement::arrange_core;
+use differential_dataflow::trace::implementations::merge_batcher::MergeBatcher;
+use timely::container::{Container, CapacityContainerBuilder};
+use timely::dataflow::InputHandleCore;
+use timely::dataflow::ProbeHandle;
+use timely::dataflow::channels::pact::ExchangeCore;
 
 fn main() {
 
@@ -345,10 +340,6 @@ mod builder {
     impl<C: Columnar> LengthPreservingContainerBuilder for ColumnBuilder<C> where C::Container: Clone { }
 }
 
-
-use differential_dataflow::trace::implementations::merge_batcher::MergeBatcher;
-use differential_dataflow::trace::implementations::merge_batcher::ColMerger;
-use differential_dataflow::containers::TimelyStack;
 
 /// A batcher for columnar storage.
 pub type Col2ValBatcher<K, V, T, R> = MergeBatcher<Column<((K,V),T,R)>, batcher::Chunker<TimelyStack<((K,V),T,R)>>, ColMerger<(K,V),T,R>>;

@@ -42,8 +42,6 @@ pub mod spine_fueled;
 
 pub mod merge_batcher;
 pub mod ord_neu;
-pub mod rhh;
-pub mod huffman_container;
 pub mod chunker;
 
 // Opinionated takes on default spines.
@@ -57,13 +55,11 @@ pub use self::ord_neu::RcOrdKeyBuilder as KeyBuilder;
 use std::borrow::{ToOwned};
 use std::convert::TryInto;
 
-use columnation::Columnation;
 use serde::{Deserialize, Serialize};
 use timely::Container;
 use timely::container::PushInto;
 use timely::progress::Timestamp;
 
-use crate::containers::TimelyStack;
 use crate::lattice::Lattice;
 use crate::difference::Semigroup;
 
@@ -126,26 +122,6 @@ where
     type OffsetContainer = OffsetList;
 }
 
-/// A layout based on timely stacks
-pub struct TStack<U: Update> {
-    phantom: std::marker::PhantomData<U>,
-}
-
-impl<U: Update> Layout for TStack<U>
-where
-    U::Key: Columnation,
-    U::Val: Columnation,
-    U::Time: Columnation,
-    U::Diff: Columnation + Ord,
-{
-    type Target = U;
-    type KeyContainer = TimelyStack<U::Key>;
-    type ValContainer = TimelyStack<U::Val>;
-    type TimeContainer = TimelyStack<U::Time>;
-    type DiffContainer = TimelyStack<U::Diff>;
-    type OffsetContainer = OffsetList;
-}
-
 /// A type with a preferred container.
 ///
 /// Examples include types that implement `Clone` who prefer
@@ -160,43 +136,6 @@ impl<T: Ord + Clone + 'static> PreferredContainer for T {
 
 impl<T: Ord + Clone + 'static> PreferredContainer for [T] {
     type Container = SliceContainer<T>;
-}
-
-/// An update and layout description based on preferred containers.
-pub struct Preferred<K: ?Sized, V: ?Sized, T, D> {
-    phantom: std::marker::PhantomData<(Box<K>, Box<V>, T, D)>,
-}
-
-impl<K,V,T,R> Update for Preferred<K, V, T, R>
-where
-    K: ToOwned + ?Sized,
-    K::Owned: Ord+Clone+'static,
-    V: ToOwned + ?Sized,
-    V::Owned: Ord+Clone+'static,
-    T: Ord+Clone+Lattice+timely::progress::Timestamp,
-    R: Ord+Clone+Semigroup+'static,
-{
-    type Key = K::Owned;
-    type Val = V::Owned;
-    type Time = T;
-    type Diff = R;
-}
-
-impl<K, V, T, D> Layout for Preferred<K, V, T, D>
-where
-    K: Ord+ToOwned+PreferredContainer + ?Sized,
-    K::Owned: Ord+Clone+'static,
-    V: Ord+ToOwned+PreferredContainer + ?Sized,
-    V::Owned: Ord+Clone+'static,
-    T: Ord+Clone+Lattice+timely::progress::Timestamp,
-    D: Ord+Clone+Semigroup+'static,
-{
-    type Target = Preferred<K, V, T, D>;
-    type KeyContainer = K::Container;
-    type ValContainer = V::Container;
-    type TimeContainer = Vec<T>;
-    type DiffContainer = Vec<D>;
-    type OffsetContainer = OffsetList;
 }
 
 /// A list of unsigned integers that uses `u32` elements as long as they are small enough, and switches to `u64` once they are not.
@@ -396,69 +335,14 @@ where
     }
 }
 
-impl<K,V,T,R> BuilderInput<K, V> for TimelyStack<((K::Owned, V::Owned), T, R)>
-where
-    K: BatchContainer,
-    for<'a> K::ReadItem<'a>: PartialEq<&'a K::Owned>,
-    K::Owned: Ord + Columnation + Clone + 'static,
-    V: BatchContainer,
-    for<'a> V::ReadItem<'a>: PartialEq<&'a V::Owned>,
-    V::Owned: Ord + Columnation + Clone + 'static,
-    T: Timestamp + Lattice + Columnation + Clone + 'static,
-    R: Ord + Clone + Semigroup + Columnation + 'static,
-{
-    type Key<'a> = &'a K::Owned;
-    type Val<'a> = &'a V::Owned;
-    type Time = T;
-    type Diff = R;
-
-    fn into_parts<'a>(((key, val), time, diff): Self::Item<'a>) -> (Self::Key<'a>, Self::Val<'a>, Self::Time, Self::Diff) {
-        (key, val, time.clone(), diff.clone())
-    }
-
-    fn key_eq(this: &&K::Owned, other: K::ReadItem<'_>) -> bool {
-        K::reborrow(other) == *this
-    }
-
-    fn val_eq(this: &&V::Owned, other: V::ReadItem<'_>) -> bool {
-        V::reborrow(other) == *this
-    }
-
-    fn key_val_upd_counts(chain: &[Self]) -> (usize, usize, usize) {
-        let mut keys = 0;
-        let mut vals = 0;
-        let mut upds = 0;
-        let mut prev_keyval = None;
-        for link in chain.iter() {
-            for ((key, val), _, _) in link.iter() {
-                if let Some((p_key, p_val)) = prev_keyval {
-                    if p_key != key {
-                        keys += 1;
-                        vals += 1;
-                    } else if p_val != val {
-                        vals += 1;
-                    }
-                } else {
-                    keys += 1;
-                    vals += 1;
-                }
-                upds += 1;
-                prev_keyval = Some((key, val));
-            }
-        }
-        (keys, vals, upds)
-    }
-}
 
 pub use self::containers::{BatchContainer, SliceContainer};
 
 /// Containers for data that resemble `Vec<T>`, with leaner implementations.
 pub mod containers {
 
-    use columnation::Columnation;
     use timely::container::PushInto;
 
-    use crate::containers::TimelyStack;
     use crate::IntoOwned;
 
     /// A general-purpose container resembling `Vec<T>`.
@@ -570,30 +454,6 @@ pub mod containers {
         }
         fn get(&self, index: usize) -> Option<Self::ReadItem<'_>> {
             <[T]>::get(&self, index)
-        }
-        fn len(&self) -> usize {
-            self[..].len()
-        }
-    }
-
-    // The `ToOwned` requirement exists to satisfy `self.reserve_items`, who must for now
-    // be presented with the actual contained type, rather than a type that borrows into it.
-    impl<T: Clone + Ord + Columnation + 'static> BatchContainer for TimelyStack<T> {
-        type Owned = T;
-        type ReadItem<'a> = &'a T;
-
-        fn reborrow<'b, 'a: 'b>(item: Self::ReadItem<'a>) -> Self::ReadItem<'b> { item }
-
-        fn with_capacity(size: usize) -> Self {
-            Self::with_capacity(size)
-        }
-        fn merge_capacity(cont1: &Self, cont2: &Self) -> Self {
-            let mut new = Self::default();
-            new.reserve_regions(std::iter::once(cont1).chain(std::iter::once(cont2)));
-            new
-        }
-        fn index(&self, index: usize) -> Self::ReadItem<'_> {
-            &self[index]
         }
         fn len(&self) -> usize {
             self[..].len()
