@@ -1,8 +1,10 @@
 [workspace]
 members = [
-    "differential-dataflow",
     # "advent_of_code_2017",
+    "containers",
+    "differential-dataflow",
     "dogsdogsdogs",
+    "doop",
     "experiments",
     "interactive",
     "server",
@@ -10,12 +12,12 @@ members = [
     "server/dataflows/neighborhood",
     "server/dataflows/random_graph",
     "server/dataflows/reachability",
-    #"tpchlike",
-    "doop"
+    # "tpchlike",
 ]
 resolver = "2"
 
 [workspace.dependencies]
+columnar = { default-features = false, version = "0.3.0" }
 differential-dataflow = { path = "differential-dataflow", default-features = false, version = "0.13.6" }
 timely = { version = "0.18", default-features = false }
 #timely = { path = "../timely-dataflow/timely/", default-features = false }

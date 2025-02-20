@@ -227,7 +227,7 @@ pub trait Merger: Default {
     fn account(chunk: &Self::Chunk) -> (usize, usize, usize, usize);
 }
 
-pub use container::{VecMerger, ColMerger};
+pub use container::VecMerger;
 
 pub mod container {
 
@@ -516,93 +516,6 @@ pub mod container {
             }
             fn account(&self) -> (usize, usize, usize, usize) {
                 let (size, capacity, allocations) = (0, 0, 0);
-                (self.len(), size, capacity, allocations)
-            }
-        }
-    }
-
-    pub use columnation::ColMerger;
-    /// Implementations of `ContainerQueue` and `MergerChunk` for `TimelyStack` containers (columnation).
-    pub mod columnation {
-
-        use timely::progress::{Antichain, frontier::AntichainRef};
-        use columnation::Columnation;
-
-        use crate::containers::TimelyStack;
-        use crate::difference::Semigroup;
-
-        use super::{ContainerQueue, MergerChunk};
-
-        /// A `Merger` implementation backed by `TimelyStack` containers (columnation).
-        pub type ColMerger<D, T, R> = super::ContainerMerger<TimelyStack<(D,T,R)>,TimelyStackQueue<(D, T, R)>>;
-
-        /// TODO
-        pub struct TimelyStackQueue<T: Columnation> {
-            list: TimelyStack<T>,
-            head: usize,
-        }
-
-        impl<D: Ord + Columnation, T: Ord + Columnation, R: Columnation> ContainerQueue<TimelyStack<(D, T, R)>> for TimelyStackQueue<(D, T, R)> {
-            fn next_or_alloc(&mut self) -> Result<&(D, T, R), TimelyStack<(D, T, R)>> {
-                if self.is_empty() {
-                    Err(std::mem::take(&mut self.list))
-                }
-                else {
-                    Ok(self.pop())
-                }
-            }
-            fn is_empty(&self) -> bool {
-                self.head == self.list[..].len()
-            }
-            fn cmp_heads(&self, other: &Self) -> std::cmp::Ordering {
-                let (data1, time1, _) = self.peek();
-                let (data2, time2, _) = other.peek();
-                (data1, time1).cmp(&(data2, time2))
-            }
-            fn from(list: TimelyStack<(D, T, R)>) -> Self {
-                TimelyStackQueue { list, head: 0 }
-            }
-        }
-
-        impl<T: Columnation> TimelyStackQueue<T> {
-            fn pop(&mut self) -> &T {
-                self.head += 1;
-                &self.list[self.head - 1]
-            }
-
-            fn peek(&self) -> &T {
-                &self.list[self.head]
-            }
-        }
-
-        impl<D: Ord + Columnation + 'static, T: Ord + timely::PartialOrder + Clone + Columnation + 'static, R: Default + Semigroup + Columnation + 'static> MergerChunk for TimelyStack<(D, T, R)> {
-            type TimeOwned = T;
-            type DiffOwned = R;
-
-            fn time_kept((_, time, _): &Self::Item<'_>, upper: &AntichainRef<Self::TimeOwned>, frontier: &mut Antichain<Self::TimeOwned>) -> bool {
-                if upper.less_equal(time) {
-                    frontier.insert_with(&time, |time| time.clone());
-                    true
-                }
-                else { false }
-            }
-            fn push_and_add<'a>(&mut self, item1: Self::Item<'a>, item2: Self::Item<'a>, stash: &mut Self::DiffOwned) {
-                let (data, time, diff1) = item1;
-                let (_data, _time, diff2) = item2;
-                stash.clone_from(diff1);
-                stash.plus_equals(&diff2);
-                if !stash.is_zero() {
-                    self.copy_destructured(data, time, stash);
-                }
-            }
-            fn account(&self) -> (usize, usize, usize, usize) {
-                let (mut size, mut capacity, mut allocations) = (0, 0, 0);
-                let cb = |siz, cap| {
-                    size += siz;
-                    capacity += cap;
-                    allocations += 1;
-                };
-                self.heap_size(cb);
                 (self.len(), size, capacity, allocations)
             }
         }
