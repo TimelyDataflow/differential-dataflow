@@ -5,18 +5,7 @@ authors = ["Frank McSherry <fmcsherry@me.com>"]
 edition = "2021"
 publish = false
 
-[dependencies.differential-dataflow]
-path="../"
-
 [dependencies]
-rand="0.3.13"
-libloading="*"
+libloading = "0.8"
+differential-dataflow = { workspace = true }
 timely = { workspace = true }
-
-#[workspace]
-#members = [
-#    "dataflows/random_graph",
-#    "dataflows/degr_dist",
-#    "dataflows/neighborhood",
-#    "dataflows/reachability"
-#]

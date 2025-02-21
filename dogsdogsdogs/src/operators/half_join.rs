@@ -206,16 +206,16 @@ where
                         for &mut ((ref key, ref val1, ref time), ref initial, ref mut diff1) in proposals.iter_mut() {
                             // Use TOTAL ORDER to allow the release of `time`.
                             yielded = yielded || yield_function(timer, work);
-                            if !yielded && !input2.frontier.frontier().iter().any(|t| comparison(<Tr::TimeGat<'_> as IntoOwned>::borrow_as(t), initial)) {
+                            if !yielded && !input2.frontier.frontier().iter().any(|t| comparison(Tr::borrow_time_as(t), initial)) {
                                 use differential_dataflow::trace::cursor::IntoOwned;
                                 cursor.seek_key(&storage, IntoOwned::borrow_as(key));
                                 if cursor.get_key(&storage) == Some(IntoOwned::borrow_as(key)) {
                                     while let Some(val2) = cursor.get_val(&storage) {
                                         cursor.map_times(&storage, |t, d| {
                                             if comparison(t, initial) {
-                                                let mut t = t.into_owned();
+                                                let mut t = Tr::owned_time(t);
                                                 t.join_assign(time);
-                                                output_buffer.push((t, d.into_owned()))
+                                                output_buffer.push((t, Tr::owned_diff(d)))
                                             }
                                         });
                                         consolidate(&mut output_buffer);
