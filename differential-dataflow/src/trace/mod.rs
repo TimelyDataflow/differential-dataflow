@@ -17,7 +17,6 @@ use timely::progress::Timestamp;
 
 use crate::logging::Logger;
 use crate::difference::Semigroup;
-use crate::IntoOwned;
 use crate::lattice::Lattice;
 pub use self::cursor::Cursor;
 pub use self::description::Description;
@@ -54,11 +53,24 @@ pub trait TraceReader {
     /// Timestamps associated with updates
     type Time: Timestamp + Lattice + Ord + Clone;
     /// Borrowed form of timestamp.
-    type TimeGat<'a>: Copy + IntoOwned<'a, Owned = Self::Time>;
+    type TimeGat<'a>: Copy;
     /// Owned form of update difference.
     type Diff: Semigroup + 'static;
     /// Borrowed form of update difference.
-    type DiffGat<'a> : Copy + IntoOwned<'a, Owned = Self::Diff>;
+    type DiffGat<'a> : Copy;
+
+    /// TODO
+    fn owned_time(time: Self::TimeGat<'_>) -> Self::Time;
+    /// TODO
+    fn owned_diff(time: Self::DiffGat<'_>) -> Self::Diff;
+    /// TODO
+    fn owned_time_onto(time: Self::TimeGat<'_>, target: &mut Self::Time);
+    /// TODO
+    fn owned_diff_onto(time: Self::DiffGat<'_>, target: &mut Self::Diff);
+    /// TODO
+    fn borrow_time_as(time: &Self::Time) -> Self::TimeGat<'_>;
+    /// TODO
+    fn borrow_diff_as(diff: &Self::Diff) -> Self::DiffGat<'_>;
 
     /// The type of an immutable collection of updates.
     type Batch: for<'a> BatchReader<Key<'a> = Self::Key<'a>, Val<'a> = Self::Val<'a>, Time = Self::Time, TimeGat<'a> = Self::TimeGat<'a>, Diff = Self::Diff, DiffGat<'a> = Self::DiffGat<'a>>+Clone+'static;
@@ -257,11 +269,11 @@ where
     /// Timestamps associated with updates
     type Time: Timestamp + Lattice + Ord + Clone;
     /// Borrowed form of timestamp.
-    type TimeGat<'a>: Copy + IntoOwned<'a, Owned = Self::Time>;
+    type TimeGat<'a>: Copy;
     /// Owned form of update difference.
     type Diff: Semigroup + 'static;
     /// Borrowed form of update difference.
-    type DiffGat<'a> : Copy + IntoOwned<'a, Owned = Self::Diff>;
+    type DiffGat<'a> : Copy;
 
     /// The type used to enumerate the batch's contents.
     type Cursor: for<'a> Cursor<Storage=Self, Key<'a> = Self::Key<'a>, Val<'a> = Self::Val<'a>, Time = Self::Time, TimeGat<'a> = Self::TimeGat<'a>, Diff = Self::Diff, DiffGat<'a> = Self::DiffGat<'a>>;
@@ -278,6 +290,19 @@ where
     fn lower(&self) -> &Antichain<Self::Time> { self.description().lower() }
     /// All times in the batch are not greater or equal to any element of `upper`.
     fn upper(&self) -> &Antichain<Self::Time> { self.description().upper() }
+
+    /// TODO
+    fn owned_time(time: Self::TimeGat<'_>) -> Self::Time;
+    /// TODO
+    fn owned_diff(time: Self::DiffGat<'_>) -> Self::Diff;
+    /// TODO
+    fn owned_time_onto(time: Self::TimeGat<'_>, target: &mut Self::Time);
+    /// TODO
+    fn owned_diff_onto(time: Self::DiffGat<'_>, target: &mut Self::Diff);
+    /// TODO
+    fn borrow_time_as(time: &Self::Time) -> Self::TimeGat<'_>;
+    /// TODO
+    fn borrow_diff_as(diff: &Self::Diff) -> Self::DiffGat<'_>;
 }
 
 /// An immutable collection of updates.
@@ -395,6 +420,13 @@ pub mod rc_blanket_impls {
         fn len(&self) -> usize { (**self).len() }
         /// Describes the times of the updates in the batch.
         fn description(&self) -> &Description<Self::Time> { (**self).description() }
+
+        #[inline] fn owned_time(time: Self::TimeGat<'_>) -> Self::Time { B::owned_time(time) }
+        #[inline] fn owned_diff(time: Self::DiffGat<'_>) -> Self::Diff { B::owned_diff(time) }
+        #[inline] fn owned_time_onto(time: Self::TimeGat<'_>, target: &mut Self::Time) { B::owned_time_onto(time, target) }
+        #[inline] fn owned_diff_onto(diff: Self::DiffGat<'_>, target: &mut Self::Diff) { B::owned_diff_onto(diff, target) }
+        #[inline] fn borrow_time_as(time: &Self::Time) -> Self::TimeGat<'_> { B::borrow_time_as(time) }
+        #[inline] fn borrow_diff_as(diff: &Self::Diff) -> Self::DiffGat<'_> { B::borrow_diff_as(diff) }
     }
 
     /// Wrapper to provide cursor to nested scope.
@@ -421,6 +453,13 @@ pub mod rc_blanket_impls {
 
         type Storage = Rc<C::Storage>;
 
+        #[inline] fn owned_time(time: Self::TimeGat<'_>) -> Self::Time { C::owned_time(time) }
+        #[inline] fn owned_diff(time: Self::DiffGat<'_>) -> Self::Diff { C::owned_diff(time) }
+        #[inline] fn owned_time_onto(time: Self::TimeGat<'_>, target: &mut Self::Time) { C::owned_time_onto(time, target) }
+        #[inline] fn owned_diff_onto(diff: Self::DiffGat<'_>, target: &mut Self::Diff) { C::owned_diff_onto(diff, target) }
+        #[inline] fn borrow_time_as(time: &Self::Time) -> Self::TimeGat<'_> { C::borrow_time_as(time) }
+        #[inline] fn borrow_diff_as(diff: &Self::Diff) -> Self::DiffGat<'_> { C::borrow_diff_as(diff) }
+
         #[inline] fn key_valid(&self, storage: &Self::Storage) -> bool { self.cursor.key_valid(storage) }
         #[inline] fn val_valid(&self, storage: &Self::Storage) -> bool { self.cursor.val_valid(storage) }
 
@@ -433,10 +472,10 @@ pub mod rc_blanket_impls {
         }
 
         #[inline] fn step_key(&mut self, storage: &Self::Storage) { self.cursor.step_key(storage) }
-        #[inline] fn seek_key(&mut self, storage: &Self::Storage, key: Self::Key<'_>) { self.cursor.seek_key(storage, key) }
+        #[inline] fn seek_key<'a>(&mut self, storage: &'a Self::Storage, key: Self::Key<'a>) { self.cursor.seek_key(storage, key) }
 
         #[inline] fn step_val(&mut self, storage: &Self::Storage) { self.cursor.step_val(storage) }
-        #[inline] fn seek_val(&mut self, storage: &Self::Storage, val: Self::Val<'_>) { self.cursor.seek_val(storage, val) }
+        #[inline] fn seek_val<'a>(&mut self, storage: &'a Self::Storage, val: Self::Val<'a>) { self.cursor.seek_val(storage, val) }
 
         #[inline] fn rewind_keys(&mut self, storage: &Self::Storage) { self.cursor.rewind_keys(storage) }
         #[inline] fn rewind_vals(&mut self, storage: &Self::Storage) { self.cursor.rewind_vals(storage) }

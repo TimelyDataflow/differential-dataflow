@@ -251,7 +251,7 @@ where
                                         // Determine the prior value associated with the key.
                                         while let Some(val) = trace_cursor.get_val(&trace_storage) {
                                             let mut count = 0;
-                                            trace_cursor.map_times(&trace_storage, |_time, diff| count += diff.into_owned());
+                                            trace_cursor.map_times(&trace_storage, |_time, diff| count += Tr::owned_diff(diff));
                                             assert!(count == 0 || count == 1);
                                             if count == 1 {
                                                 assert!(prev_value.is_none());

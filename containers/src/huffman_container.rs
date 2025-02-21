@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use timely::container::PushInto;
 
 use differential_dataflow::trace::implementations::{BatchContainer, OffsetList};
-
+use differential_dataflow::trace::implementations::containers::BatchIndex;
 use self::wrapper::Wrapped;
 use self::encoded::Encoded;
 use self::huffman::Huffman;
@@ -82,10 +82,8 @@ impl<'a, B: Ord + Clone + 'static> PushInto<Wrapped<'a, B>> for HuffmanContainer
 }
 
 impl<B: Ord + Clone + 'static> BatchContainer for HuffmanContainer<B> {
-    type Owned = Vec<B>;
-    type ReadItem<'a> = Wrapped<'a, B>;
-
-    fn reborrow<'b, 'a: 'b>(item: Self::ReadItem<'a>) -> Self::ReadItem<'b> { item }
+    type Borrowed<'a> = &'a HuffmanContainer<B>;
+    #[inline] fn borrow(&self) -> Self::Borrowed<'_> { self }
 
     fn with_capacity(size: usize) -> Self {
         let mut offsets = OffsetList::with_capacity(size + 1);
@@ -123,7 +121,37 @@ impl<B: Ord + Clone + 'static> BatchContainer for HuffmanContainer<B> {
             stats: Default::default(),
         }
     }
-    fn index(&self, index: usize) -> Self::ReadItem<'_> {
+    fn len(&self) -> usize {
+        self.offsets.len() - 1
+    }
+    fn borrow_as<'a>(owned: &'a <Self::Borrowed<'a> as BatchIndex>::Owned) -> <Self::Borrowed<'a> as BatchIndex>::Ref {
+        Wrapped::decoded(owned)
+    }
+}
+
+impl<'a, B: Ord + Clone + 'static> BatchIndex for &'a HuffmanContainer<B> {
+    type Owned = Vec<B>;
+    type Ref = Wrapped<'a, B>;
+
+    fn len(&self) -> usize { self.offsets.len() - 1 }
+
+    fn eq(this: Self::Ref, other: &Self::Owned) -> bool { this == Wrapped { inner: Err(&other[..]) } }
+
+    fn to_owned(this: Self::Ref) -> Self::Owned {
+        match this.decode() {
+            Ok(decode) => decode.cloned().collect(),
+            Err(bytes) => bytes.to_vec(),
+        }
+    }
+    fn clone_onto(this: Self::Ref, other: &mut Self::Owned) {
+        other.clear();
+        match this.decode() {
+            Ok(decode) => other.extend(decode.cloned()),
+            Err(bytes) => other.extend_from_slice(bytes),
+        }
+    }
+
+    fn index(&self, index: usize) -> Self::Ref {
         let lower = self.offsets.index(index);
         let upper = self.offsets.index(index+1);
         match &self.inner {
@@ -131,10 +159,8 @@ impl<B: Ord + Clone + 'static> BatchContainer for HuffmanContainer<B> {
             Err(raw) => Wrapped::decoded(&raw[lower .. upper]),
         }
     }
-    fn len(&self) -> usize {
-        self.offsets.len() - 1
-    }
 }
+
 /// Default implementation introduces a first offset.
 impl<B: Ord+Clone> Default for HuffmanContainer<B> {
     fn default() -> Self {
@@ -150,12 +176,10 @@ impl<B: Ord+Clone> Default for HuffmanContainer<B> {
 
 mod wrapper {
 
-    use differential_dataflow::IntoOwned;
-
     use super::Encoded;
 
     pub struct Wrapped<'a, B: Ord> {
-        inner: Result<Encoded<'a, B>, &'a [B]>,
+        pub(crate) inner: Result<Encoded<'a, B>, &'a [B]>,
     }
 
     impl<'a, B: Ord> Wrapped<'a, B> {
@@ -202,25 +226,6 @@ mod wrapper {
     impl<'a, B: Ord> Ord for Wrapped<'a, B> {
         fn cmp(&self, other: &Self) -> Ordering {
             self.partial_cmp(other).unwrap()
-        }
-    }
-    impl<'a, B: Ord+Clone> IntoOwned<'a> for Wrapped<'a, B> {
-        type Owned = Vec<B>;
-        fn into_owned(self) -> Self::Owned {
-            match self.decode() {
-                Ok(decode) => decode.cloned().collect(),
-                Err(bytes) => bytes.to_vec(),
-            }
-        }
-        fn clone_onto(self, other: &mut Self::Owned) {
-            other.clear();
-            match self.decode() {
-                Ok(decode) => other.extend(decode.cloned()),
-                Err(bytes) => other.extend_from_slice(bytes),
-            }
-        }
-        fn borrow_as(owned: &'a Self::Owned) -> Self {
-            Self { inner: Err(&owned[..]) }
         }
     }
 }

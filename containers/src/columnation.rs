@@ -4,6 +4,7 @@ use std::iter::FromIterator;
 use std::rc::Rc;
 
 use columnation::{Columnation, Region};
+use differential_dataflow::trace::implementations::containers::BatchIndex;
 use differential_dataflow::trace::implementations::merge_batcher::MergeBatcher;
 use differential_dataflow::trace::implementations::ord_neu::{OrdKeyBatch, OrdKeyBuilder, OrdValBatch, OrdValBuilder};
 use differential_dataflow::trace::implementations::spine_fueled::Spine;
@@ -56,9 +57,9 @@ pub type ColKeyBuilder<K, T, R> = RcBuilder<OrdKeyBuilder<TStack<((K,()),T,R)>, 
 // The `ToOwned` requirement exists to satisfy `self.reserve_items`, who must for now
 // be presented with the actual contained type, rather than a type that borrows into it.
 impl<T: Clone + Ord + Columnation + 'static> BatchContainer for TimelyStack<T> {
-    type Owned = T;
-    type ReadItem<'a> = &'a T;
+    type Borrowed<'a> = &'a TimelyStack<T>;
 
+    fn borrow(&self) -> Self::Borrowed<'_> { self }
     fn with_capacity(size: usize) -> Self {
         Self::with_capacity(size)
     }
@@ -68,13 +69,23 @@ impl<T: Clone + Ord + Columnation + 'static> BatchContainer for TimelyStack<T> {
         new.reserve_regions(std::iter::once(cont1).chain(std::iter::once(cont2)));
         new
     }
-    fn reborrow<'b, 'a: 'b>(item: Self::ReadItem<'a>) -> Self::ReadItem<'b> { item }
-    fn index(&self, index: usize) -> Self::ReadItem<'_> {
-        &self[index]
-    }
     fn len(&self) -> usize {
         self[..].len()
     }
+    fn borrow_as<'a>(owned: &'a <Self::Borrowed<'a> as BatchIndex>::Owned) -> <Self::Borrowed<'a> as BatchIndex>::Ref {
+        owned
+    }
+}
+
+impl<'a, T: Columnation + Eq + Ord + Clone> BatchIndex for &'a TimelyStack<T> {
+    type Owned = T;
+    type Ref = &'a T;
+
+    #[inline] fn len(&self) -> usize { self[..].len() }
+    #[inline] fn eq(this: Self::Ref, other: &Self::Owned) -> bool { this == other }
+    #[inline] fn to_owned(this: Self::Ref) -> Self::Owned { this.clone() }
+    #[inline] fn clone_onto(this: Self::Ref, other: &mut Self::Owned) { other.clone_from(this)}
+    #[inline] fn index(&self, index: usize) -> Self::Ref { &self[index] }
 }
 
 

@@ -90,6 +90,13 @@ impl<Tr: TraceReader> TraceReader for TraceRc<Tr> {
     type Storage = Tr::Storage;
     type Cursor = Tr::Cursor;
 
+    #[inline] fn owned_time(time: Self::TimeGat<'_>) -> Self::Time { Tr::owned_time(time) }
+    #[inline] fn owned_diff(time: Self::DiffGat<'_>) -> Self::Diff { Tr::owned_diff(time) }
+    #[inline] fn owned_time_onto(time: Self::TimeGat<'_>, target: &mut Self::Time) { Tr::owned_time_onto(time, target) }
+    #[inline] fn owned_diff_onto(diff: Self::DiffGat<'_>, target: &mut Self::Diff) { Tr::owned_diff_onto(diff, target) }
+    #[inline] fn borrow_time_as(time: &Self::Time) -> Self::TimeGat<'_> { Tr::borrow_time_as(time) }
+    #[inline] fn borrow_diff_as(diff: &Self::Diff) -> Self::DiffGat<'_> { Tr::borrow_diff_as(diff) }
+
     /// Sets frontier to now be elements in `frontier`.
     ///
     /// This change may not have immediately observable effects. It informs the shared trace that this

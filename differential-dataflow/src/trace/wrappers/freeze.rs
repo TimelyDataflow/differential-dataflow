@@ -26,7 +26,6 @@ use timely::progress::frontier::AntichainRef;
 use crate::operators::arrange::Arranged;
 use crate::trace::{TraceReader, BatchReader, Description};
 use crate::trace::cursor::Cursor;
-use crate::IntoOwned;
 
 /// Freezes updates to an arrangement using a supplied function.
 ///
@@ -86,6 +85,13 @@ where
     type Batch = BatchFreeze<Tr::Batch, F>;
     type Storage = Tr::Storage;
     type Cursor = CursorFreeze<Tr::Cursor, F>;
+
+    #[inline] fn owned_time(time: Self::TimeGat<'_>) -> Self::Time { Tr::owned_time(time) }
+    #[inline] fn owned_diff(time: Self::DiffGat<'_>) -> Self::Diff { Tr::owned_diff(time) }
+    #[inline] fn owned_time_onto(time: Self::TimeGat<'_>, target: &mut Self::Time) { Tr::owned_time_onto(time, target) }
+    #[inline] fn owned_diff_onto(diff: Self::DiffGat<'_>, target: &mut Self::Diff) { Tr::owned_diff_onto(diff, target) }
+    #[inline] fn borrow_time_as(time: &Self::Time) -> Self::TimeGat<'_> { Tr::borrow_time_as(time) }
+    #[inline] fn borrow_diff_as(diff: &Self::Diff) -> Self::DiffGat<'_> { Tr::borrow_diff_as(diff) }
 
     fn map_batches<F2: FnMut(&Self::Batch)>(&self, mut f: F2) {
         let func = &self.func;
@@ -154,6 +160,13 @@ where
     }
     fn len(&self) -> usize { self.batch.len() }
     fn description(&self) -> &Description<B::Time> { self.batch.description() }
+
+    #[inline] fn owned_time(time: Self::TimeGat<'_>) -> Self::Time { B::owned_time(time) }
+    #[inline] fn owned_diff(time: Self::DiffGat<'_>) -> Self::Diff { B::owned_diff(time) }
+    #[inline] fn owned_time_onto(time: Self::TimeGat<'_>, target: &mut Self::Time) { B::owned_time_onto(time, target) }
+    #[inline] fn owned_diff_onto(diff: Self::DiffGat<'_>, target: &mut Self::Diff) { B::owned_diff_onto(diff, target) }
+    #[inline] fn borrow_time_as(time: &Self::Time) -> Self::TimeGat<'_> { B::borrow_time_as(time) }
+    #[inline] fn borrow_diff_as(diff: &Self::Diff) -> Self::DiffGat<'_> { B::borrow_diff_as(diff) }
 }
 
 impl<B, F> BatchFreeze<B, F>
@@ -193,6 +206,13 @@ where
 
     type Storage = C::Storage;
 
+    #[inline] fn owned_time(time: Self::TimeGat<'_>) -> Self::Time { C::owned_time(time) }
+    #[inline] fn owned_diff(time: Self::DiffGat<'_>) -> Self::Diff { C::owned_diff(time) }
+    #[inline] fn owned_time_onto(time: Self::TimeGat<'_>, target: &mut Self::Time) { C::owned_time_onto(time, target) }
+    #[inline] fn owned_diff_onto(diff: Self::DiffGat<'_>, target: &mut Self::Diff) { C::owned_diff_onto(diff, target) }
+    #[inline] fn borrow_time_as(time: &Self::Time) -> Self::TimeGat<'_> { C::borrow_time_as(time) }
+    #[inline] fn borrow_diff_as(diff: &Self::Diff) -> Self::DiffGat<'_> { C::borrow_diff_as(diff) }
+
     #[inline] fn key_valid(&self, storage: &Self::Storage) -> bool { self.cursor.key_valid(storage) }
     #[inline] fn val_valid(&self, storage: &Self::Storage) -> bool { self.cursor.val_valid(storage) }
 
@@ -203,16 +223,16 @@ where
         let func = &self.func;
         self.cursor.map_times(storage, |time, diff| {
             if let Some(time) = func(time) {
-                logic(<Self::TimeGat<'_> as IntoOwned>::borrow_as(&time), diff);
+                logic(Self::borrow_time_as(&time), diff);
             }
         })
     }
 
     #[inline] fn step_key(&mut self, storage: &Self::Storage) { self.cursor.step_key(storage) }
-    #[inline] fn seek_key(&mut self, storage: &Self::Storage, key: Self::Key<'_>) { self.cursor.seek_key(storage, key) }
+    #[inline] fn seek_key<'a>(&mut self, storage: &'a Self::Storage, key: Self::Key<'a>) { self.cursor.seek_key(storage, key) }
 
     #[inline] fn step_val(&mut self, storage: &Self::Storage) { self.cursor.step_val(storage) }
-    #[inline] fn seek_val(&mut self, storage: &Self::Storage, val: Self::Val<'_>) { self.cursor.seek_val(storage, val) }
+    #[inline] fn seek_val<'a>(&mut self, storage: &'a Self::Storage, val: Self::Val<'a>) { self.cursor.seek_val(storage, val) }
 
     #[inline] fn rewind_keys(&mut self, storage: &Self::Storage) { self.cursor.rewind_keys(storage) }
     #[inline] fn rewind_vals(&mut self, storage: &Self::Storage) { self.cursor.rewind_vals(storage) }
@@ -245,6 +265,13 @@ where
 
     type Storage = BatchFreeze<C::Storage, F>;
 
+    #[inline] fn owned_time(time: Self::TimeGat<'_>) -> Self::Time { C::owned_time(time) }
+    #[inline] fn owned_diff(time: Self::DiffGat<'_>) -> Self::Diff { C::owned_diff(time) }
+    #[inline] fn owned_time_onto(time: Self::TimeGat<'_>, target: &mut Self::Time) { C::owned_time_onto(time, target) }
+    #[inline] fn owned_diff_onto(diff: Self::DiffGat<'_>, target: &mut Self::Diff) { C::owned_diff_onto(diff, target) }
+    #[inline] fn borrow_time_as(time: &Self::Time) -> Self::TimeGat<'_> { C::borrow_time_as(time) }
+    #[inline] fn borrow_diff_as(diff: &Self::Diff) -> Self::DiffGat<'_> { C::borrow_diff_as(diff) }
+
     #[inline] fn key_valid(&self, storage: &Self::Storage) -> bool { self.cursor.key_valid(&storage.batch) }
     #[inline] fn val_valid(&self, storage: &Self::Storage) -> bool { self.cursor.val_valid(&storage.batch) }
 
@@ -255,16 +282,16 @@ where
         let func = &self.func;
         self.cursor.map_times(&storage.batch, |time, diff| {
             if let Some(time) = func(time) {
-                logic(<Self::TimeGat<'_> as IntoOwned>::borrow_as(&time), diff);
+                logic(Self::borrow_time_as(&time), diff);
             }
         })
     }
 
     #[inline] fn step_key(&mut self, storage: &Self::Storage) { self.cursor.step_key(&storage.batch) }
-    #[inline] fn seek_key(&mut self, storage: &Self::Storage, key: Self::Key<'_>) { self.cursor.seek_key(&storage.batch, key) }
+    #[inline] fn seek_key<'a>(&mut self, storage: &'a Self::Storage, key: Self::Key<'a>) { self.cursor.seek_key(&storage.batch, key) }
 
     #[inline] fn step_val(&mut self, storage: &Self::Storage) { self.cursor.step_val(&storage.batch) }
-    #[inline] fn seek_val(&mut self, storage: &Self::Storage, val: Self::Val<'_>) { self.cursor.seek_val(&storage.batch, val) }
+    #[inline] fn seek_val<'a>(&mut self, storage: &'a Self::Storage, val: Self::Val<'a>) { self.cursor.seek_val(&storage.batch, val) }
 
     #[inline] fn rewind_keys(&mut self, storage: &Self::Storage) { self.cursor.rewind_keys(&storage.batch) }
     #[inline] fn rewind_vals(&mut self, storage: &Self::Storage) { self.cursor.rewind_vals(&storage.batch) }

@@ -114,6 +114,13 @@ where
     type Storage = Vec<B>;
     type Cursor = CursorList<<B as BatchReader>::Cursor>;
 
+    #[inline] fn owned_time(time: Self::TimeGat<'_>) -> Self::Time { B::owned_time(time) }
+    #[inline] fn owned_diff(time: Self::DiffGat<'_>) -> Self::Diff { B::owned_diff(time) }
+    #[inline] fn owned_time_onto(time: Self::TimeGat<'_>, target: &mut Self::Time) { B::owned_time_onto(time, target) }
+    #[inline] fn owned_diff_onto(diff: Self::DiffGat<'_>, target: &mut Self::Diff) { B::owned_diff_onto(diff, target) }
+    #[inline] fn borrow_time_as(time: &Self::Time) -> Self::TimeGat<'_> { B::borrow_time_as(time) }
+    #[inline] fn borrow_diff_as(diff: &Self::Diff) -> Self::DiffGat<'_> { B::borrow_diff_as(diff) }
+
     fn cursor_through(&mut self, upper: AntichainRef<Self::Time>) -> Option<(Self::Cursor, Self::Storage)> {
 
         // If `upper` is the minimum frontier, we can return an empty cursor.

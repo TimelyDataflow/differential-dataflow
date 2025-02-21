@@ -5,6 +5,7 @@ use columnation::Columnation;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::implementations::{BatchContainer, BuilderInput};
+use differential_dataflow::trace::implementations::containers::BatchIndex;
 use differential_dataflow::trace::implementations::merge_batcher::container::{ContainerMerger, ContainerQueue, MergerChunk};
 
 use crate::columnation::TimelyStack;
@@ -83,19 +84,19 @@ impl<D: Ord + Columnation + 'static, T: Ord + timely::PartialOrder + Clone + Col
     }
 }
 
-impl<K,V,T,R> BuilderInput<K, V> for TimelyStack<((K::Owned, V::Owned), T, R)>
+impl<K,KBC,V,VBC,T,R> BuilderInput<KBC, VBC> for TimelyStack<((K, V), T, R)>
 where
-    K: BatchContainer,
-    for<'a> K::ReadItem<'a>: PartialEq<&'a K::Owned>,
-    K::Owned: Ord + Columnation + Clone + 'static,
-    V: BatchContainer,
-    for<'a> V::ReadItem<'a>: PartialEq<&'a V::Owned>,
-    V::Owned: Ord + Columnation + Clone + 'static,
+    K: Ord + Columnation + Clone + 'static,
+    KBC: BatchContainer,
+    for<'a> KBC::Borrowed<'a>: BatchIndex<Owned=K>,
+    V: Ord + Columnation + Clone + 'static,
+    VBC: BatchContainer,
+    for<'a> VBC::Borrowed<'a>: BatchIndex<Owned=V>,
     T: Timestamp + Lattice + Columnation + Clone + 'static,
     R: Ord + Clone + Semigroup + Columnation + 'static,
 {
-    type Key<'a> = &'a K::Owned;
-    type Val<'a> = &'a V::Owned;
+    type Key<'a> = &'a K;
+    type Val<'a> = &'a V;
     type Time = T;
     type Diff = R;
 
@@ -103,12 +104,12 @@ where
         (key, val, time.clone(), diff.clone())
     }
 
-    fn key_eq(this: &&K::Owned, other: K::ReadItem<'_>) -> bool {
-        K::reborrow(other) == *this
+    fn key_eq(this: &Self::Key<'_>, other: <KBC::Borrowed<'_> as BatchIndex>::Ref) -> bool {
+        KBC::Borrowed::eq(other, *this)
     }
 
-    fn val_eq(this: &&V::Owned, other: V::ReadItem<'_>) -> bool {
-        V::reborrow(other) == *this
+    fn val_eq(this: &Self::Val<'_>, other: <VBC::Borrowed<'_> as BatchIndex>::Ref) -> bool {
+        VBC::Borrowed::eq(other, *this)
     }
 
     fn key_val_upd_counts(chain: &[Self]) -> (usize, usize, usize) {

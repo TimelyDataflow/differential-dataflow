@@ -86,13 +86,11 @@ impl<G, K: Data, V: Data, T1, R: Ord+Semigroup+'static> Reduce<G, K, V, R> for A
 where
     G: Scope<Timestamp=T1::Time>,
     T1: for<'a> TraceReader<Key<'a>=&'a K, Val<'a>=&'a V, Diff=R>+Clone+'static,
-    for<'a> T1::Key<'a> : IntoOwned<'a, Owned = K>,
-    for<'a> T1::Val<'a> : IntoOwned<'a, Owned = V>,
 {
     fn reduce_named<L, V2: Data, R2: Ord+Abelian+'static>(&self, name: &str, logic: L) -> Collection<G, (K, V2), R2>
         where L: FnMut(&K, &[(&V, R)], &mut Vec<(V2, R2)>)+'static {
         self.reduce_abelian::<_,K,V2,ValBuilder<_,_,_,_>,ValSpine<_,_,_,_>>(name, logic)
-            .as_collection(|k,v| (k.clone(), v.clone()))
+            .as_collection(|k,v: &V2| (k.clone(), v.clone()))
     }
 }
 
@@ -751,7 +749,7 @@ mod history_replay {
             // loaded times by performing the lattice `join` with this value.
 
             // Load the batch contents.
-            let mut batch_replay = self.batch_history.replay_key(batch_cursor, batch_storage, key, |time| time.into_owned());
+            let mut batch_replay = self.batch_history.replay_key(batch_cursor, batch_storage, key, |time| C3::owned_time(time));
 
             // We determine the meet of times we must reconsider (those from `batch` and `times`). This meet
             // can be used to advance other historical times, which may consolidate their representation. As
@@ -788,23 +786,23 @@ mod history_replay {
             // Load the input and output histories.
             let mut input_replay = if let Some(meet) = meet.as_ref() {
                 self.input_history.replay_key(source_cursor, source_storage, key, |time| {
-                    let mut time = time.into_owned();
+                    let mut time = C1::owned_time(time);
                     time.join_assign(meet);
                     time
                 })
             }
             else {
-                self.input_history.replay_key(source_cursor, source_storage, key, |time| time.into_owned())
+                self.input_history.replay_key(source_cursor, source_storage, key, |time| C1::owned_time(time))
             };
             let mut output_replay = if let Some(meet) = meet.as_ref() {
                 self.output_history.replay_key(output_cursor, output_storage, key, |time| {
-                    let mut time = time.into_owned();
+                    let mut time = C2::owned_time(time);
                     time.join_assign(meet);
                     time
                 })
             }
             else {
-                self.output_history.replay_key(output_cursor, output_storage, key, |time| time.into_owned())
+                self.output_history.replay_key(output_cursor, output_storage, key, |time| C2::owned_time(time))
             };
 
             self.synth_times.clear();

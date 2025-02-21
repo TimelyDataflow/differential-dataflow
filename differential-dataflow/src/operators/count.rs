@@ -106,7 +106,7 @@ where
                         if trace_cursor.get_key(&trace_storage) == Some(key) {
                             trace_cursor.map_times(&trace_storage, |_, diff| {
                                 count.as_mut().map(|c| c.plus_equals(&diff));
-                                if count.is_none() { count = Some(diff.into_owned()); }
+                                if count.is_none() { count = Some(T1::owned_diff(diff)); }
                             });
                         }
 
@@ -114,14 +114,14 @@ where
 
                             if let Some(count) = count.as_ref() {
                                 if !count.is_zero() {
-                                    session.give(((key.into_owned(), count.clone()), time.into_owned(), R2::from(-1i8)));
+                                    session.give(((key.into_owned(), count.clone()), T1::owned_time(time), R2::from(-1i8)));
                                 }
                             }
                             count.as_mut().map(|c| c.plus_equals(&diff));
-                            if count.is_none() { count = Some(diff.into_owned()); }
+                            if count.is_none() { count = Some(T1::owned_diff(diff)); }
                             if let Some(count) = count.as_ref() {
                                 if !count.is_zero() {
-                                    session.give(((key.into_owned(), count.clone()), time.into_owned(), R2::from(1i8)));
+                                    session.give(((key.into_owned(), count.clone()), T1::owned_time(time), R2::from(1i8)));
                                 }
                             }
                         });

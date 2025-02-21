@@ -62,6 +62,7 @@ use timely::progress::Timestamp;
 
 use crate::lattice::Lattice;
 use crate::difference::Semigroup;
+use crate::trace::implementations::containers::BatchIndex;
 
 /// A type that names constituent update types.
 pub trait Update {
@@ -89,7 +90,14 @@ where
 }
 
 /// A type with opinions on how updates should be laid out.
-pub trait Layout {
+pub trait Layout
+where
+    for<'a> <Self::KeyContainer as BatchContainer>::Borrowed<'a> : BatchIndex<Owned = <Self::Target as Update>::Key>,
+    for<'a> <Self::ValContainer as BatchContainer>::Borrowed<'a> : BatchIndex<Owned = <Self::Target as Update>::Val>,
+    for<'a> <Self::TimeContainer as BatchContainer>::Borrowed<'a> : BatchIndex<Owned = <Self::Target as Update>::Time>,
+    for<'a> <Self::DiffContainer as BatchContainer>::Borrowed<'a> : BatchIndex<Owned = <Self::Target as Update>::Diff>,
+    for<'a> <Self::OffsetContainer as BatchContainer>::Borrowed<'a> : BatchIndex<Ref = usize>,
+{
     /// The represented update.
     type Target: Update + ?Sized;
     /// Container for update keys.
@@ -98,11 +106,11 @@ pub trait Layout {
     /// Container for update vals.
     type ValContainer: BatchContainer;
     /// Container for times.
-    type TimeContainer: BatchContainer<Owned = <Self::Target as Update>::Time> + PushInto<<Self::Target as Update>::Time>;
+    type TimeContainer: BatchContainer + PushInto<<Self::Target as Update>::Time>;
     /// Container for diffs.
-    type DiffContainer: BatchContainer<Owned = <Self::Target as Update>::Diff> + PushInto<<Self::Target as Update>::Diff>;
+    type DiffContainer: BatchContainer + PushInto<<Self::Target as Update>::Diff>;
     /// Container for offsets.
-    type OffsetContainer: for<'a> BatchContainer<ReadItem<'a> = usize>;
+    type OffsetContainer: for<'a> BatchContainer;
 }
 
 /// A layout that uses vectors
@@ -235,10 +243,10 @@ impl PushInto<usize> for OffsetList {
 }
 
 impl BatchContainer for OffsetList {
-    type Owned = usize;
-    type ReadItem<'a> = usize;
-
-    fn reborrow<'b, 'a: 'b>(item: Self::ReadItem<'a>) -> Self::ReadItem<'b> { item }
+    type Borrowed<'a> = &'a OffsetList;
+    fn borrow(&self) -> Self::Borrowed<'_> {
+        self
+    }
 
     fn with_capacity(size: usize) -> Self {
         Self::with_capacity(size)
@@ -248,13 +256,21 @@ impl BatchContainer for OffsetList {
         Self::with_capacity(cont1.len() + cont2.len())
     }
 
-    fn index(&self, index: usize) -> Self::ReadItem<'_> {
-        self.index(index)
-    }
-
     fn len(&self) -> usize {
         self.len()
     }
+    #[inline] fn borrow_as<'a>(owned: &'a <Self::Borrowed<'a> as BatchIndex>::Owned) -> <Self::Borrowed<'a> as BatchIndex>::Owned { *owned }
+}
+
+impl<'a> BatchIndex for &'a OffsetList {
+    type Owned = usize;
+    type Ref = usize;
+
+    #[inline] fn eq(this: Self::Ref, other: &Self::Owned) -> bool { this == *other }
+    #[inline] fn to_owned(this: Self::Ref) -> Self::Owned { this }
+    #[inline] fn clone_onto(this: Self::Ref, other: &mut Self::Owned) { *other = this; }
+    #[inline] fn len(&self) -> usize { OffsetList::len(self) }
+    #[inline] fn index(&self, index: usize) -> Self::Ref { OffsetList::index(self, index) }
 }
 
 /// Behavior to split an update into principal components.
@@ -272,10 +288,10 @@ pub trait BuilderInput<K: BatchContainer, V: BatchContainer>: Container {
     fn into_parts<'a>(item: Self::Item<'a>) -> (Self::Key<'a>, Self::Val<'a>, Self::Time, Self::Diff);
 
     /// Test that the key equals a key in the layout's key container.
-    fn key_eq(this: &Self::Key<'_>, other: K::ReadItem<'_>) -> bool;
+    fn key_eq(this: &Self::Key<'_>, other: <K::Borrowed<'_> as BatchIndex>::Ref) -> bool;
 
     /// Test that the value equals a key in the layout's value container.
-    fn val_eq(this: &Self::Val<'_>, other: V::ReadItem<'_>) -> bool;
+    fn val_eq(this: &Self::Val<'_>, other: <V::Borrowed<'_> as BatchIndex>::Ref) -> bool;
 
     /// Count the number of distinct keys, (key, val) pairs, and total updates.
     fn key_val_upd_counts(chain: &[Self]) -> (usize, usize, usize);
@@ -285,10 +301,10 @@ impl<K,KBC,V,VBC,T,R> BuilderInput<KBC, VBC> for Vec<((K, V), T, R)>
 where
     K: Ord + Clone + 'static,
     KBC: BatchContainer,
-    for<'a> KBC::ReadItem<'a>: PartialEq<&'a K>,
+    for<'a> KBC::Borrowed<'a>: BatchIndex<Owned=K>,
     V: Ord + Clone + 'static,
     VBC: BatchContainer,
-    for<'a> VBC::ReadItem<'a>: PartialEq<&'a V>,
+    for<'a> VBC::Borrowed<'a>: BatchIndex<Owned=V>,
     T: Timestamp + Lattice + Clone + 'static,
     R: Ord + Semigroup + 'static,
 {
@@ -301,12 +317,12 @@ where
         (key, val, time, diff)
     }
 
-    fn key_eq(this: &K, other: KBC::ReadItem<'_>) -> bool {
-        KBC::reborrow(other) == this
+    fn key_eq(this: &K, other: <KBC::Borrowed<'_> as BatchIndex>::Ref) -> bool {
+        KBC::Borrowed::eq(other, this)
     }
 
-    fn val_eq(this: &V, other: VBC::ReadItem<'_>) -> bool {
-        VBC::reborrow(other) == this
+    fn val_eq(this: &V, other: <VBC::Borrowed<'_> as BatchIndex>::Ref) -> bool {
+        VBC::Borrowed::eq(other, this)
     }
 
     fn key_val_upd_counts(chain: &[Self]) -> (usize, usize, usize) {
@@ -343,15 +359,12 @@ pub mod containers {
 
     use timely::container::PushInto;
 
-    use crate::IntoOwned;
-
     /// A general-purpose container resembling `Vec<T>`.
-    pub trait BatchContainer: for<'a> PushInto<Self::ReadItem<'a>> + 'static {
-        /// An owned instance of `Self::ReadItem<'_>`.
-        type Owned;
-
-        /// The type that can be read back out of the container.
-        type ReadItem<'a>: Copy + Ord + IntoOwned<'a, Owned = Self::Owned>;
+    pub trait BatchContainer: for<'a> PushInto<<Self::Borrowed<'a> as BatchIndex>::Ref> + 'static {
+        /// TODO
+        type Borrowed<'a>: BatchIndex;
+        /// TODO
+        fn borrow(&self) -> Self::Borrowed<'_>;
 
         /// Push an item into this container
         fn push<D>(&mut self, item: D) where Self: PushInto<D> {
@@ -362,15 +375,37 @@ pub mod containers {
         /// Creates a new container with sufficient capacity.
         fn merge_capacity(cont1: &Self, cont2: &Self) -> Self;
 
-        /// Converts a read item into one with a narrower lifetime.
-        fn reborrow<'b, 'a: 'b>(item: Self::ReadItem<'a>) -> Self::ReadItem<'b>;
-
-        /// Reference to the element at this position.
-        fn index(&self, index: usize) -> Self::ReadItem<'_>;
         /// Number of contained elements
         fn len(&self) -> usize;
+        /// TODO
+        fn is_empty(&self) -> bool { self.len() == 0 }
+        /// TODO
+        fn borrow_as<'a>(owned: &'a <Self::Borrowed<'a> as BatchIndex>::Owned) -> <Self::Borrowed<'a> as BatchIndex>::Ref;
+    }
+
+    /// TODO
+    pub trait BatchIndex {
+        /// TODO
+        type Owned;
+        /// TODO
+        type Ref: Eq + Ord + Copy;
+
+        /// Number of contained elements
+        fn len(&self) -> usize;
+        /// TODO
+        fn is_empty(&self) -> bool { self.len() == 0 }
+
+        /// TODO
+        fn eq(this: Self::Ref, other: &Self::Owned) -> bool;
+        /// TODO
+        fn to_owned(this: Self::Ref) -> Self::Owned;
+        /// TODO
+        fn clone_onto(this: Self::Ref, other: &mut Self::Owned);
+
+        /// Reference to the element at this position.
+        fn index(&self, index: usize) -> Self::Ref;
         /// Returns the last item if the container is non-empty.
-        fn last(&self) -> Option<Self::ReadItem<'_>> {
+        fn last(&self) -> Option<Self::Ref> {
             if self.len() > 0 {
                 Some(self.index(self.len()-1))
             }
@@ -379,15 +414,13 @@ pub mod containers {
             }
         }
         /// Indicates if the length is zero.
-        fn is_empty(&self) -> bool { self.len() == 0 }
-
         /// Reports the number of elements satisfying the predicate.
         ///
         /// This methods *relies strongly* on the assumption that the predicate
         /// stays false once it becomes false, a joint property of the predicate
         /// and the layout of `Self. This allows `advance` to use exponential search to
         /// count the number of elements in time logarithmic in the result.
-        fn advance<F: for<'a> Fn(Self::ReadItem<'a>)->bool>(&self, start: usize, end: usize, function: F) -> usize {
+        fn advance<F: for<'a> Fn(Self::Ref)->bool>(&self, start: usize, end: usize, function: F) -> usize {
 
             let small_limit = 8;
 
@@ -426,25 +459,27 @@ pub mod containers {
         }
     }
 
+    impl<'a, T: Eq + Ord + Clone> BatchIndex for &'a [T] {
+        type Owned = T;
+        type Ref = &'a T;
+
+        #[inline] fn eq(this: Self::Ref, other: &Self::Owned) -> bool { this == other }
+        #[inline] fn to_owned(this: Self::Ref) -> Self::Owned { this.clone() }
+        #[inline] fn clone_onto(this: Self::Ref, other: &mut Self::Owned) { other.clone_from(this) }
+        #[inline] fn len(&self) -> usize { (*self).len() }
+        #[inline] fn index(&self, index: usize) -> Self::Ref { &self[index] }
+    }
+
     // All `T: Clone` also implement `ToOwned<Owned = T>`, but without the constraint Rust
     // struggles to understand why the owned type must be `T` (i.e. the one blanket impl).
     impl<T: Ord + Clone + 'static> BatchContainer for Vec<T> {
-        type Owned = T;
-        type ReadItem<'a> = &'a T;
-
-        fn reborrow<'b, 'a: 'b>(item: Self::ReadItem<'a>) -> Self::ReadItem<'b> { item }
-
-        fn with_capacity(size: usize) -> Self {
-            Vec::with_capacity(size)
-        }
-        fn merge_capacity(cont1: &Self, cont2: &Self) -> Self {
-            Vec::with_capacity(cont1.len() + cont2.len())
-        }
-        fn index(&self, index: usize) -> Self::ReadItem<'_> {
-            &self[index]
-        }
-        fn len(&self) -> usize {
-            self[..].len()
+        type Borrowed<'a> = &'a [T];
+        fn borrow(&self) -> Self::Borrowed<'_> { self }
+        fn with_capacity(size: usize) -> Self { Vec::with_capacity(size) }
+        fn merge_capacity(cont1: &Self, cont2: &Self) -> Self { Vec::with_capacity(cont1.len() + cont2.len()) }
+        fn len(&self) -> usize { self[..].len() }
+        fn borrow_as<'a>(owned: &'a <Self::Borrowed<'a> as BatchIndex>::Owned) -> <Self::Borrowed<'a> as BatchIndex>::Ref {
+            owned
         }
     }
 
@@ -487,10 +522,8 @@ pub mod containers {
     where
         B: Ord + Clone + Sized + 'static,
     {
-        type Owned = Vec<B>;
-        type ReadItem<'a> = &'a [B];
-
-        fn reborrow<'b, 'a: 'b>(item: Self::ReadItem<'a>) -> Self::ReadItem<'b> { item }
+        type Borrowed<'a> = &'a Self;
+        fn borrow(&self) -> Self::Borrowed<'_> { self }
 
         fn with_capacity(size: usize) -> Self {
             let mut offsets = Vec::with_capacity(size + 1);
@@ -508,15 +541,25 @@ pub mod containers {
                 inner: Vec::with_capacity(cont1.inner.len() + cont2.inner.len()),
             }
         }
-        fn index(&self, index: usize) -> Self::ReadItem<'_> {
+        fn len(&self) -> usize { self.offsets.len() - 1 }
+        fn borrow_as<'a>(owned: &'a <Self::Borrowed<'a> as BatchIndex>::Owned) -> <Self::Borrowed<'a> as BatchIndex>::Ref { owned }
+    }
+
+    impl<'a, B: Eq + Ord + Clone> BatchIndex for &'a SliceContainer<B> {
+        type Ref = &'a [B];
+        type Owned = Vec<B>;
+
+        fn eq(this: Self::Ref, other: &Self::Owned) -> bool { this == &other[..] }
+        fn to_owned(this: Self::Ref) -> Self::Owned { this.to_vec() }
+        fn clone_onto(this: Self::Ref, other: &mut Self::Owned) { other.clone_from_slice(this); }
+        fn len(&self) -> usize { self.offsets.len() - 1 }
+        fn index(&self, index: usize) -> Self::Ref {
             let lower = self.offsets[index];
             let upper = self.offsets[index+1];
             &self.inner[lower .. upper]
         }
-        fn len(&self) -> usize {
-            self.offsets.len() - 1
-        }
     }
+
 
     /// Default implementation introduces a first offset.
     impl<B> Default for SliceContainer<B> {

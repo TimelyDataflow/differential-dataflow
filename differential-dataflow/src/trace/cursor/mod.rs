@@ -26,14 +26,27 @@ pub trait Cursor {
     /// Timestamps associated with updates
     type Time: Timestamp + Lattice + Ord + Clone;
     /// Borrowed form of timestamp.
-    type TimeGat<'a>: Copy + IntoOwned<'a, Owned = Self::Time>;
+    type TimeGat<'a>: Copy;
     /// Owned form of update difference.
     type Diff: Semigroup + 'static;
     /// Borrowed form of update difference.
-    type DiffGat<'a> : Copy + IntoOwned<'a, Owned = Self::Diff>;
+    type DiffGat<'a> : Copy;
 
     /// Storage required by the cursor.
     type Storage;
+
+    /// TODO
+    fn owned_time(time: Self::TimeGat<'_>) -> Self::Time;
+    /// TODO
+    fn owned_diff(time: Self::DiffGat<'_>) -> Self::Diff;
+    /// TODO
+    fn owned_time_onto(time: Self::TimeGat<'_>, target: &mut Self::Time);
+    /// TODO
+    fn owned_diff_onto(time: Self::DiffGat<'_>, target: &mut Self::Diff);
+    /// TODO
+    fn borrow_time_as(time: &Self::Time) -> Self::TimeGat<'_>;
+    /// TODO
+    fn borrow_diff_as(diff: &Self::Diff) -> Self::DiffGat<'_>;
 
     /// Indicates if the current key is valid.
     ///
@@ -65,12 +78,12 @@ pub trait Cursor {
     /// Advances the cursor to the next key.
     fn step_key(&mut self, storage: &Self::Storage);
     /// Advances the cursor to the specified key.
-    fn seek_key(&mut self, storage: &Self::Storage, key: Self::Key<'_>);
+    fn seek_key<'a>(&mut self, storage: &'a Self::Storage, key: Self::Key<'a>);
 
     /// Advances the cursor to the next value.
     fn step_val(&mut self, storage: &Self::Storage);
     /// Advances the cursor to the specified value.
-    fn seek_val(&mut self, storage: &Self::Storage, val: Self::Val<'_>);
+    fn seek_val<'a>(&mut self, storage: &'a Self::Storage, val: Self::Val<'a>);
 
     /// Rewinds the cursor to the first key.
     fn rewind_keys(&mut self, storage: &Self::Storage);
@@ -90,7 +103,7 @@ pub trait Cursor {
             while self.val_valid(storage) {
                 let mut kv_out = Vec::new();
                 self.map_times(storage, |ts, r| {
-                    kv_out.push((ts.into_owned(), r.into_owned()));
+                    kv_out.push((Self::owned_time(ts), Self::owned_diff(r)));
                 });
                 out.push(((self.key(storage).into_owned(), self.val(storage).into_owned()), kv_out));
                 self.step_val(storage);

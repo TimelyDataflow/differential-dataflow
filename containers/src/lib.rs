@@ -5,7 +5,8 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::implementations::ord_neu::{OrdValBatch, OrdValBuilder};
 use differential_dataflow::trace::implementations::spine_fueled::Spine;
-use differential_dataflow::trace::implementations::{Layout, OffsetList, PreferredContainer, Update};
+use differential_dataflow::trace::implementations::{BatchContainer, Layout, OffsetList, PreferredContainer, Update};
+use differential_dataflow::trace::implementations::containers::BatchIndex;
 use differential_dataflow::trace::implementations::merge_batcher::MergeBatcher;
 use differential_dataflow::trace::rc_blanket_impls::RcBuilder;
 
@@ -46,8 +47,10 @@ impl<K, V, T, D> Layout for Preferred<K, V, T, D>
 where
     K: Ord+ToOwned+PreferredContainer + ?Sized,
     K::Owned: Ord+Clone+'static,
+    for <'a> <K::Container as BatchContainer>::Borrowed<'a>: BatchIndex<Owned = K::Owned>,
     V: Ord+ToOwned+PreferredContainer + ?Sized,
     V::Owned: Ord+Clone+'static,
+    for <'a> <V::Container as BatchContainer>::Borrowed<'a>: BatchIndex<Owned = V::Owned>,
     T: Ord+Clone+Lattice+timely::progress::Timestamp,
     D: Ord+Clone+Semigroup+'static,
 {

@@ -99,7 +99,7 @@ where
                                 while let Some(value) = cursor.get_val(&storage) {
                                     let mut count = Tr::Diff::zero();
                                     cursor.map_times(&storage, |t, d| {
-                                        if t.into_owned().less_equal(time) { count.plus_equals(&d); }
+                                        if Tr::owned_time(t).less_equal(time) { count.plus_equals(&d); }
                                     });
                                     if !count.is_zero() {
                                         let (dout, rout) = output_func(prefix, diff, value, &count);

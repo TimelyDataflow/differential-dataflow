@@ -42,6 +42,13 @@ where
     type Storage = Tr::Storage;
     type Cursor = CursorEnter<Tr::Cursor, TInner>;
 
+    #[inline] fn owned_time(time: Self::TimeGat<'_>) -> Self::Time { time.clone() }
+    #[inline] fn owned_diff(time: Self::DiffGat<'_>) -> Self::Diff { Tr::owned_diff(time) }
+    #[inline] fn owned_time_onto(time: Self::TimeGat<'_>, target: &mut Self::Time) { target.clone_from(time) }
+    #[inline] fn owned_diff_onto(diff: Self::DiffGat<'_>, target: &mut Self::Diff) { Tr::owned_diff_onto(diff, target) }
+    #[inline] fn borrow_time_as(time: &Self::Time) -> Self::TimeGat<'_> { time }
+    #[inline] fn borrow_diff_as(diff: &Self::Diff) -> Self::DiffGat<'_> { Tr::borrow_diff_as(diff) }
+
     fn map_batches<F: FnMut(&Self::Batch)>(&self, mut f: F) {
         self.trace.map_batches(|batch| {
             f(&Self::Batch::make_from(batch.clone()));
@@ -129,6 +136,13 @@ where
     }
     fn len(&self) -> usize { self.batch.len() }
     fn description(&self) -> &Description<TInner> { &self.description }
+
+    #[inline] fn owned_time(time: Self::TimeGat<'_>) -> Self::Time { time.clone() }
+    #[inline] fn owned_diff(time: Self::DiffGat<'_>) -> Self::Diff { B::owned_diff(time) }
+    #[inline] fn owned_time_onto(time: Self::TimeGat<'_>, target: &mut Self::Time) { target.clone_from(time) }
+    #[inline] fn owned_diff_onto(diff: Self::DiffGat<'_>, target: &mut Self::Diff) { B::owned_diff_onto(diff, target) }
+    #[inline] fn borrow_time_as(time: &Self::Time) -> Self::TimeGat<'_> { time }
+    #[inline] fn borrow_diff_as(diff: &Self::Diff) -> Self::DiffGat<'_> { B::borrow_diff_as(diff) }
 }
 
 impl<B, TInner> BatchEnter<B, TInner>
@@ -178,6 +192,13 @@ where
 
     type Storage = C::Storage;
 
+    #[inline] fn owned_time(time: Self::TimeGat<'_>) -> Self::Time { time.clone() }
+    #[inline] fn owned_diff(time: Self::DiffGat<'_>) -> Self::Diff { C::owned_diff(time) }
+    #[inline] fn owned_time_onto(time: Self::TimeGat<'_>, target: &mut Self::Time) { target.clone_from(time) }
+    #[inline] fn owned_diff_onto(diff: Self::DiffGat<'_>, target: &mut Self::Diff) { C::owned_diff_onto(diff, target) }
+    #[inline] fn borrow_time_as(time: &Self::Time) -> Self::TimeGat<'_> { time }
+    #[inline] fn borrow_diff_as(diff: &Self::Diff) -> Self::DiffGat<'_> { C::borrow_diff_as(diff) }
+
     #[inline] fn key_valid(&self, storage: &Self::Storage) -> bool { self.cursor.key_valid(storage) }
     #[inline] fn val_valid(&self, storage: &Self::Storage) -> bool { self.cursor.val_valid(storage) }
 
@@ -186,17 +207,16 @@ where
 
     #[inline]
     fn map_times<L: FnMut(&TInner, Self::DiffGat<'_>)>(&mut self, storage: &Self::Storage, mut logic: L) {
-        use crate::IntoOwned;
         self.cursor.map_times(storage, |time, diff| {
-            logic(&TInner::to_inner(time.into_owned()), diff)
+            logic(&TInner::to_inner(C::owned_time(time)), diff)
         })
     }
 
     #[inline] fn step_key(&mut self, storage: &Self::Storage) { self.cursor.step_key(storage) }
-    #[inline] fn seek_key(&mut self, storage: &Self::Storage, key: Self::Key<'_>) { self.cursor.seek_key(storage, key) }
+    #[inline] fn seek_key<'a>(&mut self, storage: &'a Self::Storage, key: Self::Key<'a>) { self.cursor.seek_key(storage, key) }
 
     #[inline] fn step_val(&mut self, storage: &Self::Storage) { self.cursor.step_val(storage) }
-    #[inline] fn seek_val(&mut self, storage: &Self::Storage, val: Self::Val<'_>) { self.cursor.seek_val(storage, val) }
+    #[inline] fn seek_val<'a>(&mut self, storage: &'a Self::Storage, val: Self::Val<'a>) { self.cursor.seek_val(storage, val) }
 
     #[inline] fn rewind_keys(&mut self, storage: &Self::Storage) { self.cursor.rewind_keys(storage) }
     #[inline] fn rewind_vals(&mut self, storage: &Self::Storage) { self.cursor.rewind_vals(storage) }
@@ -232,6 +252,13 @@ where
 
     type Storage = BatchEnter<C::Storage, TInner>;
 
+    #[inline] fn owned_time(time: Self::TimeGat<'_>) -> Self::Time { time.clone() }
+    #[inline] fn owned_diff(time: Self::DiffGat<'_>) -> Self::Diff { C::owned_diff(time) }
+    #[inline] fn owned_time_onto(time: Self::TimeGat<'_>, target: &mut Self::Time) { target.clone_from(time) }
+    #[inline] fn owned_diff_onto(diff: Self::DiffGat<'_>, target: &mut Self::Diff) { C::owned_diff_onto(diff, target) }
+    #[inline] fn borrow_time_as(time: &Self::Time) -> Self::TimeGat<'_> { time }
+    #[inline] fn borrow_diff_as(diff: &Self::Diff) -> Self::DiffGat<'_> { C::borrow_diff_as(diff) }
+
     #[inline] fn key_valid(&self, storage: &Self::Storage) -> bool { self.cursor.key_valid(&storage.batch) }
     #[inline] fn val_valid(&self, storage: &Self::Storage) -> bool { self.cursor.val_valid(&storage.batch) }
 
@@ -240,17 +267,16 @@ where
 
     #[inline]
     fn map_times<L: FnMut(&TInner, Self::DiffGat<'_>)>(&mut self, storage: &Self::Storage, mut logic: L) {
-        use crate::IntoOwned;
         self.cursor.map_times(&storage.batch, |time, diff| {
-            logic(&TInner::to_inner(time.into_owned()), diff)
+            logic(&TInner::to_inner(C::owned_time(time)), diff)
         })
     }
 
     #[inline] fn step_key(&mut self, storage: &Self::Storage) { self.cursor.step_key(&storage.batch) }
-    #[inline] fn seek_key(&mut self, storage: &Self::Storage, key: Self::Key<'_>) { self.cursor.seek_key(&storage.batch, key) }
+    #[inline] fn seek_key<'a>(&mut self, storage: &'a Self::Storage, key: Self::Key<'a>) { self.cursor.seek_key(&storage.batch, key) }
 
     #[inline] fn step_val(&mut self, storage: &Self::Storage) { self.cursor.step_val(&storage.batch) }
-    #[inline] fn seek_val(&mut self, storage: &Self::Storage, val: Self::Val<'_>) { self.cursor.seek_val(&storage.batch, val) }
+    #[inline] fn seek_val<'a>(&mut self, storage: &'a Self::Storage, val: Self::Val<'a>) { self.cursor.seek_val(&storage.batch, val) }
 
     #[inline] fn rewind_keys(&mut self, storage: &Self::Storage) { self.cursor.rewind_keys(&storage.batch) }
     #[inline] fn rewind_vals(&mut self, storage: &Self::Storage) { self.cursor.rewind_vals(&storage.batch) }
