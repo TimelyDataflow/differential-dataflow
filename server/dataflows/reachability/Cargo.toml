@@ -6,7 +6,7 @@ edition = "2021"
 publish = false
 
 [dependencies]
-differential-dataflow = { path = "../../../" }
+differential-dataflow = { workspace = true }
 dd_server = { path = "../../" }
 
 [lib]

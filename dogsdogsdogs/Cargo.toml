@@ -6,9 +6,13 @@ license = "MIT"
 edition = "2021"
 description = "Advanced join patterns in differential dataflow"
 
+documentation = "https://docs.rs/differential-dogs3"
+homepage = "https://github.com/TimelyDataflow/differential-dataflow"
+repository = "https://github.com/TimelyDataflow/differential-dataflow.git"
+
 [dependencies]
 timely = { workspace = true }
-differential-dataflow = { path = "../", default-features = false, version = "0.13.6" }
+differential-dataflow = { workspace = true }
 serde = { version = "1.0", features = ["derive"]}
 
 [dev-dependencies]

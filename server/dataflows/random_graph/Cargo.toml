@@ -7,7 +7,7 @@ publish = false
 
 [dependencies]
 timely = {workspace = true}
-differential-dataflow = { path = "../../../" }
+differential-dataflow = { workspace = true }
 dd_server = { path = "../../" }
 rand="0.3.13"
 
