@@ -1,7 +1,6 @@
 use std::time::Instant;
 
 use rand::{Rng, SeedableRng, StdRng};
-
 use timely::dataflow::*;
 use timely::WorkerConfig;
 
@@ -28,8 +27,7 @@ fn main() {
     let workers: usize = std::env::args().nth(4).unwrap().parse().unwrap();
     let inspect = std::env::args().any(|x| x == "inspect");
 
-    use timely::communication::allocator::zero_copy::allocator_process::ProcessBuilder;
-    let allocators = ProcessBuilder::new_vector(workers);
+    let (allocators, _others) = timely::CommunicationConfig::ProcessBinary(workers).try_build().unwrap();
     timely::execute::execute_from(allocators, Box::new(()), WorkerConfig::default(), move |worker| {
 
     // timely::execute_from_args(std::env::args().skip(1), move |worker| {
