@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.7](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dataflow-v0.13.6...differential-dataflow-v0.13.7) - 2025-02-28
+
+### Other
+
+- Move changelog to differential-dataflow crate ([#581](https://github.com/TimelyDataflow/differential-dataflow/pull/581))
+- Move differential crate from . to directory ([#575](https://github.com/TimelyDataflow/differential-dataflow/pull/575))
+
 ## [0.13.6](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dataflow-v0.13.5...differential-dataflow-v0.13.6) - 2025-02-12
 
 ### Other
