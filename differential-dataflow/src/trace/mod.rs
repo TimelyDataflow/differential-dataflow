@@ -105,12 +105,6 @@ pub trait TraceReader {
     /// this method, or the initial value of `get_logical_compaction()` if this method has not yet been called.
     fn set_logical_compaction(&mut self, frontier: AntichainRef<Self::Time>);
 
-    /// Deprecated form of `set_logical_compaction`.
-    #[deprecated(since = "0.11", note = "please use `set_logical_compaction`")]
-    fn advance_by(&mut self, frontier: AntichainRef<Self::Time>) {
-        self.set_logical_compaction(frontier);
-    }
-
     /// Reports the logical compaction frontier.
     ///
     /// All update times beyond this frontier will be presented with their original times, and all update times
@@ -118,12 +112,6 @@ pub trait TraceReader {
     /// this frontier. Practically, update times not beyond this frontier should not be taken to be accurate as
     /// presented, and should be used carefully, only in accumulation to times that are beyond the frontier.
     fn get_logical_compaction(&mut self) -> AntichainRef<Self::Time>;
-
-    /// Deprecated form of `get_logical_compaction`.
-    #[deprecated(since = "0.11", note = "please use `get_logical_compaction`")]
-    fn advance_frontier(&mut self) -> AntichainRef<Self::Time> {
-        self.get_logical_compaction()
-    }
 
     /// Advances the frontier that constrains physical compaction.
     ///
@@ -141,12 +129,6 @@ pub trait TraceReader {
     /// this method, or the initial value of `get_physical_compaction()` if this method has not yet been called.
     fn set_physical_compaction(&mut self, frontier: AntichainRef<Self::Time>);
 
-    /// Deprecated form of `set_physical_compaction`.
-    #[deprecated(since = "0.11", note = "please use `set_physical_compaction`")]
-    fn distinguish_since(&mut self, frontier: AntichainRef<Self::Time>) {
-        self.set_physical_compaction(frontier);
-    }
-
     /// Reports the physical compaction frontier.
     ///
     /// All batches containing updates beyond this frontier will not be merged with other batches. This allows
@@ -154,12 +136,6 @@ pub trait TraceReader {
     /// `cursor_through()` method. This functionality is primarily of interest to the `join` operator, and any
     /// other operators who need to take notice of the physical structure of update batches.
     fn get_physical_compaction(&mut self) -> AntichainRef<Self::Time>;
-
-    /// Deprecated form of `get_physical_compaction`.
-    #[deprecated(since = "0.11", note = "please use `get_physical_compaction`")]
-    fn distinguish_frontier(&mut self) -> AntichainRef<Self::Time> {
-        self.get_physical_compaction()
-    }
 
     /// Maps logic across the non-empty sequence of batches in the trace.
     ///

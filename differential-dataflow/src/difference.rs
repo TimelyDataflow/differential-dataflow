@@ -6,9 +6,6 @@
 //! dataflow collections would then track for each record the total of counts and heights, which allows
 //! us to track something like the average.
 
-#[deprecated]
-pub use self::Abelian as Diff;
-
 /// A type that can be an additive identity for all `Semigroup` implementations.
 ///
 /// This method is extracted from `Semigroup` to avoid ambiguity when used.
