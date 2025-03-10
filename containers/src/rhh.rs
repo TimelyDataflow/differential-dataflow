@@ -7,19 +7,14 @@
 
 use std::rc::Rc;
 use std::cmp::Ordering;
-
 use serde::{Deserialize, Serialize};
-
-use crate::Hashable;
-use crate::containers::TimelyStack;
-use crate::trace::implementations::chunker::{ColumnationChunker, VecChunker};
-use crate::trace::implementations::merge_batcher::{MergeBatcher, VecMerger, ColMerger};
-use crate::trace::implementations::spine_fueled::Spine;
-use crate::trace::rc_blanket_impls::RcBuilder;
-
-use super::{Update, Layout, Vector, TStack};
-
-use self::val_batch::{RhhValBatch, RhhValBuilder};
+use differential_dataflow::Hashable;
+use differential_dataflow::trace::implementations::chunker::VecChunker;
+use differential_dataflow::trace::implementations::merge_batcher::{MergeBatcher, VecMerger};
+use differential_dataflow::trace::implementations::spine_fueled::Spine;
+use differential_dataflow::trace::implementations::Vector;
+use differential_dataflow::trace::rc_blanket_impls::RcBuilder;
+use crate::rhh::val_batch::{RhhValBatch, RhhValBuilder};
 
 /// A trace implementation using a spine of ordered lists.
 pub type VecSpine<K, V, T, R> = Spine<Rc<RhhValBatch<Vector<((K,V),T,R)>>>>;
@@ -30,13 +25,6 @@ pub type VecBuilder<K,V,T,R> = RcBuilder<RhhValBuilder<Vector<((K,V),T,R)>, Vec<
 
 // /// A trace implementation for empty values using a spine of ordered lists.
 // pub type OrdKeySpine<K, T, R> = Spine<Rc<OrdKeyBatch<Vector<((K,()),T,R)>>>>;
-
-/// A trace implementation backed by columnar storage.
-pub type ColSpine<K, V, T, R> = Spine<Rc<RhhValBatch<TStack<((K,V),T,R)>>>>;
-/// A batcher for columnar storage.
-pub type ColBatcher<K,V,T,R> = MergeBatcher<Vec<((K,V),T,R)>, ColumnationChunker<((K,V),T,R)>, ColMerger<(K,V),T,R>>;
-/// A builder for columnar storage.
-pub type ColBuilder<K,V,T,R> = RcBuilder<RhhValBuilder<TStack<((K,V),T,R)>, TimelyStack<((K,V),T,R)>>>;
 
 // /// A trace implementation backed by columnar storage.
 // pub type ColKeySpine<K, T, R> = Spine<Rc<OrdKeyBatch<TStack<((K,()),T,R)>>>>;
@@ -90,13 +78,11 @@ mod val_batch {
     use serde::{Deserialize, Serialize};
     use timely::container::PushInto;
     use timely::progress::{Antichain, frontier::AntichainRef};
-
-    use crate::hashable::Hashable;
-    use crate::trace::{Batch, BatchReader, Builder, Cursor, Description, Merger};
-    use crate::trace::implementations::{BatchContainer, BuilderInput};
-    use crate::IntoOwned;
-
-    use super::{Layout, Update, HashOrdered};
+    use differential_dataflow::{Hashable, IntoOwned};
+    use differential_dataflow::lattice::Lattice;
+    use differential_dataflow::trace::{Batch, BatchReader, Builder, Cursor, Description, Merger};
+    use differential_dataflow::trace::implementations::{BatchContainer, BuilderInput, Layout, Update};
+    use crate::rhh::HashOrdered;
 
     /// Update tuples organized as a Robin Hood Hash map, ordered by `(hash(Key), Key, Val, Time)`.
     ///
@@ -368,7 +354,6 @@ mod val_batch {
         fn new(batch1: &RhhValBatch<L>, batch2: &RhhValBatch<L>, compaction_frontier: AntichainRef<<L::Target as Update>::Time>) -> Self {
 
             assert!(batch1.upper() == batch2.lower());
-            use crate::lattice::Lattice;
             let mut since = batch1.description().since().join(batch2.description().since());
             since = since.join(&compaction_frontier.to_owned());
 
@@ -594,7 +579,6 @@ mod val_batch {
                 let time = source.times.index(i);
                 let diff = source.diffs.index(i);
                 let mut new_time = time.into_owned();
-                use crate::lattice::Lattice;
                 new_time.advance_by(self.description.since().borrow());
                 self.update_stash.push((new_time, diff.into_owned()));
             }
@@ -602,8 +586,7 @@ mod val_batch {
 
         /// Consolidates `self.updates_stash` and produces the offset to record, if any.
         fn consolidate_updates(&mut self) -> Option<usize> {
-            use crate::consolidation;
-            consolidation::consolidate(&mut self.update_stash);
+            differential_dataflow::consolidation::consolidate(&mut self.update_stash);
             if !self.update_stash.is_empty() {
                 // If there is a single element, equal to a just-prior recorded update,
                 // we push nothing and report an unincremented offset to encode this case.
