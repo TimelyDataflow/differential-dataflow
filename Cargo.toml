@@ -17,7 +17,8 @@ resolver = "2"
 
 [workspace.dependencies]
 differential-dataflow = { path = "differential-dataflow", default-features = false, version = "0.13.7" }
-timely = { version = "0.19", default-features = false }
+# timely = { version = "0.19", default-features = false }
+timely = { git = "https://github.com/TimelyDataflow/timely-dataflow" }
 #timely = { path = "../timely-dataflow/timely/", default-features = false }
 
 [profile.release]
