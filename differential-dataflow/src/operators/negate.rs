@@ -35,18 +35,18 @@ pub trait Negate<G, C> {
     fn negate(&self) -> Self;
 }
 
-impl<G, D, R, C> Negate<G, C> for Collection<G, D, R, C>
+impl<G, D, R, C> Negate<C, G> for Collection<G, D, R, C>
 where
     G: Scope,
     C: Clone,
-    StreamCore<G, C>: Negate<G, C>,
+    StreamCore<G, C>: Negate<C, G>,
 {
     fn negate(&self) -> Self {
         self.inner.negate().as_collection()
     }
 }
 
-impl<G: Scope, D: Data, T: Data, R: Data + Abelian> Negate<G, Vec<(D, T, R)>> for Stream<G, (D, T, R)> {
+impl<G: Scope, D: Data, T: Data, R: Data + Abelian> Negate<Vec<(D, T, R)>, G> for Stream<G, (D, T, R)> {
     fn negate(&self) -> Self {
         self.map_in_place(|x| x.2.negate())
     }
