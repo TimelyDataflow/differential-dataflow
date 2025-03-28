@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.1](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dataflow-v0.14.0...differential-dataflow-v0.14.1) - 2025-03-28
+
+### Other
+
+- Update columnar to 0.4 ([#589](https://github.com/TimelyDataflow/differential-dataflow/pull/589))
+
 ## [0.14.0](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dataflow-v0.13.7...differential-dataflow-v0.14.0) - 2025-03-28
 
 ### Other
