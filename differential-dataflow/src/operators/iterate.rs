@@ -169,7 +169,7 @@ where
 impl<G: Scope, D: Data, R: Abelian, C: Container + Clone + 'static> Variable<G, D, R, C>
 where
     G::Timestamp: Lattice,
-    StreamCore<G, C>: crate::operators::Negate<G, C> + ResultsIn<G, C>,
+    StreamCore<G, C>: crate::operators::Negate<C, G> + ResultsIn<G, C>,
 {
     /// Creates a new initially empty `Variable`.
     ///

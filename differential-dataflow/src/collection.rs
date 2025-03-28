@@ -22,6 +22,7 @@ use timely::dataflow::StreamCore;
 use crate::difference::{Semigroup, Abelian, Multiply};
 use crate::lattice::Lattice;
 use crate::hashable::Hashable;
+use crate::operators::enter::EnterTime;
 
 /// A mutable collection of values of type `D`
 ///
@@ -173,6 +174,37 @@ impl<G: Scope, D, R, C: Container + Clone + 'static> Collection<G, D, R, C> {
         self.inner.scope()
     }
 
+    /// Brings a Collection into a nested scope.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use timely::dataflow::Scope;
+    /// use differential_dataflow::input::Input;
+    ///
+    /// ::timely::example(|scope| {
+    ///
+    ///     let data = scope.new_collection_from(1 .. 10).1;
+    ///
+    ///     let result = scope.region(|child| {
+    ///         data.enter(child)
+    ///             .leave()
+    ///     });
+    ///
+    ///     data.assert_eq(&result);
+    /// });
+    /// ```
+    pub fn enter<'a, T>(&self, child: &Child<'a, G, T>) -> Collection<Child<'a, G, T>, D, R, <StreamCore<G, C> as EnterTime<C, G, T>>::Container>
+    where
+        T: Refines<G::Timestamp>,
+        StreamCore<G, C>: EnterTime<C, G, T>,
+    {
+        self.inner
+            .enter_time(child)
+            .as_collection()
+    }
+
+
     /// Creates a new collection whose counts are the negation of those in the input.
     ///
     /// This method is most commonly used with `concat` to get those element in one collection but not another.
@@ -198,7 +230,7 @@ impl<G: Scope, D, R, C: Container + Clone + 'static> Collection<G, D, R, C> {
     /// ```
     // TODO: Removing this function is possible, but breaks existing callers of `negate` who expect
     //       an inherent method on `Collection`.
-    pub fn negate(&self) -> Collection<G, D, R, C> where StreamCore<G, C>: crate::operators::Negate<G, C> {
+    pub fn negate(&self) -> Collection<G, D, R, C> where StreamCore<G, C>: crate::operators::Negate<C, G> {
         crate::operators::Negate::negate(&self.inner).as_collection()
     }
 }
@@ -359,36 +391,6 @@ impl<G: Scope, D: Clone+'static, R: Clone+'static> Collection<G, D, R> {
     {
         self.inner
             .flat_map(move |(x, t, d)| logic(x).into_iter().map(move |(x,t2,d2)| (x, t.join(&t2), d2.multiply(&d))))
-            .as_collection()
-    }
-
-    /// Brings a Collection into a nested scope.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use timely::dataflow::Scope;
-    /// use differential_dataflow::input::Input;
-    ///
-    /// ::timely::example(|scope| {
-    ///
-    ///     let data = scope.new_collection_from(1 .. 10).1;
-    ///
-    ///     let result = scope.region(|child| {
-    ///         data.enter(child)
-    ///             .leave()
-    ///     });
-    ///
-    ///     data.assert_eq(&result);
-    /// });
-    /// ```
-    pub fn enter<'a, T>(&self, child: &Child<'a, G, T>) -> Collection<Child<'a, G, T>, D, R>
-    where
-        T: Refines<<G as ScopeParent>::Timestamp>,
-    {
-        self.inner
-            .enter(child)
-            .map(|(data, time, diff)| (data, T::to_inner(time), diff))
             .as_collection()
     }
 
