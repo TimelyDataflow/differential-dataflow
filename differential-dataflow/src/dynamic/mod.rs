@@ -43,7 +43,7 @@ where
         // Create a unary operator that will strip all but `level-1` timestamp coordinates.
         let mut builder = OperatorBuilder::new("LeaveDynamic".to_string(), self.scope());
         let (mut output, stream) = builder.new_output();
-        let mut input = builder.new_input_connection(&self.inner, Pipeline, vec![Antichain::from_elem(Product { outer: Default::default(), inner: PointStampSummary { retain: Some(level - 1), actions: Vec::new() } })]);
+        let mut input = builder.new_input_connection(&self.inner, Pipeline, [(0, Antichain::from_elem(Product { outer: Default::default(), inner: PointStampSummary { retain: Some(level - 1), actions: Vec::new() } }))]);
 
         builder.build(move |_capability| move |_frontier| {
             let mut output = output.activate();
