@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.2](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dataflow-v0.14.1...differential-dataflow-v0.14.2) - 2025-04-06
+
+### Other
+
+- Make builder::result members public ([#591](https://github.com/TimelyDataflow/differential-dataflow/pull/591))
+
 ## [0.14.1](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dataflow-v0.14.0...differential-dataflow-v0.14.1) - 2025-03-28
 
 ### Other
