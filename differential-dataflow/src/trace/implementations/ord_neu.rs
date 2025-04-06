@@ -542,7 +542,10 @@ mod val_batch {
 
     /// A builder for creating layers from unsorted update tuples.
     pub struct OrdValBuilder<L: Layout, CI> {
-        result: OrdValStorage<L>,
+        /// The in-progress result.
+        ///
+        /// This is public to allow container implementors to set and inspect their container.
+        pub result: OrdValStorage<L>,
         singleton: Option<(<L::Target as Update>::Time, <L::Target as Update>::Diff)>,
         /// Counts the number of singleton optimizations we performed.
         ///
@@ -1038,7 +1041,10 @@ mod key_batch {
 
     /// A builder for creating layers from unsorted update tuples.
     pub struct OrdKeyBuilder<L: Layout, CI> {
-        result: OrdKeyStorage<L>,
+        /// The in-progress result.
+        ///
+        /// This is public to allow container implementors to set and inspect their container.
+        pub result: OrdKeyStorage<L>,
         singleton: Option<(<L::Target as Update>::Time, <L::Target as Update>::Diff)>,
         /// Counts the number of singleton optimizations we performed.
         ///
