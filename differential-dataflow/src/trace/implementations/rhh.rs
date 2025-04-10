@@ -215,9 +215,9 @@ mod val_batch {
         }
 
         /// Returns true if one should advance one's index in the search for `key`.
-        fn advance_key(&self, index: usize, key: <L::KeyContainer as BatchContainer>::ReadItem<'_>) -> bool {
+        fn advance_key<'a>(&'a self, index: usize, key: <L::KeyContainer as BatchContainer>::ReadItem<'a>) -> bool {
             // Ideally this short-circuits, as `self.keys[index]` is bogus data.
-            !self.live_key(index) || self.keys.index(index).lt(&<L::KeyContainer as BatchContainer>::reborrow(key))
+            !self.live_key(index) || self.keys.index(index).lt(&key)
         }
 
         /// Indicates that a key is valid, rather than dead space, by looking for a valid offset range.
@@ -692,7 +692,7 @@ mod val_batch {
                 self.key_cursor = storage.storage.keys.len();
             }
         }
-        fn seek_key(&mut self, storage: &RhhValBatch<L>, key: Self::Key<'_>) {
+        fn seek_key<'a>(&mut self, storage: &'a RhhValBatch<L>, key: Self::Key<'a>) {
             // self.key_cursor += storage.storage.keys.advance(self.key_cursor, storage.storage.keys.len(), |x| x.lt(key));
             let desired = storage.storage.desired_location(&key);
             // Advance the cursor, if `desired` is ahead of it.
@@ -718,8 +718,8 @@ mod val_batch {
                 self.val_cursor = storage.storage.values_for_key(self.key_cursor).1;
             }
         }
-        fn seek_val(&mut self, storage: &RhhValBatch<L>, val: Self::Val<'_>) {
-            self.val_cursor += storage.storage.vals.advance(self.val_cursor, storage.storage.values_for_key(self.key_cursor).1, |x| <L::ValContainer as BatchContainer>::reborrow(x).lt(&<L::ValContainer as BatchContainer>::reborrow(val)));
+        fn seek_val<'a>(&mut self, storage: &'a RhhValBatch<L>, val: Self::Val<'a>) {
+            self.val_cursor += storage.storage.vals.advance(self.val_cursor, storage.storage.values_for_key(self.key_cursor).1, |x| x.lt(&val));
         }
         fn rewind_keys(&mut self, storage: &RhhValBatch<L>) {
             self.key_cursor = 0;

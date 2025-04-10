@@ -130,7 +130,7 @@ impl<C: Cursor> Cursor for CursorList<C> {
         self.minimize_keys(storage);
     }
     #[inline]
-    fn seek_key(&mut self, storage: &Vec<C::Storage>, key: Self::Key<'_>) {
+    fn seek_key<'a>(&mut self, storage: &'a Vec<C::Storage>, key: Self::Key<'a>) {
         for (cursor, storage) in self.cursors.iter_mut().zip(storage) {
             cursor.seek_key(storage, key);
         }
@@ -146,7 +146,7 @@ impl<C: Cursor> Cursor for CursorList<C> {
         self.minimize_vals(storage);
     }
     #[inline]
-    fn seek_val(&mut self, storage: &Vec<C::Storage>, val: Self::Val<'_>) {
+    fn seek_val<'a>(&mut self, storage: &'a Vec<C::Storage>, val: Self::Val<'a>) {
         for (cursor, storage) in self.cursors.iter_mut().zip(storage) {
             cursor.seek_val(storage, val);
         }

@@ -65,12 +65,12 @@ pub trait Cursor {
     /// Advances the cursor to the next key.
     fn step_key(&mut self, storage: &Self::Storage);
     /// Advances the cursor to the specified key.
-    fn seek_key(&mut self, storage: &Self::Storage, key: Self::Key<'_>);
+    fn seek_key<'a>(&mut self, storage: &'a Self::Storage, key: Self::Key<'a>);
 
     /// Advances the cursor to the next value.
     fn step_val(&mut self, storage: &Self::Storage);
     /// Advances the cursor to the specified value.
-    fn seek_val(&mut self, storage: &Self::Storage, val: Self::Val<'_>);
+    fn seek_val<'a>(&mut self, storage: &'a Self::Storage, val: Self::Val<'a>);
 
     /// Rewinds the cursor to the first key.
     fn rewind_keys(&mut self, storage: &Self::Storage);

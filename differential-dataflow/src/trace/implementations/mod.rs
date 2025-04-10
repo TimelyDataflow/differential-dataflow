@@ -299,8 +299,6 @@ impl BatchContainer for OffsetList {
     type Owned = usize;
     type ReadItem<'a> = usize;
 
-    fn reborrow<'b, 'a: 'b>(item: Self::ReadItem<'a>) -> Self::ReadItem<'b> { item }
-
     fn with_capacity(size: usize) -> Self {
         Self::with_capacity(size)
     }
@@ -333,7 +331,7 @@ pub trait BuilderInput<K: BatchContainer, V: BatchContainer>: Container {
     fn into_parts<'a>(item: Self::Item<'a>) -> (Self::Key<'a>, Self::Val<'a>, Self::Time, Self::Diff);
 
     /// Test that the key equals a key in the layout's key container.
-    fn key_eq(this: &Self::Key<'_>, other: K::ReadItem<'_>) -> bool;
+    fn key_eq<'a, 'b>(this: &Self::Key<'a>, other: K::ReadItem<'b>) -> bool;
 
     /// Test that the value equals a key in the layout's value container.
     fn val_eq(this: &Self::Val<'_>, other: V::ReadItem<'_>) -> bool;
@@ -346,10 +344,10 @@ impl<K,KBC,V,VBC,T,R> BuilderInput<KBC, VBC> for Vec<((K, V), T, R)>
 where
     K: Ord + Clone + 'static,
     KBC: BatchContainer,
-    for<'a> KBC::ReadItem<'a>: PartialEq<&'a K>,
+    for<'a, 'b> KBC::ReadItem<'a>: PartialEq<&'b K>,
     V: Ord + Clone + 'static,
     VBC: BatchContainer,
-    for<'a> VBC::ReadItem<'a>: PartialEq<&'a V>,
+    for<'a, 'b> VBC::ReadItem<'a>: PartialEq<&'b V>,
     T: Timestamp + Lattice + Clone + 'static,
     R: Ord + Semigroup + 'static,
 {
@@ -363,11 +361,11 @@ where
     }
 
     fn key_eq(this: &K, other: KBC::ReadItem<'_>) -> bool {
-        KBC::reborrow(other) == this
+        other == this
     }
 
     fn val_eq(this: &V, other: VBC::ReadItem<'_>) -> bool {
-        VBC::reborrow(other) == this
+        other == this
     }
 
     fn key_val_upd_counts(chain: &[Self]) -> (usize, usize, usize) {
@@ -399,10 +397,10 @@ where
 impl<K,V,T,R> BuilderInput<K, V> for TimelyStack<((K::Owned, V::Owned), T, R)>
 where
     K: BatchContainer,
-    for<'a> K::ReadItem<'a>: PartialEq<&'a K::Owned>,
+    for<'a, 'b> K::ReadItem<'a>: PartialEq<&'b K::Owned>,
     K::Owned: Ord + Columnation + Clone + 'static,
     V: BatchContainer,
-    for<'a> V::ReadItem<'a>: PartialEq<&'a V::Owned>,
+    for<'a, 'b> V::ReadItem<'a>: PartialEq<&'b V::Owned>,
     V::Owned: Ord + Columnation + Clone + 'static,
     T: Timestamp + Lattice + Columnation + Clone + 'static,
     R: Ord + Clone + Semigroup + Columnation + 'static,
@@ -417,11 +415,11 @@ where
     }
 
     fn key_eq(this: &&K::Owned, other: K::ReadItem<'_>) -> bool {
-        K::reborrow(other) == *this
+        other == *this
     }
 
     fn val_eq(this: &&V::Owned, other: V::ReadItem<'_>) -> bool {
-        V::reborrow(other) == *this
+        other == *this
     }
 
     fn key_val_upd_counts(chain: &[Self]) -> (usize, usize, usize) {
@@ -478,9 +476,6 @@ pub mod containers {
         /// Creates a new container with sufficient capacity.
         fn merge_capacity(cont1: &Self, cont2: &Self) -> Self;
 
-        /// Converts a read item into one with a narrower lifetime.
-        fn reborrow<'b, 'a: 'b>(item: Self::ReadItem<'a>) -> Self::ReadItem<'b>;
-
         /// Reference to the element at this position.
         fn index(&self, index: usize) -> Self::ReadItem<'_>;
         /// Number of contained elements
@@ -503,7 +498,7 @@ pub mod containers {
         /// stays false once it becomes false, a joint property of the predicate
         /// and the layout of `Self. This allows `advance` to use exponential search to
         /// count the number of elements in time logarithmic in the result.
-        fn advance<F: for<'a> Fn(Self::ReadItem<'a>)->bool>(&self, start: usize, end: usize, function: F) -> usize {
+        fn advance<'a, F: Fn(Self::ReadItem<'a>)->bool>(&'a self, start: usize, end: usize, function: F) -> usize {
 
             let small_limit = 8;
 
@@ -548,8 +543,6 @@ pub mod containers {
         type Owned = T;
         type ReadItem<'a> = &'a T;
 
-        fn reborrow<'b, 'a: 'b>(item: Self::ReadItem<'a>) -> Self::ReadItem<'b> { item }
-
         fn with_capacity(size: usize) -> Self {
             Vec::with_capacity(size)
         }
@@ -569,8 +562,6 @@ pub mod containers {
     impl<T: Clone + Ord + Columnation + 'static> BatchContainer for TimelyStack<T> {
         type Owned = T;
         type ReadItem<'a> = &'a T;
-
-        fn reborrow<'b, 'a: 'b>(item: Self::ReadItem<'a>) -> Self::ReadItem<'b> { item }
 
         fn with_capacity(size: usize) -> Self {
             Self::with_capacity(size)
@@ -629,8 +620,6 @@ pub mod containers {
     {
         type Owned = Vec<B>;
         type ReadItem<'a> = &'a [B];
-
-        fn reborrow<'b, 'a: 'b>(item: Self::ReadItem<'a>) -> Self::ReadItem<'b> { item }
 
         fn with_capacity(size: usize) -> Self {
             let mut offsets = Vec::with_capacity(size + 1);
