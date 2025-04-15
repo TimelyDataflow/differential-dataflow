@@ -44,11 +44,13 @@ impl<C: Cursor> CursorList<C> {
         for (index, cursor) in self.cursors.iter().enumerate() {
             let key = cursor.get_key(&storage[index]);
             if key.is_some() {
-                if min_key_opt.is_none() || key.lt(&min_key_opt) {
+                let order = key.partial_cmp(&min_key_opt);
+                if min_key_opt.is_none() || order == Some(std::cmp::Ordering::Less) {
                     min_key_opt = key;
                     self.min_key.clear();
+                    self.min_key.push(index);
                 }
-                if key.eq(&min_key_opt) {
+                else if key.eq(&min_key_opt) {
                     self.min_key.push(index);
                 }
             }
@@ -72,11 +74,13 @@ impl<C: Cursor> CursorList<C> {
         for &index in self.min_key.iter() {
             let val = self.cursors[index].get_val(&storage[index]);
             if val.is_some() {
-                if min_val.is_none() || val.lt(&min_val) {
+                let order = val.partial_cmp(&min_val);
+                if min_val.is_none() || order == Some(std::cmp::Ordering::Less) {
                     min_val = val;
                     self.min_val.clear();
+                    self.min_val.push(index);
                 }
-                if val.eq(&min_val) {
+                else if order == Some(std::cmp::Ordering::Equal) {
                     self.min_val.push(index);
                 }
             }
