@@ -115,6 +115,15 @@ impl<C: Cursor> Cursor for CursorList<C> {
         self.cursors[self.min_val[0]].val(&storage[self.min_val[0]])
     }
     #[inline]
+    fn get_key<'a>(&self, storage: &'a Vec<C::Storage>) -> Option<Self::Key<'a>> {
+        self.min_key.get(0).map(|idx| self.cursors[*idx].key(&storage[*idx]))
+    }
+    #[inline]
+    fn get_val<'a>(&self, storage: &'a Vec<C::Storage>) -> Option<Self::Val<'a>> {
+        self.min_val.get(0).map(|idx| self.cursors[*idx].val(&storage[*idx]))
+    }
+
+    #[inline]
     fn map_times<L: FnMut(Self::TimeGat<'_>, Self::DiffGat<'_>)>(&mut self, storage: &Vec<C::Storage>, mut logic: L) {
         for &index in self.min_val.iter() {
             self.cursors[index].map_times(&storage[index], |t,d| logic(t,d));

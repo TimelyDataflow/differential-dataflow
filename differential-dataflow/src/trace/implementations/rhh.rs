@@ -666,9 +666,9 @@ mod val_batch {
 
         type Storage = RhhValBatch<L>;
 
-        fn key<'a>(&self, storage: &'a RhhValBatch<L>) -> Self::Key<'a> { 
-            storage.storage.keys.index(self.key_cursor) 
-        }
+        fn get_key<'a>(&self, storage: &'a RhhValBatch<L>) -> Option<Self::Key<'a>> { storage.storage.keys.get(self.key_cursor) }
+        fn get_val<'a>(&self, storage: &'a RhhValBatch<L>) -> Option<Self::Val<'a>> { if self.val_valid(storage) { storage.storage.vals.get(self.val_cursor) } else { None } }
+        fn key<'a>(&self, storage: &'a RhhValBatch<L>) -> Self::Key<'a> { storage.storage.keys.index(self.key_cursor) }
         fn val<'a>(&self, storage: &'a RhhValBatch<L>) -> Self::Val<'a> { storage.storage.vals.index(self.val_cursor) }
         fn map_times<L2: FnMut(Self::TimeGat<'_>, Self::DiffGat<'_>)>(&mut self, storage: &RhhValBatch<L>, mut logic: L2) {
             let (lower, upper) = storage.storage.updates_for_value(self.val_cursor);
