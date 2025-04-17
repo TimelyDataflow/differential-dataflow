@@ -26,30 +26,35 @@ impl<C: Cursor> CursorList<C> {
         result
     }
 
-    // Initialize min_key with the indices of cursors with the minimum key.
-    //
-    // This method scans the current keys of each cursor, and tracks the indices
-    // of cursors whose key equals the minimum valid key seen so far. As it goes,
-    // if it observes an improved key it clears the current list, updates the
-    // minimum key, and continues.
-    //
-    // Once finished, it invokes `minimize_vals()` to ensure the value cursor is
-    // in a consistent state as well.
+    /// Initialize min_key with the indices of cursors with the minimum key.
+    ///
+    /// This method scans the current keys of each cursor, and tracks the indices
+    /// of cursors whose key equals the minimum valid key seen so far. As it goes,
+    /// if it observes an improved key it clears the current list, updates the
+    /// minimum key, and continues.
+    ///
+    /// Once finished, it invokes `minimize_vals()` to ensure the value cursor is
+    /// in a consistent state as well.
     fn minimize_keys(&mut self, storage: &[C::Storage]) {
 
         self.min_key.clear();
 
-        // Determine the index of the cursor with minimum key.
-        let mut min_key_opt = None;
-        for (index, cursor) in self.cursors.iter().enumerate() {
-            let key = cursor.get_key(&storage[index]);
-            if key.is_some() {
-                if min_key_opt.is_none() || key.lt(&min_key_opt) {
-                    min_key_opt = key;
-                    self.min_key.clear();
-                }
-                if key.eq(&min_key_opt) {
-                    self.min_key.push(index);
+        // We'll visit each non-`None` key, maintaining the indexes of the least keys in `self.min_key`.
+        let mut iter = self.cursors.iter().enumerate().flat_map(|(idx, cur)| cur.get_key(&storage[idx]).map(|key| (idx, key)));
+        if let Some((idx, key)) = iter.next() {
+            let mut min_key = key;
+            self.min_key.push(idx);
+            for (idx, key) in iter {
+                match key.cmp(&min_key) {
+                    std::cmp::Ordering::Less => {
+                        self.min_key.clear();
+                        self.min_key.push(idx);
+                        min_key = key;
+                    }
+                    std::cmp::Ordering::Equal => {
+                        self.min_key.push(idx);
+                    }
+                    std::cmp::Ordering::Greater => { }
                 }
             }
         }
@@ -57,27 +62,32 @@ impl<C: Cursor> CursorList<C> {
         self.minimize_vals(storage);
     }
 
-    // Initialize min_val with the indices of minimum key cursors with the minimum value.
-    //
-    // This method scans the current values of cursor with minimum keys, and tracks the
-    // indices of cursors whose value equals the minimum valid value seen so far. As it
-    // goes, if it observes an improved value it clears the current list, updates the minimum
-    // value, and continues.
+    /// Initialize min_val with the indices of minimum key cursors with the minimum value.
+    ///
+    /// This method scans the current values of cursor with minimum keys, and tracks the
+    /// indices of cursors whose value equals the minimum valid value seen so far. As it
+    /// goes, if it observes an improved value it clears the current list, updates the minimum
+    /// value, and continues.
     fn minimize_vals(&mut self, storage: &[C::Storage]) {
 
         self.min_val.clear();
 
-        // Determine the index of the cursor with minimum value.
-        let mut min_val = None;
-        for &index in self.min_key.iter() {
-            let val = self.cursors[index].get_val(&storage[index]);
-            if val.is_some() {
-                if min_val.is_none() || val.lt(&min_val) {
-                    min_val = val;
-                    self.min_val.clear();
-                }
-                if val.eq(&min_val) {
-                    self.min_val.push(index);
+        // We'll visit each non-`None` value, maintaining the indexes of the least values in `self.min_val`.
+        let mut iter = self.min_key.iter().cloned().flat_map(|idx| self.cursors[idx].get_val(&storage[idx]).map(|val| (idx, val)));
+        if let Some((idx, val)) = iter.next() {
+            let mut min_val = val;
+            self.min_val.push(idx);
+            for (idx, val) in iter {
+                match val.cmp(&min_val) {
+                    std::cmp::Ordering::Less => {
+                        self.min_val.clear();
+                        self.min_val.push(idx);
+                        min_val = val;
+                    }
+                    std::cmp::Ordering::Equal => {
+                        self.min_val.push(idx);
+                    }
+                    std::cmp::Ordering::Greater => { }
                 }
             }
         }

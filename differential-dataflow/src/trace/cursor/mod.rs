@@ -81,14 +81,14 @@ pub trait Cursor {
     {
         let mut out = Vec::new();
         self.rewind_keys(storage);
-        while self.key_valid(storage) {
+        while let Some(key) = self.get_key(storage) {
             self.rewind_vals(storage);
-            while self.val_valid(storage) {
+            while let Some(val) = self.get_val(storage) {
                 let mut kv_out = Vec::new();
                 self.map_times(storage, |ts, r| {
                     kv_out.push((ts.into_owned(), r.into_owned()));
                 });
-                out.push(((self.key(storage).into_owned(), self.val(storage).into_owned()), kv_out));
+                out.push(((key.into_owned(), val.into_owned()), kv_out));
                 self.step_val(storage);
             }
             self.step_key(storage);
