@@ -679,8 +679,7 @@ where
 
                     // populate `temp` with the results in the best way we know how.
                     thinker.think(|v1,v2,t,r1,r2| {
-                        let key = batch_key;
-                        logic(key, v1, v2, &t, r1, r2, &mut session);
+                        logic(batch_key, v1, v2, &t, r1, r2, &mut session);
                     });
 
                     // TODO: Effort isn't perfectly tracked as we might still have some data in the

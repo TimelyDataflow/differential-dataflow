@@ -568,6 +568,9 @@ pub mod containers {
         fn index(&self, index: usize) -> Self::ReadItem<'_> {
             &self[index]
         }
+        fn get(&self, index: usize) -> Option<Self::ReadItem<'_>> {
+            <[T]>::get(&self, index)
+        }
         fn len(&self) -> usize {
             self[..].len()
         }
