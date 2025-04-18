@@ -483,6 +483,15 @@ pub mod containers {
 
         /// Reference to the element at this position.
         fn index(&self, index: usize) -> Self::ReadItem<'_>;
+
+        /// Reference to the element at this position, if it exists.
+        fn get(&self, index: usize) -> Option<Self::ReadItem<'_>> {
+            if index < self.len() {
+                Some(self.index(index))
+            }
+            else { None }
+        }
+
         /// Number of contained elements
         fn len(&self) -> usize;
         /// Returns the last item if the container is non-empty.
@@ -558,6 +567,9 @@ pub mod containers {
         }
         fn index(&self, index: usize) -> Self::ReadItem<'_> {
             &self[index]
+        }
+        fn get(&self, index: usize) -> Option<Self::ReadItem<'_>> {
+            <[T]>::get(&self, index)
         }
         fn len(&self) -> usize {
             self[..].len()

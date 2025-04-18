@@ -661,11 +661,11 @@ where
 
         let mut thinker = JoinThinker::new();
 
-        while batch.key_valid(batch_storage) && trace.key_valid(trace_storage) && effort < *fuel {
+        while let (Some(batch_key), Some(trace_key), true) = (batch.get_key(batch_storage), trace.get_key(trace_storage), effort < *fuel) {
 
-            match trace.key(trace_storage).cmp(&batch.key(batch_storage)) {
-                Ordering::Less => trace.seek_key(trace_storage, batch.key(batch_storage)),
-                Ordering::Greater => batch.seek_key(batch_storage, trace.key(trace_storage)),
+            match trace_key.cmp(&batch_key) {
+                Ordering::Less => trace.seek_key(trace_storage, batch_key),
+                Ordering::Greater => batch.seek_key(batch_storage, trace_key),
                 Ordering::Equal => {
 
                     use crate::IntoOwned;
@@ -679,8 +679,7 @@ where
 
                     // populate `temp` with the results in the best way we know how.
                     thinker.think(|v1,v2,t,r1,r2| {
-                        let key = batch.key(batch_storage);
-                        logic(key, v1, v2, &t, r1, r2, &mut session);
+                        logic(batch_key, v1, v2, &t, r1, r2, &mut session);
                     });
 
                     // TODO: Effort isn't perfectly tracked as we might still have some data in the

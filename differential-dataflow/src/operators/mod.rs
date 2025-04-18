@@ -45,9 +45,9 @@ impl<'a, C: Cursor> EditList<'a, C> {
         L: Fn(C::TimeGat<'_>)->C::Time,
     {
         self.clear();
-        while cursor.val_valid(storage) {
+        while let Some(val) = cursor.get_val(storage) {
             cursor.map_times(storage, |time1, diff1| self.push(logic(time1), diff1.into_owned()));
-            self.seal(cursor.val(storage));
+            self.seal(val);
             cursor.step_val(storage);
         }
     }

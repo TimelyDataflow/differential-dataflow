@@ -50,13 +50,9 @@ pub trait Cursor {
     fn val<'a>(&self, storage: &'a Self::Storage) -> Self::Val<'a>;
 
     /// Returns a reference to the current key, if valid.
-    fn get_key<'a>(&self, storage: &'a Self::Storage) -> Option<Self::Key<'a>> {
-        if self.key_valid(storage) { Some(self.key(storage)) } else { None }
-    }
+    fn get_key<'a>(&self, storage: &'a Self::Storage) -> Option<Self::Key<'a>>;
     /// Returns a reference to the current value, if valid.
-    fn get_val<'a>(&self, storage: &'a Self::Storage) -> Option<Self::Val<'a>> {
-        if self.val_valid(storage) { Some(self.val(storage)) } else { None }
-    }
+    fn get_val<'a>(&self, storage: &'a Self::Storage) -> Option<Self::Val<'a>>;
 
     /// Applies `logic` to each pair of time and difference. Intended for mutation of the
     /// closure's scope.
@@ -85,14 +81,14 @@ pub trait Cursor {
     {
         let mut out = Vec::new();
         self.rewind_keys(storage);
-        while self.key_valid(storage) {
+        while let Some(key) = self.get_key(storage) {
             self.rewind_vals(storage);
-            while self.val_valid(storage) {
+            while let Some(val) = self.get_val(storage) {
                 let mut kv_out = Vec::new();
                 self.map_times(storage, |ts, r| {
                     kv_out.push((ts.into_owned(), r.into_owned()));
                 });
-                out.push(((self.key(storage).into_owned(), self.val(storage).into_owned()), kv_out));
+                out.push(((key.into_owned(), val.into_owned()), kv_out));
                 self.step_val(storage);
             }
             self.step_key(storage);
