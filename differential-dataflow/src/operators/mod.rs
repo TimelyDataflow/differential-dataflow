@@ -12,12 +12,13 @@ pub use self::count::CountTotal;
 pub use self::threshold::ThresholdTotal;
 
 pub mod arrange;
-pub mod negate;
-pub mod reduce;
 pub mod consolidate;
+pub mod count;
+pub mod enter;
 pub mod iterate;
 pub mod join;
-pub mod count;
+pub mod negate;
+pub mod reduce;
 pub mod threshold;
 
 use crate::lattice::Lattice;
