@@ -27,6 +27,7 @@ pub trait Lattice : PartialOrder {
     /// assert_eq!(join, Product::new(4, 7));
     /// # }
     /// ```
+    #[must_use]
     fn join(&self, other: &Self) -> Self;
 
     /// Updates `self` to the smallest element greater than or equal to both arguments.
@@ -67,6 +68,7 @@ pub trait Lattice : PartialOrder {
     /// assert_eq!(meet, Product::new(3, 6));
     /// # }
     /// ```
+    #[must_use]
     fn meet(&self, other: &Self) -> Self;
 
     /// Updates `self` to the largest element less than or equal to both arguments.
