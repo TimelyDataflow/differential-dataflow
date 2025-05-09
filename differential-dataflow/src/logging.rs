@@ -15,11 +15,11 @@ where
     A: timely::communication::Allocate,
     W: std::io::Write+'static,
 {
-    let writer = ::timely::dataflow::operators::capture::EventWriter::new(writer);
-    let mut logger = ::timely::logging::BatchLogger::new(writer);
-    worker
-        .log_register()
-        .insert::<DifferentialEventBuilder,_>("differential/arrange", move |time, data| logger.publish_batch(time, data))
+    worker.log_register().and_then(|mut log_register| {
+        let writer = ::timely::dataflow::operators::capture::EventWriter::new(writer);
+        let mut logger = ::timely::logging::BatchLogger::new(writer);
+        log_register.insert::<DifferentialEventBuilder,_>("differential/arrange", move |time, data| logger.publish_batch(time, data))
+    })
 }
 
 /// Possible different differential events.

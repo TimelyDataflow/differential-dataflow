@@ -30,7 +30,7 @@ fn main() {
             if let Ok(stream) = ::std::net::TcpStream::connect(&addr) {
                 let writer = ::timely::dataflow::operators::capture::EventWriter::new(stream);
                 let mut logger = ::timely::logging::BatchLogger::new(writer);
-                worker.log_register().insert::<DifferentialEventBuilder,_>("differential/arrange", move |time, data|
+                worker.log_register().unwrap().insert::<DifferentialEventBuilder,_>("differential/arrange", move |time, data|
                     logger.publish_batch(time, data)
                 );
             }
