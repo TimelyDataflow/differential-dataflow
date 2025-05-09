@@ -87,11 +87,11 @@ impl<V: ExchangeData+Datum> Manager<V>
         // Deregister loggers, so that the logging dataflows can shut down.
         worker
             .log_register()
-            .insert::<TimelyEventBuilder,_>("timely", move |_time, _data| { });
+            .map(|mut log_register| log_register.insert::<TimelyEventBuilder,_>("timely", move |_time, _data| { }));
 
         worker
             .log_register()
-            .insert::<DifferentialEventBuilder,_>("differential/arrange", move |_time, _data| { });
+            .map(|mut log_register| log_register.insert::<DifferentialEventBuilder,_>("differential/arrange", move |_time, _data| { }));
     }
 
     /// Inserts a new input session by name.

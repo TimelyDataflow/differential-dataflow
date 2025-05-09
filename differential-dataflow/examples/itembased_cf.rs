@@ -94,7 +94,7 @@ fn main() {
             .map(|(user, item)| (*user, *item))
             .collect();
 
-        let timer = worker.timer();
+        let timer = worker.timer().unwrap();
 
 
         for (user, item) in synthetic_interactions.iter() {

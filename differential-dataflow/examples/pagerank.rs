@@ -26,7 +26,7 @@ fn main() {
 
         let peers = worker.peers();
         let index = worker.index();
-        let timer = worker.timer();
+        let timer = worker.timer().unwrap();
 
         let mut input = InputSession::new();
         let mut probe = ProbeHandle::new();

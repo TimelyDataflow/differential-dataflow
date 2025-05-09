@@ -433,10 +433,7 @@ where
     let stream = stream.unary_frontier(pact, name, move |_capability, info| {
 
         // Acquire a logger for arrange events.
-        let logger = {
-            let register = scope.log_register();
-            register.get::<crate::logging::DifferentialEventBuilder>("differential/arrange").map(Into::into)
-        };
+        let logger = scope.logger_for::<crate::logging::DifferentialEventBuilder>("differential/arrange").map(Into::into);
 
         // Where we will deposit received updates, and from which we extract batches.
         let mut batcher = Ba::new(logger.clone(), info.global_id);

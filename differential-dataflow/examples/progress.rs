@@ -17,7 +17,7 @@ fn main() {
 
     timely::execute_from_args(std::env::args(), move |worker| {
 
-        let timer = worker.timer();
+        let timer = worker.timer().unwrap();
         let mut probe = Handle::new();
 
         let (mut nodes, mut edges, mut times) = worker.dataflow::<usize,_,_>(|scope| {

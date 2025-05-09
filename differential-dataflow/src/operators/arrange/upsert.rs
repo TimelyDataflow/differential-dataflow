@@ -152,11 +152,7 @@ where
         stream.unary_frontier(exchange, name, move |_capability, info| {
 
             // Acquire a logger for arrange events.
-            let logger = {
-                let scope = stream.scope();
-                let register = scope.log_register();
-                register.get::<crate::logging::DifferentialEventBuilder>("differential/arrange").map(Into::into)
-            };
+            let logger = stream.scope().logger_for::<crate::logging::DifferentialEventBuilder>("differential/arrange").map(Into::into);
 
             // Tracks the lower envelope of times in `priority_queue`.
             let mut capabilities = Antichain::<Capability<G::Timestamp>>::new();
