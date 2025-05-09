@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dataflow-v0.14.2...differential-dataflow-v0.15.0) - 2025-05-09
+
+### Other
+
+- Update timely dependence to `0.21`. ([#599](https://github.com/TimelyDataflow/differential-dataflow/pull/599))
+- Document the collection invariant ([#384](https://github.com/TimelyDataflow/differential-dataflow/pull/384))
+- Modernize `Cursor` API ([#596](https://github.com/TimelyDataflow/differential-dataflow/pull/596))
+
 ## [0.14.2](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dataflow-v0.14.1...differential-dataflow-v0.14.2) - 2025-04-06
 
 ### Other
