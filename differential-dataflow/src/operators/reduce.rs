@@ -331,6 +331,7 @@ where
         let result_trace = &mut result_trace;
         trace.stream.unary_frontier(Pipeline, name, move |_capability, operator_info| {
 
+            // Acquire a logger for arrange events.
             let logger = trace.stream.scope().logger_for::<crate::logging::DifferentialEventBuilder>("differential/arrange").map(Into::into);
 
             let activator = Some(trace.stream.scope().activator_for(operator_info.address.clone()));
