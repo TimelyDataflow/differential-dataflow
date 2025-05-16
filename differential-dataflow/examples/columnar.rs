@@ -94,7 +94,7 @@ fn main() {
                 buffer.clear();
                 i += worker.peers();
             }
-            data_input.send_batch(&mut container);
+            keys_input.send_batch(&mut container);
             container.clear();
             queries += size;
             data_input.advance_to(data_input.time() + 1);
@@ -428,9 +428,6 @@ pub mod batcher {
                 let mut iter = permutation.drain(..);
                 if let Some((data, time, diff)) = iter.next() {
 
-                    let mut owned_data = D::into_owned(data);
-                    let mut owned_time = T::into_owned(time);
-
                     let mut prev_data = data;
                     let mut prev_time = time;
                     let mut prev_diff = <R as Columnar>::into_owned(diff);
@@ -441,12 +438,8 @@ pub mod batcher {
                         }
                         else {
                             if !prev_diff.is_zero() {
-                                D::copy_from(&mut owned_data, prev_data);
-                                T::copy_from(&mut owned_time, prev_time);
-                                let tuple = (owned_data, owned_time, prev_diff);
-                                self.empty.push_into(&tuple);
-                                owned_data = tuple.0;
-                                owned_time = tuple.1;
+                                let tuple = (prev_data, prev_time, &prev_diff);
+                                self.empty.push_into(tuple);
                             }
                             prev_data = data;
                             prev_time = time;
@@ -455,10 +448,8 @@ pub mod batcher {
                     }
 
                     if !prev_diff.is_zero() {
-                        D::copy_from(&mut owned_data, prev_data);
-                        T::copy_from(&mut owned_time, prev_time);
-                        let tuple = (owned_data, owned_time, prev_diff);
-                        self.empty.push_into(&tuple);
+                        let tuple = (prev_data, prev_time, &prev_diff);
+                        self.empty.push_into(tuple);
                     }
                 }
             }
@@ -658,6 +649,7 @@ pub mod dd_builder {
         <L::ValContainer as BatchContainer>::Owned: Columnar,
         <L::TimeContainer as BatchContainer>::Owned: Columnar,
         <L::DiffContainer as BatchContainer>::Owned: Columnar,
+        // These two constraints seem .. like we could potentially replace by `Columnar::Ref<'a>`.
         for<'a> L::KeyContainer: PushInto<&'a <L::KeyContainer as BatchContainer>::Owned>,
         for<'a> L::ValContainer: PushInto<&'a <L::ValContainer as BatchContainer>::Owned>,
         for<'a> <L::TimeContainer as BatchContainer>::ReadItem<'a> : IntoOwned<'a, Owned = <L::Target as Update>::Time>,
