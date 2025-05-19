@@ -66,7 +66,8 @@ pub type PreferredBuilder<K, V, T, R> = RcBuilder<OrdValBuilder<Preferred<K,V,T,
 // pub type ColKeySpine<K, T, R> = Spine<Rc<OrdKeyBatch<TStack<((K,()),T,R)>>>>;
 
 
-mod val_batch {
+/// Types related to forming batches with values.
+pub mod val_batch {
 
     use std::marker::PhantomData;
     use serde::{Deserialize, Serialize};
