@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.2](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dataflow-v0.15.1...differential-dataflow-v0.15.2) - 2025-05-19
+
+### Other
+
+- Make module ord_neu::val_batch public ([#603](https://github.com/TimelyDataflow/differential-dataflow/pull/603))
+
 ## [0.15.1](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dataflow-v0.15.0...differential-dataflow-v0.15.1) - 2025-05-09
 
 ### Other
