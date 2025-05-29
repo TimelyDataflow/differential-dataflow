@@ -46,8 +46,8 @@ fn main() {
             let data_pact = ExchangeCore::<ColumnBuilder<((String,()),u64,i64)>,_>::new_core(|x: &((&str,()),&u64,&i64)| (x.0).0.as_bytes().iter().map(|x| *x as u64).sum::<u64>() as u64);
             let keys_pact = ExchangeCore::<ColumnBuilder<((String,()),u64,i64)>,_>::new_core(|x: &((&str,()),&u64,&i64)| (x.0).0.as_bytes().iter().map(|x| *x as u64).sum::<u64>() as u64);
 
-            let data = arrange_core::<_,_,Col2KeyBatcher<_,_,_>, ColKeyBuilder<_,_,_>, ColKeySpine<_,_,_>>(&data, data_pact, "Data");
-            let keys = arrange_core::<_,_,Col2KeyBatcher<_,_,_>, ColKeyBuilder<_,_,_>, ColKeySpine<_,_,_>>(&keys, keys_pact, "Keys");
+            let data = arrange_core::<_,_,Col2KeyBatcher<_,_,_,_>, ColKeyBuilder<_,_,_>, ColKeySpine<_,_,_>>(&data, data_pact, "Data");
+            let keys = arrange_core::<_,_,Col2KeyBatcher<_,_,_,_>, ColKeyBuilder<_,_,_>, ColKeySpine<_,_,_>>(&keys, keys_pact, "Keys");
 
             keys.join_core(&data, |_k, &(), &()| Option::<()>::None)
                 .probe_with(&mut probe);
@@ -351,8 +351,8 @@ use differential_dataflow::trace::implementations::merge_batcher::ColMerger;
 use differential_dataflow::containers::TimelyStack;
 
 /// A batcher for columnar storage.
-pub type Col2ValBatcher<K, V, T, R> = MergeBatcher<Column<((K,V),T,R)>, batcher::Chunker<TimelyStack<((K,V),T,R)>>, ColMerger<(K,V),T,R>>;
-pub type Col2KeyBatcher<K, T, R> = Col2ValBatcher<K, (), T, R>;
+pub type Col2ValBatcher<K,V,T,R,Bu> = MergeBatcher<Column<((K,V),T,R)>, batcher::Chunker<TimelyStack<((K,V),T,R)>>, ColMerger<(K,V),T,R>, Bu>;
+pub type Col2KeyBatcher<K,T,R,Bu> = Col2ValBatcher<K, (), T, R, Bu>;
 
 /// Types for consolidating, merging, and extracting columnar update collections.
 pub mod batcher {

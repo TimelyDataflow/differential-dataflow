@@ -12,7 +12,7 @@ fn get_trace() -> ValSpine<u64, u64, usize, i64> {
     let op_info = OperatorInfo::new(0, 0, [].into());
     let mut trace = IntegerTrace::new(op_info, None, None);
     {
-        let mut batcher = ValBatcher::<u64,u64,usize,i64>::new(None, 0);
+        let mut batcher = ValBatcher::<u64,u64,usize,i64,IntegerBuilder>::new(None, 0);
 
         batcher.push_container(&mut vec![
             ((1, 2), 0, 1),
@@ -21,7 +21,7 @@ fn get_trace() -> ValSpine<u64, u64, usize, i64> {
         ]);
 
         let batch_ts = &[1, 2, 3];
-        let batches = batch_ts.iter().map(move |i| batcher.seal::<IntegerBuilder>(Antichain::from_elem(*i)));
+        let batches = batch_ts.iter().map(move |i| batcher.seal(Antichain::from_elem(*i)));
         for b in batches {
             trace.insert(b);
         }

@@ -275,7 +275,10 @@ pub trait Batch : BatchReader where Self: ::std::marker::Sized {
 }
 
 /// Functionality for collecting and batching updates.
-pub trait Batcher {
+pub trait Batcher<B>
+where
+    B: Builder<Input=Self::Output, Time=Self::Time>
+{
     /// Type pushed into the batcher.
     type Input;
     /// Type produced by the batcher.
@@ -287,7 +290,7 @@ pub trait Batcher {
     /// Adds an unordered container of elements to the batcher.
     fn push_container(&mut self, batch: &mut Self::Input);
     /// Returns all updates not greater or equal to an element of `upper`.
-    fn seal<B: Builder<Input=Self::Output, Time=Self::Time>>(&mut self, upper: Antichain<Self::Time>) -> B::Output;
+    fn seal(&mut self, upper: Antichain<Self::Time>) -> B::Output;
     /// Returns the lower envelope of contained update times.
     fn frontier(&mut self) -> timely::progress::frontier::AntichainRef<Self::Time>;
 }

@@ -355,7 +355,7 @@ where
     /// Arranges updates into a shared trace.
     fn arrange<Ba, Bu, Tr>(&self) -> Arranged<G, TraceAgent<Tr>>
     where
-        Ba: Batcher<Input=C, Time=G::Timestamp> + 'static,
+        Ba: Batcher<Bu, Input=C, Time=G::Timestamp> + 'static,
         Bu: Builder<Time=G::Timestamp, Input=Ba::Output, Output = Tr::Batch>,
         Tr: Trace<Time=G::Timestamp> + 'static,
         Tr::Batch: Batch,
@@ -366,7 +366,7 @@ where
     /// Arranges updates into a shared trace, with a supplied name.
     fn arrange_named<Ba, Bu, Tr>(&self, name: &str) -> Arranged<G, TraceAgent<Tr>>
     where
-        Ba: Batcher<Input=C, Time=G::Timestamp> + 'static,
+        Ba: Batcher<Bu, Input=C, Time=G::Timestamp> + 'static,
         Bu: Builder<Time=G::Timestamp, Input=Ba::Output, Output = Tr::Batch>,
         Tr: Trace<Time=G::Timestamp> + 'static,
         Tr::Batch: Batch,
@@ -383,7 +383,7 @@ where
 {
     fn arrange_named<Ba, Bu, Tr>(&self, name: &str) -> Arranged<G, TraceAgent<Tr>>
     where
-        Ba: Batcher<Input=Vec<((K, V), G::Timestamp, R)>, Time=G::Timestamp> + 'static,
+        Ba: Batcher<Bu, Input=Vec<((K, V), G::Timestamp, R)>, Time=G::Timestamp> + 'static,
         Bu: Builder<Time=G::Timestamp, Input=Ba::Output, Output = Tr::Batch>,
         Tr: Trace<Time=G::Timestamp> + 'static,
         Tr::Batch: Batch,
@@ -403,7 +403,7 @@ where
     G: Scope,
     G::Timestamp: Lattice,
     P: ParallelizationContract<G::Timestamp, Ba::Input>,
-    Ba: Batcher<Time=G::Timestamp> + 'static,
+    Ba: Batcher<Bu, Time=G::Timestamp> + 'static,
     Ba::Input: Container + Clone + 'static,
     Bu: Builder<Time=G::Timestamp, Input=Ba::Output, Output = Tr::Batch>,
     Tr: Trace<Time=G::Timestamp>+'static,
@@ -512,7 +512,7 @@ where
                             }
 
                             // Extract updates not in advance of `upper`.
-                            let batch = batcher.seal::<Bu>(upper.clone());
+                            let batch = batcher.seal(upper.clone());
 
                             writer.insert(batch.clone(), Some(capability.time().clone()));
 
@@ -540,7 +540,7 @@ where
                 }
                 else {
                     // Announce progress updates, even without data.
-                    let _batch = batcher.seal::<Bu>(input.frontier().frontier().to_owned());
+                    let _batch = batcher.seal(input.frontier().frontier().to_owned());
                     writer.seal(input.frontier().frontier().to_owned());
                 }
 
@@ -561,7 +561,7 @@ where
 {
     fn arrange_named<Ba, Bu, Tr>(&self, name: &str) -> Arranged<G, TraceAgent<Tr>>
     where
-        Ba: Batcher<Input=Vec<((K,()),G::Timestamp,R)>, Time=G::Timestamp> + 'static,
+        Ba: Batcher<Bu, Input=Vec<((K,()),G::Timestamp,R)>, Time=G::Timestamp> + 'static,
         Bu: Builder<Time=G::Timestamp, Input=Ba::Output, Output = Tr::Batch>,
         Tr: Trace<Time=G::Timestamp> + 'static,
         Tr::Batch: Batch,
@@ -598,7 +598,7 @@ where
     }
 
     fn arrange_by_key_named(&self, name: &str) -> Arranged<G, TraceAgent<ValSpine<K, V, G::Timestamp, R>>> {
-        self.arrange_named::<ValBatcher<_,_,_,_>,ValBuilder<_,_,_,_>,_>(name)
+        self.arrange_named::<ValBatcher<_,_,_,_,_>,ValBuilder<_,_,_,_>,_>(name)
     }
 }
 
@@ -633,6 +633,6 @@ where
 
     fn arrange_by_self_named(&self, name: &str) -> Arranged<G, TraceAgent<KeySpine<K, G::Timestamp, R>>> {
         self.map(|k| (k, ()))
-            .arrange_named::<KeyBatcher<_,_,_>,KeyBuilder<_,_,_>,_>(name)
+            .arrange_named::<KeyBatcher<_,_,_,_>,KeyBuilder<_,_,_>,_>(name)
     }
 }

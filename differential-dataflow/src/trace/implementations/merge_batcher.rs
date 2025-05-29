@@ -24,7 +24,7 @@ use crate::trace::{Batcher, Builder, Description};
 ///
 /// To implement `Batcher`, the container builder `C` must accept `&mut Input` as inputs,
 /// and must produce outputs of type `M::Chunk`.
-pub struct MergeBatcher<Input, C, M: Merger> {
+pub struct MergeBatcher<Input, C, M: Merger, Bu> {
     /// Transforms input streams to chunks of sorted, consolidated data.
     chunker: C,
     /// A sequence of power-of-two length lists of sorted, consolidated containers.
@@ -44,14 +44,15 @@ pub struct MergeBatcher<Input, C, M: Merger> {
     /// Timely operator ID.
     operator_id: usize,
     /// The `Input` type needs to be called out as the type of container accepted, but it is not otherwise present.
-    _marker: PhantomData<Input>,
+    _marker: PhantomData<(Input, Bu)>,
 }
 
-impl<Input, C, M> Batcher for MergeBatcher<Input, C, M>
+impl<Input, C, M, Bu> Batcher<Bu> for MergeBatcher<Input, C, M, Bu>
 where
     C: ContainerBuilder<Container=M::Chunk> + Default + for<'a> PushInto<&'a mut Input>,
     M: Merger,
     M::Time: Timestamp,
+    Bu: Builder<Time=M::Time, Input=M::Chunk>,
 {
     type Input = Input;
     type Time = M::Time;
@@ -85,7 +86,7 @@ where
     // in `upper`. All updates must have time greater or equal to the previously used `upper`,
     // which we call `lower`, by assumption that after sealing a batcher we receive no more
     // updates with times not greater or equal to `upper`.
-    fn seal<B: Builder<Input = Self::Output, Time = Self::Time>>(&mut self, upper: Antichain<M::Time>) -> B::Output {
+    fn seal(&mut self, upper: Antichain<M::Time>) -> Bu::Output {
         // Finish
         while let Some(chunk) = self.chunker.finish() {
             let chunk = std::mem::take(chunk);
@@ -115,7 +116,7 @@ where
         self.stash.clear();
 
         let description = Description::new(self.lower.clone(), upper.clone(), Antichain::from_elem(M::Time::minimum()));
-        let seal = B::seal(&mut readied, description);
+        let seal = Bu::seal(&mut readied, description);
         self.lower = upper;
         seal
     }
@@ -127,7 +128,7 @@ where
     }
 }
 
-impl<Input, C, M> MergeBatcher<Input, C, M>
+impl<Input, C, M, Bu> MergeBatcher<Input, C, M, Bu>
 where
     M: Merger,
 {
@@ -194,7 +195,7 @@ where
     }
 }
 
-impl<Input, C, M> Drop for MergeBatcher<Input, C, M>
+impl<Input, C, M, Bu> Drop for MergeBatcher<Input, C, M, Bu>
 where
     M: Merger,
 {
