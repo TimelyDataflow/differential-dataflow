@@ -47,7 +47,7 @@ pub struct MergeBatcher<Input, C, M: Merger, Bu> {
     _marker: PhantomData<(Input, Bu)>,
 }
 
-impl<Input, C, M, Bu> Batcher<Bu> for MergeBatcher<Input, C, M, Bu>
+impl<Input, C, M, Bu> Batcher for MergeBatcher<Input, C, M, Bu>
 where
     C: ContainerBuilder<Container=M::Chunk> + Default + for<'a> PushInto<&'a mut Input>,
     M: Merger,
@@ -56,7 +56,7 @@ where
 {
     type Input = Input;
     type Time = M::Time;
-    type Output = M::Chunk;
+    type Output = Bu::Output;
 
     fn new(logger: Option<Logger>, operator_id: usize) -> Self {
         Self {

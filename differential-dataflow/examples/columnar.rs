@@ -46,8 +46,8 @@ fn main() {
             let data_pact = ExchangeCore::<ColumnBuilder<((String,()),u64,i64)>,_>::new_core(|x: &((&str,()),&u64,&i64)| (x.0).0.as_bytes().iter().map(|x| *x as u64).sum::<u64>() as u64);
             let keys_pact = ExchangeCore::<ColumnBuilder<((String,()),u64,i64)>,_>::new_core(|x: &((&str,()),&u64,&i64)| (x.0).0.as_bytes().iter().map(|x| *x as u64).sum::<u64>() as u64);
 
-            let data = arrange_core::<_,_,Col2KeyBatcher<_,_,_,_>, ColKeyBuilder<_,_,_>, ColKeySpine<_,_,_>>(&data, data_pact, "Data");
-            let keys = arrange_core::<_,_,Col2KeyBatcher<_,_,_,_>, ColKeyBuilder<_,_,_>, ColKeySpine<_,_,_>>(&keys, keys_pact, "Keys");
+            let data = arrange_core::<_,_,Col2KeyBatcher<_,_,_, ColKeyBuilder<_,_,_>>, ColKeySpine<_,_,_>>(&data, data_pact, "Data");
+            let keys = arrange_core::<_,_,Col2KeyBatcher<_,_,_, ColKeyBuilder<_,_,_>>, ColKeySpine<_,_,_>>(&keys, keys_pact, "Keys");
 
             keys.join_core(&data, |_k, &(), &()| Option::<()>::None)
                 .probe_with(&mut probe);
