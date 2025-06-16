@@ -311,3 +311,77 @@ fn read_integers<'a>(input: impl Iterator<Item=&'a str>) -> Result<Vec<isize>, s
     }
     Ok(integers)
 }
+
+
+/*
+
+-- Example commands to run and reason about their outputs. For consumption alongside https://www.youtube.com/watch?v=0WijjN0LiZ4
+
+-- add five symbols
+update 000 0 0 +1
+update 111 0 0 +1
+update 222 0 0 +1
+update 333 0 0 +1
+update 444 0 0 +1
+query 0 0
+
+advance-input 1 0
+query 0 0
+
+-- update some symbols
+update 000 1 1 -1
+update 111 1 1 +2
+update 222 1 1 +1
+advance-input 2 0
+query 1 1
+
+-- explore what we used to know
+query 0 0
+query 0 5
+query 1 0
+query 1 1
+
+-- two weirder changes
+update 111 2 0 -1
+update 333 2 4 +1
+advance-input 3 0
+query 2 0
+query 2 1
+query 2 2
+query 2 3
+query 2 4
+
+-- ask some questions
+query 0 4
+query 1 4
+query 2 4
+
+-- let go of the past
+advance-output 1 0
+query 0 4
+query 1 4
+query 2 4
+
+-- lock down data history
+advance-input 3 2
+update 111 3 0 +1
+update 111 4 0 +1
+update 333 3 4 -1
+advance-input 4 2
+
+-- report "certain" answers for data
+query 10000 0
+query 10000 1
+query 10000 2
+
+-- data time advancing allows us to know
+advance-input 4 3
+query 10000 2
+
+-- alternately, speculate about the ending
+query 3 10000
+
+-- clean up after ourselves
+advance-output 4 3
+
+ */
