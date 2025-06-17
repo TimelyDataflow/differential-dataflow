@@ -41,7 +41,7 @@ fn main() {
             let (input, graph) = scope.new_collection();
 
             // each edge should exist in both directions.
-            let graph = graph.arrange::<ValBatcher<_,_,_,_>, ValBuilder<_,_,_,_>, ValSpine<_,_,_,_>>();
+            let graph = graph.arrange::<ValBatcher<_,_,_,_,ValBuilder<_,_,_,_>>, ValSpine<_,_,_,_>>();
 
             match program.as_str() {
                 "tc"    => tc(&graph).filter(move |_| inspect).map(|_| ()).consolidate().inspect(|x| println!("tc count: {:?}", x)).probe(),
@@ -94,10 +94,10 @@ fn tc<G: Scope<Timestamp=()>>(edges: &EdgeArranged<G, Node, Node, Present>) -> C
             let result =
             inner
                 .map(|(x,y)| (y,x))
-                .arrange::<ValBatcher<_,_,_,_>, ValBuilder<_,_,_,_>, ValSpine<_,_,_,_>>()
+                .arrange::<ValBatcher<_,_,_,_,ValBuilder<_,_,_,_>>, ValSpine<_,_,_,_>>()
                 .join_core(&edges, |_y,&x,&z| Some((x, z)))
                 .concat(&edges.as_collection(|&k,&v| (k,v)))
-                .arrange::<KeyBatcher<_,_,_>, KeyBuilder<_,_,_>, KeySpine<_,_,_>>()
+                .arrange::<KeyBatcher<_,_,_,KeyBuilder<_,_,_>>, KeySpine<_,_,_>>()
                 .threshold_semigroup(|_,_,x| if x.is_none() { Some(Present) } else { None })
                 ;
 
@@ -121,12 +121,12 @@ fn sg<G: Scope<Timestamp=()>>(edges: &EdgeArranged<G, Node, Node, Present>) -> C
 
             let result =
             inner
-                .arrange::<ValBatcher<_,_,_,_>, ValBuilder<_,_,_,_>, ValSpine<_,_,_,_>>()
+                .arrange::<ValBatcher<_,_,_,_,ValBuilder<_,_,_,_>>, ValSpine<_,_,_,_>>()
                 .join_core(&edges, |_,&x,&z| Some((x, z)))
-                .arrange::<ValBatcher<_,_,_,_>, ValBuilder<_,_,_,_>, ValSpine<_,_,_,_>>()
+                .arrange::<ValBatcher<_,_,_,_,ValBuilder<_,_,_,_>>, ValSpine<_,_,_,_>>()
                 .join_core(&edges, |_,&x,&z| Some((x, z)))
                 .concat(&peers)
-                .arrange::<KeyBatcher<_,_,_>, KeyBuilder<_,_,_>, KeySpine<_,_,_>>()
+                .arrange::<KeyBatcher<_,_,_,KeyBuilder<_,_,_>>, KeySpine<_,_,_>>()
                 .threshold_semigroup(|_,_,x| if x.is_none() { Some(Present) } else { None })
                 ;
 

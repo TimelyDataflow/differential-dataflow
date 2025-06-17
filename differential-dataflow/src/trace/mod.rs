@@ -175,12 +175,12 @@ pub trait TraceReader {
 /// An append-only collection of `(key, val, time, diff)` tuples.
 ///
 /// The trace must pretend to look like a collection of `(Key, Val, Time, isize)` tuples, but is permitted
-/// to introduce new types `KeyRef`, `ValRef`, and `TimeRef` which can be dereference to the types above.
+/// to introduce new types `KeyRef`, `ValRef`, and `TimeRef` which can be dereferenced to the types above.
 ///
 /// The trace must be constructable from, and navigable by the `Key`, `Val`, `Time` types, but does not need
 /// to return them.
 pub trait Trace : TraceReader
-where <Self as TraceReader>::Batch: Batch {
+{
 
     /// Allocates a new empty trace.
     fn new(
@@ -222,10 +222,7 @@ where <Self as TraceReader>::Batch: Batch {
 /// but do not expose ways to construct the batches. This trait is appropriate for views of the batch, and is
 /// especially useful for views derived from other sources in ways that prevent the construction of batches
 /// from the type of data in the view (for example, filtered views, or views with extended time coordinates).
-pub trait BatchReader
-where
-    Self: ::std::marker::Sized,
-{
+pub trait BatchReader {
     /// Key by which updates are indexed.
     type Key<'a>: Copy + Clone + Ord;
     /// Values associated with keys.
@@ -274,7 +271,7 @@ pub trait Batch : BatchReader where Self: ::std::marker::Sized {
     fn empty(lower: Antichain<Self::Time>, upper: Antichain<Self::Time>) -> Self;
 }
 
-/// Functionality for collecting and batching updates.
+/// Functionality for collecting and batching updates and turning them into batches.
 pub trait Batcher {
     /// Type pushed into the batcher.
     type Input;
@@ -287,7 +284,7 @@ pub trait Batcher {
     /// Adds an unordered container of elements to the batcher.
     fn push_container(&mut self, batch: &mut Self::Input);
     /// Returns all updates not greater or equal to an element of `upper`.
-    fn seal<B: Builder<Input=Self::Output, Time=Self::Time>>(&mut self, upper: Antichain<Self::Time>) -> B::Output;
+    fn seal(&mut self, upper: Antichain<Self::Time>) -> Self::Output;
     /// Returns the lower envelope of contained update times.
     fn frontier(&mut self) -> timely::progress::frontier::AntichainRef<Self::Time>;
 }
