@@ -1,9 +1,82 @@
 //! A columnar container based on the columnation library.
 
 use std::iter::FromIterator;
+use std::rc::Rc;
 
-pub use columnation::*;
+use columnation::{Columnation, Region};
+use differential_dataflow::trace::implementations::merge_batcher::MergeBatcher;
+use differential_dataflow::trace::implementations::ord_neu::{OrdKeyBatch, OrdKeyBuilder, OrdValBatch, OrdValBuilder};
+use differential_dataflow::trace::implementations::spine_fueled::Spine;
+use differential_dataflow::trace::implementations::{BatchContainer, Layout, OffsetList, Update};
+use differential_dataflow::trace::rc_blanket_impls::RcBuilder;
 use timely::container::PushInto;
+
+mod merge_batcher;
+mod chunker;
+
+pub use merge_batcher::ColMerger;
+pub use chunker::ColumnationChunker;
+
+/// A layout based on timely stacks
+pub struct TStack<U: Update> {
+    phantom: std::marker::PhantomData<U>,
+}
+
+impl<U: Update> Layout for TStack<U>
+where
+    U::Key: Columnation,
+    U::Val: Columnation,
+    U::Time: Columnation,
+    U::Diff: Columnation + Ord,
+{
+    type Target = U;
+    type KeyContainer = TimelyStack<U::Key>;
+    type ValContainer = TimelyStack<U::Val>;
+    type TimeContainer = TimelyStack<U::Time>;
+    type DiffContainer = TimelyStack<U::Diff>;
+    type OffsetContainer = OffsetList;
+}
+
+
+/// A trace implementation backed by columnar storage.
+pub type ColValSpine<K, V, T, R> = Spine<Rc<OrdValBatch<TStack<((K,V),T,R)>>>>;
+/// A batcher for columnar storage.
+pub type ColValBatcher<K, V, T, R> = MergeBatcher<Vec<((K,V),T,R)>, ColumnationChunker<((K,V),T,R)>, ColMerger<(K,V),T,R>>;
+/// A builder for columnar storage.
+pub type ColValBuilder<K, V, T, R> = RcBuilder<OrdValBuilder<TStack<((K,V),T,R)>, TimelyStack<((K,V),T,R)>>>;
+
+
+/// A trace implementation backed by columnar storage.
+pub type ColKeySpine<K, T, R> = Spine<Rc<OrdKeyBatch<TStack<((K,()),T,R)>>>>;
+/// A batcher for columnar storage
+pub type ColKeyBatcher<K, T, R> = MergeBatcher<Vec<((K,()),T,R)>, ColumnationChunker<((K,()),T,R)>, ColMerger<(K,()),T,R>>;
+/// A builder for columnar storage
+pub type ColKeyBuilder<K, T, R> = RcBuilder<OrdKeyBuilder<TStack<((K,()),T,R)>, TimelyStack<((K,()),T,R)>>>;
+
+// The `ToOwned` requirement exists to satisfy `self.reserve_items`, who must for now
+// be presented with the actual contained type, rather than a type that borrows into it.
+impl<T: Clone + Ord + Columnation + 'static> BatchContainer for TimelyStack<T> {
+    type Owned = T;
+    type ReadItem<'a> = &'a T;
+
+    fn with_capacity(size: usize) -> Self {
+        Self::with_capacity(size)
+    }
+
+    fn merge_capacity(cont1: &Self, cont2: &Self) -> Self {
+        let mut new = Self::default();
+        new.reserve_regions(std::iter::once(cont1).chain(std::iter::once(cont2)));
+        new
+    }
+    fn reborrow<'b, 'a: 'b>(item: Self::ReadItem<'a>) -> Self::ReadItem<'b> { item }
+    fn index(&self, index: usize) -> Self::ReadItem<'_> {
+        &self[index]
+    }
+    fn len(&self) -> usize {
+        self[..].len()
+    }
+}
+
 
 /// An append-only vector that store records as columns.
 ///
@@ -274,7 +347,7 @@ mod container {
     use timely::Container;
     use timely::container::SizableContainer;
 
-    use crate::containers::TimelyStack;
+    use crate::columnation::TimelyStack;
 
     impl<T: Columnation> Container for TimelyStack<T> {
         type ItemRef<'a> = &'a T where Self: 'a;
