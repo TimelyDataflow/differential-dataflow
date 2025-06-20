@@ -20,8 +20,10 @@ pub fn count<G, Tr, K, R, F, P>(
 ) -> Collection<G, (P, usize, usize), R>
 where
     G: Scope<Timestamp=Tr::Time>,
-    Tr: TraceReader<Diff=isize>+Clone+'static,
-    for<'a> Tr::Key<'a>: IntoOwned<'a, Owned = K>,
+    Tr: for<'a> TraceReader<
+        Key<'a>: IntoOwned<'a, Owned = K>,
+        Diff=isize,
+    >+Clone+'static,
     for<'a> Tr::Diff : Semigroup<Tr::DiffGat<'a>>,
     K: Hashable + Ord + Default + 'static,
     R: Monoid+Multiply<Output = R>+ExchangeData,

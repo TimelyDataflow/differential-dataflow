@@ -11,8 +11,7 @@ use crate::hashable::Hashable;
 
 fn _color<G, N>(edges: &Collection<G, (N,N)>) -> Collection<G,(N,Option<u32>)>
 where
-    G: Scope,
-    G::Timestamp: Lattice+Ord,
+    G: Scope<Timestamp: Lattice+Ord>,
     N: ExchangeData+Hash,
 {
     // need some bogus initial values.
@@ -45,8 +44,7 @@ pub fn sequence<G, N, V, F>(
     edges: &Collection<G, (N,N)>,
     logic: F) -> Collection<G, (N,Option<V>)>
 where
-    G: Scope,
-    G::Timestamp: Lattice+Hash+Ord,
+    G: Scope<Timestamp: Lattice+Hash+Ord>,
     N: ExchangeData+Hashable,
     V: ExchangeData,
     F: Fn(&N, &[(&V, isize)])->V+'static

@@ -12,7 +12,8 @@ use itertools::Itertools;
 type Result = std::sync::mpsc::Receiver<timely::dataflow::operators::capture::Event<usize, Vec<((u64, i64), usize, i64)>>>;
 
 fn run_test<T>(test: T, expected: Vec<(usize, Vec<((u64, i64), i64)>)>) -> ()
-        where T: FnOnce(Vec<Vec<((u64, u64), i64)>>)-> Result + ::std::panic::UnwindSafe
+where
+    T: FnOnce(Vec<Vec<((u64, u64), i64)>>)-> Result + ::std::panic::UnwindSafe,
 {
     let input_epochs: Vec<Vec<((u64, u64), i64)>> = vec![
         vec![((2, 0), 1), ((1, 0), 1), ((1, 3), 1), ((4, 2), 1)],

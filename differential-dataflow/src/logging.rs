@@ -13,7 +13,7 @@ pub type Logger = ::timely::logging_core::TypedLogger<DifferentialEventBuilder, 
 pub fn enable<A, W>(worker: &mut timely::worker::Worker<A>, writer: W) -> Option<Box<dyn std::any::Any+'static>>
 where
     A: timely::communication::Allocate,
-    W: std::io::Write+'static,
+    W: std::io::Write + 'static,
 {
     worker.log_register().and_then(|mut log_register| {
         let writer = ::timely::dataflow::operators::capture::EventWriter::new(writer);

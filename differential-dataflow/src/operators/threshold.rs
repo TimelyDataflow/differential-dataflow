@@ -17,7 +17,7 @@ use crate::operators::arrange::{Arranged, ArrangeBySelf};
 use crate::trace::{BatchReader, Cursor, TraceReader};
 
 /// Extension trait for the `distinct` differential dataflow method.
-pub trait ThresholdTotal<G: Scope, K: ExchangeData, R: ExchangeData+Semigroup> where G::Timestamp: TotalOrder+Lattice+Ord {
+pub trait ThresholdTotal<G: Scope<Timestamp: TotalOrder+Lattice+Ord>, K: ExchangeData, R: ExchangeData+Semigroup> {
     /// Reduces the collection to one occurrence of each distinct element.
     fn threshold_semigroup<R2, F>(&self, thresh: F) -> Collection<G, K, R2>
     where
@@ -85,7 +85,9 @@ pub trait ThresholdTotal<G: Scope, K: ExchangeData, R: ExchangeData+Semigroup> w
 }
 
 impl<G: Scope, K: ExchangeData+Hashable, R: ExchangeData+Semigroup> ThresholdTotal<G, K, R> for Collection<G, K, R>
-where G::Timestamp: TotalOrder+Lattice+Ord {
+where
+    G: Scope<Timestamp: TotalOrder+Lattice+Ord>,
+{
     fn threshold_semigroup<R2, F>(&self, thresh: F) -> Collection<G, K, R2>
     where
         R2: Semigroup+'static,
@@ -99,11 +101,13 @@ where G::Timestamp: TotalOrder+Lattice+Ord {
 impl<G, K, T1> ThresholdTotal<G, K, T1::Diff> for Arranged<G, T1>
 where
     G: Scope<Timestamp=T1::Time>,
-    T1: for<'a> TraceReader<Key<'a>=&'a K, Val<'a>=&'a ()>+Clone+'static,
-    for<'a> T1::Diff : Semigroup<T1::DiffGat<'a>>,
+    T1: for<'a> TraceReader<
+        Key<'a>=&'a K, 
+        Val<'a>=&'a (),
+        Time: TotalOrder,
+        Diff : ExchangeData + Semigroup<T1::DiffGat<'a>>,
+    >+Clone+'static,
     K: ExchangeData,
-    T1::Time: TotalOrder,
-    T1::Diff: ExchangeData,
 {
     fn threshold_semigroup<R2, F>(&self, mut thresh: F) -> Collection<G, K, R2>
     where

@@ -114,14 +114,14 @@ fn main() {
 ///
 /// The computation to determine this, and to maintain it as times change, is an iterative
 /// computation that propagates times and maintains the minimal elements at each location.
-fn frontier<G: Scope, T: Timestamp>(
+fn frontier<G, T>(
     nodes: Collection<G, (Target, Source, T::Summary)>,
     edges: Collection<G, (Source, Target)>,
     times: Collection<G, (Location, T)>,
 ) -> Collection<G, (Location, T)>
 where
-    G::Timestamp: Lattice+Ord,
-    T::Summary: differential_dataflow::ExchangeData,
+    G: Scope<Timestamp: Lattice+Ord>,
+    T: Timestamp<Summary: differential_dataflow::ExchangeData>,
 {
     // Translate node and edge transitions into a common Location to Location edge with an associated Summary.
     let nodes = nodes.map(|(target, source, summary)| (Location::from(target), (Location::from(source), summary)));
@@ -148,13 +148,13 @@ where
 }
 
 /// Summary paths from locations to operator zero inputs.
-fn summarize<G: Scope, T: Timestamp>(
+fn summarize<G, T>(
     nodes: Collection<G, (Target, Source, T::Summary)>,
     edges: Collection<G, (Source, Target)>,
 ) -> Collection<G, (Location, (Location, T::Summary))>
 where
-    G::Timestamp: Lattice+Ord,
-    T::Summary: differential_dataflow::ExchangeData+std::hash::Hash,
+    G: Scope<Timestamp: Lattice+Ord>,
+    T: Timestamp<Summary: differential_dataflow::ExchangeData+std::hash::Hash>,
 {
     // Start from trivial reachability from each input to itself.
     let zero_inputs =
@@ -196,8 +196,8 @@ fn find_cycles<G: Scope, T: Timestamp>(
     edges: Collection<G, (Source, Target)>,
 ) -> Collection<G, (Location, Location)>
 where
-    G::Timestamp: Lattice+Ord,
-    T::Summary: differential_dataflow::ExchangeData,
+    G: Scope<Timestamp: Lattice+Ord>,
+    T: Timestamp<Summary: differential_dataflow::ExchangeData>,
 {
     // Retain node connections along "default" timestamp summaries.
     let nodes = nodes.flat_map(|(target, source, summary)| {

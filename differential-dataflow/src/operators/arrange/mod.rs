@@ -48,10 +48,7 @@ use timely::progress::Antichain;
 use crate::trace::TraceReader;
 
 /// Operating instructions on how to replay a trace.
-pub enum TraceReplayInstruction<Tr>
-where
-    Tr: TraceReader,
-{
+pub enum TraceReplayInstruction<Tr: TraceReader> {
     /// Describes a frontier advance.
     Frontier(Antichain<Tr::Time>),
     /// Describes a batch of data and a capability hint.

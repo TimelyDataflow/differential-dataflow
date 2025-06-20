@@ -593,10 +593,11 @@ pub mod val_batch {
 
     impl<L, CI> Builder for OrdValBuilder<L, CI>
     where
-        L: Layout,
+        L: for<'a> Layout<
+            KeyContainer: PushInto<CI::Key<'a>>,
+            ValContainer: PushInto<CI::Val<'a>>,
+        >,
         CI: for<'a> BuilderInput<L::KeyContainer, L::ValContainer, Time=<L::Target as Update>::Time, Diff=<L::Target as Update>::Diff>,
-        for<'a> L::KeyContainer: PushInto<CI::Key<'a>>,
-        for<'a> L::ValContainer: PushInto<CI::Val<'a>>,
         for<'a> <L::TimeContainer as BatchContainer>::ReadItem<'a> : IntoOwned<'a, Owned = <L::Target as Update>::Time>,
         for<'a> <L::DiffContainer as BatchContainer>::ReadItem<'a> : IntoOwned<'a, Owned = <L::Target as Update>::Diff>,
     {
@@ -1095,11 +1096,10 @@ mod key_batch {
 
     impl<L: Layout, CI> Builder for OrdKeyBuilder<L, CI>
     where
-        L: Layout,
-        CI: for<'a> BuilderInput<L::KeyContainer, L::ValContainer, Time=<L::Target as Update>::Time, Diff=<L::Target as Update>::Diff>,
-        for<'a> L::KeyContainer: PushInto<CI::Key<'a>>,
+        L: for<'a> Layout<KeyContainer: PushInto<CI::Key<'a>>>,
         for<'a> <L::TimeContainer as BatchContainer>::ReadItem<'a> : IntoOwned<'a, Owned = <L::Target as Update>::Time>,
         for<'a> <L::DiffContainer as BatchContainer>::ReadItem<'a> : IntoOwned<'a, Owned = <L::Target as Update>::Diff>,
+        CI: BuilderInput<L::KeyContainer, L::ValContainer, Time=<L::Target as Update>::Time, Diff=<L::Target as Update>::Diff>,
     {
 
         type Input = CI;

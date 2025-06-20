@@ -19,11 +19,7 @@ use super::TraceReplayInstruction;
 ///
 /// A `TraceWriter` accepts a sequence of batches and distributes them
 /// to both a shared trace and to a sequence of private queues.
-pub struct TraceWriter<Tr>
-where
-    Tr: Trace,
-    Tr::Batch: Batch,
-{
+pub struct TraceWriter<Tr: Trace> {
     /// Current upper limit.
     upper: Antichain<Tr::Time>,
     /// Shared trace, possibly absent (due to weakness).
@@ -32,11 +28,7 @@ where
     queues: Rc<RefCell<Vec<TraceAgentQueueWriter<Tr>>>>,
 }
 
-impl<Tr> TraceWriter<Tr>
-where
-    Tr: Trace,
-    Tr::Batch: Batch,
-{
+impl<Tr: Trace> TraceWriter<Tr> {
     /// Creates a new `TraceWriter`.
     pub fn new(
         upper: Vec<Tr::Time>,
@@ -98,11 +90,7 @@ where
     }
 }
 
-impl<Tr> Drop for TraceWriter<Tr>
-where
-    Tr: Trace,
-    Tr::Batch: Batch,
-{
+impl<Tr: Trace> Drop for TraceWriter<Tr> {
     fn drop(&mut self) {
         self.seal(Antichain::new())
     }

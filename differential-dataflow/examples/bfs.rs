@@ -91,9 +91,10 @@ fn main() {
 }
 
 // returns pairs (n, s) indicating node n can be reached from a root in s steps.
-fn bfs<G: Scope>(edges: &Collection<G, Edge>, roots: &Collection<G, Node>) -> Collection<G, (Node, u32)>
-where G::Timestamp: Lattice+Ord {
-
+fn bfs<G>(edges: &Collection<G, Edge>, roots: &Collection<G, Node>) -> Collection<G, (Node, u32)>
+where
+    G: Scope<Timestamp: Lattice+Ord>, 
+{
     // initialize roots as reaching themselves at distance 0
     let nodes = roots.map(|x| (x, 0));
 

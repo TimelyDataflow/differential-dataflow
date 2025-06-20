@@ -181,11 +181,10 @@ where
 
 impl<G, K, V, R, P, F> PrefixExtender<G, R> for CollectionExtender<K, V, G::Timestamp, R, P, F>
 where
-    G: Scope,
+    G: Scope<Timestamp: Lattice+ExchangeData>,
     K: ExchangeData+Hash+Default,
     V: ExchangeData+Hash+Default,
     P: ExchangeData,
-    G::Timestamp: Lattice+ExchangeData,
     R: Monoid+Multiply<Output = R>+ExchangeData,
     F: Fn(&P)->K+Clone+'static,
 {

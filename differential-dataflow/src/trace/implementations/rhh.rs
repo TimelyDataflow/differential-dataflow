@@ -53,8 +53,7 @@ pub struct HashWrapper<T: std::hash::Hash + Hashable> {
     pub inner: T
 }
 
-impl<T: PartialOrd + std::hash::Hash + Hashable> PartialOrd for HashWrapper<T>
-where <T as Hashable>::Output: PartialOrd {
+impl<T: PartialOrd + std::hash::Hash + Hashable<Output: PartialOrd>> PartialOrd for HashWrapper<T> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         let this_hash = self.inner.hashed();
         let that_hash = other.inner.hashed();
@@ -62,8 +61,7 @@ where <T as Hashable>::Output: PartialOrd {
     }
 }
 
-impl<T: Ord + PartialOrd + std::hash::Hash + Hashable> Ord for HashWrapper<T> 
-where <T as Hashable>::Output: PartialOrd { 
+impl<T: Ord + PartialOrd + std::hash::Hash + Hashable<Output: PartialOrd>> Ord for HashWrapper<T> {
     fn cmp(&self, other: &Self) -> Ordering {
         self.partial_cmp(other).unwrap()
     }

@@ -50,8 +50,7 @@ pub struct MergeBatcher<Input, C, M: Merger> {
 impl<Input, C, M> Batcher for MergeBatcher<Input, C, M>
 where
     C: ContainerBuilder<Container=M::Chunk> + Default + for<'a> PushInto<&'a mut Input>,
-    M: Merger,
-    M::Time: Timestamp,
+    M: Merger<Time: Timestamp>,
 {
     type Input = Input;
     type Time = M::Time;
@@ -127,10 +126,7 @@ where
     }
 }
 
-impl<Input, C, M> MergeBatcher<Input, C, M>
-where
-    M: Merger,
-{
+impl<Input, C, M: Merger> MergeBatcher<Input, C, M> {
     /// Insert a chain and maintain chain properties: Chains are geometrically sized and ordered
     /// by decreasing length.
     fn insert_chain(&mut self, chain: Vec<M::Chunk>) {
@@ -194,10 +190,7 @@ where
     }
 }
 
-impl<Input, C, M> Drop for MergeBatcher<Input, C, M>
-where
-    M: Merger,
-{
+impl<Input, C, M: Merger> Drop for MergeBatcher<Input, C, M> {
     fn drop(&mut self) {
         // Cleanup chain to retract accounting information.
         while self.chain_pop().is_some() {}
@@ -330,8 +323,7 @@ pub mod container {
 
     impl<MC, CQ> Merger for ContainerMerger<MC, CQ>
     where
-        for<'a> MC: MergerChunk + Clone + PushInto<<MC as Container>::Item<'a>> + 'static,
-        for<'a> MC::TimeOwned: Ord + PartialOrder + Data,
+        for<'a> MC: MergerChunk<TimeOwned: Ord + PartialOrder + Data> + Clone + PushInto<<MC as Container>::Item<'a>> + 'static,
         CQ: ContainerQueue<MC>,
     {
         type Time = MC::TimeOwned;

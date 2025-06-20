@@ -22,8 +22,7 @@ use crate::operators::iterate::Variable;
 /// could be good insurance here.
 pub fn bidijkstra<G, N>(edges: &Collection<G, (N,N)>, goals: &Collection<G, (N,N)>) -> Collection<G, ((N,N), u32)>
 where
-    G: Scope,
-    G::Timestamp: Lattice+Ord,
+    G: Scope<Timestamp: Lattice+Ord>,
     N: ExchangeData+Hash,
 {
     use crate::operators::arrange::arrangement::ArrangeByKey;

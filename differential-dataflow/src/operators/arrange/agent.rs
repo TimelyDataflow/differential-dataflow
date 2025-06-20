@@ -10,7 +10,7 @@ use timely::progress::Timestamp;
 use timely::progress::{Antichain, frontier::AntichainRef};
 use timely::dataflow::operators::CapabilitySet;
 
-use crate::trace::{Trace, TraceReader, Batch, BatchReader};
+use crate::trace::{Trace, TraceReader, BatchReader};
 use crate::trace::wrappers::rc::TraceBox;
 
 use timely::scheduling::Activator;
@@ -25,10 +25,7 @@ use crate::trace::wrappers::frontier::{TraceFrontier, BatchFrontier};
 ///
 /// The `TraceAgent` is the default trace type produced by `arranged`, and it can be extracted
 /// from the dataflow in which it was defined, and imported into other dataflows.
-pub struct TraceAgent<Tr>
-where
-    Tr: TraceReader,
-{
+pub struct TraceAgent<Tr: TraceReader> {
     trace: Rc<RefCell<TraceBox<Tr>>>,
     queues: Weak<RefCell<Vec<TraceAgentQueueWriter<Tr>>>>,
     logical_compaction: Antichain<Tr::Time>,
@@ -39,10 +36,7 @@ where
     logging: Option<crate::logging::Logger>,
 }
 
-impl<Tr> TraceReader for TraceAgent<Tr>
-where
-    Tr: TraceReader,
-{
+impl<Tr: TraceReader> TraceReader for TraceAgent<Tr> {
     type Key<'a> = Tr::Key<'a>;
     type Val<'a> = Tr::Val<'a>;
     type Time = Tr::Time;
@@ -87,7 +81,6 @@ impl<Tr: TraceReader> TraceAgent<Tr> {
     pub fn new(trace: Tr, operator: OperatorInfo, logging: Option<crate::logging::Logger>) -> (Self, TraceWriter<Tr>)
     where
         Tr: Trace,
-        Tr::Batch: Batch,
     {
         let trace = Rc::new(RefCell::new(TraceBox::new(trace)));
         let queues = Rc::new(RefCell::new(Vec::new()));
@@ -167,10 +160,7 @@ impl<Tr: TraceReader> TraceAgent<Tr> {
     }
 }
 
-impl<Tr> TraceAgent<Tr>
-where
-    Tr: TraceReader+'static,
-{
+impl<Tr: TraceReader+'static> TraceAgent<Tr> {
     /// Copies an existing collection into the supplied scope.
     ///
     /// This method creates an `Arranged` collection that should appear indistinguishable from applying `arrange`
@@ -525,10 +515,7 @@ impl<T> Drop for ShutdownDeadmans<T> {
     }
 }
 
-impl<Tr> Clone for TraceAgent<Tr>
-where
-    Tr: TraceReader,
-{
+impl<Tr: TraceReader> Clone for TraceAgent<Tr> {
     fn clone(&self) -> Self {
 
         if let Some(logging) = &self.logging {
@@ -554,10 +541,7 @@ where
     }
 }
 
-impl<Tr> Drop for TraceAgent<Tr>
-where
-    Tr: TraceReader,
-{
+impl<Tr: TraceReader> Drop for TraceAgent<Tr> {
     fn drop(&mut self) {
 
         if let Some(logging) = &self.logging {

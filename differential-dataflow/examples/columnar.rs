@@ -139,7 +139,7 @@ mod container {
         fn default() -> Self { Self::Typed(Default::default()) }
     }
 
-    impl<C: Columnar> Clone for Column<C> where C::Container: Clone {
+    impl<C: Columnar<Container: Clone>> Clone for Column<C> {
         fn clone(&self) -> Self {
             match self {
                 Column::Typed(t) => Column::Typed(t.clone()),
@@ -213,7 +213,7 @@ mod container {
     }
 
     use timely::container::PushInto;
-    impl<C: Columnar, T> PushInto<T> for Column<C> where C::Container: columnar::Push<T> {
+    impl<T, C: Columnar<Container: columnar::Push<T>>> PushInto<T> for Column<C> {
         #[inline]
         fn push_into(&mut self, item: T) {
             use columnar::Push;
@@ -286,7 +286,7 @@ mod builder {
     }
 
     use timely::container::PushInto;
-    impl<C: Columnar, T> PushInto<T> for ColumnBuilder<C> where C::Container: columnar::Push<T> {
+    impl<T, C: Columnar<Container: columnar::Push<T>>> PushInto<T> for ColumnBuilder<C> {
         #[inline]
         fn push_into(&mut self, item: T) {
             self.current.push(item);
@@ -314,7 +314,7 @@ mod builder {
     }
 
     use timely::container::{ContainerBuilder, LengthPreservingContainerBuilder};
-    impl<C: Columnar> ContainerBuilder for ColumnBuilder<C> where C::Container: Clone {
+    impl<C: Columnar<Container: Clone>> ContainerBuilder for ColumnBuilder<C> {
         type Container = Column<C>;
 
         #[inline]
@@ -342,7 +342,7 @@ mod builder {
         }
     }
 
-    impl<C: Columnar> LengthPreservingContainerBuilder for ColumnBuilder<C> where C::Container: Clone { }
+    impl<C: Columnar<Container: Clone>> LengthPreservingContainerBuilder for ColumnBuilder<C> { }
 }
 
 
@@ -396,12 +396,9 @@ pub mod batcher {
 
     impl<'a, D, T, R, C2> PushInto<&'a mut Column<(D, T, R)>> for Chunker<C2>
     where
-        D: Columnar,
-        for<'b> D::Ref<'b>: Ord + Copy,
-        T: Columnar,
-        for<'b> T::Ref<'b>: Ord + Copy,
-        R: Columnar + Semigroup + for<'b> Semigroup<R::Ref<'b>>,
-        for<'b> R::Ref<'b>: Ord,
+        D: for<'b> Columnar<Ref<'b>: Ord>,
+        T: for<'b> Columnar<Ref<'b>: Ord>,
+        R: for<'b> Columnar<Ref<'b>: Ord> + for<'b> Semigroup<R::Ref<'b>>,
         C2: Container + for<'b> PushInto<&'b (D, T, R)>,
     {
         fn push_into(&mut self, container: &'a mut Column<(D, T, R)>) {

@@ -263,24 +263,16 @@ mod columnation {
     }
 
     /// Stack for PointStamp. Part of Columnation implementation.
-    pub struct PointStampStack<R: Region>(<Vec<R::Item> as Columnation>::InnerRegion)
-    where
-        <R as Region>::Item: Columnation;
+    pub struct PointStampStack<R: Region<Item: Columnation>>(<Vec<R::Item> as Columnation>::InnerRegion);
 
-    impl<R: Region> Default for PointStampStack<R>
-    where
-        <R as Region>::Item: Columnation
-    {
+    impl<R: Region<Item: Columnation>> Default for PointStampStack<R> {
         #[inline]
         fn default() -> Self {
             Self(Default::default())
         }
     }
 
-    impl<R: Region> Region for PointStampStack<R>
-    where
-        <R as Region>::Item: Columnation
-    {
+    impl<R: Region<Item: Columnation>> Region for PointStampStack<R> {
         type Item = PointStamp<R::Item>;
 
         #[inline]

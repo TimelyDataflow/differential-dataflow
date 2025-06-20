@@ -72,8 +72,7 @@ where
 
 impl<Tr, F> TraceReader for TraceFreeze<Tr, F>
 where
-    Tr: TraceReader,
-    Tr::Batch: Clone,
+    Tr: TraceReader<Batch: Clone>,
     F: Fn(Tr::TimeGat<'_>)->Option<Tr::Time>+'static,
 {
     type Key<'a> = Tr::Key<'a>;
@@ -109,8 +108,7 @@ where
 
 impl<Tr, F> TraceFreeze<Tr, F>
 where
-    Tr: TraceReader,
-    Tr::Batch: Clone,
+    Tr: TraceReader<Batch: Clone>,
     F: Fn(Tr::TimeGat<'_>)->Option<Tr::Time>,
 {
     /// Makes a new trace wrapper

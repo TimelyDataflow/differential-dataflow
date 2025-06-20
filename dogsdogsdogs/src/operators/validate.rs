@@ -20,12 +20,12 @@ pub fn validate<G, K, V, Tr, F, P>(
 ) -> Collection<G, (P, V), Tr::Diff>
 where
     G: Scope<Timestamp=Tr::Time>,
-    Tr: TraceReader+Clone+'static,
-    for<'a> Tr::Key<'a> : IntoOwned<'a, Owned = (K, V)>,
-    for<'a> Tr::Diff : Semigroup<Tr::DiffGat<'a>>,
+    Tr: for<'a> TraceReader<
+        Key<'a> : IntoOwned<'a, Owned = (K, V)>,
+        Diff : Semigroup<Tr::DiffGat<'a>>+Monoid+Multiply<Output = Tr::Diff>+ExchangeData,
+    >+Clone+'static,
     K: Ord+Hash+Clone+Default + 'static,
     V: ExchangeData+Hash+Default,
-    Tr::Diff: Monoid+Multiply<Output = Tr::Diff>+ExchangeData,
     F: Fn(&P)->K+Clone+'static,
     P: ExchangeData,
 {

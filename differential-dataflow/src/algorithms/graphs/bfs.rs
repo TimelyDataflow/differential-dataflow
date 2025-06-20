@@ -11,8 +11,7 @@ use crate::lattice::Lattice;
 /// Returns pairs (node, dist) indicating distance of each node from a root.
 pub fn bfs<G, N>(edges: &Collection<G, (N,N)>, roots: &Collection<G, N>) -> Collection<G, (N,u32)>
 where
-    G: Scope,
-    G::Timestamp: Lattice+Ord,
+    G: Scope<Timestamp: Lattice+Ord>,
     N: ExchangeData+Hash,
 {
     use crate::operators::arrange::arrangement::ArrangeByKey;

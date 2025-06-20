@@ -114,10 +114,7 @@ pub struct Vector<U: Update> {
     phantom: std::marker::PhantomData<U>,
 }
 
-impl<U: Update> Layout for Vector<U>
-where
-    U::Diff: Ord,
-{
+impl<U: Update<Diff: Ord>> Layout for Vector<U> {
     type Target = U;
     type KeyContainer = Vec<U::Key>;
     type ValContainer = Vec<U::Val>;
@@ -131,12 +128,14 @@ pub struct TStack<U: Update> {
     phantom: std::marker::PhantomData<U>,
 }
 
-impl<U: Update> Layout for TStack<U>
+impl<U> Layout for TStack<U>
 where
-    U::Key: Columnation,
-    U::Val: Columnation,
-    U::Time: Columnation,
-    U::Diff: Columnation + Ord,
+    U: Update<
+        Key: Columnation,
+        Val: Columnation,
+        Time: Columnation,
+        Diff: Columnation + Ord,
+    >,
 {
     type Target = U;
     type KeyContainer = TimelyStack<U::Key>;
@@ -169,10 +168,8 @@ pub struct Preferred<K: ?Sized, V: ?Sized, T, D> {
 
 impl<K,V,T,R> Update for Preferred<K, V, T, R>
 where
-    K: ToOwned + ?Sized,
-    K::Owned: Ord+Clone+'static,
-    V: ToOwned + ?Sized,
-    V::Owned: Ord+Clone+'static,
+    K: ToOwned<Owned: Ord+Clone+'static> + ?Sized,
+    V: ToOwned<Owned: Ord+Clone+'static> + ?Sized,
     T: Ord+Clone+Lattice+timely::progress::Timestamp,
     R: Ord+Clone+Semigroup+'static,
 {
@@ -184,10 +181,8 @@ where
 
 impl<K, V, T, D> Layout for Preferred<K, V, T, D>
 where
-    K: Ord+ToOwned+PreferredContainer + ?Sized,
-    K::Owned: Ord+Clone+'static,
-    V: Ord+ToOwned+PreferredContainer + ?Sized,
-    V::Owned: Ord+Clone+'static,
+    K: Ord+ToOwned<Owned: Ord+Clone+'static>+PreferredContainer + ?Sized,
+    V: Ord+ToOwned<Owned: Ord+Clone+'static>+PreferredContainer + ?Sized,
     T: Ord+Clone+Lattice+timely::progress::Timestamp,
     D: Ord+Clone+Semigroup+'static,
 {
@@ -345,11 +340,9 @@ pub trait BuilderInput<K: BatchContainer, V: BatchContainer>: Container {
 impl<K,KBC,V,VBC,T,R> BuilderInput<KBC, VBC> for Vec<((K, V), T, R)>
 where
     K: Ord + Clone + 'static,
-    KBC: BatchContainer,
-    for<'a> KBC::ReadItem<'a>: PartialEq<&'a K>,
+    KBC: for<'a> BatchContainer<ReadItem<'a>: PartialEq<&'a K>>,
     V: Ord + Clone + 'static,
-    VBC: BatchContainer,
-    for<'a> VBC::ReadItem<'a>: PartialEq<&'a V>,
+    VBC: for<'a> BatchContainer<ReadItem<'a>: PartialEq<&'a V>>,
     T: Timestamp + Lattice + Clone + 'static,
     R: Ord + Semigroup + 'static,
 {
@@ -398,12 +391,14 @@ where
 
 impl<K,V,T,R> BuilderInput<K, V> for TimelyStack<((K::Owned, V::Owned), T, R)>
 where
-    K: BatchContainer,
-    for<'a> K::ReadItem<'a>: PartialEq<&'a K::Owned>,
-    K::Owned: Ord + Columnation + Clone + 'static,
-    V: BatchContainer,
-    for<'a> V::ReadItem<'a>: PartialEq<&'a V::Owned>,
-    V::Owned: Ord + Columnation + Clone + 'static,
+    K: for<'a> BatchContainer<
+        ReadItem<'a>: PartialEq<&'a K::Owned>,
+        Owned: Ord + Columnation + Clone + 'static,
+    >,
+    V: for<'a> BatchContainer<
+        ReadItem<'a>: PartialEq<&'a V::Owned>,
+        Owned: Ord + Columnation + Clone + 'static,
+    >,
     T: Timestamp + Lattice + Columnation + Clone + 'static,
     R: Ord + Clone + Semigroup + Columnation + 'static,
 {

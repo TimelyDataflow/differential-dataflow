@@ -97,8 +97,7 @@ fn main() {
 /// Accumulate data in `collection` into all powers-of-two intervals containing them.
 fn pp_aggregate<G, D, F>(collection: Collection<G, (usize, D)>, combine: F) -> Collection<G, ((usize, usize), D)>
 where
-    G: Scope,
-    G::Timestamp: Lattice,
+    G: Scope<Timestamp: Lattice>,
     D: Data,
     F: Fn(D, &D) -> D + 'static,
 {
@@ -132,8 +131,7 @@ fn pp_broadcast<G, D, B, F>(
     zero: D,
     combine: F) -> Collection<G, (usize, B)>
 where
-    G: Scope,
-    G::Timestamp: Lattice+Ord+::std::fmt::Debug,
+    G: Scope<Timestamp: Lattice+Ord+::std::fmt::Debug>,
     D: Data,
     B: Data+::std::hash::Hash,
     F: Fn(&B, &D) -> B + 'static,

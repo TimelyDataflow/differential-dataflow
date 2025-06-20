@@ -14,7 +14,7 @@ use crate::operators::arrange::{Arranged, ArrangeBySelf};
 use crate::trace::{BatchReader, Cursor, TraceReader};
 
 /// Extension trait for the `count` differential dataflow method.
-pub trait CountTotal<G: Scope, K: ExchangeData, R: Semigroup> where G::Timestamp: TotalOrder+Lattice+Ord {
+pub trait CountTotal<G: Scope<Timestamp: TotalOrder+Lattice+Ord>, K: ExchangeData, R: Semigroup> {
     /// Counts the number of occurrences of each element.
     ///
     /// # Examples
@@ -42,8 +42,10 @@ pub trait CountTotal<G: Scope, K: ExchangeData, R: Semigroup> where G::Timestamp
     fn count_total_core<R2: Semigroup + From<i8> + 'static>(&self) -> Collection<G, (K, R), R2>;
 }
 
-impl<G: Scope, K: ExchangeData+Hashable, R: ExchangeData+Semigroup> CountTotal<G, K, R> for Collection<G, K, R>
-where G::Timestamp: TotalOrder+Lattice+Ord {
+impl<G, K: ExchangeData+Hashable, R: ExchangeData+Semigroup> CountTotal<G, K, R> for Collection<G, K, R>
+where
+    G: Scope<Timestamp: TotalOrder+Lattice+Ord>,
+{
     fn count_total_core<R2: Semigroup + From<i8> + 'static>(&self) -> Collection<G, (K, R), R2> {
         self.arrange_by_self_named("Arrange: CountTotal")
             .count_total_core()
@@ -53,12 +55,13 @@ where G::Timestamp: TotalOrder+Lattice+Ord {
 impl<G, K, T1> CountTotal<G, K, T1::Diff> for Arranged<G, T1>
 where
     G: Scope<Timestamp=T1::Time>,
-    T1: for<'a> TraceReader<Val<'a>=&'a ()>+Clone+'static,
-    for<'a> T1::Key<'a>: IntoOwned<'a, Owned = K>,
-    for<'a> T1::Diff : Semigroup<T1::DiffGat<'a>>,
+    T1: for<'a> TraceReader<
+        Key<'a>: IntoOwned<'a, Owned = K>,
+        Val<'a>=&'a (),
+        Time: TotalOrder,
+        Diff: ExchangeData+Semigroup<T1::DiffGat<'a>>
+    >+Clone+'static,
     K: ExchangeData,
-    T1::Time: TotalOrder,
-    T1::Diff: ExchangeData,
 {
     fn count_total_core<R2: Semigroup + From<i8> + 'static>(&self) -> Collection<G, (K, T1::Diff), R2> {
 

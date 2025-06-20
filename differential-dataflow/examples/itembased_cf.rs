@@ -144,7 +144,7 @@ impl CRP {
         CRP { alpha, discount, weight: 0.0, weights: Vec::new() }
     }
 
-    fn sample<R>(&mut self, rng: &mut R) -> u32 where R: Rng {
+    fn sample<R: Rng>(&mut self, rng: &mut R) -> u32 {
         let mut u = rng.gen::<f64>() * (self.alpha + self.weight);
         for j in 0 .. self.weights.len() {
             if u < self.weights[j] - self.discount {
@@ -164,7 +164,7 @@ impl CRP {
 }
 
 // Generate synthetic interactions with a skewed distribution
-fn generate_interactions<R>(how_many: usize, rng: &mut R) -> Vec<(u32,u32)> where R: Rng {
+fn generate_interactions<R: Rng>(how_many: usize, rng: &mut R) -> Vec<(u32,u32)> {
     let mut interactions = Vec::with_capacity(how_many);
 
     let mut user_sampler = CRP::new(6000.0, 0.35);
