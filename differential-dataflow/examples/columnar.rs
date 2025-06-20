@@ -23,8 +23,8 @@ fn main() {
         worker: timely::WorkerConfig::default(),
     };
 
-    let keys: usize = std::env::args().nth(1).unwrap().parse().unwrap();
-    let size: usize = std::env::args().nth(2).unwrap().parse().unwrap();
+    let keys: usize = std::env::args().nth(1).expect("missing argument 1").parse().unwrap();
+    let size: usize = std::env::args().nth(2).expect("missing argument 2").parse().unwrap();
 
     let timer1 = ::std::time::Instant::now();
     let timer2 = timer1.clone();
@@ -411,7 +411,7 @@ pub mod batcher {
         D: for<'b> Columnar<Ref<'b>: Ord>,
         T: for<'b> Columnar<Ref<'b>: Ord>,
         R: for<'b> Columnar<Ref<'b>: Ord> + for<'b> Semigroup<R::Ref<'b>>,
-        C2: Container + for<'b> PushInto<&'b (D, T, R)>,
+        C2: Container + for<'b, 'c> PushInto<(D::Ref<'b>, T::Ref<'b>, &'c R)>,
     {
         fn push_into(&mut self, container: &'a mut Column<(D, T, R)>) {
 
@@ -482,7 +482,12 @@ pub mod batcher {
             head: usize,
         }
 
-        impl<D: Ord + Columnar, T: Ord + Columnar, R: Columnar> ContainerQueue<Column<(D, T, R)>> for ColumnQueue<(D, T, R)> {
+        impl<D, T, R> ContainerQueue<Column<(D, T, R)>> for ColumnQueue<(D, T, R)>
+        where
+            D: for<'a> Columnar<Ref<'a>: Ord>,
+            T: for<'a> Columnar<Ref<'a>: Ord>,
+            R: Columnar,
+        {
             fn next_or_alloc(&mut self) -> Result<<(D, T, R) as Columnar>::Ref<'_>, Column<(D, T, R)>> {
                 if self.is_empty() {
                     Err(std::mem::take(&mut self.list))
@@ -498,11 +503,6 @@ pub mod batcher {
             fn cmp_heads(&self, other: &Self) -> std::cmp::Ordering {
                 let (data1, time1, _) = self.peek();
                 let (data2, time2, _) = other.peek();
-
-                let data1 = <D as Columnar>::into_owned(data1);
-                let data2 = <D as Columnar>::into_owned(data2);
-                let time1 = <T as Columnar>::into_owned(time1);
-                let time2 = <T as Columnar>::into_owned(time2);
 
                 (data1, time1).cmp(&(data2, time2))
             }
@@ -524,9 +524,8 @@ pub mod batcher {
 
         impl<D, T, R> MergerChunk for Column<(D, T, R)> 
         where
-            D: Ord + Columnar + 'static,
-            T: Ord + timely::PartialOrder + Clone + Columnar + 'static,
-            for<'a> <T as Columnar>::Ref<'a> : Copy,
+            D: Columnar + 'static,
+            T: timely::PartialOrder + Clone + Columnar + 'static,
             R: Default + Semigroup + Columnar + 'static
         {
             type TimeOwned = T;
@@ -534,7 +533,6 @@ pub mod batcher {
 
             fn time_kept((_, time, _): &Self::Item<'_>, upper: &AntichainRef<Self::TimeOwned>, frontier: &mut Antichain<Self::TimeOwned>) -> bool {
                 let time = T::into_owned(*time);
-                // let time = unimplemented!();
                 if upper.less_equal(&time) {
                     frontier.insert(time);
                     true
