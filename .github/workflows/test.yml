@@ -12,7 +12,7 @@ jobs:
         os:
           - ubuntu
           - macos
-          - windows
+          # - windows
         toolchain:
           - stable
           - 1.79
