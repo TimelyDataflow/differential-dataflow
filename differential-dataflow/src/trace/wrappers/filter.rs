@@ -26,8 +26,7 @@ where
 
 impl<Tr, F> TraceReader for TraceFilter<Tr, F>
 where
-    Tr: TraceReader,
-    Tr::Batch: Clone,
+    Tr: TraceReader<Batch: Clone>,
     F: FnMut(Tr::Key<'_>, Tr::Val<'_>)->bool+Clone+'static,
 {
     type Key<'a> = Tr::Key<'a>;
@@ -58,10 +57,7 @@ where
     }
 }
 
-impl<Tr, F> TraceFilter<Tr, F>
-where
-    Tr: TraceReader,
-{
+impl<Tr: TraceReader, F> TraceFilter<Tr, F> {
     /// Makes a new trace wrapper
     pub fn make_from(trace: Tr, logic: F) -> Self {
         TraceFilter {
@@ -100,10 +96,7 @@ where
     fn description(&self) -> &Description<B::Time> { self.batch.description() }
 }
 
-impl<B, F> BatchFilter<B, F>
-where
-    B: BatchReader,
-{
+impl<B: BatchReader, F> BatchFilter<B, F> {
     /// Makes a new batch wrapper
     pub fn make_from(batch: B, logic: F) -> Self {
         BatchFilter {

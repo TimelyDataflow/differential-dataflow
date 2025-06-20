@@ -19,8 +19,7 @@ use crate::trace::{Batcher, Builder};
 /// Methods which require data be arrangeable.
 impl<G, D, R> Collection<G, D, R>
 where
-    G: Scope,
-    G::Timestamp: Data+Lattice,
+    G: Scope<Timestamp: Data+Lattice>,
     D: ExchangeData+Hashable,
     R: Semigroup+ExchangeData,
 {
@@ -53,9 +52,7 @@ where
     pub fn consolidate_named<Ba, Bu, Tr>(&self, name: &str) -> Self
     where
         Ba: Batcher<Input=Vec<((D,()),G::Timestamp,R)>, Time=G::Timestamp> + 'static,
-        Tr: crate::trace::Trace<Time=G::Timestamp,Diff=R>+'static,
-        for<'a> Tr::Key<'a>: IntoOwned<'a, Owned = D>,
-        Tr::Batch: crate::trace::Batch,
+        Tr: for<'a> crate::trace::Trace<Key<'a>: IntoOwned<'a, Owned = D>,Time=G::Timestamp,Diff=R>+'static,
         Bu: Builder<Time=Tr::Time, Input=Ba::Output, Output=Tr::Batch>,
     {
         use crate::operators::arrange::arrangement::Arrange;

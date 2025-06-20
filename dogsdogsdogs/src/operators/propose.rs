@@ -21,15 +21,15 @@ pub fn propose<G, Tr, K, F, P, V>(
 ) -> Collection<G, (P, V), Tr::Diff>
 where
     G: Scope<Timestamp=Tr::Time>,
-    Tr: TraceReader+Clone+'static,
-    for<'a> Tr::Key<'a> : IntoOwned<'a, Owned = K>,
+    Tr: for<'a> TraceReader<
+        Key<'a> : IntoOwned<'a, Owned = K>,
+        Val<'a> : IntoOwned<'a, Owned = V>,
+        Diff: Monoid+Multiply<Output = Tr::Diff>+ExchangeData+Semigroup<Tr::DiffGat<'a>>,
+    >+Clone+'static,
     K: Hashable + Default + Ord + 'static,
-    Tr::Diff: Monoid+Multiply<Output = Tr::Diff>+ExchangeData,
-    for<'a> Tr::Diff : Semigroup<Tr::DiffGat<'a>>,
     F: Fn(&P)->K+Clone+'static,
     P: ExchangeData,
     V: Clone + 'static,
-    for<'a> Tr::Val<'a> : IntoOwned<'a, Owned = V>,
 {
     crate::operators::lookup_map(
         prefixes,
@@ -54,15 +54,15 @@ pub fn propose_distinct<G, Tr, K, F, P, V>(
 ) -> Collection<G, (P, V), Tr::Diff>
 where
     G: Scope<Timestamp=Tr::Time>,
-    Tr: TraceReader+Clone+'static,
-    for<'a> Tr::Key<'a> : IntoOwned<'a, Owned = K>,
-    for<'a> Tr::Diff : Semigroup<Tr::DiffGat<'a>>,
+    Tr: for<'a> TraceReader<
+        Key<'a> : IntoOwned<'a, Owned = K>,
+        Val<'a> : IntoOwned<'a, Owned = V>,
+        Diff : Semigroup<Tr::DiffGat<'a>>+Monoid+Multiply<Output = Tr::Diff>+ExchangeData,
+    >+Clone+'static,
     K: Hashable + Default + Ord + 'static,
-    Tr::Diff: Monoid+Multiply<Output = Tr::Diff>+ExchangeData,
     F: Fn(&P)->K+Clone+'static,
     P: ExchangeData,
     V: Clone + 'static,
-    for<'a> Tr::Val<'a> : IntoOwned<'a, Owned = V>,
 {
     crate::operators::lookup_map(
         prefixes,

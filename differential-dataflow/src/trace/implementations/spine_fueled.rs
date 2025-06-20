@@ -99,10 +99,7 @@ pub struct Spine<B: Batch> {
     exert_logic: Option<ExertionLogic>,
 }
 
-impl<B> TraceReader for Spine<B>
-where
-    B: Batch+Clone+'static,
-{
+impl<B: Batch+Clone+'static> TraceReader for Spine<B> {
     type Key<'a> = B::Key<'a>;
     type Val<'a> = B::Val<'a>;
     type Time = B::Time;
@@ -245,10 +242,7 @@ where
 
 // A trace implementation for any key type that can be borrowed from or converted into `Key`.
 // TODO: Almost all this implementation seems to be generic with respect to the trace and batch types.
-impl<B> Trace for Spine<B>
-where
-    B: Batch+Clone+'static,
-{
+impl<B: Batch+Clone+'static> Trace for Spine<B> {
     fn new(
         info: ::timely::dataflow::operators::generic::OperatorInfo,
         logging: Option<crate::logging::Logger>,
@@ -765,7 +759,7 @@ enum MergeState<B: Batch> {
     Double(MergeVariant<B>),
 }
 
-impl<B: Batch> MergeState<B> where B::Time: Eq {
+impl<B: Batch<Time: Eq>> MergeState<B> {
 
     /// The number of actual updates contained in the level.
     fn len(&self) -> usize {

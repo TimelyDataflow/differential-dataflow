@@ -28,11 +28,11 @@ pub fn lookup_map<G, D, K, R, Tr, F, DOut, ROut, S>(
 ) -> Collection<G, DOut, ROut>
 where
     G: Scope<Timestamp=Tr::Time>,
-    Tr: TraceReader+Clone+'static,
-    for<'a> Tr::Key<'a>: IntoOwned<'a, Owned = K>,
-    for<'a> Tr::Diff : Semigroup<Tr::DiffGat<'a>>,
+    Tr: for<'a> TraceReader<
+        Key<'a>: IntoOwned<'a, Owned = K>,
+        Diff : Semigroup<Tr::DiffGat<'a>>+Monoid+ExchangeData,
+    >+Clone+'static,
     K: Hashable + Ord + 'static,
-    Tr::Diff: Monoid+ExchangeData,
     F: FnMut(&D, &mut K)+Clone+'static,
     D: ExchangeData,
     R: ExchangeData+Monoid,

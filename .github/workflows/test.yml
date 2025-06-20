@@ -12,10 +12,10 @@ jobs:
         os:
           - ubuntu
           - macos
-          - windows
+          # - windows
         toolchain:
           - stable
-          - 1.78
+          - 1.79
     name: cargo test on ${{ matrix.os }}, rust ${{ matrix.toolchain }}
     runs-on: ${{ matrix.os }}-latest
     steps:

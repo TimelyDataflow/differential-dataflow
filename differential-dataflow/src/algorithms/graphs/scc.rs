@@ -15,9 +15,8 @@ use super::propagate::propagate;
 /// Iteratively removes nodes with no in-edges.
 pub fn trim<G, N, R>(graph: &Collection<G, (N,N), R>) -> Collection<G, (N,N), R>
 where
-    G: Scope,
-    G::Timestamp: Lattice+Ord,
-    N: ExchangeData+Hash,
+    G: Scope<Timestamp: Lattice+Ord>,
+    N: ExchangeData + Hash,
     R: ExchangeData + Abelian,
     R: Multiply<R, Output=R>,
     R: From<i8>,
@@ -36,9 +35,8 @@ where
 /// Returns the subset of edges in the same strongly connected component.
 pub fn strongly_connected<G, N, R>(graph: &Collection<G, (N,N), R>) -> Collection<G, (N,N), R>
 where
-    G: Scope,
-    G::Timestamp: Lattice+Ord,
-    N: ExchangeData+Hash,
+    G: Scope<Timestamp: Lattice + Ord>,
+    N: ExchangeData + Hash,
     R: ExchangeData + Abelian,
     R: Multiply<R, Output=R>,
     R: From<i8>
@@ -53,9 +51,8 @@ where
 fn trim_edges<G, N, R>(cycle: &Collection<G, (N,N), R>, edges: &Collection<G, (N,N), R>)
     -> Collection<G, (N,N), R>
 where
-    G: Scope,
-    G::Timestamp: Lattice+Ord,
-    N: ExchangeData+Hash,
+    G: Scope<Timestamp: Lattice+Ord>,
+    N: ExchangeData + Hash,
     R: ExchangeData + Abelian,
     R: Multiply<R, Output=R>,
     R: From<i8>

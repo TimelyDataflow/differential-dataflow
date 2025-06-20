@@ -27,8 +27,7 @@ impl<Tr: TraceReader + Clone, TInner> Clone for TraceEnter<Tr, TInner> {
 
 impl<Tr, TInner> TraceReader for TraceEnter<Tr, TInner>
 where
-    Tr: TraceReader,
-    Tr::Batch: Clone,
+    Tr: TraceReader<Batch: Clone>,
     TInner: Refines<Tr::Time>+Lattice,
 {
     type Key<'a> = Tr::Key<'a>;

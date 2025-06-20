@@ -123,9 +123,10 @@ fn main() {
 }
 
 // returns pairs (n, s) indicating node n can be reached from a root in s steps.
-fn bfs<G: Scope>(edges: &Collection<G, Edge, MinSum>, roots: &Collection<G, Node, MinSum>) -> Collection<G, Node, MinSum>
-where G::Timestamp: Lattice+Ord {
-
+fn bfs<G>(edges: &Collection<G, Edge, MinSum>, roots: &Collection<G, Node, MinSum>) -> Collection<G, Node, MinSum>
+where
+    G: Scope<Timestamp: Lattice+Ord>,
+{
     // repeatedly update minimal distances each node can be reached from each root
     roots.scope().iterative::<u32,_,_>(|scope| {
 

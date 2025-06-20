@@ -29,7 +29,7 @@ use timely::dataflow::operators::Capability;
 use crate::{Data, ExchangeData, Collection, AsCollection, Hashable, IntoOwned};
 use crate::difference::Semigroup;
 use crate::lattice::Lattice;
-use crate::trace::{self, Trace, TraceReader, Batch, BatchReader, Batcher, Builder, Cursor};
+use crate::trace::{self, Trace, TraceReader, BatchReader, Batcher, Builder, Cursor};
 use crate::trace::implementations::{KeyBatcher, KeyBuilder, KeySpine, ValBatcher, ValBuilder, ValSpine};
 
 use trace::wrappers::enter::{TraceEnter, BatchEnter,};
@@ -43,9 +43,9 @@ use super::TraceAgent;
 ///
 /// An `Arranged` allows multiple differential operators to share the resources (communication,
 /// computation, memory) required to produce and maintain an indexed representation of a collection.
-pub struct Arranged<G: Scope, Tr>
+pub struct Arranged<G, Tr>
 where
-    G::Timestamp: Lattice+Ord,
+    G: Scope<Timestamp: Lattice+Ord>,
     Tr: TraceReader+Clone,
 {
     /// A stream containing arranged updates.
@@ -187,8 +187,7 @@ where
     /// filtering or flat mapping as part of the extraction.
     pub fn flat_map_ref<I, L>(&self, logic: L) -> Collection<G, I::Item, Tr::Diff>
         where
-            I: IntoIterator,
-            I::Item: Data,
+            I: IntoIterator<Item: Data>,
             L: FnMut(Tr::Key<'_>, Tr::Val<'_>) -> I+'static,
     {
         Self::flat_map_batches(&self.stream, logic)
@@ -203,8 +202,7 @@ where
     /// If you have the arrangement, its `flat_map_ref` method is equivalent to this.
     pub fn flat_map_batches<I, L>(stream: &Stream<G, Tr::Batch>, mut logic: L) -> Collection<G, I::Item, Tr::Diff>
     where
-        I: IntoIterator,
-        I::Item: Data,
+        I: IntoIterator<Item: Data>,
         L: FnMut(Tr::Key<'_>, Tr::Val<'_>) -> I+'static,
     {
         stream.unary(Pipeline, "AsCollection", move |_,_| move |input, output| {
@@ -243,10 +241,8 @@ where
     pub fn join_core<T2,I,L>(&self, other: &Arranged<G,T2>, mut result: L) -> Collection<G,I::Item,<T1::Diff as Multiply<T2::Diff>>::Output>
     where
         T2: for<'a> TraceReader<Key<'a>=T1::Key<'a>,Time=T1::Time>+Clone+'static,
-        T1::Diff: Multiply<T2::Diff>,
-        <T1::Diff as Multiply<T2::Diff>>::Output: Semigroup+'static,
-        I: IntoIterator,
-        I::Item: Data,
+        T1::Diff: Multiply<T2::Diff, Output: Semigroup+'static>,
+        I: IntoIterator<Item: Data>,
         L: FnMut(T1::Key<'_>,T1::Val<'_>,T2::Val<'_>)->I+'static
     {
         let result = move |k: T1::Key<'_>, v1: T1::Val<'_>, v2: T2::Val<'_>, t: &G::Timestamp, r1: &T1::Diff, r2: &T2::Diff| {
@@ -290,14 +286,15 @@ where
     pub fn reduce_abelian<L, K, V, Bu, T2>(&self, name: &str, mut logic: L) -> Arranged<G, TraceAgent<T2>>
     where
         for<'a> T1::Key<'a>: IntoOwned<'a, Owned = K>,
-        T2: for<'a> Trace<Key<'a>= T1::Key<'a>, Time=T1::Time>+'static,
+        T2: for<'a> Trace<
+            Key<'a>= T1::Key<'a>,
+            Val<'a> : IntoOwned<'a, Owned = V>,
+            Time=T1::Time,
+            Diff: Abelian,
+        >+'static,
         K: Ord + 'static,
         V: Data,
-        for<'a> T2::Val<'a> : IntoOwned<'a, Owned = V>,
-        T2::Diff: Abelian,
-        T2::Batch: Batch,
-        Bu: Builder<Time=G::Timestamp, Output = T2::Batch>,
-        Bu::Input: Container + PushInto<((K, V), T2::Time, T2::Diff)>,
+        Bu: Builder<Time=G::Timestamp, Output = T2::Batch, Input: Container + PushInto<((K, V), T2::Time, T2::Diff)>>,
         L: FnMut(T1::Key<'_>, &[(T1::Val<'_>, T1::Diff)], &mut Vec<(V, T2::Diff)>)+'static,
     {
         self.reduce_core::<_,K,V,Bu,T2>(name, move |key, input, output, change| {
@@ -313,13 +310,14 @@ where
     pub fn reduce_core<L, K, V, Bu, T2>(&self, name: &str, logic: L) -> Arranged<G, TraceAgent<T2>>
     where
         for<'a> T1::Key<'a>: IntoOwned<'a, Owned = K>,
-        T2: for<'a> Trace<Key<'a>=T1::Key<'a>, Time=T1::Time>+'static,
+        T2: for<'a> Trace<
+            Key<'a>=T1::Key<'a>,
+            Val<'a> : IntoOwned<'a, Owned = V>,
+            Time=T1::Time,
+        >+'static,
         K: Ord + 'static,
         V: Data,
-        for<'a> T2::Val<'a> : IntoOwned<'a, Owned = V>,
-        T2::Batch: Batch,
-        Bu: Builder<Time=G::Timestamp, Output = T2::Batch>,
-        Bu::Input: Container + PushInto<((K, V), T2::Time, T2::Diff)>,
+        Bu: Builder<Time=G::Timestamp, Output = T2::Batch, Input: Container + PushInto<((K, V), T2::Time, T2::Diff)>>,
         L: FnMut(T1::Key<'_>, &[(T1::Val<'_>, T1::Diff)], &mut Vec<(V, T2::Diff)>, &mut Vec<(V, T2::Diff)>)+'static,
     {
         use crate::operators::reduce::reduce_trace;
@@ -349,8 +347,7 @@ where
 /// A type that can be arranged as if a collection of updates.
 pub trait Arrange<G, C>
 where
-    G: Scope,
-    G::Timestamp: Lattice,
+    G: Scope<Timestamp: Lattice>,
 {
     /// Arranges updates into a shared trace.
     fn arrange<Ba, Bu, Tr>(&self) -> Arranged<G, TraceAgent<Tr>>
@@ -358,7 +355,6 @@ where
         Ba: Batcher<Input=C, Time=G::Timestamp> + 'static,
         Bu: Builder<Time=G::Timestamp, Input=Ba::Output, Output = Tr::Batch>,
         Tr: Trace<Time=G::Timestamp> + 'static,
-        Tr::Batch: Batch,
     {
         self.arrange_named::<Ba, Bu, Tr>("Arrange")
     }
@@ -369,14 +365,12 @@ where
         Ba: Batcher<Input=C, Time=G::Timestamp> + 'static,
         Bu: Builder<Time=G::Timestamp, Input=Ba::Output, Output = Tr::Batch>,
         Tr: Trace<Time=G::Timestamp> + 'static,
-        Tr::Batch: Batch,
     ;
 }
 
 impl<G, K, V, R> Arrange<G, Vec<((K, V), G::Timestamp, R)>> for Collection<G, (K, V), R>
 where
-    G: Scope,
-    G::Timestamp: Lattice,
+    G: Scope<Timestamp: Lattice>,
     K: ExchangeData + Hashable,
     V: ExchangeData,
     R: ExchangeData + Semigroup,
@@ -386,7 +380,6 @@ where
         Ba: Batcher<Input=Vec<((K, V), G::Timestamp, R)>, Time=G::Timestamp> + 'static,
         Bu: Builder<Time=G::Timestamp, Input=Ba::Output, Output = Tr::Batch>,
         Tr: Trace<Time=G::Timestamp> + 'static,
-        Tr::Batch: Batch,
     {
         let exchange = Exchange::new(move |update: &((K,V),G::Timestamp,R)| (update.0).0.hashed().into());
         arrange_core::<_, _, Ba, Bu, _>(&self.inner, exchange, name)
@@ -400,14 +393,11 @@ where
 /// be consistently by key (though this is the most common).
 pub fn arrange_core<G, P, Ba, Bu, Tr>(stream: &StreamCore<G, Ba::Input>, pact: P, name: &str) -> Arranged<G, TraceAgent<Tr>>
 where
-    G: Scope,
-    G::Timestamp: Lattice,
+    G: Scope<Timestamp: Lattice>,
     P: ParallelizationContract<G::Timestamp, Ba::Input>,
-    Ba: Batcher<Time=G::Timestamp> + 'static,
-    Ba::Input: Container + Clone + 'static,
+    Ba: Batcher<Time=G::Timestamp,Input: Container + Clone + 'static> + 'static,
     Bu: Builder<Time=G::Timestamp, Input=Ba::Output, Output = Tr::Batch>,
     Tr: Trace<Time=G::Timestamp>+'static,
-    Tr::Batch: Batch,
 {
     // The `Arrange` operator is tasked with reacting to an advancing input
     // frontier by producing the sequence of batches whose lower and upper
@@ -555,16 +545,15 @@ where
     Arranged { stream, trace: reader.unwrap() }
 }
 
-impl<G: Scope, K: ExchangeData+Hashable, R: ExchangeData+Semigroup> Arrange<G, Vec<((K, ()), G::Timestamp, R)>> for Collection<G, K, R>
+impl<G, K: ExchangeData+Hashable, R: ExchangeData+Semigroup> Arrange<G, Vec<((K, ()), G::Timestamp, R)>> for Collection<G, K, R>
 where
-    G::Timestamp: Lattice+Ord,
+    G: Scope<Timestamp: Lattice+Ord>,
 {
     fn arrange_named<Ba, Bu, Tr>(&self, name: &str) -> Arranged<G, TraceAgent<Tr>>
     where
         Ba: Batcher<Input=Vec<((K,()),G::Timestamp,R)>, Time=G::Timestamp> + 'static,
         Bu: Builder<Time=G::Timestamp, Input=Ba::Output, Output = Tr::Batch>,
         Tr: Trace<Time=G::Timestamp> + 'static,
-        Tr::Batch: Batch,
     {
         let exchange = Exchange::new(move |update: &((K,()),G::Timestamp,R)| (update.0).0.hashed().into());
         arrange_core::<_,_,Ba,Bu,_>(&self.map(|k| (k, ())).inner, exchange, name)
@@ -577,7 +566,9 @@ where
 /// map. This can result in many hash calls, and in some cases it may help to first transform `K` to the
 /// pair `(u64, K)` of hash value and key.
 pub trait ArrangeByKey<G: Scope, K: Data+Hashable, V: Data, R: Ord+Semigroup+'static>
-where G::Timestamp: Lattice+Ord {
+where
+    G: Scope<Timestamp: Lattice+Ord>,
+{
     /// Arranges a collection of `(Key, Val)` records by `Key`.
     ///
     /// This operator arranges a stream of values into a shared trace, whose contents it maintains.
@@ -589,9 +580,9 @@ where G::Timestamp: Lattice+Ord {
     fn arrange_by_key_named(&self, name: &str) -> Arranged<G, TraceAgent<ValSpine<K, V, G::Timestamp, R>>>;
 }
 
-impl<G: Scope, K: ExchangeData+Hashable, V: ExchangeData, R: ExchangeData+Semigroup> ArrangeByKey<G, K, V, R> for Collection<G, (K,V), R>
+impl<G, K: ExchangeData+Hashable, V: ExchangeData, R: ExchangeData+Semigroup> ArrangeByKey<G, K, V, R> for Collection<G, (K,V), R>
 where
-    G::Timestamp: Lattice+Ord
+    G: Scope<Timestamp: Lattice+Ord>,
 {
     fn arrange_by_key(&self) -> Arranged<G, TraceAgent<ValSpine<K, V, G::Timestamp, R>>> {
         self.arrange_by_key_named("ArrangeByKey")
@@ -607,9 +598,9 @@ where
 /// This arrangement requires `Key: Hashable`, and uses the `hashed()` method to place keys in a hashed
 /// map. This can result in many hash calls, and in some cases it may help to first transform `K` to the
 /// pair `(u64, K)` of hash value and key.
-pub trait ArrangeBySelf<G: Scope, K: Data+Hashable, R: Ord+Semigroup+'static>
+pub trait ArrangeBySelf<G, K: Data+Hashable, R: Ord+Semigroup+'static>
 where
-    G::Timestamp: Lattice+Ord
+    G: Scope<Timestamp: Lattice+Ord>,
 {
     /// Arranges a collection of `Key` records by `Key`.
     ///
@@ -623,9 +614,9 @@ where
 }
 
 
-impl<G: Scope, K: ExchangeData+Hashable, R: ExchangeData+Semigroup> ArrangeBySelf<G, K, R> for Collection<G, K, R>
+impl<G, K: ExchangeData+Hashable, R: ExchangeData+Semigroup> ArrangeBySelf<G, K, R> for Collection<G, K, R>
 where
-    G::Timestamp: Lattice+Ord
+    G: Scope<Timestamp: Lattice+Ord>,
 {
     fn arrange_by_self(&self) -> Arranged<G, TraceAgent<KeySpine<K, G::Timestamp, R>>> {
         self.arrange_by_self_named("ArrangeBySelf")

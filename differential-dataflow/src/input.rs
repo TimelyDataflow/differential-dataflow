@@ -68,7 +68,7 @@ pub trait Input : TimelyInput {
     /// }).unwrap();
     /// ```
     fn new_collection_from<I>(&mut self, data: I) -> (InputSession<<Self as ScopeParent>::Timestamp, I::Item, isize>, Collection<Self, I::Item, isize>)
-    where I: IntoIterator+'static, I::Item: Data;
+    where I: IntoIterator<Item: Data> + 'static;
     /// Create a new collection and input handle from initial data.
     ///
     /// # Examples
@@ -100,7 +100,9 @@ pub trait Input : TimelyInput {
 use crate::lattice::Lattice;
 impl<G: TimelyInput> Input for G where <G as ScopeParent>::Timestamp: Lattice {
     fn new_collection<D, R>(&mut self) -> (InputSession<<G as ScopeParent>::Timestamp, D, R>, Collection<G, D, R>)
-    where D: Data, R: Semigroup+'static{
+    where
+        D: Data, R: Semigroup+'static,
+    {
         let (handle, stream) = self.new_input();
         (InputSession::from(handle), stream.as_collection())
     }

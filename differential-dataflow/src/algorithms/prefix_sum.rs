@@ -21,10 +21,9 @@ pub trait PrefixSum<G: Scope, K, D> {
 
 impl<G, K, D> PrefixSum<G, K, D> for Collection<G, ((usize, K), D)>
 where
-    G: Scope,
-    G::Timestamp: Lattice,
-    K: ExchangeData+::std::hash::Hash,
-    D: ExchangeData+::std::hash::Hash,
+    G: Scope<Timestamp: Lattice>,
+    K: ExchangeData + ::std::hash::Hash,
+    D: ExchangeData + ::std::hash::Hash,
 {
     fn prefix_sum<F>(&self, zero: D, combine: F) -> Self where F: Fn(&K,&D,&D)->D + 'static {
         self.prefix_sum_at(self.map(|(x,_)| x), zero, combine)
@@ -43,10 +42,9 @@ where
 /// Accumulate data in `collection` into all powers-of-two intervals containing them.
 pub fn aggregate<G, K, D, F>(collection: Collection<G, ((usize, K), D)>, combine: F) -> Collection<G, ((usize, usize, K), D)>
 where
-    G: Scope,
-    G::Timestamp: Lattice,
-    K: ExchangeData+::std::hash::Hash,
-    D: ExchangeData+::std::hash::Hash,
+    G: Scope<Timestamp: Lattice>,
+    K: ExchangeData + ::std::hash::Hash,
+    D: ExchangeData + ::std::hash::Hash,
     F: Fn(&K,&D,&D)->D + 'static,
 {
     // initial ranges are at each index, and with width 2^0.
@@ -79,10 +77,9 @@ pub fn broadcast<G, K, D, F>(
     zero: D,
     combine: F) -> Collection<G, ((usize, K), D)>
 where
-    G: Scope,
-    G::Timestamp: Lattice+Ord+::std::fmt::Debug,
-    K: ExchangeData+::std::hash::Hash,
-    D: ExchangeData+::std::hash::Hash,
+    G: Scope<Timestamp: Lattice + Ord + ::std::fmt::Debug>,
+    K: ExchangeData + ::std::hash::Hash,
+    D: ExchangeData + ::std::hash::Hash,
     F: Fn(&K,&D,&D)->D + 'static,
 {
 

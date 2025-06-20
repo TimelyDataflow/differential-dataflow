@@ -179,8 +179,7 @@ pub trait TraceReader {
 ///
 /// The trace must be constructable from, and navigable by the `Key`, `Val`, `Time` types, but does not need
 /// to return them.
-pub trait Trace : TraceReader
-where <Self as TraceReader>::Batch: Batch {
+pub trait Trace : TraceReader<Batch: Batch> {
 
     /// Allocates a new empty trace.
     fn new(
@@ -222,10 +221,7 @@ where <Self as TraceReader>::Batch: Batch {
 /// but do not expose ways to construct the batches. This trait is appropriate for views of the batch, and is
 /// especially useful for views derived from other sources in ways that prevent the construction of batches
 /// from the type of data in the view (for example, filtered views, or views with extended time coordinates).
-pub trait BatchReader
-where
-    Self: ::std::marker::Sized,
-{
+pub trait BatchReader : Sized {
     /// Key by which updates are indexed.
     type Key<'a>: Copy + Clone + Ord;
     /// Values associated with keys.
@@ -257,7 +253,7 @@ where
 }
 
 /// An immutable collection of updates.
-pub trait Batch : BatchReader where Self: ::std::marker::Sized {
+pub trait Batch : BatchReader + Sized {
     /// A type used to progressively merge batches.
     type Merger: Merger<Self>;
 

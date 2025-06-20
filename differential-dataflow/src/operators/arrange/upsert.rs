@@ -110,7 +110,7 @@ use timely::dataflow::operators::Capability;
 
 use crate::operators::arrange::arrangement::Arranged;
 use crate::trace::{Builder, Description};
-use crate::trace::{self, Trace, TraceReader, Batch, Cursor};
+use crate::trace::{self, Trace, TraceReader, Cursor};
 use crate::{ExchangeData, Hashable, IntoOwned};
 
 use super::TraceAgent;
@@ -131,13 +131,14 @@ pub fn arrange_from_upsert<G, K, V, Bu, Tr>(
 ) -> Arranged<G, TraceAgent<Tr>>
 where
     G: Scope<Timestamp=Tr::Time>,
-    Tr: Trace+TraceReader<Diff=isize>+'static,
-    for<'a> Tr::Key<'a> : IntoOwned<'a, Owned = K>,
+    Tr: Trace + for<'a> TraceReader<
+        Key<'a> : IntoOwned<'a, Owned = K>,
+        Val<'a> : IntoOwned<'a, Owned = V>,
+        Time: TotalOrder+ExchangeData,
+        Diff=isize,
+    >+'static,
     K: ExchangeData+Hashable+std::hash::Hash,
     V: ExchangeData,
-    for<'a> Tr::Val<'a> : IntoOwned<'a, Owned = V>,
-    Tr::Time: TotalOrder+ExchangeData,
-    Tr::Batch: Batch,
     Bu: Builder<Time=G::Timestamp, Input = Vec<((K, V), Tr::Time, Tr::Diff)>, Output = Tr::Batch>,
 {
     let mut reader: Option<TraceAgent<Tr>> = None;

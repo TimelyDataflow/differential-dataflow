@@ -215,8 +215,10 @@ fn scc_differential(
         .collect()
 }
 
-fn _strongly_connected<G: Scope>(graph: &Collection<G, Edge>) -> Collection<G, Edge>
-where G::Timestamp: Lattice+Ord+Hash {
+fn _strongly_connected<G>(graph: &Collection<G, Edge>) -> Collection<G, Edge>
+where
+    G: Scope<Timestamp: Lattice+Ord+Hash>,
+{
     graph.iterate(|inner| {
         let edges = graph.enter(&inner.scope());
         let trans = edges.map_in_place(|x| mem::swap(&mut x.0, &mut x.1));
@@ -224,9 +226,10 @@ where G::Timestamp: Lattice+Ord+Hash {
     })
 }
 
-fn _trim_edges<G: Scope>(cycle: &Collection<G, Edge>, edges: &Collection<G, Edge>)
-    -> Collection<G, Edge> where G::Timestamp: Lattice+Ord+Hash {
-
+fn _trim_edges<G>(cycle: &Collection<G, Edge>, edges: &Collection<G, Edge>) -> Collection<G, Edge>
+where
+    G: Scope<Timestamp: Lattice+Ord+Hash>,
+{
     let nodes = edges.map_in_place(|x| x.0 = x.1)
                      .consolidate();
 
@@ -240,9 +243,10 @@ fn _trim_edges<G: Scope>(cycle: &Collection<G, Edge>, edges: &Collection<G, Edge
          .map(|((x1,x2),_)| (x2,x1))
 }
 
-fn _reachability<G: Scope>(edges: &Collection<G, Edge>, nodes: &Collection<G, (Node, Node)>) -> Collection<G, Edge>
-where G::Timestamp: Lattice+Ord+Hash {
-
+fn _reachability<G>(edges: &Collection<G, Edge>, nodes: &Collection<G, (Node, Node)>) -> Collection<G, Edge>
+where
+    G: Scope<Timestamp: Lattice+Ord+Hash>,
+{
     edges.filter(|_| false)
          .iterate(|inner| {
              let edges = edges.enter(&inner.scope());

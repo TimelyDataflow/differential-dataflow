@@ -293,7 +293,7 @@ impl<D, T, R> ConsolidateLayout for Vec<(D, T, R)>
 where
     D: Ord + Clone + 'static,
     T: Ord + Clone + 'static,
-    for<'a> R: Semigroup + IntoOwned<'a, Owned = R> + Clone + 'static,
+    R: Semigroup + for<'a> IntoOwned<'a, Owned = R> + Clone + 'static,
 {
     type Key<'a> = (D, T) where Self: 'a;
     type Diff<'a> = R where Self: 'a;

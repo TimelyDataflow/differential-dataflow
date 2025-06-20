@@ -47,7 +47,7 @@ use crate::difference::{Semigroup, Abelian};
 use crate::lattice::Lattice;
 
 /// An extension trait for the `iterate` method.
-pub trait Iterate<G: Scope, D: Data, R: Semigroup> {
+pub trait Iterate<G: Scope<Timestamp: Lattice>, D: Data, R: Semigroup> {
     /// Iteratively apply `logic` to the source collection until convergence.
     ///
     /// Importantly, this method does not automatically consolidate results.
@@ -72,16 +72,15 @@ pub trait Iterate<G: Scope, D: Data, R: Semigroup> {
     /// });
     /// ```
     fn iterate<F>(&self, logic: F) -> Collection<G, D, R>
-        where
-            G::Timestamp: Lattice,
-            for<'a> F: FnOnce(&Collection<Iterative<'a, G, u64>, D, R>)->Collection<Iterative<'a, G, u64>, D, R>;
+    where
+        for<'a> F: FnOnce(&Collection<Iterative<'a, G, u64>, D, R>)->Collection<Iterative<'a, G, u64>, D, R>;
 }
 
-impl<G: Scope, D: Ord+Data+Debug, R: Abelian+'static> Iterate<G, D, R> for Collection<G, D, R> {
+impl<G: Scope<Timestamp: Lattice>, D: Ord+Data+Debug, R: Abelian+'static> Iterate<G, D, R> for Collection<G, D, R> {
     fn iterate<F>(&self, logic: F) -> Collection<G, D, R>
-        where G::Timestamp: Lattice,
-              for<'a> F: FnOnce(&Collection<Iterative<'a, G, u64>, D, R>)->Collection<Iterative<'a, G, u64>, D, R> {
-
+    where
+        for<'a> F: FnOnce(&Collection<Iterative<'a, G, u64>, D, R>)->Collection<Iterative<'a, G, u64>, D, R>,
+    {
         self.inner.scope().scoped("Iterate", |subgraph| {
             // create a new variable, apply logic, bind variable, return.
             //
@@ -97,11 +96,11 @@ impl<G: Scope, D: Ord+Data+Debug, R: Abelian+'static> Iterate<G, D, R> for Colle
     }
 }
 
-impl<G: Scope, D: Ord+Data+Debug, R: Semigroup+'static> Iterate<G, D, R> for G {
+impl<G: Scope<Timestamp: Lattice>, D: Ord+Data+Debug, R: Semigroup+'static> Iterate<G, D, R> for G {
     fn iterate<F>(&self, logic: F) -> Collection<G, D, R>
-        where G::Timestamp: Lattice,
-              for<'a> F: FnOnce(&Collection<Iterative<'a, G, u64>, D, R>)->Collection<Iterative<'a, G, u64>, D, R> {
-
+    where
+        for<'a> F: FnOnce(&Collection<Iterative<'a, G, u64>, D, R>)->Collection<Iterative<'a, G, u64>, D, R>,
+    {
         // TODO: This makes me think we have the wrong ownership pattern here.
         let mut clone = self.clone();
         clone
@@ -154,8 +153,7 @@ impl<G: Scope, D: Ord+Data+Debug, R: Semigroup+'static> Iterate<G, D, R> for G {
 /// ```
 pub struct Variable<G, D, R, C = Vec<(D, <G as ScopeParent>::Timestamp, R)>>
 where
-    G: Scope,
-    G::Timestamp: Lattice,
+    G: Scope<Timestamp: Lattice>,
     D: Data,
     R: Abelian + 'static,
     C: Container + Clone + 'static,
@@ -166,9 +164,9 @@ where
     step: <G::Timestamp as Timestamp>::Summary,
 }
 
-impl<G: Scope, D: Data, R: Abelian, C: Container + Clone + 'static> Variable<G, D, R, C>
+impl<G, D: Data, R: Abelian, C: Container + Clone + 'static> Variable<G, D, R, C>
 where
-    G::Timestamp: Lattice,
+    G: Scope<Timestamp: Lattice>,
     StreamCore<G, C>: crate::operators::Negate<G, C> + ResultsIn<G, C>,
 {
     /// Creates a new initially empty `Variable`.
@@ -220,7 +218,7 @@ where
     }
 }
 
-impl<G: Scope, D: Data, R: Abelian, C: Container + Clone + 'static> Deref for Variable<G, D, R, C> where G::Timestamp: Lattice {
+impl<G: Scope<Timestamp: Lattice>, D: Data, R: Abelian, C: Container + Clone + 'static> Deref for Variable<G, D, R, C> {
     type Target = Collection<G, D, R, C>;
     fn deref(&self) -> &Self::Target {
         &self.collection
@@ -235,8 +233,7 @@ impl<G: Scope, D: Data, R: Abelian, C: Container + Clone + 'static> Deref for Va
 /// negation.
 pub struct SemigroupVariable<G, D, R, C = Vec<(D, <G as ScopeParent>::Timestamp, R)>>
 where
-    G::Timestamp: Lattice,
-    G: Scope,
+    G: Scope<Timestamp: Lattice>,
     D: Data,
     R: Semigroup + 'static,
     C: Container + Clone + 'static,
@@ -246,9 +243,9 @@ where
     step: <G::Timestamp as Timestamp>::Summary,
 }
 
-impl<G: Scope, D: Data, R: Semigroup, C: Container+Clone> SemigroupVariable<G, D, R, C>
+impl<G, D: Data, R: Semigroup, C: Container+Clone> SemigroupVariable<G, D, R, C>
 where
-    G::Timestamp: Lattice,
+    G: Scope<Timestamp: Lattice>,
     StreamCore<G, C>: ResultsIn<G, C>,
 {
     /// Creates a new initially empty `SemigroupVariable`.

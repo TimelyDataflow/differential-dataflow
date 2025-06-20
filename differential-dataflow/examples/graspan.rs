@@ -82,14 +82,14 @@ type Arrange<G,K,V,R> = Arranged<G, TraceValHandle<K, V, <G as ScopeParent>::Tim
 ///
 /// An edge variable provides arranged representations of its contents, even before they are
 /// completely defined, in support of recursively defined productions.
-pub struct EdgeVariable<G: Scope> where G::Timestamp : Lattice {
+pub struct EdgeVariable<G: Scope<Timestamp: Lattice>> {
     variable: Variable<G, Edge, Diff>,
     current: Collection<G, Edge, Diff>,
     forward: Option<Arrange<G, Node, Node, Diff>>,
     reverse: Option<Arrange<G, Node, Node, Diff>>,
 }
 
-impl<G: Scope> EdgeVariable<G> where G::Timestamp : Lattice {
+impl<G: Scope<Timestamp: Lattice>> EdgeVariable<G> {
     /// Creates a new variable initialized with `source`.
     pub fn from(source: &Collection<G, Edge>, step: <G::Timestamp as Timestamp>::Summary) -> Self {
         let variable = Variable::new(&mut source.scope(), step);
@@ -152,9 +152,10 @@ impl Query {
     }
 
     /// Creates a dataflow implementing the query, and returns input and trace handles.
-    pub fn render_in<G: Scope>(&self, scope: &mut G) -> IndexMap<String, RelationHandles<G::Timestamp>>
-    where G::Timestamp: Lattice+::timely::order::TotalOrder {
-
+    pub fn render_in<G>(&self, scope: &mut G) -> IndexMap<String, RelationHandles<G::Timestamp>>
+    where 
+        G: Scope<Timestamp: Lattice+::timely::order::TotalOrder>,
+    {
         // Create new input (handle, stream) pairs
         let mut input_map = IndexMap::new();
         for production in self.productions.iter() {

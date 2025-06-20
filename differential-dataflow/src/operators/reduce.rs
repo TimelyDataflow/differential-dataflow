@@ -21,14 +21,14 @@ use timely::dataflow::operators::Capability;
 
 use crate::operators::arrange::{Arranged, ArrangeByKey, ArrangeBySelf, TraceAgent};
 use crate::lattice::Lattice;
-use crate::trace::{Batch, BatchReader, Cursor, Trace, Builder, ExertionLogic, Description};
+use crate::trace::{BatchReader, Cursor, Trace, Builder, ExertionLogic, Description};
 use crate::trace::cursor::CursorList;
 use crate::trace::implementations::{KeySpine, KeyBuilder, ValSpine, ValBuilder};
 
 use crate::trace::TraceReader;
 
 /// Extension trait for the `reduce` differential dataflow method.
-pub trait Reduce<G: Scope, K: Data, V: Data, R: Semigroup> where G::Timestamp: Lattice+Ord {
+pub trait Reduce<G: Scope<Timestamp: Lattice+Ord>, K: Data, V: Data, R: Semigroup> {
     /// Applies a reduction function on records grouped by key.
     ///
     /// Input data must be structured as `(key, val)` pairs.
@@ -69,8 +69,7 @@ pub trait Reduce<G: Scope, K: Data, V: Data, R: Semigroup> where G::Timestamp: L
 
 impl<G, K, V, R> Reduce<G, K, V, R> for Collection<G, (K, V), R>
     where
-        G: Scope,
-        G::Timestamp: Lattice+Ord,
+        G: Scope<Timestamp: Lattice+Ord>,
         K: ExchangeData+Hashable,
         V: ExchangeData,
         R: ExchangeData+Semigroup,
@@ -86,8 +85,6 @@ impl<G, K: Data, V: Data, T1, R: Ord+Semigroup+'static> Reduce<G, K, V, R> for A
 where
     G: Scope<Timestamp=T1::Time>,
     T1: for<'a> TraceReader<Key<'a>=&'a K, Val<'a>=&'a V, Diff=R>+Clone+'static,
-    for<'a> T1::Key<'a> : IntoOwned<'a, Owned = K>,
-    for<'a> T1::Val<'a> : IntoOwned<'a, Owned = V>,
 {
     fn reduce_named<L, V2: Data, R2: Ord+Abelian+'static>(&self, name: &str, logic: L) -> Collection<G, (K, V2), R2>
         where L: FnMut(&K, &[(&V, R)], &mut Vec<(V2, R2)>)+'static {
@@ -97,7 +94,7 @@ where
 }
 
 /// Extension trait for the `threshold` and `distinct` differential dataflow methods.
-pub trait Threshold<G: Scope, K: Data, R1: Semigroup> where G::Timestamp: Lattice+Ord {
+pub trait Threshold<G: Scope<Timestamp: Lattice+Ord>, K: Data, R1: Semigroup> {
     /// Transforms the multiplicity of records.
     ///
     /// The `threshold` function is obliged to map `R1::zero` to `R2::zero`, or at
@@ -153,8 +150,7 @@ pub trait Threshold<G: Scope, K: Data, R1: Semigroup> where G::Timestamp: Lattic
     }
 }
 
-impl<G: Scope, K: ExchangeData+Hashable, R1: ExchangeData+Semigroup> Threshold<G, K, R1> for Collection<G, K, R1>
-where G::Timestamp: Lattice+Ord {
+impl<G: Scope<Timestamp: Lattice+Ord>, K: ExchangeData+Hashable, R1: ExchangeData+Semigroup> Threshold<G, K, R1> for Collection<G, K, R1> {
     fn threshold_named<R2: Ord+Abelian+'static, F: FnMut(&K,&R1)->R2+'static>(&self, name: &str, thresh: F) -> Collection<G, K, R2> {
         self.arrange_by_self_named(&format!("Arrange: {}", name))
             .threshold_named(name, thresh)
@@ -165,7 +161,6 @@ impl<G, K: Data, T1, R1: Semigroup> Threshold<G, K, R1> for Arranged<G, T1>
 where
     G: Scope<Timestamp=T1::Time>,
     T1: for<'a> TraceReader<Key<'a>=&'a K, Val<'a>=&'a (), Diff=R1>+Clone+'static,
-    for<'a> T1::Key<'a>: IntoOwned<'a, Owned = K>,
 {
     fn threshold_named<R2: Ord+Abelian+'static, F: FnMut(&K,&R1)->R2+'static>(&self, name: &str, mut thresh: F) -> Collection<G, K, R2> {
         self.reduce_abelian::<_,K,(),KeyBuilder<K,G::Timestamp,R2>,KeySpine<K,G::Timestamp,R2>>(name, move |k,s,t| t.push(((), thresh(k, &s[0].1))))
@@ -174,7 +169,7 @@ where
 }
 
 /// Extension trait for the `count` differential dataflow method.
-pub trait Count<G: Scope, K: Data, R: Semigroup> where G::Timestamp: Lattice+Ord {
+pub trait Count<G: Scope<Timestamp: Lattice+Ord>, K: Data, R: Semigroup> {
     /// Counts the number of occurrences of each element.
     ///
     /// # Examples
@@ -202,10 +197,7 @@ pub trait Count<G: Scope, K: Data, R: Semigroup> where G::Timestamp: Lattice+Ord
     fn count_core<R2: Ord + Abelian + From<i8> + 'static>(&self) -> Collection<G, (K, R), R2>;
 }
 
-impl<G: Scope, K: ExchangeData+Hashable, R: ExchangeData+Semigroup> Count<G, K, R> for Collection<G, K, R>
-where
-    G::Timestamp: Lattice+Ord,
-{
+impl<G: Scope<Timestamp: Lattice+Ord>, K: ExchangeData+Hashable, R: ExchangeData+Semigroup> Count<G, K, R> for Collection<G, K, R> {
     fn count_core<R2: Ord + Abelian + From<i8> + 'static>(&self) -> Collection<G, (K, R), R2> {
         self.arrange_by_self_named("Arrange: Count")
             .count_core()
@@ -216,7 +208,6 @@ impl<G, K: Data, T1, R: Data+Semigroup> Count<G, K, R> for Arranged<G, T1>
 where
     G: Scope<Timestamp=T1::Time>,
     T1: for<'a> TraceReader<Key<'a>=&'a K, Val<'a>=&'a (), Diff=R>+Clone+'static,
-    for<'a> T1::Key<'a>: IntoOwned<'a, Owned = K>,
 {
     fn count_core<R2: Ord + Abelian + From<i8> + 'static>(&self) -> Collection<G, (K, R), R2> {
         self.reduce_abelian::<_,K,R,ValBuilder<K,R,G::Timestamp,R2>,ValSpine<K,R,G::Timestamp,R2>>("Count", |_k,s,t| t.push((s[0].1.clone(), R2::from(1i8))))
@@ -225,7 +216,7 @@ where
 }
 
 /// Extension trait for the `reduce_core` differential dataflow method.
-pub trait ReduceCore<G: Scope, K: ToOwned + ?Sized, V: Data, R: Semigroup> where G::Timestamp: Lattice+Ord {
+pub trait ReduceCore<G: Scope<Timestamp: Lattice+Ord>, K: ToOwned + ?Sized, V: Data, R: Semigroup> {
     /// Applies `reduce` to arranged data, and returns an arrangement of output data.
     ///
     /// This method is used by the more ergonomic `reduce`, `distinct`, and `count` methods, although
@@ -253,10 +244,12 @@ pub trait ReduceCore<G: Scope, K: ToOwned + ?Sized, V: Data, R: Semigroup> where
     /// ```
     fn reduce_abelian<L, Bu, T2>(&self, name: &str, mut logic: L) -> Arranged<G, TraceAgent<T2>>
         where
-            T2: for<'a> Trace<Key<'a>= &'a K, Time=G::Timestamp>+'static,
-            for<'a> T2::Val<'a> : IntoOwned<'a, Owned = V>,
-            T2::Diff: Abelian,
-            T2::Batch: Batch,
+            T2: for<'a> Trace<
+                Key<'a>= &'a K,
+                Val<'a> : IntoOwned<'a, Owned = V>,
+                Time=G::Timestamp,
+                Diff: Abelian,
+            >+'static,
             Bu: Builder<Time=T2::Time, Input = Vec<((K::Owned, V), T2::Time, T2::Diff)>, Output = T2::Batch>,
             L: FnMut(&K, &[(&V, R)], &mut Vec<(V, T2::Diff)>)+'static,
         {
@@ -276,9 +269,11 @@ pub trait ReduceCore<G: Scope, K: ToOwned + ?Sized, V: Data, R: Semigroup> where
     /// At least one of the two collections will be non-empty.
     fn reduce_core<L, Bu, T2>(&self, name: &str, logic: L) -> Arranged<G, TraceAgent<T2>>
         where
-            T2: for<'a> Trace<Key<'a>=&'a K, Time=G::Timestamp>+'static,
-            for<'a> T2::Val<'a> : IntoOwned<'a, Owned = V>,
-            T2::Batch: Batch,
+            T2: for<'a> Trace<
+                Key<'a>=&'a K,
+                Val<'a> : IntoOwned<'a, Owned = V>,
+                Time=G::Timestamp,
+            >+'static,
             Bu: Builder<Time=T2::Time, Input = Vec<((K::Owned, V), T2::Time, T2::Diff)>, Output = T2::Batch>,
             L: FnMut(&K, &[(&V, R)], &mut Vec<(V,T2::Diff)>, &mut Vec<(V, T2::Diff)>)+'static,
             ;
@@ -295,9 +290,11 @@ where
     fn reduce_core<L, Bu, T2>(&self, name: &str, logic: L) -> Arranged<G, TraceAgent<T2>>
         where
             V: Data,
-            T2: for<'a> Trace<Key<'a>=&'a K, Time=G::Timestamp>+'static,
-            for<'a> T2::Val<'a> : IntoOwned<'a, Owned = V>,
-            T2::Batch: Batch,
+            T2: for<'a> Trace<
+                Key<'a>=&'a K,
+                Val<'a> : IntoOwned<'a, Owned = V>,
+                Time=G::Timestamp,
+            >+'static,
             Bu: Builder<Time=T2::Time, Input = Vec<((K, V), T2::Time, T2::Diff)>, Output = T2::Batch>,
             L: FnMut(&K, &[(&V, R)], &mut Vec<(V,T2::Diff)>, &mut Vec<(V, T2::Diff)>)+'static,
     {
@@ -312,15 +309,11 @@ where
 pub fn reduce_trace<G, T1, Bu, T2, K, V, L>(trace: &Arranged<G, T1>, name: &str, mut logic: L) -> Arranged<G, TraceAgent<T2>>
 where
     G: Scope<Timestamp=T1::Time>,
-    T1: TraceReader + Clone + 'static,
-    for<'a> T1::Key<'a> : IntoOwned<'a, Owned = K>,
-    T2: for<'a> Trace<Key<'a>=T1::Key<'a>, Time=T1::Time> + 'static,
+    T1: for<'a> TraceReader<Key<'a> : IntoOwned<'a, Owned = K>> + Clone + 'static,
+    T2: for<'a> Trace<Key<'a>=T1::Key<'a>, Val<'a> : IntoOwned<'a, Owned = V>, Time=T1::Time> + 'static,
     K: Ord + 'static,
     V: Data,
-    for<'a> T2::Val<'a> : IntoOwned<'a, Owned = V>,
-    T2::Batch: Batch,
-    Bu: Builder<Time=T2::Time, Output = T2::Batch>,
-    Bu::Input: Container + PushInto<((K, V), T2::Time, T2::Diff)>,
+    Bu: Builder<Time=T2::Time, Output = T2::Batch, Input: Container + PushInto<((K, V), T2::Time, T2::Diff)>>,
     L: FnMut(T1::Key<'_>, &[(T1::Val<'_>, T1::Diff)], &mut Vec<(V,T2::Diff)>, &mut Vec<(V, T2::Diff)>)+'static,
 {
     let mut result_trace = None;
@@ -633,10 +626,9 @@ fn sort_dedup<T: Ord>(list: &mut Vec<T>) {
 trait PerKeyCompute<'a, C1, C2, C3, V>
 where
     C1: Cursor,
-    C2: Cursor<Key<'a> = C1::Key<'a>, Time = C1::Time>,
+    C2: for<'b> Cursor<Key<'a> = C1::Key<'a>, Val<'b> : IntoOwned<'b, Owned = V>, Time = C1::Time>,
     C3: Cursor<Key<'a> = C1::Key<'a>, Val<'a> = C1::Val<'a>, Time = C1::Time, Diff = C1::Diff>,
     V: Clone + Ord,
-    for<'b> C2::Val<'b> : IntoOwned<'b, Owned = V>,
 {
     fn new() -> Self;
     fn compute<L>(
@@ -698,10 +690,9 @@ mod history_replay {
     impl<'a, C1, C2, C3, V> PerKeyCompute<'a, C1, C2, C3, V> for HistoryReplayer<'a, C1, C2, C3, V>
     where
         C1: Cursor,
-        C2: Cursor<Key<'a> = C1::Key<'a>, Time = C1::Time>,
+        C2: for<'b> Cursor<Key<'a> = C1::Key<'a>, Val<'b> : IntoOwned<'b, Owned = V>, Time = C1::Time>,
         C3: Cursor<Key<'a> = C1::Key<'a>, Val<'a> = C1::Val<'a>, Time = C1::Time, Diff = C1::Diff>,
         V: Clone + Ord,
-        for<'b> C2::Val<'b> : IntoOwned<'b, Owned = V>,
     {
         fn new() -> Self {
             HistoryReplayer {

@@ -21,10 +21,7 @@ pub struct HuffmanContainer<B: Ord+Clone> {
     stats: BTreeMap<B, i64>
 }
 
-impl<B> HuffmanContainer<B>
-where
-    B: Ord + Clone,
-{
+impl<B: Ord + Clone> HuffmanContainer<B> {
     /// Prints statistics about encoded containers.
     pub fn print(&self) {
         if let Ok((_huff, bytes)) = &self.inner {
@@ -439,10 +436,7 @@ mod huffman {
             }
         }
 
-        impl<'a, T, I> Iterator for Decoder<'a, T, I>
-        where
-            I: Iterator<Item=u8>,
-        {
+        impl<'a, T, I: Iterator<Item=u8>> Iterator for Decoder<'a, T, I> {
             type Item = &'a T;
             fn next(&mut self) -> Option<&'a T> {
                 // We must navigate `self.decode`, restocking bits whenever possible.

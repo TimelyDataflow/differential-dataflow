@@ -33,10 +33,9 @@ pub trait Identifiers<G: Scope, D: ExchangeData, R: ExchangeData+Abelian> {
 
 impl<G, D, R> Identifiers<G, D, R> for Collection<G, D, R>
 where
-    G: Scope,
-    G::Timestamp: Lattice,
-    D: ExchangeData+::std::hash::Hash,
-    R: ExchangeData+Abelian,
+    G: Scope<Timestamp: Lattice>,
+    D: ExchangeData + ::std::hash::Hash,
+    R: ExchangeData + Abelian,
 {
     fn identifiers(&self) -> Collection<G, (D, u64), R> {
 

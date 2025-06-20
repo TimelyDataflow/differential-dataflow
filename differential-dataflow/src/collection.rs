@@ -153,7 +153,9 @@ impl<G: Scope, D, R, C: Container + Clone + 'static> Collection<G, D, R, C> {
     /// });
     /// ```
     pub fn inspect_container<F>(&self, func: F) -> Self
-    where F: FnMut(Result<(&G::Timestamp, &C), &[G::Timestamp]>)+'static {
+    where
+        F: FnMut(Result<(&G::Timestamp, &C), &[G::Timestamp]>)+'static,
+    {
         self.inner
             .inspect_container(func)
             .as_collection()
@@ -205,7 +207,10 @@ impl<G: Scope, D, R, C: Container + Clone + 'static> Collection<G, D, R, C> {
     /// ```
     // TODO: Removing this function is possible, but breaks existing callers of `negate` who expect
     //       an inherent method on `Collection`.
-    pub fn negate(&self) -> Collection<G, D, R, C> where StreamCore<G, C>: crate::operators::Negate<G, C> {
+    pub fn negate(&self) -> Collection<G, D, R, C>
+    where 
+        StreamCore<G, C>: crate::operators::Negate<G, C>
+    {
         crate::operators::Negate::negate(&self.inner).as_collection()
     }
 }
@@ -226,8 +231,9 @@ impl<G: Scope, D: Clone+'static, R: Clone+'static> Collection<G, D, R> {
     /// });
     /// ```
     pub fn map<D2, L>(&self, mut logic: L) -> Collection<G, D2, R>
-    where D2: Data,
-          L: FnMut(D) -> D2 + 'static
+    where
+        D2: Data,
+        L: FnMut(D) -> D2 + 'static,
     {
         self.inner
             .map(move |(data, time, delta)| (logic(data), time, delta))
@@ -252,7 +258,9 @@ impl<G: Scope, D: Clone+'static, R: Clone+'static> Collection<G, D, R> {
     /// });
     /// ```
     pub fn map_in_place<L>(&self, mut logic: L) -> Collection<G, D, R>
-    where L: FnMut(&mut D) + 'static {
+    where
+        L: FnMut(&mut D) + 'static,
+    {
         self.inner
             .map_in_place(move |&mut (ref mut data, _, _)| logic(data))
             .as_collection()
@@ -274,10 +282,11 @@ impl<G: Scope, D: Clone+'static, R: Clone+'static> Collection<G, D, R> {
     /// });
     /// ```
     pub fn flat_map<I, L>(&self, mut logic: L) -> Collection<G, I::Item, R>
-        where G::Timestamp: Clone,
-              I: IntoIterator,
-              I::Item: Data,
-              L: FnMut(D) -> I + 'static {
+    where
+        G::Timestamp: Clone,
+        I: IntoIterator<Item: Data>,
+        L: FnMut(D) -> I + 'static,
+    {
         self.inner
             .flat_map(move |(data, time, delta)| logic(data).into_iter().map(move |x| (x, time.clone(), delta.clone())))
             .as_collection()
@@ -297,7 +306,9 @@ impl<G: Scope, D: Clone+'static, R: Clone+'static> Collection<G, D, R> {
     /// });
     /// ```
     pub fn filter<L>(&self, mut logic: L) -> Collection<G, D, R>
-    where L: FnMut(&D) -> bool + 'static {
+    where
+        L: FnMut(&D) -> bool + 'static,
+    {
         self.inner
             .filter(move |(data, _, _)| logic(data))
             .as_collection()
@@ -323,11 +334,11 @@ impl<G: Scope, D: Clone+'static, R: Clone+'static> Collection<G, D, R> {
     /// });
     /// ```
     pub fn explode<D2, R2, I, L>(&self, mut logic: L) -> Collection<G, D2, <R2 as Multiply<R>>::Output>
-    where D2: Data,
-          R2: Semigroup+Multiply<R>,
-          <R2 as Multiply<R>>::Output: Semigroup+'static,
-          I: IntoIterator<Item=(D2,R2)>,
-          L: FnMut(D)->I+'static,
+    where
+        D2: Data,
+        R2: Semigroup+Multiply<R, Output: Semigroup+'static>,
+        I: IntoIterator<Item=(D2,R2)>,
+        L: FnMut(D)->I+'static,
     {
         self.inner
             .flat_map(move |(x, t, d)| logic(x).into_iter().map(move |(x,d2)| (x, t.clone(), d2.multiply(&d))))
@@ -357,12 +368,12 @@ impl<G: Scope, D: Clone+'static, R: Clone+'static> Collection<G, D, R> {
     /// });
     /// ```
     pub fn join_function<D2, R2, I, L>(&self, mut logic: L) -> Collection<G, D2, <R2 as Multiply<R>>::Output>
-    where G::Timestamp: Lattice,
-          D2: Data,
-          R2: Semigroup+Multiply<R>,
-          <R2 as Multiply<R>>::Output: Semigroup+'static,
-          I: IntoIterator<Item=(D2,G::Timestamp,R2)>,
-          L: FnMut(D)->I+'static,
+    where
+        G::Timestamp: Lattice,
+        D2: Data,
+        R2: Semigroup+Multiply<R, Output: Semigroup+'static>,
+        I: IntoIterator<Item=(D2,G::Timestamp,R2)>,
+        L: FnMut(D)->I+'static,
     {
         self.inner
             .flat_map(move |(x, t, d)| logic(x).into_iter().map(move |(x,t2,d2)| (x, t.join(&t2), d2.multiply(&d))))
@@ -444,8 +455,9 @@ impl<G: Scope, D: Clone+'static, R: Clone+'static> Collection<G, D, R> {
     /// is because we advance the timely capability with the same logic, and it must remain `less_equal`
     /// to all of the data timestamps).
     pub fn delay<F>(&self, func: F) -> Collection<G, D, R>
-    where F: FnMut(&G::Timestamp) -> G::Timestamp + Clone + 'static {
-
+    where
+        F: FnMut(&G::Timestamp) -> G::Timestamp + Clone + 'static,
+    {
         let mut func1 = func.clone();
         let mut func2 = func.clone();
 
@@ -479,7 +491,9 @@ impl<G: Scope, D: Clone+'static, R: Clone+'static> Collection<G, D, R> {
     /// });
     /// ```
     pub fn inspect<F>(&self, func: F) -> Collection<G, D, R>
-    where F: FnMut(&(D, G::Timestamp, R))+'static {
+    where
+        F: FnMut(&(D, G::Timestamp, R))+'static,
+    {
         self.inner
             .inspect(func)
             .as_collection()
@@ -503,7 +517,9 @@ impl<G: Scope, D: Clone+'static, R: Clone+'static> Collection<G, D, R> {
     /// });
     /// ```
     pub fn inspect_batch<F>(&self, mut func: F) -> Collection<G, D, R>
-    where F: FnMut(&G::Timestamp, &[(D, G::Timestamp, R)])+'static {
+    where
+        F: FnMut(&G::Timestamp, &[(D, G::Timestamp, R)])+'static,
+    {
         self.inner
             .inspect_batch(move |time, data| func(time, data))
             .as_collection()
@@ -529,9 +545,10 @@ impl<G: Scope, D: Clone+'static, R: Clone+'static> Collection<G, D, R> {
     /// });
     /// ```
     pub fn assert_empty(&self)
-    where D: crate::ExchangeData+Hashable,
-          R: crate::ExchangeData+Hashable + Semigroup,
-          G::Timestamp: Lattice+Ord,
+    where
+        D: crate::ExchangeData+Hashable,
+        R: crate::ExchangeData+Hashable + Semigroup,
+        G::Timestamp: Lattice+Ord,
     {
         self.consolidate()
             .inspect(|x| panic!("Assertion failed: non-empty collection: {:?}", x));
@@ -589,7 +606,7 @@ impl<G: Scope, D, R, C: Container+Data> Collection<Child<'_, G, G::Timestamp>, D
 }
 
 /// Methods requiring an Abelian difference, to support negation.
-impl<G: Scope, D: Clone+'static, R: Abelian+'static> Collection<G, D, R> where G::Timestamp: Data {
+impl<G: Scope<Timestamp: Data>, D: Clone+'static, R: Abelian+'static> Collection<G, D, R> {
     /// Assert if the collections are ever different.
     ///
     /// Because this is a dataflow fragment, the test is only applied as the computation is run. If the computation
@@ -614,9 +631,10 @@ impl<G: Scope, D: Clone+'static, R: Abelian+'static> Collection<G, D, R> where G
     /// });
     /// ```
     pub fn assert_eq(&self, other: &Self)
-    where D: crate::ExchangeData+Hashable,
-          R: crate::ExchangeData+Hashable,
-          G::Timestamp: Lattice+Ord
+    where
+        D: crate::ExchangeData+Hashable,
+        R: crate::ExchangeData+Hashable,
+        G::Timestamp: Lattice+Ord,
     {
         self.negate()
             .concat(other)
@@ -665,7 +683,7 @@ pub fn concatenate<G, D, R, C, I>(scope: &mut G, iterator: I) -> Collection<G, D
 where
     G: Scope,
     D: Data,
-    R: Semigroup+'static,
+    R: Semigroup + 'static,
     C: Container + Clone + 'static,
     I: IntoIterator<Item=Collection<G, D, R, C>>,
 {

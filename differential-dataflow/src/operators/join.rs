@@ -55,8 +55,7 @@ pub trait Join<G: Scope, K: Data, V: Data, R: Semigroup> {
         K: ExchangeData,
         V2: ExchangeData,
         R2: ExchangeData+Semigroup,
-        R: Multiply<R2>,
-        <R as Multiply<R2>>::Output: Semigroup+'static
+        R: Multiply<R2, Output: Semigroup+'static>,
     {
         self.join_map(other, |k,v,v2| (k.clone(),(v.clone(),v2.clone())))
     }
@@ -80,7 +79,7 @@ pub trait Join<G: Scope, K: Data, V: Data, R: Semigroup> {
     /// });
     /// ```
     fn join_map<V2, R2, D, L>(&self, other: &Collection<G, (K,V2), R2>, logic: L) -> Collection<G, D, <R as Multiply<R2>>::Output>
-    where K: ExchangeData, V2: ExchangeData, R2: ExchangeData+Semigroup, R: Multiply<R2>, <R as Multiply<R2>>::Output: Semigroup+'static, D: Data, L: FnMut(&K, &V, &V2)->D+'static;
+    where K: ExchangeData, V2: ExchangeData, R2: ExchangeData+Semigroup, R: Multiply<R2, Output: Semigroup+'static>, D: Data, L: FnMut(&K, &V, &V2)->D+'static;
 
     /// Matches pairs `(key, val)` and `key` based on `key`, producing the former with frequencies multiplied.
     ///
@@ -105,7 +104,7 @@ pub trait Join<G: Scope, K: Data, V: Data, R: Semigroup> {
     /// });
     /// ```
     fn semijoin<R2>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), <R as Multiply<R2>>::Output>
-    where K: ExchangeData, R2: ExchangeData+Semigroup, R: Multiply<R2>, <R as Multiply<R2>>::Output: Semigroup+'static;
+    where K: ExchangeData, R2: ExchangeData+Semigroup, R: Multiply<R2, Output: Semigroup+'static>;
 
     /// Subtracts the semijoin with `other` from `self`.
     ///
@@ -139,21 +138,20 @@ pub trait Join<G: Scope, K: Data, V: Data, R: Semigroup> {
 
 impl<G, K, V, R> Join<G, K, V, R> for Collection<G, (K, V), R>
 where
-    G: Scope,
+    G: Scope<Timestamp: Lattice+Ord>,
     K: ExchangeData+Hashable,
     V: ExchangeData,
     R: ExchangeData+Semigroup,
-    G::Timestamp: Lattice+Ord,
 {
     fn join_map<V2: ExchangeData, R2: ExchangeData+Semigroup, D: Data, L>(&self, other: &Collection<G, (K, V2), R2>, mut logic: L) -> Collection<G, D, <R as Multiply<R2>>::Output>
-    where R: Multiply<R2>, <R as Multiply<R2>>::Output: Semigroup+'static, L: FnMut(&K, &V, &V2)->D+'static {
+    where R: Multiply<R2, Output: Semigroup+'static>, L: FnMut(&K, &V, &V2)->D+'static {
         let arranged1 = self.arrange_by_key();
         let arranged2 = other.arrange_by_key();
         arranged1.join_core(&arranged2, move |k,v1,v2| Some(logic(k,v1,v2)))
     }
 
     fn semijoin<R2: ExchangeData+Semigroup>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), <R as Multiply<R2>>::Output>
-    where R: Multiply<R2>, <R as Multiply<R2>>::Output: Semigroup+'static {
+    where R: Multiply<R2, Output: Semigroup+'static> {
         let arranged1 = self.arrange_by_key();
         let arranged2 = other.arrange_by_self();
         arranged1.join_core(&arranged2, |k,v,_| Some((k.clone(), v.clone())))
@@ -174,8 +172,7 @@ where
 {
     fn join_map<V2: ExchangeData, R2: ExchangeData+Semigroup, D: Data, L>(&self, other: &Collection<G, (K, V2), R2>, mut logic: L) -> Collection<G, D, <Tr::Diff as Multiply<R2>>::Output>
     where 
-        Tr::Diff: Multiply<R2>,
-        <Tr::Diff as Multiply<R2>>::Output: Semigroup+'static,
+        Tr::Diff: Multiply<R2, Output: Semigroup+'static>,
         L: for<'a> FnMut(Tr::Key<'a>, Tr::Val<'a>, &V2)->D+'static,
     {
         let arranged2 = other.arrange_by_key();
@@ -183,7 +180,7 @@ where
     }
 
     fn semijoin<R2: ExchangeData+Semigroup>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), <Tr::Diff as Multiply<R2>>::Output>
-    where Tr::Diff: Multiply<R2>, <Tr::Diff as Multiply<R2>>::Output: Semigroup+'static {
+    where Tr::Diff: Multiply<R2, Output: Semigroup+'static> {
         let arranged2 = other.arrange_by_self();
         self.join_core(&arranged2, |k,v,_| Some((k.clone(), v.clone())))
     }
@@ -200,7 +197,7 @@ where
 /// This method is used by the various `join` implementations, but it can also be used
 /// directly in the event that one has a handle to an `Arranged<G,T>`, perhaps because
 /// the arrangement is available for re-use, or from the output of a `reduce` operator.
-pub trait JoinCore<G: Scope, K: 'static + ?Sized, V: 'static + ?Sized, R: Semigroup> where G::Timestamp: Lattice+Ord {
+pub trait JoinCore<G: Scope<Timestamp: Lattice+Ord>, K: 'static + ?Sized, V: 'static + ?Sized, R: Semigroup> {
 
     /// Joins two arranged collections with the same key type.
     ///
@@ -235,10 +232,8 @@ pub trait JoinCore<G: Scope, K: 'static + ?Sized, V: 'static + ?Sized, R: Semigr
     fn join_core<Tr2,I,L> (&self, stream2: &Arranged<G,Tr2>, result: L) -> Collection<G,I::Item,<R as Multiply<Tr2::Diff>>::Output>
     where
         Tr2: for<'a> TraceReader<Key<'a>=&'a K, Time=G::Timestamp>+Clone+'static,
-        R: Multiply<Tr2::Diff>,
-        <R as Multiply<Tr2::Diff>>::Output: Semigroup+'static,
-        I: IntoIterator,
-        I::Item: Data,
+        R: Multiply<Tr2::Diff, Output: Semigroup+'static>,
+        I: IntoIterator<Item: Data>,
         L: FnMut(&K,&V,Tr2::Val<'_>)->I+'static,
         ;
 
@@ -288,19 +283,16 @@ pub trait JoinCore<G: Scope, K: 'static + ?Sized, V: 'static + ?Sized, R: Semigr
 
 impl<G, K, V, R> JoinCore<G, K, V, R> for Collection<G, (K, V), R>
 where
-    G: Scope,
+    G: Scope<Timestamp: Lattice+Ord>,
     K: ExchangeData+Hashable,
     V: ExchangeData,
     R: ExchangeData+Semigroup,
-    G::Timestamp: Lattice+Ord,
 {
     fn join_core<Tr2,I,L> (&self, stream2: &Arranged<G,Tr2>, result: L) -> Collection<G,I::Item,<R as Multiply<Tr2::Diff>>::Output>
     where
         Tr2: for<'a> TraceReader<Key<'a>=&'a K, Time=G::Timestamp>+Clone+'static,
-        R: Multiply<Tr2::Diff>,
-        <R as Multiply<Tr2::Diff>>::Output: Semigroup+'static,
-        I: IntoIterator,
-        I::Item: Data,
+        R: Multiply<Tr2::Diff, Output: Semigroup+'static>,
+        I: IntoIterator<Item: Data>,
         L: FnMut(&K,&V,Tr2::Val<'_>)->I+'static,
     {
         self.arrange_by_key()

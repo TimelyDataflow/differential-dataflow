@@ -42,8 +42,7 @@ where
 
 impl<Tr, TInner, F, G> TraceReader for TraceEnter<Tr, TInner, F, G>
 where
-    Tr: TraceReader,
-    Tr::Batch: Clone,
+    Tr: TraceReader<Batch: Clone>,
     TInner: Refines<Tr::Time>+Lattice,
     F: 'static,
     F: FnMut(Tr::Key<'_>, Tr::Val<'_>, Tr::TimeGat<'_>)->TInner+Clone,

@@ -242,10 +242,7 @@ pub struct ContainerChunker<Output> {
     empty: Output,
 }
 
-impl<Output> Default for ContainerChunker<Output>
-where
-    Output: Default,
-{
+impl<Output: Default> Default for ContainerChunker<Output> {
     fn default() -> Self {
         Self {
             pending: Output::default(),

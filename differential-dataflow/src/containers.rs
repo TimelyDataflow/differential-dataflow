@@ -38,7 +38,7 @@ impl<T: Columnation> TimelyStack<T> {
     #[inline(always)]
     pub fn reserve_items<'a, I>(&mut self, items: I)
     where
-        I: Iterator<Item= &'a T>+Clone,
+        I: Iterator<Item= &'a T> + Clone,
         T: 'a,
     {
         self.local.reserve(items.clone().count());
@@ -53,7 +53,7 @@ impl<T: Columnation> TimelyStack<T> {
     pub fn reserve_regions<'a, I>(&mut self, regions: I)
     where
         Self: 'a,
-        I: Iterator<Item= &'a Self>+Clone,
+        I: Iterator<Item= &'a Self> + Clone,
     {
         self.local.reserve(regions.clone().map(|cs| cs.local.len()).sum());
         self.inner.reserve_regions(regions.map(|cs| &cs.inner));

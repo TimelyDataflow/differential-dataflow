@@ -42,8 +42,9 @@ fn main() {
 }
 
 fn triangles<G: Scope>(edges: &Collection<G, Edge>) -> Collection<G, (Node, Node, Node)>
-where G::Timestamp: Lattice+Hash+Ord {
-
+where
+    G: Scope<Timestamp: Lattice+Hash+Ord>,
+{
     // only use forward-pointing edges.
     let edges = edges.filter(|&(src, dst)| src < dst);
 

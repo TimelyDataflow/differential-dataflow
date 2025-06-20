@@ -117,7 +117,7 @@ pub struct CursorFrontier<C, T> {
     until: Antichain<T>
 }
 
-impl<C, T> CursorFrontier<C, T> where T: Clone {
+impl<C, T: Clone> CursorFrontier<C, T> {
     fn new(cursor: C, since: AntichainRef<T>, until: AntichainRef<T>) -> Self {
         CursorFrontier {
             cursor,
@@ -190,10 +190,7 @@ impl<C: Cursor> BatchCursorFrontier<C> {
     }
 }
 
-impl<C: Cursor> Cursor for BatchCursorFrontier<C>
-where
-    C::Storage: BatchReader,
-{
+impl<C: Cursor<Storage: BatchReader>> Cursor for BatchCursorFrontier<C> {
     type Key<'a> = C::Key<'a>;
     type Val<'a> = C::Val<'a>;
     type Time = C::Time;

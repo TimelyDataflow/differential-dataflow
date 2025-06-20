@@ -41,8 +41,10 @@ fn main() {
     }).unwrap();
 }
 
-fn interpret<G: Scope>(edges: &Collection<G, Edge>, relations: &[(usize, usize)]) -> Collection<G, Vec<Node>>
-where G::Timestamp: Lattice+Hash+Ord {
+fn interpret<G>(edges: &Collection<G, Edge>, relations: &[(usize, usize)]) -> Collection<G, Vec<Node>>
+where 
+    G: Scope<Timestamp: Lattice+Hash+Ord>,
+{
 
     // arrange the edge relation three ways.
     let as_self = edges.arrange_by_self();

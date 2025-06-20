@@ -16,8 +16,7 @@ use crate::operators::arrange::arrangement::ArrangeByKey;
 /// method to limit the introduction of labels.
 pub fn propagate<G, N, L, R>(edges: &Collection<G, (N,N), R>, nodes: &Collection<G,(N,L),R>) -> Collection<G,(N,L),R>
 where
-    G: Scope,
-    G::Timestamp: Lattice+Ord,
+    G: Scope<Timestamp: Lattice+Ord>,
     N: ExchangeData+Hash,
     R: ExchangeData+Abelian,
     R: Multiply<R, Output=R>,
@@ -34,8 +33,7 @@ where
 /// method to limit the introduction of labels.
 pub fn propagate_at<G, N, L, F, R>(edges: &Collection<G, (N,N), R>, nodes: &Collection<G,(N,L),R>, logic: F) -> Collection<G,(N,L),R>
 where
-    G: Scope,
-    G::Timestamp: Lattice+Ord,
+    G: Scope<Timestamp: Lattice+Ord>,
     N: ExchangeData+Hash,
     R: ExchangeData+Abelian,
     R: Multiply<R, Output=R>,
