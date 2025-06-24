@@ -23,7 +23,7 @@ graph_map = "0.1"
 bytemuck = "1.18.0"
 
 [dependencies]
-columnar = "0.5"
+columnar = "0.6"
 columnation = "0.1.0"
 fnv="1.0.2"
 paste = "1.0"
