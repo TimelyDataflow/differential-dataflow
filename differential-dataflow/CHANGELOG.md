@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.3](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dataflow-v0.15.2...differential-dataflow-v0.15.3) - 2025-06-24
+
+### Other
+
+- Update columnar to 0.6 ([#611](https://github.com/TimelyDataflow/differential-dataflow/pull/611))
+- Remove use of borrow_as from trace wrappers ([#609](https://github.com/TimelyDataflow/differential-dataflow/pull/609))
+- Modernize many where constraints ([#610](https://github.com/TimelyDataflow/differential-dataflow/pull/610))
+- Added example commands to examples/multitemporal.rs ([#607](https://github.com/TimelyDataflow/differential-dataflow/pull/607))
+
 ## [0.15.2](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dataflow-v0.15.1...differential-dataflow-v0.15.2) - 2025-05-19
 
 ### Other
