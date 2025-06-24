@@ -677,7 +677,8 @@ pub mod val_batch {
     }
 }
 
-mod key_batch {
+/// Types related to forming batches of keys.
+pub mod key_batch {
 
     use std::marker::PhantomData;
     use serde::{Deserialize, Serialize};
