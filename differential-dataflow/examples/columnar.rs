@@ -580,7 +580,7 @@ pub mod dd_builder {
     use differential_dataflow::trace::implementations::Layout;
     use differential_dataflow::trace::implementations::Update;
     use differential_dataflow::trace::implementations::BatchContainer;
-    use differential_dataflow::trace::implementations::ord_neu::{OrdValBatch, val_batch::OrdValStorage, OrdKeyBatch};
+    use differential_dataflow::trace::implementations::ord_neu::{OrdValBatch, val_batch::OrdValStorage, OrdKeyBatch, Vals, Upds};
     use differential_dataflow::trace::implementations::ord_neu::key_batch::OrdKeyStorage;
     use crate::Column;
 
@@ -619,8 +619,8 @@ pub mod dd_builder {
         /// to recover the singleton to push it into `updates` to join the second update.
         fn push_update(&mut self, time: <L::Target as Update>::Time, diff: <L::Target as Update>::Diff) {
             // If a just-pushed update exactly equals `(time, diff)` we can avoid pushing it.
-            if self.result.times.last().map(|t| t == <<L::TimeContainer as BatchContainer>::ReadItem<'_> as IntoOwned>::borrow_as(&time)) == Some(true) &&
-                self.result.diffs.last().map(|d| d == <<L::DiffContainer as BatchContainer>::ReadItem<'_> as IntoOwned>::borrow_as(&diff)) == Some(true)
+            if self.result.upds.times.last().map(|t| t == <<L::TimeContainer as BatchContainer>::ReadItem<'_> as IntoOwned>::borrow_as(&time)) == Some(true) &&
+                self.result.upds.diffs.last().map(|d| d == <<L::DiffContainer as BatchContainer>::ReadItem<'_> as IntoOwned>::borrow_as(&diff)) == Some(true)
             {
                 assert!(self.singleton.is_none());
                 self.singleton = Some((time, diff));
@@ -628,11 +628,11 @@ pub mod dd_builder {
             else {
                 // If we have pushed a single element, we need to copy it out to meet this one.
                 if let Some((time, diff)) = self.singleton.take() {
-                    self.result.times.push(time);
-                    self.result.diffs.push(diff);
+                    self.result.upds.times.push(time);
+                    self.result.upds.diffs.push(diff);
                 }
-                self.result.times.push(time);
-                self.result.diffs.push(diff);
+                self.result.upds.times.push(time);
+                self.result.upds.diffs.push(diff);
             }
         }
     }
@@ -660,11 +660,8 @@ pub mod dd_builder {
             Self {
                 result: OrdValStorage {
                     keys: L::KeyContainer::with_capacity(keys),
-                    keys_offs: L::OffsetContainer::with_capacity(keys + 1),
-                    vals: L::ValContainer::with_capacity(vals),
-                    vals_offs: L::OffsetContainer::with_capacity(vals + 1),
-                    times: L::TimeContainer::with_capacity(upds),
-                    diffs: L::DiffContainer::with_capacity(upds),
+                    vals: Vals::with_capacity(keys + 1, vals),
+                    upds: Upds::with_capacity(vals + 1, upds),
                 },
                 singleton: None,
                 singletons: 0,
@@ -692,22 +689,22 @@ pub mod dd_builder {
                 // Perhaps this is a continuation of an already received key.
                 if self.result.keys.last().map(|k| <<L::KeyContainer as BatchContainer>::ReadItem<'_> as IntoOwned>::borrow_as(&key).eq(&k)).unwrap_or(false) {
                     // Perhaps this is a continuation of an already received value.
-                    if self.result.vals.last().map(|v| <<L::ValContainer as BatchContainer>::ReadItem<'_> as IntoOwned>::borrow_as(&val).eq(&v)).unwrap_or(false) {
+                    if self.result.vals.vals.last().map(|v| <<L::ValContainer as BatchContainer>::ReadItem<'_> as IntoOwned>::borrow_as(&val).eq(&v)).unwrap_or(false) {
                         self.push_update(time, diff);
                     } else {
                         // New value; complete representation of prior value.
-                        self.result.vals_offs.push(self.result.times.len());
+                        self.result.upds.offs.push(self.result.upds.times.len());
                         if self.singleton.take().is_some() { self.singletons += 1; }
                         self.push_update(time, diff);
-                        self.result.vals.push(&val);
+                        self.result.vals.vals.push(&val);
                     }
                 } else {
                     // New key; complete representation of prior key.
-                    self.result.vals_offs.push(self.result.times.len());
+                    self.result.upds.offs.push(self.result.upds.times.len());
                     if self.singleton.take().is_some() { self.singletons += 1; }
-                    self.result.keys_offs.push(self.result.vals.len());
+                    self.result.vals.offs.push(self.result.vals.len());
                     self.push_update(time, diff);
-                    self.result.vals.push(&val);
+                    self.result.vals.vals.push(&val);
                     self.result.keys.push(&key);
                 }
             }
@@ -716,12 +713,12 @@ pub mod dd_builder {
         #[inline(never)]
         fn done(mut self, description: Description<Self::Time>) -> OrdValBatch<L> {
             // Record the final offsets
-            self.result.vals_offs.push(self.result.times.len());
+            self.result.upds.offs.push(self.result.upds.times.len());
             // Remove any pending singleton, and if it was set increment our count.
             if self.singleton.take().is_some() { self.singletons += 1; }
-            self.result.keys_offs.push(self.result.vals.len());
+            self.result.vals.offs.push(self.result.vals.len());
             OrdValBatch {
-                updates: self.result.times.len() + self.singletons,
+                updates: self.result.upds.times.len() + self.singletons,
                 storage: self.result,
                 description,
             }
@@ -767,8 +764,8 @@ pub mod dd_builder {
         /// to recover the singleton to push it into `updates` to join the second update.
         fn push_update(&mut self, time: <L::Target as Update>::Time, diff: <L::Target as Update>::Diff) {
             // If a just-pushed update exactly equals `(time, diff)` we can avoid pushing it.
-            if self.result.times.last().map(|t| t == <<L::TimeContainer as BatchContainer>::ReadItem<'_> as IntoOwned>::borrow_as(&time)) == Some(true) &&
-                self.result.diffs.last().map(|d| d == <<L::DiffContainer as BatchContainer>::ReadItem<'_> as IntoOwned>::borrow_as(&diff)) == Some(true)
+            if self.result.upds.times.last().map(|t| t == <<L::TimeContainer as BatchContainer>::ReadItem<'_> as IntoOwned>::borrow_as(&time)) == Some(true) &&
+                self.result.upds.diffs.last().map(|d| d == <<L::DiffContainer as BatchContainer>::ReadItem<'_> as IntoOwned>::borrow_as(&diff)) == Some(true)
             {
                 assert!(self.singleton.is_none());
                 self.singleton = Some((time, diff));
@@ -776,11 +773,11 @@ pub mod dd_builder {
             else {
                 // If we have pushed a single element, we need to copy it out to meet this one.
                 if let Some((time, diff)) = self.singleton.take() {
-                    self.result.times.push(time);
-                    self.result.diffs.push(diff);
+                    self.result.upds.times.push(time);
+                    self.result.upds.diffs.push(diff);
                 }
-                self.result.times.push(time);
-                self.result.diffs.push(diff);
+                self.result.upds.times.push(time);
+                self.result.upds.diffs.push(diff);
             }
         }
     }
@@ -808,9 +805,7 @@ pub mod dd_builder {
             Self {
                 result: OrdKeyStorage {
                     keys: L::KeyContainer::with_capacity(keys),
-                    keys_offs: L::OffsetContainer::with_capacity(keys + 1),
-                    times: L::TimeContainer::with_capacity(upds),
-                    diffs: L::DiffContainer::with_capacity(upds),
+                    upds: Upds::with_capacity(keys + 1, upds),
                 },
                 singleton: None,
                 singletons: 0,
@@ -839,7 +834,7 @@ pub mod dd_builder {
                     self.push_update(time, diff);
                 } else {
                     // New key; complete representation of prior key.
-                    self.result.keys_offs.push(self.result.times.len());
+                    self.result.upds.offs.push(self.result.upds.times.len());
                     if self.singleton.take().is_some() { self.singletons += 1; }
                     self.push_update(time, diff);
                     self.result.keys.push(&key);
@@ -850,11 +845,11 @@ pub mod dd_builder {
         #[inline(never)]
         fn done(mut self, description: Description<Self::Time>) -> OrdKeyBatch<L> {
             // Record the final offsets
-            self.result.keys_offs.push(self.result.times.len());
+            self.result.upds.offs.push(self.result.upds.times.len());
             // Remove any pending singleton, and if it was set increment our count.
             if self.singleton.take().is_some() { self.singletons += 1; }
             OrdKeyBatch {
-                updates: self.result.times.len() + self.singletons,
+                updates: self.result.upds.times.len() + self.singletons,
                 storage: self.result,
                 description,
             }
