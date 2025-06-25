@@ -99,10 +99,23 @@ mod layers {
         pub fn bounds(&self, index: usize) -> (usize, usize) {
             (self.offs.index(index), self.offs.index(index+1))
         }
+        /// Retrieves a value using relative indexes.
+        ///
+        /// The first index identifies a list, and the second an item within the list.
+        /// The method adds the list's lower bound to the item index, and then calls
+        /// `get_abs`. Using absolute indexes within the list's bounds can be more
+        /// efficient than using relative indexing.
+        pub fn get_rel(&self, list_idx: usize, item_idx: usize) -> V::ReadItem<'_> {
+            self.get_abs(self.bounds(list_idx).0 + item_idx)
+        }
     }
     impl<O: BatchContainer, V: BatchContainer> Vals<O, V> {
         /// Number of lists in the container.
         pub fn len(&self) -> usize { self.offs.len() - 1 }
+        /// Retrieves a value using an absolute rather than relative index.
+        pub fn get_abs(&self, index: usize) -> V::ReadItem<'_> {
+            self.vals.index(index)
+        }
         /// Allocates with capacities for a number of lists and values.
         pub fn with_capacity(o_size: usize, v_size: usize) -> Self {
             Self {
@@ -149,10 +162,23 @@ mod layers {
             }
             (lower, upper)
         }
+        /// Retrieves a value using relative indexes.
+        ///
+        /// The first index identifies a list, and the second an item within the list.
+        /// The method adds the list's lower bound to the item index, and then calls
+        /// `get_abs`. Using absolute indexes within the list's bounds can be more
+        /// efficient than using relative indexing.
+        pub fn get_rel(&self, list_idx: usize, item_idx: usize) -> (T::ReadItem<'_>, D::ReadItem<'_>) {
+            self.get_abs(self.bounds(list_idx).0 + item_idx)
+        }
     }
     impl<O: BatchContainer, T: BatchContainer, D: BatchContainer> Upds<O, T, D> {
         /// Number of lists in the container.
         pub fn len(&self) -> usize { self.offs.len() - 1 }
+        /// Retrieves a value using an absolute rather than relative index.
+        pub fn get_abs(&self, index: usize) -> (T::ReadItem<'_>, D::ReadItem<'_>) {
+            (self.times.index(index), self.diffs.index(index))
+        }
         /// Allocates with capacities for a number of lists and values.
         pub fn with_capacity(o_size: usize, u_size: usize) -> Self {
             Self {
@@ -387,7 +413,7 @@ pub mod val_batch {
                 self.stash_updates_for_val(source, lower);
                 if let Some(off) = self.consolidate_updates() {
                     self.result.upds.offs.push(off);
-                    self.result.vals.vals.push(source.vals.vals.index(lower));
+                    self.result.vals.vals.push(source.vals.get_abs(lower));
                 }
                 lower += 1;
             }            
@@ -443,13 +469,13 @@ pub mod val_batch {
                 // if they are non-empty post-consolidation, we write the value.
                 // We could multi-way merge and it wouldn't be very complicated.
                 use ::std::cmp::Ordering;
-                match source1.vals.vals.index(lower1).cmp(&source2.vals.vals.index(lower2)) {
+                match source1.vals.get_abs(lower1).cmp(&source2.vals.get_abs(lower2)) {
                     Ordering::Less => { 
                         // Extend stash by updates, with logical compaction applied.
                         self.stash_updates_for_val(source1, lower1);
                         if let Some(off) = self.consolidate_updates() {
                             self.result.upds.offs.push(off);
-                            self.result.vals.vals.push(source1.vals.vals.index(lower1));
+                            self.result.vals.vals.push(source1.vals.get_abs(lower1));
                         }
                         lower1 += 1;
                     },
@@ -458,7 +484,7 @@ pub mod val_batch {
                         self.stash_updates_for_val(source2, lower2);
                         if let Some(off) = self.consolidate_updates() {
                             self.result.upds.offs.push(off);
-                            self.result.vals.vals.push(source1.vals.vals.index(lower1));
+                            self.result.vals.vals.push(source1.vals.get_abs(lower1));
                         }
                         lower1 += 1;
                         lower2 += 1;
@@ -468,7 +494,7 @@ pub mod val_batch {
                         self.stash_updates_for_val(source2, lower2);
                         if let Some(off) = self.consolidate_updates() {
                             self.result.upds.offs.push(off);
-                            self.result.vals.vals.push(source2.vals.vals.index(lower2));
+                            self.result.vals.vals.push(source2.vals.get_abs(lower2));
                         }
                         lower2 += 1;
                     },
@@ -479,7 +505,7 @@ pub mod val_batch {
                 self.stash_updates_for_val(source1, lower1);
                 if let Some(off) = self.consolidate_updates() {
                     self.result.upds.offs.push(off);
-                    self.result.vals.vals.push(source1.vals.vals.index(lower1));
+                    self.result.vals.vals.push(source1.vals.get_abs(lower1));
                 }
                 lower1 += 1;
             }
@@ -487,7 +513,7 @@ pub mod val_batch {
                 self.stash_updates_for_val(source2, lower2);
                 if let Some(off) = self.consolidate_updates() {
                     self.result.upds.offs.push(off);
-                    self.result.vals.vals.push(source2.vals.vals.index(lower2));
+                    self.result.vals.vals.push(source2.vals.get_abs(lower2));
                 }
                 lower2 += 1;
             }
@@ -505,8 +531,7 @@ pub mod val_batch {
             let (lower, upper) = source.upds.bounds(index);
             for i in lower .. upper {
                 // NB: Here is where we would need to look back if `lower == upper`.
-                let time = source.upds.times.index(i);
-                let diff = source.upds.diffs.index(i);
+                let (time, diff) = source.upds.get_abs(i);
                 use crate::lattice::Lattice;
                 let mut new_time: <L::Target as Update>::Time = time.into_owned();
                 new_time.advance_by(self.description.since().borrow());
@@ -571,12 +596,11 @@ pub mod val_batch {
         fn get_val<'a>(&self, storage: &'a Self::Storage) -> Option<Self::Val<'a>> { if self.val_valid(storage) { Some(self.val(storage)) } else { None } }
 
         fn key<'a>(&self, storage: &'a OrdValBatch<L>) -> Self::Key<'a> { storage.storage.keys.index(self.key_cursor) }
-        fn val<'a>(&self, storage: &'a OrdValBatch<L>) -> Self::Val<'a> { storage.storage.vals.vals.index(self.val_cursor) }
+        fn val<'a>(&self, storage: &'a OrdValBatch<L>) -> Self::Val<'a> { storage.storage.vals.get_abs(self.val_cursor) }
         fn map_times<L2: FnMut(Self::TimeGat<'_>, Self::DiffGat<'_>)>(&mut self, storage: &OrdValBatch<L>, mut logic: L2) {
             let (lower, upper) = storage.storage.upds.bounds(self.val_cursor);
             for index in lower .. upper {
-                let time = storage.storage.upds.times.index(index);
-                let diff = storage.storage.upds.diffs.index(index);
+                let (time, diff) = storage.storage.upds.get_abs(index);
                 logic(time, diff);
             }
         }
@@ -988,8 +1012,7 @@ pub mod key_batch {
             let (lower, upper) = source.upds.bounds(index);
             for i in lower .. upper {
                 // NB: Here is where we would need to look back if `lower == upper`.
-                let time = source.upds.times.index(i);
-                let diff = source.upds.diffs.index(i);
+                let (time, diff) = source.upds.get_abs(i);
                 use crate::lattice::Lattice;
                 let mut new_time = time.into_owned();
                 new_time.advance_by(self.description.since().borrow());
@@ -1057,8 +1080,7 @@ pub mod key_batch {
         fn map_times<L2: FnMut(Self::TimeGat<'_>, Self::DiffGat<'_>)>(&mut self, storage: &Self::Storage, mut logic: L2) {
             let (lower, upper) = storage.storage.upds.bounds(self.key_cursor);
             for index in lower .. upper {
-                let time = storage.storage.upds.times.index(index);
-                let diff = storage.storage.upds.diffs.index(index);
+                let (time, diff) = storage.storage.upds.get_abs(index);
                 logic(time, diff);
             }
         }
