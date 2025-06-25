@@ -144,6 +144,11 @@ mod layers {
         pub times: T,
         /// Concatenated ordered lists of update diffs, bracketed by offsets in `offs`.
         pub diffs: D,
+        /// Tracks the total number of updates contained within.
+        ///
+        /// This may be more than `times.len()` or `diffs.len()` because we deduplicate runs
+        /// of the same single `(time, diff)` pair.
+        total: usize,
     }
 
     impl<O: BatchContainer, T: BatchContainer, D: BatchContainer> Default for Upds<O, T, D> {
@@ -185,6 +190,7 @@ mod layers {
                 offs: <O as BatchContainer>::with_capacity(o_size),
                 times: <T as BatchContainer>::with_capacity(u_size),
                 diffs: <D as BatchContainer>::with_capacity(u_size),
+                total: 0,
             }
         }
         /// Allocates with enough capacity to contain two inputs.
@@ -193,8 +199,78 @@ mod layers {
                 offs:  <O as BatchContainer>::with_capacity(this.offs.len() + that.offs.len()),
                 times: <T as BatchContainer>::merge_capacity(&this.times, &that.times),
                 diffs: <D as BatchContainer>::merge_capacity(&this.diffs, &that.diffs),
+                total: 0,
             }
         }
+    }
+
+    pub struct UpdsBuilder<T: BatchContainer, D: BatchContainer> {
+        /// Local stash of updates, to use for consolidation.
+        ///
+        /// We could emulate a `ChangeBatch` here, with related compaction smarts.
+        /// A `ChangeBatch` itself needs an `i64` diff type, which we have not.
+        stash: Vec<(T::Owned, D::Owned)>,
+        /// Total number of consolidated updates.
+        ///
+        /// Tracked independently to account for duplicate compression.
+        total: usize,
+    }
+
+    impl<T: BatchContainer, D: BatchContainer> Default for UpdsBuilder<T, D> {
+        fn default() -> Self { Self { stash: Vec::default(), total: 0, } }
+    }
+
+
+    use timely::container::PushInto;
+    impl<T, D> UpdsBuilder<T, D>
+    where
+        T: BatchContainer<Owned: Ord> + PushInto<T::Owned>,
+        D: BatchContainer<Owned: crate::difference::Semigroup> + PushInto<D::Owned>,
+    {
+        /// Stages one update, but does not seal the set of updates.
+        pub fn push(&mut self, time: T::Owned, diff: D::Owned) {
+            self.stash.push((time, diff));
+        }
+
+        /// Consolidate and insert (if non-empty) the stashed updates.
+        ///
+        /// The return indicates whether the results were indeed non-empty.
+        pub fn seal<O: for<'a> BatchContainer<ReadItem<'a> = usize>>(&mut self, upds: &mut Upds<O, T, D>) -> bool {
+            use crate::consolidation;
+            consolidation::consolidate(&mut self.stash);
+            if !self.stash.is_empty() {
+                // If there is a single element, equal to a just-prior recorded update,
+                // we push nothing and report an unincremented offset to encode this case.
+                let time_diff = upds.times.last().zip(upds.diffs.last());
+                let last_eq = self.stash.last().zip(time_diff).map(|((t1, d1), (t2, d2))| {
+                    use crate::IntoOwned;
+                    let t1 = <<T as BatchContainer>::ReadItem<'_> as IntoOwned>::borrow_as(t1);
+                    let d1 = <<D as BatchContainer>::ReadItem<'_> as IntoOwned>::borrow_as(d1);
+                    t1.eq(&t2) && d1.eq(&d2)
+                });
+                if self.stash.len() == 1 && last_eq.unwrap_or(false) {
+                    // Just clear out the stash, as we won't drain it here.
+                    self.total += 1;
+                    self.stash.clear();
+                    upds.offs.push(upds.times.len());
+                }
+                else {
+                    // Conventional; move `stash` into `updates`.
+                    self.total += self.stash.len();
+                    for (time, diff) in self.stash.drain(..) {
+                        upds.times.push(time);
+                        upds.diffs.push(diff);
+                    }
+                    upds.offs.push(upds.times.len());
+                }
+                true
+            } else {
+                false
+            }
+        }
+
+        /// Completes the building and returns the total updates sealed.
+        pub fn total(&self) -> usize { self.total }
     }
 }
 
@@ -210,7 +286,7 @@ pub mod val_batch {
     use crate::trace::implementations::{BatchContainer, BuilderInput};
     use crate::IntoOwned;
 
-    use super::{Layout, Update, Vals, Upds};
+    use super::{Layout, Update, Vals, Upds, layers::UpdsBuilder};
 
     /// An immutable collection of update tuples, from a contiguous interval of logical times.
     #[derive(Debug, Serialize, Deserialize)]
@@ -310,14 +386,8 @@ pub mod val_batch {
         result: OrdValStorage<L>,
         /// description
         description: Description<<L::Target as Update>::Time>,
-
-        /// Local stash of updates, to use for consolidation.
-        ///
-        /// We could emulate a `ChangeBatch` here, with related compaction smarts.
-        /// A `ChangeBatch` itself needs an `i64` diff type, which we have not.
-        update_stash: Vec<(<L::Target as Update>::Time, <L::Target as Update>::Diff)>,
-        /// Counts the number of singleton-optimized entries, that we may correctly count the updates.
-        singletons: usize,
+        /// Staging area to consolidate owned times and diffs, before sealing.
+        staging: UpdsBuilder<L::TimeContainer, L::DiffContainer>,
     }
 
     impl<L: Layout> Merger<OrdValBatch<L>> for OrdValMerger<L>
@@ -355,13 +425,12 @@ pub mod val_batch {
                 key_cursor2: 0,
                 result: storage,
                 description,
-                update_stash: Vec::new(),
-                singletons: 0,
+                staging: UpdsBuilder::default(),
             }
         }
         fn done(self) -> OrdValBatch<L> {
             OrdValBatch {
-                updates: self.result.upds.times.len() + self.singletons,
+                updates: self.staging.total(),
                 storage: self.result,
                 description: self.description,
             }
@@ -369,14 +438,14 @@ pub mod val_batch {
         fn work(&mut self, source1: &OrdValBatch<L>, source2: &OrdValBatch<L>, fuel: &mut isize) {
 
             // An (incomplete) indication of the amount of work we've done so far.
-            let starting_updates = self.result.upds.times.len() + self.singletons;
+            let starting_updates = self.staging.total();
             let mut effort = 0isize;
 
             // While both mergees are still active, perform single-key merges.
             while self.key_cursor1 < source1.storage.keys.len() && self.key_cursor2 < source2.storage.keys.len() && effort < *fuel {
                 self.merge_key(&source1.storage, &source2.storage);
                 // An (incomplete) accounting of the work we've done.
-                effort = (self.result.upds.times.len() + self.singletons - starting_updates) as isize;
+                effort = (self.staging.total() - starting_updates) as isize;
             }
 
             // Merging is complete, and only copying remains. 
@@ -384,12 +453,12 @@ pub mod val_batch {
             while self.key_cursor1 < source1.storage.keys.len() && effort < *fuel {
                 self.copy_key(&source1.storage, self.key_cursor1);
                 self.key_cursor1 += 1;
-                effort = (self.result.upds.times.len() + self.singletons - starting_updates) as isize;
+                effort = (self.staging.total() - starting_updates) as isize;
             }
             while self.key_cursor2 < source2.storage.keys.len() && effort < *fuel {
                 self.copy_key(&source2.storage, self.key_cursor2);
                 self.key_cursor2 += 1;
-                effort = (self.result.upds.times.len() + self.singletons - starting_updates) as isize;
+                effort = (self.staging.total() - starting_updates) as isize;
             }
 
             *fuel -= effort;
@@ -411,8 +480,7 @@ pub mod val_batch {
             let (mut lower, upper) = source.vals.bounds(cursor);
             while lower < upper {
                 self.stash_updates_for_val(source, lower);
-                if let Some(off) = self.consolidate_updates() {
-                    self.result.upds.offs.push(off);
+                if self.staging.seal(&mut self.result.upds) {
                     self.result.vals.vals.push(source.vals.get_abs(lower));
                 }
                 lower += 1;
@@ -473,8 +541,7 @@ pub mod val_batch {
                     Ordering::Less => { 
                         // Extend stash by updates, with logical compaction applied.
                         self.stash_updates_for_val(source1, lower1);
-                        if let Some(off) = self.consolidate_updates() {
-                            self.result.upds.offs.push(off);
+                        if self.staging.seal(&mut self.result.upds) {
                             self.result.vals.vals.push(source1.vals.get_abs(lower1));
                         }
                         lower1 += 1;
@@ -482,8 +549,7 @@ pub mod val_batch {
                     Ordering::Equal => {
                         self.stash_updates_for_val(source1, lower1);
                         self.stash_updates_for_val(source2, lower2);
-                        if let Some(off) = self.consolidate_updates() {
-                            self.result.upds.offs.push(off);
+                        if self.staging.seal(&mut self.result.upds) {
                             self.result.vals.vals.push(source1.vals.get_abs(lower1));
                         }
                         lower1 += 1;
@@ -492,8 +558,7 @@ pub mod val_batch {
                     Ordering::Greater => { 
                         // Extend stash by updates, with logical compaction applied.
                         self.stash_updates_for_val(source2, lower2);
-                        if let Some(off) = self.consolidate_updates() {
-                            self.result.upds.offs.push(off);
+                        if self.staging.seal(&mut self.result.upds) {
                             self.result.vals.vals.push(source2.vals.get_abs(lower2));
                         }
                         lower2 += 1;
@@ -503,16 +568,14 @@ pub mod val_batch {
             // Merging is complete, but we may have remaining elements to push.
             while lower1 < upper1 {
                 self.stash_updates_for_val(source1, lower1);
-                if let Some(off) = self.consolidate_updates() {
-                    self.result.upds.offs.push(off);
+                if self.staging.seal(&mut self.result.upds) {
                     self.result.vals.vals.push(source1.vals.get_abs(lower1));
                 }
                 lower1 += 1;
             }
             while lower2 < upper2 {
                 self.stash_updates_for_val(source2, lower2);
-                if let Some(off) = self.consolidate_updates() {
-                    self.result.upds.offs.push(off);
+                if self.staging.seal(&mut self.result.upds) {
                     self.result.vals.vals.push(source2.vals.get_abs(lower2));
                 }
                 lower2 += 1;
@@ -535,38 +598,8 @@ pub mod val_batch {
                 use crate::lattice::Lattice;
                 let mut new_time: <L::Target as Update>::Time = time.into_owned();
                 new_time.advance_by(self.description.since().borrow());
-                self.update_stash.push((new_time, diff.into_owned()));
-            }
-        }
-
-        /// Consolidates `self.updates_stash` and produces the offset to record, if any.
-        fn consolidate_updates(&mut self) -> Option<usize> {
-            use crate::consolidation;
-            consolidation::consolidate(&mut self.update_stash);
-            if !self.update_stash.is_empty() {
-                // If there is a single element, equal to a just-prior recorded update,
-                // we push nothing and report an unincremented offset to encode this case.
-                let time_diff = self.result.upds.times.last().zip(self.result.upds.diffs.last());
-                let last_eq = self.update_stash.last().zip(time_diff).map(|((t1, d1), (t2, d2))| {
-                    let t1 = <<L::TimeContainer as BatchContainer>::ReadItem<'_> as IntoOwned>::borrow_as(t1);
-                    let d1 = <<L::DiffContainer as BatchContainer>::ReadItem<'_> as IntoOwned>::borrow_as(d1);
-                    t1.eq(&t2) && d1.eq(&d2)
-                });
-                if self.update_stash.len() == 1 && last_eq.unwrap_or(false) {
-                    // Just clear out update_stash, as we won't drain it here.
-                    self.update_stash.clear();
-                    self.singletons += 1;
-                }
-                else {
-                    // Conventional; move `update_stash` into `updates`.
-                    for (time, diff) in self.update_stash.drain(..) {
-                        self.result.upds.times.push(time);
-                        self.result.upds.diffs.push(diff);
-                    }
-                }
-                Some(self.result.upds.times.len())
-            } else {
-                None
+                self.staging.push(new_time, diff.into_owned());
+                // self.update_stash.push((new_time, diff.into_owned()));
             }
         }
     }
@@ -647,45 +680,8 @@ pub mod val_batch {
         ///
         /// This is public to allow container implementors to set and inspect their container.
         pub result: OrdValStorage<L>,
-        singleton: Option<(<L::Target as Update>::Time, <L::Target as Update>::Diff)>,
-        /// Counts the number of singleton optimizations we performed.
-        ///
-        /// This number allows us to correctly gauge the total number of updates reflected in a batch,
-        /// even though `updates.len()` may be much shorter than this amount.
-        singletons: usize,
+        staging: UpdsBuilder<L::TimeContainer, L::DiffContainer>,
         _marker: PhantomData<CI>,
-    }
-
-    impl<L: Layout, CI> OrdValBuilder<L, CI> {
-        /// Pushes a single update, which may set `self.singleton` rather than push.
-        ///
-        /// This operation is meant to be equivalent to `self.results.updates.push((time, diff))`.
-        /// However, for "clever" reasons it does not do this. Instead, it looks for opportunities
-        /// to encode a singleton update with an "absert" update: repeating the most recent offset.
-        /// This otherwise invalid state encodes "look back one element".
-        ///
-        /// When `self.singleton` is `Some`, it means that we have seen one update and it matched the
-        /// previously pushed update exactly. In that case, we do not push the update into `updates`.
-        /// The update tuple is retained in `self.singleton` in case we see another update and need
-        /// to recover the singleton to push it into `updates` to join the second update.
-        fn push_update(&mut self, time: <L::Target as Update>::Time, diff: <L::Target as Update>::Diff) {
-            // If a just-pushed update exactly equals `(time, diff)` we can avoid pushing it.
-            if self.result.upds.times.last().map(|t| t == <<L::TimeContainer as BatchContainer>::ReadItem<'_> as IntoOwned>::borrow_as(&time)) == Some(true) &&
-               self.result.upds.diffs.last().map(|d| d == <<L::DiffContainer as BatchContainer>::ReadItem<'_> as IntoOwned>::borrow_as(&diff)) == Some(true)
-            {
-                assert!(self.singleton.is_none());
-                self.singleton = Some((time, diff));
-            }
-            else {
-                // If we have pushed a single element, we need to copy it out to meet this one.
-                if let Some((time, diff)) = self.singleton.take() {
-                    self.result.upds.times.push(time);
-                    self.result.upds.diffs.push(diff);
-                }
-                self.result.upds.times.push(time);
-                self.result.upds.diffs.push(diff);
-            }
-        }
     }
 
     impl<L, CI> Builder for OrdValBuilder<L, CI>
@@ -704,15 +700,22 @@ pub mod val_batch {
         type Output = OrdValBatch<L>;
 
         fn with_capacity(keys: usize, vals: usize, upds: usize) -> Self {
-            // We don't introduce zero offsets as they will be introduced by the first `push` call.
+
+            let mut result = OrdValStorage {
+                keys: L::KeyContainer::with_capacity(keys),
+                vals: Vals::with_capacity(keys + 1, vals),
+                upds: Upds::with_capacity(vals + 1, upds),
+            };
+
+            // Mark explicit types because type inference fails to resolve it.
+            let keys_offs: &mut L::OffsetContainer = &mut result.vals.offs;
+            keys_offs.push(0);
+            let vals_offs: &mut L::OffsetContainer = &mut result.upds.offs;
+            vals_offs.push(0);
+
             Self { 
-                result: OrdValStorage {
-                    keys: L::KeyContainer::with_capacity(keys),
-                    vals: Vals::with_capacity(keys + 1, vals),
-                    upds: Upds::with_capacity(vals + 1, upds),
-                },
-                singleton: None,
-                singletons: 0,
+                result,
+                staging: UpdsBuilder::default(),
                 _marker: PhantomData,
             }
         }
@@ -721,24 +724,30 @@ pub mod val_batch {
         fn push(&mut self, chunk: &mut Self::Input) {
             for item in chunk.drain() {
                 let (key, val, time, diff) = CI::into_parts(item);
+
+                // Pre-load the first update.
+                if self.result.keys.is_empty() {
+                    self.result.vals.vals.push(val);
+                    self.result.keys.push(key);
+                    self.staging.push(time, diff);
+                }
                 // Perhaps this is a continuation of an already received key.
-                if self.result.keys.last().map(|k| CI::key_eq(&key, k)).unwrap_or(false) {
+                else if self.result.keys.last().map(|k| CI::key_eq(&key, k)).unwrap_or(false) {
                     // Perhaps this is a continuation of an already received value.
                     if self.result.vals.vals.last().map(|v| CI::val_eq(&val, v)).unwrap_or(false) {
-                        self.push_update(time, diff);
+                        // self.push_update(time, diff);
+                        self.staging.push(time, diff);
                     } else {
                         // New value; complete representation of prior value.
-                        self.result.upds.offs.push(self.result.upds.times.len());
-                        if self.singleton.take().is_some() { self.singletons += 1; }
-                        self.push_update(time, diff);
+                        self.staging.seal(&mut self.result.upds);
+                        self.staging.push(time, diff);
                         self.result.vals.vals.push(val);
                     }
                 } else {
                     // New key; complete representation of prior key.
-                    self.result.upds.offs.push(self.result.upds.times.len());
-                    if self.singleton.take().is_some() { self.singletons += 1; }
+                    self.staging.seal(&mut self.result.upds);
+                    self.staging.push(time, diff);
                     self.result.vals.offs.push(self.result.vals.vals.len());
-                    self.push_update(time, diff);
                     self.result.vals.vals.push(val);
                     self.result.keys.push(key);
                 }
@@ -748,12 +757,13 @@ pub mod val_batch {
         #[inline(never)]
         fn done(mut self, description: Description<Self::Time>) -> OrdValBatch<L> {
             // Record the final offsets
-            self.result.upds.offs.push(self.result.upds.times.len());
-            // Remove any pending singleton, and if it was set increment our count.
-            if self.singleton.take().is_some() { self.singletons += 1; }
+            self.staging.seal(&mut self.result.upds);
+            // self.result.upds.offs.push(self.result.upds.times.len());
+            // // Remove any pending singleton, and if it was set increment our count.
+            // if self.singleton.take().is_some() { self.singletons += 1; }
             self.result.vals.offs.push(self.result.vals.vals.len());
             OrdValBatch {
-                updates: self.result.upds.times.len() + self.singletons,
+                updates: self.staging.total(),
                 storage: self.result,
                 description,
             }
@@ -783,7 +793,7 @@ pub mod key_batch {
     use crate::trace::implementations::{BatchContainer, BuilderInput};
     use crate::IntoOwned;
 
-    use super::{Layout, Update, Upds};
+    use super::{Layout, Update, Upds, layers::UpdsBuilder};
 
     /// An immutable collection of update tuples, from a contiguous interval of logical times.
     #[derive(Debug, Serialize, Deserialize)]
@@ -881,12 +891,7 @@ pub mod key_batch {
         description: Description<<L::Target as Update>::Time>,
 
         /// Local stash of updates, to use for consolidation.
-        ///
-        /// We could emulate a `ChangeBatch` here, with related compaction smarts.
-        /// A `ChangeBatch` itself needs an `i64` diff type, which we have not.
-        update_stash: Vec<(<L::Target as Update>::Time, <L::Target as Update>::Diff)>,
-        /// Counts the number of singleton-optimized entries, that we may correctly count the updates.
-        singletons: usize,
+        staging: UpdsBuilder<L::TimeContainer, L::DiffContainer>,
     }
 
     impl<L: Layout> Merger<OrdKeyBatch<L>> for OrdKeyMerger<L>
@@ -920,13 +925,12 @@ pub mod key_batch {
                 key_cursor2: 0,
                 result: storage,
                 description,
-                update_stash: Vec::new(),
-                singletons: 0,
+                staging: UpdsBuilder::default(),
             }
         }
         fn done(self) -> OrdKeyBatch<L> {
             OrdKeyBatch {
-                updates: self.result.upds.times.len() + self.singletons,
+                updates: self.staging.total(),
                 storage: self.result,
                 description: self.description,
             }
@@ -934,14 +938,14 @@ pub mod key_batch {
         fn work(&mut self, source1: &OrdKeyBatch<L>, source2: &OrdKeyBatch<L>, fuel: &mut isize) {
 
             // An (incomplete) indication of the amount of work we've done so far.
-            let starting_updates = self.result.upds.times.len() + self.singletons;
+            let starting_updates = self.staging.total();
             let mut effort = 0isize;
 
             // While both mergees are still active, perform single-key merges.
             while self.key_cursor1 < source1.storage.keys.len() && self.key_cursor2 < source2.storage.keys.len() && effort < *fuel {
                 self.merge_key(&source1.storage, &source2.storage);
                 // An (incomplete) accounting of the work we've done.
-                effort = (self.result.upds.times.len() + self.singletons - starting_updates) as isize;
+                effort = (self.staging.total() - starting_updates) as isize;
             }
 
             // Merging is complete, and only copying remains.
@@ -949,12 +953,12 @@ pub mod key_batch {
             while self.key_cursor1 < source1.storage.keys.len() && effort < *fuel {
                 self.copy_key(&source1.storage, self.key_cursor1);
                 self.key_cursor1 += 1;
-                effort = (self.result.upds.times.len() + self.singletons - starting_updates) as isize;
+                effort = (self.staging.total() - starting_updates) as isize;
             }
             while self.key_cursor2 < source2.storage.keys.len() && effort < *fuel {
                 self.copy_key(&source2.storage, self.key_cursor2);
                 self.key_cursor2 += 1;
-                effort = (self.result.upds.times.len() + self.singletons - starting_updates) as isize;
+                effort = (self.staging.total() - starting_updates) as isize;
             }
 
             *fuel -= effort;
@@ -972,8 +976,7 @@ pub mod key_batch {
         /// The caller should be certain to update the cursor, as this method does not do this.
         fn copy_key(&mut self, source: &OrdKeyStorage<L>, cursor: usize) {
             self.stash_updates_for_key(source, cursor);
-            if let Some(off) = self.consolidate_updates() {
-                self.result.upds.offs.push(off);
+            if self.staging.seal(&mut self.result.upds) {
                 self.result.keys.push(source.keys.index(cursor));
             }
         }
@@ -992,8 +995,7 @@ pub mod key_batch {
                     // Keys are equal; must merge all updates from both sources for this one key.
                     self.stash_updates_for_key(source1, self.key_cursor1);
                     self.stash_updates_for_key(source2, self.key_cursor2);
-                    if let Some(off) = self.consolidate_updates() {
-                        self.result.upds.offs.push(off);
+                    if self.staging.seal(&mut self.result.upds) {
                         self.result.keys.push(source1.keys.index(self.key_cursor1));
                     }
                     // Increment cursors in either case; the keys are merged.
@@ -1016,38 +1018,7 @@ pub mod key_batch {
                 use crate::lattice::Lattice;
                 let mut new_time = time.into_owned();
                 new_time.advance_by(self.description.since().borrow());
-                self.update_stash.push((new_time, diff.into_owned()));
-            }
-        }
-
-        /// Consolidates `self.updates_stash` and produces the offset to record, if any.
-        fn consolidate_updates(&mut self) -> Option<usize> {
-            use crate::consolidation;
-            consolidation::consolidate(&mut self.update_stash);
-            if !self.update_stash.is_empty() {
-                // If there is a single element, equal to a just-prior recorded update,
-                // we push nothing and report an unincremented offset to encode this case.
-                let time_diff = self.result.upds.times.last().zip(self.result.upds.diffs.last());
-                let last_eq = self.update_stash.last().zip(time_diff).map(|((t1, d1), (t2, d2))| {
-                    let t1 = <<L::TimeContainer as BatchContainer>::ReadItem<'_> as IntoOwned>::borrow_as(t1);
-                    let d1 = <<L::DiffContainer as BatchContainer>::ReadItem<'_> as IntoOwned>::borrow_as(d1);
-                    t1.eq(&t2) && d1.eq(&d2)
-                });
-                if self.update_stash.len() == 1 && last_eq.unwrap_or(false) {
-                    // Just clear out update_stash, as we won't drain it here.
-                    self.update_stash.clear();
-                    self.singletons += 1;
-                }
-                else {
-                    // Conventional; move `update_stash` into `updates`.
-                    for (time, diff) in self.update_stash.drain(..) {
-                        self.result.upds.times.push(time);
-                        self.result.upds.diffs.push(diff);
-                    }
-                }
-                Some(self.result.upds.times.len())
-            } else {
-                None
+                self.staging.push(new_time, diff.into_owned());
             }
         }
     }
@@ -1122,45 +1093,8 @@ pub mod key_batch {
         ///
         /// This is public to allow container implementors to set and inspect their container.
         pub result: OrdKeyStorage<L>,
-        singleton: Option<(<L::Target as Update>::Time, <L::Target as Update>::Diff)>,
-        /// Counts the number of singleton optimizations we performed.
-        ///
-        /// This number allows us to correctly gauge the total number of updates reflected in a batch,
-        /// even though `updates.len()` may be much shorter than this amount.
-        singletons: usize,
+        staging: UpdsBuilder<L::TimeContainer, L::DiffContainer>,
         _marker: PhantomData<CI>,
-    }
-
-    impl<L: Layout, CI> OrdKeyBuilder<L, CI> {
-        /// Pushes a single update, which may set `self.singleton` rather than push.
-        ///
-        /// This operation is meant to be equivalent to `self.results.updates.push((time, diff))`.
-        /// However, for "clever" reasons it does not do this. Instead, it looks for opportunities
-        /// to encode a singleton update with an "absert" update: repeating the most recent offset.
-        /// This otherwise invalid state encodes "look back one element".
-        ///
-        /// When `self.singleton` is `Some`, it means that we have seen one update and it matched the
-        /// previously pushed update exactly. In that case, we do not push the update into `updates`.
-        /// The update tuple is retained in `self.singleton` in case we see another update and need
-        /// to recover the singleton to push it into `updates` to join the second update.
-        fn push_update(&mut self, time: <L::Target as Update>::Time, diff: <L::Target as Update>::Diff) {
-            // If a just-pushed update exactly equals `(time, diff)` we can avoid pushing it.
-            let t1 = <<L::TimeContainer as BatchContainer>::ReadItem<'_> as IntoOwned>::borrow_as(&time);
-            let d1 = <<L::DiffContainer as BatchContainer>::ReadItem<'_> as IntoOwned>::borrow_as(&diff);
-            if self.result.upds.times.last().map(|t| t == t1).unwrap_or(false) && self.result.upds.diffs.last().map(|d| d == d1).unwrap_or(false) {
-                assert!(self.singleton.is_none());
-                self.singleton = Some((time, diff));
-            }
-            else {
-                // If we have pushed a single element, we need to copy it out to meet this one.
-                if let Some((time, diff)) = self.singleton.take() {
-                    self.result.upds.times.push(time);
-                    self.result.upds.diffs.push(diff);
-                }
-                self.result.upds.times.push(time);
-                self.result.upds.diffs.push(diff);
-            }
-        }
     }
 
     impl<L: Layout, CI> Builder for OrdKeyBuilder<L, CI>
@@ -1176,14 +1110,18 @@ pub mod key_batch {
         type Output = OrdKeyBatch<L>;
 
         fn with_capacity(keys: usize, _vals: usize, upds: usize) -> Self {
-            // We don't introduce zero offsets as they will be introduced by the first `push` call.
+
+            let mut result = OrdKeyStorage {
+                keys: L::KeyContainer::with_capacity(keys),
+                upds: Upds::with_capacity(keys+1, upds),
+            };
+
+            let keys_offs: &mut L::OffsetContainer = &mut result.upds.offs;
+            keys_offs.push(0);
+
             Self { 
-                result: OrdKeyStorage {
-                    keys: L::KeyContainer::with_capacity(keys),
-                    upds: Upds::with_capacity(keys+1, upds),
-                },
-                singleton: None,
-                singletons: 0,
+                result,
+                staging: UpdsBuilder::default(),
                 _marker: PhantomData,
             }
         }
@@ -1192,15 +1130,16 @@ pub mod key_batch {
         fn push(&mut self, chunk: &mut Self::Input) {
             for item in chunk.drain() {
                 let (key, _val, time, diff) = CI::into_parts(item);
+                if self.result.keys.is_empty() {
+                    self.result.keys.push(key);
+                    self.staging.push(time, diff);
+                }
                 // Perhaps this is a continuation of an already received key.
-                if self.result.keys.last().map(|k| CI::key_eq(&key, k)).unwrap_or(false) {
-                    self.push_update(time, diff);
+                else if self.result.keys.last().map(|k| CI::key_eq(&key, k)).unwrap_or(false) {
+                    self.staging.push(time, diff);
                 } else {
-                    // New key; complete representation of prior key.
-                    self.result.upds.offs.push(self.result.upds.times.len());
-                    // Remove any pending singleton, and if it was set increment our count.
-                    if self.singleton.take().is_some() { self.singletons += 1; }
-                    self.push_update(time, diff);
+                    self.staging.seal(&mut self.result.upds);
+                    self.staging.push(time, diff);
                     self.result.keys.push(key);
                 }
             }
@@ -1209,11 +1148,9 @@ pub mod key_batch {
         #[inline(never)]
         fn done(mut self, description: Description<Self::Time>) -> OrdKeyBatch<L> {
             // Record the final offsets
-            self.result.upds.offs.push(self.result.upds.times.len());
-            // Remove any pending singleton, and if it was set increment our count.
-            if self.singleton.take().is_some() { self.singletons += 1; }
+            self.staging.seal(&mut self.result.upds);
             OrdKeyBatch {
-                updates: self.result.upds.times.len() + self.singletons,
+                updates: self.staging.total(),
                 storage: self.result,
                 description,
             }
