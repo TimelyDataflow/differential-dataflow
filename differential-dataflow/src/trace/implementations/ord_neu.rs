@@ -90,7 +90,7 @@ mod layers {
         pub vals: V,
     }
 
-    impl<O: BatchContainer, V: BatchContainer> Default for Vals<O, V> {
+    impl<O: for<'a> BatchContainer<ReadItem<'a> = usize>, V: BatchContainer> Default for Vals<O, V> {
         fn default() -> Self { Self::with_capacity(0, 0) }
     }
 
@@ -108,8 +108,7 @@ mod layers {
         pub fn get_rel(&self, list_idx: usize, item_idx: usize) -> V::ReadItem<'_> {
             self.get_abs(self.bounds(list_idx).0 + item_idx)
         }
-    }
-    impl<O: BatchContainer, V: BatchContainer> Vals<O, V> {
+
         /// Number of lists in the container.
         pub fn len(&self) -> usize { self.offs.len() - 1 }
         /// Retrieves a value using an absolute rather than relative index.
@@ -118,15 +117,19 @@ mod layers {
         }
         /// Allocates with capacities for a number of lists and values.
         pub fn with_capacity(o_size: usize, v_size: usize) -> Self {
+            let mut offs = <O as BatchContainer>::with_capacity(o_size);
+            offs.push(0);
             Self {
-                offs: <O as BatchContainer>::with_capacity(o_size),
+                offs,
                 vals: <V as BatchContainer>::with_capacity(v_size),
             }
         }
         /// Allocates with enough capacity to contain two inputs.
         pub fn merge_capacity(this: &Self, that: &Self) -> Self {
+            let mut offs = <O as BatchContainer>::with_capacity(this.offs.len() + that.offs.len());
+            offs.push(0);
             Self {
-                offs: <O as BatchContainer>::with_capacity(this.offs.len() + that.offs.len()),
+                offs,
                 vals: <V as BatchContainer>::merge_capacity(&this.vals, &that.vals),
             }
         }
@@ -151,7 +154,7 @@ mod layers {
         total: usize,
     }
 
-    impl<O: BatchContainer, T: BatchContainer, D: BatchContainer> Default for Upds<O, T, D> {
+    impl<O: for<'a> BatchContainer<ReadItem<'a> = usize>, T: BatchContainer, D: BatchContainer> Default for Upds<O, T, D> {
         fn default() -> Self { Self::with_capacity(0, 0) }
     }
     impl<O: for<'a> BatchContainer<ReadItem<'a> = usize>, T: BatchContainer, D: BatchContainer> Upds<O, T, D> {
@@ -176,8 +179,7 @@ mod layers {
         pub fn get_rel(&self, list_idx: usize, item_idx: usize) -> (T::ReadItem<'_>, D::ReadItem<'_>) {
             self.get_abs(self.bounds(list_idx).0 + item_idx)
         }
-    }
-    impl<O: BatchContainer, T: BatchContainer, D: BatchContainer> Upds<O, T, D> {
+
         /// Number of lists in the container.
         pub fn len(&self) -> usize { self.offs.len() - 1 }
         /// Retrieves a value using an absolute rather than relative index.
@@ -186,8 +188,10 @@ mod layers {
         }
         /// Allocates with capacities for a number of lists and values.
         pub fn with_capacity(o_size: usize, u_size: usize) -> Self {
+            let mut offs = <O as BatchContainer>::with_capacity(o_size);
+            offs.push(0);
             Self {
-                offs: <O as BatchContainer>::with_capacity(o_size),
+                offs,
                 times: <T as BatchContainer>::with_capacity(u_size),
                 diffs: <D as BatchContainer>::with_capacity(u_size),
                 total: 0,
@@ -195,8 +199,10 @@ mod layers {
         }
         /// Allocates with enough capacity to contain two inputs.
         pub fn merge_capacity(this: &Self, that: &Self) -> Self {
+            let mut offs = <O as BatchContainer>::with_capacity(this.offs.len() + that.offs.len());
+            offs.push(0);
             Self {
-                offs:  <O as BatchContainer>::with_capacity(this.offs.len() + that.offs.len()),
+                offs,
                 times: <T as BatchContainer>::merge_capacity(&this.times, &that.times),
                 diffs: <D as BatchContainer>::merge_capacity(&this.diffs, &that.diffs),
                 total: 0,
@@ -326,7 +332,7 @@ pub mod val_batch {
         /// The number of updates reflected in the batch.
         ///
         /// We track this separately from `storage` because due to the singleton optimization,
-        /// we may have many more updates than `storage.updates.len()`. It should equal that 
+        /// we may have many more updates than `storage.updates.len()`. It should equal that
         /// length, plus the number of singleton optimizations employed.
         pub updates: usize,
     }
@@ -340,14 +346,14 @@ pub mod val_batch {
         type DiffGat<'a> = <L::DiffContainer as BatchContainer>::ReadItem<'a>;
 
         type Cursor = OrdValCursor<L>;
-        fn cursor(&self) -> Self::Cursor { 
+        fn cursor(&self) -> Self::Cursor {
             OrdValCursor {
                 key_cursor: 0,
                 val_cursor: 0,
                 phantom: PhantomData,
             }
         }
-        fn len(&self) -> usize { 
+        fn len(&self) -> usize {
             // Normally this would be `self.updates.len()`, but we have a clever compact encoding.
             // Perhaps we should count such exceptions to the side, to provide a correct accounting.
             self.updates
@@ -408,22 +414,14 @@ pub mod val_batch {
             let batch1 = &batch1.storage;
             let batch2 = &batch2.storage;
 
-            let mut storage = OrdValStorage {
-                keys: L::KeyContainer::merge_capacity(&batch1.keys, &batch2.keys),
-                vals: Vals::merge_capacity(&batch1.vals, &batch2.vals),
-                upds: Upds::merge_capacity(&batch1.upds, &batch2.upds),
-            };
-
-            // Mark explicit types because type inference fails to resolve it.
-            let keys_offs: &mut L::OffsetContainer = &mut storage.vals.offs;
-            keys_offs.push(0);
-            let vals_offs: &mut L::OffsetContainer = &mut storage.upds.offs;
-            vals_offs.push(0);
-
             OrdValMerger {
                 key_cursor1: 0,
                 key_cursor2: 0,
-                result: storage,
+                result: OrdValStorage {
+                    keys: L::KeyContainer::merge_capacity(&batch1.keys, &batch2.keys),
+                    vals: Vals::merge_capacity(&batch1.vals, &batch2.vals),
+                    upds: Upds::merge_capacity(&batch1.upds, &batch2.upds),
+                },
                 description,
                 staging: UpdsBuilder::default(),
             }
@@ -448,7 +446,7 @@ pub mod val_batch {
                 effort = (self.staging.total() - starting_updates) as isize;
             }
 
-            // Merging is complete, and only copying remains. 
+            // Merging is complete, and only copying remains.
             // Key-by-key copying allows effort interruption, and compaction.
             while self.key_cursor1 < source1.storage.keys.len() && effort < *fuel {
                 self.copy_key(&source1.storage, self.key_cursor1);
@@ -484,13 +482,13 @@ pub mod val_batch {
                     self.result.vals.vals.push(source.vals.get_abs(lower));
                 }
                 lower += 1;
-            }            
+            }
 
             // If we have pushed any values, copy the key as well.
             if self.result.vals.vals.len() > init_vals {
                 self.result.keys.push(source.keys.index(cursor));
                 self.result.vals.offs.push(self.result.vals.vals.len());
-            }           
+            }
         }
         /// Merge the next key in each of `source1` and `source2` into `self`, updating the appropriate cursors.
         ///
@@ -499,7 +497,7 @@ pub mod val_batch {
         fn merge_key(&mut self, source1: &OrdValStorage<L>, source2: &OrdValStorage<L>) {
             use ::std::cmp::Ordering;
             match source1.keys.index(self.key_cursor1).cmp(&source2.keys.index(self.key_cursor2)) {
-                Ordering::Less => { 
+                Ordering::Less => {
                     self.copy_key(source1, self.key_cursor1);
                     self.key_cursor1 += 1;
                 },
@@ -526,8 +524,8 @@ pub mod val_batch {
         /// If the compacted result contains values with non-empty updates, the function returns
         /// an offset that should be recorded to indicate the upper extent of the result values.
         fn merge_vals(
-            &mut self, 
-            (source1, mut lower1, upper1): (&OrdValStorage<L>, usize, usize), 
+            &mut self,
+            (source1, mut lower1, upper1): (&OrdValStorage<L>, usize, usize),
             (source2, mut lower2, upper2): (&OrdValStorage<L>, usize, usize),
         ) -> Option<usize> {
             // Capture the initial number of values to determine if the merge was ultimately non-empty.
@@ -538,7 +536,7 @@ pub mod val_batch {
                 // We could multi-way merge and it wouldn't be very complicated.
                 use ::std::cmp::Ordering;
                 match source1.vals.get_abs(lower1).cmp(&source2.vals.get_abs(lower2)) {
-                    Ordering::Less => { 
+                    Ordering::Less => {
                         // Extend stash by updates, with logical compaction applied.
                         self.stash_updates_for_val(source1, lower1);
                         if self.staging.seal(&mut self.result.upds) {
@@ -555,7 +553,7 @@ pub mod val_batch {
                         lower1 += 1;
                         lower2 += 1;
                     },
-                    Ordering::Greater => { 
+                    Ordering::Greater => {
                         // Extend stash by updates, with logical compaction applied.
                         self.stash_updates_for_val(source2, lower2);
                         if self.staging.seal(&mut self.result.upds) {
@@ -655,7 +653,7 @@ pub mod val_batch {
             }
         }
         fn step_val(&mut self, storage: &OrdValBatch<L>) {
-            self.val_cursor += 1; 
+            self.val_cursor += 1;
             if !self.val_valid(storage) {
                 self.val_cursor = storage.storage.vals.bounds(self.key_cursor).1;
             }
@@ -701,20 +699,12 @@ pub mod val_batch {
 
         fn with_capacity(keys: usize, vals: usize, upds: usize) -> Self {
 
-            let mut result = OrdValStorage {
-                keys: L::KeyContainer::with_capacity(keys),
-                vals: Vals::with_capacity(keys + 1, vals),
-                upds: Upds::with_capacity(vals + 1, upds),
-            };
-
-            // Mark explicit types because type inference fails to resolve it.
-            let keys_offs: &mut L::OffsetContainer = &mut result.vals.offs;
-            keys_offs.push(0);
-            let vals_offs: &mut L::OffsetContainer = &mut result.upds.offs;
-            vals_offs.push(0);
-
-            Self { 
-                result,
+            Self {
+                result: OrdValStorage {
+                    keys: L::KeyContainer::with_capacity(keys),
+                    vals: Vals::with_capacity(keys + 1, vals),
+                    upds: Upds::with_capacity(vals + 1, upds),
+                },
                 staging: UpdsBuilder::default(),
                 _marker: PhantomData,
             }
@@ -775,7 +765,7 @@ pub mod val_batch {
             for mut chunk in chain.drain(..) {
                 builder.push(&mut chunk);
             }
-    
+
             builder.done(description)
         }
     }
@@ -835,7 +825,7 @@ pub mod key_batch {
     }
 
     impl<L: Layout> BatchReader for OrdKeyBatch<L> {
-        
+
         type Key<'a> = <L::KeyContainer as BatchContainer>::ReadItem<'a>;
         type Val<'a> = &'a ();
         type Time = <L::Target as Update>::Time;
@@ -912,18 +902,13 @@ pub mod key_batch {
             let batch1 = &batch1.storage;
             let batch2 = &batch2.storage;
 
-            let mut storage = OrdKeyStorage {
-                keys: L::KeyContainer::merge_capacity(&batch1.keys, &batch2.keys),
-                upds: Upds::merge_capacity(&batch1.upds, &batch2.upds),
-            };
-
-            let keys_offs: &mut L::OffsetContainer = &mut storage.upds.offs;
-            keys_offs.push(0);
-
             OrdKeyMerger {
                 key_cursor1: 0,
                 key_cursor2: 0,
-                result: storage,
+                result: OrdKeyStorage {
+                    keys: L::KeyContainer::merge_capacity(&batch1.keys, &batch2.keys),
+                    upds: Upds::merge_capacity(&batch1.upds, &batch2.upds),
+                },
                 description,
                 staging: UpdsBuilder::default(),
             }
@@ -971,8 +956,8 @@ pub mod key_batch {
         ///
         /// The method extracts the key in `source` at `cursor`, and merges it in to `self`.
         /// If the result does not wholly cancel, they key will be present in `self` with the
-        /// compacted values and updates. 
-        /// 
+        /// compacted values and updates.
+        ///
         /// The caller should be certain to update the cursor, as this method does not do this.
         fn copy_key(&mut self, source: &OrdKeyStorage<L>, cursor: usize) {
             self.stash_updates_for_key(source, cursor);
@@ -987,7 +972,7 @@ pub mod key_batch {
         fn merge_key(&mut self, source1: &OrdKeyStorage<L>, source2: &OrdKeyStorage<L>) {
             use ::std::cmp::Ordering;
             match source1.keys.index(self.key_cursor1).cmp(&source2.keys.index(self.key_cursor2)) {
-                Ordering::Less => { 
+                Ordering::Less => {
                     self.copy_key(source1, self.key_cursor1);
                     self.key_cursor1 += 1;
                 },
@@ -1111,16 +1096,11 @@ pub mod key_batch {
 
         fn with_capacity(keys: usize, _vals: usize, upds: usize) -> Self {
 
-            let mut result = OrdKeyStorage {
-                keys: L::KeyContainer::with_capacity(keys),
-                upds: Upds::with_capacity(keys+1, upds),
-            };
-
-            let keys_offs: &mut L::OffsetContainer = &mut result.upds.offs;
-            keys_offs.push(0);
-
-            Self { 
-                result,
+            Self {
+                result: OrdKeyStorage {
+                    keys: L::KeyContainer::with_capacity(keys),
+                    upds: Upds::with_capacity(keys+1, upds),
+                },
                 staging: UpdsBuilder::default(),
                 _marker: PhantomData,
             }
@@ -1162,7 +1142,7 @@ pub mod key_batch {
             for mut chunk in chain.drain(..) {
                 builder.push(&mut chunk);
             }
-    
+
             builder.done(description)
         }
     }
