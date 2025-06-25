@@ -10,10 +10,7 @@
 
 use std::rc::Rc;
 
-use serde::{Deserialize, Serialize};
-
 use crate::containers::TimelyStack;
-use crate::trace::implementations::BatchContainer;
 use crate::trace::implementations::chunker::{ColumnationChunker, VecChunker};
 use crate::trace::implementations::spine_fueled::Spine;
 use crate::trace::implementations::merge_batcher::{MergeBatcher, VecMerger, ColMerger};
@@ -68,70 +65,112 @@ pub type PreferredBuilder<K, V, T, R> = RcBuilder<OrdValBuilder<Preferred<K,V,T,
 // /// A trace implementation backed by columnar storage.
 // pub type ColKeySpine<K, T, R> = Spine<Rc<OrdKeyBatch<TStack<((K,()),T,R)>>>>;
 
-
-/// A container for non-empty lists of values.
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Vals<O, V> {
-    /// Offsets used to provide indexes from keys to values.
-    ///
-    /// The length of this list is one longer than `keys`, so that we can avoid bounds logic.
-    pub offs: O,
-    /// Concatenated ordered lists of values, bracketed by offsets in `offs`.
-    pub vals: V,
-}
-
-impl<O: BatchContainer, V: BatchContainer> Default for Vals<O, V> {
-    fn default() -> Self { Self::with_capacity(0, 0) }
-}
-
-impl<O: BatchContainer, V: BatchContainer> Vals<O, V> {
-    fn with_capacity(o_size: usize, v_size: usize) -> Self {
-        Self {
-            offs: <O as BatchContainer>::with_capacity(o_size),
-            vals: <V as BatchContainer>::with_capacity(v_size),
-        }
-    }
-    fn merge_capacity(this: &Self, that: &Self) -> Self {
-        Self {
-            offs: <O as BatchContainer>::with_capacity(this.offs.len() + that.offs.len()),
-            vals: <V as BatchContainer>::merge_capacity(&this.vals, &that.vals),
-        }
-    }
-}
-/// A container for non-empty lists of updates.
+pub use layers::{Vals, Upds};
+/// Layers are containers of lists of some type.
 ///
-/// This container uses the special representiation of an empty slice to stand in for
-/// "the previous single element". An empty slice is an otherwise invalid representation.
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Upds<O, T, D> {
-    /// Offsets used to provide indexes from values to updates.
-    pub offs: O,
-    /// Concatenated ordered lists of update times, bracketed by offsets in `offs`.
-    pub times: T,
-    /// Concatenated ordered lists of update diffs, bracketed by offsets in `offs`.
-    pub diffs: D,
-}
+/// The intent is that they "attach" to an outer layer which has as many values
+/// as the layer has lists, thereby associating a list with each outer value.
+/// A sequence of layers, each matching the number of values in its predecessor,
+/// forms a layered trie: a tree with values of some type on nodes at each depth.
+///
+/// We will form tries here by layering `[Keys, Vals, Upds]` or `[Keys, Upds]`.
+mod layers {
 
-impl<O: BatchContainer, T: BatchContainer, D: BatchContainer> Default for Upds<O, T, D> {
-    fn default() -> Self { Self::with_capacity(0, 0) }
-}
-impl<O: BatchContainer, T: BatchContainer, D: BatchContainer> Upds<O, T, D> {
-    fn with_capacity(o_size: usize, u_size: usize) -> Self {
-        Self {
-            offs: <O as BatchContainer>::with_capacity(o_size),
-            times: <T as BatchContainer>::with_capacity(u_size),
-            diffs: <D as BatchContainer>::with_capacity(u_size),
+    use serde::{Deserialize, Serialize};
+    use crate::trace::implementations::BatchContainer;
+
+    /// A container for non-empty lists of values.
+    #[derive(Debug, Serialize, Deserialize)]
+    pub struct Vals<O, V> {
+        /// Offsets used to provide indexes from keys to values.
+        ///
+        /// The length of this list is one longer than `keys`, so that we can avoid bounds logic.
+        pub offs: O,
+        /// Concatenated ordered lists of values, bracketed by offsets in `offs`.
+        pub vals: V,
+    }
+
+    impl<O: BatchContainer, V: BatchContainer> Default for Vals<O, V> {
+        fn default() -> Self { Self::with_capacity(0, 0) }
+    }
+
+    impl<O: for<'a> BatchContainer<ReadItem<'a> = usize>, V: BatchContainer> Vals<O, V> {
+        /// Lower and upper bounds in `self.vals` of the indexed list.
+        pub fn bounds(&self, index: usize) -> (usize, usize) {
+            (self.offs.index(index), self.offs.index(index+1))
         }
     }
-    fn merge_capacity(this: &Self, that: &Self) -> Self {
-        Self {
-            offs:  <O as BatchContainer>::with_capacity(this.offs.len() + that.offs.len()),
-            times: <T as BatchContainer>::merge_capacity(&this.times, &that.times),
-            diffs: <D as BatchContainer>::merge_capacity(&this.diffs, &that.diffs),
+    impl<O: BatchContainer, V: BatchContainer> Vals<O, V> {
+        /// Number of lists in the container.
+        pub fn len(&self) -> usize { self.offs.len() - 1 }
+        /// Allocates with capacities for a number of lists and values.
+        pub fn with_capacity(o_size: usize, v_size: usize) -> Self {
+            Self {
+                offs: <O as BatchContainer>::with_capacity(o_size),
+                vals: <V as BatchContainer>::with_capacity(v_size),
+            }
+        }
+        /// Allocates with enough capacity to contain two inputs.
+        pub fn merge_capacity(this: &Self, that: &Self) -> Self {
+            Self {
+                offs: <O as BatchContainer>::with_capacity(this.offs.len() + that.offs.len()),
+                vals: <V as BatchContainer>::merge_capacity(&this.vals, &that.vals),
+            }
+        }
+    }
+
+    /// A container for non-empty lists of updates.
+    ///
+    /// This container uses the special representiation of an empty slice to stand in for
+    /// "the previous single element". An empty slice is an otherwise invalid representation.
+    #[derive(Debug, Serialize, Deserialize)]
+    pub struct Upds<O, T, D> {
+        /// Offsets used to provide indexes from values to updates.
+        pub offs: O,
+        /// Concatenated ordered lists of update times, bracketed by offsets in `offs`.
+        pub times: T,
+        /// Concatenated ordered lists of update diffs, bracketed by offsets in `offs`.
+        pub diffs: D,
+    }
+
+    impl<O: BatchContainer, T: BatchContainer, D: BatchContainer> Default for Upds<O, T, D> {
+        fn default() -> Self { Self::with_capacity(0, 0) }
+    }
+    impl<O: for<'a> BatchContainer<ReadItem<'a> = usize>, T: BatchContainer, D: BatchContainer> Upds<O, T, D> {
+        /// Lower and upper bounds in `self.vals` of the indexed list.
+        pub fn bounds(&self, index: usize) -> (usize, usize) {
+            let mut lower = self.offs.index(index);
+            let upper = self.offs.index(index+1);
+            // We use equal lower and upper to encode "singleton update; just before here".
+            // It should only apply when there is a prior element, so `lower` should be greater than zero.
+            if lower == upper {
+                assert!(lower > 0);
+                lower -= 1;
+            }
+            (lower, upper)
+        }
+    }
+    impl<O: BatchContainer, T: BatchContainer, D: BatchContainer> Upds<O, T, D> {
+        /// Number of lists in the container.
+        pub fn len(&self) -> usize { self.offs.len() - 1 }
+        /// Allocates with capacities for a number of lists and values.
+        pub fn with_capacity(o_size: usize, u_size: usize) -> Self {
+            Self {
+                offs: <O as BatchContainer>::with_capacity(o_size),
+                times: <T as BatchContainer>::with_capacity(u_size),
+                diffs: <D as BatchContainer>::with_capacity(u_size),
+            }
+        }
+        /// Allocates with enough capacity to contain two inputs.
+        pub fn merge_capacity(this: &Self, that: &Self) -> Self {
+            Self {
+                offs:  <O as BatchContainer>::with_capacity(this.offs.len() + that.offs.len()),
+                times: <T as BatchContainer>::merge_capacity(&this.times, &that.times),
+                diffs: <D as BatchContainer>::merge_capacity(&this.diffs, &that.diffs),
+            }
         }
     }
 }
-
 
 /// Types related to forming batches with values.
 pub mod val_batch {
@@ -163,25 +202,6 @@ pub mod val_batch {
         pub vals: Vals<L::OffsetContainer, L::ValContainer>,
         /// For each val in `vals`, a list of (time, diff) updates.
         pub upds: Upds<L::OffsetContainer, L::TimeContainer, L::DiffContainer>,
-    }
-
-    impl<L: Layout> OrdValStorage<L> {
-        /// Lower and upper bounds in `self.vals` corresponding to the key at `index`.
-        fn values_for_key(&self, index: usize) -> (usize, usize) {
-            (self.vals.offs.index(index), self.vals.offs.index(index+1))
-        }
-        /// Lower and upper bounds in `self.updates` corresponding to the value at `index`.
-        fn updates_for_value(&self, index: usize) -> (usize, usize) {
-            let mut lower = self.upds.offs.index(index);
-            let upper = self.upds.offs.index(index+1);
-            // We use equal lower and upper to encode "singleton update; just before here".
-            // It should only apply when there is a prior element, so `lower` should be greater than zero.
-            if lower == upper {
-                assert!(lower > 0);
-                lower -= 1;
-            }
-            (lower, upper)
-        }
     }
 
     /// An immutable collection of update tuples, from a contiguous interval of logical times.
@@ -362,7 +382,7 @@ pub mod val_batch {
         fn copy_key(&mut self, source: &OrdValStorage<L>, cursor: usize) {
             // Capture the initial number of values to determine if the merge was ultimately non-empty.
             let init_vals = self.result.vals.vals.len();
-            let (mut lower, upper) = source.values_for_key(cursor);
+            let (mut lower, upper) = source.vals.bounds(cursor);
             while lower < upper {
                 self.stash_updates_for_val(source, lower);
                 if let Some(off) = self.consolidate_updates() {
@@ -391,8 +411,8 @@ pub mod val_batch {
                 },
                 Ordering::Equal => {
                     // Keys are equal; must merge all values from both sources for this one key.
-                    let (lower1, upper1) = source1.values_for_key(self.key_cursor1);
-                    let (lower2, upper2) = source2.values_for_key(self.key_cursor2);
+                    let (lower1, upper1) = source1.vals.bounds(self.key_cursor1);
+                    let (lower2, upper2) = source2.vals.bounds(self.key_cursor2);
                     if let Some(off) = self.merge_vals((source1, lower1, upper1), (source2, lower2, upper2)) {
                         self.result.keys.push(source1.keys.index(self.key_cursor1));
                         self.result.vals.offs.push(off);
@@ -482,7 +502,7 @@ pub mod val_batch {
 
         /// Transfer updates for an indexed value in `source` into `self`, with compaction applied.
         fn stash_updates_for_val(&mut self, source: &OrdValStorage<L>, index: usize) {
-            let (lower, upper) = source.updates_for_value(index);
+            let (lower, upper) = source.upds.bounds(index);
             for i in lower .. upper {
                 // NB: Here is where we would need to look back if `lower == upper`.
                 let time = source.upds.times.index(i);
@@ -553,7 +573,7 @@ pub mod val_batch {
         fn key<'a>(&self, storage: &'a OrdValBatch<L>) -> Self::Key<'a> { storage.storage.keys.index(self.key_cursor) }
         fn val<'a>(&self, storage: &'a OrdValBatch<L>) -> Self::Val<'a> { storage.storage.vals.vals.index(self.val_cursor) }
         fn map_times<L2: FnMut(Self::TimeGat<'_>, Self::DiffGat<'_>)>(&mut self, storage: &OrdValBatch<L>, mut logic: L2) {
-            let (lower, upper) = storage.storage.updates_for_value(self.val_cursor);
+            let (lower, upper) = storage.storage.upds.bounds(self.val_cursor);
             for index in lower .. upper {
                 let time = storage.storage.upds.times.index(index);
                 let diff = storage.storage.upds.diffs.index(index);
@@ -561,7 +581,7 @@ pub mod val_batch {
             }
         }
         fn key_valid(&self, storage: &OrdValBatch<L>) -> bool { self.key_cursor < storage.storage.keys.len() }
-        fn val_valid(&self, storage: &OrdValBatch<L>) -> bool { self.val_cursor < storage.storage.values_for_key(self.key_cursor).1 }
+        fn val_valid(&self, storage: &OrdValBatch<L>) -> bool { self.val_cursor < storage.storage.vals.bounds(self.key_cursor).1 }
         fn step_key(&mut self, storage: &OrdValBatch<L>){
             self.key_cursor += 1;
             if self.key_valid(storage) {
@@ -580,11 +600,11 @@ pub mod val_batch {
         fn step_val(&mut self, storage: &OrdValBatch<L>) {
             self.val_cursor += 1; 
             if !self.val_valid(storage) {
-                self.val_cursor = storage.storage.values_for_key(self.key_cursor).1;
+                self.val_cursor = storage.storage.vals.bounds(self.key_cursor).1;
             }
         }
         fn seek_val(&mut self, storage: &OrdValBatch<L>, val: Self::Val<'_>) {
-            self.val_cursor += storage.storage.vals.vals.advance(self.val_cursor, storage.storage.values_for_key(self.key_cursor).1, |x| <L::ValContainer as BatchContainer>::reborrow(x).lt(&<L::ValContainer as BatchContainer>::reborrow(val)));
+            self.val_cursor += storage.storage.vals.vals.advance(self.val_cursor, storage.storage.vals.bounds(self.key_cursor).1, |x| <L::ValContainer as BatchContainer>::reborrow(x).lt(&<L::ValContainer as BatchContainer>::reborrow(val)));
         }
         fn rewind_keys(&mut self, storage: &OrdValBatch<L>) {
             self.key_cursor = 0;
@@ -593,7 +613,7 @@ pub mod val_batch {
             }
         }
         fn rewind_vals(&mut self, storage: &OrdValBatch<L>) {
-            self.val_cursor = storage.storage.values_for_key(self.key_cursor).0;
+            self.val_cursor = storage.storage.vals.bounds(self.key_cursor).0;
         }
     }
 
@@ -754,21 +774,6 @@ pub mod key_batch {
         pub keys: L::KeyContainer,
         /// For each key in `keys`, a list of (time, diff) updates.
         pub upds: Upds<L::OffsetContainer, L::TimeContainer, L::DiffContainer>,
-    }
-
-    impl<L: Layout> OrdKeyStorage<L> {
-        /// Lower and upper bounds in `self.vals` corresponding to the key at `index`.
-        fn updates_for_key(&self, index: usize) -> (usize, usize) {
-            let mut lower = self.upds.offs.index(index);
-            let upper = self.upds.offs.index(index+1);
-            // We use equal lower and upper to encode "singleton update; just before here".
-            // It should only apply when there is a prior element, so `lower` should be greater than zero.
-            if lower == upper {
-                assert!(lower > 0);
-                lower -= 1;
-            }
-            (lower, upper)
-        }
     }
 
     /// An immutable collection of update tuples, from a contiguous interval of logical times.
@@ -980,7 +985,7 @@ pub mod key_batch {
 
         /// Transfer updates for an indexed value in `source` into `self`, with compaction applied.
         fn stash_updates_for_key(&mut self, source: &OrdKeyStorage<L>, index: usize) {
-            let (lower, upper) = source.updates_for_key(index);
+            let (lower, upper) = source.upds.bounds(index);
             for i in lower .. upper {
                 // NB: Here is where we would need to look back if `lower == upper`.
                 let time = source.upds.times.index(i);
@@ -1050,7 +1055,7 @@ pub mod key_batch {
         fn key<'a>(&self, storage: &'a Self::Storage) -> Self::Key<'a> { storage.storage.keys.index(self.key_cursor) }
         fn val<'a>(&self, _storage: &'a Self::Storage) -> &'a () { &() }
         fn map_times<L2: FnMut(Self::TimeGat<'_>, Self::DiffGat<'_>)>(&mut self, storage: &Self::Storage, mut logic: L2) {
-            let (lower, upper) = storage.storage.updates_for_key(self.key_cursor);
+            let (lower, upper) = storage.storage.upds.bounds(self.key_cursor);
             for index in lower .. upper {
                 let time = storage.storage.upds.times.index(index);
                 let diff = storage.storage.upds.diffs.index(index);
