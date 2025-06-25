@@ -580,7 +580,7 @@ pub mod dd_builder {
     use differential_dataflow::trace::implementations::Layout;
     use differential_dataflow::trace::implementations::Update;
     use differential_dataflow::trace::implementations::BatchContainer;
-    use differential_dataflow::trace::implementations::ord_neu::{OrdValBatch, val_batch::OrdValStorage, OrdKeyBatch, Vals, Upds};
+    use differential_dataflow::trace::implementations::ord_neu::{OrdValBatch, val_batch::OrdValStorage, OrdKeyBatch, Vals, Upds, layers::UpdsBuilder};
     use differential_dataflow::trace::implementations::ord_neu::key_batch::OrdKeyStorage;
     use crate::Column;
 
@@ -597,44 +597,7 @@ pub mod dd_builder {
         ///
         /// This is public to allow container implementors to set and inspect their container.
         pub result: OrdValStorage<L>,
-        singleton: Option<(<L::Target as Update>::Time, <L::Target as Update>::Diff)>,
-        /// Counts the number of singleton optimizations we performed.
-        ///
-        /// This number allows us to correctly gauge the total number of updates reflected in a batch,
-        /// even though `updates.len()` may be much shorter than this amount.
-        singletons: usize,
-    }
-
-    impl<L: Layout> OrdValBuilder<L> {
-        /// Pushes a single update, which may set `self.singleton` rather than push.
-        ///
-        /// This operation is meant to be equivalent to `self.results.updates.push((time, diff))`.
-        /// However, for "clever" reasons it does not do this. Instead, it looks for opportunities
-        /// to encode a singleton update with an "absert" update: repeating the most recent offset.
-        /// This otherwise invalid state encodes "look back one element".
-        ///
-        /// When `self.singleton` is `Some`, it means that we have seen one update and it matched the
-        /// previously pushed update exactly. In that case, we do not push the update into `updates`.
-        /// The update tuple is retained in `self.singleton` in case we see another update and need
-        /// to recover the singleton to push it into `updates` to join the second update.
-        fn push_update(&mut self, time: <L::Target as Update>::Time, diff: <L::Target as Update>::Diff) {
-            // If a just-pushed update exactly equals `(time, diff)` we can avoid pushing it.
-            if self.result.upds.times.last().map(|t| t == <<L::TimeContainer as BatchContainer>::ReadItem<'_> as IntoOwned>::borrow_as(&time)) == Some(true) &&
-                self.result.upds.diffs.last().map(|d| d == <<L::DiffContainer as BatchContainer>::ReadItem<'_> as IntoOwned>::borrow_as(&diff)) == Some(true)
-            {
-                assert!(self.singleton.is_none());
-                self.singleton = Some((time, diff));
-            }
-            else {
-                // If we have pushed a single element, we need to copy it out to meet this one.
-                if let Some((time, diff)) = self.singleton.take() {
-                    self.result.upds.times.push(time);
-                    self.result.upds.diffs.push(diff);
-                }
-                self.result.upds.times.push(time);
-                self.result.upds.diffs.push(diff);
-            }
-        }
+        staging: UpdsBuilder<L::TimeContainer, L::DiffContainer>,
     }
 
     // The layout `L` determines the key, val, time, and diff types.
@@ -656,15 +619,13 @@ pub mod dd_builder {
         type Output = OrdValBatch<L>;
 
         fn with_capacity(keys: usize, vals: usize, upds: usize) -> Self {
-            // We don't introduce zero offsets as they will be introduced by the first `push` call.
             Self {
                 result: OrdValStorage {
                     keys: L::KeyContainer::with_capacity(keys),
                     vals: Vals::with_capacity(keys + 1, vals),
                     upds: Upds::with_capacity(vals + 1, upds),
                 },
-                singleton: None,
-                singletons: 0,
+                staging: UpdsBuilder::default(),
             }
         }
 
@@ -686,24 +647,28 @@ pub mod dd_builder {
                 let time = <<L::TimeContainer as BatchContainer>::Owned as Columnar>::into_owned(time);
                 let diff = <<L::DiffContainer as BatchContainer>::Owned as Columnar>::into_owned(diff);
 
+                // Pre-load the first update.
+                if self.result.keys.is_empty() {
+                    self.result.vals.vals.push(&val);
+                    self.result.keys.push(&key);
+                    self.staging.push(time, diff);
+                }
                 // Perhaps this is a continuation of an already received key.
-                if self.result.keys.last().map(|k| <<L::KeyContainer as BatchContainer>::ReadItem<'_> as IntoOwned>::borrow_as(&key).eq(&k)).unwrap_or(false) {
+                else if self.result.keys.last().map(|k| <<L::KeyContainer as BatchContainer>::ReadItem<'_> as IntoOwned>::borrow_as(&key).eq(&k)).unwrap_or(false) {
                     // Perhaps this is a continuation of an already received value.
                     if self.result.vals.vals.last().map(|v| <<L::ValContainer as BatchContainer>::ReadItem<'_> as IntoOwned>::borrow_as(&val).eq(&v)).unwrap_or(false) {
-                        self.push_update(time, diff);
+                        self.staging.push(time, diff);
                     } else {
                         // New value; complete representation of prior value.
-                        self.result.upds.offs.push(self.result.upds.times.len());
-                        if self.singleton.take().is_some() { self.singletons += 1; }
-                        self.push_update(time, diff);
+                        self.staging.seal(&mut self.result.upds);
+                        self.staging.push(time, diff);
                         self.result.vals.vals.push(&val);
                     }
                 } else {
                     // New key; complete representation of prior key.
-                    self.result.upds.offs.push(self.result.upds.times.len());
-                    if self.singleton.take().is_some() { self.singletons += 1; }
+                    self.staging.seal(&mut self.result.upds);
+                    self.staging.push(time, diff);
                     self.result.vals.offs.push(self.result.vals.len());
-                    self.push_update(time, diff);
                     self.result.vals.vals.push(&val);
                     self.result.keys.push(&key);
                 }
@@ -712,13 +677,10 @@ pub mod dd_builder {
 
         #[inline(never)]
         fn done(mut self, description: Description<Self::Time>) -> OrdValBatch<L> {
-            // Record the final offsets
-            self.result.upds.offs.push(self.result.upds.times.len());
-            // Remove any pending singleton, and if it was set increment our count.
-            if self.singleton.take().is_some() { self.singletons += 1; }
+            self.staging.seal(&mut self.result.upds);
             self.result.vals.offs.push(self.result.vals.len());
             OrdValBatch {
-                updates: self.result.upds.times.len() + self.singletons,
+                updates: self.staging.total(),
                 storage: self.result,
                 description,
             }
@@ -742,44 +704,7 @@ pub mod dd_builder {
         ///
         /// This is public to allow container implementors to set and inspect their container.
         pub result: OrdKeyStorage<L>,
-        singleton: Option<(<L::Target as Update>::Time, <L::Target as Update>::Diff)>,
-        /// Counts the number of singleton optimizations we performed.
-        ///
-        /// This number allows us to correctly gauge the total number of updates reflected in a batch,
-        /// even though `updates.len()` may be much shorter than this amount.
-        singletons: usize,
-    }
-
-    impl<L: Layout> OrdKeyBuilder<L> {
-        /// Pushes a single update, which may set `self.singleton` rather than push.
-        ///
-        /// This operation is meant to be equivalent to `self.results.updates.push((time, diff))`.
-        /// However, for "clever" reasons it does not do this. Instead, it looks for opportunities
-        /// to encode a singleton update with an "absert" update: repeating the most recent offset.
-        /// This otherwise invalid state encodes "look back one element".
-        ///
-        /// When `self.singleton` is `Some`, it means that we have seen one update and it matched the
-        /// previously pushed update exactly. In that case, we do not push the update into `updates`.
-        /// The update tuple is retained in `self.singleton` in case we see another update and need
-        /// to recover the singleton to push it into `updates` to join the second update.
-        fn push_update(&mut self, time: <L::Target as Update>::Time, diff: <L::Target as Update>::Diff) {
-            // If a just-pushed update exactly equals `(time, diff)` we can avoid pushing it.
-            if self.result.upds.times.last().map(|t| t == <<L::TimeContainer as BatchContainer>::ReadItem<'_> as IntoOwned>::borrow_as(&time)) == Some(true) &&
-                self.result.upds.diffs.last().map(|d| d == <<L::DiffContainer as BatchContainer>::ReadItem<'_> as IntoOwned>::borrow_as(&diff)) == Some(true)
-            {
-                assert!(self.singleton.is_none());
-                self.singleton = Some((time, diff));
-            }
-            else {
-                // If we have pushed a single element, we need to copy it out to meet this one.
-                if let Some((time, diff)) = self.singleton.take() {
-                    self.result.upds.times.push(time);
-                    self.result.upds.diffs.push(diff);
-                }
-                self.result.upds.times.push(time);
-                self.result.upds.diffs.push(diff);
-            }
-        }
+        staging: UpdsBuilder<L::TimeContainer, L::DiffContainer>,
     }
 
     // The layout `L` determines the key, val, time, and diff types.
@@ -801,14 +726,12 @@ pub mod dd_builder {
         type Output = OrdKeyBatch<L>;
 
         fn with_capacity(keys: usize, _vals: usize, upds: usize) -> Self {
-            // We don't introduce zero offsets as they will be introduced by the first `push` call.
             Self {
                 result: OrdKeyStorage {
                     keys: L::KeyContainer::with_capacity(keys),
                     upds: Upds::with_capacity(keys + 1, upds),
                 },
-                singleton: None,
-                singletons: 0,
+                staging: UpdsBuilder::default(),
             }
         }
 
@@ -829,14 +752,18 @@ pub mod dd_builder {
                 let time = <<L::TimeContainer as BatchContainer>::Owned as Columnar>::into_owned(time);
                 let diff = <<L::DiffContainer as BatchContainer>::Owned as Columnar>::into_owned(diff);
 
+                // Pre-load the first update.
+                if self.result.keys.is_empty() {
+                    self.result.keys.push(&key);
+                    self.staging.push(time, diff);
+                }
                 // Perhaps this is a continuation of an already received key.
-                if self.result.keys.last().map(|k| <<L::KeyContainer as BatchContainer>::ReadItem<'_> as IntoOwned>::borrow_as(&key).eq(&k)).unwrap_or(false) {
-                    self.push_update(time, diff);
+                else if self.result.keys.last().map(|k| <<L::KeyContainer as BatchContainer>::ReadItem<'_> as IntoOwned>::borrow_as(&key).eq(&k)).unwrap_or(false) {
+                    self.staging.push(time, diff);
                 } else {
                     // New key; complete representation of prior key.
-                    self.result.upds.offs.push(self.result.upds.times.len());
-                    if self.singleton.take().is_some() { self.singletons += 1; }
-                    self.push_update(time, diff);
+                    self.staging.seal(&mut self.result.upds);
+                    self.staging.push(time, diff);
                     self.result.keys.push(&key);
                 }
             }
@@ -844,12 +771,9 @@ pub mod dd_builder {
 
         #[inline(never)]
         fn done(mut self, description: Description<Self::Time>) -> OrdKeyBatch<L> {
-            // Record the final offsets
-            self.result.upds.offs.push(self.result.upds.times.len());
-            // Remove any pending singleton, and if it was set increment our count.
-            if self.singleton.take().is_some() { self.singletons += 1; }
+            self.staging.seal(&mut self.result.upds);
             OrdKeyBatch {
-                updates: self.result.upds.times.len() + self.singletons,
+                updates: self.staging.total(),
                 storage: self.result,
                 description,
             }
