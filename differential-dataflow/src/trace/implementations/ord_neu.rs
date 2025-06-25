@@ -74,7 +74,7 @@ pub use layers::{Vals, Upds};
 /// forms a layered trie: a tree with values of some type on nodes at each depth.
 ///
 /// We will form tries here by layering `[Keys, Vals, Upds]` or `[Keys, Upds]`.
-mod layers {
+pub mod layers {
 
     use serde::{Deserialize, Serialize};
     use crate::trace::implementations::BatchContainer;
@@ -142,11 +142,11 @@ mod layers {
     #[derive(Debug, Serialize, Deserialize)]
     pub struct Upds<O, T, D> {
         /// Offsets used to provide indexes from values to updates.
-        pub offs: O,
+        offs: O,
         /// Concatenated ordered lists of update times, bracketed by offsets in `offs`.
-        pub times: T,
+        times: T,
         /// Concatenated ordered lists of update diffs, bracketed by offsets in `offs`.
-        pub diffs: D,
+        diffs: D,
         /// Tracks the total number of updates contained within.
         ///
         /// This may be more than `times.len()` or `diffs.len()` because we deduplicate runs
@@ -210,6 +210,7 @@ mod layers {
         }
     }
 
+    /// Helper type for constructing `Upds` containers.
     pub struct UpdsBuilder<T: BatchContainer, D: BatchContainer> {
         /// Local stash of updates, to use for consolidation.
         ///
@@ -597,7 +598,6 @@ pub mod val_batch {
                 let mut new_time: <L::Target as Update>::Time = time.into_owned();
                 new_time.advance_by(self.description.since().borrow());
                 self.staging.push(new_time, diff.into_owned());
-                // self.update_stash.push((new_time, diff.into_owned()));
             }
         }
     }
@@ -698,7 +698,6 @@ pub mod val_batch {
         type Output = OrdValBatch<L>;
 
         fn with_capacity(keys: usize, vals: usize, upds: usize) -> Self {
-
             Self {
                 result: OrdValStorage {
                     keys: L::KeyContainer::with_capacity(keys),
@@ -725,7 +724,6 @@ pub mod val_batch {
                 else if self.result.keys.last().map(|k| CI::key_eq(&key, k)).unwrap_or(false) {
                     // Perhaps this is a continuation of an already received value.
                     if self.result.vals.vals.last().map(|v| CI::val_eq(&val, v)).unwrap_or(false) {
-                        // self.push_update(time, diff);
                         self.staging.push(time, diff);
                     } else {
                         // New value; complete representation of prior value.
@@ -746,11 +744,7 @@ pub mod val_batch {
 
         #[inline(never)]
         fn done(mut self, description: Description<Self::Time>) -> OrdValBatch<L> {
-            // Record the final offsets
             self.staging.seal(&mut self.result.upds);
-            // self.result.upds.offs.push(self.result.upds.times.len());
-            // // Remove any pending singleton, and if it was set increment our count.
-            // if self.singleton.take().is_some() { self.singletons += 1; }
             self.result.vals.offs.push(self.result.vals.vals.len());
             OrdValBatch {
                 updates: self.staging.total(),
@@ -1095,7 +1089,6 @@ pub mod key_batch {
         type Output = OrdKeyBatch<L>;
 
         fn with_capacity(keys: usize, _vals: usize, upds: usize) -> Self {
-
             Self {
                 result: OrdKeyStorage {
                     keys: L::KeyContainer::with_capacity(keys),
@@ -1127,7 +1120,6 @@ pub mod key_batch {
 
         #[inline(never)]
         fn done(mut self, description: Description<Self::Time>) -> OrdKeyBatch<L> {
-            // Record the final offsets
             self.staging.seal(&mut self.result.upds);
             OrdKeyBatch {
                 updates: self.staging.total(),
