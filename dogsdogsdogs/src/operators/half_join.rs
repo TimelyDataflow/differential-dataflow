@@ -36,21 +36,21 @@ use std::ops::Mul;
 use std::time::Instant;
 
 use timely::container::{CapacityContainerBuilder, ContainerBuilder};
+use timely::dataflow::{Scope, ScopeParent, StreamCore};
 use timely::dataflow::channels::pact::{Pipeline, Exchange};
 use timely::dataflow::channels::pushers::buffer::Session;
 use timely::dataflow::channels::pushers::{Counter as PushCounter, Tee};
 use timely::dataflow::operators::Operator;
-use timely::dataflow::{Scope, ScopeParent, StreamCore};
 use timely::progress::Antichain;
 use timely::progress::frontier::AntichainRef;
 
-use differential_dataflow::consolidation::{consolidate, consolidate_updates};
+use differential_dataflow::{ExchangeData, Collection, AsCollection, Hashable};
 use differential_dataflow::difference::{Monoid, Semigroup};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arranged;
-use differential_dataflow::trace::cursor::IntoOwned;
 use differential_dataflow::trace::{Cursor, TraceReader};
-use differential_dataflow::{ExchangeData, Collection, AsCollection, Hashable};
+use differential_dataflow::consolidation::{consolidate, consolidate_updates};
+use differential_dataflow::trace::cursor::IntoOwned;
 
 /// A binary equijoin that responds to updates on only its first input.
 ///
