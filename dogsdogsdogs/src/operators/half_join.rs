@@ -104,7 +104,9 @@ where
         .as_collection()
 }
 
-/// Utility type for a session in scope `G` with a container builder `CB`.
+/// A session with lifetime `'a` in a scope `G` with a container builder `CB`.
+///
+/// This is a shorthand primarily for the reson of readability.
 type SessionFor<'a, G, CB> =
     Session<'a,
         <G as ScopeParent>::Timestamp,
@@ -291,14 +293,15 @@ where
     })
 }
 
-/// Process proposals one at a time, yielding if necessary.
+/// Outlined inner loop for `half_join_internal_unsafe` for reasons of performance.
+///
+/// Gives Rust/LLVM the opportunity to inline the loop body instead of inlining the loop and
+/// leaving all calls in the loop body outlined.
 ///
 /// Consumes proposals until the yield function returns `true` or all proposals are processed.
 /// Leaves a zero diff in place for all proposals that were processed.
 ///
 /// Returns `true` if the operator should yield.
-///
-/// Utility function for `half_join_internal_unsafe`.
 fn process_proposals<G, Tr, CF, Y, S, CB, K, V, R>(
     comparison: &CF,
     yield_function: &Y,
