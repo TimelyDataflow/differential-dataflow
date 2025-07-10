@@ -117,9 +117,10 @@ type SessionFor<'a, G, CB> =
     >;
 
 /// An unsafe variant of `half_join` where the `output_func` closure takes
-/// additional arguments for `time` and `diff` as input and returns an iterator
-/// over `(data, time, diff)` triplets. This allows for more flexibility, but
-/// is more error-prone.
+/// additional arguments a vector of `time` and `diff` tuples as input and
+/// writes its outputs at a container builder. The container builder
+/// can, but isn't required to, accept `(data, time, diff)` triplets.
+/// This allows for more flexibility, but is more error-prone.
 ///
 /// This operator responds to inputs of the form
 ///
@@ -130,7 +131,7 @@ type SessionFor<'a, G, CB> =
 /// where `initial_time` is less or equal to `time1`, and produces as output
 ///
 /// ```ignore
-/// output_func(key, val1, val2, initial_time, lub(time1, time2), diff1, diff2)
+/// output_func(session, key, val1, val2, initial_time, diff1, &[lub(time1, time2), diff2])
 /// ```
 ///
 /// for each `((key, val2), time2, diff2)` present in `arrangement`, where
@@ -210,12 +211,11 @@ where
                     yielded = yielded || yield_function(timer, work);
                     if !yielded && !input2.frontier.less_equal(capability.time()) {
 
-                        // Sort requests by key for in-order cursor traversal.
-                        consolidate_updates(proposals);
-
                         let frontier = input2.frontier.frontier();
 
-                        yielded |= process_proposals::<G, _, _, _, _, _, _, _, _>(
+                        // Update yielded: We can only go from false to {false, true} as
+                        // we're checking that `!yielded` holds before entering this block.
+                        yielded = process_proposals::<G, _, _, _, _, _, _, _, _>(
                             &comparison,
                             &yield_function,
                             &mut output_func,
@@ -293,6 +293,9 @@ where
 
 /// Process proposals one at a time, yielding if necessary.
 ///
+/// Consumes proposals until the yield function returns `true` or all proposals are processed.
+/// Leaves a zero diff in place for all proposals that were processed.
+///
 /// Returns `true` if the operator should yield.
 ///
 /// Utility function for `half_join_internal_unsafe`.
@@ -315,8 +318,13 @@ where
     Y: Fn(Instant, usize) -> bool + 'static,
     S: FnMut(&mut SessionFor<G, CB>, &K, &V, Tr::Val<'_>, &G::Timestamp, &R, &mut Vec<(G::Timestamp, Tr::Diff)>) + 'static,
     CB: ContainerBuilder,
+    K: Ord,
+    V: Ord,
     R: Monoid,
 {
+    // Sort requests by key for in-order cursor traversal.
+    consolidate_updates(proposals);
+
     let (mut cursor, storage) = trace.cursor();
     let mut yielded = false;
 
@@ -339,6 +347,8 @@ where
                     consolidate(&mut output_buffer);
                     *work += output_buffer.len();
                     output_func(&mut session, key, val1, val2, initial, diff1, &mut output_buffer);
+                    // Defensive clear; we'd expect `output_func` to clear the buffer.
+                    // TODO: Should we assert it is empty?
                     output_buffer.clear();
                     cursor.step_val(&storage);
                 }
