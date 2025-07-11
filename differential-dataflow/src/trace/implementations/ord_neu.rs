@@ -147,11 +147,6 @@ pub mod layers {
         times: T,
         /// Concatenated ordered lists of update diffs, bracketed by offsets in `offs`.
         diffs: D,
-        /// Tracks the total number of updates contained within.
-        ///
-        /// This may be more than `times.len()` or `diffs.len()` because we deduplicate runs
-        /// of the same single `(time, diff)` pair.
-        total: usize,
     }
 
     impl<O: for<'a> BatchContainer<ReadItem<'a> = usize>, T: BatchContainer, D: BatchContainer> Default for Upds<O, T, D> {
@@ -194,7 +189,6 @@ pub mod layers {
                 offs,
                 times: <T as BatchContainer>::with_capacity(u_size),
                 diffs: <D as BatchContainer>::with_capacity(u_size),
-                total: 0,
             }
         }
         /// Allocates with enough capacity to contain two inputs.
@@ -205,7 +199,6 @@ pub mod layers {
                 offs,
                 times: <T as BatchContainer>::merge_capacity(&this.times, &that.times),
                 diffs: <D as BatchContainer>::merge_capacity(&this.diffs, &that.diffs),
-                total: 0,
             }
         }
     }
