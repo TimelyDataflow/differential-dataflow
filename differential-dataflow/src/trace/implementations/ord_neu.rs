@@ -153,7 +153,7 @@ pub mod layers {
         fn default() -> Self { Self::with_capacity(0, 0) }
     }
     impl<O: for<'a> BatchContainer<ReadItem<'a> = usize>, T: BatchContainer, D: BatchContainer> Upds<O, T, D> {
-        /// Lower and upper bounds in `self.vals` of the indexed list.
+        /// Lower and upper bounds in `self.times` and `self.diffs` of the indexed list.
         pub fn bounds(&self, index: usize) -> (usize, usize) {
             let mut lower = self.offs.index(index);
             let upper = self.offs.index(index+1);
