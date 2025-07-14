@@ -54,7 +54,6 @@ pub use self::ord_neu::OrdKeySpine as KeySpine;
 pub use self::ord_neu::OrdKeyBatcher as KeyBatcher;
 pub use self::ord_neu::RcOrdKeyBuilder as KeyBuilder;
 
-use std::borrow::{ToOwned};
 use std::convert::TryInto;
 
 use columnation::Columnation;
@@ -94,20 +93,46 @@ where
 
 /// A type with opinions on how updates should be laid out.
 pub trait Layout {
-    /// The represented update.
-    type Target: Update + ?Sized;
+    // /// The represented update.
+    // type Target: Update + ?Sized;
     /// Container for update keys.
     // NB: The `PushInto` constraint is only required by `rhh.rs` to push default values.
-    type KeyContainer: BatchContainer<Owned = <Self::Target as Update>::Key> + PushInto<<Self::Target as Update>::Key>;
+    type KeyContainer: BatchContainer;
     /// Container for update vals.
-    type ValContainer: BatchContainer<Owned = <Self::Target as Update>::Val>;
+    type ValContainer: BatchContainer;
     /// Container for times.
-    type TimeContainer: BatchContainer<Owned = <Self::Target as Update>::Time> + PushInto<<Self::Target as Update>::Time>;
+    type TimeContainer: BatchContainer<Owned: Lattice + timely::progress::Timestamp>;
     /// Container for diffs.
-    type DiffContainer: BatchContainer<Owned = <Self::Target as Update>::Diff> + PushInto<<Self::Target as Update>::Diff>;
+    type DiffContainer: BatchContainer<Owned: Semigroup>;
     /// Container for offsets.
     type OffsetContainer: for<'a> BatchContainer<ReadItem<'a> = usize>;
 }
+
+// pub use aliases::{Key, KeyRef, Val, ValRef, Time, TimeRef, Diff, DiffRef};
+
+/// Aliases for types provided by the containers within a `Layout`.
+#[allow(type_alias_bounds)]
+pub mod layout {
+    use crate::trace::implementations::{BatchContainer, Layout};
+
+    /// Alias for an owned key of a layout.
+    pub type Key<L: Layout> = <<L as Layout>::KeyContainer as BatchContainer>::Owned;
+    /// Alias for an borrowed key of a layout.
+    pub type KeyRef<'a, L: Layout> = <<L as Layout>::KeyContainer as BatchContainer>::ReadItem<'a>;
+    /// Alias for an owned val of a layout.
+    pub type Val<L: Layout> = <<L as Layout>::ValContainer as BatchContainer>::Owned;
+    /// Alias for an borrowed val of a layout.
+    pub type ValRef<'a, L: Layout> = <<L as Layout>::ValContainer as BatchContainer>::ReadItem<'a>;
+    /// Alias for an owned time of a layout.
+    pub type Time<L: Layout> = <<L as Layout>::TimeContainer as BatchContainer>::Owned;
+    /// Alias for an borrowed time of a layout.
+    pub type TimeRef<'a, L: Layout> = <<L as Layout>::TimeContainer as BatchContainer>::ReadItem<'a>;
+    /// Alias for an owned diff of a layout.
+    pub type Diff<L: Layout> = <<L as Layout>::DiffContainer as BatchContainer>::Owned;
+    /// Alias for an borrowed diff of a layout.
+    pub type DiffRef<'a, L: Layout> = <<L as Layout>::DiffContainer as BatchContainer>::ReadItem<'a>;
+}
+
 
 /// A layout that uses vectors
 pub struct Vector<U: Update> {
@@ -115,7 +140,6 @@ pub struct Vector<U: Update> {
 }
 
 impl<U: Update<Diff: Ord>> Layout for Vector<U> {
-    type Target = U;
     type KeyContainer = Vec<U::Key>;
     type ValContainer = Vec<U::Val>;
     type TimeContainer = Vec<U::Time>;
@@ -137,60 +161,10 @@ where
         Diff: Columnation + Ord,
     >,
 {
-    type Target = U;
     type KeyContainer = TimelyStack<U::Key>;
     type ValContainer = TimelyStack<U::Val>;
     type TimeContainer = TimelyStack<U::Time>;
     type DiffContainer = TimelyStack<U::Diff>;
-    type OffsetContainer = OffsetList;
-}
-
-/// A type with a preferred container.
-///
-/// Examples include types that implement `Clone` who prefer
-pub trait PreferredContainer : ToOwned {
-    /// The preferred container for the type.
-    type Container: BatchContainer<Owned = Self::Owned> + PushInto<Self::Owned>;
-}
-
-impl<T: Ord + Clone + 'static> PreferredContainer for T {
-    type Container = Vec<T>;
-}
-
-impl<T: Ord + Clone + 'static> PreferredContainer for [T] {
-    type Container = SliceContainer<T>;
-}
-
-/// An update and layout description based on preferred containers.
-pub struct Preferred<K: ?Sized, V: ?Sized, T, D> {
-    phantom: std::marker::PhantomData<(Box<K>, Box<V>, T, D)>,
-}
-
-impl<K,V,T,R> Update for Preferred<K, V, T, R>
-where
-    K: ToOwned<Owned: Ord+Clone+'static> + ?Sized,
-    V: ToOwned<Owned: Ord+Clone+'static> + ?Sized,
-    T: Ord+Clone+Lattice+timely::progress::Timestamp,
-    R: Ord+Clone+Semigroup+'static,
-{
-    type Key = K::Owned;
-    type Val = V::Owned;
-    type Time = T;
-    type Diff = R;
-}
-
-impl<K, V, T, D> Layout for Preferred<K, V, T, D>
-where
-    K: Ord+ToOwned<Owned: Ord+Clone+'static>+PreferredContainer + ?Sized,
-    V: Ord+ToOwned<Owned: Ord+Clone+'static>+PreferredContainer + ?Sized,
-    T: Ord+Clone+Lattice+timely::progress::Timestamp,
-    D: Ord+Clone+Semigroup+'static,
-{
-    type Target = Preferred<K, V, T, D>;
-    type KeyContainer = K::Container;
-    type ValContainer = V::Container;
-    type TimeContainer = Vec<T>;
-    type DiffContainer = Vec<D>;
     type OffsetContainer = OffsetList;
 }
 
@@ -460,7 +434,7 @@ pub mod containers {
     use crate::IntoOwned;
 
     /// A general-purpose container resembling `Vec<T>`.
-    pub trait BatchContainer: for<'a> PushInto<Self::ReadItem<'a>> + 'static {
+    pub trait BatchContainer: for<'a> PushInto<Self::ReadItem<'a>> + PushInto<Self::Owned> + 'static {
         /// An owned instance of `Self::ReadItem<'_>`.
         type Owned;
 

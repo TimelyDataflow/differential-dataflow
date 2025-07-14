@@ -585,7 +585,7 @@ pub mod dd_builder {
     use differential_dataflow::trace::Builder;
     use differential_dataflow::trace::Description;
     use differential_dataflow::trace::implementations::Layout;
-    use differential_dataflow::trace::implementations::Update;
+    use differential_dataflow::trace::implementations::layout;
     use differential_dataflow::trace::implementations::BatchContainer;
     use differential_dataflow::trace::implementations::ord_neu::{OrdValBatch, val_batch::OrdValStorage, OrdKeyBatch, Vals, Upds, layers::UpdsBuilder};
     use differential_dataflow::trace::implementations::ord_neu::key_batch::OrdKeyStorage;
@@ -618,11 +618,11 @@ pub mod dd_builder {
         // These two constraints seem .. like we could potentially replace by `Columnar::Ref<'a>`.
         for<'a> L::KeyContainer: PushInto<&'a <L::KeyContainer as BatchContainer>::Owned>,
         for<'a> L::ValContainer: PushInto<&'a <L::ValContainer as BatchContainer>::Owned>,
-        for<'a> <L::TimeContainer as BatchContainer>::ReadItem<'a> : IntoOwned<'a, Owned = <L::Target as Update>::Time>,
-        for<'a> <L::DiffContainer as BatchContainer>::ReadItem<'a> : IntoOwned<'a, Owned = <L::Target as Update>::Diff>,
+        for<'a> <L::TimeContainer as BatchContainer>::ReadItem<'a> : IntoOwned<'a, Owned = layout::Time<L>>,
+        for<'a> <L::DiffContainer as BatchContainer>::ReadItem<'a> : IntoOwned<'a, Owned = layout::Diff<L>>,
     {
         type Input = Column<((<L::KeyContainer as BatchContainer>::Owned,<L::ValContainer as BatchContainer>::Owned),<L::TimeContainer as BatchContainer>::Owned,<L::DiffContainer as BatchContainer>::Owned)>;
-        type Time = <L::Target as Update>::Time;
+        type Time = layout::Time<L>;
         type Output = OrdValBatch<L>;
 
         fn with_capacity(keys: usize, vals: usize, upds: usize) -> Self {
@@ -725,11 +725,11 @@ pub mod dd_builder {
     // These two constraints seem .. like we could potentially replace by `Columnar::Ref<'a>`.
         for<'a> L::KeyContainer: PushInto<&'a <L::KeyContainer as BatchContainer>::Owned>,
         for<'a> L::ValContainer: PushInto<&'a <L::ValContainer as BatchContainer>::Owned>,
-        for<'a> <L::TimeContainer as BatchContainer>::ReadItem<'a> : IntoOwned<'a, Owned = <L::Target as Update>::Time>,
-        for<'a> <L::DiffContainer as BatchContainer>::ReadItem<'a> : IntoOwned<'a, Owned = <L::Target as Update>::Diff>,
+        for<'a> <L::TimeContainer as BatchContainer>::ReadItem<'a> : IntoOwned<'a, Owned = layout::Time<L>>,
+        for<'a> <L::DiffContainer as BatchContainer>::ReadItem<'a> : IntoOwned<'a, Owned = layout::Diff<L>>,
     {
         type Input = Column<((<L::KeyContainer as BatchContainer>::Owned,<L::ValContainer as BatchContainer>::Owned),<L::TimeContainer as BatchContainer>::Owned,<L::DiffContainer as BatchContainer>::Owned)>;
-        type Time = <L::Target as Update>::Time;
+        type Time = layout::Time<L>;
         type Output = OrdKeyBatch<L>;
 
         fn with_capacity(keys: usize, _vals: usize, upds: usize) -> Self {

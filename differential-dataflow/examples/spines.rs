@@ -48,22 +48,6 @@ fn main() {
                     keys.join_core(&data, |_k, &(), &()| Option::<()>::None)
                         .probe_with(&mut probe);
                 },
-                "slc" => {
-
-                    use differential_dataflow::trace::implementations::ord_neu::{PreferredBatcher, PreferredBuilder, PreferredSpine};
-
-                    let data =
-                    data.map(|x| (x.clone().into_bytes(), x.into_bytes()))
-                        .arrange::<PreferredBatcher<[u8],[u8],_,_>, PreferredBuilder<[u8],[u8],_,_>, PreferredSpine<[u8],[u8],_,_>>()
-                        .reduce_abelian::<_, _, _, PreferredBuilder<[u8],(),_,_>, PreferredSpine<[u8],(),_,_>>("distinct", |_,_,output| output.push(((), 1)));
-                    let keys =
-                    keys.map(|x| (x.clone().into_bytes(), 7))
-                        .arrange::<PreferredBatcher<[u8],u8,_,_>, PreferredBuilder<[u8],u8,_,_>, PreferredSpine<[u8],u8,_,_>>()
-                        .reduce_abelian::<_, _, _, PreferredBuilder<[u8],(),_,_>,PreferredSpine<[u8],(),_,_>>("distinct", |_,_,output| output.push(((), 1)));
-
-                    keys.join_core(&data, |_k, &(), &()| Option::<()>::None)
-                        .probe_with(&mut probe);
-                },
                 _ => {
                     println!("unrecognized mode: {:?}", mode)
                 }

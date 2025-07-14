@@ -16,7 +16,7 @@ use crate::trace::implementations::spine_fueled::Spine;
 use crate::trace::implementations::merge_batcher::{MergeBatcher, VecMerger, ColMerger};
 use crate::trace::rc_blanket_impls::RcBuilder;
 
-use super::{Update, Layout, Vector, TStack, Preferred};
+use super::{Layout, Vector, TStack};
 
 pub use self::val_batch::{OrdValBatch, OrdValBuilder};
 pub use self::key_batch::{OrdKeyBatch, OrdKeyBuilder};
@@ -54,13 +54,6 @@ pub type ColKeySpine<K, T, R> = Spine<Rc<OrdKeyBatch<TStack<((K,()),T,R)>>>>;
 pub type ColKeyBatcher<K, T, R> = MergeBatcher<Vec<((K,()),T,R)>, ColumnationChunker<((K,()),T,R)>, ColMerger<(K,()),T,R>>;
 /// A builder for columnar storage
 pub type ColKeyBuilder<K, T, R> = RcBuilder<OrdKeyBuilder<TStack<((K,()),T,R)>, TimelyStack<((K,()),T,R)>>>;
-
-/// A trace implementation backed by columnar storage.
-pub type PreferredSpine<K, V, T, R> = Spine<Rc<OrdValBatch<Preferred<K,V,T,R>>>>;
-/// A batcher for columnar storage.
-pub type PreferredBatcher<K, V, T, R> = MergeBatcher<Vec<((<K as ToOwned>::Owned,<V as ToOwned>::Owned),T,R)>, ColumnationChunker<((<K as ToOwned>::Owned,<V as ToOwned>::Owned),T,R)>, ColMerger<(<K as ToOwned>::Owned,<V as ToOwned>::Owned),T,R>>;
-/// A builder for columnar storage.
-pub type PreferredBuilder<K, V, T, R> = RcBuilder<OrdValBuilder<Preferred<K,V,T,R>, TimelyStack<((<K as ToOwned>::Owned,<V as ToOwned>::Owned),T,R)>>>;
 
 // /// A trace implementation backed by columnar storage.
 // pub type ColKeySpine<K, T, R> = Spine<Rc<OrdKeyBatch<TStack<((K,()),T,R)>>>>;
@@ -284,9 +277,10 @@ pub mod val_batch {
 
     use crate::trace::{Batch, BatchReader, Builder, Cursor, Description, Merger};
     use crate::trace::implementations::{BatchContainer, BuilderInput};
+    use crate::trace::implementations::layout;
     use crate::IntoOwned;
 
-    use super::{Layout, Update, Vals, Upds, layers::UpdsBuilder};
+    use super::{Layout, Vals, Upds, layers::UpdsBuilder};
 
     /// An immutable collection of update tuples, from a contiguous interval of logical times.
     #[derive(Debug, Serialize, Deserialize)]
@@ -322,7 +316,7 @@ pub mod val_batch {
         /// The updates themselves.
         pub storage: OrdValStorage<L>,
         /// Description of the update times this layer represents.
-        pub description: Description<<L::Target as Update>::Time>,
+        pub description: Description<layout::Time<L>>,
         /// The number of updates reflected in the batch.
         ///
         /// We track this separately from `storage` because due to the singleton optimization,
@@ -334,9 +328,9 @@ pub mod val_batch {
     impl<L: Layout> BatchReader for OrdValBatch<L> {
         type Key<'a> = <L::KeyContainer as BatchContainer>::ReadItem<'a>;
         type Val<'a> = <L::ValContainer as BatchContainer>::ReadItem<'a>;
-        type Time = <L::Target as Update>::Time;
+        type Time = layout::Time<L>;
         type TimeGat<'a> = <L::TimeContainer as BatchContainer>::ReadItem<'a>;
-        type Diff = <L::Target as Update>::Diff;
+        type Diff = layout::Diff<L>;
         type DiffGat<'a> = <L::DiffContainer as BatchContainer>::ReadItem<'a>;
 
         type Cursor = OrdValCursor<L>;
@@ -352,13 +346,13 @@ pub mod val_batch {
             // Perhaps we should count such exceptions to the side, to provide a correct accounting.
             self.updates
         }
-        fn description(&self) -> &Description<<L::Target as Update>::Time> { &self.description }
+        fn description(&self) -> &Description<layout::Time<L>> { &self.description }
     }
 
     impl<L: Layout> Batch for OrdValBatch<L> {
         type Merger = OrdValMerger<L>;
 
-        fn begin_merge(&self, other: &Self, compaction_frontier: AntichainRef<<L::Target as Update>::Time>) -> Self::Merger {
+        fn begin_merge(&self, other: &Self, compaction_frontier: AntichainRef<layout::Time<L>>) -> Self::Merger {
             OrdValMerger::new(self, other, compaction_frontier)
         }
 
@@ -385,16 +379,16 @@ pub mod val_batch {
         /// result that we are currently assembling.
         result: OrdValStorage<L>,
         /// description
-        description: Description<<L::Target as Update>::Time>,
+        description: Description<layout::Time<L>>,
         /// Staging area to consolidate owned times and diffs, before sealing.
         staging: UpdsBuilder<L::TimeContainer, L::DiffContainer>,
     }
 
     impl<L: Layout> Merger<OrdValBatch<L>> for OrdValMerger<L>
     where
-        OrdValBatch<L>: Batch<Time=<L::Target as Update>::Time>,
+        OrdValBatch<L>: Batch<Time=layout::Time<L>>,
     {
-        fn new(batch1: &OrdValBatch<L>, batch2: &OrdValBatch<L>, compaction_frontier: AntichainRef<<L::Target as Update>::Time>) -> Self {
+        fn new(batch1: &OrdValBatch<L>, batch2: &OrdValBatch<L>, compaction_frontier: AntichainRef<layout::Time<L>>) -> Self {
 
             assert!(batch1.upper() == batch2.lower());
             use crate::lattice::Lattice;
@@ -586,7 +580,7 @@ pub mod val_batch {
                 // NB: Here is where we would need to look back if `lower == upper`.
                 let (time, diff) = source.upds.get_abs(i);
                 use crate::lattice::Lattice;
-                let mut new_time: <L::Target as Update>::Time = time.into_owned();
+                let mut new_time: layout::Time<L> = time.into_owned();
                 new_time.advance_by(self.description.since().borrow());
                 self.staging.push(new_time, diff.into_owned());
             }
@@ -607,9 +601,9 @@ pub mod val_batch {
 
         type Key<'a> = <L::KeyContainer as BatchContainer>::ReadItem<'a>;
         type Val<'a> = <L::ValContainer as BatchContainer>::ReadItem<'a>;
-        type Time = <L::Target as Update>::Time;
+        type Time = layout::Time<L>;
         type TimeGat<'a> = <L::TimeContainer as BatchContainer>::ReadItem<'a>;
-        type Diff = <L::Target as Update>::Diff;
+        type Diff = layout::Diff<L>;
         type DiffGat<'a> = <L::DiffContainer as BatchContainer>::ReadItem<'a>;
 
         type Storage = OrdValBatch<L>;
@@ -679,11 +673,11 @@ pub mod val_batch {
             KeyContainer: PushInto<CI::Key<'a>>,
             ValContainer: PushInto<CI::Val<'a>>,
         >,
-        CI: for<'a> BuilderInput<L::KeyContainer, L::ValContainer, Time=<L::Target as Update>::Time, Diff=<L::Target as Update>::Diff>,
+        CI: for<'a> BuilderInput<L::KeyContainer, L::ValContainer, Time=layout::Time<L>, Diff=layout::Diff<L>>,
     {
 
         type Input = CI;
-        type Time = <L::Target as Update>::Time;
+        type Time = layout::Time<L>;
         type Output = OrdValBatch<L>;
 
         fn with_capacity(keys: usize, vals: usize, upds: usize) -> Self {
@@ -764,9 +758,11 @@ pub mod key_batch {
 
     use crate::trace::{Batch, BatchReader, Builder, Cursor, Description, Merger};
     use crate::trace::implementations::{BatchContainer, BuilderInput};
+    use crate::trace::implementations::layout;
+
     use crate::IntoOwned;
 
-    use super::{Layout, Update, Upds, layers::UpdsBuilder};
+    use super::{Layout, Upds, layers::UpdsBuilder};
 
     /// An immutable collection of update tuples, from a contiguous interval of logical times.
     #[derive(Debug, Serialize, Deserialize)]
@@ -798,7 +794,7 @@ pub mod key_batch {
         /// The updates themselves.
         pub storage: OrdKeyStorage<L>,
         /// Description of the update times this layer represents.
-        pub description: Description<<L::Target as Update>::Time>,
+        pub description: Description<layout::Time<L>>,
         /// The number of updates reflected in the batch.
         ///
         /// We track this separately from `storage` because due to the singleton optimization,
@@ -811,9 +807,9 @@ pub mod key_batch {
 
         type Key<'a> = <L::KeyContainer as BatchContainer>::ReadItem<'a>;
         type Val<'a> = &'a ();
-        type Time = <L::Target as Update>::Time;
+        type Time = layout::Time<L>;
         type TimeGat<'a> = <L::TimeContainer as BatchContainer>::ReadItem<'a>;
-        type Diff = <L::Target as Update>::Diff;
+        type Diff = layout::Diff<L>;
         type DiffGat<'a> = <L::DiffContainer as BatchContainer>::ReadItem<'a>;
 
         type Cursor = OrdKeyCursor<L>;
@@ -829,13 +825,13 @@ pub mod key_batch {
             // Perhaps we should count such exceptions to the side, to provide a correct accounting.
             self.updates
         }
-        fn description(&self) -> &Description<<L::Target as Update>::Time> { &self.description }
+        fn description(&self) -> &Description<layout::Time<L>> { &self.description }
     }
 
     impl<L: Layout> Batch for OrdKeyBatch<L> {
         type Merger = OrdKeyMerger<L>;
 
-        fn begin_merge(&self, other: &Self, compaction_frontier: AntichainRef<<L::Target as Update>::Time>) -> Self::Merger {
+        fn begin_merge(&self, other: &Self, compaction_frontier: AntichainRef<layout::Time<L>>) -> Self::Merger {
             OrdKeyMerger::new(self, other, compaction_frontier)
         }
 
@@ -861,7 +857,7 @@ pub mod key_batch {
         /// result that we are currently assembling.
         result: OrdKeyStorage<L>,
         /// description
-        description: Description<<L::Target as Update>::Time>,
+        description: Description<layout::Time<L>>,
 
         /// Local stash of updates, to use for consolidation.
         staging: UpdsBuilder<L::TimeContainer, L::DiffContainer>,
@@ -869,9 +865,9 @@ pub mod key_batch {
 
     impl<L: Layout> Merger<OrdKeyBatch<L>> for OrdKeyMerger<L>
     where
-        OrdKeyBatch<L>: Batch<Time=<L::Target as Update>::Time>,
+        OrdKeyBatch<L>: Batch<Time=layout::Time<L>>,
     {
-        fn new(batch1: &OrdKeyBatch<L>, batch2: &OrdKeyBatch<L>, compaction_frontier: AntichainRef<<L::Target as Update>::Time>) -> Self {
+        fn new(batch1: &OrdKeyBatch<L>, batch2: &OrdKeyBatch<L>, compaction_frontier: AntichainRef<layout::Time<L>>) -> Self {
 
             assert!(batch1.upper() == batch2.lower());
             use crate::lattice::Lattice;
@@ -1002,9 +998,9 @@ pub mod key_batch {
     impl<L: Layout> Cursor for OrdKeyCursor<L> {
         type Key<'a> = <L::KeyContainer as BatchContainer>::ReadItem<'a>;
         type Val<'a> = &'a ();
-        type Time = <L::Target as Update>::Time;
+        type Time = layout::Time<L>;
         type TimeGat<'a> = <L::TimeContainer as BatchContainer>::ReadItem<'a>;
-        type Diff = <L::Target as Update>::Diff;
+        type Diff = layout::Diff<L>;
         type DiffGat<'a> = <L::DiffContainer as BatchContainer>::ReadItem<'a>;
 
         type Storage = OrdKeyBatch<L>;
@@ -1066,11 +1062,11 @@ pub mod key_batch {
     impl<L: Layout, CI> Builder for OrdKeyBuilder<L, CI>
     where
         L: for<'a> Layout<KeyContainer: PushInto<CI::Key<'a>>>,
-        CI: BuilderInput<L::KeyContainer, L::ValContainer, Time=<L::Target as Update>::Time, Diff=<L::Target as Update>::Diff>,
+        CI: BuilderInput<L::KeyContainer, L::ValContainer, Time=layout::Time<L>, Diff=layout::Diff<L>>,
     {
 
         type Input = CI;
-        type Time = <L::Target as Update>::Time;
+        type Time = layout::Time<L>;
         type Output = OrdKeyBatch<L>;
 
         fn with_capacity(keys: usize, _vals: usize, upds: usize) -> Self {
