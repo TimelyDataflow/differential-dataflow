@@ -41,6 +41,7 @@
 pub mod spine_fueled;
 
 pub mod merge_batcher;
+pub mod chainless_batcher;
 pub mod ord_neu;
 pub mod rhh;
 pub mod huffman_container;
