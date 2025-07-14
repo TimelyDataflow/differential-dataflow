@@ -22,6 +22,7 @@ where
     G: Scope<Timestamp=Tr::Time>,
     Tr: for<'a> TraceReader<
         Key<'a> : IntoOwned<'a, Owned = (K, V)>,
+        TimeGat<'a>: IntoOwned<'a, Owned = Tr::Time>,
         Diff : Semigroup<Tr::DiffGat<'a>>+Monoid+Multiply<Output = Tr::Diff>+ExchangeData,
     >+Clone+'static,
     K: Ord+Hash+Clone+Default + 'static,

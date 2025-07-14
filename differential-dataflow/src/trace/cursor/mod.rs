@@ -26,14 +26,14 @@ pub trait Cursor {
     /// Timestamps associated with updates
     type Time: Timestamp + Lattice + Ord + Clone;
     /// Borrowed form of timestamp.
-    type TimeGat<'a>: Copy + IntoOwned<'a, Owned = Self::Time>;
+    type TimeGat<'a>: Copy;
     /// Owned form of update difference.
     type Diff: Semigroup + 'static;
     /// Borrowed form of update difference.
     type DiffGat<'a> : Copy;
 
     /// An owned copy of a reference to a time.
-    #[inline(always)] fn owned_time(time: Self::TimeGat<'_>) -> Self::Time { time.into_owned() }
+    fn owned_time(time: Self::TimeGat<'_>) -> Self::Time;
     /// An owned copy of a reference to a diff.
     fn owned_diff(diff: Self::DiffGat<'_>) -> Self::Diff;
 
@@ -91,7 +91,7 @@ pub trait Cursor {
             while let Some(val) = self.get_val(storage) {
                 let mut kv_out = Vec::new();
                 self.map_times(storage, |ts, r| {
-                    kv_out.push((ts.into_owned(), Self::owned_diff(r)));
+                    kv_out.push((Self::owned_time(ts), Self::owned_diff(r)));
                 });
                 out.push(((key.into_owned(), val.into_owned()), kv_out));
                 self.step_val(storage);

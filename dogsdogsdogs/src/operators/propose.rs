@@ -24,6 +24,7 @@ where
     Tr: for<'a> TraceReader<
         Key<'a> : IntoOwned<'a, Owned = K>,
         Val<'a> : IntoOwned<'a, Owned = V>,
+        TimeGat<'a>: IntoOwned<'a, Owned = Tr::Time>,
         Diff: Monoid+Multiply<Output = Tr::Diff>+ExchangeData+Semigroup<Tr::DiffGat<'a>>,
     >+Clone+'static,
     K: Hashable + Default + Ord + 'static,
@@ -57,6 +58,7 @@ where
     Tr: for<'a> TraceReader<
         Key<'a> : IntoOwned<'a, Owned = K>,
         Val<'a> : IntoOwned<'a, Owned = V>,
+        TimeGat<'a>: IntoOwned<'a, Owned = Tr::Time>,
         Diff : Semigroup<Tr::DiffGat<'a>>+Monoid+Multiply<Output = Tr::Diff>+ExchangeData,
     >+Clone+'static,
     K: Hashable + Default + Ord + 'static,

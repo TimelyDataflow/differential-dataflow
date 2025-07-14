@@ -135,6 +135,7 @@ impl<C: Cursor> Cursor for CursorFrontier<C, C::Time> {
     type Diff = C::Diff;
     type DiffGat<'a> = C::DiffGat<'a>;
 
+    #[inline(always)] fn owned_time(time: Self::TimeGat<'_>) -> Self::Time { time.clone() }
     #[inline(always)] fn owned_diff(diff: Self::DiffGat<'_>) -> Self::Diff { C::owned_diff(diff) }
 
     type Storage = C::Storage;
@@ -152,10 +153,8 @@ impl<C: Cursor> Cursor for CursorFrontier<C, C::Time> {
     fn map_times<L: FnMut(Self::TimeGat<'_>, Self::DiffGat<'_>)>(&mut self, storage: &Self::Storage, mut logic: L) {
         let since = self.since.borrow();
         let until = self.until.borrow();
-        let mut temp: C::Time = <C::Time as timely::progress::Timestamp>::minimum();
         self.cursor.map_times(storage, |time, diff| {
-            use crate::IntoOwned;
-            time.clone_onto(&mut temp);
+            let mut temp = C::owned_time(time);
             temp.advance_by(since);
             if !until.less_equal(&temp) {
                 logic(&temp, diff);
@@ -200,6 +199,7 @@ impl<C: Cursor<Storage: BatchReader>> Cursor for BatchCursorFrontier<C> {
     type Diff = C::Diff;
     type DiffGat<'a> = C::DiffGat<'a>;
 
+    #[inline(always)] fn owned_time(time: Self::TimeGat<'_>) -> Self::Time { time.clone() }
     #[inline(always)] fn owned_diff(diff: Self::DiffGat<'_>) -> Self::Diff { C::owned_diff(diff) }
 
     type Storage = BatchFrontier<C::Storage>;
@@ -217,10 +217,8 @@ impl<C: Cursor<Storage: BatchReader>> Cursor for BatchCursorFrontier<C> {
     fn map_times<L: FnMut(Self::TimeGat<'_>, Self::DiffGat<'_>)>(&mut self, storage: &Self::Storage, mut logic: L) {
         let since = self.since.borrow();
         let until = self.until.borrow();
-        let mut temp: C::Time = <C::Time as timely::progress::Timestamp>::minimum();
         self.cursor.map_times(&storage.batch, |time, diff| {
-            use crate::IntoOwned;
-            time.clone_onto(&mut temp);
+            let mut temp = C::owned_time(time);
             temp.advance_by(since);
             if !until.less_equal(&temp) {
                 logic(&temp, diff);

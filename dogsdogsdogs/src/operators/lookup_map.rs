@@ -30,6 +30,7 @@ where
     G: Scope<Timestamp=Tr::Time>,
     Tr: for<'a> TraceReader<
         Key<'a>: IntoOwned<'a, Owned = K>,
+        TimeGat<'a>: IntoOwned<'a, Owned = Tr::Time>,
         Diff : Semigroup<Tr::DiffGat<'a>>+Monoid+ExchangeData,
     >+Clone+'static,
     K: Hashable + Ord + 'static,

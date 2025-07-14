@@ -664,6 +664,7 @@ mod val_batch {
         type Diff = layout::Diff<L>;
         type DiffGat<'a> = <L::DiffContainer as BatchContainer>::ReadItem<'a>;
 
+        #[inline(always)] fn owned_time(time: Self::TimeGat<'_>) -> Self::Time { L::TimeContainer::into_owned(time) }
         #[inline(always)] fn owned_diff(diff: Self::DiffGat<'_>) -> Self::Diff { L::DiffContainer::into_owned(diff) }
 
         type Storage = RhhValBatch<L>;

@@ -86,7 +86,7 @@ where
     K: Hashable + ExchangeData,
     V: ExchangeData,
     R: ExchangeData + Monoid,
-    Tr: for<'a> TraceReader<Key<'a> : IntoOwned<'a, Owned = K>>+Clone+'static,
+    Tr: for<'a> TraceReader<Key<'a> : IntoOwned<'a, Owned = K>, TimeGat<'a> : IntoOwned<'a, Owned = Tr::Time>>+Clone+'static,
     R: Mul<Tr::Diff, Output: Semigroup>,
     FF: Fn(&G::Timestamp, &mut Antichain<G::Timestamp>) + 'static,
     CF: Fn(Tr::TimeGat<'_>, &G::Timestamp) -> bool + 'static,
@@ -156,7 +156,7 @@ where
     K: Hashable + ExchangeData,
     V: ExchangeData,
     R: ExchangeData + Monoid,
-    Tr: for<'a> TraceReader<Key<'a> : IntoOwned<'a, Owned = K>>+Clone+'static,
+    Tr: for<'a> TraceReader<Key<'a> : IntoOwned<'a, Owned = K>, TimeGat<'a> : IntoOwned<'a, Owned = Tr::Time>>+Clone+'static,
     FF: Fn(&G::Timestamp, &mut Antichain<G::Timestamp>) + 'static,
     CF: Fn(Tr::TimeGat<'_>, &Tr::Time) -> bool + 'static,
     Y: Fn(std::time::Instant, usize) -> bool + 'static,
@@ -316,7 +316,7 @@ fn process_proposals<G, Tr, CF, Y, S, CB, K, V, R>(
 ) -> bool
 where
     G: Scope<Timestamp = Tr::Time>,
-    Tr: for<'a> TraceReader<Key<'a> : IntoOwned<'a, Owned = K>>,
+    Tr: for<'a> TraceReader<Key<'a> : IntoOwned<'a, Owned = K>, TimeGat<'a> : IntoOwned<'a, Owned = Tr::Time>>,
     CF: Fn(Tr::TimeGat<'_>, &Tr::Time) -> bool + 'static,
     Y: Fn(Instant, usize) -> bool + 'static,
     S: FnMut(&mut SessionFor<G, CB>, &K, &V, Tr::Val<'_>, &G::Timestamp, &R, &mut Vec<(G::Timestamp, Tr::Diff)>) + 'static,

@@ -17,7 +17,6 @@ use timely::progress::Timestamp;
 
 use crate::logging::Logger;
 use crate::difference::Semigroup;
-use crate::IntoOwned;
 use crate::lattice::Lattice;
 pub use self::cursor::Cursor;
 pub use self::description::Description;
@@ -54,7 +53,7 @@ pub trait TraceReader {
     /// Timestamps associated with updates
     type Time: Timestamp + Lattice + Ord + Clone;
     /// Borrowed form of timestamp.
-    type TimeGat<'a>: Copy + IntoOwned<'a, Owned = Self::Time>;
+    type TimeGat<'a>: Copy;
     /// Owned form of update difference.
     type Diff: Semigroup + 'static;
     /// Borrowed form of update difference.
@@ -234,7 +233,7 @@ pub trait BatchReader : Sized {
     /// Timestamps associated with updates
     type Time: Timestamp + Lattice + Ord + Clone;
     /// Borrowed form of timestamp.
-    type TimeGat<'a>: Copy + IntoOwned<'a, Owned = Self::Time>;
+    type TimeGat<'a>: Copy;
     /// Owned form of update difference.
     type Diff: Semigroup + 'static;
     /// Borrowed form of update difference.
@@ -401,6 +400,7 @@ pub mod rc_blanket_impls {
         type Diff = C::Diff;
         type DiffGat<'a> = C::DiffGat<'a>;
 
+    #[inline(always)] fn owned_time(time: Self::TimeGat<'_>) -> Self::Time { C::owned_time(time) }
         #[inline(always)] fn owned_diff(diff: Self::DiffGat<'_>) -> Self::Diff { C::owned_diff(diff) }
 
         type Storage = Rc<C::Storage>;
