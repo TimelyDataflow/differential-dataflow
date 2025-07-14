@@ -94,8 +94,6 @@ mod val_batch {
     use crate::trace::implementations::{BatchContainer, BuilderInput};
     use crate::trace::implementations::layout;
 
-    use crate::IntoOwned;
-
     use super::{Layout, HashOrdered};
 
     /// Update tuples organized as a Robin Hood Hash map, ordered by `(hash(Key), Key, Val, Time)`.
@@ -792,7 +790,7 @@ mod val_batch {
         layout::Key<L>: Default + HashOrdered,
         CI: for<'a> BuilderInput<L::KeyContainer, L::ValContainer, Key<'a> = layout::Key<L>, Time=layout::Time<L>, Diff=layout::Diff<L>>,
         for<'a> L::ValContainer: PushInto<CI::Val<'a>>,
-        for<'a> <L::KeyContainer as BatchContainer>::ReadItem<'a>: HashOrdered + IntoOwned<'a, Owned = layout::Key<L>>,
+        for<'a> <L::KeyContainer as BatchContainer>::ReadItem<'a>: HashOrdered,
     {
         type Input = CI;
         type Time = layout::Time<L>;

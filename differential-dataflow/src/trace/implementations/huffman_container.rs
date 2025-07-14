@@ -162,7 +162,6 @@ impl<B: Ord+Clone> Default for HuffmanContainer<B> {
 
 mod wrapper {
 
-    use crate::IntoOwned;
     use super::Encoded;
 
     pub struct Wrapped<'a, B: Ord> {
@@ -213,25 +212,6 @@ mod wrapper {
     impl<'a, B: Ord> Ord for Wrapped<'a, B> {
         fn cmp(&self, other: &Self) -> Ordering {
             self.partial_cmp(other).unwrap()
-        }
-    }
-    impl<'a, B: Ord+Clone> IntoOwned<'a> for Wrapped<'a, B> {
-        type Owned = Vec<B>;
-        fn into_owned(self) -> Self::Owned {
-            match self.decode() {
-                Ok(decode) => decode.cloned().collect(),
-                Err(bytes) => bytes.to_vec(),
-            }
-        }
-        fn clone_onto(self, other: &mut Self::Owned) {
-            other.clear();
-            match self.decode() {
-                Ok(decode) => other.extend(decode.cloned()),
-                Err(bytes) => other.extend_from_slice(bytes),
-            }
-        }
-        fn borrow_as(owned: &'a Self::Owned) -> Self {
-            Self { inner: Err(&owned[..]) }
         }
     }
 }

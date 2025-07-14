@@ -93,10 +93,7 @@ where
 
 /// A type with opinions on how updates should be laid out.
 pub trait Layout {
-    // /// The represented update.
-    // type Target: Update + ?Sized;
     /// Container for update keys.
-    // NB: The `PushInto` constraint is only required by `rhh.rs` to push default values.
     type KeyContainer: BatchContainer;
     /// Container for update vals.
     type ValContainer: BatchContainer;
