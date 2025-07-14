@@ -236,9 +236,8 @@ pub mod layers {
                 // we push nothing and report an unincremented offset to encode this case.
                 let time_diff = upds.times.last().zip(upds.diffs.last());
                 let last_eq = self.stash.last().zip(time_diff).map(|((t1, d1), (t2, d2))| {
-                    use crate::IntoOwned;
-                    let t1 = <<T as BatchContainer>::ReadItem<'_> as IntoOwned>::borrow_as(t1);
-                    let d1 = <<D as BatchContainer>::ReadItem<'_> as IntoOwned>::borrow_as(d1);
+                    let t1 = T::borrow_as(t1);
+                    let d1 = D::borrow_as(d1);
                     t1.eq(&t2) && d1.eq(&d2)
                 });
                 if self.stash.len() == 1 && last_eq.unwrap_or(false) {
@@ -278,7 +277,6 @@ pub mod val_batch {
     use crate::trace::{Batch, BatchReader, Builder, Cursor, Description, Merger};
     use crate::trace::implementations::{BatchContainer, BuilderInput};
     use crate::trace::implementations::layout;
-    use crate::IntoOwned;
 
     use super::{Layout, Vals, Upds, layers::UpdsBuilder};
 
@@ -580,9 +578,9 @@ pub mod val_batch {
                 // NB: Here is where we would need to look back if `lower == upper`.
                 let (time, diff) = source.upds.get_abs(i);
                 use crate::lattice::Lattice;
-                let mut new_time: layout::Time<L> = time.into_owned();
+                let mut new_time: layout::Time<L> = L::TimeContainer::into_owned(time);
                 new_time.advance_by(self.description.since().borrow());
-                self.staging.push(new_time, diff.into_owned());
+                self.staging.push(new_time, L::DiffContainer::into_owned(diff));
             }
         }
     }
@@ -759,8 +757,6 @@ pub mod key_batch {
     use crate::trace::{Batch, BatchReader, Builder, Cursor, Description, Merger};
     use crate::trace::implementations::{BatchContainer, BuilderInput};
     use crate::trace::implementations::layout;
-
-    use crate::IntoOwned;
 
     use super::{Layout, Upds, layers::UpdsBuilder};
 
@@ -978,9 +974,9 @@ pub mod key_batch {
                 // NB: Here is where we would need to look back if `lower == upper`.
                 let (time, diff) = source.upds.get_abs(i);
                 use crate::lattice::Lattice;
-                let mut new_time = time.into_owned();
+                let mut new_time = L::TimeContainer::into_owned(time);
                 new_time.advance_by(self.description.since().borrow());
-                self.staging.push(new_time, diff.into_owned());
+                self.staging.push(new_time, L::DiffContainer::into_owned(diff));
             }
         }
     }

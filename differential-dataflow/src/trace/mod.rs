@@ -60,6 +60,11 @@ pub trait TraceReader {
     /// Borrowed form of update difference.
     type DiffGat<'a> : Copy + IntoOwned<'a, Owned = Self::Diff>;
 
+    /// An owned copy of a reference to a time.
+    #[inline(always)] fn owned_time(time: Self::TimeGat<'_>) -> Self::Time { Self::Cursor::owned_time(time) }
+    /// An owned copy of a reference to a diff.
+    #[inline(always)] fn owned_diff(diff: Self::DiffGat<'_>) -> Self::Diff { Self::Cursor::owned_diff(diff) }
+
     /// The type of an immutable collection of updates.
     type Batch: for<'a> BatchReader<Key<'a> = Self::Key<'a>, Val<'a> = Self::Val<'a>, Time = Self::Time, TimeGat<'a> = Self::TimeGat<'a>, Diff = Self::Diff, DiffGat<'a> = Self::DiffGat<'a>>+Clone+'static;
 
@@ -194,7 +199,7 @@ pub trait Trace : TraceReader<Batch: Batch> {
     /// Sets the logic for exertion in the absence of updates.
     ///
     /// The function receives an iterator over batch levels, from large to small, as triples `(level, count, length)`,
-    /// indicating the level, the number of batches, and their total length in updates. It should return a number of 
+    /// indicating the level, the number of batches, and their total length in updates. It should return a number of
     /// updates to perform, or `None` if no work is required.
     fn set_exert_logic(&mut self, logic: ExertionLogic);
 
@@ -234,6 +239,11 @@ pub trait BatchReader : Sized {
     type Diff: Semigroup + 'static;
     /// Borrowed form of update difference.
     type DiffGat<'a> : Copy + IntoOwned<'a, Owned = Self::Diff>;
+
+    /// An owned copy of a reference to a time.
+    #[inline(always)] fn owned_time(time: Self::TimeGat<'_>) -> Self::Time { Self::Cursor::owned_time(time) }
+    /// An owned copy of a reference to a diff.
+    #[inline(always)] fn owned_diff(diff: Self::DiffGat<'_>) -> Self::Diff { Self::Cursor::owned_diff(diff) }
 
     /// The type used to enumerate the batch's contents.
     type Cursor: for<'a> Cursor<Storage=Self, Key<'a> = Self::Key<'a>, Val<'a> = Self::Val<'a>, Time = Self::Time, TimeGat<'a> = Self::TimeGat<'a>, Diff = Self::Diff, DiffGat<'a> = Self::DiffGat<'a>>;

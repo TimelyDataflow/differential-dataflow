@@ -188,9 +188,8 @@ where
 
     #[inline]
     fn map_times<L: FnMut(&TInner, Self::DiffGat<'_>)>(&mut self, storage: &Self::Storage, mut logic: L) {
-        use crate::IntoOwned;
         self.cursor.map_times(storage, |time, diff| {
-            logic(&TInner::to_inner(time.into_owned()), diff)
+            logic(&TInner::to_inner(C::owned_time(time)), diff)
         })
     }
 
@@ -245,9 +244,8 @@ where
 
     #[inline]
     fn map_times<L: FnMut(&TInner, Self::DiffGat<'_>)>(&mut self, storage: &Self::Storage, mut logic: L) {
-        use crate::IntoOwned;
         self.cursor.map_times(&storage.batch, |time, diff| {
-            logic(&TInner::to_inner(time.into_owned()), diff)
+            logic(&TInner::to_inner(C::owned_time(time)), diff)
         })
     }
 

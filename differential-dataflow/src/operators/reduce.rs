@@ -739,7 +739,7 @@ mod history_replay {
             // loaded times by performing the lattice `join` with this value.
 
             // Load the batch contents.
-            let mut batch_replay = self.batch_history.replay_key(batch_cursor, batch_storage, key, |time| time.into_owned());
+            let mut batch_replay = self.batch_history.replay_key(batch_cursor, batch_storage, key, |time| C3::owned_time(time));
 
             // We determine the meet of times we must reconsider (those from `batch` and `times`). This meet
             // can be used to advance other historical times, which may consolidate their representation. As
@@ -776,23 +776,23 @@ mod history_replay {
             // Load the input and output histories.
             let mut input_replay = if let Some(meet) = meet.as_ref() {
                 self.input_history.replay_key(source_cursor, source_storage, key, |time| {
-                    let mut time = time.into_owned();
+                    let mut time = C1::owned_time(time);
                     time.join_assign(meet);
                     time
                 })
             }
             else {
-                self.input_history.replay_key(source_cursor, source_storage, key, |time| time.into_owned())
+                self.input_history.replay_key(source_cursor, source_storage, key, |time| C1::owned_time(time))
             };
             let mut output_replay = if let Some(meet) = meet.as_ref() {
                 self.output_history.replay_key(output_cursor, output_storage, key, |time| {
-                    let mut time = time.into_owned();
+                    let mut time = C2::owned_time(time);
                     time.join_assign(meet);
                     time
                 })
             }
             else {
-                self.output_history.replay_key(output_cursor, output_storage, key, |time| time.into_owned())
+                self.output_history.replay_key(output_cursor, output_storage, key, |time| C2::owned_time(time))
             };
 
             self.synth_times.clear();

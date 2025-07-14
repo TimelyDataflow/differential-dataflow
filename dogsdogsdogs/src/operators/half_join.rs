@@ -271,7 +271,7 @@ where
 
             // drop fully processed capabilities.
             stash.retain(|_,proposals| !proposals.is_empty());
-            
+
             for (capability, proposals) in stash_additions.into_iter() {
                 stash.entry(capability).or_insert(Vec::new()).extend(proposals);
             }

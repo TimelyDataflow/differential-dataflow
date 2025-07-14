@@ -268,9 +268,11 @@ impl BatchContainer for OffsetList {
     type Owned = usize;
     type ReadItem<'a> = usize;
 
+    #[inline(always)]
     fn into_owned<'a>(item: Self::ReadItem<'a>) -> Self::Owned { item }
+    #[inline(always)]
     fn borrow_as<'a>(owned: &'a Self::Owned) -> Self::ReadItem<'a> { *owned }
-
+    #[inline(always)]
     fn reborrow<'b, 'a: 'b>(item: Self::ReadItem<'a>) -> Self::ReadItem<'b> { item }
 
     fn with_capacity(size: usize) -> Self {
@@ -446,6 +448,7 @@ pub mod containers {
         #[must_use]
         fn into_owned<'a>(item: Self::ReadItem<'a>) -> Self::Owned;
         /// Clones `self` onto an existing instance of the owned type.
+        #[inline(always)]
         fn clone_onto<'a>(item: Self::ReadItem<'a>, other: &mut Self::Owned) {
             *other = Self::into_owned(item);
         }
@@ -542,9 +545,9 @@ pub mod containers {
         type Owned = T;
         type ReadItem<'a> = &'a T;
 
-        fn into_owned<'a>(item: Self::ReadItem<'a>) -> Self::Owned { item.clone() }
-        fn clone_onto<'a>(item: Self::ReadItem<'a>, other: &mut Self::Owned) { other.clone_from(item); }
-        fn borrow_as<'a>(owned: &'a Self::Owned) -> Self::ReadItem<'a> { owned }
+        #[inline(always)] fn into_owned<'a>(item: Self::ReadItem<'a>) -> Self::Owned { item.clone() }
+        #[inline(always)] fn clone_onto<'a>(item: Self::ReadItem<'a>, other: &mut Self::Owned) { other.clone_from(item); }
+        #[inline(always)] fn borrow_as<'a>(owned: &'a Self::Owned) -> Self::ReadItem<'a> { owned }
 
         fn reborrow<'b, 'a: 'b>(item: Self::ReadItem<'a>) -> Self::ReadItem<'b> { item }
 
@@ -571,9 +574,9 @@ pub mod containers {
         type Owned = T;
         type ReadItem<'a> = &'a T;
 
-        fn into_owned<'a>(item: Self::ReadItem<'a>) -> Self::Owned { item.clone() }
-        fn clone_onto<'a>(item: Self::ReadItem<'a>, other: &mut Self::Owned) { other.clone_from(item); }
-        fn borrow_as<'a>(owned: &'a Self::Owned) -> Self::ReadItem<'a> { owned }
+        #[inline(always)] fn into_owned<'a>(item: Self::ReadItem<'a>) -> Self::Owned { item.clone() }
+        #[inline(always)] fn clone_onto<'a>(item: Self::ReadItem<'a>, other: &mut Self::Owned) { other.clone_from(item); }
+        #[inline(always)] fn borrow_as<'a>(owned: &'a Self::Owned) -> Self::ReadItem<'a> { owned }
 
         fn reborrow<'b, 'a: 'b>(item: Self::ReadItem<'a>) -> Self::ReadItem<'b> { item }
 
@@ -635,9 +638,9 @@ pub mod containers {
         type Owned = Vec<B>;
         type ReadItem<'a> = &'a [B];
 
-        fn into_owned<'a>(item: Self::ReadItem<'a>) -> Self::Owned { item.to_vec() }
-        fn clone_onto<'a>(item: Self::ReadItem<'a>, other: &mut Self::Owned) { other.clone_from_slice(item); }
-        fn borrow_as<'a>(owned: &'a Self::Owned) -> Self::ReadItem<'a> { &owned[..] }
+        #[inline(always)] fn into_owned<'a>(item: Self::ReadItem<'a>) -> Self::Owned { item.to_vec() }
+        #[inline(always)] fn clone_onto<'a>(item: Self::ReadItem<'a>, other: &mut Self::Owned) { other.clone_from_slice(item); }
+        #[inline(always)] fn borrow_as<'a>(owned: &'a Self::Owned) -> Self::ReadItem<'a> { &owned[..] }
 
         fn reborrow<'b, 'a: 'b>(item: Self::ReadItem<'a>) -> Self::ReadItem<'b> { item }
 

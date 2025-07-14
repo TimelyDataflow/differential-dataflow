@@ -32,6 +32,11 @@ pub trait Cursor {
     /// Borrowed form of update difference.
     type DiffGat<'a> : Copy + IntoOwned<'a, Owned = Self::Diff>;
 
+    /// An owned copy of a reference to a time.
+    #[inline(always)] fn owned_time(time: Self::TimeGat<'_>) -> Self::Time { time.into_owned() }
+    /// An owned copy of a reference to a diff.
+    #[inline(always)] fn owned_diff(diff: Self::DiffGat<'_>) -> Self::Diff { diff.into_owned() }
+
     /// Storage required by the cursor.
     type Storage;
 
@@ -75,7 +80,7 @@ pub trait Cursor {
 
     /// Rewinds the cursor and outputs its contents to a Vec
     fn to_vec<K, V>(&mut self, storage: &Self::Storage) -> Vec<((K, V), Vec<(Self::Time, Self::Diff)>)>
-    where 
+    where
         for<'a> Self::Key<'a> : IntoOwned<'a, Owned = K>,
         for<'a> Self::Val<'a> : IntoOwned<'a, Owned = V>,
     {

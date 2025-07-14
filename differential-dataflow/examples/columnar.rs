@@ -618,8 +618,6 @@ pub mod dd_builder {
         // These two constraints seem .. like we could potentially replace by `Columnar::Ref<'a>`.
         for<'a> L::KeyContainer: PushInto<&'a <L::KeyContainer as BatchContainer>::Owned>,
         for<'a> L::ValContainer: PushInto<&'a <L::ValContainer as BatchContainer>::Owned>,
-        for<'a> <L::TimeContainer as BatchContainer>::ReadItem<'a> : IntoOwned<'a, Owned = layout::Time<L>>,
-        for<'a> <L::DiffContainer as BatchContainer>::ReadItem<'a> : IntoOwned<'a, Owned = layout::Diff<L>>,
     {
         type Input = Column<((<L::KeyContainer as BatchContainer>::Owned,<L::ValContainer as BatchContainer>::Owned),<L::TimeContainer as BatchContainer>::Owned,<L::DiffContainer as BatchContainer>::Owned)>;
         type Time = layout::Time<L>;
@@ -725,8 +723,6 @@ pub mod dd_builder {
     // These two constraints seem .. like we could potentially replace by `Columnar::Ref<'a>`.
         for<'a> L::KeyContainer: PushInto<&'a <L::KeyContainer as BatchContainer>::Owned>,
         for<'a> L::ValContainer: PushInto<&'a <L::ValContainer as BatchContainer>::Owned>,
-        for<'a> <L::TimeContainer as BatchContainer>::ReadItem<'a> : IntoOwned<'a, Owned = layout::Time<L>>,
-        for<'a> <L::DiffContainer as BatchContainer>::ReadItem<'a> : IntoOwned<'a, Owned = layout::Diff<L>>,
     {
         type Input = Column<((<L::KeyContainer as BatchContainer>::Owned,<L::ValContainer as BatchContainer>::Owned),<L::TimeContainer as BatchContainer>::Owned,<L::DiffContainer as BatchContainer>::Owned)>;
         type Time = layout::Time<L>;
