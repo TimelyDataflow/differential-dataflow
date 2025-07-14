@@ -98,9 +98,9 @@ pub trait Layout {
     type Target: Update + ?Sized;
     /// Container for update keys.
     // NB: The `PushInto` constraint is only required by `rhh.rs` to push default values.
-    type KeyContainer: BatchContainer + PushInto<<Self::Target as Update>::Key>;
+    type KeyContainer: BatchContainer<Owned = <Self::Target as Update>::Key> + PushInto<<Self::Target as Update>::Key>;
     /// Container for update vals.
-    type ValContainer: BatchContainer;
+    type ValContainer: BatchContainer<Owned = <Self::Target as Update>::Val>;
     /// Container for times.
     type TimeContainer: BatchContainer<Owned = <Self::Target as Update>::Time> + PushInto<<Self::Target as Update>::Time>;
     /// Container for diffs.
@@ -150,7 +150,7 @@ where
 /// Examples include types that implement `Clone` who prefer
 pub trait PreferredContainer : ToOwned {
     /// The preferred container for the type.
-    type Container: BatchContainer + PushInto<Self::Owned>;
+    type Container: BatchContainer<Owned = Self::Owned> + PushInto<Self::Owned>;
 }
 
 impl<T: Ord + Clone + 'static> PreferredContainer for T {
