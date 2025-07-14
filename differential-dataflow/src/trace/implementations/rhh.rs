@@ -191,15 +191,15 @@ mod val_batch {
             while self.keys.len() < desired {
                 // We insert a default (dummy) key and repeat the offset to indicate this.
                 let current_offset = self.keys_offs.index(self.keys.len());
-                self.keys.push(<layout::Key<L> as Default>::default());
-                self.keys_offs.push(current_offset);
+                self.keys.push_own(<layout::Key<L> as Default>::default());
+                self.keys_offs.push_ref(current_offset);
             }
 
             // Now we insert the key. Even if it is no longer the desired location because of contention.
             // If an offset has been supplied we insert it, and otherwise leave it for future determination.
-            self.keys.push(key);
+            self.keys.push_ref(key);
             if let Some(offset) = offset {
-                self.keys_offs.push(offset);
+                self.keys_offs.push_ref(offset);
             }
             self.key_count += 1;
         }
@@ -394,9 +394,9 @@ mod val_batch {
 
             // Mark explicit types because type inference fails to resolve it.
             let keys_offs: &mut L::OffsetContainer = &mut storage.keys_offs;
-            keys_offs.push(0);
+            keys_offs.push_ref(0);
             let vals_offs: &mut L::OffsetContainer = &mut storage.vals_offs;
-            vals_offs.push(0);
+            vals_offs.push_ref(0);
 
             RhhValMerger {
                 key_cursor1: 0,
@@ -471,8 +471,8 @@ mod val_batch {
             while lower < upper {
                 self.stash_updates_for_val(source, lower);
                 if let Some(off) = self.consolidate_updates() {
-                    self.result.vals_offs.push(off);
-                    self.result.vals.push(source.vals.index(lower));
+                    self.result.vals_offs.push_ref(off);
+                    self.result.vals.push_ref(source.vals.index(lower));
                 }
                 lower += 1;
             }
@@ -532,8 +532,8 @@ mod val_batch {
                         // Extend stash by updates, with logical compaction applied.
                         self.stash_updates_for_val(source1, lower1);
                         if let Some(off) = self.consolidate_updates() {
-                            self.result.vals_offs.push(off);
-                            self.result.vals.push(source1.vals.index(lower1));
+                            self.result.vals_offs.push_ref(off);
+                            self.result.vals.push_ref(source1.vals.index(lower1));
                         }
                         lower1 += 1;
                     },
@@ -541,8 +541,8 @@ mod val_batch {
                         self.stash_updates_for_val(source1, lower1);
                         self.stash_updates_for_val(source2, lower2);
                         if let Some(off) = self.consolidate_updates() {
-                            self.result.vals_offs.push(off);
-                            self.result.vals.push(source1.vals.index(lower1));
+                            self.result.vals_offs.push_ref(off);
+                            self.result.vals.push_ref(source1.vals.index(lower1));
                         }
                         lower1 += 1;
                         lower2 += 1;
@@ -551,8 +551,8 @@ mod val_batch {
                         // Extend stash by updates, with logical compaction applied.
                         self.stash_updates_for_val(source2, lower2);
                         if let Some(off) = self.consolidate_updates() {
-                            self.result.vals_offs.push(off);
-                            self.result.vals.push(source2.vals.index(lower2));
+                            self.result.vals_offs.push_ref(off);
+                            self.result.vals.push_ref(source2.vals.index(lower2));
                         }
                         lower2 += 1;
                     },
@@ -562,16 +562,16 @@ mod val_batch {
             while lower1 < upper1 {
                 self.stash_updates_for_val(source1, lower1);
                 if let Some(off) = self.consolidate_updates() {
-                    self.result.vals_offs.push(off);
-                    self.result.vals.push(source1.vals.index(lower1));
+                    self.result.vals_offs.push_ref(off);
+                    self.result.vals.push_ref(source1.vals.index(lower1));
                 }
                 lower1 += 1;
             }
             while lower2 < upper2 {
                 self.stash_updates_for_val(source2, lower2);
                 if let Some(off) = self.consolidate_updates() {
-                    self.result.vals_offs.push(off);
-                    self.result.vals.push(source2.vals.index(lower2));
+                    self.result.vals_offs.push_ref(off);
+                    self.result.vals.push_ref(source2.vals.index(lower2));
                 }
                 lower2 += 1;
             }
@@ -619,8 +619,8 @@ mod val_batch {
                 else {
                     // Conventional; move `update_stash` into `updates`.
                     for (time, diff) in self.update_stash.drain(..) {
-                        self.result.times.push(time);
-                        self.result.diffs.push(diff);
+                        self.result.times.push_own(time);
+                        self.result.diffs.push_own(diff);
                     }
                 }
                 Some(self.result.times.len())
@@ -776,11 +776,11 @@ mod val_batch {
             else {
                 // If we have pushed a single element, we need to copy it out to meet this one.
                 if let Some((time, diff)) = self.singleton.take() {
-                    self.result.times.push(time);
-                    self.result.diffs.push(diff);
+                    self.result.times.push_own(time);
+                    self.result.diffs.push_own(diff);
                 }
-                self.result.times.push(time);
-                self.result.diffs.push(diff);
+                self.result.times.push_own(time);
+                self.result.diffs.push_own(diff);
             }
         }
     }
@@ -836,18 +836,18 @@ mod val_batch {
                         self.push_update(time, diff);
                     } else {
                         // New value; complete representation of prior value.
-                        self.result.vals_offs.push(self.result.times.len());
+                        self.result.vals_offs.push_ref(self.result.times.len());
                         if self.singleton.take().is_some() { self.singletons += 1; }
                         self.push_update(time, diff);
-                        self.result.vals.push(val);
+                        self.result.vals.push_into(val);
                     }
                 } else {
                     // New key; complete representation of prior key.
-                    self.result.vals_offs.push(self.result.times.len());
+                    self.result.vals_offs.push_ref(self.result.times.len());
                     if self.singleton.take().is_some() { self.singletons += 1; }
-                    self.result.keys_offs.push(self.result.vals.len());
+                    self.result.keys_offs.push_ref(self.result.vals.len());
                     self.push_update(time, diff);
-                    self.result.vals.push(val);
+                    self.result.vals.push_into(val);
                     // Insert the key, but with no specified offset.
                     self.result.insert_key(L::KeyContainer::borrow_as(&key), None);
                 }
@@ -857,10 +857,10 @@ mod val_batch {
         #[inline(never)]
         fn done(mut self, description: Description<Self::Time>) -> RhhValBatch<L> {
             // Record the final offsets
-            self.result.vals_offs.push(self.result.times.len());
+            self.result.vals_offs.push_ref(self.result.times.len());
             // Remove any pending singleton, and if it was set increment our count.
             if self.singleton.take().is_some() { self.singletons += 1; }
-            self.result.keys_offs.push(self.result.vals.len());
+            self.result.keys_offs.push_ref(self.result.vals.len());
             RhhValBatch {
                 updates: self.result.times.len() + self.singletons,
                 storage: self.result,

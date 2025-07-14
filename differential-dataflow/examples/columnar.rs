@@ -653,8 +653,8 @@ pub mod dd_builder {
 
                 // Pre-load the first update.
                 if self.result.keys.is_empty() {
-                    self.result.vals.vals.push(&val);
-                    self.result.keys.push(&key);
+                    self.result.vals.vals.push_into(&val);
+                    self.result.keys.push_into(&key);
                     self.staging.push(time, diff);
                 }
                 // Perhaps this is a continuation of an already received key.
@@ -666,15 +666,15 @@ pub mod dd_builder {
                         // New value; complete representation of prior value.
                         self.staging.seal(&mut self.result.upds);
                         self.staging.push(time, diff);
-                        self.result.vals.vals.push(&val);
+                        self.result.vals.vals.push_into(&val);
                     }
                 } else {
                     // New key; complete representation of prior key.
                     self.staging.seal(&mut self.result.upds);
                     self.staging.push(time, diff);
-                    self.result.vals.offs.push(self.result.vals.len());
-                    self.result.vals.vals.push(&val);
-                    self.result.keys.push(&key);
+                    self.result.vals.offs.push_ref(self.result.vals.len());
+                    self.result.vals.vals.push_into(&val);
+                    self.result.keys.push_into(&key);
                 }
             }
         }
@@ -682,7 +682,7 @@ pub mod dd_builder {
         #[inline(never)]
         fn done(mut self, description: Description<Self::Time>) -> OrdValBatch<L> {
             self.staging.seal(&mut self.result.upds);
-            self.result.vals.offs.push(self.result.vals.len());
+            self.result.vals.offs.push_ref(self.result.vals.len());
             OrdValBatch {
                 updates: self.staging.total(),
                 storage: self.result,
@@ -756,7 +756,7 @@ pub mod dd_builder {
 
                 // Pre-load the first update.
                 if self.result.keys.is_empty() {
-                    self.result.keys.push(&key);
+                    self.result.keys.push_into(&key);
                     self.staging.push(time, diff);
                 }
                 // Perhaps this is a continuation of an already received key.
@@ -766,7 +766,7 @@ pub mod dd_builder {
                     // New key; complete representation of prior key.
                     self.staging.seal(&mut self.result.upds);
                     self.staging.push(time, diff);
-                    self.result.keys.push(&key);
+                    self.result.keys.push_into(&key);
                 }
             }
         }

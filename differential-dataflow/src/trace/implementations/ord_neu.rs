@@ -111,7 +111,7 @@ pub mod layers {
         /// Allocates with capacities for a number of lists and values.
         pub fn with_capacity(o_size: usize, v_size: usize) -> Self {
             let mut offs = <O as BatchContainer>::with_capacity(o_size);
-            offs.push(0);
+            offs.push_ref(0);
             Self {
                 offs,
                 vals: <V as BatchContainer>::with_capacity(v_size),
@@ -120,7 +120,7 @@ pub mod layers {
         /// Allocates with enough capacity to contain two inputs.
         pub fn merge_capacity(this: &Self, that: &Self) -> Self {
             let mut offs = <O as BatchContainer>::with_capacity(this.offs.len() + that.offs.len());
-            offs.push(0);
+            offs.push_ref(0);
             Self {
                 offs,
                 vals: <V as BatchContainer>::merge_capacity(&this.vals, &that.vals),
@@ -177,7 +177,7 @@ pub mod layers {
         /// Allocates with capacities for a number of lists and values.
         pub fn with_capacity(o_size: usize, u_size: usize) -> Self {
             let mut offs = <O as BatchContainer>::with_capacity(o_size);
-            offs.push(0);
+            offs.push_ref(0);
             Self {
                 offs,
                 times: <T as BatchContainer>::with_capacity(u_size),
@@ -187,7 +187,7 @@ pub mod layers {
         /// Allocates with enough capacity to contain two inputs.
         pub fn merge_capacity(this: &Self, that: &Self) -> Self {
             let mut offs = <O as BatchContainer>::with_capacity(this.offs.len() + that.offs.len());
-            offs.push(0);
+            offs.push_ref(0);
             Self {
                 offs,
                 times: <T as BatchContainer>::merge_capacity(&this.times, &that.times),
@@ -214,11 +214,10 @@ pub mod layers {
     }
 
 
-    use timely::container::PushInto;
     impl<T, D> UpdsBuilder<T, D>
     where
-        T: BatchContainer<Owned: Ord> + PushInto<T::Owned>,
-        D: BatchContainer<Owned: crate::difference::Semigroup> + PushInto<D::Owned>,
+        T: BatchContainer<Owned: Ord>,
+        D: BatchContainer<Owned: crate::difference::Semigroup>,
     {
         /// Stages one update, but does not seal the set of updates.
         pub fn push(&mut self, time: T::Owned, diff: D::Owned) {
@@ -244,16 +243,16 @@ pub mod layers {
                     // Just clear out the stash, as we won't drain it here.
                     self.total += 1;
                     self.stash.clear();
-                    upds.offs.push(upds.times.len());
+                    upds.offs.push_ref(upds.times.len());
                 }
                 else {
                     // Conventional; move `stash` into `updates`.
                     self.total += self.stash.len();
                     for (time, diff) in self.stash.drain(..) {
-                        upds.times.push(time);
-                        upds.diffs.push(diff);
+                        upds.times.push_own(time);
+                        upds.diffs.push_own(diff);
                     }
-                    upds.offs.push(upds.times.len());
+                    upds.offs.push_ref(upds.times.len());
                 }
                 true
             } else {
@@ -463,15 +462,15 @@ pub mod val_batch {
             while lower < upper {
                 self.stash_updates_for_val(source, lower);
                 if self.staging.seal(&mut self.result.upds) {
-                    self.result.vals.vals.push(source.vals.get_abs(lower));
+                    self.result.vals.vals.push_ref(source.vals.get_abs(lower));
                 }
                 lower += 1;
             }
 
             // If we have pushed any values, copy the key as well.
             if self.result.vals.vals.len() > init_vals {
-                self.result.keys.push(source.keys.index(cursor));
-                self.result.vals.offs.push(self.result.vals.vals.len());
+                self.result.keys.push_ref(source.keys.index(cursor));
+                self.result.vals.offs.push_ref(self.result.vals.vals.len());
             }
         }
         /// Merge the next key in each of `source1` and `source2` into `self`, updating the appropriate cursors.
@@ -490,8 +489,8 @@ pub mod val_batch {
                     let (lower1, upper1) = source1.vals.bounds(self.key_cursor1);
                     let (lower2, upper2) = source2.vals.bounds(self.key_cursor2);
                     if let Some(off) = self.merge_vals((source1, lower1, upper1), (source2, lower2, upper2)) {
-                        self.result.keys.push(source1.keys.index(self.key_cursor1));
-                        self.result.vals.offs.push(off);
+                        self.result.keys.push_ref(source1.keys.index(self.key_cursor1));
+                        self.result.vals.offs.push_ref(off);
                     }
                     // Increment cursors in either case; the keys are merged.
                     self.key_cursor1 += 1;
@@ -524,7 +523,7 @@ pub mod val_batch {
                         // Extend stash by updates, with logical compaction applied.
                         self.stash_updates_for_val(source1, lower1);
                         if self.staging.seal(&mut self.result.upds) {
-                            self.result.vals.vals.push(source1.vals.get_abs(lower1));
+                            self.result.vals.vals.push_ref(source1.vals.get_abs(lower1));
                         }
                         lower1 += 1;
                     },
@@ -532,7 +531,7 @@ pub mod val_batch {
                         self.stash_updates_for_val(source1, lower1);
                         self.stash_updates_for_val(source2, lower2);
                         if self.staging.seal(&mut self.result.upds) {
-                            self.result.vals.vals.push(source1.vals.get_abs(lower1));
+                            self.result.vals.vals.push_ref(source1.vals.get_abs(lower1));
                         }
                         lower1 += 1;
                         lower2 += 1;
@@ -541,7 +540,7 @@ pub mod val_batch {
                         // Extend stash by updates, with logical compaction applied.
                         self.stash_updates_for_val(source2, lower2);
                         if self.staging.seal(&mut self.result.upds) {
-                            self.result.vals.vals.push(source2.vals.get_abs(lower2));
+                            self.result.vals.vals.push_ref(source2.vals.get_abs(lower2));
                         }
                         lower2 += 1;
                     },
@@ -551,14 +550,14 @@ pub mod val_batch {
             while lower1 < upper1 {
                 self.stash_updates_for_val(source1, lower1);
                 if self.staging.seal(&mut self.result.upds) {
-                    self.result.vals.vals.push(source1.vals.get_abs(lower1));
+                    self.result.vals.vals.push_ref(source1.vals.get_abs(lower1));
                 }
                 lower1 += 1;
             }
             while lower2 < upper2 {
                 self.stash_updates_for_val(source2, lower2);
                 if self.staging.seal(&mut self.result.upds) {
-                    self.result.vals.vals.push(source2.vals.get_abs(lower2));
+                    self.result.vals.vals.push_ref(source2.vals.get_abs(lower2));
                 }
                 lower2 += 1;
             }
@@ -700,8 +699,8 @@ pub mod val_batch {
 
                 // Pre-load the first update.
                 if self.result.keys.is_empty() {
-                    self.result.vals.vals.push(val);
-                    self.result.keys.push(key);
+                    self.result.vals.vals.push_into(val);
+                    self.result.keys.push_into(key);
                     self.staging.push(time, diff);
                 }
                 // Perhaps this is a continuation of an already received key.
@@ -713,15 +712,15 @@ pub mod val_batch {
                         // New value; complete representation of prior value.
                         self.staging.seal(&mut self.result.upds);
                         self.staging.push(time, diff);
-                        self.result.vals.vals.push(val);
+                        self.result.vals.vals.push_into(val);
                     }
                 } else {
                     // New key; complete representation of prior key.
                     self.staging.seal(&mut self.result.upds);
                     self.staging.push(time, diff);
-                    self.result.vals.offs.push(self.result.vals.vals.len());
-                    self.result.vals.vals.push(val);
-                    self.result.keys.push(key);
+                    self.result.vals.offs.push_ref(self.result.vals.vals.len());
+                    self.result.vals.vals.push_into(val);
+                    self.result.keys.push_into(key);
                 }
             }
         }
@@ -729,7 +728,7 @@ pub mod val_batch {
         #[inline(never)]
         fn done(mut self, description: Description<Self::Time>) -> OrdValBatch<L> {
             self.staging.seal(&mut self.result.upds);
-            self.result.vals.offs.push(self.result.vals.vals.len());
+            self.result.vals.offs.push_ref(self.result.vals.vals.len());
             OrdValBatch {
                 updates: self.staging.total(),
                 storage: self.result,
@@ -938,7 +937,7 @@ pub mod key_batch {
         fn copy_key(&mut self, source: &OrdKeyStorage<L>, cursor: usize) {
             self.stash_updates_for_key(source, cursor);
             if self.staging.seal(&mut self.result.upds) {
-                self.result.keys.push(source.keys.index(cursor));
+                self.result.keys.push_ref(source.keys.index(cursor));
             }
         }
         /// Merge the next key in each of `source1` and `source2` into `self`, updating the appropriate cursors.
@@ -957,7 +956,7 @@ pub mod key_batch {
                     self.stash_updates_for_key(source1, self.key_cursor1);
                     self.stash_updates_for_key(source2, self.key_cursor2);
                     if self.staging.seal(&mut self.result.upds) {
-                        self.result.keys.push(source1.keys.index(self.key_cursor1));
+                        self.result.keys.push_ref(source1.keys.index(self.key_cursor1));
                     }
                     // Increment cursors in either case; the keys are merged.
                     self.key_cursor1 += 1;
@@ -1087,7 +1086,7 @@ pub mod key_batch {
             for item in chunk.drain() {
                 let (key, _val, time, diff) = CI::into_parts(item);
                 if self.result.keys.is_empty() {
-                    self.result.keys.push(key);
+                    self.result.keys.push_into(key);
                     self.staging.push(time, diff);
                 }
                 // Perhaps this is a continuation of an already received key.
@@ -1096,7 +1095,7 @@ pub mod key_batch {
                 } else {
                     self.staging.seal(&mut self.result.upds);
                     self.staging.push(time, diff);
-                    self.result.keys.push(key);
+                    self.result.keys.push_into(key);
                 }
             }
         }
