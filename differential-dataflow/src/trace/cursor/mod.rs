@@ -30,12 +30,12 @@ pub trait Cursor {
     /// Owned form of update difference.
     type Diff: Semigroup + 'static;
     /// Borrowed form of update difference.
-    type DiffGat<'a> : Copy + IntoOwned<'a, Owned = Self::Diff>;
+    type DiffGat<'a> : Copy;
 
     /// An owned copy of a reference to a time.
     #[inline(always)] fn owned_time(time: Self::TimeGat<'_>) -> Self::Time { time.into_owned() }
     /// An owned copy of a reference to a diff.
-    #[inline(always)] fn owned_diff(diff: Self::DiffGat<'_>) -> Self::Diff { diff.into_owned() }
+    fn owned_diff(diff: Self::DiffGat<'_>) -> Self::Diff;
 
     /// Storage required by the cursor.
     type Storage;
@@ -91,7 +91,7 @@ pub trait Cursor {
             while let Some(val) = self.get_val(storage) {
                 let mut kv_out = Vec::new();
                 self.map_times(storage, |ts, r| {
-                    kv_out.push((ts.into_owned(), r.into_owned()));
+                    kv_out.push((ts.into_owned(), Self::owned_diff(r)));
                 });
                 out.push(((key.into_owned(), val.into_owned()), kv_out));
                 self.step_val(storage);

@@ -604,6 +604,8 @@ pub mod val_batch {
         type Diff = layout::Diff<L>;
         type DiffGat<'a> = <L::DiffContainer as BatchContainer>::ReadItem<'a>;
 
+        #[inline(always)] fn owned_diff(diff: Self::DiffGat<'_>) -> Self::Diff { L::DiffContainer::into_owned(diff) }
+
         type Storage = OrdValBatch<L>;
 
         fn get_key<'a>(&self, storage: &'a Self::Storage) -> Option<Self::Key<'a>> { storage.storage.keys.get(self.key_cursor) }
@@ -998,6 +1000,8 @@ pub mod key_batch {
         type TimeGat<'a> = <L::TimeContainer as BatchContainer>::ReadItem<'a>;
         type Diff = layout::Diff<L>;
         type DiffGat<'a> = <L::DiffContainer as BatchContainer>::ReadItem<'a>;
+
+        #[inline(always)] fn owned_diff(diff: Self::DiffGat<'_>) -> Self::Diff { L::DiffContainer::into_owned(diff) }
 
         type Storage = OrdKeyBatch<L>;
 

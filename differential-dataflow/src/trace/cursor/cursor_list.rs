@@ -102,6 +102,8 @@ impl<C: Cursor> Cursor for CursorList<C> {
     type Diff = C::Diff;
     type DiffGat<'a> = C::DiffGat<'a>;
 
+    #[inline(always)] fn owned_diff(diff: Self::DiffGat<'_>) -> Self::Diff { C::owned_diff(diff) }
+
     type Storage = Vec<C::Storage>;
 
     // validation methods

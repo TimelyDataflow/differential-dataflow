@@ -58,7 +58,7 @@ pub trait TraceReader {
     /// Owned form of update difference.
     type Diff: Semigroup + 'static;
     /// Borrowed form of update difference.
-    type DiffGat<'a> : Copy + IntoOwned<'a, Owned = Self::Diff>;
+    type DiffGat<'a> : Copy;
 
     /// An owned copy of a reference to a time.
     #[inline(always)] fn owned_time(time: Self::TimeGat<'_>) -> Self::Time { Self::Cursor::owned_time(time) }
@@ -238,7 +238,7 @@ pub trait BatchReader : Sized {
     /// Owned form of update difference.
     type Diff: Semigroup + 'static;
     /// Borrowed form of update difference.
-    type DiffGat<'a> : Copy + IntoOwned<'a, Owned = Self::Diff>;
+    type DiffGat<'a> : Copy;
 
     /// An owned copy of a reference to a time.
     #[inline(always)] fn owned_time(time: Self::TimeGat<'_>) -> Self::Time { Self::Cursor::owned_time(time) }
@@ -400,6 +400,8 @@ pub mod rc_blanket_impls {
         type TimeGat<'a> = C::TimeGat<'a>;
         type Diff = C::Diff;
         type DiffGat<'a> = C::DiffGat<'a>;
+
+        #[inline(always)] fn owned_diff(diff: Self::DiffGat<'_>) -> Self::Diff { C::owned_diff(diff) }
 
         type Storage = Rc<C::Storage>;
 

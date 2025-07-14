@@ -344,7 +344,7 @@ where
                         if comparison(t, initial) {
                             let mut t = t.into_owned();
                             t.join_assign(time);
-                            output_buffer.push((t, d.into_owned()))
+                            output_buffer.push((t, Tr::owned_diff(d)))
                         }
                     });
                     consolidate(&mut output_buffer);

@@ -133,6 +133,8 @@ where
     type Diff = C::Diff;
     type DiffGat<'a> = C::DiffGat<'a>;
 
+    #[inline(always)] fn owned_diff(diff: Self::DiffGat<'_>) -> Self::Diff { C::owned_diff(diff) }
+
     type Storage = C::Storage;
 
     #[inline] fn key_valid(&self, storage: &Self::Storage) -> bool { self.cursor.key_valid(storage) }
@@ -190,6 +192,8 @@ where
     type TimeGat<'a> = C::TimeGat<'a>;
     type Diff = C::Diff;
     type DiffGat<'a> = C::DiffGat<'a>;
+
+    #[inline(always)] fn owned_diff(diff: Self::DiffGat<'_>) -> Self::Diff { C::owned_diff(diff) }
 
     type Storage = BatchFilter<C::Storage, F>;
 
