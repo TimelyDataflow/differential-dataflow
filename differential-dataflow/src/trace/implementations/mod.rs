@@ -105,9 +105,9 @@ pub trait Layout {
     type OffsetContainer: for<'a> BatchContainer<ReadItem<'a> = usize>;
 }
 
-// pub use aliases::{Key, KeyRef, Val, ValRef, Time, TimeRef, Diff, DiffRef};
-
 /// Aliases for types provided by the containers within a `Layout`.
+///
+/// For clarity, prefer `use layout;` and then `layout::Key<L>` to retain the layout context.
 #[allow(type_alias_bounds)]
 pub mod layout {
     use crate::trace::implementations::{BatchContainer, Layout};
