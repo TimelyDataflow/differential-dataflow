@@ -433,7 +433,6 @@ pub mod containers {
     use timely::container::PushInto;
 
     use crate::containers::TimelyStack;
-    use crate::IntoOwned;
 
     /// A general-purpose container resembling `Vec<T>`.
     pub trait BatchContainer: for<'a> PushInto<Self::ReadItem<'a>> + PushInto<Self::Owned> + 'static {
@@ -441,7 +440,7 @@ pub mod containers {
         type Owned;
 
         /// The type that can be read back out of the container.
-        type ReadItem<'a>: Copy + Ord + IntoOwned<'a, Owned = Self::Owned>;
+        type ReadItem<'a>: Copy + Ord;
 
 
         /// Conversion from an instance of this type to the owned type.
