@@ -581,7 +581,6 @@ pub mod dd_builder {
 
     use timely::container::PushInto;
 
-    use differential_dataflow::IntoOwned;
     use differential_dataflow::trace::Builder;
     use differential_dataflow::trace::Description;
     use differential_dataflow::trace::implementations::Layout;
@@ -659,9 +658,9 @@ pub mod dd_builder {
                     self.staging.push(time, diff);
                 }
                 // Perhaps this is a continuation of an already received key.
-                else if self.result.keys.last().map(|k| <<L::KeyContainer as BatchContainer>::ReadItem<'_> as IntoOwned>::borrow_as(&key).eq(&k)).unwrap_or(false) {
+                else if self.result.keys.last().map(|k| L::KeyContainer::borrow_as(&key).eq(&k)).unwrap_or(false) {
                     // Perhaps this is a continuation of an already received value.
-                    if self.result.vals.vals.last().map(|v| <<L::ValContainer as BatchContainer>::ReadItem<'_> as IntoOwned>::borrow_as(&val).eq(&v)).unwrap_or(false) {
+                    if self.result.vals.vals.last().map(|v| L::ValContainer::borrow_as(&val).eq(&v)).unwrap_or(false) {
                         self.staging.push(time, diff);
                     } else {
                         // New value; complete representation of prior value.
@@ -761,7 +760,7 @@ pub mod dd_builder {
                     self.staging.push(time, diff);
                 }
                 // Perhaps this is a continuation of an already received key.
-                else if self.result.keys.last().map(|k| <<L::KeyContainer as BatchContainer>::ReadItem<'_> as IntoOwned>::borrow_as(&key).eq(&k)).unwrap_or(false) {
+                else if self.result.keys.last().map(|k| L::KeyContainer::borrow_as(&key).eq(&k)).unwrap_or(false) {
                     self.staging.push(time, diff);
                 } else {
                     // New key; complete representation of prior key.

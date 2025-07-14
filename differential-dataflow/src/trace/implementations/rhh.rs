@@ -850,7 +850,7 @@ mod val_batch {
                     self.push_update(time, diff);
                     self.result.vals.push(val);
                     // Insert the key, but with no specified offset.
-                    self.result.insert_key(IntoOwned::borrow_as(&key), None);
+                    self.result.insert_key(L::KeyContainer::borrow_as(&key), None);
                 }
             }
         }
