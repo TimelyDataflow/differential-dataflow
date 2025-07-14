@@ -324,12 +324,12 @@ pub mod val_batch {
     }
 
     impl<L: Layout> BatchReader for OrdValBatch<L> {
-        type Key<'a> = <L::KeyContainer as BatchContainer>::ReadItem<'a>;
-        type Val<'a> = <L::ValContainer as BatchContainer>::ReadItem<'a>;
+        type Key<'a> = layout::KeyRef<'a, L>;
+        type Val<'a> = layout::ValRef<'a, L>;
         type Time = layout::Time<L>;
-        type TimeGat<'a> = <L::TimeContainer as BatchContainer>::ReadItem<'a>;
+        type TimeGat<'a> = layout::TimeRef<'a, L>;
         type Diff = layout::Diff<L>;
-        type DiffGat<'a> = <L::DiffContainer as BatchContainer>::ReadItem<'a>;
+        type DiffGat<'a> = layout::DiffRef<'a, L>;
 
         type Cursor = OrdValCursor<L>;
         fn cursor(&self) -> Self::Cursor {
@@ -597,12 +597,12 @@ pub mod val_batch {
 
     impl<L: Layout> Cursor for OrdValCursor<L> {
 
-        type Key<'a> = <L::KeyContainer as BatchContainer>::ReadItem<'a>;
-        type Val<'a> = <L::ValContainer as BatchContainer>::ReadItem<'a>;
+        type Key<'a> = layout::KeyRef<'a, L>;
+        type Val<'a> = layout::ValRef<'a, L>;
         type Time = layout::Time<L>;
-        type TimeGat<'a> = <L::TimeContainer as BatchContainer>::ReadItem<'a>;
+        type TimeGat<'a> = layout::TimeRef<'a, L>;
         type Diff = layout::Diff<L>;
-        type DiffGat<'a> = <L::DiffContainer as BatchContainer>::ReadItem<'a>;
+        type DiffGat<'a> = layout::DiffRef<'a, L>;
 
         #[inline(always)] fn owned_time(time: Self::TimeGat<'_>) -> Self::Time { L::TimeContainer::into_owned(time) }
         #[inline(always)] fn owned_diff(diff: Self::DiffGat<'_>) -> Self::Diff { L::DiffContainer::into_owned(diff) }
@@ -804,12 +804,12 @@ pub mod key_batch {
 
     impl<L: Layout> BatchReader for OrdKeyBatch<L> {
 
-        type Key<'a> = <L::KeyContainer as BatchContainer>::ReadItem<'a>;
+        type Key<'a> = layout::KeyRef<'a, L>;
         type Val<'a> = &'a ();
         type Time = layout::Time<L>;
-        type TimeGat<'a> = <L::TimeContainer as BatchContainer>::ReadItem<'a>;
+        type TimeGat<'a> = layout::TimeRef<'a, L>;
         type Diff = layout::Diff<L>;
-        type DiffGat<'a> = <L::DiffContainer as BatchContainer>::ReadItem<'a>;
+        type DiffGat<'a> = layout::DiffRef<'a, L>;
 
         type Cursor = OrdKeyCursor<L>;
         fn cursor(&self) -> Self::Cursor {
@@ -995,12 +995,12 @@ pub mod key_batch {
     }
 
     impl<L: Layout> Cursor for OrdKeyCursor<L> {
-        type Key<'a> = <L::KeyContainer as BatchContainer>::ReadItem<'a>;
+        type Key<'a> = layout::KeyRef<'a, L>;
         type Val<'a> = &'a ();
         type Time = layout::Time<L>;
-        type TimeGat<'a> = <L::TimeContainer as BatchContainer>::ReadItem<'a>;
+        type TimeGat<'a> = layout::TimeRef<'a, L>;
         type Diff = layout::Diff<L>;
-        type DiffGat<'a> = <L::DiffContainer as BatchContainer>::ReadItem<'a>;
+        type DiffGat<'a> = layout::DiffRef<'a, L>;
 
         #[inline(always)] fn owned_time(time: Self::TimeGat<'_>) -> Self::Time { L::TimeContainer::into_owned(time) }
         #[inline(always)] fn owned_diff(diff: Self::DiffGat<'_>) -> Self::Diff { L::DiffContainer::into_owned(diff) }

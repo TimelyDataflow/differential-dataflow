@@ -152,7 +152,7 @@ mod val_batch {
     impl<L: Layout> RhhValStorage<L>
     where
         layout::Key<L>: Default + HashOrdered,
-        for<'a> <L::KeyContainer as BatchContainer>::ReadItem<'a>: HashOrdered,
+        for<'a> layout::KeyRef<'a, L>: HashOrdered,
     {
         /// Lower and upper bounds in `self.vals` corresponding to the key at `index`.
         fn values_for_key(&self, index: usize) -> (usize, usize) {
@@ -184,7 +184,7 @@ mod val_batch {
         /// If `offset` is specified, we will insert it at the appropriate location. If it is not specified,
         /// we leave `keys_offs` ready to receive it as the next `push`. This is so that builders that may
         /// not know the final offset at the moment of key insertion can prepare for receiving the offset.
-        fn insert_key(&mut self, key: <L::KeyContainer as BatchContainer>::ReadItem<'_>, offset: Option<usize>) {
+        fn insert_key(&mut self, key: layout::KeyRef<'_, L>, offset: Option<usize>) {
             let desired = self.desired_location(&key);
             // Were we to push the key now, it would be at `self.keys.len()`, so while that is wrong,
             // push additional blank entries in.
@@ -213,7 +213,7 @@ mod val_batch {
         }
 
         /// Returns true if one should advance one's index in the search for `key`.
-        fn advance_key(&self, index: usize, key: <L::KeyContainer as BatchContainer>::ReadItem<'_>) -> bool {
+        fn advance_key(&self, index: usize, key: layout::KeyRef<'_, L>) -> bool {
             // Ideally this short-circuits, as `self.keys[index]` is bogus data.
             !self.live_key(index) || self.keys.index(index).lt(&<L::KeyContainer as BatchContainer>::reborrow(key))
         }
@@ -276,14 +276,14 @@ mod val_batch {
     impl<L: Layout> BatchReader for RhhValBatch<L>
     where
         layout::Key<L>: Default + HashOrdered,
-        for<'a> <L::KeyContainer as BatchContainer>::ReadItem<'a>: HashOrdered,
+        for<'a> layout::KeyRef<'a, L>: HashOrdered,
     {
-        type Key<'a> = <L::KeyContainer as BatchContainer>::ReadItem<'a>;
-        type Val<'a> = <L::ValContainer as BatchContainer>::ReadItem<'a>;
+        type Key<'a> = layout::KeyRef<'a, L>;
+        type Val<'a> = layout::ValRef<'a, L>;
         type Time = layout::Time<L>;
-        type TimeGat<'a> = <L::TimeContainer as BatchContainer>::ReadItem<'a>;
+        type TimeGat<'a> = layout::TimeRef<'a, L>;
         type Diff = layout::Diff<L>;
-        type DiffGat<'a> = <L::DiffContainer as BatchContainer>::ReadItem<'a>;
+        type DiffGat<'a> = layout::DiffRef<'a, L>;
 
         type Cursor = RhhValCursor<L>;
         fn cursor(&self) -> Self::Cursor {
@@ -306,7 +306,7 @@ mod val_batch {
     impl<L: Layout> Batch for RhhValBatch<L>
     where
         layout::Key<L>: Default + HashOrdered,
-        for<'a> <L::KeyContainer as BatchContainer>::ReadItem<'a>: HashOrdered,
+        for<'a> layout::KeyRef<'a, L>: HashOrdered,
     {
         type Merger = RhhValMerger<L>;
 
@@ -361,7 +361,7 @@ mod val_batch {
     where
         layout::Key<L>: Default + HashOrdered,
         RhhValBatch<L>: Batch<Time=layout::Time<L>>,
-        for<'a> <L::KeyContainer as BatchContainer>::ReadItem<'a>: HashOrdered,
+        for<'a> layout::KeyRef<'a, L>: HashOrdered,
     {
         fn new(batch1: &RhhValBatch<L>, batch2: &RhhValBatch<L>, compaction_frontier: AntichainRef<layout::Time<L>>) -> Self {
 
@@ -455,7 +455,7 @@ mod val_batch {
     impl<L: Layout> RhhValMerger<L>
     where
         layout::Key<L>: Default + HashOrdered,
-        for<'a> <L::KeyContainer as BatchContainer>::ReadItem<'a>: HashOrdered,
+        for<'a> layout::KeyRef<'a, L>: HashOrdered,
     {
         /// Copy the next key in `source`.
         ///
@@ -653,14 +653,14 @@ mod val_batch {
     impl<L: Layout> Cursor for RhhValCursor<L>
     where
         layout::Key<L>: Default + HashOrdered,
-        for<'a> <L::KeyContainer as BatchContainer>::ReadItem<'a>: HashOrdered,
+        for<'a> layout::KeyRef<'a, L>: HashOrdered,
     {
-        type Key<'a> = <L::KeyContainer as BatchContainer>::ReadItem<'a>;
-        type Val<'a> = <L::ValContainer as BatchContainer>::ReadItem<'a>;
+        type Key<'a> = layout::KeyRef<'a, L>;
+        type Val<'a> = layout::ValRef<'a, L>;
         type Time = layout::Time<L>;
-        type TimeGat<'a> = <L::TimeContainer as BatchContainer>::ReadItem<'a>;
+        type TimeGat<'a> = layout::TimeRef<'a, L>;
         type Diff = layout::Diff<L>;
-        type DiffGat<'a> = <L::DiffContainer as BatchContainer>::ReadItem<'a>;
+        type DiffGat<'a> = layout::DiffRef<'a, L>;
 
         #[inline(always)] fn owned_time(time: Self::TimeGat<'_>) -> Self::Time { L::TimeContainer::into_owned(time) }
         #[inline(always)] fn owned_diff(diff: Self::DiffGat<'_>) -> Self::Diff { L::DiffContainer::into_owned(diff) }
@@ -790,7 +790,7 @@ mod val_batch {
         layout::Key<L>: Default + HashOrdered,
         CI: for<'a> BuilderInput<L::KeyContainer, L::ValContainer, Key<'a> = layout::Key<L>, Time=layout::Time<L>, Diff=layout::Diff<L>>,
         for<'a> L::ValContainer: PushInto<CI::Val<'a>>,
-        for<'a> <L::KeyContainer as BatchContainer>::ReadItem<'a>: HashOrdered,
+        for<'a> layout::KeyRef<'a, L>: HashOrdered,
     {
         type Input = CI;
         type Time = layout::Time<L>;

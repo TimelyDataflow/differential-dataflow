@@ -610,15 +610,15 @@ pub mod dd_builder {
     impl<L> Builder for OrdValBuilder<L>
     where
         L: Layout,
-        <L::KeyContainer as BatchContainer>::Owned: Columnar,
-        <L::ValContainer as BatchContainer>::Owned: Columnar,
-        <L::TimeContainer as BatchContainer>::Owned: Columnar,
-        <L::DiffContainer as BatchContainer>::Owned: Columnar,
+        layout::Key<L>: Columnar,
+        layout::Val<L>: Columnar,
+        layout::Time<L>: Columnar,
+        layout::Diff<L>: Columnar,
         // These two constraints seem .. like we could potentially replace by `Columnar::Ref<'a>`.
-        for<'a> L::KeyContainer: PushInto<&'a <L::KeyContainer as BatchContainer>::Owned>,
-        for<'a> L::ValContainer: PushInto<&'a <L::ValContainer as BatchContainer>::Owned>,
+        for<'a> L::KeyContainer: PushInto<&'a layout::Key<L>>,
+        for<'a> L::ValContainer: PushInto<&'a layout::Val<L>>,
     {
-        type Input = Column<((<L::KeyContainer as BatchContainer>::Owned,<L::ValContainer as BatchContainer>::Owned),<L::TimeContainer as BatchContainer>::Owned,<L::DiffContainer as BatchContainer>::Owned)>;
+        type Input = Column<((layout::Key<L>,layout::Val<L>),layout::Time<L>,layout::Diff<L>)>;
         type Time = layout::Time<L>;
         type Output = OrdValBatch<L>;
 
@@ -645,11 +645,11 @@ pub mod dd_builder {
 
             for ((key,val),time,diff) in chunk.drain() {
                 // It would be great to avoid.
-                let key  = <<L::KeyContainer as BatchContainer>::Owned as Columnar>::into_owned(key);
-                let val  = <<L::ValContainer as BatchContainer>::Owned as Columnar>::into_owned(val);
+                let key  = <layout::Key<L> as Columnar>::into_owned(key);
+                let val  = <layout::Val<L> as Columnar>::into_owned(val);
                 // These feel fine (wrt the other versions)
-                let time = <<L::TimeContainer as BatchContainer>::Owned as Columnar>::into_owned(time);
-                let diff = <<L::DiffContainer as BatchContainer>::Owned as Columnar>::into_owned(diff);
+                let time = <layout::Time<L> as Columnar>::into_owned(time);
+                let diff = <layout::Diff<L> as Columnar>::into_owned(diff);
 
                 // Pre-load the first update.
                 if self.result.keys.is_empty() {
@@ -715,15 +715,15 @@ pub mod dd_builder {
     impl<L> Builder for OrdKeyBuilder<L>
     where
         L: Layout,
-        <L::KeyContainer as BatchContainer>::Owned: Columnar,
-        <L::ValContainer as BatchContainer>::Owned: Columnar,
-        <L::TimeContainer as BatchContainer>::Owned: Columnar,
-        <L::DiffContainer as BatchContainer>::Owned: Columnar,
+        layout::Key<L>: Columnar,
+        layout::Val<L>: Columnar,
+        layout::Time<L>: Columnar,
+        layout::Diff<L>: Columnar,
     // These two constraints seem .. like we could potentially replace by `Columnar::Ref<'a>`.
-        for<'a> L::KeyContainer: PushInto<&'a <L::KeyContainer as BatchContainer>::Owned>,
-        for<'a> L::ValContainer: PushInto<&'a <L::ValContainer as BatchContainer>::Owned>,
+        for<'a> L::KeyContainer: PushInto<&'a layout::Key<L>>,
+        for<'a> L::ValContainer: PushInto<&'a layout::Val<L>>,
     {
-        type Input = Column<((<L::KeyContainer as BatchContainer>::Owned,<L::ValContainer as BatchContainer>::Owned),<L::TimeContainer as BatchContainer>::Owned,<L::DiffContainer as BatchContainer>::Owned)>;
+        type Input = Column<((layout::Key<L>,layout::Val<L>),layout::Time<L>,layout::Diff<L>)>;
         type Time = layout::Time<L>;
         type Output = OrdKeyBatch<L>;
 
@@ -749,10 +749,10 @@ pub mod dd_builder {
 
             for ((key,_val),time,diff) in chunk.drain() {
                 // It would be great to avoid.
-                let key  = <<L::KeyContainer as BatchContainer>::Owned as Columnar>::into_owned(key);
+                let key  = <layout::Key<L> as Columnar>::into_owned(key);
                 // These feel fine (wrt the other versions)
-                let time = <<L::TimeContainer as BatchContainer>::Owned as Columnar>::into_owned(time);
-                let diff = <<L::DiffContainer as BatchContainer>::Owned as Columnar>::into_owned(diff);
+                let time = <layout::Time<L> as Columnar>::into_owned(time);
+                let diff = <layout::Diff<L> as Columnar>::into_owned(diff);
 
                 // Pre-load the first update.
                 if self.result.keys.is_empty() {
