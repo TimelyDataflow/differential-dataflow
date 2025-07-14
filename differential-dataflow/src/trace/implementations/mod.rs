@@ -294,6 +294,9 @@ impl BatchContainer for OffsetList {
     type Owned = usize;
     type ReadItem<'a> = usize;
 
+    fn into_owned<'a>(item: Self::ReadItem<'a>) -> Self::Owned { item }
+    fn borrow_as<'a>(owned: &'a Self::Owned) -> Self::ReadItem<'a> { *owned }
+
     fn reborrow<'b, 'a: 'b>(item: Self::ReadItem<'a>) -> Self::ReadItem<'b> { item }
 
     fn with_capacity(size: usize) -> Self {
@@ -464,6 +467,19 @@ pub mod containers {
         /// The type that can be read back out of the container.
         type ReadItem<'a>: Copy + Ord + IntoOwned<'a, Owned = Self::Owned>;
 
+
+        /// Conversion from an instance of this type to the owned type.
+        #[must_use]
+        fn into_owned<'a>(item: Self::ReadItem<'a>) -> Self::Owned;
+        /// Clones `self` onto an existing instance of the owned type.
+        fn clone_onto<'a>(item: Self::ReadItem<'a>, other: &mut Self::Owned) {
+            *other = Self::into_owned(item);
+        }
+        /// Borrows an owned instance as oneself.
+        #[must_use]
+        fn borrow_as<'a>(owned: &'a Self::Owned) -> Self::ReadItem<'a>;
+
+
         /// Push an item into this container
         fn push<D>(&mut self, item: D) where Self: PushInto<D> {
             self.push_into(item);
@@ -552,6 +568,10 @@ pub mod containers {
         type Owned = T;
         type ReadItem<'a> = &'a T;
 
+        fn into_owned<'a>(item: Self::ReadItem<'a>) -> Self::Owned { item.clone() }
+        fn clone_onto<'a>(item: Self::ReadItem<'a>, other: &mut Self::Owned) { other.clone_from(item); }
+        fn borrow_as<'a>(owned: &'a Self::Owned) -> Self::ReadItem<'a> { owned }
+
         fn reborrow<'b, 'a: 'b>(item: Self::ReadItem<'a>) -> Self::ReadItem<'b> { item }
 
         fn with_capacity(size: usize) -> Self {
@@ -576,6 +596,10 @@ pub mod containers {
     impl<T: Clone + Ord + Columnation + 'static> BatchContainer for TimelyStack<T> {
         type Owned = T;
         type ReadItem<'a> = &'a T;
+
+        fn into_owned<'a>(item: Self::ReadItem<'a>) -> Self::Owned { item.clone() }
+        fn clone_onto<'a>(item: Self::ReadItem<'a>, other: &mut Self::Owned) { other.clone_from(item); }
+        fn borrow_as<'a>(owned: &'a Self::Owned) -> Self::ReadItem<'a> { owned }
 
         fn reborrow<'b, 'a: 'b>(item: Self::ReadItem<'a>) -> Self::ReadItem<'b> { item }
 
@@ -636,6 +660,10 @@ pub mod containers {
     {
         type Owned = Vec<B>;
         type ReadItem<'a> = &'a [B];
+
+        fn into_owned<'a>(item: Self::ReadItem<'a>) -> Self::Owned { item.to_vec() }
+        fn clone_onto<'a>(item: Self::ReadItem<'a>, other: &mut Self::Owned) { other.clone_from_slice(item); }
+        fn borrow_as<'a>(owned: &'a Self::Owned) -> Self::ReadItem<'a> { &owned[..] }
 
         fn reborrow<'b, 'a: 'b>(item: Self::ReadItem<'a>) -> Self::ReadItem<'b> { item }
 

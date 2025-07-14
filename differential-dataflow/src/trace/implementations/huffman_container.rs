@@ -38,8 +38,8 @@ impl<B: Ord + Clone + 'static> PushInto<Vec<B>> for HuffmanContainer<B> {
                 bytes.extend(huffman.encode(item.iter()));
                 self.offsets.push(bytes.len());
             },
-            Err(raw) => { 
-                raw.extend(item); 
+            Err(raw) => {
+                raw.extend(item);
                 self.offsets.push(raw.len());
             }
         }
@@ -81,6 +81,21 @@ impl<'a, B: Ord + Clone + 'static> PushInto<Wrapped<'a, B>> for HuffmanContainer
 impl<B: Ord + Clone + 'static> BatchContainer for HuffmanContainer<B> {
     type Owned = Vec<B>;
     type ReadItem<'a> = Wrapped<'a, B>;
+
+    fn into_owned<'a>(item: Self::ReadItem<'a>) -> Self::Owned {
+        match item.decode() {
+            Ok(decode) => decode.cloned().collect(),
+            Err(bytes) => bytes.to_vec(),
+        }
+    }
+    fn clone_onto<'a>(item: Self::ReadItem<'a>, other: &mut Self::Owned) {
+        other.clear();
+        match item.decode() {
+            Ok(decode) => other.extend(decode.cloned()),
+            Err(bytes) => other.extend_from_slice(bytes),
+        }
+    }
+    fn borrow_as<'a>(owned: &'a Self::Owned) -> Self::ReadItem<'a> { Self::ReadItem { inner: Err(&owned[..]) } }
 
     fn reborrow<'b, 'a: 'b>(item: Self::ReadItem<'a>) -> Self::ReadItem<'b> { item }
 
@@ -151,7 +166,7 @@ mod wrapper {
     use super::Encoded;
 
     pub struct Wrapped<'a, B: Ord> {
-        inner: Result<Encoded<'a, B>, &'a [B]>,
+        pub(crate) inner: Result<Encoded<'a, B>, &'a [B]>,
     }
 
     impl<'a, B: Ord> Wrapped<'a, B> {
@@ -254,7 +269,7 @@ mod huffman {
 
     use std::collections::BTreeMap;
     use std::convert::TryInto;
-    
+
     use self::decoder::Decoder;
     use self::encoder::Encoder;
 
@@ -281,7 +296,7 @@ mod huffman {
         }
 
         /// Decodes the provided bytes as a sequence of symbols.
-        pub fn decode<I>(&self, bytes: I) -> Decoder<'_, T, I::IntoIter> 
+        pub fn decode<I>(&self, bytes: I) -> Decoder<'_, T, I::IntoIter>
         where
             I: IntoIterator<Item=u8>
         {
@@ -317,7 +332,7 @@ mod huffman {
             while let Some((node, level)) = todo.pop() {
                 match node {
                     Node::Leaf(sym) => { levels.push((level, sym)); },
-                    Node::Fork(l,r) => { 
+                    Node::Fork(l,r) => {
                         todo.push((&tree[*l], level + 1));
                         todo.push((&tree[*r], level + 1));
                     },
@@ -345,13 +360,13 @@ mod huffman {
                 }
             }
 
-            Huffman { 
+            Huffman {
                 encode,
                 decode,
             }
         }
 
-        /// Inserts a symbol, and 
+        /// Inserts a symbol, and
         fn insert_decode(map: &mut [Decode<T>; 256], symbol: &T, bits: usize, code: u64) where T: Clone {
             let byte: u8 = (code >> 56).try_into().unwrap();
             if bits <= 8 {
@@ -376,7 +391,7 @@ mod huffman {
         Fork(usize, usize),
     }
 
-    /// Decoder 
+    /// Decoder
     #[derive(Eq, PartialEq, Ord, PartialOrd, Debug, Default)]
     pub enum Decode<T> {
         /// An as-yet unfilled slot.
@@ -392,7 +407,7 @@ mod huffman {
         /// Tests to see if the map contains any invalid values.
         ///
         /// A correctly initialized map will have no invalid values.
-        /// A map with invalid values will be unable to decode some 
+        /// A map with invalid values will be unable to decode some
         /// input byte sequences.
         fn any_void(&self) -> bool {
             match self {
