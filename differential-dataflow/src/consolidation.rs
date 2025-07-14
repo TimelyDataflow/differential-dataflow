@@ -14,7 +14,7 @@ use std::cmp::Ordering;
 use std::collections::VecDeque;
 use timely::Container;
 use timely::container::{ContainerBuilder, PushInto};
-use crate::{IntoOwned, Data};
+use crate::Data;
 use crate::difference::{IsZero, Semigroup};
 
 /// Sorts and consolidates `vec`.
@@ -231,10 +231,13 @@ pub trait ConsolidateLayout: Container {
     type Key<'a>: Eq where Self: 'a;
 
     /// GAT diff type.
-    type Diff<'a>: IntoOwned<'a, Owned = Self::DiffOwned> where Self: 'a;
+    type Diff<'a>;
 
     /// Owned diff type.
     type DiffOwned: for<'a> Semigroup<Self::Diff<'a>>;
+
+    /// Converts a reference diff into an owned diff.
+    fn owned_diff(diff: Self::Diff<'_>) -> Self::DiffOwned;
 
     /// Deconstruct an item into key and diff. Must be cheap.
     fn into_parts(item: Self::Item<'_>) -> (Self::Key<'_>, Self::Diff<'_>);
@@ -266,7 +269,7 @@ pub trait ConsolidateLayout: Container {
 
             let (k, d) = Self::into_parts(item);
             let mut prev_key = k;
-            let mut prev_diff = d.into_owned();
+            let mut prev_diff = Self::owned_diff(d);
 
             for item in iter {
                 let (next_key, next_diff) = Self::into_parts(item);
@@ -278,7 +281,7 @@ pub trait ConsolidateLayout: Container {
                         target.push_with_diff(prev_key, prev_diff);
                     }
                     prev_key = next_key;
-                    prev_diff = next_diff.into_owned();
+                    prev_diff = Self::owned_diff(next_diff);
                 }
             }
 
@@ -293,11 +296,13 @@ impl<D, T, R> ConsolidateLayout for Vec<(D, T, R)>
 where
     D: Ord + Clone + 'static,
     T: Ord + Clone + 'static,
-    R: Semigroup + for<'a> IntoOwned<'a, Owned = R> + Clone + 'static,
+    R: Semigroup + Clone + 'static,
 {
     type Key<'a> = (D, T) where Self: 'a;
     type Diff<'a> = R where Self: 'a;
     type DiffOwned = R;
+
+    fn owned_diff(diff: Self::Diff<'_>) -> Self::DiffOwned { diff }
 
     fn into_parts((data, time, diff): Self::Item<'_>) -> (Self::Key<'_>, Self::Diff<'_>) {
         ((data, time), diff)
