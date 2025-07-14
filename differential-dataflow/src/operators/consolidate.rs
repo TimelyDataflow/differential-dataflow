@@ -8,7 +8,7 @@
 
 use timely::dataflow::Scope;
 
-use crate::{IntoOwned, Collection, ExchangeData, Hashable};
+use crate::{Collection, ExchangeData, Hashable};
 use crate::consolidation::ConsolidatingContainerBuilder;
 use crate::difference::Semigroup;
 
@@ -45,20 +45,21 @@ where
     /// ```
     pub fn consolidate(&self) -> Self {
         use crate::trace::implementations::{KeyBatcher, KeyBuilder, KeySpine};
-        self.consolidate_named::<KeyBatcher<_, _, _>,KeyBuilder<_,_,_>, KeySpine<_,_,_>>("Consolidate")
+        self.consolidate_named::<KeyBatcher<_, _, _>,KeyBuilder<_,_,_>, KeySpine<_,_,_>,_>("Consolidate", |key,&()| key.clone())
     }
 
     /// As `consolidate` but with the ability to name the operator and specify the trace type.
-    pub fn consolidate_named<Ba, Bu, Tr>(&self, name: &str) -> Self
+    pub fn consolidate_named<Ba, Bu, Tr, F>(&self, name: &str, reify: F) -> Self
     where
         Ba: Batcher<Input=Vec<((D,()),G::Timestamp,R)>, Time=G::Timestamp> + 'static,
-        Tr: for<'a> crate::trace::Trace<Key<'a>: IntoOwned<'a, Owned = D>,Time=G::Timestamp,Diff=R>+'static,
+        Tr: for<'a> crate::trace::Trace<Time=G::Timestamp,Diff=R>+'static,
         Bu: Builder<Time=Tr::Time, Input=Ba::Output, Output=Tr::Batch>,
+        F: Fn(Tr::Key<'_>, Tr::Val<'_>) -> D + 'static,
     {
         use crate::operators::arrange::arrangement::Arrange;
         self.map(|k| (k, ()))
             .arrange_named::<Ba, Bu, Tr>(name)
-            .as_collection(|d, _| d.into_owned())
+            .as_collection(reify)
     }
 
     /// Aggregates the weights of equal records.
