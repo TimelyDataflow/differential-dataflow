@@ -48,7 +48,8 @@ where
         self.consolidate_named::<KeyBatcher<_, _, _>,KeyBuilder<_,_,_>, KeySpine<_,_,_>,_>("Consolidate", |key,&()| key.clone())
     }
 
-    /// As `consolidate` but with the ability to name the operator and specify the trace type.
+    /// As `consolidate` but with the ability to name the operator, specify the trace type,
+    /// and provide the function `reify` to produce owned keys and values..
     pub fn consolidate_named<Ba, Bu, Tr, F>(&self, name: &str, reify: F) -> Self
     where
         Ba: Batcher<Input=Vec<((D,()),G::Timestamp,R)>, Time=G::Timestamp> + 'static,
