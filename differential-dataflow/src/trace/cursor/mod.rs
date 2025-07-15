@@ -8,8 +8,6 @@
 use timely::progress::Timestamp;
 
 use crate::difference::Semigroup;
-// `pub use` for legacy reasons.
-pub use crate::IntoOwned;
 use crate::lattice::Lattice;
 
 pub mod cursor_list;
@@ -81,10 +79,10 @@ pub trait Cursor {
     fn rewind_vals(&mut self, storage: &Self::Storage);
 
     /// Rewinds the cursor and outputs its contents to a Vec
-    fn to_vec<K, V>(&mut self, storage: &Self::Storage) -> Vec<((K, V), Vec<(Self::Time, Self::Diff)>)>
+    fn to_vec<K, IK, V, IV>(&mut self, storage: &Self::Storage, into_key: IK, into_val: IV) -> Vec<((K, V), Vec<(Self::Time, Self::Diff)>)>
     where
-        for<'a> Self::Key<'a> : IntoOwned<'a, Owned = K>,
-        for<'a> Self::Val<'a> : IntoOwned<'a, Owned = V>,
+        IK: for<'a> Fn(Self::Key<'a>) -> K,
+        IV: for<'a> Fn(Self::Val<'a>) -> V,
     {
         let mut out = Vec::new();
         self.rewind_keys(storage);
@@ -95,7 +93,7 @@ pub trait Cursor {
                 self.map_times(storage, |ts, r| {
                     kv_out.push((Self::owned_time(ts), Self::owned_diff(r)));
                 });
-                out.push(((key.into_owned(), val.into_owned()), kv_out));
+                out.push(((into_key(key), into_val(val)), kv_out));
                 self.step_val(storage);
             }
             self.step_key(storage);

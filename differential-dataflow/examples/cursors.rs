@@ -95,7 +95,7 @@ fn main() {
 
         /* Return trace content after the last round. */
         let (mut cursor, storage) = graph_trace.cursor();
-        cursor.to_vec(&storage)
+        cursor.to_vec(&storage, |k| k.clone(), |v| v.clone())
     })
     .unwrap().join();
 

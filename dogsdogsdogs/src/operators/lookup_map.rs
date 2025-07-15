@@ -10,7 +10,7 @@ use differential_dataflow::{ExchangeData, Collection, AsCollection, Hashable};
 use differential_dataflow::difference::{IsZero, Semigroup, Monoid};
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::trace::{Cursor, TraceReader};
-use differential_dataflow::trace::cursor::IntoOwned;
+use differential_dataflow::IntoOwned;
 
 /// Proposes extensions to a stream of prefixes.
 ///
@@ -94,7 +94,7 @@ where
                     for &mut (ref prefix, ref time, ref mut diff) in prefixes.iter_mut() {
                         if !input2.frontier.less_equal(time) {
                             logic2(prefix, &mut key1);
-                            use differential_dataflow::trace::cursor::IntoOwned;
+                            use differential_dataflow::IntoOwned;
                             cursor.seek_key(&storage, IntoOwned::borrow_as(&key1));
                             if cursor.get_key(&storage) == Some(IntoOwned::borrow_as(&key1)) {
                                 while let Some(value) = cursor.get_val(&storage) {

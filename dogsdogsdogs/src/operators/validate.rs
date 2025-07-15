@@ -6,7 +6,7 @@ use differential_dataflow::{ExchangeData, Collection};
 use differential_dataflow::difference::{Semigroup, Monoid, Multiply};
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::trace::TraceReader;
-use differential_dataflow::trace::cursor::IntoOwned;
+use differential_dataflow::IntoOwned;
 
 /// Proposes extensions to a stream of prefixes.
 ///

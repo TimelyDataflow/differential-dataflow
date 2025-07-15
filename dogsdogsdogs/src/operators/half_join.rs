@@ -50,7 +50,7 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::trace::{Cursor, TraceReader};
 use differential_dataflow::consolidation::{consolidate, consolidate_updates};
-use differential_dataflow::trace::cursor::IntoOwned;
+use differential_dataflow::IntoOwned;
 
 /// A binary equijoin that responds to updates on only its first input.
 ///
@@ -336,7 +336,7 @@ where
         // Use TOTAL ORDER to allow the release of `time`.
         yielded = yielded || yield_function(timer, *work);
         if !yielded && !frontier.iter().any(|t| comparison(<Tr::TimeGat<'_> as IntoOwned>::borrow_as(t), initial)) {
-            use differential_dataflow::trace::cursor::IntoOwned;
+            use differential_dataflow::IntoOwned;
             cursor.seek_key(&storage, IntoOwned::borrow_as(key));
             if cursor.get_key(&storage) == Some(IntoOwned::borrow_as(key)) {
                 while let Some(val2) = cursor.get_val(&storage) {
