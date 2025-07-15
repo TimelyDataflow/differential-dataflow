@@ -17,7 +17,6 @@ use timely::progress::Timestamp;
 
 use crate::logging::Logger;
 use crate::difference::Semigroup;
-use crate::IntoOwned;
 use crate::lattice::Lattice;
 pub use self::cursor::Cursor;
 pub use self::description::Description;
@@ -54,11 +53,16 @@ pub trait TraceReader {
     /// Timestamps associated with updates
     type Time: Timestamp + Lattice + Ord + Clone;
     /// Borrowed form of timestamp.
-    type TimeGat<'a>: Copy + IntoOwned<'a, Owned = Self::Time>;
+    type TimeGat<'a>: Copy;
     /// Owned form of update difference.
     type Diff: Semigroup + 'static;
     /// Borrowed form of update difference.
-    type DiffGat<'a> : Copy + IntoOwned<'a, Owned = Self::Diff>;
+    type DiffGat<'a> : Copy;
+
+    /// An owned copy of a reference to a time.
+    #[inline(always)] fn owned_time(time: Self::TimeGat<'_>) -> Self::Time { Self::Cursor::owned_time(time) }
+    /// An owned copy of a reference to a diff.
+    #[inline(always)] fn owned_diff(diff: Self::DiffGat<'_>) -> Self::Diff { Self::Cursor::owned_diff(diff) }
 
     /// The type of an immutable collection of updates.
     type Batch: for<'a> BatchReader<Key<'a> = Self::Key<'a>, Val<'a> = Self::Val<'a>, Time = Self::Time, TimeGat<'a> = Self::TimeGat<'a>, Diff = Self::Diff, DiffGat<'a> = Self::DiffGat<'a>>+Clone+'static;
@@ -194,7 +198,7 @@ pub trait Trace : TraceReader<Batch: Batch> {
     /// Sets the logic for exertion in the absence of updates.
     ///
     /// The function receives an iterator over batch levels, from large to small, as triples `(level, count, length)`,
-    /// indicating the level, the number of batches, and their total length in updates. It should return a number of 
+    /// indicating the level, the number of batches, and their total length in updates. It should return a number of
     /// updates to perform, or `None` if no work is required.
     fn set_exert_logic(&mut self, logic: ExertionLogic);
 
@@ -229,11 +233,16 @@ pub trait BatchReader : Sized {
     /// Timestamps associated with updates
     type Time: Timestamp + Lattice + Ord + Clone;
     /// Borrowed form of timestamp.
-    type TimeGat<'a>: Copy + IntoOwned<'a, Owned = Self::Time>;
+    type TimeGat<'a>: Copy;
     /// Owned form of update difference.
     type Diff: Semigroup + 'static;
     /// Borrowed form of update difference.
-    type DiffGat<'a> : Copy + IntoOwned<'a, Owned = Self::Diff>;
+    type DiffGat<'a> : Copy;
+
+    /// An owned copy of a reference to a time.
+    #[inline(always)] fn owned_time(time: Self::TimeGat<'_>) -> Self::Time { Self::Cursor::owned_time(time) }
+    /// An owned copy of a reference to a diff.
+    #[inline(always)] fn owned_diff(diff: Self::DiffGat<'_>) -> Self::Diff { Self::Cursor::owned_diff(diff) }
 
     /// The type used to enumerate the batch's contents.
     type Cursor: for<'a> Cursor<Storage=Self, Key<'a> = Self::Key<'a>, Val<'a> = Self::Val<'a>, Time = Self::Time, TimeGat<'a> = Self::TimeGat<'a>, Diff = Self::Diff, DiffGat<'a> = Self::DiffGat<'a>>;
@@ -390,6 +399,10 @@ pub mod rc_blanket_impls {
         type TimeGat<'a> = C::TimeGat<'a>;
         type Diff = C::Diff;
         type DiffGat<'a> = C::DiffGat<'a>;
+
+        #[inline(always)] fn owned_time(time: Self::TimeGat<'_>) -> Self::Time { C::owned_time(time) }
+        #[inline(always)] fn clone_time_onto(time: Self::TimeGat<'_>, onto: &mut Self::Time) { C::clone_time_onto(time, onto) }
+        #[inline(always)] fn owned_diff(diff: Self::DiffGat<'_>) -> Self::Diff { C::owned_diff(diff) }
 
         type Storage = Rc<C::Storage>;
 

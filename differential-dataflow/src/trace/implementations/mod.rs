@@ -54,7 +54,6 @@ pub use self::ord_neu::OrdKeySpine as KeySpine;
 pub use self::ord_neu::OrdKeyBatcher as KeyBatcher;
 pub use self::ord_neu::RcOrdKeyBuilder as KeyBuilder;
 
-use std::borrow::{ToOwned};
 use std::convert::TryInto;
 
 use columnation::Columnation;
@@ -94,19 +93,108 @@ where
 
 /// A type with opinions on how updates should be laid out.
 pub trait Layout {
-    /// The represented update.
-    type Target: Update + ?Sized;
     /// Container for update keys.
-    // NB: The `PushInto` constraint is only required by `rhh.rs` to push default values.
-    type KeyContainer: BatchContainer + PushInto<<Self::Target as Update>::Key>;
+    type KeyContainer: BatchContainer;
     /// Container for update vals.
     type ValContainer: BatchContainer;
     /// Container for times.
-    type TimeContainer: BatchContainer<Owned = <Self::Target as Update>::Time> + PushInto<<Self::Target as Update>::Time>;
+    type TimeContainer: BatchContainer<Owned: Lattice + timely::progress::Timestamp>;
     /// Container for diffs.
-    type DiffContainer: BatchContainer<Owned = <Self::Target as Update>::Diff> + PushInto<<Self::Target as Update>::Diff>;
+    type DiffContainer: BatchContainer<Owned: Semigroup>;
     /// Container for offsets.
     type OffsetContainer: for<'a> BatchContainer<ReadItem<'a> = usize>;
+}
+
+/// A type bearing a layout.
+pub trait LaidOut {
+    /// The layout.
+    type Layout: Layout;
+}
+
+/// Automatically implemented trait for types with layouts.
+pub trait LayoutExt : LaidOut {
+    /// Alias for an owned key of a layout.
+    type Key;
+    /// Alias for an borrowed key of a layout.
+    type KeyRef<'a>;
+    /// Alias for an owned val of a layout.
+    type Val;
+    /// Alias for an borrowed val of a layout.
+    type ValRef<'a>;
+    /// Alias for an owned time of a layout.
+    type Time;
+    /// Alias for an borrowed time of a layout.
+    type TimeRef<'a>;
+    /// Alias for an owned diff of a layout.
+    type Diff;
+    /// Alias for an borrowed diff of a layout.
+    type DiffRef<'a>;
+
+    /// Construct an owned key from a reference.
+    fn owned_key(key: Self::KeyRef<'_>) -> Self::Key;
+    /// Construct an owned val from a reference.
+    fn owned_val(val: Self::ValRef<'_>) -> Self::Val;
+    /// Construct an owned time from a reference.
+    fn owned_time(time: Self::TimeRef<'_>) -> Self::Time;
+    /// Construct an owned diff from a reference.
+    fn owned_diff(diff: Self::DiffRef<'_>) -> Self::Diff;
+}
+
+impl<L: LaidOut> LayoutExt for L {
+    type Key = <<L::Layout as Layout>::KeyContainer as BatchContainer>::Owned;
+    type KeyRef<'a> = <<L::Layout as Layout>::KeyContainer as BatchContainer>::ReadItem<'a>;
+    type Val = <<L::Layout as Layout>::ValContainer as BatchContainer>::Owned;
+    type ValRef<'a> = <<L::Layout as Layout>::ValContainer as BatchContainer>::ReadItem<'a>;
+    type Time = <<L::Layout as Layout>::TimeContainer as BatchContainer>::Owned;
+    type TimeRef<'a> = <<L::Layout as Layout>::TimeContainer as BatchContainer>::ReadItem<'a>;
+    type Diff = <<L::Layout as Layout>::DiffContainer as BatchContainer>::Owned;
+    type DiffRef<'a> = <<L::Layout as Layout>::DiffContainer as BatchContainer>::ReadItem<'a>;
+
+    #[inline(always)] fn owned_key(key: Self::KeyRef<'_>) -> Self::Key { <Self::Layout as Layout>::KeyContainer::into_owned(key) }
+    #[inline(always)] fn owned_val(val: Self::ValRef<'_>) -> Self::Val { <Self::Layout as Layout>::ValContainer::into_owned(val) }
+    #[inline(always)] fn owned_time(time: Self::TimeRef<'_>) -> Self::Time { <Self::Layout as Layout>::TimeContainer::into_owned(time) }
+    #[inline(always)] fn owned_diff(diff: Self::DiffRef<'_>) -> Self::Diff { <Self::Layout as Layout>::DiffContainer::into_owned(diff) }
+}
+
+// An easy way to provide an explicit layout: as a 5-tuple.
+// Valuable when one wants to perform layout surgery.
+impl<KC, VC, TC, DC, OC> Layout for (KC, VC, TC, DC, OC)
+where
+    KC: BatchContainer,
+    VC: BatchContainer,
+    TC: BatchContainer<Owned: Lattice + timely::progress::Timestamp>,
+    DC: BatchContainer<Owned: Semigroup>,
+    OC: for<'a> BatchContainer<ReadItem<'a> = usize>,
+{
+    type KeyContainer = KC;
+    type ValContainer = VC;
+    type TimeContainer = TC;
+    type DiffContainer = DC;
+    type OffsetContainer = OC;
+}
+
+/// Aliases for types provided by the containers within a `Layout`.
+///
+/// For clarity, prefer `use layout;` and then `layout::Key<L>` to retain the layout context.
+pub mod layout {
+    use crate::trace::implementations::{BatchContainer, Layout};
+
+    /// Alias for an owned key of a layout.
+    pub type Key<L> = <<L as Layout>::KeyContainer as BatchContainer>::Owned;
+    /// Alias for an borrowed key of a layout.
+    pub type KeyRef<'a, L> = <<L as Layout>::KeyContainer as BatchContainer>::ReadItem<'a>;
+    /// Alias for an owned val of a layout.
+    pub type Val<L> = <<L as Layout>::ValContainer as BatchContainer>::Owned;
+    /// Alias for an borrowed val of a layout.
+    pub type ValRef<'a, L> = <<L as Layout>::ValContainer as BatchContainer>::ReadItem<'a>;
+    /// Alias for an owned time of a layout.
+    pub type Time<L> = <<L as Layout>::TimeContainer as BatchContainer>::Owned;
+    /// Alias for an borrowed time of a layout.
+    pub type TimeRef<'a, L> = <<L as Layout>::TimeContainer as BatchContainer>::ReadItem<'a>;
+    /// Alias for an owned diff of a layout.
+    pub type Diff<L> = <<L as Layout>::DiffContainer as BatchContainer>::Owned;
+    /// Alias for an borrowed diff of a layout.
+    pub type DiffRef<'a, L> = <<L as Layout>::DiffContainer as BatchContainer>::ReadItem<'a>;
 }
 
 /// A layout that uses vectors
@@ -115,7 +203,6 @@ pub struct Vector<U: Update> {
 }
 
 impl<U: Update<Diff: Ord>> Layout for Vector<U> {
-    type Target = U;
     type KeyContainer = Vec<U::Key>;
     type ValContainer = Vec<U::Val>;
     type TimeContainer = Vec<U::Time>;
@@ -137,60 +224,10 @@ where
         Diff: Columnation + Ord,
     >,
 {
-    type Target = U;
     type KeyContainer = TimelyStack<U::Key>;
     type ValContainer = TimelyStack<U::Val>;
     type TimeContainer = TimelyStack<U::Time>;
     type DiffContainer = TimelyStack<U::Diff>;
-    type OffsetContainer = OffsetList;
-}
-
-/// A type with a preferred container.
-///
-/// Examples include types that implement `Clone` who prefer
-pub trait PreferredContainer : ToOwned {
-    /// The preferred container for the type.
-    type Container: BatchContainer + PushInto<Self::Owned>;
-}
-
-impl<T: Ord + Clone + 'static> PreferredContainer for T {
-    type Container = Vec<T>;
-}
-
-impl<T: Ord + Clone + 'static> PreferredContainer for [T] {
-    type Container = SliceContainer<T>;
-}
-
-/// An update and layout description based on preferred containers.
-pub struct Preferred<K: ?Sized, V: ?Sized, T, D> {
-    phantom: std::marker::PhantomData<(Box<K>, Box<V>, T, D)>,
-}
-
-impl<K,V,T,R> Update for Preferred<K, V, T, R>
-where
-    K: ToOwned<Owned: Ord+Clone+'static> + ?Sized,
-    V: ToOwned<Owned: Ord+Clone+'static> + ?Sized,
-    T: Ord+Clone+Lattice+timely::progress::Timestamp,
-    R: Ord+Clone+Semigroup+'static,
-{
-    type Key = K::Owned;
-    type Val = V::Owned;
-    type Time = T;
-    type Diff = R;
-}
-
-impl<K, V, T, D> Layout for Preferred<K, V, T, D>
-where
-    K: Ord+ToOwned<Owned: Ord+Clone+'static>+PreferredContainer + ?Sized,
-    V: Ord+ToOwned<Owned: Ord+Clone+'static>+PreferredContainer + ?Sized,
-    T: Ord+Clone+Lattice+timely::progress::Timestamp,
-    D: Ord+Clone+Semigroup+'static,
-{
-    type Target = Preferred<K, V, T, D>;
-    type KeyContainer = K::Container;
-    type ValContainer = V::Container;
-    type TimeContainer = Vec<T>;
-    type DiffContainer = Vec<D>;
     type OffsetContainer = OffsetList;
 }
 
@@ -294,7 +331,15 @@ impl BatchContainer for OffsetList {
     type Owned = usize;
     type ReadItem<'a> = usize;
 
+    #[inline(always)]
+    fn into_owned<'a>(item: Self::ReadItem<'a>) -> Self::Owned { item }
+    #[inline(always)]
+    fn borrow_as<'a>(owned: &'a Self::Owned) -> Self::ReadItem<'a> { *owned }
+    #[inline(always)]
     fn reborrow<'b, 'a: 'b>(item: Self::ReadItem<'a>) -> Self::ReadItem<'b> { item }
+
+    fn push_ref(&mut self, item: Self::ReadItem<'_>) { self.push_into(item) }
+    fn push_own(&mut self, item: Self::Owned) { self.push_into(item) }
 
     fn with_capacity(size: usize) -> Self {
         Self::with_capacity(size)
@@ -454,20 +499,34 @@ pub mod containers {
     use timely::container::PushInto;
 
     use crate::containers::TimelyStack;
-    use crate::IntoOwned;
 
     /// A general-purpose container resembling `Vec<T>`.
-    pub trait BatchContainer: for<'a> PushInto<Self::ReadItem<'a>> + 'static {
+    pub trait BatchContainer: 'static {
         /// An owned instance of `Self::ReadItem<'_>`.
         type Owned;
 
         /// The type that can be read back out of the container.
-        type ReadItem<'a>: Copy + Ord + IntoOwned<'a, Owned = Self::Owned>;
+        type ReadItem<'a>: Copy + Ord;
+
+
+        /// Conversion from an instance of this type to the owned type.
+        #[must_use]
+        fn into_owned<'a>(item: Self::ReadItem<'a>) -> Self::Owned;
+        /// Clones `self` onto an existing instance of the owned type.
+        #[inline(always)]
+        fn clone_onto<'a>(item: Self::ReadItem<'a>, other: &mut Self::Owned) {
+            *other = Self::into_owned(item);
+        }
+        /// Borrows an owned instance as oneself.
+        #[must_use]
+        fn borrow_as<'a>(owned: &'a Self::Owned) -> Self::ReadItem<'a>;
+
 
         /// Push an item into this container
-        fn push<D>(&mut self, item: D) where Self: PushInto<D> {
-            self.push_into(item);
-        }
+        fn push_ref(&mut self, item: Self::ReadItem<'_>);
+        /// Push an item into this container
+        fn push_own(&mut self, item: Self::Owned);
+
         /// Creates a new container with sufficient capacity.
         fn with_capacity(size: usize) -> Self;
         /// Creates a new container with sufficient capacity.
@@ -552,7 +611,14 @@ pub mod containers {
         type Owned = T;
         type ReadItem<'a> = &'a T;
 
+        #[inline(always)] fn into_owned<'a>(item: Self::ReadItem<'a>) -> Self::Owned { item.clone() }
+        #[inline(always)] fn clone_onto<'a>(item: Self::ReadItem<'a>, other: &mut Self::Owned) { other.clone_from(item); }
+        #[inline(always)] fn borrow_as<'a>(owned: &'a Self::Owned) -> Self::ReadItem<'a> { owned }
+
         fn reborrow<'b, 'a: 'b>(item: Self::ReadItem<'a>) -> Self::ReadItem<'b> { item }
+
+        fn push_ref(&mut self, item: Self::ReadItem<'_>) { self.push_into(item) }
+        fn push_own(&mut self, item: Self::Owned) { self.push_into(item) }
 
         fn with_capacity(size: usize) -> Self {
             Vec::with_capacity(size)
@@ -577,7 +643,14 @@ pub mod containers {
         type Owned = T;
         type ReadItem<'a> = &'a T;
 
+        #[inline(always)] fn into_owned<'a>(item: Self::ReadItem<'a>) -> Self::Owned { item.clone() }
+        #[inline(always)] fn clone_onto<'a>(item: Self::ReadItem<'a>, other: &mut Self::Owned) { other.clone_from(item); }
+        #[inline(always)] fn borrow_as<'a>(owned: &'a Self::Owned) -> Self::ReadItem<'a> { owned }
+
         fn reborrow<'b, 'a: 'b>(item: Self::ReadItem<'a>) -> Self::ReadItem<'b> { item }
+
+        fn push_ref(&mut self, item: Self::ReadItem<'_>) { self.push_into(item) }
+        fn push_own(&mut self, item: Self::Owned) { self.push_into(item) }
 
         fn with_capacity(size: usize) -> Self {
             Self::with_capacity(size)
@@ -637,7 +710,14 @@ pub mod containers {
         type Owned = Vec<B>;
         type ReadItem<'a> = &'a [B];
 
+        #[inline(always)] fn into_owned<'a>(item: Self::ReadItem<'a>) -> Self::Owned { item.to_vec() }
+        #[inline(always)] fn clone_onto<'a>(item: Self::ReadItem<'a>, other: &mut Self::Owned) { other.clone_from_slice(item); }
+        #[inline(always)] fn borrow_as<'a>(owned: &'a Self::Owned) -> Self::ReadItem<'a> { &owned[..] }
+
         fn reborrow<'b, 'a: 'b>(item: Self::ReadItem<'a>) -> Self::ReadItem<'b> { item }
+
+        fn push_ref(&mut self, item: Self::ReadItem<'_>) { self.push_into(item) }
+        fn push_own(&mut self, item: Self::Owned) { self.push_into(item) }
 
         fn with_capacity(size: usize) -> Self {
             let mut offsets = Vec::with_capacity(size + 1);

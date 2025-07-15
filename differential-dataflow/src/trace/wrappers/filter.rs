@@ -133,6 +133,10 @@ where
     type Diff = C::Diff;
     type DiffGat<'a> = C::DiffGat<'a>;
 
+    #[inline(always)] fn owned_time(time: Self::TimeGat<'_>) -> Self::Time { C::owned_time(time) }
+    #[inline(always)] fn clone_time_onto(time: Self::TimeGat<'_>, onto: &mut Self::Time) { C::clone_time_onto(time, onto) }
+    #[inline(always)] fn owned_diff(diff: Self::DiffGat<'_>) -> Self::Diff { C::owned_diff(diff) }
+
     type Storage = C::Storage;
 
     #[inline] fn key_valid(&self, storage: &Self::Storage) -> bool { self.cursor.key_valid(storage) }
@@ -190,6 +194,10 @@ where
     type TimeGat<'a> = C::TimeGat<'a>;
     type Diff = C::Diff;
     type DiffGat<'a> = C::DiffGat<'a>;
+
+    #[inline(always)] fn owned_time(time: Self::TimeGat<'_>) -> Self::Time { C::owned_time(time) }
+    #[inline(always)] fn clone_time_onto(time: Self::TimeGat<'_>, onto: &mut Self::Time) { C::clone_time_onto(time, onto) }
+    #[inline(always)] fn owned_diff(diff: Self::DiffGat<'_>) -> Self::Diff { C::owned_diff(diff) }
 
     type Storage = BatchFilter<C::Storage, F>;
 

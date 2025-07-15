@@ -8,8 +8,6 @@
 use timely::progress::Timestamp;
 
 use crate::difference::Semigroup;
-// `pub use` for legacy reasons.
-pub use crate::IntoOwned;
 use crate::lattice::Lattice;
 
 pub mod cursor_list;
@@ -26,11 +24,18 @@ pub trait Cursor {
     /// Timestamps associated with updates
     type Time: Timestamp + Lattice + Ord + Clone;
     /// Borrowed form of timestamp.
-    type TimeGat<'a>: Copy + IntoOwned<'a, Owned = Self::Time>;
+    type TimeGat<'a>: Copy;
     /// Owned form of update difference.
     type Diff: Semigroup + 'static;
     /// Borrowed form of update difference.
-    type DiffGat<'a> : Copy + IntoOwned<'a, Owned = Self::Diff>;
+    type DiffGat<'a> : Copy;
+
+    /// An owned copy of a reference to a time.
+    fn owned_time(time: Self::TimeGat<'_>) -> Self::Time;
+    /// Clones a reference time onto an owned time.
+    fn clone_time_onto(time: Self::TimeGat<'_>, onto: &mut Self::Time);
+    /// An owned copy of a reference to a diff.
+    fn owned_diff(diff: Self::DiffGat<'_>) -> Self::Diff;
 
     /// Storage required by the cursor.
     type Storage;
@@ -74,10 +79,10 @@ pub trait Cursor {
     fn rewind_vals(&mut self, storage: &Self::Storage);
 
     /// Rewinds the cursor and outputs its contents to a Vec
-    fn to_vec<K, V>(&mut self, storage: &Self::Storage) -> Vec<((K, V), Vec<(Self::Time, Self::Diff)>)>
-    where 
-        for<'a> Self::Key<'a> : IntoOwned<'a, Owned = K>,
-        for<'a> Self::Val<'a> : IntoOwned<'a, Owned = V>,
+    fn to_vec<K, IK, V, IV>(&mut self, storage: &Self::Storage, into_key: IK, into_val: IV) -> Vec<((K, V), Vec<(Self::Time, Self::Diff)>)>
+    where
+        IK: for<'a> Fn(Self::Key<'a>) -> K,
+        IV: for<'a> Fn(Self::Val<'a>) -> V,
     {
         let mut out = Vec::new();
         self.rewind_keys(storage);
@@ -86,9 +91,9 @@ pub trait Cursor {
             while let Some(val) = self.get_val(storage) {
                 let mut kv_out = Vec::new();
                 self.map_times(storage, |ts, r| {
-                    kv_out.push((ts.into_owned(), r.into_owned()));
+                    kv_out.push((Self::owned_time(ts), Self::owned_diff(r)));
                 });
-                out.push(((key.into_owned(), val.into_owned()), kv_out));
+                out.push(((into_key(key), into_val(val)), kv_out));
                 self.step_val(storage);
             }
             self.step_key(storage);

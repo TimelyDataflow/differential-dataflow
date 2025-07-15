@@ -42,10 +42,10 @@ pub trait ThresholdTotal<G: Scope<Timestamp: TotalOrder+Lattice+Ord>, K: Exchang
     fn threshold_total<R2: Abelian+'static, F: FnMut(&K,&R)->R2+'static>(&self, mut thresh: F) -> Collection<G, K, R2> {
         self.threshold_semigroup(move |key, new, old| {
             let mut new = thresh(key, new);
-            if let Some(old) = old { 
+            if let Some(old) = old {
                 let mut add = thresh(key, old);
                 add.negate();
-                new.plus_equals(&add); 
+                new.plus_equals(&add);
             }
             if !new.is_zero() { Some(new) } else { None }
         })
@@ -102,7 +102,7 @@ impl<G, K, T1> ThresholdTotal<G, K, T1::Diff> for Arranged<G, T1>
 where
     G: Scope<Timestamp=T1::Time>,
     T1: for<'a> TraceReader<
-        Key<'a>=&'a K, 
+        Key<'a>=&'a K,
         Val<'a>=&'a (),
         Time: TotalOrder,
         Diff : ExchangeData + Semigroup<T1::DiffGat<'a>>,
@@ -144,7 +144,6 @@ where
                     }
                 });
 
-                use crate::IntoOwned;
                 if let Some(capability) = cap {
 
                     let mut session = output.session(&capability);
@@ -161,7 +160,7 @@ where
                         if trace_cursor.get_key(&trace_storage) == Some(key) {
                             trace_cursor.map_times(&trace_storage, |_, diff| {
                                 count.as_mut().map(|c| c.plus_equals(&diff));
-                                if count.is_none() { count = Some(diff.into_owned()); }
+                                if count.is_none() { count = Some(T1::owned_diff(diff)); }
                             });
                         }
 
@@ -176,7 +175,7 @@ where
                                     temp.plus_equals(&diff);
                                     thresh(key, &temp, Some(old))
                                 },
-                                None => { thresh(key, &diff.into_owned(), None) },
+                                None => { thresh(key, &T1::owned_diff(diff), None) },
                             };
 
                             // Either add or assign `diff` to `count`.
@@ -184,12 +183,12 @@ where
                                 count.plus_equals(&diff);
                             }
                             else {
-                                count = Some(diff.into_owned());
+                                count = Some(T1::owned_diff(diff));
                             }
 
                             if let Some(difference) = difference {
                                 if !difference.is_zero() {
-                                    session.give((key.clone(), time.into_owned(), difference));
+                                    session.give((key.clone(), T1::owned_time(time), difference));
                                 }
                             }
                         });

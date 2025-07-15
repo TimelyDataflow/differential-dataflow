@@ -175,6 +175,10 @@ where
     type Diff = C::Diff;
     type DiffGat<'a> = C::DiffGat<'a>;
 
+    #[inline(always)] fn owned_time(time: Self::TimeGat<'_>) -> Self::Time { time.clone() }
+    #[inline(always)] fn clone_time_onto(time: Self::TimeGat<'_>, onto: &mut Self::Time) { onto.clone_from(time) }
+    #[inline(always)] fn owned_diff(diff: Self::DiffGat<'_>) -> Self::Diff { C::owned_diff(diff) }
+
     type Storage = C::Storage;
 
     #[inline] fn key_valid(&self, storage: &Self::Storage) -> bool { self.cursor.key_valid(storage) }
@@ -188,9 +192,8 @@ where
 
     #[inline]
     fn map_times<L: FnMut(&TInner, Self::DiffGat<'_>)>(&mut self, storage: &Self::Storage, mut logic: L) {
-        use crate::IntoOwned;
         self.cursor.map_times(storage, |time, diff| {
-            logic(&TInner::to_inner(time.into_owned()), diff)
+            logic(&TInner::to_inner(C::owned_time(time)), diff)
         })
     }
 
@@ -232,6 +235,10 @@ where
     type Diff = C::Diff;
     type DiffGat<'a> = C::DiffGat<'a>;
 
+    #[inline(always)] fn owned_time(time: Self::TimeGat<'_>) -> Self::Time { time.clone() }
+    #[inline(always)] fn clone_time_onto(time: Self::TimeGat<'_>, onto: &mut Self::Time) { onto.clone_from(time) }
+    #[inline(always)] fn owned_diff(diff: Self::DiffGat<'_>) -> Self::Diff { C::owned_diff(diff) }
+
     type Storage = BatchEnter<C::Storage, TInner>;
 
     #[inline] fn key_valid(&self, storage: &Self::Storage) -> bool { self.cursor.key_valid(&storage.batch) }
@@ -245,9 +252,8 @@ where
 
     #[inline]
     fn map_times<L: FnMut(&TInner, Self::DiffGat<'_>)>(&mut self, storage: &Self::Storage, mut logic: L) {
-        use crate::IntoOwned;
         self.cursor.map_times(&storage.batch, |time, diff| {
-            logic(&TInner::to_inner(time.into_owned()), diff)
+            logic(&TInner::to_inner(C::owned_time(time)), diff)
         })
     }
 

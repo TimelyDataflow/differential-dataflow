@@ -6,7 +6,7 @@ use timely::dataflow::operators::Operator;
 use timely::dataflow::channels::pact::Pipeline;
 
 use crate::lattice::Lattice;
-use crate::{IntoOwned, ExchangeData, Collection};
+use crate::{ExchangeData, Collection};
 use crate::difference::{IsZero, Semigroup};
 use crate::hashable::Hashable;
 use crate::collection::AsCollection;
@@ -56,7 +56,7 @@ impl<G, K, T1> CountTotal<G, K, T1::Diff> for Arranged<G, T1>
 where
     G: Scope<Timestamp=T1::Time>,
     T1: for<'a> TraceReader<
-        Key<'a>: IntoOwned<'a, Owned = K>,
+        Key<'a> = &'a K,
         Val<'a>=&'a (),
         Time: TotalOrder,
         Diff: ExchangeData+Semigroup<T1::DiffGat<'a>>
@@ -109,7 +109,7 @@ where
                         if trace_cursor.get_key(&trace_storage) == Some(key) {
                             trace_cursor.map_times(&trace_storage, |_, diff| {
                                 count.as_mut().map(|c| c.plus_equals(&diff));
-                                if count.is_none() { count = Some(diff.into_owned()); }
+                                if count.is_none() { count = Some(T1::owned_diff(diff)); }
                             });
                         }
 
@@ -117,14 +117,14 @@ where
 
                             if let Some(count) = count.as_ref() {
                                 if !count.is_zero() {
-                                    session.give(((key.into_owned(), count.clone()), time.into_owned(), R2::from(-1i8)));
+                                    session.give(((key.clone(), count.clone()), T1::owned_time(time), R2::from(-1i8)));
                                 }
                             }
                             count.as_mut().map(|c| c.plus_equals(&diff));
-                            if count.is_none() { count = Some(diff.into_owned()); }
+                            if count.is_none() { count = Some(T1::owned_diff(diff)); }
                             if let Some(count) = count.as_ref() {
                                 if !count.is_zero() {
-                                    session.give(((key.into_owned(), count.clone()), time.into_owned(), R2::from(1i8)));
+                                    session.give(((key.clone(), count.clone()), T1::owned_time(time), R2::from(1i8)));
                                 }
                             }
                         });

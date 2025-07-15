@@ -50,7 +50,7 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::trace::{Cursor, TraceReader};
 use differential_dataflow::consolidation::{consolidate, consolidate_updates};
-use differential_dataflow::trace::cursor::IntoOwned;
+use differential_dataflow::IntoOwned;
 
 /// A binary equijoin that responds to updates on only its first input.
 ///
@@ -86,7 +86,7 @@ where
     K: Hashable + ExchangeData,
     V: ExchangeData,
     R: ExchangeData + Monoid,
-    Tr: for<'a> TraceReader<Key<'a> : IntoOwned<'a, Owned = K>>+Clone+'static,
+    Tr: for<'a> TraceReader<Key<'a> : IntoOwned<'a, Owned = K>, TimeGat<'a> : IntoOwned<'a, Owned = Tr::Time>>+Clone+'static,
     R: Mul<Tr::Diff, Output: Semigroup>,
     FF: Fn(&G::Timestamp, &mut Antichain<G::Timestamp>) + 'static,
     CF: Fn(Tr::TimeGat<'_>, &G::Timestamp) -> bool + 'static,
@@ -156,7 +156,7 @@ where
     K: Hashable + ExchangeData,
     V: ExchangeData,
     R: ExchangeData + Monoid,
-    Tr: for<'a> TraceReader<Key<'a> : IntoOwned<'a, Owned = K>>+Clone+'static,
+    Tr: for<'a> TraceReader<Key<'a> : IntoOwned<'a, Owned = K>, TimeGat<'a> : IntoOwned<'a, Owned = Tr::Time>>+Clone+'static,
     FF: Fn(&G::Timestamp, &mut Antichain<G::Timestamp>) + 'static,
     CF: Fn(Tr::TimeGat<'_>, &Tr::Time) -> bool + 'static,
     Y: Fn(std::time::Instant, usize) -> bool + 'static,
@@ -271,7 +271,7 @@ where
 
             // drop fully processed capabilities.
             stash.retain(|_,proposals| !proposals.is_empty());
-            
+
             for (capability, proposals) in stash_additions.into_iter() {
                 stash.entry(capability).or_insert(Vec::new()).extend(proposals);
             }
@@ -316,7 +316,7 @@ fn process_proposals<G, Tr, CF, Y, S, CB, K, V, R>(
 ) -> bool
 where
     G: Scope<Timestamp = Tr::Time>,
-    Tr: for<'a> TraceReader<Key<'a> : IntoOwned<'a, Owned = K>>,
+    Tr: for<'a> TraceReader<Key<'a> : IntoOwned<'a, Owned = K>, TimeGat<'a> : IntoOwned<'a, Owned = Tr::Time>>,
     CF: Fn(Tr::TimeGat<'_>, &Tr::Time) -> bool + 'static,
     Y: Fn(Instant, usize) -> bool + 'static,
     S: FnMut(&mut SessionFor<G, CB>, &K, &V, Tr::Val<'_>, &G::Timestamp, &R, &mut Vec<(G::Timestamp, Tr::Diff)>) + 'static,
@@ -336,7 +336,7 @@ where
         // Use TOTAL ORDER to allow the release of `time`.
         yielded = yielded || yield_function(timer, *work);
         if !yielded && !frontier.iter().any(|t| comparison(<Tr::TimeGat<'_> as IntoOwned>::borrow_as(t), initial)) {
-            use differential_dataflow::trace::cursor::IntoOwned;
+            use differential_dataflow::IntoOwned;
             cursor.seek_key(&storage, IntoOwned::borrow_as(key));
             if cursor.get_key(&storage) == Some(IntoOwned::borrow_as(key)) {
                 while let Some(val2) = cursor.get_val(&storage) {
@@ -344,7 +344,7 @@ where
                         if comparison(t, initial) {
                             let mut t = t.into_owned();
                             t.join_assign(time);
-                            output_buffer.push((t, d.into_owned()))
+                            output_buffer.push((t, Tr::owned_diff(d)))
                         }
                     });
                     consolidate(&mut output_buffer);

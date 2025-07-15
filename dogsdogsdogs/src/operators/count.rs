@@ -4,7 +4,7 @@ use differential_dataflow::{ExchangeData, Collection, Hashable};
 use differential_dataflow::difference::{Semigroup, Monoid, Multiply};
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::trace::TraceReader;
-use differential_dataflow::trace::cursor::IntoOwned;
+use differential_dataflow::IntoOwned;
 
 /// Reports a number of extensions to a stream of prefixes.
 ///
@@ -22,6 +22,7 @@ where
     G: Scope<Timestamp=Tr::Time>,
     Tr: for<'a> TraceReader<
         Key<'a>: IntoOwned<'a, Owned = K>,
+        TimeGat<'a>: IntoOwned<'a, Owned = Tr::Time>,
         Diff=isize,
     >+Clone+'static,
     for<'a> Tr::Diff : Semigroup<Tr::DiffGat<'a>>,

@@ -22,7 +22,6 @@ pub mod threshold;
 
 use crate::lattice::Lattice;
 use crate::trace::Cursor;
-use crate::IntoOwned;
 
 /// An accumulation of (value, time, diff) updates.
 struct EditList<'a, C: Cursor> {
@@ -46,7 +45,7 @@ impl<'a, C: Cursor> EditList<'a, C> {
     {
         self.clear();
         while let Some(val) = cursor.get_val(storage) {
-            cursor.map_times(storage, |time1, diff1| self.push(logic(time1), diff1.into_owned()));
+            cursor.map_times(storage, |time1, diff1| self.push(logic(time1), C::owned_diff(diff1)));
             self.seal(val);
             cursor.step_val(storage);
         }

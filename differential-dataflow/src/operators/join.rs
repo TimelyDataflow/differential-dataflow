@@ -171,7 +171,7 @@ where
     V: Data + 'static,
 {
     fn join_map<V2: ExchangeData, R2: ExchangeData+Semigroup, D: Data, L>(&self, other: &Collection<G, (K, V2), R2>, mut logic: L) -> Collection<G, D, <Tr::Diff as Multiply<R2>>::Output>
-    where 
+    where
         Tr::Diff: Multiply<R2, Output: Semigroup+'static>,
         L: for<'a> FnMut(Tr::Key<'a>, Tr::Val<'a>, &V2)->D+'static,
     {
@@ -660,14 +660,12 @@ where
                 Ordering::Greater => batch.seek_key(batch_storage, trace_key),
                 Ordering::Equal => {
 
-                    use crate::IntoOwned;
-                    
                     thinker.history1.edits.load(trace, trace_storage, |time| {
-                        let mut time = time.into_owned();
+                        let mut time = C1::owned_time(time);
                         time.join_assign(meet);
                         time
                     });
-                    thinker.history2.edits.load(batch, batch_storage, |time| time.into_owned());
+                    thinker.history2.edits.load(batch, batch_storage, |time| C2::owned_time(time));
 
                     // populate `temp` with the results in the best way we know how.
                     thinker.think(|v1,v2,t,r1,r2| {
