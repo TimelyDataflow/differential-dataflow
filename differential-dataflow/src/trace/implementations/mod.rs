@@ -116,58 +116,63 @@ pub trait LayoutExt : LaidOut<Layout: Layout<KeyContainer = Self::KeyContainer, 
     /// Alias for an owned key of a layout.
     type KeyOwn;
     /// Alias for an borrowed key of a layout.
-    type KeyRef<'a>: Copy + Ord;
+    type Key<'a>: Copy + Ord;
     /// Alias for an owned val of a layout.
     type ValOwn;
     /// Alias for an borrowed val of a layout.
-    type ValRef<'a>: Copy + Ord;
+    type Val<'a>: Copy + Ord;
     /// Alias for an owned time of a layout.
-    type TimeOwn: Lattice + timely::progress::Timestamp;
+    type Time: Lattice + timely::progress::Timestamp;
     /// Alias for an borrowed time of a layout.
-    type TimeRef<'a>: Copy + Ord;
+    type TimeGat<'a>: Copy + Ord;
     /// Alias for an owned diff of a layout.
-    type DiffOwn: Semigroup;
+    type Diff: Semigroup;
     /// Alias for an borrowed diff of a layout.
-    type DiffRef<'a>: Copy + Ord;
+    type DiffGat<'a>: Copy + Ord;
 
     /// Container for update keys.
-    type KeyContainer: for<'a> BatchContainer<ReadItem<'a> = Self::KeyRef<'a>, Owned = Self::KeyOwn>;
+    type KeyContainer: for<'a> BatchContainer<ReadItem<'a> = Self::Key<'a>, Owned = Self::KeyOwn>;
     /// Container for update vals.
-    type ValContainer: for<'a> BatchContainer<ReadItem<'a> = Self::ValRef<'a>, Owned = Self::ValOwn>;
+    type ValContainer: for<'a> BatchContainer<ReadItem<'a> = Self::Val<'a>, Owned = Self::ValOwn>;
     /// Container for times.
-    type TimeContainer: for<'a> BatchContainer<ReadItem<'a> = Self::TimeRef<'a>, Owned = Self::TimeOwn>;
+    type TimeContainer: for<'a> BatchContainer<ReadItem<'a> = Self::TimeGat<'a>, Owned = Self::Time>;
     /// Container for diffs.
-    type DiffContainer: for<'a> BatchContainer<ReadItem<'a> = Self::DiffRef<'a>, Owned = Self::DiffOwn>;
+    type DiffContainer: for<'a> BatchContainer<ReadItem<'a> = Self::DiffGat<'a>, Owned = Self::Diff>;
 
     /// Construct an owned key from a reference.
-    fn owned_key(key: Self::KeyRef<'_>) -> Self::KeyOwn;
+    fn owned_key(key: Self::Key<'_>) -> Self::KeyOwn;
     /// Construct an owned val from a reference.
-    fn owned_val(val: Self::ValRef<'_>) -> Self::ValOwn;
+    fn owned_val(val: Self::Val<'_>) -> Self::ValOwn;
     /// Construct an owned time from a reference.
-    fn owned_time2(time: Self::TimeRef<'_>) -> Self::TimeOwn;
+    fn owned_time(time: Self::TimeGat<'_>) -> Self::Time;
     /// Construct an owned diff from a reference.
-    fn owned_diff2(diff: Self::DiffRef<'_>) -> Self::DiffOwn;
+    fn owned_diff(diff: Self::DiffGat<'_>) -> Self::Diff;
+
+    /// Clones a reference time onto an owned time.
+    fn clone_time_onto(time: Self::TimeGat<'_>, onto: &mut Self::Time);
 }
 
 impl<L: LaidOut> LayoutExt for L {
     type KeyOwn = <<L::Layout as Layout>::KeyContainer as BatchContainer>::Owned;
-    type KeyRef<'a> = <<L::Layout as Layout>::KeyContainer as BatchContainer>::ReadItem<'a>;
+    type Key<'a> = <<L::Layout as Layout>::KeyContainer as BatchContainer>::ReadItem<'a>;
     type ValOwn = <<L::Layout as Layout>::ValContainer as BatchContainer>::Owned;
-    type ValRef<'a> = <<L::Layout as Layout>::ValContainer as BatchContainer>::ReadItem<'a>;
-    type TimeOwn = <<L::Layout as Layout>::TimeContainer as BatchContainer>::Owned;
-    type TimeRef<'a> = <<L::Layout as Layout>::TimeContainer as BatchContainer>::ReadItem<'a>;
-    type DiffOwn = <<L::Layout as Layout>::DiffContainer as BatchContainer>::Owned;
-    type DiffRef<'a> = <<L::Layout as Layout>::DiffContainer as BatchContainer>::ReadItem<'a>;
+    type Val<'a> = <<L::Layout as Layout>::ValContainer as BatchContainer>::ReadItem<'a>;
+    type Time = <<L::Layout as Layout>::TimeContainer as BatchContainer>::Owned;
+    type TimeGat<'a> = <<L::Layout as Layout>::TimeContainer as BatchContainer>::ReadItem<'a>;
+    type Diff = <<L::Layout as Layout>::DiffContainer as BatchContainer>::Owned;
+    type DiffGat<'a> = <<L::Layout as Layout>::DiffContainer as BatchContainer>::ReadItem<'a>;
 
     type KeyContainer = <L::Layout as Layout>::KeyContainer;
     type ValContainer = <L::Layout as Layout>::ValContainer;
     type TimeContainer = <L::Layout as Layout>::TimeContainer;
     type DiffContainer = <L::Layout as Layout>::DiffContainer;
 
-    #[inline(always)] fn owned_key(key: Self::KeyRef<'_>) -> Self::KeyOwn { <Self::Layout as Layout>::KeyContainer::into_owned(key) }
-    #[inline(always)] fn owned_val(val: Self::ValRef<'_>) -> Self::ValOwn { <Self::Layout as Layout>::ValContainer::into_owned(val) }
-    #[inline(always)] fn owned_time2(time: Self::TimeRef<'_>) -> Self::TimeOwn { <Self::Layout as Layout>::TimeContainer::into_owned(time) }
-    #[inline(always)] fn owned_diff2(diff: Self::DiffRef<'_>) -> Self::DiffOwn { <Self::Layout as Layout>::DiffContainer::into_owned(diff) }
+    #[inline(always)] fn owned_key(key: Self::Key<'_>) -> Self::KeyOwn { <Self::Layout as Layout>::KeyContainer::into_owned(key) }
+    #[inline(always)] fn owned_val(val: Self::Val<'_>) -> Self::ValOwn { <Self::Layout as Layout>::ValContainer::into_owned(val) }
+    #[inline(always)] fn owned_time(time: Self::TimeGat<'_>) -> Self::Time { <Self::Layout as Layout>::TimeContainer::into_owned(time) }
+    #[inline(always)] fn owned_diff(diff: Self::DiffGat<'_>) -> Self::Diff { <Self::Layout as Layout>::DiffContainer::into_owned(diff) }
+    #[inline(always)] fn clone_time_onto(time: Self::TimeGat<'_>, onto: &mut Self::Time) { <Self::Layout as Layout>::TimeContainer::clone_onto(time, onto) }
+
 }
 
 // An easy way to provide an explicit layout: as a 5-tuple.

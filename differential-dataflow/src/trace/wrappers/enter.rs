@@ -183,17 +183,6 @@ where
     C: Cursor,
     TInner: Refines<C::Time>+Lattice,
 {
-    type Key<'a> = C::Key<'a>;
-    type Val<'a> = C::Val<'a>;
-    type Time = TInner;
-    type TimeGat<'a> = &'a TInner;
-    type Diff = C::Diff;
-    type DiffGat<'a> = C::DiffGat<'a>;
-
-    #[inline(always)] fn owned_time(time: Self::TimeGat<'_>) -> Self::Time { time.clone() }
-    #[inline(always)] fn clone_time_onto(time: Self::TimeGat<'_>, onto: &mut Self::Time) { onto.clone_from(time) }
-    #[inline(always)] fn owned_diff(diff: Self::DiffGat<'_>) -> Self::Diff { C::owned_diff(diff) }
-
     type Storage = C::Storage;
 
     #[inline] fn key_valid(&self, storage: &Self::Storage) -> bool { self.cursor.key_valid(storage) }
@@ -257,17 +246,6 @@ impl<TInner, C: Cursor> Cursor for BatchCursorEnter<C, TInner>
 where
     TInner: Refines<C::Time>+Lattice,
 {
-    type Key<'a> = C::Key<'a>;
-    type Val<'a> = C::Val<'a>;
-    type Time = TInner;
-    type TimeGat<'a> = &'a TInner;
-    type Diff = C::Diff;
-    type DiffGat<'a> = C::DiffGat<'a>;
-
-    #[inline(always)] fn owned_time(time: Self::TimeGat<'_>) -> Self::Time { time.clone() }
-    #[inline(always)] fn clone_time_onto(time: Self::TimeGat<'_>, onto: &mut Self::Time) { onto.clone_from(time) }
-    #[inline(always)] fn owned_diff(diff: Self::DiffGat<'_>) -> Self::Diff { C::owned_diff(diff) }
-
     type Storage = BatchEnter<C::Storage, TInner>;
 
     #[inline] fn key_valid(&self, storage: &Self::Storage) -> bool { self.cursor.key_valid(&storage.batch) }

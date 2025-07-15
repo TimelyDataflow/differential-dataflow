@@ -664,17 +664,6 @@ mod val_batch {
         layout::Key<L>: Default + HashOrdered,
         for<'a> layout::KeyRef<'a, L>: HashOrdered,
     {
-        type Key<'a> = layout::KeyRef<'a, L>;
-        type Val<'a> = layout::ValRef<'a, L>;
-        type Time = layout::Time<L>;
-        type TimeGat<'a> = layout::TimeRef<'a, L>;
-        type Diff = layout::Diff<L>;
-        type DiffGat<'a> = layout::DiffRef<'a, L>;
-
-        #[inline(always)] fn owned_time(time: Self::TimeGat<'_>) -> Self::Time { L::TimeContainer::into_owned(time) }
-        #[inline(always)] fn clone_time_onto(time: Self::TimeGat<'_>, onto: &mut Self::Time) { L::TimeContainer::clone_onto(time, onto) }
-        #[inline(always)] fn owned_diff(diff: Self::DiffGat<'_>) -> Self::Diff { L::DiffContainer::into_owned(diff) }
-
         type Storage = RhhValBatch<L>;
 
         fn get_key<'a>(&self, storage: &'a RhhValBatch<L>) -> Option<Self::Key<'a>> { storage.storage.keys.get(self.key_cursor) }

@@ -192,17 +192,6 @@ where
     C: Cursor,
     F: Fn(C::TimeGat<'_>)->Option<C::Time>,
 {
-    type Key<'a> = C::Key<'a>;
-    type Val<'a> = C::Val<'a>;
-    type Time = C::Time;
-    type TimeGat<'a> = &'a C::Time;
-    type Diff = C::Diff;
-    type DiffGat<'a> = C::DiffGat<'a>;
-
-    #[inline(always)] fn owned_time(time: Self::TimeGat<'_>) -> Self::Time { time.clone() }
-    #[inline(always)] fn clone_time_onto(time: Self::TimeGat<'_>, onto: &mut Self::Time) { onto.clone_from(time) }
-    #[inline(always)] fn owned_diff(diff: Self::DiffGat<'_>) -> Self::Diff { C::owned_diff(diff) }
-
     type Storage = C::Storage;
 
     #[inline] fn key_valid(&self, storage: &Self::Storage) -> bool { self.cursor.key_valid(storage) }
@@ -261,17 +250,6 @@ impl<C: Cursor, F> Cursor for BatchCursorFreeze<C, F>
 where
     F: Fn(C::TimeGat<'_>)->Option<C::Time>,
 {
-    type Key<'a> = C::Key<'a>;
-    type Val<'a> = C::Val<'a>;
-    type Time = C::Time;
-    type TimeGat<'a> = &'a C::Time;
-    type Diff = C::Diff;
-    type DiffGat<'a> = C::DiffGat<'a>;
-
-    #[inline(always)] fn owned_time(time: Self::TimeGat<'_>) -> Self::Time { time.clone() }
-    #[inline(always)] fn clone_time_onto(time: Self::TimeGat<'_>, onto: &mut Self::Time) { onto.clone_from(time) }
-    #[inline(always)] fn owned_diff(diff: Self::DiffGat<'_>) -> Self::Diff { C::owned_diff(diff) }
-
     type Storage = BatchFreeze<C::Storage, F>;
 
     #[inline] fn key_valid(&self, storage: &Self::Storage) -> bool { self.cursor.key_valid(&storage.batch) }
