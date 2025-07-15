@@ -604,6 +604,7 @@ pub mod val_batch {
         type DiffGat<'a> = layout::DiffRef<'a, L>;
 
         #[inline(always)] fn owned_time(time: Self::TimeGat<'_>) -> Self::Time { L::TimeContainer::into_owned(time) }
+        #[inline(always)] fn clone_time_onto(time: Self::TimeGat<'_>, onto: &mut Self::Time) { L::TimeContainer::clone_onto(time, onto) }
         #[inline(always)] fn owned_diff(diff: Self::DiffGat<'_>) -> Self::Diff { L::DiffContainer::into_owned(diff) }
 
         type Storage = OrdValBatch<L>;
@@ -1002,6 +1003,7 @@ pub mod key_batch {
         type DiffGat<'a> = layout::DiffRef<'a, L>;
 
         #[inline(always)] fn owned_time(time: Self::TimeGat<'_>) -> Self::Time { L::TimeContainer::into_owned(time) }
+        #[inline(always)] fn clone_time_onto(time: Self::TimeGat<'_>, onto: &mut Self::Time) { L::TimeContainer::clone_onto(time, onto) }
         #[inline(always)] fn owned_diff(diff: Self::DiffGat<'_>) -> Self::Diff { L::DiffContainer::into_owned(diff) }
 
         type Storage = OrdKeyBatch<L>;

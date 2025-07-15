@@ -203,6 +203,7 @@ where
     type DiffGat<'a> = C::DiffGat<'a>;
 
     #[inline(always)] fn owned_time(time: Self::TimeGat<'_>) -> Self::Time { time.clone() }
+    #[inline(always)] fn clone_time_onto(time: Self::TimeGat<'_>, onto: &mut Self::Time) { onto.clone_from(time) }
     #[inline(always)] fn owned_diff(diff: Self::DiffGat<'_>) -> Self::Diff { C::owned_diff(diff) }
 
     type Storage = C::Storage;
@@ -268,6 +269,7 @@ where
     type DiffGat<'a> = C::DiffGat<'a>;
 
     #[inline(always)] fn owned_time(time: Self::TimeGat<'_>) -> Self::Time { time.clone() }
+    #[inline(always)] fn clone_time_onto(time: Self::TimeGat<'_>, onto: &mut Self::Time) { onto.clone_from(time) }
     #[inline(always)] fn owned_diff(diff: Self::DiffGat<'_>) -> Self::Diff { C::owned_diff(diff) }
 
     type Storage = BatchEnter<C::Storage, TInner, F>;

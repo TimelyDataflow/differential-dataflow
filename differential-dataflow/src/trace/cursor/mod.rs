@@ -34,6 +34,8 @@ pub trait Cursor {
 
     /// An owned copy of a reference to a time.
     fn owned_time(time: Self::TimeGat<'_>) -> Self::Time;
+    /// Clones a reference time onto an owned time.
+    fn clone_time_onto(time: Self::TimeGat<'_>, onto: &mut Self::Time);
     /// An owned copy of a reference to a diff.
     fn owned_diff(diff: Self::DiffGat<'_>) -> Self::Diff;
 
