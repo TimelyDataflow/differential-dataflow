@@ -594,6 +594,11 @@ pub mod val_batch {
         phantom: PhantomData<L>,
     }
 
+    use crate::trace::implementations::LaidOut;
+    impl<L: Layout> LaidOut for OrdValCursor<L> {
+        type Layout = L;
+    }
+
     impl<L: Layout> Cursor for OrdValCursor<L> {
 
         type Key<'a> = layout::KeyRef<'a, L>;
@@ -992,6 +997,11 @@ pub mod key_batch {
         val_stepped: bool,
         /// Phantom marker for Rust happiness.
         phantom: PhantomData<L>,
+    }
+
+    use crate::trace::implementations::LaidOut;
+    impl<L: Layout> LaidOut for OrdKeyCursor<L> {
+        type Layout = L;
     }
 
     impl<L: Layout> Cursor for OrdKeyCursor<L> {

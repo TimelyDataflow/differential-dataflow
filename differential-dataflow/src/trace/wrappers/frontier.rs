@@ -117,6 +117,17 @@ pub struct CursorFrontier<C, T> {
     until: Antichain<T>
 }
 
+use crate::trace::implementations::{Layout, LaidOut};
+impl<C: Cursor> LaidOut for CursorFrontier<C, C::Time> {
+    type Layout = (
+        <C::Layout as Layout>::KeyContainer,
+        <C::Layout as Layout>::ValContainer,
+        Vec<C::Time>,
+        <C::Layout as Layout>::DiffContainer,
+        <C::Layout as Layout>::OffsetContainer,
+    );
+}
+
 impl<C, T: Clone> CursorFrontier<C, T> {
     fn new(cursor: C, since: AntichainRef<T>, until: AntichainRef<T>) -> Self {
         CursorFrontier {
@@ -181,6 +192,16 @@ pub struct BatchCursorFrontier<C: Cursor> {
     cursor: C,
     since: Antichain<C::Time>,
     until: Antichain<C::Time>,
+}
+
+impl<C: Cursor> LaidOut for BatchCursorFrontier<C> {
+    type Layout = (
+        <C::Layout as Layout>::KeyContainer,
+        <C::Layout as Layout>::ValContainer,
+        Vec<C::Time>,
+        <C::Layout as Layout>::DiffContainer,
+        <C::Layout as Layout>::OffsetContainer,
+    );
 }
 
 impl<C: Cursor> BatchCursorFrontier<C> {

@@ -112,6 +112,11 @@ pub struct CursorFilter<C, F> {
     logic: F,
 }
 
+use crate::trace::implementations::LaidOut;
+impl<C: Cursor, F> LaidOut for CursorFilter<C, F> {
+    type Layout = C::Layout;
+}
+
 impl<C, F> CursorFilter<C, F> {
     fn new(cursor: C, logic: F) -> Self {
         CursorFilter {
@@ -173,6 +178,10 @@ where
 pub struct BatchCursorFilter<C, F> {
     cursor: C,
     logic: F,
+}
+
+impl<C: Cursor, F> LaidOut for BatchCursorFilter<C, F> {
+    type Layout = C::Layout;
 }
 
 impl<C, F> BatchCursorFilter<C, F> {

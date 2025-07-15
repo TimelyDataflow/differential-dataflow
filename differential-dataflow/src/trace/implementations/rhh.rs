@@ -650,6 +650,15 @@ mod val_batch {
         phantom: PhantomData<L>,
     }
 
+    use crate::trace::implementations::LaidOut;
+    impl<L: Layout> LaidOut for RhhValCursor<L>
+    where
+        layout::Key<L>: Default + HashOrdered,
+        for<'a> layout::KeyRef<'a, L>: HashOrdered,
+    {
+        type Layout = L;
+    }
+
     impl<L: Layout> Cursor for RhhValCursor<L>
     where
         layout::Key<L>: Default + HashOrdered,

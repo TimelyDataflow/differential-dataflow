@@ -94,6 +94,11 @@ impl<C: Cursor> CursorList<C> {
     }
 }
 
+use crate::trace::implementations::LaidOut;
+impl<C: Cursor> LaidOut for CursorList<C> {
+    type Layout = C::Layout;
+}
+
 impl<C: Cursor> Cursor for CursorList<C> {
     type Key<'a> = C::Key<'a>;
     type Val<'a> = C::Val<'a>;

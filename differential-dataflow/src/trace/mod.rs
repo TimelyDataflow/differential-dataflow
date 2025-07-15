@@ -383,6 +383,11 @@ pub mod rc_blanket_impls {
         cursor: C,
     }
 
+    use crate::trace::implementations::LaidOut;
+    impl<C: Cursor> LaidOut for RcBatchCursor<C> {
+        type Layout = C::Layout;
+    }
+
     impl<C> RcBatchCursor<C> {
         fn new(cursor: C) -> Self {
             RcBatchCursor {

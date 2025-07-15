@@ -14,8 +14,10 @@ pub mod cursor_list;
 
 pub use self::cursor_list::CursorList;
 
+use crate::trace::implementations::LayoutExt;
+
 /// A cursor for navigating ordered `(key, val, time, diff)` updates.
-pub trait Cursor {
+pub trait Cursor : LayoutExt {
 
     /// Key by which updates are indexed.
     type Key<'a>: Copy + Clone + Ord;

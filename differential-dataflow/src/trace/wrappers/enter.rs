@@ -154,6 +154,21 @@ pub struct CursorEnter<C, TInner> {
     cursor: C,
 }
 
+use crate::trace::implementations::{Layout, LaidOut};
+impl<C, TInner> LaidOut for CursorEnter<C, TInner>
+where
+    C: Cursor,
+    TInner: Refines<C::Time>+Lattice,
+{
+    type Layout = (
+        <C::Layout as Layout>::KeyContainer,
+        <C::Layout as Layout>::ValContainer,
+        Vec<TInner>,
+        <C::Layout as Layout>::DiffContainer,
+        <C::Layout as Layout>::OffsetContainer,
+    );
+}
+
 impl<C, TInner> CursorEnter<C, TInner> {
     fn new(cursor: C) -> Self {
         CursorEnter {
@@ -222,6 +237,20 @@ impl<C, TInner> BatchCursorEnter<C, TInner> {
             cursor,
         }
     }
+}
+
+impl<C, TInner> LaidOut for BatchCursorEnter<C, TInner>
+where
+    C: Cursor,
+    TInner: Refines<C::Time>+Lattice,
+{
+    type Layout = (
+        <C::Layout as Layout>::KeyContainer,
+        <C::Layout as Layout>::ValContainer,
+        Vec<TInner>,
+        <C::Layout as Layout>::DiffContainer,
+        <C::Layout as Layout>::OffsetContainer,
+    );
 }
 
 impl<TInner, C: Cursor> Cursor for BatchCursorEnter<C, TInner>

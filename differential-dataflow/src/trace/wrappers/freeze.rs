@@ -170,6 +170,17 @@ pub struct CursorFreeze<C, F> {
     func: Rc<F>,
 }
 
+use crate::trace::implementations::{Layout, LaidOut};
+impl<C: Cursor, F> LaidOut for CursorFreeze<C, F> {
+    type Layout = (
+        <C::Layout as Layout>::KeyContainer,
+        <C::Layout as Layout>::ValContainer,
+        Vec<C::Time>,
+        <C::Layout as Layout>::DiffContainer,
+        <C::Layout as Layout>::OffsetContainer,
+    );
+}
+
 impl<C, F> CursorFreeze<C, F> {
     fn new(cursor: C, func: Rc<F>) -> Self {
         Self { cursor, func }
@@ -227,6 +238,16 @@ where
 pub struct BatchCursorFreeze<C, F> {
     cursor: C,
     func: Rc<F>,
+}
+
+impl<C: Cursor, F> LaidOut for BatchCursorFreeze<C, F> {
+    type Layout = (
+        <C::Layout as Layout>::KeyContainer,
+        <C::Layout as Layout>::ValContainer,
+        Vec<C::Time>,
+        <C::Layout as Layout>::DiffContainer,
+        <C::Layout as Layout>::OffsetContainer,
+    );
 }
 
 impl<C, F> BatchCursorFreeze<C, F> {
