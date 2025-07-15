@@ -118,7 +118,7 @@ pub trait LayoutExt : LaidOut<Layout: Layout<KeyContainer = Self::KeyContainer, 
     /// Alias for an borrowed key of a layout.
     type Key<'a>: Copy + Ord;
     /// Alias for an owned val of a layout.
-    type ValOwn;
+    type ValOwn: Clone + Ord;
     /// Alias for an borrowed val of a layout.
     type Val<'a>: Copy + Ord;
     /// Alias for an owned time of a layout.
@@ -522,7 +522,7 @@ pub mod containers {
     /// A general-purpose container resembling `Vec<T>`.
     pub trait BatchContainer: 'static {
         /// An owned instance of `Self::ReadItem<'_>`.
-        type Owned;
+        type Owned: Clone + Ord;
 
         /// The type that can be read back out of the container.
         type ReadItem<'a>: Copy + Ord;

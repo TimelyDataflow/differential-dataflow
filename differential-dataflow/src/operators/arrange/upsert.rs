@@ -111,7 +111,9 @@ use timely::dataflow::operators::Capability;
 use crate::operators::arrange::arrangement::Arranged;
 use crate::trace::{Builder, Description};
 use crate::trace::{self, Trace, TraceReader, Cursor};
-use crate::{ExchangeData, Hashable, IntoOwned};
+use crate::{ExchangeData, Hashable};
+
+use crate::trace::implementations::containers::BatchContainer;
 
 use super::TraceAgent;
 
@@ -131,9 +133,9 @@ pub fn arrange_from_upsert<G, K, V, Bu, Tr>(
 ) -> Arranged<G, TraceAgent<Tr>>
 where
     G: Scope<Timestamp=Tr::Time>,
-    Tr: Trace + for<'a> TraceReader<
-        Key<'a> : IntoOwned<'a, Owned = K>,
-        Val<'a> : IntoOwned<'a, Owned = V>,
+    Tr: for<'a> Trace<
+        KeyOwn = K,
+        ValOwn = V,
         Time: TotalOrder+ExchangeData,
         Diff=isize,
     >+'static,
@@ -148,7 +150,7 @@ where
 
         let reader = &mut reader;
 
-        let exchange = Exchange::new(move |update: &(K,Option<V>,G::Timestamp)| (update.0).hashed().into());
+        let exchange = Exchange::<(K, Option<V>, G::Timestamp), _>::new(move |update: &(K,Option<V>,G::Timestamp)| (update.0).hashed().into());
 
         stream.unary_frontier(exchange, name, move |_capability, info| {
 
@@ -239,8 +241,8 @@ where
                                     let mut prev_value: Option<V> = None;
 
                                     // Attempt to find the key in the trace.
-                                    trace_cursor.seek_key(&trace_storage, IntoOwned::borrow_as(&key));
-                                    if trace_cursor.get_key(&trace_storage).map(|k| k.eq(&IntoOwned::borrow_as(&key))).unwrap_or(false) {
+                                    trace_cursor.seek_key(&trace_storage, Tr::KeyContainer::borrow_as(&key));
+                                    if trace_cursor.get_key(&trace_storage).map(|k| k.eq(&Tr::KeyContainer::borrow_as(&key))).unwrap_or(false) {
                                         // Determine the prior value associated with the key.
                                         while let Some(val) = trace_cursor.get_val(&trace_storage) {
                                             let mut count = 0;
@@ -248,7 +250,7 @@ where
                                             assert!(count == 0 || count == 1);
                                             if count == 1 {
                                                 assert!(prev_value.is_none());
-                                                prev_value = Some(val.into_owned());
+                                                prev_value = Some(Tr::owned_val(val));
                                             }
                                             trace_cursor.step_val(&trace_storage);
                                         }

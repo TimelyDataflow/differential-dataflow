@@ -26,7 +26,7 @@ use timely::progress::Timestamp;
 use timely::progress::Antichain;
 use timely::dataflow::operators::Capability;
 
-use crate::{Data, ExchangeData, Collection, AsCollection, Hashable, IntoOwned};
+use crate::{Data, ExchangeData, Collection, AsCollection, Hashable};
 use crate::difference::Semigroup;
 use crate::lattice::Lattice;
 use crate::trace::{self, Trace, TraceReader, BatchReader, Batcher, Builder, Cursor};
@@ -285,10 +285,11 @@ where
     /// A direct implementation of `ReduceCore::reduce_abelian`.
     pub fn reduce_abelian<L, K, V, Bu, T2>(&self, name: &str, mut logic: L) -> Arranged<G, TraceAgent<T2>>
     where
-        for<'a> T1::Key<'a>: IntoOwned<'a, Owned = K>,
+        T1: TraceReader<KeyOwn = K>,
         T2: for<'a> Trace<
             Key<'a>= T1::Key<'a>,
-            Val<'a> : IntoOwned<'a, Owned = V>,
+            KeyOwn = K,
+            ValOwn = V,
             Time=T1::Time,
             Diff: Abelian,
         >+'static,
@@ -309,10 +310,11 @@ where
     /// A direct implementation of `ReduceCore::reduce_core`.
     pub fn reduce_core<L, K, V, Bu, T2>(&self, name: &str, logic: L) -> Arranged<G, TraceAgent<T2>>
     where
-        for<'a> T1::Key<'a>: IntoOwned<'a, Owned = K>,
+        T1: TraceReader<KeyOwn = K>,
         T2: for<'a> Trace<
             Key<'a>=T1::Key<'a>,
-            Val<'a> : IntoOwned<'a, Owned = V>,
+            KeyOwn = K,
+            ValOwn = V,
             Time=T1::Time,
         >+'static,
         K: Ord + 'static,

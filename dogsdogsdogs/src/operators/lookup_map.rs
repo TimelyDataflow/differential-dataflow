@@ -10,7 +10,7 @@ use differential_dataflow::{ExchangeData, Collection, AsCollection, Hashable};
 use differential_dataflow::difference::{IsZero, Semigroup, Monoid};
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::trace::{Cursor, TraceReader};
-use differential_dataflow::IntoOwned;
+use differential_dataflow::trace::implementations::BatchContainer;
 
 /// Proposes extensions to a stream of prefixes.
 ///
@@ -29,8 +29,7 @@ pub fn lookup_map<G, D, K, R, Tr, F, DOut, ROut, S>(
 where
     G: Scope<Timestamp=Tr::Time>,
     Tr: for<'a> TraceReader<
-        Key<'a>: IntoOwned<'a, Owned = K>,
-        TimeGat<'a>: IntoOwned<'a, Owned = Tr::Time>,
+        KeyOwn = K,
         Diff : Semigroup<Tr::DiffGat<'a>>+Monoid+ExchangeData,
     >+Clone+'static,
     K: Hashable + Ord + 'static,
@@ -94,13 +93,12 @@ where
                     for &mut (ref prefix, ref time, ref mut diff) in prefixes.iter_mut() {
                         if !input2.frontier.less_equal(time) {
                             logic2(prefix, &mut key1);
-                            use differential_dataflow::IntoOwned;
-                            cursor.seek_key(&storage, IntoOwned::borrow_as(&key1));
-                            if cursor.get_key(&storage) == Some(IntoOwned::borrow_as(&key1)) {
+                            cursor.seek_key(&storage, Tr::KeyContainer::borrow_as(&key1));
+                            if cursor.get_key(&storage) == Some(Tr::KeyContainer::borrow_as(&key1)) {
                                 while let Some(value) = cursor.get_val(&storage) {
                                     let mut count = Tr::Diff::zero();
                                     cursor.map_times(&storage, |t, d| {
-                                        if t.into_owned().less_equal(time) { count.plus_equals(&d); }
+                                        if Tr::owned_time(t).less_equal(time) { count.plus_equals(&d); }
                                     });
                                     if !count.is_zero() {
                                         let (dout, rout) = output_func(prefix, diff, value, &count);

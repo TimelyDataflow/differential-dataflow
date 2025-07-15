@@ -54,7 +54,9 @@ pub trait TraceReader : LayoutExt {
         LaidOut<Layout = Self::Layout> +
         for<'a> LayoutExt<
             Key<'a> = Self::Key<'a>,
+            KeyOwn = Self::KeyOwn,
             Val<'a> = Self::Val<'a>,
+            ValOwn = Self::ValOwn,
             Time = Self::Time,
             TimeGat<'a> = Self::TimeGat<'a>,
             Diff = Self::Diff,
@@ -75,7 +77,9 @@ pub trait TraceReader : LayoutExt {
         LaidOut<Layout = Self::Layout> +
         for<'a> LayoutExt<
             Key<'a> = Self::Key<'a>,
+            KeyOwn = Self::KeyOwn,
             Val<'a> = Self::Val<'a>,
+            ValOwn = Self::ValOwn,
             Time = Self::Time,
             TimeGat<'a> = Self::TimeGat<'a>,
             Diff = Self::Diff,
@@ -249,7 +253,9 @@ pub trait BatchReader : LayoutExt + Sized {
         LaidOut<Layout = Self::Layout> +
         for<'a> LayoutExt<
             Key<'a> = Self::Key<'a>,
+            KeyOwn = Self::KeyOwn,
             Val<'a> = Self::Val<'a>,
+            ValOwn = Self::ValOwn,
             Time = Self::Time,
             TimeGat<'a> = Self::TimeGat<'a>,
             Diff = Self::Diff,
