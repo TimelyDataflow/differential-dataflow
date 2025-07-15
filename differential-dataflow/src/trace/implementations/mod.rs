@@ -105,31 +105,97 @@ pub trait Layout {
     type OffsetContainer: for<'a> BatchContainer<ReadItem<'a> = usize>;
 }
 
+/// A type bearing a layout.
+pub trait LaidOut {
+    /// The layout.
+    type Layout: Layout;
+}
+
+/// Automatically implemented trait for types with layouts.
+pub trait LayoutExt : LaidOut {
+    /// Alias for an owned key of a layout.
+    type Key;
+    /// Alias for an borrowed key of a layout.
+    type KeyRef<'a>;
+    /// Alias for an owned val of a layout.
+    type Val;
+    /// Alias for an borrowed val of a layout.
+    type ValRef<'a>;
+    /// Alias for an owned time of a layout.
+    type Time;
+    /// Alias for an borrowed time of a layout.
+    type TimeRef<'a>;
+    /// Alias for an owned diff of a layout.
+    type Diff;
+    /// Alias for an borrowed diff of a layout.
+    type DiffRef<'a>;
+
+    /// Construct an owned key from a reference.
+    fn owned_key(key: Self::KeyRef<'_>) -> Self::Key;
+    /// Construct an owned val from a reference.
+    fn owned_val(val: Self::ValRef<'_>) -> Self::Val;
+    /// Construct an owned time from a reference.
+    fn owned_time(time: Self::TimeRef<'_>) -> Self::Time;
+    /// Construct an owned diff from a reference.
+    fn owned_diff(diff: Self::DiffRef<'_>) -> Self::Diff;
+}
+
+impl<L: LaidOut> LayoutExt for L {
+    type Key = <<L::Layout as Layout>::KeyContainer as BatchContainer>::Owned;
+    type KeyRef<'a> = <<L::Layout as Layout>::KeyContainer as BatchContainer>::ReadItem<'a>;
+    type Val = <<L::Layout as Layout>::ValContainer as BatchContainer>::Owned;
+    type ValRef<'a> = <<L::Layout as Layout>::ValContainer as BatchContainer>::ReadItem<'a>;
+    type Time = <<L::Layout as Layout>::TimeContainer as BatchContainer>::Owned;
+    type TimeRef<'a> = <<L::Layout as Layout>::TimeContainer as BatchContainer>::ReadItem<'a>;
+    type Diff = <<L::Layout as Layout>::DiffContainer as BatchContainer>::Owned;
+    type DiffRef<'a> = <<L::Layout as Layout>::DiffContainer as BatchContainer>::ReadItem<'a>;
+
+    #[inline(always)] fn owned_key(key: Self::KeyRef<'_>) -> Self::Key { <Self::Layout as Layout>::KeyContainer::into_owned(key) }
+    #[inline(always)] fn owned_val(val: Self::ValRef<'_>) -> Self::Val { <Self::Layout as Layout>::ValContainer::into_owned(val) }
+    #[inline(always)] fn owned_time(time: Self::TimeRef<'_>) -> Self::Time { <Self::Layout as Layout>::TimeContainer::into_owned(time) }
+    #[inline(always)] fn owned_diff(diff: Self::DiffRef<'_>) -> Self::Diff { <Self::Layout as Layout>::DiffContainer::into_owned(diff) }
+}
+
+// An easy way to provide an explicit layout: as a 5-tuple.
+// Valuable when one wants to perform layout surgery.
+impl<KC, VC, TC, DC, OC> Layout for (KC, VC, TC, DC, OC)
+where
+    KC: BatchContainer,
+    VC: BatchContainer,
+    TC: BatchContainer<Owned: Lattice + timely::progress::Timestamp>,
+    DC: BatchContainer<Owned: Semigroup>,
+    OC: for<'a> BatchContainer<ReadItem<'a> = usize>,
+{
+    type KeyContainer = KC;
+    type ValContainer = VC;
+    type TimeContainer = TC;
+    type DiffContainer = DC;
+    type OffsetContainer = OC;
+}
+
 /// Aliases for types provided by the containers within a `Layout`.
 ///
 /// For clarity, prefer `use layout;` and then `layout::Key<L>` to retain the layout context.
-#[allow(type_alias_bounds)]
 pub mod layout {
     use crate::trace::implementations::{BatchContainer, Layout};
 
     /// Alias for an owned key of a layout.
-    pub type Key<L: Layout> = <<L as Layout>::KeyContainer as BatchContainer>::Owned;
+    pub type Key<L> = <<L as Layout>::KeyContainer as BatchContainer>::Owned;
     /// Alias for an borrowed key of a layout.
-    pub type KeyRef<'a, L: Layout> = <<L as Layout>::KeyContainer as BatchContainer>::ReadItem<'a>;
+    pub type KeyRef<'a, L> = <<L as Layout>::KeyContainer as BatchContainer>::ReadItem<'a>;
     /// Alias for an owned val of a layout.
-    pub type Val<L: Layout> = <<L as Layout>::ValContainer as BatchContainer>::Owned;
+    pub type Val<L> = <<L as Layout>::ValContainer as BatchContainer>::Owned;
     /// Alias for an borrowed val of a layout.
-    pub type ValRef<'a, L: Layout> = <<L as Layout>::ValContainer as BatchContainer>::ReadItem<'a>;
+    pub type ValRef<'a, L> = <<L as Layout>::ValContainer as BatchContainer>::ReadItem<'a>;
     /// Alias for an owned time of a layout.
-    pub type Time<L: Layout> = <<L as Layout>::TimeContainer as BatchContainer>::Owned;
+    pub type Time<L> = <<L as Layout>::TimeContainer as BatchContainer>::Owned;
     /// Alias for an borrowed time of a layout.
-    pub type TimeRef<'a, L: Layout> = <<L as Layout>::TimeContainer as BatchContainer>::ReadItem<'a>;
+    pub type TimeRef<'a, L> = <<L as Layout>::TimeContainer as BatchContainer>::ReadItem<'a>;
     /// Alias for an owned diff of a layout.
-    pub type Diff<L: Layout> = <<L as Layout>::DiffContainer as BatchContainer>::Owned;
+    pub type Diff<L> = <<L as Layout>::DiffContainer as BatchContainer>::Owned;
     /// Alias for an borrowed diff of a layout.
-    pub type DiffRef<'a, L: Layout> = <<L as Layout>::DiffContainer as BatchContainer>::ReadItem<'a>;
+    pub type DiffRef<'a, L> = <<L as Layout>::DiffContainer as BatchContainer>::ReadItem<'a>;
 }
-
 
 /// A layout that uses vectors
 pub struct Vector<U: Update> {
