@@ -273,18 +273,19 @@ mod val_batch {
         pub updates: usize,
     }
 
+    impl<L: Layout> LaidOut for RhhValBatch<L>
+    where
+        layout::Key<L>: Default + HashOrdered,
+        for<'a> layout::KeyRef<'a, L>: HashOrdered,
+    {
+        type Layout = L;
+    }
+
     impl<L: Layout> BatchReader for RhhValBatch<L>
     where
         layout::Key<L>: Default + HashOrdered,
         for<'a> layout::KeyRef<'a, L>: HashOrdered,
     {
-        type Key<'a> = layout::KeyRef<'a, L>;
-        type Val<'a> = layout::ValRef<'a, L>;
-        type Time = layout::Time<L>;
-        type TimeGat<'a> = layout::TimeRef<'a, L>;
-        type Diff = layout::Diff<L>;
-        type DiffGat<'a> = layout::DiffRef<'a, L>;
-
         type Cursor = RhhValCursor<L>;
         fn cursor(&self) -> Self::Cursor {
             let mut cursor = RhhValCursor {

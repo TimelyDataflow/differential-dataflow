@@ -322,13 +322,11 @@ pub mod val_batch {
         pub updates: usize,
     }
 
+    impl<L: Layout> LaidOut for OrdValBatch<L> {
+        type Layout = L;
+    }
+
     impl<L: Layout> BatchReader for OrdValBatch<L> {
-        type Key<'a> = layout::KeyRef<'a, L>;
-        type Val<'a> = layout::ValRef<'a, L>;
-        type Time = layout::Time<L>;
-        type TimeGat<'a> = layout::TimeRef<'a, L>;
-        type Diff = layout::Diff<L>;
-        type DiffGat<'a> = layout::DiffRef<'a, L>;
 
         type Cursor = OrdValCursor<L>;
         fn cursor(&self) -> Self::Cursor {
@@ -796,14 +794,11 @@ pub mod key_batch {
         pub updates: usize,
     }
 
-    impl<L: for<'a> Layout<ValContainer: BatchContainer<ReadItem<'a> = &'a ()>>> BatchReader for OrdKeyBatch<L> {
+    impl<L: for<'a> Layout<ValContainer: BatchContainer<ReadItem<'a> = &'a ()>>> LaidOut for OrdKeyBatch<L> {
+        type Layout = L;
+    }
 
-        type Key<'a> = layout::KeyRef<'a, L>;
-        type Val<'a> = &'a ();
-        type Time = layout::Time<L>;
-        type TimeGat<'a> = layout::TimeRef<'a, L>;
-        type Diff = layout::Diff<L>;
-        type DiffGat<'a> = layout::DiffRef<'a, L>;
+    impl<L: for<'a> Layout<ValContainer: BatchContainer<ReadItem<'a> = &'a ()>>> BatchReader for OrdKeyBatch<L> {
 
         type Cursor = OrdKeyCursor<L>;
         fn cursor(&self) -> Self::Cursor {

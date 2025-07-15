@@ -40,6 +40,22 @@ where
     }
 }
 
+impl<Tr, TInner, F, G> LaidOut for TraceEnter<Tr, TInner, F, G>
+where
+    Tr: TraceReader<Batch: Clone>,
+    TInner: Refines<Tr::Time>+Lattice,
+    F: Clone,
+    G: Clone,
+{
+    type Layout = (
+        <Tr::Layout as Layout>::KeyContainer,
+        <Tr::Layout as Layout>::ValContainer,
+        Vec<TInner>,
+        <Tr::Layout as Layout>::DiffContainer,
+        <Tr::Layout as Layout>::OffsetContainer,
+    );
+}
+
 impl<Tr, TInner, F, G> TraceReader for TraceEnter<Tr, TInner, F, G>
 where
     Tr: TraceReader<Batch: Clone>,
@@ -48,13 +64,6 @@ where
     F: FnMut(Tr::Key<'_>, Tr::Val<'_>, Tr::TimeGat<'_>)->TInner+Clone,
     G: FnMut(&TInner)->Tr::Time+Clone+'static,
 {
-    type Key<'a> = Tr::Key<'a>;
-    type Val<'a> = Tr::Val<'a>;
-    type Time = TInner;
-    type TimeGat<'a> = &'a TInner;
-    type Diff = Tr::Diff;
-    type DiffGat<'a> = Tr::DiffGat<'a>;
-
     type Batch = BatchEnter<Tr::Batch, TInner,F>;
     type Storage = Tr::Storage;
     type Cursor = CursorEnter<Tr::Cursor, TInner,F>;
@@ -131,6 +140,20 @@ pub struct BatchEnter<B, TInner, F> {
     logic: F,
 }
 
+impl<B, TInner, F> LaidOut for BatchEnter<B, TInner, F>
+where
+    B: BatchReader,
+    TInner: Refines<B::Time>+Lattice,
+{
+    type Layout = (
+        <B::Layout as Layout>::KeyContainer,
+        <B::Layout as Layout>::ValContainer,
+        Vec<TInner>,
+        <B::Layout as Layout>::DiffContainer,
+        <B::Layout as Layout>::OffsetContainer,
+    );
+}
+
 use crate::trace::implementations::LayoutExt;
 impl<B, TInner, F> BatchReader for BatchEnter<B, TInner, F>
 where
@@ -138,13 +161,6 @@ where
     TInner: Refines<B::Time>+Lattice,
     F: FnMut(B::Key<'_>, <B::Cursor as LayoutExt>::Val<'_>, B::TimeGat<'_>)->TInner+Clone,
 {
-    type Key<'a> = B::Key<'a>;
-    type Val<'a> = B::Val<'a>;
-    type Time = TInner;
-    type TimeGat<'a> = &'a TInner;
-    type Diff = B::Diff;
-    type DiffGat<'a> = B::DiffGat<'a>;
-
     type Cursor = BatchCursorEnter<B::Cursor, TInner, F>;
 
     fn cursor(&self) -> Self::Cursor {

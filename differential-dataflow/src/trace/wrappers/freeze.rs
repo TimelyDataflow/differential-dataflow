@@ -69,18 +69,25 @@ where
     }
 }
 
+impl<Tr, F> LaidOut for TraceFreeze<Tr, F>
+where
+    Tr: TraceReader,
+    F: Fn(Tr::TimeGat<'_>)->Option<Tr::Time>,
+{
+    type Layout = (
+        <Tr::Layout as Layout>::KeyContainer,
+        <Tr::Layout as Layout>::ValContainer,
+        Vec<Tr::Time>,
+        <Tr::Layout as Layout>::DiffContainer,
+        <Tr::Layout as Layout>::OffsetContainer,
+    );
+}
+
 impl<Tr, F> TraceReader for TraceFreeze<Tr, F>
 where
     Tr: TraceReader<Batch: Clone>,
     F: Fn(Tr::TimeGat<'_>)->Option<Tr::Time>+'static,
 {
-    type Key<'a> = Tr::Key<'a>;
-    type Val<'a> = Tr::Val<'a>;
-    type Time = Tr::Time;
-    type TimeGat<'a> = &'a Tr::Time;
-    type Diff = Tr::Diff;
-    type DiffGat<'a> = Tr::DiffGat<'a>;
-
     type Batch = BatchFreeze<Tr::Batch, F>;
     type Storage = Tr::Storage;
     type Cursor = CursorFreeze<Tr::Cursor, F>;
@@ -132,18 +139,25 @@ impl<B: Clone, F> Clone for BatchFreeze<B, F> {
     }
 }
 
+impl<B, F> LaidOut for BatchFreeze<B, F>
+where
+    B: BatchReader,
+    F: Fn(B::TimeGat<'_>)->Option<B::Time>,
+{
+    type Layout = (
+        <B::Layout as Layout>::KeyContainer,
+        <B::Layout as Layout>::ValContainer,
+        Vec<B::Time>,
+        <B::Layout as Layout>::DiffContainer,
+        <B::Layout as Layout>::OffsetContainer,
+    );
+}
+
 impl<B, F> BatchReader for BatchFreeze<B, F>
 where
     B: BatchReader,
     F: Fn(B::TimeGat<'_>)->Option<B::Time>,
 {
-    type Key<'a> = B::Key<'a>;
-    type Val<'a> = B::Val<'a>;
-    type Time = B::Time;
-    type TimeGat<'a> = &'a B::Time;
-    type Diff = B::Diff;
-    type DiffGat<'a> = B::DiffGat<'a>;
-
     type Cursor = BatchCursorFreeze<B::Cursor, F>;
 
     fn cursor(&self) -> Self::Cursor {

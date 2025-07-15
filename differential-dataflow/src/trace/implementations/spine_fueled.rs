@@ -99,13 +99,18 @@ pub struct Spine<B: Batch> {
     exert_logic: Option<ExertionLogic>,
 }
 
+use crate::trace::LaidOut;
+impl<B: Batch> LaidOut for Spine<B> {
+    type Layout = B::Layout;
+}
+
 impl<B: Batch+Clone+'static> TraceReader for Spine<B> {
-    type Key<'a> = B::Key<'a>;
-    type Val<'a> = B::Val<'a>;
-    type Time = B::Time;
-    type TimeGat<'a> = B::TimeGat<'a>;
-    type Diff = B::Diff;
-    type DiffGat<'a> = B::DiffGat<'a>;
+    // type Key<'a> = B::Key<'a>;
+    // type Val<'a> = B::Val<'a>;
+    // type Time = B::Time;
+    // type TimeGat<'a> = B::TimeGat<'a>;
+    // type Diff = B::Diff;
+    // type DiffGat<'a> = B::DiffGat<'a>;
 
     type Batch = B;
     type Storage = Vec<B>;

@@ -78,13 +78,12 @@ pub struct TraceRc<Tr: TraceReader> {
     pub wrapper: Rc<RefCell<TraceBox<Tr>>>,
 }
 
+use crate::trace::LaidOut;
+impl<Tr: TraceReader> LaidOut for TraceRc<Tr> {
+    type Layout = Tr::Layout;
+}
+
 impl<Tr: TraceReader> TraceReader for TraceRc<Tr> {
-    type Key<'a> = Tr::Key<'a>;
-    type Val<'a> = Tr::Val<'a>;
-    type Time = Tr::Time;
-    type TimeGat<'a> = Tr::TimeGat<'a>;
-    type Diff = Tr::Diff;
-    type DiffGat<'a> = Tr::DiffGat<'a>;
 
     type Batch = Tr::Batch;
     type Storage = Tr::Storage;

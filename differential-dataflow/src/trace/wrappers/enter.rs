@@ -25,18 +25,25 @@ impl<Tr: TraceReader + Clone, TInner> Clone for TraceEnter<Tr, TInner> {
     }
 }
 
+impl<Tr, TInner> LaidOut for TraceEnter<Tr, TInner>
+where
+    Tr: TraceReader<Batch: Clone>,
+    TInner: Refines<Tr::Time>+Lattice,
+{
+    type Layout = (
+        <Tr::Layout as Layout>::KeyContainer,
+        <Tr::Layout as Layout>::ValContainer,
+        Vec<TInner>,
+        <Tr::Layout as Layout>::DiffContainer,
+        <Tr::Layout as Layout>::OffsetContainer,
+    );
+}
+
 impl<Tr, TInner> TraceReader for TraceEnter<Tr, TInner>
 where
     Tr: TraceReader<Batch: Clone>,
     TInner: Refines<Tr::Time>+Lattice,
 {
-    type Key<'a> = Tr::Key<'a>;
-    type Val<'a> = Tr::Val<'a>;
-    type Time = TInner;
-    type TimeGat<'a> = &'a TInner;
-    type Diff = Tr::Diff;
-    type DiffGat<'a> = Tr::DiffGat<'a>;
-
     type Batch = BatchEnter<Tr::Batch, TInner>;
     type Storage = Tr::Storage;
     type Cursor = CursorEnter<Tr::Cursor, TInner>;
@@ -109,18 +116,25 @@ pub struct BatchEnter<B, TInner> {
     description: Description<TInner>,
 }
 
+impl<B, TInner> LaidOut for BatchEnter<B, TInner>
+where
+    B: BatchReader,
+    TInner: Refines<B::Time>+Lattice,
+{
+    type Layout = (
+        <B::Layout as Layout>::KeyContainer,
+        <B::Layout as Layout>::ValContainer,
+        Vec<TInner>,
+        <B::Layout as Layout>::DiffContainer,
+        <B::Layout as Layout>::OffsetContainer,
+    );
+}
+
 impl<B, TInner> BatchReader for BatchEnter<B, TInner>
 where
     B: BatchReader,
     TInner: Refines<B::Time>+Lattice,
 {
-    type Key<'a> = B::Key<'a>;
-    type Val<'a> = B::Val<'a>;
-    type Time = TInner;
-    type TimeGat<'a> = &'a TInner;
-    type Diff = B::Diff;
-    type DiffGat<'a> = B::DiffGat<'a>;
-
     type Cursor = BatchCursorEnter<B::Cursor, TInner>;
 
     fn cursor(&self) -> Self::Cursor {

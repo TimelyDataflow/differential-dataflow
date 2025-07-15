@@ -24,18 +24,15 @@ where
     }
 }
 
+impl<Tr: TraceReader, F> LaidOut for TraceFilter<Tr, F> {
+    type Layout = Tr::Layout;
+}
+
 impl<Tr, F> TraceReader for TraceFilter<Tr, F>
 where
     Tr: TraceReader<Batch: Clone>,
     F: FnMut(Tr::Key<'_>, Tr::Val<'_>)->bool+Clone+'static,
 {
-    type Key<'a> = Tr::Key<'a>;
-    type Val<'a> = Tr::Val<'a>;
-    type Time = Tr::Time;
-    type TimeGat<'a> = Tr::TimeGat<'a>;
-    type Diff = Tr::Diff;
-    type DiffGat<'a> = Tr::DiffGat<'a>;
-
     type Batch = BatchFilter<Tr::Batch, F>;
     type Storage = Tr::Storage;
     type Cursor = CursorFilter<Tr::Cursor, F>;
@@ -75,18 +72,15 @@ pub struct BatchFilter<B, F> {
     logic: F,
 }
 
+impl<B: BatchReader, F> LaidOut for BatchFilter<B, F> {
+    type Layout = B::Layout;
+}
+
 impl<B, F> BatchReader for BatchFilter<B, F>
 where
     B: BatchReader,
     F: FnMut(B::Key<'_>, B::Val<'_>)->bool+Clone+'static
 {
-    type Key<'a> = B::Key<'a>;
-    type Val<'a> = B::Val<'a>;
-    type Time = B::Time;
-    type TimeGat<'a> = B::TimeGat<'a>;
-    type Diff = B::Diff;
-    type DiffGat<'a> = B::DiffGat<'a>;
-
     type Cursor = BatchCursorFilter<B::Cursor, F>;
 
     fn cursor(&self) -> Self::Cursor {

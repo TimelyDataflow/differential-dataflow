@@ -31,13 +31,17 @@ impl<Tr: TraceReader + Clone> Clone for TraceFrontier<Tr> {
     }
 }
 
+impl<Tr: TraceReader> LaidOut for TraceFrontier<Tr> {
+    type Layout = (
+        <Tr::Layout as Layout>::KeyContainer,
+        <Tr::Layout as Layout>::ValContainer,
+        Vec<Tr::Time>,
+        <Tr::Layout as Layout>::DiffContainer,
+        <Tr::Layout as Layout>::OffsetContainer,
+    );
+}
+
 impl<Tr: TraceReader> TraceReader for TraceFrontier<Tr> {
-    type Key<'a> = Tr::Key<'a>;
-    type Val<'a> = Tr::Val<'a>;
-    type Time = Tr::Time;
-    type TimeGat<'a> = &'a Tr::Time;
-    type Diff = Tr::Diff;
-    type DiffGat<'a> = Tr::DiffGat<'a>;
 
     type Batch = BatchFrontier<Tr::Batch>;
     type Storage = Tr::Storage;
@@ -82,13 +86,17 @@ pub struct BatchFrontier<B: BatchReader> {
     until: Antichain<B::Time>,
 }
 
+impl<B: BatchReader> LaidOut for BatchFrontier<B> {
+    type Layout = (
+        <B::Layout as Layout>::KeyContainer,
+        <B::Layout as Layout>::ValContainer,
+        Vec<B::Time>,
+        <B::Layout as Layout>::DiffContainer,
+        <B::Layout as Layout>::OffsetContainer,
+    );
+}
+
 impl<B: BatchReader> BatchReader for BatchFrontier<B> {
-    type Key<'a> = B::Key<'a>;
-    type Val<'a> = B::Val<'a>;
-    type Time = B::Time;
-    type TimeGat<'a> = &'a B::Time;
-    type Diff = B::Diff;
-    type DiffGat<'a> = B::DiffGat<'a>;
 
     type Cursor = BatchCursorFrontier<B::Cursor>;
 

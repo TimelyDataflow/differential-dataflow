@@ -100,7 +100,7 @@ pub trait Layout {
     /// Container for times.
     type TimeContainer: BatchContainer<Owned: Lattice + timely::progress::Timestamp>;
     /// Container for diffs.
-    type DiffContainer: BatchContainer<Owned: Semigroup>;
+    type DiffContainer: BatchContainer<Owned: Semigroup + 'static>;
     /// Container for offsets.
     type OffsetContainer: for<'a> BatchContainer<ReadItem<'a> = usize>;
 }
@@ -126,7 +126,7 @@ pub trait LayoutExt : LaidOut<Layout: Layout<KeyContainer = Self::KeyContainer, 
     /// Alias for an borrowed time of a layout.
     type TimeGat<'a>: Copy + Ord;
     /// Alias for an owned diff of a layout.
-    type Diff: Semigroup;
+    type Diff: Semigroup + 'static;
     /// Alias for an borrowed diff of a layout.
     type DiffGat<'a>: Copy + Ord;
 
