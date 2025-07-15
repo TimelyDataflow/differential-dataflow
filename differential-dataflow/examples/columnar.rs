@@ -44,8 +44,9 @@ fn main() {
             let data_pact = ExchangeCore::<ColumnBuilder<((String,()),u64,i64)>,_>::new_core(|x: &((&str,()),&u64,&i64)| (x.0).0.as_bytes().iter().map(|x| *x as u64).sum::<u64>() as u64);
             let keys_pact = ExchangeCore::<ColumnBuilder<((String,()),u64,i64)>,_>::new_core(|x: &((&str,()),&u64,&i64)| (x.0).0.as_bytes().iter().map(|x| *x as u64).sum::<u64>() as u64);
 
-            let data = arrange_core::<_,_,Col2KeyBatcher<_,_,_>, ColKeyBuilder<_,_,_>, ColKeySpine<_,_,_>>(&data, data_pact, "Data");
-            let keys = arrange_core::<_,_,Col2KeyBatcher<_,_,_>, ColKeyBuilder<_,_,_>, ColKeySpine<_,_,_>>(&keys, keys_pact, "Keys");
+            use crate::batcher::Col2ValChunker;
+            let data = arrange_core::<_,_,_,Col2ValChunker<WordCount>,Col2KeyBatcher<_,_,_>, ColKeyBuilder<_,_,_>, ColKeySpine<_,_,_>>(&data, data_pact, "Data");
+            let keys = arrange_core::<_,_,_,Col2ValChunker<WordCount>,Col2KeyBatcher<_,_,_>, ColKeyBuilder<_,_,_>, ColKeySpine<_,_,_>>(&keys, keys_pact, "Keys");
 
             keys.join_core(&data, |_k, &(), &()| Option::<()>::None)
                 .probe_with(&mut probe);
@@ -373,7 +374,8 @@ pub mod batcher {
     use differential_dataflow::trace::implementations::merge_batcher::MergeBatcher;
 
     /// A batcher for columnar storage.
-    pub type Col2ValBatcher<K, V, T, R> = MergeBatcher<Column<((K,V),T,R)>, Chunker<Column<((K,V),T,R)>>, merger::ColumnMerger<(K,V),T,R>>;
+    pub type Col2ValChunker<T> = Chunker<Column<T>>;
+    pub type Col2ValBatcher<K, V, T, R> = MergeBatcher<merger::ColumnMerger<(K,V),T,R>>;
     pub type Col2KeyBatcher<K, T, R> = Col2ValBatcher<K, (), T, R>;
 
     // First draft: build a "chunker" and a "merger".
@@ -408,11 +410,11 @@ pub mod batcher {
 
     impl<'a, D, T, R, C2> PushInto<&'a mut Column<(D, T, R)>> for Chunker<C2>
     where
-        D: for<'b> Columnar,
+        D: Columnar,
         for<'b> columnar::Ref<'b, D>: Ord,
-        T: for<'b> Columnar,
+        T: Columnar,
         for<'b> columnar::Ref<'b, T>: Ord,
-        R: for<'b> Columnar + for<'b> Semigroup<columnar::Ref<'b, R>>,
+        R: Columnar + for<'b> Semigroup<columnar::Ref<'b, R>>,
         for<'b> columnar::Ref<'b, R>: Ord,
         C2: Container + for<'b, 'c> PushInto<(columnar::Ref<'b, D>, columnar::Ref<'b, T>, &'c R)>,
     {
