@@ -24,18 +24,15 @@ where
     }
 }
 
+impl<Tr: TraceReader, F> WithLayout for TraceFilter<Tr, F> {
+    type Layout = Tr::Layout;
+}
+
 impl<Tr, F> TraceReader for TraceFilter<Tr, F>
 where
     Tr: TraceReader<Batch: Clone>,
     F: FnMut(Tr::Key<'_>, Tr::Val<'_>)->bool+Clone+'static,
 {
-    type Key<'a> = Tr::Key<'a>;
-    type Val<'a> = Tr::Val<'a>;
-    type Time = Tr::Time;
-    type TimeGat<'a> = Tr::TimeGat<'a>;
-    type Diff = Tr::Diff;
-    type DiffGat<'a> = Tr::DiffGat<'a>;
-
     type Batch = BatchFilter<Tr::Batch, F>;
     type Storage = Tr::Storage;
     type Cursor = CursorFilter<Tr::Cursor, F>;
@@ -75,18 +72,15 @@ pub struct BatchFilter<B, F> {
     logic: F,
 }
 
+impl<B: BatchReader, F> WithLayout for BatchFilter<B, F> {
+    type Layout = B::Layout;
+}
+
 impl<B, F> BatchReader for BatchFilter<B, F>
 where
     B: BatchReader,
     F: FnMut(B::Key<'_>, B::Val<'_>)->bool+Clone+'static
 {
-    type Key<'a> = B::Key<'a>;
-    type Val<'a> = B::Val<'a>;
-    type Time = B::Time;
-    type TimeGat<'a> = B::TimeGat<'a>;
-    type Diff = B::Diff;
-    type DiffGat<'a> = B::DiffGat<'a>;
-
     type Cursor = BatchCursorFilter<B::Cursor, F>;
 
     fn cursor(&self) -> Self::Cursor {
@@ -112,6 +106,11 @@ pub struct CursorFilter<C, F> {
     logic: F,
 }
 
+use crate::trace::implementations::WithLayout;
+impl<C: Cursor, F> WithLayout for CursorFilter<C, F> {
+    type Layout = C::Layout;
+}
+
 impl<C, F> CursorFilter<C, F> {
     fn new(cursor: C, logic: F) -> Self {
         CursorFilter {
@@ -126,17 +125,6 @@ where
     C: Cursor,
     F: FnMut(C::Key<'_>, C::Val<'_>)->bool+'static
 {
-    type Key<'a> = C::Key<'a>;
-    type Val<'a> = C::Val<'a>;
-    type Time = C::Time;
-    type TimeGat<'a> = C::TimeGat<'a>;
-    type Diff = C::Diff;
-    type DiffGat<'a> = C::DiffGat<'a>;
-
-    #[inline(always)] fn owned_time(time: Self::TimeGat<'_>) -> Self::Time { C::owned_time(time) }
-    #[inline(always)] fn clone_time_onto(time: Self::TimeGat<'_>, onto: &mut Self::Time) { C::clone_time_onto(time, onto) }
-    #[inline(always)] fn owned_diff(diff: Self::DiffGat<'_>) -> Self::Diff { C::owned_diff(diff) }
-
     type Storage = C::Storage;
 
     #[inline] fn key_valid(&self, storage: &Self::Storage) -> bool { self.cursor.key_valid(storage) }
@@ -175,6 +163,10 @@ pub struct BatchCursorFilter<C, F> {
     logic: F,
 }
 
+impl<C: Cursor, F> WithLayout for BatchCursorFilter<C, F> {
+    type Layout = C::Layout;
+}
+
 impl<C, F> BatchCursorFilter<C, F> {
     fn new(cursor: C, logic: F) -> Self {
         BatchCursorFilter {
@@ -188,17 +180,6 @@ impl<C: Cursor, F> Cursor for BatchCursorFilter<C, F>
 where
     F: FnMut(C::Key<'_>, C::Val<'_>)->bool+'static,
 {
-    type Key<'a> = C::Key<'a>;
-    type Val<'a> = C::Val<'a>;
-    type Time = C::Time;
-    type TimeGat<'a> = C::TimeGat<'a>;
-    type Diff = C::Diff;
-    type DiffGat<'a> = C::DiffGat<'a>;
-
-    #[inline(always)] fn owned_time(time: Self::TimeGat<'_>) -> Self::Time { C::owned_time(time) }
-    #[inline(always)] fn clone_time_onto(time: Self::TimeGat<'_>, onto: &mut Self::Time) { C::clone_time_onto(time, onto) }
-    #[inline(always)] fn owned_diff(diff: Self::DiffGat<'_>) -> Self::Diff { C::owned_diff(diff) }
-
     type Storage = BatchFilter<C::Storage, F>;
 
     #[inline] fn key_valid(&self, storage: &Self::Storage) -> bool { self.cursor.key_valid(&storage.batch) }

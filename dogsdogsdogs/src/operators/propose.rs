@@ -4,7 +4,6 @@ use differential_dataflow::{ExchangeData, Collection, Hashable};
 use differential_dataflow::difference::{Semigroup, Monoid, Multiply};
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::trace::TraceReader;
-use differential_dataflow::IntoOwned;
 
 /// Proposes extensions to a prefix stream.
 ///
@@ -22,9 +21,8 @@ pub fn propose<G, Tr, K, F, P, V>(
 where
     G: Scope<Timestamp=Tr::Time>,
     Tr: for<'a> TraceReader<
-        Key<'a> : IntoOwned<'a, Owned = K>,
-        Val<'a> : IntoOwned<'a, Owned = V>,
-        TimeGat<'a>: IntoOwned<'a, Owned = Tr::Time>,
+        KeyOwn = K,
+        ValOwn = V,
         Diff: Monoid+Multiply<Output = Tr::Diff>+ExchangeData+Semigroup<Tr::DiffGat<'a>>,
     >+Clone+'static,
     K: Hashable + Default + Ord + 'static,
@@ -36,7 +34,7 @@ where
         prefixes,
         arrangement,
         move |p: &P, k: &mut K | { *k = key_selector(p); },
-        move |prefix, diff, value, sum| ((prefix.clone(), value.into_owned()), diff.clone().multiply(sum)),
+        move |prefix, diff, value, sum| ((prefix.clone(), Tr::owned_val(value)), diff.clone().multiply(sum)),
         Default::default(),
         Default::default(),
         Default::default(),
@@ -56,9 +54,8 @@ pub fn propose_distinct<G, Tr, K, F, P, V>(
 where
     G: Scope<Timestamp=Tr::Time>,
     Tr: for<'a> TraceReader<
-        Key<'a> : IntoOwned<'a, Owned = K>,
-        Val<'a> : IntoOwned<'a, Owned = V>,
-        TimeGat<'a>: IntoOwned<'a, Owned = Tr::Time>,
+        KeyOwn = K,
+        ValOwn = V,
         Diff : Semigroup<Tr::DiffGat<'a>>+Monoid+Multiply<Output = Tr::Diff>+ExchangeData,
     >+Clone+'static,
     K: Hashable + Default + Ord + 'static,
@@ -70,7 +67,7 @@ where
         prefixes,
         arrangement,
         move |p: &P, k: &mut K| { *k = key_selector(p); },
-        move |prefix, diff, value, _sum| ((prefix.clone(), value.into_owned()), diff.clone()),
+        move |prefix, diff, value, _sum| ((prefix.clone(), Tr::owned_val(value)), diff.clone()),
         Default::default(),
         Default::default(),
         Default::default(),

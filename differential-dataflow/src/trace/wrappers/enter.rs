@@ -25,18 +25,25 @@ impl<Tr: TraceReader + Clone, TInner> Clone for TraceEnter<Tr, TInner> {
     }
 }
 
+impl<Tr, TInner> WithLayout for TraceEnter<Tr, TInner>
+where
+    Tr: TraceReader<Batch: Clone>,
+    TInner: Refines<Tr::Time>+Lattice,
+{
+    type Layout = (
+        <Tr::Layout as Layout>::KeyContainer,
+        <Tr::Layout as Layout>::ValContainer,
+        Vec<TInner>,
+        <Tr::Layout as Layout>::DiffContainer,
+        <Tr::Layout as Layout>::OffsetContainer,
+    );
+}
+
 impl<Tr, TInner> TraceReader for TraceEnter<Tr, TInner>
 where
     Tr: TraceReader<Batch: Clone>,
     TInner: Refines<Tr::Time>+Lattice,
 {
-    type Key<'a> = Tr::Key<'a>;
-    type Val<'a> = Tr::Val<'a>;
-    type Time = TInner;
-    type TimeGat<'a> = &'a TInner;
-    type Diff = Tr::Diff;
-    type DiffGat<'a> = Tr::DiffGat<'a>;
-
     type Batch = BatchEnter<Tr::Batch, TInner>;
     type Storage = Tr::Storage;
     type Cursor = CursorEnter<Tr::Cursor, TInner>;
@@ -109,18 +116,25 @@ pub struct BatchEnter<B, TInner> {
     description: Description<TInner>,
 }
 
+impl<B, TInner> WithLayout for BatchEnter<B, TInner>
+where
+    B: BatchReader,
+    TInner: Refines<B::Time>+Lattice,
+{
+    type Layout = (
+        <B::Layout as Layout>::KeyContainer,
+        <B::Layout as Layout>::ValContainer,
+        Vec<TInner>,
+        <B::Layout as Layout>::DiffContainer,
+        <B::Layout as Layout>::OffsetContainer,
+    );
+}
+
 impl<B, TInner> BatchReader for BatchEnter<B, TInner>
 where
     B: BatchReader,
     TInner: Refines<B::Time>+Lattice,
 {
-    type Key<'a> = B::Key<'a>;
-    type Val<'a> = B::Val<'a>;
-    type Time = TInner;
-    type TimeGat<'a> = &'a TInner;
-    type Diff = B::Diff;
-    type DiffGat<'a> = B::DiffGat<'a>;
-
     type Cursor = BatchCursorEnter<B::Cursor, TInner>;
 
     fn cursor(&self) -> Self::Cursor {
@@ -154,6 +168,21 @@ pub struct CursorEnter<C, TInner> {
     cursor: C,
 }
 
+use crate::trace::implementations::{Layout, WithLayout};
+impl<C, TInner> WithLayout for CursorEnter<C, TInner>
+where
+    C: Cursor,
+    TInner: Refines<C::Time>+Lattice,
+{
+    type Layout = (
+        <C::Layout as Layout>::KeyContainer,
+        <C::Layout as Layout>::ValContainer,
+        Vec<TInner>,
+        <C::Layout as Layout>::DiffContainer,
+        <C::Layout as Layout>::OffsetContainer,
+    );
+}
+
 impl<C, TInner> CursorEnter<C, TInner> {
     fn new(cursor: C) -> Self {
         CursorEnter {
@@ -168,17 +197,6 @@ where
     C: Cursor,
     TInner: Refines<C::Time>+Lattice,
 {
-    type Key<'a> = C::Key<'a>;
-    type Val<'a> = C::Val<'a>;
-    type Time = TInner;
-    type TimeGat<'a> = &'a TInner;
-    type Diff = C::Diff;
-    type DiffGat<'a> = C::DiffGat<'a>;
-
-    #[inline(always)] fn owned_time(time: Self::TimeGat<'_>) -> Self::Time { time.clone() }
-    #[inline(always)] fn clone_time_onto(time: Self::TimeGat<'_>, onto: &mut Self::Time) { onto.clone_from(time) }
-    #[inline(always)] fn owned_diff(diff: Self::DiffGat<'_>) -> Self::Diff { C::owned_diff(diff) }
-
     type Storage = C::Storage;
 
     #[inline] fn key_valid(&self, storage: &Self::Storage) -> bool { self.cursor.key_valid(storage) }
@@ -224,21 +242,24 @@ impl<C, TInner> BatchCursorEnter<C, TInner> {
     }
 }
 
+impl<C, TInner> WithLayout for BatchCursorEnter<C, TInner>
+where
+    C: Cursor,
+    TInner: Refines<C::Time>+Lattice,
+{
+    type Layout = (
+        <C::Layout as Layout>::KeyContainer,
+        <C::Layout as Layout>::ValContainer,
+        Vec<TInner>,
+        <C::Layout as Layout>::DiffContainer,
+        <C::Layout as Layout>::OffsetContainer,
+    );
+}
+
 impl<TInner, C: Cursor> Cursor for BatchCursorEnter<C, TInner>
 where
     TInner: Refines<C::Time>+Lattice,
 {
-    type Key<'a> = C::Key<'a>;
-    type Val<'a> = C::Val<'a>;
-    type Time = TInner;
-    type TimeGat<'a> = &'a TInner;
-    type Diff = C::Diff;
-    type DiffGat<'a> = C::DiffGat<'a>;
-
-    #[inline(always)] fn owned_time(time: Self::TimeGat<'_>) -> Self::Time { time.clone() }
-    #[inline(always)] fn clone_time_onto(time: Self::TimeGat<'_>, onto: &mut Self::Time) { onto.clone_from(time) }
-    #[inline(always)] fn owned_diff(diff: Self::DiffGat<'_>) -> Self::Diff { C::owned_diff(diff) }
-
     type Storage = BatchEnter<C::Storage, TInner>;
 
     #[inline] fn key_valid(&self, storage: &Self::Storage) -> bool { self.cursor.key_valid(&storage.batch) }

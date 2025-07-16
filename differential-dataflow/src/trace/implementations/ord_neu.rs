@@ -322,13 +322,11 @@ pub mod val_batch {
         pub updates: usize,
     }
 
+    impl<L: Layout> WithLayout for OrdValBatch<L> {
+        type Layout = L;
+    }
+
     impl<L: Layout> BatchReader for OrdValBatch<L> {
-        type Key<'a> = layout::KeyRef<'a, L>;
-        type Val<'a> = layout::ValRef<'a, L>;
-        type Time = layout::Time<L>;
-        type TimeGat<'a> = layout::TimeRef<'a, L>;
-        type Diff = layout::Diff<L>;
-        type DiffGat<'a> = layout::DiffRef<'a, L>;
 
         type Cursor = OrdValCursor<L>;
         fn cursor(&self) -> Self::Cursor {
@@ -594,18 +592,12 @@ pub mod val_batch {
         phantom: PhantomData<L>,
     }
 
+    use crate::trace::implementations::WithLayout;
+    impl<L: Layout> WithLayout for OrdValCursor<L> {
+        type Layout = L;
+    }
+
     impl<L: Layout> Cursor for OrdValCursor<L> {
-
-        type Key<'a> = layout::KeyRef<'a, L>;
-        type Val<'a> = layout::ValRef<'a, L>;
-        type Time = layout::Time<L>;
-        type TimeGat<'a> = layout::TimeRef<'a, L>;
-        type Diff = layout::Diff<L>;
-        type DiffGat<'a> = layout::DiffRef<'a, L>;
-
-        #[inline(always)] fn owned_time(time: Self::TimeGat<'_>) -> Self::Time { L::TimeContainer::into_owned(time) }
-        #[inline(always)] fn clone_time_onto(time: Self::TimeGat<'_>, onto: &mut Self::Time) { L::TimeContainer::clone_onto(time, onto) }
-        #[inline(always)] fn owned_diff(diff: Self::DiffGat<'_>) -> Self::Diff { L::DiffContainer::into_owned(diff) }
 
         type Storage = OrdValBatch<L>;
 
@@ -802,14 +794,11 @@ pub mod key_batch {
         pub updates: usize,
     }
 
-    impl<L: Layout> BatchReader for OrdKeyBatch<L> {
+    impl<L: for<'a> Layout<ValContainer: BatchContainer<ReadItem<'a> = &'a ()>>> WithLayout for OrdKeyBatch<L> {
+        type Layout = L;
+    }
 
-        type Key<'a> = layout::KeyRef<'a, L>;
-        type Val<'a> = &'a ();
-        type Time = layout::Time<L>;
-        type TimeGat<'a> = layout::TimeRef<'a, L>;
-        type Diff = layout::Diff<L>;
-        type DiffGat<'a> = layout::DiffRef<'a, L>;
+    impl<L: for<'a> Layout<ValContainer: BatchContainer<ReadItem<'a> = &'a ()>>> BatchReader for OrdKeyBatch<L> {
 
         type Cursor = OrdKeyCursor<L>;
         fn cursor(&self) -> Self::Cursor {
@@ -827,7 +816,7 @@ pub mod key_batch {
         fn description(&self) -> &Description<layout::Time<L>> { &self.description }
     }
 
-    impl<L: Layout> Batch for OrdKeyBatch<L> {
+    impl<L: for<'a> Layout<ValContainer: BatchContainer<ReadItem<'a> = &'a ()>>> Batch for OrdKeyBatch<L> {
         type Merger = OrdKeyMerger<L>;
 
         fn begin_merge(&self, other: &Self, compaction_frontier: AntichainRef<layout::Time<L>>) -> Self::Merger {
@@ -994,17 +983,12 @@ pub mod key_batch {
         phantom: PhantomData<L>,
     }
 
-    impl<L: Layout> Cursor for OrdKeyCursor<L> {
-        type Key<'a> = layout::KeyRef<'a, L>;
-        type Val<'a> = &'a ();
-        type Time = layout::Time<L>;
-        type TimeGat<'a> = layout::TimeRef<'a, L>;
-        type Diff = layout::Diff<L>;
-        type DiffGat<'a> = layout::DiffRef<'a, L>;
+    use crate::trace::implementations::WithLayout;
+    impl<L: for<'a> Layout<ValContainer: BatchContainer<ReadItem<'a> = &'a ()>>> WithLayout for OrdKeyCursor<L> {
+        type Layout = L;
+    }
 
-        #[inline(always)] fn owned_time(time: Self::TimeGat<'_>) -> Self::Time { L::TimeContainer::into_owned(time) }
-        #[inline(always)] fn clone_time_onto(time: Self::TimeGat<'_>, onto: &mut Self::Time) { L::TimeContainer::clone_onto(time, onto) }
-        #[inline(always)] fn owned_diff(diff: Self::DiffGat<'_>) -> Self::Diff { L::DiffContainer::into_owned(diff) }
+    impl<L: for<'a> Layout<ValContainer: BatchContainer<ReadItem<'a> = &'a ()>>> Cursor for OrdKeyCursor<L> {
 
         type Storage = OrdKeyBatch<L>;
 

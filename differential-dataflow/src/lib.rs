@@ -79,7 +79,6 @@ use std::fmt::Debug;
 pub use collection::{Collection, AsCollection};
 pub use hashable::Hashable;
 pub use difference::Abelian as Diff;
-pub use into_owned::IntoOwned;
 
 /// Data type usable in differential dataflow.
 ///
@@ -106,7 +105,6 @@ pub mod logging;
 pub mod consolidation;
 pub mod capture;
 pub mod containers;
-mod into_owned;
 
 /// Configuration options for differential dataflow.
 #[derive(Default)]

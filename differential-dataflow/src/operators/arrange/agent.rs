@@ -36,13 +36,12 @@ pub struct TraceAgent<Tr: TraceReader> {
     logging: Option<crate::logging::Logger>,
 }
 
+use crate::trace::implementations::WithLayout;
+impl<Tr: TraceReader> WithLayout for TraceAgent<Tr> {
+    type Layout = Tr::Layout;
+}
+
 impl<Tr: TraceReader> TraceReader for TraceAgent<Tr> {
-    type Key<'a> = Tr::Key<'a>;
-    type Val<'a> = Tr::Val<'a>;
-    type Time = Tr::Time;
-    type TimeGat<'a> = Tr::TimeGat<'a>;
-    type Diff = Tr::Diff;
-    type DiffGat<'a> = Tr::DiffGat<'a>;
 
     type Batch = Tr::Batch;
     type Storage = Tr::Storage;

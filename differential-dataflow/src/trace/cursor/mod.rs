@@ -5,37 +5,14 @@
 //! both because it allows navigation on multiple levels (key and val), but also because it
 //! supports efficient seeking (via the `seek_key` and `seek_val` methods).
 
-use timely::progress::Timestamp;
-
-use crate::difference::Semigroup;
-use crate::lattice::Lattice;
-
 pub mod cursor_list;
 
 pub use self::cursor_list::CursorList;
 
+use crate::trace::implementations::LayoutExt;
+
 /// A cursor for navigating ordered `(key, val, time, diff)` updates.
-pub trait Cursor {
-
-    /// Key by which updates are indexed.
-    type Key<'a>: Copy + Clone + Ord;
-    /// Values associated with keys.
-    type Val<'a>: Copy + Clone + Ord;
-    /// Timestamps associated with updates
-    type Time: Timestamp + Lattice + Ord + Clone;
-    /// Borrowed form of timestamp.
-    type TimeGat<'a>: Copy;
-    /// Owned form of update difference.
-    type Diff: Semigroup + 'static;
-    /// Borrowed form of update difference.
-    type DiffGat<'a> : Copy;
-
-    /// An owned copy of a reference to a time.
-    fn owned_time(time: Self::TimeGat<'_>) -> Self::Time;
-    /// Clones a reference time onto an owned time.
-    fn clone_time_onto(time: Self::TimeGat<'_>, onto: &mut Self::Time);
-    /// An owned copy of a reference to a diff.
-    fn owned_diff(diff: Self::DiffGat<'_>) -> Self::Diff;
+pub trait Cursor : LayoutExt {
 
     /// Storage required by the cursor.
     type Storage;

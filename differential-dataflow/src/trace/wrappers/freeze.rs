@@ -69,18 +69,25 @@ where
     }
 }
 
+impl<Tr, F> WithLayout for TraceFreeze<Tr, F>
+where
+    Tr: TraceReader,
+    F: Fn(Tr::TimeGat<'_>)->Option<Tr::Time>,
+{
+    type Layout = (
+        <Tr::Layout as Layout>::KeyContainer,
+        <Tr::Layout as Layout>::ValContainer,
+        Vec<Tr::Time>,
+        <Tr::Layout as Layout>::DiffContainer,
+        <Tr::Layout as Layout>::OffsetContainer,
+    );
+}
+
 impl<Tr, F> TraceReader for TraceFreeze<Tr, F>
 where
     Tr: TraceReader<Batch: Clone>,
     F: Fn(Tr::TimeGat<'_>)->Option<Tr::Time>+'static,
 {
-    type Key<'a> = Tr::Key<'a>;
-    type Val<'a> = Tr::Val<'a>;
-    type Time = Tr::Time;
-    type TimeGat<'a> = &'a Tr::Time;
-    type Diff = Tr::Diff;
-    type DiffGat<'a> = Tr::DiffGat<'a>;
-
     type Batch = BatchFreeze<Tr::Batch, F>;
     type Storage = Tr::Storage;
     type Cursor = CursorFreeze<Tr::Cursor, F>;
@@ -132,18 +139,25 @@ impl<B: Clone, F> Clone for BatchFreeze<B, F> {
     }
 }
 
+impl<B, F> WithLayout for BatchFreeze<B, F>
+where
+    B: BatchReader,
+    F: Fn(B::TimeGat<'_>)->Option<B::Time>,
+{
+    type Layout = (
+        <B::Layout as Layout>::KeyContainer,
+        <B::Layout as Layout>::ValContainer,
+        Vec<B::Time>,
+        <B::Layout as Layout>::DiffContainer,
+        <B::Layout as Layout>::OffsetContainer,
+    );
+}
+
 impl<B, F> BatchReader for BatchFreeze<B, F>
 where
     B: BatchReader,
     F: Fn(B::TimeGat<'_>)->Option<B::Time>,
 {
-    type Key<'a> = B::Key<'a>;
-    type Val<'a> = B::Val<'a>;
-    type Time = B::Time;
-    type TimeGat<'a> = &'a B::Time;
-    type Diff = B::Diff;
-    type DiffGat<'a> = B::DiffGat<'a>;
-
     type Cursor = BatchCursorFreeze<B::Cursor, F>;
 
     fn cursor(&self) -> Self::Cursor {
@@ -170,6 +184,17 @@ pub struct CursorFreeze<C, F> {
     func: Rc<F>,
 }
 
+use crate::trace::implementations::{Layout, WithLayout};
+impl<C: Cursor, F> WithLayout for CursorFreeze<C, F> {
+    type Layout = (
+        <C::Layout as Layout>::KeyContainer,
+        <C::Layout as Layout>::ValContainer,
+        Vec<C::Time>,
+        <C::Layout as Layout>::DiffContainer,
+        <C::Layout as Layout>::OffsetContainer,
+    );
+}
+
 impl<C, F> CursorFreeze<C, F> {
     fn new(cursor: C, func: Rc<F>) -> Self {
         Self { cursor, func }
@@ -181,17 +206,6 @@ where
     C: Cursor,
     F: Fn(C::TimeGat<'_>)->Option<C::Time>,
 {
-    type Key<'a> = C::Key<'a>;
-    type Val<'a> = C::Val<'a>;
-    type Time = C::Time;
-    type TimeGat<'a> = &'a C::Time;
-    type Diff = C::Diff;
-    type DiffGat<'a> = C::DiffGat<'a>;
-
-    #[inline(always)] fn owned_time(time: Self::TimeGat<'_>) -> Self::Time { time.clone() }
-    #[inline(always)] fn clone_time_onto(time: Self::TimeGat<'_>, onto: &mut Self::Time) { onto.clone_from(time) }
-    #[inline(always)] fn owned_diff(diff: Self::DiffGat<'_>) -> Self::Diff { C::owned_diff(diff) }
-
     type Storage = C::Storage;
 
     #[inline] fn key_valid(&self, storage: &Self::Storage) -> bool { self.cursor.key_valid(storage) }
@@ -229,6 +243,16 @@ pub struct BatchCursorFreeze<C, F> {
     func: Rc<F>,
 }
 
+impl<C: Cursor, F> WithLayout for BatchCursorFreeze<C, F> {
+    type Layout = (
+        <C::Layout as Layout>::KeyContainer,
+        <C::Layout as Layout>::ValContainer,
+        Vec<C::Time>,
+        <C::Layout as Layout>::DiffContainer,
+        <C::Layout as Layout>::OffsetContainer,
+    );
+}
+
 impl<C, F> BatchCursorFreeze<C, F> {
     fn new(cursor: C, func: Rc<F>) -> Self {
         Self { cursor, func }
@@ -240,17 +264,6 @@ impl<C: Cursor, F> Cursor for BatchCursorFreeze<C, F>
 where
     F: Fn(C::TimeGat<'_>)->Option<C::Time>,
 {
-    type Key<'a> = C::Key<'a>;
-    type Val<'a> = C::Val<'a>;
-    type Time = C::Time;
-    type TimeGat<'a> = &'a C::Time;
-    type Diff = C::Diff;
-    type DiffGat<'a> = C::DiffGat<'a>;
-
-    #[inline(always)] fn owned_time(time: Self::TimeGat<'_>) -> Self::Time { time.clone() }
-    #[inline(always)] fn clone_time_onto(time: Self::TimeGat<'_>, onto: &mut Self::Time) { onto.clone_from(time) }
-    #[inline(always)] fn owned_diff(diff: Self::DiffGat<'_>) -> Self::Diff { C::owned_diff(diff) }
-
     type Storage = BatchFreeze<C::Storage, F>;
 
     #[inline] fn key_valid(&self, storage: &Self::Storage) -> bool { self.cursor.key_valid(&storage.batch) }
