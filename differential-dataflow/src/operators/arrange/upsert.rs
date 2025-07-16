@@ -233,14 +233,17 @@ where
                                 // new stuff that we add.
                                 let (mut trace_cursor, trace_storage) = reader_local.cursor();
                                 let mut builder = Bu::new();
+                                let mut key_con = Tr::KeyContainer::with_capacity(1);
                                 for (key, mut list) in to_process {
+
+                                    key_con.clear(); key_con.push_own(&key);
 
                                     // The prior value associated with the key.
                                     let mut prev_value: Option<Tr::ValOwn> = None;
 
                                     // Attempt to find the key in the trace.
-                                    trace_cursor.seek_key(&trace_storage, Tr::KeyContainer::borrow_as(&key));
-                                    if trace_cursor.get_key(&trace_storage).map(|k| k.eq(&Tr::KeyContainer::borrow_as(&key))).unwrap_or(false) {
+                                    trace_cursor.seek_key(&trace_storage, key_con.index(0));
+                                    if trace_cursor.get_key(&trace_storage).map(|k| k.eq(&key_con.index(0))).unwrap_or(false) {
                                         // Determine the prior value associated with the key.
                                         while let Some(val) = trace_cursor.get_val(&trace_storage) {
                                             let mut count = 0;

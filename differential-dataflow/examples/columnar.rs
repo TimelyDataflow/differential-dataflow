@@ -579,8 +579,6 @@ pub mod dd_builder {
 
     use columnar::Columnar;
 
-    use timely::container::PushInto;
-
     use differential_dataflow::trace::Builder;
     use differential_dataflow::trace::Description;
     use differential_dataflow::trace::implementations::Layout;
@@ -614,9 +612,6 @@ pub mod dd_builder {
         layout::Val<L>: Columnar,
         layout::Time<L>: Columnar,
         layout::Diff<L>: Columnar,
-        // These two constraints seem .. like we could potentially replace by `Columnar::Ref<'a>`.
-        for<'a> L::KeyContainer: PushInto<&'a layout::Key<L>>,
-        for<'a> L::ValContainer: PushInto<&'a layout::Val<L>>,
     {
         type Input = Column<((layout::Key<L>,layout::Val<L>),layout::Time<L>,layout::Diff<L>)>;
         type Time = layout::Time<L>;
@@ -643,6 +638,9 @@ pub mod dd_builder {
             // Owned key and val would need to be members of `self`, as this method can be called multiple times,
             // and we need to correctly cache last for reasons of correctness, not just performance.
 
+            let mut key_con = L::KeyContainer::with_capacity(1);
+            let mut val_con = L::ValContainer::with_capacity(1);
+
             for ((key,val),time,diff) in chunk.drain() {
                 // It would be great to avoid.
                 let key  = <layout::Key<L> as Columnar>::into_owned(key);
@@ -651,30 +649,33 @@ pub mod dd_builder {
                 let time = <layout::Time<L> as Columnar>::into_owned(time);
                 let diff = <layout::Diff<L> as Columnar>::into_owned(diff);
 
+                key_con.clear(); key_con.push_own(&key);
+                val_con.clear(); val_con.push_own(&val);
+
                 // Pre-load the first update.
                 if self.result.keys.is_empty() {
-                    self.result.vals.vals.push_into(&val);
-                    self.result.keys.push_into(&key);
+                    self.result.vals.vals.push_own(&val);
+                    self.result.keys.push_own(&key);
                     self.staging.push(time, diff);
                 }
                 // Perhaps this is a continuation of an already received key.
-                else if self.result.keys.last().map(|k| L::KeyContainer::borrow_as(&key).eq(&k)).unwrap_or(false) {
+                else if self.result.keys.last() == key_con.get(0) {
                     // Perhaps this is a continuation of an already received value.
-                    if self.result.vals.vals.last().map(|v| L::ValContainer::borrow_as(&val).eq(&v)).unwrap_or(false) {
+                    if self.result.vals.vals.last() == val_con.get(0) {
                         self.staging.push(time, diff);
                     } else {
                         // New value; complete representation of prior value.
                         self.staging.seal(&mut self.result.upds);
                         self.staging.push(time, diff);
-                        self.result.vals.vals.push_into(&val);
+                        self.result.vals.vals.push_own(&val);
                     }
                 } else {
                     // New key; complete representation of prior key.
                     self.staging.seal(&mut self.result.upds);
                     self.staging.push(time, diff);
                     self.result.vals.offs.push_ref(self.result.vals.len());
-                    self.result.vals.vals.push_into(&val);
-                    self.result.keys.push_into(&key);
+                    self.result.vals.vals.push_own(&val);
+                    self.result.keys.push_own(&key);
                 }
             }
         }
@@ -719,9 +720,6 @@ pub mod dd_builder {
         layout::Val<L>: Columnar,
         layout::Time<L>: Columnar,
         layout::Diff<L>: Columnar,
-    // These two constraints seem .. like we could potentially replace by `Columnar::Ref<'a>`.
-        for<'a> L::KeyContainer: PushInto<&'a layout::Key<L>>,
-        for<'a> L::ValContainer: PushInto<&'a layout::Val<L>>,
     {
         type Input = Column<((layout::Key<L>,layout::Val<L>),layout::Time<L>,layout::Diff<L>)>;
         type Time = layout::Time<L>;
@@ -747,6 +745,8 @@ pub mod dd_builder {
             // Owned key and val would need to be members of `self`, as this method can be called multiple times,
             // and we need to correctly cache last for reasons of correctness, not just performance.
 
+            let mut key_con = L::KeyContainer::with_capacity(1);
+
             for ((key,_val),time,diff) in chunk.drain() {
                 // It would be great to avoid.
                 let key  = <layout::Key<L> as Columnar>::into_owned(key);
@@ -754,19 +754,21 @@ pub mod dd_builder {
                 let time = <layout::Time<L> as Columnar>::into_owned(time);
                 let diff = <layout::Diff<L> as Columnar>::into_owned(diff);
 
+                key_con.clear(); key_con.push_own(&key);
+
                 // Pre-load the first update.
                 if self.result.keys.is_empty() {
-                    self.result.keys.push_into(&key);
+                    self.result.keys.push_own(&key);
                     self.staging.push(time, diff);
                 }
                 // Perhaps this is a continuation of an already received key.
-                else if self.result.keys.last().map(|k| L::KeyContainer::borrow_as(&key).eq(&k)).unwrap_or(false) {
+                else if self.result.keys.last() == key_con.get(0) {
                     self.staging.push(time, diff);
                 } else {
                     // New key; complete representation of prior key.
                     self.staging.seal(&mut self.result.upds);
                     self.staging.push(time, diff);
-                    self.result.keys.push_into(&key);
+                    self.result.keys.push_own(&key);
                 }
             }
         }

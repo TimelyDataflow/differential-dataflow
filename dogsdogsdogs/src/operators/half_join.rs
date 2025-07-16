@@ -331,13 +331,21 @@ where
     let (mut cursor, storage) = trace.cursor();
     let mut yielded = false;
 
+    let mut key_con = Tr::KeyContainer::with_capacity(1);
+    let mut time_con = Tr::TimeContainer::with_capacity(1);
+    for time in frontier.iter() {
+        time_con.push_own(time);
+    }
+
     // Process proposals one at a time, stopping if we should yield.
     for ((ref key, ref val1, ref time), ref initial, ref mut diff1) in proposals.iter_mut() {
         // Use TOTAL ORDER to allow the release of `time`.
         yielded = yielded || yield_function(timer, *work);
-        if !yielded && !frontier.iter().any(|t| comparison(Tr::TimeContainer::borrow_as(t), initial)) {
-            cursor.seek_key(&storage, Tr::KeyContainer::borrow_as(key));
-            if cursor.get_key(&storage) == Some(Tr::KeyContainer::borrow_as(key)) {
+
+        if !yielded && !(0 .. time_con.len()).any(|i| comparison(time_con.index(i), initial)) {
+            key_con.clear(); key_con.push_own(&key);
+            cursor.seek_key(&storage, key_con.index(0));
+            if cursor.get_key(&storage) == key_con.get(0) {
                 while let Some(val2) = cursor.get_val(&storage) {
                     cursor.map_times(&storage, |t, d| {
                         if comparison(t, initial) {

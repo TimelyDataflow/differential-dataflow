@@ -431,11 +431,16 @@ where
                         // We first extract those times from this list that lie in the interval we will process.
                         sort_dedup(&mut interesting);
                         // `exposed` contains interesting (key, time)s now below `upper_limit`
-                        let exposed = {
-                            let (exposed, new_interesting) = interesting.drain(..).partition(|(_, time)| !upper_limit.less_equal(time));
-                            interesting = new_interesting;
-                            exposed
-                        };
+                        let mut exposed_keys = T1::KeyContainer::with_capacity(0);
+                        let mut exposed_time = T1::TimeContainer::with_capacity(0);
+                        // Keep pairs greater or equal to `upper_limit`, and "expose" other pairs.
+                        interesting.retain(|(key, time)| {
+                            if upper_limit.less_equal(time) { true } else {
+                                exposed_keys.push_own(key);
+                                exposed_time.push_own(time);
+                                false
+                            }
+                        });
 
                         // Prepare an output buffer and builder for each capability.
                         //
@@ -471,12 +476,10 @@ where
                         // indicates whether more data remain. We move through `exposed` using (index) `exposed_position`.
                         // There could perhaps be a less provocative variable name.
                         let mut exposed_position = 0;
-                        while batch_cursor.key_valid(batch_storage) || exposed_position < exposed.len() {
-
-                            use std::borrow::Borrow;
+                        while batch_cursor.key_valid(batch_storage) || exposed_position < exposed_keys.len() {
 
                             // Determine the next key we will work on; could be synthetic, could be from a batch.
-                            let key1 = exposed.get(exposed_position).map(|x| T1::KeyContainer::borrow_as(&x.0));
+                            let key1 = exposed_keys.get(exposed_position);
                             let key2 = batch_cursor.get_key(batch_storage);
                             let key = match (key1, key2) {
                                 (Some(key1), Some(key2)) => ::std::cmp::min(key1, key2),
@@ -492,8 +495,8 @@ where
                             interesting_times.clear();
 
                             // Populate `interesting_times` with synthetic interesting times (below `upper_limit`) for this key.
-                            while exposed.get(exposed_position).map(|x| x.0.borrow()).map(|k| key.eq(&T1::KeyContainer::borrow_as(&k))).unwrap_or(false) {
-                                interesting_times.push(exposed[exposed_position].1.clone());
+                            while exposed_keys.get(exposed_position) == Some(key) {
+                                interesting_times.push(T1::owned_time(exposed_time.index(exposed_position)));
                                 exposed_position += 1;
                             }
 

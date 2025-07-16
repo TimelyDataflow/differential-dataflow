@@ -353,12 +353,12 @@ impl BatchContainer for OffsetList {
     #[inline(always)]
     fn into_owned<'a>(item: Self::ReadItem<'a>) -> Self::Owned { item }
     #[inline(always)]
-    fn borrow_as<'a>(owned: &'a Self::Owned) -> Self::ReadItem<'a> { *owned }
-    #[inline(always)]
     fn reborrow<'b, 'a: 'b>(item: Self::ReadItem<'a>) -> Self::ReadItem<'b> { item }
 
     fn push_ref(&mut self, item: Self::ReadItem<'_>) { self.push_into(item) }
-    fn push_own(&mut self, item: Self::Owned) { self.push_into(item) }
+    fn push_own(&mut self, item: &Self::Owned) { self.push_into(*item) }
+
+    fn clear(&mut self) { self.zero_prefix = 0; self.smol.clear(); self.chonk.clear(); }
 
     fn with_capacity(size: usize) -> Self {
         Self::with_capacity(size)
@@ -536,15 +536,14 @@ pub mod containers {
         fn clone_onto<'a>(item: Self::ReadItem<'a>, other: &mut Self::Owned) {
             *other = Self::into_owned(item);
         }
-        /// Borrows an owned instance as oneself.
-        #[must_use]
-        fn borrow_as<'a>(owned: &'a Self::Owned) -> Self::ReadItem<'a>;
-
 
         /// Push an item into this container
         fn push_ref(&mut self, item: Self::ReadItem<'_>);
         /// Push an item into this container
-        fn push_own(&mut self, item: Self::Owned);
+        fn push_own(&mut self, item: &Self::Owned);
+
+        /// Clears the container. May not release resources.
+        fn clear(&mut self);
 
         /// Creates a new container with sufficient capacity.
         fn with_capacity(size: usize) -> Self;
@@ -632,12 +631,13 @@ pub mod containers {
 
         #[inline(always)] fn into_owned<'a>(item: Self::ReadItem<'a>) -> Self::Owned { item.clone() }
         #[inline(always)] fn clone_onto<'a>(item: Self::ReadItem<'a>, other: &mut Self::Owned) { other.clone_from(item); }
-        #[inline(always)] fn borrow_as<'a>(owned: &'a Self::Owned) -> Self::ReadItem<'a> { owned }
 
         fn reborrow<'b, 'a: 'b>(item: Self::ReadItem<'a>) -> Self::ReadItem<'b> { item }
 
         fn push_ref(&mut self, item: Self::ReadItem<'_>) { self.push_into(item) }
-        fn push_own(&mut self, item: Self::Owned) { self.push_into(item) }
+        fn push_own(&mut self, item: &Self::Owned) { self.push_into(item.clone()) }
+
+        fn clear(&mut self) { self.clear() }
 
         fn with_capacity(size: usize) -> Self {
             Vec::with_capacity(size)
@@ -664,12 +664,13 @@ pub mod containers {
 
         #[inline(always)] fn into_owned<'a>(item: Self::ReadItem<'a>) -> Self::Owned { item.clone() }
         #[inline(always)] fn clone_onto<'a>(item: Self::ReadItem<'a>, other: &mut Self::Owned) { other.clone_from(item); }
-        #[inline(always)] fn borrow_as<'a>(owned: &'a Self::Owned) -> Self::ReadItem<'a> { owned }
 
         fn reborrow<'b, 'a: 'b>(item: Self::ReadItem<'a>) -> Self::ReadItem<'b> { item }
 
         fn push_ref(&mut self, item: Self::ReadItem<'_>) { self.push_into(item) }
-        fn push_own(&mut self, item: Self::Owned) { self.push_into(item) }
+        fn push_own(&mut self, item: &Self::Owned) { self.push_into(item) }
+
+        fn clear(&mut self) { self.clear() }
 
         fn with_capacity(size: usize) -> Self {
             Self::with_capacity(size)
@@ -713,15 +714,6 @@ pub mod containers {
         }
     }
 
-    impl<B> PushInto<Vec<B>> for SliceContainer<B> {
-        fn push_into(&mut self, item: Vec<B>) {
-            for x in item.into_iter() {
-                self.inner.push(x);
-            }
-            self.offsets.push(self.inner.len());
-        }
-    }
-
     impl<B> BatchContainer for SliceContainer<B>
     where
         B: Ord + Clone + Sized + 'static,
@@ -731,12 +723,17 @@ pub mod containers {
 
         #[inline(always)] fn into_owned<'a>(item: Self::ReadItem<'a>) -> Self::Owned { item.to_vec() }
         #[inline(always)] fn clone_onto<'a>(item: Self::ReadItem<'a>, other: &mut Self::Owned) { other.clone_from_slice(item); }
-        #[inline(always)] fn borrow_as<'a>(owned: &'a Self::Owned) -> Self::ReadItem<'a> { &owned[..] }
 
         fn reborrow<'b, 'a: 'b>(item: Self::ReadItem<'a>) -> Self::ReadItem<'b> { item }
 
         fn push_ref(&mut self, item: Self::ReadItem<'_>) { self.push_into(item) }
-        fn push_own(&mut self, item: Self::Owned) { self.push_into(item) }
+        fn push_own(&mut self, item: &Self::Owned) { self.push_into(item) }
+
+        fn clear(&mut self) {
+            self.offsets.clear();
+            self.offsets.push(0);
+            self.inner.clear();
+        }
 
         fn with_capacity(size: usize) -> Self {
             let mut offsets = Vec::with_capacity(size + 1);
