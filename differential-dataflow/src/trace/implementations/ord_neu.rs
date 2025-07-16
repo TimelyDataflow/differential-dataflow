@@ -249,8 +249,8 @@ pub mod layers {
                     // Conventional; move `stash` into `updates`.
                     self.total += self.stash.len();
                     for (time, diff) in self.stash.drain(..) {
-                        upds.times.push_own(time);
-                        upds.diffs.push_own(diff);
+                        upds.times.push_own(&time);
+                        upds.diffs.push_own(&diff);
                     }
                     upds.offs.push_ref(upds.times.len());
                 }

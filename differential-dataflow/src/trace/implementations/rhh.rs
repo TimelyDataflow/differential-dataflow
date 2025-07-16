@@ -191,7 +191,7 @@ mod val_batch {
             while self.keys.len() < desired {
                 // We insert a default (dummy) key and repeat the offset to indicate this.
                 let current_offset = self.keys_offs.index(self.keys.len());
-                self.keys.push_own(<layout::Key<L> as Default>::default());
+                self.keys.push_own(&<layout::Key<L> as Default>::default());
                 self.keys_offs.push_ref(current_offset);
             }
 
@@ -620,8 +620,8 @@ mod val_batch {
                 else {
                     // Conventional; move `update_stash` into `updates`.
                     for (time, diff) in self.update_stash.drain(..) {
-                        self.result.times.push_own(time);
-                        self.result.diffs.push_own(diff);
+                        self.result.times.push_own(&time);
+                        self.result.diffs.push_own(&diff);
                     }
                 }
                 Some(self.result.times.len())
@@ -776,11 +776,11 @@ mod val_batch {
             else {
                 // If we have pushed a single element, we need to copy it out to meet this one.
                 if let Some((time, diff)) = self.singleton.take() {
-                    self.result.times.push_own(time);
-                    self.result.diffs.push_own(diff);
+                    self.result.times.push_own(&time);
+                    self.result.diffs.push_own(&diff);
                 }
-                self.result.times.push_own(time);
-                self.result.diffs.push_own(diff);
+                self.result.times.push_own(&time);
+                self.result.diffs.push_own(&diff);
             }
         }
     }

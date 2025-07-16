@@ -30,8 +30,8 @@ impl<B: Ord + Clone> HuffmanContainer<B> {
     }
 }
 
-impl<B: Ord + Clone + 'static> PushInto<Vec<B>> for HuffmanContainer<B> {
-    fn push_into(&mut self, item: Vec<B>) {
+impl<'a, B: Ord + Clone + 'static> PushInto<&'a Vec<B>> for HuffmanContainer<B> {
+    fn push_into(&mut self, item: &'a Vec<B>) {
         for x in item.iter() { *self.stats.entry(x.clone()).or_insert(0) += 1; }
         match &mut self.inner {
             Ok((huffman, bytes)) => {
@@ -39,7 +39,7 @@ impl<B: Ord + Clone + 'static> PushInto<Vec<B>> for HuffmanContainer<B> {
                 self.offsets.push(bytes.len());
             },
             Err(raw) => {
-                raw.extend(item);
+                raw.extend(item.iter().cloned());
                 self.offsets.push(raw.len());
             }
         }
@@ -100,7 +100,7 @@ impl<B: Ord + Clone + 'static> BatchContainer for HuffmanContainer<B> {
     fn reborrow<'b, 'a: 'b>(item: Self::ReadItem<'a>) -> Self::ReadItem<'b> { item }
 
     fn push_ref(&mut self, item: Self::ReadItem<'_>) { self.push_into(item) }
-    fn push_own(&mut self, item: Self::Owned) { self.push_into(item) }
+    fn push_own(&mut self, item: &Self::Owned) { self.push_into(item) }
 
     fn with_capacity(size: usize) -> Self {
         let mut offsets = OffsetList::with_capacity(size + 1);

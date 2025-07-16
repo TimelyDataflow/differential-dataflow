@@ -358,7 +358,7 @@ impl BatchContainer for OffsetList {
     fn reborrow<'b, 'a: 'b>(item: Self::ReadItem<'a>) -> Self::ReadItem<'b> { item }
 
     fn push_ref(&mut self, item: Self::ReadItem<'_>) { self.push_into(item) }
-    fn push_own(&mut self, item: Self::Owned) { self.push_into(item) }
+    fn push_own(&mut self, item: &Self::Owned) { self.push_into(*item) }
 
     fn with_capacity(size: usize) -> Self {
         Self::with_capacity(size)
@@ -544,7 +544,7 @@ pub mod containers {
         /// Push an item into this container
         fn push_ref(&mut self, item: Self::ReadItem<'_>);
         /// Push an item into this container
-        fn push_own(&mut self, item: Self::Owned);
+        fn push_own(&mut self, item: &Self::Owned);
 
         /// Creates a new container with sufficient capacity.
         fn with_capacity(size: usize) -> Self;
@@ -637,7 +637,7 @@ pub mod containers {
         fn reborrow<'b, 'a: 'b>(item: Self::ReadItem<'a>) -> Self::ReadItem<'b> { item }
 
         fn push_ref(&mut self, item: Self::ReadItem<'_>) { self.push_into(item) }
-        fn push_own(&mut self, item: Self::Owned) { self.push_into(item) }
+        fn push_own(&mut self, item: &Self::Owned) { self.push_into(item.clone()) }
 
         fn with_capacity(size: usize) -> Self {
             Vec::with_capacity(size)
@@ -669,7 +669,7 @@ pub mod containers {
         fn reborrow<'b, 'a: 'b>(item: Self::ReadItem<'a>) -> Self::ReadItem<'b> { item }
 
         fn push_ref(&mut self, item: Self::ReadItem<'_>) { self.push_into(item) }
-        fn push_own(&mut self, item: Self::Owned) { self.push_into(item) }
+        fn push_own(&mut self, item: &Self::Owned) { self.push_into(item) }
 
         fn with_capacity(size: usize) -> Self {
             Self::with_capacity(size)
@@ -713,15 +713,6 @@ pub mod containers {
         }
     }
 
-    impl<B> PushInto<Vec<B>> for SliceContainer<B> {
-        fn push_into(&mut self, item: Vec<B>) {
-            for x in item.into_iter() {
-                self.inner.push(x);
-            }
-            self.offsets.push(self.inner.len());
-        }
-    }
-
     impl<B> BatchContainer for SliceContainer<B>
     where
         B: Ord + Clone + Sized + 'static,
@@ -736,7 +727,7 @@ pub mod containers {
         fn reborrow<'b, 'a: 'b>(item: Self::ReadItem<'a>) -> Self::ReadItem<'b> { item }
 
         fn push_ref(&mut self, item: Self::ReadItem<'_>) { self.push_into(item) }
-        fn push_own(&mut self, item: Self::Owned) { self.push_into(item) }
+        fn push_own(&mut self, item: &Self::Owned) { self.push_into(item) }
 
         fn with_capacity(size: usize) -> Self {
             let mut offsets = Vec::with_capacity(size + 1);
