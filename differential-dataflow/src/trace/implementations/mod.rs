@@ -353,8 +353,6 @@ impl BatchContainer for OffsetList {
     #[inline(always)]
     fn into_owned<'a>(item: Self::ReadItem<'a>) -> Self::Owned { item }
     #[inline(always)]
-    fn borrow_as<'a>(owned: &'a Self::Owned) -> Self::ReadItem<'a> { *owned }
-    #[inline(always)]
     fn reborrow<'b, 'a: 'b>(item: Self::ReadItem<'a>) -> Self::ReadItem<'b> { item }
 
     fn push_ref(&mut self, item: Self::ReadItem<'_>) { self.push_into(item) }
@@ -538,10 +536,6 @@ pub mod containers {
         fn clone_onto<'a>(item: Self::ReadItem<'a>, other: &mut Self::Owned) {
             *other = Self::into_owned(item);
         }
-        /// Borrows an owned instance as oneself.
-        #[must_use]
-        fn borrow_as<'a>(owned: &'a Self::Owned) -> Self::ReadItem<'a>;
-
 
         /// Push an item into this container
         fn push_ref(&mut self, item: Self::ReadItem<'_>);
@@ -637,7 +631,6 @@ pub mod containers {
 
         #[inline(always)] fn into_owned<'a>(item: Self::ReadItem<'a>) -> Self::Owned { item.clone() }
         #[inline(always)] fn clone_onto<'a>(item: Self::ReadItem<'a>, other: &mut Self::Owned) { other.clone_from(item); }
-        #[inline(always)] fn borrow_as<'a>(owned: &'a Self::Owned) -> Self::ReadItem<'a> { owned }
 
         fn reborrow<'b, 'a: 'b>(item: Self::ReadItem<'a>) -> Self::ReadItem<'b> { item }
 
@@ -671,7 +664,6 @@ pub mod containers {
 
         #[inline(always)] fn into_owned<'a>(item: Self::ReadItem<'a>) -> Self::Owned { item.clone() }
         #[inline(always)] fn clone_onto<'a>(item: Self::ReadItem<'a>, other: &mut Self::Owned) { other.clone_from(item); }
-        #[inline(always)] fn borrow_as<'a>(owned: &'a Self::Owned) -> Self::ReadItem<'a> { owned }
 
         fn reborrow<'b, 'a: 'b>(item: Self::ReadItem<'a>) -> Self::ReadItem<'b> { item }
 
@@ -731,7 +723,6 @@ pub mod containers {
 
         #[inline(always)] fn into_owned<'a>(item: Self::ReadItem<'a>) -> Self::Owned { item.to_vec() }
         #[inline(always)] fn clone_onto<'a>(item: Self::ReadItem<'a>, other: &mut Self::Owned) { other.clone_from_slice(item); }
-        #[inline(always)] fn borrow_as<'a>(owned: &'a Self::Owned) -> Self::ReadItem<'a> { &owned[..] }
 
         fn reborrow<'b, 'a: 'b>(item: Self::ReadItem<'a>) -> Self::ReadItem<'b> { item }
 

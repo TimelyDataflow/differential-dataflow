@@ -95,8 +95,6 @@ impl<B: Ord + Clone + 'static> BatchContainer for HuffmanContainer<B> {
             Err(bytes) => other.extend_from_slice(bytes),
         }
     }
-    fn borrow_as<'a>(owned: &'a Self::Owned) -> Self::ReadItem<'a> { Self::ReadItem { inner: Err(&owned[..]) } }
-
     fn reborrow<'b, 'a: 'b>(item: Self::ReadItem<'a>) -> Self::ReadItem<'b> { item }
 
     fn push_ref(&mut self, item: Self::ReadItem<'_>) { self.push_into(item) }
