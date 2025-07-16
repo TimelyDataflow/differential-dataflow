@@ -360,6 +360,8 @@ impl BatchContainer for OffsetList {
     fn push_ref(&mut self, item: Self::ReadItem<'_>) { self.push_into(item) }
     fn push_own(&mut self, item: &Self::Owned) { self.push_into(*item) }
 
+    fn clear(&mut self) { self.zero_prefix = 0; self.smol.clear(); self.chonk.clear(); }
+
     fn with_capacity(size: usize) -> Self {
         Self::with_capacity(size)
     }
@@ -546,6 +548,9 @@ pub mod containers {
         /// Push an item into this container
         fn push_own(&mut self, item: &Self::Owned);
 
+        /// Clears the container. May not release resources.
+        fn clear(&mut self);
+
         /// Creates a new container with sufficient capacity.
         fn with_capacity(size: usize) -> Self;
         /// Creates a new container with sufficient capacity.
@@ -639,6 +644,8 @@ pub mod containers {
         fn push_ref(&mut self, item: Self::ReadItem<'_>) { self.push_into(item) }
         fn push_own(&mut self, item: &Self::Owned) { self.push_into(item.clone()) }
 
+        fn clear(&mut self) { self.clear() }
+
         fn with_capacity(size: usize) -> Self {
             Vec::with_capacity(size)
         }
@@ -670,6 +677,8 @@ pub mod containers {
 
         fn push_ref(&mut self, item: Self::ReadItem<'_>) { self.push_into(item) }
         fn push_own(&mut self, item: &Self::Owned) { self.push_into(item) }
+
+        fn clear(&mut self) { self.clear() }
 
         fn with_capacity(size: usize) -> Self {
             Self::with_capacity(size)
@@ -728,6 +737,12 @@ pub mod containers {
 
         fn push_ref(&mut self, item: Self::ReadItem<'_>) { self.push_into(item) }
         fn push_own(&mut self, item: &Self::Owned) { self.push_into(item) }
+
+        fn clear(&mut self) {
+            self.offsets.clear();
+            self.offsets.push(0);
+            self.inner.clear();
+        }
 
         fn with_capacity(size: usize) -> Self {
             let mut offsets = Vec::with_capacity(size + 1);

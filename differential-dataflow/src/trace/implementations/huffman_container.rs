@@ -102,6 +102,8 @@ impl<B: Ord + Clone + 'static> BatchContainer for HuffmanContainer<B> {
     fn push_ref(&mut self, item: Self::ReadItem<'_>) { self.push_into(item) }
     fn push_own(&mut self, item: &Self::Owned) { self.push_into(item) }
 
+    fn clear(&mut self) { *self = Self::default(); }
+
     fn with_capacity(size: usize) -> Self {
         let mut offsets = OffsetList::with_capacity(size + 1);
         offsets.push(0);
