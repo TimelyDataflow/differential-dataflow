@@ -207,10 +207,15 @@ pub mod layers {
         ///
         /// Tracked independently to account for duplicate compression.
         total: usize,
+
+        /// Time container to stage singleton times for evaluation.
+        time_con: T,
+        /// Diff container to stage singleton times for evaluation.
+        diff_con: D,
     }
 
     impl<T: BatchContainer, D: BatchContainer> Default for UpdsBuilder<T, D> {
-        fn default() -> Self { Self { stash: Vec::default(), total: 0, } }
+        fn default() -> Self { Self { stash: Vec::default(), total: 0, time_con: BatchContainer::with_capacity(1), diff_con: BatchContainer::with_capacity(1) } }
     }
 
 
@@ -230,34 +235,28 @@ pub mod layers {
         pub fn seal<O: for<'a> BatchContainer<ReadItem<'a> = usize>>(&mut self, upds: &mut Upds<O, T, D>) -> bool {
             use crate::consolidation;
             consolidation::consolidate(&mut self.stash);
-            if !self.stash.is_empty() {
-                // If there is a single element, equal to a just-prior recorded update,
-                // we push nothing and report an unincremented offset to encode this case.
-                let time_diff = upds.times.last().zip(upds.diffs.last());
-                let last_eq = self.stash.last().zip(time_diff).map(|((t1, d1), (t2, d2))| {
-                    let t1 = T::borrow_as(t1);
-                    let d1 = D::borrow_as(d1);
-                    t1.eq(&t2) && d1.eq(&d2)
-                });
-                if self.stash.len() == 1 && last_eq.unwrap_or(false) {
-                    // Just clear out the stash, as we won't drain it here.
+            // If everything consolidates away, return false.
+            if self.stash.is_empty() { return false; }
+            // If there is a singleton, we may be able to optimize.
+            if self.stash.len() == 1 {
+                let (time, diff) = self.stash.last().unwrap();
+                self.time_con.clear(); self.time_con.push_own(time);
+                self.diff_con.clear(); self.diff_con.push_own(diff);
+                if upds.times.last() == self.time_con.get(0) && upds.diffs.last() == self.diff_con.get(0) {
                     self.total += 1;
                     self.stash.clear();
                     upds.offs.push_ref(upds.times.len());
+                    return true;
                 }
-                else {
-                    // Conventional; move `stash` into `updates`.
-                    self.total += self.stash.len();
-                    for (time, diff) in self.stash.drain(..) {
-                        upds.times.push_own(&time);
-                        upds.diffs.push_own(&diff);
-                    }
-                    upds.offs.push_ref(upds.times.len());
-                }
-                true
-            } else {
-                false
             }
+            // Conventional; move `stash` into `updates`.
+            self.total += self.stash.len();
+            for (time, diff) in self.stash.drain(..) {
+                upds.times.push_own(&time);
+                upds.diffs.push_own(&diff);
+            }
+            upds.offs.push_ref(upds.times.len());
+            true
         }
 
         /// Completes the building and returns the total updates sealed.

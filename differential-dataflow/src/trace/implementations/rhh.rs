@@ -204,6 +204,13 @@ mod val_batch {
             self.key_count += 1;
         }
 
+        /// Inserts a reference to an owned key, inefficiently. Should be removed.
+        fn insert_key_own(&mut self, key: &layout::Key<L>, offset: Option<usize>) {
+            let mut key_con = L::KeyContainer::with_capacity(1);
+            key_con.push_own(&key);
+            self.insert_key(key_con.index(0), offset)
+        }
+
         /// Indicates both the desired location and the hash signature of the key.
         fn desired_location<K: Hashable>(&self, key: &K) -> usize {
             if self.divisor == 0 { 0 }
@@ -608,9 +615,8 @@ mod val_batch {
                 // we push nothing and report an unincremented offset to encode this case.
                 let time_diff = self.result.times.last().zip(self.result.diffs.last());
                 let last_eq = self.update_stash.last().zip(time_diff).map(|((t1, d1), (t2, d2))| {
-                    let t1 = L::TimeContainer::borrow_as(t1);
-                    let d1 = L::DiffContainer::borrow_as(d1);
-                    t1.eq(&t2) && d1.eq(&d2)
+                    // TODO: The use of `into_owned` is a work-around for not having reference types.
+                    *t1 == L::TimeContainer::into_owned(t2) && *d1 == L::DiffContainer::into_owned(d2)
                 });
                 if self.update_stash.len() == 1 && last_eq.unwrap_or(false) {
                     // Just clear out update_stash, as we won't drain it here.
@@ -767,9 +773,8 @@ mod val_batch {
         /// to recover the singleton to push it into `updates` to join the second update.
         fn push_update(&mut self, time: layout::Time<L>, diff: layout::Diff<L>) {
             // If a just-pushed update exactly equals `(time, diff)` we can avoid pushing it.
-            let t1 = L::TimeContainer::borrow_as(&time);
-            let d1 = L::DiffContainer::borrow_as(&diff);
-            if self.result.times.last().map(|t| t == t1).unwrap_or(false) && self.result.diffs.last().map(|d| d == d1).unwrap_or(false) {
+            // TODO: The use of `into_owned` is a bandage for not having references we can compare.
+            if self.result.times.last().map(|t| L::TimeContainer::into_owned(t) == time).unwrap_or(false) && self.result.diffs.last().map(|d| L::DiffContainer::into_owned(d) == diff).unwrap_or(false) {
                 assert!(self.singleton.is_none());
                 self.singleton = Some((time, diff));
             }
@@ -849,7 +854,7 @@ mod val_batch {
                     self.push_update(time, diff);
                     self.result.vals.push_into(val);
                     // Insert the key, but with no specified offset.
-                    self.result.insert_key(L::KeyContainer::borrow_as(&key), None);
+                    self.result.insert_key_own(&key, None);
                 }
             }
         }

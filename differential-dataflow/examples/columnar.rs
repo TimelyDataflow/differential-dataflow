@@ -638,6 +638,9 @@ pub mod dd_builder {
             // Owned key and val would need to be members of `self`, as this method can be called multiple times,
             // and we need to correctly cache last for reasons of correctness, not just performance.
 
+            let mut key_con = L::KeyContainer::with_capacity(1);
+            let mut val_con = L::ValContainer::with_capacity(1);
+
             for ((key,val),time,diff) in chunk.drain() {
                 // It would be great to avoid.
                 let key  = <layout::Key<L> as Columnar>::into_owned(key);
@@ -646,6 +649,9 @@ pub mod dd_builder {
                 let time = <layout::Time<L> as Columnar>::into_owned(time);
                 let diff = <layout::Diff<L> as Columnar>::into_owned(diff);
 
+                key_con.clear(); key_con.push_own(&key);
+                val_con.clear(); val_con.push_own(&val);
+
                 // Pre-load the first update.
                 if self.result.keys.is_empty() {
                     self.result.vals.vals.push_own(&val);
@@ -653,9 +659,9 @@ pub mod dd_builder {
                     self.staging.push(time, diff);
                 }
                 // Perhaps this is a continuation of an already received key.
-                else if self.result.keys.last().map(|k| L::KeyContainer::borrow_as(&key).eq(&k)).unwrap_or(false) {
+                else if self.result.keys.last() == key_con.get(0) {
                     // Perhaps this is a continuation of an already received value.
-                    if self.result.vals.vals.last().map(|v| L::ValContainer::borrow_as(&val).eq(&v)).unwrap_or(false) {
+                    if self.result.vals.vals.last() == val_con.get(0) {
                         self.staging.push(time, diff);
                     } else {
                         // New value; complete representation of prior value.
@@ -739,6 +745,8 @@ pub mod dd_builder {
             // Owned key and val would need to be members of `self`, as this method can be called multiple times,
             // and we need to correctly cache last for reasons of correctness, not just performance.
 
+            let mut key_con = L::KeyContainer::with_capacity(1);
+
             for ((key,_val),time,diff) in chunk.drain() {
                 // It would be great to avoid.
                 let key  = <layout::Key<L> as Columnar>::into_owned(key);
@@ -746,13 +754,15 @@ pub mod dd_builder {
                 let time = <layout::Time<L> as Columnar>::into_owned(time);
                 let diff = <layout::Diff<L> as Columnar>::into_owned(diff);
 
+                key_con.clear(); key_con.push_own(&key);
+
                 // Pre-load the first update.
                 if self.result.keys.is_empty() {
                     self.result.keys.push_own(&key);
                     self.staging.push(time, diff);
                 }
                 // Perhaps this is a continuation of an already received key.
-                else if self.result.keys.last().map(|k| L::KeyContainer::borrow_as(&key).eq(&k)).unwrap_or(false) {
+                else if self.result.keys.last() == key_con.get(0) {
                     self.staging.push(time, diff);
                 } else {
                     // New key; complete representation of prior key.

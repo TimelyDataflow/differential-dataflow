@@ -89,12 +89,14 @@ where
                     });
 
                     let (mut cursor, storage) = trace.cursor();
-
+                    // Key container to stage keys for comparison.
+                    let mut key_con = Tr::KeyContainer::with_capacity(1);
                     for &mut (ref prefix, ref time, ref mut diff) in prefixes.iter_mut() {
                         if !input2.frontier.less_equal(time) {
                             logic2(prefix, &mut key1);
-                            cursor.seek_key(&storage, Tr::KeyContainer::borrow_as(&key1));
-                            if cursor.get_key(&storage) == Some(Tr::KeyContainer::borrow_as(&key1)) {
+                            key_con.clear(); key_con.push_own(&key1);
+                            cursor.seek_key(&storage, key_con.index(1));
+                            if cursor.get_key(&storage) == Some(key_con.index(1)) {
                                 while let Some(value) = cursor.get_val(&storage) {
                                     let mut count = Tr::Diff::zero();
                                     cursor.map_times(&storage, |t, d| {
