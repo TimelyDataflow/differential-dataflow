@@ -150,7 +150,7 @@ where
 
         let reader = &mut reader;
 
-        let exchange = Exchange::<(K, Option<V>, G::Timestamp), _>::new(move |update: &(K,Option<V>,G::Timestamp)| (update.0).hashed().into());
+        let exchange = Exchange::new(move |update: &(K,Option<V>,G::Timestamp)| (update.0).hashed().into());
 
         stream.unary_frontier(exchange, name, move |_capability, info| {
 

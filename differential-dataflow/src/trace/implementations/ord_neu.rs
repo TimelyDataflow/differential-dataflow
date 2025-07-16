@@ -322,7 +322,7 @@ pub mod val_batch {
         pub updates: usize,
     }
 
-    impl<L: Layout> LaidOut for OrdValBatch<L> {
+    impl<L: Layout> WithLayout for OrdValBatch<L> {
         type Layout = L;
     }
 
@@ -592,8 +592,8 @@ pub mod val_batch {
         phantom: PhantomData<L>,
     }
 
-    use crate::trace::implementations::LaidOut;
-    impl<L: Layout> LaidOut for OrdValCursor<L> {
+    use crate::trace::implementations::WithLayout;
+    impl<L: Layout> WithLayout for OrdValCursor<L> {
         type Layout = L;
     }
 
@@ -794,7 +794,7 @@ pub mod key_batch {
         pub updates: usize,
     }
 
-    impl<L: for<'a> Layout<ValContainer: BatchContainer<ReadItem<'a> = &'a ()>>> LaidOut for OrdKeyBatch<L> {
+    impl<L: for<'a> Layout<ValContainer: BatchContainer<ReadItem<'a> = &'a ()>>> WithLayout for OrdKeyBatch<L> {
         type Layout = L;
     }
 
@@ -983,8 +983,8 @@ pub mod key_batch {
         phantom: PhantomData<L>,
     }
 
-    use crate::trace::implementations::LaidOut;
-    impl<L: for<'a> Layout<ValContainer: BatchContainer<ReadItem<'a> = &'a ()>>> LaidOut for OrdKeyCursor<L> {
+    use crate::trace::implementations::WithLayout;
+    impl<L: for<'a> Layout<ValContainer: BatchContainer<ReadItem<'a> = &'a ()>>> WithLayout for OrdKeyCursor<L> {
         type Layout = L;
     }
 

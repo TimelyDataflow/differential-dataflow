@@ -31,7 +31,7 @@ impl<Tr: TraceReader + Clone> Clone for TraceFrontier<Tr> {
     }
 }
 
-impl<Tr: TraceReader> LaidOut for TraceFrontier<Tr> {
+impl<Tr: TraceReader> WithLayout for TraceFrontier<Tr> {
     type Layout = (
         <Tr::Layout as Layout>::KeyContainer,
         <Tr::Layout as Layout>::ValContainer,
@@ -86,7 +86,7 @@ pub struct BatchFrontier<B: BatchReader> {
     until: Antichain<B::Time>,
 }
 
-impl<B: BatchReader> LaidOut for BatchFrontier<B> {
+impl<B: BatchReader> WithLayout for BatchFrontier<B> {
     type Layout = (
         <B::Layout as Layout>::KeyContainer,
         <B::Layout as Layout>::ValContainer,
@@ -125,8 +125,8 @@ pub struct CursorFrontier<C, T> {
     until: Antichain<T>
 }
 
-use crate::trace::implementations::{Layout, LaidOut};
-impl<C: Cursor> LaidOut for CursorFrontier<C, C::Time> {
+use crate::trace::implementations::{Layout, WithLayout};
+impl<C: Cursor> WithLayout for CursorFrontier<C, C::Time> {
     type Layout = (
         <C::Layout as Layout>::KeyContainer,
         <C::Layout as Layout>::ValContainer,
@@ -192,7 +192,7 @@ pub struct BatchCursorFrontier<C: Cursor> {
     until: Antichain<C::Time>,
 }
 
-impl<C: Cursor> LaidOut for BatchCursorFrontier<C> {
+impl<C: Cursor> WithLayout for BatchCursorFrontier<C> {
     type Layout = (
         <C::Layout as Layout>::KeyContainer,
         <C::Layout as Layout>::ValContainer,

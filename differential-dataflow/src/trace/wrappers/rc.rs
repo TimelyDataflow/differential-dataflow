@@ -78,8 +78,8 @@ pub struct TraceRc<Tr: TraceReader> {
     pub wrapper: Rc<RefCell<TraceBox<Tr>>>,
 }
 
-use crate::trace::LaidOut;
-impl<Tr: TraceReader> LaidOut for TraceRc<Tr> {
+use crate::trace::WithLayout;
+impl<Tr: TraceReader> WithLayout for TraceRc<Tr> {
     type Layout = Tr::Layout;
 }
 

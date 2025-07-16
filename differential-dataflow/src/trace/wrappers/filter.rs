@@ -24,7 +24,7 @@ where
     }
 }
 
-impl<Tr: TraceReader, F> LaidOut for TraceFilter<Tr, F> {
+impl<Tr: TraceReader, F> WithLayout for TraceFilter<Tr, F> {
     type Layout = Tr::Layout;
 }
 
@@ -72,7 +72,7 @@ pub struct BatchFilter<B, F> {
     logic: F,
 }
 
-impl<B: BatchReader, F> LaidOut for BatchFilter<B, F> {
+impl<B: BatchReader, F> WithLayout for BatchFilter<B, F> {
     type Layout = B::Layout;
 }
 
@@ -106,8 +106,8 @@ pub struct CursorFilter<C, F> {
     logic: F,
 }
 
-use crate::trace::implementations::LaidOut;
-impl<C: Cursor, F> LaidOut for CursorFilter<C, F> {
+use crate::trace::implementations::WithLayout;
+impl<C: Cursor, F> WithLayout for CursorFilter<C, F> {
     type Layout = C::Layout;
 }
 
@@ -163,7 +163,7 @@ pub struct BatchCursorFilter<C, F> {
     logic: F,
 }
 
-impl<C: Cursor, F> LaidOut for BatchCursorFilter<C, F> {
+impl<C: Cursor, F> WithLayout for BatchCursorFilter<C, F> {
     type Layout = C::Layout;
 }
 

@@ -51,7 +51,7 @@ pub trait TraceReader : LayoutExt {
         'static +
         Clone +
         BatchReader +
-        LaidOut<Layout = Self::Layout> +
+        WithLayout<Layout = Self::Layout> +
         for<'a> LayoutExt<
             Key<'a> = Self::Key<'a>,
             KeyOwn = Self::KeyOwn,
@@ -74,7 +74,7 @@ pub trait TraceReader : LayoutExt {
     /// The type used to enumerate the collections contents.
     type Cursor:
         Cursor<Storage=Self::Storage> +
-        LaidOut<Layout = Self::Layout> +
+        WithLayout<Layout = Self::Layout> +
         for<'a> LayoutExt<
             Key<'a> = Self::Key<'a>,
             KeyOwn = Self::KeyOwn,
@@ -237,7 +237,7 @@ pub trait Trace : TraceReader<Batch: Batch> {
     fn close(&mut self);
 }
 
-use crate::trace::implementations::LaidOut;
+use crate::trace::implementations::WithLayout;
 
 /// A batch of updates whose contents may be read.
 ///
@@ -250,7 +250,7 @@ pub trait BatchReader : LayoutExt + Sized {
     /// The type used to enumerate the batch's contents.
     type Cursor:
         Cursor<Storage=Self> +
-        LaidOut<Layout = Self::Layout> +
+        WithLayout<Layout = Self::Layout> +
         for<'a> LayoutExt<
             Key<'a> = Self::Key<'a>,
             KeyOwn = Self::KeyOwn,
@@ -377,7 +377,7 @@ pub mod rc_blanket_impls {
     use timely::progress::{Antichain, frontier::AntichainRef};
     use super::{Batch, BatchReader, Builder, Merger, Cursor, Description};
 
-    impl<B: BatchReader> LaidOut for Rc<B> {
+    impl<B: BatchReader> WithLayout for Rc<B> {
         type Layout = B::Layout;
     }
 
@@ -401,8 +401,8 @@ pub mod rc_blanket_impls {
         cursor: C,
     }
 
-    use crate::trace::implementations::LaidOut;
-    impl<C: Cursor> LaidOut for RcBatchCursor<C> {
+    use crate::trace::implementations::WithLayout;
+    impl<C: Cursor> WithLayout for RcBatchCursor<C> {
         type Layout = C::Layout;
     }
 

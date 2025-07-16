@@ -40,7 +40,7 @@ where
     }
 }
 
-impl<Tr, TInner, F, G> LaidOut for TraceEnter<Tr, TInner, F, G>
+impl<Tr, TInner, F, G> WithLayout for TraceEnter<Tr, TInner, F, G>
 where
     Tr: TraceReader<Batch: Clone>,
     TInner: Refines<Tr::Time>+Lattice,
@@ -140,7 +140,7 @@ pub struct BatchEnter<B, TInner, F> {
     logic: F,
 }
 
-impl<B, TInner, F> LaidOut for BatchEnter<B, TInner, F>
+impl<B, TInner, F> WithLayout for BatchEnter<B, TInner, F>
 where
     B: BatchReader,
     TInner: Refines<B::Time>+Lattice,
@@ -196,8 +196,8 @@ pub struct CursorEnter<C, TInner, F> {
     logic: F,
 }
 
-use crate::trace::implementations::{Layout, LaidOut};
-impl<C, TInner, F> LaidOut for CursorEnter<C, TInner, F>
+use crate::trace::implementations::{Layout, WithLayout};
+impl<C, TInner, F> WithLayout for CursorEnter<C, TInner, F>
 where
     C: Cursor,
     TInner: Refines<C::Time>+Lattice,
@@ -267,7 +267,7 @@ pub struct BatchCursorEnter<C, TInner, F> {
     logic: F,
 }
 
-impl<C, TInner, F> LaidOut for BatchCursorEnter<C, TInner, F>
+impl<C, TInner, F> WithLayout for BatchCursorEnter<C, TInner, F>
 where
     C: Cursor,
     TInner: Refines<C::Time>+Lattice,

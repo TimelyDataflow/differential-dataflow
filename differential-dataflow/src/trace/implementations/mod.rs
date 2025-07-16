@@ -106,13 +106,13 @@ pub trait Layout {
 }
 
 /// A type bearing a layout.
-pub trait LaidOut {
+pub trait WithLayout {
     /// The layout.
     type Layout: Layout;
 }
 
 /// Automatically implemented trait for types with layouts.
-pub trait LayoutExt : LaidOut<Layout: Layout<KeyContainer = Self::KeyContainer, ValContainer = Self::ValContainer, TimeContainer = Self::TimeContainer, DiffContainer = Self::DiffContainer>> {
+pub trait LayoutExt : WithLayout<Layout: Layout<KeyContainer = Self::KeyContainer, ValContainer = Self::ValContainer, TimeContainer = Self::TimeContainer, DiffContainer = Self::DiffContainer>> {
     /// Alias for an owned key of a layout.
     type KeyOwn;
     /// Alias for an borrowed key of a layout.
@@ -152,7 +152,7 @@ pub trait LayoutExt : LaidOut<Layout: Layout<KeyContainer = Self::KeyContainer, 
     fn clone_time_onto(time: Self::TimeGat<'_>, onto: &mut Self::Time);
 }
 
-impl<L: LaidOut> LayoutExt for L {
+impl<L: WithLayout> LayoutExt for L {
     type KeyOwn = <<L::Layout as Layout>::KeyContainer as BatchContainer>::Owned;
     type Key<'a> = <<L::Layout as Layout>::KeyContainer as BatchContainer>::ReadItem<'a>;
     type ValOwn = <<L::Layout as Layout>::ValContainer as BatchContainer>::Owned;

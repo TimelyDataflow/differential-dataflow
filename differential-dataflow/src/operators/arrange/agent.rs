@@ -36,8 +36,8 @@ pub struct TraceAgent<Tr: TraceReader> {
     logging: Option<crate::logging::Logger>,
 }
 
-use crate::trace::implementations::LaidOut;
-impl<Tr: TraceReader> LaidOut for TraceAgent<Tr> {
+use crate::trace::implementations::WithLayout;
+impl<Tr: TraceReader> WithLayout for TraceAgent<Tr> {
     type Layout = Tr::Layout;
 }
 

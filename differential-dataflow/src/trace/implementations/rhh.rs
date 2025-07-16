@@ -273,7 +273,7 @@ mod val_batch {
         pub updates: usize,
     }
 
-    impl<L: Layout> LaidOut for RhhValBatch<L>
+    impl<L: Layout> WithLayout for RhhValBatch<L>
     where
         layout::Key<L>: Default + HashOrdered,
         for<'a> layout::KeyRef<'a, L>: HashOrdered,
@@ -651,8 +651,8 @@ mod val_batch {
         phantom: PhantomData<L>,
     }
 
-    use crate::trace::implementations::LaidOut;
-    impl<L: Layout> LaidOut for RhhValCursor<L>
+    use crate::trace::implementations::WithLayout;
+    impl<L: Layout> WithLayout for RhhValCursor<L>
     where
         layout::Key<L>: Default + HashOrdered,
         for<'a> layout::KeyRef<'a, L>: HashOrdered,

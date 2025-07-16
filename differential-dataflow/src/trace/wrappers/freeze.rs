@@ -69,7 +69,7 @@ where
     }
 }
 
-impl<Tr, F> LaidOut for TraceFreeze<Tr, F>
+impl<Tr, F> WithLayout for TraceFreeze<Tr, F>
 where
     Tr: TraceReader,
     F: Fn(Tr::TimeGat<'_>)->Option<Tr::Time>,
@@ -139,7 +139,7 @@ impl<B: Clone, F> Clone for BatchFreeze<B, F> {
     }
 }
 
-impl<B, F> LaidOut for BatchFreeze<B, F>
+impl<B, F> WithLayout for BatchFreeze<B, F>
 where
     B: BatchReader,
     F: Fn(B::TimeGat<'_>)->Option<B::Time>,
@@ -184,8 +184,8 @@ pub struct CursorFreeze<C, F> {
     func: Rc<F>,
 }
 
-use crate::trace::implementations::{Layout, LaidOut};
-impl<C: Cursor, F> LaidOut for CursorFreeze<C, F> {
+use crate::trace::implementations::{Layout, WithLayout};
+impl<C: Cursor, F> WithLayout for CursorFreeze<C, F> {
     type Layout = (
         <C::Layout as Layout>::KeyContainer,
         <C::Layout as Layout>::ValContainer,
@@ -243,7 +243,7 @@ pub struct BatchCursorFreeze<C, F> {
     func: Rc<F>,
 }
 
-impl<C: Cursor, F> LaidOut for BatchCursorFreeze<C, F> {
+impl<C: Cursor, F> WithLayout for BatchCursorFreeze<C, F> {
     type Layout = (
         <C::Layout as Layout>::KeyContainer,
         <C::Layout as Layout>::ValContainer,

@@ -94,8 +94,8 @@ impl<C: Cursor> CursorList<C> {
     }
 }
 
-use crate::trace::implementations::LaidOut;
-impl<C: Cursor> LaidOut for CursorList<C> {
+use crate::trace::implementations::WithLayout;
+impl<C: Cursor> WithLayout for CursorList<C> {
     type Layout = C::Layout;
 }
 
