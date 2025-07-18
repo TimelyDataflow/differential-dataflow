@@ -10,23 +10,16 @@
 //! Implementations of `MergeBatcher` can be instantiated through the choice of both
 //! the chunker and the merger, provided their respective output and input types align.
 
-use std::marker::PhantomData;
-
 use timely::progress::frontier::AntichainRef;
 use timely::progress::{frontier::Antichain, Timestamp};
 use timely::Container;
-use timely::container::{ContainerBuilder, PushInto};
+use timely::container::PushInto;
 
 use crate::logging::{BatcherEvent, Logger};
 use crate::trace::{Batcher, Builder, Description};
 
 /// Creates batches from containers of unordered tuples.
-///
-/// To implement `Batcher`, the container builder `C` must accept `&mut Input` as inputs,
-/// and must produce outputs of type `M::Chunk`.
-pub struct MergeBatcher<Input, C, M: Merger> {
-    /// Transforms input streams to chunks of sorted, consolidated data.
-    chunker: C,
+pub struct MergeBatcher<M: Merger> {
     /// A sequence of power-of-two length lists of sorted, consolidated containers.
     ///
     /// Do not push/pop directly but use the corresponding functions ([`Self::chain_push`]/[`Self::chain_pop`]).
@@ -43,40 +36,24 @@ pub struct MergeBatcher<Input, C, M: Merger> {
     logger: Option<Logger>,
     /// Timely operator ID.
     operator_id: usize,
-    /// The `Input` type needs to be called out as the type of container accepted, but it is not otherwise present.
-    _marker: PhantomData<Input>,
 }
 
-impl<Input, C, M> Batcher for MergeBatcher<Input, C, M>
+impl<M> Batcher for MergeBatcher<M>
 where
-    C: ContainerBuilder<Container=M::Chunk> + Default + for<'a> PushInto<&'a mut Input>,
     M: Merger<Time: Timestamp>,
 {
-    type Input = Input;
     type Time = M::Time;
-    type Output = M::Chunk;
+    type Container = M::Chunk;
 
     fn new(logger: Option<Logger>, operator_id: usize) -> Self {
         Self {
             logger,
             operator_id,
-            chunker: C::default(),
             merger: M::default(),
             chains: Vec::new(),
             stash: Vec::new(),
             frontier: Antichain::new(),
             lower: Antichain::from_elem(M::Time::minimum()),
-            _marker: PhantomData,
-        }
-    }
-
-    /// Push a container of data into this merge batcher. Updates the internal chain structure if
-    /// needed.
-    fn push_container(&mut self, container: &mut Input) {
-        self.chunker.push_into(container);
-        while let Some(chunk) = self.chunker.extract() {
-            let chunk = std::mem::take(chunk);
-            self.insert_chain(vec![chunk]);
         }
     }
 
@@ -84,13 +61,7 @@ where
     // in `upper`. All updates must have time greater or equal to the previously used `upper`,
     // which we call `lower`, by assumption that after sealing a batcher we receive no more
     // updates with times not greater or equal to `upper`.
-    fn seal<B: Builder<Input = Self::Output, Time = Self::Time>>(&mut self, upper: Antichain<M::Time>) -> B::Output {
-        // Finish
-        while let Some(chunk) = self.chunker.finish() {
-            let chunk = std::mem::take(chunk);
-            self.insert_chain(vec![chunk]);
-        }
-
+    fn seal<B: Builder<Input = Self::Container, Time = Self::Time>>(&mut self, upper: Antichain<M::Time>) -> B::Output {
         // Merge all remaining chains into a single chain.
         while self.chains.len() > 1 {
             let list1 = self.chain_pop().unwrap();
@@ -125,8 +96,16 @@ where
         self.frontier.borrow()
     }
 }
+impl<M> PushInto<M::Chunk> for MergeBatcher<M>
+where
+    M: Merger,
+{
+    fn push_into(&mut self, item: M::Chunk) {
+        self.insert_chain(vec![item]);
+    }
+}
 
-impl<Input, C, M: Merger> MergeBatcher<Input, C, M> {
+impl<M: Merger> MergeBatcher<M> {
     /// Insert a chain and maintain chain properties: Chains are geometrically sized and ordered
     /// by decreasing length.
     fn insert_chain(&mut self, chain: Vec<M::Chunk>) {
@@ -190,7 +169,7 @@ impl<Input, C, M: Merger> MergeBatcher<Input, C, M> {
     }
 }
 
-impl<Input, C, M: Merger> Drop for MergeBatcher<Input, C, M> {
+impl<M: Merger> Drop for MergeBatcher<M> {
     fn drop(&mut self) {
         // Cleanup chain to retract accounting information.
         while self.chain_pop().is_some() {}
