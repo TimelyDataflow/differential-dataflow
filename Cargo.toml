@@ -17,9 +17,10 @@ resolver = "2"
 
 [workspace.dependencies]
 differential-dataflow = { path = "differential-dataflow", default-features = false, version = "0.15.3" }
-timely = { version = "0.21", default-features = false }
-columnar = { version = "0.8", default-features = false }
-#timely = { path = "../timely-dataflow/timely/", default-features = false }
+#timely = { version = "0.21", default-features = false }
+#columnar = { version = "0.9", default-features = false }
+columnar = { path = "../columnar" }
+timely = { path = "../timely-dataflow/timely/", default-features = false }
 
 [profile.release]
 opt-level = 3
