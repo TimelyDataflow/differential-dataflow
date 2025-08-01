@@ -6,6 +6,7 @@
 //! underlying system can more clearly see that no work must be done in the later case, and we can
 //! drop out of, e.g. iterative computations.
 
+use timely::container::{ContainerBuilder, PushInto};
 use timely::dataflow::Scope;
 
 use crate::{Collection, ExchangeData, Hashable};
@@ -44,22 +45,23 @@ where
     /// });
     /// ```
     pub fn consolidate(&self) -> Self {
-        use crate::trace::implementations::{KeyBatcher, KeyBuilder, KeySpine};
-        self.consolidate_named::<KeyBatcher<_, _, _>,KeyBuilder<_,_,_>, KeySpine<_,_,_>,_>("Consolidate", |key,&()| key.clone())
+        use crate::trace::implementations::{VecChunker, KeyBatcher, KeyBuilder, KeySpine};
+        self.consolidate_named::<VecChunker<_>,KeyBatcher<_, _, _>,KeyBuilder<_,_,_>, KeySpine<_,_,_>,_>("Consolidate", |key,&()| key.clone())
     }
 
     /// As `consolidate` but with the ability to name the operator, specify the trace type,
     /// and provide the function `reify` to produce owned keys and values..
-    pub fn consolidate_named<Ba, Bu, Tr, F>(&self, name: &str, reify: F) -> Self
+    pub fn consolidate_named<Chu, Ba, Bu, Tr, F>(&self, name: &str, reify: F) -> Self
     where
-        Ba: Batcher<Input=Vec<((D,()),G::Timestamp,R)>, Time=G::Timestamp> + 'static,
+        Chu: ContainerBuilder<Container=Ba::Container> + for<'a> PushInto<&'a mut Vec<((D, ()), G::Timestamp, R)>>,
+        Ba: Batcher<Time=G::Timestamp> + 'static,
         Tr: for<'a> crate::trace::Trace<Time=G::Timestamp,Diff=R>+'static,
-        Bu: Builder<Time=Tr::Time, Input=Ba::Output, Output=Tr::Batch>,
+        Bu: Builder<Time=Tr::Time, Input=Ba::Container, Output=Tr::Batch>,
         F: Fn(Tr::Key<'_>, Tr::Val<'_>) -> D + 'static,
     {
         use crate::operators::arrange::arrangement::Arrange;
         self.map(|k| (k, ()))
-            .arrange_named::<Ba, Bu, Tr>(name)
+            .arrange_named::<Chu, Ba, Bu, Tr>(name)
             .as_collection(reify)
     }
 

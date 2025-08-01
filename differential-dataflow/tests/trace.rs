@@ -1,3 +1,4 @@
+use timely::container::PushInto;
 use timely::dataflow::operators::generic::OperatorInfo;
 use timely::progress::{Antichain, frontier::AntichainRef};
 
@@ -14,7 +15,7 @@ fn get_trace() -> ValSpine<u64, u64, usize, i64> {
     {
         let mut batcher = ValBatcher::<u64,u64,usize,i64>::new(None, 0);
 
-        batcher.push_container(&mut vec![
+        batcher.push_into(vec![
             ((1, 2), 0, 1),
             ((2, 3), 1, 1),
             ((2, 3), 2, -1),
