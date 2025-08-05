@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.4](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dogs3-v0.1.14...differential-dogs3-v0.15.4) - 2025-08-05
+
+### Other
+
+- Remove `BatchContainer::borrow_as()` ([#628](https://github.com/TimelyDataflow/differential-dataflow/pull/628))
+- `Layout` extension trait ([#627](https://github.com/TimelyDataflow/differential-dataflow/pull/627))
+- Remove `IntoOwned` (phase 1) ([#624](https://github.com/TimelyDataflow/differential-dataflow/pull/624))
+- Extract inner function from half-join ([#619](https://github.com/TimelyDataflow/differential-dataflow/pull/619))
+
 ## [0.1.14](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dogs3-v0.1.13...differential-dogs3-v0.1.14) - 2025-06-24
 
 ### Other
