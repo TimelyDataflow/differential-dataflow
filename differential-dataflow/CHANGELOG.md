@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.4](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dataflow-v0.15.3...differential-dataflow-v0.15.4) - 2025-08-05
+
+### Other
+
+- Inline consolidate fast-path ([#629](https://github.com/TimelyDataflow/differential-dataflow/pull/629))
+- Remove `BatchContainer::borrow_as()` ([#628](https://github.com/TimelyDataflow/differential-dataflow/pull/628))
+- `Layout` extension trait ([#627](https://github.com/TimelyDataflow/differential-dataflow/pull/627))
+- Remove `IntoOwned` (phase 1) ([#624](https://github.com/TimelyDataflow/differential-dataflow/pull/624))
+- Remove redundant bounds ([#623](https://github.com/TimelyDataflow/differential-dataflow/pull/623))
+- Update comment
+- Use trie abstractions for batch implementations ([#616](https://github.com/TimelyDataflow/differential-dataflow/pull/616))
+- Bump columnar to 0.8.0 ([#620](https://github.com/TimelyDataflow/differential-dataflow/pull/620))
+- Use BTreeMap to avoid sorting ([#615](https://github.com/TimelyDataflow/differential-dataflow/pull/615))
+- Respect singleton counts in merge effort ([#614](https://github.com/TimelyDataflow/differential-dataflow/pull/614))
+- Demonstrate `Columnar` batch builder ([#602](https://github.com/TimelyDataflow/differential-dataflow/pull/602))
+
 ## [0.15.3](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dataflow-v0.15.2...differential-dataflow-v0.15.3) - 2025-06-24
 
 ### Other
