@@ -10,6 +10,7 @@ name = "differential-dataflow"
 release = true
 # enable the changelog for this package
 changelog_update = true
+version_group = "differential"
 
 [[package]]
 name = "differential-dogs3"
@@ -17,3 +18,4 @@ name = "differential-dogs3"
 release = true
 # enable the changelog for this package
 changelog_update = true
+version_group = "differential"
