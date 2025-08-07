@@ -159,14 +159,14 @@ mod container {
     type BorrowedOf<'a, C> = <<C as Columnar>::Container as columnar::Container>::Borrowed<'a>;
 
     impl<C: Columnar> Column<C> {
-        pub fn borrow(&self) -> BorrowedOf<C> {
+        pub fn borrow(&self) -> BorrowedOf<'_, C> {
             match self {
                 Column::Typed(t) => t.borrow(),
                 Column::Bytes(b) => <BorrowedOf<C> as FromBytes>::from_bytes(&mut Indexed::decode(bytemuck::cast_slice(b))),
                 Column::Align(a) => <BorrowedOf<C> as FromBytes>::from_bytes(&mut Indexed::decode(a)),
             }
         }
-        pub fn get(&self, index: usize) -> columnar::Ref<C> {
+        pub fn get(&self, index: usize) -> columnar::Ref<'_, C> {
             self.borrow().get(index)
         }
     }
@@ -493,7 +493,7 @@ pub mod batcher {
             for<'b> columnar::Ref<'b, T>: Ord,
             R: Columnar,
         {
-            fn next_or_alloc(&mut self) -> Result<columnar::Ref<(D, T, R)>, Column<(D, T, R)>> {
+            fn next_or_alloc(&mut self) -> Result<columnar::Ref<'_, (D, T, R)>, Column<(D, T, R)>> {
                 if self.is_empty() {
                     Err(std::mem::take(&mut self.list))
                 }
@@ -517,12 +517,12 @@ pub mod batcher {
         }
 
         impl<T: Columnar> ColumnQueue<T> {
-            fn pop(&mut self) -> columnar::Ref<T> {
+            fn pop(&mut self) -> columnar::Ref<'_, T> {
                 self.head += 1;
                 self.list.get(self.head - 1)
             }
 
-            fn peek(&self) -> columnar::Ref<T> {
+            fn peek(&self) -> columnar::Ref<'_, T> {
                 self.list.get(self.head)
             }
         }

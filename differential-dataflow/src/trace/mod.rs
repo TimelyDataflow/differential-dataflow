@@ -133,7 +133,7 @@ pub trait TraceReader : LayoutExt {
     /// not beyond this frontier will present as a time that compares identically with all query times beyond
     /// this frontier. Practically, update times not beyond this frontier should not be taken to be accurate as
     /// presented, and should be used carefully, only in accumulation to times that are beyond the frontier.
-    fn get_logical_compaction(&mut self) -> AntichainRef<Self::Time>;
+    fn get_logical_compaction(&mut self) -> AntichainRef<'_, Self::Time>;
 
     /// Advances the frontier that constrains physical compaction.
     ///
@@ -149,7 +149,7 @@ pub trait TraceReader : LayoutExt {
     ///
     /// It is an error to call this method with a frontier not equal to or beyond the most recent arguments to
     /// this method, or the initial value of `get_physical_compaction()` if this method has not yet been called.
-    fn set_physical_compaction(&mut self, frontier: AntichainRef<Self::Time>);
+    fn set_physical_compaction(&mut self, frontier: AntichainRef<'_, Self::Time>);
 
     /// Reports the physical compaction frontier.
     ///
@@ -157,7 +157,7 @@ pub trait TraceReader : LayoutExt {
     /// the caller to create a cursor through any frontier beyond the physical compaction frontier, with the
     /// `cursor_through()` method. This functionality is primarily of interest to the `join` operator, and any
     /// other operators who need to take notice of the physical structure of update batches.
-    fn get_physical_compaction(&mut self) -> AntichainRef<Self::Time>;
+    fn get_physical_compaction(&mut self) -> AntichainRef<'_, Self::Time>;
 
     /// Maps logic across the non-empty sequence of batches in the trace.
     ///
@@ -314,7 +314,7 @@ pub trait Batcher {
     /// Returns all updates not greater or equal to an element of `upper`.
     fn seal<B: Builder<Input=Self::Output, Time=Self::Time>>(&mut self, upper: Antichain<Self::Time>) -> B::Output;
     /// Returns the lower envelope of contained update times.
-    fn frontier(&mut self) -> timely::progress::frontier::AntichainRef<Self::Time>;
+    fn frontier(&mut self) -> AntichainRef<'_, Self::Time>;
 }
 
 /// Functionality for building batches from ordered update sequences.

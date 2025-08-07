@@ -121,7 +121,7 @@ where
 
     /// The frontier of elements remaining after the most recent call to `self.seal`.
     #[inline]
-    fn frontier(&mut self) -> AntichainRef<M::Time> {
+    fn frontier(&mut self) -> AntichainRef<'_, M::Time> {
         self.frontier.borrow()
     }
 }

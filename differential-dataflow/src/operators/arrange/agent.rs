@@ -55,10 +55,10 @@ impl<Tr: TraceReader> TraceReader for TraceAgent<Tr> {
         ::std::mem::swap(&mut self.logical_compaction, &mut self.temp_antichain);
         self.temp_antichain.clear();
     }
-    fn get_logical_compaction(&mut self) -> AntichainRef<Tr::Time> {
+    fn get_logical_compaction(&mut self) -> AntichainRef<'_, Tr::Time> {
         self.logical_compaction.borrow()
     }
-    fn set_physical_compaction(&mut self, frontier: AntichainRef<Tr::Time>) {
+    fn set_physical_compaction(&mut self, frontier: AntichainRef<'_, Tr::Time>) {
         // This method does not enforce that `frontier` is greater or equal to `self.physical_compaction`.
         // Instead, it determines the joint consequences of both guarantees and moves forward with that.
         crate::lattice::antichain_join_into(&self.physical_compaction.borrow()[..], &frontier[..], &mut self.temp_antichain);
@@ -66,10 +66,10 @@ impl<Tr: TraceReader> TraceReader for TraceAgent<Tr> {
         ::std::mem::swap(&mut self.physical_compaction, &mut self.temp_antichain);
         self.temp_antichain.clear();
     }
-    fn get_physical_compaction(&mut self) -> AntichainRef<Tr::Time> {
+    fn get_physical_compaction(&mut self) -> AntichainRef<'_, Tr::Time> {
         self.physical_compaction.borrow()
     }
-    fn cursor_through(&mut self, frontier: AntichainRef<Tr::Time>) -> Option<(Self::Cursor, Self::Storage)> {
+    fn cursor_through(&mut self, frontier: AntichainRef<'_, Tr::Time>) -> Option<(Self::Cursor, Self::Storage)> {
         self.trace.borrow_mut().trace.cursor_through(frontier)
     }
     fn map_batches<F: FnMut(&Self::Batch)>(&self, f: F) { self.trace.borrow().trace.map_batches(f) }

@@ -80,7 +80,7 @@ impl TraceHandler {
         boxed.downcast_mut::<T>().ok_or(format!("failed to downcast: {}", name))
     }
     /// Enumerates the keys maintained in storage (for the `list` operation).
-    pub fn keys(&self) -> ::std::collections::hash_map::Keys<String, Box<dyn Any>> {
+    pub fn keys(&self) -> ::std::collections::hash_map::Keys<'_, String, Box<dyn Any>> {
         self.handles.keys()
     }
     /// Assign a thing to key `name`, boxed as `Box<Any>`.

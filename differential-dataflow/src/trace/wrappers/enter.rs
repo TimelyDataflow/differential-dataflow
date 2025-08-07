@@ -54,14 +54,14 @@ where
         })
     }
 
-    fn set_logical_compaction(&mut self, frontier: AntichainRef<TInner>) {
+    fn set_logical_compaction(&mut self, frontier: AntichainRef<'_, TInner>) {
         self.stash1.clear();
         for time in frontier.iter() {
             self.stash1.insert(time.clone().to_outer());
         }
         self.trace.set_logical_compaction(self.stash1.borrow());
     }
-    fn get_logical_compaction(&mut self) -> AntichainRef<TInner> {
+    fn get_logical_compaction(&mut self) -> AntichainRef<'_, TInner> {
         self.stash2.clear();
         for time in self.trace.get_logical_compaction().iter() {
             self.stash2.insert(TInner::to_inner(time.clone()));
@@ -69,14 +69,14 @@ where
         self.stash2.borrow()
     }
 
-    fn set_physical_compaction(&mut self, frontier: AntichainRef<TInner>) {
+    fn set_physical_compaction(&mut self, frontier: AntichainRef<'_, TInner>) {
         self.stash1.clear();
         for time in frontier.iter() {
             self.stash1.insert(time.clone().to_outer());
         }
         self.trace.set_physical_compaction(self.stash1.borrow());
     }
-    fn get_physical_compaction(&mut self) -> AntichainRef<TInner> {
+    fn get_physical_compaction(&mut self) -> AntichainRef<'_, TInner> {
         self.stash2.clear();
         for time in self.trace.get_physical_compaction().iter() {
             self.stash2.insert(TInner::to_inner(time.clone()));

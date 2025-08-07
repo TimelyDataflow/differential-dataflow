@@ -211,9 +211,9 @@ impl<B: Batch+Clone+'static> TraceReader for Spine<B> {
         self.logical_frontier.extend(frontier.iter().cloned());
     }
     #[inline]
-    fn get_logical_compaction(&mut self) -> AntichainRef<B::Time> { self.logical_frontier.borrow() }
+    fn get_logical_compaction(&mut self) -> AntichainRef<'_, B::Time> { self.logical_frontier.borrow() }
     #[inline]
-    fn set_physical_compaction(&mut self, frontier: AntichainRef<B::Time>) {
+    fn set_physical_compaction(&mut self, frontier: AntichainRef<'_, B::Time>) {
         // We should never request to rewind the frontier.
         debug_assert!(PartialOrder::less_equal(&self.physical_frontier.borrow(), &frontier), "FAIL\tthrough frontier !<= new frontier {:?} {:?}\n", self.physical_frontier, frontier);
         self.physical_frontier.clear();
@@ -221,7 +221,7 @@ impl<B: Batch+Clone+'static> TraceReader for Spine<B> {
         self.consider_merges();
     }
     #[inline]
-    fn get_physical_compaction(&mut self) -> AntichainRef<B::Time> { self.physical_frontier.borrow() }
+    fn get_physical_compaction(&mut self) -> AntichainRef<'_, B::Time> { self.physical_frontier.borrow() }
 
     #[inline]
     fn map_batches<F: FnMut(&Self::Batch)>(&self, mut f: F) {

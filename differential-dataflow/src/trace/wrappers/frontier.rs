@@ -53,13 +53,13 @@ impl<Tr: TraceReader> TraceReader for TraceFrontier<Tr> {
         self.trace.map_batches(|batch| f(&Self::Batch::make_from(batch.clone(), since, until)))
     }
 
-    fn set_logical_compaction(&mut self, frontier: AntichainRef<Tr::Time>) { self.trace.set_logical_compaction(frontier) }
-    fn get_logical_compaction(&mut self) -> AntichainRef<Tr::Time> { self.trace.get_logical_compaction() }
+    fn set_logical_compaction(&mut self, frontier: AntichainRef<'_, Tr::Time>) { self.trace.set_logical_compaction(frontier) }
+    fn get_logical_compaction(&mut self) -> AntichainRef<'_, Tr::Time> { self.trace.get_logical_compaction() }
 
-    fn set_physical_compaction(&mut self, frontier: AntichainRef<Tr::Time>) { self.trace.set_physical_compaction(frontier) }
-    fn get_physical_compaction(&mut self) -> AntichainRef<Tr::Time> { self.trace.get_physical_compaction() }
+    fn set_physical_compaction(&mut self, frontier: AntichainRef<'_, Tr::Time>) { self.trace.set_physical_compaction(frontier) }
+    fn get_physical_compaction(&mut self) -> AntichainRef<'_, Tr::Time> { self.trace.get_physical_compaction() }
 
-    fn cursor_through(&mut self, upper: AntichainRef<Tr::Time>) -> Option<(Self::Cursor, Self::Storage)> {
+    fn cursor_through(&mut self, upper: AntichainRef<'_, Tr::Time>) -> Option<(Self::Cursor, Self::Storage)> {
         let since = self.since.borrow();
         let until = self.until.borrow();
         self.trace.cursor_through(upper).map(|(x,y)| (CursorFrontier::new(x, since, until), y))
@@ -68,7 +68,7 @@ impl<Tr: TraceReader> TraceReader for TraceFrontier<Tr> {
 
 impl<Tr: TraceReader> TraceFrontier<Tr> {
     /// Makes a new trace wrapper
-    pub fn make_from(trace: Tr, since: AntichainRef<Tr::Time>, until: AntichainRef<Tr::Time>) -> Self {
+    pub fn make_from(trace: Tr, since: AntichainRef<'_, Tr::Time>, until: AntichainRef<'_, Tr::Time>) -> Self {
         TraceFrontier {
             trace,
             since: since.to_owned(),
