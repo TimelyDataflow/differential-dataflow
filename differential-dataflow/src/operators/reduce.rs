@@ -89,7 +89,7 @@ where
 {
     fn reduce_named<L, V2: Data, R2: Ord+Abelian+'static>(&self, name: &str, logic: L) -> Collection<G, (K, V2), R2>
         where L: FnMut(&K, &[(&V, R)], &mut Vec<(V2, R2)>)+'static {
-        self.reduce_abelian::<_,K,V2,ValBuilder<_,_,_,_>,ValSpine<_,_,_,_>>(name, logic)
+        self.reduce_abelian::<_,ValBuilder<_,_,_,_>,ValSpine<K,V2,_,_>>(name, logic)
             .as_collection(|k,v| (k.clone(), v.clone()))
     }
 }
@@ -164,7 +164,7 @@ where
     T1: for<'a> TraceReader<Key<'a>=&'a K, KeyOwn = K, Val<'a>=&'a (), Diff=R1>+Clone+'static,
 {
     fn threshold_named<R2: Ord+Abelian+'static, F: FnMut(&K,&R1)->R2+'static>(&self, name: &str, mut thresh: F) -> Collection<G, K, R2> {
-        self.reduce_abelian::<_,K,(),KeyBuilder<K,G::Timestamp,R2>,KeySpine<K,G::Timestamp,R2>>(name, move |k,s,t| t.push(((), thresh(k, &s[0].1))))
+        self.reduce_abelian::<_,KeyBuilder<K,G::Timestamp,R2>,KeySpine<K,G::Timestamp,R2>>(name, move |k,s,t| t.push(((), thresh(k, &s[0].1))))
             .as_collection(|k,_| k.clone())
     }
 }
@@ -211,7 +211,7 @@ where
     T1: for<'a> TraceReader<Key<'a>=&'a K, KeyOwn = K, Val<'a>=&'a (), Diff=R>+Clone+'static,
 {
     fn count_core<R2: Ord + Abelian + From<i8> + 'static>(&self) -> Collection<G, (K, R), R2> {
-        self.reduce_abelian::<_,K,R,ValBuilder<K,R,G::Timestamp,R2>,ValSpine<K,R,G::Timestamp,R2>>("Count", |_k,s,t| t.push((s[0].1.clone(), R2::from(1i8))))
+        self.reduce_abelian::<_,ValBuilder<K,R,G::Timestamp,R2>,ValSpine<K,R,G::Timestamp,R2>>("Count", |_k,s,t| t.push((s[0].1.clone(), R2::from(1i8))))
             .as_collection(|k,c| (k.clone(), c.clone()))
     }
 }
@@ -303,22 +303,20 @@ where
             L: FnMut(&K, &[(&V, R)], &mut Vec<(V,T2::Diff)>, &mut Vec<(V, T2::Diff)>)+'static,
     {
         self.arrange_by_key_named(&format!("Arrange: {}", name))
-            .reduce_core::<_,_,_,Bu,_>(name, logic)
+            .reduce_core::<_,Bu,_>(name, logic)
     }
 }
 
 /// A key-wise reduction of values in an input trace.
 ///
 /// This method exists to provide reduce functionality without opinions about qualifying trace types.
-pub fn reduce_trace<G, T1, Bu, T2, K, V, L>(trace: &Arranged<G, T1>, name: &str, mut logic: L) -> Arranged<G, TraceAgent<T2>>
+pub fn reduce_trace<G, T1, Bu, T2, L>(trace: &Arranged<G, T1>, name: &str, mut logic: L) -> Arranged<G, TraceAgent<T2>>
 where
     G: Scope<Timestamp=T1::Time>,
-    T1: for<'a> TraceReader<KeyOwn = K> + Clone + 'static,
-    T2: for<'a> Trace<Key<'a>=T1::Key<'a>, ValOwn = V, Time=T1::Time> + 'static,
-    K: Ord + 'static,
-    V: Data,
-    Bu: Builder<Time=T2::Time, Output = T2::Batch, Input: Container + PushInto<((K, V), T2::Time, T2::Diff)>>,
-    L: FnMut(T1::Key<'_>, &[(T1::Val<'_>, T1::Diff)], &mut Vec<(V,T2::Diff)>, &mut Vec<(V, T2::Diff)>)+'static,
+    T1: TraceReader<KeyOwn: Ord> + Clone + 'static,
+    T2: for<'a> Trace<Key<'a>=T1::Key<'a>, KeyOwn=T1::KeyOwn, ValOwn: Data, Time=T1::Time> + 'static,
+    Bu: Builder<Time=T2::Time, Output = T2::Batch, Input: Container + PushInto<((T1::KeyOwn, T2::ValOwn), T2::Time, T2::Diff)>>,
+    L: FnMut(T1::Key<'_>, &[(T1::Val<'_>, T1::Diff)], &mut Vec<(T2::ValOwn,T2::Diff)>, &mut Vec<(T2::ValOwn, T2::Diff)>)+'static,
 {
     let mut result_trace = None;
 
@@ -352,7 +350,7 @@ where
 
             // Our implementation maintains a list of outstanding `(key, time)` synthetic interesting times,
             // as well as capabilities for these times (or their lower envelope, at least).
-            let mut interesting = Vec::<(K, G::Timestamp)>::new();
+            let mut interesting = Vec::<(T1::KeyOwn, G::Timestamp)>::new();
             let mut capabilities = Vec::<Capability<G::Timestamp>>::new();
 
             // buffers and logic for computing per-key interesting times "efficiently".
@@ -451,7 +449,7 @@ where
                         //
                         // TODO: It would be better if all updates went into one batch, but timely dataflow prevents
                         //       this as long as it requires that there is only one capability for each message.
-                        let mut buffers = Vec::<(G::Timestamp, Vec<(V, G::Timestamp, T2::Diff)>)>::new();
+                        let mut buffers = Vec::<(G::Timestamp, Vec<(T2::ValOwn, G::Timestamp, T2::Diff)>)>::new();
                         let mut builders = Vec::new();
                         for cap in capabilities.iter() {
                             buffers.push((cap.time().clone(), Vec::new()));
