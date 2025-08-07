@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.0](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dataflow-v0.15.4...differential-dataflow-v0.16.0) - 2025-08-07
+
+### Other
+
+- Simplify type arguments to reduce, make Upds fields pub ([#632](https://github.com/TimelyDataflow/differential-dataflow/pull/632))
+
 ## [0.15.4](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dataflow-v0.15.3...differential-dataflow-v0.15.4) - 2025-08-05
 
 ### Other
