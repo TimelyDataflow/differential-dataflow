@@ -283,22 +283,20 @@ where
     T1: TraceReader + Clone + 'static,
 {
     /// A direct implementation of `ReduceCore::reduce_abelian`.
-    pub fn reduce_abelian<L, K, V, Bu, T2>(&self, name: &str, mut logic: L) -> Arranged<G, TraceAgent<T2>>
+    pub fn reduce_abelian<L, Bu, T2>(&self, name: &str, mut logic: L) -> Arranged<G, TraceAgent<T2>>
     where
-        T1: TraceReader<KeyOwn = K>,
+        T1: TraceReader<KeyOwn: Ord>,
         T2: for<'a> Trace<
             Key<'a>= T1::Key<'a>,
-            KeyOwn = K,
-            ValOwn = V,
+            KeyOwn=T1::KeyOwn,
+            ValOwn: Data,
             Time=T1::Time,
             Diff: Abelian,
         >+'static,
-        K: Ord + 'static,
-        V: Data,
-        Bu: Builder<Time=G::Timestamp, Output = T2::Batch, Input: Container + PushInto<((K, V), T2::Time, T2::Diff)>>,
-        L: FnMut(T1::Key<'_>, &[(T1::Val<'_>, T1::Diff)], &mut Vec<(V, T2::Diff)>)+'static,
+        Bu: Builder<Time=G::Timestamp, Output = T2::Batch, Input: Container + PushInto<((T1::KeyOwn, T2::ValOwn), T2::Time, T2::Diff)>>,
+        L: FnMut(T1::Key<'_>, &[(T1::Val<'_>, T1::Diff)], &mut Vec<(T2::ValOwn, T2::Diff)>)+'static,
     {
-        self.reduce_core::<_,K,V,Bu,T2>(name, move |key, input, output, change| {
+        self.reduce_core::<_,Bu,T2>(name, move |key, input, output, change| {
             if !input.is_empty() {
                 logic(key, input, change);
             }
@@ -308,22 +306,20 @@ where
     }
 
     /// A direct implementation of `ReduceCore::reduce_core`.
-    pub fn reduce_core<L, K, V, Bu, T2>(&self, name: &str, logic: L) -> Arranged<G, TraceAgent<T2>>
+    pub fn reduce_core<L, Bu, T2>(&self, name: &str, logic: L) -> Arranged<G, TraceAgent<T2>>
     where
-        T1: TraceReader<KeyOwn = K>,
+        T1: TraceReader<KeyOwn: Ord>,
         T2: for<'a> Trace<
             Key<'a>=T1::Key<'a>,
-            KeyOwn = K,
-            ValOwn = V,
+            KeyOwn=T1::KeyOwn,
+            ValOwn: Data,
             Time=T1::Time,
         >+'static,
-        K: Ord + 'static,
-        V: Data,
-        Bu: Builder<Time=G::Timestamp, Output = T2::Batch, Input: Container + PushInto<((K, V), T2::Time, T2::Diff)>>,
-        L: FnMut(T1::Key<'_>, &[(T1::Val<'_>, T1::Diff)], &mut Vec<(V, T2::Diff)>, &mut Vec<(V, T2::Diff)>)+'static,
+        Bu: Builder<Time=G::Timestamp, Output = T2::Batch, Input: Container + PushInto<((T1::KeyOwn, T2::ValOwn), T2::Time, T2::Diff)>>,
+        L: FnMut(T1::Key<'_>, &[(T1::Val<'_>, T1::Diff)], &mut Vec<(T2::ValOwn, T2::Diff)>, &mut Vec<(T2::ValOwn, T2::Diff)>)+'static,
     {
         use crate::operators::reduce::reduce_trace;
-        reduce_trace::<_,_,Bu,_,_,V,_>(self, name, logic)
+        reduce_trace::<_,_,Bu,_,_>(self, name, logic)
     }
 }
 

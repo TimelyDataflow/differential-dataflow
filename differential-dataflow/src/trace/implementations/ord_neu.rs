@@ -135,11 +135,11 @@ pub mod layers {
     #[derive(Debug, Serialize, Deserialize)]
     pub struct Upds<O, T, D> {
         /// Offsets used to provide indexes from values to updates.
-        offs: O,
+        pub offs: O,
         /// Concatenated ordered lists of update times, bracketed by offsets in `offs`.
-        times: T,
+        pub times: T,
         /// Concatenated ordered lists of update diffs, bracketed by offsets in `offs`.
-        diffs: D,
+        pub diffs: D,
     }
 
     impl<O: for<'a> BatchContainer<ReadItem<'a> = usize>, T: BatchContainer, D: BatchContainer> Default for Upds<O, T, D> {
