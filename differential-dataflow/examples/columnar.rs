@@ -157,6 +157,7 @@ mod container {
     type BorrowedOf<'a, C> = <<C as Columnar>::Container as columnar::Container>::Borrowed<'a>;
 
     impl<C: Columnar> Column<C> {
+        #[inline(always)]
         pub fn borrow(&self) -> BorrowedOf<'_, C> {
             match self {
                 Column::Typed(t) => t.borrow(),
@@ -164,6 +165,7 @@ mod container {
                 Column::Align(a) => <BorrowedOf<C> as FromBytes>::from_bytes(&mut Indexed::decode(a)),
             }
         }
+        #[inline(always)]
         pub fn get(&self, index: usize) -> columnar::Ref<'_, C> {
             self.borrow().get(index)
         }
@@ -171,6 +173,7 @@ mod container {
 
     use timely::Container;
     impl<C: Columnar> Container for Column<C> {
+        #[inline(always)]
         fn len(&self) -> usize {
             match self {
                 Column::Typed(t) => t.len(),
@@ -179,6 +182,7 @@ mod container {
             }
         }
         // This sets the `Bytes` variant to be an empty `Typed` variant, appropriate for pushing into.
+        #[inline(always)]
         fn clear(&mut self) {
             match self {
                 Column::Typed(t) => t.clear(),
@@ -189,6 +193,7 @@ mod container {
 
         type ItemRef<'a> = columnar::Ref<'a, C>;
         type Iter<'a> = IterOwn<BorrowedOf<'a, C>>;
+        #[inline(always)]
         fn iter<'a>(&'a self) -> Self::Iter<'a> {
             match self {
                 Column::Typed(t) => t.borrow().into_index_iter(),
@@ -199,6 +204,7 @@ mod container {
 
         type Item<'a> = columnar::Ref<'a, C>;
         type DrainIter<'a> = IterOwn<BorrowedOf<'a, C>>;
+        #[inline(always)]
         fn drain<'a>(&'a mut self) -> Self::DrainIter<'a> {
             match self {
                 Column::Typed(t) => t.borrow().into_index_iter(),
@@ -210,6 +216,7 @@ mod container {
 
     use timely::container::SizableContainer;
     impl<C: Columnar> SizableContainer for Column<C> {
+        #[inline(always)]
         fn at_capacity(&self) -> bool {
             match self {
                 Self::Typed(t) => {
@@ -220,6 +227,7 @@ mod container {
                 Self::Align(_) => true,
             }
         }
+        #[inline(always)]
         fn ensure_capacity(&mut self, _stash: &mut Option<Self>) { }
     }
 
@@ -259,6 +267,7 @@ mod container {
             }
         }
 
+        #[inline(always)]
         fn length_in_bytes(&self) -> usize {
             match self {
                 // We'll need one u64 for the length, then the length rounded up to a multiple of 8.
@@ -284,44 +293,54 @@ mod container {
         type Owned = T;
         type ReadItem<'a> = columnar::Ref<'a, T>;
 
+        #[inline(always)]
         fn into_owned<'a>(item: Self::ReadItem<'a>) -> Self::Owned {
             T::into_owned(item)
         }
 
+        #[inline(always)]
         fn clone_onto<'a>(item: Self::ReadItem<'a>, other: &mut Self::Owned) {
             other.copy_from(item);
         }
 
+        #[inline(always)]
         fn push_ref(&mut self, item: Self::ReadItem<'_>) {
             self.push(item);
         }
 
+        #[inline(always)]
         fn push_own(&mut self, item: &Self::Owned) {
             self.push(item);
         }
 
+        #[inline(always)]
         fn clear(&mut self) {
             Container::clear(self);
         }
 
+        #[inline(always)]
         fn with_capacity(_size: usize) -> Self {
             Self::default()
         }
 
+        #[inline(always)]
         fn merge_capacity(cont1: &Self, cont2: &Self) -> Self {
             Self::Typed(T::Container::with_capacity_for([cont1.borrow(), cont2.borrow()].into_iter()))
         }
 
+        #[inline(always)]
         fn reborrow<'b, 'a: 'b>(item: Self::ReadItem<'a>) -> Self::ReadItem<'b> {
             T::reborrow(item)
         }
 
+        #[inline(always)]
         fn index(&self, index: usize) -> Self::ReadItem<'_> {
             self.get(index)
         }
 
+        #[inline(always)]
         fn len(&self) -> usize {
-            self.borrow().len()
+            Container::len(self)
         }
     }
 }
