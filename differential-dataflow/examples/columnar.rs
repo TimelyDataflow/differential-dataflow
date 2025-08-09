@@ -301,15 +301,15 @@ mod container {
         }
 
         fn clear(&mut self) {
-            *self = Self::default();
+            Container::clear(self);
         }
 
         fn with_capacity(_size: usize) -> Self {
             Self::default()
         }
 
-        fn merge_capacity(_cont1: &Self, _cont2: &Self) -> Self {
-            Self::default()
+        fn merge_capacity(cont1: &Self, cont2: &Self) -> Self {
+            Self::Typed(T::Container::with_capacity_for([cont1.borrow(), cont2.borrow()].into_iter()))
         }
 
         fn reborrow<'b, 'a: 'b>(item: Self::ReadItem<'a>) -> Self::ReadItem<'b> {
@@ -629,7 +629,7 @@ pub mod dd_builder {
 
     use differential_dataflow::trace::Builder;
     use differential_dataflow::trace::Description;
-    use differential_dataflow::trace::implementations::{Layout, TStack, Update};
+    use differential_dataflow::trace::implementations::{Layout, Update};
     use differential_dataflow::trace::implementations::layout;
     use differential_dataflow::trace::implementations::BatchContainer;
     use differential_dataflow::trace::implementations::ord_neu::{OrdValBatch, val_batch::OrdValStorage, OrdKeyBatch, Vals, Upds, layers::UpdsBuilder};
