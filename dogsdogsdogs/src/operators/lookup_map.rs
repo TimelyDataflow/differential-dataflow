@@ -71,13 +71,16 @@ where
         // to observe the frontier and to drive scheduling.
         input2.for_each(|_, _| { });
 
-        if let Some(ref mut trace) = propose_trace {
+        // Frontier for receiving the upper bound of `arrangement`.
+        let mut input2_trace_frontier = Antichain::new();
 
+        if let Some(ref mut trace) = propose_trace {
+            trace.read_upper(&mut input2_trace_frontier);
             for (capability, prefixes) in stash.iter_mut() {
 
                 // defer requests at incomplete times.
                 // NOTE: not all updates may be at complete times, but if this test fails then none of them are.
-                if !input2.frontier.less_equal(capability.time()) {
+                if !input2_trace_frontier.less_equal(capability.time()) {
 
                     let mut session = output.session(capability);
 
@@ -92,7 +95,7 @@ where
                     // Key container to stage keys for comparison.
                     let mut key_con = Tr::KeyContainer::with_capacity(1);
                     for &mut (ref prefix, ref time, ref mut diff) in prefixes.iter_mut() {
-                        if !input2.frontier.less_equal(time) {
+                        if !input2_trace_frontier.less_equal(time) {
                             logic2(prefix, &mut key1);
                             key_con.clear(); key_con.push_own(&key1);
                             cursor.seek_key(&storage, key_con.index(1));
