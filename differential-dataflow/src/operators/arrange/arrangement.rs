@@ -393,7 +393,7 @@ pub fn arrange_core<G, P, Ba, Bu, Tr>(stream: &StreamCore<G, Ba::Input>, pact: P
 where
     G: Scope<Timestamp: Lattice>,
     P: ParallelizationContract<G::Timestamp, Ba::Input>,
-    Ba: Batcher<Time=G::Timestamp,Input: Container + Clone + 'static> + 'static,
+    Ba: Batcher<Time=G::Timestamp, Input: Container + Clone + 'static> + 'static,
     Bu: Builder<Time=G::Timestamp, Input=Ba::Output, Output = Tr::Batch>,
     Tr: Trace<Time=G::Timestamp>+'static,
 {
