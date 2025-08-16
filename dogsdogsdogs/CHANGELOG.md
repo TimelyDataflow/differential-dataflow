@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.1](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dogs3-v0.16.0...differential-dogs3-v0.16.1) - 2025-08-16
+
+### Other
+
+- update Cargo.toml dependencies
+
 ## [0.15.4](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dogs3-v0.1.14...differential-dogs3-v0.15.4) - 2025-08-05
 
 ### Other
