@@ -776,6 +776,7 @@ pub mod key_batch {
     #[derive(Serialize, Deserialize)]
     #[serde(bound = "
         L::KeyContainer: Serialize + for<'a> Deserialize<'a>,
+        L::ValContainer: Serialize + for<'a> Deserialize<'a>,
         L::OffsetContainer: Serialize + for<'a> Deserialize<'a>,
         L::TimeContainer: Serialize + for<'a> Deserialize<'a>,
         L::DiffContainer: Serialize + for<'a> Deserialize<'a>,
@@ -791,13 +792,25 @@ pub mod key_batch {
         /// we may have many more updates than `storage.updates.len()`. It should equal that
         /// length, plus the number of singleton optimizations employed.
         pub updates: usize,
+
+        /// Single value to return if asked.
+        pub value: L::ValContainer,
     }
 
-    impl<L: for<'a> Layout<ValContainer: BatchContainer<ReadItem<'a> = &'a ()>>> WithLayout for OrdKeyBatch<L> {
+    impl<L: Layout<ValContainer: BatchContainer<Owned: Default>>> OrdKeyBatch<L> {
+        /// Creates a container with one value, to slot in to `self.value`.
+        pub fn create_value() -> L::ValContainer {
+            let mut value = L::ValContainer::with_capacity(1);
+            value.push_own(&Default::default());
+            value
+        }
+    }
+
+    impl<L: Layout<ValContainer: BatchContainer<Owned: Default>>> WithLayout for OrdKeyBatch<L> {
         type Layout = L;
     }
 
-    impl<L: for<'a> Layout<ValContainer: BatchContainer<ReadItem<'a> = &'a ()>>> BatchReader for OrdKeyBatch<L> {
+    impl<L: Layout<ValContainer: BatchContainer<Owned: Default>>> BatchReader for OrdKeyBatch<L> {
 
         type Cursor = OrdKeyCursor<L>;
         fn cursor(&self) -> Self::Cursor {
@@ -815,7 +828,7 @@ pub mod key_batch {
         fn description(&self) -> &Description<layout::Time<L>> { &self.description }
     }
 
-    impl<L: for<'a> Layout<ValContainer: BatchContainer<ReadItem<'a> = &'a ()>>> Batch for OrdKeyBatch<L> {
+    impl<L: Layout<ValContainer: BatchContainer<Owned: Default>>> Batch for OrdKeyBatch<L> {
         type Merger = OrdKeyMerger<L>;
 
         fn begin_merge(&self, other: &Self, compaction_frontier: AntichainRef<layout::Time<L>>) -> Self::Merger {
@@ -831,6 +844,7 @@ pub mod key_batch {
                 },
                 description: Description::new(lower, upper, Antichain::from_elem(Self::Time::minimum())),
                 updates: 0,
+                value: Self::create_value(),
             }
         }
     }
@@ -850,7 +864,7 @@ pub mod key_batch {
         staging: UpdsBuilder<L::TimeContainer, L::DiffContainer>,
     }
 
-    impl<L: Layout> Merger<OrdKeyBatch<L>> for OrdKeyMerger<L>
+    impl<L: Layout<ValContainer: BatchContainer<Owned: Default>>> Merger<OrdKeyBatch<L>> for OrdKeyMerger<L>
     where
         OrdKeyBatch<L>: Batch<Time=layout::Time<L>>,
     {
@@ -882,6 +896,7 @@ pub mod key_batch {
                 updates: self.staging.total(),
                 storage: self.result,
                 description: self.description,
+                value: OrdKeyBatch::<L>::create_value(),
             }
         }
         fn work(&mut self, source1: &OrdKeyBatch<L>, source2: &OrdKeyBatch<L>, fuel: &mut isize) {
@@ -983,19 +998,19 @@ pub mod key_batch {
     }
 
     use crate::trace::implementations::WithLayout;
-    impl<L: for<'a> Layout<ValContainer: BatchContainer<ReadItem<'a> = &'a ()>>> WithLayout for OrdKeyCursor<L> {
+    impl<L: Layout<ValContainer: BatchContainer>> WithLayout for OrdKeyCursor<L> {
         type Layout = L;
     }
 
-    impl<L: for<'a> Layout<ValContainer: BatchContainer<ReadItem<'a> = &'a ()>>> Cursor for OrdKeyCursor<L> {
+    impl<L: for<'a> Layout<ValContainer: BatchContainer<Owned: Default>>> Cursor for OrdKeyCursor<L> {
 
         type Storage = OrdKeyBatch<L>;
 
         fn get_key<'a>(&self, storage: &'a Self::Storage) -> Option<Self::Key<'a>> { storage.storage.keys.get(self.key_cursor) }
-        fn get_val<'a>(&self, storage: &'a Self::Storage) -> Option<&'a ()> { if self.val_valid(storage) { Some(&()) } else { None } }
+        fn get_val<'a>(&self, storage: &'a Self::Storage) -> Option<Self::Val<'a>> { if self.val_valid(storage) { Some(self.val(storage)) } else { None } }
 
         fn key<'a>(&self, storage: &'a Self::Storage) -> Self::Key<'a> { storage.storage.keys.index(self.key_cursor) }
-        fn val<'a>(&self, _storage: &'a Self::Storage) -> &'a () { &() }
+        fn val<'a>(&self, storage: &'a Self::Storage) -> Self::Val<'a> { storage.value.index(0) }
         fn map_times<L2: FnMut(Self::TimeGat<'_>, Self::DiffGat<'_>)>(&mut self, storage: &Self::Storage, mut logic: L2) {
             let (lower, upper) = storage.storage.upds.bounds(self.key_cursor);
             for index in lower .. upper {
@@ -1048,6 +1063,7 @@ pub mod key_batch {
     impl<L: Layout, CI> Builder for OrdKeyBuilder<L, CI>
     where
         L: for<'a> Layout<KeyContainer: PushInto<CI::Key<'a>>>,
+        L: Layout<ValContainer: BatchContainer<Owned: Default>>,
         CI: BuilderInput<L::KeyContainer, L::ValContainer, Time=layout::Time<L>, Diff=layout::Diff<L>>,
     {
 
@@ -1092,6 +1108,7 @@ pub mod key_batch {
                 updates: self.staging.total(),
                 storage: self.result,
                 description,
+                value: OrdKeyBatch::<L>::create_value(),
             }
         }
 
