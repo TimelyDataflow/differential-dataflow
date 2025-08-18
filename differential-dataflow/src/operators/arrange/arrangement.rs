@@ -30,7 +30,7 @@ use crate::{Data, ExchangeData, Collection, AsCollection, Hashable};
 use crate::difference::Semigroup;
 use crate::lattice::Lattice;
 use crate::trace::{self, Trace, TraceReader, BatchReader, Batcher, Builder, Cursor};
-use crate::trace::implementations::{KeyBatcher, KeyBuilder, KeySpine, ValBatcher, ValBuilder, ValSpine};
+use crate::trace::implementations::{KeyBatcher, KeyBuilder, KeySpine, ValBatcher, ValBuilder, ValSpine, VecChunker};
 
 use trace::wrappers::enter::{TraceEnter, BatchEnter,};
 use trace::wrappers::enter_at::TraceEnter as TraceEnterAt;
@@ -76,7 +76,7 @@ where
 use ::timely::dataflow::scopes::Child;
 use ::timely::progress::timestamp::Refines;
 use timely::Container;
-use timely::container::PushInto;
+use timely::container::{ContainerBuilder, PushInto};
 
 impl<G, Tr> Arranged<G, Tr>
 where
@@ -348,20 +348,22 @@ where
     G: Scope<Timestamp: Lattice>,
 {
     /// Arranges updates into a shared trace.
-    fn arrange<Ba, Bu, Tr>(&self) -> Arranged<G, TraceAgent<Tr>>
+    fn arrange<Chu, Ba, Bu, Tr>(&self) -> Arranged<G, TraceAgent<Tr>>
     where
-        Ba: Batcher<Input=C, Time=G::Timestamp> + 'static,
-        Bu: Builder<Time=G::Timestamp, Input=Ba::Output, Output = Tr::Batch>,
+        Chu: ContainerBuilder<Container=Ba::Container> + for<'a> PushInto<&'a mut C>,
+        Ba: Batcher<Time=G::Timestamp> + 'static,
+        Bu: Builder<Time=G::Timestamp, Input=Ba::Container, Output = Tr::Batch>,
         Tr: Trace<Time=G::Timestamp> + 'static,
     {
-        self.arrange_named::<Ba, Bu, Tr>("Arrange")
+        self.arrange_named::<Chu, Ba, Bu, Tr>("Arrange")
     }
 
     /// Arranges updates into a shared trace, with a supplied name.
-    fn arrange_named<Ba, Bu, Tr>(&self, name: &str) -> Arranged<G, TraceAgent<Tr>>
+    fn arrange_named<Chu, Ba, Bu, Tr>(&self, name: &str) -> Arranged<G, TraceAgent<Tr>>
     where
-        Ba: Batcher<Input=C, Time=G::Timestamp> + 'static,
-        Bu: Builder<Time=G::Timestamp, Input=Ba::Output, Output = Tr::Batch>,
+        Chu: ContainerBuilder<Container=Ba::Container> + for<'a> PushInto<&'a mut C>,
+        Ba: Batcher<Time=G::Timestamp> + 'static,
+        Bu: Builder<Time=G::Timestamp, Input=Ba::Container, Output = Tr::Batch>,
         Tr: Trace<Time=G::Timestamp> + 'static,
     ;
 }
@@ -373,14 +375,15 @@ where
     V: ExchangeData,
     R: ExchangeData + Semigroup,
 {
-    fn arrange_named<Ba, Bu, Tr>(&self, name: &str) -> Arranged<G, TraceAgent<Tr>>
+    fn arrange_named<Chu, Ba, Bu, Tr>(&self, name: &str) -> Arranged<G, TraceAgent<Tr>>
     where
-        Ba: Batcher<Input=Vec<((K, V), G::Timestamp, R)>, Time=G::Timestamp> + 'static,
-        Bu: Builder<Time=G::Timestamp, Input=Ba::Output, Output = Tr::Batch>,
+        Chu: ContainerBuilder<Container=Ba::Container> + for<'a> PushInto<&'a mut Vec<((K, V), G::Timestamp, R)>>,
+        Ba: Batcher<Time=G::Timestamp> + 'static,
+        Bu: Builder<Time=G::Timestamp, Input=Ba::Container, Output = Tr::Batch>,
         Tr: Trace<Time=G::Timestamp> + 'static,
     {
         let exchange = Exchange::new(move |update: &((K,V),G::Timestamp,R)| (update.0).0.hashed().into());
-        arrange_core::<_, _, Ba, Bu, _>(&self.inner, exchange, name)
+        arrange_core::<_, _, _, Chu, Ba, Bu, _>(&self.inner, exchange, name)
     }
 }
 
@@ -389,12 +392,14 @@ where
 /// This operator arranges a stream of values into a shared trace, whose contents it maintains.
 /// It uses the supplied parallelization contract to distribute the data, which does not need to
 /// be consistently by key (though this is the most common).
-pub fn arrange_core<G, P, Ba, Bu, Tr>(stream: &StreamCore<G, Ba::Input>, pact: P, name: &str) -> Arranged<G, TraceAgent<Tr>>
+pub fn arrange_core<G, P, C, Chu, Ba, Bu, Tr>(stream: &StreamCore<G, C>, pact: P, name: &str) -> Arranged<G, TraceAgent<Tr>>
 where
     G: Scope<Timestamp: Lattice>,
-    P: ParallelizationContract<G::Timestamp, Ba::Input>,
-    Ba: Batcher<Time=G::Timestamp,Input: Container + Clone + 'static> + 'static,
-    Bu: Builder<Time=G::Timestamp, Input=Ba::Output, Output = Tr::Batch>,
+    P: ParallelizationContract<G::Timestamp, C>,
+    C: Container + Clone + 'static,
+    Chu: ContainerBuilder<Container=Ba::Container> + for<'a> PushInto<&'a mut C>,
+    Ba: Batcher<Time=G::Timestamp> + 'static,
+    Bu: Builder<Time=G::Timestamp, Input=Ba::Container, Output = Tr::Batch>,
     Tr: Trace<Time=G::Timestamp>+'static,
 {
     // The `Arrange` operator is tasked with reacting to an advancing input
@@ -443,6 +448,8 @@ where
         // Initialize to the minimal input frontier.
         let mut prev_frontier = Antichain::from_elem(<G::Timestamp as Timestamp>::minimum());
 
+        let mut chunker = Chu::default();
+
         move |input, output| {
 
             // As we receive data, we need to (i) stash the data and (ii) keep *enough* capabilities.
@@ -451,7 +458,11 @@ where
 
             input.for_each(|cap, data| {
                 capabilities.insert(cap.retain());
-                batcher.push_container(data);
+                chunker.push_into(data);
+                while let Some(chunk) = chunker.extract() {
+                    let chunk = std::mem::take(chunk);
+                    batcher.push_into(chunk);
+                }
             });
 
             // The frontier may have advanced by multiple elements, which is an issue because
@@ -480,6 +491,11 @@ where
 
                 // If there is at least one capability not in advance of the input frontier ...
                 if capabilities.elements().iter().any(|c| !input.frontier().less_equal(c.time())) {
+
+                    while let Some(chunk) = chunker.finish() {
+                        let chunk = std::mem::take(chunk);
+                        batcher.push_into(chunk);
+                    }
 
                     let mut upper = Antichain::new();   // re-used allocation for sealing batches.
 
@@ -547,14 +563,15 @@ impl<G, K: ExchangeData+Hashable, R: ExchangeData+Semigroup> Arrange<G, Vec<((K,
 where
     G: Scope<Timestamp: Lattice+Ord>,
 {
-    fn arrange_named<Ba, Bu, Tr>(&self, name: &str) -> Arranged<G, TraceAgent<Tr>>
+    fn arrange_named<Chu, Ba, Bu, Tr>(&self, name: &str) -> Arranged<G, TraceAgent<Tr>>
     where
-        Ba: Batcher<Input=Vec<((K,()),G::Timestamp,R)>, Time=G::Timestamp> + 'static,
-        Bu: Builder<Time=G::Timestamp, Input=Ba::Output, Output = Tr::Batch>,
+        Chu: ContainerBuilder<Container=Ba::Container> + for<'a> PushInto<&'a mut Vec<((K, ()), G::Timestamp, R)>>,
+        Ba: Batcher<Time=G::Timestamp> + 'static,
+        Bu: Builder<Time=G::Timestamp, Input=Ba::Container, Output = Tr::Batch>,
         Tr: Trace<Time=G::Timestamp> + 'static,
     {
         let exchange = Exchange::new(move |update: &((K,()),G::Timestamp,R)| (update.0).0.hashed().into());
-        arrange_core::<_,_,Ba,Bu,_>(&self.map(|k| (k, ())).inner, exchange, name)
+        arrange_core::<_,_,_,Chu,Ba,Bu,_>(&self.map(|k| (k, ())).inner, exchange, name)
     }
 }
 
@@ -587,7 +604,7 @@ where
     }
 
     fn arrange_by_key_named(&self, name: &str) -> Arranged<G, TraceAgent<ValSpine<K, V, G::Timestamp, R>>> {
-        self.arrange_named::<ValBatcher<_,_,_,_>,ValBuilder<_,_,_,_>,_>(name)
+        self.arrange_named::<VecChunker<_>, ValBatcher<_,_,_,_>,ValBuilder<_,_,_,_>,_>(name)
     }
 }
 
@@ -622,6 +639,6 @@ where
 
     fn arrange_by_self_named(&self, name: &str) -> Arranged<G, TraceAgent<KeySpine<K, G::Timestamp, R>>> {
         self.map(|k| (k, ()))
-            .arrange_named::<KeyBatcher<_,_,_>,KeyBuilder<_,_,_>,_>(name)
+            .arrange_named::<VecChunker<_>, KeyBatcher<_,_,_>,KeyBuilder<_,_,_>,_>(name)
     }
 }
