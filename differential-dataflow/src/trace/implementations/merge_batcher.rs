@@ -14,7 +14,6 @@ use std::marker::PhantomData;
 
 use timely::progress::frontier::AntichainRef;
 use timely::progress::{frontier::Antichain, Timestamp};
-use timely::Container;
 use timely::container::{ContainerBuilder, PushInto};
 
 use crate::logging::{BatcherEvent, Logger};
@@ -200,7 +199,7 @@ impl<Input, C, M: Merger> Drop for MergeBatcher<Input, C, M> {
 /// A trait to describe interesting moments in a merge batcher.
 pub trait Merger: Default {
     /// The internal representation of chunks of data.
-    type Chunk: Container;
+    type Chunk: Default;
     /// The type of time in frontiers to extract updates.
     type Time;
     /// Merge chains into an output chain.
@@ -238,14 +237,14 @@ pub mod container {
 
     use std::cmp::Ordering;
     use std::marker::PhantomData;
-    use timely::{Container, container::{PushInto, SizableContainer}};
+    use timely::container::{PushInto, SizableContainer};
     use timely::progress::frontier::{Antichain, AntichainRef};
-    use timely::{Data, PartialOrder};
-
+    use timely::{Accountable, Data, PartialOrder};
+    use timely::container::DrainContainer;
     use crate::trace::implementations::merge_batcher::Merger;
 
     /// An abstraction for a container that can be iterated over, and conclude by returning itself.
-    pub trait ContainerQueue<C: Container> {
+    pub trait ContainerQueue<C: DrainContainer> {
         /// Returns either the next item in the container, or the container itself.
         fn next_or_alloc(&mut self) -> Result<C::Item<'_>, C>;
         /// Indicates whether `next_or_alloc` will return `Ok`, and whether `peek` will return `Some`.
@@ -257,7 +256,7 @@ pub mod container {
     }
 
     /// Behavior to dissect items of chunks in the merge batcher
-    pub trait MergerChunk : SizableContainer {
+    pub trait MergerChunk : Accountable + DrainContainer + SizableContainer + Default {
         /// An owned time type.
         ///
         /// This type is provided so that users can maintain antichains of something, in order to track
@@ -284,8 +283,11 @@ pub mod container {
         // TODO: Find a more universal home for this: `Container`?
         fn account(&self) -> (usize, usize, usize, usize) {
             let (size, capacity, allocations) = (0, 0, 0);
-            (self.len(), size, capacity, allocations)
+            (usize::try_from(self.record_count()).unwrap(), size, capacity, allocations)
         }
+
+        /// Clear the chunk, to be reused.
+        fn clear(&mut self);
     }
 
     /// A merger for arbitrary containers.
@@ -323,7 +325,7 @@ pub mod container {
 
     impl<MC, CQ> Merger for ContainerMerger<MC, CQ>
     where
-        for<'a> MC: MergerChunk<TimeOwned: Ord + PartialOrder + Data> + Clone + PushInto<<MC as Container>::Item<'a>> + 'static,
+        for<'a> MC: MergerChunk<TimeOwned: Ord + PartialOrder + Data> + Clone + Default + PushInto<<MC as DrainContainer>::Item<'a>> + 'static,
         CQ: ContainerQueue<MC>,
     {
         type Time = MC::TimeOwned;
@@ -510,6 +512,7 @@ pub mod container {
                 let (size, capacity, allocations) = (0, 0, 0);
                 (self.len(), size, capacity, allocations)
             }
+            #[inline] fn clear(&mut self) { Vec::clear(self) }
         }
     }
 
@@ -597,6 +600,7 @@ pub mod container {
                 self.heap_size(cb);
                 (self.len(), size, capacity, allocations)
             }
+            #[inline] fn clear(&mut self) { TimelyStack::clear(self) }
         }
     }
 }

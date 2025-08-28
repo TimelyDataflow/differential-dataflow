@@ -4,8 +4,8 @@
 //! the multiplication distributes over addition. That is, we will repeatedly evaluate (a + b) * c as (a * c)
 //! + (b * c), and if this is not equal to the former term, little is known about the actual output.
 use std::cmp::Ordering;
-use timely::Container;
 
+use timely::Accountable;
 use timely::container::{ContainerBuilder, PushInto};
 use timely::order::PartialOrder;
 use timely::progress::Timestamp;
@@ -324,14 +324,14 @@ impl<CB: ContainerBuilder> ContainerBuilder for EffortBuilder<CB> {
     #[inline]
     fn extract(&mut self) -> Option<&mut Self::Container> {
         let extracted = self.1.extract();
-        self.0.replace(self.0.take() + extracted.as_ref().map_or(0, |e| e.len()));
+        self.0.replace(self.0.take() + extracted.as_ref().map_or(0, |e| e.record_count() as usize));
         extracted
     }
 
     #[inline]
     fn finish(&mut self) -> Option<&mut Self::Container> {
         let finished = self.1.finish();
-        self.0.replace(self.0.take() + finished.as_ref().map_or(0, |e| e.len()));
+        self.0.replace(self.0.take() + finished.as_ref().map_or(0, |e| e.record_count() as usize));
         finished
     }
 }

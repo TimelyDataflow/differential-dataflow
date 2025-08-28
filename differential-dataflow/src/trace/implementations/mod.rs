@@ -58,8 +58,7 @@ use std::convert::TryInto;
 
 use columnation::Columnation;
 use serde::{Deserialize, Serialize};
-use timely::Container;
-use timely::container::PushInto;
+use timely::container::{DrainContainer, PushInto};
 use timely::progress::Timestamp;
 
 use crate::containers::TimelyStack;
@@ -378,7 +377,7 @@ impl BatchContainer for OffsetList {
 }
 
 /// Behavior to split an update into principal components.
-pub trait BuilderInput<K: BatchContainer, V: BatchContainer>: Container {
+pub trait BuilderInput<K: BatchContainer, V: BatchContainer>: DrainContainer + Sized {
     /// Key portion
     type Key<'a>: Ord;
     /// Value portion

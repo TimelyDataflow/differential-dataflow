@@ -533,7 +533,8 @@ where
                                 for (val, time, diff) in buffers[index].1.drain(..) {
                                     buffer.push_into(((T1::owned_key(key), val), time, diff));
                                     builders[index].push(&mut buffer);
-                                    buffer.clear();
+                                    // TODO: Clear!
+                                    // buffer.clear();
                                 }
                             }
                         }
