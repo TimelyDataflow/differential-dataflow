@@ -4,7 +4,7 @@ use std::collections::VecDeque;
 
 use columnation::Columnation;
 use timely::Container;
-use timely::container::{ContainerBuilder, PushInto, SizableContainer};
+use timely::container::{ContainerBuilder, DrainContainer, PushInto, SizableContainer};
 
 use crate::containers::TimelyStack;
 use crate::consolidation::{consolidate_updates, ConsolidateLayout};
@@ -254,8 +254,9 @@ impl<Output: Default> Default for ContainerChunker<Output> {
 
 impl<'a, Input, Output> PushInto<&'a mut Input> for ContainerChunker<Output>
 where
-    Input: Container,
-    Output: SizableContainer
+    Input: DrainContainer,
+    Output: Default
+        + SizableContainer
         + ConsolidateLayout
         + PushInto<Input::Item<'a>>,
 {
@@ -263,7 +264,7 @@ where
         self.pending.ensure_capacity(&mut None);
 
         for item in container.drain() {
-            self.pending.push(item);
+            self.pending.push_into(item);
             if self.pending.at_capacity() {
                 let starting_len = self.pending.len();
                 self.pending.consolidate_into(&mut self.empty);
@@ -282,7 +283,7 @@ where
 
 impl<Output> ContainerBuilder for ContainerChunker<Output>
 where
-    Output: SizableContainer + ConsolidateLayout + Clone + 'static,
+    Output: SizableContainer + ConsolidateLayout + Container,
 {
     type Container = Output;
 

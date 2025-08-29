@@ -12,8 +12,7 @@
 
 use std::cmp::Ordering;
 use std::collections::VecDeque;
-use timely::Container;
-use timely::container::{ContainerBuilder, PushInto};
+use timely::container::{ContainerBuilder, DrainContainer, PushInto};
 use crate::Data;
 use crate::difference::{IsZero, Semigroup};
 
@@ -239,7 +238,7 @@ where
 /// items. Consolidation accumulates the diffs per key.
 ///
 /// The trait requires `Container` to have access to its `Item` GAT.
-pub trait ConsolidateLayout: Container {
+pub trait ConsolidateLayout: DrainContainer {
     /// Key portion of data, essentially everything minus the diff
     type Key<'a>: Eq where Self: 'a;
 
@@ -268,6 +267,12 @@ pub trait ConsolidateLayout: Container {
 
     /// Compare two items by key to sort containers.
     fn cmp(item1: &Self::Item<'_>, item2: &Self::Item<'_>) -> Ordering;
+
+    /// Returns the number of items in the container.
+    fn len(&self) -> usize;
+
+    /// Clear the container. Afterwards, `len()` should return 0.
+    fn clear(&mut self);
 
     /// Consolidate the supplied container.
     fn consolidate_into(&mut self, target: &mut Self) {
@@ -328,6 +333,9 @@ where
     fn push_with_diff(&mut self, (data, time): Self::Key<'_>, diff: Self::DiffOwned) {
         self.push((data, time, diff));
     }
+
+    #[inline] fn len(&self) -> usize { Vec::len(self) }
+    #[inline] fn clear(&mut self) { Vec::clear(self) }
 
     /// Consolidate the supplied container.
     fn consolidate_into(&mut self, target: &mut Self) {

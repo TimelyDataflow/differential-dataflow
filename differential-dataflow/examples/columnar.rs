@@ -1,11 +1,9 @@
 //! Wordcount based on `columnar`.
 
-use {
-    timely::container::{Container, CapacityContainerBuilder},
-    timely::dataflow::channels::pact::ExchangeCore,
-    timely::dataflow::InputHandleCore,
-    timely::dataflow::ProbeHandle,
-};
+use timely::container::{CapacityContainerBuilder, PushInto};
+use timely::dataflow::channels::pact::ExchangeCore;
+use timely::dataflow::InputHandleCore;
+use timely::dataflow::ProbeHandle;
 
 use differential_dataflow::trace::implementations::ord_neu::ColKeySpine;
 
@@ -65,7 +63,7 @@ fn main() {
             while i < size {
                 let val = (counter + i) % keys;
                 write!(buffer, "{:?}", val).unwrap();
-                container.push(((&buffer, ()), time, 1));
+                container.push_into(((&buffer, ()), time, 1));
                 buffer.clear();
                 i += worker.peers();
             }
@@ -88,7 +86,7 @@ fn main() {
             while i < size {
                 let val = (queries + i) % keys;
                 write!(buffer, "{:?}", val).unwrap();
-                container.push(((&buffer, ()), time, 1));
+                container.push_into(((&buffer, ()), time, 1));
                 buffer.clear();
                 i += worker.peers();
             }
@@ -169,26 +167,29 @@ mod container {
         pub fn get(&self, index: usize) -> columnar::Ref<'_, C> {
             self.borrow().get(index)
         }
-    }
-
-    use timely::Container;
-    impl<C: Columnar> Container for Column<C> {
-        fn len(&self) -> usize {
-            match self {
-                Column::Typed(t) => t.len(),
-                Column::Bytes(b) => <BorrowedOf<C> as FromBytes>::from_bytes(&mut Indexed::decode(bytemuck::cast_slice(b))).len(),
-                Column::Align(a) => <BorrowedOf<C> as FromBytes>::from_bytes(&mut Indexed::decode(a)).len(),
-            }
-        }
         // This sets the `Bytes` variant to be an empty `Typed` variant, appropriate for pushing into.
-        fn clear(&mut self) {
+        pub(crate) fn clear(&mut self) {
             match self {
                 Column::Typed(t) => t.clear(),
                 Column::Bytes(_) => *self = Column::Typed(Default::default()),
                 Column::Align(_) => *self = Column::Typed(Default::default()),
             }
         }
+        #[inline]
+        pub fn len(&self) -> usize {
+            match self {
+                Column::Typed(t) => t.len(),
+                Column::Bytes(b) => <BorrowedOf<C> as FromBytes>::from_bytes(&mut Indexed::decode(bytemuck::cast_slice(b))).len(),
+                Column::Align(a) => <BorrowedOf<C> as FromBytes>::from_bytes(&mut Indexed::decode(a)).len(),
+            }
+        }
+    }
 
+    impl<C: Columnar> timely::Accountable for Column<C> {
+        #[inline] fn record_count(&self) -> i64 { self.len() as i64 }
+    }
+
+    impl<C: Columnar> timely::container::IterContainer for Column<C> {
         type ItemRef<'a> = columnar::Ref<'a, C>;
         type Iter<'a> = IterOwn<BorrowedOf<'a, C>>;
         fn iter<'a>(&'a self) -> Self::Iter<'a> {
@@ -198,7 +199,9 @@ mod container {
                 Column::Align(a) => <BorrowedOf<C> as FromBytes>::from_bytes(&mut Indexed::decode(a)).into_index_iter(),
             }
         }
+    }
 
+    impl<C: Columnar> timely::container::DrainContainer for Column<C> {
         type Item<'a> = columnar::Ref<'a, C>;
         type DrainIter<'a> = IterOwn<BorrowedOf<'a, C>>;
         fn drain<'a>(&'a mut self) -> Self::DrainIter<'a> {
@@ -366,7 +369,7 @@ pub mod batcher {
     use std::collections::VecDeque;
     use columnar::Columnar;
     use timely::Container;
-    use timely::container::{ContainerBuilder, PushInto};
+    use timely::container::{ContainerBuilder, DrainContainer, PushInto, SizableContainer};
     use differential_dataflow::difference::Semigroup;
     use crate::Column;
 
@@ -389,7 +392,7 @@ pub mod batcher {
         ready: VecDeque<C>,
     }
 
-    impl<C: Container + Clone + 'static> ContainerBuilder for Chunker<C> {
+    impl<C: Container> ContainerBuilder for Chunker<C> {
         type Container = C;
 
         fn extract(&mut self) -> Option<&mut Self::Container> {
@@ -414,9 +417,11 @@ pub mod batcher {
         for<'b> columnar::Ref<'b, T>: Ord,
         R: for<'b> Columnar + for<'b> Semigroup<columnar::Ref<'b, R>>,
         for<'b> columnar::Ref<'b, R>: Ord,
-        C2: Container + for<'b, 'c> PushInto<(columnar::Ref<'b, D>, columnar::Ref<'b, T>, &'c R)>,
+        C2: Container + SizableContainer + for<'b, 'c> PushInto<(columnar::Ref<'b, D>, columnar::Ref<'b, T>, &'c R)>,
     {
         fn push_into(&mut self, container: &'a mut Column<(D, T, R)>) {
+            let mut target: C2 = Default::default();
+            target.ensure_capacity(&mut Some(std::mem::take(&mut self.empty)));
 
             // Scoped to let borrow through `permutation` drop.
             {
@@ -426,7 +431,6 @@ pub mod batcher {
                 permutation.extend(container.drain());
                 permutation.sort();
 
-                self.empty.clear();
                 // Iterate over the data, accumulating diffs for like keys.
                 let mut iter = permutation.drain(..);
                 if let Some((data, time, diff)) = iter.next() {
@@ -442,7 +446,7 @@ pub mod batcher {
                         else {
                             if !prev_diff.is_zero() {
                                 let tuple = (prev_data, prev_time, &prev_diff);
-                                self.empty.push_into(tuple);
+                                target.push_into(tuple);
                             }
                             prev_data = data;
                             prev_time = time;
@@ -452,13 +456,13 @@ pub mod batcher {
 
                     if !prev_diff.is_zero() {
                         let tuple = (prev_data, prev_time, &prev_diff);
-                        self.empty.push_into(tuple);
+                        target.push_into(tuple);
                     }
                 }
             }
 
-            if !self.empty.is_empty() {
-                self.ready.push_back(std::mem::take(&mut self.empty));
+            if !target.is_empty() {
+                self.ready.push_back(target);
             }
         }
     }
@@ -468,7 +472,7 @@ pub mod batcher {
 
         use timely::progress::{Antichain, frontier::AntichainRef};
         use columnar::Columnar;
-
+        use timely::container::PushInto;
         use crate::container::Column;
         use differential_dataflow::difference::Semigroup;
 
@@ -502,7 +506,6 @@ pub mod batcher {
                 }
             }
             fn is_empty(&self) -> bool {
-                use timely::Container;
                 self.head == self.list.len()
             }
             fn cmp_heads(&self, other: &Self) -> std::cmp::Ordering {
@@ -551,8 +554,7 @@ pub mod batcher {
                 let stash2: R = R::into_owned(diff2);
                 stash.plus_equals(&stash2);
                 if !stash.is_zero() {
-                    use timely::Container;
-                    self.push((data, time, &*stash));
+                    self.push_into((data, time, &*stash));
                 }
             }
             fn account(&self) -> (usize, usize, usize, usize) {
@@ -568,6 +570,7 @@ pub mod batcher {
                 // self.heap_size(cb);
                 // (self.len(), size, capacity, allocations)
             }
+            #[inline] fn clear(&mut self) { self.clear() }
         }
     }
 
@@ -578,7 +581,7 @@ use dd_builder::ColKeyBuilder;
 pub mod dd_builder {
 
     use columnar::Columnar;
-
+    use timely::container::DrainContainer;
     use differential_dataflow::trace::Builder;
     use differential_dataflow::trace::Description;
     use differential_dataflow::trace::implementations::Layout;
@@ -630,8 +633,6 @@ pub mod dd_builder {
 
         #[inline]
         fn push(&mut self, chunk: &mut Self::Input) {
-            use timely::Container;
-
             // NB: Maintaining owned key and val across iterations to track the "last", which we clone into,
             // is somewhat appealing from an ease point of view. Might still allocate, do work we don't need,
             // but avoids e.g. calls into `last()` and breaks horrid trait requirements.
@@ -737,8 +738,6 @@ pub mod dd_builder {
 
         #[inline]
         fn push(&mut self, chunk: &mut Self::Input) {
-            use timely::Container;
-
             // NB: Maintaining owned key and val across iterations to track the "last", which we clone into,
             // is somewhat appealing from an ease point of view. Might still allocate, do work we don't need,
             // but avoids e.g. calls into `last()` and breaks horrid trait requirements.

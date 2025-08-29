@@ -271,41 +271,27 @@ mod container {
     use std::ops::Deref;
 
     use columnation::Columnation;
-    use timely::Container;
-    use timely::container::SizableContainer;
 
     use crate::containers::TimelyStack;
 
-    impl<T: Columnation> Container for TimelyStack<T> {
+    impl<T: Columnation> timely::container::Accountable for TimelyStack<T> {
+        #[inline] fn record_count(&self) -> i64 { i64::try_from(self.local.len()).unwrap() }
+        #[inline] fn is_empty(&self) -> bool { self.local.is_empty() }
+    }
+    impl<T: Columnation> timely::container::IterContainer for TimelyStack<T> {
         type ItemRef<'a> = &'a T where Self: 'a;
-        type Item<'a> = &'a T where Self: 'a;
-
-        fn len(&self) -> usize {
-            self.local.len()
-        }
-
-        fn is_empty(&self) -> bool {
-            self.local.is_empty()
-        }
-
-        fn clear(&mut self) {
-            TimelyStack::clear(self)
-        }
-
         type Iter<'a> = std::slice::Iter<'a, T> where Self: 'a;
-
-        fn iter(&self) -> Self::Iter<'_> {
-            self.deref().iter()
-        }
-
+        #[inline] fn iter(&self) -> Self::Iter<'_> { self.deref().iter() }
+    }
+    impl<T: Columnation> timely::container::DrainContainer for TimelyStack<T> {
+        type Item<'a> = &'a T where Self: 'a;
         type DrainIter<'a> = std::slice::Iter<'a, T> where Self: 'a;
-
-        fn drain(&mut self) -> Self::DrainIter<'_> {
+        #[inline] fn drain(&mut self) -> Self::DrainIter<'_> {
             (*self).iter()
         }
     }
 
-    impl<T: Columnation> SizableContainer for TimelyStack<T> {
+    impl<T: Columnation> timely::container::SizableContainer for TimelyStack<T> {
         fn at_capacity(&self) -> bool {
             self.len() == self.capacity()
         }
