@@ -362,7 +362,7 @@ where
     T1: TraceReader+Clone+'static,
     T2: for<'a> TraceReader<Key<'a>=T1::Key<'a>, Time=T1::Time>+Clone+'static,
     L: FnMut(T1::Key<'_>,T1::Val<'_>,T2::Val<'_>,&G::Timestamp,&T1::Diff,&T2::Diff,&mut JoinSession<T1::Time, CB, CB::Container>)+'static,
-    CB: ContainerBuilder + 'static,
+    CB: ContainerBuilder,
 {
     // Rename traces for symmetry from here on out.
     let mut trace1 = arranged1.trace.clone();

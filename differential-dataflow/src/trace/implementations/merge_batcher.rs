@@ -48,7 +48,7 @@ pub struct MergeBatcher<Input, C, M: Merger> {
 
 impl<Input, C, M> Batcher for MergeBatcher<Input, C, M>
 where
-    C: ContainerBuilder<Container=M::Chunk> + Default + for<'a> PushInto<&'a mut Input>,
+    C: ContainerBuilder<Container=M::Chunk> + for<'a> PushInto<&'a mut Input>,
     M: Merger<Time: Timestamp>,
 {
     type Input = Input;
@@ -325,7 +325,7 @@ pub mod container {
 
     impl<MC, CQ> Merger for ContainerMerger<MC, CQ>
     where
-        for<'a> MC: MergerChunk<TimeOwned: Ord + PartialOrder + Data> + Clone + Default + PushInto<<MC as DrainContainer>::Item<'a>> + 'static,
+        for<'a> MC: MergerChunk<TimeOwned: Ord + PartialOrder + Data> + Clone + PushInto<<MC as DrainContainer>::Item<'a>> + 'static,
         CQ: ContainerQueue<MC>,
     {
         type Time = MC::TimeOwned;

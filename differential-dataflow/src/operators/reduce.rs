@@ -5,7 +5,6 @@
 //! to the key and the list of values.
 //! The function is expected to populate a list of output values.
 
-use timely::Container;
 use timely::container::PushInto;
 use crate::hashable::Hashable;
 use crate::{Data, ExchangeData, Collection};
@@ -25,7 +24,7 @@ use crate::trace::{BatchReader, Cursor, Trace, Builder, ExertionLogic, Descripti
 use crate::trace::cursor::CursorList;
 use crate::trace::implementations::{KeySpine, KeyBuilder, ValSpine, ValBuilder};
 use crate::trace::implementations::containers::BatchContainer;
-
+use crate::trace::implementations::merge_batcher::container::MergerChunk;
 use crate::trace::TraceReader;
 
 /// Extension trait for the `reduce` differential dataflow method.
@@ -315,7 +314,7 @@ where
     G: Scope<Timestamp=T1::Time>,
     T1: TraceReader<KeyOwn: Ord> + Clone + 'static,
     T2: for<'a> Trace<Key<'a>=T1::Key<'a>, KeyOwn=T1::KeyOwn, ValOwn: Data, Time=T1::Time> + 'static,
-    Bu: Builder<Time=T2::Time, Output = T2::Batch, Input: Container + PushInto<((T1::KeyOwn, T2::ValOwn), T2::Time, T2::Diff)>>,
+    Bu: Builder<Time=T2::Time, Output = T2::Batch, Input: MergerChunk + PushInto<((T1::KeyOwn, T2::ValOwn), T2::Time, T2::Diff)>>,
     L: FnMut(T1::Key<'_>, &[(T1::Val<'_>, T1::Diff)], &mut Vec<(T2::ValOwn,T2::Diff)>, &mut Vec<(T2::ValOwn, T2::Diff)>)+'static,
 {
     let mut result_trace = None;
@@ -533,8 +532,7 @@ where
                                 for (val, time, diff) in buffers[index].1.drain(..) {
                                     buffer.push_into(((T1::owned_key(key), val), time, diff));
                                     builders[index].push(&mut buffer);
-                                    // TODO: Clear!
-                                    // buffer.clear();
+                                    buffer.clear();
                                 }
                             }
                         }

@@ -392,7 +392,7 @@ pub mod batcher {
         ready: VecDeque<C>,
     }
 
-    impl<C: Container + Clone + 'static> ContainerBuilder for Chunker<C> {
+    impl<C: Container> ContainerBuilder for Chunker<C> {
         type Container = C;
 
         fn extract(&mut self) -> Option<&mut Self::Container> {

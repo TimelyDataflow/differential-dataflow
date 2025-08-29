@@ -156,7 +156,7 @@ where
     G: Scope<Timestamp: Lattice>,
     D: Data,
     R: Abelian + 'static,
-    C: Container + Clone + 'static,
+    C: Container,
 {
     collection: Collection<G, D, R, C>,
     feedback: Handle<G, C>,
@@ -164,7 +164,7 @@ where
     step: <G::Timestamp as Timestamp>::Summary,
 }
 
-impl<G, D: Data, R: Abelian, C: Container + Clone + 'static> Variable<G, D, R, C>
+impl<G, D: Data, R: Abelian, C: Container> Variable<G, D, R, C>
 where
     G: Scope<Timestamp: Lattice>,
     StreamCore<G, C>: crate::operators::Negate<G, C> + ResultsIn<G, C>,
@@ -218,7 +218,7 @@ where
     }
 }
 
-impl<G: Scope<Timestamp: Lattice>, D: Data, R: Abelian, C: Container + Clone + 'static> Deref for Variable<G, D, R, C> {
+impl<G: Scope<Timestamp: Lattice>, D: Data, R: Abelian, C: Container> Deref for Variable<G, D, R, C> {
     type Target = Collection<G, D, R, C>;
     fn deref(&self) -> &Self::Target {
         &self.collection
@@ -236,14 +236,14 @@ where
     G: Scope<Timestamp: Lattice>,
     D: Data,
     R: Semigroup + 'static,
-    C: Container + Clone + 'static,
+    C: Container,
 {
     collection: Collection<G, D, R, C>,
     feedback: Handle<G, C>,
     step: <G::Timestamp as Timestamp>::Summary,
 }
 
-impl<G, D: Data, R: Semigroup, C: Container+Clone> SemigroupVariable<G, D, R, C>
+impl<G, D: Data, R: Semigroup, C: Container> SemigroupVariable<G, D, R, C>
 where
     G: Scope<Timestamp: Lattice>,
     StreamCore<G, C>: ResultsIn<G, C>,
@@ -267,7 +267,7 @@ where
     }
 }
 
-impl<G: Scope, D: Data, R: Semigroup, C: Container+Clone+'static> Deref for SemigroupVariable<G, D, R, C> where G::Timestamp: Lattice {
+impl<G: Scope, D: Data, R: Semigroup, C: Container> Deref for SemigroupVariable<G, D, R, C> where G::Timestamp: Lattice {
     type Target = Collection<G, D, R, C>;
     fn deref(&self) -> &Self::Target {
         &self.collection
