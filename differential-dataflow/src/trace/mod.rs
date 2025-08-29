@@ -12,6 +12,7 @@ pub mod description;
 pub mod implementations;
 pub mod wrappers;
 
+use timely::container::PushInto;
 use timely::progress::{Antichain, frontier::AntichainRef};
 use timely::progress::Timestamp;
 
@@ -299,20 +300,17 @@ pub trait Batch : BatchReader + Sized {
     fn empty(lower: Antichain<Self::Time>, upper: Antichain<Self::Time>) -> Self;
 }
 
-/// Functionality for collecting and batching updates.
-pub trait Batcher {
-    /// Type pushed into the batcher.
-    type Input;
+/// Functionality for collecting and batching updates. Accepts chunks and transforms them into
+/// chains of chunks. The chunks have type `Container` and must be sorted.
+pub trait Batcher: PushInto<Self::Container> {
     /// Type produced by the batcher.
-    type Output;
+    type Container: Default;
     /// Times at which batches are formed.
     type Time: Timestamp;
     /// Allocates a new empty batcher.
     fn new(logger: Option<Logger>, operator_id: usize) -> Self;
-    /// Adds an unordered container of elements to the batcher.
-    fn push_container(&mut self, batch: &mut Self::Input);
     /// Returns all updates not greater or equal to an element of `upper`.
-    fn seal<B: Builder<Input=Self::Output, Time=Self::Time>>(&mut self, upper: Antichain<Self::Time>) -> B::Output;
+    fn seal<B: Builder<Input=Self::Container, Time=Self::Time>>(&mut self, upper: Antichain<Self::Time>) -> B::Output;
     /// Returns the lower envelope of contained update times.
     fn frontier(&mut self) -> AntichainRef<'_, Self::Time>;
 }
