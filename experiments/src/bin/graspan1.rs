@@ -6,7 +6,7 @@ use timely::order::Product;
 
 use differential_dataflow::difference::Present;
 use differential_dataflow::input::Input;
-use differential_dataflow::trace::implementations::{ValBatcher, ValBuilder, ValSpine};
+use differential_dataflow::trace::implementations::{ValBatcher, ValBuilder, ValSpine, VecChunker};
 use differential_dataflow::operators::*;
 use differential_dataflow::operators::arrange::Arrange;
 use differential_dataflow::operators::iterate::SemigroupVariable;
@@ -31,7 +31,7 @@ fn main() {
             let (n_handle, nodes) = scope.new_collection();
             let (e_handle, edges) = scope.new_collection();
 
-            let edges = edges.arrange::<ValBatcher<_,_,_,_>, ValBuilder<_,_,_,_>, ValSpine<_,_,_,_>>();
+            let edges = edges.arrange::<VecChunker<_>,ValBatcher<_,_,_,_>, ValBuilder<_,_,_,_>, ValSpine<_,_,_,_>>();
 
             // a N c  <-  a N b && b E c
             // N(a,c) <-  N(a,b), E(b, c)
@@ -46,7 +46,7 @@ fn main() {
                 let next =
                 labels.join_core(&edges, |_b, a, c| Some((*c, *a)))
                       .concat(&nodes)
-                      .arrange::<ValBatcher<_,_,_,_>, ValBuilder<_,_,_,_>, ValSpine<_,_,_,_>>()
+                      .arrange::<VecChunker<_>,ValBatcher<_,_,_,_>, ValBuilder<_,_,_,_>, ValSpine<_,_,_,_>>()
                     //   .distinct_total_core::<Diff>();
                       .threshold_semigroup(|_,_,x| if x.is_none() { Some(Present) } else { None });
 
