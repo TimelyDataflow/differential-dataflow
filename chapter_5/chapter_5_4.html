@@ -156,46 +156,9 @@
 <p>There are many cases where we make small manipulations of a collection, and we might hope to retain the arrangement structure rather than re-build and maintain new arrangements. In some cases this is possible, using what we call <em>trace wrappers</em>.</p>
 <p>The set of trace wrappers grows as more idioms are discovered and implemented, but the intent is that we can often avoid reforming new collections, and instead just push logic into a layer around the arrangement.</p>
 <h2 id="filter"><a class="header" href="#filter">Filter</a></h2>
-<p>Like a collection, an arrangement supports the <code>filter(predicate)</code> operator that reduces the data down to those elements satisfying <code>predicate</code>. Unlike a collection, which produces a new collection when filtered, a filtered arrangement is just a wrapper around the existing arrangement.</p>
-<p>The following example uses two different collections in its two joins, but one is a filtered version of the other and can re-use the same arrangement.</p>
-<pre><pre class="playground"><code class="language-rust">extern crate timely;
-extern crate differential_dataflow;
-
-use differential_dataflow::operators::JoinCore;
-use differential_dataflow::operators::arrange::ArrangeByKey;
-
-fn main() {
-
-    // define a new timely dataflow computation.
-    timely::execute_from_args(::std::env::args(), move |worker| {
-
-        let mut knows = differential_dataflow::input::InputSession::new();
-        let mut query = differential_dataflow::input::InputSession::new();
-
-        worker.dataflow(|scope| {
-
-            let knows = knows.to_collection(scope);
-            let query = query.to_collection(scope);
-
-            // Arrange the data first! (by key).
-            let knows1 = knows.arrange_by_key();
-
-            // Filter to equal pairs (for some reason).
-            let knows2 = knows1.filter(|k,v| k == v);
-
-            // Same logic as before, with a new method name.
-            query.join_core(&amp;knows1, |x,q,y| Some((*y,(*x,*q))))
-                 .join_core(&amp;knows2, |y,(x,q),z| Some((*q,(*x,*y,*z))))
-                 .inspect(|result| println!("result {:?}", result));
-
-        });
-
-<span class="boring">      // to help with type inference ...
-</span><span class="boring">      knows.update_at((0,0), 0usize, 1isize);
-</span><span class="boring">      query.update_at((0,0), 0usize, 1isize);
-</span>    });
-}</code></pre></pre>
-<p>Filtered arrangements are not always a win. If the input arrangement is large and the filtered arrangement is small, it may make more sense to build and maintain a second arrangement than to continually search through the large arrangement for records satisfying the predicate. If you would like to form a second arrangement, you can use <code>as_collection()</code> to return to a collection, filter the result, and then arrange it again.</p>
+<p>The filter wrapper has been deprecated.
+It's still a neat filter, but its existence was constraining the development velocity.
+Reach out if you worry this was wrong, and we can discuss alternatives!</p>
 <h2 id="entering-scopes"><a class="header" href="#entering-scopes">Entering scopes</a></h2>
 <p>Differential dataflow programs often contain nested scopes, used for loops and iteration. Collections in a nested scope have different timestamps than collections outside the scope, which means we can not immediately re-use arrangements from outside the scope inside the scope.</p>
 <p>Like collections, arrangements support an <code>enter(scope)</code> method for entering a scope, which will wrap the arrangement so that access to timestamps automatically enriches it as if the collection had entered the scope.</p>
