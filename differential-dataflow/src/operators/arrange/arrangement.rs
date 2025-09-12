@@ -35,7 +35,6 @@ use crate::trace::implementations::{KeyBatcher, KeyBuilder, KeySpine, ValBatcher
 use trace::wrappers::enter::{TraceEnter, BatchEnter,};
 use trace::wrappers::enter_at::TraceEnter as TraceEnterAt;
 use trace::wrappers::enter_at::BatchEnter as BatchEnterAt;
-use trace::wrappers::filter::{TraceFilter, BatchFilter};
 
 use super::TraceAgent;
 
@@ -131,44 +130,6 @@ where
         }
     }
 
-    /// Filters an arranged collection.
-    ///
-    /// This method produces a new arrangement backed by the same shared
-    /// arrangement as `self`, paired with user-specified logic that can
-    /// filter by key and value. The resulting collection is restricted
-    /// to the keys and values that return true under the user predicate.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use differential_dataflow::input::Input;
-    /// use differential_dataflow::operators::arrange::ArrangeByKey;
-    ///
-    /// ::timely::example(|scope| {
-    ///
-    ///     let arranged =
-    ///     scope.new_collection_from(0 .. 10).1
-    ///          .map(|x| (x, x+1))
-    ///          .arrange_by_key();
-    ///
-    ///     arranged
-    ///         .filter(|k,v| k == v)
-    ///         .as_collection(|k,v| (*k,*v))
-    ///         .assert_empty();
-    /// });
-    /// ```
-    pub fn filter<F>(&self, logic: F)
-        -> Arranged<G, TraceFilter<Tr, F>>
-        where
-            F: FnMut(Tr::Key<'_>, Tr::Val<'_>)->bool+Clone+'static,
-    {
-        let logic1 = logic.clone();
-        let logic2 = logic.clone();
-        Arranged {
-            trace: TraceFilter::make_from(self.trace.clone(), logic1),
-            stream: self.stream.map(move |bw| BatchFilter::make_from(bw, logic2.clone())),
-        }
-    }
     /// Flattens the stream into a `Collection`.
     ///
     /// The underlying `Stream<G, BatchWrapper<T::Batch>>` is a much more efficient way to access the data,
