@@ -16,7 +16,7 @@ members = [
 resolver = "2"
 
 [workspace.dependencies]
-differential-dataflow = { path = "differential-dataflow", default-features = false, version = "0.16.2" }
+differential-dataflow = { path = "differential-dataflow", default-features = false, version = "0.17.0" }
 timely = { version = "0.24", default-features = false }
 columnar = { version = "0.10", default-features = false }
 #timely = { path = "../timely-dataflow/timely/", default-features = false }
