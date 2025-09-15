@@ -10,9 +10,7 @@
 
 use std::hash::Hash;
 
-use timely::Container;
-use timely::container::IterContainer;
-use timely::Data;
+use timely::{Container, Data};
 use timely::progress::Timestamp;
 use timely::order::Product;
 use timely::dataflow::scopes::{Child, child::Iterative};
@@ -156,7 +154,6 @@ impl<G: Scope, D, R, C: Container> Collection<G, D, R, C> {
     pub fn inspect_container<F>(&self, func: F) -> Self
     where
         F: FnMut(Result<(&G::Timestamp, &C), &[G::Timestamp]>)+'static,
-        C: IterContainer,
     {
         self.inner
             .inspect_container(func)
