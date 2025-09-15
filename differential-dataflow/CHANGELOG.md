@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.0](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dataflow-v0.16.2...differential-dataflow-v0.17.0) - 2025-09-15
+
+### Other
+
+- Adjust Differential to recent Timely changes ([#643](https://github.com/TimelyDataflow/differential-dataflow/pull/643))
+- Remove `Filter` and `Freeze` wrappers ([#644](https://github.com/TimelyDataflow/differential-dataflow/pull/644))
+
 ## [0.16.2](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dataflow-v0.16.1...differential-dataflow-v0.16.2) - 2025-08-28
 
 ### Other
