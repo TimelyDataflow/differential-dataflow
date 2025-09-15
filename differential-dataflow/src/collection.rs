@@ -10,8 +10,7 @@
 
 use std::hash::Hash;
 
-use timely::Container;
-use timely::Data;
+use timely::{Container, Data};
 use timely::progress::Timestamp;
 use timely::order::Product;
 use timely::dataflow::scopes::{Child, child::Iterative};
@@ -67,7 +66,7 @@ impl<G: Scope, D, R, C> Collection<G, D, R, C> {
         Collection { inner: stream, phantom: std::marker::PhantomData }
     }
 }
-impl<G: Scope, D, R, C: Container + Clone + 'static> Collection<G, D, R, C> {
+impl<G: Scope, D, R, C: Container> Collection<G, D, R, C> {
     /// Creates a new collection accumulating the contents of the two collections.
     ///
     /// Despite the name, differential dataflow collections are unordered. This method is so named because the
@@ -684,7 +683,7 @@ where
     G: Scope,
     D: Data,
     R: Semigroup + 'static,
-    C: Container + Clone + 'static,
+    C: Container,
     I: IntoIterator<Item=Collection<G, D, R, C>>,
 {
     scope

@@ -86,7 +86,7 @@ impl VectorFrom<TimelyEvent> for Value {
                     x.source.into(),
                     x.target.into(),
                     x.seq_no.into(),
-                    x.length.into(),
+                    usize::try_from(x.record_count).unwrap().into(),
                 ]
             },
             TimelyEvent::Shutdown(x) => { vec![x.id.into()] },
