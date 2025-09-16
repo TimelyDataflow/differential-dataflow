@@ -1,7 +1,6 @@
 //! Wordcount based on `columnar`.
 
 use timely::container::{ContainerBuilder, PushInto};
-use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::InputHandleCore;
 use timely::dataflow::ProbeHandle;
 
@@ -37,8 +36,12 @@ fn main() {
             let data = data_input.to_stream(scope);
             let keys = keys_input.to_stream(scope);
 
-            let data = arrange_core::<_,_,KeyBatcher<_,_,_>, KeyBuilder<_,_,_>, KeySpine<_,_,_>>(&data, Pipeline, "Data");
-            let keys = arrange_core::<_,_,KeyBatcher<_,_,_>, KeyBuilder<_,_,_>, KeySpine<_,_,_>>(&keys, Pipeline, "Keys");
+            use differential_dataflow::Hashable;
+            let data_pact = KeyPact { hashfunc: |k: columnar::Ref<'_, Vec<u8>>| k.hashed() };
+            let keys_pact = KeyPact { hashfunc: |k: columnar::Ref<'_, Vec<u8>>| k.hashed() };
+
+            let data = arrange_core::<_,_,KeyBatcher<_,_,_>, KeyBuilder<_,_,_>, KeySpine<_,_,_>>(&data, data_pact, "Data");
+            let keys = arrange_core::<_,_,KeyBatcher<_,_,_>, KeyBuilder<_,_,_>, KeySpine<_,_,_>>(&keys, keys_pact, "Keys");
 
             keys.join_core(&data, |_k, (), ()| { Option::<()>::None })
                 .probe_with(&mut probe);
@@ -268,6 +271,17 @@ pub mod storage {
                 self.upds.extend_from_self(other.upds.borrow(), range);
             }
         }
+
+        impl<U: Update> timely::Accountable for ValStorage<U> {
+            #[inline] fn record_count(&self) -> i64 { use columnar::Len; self.upds.values.len() as i64 }
+        }
+
+        use timely::dataflow::channels::ContainerBytes;
+        impl<U: Update> ContainerBytes for ValStorage<U> {
+            fn from_bytes(_bytes: timely::bytes::arc::Bytes) -> Self { unimplemented!() }
+            fn length_in_bytes(&self) -> usize { unimplemented!() }
+            fn into_bytes<W: ::std::io::Write>(&self, _writer: &mut W) { unimplemented!() }
+        }
     }
 
     pub mod key {
@@ -283,7 +297,7 @@ pub mod storage {
         pub struct KeyStorage<U: Update> {
             /// An ordered list of keys.
             pub keys: ContainerOf<U::Key>,
-            /// For each val in `vals`, a list of (time, diff) updates.
+            /// For each key in `keys`, a list of (time, diff) updates.
             pub upds: Vecs<(ContainerOf<U::Time>, ContainerOf<U::Diff>)>,
         }
 
@@ -341,47 +355,9 @@ pub mod storage {
                 self.upds.extend_from_self(other.upds.borrow(), range.clone());
             }
         }
-    }
-}
-
-mod container {
-
-    mod val {
-
-        use crate::layout::ColumnarUpdate as Update;
-        use crate::ValStorage;
-
-        impl<U: Update> timely::Accountable for ValStorage<U> {
-            #[inline] fn record_count(&self) -> i64 { use columnar::Len; self.upds.values.len() as i64 }
-        }
-
-        use timely::container::SizableContainer;
-        impl<U: Update> SizableContainer for ValStorage<U> {
-            fn at_capacity(&self) -> bool { false }
-            fn ensure_capacity(&mut self, _stash: &mut Option<Self>) { }
-        }
-
-        use timely::dataflow::channels::ContainerBytes;
-        impl<U: Update> ContainerBytes for ValStorage<U> {
-            fn from_bytes(_bytes: timely::bytes::arc::Bytes) -> Self { unimplemented!() }
-            fn length_in_bytes(&self) -> usize { unimplemented!() }
-            fn into_bytes<W: ::std::io::Write>(&self, _writer: &mut W) { unimplemented!() }
-        }
-    }
-
-    mod key {
-
-        use crate::layout::ColumnarUpdate as Update;
-        use crate::KeyStorage;
 
         impl<U: Update> timely::Accountable for KeyStorage<U> {
             #[inline] fn record_count(&self) -> i64 { use columnar::Len; self.upds.values.len() as i64 }
-        }
-
-        use timely::container::SizableContainer;
-        impl<U: Update> SizableContainer for KeyStorage<U> {
-            fn at_capacity(&self) -> bool { false }
-            fn ensure_capacity(&mut self, _stash: &mut Option<Self>) { }
         }
 
         use timely::dataflow::channels::ContainerBytes;
@@ -471,20 +447,6 @@ mod column_builder {
                 self.empty = self.pending.pop_front();
                 self.empty.as_mut()
             }
-
-            // fn partition<I>(container: &mut Self::Container, builders: &mut [Self], mut index: I)
-            // where
-            //     Self: for<'a> PushInto<<Self::Container as timely::Container>::Item<'a>>,
-            //     I: for<'a> FnMut(&<Self::Container as timely::Container>::Item<'a>) -> usize,
-            // {
-            //     println!("Exchanging!");
-            //     for datum in container.drain() {
-            //         let index = index(&datum);
-            //         builders[index].push_into(datum);
-            //     }
-            //     container.clear();
-            // }
-
         }
 
         impl<U: Update> LengthPreservingContainerBuilder for ValBuilder<U> { }
@@ -557,23 +519,86 @@ mod column_builder {
                 self.empty = self.pending.pop_front();
                 self.empty.as_mut()
             }
-
-            // fn partition<I>(container: &mut Self::Container, builders: &mut [Self], mut index: I)
-            // where
-            //     Self: for<'a> PushInto<<Self::Container as timely::Container>::Item<'a>>,
-            //     I: for<'a> FnMut(&<Self::Container as timely::Container>::Item<'a>) -> usize,
-            // {
-            //     println!("Exchanging!");
-            //     for datum in container.drain() {
-            //         let index = index(&datum);
-            //         builders[index].push_into(datum);
-            //     }
-            //     container.clear();
-            // }
-
         }
 
         impl<U: Update> LengthPreservingContainerBuilder for KeyBuilder<U> { }
+    }
+}
+
+use distributor::key::KeyPact;
+mod distributor {
+
+    pub mod key {
+
+        use std::rc::Rc;
+
+        use columnar::{Container, Index, Len};
+        use timely::container::{ContainerBuilder, PushInto};
+        use timely::logging::TimelyLogger;
+        use timely::dataflow::channels::pushers::{Exchange, exchange::Distributor};
+        use timely::dataflow::channels::Message;
+        use timely::dataflow::channels::pact::{LogPuller, LogPusher, ParallelizationContract};
+        use timely::progress::Timestamp;
+        use timely::worker::AsWorker;
+
+        use crate::layout::ColumnarUpdate as Update;
+        use crate::{KeyColBuilder, KeyStorage};
+
+        pub struct KeyDistributor<U: Update, H> {
+            builders: Vec<KeyColBuilder<U>>,
+            hashfunc: H,
+        }
+
+        impl<U: Update, H: for<'a> FnMut(columnar::Ref<'a, U::Key>)->u64> Distributor<KeyStorage<U>> for KeyDistributor<U, H> {
+            fn partition<T: Clone, P: timely::communication::Push<Message<T, KeyStorage<U>>>>(&mut self, container: &mut KeyStorage<U>, time: &T, pushers: &mut [P]) {
+                // For each key, partition and copy (key, time, diff) into the appropriate self.builder.
+                for index in 0 .. container.keys.len() {
+                    let key = container.keys.borrow().get(index);
+                    let idx = ((self.hashfunc)(key) as usize) % self.builders.len();
+                    for (t, diff) in container.upds.borrow().get(index).into_index_iter() {
+                        self.builders[idx].push_into((key, t, diff));
+                    }
+                    while let Some(produced) = self.builders[idx].extract() {
+                        Message::push_at(produced, time.clone(), &mut pushers[idx]);
+                    }
+                }
+            }
+            fn flush<T: Clone, P: timely::communication::Push<Message<T, KeyStorage<U>>>>(&mut self, time: &T, pushers: &mut [P]) {
+                for (builder, pusher) in self.builders.iter_mut().zip(pushers.iter_mut()) {
+                    while let Some(container) = builder.finish() {
+                        Message::push_at(container, time.clone(), pusher);
+                    }
+                }
+            }
+            fn relax(&mut self) { }
+        }
+
+        pub struct KeyPact<H> { pub hashfunc: H }
+
+        // Exchange uses a `Box<Pushable>` because it cannot know what type of pushable will return from the allocator.
+        impl<T, U, H> ParallelizationContract<T, KeyStorage<U>> for KeyPact<H>
+        where
+            T: Timestamp,
+            U: Update,
+            H: for<'a> FnMut(columnar::Ref<'a, U::Key>)->u64 + 'static,
+        {
+            type Pusher = Exchange<
+                T,
+                LogPusher<Box<dyn timely::communication::Push<Message<T, KeyStorage<U>>>>>,
+                KeyDistributor<U, H>
+            >;
+            type Puller = LogPuller<Box<dyn timely::communication::Pull<Message<T, KeyStorage<U>>>>>;
+
+            fn connect<A: AsWorker>(self, allocator: &mut A, identifier: usize, address: Rc<[usize]>, logging: Option<TimelyLogger>) -> (Self::Pusher, Self::Puller) {
+                let (senders, receiver) = allocator.allocate::<Message<T, KeyStorage<U>>>(identifier, address);
+                let senders = senders.into_iter().enumerate().map(|(i,x)| LogPusher::new(x, allocator.index(), i, identifier, logging.clone())).collect::<Vec<_>>();
+                let distributor = KeyDistributor {
+                    builders: std::iter::repeat_with(Default::default).take(allocator.peers()).collect(),
+                    hashfunc: self.hashfunc,
+                };
+                (Exchange::new(senders, distributor), LogPuller::new(receiver, allocator.index(), identifier, logging.clone()))
+            }
+        }
     }
 }
 
