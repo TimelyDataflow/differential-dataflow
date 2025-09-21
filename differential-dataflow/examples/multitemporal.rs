@@ -59,7 +59,8 @@ fn main() {
                             let time = Pair::new(arguments[1], arguments[2]);
                             if capability.time().less_equal(&time) {
                                 input
-                                    .session(capability.clone())
+                                    .activate()
+                                    .session(&capability)
                                     .give((arguments[0], time, arguments[3]));
                             } else {
                                 println!("Requested time {:?} no longer open (input from {:?})", time, capability.time());

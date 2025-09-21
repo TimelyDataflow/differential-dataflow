@@ -176,7 +176,7 @@ where
             let mut priority_queue = BinaryHeap::<std::cmp::Reverse<(G::Timestamp, Tr::KeyOwn, Option<Tr::ValOwn>)>>::new();
             let mut updates = Vec::new();
 
-            move |input, output| {
+            move |(input, frontier), output| {
 
                 // Stash capabilities and associated data (ordered by time).
                 input.for_each(|cap, data| {
@@ -187,28 +187,28 @@ where
                 });
 
                 // Assert that the frontier never regresses.
-                assert!(PartialOrder::less_equal(&prev_frontier.borrow(), &input.frontier().frontier()));
+                assert!(PartialOrder::less_equal(&prev_frontier.borrow(), &frontier.frontier()));
 
                 // Test to see if strict progress has occurred, which happens whenever the new
                 // frontier isn't equal to the previous. It is only in this case that we have any
                 // data processing to do.
-                if prev_frontier.borrow() != input.frontier().frontier() {
+                if prev_frontier.borrow() != frontier.frontier() {
 
                     // If there is at least one capability not in advance of the input frontier ...
-                    if capabilities.elements().iter().any(|c| !input.frontier().less_equal(c.time())) {
+                    if capabilities.elements().iter().any(|c| !frontier.less_equal(c.time())) {
 
                         let mut upper = Antichain::new();   // re-used allocation for sealing batches.
 
                         // For each capability not in advance of the input frontier ...
                         for (index, capability) in capabilities.elements().iter().enumerate() {
 
-                            if !input.frontier().less_equal(capability.time()) {
+                            if !frontier.less_equal(capability.time()) {
 
                                 // Assemble the upper bound on times we can commit with this capabilities.
                                 // We must respect the input frontier, and *subsequent* capabilities, as
                                 // we are pretending to retire the capability changes one by one.
                                 upper.clear();
-                                for time in input.frontier().frontier().iter() {
+                                for time in frontier.frontier().iter() {
                                     upper.insert(time.clone());
                                 }
                                 for other_capability in &capabilities.elements()[(index + 1) .. ] {
@@ -305,12 +305,12 @@ where
                     }
                     else {
                         // Announce progress updates, even without data.
-                        writer.seal(input.frontier().frontier().to_owned());
+                        writer.seal(frontier.frontier().to_owned());
                     }
 
                     // Update our view of the input frontier.
                     prev_frontier.clear();
-                    prev_frontier.extend(input.frontier().frontier().iter().cloned());
+                    prev_frontier.extend(frontier.frontier().iter().cloned());
 
                     // Downgrade capabilities for `reader_local`.
                     reader_local.set_logical_compaction(prev_frontier.borrow());

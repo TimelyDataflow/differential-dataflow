@@ -7,6 +7,7 @@ use timely::communication::Allocate;
 use timely::worker::Worker;
 use timely::logging::TimelyEvent;
 use timely::dataflow::operators::capture::event::EventIterator;
+use timely::dataflow::operators::generic::OutputBuilder;
 
 use differential_dataflow::ExchangeData;
 use differential_dataflow::logging::DifferentialEvent;
@@ -47,13 +48,20 @@ where
         use timely::dataflow::channels::pact::Pipeline;
         let mut input = demux.new_input(&input_stream, Pipeline);
 
-        let (mut operates_out, operates) = demux.new_output();
-        let (mut channels_out, channels) = demux.new_output();
-        let (mut schedule_out, schedule) = demux.new_output();
-        let (mut messages_out, messages) = demux.new_output();
-        let (mut shutdown_out, shutdown) = demux.new_output();
-        let (mut park_out, park) = demux.new_output();
-        let (mut text_out, text) = demux.new_output();
+        let (operates_out, operates) = demux.new_output();
+        let mut operates_out = OutputBuilder::from(operates_out);
+        let (channels_out, channels) = demux.new_output();
+        let mut channels_out = OutputBuilder::from(channels_out);
+        let (schedule_out, schedule) = demux.new_output();
+        let mut schedule_out = OutputBuilder::from(schedule_out);
+        let (messages_out, messages) = demux.new_output();
+        let mut messages_out = OutputBuilder::from(messages_out);
+        let (shutdown_out, shutdown) = demux.new_output();
+        let mut shutdown_out = OutputBuilder::from(shutdown_out);
+        let (park_out, park) = demux.new_output();
+        let mut park_out = OutputBuilder::from(park_out);
+        let (text_out, text) = demux.new_output();
+        let mut text_out = OutputBuilder::from(text_out);
 
         demux.build(move |_capability| {
 
@@ -228,8 +236,10 @@ where
         use timely::dataflow::channels::pact::Pipeline;
         let mut input = demux.new_input(&input, Pipeline);
 
-        let (mut batch_out, batch) = demux.new_output();
-        let (mut merge_out, merge) = demux.new_output();
+        let (batch_out, batch) = demux.new_output();
+        let mut batch_out = OutputBuilder::from(batch_out);
+        let (merge_out, merge) = demux.new_output();
+        let mut merge_out = OutputBuilder::from(merge_out);
 
         demux.build(move |_capability| {
 

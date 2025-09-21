@@ -39,8 +39,10 @@ fn main() {
             let data = data_input.to_stream(scope);
             let keys = keys_input.to_stream(scope);
 
-            let data_pact = ExchangeCore::<ColumnBuilder<((String,()),u64,i64)>,_>::new_core(|x: &((&str,()),&u64,&i64)| (x.0).0.as_bytes().iter().map(|x| *x as u64).sum::<u64>() as u64);
-            let keys_pact = ExchangeCore::<ColumnBuilder<((String,()),u64,i64)>,_>::new_core(|x: &((&str,()),&u64,&i64)| (x.0).0.as_bytes().iter().map(|x| *x as u64).sum::<u64>() as u64);
+            use differential_dataflow::Hashable;
+            use timely::dataflow::channels::pact::DistributorPact;
+            let data_pact = DistributorPact(|peers| KeyDistributor::new(peers, |k: columnar::Ref<'_, Vec<u8>>| k.hashed()));
+            let keys_pact = DistributorPact(|peers| KeyDistributor::new(peers, |k: columnar::Ref<'_, Vec<u8>>| k.hashed()));
 
             let data = arrange_core::<_,_,Col2KeyBatcher<_,_,_>, ColKeyBuilder<_,_,_>, ColKeySpine<_,_,_>>(&data, data_pact, "Data");
             let keys = arrange_core::<_,_,Col2KeyBatcher<_,_,_>, ColKeyBuilder<_,_,_>, ColKeySpine<_,_,_>>(&keys, keys_pact, "Keys");
@@ -375,6 +377,475 @@ pub mod batcher {
 
     use differential_dataflow::trace::implementations::merge_batcher::MergeBatcher;
 
+    impl<K, V, T, R> ColumnarUpdate for (K, V, T, R)
+    where
+        K: Columnar<Container: OrdContainer + Debug + Default> + Debug + Ord + Clone + 'static,
+        V: Columnar<Container: OrdContainer + Debug + Default> + Debug + Ord + Clone + 'static,
+        T: Columnar<Container: OrdContainer + Debug + Default> + Debug + Ord + Default + Clone + Lattice + Timestamp,
+        R: Columnar<Container: OrdContainer + Debug + Default> + Debug + Ord + Default + Semigroup + 'static,
+    {
+        type Key = K;
+        type Val = V;
+        type Time = T;
+        type Diff = R;
+    }
+
+    impl<K, T, R> ColumnarUpdate for (K, T, R)
+    where
+        K: Columnar<Container: OrdContainer + Debug + Default> + Debug + Ord + Clone + 'static,
+        T: Columnar<Container: OrdContainer + Debug + Default> + Debug + Ord + Default + Clone + Lattice + Timestamp,
+        R: Columnar<Container: OrdContainer + Debug + Default> + Debug + Ord + Default + Semigroup + 'static,
+    {
+        type Key = K;
+        type Val = ();
+        type Time = T;
+        type Diff = R;
+    }
+
+
+    use crate::arrangement::Coltainer;
+    impl<U: ColumnarUpdate> Layout for ColumnarLayout<U> {
+        type KeyContainer    = Coltainer<U::Key>;
+        type ValContainer    = Coltainer<U::Val>;
+        type TimeContainer   = Coltainer<U::Time>;
+        type DiffContainer   = Coltainer<U::Diff>;
+        type OffsetContainer = OffsetList;
+    }
+
+    /// A type that names constituent update types.
+    ///
+    /// We will use their associated `Columnar::Container`
+    pub trait ColumnarUpdate : Debug + 'static {
+        type Key:  Columnar<Container: OrdContainer + Debug + Default> + Debug + Ord + Clone + 'static;
+        type Val:  Columnar<Container: OrdContainer + Debug + Default> + Debug + Ord + Clone + 'static;
+        type Time: Columnar<Container: OrdContainer + Debug + Default> + Debug + Ord + Default + Clone + Lattice + Timestamp;
+        type Diff: Columnar<Container: OrdContainer + Debug + Default> + Debug + Ord + Default + Semigroup + 'static;
+    }
+
+    /// A container whose references can be ordered.
+    pub trait OrdContainer : for<'a> columnar::Container<Ref<'a> : Ord> { }
+    impl<C: for<'a> columnar::Container<Ref<'a> : Ord>> OrdContainer for C { }
+
+}
+
+pub use storage::val::ValStorage;
+pub use storage::key::KeyStorage;
+pub mod storage {
+
+    pub mod val {
+
+        use std::fmt::Debug;
+        use columnar::{Container, ContainerOf, Index, Len, Push};
+        use columnar::Vecs;
+
+        use crate::layout::ColumnarUpdate as Update;
+
+        /// Trie-shaped update storage.
+        #[derive(Debug)]
+        pub struct ValStorage<U: Update> {
+            /// An ordered list of keys.
+            pub keys: ContainerOf<U::Key>,
+            /// For each key in `keys`, a list of values.
+            pub vals: Vecs<ContainerOf<U::Val>>,
+            /// For each val in `vals`, a list of (time, diff) updates.
+            pub upds: Vecs<(ContainerOf<U::Time>, ContainerOf<U::Diff>)>,
+        }
+
+        impl<U: Update> Default for ValStorage<U> { fn default() -> Self { Self { keys: Default::default(), vals: Default::default(), upds: Default::default(), } } }
+        impl<U: Update> Clone for ValStorage<U> { fn clone(&self) -> Self { Self { keys: self.keys.clone(), vals: self.vals.clone(), upds: self.upds.clone(), } } }
+
+        pub type Tuple<U> = (<U as Update>::Key, <U as Update>::Val, <U as Update>::Time, <U as Update>::Diff);
+
+        use std::ops::Range;
+        impl<U: Update> ValStorage<U> {
+
+            /// Forms `Self` from sorted update tuples.
+            pub fn form<'a>(sorted: impl Iterator<Item = columnar::Ref<'a, Tuple<U>>>) -> Self {
+
+                let mut output = Self::default();
+                let mut sorted = sorted.peekable();
+
+                if let Some((key,val,time,diff)) = sorted.next() {
+                    output.keys.push(key);
+                    output.vals.values.push(val);
+                    output.upds.values.push((time, diff));
+                    for (key,val,time,diff) in sorted {
+                        let mut differs = false;
+                        // We would now iterate over layers.
+                        // We'll do that manually, as the types are all different.
+                        // Keys first; non-standard logic because they are not (yet) a list of lists.
+                        let keys_len = output.keys.len();
+                        differs |= ContainerOf::<U::Key>::reborrow_ref(key) != output.keys.borrow().get(keys_len-1);
+                        if differs { output.keys.push(key); }
+                        // Vals next
+                        let vals_len = output.vals.values.len();
+                        if differs { output.vals.bounds.push(vals_len as u64); }
+                        differs |= ContainerOf::<U::Val>::reborrow_ref(val) != output.vals.values.borrow().get(vals_len-1);
+                        if differs { output.vals.values.push(val); }
+                        // Upds last
+                        let upds_len = output.upds.values.len();
+                        if differs { output.upds.bounds.push(upds_len as u64); }
+                        // differs |= ContainerOf::<(U::Time,U::Diff)>::reborrow_ref((time,diff)) != output.upds.values.borrow().get(upds_len-1);
+                        differs = true;
+                        if differs { output.upds.values.push((time,diff)); }
+                    }
+                    // output.keys.bounds.push(vals_len as u64);
+                    output.vals.bounds.push(output.vals.values.len() as u64);
+                    output.upds.bounds.push(output.upds.values.len() as u64);
+                }
+
+                assert_eq!(output.keys.len(), output.vals.len());
+                assert_eq!(output.vals.values.len(), output.upds.len());
+
+                output
+            }
+
+            pub fn vals_bounds(&self, range: Range<usize>) -> Range<usize> {
+                if !range.is_empty() {
+                    let lower = if range.start == 0 { 0 } else { Index::get(self.vals.bounds.borrow(), range.start-1) as usize };
+                    let upper = Index::get(self.vals.bounds.borrow(), range.end-1) as usize;
+                    lower .. upper
+                } else { range }
+            }
+
+            pub fn upds_bounds(&self, range: Range<usize>) -> Range<usize> {
+                if !range.is_empty() {
+                    let lower = if range.start == 0 { 0 } else { Index::get(self.upds.bounds.borrow(), range.start-1) as usize };
+                    let upper = Index::get(self.upds.bounds.borrow(), range.end-1) as usize;
+                    lower .. upper
+                } else { range }
+            }
+
+            /// Copies `other[range]` into self, keys and all.
+            pub fn extend_from_keys(&mut self, other: &Self, range: Range<usize>) {
+                self.keys.extend_from_self(other.keys.borrow(), range.clone());
+                self.vals.extend_from_self(other.vals.borrow(), range.clone());
+                self.upds.extend_from_self(other.upds.borrow(), other.vals_bounds(range));
+            }
+
+            pub fn extend_from_vals(&mut self, other: &Self, range: Range<usize>) {
+                self.vals.values.extend_from_self(other.vals.values.borrow(), range.clone());
+                self.upds.extend_from_self(other.upds.borrow(), range);
+            }
+        }
+
+        impl<U: Update> timely::Accountable for ValStorage<U> {
+            #[inline] fn record_count(&self) -> i64 { use columnar::Len; self.upds.values.len() as i64 }
+        }
+
+        use timely::dataflow::channels::ContainerBytes;
+        impl<U: Update> ContainerBytes for ValStorage<U> {
+            fn from_bytes(_bytes: timely::bytes::arc::Bytes) -> Self { unimplemented!() }
+            fn length_in_bytes(&self) -> usize { unimplemented!() }
+            fn into_bytes<W: ::std::io::Write>(&self, _writer: &mut W) { unimplemented!() }
+        }
+    }
+
+    pub mod key {
+
+        use std::fmt::Debug;
+        use columnar::{Container, ContainerOf, Index, Len, Push};
+        use columnar::Vecs;
+
+        use crate::layout::ColumnarUpdate as Update;
+
+        /// Trie-shaped update storage.
+        #[derive(Debug)]
+        pub struct KeyStorage<U: Update> {
+            /// An ordered list of keys.
+            pub keys: ContainerOf<U::Key>,
+            /// For each key in `keys`, a list of (time, diff) updates.
+            pub upds: Vecs<(ContainerOf<U::Time>, ContainerOf<U::Diff>)>,
+        }
+
+        impl<U: Update> Default for KeyStorage<U> { fn default() -> Self { Self { keys: Default::default(), upds: Default::default(), } } }
+        impl<U: Update> Clone for KeyStorage<U> { fn clone(&self) -> Self { Self { keys: self.keys.clone(), upds: self.upds.clone(), } } }
+
+        pub type Tuple<U> = (<U as Update>::Key, <U as Update>::Time, <U as Update>::Diff);
+
+        use std::ops::Range;
+        impl<U: Update> KeyStorage<U> {
+
+            /// Forms `Self` from sorted update tuples.
+            pub fn form<'a>(sorted: impl Iterator<Item = columnar::Ref<'a, Tuple<U>>>) -> Self {
+
+                let mut output = Self::default();
+                let mut sorted = sorted.peekable();
+
+                if let Some((key,time,diff)) = sorted.next() {
+                    output.keys.push(key);
+                    output.upds.values.push((time, diff));
+                    for (key,time,diff) in sorted {
+                        let mut differs = false;
+                        // We would now iterate over layers.
+                        // We'll do that manually, as the types are all different.
+                        // Keys first; non-standard logic because they are not (yet) a list of lists.
+                        let keys_len = output.keys.len();
+                        differs |= ContainerOf::<U::Key>::reborrow_ref(key) != output.keys.borrow().get(keys_len-1);
+                        if differs { output.keys.push(key); }
+                        // Upds last
+                        let upds_len = output.upds.values.len();
+                        if differs { output.upds.bounds.push(upds_len as u64); }
+                        // differs |= ContainerOf::<(U::Time,U::Diff)>::reborrow_ref((time,diff)) != output.upds.values.borrow().get(upds_len-1);
+                        differs = true;
+                        if differs { output.upds.values.push((time,diff)); }
+                    }
+                    output.upds.bounds.push(output.upds.values.len() as u64);
+                }
+
+                assert_eq!(output.keys.len(), output.upds.len());
+
+                output
+            }
+
+            pub fn upds_bounds(&self, range: Range<usize>) -> Range<usize> {
+                if !range.is_empty() {
+                    let lower = if range.start == 0 { 0 } else { Index::get(self.upds.bounds.borrow(), range.start-1) as usize };
+                    let upper = Index::get(self.upds.bounds.borrow(), range.end-1) as usize;
+                    lower .. upper
+                } else { range }
+            }
+
+            /// Copies `other[range]` into self, keys and all.
+            pub fn extend_from_keys(&mut self, other: &Self, range: Range<usize>) {
+                self.keys.extend_from_self(other.keys.borrow(), range.clone());
+                self.upds.extend_from_self(other.upds.borrow(), range.clone());
+            }
+        }
+
+        impl<U: Update> timely::Accountable for KeyStorage<U> {
+            #[inline] fn record_count(&self) -> i64 { use columnar::Len; self.upds.values.len() as i64 }
+        }
+
+        use timely::dataflow::channels::ContainerBytes;
+        impl<U: Update> ContainerBytes for KeyStorage<U> {
+            fn from_bytes(_bytes: timely::bytes::arc::Bytes) -> Self { unimplemented!() }
+            fn length_in_bytes(&self) -> usize { unimplemented!() }
+            fn into_bytes<W: ::std::io::Write>(&self, _writer: &mut W) { unimplemented!() }
+        }
+    }
+}
+
+pub use column_builder::{val::ValBuilder as ValColBuilder, key::KeyBuilder as KeyColBuilder};
+mod column_builder {
+
+    pub mod val {
+
+        use std::collections::VecDeque;
+        use columnar::{Columnar, Clear, Len, Push};
+
+        use crate::layout::ColumnarUpdate as Update;
+        use crate::ValStorage;
+
+        type TupleContainer<U> = <(<U as Update>::Key, <U as Update>::Val, <U as Update>::Time, <U as Update>::Diff) as Columnar>::Container;
+
+        /// A container builder for `Column<C>`.
+        pub struct ValBuilder<U: Update> {
+            /// Container that we're writing to.
+            current: TupleContainer<U>,
+            /// Empty allocation.
+            empty: Option<ValStorage<U>>,
+            /// Completed containers pending to be sent.
+            pending: VecDeque<ValStorage<U>>,
+        }
+
+        use timely::container::PushInto;
+        impl<T, U: Update> PushInto<T> for ValBuilder<U> where TupleContainer<U> : Push<T> {
+            #[inline]
+            fn push_into(&mut self, item: T) {
+                self.current.push(item);
+                if self.current.len() > 1024 {
+                    // TODO: Consolidate the batch?
+                    use columnar::{Container, Index};
+                    let mut refs = self.current.borrow().into_index_iter().collect::<Vec<_>>();
+                    refs.sort();
+                    let storage = ValStorage::form(refs.into_iter());
+                    self.pending.push_back(storage);
+                    self.current.clear();
+                }
+            }
+        }
+
+        impl<U: Update> Default for ValBuilder<U> {
+            fn default() -> Self {
+                ValBuilder {
+                    current: Default::default(),
+                    empty: None,
+                    pending: Default::default(),
+                }
+            }
+        }
+
+        use timely::container::{ContainerBuilder, LengthPreservingContainerBuilder};
+        impl<U: Update> ContainerBuilder for ValBuilder<U> {
+            type Container = ValStorage<U>;
+
+            #[inline]
+            fn extract(&mut self) -> Option<&mut Self::Container> {
+                if let Some(container) = self.pending.pop_front() {
+                    self.empty = Some(container);
+                    self.empty.as_mut()
+                } else {
+                    None
+                }
+            }
+
+            #[inline]
+            fn finish(&mut self) -> Option<&mut Self::Container> {
+                if !self.current.is_empty() {
+                    // TODO: Consolidate the batch?
+                    use columnar::{Container, Index};
+                    let mut refs = self.current.borrow().into_index_iter().collect::<Vec<_>>();
+                    refs.sort();
+                    let storage = ValStorage::form(refs.into_iter());
+                    self.pending.push_back(storage);
+                    self.current.clear();
+                }
+                self.empty = self.pending.pop_front();
+                self.empty.as_mut()
+            }
+        }
+
+        impl<U: Update> LengthPreservingContainerBuilder for ValBuilder<U> { }
+    }
+
+    pub mod key {
+
+        use std::collections::VecDeque;
+        use columnar::{Columnar, Clear, Len, Push};
+
+        use crate::layout::ColumnarUpdate as Update;
+        use crate::KeyStorage;
+
+        type TupleContainer<U> = <(<U as Update>::Key, <U as Update>::Time, <U as Update>::Diff) as Columnar>::Container;
+
+        /// A container builder for `Column<C>`.
+        pub struct KeyBuilder<U: Update> {
+            /// Container that we're writing to.
+            current: TupleContainer<U>,
+            /// Empty allocation.
+            empty: Option<KeyStorage<U>>,
+            /// Completed containers pending to be sent.
+            pending: VecDeque<KeyStorage<U>>,
+        }
+
+        use timely::container::PushInto;
+        impl<T, U: Update> PushInto<T> for KeyBuilder<U> where TupleContainer<U> : Push<T> {
+            #[inline]
+            fn push_into(&mut self, item: T) {
+                self.current.push(item);
+                if self.current.len() > 1024 {
+                    // TODO: Consolidate the batch?
+                    use columnar::{Container, Index};
+                    let mut refs = self.current.borrow().into_index_iter().collect::<Vec<_>>();
+                    refs.sort();
+                    let storage = KeyStorage::form(refs.into_iter());
+                    self.pending.push_back(storage);
+                    self.current.clear();
+                }
+            }
+        }
+
+        impl<U: Update> Default for KeyBuilder<U> { fn default() -> Self { KeyBuilder { current: Default::default(), empty: None, pending: Default::default(), } } }
+
+        use timely::container::{ContainerBuilder, LengthPreservingContainerBuilder};
+        impl<U: Update> ContainerBuilder for KeyBuilder<U> {
+            type Container = KeyStorage<U>;
+
+            #[inline]
+            fn extract(&mut self) -> Option<&mut Self::Container> {
+                if let Some(container) = self.pending.pop_front() {
+                    self.empty = Some(container);
+                    self.empty.as_mut()
+                } else {
+                    None
+                }
+            }
+
+            #[inline]
+            fn finish(&mut self) -> Option<&mut Self::Container> {
+                if !self.current.is_empty() {
+                    // TODO: Consolidate the batch?
+                    use columnar::{Container, Index};
+                    let mut refs = self.current.borrow().into_index_iter().collect::<Vec<_>>();
+                    refs.sort();
+                    let storage = KeyStorage::form(refs.into_iter());
+                    self.pending.push_back(storage);
+                    self.current.clear();
+                }
+                self.empty = self.pending.pop_front();
+                self.empty.as_mut()
+            }
+        }
+
+        impl<U: Update> LengthPreservingContainerBuilder for KeyBuilder<U> { }
+    }
+}
+
+use distributor::key::KeyDistributor;
+mod distributor {
+
+    pub mod key {
+
+        use columnar::{Container, Index, Len};
+        use timely::container::{ContainerBuilder, PushInto};
+        use timely::dataflow::channels::{Message, pushers::exchange::Distributor};
+
+        use crate::layout::ColumnarUpdate as Update;
+        use crate::{KeyColBuilder, KeyStorage};
+
+        pub struct KeyDistributor<U: Update, H> {
+            builders: Vec<KeyColBuilder<U>>,
+            hashfunc: H,
+        }
+
+        impl<U: Update, H: for<'a> FnMut(columnar::Ref<'a, U::Key>)->u64> Distributor<KeyStorage<U>> for KeyDistributor<U, H> {
+            fn partition<T: Clone, P: timely::communication::Push<Message<T, KeyStorage<U>>>>(&mut self, container: &mut KeyStorage<U>, time: &T, pushers: &mut [P]) {
+                // For each key, partition and copy (key, time, diff) into the appropriate self.builder.
+                for index in 0 .. container.keys.len() {
+                    let key = container.keys.borrow().get(index);
+                    let idx = ((self.hashfunc)(key) as usize) % self.builders.len();
+                    for (t, diff) in container.upds.borrow().get(index).into_index_iter() {
+                        self.builders[idx].push_into((key, t, diff));
+                    }
+                    while let Some(produced) = self.builders[idx].extract() {
+                        Message::push_at(produced, time.clone(), &mut pushers[idx]);
+                    }
+                }
+            }
+            fn flush<T: Clone, P: timely::communication::Push<Message<T, KeyStorage<U>>>>(&mut self, time: &T, pushers: &mut [P]) {
+                for (builder, pusher) in self.builders.iter_mut().zip(pushers.iter_mut()) {
+                    while let Some(container) = builder.finish() {
+                        Message::push_at(container, time.clone(), pusher);
+                    }
+                }
+            }
+            fn relax(&mut self) { }
+        }
+
+        impl<U: Update, H> KeyDistributor<U, H> {
+            pub fn new(peers: usize, hashfunc: H) -> Self {
+                Self {
+                    builders: std::iter::repeat_with(Default::default).take(peers).collect(),
+                    hashfunc,
+                }
+            }
+        }
+    }
+}
+
+pub use arrangement::{ValBatcher, ValBuilder, ValSpine, KeyBatcher, KeyBuilder, KeySpine};
+pub mod arrangement {
+
+    use std::rc::Rc;
+    use differential_dataflow::trace::implementations::ord_neu::{OrdValBatch, OrdKeyBatch};
+    use differential_dataflow::trace::rc_blanket_impls::RcBuilder;
+    use differential_dataflow::trace::implementations::spine_fueled::Spine;
+
+    use crate::layout::ColumnarLayout;
+
+    /// A trace implementation backed by columnar storage.
+    pub type ValSpine<K, V, T, R> = Spine<Rc<OrdValBatch<ColumnarLayout<(K,V,T,R)>>>>;
     /// A batcher for columnar storage.
     pub type Col2ValBatcher<K, V, T, R> = MergeBatcher<Column<((K,V),T,R)>, Chunker<Column<((K,V),T,R)>>, merger::ColumnMerger<(K,V),T,R>>;
     pub type Col2KeyBatcher<K, T, R> = Col2ValBatcher<K, (), T, R>;
