@@ -36,8 +36,8 @@ fn main() {
                 use differential_dogs3::operators::half_join;
 
                 // pick a frontier that will not mislead TOTAL ORDER comparisons.
-                let closure = |time: &Product<usize, usize>, antichain: &mut timely::progress::Antichain<Product<usize, usize>>| { 
-                    antichain.insert(Product::new(time.outer.saturating_sub(1), time.inner.saturating_sub(1))); 
+                let closure = |time: &Product<usize, usize>, antichain: &mut timely::progress::Antichain<Product<usize, usize>>| {
+                    antichain.insert(Product::new(time.outer.saturating_sub(1), time.inner.saturating_sub(1)));
                 };
 
                 let path1 =
@@ -70,11 +70,13 @@ fn main() {
         });
 
         i1
-            .session(c1.clone())
+            .activate()
+            .session(&c1)
             .give(((5, 6), Product::new(0, 13), 1));
 
         i2
-            .session(c2.clone())
+            .activate()
+            .session(&c2)
             .give(((5, 7), Product::new(11, 0), 1));
 
     }).unwrap();

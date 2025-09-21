@@ -11,7 +11,7 @@ use crate::hashable::Hashable;
 
 fn _color<G, N>(edges: &VecCollection<G, (N,N)>) -> VecCollection<G,(N,Option<u32>)>
 where
-    G: Scope<Timestamp: Lattice+Ord>,
+    G: Scope<Timestamp: Lattice+Ord+Hash>,
     N: ExchangeData+Hash,
 {
     // need some bogus initial values.

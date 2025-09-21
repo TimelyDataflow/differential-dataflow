@@ -40,8 +40,7 @@ fn wrap<G: Scope, C: timely::Container>(stream: &StreamCore<G, C>) -> StreamCore
     builder.build(move |_capability| move |_frontier| {
         let mut output = output.activate();
         input.for_each(|time, data| {
-            let mut session = output.session(&time);
-            session.give_container(&mut ContainerWrapper(std::mem::take(data)));
+            output.give(&time, &mut ContainerWrapper(std::mem::take(data)));
         });
     });
     stream_out

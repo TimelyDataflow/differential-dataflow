@@ -123,7 +123,7 @@ where
             let mut lower_limit = timely::progress::frontier::Antichain::from_elem(<G::Timestamp as timely::progress::Timestamp>::minimum());
             let mut upper_limit = timely::progress::frontier::Antichain::from_elem(<G::Timestamp as timely::progress::Timestamp>::minimum());
 
-            move |input, output| {
+            move |(input, _frontier), output| {
 
                 let mut batch_cursors = Vec::new();
                 let mut batch_storage = Vec::new();

@@ -365,7 +365,7 @@ where
 
             let id = trace.stream.scope().index();
 
-            move |input, output| {
+            move |(input, _frontier), output| {
 
                 // The `reduce` operator receives fully formed batches, which each serve as an indication
                 // that the frontier has advanced to the upper bound of their description.
