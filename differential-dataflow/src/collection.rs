@@ -207,7 +207,7 @@ impl<G: Scope, D, R, C: Container> Collection<G, D, R, C> {
     // TODO: Removing this function is possible, but breaks existing callers of `negate` who expect
     //       an inherent method on `Collection`.
     pub fn negate(&self) -> Collection<G, D, R, C>
-    where 
+    where
         StreamCore<G, C>: crate::operators::Negate<G, C>
     {
         crate::operators::Negate::negate(&self.inner).as_collection()
@@ -455,6 +455,7 @@ impl<G: Scope, D: Clone+'static, R: Clone+'static> Collection<G, D, R> {
     /// to all of the data timestamps).
     pub fn delay<F>(&self, func: F) -> Collection<G, D, R>
     where
+        G::Timestamp: Hash,
         F: FnMut(&G::Timestamp) -> G::Timestamp + Clone + 'static,
     {
         let mut func1 = func.clone();

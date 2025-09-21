@@ -268,8 +268,6 @@ impl<T: Columnation> PushInto<&&T> for TimelyStack<T> {
 }
 
 mod container {
-    use std::ops::Deref;
-
     use columnation::Columnation;
 
     use crate::containers::TimelyStack;
@@ -277,11 +275,6 @@ mod container {
     impl<T: Columnation> timely::container::Accountable for TimelyStack<T> {
         #[inline] fn record_count(&self) -> i64 { i64::try_from(self.local.len()).unwrap() }
         #[inline] fn is_empty(&self) -> bool { self.local.is_empty() }
-    }
-    impl<T: Columnation> timely::container::IterContainer for TimelyStack<T> {
-        type ItemRef<'a> = &'a T where Self: 'a;
-        type Iter<'a> = std::slice::Iter<'a, T> where Self: 'a;
-        #[inline] fn iter(&self) -> Self::Iter<'_> { self.deref().iter() }
     }
     impl<T: Columnation> timely::container::DrainContainer for TimelyStack<T> {
         type Item<'a> = &'a T where Self: 'a;

@@ -228,6 +228,7 @@ pub mod source {
     use std::marker::{Send, Sync};
     use std::sync::Arc;
     use timely::dataflow::{Scope, Stream, operators::{Capability, CapabilitySet}};
+    use timely::dataflow::operators::generic::OutputBuilder;
     use timely::progress::Timestamp;
     use timely::scheduling::SyncActivator;
 
@@ -313,8 +314,11 @@ pub mod source {
         let activator2 = scope.activator_for(Rc::clone(&address));
         let drop_activator = DropActivator { activator: Arc::new(scope.sync_activator_for(address.to_vec())) };
         let mut source = source_builder(activator);
-        let (mut updates_out, updates) = messages_op.new_output();
-        let (mut progress_out, progress) = messages_op.new_output();
+        let (updates_out, updates) = messages_op.new_output();
+        let mut updates_out = OutputBuilder::from(updates_out);
+        let (progress_out, progress) = messages_op.new_output();
+        let mut progress_out = OutputBuilder::from(progress_out);
+
         messages_op.build(|capabilities| {
 
             // A Weak that communicates whether the returned token has been dropped.
@@ -387,8 +391,11 @@ pub mod source {
         // Step 2: The UPDATES operator.
         let mut updates_op = OperatorBuilder::new("CDCV2_Updates".to_string(), scope.clone());
         let mut input = updates_op.new_input(&updates, Exchange::new(|x: &(D, T, R)| x.hashed()));
-        let (mut changes_out, changes) = updates_op.new_output();
-        let (mut counts_out, counts) = updates_op.new_output();
+        let (changes_out, changes) = updates_op.new_output();
+        let mut changes_out = OutputBuilder::from(changes_out);
+        let (counts_out, counts) = updates_op.new_output();
+        let mut counts_out = OutputBuilder::from(counts_out);
+
         updates_op.build(move |_capability| {
             // Deduplicates updates, and ships novel updates and the counts for each time.
             // For simplicity, this operator ships updates as they are discovered to be new.
@@ -438,7 +445,8 @@ pub mod source {
         );
         let mut counts =
             progress_op.new_input(&counts, Exchange::new(|x: &(T, i64)| (x.0).hashed()));
-        let (mut frontier_out, frontier) = progress_op.new_output();
+        let (frontier_out, frontier) = progress_op.new_output();
+        let mut frontier_out = OutputBuilder::from(frontier_out);
         progress_op.build(move |_capability| {
             // Receive progress statements, deduplicated counts. Track lower frontier of both and broadcast changes.
 
@@ -554,7 +562,7 @@ pub mod sink {
     use timely::progress::{Antichain, ChangeBatch, Timestamp};
     use timely::dataflow::{Scope, Stream};
     use timely::dataflow::channels::pact::{Exchange, Pipeline};
-    use timely::dataflow::operators::generic::{FrontieredInputHandle, builder_rc::OperatorBuilder};
+    use timely::dataflow::operators::generic::{builder_rc::OperatorBuilder, OutputBuilder};
 
     use crate::{lattice::Lattice, ExchangeData};
     use super::{Writer, Message, Progress};
@@ -583,7 +591,8 @@ pub mod sink {
         let mut builder = OperatorBuilder::new("UpdatesWriter".to_owned(), stream.scope());
         let reactivator = stream.scope().activator_for(builder.operator_info().address);
         let mut input = builder.new_input(stream, Pipeline);
-        let (mut updates_out, updates) = builder.new_output();
+        let (updates_out, updates) = builder.new_output();
+        let mut updates_out = OutputBuilder::from(updates_out);
 
         builder.build_reschedule(
             move |_capability| {
@@ -650,7 +659,6 @@ pub mod sink {
 
         builder.build_reschedule(|_capabilities| {
             move |frontiers| {
-                let mut input = FrontieredInputHandle::new(&mut input, &frontiers[0]);
 
                 // We want to drain inputs no matter what.
                 // We could do this after the next step, as we are certain these timestamps will
@@ -667,9 +675,9 @@ pub mod sink {
                         // If our frontier advances strictly, we have the opportunity to issue a progress statement.
                         if <_ as PartialOrder>::less_than(
                             &frontier.borrow(),
-                            &input.frontier.frontier(),
+                            &frontiers[0].frontier(),
                         ) {
-                            let new_frontier = input.frontier.frontier();
+                            let new_frontier = frontiers[0].frontier();
 
                             // Extract the timestamp counts to announce.
                             let mut announce = Vec::new();
@@ -691,7 +699,7 @@ pub mod sink {
                             send_queue.push_back(Message::Progress(progress));
 
                             // Advance our frontier to track our progress utterance.
-                            frontier = input.frontier.frontier().to_owned();
+                            frontier = frontiers[0].frontier().to_owned();
 
                             while let Some(message) = send_queue.front() {
                                 if let Some(duration) = sink.poll(message) {
