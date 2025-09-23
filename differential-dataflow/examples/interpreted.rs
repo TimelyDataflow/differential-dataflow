@@ -28,7 +28,7 @@ fn main() {
         let graph = GraphMMap::new(&filename);
         let nodes = graph.nodes();
         let edges = (0..nodes).filter(move |node| node % peers == index)
-                              .flat_map(|node| graph.edges(node).iter().cloned().map(move |dst| ((node as u32, dst))))
+                              .flat_map(|node| graph.edges(node).iter().cloned().map(move |dst| (node as u32, dst)))
                               .map(|(src, dst)| ((src, dst), Default::default(), 1))
                               .collect::<Vec<_>>();
 
@@ -42,7 +42,7 @@ fn main() {
 }
 
 fn interpret<G>(edges: &Collection<G, Edge>, relations: &[(usize, usize)]) -> Collection<G, Vec<Node>>
-where 
+where
     G: Scope<Timestamp: Lattice+Hash+Ord>,
 {
 
