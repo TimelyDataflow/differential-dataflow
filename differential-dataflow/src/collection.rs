@@ -204,13 +204,80 @@ impl<G: Scope, D, R, C: Container> Collection<G, D, R, C> {
     ///         .assert_eq(&evens);
     /// });
     /// ```
-    // TODO: Removing this function is possible, but breaks existing callers of `negate` who expect
-    //       an inherent method on `Collection`.
-    pub fn negate(&self) -> Collection<G, D, R, C>
-    where 
-        StreamCore<G, C>: crate::operators::Negate<G, C>
+    pub fn negate(&self) -> Collection<G, D, R, C> where C: traits::Negate {
+        use timely::dataflow::channels::pact::Pipeline;
+        self.inner
+            .unary(Pipeline, "Negate", move |_,_| move |input, output| {
+                input.for_each(|time, data| output.session(&time).give_container(&mut std::mem::take(data).negate()));
+            })
+            .as_collection()
+    }
+
+    /// Brings a Collection into a nested scope.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use timely::dataflow::Scope;
+    /// use differential_dataflow::input::Input;
+    ///
+    /// ::timely::example(|scope| {
+    ///
+    ///     let data = scope.new_collection_from(1 .. 10).1;
+    ///
+    ///     let result = scope.region(|child| {
+    ///         data.enter(child)
+    ///             .leave()
+    ///     });
+    ///
+    ///     data.assert_eq(&result);
+    /// });
+    /// ```
+    pub fn enter<'a, T>(&self, child: &Child<'a, G, T>) -> Collection<Child<'a, G, T>, D, R, <C as traits::Enter<<G as ScopeParent>::Timestamp, T>>::InnerContainer>
+    where
+        C: traits::Enter<<G as ScopeParent>::Timestamp, T, InnerContainer: Container>,
+        T: Refines<<G as ScopeParent>::Timestamp>,
     {
-        crate::operators::Negate::negate(&self.inner).as_collection()
+        use timely::dataflow::channels::pact::Pipeline;
+        self.inner
+            .enter(child)
+            .unary(Pipeline, "Enter", move |_,_| move |input, output| {
+                input.for_each(|time, data| output.session(&time).give_container(&mut std::mem::take(data).enter()));
+            })
+            .as_collection()
+    }
+
+    /// Advances a timestamp in the stream according to the timestamp actions on the path.
+    ///
+    /// The path may advance the timestamp sufficiently that it is no longer valid, for example if
+    /// incrementing fields would result in integer overflow. In this case, the record is dropped.
+    ///
+    /// # Examples
+    /// ```
+    /// use timely::dataflow::Scope;
+    /// use timely::dataflow::operators::{ToStream, Concat, Inspect, BranchWhen};
+    ///
+    /// use differential_dataflow::input::Input;
+    /// use differential_dataflow::operators::ResultsIn;
+    ///
+    /// timely::example(|scope| {
+    ///     let summary1 = 5;
+    ///
+    ///     let data = scope.new_collection_from(1 .. 10).1;
+    ///     /// Applies `results_in` on every timestamp in the collection.
+    ///     data.results_in(summary1);
+    /// });
+    /// ```
+    pub fn results_in(&self, step: <G::Timestamp as Timestamp>::Summary) -> Self
+    where
+        C: traits::ResultsIn<<G::Timestamp as Timestamp>::Summary>,
+    {
+        use timely::dataflow::channels::pact::Pipeline;
+        self.inner
+            .unary(Pipeline, "ResultsIn", move |_,_| move |input, output| {
+                input.for_each(|time, data| output.session(&time).give_container(&mut std::mem::take(data).results_in(&step)));
+            })
+            .as_collection()
     }
 }
 
@@ -379,36 +446,6 @@ impl<G: Scope, D: Clone+'static, R: Clone+'static> Collection<G, D, R> {
             .as_collection()
     }
 
-    /// Brings a Collection into a nested scope.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use timely::dataflow::Scope;
-    /// use differential_dataflow::input::Input;
-    ///
-    /// ::timely::example(|scope| {
-    ///
-    ///     let data = scope.new_collection_from(1 .. 10).1;
-    ///
-    ///     let result = scope.region(|child| {
-    ///         data.enter(child)
-    ///             .leave()
-    ///     });
-    ///
-    ///     data.assert_eq(&result);
-    /// });
-    /// ```
-    pub fn enter<'a, T>(&self, child: &Child<'a, G, T>) -> Collection<Child<'a, G, T>, D, R>
-    where
-        T: Refines<<G as ScopeParent>::Timestamp>,
-    {
-        self.inner
-            .enter(child)
-            .map(|(data, time, diff)| (data, T::to_inner(time), diff))
-            .as_collection()
-    }
-
     /// Brings a Collection into a nested scope, at varying times.
     ///
     /// The `initial` function indicates the time at which each element of the Collection should appear.
@@ -558,8 +595,9 @@ use timely::dataflow::scopes::ScopeParent;
 use timely::progress::timestamp::Refines;
 
 /// Methods requiring a nested scope.
-impl<'a, G: Scope, T: Timestamp, D: Clone+'static, R: Clone+'static> Collection<Child<'a, G, T>, D, R>
+impl<'a, G: Scope, T: Timestamp, D: Clone+'static, R: Clone+'static, C: Container> Collection<Child<'a, G, T>, D, R, C>
 where
+    C: traits::Leave<T, G::Timestamp, OuterContainer: Container>,
     T: Refines<<G as ScopeParent>::Timestamp>,
 {
     /// Returns the final value of a Collection from a nested scope to its containing scope.
@@ -582,10 +620,13 @@ where
     ///     data.assert_eq(&result);
     /// });
     /// ```
-    pub fn leave(&self) -> Collection<G, D, R> {
+    pub fn leave(&self) -> Collection<G, D, R, <C as traits::Leave<T, G::Timestamp>>::OuterContainer> {
+        use timely::dataflow::channels::pact::Pipeline;
         self.inner
             .leave()
-            .map(|(data, time, diff)| (data, time.to_outer(), diff))
+            .unary(Pipeline, "Leave", move |_,_| move |input, output| {
+                input.for_each(|time, data| output.session(&time).give_container(&mut std::mem::take(data).leave()));
+            })
             .as_collection()
     }
 }
@@ -689,4 +730,65 @@ where
     scope
         .concatenate(iterator.into_iter().map(|x| x.inner))
         .as_collection()
+}
+
+/// Traits that can be implemented by containers to provide functionality to collections based on them.
+pub mod traits {
+
+    use timely::progress::{Timestamp, timestamp::Refines};
+    use crate::collection::Abelian;
+
+    /// A container that can negate its updates.
+    pub trait Negate {
+        /// Negates Abelian differences of each update.
+        fn negate(self) -> Self;
+    }
+    impl<D, T, R: Abelian> Negate for Vec<(D, T, R)> {
+        fn negate(mut self) -> Self {
+            for (_data, _time, diff) in self.iter_mut() {
+                diff.negate();
+            }
+            self
+        }
+    }
+
+    /// A container that can enter from timestamp `T1` into timestamp `T2`.
+    pub trait Enter<T1, T2> {
+        /// The resulting container type.
+        type InnerContainer;
+        /// Update timestamps from `T1` to `T2`.
+        fn enter(self) -> Self::InnerContainer;
+    }
+    impl<D, T1: Timestamp, T2: Refines<T1>, R> Enter<T1, T2> for Vec<(D, T1, R)> {
+        type InnerContainer = Vec<(D, T2, R)>;
+        fn enter(self) -> Self::InnerContainer {
+            self.into_iter().map(|(d,t1,r)| (d,T2::to_inner(t1),r)).collect()
+        }
+    }
+
+    /// A container that can leave from timestamp `T1` into timestamp `T2`.
+    pub trait Leave<T1, T2> {
+        /// The resulting container type.
+        type OuterContainer;
+        /// Update timestamps from `T1` to `T2`.
+        fn leave(self) -> Self::OuterContainer;
+    }
+    impl<D, T1: Refines<T2>, T2: Timestamp, R> Leave<T1, T2> for Vec<(D, T1, R)> {
+        type OuterContainer = Vec<(D, T2, R)>;
+        fn leave(self) -> Self::OuterContainer {
+            self.into_iter().map(|(d,t1,r)| (d,t1.to_outer(),r)).collect()
+        }
+    }
+
+    /// A container that can advance timestamps by a summary `TS`.
+    pub trait ResultsIn<TS> {
+        /// Advance times in the container by `step`.
+        fn results_in(self, step: &TS) -> Self;
+    }
+    impl<D, T: Timestamp, R> ResultsIn<T::Summary> for Vec<(D, T, R)> {
+        fn results_in(self, step: &T::Summary) -> Self {
+            use timely::progress::PathSummary;
+            self.into_iter().filter_map(move |(d,t,r)| step.results_in(&t).map(|t| (d,t,r))).collect()
+        }
+    }
 }

@@ -34,7 +34,7 @@ use std::fmt::Debug;
 use std::ops::Deref;
 
 use timely::Container;
-use timely::progress::{Timestamp, PathSummary};
+use timely::progress::Timestamp;
 use timely::order::Product;
 
 use timely::dataflow::*;
@@ -42,7 +42,7 @@ use timely::dataflow::scopes::child::Iterative;
 use timely::dataflow::operators::{Feedback, ConnectLoop};
 use timely::dataflow::operators::feedback::Handle;
 
-use crate::{Data, Collection, AsCollection};
+use crate::{Data, Collection};
 use crate::difference::{Semigroup, Abelian};
 use crate::lattice::Lattice;
 
@@ -167,7 +167,7 @@ where
 impl<G, D: Data, R: Abelian, C: Container> Variable<G, D, R, C>
 where
     G: Scope<Timestamp: Lattice>,
-    StreamCore<G, C>: crate::operators::Negate<G, C> + ResultsIn<G, C>,
+    C: crate::collection::traits::Negate + crate::collection::traits::ResultsIn<<G::Timestamp as Timestamp>::Summary>,
 {
     /// Creates a new initially empty `Variable`.
     ///
@@ -210,8 +210,8 @@ where
     pub fn set_concat(self, result: &Collection<G, D, R, C>) -> Collection<G, D, R, C> {
         let step = self.step;
         result
-            .inner
             .results_in(step)
+            .inner
             .connect_loop(self.feedback);
 
         self.collection
@@ -246,7 +246,7 @@ where
 impl<G, D: Data, R: Semigroup, C: Container> SemigroupVariable<G, D, R, C>
 where
     G: Scope<Timestamp: Lattice>,
-    StreamCore<G, C>: ResultsIn<G, C>,
+    C: crate::collection::traits::ResultsIn<<G::Timestamp as Timestamp>::Summary>,
 {
     /// Creates a new initially empty `SemigroupVariable`.
     pub fn new(scope: &mut G, step: <G::Timestamp as Timestamp>::Summary) -> Self {
@@ -259,8 +259,8 @@ where
     pub fn set(self, result: &Collection<G, D, R, C>) -> Collection<G, D, R, C> {
         let step = self.step;
         result
-            .inner
             .results_in(step)
+            .inner
             .connect_loop(self.feedback);
 
         self.collection
@@ -271,49 +271,5 @@ impl<G: Scope, D: Data, R: Semigroup, C: Container> Deref for SemigroupVariable<
     type Target = Collection<G, D, R, C>;
     fn deref(&self) -> &Self::Target {
         &self.collection
-    }
-}
-
-/// Extension trait for streams.
-pub trait ResultsIn<G: Scope, C> {
-    /// Advances a timestamp in the stream according to the timestamp actions on the path.
-    ///
-    /// The path may advance the timestamp sufficiently that it is no longer valid, for example if
-    /// incrementing fields would result in integer overflow. In this case, the record is dropped.
-    ///
-    /// # Examples
-    /// ```
-    /// use timely::dataflow::Scope;
-    /// use timely::dataflow::operators::{ToStream, Concat, Inspect, BranchWhen};
-    ///
-    /// use differential_dataflow::input::Input;
-    /// use differential_dataflow::operators::ResultsIn;
-    ///
-    /// timely::example(|scope| {
-    ///     let summary1 = 5;
-    ///
-    ///     let data = scope.new_collection_from(1 .. 10).1;
-    ///     /// Applies `results_in` on every timestamp in the collection.
-    ///     data.results_in(summary1);
-    /// });
-    /// ```
-    fn results_in(&self, step: <G::Timestamp as Timestamp>::Summary) -> Self;
-}
-
-impl<G, D, R, C> ResultsIn<G, C> for Collection<G, D, R, C>
-where
-    G: Scope,
-    C: Clone,
-    StreamCore<G, C>: ResultsIn<G, C>,
-{
-    fn results_in(&self, step: <G::Timestamp as Timestamp>::Summary) -> Self {
-        self.inner.results_in(step).as_collection()
-    }
-}
-
-impl<G: Scope, D: timely::Data, R: timely::Data> ResultsIn<G, Vec<(D, G::Timestamp, R)>> for Stream<G, (D, G::Timestamp, R)> {
-    fn results_in(&self, step: <G::Timestamp as Timestamp>::Summary) -> Self {
-        use timely::dataflow::operators::Map;
-        self.flat_map(move |(x,t,d)| step.results_in(&t).map(|t| (x,t,d)))
     }
 }
