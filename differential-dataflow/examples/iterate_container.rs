@@ -36,7 +36,7 @@ impl<C: ResultsIn<TS>, TS> ResultsIn<TS> for ContainerWrapper<C> {
 fn wrap<G: Scope, C: timely::Container>(stream: &StreamCore<G, C>) -> StreamCore<G, ContainerWrapper<C>> {
     let mut builder = OperatorBuilder::new("Wrap".to_string(), stream.scope());
     let (mut output, stream_out) = builder.new_output();
-    let mut input = builder.new_input_connection(stream, Pipeline, vec![]);
+    let mut input = builder.new_input(stream, Pipeline);
     builder.build(move |_capability| move |_frontier| {
         let mut output = output.activate();
         input.for_each(|time, data| {
