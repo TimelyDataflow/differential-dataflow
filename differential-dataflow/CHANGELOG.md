@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.0](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dataflow-v0.17.0...differential-dataflow-v0.18.0) - 2025-09-26
+
+### Other
+
+- Extract `VecCollection` from `Collection` ([#651](https://github.com/TimelyDataflow/differential-dataflow/pull/651))
+- Introduce traits for collection containers ([#650](https://github.com/TimelyDataflow/differential-dataflow/pull/650))
+- Correct some clippy nit ([#649](https://github.com/TimelyDataflow/differential-dataflow/pull/649))
+- Batcher implementation that has no opinions about chains, and columnar. ([#626](https://github.com/TimelyDataflow/differential-dataflow/pull/626))
+
 ## [0.17.0](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dataflow-v0.16.2...differential-dataflow-v0.17.0) - 2025-09-15
 
 ### Other
