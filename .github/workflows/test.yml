@@ -25,6 +25,8 @@ jobs:
           toolchain: ${{ matrix.toolchain }}
       - name: Cargo test
         run: cargo test --workspace --all-targets
+      - name: Cargo doc test
+        run: cargo test --doc
 
   # Check formatting with rustfmt
   mdbook:

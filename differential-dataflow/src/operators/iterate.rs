@@ -167,7 +167,7 @@ where
 impl<G, D: Data, R: Abelian, C: Container> Variable<G, D, R, C>
 where
     G: Scope<Timestamp: Lattice>,
-    C: crate::collection::traits::Negate + crate::collection::traits::ResultsIn<<G::Timestamp as Timestamp>::Summary>,
+    C: crate::collection::containers::Negate + crate::collection::containers::ResultsIn<<G::Timestamp as Timestamp>::Summary>,
 {
     /// Creates a new initially empty `Variable`.
     ///
@@ -246,7 +246,7 @@ where
 impl<G, D: Data, R: Semigroup, C: Container> SemigroupVariable<G, D, R, C>
 where
     G: Scope<Timestamp: Lattice>,
-    C: crate::collection::traits::ResultsIn<<G::Timestamp as Timestamp>::Summary>,
+    C: crate::collection::containers::ResultsIn<<G::Timestamp as Timestamp>::Summary>,
 {
     /// Creates a new initially empty `SemigroupVariable`.
     pub fn new(scope: &mut G, step: <G::Timestamp as Timestamp>::Summary) -> Self {

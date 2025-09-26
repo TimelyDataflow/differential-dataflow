@@ -204,7 +204,7 @@ impl<G: Scope, D, R, C: Container> Collection<G, D, R, C> {
     ///         .assert_eq(&evens);
     /// });
     /// ```
-    pub fn negate(&self) -> Collection<G, D, R, C> where C: traits::Negate {
+    pub fn negate(&self) -> Collection<G, D, R, C> where C: containers::Negate {
         use timely::dataflow::channels::pact::Pipeline;
         self.inner
             .unary(Pipeline, "Negate", move |_,_| move |input, output| {
@@ -233,9 +233,9 @@ impl<G: Scope, D, R, C: Container> Collection<G, D, R, C> {
     ///     data.assert_eq(&result);
     /// });
     /// ```
-    pub fn enter<'a, T>(&self, child: &Child<'a, G, T>) -> Collection<Child<'a, G, T>, D, R, <C as traits::Enter<<G as ScopeParent>::Timestamp, T>>::InnerContainer>
+    pub fn enter<'a, T>(&self, child: &Child<'a, G, T>) -> Collection<Child<'a, G, T>, D, R, <C as containers::Enter<<G as ScopeParent>::Timestamp, T>>::InnerContainer>
     where
-        C: traits::Enter<<G as ScopeParent>::Timestamp, T, InnerContainer: Container>,
+        C: containers::Enter<<G as ScopeParent>::Timestamp, T, InnerContainer: Container>,
         T: Refines<<G as ScopeParent>::Timestamp>,
     {
         use timely::dataflow::channels::pact::Pipeline;
@@ -258,7 +258,6 @@ impl<G: Scope, D, R, C: Container> Collection<G, D, R, C> {
     /// use timely::dataflow::operators::{ToStream, Concat, Inspect, BranchWhen};
     ///
     /// use differential_dataflow::input::Input;
-    /// use differential_dataflow::operators::ResultsIn;
     ///
     /// timely::example(|scope| {
     ///     let summary1 = 5;
@@ -270,7 +269,7 @@ impl<G: Scope, D, R, C: Container> Collection<G, D, R, C> {
     /// ```
     pub fn results_in(&self, step: <G::Timestamp as Timestamp>::Summary) -> Self
     where
-        C: traits::ResultsIn<<G::Timestamp as Timestamp>::Summary>,
+        C: containers::ResultsIn<<G::Timestamp as Timestamp>::Summary>,
     {
         use timely::dataflow::channels::pact::Pipeline;
         self.inner
@@ -597,7 +596,7 @@ use timely::progress::timestamp::Refines;
 /// Methods requiring a nested scope.
 impl<'a, G: Scope, T: Timestamp, D: Clone+'static, R: Clone+'static, C: Container> Collection<Child<'a, G, T>, D, R, C>
 where
-    C: traits::Leave<T, G::Timestamp, OuterContainer: Container>,
+    C: containers::Leave<T, G::Timestamp, OuterContainer: Container>,
     T: Refines<<G as ScopeParent>::Timestamp>,
 {
     /// Returns the final value of a Collection from a nested scope to its containing scope.
@@ -620,7 +619,7 @@ where
     ///     data.assert_eq(&result);
     /// });
     /// ```
-    pub fn leave(&self) -> Collection<G, D, R, <C as traits::Leave<T, G::Timestamp>>::OuterContainer> {
+    pub fn leave(&self) -> Collection<G, D, R, <C as containers::Leave<T, G::Timestamp>>::OuterContainer> {
         use timely::dataflow::channels::pact::Pipeline;
         self.inner
             .leave()
@@ -733,7 +732,7 @@ where
 }
 
 /// Traits that can be implemented by containers to provide functionality to collections based on them.
-pub mod traits {
+pub mod containers {
 
     use timely::progress::{Timestamp, timestamp::Refines};
     use crate::collection::Abelian;

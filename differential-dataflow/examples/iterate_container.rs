@@ -8,7 +8,7 @@ use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use differential_dataflow::{AsCollection, Collection};
 use differential_dataflow::input::Input;
 use differential_dataflow::operators::iterate::Variable;
-use differential_dataflow::collection::traits::{Enter, Leave, Negate, ResultsIn};
+use differential_dataflow::collection::containers::{Enter, Leave, Negate, ResultsIn};
 
 /// A wrapper around a container that implements the necessary traits to be used in iterative scopes.
 #[derive(Clone, Default)]
