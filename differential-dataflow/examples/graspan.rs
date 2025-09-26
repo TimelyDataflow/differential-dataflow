@@ -12,7 +12,7 @@ use differential_dataflow::Collection;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::input::{Input, InputSession};
 use differential_dataflow::operators::arrange::{ArrangeByKey, ArrangeBySelf};
-use differential_dataflow::operators::iterate::Variable;
+use differential_dataflow::operators::iterate::VariableRow;
 use differential_dataflow::operators::Threshold;
 
 type Node = usize;
@@ -83,7 +83,7 @@ type Arrange<G,K,V,R> = Arranged<G, TraceValHandle<K, V, <G as ScopeParent>::Tim
 /// An edge variable provides arranged representations of its contents, even before they are
 /// completely defined, in support of recursively defined productions.
 pub struct EdgeVariable<G: Scope<Timestamp: Lattice>> {
-    variable: Variable<G, Edge, Diff>,
+    variable: VariableRow<G, Edge, Diff>,
     current: Collection<G, Edge, Diff>,
     forward: Option<Arrange<G, Node, Node, Diff>>,
     reverse: Option<Arrange<G, Node, Node, Diff>>,
@@ -92,7 +92,7 @@ pub struct EdgeVariable<G: Scope<Timestamp: Lattice>> {
 impl<G: Scope<Timestamp: Lattice>> EdgeVariable<G> {
     /// Creates a new variable initialized with `source`.
     pub fn from(source: &Collection<G, Edge>, step: <G::Timestamp as Timestamp>::Summary) -> Self {
-        let variable = Variable::new(&mut source.scope(), step);
+        let variable = VariableRow::new(&mut source.scope(), step);
         EdgeVariable {
             variable: variable,
             current: source.clone(),
@@ -153,7 +153,7 @@ impl Query {
 
     /// Creates a dataflow implementing the query, and returns input and trace handles.
     pub fn render_in<G>(&self, scope: &mut G) -> IndexMap<String, RelationHandles<G::Timestamp>>
-    where 
+    where
         G: Scope<Timestamp: Lattice+::timely::order::TotalOrder>,
     {
         // Create new input (handle, stream) pairs

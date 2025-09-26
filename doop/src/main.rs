@@ -11,7 +11,7 @@ use differential_dataflow::{AsCollection, Collection, Hashable};
 use differential_dataflow::ExchangeData as Data;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::input::Input;
-use differential_dataflow::operators::iterate::Variable;
+use differential_dataflow::operators::iterate::VariableRow;
 use differential_dataflow::operators::{Threshold, Join, JoinCore};
 use differential_dataflow::operators::arrange::ArrangeByKey;
 
@@ -56,7 +56,7 @@ type MethodInvocation = Instruction;
 
 /// Set-valued collection.
 pub struct Relation<'a, G: Scope, D: Data+Hashable> where G::Timestamp : Lattice {
-    variable: Variable<Child<'a, G, Iter>, D, Diff>,
+    variable: VariableRow<Child<'a, G, Iter>, D, Diff>,
     current: Collection<Child<'a, G, Iter>, D, Diff>,
 }
 
@@ -68,7 +68,7 @@ impl<'a, G: Scope, D: Data+Hashable> Relation<'a, G, D> where G::Timestamp : Lat
     /// Creates a new variable initialized with `source`.
     pub fn new_from(source: &Collection<Child<'a, G, Iter>, D, Diff>) -> Self {
         use ::timely::order::Product;
-        let variable = Variable::new_from(source.clone(), Product::new(Default::default(), 1));
+        let variable = VariableRow::new_from(source.clone(), Product::new(Default::default(), 1));
         Relation {
             variable: variable,
             current: source.clone(),

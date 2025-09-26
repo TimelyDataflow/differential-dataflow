@@ -46,7 +46,7 @@ In the example above, we could rewrite
 # use timely::dataflow::Scope;
 # use differential_dataflow::Collection;
 # use differential_dataflow::operators::{Join, Threshold};
-# use differential_dataflow::operators::{Iterate, iterate::Variable};
+# use differential_dataflow::operators::{Iterate, iterate::VariableRow};
 # use differential_dataflow::lattice::Lattice;
 # fn example<G: Scope>(manages: &Collection<G, (u64, u64)>)
 # where G::Timestamp: Lattice
@@ -87,18 +87,18 @@ As an example, the implementation of the `iterate` operator looks something like
 # use timely::dataflow::scopes::Child;
 # use timely::progress::Antichain;
 # use differential_dataflow::Collection;
-# use differential_dataflow::operators::{Iterate, iterate::Variable};
+# use differential_dataflow::operators::{Iterate, iterate::VariableRow};
 # use differential_dataflow::lattice::Lattice;
-# fn logic<'a, G: Scope>(variable: &Variable<Child<'a, G, G::Timestamp>, (u64, u64), isize>) -> Collection<Child<'a, G, G::Timestamp>, (u64, u64)>
+# fn logic<'a, G: Scope>(variable: &VariableRow<Child<'a, G, G::Timestamp>, (u64, u64), isize>) -> Collection<Child<'a, G, G::Timestamp>, (u64, u64)>
 # where G::Timestamp: Lattice
 # {
 #     (*variable).clone()
 # }
-# fn example<'a, G: Scope<Timestamp=u64>>(collection: &Collection<G, (u64, u64)>) //, logic: impl Fn(&Variable<Child<'a, G, G::Timestamp>, (u64, u64), isize>) -> Collection<Child<'a, G, G::Timestamp>, (u64, u64)>)
+# fn example<'a, G: Scope<Timestamp=u64>>(collection: &Collection<G, (u64, u64)>) //, logic: impl Fn(&VariableRow<Child<'a, G, G::Timestamp>, (u64, u64), isize>) -> Collection<Child<'a, G, G::Timestamp>, (u64, u64)>)
 #    where G::Timestamp: Lattice
 # {
     collection.scope().scoped("inner", |subgraph| {
-        let variable = Variable::new_from(collection.enter(subgraph), 1);
+        let variable = VariableRow::new_from(collection.enter(subgraph), 1);
         let result = logic(&variable);
         variable.set(&result);
         result.leave()

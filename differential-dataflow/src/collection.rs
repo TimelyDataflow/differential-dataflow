@@ -37,8 +37,15 @@ use crate::hashable::Hashable;
 /// parameter is the type of data in your collection, for example `String`, or `(u32, Vec<Option<()>>)`.
 /// The `R` parameter represents the types of changes that the data undergo, and is most commonly (and
 /// defaults to) `isize`, representing changes to the occurrence count of each record.
+pub type Collection<G, D, R = isize> = CollectionCore<G, Vec<(D, <G as ScopeParent>::Timestamp, R)>>;
+
+/// A collection represented by a stream of abstract containers.
+///
+/// The containers purport to reperesent changes to a collection, and they must implement various traits
+/// in order to expose some of this functionality (e.g. negation, timestamp manipulation). Other actions
+/// on the containers, and streams of containers, are left to the container implementor to describe.
 #[derive(Clone)]
-pub struct Collection<G: Scope, D, R = isize, C = Vec<(D, <G as ScopeParent>::Timestamp, R)>> {
+pub struct CollectionCore<G: Scope, C> {
     /// The underlying timely dataflow stream.
     ///
     /// This field is exposed to support direct timely dataflow manipulation when required, but it is
@@ -48,11 +55,9 @@ pub struct Collection<G: Scope, D, R = isize, C = Vec<(D, <G as ScopeParent>::Ti
     /// the timely-dataflow sense. If this invariant is not upheld, differential operators may behave
     /// unexpectedly.
     pub inner: timely::dataflow::StreamCore<G, C>,
-    /// Phantom data for unreferenced `D` and `R` types.
-    phantom: std::marker::PhantomData<(D, R)>,
 }
 
-impl<G: Scope, D, R, C> Collection<G, D, R, C> {
+impl<G: Scope, C> CollectionCore<G, C> {
     /// Creates a new Collection from a timely dataflow stream.
     ///
     /// This method seems to be rarely used, with the `as_collection` method on streams being a more
@@ -62,11 +67,9 @@ impl<G: Scope, D, R, C> Collection<G, D, R, C> {
     ///
     /// This stream should satisfy the timestamp invariant as documented on [Collection]; this
     /// method does not check it.
-    pub fn new(stream: StreamCore<G, C>) -> Collection<G, D, R, C> {
-        Collection { inner: stream, phantom: std::marker::PhantomData }
-    }
+    pub fn new(stream: StreamCore<G, C>) -> Self { Self { inner: stream } }
 }
-impl<G: Scope, D, R, C: Container> Collection<G, D, R, C> {
+impl<G: Scope, C: Container> CollectionCore<G, C> {
     /// Creates a new collection accumulating the contents of the two collections.
     ///
     /// Despite the name, differential dataflow collections are unordered. This method is so named because the
@@ -128,7 +131,7 @@ impl<G: Scope, D, R, C: Container> Collection<G, D, R, C> {
     ///
     /// This method is a specialization of `enter` to the case where the nested scope is a region.
     /// It removes the need for an operator that adjusts the timestamp.
-    pub fn enter_region<'a>(&self, child: &Child<'a, G, <G as ScopeParent>::Timestamp>) -> Collection<Child<'a, G, <G as ScopeParent>::Timestamp>, D, R, C> {
+    pub fn enter_region<'a>(&self, child: &Child<'a, G, <G as ScopeParent>::Timestamp>) -> CollectionCore<Child<'a, G, <G as ScopeParent>::Timestamp>, C> {
         self.inner
             .enter(child)
             .as_collection()
@@ -204,7 +207,7 @@ impl<G: Scope, D, R, C: Container> Collection<G, D, R, C> {
     ///         .assert_eq(&evens);
     /// });
     /// ```
-    pub fn negate(&self) -> Collection<G, D, R, C> where C: containers::Negate {
+    pub fn negate(&self) -> Self where C: containers::Negate {
         use timely::dataflow::channels::pact::Pipeline;
         self.inner
             .unary(Pipeline, "Negate", move |_,_| move |input, output| {
@@ -233,7 +236,7 @@ impl<G: Scope, D, R, C: Container> Collection<G, D, R, C> {
     ///     data.assert_eq(&result);
     /// });
     /// ```
-    pub fn enter<'a, T>(&self, child: &Child<'a, G, T>) -> Collection<Child<'a, G, T>, D, R, <C as containers::Enter<<G as ScopeParent>::Timestamp, T>>::InnerContainer>
+    pub fn enter<'a, T>(&self, child: &Child<'a, G, T>) -> CollectionCore<Child<'a, G, T>, <C as containers::Enter<<G as ScopeParent>::Timestamp, T>>::InnerContainer>
     where
         C: containers::Enter<<G as ScopeParent>::Timestamp, T, InnerContainer: Container>,
         T: Refines<<G as ScopeParent>::Timestamp>,
@@ -594,7 +597,7 @@ use timely::dataflow::scopes::ScopeParent;
 use timely::progress::timestamp::Refines;
 
 /// Methods requiring a nested scope.
-impl<'a, G: Scope, T: Timestamp, D: Clone+'static, R: Clone+'static, C: Container> Collection<Child<'a, G, T>, D, R, C>
+impl<'a, G: Scope, T: Timestamp, C: Container> CollectionCore<Child<'a, G, T>, C>
 where
     C: containers::Leave<T, G::Timestamp, OuterContainer: Container>,
     T: Refines<<G as ScopeParent>::Timestamp>,
@@ -619,7 +622,7 @@ where
     ///     data.assert_eq(&result);
     /// });
     /// ```
-    pub fn leave(&self) -> Collection<G, D, R, <C as containers::Leave<T, G::Timestamp>>::OuterContainer> {
+    pub fn leave(&self) -> CollectionCore<G, <C as containers::Leave<T, G::Timestamp>>::OuterContainer> {
         use timely::dataflow::channels::pact::Pipeline;
         self.inner
             .leave()
@@ -631,13 +634,13 @@ where
 }
 
 /// Methods requiring a region as the scope.
-impl<G: Scope, D, R, C: Container+Data> Collection<Child<'_, G, G::Timestamp>, D, R, C>
+impl<G: Scope, C: Container+Data> CollectionCore<Child<'_, G, G::Timestamp>, C>
 {
     /// Returns the value of a Collection from a nested region to its containing scope.
     ///
     /// This method is a specialization of `leave` to the case that of a nested region.
     /// It removes the need for an operator that adjusts the timestamp.
-    pub fn leave_region(&self) -> Collection<G, D, R, C> {
+    pub fn leave_region(&self) -> CollectionCore<G, C> {
         self.inner
             .leave()
             .as_collection()
@@ -682,18 +685,18 @@ impl<G: Scope<Timestamp: Data>, D: Clone+'static, R: Abelian+'static> Collection
 }
 
 /// Conversion to a differential dataflow Collection.
-pub trait AsCollection<G: Scope, D, R, C> {
+pub trait AsCollection<G: Scope, C> {
     /// Converts the type to a differential dataflow collection.
-    fn as_collection(&self) -> Collection<G, D, R, C>;
+    fn as_collection(&self) -> CollectionCore<G, C>;
 }
 
-impl<G: Scope, D, R, C: Clone> AsCollection<G, D, R, C> for StreamCore<G, C> {
+impl<G: Scope, C: Clone> AsCollection<G, C> for StreamCore<G, C> {
     /// Converts the type to a differential dataflow collection.
     ///
     /// By calling this method, you guarantee that the timestamp invariant (as documented on
     /// [Collection]) is upheld. This method will not check it.
-    fn as_collection(&self) -> Collection<G, D, R, C> {
-        Collection::<G,D,R,C>::new(self.clone())
+    fn as_collection(&self) -> CollectionCore<G, C> {
+        CollectionCore::<G,C>::new(self.clone())
     }
 }
 
@@ -718,13 +721,11 @@ impl<G: Scope, D, R, C: Clone> AsCollection<G, D, R, C> for StreamCore<G, C> {
 ///         .assert_eq(&data);
 /// });
 /// ```
-pub fn concatenate<G, D, R, C, I>(scope: &mut G, iterator: I) -> Collection<G, D, R, C>
+pub fn concatenate<G, C, I>(scope: &mut G, iterator: I) -> CollectionCore<G, C>
 where
     G: Scope,
-    D: Data,
-    R: Semigroup + 'static,
     C: Container,
-    I: IntoIterator<Item=Collection<G, D, R, C>>,
+    I: IntoIterator<Item=CollectionCore<G, C>>,
 {
     scope
         .concatenate(iterator.into_iter().map(|x| x.inner))
