@@ -5,7 +5,7 @@ use timely::dataflow::*;
 use timely::WorkerConfig;
 
 use differential_dataflow::input::Input;
-use differential_dataflow::Collection;
+use differential_dataflow::VecCollection;
 use differential_dataflow::operators::*;
 use differential_dataflow::operators::arrange::ArrangeByKey;
 use differential_dataflow::lattice::Lattice;
@@ -207,10 +207,10 @@ fn main() {
 
 fn interactive<G: Scope>(
     edges: &Arrange<G, Node, Node, isize>,
-    tc_1: Collection<G, Node>,
-    tc_2: Collection<G, Node>,
-    sg_x: Collection<G, Node>
-) -> Collection<G, Node>
+    tc_1: VecCollection<G, Node>,
+    tc_2: VecCollection<G, Node>,
+    sg_x: VecCollection<G, Node>
+) -> VecCollection<G, Node>
 where G::Timestamp: Lattice{
 
     // descendants of tc_1:

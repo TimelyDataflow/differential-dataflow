@@ -5,7 +5,7 @@ use std::hash::Hash;
 use timely::order::Product;
 use timely::dataflow::*;
 
-use crate::{Collection, ExchangeData};
+use crate::{VecCollection, ExchangeData};
 use crate::operators::*;
 use crate::lattice::Lattice;
 use crate::operators::iterate::Variable;
@@ -20,7 +20,7 @@ use crate::operators::iterate::Variable;
 /// Goals that cannot reach from the source to the target are relatively expensive, as
 /// the entire graph must be explored to confirm this. A graph connectivity pre-filter
 /// could be good insurance here.
-pub fn bidijkstra<G, N>(edges: &Collection<G, (N,N)>, goals: &Collection<G, (N,N)>) -> Collection<G, ((N,N), u32)>
+pub fn bidijkstra<G, N>(edges: &VecCollection<G, (N,N)>, goals: &VecCollection<G, (N,N)>) -> VecCollection<G, ((N,N), u32)>
 where
     G: Scope<Timestamp: Lattice+Ord>,
     N: ExchangeData+Hash,
@@ -38,8 +38,8 @@ use crate::operators::arrange::Arranged;
 pub fn bidijkstra_arranged<G, N, Tr>(
     forward: &Arranged<G, Tr>,
     reverse: &Arranged<G, Tr>,
-    goals: &Collection<G, (N,N)>
-) -> Collection<G, ((N,N), u32)>
+    goals: &VecCollection<G, (N,N)>
+) -> VecCollection<G, ((N,N), u32)>
 where
     G: Scope<Timestamp=Tr::Time>,
     N: ExchangeData+Hash,

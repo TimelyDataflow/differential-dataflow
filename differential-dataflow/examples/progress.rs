@@ -5,7 +5,7 @@ use timely::dataflow::*;
 use timely::dataflow::operators::probe::Handle;
 
 use differential_dataflow::input::Input;
-use differential_dataflow::Collection;
+use differential_dataflow::VecCollection;
 use differential_dataflow::operators::*;
 
 use differential_dataflow::lattice::Lattice;
@@ -115,10 +115,10 @@ fn main() {
 /// The computation to determine this, and to maintain it as times change, is an iterative
 /// computation that propagates times and maintains the minimal elements at each location.
 fn frontier<G, T>(
-    nodes: Collection<G, (Target, Source, T::Summary)>,
-    edges: Collection<G, (Source, Target)>,
-    times: Collection<G, (Location, T)>,
-) -> Collection<G, (Location, T)>
+    nodes: VecCollection<G, (Target, Source, T::Summary)>,
+    edges: VecCollection<G, (Source, Target)>,
+    times: VecCollection<G, (Location, T)>,
+) -> VecCollection<G, (Location, T)>
 where
     G: Scope<Timestamp: Lattice+Ord>,
     T: Timestamp<Summary: differential_dataflow::ExchangeData>,
@@ -126,7 +126,7 @@ where
     // Translate node and edge transitions into a common Location to Location edge with an associated Summary.
     let nodes = nodes.map(|(target, source, summary)| (Location::from(target), (Location::from(source), summary)));
     let edges = edges.map(|(source, target)| (Location::from(source), (Location::from(target), Default::default())));
-    let transitions: Collection<G, (Location, (Location, T::Summary))> = nodes.concat(&edges);
+    let transitions: VecCollection<G, (Location, (Location, T::Summary))> = nodes.concat(&edges);
 
     times
         .iterate(|reach| {
@@ -149,9 +149,9 @@ where
 
 /// Summary paths from locations to operator zero inputs.
 fn summarize<G, T>(
-    nodes: Collection<G, (Target, Source, T::Summary)>,
-    edges: Collection<G, (Source, Target)>,
-) -> Collection<G, (Location, (Location, T::Summary))>
+    nodes: VecCollection<G, (Target, Source, T::Summary)>,
+    edges: VecCollection<G, (Source, Target)>,
+) -> VecCollection<G, (Location, (Location, T::Summary))>
 where
     G: Scope<Timestamp: Lattice+Ord>,
     T: Timestamp<Summary: differential_dataflow::ExchangeData+std::hash::Hash>,
@@ -166,7 +166,7 @@ where
     // Retain node connections along "default" timestamp summaries.
     let nodes = nodes.map(|(target, source, summary)| (Location::from(source), (Location::from(target), summary)));
     let edges = edges.map(|(source, target)| (Location::from(target), (Location::from(source), Default::default())));
-    let transitions: Collection<G, (Location, (Location, T::Summary))> = nodes.concat(&edges);
+    let transitions: VecCollection<G, (Location, (Location, T::Summary))> = nodes.concat(&edges);
 
     zero_inputs
         .iterate(|summaries| {
@@ -192,9 +192,9 @@ where
 
 /// Identifies cycles along paths that do not increment timestamps.
 fn find_cycles<G: Scope, T: Timestamp>(
-    nodes: Collection<G, (Target, Source, T::Summary)>,
-    edges: Collection<G, (Source, Target)>,
-) -> Collection<G, (Location, Location)>
+    nodes: VecCollection<G, (Target, Source, T::Summary)>,
+    edges: VecCollection<G, (Source, Target)>,
+) -> VecCollection<G, (Location, Location)>
 where
     G: Scope<Timestamp: Lattice+Ord>,
     T: Timestamp<Summary: differential_dataflow::ExchangeData>,
@@ -209,7 +209,7 @@ where
         }
     });
     let edges = edges.map(|(source, target)| (Location::from(source), Location::from(target)));
-    let transitions: Collection<G, (Location, Location)> = nodes.concat(&edges);
+    let transitions: VecCollection<G, (Location, Location)> = nodes.concat(&edges);
 
     // Repeatedly restrict to locations with an incoming path.
     transitions

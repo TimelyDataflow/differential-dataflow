@@ -3,7 +3,7 @@ extern crate differential_dataflow;
 
 // taken from: https://adventofcode.com/2017/day/8
 
-use differential_dataflow::Collection;
+use differential_dataflow::VecCollection;
 use differential_dataflow::input::Input;
 use differential_dataflow::operators::*;
 
@@ -31,8 +31,8 @@ fn main() {
                     // println!("{:?}: \t{:?}", row, hash);
 
                     (0 .. 128)
-                        .map(move |col| 
-                            if hash[col/8] & (1 << (7-(col % 8))) != 0 { 
+                        .map(move |col|
+                            if hash[col/8] & (1 << (7-(col % 8))) != 0 {
                                 (row, col, '#')
                             }
                             else {

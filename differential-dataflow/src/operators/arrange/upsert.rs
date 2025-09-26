@@ -119,7 +119,7 @@ use super::TraceAgent;
 
 /// Arrange data from a stream of keyed upserts.
 ///
-/// The input should be a stream of timestamped pairs of Key and Option<Val>.
+/// The input should be a stream of timestamped pairs of `Key` and `Option<Val>`.
 /// The contents of the collection are defined key-by-key, where each optional
 /// value in sequence either replaces or removes the existing value, should it
 /// exist.

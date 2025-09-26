@@ -4,7 +4,7 @@ use std::hash::Hash;
 
 use timely::dataflow::*;
 
-use crate::{Collection, ExchangeData};
+use crate::{VecCollection, ExchangeData};
 use crate::lattice::Lattice;
 use crate::difference::{Abelian, Multiply};
 use crate::operators::arrange::arrangement::ArrangeByKey;
@@ -14,7 +14,7 @@ use crate::operators::arrange::arrangement::ArrangeByKey;
 /// This algorithm naively propagates all labels at once, much like standard label propagation.
 /// To more carefully control the label propagation, consider `propagate_core` which supports a
 /// method to limit the introduction of labels.
-pub fn propagate<G, N, L, R>(edges: &Collection<G, (N,N), R>, nodes: &Collection<G,(N,L),R>) -> Collection<G,(N,L),R>
+pub fn propagate<G, N, L, R>(edges: &VecCollection<G, (N,N), R>, nodes: &VecCollection<G,(N,L),R>) -> VecCollection<G,(N,L),R>
 where
     G: Scope<Timestamp: Lattice+Ord>,
     N: ExchangeData+Hash,
@@ -31,7 +31,7 @@ where
 /// This algorithm naively propagates all labels at once, much like standard label propagation.
 /// To more carefully control the label propagation, consider `propagate_core` which supports a
 /// method to limit the introduction of labels.
-pub fn propagate_at<G, N, L, F, R>(edges: &Collection<G, (N,N), R>, nodes: &Collection<G,(N,L),R>, logic: F) -> Collection<G,(N,L),R>
+pub fn propagate_at<G, N, L, F, R>(edges: &VecCollection<G, (N,N), R>, nodes: &VecCollection<G,(N,L),R>, logic: F) -> VecCollection<G,(N,L),R>
 where
     G: Scope<Timestamp: Lattice+Ord>,
     N: ExchangeData+Hash,
@@ -51,8 +51,8 @@ use crate::operators::arrange::arrangement::Arranged;
 ///
 /// This variant takes a pre-arranged edge collection, to facilitate re-use, and allows
 /// a method `logic` to specify the rounds in which we introduce various labels. The output
-/// of `logic should be a number in the interval [0,64],
-pub fn propagate_core<G, N, L, Tr, F, R>(edges: &Arranged<G,Tr>, nodes: &Collection<G,(N,L),R>, logic: F) -> Collection<G,(N,L),R>
+/// of `logic should be a number in the interval \[0,64\],
+pub fn propagate_core<G, N, L, Tr, F, R>(edges: &Arranged<G,Tr>, nodes: &VecCollection<G,(N,L),R>, logic: F) -> VecCollection<G,(N,L),R>
 where
     G: Scope<Timestamp=Tr::Time>,
     N: ExchangeData+Hash,
@@ -96,7 +96,7 @@ where
             .concat(&nodes)
             .reduce_abelian::<_,ValBuilder<_,_,_,_>,ValSpine<_,_,_,_>>("Propagate", |_, s, t| t.push((s[0].0.clone(), R::from(1_i8))));
 
-        let propagate: Collection<_, (N, L), R> =
+        let propagate: VecCollection<_, (N, L), R> =
         labels
             .join_core(&edges, |_k, l: &L, d| Some((d.clone(), l.clone())));
 

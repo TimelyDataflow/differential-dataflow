@@ -20,7 +20,7 @@ fn main() {
         let index = worker.index();
         let peers = worker.peers();
 
-        let worker_input = 
+        let worker_input =
         input
             .chars()
             .enumerate()
@@ -37,7 +37,7 @@ fn main() {
             //   { next_invalid, garbage }
             //
             // where the first bool indicates that the next character should be ignored,
-            // and the second bool indicates that we are in a garbage scope. We will 
+            // and the second bool indicates that we are in a garbage scope. We will
             // encode this as the values 0 .. 4, where
             //
             //  0: valid, non-garbage
@@ -48,7 +48,7 @@ fn main() {
             // Each character initially describes a substring of length one, but we will
             // build up the state transition for larger substrings, iteratively.
 
-            let transitions = 
+            let transitions =
             input
                 .map(|(pos, character)|
                     (pos, match character {
@@ -95,7 +95,7 @@ fn main() {
 }
 
 /// Accumulate data in `collection` into all powers-of-two intervals containing them.
-fn pp_aggregate<G, D, F>(collection: Collection<G, (usize, D)>, combine: F) -> Collection<G, ((usize, usize), D)>
+fn pp_aggregate<G, D, F>(collection: VecCollection<G, (usize, D)>, combine: F) -> VecCollection<G, ((usize, usize), D)>
 where
     G: Scope<Timestamp: Lattice>,
     D: Data,
@@ -105,7 +105,7 @@ where
     let unit_ranges = collection.map(|(index, data)| ((index, 0), data));
 
     unit_ranges
-        .iterate(|ranges| 
+        .iterate(|ranges|
 
             // Each available range, of size less than usize::max_value(), advertises itself as the range
             // twice as large, aligned to integer multiples of its size. Each range, which may contain at
@@ -126,10 +126,10 @@ where
 
 /// Produces the accumulated values at each of the `usize` locations in `aggregates` (and others).
 fn pp_broadcast<G, D, B, F>(
-    ranges: Collection<G, ((usize, usize), D)>, 
+    ranges: VecCollection<G, ((usize, usize), D)>,
     seed: B,
     zero: D,
-    combine: F) -> Collection<G, (usize, B)>
+    combine: F) -> VecCollection<G, (usize, B)>
 where
     G: Scope<Timestamp: Lattice+Ord+::std::fmt::Debug>,
     D: Data,
@@ -137,7 +137,7 @@ where
     F: Fn(&B, &D) -> B + 'static,
 {
     // Each range proposes an empty first child, to provide for its second child if it has no sibling.
-    // This is important if we want to reconstruct 
+    // This is important if we want to reconstruct
     let zero_ranges =
         ranges
             .map(move |((pos, log),_)| ((pos, if log > 0 { log - 1 } else { 0 }), zero.clone()))
@@ -145,7 +145,7 @@ where
 
     let aggregates = ranges.concat(&zero_ranges);
 
-    let init_state = 
+    let init_state =
     Some(((0, seed), Default::default(), 1))
         .to_stream(&mut aggregates.scope())
         .as_collection();

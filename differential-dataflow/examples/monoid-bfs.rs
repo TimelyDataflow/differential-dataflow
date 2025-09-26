@@ -5,7 +5,7 @@ use timely::dataflow::*;
 use timely::dataflow::operators::probe::Handle;
 
 use differential_dataflow::input::Input;
-use differential_dataflow::Collection;
+use differential_dataflow::VecCollection;
 use differential_dataflow::operators::*;
 use differential_dataflow::lattice::Lattice;
 
@@ -123,7 +123,7 @@ fn main() {
 }
 
 // returns pairs (n, s) indicating node n can be reached from a root in s steps.
-fn bfs<G>(edges: &Collection<G, Edge, MinSum>, roots: &Collection<G, Node, MinSum>) -> Collection<G, Node, MinSum>
+fn bfs<G>(edges: &VecCollection<G, Edge, MinSum>, roots: &VecCollection<G, Node, MinSum>) -> VecCollection<G, Node, MinSum>
 where
     G: Scope<Timestamp: Lattice+Ord>,
 {

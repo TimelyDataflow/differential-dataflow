@@ -4,12 +4,12 @@ use std::hash::Hash;
 
 use timely::dataflow::*;
 
-use crate::{Collection, ExchangeData};
+use crate::{VecCollection, ExchangeData};
 use crate::lattice::Lattice;
 use crate::operators::*;
 use crate::hashable::Hashable;
 
-fn _color<G, N>(edges: &Collection<G, (N,N)>) -> Collection<G,(N,Option<u32>)>
+fn _color<G, N>(edges: &VecCollection<G, (N,N)>) -> VecCollection<G,(N,Option<u32>)>
 where
     G: Scope<Timestamp: Lattice+Ord>,
     N: ExchangeData+Hash,
@@ -40,9 +40,9 @@ where
 /// fired, and we apply `logic` to the new state of lower neighbors and
 /// the old state (input) of higher neighbors.
 pub fn sequence<G, N, V, F>(
-    state: &Collection<G, (N,V)>,
-    edges: &Collection<G, (N,N)>,
-    logic: F) -> Collection<G, (N,Option<V>)>
+    state: &VecCollection<G, (N,V)>,
+    edges: &VecCollection<G, (N,N)>,
+    logic: F) -> VecCollection<G, (N,Option<V>)>
 where
     G: Scope<Timestamp: Lattice+Hash+Ord>,
     N: ExchangeData+Hashable,

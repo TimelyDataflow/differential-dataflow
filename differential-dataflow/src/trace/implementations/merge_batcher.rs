@@ -292,7 +292,7 @@ pub mod container {
 
     /// A merger for arbitrary containers.
     ///
-    /// `MC` is a [`Container`] that implements [`MergerChunk`].
+    /// `MC` is a `Container` that implements [`MergerChunk`].
     /// `CQ` is a [`ContainerQueue`] supporting `MC`.
     pub struct ContainerMerger<MC, CQ> {
         _marker: PhantomData<(MC, CQ)>,

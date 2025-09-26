@@ -44,7 +44,7 @@ use timely::dataflow::operators::Operator;
 use timely::progress::Antichain;
 use timely::progress::frontier::AntichainRef;
 
-use differential_dataflow::{ExchangeData, Collection, AsCollection, Hashable};
+use differential_dataflow::{ExchangeData, VecCollection, AsCollection, Hashable};
 use differential_dataflow::difference::{Monoid, Semigroup};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arranged;
@@ -75,12 +75,12 @@ use differential_dataflow::trace::implementations::BatchContainer;
 /// once out of the "delta flow region", the updates will be `delay`d to the
 /// times specified in the payloads.
 pub fn half_join<G, K, V, R, Tr, FF, CF, DOut, S>(
-    stream: &Collection<G, (K, V, G::Timestamp), R>,
+    stream: &VecCollection<G, (K, V, G::Timestamp), R>,
     arrangement: Arranged<G, Tr>,
     frontier_func: FF,
     comparison: CF,
     mut output_func: S,
-) -> Collection<G, (DOut, G::Timestamp), <R as Mul<Tr::Diff>>::Output>
+) -> VecCollection<G, (DOut, G::Timestamp), <R as Mul<Tr::Diff>>::Output>
 where
     G: Scope<Timestamp = Tr::Time>,
     K: Hashable + ExchangeData,
@@ -144,7 +144,7 @@ type SessionFor<'a, G, CB> =
 /// records. Note this is not the number of *output* records, owing mainly to
 /// the number of matched records being easiest to record with low overhead.
 pub fn half_join_internal_unsafe<G, K, V, R, Tr, FF, CF, Y, S, CB>(
-    stream: &Collection<G, (K, V, G::Timestamp), R>,
+    stream: &VecCollection<G, (K, V, G::Timestamp), R>,
     mut arrangement: Arranged<G, Tr>,
     frontier_func: FF,
     comparison: CF,

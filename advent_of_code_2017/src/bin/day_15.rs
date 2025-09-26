@@ -3,7 +3,7 @@ extern crate differential_dataflow;
 
 // taken from: https://adventofcode.com/2017/day/8
 
-use differential_dataflow::Collection;
+use differential_dataflow::VecCollection;
 use differential_dataflow::input::Input;
 use differential_dataflow::operators::*;
 

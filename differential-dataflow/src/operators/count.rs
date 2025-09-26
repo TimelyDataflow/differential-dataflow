@@ -6,7 +6,7 @@ use timely::dataflow::operators::Operator;
 use timely::dataflow::channels::pact::Pipeline;
 
 use crate::lattice::Lattice;
-use crate::{ExchangeData, Collection};
+use crate::{ExchangeData, VecCollection};
 use crate::difference::{IsZero, Semigroup};
 use crate::hashable::Hashable;
 use crate::collection::AsCollection;
@@ -30,7 +30,7 @@ pub trait CountTotal<G: Scope<Timestamp: TotalOrder+Lattice+Ord>, K: ExchangeDat
     ///          .count_total();
     /// });
     /// ```
-    fn count_total(&self) -> Collection<G, (K, R), isize> {
+    fn count_total(&self) -> VecCollection<G, (K, R), isize> {
         self.count_total_core()
     }
 
@@ -39,14 +39,14 @@ pub trait CountTotal<G: Scope<Timestamp: TotalOrder+Lattice+Ord>, K: ExchangeDat
     /// This method allows `count_total` to produce collections whose difference
     /// type is something other than an `isize` integer, for example perhaps an
     /// `i32`.
-    fn count_total_core<R2: Semigroup + From<i8> + 'static>(&self) -> Collection<G, (K, R), R2>;
+    fn count_total_core<R2: Semigroup + From<i8> + 'static>(&self) -> VecCollection<G, (K, R), R2>;
 }
 
-impl<G, K: ExchangeData+Hashable, R: ExchangeData+Semigroup> CountTotal<G, K, R> for Collection<G, K, R>
+impl<G, K: ExchangeData+Hashable, R: ExchangeData+Semigroup> CountTotal<G, K, R> for VecCollection<G, K, R>
 where
     G: Scope<Timestamp: TotalOrder+Lattice+Ord>,
 {
-    fn count_total_core<R2: Semigroup + From<i8> + 'static>(&self) -> Collection<G, (K, R), R2> {
+    fn count_total_core<R2: Semigroup + From<i8> + 'static>(&self) -> VecCollection<G, (K, R), R2> {
         self.arrange_by_self_named("Arrange: CountTotal")
             .count_total_core()
     }
@@ -63,7 +63,7 @@ where
     >+Clone+'static,
     K: ExchangeData,
 {
-    fn count_total_core<R2: Semigroup + From<i8> + 'static>(&self) -> Collection<G, (K, T1::Diff), R2> {
+    fn count_total_core<R2: Semigroup + From<i8> + 'static>(&self) -> VecCollection<G, (K, T1::Diff), R2> {
 
         let mut trace = self.trace.clone();
 

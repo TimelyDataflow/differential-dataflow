@@ -12,7 +12,7 @@ use timely::dataflow::operators::Capture;
 use timely::dataflow::operators::capture::Extract;
 
 use differential_dataflow::input::Input;
-use differential_dataflow::Collection;
+use differential_dataflow::VecCollection;
 
 use differential_dataflow::operators::*;
 use differential_dataflow::lattice::Lattice;
@@ -215,7 +215,7 @@ fn scc_differential(
         .collect()
 }
 
-fn _strongly_connected<G>(graph: &Collection<G, Edge>) -> Collection<G, Edge>
+fn _strongly_connected<G>(graph: &VecCollection<G, Edge>) -> VecCollection<G, Edge>
 where
     G: Scope<Timestamp: Lattice+Ord+Hash>,
 {
@@ -226,7 +226,7 @@ where
     })
 }
 
-fn _trim_edges<G>(cycle: &Collection<G, Edge>, edges: &Collection<G, Edge>) -> Collection<G, Edge>
+fn _trim_edges<G>(cycle: &VecCollection<G, Edge>, edges: &VecCollection<G, Edge>) -> VecCollection<G, Edge>
 where
     G: Scope<Timestamp: Lattice+Ord+Hash>,
 {
@@ -243,7 +243,7 @@ where
          .map(|((x1,x2),_)| (x2,x1))
 }
 
-fn _reachability<G>(edges: &Collection<G, Edge>, nodes: &Collection<G, (Node, Node)>) -> Collection<G, Edge>
+fn _reachability<G>(edges: &VecCollection<G, Edge>, nodes: &VecCollection<G, (Node, Node)>) -> VecCollection<G, Edge>
 where
     G: Scope<Timestamp: Lattice+Ord+Hash>,
 {

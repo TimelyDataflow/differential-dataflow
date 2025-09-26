@@ -18,7 +18,7 @@ use timely::dataflow::operators::Capability;
 use timely::dataflow::channels::pushers::tee::Tee;
 
 use crate::hashable::Hashable;
-use crate::{Data, ExchangeData, Collection};
+use crate::{Data, ExchangeData, VecCollection};
 use crate::difference::{Semigroup, Abelian, Multiply};
 use crate::lattice::Lattice;
 use crate::operators::arrange::{Arranged, ArrangeByKey, ArrangeBySelf};
@@ -50,7 +50,7 @@ pub trait Join<G: Scope, K: Data, V: Data, R: Semigroup> {
     ///      .assert_eq(&z);
     /// });
     /// ```
-    fn join<V2, R2>(&self, other: &Collection<G, (K,V2), R2>) -> Collection<G, (K,(V,V2)), <R as Multiply<R2>>::Output>
+    fn join<V2, R2>(&self, other: &VecCollection<G, (K,V2), R2>) -> VecCollection<G, (K,(V,V2)), <R as Multiply<R2>>::Output>
     where
         K: ExchangeData,
         V2: ExchangeData,
@@ -78,7 +78,7 @@ pub trait Join<G: Scope, K: Data, V: Data, R: Semigroup> {
     ///      .assert_eq(&z);
     /// });
     /// ```
-    fn join_map<V2, R2, D, L>(&self, other: &Collection<G, (K,V2), R2>, logic: L) -> Collection<G, D, <R as Multiply<R2>>::Output>
+    fn join_map<V2, R2, D, L>(&self, other: &VecCollection<G, (K,V2), R2>, logic: L) -> VecCollection<G, D, <R as Multiply<R2>>::Output>
     where K: ExchangeData, V2: ExchangeData, R2: ExchangeData+Semigroup, R: Multiply<R2, Output: Semigroup+'static>, D: Data, L: FnMut(&K, &V, &V2)->D+'static;
 
     /// Matches pairs `(key, val)` and `key` based on `key`, producing the former with frequencies multiplied.
@@ -103,7 +103,7 @@ pub trait Join<G: Scope, K: Data, V: Data, R: Semigroup> {
     ///      .assert_eq(&z);
     /// });
     /// ```
-    fn semijoin<R2>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), <R as Multiply<R2>>::Output>
+    fn semijoin<R2>(&self, other: &VecCollection<G, K, R2>) -> VecCollection<G, (K, V), <R as Multiply<R2>>::Output>
     where K: ExchangeData, R2: ExchangeData+Semigroup, R: Multiply<R2, Output: Semigroup+'static>;
 
     /// Subtracts the semijoin with `other` from `self`.
@@ -132,32 +132,32 @@ pub trait Join<G: Scope, K: Data, V: Data, R: Semigroup> {
     ///      .assert_eq(&z);
     /// });
     /// ```
-    fn antijoin<R2>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), R>
+    fn antijoin<R2>(&self, other: &VecCollection<G, K, R2>) -> VecCollection<G, (K, V), R>
     where K: ExchangeData, R2: ExchangeData+Semigroup, R: Multiply<R2, Output = R>, R: Abelian+'static;
 }
 
-impl<G, K, V, R> Join<G, K, V, R> for Collection<G, (K, V), R>
+impl<G, K, V, R> Join<G, K, V, R> for VecCollection<G, (K, V), R>
 where
     G: Scope<Timestamp: Lattice+Ord>,
     K: ExchangeData+Hashable,
     V: ExchangeData,
     R: ExchangeData+Semigroup,
 {
-    fn join_map<V2: ExchangeData, R2: ExchangeData+Semigroup, D: Data, L>(&self, other: &Collection<G, (K, V2), R2>, mut logic: L) -> Collection<G, D, <R as Multiply<R2>>::Output>
+    fn join_map<V2: ExchangeData, R2: ExchangeData+Semigroup, D: Data, L>(&self, other: &VecCollection<G, (K, V2), R2>, mut logic: L) -> VecCollection<G, D, <R as Multiply<R2>>::Output>
     where R: Multiply<R2, Output: Semigroup+'static>, L: FnMut(&K, &V, &V2)->D+'static {
         let arranged1 = self.arrange_by_key();
         let arranged2 = other.arrange_by_key();
         arranged1.join_core(&arranged2, move |k,v1,v2| Some(logic(k,v1,v2)))
     }
 
-    fn semijoin<R2: ExchangeData+Semigroup>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), <R as Multiply<R2>>::Output>
+    fn semijoin<R2: ExchangeData+Semigroup>(&self, other: &VecCollection<G, K, R2>) -> VecCollection<G, (K, V), <R as Multiply<R2>>::Output>
     where R: Multiply<R2, Output: Semigroup+'static> {
         let arranged1 = self.arrange_by_key();
         let arranged2 = other.arrange_by_self();
         arranged1.join_core(&arranged2, |k,v,_| Some((k.clone(), v.clone())))
     }
 
-    fn antijoin<R2: ExchangeData+Semigroup>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), R>
+    fn antijoin<R2: ExchangeData+Semigroup>(&self, other: &VecCollection<G, K, R2>) -> VecCollection<G, (K, V), R>
     where R: Multiply<R2, Output=R>, R: Abelian+'static {
         self.concat(&self.semijoin(other).negate())
     }
@@ -170,7 +170,7 @@ where
     K: ExchangeData+Hashable,
     V: Data + 'static,
 {
-    fn join_map<V2: ExchangeData, R2: ExchangeData+Semigroup, D: Data, L>(&self, other: &Collection<G, (K, V2), R2>, mut logic: L) -> Collection<G, D, <Tr::Diff as Multiply<R2>>::Output>
+    fn join_map<V2: ExchangeData, R2: ExchangeData+Semigroup, D: Data, L>(&self, other: &VecCollection<G, (K, V2), R2>, mut logic: L) -> VecCollection<G, D, <Tr::Diff as Multiply<R2>>::Output>
     where
         Tr::Diff: Multiply<R2, Output: Semigroup+'static>,
         L: for<'a> FnMut(Tr::Key<'a>, Tr::Val<'a>, &V2)->D+'static,
@@ -179,13 +179,13 @@ where
         self.join_core(&arranged2, move |k,v1,v2| Some(logic(k,v1,v2)))
     }
 
-    fn semijoin<R2: ExchangeData+Semigroup>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), <Tr::Diff as Multiply<R2>>::Output>
+    fn semijoin<R2: ExchangeData+Semigroup>(&self, other: &VecCollection<G, K, R2>) -> VecCollection<G, (K, V), <Tr::Diff as Multiply<R2>>::Output>
     where Tr::Diff: Multiply<R2, Output: Semigroup+'static> {
         let arranged2 = other.arrange_by_self();
         self.join_core(&arranged2, |k,v,_| Some((k.clone(), v.clone())))
     }
 
-    fn antijoin<R2: ExchangeData+Semigroup>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), Tr::Diff>
+    fn antijoin<R2: ExchangeData+Semigroup>(&self, other: &VecCollection<G, K, R2>) -> VecCollection<G, (K, V), Tr::Diff>
     where Tr::Diff: Multiply<R2, Output=Tr::Diff>, Tr::Diff: Abelian+'static {
         self.as_collection(|k,v| (k.clone(), v.clone()))
             .concat(&self.semijoin(other).negate())
@@ -229,7 +229,7 @@ pub trait JoinCore<G: Scope<Timestamp: Lattice+Ord>, K: 'static + ?Sized, V: 'st
     ///      .assert_eq(&z);
     /// });
     /// ```
-    fn join_core<Tr2,I,L> (&self, stream2: &Arranged<G,Tr2>, result: L) -> Collection<G,I::Item,<R as Multiply<Tr2::Diff>>::Output>
+    fn join_core<Tr2,I,L> (&self, stream2: &Arranged<G,Tr2>, result: L) -> VecCollection<G,I::Item,<R as Multiply<Tr2::Diff>>::Output>
     where
         Tr2: for<'a> TraceReader<Key<'a>=&'a K, Time=G::Timestamp>+Clone+'static,
         R: Multiply<Tr2::Diff, Output: Semigroup+'static>,
@@ -270,7 +270,7 @@ pub trait JoinCore<G: Scope<Timestamp: Lattice+Ord>, K: 'static + ?Sized, V: 'st
     ///      .assert_eq(&z);
     /// });
     /// ```
-    fn join_core_internal_unsafe<Tr2,I,L,D,ROut> (&self, stream2: &Arranged<G,Tr2>, result: L) -> Collection<G,D,ROut>
+    fn join_core_internal_unsafe<Tr2,I,L,D,ROut> (&self, stream2: &Arranged<G,Tr2>, result: L) -> VecCollection<G,D,ROut>
     where
         Tr2: for<'a> TraceReader<Key<'a>=&'a K, Time=G::Timestamp>+Clone+'static,
         D: Data,
@@ -281,14 +281,14 @@ pub trait JoinCore<G: Scope<Timestamp: Lattice+Ord>, K: 'static + ?Sized, V: 'st
 }
 
 
-impl<G, K, V, R> JoinCore<G, K, V, R> for Collection<G, (K, V), R>
+impl<G, K, V, R> JoinCore<G, K, V, R> for VecCollection<G, (K, V), R>
 where
     G: Scope<Timestamp: Lattice+Ord>,
     K: ExchangeData+Hashable,
     V: ExchangeData,
     R: ExchangeData+Semigroup,
 {
-    fn join_core<Tr2,I,L> (&self, stream2: &Arranged<G,Tr2>, result: L) -> Collection<G,I::Item,<R as Multiply<Tr2::Diff>>::Output>
+    fn join_core<Tr2,I,L> (&self, stream2: &Arranged<G,Tr2>, result: L) -> VecCollection<G,I::Item,<R as Multiply<Tr2::Diff>>::Output>
     where
         Tr2: for<'a> TraceReader<Key<'a>=&'a K, Time=G::Timestamp>+Clone+'static,
         R: Multiply<Tr2::Diff, Output: Semigroup+'static>,
@@ -299,7 +299,7 @@ where
             .join_core(stream2, result)
     }
 
-    fn join_core_internal_unsafe<Tr2,I,L,D,ROut> (&self, stream2: &Arranged<G,Tr2>, result: L) -> Collection<G,D,ROut>
+    fn join_core_internal_unsafe<Tr2,I,L,D,ROut> (&self, stream2: &Arranged<G,Tr2>, result: L) -> VecCollection<G,D,ROut>
     where
         Tr2: for<'a> TraceReader<Key<'a>=&'a K, Time=G::Timestamp>+Clone+'static,
         I: IntoIterator<Item=(D, G::Timestamp, ROut)>,

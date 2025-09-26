@@ -2,7 +2,7 @@ use std::hash::Hash;
 use timely::dataflow::*;
 use timely::dataflow::operators::*;
 
-use differential_dataflow::Collection;
+use differential_dataflow::VecCollection;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::*;
 
@@ -35,13 +35,13 @@ fn main() {
         println!("loaded {} nodes, {} edges", nodes, edges.len());
 
         worker.dataflow::<(),_,_>(|scope| {
-            triangles(&Collection::new(edges.to_stream(scope))).inner.count().inspect(|x| println!("{:?}", x));
+            triangles(&VecCollection::new(edges.to_stream(scope))).inner.count().inspect(|x| println!("{:?}", x));
         });
 
     }).unwrap();
 }
 
-fn triangles<G: Scope>(edges: &Collection<G, Edge>) -> Collection<G, (Node, Node, Node)>
+fn triangles<G: Scope>(edges: &VecCollection<G, Edge>) -> VecCollection<G, (Node, Node, Node)>
 where
     G: Scope<Timestamp: Lattice+Hash+Ord>,
 {

@@ -42,7 +42,7 @@ use timely::dataflow::scopes::child::Iterative;
 use timely::dataflow::operators::{Feedback, ConnectLoop};
 use timely::dataflow::operators::feedback::Handle;
 
-use crate::{Data, Collection};
+use crate::{Data, VecCollection, Collection};
 use crate::difference::{Semigroup, Abelian};
 use crate::lattice::Lattice;
 
@@ -71,15 +71,15 @@ pub trait Iterate<G: Scope<Timestamp: Lattice>, D: Data, R: Semigroup> {
     ///          });
     /// });
     /// ```
-    fn iterate<F>(&self, logic: F) -> Collection<G, D, R>
+    fn iterate<F>(&self, logic: F) -> VecCollection<G, D, R>
     where
-        for<'a> F: FnOnce(&Collection<Iterative<'a, G, u64>, D, R>)->Collection<Iterative<'a, G, u64>, D, R>;
+        for<'a> F: FnOnce(&VecCollection<Iterative<'a, G, u64>, D, R>)->VecCollection<Iterative<'a, G, u64>, D, R>;
 }
 
-impl<G: Scope<Timestamp: Lattice>, D: Ord+Data+Debug, R: Abelian+'static> Iterate<G, D, R> for Collection<G, D, R> {
-    fn iterate<F>(&self, logic: F) -> Collection<G, D, R>
+impl<G: Scope<Timestamp: Lattice>, D: Ord+Data+Debug, R: Abelian+'static> Iterate<G, D, R> for VecCollection<G, D, R> {
+    fn iterate<F>(&self, logic: F) -> VecCollection<G, D, R>
     where
-        for<'a> F: FnOnce(&Collection<Iterative<'a, G, u64>, D, R>)->Collection<Iterative<'a, G, u64>, D, R>,
+        for<'a> F: FnOnce(&VecCollection<Iterative<'a, G, u64>, D, R>)->VecCollection<Iterative<'a, G, u64>, D, R>,
     {
         self.inner.scope().scoped("Iterate", |subgraph| {
             // create a new variable, apply logic, bind variable, return.
@@ -97,9 +97,9 @@ impl<G: Scope<Timestamp: Lattice>, D: Ord+Data+Debug, R: Abelian+'static> Iterat
 }
 
 impl<G: Scope<Timestamp: Lattice>, D: Ord+Data+Debug, R: Semigroup+'static> Iterate<G, D, R> for G {
-    fn iterate<F>(&self, logic: F) -> Collection<G, D, R>
+    fn iterate<F>(&self, logic: F) -> VecCollection<G, D, R>
     where
-        for<'a> F: FnOnce(&Collection<Iterative<'a, G, u64>, D, R>)->Collection<Iterative<'a, G, u64>, D, R>,
+        for<'a> F: FnOnce(&VecCollection<Iterative<'a, G, u64>, D, R>)->VecCollection<Iterative<'a, G, u64>, D, R>,
     {
         // TODO: This makes me think we have the wrong ownership pattern here.
         let mut clone = self.clone();
@@ -151,20 +151,21 @@ impl<G: Scope<Timestamp: Lattice>, D: Ord+Data+Debug, R: Semigroup+'static> Iter
 ///     });
 /// })
 /// ```
-pub struct Variable<G, D, R, C = Vec<(D, <G as ScopeParent>::Timestamp, R)>>
+pub struct Variable<G, C>
 where
     G: Scope<Timestamp: Lattice>,
-    D: Data,
-    R: Abelian + 'static,
     C: Container,
 {
-    collection: Collection<G, D, R, C>,
+    collection: Collection<G, C>,
     feedback: Handle<G, C>,
-    source: Option<Collection<G, D, R, C>>,
+    source: Option<Collection<G, C>>,
     step: <G::Timestamp as Timestamp>::Summary,
 }
 
-impl<G, D: Data, R: Abelian, C: Container> Variable<G, D, R, C>
+/// A `Variable` specialized to a vector container of update triples (data, time, diff).
+pub type VecVariable<G, D, R> = Variable<G, Vec<(D, <G as ScopeParent>::Timestamp, R)>>;
+
+impl<G, C: Container> Variable<G, C>
 where
     G: Scope<Timestamp: Lattice>,
     C: crate::collection::containers::Negate + crate::collection::containers::ResultsIn<<G::Timestamp as Timestamp>::Summary>,
@@ -175,14 +176,14 @@ where
     /// be used whenever the variable has an empty input.
     pub fn new(scope: &mut G, step: <G::Timestamp as Timestamp>::Summary) -> Self {
         let (feedback, updates) = scope.feedback(step.clone());
-        let collection = Collection::<G, D, R, C>::new(updates);
+        let collection = Collection::<G, C>::new(updates);
         Self { collection, feedback, source: None, step }
     }
 
     /// Creates a new `Variable` from a supplied `source` stream.
-    pub fn new_from(source: Collection<G, D, R, C>, step: <G::Timestamp as Timestamp>::Summary) -> Self {
+    pub fn new_from(source: Collection<G, C>, step: <G::Timestamp as Timestamp>::Summary) -> Self {
         let (feedback, updates) = source.inner.scope().feedback(step.clone());
-        let collection = Collection::<G, D, R, C>::new(updates).concat(&source);
+        let collection = Collection::<G, C>::new(updates).concat(&source);
         Variable { collection, feedback, source: Some(source), step }
     }
 
@@ -190,7 +191,7 @@ where
     ///
     /// This method binds the `Variable` to be equal to the supplied collection,
     /// which may be recursively defined in terms of the variable itself.
-    pub fn set(self, result: &Collection<G, D, R, C>) -> Collection<G, D, R, C> {
+    pub fn set(self, result: &Collection<G, C>) -> Collection<G, C> {
         let mut in_result = result.clone();
         if let Some(source) = &self.source {
             in_result = in_result.concat(&source.negate());
@@ -207,7 +208,7 @@ where
     ///
     /// This behavior can also be achieved by using `new` to create an empty initial
     /// collection, and then using `self.set(self.concat(result))`.
-    pub fn set_concat(self, result: &Collection<G, D, R, C>) -> Collection<G, D, R, C> {
+    pub fn set_concat(self, result: &Collection<G, C>) -> Collection<G, C> {
         let step = self.step;
         result
             .results_in(step)
@@ -218,8 +219,8 @@ where
     }
 }
 
-impl<G: Scope<Timestamp: Lattice>, D: Data, R: Abelian, C: Container> Deref for Variable<G, D, R, C> {
-    type Target = Collection<G, D, R, C>;
+impl<G: Scope<Timestamp: Lattice>, C: Container> Deref for Variable<G, C> {
+    type Target = Collection<G, C>;
     fn deref(&self) -> &Self::Target {
         &self.collection
     }
@@ -231,19 +232,17 @@ impl<G: Scope<Timestamp: Lattice>, D: Data, R: Abelian, C: Container> Deref for 
 /// that do not implement `Abelian` and only implement `Semigroup`. This means
 /// that it can be used in settings where the difference type does not support
 /// negation.
-pub struct SemigroupVariable<G, D, R, C = Vec<(D, <G as ScopeParent>::Timestamp, R)>>
+pub struct SemigroupVariable<G, C>
 where
     G: Scope<Timestamp: Lattice>,
-    D: Data,
-    R: Semigroup + 'static,
     C: Container,
 {
-    collection: Collection<G, D, R, C>,
+    collection: Collection<G, C>,
     feedback: Handle<G, C>,
     step: <G::Timestamp as Timestamp>::Summary,
 }
 
-impl<G, D: Data, R: Semigroup, C: Container> SemigroupVariable<G, D, R, C>
+impl<G, C: Container> SemigroupVariable<G, C>
 where
     G: Scope<Timestamp: Lattice>,
     C: crate::collection::containers::ResultsIn<<G::Timestamp as Timestamp>::Summary>,
@@ -251,12 +250,12 @@ where
     /// Creates a new initially empty `SemigroupVariable`.
     pub fn new(scope: &mut G, step: <G::Timestamp as Timestamp>::Summary) -> Self {
         let (feedback, updates) = scope.feedback(step.clone());
-        let collection = Collection::<G,D,R,C>::new(updates);
+        let collection = Collection::<G,C>::new(updates);
         SemigroupVariable { collection, feedback, step }
     }
 
     /// Adds a new source of data to `self`.
-    pub fn set(self, result: &Collection<G, D, R, C>) -> Collection<G, D, R, C> {
+    pub fn set(self, result: &Collection<G, C>) -> Collection<G, C> {
         let step = self.step;
         result
             .results_in(step)
@@ -267,8 +266,8 @@ where
     }
 }
 
-impl<G: Scope, D: Data, R: Semigroup, C: Container> Deref for SemigroupVariable<G, D, R, C> where G::Timestamp: Lattice {
-    type Target = Collection<G, D, R, C>;
+impl<G: Scope, C: Container> Deref for SemigroupVariable<G, C> where G::Timestamp: Lattice {
+    type Target = Collection<G, C>;
     fn deref(&self) -> &Self::Target {
         &self.collection
     }

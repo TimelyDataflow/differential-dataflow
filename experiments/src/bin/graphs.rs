@@ -3,7 +3,7 @@ use rand::{Rng, SeedableRng, StdRng};
 use timely::dataflow::*;
 
 use differential_dataflow::input::Input;
-use differential_dataflow::Collection;
+use differential_dataflow::VecCollection;
 use differential_dataflow::operators::*;
 use differential_dataflow::operators::arrange::ArrangeByKey;
 use differential_dataflow::operators::arrange::ArrangeBySelf;
@@ -92,8 +92,8 @@ type TraceHandle = TraceAgent<GraphTrace>;
 
 fn reach<G: Scope<Timestamp = ()>> (
     graph: &mut TraceHandle,
-    roots: Collection<G, Node>
-) -> Collection<G, Node> {
+    roots: VecCollection<G, Node>
+) -> VecCollection<G, Node> {
 
     let graph = graph.import(&roots.scope());
 
@@ -114,8 +114,8 @@ fn reach<G: Scope<Timestamp = ()>> (
 
 fn bfs<G: Scope<Timestamp = ()>> (
     graph: &mut TraceHandle,
-    roots: Collection<G, Node>
-) -> Collection<G, (Node, u32)> {
+    roots: VecCollection<G, Node>
+) -> VecCollection<G, (Node, u32)> {
 
     let graph = graph.import(&roots.scope());
     let roots = roots.map(|r| (r,0));
@@ -133,7 +133,7 @@ fn bfs<G: Scope<Timestamp = ()>> (
 
 // fn connected_components<G: Scope<Timestamp = ()>>(
 //     graph: &mut TraceHandle<Node>
-// ) -> Collection<G, (Node, Node)> {
+// ) -> VecCollection<G, (Node, Node)> {
 
 //     // each edge (x,y) means that we need at least a label for the min of x and y.
 //     let nodes =

@@ -52,12 +52,12 @@ fn main() {
     timely::example(|scope| {
 
         let numbers = scope.new_collection_from(1 .. 10u32).1;
-        let numbers: Collection<_, u32, isize, _>  = wrap(&numbers.inner).as_collection();
+        let numbers: Collection<_, _>  = wrap(&numbers.inner).as_collection();
 
         scope.iterative::<u64,_,_>(|nested| {
             let summary = Product::new(Default::default(), 1);
             let variable = Variable::new_from(numbers.enter(nested), summary);
-            let mapped: Collection<_, u32, isize, _> = variable.inner.unary(Pipeline, "Map", |_,_| {
+            let mapped: Collection<_, _> = variable.inner.unary(Pipeline, "Map", |_,_| {
                 |input, output| {
                     input.for_each(|time, data| {
                         let mut session = output.session(&time);

@@ -1,14 +1,4 @@
 //! A `Batcher` implementation based on merge sort.
-//!
-//! The `MergeBatcher` requires support from two types, a "chunker" and a "merger".
-//! The chunker receives input batches and consolidates them, producing sorted output
-//! "chunks" that are fully consolidated (no adjacent updates can be accumulated).
-//! The merger implements the [`Merger`] trait, and provides hooks for manipulating
-//! sorted "chains" of chunks as needed by the merge batcher: merging chunks and also
-//! splitting them apart based on time.
-//!
-//! Implementations of `MergeBatcher` can be instantiated through the choice of both
-//! the chunker and the merger, provided their respective output and input types align.
 
 use timely::progress::frontier::AntichainRef;
 use timely::progress::{frontier::Antichain, Timestamp};

@@ -4,12 +4,12 @@ use std::hash::Hash;
 
 use timely::dataflow::*;
 
-use crate::{Collection, ExchangeData};
+use crate::{VecCollection, ExchangeData};
 use crate::operators::*;
 use crate::lattice::Lattice;
 
 /// Returns pairs (node, dist) indicating distance of each node from a root.
-pub fn bfs<G, N>(edges: &Collection<G, (N,N)>, roots: &Collection<G, N>) -> Collection<G, (N,u32)>
+pub fn bfs<G, N>(edges: &VecCollection<G, (N,N)>, roots: &VecCollection<G, N>) -> VecCollection<G, (N,u32)>
 where
     G: Scope<Timestamp: Lattice+Ord>,
     N: ExchangeData+Hash,
@@ -23,7 +23,7 @@ use crate::trace::TraceReader;
 use crate::operators::arrange::Arranged;
 
 /// Returns pairs (node, dist) indicating distance of each node from a root.
-pub fn bfs_arranged<G, N, Tr>(edges: &Arranged<G, Tr>, roots: &Collection<G, N>) -> Collection<G, (N, u32)>
+pub fn bfs_arranged<G, N, Tr>(edges: &Arranged<G, Tr>, roots: &VecCollection<G, N>) -> VecCollection<G, (N, u32)>
 where
     G: Scope<Timestamp=Tr::Time>,
     N: ExchangeData+Hash,

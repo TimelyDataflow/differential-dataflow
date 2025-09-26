@@ -2,7 +2,7 @@
 
 use timely::dataflow::Scope;
 
-use crate::{Collection, ExchangeData, Hashable};
+use crate::{VecCollection, ExchangeData, Hashable};
 use crate::lattice::Lattice;
 use crate::operators::*;
 use crate::difference::Abelian;
@@ -28,16 +28,16 @@ pub trait Identifiers<G: Scope, D: ExchangeData, R: ExchangeData+Abelian> {
     ///          .assert_empty();
     /// });
     /// ```
-    fn identifiers(&self) -> Collection<G, (D, u64), R>;
+    fn identifiers(&self) -> VecCollection<G, (D, u64), R>;
 }
 
-impl<G, D, R> Identifiers<G, D, R> for Collection<G, D, R>
+impl<G, D, R> Identifiers<G, D, R> for VecCollection<G, D, R>
 where
     G: Scope<Timestamp: Lattice>,
     D: ExchangeData + ::std::hash::Hash,
     R: ExchangeData + Abelian,
 {
-    fn identifiers(&self) -> Collection<G, (D, u64), R> {
+    fn identifiers(&self) -> VecCollection<G, (D, u64), R> {
 
         // The design here is that we iteratively develop a collection
         // of pairs (round, record), where each pair is a proposal that

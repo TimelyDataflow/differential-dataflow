@@ -4,7 +4,7 @@ use timely::dataflow::*;
 use timely::dataflow::operators::probe::Handle;
 
 use differential_dataflow::input::Input;
-use differential_dataflow::Collection;
+use differential_dataflow::VecCollection;
 use differential_dataflow::operators::*;
 use differential_dataflow::lattice::Lattice;
 
@@ -91,9 +91,9 @@ fn main() {
 }
 
 // returns pairs (n, s) indicating node n can be reached from a root in s steps.
-fn bfs<G>(edges: &Collection<G, Edge>, roots: &Collection<G, Node>) -> Collection<G, (Node, u32)>
+fn bfs<G>(edges: &VecCollection<G, Edge>, roots: &VecCollection<G, Node>) -> VecCollection<G, (Node, u32)>
 where
-    G: Scope<Timestamp: Lattice+Ord>, 
+    G: Scope<Timestamp: Lattice+Ord>,
 {
     use timely::order::Product;
     use iterate::Variable;
@@ -115,7 +115,7 @@ where
         let inner = feedback_summary::<usize>(1, 1);
         let label = Variable::new_from(nodes.clone(), Product { outer: Default::default(), inner });
 
-        let next = 
+        let next =
         label
             .join_map(&edges, |_k,l,d| (*d, l+1))
             .concat(&nodes)

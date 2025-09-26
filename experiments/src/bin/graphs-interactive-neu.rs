@@ -7,7 +7,7 @@ use timely::dataflow::operators::probe::Handle;
 use timely::order::Product;
 
 use differential_dataflow::input::Input;
-use differential_dataflow::Collection;
+use differential_dataflow::VecCollection;
 use differential_dataflow::operators::*;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::iterate::Variable;
@@ -300,7 +300,7 @@ type Arrange<G, K, V, R> = Arranged<G, TraceAgent<ValSpine<K, V, <G as ScopePare
 fn three_hop<G: Scope>(
     forward_graph: &Arrange<G, Node, Node, isize>,
     reverse_graph: &Arrange<G, Node, Node, isize>,
-    goals: &Collection<G, (Node, Node)>) -> Collection<G, ((Node, Node), u32)>
+    goals: &VecCollection<G, (Node, Node)>) -> VecCollection<G, ((Node, Node), u32)>
 where G::Timestamp: Lattice+Ord {
 
     let sources = goals.map(|(x,_)| x);
@@ -327,7 +327,7 @@ where G::Timestamp: Lattice+Ord {
 fn _bidijkstra<G: Scope>(
     forward_graph: &Arrange<G, Node, Node, isize>,
     reverse_graph: &Arrange<G, Node, Node, isize>,
-    goals: &Collection<G, (Node, Node)>) -> Collection<G, ((Node, Node), u32)>
+    goals: &VecCollection<G, (Node, Node)>) -> VecCollection<G, ((Node, Node), u32)>
 where G::Timestamp: Lattice+Ord {
 
     goals.scope().iterative::<Iter,_,_>(|inner| {

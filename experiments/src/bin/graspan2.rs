@@ -6,7 +6,7 @@ use timely::order::Product;
 
 use differential_dataflow::operators::iterate::SemigroupVariable;
 
-use differential_dataflow::Collection;
+use differential_dataflow::VecCollection;
 use differential_dataflow::input::Input;
 use differential_dataflow::operators::*;
 use differential_dataflow::operators::arrange::Arrange;
@@ -92,13 +92,13 @@ fn unoptimized() {
                         ;
 
                     // MA(a,b) <- D(x,a),VA(x,y),D(y,b)
-                    let memory_alias_next: Collection<_,_,Present> =
+                    let memory_alias_next: VecCollection<_,_,Present> =
                     value_alias_next
                         .join_core(&dereference, |_x,&y,&a| Some((y,a)))
                         .arrange::<ValBatcher<_,_,_,_>, ValBuilder<_,_,_,_>, ValSpine<_,_,_,_>>()
                         .join_core(&dereference, |_y,&a,&b| Some((a,b)));
 
-                    let memory_alias_next: Collection<_,_,Present>  =
+                    let memory_alias_next: VecCollection<_,_,Present>  =
                     memory_alias_next
                         .arrange::<KeyBatcher<_,_,_>, KeyBuilder<_,_,_>, KeySpine<_,_,_>>()
                         // .distinct_total_core::<Diff>()

@@ -8,10 +8,10 @@ For example, to produce for each manager their managee with the lowest identifie
 # extern crate timely;
 # extern crate differential_dataflow;
 # use timely::dataflow::Scope;
-# use differential_dataflow::Collection;
+# use differential_dataflow::VecCollection;
 # use differential_dataflow::lattice::Lattice;
 # use differential_dataflow::operators::Reduce;
-# fn example<G: Scope>(manages: &Collection<G, (u64, u64), i64>)
+# fn example<G: Scope>(manages: &VecCollection<G, (u64, u64), i64>)
 # where G::Timestamp: Lattice
 # {
     manages

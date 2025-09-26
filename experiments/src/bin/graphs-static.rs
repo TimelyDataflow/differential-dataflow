@@ -4,7 +4,7 @@ use timely::order::Product;
 use timely::dataflow::operators::ToStream;
 
 use differential_dataflow::input::Input;
-use differential_dataflow::Collection;
+use differential_dataflow::VecCollection;
 use differential_dataflow::operators::*;
 use differential_dataflow::operators::arrange::ArrangeByKey;
 use differential_dataflow::operators::arrange::ArrangeBySelf;
@@ -110,8 +110,8 @@ type TraceHandle = TraceAgent<GraphTrace>;
 
 fn reach<G: Scope<Timestamp = ()>> (
     graph: &mut TraceHandle,
-    roots: Collection<G, Node, Diff>
-) -> Collection<G, Node, Diff> {
+    roots: VecCollection<G, Node, Diff>
+) -> VecCollection<G, Node, Diff> {
 
     let graph = graph.import(&roots.scope());
 
@@ -135,8 +135,8 @@ fn reach<G: Scope<Timestamp = ()>> (
 
 fn bfs<G: Scope<Timestamp = ()>> (
     graph: &mut TraceHandle,
-    roots: Collection<G, Node, Diff>
-) -> Collection<G, (Node, u32), Diff> {
+    roots: VecCollection<G, Node, Diff>
+) -> VecCollection<G, (Node, u32), Diff> {
 
     let graph = graph.import(&roots.scope());
     let roots = roots.map(|r| (r,0));
@@ -161,7 +161,7 @@ fn connected_components<G: Scope<Timestamp = ()>>(
     scope: &mut G,
     forward: &mut TraceHandle,
     reverse: &mut TraceHandle,
-) -> Collection<G, (Node, Node), Diff> {
+) -> VecCollection<G, (Node, Node), Diff> {
 
     let forward = forward.import(scope);
     let reverse = reverse.import(scope);

@@ -7,11 +7,11 @@ use std::cell::RefCell;
 use timely::dataflow::{Scope, ProbeHandle};
 use timely::dataflow::scopes::child::Iterative as Child;
 
-use differential_dataflow::{AsCollection, Collection, Hashable};
+use differential_dataflow::{AsCollection, VecCollection, Hashable};
 use differential_dataflow::ExchangeData as Data;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::input::Input;
-use differential_dataflow::operators::iterate::Variable;
+use differential_dataflow::operators::iterate::VecVariable;
 use differential_dataflow::operators::{Threshold, Join, JoinCore};
 use differential_dataflow::operators::arrange::ArrangeByKey;
 
@@ -56,8 +56,8 @@ type MethodInvocation = Instruction;
 
 /// Set-valued collection.
 pub struct Relation<'a, G: Scope, D: Data+Hashable> where G::Timestamp : Lattice {
-    variable: Variable<Child<'a, G, Iter>, D, Diff>,
-    current: Collection<Child<'a, G, Iter>, D, Diff>,
+    variable: VecVariable<Child<'a, G, Iter>, D, Diff>,
+    current: VecCollection<Child<'a, G, Iter>, D, Diff>,
 }
 
 impl<'a, G: Scope, D: Data+Hashable> Relation<'a, G, D> where G::Timestamp : Lattice {
@@ -66,16 +66,16 @@ impl<'a, G: Scope, D: Data+Hashable> Relation<'a, G, D> where G::Timestamp : Lat
         Self::new_from(&::timely::dataflow::operators::generic::operator::empty(scope).as_collection())
     }
     /// Creates a new variable initialized with `source`.
-    pub fn new_from(source: &Collection<Child<'a, G, Iter>, D, Diff>) -> Self {
+    pub fn new_from(source: &VecCollection<Child<'a, G, Iter>, D, Diff>) -> Self {
         use ::timely::order::Product;
-        let variable = Variable::new_from(source.clone(), Product::new(Default::default(), 1));
+        let variable = VecVariable::new_from(source.clone(), Product::new(Default::default(), 1));
         Relation {
             variable: variable,
             current: source.clone(),
         }
     }
     /// Concatenates `production` into the definition of the variable.
-    pub fn add_production(&mut self, production: &Collection<Child<'a, G, Iter>, D, Diff>) {
+    pub fn add_production(&mut self, production: &VecCollection<Child<'a, G, Iter>, D, Diff>) {
         self.current = self.current.concat(production);
     }
     /// Finalizes the variable, connecting its recursive definition.
@@ -89,8 +89,8 @@ impl<'a, G: Scope, D: Data+Hashable> Relation<'a, G, D> where G::Timestamp : Lat
 
 impl<'a, G: Scope, D: Data+Hashable> ::std::ops::Deref for Relation<'a, G, D>
 where G::Timestamp : Lattice {
-    type Target = Collection<Child<'a, G, Iter>, D, Diff>;
-    fn deref(&self) -> &Collection<Child<'a, G, Iter>, D, Diff> {
+    type Target = VecCollection<Child<'a, G, Iter>, D, Diff>;
+    fn deref(&self) -> &VecCollection<Child<'a, G, Iter>, D, Diff> {
         &self.variable
     }
 }
@@ -283,7 +283,7 @@ fn main() {
             let (input1, ClassType) = scope.new_collection_from_raw(load1(index, &prefix, "ClassType.facts", interner.clone())); inputs.0.push(input1);
             let (input2, ArrayType) = scope.new_collection_from_raw(load1(index, &prefix, "ArrayType.facts", interner.clone())); inputs.0.push(input2);
             let (input3, InterfaceType) = scope.new_collection_from_raw(load1(index, &prefix, "InterfaceType.facts", interner.clone())); inputs.0.push(input3);
-            // let Var_DeclaringMethod: Collection<_,(Symbol, Symbol)> = scope.new_collection_from_raw(load2(index, &prefix, "Var-DeclaringMethod.facts", interner.clone())).1;
+            // let Var_DeclaringMethod: VecCollection<_,(Symbol, Symbol)> = scope.new_collection_from_raw(load2(index, &prefix, "Var-DeclaringMethod.facts", interner.clone())).1;
             let (input4, ApplicationClass) = scope.new_collection_from_raw(load1(index, &prefix, "ApplicationClass.facts", interner.clone())); inputs.0.push(input4);
             let (input5, ThisVar) = scope.new_collection_from_raw(load2(index, &prefix, "ThisVar.facts", interner.clone())); inputs.1.push(input5);
 
@@ -317,14 +317,14 @@ fn main() {
             let (input31, ActualParam) = scope.new_collection_from_raw(load3(index, &prefix, "ActualParam.facts", interner.clone())); inputs.2.push(input31);
 
             // Main schema
-            let isType: Collection<_,Type> =
+            let isType: VecCollection<_,Type> =
             ClassType
                 .concat(&ArrayType)
                 .concat(&InterfaceType)
                 .concat(&ApplicationClass)
                 .concat(&_NormalHeap.map(|(_id,ty)| ty));
 
-            let isReferenceType: Collection<_,ReferenceType> =
+            let isReferenceType: VecCollection<_,ReferenceType> =
             ClassType
                 .concat(&ArrayType)
                 .concat(&InterfaceType)
@@ -350,11 +350,11 @@ fn main() {
                 .concat(&scope.new_collection_from_raw(Some(((temp2.clone(), temp1b.clone()), 0, 1))).1);
 
             // NOTE: Unused
-            // let MainMethodArgArray: Collection<_,HeapAllocation> = scope.new_collection_from_raw(Some(temp3.clone())).1;
+            // let MainMethodArgArray: VecCollection<_,HeapAllocation> = scope.new_collection_from_raw(Some(temp3.clone())).1;
             // NOTE: Unused
-            // let MainMethodArgArrayContent: Collection<_,HeapAllocation> = scope.new_collection_from_raw(Some(temp2.clone())).1;
+            // let MainMethodArgArrayContent: VecCollection<_,HeapAllocation> = scope.new_collection_from_raw(Some(temp2.clone())).1;
 
-            let Instruction_Method = //: Collection<_,(Instruction, Method)> =
+            let Instruction_Method = //: VecCollection<_,(Instruction, Method)> =
             _AssignHeapAllocation.map(|x| (x.0, x.4))
                 .concat(&_AssignLocal.map(|x| (x.0, x.4)))
                 .concat(&_AssignCast.map(|x| (x.0, x.5)))
@@ -374,7 +374,7 @@ fn main() {
             let isVirtualMethodInvocation_Insn = _VirtualMethodInvocation.map(|x| x.0);
             let isStaticMethodInvocation_Insn = _StaticMethodInvocation.map(|x| x.0);
 
-            let FieldInstruction_Signature: Collection<_,(FieldInstruction, Field)> =
+            let FieldInstruction_Signature: VecCollection<_,(FieldInstruction, Field)> =
             _StoreInstanceField.map(|x| (x.0, x.4))
                 .concat(&_LoadInstanceField.map(|x| (x.0, x.4)))
                 .concat(&_StoreStaticField.map(|x| (x.0, x.3)))
@@ -392,7 +392,7 @@ fn main() {
             let StoreArrayIndex_From = _StoreArrayIndex.map(|x| (x.0, x.2));
             let StoreArrayIndex_Base = _StoreArrayIndex.map(|x| (x.0, x.3));
 
-            let AssignInstruction_To: Collection<_,(AssignInstruction, Var)> =
+            let AssignInstruction_To: VecCollection<_,(AssignInstruction, Var)> =
             _AssignHeapAllocation.map(|x| (x.0, x.3))
                 .concat(&_AssignLocal.map(|x| (x.0, x.3)))
                 .concat(&_AssignCast.map(|x| (x.0, x.3)));
@@ -403,7 +403,7 @@ fn main() {
             let AssignHeapAllocation_Heap = _AssignHeapAllocation.map(|x| (x.0, x.2));
 
             let ReturnNonvoid_Var = _Return.map(|x| (x.0, x.2));
-            let MethodInvocation_Method: Collection<_,(MethodInvocation, Method)> =
+            let MethodInvocation_Method: VecCollection<_,(MethodInvocation, Method)> =
             _StaticMethodInvocation.map(|x| (x.0, x.2))
                 .concat(&_SpecialMethodInvocation.map(|x| (x.0, x.2)))
                 .concat(&_VirtualMethodInvocation.map(|x| (x.0, x.2)));
@@ -420,7 +420,7 @@ fn main() {
             //  LoadInstanceField_Base(?insn, ?base),
             //  FieldInstruction_Signature(?insn, ?sig),
             //  LoadInstanceField_To(?insn, ?to).
-            let LoadInstanceField: Collection<_,(Var, Field, Var, Method)> =
+            let LoadInstanceField: VecCollection<_,(Var, Field, Var, Method)> =
             Instruction_Method
                 .join(&LoadInstanceField_Base)
                 .join(&FieldInstruction_Signature)
@@ -432,7 +432,7 @@ fn main() {
             //  StoreInstanceField_From(?insn, ?from),
             //  StoreInstanceField_Base(?insn, ?base),
             //  FieldInstruction_Signature(?insn, ?sig).
-            let StoreInstanceField: Collection<_,(Var, Var, Field, Method)> =
+            let StoreInstanceField: VecCollection<_,(Var, Var, Field, Method)> =
             Instruction_Method
                 .join(&StoreInstanceField_From)
                 .join(&StoreInstanceField_Base)
@@ -443,7 +443,7 @@ fn main() {
             //  Instruction_Method(?insn, ?inmethod),
             //  FieldInstruction_Signature(?insn, ?sig),
             //  LoadStaticField_To(?insn, ?to).
-            let LoadStaticField: Collection<_,(Field, Var, Method)> =
+            let LoadStaticField: VecCollection<_,(Field, Var, Method)> =
             Instruction_Method
                 .join(&FieldInstruction_Signature)
                 .join(&LoadStaticField_To)
@@ -453,7 +453,7 @@ fn main() {
             //  Instruction_Method(?insn, ?inmethod),
             //  StoreStaticField_From(?insn, ?from),
             //  FieldInstruction_Signature(?insn, ?sig).
-            let StoreStaticField: Collection<_,(Var, Field, Method)> =
+            let StoreStaticField: VecCollection<_,(Var, Field, Method)> =
             Instruction_Method
                 .join(&StoreStaticField_From)
                 .join(&FieldInstruction_Signature)
@@ -463,7 +463,7 @@ fn main() {
             //  Instruction_Method(?insn, ?inmethod),
             //  LoadArrayIndex_Base(?insn, ?base),
             //  LoadArrayIndex_To(?insn, ?to).
-            let LoadArrayIndex: Collection<_,(Var, Var, Method)> =
+            let LoadArrayIndex: VecCollection<_,(Var, Var, Method)> =
             Instruction_Method
                 .join(&LoadArrayIndex_Base)
                 .join(&LoadArrayIndex_To)
@@ -473,7 +473,7 @@ fn main() {
             //  Instruction_Method(?insn, ?inmethod),
             //  StoreArrayIndex_From(?insn, ?from),
             //  StoreArrayIndex_Base(?insn, ?base).
-            let StoreArrayIndex: Collection<_,(Var, Var, Method)> =
+            let StoreArrayIndex: VecCollection<_,(Var, Var, Method)> =
             Instruction_Method
                 .join(&StoreArrayIndex_From)
                 .join(&StoreArrayIndex_Base)
@@ -484,7 +484,7 @@ fn main() {
             //  AssignCast_From(?insn, ?from),
             //  AssignInstruction_To(?insn, ?to),
             //  AssignCast_Type(?insn, ?type).
-            let AssignCast: Collection<_,(Type, Var, Var, Method)> =
+            let AssignCast: VecCollection<_,(Type, Var, Var, Method)> =
             Instruction_Method
                 .join(&AssignCast_From)
                 .join(&AssignInstruction_To)
@@ -495,7 +495,7 @@ fn main() {
             //  AssignInstruction_To(?insn, ?to),
             //  Instruction_Method(?insn, ?inmethod),
             //  AssignLocal_From(?insn, ?from).
-            let AssignLocal: Collection<_,(Var, Var, Method)> =
+            let AssignLocal: VecCollection<_,(Var, Var, Method)> =
             Instruction_Method
                 .join(&AssignInstruction_To)
                 .join(&AssignLocal_From)
@@ -505,7 +505,7 @@ fn main() {
             //  Instruction_Method(?insn, ?inmethod),
             //  AssignHeapAllocation_Heap(?insn, ?heap),
             //  AssignInstruction_To(?insn, ?to).
-            let AssignHeapAllocation: Collection<_,(HeapAllocation, Var, Method)> =
+            let AssignHeapAllocation: VecCollection<_,(HeapAllocation, Var, Method)> =
             Instruction_Method
                 .join(&AssignHeapAllocation_Heap)
                 .join(&AssignInstruction_To)
@@ -514,7 +514,7 @@ fn main() {
             // ReturnVar(?var, ?method) :-
             //  Instruction_Method(?insn, ?method),
             //  ReturnNonvoid_Var(?insn, ?var).
-            let ReturnVar: Collection<_,(Var, Method)> =
+            let ReturnVar: VecCollection<_,(Var, Method)> =
             Instruction_Method
                 .join(&ReturnNonvoid_Var)
                 .map(|(_insn, (inmethod, var))| (var, inmethod));
@@ -523,7 +523,7 @@ fn main() {
             //  isStaticMethodInvocation_Insn(?invocation),
             //  Instruction_Method(?invocation, ?inmethod),
             //  MethodInvocation_Method(?invocation, ?signature).
-            let StaticMethodInvocation: Collection<_,(MethodInvocation, Method, Method)> =
+            let StaticMethodInvocation: VecCollection<_,(MethodInvocation, Method, Method)> =
             Instruction_Method
                 .semijoin(&isStaticMethodInvocation_Insn)
                 .join(&MethodInvocation_Method)

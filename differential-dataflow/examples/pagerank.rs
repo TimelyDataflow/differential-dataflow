@@ -1,7 +1,7 @@
 use timely::order::Product;
 use timely::dataflow::{*, operators::Filter};
 
-use differential_dataflow::Collection;
+use differential_dataflow::VecCollection;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::{*, iterate::Variable};
 use differential_dataflow::input::InputSession;
@@ -77,7 +77,7 @@ fn main() {
 
 // Returns a weighted collection in which the weight of each node is proportional
 // to its PageRank in the input graph `edges`.
-fn pagerank<G>(iters: Iter, edges: &Collection<G, Edge, Diff>) -> Collection<G, Node, Diff>
+fn pagerank<G>(iters: Iter, edges: &VecCollection<G, Edge, Diff>) -> VecCollection<G, Node, Diff>
 where
     G: Scope<Timestamp: Lattice>,
 {

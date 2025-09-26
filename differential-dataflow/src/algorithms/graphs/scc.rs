@@ -5,7 +5,7 @@ use std::hash::Hash;
 
 use timely::dataflow::*;
 
-use crate::{Collection, ExchangeData};
+use crate::{VecCollection, ExchangeData};
 use crate::operators::*;
 use crate::lattice::Lattice;
 use crate::difference::{Abelian, Multiply};
@@ -13,7 +13,7 @@ use crate::difference::{Abelian, Multiply};
 use super::propagate::propagate;
 
 /// Iteratively removes nodes with no in-edges.
-pub fn trim<G, N, R>(graph: &Collection<G, (N,N), R>) -> Collection<G, (N,N), R>
+pub fn trim<G, N, R>(graph: &VecCollection<G, (N,N), R>) -> VecCollection<G, (N,N), R>
 where
     G: Scope<Timestamp: Lattice+Ord>,
     N: ExchangeData + Hash,
@@ -33,7 +33,7 @@ where
 }
 
 /// Returns the subset of edges in the same strongly connected component.
-pub fn strongly_connected<G, N, R>(graph: &Collection<G, (N,N), R>) -> Collection<G, (N,N), R>
+pub fn strongly_connected<G, N, R>(graph: &VecCollection<G, (N,N), R>) -> VecCollection<G, (N,N), R>
 where
     G: Scope<Timestamp: Lattice + Ord>,
     N: ExchangeData + Hash,
@@ -48,8 +48,8 @@ where
     })
 }
 
-fn trim_edges<G, N, R>(cycle: &Collection<G, (N,N), R>, edges: &Collection<G, (N,N), R>)
-    -> Collection<G, (N,N), R>
+fn trim_edges<G, N, R>(cycle: &VecCollection<G, (N,N), R>, edges: &VecCollection<G, (N,N), R>)
+    -> VecCollection<G, (N,N), R>
 where
     G: Scope<Timestamp: Lattice+Ord>,
     N: ExchangeData + Hash,

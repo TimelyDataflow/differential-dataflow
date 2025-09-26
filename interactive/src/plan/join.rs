@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use timely::dataflow::Scope;
 
-use differential_dataflow::{Collection, ExchangeData};
+use differential_dataflow::{VecCollection, ExchangeData};
 use crate::plan::{Plan, Render};
 use crate::{TraceManager, Time, Diff, Datum};
 
@@ -29,9 +29,9 @@ impl<V: ExchangeData+Hash+Datum> Render for Join<V> {
     fn render<S: Scope<Timestamp = Time>>(
         &self,
         scope: &mut S,
-        collections: &mut std::collections::HashMap<Plan<Self::Value>, Collection<S, Vec<Self::Value>, Diff>>,
+        collections: &mut std::collections::HashMap<Plan<Self::Value>, VecCollection<S, Vec<Self::Value>, Diff>>,
         arrangements: &mut TraceManager<Self::Value>,
-    ) -> Collection<S, Vec<Self::Value>, Diff>
+    ) -> VecCollection<S, Vec<Self::Value>, Diff>
     {
         use differential_dataflow::operators::arrange::ArrangeByKey;
 
