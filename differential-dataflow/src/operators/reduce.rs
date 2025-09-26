@@ -7,7 +7,7 @@
 
 use timely::container::PushInto;
 use crate::hashable::Hashable;
-use crate::{Data, ExchangeData, Collection};
+use crate::{Data, ExchangeData, VecCollection};
 use crate::difference::{Semigroup, Abelian};
 
 use timely::order::PartialOrder;
@@ -57,24 +57,24 @@ pub trait Reduce<G: Scope<Timestamp: Lattice+Ord>, K: Data, V: Data, R: Semigrou
     ///          });
     /// });
     /// ```
-    fn reduce<L, V2: Data, R2: Ord+Abelian+'static>(&self, logic: L) -> Collection<G, (K, V2), R2>
+    fn reduce<L, V2: Data, R2: Ord+Abelian+'static>(&self, logic: L) -> VecCollection<G, (K, V2), R2>
     where L: FnMut(&K, &[(&V, R)], &mut Vec<(V2, R2)>)+'static {
         self.reduce_named("Reduce", logic)
     }
 
     /// As `reduce` with the ability to name the operator.
-    fn reduce_named<L, V2: Data, R2: Ord+Abelian+'static>(&self, name: &str, logic: L) -> Collection<G, (K, V2), R2>
+    fn reduce_named<L, V2: Data, R2: Ord+Abelian+'static>(&self, name: &str, logic: L) -> VecCollection<G, (K, V2), R2>
     where L: FnMut(&K, &[(&V, R)], &mut Vec<(V2, R2)>)+'static;
 }
 
-impl<G, K, V, R> Reduce<G, K, V, R> for Collection<G, (K, V), R>
+impl<G, K, V, R> Reduce<G, K, V, R> for VecCollection<G, (K, V), R>
     where
         G: Scope<Timestamp: Lattice+Ord>,
         K: ExchangeData+Hashable,
         V: ExchangeData,
         R: ExchangeData+Semigroup,
  {
-    fn reduce_named<L, V2: Data, R2: Ord+Abelian+'static>(&self, name: &str, logic: L) -> Collection<G, (K, V2), R2>
+    fn reduce_named<L, V2: Data, R2: Ord+Abelian+'static>(&self, name: &str, logic: L) -> VecCollection<G, (K, V2), R2>
         where L: FnMut(&K, &[(&V, R)], &mut Vec<(V2, R2)>)+'static {
         self.arrange_by_key_named(&format!("Arrange: {}", name))
             .reduce_named(name, logic)
@@ -86,7 +86,7 @@ where
     G: Scope<Timestamp=T1::Time>,
     T1: for<'a> TraceReader<Key<'a>=&'a K, KeyOwn = K, Val<'a>=&'a V, Diff=R>+Clone+'static,
 {
-    fn reduce_named<L, V2: Data, R2: Ord+Abelian+'static>(&self, name: &str, logic: L) -> Collection<G, (K, V2), R2>
+    fn reduce_named<L, V2: Data, R2: Ord+Abelian+'static>(&self, name: &str, logic: L) -> VecCollection<G, (K, V2), R2>
         where L: FnMut(&K, &[(&V, R)], &mut Vec<(V2, R2)>)+'static {
         self.reduce_abelian::<_,ValBuilder<_,_,_,_>,ValSpine<K,V2,_,_>>(name, logic)
             .as_collection(|k,v| (k.clone(), v.clone()))
@@ -114,12 +114,12 @@ pub trait Threshold<G: Scope<Timestamp: Lattice+Ord>, K: Data, R1: Semigroup> {
     ///          .threshold(|_,c| c % 2);
     /// });
     /// ```
-    fn threshold<R2: Ord+Abelian+'static, F: FnMut(&K, &R1)->R2+'static>(&self, thresh: F) -> Collection<G, K, R2> {
+    fn threshold<R2: Ord+Abelian+'static, F: FnMut(&K, &R1)->R2+'static>(&self, thresh: F) -> VecCollection<G, K, R2> {
         self.threshold_named("Threshold", thresh)
     }
 
     /// A `threshold` with the ability to name the operator.
-    fn threshold_named<R2: Ord+Abelian+'static, F: FnMut(&K, &R1)->R2+'static>(&self, name: &str, thresh: F) -> Collection<G, K, R2>;
+    fn threshold_named<R2: Ord+Abelian+'static, F: FnMut(&K, &R1)->R2+'static>(&self, name: &str, thresh: F) -> VecCollection<G, K, R2>;
 
     /// Reduces the collection to one occurrence of each distinct element.
     ///
@@ -136,7 +136,7 @@ pub trait Threshold<G: Scope<Timestamp: Lattice+Ord>, K: Data, R1: Semigroup> {
     ///          .distinct();
     /// });
     /// ```
-    fn distinct(&self) -> Collection<G, K, isize> {
+    fn distinct(&self) -> VecCollection<G, K, isize> {
         self.distinct_core()
     }
 
@@ -145,13 +145,13 @@ pub trait Threshold<G: Scope<Timestamp: Lattice+Ord>, K: Data, R1: Semigroup> {
     /// This method allows `distinct` to produce collections whose difference
     /// type is something other than an `isize` integer, for example perhaps an
     /// `i32`.
-    fn distinct_core<R2: Ord+Abelian+'static+From<i8>>(&self) -> Collection<G, K, R2> {
+    fn distinct_core<R2: Ord+Abelian+'static+From<i8>>(&self) -> VecCollection<G, K, R2> {
         self.threshold_named("Distinct", |_,_| R2::from(1i8))
     }
 }
 
-impl<G: Scope<Timestamp: Lattice+Ord>, K: ExchangeData+Hashable, R1: ExchangeData+Semigroup> Threshold<G, K, R1> for Collection<G, K, R1> {
-    fn threshold_named<R2: Ord+Abelian+'static, F: FnMut(&K,&R1)->R2+'static>(&self, name: &str, thresh: F) -> Collection<G, K, R2> {
+impl<G: Scope<Timestamp: Lattice+Ord>, K: ExchangeData+Hashable, R1: ExchangeData+Semigroup> Threshold<G, K, R1> for VecCollection<G, K, R1> {
+    fn threshold_named<R2: Ord+Abelian+'static, F: FnMut(&K,&R1)->R2+'static>(&self, name: &str, thresh: F) -> VecCollection<G, K, R2> {
         self.arrange_by_self_named(&format!("Arrange: {}", name))
             .threshold_named(name, thresh)
     }
@@ -162,7 +162,7 @@ where
     G: Scope<Timestamp=T1::Time>,
     T1: for<'a> TraceReader<Key<'a>=&'a K, KeyOwn = K, Val<'a>=&'a (), Diff=R1>+Clone+'static,
 {
-    fn threshold_named<R2: Ord+Abelian+'static, F: FnMut(&K,&R1)->R2+'static>(&self, name: &str, mut thresh: F) -> Collection<G, K, R2> {
+    fn threshold_named<R2: Ord+Abelian+'static, F: FnMut(&K,&R1)->R2+'static>(&self, name: &str, mut thresh: F) -> VecCollection<G, K, R2> {
         self.reduce_abelian::<_,KeyBuilder<K,G::Timestamp,R2>,KeySpine<K,G::Timestamp,R2>>(name, move |k,s,t| t.push(((), thresh(k, &s[0].1))))
             .as_collection(|k,_| k.clone())
     }
@@ -185,7 +185,7 @@ pub trait Count<G: Scope<Timestamp: Lattice+Ord>, K: Data, R: Semigroup> {
     ///          .count();
     /// });
     /// ```
-    fn count(&self) -> Collection<G, (K, R), isize> {
+    fn count(&self) -> VecCollection<G, (K, R), isize> {
         self.count_core()
     }
 
@@ -194,11 +194,11 @@ pub trait Count<G: Scope<Timestamp: Lattice+Ord>, K: Data, R: Semigroup> {
     /// This method allows `count` to produce collections whose difference
     /// type is something other than an `isize` integer, for example perhaps an
     /// `i32`.
-    fn count_core<R2: Ord + Abelian + From<i8> + 'static>(&self) -> Collection<G, (K, R), R2>;
+    fn count_core<R2: Ord + Abelian + From<i8> + 'static>(&self) -> VecCollection<G, (K, R), R2>;
 }
 
-impl<G: Scope<Timestamp: Lattice+Ord>, K: ExchangeData+Hashable, R: ExchangeData+Semigroup> Count<G, K, R> for Collection<G, K, R> {
-    fn count_core<R2: Ord + Abelian + From<i8> + 'static>(&self) -> Collection<G, (K, R), R2> {
+impl<G: Scope<Timestamp: Lattice+Ord>, K: ExchangeData+Hashable, R: ExchangeData+Semigroup> Count<G, K, R> for VecCollection<G, K, R> {
+    fn count_core<R2: Ord + Abelian + From<i8> + 'static>(&self) -> VecCollection<G, (K, R), R2> {
         self.arrange_by_self_named("Arrange: Count")
             .count_core()
     }
@@ -209,7 +209,7 @@ where
     G: Scope<Timestamp=T1::Time>,
     T1: for<'a> TraceReader<Key<'a>=&'a K, KeyOwn = K, Val<'a>=&'a (), Diff=R>+Clone+'static,
 {
-    fn count_core<R2: Ord + Abelian + From<i8> + 'static>(&self) -> Collection<G, (K, R), R2> {
+    fn count_core<R2: Ord + Abelian + From<i8> + 'static>(&self) -> VecCollection<G, (K, R), R2> {
         self.reduce_abelian::<_,ValBuilder<K,R,G::Timestamp,R2>,ValSpine<K,R,G::Timestamp,R2>>("Count", |_k,s,t| t.push((s[0].1.clone(), R2::from(1i8))))
             .as_collection(|k,c| (k.clone(), c.clone()))
     }
@@ -281,7 +281,7 @@ pub trait ReduceCore<G: Scope<Timestamp: Lattice+Ord>, K: ToOwned + ?Sized, V: D
             ;
 }
 
-impl<G, K, V, R> ReduceCore<G, K, V, R> for Collection<G, (K, V), R>
+impl<G, K, V, R> ReduceCore<G, K, V, R> for VecCollection<G, (K, V), R>
 where
     G: Scope,
     G::Timestamp: Lattice+Ord,

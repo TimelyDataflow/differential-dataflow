@@ -2,7 +2,7 @@ use std::hash::Hash;
 
 use timely::dataflow::Scope;
 
-use differential_dataflow::{ExchangeData, Collection};
+use differential_dataflow::{ExchangeData, VecCollection};
 use differential_dataflow::difference::{Semigroup, Monoid, Multiply};
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::trace::TraceReader;
@@ -13,10 +13,10 @@ use differential_dataflow::trace::TraceReader;
 /// key with `key_selector` and then proposes all pair af the prefix
 /// and values associated with the key in `arrangement`.
 pub fn validate<G, K, V, Tr, F, P>(
-    extensions: &Collection<G, (P, V), Tr::Diff>,
+    extensions: &VecCollection<G, (P, V), Tr::Diff>,
     arrangement: Arranged<G, Tr>,
     key_selector: F,
-) -> Collection<G, (P, V), Tr::Diff>
+) -> VecCollection<G, (P, V), Tr::Diff>
 where
     G: Scope<Timestamp=Tr::Time>,
     Tr: for<'a> TraceReader<

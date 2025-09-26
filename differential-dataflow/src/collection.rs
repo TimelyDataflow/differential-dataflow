@@ -37,7 +37,7 @@ use crate::hashable::Hashable;
 /// parameter is the type of data in your collection, for example `String`, or `(u32, Vec<Option<()>>)`.
 /// The `R` parameter represents the types of changes that the data undergo, and is most commonly (and
 /// defaults to) `isize`, representing changes to the occurrence count of each record.
-pub type Collection<G, D, R = isize> = CollectionCore<G, Vec<(D, <G as ScopeParent>::Timestamp, R)>>;
+pub type VecCollection<G, D, R = isize> = Collection<G, Vec<(D, <G as ScopeParent>::Timestamp, R)>>;
 
 /// A collection represented by a stream of abstract containers.
 ///
@@ -45,7 +45,7 @@ pub type Collection<G, D, R = isize> = CollectionCore<G, Vec<(D, <G as ScopePare
 /// in order to expose some of this functionality (e.g. negation, timestamp manipulation). Other actions
 /// on the containers, and streams of containers, are left to the container implementor to describe.
 #[derive(Clone)]
-pub struct CollectionCore<G: Scope, C> {
+pub struct Collection<G: Scope, C> {
     /// The underlying timely dataflow stream.
     ///
     /// This field is exposed to support direct timely dataflow manipulation when required, but it is
@@ -57,7 +57,7 @@ pub struct CollectionCore<G: Scope, C> {
     pub inner: timely::dataflow::StreamCore<G, C>,
 }
 
-impl<G: Scope, C> CollectionCore<G, C> {
+impl<G: Scope, C> Collection<G, C> {
     /// Creates a new Collection from a timely dataflow stream.
     ///
     /// This method seems to be rarely used, with the `as_collection` method on streams being a more
@@ -69,7 +69,7 @@ impl<G: Scope, C> CollectionCore<G, C> {
     /// method does not check it.
     pub fn new(stream: StreamCore<G, C>) -> Self { Self { inner: stream } }
 }
-impl<G: Scope, C: Container> CollectionCore<G, C> {
+impl<G: Scope, C: Container> Collection<G, C> {
     /// Creates a new collection accumulating the contents of the two collections.
     ///
     /// Despite the name, differential dataflow collections are unordered. This method is so named because the
@@ -131,7 +131,7 @@ impl<G: Scope, C: Container> CollectionCore<G, C> {
     ///
     /// This method is a specialization of `enter` to the case where the nested scope is a region.
     /// It removes the need for an operator that adjusts the timestamp.
-    pub fn enter_region<'a>(&self, child: &Child<'a, G, <G as ScopeParent>::Timestamp>) -> CollectionCore<Child<'a, G, <G as ScopeParent>::Timestamp>, C> {
+    pub fn enter_region<'a>(&self, child: &Child<'a, G, <G as ScopeParent>::Timestamp>) -> Collection<Child<'a, G, <G as ScopeParent>::Timestamp>, C> {
         self.inner
             .enter(child)
             .as_collection()
@@ -236,7 +236,7 @@ impl<G: Scope, C: Container> CollectionCore<G, C> {
     ///     data.assert_eq(&result);
     /// });
     /// ```
-    pub fn enter<'a, T>(&self, child: &Child<'a, G, T>) -> CollectionCore<Child<'a, G, T>, <C as containers::Enter<<G as ScopeParent>::Timestamp, T>>::InnerContainer>
+    pub fn enter<'a, T>(&self, child: &Child<'a, G, T>) -> Collection<Child<'a, G, T>, <C as containers::Enter<<G as ScopeParent>::Timestamp, T>>::InnerContainer>
     where
         C: containers::Enter<<G as ScopeParent>::Timestamp, T, InnerContainer: Container>,
         T: Refines<<G as ScopeParent>::Timestamp>,
@@ -283,7 +283,7 @@ impl<G: Scope, C: Container> CollectionCore<G, C> {
     }
 }
 
-impl<G: Scope, D: Clone+'static, R: Clone+'static> Collection<G, D, R> {
+impl<G: Scope, D: Clone+'static, R: Clone+'static> VecCollection<G, D, R> {
     /// Creates a new collection by applying the supplied function to each input element.
     ///
     /// # Examples
@@ -298,7 +298,7 @@ impl<G: Scope, D: Clone+'static, R: Clone+'static> Collection<G, D, R> {
     ///          .assert_empty();
     /// });
     /// ```
-    pub fn map<D2, L>(&self, mut logic: L) -> Collection<G, D2, R>
+    pub fn map<D2, L>(&self, mut logic: L) -> VecCollection<G, D2, R>
     where
         D2: Data,
         L: FnMut(D) -> D2 + 'static,
@@ -325,7 +325,7 @@ impl<G: Scope, D: Clone+'static, R: Clone+'static> Collection<G, D, R> {
     ///          .assert_empty();
     /// });
     /// ```
-    pub fn map_in_place<L>(&self, mut logic: L) -> Collection<G, D, R>
+    pub fn map_in_place<L>(&self, mut logic: L) -> VecCollection<G, D, R>
     where
         L: FnMut(&mut D) + 'static,
     {
@@ -349,7 +349,7 @@ impl<G: Scope, D: Clone+'static, R: Clone+'static> Collection<G, D, R> {
     ///          .flat_map(|x| 0 .. x);
     /// });
     /// ```
-    pub fn flat_map<I, L>(&self, mut logic: L) -> Collection<G, I::Item, R>
+    pub fn flat_map<I, L>(&self, mut logic: L) -> VecCollection<G, I::Item, R>
     where
         G::Timestamp: Clone,
         I: IntoIterator<Item: Data>,
@@ -373,7 +373,7 @@ impl<G: Scope, D: Clone+'static, R: Clone+'static> Collection<G, D, R> {
     ///          .assert_empty();
     /// });
     /// ```
-    pub fn filter<L>(&self, mut logic: L) -> Collection<G, D, R>
+    pub fn filter<L>(&self, mut logic: L) -> VecCollection<G, D, R>
     where
         L: FnMut(&D) -> bool + 'static,
     {
@@ -401,7 +401,7 @@ impl<G: Scope, D: Clone+'static, R: Clone+'static> Collection<G, D, R> {
     ///     x1.assert_eq(&x2);
     /// });
     /// ```
-    pub fn explode<D2, R2, I, L>(&self, mut logic: L) -> Collection<G, D2, <R2 as Multiply<R>>::Output>
+    pub fn explode<D2, R2, I, L>(&self, mut logic: L) -> VecCollection<G, D2, <R2 as Multiply<R>>::Output>
     where
         D2: Data,
         R2: Semigroup+Multiply<R, Output: Semigroup+'static>,
@@ -435,7 +435,7 @@ impl<G: Scope, D: Clone+'static, R: Clone+'static> Collection<G, D, R> {
     ///           );
     /// });
     /// ```
-    pub fn join_function<D2, R2, I, L>(&self, mut logic: L) -> Collection<G, D2, <R2 as Multiply<R>>::Output>
+    pub fn join_function<D2, R2, I, L>(&self, mut logic: L) -> VecCollection<G, D2, <R2 as Multiply<R>>::Output>
     where
         G::Timestamp: Lattice,
         D2: Data,
@@ -470,7 +470,7 @@ impl<G: Scope, D: Clone+'static, R: Clone+'static> Collection<G, D, R> {
     ///     data.assert_eq(&result);
     /// });
     /// ```
-    pub fn enter_at<'a, T, F>(&self, child: &Iterative<'a, G, T>, mut initial: F) -> Collection<Iterative<'a, G, T>, D, R>
+    pub fn enter_at<'a, T, F>(&self, child: &Iterative<'a, G, T>, mut initial: F) -> VecCollection<Iterative<'a, G, T>, D, R>
     where
         T: Timestamp+Hash,
         F: FnMut(&D) -> T + Clone + 'static,
@@ -492,7 +492,7 @@ impl<G: Scope, D: Clone+'static, R: Clone+'static> Collection<G, D, R> {
     /// ordered, they should have the same order or compare equal once `func` is applied to them (this
     /// is because we advance the timely capability with the same logic, and it must remain `less_equal`
     /// to all of the data timestamps).
-    pub fn delay<F>(&self, func: F) -> Collection<G, D, R>
+    pub fn delay<F>(&self, func: F) -> VecCollection<G, D, R>
     where
         F: FnMut(&G::Timestamp) -> G::Timestamp + Clone + 'static,
     {
@@ -528,7 +528,7 @@ impl<G: Scope, D: Clone+'static, R: Clone+'static> Collection<G, D, R> {
     ///          .inspect(|x| println!("error: {:?}", x));
     /// });
     /// ```
-    pub fn inspect<F>(&self, func: F) -> Collection<G, D, R>
+    pub fn inspect<F>(&self, func: F) -> VecCollection<G, D, R>
     where
         F: FnMut(&(D, G::Timestamp, R))+'static,
     {
@@ -554,7 +554,7 @@ impl<G: Scope, D: Clone+'static, R: Clone+'static> Collection<G, D, R> {
     ///          .inspect_batch(|t,xs| println!("errors @ {:?}: {:?}", t, xs));
     /// });
     /// ```
-    pub fn inspect_batch<F>(&self, mut func: F) -> Collection<G, D, R>
+    pub fn inspect_batch<F>(&self, mut func: F) -> VecCollection<G, D, R>
     where
         F: FnMut(&G::Timestamp, &[(D, G::Timestamp, R)])+'static,
     {
@@ -597,7 +597,7 @@ use timely::dataflow::scopes::ScopeParent;
 use timely::progress::timestamp::Refines;
 
 /// Methods requiring a nested scope.
-impl<'a, G: Scope, T: Timestamp, C: Container> CollectionCore<Child<'a, G, T>, C>
+impl<'a, G: Scope, T: Timestamp, C: Container> Collection<Child<'a, G, T>, C>
 where
     C: containers::Leave<T, G::Timestamp, OuterContainer: Container>,
     T: Refines<<G as ScopeParent>::Timestamp>,
@@ -622,7 +622,7 @@ where
     ///     data.assert_eq(&result);
     /// });
     /// ```
-    pub fn leave(&self) -> CollectionCore<G, <C as containers::Leave<T, G::Timestamp>>::OuterContainer> {
+    pub fn leave(&self) -> Collection<G, <C as containers::Leave<T, G::Timestamp>>::OuterContainer> {
         use timely::dataflow::channels::pact::Pipeline;
         self.inner
             .leave()
@@ -634,13 +634,13 @@ where
 }
 
 /// Methods requiring a region as the scope.
-impl<G: Scope, C: Container+Data> CollectionCore<Child<'_, G, G::Timestamp>, C>
+impl<G: Scope, C: Container+Data> Collection<Child<'_, G, G::Timestamp>, C>
 {
     /// Returns the value of a Collection from a nested region to its containing scope.
     ///
     /// This method is a specialization of `leave` to the case that of a nested region.
     /// It removes the need for an operator that adjusts the timestamp.
-    pub fn leave_region(&self) -> CollectionCore<G, C> {
+    pub fn leave_region(&self) -> Collection<G, C> {
         self.inner
             .leave()
             .as_collection()
@@ -648,7 +648,7 @@ impl<G: Scope, C: Container+Data> CollectionCore<Child<'_, G, G::Timestamp>, C>
 }
 
 /// Methods requiring an Abelian difference, to support negation.
-impl<G: Scope<Timestamp: Data>, D: Clone+'static, R: Abelian+'static> Collection<G, D, R> {
+impl<G: Scope<Timestamp: Data>, D: Clone+'static, R: Abelian+'static> VecCollection<G, D, R> {
     /// Assert if the collections are ever different.
     ///
     /// Because this is a dataflow fragment, the test is only applied as the computation is run. If the computation
@@ -687,7 +687,7 @@ impl<G: Scope<Timestamp: Data>, D: Clone+'static, R: Abelian+'static> Collection
 /// Conversion to a differential dataflow Collection.
 pub trait AsCollection<G: Scope, C> {
     /// Converts the type to a differential dataflow collection.
-    fn as_collection(&self) -> CollectionCore<G, C>;
+    fn as_collection(&self) -> Collection<G, C>;
 }
 
 impl<G: Scope, C: Clone> AsCollection<G, C> for StreamCore<G, C> {
@@ -695,8 +695,8 @@ impl<G: Scope, C: Clone> AsCollection<G, C> for StreamCore<G, C> {
     ///
     /// By calling this method, you guarantee that the timestamp invariant (as documented on
     /// [Collection]) is upheld. This method will not check it.
-    fn as_collection(&self) -> CollectionCore<G, C> {
-        CollectionCore::<G,C>::new(self.clone())
+    fn as_collection(&self) -> Collection<G, C> {
+        Collection::<G,C>::new(self.clone())
     }
 }
 
@@ -721,11 +721,11 @@ impl<G: Scope, C: Clone> AsCollection<G, C> for StreamCore<G, C> {
 ///         .assert_eq(&data);
 /// });
 /// ```
-pub fn concatenate<G, C, I>(scope: &mut G, iterator: I) -> CollectionCore<G, C>
+pub fn concatenate<G, C, I>(scope: &mut G, iterator: I) -> Collection<G, C>
 where
     G: Scope,
     C: Container,
-    I: IntoIterator<Item=CollectionCore<G, C>>,
+    I: IntoIterator<Item=Collection<G, C>>,
 {
     scope
         .concatenate(iterator.into_iter().map(|x| x.inner))

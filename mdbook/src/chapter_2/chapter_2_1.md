@@ -11,7 +11,7 @@ As an example, our example program used `map` to reverse the pairs of identifier
 # use differential_dataflow::Collection;
 # use differential_dataflow::lattice::Lattice;
 # use differential_dataflow::operators::Join;
-# fn example<G: Scope>(manages: &Collection<G, (u64, u64)>)
+# fn example<G: Scope>(manages: &VecCollection<G, (u64, u64)>)
 # where G::Timestamp: Lattice
 # {
     manages
@@ -29,7 +29,7 @@ If instead we had just written
 # use timely::dataflow::Scope;
 # use differential_dataflow::Collection;
 # use differential_dataflow::lattice::Lattice;
-# fn example<G: Scope>(manages: &Collection<G, (u64, u64)>)
+# fn example<G: Scope>(manages: &VecCollection<G, (u64, u64)>)
 # where G::Timestamp: Lattice
 # {
     manages

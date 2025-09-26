@@ -10,7 +10,7 @@ As an example, we might select out those management relation where the manager h
 # use timely::dataflow::Scope;
 # use differential_dataflow::Collection;
 # use differential_dataflow::lattice::Lattice;
-# fn example<G: Scope>(manages: &Collection<G, (u64, u64)>)
+# fn example<G: Scope>(manages: &VecCollection<G, (u64, u64)>)
 # where G::Timestamp: Lattice
 # {
     manages

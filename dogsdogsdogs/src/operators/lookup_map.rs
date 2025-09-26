@@ -6,7 +6,7 @@ use timely::dataflow::channels::pact::{Pipeline, Exchange};
 use timely::dataflow::operators::Operator;
 use timely::progress::Antichain;
 
-use differential_dataflow::{ExchangeData, Collection, AsCollection, Hashable};
+use differential_dataflow::{ExchangeData, VecCollection, AsCollection, Hashable};
 use differential_dataflow::difference::{IsZero, Semigroup, Monoid};
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::trace::{Cursor, TraceReader};
@@ -18,14 +18,14 @@ use differential_dataflow::trace::implementations::BatchContainer;
 /// key with `key_selector` and then proposes all pair af the prefix
 /// and values associated with the key in `arrangement`.
 pub fn lookup_map<G, D, K, R, Tr, F, DOut, ROut, S>(
-    prefixes: &Collection<G, D, R>,
+    prefixes: &VecCollection<G, D, R>,
     mut arrangement: Arranged<G, Tr>,
     key_selector: F,
     mut output_func: S,
     supplied_key0: K,
     supplied_key1: K,
     supplied_key2: K,
-) -> Collection<G, DOut, ROut>
+) -> VecCollection<G, DOut, ROut>
 where
     G: Scope<Timestamp=Tr::Time>,
     Tr: for<'a> TraceReader<

@@ -5,7 +5,7 @@ use timely::dataflow::operators::Operator;
 use timely::order::Product;
 use timely::dataflow::{Scope, StreamCore};
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
-use differential_dataflow::{AsCollection, collection::CollectionCore};
+use differential_dataflow::{AsCollection, Collection};
 use differential_dataflow::input::Input;
 use differential_dataflow::operators::iterate::Variable;
 use differential_dataflow::collection::containers::{Enter, Leave, Negate, ResultsIn};
@@ -52,12 +52,12 @@ fn main() {
     timely::example(|scope| {
 
         let numbers = scope.new_collection_from(1 .. 10u32).1;
-        let numbers: CollectionCore<_, _>  = wrap(&numbers.inner).as_collection();
+        let numbers: Collection<_, _>  = wrap(&numbers.inner).as_collection();
 
         scope.iterative::<u64,_,_>(|nested| {
             let summary = Product::new(Default::default(), 1);
             let variable = Variable::new_from(numbers.enter(nested), summary);
-            let mapped: CollectionCore<_, _> = variable.inner.unary(Pipeline, "Map", |_,_| {
+            let mapped: Collection<_, _> = variable.inner.unary(Pipeline, "Map", |_,_| {
                 |input, output| {
                     input.for_each(|time, data| {
                         let mut session = output.session(&time);

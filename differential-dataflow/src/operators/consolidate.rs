@@ -8,7 +8,7 @@
 
 use timely::dataflow::Scope;
 
-use crate::{Collection, ExchangeData, Hashable};
+use crate::{VecCollection, ExchangeData, Hashable};
 use crate::consolidation::ConsolidatingContainerBuilder;
 use crate::difference::Semigroup;
 
@@ -17,7 +17,7 @@ use crate::lattice::Lattice;
 use crate::trace::{Batcher, Builder};
 
 /// Methods which require data be arrangeable.
-impl<G, D, R> Collection<G, D, R>
+impl<G, D, R> VecCollection<G, D, R>
 where
     G: Scope<Timestamp: Data+Lattice>,
     D: ExchangeData+Hashable,

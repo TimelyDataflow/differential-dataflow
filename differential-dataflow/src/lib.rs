@@ -76,7 +76,7 @@
 
 use std::fmt::Debug;
 
-pub use collection::{Collection, AsCollection};
+pub use collection::{AsCollection, Collection, VecCollection};
 pub use hashable::Hashable;
 pub use difference::Abelian as Diff;
 

@@ -8,11 +8,11 @@ use timely::order::Product;
 use timely::dataflow::Scope;
 use timely::dataflow::scopes::ScopeParent;
 
-use differential_dataflow::Collection;
+use differential_dataflow::VecCollection;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::input::{Input, InputSession};
 use differential_dataflow::operators::arrange::{ArrangeByKey, ArrangeBySelf};
-use differential_dataflow::operators::iterate::VariableRow;
+use differential_dataflow::operators::iterate::VecVariable;
 use differential_dataflow::operators::Threshold;
 
 type Node = usize;
@@ -83,16 +83,16 @@ type Arrange<G,K,V,R> = Arranged<G, TraceValHandle<K, V, <G as ScopeParent>::Tim
 /// An edge variable provides arranged representations of its contents, even before they are
 /// completely defined, in support of recursively defined productions.
 pub struct EdgeVariable<G: Scope<Timestamp: Lattice>> {
-    variable: VariableRow<G, Edge, Diff>,
-    current: Collection<G, Edge, Diff>,
+    variable: VecVariable<G, Edge, Diff>,
+    current: VecCollection<G, Edge, Diff>,
     forward: Option<Arrange<G, Node, Node, Diff>>,
     reverse: Option<Arrange<G, Node, Node, Diff>>,
 }
 
 impl<G: Scope<Timestamp: Lattice>> EdgeVariable<G> {
     /// Creates a new variable initialized with `source`.
-    pub fn from(source: &Collection<G, Edge>, step: <G::Timestamp as Timestamp>::Summary) -> Self {
-        let variable = VariableRow::new(&mut source.scope(), step);
+    pub fn from(source: &VecCollection<G, Edge>, step: <G::Timestamp as Timestamp>::Summary) -> Self {
+        let variable = VecVariable::new(&mut source.scope(), step);
         EdgeVariable {
             variable: variable,
             current: source.clone(),
@@ -101,7 +101,7 @@ impl<G: Scope<Timestamp: Lattice>> EdgeVariable<G> {
         }
     }
     /// Concatenates `production` into the definition of the variable.
-    pub fn add_production(&mut self, production: &Collection<G, Edge, Diff>) {
+    pub fn add_production(&mut self, production: &VecCollection<G, Edge, Diff>) {
         self.current = self.current.concat(production);
     }
     /// Finalizes the variable, connecting its recursive definition.

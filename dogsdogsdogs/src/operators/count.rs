@@ -1,6 +1,6 @@
 use timely::dataflow::Scope;
 
-use differential_dataflow::{ExchangeData, Collection, Hashable};
+use differential_dataflow::{ExchangeData, VecCollection, Hashable};
 use differential_dataflow::difference::{Semigroup, Monoid, Multiply};
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::trace::TraceReader;
@@ -12,11 +12,11 @@ use differential_dataflow::trace::TraceReader;
 /// associated count in `arrangement`. If the found count is less than `count`,
 /// the `count` and `index` fields are overwritten with their new values.
 pub fn count<G, Tr, K, R, F, P>(
-    prefixes: &Collection<G, (P, usize, usize), R>,
+    prefixes: &VecCollection<G, (P, usize, usize), R>,
     arrangement: Arranged<G, Tr>,
     key_selector: F,
     index: usize,
-) -> Collection<G, (P, usize, usize), R>
+) -> VecCollection<G, (P, usize, usize), R>
 where
     G: Scope<Timestamp=Tr::Time>,
     Tr: TraceReader<KeyOwn = K, Diff=isize>+Clone+'static,

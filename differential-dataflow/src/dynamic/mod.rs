@@ -1,15 +1,15 @@
 //! Types and operators for dynamically scoped iterative dataflows.
-//! 
+//!
 //! Scopes in timely dataflow are expressed statically, as part of the type system.
 //! This affords many efficiencies, as well as type-driven reassurance of correctness.
 //! However, there are times you need scopes whose organization is discovered only at runtime.
 //! Naiad and Materialize are examples: the latter taking arbitrary SQL into iterative dataflows.
-//! 
-//! This module provides a timestamp type `Pointstamp` that can represent an update with an 
+//!
+//! This module provides a timestamp type `Pointstamp` that can represent an update with an
 //! unboundedly long sequence of some `T: Timestamp`, ordered by the product order by which times
-//! in iterative dataflows are ordered. The module also provides methods for manipulating these 
+//! in iterative dataflows are ordered. The module also provides methods for manipulating these
 //! timestamps to emulate the movement of update streams in to, within, and out of iterative scopes.
-//! 
+//!
 
 pub mod pointstamp;
 
@@ -21,12 +21,12 @@ use timely::dataflow::channels::pact::Pipeline;
 use timely::progress::Antichain;
 
 use crate::difference::Semigroup;
-use crate::{Collection, Data};
+use crate::{VecCollection, Data};
 use crate::collection::AsCollection;
 use crate::dynamic::pointstamp::PointStamp;
 use crate::dynamic::pointstamp::PointStampSummary;
 
-impl<G, D, R, T, TOuter> Collection<G, D, R>
+impl<G, D, R, T, TOuter> VecCollection<G, D, R>
 where
     G: Scope<Timestamp = Product<TOuter, PointStamp<T>>>,
     D: Data,
@@ -67,7 +67,7 @@ where
 }
 
 /// Produces the summary for a feedback operator at `level`, applying `summary` to that coordinate.
-pub fn feedback_summary<T>(level: usize, summary: T::Summary) -> PointStampSummary<T::Summary> 
+pub fn feedback_summary<T>(level: usize, summary: T::Summary) -> PointStampSummary<T::Summary>
 where
     T: Timestamp+Default,
 {

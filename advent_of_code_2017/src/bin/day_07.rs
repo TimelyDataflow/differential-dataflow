@@ -1074,7 +1074,7 @@ tvhftq (35)";
         let index = worker.index();
         let peers = worker.peers();
 
-        let worker_input = 
+        let worker_input =
         input
             .split('\n')
             .enumerate()
@@ -1102,7 +1102,7 @@ tvhftq (35)";
             let weights = input.explode(|(name,weight,_)| Some((name, weight as isize)));
             let parents = input.flat_map(|(name,_,links)| links.into_iter().map(move |link| (link,name.to_string())));
 
-            let total_weights: Collection<_,String> = weights
+            let total_weights: VecCollection<_,String> = weights
                 .iterate(|inner| {
                     parents.enter(&inner.scope())
                            .semijoin(&inner)

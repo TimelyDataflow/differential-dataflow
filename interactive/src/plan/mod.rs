@@ -4,7 +4,7 @@ use std::hash::Hash;
 use serde::{Deserialize, Serialize};
 
 use timely::dataflow::Scope;
-use differential_dataflow::{Collection, ExchangeData};
+use differential_dataflow::{VecCollection, ExchangeData};
 
 use crate::{TraceManager, Time, Diff};
 
@@ -35,9 +35,9 @@ pub trait Render : Sized {
     fn render<S: Scope<Timestamp = Time>>(
         &self,
         scope: &mut S,
-        collections: &mut std::collections::HashMap<Plan<Self::Value>, Collection<S, Vec<Self::Value>, Diff>>,
+        collections: &mut std::collections::HashMap<Plan<Self::Value>, VecCollection<S, Vec<Self::Value>, Diff>>,
         arrangements: &mut TraceManager<Self::Value>,
-    ) -> Collection<S, Vec<Self::Value>, Diff>;
+    ) -> VecCollection<S, Vec<Self::Value>, Diff>;
 }
 
 /// Possible query plan types.
@@ -145,9 +145,9 @@ impl<V: ExchangeData+Hash+Datum> Render for Plan<V> {
     fn render<S: Scope<Timestamp = Time>>(
         &self,
         scope: &mut S,
-        collections: &mut std::collections::HashMap<Plan<Self::Value>, Collection<S, Vec<Self::Value>, Diff>>,
+        collections: &mut std::collections::HashMap<Plan<Self::Value>, VecCollection<S, Vec<Self::Value>, Diff>>,
         arrangements: &mut TraceManager<Self::Value>,
-    ) -> Collection<S, Vec<Self::Value>, Diff>
+    ) -> VecCollection<S, Vec<Self::Value>, Diff>
     {
         if collections.get(self).is_none() {
 

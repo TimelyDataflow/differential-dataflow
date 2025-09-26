@@ -13,7 +13,7 @@ As an example, if we were to inspect
 # use differential_dataflow::Collection;
 # use differential_dataflow::lattice::Lattice;
 # use differential_dataflow::operators::Reduce;
-# fn example<G: Scope>(manages: &Collection<G, (u64, u64)>)
+# fn example<G: Scope>(manages: &VecCollection<G, (u64, u64)>)
 # where G::Timestamp: Lattice
 # {
     manages
@@ -38,7 +38,7 @@ However, by introducing `consolidate`
 # use timely::dataflow::Scope;
 # use differential_dataflow::Collection;
 # use differential_dataflow::lattice::Lattice;
-# fn example<G: Scope>(manages: &Collection<G, (u64, u64)>)
+# fn example<G: Scope>(manages: &VecCollection<G, (u64, u64)>)
 # where G::Timestamp: Lattice
 # {
     manages

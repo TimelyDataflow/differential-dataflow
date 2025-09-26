@@ -3,7 +3,7 @@ use std::time::Instant;
 use timely::dataflow::*;
 
 use differential_dataflow::input::Input;
-use differential_dataflow::Collection;
+use differential_dataflow::VecCollection;
 use differential_dataflow::operators::*;
 
 use differential_dataflow::trace::implementations::{ValSpine, KeySpine, KeyBatcher, KeyBuilder, ValBatcher, ValBuilder};
@@ -83,7 +83,7 @@ fn main() {
 use timely::order::Product;
 
 // returns pairs (n, s) indicating node n can be reached from a root in s steps.
-fn tc<G: Scope<Timestamp=()>>(edges: &EdgeArranged<G, Node, Node, Present>) -> Collection<G, Edge, Present> {
+fn tc<G: Scope<Timestamp=()>>(edges: &EdgeArranged<G, Node, Node, Present>) -> VecCollection<G, Edge, Present> {
 
     // repeatedly update minimal distances each node can be reached from each root
     edges.stream.scope().iterative::<Iter,_,_>(|scope| {
@@ -108,7 +108,7 @@ fn tc<G: Scope<Timestamp=()>>(edges: &EdgeArranged<G, Node, Node, Present>) -> C
 }
 
 // returns pairs (n, s) indicating node n can be reached from a root in s steps.
-fn sg<G: Scope<Timestamp=()>>(edges: &EdgeArranged<G, Node, Node, Present>) -> Collection<G, Edge, Present> {
+fn sg<G: Scope<Timestamp=()>>(edges: &EdgeArranged<G, Node, Node, Present>) -> VecCollection<G, Edge, Present> {
 
     let peers = edges.join_core(&edges, |_,&x,&y| Some((x,y))).filter(|&(x,y)| x != y);
 
