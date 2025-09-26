@@ -160,9 +160,9 @@
 </span><span class="boring">extern crate timely;
 </span><span class="boring">extern crate differential_dataflow;
 </span><span class="boring">use timely::dataflow::Scope;
-</span><span class="boring">use differential_dataflow::Collection;
+</span><span class="boring">use differential_dataflow::VecCollection;
 </span><span class="boring">use differential_dataflow::lattice::Lattice;
-</span><span class="boring">fn example&lt;G: Scope&gt;(manages: &amp;Collection&lt;G, (u64, u64)&gt;)
+</span><span class="boring">fn example&lt;G: Scope&gt;(manages: &amp;VecCollection&lt;G, (u64, u64)&gt;)
 </span><span class="boring">where G::Timestamp: Lattice
 </span><span class="boring">{
 </span>    manages

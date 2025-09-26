@@ -160,10 +160,10 @@
 </span><span class="boring">extern crate timely;
 </span><span class="boring">extern crate differential_dataflow;
 </span><span class="boring">use timely::dataflow::Scope;
-</span><span class="boring">use differential_dataflow::Collection;
+</span><span class="boring">use differential_dataflow::VecCollection;
 </span><span class="boring">use differential_dataflow::operators::{Join, Iterate, Threshold};
 </span><span class="boring">use differential_dataflow::lattice::Lattice;
-</span><span class="boring">fn example&lt;G: Scope&gt;(manages: &amp;Collection&lt;G, (u64, u64)&gt;)
+</span><span class="boring">fn example&lt;G: Scope&gt;(manages: &amp;VecCollection&lt;G, (u64, u64)&gt;)
 </span><span class="boring">where G::Timestamp: Lattice
 </span><span class="boring">{
 </span>    manages   // transitive contains (manager, person) for many hops.
@@ -197,11 +197,11 @@
 </span><span class="boring">extern crate timely;
 </span><span class="boring">extern crate differential_dataflow;
 </span><span class="boring">use timely::dataflow::Scope;
-</span><span class="boring">use differential_dataflow::Collection;
+</span><span class="boring">use differential_dataflow::VecCollection;
 </span><span class="boring">use differential_dataflow::operators::{Join, Threshold};
-</span><span class="boring">use differential_dataflow::operators::{Iterate, iterate::Variable};
+</span><span class="boring">use differential_dataflow::operators::{Iterate, iterate::VecVariable};
 </span><span class="boring">use differential_dataflow::lattice::Lattice;
-</span><span class="boring">fn example&lt;G: Scope&gt;(manages: &amp;Collection&lt;G, (u64, u64)&gt;)
+</span><span class="boring">fn example&lt;G: Scope&gt;(manages: &amp;VecCollection&lt;G, (u64, u64)&gt;)
 </span><span class="boring">where G::Timestamp: Lattice
 </span><span class="boring">{
 </span>    manages   // transitive contains (manager, person) for many hops.
@@ -232,19 +232,19 @@
 </span><span class="boring">use timely::dataflow::Scope;
 </span><span class="boring">use timely::dataflow::scopes::Child;
 </span><span class="boring">use timely::progress::Antichain;
-</span><span class="boring">use differential_dataflow::Collection;
-</span><span class="boring">use differential_dataflow::operators::{Iterate, iterate::Variable};
+</span><span class="boring">use differential_dataflow::VecCollection;
+</span><span class="boring">use differential_dataflow::operators::{Iterate, iterate::VecVariable};
 </span><span class="boring">use differential_dataflow::lattice::Lattice;
-</span><span class="boring">fn logic&lt;'a, G: Scope&gt;(variable: &amp;Variable&lt;Child&lt;'a, G, G::Timestamp&gt;, (u64, u64), isize&gt;) -&gt; Collection&lt;Child&lt;'a, G, G::Timestamp&gt;, (u64, u64)&gt;
+</span><span class="boring">fn logic&lt;'a, G: Scope&gt;(variable: &amp;VecVariable&lt;Child&lt;'a, G, G::Timestamp&gt;, (u64, u64), isize&gt;) -&gt; VecCollection&lt;Child&lt;'a, G, G::Timestamp&gt;, (u64, u64)&gt;
 </span><span class="boring">where G::Timestamp: Lattice
 </span><span class="boring">{
 </span><span class="boring">    (*variable).clone()
 </span><span class="boring">}
-</span><span class="boring">fn example&lt;'a, G: Scope&lt;Timestamp=u64&gt;&gt;(collection: &amp;Collection&lt;G, (u64, u64)&gt;) //, logic: impl Fn(&amp;Variable&lt;Child&lt;'a, G, G::Timestamp&gt;, (u64, u64), isize&gt;) -&gt; Collection&lt;Child&lt;'a, G, G::Timestamp&gt;, (u64, u64)&gt;)
+</span><span class="boring">fn example&lt;'a, G: Scope&lt;Timestamp=u64&gt;&gt;(collection: &amp;VecCollection&lt;G, (u64, u64)&gt;) //, logic: impl Fn(&amp;VecVariable&lt;Child&lt;'a, G, G::Timestamp&gt;, (u64, u64), isize&gt;) -&gt; VecCollection&lt;Child&lt;'a, G, G::Timestamp&gt;, (u64, u64)&gt;)
 </span><span class="boring">   where G::Timestamp: Lattice
 </span><span class="boring">{
 </span>    collection.scope().scoped("inner", |subgraph| {
-        let variable = Variable::new_from(collection.enter(subgraph), 1);
+        let variable = VecVariable::new_from(collection.enter(subgraph), 1);
         let result = logic(&amp;variable);
         variable.set(&amp;result);
         result.leave()
