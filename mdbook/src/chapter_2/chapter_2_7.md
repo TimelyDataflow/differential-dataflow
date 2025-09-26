@@ -8,7 +8,7 @@ As an example, we can take our `manages` relation and determine for all employee
 # extern crate timely;
 # extern crate differential_dataflow;
 # use timely::dataflow::Scope;
-# use differential_dataflow::Collection;
+# use differential_dataflow::VecCollection;
 # use differential_dataflow::operators::{Join, Iterate, Threshold};
 # use differential_dataflow::lattice::Lattice;
 # fn example<G: Scope>(manages: &VecCollection<G, (u64, u64)>)
@@ -44,7 +44,7 @@ In the example above, we could rewrite
 # extern crate timely;
 # extern crate differential_dataflow;
 # use timely::dataflow::Scope;
-# use differential_dataflow::Collection;
+# use differential_dataflow::VecCollection;
 # use differential_dataflow::operators::{Join, Threshold};
 # use differential_dataflow::operators::{Iterate, iterate::VecVariable};
 # use differential_dataflow::lattice::Lattice;
@@ -86,7 +86,7 @@ As an example, the implementation of the `iterate` operator looks something like
 # use timely::dataflow::Scope;
 # use timely::dataflow::scopes::Child;
 # use timely::progress::Antichain;
-# use differential_dataflow::Collection;
+# use differential_dataflow::VecCollection;
 # use differential_dataflow::operators::{Iterate, iterate::VecVariable};
 # use differential_dataflow::lattice::Lattice;
 # fn logic<'a, G: Scope>(variable: &VecVariable<Child<'a, G, G::Timestamp>, (u64, u64), isize>) -> VecCollection<Child<'a, G, G::Timestamp>, (u64, u64)>

@@ -22,7 +22,7 @@ use crate::difference::{Semigroup, Abelian, Multiply};
 use crate::lattice::Lattice;
 use crate::hashable::Hashable;
 
-/// A mutable collection of values of type `D`
+/// An evolving collection of values of type `D`, backed by Rust `Vec` types as containers.
 ///
 /// The `Collection` type is the core abstraction in differential dataflow programs. As you write your
 /// differential dataflow computation, you write as if the collection is a static dataset to which you
@@ -31,15 +31,17 @@ use crate::hashable::Hashable;
 /// propagate changes through your functional computation and report the corresponding changes to the
 /// output collections.
 ///
-/// Each collection has three generic parameters. The parameter `G` is for the scope in which the
+/// Each vec collection has three generic parameters. The parameter `G` is for the scope in which the
 /// collection exists; as you write more complicated programs you may wish to introduce nested scopes
 /// (e.g. for iteration) and this parameter tracks the scope (for timely dataflow's benefit). The `D`
 /// parameter is the type of data in your collection, for example `String`, or `(u32, Vec<Option<()>>)`.
 /// The `R` parameter represents the types of changes that the data undergo, and is most commonly (and
 /// defaults to) `isize`, representing changes to the occurrence count of each record.
+///
+/// This type definition instantiates the [`Collection`] type with a `Vec<(D, G::Timestamp, R)>`.
 pub type VecCollection<G, D, R = isize> = Collection<G, Vec<(D, <G as ScopeParent>::Timestamp, R)>>;
 
-/// A collection represented by a stream of abstract containers.
+/// An evolving collection represented by a stream of abstract containers.
 ///
 /// The containers purport to reperesent changes to a collection, and they must implement various traits
 /// in order to expose some of this functionality (e.g. negation, timestamp manipulation). Other actions

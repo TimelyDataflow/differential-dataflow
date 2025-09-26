@@ -10,7 +10,7 @@ use std::rc::Rc;
 use timely::dataflow::*;
 use timely::dataflow::operators::CapabilitySet;
 
-use differential_dataflow::Collection;
+use differential_dataflow::VecCollection;
 use differential_dataflow::operators::arrange::ArrangeByKey;
 use differential_dataflow::operators::arrange::ShutdownButton;
 

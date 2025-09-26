@@ -51,7 +51,7 @@ use crate::operators::arrange::arrangement::Arranged;
 ///
 /// This variant takes a pre-arranged edge collection, to facilitate re-use, and allows
 /// a method `logic` to specify the rounds in which we introduce various labels. The output
-/// of `logic should be a number in the interval [0,64],
+/// of `logic should be a number in the interval \[0,64\],
 pub fn propagate_core<G, N, L, Tr, F, R>(edges: &Arranged<G,Tr>, nodes: &VecCollection<G,(N,L),R>, logic: F) -> VecCollection<G,(N,L),R>
 where
     G: Scope<Timestamp=Tr::Time>,

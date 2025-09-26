@@ -10,7 +10,7 @@ As an example, if we were to inspect
 # extern crate timely;
 # extern crate differential_dataflow;
 # use timely::dataflow::Scope;
-# use differential_dataflow::Collection;
+# use differential_dataflow::VecCollection;
 # use differential_dataflow::lattice::Lattice;
 # use differential_dataflow::operators::Reduce;
 # fn example<G: Scope>(manages: &VecCollection<G, (u64, u64)>)
@@ -36,7 +36,7 @@ However, by introducing `consolidate`
 # extern crate timely;
 # extern crate differential_dataflow;
 # use timely::dataflow::Scope;
-# use differential_dataflow::Collection;
+# use differential_dataflow::VecCollection;
 # use differential_dataflow::lattice::Lattice;
 # fn example<G: Scope>(manages: &VecCollection<G, (u64, u64)>)
 # where G::Timestamp: Lattice

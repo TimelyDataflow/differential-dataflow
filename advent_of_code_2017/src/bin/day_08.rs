@@ -3,7 +3,7 @@ extern crate differential_dataflow;
 
 // taken from: https://adventofcode.com/2017/day/8
 
-// use differential_dataflow::Collection;
+// use differential_dataflow::VecCollection;
 use differential_dataflow::input::Input;
 use differential_dataflow::operators::*;
 use differential_dataflow::algorithms::prefix_sum::PrefixSum;
@@ -1068,7 +1068,7 @@ wui inc -120 if i > -2038";
             let edits = data.map(|(pos, line)| {
 
                 // Each line has a read location with a condition, and a write location with an operation.
-                // E.g., 
+                // E.g.,
                 //
                 //      kxm dec 986 if xbh <= -2515
                 //      obc inc 63 if wui >= 2800
