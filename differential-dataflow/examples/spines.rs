@@ -2,6 +2,11 @@ use timely::dataflow::operators::probe::Handle;
 
 use differential_dataflow::input::Input;
 
+use mimalloc::MiMalloc;
+
+#[global_allocator]
+static GLOBAL: MiMalloc = MiMalloc;
+
 fn main() {
 
     let keys: usize = std::env::args().nth(1).unwrap().parse().unwrap();
