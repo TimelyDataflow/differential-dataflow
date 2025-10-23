@@ -121,7 +121,7 @@ fn frontier<G, T>(
 ) -> VecCollection<G, (Location, T)>
 where
     G: Scope<Timestamp: Lattice+Ord>,
-    T: Timestamp<Summary: differential_dataflow::ExchangeData>,
+    T: Timestamp<Summary: differential_dataflow::ExchangeData>+std::hash::Hash,
 {
     // Translate node and edge transitions into a common Location to Location edge with an associated Summary.
     let nodes = nodes.map(|(target, source, summary)| (Location::from(target), (Location::from(source), summary)));

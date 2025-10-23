@@ -5,17 +5,14 @@
 //! + (b * c), and if this is not equal to the former term, little is known about the actual output.
 use std::cmp::Ordering;
 
-use timely::Accountable;
-use timely::container::{ContainerBuilder, PushInto};
+use timely::{Accountable, ContainerBuilder};
+use timely::container::PushInto;
 use timely::order::PartialOrder;
 use timely::progress::Timestamp;
 use timely::dataflow::{Scope, StreamCore};
-use timely::dataflow::operators::generic::{Operator, OutputHandleCore};
+use timely::dataflow::operators::generic::{Operator, OutputBuilderSession, Session};
 use timely::dataflow::channels::pact::Pipeline;
-use timely::dataflow::channels::pushers::buffer::Session;
-use timely::dataflow::channels::pushers::Counter;
 use timely::dataflow::operators::Capability;
-use timely::dataflow::channels::pushers::tee::Tee;
 
 use crate::hashable::Hashable;
 use crate::{Data, ExchangeData, VecCollection};
@@ -312,13 +309,13 @@ where
 }
 
 /// The session passed to join closures.
-pub type JoinSession<'a, T, CB, C> = Session<'a, T, EffortBuilder<CB>, Counter<T, C, Tee<T, C>>>;
+pub type JoinSession<'a, 'b, T, CB, CT> = Session<'a, 'b, T, EffortBuilder<CB>, CT>;
 
 /// A container builder that tracks the length of outputs to estimate the effort of join closures.
 #[derive(Default, Debug)]
 pub struct EffortBuilder<CB>(pub std::cell::Cell<usize>, pub CB);
 
-impl<CB: ContainerBuilder> ContainerBuilder for EffortBuilder<CB> {
+impl<CB: ContainerBuilder> timely::container::ContainerBuilder for EffortBuilder<CB> {
     type Container = CB::Container;
 
     #[inline]
@@ -361,7 +358,7 @@ where
     G: Scope<Timestamp=T1::Time>,
     T1: TraceReader+Clone+'static,
     T2: for<'a> TraceReader<Key<'a>=T1::Key<'a>, Time=T1::Time>+Clone+'static,
-    L: FnMut(T1::Key<'_>,T1::Val<'_>,T2::Val<'_>,&G::Timestamp,&T1::Diff,&T2::Diff,&mut JoinSession<T1::Time, CB, CB::Container>)+'static,
+    L: FnMut(T1::Key<'_>,T1::Val<'_>,T2::Val<'_>,&G::Timestamp,&T1::Diff,&T2::Diff,&mut JoinSession<T1::Time, CB, Capability<T1::Time>>)+'static,
     CB: ContainerBuilder,
 {
     // Rename traces for symmetry from here on out.
@@ -436,7 +433,7 @@ where
         let mut trace1_option = Some(trace1);
         let mut trace2_option = Some(trace2);
 
-        move |input1, input2, output| {
+        move |(input1, frontier1), (input2, frontier2), output| {
 
             // 1. Consuming input.
             //
@@ -561,12 +558,12 @@ where
 
             // Maintain `trace1`. Drop if `input2` is empty, or advance based on future needs.
             if let Some(trace1) = trace1_option.as_mut() {
-                if input2.frontier().is_empty() { trace1_option = None; }
+                if frontier2.is_empty() { trace1_option = None; }
                 else {
                     // Allow `trace1` to compact logically up to the frontier we may yet receive,
                     // in the opposing input (`input2`). All `input2` times will be beyond this
                     // frontier, and joined times only need to be accurate when advanced to it.
-                    trace1.set_logical_compaction(input2.frontier().frontier());
+                    trace1.set_logical_compaction(frontier2.frontier());
                     // Allow `trace1` to compact physically up to the upper bound of batches we
                     // have received in its input (`input1`). We will not require a cursor that
                     // is not beyond this bound.
@@ -576,12 +573,12 @@ where
 
             // Maintain `trace2`. Drop if `input1` is empty, or advance based on future needs.
             if let Some(trace2) = trace2_option.as_mut() {
-                if input1.frontier().is_empty() { trace2_option = None;}
+                if frontier1.is_empty() { trace2_option = None;}
                 else {
                     // Allow `trace2` to compact logically up to the frontier we may yet receive,
                     // in the opposing input (`input1`). All `input1` times will be beyond this
                     // frontier, and joined times only need to be accurate when advanced to it.
-                    trace2.set_logical_compaction(input1.frontier().frontier());
+                    trace2.set_logical_compaction(frontier1.frontier());
                     // Allow `trace2` to compact physically up to the upper bound of batches we
                     // have received in its input (`input2`). We will not require a cursor that
                     // is not beyond this bound.
@@ -635,9 +632,9 @@ where
 
     /// Process keys until at least `fuel` output tuples produced, or the work is exhausted.
     #[inline(never)]
-    fn work<L, CB: ContainerBuilder>(&mut self, output: &mut OutputHandleCore<T, EffortBuilder<CB>, Tee<T, CB::Container>>, mut logic: L, fuel: &mut usize)
+    fn work<L, CB: ContainerBuilder>(&mut self, output: &mut OutputBuilderSession<T, EffortBuilder<CB>>, mut logic: L, fuel: &mut usize)
     where
-        L: for<'a> FnMut(C1::Key<'a>, C1::Val<'a>, C2::Val<'a>, &T, &C1::Diff, &C2::Diff, &mut JoinSession<T, CB, CB::Container>),
+        L: for<'a> FnMut(C1::Key<'a>, C1::Val<'a>, C2::Val<'a>, &T, &C1::Diff, &C2::Diff, &mut JoinSession<T, CB, Capability<T>>),
     {
 
         let meet = self.capability.time();

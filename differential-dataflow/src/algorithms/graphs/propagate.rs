@@ -16,7 +16,7 @@ use crate::operators::arrange::arrangement::ArrangeByKey;
 /// method to limit the introduction of labels.
 pub fn propagate<G, N, L, R>(edges: &VecCollection<G, (N,N), R>, nodes: &VecCollection<G,(N,L),R>) -> VecCollection<G,(N,L),R>
 where
-    G: Scope<Timestamp: Lattice+Ord>,
+    G: Scope<Timestamp: Lattice+Ord+Hash>,
     N: ExchangeData+Hash,
     R: ExchangeData+Abelian,
     R: Multiply<R, Output=R>,
@@ -33,7 +33,7 @@ where
 /// method to limit the introduction of labels.
 pub fn propagate_at<G, N, L, F, R>(edges: &VecCollection<G, (N,N), R>, nodes: &VecCollection<G,(N,L),R>, logic: F) -> VecCollection<G,(N,L),R>
 where
-    G: Scope<Timestamp: Lattice+Ord>,
+    G: Scope<Timestamp: Lattice+Ord+Hash>,
     N: ExchangeData+Hash,
     R: ExchangeData+Abelian,
     R: Multiply<R, Output=R>,
@@ -60,7 +60,7 @@ where
     R: Multiply<R, Output=R>,
     R: From<i8>,
     L: ExchangeData,
-    Tr: for<'a> TraceReader<Key<'a>=&'a N, Val<'a>=&'a N, Diff=R>+Clone+'static,
+    Tr: for<'a> TraceReader<Key<'a>=&'a N, Val<'a>=&'a N, Time:Hash, Diff=R>+Clone+'static,
     F: Fn(&L)->u64+Clone+'static,
 {
     // Morally the code performs the following iterative computation. However, in the interest of a simplified

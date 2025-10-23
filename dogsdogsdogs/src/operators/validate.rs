@@ -21,6 +21,7 @@ where
     G: Scope<Timestamp=Tr::Time>,
     Tr: for<'a> TraceReader<
         KeyOwn = (K, V),
+        Time: std::hash::Hash,
         Diff : Semigroup<Tr::DiffGat<'a>>+Monoid+Multiply<Output = Tr::Diff>+ExchangeData,
     >+Clone+'static,
     K: Ord+Hash+Clone+Default + 'static,

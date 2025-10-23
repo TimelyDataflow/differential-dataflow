@@ -181,7 +181,7 @@ where
 
 impl<G, K, V, R, P, F> PrefixExtender<G, R> for CollectionExtender<K, V, G::Timestamp, R, P, F>
 where
-    G: Scope<Timestamp: Lattice+ExchangeData>,
+    G: Scope<Timestamp: Lattice+ExchangeData+Hash>,
     K: ExchangeData+Hash+Default,
     V: ExchangeData+Hash+Default,
     P: ExchangeData,

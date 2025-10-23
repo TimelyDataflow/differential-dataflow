@@ -16,7 +16,7 @@ pub mod pointstamp;
 use timely::dataflow::Scope;
 use timely::order::Product;
 use timely::progress::Timestamp;
-use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
+use timely::dataflow::operators::generic::{OutputBuilder, builder_rc::OperatorBuilder};
 use timely::dataflow::channels::pact::Pipeline;
 use timely::progress::Antichain;
 
@@ -42,7 +42,8 @@ where
     pub fn leave_dynamic(&self, level: usize) -> Self {
         // Create a unary operator that will strip all but `level-1` timestamp coordinates.
         let mut builder = OperatorBuilder::new("LeaveDynamic".to_string(), self.scope());
-        let (mut output, stream) = builder.new_output();
+        let (output, stream) = builder.new_output();
+        let mut output = OutputBuilder::from(output);
         let mut input = builder.new_input_connection(&self.inner, Pipeline, [(0, Antichain::from_elem(Product { outer: Default::default(), inner: PointStampSummary { retain: Some(level - 1), actions: Vec::new() } }))]);
 
         builder.build(move |_capability| move |_frontier| {

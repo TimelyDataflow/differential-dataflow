@@ -30,6 +30,7 @@ where
     G: Scope<Timestamp=Tr::Time>,
     Tr: for<'a> TraceReader<
         KeyOwn = K,
+        Time: std::hash::Hash,
         Diff : Semigroup<Tr::DiffGat<'a>>+Monoid+ExchangeData,
     >+Clone+'static,
     K: Hashable + Ord + 'static,
@@ -58,7 +59,7 @@ where
     let mut key1: K = supplied_key1;
     let mut key2: K = supplied_key2;
 
-    prefixes.inner.binary_frontier(&propose_stream, exchange, Pipeline, "LookupMap", move |_,_| move |input1, input2, output| {
+    prefixes.inner.binary_frontier(&propose_stream, exchange, Pipeline, "LookupMap", move |_,_| move |(input1, frontier1), (input2, frontier2), output| {
 
         // drain the first input, stashing requests.
         input1.for_each(|capability, data| {
@@ -77,7 +78,7 @@ where
 
                 // defer requests at incomplete times.
                 // NOTE: not all updates may be at complete times, but if this test fails then none of them are.
-                if !input2.frontier.less_equal(capability.time()) {
+                if !frontier2.less_equal(capability.time()) {
 
                     let mut session = output.session(capability);
 
@@ -92,7 +93,7 @@ where
                     // Key container to stage keys for comparison.
                     let mut key_con = Tr::KeyContainer::with_capacity(1);
                     for &mut (ref prefix, ref time, ref mut diff) in prefixes.iter_mut() {
-                        if !input2.frontier.less_equal(time) {
+                        if !frontier2.less_equal(time) {
                             logic2(prefix, &mut key1);
                             key_con.clear(); key_con.push_own(&key1);
                             cursor.seek_key(&storage, key_con.index(1));
@@ -127,7 +128,7 @@ where
 
         // The logical merging frontier depends on both input1 and stash.
         let mut frontier = timely::progress::frontier::Antichain::new();
-        for time in input1.frontier().frontier().to_vec() {
+        for time in frontier1.frontier().to_vec() {
             frontier.insert(time);
         }
         for key in stash.keys() {
@@ -135,7 +136,7 @@ where
         }
         propose_trace.as_mut().map(|trace| trace.set_logical_compaction(frontier.borrow()));
 
-        if input1.frontier().is_empty() && stash.is_empty() {
+        if frontier1.is_empty() && stash.is_empty() {
             propose_trace = None;
         }
 

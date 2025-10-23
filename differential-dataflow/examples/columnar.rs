@@ -298,7 +298,7 @@ pub mod storage {
     pub mod val {
 
         use std::fmt::Debug;
-        use columnar::{Container, ContainerOf, Index, Len, Push};
+        use columnar::{Borrow, Container, ContainerOf, Index, Len, Push};
         use columnar::Vecs;
 
         use crate::layout::ColumnarUpdate as Update;
@@ -406,7 +406,7 @@ pub mod storage {
 
     pub mod key {
 
-        use columnar::{Container, ContainerOf, Index, Len, Push};
+        use columnar::{Borrow, Container, ContainerOf, Index, Len, Push};
         use columnar::Vecs;
 
         use crate::layout::ColumnarUpdate as Update;
@@ -532,7 +532,7 @@ mod column_builder {
                 self.current.push(item);
                 if self.current.len() > 1024 * 1024 {
                     // TODO: Consolidate the batch?
-                    use columnar::{Container, Index};
+                    use columnar::{Borrow, Index};
                     let mut refs = self.current.borrow().into_index_iter().collect::<Vec<_>>();
                     refs.sort();
                     let storage = ValStorage::form(refs.into_iter());
@@ -570,7 +570,7 @@ mod column_builder {
             fn finish(&mut self) -> Option<&mut Self::Container> {
                 if !self.current.is_empty() {
                     // TODO: Consolidate the batch?
-                    use columnar::{Container, Index};
+                    use columnar::{Borrow, Index};
                     let mut refs = self.current.borrow().into_index_iter().collect::<Vec<_>>();
                     refs.sort();
                     let storage = ValStorage::form(refs.into_iter());
@@ -612,7 +612,7 @@ mod column_builder {
                 self.current.push(item);
                 if self.current.len() > 1024 * 1024 {
                     // TODO: Consolidate the batch?
-                    use columnar::{Container, Index};
+                    use columnar::{Borrow, Index};
                     let mut refs = self.current.borrow().into_index_iter().collect::<Vec<_>>();
                     refs.sort();
                     let storage = KeyStorage::form(refs.into_iter());
@@ -642,7 +642,7 @@ mod column_builder {
             fn finish(&mut self) -> Option<&mut Self::Container> {
                 if !self.current.is_empty() {
                     // TODO: Consolidate the batch?
-                    use columnar::{Container, Index};
+                    use columnar::{Borrow, Index};
                     let mut refs = self.current.borrow().into_index_iter().collect::<Vec<_>>();
                     refs.sort();
                     let storage = KeyStorage::form(refs.into_iter());
@@ -763,7 +763,7 @@ pub mod arrangement {
     pub use batch_container::Coltainer;
     pub mod batch_container {
 
-        use columnar::{Columnar, Container, Clear, Push, Index, Len};
+        use columnar::{Borrow, Columnar, Container, Clear, Push, Index, Len};
         use differential_dataflow::trace::implementations::BatchContainer;
 
         /// Container, anchored by `C` to provide an owned type.
@@ -815,7 +815,7 @@ pub mod arrangement {
     pub mod batcher {
 
         use std::ops::Range;
-        use columnar::{Columnar, Container, Index, Len, Push};
+        use columnar::{Borrow, Columnar, Container, Index, Len, Push};
         use differential_dataflow::trace::implementations::chainless_batcher as chainless;
         use differential_dataflow::difference::{Semigroup, IsZero};
         use timely::progress::frontier::{Antichain, AntichainRef};

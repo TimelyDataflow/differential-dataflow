@@ -19,7 +19,7 @@ pub fn count<G, Tr, K, R, F, P>(
 ) -> VecCollection<G, (P, usize, usize), R>
 where
     G: Scope<Timestamp=Tr::Time>,
-    Tr: TraceReader<KeyOwn = K, Diff=isize>+Clone+'static,
+    Tr: TraceReader<KeyOwn = K, Time: std::hash::Hash, Diff=isize>+Clone+'static,
     for<'a> Tr::Diff : Semigroup<Tr::DiffGat<'a>>,
     K: Hashable + Ord + Default + 'static,
     R: Monoid+Multiply<Output = R>+ExchangeData,

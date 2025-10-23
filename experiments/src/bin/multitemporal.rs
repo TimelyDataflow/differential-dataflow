@@ -65,12 +65,14 @@ fn main() {
 
         // load initial root.
         root_input
-            .session(root_cap)
+            .activate()
+            .session(&root_cap)
             .give((0, Pair::new(0, 0), 1));
 
         // load initial edges
         edge_input
-            .session(edge_cap.clone())
+            .activate()
+            .session(&edge_cap)
             .give_iterator((0 .. worker_edges).map(|_|
                 ((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)),
                     Pair::new(0, 0), 1)
@@ -90,7 +92,8 @@ fn main() {
         for round in 1 .. rounds {
 
             edge_input
-                .session(edge_cap.clone())
+                .activate()
+                .session(&edge_cap)
                 .give_iterator((0 .. worker_batch).flat_map(|_| {
                     let insert = ((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), Pair::new(0, round), 1);
                     let remove = ((rng2.gen_range(0, nodes), rng2.gen_range(0, nodes)), Pair::new(0, round),-1);
@@ -112,7 +115,8 @@ fn main() {
         edge_cap = edge_cap_next;
 
         edge_input
-            .session(edge_cap.clone())
+            .activate()
+            .session(&edge_cap)
             .give_iterator((0 .. worker_batch).map(|_| {
                 ((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), Pair::new(1, 0), 1)
             }));
@@ -124,7 +128,8 @@ fn main() {
         }
 
         edge_input
-            .session(edge_cap.clone())
+            .activate()
+            .session(&edge_cap)
             .give_iterator((0 .. worker_batch).map(|_| {
                 ((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), Pair::new(2, 3), 1)
             }));
@@ -136,7 +141,8 @@ fn main() {
         }
 
         edge_input
-            .session(edge_cap.clone())
+            .activate()
+            .session(&edge_cap)
             .give_iterator((0 .. worker_batch).map(|_| {
                 ((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), Pair::new(3, 1), 1)
             }));
@@ -148,7 +154,8 @@ fn main() {
         }
 
         edge_input
-            .session(edge_cap0)
+            .activate()
+            .session(&edge_cap0)
             .give_iterator((0 .. worker_batch).map(|_| {
                 ((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), Pair::new(0, 10), 1)
             }));

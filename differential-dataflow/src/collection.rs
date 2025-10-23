@@ -496,6 +496,7 @@ impl<G: Scope, D: Clone+'static, R: Clone+'static> VecCollection<G, D, R> {
     /// to all of the data timestamps).
     pub fn delay<F>(&self, func: F) -> VecCollection<G, D, R>
     where
+        G::Timestamp: Hash,
         F: FnMut(&G::Timestamp) -> G::Timestamp + Clone + 'static,
     {
         let mut func1 = func.clone();

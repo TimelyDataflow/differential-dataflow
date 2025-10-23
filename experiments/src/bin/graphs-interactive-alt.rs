@@ -364,7 +364,7 @@ where G::Timestamp: Lattice+Ord {
 
 
 fn connected_components<G: Scope>(graph: &Arrange<G, Node, Node, isize>) -> VecCollection<G, (Node, Node)>
-where G::Timestamp: Lattice {
+where G::Timestamp: Lattice + std::hash::Hash {
 
     // each edge (x,y) means that we need at least a label for the min of x and y.
     let nodes =

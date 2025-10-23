@@ -23,6 +23,7 @@ where
     Tr: for<'a> TraceReader<
         KeyOwn = K,
         ValOwn = V,
+        Time: std::hash::Hash,
         Diff: Monoid+Multiply<Output = Tr::Diff>+ExchangeData+Semigroup<Tr::DiffGat<'a>>,
     >+Clone+'static,
     K: Hashable + Default + Ord + 'static,
@@ -56,6 +57,7 @@ where
     Tr: for<'a> TraceReader<
         KeyOwn = K,
         ValOwn = V,
+        Time: std::hash::Hash,
         Diff : Semigroup<Tr::DiffGat<'a>>+Monoid+Multiply<Output = Tr::Diff>+ExchangeData,
     >+Clone+'static,
     K: Hashable + Default + Ord + 'static,

@@ -35,12 +35,11 @@ use std::collections::HashMap;
 use std::ops::Mul;
 use std::time::Instant;
 
-use timely::container::{CapacityContainerBuilder, ContainerBuilder};
+use timely::ContainerBuilder;
+use timely::container::CapacityContainerBuilder;
 use timely::dataflow::{Scope, ScopeParent, StreamCore};
 use timely::dataflow::channels::pact::{Pipeline, Exchange};
-use timely::dataflow::channels::pushers::buffer::Session;
-use timely::dataflow::channels::pushers::{Counter as PushCounter, Tee};
-use timely::dataflow::operators::Operator;
+use timely::dataflow::operators::{Capability, Operator, generic::Session};
 use timely::progress::Antichain;
 use timely::progress::frontier::AntichainRef;
 
@@ -86,7 +85,7 @@ where
     K: Hashable + ExchangeData,
     V: ExchangeData,
     R: ExchangeData + Monoid,
-    Tr: TraceReader<KeyOwn = K>+Clone+'static,
+    Tr: TraceReader<KeyOwn = K, Time: std::hash::Hash>+Clone+'static,
     R: Mul<Tr::Diff, Output: Semigroup>,
     FF: Fn(&G::Timestamp, &mut Antichain<G::Timestamp>) + 'static,
     CF: Fn(Tr::TimeGat<'_>, &G::Timestamp) -> bool + 'static,
@@ -107,15 +106,11 @@ where
 /// A session with lifetime `'a` in a scope `G` with a container builder `CB`.
 ///
 /// This is a shorthand primarily for the reson of readability.
-type SessionFor<'a, G, CB> =
-    Session<'a,
+type SessionFor<'a, 'b, G, CB> =
+    Session<'a, 'b,
         <G as ScopeParent>::Timestamp,
         CB,
-        PushCounter<
-            <G as ScopeParent>::Timestamp,
-            <CB as ContainerBuilder>::Container,
-            Tee<<G as ScopeParent>::Timestamp, <CB as ContainerBuilder>::Container>
-        >
+        Capability<<G as ScopeParent>::Timestamp>,
     >;
 
 /// An unsafe variant of `half_join` where the `output_func` closure takes
@@ -156,7 +151,7 @@ where
     K: Hashable + ExchangeData,
     V: ExchangeData,
     R: ExchangeData + Monoid,
-    Tr: for<'a> TraceReader<KeyOwn = K>+Clone+'static,
+    Tr: for<'a> TraceReader<KeyOwn = K, Time: std::hash::Hash>+Clone+'static,
     FF: Fn(&G::Timestamp, &mut Antichain<G::Timestamp>) + 'static,
     CF: Fn(Tr::TimeGat<'_>, &Tr::Time) -> bool + 'static,
     Y: Fn(std::time::Instant, usize) -> bool + 'static,
@@ -180,7 +175,7 @@ where
         // Acquire an activator to reschedule the operator when it has unfinished work.
         let activator = stream.scope().activator_for(info.address);
 
-        move |input1, input2, output| {
+        move |(input1, frontier1), (input2, frontier2), output| {
 
             // drain the first input, stashing requests.
             input1.for_each(|capability, data| {
@@ -211,9 +206,9 @@ where
                     // Avoid computation if we should already yield.
                     // TODO: Verify this is correct for TOTAL ORDER.
                     yielded = yielded || yield_function(timer, work);
-                    if !yielded && !input2.frontier.less_equal(capability.time()) {
+                    if !yielded && !frontier2.less_equal(capability.time()) {
 
-                        let frontier = input2.frontier.frontier();
+                        let frontier = frontier2.frontier();
 
                         // Update yielded: We can only go from false to {false, true} as
                         // we're checking that `!yielded` holds before entering this block.
@@ -278,7 +273,7 @@ where
 
             // The logical merging frontier depends on both input1 and stash.
             let mut frontier = timely::progress::frontier::Antichain::new();
-            for time in input1.frontier().frontier().iter() {
+            for time in frontier1.frontier().iter() {
                 frontier_func(time, &mut frontier);
             }
             for time in stash.keys() {
@@ -286,7 +281,7 @@ where
             }
             arrangement_trace.as_mut().map(|trace| trace.set_logical_compaction(frontier.borrow()));
 
-            if input1.frontier().is_empty() && stash.is_empty() {
+            if frontier1.is_empty() && stash.is_empty() {
                 arrangement_trace = None;
             }
         }
