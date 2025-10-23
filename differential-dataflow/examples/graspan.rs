@@ -1,7 +1,6 @@
+use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader};
 use std::fs::File;
-
-use indexmap::IndexMap;
 
 use timely::progress::Timestamp;
 use timely::order::Product;
@@ -152,12 +151,12 @@ impl Query {
     }
 
     /// Creates a dataflow implementing the query, and returns input and trace handles.
-    pub fn render_in<G>(&self, scope: &mut G) -> IndexMap<String, RelationHandles<G::Timestamp>>
+    pub fn render_in<G>(&self, scope: &mut G) -> BTreeMap<String, RelationHandles<G::Timestamp>>
     where
         G: Scope<Timestamp: Lattice+::timely::order::TotalOrder>,
     {
         // Create new input (handle, stream) pairs
-        let mut input_map = IndexMap::new();
+        let mut input_map = BTreeMap::new();
         for production in self.productions.iter() {
             input_map.entry(production.left_hand.clone()).or_insert_with(|| scope.new_collection());
         }
@@ -166,11 +165,11 @@ impl Query {
         scope.iterative::<Iter,_,_>(|subscope| {
 
             // create map from relation name to input handle and collection.
-            let mut result_map = IndexMap::new();
-            let mut variable_map = IndexMap::new();
+            let mut result_map = BTreeMap::new();
+            let mut variable_map = BTreeMap::new();
 
             // create variables and result handles for each named relation.
-            for (name, (input, collection)) in input_map.drain(..) {
+            for (name, (input, collection)) in input_map {
                 let edge_variable = EdgeVariable::from(&collection.enter(subscope), Product::new(Default::default(), 1));
                 let trace = edge_variable.variable.leave().arrange_by_self().trace;
                 result_map.insert(name.clone(), RelationHandles { input, trace });
@@ -188,14 +187,14 @@ impl Query {
 
                     // We'll track the path transposed, so that it is indexed by *destination* rather than source.
                     let mut transposed = match &rule[0] {
-                        Relation::Forward(name) => variable_map[name].reverse().clone(),
-                        Relation::Reverse(name) => variable_map[name].forward().clone(),
+                        Relation::Forward(name) => variable_map.get_mut(name).unwrap().reverse().clone(),
+                        Relation::Reverse(name) => variable_map.get_mut(name).unwrap().forward().clone(),
                     };
 
                     for relation in rule[1..].iter() {
                         let to_join = match relation {
-                            Relation::Forward(name) => variable_map[name].forward(),
-                            Relation::Reverse(name) => variable_map[name].reverse(),
+                            Relation::Forward(name) => variable_map.get_mut(name).unwrap().forward(),
+                            Relation::Reverse(name) => variable_map.get_mut(name).unwrap().reverse(),
                         };
 
                         transposed =
@@ -205,11 +204,11 @@ impl Query {
                     }
 
                     // Reverse the direction before adding it as a production.
-                    variable_map[name].add_production(&transposed.as_collection(|&dst,&src| (src,dst)));
+                    variable_map.get_mut(name).unwrap().add_production(&transposed.as_collection(|&dst,&src| (src,dst)));
                 }
             }
 
-            for (_name, variable) in variable_map.drain(..) {
+            for (_name, variable) in variable_map {
                 variable.complete();
             }
             result_map
