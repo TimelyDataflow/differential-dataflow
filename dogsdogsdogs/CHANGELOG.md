@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.0](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dogs3-v0.17.0...differential-dogs3-v0.18.0) - 2025-10-23
+
+### Other
+
+- Updates for timely 0.25 ([#647](https://github.com/TimelyDataflow/differential-dataflow/pull/647))
+- Extract `VecCollection` from `Collection` ([#651](https://github.com/TimelyDataflow/differential-dataflow/pull/651))
+- Correct some clippy nit ([#649](https://github.com/TimelyDataflow/differential-dataflow/pull/649))
+
 ## [0.17.0](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dogs3-v0.16.2...differential-dogs3-v0.17.0) - 2025-09-15
 
 ### Other
