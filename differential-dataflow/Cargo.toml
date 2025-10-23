@@ -16,7 +16,6 @@ readme = "../README.md"
 edition="2021"
 
 [dev-dependencies]
-indexmap = "2.1"
 rand="0.4"
 itertools="^0.13"
 graph_map = "0.1"

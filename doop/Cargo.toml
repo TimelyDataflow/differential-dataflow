@@ -6,6 +6,5 @@ edition = "2021"
 publish = false
 
 [dependencies]
-indexmap = "2.1"
 timely = {workspace = true}
 differential-dataflow = { workspace = true }
