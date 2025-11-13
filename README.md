@@ -38,7 +38,7 @@ Be sure to check out the [differential dataflow documentation](https://docs.rs/d
 
 ## An example: counting degrees in a graph.
 
-Let's check out that out-degree distribution computation, to get a sense for how differential dataflow actually works. This example is [examples/hello.rs](https://github.com/TimelyDataflow/differential-dataflow/blob/master/examples/hello.rs) in this repository, if you'd like to follow along.
+Let's check out that out-degree distribution computation, to get a sense for how differential dataflow actually works. This example is [examples/hello.rs](https://github.com/TimelyDataflow/differential-dataflow/blob/master/differential-dataflow/examples/hello.rs) in this repository, if you'd like to follow along.
 
 A graph is a collection of pairs `(Node, Node)`, and one standard analysis is to determine the number of times each `Node` occurs in the first position, its "degree". The number of nodes with each degree is a helpful graph statistic.
 
