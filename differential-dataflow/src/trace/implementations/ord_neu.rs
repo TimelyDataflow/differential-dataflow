@@ -89,7 +89,7 @@ pub mod layers {
 
     impl<O: for<'a> BatchContainer<ReadItem<'a> = usize>, V: BatchContainer> Vals<O, V> {
         /// Lower and upper bounds in `self.vals` of the indexed list.
-        pub fn bounds(&self, index: usize) -> (usize, usize) {
+        #[inline(always)] pub fn bounds(&self, index: usize) -> (usize, usize) {
             (self.offs.index(index), self.offs.index(index+1))
         }
         /// Retrieves a value using relative indexes.
