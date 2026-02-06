@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.19.0](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dataflow-v0.18.0...differential-dataflow-v0.19.0) - 2026-02-06
+
+### Other
+
+- Back Pointstamp with SmallVec ([#661](https://github.com/TimelyDataflow/differential-dataflow/pull/661))
+- Correct chainless lower bound determination ([#660](https://github.com/TimelyDataflow/differential-dataflow/pull/660))
+- Exchange columns more efficiently ([#656](https://github.com/TimelyDataflow/differential-dataflow/pull/656))
+- fix broken example link ([#654](https://github.com/TimelyDataflow/differential-dataflow/pull/654))
+
 ## [0.18.0](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dataflow-v0.17.0...differential-dataflow-v0.18.0) - 2025-10-23
 
 ### Other
