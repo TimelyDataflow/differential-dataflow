@@ -417,7 +417,7 @@ pub mod source {
                 // Deduplicate newly received updates, sending new updates and timestamp counts.
                 let mut changes = changes_out.activate();
                 let mut counts = counts_out.activate();
-                while let Some((capability, updates)) = input.next() {
+                input.for_each(|capability, updates| {
                     let mut changes_session = changes.session(&capability);
                     let mut counts_session = counts.session(&capability);
                     for (data, time, diff) in updates.iter() {
@@ -433,7 +433,7 @@ pub mod source {
                     if !change_batch.is_empty() {
                         counts_session.give_iterator(change_batch.drain());
                     }
-                }
+                });
             }
         });
 
@@ -466,15 +466,15 @@ pub mod source {
                 let mut capability: Option<Capability<T>> = None;
 
                 // Drain all relevant update counts in to the mutable antichain tracking its frontier.
-                while let Some((cap, counts)) = counts.next() {
+                counts.for_each(|cap, counts| {
                     updates_frontier.update_iter(counts.iter().cloned());
                     capability = Some(cap.retain());
-                }
+                });
                 // Drain all progress statements into the queue out of which we will work.
-                while let Some((cap, progress)) = input.next() {
+                input.for_each(|cap, progress| {
                     progress_queue.extend(progress.iter().map(|x| (x.1).clone()));
                     capability = Some(cap.retain());
-                }
+                });
 
                 // Extract and act on actionable progress messages.
                 // A progress message is actionable if `self.progress_frontier` is beyond the message's lower bound.
@@ -532,14 +532,14 @@ pub mod source {
             move |_frontiers| {
                 let mut antichain = shared_frontier2.borrow_mut();
                 let mut must_activate = false;
-                while let Some((_cap, frontier_changes)) = input.next() {
+                input.for_each(|_cap, frontier_changes| {
                     for (_self, input_changes) in frontier_changes.iter() {
                         // Apply the updates, and observe if the lower bound has changed.
                         if antichain.update_iter(input_changes.unstable_internal_updates().iter().cloned()).next().is_some() {
                             must_activate = true;
                         }
                     }
-                }
+                });
                 // If the lower bound has changed, we must activate MESSAGES.
                 if must_activate { activator2.activate(); }
             }
