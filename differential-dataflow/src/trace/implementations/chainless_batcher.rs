@@ -72,6 +72,8 @@ impl<T: Timestamp, S: BatcherStorage<T>> trace::Batcher for Batcher<T, S> {
 
     fn push_container(&mut self, batch: &mut Self::Input) {
         if batch.len() > 0 {
+            // TODO: This appears to be optional based on `frontier` only being called after `seal`.
+            //       For the moment, the trait doesn't promise this, but keep eyes on the cost.
             batch.lower(&mut self.lower);
             self.storages.push(std::mem::take(batch));
             self.tidy();
@@ -85,13 +87,12 @@ impl<T: Timestamp, S: BatcherStorage<T>> trace::Batcher for Batcher<T, S> {
         if let Some(store) = stores.next() {
             self.lower.clear();
             let mut ship = store.split(upper.borrow());
-            store.lower(&mut self.lower);
             for store in stores {
                 let split = store.split(upper.borrow());
                 ship = ship.merge(split);
-                store.lower(&mut self.lower);
             }
             self.tidy();
+            store.lower(&mut self.lower);
             B::seal(&mut vec![ship], description)
         }
         else {
