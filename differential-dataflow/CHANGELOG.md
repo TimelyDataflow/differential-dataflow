@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.19.1](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dataflow-v0.19.0...differential-dataflow-v0.19.1) - 2026-02-06
+
+### Other
+
+- Update to timely 0.26 ([#662](https://github.com/TimelyDataflow/differential-dataflow/pull/662))
+
 ## [0.19.0](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dataflow-v0.18.0...differential-dataflow-v0.19.0) - 2026-02-06
 
 ### Other
