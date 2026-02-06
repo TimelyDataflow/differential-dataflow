@@ -83,16 +83,17 @@ impl<T: Timestamp, S: BatcherStorage<T>> trace::Batcher for Batcher<T, S> {
     fn seal<B: trace::Builder<Input=Self::Output, Time=Self::Time>>(&mut self, upper: Antichain<Self::Time>) -> B::Output {
         let description = trace::Description::new(self.prior.clone(), upper.clone(), Antichain::new());
         self.prior = upper.clone();
-        let mut stores = self.storages.iter_mut().rev();
-        if let Some(store) = stores.next() {
+        if let Some(mut store) = self.storages.pop() {
             self.lower.clear();
             let mut ship = store.split(upper.borrow());
-            for store in stores {
+            let mut keep = store;
+            while let Some(mut store) = self.storages.pop() {
                 let split = store.split(upper.borrow());
                 ship = ship.merge(split);
+                keep = keep.merge(store);
             }
-            self.tidy();
-            store.lower(&mut self.lower);
+            keep.lower(&mut self.lower);
+            self.storages.push(keep);
             B::seal(&mut vec![ship], description)
         }
         else {
