@@ -823,6 +823,43 @@ pub mod vec {
 
     }
 
+    impl<G, K, R> Collection<G, K, R>
+    where
+        G: Scope<Timestamp: Lattice+Ord>,
+        K: crate::ExchangeData+Hashable,
+        R: crate::ExchangeData+Semigroup
+    {
+
+        /// Counts the number of occurrences of each element.
+        ///
+        /// # Examples
+        ///
+        /// ```
+        /// use differential_dataflow::input::Input;
+        ///
+        /// ::timely::example(|scope| {
+        ///     // report the number of occurrences of each key
+        ///     scope.new_collection_from(1 .. 10).1
+        ///          .map(|x| x / 3)
+        ///          .count();
+        /// });
+        /// ```
+        pub fn count(&self) -> Collection<G, (K, R), isize> { self.count_core() }
+
+        /// Count for general integer differences.
+        ///
+        /// This method allows `count` to produce collections whose difference
+        /// type is something other than an `isize` integer, for example perhaps an
+        /// `i32`.
+        pub fn count_core<R2: Ord + Abelian + From<i8> + 'static>(&self) -> Collection<G, (K, R), R2> {
+            use crate::operators::arrange::arrangement::ArrangeBySelf;
+            use crate::trace::implementations::{ValBuilder, ValSpine};
+            self.arrange_by_self_named("Arrange: Count")
+                .reduce_abelian::<_,ValBuilder<K,R,G::Timestamp,R2>,ValSpine<K,R,G::Timestamp,R2>>("Count", |_k,s,t| t.push((s[0].1.clone(), R2::from(1i8))))
+                .as_collection(|k,c| (k.clone(), c.clone()))
+        }
+    }
+
 }
 
 /// Conversion to a differential dataflow Collection.

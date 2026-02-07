@@ -18,61 +18,13 @@ use timely::dataflow::operators::Operator;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Capability;
 
-use crate::operators::arrange::{Arranged, ArrangeByKey, ArrangeBySelf, TraceAgent};
+use crate::operators::arrange::{Arranged, ArrangeByKey, TraceAgent};
 use crate::lattice::Lattice;
 use crate::trace::{BatchReader, Cursor, Trace, Builder, ExertionLogic, Description};
 use crate::trace::cursor::CursorList;
-use crate::trace::implementations::{ValSpine, ValBuilder};
 use crate::trace::implementations::containers::BatchContainer;
 use crate::trace::implementations::merge_batcher::container::MergerChunk;
 use crate::trace::TraceReader;
-
-/// Extension trait for the `count` differential dataflow method.
-pub trait Count<G: Scope<Timestamp: Lattice+Ord>, K: Data, R: Semigroup> {
-    /// Counts the number of occurrences of each element.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use differential_dataflow::input::Input;
-    /// use differential_dataflow::operators::Count;
-    ///
-    /// ::timely::example(|scope| {
-    ///     // report the number of occurrences of each key
-    ///     scope.new_collection_from(1 .. 10).1
-    ///          .map(|x| x / 3)
-    ///          .count();
-    /// });
-    /// ```
-    fn count(&self) -> VecCollection<G, (K, R), isize> {
-        self.count_core()
-    }
-
-    /// Count for general integer differences.
-    ///
-    /// This method allows `count` to produce collections whose difference
-    /// type is something other than an `isize` integer, for example perhaps an
-    /// `i32`.
-    fn count_core<R2: Ord + Abelian + From<i8> + 'static>(&self) -> VecCollection<G, (K, R), R2>;
-}
-
-impl<G: Scope<Timestamp: Lattice+Ord>, K: ExchangeData+Hashable, R: ExchangeData+Semigroup> Count<G, K, R> for VecCollection<G, K, R> {
-    fn count_core<R2: Ord + Abelian + From<i8> + 'static>(&self) -> VecCollection<G, (K, R), R2> {
-        self.arrange_by_self_named("Arrange: Count")
-            .count_core()
-    }
-}
-
-impl<G, K: Data, T1, R: Data+Semigroup> Count<G, K, R> for Arranged<G, T1>
-where
-    G: Scope<Timestamp=T1::Time>,
-    T1: for<'a> TraceReader<Key<'a>=&'a K, KeyOwn = K, Val<'a>=&'a (), Diff=R>+Clone+'static,
-{
-    fn count_core<R2: Ord + Abelian + From<i8> + 'static>(&self) -> VecCollection<G, (K, R), R2> {
-        self.reduce_abelian::<_,ValBuilder<K,R,G::Timestamp,R2>,ValSpine<K,R,G::Timestamp,R2>>("Count", |_k,s,t| t.push((s[0].1.clone(), R2::from(1i8))))
-            .as_collection(|k,c| (k.clone(), c.clone()))
-    }
-}
 
 /// Extension trait for the `reduce_core` differential dataflow method.
 pub trait ReduceCore<G: Scope<Timestamp: Lattice+Ord>, K: ToOwned + ?Sized, V: Data, R: Semigroup> {
