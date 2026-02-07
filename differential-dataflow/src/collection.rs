@@ -754,6 +754,75 @@ pub mod vec {
         }
     }
 
+
+    impl<G, K, R1> Collection<G, K, R1>
+    where
+        G: Scope<Timestamp: Lattice+Ord>,
+        K: crate::ExchangeData+Hashable,
+        R1: crate::ExchangeData+Semigroup
+    {
+
+        /// Reduces the collection to one occurrence of each distinct element.
+        ///
+        /// # Examples
+        ///
+        /// ```
+        /// use differential_dataflow::input::Input;
+        ///
+        /// ::timely::example(|scope| {
+        ///     // report at most one of each key.
+        ///     scope.new_collection_from(1 .. 10).1
+        ///          .map(|x| x / 3)
+        ///          .distinct();
+        /// });
+        /// ```
+        pub fn distinct(&self) -> Collection<G, K, isize> {
+            self.distinct_core()
+        }
+
+        /// Distinct for general integer differences.
+        ///
+        /// This method allows `distinct` to produce collections whose difference
+        /// type is something other than an `isize` integer, for example perhaps an
+        /// `i32`.
+        pub fn distinct_core<R2: Ord+Abelian+'static+From<i8>>(&self) -> Collection<G, K, R2> {
+            self.threshold_named("Distinct", |_,_| R2::from(1i8))
+        }
+
+        /// Transforms the multiplicity of records.
+        ///
+        /// The `threshold` function is obliged to map `R1::zero` to `R2::zero`, or at
+        /// least the computation may behave as if it does. Otherwise, the transformation
+        /// can be nearly arbitrary: the code does not assume any properties of `threshold`.
+        ///
+        /// # Examples
+        ///
+        /// ```
+        /// use differential_dataflow::input::Input;
+        ///
+        /// ::timely::example(|scope| {
+        ///     // report at most one of each key.
+        ///     scope.new_collection_from(1 .. 10).1
+        ///          .map(|x| x / 3)
+        ///          .threshold(|_,c| c % 2);
+        /// });
+        /// ```
+        pub fn threshold<R2: Ord+Abelian+'static, F: FnMut(&K, &R1)->R2+'static>(&self, thresh: F) -> Collection<G, K, R2> {
+            self.threshold_named("Threshold", thresh)
+        }
+
+        /// A `threshold` with the ability to name the operator.
+        pub fn threshold_named<R2: Ord+Abelian+'static, F: FnMut(&K,&R1)->R2+'static>(&self, name: &str, mut thresh: F) -> Collection<G, K, R2> {
+            use crate::operators::arrange::arrangement::ArrangeBySelf;
+            use crate::trace::implementations::{KeyBuilder, KeySpine};
+
+            self.arrange_by_self_named(&format!("Arrange: {}", name))
+                .reduce_abelian::<_,KeyBuilder<K,G::Timestamp,R2>,KeySpine<K,G::Timestamp,R2>>(name, move |k,s,t| t.push(((), thresh(k, &s[0].1))))
+                .as_collection(|k,_| k.clone())
+        }
+
+    }
+
 }
 
 /// Conversion to a differential dataflow Collection.

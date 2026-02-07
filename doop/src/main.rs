@@ -12,7 +12,7 @@ use differential_dataflow::ExchangeData as Data;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::input::Input;
 use differential_dataflow::operators::iterate::VecVariable;
-use differential_dataflow::operators::{Threshold, Join, JoinCore};
+use differential_dataflow::operators::{Join, JoinCore};
 use differential_dataflow::operators::arrange::ArrangeByKey;
 
 // Type aliases for differential execution.

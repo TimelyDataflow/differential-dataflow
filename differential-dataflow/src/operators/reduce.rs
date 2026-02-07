@@ -22,85 +22,10 @@ use crate::operators::arrange::{Arranged, ArrangeByKey, ArrangeBySelf, TraceAgen
 use crate::lattice::Lattice;
 use crate::trace::{BatchReader, Cursor, Trace, Builder, ExertionLogic, Description};
 use crate::trace::cursor::CursorList;
-use crate::trace::implementations::{KeySpine, KeyBuilder, ValSpine, ValBuilder};
+use crate::trace::implementations::{ValSpine, ValBuilder};
 use crate::trace::implementations::containers::BatchContainer;
 use crate::trace::implementations::merge_batcher::container::MergerChunk;
 use crate::trace::TraceReader;
-
-/// Extension trait for the `threshold` and `distinct` differential dataflow methods.
-pub trait Threshold<G: Scope<Timestamp: Lattice+Ord>, K: Data, R1: Semigroup> {
-    /// Transforms the multiplicity of records.
-    ///
-    /// The `threshold` function is obliged to map `R1::zero` to `R2::zero`, or at
-    /// least the computation may behave as if it does. Otherwise, the transformation
-    /// can be nearly arbitrary: the code does not assume any properties of `threshold`.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use differential_dataflow::input::Input;
-    /// use differential_dataflow::operators::Threshold;
-    ///
-    /// ::timely::example(|scope| {
-    ///     // report at most one of each key.
-    ///     scope.new_collection_from(1 .. 10).1
-    ///          .map(|x| x / 3)
-    ///          .threshold(|_,c| c % 2);
-    /// });
-    /// ```
-    fn threshold<R2: Ord+Abelian+'static, F: FnMut(&K, &R1)->R2+'static>(&self, thresh: F) -> VecCollection<G, K, R2> {
-        self.threshold_named("Threshold", thresh)
-    }
-
-    /// A `threshold` with the ability to name the operator.
-    fn threshold_named<R2: Ord+Abelian+'static, F: FnMut(&K, &R1)->R2+'static>(&self, name: &str, thresh: F) -> VecCollection<G, K, R2>;
-
-    /// Reduces the collection to one occurrence of each distinct element.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use differential_dataflow::input::Input;
-    /// use differential_dataflow::operators::Threshold;
-    ///
-    /// ::timely::example(|scope| {
-    ///     // report at most one of each key.
-    ///     scope.new_collection_from(1 .. 10).1
-    ///          .map(|x| x / 3)
-    ///          .distinct();
-    /// });
-    /// ```
-    fn distinct(&self) -> VecCollection<G, K, isize> {
-        self.distinct_core()
-    }
-
-    /// Distinct for general integer differences.
-    ///
-    /// This method allows `distinct` to produce collections whose difference
-    /// type is something other than an `isize` integer, for example perhaps an
-    /// `i32`.
-    fn distinct_core<R2: Ord+Abelian+'static+From<i8>>(&self) -> VecCollection<G, K, R2> {
-        self.threshold_named("Distinct", |_,_| R2::from(1i8))
-    }
-}
-
-impl<G: Scope<Timestamp: Lattice+Ord>, K: ExchangeData+Hashable, R1: ExchangeData+Semigroup> Threshold<G, K, R1> for VecCollection<G, K, R1> {
-    fn threshold_named<R2: Ord+Abelian+'static, F: FnMut(&K,&R1)->R2+'static>(&self, name: &str, thresh: F) -> VecCollection<G, K, R2> {
-        self.arrange_by_self_named(&format!("Arrange: {}", name))
-            .threshold_named(name, thresh)
-    }
-}
-
-impl<G, K: Data, T1, R1: Semigroup> Threshold<G, K, R1> for Arranged<G, T1>
-where
-    G: Scope<Timestamp=T1::Time>,
-    T1: for<'a> TraceReader<Key<'a>=&'a K, KeyOwn = K, Val<'a>=&'a (), Diff=R1>+Clone+'static,
-{
-    fn threshold_named<R2: Ord+Abelian+'static, F: FnMut(&K,&R1)->R2+'static>(&self, name: &str, mut thresh: F) -> VecCollection<G, K, R2> {
-        self.reduce_abelian::<_,KeyBuilder<K,G::Timestamp,R2>,KeySpine<K,G::Timestamp,R2>>(name, move |k,s,t| t.push(((), thresh(k, &s[0].1))))
-            .as_collection(|k,_| k.clone())
-    }
-}
 
 /// Extension trait for the `count` differential dataflow method.
 pub trait Count<G: Scope<Timestamp: Lattice+Ord>, K: Data, R: Semigroup> {

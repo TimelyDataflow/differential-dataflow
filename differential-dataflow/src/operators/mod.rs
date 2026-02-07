@@ -4,7 +4,7 @@
 //! operators have specialized implementations to make them work efficiently, and are in addition
 //! to several operations defined directly on the `Collection` type (e.g. `map` and `filter`).
 
-pub use self::reduce::{Threshold, Count};
+pub use self::reduce::Count;
 pub use self::iterate::Iterate;
 pub use self::join::{Join, JoinCore};
 pub use self::count::CountTotal;
