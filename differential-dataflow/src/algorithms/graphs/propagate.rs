@@ -80,7 +80,6 @@ where
 
     nodes.scope().iterative::<usize,_,_>(|scope| {
 
-        use crate::operators::reduce::ReduceCore;
         use crate::operators::iterate::SemigroupVariable;
         use crate::trace::implementations::{ValBuilder, ValSpine};
 

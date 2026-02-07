@@ -131,9 +131,7 @@ where
     roots.scope().iterative::<u32,_,_>(|scope| {
 
         use differential_dataflow::operators::iterate::SemigroupVariable;
-        use differential_dataflow::operators::reduce::ReduceCore;
         use differential_dataflow::trace::implementations::{KeySpine, KeyBuilder};
-
 
         use timely::order::Product;
         let variable = SemigroupVariable::new(scope, Product::new(Default::default(), 1));

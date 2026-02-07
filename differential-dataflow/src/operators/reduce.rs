@@ -6,9 +6,7 @@
 //! The function is expected to populate a list of output values.
 
 use timely::container::PushInto;
-use crate::hashable::Hashable;
-use crate::{Data, ExchangeData, VecCollection};
-use crate::difference::{Semigroup, Abelian};
+use crate::Data;
 
 use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
@@ -18,104 +16,12 @@ use timely::dataflow::operators::Operator;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Capability;
 
-use crate::operators::arrange::{Arranged, ArrangeByKey, TraceAgent};
-use crate::lattice::Lattice;
+use crate::operators::arrange::{Arranged, TraceAgent};
 use crate::trace::{BatchReader, Cursor, Trace, Builder, ExertionLogic, Description};
 use crate::trace::cursor::CursorList;
 use crate::trace::implementations::containers::BatchContainer;
 use crate::trace::implementations::merge_batcher::container::MergerChunk;
 use crate::trace::TraceReader;
-
-/// Extension trait for the `reduce_core` differential dataflow method.
-pub trait ReduceCore<G: Scope<Timestamp: Lattice+Ord>, K: ToOwned + ?Sized, V: Data, R: Semigroup> {
-    /// Applies `reduce` to arranged data, and returns an arrangement of output data.
-    ///
-    /// This method is used by the more ergonomic `reduce`, `distinct`, and `count` methods, although
-    /// it can be very useful if one needs to manually attach and re-use existing arranged collections.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use differential_dataflow::input::Input;
-    /// use differential_dataflow::operators::reduce::ReduceCore;
-    /// use differential_dataflow::trace::Trace;
-    /// use differential_dataflow::trace::implementations::{ValBuilder, ValSpine};
-    ///
-    /// ::timely::example(|scope| {
-    ///
-    ///     let trace =
-    ///     scope.new_collection_from(1 .. 10u32).1
-    ///          .map(|x| (x, x))
-    ///          .reduce_abelian::<_,ValBuilder<_,_,_,_>,ValSpine<_,_,_,_>>(
-    ///             "Example",
-    ///              move |_key, src, dst| dst.push((*src[0].0, 1))
-    ///          )
-    ///          .trace;
-    /// });
-    /// ```
-    fn reduce_abelian<L, Bu, T2>(&self, name: &str, mut logic: L) -> Arranged<G, TraceAgent<T2>>
-        where
-            T2: for<'a> Trace<
-                Key<'a>= &'a K,
-                KeyOwn = K,
-                ValOwn = V,
-                Time=G::Timestamp,
-                Diff: Abelian,
-            >+'static,
-            Bu: Builder<Time=T2::Time, Input = Vec<((K::Owned, V), T2::Time, T2::Diff)>, Output = T2::Batch>,
-            L: FnMut(&K, &[(&V, R)], &mut Vec<(V, T2::Diff)>)+'static,
-        {
-            self.reduce_core::<_,Bu,T2>(name, move |key, input, output, change| {
-                if !input.is_empty() {
-                    logic(key, input, change);
-                }
-                change.extend(output.drain(..).map(|(x,mut d)| { d.negate(); (x, d) }));
-                crate::consolidation::consolidate(change);
-            })
-        }
-
-    /// Solves for output updates when presented with inputs and would-be outputs.
-    ///
-    /// Unlike `reduce_arranged`, this method may be called with an empty `input`,
-    /// and it may not be safe to index into the first element.
-    /// At least one of the two collections will be non-empty.
-    fn reduce_core<L, Bu, T2>(&self, name: &str, logic: L) -> Arranged<G, TraceAgent<T2>>
-        where
-            T2: for<'a> Trace<
-                Key<'a>=&'a K,
-                KeyOwn = K,
-                ValOwn = V,
-                Time=G::Timestamp,
-            >+'static,
-            Bu: Builder<Time=T2::Time, Input = Vec<((K::Owned, V), T2::Time, T2::Diff)>, Output = T2::Batch>,
-            L: FnMut(&K, &[(&V, R)], &mut Vec<(V,T2::Diff)>, &mut Vec<(V, T2::Diff)>)+'static,
-            ;
-}
-
-impl<G, K, V, R> ReduceCore<G, K, V, R> for VecCollection<G, (K, V), R>
-where
-    G: Scope,
-    G::Timestamp: Lattice+Ord,
-    K: ExchangeData+Hashable,
-    V: ExchangeData,
-    R: ExchangeData+Semigroup,
-{
-    fn reduce_core<L, Bu, T2>(&self, name: &str, logic: L) -> Arranged<G, TraceAgent<T2>>
-        where
-            V: Data,
-            T2: for<'a> Trace<
-                Key<'a>=&'a K,
-                KeyOwn = K,
-                ValOwn = V,
-                Time=G::Timestamp,
-            >+'static,
-            Bu: Builder<Time=T2::Time, Input = Vec<((K, V), T2::Time, T2::Diff)>, Output = T2::Batch>,
-            L: FnMut(&K, &[(&V, R)], &mut Vec<(V,T2::Diff)>, &mut Vec<(V, T2::Diff)>)+'static,
-    {
-        self.arrange_by_key_named(&format!("Arrange: {}", name))
-            .reduce_core::<_,Bu,_>(name, logic)
-    }
-}
 
 /// A key-wise reduction of values in an input trace.
 ///
