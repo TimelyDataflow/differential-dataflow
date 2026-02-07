@@ -12,7 +12,6 @@ As an example, if we were to inspect
 # use timely::dataflow::Scope;
 # use differential_dataflow::VecCollection;
 # use differential_dataflow::lattice::Lattice;
-# use differential_dataflow::operators::Reduce;
 # fn example<G: Scope>(manages: &VecCollection<G, (u64, u64)>)
 # where G::Timestamp: Lattice
 # {

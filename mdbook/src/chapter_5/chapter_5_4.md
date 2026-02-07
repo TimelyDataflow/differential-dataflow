@@ -23,7 +23,6 @@ extern crate timely;
 extern crate differential_dataflow;
 
 use differential_dataflow::operators::Join;
-use differential_dataflow::operators::Threshold;
 use differential_dataflow::operators::Iterate;
 use differential_dataflow::operators::arrange::ArrangeByKey;
 

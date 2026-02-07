@@ -9,7 +9,7 @@ As an example, we can take our `manages` relation and determine for all employee
 # extern crate differential_dataflow;
 # use timely::dataflow::Scope;
 # use differential_dataflow::VecCollection;
-# use differential_dataflow::operators::{Join, Iterate, Threshold};
+# use differential_dataflow::operators::{Join, Iterate};
 # use differential_dataflow::lattice::Lattice;
 # fn example<G: Scope>(manages: &VecCollection<G, (u64, u64)>)
 # where G::Timestamp: Lattice
@@ -45,7 +45,7 @@ In the example above, we could rewrite
 # extern crate differential_dataflow;
 # use timely::dataflow::Scope;
 # use differential_dataflow::VecCollection;
-# use differential_dataflow::operators::{Join, Threshold};
+# use differential_dataflow::operators::Join;
 # use differential_dataflow::operators::{Iterate, iterate::VecVariable};
 # use differential_dataflow::lattice::Lattice;
 # fn example<G: Scope>(manages: &VecCollection<G, (u64, u64)>)
