@@ -98,7 +98,7 @@ mod tests {
         // there are collisions, everyone gets a unique identifier.
 
         use crate::input::Input;
-        use crate::operators::{Threshold, Reduce};
+        use crate::operators::Threshold;
         use crate::operators::iterate::Iterate;
 
         ::timely::example(|scope| {

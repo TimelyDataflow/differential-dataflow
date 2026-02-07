@@ -701,6 +701,59 @@ pub mod vec {
         }
     }
 
+
+
+    impl <G, K, V, R> Collection<G, (K, V), R>
+    where
+        G: Scope<Timestamp: Lattice+Ord>,
+        K: crate::ExchangeData+Hashable,
+        V: crate::ExchangeData,
+        R: crate::ExchangeData+Semigroup,
+    {
+        /// Applies a reduction function on records grouped by key.
+        ///
+        /// Input data must be structured as `(key, val)` pairs.
+        /// The user-supplied reduction function takes as arguments
+        ///
+        /// 1. a reference to the key,
+        /// 2. a reference to the slice of values and their accumulated updates,
+        /// 3. a mutuable reference to a vector to populate with output values and accumulated updates.
+        ///
+        /// The user logic is only invoked for non-empty input collections, and it is safe to assume that the
+        /// slice of input values is non-empty. The values are presented in sorted order, as defined by their
+        /// `Ord` implementations.
+        ///
+        /// # Examples
+        ///
+        /// ```
+        /// use differential_dataflow::input::Input;
+        ///
+        /// ::timely::example(|scope| {
+        ///     // report the smallest value for each group
+        ///     scope.new_collection_from(1 .. 10).1
+        ///          .map(|x| (x / 3, x))
+        ///          .reduce(|_key, input, output| {
+        ///              output.push((*input[0].0, 1))
+        ///          });
+        /// });
+        /// ```
+        pub fn reduce<L, V2: crate::Data, R2: Ord+Abelian+'static>(&self, logic: L) -> Collection<G, (K, V2), R2>
+        where L: FnMut(&K, &[(&V, R)], &mut Vec<(V2, R2)>)+'static {
+            self.reduce_named("Reduce", logic)
+        }
+
+        /// As `reduce` with the ability to name the operator.
+        pub fn reduce_named<L, V2: crate::Data, R2: Ord+Abelian+'static>(&self, name: &str, logic: L) -> Collection<G, (K, V2), R2>
+        where L: FnMut(&K, &[(&V, R)], &mut Vec<(V2, R2)>)+'static {
+            use crate::operators::arrange::arrangement::ArrangeByKey;
+            use crate::trace::implementations::{ValBuilder, ValSpine};
+
+            self.arrange_by_key_named(&format!("Arrange: {}", name))
+                .reduce_abelian::<_,ValBuilder<_,_,_,_>,ValSpine<K,V2,_,_>>(name, logic)
+                .as_collection(|k,v| (k.clone(), v.clone()))
+        }
+    }
+
 }
 
 /// Conversion to a differential dataflow Collection.
