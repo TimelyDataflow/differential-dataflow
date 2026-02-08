@@ -553,7 +553,6 @@ Echidnatron%
 </span><span class="boring">use timely::dataflow::Scope;
 </span><span class="boring">use differential_dataflow::VecCollection;
 </span><span class="boring">use differential_dataflow::lattice::Lattice;
-</span><span class="boring">use differential_dataflow::operators::Reduce;
 </span><span class="boring">fn example&lt;G: Scope&gt;(manages: &amp;VecCollection&lt;G, (u64, u64)&gt;)
 </span><span class="boring">where G::Timestamp: Lattice
 </span><span class="boring">{
@@ -620,7 +619,6 @@ Echidnatron%
 </span><span class="boring">use timely::dataflow::Scope;
 </span><span class="boring">use differential_dataflow::VecCollection;
 </span><span class="boring">use differential_dataflow::lattice::Lattice;
-</span><span class="boring">use differential_dataflow::operators::Reduce;
 </span><span class="boring">fn example&lt;G: Scope&gt;(manages: &amp;VecCollection&lt;G, (u64, u64), i64&gt;)
 </span><span class="boring">where G::Timestamp: Lattice
 </span><span class="boring">{
@@ -666,7 +664,7 @@ Echidnatron%
 </span><span class="boring">extern crate differential_dataflow;
 </span><span class="boring">use timely::dataflow::Scope;
 </span><span class="boring">use differential_dataflow::VecCollection;
-</span><span class="boring">use differential_dataflow::operators::{Join, Iterate, Threshold};
+</span><span class="boring">use differential_dataflow::operators::{Join, Iterate};
 </span><span class="boring">use differential_dataflow::lattice::Lattice;
 </span><span class="boring">fn example&lt;G: Scope&gt;(manages: &amp;VecCollection&lt;G, (u64, u64)&gt;)
 </span><span class="boring">where G::Timestamp: Lattice
@@ -703,7 +701,7 @@ Echidnatron%
 </span><span class="boring">extern crate differential_dataflow;
 </span><span class="boring">use timely::dataflow::Scope;
 </span><span class="boring">use differential_dataflow::VecCollection;
-</span><span class="boring">use differential_dataflow::operators::{Join, Threshold};
+</span><span class="boring">use differential_dataflow::operators::Join;
 </span><span class="boring">use differential_dataflow::operators::{Iterate, iterate::VecVariable};
 </span><span class="boring">use differential_dataflow::lattice::Lattice;
 </span><span class="boring">fn example&lt;G: Scope&gt;(manages: &amp;VecCollection&lt;G, (u64, u64)&gt;)
@@ -1204,7 +1202,6 @@ Reach out if you worry this was wrong, and we can discuss alternatives!</p>
 extern crate differential_dataflow;
 
 use differential_dataflow::operators::Join;
-use differential_dataflow::operators::Threshold;
 use differential_dataflow::operators::Iterate;
 use differential_dataflow::operators::arrange::ArrangeByKey;
 
