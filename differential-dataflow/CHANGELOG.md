@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.0](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dataflow-v0.19.1...differential-dataflow-v0.20.0) - 2026-02-08
+
+### Other
+
+- Deprioritize the `Vec` container ([#664](https://github.com/TimelyDataflow/differential-dataflow/pull/664))
+
 ## [0.19.1](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dataflow-v0.19.0...differential-dataflow-v0.19.1) - 2026-02-06
 
 ### Other
