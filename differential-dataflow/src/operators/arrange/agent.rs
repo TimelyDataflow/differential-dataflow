@@ -186,8 +186,8 @@ impl<Tr: TraceReader+'static> TraceAgent<Tr> {
     /// use timely::Config;
     /// use differential_dataflow::input::Input;
     /// use differential_dataflow::operators::arrange::ArrangeBySelf;
-    /// use differential_dataflow::operators::reduce::Reduce;
     /// use differential_dataflow::trace::Trace;
+    /// use differential_dataflow::trace::implementations::{ValBuilder, ValSpine};
     ///
     /// ::timely::execute(Config::thread(), |worker| {
     ///
@@ -206,7 +206,8 @@ impl<Tr: TraceReader+'static> TraceAgent<Tr> {
     ///     // create a second dataflow
     ///     worker.dataflow(move |scope| {
     ///         trace.import(scope)
-    ///              .reduce(move |_key, src, dst| dst.push((*src[0].0, 1)));
+    ///              .reduce_abelian::<_,ValBuilder<_,_,_,_>,ValSpine<_,_,_,_>>("Reduce", |_key, src, dst| dst.push((*src[0].0, 1)))
+    ///              .as_collection(|k,v| (k.clone(), v.clone()));
     ///     });
     ///
     /// }).unwrap();
@@ -237,7 +238,6 @@ impl<Tr: TraceReader+'static> TraceAgent<Tr> {
     /// use timely::dataflow::operators::Probe;
     /// use differential_dataflow::input::InputSession;
     /// use differential_dataflow::operators::arrange::ArrangeBySelf;
-    /// use differential_dataflow::operators::reduce::Reduce;
     /// use differential_dataflow::trace::Trace;
     ///
     /// ::timely::execute(Config::thread(), |worker| {
@@ -342,7 +342,6 @@ impl<Tr: TraceReader+'static> TraceAgent<Tr> {
     /// use timely::dataflow::operators::Inspect;
     /// use differential_dataflow::input::InputSession;
     /// use differential_dataflow::operators::arrange::ArrangeBySelf;
-    /// use differential_dataflow::operators::reduce::Reduce;
     /// use differential_dataflow::trace::Trace;
     /// use differential_dataflow::trace::TraceReader;
     /// use differential_dataflow::input::Input;

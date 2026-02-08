@@ -8,38 +8,14 @@
 //! manually. The higher-level of programming allows differential dataflow to provide efficient
 //! implementations, and to support efficient incremental updates to the collections.
 
-use std::hash::Hash;
-
 use timely::{Container, Data};
 use timely::progress::Timestamp;
-use timely::order::Product;
-use timely::dataflow::scopes::{Child, child::Iterative};
+use timely::dataflow::scopes::Child;
 use timely::dataflow::Scope;
 use timely::dataflow::operators::*;
 use timely::dataflow::StreamCore;
 
-use crate::difference::{Semigroup, Abelian, Multiply};
-use crate::lattice::Lattice;
-use crate::hashable::Hashable;
-
-/// An evolving collection of values of type `D`, backed by Rust `Vec` types as containers.
-///
-/// The `Collection` type is the core abstraction in differential dataflow programs. As you write your
-/// differential dataflow computation, you write as if the collection is a static dataset to which you
-/// apply functional transformations, creating new collections. Once your computation is written, you
-/// are able to mutate the collection (by inserting and removing elements); differential dataflow will
-/// propagate changes through your functional computation and report the corresponding changes to the
-/// output collections.
-///
-/// Each vec collection has three generic parameters. The parameter `G` is for the scope in which the
-/// collection exists; as you write more complicated programs you may wish to introduce nested scopes
-/// (e.g. for iteration) and this parameter tracks the scope (for timely dataflow's benefit). The `D`
-/// parameter is the type of data in your collection, for example `String`, or `(u32, Vec<Option<()>>)`.
-/// The `R` parameter represents the types of changes that the data undergo, and is most commonly (and
-/// defaults to) `isize`, representing changes to the occurrence count of each record.
-///
-/// This type definition instantiates the [`Collection`] type with a `Vec<(D, G::Timestamp, R)>`.
-pub type VecCollection<G, D, R = isize> = Collection<G, Vec<(D, <G as ScopeParent>::Timestamp, R)>>;
+use crate::difference::Abelian;
 
 /// An evolving collection represented by a stream of abstract containers.
 ///
@@ -285,317 +261,6 @@ impl<G: Scope, C: Container> Collection<G, C> {
     }
 }
 
-impl<G: Scope, D: Clone+'static, R: Clone+'static> VecCollection<G, D, R> {
-    /// Creates a new collection by applying the supplied function to each input element.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use differential_dataflow::input::Input;
-    ///
-    /// ::timely::example(|scope| {
-    ///     scope.new_collection_from(1 .. 10).1
-    ///          .map(|x| x * 2)
-    ///          .filter(|x| x % 2 == 1)
-    ///          .assert_empty();
-    /// });
-    /// ```
-    pub fn map<D2, L>(&self, mut logic: L) -> VecCollection<G, D2, R>
-    where
-        D2: Data,
-        L: FnMut(D) -> D2 + 'static,
-    {
-        self.inner
-            .map(move |(data, time, delta)| (logic(data), time, delta))
-            .as_collection()
-    }
-    /// Creates a new collection by applying the supplied function to each input element.
-    ///
-    /// Although the name suggests in-place mutation, this function does not change the source collection,
-    /// but rather re-uses the underlying allocations in its implementation. The method is semantically
-    /// equivalent to `map`, but can be more efficient.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use differential_dataflow::input::Input;
-    ///
-    /// ::timely::example(|scope| {
-    ///     scope.new_collection_from(1 .. 10).1
-    ///          .map_in_place(|x| *x *= 2)
-    ///          .filter(|x| x % 2 == 1)
-    ///          .assert_empty();
-    /// });
-    /// ```
-    pub fn map_in_place<L>(&self, mut logic: L) -> VecCollection<G, D, R>
-    where
-        L: FnMut(&mut D) + 'static,
-    {
-        self.inner
-            .map_in_place(move |&mut (ref mut data, _, _)| logic(data))
-            .as_collection()
-    }
-    /// Creates a new collection by applying the supplied function to each input element and accumulating the results.
-    ///
-    /// This method extracts an iterator from each input element, and extracts the full contents of the iterator. Be
-    /// warned that if the iterators produce substantial amounts of data, they are currently fully drained before
-    /// attempting to consolidate the results.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use differential_dataflow::input::Input;
-    ///
-    /// ::timely::example(|scope| {
-    ///     scope.new_collection_from(1 .. 10).1
-    ///          .flat_map(|x| 0 .. x);
-    /// });
-    /// ```
-    pub fn flat_map<I, L>(&self, mut logic: L) -> VecCollection<G, I::Item, R>
-    where
-        G::Timestamp: Clone,
-        I: IntoIterator<Item: Data>,
-        L: FnMut(D) -> I + 'static,
-    {
-        self.inner
-            .flat_map(move |(data, time, delta)| logic(data).into_iter().map(move |x| (x, time.clone(), delta.clone())))
-            .as_collection()
-    }
-    /// Creates a new collection containing those input records satisfying the supplied predicate.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use differential_dataflow::input::Input;
-    ///
-    /// ::timely::example(|scope| {
-    ///     scope.new_collection_from(1 .. 10).1
-    ///          .map(|x| x * 2)
-    ///          .filter(|x| x % 2 == 1)
-    ///          .assert_empty();
-    /// });
-    /// ```
-    pub fn filter<L>(&self, mut logic: L) -> VecCollection<G, D, R>
-    where
-        L: FnMut(&D) -> bool + 'static,
-    {
-        self.inner
-            .filter(move |(data, _, _)| logic(data))
-            .as_collection()
-    }
-    /// Replaces each record with another, with a new difference type.
-    ///
-    /// This method is most commonly used to take records containing aggregatable data (e.g. numbers to be summed)
-    /// and move the data into the difference component. This will allow differential dataflow to update in-place.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use differential_dataflow::input::Input;
-    ///
-    /// ::timely::example(|scope| {
-    ///
-    ///     let nums = scope.new_collection_from(0 .. 10).1;
-    ///     let x1 = nums.flat_map(|x| 0 .. x);
-    ///     let x2 = nums.map(|x| (x, 9 - x))
-    ///                  .explode(|(x,y)| Some((x,y)));
-    ///
-    ///     x1.assert_eq(&x2);
-    /// });
-    /// ```
-    pub fn explode<D2, R2, I, L>(&self, mut logic: L) -> VecCollection<G, D2, <R2 as Multiply<R>>::Output>
-    where
-        D2: Data,
-        R2: Semigroup+Multiply<R, Output: Semigroup+'static>,
-        I: IntoIterator<Item=(D2,R2)>,
-        L: FnMut(D)->I+'static,
-    {
-        self.inner
-            .flat_map(move |(x, t, d)| logic(x).into_iter().map(move |(x,d2)| (x, t.clone(), d2.multiply(&d))))
-            .as_collection()
-    }
-
-    /// Joins each record against a collection defined by the function `logic`.
-    ///
-    /// This method performs what is essentially a join with the collection of records `(x, logic(x))`.
-    /// Rather than materialize this second relation, `logic` is applied to each record and the appropriate
-    /// modifications made to the results, namely joining timestamps and multiplying differences.
-    ///
-    /// #Examples
-    ///
-    /// ```
-    /// use differential_dataflow::input::Input;
-    ///
-    /// ::timely::example(|scope| {
-    ///     // creates `x` copies of `2*x` from time `3*x` until `4*x`,
-    ///     // for x from 0 through 9.
-    ///     scope.new_collection_from(0 .. 10isize).1
-    ///          .join_function(|x|
-    ///              //   data      time      diff
-    ///              vec![(2*x, (3*x) as u64,  x),
-    ///                   (2*x, (4*x) as u64, -x)]
-    ///           );
-    /// });
-    /// ```
-    pub fn join_function<D2, R2, I, L>(&self, mut logic: L) -> VecCollection<G, D2, <R2 as Multiply<R>>::Output>
-    where
-        G::Timestamp: Lattice,
-        D2: Data,
-        R2: Semigroup+Multiply<R, Output: Semigroup+'static>,
-        I: IntoIterator<Item=(D2,G::Timestamp,R2)>,
-        L: FnMut(D)->I+'static,
-    {
-        self.inner
-            .flat_map(move |(x, t, d)| logic(x).into_iter().map(move |(x,t2,d2)| (x, t.join(&t2), d2.multiply(&d))))
-            .as_collection()
-    }
-
-    /// Brings a Collection into a nested scope, at varying times.
-    ///
-    /// The `initial` function indicates the time at which each element of the Collection should appear.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use timely::dataflow::Scope;
-    /// use differential_dataflow::input::Input;
-    ///
-    /// ::timely::example(|scope| {
-    ///
-    ///     let data = scope.new_collection_from(1 .. 10).1;
-    ///
-    ///     let result = scope.iterative::<u64,_,_>(|child| {
-    ///         data.enter_at(child, |x| *x)
-    ///             .leave()
-    ///     });
-    ///
-    ///     data.assert_eq(&result);
-    /// });
-    /// ```
-    pub fn enter_at<'a, T, F>(&self, child: &Iterative<'a, G, T>, mut initial: F) -> VecCollection<Iterative<'a, G, T>, D, R>
-    where
-        T: Timestamp+Hash,
-        F: FnMut(&D) -> T + Clone + 'static,
-        G::Timestamp: Hash,
-    {
-        self.inner
-            .enter(child)
-            .map(move |(data, time, diff)| {
-                let new_time = Product::new(time, initial(&data));
-                (data, new_time, diff)
-            })
-            .as_collection()
-    }
-
-    /// Delays each difference by a supplied function.
-    ///
-    /// It is assumed that `func` only advances timestamps; this is not verified, and things may go horribly
-    /// wrong if that assumption is incorrect. It is also critical that `func` be monotonic: if two times are
-    /// ordered, they should have the same order or compare equal once `func` is applied to them (this
-    /// is because we advance the timely capability with the same logic, and it must remain `less_equal`
-    /// to all of the data timestamps).
-    pub fn delay<F>(&self, func: F) -> VecCollection<G, D, R>
-    where
-        G::Timestamp: Hash,
-        F: FnMut(&G::Timestamp) -> G::Timestamp + Clone + 'static,
-    {
-        let mut func1 = func.clone();
-        let mut func2 = func.clone();
-
-        self.inner
-            .delay_batch(move |x| func1(x))
-            .map_in_place(move |x| x.1 = func2(&x.1))
-            .as_collection()
-    }
-
-    /// Applies a supplied function to each update.
-    ///
-    /// This method is most commonly used to report information back to the user, often for debugging purposes.
-    /// Any function can be used here, but be warned that the incremental nature of differential dataflow does
-    /// not guarantee that it will be called as many times as you might expect.
-    ///
-    /// The `(data, time, diff)` triples indicate a change `diff` to the frequency of `data` which takes effect
-    /// at the logical time `time`. When times are totally ordered (for example, `usize`), these updates reflect
-    /// the changes along the sequence of collections. For partially ordered times, the mathematics are more
-    /// interesting and less intuitive, unfortunately.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use differential_dataflow::input::Input;
-    ///
-    /// ::timely::example(|scope| {
-    ///     scope.new_collection_from(1 .. 10).1
-    ///          .map_in_place(|x| *x *= 2)
-    ///          .filter(|x| x % 2 == 1)
-    ///          .inspect(|x| println!("error: {:?}", x));
-    /// });
-    /// ```
-    pub fn inspect<F>(&self, func: F) -> VecCollection<G, D, R>
-    where
-        F: FnMut(&(D, G::Timestamp, R))+'static,
-    {
-        self.inner
-            .inspect(func)
-            .as_collection()
-    }
-    /// Applies a supplied function to each batch of updates.
-    ///
-    /// This method is analogous to `inspect`, but operates on batches and reveals the timestamp of the
-    /// timely dataflow capability associated with the batch of updates. The observed batching depends
-    /// on how the system executes, and may vary run to run.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use differential_dataflow::input::Input;
-    ///
-    /// ::timely::example(|scope| {
-    ///     scope.new_collection_from(1 .. 10).1
-    ///          .map_in_place(|x| *x *= 2)
-    ///          .filter(|x| x % 2 == 1)
-    ///          .inspect_batch(|t,xs| println!("errors @ {:?}: {:?}", t, xs));
-    /// });
-    /// ```
-    pub fn inspect_batch<F>(&self, mut func: F) -> VecCollection<G, D, R>
-    where
-        F: FnMut(&G::Timestamp, &[(D, G::Timestamp, R)])+'static,
-    {
-        self.inner
-            .inspect_batch(move |time, data| func(time, data))
-            .as_collection()
-    }
-
-    /// Assert if the collection is ever non-empty.
-    ///
-    /// Because this is a dataflow fragment, the test is only applied as the computation is run. If the computation
-    /// is not run, or not run to completion, there may be un-exercised times at which the collection could be
-    /// non-empty. Typically, a timely dataflow computation runs to completion on drop, and so clean exit from a
-    /// program should indicate that this assertion never found cause to complain.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use differential_dataflow::input::Input;
-    ///
-    /// ::timely::example(|scope| {
-    ///     scope.new_collection_from(1 .. 10).1
-    ///          .map(|x| x * 2)
-    ///          .filter(|x| x % 2 == 1)
-    ///          .assert_empty();
-    /// });
-    /// ```
-    pub fn assert_empty(&self)
-    where
-        D: crate::ExchangeData+Hashable,
-        R: crate::ExchangeData+Hashable + Semigroup,
-        G::Timestamp: Lattice+Ord,
-    {
-        self.consolidate()
-            .inspect(|x| panic!("Assertion failed: non-empty collection: {:?}", x));
-    }
-}
-
 use timely::dataflow::scopes::ScopeParent;
 use timely::progress::timestamp::Refines;
 
@@ -650,41 +315,605 @@ impl<G: Scope, C: Container+Data> Collection<Child<'_, G, G::Timestamp>, C>
     }
 }
 
-/// Methods requiring an Abelian difference, to support negation.
-impl<G: Scope<Timestamp: Data>, D: Clone+'static, R: Abelian+'static> VecCollection<G, D, R> {
-    /// Assert if the collections are ever different.
+pub use vec::Collection as VecCollection;
+/// Specializations of `Collection` that use `Vec` as the container.
+pub mod vec {
+
+    use std::hash::Hash;
+
+    use timely::Data;
+    use timely::progress::Timestamp;
+    use timely::order::Product;
+    use timely::dataflow::scopes::child::Iterative;
+    use timely::dataflow::{Scope, ScopeParent};
+    use timely::dataflow::operators::*;
+
+    use crate::collection::AsCollection;
+    use crate::difference::{Semigroup, Abelian, Multiply};
+    use crate::lattice::Lattice;
+    use crate::hashable::Hashable;
+
+    /// An evolving collection of values of type `D`, backed by Rust `Vec` types as containers.
     ///
-    /// Because this is a dataflow fragment, the test is only applied as the computation is run. If the computation
-    /// is not run, or not run to completion, there may be un-exercised times at which the collections could vary.
-    /// Typically, a timely dataflow computation runs to completion on drop, and so clean exit from a program should
-    /// indicate that this assertion never found cause to complain.
+    /// The `Collection` type is the core abstraction in differential dataflow programs. As you write your
+    /// differential dataflow computation, you write as if the collection is a static dataset to which you
+    /// apply functional transformations, creating new collections. Once your computation is written, you
+    /// are able to mutate the collection (by inserting and removing elements); differential dataflow will
+    /// propagate changes through your functional computation and report the corresponding changes to the
+    /// output collections.
     ///
-    /// # Examples
+    /// Each vec collection has three generic parameters. The parameter `G` is for the scope in which the
+    /// collection exists; as you write more complicated programs you may wish to introduce nested scopes
+    /// (e.g. for iteration) and this parameter tracks the scope (for timely dataflow's benefit). The `D`
+    /// parameter is the type of data in your collection, for example `String`, or `(u32, Vec<Option<()>>)`.
+    /// The `R` parameter represents the types of changes that the data undergo, and is most commonly (and
+    /// defaults to) `isize`, representing changes to the occurrence count of each record.
     ///
-    /// ```
-    /// use differential_dataflow::input::Input;
-    ///
-    /// ::timely::example(|scope| {
-    ///
-    ///     let data = scope.new_collection_from(1 .. 10).1;
-    ///
-    ///     let odds = data.filter(|x| x % 2 == 1);
-    ///     let evens = data.filter(|x| x % 2 == 0);
-    ///
-    ///     odds.concat(&evens)
-    ///         .assert_eq(&data);
-    /// });
-    /// ```
-    pub fn assert_eq(&self, other: &Self)
-    where
-        D: crate::ExchangeData+Hashable,
-        R: crate::ExchangeData+Hashable,
-        G::Timestamp: Lattice+Ord,
-    {
-        self.negate()
-            .concat(other)
-            .assert_empty();
+    /// This type definition instantiates the [`Collection`] type with a `Vec<(D, G::Timestamp, R)>`.
+    pub type Collection<G, D, R = isize> = super::Collection<G, Vec<(D, <G as ScopeParent>::Timestamp, R)>>;
+
+
+    impl<G: Scope, D: Clone+'static, R: Clone+'static> Collection<G, D, R> {
+        /// Creates a new collection by applying the supplied function to each input element.
+        ///
+        /// # Examples
+        ///
+        /// ```
+        /// use differential_dataflow::input::Input;
+        ///
+        /// ::timely::example(|scope| {
+        ///     scope.new_collection_from(1 .. 10).1
+        ///          .map(|x| x * 2)
+        ///          .filter(|x| x % 2 == 1)
+        ///          .assert_empty();
+        /// });
+        /// ```
+        pub fn map<D2, L>(&self, mut logic: L) -> Collection<G, D2, R>
+        where
+            D2: Data,
+            L: FnMut(D) -> D2 + 'static,
+        {
+            self.inner
+                .map(move |(data, time, delta)| (logic(data), time, delta))
+                .as_collection()
+        }
+        /// Creates a new collection by applying the supplied function to each input element.
+        ///
+        /// Although the name suggests in-place mutation, this function does not change the source collection,
+        /// but rather re-uses the underlying allocations in its implementation. The method is semantically
+        /// equivalent to `map`, but can be more efficient.
+        ///
+        /// # Examples
+        ///
+        /// ```
+        /// use differential_dataflow::input::Input;
+        ///
+        /// ::timely::example(|scope| {
+        ///     scope.new_collection_from(1 .. 10).1
+        ///          .map_in_place(|x| *x *= 2)
+        ///          .filter(|x| x % 2 == 1)
+        ///          .assert_empty();
+        /// });
+        /// ```
+        pub fn map_in_place<L>(&self, mut logic: L) -> Collection<G, D, R>
+        where
+            L: FnMut(&mut D) + 'static,
+        {
+            self.inner
+                .map_in_place(move |&mut (ref mut data, _, _)| logic(data))
+                .as_collection()
+        }
+        /// Creates a new collection by applying the supplied function to each input element and accumulating the results.
+        ///
+        /// This method extracts an iterator from each input element, and extracts the full contents of the iterator. Be
+        /// warned that if the iterators produce substantial amounts of data, they are currently fully drained before
+        /// attempting to consolidate the results.
+        ///
+        /// # Examples
+        ///
+        /// ```
+        /// use differential_dataflow::input::Input;
+        ///
+        /// ::timely::example(|scope| {
+        ///     scope.new_collection_from(1 .. 10).1
+        ///          .flat_map(|x| 0 .. x);
+        /// });
+        /// ```
+        pub fn flat_map<I, L>(&self, mut logic: L) -> Collection<G, I::Item, R>
+        where
+            G::Timestamp: Clone,
+            I: IntoIterator<Item: Data>,
+            L: FnMut(D) -> I + 'static,
+        {
+            self.inner
+                .flat_map(move |(data, time, delta)| logic(data).into_iter().map(move |x| (x, time.clone(), delta.clone())))
+                .as_collection()
+        }
+        /// Creates a new collection containing those input records satisfying the supplied predicate.
+        ///
+        /// # Examples
+        ///
+        /// ```
+        /// use differential_dataflow::input::Input;
+        ///
+        /// ::timely::example(|scope| {
+        ///     scope.new_collection_from(1 .. 10).1
+        ///          .map(|x| x * 2)
+        ///          .filter(|x| x % 2 == 1)
+        ///          .assert_empty();
+        /// });
+        /// ```
+        pub fn filter<L>(&self, mut logic: L) -> Collection<G, D, R>
+        where
+            L: FnMut(&D) -> bool + 'static,
+        {
+            self.inner
+                .filter(move |(data, _, _)| logic(data))
+                .as_collection()
+        }
+        /// Replaces each record with another, with a new difference type.
+        ///
+        /// This method is most commonly used to take records containing aggregatable data (e.g. numbers to be summed)
+        /// and move the data into the difference component. This will allow differential dataflow to update in-place.
+        ///
+        /// # Examples
+        ///
+        /// ```
+        /// use differential_dataflow::input::Input;
+        ///
+        /// ::timely::example(|scope| {
+        ///
+        ///     let nums = scope.new_collection_from(0 .. 10).1;
+        ///     let x1 = nums.flat_map(|x| 0 .. x);
+        ///     let x2 = nums.map(|x| (x, 9 - x))
+        ///                  .explode(|(x,y)| Some((x,y)));
+        ///
+        ///     x1.assert_eq(&x2);
+        /// });
+        /// ```
+        pub fn explode<D2, R2, I, L>(&self, mut logic: L) -> Collection<G, D2, <R2 as Multiply<R>>::Output>
+        where
+            D2: Data,
+            R2: Semigroup+Multiply<R, Output: Semigroup+'static>,
+            I: IntoIterator<Item=(D2,R2)>,
+            L: FnMut(D)->I+'static,
+        {
+            self.inner
+                .flat_map(move |(x, t, d)| logic(x).into_iter().map(move |(x,d2)| (x, t.clone(), d2.multiply(&d))))
+                .as_collection()
+        }
+
+        /// Joins each record against a collection defined by the function `logic`.
+        ///
+        /// This method performs what is essentially a join with the collection of records `(x, logic(x))`.
+        /// Rather than materialize this second relation, `logic` is applied to each record and the appropriate
+        /// modifications made to the results, namely joining timestamps and multiplying differences.
+        ///
+        /// #Examples
+        ///
+        /// ```
+        /// use differential_dataflow::input::Input;
+        ///
+        /// ::timely::example(|scope| {
+        ///     // creates `x` copies of `2*x` from time `3*x` until `4*x`,
+        ///     // for x from 0 through 9.
+        ///     scope.new_collection_from(0 .. 10isize).1
+        ///          .join_function(|x|
+        ///              //   data      time      diff
+        ///              vec![(2*x, (3*x) as u64,  x),
+        ///                   (2*x, (4*x) as u64, -x)]
+        ///           );
+        /// });
+        /// ```
+        pub fn join_function<D2, R2, I, L>(&self, mut logic: L) -> Collection<G, D2, <R2 as Multiply<R>>::Output>
+        where
+            G::Timestamp: Lattice,
+            D2: Data,
+            R2: Semigroup+Multiply<R, Output: Semigroup+'static>,
+            I: IntoIterator<Item=(D2,G::Timestamp,R2)>,
+            L: FnMut(D)->I+'static,
+        {
+            self.inner
+                .flat_map(move |(x, t, d)| logic(x).into_iter().map(move |(x,t2,d2)| (x, t.join(&t2), d2.multiply(&d))))
+                .as_collection()
+        }
+
+        /// Brings a Collection into a nested scope, at varying times.
+        ///
+        /// The `initial` function indicates the time at which each element of the Collection should appear.
+        ///
+        /// # Examples
+        ///
+        /// ```
+        /// use timely::dataflow::Scope;
+        /// use differential_dataflow::input::Input;
+        ///
+        /// ::timely::example(|scope| {
+        ///
+        ///     let data = scope.new_collection_from(1 .. 10).1;
+        ///
+        ///     let result = scope.iterative::<u64,_,_>(|child| {
+        ///         data.enter_at(child, |x| *x)
+        ///             .leave()
+        ///     });
+        ///
+        ///     data.assert_eq(&result);
+        /// });
+        /// ```
+        pub fn enter_at<'a, T, F>(&self, child: &Iterative<'a, G, T>, mut initial: F) -> Collection<Iterative<'a, G, T>, D, R>
+        where
+            T: Timestamp+Hash,
+            F: FnMut(&D) -> T + Clone + 'static,
+            G::Timestamp: Hash,
+        {
+            self.inner
+                .enter(child)
+                .map(move |(data, time, diff)| {
+                    let new_time = Product::new(time, initial(&data));
+                    (data, new_time, diff)
+                })
+                .as_collection()
+        }
+
+        /// Delays each difference by a supplied function.
+        ///
+        /// It is assumed that `func` only advances timestamps; this is not verified, and things may go horribly
+        /// wrong if that assumption is incorrect. It is also critical that `func` be monotonic: if two times are
+        /// ordered, they should have the same order or compare equal once `func` is applied to them (this
+        /// is because we advance the timely capability with the same logic, and it must remain `less_equal`
+        /// to all of the data timestamps).
+        pub fn delay<F>(&self, func: F) -> Collection<G, D, R>
+        where
+            G::Timestamp: Hash,
+            F: FnMut(&G::Timestamp) -> G::Timestamp + Clone + 'static,
+        {
+            let mut func1 = func.clone();
+            let mut func2 = func.clone();
+
+            self.inner
+                .delay_batch(move |x| func1(x))
+                .map_in_place(move |x| x.1 = func2(&x.1))
+                .as_collection()
+        }
+
+        /// Applies a supplied function to each update.
+        ///
+        /// This method is most commonly used to report information back to the user, often for debugging purposes.
+        /// Any function can be used here, but be warned that the incremental nature of differential dataflow does
+        /// not guarantee that it will be called as many times as you might expect.
+        ///
+        /// The `(data, time, diff)` triples indicate a change `diff` to the frequency of `data` which takes effect
+        /// at the logical time `time`. When times are totally ordered (for example, `usize`), these updates reflect
+        /// the changes along the sequence of collections. For partially ordered times, the mathematics are more
+        /// interesting and less intuitive, unfortunately.
+        ///
+        /// # Examples
+        ///
+        /// ```
+        /// use differential_dataflow::input::Input;
+        ///
+        /// ::timely::example(|scope| {
+        ///     scope.new_collection_from(1 .. 10).1
+        ///          .map_in_place(|x| *x *= 2)
+        ///          .filter(|x| x % 2 == 1)
+        ///          .inspect(|x| println!("error: {:?}", x));
+        /// });
+        /// ```
+        pub fn inspect<F>(&self, func: F) -> Collection<G, D, R>
+        where
+            F: FnMut(&(D, G::Timestamp, R))+'static,
+        {
+            self.inner
+                .inspect(func)
+                .as_collection()
+        }
+        /// Applies a supplied function to each batch of updates.
+        ///
+        /// This method is analogous to `inspect`, but operates on batches and reveals the timestamp of the
+        /// timely dataflow capability associated with the batch of updates. The observed batching depends
+        /// on how the system executes, and may vary run to run.
+        ///
+        /// # Examples
+        ///
+        /// ```
+        /// use differential_dataflow::input::Input;
+        ///
+        /// ::timely::example(|scope| {
+        ///     scope.new_collection_from(1 .. 10).1
+        ///          .map_in_place(|x| *x *= 2)
+        ///          .filter(|x| x % 2 == 1)
+        ///          .inspect_batch(|t,xs| println!("errors @ {:?}: {:?}", t, xs));
+        /// });
+        /// ```
+        pub fn inspect_batch<F>(&self, mut func: F) -> Collection<G, D, R>
+        where
+            F: FnMut(&G::Timestamp, &[(D, G::Timestamp, R)])+'static,
+        {
+            self.inner
+                .inspect_batch(move |time, data| func(time, data))
+                .as_collection()
+        }
+
+        /// Assert if the collection is ever non-empty.
+        ///
+        /// Because this is a dataflow fragment, the test is only applied as the computation is run. If the computation
+        /// is not run, or not run to completion, there may be un-exercised times at which the collection could be
+        /// non-empty. Typically, a timely dataflow computation runs to completion on drop, and so clean exit from a
+        /// program should indicate that this assertion never found cause to complain.
+        ///
+        /// # Examples
+        ///
+        /// ```
+        /// use differential_dataflow::input::Input;
+        ///
+        /// ::timely::example(|scope| {
+        ///     scope.new_collection_from(1 .. 10).1
+        ///          .map(|x| x * 2)
+        ///          .filter(|x| x % 2 == 1)
+        ///          .assert_empty();
+        /// });
+        /// ```
+        pub fn assert_empty(&self)
+        where
+            D: crate::ExchangeData+Hashable,
+            R: crate::ExchangeData+Hashable + Semigroup,
+            G::Timestamp: Lattice+Ord,
+        {
+            self.consolidate()
+                .inspect(|x| panic!("Assertion failed: non-empty collection: {:?}", x));
+        }
     }
+
+    /// Methods requiring an Abelian difference, to support negation.
+    impl<G: Scope<Timestamp: Data>, D: Clone+'static, R: Abelian+'static> Collection<G, D, R> {
+        /// Assert if the collections are ever different.
+        ///
+        /// Because this is a dataflow fragment, the test is only applied as the computation is run. If the computation
+        /// is not run, or not run to completion, there may be un-exercised times at which the collections could vary.
+        /// Typically, a timely dataflow computation runs to completion on drop, and so clean exit from a program should
+        /// indicate that this assertion never found cause to complain.
+        ///
+        /// # Examples
+        ///
+        /// ```
+        /// use differential_dataflow::input::Input;
+        ///
+        /// ::timely::example(|scope| {
+        ///
+        ///     let data = scope.new_collection_from(1 .. 10).1;
+        ///
+        ///     let odds = data.filter(|x| x % 2 == 1);
+        ///     let evens = data.filter(|x| x % 2 == 0);
+        ///
+        ///     odds.concat(&evens)
+        ///         .assert_eq(&data);
+        /// });
+        /// ```
+        pub fn assert_eq(&self, other: &Self)
+        where
+            D: crate::ExchangeData+Hashable,
+            R: crate::ExchangeData+Hashable,
+            G::Timestamp: Lattice+Ord,
+        {
+            self.negate()
+                .concat(other)
+                .assert_empty();
+        }
+    }
+
+    use crate::trace::{Trace, Builder};
+    use crate::operators::arrange::{Arranged, TraceAgent};
+
+    impl <G, K, V, R> Collection<G, (K, V), R>
+    where
+        G: Scope<Timestamp: Lattice+Ord>,
+        K: crate::ExchangeData+Hashable,
+        V: crate::ExchangeData,
+        R: crate::ExchangeData+Semigroup,
+    {
+        /// Applies a reduction function on records grouped by key.
+        ///
+        /// Input data must be structured as `(key, val)` pairs.
+        /// The user-supplied reduction function takes as arguments
+        ///
+        /// 1. a reference to the key,
+        /// 2. a reference to the slice of values and their accumulated updates,
+        /// 3. a mutuable reference to a vector to populate with output values and accumulated updates.
+        ///
+        /// The user logic is only invoked for non-empty input collections, and it is safe to assume that the
+        /// slice of input values is non-empty. The values are presented in sorted order, as defined by their
+        /// `Ord` implementations.
+        ///
+        /// # Examples
+        ///
+        /// ```
+        /// use differential_dataflow::input::Input;
+        ///
+        /// ::timely::example(|scope| {
+        ///     // report the smallest value for each group
+        ///     scope.new_collection_from(1 .. 10).1
+        ///          .map(|x| (x / 3, x))
+        ///          .reduce(|_key, input, output| {
+        ///              output.push((*input[0].0, 1))
+        ///          });
+        /// });
+        /// ```
+        pub fn reduce<L, V2: crate::Data, R2: Ord+Abelian+'static>(&self, logic: L) -> Collection<G, (K, V2), R2>
+        where L: FnMut(&K, &[(&V, R)], &mut Vec<(V2, R2)>)+'static {
+            self.reduce_named("Reduce", logic)
+        }
+
+        /// As `reduce` with the ability to name the operator.
+        pub fn reduce_named<L, V2: crate::Data, R2: Ord+Abelian+'static>(&self, name: &str, logic: L) -> Collection<G, (K, V2), R2>
+        where L: FnMut(&K, &[(&V, R)], &mut Vec<(V2, R2)>)+'static {
+            use crate::operators::arrange::arrangement::ArrangeByKey;
+            use crate::trace::implementations::{ValBuilder, ValSpine};
+
+            self.arrange_by_key_named(&format!("Arrange: {}", name))
+                .reduce_abelian::<_,ValBuilder<_,_,_,_>,ValSpine<K,V2,_,_>>(name, logic)
+                .as_collection(|k,v| (k.clone(), v.clone()))
+        }
+
+        /// Applies `reduce` to arranged data, and returns an arrangement of output data.
+        ///
+        /// This method is used by the more ergonomic `reduce`, `distinct`, and `count` methods, although
+        /// it can be very useful if one needs to manually attach and re-use existing arranged collections.
+        ///
+        /// # Examples
+        ///
+        /// ```
+        /// use differential_dataflow::input::Input;
+        /// use differential_dataflow::trace::Trace;
+        /// use differential_dataflow::trace::implementations::{ValBuilder, ValSpine};
+        ///
+        /// ::timely::example(|scope| {
+        ///
+        ///     let trace =
+        ///     scope.new_collection_from(1 .. 10u32).1
+        ///          .map(|x| (x, x))
+        ///          .reduce_abelian::<_,ValBuilder<_,_,_,_>,ValSpine<_,_,_,_>>(
+        ///             "Example",
+        ///              move |_key, src, dst| dst.push((*src[0].0, 1))
+        ///          )
+        ///          .trace;
+        /// });
+        /// ```
+        pub fn reduce_abelian<L, Bu, T2>(&self, name: &str, mut logic: L) -> Arranged<G, TraceAgent<T2>>
+        where
+            T2: for<'a> Trace<Key<'a>= &'a K, KeyOwn = K, ValOwn = V, Time=G::Timestamp, Diff: Abelian>+'static,
+            Bu: Builder<Time=T2::Time, Input = Vec<((K, V), T2::Time, T2::Diff)>, Output = T2::Batch>,
+            L: FnMut(&K, &[(&V, R)], &mut Vec<(V, T2::Diff)>)+'static,
+        {
+            self.reduce_core::<_,Bu,T2>(name, move |key, input, output, change| {
+                if !input.is_empty() { logic(key, input, change); }
+                change.extend(output.drain(..).map(|(x,mut d)| { d.negate(); (x, d) }));
+                crate::consolidation::consolidate(change);
+            })
+        }
+
+        /// Solves for output updates when presented with inputs and would-be outputs.
+        ///
+        /// Unlike `reduce_arranged`, this method may be called with an empty `input`,
+        /// and it may not be safe to index into the first element.
+        /// At least one of the two collections will be non-empty.
+        pub fn reduce_core<L, Bu, T2>(&self, name: &str, logic: L) -> Arranged<G, TraceAgent<T2>>
+        where
+            V: Data,
+            T2: for<'a> Trace<Key<'a>=&'a K, KeyOwn = K, ValOwn = V, Time=G::Timestamp>+'static,
+            Bu: Builder<Time=T2::Time, Input = Vec<((K, V), T2::Time, T2::Diff)>, Output = T2::Batch>,
+            L: FnMut(&K, &[(&V, R)], &mut Vec<(V,T2::Diff)>, &mut Vec<(V, T2::Diff)>)+'static,
+        {
+            use crate::operators::arrange::arrangement::ArrangeByKey;
+            self.arrange_by_key_named(&format!("Arrange: {}", name))
+                .reduce_core::<_,Bu,_>(name, logic)
+        }
+    }
+
+    impl<G, K, R1> Collection<G, K, R1>
+    where
+        G: Scope<Timestamp: Lattice+Ord>,
+        K: crate::ExchangeData+Hashable,
+        R1: crate::ExchangeData+Semigroup
+    {
+
+        /// Reduces the collection to one occurrence of each distinct element.
+        ///
+        /// # Examples
+        ///
+        /// ```
+        /// use differential_dataflow::input::Input;
+        ///
+        /// ::timely::example(|scope| {
+        ///     // report at most one of each key.
+        ///     scope.new_collection_from(1 .. 10).1
+        ///          .map(|x| x / 3)
+        ///          .distinct();
+        /// });
+        /// ```
+        pub fn distinct(&self) -> Collection<G, K, isize> {
+            self.distinct_core()
+        }
+
+        /// Distinct for general integer differences.
+        ///
+        /// This method allows `distinct` to produce collections whose difference
+        /// type is something other than an `isize` integer, for example perhaps an
+        /// `i32`.
+        pub fn distinct_core<R2: Ord+Abelian+'static+From<i8>>(&self) -> Collection<G, K, R2> {
+            self.threshold_named("Distinct", |_,_| R2::from(1i8))
+        }
+
+        /// Transforms the multiplicity of records.
+        ///
+        /// The `threshold` function is obliged to map `R1::zero` to `R2::zero`, or at
+        /// least the computation may behave as if it does. Otherwise, the transformation
+        /// can be nearly arbitrary: the code does not assume any properties of `threshold`.
+        ///
+        /// # Examples
+        ///
+        /// ```
+        /// use differential_dataflow::input::Input;
+        ///
+        /// ::timely::example(|scope| {
+        ///     // report at most one of each key.
+        ///     scope.new_collection_from(1 .. 10).1
+        ///          .map(|x| x / 3)
+        ///          .threshold(|_,c| c % 2);
+        /// });
+        /// ```
+        pub fn threshold<R2: Ord+Abelian+'static, F: FnMut(&K, &R1)->R2+'static>(&self, thresh: F) -> Collection<G, K, R2> {
+            self.threshold_named("Threshold", thresh)
+        }
+
+        /// A `threshold` with the ability to name the operator.
+        pub fn threshold_named<R2: Ord+Abelian+'static, F: FnMut(&K,&R1)->R2+'static>(&self, name: &str, mut thresh: F) -> Collection<G, K, R2> {
+            use crate::operators::arrange::arrangement::ArrangeBySelf;
+            use crate::trace::implementations::{KeyBuilder, KeySpine};
+
+            self.arrange_by_self_named(&format!("Arrange: {}", name))
+                .reduce_abelian::<_,KeyBuilder<K,G::Timestamp,R2>,KeySpine<K,G::Timestamp,R2>>(name, move |k,s,t| t.push(((), thresh(k, &s[0].1))))
+                .as_collection(|k,_| k.clone())
+        }
+
+    }
+
+    impl<G, K, R> Collection<G, K, R>
+    where
+        G: Scope<Timestamp: Lattice+Ord>,
+        K: crate::ExchangeData+Hashable,
+        R: crate::ExchangeData+Semigroup
+    {
+
+        /// Counts the number of occurrences of each element.
+        ///
+        /// # Examples
+        ///
+        /// ```
+        /// use differential_dataflow::input::Input;
+        ///
+        /// ::timely::example(|scope| {
+        ///     // report the number of occurrences of each key
+        ///     scope.new_collection_from(1 .. 10).1
+        ///          .map(|x| x / 3)
+        ///          .count();
+        /// });
+        /// ```
+        pub fn count(&self) -> Collection<G, (K, R), isize> { self.count_core() }
+
+        /// Count for general integer differences.
+        ///
+        /// This method allows `count` to produce collections whose difference
+        /// type is something other than an `isize` integer, for example perhaps an
+        /// `i32`.
+        pub fn count_core<R2: Ord + Abelian + From<i8> + 'static>(&self) -> Collection<G, (K, R), R2> {
+            use crate::operators::arrange::arrangement::ArrangeBySelf;
+            use crate::trace::implementations::{ValBuilder, ValSpine};
+            self.arrange_by_self_named("Arrange: Count")
+                .reduce_abelian::<_,ValBuilder<K,R,G::Timestamp,R2>,ValSpine<K,R,G::Timestamp,R2>>("Count", |_k,s,t| t.push((s[0].1.clone(), R2::from(1i8))))
+                .as_collection(|k,c| (k.clone(), c.clone()))
+        }
+    }
+
 }
 
 /// Conversion to a differential dataflow Collection.
@@ -738,21 +967,10 @@ where
 /// Traits that can be implemented by containers to provide functionality to collections based on them.
 pub mod containers {
 
-    use timely::progress::{Timestamp, timestamp::Refines};
-    use crate::collection::Abelian;
-
     /// A container that can negate its updates.
     pub trait Negate {
         /// Negates Abelian differences of each update.
         fn negate(self) -> Self;
-    }
-    impl<D, T, R: Abelian> Negate for Vec<(D, T, R)> {
-        fn negate(mut self) -> Self {
-            for (_data, _time, diff) in self.iter_mut() {
-                diff.negate();
-            }
-            self
-        }
     }
 
     /// A container that can enter from timestamp `T1` into timestamp `T2`.
@@ -762,12 +980,6 @@ pub mod containers {
         /// Update timestamps from `T1` to `T2`.
         fn enter(self) -> Self::InnerContainer;
     }
-    impl<D, T1: Timestamp, T2: Refines<T1>, R> Enter<T1, T2> for Vec<(D, T1, R)> {
-        type InnerContainer = Vec<(D, T2, R)>;
-        fn enter(self) -> Self::InnerContainer {
-            self.into_iter().map(|(d,t1,r)| (d,T2::to_inner(t1),r)).collect()
-        }
-    }
 
     /// A container that can leave from timestamp `T1` into timestamp `T2`.
     pub trait Leave<T1, T2> {
@@ -776,22 +988,48 @@ pub mod containers {
         /// Update timestamps from `T1` to `T2`.
         fn leave(self) -> Self::OuterContainer;
     }
-    impl<D, T1: Refines<T2>, T2: Timestamp, R> Leave<T1, T2> for Vec<(D, T1, R)> {
-        type OuterContainer = Vec<(D, T2, R)>;
-        fn leave(self) -> Self::OuterContainer {
-            self.into_iter().map(|(d,t1,r)| (d,t1.to_outer(),r)).collect()
-        }
-    }
 
     /// A container that can advance timestamps by a summary `TS`.
     pub trait ResultsIn<TS> {
         /// Advance times in the container by `step`.
         fn results_in(self, step: &TS) -> Self;
     }
-    impl<D, T: Timestamp, R> ResultsIn<T::Summary> for Vec<(D, T, R)> {
-        fn results_in(self, step: &T::Summary) -> Self {
-            use timely::progress::PathSummary;
-            self.into_iter().filter_map(move |(d,t,r)| step.results_in(&t).map(|t| (d,t,r))).collect()
+
+
+    /// Implementations of container traits for the `Vec` container.
+    mod vec {
+
+        use timely::progress::{Timestamp, timestamp::Refines};
+        use crate::collection::Abelian;
+
+        use super::{Negate, Enter, Leave, ResultsIn};
+
+        impl<D, T, R: Abelian> Negate for Vec<(D, T, R)> {
+            fn negate(mut self) -> Self {
+                for (_data, _time, diff) in self.iter_mut() { diff.negate(); }
+                self
+            }
+        }
+
+        impl<D, T1: Timestamp, T2: Refines<T1>, R> Enter<T1, T2> for Vec<(D, T1, R)> {
+            type InnerContainer = Vec<(D, T2, R)>;
+            fn enter(self) -> Self::InnerContainer {
+                self.into_iter().map(|(d,t1,r)| (d,T2::to_inner(t1),r)).collect()
+            }
+        }
+
+        impl<D, T1: Refines<T2>, T2: Timestamp, R> Leave<T1, T2> for Vec<(D, T1, R)> {
+            type OuterContainer = Vec<(D, T2, R)>;
+            fn leave(self) -> Self::OuterContainer {
+                self.into_iter().map(|(d,t1,r)| (d,t1.to_outer(),r)).collect()
+            }
+        }
+
+        impl<D, T: Timestamp, R> ResultsIn<T::Summary> for Vec<(D, T, R)> {
+            fn results_in(self, step: &T::Summary) -> Self {
+                use timely::progress::PathSummary;
+                self.into_iter().filter_map(move |(d,t,r)| step.results_in(&t).map(|t| (d,t,r))).collect()
+            }
         }
     }
 }

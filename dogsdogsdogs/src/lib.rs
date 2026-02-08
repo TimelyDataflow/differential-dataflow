@@ -6,7 +6,6 @@ use timely::dataflow::operators::Partition;
 use timely::dataflow::operators::Concatenate;
 
 use differential_dataflow::{ExchangeData, VecCollection, AsCollection};
-use differential_dataflow::operators::Threshold;
 use differential_dataflow::difference::{Monoid, Multiply};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::TraceAgent;
@@ -143,7 +142,9 @@ where
         // We need to count the number of (k, v) pairs and not rely on the given Monoid R and its binary addition operation.
         // counts and validate can share the base arrangement
         let arranged = collection.arrange_by_self();
+        // TODO: This could/should be arrangement to arrangement, via `reduce_abelian`, but the types are a mouthful at the moment.
         let counts = arranged
+            .as_collection(|k,_v| k.clone())
             .distinct()
             .map(|(k, _v)| k)
             .arrange_by_self()

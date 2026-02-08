@@ -1,5 +1,4 @@
 use differential_dataflow::input::Input;
-use differential_dataflow::operators::Threshold;
 
 fn main() {
 

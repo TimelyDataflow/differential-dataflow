@@ -5,7 +5,6 @@ use timely::progress::frontier::AntichainRef;
 use differential_dataflow::input::InputSession;
 use differential_dataflow::collection::AsCollection;
 use differential_dataflow::operators::arrange::{ArrangeByKey, ArrangeBySelf};
-use differential_dataflow::operators::reduce::Reduce;
 use differential_dataflow::trace::TraceReader;
 use itertools::Itertools;
 
@@ -42,6 +41,9 @@ where
 
 #[test]
 fn test_import_vanilla() {
+
+    use differential_dataflow::trace::implementations::{ValBuilder, ValSpine};
+
     run_test(|input_epochs| {
         timely::execute(timely::Config::process(4), move |worker| {
             let ref input_epochs = input_epochs;
@@ -59,7 +61,8 @@ fn test_import_vanilla() {
                 ::std::mem::drop(trace);
                 let captured =
                 imported
-                    .reduce(|_k, s, t| t.push((s.iter().map(|&(_, w)| w).sum(), 1i64)))
+                    .reduce_abelian::<_,ValBuilder<_,_,_,_>,ValSpine<u64,i64,_,_>>("Reduce", |_k, s, t| t.push((s.iter().map(|&(_, w)| w).sum(), 1i64)))
+                    .as_collection(|k,v| (k.clone(), v.clone()))
                     .inner
                     .exchange(|_| 0)
                     .capture();
@@ -97,6 +100,9 @@ fn test_import_vanilla() {
 
 #[test]
 fn test_import_completed_dataflow() {
+
+    use differential_dataflow::trace::implementations::{ValBuilder, ValSpine};
+
     // Runs the first dataflow to completion before constructing the subscriber.
     run_test(|input_epochs| {
         timely::execute(timely::Config::process(4), move |worker| {
@@ -129,7 +135,8 @@ fn test_import_completed_dataflow() {
                 ::std::mem::drop(trace);
                 let stream =
                 imported
-                    .reduce(|_k, s, t| t.push((s.iter().map(|&(_, w)| w).sum(), 1i64)))
+                    .reduce_abelian::<_,ValBuilder<_,_,_,_>,ValSpine<u64,i64,_,_>>("Reduce", |_k, s, t| t.push((s.iter().map(|&(_, w)| w).sum(), 1i64)))
+                    .as_collection(|k,v| (k.clone(), v.clone()))
                     .inner
                     .exchange(|_| 0);
                 let probe = stream.probe();

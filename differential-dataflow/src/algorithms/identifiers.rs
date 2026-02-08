@@ -15,7 +15,6 @@ pub trait Identifiers<G: Scope, D: ExchangeData, R: ExchangeData+Abelian> {
     /// ```
     /// use differential_dataflow::input::Input;
     /// use differential_dataflow::algorithms::identifiers::Identifiers;
-    /// use differential_dataflow::operators::Threshold;
     ///
     /// ::timely::example(|scope| {
     ///
@@ -98,7 +97,6 @@ mod tests {
         // there are collisions, everyone gets a unique identifier.
 
         use crate::input::Input;
-        use crate::operators::{Threshold, Reduce};
         use crate::operators::iterate::Iterate;
 
         ::timely::example(|scope| {

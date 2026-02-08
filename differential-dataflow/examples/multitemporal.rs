@@ -7,7 +7,7 @@ use timely::progress::frontier::AntichainRef;
 use timely::PartialOrder;
 
 use differential_dataflow::AsCollection;
-use differential_dataflow::operators::{Count, arrange::ArrangeBySelf};
+use differential_dataflow::operators::arrange::ArrangeBySelf;
 use differential_dataflow::trace::{Cursor, TraceReader};
 
 use pair::Pair;

@@ -12,7 +12,6 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::input::{Input, InputSession};
 use differential_dataflow::operators::arrange::{ArrangeByKey, ArrangeBySelf};
 use differential_dataflow::operators::iterate::VecVariable;
-use differential_dataflow::operators::Threshold;
 
 type Node = usize;
 type Edge = (Node, Node);
