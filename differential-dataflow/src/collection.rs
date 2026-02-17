@@ -1032,4 +1032,39 @@ pub mod containers {
             }
         }
     }
+
+    /// Implementations of container traits for the `Rc` container.
+    mod rc {
+        use std::rc::Rc;
+
+        use timely::progress::{Timestamp, timestamp::Refines};
+
+        use super::{Negate, Enter, Leave, ResultsIn};
+
+        impl<C: Negate+Clone+Default> Negate for Rc<C> {
+            fn negate(mut self) -> Self {
+                std::mem::take(Rc::make_mut(&mut self)).negate().into()
+            }
+        }
+
+        impl<C: Enter<T1, T2>+Clone+Default, T1: Timestamp, T2: Refines<T1>> Enter<T1, T2> for Rc<C> {
+            type InnerContainer = Rc<C::InnerContainer>;
+            fn enter(mut self) -> Self::InnerContainer {
+                std::mem::take(Rc::make_mut(&mut self)).enter().into()
+            }
+        }
+
+        impl<C: Leave<T1, T2>+Clone+Default, T1: Refines<T2>, T2: Timestamp> Leave<T1, T2> for Rc<C> {
+            type OuterContainer = Rc<C::OuterContainer>;
+            fn leave(mut self) -> Self::OuterContainer {
+                std::mem::take(Rc::make_mut(&mut self)).leave().into()
+            }
+        }
+
+        impl<C: ResultsIn<TS>+Clone+Default, TS> ResultsIn<TS> for Rc<C> {
+            fn results_in(mut self, step: &TS) -> Self {
+                std::mem::take(Rc::make_mut(&mut self)).results_in(step).into()
+            }
+        }
+    }
 }
