@@ -8,8 +8,6 @@ Let's first build this naively, starting from two inputs: `knows` containing the
 extern crate timely;
 extern crate differential_dataflow;
 
-use differential_dataflow::operators::Join;
-
 fn main() {
 
     // define a new timely dataflow computation.
@@ -44,8 +42,6 @@ To arrange a collection, we just call one of several `arrange` methods. In this 
 ```rust
 extern crate timely;
 extern crate differential_dataflow;
-
-use differential_dataflow::operators::JoinCore;
 
 fn main() {
 

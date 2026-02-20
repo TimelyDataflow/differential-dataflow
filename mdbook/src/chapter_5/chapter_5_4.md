@@ -22,7 +22,6 @@ The following example demonstrates arranging the `knows` relation outside an ite
 extern crate timely;
 extern crate differential_dataflow;
 
-use differential_dataflow::operators::Join;
 use differential_dataflow::operators::Iterate;
 
 fn main() {
@@ -47,7 +46,7 @@ fn main() {
                 let knows = knows.enter(&reach.scope());
                 let query = query.enter(&reach.scope());
 
-                knows.join_map(reach, |x,y,q| (*y,*q))
+                knows.join_core(&reach.arrange_by_key(), |x,y,q| [(*y,*q)])
                      .concat(&query)
                      .distinct()
             });

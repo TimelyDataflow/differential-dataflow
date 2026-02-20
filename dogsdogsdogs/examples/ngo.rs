@@ -4,7 +4,6 @@ use timely::dataflow::operators::*;
 
 use differential_dataflow::VecCollection;
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::operators::*;
 
 use graph_map::GraphMMap;
 

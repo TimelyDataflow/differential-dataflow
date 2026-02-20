@@ -11,7 +11,6 @@ extern crate timely;
 extern crate differential_dataflow;
 
 use differential_dataflow::input::InputSession;
-use differential_dataflow::operators::Join;
 
 fn main() {
 

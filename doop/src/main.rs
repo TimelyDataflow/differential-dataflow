@@ -12,7 +12,6 @@ use differential_dataflow::ExchangeData as Data;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::input::Input;
 use differential_dataflow::operators::iterate::VecVariable;
-use differential_dataflow::operators::{Join, JoinCore};
 
 // Type aliases for differential execution.
 type Time = u32;
@@ -421,6 +420,7 @@ fn main() {
             //  LoadInstanceField_To(?insn, ?to).
             let LoadInstanceField: VecCollection<_,(Var, Field, Var, Method)> =
             Instruction_Method
+                .as_vecs()
                 .join(&LoadInstanceField_Base)
                 .join(&FieldInstruction_Signature)
                 .join(&LoadInstanceField_To)
@@ -433,6 +433,7 @@ fn main() {
             //  FieldInstruction_Signature(?insn, ?sig).
             let StoreInstanceField: VecCollection<_,(Var, Var, Field, Method)> =
             Instruction_Method
+                .as_vecs()
                 .join(&StoreInstanceField_From)
                 .join(&StoreInstanceField_Base)
                 .join(&FieldInstruction_Signature)
@@ -444,6 +445,7 @@ fn main() {
             //  LoadStaticField_To(?insn, ?to).
             let LoadStaticField: VecCollection<_,(Field, Var, Method)> =
             Instruction_Method
+                .as_vecs()
                 .join(&FieldInstruction_Signature)
                 .join(&LoadStaticField_To)
                 .map(|(_insn, ((inmethod, sig), to))| (sig, to, inmethod));
@@ -454,6 +456,7 @@ fn main() {
             //  FieldInstruction_Signature(?insn, ?sig).
             let StoreStaticField: VecCollection<_,(Var, Field, Method)> =
             Instruction_Method
+                .as_vecs()
                 .join(&StoreStaticField_From)
                 .join(&FieldInstruction_Signature)
                 .map(|(_insn, ((inmethod, from), sig))| (from, sig, inmethod));
@@ -464,6 +467,7 @@ fn main() {
             //  LoadArrayIndex_To(?insn, ?to).
             let LoadArrayIndex: VecCollection<_,(Var, Var, Method)> =
             Instruction_Method
+                .as_vecs()
                 .join(&LoadArrayIndex_Base)
                 .join(&LoadArrayIndex_To)
                 .map(|(_insn, ((inmethod, base), to))| (base, to, inmethod));
@@ -474,6 +478,7 @@ fn main() {
             //  StoreArrayIndex_Base(?insn, ?base).
             let StoreArrayIndex: VecCollection<_,(Var, Var, Method)> =
             Instruction_Method
+                .as_vecs()
                 .join(&StoreArrayIndex_From)
                 .join(&StoreArrayIndex_Base)
                 .map(|(_insn, ((inmethod, from), base))| (from, base, inmethod));
@@ -485,6 +490,7 @@ fn main() {
             //  AssignCast_Type(?insn, ?type).
             let AssignCast: VecCollection<_,(Type, Var, Var, Method)> =
             Instruction_Method
+                .as_vecs()
                 .join(&AssignCast_From)
                 .join(&AssignInstruction_To)
                 .join(&AssignCast_Type)
@@ -496,6 +502,7 @@ fn main() {
             //  AssignLocal_From(?insn, ?from).
             let AssignLocal: VecCollection<_,(Var, Var, Method)> =
             Instruction_Method
+                .as_vecs()
                 .join(&AssignInstruction_To)
                 .join(&AssignLocal_From)
                 .map(|(_insn, ((inmethod, to), from))| (from, to, inmethod));
@@ -506,6 +513,7 @@ fn main() {
             //  AssignInstruction_To(?insn, ?to).
             let AssignHeapAllocation: VecCollection<_,(HeapAllocation, Var, Method)> =
             Instruction_Method
+                .as_vecs()
                 .join(&AssignHeapAllocation_Heap)
                 .join(&AssignInstruction_To)
                 .map(|(_insn, ((inmethod, heap), to))| (heap, to, inmethod));
@@ -515,6 +523,7 @@ fn main() {
             //  ReturnNonvoid_Var(?insn, ?var).
             let ReturnVar: VecCollection<_,(Var, Method)> =
             Instruction_Method
+                .as_vecs()
                 .join(&ReturnNonvoid_Var)
                 .map(|(_insn, (inmethod, var))| (var, inmethod));
 
@@ -524,7 +533,7 @@ fn main() {
             //  MethodInvocation_Method(?invocation, ?signature).
             let StaticMethodInvocation: VecCollection<_,(MethodInvocation, Method, Method)> =
             Instruction_Method
-                .semijoin(&isStaticMethodInvocation_Insn)
+                .join_core(&isStaticMethodInvocation_Insn.arrange_by_self(), |k,v,_| [(k.clone(), v.clone())])
                 .join(&MethodInvocation_Method)
                 .map(|(invocation, (inmethod, sig))| (invocation, sig, inmethod));
 

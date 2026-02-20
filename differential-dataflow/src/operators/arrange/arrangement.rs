@@ -142,6 +142,19 @@ where
         self.flat_map_ref(move |key, val| Some(logic(key,val)))
     }
 
+    /// Flattens the stream into a `Collection`.
+    ///
+    /// The underlying `Stream<G, BatchWrapper<T::Batch>>` is a much more efficient way to access the data,
+    /// and this method should only be used when the data need to be transformed or exchanged, rather than
+    /// supplied as arguments to an operator using the same key-value structure.
+    pub fn as_vecs(&self) -> VecCollection<G, (Tr::KeyOwn, Tr::ValOwn), Tr::Diff>
+    where
+        Tr::KeyOwn: crate::ExchangeData,
+        Tr::ValOwn: crate::ExchangeData,
+    {
+        self.flat_map_ref(move |key, val| [(Tr::owned_key(key), Tr::owned_val(val))])
+    }
+
     /// Extracts elements from an arrangement as a collection.
     ///
     /// The supplied logic may produce an iterator over output values, allowing either
@@ -198,7 +211,9 @@ where
     G: Scope<Timestamp=T1::Time>,
     T1: TraceReader + Clone + 'static,
 {
-    /// A direct implementation of the `JoinCore::join_core` method.
+    /// A convenience method to join and produce `VecCollection` output.
+    ///
+    /// Avoid this method, as it is likely to evolve into one without the `VecCollection` opinion.
     pub fn join_core<T2,I,L>(&self, other: &Arranged<G,T2>, mut result: L) -> VecCollection<G,I::Item,<T1::Diff as Multiply<T2::Diff>>::Output>
     where
         T2: for<'a> TraceReader<Key<'a>=T1::Key<'a>,Time=T1::Time>+Clone+'static,
@@ -206,22 +221,12 @@ where
         I: IntoIterator<Item: Data>,
         L: FnMut(T1::Key<'_>,T1::Val<'_>,T2::Val<'_>)->I+'static
     {
-        let result = move |k: T1::Key<'_>, v1: T1::Val<'_>, v2: T2::Val<'_>, t: &G::Timestamp, r1: &T1::Diff, r2: &T2::Diff| {
+        let mut result = move |k: T1::Key<'_>, v1: T1::Val<'_>, v2: T2::Val<'_>, t: &G::Timestamp, r1: &T1::Diff, r2: &T2::Diff| {
             let t = t.clone();
             let r = (r1.clone()).multiply(r2);
             result(k, v1, v2).into_iter().map(move |d| (d, t.clone(), r.clone()))
         };
-        self.join_core_internal_unsafe(other, result)
-    }
-    /// A direct implementation of the `JoinCore::join_core_internal_unsafe` method.
-    pub fn join_core_internal_unsafe<T2,I,L,D,ROut> (&self, other: &Arranged<G,T2>, mut result: L) -> VecCollection<G,D,ROut>
-    where
-        T2: for<'a> TraceReader<Key<'a>=T1::Key<'a>, Time=T1::Time>+Clone+'static,
-        D: Data,
-        ROut: Semigroup+'static,
-        I: IntoIterator<Item=(D, G::Timestamp, ROut)>,
-        L: FnMut(T1::Key<'_>, T1::Val<'_>,T2::Val<'_>,&G::Timestamp,&T1::Diff,&T2::Diff)->I+'static,
-    {
+
         use crate::operators::join::join_traces;
         join_traces::<_, _, _, _, crate::consolidation::ConsolidatingContainerBuilder<_>>(
             self,

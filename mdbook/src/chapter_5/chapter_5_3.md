@@ -10,8 +10,6 @@ The following example demonstrates going from an interactive input session (`inp
 extern crate timely;
 extern crate differential_dataflow;
 
-use differential_dataflow::operators::JoinCore;
-
 fn main() {
 
     // define a new timely dataflow computation.

@@ -9,7 +9,6 @@ Our example from earlier uses a join to match up pairs `(m2, m1)` and `(m1, p)` 
 # extern crate differential_dataflow;
 # use timely::dataflow::Scope;
 # use differential_dataflow::VecCollection;
-# use differential_dataflow::operators::Join;
 # use differential_dataflow::lattice::Lattice;
 # fn example<G: Scope>(manages: &VecCollection<G, (u64, u64)>)
 # where G::Timestamp: Lattice

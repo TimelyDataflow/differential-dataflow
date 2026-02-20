@@ -6,7 +6,6 @@ use timely::order::Product;
 use timely::dataflow::*;
 
 use crate::{VecCollection, ExchangeData};
-use crate::operators::*;
 use crate::lattice::Lattice;
 use crate::operators::iterate::Variable;
 

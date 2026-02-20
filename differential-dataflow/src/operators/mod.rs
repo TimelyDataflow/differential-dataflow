@@ -5,7 +5,6 @@
 //! to several operations defined directly on the `Collection` type (e.g. `map` and `filter`).
 
 pub use self::iterate::Iterate;
-pub use self::join::{Join, JoinCore};
 pub use self::count::CountTotal;
 pub use self::threshold::ThresholdTotal;
 
