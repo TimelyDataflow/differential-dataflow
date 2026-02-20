@@ -3,7 +3,7 @@ name = "differential-dogs3"
 version = "0.19.1"
 authors = ["Frank McSherry <fmcsherry@me.com>"]
 license = "MIT"
-edition = "2021"
+edition.workspace = true
 description = "Advanced join patterns in differential dataflow"
 
 documentation = "https://docs.rs/differential-dogs3"

@@ -11,9 +11,13 @@ members = [
     "server/dataflows/random_graph",
     "server/dataflows/reachability",
     #"tpchlike",
-    "doop"
+    "doop",
+    "mdbook",
 ]
 resolver = "2"
+
+[workspace.package]
+edition = "2021"
 
 [workspace.dependencies]
 differential-dataflow = { path = "differential-dataflow", default-features = false, version = "0.19.1" }
