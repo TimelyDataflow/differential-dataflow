@@ -5,7 +5,6 @@ use timely::dataflow::operators::{Exchange, Probe};
 // use timely::progress::timestamp::RootTimestamp;
 
 use differential_dataflow::input::Input;
-use differential_dataflow::operators::arrange::ArrangeBySelf;
 use differential_dataflow::operators::count::CountTotal;
 use differential_dataflow::operators::threshold::ThresholdTotal;
 

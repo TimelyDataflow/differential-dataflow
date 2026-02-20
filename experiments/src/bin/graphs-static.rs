@@ -6,8 +6,6 @@ use timely::dataflow::operators::ToStream;
 use differential_dataflow::input::Input;
 use differential_dataflow::VecCollection;
 use differential_dataflow::operators::*;
-use differential_dataflow::operators::arrange::ArrangeByKey;
-use differential_dataflow::operators::arrange::ArrangeBySelf;
 use differential_dataflow::operators::iterate::SemigroupVariable;
 use differential_dataflow::AsCollection;
 

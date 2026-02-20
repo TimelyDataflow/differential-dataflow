@@ -10,7 +10,7 @@ use crate::{ExchangeData, VecCollection};
 use crate::difference::{IsZero, Semigroup};
 use crate::hashable::Hashable;
 use crate::collection::AsCollection;
-use crate::operators::arrange::{Arranged, ArrangeBySelf};
+use crate::operators::arrange::Arranged;
 use crate::trace::{BatchReader, Cursor, TraceReader};
 
 /// Extension trait for the `count` differential dataflow method.

@@ -9,7 +9,6 @@ use differential_dataflow::{ExchangeData, VecCollection, AsCollection};
 use differential_dataflow::difference::{Monoid, Multiply};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::TraceAgent;
-use differential_dataflow::operators::arrange::{ArrangeBySelf, ArrangeByKey};
 
 pub mod altneu;
 pub mod calculus;

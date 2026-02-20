@@ -159,7 +159,6 @@ where
         //         });
 
         use differential_dataflow::collection::AsCollection;
-        use differential_dataflow::operators::arrange::ArrangeBySelf;
         let operates = operates.as_collection().arrange_by_self().trace;
         let channels = channels.as_collection().arrange_by_self().trace;
         let schedule = schedule.as_collection().arrange_by_self().trace;
@@ -274,7 +273,6 @@ where
         });
 
         use differential_dataflow::collection::AsCollection;
-        use differential_dataflow::operators::arrange::ArrangeBySelf;
         let batch = batch.as_collection().arrange_by_self().trace;
         let merge = merge.as_collection().arrange_by_self().trace;
 

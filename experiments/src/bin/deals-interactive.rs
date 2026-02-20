@@ -7,7 +7,6 @@ use timely::WorkerConfig;
 use differential_dataflow::input::Input;
 use differential_dataflow::VecCollection;
 use differential_dataflow::operators::*;
-use differential_dataflow::operators::arrange::ArrangeByKey;
 use differential_dataflow::lattice::Lattice;
 
 use differential_dataflow::trace::implementations::ValSpine;

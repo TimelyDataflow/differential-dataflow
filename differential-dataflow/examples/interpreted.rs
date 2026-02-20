@@ -6,9 +6,6 @@ use differential_dataflow::VecCollection;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::*;
 
-use differential_dataflow::operators::arrange::ArrangeBySelf;
-use differential_dataflow::operators::arrange::ArrangeByKey;
-
 use graph_map::GraphMMap;
 
 type Node = u32;

@@ -70,7 +70,6 @@ where
                 worker.dataflow(|scope| {
 
                     use timely::dataflow::operators::Probe;
-                    use differential_dataflow::operators::arrange::ArrangeBySelf;
                     use crate::plan::Render;
 
                     let mut collections = std::collections::HashMap::new();
@@ -102,7 +101,6 @@ where
             Command::CreateInput(name, updates) => {
 
                 use differential_dataflow::input::Input;
-                use differential_dataflow::operators::arrange::ArrangeBySelf;
 
                 let (input, trace) = worker.dataflow(|scope| {
                     let (input, collection) = scope.new_collection_from(updates.into_iter());

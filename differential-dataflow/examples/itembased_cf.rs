@@ -1,6 +1,5 @@
 use differential_dataflow::input::InputSession;
 use differential_dataflow::operators::{Join,CountTotal};
-use differential_dataflow::operators::arrange::ArrangeByKey;
 use differential_dataflow::operators::join::JoinCore;
 
 use rand::{Rng, SeedableRng, StdRng};

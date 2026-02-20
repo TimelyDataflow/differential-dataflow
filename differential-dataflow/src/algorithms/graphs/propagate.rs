@@ -7,7 +7,6 @@ use timely::dataflow::*;
 use crate::{VecCollection, ExchangeData};
 use crate::lattice::Lattice;
 use crate::difference::{Abelian, Multiply};
-use crate::operators::arrange::arrangement::ArrangeByKey;
 
 /// Propagates labels forward, retaining the minimum label.
 ///
