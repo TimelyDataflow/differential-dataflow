@@ -218,7 +218,7 @@ where G::Timestamp: Lattice{
         .iterate(|inner|
             edges
                 .enter(&inner.scope())
-                .join_map(&inner, |_,&y,&q| (y,q))
+                .join_core(&inner.arrange_by_key(), |_,&y,&q| [(y,q)])
                 .concat(&tc_1.enter(&inner.scope()).map(|x| (x,x)))
                 .distinct()
         )
@@ -231,7 +231,7 @@ where G::Timestamp: Lattice{
             edges
                 .as_collection(|&k,&v| (v,k))
                 .enter(&inner.scope())
-                .join_map(&inner, |_,&y,&q| (y,q))
+                .join_core(&inner.arrange_by_key(), |_,&y,&q| [(y,q)])
                 .concat(&tc_2.enter(&inner.scope()).map(|x| (x,x)))
                 .distinct()
         )
@@ -255,7 +255,7 @@ where G::Timestamp: Lattice{
 
     let magic_edges =
     edges
-        .semijoin(&magic)
+        .join_core(&magic.arrange_by_self(), |k,v,_| [(k.clone(), v.clone())])
         .map(|(x,y)|(y,x))
         .semijoin(&magic)
         .map(|(x,y)|(y,x));

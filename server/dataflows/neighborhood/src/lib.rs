@@ -2,7 +2,6 @@ use std::rc::Rc;
 use std::cell::RefCell;
 
 use differential_dataflow::input::Input;
-use differential_dataflow::operators::JoinCore;
 
 use dd_server::{Environment, TraceHandle};
 
@@ -17,7 +16,7 @@ pub fn build((dataflow, handles, probe, _timer, args): Environment) -> Result<()
         .get_mut::<Rc<RefCell<Option<TraceHandle>>>>(&args[0])?
         .borrow_mut().as_mut().unwrap().import(dataflow);
 
-    let source = args[1].parse::<usize>().map_err(|_| format!("parse error, source: {:?}", args[1]))?; 
+    let source = args[1].parse::<usize>().map_err(|_| format!("parse error, source: {:?}", args[1]))?;
     let (_input, query) = dataflow.new_collection_from(Some(source));
 
     let timer = ::std::time::Instant::now();

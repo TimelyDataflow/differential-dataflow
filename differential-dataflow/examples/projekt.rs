@@ -1,7 +1,6 @@
 use timely::dataflow::operators::probe::Handle;
 
 use differential_dataflow::input::InputSession;
-use differential_dataflow::operators::*;
 
 fn main() {
 

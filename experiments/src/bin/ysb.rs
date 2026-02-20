@@ -1,7 +1,6 @@
 use rand::{Rng, SeedableRng, StdRng};
 
 use differential_dataflow::input::Input;
-use differential_dataflow::operators::Join;
 
 #[derive(Clone)]
 pub enum AdType {

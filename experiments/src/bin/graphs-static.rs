@@ -146,7 +146,7 @@ fn bfs<G: Scope<Timestamp = ()>> (
 
         let inner = SemigroupVariable::new(scope, Product::new(Default::default(), 1));
         let result =
-        graph.join_map(&inner, |_src,&dest,&dist| (dest, dist+1))
+        graph.join_core(&inner.arrange_by_key(), |_src,&dest,&dist| [(dest, dist+1)])
              .concat(&roots)
              .reduce(|_key, input, output| output.push((*input[0].0,1)));
 

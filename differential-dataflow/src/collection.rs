@@ -1077,7 +1077,163 @@ pub mod vec {
         }
     }
 
+    impl<G, K, V, R> Collection<G, (K, V), R>
+    where
+        G: Scope<Timestamp: Lattice+Ord>,
+        K: crate::ExchangeData+Hashable,
+        V: crate::ExchangeData,
+        R: crate::ExchangeData+Semigroup,
+    {
+        /// Matches pairs `(key,val1)` and `(key,val2)` based on `key` and yields pairs `(key, (val1, val2))`.
+        ///
+        /// The [`join_map`](Join::join_map) method may be more convenient for non-trivial processing pipelines.
+        ///
+        /// # Examples
+        ///
+        /// ```
+        /// use differential_dataflow::input::Input;
+        ///
+        /// ::timely::example(|scope| {
+        ///
+        ///     let x = scope.new_collection_from(vec![(0, 1), (1, 3)]).1;
+        ///     let y = scope.new_collection_from(vec![(0, 'a'), (1, 'b')]).1;
+        ///     let z = scope.new_collection_from(vec![(0, (1, 'a')), (1, (3, 'b'))]).1;
+        ///
+        ///     x.join(&y)
+        ///      .assert_eq(&z);
+        /// });
+        /// ```
+        pub fn join<V2, R2>(&self, other: &Collection<G, (K,V2), R2>) -> Collection<G, (K,(V,V2)), <R as Multiply<R2>>::Output>
+        where
+            K:  crate::ExchangeData,
+            V2: crate::ExchangeData,
+            R2: crate::ExchangeData+Semigroup,
+            R: Multiply<R2, Output: Semigroup+'static>,
+        {
+            self.join_map(other, |k,v,v2| (k.clone(),(v.clone(),v2.clone())))
+        }
 
+        /// Matches pairs `(key,val1)` and `(key,val2)` based on `key` and then applies a function.
+        ///
+        /// # Examples
+        ///
+        /// ```
+        /// use differential_dataflow::input::Input;
+        ///
+        /// ::timely::example(|scope| {
+        ///
+        ///     let x = scope.new_collection_from(vec![(0, 1), (1, 3)]).1;
+        ///     let y = scope.new_collection_from(vec![(0, 'a'), (1, 'b')]).1;
+        ///     let z = scope.new_collection_from(vec![(1, 'a'), (3, 'b')]).1;
+        ///
+        ///     x.join_map(&y, |_key, &a, &b| (a,b))
+        ///      .assert_eq(&z);
+        /// });
+        /// ```
+        pub fn join_map<V2: crate::ExchangeData, R2: crate::ExchangeData+Semigroup, D: crate::Data, L>(&self, other: &Collection<G, (K, V2), R2>, mut logic: L) -> Collection<G, D, <R as Multiply<R2>>::Output>
+        where R: Multiply<R2, Output: Semigroup+'static>, L: FnMut(&K, &V, &V2)->D+'static {
+            let arranged1 = self.arrange_by_key();
+            let arranged2 = other.arrange_by_key();
+            arranged1.join_core(&arranged2, move |k,v1,v2| Some(logic(k,v1,v2)))
+        }
+
+        /// Matches pairs `(key, val)` and `key` based on `key`, producing the former with frequencies multiplied.
+        ///
+        /// When the second collection contains frequencies that are either zero or one this is the more traditional
+        /// relational semijoin. When the second collection may contain multiplicities, this operation may scale up
+        /// the counts of the records in the first input.
+        ///
+        /// # Examples
+        ///
+        /// ```
+        /// use differential_dataflow::input::Input;
+        ///
+        /// ::timely::example(|scope| {
+        ///
+        ///     let x = scope.new_collection_from(vec![(0, 1), (1, 3)]).1;
+        ///     let y = scope.new_collection_from(vec![0, 2]).1;
+        ///     let z = scope.new_collection_from(vec![(0, 1)]).1;
+        ///
+        ///     x.semijoin(&y)
+        ///      .assert_eq(&z);
+        /// });
+        /// ```
+        pub fn semijoin<R2: crate::ExchangeData+Semigroup>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), <R as Multiply<R2>>::Output>
+        where R: Multiply<R2, Output: Semigroup+'static> {
+            let arranged1 = self.arrange_by_key();
+            let arranged2 = other.arrange_by_self();
+            arranged1.join_core(&arranged2, |k,v,_| Some((k.clone(), v.clone())))
+        }
+
+        /// Subtracts the semijoin with `other` from `self`.
+        ///
+        /// In the case that `other` has multiplicities zero or one this results
+        /// in a relational antijoin, in which we discard input records whose key
+        /// is present in `other`. If the multiplicities could be other than zero
+        /// or one, the semantic interpretation of this operator is less clear.
+        ///
+        /// In almost all cases, you should ensure that `other` has multiplicities
+        /// that are zero or one, perhaps by using the `distinct` operator.
+        ///
+        /// # Examples
+        ///
+        /// ```
+        /// use differential_dataflow::input::Input;
+        ///
+        /// ::timely::example(|scope| {
+        ///
+        ///     let x = scope.new_collection_from(vec![(0, 1), (1, 3)]).1;
+        ///     let y = scope.new_collection_from(vec![0, 2]).1;
+        ///     let z = scope.new_collection_from(vec![(1, 3)]).1;
+        ///
+        ///     x.antijoin(&y)
+        ///      .assert_eq(&z);
+        /// });
+        /// ```
+        pub fn antijoin<R2: crate::ExchangeData+Semigroup>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), R>
+        where R: Multiply<R2, Output=R>, R: Abelian+'static {
+            self.concat(&self.semijoin(other).negate())
+        }
+
+        /// Joins two arranged collections with the same key type.
+        ///
+        /// Each matching pair of records `(key, val1)` and `(key, val2)` are subjected to the `result` function,
+        /// which produces something implementing `IntoIterator`, where the output collection will have an entry for
+        /// every value returned by the iterator.
+        ///
+        /// This trait is implemented for arrangements (`Arranged<G, T>`) rather than collections. The `Join` trait
+        /// contains the implementations for collections.
+        ///
+        /// # Examples
+        ///
+        /// ```
+        /// use differential_dataflow::input::Input;
+        /// use differential_dataflow::trace::Trace;
+        ///
+        /// ::timely::example(|scope| {
+        ///
+        ///     let x = scope.new_collection_from(vec![(0u32, 1), (1, 3)]).1
+        ///                  .arrange_by_key();
+        ///     let y = scope.new_collection_from(vec![(0, 'a'), (1, 'b')]).1
+        ///                  .arrange_by_key();
+        ///
+        ///     let z = scope.new_collection_from(vec![(1, 'a'), (3, 'b')]).1;
+        ///
+        ///     x.join_core(&y, |_key, &a, &b| Some((a, b)))
+        ///      .assert_eq(&z);
+        /// });
+        /// ```
+        pub fn join_core<Tr2,I,L> (&self, stream2: &Arranged<G,Tr2>, result: L) -> Collection<G,I::Item,<R as Multiply<Tr2::Diff>>::Output>
+        where
+            Tr2: for<'a> crate::trace::TraceReader<Key<'a>=&'a K, Time=G::Timestamp>+Clone+'static,
+            R: Multiply<Tr2::Diff, Output: Semigroup+'static>,
+            I: IntoIterator<Item: crate::Data>,
+            L: FnMut(&K,&V,Tr2::Val<'_>)->I+'static,
+        {
+            self.arrange_by_key()
+                .join_core(stream2, result)
+        }
+    }
 }
 
 /// Conversion to a differential dataflow Collection.

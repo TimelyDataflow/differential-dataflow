@@ -123,7 +123,7 @@ fn bfs<G: Scope<Timestamp = ()>> (
         let graph = graph.enter(&inner.scope());
         let roots = roots.enter(&inner.scope());
 
-        graph.join_map(&inner, |_src,&dest,&dist| (dest, dist+1))
+        graph.join_core(&inner.arrange_by_key(), |_src,&dest,&dist| [(dest, dist+1)])
              .concat(&roots)
              .reduce(|_key, input, output| output.push((*input[0].0,1)))
     })
