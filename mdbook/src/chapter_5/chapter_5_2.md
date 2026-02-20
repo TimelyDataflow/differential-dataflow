@@ -10,8 +10,6 @@ We saw before an example where we used one type of arrangement, `arrange_by_key(
 extern crate timely;
 extern crate differential_dataflow;
 
-use differential_dataflow::operators::JoinCore;
-
 fn main() {
 
     // define a new timely dataflow computation.
@@ -50,8 +48,6 @@ We can show off arrangement by self in our "friends of friends" example by addin
 ```rust
 extern crate timely;
 extern crate differential_dataflow;
-
-use differential_dataflow::operators::JoinCore;
 
 fn main() {
 
@@ -103,8 +99,6 @@ You may need to return from an arrangement to a collection (a stream of updates)
 ```rust
 extern crate timely;
 extern crate differential_dataflow;
-
-use differential_dataflow::operators::{Join, JoinCore};
 
 fn main() {
 

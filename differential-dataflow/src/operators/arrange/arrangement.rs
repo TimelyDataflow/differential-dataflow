@@ -211,7 +211,9 @@ where
     G: Scope<Timestamp=T1::Time>,
     T1: TraceReader + Clone + 'static,
 {
-    /// A direct implementation of the `JoinCore::join_core` method.
+    /// A convenience method to join and produce `VecCollection` output.
+    ///
+    /// Avoid this method, as it is likely to evolve into one without the `VecCollection` opinion.
     pub fn join_core<T2,I,L>(&self, other: &Arranged<G,T2>, mut result: L) -> VecCollection<G,I::Item,<T1::Diff as Multiply<T2::Diff>>::Output>
     where
         T2: for<'a> TraceReader<Key<'a>=T1::Key<'a>,Time=T1::Time>+Clone+'static,
