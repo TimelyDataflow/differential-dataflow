@@ -1,13 +1,8 @@
 use std::io::{BufRead, BufReader};
 use std::fs::File;
 
-// use timely::progress::nested::product::Product;
-// use timely::dataflow::operators::{Accumulate, Inspect};
 use differential_dataflow::input::Input;
-// use differential_dataflow::trace::Trace;
-// use differential_dataflow::trace::implementations::ord::OrdValSpine;
 use differential_dataflow::operators::*;
-use differential_dataflow::operators::arrange::ArrangeByKey;
 
 fn main() {
 

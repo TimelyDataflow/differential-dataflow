@@ -18,7 +18,7 @@ use crate::hashable::Hashable;
 use crate::{Data, ExchangeData, VecCollection};
 use crate::difference::{Semigroup, Abelian, Multiply};
 use crate::lattice::Lattice;
-use crate::operators::arrange::{Arranged, ArrangeByKey, ArrangeBySelf};
+use crate::operators::arrange::Arranged;
 use crate::trace::{BatchReader, Cursor};
 use crate::operators::ValueHistory;
 
@@ -209,7 +209,6 @@ pub trait JoinCore<G: Scope<Timestamp: Lattice+Ord>, K: 'static + ?Sized, V: 'st
     ///
     /// ```
     /// use differential_dataflow::input::Input;
-    /// use differential_dataflow::operators::arrange::ArrangeByKey;
     /// use differential_dataflow::operators::join::JoinCore;
     /// use differential_dataflow::trace::Trace;
     ///
@@ -249,7 +248,6 @@ pub trait JoinCore<G: Scope<Timestamp: Lattice+Ord>, K: 'static + ?Sized, V: 'st
     ///
     /// ```
     /// use differential_dataflow::input::Input;
-    /// use differential_dataflow::operators::arrange::ArrangeByKey;
     /// use differential_dataflow::operators::join::JoinCore;
     /// use differential_dataflow::trace::Trace;
     ///

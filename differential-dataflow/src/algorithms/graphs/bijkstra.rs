@@ -25,7 +25,6 @@ where
     G: Scope<Timestamp: Lattice+Ord>,
     N: ExchangeData+Hash,
 {
-    use crate::operators::arrange::arrangement::ArrangeByKey;
     let forward = edges.arrange_by_key();
     let reverse = edges.map(|(x,y)| (y,x)).arrange_by_key();
     bidijkstra_arranged(&forward, &reverse, goals)

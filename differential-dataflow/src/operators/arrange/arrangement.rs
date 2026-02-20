@@ -21,16 +21,15 @@ use timely::dataflow::operators::{Enter, Map};
 use timely::order::PartialOrder;
 use timely::dataflow::{Scope, Stream, StreamCore};
 use timely::dataflow::operators::generic::Operator;
-use timely::dataflow::channels::pact::{ParallelizationContract, Pipeline, Exchange};
+use timely::dataflow::channels::pact::{ParallelizationContract, Pipeline};
 use timely::progress::Timestamp;
 use timely::progress::Antichain;
 use timely::dataflow::operators::Capability;
 
-use crate::{Data, ExchangeData, VecCollection, AsCollection, Hashable};
+use crate::{Data, VecCollection, AsCollection};
 use crate::difference::Semigroup;
 use crate::lattice::Lattice;
 use crate::trace::{self, Trace, TraceReader, BatchReader, Batcher, Builder, Cursor};
-use crate::trace::implementations::{KeyBatcher, KeyBuilder, KeySpine, ValBatcher, ValBuilder, ValSpine};
 use crate::trace::implementations::merge_batcher::container::MergerChunk;
 
 use trace::wrappers::enter::{TraceEnter, BatchEnter,};
@@ -328,24 +327,6 @@ where
     ;
 }
 
-impl<G, K, V, R> Arrange<G, Vec<((K, V), G::Timestamp, R)>> for VecCollection<G, (K, V), R>
-where
-    G: Scope<Timestamp: Lattice>,
-    K: ExchangeData + Hashable,
-    V: ExchangeData,
-    R: ExchangeData + Semigroup,
-{
-    fn arrange_named<Ba, Bu, Tr>(&self, name: &str) -> Arranged<G, TraceAgent<Tr>>
-    where
-        Ba: Batcher<Input=Vec<((K, V), G::Timestamp, R)>, Time=G::Timestamp> + 'static,
-        Bu: Builder<Time=G::Timestamp, Input=Ba::Output, Output = Tr::Batch>,
-        Tr: Trace<Time=G::Timestamp> + 'static,
-    {
-        let exchange = Exchange::new(move |update: &((K,V),G::Timestamp,R)| (update.0).0.hashed().into());
-        arrange_core::<_, _, Ba, Bu, _>(&self.inner, exchange, name)
-    }
-}
-
 /// Arranges a stream of updates by a key, configured with a name and a parallelization contract.
 ///
 /// This operator arranges a stream of values into a shared trace, whose contents it maintains.
@@ -503,87 +484,4 @@ where
     });
 
     Arranged { stream, trace: reader.unwrap() }
-}
-
-impl<G, K: ExchangeData+Hashable, R: ExchangeData+Semigroup> Arrange<G, Vec<((K, ()), G::Timestamp, R)>> for VecCollection<G, K, R>
-where
-    G: Scope<Timestamp: Lattice+Ord>,
-{
-    fn arrange_named<Ba, Bu, Tr>(&self, name: &str) -> Arranged<G, TraceAgent<Tr>>
-    where
-        Ba: Batcher<Input=Vec<((K,()),G::Timestamp,R)>, Time=G::Timestamp> + 'static,
-        Bu: Builder<Time=G::Timestamp, Input=Ba::Output, Output = Tr::Batch>,
-        Tr: Trace<Time=G::Timestamp> + 'static,
-    {
-        let exchange = Exchange::new(move |update: &((K,()),G::Timestamp,R)| (update.0).0.hashed().into());
-        arrange_core::<_,_,Ba,Bu,_>(&self.map(|k| (k, ())).inner, exchange, name)
-    }
-}
-
-/// Arranges something as `(Key,Val)` pairs according to a type `T` of trace.
-///
-/// This arrangement requires `Key: Hashable`, and uses the `hashed()` method to place keys in a hashed
-/// map. This can result in many hash calls, and in some cases it may help to first transform `K` to the
-/// pair `(u64, K)` of hash value and key.
-pub trait ArrangeByKey<G: Scope, K: Data+Hashable, V: Data, R: Ord+Semigroup+'static>
-where
-    G: Scope<Timestamp: Lattice+Ord>,
-{
-    /// Arranges a collection of `(Key, Val)` records by `Key`.
-    ///
-    /// This operator arranges a stream of values into a shared trace, whose contents it maintains.
-    /// This trace is current for all times completed by the output stream, which can be used to
-    /// safely identify the stable times and values in the trace.
-    fn arrange_by_key(&self) -> Arranged<G, TraceAgent<ValSpine<K, V, G::Timestamp, R>>>;
-
-    /// As `arrange_by_key` but with the ability to name the arrangement.
-    fn arrange_by_key_named(&self, name: &str) -> Arranged<G, TraceAgent<ValSpine<K, V, G::Timestamp, R>>>;
-}
-
-impl<G, K: ExchangeData+Hashable, V: ExchangeData, R: ExchangeData+Semigroup> ArrangeByKey<G, K, V, R> for VecCollection<G, (K,V), R>
-where
-    G: Scope<Timestamp: Lattice+Ord>,
-{
-    fn arrange_by_key(&self) -> Arranged<G, TraceAgent<ValSpine<K, V, G::Timestamp, R>>> {
-        self.arrange_by_key_named("ArrangeByKey")
-    }
-
-    fn arrange_by_key_named(&self, name: &str) -> Arranged<G, TraceAgent<ValSpine<K, V, G::Timestamp, R>>> {
-        self.arrange_named::<ValBatcher<_,_,_,_>,ValBuilder<_,_,_,_>,_>(name)
-    }
-}
-
-/// Arranges something as `(Key, ())` pairs according to a type `T` of trace.
-///
-/// This arrangement requires `Key: Hashable`, and uses the `hashed()` method to place keys in a hashed
-/// map. This can result in many hash calls, and in some cases it may help to first transform `K` to the
-/// pair `(u64, K)` of hash value and key.
-pub trait ArrangeBySelf<G, K: Data+Hashable, R: Ord+Semigroup+'static>
-where
-    G: Scope<Timestamp: Lattice+Ord>,
-{
-    /// Arranges a collection of `Key` records by `Key`.
-    ///
-    /// This operator arranges a collection of records into a shared trace, whose contents it maintains.
-    /// This trace is current for all times complete in the output stream, which can be used to safely
-    /// identify the stable times and values in the trace.
-    fn arrange_by_self(&self) -> Arranged<G, TraceAgent<KeySpine<K, G::Timestamp, R>>>;
-
-    /// As `arrange_by_self` but with the ability to name the arrangement.
-    fn arrange_by_self_named(&self, name: &str) -> Arranged<G, TraceAgent<KeySpine<K, G::Timestamp, R>>>;
-}
-
-
-impl<G, K: ExchangeData+Hashable, R: ExchangeData+Semigroup> ArrangeBySelf<G, K, R> for VecCollection<G, K, R>
-where
-    G: Scope<Timestamp: Lattice+Ord>,
-{
-    fn arrange_by_self(&self) -> Arranged<G, TraceAgent<KeySpine<K, G::Timestamp, R>>> {
-        self.arrange_by_self_named("ArrangeBySelf")
-    }
-
-    fn arrange_by_self_named(&self, name: &str) -> Arranged<G, TraceAgent<KeySpine<K, G::Timestamp, R>>> {
-        self.map(|k| (k, ()))
-            .arrange_named::<KeyBatcher<_,_,_>,KeyBuilder<_,_,_>,_>(name)
-    }
 }

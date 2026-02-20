@@ -9,7 +9,6 @@ use timely::dataflow::operators::generic::operator::source;
 use timely::progress::Antichain;
 
 use differential_dataflow::AsCollection;
-use differential_dataflow::operators::arrange::ArrangeByKey;
 use differential_dataflow::trace::TraceReader;
 
 use dd_server::{Environment, TraceHandle};

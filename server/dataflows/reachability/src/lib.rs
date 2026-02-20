@@ -3,7 +3,6 @@ use std::cell::RefCell;
 
 use differential_dataflow::input::Input;
 use differential_dataflow::operators::Iterate;
-use differential_dataflow::operators::arrange::ArrangeBySelf;
 
 use dd_server::{Environment, TraceHandle};
 

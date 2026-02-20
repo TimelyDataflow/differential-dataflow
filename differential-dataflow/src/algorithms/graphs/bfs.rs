@@ -14,7 +14,6 @@ where
     G: Scope<Timestamp: Lattice+Ord>,
     N: ExchangeData+Hash,
 {
-    use crate::operators::arrange::arrangement::ArrangeByKey;
     let edges = edges.arrange_by_key();
     bfs_arranged(&edges, roots)
 }

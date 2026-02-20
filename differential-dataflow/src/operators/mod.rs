@@ -11,7 +11,6 @@ pub use self::threshold::ThresholdTotal;
 
 pub mod arrange;
 pub mod reduce;
-pub mod consolidate;
 pub mod iterate;
 pub mod join;
 pub mod count;

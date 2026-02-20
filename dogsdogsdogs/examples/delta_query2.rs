@@ -25,7 +25,6 @@ fn main() {
                 let edges2 = data2.as_collection();
 
                 // Graph oriented both ways, indexed by key.
-                use differential_dataflow::operators::arrange::ArrangeByKey;
                 let forward1 = edges1.arrange_by_key();
                 let forward2 = edges2.arrange_by_key();
 

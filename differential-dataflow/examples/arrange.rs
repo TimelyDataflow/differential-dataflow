@@ -6,7 +6,6 @@ use timely::scheduling::Scheduler;
 
 use differential_dataflow::input::Input;
 use differential_dataflow::AsCollection;
-use differential_dataflow::operators::arrange::ArrangeByKey;
 use differential_dataflow::operators::join::JoinCore;
 use differential_dataflow::operators::Iterate;
 

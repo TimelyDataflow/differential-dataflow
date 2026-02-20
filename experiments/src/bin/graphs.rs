@@ -5,8 +5,6 @@ use timely::dataflow::*;
 use differential_dataflow::input::Input;
 use differential_dataflow::VecCollection;
 use differential_dataflow::operators::*;
-use differential_dataflow::operators::arrange::ArrangeByKey;
-use differential_dataflow::operators::arrange::ArrangeBySelf;
 
 type Node = usize;
 

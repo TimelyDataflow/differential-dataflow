@@ -185,7 +185,6 @@ impl<Tr: TraceReader+'static> TraceAgent<Tr> {
     /// ```
     /// use timely::Config;
     /// use differential_dataflow::input::Input;
-    /// use differential_dataflow::operators::arrange::ArrangeBySelf;
     /// use differential_dataflow::trace::Trace;
     /// use differential_dataflow::trace::implementations::{ValBuilder, ValSpine};
     ///
@@ -237,7 +236,6 @@ impl<Tr: TraceReader+'static> TraceAgent<Tr> {
     /// use timely::dataflow::ProbeHandle;
     /// use timely::dataflow::operators::Probe;
     /// use differential_dataflow::input::InputSession;
-    /// use differential_dataflow::operators::arrange::ArrangeBySelf;
     /// use differential_dataflow::trace::Trace;
     ///
     /// ::timely::execute(Config::thread(), |worker| {
@@ -341,7 +339,6 @@ impl<Tr: TraceReader+'static> TraceAgent<Tr> {
     /// use timely::dataflow::operators::Probe;
     /// use timely::dataflow::operators::Inspect;
     /// use differential_dataflow::input::InputSession;
-    /// use differential_dataflow::operators::arrange::ArrangeBySelf;
     /// use differential_dataflow::trace::Trace;
     /// use differential_dataflow::trace::TraceReader;
     /// use differential_dataflow::input::Input;

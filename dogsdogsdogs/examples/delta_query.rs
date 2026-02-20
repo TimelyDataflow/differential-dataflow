@@ -29,13 +29,11 @@ fn main() {
             let (edges_input, edges) = scope.new_collection();
 
             // Graph oriented both ways, indexed by key.
-            use differential_dataflow::operators::arrange::ArrangeByKey;
             let forward_key = edges.arrange_by_key();
             let reverse_key = edges.map(|(x,y)| (y,x))
                                    .arrange_by_key();
 
             // Graph oriented both ways, indexed by (key, val).
-            use differential_dataflow::operators::arrange::ArrangeBySelf;
             let forward_self = edges.arrange_by_self();
             let reverse_self = edges.map(|(x,y)| (y,x))
                                     .arrange_by_self();

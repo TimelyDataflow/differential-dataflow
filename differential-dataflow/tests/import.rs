@@ -4,7 +4,6 @@ use timely::progress::frontier::AntichainRef;
 
 use differential_dataflow::input::InputSession;
 use differential_dataflow::collection::AsCollection;
-use differential_dataflow::operators::arrange::{ArrangeByKey, ArrangeBySelf};
 use differential_dataflow::trace::TraceReader;
 use itertools::Itertools;
 

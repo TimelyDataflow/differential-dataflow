@@ -29,8 +29,6 @@ use serde::{Deserialize, Serialize};
 
 use timely::dataflow::Scope;
 
-use differential_dataflow::operators::arrange::{ArrangeBySelf, ArrangeByKey};
-
 use differential_dataflow::{VecCollection, ExchangeData};
 use crate::plan::{Plan, Render};
 use crate::{TraceManager, Time, Diff, Datum};

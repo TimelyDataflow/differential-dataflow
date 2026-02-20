@@ -9,8 +9,6 @@ use differential_dataflow::VecCollection;
 use differential_dataflow::operators::*;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::iterate::Variable;
-use differential_dataflow::operators::arrange::ArrangeByKey;
-use differential_dataflow::operators::arrange::ArrangeBySelf;
 
 type Node = usize;
 

@@ -33,8 +33,6 @@ impl<V: ExchangeData+Hash+Datum> Render for Join<V> {
         arrangements: &mut TraceManager<Self::Value>,
     ) -> VecCollection<S, Vec<Self::Value>, Diff>
     {
-        use differential_dataflow::operators::arrange::ArrangeByKey;
-
         // acquire arrangements for each input.
         let keys1 = self.keys.iter().map(|key| key.0).collect::<Vec<_>>();
         let mut trace1 =

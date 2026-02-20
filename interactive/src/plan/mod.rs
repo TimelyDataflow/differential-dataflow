@@ -157,7 +157,6 @@ impl<V: ExchangeData+Hash+Datum> Render for Plan<V> {
                 Plan::Map(expressions) => expressions.render(scope, collections, arrangements),
                 Plan::Distinct(distinct) => {
 
-                    use differential_dataflow::operators::arrange::ArrangeBySelf;
                     use differential_dataflow::trace::implementations::{KeyBuilder, KeySpine};
 
                     let input =
