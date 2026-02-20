@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.0](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dataflow-v0.19.1...differential-dataflow-v0.20.0) - 2026-02-20
+
+### Other
+
+- Test mdbook like a crate ([#669](https://github.com/TimelyDataflow/differential-dataflow/pull/669))
+- Migrate Join logic away from traits ([#668](https://github.com/TimelyDataflow/differential-dataflow/pull/668))
+- More `VecCollection` demotion ([#667](https://github.com/TimelyDataflow/differential-dataflow/pull/667))
+- Implement utility traits for Rc collections ([#666](https://github.com/TimelyDataflow/differential-dataflow/pull/666))
+- Deprioritize the `Vec` container ([#664](https://github.com/TimelyDataflow/differential-dataflow/pull/664))
+
 ## [0.19.1](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dataflow-v0.19.0...differential-dataflow-v0.19.1) - 2026-02-06
 
 ### Other
