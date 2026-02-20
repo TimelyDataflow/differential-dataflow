@@ -11,7 +11,6 @@ use timely::dataflow::*;
 use timely::dataflow::operators::CapabilitySet;
 
 use differential_dataflow::VecCollection;
-use differential_dataflow::operators::arrange::ArrangeByKey;
 use differential_dataflow::operators::arrange::ShutdownButton;
 
 pub mod types;

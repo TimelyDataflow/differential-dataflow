@@ -97,8 +97,6 @@ where
 {
     let arrangements = arrangements.in_scope(scope, experiment);
 
-    use differential_dataflow::operators::arrange::ArrangeBySelf;
-
     experiment
         .lineitem(scope)
         .explode(|x|

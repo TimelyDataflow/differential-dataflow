@@ -11,7 +11,6 @@ extern crate timely;
 extern crate differential_dataflow;
 
 use differential_dataflow::operators::JoinCore;
-use differential_dataflow::operators::arrange::ArrangeByKey;
 
 fn main() {
 
@@ -53,8 +52,6 @@ extern crate timely;
 extern crate differential_dataflow;
 
 use differential_dataflow::operators::JoinCore;
-use differential_dataflow::operators::arrange::ArrangeByKey;
-use differential_dataflow::operators::arrange::ArrangeBySelf;
 
 fn main() {
 
@@ -108,7 +105,6 @@ extern crate timely;
 extern crate differential_dataflow;
 
 use differential_dataflow::operators::{Join, JoinCore};
-use differential_dataflow::operators::arrange::ArrangeByKey;
 
 fn main() {
 

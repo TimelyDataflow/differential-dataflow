@@ -3,7 +3,6 @@ use timely::dataflow::*;
 use timely::dataflow::operators::probe::Handle as ProbeHandle;
 
 use differential_dataflow::operators::*;
-use differential_dataflow::operators::arrange::ArrangeBySelf;
 use differential_dataflow::lattice::Lattice;
 
 use {Arrangements, Experiment, Collections};
